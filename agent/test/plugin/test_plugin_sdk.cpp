@@ -35,6 +35,8 @@ struct CapturedRegistration {
     AgentxxPluginOperatorCancelFunction  capCancel = nullptr;
     void*                                capUd     = nullptr;
     bool                                 hasCapability = false;
+    AgentxxPluginGraphNodeTypeSpec       graphNode{};
+    bool                                 hasGraphNode = false;
 };
 
 CapturedRegistration g_captured;
@@ -73,6 +75,16 @@ int32_t AGENTXX_PLUGIN_CALL fakeRegisterCapabilityEx(
     return 0;
 }
 
+int32_t AGENTXX_PLUGIN_CALL
+    fakeRegisterGraphNodeType(const AgentxxPluginHost*, const AgentxxPluginGraphNodeTypeSpec* spec) {
+    if (!spec) {
+        return -1;
+    }
+    g_captured.graphNode    = *spec;
+    g_captured.hasGraphNode = true;
+    return 0;
+}
+
 const AgentxxPluginToolsIface g_fakeTools = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION,
     /* struct_size */ sizeof(AgentxxPluginToolsIface),
@@ -100,6 +112,16 @@ const AgentxxPluginCapabilitiesIface g_fakeCapabilities = {
     /* op_cancel */ nullptr,
 };
 
+const AgentxxPluginGraphIface g_fakeGraph = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginGraphIface),
+    /* register_node_type */ fakeRegisterGraphNodeType,
+    /* unregister_node_type */ nullptr,
+    /* get_graph_json */ nullptr,
+    /* get_graph_name */ nullptr,
+    /* set_graph_json */ nullptr,
+};
+
 const void* AGENTXX_PLUGIN_CALL
     fakeQueryInterface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
     if (!iid || !iid->data) {
@@ -114,6 +136,9 @@ const void* AGENTXX_PLUGIN_CALL
     }
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES) {
         return &g_fakeCapabilities;
+    }
+    if (name == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH) {
+        return &g_fakeGraph;
     }
     return nullptr;
 }
@@ -435,6 +460,148 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
         XX_TEST_EXPECT_TRUE(probe.payload.find("done:async-ping") != std::string::npos);
+    }
+
+    /// graph_node: 快同步节点（返回节点输出 JSON）+ 输入拥有化 + 取消句柄。
+    {
+        SdkCtx ctx;
+        ctx.init(&host);
+        g_captured = CapturedRegistration{};
+        const int32_t rc = agentxx::plugin::graph_node(
+            ctx,
+            "test.node.sync",
+            R"({"type":"object"})",
+            [](SdkCtx&, const RootRequest& req) -> std::string {
+                return fmt::format(
+                    R"({{"node":"{}","thread":"{}","state":{}}})",
+                    req.node(),
+                    req.session(),
+                    req.state()
+                );
+            }
+        );
+        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(g_captured.hasGraphNode);
+        XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_start != nullptr);
+        XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_cancel != nullptr);
+
+        auto        spec    = g_captured.graphNode;
+        auto        nameSv  = PluginStringView::fromCstr("n1");
+        auto        cfgSv   = PluginStringView::fromCstr(R"({"intents":["a"]})");
+        auto        stateSv = PluginStringView::fromCstr(R"({"channels":{"x":1}})");
+        auto        tidSv   = PluginStringView::fromCstr("sess-1");
+        NotifyProbe probe;
+        auto        notify = probe.notify();
+        void*       op = spec.run_start(
+            spec.user_data,
+            &nameSv,
+            &cfgSv,
+            &stateSv,
+            &tidSv,
+            &notify,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(op == nullptr); ///< 快同步: 调用内完成, 不返回句柄
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("n1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("sess-1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("channels") != std::string::npos);
+    }
+
+    /// graph_node: 快同步节点异常 → FAILED（不越界、不悬垂）。
+    {
+        SdkCtx ctx;
+        ctx.init(&host);
+        g_captured = CapturedRegistration{};
+        const int32_t rc = agentxx::plugin::graph_node(
+            ctx,
+            "test.node.throw",
+            "{}",
+            [](SdkCtx&, const RootRequest&) -> std::string {
+                throw std::runtime_error("node boom");
+            }
+        );
+        XX_TEST_EXPECT_EQ(rc, 0);
+        auto        spec    = g_captured.graphNode;
+        NotifyProbe probe;
+        auto        notify = probe.notify();
+        void*       op = spec.run_start(
+            spec.user_data, nullptr, nullptr, nullptr, nullptr, &notify, nullptr
+        );
+        XX_TEST_EXPECT_TRUE(op == nullptr);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("node boom") != std::string::npos);
+    }
+
+    /// graph_node: Task<string> 节点 —— provider 句柄 + 借用输入失效后仍完成。
+    {
+        bool                    released = false;
+        std::coroutine_handle<> handle{};
+        bool                    finished = false;
+        std::string             seenState;
+
+        struct AsyncBox {
+            bool*                    released = nullptr;
+            std::coroutine_handle<>* handle   = nullptr;
+            bool*                    finished = nullptr;
+            std::string*             seenState = nullptr;
+        } box{&released, &handle, &finished, &seenState};
+
+        SdkCtx ctx;
+        ctx.init(&host);
+        g_captured = CapturedRegistration{};
+        const int32_t rc = agentxx::plugin::graph_node(
+            ctx,
+            "test.node.async",
+            "{}",
+            [&box](SdkCtx&, const RootRequest& req, OpCtl ctl) -> Task<std::string> {
+                std::string node{req.node()};
+                std::string state{req.state()};
+                co_await Gate{box.released, box.handle};
+                if (ctl.cancelled()) {
+                    co_return std::string{"cancelled"};
+                }
+                *box.seenState = state;
+                *box.finished = true;
+                co_return fmt::format(R"({{"async":"{}"}})", node);
+            }
+        );
+        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(g_captured.hasGraphNode);
+        XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_cancel != nullptr);
+
+        auto        spec    = g_captured.graphNode;
+        auto        nameSv  = PluginStringView::fromCstr("n2");
+        auto        cfgSv   = PluginStringView::fromCstr("{}");
+        auto        stateSv = PluginStringView::fromCstr(R"({"channels":{}})");
+        auto        tidSv   = PluginStringView::fromCstr("sess-2");
+        NotifyProbe probe;
+        auto        notify = probe.notify();
+        void*       op = spec.run_start(
+            spec.user_data,
+            &nameSv,
+            &cfgSv,
+            &stateSv,
+            &tidSv,
+            &notify,
+            nullptr
+        );
+        XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> provider 句柄
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+        XX_TEST_EXPECT_FALSE(finished);
+
+        // 宿主借用缓冲区失效后 (置空视图) 协程仍能完成 (Request 拥有输入)
+        released = true;
+        XX_TEST_EXPECT_TRUE(handle != nullptr);
+        handle.resume();
+        XX_TEST_EXPECT_TRUE(finished);
+        finishRoot<Task<std::string>::promise_type>(handle);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_TRUE(probe.payload.find("n2") != std::string::npos);
+        XX_TEST_EXPECT_EQ(seenState, std::string{R"({"channels":{}})"});
     }
     return result;
 }

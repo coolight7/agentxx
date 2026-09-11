@@ -1,12 +1,14 @@
 #include "test_plugin_runtime.h"
 
 #include "agentxx/agent/context.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_future.hpp"
 #include "neograph/graph/run_context.h"
+#include "neograph/graph/registry.h"
 #include "neograph/graph/state.h"
 #include "neograph/graph/types.h"
 
@@ -208,6 +210,23 @@ void installLifecycleHooks(PluginInstance& inst, int* destroys) {
 
 /// P1-4 生命周期事务探针: 记录 start/stop 实际调用次数，并让 start 可以按需失败。
 /// 探针本身挂在实例的 pluginCtx 上，不使用任何可变全局状态。
+void* AGENTXX_PLUGIN_CALL probeGraphRunStart(
+    void*                              ud,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*
+) {
+    (void)ud;
+    if (notify && notify->done) {
+        AgentxxPluginStringView empty{nullptr, 0};
+        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &empty);
+    }
+    return nullptr;
+}
+
 struct LifecycleProbe {
     int                            starts    = 0;
     int                            stops     = 0;
@@ -216,6 +235,9 @@ struct LifecycleProbe {
     bool                           partialRegistration = false;
     const AgentxxPluginHost*       host      = nullptr;
     const AgentxxPluginToolsIface* tools     = nullptr;
+    const AgentxxPluginGraphIface* graph     = nullptr;
+    /// start 失败前是否真的登记过图节点类型（证明图注册同样回滚）。
+    bool                           partialGraphRegistration = false;
     AgentxxPluginToolSpec          spec{};
 };
 
@@ -226,6 +248,14 @@ void* AGENTXX_PLUGIN_CALL
     if (probe.tools && probe.host) {
         const int32_t rc = probe.tools->register_tool(probe.host, &probe.spec);
         probe.partialRegistration = (rc == 0);
+    }
+    if (probe.graph && probe.host && probe.graph->register_node_type) {
+        AgentxxPluginGraphNodeTypeSpec gspec{};
+        gspec.type      = agentxx::plugin::PluginStringView::fromCstr("probe_graph_type");
+        gspec.run_start = &probeGraphRunStart;
+        gspec.user_data = &probe;
+        const int32_t rc = probe.graph->register_node_type(probe.host, &gspec);
+        probe.partialGraphRegistration = (rc == 0);
     }
     if (probe.failStart) {
         // 事务中途失败：宿主必须撤销这次已生效的注册（部分注册回滚）。
@@ -1029,16 +1059,21 @@ TestResult testPluginRuntime() {
     /// stop 在 IO 线程撤销插件自管注册，start 重新声明；stop 成功后清空旧记录，
     /// 因此重复 enable/disable 不会累积重复项。
     {
-        RuntimeFixture f;
+        // 图类型注册需要宿主 graphRegistry (AgentContext 装配)。
+        auto ctx = std::make_shared<agentxx::agent::AgentContext>();
+        RuntimeFixture f(ctx);
+        ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
         auto          inst  = f.instance("lifecycle_plugin", 7);
         auto          probe = std::make_shared<LifecycleProbe>();
         probe->host         = inst->hostView();
         probe->tools        = AgentIfaces::query(probe->host).tools;
+        probe->graph        = AgentIfaces::query(probe->host).graph;
         probe->spec         = fakeTool(nullptr, false);
         XX_TEST_EXPECT_TRUE(probe->tools != nullptr);
         if (!probe->tools) {
             return result;
         }
+        XX_TEST_EXPECT_TRUE(probe->graph != nullptr);
 
         inst->lifecycleStart  = &lifecycleStartHook;
         inst->lifecycleStop   = &lifecycleStopHook;
@@ -1080,6 +1115,11 @@ TestResult testPluginRuntime() {
         );
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
         XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->graphNodeTypes.size(), size_t{1});
+        auto graphSlot = inst->graphNodeTypes.empty() ? std::shared_ptr<GraphTypeSlot>{}
+                                                      : inst->graphNodeTypes.front().slot;
+        XX_TEST_EXPECT_TRUE(graphSlot != nullptr);
+        XX_TEST_EXPECT_TRUE(graphSlot && graphSlot->snapshot().active);
 
         // ---- 重复 enable/disable 不累积重复项 ----
         for (int i = 0; i < 3; ++i) {
@@ -1109,10 +1149,12 @@ TestResult testPluginRuntime() {
         f.drainAll();
         const int startsBeforeFail = probe->starts;
         probe->partialRegistration = false;
+        probe->partialGraphRegistration = false;
         f.manager->enable("lifecycle_plugin");
         f.drainAll();
         XX_TEST_EXPECT_EQ(probe->starts, startsBeforeFail + 1);
         XX_TEST_EXPECT_TRUE(probe->partialRegistration); // start 确实留下过部分注册
+        XX_TEST_EXPECT_TRUE(probe->partialGraphRegistration); // 图类型也登记过
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
@@ -1120,6 +1162,8 @@ TestResult testPluginRuntime() {
         );
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool")); // 已回滚
         XX_TEST_EXPECT_TRUE(inst->toolNames.empty());
+        XX_TEST_EXPECT_TRUE(inst->graphNodeTypes.empty()); // 图注册记录同样回滚
+        XX_TEST_EXPECT_TRUE(graphSlot && !graphSlot->snapshot().active); // 槽位失效
 
         probe->failStart = false;
         f.manager->enable("lifecycle_plugin");
@@ -1130,6 +1174,8 @@ TestResult testPluginRuntime() {
             static_cast<int>(PluginInstanceState::Ready)
         );
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
+        XX_TEST_EXPECT_EQ(inst->graphNodeTypes.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(graphSlot && graphSlot->snapshot().active); // 重新激活
 
         // ---- 关闭流程中的实例不接受启用状态变化 ----
         inst->lifetime->requestClose();
@@ -1579,6 +1625,83 @@ TestResult testPluginRuntime() {
         );
         XX_TEST_EXPECT_TRUE(runNode(reloadNode).empty());
         XX_TEST_EXPECT_EQ(callsReload, 1);
+    }
+
+    /// F02: 订阅句柄独立于实例生命周期 —— 重复 unsubscribe 为空操作；
+    /// 卸载 (detachAll 退订) 之后对旧句柄再次 unsubscribe 不得访问已释放实例。
+    {
+        auto ctx = std::make_shared<agentxx::agent::AgentContext>();
+        RuntimeFixture f(ctx);
+        ctx->bus = std::make_shared<agentxx::event::EventBus>(f.io.get_executor());
+
+        const auto* host   = f.provider->hostView();
+        const auto  ifaces = AgentIfaces::query(host);
+        XX_TEST_EXPECT_TRUE(ifaces.events != nullptr);
+        if (!ifaces.events) {
+            return result;
+        }
+        const auto topicSv = PluginStringView::fromCstr("runtime_probe.topic");
+        int        handlerCalls = 0;
+        // EventBus 派发为协程异步执行; 循环推进后必须 restart, 保持上下文
+        // 处于非 stopped 状态 (否则 vtable 入口按"IO 不可用"拒绝退订/订阅)。
+        auto flushEvents = [&] {
+            for (int i = 0; i < 50; ++i) {
+                f.io.restart();
+                f.io.run_for(std::chrono::milliseconds{2});
+            }
+            f.io.restart();
+        };
+        auto*      sub = ifaces.events->subscribe(
+            host,
+            &topicSv,
+            +[](const AgentxxPluginStringView*, void* ud) {
+                ++*static_cast<int*>(ud);
+            },
+            &handlerCalls
+        );
+        XX_TEST_EXPECT_TRUE(sub != nullptr);
+        XX_TEST_EXPECT_TRUE(sub && sub->alive.load());
+
+        XX_TEST_EXPECT_EQ(f.manager->publish("runtime_probe.topic", "{}"), 0);
+        flushEvents();
+        XX_TEST_EXPECT_EQ(handlerCalls, 1);
+
+        // 重复退订: 第二次必须是空操作 (alive 先失效再移除宿主引用)。
+        ifaces.events->unsubscribe(sub);
+        ifaces.events->unsubscribe(sub);
+        XX_TEST_EXPECT_FALSE(sub->alive.load());
+        XX_TEST_EXPECT_EQ(f.manager->publish("runtime_probe.topic", "{}"), 0);
+        flushEvents();
+        XX_TEST_EXPECT_EQ(handlerCalls, 1); ///< 退订后不再回调
+
+        // 卸载实例 (detachAll 统一退订) 后, 对插件保存的旧句柄再次退订必须安全。
+        auto* late = ifaces.events->subscribe(
+            host,
+            &topicSv,
+            +[](const AgentxxPluginStringView*, void* ud) {
+                ++*static_cast<int*>(ud);
+            },
+            &handlerCalls
+        );
+        XX_TEST_EXPECT_TRUE(late != nullptr);
+        bool unloaded = false;
+        asio::co_spawn(
+            f.io,
+            [&]() -> asio::awaitable<void> {
+                unloaded = co_await f.manager->unloadAsync("provider", 500ms);
+            },
+            asio::detached
+        );
+        f.drainAll();
+        XX_TEST_EXPECT_TRUE(unloaded);
+        if (late) {
+            XX_TEST_EXPECT_FALSE(late->alive.load()); ///< detachAll 已失效句柄
+            ifaces.events->unsubscribe(late);         ///< 迟到调用必须安全空操作
+            ifaces.events->unsubscribe(late);
+        }
+        XX_TEST_EXPECT_EQ(f.manager->publish("runtime_probe.topic", "{}"), 0);
+        flushEvents();
+        XX_TEST_EXPECT_EQ(handlerCalls, 1);
     }
     return result;
 }

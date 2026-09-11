@@ -227,6 +227,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - hook / capability 的 SDK helper 按**返回类型严格分发**：返回 `void`/字符串的同步业务在
      调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收束（provider 句柄可取消，
      完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
+   - `graph_node` 使用同一 root adapter 注册自定义图节点类型：快同步节点返回节点输出
+     JSON（`std::string`），异步节点返回 `Task<std::string>`；node/config/state/thread_id
+     由拥有型 `RootRequest` 保证跨挂起点有效，`run_cancel` 置取消标志并取消嵌套 awaiter
 
 **后台任务 spawn (宿主托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!cancelled()) { offload; sleep; }`) 自 API v1 起注册到宿主 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 
@@ -392,6 +395,11 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 ---
 
 ## 14. 构建与平台
+
+> SDK 类型约束的编译期验证：`agent/script/check_sdk_negative_compile.sh` 从测试构建的
+> `compile_commands.json` 提取真实编译环境，编译 `agent/test/plugin/negative_compile/`
+> 下的片段并断言行为（`positive_control.cpp` 必须编译成功；错误签名如 hook 返回 `int`、
+> capability 返回 `int`、tool 返回普通值、跨边界传 STL 参数必须编译失败）。
 
 - **平台矩阵**：各插件在自身 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 函数判定，复用顶层 `XX_IS_*_D` 变量；不支持的平台跳过编译 (screen_capture/computer_use/text_selection_monitor 仅 Windows, audio_stream 全平台未实现等)
 - **内置合并编译**：按 `AGENTXX_PLUGIN_BUILTIN_LIST` 合并进 `libagentxx`；此时 `test_ffi_c_api` 与 `client_plugins` 测试按条件跳过动态库路径

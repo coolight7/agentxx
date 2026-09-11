@@ -140,43 +140,17 @@ bool lastAssistantHasToolCalls(const agentxx::util::Json& messages) {
 /// - 后续轮次: 按 has_tool_calls 语义写 __route__ (tools/end), 保持原
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
-void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
-    void*                              user_data,
-    const AgentxxPluginStringView*     node_name,
-    const AgentxxPluginStringView*     config_json,
-    const AgentxxPluginStringView*     state_json,
-    const AgentxxPluginStringView*     thread_id,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error_out
-) {
-    auto* ctx = static_cast<AgentCtx*>(user_data);
+std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
     (void)ctx;
-    (void)node_name;
-    (void)thread_id;
-    (void)error_out;
-
-    auto done = [&](const std::string& payload) {
-        if (notify && notify->done) {
-            auto payloadSv
-                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payloadSv);
-        }
-    };
-
-    try {
-        auto state    = agentxx::util::Json::parse(std::string_view(
-            state_json && state_json->data ? state_json->data : "{}",
-            state_json ? static_cast<size_t>(state_json->size) : 0
-        ));
-        auto messages = stateMessages(state);
+    const std::string_view config_json = req.config();
+    auto                   state       = agentxx::util::Json::parse(req.state());
+    auto                   messages    = stateMessages(state);
 
         // 解析 config: intents 枚举 + fallback
         std::vector<std::string> intents;
         std::string              fallback = "normal";
-        if (config_json && config_json->data && config_json->size) {
-            auto cfg = agentxx::util::Json::parse(
-                std::string_view(config_json->data, static_cast<size_t>(config_json->size))
-            );
+        if (!config_json.empty()) {
+            auto cfg = agentxx::util::Json::parse(config_json);
             if (cfg.is_object()) {
                 if (cfg.contains("intents") && cfg["intents"].is_array()) {
                     for (const auto& i : cfg["intents"]) {
@@ -234,8 +208,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
                         agentxx::util::Json(route).dump(),
                         messages.dump()
                     );
-                    done(payload);
-                    return nullptr;
+                    return payload;
                 }
             }
             // 未命中/未移除: 仅写路由标记
@@ -243,8 +216,7 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
                 R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})",
                 agentxx::util::Json(route).dump()
             );
-            done(payload);
-            return nullptr;
+            return payload;
         }
 
         // 后续轮次: 等价 has_tool_calls 条件
@@ -253,92 +225,41 @@ void* AGENTXX_PLUGIN_CALL intentRouterRunStart(
             R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
             agentxx::util::Json(route).dump()
         );
-        done(payload);
-        return nullptr;
-    } catch (const std::exception& e) {
-        if (notify && notify->done) {
-            std::string what  = e.what();
-            auto        errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-        }
-        return nullptr;
-    } catch (...) {
-        if (notify && notify->done) {
-            auto errSv = agentxx::plugin::PluginStringView::fromCstr("unknown intent_router error");
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-        }
-        return nullptr;
-    }
+        return payload;
 }
 
 /// 时间输出节点执行 (快同步): 写当前系统日期时间到 messages channel
 /// - EventBridge 收到 messages CHANNEL_WRITE 后同步 viewMessages (assistant
 ///   角色消息) 与 llmMessages, 满足"添加到 viewMessages、llmMessages"
 /// - 图配置为执行后直接路由 __end__ 结束轮次
-void* AGENTXX_PLUGIN_CALL datetimeNodeRunStart(
-    void*                              user_data,
-    const AgentxxPluginStringView*     node_name,
-    const AgentxxPluginStringView*     config_json,
-    const AgentxxPluginStringView*     state_json,
-    const AgentxxPluginStringView*     thread_id,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error_out
-) {
-    auto* ctx = static_cast<AgentCtx*>(user_data);
+std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
     (void)ctx;
-    (void)node_name;
-    (void)config_json;
-    (void)state_json;
-    (void)thread_id;
-    (void)error_out;
-
-    try {
-        const auto now  = std::chrono::system_clock::now();
-        const auto nowT = std::chrono::system_clock::to_time_t(now);
-        const auto nowMs
-            = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        std::tm tm{};
+    (void)req;
+    const auto now  = std::chrono::system_clock::now();
+    const auto nowT = std::chrono::system_clock::to_time_t(now);
+    const auto nowMs
+        = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    std::tm tm{};
 #if XX_IS_WIN_D
-        localtime_s(&tm, &nowT);
+    localtime_s(&tm, &nowT);
 #else
-        localtime_r(&nowT, &tm);
+    localtime_r(&nowT, &tm);
 #endif
-        char buf[64]{};
-        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+    char buf[64]{};
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
 
-        const std::string text = fmt::format("当前系统日期时间: {}", buf);
-        // assistant 消息 (role/content 字段, 与图消息 JSON 字段一致)
-        agentxx::util::Json msg = agentxx::util::Json::object();
-        msg["role"]             = "assistant";
-        msg["content"]          = text;
-        msg["startTimeMs"]      = nowMs;
-        msg["durationMs"]       = int64_t{0};
+    const std::string text = fmt::format("当前系统日期时间: {}", buf);
+    // assistant 消息 (role/content 字段, 与图消息 JSON 字段一致)
+    agentxx::util::Json msg = agentxx::util::Json::object();
+    msg["role"]             = "assistant";
+    msg["content"]          = text;
+    msg["startTimeMs"]      = nowMs;
+    msg["durationMs"]       = int64_t{0};
 
-        agentxx::util::Json msgs = agentxx::util::Json::array();
-        msgs.push_back(std::move(msg));
+    agentxx::util::Json msgs = agentxx::util::Json::array();
+    msgs.push_back(std::move(msg));
 
-        const std::string payload
-            = fmt::format(R"({{"writes":[{{"channel":"messages","value":{}}}]}})", msgs.dump());
-        if (notify && notify->done) {
-            auto payloadSv
-                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payloadSv);
-        }
-        return nullptr;
-    } catch (const std::exception& e) {
-        if (notify && notify->done) {
-            std::string what  = e.what();
-            auto        errSv = agentxx::plugin::PluginStringView::from(what.data(), what.size());
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-        }
-        return nullptr;
-    } catch (...) {
-        if (notify && notify->done) {
-            auto errSv = agentxx::plugin::PluginStringView::fromCstr("unknown datetime_node error");
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
-        }
-        return nullptr;
-    }
+    return fmt::format(R"({{"writes":[{{"channel":"messages","value":{}}}]}})", msgs.dump());
 }
 
 /// =====================================================================
@@ -513,34 +434,20 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 /// 注册事务 (start 的实际内容); 任一步失败由宿主回滚已生效的注册。
 static int exampleGraphAgentSetup(AgentCtx& ctx) {
-    const AgentxxPluginHost* host = ctx.host;
-
-    // 1. 注册意图识别节点类型
-    {
-        AgentxxPluginGraphNodeTypeSpec spec{};
-        spec.type = agentxx::plugin::PluginStringView::fromCstr("example_intent_router");
-        spec.run_start          = intentRouterRunStart;
-        spec.run_cancel         = nullptr;
-        spec.user_data          = &ctx;
-        spec.config_schema_json = agentxx::plugin::PluginStringView::fromCstr(
-            R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})"
-        );
-        if (ctx.iface.graph->register_node_type(host, &spec) != 0) {
-            return -1;
-        }
+    // 1. 注册意图识别节点类型 (统一 root adapter: 输入拥有化 + provider 句柄)
+    if (agentxx::plugin::graph_node(
+            ctx,
+            "example_intent_router",
+            R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})",
+            intentRouterRun
+        )
+        != 0) {
+        return -1;
     }
     // 2. 注册时间输出节点类型
-    {
-        AgentxxPluginGraphNodeTypeSpec spec{};
-        spec.type       = agentxx::plugin::PluginStringView::fromCstr("example_datetime");
-        spec.run_start  = datetimeNodeRunStart;
-        spec.run_cancel = nullptr;
-        spec.user_data  = &ctx;
-        spec.config_schema_json
-            = agentxx::plugin::PluginStringView::fromCstr(R"({"type":"object"})");
-        if (ctx.iface.graph->register_node_type(host, &spec) != 0) {
-            return -1;
-        }
+    if (agentxx::plugin::graph_node(ctx, "example_datetime", R"({"type":"object"})", datetimeNodeRun)
+        != 0) {
+        return -1;
     }
 
     // 3. 修改执行图: 默认图 → 意图路由流程

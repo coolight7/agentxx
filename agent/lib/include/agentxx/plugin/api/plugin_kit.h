@@ -1286,6 +1286,9 @@ struct RootRequest {
     std::string sessionId; ///< ABI thread_id / session_id
     std::string callId;    ///< 工具 tool_call_id；能力方法名放 method
     std::string method;    ///< 能力方法名（非能力操作为空）
+    std::string nodeName;  ///< 图节点实例名（仅图节点操作）
+    std::string configJson; ///< 图节点 config JSON（仅图节点操作）
+    std::string stateJson;  ///< GraphState::serialize() 只读快照（仅图节点操作）
 
     const AgentxxPluginHost*        host        = nullptr;
     const AgentxxPluginCancelToken* cancelToken = nullptr; ///< offload/worker 内的取消令牌视图
@@ -1335,10 +1338,30 @@ struct RootRequest {
         return req;
     }
 
+    /// 图节点：node_name/config_json/state_json/thread_id
+    static RootRequest forGraphNode(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* nodeName,
+        const AgentxxPluginStringView* configJson,
+        const AgentxxPluginStringView* stateJson,
+        const AgentxxPluginStringView* threadId
+    ) {
+        RootRequest req;
+        req.host       = host;
+        req.nodeName   = copyView(nodeName);
+        req.configJson = copyView(configJson, "{}");
+        req.stateJson  = copyView(stateJson, "{}");
+        req.sessionId  = copyView(threadId);
+        return req;
+    }
+
     std::string_view args() const noexcept { return argsJson; }
     std::string_view session() const noexcept { return sessionId; }
     std::string_view call() const noexcept { return callId; }
     std::string_view capMethod() const noexcept { return method; }
+    std::string_view node() const noexcept { return nodeName; }
+    std::string_view config() const noexcept { return configJson; }
+    std::string_view state() const noexcept { return stateJson; }
 };
 
 /// 根操作完成守卫：保证 notify.done 恰好一次，并把异常统一映射为终态。
@@ -1489,6 +1512,10 @@ struct PromiseBase {
 };
 
 } // namespace detail
+
+/// 根操作拥有型输入的公开别名：插件业务签名可直接写 `const RootRequest&`
+/// （tool/hook/capability/graph 通用；异步路径由 Job 持有到协程结束）。
+using RootRequest = detail::RootRequest;
 
 template<typename T>
 struct Task {
@@ -3471,6 +3498,174 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
             shim
         );
     }
+}
+
+namespace detail {
+
+/// 按可调用性选择图节点业务签名：fn(ctx, request, ctl) / fn(ctx, request)。
+/// 返回类型原样转发：快同步节点返回 `std::string`（节点输出 JSON），
+/// 锚定协程节点返回 `Task<T>`（同上，result 为节点输出 JSON）。
+template<typename NodeFn, typename Ctx>
+inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& req, OpCtl ctl) {
+    if constexpr (std::is_invocable_v<NodeFn, Ctx&, const RootRequest&, OpCtl>) {
+        return fn(ctx, req, std::move(ctl));
+    } else {
+        return fn(ctx, req);
+    }
+}
+
+} // namespace detail
+
+/// 注册插件自定义图节点类型（统一 root adapter）。
+///
+/// 与 tool/hook/capability 使用同一套生命周期与完成协议：
+/// - 输入（node/config/state/thread_id）由 [RootRequest] 拥有，跨挂起点有效（F13）；
+/// - 返回 `std::string`：快同步节点，调用返回即完成（异常 → FAILED）；
+/// - 返回 `Task<std::string>`：锚定协程节点，宿主获得可取消的 provider 句柄，
+///   完成通知在协程真正结束后 exactly-once 发出；
+/// - `run_cancel` 置取消标志并取消嵌套 awaiter。
+///
+/// `return`: 0 = 注册成功；非 0 = 类型名冲突或宿主不支持（调用方应使 start 事务失败）。
+template<typename Ctx, typename NodeFn>
+inline int32_t graph_node(
+    Ctx&             ctx,
+    std::string_view type,
+    std::string_view configSchema,
+    NodeFn&&         fn
+) {
+    if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
+        return -1;
+    }
+
+    struct NodeShim {
+        Ctx*                 ctx = nullptr;
+        std::decay_t<NodeFn> fn;
+    };
+
+    /// 异步节点的 provider 句柄：拥有输入 Request，由 promise.opCleanup_ 回收。
+    struct NodeJob {
+        NodeShim*                          shim = nullptr;
+        std::shared_ptr<std::atomic<bool>> cancelFlag;
+        void*                              coroAddr = nullptr;
+        detail::RootRequest                request;
+    };
+
+    auto shim
+        = ctx.storeShim(std::make_unique<NodeShim>(NodeShim{&ctx, std::forward<NodeFn>(fn)}));
+
+    AgentxxPluginGraphNodeTypeSpec spec{};
+    spec.type = PluginStringView::from(type.data(), type.size());
+    spec.config_schema_json
+        = PluginStringView::from(configSchema.data(), configSchema.size());
+    spec.user_data = shim;
+
+    spec.run_start = [](void*                              user_data,
+                        const AgentxxPluginStringView*     node_name,
+                        const AgentxxPluginStringView*     config_json,
+                        const AgentxxPluginStringView*     state_json,
+                        const AgentxxPluginStringView*     thread_id,
+                        const AgentxxPluginOperatorNotify* notify,
+                        AgentxxPluginString*               error_out) -> void* {
+        auto* shim = static_cast<NodeShim*>(user_data);
+        (void)error_out;
+        if (!shim || !shim->ctx) {
+            detail::CompletionGuard guard(notify);
+            guard.failed("graph node context released");
+            return nullptr;
+        }
+        // 输入纳入拥有型 Request：快同步节点在调用期间有效，异步节点由 Job
+        // 持有到协程真正结束（F13）。
+        auto request = detail::RootRequest::forGraphNode(
+            shim->ctx->host,
+            node_name,
+            config_json,
+            state_json,
+            thread_id
+        );
+        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        OpCtl ctl{
+            cancelFlag,
+            shim->ctx->host,
+            shim->ctx->iface.cancel,
+            request.sessionId,
+            &shim->ctx->cancelRegistry
+        };
+
+        using NodeRet = decltype(
+            detail::invokeGraphNode(shim->fn, *shim->ctx, request, ctl)
+        );
+        if constexpr (std::is_void_v<NodeRet>
+                      || std::is_convertible_v<NodeRet, std::string_view>) {
+            /// 快同步节点：调用返回即完成；异常统一映射为终态。
+            detail::CompletionGuard guard(notify);
+            try {
+                if constexpr (std::is_void_v<NodeRet>) {
+                    detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl));
+                    guard.ok();
+                } else {
+                    guard.ok(
+                        detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl))
+                    );
+                }
+            } catch (...) {
+                guard.fromCurrentException();
+            }
+            return nullptr;
+        } else {
+            /// Task<T> 节点：由 promise 在协程结束后收束完成通知，
+            /// 返回 Job 作为宿主可取消的 provider 句柄。
+            auto* job = new NodeJob{
+                shim,
+                std::move(cancelFlag),
+                nullptr,
+                std::move(request)
+            };
+            auto task = detail::invokeGraphNode(shim->fn, *shim->ctx, job->request, std::move(ctl));
+            if (!task.handle_) {
+                delete job;
+                detail::CompletionGuard guard(notify);
+                guard.failed("graph node returned an empty task");
+                return nullptr;
+            }
+            auto  h      = task.handle_;
+            task.handle_ = nullptr;
+            auto& p      = h.promise();
+            p.notify_     = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
+            p.host_       = job->request.host;
+            p.cancelFlag_ = job->cancelFlag;
+            try {
+                h.resume();
+            } catch (...) {
+                p.set_exception(std::current_exception());
+            }
+            if (h.done()) {
+                detail::finishIfDone(h);
+                delete job;
+                return nullptr;
+            }
+            job->coroAddr = h.address();
+            p.opCleanup_  = [job]() { delete job; };
+            return job;
+        }
+    };
+
+    spec.run_cancel = [](void* user_data, void* op) {
+        (void)user_data;
+        if (!op) {
+            return;
+        }
+        auto* job = static_cast<NodeJob*>(op);
+        if (job->cancelFlag) {
+            job->cancelFlag->store(true, std::memory_order_release);
+        }
+        if (job->coroAddr) {
+            auto handle
+                = std::coroutine_handle<detail::PromiseBase<void>>::from_address(job->coroAddr);
+            handle.promise().cancel_outstanding();
+        }
+    };
+
+    return ctx.iface.graph->register_node_type(ctx.host, &spec);
 }
 
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
