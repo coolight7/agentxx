@@ -12,10 +12,11 @@
 
 ### 0.1 当前状态
 
-- 本文是任务交接文档。**当前状态：Reset-v1 重构完成（2026-09-11，提交 29）**；
-  逐提交进度、验证结果与剩余非阻塞遗留项以
+- 本文是任务交接文档。**当前状态：Reset-v1 重构完成（2026-09-11，提交 29 = `91b345a9`）**；
+  逐提交进度、验证结果与剩余非阻塞待完成项以
   `resource/history/plugin-refactor-2/work.md` 为准
-  （最新提交 29；该文件**第 1 节=已实现任务内容、第 2 节=待实现/非阻塞遗留内容**）。
+  （该文件**第 1 节=已完成任务内容、第 2 节=待完成任务内容**；
+  最新提交号为提交 30 的文档整理，明细见该文件第 4 节）。
 - 已落地（阶段）：R1 Runtime/Operation；R2 加载事务与异步关闭（含注册事务回滚，
   工具/图/订阅/prompt/hook/能力/资源与客户端 UI 均有真实 DSO 用例）；R3 ABI v1 与
   SDK 统一 root adapter / 反例编译检查；R4 全部内置插件（含 3 个 JS 系插件）的
@@ -23,13 +24,14 @@
   依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、Debug+ASan 回归、
   插件框架定向 UBSan 探针、定向 TSan 回归、设计文档 Reset-v1 章节、**Windows 平台
   验证（提交 29）**。
-- **第 12 节完成标准已全部满足**（6 项前置条件逐项见 work.md 2.6）。其余平台：
-  Android 未验证，不以其它平台结果代替。
-- 非阻塞遗留项（不影响完成判定，已在 work.md 第 2/5 节逐条列出）：
-  ① 依赖插件启用事务顺序边界（work.md 2.3，失败→Disabled 可重试，不影响契约）；
-  ② 仓库中**非插件模块**的 TSan 告警（FFI / HttpServer / 测试脚手架 / 未插桩
-  liburing + boost asio io_uring），需另立任务；插件框架范围内 0 告警；
-  ③ work.md 2.4 的 5 个可选收尾项。
+- **第 12 节完成标准已全部满足**（6 项逐项勾选见 work.md 1.1）。已验证平台：
+  Windows（MSVC Debug + ASan）、Linux（Debug + ASan/LSan、定向 UBSan/TSan）；
+  Android 平台验证不在本任务范围。
+- 非阻塞待完成项（不影响完成判定，明细见 work.md 第 2 节）：
+  ① 依赖插件启用事务串行化（work.md 2.1，失败→Disabled 可重试，不影响契约）；
+  ② 业务插件迁移到宿主 HTTP/process 服务（work.md 2.2）；
+  ③ 平台交互人工回归（work.md 2.3）；
+  ④ work.md 2.4 的 5 个可选收尾项。
 - 仓库中已有用户未提交/已提交但与本任务无关的改动，至少包括：
   - `agentxx-config.yaml`（用户模型配置改动，勿回退）
   - `agent/third_party/fmt`（untracked）、`libiconv-native` / `liburing`（submodule 脏标记）
@@ -164,8 +166,8 @@ Toolcall / PluginTool::execute_async
   gate 改为**空列表（全平台跳过）**，Windows/Linux 均不产出该 DSO；恢复条件已写入
   插件 CMakeLists 与源码注释。
 - `agentxx_execute_command`、`agentxx_websearch`、`agentxx_rag_search` 等可先继续受控 offload，但应逐步迁移到宿主 HTTP/process 服务，避免每个请求占用一个长期阻塞 worker。
-  **部分完成**：CancelToken 已接入（提交 5/14/24）；宿主 HTTP/process 服务迁移列为后续
-  任务（work.md 2.4/第 6 节）。
+  **部分完成**：CancelToken 已接入（提交 5/14/24）；宿主 HTTP/process 服务迁移属非阻塞
+  待完成任务（work.md 2.2）。
 - JS 专用线程本身不是错误；必须修复的是同步跨脚本等待、Promise 轮询、失败事务和 stop 完成语义。
   **已修复**（提交 15/27）：callTool Promise 化、轮询删除、顶层异常事务、stop 完成语义与
   引擎 start/stop 往返；Windows 侧同样通过（提交 29）。
@@ -639,11 +641,11 @@ UI/TUI 提交 render request（拷贝 tool 输入）
 
 > 完成记录（提交 29）：R6 全部完成。已验证：Linux（Debug + ASan/LSan、定向 UBSan、
 > 定向 TSan，插件框架 0 告警）与 **Windows（MSVC Debug + ASan：全插件构建 +
-> 插件专项 1765/0 + 扩展 2251/0 + 工具模块 360/0）**。Android 未验证。
+> 插件专项 1765/0 + 扩展 2251/0 + 工具模块 360/0）**。
 > Windows 验证期间发现并修复 2 个问题：① `test_plugin_runtime` 的轮询式等待在
 > win_iocp 下会漏掉定时器线程投递的完成包（偶发失败/永久挂起），改为有界推进 IO 的
 > 等待（`plugin_runtime` 623→634 断言，连续 10 轮稳定）；② `audio_stream` 桩实现
-> 误进入产物，改为全平台跳过。详见 work.md 1.8 第 12/13 条与 1.10/3.6 节。
+> 误进入产物，改为全平台跳过。详见 work.md 1.8 第 12/13 条与 1.10/3.1 节。
 
 ### 提交建议
 
@@ -724,25 +726,27 @@ plugin_multi_instance            29 passed / 0 failed
 
 新会话在结束本任务前必须：
 
-- [x] 按 R1～R6 更新本文“实施状态”，未把计划写成已完成（见第 0.1 节；明细在 work.md）。
-- [x] 记录每个阶段实际修改的文件、构建命令、测试命令、通过/失败结果（work.md 第 3/7 节）。
-- [x] 失败或超时必须记录原因和是否留下 CloseFailed/临时资源（work.md 第 7/8 节）。
+- [x] 按 R1～R6 更新本文“实施状态”，未把计划写成已完成（见第 0.1 节；明细在 work.md 第 1 节）。
+- [x] 记录每个阶段实际修改的文件、构建命令、测试命令、通过/失败结果
+      （work.md 第 0.3/3 节、第 4 节提交边界）。
+- [x] 失败或超时必须记录原因和是否留下 CloseFailed/临时资源
+      （work.md 第 3 节"验证记录"与第 5 节"已知风险"）。
 - [x] 每次修改后查看 `git diff --check` 和 `git status`，保留用户无关修改。
 - [x] 更新 `docs/zh-cn/design/plugins.md`，使公开设计文档与 Reset-v1 实现一致
       （第 15 节 Reset-v1 章节 + 第 2/3/4/6/9/12/14 节修订）。
 - [x] 明确已验证平台：**Windows（MSVC 14.51 / VS18 Debug + ASan，提交 29）**、
-      **Linux（Debug + ASan/LSan、定向 UBSan 探针、定向 TSan）**；Android 未验证，
-      不以其它平台结果代替。
-- [x] 只有在所有内置插件迁移（§9 第 4-8 步）与专项生命周期测试通过、且 work.md 2.6 的
+      **Linux（Debug + ASan/LSan、定向 UBSan 探针、定向 TSan）**；
+      其它平台未验证，不以已通过平台的结果代替。
+- [x] 只有在所有内置插件迁移（§9 第 4-8 步）与专项生命周期测试通过、且 work.md 的
       全部前置条件满足后，才能将本文状态改为“Reset-v1 重构完成”。
       **已于提交 29 满足**：§9 第 4-8 步全部完成（Windows 插件按平台 gate 单独修复/
-      编译，`audio_stream` 因实现未启用而全平台跳过构建）；work.md 2.6 的 6 项前置条件
-      全部勾选；状态已更新为“Reset-v1 重构完成”。
-      非阻塞遗留项（需在结论中列出，不影响完成判定）：
-      ① 依赖插件启用事务顺序边界（work.md 2.3）；② 仓库中非插件模块的 TSan 告警
-      （FFI / HttpServer / 测试脚手架 / 未插桩 liburing，需另立任务；插件框架范围内
-      0 告警）；③ work.md 2.4 的 5 个可选收尾项；④ Android 未验证。
+      编译，`audio_stream` 因实现未启用而全平台跳过构建）；work.md 1.1 的 6 项完成
+      标准全部勾选；状态已更新为“Reset-v1 重构完成”。
+      非阻塞待完成项（不影响完成判定，明细见 work.md 第 2 节）：
+      ① 依赖插件启用事务串行化（work.md 2.1）；② 业务插件迁移到宿主 HTTP/process
+      服务（work.md 2.2）；③ 平台交互人工回归（work.md 2.3）；④ work.md 2.4 的
+      5 个可选收尾项。
 
-**交接给后续会话的第一步**：读取本文与 work.md（第 1 节已实现 / 第 2 节非阻塞遗留），
-检查工作树，然后按 work.md 第 6 节"后续（非本任务验收项）"选择要处理的事项；
+**交接给后续会话的第一步**：读取本文与 work.md（第 1 节 = 已完成 / 第 2 节 = 待完成），
+检查工作树，然后按 work.md 第 6 节清单第 8 项选择要处理的事项；
 Reset-v1 重构本身已完成，不要回退已完成的 ABI/生命周期契约，也不要删除现有测试。
