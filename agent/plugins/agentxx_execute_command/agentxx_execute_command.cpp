@@ -236,24 +236,103 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
         return 0;
     }
 
+static void* execStart(
+    ExecPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_execute_command start: notify required");
+        }
+        return nullptr;
+    }
+    if (setupExecPlugin(ctx) != 0) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_execute_command start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* execStop(
+    ExecPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ExecPluginCtx, execStart, execStop)
+
 AGENTXX_PLUGIN_AGENT_EXPORT(
     ExecPluginCtx,
     "agentxx_execute_command",
     "1.0.0",
     "Execute system commands (bash/windows terminal) with timeout/cancellation",
-    setupExecPlugin
+    [](ExecPluginCtx&) -> int32_t {
+        // create 只构造上下文; 工具注册在 start 事务中执行。
+        return 0;
+    }
 );
 
 struct ExecClientCtx : public ClientPluginBase {};
+
+/// client 侧注册事务 (start 的实际内容)。
+static int32_t setupExecClient(ExecClientCtx& ctx) {
+        ctx.registerTemplate(kNameBash, "Bash", "command");
+        ctx.registerTemplate(kNameWindows, "Cmd", "command");
+        return 0;
+}
+
+static void* execClientStart(
+    ExecClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_execute_command client start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (setupExecClient(ctx) != 0) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_execute_command client start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* execClientStop(
+    ExecClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // UI 注册记录由宿主在 stop 后统一撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ExecClientCtx, execClientStart, execClientStop)
 
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     ExecClientCtx,
     "agentxx_execute_command",
     "1.0.0",
     "Command execution specialized UI template renderer",
-    [](ExecClientCtx& ctx) -> int32_t {
-        ctx.registerTemplate(kNameBash, "Bash", "command");
-        ctx.registerTemplate(kNameWindows, "Cmd", "command");
+    [](ExecClientCtx&) -> int32_t {
+        // create 只构造上下文; UI 注册在 start 事务中执行。
         return 0;
     }
 );

@@ -145,7 +145,7 @@ asio::awaitable<TestResult>
         StateTuple state{&opStatus, &payload, &done};
 
         auto* op = ctx->pluginManager->invokeCapabilityAsync(
-            nullptr,
+            inst.get(), ///< Reset-v1: 能力调用必须携带 caller 实例 (租约保护)
             "agentxx.system_usage",
             "query",
             "{}",
@@ -161,11 +161,12 @@ asio::awaitable<TestResult>
             &err
         );
         XX_TEST_EXPECT_TRUE(op != nullptr);
-        while (!done) {
+        for (int i = 0; i < 500 && !done; ++i) {
             asio::steady_timer t(co_await asio::this_coro::executor);
             t.expires_after(std::chrono::milliseconds(2));
             co_await t.async_wait(asio::use_awaitable);
         }
+        XX_TEST_EXPECT_TRUE(done); ///< 有界等待: 完成回调未到达即失败, 不悬挂测试
         XX_TEST_EXPECT_EQ(opStatus, AGENTXX_PLUGIN_OPERATOR_OK);
         if (!payload.empty()) {
             auto j = agentxx::util::Json::parse(payload);

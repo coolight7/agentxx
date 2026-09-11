@@ -45,12 +45,8 @@ constexpr std::string_view kTimeoutDesc
 
 struct FsPluginCtx : public PluginBase {};
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
-    FsPluginCtx,
-    "agentxx_filesystem",
-    "1.0.0",
-    "File system tools: list, read, write, edit, glob, grep",
-    [](FsPluginCtx& ctx) -> int32_t {
+/// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
+static int32_t fsSetup(FsPluginCtx& ctx) {
         // 1. List
         auto listSchema
             = ctx.schema(kNameList)
@@ -336,17 +332,50 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         );
 
         return 0;
+}
+
+static void* fsStart(
+    FsPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_filesystem start: notify required");
+        }
+        return nullptr;
+    }
+    if (fsSetup(ctx) != 0) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_filesystem start: registration failed");
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* fsStop(FsPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(FsPluginCtx, fsStart, fsStop)
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    FsPluginCtx,
+    "agentxx_filesystem",
+    "1.0.0",
+    "File system tools: list, read, write, edit, glob, grep",
+    [](FsPluginCtx&) -> int32_t {
+        // create 只构造上下文; 工具注册在 start 事务中执行。
+        return 0;
     }
 );
 
 struct FsClientCtx : public ClientPluginBase {};
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
-    FsClientCtx,
-    "agentxx_filesystem",
-    "1.0.0",
-    "Filesystem specialized renderer",
-    [](FsClientCtx& ctx) -> int32_t {
+/// client 侧注册事务 (start 的实际内容)。
+static int32_t fsClientSetup(FsClientCtx& ctx) {
         // 1. List
         ctx.registerTemplate(kNameList, "List", "path");
 
@@ -472,6 +501,49 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
             }
         });
 
+        return 0;
+}
+
+static void* fsClientStart(
+    FsClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_filesystem client start: notify required");
+        }
+        return nullptr;
+    }
+    if (fsClientSetup(ctx) != 0) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_filesystem client start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* fsClientStop(
+    FsClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // UI 注册记录由宿主在 stop 后统一撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(FsClientCtx, fsClientStart, fsClientStop)
+
+AGENTXX_PLUGIN_CLIENT_EXPORT(
+    FsClientCtx,
+    "agentxx_filesystem",
+    "1.0.0",
+    "Filesystem specialized renderer",
+    [](FsClientCtx&) -> int32_t {
+        // create 只构造上下文; UI 注册在 start 事务中执行。
         return 0;
     }
 );

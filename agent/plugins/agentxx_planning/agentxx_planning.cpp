@@ -346,9 +346,148 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
     );
 }
 
+/// 注册事务 (start 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
+static int planningSetup(PluginCtx* ctx) {
+    const AgentxxPluginHost* host = ctx->host;
+    // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts)
+    if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
+        agentxx::util::Json j;
+        j["appendSystemPrompts"]             = agentxx::util::Json::object();
+        j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
+        std::string js                       = j.dump();
+        auto        promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
+        if (ctx->iface.prompt->set_prompt(host, &promptSv) != 0) {
+            pluginLog(ctx, 3, "agentxx_planning: set appendSystemPrompts[planning] failed");
+        } else {
+            pluginLog(
+                ctx,
+                2,
+                "agentxx_planning: appendSystemPrompts[planning] injected via prompt iface"
+            );
+        }
+    }
+
+    // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
+
+    {
+        std::string schema
+            = ctx->schema(kNamePlanning)
+                  .enumString(
+                      "mode",
+                      "Operation mode: `write` saves/updates the planning content "
+                      "(requires `roadmap`); `read` returns the previously saved "
+                      "planning content of this session.",
+                      {"write", "read"},
+                      /*required=*/true
+                  )
+                  .string(
+                      "roadmap",
+                      "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow."
+                  )
+                  .array(
+                      "todos",
+                      "(write only) TACTICAL LAYER: Near-term task items (state/content).",
+                      "object"
+                  )
+                  .string(
+                      "notes",
+                      "(write only) MEMO LAYER: Any additional notes, tips, reminders."
+                  )
+                  .build();
+
+        agentxx::plugin::fast_tool(
+            *ctx,
+            kNamePlanning,
+            kDepictPlanning,
+            schema,
+            [](PluginCtx& c, std::string_view args_json, std::string_view thread_id
+            ) -> std::string {
+                std::string argsStr(args_json.data() ? args_json.data() : "", args_json.size());
+                auto        arguments = argsStr.empty() ? agentxx::util::Json::object()
+                                                        : agentxx::util::Json::parse(argsStr);
+
+                const auto mode = arguments.value("mode", std::string{});
+                if (mode != "write" && mode != "read") {
+                    return R"({"error":"Arg `mode` must be \"write\" or \"read\""})";
+                }
+
+                if (mode == "read") {
+                    const std::string tid{
+                        thread_id.data() ? thread_id.data() : "",
+                        thread_id.size()
+                    };
+                    auto saved = loadPlanningFile(c, tid);
+                    if (saved.empty()) {
+                        return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
+                    }
+                    try {
+                        auto v = agentxx::util::Json::parse(saved);
+                        return v.dump(2);
+                    } catch (...) {
+                        return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
+                    }
+                }
+
+                auto roadmap = arguments.value("roadmap", std::string{});
+                if (roadmap.empty()) {
+                    return R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})";
+                }
+
+                std::string todosJson;
+                if (arguments.contains("todos") && arguments["todos"].is_array()) {
+                    todosJson = arguments["todos"].dump();
+                }
+                std::string notes = arguments.value("notes", std::string{});
+
+                agentxx::util::Json planStore = agentxx::util::Json::object();
+                planStore["roadmap"]          = roadmap;
+                if (!todosJson.empty()) {
+                    try {
+                        planStore["todos"] = agentxx::util::Json::parse(todosJson);
+                    } catch (...) {
+                        return R"({"error":"Arg `todos` is not valid JSON"})";
+                    }
+                }
+                if (!notes.empty()) {
+                    planStore["notes"] = notes;
+                }
+                std::string planJson = planStore.dump();
+
+                const std::string tid{thread_id.data() ? thread_id.data() : "", thread_id.size()};
+                if (!savePlanningFile(c, tid, planJson)) {
+                    pluginLog(
+                        &c,
+                        3,
+                        fmt::format("agentxx_planning: persist planning failed tid={}", tid)
+                    );
+                }
+
+                // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用处理)
+                publishPlanningEvent(c, planJson);
+
+                return "success";
+            }
+        );
+    }
+
+    // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
+    if (ctx->iface.events && ctx->iface.events->subscribe) {
+        auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+        if (!ctx->iface.events->subscribe(host, &topicSv, on_client_attached, ctx)) {
+            pluginLog(
+                ctx,
+                3,
+                "agentxx_planning: subscribe client_attached failed (UI resnapshot disabled)"
+            );
+        }
+    }
+
+    return 0;
+}
+
 extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: create 内含 JSON schema 构建等可抛操作, 异常返回 -1;
+    // C ABI 边界异常守卫: create 只构造上下文与接口查询, 注册事务由 start 执行;
     // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
     PluginCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
@@ -365,152 +504,63 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             ctx->iface = agentxx::plugin::AgentIfaces::query(host);
             raw        = ctx.get();
 
-            // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts)
-            if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
-                agentxx::util::Json j;
-                j["appendSystemPrompts"]             = agentxx::util::Json::object();
-                j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
-                std::string js                       = j.dump();
-                auto promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
-                if (ctx->iface.prompt->set_prompt(host, &promptSv) != 0) {
-                    pluginLog(
-                        ctx.get(),
-                        3,
-                        "agentxx_planning: set appendSystemPrompts[planning] failed"
-                    );
-                } else {
-                    pluginLog(
-                        ctx.get(),
-                        2,
-                        "agentxx_planning: appendSystemPrompts[planning] injected via prompt iface"
-                    );
-                }
-            }
-
-            // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
-
-            {
-                std::string schema
-                    = ctx->schema(kNamePlanning)
-                          .enumString(
-                              "mode",
-                              "Operation mode: `write` saves/updates the planning content "
-                              "(requires `roadmap`); `read` returns the previously saved "
-                              "planning content of this session.",
-                              {"write", "read"},
-                              /*required=*/true
-                          )
-                          .string(
-                              "roadmap",
-                              "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow."
-                          )
-                          .array(
-                              "todos",
-                              "(write only) TACTICAL LAYER: Near-term task items (state/content).",
-                              "object"
-                          )
-                          .string(
-                              "notes",
-                              "(write only) MEMO LAYER: Any additional notes, tips, reminders."
-                          )
-                          .build();
-
-                agentxx::plugin::fast_tool(
-                    *ctx,
-                    kNamePlanning,
-                    kDepictPlanning,
-                    schema,
-                    [](PluginCtx& c, std::string_view args_json, std::string_view thread_id
-                    ) -> std::string {
-                        std::string argsStr(
-                            args_json.data() ? args_json.data() : "",
-                            args_json.size()
-                        );
-                        auto arguments = argsStr.empty() ? agentxx::util::Json::object()
-                                                         : agentxx::util::Json::parse(argsStr);
-
-                        const auto mode = arguments.value("mode", std::string{});
-                        if (mode != "write" && mode != "read") {
-                            return R"({"error":"Arg `mode` must be \"write\" or \"read\""})";
-                        }
-
-                        if (mode == "read") {
-                            const std::string tid{
-                                thread_id.data() ? thread_id.data() : "",
-                                thread_id.size()
-                            };
-                            auto saved = loadPlanningFile(c, tid);
-                            if (saved.empty()) {
-                                return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
-                            }
-                            try {
-                                auto v = agentxx::util::Json::parse(saved);
-                                return v.dump(2);
-                            } catch (...) {
-                                return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
-                            }
-                        }
-
-                        auto roadmap = arguments.value("roadmap", std::string{});
-                        if (roadmap.empty()) {
-                            return R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})";
-                        }
-
-                        std::string todosJson;
-                        if (arguments.contains("todos") && arguments["todos"].is_array()) {
-                            todosJson = arguments["todos"].dump();
-                        }
-                        std::string notes = arguments.value("notes", std::string{});
-
-                        agentxx::util::Json planStore = agentxx::util::Json::object();
-                        planStore["roadmap"]          = roadmap;
-                        if (!todosJson.empty()) {
-                            try {
-                                planStore["todos"] = agentxx::util::Json::parse(todosJson);
-                            } catch (...) {
-                                return R"({"error":"Arg `todos` is not valid JSON"})";
-                            }
-                        }
-                        if (!notes.empty()) {
-                            planStore["notes"] = notes;
-                        }
-                        std::string planJson = planStore.dump();
-
-                        const std::string tid{
-                            thread_id.data() ? thread_id.data() : "",
-                            thread_id.size()
-                        };
-                        if (!savePlanningFile(c, tid, planJson)) {
-                            pluginLog(
-                                &c,
-                                3,
-                                fmt::format("agentxx_planning: persist planning failed tid={}", tid)
-                            );
-                        }
-
-                        // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用处理)
-                        publishPlanningEvent(c, planJson);
-
-                        return "success";
-                    }
-                );
-            }
-
-            // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
-            if (ctx->iface.events && ctx->iface.events->subscribe) {
-                auto topicSv
-                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
-                if (!ctx->iface.events->subscribe(host, &topicSv, on_client_attached, ctx.get())) {
-                    pluginLog(
-                        ctx.get(),
-                        3,
-                        "agentxx_planning: subscribe client_attached failed (UI resnapshot disabled)"
-                    );
-                }
-            }
-
             *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
             return 0;
+        }
+    );
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_start(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
+            if (!ctx) {
+                agentxx::plugin::PluginString::set(
+                    nullptr,
+                    error_out,
+                    "planning start: null context"
+                );
+                return nullptr;
+            }
+            if (!notify) {
+                agentxx::plugin::PluginString::set(
+                    ctx->host,
+                    error_out,
+                    "agentxx_planning start: notify required"
+                );
+                return nullptr;
+            }
+            if (planningSetup(ctx) != 0) {
+                agentxx::plugin::PluginString::set(
+                    ctx->host,
+                    error_out,
+                    "agentxx_planning start: registration failed"
+                );
+                return nullptr;
+            }
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            return nullptr;
+        }
+    );
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL
+    agentxx_plugin_agent_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+            if (notify && notify->done) {
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            }
+            return nullptr;
         }
     );
 }
@@ -990,6 +1040,88 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_C
     );
 }
 
+/// client 侧注册事务 (start 的实际内容): 动作绑定 + client 事件订阅。
+static int planningClientSetup(ClientCtx* ctx) {
+    const AgentxxPluginHost* host = ctx->host;
+    // 通用交互绑定 (方案 A fallback: target_id="" 本实例兜底, 一次永久生效):
+    // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
+    //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind
+    // - ui 缺失或 bind 为 NULL (CLI/老宿主) 时静默降级: 内容仍推送, 按钮不可点
+    if (ctx->ui && ctx->ui->bind_action_handler) {
+        ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx](const agentxx::util::Json&) {
+            auto* c = ctxPtr;
+            if (!c || !c->host || !c->ui || !c->ui->open_overlay || c->last_plan_json.empty()) {
+                return;
+            }
+            std::string roadmap;
+            try {
+                roadmap
+                    = agentxx::util::Json::parse(c->last_plan_json).value("roadmap", std::string{});
+            } catch (...) {
+                return;
+            }
+            if (roadmap.empty()) {
+                return;
+            }
+            AgentxxOverlaySpec spec{};
+            spec.version = 1;
+            spec.type    = AGENTXX_OVERLAY_MERMAID;
+            spec.title   = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
+            spec.payload = agentxx::plugin::PluginStringView::from(roadmap.data(), roadmap.size());
+            spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
+            c->ui->open_overlay(c->host, &spec);
+        });
+        auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
+        if (ctx->ui->bind_action_handler(
+                host,
+                &emptySv,
+                &agentxx::plugin::kit::ActionController::dispatch,
+                &ctx->actions
+            )
+            != 0) {
+            auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
+                "agentxx_planning client: bind open_graph failed (buttons static)"
+            );
+            if (ctx->iface.log && ctx->iface.log->log) {
+                ctx->iface.log->log(host, 3, &warnSv);
+            }
+        }
+    }
+
+    // 事件订阅 (卸载时宿主自动退订); events/ui 缺失时仅失去渲染能力,
+    // 不阻塞加载 (CLI 等精简宿主场景)
+    auto subWarn = [ctxPtr = ctx](const char* what) {
+        if (ctxPtr && ctxPtr->host && ctxPtr->iface.log && ctxPtr->iface.log->log) {
+            auto sv = agentxx::plugin::PluginStringView::from(what, std::strlen(what));
+            ctxPtr->iface.log->log(ctxPtr->host, 3, &sv);
+        }
+    };
+    if (ctx->iface.events && ctx->iface.events->subscribe) {
+        if (!ctx->iface.events->subscribe(host, AGENTXX_CLIENT_EVT_DELTA, on_client_delta, ctx)) {
+            subWarn("agentxx_planning client: subscribe DELTA failed");
+        }
+        if (!ctx->iface.events
+                 ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, ctx)) {
+            subWarn("agentxx_planning client: subscribe PLUGIN_DATA failed");
+        }
+        if (!ctx->iface.events->subscribe(
+                host,
+                AGENTXX_CLIENT_EVT_SESSION_SWITCH,
+                on_client_session_switch,
+                ctx
+            )) {
+            subWarn("agentxx_planning client: subscribe SESSION_SWITCH failed");
+        }
+    }
+
+    if (ctx->iface.log && ctx->iface.log->log) {
+        auto loadedSv
+            = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning client plugin loaded");
+        ctx->iface.log->log(host, 2, &loadedSv);
+    }
+    return 0;
+}
+
 extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
     agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败); 日志闭包捕获局部裸指针
@@ -1009,92 +1141,63 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
             ctx->ui    = ctx->iface.ui;
             raw        = ctx.get();
 
-            // 通用交互绑定 (方案 A fallback: target_id="" 本实例兜底, 一次永久生效):
-            // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
-            //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind
-            // - ui 缺失或 bind 为 NULL (CLI/老宿主) 时静默降级: 内容仍推送, 按钮不可点
-            if (ctx->ui && ctx->ui->bind_action_handler) {
-                ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx.get()](const agentxx::util::Json&) {
-                    auto* c = ctxPtr;
-                    if (!c || !c->host || !c->ui || !c->ui->open_overlay
-                        || c->last_plan_json.empty()) {
-                        return;
-                    }
-                    std::string roadmap;
-                    try {
-                        roadmap = agentxx::util::Json::parse(c->last_plan_json)
-                                      .value("roadmap", std::string{});
-                    } catch (...) {
-                        return;
-                    }
-                    if (roadmap.empty()) {
-                        return;
-                    }
-                    AgentxxOverlaySpec spec{};
-                    spec.version = 1;
-                    spec.type    = AGENTXX_OVERLAY_MERMAID;
-                    spec.title   = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
-                    spec.payload
-                        = agentxx::plugin::PluginStringView::from(roadmap.data(), roadmap.size());
-                    spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-                    c->ui->open_overlay(c->host, &spec);
-                });
-                auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
-                if (ctx->ui->bind_action_handler(
-                        host,
-                        &emptySv,
-                        &agentxx::plugin::kit::ActionController::dispatch,
-                        &ctx->actions
-                    )
-                    != 0) {
-                    auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
-                        "agentxx_planning client: bind open_graph failed (buttons static)"
-                    );
-                    if (ctx->iface.log && ctx->iface.log->log) {
-                        ctx->iface.log->log(host, 3, &warnSv);
-                    }
-                }
-            }
-
-            // 事件订阅 (卸载时宿主自动退订); events/ui 缺失时仅失去渲染能力,
-            // 不阻塞加载 (CLI 等精简宿主场景)
-            auto subWarn = [ctxPtr = ctx.get()](const char* what) {
-                if (ctxPtr && ctxPtr->host && ctxPtr->iface.log && ctxPtr->iface.log->log) {
-                    auto sv = agentxx::plugin::PluginStringView::from(what, std::strlen(what));
-                    ctxPtr->iface.log->log(ctxPtr->host, 3, &sv);
-                }
-            };
-            if (ctx->iface.events && ctx->iface.events->subscribe) {
-                if (!ctx->iface.events
-                         ->subscribe(host, AGENTXX_CLIENT_EVT_DELTA, on_client_delta, ctx.get())) {
-                    subWarn("agentxx_planning client: subscribe DELTA failed");
-                }
-                if (!ctx->iface.events->subscribe(
-                        host,
-                        AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-                        on_client_plugin_data,
-                        ctx.get()
-                    )) {
-                    subWarn("agentxx_planning client: subscribe PLUGIN_DATA failed");
-                }
-                if (!ctx->iface.events->subscribe(
-                        host,
-                        AGENTXX_CLIENT_EVT_SESSION_SWITCH,
-                        on_client_session_switch,
-                        ctx.get()
-                    )) {
-                    subWarn("agentxx_planning client: subscribe SESSION_SWITCH failed");
-                }
-            }
-
-            if (ctx->iface.log && ctx->iface.log->log) {
-                auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
-                    "agentxx_planning client plugin loaded"
-                );
-                ctx->iface.log->log(host, 2, &loadedSv);
-            }
             *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
             return 0;
+        }
+    );
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL agentxx_plugin_client_start(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
+            if (!ctx) {
+                agentxx::plugin::PluginString::set(
+                    nullptr,
+                    error_out,
+                    "planning client start: null context"
+                );
+                return nullptr;
+            }
+            if (!notify) {
+                agentxx::plugin::PluginString::set(
+                    ctx->host,
+                    error_out,
+                    "agentxx_planning client start: notify required"
+                );
+                return nullptr;
+            }
+            if (planningClientSetup(ctx) != 0) {
+                agentxx::plugin::PluginString::set(
+                    ctx->host,
+                    error_out,
+                    "agentxx_planning client start: registration failed"
+                );
+                return nullptr;
+            }
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            return nullptr;
+        }
+    );
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL
+    agentxx_plugin_client_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            // UI 注册与订阅由宿主在 stop 后统一撤销。
+            if (notify && notify->done) {
+                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            }
+            return nullptr;
         }
     );
 }

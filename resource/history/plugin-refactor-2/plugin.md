@@ -20,9 +20,8 @@
   SDK 统一 root adapter / 反例编译检查；R4 JS 事务与部分内置插件迁移、后台任务托管；
   R5 Client 语义渲染/动作代次/依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、
   Debug+ASan 回归、插件框架定向 UBSan 探针、设计文档 Reset-v1 章节。
-- 未完成（阻塞"重构完成"判定）：7 个内置插件的 start/stop 迁移（按用户指示：
-  插件框架完善后再处理；filesystem / execute_command / planning / system_monitor /
-  javascript_engine / execute_javascript / example_js，其中 JS 引擎需先定义引擎线程
+- 未完成（阻塞"重构完成"判定）：3 个 JS 系内置插件的 start/stop 迁移
+  （javascript_engine / execute_javascript / example_js，需先定义引擎线程
   stop/重启语义）；TSan 定向回归（需独立全量构建）；Windows 平台编译与专项
   （本机无 Windows 工具链，未验证不得声明）。
 - 仓库中已有用户未提交修改，至少包括：

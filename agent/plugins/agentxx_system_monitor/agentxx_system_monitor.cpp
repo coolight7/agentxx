@@ -109,12 +109,8 @@ struct SysMonCtx : public PluginBase {
     }
 };
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
-    SysMonCtx,
-    "agentxx_system_monitor",
-    "1.0.0",
-    "System resource monitor: CPU/memory/GPU usage tool",
-    [](SysMonCtx& ctx) -> int32_t {
+/// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
+static int32_t sysMonSetup(SysMonCtx& ctx) {
         // 1. 工具
         auto schema = ctx.schema("agentxx_get_system_core_info").build();
         blocking_tool(
@@ -227,6 +223,49 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         });
 
         return 0;
+}
+
+static void* sysMonStart(
+    SysMonCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_system_monitor start: notify required");
+        }
+        return nullptr;
+    }
+    if (sysMonSetup(ctx) != 0) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_system_monitor start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* sysMonStop(
+    SysMonCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // 无自管线程/定时器 (采样按需在工具/能力调用内完成); 注册记录由宿主统一撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(SysMonCtx, sysMonStart, sysMonStop)
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    SysMonCtx,
+    "agentxx_system_monitor",
+    "1.0.0",
+    "System resource monitor: CPU/memory/GPU usage tool",
+    [](SysMonCtx&) -> int32_t {
+        // create 只构造上下文; 工具/能力/订阅注册在 start 事务中执行。
+        return 0;
     }
 );
 
@@ -328,12 +367,8 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     ctx.iface.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
-    SysMonClientCtx,
-    "agentxx_system_monitor",
-    "1.0.0",
-    "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle",
-    [](SysMonClientCtx& ctx) -> int32_t {
+/// client 侧注册事务 (start 的实际内容); 无 UI 能力时静默降级 (返回 0)。
+static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
         if (!ctx.iface.ui) {
             return 0;
         }
@@ -434,6 +469,53 @@ AGENTXX_PLUGIN_CLIENT_EXPORT(
             );
         }
 
+        return 0;
+}
+
+static void* sysMonClientStart(
+    SysMonClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_system_monitor client start: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (sysMonClientSetup(ctx) != 0) {
+        if (error) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_system_monitor client start: registration failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* sysMonClientStop(
+    SysMonClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    // UI 注册与订阅由宿主在 stop 后统一撤销。
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(SysMonClientCtx, sysMonClientStart, sysMonClientStop)
+
+AGENTXX_PLUGIN_CLIENT_EXPORT(
+    SysMonClientCtx,
+    "agentxx_system_monitor",
+    "1.0.0",
+    "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle",
+    [](SysMonClientCtx&) -> int32_t {
+        // create 只构造上下文; Info 段落/订阅/命令注册在 start 事务中执行。
         return 0;
     }
 );
