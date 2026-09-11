@@ -41,6 +41,14 @@ git diff --check
 
 预期状态：工作树无代码文件修改、无 untracked 文件。
 
+> **两个工作副本（重要）**：本任务涉及两份 clone ——
+> Windows 侧 `D:\0Acoolight\Program\cpp\agentxx`（提交 29 及之后的提交在这里产生）
+> 与 WSL2 侧 `/home/coolight/program/agentxx`（此前 Linux 验证用的那份）。
+> 两者同源（`origin = https://github.com/coolight7/agentxx.git`）但**互不共享文件**，
+> 且提交尚未推送。下次在任一副本继续开发前，先确认 `git log -1` 是否已包含
+> 第 4 节列出的最新提交；不在同一副本上时需先同步（从 Windows 侧 push，或在另一份
+> 上 `git fetch` + 合并），不要在两份副本上分别提交同一改动。
+
 ### 0.2 工作树保护规则（不得违反）
 
 - 禁止 `git reset --hard`、`git checkout --`、清空 build 目录或批量删除测试。
@@ -1079,6 +1087,7 @@ bash agent/script/check_plugin_exports.sh  → OK: 16 plugin libraries
                              IOCP 定时器投递时序）；audio_stream 改为全平台跳过；
                              work.md/plugin.md 更新为"Reset-v1 重构完成"
 提交 29.1       0667426b  重构插件框架-R6-3b 提交 29 记录补记                     (仅本文档)
+提交 29.2       9ac97ca5  重构插件框架-R6-3c 提交边界表补入记录补记提交           (仅本文档)
 工作树          提交 29.1 后：代码/文档修改均已入库；仅剩用户既有改动与构建副产物
                 （`agentxx-config.yaml`、`agent/third_party/fmt`(untracked)、
                  `libiconv-native`/`liburing`(submodule 脏标记)），勿回退/勿清理
