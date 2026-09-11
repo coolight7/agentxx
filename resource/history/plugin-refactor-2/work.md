@@ -1088,6 +1088,7 @@ bash agent/script/check_plugin_exports.sh  → OK: 16 plugin libraries
                              work.md/plugin.md 更新为"Reset-v1 重构完成"
 提交 29.1       0667426b  重构插件框架-R6-3b 提交 29 记录补记                     (仅本文档)
 提交 29.2       9ac97ca5  重构插件框架-R6-3c 提交边界表补入记录补记提交           (仅本文档)
+提交 29.3       7fbbf3ba  重构插件框架-R6-3d 补记两个工作副本的同步注意事项        (仅本文档)
 工作树          提交 29.1 后：代码/文档修改均已入库；仅剩用户既有改动与构建副产物
                 （`agentxx-config.yaml`、`agent/third_party/fmt`(untracked)、
                  `libiconv-native`/`liburing`(submodule 脏标记)），勿回退/勿清理
