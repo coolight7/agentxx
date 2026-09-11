@@ -1378,8 +1378,13 @@ std::shared_ptr<const ClientToolRenderEntry>
     ClientToolRenderCache::store(ClientToolRenderEntry entry) {
     auto snapshot = std::make_shared<const ClientToolRenderEntry>(std::move(entry));
     std::lock_guard<std::mutex> lock(mutex_);
+    // 首次写入 (含淘汰后重写) 才登记顺序; 已有版本记录的键保留原顺序位置
+    if (versions_.find(snapshot->key) == versions_.end()) {
+        order_.push_back(snapshot->key);
+    }
     ++versions_[snapshot->key];
     entries_[snapshot->key] = snapshot;
+    evictLocked();
     return snapshot;
 }
 
@@ -1394,20 +1399,32 @@ void ClientToolRenderCache::invalidatePlugin(std::string_view plugin) {
             ++it;
         }
     }
+    // 被失效的键保留版本记录 (旧快照据此重建), 由 evictLocked 按顺序回收,
+    // 保证长时间会话中版本记录同样有界。
+    evictLocked();
 }
 
 void ClientToolRenderCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& [key, ver] : versions_) {
-        (void)ver;
+    for (auto& key : order_) {
         ++versions_[key];
     }
     entries_.clear();
+    evictLocked();
 }
 
 size_t ClientToolRenderCache::size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return entries_.size();
+}
+
+void ClientToolRenderCache::evictLocked() {
+    while (order_.size() > maxEntries_) {
+        std::string key = std::move(order_.front());
+        order_.pop_front();
+        entries_.erase(key);
+        versions_.erase(key);
+    }
 }
 
 bool ClientToolRenderCache::beginRequest(const std::string& key, uint64_t inputHash) {

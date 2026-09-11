@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（R6-1 提交）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 二十一个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（R5-1 提交）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 二十二个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -24,7 +24,8 @@
 > R2-3 提交（客户端旧 host 指针安全失败、同轮退订复查、关闭取证标记，见第 3.18 节）、
 > R2-4 提交（加载期 start 失败的真实 DSO 回滚用例，见第 3.19 节）、
 > R2-5 提交（注册事务完成度：agent 侧 hook/能力/资源 + 客户端 UI 真实 DSO 回滚，见第 3.20 节）、
-> R6-1 提交（插件框架定向 UBSan 探针与回归，见第 3.21 节）。
+> R6-1 提交（插件框架定向 UBSan 探针与回归，见第 3.21 节）、
+> R5-1 提交（Client 语义渲染缓存容量上限与回收，见第 3.22 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -94,7 +95,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
 | R2 加载事务 / 异步关闭 | 基本完成（P0-1 / P1-3 / P1-4 / R2-3 / R2-4 / R2-5） | 名称预占、`Loading/Ready/Closing/CloseFailed`、`create/start/stop/destroy`、`shutdownAsync`、owner 顺序、`GraphTypeSlot` 已在 `b2b5114a` 落地；P0-1 补齐宿主控制块、迟到调用安全失败、注册执行期复查；P1-4 完成 agent 侧 start/stop 事务；P1-3 完成 Client 语义渲染缓存与 client 侧启停事务；R1-2/R3-2/R2-3 补齐句柄、代次、退订、图注册回滚与关闭取证回归；R2-4/R2-5 以真实 DSO 双端补齐加载期 start 失败回滚（工具/图/订阅/prompt/hook/能力/资源 + 客户端 UI 项/命令/订阅），第 11.2-10 条注册类型至此全覆盖 |
 | R3 ABI v1 / SDK | 基本完成 | 接口表 `struct_size` + SDK 严格校验、opaque CancelToken、scheduler v1（删 `pump_io`/`cancel_sleep`/`volatile`）、tasks handle 语义、SDK scheduler/offload 迁移已在 `b2b5114a` 落地；`c2869f07` 统一 `host.opaque` 令牌；P1-2 补 C17 ABI 编译期检查 + 接口表严格协商；P1-1 补 SDK 拥有型 `Request`、统一 root adapter、hook 同步/异步分发；P2-1a 补 client 生命周期导出宏；R4-3 补 capability 异步 `Task<T>`；R3-2 补 graph node 统一 root adapter 与 SDK 反例编译检查（第 3.16/3.17 节） |
 | R4 内置插件 / JS / 平台 | 大部分完成 | 4 个内置插件已迁到 CancelToken 新签名；`f861bcf9` 修平台插件构建；P2-1a 把 example_plugin 迁移为双端 start/stop 正例；P2-1b 完成 JS Promise 拒绝/超时/取消的终态映射与事件式等待；P2-1c 完成可变静态审计；R4-1 完成 example_resources/example_graph_node 迁移、websearch/rag/string CancelToken 接入、codegraph 后台任务托管与 system_monitor 双实例专项（第 3.14 节）；R4-2 完成 JS `callTool` Promise 化、顶层异常事务、hook/unload 真实完成（第 3.15 节）；R4-3 完成 capability 异步 Task 与 math/system/string/websearch/rag 5 个插件 start/stop 迁移（第 3.16 节）；仍缺 filesystem/execute_command/planning/system_monitor/javascript_engine/execute_javascript/example_js 的 start/stop 迁移、graph node 纳入 SDK adapter、Windows 平台 gate |
-| R5 Client / 依赖 / prompt | 基本完成（P1-3 / P1-4 / R2-3） | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）与 agent 侧依赖级联（F09）由 P1-4 落地；语义 renderer cache、动作代次、client 侧启停事务与依赖级联由 P1-3 落地；R2-3 补客户端旧 host 指针安全失败与同轮退订端到端用例；仍缺 UI 侧的"旧快照模块级"端到端用例（现有用例在 manager 层驱动） |
+| R5 Client / 依赖 / prompt | 基本完成（P1-3 / P1-4 / R2-3 / R5-1） | 事件逐 callback 复查 alive、renderer lease、动作派发校验已落地；prompt contribution（F20）与 agent 侧依赖级联（F09）由 P1-4 落地；语义 renderer cache、动作代次、client 侧启停事务与依赖级联由 P1-3 落地；R2-3 补客户端旧 host 指针安全失败与同轮退订端到端用例；R5-1 补齐语义缓存容量上限与版本记录回收；仍缺 UI 侧的"旧快照模块级"端到端用例（现有用例在 manager 层驱动） |
 | R6 验证 / 文档 / 发布审查 | 大部分完成 | P1-2 完成 C17 ABI 编译期检查；P2-1a 完成导出符号白名单脚本（16 库全绿）；P2-1b 完成 `docs/zh-cn/design/plugins.md` Reset-v1 章节（第 15 节）与第 2/3/4/9 节修订；R4-2/R4-3 补充 JS callTool Promise 与 hook/capability 异步契约（第 12/6 节）；R6-1 完成插件框架定向 UBSan 探针（1592/0，无 runtime error，第 3.21 节）；仍缺 TSan 与 Windows 平台验证（本机无 Windows 工具链，未验证即不得声明） |
 
 结论：不能把当前状态写成“Reset-v1 完成”。下一阶段建议见第 9 节。
@@ -149,7 +150,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 6 文件；见第 3.20 节)
 提交 21（R6-1）重构插件框架-R6-1 插件框架定向 UBSan 探针
                           (2026-09-11, 5 文件；见第 3.21 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-21 均未推送
+提交 22（R5-1）重构插件框架-R5-1 Client 语义渲染缓存容量上限
+                          (2026-09-11, 5 文件；见第 3.22 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-22 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -775,6 +778,24 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 - 未做（记为遗留）：TSan 未纳入本轮（plugin.md R6 只要求 ASan/UBSan 定向探针；
   TSan 需要独立全量构建且三方库未插桩，见第 6 节 P2-2）。
 
+### 3.22 R5-1 提交：Client 语义渲染缓存容量上限与回收（P1-3 收尾）
+
+5 文件（`client_plugin_manager.h`、`client_plugin_manager.cpp`、
+`test_client_plugins.cpp`、`docs/zh-cn/design/plugins.md` + 本文档）。要点：
+
+- `ClientToolRenderCache` 支持容量上限（构造参数 `maxEntries`，默认 512）：
+  条目与版本记录共用一条按写入顺序的队列，超限时从最旧键开始**同时回收
+  条目与版本记录**（`evictLocked`），因此长会话不再按 `tool_call_id` 无限
+  增长（此前 `entries_`/`versions_` 均无上限，仅会话切换清空）。
+- 语义约定：缓存失效（`invalidatePlugin`/`clear`）仍递增版本号驱动旧 UI
+  快照重建；被失效键保留版本记录、随后续写入按序回收（版本号回到 0 视为
+  "从未渲染"，UI 缓存键变化后重建并重新请求渲染）。默认 512 远超单屏可见
+  块数，可见块不会被淘汰。
+- 回归用例（`client_plugins` 408 → 421）：`maxEntries=3` 的独立缓存验证
+  超限淘汰最旧条目、条目与版本记录一并回收（`version` 归 0）、插件失效后
+  版本号仍递增、继续写入时失效键的版本记录按序回收（有界）。
+- 回归：扩展回归 2089 passed / 0 failed（第 7.21 节）。
+
 ---
 
 ## 4. `b2b5114a` 内容明细（已提交，按阶段归类）
@@ -941,7 +962,8 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 
 遗留：
 
-- 语义缓存无容量上限（会话切换清空，但同一会话内按 tool_call_id 持续增长）。
+- ~~语义缓存无容量上限（会话切换清空，但同一会话内按 tool_call_id 持续增长）~~：
+  R5-1 已加容量上限与条目/版本记录按序回收（第 3.22 节）。
 - `onToolRenderUpdated` 触发整表重绘，未做按消息块精确失效。
 - 旧快照用例在 manager 层驱动 `renderClientTool`，未覆盖 TUI 组件级路径。
 
@@ -1572,6 +1594,35 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 600s \
 ```
 
 日志：`/tmp/ubsan-run.log`、`/tmp/baseline-restore.log`。
+
+### 7.21 R5-1 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth codegraph --fail-fast
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        623 passed / 0 failed
+plugin_sdk             71 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+codegraph              23 passed / 0 failed
+plugins               359 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  48 passed / 0 failed
+client_plugins        421 passed / 0 failed   # R5-1 新增 13 断言（缓存容量上限）
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 2089 passed / 0 failed   （exit=0，ASan + LSan）
+```
+
+日志：`/tmp/r51-sweep.log`。
 
 ### 7.15 本会话最终扩展回归（全部插件相关模块）
 

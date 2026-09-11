@@ -11,6 +11,7 @@
 #include "asio/thread_pool.hpp"
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -196,6 +197,13 @@ struct ClientToolRenderRequest {
 class ClientToolRenderCache {
 public:
 
+    /// 容量上限 (条目数与版本记录数)。超过上限按最旧写入顺序淘汰:
+    /// 条目淘汰后该键回到"未命中 → 重新请求渲染"; 版本记录随条目一并回收,
+    /// 因此 `version(key)` 对已淘汰键返回 0 (视为从未渲染, UI 缓存键变化后
+    /// 重建为通用回退, 再次渲染完成后回到语义内容)。默认 512 远超单屏
+    /// 可见块数, 正常会话不触发；长时间会话不再按 tool_call_id 无限增长。
+    explicit ClientToolRenderCache(size_t maxEntries = 512) : maxEntries_(maxEntries == 0 ? 1 : maxEntries) {}
+
     std::shared_ptr<const ClientToolRenderEntry>
         lookup(const std::string& key, uint64_t inputHash) const;
 
@@ -220,9 +228,16 @@ public:
 
 private:
 
+    /// 淘汰最旧条目 (调用方持锁)。FIFO 近似 LRU: UI 每帧都会查询可见块的
+    /// version/lookup, 但按键写入顺序淘汰已足够 (可见块数远小于上限)。
+    void evictLocked();
+
+    const size_t                                                                  maxEntries_;
     mutable std::mutex                                                           mutex_;
     std::unordered_map<std::string, std::shared_ptr<const ClientToolRenderEntry>> entries_;
     std::unordered_map<std::string, uint64_t>                                     versions_;
+    /// 条目写入顺序 (仅记录当前在 entries_ 中的键, 每键一条)
+    std::deque<std::string>                                                       order_;
     /// 键 → 在途请求的输入特征
     std::unordered_map<std::string, uint64_t> pending_;
 };

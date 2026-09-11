@@ -2468,6 +2468,51 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 #endif
     }
 
+    // ---- 27. 工具语义渲染缓存容量上限 (P1-3 遗留) ----
+    // 长会话按 tool_call_id 持续写入不再无限增长: 超限淘汰最旧条目并回收
+    // 其版本记录; 插件失效时的版本号仍单调变化 (旧快照重建信号)。
+    {
+        agentxx::plugin::ClientToolRenderCache cache(3);
+        auto makeEntry = [](const std::string& key, const std::string& plugin) {
+            agentxx::plugin::ClientToolRenderEntry entry;
+            entry.key        = key;
+            entry.plugin     = plugin;
+            entry.inputHash  = 1;
+            entry.matched    = true;
+            entry.displayName = key;
+            return entry;
+        };
+
+        cache.store(makeEntry("k1", "p"));
+        cache.store(makeEntry("k2", "p"));
+        cache.store(makeEntry("k3", "p"));
+        XX_TEST_EXPECT_EQ(cache.size(), size_t{3});
+        XX_TEST_EXPECT_TRUE(cache.lookup("k1", 1) != nullptr);
+
+        // 超限: 最旧的 k1 条目与版本记录一并回收
+        cache.store(makeEntry("k4", "p"));
+        XX_TEST_EXPECT_EQ(cache.size(), size_t{3});
+        XX_TEST_EXPECT_TRUE(cache.lookup("k1", 1) == nullptr);
+        XX_TEST_EXPECT_TRUE(cache.lookup("k4", 1) != nullptr);
+        XX_TEST_EXPECT_EQ(cache.version("k1"), uint64_t{0});
+
+        // 插件失效: 剩余条目的版本号递增 (即使条目被摘除)
+        const uint64_t versionK2 = cache.version("k2");
+        cache.invalidatePlugin("p");
+        XX_TEST_EXPECT_TRUE(cache.lookup("k2", 1) == nullptr);
+        XX_TEST_EXPECT_TRUE(cache.version("k2") > versionK2);
+
+        // 继续写入: 被失效键的版本记录随后续淘汰按序回收 (有界)
+        cache.store(makeEntry("k5", "p"));
+        cache.store(makeEntry("k6", "p"));
+        cache.store(makeEntry("k7", "p"));
+        XX_TEST_EXPECT_EQ(cache.size(), size_t{3});
+        XX_TEST_EXPECT_TRUE(cache.lookup("k5", 1) != nullptr);
+        XX_TEST_EXPECT_TRUE(cache.lookup("k7", 1) != nullptr);
+        XX_TEST_EXPECT_EQ(cache.version("k2"), uint64_t{0});
+        XX_TEST_EXPECT_EQ(cache.version("k3"), uint64_t{0});
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }
 
