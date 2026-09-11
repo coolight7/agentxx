@@ -874,9 +874,87 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 26. H2 回归: shutdownAll (含 JS 引擎) 先子后父, unload 回调后 dlclose ----
-    // - 引擎插件 unload 回调 join JS 线程; 脚本插件先卸载 (通知引擎释放
-    //   JSContext) → 引擎 join 时 JS 线程空闲 → 无挂死/无执行已卸载代码段
+    // ---- 25b. JS 引擎/脚本插件 disable→enable 往返: 引擎线程与脚本按事务重建 ----
+    // Reset-v1: 引擎线程、JSRuntime 与脚本上下文都属于 start 事务 —— disable 停
+    // 线程 (stop), enable 重建线程并重放脚本 (start)。断言能力/工具的可观察状态
+    // 往返一致, 且 stop/destroy 顺序不会把实例提前销毁。
+    {
+        auto engine25b = co_await ctx->pluginManager->loadPluginAsync(jsLib);
+        XX_TEST_EXPECT_TRUE(engine25b != nullptr);
+        auto js25b = co_await ctx->pluginManager->loadPluginAsync(jsDir);
+        XX_TEST_EXPECT_TRUE(js25b != nullptr);
+        for (int i = 0; i < 40 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(25);
+        }
+        XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+
+        // 禁用引擎 → 级联禁用脚本插件 → 两者 stop (引擎退出 JS 线程并释放 runtime)
+        ctx->pluginManager->disable("agentxx_javascript_engine");
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
+        for (int i = 0; i < 300 && !engine25b->lifecycleStopped; ++i) {
+            co_await sleepMs(10);
+        }
+        XX_TEST_EXPECT_TRUE(engine25b->lifecycleStopped);
+        XX_TEST_EXPECT_TRUE(js25b->lifecycleStopped);
+        XX_TEST_EXPECT_TRUE(
+            engine25b->lifetime->state() == agentxx::plugin::PluginInstanceState::Disabled
+        );
+        // 停用期间: 能力与脚本工具都不可见, 但实例/上下文保留 (未 destroy)
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+        XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == engine25b);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == js25b);
+
+        // 重新启用引擎 → 级联恢复脚本插件: 引擎重建线程, 脚本重新 load
+        ctx->pluginManager->enable("agentxx_javascript_engine");
+        for (int i = 0; i < 400 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(10);
+        }
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+        XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+        auto hello25b = ctx->toolRegistry->find("js_hello");
+        XX_TEST_EXPECT_TRUE(hello25b != nullptr);
+        if (hello25b) {
+            auto out = co_await hello25b->execute_async(agentxx::util::Json{{"name", "reenabled"}}
+            );
+            XX_TEST_EXPECT_TRUE(out.find("reenabled") != std::string::npos);
+        }
+
+        // disable/enable 紧邻 (stop 事务仍在飞行中): start 事务必须先补齐 stop
+        // 再重建, 能力名不得冲突、脚本工具不得重复或丢失。
+        ctx->pluginManager->disable("agentxx_javascript_engine");
+        ctx->pluginManager->enable("agentxx_javascript_engine");
+        for (int i = 0; i < 600 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+            co_await sleepMs(10);
+        }
+        XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js")->enabled);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+        auto hello25b2 = ctx->toolRegistry->find("js_hello");
+        XX_TEST_EXPECT_TRUE(hello25b2 != nullptr);
+        if (hello25b2) {
+            auto out = co_await hello25b2->execute_async(agentxx::util::Json{{"name", "storm"}});
+            XX_TEST_EXPECT_TRUE(out.find("storm") != std::string::npos);
+        }
+
+        // 清理: 卸载引擎级联卸载脚本插件
+        XX_TEST_EXPECT_TRUE(
+            co_await ctx->pluginManager->unloadAsync(
+                "agentxx_javascript_engine", std::chrono::seconds{30}
+            )
+        );
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
+        XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+    }
+
+    // ---- 26. H2 回归: shutdownAsync (含 JS 引擎) 先子后父, stop/destroy 后 dlclose ----
+    // - 引擎插件 stop 停 JS 线程; 脚本插件先卸载 (通知引擎释放 JSContext) →
+    //   引擎停线程时 JS 线程空闲 → 无挂死/无执行已卸载代码段
+    // - 同步 shutdownAll 不能等待 stop 事务: 导出 start/stop 的插件必须保留
+    //   实例/上下文 (CloseFailed), 由 shutdownAsync 收尾 (plugin.md 第 7.3 节)
     {
         auto engine26 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
         XX_TEST_EXPECT_TRUE(engine26 != nullptr);
@@ -885,7 +963,22 @@ throw new Error("top-level rollback probe");
         for (int i = 0; i < 10 && js26 && !ctx->toolRegistry->contains("js_hello"); ++i) {
             co_await sleepMs(50);
         }
+        XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+
+        // 同步关闭路径: stop 未执行前不得 destroy/dlclose
         ctx->pluginManager->shutdownAll();
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") != nullptr);
+        XX_TEST_EXPECT_TRUE(
+            engine26->lifetime->state() == agentxx::plugin::PluginInstanceState::CloseFailed
+        );
+        // 对外注册已摘除 (工具/能力不可见), 但插件上下文与 DSO 仍保留
+        XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+
+        // 异步关闭: 先子后父完成 stop/destroy, 实例表清空
+        const bool closed26 = co_await ctx->pluginManager->shutdownAsync(std::chrono::seconds(30));
+        XX_TEST_EXPECT_TRUE(closed26);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
     }

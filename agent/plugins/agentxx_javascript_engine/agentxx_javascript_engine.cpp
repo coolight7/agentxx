@@ -166,28 +166,140 @@ struct JsPluginCtx {
 class JsEngine {
 public:
 
-    JsEngine() {
+    /// 引擎生命周期状态 (Reset-v1: create 只构造, runtime 与 JS 线程属于 start)
+    enum class State {
+        Stopped,  ///< 未启动或已完全停止 (无 JS 线程、无 runtime、无收尾线程)
+        Running,  ///< 运行中: 接受 post
+        Stopping, ///< 停止中: 拒绝新 post, 收尾线程正在 join JS 线程/释放 runtime
+    };
+
+    JsEngine() = default;
+
+    /// 析构: 只处理已经安全停止 (或可以同步收尾) 的对象。
+    /// 宿主协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
+    ~JsEngine() { stopAndWait(); }
+
+    // ==================== 生命周期 (start / stop) ====================
+
+    /// 引擎是否运行中 (JS 线程存活, 接受新任务)
+    bool running() const {
+        std::lock_guard<std::mutex> lk(lifecycleMtx_);
+        return state_ == State::Running;
+    }
+
+    /// 引擎是否正在停止或已停止: 队列任务不再执行插件 JS 代码, 只按终态终结
+    bool stopping() const {
+        return !running();
+    }
+
+    /// 启动引擎: 创建 JSRuntime 与专用 JS 线程 (start 事务)
+    /// - 幂等: 已运行时返回 true;
+    /// - 上一次停止的收尾线程必须先结束 (宿主协议: stop 完成才会再次 start),
+    ///   否则等待其退出后重建, 不共享已释放的 runtime/线程;
+    /// - 失败 (runtime 创建失败) 返回 false 并保持停止状态, 可再次尝试。
+    bool start() {
+        joinStopper(); // 无锁等待: 收尾线程退出前不得重建 runtime/线程
+        std::lock_guard<std::mutex> lk(lifecycleMtx_);
+        if (state_ == State::Running) {
+            return true;
+        }
         rt_ = JS_NewRuntime();
+        if (!rt_) {
+            return false;
+        }
         JS_SetMemoryLimit(rt_, kMemoryLimit);
         JS_SetMaxStackSize(rt_, kStackLimit);
         JS_SetInterruptHandler(rt_, &JsEngine::interruptHandler, this);
         taskStart_ = std::chrono::steady_clock::now();
-        thread_    = std::thread(&JsEngine::jsThreadMain, this);
+        {
+            std::lock_guard<std::mutex> qlk(mtx_);
+            queue_.clear(); ///< 停止时已全部终结, 启动前不应有残留
+            stop_.store(false, std::memory_order_release);
+        }
+        state_  = State::Running;
+        thread_ = std::thread(&JsEngine::jsThreadMain, this);
+        return true;
     }
 
-    ~JsEngine() {
+    /// 请求停止并异步等待收尾完成; `onStopped` 在停止真正完成后调用一次
+    /// (可能来自收尾线程, 任意线程安全)。
+    ///
+    /// - 立即生效: 这是最后一次接受新任务之前的状态, 之后 post() 一律失败;
+    /// - 队列中尚未开始的 JS 任务按取消/失败终结, 不再执行插件 JS 代码
+    ///   (见各任务的 `stopping()` 前置检查);
+    /// - 不在调用线程 join JS 线程: JS 线程可能正阻塞在宿主 vtable 调用
+    ///   (ioCallSync 等待 IO 线程) 上, 而 stop 由 IO 线程调用, 直接 join 会
+    ///   自锁; 因此 join 与 JS_FreeRuntime 交给独立收尾线程;
+    /// - 幂等: 停止中重复调用只追加完成回调。
+    void requestStop(std::function<void()> onStopped = nullptr) {
+        std::vector<std::function<void()>> completed;
+        bool                               spawnStopper = false;
+        bool                               finishInline = false;
         {
-            std::lock_guard<std::mutex> lk(mtx_);
-            stop_ = true;
+            std::lock_guard<std::mutex> lk(lifecycleMtx_);
+            if (onStopped) {
+                stopCompletions_.push_back(std::move(onStopped));
+            }
+            if (state_ == State::Stopped) {
+                // 已完全停止: 立即完成 (重复 stop 的快速路径)
+                completed.swap(stopCompletions_);
+            } else if (state_ == State::Running) {
+                state_ = State::Stopping;
+                {
+                    std::lock_guard<std::mutex> qlk(mtx_);
+                    stop_.store(true, std::memory_order_release); ///< post() 从这里起拒绝新任务
+                    // JS 线程空闲 (没有在手中的任务、队列为空) 时, 停止标志生效后
+                    // 它只会走线程退出清理路径 (不调用宿主 vtable), 因此可以在
+                    // 调用线程直接收尾: 省一次线程切换, 也让 stop→start 紧邻的
+                    // 生命周期事务保持确定顺序。
+                    finishInline = !busy_ && queue_.empty();
+                }
+                cv_.notify_all();
+                if (!finishInline) {
+                    spawnStopper = true;
+                }
+            }
+            // state_ == Stopping: 由收尾线程在下一轮完成回调中取走
         }
-        cv_.notify_all();
-        if (thread_.joinable()) {
-            thread_.join(); // 处理完已入队任务 (含进行中的 execute) 后退出
+        if (finishInline) {
+            finishStop(); ///< 空队列 join 立即返回; 完成后派发全部完成回调
+            return;
         }
-        if (rt_) {
-            JS_FreeRuntime(rt_);
-            rt_ = nullptr;
+        if (spawnStopper) {
+            try {
+                std::lock_guard<std::mutex> lk(lifecycleMtx_);
+                stopper_ = std::thread([this]() noexcept {
+                    finishStop();
+                });
+            } catch (...) {
+                // 辅助线程创建失败 (资源耗尽): 退化为调用线程同步收尾,
+                // 保证已接受的 stop 仍然终结, 不静默悬挂。
+                guardLog("js engine: stop helper thread creation failed, stopping inline");
+                finishStop();
+            }
         }
+        for (auto& fn : completed) {
+            try {
+                fn();
+            } catch (...) {
+            }
+        }
+    }
+
+    /// 同步停止 (destroy/析构安全网): 触发停止并等待收尾线程完成
+    void stopAndWait() {
+        requestStop(nullptr);
+        joinStopper();
+    }
+
+    /// 能力 "interpreter.js" 是否已由本实例注册 (start 事务幂等判定)。
+    /// 宿主在禁用/卸载时统一撤销注册, 引擎 stop 时同步清位。
+    bool capabilityRegistered() const {
+        return capabilityRegistered_;
+    }
+
+    void setCapabilityRegistered(bool registered) {
+        capabilityRegistered_ = registered;
     }
 
     void setEngineHost(const AgentxxPluginHost* host) {
@@ -430,7 +542,7 @@ public:
     bool post(std::function<void()> fn) {
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            if (stop_) {
+            if (stop_.load(std::memory_order_acquire)) {
                 return false;
             }
             queue_.push_back(std::move(fn));
@@ -447,7 +559,7 @@ public:
         bool                    done = false;
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            if (stop_) {
+            if (stop_.load(std::memory_order_acquire)) {
                 return false;
             }
             queue_.push_back([&]() {
@@ -482,6 +594,57 @@ public:
 private:
 
     friend struct JsPluginCtx;
+
+    // ==================== 生命周期收尾 ====================
+
+    /// 等待收尾线程退出 (先取出线程句柄再 join: 收尾线程结束前会短暂持
+    /// lifecycleMtx_, 不能持锁等待, 否则自锁)
+    void joinStopper() {
+        std::thread t;
+        {
+            std::lock_guard<std::mutex> lk(lifecycleMtx_);
+            if (stopper_.joinable()) {
+                t = std::move(stopper_);
+            }
+        }
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+
+    /// 停止收尾 (由收尾线程调用; 极端情况下由 requestStop 的退化路径调用):
+    /// 1) join JS 线程 —— 队列中未开始的任务在此执行 "按终态终结" 的收尾,
+    ///    但不执行插件 JS 代码 (见各任务的 stopping() 检查);
+    /// 2) 释放 JSRuntime (残余 JSContext 已由 JS 线程退出前清理);
+    /// 3) 派发全部完成回调; 期间新追加的回调在下一轮取走。
+    void finishStop() noexcept {
+        if (thread_.joinable()) {
+            thread_.join(); // 处理完已入队任务 (含进行中的 execute) 后退出
+        }
+        if (rt_) {
+            JS_FreeRuntime(rt_);
+            rt_ = nullptr;
+        }
+        for (;;) {
+            std::vector<std::function<void()>> completed;
+            {
+                std::lock_guard<std::mutex> lk(lifecycleMtx_);
+                completed.swap(stopCompletions_);
+                if (completed.empty()) {
+                    // 状态切换与"取空"在同一临界区: 之后到达的 stop 请求走
+                    // requestStop 的 Stopped 快速路径, 不会被漏掉。
+                    state_ = State::Stopped;
+                    return;
+                }
+            }
+            for (auto& fn : completed) {
+                try {
+                    fn();
+                } catch (...) {
+                }
+            }
+        }
+    }
 
     static void setErr(char** err_out, const AgentxxPluginHost* host, const char* msg) {
         if (err_out && host && msg) {
@@ -552,32 +715,44 @@ private:
                 auto                         next = nextTimerLocked();
                 if (next == std::chrono::steady_clock::time_point::max()) {
                     cv_.wait(lk, [&]() {
-                        return stop_ || !queue_.empty();
+                        return stop_.load(std::memory_order_acquire) || !queue_.empty();
                     });
                 } else {
                     cv_.wait_until(lk, next, [&]() {
-                        return stop_ || !queue_.empty();
+                        return stop_.load(std::memory_order_acquire) || !queue_.empty();
                     });
                 }
                 // 退出条件仅看 stop_ + 队列: 未到期长定时器不再导致退出前忙循环
                 // (定时器引用在下方 break 前统一释放)
-                if (stop_ && queue_.empty()) {
+                if (stop_.load(std::memory_order_acquire) && queue_.empty()) {
                     break;
                 }
                 if (queue_.empty()) {
-                    // 仅定时器到期: 直接执行后继续等待
+                    // 仅定时器到期: 直接执行后继续等待。
+                    // 执行定时器回调期间视为"忙": 期间可能调用宿主 vtable,
+                    // 停止请求必须交给收尾线程 (见 requestStop)。
+                    busy_ = true;
                     lk.unlock();
                     fireDueTimersInline();
+                    lk.lock();
+                    busy_ = false;
                     continue;
                 }
                 task = std::move(queue_.front());
                 queue_.pop_front();
+                // 任务在手中 (取任务与置忙在同一临界区内完成): 本线程此后可能
+                // 调用宿主 vtable, 停止请求不得在调用线程直接 join。
+                busy_ = true;
             }
             taskStart_ = std::chrono::steady_clock::now();
             try {
                 task();
             } catch (...) {
                 // 任务异常不得终止 JS 线程
+            }
+            {
+                std::lock_guard<std::mutex> lk(mtx_);
+                busy_ = false;
             }
         }
         // ---- 线程退出前清理 (JS 线程, 安全释放 JSValue) ----
@@ -938,7 +1113,7 @@ private:
         const auto deadline = std::chrono::steady_clock::now()
                               + std::chrono::milliseconds(kPromiseWaitLimitMs);
         while (JS_PromiseState(ctx, value) == JS_PROMISE_PENDING) {
-            if (stop_) {
+            if (stop_.load(std::memory_order_acquire)) {
                 out.kind = PromiseOutcome::Kind::Cancelled;
                 out.text = "interpreter.js engine stopped";
                 return out;
@@ -993,7 +1168,8 @@ private:
                                                    ? deadline
                                                    : std::min(next, deadline);
             cv_.wait_until(lk, wake, [&]() {
-                return stop_ || !queue_.empty() || timerEpoch_ != epoch;
+                return stop_.load(std::memory_order_acquire) || !queue_.empty()
+                       || timerEpoch_ != epoch;
             });
         }
         if (JS_PromiseState(ctx, value) == JS_PROMISE_FULFILLED) {
@@ -1152,7 +1328,21 @@ private:
     std::mutex                        mtx_;
     std::condition_variable           cv_;
     std::deque<std::function<void()>> queue_;
-    bool                              stop_ = false;
+    /// true = 拒绝新任务 (mtx_ 保护写入; JS 线程经原子读取观察停止标志)
+    std::atomic<bool> stop_{false};
+    /// JS 线程"忙"标记 (mtx_ 保护): 取任务与置忙在同一临界区内完成。
+    /// 停止请求据此判断能否在调用线程直接 join JS 线程 (空闲时可).
+    bool busy_ = false;
+
+    /// 能力 "interpreter.js" 注册标记 (start/stop 事务幂等; 仅在所属 IO 线程访问)
+    bool capabilityRegistered_ = false;
+
+    /// 生命周期互斥量: 只保护引擎状态与停止完成回调 (不与 mtx_ 组成嵌套
+    /// 死锁: 需要同时持有时一律先 lifecycleMtx_ 再 mtx_)。
+    mutable std::mutex                 lifecycleMtx_;
+    State                              state_ = State::Stopped;
+    std::thread                        stopper_;  ///< 停止收尾线程 (join JS 线程 + 释放 runtime)
+    std::vector<std::function<void()>> stopCompletions_; ///< 停止完成回调 (可能多个: 重复 stop)
 
     std::chrono::steady_clock::time_point taskStart_;
 
@@ -1252,6 +1442,14 @@ void* JsEngine::toolExecuteStart(
                         delete p;
                     }
                 } releaser{op};
+                if (engine->stopping()) {
+                    // 停止中: 不再执行插件 JS 代码, 但已接受的 op 必须终结
+                    auto errSv = agentxx::plugin::PluginStringView::fromCstr(
+                        "interpreter.js engine stopped"
+                    );
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, &errSv);
+                    return;
+                }
                 engine->doToolExecute(binding, *req);
                 if (req->cancelled) {
                     // 引擎停止/取消: 终态为 CANCELLED, 不是普通失败
@@ -1324,6 +1522,13 @@ void* JsEngine::hookStart(
         int pt               = static_cast<int>(point);
         auto ntfCopy         = *notify;
         if (!engine->post([engine, binding, payload, pt, ntfCopy]() {
+                if (engine->stopping()) {
+                    // 停止中: 不执行插件 JS 回调, 仍按失败终结本次 hook op
+                    auto errSv
+                        = agentxx::plugin::PluginStringView::fromCstr("interpreter.js engine stopped");
+                    ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+                    return;
+                }
                 engine->doHookFire(binding, pt, payload, ntfCopy);
             })) {
             // 引擎已停止: 已接受的 op 必须终结 (失败), 不返回悬挂句柄
@@ -1368,6 +1573,9 @@ void JsEngine::eventFire(const AgentxxPluginStringView* event_json, void* ud) {
                 event_json ? static_cast<size_t>(event_json->size) : 0
             };
             engine->post([engine, binding, payload]() {
+                if (engine->stopping()) {
+                    return; ///< 事件为 fire-and-forget: 停止中不再执行插件 JS
+                }
                 engine->doEventFire(binding, payload);
             });
         }
@@ -2095,6 +2303,14 @@ static void* AGENTXX_PLUGIN_CALL jsCapStart(
             // 完成后取工具清单并经通知器上报
             AgentxxPluginOperatorNotify ntfCopy = *notify;
             if (!engine->post([engine, caller_host, ntfCopy, name, path, code]() {
+                    if (engine->stopping()) {
+                        // 停止中: 不执行脚本加载, 但仍终结本次能力 op
+                        auto errSv = agentxx::plugin::PluginStringView::fromCstr(
+                            "interpreter.js engine stopped"
+                        );
+                        ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+                        return;
+                    }
                     std::string err2;
                     const int   rc2
                         = engine->loadScriptOnJsThread(caller_host, name, path, code, err2);
@@ -2128,6 +2344,15 @@ static void* AGENTXX_PLUGIN_CALL jsCapStart(
             // done 在脚本真正卸载之后 (JS 线程执行 rollback + 定时器清理) 触发
             AgentxxPluginOperatorNotify ntfCopy = *notify;
             if (!engine->post([engine, name, ntfCopy]() {
+                    if (engine->stopping()) {
+                        // 停止中: 脚本上下文由 JS 线程退出路径统一释放,
+                        // 不再执行脚本 rollback (宿主侧注册此时已撤销)。
+                        auto errSv = agentxx::plugin::PluginStringView::fromCstr(
+                            "interpreter.js engine stopped"
+                        );
+                        ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+                        return;
+                    }
                     engine->unloadScriptOnJsThread(name);
                     auto okSv = agentxx::plugin::PluginStringView::fromCstr("{\"ok\": true}");
                     ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &okSv);
@@ -2161,8 +2386,9 @@ static void* AGENTXX_PLUGIN_CALL jsCapStart(
 
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: create 含引擎线程创建/能力注册等可抛操作,
-    // 异常返回 -1 走宿主加载失败清理路径; 日志闭包捕获局部裸指针
+    // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 装配宿主句柄),
+    // 不创建 runtime/线程, 也不提交任何运行时注册 (Reset-v1 §5.2); 异常返回
+    // -1 走宿主加载失败清理路径
     JsEngine* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
@@ -2184,35 +2410,156 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
             if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
                 delete engine;
+                raw = nullptr;
                 return -1;
             }
-
-            // 注册能力 "interpreter.js" (agentxx.agent.capabilities 接口表, 异步方法
-            // 处理器三件套): 脚本插件 (C++ 壳) 经 invoke_capability(_async) 把脚本代码
-            // 交给本引擎执行 —— 插件间通信, 宿主不参与; load 为异步完成 (JS 线程执行),
-            // unload 内联完成 (fire-and-forget)
-            auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-            int  rc    = s_if.capabilities
-                         ->register_capability_ex(host, &capSv, &jsCapStart, nullptr, engine);
-            if (rc != 0) {
-                delete engine;
-                return -1;
-            }
-            // 先日志后交付: 若日志抛异常走 -1 失败路径时引擎仍由本函数 delete
-            // (避免 ctx 已交付但 rc=-1 的所有权歧义)
-            auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
-                "agentxx_javascript_engine loaded (QuickJS interpreter.js)"
-            );
-            s_if.log->log(host, 2, &loadedSv);
             *plugin_ctx = engine; ///< 所有权移交宿主 (destroy 时取回归还)
             return 0;
         }
     );
 }
 
+/// 引擎 start (Reset-v1 start 事务): 创建 JSRuntime + 专用 JS 线程, 并注册
+/// 能力 "interpreter.js"。
+///
+/// - create 阶段不启动线程/不注册: disable→enable 往返等价于一次 stop+start,
+///   引擎线程与脚本上下文都按事务重建, 不存在"线程已存在但实例已停用"的中间态;
+/// - 线程启动失败或能力注册失败 → 返回 NULL + error, 宿主回滚本次加载 (注册
+///   失败时先停止刚启动的引擎, 不留线程/运行时残留);
+/// - 重复 start: 引擎已运行时幂等成功, 能力注册在宿主侧按 owner+名称去重。
+static void* AGENTXX_PLUGIN_CALL jsEngineStart(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    auto* engine = static_cast<JsEngine*>(plugin_ctx); ///< 提升至 try 外 (catch 日志闭包使用)
+    try {
+        auto setErr = [&](const char* msg) {
+            if (error_out && engine && engine->host()) {
+                *error_out = agentxx::plugin::PluginString::fromCstr(engine->host(), msg);
+            }
+            return nullptr;
+        };
+        if (!engine || !notify || !notify->done) {
+            return setErr("interpreter.js start: invalid lifecycle call");
+        }
+        if (!engine->start()) {
+            return setErr("interpreter.js start: JS runtime init failed");
+        }
+        const AgentxxPluginHost* host = engine->host();
+        const agentxx::plugin::AgentIfaces iface = agentxx::plugin::AgentIfaces::query(host);
+        if (!iface.capabilities || !iface.capabilities->register_capability_ex) {
+            engine->requestStop(nullptr);
+            return setErr("interpreter.js start: host lacks capabilities interface");
+        }
+        if (engine->capabilityRegistered()) {
+            // 重复 start (幂等): 能力仍由本实例持有, 宿主尚未撤销
+        } else {
+            // 能力 "interpreter.js" (异步方法处理器三件套): 脚本插件 (C++ 壳) 经
+            // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
+            // 宿主不参与; load/unload 均为异步完成 (JS 线程执行)
+            auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
+            int  rc = iface.capabilities
+                          ->register_capability_ex(host, &capSv, &jsCapStart, nullptr, engine);
+            if (rc != 0) {
+                // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会
+                // 等待收尾完成, 不留线程/运行时残留)
+                engine->requestStop(nullptr);
+                return setErr("interpreter.js start: capability registration failed");
+            }
+            engine->setCapabilityRegistered(true);
+        }
+        if (iface.log && iface.log->log) {
+            auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
+                "agentxx_javascript_engine started (QuickJS interpreter.js)"
+            );
+            iface.log->log(host, 2, &loadedSv);
+        }
+        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        return nullptr; ///< 同步完成
+    } catch (...) {
+        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
+            if (engine) {
+                engine->guardLog(m);
+            }
+        });
+        if (notify && notify->done) {
+            auto errSv
+                = agentxx::plugin::PluginStringView::fromCstr("interpreter.js start: exception");
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+        }
+        return nullptr;
+    }
+}
+
+/// 引擎 stop (Reset-v1 stop 事务): 停止 JS 线程并释放 runtime。
+///
+/// - 立即拒绝新任务: 之后到达的能力调用/工具执行一律失败, 不再排队;
+/// - 队列中尚未开始的任务按取消终结 (不执行插件 JS 代码); 已经开始的执行
+///   由 drivePromise 观察 stop 标志后按取消完成;
+/// - JS 线程的 join 与 JS_FreeRuntime 交给收尾线程执行 (不能在 IO 线程直接
+///   join: JS 线程可能在宿主 vtable 调用中等待 IO 线程), done 在收尾完成后
+///   从收尾线程上报 (完成通知允许来自任意线程)。
+static void* AGENTXX_PLUGIN_CALL jsEngineStop(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
+) {
+    auto* engine = static_cast<JsEngine*>(plugin_ctx); ///< 提升至 try 外 (catch 日志闭包使用)
+    try {
+        if (!engine || !notify || !notify->done) {
+            if (error_out && engine && engine->host()) {
+                *error_out = agentxx::plugin::PluginString::fromCstr(
+                    engine->host(),
+                    "interpreter.js stop: invalid lifecycle call"
+                );
+            }
+            return nullptr;
+        }
+        AgentxxPluginOperatorNotify ntfCopy = *notify;
+        // 能力注册由宿主在停用/卸载时统一撤销 (detachInstanceRegistrations /
+        // detachAll), 这里只清本实例的幂等标记。
+        engine->setCapabilityRegistered(false);
+        engine->requestStop([engine, ntfCopy]() mutable {
+            ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        });
+        // 已接受: 返回非空句柄, 完成通知在收尾线程发出 (幂等重复 stop 同样成立)
+        return engine->capOpToken();
+    } catch (...) {
+        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
+            if (engine) {
+                engine->guardLog(m);
+            }
+        });
+        if (notify && notify->done) {
+            auto errSv
+                = agentxx::plugin::PluginStringView::fromCstr("interpreter.js stop: exception");
+            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+        }
+        return nullptr;
+    }
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               err
+) {
+    // 入口为 noexcept 守卫函数 (内部 try/catch 已分类上报, 异常不穿越 C ABI)
+    return jsEngineStart(plugin_ctx, notify, err);
+}
+
+extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               err
+) {
+    return jsEngineStop(plugin_ctx, notify, err);
+}
+
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
-    // C ABI 边界异常守卫: 销毁回调 (delete 引擎 = 停线程 + 释放 runtime)
+    // C ABI 边界异常守卫: 销毁回调 (同步等待停止收尾 = 停线程 + 释放 runtime)
     // 异常不得外泄, 否则 JS 线程/runtime 泄漏且宿主卸载流程被打断;
     // 先借本实例宿主句柄装配日志闭包再 delete (delete 后不得访问成员)
     const AgentxxPluginHost*     ownHost = engine ? engine->host() : nullptr;

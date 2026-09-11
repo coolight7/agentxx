@@ -14,6 +14,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
 #include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include <atomic>
 #include <filesystem>
@@ -70,6 +71,14 @@ static std::string findPluginDirMI(std::string_view pluginName) {
 
 static std::string findExamplePluginDirMI() {
     return findPluginDirMI("example_plugin");
+}
+
+/// 等待若干毫秒 (本模块测试协程内的定时等待; 与 test_plugins 的 sleepMs 同义)
+static asio::awaitable<void> sleepMsMI(int64_t ms) {
+    asio::steady_timer t(co_await asio::this_coro::executor);
+    t.expires_after(std::chrono::milliseconds(ms));
+    co_await t.async_wait(asio::use_awaitable);
+    co_return;
 }
 
 /// 构造最小 AgentContext (与 run_plugin_tests 相同装配)
@@ -337,6 +346,96 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 );
                 XX_TEST_EXPECT_FALSE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
             }
+        }
+    }
+
+    // ---- 7. JS 引擎 + 脚本插件双实例: 引擎线程/脚本上下文按实例隔离 ----
+    // - 同一 DSO 在每个 AgentContext 各建一个 JsEngine (各自 JS 线程与 runtime);
+    // - A 停用引擎 (stop 停线程) 与卸载都不影响 B 的能力调用与脚本工具;
+    // - 脚本注册的工具按 caller 实例归属, A/B 的注册表互不污染。
+    {
+        auto jsLibDir = findPluginDirMI("agentxx_javascript_engine");
+        auto jsDir    = findPluginDirMI("example_js");
+        XX_TEST_EXPECT_TRUE(!jsLibDir.empty());
+        XX_TEST_EXPECT_TRUE(!jsDir.empty());
+        if (!jsLibDir.empty() && !jsDir.empty()) {
+            auto jsA = co_await ctxA->pluginManager->loadPluginAsync(jsLibDir);
+            XX_TEST_EXPECT_TRUE(jsA != nullptr);
+            auto jsB = co_await ctxB->pluginManager->loadPluginAsync(jsLibDir);
+            XX_TEST_EXPECT_TRUE(jsB != nullptr);
+            XX_TEST_EXPECT_TRUE(jsA && jsB && jsA.get() != jsB.get());
+            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->hasCapability("interpreter.js") == 1);
+            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->hasCapability("interpreter.js") == 1);
+
+            auto scriptA = co_await ctxA->pluginManager->loadPluginAsync(jsDir);
+            XX_TEST_EXPECT_TRUE(scriptA != nullptr);
+            auto scriptB = co_await ctxB->pluginManager->loadPluginAsync(jsDir);
+            XX_TEST_EXPECT_TRUE(scriptB != nullptr);
+            for (int i = 0; i < 40
+                 && (!ctxA->toolRegistry->contains("js_hello")
+                     || !ctxB->toolRegistry->contains("js_hello"));
+                 ++i) {
+                co_await sleepMsMI(25);
+            }
+            XX_TEST_EXPECT_TRUE(ctxA->toolRegistry->contains("js_hello"));
+            XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
+
+            // 两实例各自执行同一脚本工具, 结果按参数区分且互不串扰
+            auto toolA = ctxA->toolRegistry->find("js_hello");
+            auto toolB = ctxB->toolRegistry->find("js_hello");
+            if (toolA && toolB) {
+                auto outA = co_await toolA->execute_async(agentxx::util::Json{{"name", "mi-A"}});
+                auto outB = co_await toolB->execute_async(agentxx::util::Json{{"name", "mi-B"}});
+                XX_TEST_EXPECT_TRUE(outA.find("mi-A") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(outB.find("mi-B") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(outA.find("mi-B") == std::string::npos);
+                XX_TEST_EXPECT_TRUE(outB.find("mi-A") == std::string::npos);
+            }
+
+            // A 停用引擎 (级联停脚本插件, 线程退出) → B 完全不受影响
+            ctxA->pluginManager->disable("agentxx_javascript_engine");
+            for (int i = 0; i < 300 && jsA && !jsA->lifecycleStopped; ++i) {
+                co_await sleepMsMI(10);
+            }
+            XX_TEST_EXPECT_TRUE(jsA && jsA->lifecycleStopped);
+            XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_FALSE(ctxA->toolRegistry->contains("js_hello"));
+            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
+            auto toolB2 = ctxB->toolRegistry->find("js_hello");
+            if (toolB2) {
+                auto outB2 = co_await toolB2->execute_async(agentxx::util::Json{{"name", "mi-B2"}}
+                );
+                XX_TEST_EXPECT_TRUE(outB2.find("mi-B2") != std::string::npos);
+            }
+
+            // A 重新启用 → 引擎线程重建, 脚本重新加载; B 的实例继续可用
+            ctxA->pluginManager->enable("agentxx_javascript_engine");
+            for (int i = 0; i < 400 && !ctxA->toolRegistry->contains("js_hello"); ++i) {
+                co_await sleepMsMI(10);
+            }
+            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->hasCapability("interpreter.js") == 1);
+            XX_TEST_EXPECT_TRUE(ctxA->toolRegistry->contains("js_hello"));
+            XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
+
+            // A 卸载引擎 (级联脚本插件) → B 仍可调用能力与工具
+            XX_TEST_EXPECT_TRUE(
+                co_await ctxA->pluginManager->unloadAsync(
+                    "agentxx_javascript_engine", std::chrono::seconds{30}
+                )
+            );
+            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->find("agentxx_javascript_engine") == nullptr);
+            XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->find("agentxx_javascript_engine") == jsB);
+            XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
+
+            XX_TEST_EXPECT_TRUE(
+                co_await ctxB->pluginManager->unloadAsync(
+                    "agentxx_javascript_engine", std::chrono::seconds{30}
+                )
+            );
+            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->find("example_js") == nullptr);
+            XX_TEST_EXPECT_FALSE(ctxB->toolRegistry->contains("js_hello"));
         }
     }
 
