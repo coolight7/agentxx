@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（R4-4 提交）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 二十四个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（JS 迁移设计补记提交）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 二十五个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -28,7 +28,8 @@
 > R5-1 提交（Client 语义渲染缓存容量上限与回收，见第 3.22 节）、
 > 状态同步提交（plugin.md 第 0.1/12 节实施状态与完成标准对齐，见第 3.23 节）、
 > R4-4 提交（filesystem/execute_command/system_monitor/planning 四个内置插件
-> start/stop 迁移 + cpu_gpu 用例修复，见第 3.24 节）。
+> start/stop 迁移 + cpu_gpu 用例修复，见第 3.24 节）、
+> JS 迁移设计补记提交（引擎线程 stop/重启三种候选语义与回归要求，见第 6 节 P2-1）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -159,7 +160,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 2 文件；见第 3.23 节)
 提交 24（R4-4）重构插件框架-R4-4 四个内置插件 start/stop 迁移与 cpu_gpu 用例修复
                           (2026-09-11, 7 文件；见第 3.24 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-24 均未推送
+提交 25（设计补记）重构插件框架-补记 JS 引擎迁移设计要点（仅本文档）
+                          (2026-09-11, 1 文件；见第 6 节 P2-1）
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-25 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -1044,6 +1047,21 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
 start/stop 导出，属 R4 收尾剩余。R4-4 已迁移 filesystem/execute_command/
 system_monitor/planning（第 3.24 节）；R4 收尾剩 JS 三件（javascript_engine/
 execute_javascript/example_js），需先定义 JS 引擎线程的 stop/重启语义。
+
+JS 引擎迁移的设计要点（下一会话开工前先定，勿直接改）：
+
+- 现状：`JsEngine` 构造即起专用线程，析构 join；create 期完成线程启动，
+  因此实例不可重复 start（disable→enable 后线程已随 stop 语义缺失而保留）。
+- 可选语义 A（推荐先评估）：引擎线程跟随**实例生命周期**（create 启动、
+  destroy join），stop 只做"取消在途操作 + 拒绝新操作"的静默化，
+  disable→enable 时线程复用；优点是脚本状态不丢，缺点是 disable 未释放线程。
+- 可选语义 B：stop 卸载全部脚本（执行 JS unload 钩子）并停线程，
+  start 重启空引擎；语义干净，但 disable→enable 后脚本不会自动重载，
+  需要明确"脚本由谁重放"（当前脚本是运行时经 `interpreter.js` 的 load 能力
+  动态加载，插件自身没有脚本清单）。
+- 无论哪种，`execute_javascript`/`example_js` 的 create 期能力检查
+  （`has_capability("interpreter.js")` + 依赖 engine 插件）与工具注册需拆分为
+  create 检查 + start 注册，并补 disable→enable 与卸载回归用例。
 
 ### P2-2 R6 验证与文档
 
