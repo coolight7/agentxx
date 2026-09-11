@@ -3,7 +3,8 @@
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
 > 本文件更新时间：2026-09-11（JS 迁移设计补记提交）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 二十五个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 当前重构进度 = 编号提交 1-25（另含 12.1 与 R4-3 文档提交；自基线 `a805f9cb` 起
+> 共 27 个 git 提交，均未推送）：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -144,6 +145,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 4 文件；见第 3.15 节)
 提交 16（R4-3）重构插件框架-R4-3 capability 异步 Task 与批量 start/stop 迁移
                           (2026-09-11, 8 文件；见第 3.16 节)
+提交 16.1      重构插件框架-更新交接文档至 R4-3 状态与最终回归结果 (`82096e58`, 仅本文档)
 提交 17（R3-2）重构插件框架-R3-2 graph node 统一 root adapter、SDK 反例编译检查与句柄回归
                           (2026-09-11, 8 文件；见第 3.17 节)
 提交 18（R2-3）重构插件框架-R2-3 客户端句柄安全、事件退订复查与关闭取证补全
