@@ -103,7 +103,8 @@ bash agent/script/check_sdk_negative_compile.sh    # OK: 5 snippets behave as ex
 - 定向 TSan 回归：**plugin 7 模块 1695 passed / 0 failed，0 条告警**（`agent/build/linux-tsan`，
   连续两轮复现）；扩展模块（ffi/agent/http_server 等）另有告警，全部为非插件模块或
   未插桩三方库，见 3.5 节的分类结论。
-- 定向 UBSan 探针：**1592 passed / 0 failed**，无 `runtime error` 报告。
+- 定向 UBSan 探针：提交 28 代码复跑 **1670 passed / 0 failed**、0 处 `runtime error`
+  （首次建立时 1592/0；两次均无 UBSan 报告，见 3.2 节）。
 - 导出符号 16 库全绿；SDK 反例编译 5/5；ABI C17 检查随 `plugin_runtime` 模块运行。
 - 平台已验证范围：Linux（Debug + ASan/LSan、定向 UBSan、定向 TSan）。**Windows / Android 未验证**。
 
@@ -357,10 +358,10 @@ R3-2/R2-4/R2-5/R4-3 的注册回滚用例）。
   **0 告警 / 1695 断言全通过**（连续两轮）。TSan 期间定位并修复 3 处插件相关数据竞争
   （log sink 成员顺序、测试顺序探针同步、system_monitor GPU/PDH/查询实例化），
   明细与扩展模块告警分类见 3.4 节。
-- **UBSan 定向探针（`7a44e76d`）**：构建选项 `AGENTXX_PLUGIN_UBSAN_PROBE`
+- **UBSan 定向探针（`7a44e76d` 建立；提交 28 复跑）**：构建选项 `AGENTXX_PLUGIN_UBSAN_PROBE`
   （默认 OFF，开启时只对 `lib/src/plugins/*.cpp` 与 6 个插件测试 TU 追加
   `-fsanitize=undefined -fno-sanitize-recover=undefined`，链接参数由顶层注入）；
-  探针下 1592 passed / 0 failed、无 `runtime error`，验证后已恢复基线。
+  首次 1592/0、提交 28 代码 1670/0，两次均无 `runtime error`，验证后已恢复基线。
 - **导出符号白名单（`dfe04a6a`）**：`agent/script/check_plugin_exports.sh`；
   16 个插件库只导出
   `agentxx_plugin_{agent,client}_{get_info,create,start,stop,destroy}`。
@@ -515,8 +516,7 @@ TSAN_OPTIONS=halt_on_error=0 second_deadlock_stack=1 timeout 1200s \
    均为非插件模块/未插桩三方库，需另立任务）；
 3. Windows 平台验证完成并写入结果（2.2）；
 4. ~~全模块扩展回归~~（2179/0）+ 导出符号（16 库）+ 反例编译（5/5）+
-   UBSan 探针（1592/0）—— **UBSan 探针需在提交 28 代码上再复跑一次**
-   （提交 27/28 动了 plugins 与 test 代码；当前探针结论对应提交 `7a44e76d`）；
+   ~~UBSan 探针~~（提交 28 代码复跑 1670/0，0 处 `runtime error`，见 3.2 节）；
 5. 明确"已验证平台"范围，不以 Linux 结果代替 Windows/Android；
 6. 残余顺序边界（2.3）不阻塞完成判定，但需在结论中明确列出。
 
@@ -572,6 +572,9 @@ client_plugins 421 / cpu_gpu 25 / agent 91 / memgrowth 15 / codegraph 23
 日志：/tmp/asan-ext-final.log
 ```
 
+同提交的**定向 UBSan 探针**复跑为 1670/0、0 处 `runtime error`（3.2 节）；
+恢复基线（`AGENTXX_PLUGIN_UBSAN_PROBE=OFF` 重建）后插件 7 模块再跑一次仍为
+**1695 passed / 0 failed**，LSan 报告与基线一致（4480 字节 / 64 处）。
 同提交的**定向 TSan**（插件框架 7 模块）为 0 告警、1695/0，详见 3.4 节。
 
 ### 3.1 历史基线（对应提交 `10cb3ae2`，2026-09-11）
@@ -606,7 +609,28 @@ memgrowth              15 passed / 0 failed
 日志：`/tmp/r44-sweep2.log`（另有 `/tmp/r51-sweep.log`、`/tmp/r26-sweep.log`、
 `/tmp/p4-sweep3.log` 等历史日志，`/tmp` 清理后需重跑）。
 
-### 3.2 定向 UBSan 探针（对应提交 `7a44e76d`）
+### 3.2 定向 UBSan 探针（提交 `7a44e76d` 建立；提交 28 复跑确认）
+
+**提交 28 代码复跑**（探针覆盖提交 27/28 改动的 plugins 与 test 代码）：
+
+```bash
+cmake -B agent/build/linux-debug -S agent -DAGENTXX_PLUGIN_UBSAN_PROBE=ON
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 \
+  timeout 1800s agent/build/linux-debug/exec/agentxx_test \
+  plugin_runtime plugin_sdk plugins plugin_resources plugin_multi_instance client_plugins --fail-fast
+```
+
+```text
+合计  1670 passed / 0 failed（exit=0）；`runtime error` 匹配 0 处（无 UBSan 报告）
+插桩范围校核（compile_commands.json）：
+  lib/src/plugins/*.cpp   11/11 带 -fsanitize=undefined
+  test/plugin/*.TU         6/13 带 (其余为 DSO 测试插件/平台模块/ABI C 检查 TU, 设计如此)
+验证后已恢复 AGENTXX_PLUGIN_UBSAN_PROBE=OFF 并重建
+日志：/tmp/ubsan-run-commit28.log
+```
+
+**首次建立时的记录（`7a44e76d`）**
 
 ```bash
 cmake -B agent/build/linux-debug -S agent -DAGENTXX_PLUGIN_UBSAN_PROBE=ON
@@ -651,7 +675,7 @@ test 侧 6 个插件测试 TU 带 `-fsanitize=undefined`；验证后恢复
 | `43c93ff6`（R5-1） | 623 | 71 | 359 | 421 | 扩展回归 2089/0 |
 | `10cb3ae2`（R4-4） | 623 | 71 | 359 | 421 | cpu_gpu 25；扩展回归 2114/0 |
 | `d3dbd909`（R4-5） | 623 | 71 | **392** | 421 | JS 三件 start/stop 迁移；multi_instance 80；专项回归 1695/0（LSan 与基线一致） |
-| 提交 28（R6-2） | 623 | 71 | 392 | 421 | TSan 定向回归（插件框架 0 告警/1695 断言）+ 3 处竞争修复；扩展回归 2179/0 |
+| 提交 28（R6-2） | 623 | 71 | 392 | 421 | TSan 插件框架 0 告警/1695 断言 + 3 处竞争修复；扩展回归 2179/0；UBSan 复跑 1670/0 |
 
 历史详细记录（每个模块完整列表与日志路径）见 git 历史中的本文件旧版本
 （`git show <旧提交>:resource/history/plugin-refactor-2/work.md`）。

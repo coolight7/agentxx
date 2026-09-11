@@ -14,16 +14,20 @@
 
 - 本文是任务交接文档。**当前状态：Reset-v1 重构进行中（未完成）**；逐提交进度、
   验证结果与剩余待办以 `resource/history/plugin-refactor-2/work.md` 为准
-  （最新提交 27；该文件**第 1 节=已实现任务内容、第 2 节=待实现任务内容**）。
+  （最新提交 28；该文件**第 1 节=已实现任务内容、第 2 节=待实现任务内容**）。
 - 已落地（阶段）：R1 Runtime/Operation；R2 加载事务与异步关闭（含注册事务回滚，
   工具/图/订阅/prompt/hook/能力/资源与客户端 UI 均有真实 DSO 用例）；R3 ABI v1 与
   SDK 统一 root adapter / 反例编译检查；R4 全部内置插件（含 3 个 JS 系插件）的
   start/stop 迁移、后台任务托管与 JS 引擎停/启语义定义；R5 Client 语义渲染/动作代次/
   依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、Debug+ASan 回归、
   插件框架定向 UBSan 探针、设计文档 Reset-v1 章节。
-- 未完成（阻塞"重构完成"判定）：TSan 定向回归（需独立全量构建，见 work.md 2.1）；
-  Windows 平台编译与专项（本机无 Windows 工具链，未验证不得声明）；
-  work.md 2.3 记录的"依赖启用事务顺序"残余边界不影响契约（失败→Disabled 可重试）。
+- 未完成（阻塞"重构完成"判定）：Windows 平台编译与专项（本机无 Windows 工具链，
+  未验证不得声明）；work.md 2.3 记录的"依赖启用事务顺序"残余边界不影响契约
+  （失败→Disabled 可重试），但需在结论中列出。
+- TSan 定向回归已完成（work.md 3.4 节）：插件框架 7 模块 0 告警 / 1695 断言通过，
+  期间修复 3 处数据竞争；扩展模块的告警全部落在非插件模块
+  （FFI/HttpServer/测试脚手架）与未插桩三方库（liburing + boost asio io_uring）上，
+  需另立任务 —— 即第 12 节"无本仓库代码的 TSan 告警"目前仅在**插件框架范围内**满足。
 - 仓库中已有用户未提交修改，至少包括：
   - `agentxx-config.yaml`（用户模型配置改动，勿回退）
 - 新会话开始时必须先执行 `git status --short --branch`，不得覆盖上述修改，也不得重置整个工作树。
@@ -696,9 +700,10 @@ plugin_multi_instance            29 passed / 0 failed
 - [x] 每次修改后查看 `git diff --check` 和 `git status`，保留用户无关修改。
 - [x] 更新 `docs/zh-cn/design/plugins.md`，使公开设计文档与 Reset-v1 实现一致
       （第 15 节 Reset-v1 章节 + 第 2/3/4/6/9/12/14 节修订）。
-- [x] 明确已验证平台：Linux（Debug + ASan/LSan、定向 UBSan 探针）；Windows/Android
-      未验证，不以 Linux 结果代替。
-- [ ] 只有在所有内置插件迁移（§9 第 4-8 步剩余项）和专项生命周期测试通过后，才能将本文
-      状态改为“Reset-v1 重构完成”；当前状态仍是“重构进行中（未完成）”。
+- [x] 明确已验证平台：Linux（Debug + ASan/LSan、定向 UBSan 探针、定向 TSan）；
+      Windows/Android 未验证，不以 Linux 结果代替。
+- [ ] 只有在所有内置插件迁移（§9 第 4-8 步）与专项生命周期测试通过、且 work.md 2.6 的
+      全部前置条件满足后，才能将本文状态改为“Reset-v1 重构完成”；当前状态仍是
+      “重构进行中（未完成）”（剩余：Windows 平台验证）。
 
 **交接给后续会话的第一步**：读取本文，检查工作树，然后从 R1 建立宿主 Operation/Lifetime 基础；不要先修改业务插件，也不要先删除现有测试。
