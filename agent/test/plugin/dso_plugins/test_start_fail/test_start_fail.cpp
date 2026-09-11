@@ -5,11 +5,14 @@
 ///   2. 注册图节点类型      `dso_rollback_type`
 ///   3. 订阅事件            `dso_rollback.watch`
 ///   4. prompt 贡献         `appendSystemPrompts.dso_rollback`
-///   5. 发布 `{"step":"all","ok":true}` 到 `dso_rollback.probe`，然后返回 NULL + error
+///   5. 注册 hook           点 `AGENTXX_PLUGIN_HOOK_MODEL_START`
+///   6. 注册能力            `dso.rollback.cap`
+///   7. 注册资源            skill 目录 `/tmp/agentxx_dso_rollback_skills`
+///   8. 发布 `{"step":"all","ok":true}` 到 `dso_rollback.probe`，然后返回 NULL + error
 ///
 /// 若任一步骤失败，则发布 `{"step":"<name>","ok":false}` 并返回该失败。
 /// 测试据此验证：
-/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt）；
+/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt/hook/能力/资源）；
 /// - 回滚后再次加载同一 DSO 仍能重新注册同名条目（第一次的注册没有残留）。
 ///
 /// 仅使用纯 C ABI 头；不依赖 libagentxx。
@@ -121,6 +124,33 @@ void AGENTXX_PLUGIN_CALL onProbeEvent(const AgentxxPluginStringView*, void*) {
     // 回滚用例只需要"订阅存在/被撤销"这一事实；handler 本身不做任何事。
 }
 
+void* AGENTXX_PLUGIN_CALL probeHookStart(
+    void*,
+    int32_t,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*
+) {
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    }
+    return nullptr;
+}
+
+void* AGENTXX_PLUGIN_CALL probeCapabilityStart(
+    void*,
+    const AgentxxPluginHost*,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginStringView*,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*
+) {
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    }
+    return nullptr;
+}
+
 struct ProbeCtx {
     const AgentxxPluginHost* host = nullptr;
 };
@@ -229,7 +259,53 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
         return nullptr;
     }
 
-    // 5. 全部注册成功后主动失败 (触发宿主回滚)
+    // 5. hook 注册 (中间件句柄入栈)
+    const auto* hooks = static_cast<const AgentxxPluginHooksIface*>(
+        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS)
+    );
+    if (!hooks || !hooks->register_hook) {
+        setError(host, error_out, failStep(host, "hooks_iface"));
+        return nullptr;
+    }
+    AgentxxPluginHookSpec hookSpec{};
+    hookSpec.point      = AGENTXX_PLUGIN_HOOK_MODEL_START;
+    hookSpec.hook_start = &probeHookStart;
+    hookSpec.user_data  = ctx;
+    if (hooks->register_hook(host, &hookSpec) != 0) {
+        setError(host, error_out, failStep(host, "hook"));
+        return nullptr;
+    }
+
+    // 6. 能力注册
+    const auto* capabilities = static_cast<const AgentxxPluginCapabilitiesIface*>(
+        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES)
+    );
+    if (!capabilities || !capabilities->register_capability_ex) {
+        setError(host, error_out, failStep(host, "capabilities_iface"));
+        return nullptr;
+    }
+    const auto capability = sv("dso.rollback.cap");
+    if (capabilities->register_capability_ex(host, &capability, &probeCapabilityStart, nullptr, ctx)
+        != 0) {
+        setError(host, error_out, failStep(host, "capability"));
+        return nullptr;
+    }
+
+    // 7. 资源注册 (skill 扫描目录; 所有权归本插件, 卸载/回滚时摘除)
+    const auto* resources = static_cast<const AgentxxPluginResourcesIface*>(
+        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES)
+    );
+    if (!resources || !resources->register_skill_dir) {
+        setError(host, error_out, failStep(host, "resources_iface"));
+        return nullptr;
+    }
+    const auto skillDir = sv("/tmp/agentxx_dso_rollback_skills");
+    if (resources->register_skill_dir(host, &skillDir) != 0) {
+        setError(host, error_out, failStep(host, "resource"));
+        return nullptr;
+    }
+
+    // 8. 全部注册成功后主动失败 (触发宿主回滚)
     report(host, "all", true);
     setError(host, error_out, "start failed on purpose after full registration");
     return nullptr;

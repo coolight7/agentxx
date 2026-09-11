@@ -240,6 +240,34 @@ target_compile_definitions(agentxx_test PRIVATE
 )
 add_dependencies(agentxx_test agentxx_test_start_fail_plugin)
 
+# ===== 客户端加载期 start 失败回滚用例: 客户端测试专用插件动态库 =====
+# 仅用于 test_client_plugins 的"UI 全注册后失败 → 宿主回滚"真实 DSO 用例:
+# - 源码只用纯 C ABI 头 (client_plugin_api.h), 不需要链接 libagentxx;
+# - 入口符号经 AGENTXX_PLUGIN_EXPORT 导出, 其余符号隐藏;
+# - 行为受环境变量 AGENTXX_TEST_CLIENT_START_OK 控制 (测试内先失败后成功)。
+add_library(agentxx_test_client_start_fail_plugin SHARED
+  "${CMAKE_CURRENT_SOURCE_DIR}/plugin/dso_plugins/test_client_start_fail/test_client_start_fail.cpp"
+)
+target_include_directories(agentxx_test_client_start_fail_plugin PRIVATE
+  "${AGENTXX_INSTALL_DIR}/include"
+)
+set_target_properties(agentxx_test_client_start_fail_plugin PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "test_client_start_fail_plugin"
+  CXX_STANDARD 26
+  CXX_STANDARD_REQUIRED OFF
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/dso_plugins"
+)
+if (XX_IS_MSVC_D)
+  # MSVC 不自动导出, 入口函数已带 dllexport
+else()
+  target_compile_options(agentxx_test_client_start_fail_plugin PRIVATE -fvisibility=hidden)
+endif()
+target_compile_definitions(agentxx_test PRIVATE
+  AGENTXX_TEST_CLIENT_START_FAIL_PLUGIN_PATH="$<TARGET_FILE:agentxx_test_client_start_fail_plugin>"
+)
+add_dependencies(agentxx_test agentxx_test_client_start_fail_plugin)
+
 if (XX_IS_MSVC_D)
 	target_compile_options(agentxx_test PRIVATE 
 		"/bigobj"

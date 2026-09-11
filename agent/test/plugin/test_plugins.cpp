@@ -1,8 +1,11 @@
 #include "test_plugins.h"
 
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/middlewares/memory_file.h"
+#include "agentxx/middlewares/skill.h"
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
@@ -2133,8 +2136,8 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 40. 加载期 start 失败的真实 DSO 回滚 (R2 遗留) ----
-    // 测试插件 start 依次注册 工具/图类型/订阅/prompt 后主动失败:
-    // - 宿主必须回滚全部已生效注册 (工具/图类型/订阅/prompt 贡献);
+    // 测试插件 start 依次注册 工具/图类型/订阅/prompt/hook/能力/资源 后主动失败:
+    // - 宿主必须回滚全部已生效注册 (工具/图类型/订阅/prompt/hook 中间件/能力/资源);
     // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件
     //   `{"step":"all","ok":true}` 证明走到了最后一步)。
     {
@@ -2148,6 +2151,23 @@ throw new Error("top-level rollback probe");
         sctx->pluginManager = std::make_shared<plugin::PluginManager>(sctx);
         sctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
         sctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
+        // 资源应用器 (skill/memory 中间件): 插件 start 经 vtable 注册 skill 目录,
+        // 回滚后所有权记录必须为空。
+        auto skillMw = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
+            std::vector<std::string>{},
+            sctx
+        );
+        auto memMw = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
+            std::vector<std::string>{},
+            sctx
+        );
+        auto applier = std::make_shared<agentxx::agent::AgentResourceApplier>(
+            sctx,
+            co_await asio::this_coro::executor,
+            skillMw,
+            memMw
+        );
+        sctx->resourceApplier = applier;
 
         sctx->bus->get<std::string>("plugin.dso_rollback.probe")
             .subscribe([&](const std::string& data) -> asio::awaitable<void> {
@@ -2180,6 +2200,20 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
         // 订阅已撤销: 发布 watch 主题不得调用已卸载 DSO 的 handler (ASan 下泄漏即崩溃)
         XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("dso_rollback.watch", "{}"), 0);
+        // 能力已注销: 失败加载不得留下能力注册
+        XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
+        // hook 中间件已摘除: 失败实例的中间件句柄不得留在句柄栈上
+        {
+            const auto& handles = sctx->middlewareHandleContext->handles;
+            const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                return h->name == "test_start_fail_plugin_middleware";
+            });
+            XX_TEST_EXPECT_FALSE(found);
+        }
+        // 资源已摘除: 失败实例不得留下 skill 目录所有权记录
+        XX_TEST_EXPECT_TRUE(
+            applier->ownedBy("test_start_fail_plugin").skillDirs.empty()
+        );
         co_await sleepMs(5);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
 
@@ -2199,6 +2233,10 @@ throw new Error("top-level rollback probe");
             reports.size() >= 2 && reports[1].find("\"ok\":true") != std::string::npos
         );
         XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
+        XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
+        XX_TEST_EXPECT_TRUE(
+            applier->ownedBy("test_start_fail_plugin").skillDirs.empty()
+        );
         sctx->pluginManager->shutdownAll();
 #else
         // 独立构建未接线测试插件: 跳过

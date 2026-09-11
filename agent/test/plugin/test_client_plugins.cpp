@@ -23,6 +23,7 @@
 #include "asio/use_awaitable.hpp"
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -2364,6 +2365,107 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
         }
+    }
+
+    // ---- 26. 客户端加载期 start 失败的真实 DSO 回滚 (R2 遗留: UI 项) ----
+    // 测试插件 start 依次注册 状态栏项/面板/Info 段落/命令/订阅, 每步注册后
+    // 立即经句柄自检 (update 必须成功, 保证"走到最后一步"意味着前面的注册
+    // 真实生效), 然后主动失败: 宿主必须回滚全部 UI 注册与订阅。
+    // 随后置 `AGENTXX_TEST_CLIENT_START_OK` 再次加载同一 DSO 必须完整成功
+    // (证明 id/命令/订阅无残留冲突), 卸载后再次清空。
+    {
+#ifdef AGENTXX_TEST_CLIENT_START_FAIL_PLUGIN_PATH
+        auto mgr2     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        auto adapter2 = std::make_shared<MockPluginUiAdapter>();
+        mgr2->setUiAdapter(adapter2);
+        mgr2->setSessionId("sess-rollback");
+
+        const std::string dsoPath = AGENTXX_TEST_CLIENT_START_FAIL_PLUGIN_PATH;
+        auto              findInRegistry
+            = [](const std::shared_ptr<const agentxx::plugin::ClientUiRegistry>& reg,
+                 const char*                                                       id) {
+                  if (!reg) {
+                      return false;
+                  }
+                  for (const auto& s : reg->statusItems) {
+                      if (s.id == id) {
+                          return true;
+                      }
+                  }
+                  for (const auto& p : reg->panels) {
+                      if (p.id == id) {
+                          return true;
+                      }
+                  }
+                  for (const auto& s : reg->infoSections) {
+                      if (s.id == id) {
+                          return true;
+                      }
+                  }
+                  return false;
+              };
+
+        // 第一次加载: 全注册后失败, 宿主回滚
+        ::unsetenv("AGENTXX_TEST_CLIENT_START_OK");
+        auto failed = co_await mgr2->loadNativeAsync(dsoPath);
+        XX_TEST_EXPECT_TRUE(failed == nullptr);
+        XX_TEST_EXPECT_FALSE(mgr2->hasCommand("test_client_start_fail_cmd"));
+        {
+            auto reg = mgr2->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+            XX_TEST_EXPECT_FALSE(findInRegistry(reg, "test_client_start_fail.status"));
+            XX_TEST_EXPECT_FALSE(findInRegistry(reg, "test_client_start_fail.panel"));
+            XX_TEST_EXPECT_FALSE(findInRegistry(reg, "test_client_start_fail.info"));
+        }
+
+        // 第二次加载: 同名注册必须完整重新成功 (无残留冲突)
+        ::setenv("AGENTXX_TEST_CLIENT_START_OK", "1", 1);
+        auto ok = co_await mgr2->loadNativeAsync(dsoPath);
+        ::unsetenv("AGENTXX_TEST_CLIENT_START_OK");
+        XX_TEST_EXPECT_TRUE(ok != nullptr);
+        if (ok) {
+            XX_TEST_EXPECT_EQ(ok->name, "test_client_start_fail_plugin");
+            XX_TEST_EXPECT_TRUE(mgr2->hasCommand("test_client_start_fail_cmd"));
+            auto reg = mgr2->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+            if (reg) {
+                bool statusOk = false;
+                for (const auto& s : reg->statusItems) {
+                    if (s.id == "test_client_start_fail.status") {
+                        statusOk = (s.text == "probe: 1");
+                    }
+                }
+                bool panelOk = false;
+                for (const auto& p : reg->panels) {
+                    if (p.id == "test_client_start_fail.panel") {
+                        panelOk = (p.title == "Probe");
+                    }
+                }
+                bool infoOk = false;
+                for (const auto& s : reg->infoSections) {
+                    if (s.id == "test_client_start_fail.info") {
+                        infoOk = (s.title == "Probe Info");
+                    }
+                }
+                XX_TEST_EXPECT_TRUE(statusOk);
+                XX_TEST_EXPECT_TRUE(panelOk);
+                XX_TEST_EXPECT_TRUE(infoOk);
+            }
+            // 卸载: UI 项与命令再次清空
+            XX_TEST_EXPECT_TRUE(
+                co_await mgr2->unloadAsync(
+                    "test_client_start_fail_plugin", std::chrono::seconds{5}
+                )
+            );
+            XX_TEST_EXPECT_FALSE(mgr2->hasCommand("test_client_start_fail_cmd"));
+            auto regAfter = mgr2->uiRegistrySnapshot();
+            XX_TEST_EXPECT_FALSE(findInRegistry(regAfter, "test_client_start_fail.status"));
+            XX_TEST_EXPECT_FALSE(findInRegistry(regAfter, "test_client_start_fail.panel"));
+            XX_TEST_EXPECT_FALSE(findInRegistry(regAfter, "test_client_start_fail.info"));
+        }
+#else
+        // 独立构建未接线测试插件: 跳过
+#endif
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
