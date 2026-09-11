@@ -74,7 +74,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
 | **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows, 由 `agentxx_computer_use` 插件提供, depends: screen_capture) |
 | **屏幕捕获** | `agentxx_screen_capture` | 屏幕截图/流式捕获 (仅 Windows) |
-| **音频流** | `agentxx_audio_stream` | 系统/程序/麦克风音频流捕获 (仅 Windows WASAPI; 当前桩实现阶段, 平台矩阵见 plugins.md) |
+| **音频流** | `agentxx_audio_stream` | 系统/程序/麦克风音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现; 平台矩阵见 plugins.md) |
 | **文本选择监听** | `agentxx_text_selection_monitor` | 系统级文本选择事件流 (仅 Windows UIAutomation) |
 | **JS 执行** | `agentxx_execute_javascript` | QuickJS 执行 JS 代码 (depends: `agentxx_javascript_engine` 的 `interpreter.js` 能力) |
 
@@ -428,7 +428,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 | 模块 | 说明 |
 |------|------|
 | **ScreenCapture** | 屏幕截图与流式捕获 (多屏支持; 插件 `agentxx_screen_capture`, 仅 Windows) |
-| **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 仅 Windows WASAPI) |
+| **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 全平台跳过构建: 实现未启用) |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (插件 `agentxx_text_selection_monitor`, 仅 Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`; 工具 + 周期采集 + client 侧渲染) |
 | **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugins` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
@@ -1521,7 +1521,7 @@ agent/
 │   ├── agentxx_screen_capture/   # 屏幕捕获插件 (仅 Windows)
 │   ├── agentxx_computer_use/     # 键鼠控制插件 (仅 Windows; depends: screen_capture)
 │   ├── agentxx_system_monitor/   # 系统资源监控插件 (工具 + 周期采集 + client 状态栏渲染)
-│   ├── agentxx_audio_stream/     # 音频流捕获插件 (仅 Windows WASAPI)
+│   ├── agentxx_audio_stream/     # 音频流捕获插件 (全平台跳过构建: 实现未启用)
 │   └── agentxx_text_selection_monitor/ # 文本选择监听插件 (仅 Windows UIAutomation)
 │
 └── script/                       # 编译/测试脚本

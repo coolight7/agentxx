@@ -30,6 +30,10 @@ using Microsoft::WRL::ComPtr;
 
 namespace agentxx_audio_stream_plugin {
 
+// 说明: Windows WASAPI 实现当前**未启用** (条件恒假), 因此所有平台都走下方
+// "not implemented on this platform" 桩分支; 本插件同时被 CMake 平台 gate 全平台
+// 跳过编译 (见 CMakeLists.txt), 不进入构建产物。恢复实现时请一并去掉此处的
+// `&& false` 并在 CMakeLists 中声明支持平台。
 #if XX_IS_WIN_D && false
 
 class AudioStream::Impl {

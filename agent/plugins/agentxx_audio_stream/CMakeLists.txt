@@ -9,8 +9,15 @@
 set(PLUGIN_NAME agentxx_audio_stream)
 
 # ===== 平台支持判定 =====
+# 当前为**全平台跳过** (平台列表为空):
+# - Windows WASAPI 实现尚未启用 (audio_stream.cpp 中 `#if XX_IS_WIN_D && false`,
+#   实际走 "not implemented on this platform" 桩分支), 即本插件在所有平台都只是
+#   桩实现; 按 Reset-v1 要求 (见 resource/history/plugin-refactor-2/plugin.md 2.3),
+#   CMake 不得把未实现能力伪装为已支持 → 在真实实现完成并通过验证前不进入构建产物。
+# - 恢复方式: 实现可用后在下面的 gate 调用中声明平台 (如 windows) 并同步更新
+#   docs/zh-cn/design/plugins.md 平台矩阵。
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
-agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK)
 if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()

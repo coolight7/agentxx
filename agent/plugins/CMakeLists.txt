@@ -201,6 +201,8 @@ agentxx_load_plugin(agentxx_computer_use AGENTXX_ENABLE_PLUGIN_COMPUTER_USE)
 
 agentxx_load_plugin(agentxx_codegraph AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
 agentxx_load_plugin(agentxx_system_monitor AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
+# audio_stream: 实现未启用 (见 audio_stream.cpp 的条件编译与自身 CMakeLists 的平台
+# gate), 全平台跳过编译, 不进入构建产物; 开关保留以便实现完成后直接启用
 agentxx_load_plugin(agentxx_audio_stream AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
 agentxx_load_plugin(agentxx_text_selection_monitor AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
 agentxx_load_plugin(agentxx_execute_javascript AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT)

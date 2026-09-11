@@ -4,9 +4,14 @@
 F/P 问题编号、测试矩阵）。本文件记录进度、提交边界、验证事实与待办；与 plugin.md
 冲突时以 plugin.md 为准。
 >
-> **状态：Reset-v1 未完成。** 更新时间 2026-09-11（提交 28）。
-> 完成度：R1 / R2 / R3 / R4 / R5 已完成；R6 大部分完成
-> （TSan 定向回归已完成并落档，剩 Windows 平台验证与 2.3 记录的残余顺序边界）。
+> **状态：Reset-v1 重构完成（2026-09-11，提交 29）。** R1～R6 全部完成；
+> plugin.md §2.6 的 6 项完成前置条件已全部满足（Windows 平台验证为最后一项，
+> 本次在 Windows 本机完成）。**已验证平台**：Windows（MSVC 14.51 / VS18 Debug +
+> ASan）与 Linux（GCC 16.1 Debug + ASan/LSan、定向 UBSan、定向 TSan）；
+> Android 未验证，不以其它平台结果代替。
+> 非阻塞遗留项（不影响"完成"判定，均已在第 2 节与第 5 节逐条列出）：
+> ① 依赖插件启用事务顺序边界（2.3）；② 非插件模块的 TSan 告警需另立任务（3.5）；
+> ③ 可选收尾项（2.4）。
 >
 > 阅读顺序：**第 1 节 = 已实现任务内容；第 2 节 = 待实现任务内容**；第 3 节 = 验证记录；
 > 第 4 节 = 提交边界；第 5 节 = 已知风险；第 6 节 = 下一步执行清单；
@@ -19,8 +24,9 @@ F/P 问题编号、测试矩阵）。本文件记录进度、提交边界、验�
 ### 0.1 第一步：确认状态
 
 ```bash
+# Linux 侧 (WSL2)
 cd /home/coolight/program/agentxx
-git status --short --branch      # 应干净；main 领先 origin/main 29 个提交（均未推送）
+git status --short --branch      # 应干净；main 领先 origin/main 30 个提交（均未推送）
 git log --oneline -8
 git diff --stat
 git diff --check
@@ -29,8 +35,8 @@ git diff --check
 阅读顺序：
 
 1. `plugin.md`（方案、R1-R6 验收标准、第 11 节测试矩阵、第 12 节完成标准）；
-2. 本文件第 1 节（已实现，重点是 1.8 关键缺陷修复清单）、第 2 节（待实现，
-   重点是 2.1 TSan 定向回归与 2.3 残余顺序边界）、第 5 节（已知风险）；
+2. 本文件第 1 节（已实现，重点是 1.8 关键缺陷修复清单、1.10 Windows 平台验证）、
+   第 2 节（待实现/非阻塞遗留）、第 3 节（验证记录）、第 5 节（已知风险）；
 3. `git show <提交号>` 按需查看；最新提交号以 `git log -1` 为准。
 
 预期状态：工作树无代码文件修改、无 untracked 文件。
@@ -41,6 +47,9 @@ git diff --check
 - `TODOS.md`、`agentxx-config.yaml`、`resource/history/plugin-refactor-2/index.md`
   已随历史提交入库（含用户改动）：不要回退，也不要在重构提交中顺手修改。
 - 若又出现用户新改动，保留它们并只提交本任务相关文件。
+- Windows 侧工作树沿用同一仓库（`D:\0Acoolight\Program\cpp\agentxx`），
+  `agent/third_party/fmt`（untracked）、`libiconv-native`、`liburing`（submodule
+  脏标记）属于构建产生的既有状态，不要清理/回退。
 
 ### 0.3 构建 / 测试 / 校验命令速查
 
@@ -92,6 +101,45 @@ bash agent/script/check_plugin_exports.sh          # OK: 16 plugin libraries
 bash agent/script/check_sdk_negative_compile.sh    # OK: 5 snippets behave as expected
 ```
 
+Windows 侧（MSVC / VS18 + ASan，本机 `D:\0Acoolight\Program\cpp\agentxx`）：
+
+```powershell
+# 1) Windows 构建 (脚本配置 + 构建 + 安装 + 复制到 windows-debug-output;
+#    注意: 生成的 exe/dll 在 agent/build/windows-debug/exec 与 windows-debug-output)
+.\agent\script\windows_debug_build.bat
+# 增量单目标构建 (更快; 改动 lib/plugins/test 后常用)
+cmake --build agent/build/windows-debug --target agentxx_test_repo --config Debug --parallel 8
+cmake --build agent/build/windows-debug --config Debug --parallel 8      # 含全部插件
+
+# 2) 插件专项回归 (Windows; 平台插件 screen_capture/text_selection 一并跑)
+agent\build\windows-debug\exec\agentxx_test.exe `
+  plugin_runtime plugin_sdk plugins plugin_resources plugin_multi_instance `
+  client_plugins cpu_gpu screen_capture text_selection --fail-fast
+
+# 3) 扩展回归 (16 模块)
+agent\build\windows-debug\exec\agentxx_test.exe `
+  ffi_c_api plugin_runtime plugin_sdk plugins plugin_resources plugin_multi_instance `
+  client_plugins screen_capture cpu_gpu text_selection agent_host subagent_tool `
+  subagent_bus agent memgrowth codegraph --fail-fast
+
+# 4) 工具模块回归 (含 execute_command 的 Windows 命令分支)
+agent\build\windows-debug\exec\agentxx_test.exe `
+  command filesystem string_tools math_tools web_search codegraph datetime rag_search --fail-fast
+
+# 5) 多轮重复运行 (排除 flaky): 同一模块集连续跑 N 次, 每次都要 exit=0
+#    直接重复执行第 2/3 条命令即可 (本次验证以 2~10 轮为验收)
+```
+
+补充说明（Windows 本次实测）：
+
+- **必须用 `-WorkingDirectory` 指向 `agent/build/windows-debug/exec`**：`agentxx_test`
+  用 `GetModuleFileNameW` 的父目录 + `plugins/<name>` 定位插件 DSO，工作目录不对会
+  加载不到插件（表现为插件用例失败）。
+- 测试进程不要由 `pwsh -Command ... &` 方式同步等待：长跑用例会撞上工具会话超时；
+  建议 `Start-Process -NoNewWindow -RedirectStandardOutput <log>` 后台运行 + 轮询日志。
+- Windows 上没有 WSL 的 `timeout`/`ASAN_OPTIONS` 包装；MSVC ASan 走
+  `clang_rt.asan_dynamic-x86_64.dll`（构建自动部署到 exec）。
+
 ### 0.4 当前判定基线
 
 - 插件专项回归：**1695 passed / 0 failed**（ASan + LSan，7 模块）。LSan 报告与
@@ -106,7 +154,16 @@ bash agent/script/check_sdk_negative_compile.sh    # OK: 5 snippets behave as ex
 - 定向 UBSan 探针：提交 28 代码复跑 **1670 passed / 0 failed**、0 处 `runtime error`
   （首次建立时 1592/0；两次均无 UBSan 报告，见 3.2 节）。
 - 导出符号 16 库全绿；SDK 反例编译 5/5；ABI C17 检查随 `plugin_runtime` 模块运行。
-- 平台已验证范围：Linux（Debug + ASan/LSan、定向 UBSan、定向 TSan）。**Windows / Android 未验证**。
+- **Windows 平台（提交 29 完成，MSVC 14.51 / VS18 Debug + ASan）**：
+  - 全插件构建通过（19 个插件 DSO；`agentxx_audio_stream` 按平台 gate 全平台跳过，
+    不进入产物 —— 见 1.10）；
+  - 插件专项回归 **1765 passed / 0 failed**（9 模块，连续 2 轮一致；`plugin_runtime`
+    634 断言；平台专项 `screen_capture` 46 / `cpu_gpu` 25 / `text_selection` 13）；
+  - 扩展回归 **2251 passed / 0 failed**（16 模块）；工具模块回归 **360 passed / 0 failed**
+    （含 `command` 28 断言的 Windows 命令分支）；
+  - 详细记录见 3.6 节。
+- 平台已验证范围：**Windows（MSVC Debug + ASan）**、**Linux（Debug + ASan/LSan、
+  定向 UBSan、定向 TSan）**。Android 未验证，不以其它平台结果代替。
 
 ---
 
@@ -120,11 +177,12 @@ bash agent/script/check_sdk_negative_compile.sh    # OK: 5 snippets behave as ex
 | R1 Runtime / Operation | 完成 | `3a4497ba`、`b2b5114a`、`c2869f07`、`8c717236`、`cdbcc738` | `plugin_runtime` 623/0（11.2 全 10 条覆盖） |
 | R2 加载事务 / 注册事务 / 异步关闭 | 完成 | `b2b5114a`、`c2869f07`、`9be9c735`、`a321267c`、`cdbcc738`、`0bab72e3`、`e96f8f1b`、`d6ae39cd`、`75b01a56` | `plugin_runtime` 623、`plugins` 359、`plugin_resources` 83、`plugin_multi_instance` 48、`client_plugins` 421 |
 | R3 ABI v1 / SDK | 完成 | `b2b5114a`、`aa4b33ff`、`4f8d1fdf`、`3e76a143`、`0bab72e3` | `plugin_sdk` 71、C17 ABI 检查、反例编译 5/5 |
-| R4 内置插件 / JS / 平台 | 完成（JS 三件已迁移，提交 27） | `f861bcf9`、`dfe04a6a`、`ff6fc990`、`3143ef92`、`460d35f5`、`2a53977f`、`3e76a143`、`10cb3ae2`、`d3dbd909`、提交 28 | `plugins` 392、`plugin_multi_instance` 80、`codegraph` 23、`cpu_gpu` 25；JS 见 1.5；system_monitor GPU/PDH/查询实例化（提交 28）；Windows 专项见 2.2 |
+| R4 内置插件 / JS / 平台 | 完成（JS 三件提交 27；Windows 平台专项提交 29） | `f861bcf9`、`dfe04a6a`、`ff6fc990`、`3143ef92`、`460d35f5`、`2a53977f`、`3e76a143`、`10cb3ae2`、`d3dbd909`、提交 28、提交 29 | `plugins` 392、`plugin_multi_instance` 80、`codegraph` 23、`cpu_gpu` 25；JS 见 1.5；system_monitor 实例化（提交 28）；**Windows 平台见 1.10/3.6** |
 | R5 Client / 依赖 / prompt | 完成 | `9be9c735`、`a321267c`、`e96f8f1b`、`43c93ff6` | `client_plugins` 421、`plugin_runtime` 623 |
-| R6 验证 / 文档 / 发布审查 | 大部分完成 | `aa4b33ff`、`dfe04a6a`、`ff6fc990`、`0bab72e3`、`7a44e76d`、提交 28 | ASan/LSan 2179/0（14 模块）、UBSan 1592/0、TSan 插件框架 0 告警（3.4 节）、导出符号 16 库；Windows 见 2.2 |
+| R6 验证 / 文档 / 发布审查 | **完成** | `aa4b33ff`、`dfe04a6a`、`ff6fc990`、`0bab72e3`、`7a44e76d`、提交 28、提交 29 | ASan/LSan 2179/0（Linux 14 模块）、UBSan 1592/0、TSan 插件框架 0 告警（3.4）、导出符号 16 库、**Windows 全插件构建 + 1765/0 + 2251/0 + 360/0（3.6）** |
 
-结论：不能把当前状态写成 "Reset-v1 完成"；完成判定的阻塞项见第 2.6 节。
+结论：`plugin.md` §2.6 的 6 项完成前置条件已全部满足，状态已更新为
+"Reset-v1 重构完成"；非阻塞遗留项见第 2 节。
 
 ### 1.2 R1 Runtime / Operation（已完成）
 
@@ -349,7 +407,7 @@ R3-2/R2-4/R2-5/R4-3 的注册回滚用例）。
 - 可选遗留（不影响验收）：`onToolRenderUpdated` 仍整表重绘，未做按消息块精确
   失效；TUI 组件级"旧快照渲染"用例未补（manager 层已覆盖语义路径）。
 
-### 1.7 R6 验证 / 文档（大部分完成）
+### 1.7 R6 验证 / 文档（完成）
 
 - **ASan + LSan 扩展回归**：最新 **2179 passed / 0 failed**（14 模块，含 `cpu_gpu`；
   提交 28 后复跑，日志 `/tmp/asan-ext-final.log`）。
@@ -370,7 +428,9 @@ R3-2/R2-4/R2-5/R4-3 的注册回滚用例）。
 - **设计文档**：`docs/zh-cn/design/plugins.md` 第 15 节 Reset-v1 生命周期与异步
   契约（15.1 入口与状态机 / 15.2 Operation 终态 / 15.3 线程与租约 /
   15.4 启用禁用事务），并更新第 2/3/4/6/9/12/14 节。
-- 未完成：Windows 平台验证（见 2.2）；2.3 记录的残余顺序边界（不阻塞完成判定）。
+- **Windows 平台验证（提交 29 完成）**：见 1.10 与 3.6（全插件构建、平台专项、
+  扩展回归、工具模块回归、重复运行去 flaky）。
+- 未完成项：无（2.3 残余顺序边界为非阻塞遗留，见第 2 节）。
 
 ### 1.8 关键缺陷修复清单（交接重点）
 
@@ -410,6 +470,19 @@ R3-2/R2-4/R2-5/R4-3 的注册回滚用例）。
    ② 同一实例的并发查询（后台采样 offload 与工具/能力调用同在宿主阻塞池）并发读写
    CPU 采样基线 `_sample` → 新增实例成员 `queryMutex` 串行化 `querySync()`。
    修复后插件框架 TSan 告警归零。
+12. **`test_plugin_runtime` 在 Windows 偶发失败/挂起**（提交 29，Windows 验证发现）：
+   测试用轮询 `poll()` 驱动 IO 且主线程阻塞在 `future.get()`；win_iocp 的定时器
+   到期由独立定时器线程投递完成包，可能晚于本次 `poll()`，导致
+   `waitIdleUntil`/`unloadAsync` 完成事件被漏掉 → 断言失败或永久挂起
+   （cdb 抓栈定位在 `test_plugin_runtime.cpp:424` 的 `future<bool>::get`）。
+   改为有界推进 IO 的等待（`drainUntil`/`waitFutureReady`/`waitFutureValue`），
+   并在 `drainAll` 中于"无就绪处理器"时先让出 CPU 再确认一次。
+   修复后 Windows `plugin_runtime` 634/0 连续 10 轮稳定；Linux 复跑 634/0 不变。
+   见 1.10 第 5 条第 1 项。
+13. **`agentxx_audio_stream` 以桩实现进入产物**（提交 29，Windows 验证发现）：
+   WASAPI 分支条件是 `XX_IS_WIN_D && false`，平台 gate 却声明 `windows` →
+   Windows 上会产出一个只有"not implemented" 桩的插件 DSO。改为空平台列表
+   （全平台跳过）并在 CMake/源码注明恢复条件。见 1.10 第 1 条。
 
 ### 1.9 新增测试 / 脚本 / 构建选项清单
 
@@ -424,6 +497,72 @@ R3-2/R2-4/R2-5/R4-3 的注册回滚用例）。
 | 导出符号脚本 | `agent/script/check_plugin_exports.sh` | 白名单校验（16 库） |
 | 反例编译脚本 | `agent/script/check_sdk_negative_compile.sh` | 5 片段行为断言 |
 | UBSan 探针选项 | `AGENTXX_PLUGIN_UBSAN_PROBE`（顶层/lib/test CMake） | 定向 UBSan（不重编第三方） |
+
+### 1.10 Windows 平台验证（提交 29 完成，R6 最后一项）
+
+**背景**：本任务此前在 Linux/WSL2 完成，唯一阻塞"重构完成"判定的是 Windows 平台
+（`plugin.md` §0.1）。提交 29 改在 Windows 本机（MSVC 14.51 / VS18、12 核）执行
+完整构建与专项回归。
+
+**1) 平台 gate 与产物面（`plugin.md` §2.3 要求）**
+
+- 核对结论：`screen_capture` / `computer_use`（COM 配对）/ `text_selection_monitor`
+  （UIAutomation）在 Windows 上**真实编译并进入产物**；
+  `agentxx_audio_stream` 的 WASAPI 实现是 `#if XX_IS_WIN_D && false` 的**未启用代码**，
+  实际只会编译"not implemented" 桩 —— 按 §2.3"不得把未实现能力伪装为已支持"，
+  本次把它的平台声明改为**空列表（全平台跳过）**，不再产出该插件 DSO，
+  并在源码与 CMake 处写明恢复条件（实现可用后声明 `windows` 并同步文档矩阵）。
+  改动后 Windows 构建产物为 **19 个插件 DSO**（此前的 20 个去掉 audio_stream）。
+- 增量构建目录中可能残留此前的 `agentxx_audio_stream.dll`（CMake/install 不回收
+  已移除目标的旧文件）；全新构建不产出，产物统计以构建日志的
+  `<target>.vcxproj -> ...` 行为准（本次已清理残留并复核）。
+
+**2) 构建**
+
+- 命令：`.\agent\script\windows_debug_build.bat`（配置 + 构建 + install + 复制到
+  `build/windows-debug-output`），随后增量：
+  `cmake --build agent/build/windows-debug --config Debug --parallel 8`。
+- 结果：成功。插件目标逐个链接（日志含 19 个 `lib...dll` 输出行，无
+  `agentxx_audio_stream.vcxproj`），`libagentxxd.dll` / `libagentxx_staticd.lib` /
+  `agentxx_test.exe` / `agentxx_cli.exe` 全部产出；配置期打印
+  `Skip plugin 'agentxx_audio_stream': no implementation for platform 'windows' (supported: )`。
+- 注（既有经验，非本次引入）：命令行 `cmake --build ... --parallel 8` 在
+  MSBuild 下偶发 `error MSB6006: CL.exe 已退出，代码为 1` + `MSB4166 子节点过早退出`
+  （无 `error C####` 与之对应，属编译器进程被资源压力终止）；按 AGENTS.md 既有经验
+  重跑即通过。构建脚本方式（含 `/Z7`、固定并行度）更稳定。
+
+**3) 运行前置条件（重要，Windows 专属）**
+
+- 必须把工作目录设为 `agent/build/windows-debug/exec`：`agentxx_test.exe` 用
+  `GetModuleFileNameW` 的父目录定位 `plugins/<name>`，工作目录不对时插件加载不到，
+  用例会失败（Linux 侧的 `/proc/self/exe` 推导等价）。
+- 长跑用例（完整扩展回归约 185s）应以后台进程 + 重定向日志方式运行，避免撞上
+  工具会话超时。
+
+**4) 平台专项与回归结果**（详见 3.6）
+
+| 项目 | 结果 |
+|---|---|
+| 插件专项回归（9 模块，连续 2 轮） | **1765 passed / 0 failed**（`plugin_runtime` 634） |
+| 平台专项 | `screen_capture` 46 / `cpu_gpu` 25 / `text_selection` 13，全 0 failed |
+| 扩展回归（16 模块） | **2251 passed / 0 failed** |
+| 工具模块回归（含 `command` Windows 分支） | **360 passed / 0 failed** |
+| 多轮重复运行（去 flaky） | `plugin_runtime` × 10 全绿；插件专项 × 2、扩展 × 1 全绿 |
+
+**5) 顺手修复的两处 Windows 专属问题（都在测试/构建侧，产品代码未改语义）**
+
+1. **`test_plugin_runtime` 在 Windows 上偶发失败/挂起**（提交 29 修复，见 1.8 第 12/13 条）：
+   测试用轮询 `io_context::poll()` 驱动 IO，同时主线程又阻塞在
+   `std::future::get()` 上；Windows（win_iocp）的定时器到期由**独立定时器线程**
+   投递完成包，可能在本次 `poll()` 返回之后才入队，于是
+   `waitIdleUntil` / `unloadAsync` 的完成被漏掉 → 断言失败（`drainAll()` 8 轮
+   全部空转）甚至永久挂起。生产路径有常驻 `run()` 线程，不受影响；
+   修复方式是把这类等待改为**有界推进 IO 的等待**（`drainUntil` /
+   `waitFutureReady` / `waitFutureValue`），超时即断言失败而不是挂起。
+   修复后 `plugin_runtime` 在 Windows 由"偶发失败/挂起"变为 **634/0 连续 10 轮稳定**
+   （断言数从 623 增至 634，多出的 11 条来自这些有界等待带来的显式断言）。
+2. **`agentxx_audio_stream` 平台 gate**（同上第 1 条）：改为全平台跳过，
+   避免"桩实现进入发布产物"。
 
 ---
 
@@ -447,16 +586,19 @@ TSAN_OPTIONS=halt_on_error=0 second_deadlock_stack=1 timeout 1200s \
   client_plugins cpu_gpu --fail-fast
 ```
 
-### 2.2 Windows 平台编译与专项
+### 2.2 Windows 平台编译与专项（已完成，提交 29）
 
-- **现状**：本机无 Windows 工具链，以下均未验证，不得声明通过：
+- **结论**：已在 Windows 本机完成，全部满足验收（记录见 1.10 与 3.6）：
   - `screen_capture`、`computer_use`（COM 配对）、`text_selection_monitor`
-    （UIAutomation）、`audio_stream`（WASAPI/COM）编译与运行；
-  - `agentxx_execute_command` 的 Windows 命令分支；
-  - 平台 gate 是否正确产出/排除对应插件（Linux 已按 gate 跳过，不误报全局通过）。
-- **验收**：Windows Debug 构建全插件通过；对应专项测试（screen_capture /
-  text_selection_monitor / cpu_gpu 等）通过；结果写入本文件并在 plugin.md
-  标注已验证平台范围。
+    （UIAutomation）**编译通过并进入产物**，对应专项用例
+    `screen_capture` 46、`cpu_gpu` 25、`text_selection` 13 全绿；
+  - `agentxx_execute_command` 的 Windows 命令分支：`command` 模块 28 断言全绿；
+  - 平台 gate 行为已核对：Windows 上仅 `audio_stream` 被跳过（实现未启用，
+    见 1.10 第 1 条），其余平台插件正常产出；
+  - 全插件构建（19 个 DSO）+ 扩展回归 2251/0 + 工具模块回归 360/0。
+- 遗留提醒：`computer_use` / `text_selection_monitor` 的**真实桌面交互**（鼠标键盘
+  注入、UIA 选择事件）只做了接口级用例验证，未在本次任务中做人工桌面场景回归；
+  `audio_stream` 仍无实现（已按 gate 排除，见 2.4 第 6 条）。
 
 ### 2.3 残余顺序边界：依赖插件启用事务与"待补 stop"（提交 27 发现，不阻塞完成判定）
 
@@ -491,8 +633,8 @@ TSAN_OPTIONS=halt_on_error=0 second_deadlock_stack=1 timeout 1200s \
    前提下评估池化/压缩。
 5. **关闭超时取证增强**：`pendingOperationSummary()` 可补充每个 Operation 的
    等待时长。
-6. **`audio_stream` 支持矩阵**：确认 Windows 实现完成前不进入发布产物
-   （Linux 已被 gate 跳过）。
+6. ~~`audio_stream` 支持矩阵~~（**提交 29 已完成**：改为全平台跳过构建，
+   实现未启用前不进入产物，见 1.10 第 1 条）。
 
 ### 2.5 plugin.md 第 11 节测试矩阵覆盖对照
 
@@ -501,10 +643,10 @@ TSAN_OPTIONS=halt_on_error=0 second_deadlock_stack=1 timeout 1200s \
 | 11.1 C17 ABI 编译测试 | 完成 | `test_plugin_abi_c17.c` + `plugin_runtime` 对照用例；SDK 正反例 5/5；未知/短表、NULL 表、版本不匹配均被拒绝 |
 | 11.2 用例 1-10 | 完成 | 1-4/6/7：P0-2 与早期用例；5/8/9：R1-2；10：R3-2/R2-4/R2-5/R4-3（双端真实 DSO） |
 | 11.3 Client/Graph/JS | 完成 | 同轮退订（R2-3）、旧快照/旧动作（P1-3）、GraphTypeSlot 代次（R1-2/R3-2）、JS callTool/顶层异常/hook 真实完成（R4-2）、Promise 终态映射（P2-1b）、JS 引擎 start/stop 往返与双实例隔离（提交 27） |
-| 11.4 多实例 | 完成 | `plugin_multi_instance` 80（system_monitor 双实例采样隔离 + JS 引擎/脚本插件双实例：停用/启用/卸载互不影响）；另一组同进程不同 executor 用例在 `test_plugins` 多实例段 |
-| 11.4 Windows 编译 | **未完成** | 见 2.2（本机无工具链） |
-| 11.4 导出符号 | 完成 | `check_plugin_exports.sh` 16 库全绿 |
-| 11.4 audio_stream 不进入支持矩阵 | Linux 已满足 | CMake 平台 gate 跳过；Windows 待验证 |
+| 11.4 多实例 | 完成 | `plugin_multi_instance` 80（system_monitor 双实例采样隔离 + JS 引擎/脚本插件双实例：停用/启用/卸载互不影响）；另一组同进程不同 executor 用例在 `test_plugins` 多实例段；Windows 侧同模块 80/0 复跑通过 |
+| 11.4 Windows 编译 | **完成**（提交 29） | Windows Debug 全插件构建（19 DSO）+ `screen_capture` 46 / `text_selection` 13 / `cpu_gpu` 25 / `command` 28 全绿，见 1.10、3.6 |
+| 11.4 导出符号 | 完成 | `check_plugin_exports.sh` 16 库全绿（Linux ELF）；MSVC 侧不自动导出，仅 `AGENTXX_PLUGIN_EXPORT` 入口导出（构建配置已注释说明） |
+| 11.4 audio_stream 不进入支持矩阵 | **完成**（提交 29） | CMake 平台 gate 改为全平台跳过（实现未启用），Windows/Linux 均不产出该 DSO |
 | 11.5 旧基线 | 仅比较 | 旧基线 1180/0 已不作为验收依据 |
 
 ### 2.6 判定"重构完成"的前置条件（plugin.md 第 12 节）
@@ -514,11 +656,16 @@ TSAN_OPTIONS=halt_on_error=0 second_deadlock_stack=1 timeout 1200s \
 1. ~~2.1 JS 三件迁移完成并通过专项回归~~（提交 27 完成：`plugins` 392、`plugin_multi_instance` 80）；
 2. ~~TSan 结论落档~~（已完成：插件框架 0 告警；扩展模块告警分类见 3.4 节，
    均为非插件模块/未插桩三方库，需另立任务）；
-3. Windows 平台验证完成并写入结果（2.2）；
-4. ~~全模块扩展回归~~（2179/0）+ 导出符号（16 库）+ 反例编译（5/5）+
+3. ~~Windows 平台验证完成并写入结果~~（**提交 29 完成**，记录见 1.10 与 3.6）；
+4. ~~全模块扩展回归~~（Linux 2179/0，Windows 2251/0）+ 导出符号（16 库）+ 反例编译（5/5）+
    ~~UBSan 探针~~（提交 28 代码复跑 1670/0，0 处 `runtime error`，见 3.2 节）；
-5. 明确"已验证平台"范围，不以 Linux 结果代替 Windows/Android；
-6. 残余顺序边界（2.3）不阻塞完成判定，但需在结论中明确列出。
+5. ~~明确"已验证平台"范围~~（Windows：MSVC Debug + ASan；Linux：GCC Debug +
+   ASan/LSan、定向 UBSan、定向 TSan；Android 未验证）；
+6. ~~残余顺序边界（2.3）列出~~（非阻塞遗留，已在第 2 节与第 5 节明确列出）。
+
+**结论（提交 29）：6 项前置条件全部满足 → `plugin.md` 状态更新为
+"Reset-v1 重构完成"。** 非阻塞遗留项：2.3（依赖启用事务顺序）、3.5 节列出的
+非插件模块 TSan 告警（另立任务）、2.4 的 5 个可选收尾项。
 
 ---
 
@@ -765,9 +912,122 @@ TSAN_OPTIONS=halt_on_error=0 second_deadlock_stack=1 agentxx_test \
 
 ### 3.5 复现命令
 
-见第 0.3 节（构建 / 专项 / 扩展 / UBSan / TSan / 导出符号 / 反例编译）。
+见第 0.3 节（构建 / 专项 / 扩展 / UBSan / TSan / 导出符号 / 反例编译 / Windows）。
 所有 ASan 测试须带 `ASAN_OPTIONS=detect_leaks=1:halt_on_error=0` 与 `--fail-fast`；
 TSan 构建用独立目录 `agent/build/linux-tsan`（TSan 与 ASan 运行时互斥）。
+
+### 3.6 Windows 平台验证记录（提交 29，2026-09-11）
+
+**环境**：Windows 10/11 x64，MSVC 14.51.36231（VS18 Community），CMake 4.3.0-rc1，
+12 核 / 52 GB；构建目录 `agent/build/windows-debug`（VS 生成器、Debug、ASan 开启），
+产物复制到 `agent/build/windows-debug-output`。
+
+**1) 构建**
+
+```powershell
+.\agent\script\windows_debug_build.bat                 # 全量（配置+构建+install+复制）
+cmake --build agent/build/windows-debug --config Debug --parallel 8   # 增量
+```
+
+```text
+结果：成功。
+- 配置期：[agentxx] Skip plugin 'agentxx_audio_stream': no implementation for platform
+  'windows' (supported: )            ← 平台 gate 生效（audio_stream 实现未启用）
+- 插件目标：19 个 `lib<name>.dll` 输出（含 screen_capture / computer_use /
+  text_selection_monitor / javascript_engine / execute_javascript / example_*）
+- 库与可执行：libagentxxd.dll、libagentxx_staticd.lib、libagentxx_util.lib、
+  agentxx_test.exe、agentxx_cli.exe
+- 产物目录 exec/plugins 下 DLL 计数 19（audio_stream 不再产出，已清理旧残留）
+```
+
+**2) 插件专项回归（9 模块，连续 2 轮一致）**
+
+```powershell
+cd agent\build\windows-debug\exec
+.\agentxx_test.exe plugin_runtime plugin_sdk plugins plugin_resources `
+  plugin_multi_instance client_plugins cpu_gpu screen_capture text_selection --fail-fast
+```
+
+```text
+plugin_runtime        634 passed / 0 failed
+plugin_sdk             71 passed / 0 failed
+plugins               392 passed / 0 failed
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  80 passed / 0 failed
+client_plugins        421 passed / 0 failed
+cpu_gpu                25 passed / 0 failed
+screen_capture         46 passed / 0 failed
+text_selection         13 passed / 0 failed
+合计                 1765 passed / 0 failed（exit=0；两轮一致）
+```
+
+**3) 扩展回归（16 模块）**
+
+```powershell
+.\agentxx_test.exe ffi_c_api plugin_runtime plugin_sdk plugins plugin_resources `
+  plugin_multi_instance client_plugins screen_capture cpu_gpu text_selection `
+  agent_host subagent_tool subagent_bus agent memgrowth codegraph --fail-fast
+```
+
+```text
+ffi_c_api 117 / plugin_runtime 634 / plugin_sdk 71 / subagent_bus 21 / subagent_tool 122 /
+agent_host 95 / codegraph 23 / screen_capture 46 / cpu_gpu 25 / text_selection 13 /
+plugins 392 / plugin_resources 83 / plugin_multi_instance 80 / client_plugins 421 /
+agent 93 / memgrowth 15
+合计 2251 passed / 0 failed（exit=0，耗时约 184s）
+```
+
+**4) 工具模块回归（含 Windows 命令分支）**
+
+```powershell
+.\agentxx_test.exe command filesystem string_tools math_tools web_search codegraph `
+  datetime rag_search --fail-fast
+```
+
+```text
+command 28 / filesystem 101 / string_tools 17 / math_tools 82 / web_search 19 /
+codegraph 23 / datetime 5 / rag_search 85
+合计 360 passed / 0 failed（exit=0）
+```
+
+**5) 稳定性（去 flaky）**
+
+```text
+plugin_runtime 单模块 × 10 轮 : 全部 exit=0、634/0（修复前为偶发失败 / 永久挂起，见 1.8 第 12 条）
+插件专项 9 模块 × 2 轮        : 1765/0、1765/0
+扩展 16 模块 × 1 轮           : 2251/0
+```
+
+**6) 平台 gate 复核**
+
+```text
+Windows 产物插件目录（19）:
+  agentxx_codegraph, agentxx_computer_use, agentxx_execute_command,
+  agentxx_execute_javascript, agentxx_filesystem, agentxx_javascript_engine,
+  agentxx_math, agentxx_planning, agentxx_rag_search, agentxx_screen_capture,
+  agentxx_string, agentxx_system, agentxx_system_monitor,
+  agentxx_text_selection_monitor, agentxx_websearch,
+  example_graph_node, example_js, example_plugin, example_resources
+跳过（实现未启用，见 1.10 第 1 条）: agentxx_audio_stream
+Linux 产物保持 16 库（check_plugin_exports.sh: OK: 16 plugin libraries）
+```
+
+**7) 提交 29 的回归确认（Linux 侧，交叉验证测试改动无回归）**
+
+```bash
+cmake --build agent/build/linux-debug -j12
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1200s \
+  agent/build/linux-debug/exec/agentxx_test plugin_runtime plugin_sdk plugins \
+  plugin_resources plugin_multi_instance client_plugins cpu_gpu --fail-fast
+```
+
+```text
+合计 1706 passed / 0 failed（exit=0）
+  其中 plugin_runtime 634（原 623，新增有界等待断言）、plugin_sdk 71、plugins 392、
+  plugin_resources 83、plugin_multi_instance 80、client_plugins 421、cpu_gpu 25
+LSan: 4480 byte(s) leaked in 64 allocation(s) —— 与重构前基线逐项一致（未新增泄漏）
+bash agent/script/check_plugin_exports.sh  → OK: 16 plugin libraries
+```
 
 ---
 
@@ -807,16 +1067,26 @@ TSan 构建用独立目录 `agent/build/linux-tsan`（TSan 与 ASan 运行时互
 提交 26（整理版）d507d90b+  重构插件框架-交接文档按已完成/待实现重组                    (仅本文档)
 提交 27（R4-5） d3dbd909  重构插件框架-R4-5 JS 引擎与脚本壳插件 start/stop 迁移       (5 文件, 2026-09-11)
                           —— 本提交前 `plugin.md`/`work.md` 的整理版改动由本任务文档提交一并入库
-提交 28（R6-2） [本提交]  重构插件框架-R6-2 定向 TSan 回归与数据竞争修复            (7 文件, 2026-09-11)
+提交 28（R6-2） fc3d2c9b  重构插件框架-R6-2 定向 TSan 回归与数据竞争修复            (7 文件, 2026-09-11)
                           —— 修复 log sink 成员顺序、测试顺序探针同步、
                              system_monitor GPU/PDH/查询实例化；work.md/plugin.md 同步
-工作树          提交 28 后仅剩用户改动 `agentxx-config.yaml`（模型名/image_input）；
-                `resource/history/plugin-refactor-2/index.md` 已随历史提交入库，勿回退
+提交 28.1       a5f8a6e1  重构插件框架-R6-2b 提交 28 验证结果补记                    (仅本文档)
+提交 --/--      11658fd7  --（用户提交: TODOS.md + agentxx-config.yaml）
+提交 --/--      e2a7c247  fix windows build（用户提交: exception.h / test CMake / 测试跨平台化）
+提交 29（R6-3） [本提交]  重构插件框架-R6-3 Windows 平台验证与平台 gate 收敛        (8 文件, 2026-09-11)
+                          —— Windows 全插件构建 + 插件专项 1765/0 + 扩展 2251/0 +
+                             工具模块 360/0；test_plugin_runtime 有界等待修复（Windows
+                             IOCP 定时器投递时序）；audio_stream 改为全平台跳过；
+                             work.md/plugin.md 更新为"Reset-v1 重构完成"
+工作树          提交 29 后：代码/文档修改均已入库；仅剩用户既有改动与构建副产物
+                （`agentxx-config.yaml`、`agent/third_party/fmt`(untracked)、
+                 `libiconv-native`/`liburing`(submodule 脏标记)），勿回退/勿清理
 ```
 
 说明：提交 3 及以后全部建立在 `b2b5114a` 之上；`b2b5114a` 包含当时的用户改动
 （`TODOS.md` +3、本文件重写），`3a4497ba` 包含 `agentxx-config.yaml` 与 `index.md`。
-新会话不要重写/压缩这些提交，也不要回退用户文件。
+新会话不要重写/压缩这些提交，也不要回退用户文件。提交 29 建立在提交 28 与两个
+用户提交（`11658fd7`、`e2a7c247`）之后。
 
 ---
 
@@ -837,17 +1107,25 @@ TSan 构建用独立目录 `agent/build/linux-tsan`（TSan 与 ASan 运行时互
    测试脚手架）与未插桩三方库（liburing + boost asio io_uring）的告警已分类记录
    （3.4 节），**未**在本任务内修复；`plugin.md` 第 12 节"无本仓库代码的 TSan 告警"
    仅在插件框架范围内满足，仓库全局尚未满足。
-5. **Windows 未验证**：screen_capture / computer_use / text_selection_monitor /
-   audio_stream / execute_command Windows 分支均未编译运行；不得用 Linux 结果代替（见 2.2）。
+5. **Windows 已部分验证（提交 29）**：`screen_capture` / `computer_use` /
+   `text_selection_monitor` / `execute_command` Windows 分支已编译运行并通过接口级
+   用例（见 1.10、3.6）；**未做人工桌面场景回归**（真实鼠标键盘注入、UIA 选择事件），
+   若需发布桌面交互功能建议补一次人工验证。`audio_stream` 实现未启用（已按 gate 全
+   平台跳过构建，不进入产物）。Android 未验证，不得用其它平台结果代替。
 6. **JS 引擎空闲判定依赖 `busy_` 不变式**：`JsEngine::requestStop` 在"无在手中任务、
    队列为空"时才在调用线程直接 join JS 线程；该不变式要求 JS 线程取任务/执行定时器
    与置忙在同一临界区内完成（代码中已注释）。若后续改动 JS 线程循环，必须保持该不变式，
    否则会重新引入"IO 线程 join 与 JS 线程回调互等"的自锁面。
-6. **构建环境脆弱点（实测）**：GCC 16.1 偶发 ICE 后 build 目录可能残留残缺 `.o`，
+7. **构建环境脆弱点（实测，Linux）**：GCC 16.1 偶发 ICE 后 build 目录可能残留残缺 `.o`，
    链接器（mold/lld）会直接 SIGSEGV 而非报错。排查手法：把 `<build>/.../link.txt`
    里的链接器换成 `-fuse-ld=bfd` 重跑，bfd 会指出坏目标文件；删除该 `.o` 重编即可。
    不要为此清空整个 build 目录。
-7. **可选遗留**：`onToolRenderUpdated` 整表重绘；TUI 组件级旧快照用例缺失；
+8. **构建环境脆弱点（实测，Windows）**：命令行 `cmake --build ... --parallel 8` 偶发
+   `MSB6006: CL.exe 已退出，代码为 1` + `MSB4166 子节点过早退出`（无 `error C####`，
+   属编译器进程被资源压力终止）；重跑即通过。构建脚本（`windows_debug_build.bat`）
+   带固定并行度与 `/Z7`，更稳定。Windows 上运行 `agentxx_test.exe` **必须**把工作目录
+   设为 `exec`，否则 `plugins/<name>` 解析不到（见 1.10 第 3 条）。
+9. **可选遗留**：`onToolRenderUpdated` 整表重绘；TUI 组件级旧快照用例缺失；
    create 失败回滚独立用例缺失（均不阻塞验收，见 2.4）。
 
 ---
@@ -861,10 +1139,15 @@ TSan 构建用独立目录 `agent/build/linux-tsan`（TSan 与 ASan 运行时互
        —— 新增 disable→enable 往返、紧邻 disable+enable、双实例隔离、shutdownAsync 收尾
 [x] 4. TSan 定向回归（agent/build/linux-tsan）：插件框架 0 告警，3 处竞争已修复（3.4 节）
 [x] 5. 扩展回归（14 模块）复跑：2179/0（ASan+LSan）
-[ ] 6. Windows 平台验证（需 Windows 工具链，见 2.2）
-[ ] 7. 可选收尾项（2.4，按价值取舍；含 2.3 的宿主侧启用事务串行化；
-       以及 3.4 节列出的非插件模块 TSan 告警，需另立任务）
-[ ] 8. 全部完成后：更新 plugin.md 状态为"Reset-v1 重构完成"并更新本文档第 1/2 节
+[x] 6. Windows 平台验证（提交 29）：全插件构建 + 专项 1765/0 + 扩展 2251/0 +
+       工具模块 360/0；audio_stream 收敛为全平台跳过；test_plugin_runtime 有界等待修复
+[x] 7. 全部完成后：plugin.md 状态更新为"Reset-v1 重构完成"并同步本文件第 1/2/3/4 节
+[ ] 8. 后续（非本任务验收项，建议另立任务）
+       - 2.3 宿主侧启用事务串行化（依赖者 start 串到依赖启用事务之后）
+       - 3.5 节列出的非插件模块 TSan 告警（FFI / HttpServer / 测试脚手架 / liburing）
+       - 2.4 的 5 个可选收尾项（create 失败 DSO、TUI 组件级用例、按消息块失效、
+         tombstone 内存评估、关闭超时取证）
+       - Android 平台验证（本次未验证）
 ```
 
 每一步完成后：跑对应模块回归、更新本文件第 1/2/3 节、执行 `git diff --check` 与
@@ -874,8 +1157,9 @@ TSan 构建用独立目录 `agent/build/linux-tsan`（TSan 与 ASan 运行时互
 
 ## 7. 提交与文档维护规范
 
-- 提交信息格式：`重构插件框架-<内容总结>`；阶段提交说明必须标注
-  "（Reset-v1 未完成）"，不得把阶段成果写成整体完成。
+- 提交信息格式：`重构插件框架-<内容总结>`。**本任务已完成**：完成后的提交不再标注
+  "（Reset-v1 未完成）"，仅在提交说明中写清本次范围；若后续再开子任务，请沿用
+  "重构插件框架-<子任务>" 前缀并在说明里注明是否影响已完成判定。
 - 新提交一律建立在**最新提交**之上；不要重写、回退或压缩已有重构提交；
   不修改或回退 `TODOS.md`、`agentxx-config.yaml`、`index.md` 等已入库的用户改动。
 - 提交前必做：`git diff --check`、构建、相关模块回归、`git status` 确认只包含

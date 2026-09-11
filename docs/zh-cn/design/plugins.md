@@ -391,7 +391,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `agentxx_codegraph` | 代码索引 5 工具 (search/context/callers/callees/path) + client Info 栏 |
 | `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |
 | `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
-| `agentxx_audio_stream` | 音频流捕获 (仅 Windows WASAPI) |
+| `agentxx_audio_stream` | 音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现) |
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `agentxx_execute_javascript` | JS 代码执行工具 (`agentxx_execute_javascript`, 依赖 `agentxx_javascript_engine`) |
@@ -501,3 +501,22 @@ Closing → CloseFailed → Closing (可重试)
 - **脚本/子对象注册归属调用方实例**：引擎承载的脚本注册挂在调用方 (壳插件) 实例上，
   由宿主在该实例停用/卸载时统一撤销；引擎自身的 `stop` 只释放运行时，不假设宿主
   注册表的清理顺序。
+
+### 15.6 平台支持矩阵与验证状态
+
+- **平台 gate**：各插件在自身 `CMakeLists.txt` 开头调用 `agentxx_plugin_platform_gate`
+  声明支持平台，列表为空表示**全平台跳过**（无实现）。跳过发生在 `add_subdirectory`
+  入口，内置合并清单登记也随之天然跳过。
+- 当前矩阵：`screen_capture` / `computer_use` / `text_selection_monitor` 仅 Windows；
+  `agentxx_audio_stream` **全平台跳过**（WASAPI 实现未启用，`audio_stream.cpp` 中该分支
+  带 `&& false`，仅剩桩实现；实现可用后声明 `windows` 并同步本节）。
+- **已验证平台**（Reset-v1 重构验收范围）：
+  - Windows（MSVC 14.51 / VS18，Debug + ASan）：全插件构建（19 个 DSO）、插件专项
+    1765/0、扩展回归 2251/0、工具模块 360/0；
+  - Linux（GCC 16.1，Debug + ASan/LSan、定向 UBSan、定向 TSan）：插件框架 TSan 0 告警，
+    ASan 扩展回归 2179/0；
+  - Android：未验证。
+- **测试二进制在 Windows 上的运行前提**：工作目录必须是可执行文件所在目录
+  （`exec/`），因为插件目录按 `GetModuleFileNameW` 推导；Linux 用 `/proc/self/exe`。
+- 平台矩阵的迁移记录与逐条验证结果见
+  `resource/history/plugin-refactor-2/work.md`（1.10、3.6 节）。

@@ -351,7 +351,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_codegraph` | Code index & navigation (5 tools: search/context/callers/callees/path + client Info panel). |
 | `agentxx_screen_capture` | Screen capture (Windows only). |
 | `agentxx_computer_use` | Mouse and keyboard control (Windows only; depends on `screen_capture`). |
-| `agentxx_audio_stream` | Audio stream capture (Windows WASAPI only). |
+| `agentxx_audio_stream` | Audio stream capture (**skipped on all platforms**: WASAPI implementation not enabled; stub only). |
 | `agentxx_text_selection_monitor` | Text selection event listener (Windows UIAutomation only). |
 | `agentxx_javascript_engine` | QuickJS execution engine (exports `interpreter.js` capability). |
 | `agentxx_execute_javascript` | JS code execution tool (`agentxx_execute_javascript`; depends on `agentxx_javascript_engine`). |
@@ -360,6 +360,8 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 
 ## 14. Build System & Platform Support
 
-- **Platform Matrix**: Each plugin determines platform compatibility at the start of its `CMakeLists.txt` via the `gate` function in `plugin_platform_support.cmake`, leveraging top-level `XX_IS_*_D` flags. Unsupported platforms are skipped during compilation (`screen_capture`, `computer_use`, and `text_selection_monitor` are Windows only; `audio_stream` is not yet implemented across platforms, etc.).
+- **Platform Matrix**: Each plugin determines platform compatibility at the start of its `CMakeLists.txt` via the `gate` function in `plugin_platform_support.cmake`, leveraging top-level `XX_IS_*_D` flags. Unsupported platforms are skipped during compilation (`screen_capture`, `computer_use`, and `text_selection_monitor` are Windows only; `audio_stream` is skipped on all platforms since its WASAPI implementation is not enabled, etc.). An empty platform list means "skip everywhere".
+- **Verified platforms (Reset-v1 acceptance scope)**: Windows (MSVC 14.51 / VS18, Debug + ASan: full plugin build, plugin-focused 1765/0, extended regression 2251/0) and Linux (GCC, Debug + ASan/LSan, targeted UBSan/TSan). Android is not verified.
+- **Running the test binary on Windows**: the working directory must be the executable's directory (`exec/`), because plugin paths are derived from `GetModuleFileNameW` (Linux uses `/proc/self/exe`).
 - **Monolithic Built-in Compilation**: Plugins specified in `AGENTXX_PLUGIN_BUILTIN_LIST` are merged into `libagentxx`. In this mode, `test_ffi_c_api` and `client_plugins` tests conditionally bypass dynamic library path checks.
 - **Artifact Layout**: Standalone shared libraries output to `{build}/exec/plugins/<plugin_name>/` (organized into subdirectories when accompanied by a `plugin.yaml` manifest).

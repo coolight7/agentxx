@@ -69,7 +69,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_get_system_core_info` | Retrieves CPU, memory, and GPU utilization metrics. |
 | **UI Control** | `agentxx_ui_control_keyboard_mouse` | Mouse and keyboard automation on Windows (Windows only; provided by the `agentxx_computer_use` plugin, depends: screen_capture). |
 | **Screen Capture** | `agentxx_screen_capture` | Screen capture and streaming (Windows only). |
-| **Audio Stream** | `agentxx_audio_stream` | System/application/microphone audio capture (Windows WASAPI only; currently stub stage, see platform matrix in plugins.md). |
+| **Audio Stream** | `agentxx_audio_stream` | System/application/microphone audio capture (**skipped on all platforms**: WASAPI implementation not enabled, stub only; see platform matrix in plugins.md). |
 | **Text Selection Monitor** | `agentxx_text_selection_monitor` | System-wide text selection event stream (Windows UIAutomation only). |
 | **JS Execution** | `agentxx_execute_javascript` | Executes JS code via QuickJS (depends: `interpreter.js` capability of `agentxx_javascript_engine`). |
 
@@ -299,7 +299,7 @@ The following capabilities have been decoupled from the core library into standa
 | Module | Description |
 |---|---|
 | **ScreenCapture** | Screen capture and streaming (multi-monitor support; plugin `agentxx_screen_capture`, Windows only). |
-| **AudioStream** | System audio, microphone, and application audio stream capture (plugin `agentxx_audio_stream`, Windows WASAPI only). |
+| **AudioStream** | System audio, microphone, and application audio stream capture (plugin `agentxx_audio_stream`, skipped on all platforms: implementation not enabled). |
 | **TextSelectionMonitor** | System-wide text selection event listener (plugin `agentxx_text_selection_monitor`, Windows UI Automation only). |
 | **CpuGpuMonitor** | CPU, RAM, and GPU utilization inspection (plugin `agentxx_system_monitor`; tool + periodic sampling + client rendering). |
 | **CodeGraphManager** | Code indexing and symbol analysis based on `codegraph-cpp` (plugin `agentxx_codegraph`): Indexing scope configured via plugin args in YAML `plugins` (`paths` directory list, defaulting to current working directory if empty; `ignore_paths` with wildcard support; `use_gitignore` respecting `.gitignore` rules, `.gitmodules`, and `.git`). Traversal prunes ignored subtrees immediately, and filesystem watchers apply identical filters. SQLite indices reside at `{dataDir}/sqlite/codegraph/<hashed_path>/index.db`; skipped if `dataDir` is unconfigured. |
@@ -1348,7 +1348,7 @@ agent/
 │   ├── agentxx_screen_capture/   # Screen capture plugin (Windows only)
 │   ├── agentxx_computer_use/     # Mouse and keyboard automation plugin (Windows only; depends: screen_capture)
 │   ├── agentxx_system_monitor/   # System resource monitoring plugin (tools + background periodic sampling + client status bar rendering)
-│   ├── agentxx_audio_stream/     # Audio stream capture plugin (Windows WASAPI only)
+│   ├── agentxx_audio_stream/     # Audio stream capture plugin (skipped on all platforms: implementation not enabled)
 │   └── agentxx_text_selection_monitor/ # Text selection event listener plugin (Windows UI Automation only)
 │
 └── script/                       # Build and test scripts

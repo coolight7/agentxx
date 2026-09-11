@@ -12,24 +12,28 @@
 
 ### 0.1 当前状态
 
-- 本文是任务交接文档。**当前状态：Reset-v1 重构进行中（未完成）**；逐提交进度、
-  验证结果与剩余待办以 `resource/history/plugin-refactor-2/work.md` 为准
-  （最新提交 28；该文件**第 1 节=已实现任务内容、第 2 节=待实现任务内容**）。
+- 本文是任务交接文档。**当前状态：Reset-v1 重构完成（2026-09-11，提交 29）**；
+  逐提交进度、验证结果与剩余非阻塞遗留项以
+  `resource/history/plugin-refactor-2/work.md` 为准
+  （最新提交 29；该文件**第 1 节=已实现任务内容、第 2 节=待实现/非阻塞遗留内容**）。
 - 已落地（阶段）：R1 Runtime/Operation；R2 加载事务与异步关闭（含注册事务回滚，
   工具/图/订阅/prompt/hook/能力/资源与客户端 UI 均有真实 DSO 用例）；R3 ABI v1 与
   SDK 统一 root adapter / 反例编译检查；R4 全部内置插件（含 3 个 JS 系插件）的
   start/stop 迁移、后台任务托管与 JS 引擎停/启语义定义；R5 Client 语义渲染/动作代次/
   依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、Debug+ASan 回归、
-  插件框架定向 UBSan 探针、设计文档 Reset-v1 章节。
-- 未完成（阻塞"重构完成"判定）：Windows 平台编译与专项（本机无 Windows 工具链，
-  未验证不得声明）；work.md 2.3 记录的"依赖启用事务顺序"残余边界不影响契约
-  （失败→Disabled 可重试），但需在结论中列出。
-- TSan 定向回归已完成（work.md 3.4 节）：插件框架 7 模块 0 告警 / 1695 断言通过，
-  期间修复 3 处数据竞争；扩展模块的告警全部落在非插件模块
-  （FFI/HttpServer/测试脚手架）与未插桩三方库（liburing + boost asio io_uring）上，
-  需另立任务 —— 即第 12 节"无本仓库代码的 TSan 告警"目前仅在**插件框架范围内**满足。
-- 仓库中已有用户未提交修改，至少包括：
+  插件框架定向 UBSan 探针、定向 TSan 回归、设计文档 Reset-v1 章节、**Windows 平台
+  验证（提交 29）**。
+- **第 12 节完成标准已全部满足**（6 项前置条件逐项见 work.md 2.6）。其余平台：
+  Android 未验证，不以其它平台结果代替。
+- 非阻塞遗留项（不影响完成判定，已在 work.md 第 2/5 节逐条列出）：
+  ① 依赖插件启用事务顺序边界（work.md 2.3，失败→Disabled 可重试，不影响契约）；
+  ② 仓库中**非插件模块**的 TSan 告警（FFI / HttpServer / 测试脚手架 / 未插桩
+  liburing + boost asio io_uring），需另立任务；插件框架范围内 0 告警；
+  ③ work.md 2.4 的 5 个可选收尾项。
+- 仓库中已有用户未提交/已提交但与本任务无关的改动，至少包括：
   - `agentxx-config.yaml`（用户模型配置改动，勿回退）
+  - `agent/third_party/fmt`（untracked）、`libiconv-native` / `liburing`（submodule 脏标记）
+    —— 构建产生的既有状态，勿清理
 - 新会话开始时必须先执行 `git status --short --branch`，不得覆盖上述修改，也不得重置整个工作树。
 - `resource/history/plugin-refactor-2/plugin.md` 是本任务的最终事实来源；
   `docs/zh-cn/design/plugins.md` 已按本文更新出 Reset-v1 章节（第 15 节）与相关修订，
@@ -145,12 +149,26 @@ Toolcall / PluginTool::execute_async
 
 ### 2.3 平台和业务插件问题
 
+> 状态（提交 29）：以下平台的编译/运行问题已在 Windows + Linux 两侧处理完毕，
+> 唯一保留的限制是 `audio_stream` 仍无实现（已按"跳过构建"处理）。
+
 - `agentxx_system_monitor` 的 GPU/PDH 状态必须从可变 static 改为实例成员；采样任务和缓存快照按实例管理。
+  **已修复**（提交 28，TSan 发现）：Linux GPU 枚举缓存、Windows DXGI 适配器缓存与
+  PDH 查询句柄改为 `CpuGpuMonitor::Impl` 实例成员；同实例并发查询加实例锁串行化。
 - `agentxx_text_selection_monitor` 的 `instancePtr()` 静态全局指针必须删除；使用实例绑定的事件线程/窗口路由；COM 初始化和释放必须在同一线程配对。
+  **已修复**（提交 14/24/29）：实例成员化，Windows 编译与 `text_selection` 专项用例通过。
 - `agentxx_screen_capture` 必须修正当前 Linux 语法检查暴露的入口错误；Windows WIC 只有在实际初始化成功时才 `CoUninitialize`。
+  **已修复**（提交 2/24/29）：Windows 编译通过，`screen_capture` 专项 46 断言通过。
 - `agentxx_audio_stream` 当前是 stub，CMake 不得把未实现能力伪装为已支持；应明确跳过构建/发布，直到有真实实现。
+  **已修复**（提交 29）：WASAPI 分支为 `#if XX_IS_WIN_D && false` 的未启用代码，平台
+  gate 改为**空列表（全平台跳过）**，Windows/Linux 均不产出该 DSO；恢复条件已写入
+  插件 CMakeLists 与源码注释。
 - `agentxx_execute_command`、`agentxx_websearch`、`agentxx_rag_search` 等可先继续受控 offload，但应逐步迁移到宿主 HTTP/process 服务，避免每个请求占用一个长期阻塞 worker。
+  **部分完成**：CancelToken 已接入（提交 5/14/24）；宿主 HTTP/process 服务迁移列为后续
+  任务（work.md 2.4/第 6 节）。
 - JS 专用线程本身不是错误；必须修复的是同步跨脚本等待、Promise 轮询、失败事务和 stop 完成语义。
+  **已修复**（提交 15/27）：callTool Promise 化、轮询删除、顶层异常事务、stop 完成语义与
+  引擎 start/stop 往返；Windows 侧同样通过（提交 29）。
 
 ---
 
@@ -603,6 +621,10 @@ UI/TUI 提交 render request（拷贝 tool 输入）
 
 **必须通过**：Linux Debug 全插件构建和插件测试；Windows 编译/双实例专项；JS 跨脚本调用和 rejection/timeout 测试。
 
+> 完成记录（提交 29）：Linux 与 **Windows** 双侧全插件构建通过；
+> Windows 插件专项 1765/0（含 `plugin_multi_instance` 80、JS 引擎/脚本壳双实例）、
+> 扩展回归 2251/0、工具模块 360/0；`audio_stream` 收敛为全平台跳过构建。
+
 ### R5：Client、依赖和 prompt 收敛
 
 **内容**：事件 alive 复查、动作代次、prompt contribution、依赖 blocked/userDisabled、enable/disable 事务。
@@ -614,6 +636,14 @@ UI/TUI 提交 render request（拷贝 tool 输入）
 **内容**：Debug、ASan/UBSan 定向探针、导出符号、CMake 平台 gate、文档更新和最终 diff 审查。
 
 **必须通过**：所有 P0 回归通过；无已知 UAF、永久挂起、卸载死锁和 unmanaged 操作；更新 `docs/zh-cn/design/plugins.md` 与测试说明；不修改用户已有无关文件。
+
+> 完成记录（提交 29）：R6 全部完成。已验证：Linux（Debug + ASan/LSan、定向 UBSan、
+> 定向 TSan，插件框架 0 告警）与 **Windows（MSVC Debug + ASan：全插件构建 +
+> 插件专项 1765/0 + 扩展 2251/0 + 工具模块 360/0）**。Android 未验证。
+> Windows 验证期间发现并修复 2 个问题：① `test_plugin_runtime` 的轮询式等待在
+> win_iocp 下会漏掉定时器线程投递的完成包（偶发失败/永久挂起），改为有界推进 IO 的
+> 等待（`plugin_runtime` 623→634 断言，连续 10 轮稳定）；② `audio_stream` 桩实现
+> 误进入产物，改为全平台跳过。详见 work.md 1.8 第 12/13 条与 1.10/3.6 节。
 
 ### 提交建议
 
@@ -700,10 +730,19 @@ plugin_multi_instance            29 passed / 0 failed
 - [x] 每次修改后查看 `git diff --check` 和 `git status`，保留用户无关修改。
 - [x] 更新 `docs/zh-cn/design/plugins.md`，使公开设计文档与 Reset-v1 实现一致
       （第 15 节 Reset-v1 章节 + 第 2/3/4/6/9/12/14 节修订）。
-- [x] 明确已验证平台：Linux（Debug + ASan/LSan、定向 UBSan 探针、定向 TSan）；
-      Windows/Android 未验证，不以 Linux 结果代替。
-- [ ] 只有在所有内置插件迁移（§9 第 4-8 步）与专项生命周期测试通过、且 work.md 2.6 的
-      全部前置条件满足后，才能将本文状态改为“Reset-v1 重构完成”；当前状态仍是
-      “重构进行中（未完成）”（剩余：Windows 平台验证）。
+- [x] 明确已验证平台：**Windows（MSVC 14.51 / VS18 Debug + ASan，提交 29）**、
+      **Linux（Debug + ASan/LSan、定向 UBSan 探针、定向 TSan）**；Android 未验证，
+      不以其它平台结果代替。
+- [x] 只有在所有内置插件迁移（§9 第 4-8 步）与专项生命周期测试通过、且 work.md 2.6 的
+      全部前置条件满足后，才能将本文状态改为“Reset-v1 重构完成”。
+      **已于提交 29 满足**：§9 第 4-8 步全部完成（Windows 插件按平台 gate 单独修复/
+      编译，`audio_stream` 因实现未启用而全平台跳过构建）；work.md 2.6 的 6 项前置条件
+      全部勾选；状态已更新为“Reset-v1 重构完成”。
+      非阻塞遗留项（需在结论中列出，不影响完成判定）：
+      ① 依赖插件启用事务顺序边界（work.md 2.3）；② 仓库中非插件模块的 TSan 告警
+      （FFI / HttpServer / 测试脚手架 / 未插桩 liburing，需另立任务；插件框架范围内
+      0 告警）；③ work.md 2.4 的 5 个可选收尾项；④ Android 未验证。
 
-**交接给后续会话的第一步**：读取本文，检查工作树，然后从 R1 建立宿主 Operation/Lifetime 基础；不要先修改业务插件，也不要先删除现有测试。
+**交接给后续会话的第一步**：读取本文与 work.md（第 1 节已实现 / 第 2 节非阻塞遗留），
+检查工作树，然后按 work.md 第 6 节"后续（非本任务验收项）"选择要处理的事项；
+Reset-v1 重构本身已完成，不要回退已完成的 ABI/生命周期契约，也不要删除现有测试。

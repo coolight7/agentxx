@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #define XX_TEST_PASSED result.passed
@@ -95,12 +96,79 @@ struct RuntimeFixture {
 
     /// 推进 IO 直到没有新的就绪处理器：生命周期事务包含多级投递
     /// (start/stop 完成包 → 状态提交 → 后续步骤)，单次 poll 不足以跑完。
+    ///
+    /// 注意"跨线程/定时器完成包"的投递时刻：Windows(IOCP) 下由其它线程
+    /// (worker 提交的完成包、IO 线程之外的 post、**独立定时器线程的到期投递**)
+    /// 产生的处理器可能在本次 `poll()` 返回之后才入队，Linux(epoll) 则在同一次
+    /// poll 内就会处理已到期 timer。因此无就绪处理器时先短暂让出 CPU 再确认一次，
+    /// 避免把"尚未入队"误判成"事务已跑完"（生产环境有常驻 `run()` 线程，不存在
+    /// 该问题；这里只是让轮询驱动的测试不依赖平台投递时序）。
     void drainAll(int rounds = 8) {
         for (int i = 0; i < rounds; ++i) {
+            io.restart();
+            if (io.poll() != 0) {
+                continue;
+            }
+            std::this_thread::sleep_for(1ms);
             io.restart();
             io.poll();
         }
         io.restart();
+    }
+
+    /// 持续推进 IO 直到谓词为真（有界，超时返回 false）。
+    /// 用于"效果来自其它线程/定时器"的等待：不能靠固定轮数假设投递时刻。
+    template <typename Pred>
+    bool drainUntil(Pred pred, std::chrono::milliseconds timeout = 10s) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        for (;;) {
+            if (pred()) {
+                return true;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            drain();
+            std::this_thread::sleep_for(1ms);
+        }
+    }
+
+    /// 有界等待 `use_future` 结果，同时持续推进 IO。
+    ///
+    /// 为什么需要它（而不是 `drain()` 之后直接 `future.get()`）：
+    /// - 测试里主线程**同时**充当"IO 线程"与等待者：一旦阻塞在 `get()` 上，
+    ///   就没有人再推进 io_context，最后一步投递将永远不会被处理 → 永久挂起；
+    /// - Windows(win_iocp) 的定时器到期由**独立定时器线程**投递完成包，单次
+    ///   `poll()` 返回后该完成包可能尚未入队（Linux epoll reactor 在 poll 内
+    ///   直接处理已到期 timer，因此不会暴露）；生产环境有常驻 `run()` 线程，
+    ///   该差异只影响这种"轮询驱动"的测试写法。
+    /// 因此这里在等待期间持续 `poll()` 并让出 CPU，直到结果就绪或超时。
+    ///
+    /// - `timeout` 超时即返回 false：测试宁可失败也不允许永久挂起
+    /// - 不消费 future；调用方在返回 true 后再 `get()`（异常语义不变）
+    template <typename T>
+    bool waitFutureReady(std::future<T>& fut, std::chrono::milliseconds timeout = 10s) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (fut.wait_for(0ms) != std::future_status::ready) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            drain();
+            // 让第三方线程(如 IOCP 定时器线程)有机会投递完成包
+            std::this_thread::sleep_for(1ms);
+        }
+        return true;
+    }
+
+    /// 有界等待并取结果；超时返回 `std::nullopt`（不阻塞、不永久挂起）。
+    /// 结果本身是异常时照常抛出（取消/超时导致的 `AsioSystemError` 等）。
+    /// - 按值接收 `future`（`std::future` 只可移动）: 调用方传右值或 `std::move`
+    template <typename T>
+    std::optional<T> waitFutureValue(std::future<T> fut, std::chrono::milliseconds timeout = 10s) {
+        if (!waitFutureReady(fut, timeout)) {
+            return std::nullopt;
+        }
+        return fut.get();
     }
 };
 
@@ -420,8 +488,10 @@ TestResult testPluginRuntime() {
         f.provider->lifetime->requestClose();
         XX_TEST_EXPECT_FALSE(static_cast<bool>(InstanceLease::acquire(f.provider->lifetime)));
         auto expired = asio::co_spawn(f.io, f.provider->lifetime->waitIdleUntil(std::chrono::steady_clock::now()), asio::use_future);
-        f.drain();
-        XX_TEST_EXPECT_FALSE(expired.get());
+        // 超时即断言失败 (不允许测试永久挂起): 见 waitFutureValue 注释
+        auto expiredValue = f.waitFutureValue(std::move(expired));
+        XX_TEST_EXPECT_TRUE(expiredValue.has_value());
+        XX_TEST_EXPECT_FALSE(expiredValue.value_or(true));
         f.provider->lifetime->setState(PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
         auto first = asio::co_spawn(f.io, f.provider->lifetime->waitIdleUntil(std::chrono::steady_clock::now() + 5s), asio::use_future);
@@ -431,8 +501,8 @@ TestResult testPluginRuntime() {
         auto notify = op->notify();
         notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
         f.drain();
-        XX_TEST_EXPECT_TRUE(first.get());
-        XX_TEST_EXPECT_TRUE(second.get());
+        XX_TEST_EXPECT_TRUE(f.waitFutureValue(std::move(first)).value_or(false));
+        XX_TEST_EXPECT_TRUE(f.waitFutureValue(std::move(second)).value_or(false));
         f.provider->lifetime->setState(PluginInstanceState::Closed);
         f.manager->plugins_.erase(f.provider->name);
     }
@@ -549,7 +619,10 @@ TestResult testPluginRuntime() {
         cancel.emit(asio::cancellation_type::all);
         f.drain();
         bool aborted = false;
-        try { waited.get(); } catch (const util::AsioSystemError&) { aborted = true; }
+        // 有界等待: 取消投递在 Windows 下可能晚于单次 poll (见 waitFutureReady 注释)
+        if (f.waitFutureReady(waited)) {
+            try { waited.get(); } catch (const util::AsioSystemError&) { aborted = true; }
+        }
         XX_TEST_EXPECT_TRUE(aborted);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
         XX_TEST_EXPECT_FALSE(op->completed());
@@ -1219,14 +1292,14 @@ TestResult testPluginRuntime() {
         // ---- 关闭收尾: 欠着的 stop 由卸载路径补齐, 之后才能 destroy ----
         const int stopsBeforeUnload = probe->stops;
         bool      unloaded          = false;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                unloaded = co_await f.manager->unloadAsync("lifecycle_plugin", 500ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            // use_future + 有界推进 IO: 不假设固定轮数 poll 已跑完整轮事务
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("lifecycle_plugin", 500ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            unloaded = rc.value_or(false);
+        }
         XX_TEST_EXPECT_TRUE(unloaded);
         XX_TEST_EXPECT_EQ(probe->stops, stopsBeforeUnload + 1);
         XX_TEST_EXPECT_TRUE(inst->pluginDestroyed);
@@ -1366,14 +1439,13 @@ TestResult testPluginRuntime() {
         // provider 未完成时 caller 开始关闭: 等待 lease 超时 -> CloseFailed,
         // 插件上下文与动态库保留 (destroy 未调用)。
         bool firstUnload = true;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                firstUnload = co_await f.manager->unloadAsync("caller", 0ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("caller", 0ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            firstUnload = rc.value_or(true);
+        }
         XX_TEST_EXPECT_FALSE(firstUnload);
         XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_EQ(callerDestroys, 0);
@@ -1391,14 +1463,13 @@ TestResult testPluginRuntime() {
 
         // 现在才能完成 caller 的关闭 (可重试), destroy 恰好一次。
         bool secondUnload = false;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                secondUnload = co_await f.manager->unloadAsync("caller", 500ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("caller", 500ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            secondUnload = rc.value_or(false);
+        }
         XX_TEST_EXPECT_TRUE(secondUnload);
         XX_TEST_EXPECT_EQ(callerDestroys, 1);
         XX_TEST_EXPECT_TRUE(f.caller->pluginDestroyed);
@@ -1440,17 +1511,11 @@ TestResult testPluginRuntime() {
         op->setCompletionHandler([&](int32_t, std::string_view) { order.push("completion"); });
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
 
-        bool unloaded = false;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                unloaded = co_await f.manager->unloadAsync("provider", 5s);
-            },
-            asio::detached
-        );
+        bool unloaded        = false;
+        auto unloadFuture    = asio::co_spawn(f.io, f.manager->unloadAsync("provider", 5s), asio::use_future);
         f.drainAll();
         // 关闭先取消后台任务 (detachAll → cancel), 任务尚未退出: 卸载停在
-        // lease 等待上, destroy 未发生。
+        // lease 等待上 (协程未结束, unloaded 保持初值), destroy 未发生。
         XX_TEST_EXPECT_FALSE(unloaded);
         XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
         XX_TEST_EXPECT_EQ(destroys, 0);
@@ -1461,7 +1526,7 @@ TestResult testPluginRuntime() {
         // 任务在自有线程恢复并提交 done; 宿主回收 lease 与句柄, 卸载随后继续。
         allowDone.set_value();
         task.join();
-        f.drainAll();
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return op->completed(); }));
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_EQ(op->status(), AGENTXX_PLUGIN_OPERATOR_CANCELLED);
         XX_TEST_EXPECT_TRUE(probe.onIo);
@@ -1475,6 +1540,9 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
 
         // lease 归零后销毁才发生 (destroy 不能早于 callback 与 done)。
+        // 卸载协程在 lease 归零后才继续: 这里显式等待它结束再取结果。
+        XX_TEST_EXPECT_TRUE(f.waitFutureReady(unloadFuture));
+        unloaded = unloadFuture.get();
         XX_TEST_EXPECT_TRUE(unloaded);
         XX_TEST_EXPECT_EQ(destroys, 1);
         XX_TEST_EXPECT_TRUE(f.provider->pluginDestroyed);
@@ -1493,14 +1561,14 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
 
         bool first = true;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                first = co_await f.manager->unloadAsync("provider", 0ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            // 用 use_future 明确等待本轮卸载协程结束 (而不是假设固定轮数 poll 已跑完)
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("provider", 0ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            first = rc.value_or(true);
+        }
         XX_TEST_EXPECT_FALSE(first);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_EQ(destroys, 0);
@@ -1509,14 +1577,13 @@ TestResult testPluginRuntime() {
 
         // 超时后立即重试: 执行仍在运行, 第二次卸载依然只能拒绝收尾。
         bool second = true;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                second = co_await f.manager->unloadAsync("provider", 0ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("provider", 0ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            second = rc.value_or(true);
+        }
         XX_TEST_EXPECT_FALSE(second);
         XX_TEST_EXPECT_EQ(destroys, 0);
         XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
@@ -1528,21 +1595,20 @@ TestResult testPluginRuntime() {
             notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
         });
         worker.join();
-        f.drainAll();
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return op->completed(); }));
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
         XX_TEST_EXPECT_EQ(destroys, 0);
 
         // 执行完全退出后重试成功; destroy 只在此时发生。
         bool third = false;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                third = co_await f.manager->unloadAsync("provider", 500ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("provider", 500ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            third = rc.value_or(false);
+        }
         XX_TEST_EXPECT_TRUE(third);
         XX_TEST_EXPECT_EQ(destroys, 1);
         XX_TEST_EXPECT_TRUE(f.provider->pluginDestroyed);
@@ -1715,14 +1781,13 @@ TestResult testPluginRuntime() {
         );
         XX_TEST_EXPECT_TRUE(late != nullptr);
         bool unloaded = false;
-        asio::co_spawn(
-            f.io,
-            [&]() -> asio::awaitable<void> {
-                unloaded = co_await f.manager->unloadAsync("provider", 500ms);
-            },
-            asio::detached
-        );
-        f.drainAll();
+        {
+            auto rc = f.waitFutureValue(
+                asio::co_spawn(f.io, f.manager->unloadAsync("provider", 500ms), asio::use_future)
+            );
+            XX_TEST_EXPECT_TRUE(rc.has_value());
+            unloaded = rc.value_or(false);
+        }
         XX_TEST_EXPECT_TRUE(unloaded);
         if (late) {
             XX_TEST_EXPECT_FALSE(late->alive.load()); ///< detachAll 已失效句柄
