@@ -36,6 +36,16 @@ file(GLOB_RECURSE agentxx_SOURCES
  "src/*.cpp" "src/*.cc" "src/*.cxx"
 )
 
+# 定向 UBSan 探针 (AGENTXX_PLUGIN_UBSAN_PROBE, 见顶层选项说明): 仅对插件框架
+# 源文件追加 -fsanitize=undefined; 其余源码保持基线 (通常 ASan) 插桩不变。
+if (AGENTXX_PLUGIN_UBSAN_PROBE AND NOT XX_IS_MSVC_D)
+  file(GLOB _agentxx_plugin_probe_sources CONFIGURE_DEPENDS "src/plugins/*.cpp")
+  set_source_files_properties(${_agentxx_plugin_probe_sources} PROPERTIES
+    COMPILE_OPTIONS "-fsanitize=undefined;-fno-sanitize-recover=undefined"
+  )
+  unset(_agentxx_plugin_probe_sources)
+endif()
+
 # ===== 工具函数静态库 agentxx_util (主程序与插件共同复用) =====
 # - 插件不链接 libagentxx (纯 C ABI 契约), 但 agentxx 内置插件 (与主程序同一
 #   superbuild 构建、依赖环境齐全) 可复用 `agent/lib/include/agentxx/util` 的

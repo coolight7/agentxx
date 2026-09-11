@@ -107,6 +107,14 @@ option(AGENTXX_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Debug builds 
 #   不可见, 可能产生误报/漏报; dlopen 的外置插件同理 (内置合并编译模式无此问题);
 # - 性能开销大 (5-15x), 仅建议定向排查并发问题时临时开启
 option(AGENTXX_ENABLE_TSAN "Enable ThreadSanitizer for Debug builds (GCC/Clang; mutually exclusive with ASAN)." OFF)
+# 定向 UBSan 探针 (plugin.md R6): 在常规 Debug 构建 (默认 ASan 基线) 之上, 仅对
+# 插件框架相关源码额外启用 -fsanitize=undefined:
+#   - `lib/src/plugins/*.cpp` (宿主 PluginManager/ClientPluginManager)
+#   - `test/plugin/*.cpp` (插件框架测试 TU; 运行时核心 OpCore/InstanceLifetime
+#     为 header-only, 其 UBSan 覆盖由这些 TU 的插桩获得)
+# 不重编第三方依赖, 也不改变其他模块的插桩状态 (区别于 AGENTXX_ENABLE_UBSAN 的
+# 全量构建); 用于"ASan 基线 + 插件框架 UBSan"的定向回归。MSVC 无 UBSan, 忽略。
+option(AGENTXX_PLUGIN_UBSAN_PROBE "Instrument plugin framework sources/tests with UBSan on top of the ASan baseline." OFF)
 # - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
 #   项目自身头文件不参与 PCH，改动时不会触发全量重编。仅 GCC/Clang 生效
 option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
@@ -437,7 +445,7 @@ else ()
     elseif (AGENTXX_ENABLE_ASAN)
       string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=address")
     endif()
-    if (AGENTXX_ENABLE_UBSAN)
+    if (AGENTXX_ENABLE_UBSAN OR AGENTXX_PLUGIN_UBSAN_PROBE)
       string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=undefined")
     endif()
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}${_AGENTXX_SAN_LINK_FLAGS}")
@@ -638,6 +646,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
 
     -DAGENTXX_ENABLE_ASAN=${AGENTXX_ENABLE_ASAN}
     -DAGENTXX_ENABLE_UBSAN=${AGENTXX_ENABLE_UBSAN}
+    -DAGENTXX_PLUGIN_UBSAN_PROBE=${AGENTXX_PLUGIN_UBSAN_PROBE}
     -DAGENTXX_ENABLE_TSAN=${AGENTXX_ENABLE_TSAN}
     -DAGENTXX_ENABLE_PCH=${AGENTXX_ENABLE_PCH}
     
