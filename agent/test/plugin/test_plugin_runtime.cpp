@@ -15,6 +15,7 @@
 #include <barrier>
 #include <cstddef>
 #include <future>
+#include <mutex>
 #include <thread>
 
 #define XX_TEST_PASSED result.passed
@@ -124,10 +125,34 @@ struct CallbackState {
     }
 };
 
+/// 顺序记录（取消 → 恢复 → 完成 → 回调 → 销毁）。
+///
+/// 追加来自后台任务线程（resumed/doneSubmitted）、宿主 IO 线程（cancel/callback/
+/// completion）；主线程在 join 之前也要读它（断言"卸载停在 lease 等待上"时
+/// order[0] 已是 cancel）。所有访问因此必须经互斥量 —— 裸 vector 在这里就是
+/// 一条真实的数据竞争（TSan 定向回归会命中）。
+struct OrderLog {
+    mutable std::mutex       mu;
+    std::vector<std::string> items;
+
+    void push(std::string item) {
+        std::lock_guard<std::mutex> lock(mu);
+        items.push_back(std::move(item));
+    }
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(mu);
+        return items.size();
+    }
+    std::string at(size_t index) const {
+        std::lock_guard<std::mutex> lock(mu);
+        return index < items.size() ? items[index] : std::string{};
+    }
+};
+
 /// plugin.md 11.2-8/9 探针：记录取消 → 恢复 → 完成 → 回调 → 销毁的实际顺序，
 /// 并证明回调返回前不会调用插件 destroy。
 struct ShutdownOrderProbe {
-    std::vector<std::string>* order   = nullptr;
+    OrderLog* order   = nullptr;
     PluginInstance*           provider = nullptr;
     PluginManager*            manager  = nullptr;
     bool                      destroyDuringCallback = false;
@@ -136,7 +161,7 @@ struct ShutdownOrderProbe {
     static void AGENTXX_PLUGIN_CALL record(void* ud, int32_t, const AgentxxPluginStringView*) {
         auto& probe = *static_cast<ShutdownOrderProbe*>(ud);
         if (probe.order) {
-            probe.order->push_back("callback");
+            probe.order->push("callback");
         }
         probe.destroyDuringCallback = probe.provider && probe.provider->pluginDestroyed;
         probe.onIo                  = probe.manager && probe.manager->isIoThread();
@@ -1388,8 +1413,8 @@ TestResult testPluginRuntime() {
         RuntimeFixture f;
         int            destroys = 0;
         installLifecycleHooks(*f.provider, &destroys);
-        std::vector<std::string> order;
-        ShutdownOrderProbe       probe{
+        OrderLog           order;
+        ShutdownOrderProbe probe{
             .order = &order, .provider = f.provider.get(), .manager = f.manager.get()
         };
         auto op     = f.operation();
@@ -1402,17 +1427,17 @@ TestResult testPluginRuntime() {
         auto               allowDoneFuture = allowDone.get_future();
         std::thread        task([&] {
             cancelFuture.wait();
-            order.push_back("resumed");
+            order.push("resumed");
             allowDoneFuture.wait();
             notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
-            order.push_back("doneSubmitted");
+            order.push("doneSubmitted");
         });
         op->accept([&] {
-            order.push_back("cancel");
+            order.push("cancel");
             cancelSignal.set_value();
         });
         op->setCallback(ShutdownOrderProbe::record, &probe);
-        op->setCompletionHandler([&](int32_t, std::string_view) { order.push_back("completion"); });
+        op->setCompletionHandler([&](int32_t, std::string_view) { order.push("completion"); });
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
 
         bool unloaded = false;
@@ -1430,8 +1455,8 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
         XX_TEST_EXPECT_EQ(destroys, 0);
         XX_TEST_EXPECT_EQ(op->state(), PluginOperationState::Cancelling);
-        XX_TEST_EXPECT_FALSE(order.empty());
-        XX_TEST_EXPECT_EQ(order[0], std::string{"cancel"});
+        XX_TEST_EXPECT_TRUE(order.size() >= 1);
+        XX_TEST_EXPECT_EQ(order.at(0), std::string{"cancel"});
 
         // 任务在自有线程恢复并提交 done; 宿主回收 lease 与句柄, 卸载随后继续。
         allowDone.set_value();
@@ -1442,11 +1467,11 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(probe.onIo);
         XX_TEST_EXPECT_FALSE(probe.destroyDuringCallback);
         XX_TEST_EXPECT_EQ(order.size(), size_t{5});
-        XX_TEST_EXPECT_EQ(order[0], std::string{"cancel"});
-        XX_TEST_EXPECT_EQ(order[1], std::string{"resumed"});
-        XX_TEST_EXPECT_EQ(order[2], std::string{"doneSubmitted"});
-        XX_TEST_EXPECT_EQ(order[3], std::string{"callback"});
-        XX_TEST_EXPECT_EQ(order[4], std::string{"completion"});
+        XX_TEST_EXPECT_EQ(order.at(0), std::string{"cancel"});
+        XX_TEST_EXPECT_EQ(order.at(1), std::string{"resumed"});
+        XX_TEST_EXPECT_EQ(order.at(2), std::string{"doneSubmitted"});
+        XX_TEST_EXPECT_EQ(order.at(3), std::string{"callback"});
+        XX_TEST_EXPECT_EQ(order.at(4), std::string{"completion"});
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
 
         // lease 归零后销毁才发生 (destroy 不能早于 callback 与 done)。

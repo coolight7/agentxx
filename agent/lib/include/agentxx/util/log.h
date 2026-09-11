@@ -105,9 +105,14 @@ private:
 
     void threadLoop();
 
-    std::thread thread_;
+    /// 后台线程读写的状态必须声明在 `thread_` **之前**:
+    /// 成员按声明顺序初始化, `thread_` 的构造会立刻启动线程并在其中读 `running_`/
+    /// `idle_`; 若这两个成员排在 `thread_` 之后, 线程可能在它们被初始化前读到
+    /// 未初始化的值 (TSan 可复现的数据竞争, 且线程可能直接判定为"已停止"而退出,
+    /// 丢掉后续日志)。
     bool        running_ = true; // 受 LogSink::mutex_ 保护
     bool        idle_    = true; // 受 LogSink::mutex_ 保护; 线程未在 onLog 中时为 true
+    std::thread thread_;
 };
 
 /// std::atomic<std::shared_ptr<T>> 的可移植封装:

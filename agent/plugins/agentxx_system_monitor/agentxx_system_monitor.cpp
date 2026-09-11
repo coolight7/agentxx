@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -94,7 +95,21 @@ struct SysMonCtx : public PluginBase {
     std::atomic<bool> usageEnabled{true};
     CpuGpuMonitor     monitor;
 
+    /// 同实例查询串行化。
+    ///
+    /// 后台采样任务（offload 到宿主阻塞池）、`client_attached` 的一次性采样、
+    /// 工具执行与能力调用可能同时发起查询，而 `CpuGpuMonitor` 的 CPU 采样基线
+    /// 与 GPU 枚举缓存是实例内可变状态：并发访问会读写同一份数据（TSan 定向
+    /// 回归可复现）。
+    /// - 锁是**实例成员**，不跨实例共享（多实例契约）；
+    /// - 查询只使用调用线程自己创建的 io_context 与文件 IO，不回调宿主 IO 线程，
+    ///   因此"阻塞池线程持锁 + 另一线程等待"不会与宿主 IO 线程形成锁反转；
+    /// - 阻塞池本就被查询同步占用（`querySync` 内 `io.run()`），串行化不改变
+    ///   现有线程占用模型，只把并发查询变成排队。
+    std::mutex queryMutex;
+
     CpuGpuUsage querySync() {
+        std::lock_guard<std::mutex> lock(queryMutex);
         asio::io_context io;
         CpuGpuUsage      usage;
         asio::co_spawn(

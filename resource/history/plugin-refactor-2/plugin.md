@@ -14,19 +14,18 @@
 
 - 本文是任务交接文档。**当前状态：Reset-v1 重构进行中（未完成）**；逐提交进度、
   验证结果与剩余待办以 `resource/history/plugin-refactor-2/work.md` 为准
-  （最新提交 22，见该文件第 1-3 节）。
+  （最新提交 27；该文件**第 1 节=已实现任务内容、第 2 节=待实现任务内容**）。
 - 已落地（阶段）：R1 Runtime/Operation；R2 加载事务与异步关闭（含注册事务回滚，
   工具/图/订阅/prompt/hook/能力/资源与客户端 UI 均有真实 DSO 用例）；R3 ABI v1 与
-  SDK 统一 root adapter / 反例编译检查；R4 JS 事务与部分内置插件迁移、后台任务托管；
-  R5 Client 语义渲染/动作代次/依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、
-  Debug+ASan 回归、插件框架定向 UBSan 探针、设计文档 Reset-v1 章节。
-- 未完成（阻塞"重构完成"判定）：3 个 JS 系内置插件的 start/stop 迁移
-  （javascript_engine / execute_javascript / example_js，需先定义引擎线程
-  stop/重启语义）；TSan 定向回归（需独立全量构建）；Windows 平台编译与专项
-  （本机无 Windows 工具链，未验证不得声明）。
+  SDK 统一 root adapter / 反例编译检查；R4 全部内置插件（含 3 个 JS 系插件）的
+  start/stop 迁移、后台任务托管与 JS 引擎停/启语义定义；R5 Client 语义渲染/动作代次/
+  依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、Debug+ASan 回归、
+  插件框架定向 UBSan 探针、设计文档 Reset-v1 章节。
+- 未完成（阻塞"重构完成"判定）：TSan 定向回归（需独立全量构建，见 work.md 2.1）；
+  Windows 平台编译与专项（本机无 Windows 工具链，未验证不得声明）；
+  work.md 2.3 记录的"依赖启用事务顺序"残余边界不影响契约（失败→Disabled 可重试）。
 - 仓库中已有用户未提交修改，至少包括：
-  - `agentxx-config.yaml`
-  - `resource/history/plugin-refactor-2/index.md`
+  - `agentxx-config.yaml`（用户模型配置改动，勿回退）
 - 新会话开始时必须先执行 `git status --short --branch`，不得覆盖上述修改，也不得重置整个工作树。
 - `resource/history/plugin-refactor-2/plugin.md` 是本任务的最终事实来源；
   `docs/zh-cn/design/plugins.md` 已按本文更新出 Reset-v1 章节（第 15 节）与相关修订，

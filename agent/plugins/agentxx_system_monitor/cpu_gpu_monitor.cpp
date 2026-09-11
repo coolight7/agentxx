@@ -43,15 +43,16 @@ struct CachedGpuAdapter {
     uint64_t    sharedVramMB    = 0;
 };
 
+/// DXGI 适配器枚举缓存与 PDH 计数器句柄。
+///
+/// 两者都是 **CpuGpuMonitor::Impl 的实例成员** (不再是函数级 static):
+/// 枚举/PDH 采样都带 lazy 构建与可变的查询句柄, 同进程多实例并发查询会读写同一
+/// 份 static (数据竞争); 且 PDH 句柄的创建/释放必须与实例生命周期配对,
+/// 见 Reset-v1 多实例契约"禁止可变全局/函数级 static 保存实例状态"。
 struct GpuAdapterCache {
     std::vector<CachedGpuAdapter> adapters;
     bool                          built = false;
 };
-
-static GpuAdapterCache& getGpuAdapterCache() {
-    static GpuAdapterCache cache;
-    return cache;
-}
 
 struct SharedPdhContext {
     HQUERY   query             = nullptr;
@@ -107,11 +108,6 @@ struct SharedPdhContext {
     }
 };
 
-static SharedPdhContext& getSharedPdh() {
-    static SharedPdhContext ctx;
-    return ctx;
-}
-
 class CpuGpuMonitor::Impl {
 public:
 
@@ -129,9 +125,9 @@ public:
             queryCpuUsage(result);
         }
 
-        bool pdhAvailable = getSharedPdh().ensureInitialized();
+        bool pdhAvailable = _pdh.ensureInitialized();
         if (pdhAvailable) {
-            PdhCollectQueryData(getSharedPdh().query);
+            PdhCollectQueryData(_pdh.query);
         }
 
         if (needCpuInit || pdhAvailable) {
@@ -146,7 +142,7 @@ public:
 
         if (pdhAvailable) {
             co_await buildGpuCache();
-            PdhCollectQueryData(getSharedPdh().query);
+            PdhCollectQueryData(_pdh.query);
             collectPdhGpuData(result);
         }
 
@@ -213,8 +209,8 @@ private:
         }
     }
 
-    static asio::awaitable<void> buildGpuCache() {
-        auto& cache = getGpuAdapterCache();
+    asio::awaitable<void> buildGpuCache() {
+        auto& cache = _adapterCache;
         if (cache.built) {
             co_return;
         }
@@ -279,12 +275,12 @@ private:
     }
 
     void collectPdhGpuData(CpuGpuUsage& result) {
-        auto& cache = getGpuAdapterCache();
+        auto& cache = _adapterCache;
         if (!cache.built) {
             return;
         }
 
-        auto& pdh = getSharedPdh();
+        auto& pdh = _pdh;
 
         std::unordered_map<LUID, double, LUIDHash, LUIDEqual>   gpuUsageMap;
         std::unordered_map<LUID, uint64_t, LUIDHash, LUIDEqual> gpuDedicatedUsedMap;
@@ -450,6 +446,11 @@ private:
 
     ULONGLONG prevIdleTime_  = 0;
     ULONGLONG prevTotalTime_ = 0;
+
+    /// GPU 适配器枚举缓存 (每实例一份; 见 [GpuAdapterCache] 说明)
+    GpuAdapterCache  _adapterCache;
+    /// PDH 查询句柄与计数器 (每实例一份, 随实例析构释放)
+    SharedPdhContext _pdh;
 };
 
 CpuGpuMonitor::CpuGpuMonitor() :
@@ -541,15 +542,16 @@ struct LinuxGpuCacheEntry {
     bool        isNvidia        = false;
 };
 
+/// Linux GPU 枚举结果缓存。
+///
+/// 属于 **CpuGpuMonitor::Impl 实例成员**: 枚举本身读写 sysfs 且带 lazy 构建,
+/// 若放在函数级 static 中, 同进程多个插件实例 (各自线程/io_context) 并发查询
+/// 会同时读写同一份缓存 (数据竞争, TSan 可复现); 同时违反 Reset-v1 的多实例
+/// 契约"禁止可变全局/函数级 static 保存实例状态"。
 struct LinuxGpuCache {
     std::vector<LinuxGpuCacheEntry> entries;
     bool                            built = false;
 };
-
-static LinuxGpuCache& getLinuxGpuCache() {
-    static LinuxGpuCache cache;
-    return cache;
-}
 
 class CpuGpuMonitor::Impl {
 public:
@@ -604,7 +606,9 @@ public:
 
 protected:
 
-    CpuTimes _sample;
+    CpuTimes       _sample;
+    /// GPU 枚举缓存 (每实例一份; 见 [LinuxGpuCache] 的说明)
+    LinuxGpuCache  _gpuCache;
 
     static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
@@ -694,12 +698,11 @@ protected:
     }
 
     asio::awaitable<void> queryGpuInfo(CpuGpuUsage& result) {
-        auto& cache = getLinuxGpuCache();
-        if (!cache.built) {
+        if (!_gpuCache.built) {
             co_await buildGpuCache();
         }
 
-        for (const auto& entry : cache.entries) {
+        for (const auto& entry : _gpuCache.entries) {
             GpuInfo info;
             info.name            = entry.name;
             info.dedicatedVramMB = entry.dedicatedVramMB;
@@ -712,8 +715,8 @@ protected:
         }
     }
 
-    static asio::awaitable<void> buildGpuCache() {
-        auto& cache = getLinuxGpuCache();
+    asio::awaitable<void> buildGpuCache() {
+        auto& cache = _gpuCache;
 
         for (int cardIdx = 0;; ++cardIdx) {
             auto devicePath = fmt::format("/sys/class/drm/card{}/device", cardIdx);

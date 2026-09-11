@@ -214,6 +214,7 @@ public:
         {
             std::lock_guard<std::mutex> qlk(mtx_);
             queue_.clear(); ///< 停止时已全部终结, 启动前不应有残留
+            busy_ = false;  ///< 上一次线程退出时已复位, 这里防御性归零
             stop_.store(false, std::memory_order_release);
         }
         state_  = State::Running;
