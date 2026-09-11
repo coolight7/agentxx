@@ -70,24 +70,6 @@ static agentxx::client::YamlAppConfig loadYamlWithDotEnv(
 // 系统环境变量读写辅助 (测试查找顺序用; 结束时恢复原值)
 // ---------------------------------------------------------------------------
 
-#if XX_IS_WIN_D
-static void setSystemEnvVar(const std::string& key, const std::string& value) {
-    _putenv_s(key.c_str(), value.c_str());
-}
-
-static void clearSystemEnvVar(const std::string& key) {
-    _putenv_s(key.c_str(), "");
-}
-#else
-static void setSystemEnvVar(const std::string& key, const std::string& value) {
-    setenv(key.c_str(), value.c_str(), 1);
-}
-
-static void clearSystemEnvVar(const std::string& key) {
-    unsetenv(key.c_str());
-}
-#endif
-
 /// RAII: 设置系统环境变量, 析构时恢复原值/删除
 class SystemEnvGuard {
 public:
@@ -97,14 +79,14 @@ public:
         auto hadOpt = agentxx::util::ApplicationEnv::instance().getSystem(key_);
         existed_    = hadOpt.has_value();
         saved_      = hadOpt ? *hadOpt : std::string{};
-        setSystemEnvVar(key_, value);
+        agentxx::util::ApplicationEnv::instance().set(key_, value);
     }
 
     ~SystemEnvGuard() {
         if (existed_) {
-            setSystemEnvVar(key_, saved_);
+            agentxx::util::ApplicationEnv::instance().set(key_, saved_);
         } else {
-            clearSystemEnvVar(key_);
+            agentxx::util::ApplicationEnv::instance().remove(key_);
         }
     }
 
@@ -888,7 +870,7 @@ void test_builtin_exec_dir_inject() {
 void test_builtin_exec_dir_uninjected_kept() {
     // 未注入且无系统/.env 变量: 保留 ${AGENTXX_EXEC_DIR} 原样 (可执行目录无法惰性推导)
     agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
-    clearSystemEnvVar("AGENTXX_EXEC_DIR");
+    agentxx::util::ApplicationEnv::instance().remove("AGENTXX_EXEC_DIR");
     auto        cfg    = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
     auto        curOpt = agentxx::util::ApplicationEnv::instance().getSystem("AGENTXX_EXEC_DIR");
     const char* cur    = curOpt ? curOpt->c_str() : nullptr;
@@ -956,7 +938,7 @@ void test_env_order_unresolved_kept() {
     // 注: 部分平台 (Windows _putenv_s) 清除变量时可能置为空串而非删除,
     // 空串同样视为"未定义"(展开为空串); 两种情况分别断言
     const char* key = "AGENTXX_TEST_ENV_MISSING_9F3K2Q";
-    clearSystemEnvVar(key);
+    agentxx::util::ApplicationEnv::instance().remove(key);
     auto        cfg    = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
     auto        curOpt = agentxx::util::ApplicationEnv::instance().getSystem(key);
     const char* cur    = curOpt ? curOpt->c_str() : nullptr;

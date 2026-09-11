@@ -198,6 +198,7 @@ if (AGENTXX_BUILD_CLIENT)
   find_package(markdown-ui REQUIRED)
 endif()
 
+find_package(agentxx_util REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_test PUBLIC
@@ -214,6 +215,7 @@ target_link_libraries(agentxx_test PRIVATE
   neograph_core
   # === neograph ^^^
   yyjson
+  agentxx_util
 	agentxx_static
 )
 if (AGENTXX_ENABLE_HYPERSCAN)

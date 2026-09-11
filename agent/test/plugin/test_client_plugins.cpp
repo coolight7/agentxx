@@ -44,9 +44,8 @@ static asio::awaitable<void> sleepMs(int ms) {
 }
 
 /// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
-void* AGENTXX_PLUGIN_CALL fakeClientStopHook(
-    void*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    fakeClientStopHook(void*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*) {
     return nullptr;
 }
 
@@ -56,21 +55,38 @@ struct ClientLifecycleProbe {
     int stops  = 0;
 };
 
-void* AGENTXX_PLUGIN_CALL probeClientStartHook(
-    void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    probeClientStartHook(void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     ++static_cast<ClientLifecycleProbe*>(ud)->starts;
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL probeClientStopHook(
-    void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    probeClientStopHook(void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     ++static_cast<ClientLifecycleProbe*>(ud)->stops;
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }
+
+#if XX_IS_WIN_D
+static void setSystemEnvVar(const std::string& key, const std::string& value) {
+    _putenv_s(key.c_str(), value.c_str());
+}
+
+static void clearSystemEnvVar(const std::string& key) {
+    _putenv_s(key.c_str(), "");
+}
+#else
+static void setSystemEnvVar(const std::string& key, const std::string& value) {
+    setenv(key.c_str(), value.c_str(), 1);
+}
+
+static void clearSystemEnvVar(const std::string& key) {
+    unsetenv(key.c_str());
+}
+#endif
+
 } // namespace
 
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
@@ -427,10 +443,8 @@ asio::awaitable<agentxx::plugin::ClientToolRenderResult> renderToolAsync(
     req.isFinished = isFinished;
     req.isError    = isError;
     req.maxWidth   = maxWidth;
-    const std::string key  = agentxx::plugin::ClientToolRenderRequest::keyFor(
-        req.toolCallId,
-        req.toolName
-    );
+    const std::string key
+        = agentxx::plugin::ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName);
     const uint64_t hash = req.inputHash();
     mgr->requestToolRender(req);
     // 请求可能内联执行 (本协程与 manager 同 executor), 否则让出执行权等它完成
@@ -770,11 +784,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(events8 != nullptr && events8->subscribe != nullptr);
         for (int i = 0; i < 4; ++i) {
             subs[i] = events8 ? events8->subscribe(
-                                    inst2->hostView(),
-                                    AGENTXX_CLIENT_EVT_CONN_STATE,
-                                    subFn,
-                                    &hits
-                                )
+                          inst2->hostView(),
+                          AGENTXX_CLIENT_EVT_CONN_STATE,
+                          subFn,
+                          &hits
+                      )
                               : nullptr;
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
@@ -840,8 +854,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             std::atomic<int>                first{0};
             std::atomic<int>                second{0};
         };
-        auto us    = std::make_shared<UnsubNextState>();
-        us->events = events8;
+
+        auto us       = std::make_shared<UnsubNextState>();
+        us->events    = events8;
         auto secondFn = +[](const AgentxxPluginStringView*, void* ud) {
             ++static_cast<UnsubNextState*>(ud)->second;
         };
@@ -856,19 +871,19 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 先订阅"执行退订的 handler", 再订阅"被退订的 handler" —— 派发按
         // 订阅顺序执行, 保证 first 在 second 之前被调用。
         auto firstSub = events8 ? events8->subscribe(
-                                      inst2->hostView(),
-                                      AGENTXX_CLIENT_EVT_CONN_STATE,
-                                      firstFn,
-                                      us.get()
-                                  )
+                            inst2->hostView(),
+                            AGENTXX_CLIENT_EVT_CONN_STATE,
+                            firstFn,
+                            us.get()
+                        )
                                 : nullptr;
         XX_TEST_EXPECT_TRUE(firstSub != nullptr);
         us->next = events8 ? events8->subscribe(
-                                 inst2->hostView(),
-                                 AGENTXX_CLIENT_EVT_CONN_STATE,
-                                 secondFn,
-                                 us.get()
-                             )
+                       inst2->hostView(),
+                       AGENTXX_CLIENT_EVT_CONN_STATE,
+                       secondFn,
+                       us.get()
+                   )
                            : nullptr;
         XX_TEST_EXPECT_TRUE(us->next != nullptr);
         mgr->onConnStateChanged("connected", "100%");
@@ -1079,12 +1094,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 const auto events11
                     = agentxx::plugin::ClientIfaces::query(okInst->hostView()).events;
                 auto sub = events11 ? events11->subscribe(
-                                          okInst->hostView(),
-                                          AGENTXX_CLIENT_EVT_READY,
-                                          readyFn,
-                                          &readyPayload
-                                      )
-                                               : nullptr;
+                               okInst->hostView(),
+                               AGENTXX_CLIENT_EVT_READY,
+                               readyFn,
+                               &readyPayload
+                           )
+                                    : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
@@ -1982,10 +1997,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             req.isFinished = true;
             req.isError    = false;
             req.maxWidth   = 100;
-            const std::string key  = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                req.toolCallId,
-                req.toolName
-            );
+            const std::string key
+                = agentxx::plugin::ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName);
             const uint64_t hash = req.inputHash();
 
             // 首次查询: 自定义 renderer 未计算 → 通用回退 + 请求渲染 (不进入插件代码)
@@ -2089,7 +2102,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     ui->bind_action_handler(first->hostView(), &secSv, probeFn, &hits),
                     0
                 );
-                auto           reg = mgr->uiRegistrySnapshot();
+                auto           reg  = mgr->uiRegistrySnapshot();
                 const uint64_t gen1 = reg ? reg->generationOf("agentxx_filesystem") : 0;
                 XX_TEST_EXPECT_TRUE(gen1 != 0);
 
@@ -2103,7 +2116,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 auto second = co_await mgr->loadNativeAsync(fsPath);
                 XX_TEST_EXPECT_TRUE(second != nullptr);
                 if (second) {
-                    auto reg2 = mgr->uiRegistrySnapshot();
+                    auto           reg2 = mgr->uiRegistrySnapshot();
                     const uint64_t gen2 = reg2 ? reg2->generationOf("agentxx_filesystem") : 0;
                     XX_TEST_EXPECT_TRUE(gen2 != 0);
                     XX_TEST_EXPECT_TRUE(gen2 != gen1);
@@ -2115,12 +2128,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(ui2 != nullptr && ui2->bind_action_handler != nullptr);
                     if (ui2 && ui2->bind_action_handler) {
                         XX_TEST_EXPECT_EQ(
-                            ui2->bind_action_handler(
-                                second->hostView(),
-                                &secSv,
-                                probeFn,
-                                &hits
-                            ),
+                            ui2->bind_action_handler(second->hostView(), &secSv, probeFn, &hits),
                             0
                         );
                     }
@@ -2135,7 +2143,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 22. 同步关闭不得绕过 stop: 实例、上下文与 DSO 保留 + CloseFailed ----
     {
         asio::io_context syncIo;
-        auto syncMgr = std::make_shared<agentxx::plugin::ClientPluginManager>(syncIo.get_executor());
+        auto             syncMgr
+            = std::make_shared<agentxx::plugin::ClientPluginManager>(syncIo.get_executor());
         auto fake = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_pending_stop");
         fake->lifecycleStop    = &fakeClientStopHook;
         fake->lifecycleStarted = true;
@@ -2143,7 +2152,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         fake->manager          = syncMgr;
         fake->self             = fake;
         fake->lifetime         = std::make_shared<agentxx::plugin::InstanceLifetime>(
-            syncIo.get_executor(), fake->name, uint64_t{1}
+            syncIo.get_executor(),
+            fake->name,
+            uint64_t{1}
         );
         fake->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
         syncMgr->plugins_.emplace(fake->name, fake);
@@ -2159,11 +2170,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(syncMgr->hasPendingClose());
 
         // 无 stop 导出的 legacy 实例仍走同步关闭, 不因新守卫变成无条件泄漏。
-        auto legacy = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_legacy");
+        auto legacy      = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_legacy");
         legacy->manager  = syncMgr;
         legacy->self     = legacy;
         legacy->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
-            syncIo.get_executor(), legacy->name, uint64_t{2}
+            syncIo.get_executor(),
+            legacy->name,
+            uint64_t{2}
         );
         legacy->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
         legacy->pluginCreated = true;
@@ -2180,13 +2193,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 23. client 侧禁用/启用事务: 导出 start/stop 的插件收到 stop/start ----
     {
         auto createFake = [](const std::shared_ptr<agentxx::plugin::ClientPluginManager>& m,
-                             asio::io_context&                                             io,
-                             std::string                                                   name,
+                             asio::io_context&                                            io,
+                             std::string                                                  name,
                              uint64_t generation) {
-            auto inst         = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
-            inst->self        = inst;
-            inst->manager     = m;
-            inst->lifetime    = std::make_shared<agentxx::plugin::InstanceLifetime>(
+            auto inst  = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
+            inst->self = inst;
+            inst->manager  = m;
+            inst->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
                 io.get_executor(),
                 inst->name,
                 generation
@@ -2205,13 +2218,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         };
 
         asio::io_context io;
-        auto             mgr2  = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
+        auto mgr2 = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
         ClientLifecycleProbe probe;
-        auto inst = createFake(mgr2, io, "fake_lifecycle", uint64_t{7});
-        inst->lifecycleStart  = &probeClientStartHook;
-        inst->lifecycleStop   = &probeClientStopHook;
-        inst->pluginCtx       = &probe;
-        inst->lifecycleStarted = true;
+        auto                 inst = createFake(mgr2, io, "fake_lifecycle", uint64_t{7});
+        inst->lifecycleStart      = &probeClientStartHook;
+        inst->lifecycleStop       = &probeClientStopHook;
+        inst->pluginCtx           = &probe;
+        inst->lifecycleStarted    = true;
 
         // 禁用: 宿主侧同步摘除, stop 事务投递到 client io 线程
         mgr2->disable("fake_lifecycle");
@@ -2248,7 +2261,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         asio::co_spawn(
             io,
             [&]() -> asio::awaitable<void> {
-                closed = co_await mgr2->unloadAsync("fake_lifecycle", std::chrono::milliseconds{500});
+                closed
+                    = co_await mgr2->unloadAsync("fake_lifecycle", std::chrono::milliseconds{500});
             },
             asio::detached
         );
@@ -2261,11 +2275,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 24. client 侧依赖级联: 三级/菱形禁用-恢复 + 用户禁用不被级联恢复 ----
     {
         auto createFake = [](const std::shared_ptr<agentxx::plugin::ClientPluginManager>& m,
-                             asio::io_context&                                             io,
-                             std::string                                                   name,
+                             asio::io_context&                                            io,
+                             std::string                                                  name,
                              uint64_t generation) {
-            auto inst      = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
-            inst->self     = inst;
+            auto inst  = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
+            inst->self = inst;
             inst->manager  = m;
             inst->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
                 io.get_executor(),
@@ -2277,11 +2291,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             return inst;
         };
         asio::io_context io;
-        auto mgr2 = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
-        auto leaf = createFake(mgr2, io, "leaf", 30);
-        auto mid  = createFake(mgr2, io, "mid", 31);
-        auto side = createFake(mgr2, io, "side", 32);
-        auto top  = createFake(mgr2, io, "top", 33);
+        auto mgr2     = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
+        auto leaf     = createFake(mgr2, io, "leaf", 30);
+        auto mid      = createFake(mgr2, io, "mid", 31);
+        auto side     = createFake(mgr2, io, "side", 32);
+        auto top      = createFake(mgr2, io, "top", 33);
         mid->depends  = {"leaf"};
         side->depends = {"leaf"};
         top->depends  = {"mid", "side"}; // 菱形: top 经 mid/side 两级依赖 leaf
@@ -2333,7 +2347,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // 控制块视图地址保持稳定; 接口表本身是进程级静态只读, 查询仍可用
             XX_TEST_EXPECT_TRUE(oldHost->vtable != nullptr);
             auto ui = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
-                oldHost, AGENTXX_IFACE_CLIENT_UI
+                oldHost,
+                AGENTXX_IFACE_CLIENT_UI
             );
             XX_TEST_EXPECT_TRUE(ui != nullptr);
             if (ui) {
@@ -2353,8 +2368,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         ui->register_status_item(oldHost, &idSv, &jsSv, 0, 0) == nullptr
                     );
                     // 新实例自己的 host 视图可以注册 (证明失败来自指针失效而非环境)
-                    auto* item
-                        = ui->register_status_item(instB->hostView(), &idSv, &jsSv, 0, 0);
+                    auto* item = ui->register_status_item(instB->hostView(), &idSv, &jsSv, 0, 0);
                     XX_TEST_EXPECT_TRUE(item != nullptr);
                     if (item) {
                         ui->unregister_status_item(instB->hostView(), item);
@@ -2383,7 +2397,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         const std::string dsoPath = AGENTXX_TEST_CLIENT_START_FAIL_PLUGIN_PATH;
         auto              findInRegistry
             = [](const std::shared_ptr<const agentxx::plugin::ClientUiRegistry>& reg,
-                 const char*                                                       id) {
+                 const char*                                                     id) {
                   if (!reg) {
                       return false;
                   }
@@ -2406,7 +2420,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
               };
 
         // 第一次加载: 全注册后失败, 宿主回滚
-        ::unsetenv("AGENTXX_TEST_CLIENT_START_OK");
+        clearSystemEnvVar("AGENTXX_TEST_CLIENT_START_OK");
         auto failed = co_await mgr2->loadNativeAsync(dsoPath);
         XX_TEST_EXPECT_TRUE(failed == nullptr);
         XX_TEST_EXPECT_FALSE(mgr2->hasCommand("test_client_start_fail_cmd"));
@@ -2419,9 +2433,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
 
         // 第二次加载: 同名注册必须完整重新成功 (无残留冲突)
-        ::setenv("AGENTXX_TEST_CLIENT_START_OK", "1", 1);
+        setSystemEnvVar("AGENTXX_TEST_CLIENT_START_OK", "1");
         auto ok = co_await mgr2->loadNativeAsync(dsoPath);
-        ::unsetenv("AGENTXX_TEST_CLIENT_START_OK");
+        clearSystemEnvVar("AGENTXX_TEST_CLIENT_START_OK");
         XX_TEST_EXPECT_TRUE(ok != nullptr);
         if (ok) {
             XX_TEST_EXPECT_EQ(ok->name, "test_client_start_fail_plugin");
@@ -2453,9 +2467,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
             // 卸载: UI 项与命令再次清空
             XX_TEST_EXPECT_TRUE(
-                co_await mgr2->unloadAsync(
-                    "test_client_start_fail_plugin", std::chrono::seconds{5}
-                )
+                co_await mgr2->unloadAsync("test_client_start_fail_plugin", std::chrono::seconds{5})
             );
             XX_TEST_EXPECT_FALSE(mgr2->hasCommand("test_client_start_fail_cmd"));
             auto regAfter = mgr2->uiRegistrySnapshot();
@@ -2475,10 +2487,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::ClientToolRenderCache cache(3);
         auto makeEntry = [](const std::string& key, const std::string& plugin) {
             agentxx::plugin::ClientToolRenderEntry entry;
-            entry.key        = key;
-            entry.plugin     = plugin;
-            entry.inputHash  = 1;
-            entry.matched    = true;
+            entry.key         = key;
+            entry.plugin      = plugin;
+            entry.inputHash   = 1;
+            entry.matched     = true;
             entry.displayName = key;
             return entry;
         };

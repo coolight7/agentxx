@@ -24,7 +24,7 @@ constexpr bool isNullCallable(const F& f) noexcept {
     if constexpr (std::is_same_v<std::decay_t<F>, std::nullptr_t>) {
         return true;
     } else if constexpr (requires { bool(f); }) {
-        return !static_cast<bool>(f);
+        return !f;
     } else {
         return false;
     }
