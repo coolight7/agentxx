@@ -115,15 +115,15 @@ models:
       reasoning:
         effort: high 
 
-  - name: command-code-deepseek-v4-flash
+  - name: command-code-deepseek-v4.1-flash
     type: "openai"
     base_url: "https://api.commandcode.ai/provider/v1"
     api_key: "${COMMANDCODE_API_KEY}"
-    model_name: "deepseek/deepseek-v4-flash"
+    model_name: "deepseek/deepseek-v4.1-flash"
     send_thinking: true
     model_context_max_token: 1000000
     # 多模态示例: 如该模型支持视觉输入可改为 true，TUI 即显示附件按钮
-    image_input: false
+    image_input: true
     audio_input: false
     video_input: false
     extra_api_config:
