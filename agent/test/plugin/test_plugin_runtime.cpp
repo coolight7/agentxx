@@ -657,6 +657,11 @@ TestResult testPluginRuntime() {
             f.manager->runtime()->pendingOperationSummary().find("runtime regression")
             != std::string::npos
         );
+        // 摘要标记"完成包待提交"形态, 关闭超时可据此区分"插件未 done"
+        XX_TEST_EXPECT_TRUE(
+            f.manager->runtime()->pendingOperationSummary().find("completion-pending")
+            != std::string::npos
+        );
 
         f.io.restart();
         f.manager->setIoExecutor(f.io.get_executor());

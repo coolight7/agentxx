@@ -832,6 +832,51 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             st->events->unsubscribe(st->dynSub);
         }
 
+        // 8.4 同轮派发中退订后续 handler: 未开始的回调不得执行 (F18)
+        struct UnsubNextState {
+            const AgentxxClientEventsIface* events = nullptr;
+            AgentxxPluginSubscription*      next   = nullptr;
+            std::atomic<int>                first{0};
+            std::atomic<int>                second{0};
+        };
+        auto us    = std::make_shared<UnsubNextState>();
+        us->events = events8;
+        auto secondFn = +[](const AgentxxPluginStringView*, void* ud) {
+            ++static_cast<UnsubNextState*>(ud)->second;
+        };
+        auto firstFn = +[](const AgentxxPluginStringView*, void* ud) {
+            auto* s = static_cast<UnsubNextState*>(ud);
+            ++s->first;
+            if (s->next && s->events) {
+                s->events->unsubscribe(s->next);
+                s->next = nullptr;
+            }
+        };
+        // 先订阅"执行退订的 handler", 再订阅"被退订的 handler" —— 派发按
+        // 订阅顺序执行, 保证 first 在 second 之前被调用。
+        auto firstSub = events8 ? events8->subscribe(
+                                      inst2->hostView(),
+                                      AGENTXX_CLIENT_EVT_CONN_STATE,
+                                      firstFn,
+                                      us.get()
+                                  )
+                                : nullptr;
+        XX_TEST_EXPECT_TRUE(firstSub != nullptr);
+        us->next = events8 ? events8->subscribe(
+                                 inst2->hostView(),
+                                 AGENTXX_CLIENT_EVT_CONN_STATE,
+                                 secondFn,
+                                 us.get()
+                             )
+                           : nullptr;
+        XX_TEST_EXPECT_TRUE(us->next != nullptr);
+        mgr->onConnStateChanged("connected", "100%");
+        XX_TEST_EXPECT_EQ(us->first.load(), 1);
+        XX_TEST_EXPECT_EQ(us->second.load(), 0); ///< 已退订的后续 handler 不执行
+        if (firstSub && events8) {
+            events8->unsubscribe(firstSub);
+        }
+
         // 8.3 收尾: 卸载 (unload 回调内 vtable 反注册路径已由段 7 覆盖)
         bool unloaded2 = co_await mgr->unloadAsync("example_plugin");
         XX_TEST_EXPECT_TRUE(unloaded2);
@@ -2266,6 +2311,59 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr2->enable("top");
         XX_TEST_EXPECT_TRUE(top->enabled);
         XX_TEST_EXPECT_FALSE(top->userDisabled);
+    }
+
+    // ---- 25. 客户端旧 host 指针在卸载后安全失败 (P0-1 / R2, client 侧) ----
+    // 插件保存的 host 指针跨卸载继续调用时必须安全失败: 控制块地址稳定,
+    // 实例失效后各入口返回失败值, 且同名重载后旧指针不会转交新实例。
+    {
+        auto mgr2     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        auto adapter2 = std::make_shared<MockPluginUiAdapter>();
+        mgr2->setUiAdapter(adapter2);
+
+        auto instA = co_await mgr2->loadNativeAsync(path);
+        XX_TEST_EXPECT_TRUE(instA != nullptr);
+        if (instA) {
+            const AgentxxPluginHost* oldHost = instA->hostView();
+            XX_TEST_EXPECT_TRUE(oldHost != nullptr && oldHost->vtable != nullptr);
+            XX_TEST_EXPECT_TRUE(
+                co_await mgr2->unloadAsync("example_plugin", std::chrono::seconds{5})
+            );
+            // 控制块视图地址保持稳定; 接口表本身是进程级静态只读, 查询仍可用
+            XX_TEST_EXPECT_TRUE(oldHost->vtable != nullptr);
+            auto ui = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
+                oldHost, AGENTXX_IFACE_CLIENT_UI
+            );
+            XX_TEST_EXPECT_TRUE(ui != nullptr);
+            if (ui) {
+                auto idSv = agentxx::plugin::PluginStringView::fromCstr("late.probe");
+                auto jsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"x"})");
+                // 迟到注册: 实例已销毁 -> 安全失败, 不访问已释放对象
+                XX_TEST_EXPECT_TRUE(
+                    ui->register_status_item(oldHost, &idSv, &jsSv, 0, 0) == nullptr
+                );
+
+                // 同名重载: 旧指针不得路由到新实例
+                auto instB = co_await mgr2->loadNativeAsync(path);
+                XX_TEST_EXPECT_TRUE(instB != nullptr);
+                if (instB) {
+                    XX_TEST_EXPECT_TRUE(instB->hostView() != oldHost);
+                    XX_TEST_EXPECT_TRUE(
+                        ui->register_status_item(oldHost, &idSv, &jsSv, 0, 0) == nullptr
+                    );
+                    // 新实例自己的 host 视图可以注册 (证明失败来自指针失效而非环境)
+                    auto* item
+                        = ui->register_status_item(instB->hostView(), &idSv, &jsSv, 0, 0);
+                    XX_TEST_EXPECT_TRUE(item != nullptr);
+                    if (item) {
+                        ui->unregister_status_item(instB->hostView(), item);
+                    }
+                    XX_TEST_EXPECT_TRUE(
+                        co_await mgr2->unloadAsync("example_plugin", std::chrono::seconds{5})
+                    );
+                }
+            }
+        }
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

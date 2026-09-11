@@ -120,6 +120,12 @@ std::string PluginRuntime::pendingOperationSummary() const {
             std::string item = operation->label();
             item += '#';
             item += std::to_string(entry.first);
+            // 完成包已产生但尚未在 IO 线程提交 (executor 停止时保留在待重放
+            // 队列): 这是"阻塞关闭"最常见的可诊断形态, 与"插件从未 done"
+            // 区分开, 便于卸载超时取证。
+            if (operation->completionPending()) {
+                item += "(completion-pending)";
+            }
             items.push_back(std::move(item));
         }
     }
