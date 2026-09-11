@@ -4,7 +4,7 @@
 F/P 问题编号、测试矩阵）。本文件记录进度、提交边界、验证事实与待办；与 plugin.md
 冲突时以 plugin.md 为准。
 >
-> **状态：Reset-v1 重构完成（2026-09-11，提交 29）。** R1～R6 全部完成；
+> **状态：Reset-v1 重构完成（2026-09-11，提交 29 = `91b345a9`）。** R1～R6 全部完成；
 > plugin.md §2.6 的 6 项完成前置条件已全部满足（Windows 平台验证为最后一项，
 > 本次在 Windows 本机完成）。**已验证平台**：Windows（MSVC 14.51 / VS18 Debug +
 > ASan）与 Linux（GCC 16.1 Debug + ASan/LSan、定向 UBSan、定向 TSan）；
@@ -26,8 +26,8 @@ F/P 问题编号、测试矩阵）。本文件记录进度、提交边界、验�
 ```bash
 # Linux 侧 (WSL2)
 cd /home/coolight/program/agentxx
-git status --short --branch      # 应干净；main 领先 origin/main 30 个提交（均未推送）
-git log --oneline -8
+git status --short --branch      # 应干净（仅构建副产物/submodule 脏标记）
+git log --oneline -8             # 最新提交 = R6-3 Windows 平台验证（提交号见第 4 节）
 git diff --stat
 git diff --check
 ```
@@ -1073,7 +1073,7 @@ bash agent/script/check_plugin_exports.sh  → OK: 16 plugin libraries
 提交 28.1       a5f8a6e1  重构插件框架-R6-2b 提交 28 验证结果补记                    (仅本文档)
 提交 --/--      11658fd7  --（用户提交: TODOS.md + agentxx-config.yaml）
 提交 --/--      e2a7c247  fix windows build（用户提交: exception.h / test CMake / 测试跨平台化）
-提交 29（R6-3） [本提交]  重构插件框架-R6-3 Windows 平台验证与平台 gate 收敛        (8 文件, 2026-09-11)
+提交 29（R6-3） 91b345a9  重构插件框架-R6-3 Windows 平台验证与平台 gate 收敛        (10 文件, 2026-09-11)
                           —— Windows 全插件构建 + 插件专项 1765/0 + 扩展 2251/0 +
                              工具模块 360/0；test_plugin_runtime 有界等待修复（Windows
                              IOCP 定时器投递时序）；audio_stream 改为全平台跳过；
