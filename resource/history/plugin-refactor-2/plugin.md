@@ -12,13 +12,26 @@
 
 ### 0.1 当前状态
 
-- 本文是任务交接文档，不表示重构已经完成。
-- 截至本次交接，未完成任何产品级 Reset-v1 实现；此前只进行了源码阅读、问题复现和方案整理。
+- 本文是任务交接文档。**当前状态：Reset-v1 重构进行中（未完成）**；逐提交进度、
+  验证结果与剩余待办以 `resource/history/plugin-refactor-2/work.md` 为准
+  （最新提交 22，见该文件第 1-3 节）。
+- 已落地（阶段）：R1 Runtime/Operation；R2 加载事务与异步关闭（含注册事务回滚，
+  工具/图/订阅/prompt/hook/能力/资源与客户端 UI 均有真实 DSO 用例）；R3 ABI v1 与
+  SDK 统一 root adapter / 反例编译检查；R4 JS 事务与部分内置插件迁移、后台任务托管；
+  R5 Client 语义渲染/动作代次/依赖级联/prompt 贡献；R6 C17 ABI 检查、导出符号白名单、
+  Debug+ASan 回归、插件框架定向 UBSan 探针、设计文档 Reset-v1 章节。
+- 未完成（阻塞"重构完成"判定）：7 个内置插件的 start/stop 迁移（按用户指示：
+  插件框架完善后再处理；filesystem / execute_command / planning / system_monitor /
+  javascript_engine / execute_javascript / example_js，其中 JS 引擎需先定义引擎线程
+  stop/重启语义）；TSan 定向回归（需独立全量构建）；Windows 平台编译与专项
+  （本机无 Windows 工具链，未验证不得声明）。
 - 仓库中已有用户未提交修改，至少包括：
   - `agentxx-config.yaml`
   - `resource/history/plugin-refactor-2/index.md`
 - 新会话开始时必须先执行 `git status --short --branch`，不得覆盖上述修改，也不得重置整个工作树。
-- `resource/history/plugin-refactor-2/plugin.md` 是本任务的最终事实来源；旧的 `docs/zh-cn/design/plugins.md` 在实现完成后再按本文更新，不能反过来覆盖本文的 Reset-v1 决策。
+- `resource/history/plugin-refactor-2/plugin.md` 是本任务的最终事实来源；
+  `docs/zh-cn/design/plugins.md` 已按本文更新出 Reset-v1 章节（第 15 节）与相关修订，
+  不得反过来覆盖本文的 Reset-v1 决策。
 
 ### 0.2 总目标
 
@@ -679,12 +692,15 @@ plugin_multi_instance            29 passed / 0 failed
 
 新会话在结束本任务前必须：
 
-- [ ] 按 R1～R6 更新本文“实施状态”，不得把计划写成已完成。
-- [ ] 记录每个阶段实际修改的文件、构建命令、测试命令、通过/失败结果。
-- [ ] 失败或超时必须记录原因和是否留下 CloseFailed/临时资源。
-- [ ] 每次修改后查看 `git diff --check` 和 `git status`，保留用户无关修改。
-- [ ] 最终更新 `docs/zh-cn/design/plugins.md`，使公开设计文档与 Reset-v1 实现一致。
-- [ ] 最终明确哪些平台已验证，不能用 Linux 构建结果代替 Windows/Android 验证。
-- [ ] 只有在所有内置插件迁移和专项生命周期测试通过后，才能将本文状态改为“Reset-v1 重构完成”。
+- [x] 按 R1～R6 更新本文“实施状态”，未把计划写成已完成（见第 0.1 节；明细在 work.md）。
+- [x] 记录每个阶段实际修改的文件、构建命令、测试命令、通过/失败结果（work.md 第 3/7 节）。
+- [x] 失败或超时必须记录原因和是否留下 CloseFailed/临时资源（work.md 第 7/8 节）。
+- [x] 每次修改后查看 `git diff --check` 和 `git status`，保留用户无关修改。
+- [x] 更新 `docs/zh-cn/design/plugins.md`，使公开设计文档与 Reset-v1 实现一致
+      （第 15 节 Reset-v1 章节 + 第 2/3/4/6/9/12/14 节修订）。
+- [x] 明确已验证平台：Linux（Debug + ASan/LSan、定向 UBSan 探针）；Windows/Android
+      未验证，不以 Linux 结果代替。
+- [ ] 只有在所有内置插件迁移（§9 第 4-8 步剩余项）和专项生命周期测试通过后，才能将本文
+      状态改为“Reset-v1 重构完成”；当前状态仍是“重构进行中（未完成）”。
 
 **交接给后续会话的第一步**：读取本文，检查工作树，然后从 R1 建立宿主 Operation/Lifetime 基础；不要先修改业务插件，也不要先删除现有测试。
