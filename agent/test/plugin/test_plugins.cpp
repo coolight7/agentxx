@@ -2132,6 +2132,79 @@ throw new Error("top-level rollback probe");
         }
     }
 
+    // ---- 40. 加载期 start 失败的真实 DSO 回滚 (R2 遗留) ----
+    // 测试插件 start 依次注册 工具/图类型/订阅/prompt 后主动失败:
+    // - 宿主必须回滚全部已生效注册 (工具/图类型/订阅/prompt 贡献);
+    // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件
+    //   `{"step":"all","ok":true}` 证明走到了最后一步)。
+    {
+#ifdef AGENTXX_TEST_START_FAIL_PLUGIN_PATH
+        std::vector<std::string> reports; ///< 先声明: 保证晚于 bus 析构 (回调安全)
+        auto sctx                     = std::make_shared<agent::AgentContext>();
+        sctx->agentConfig             = std::make_shared<agent::AgentConfig>();
+        sctx->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
+        sctx->bus = std::make_shared<event::EventBus>(co_await asio::this_coro::executor);
+        sctx->toolRegistry  = std::make_shared<plugin::ToolRegistry>();
+        sctx->pluginManager = std::make_shared<plugin::PluginManager>(sctx);
+        sctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        sctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
+
+        sctx->bus->get<std::string>("plugin.dso_rollback.probe")
+            .subscribe([&](const std::string& data) -> asio::awaitable<void> {
+                reports.push_back(data);
+                co_return;
+            });
+        const std::string promptBefore = sctx->pluginManager->getPromptJson();
+        auto              waitReports  = [&](size_t count) -> asio::awaitable<void> {
+            for (int i = 0; i < 500 && reports.size() < count; ++i) {
+                co_await sleepMs(2);
+            }
+        };
+
+        // 第一次加载: 全注册后失败, 宿主回滚
+        auto fail1 = co_await sctx->pluginManager->loadPluginAsync(
+            AGENTXX_TEST_START_FAIL_PLUGIN_PATH
+        );
+        XX_TEST_EXPECT_TRUE(fail1 == nullptr);
+        co_await waitReports(1);
+        XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            !reports.empty() && reports[0].find("\"step\":\"all\"") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            !reports.empty() && reports[0].find("\"ok\":true") != std::string::npos
+        );
+        XX_TEST_EXPECT_FALSE(sctx->toolRegistry->contains("dso_rollback_tool"));
+        // 注: GraphRegistry 无删除类型接口 (设计如此), 类型名保留在注册表中;
+        // 回滚语义由 GraphTypeSlot 失效 + 第二次加载能重新注册同名类型共同证明。
+        XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
+        // 订阅已撤销: 发布 watch 主题不得调用已卸载 DSO 的 handler (ASan 下泄漏即崩溃)
+        XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("dso_rollback.watch", "{}"), 0);
+        co_await sleepMs(5);
+        XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
+
+        // 第二次加载: 同名注册必须全部重新成功 (无残留冲突)
+        auto fail2 = co_await sctx->pluginManager->loadPluginAsync(
+            AGENTXX_TEST_START_FAIL_PLUGIN_PATH
+        );
+        XX_TEST_EXPECT_TRUE(fail2 == nullptr);
+        co_await waitReports(2);
+        XX_TEST_EXPECT_EQ(reports.size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(
+            reports.size() >= 2 && reports[1].find("\"step\":\"all\"") != std::string::npos
+        );
+        XX_TEST_EXPECT_FALSE(sctx->toolRegistry->contains("dso_rollback_tool"));
+        // 第二次 start 仍走到 "all": 同名工具/图类型注册均未因残留而冲突
+        XX_TEST_EXPECT_TRUE(
+            reports.size() >= 2 && reports[1].find("\"ok\":true") != std::string::npos
+        );
+        XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
+        sctx->pluginManager->shutdownAll();
+#else
+        // 独立构建未接线测试插件: 跳过
+#endif
+    }
+
     ctx->pluginManager->shutdownAll();
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};

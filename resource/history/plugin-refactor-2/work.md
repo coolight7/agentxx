@@ -2,8 +2,8 @@
 
 > 事实来源：设计定稿是 `resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、F/P 问题编号、测试矩阵）。本文件只记录进度、提交边界、验证结果和待办；与 plugin.md 冲突时以 plugin.md 为准。
 >
-> 本文件更新时间：2026-09-11（R2-3 提交）。**状态：Reset-v1 未完成。**
-> 当前重构进度 = 十八个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
+> 本文件更新时间：2026-09-11（R2-4 提交）。**状态：Reset-v1 未完成。**
+> 当前重构进度 = 十九个提交：`3a4497ba`（R1-1 Runtime / Operation）、`f861bcf9`（fix-build）、
 > `b2b5114a`（Operation/Runtime 可靠性、加载事务与关闭、owner 顺序、ABI v1 / SDK 推进）、
 > `c2869f07`（P0-1 宿主控制块 / 迟到调用安全失败 / 注册执行期复查，见第 3.4 节）、
 > `8c717236`（P0-2 Operation 终态与取消线性化，见第 3.5 节）、
@@ -21,7 +21,8 @@
 > R4-3 提交（capability 异步 Task + 5 个内置插件 start/stop 迁移，见第 3.16 节）、
 > R3-2 提交（graph node 统一 root adapter、SDK 反例编译检查、订阅句柄与图注册回滚回归，
 > 见第 3.17 节）、
-> R2-3 提交（客户端旧 host 指针安全失败、同轮退订复查、关闭取证标记，见第 3.18 节）。
+> R2-3 提交（客户端旧 host 指针安全失败、同轮退订复查、关闭取证标记，见第 3.18 节）、
+> R2-4 提交（加载期 start 失败的真实 DSO 回滚用例，见第 3.19 节）。
 > 工作树在该提交后是**干净的**；本文档自身也已包含在最新提交中。
 > 已完成/待完成对照见第 5、6 节，内容明细见第 3、4 节。
 
@@ -140,7 +141,9 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
                           (2026-09-11, 8 文件；见第 3.17 节)
 提交 18（R2-3）重构插件框架-R2-3 客户端句柄安全、事件退订复查与关闭取证补全
                           (2026-09-11, 4 文件；见第 3.18 节)
-工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-18 均未推送
+提交 19（R2-4）重构插件框架-R2-4 加载期 start 失败的真实 DSO 回滚用例
+                          (2026-09-11, 5 文件；见第 3.19 节)
+工作树          干净（无修改、无 untracked）；origin/main 停在 f861bcf9，提交 3-19 均未推送
 ```
 
 `b2b5114a` 就是此前工作树里的全部增量，代码与验证记录一一对应（未做任何额外改动）；
@@ -687,6 +690,31 @@ JS 线程 settle”（当前仍是同步驱动，只是不再把拒绝当成功�
   重放用例同步断言该标记。
 - 回归：`client_plugins` 375 → 390、`plugin_runtime` 622 → 623，扩展回归
   2039 passed / 0 failed（第 7.17 节）。
+
+### 3.19 R2-4 提交：加载期 start 失败的真实 DSO 回滚用例（R2 收尾）
+
+4 文件（新增 `agent/test/plugin/dso_plugins/test_start_fail/test_start_fail.cpp`、
+`agent/test/CMakeLists.txt`、`test_plugins.cpp`、`docs/zh-cn/design/plugins.md` + 本文档）。要点：
+
+- **测试专用插件 DSO**（`test_start_fail_plugin`，仅纯 C ABI 头、仅导出
+  get_info/create/start/stop/destroy）：start 依次注册
+  工具 `dso_rollback_tool` → 图类型 `dso_rollback_type` → 订阅 `dso_rollback.watch`
+  → prompt 贡献 `appendSystemPrompts.dso_rollback`，全部成功后发布
+  `{"step":"all","ok":true}` 到 `dso_rollback.probe` 并**主动返回失败**；
+  任一步前期失败则发布对应 `step` 的失败事件。
+- **CMake 接线**：测试项目内 `add_library(... SHARED)` 构建该 DSO（安装头 include、
+  `-fvisibility=hidden`、输出到构建目录），经
+  `AGENTXX_TEST_START_FAIL_PLUGIN_PATH` 编译定义把路径传给测试并建立依赖；
+  测试以 `#ifdef` 守卫，独立构建时跳过。
+- **回归用例**（`plugins` 340 → 354 断言）：
+  - 第一次加载返回 nullptr，事件证明"全部注册成功后失败"；
+  - 回滚断言：工具不在注册表、prompt 有效值与加载前一致；
+  - 订阅已撤销：发布 watch 主题不调用已卸载 DSO 的 handler（ASan 兜底 UAF）；
+  - 第二次加载同样走到 "all ok"：同名工具/图类型注册未因残留冲突；
+  - 注：GraphRegistry 无删除类型接口（设计如此），类型名保留、回滚语义由
+    GraphTypeSlot 失效与二次注册成功共同证明（槽位失效用例见 3.17 节）。
+- 导出面检查：该 DSO 仅导出 5 个入口符号。
+- 回归：扩展回归 2053 passed / 0 failed（第 7.18 节）。
 
 ---
 
@@ -1384,6 +1412,36 @@ memgrowth              15 passed / 0 failed
 ```
 
 日志：`/tmp/p4-sweep2.log`、`/tmp/p4-chost-tests.log`、`/tmp/p4-f18b-tests.log`。
+
+### 7.18 R2-4 提交的回归
+
+```bash
+cmake --build agent/build/linux-debug --target agentxx_test_repo -j12
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 timeout 1500s \
+  agent/build/linux-debug/exec/agentxx_test \
+  ffi_c_api agent_host subagent_tool subagent_bus plugin_sdk plugin_runtime plugins \
+  plugin_resources plugin_multi_instance client_plugins agent memgrowth codegraph --fail-fast
+nm -D --defined-only .../dso_plugins/test_start_fail_plugin.so   # 仅 5 个入口符号
+```
+
+```text
+ffi_c_api             117 passed / 0 failed
+plugin_runtime        623 passed / 0 failed
+plugin_sdk             71 passed / 0 failed
+subagent_bus           21 passed / 0 failed
+subagent_tool         122 passed / 0 failed
+agent_host             95 passed / 0 failed
+codegraph              23 passed / 0 failed
+plugins               354 passed / 0 failed   # R2-4 新增 14 断言（真实 DSO start 回滚）
+plugin_resources       83 passed / 0 failed
+plugin_multi_instance  48 passed / 0 failed
+client_plugins        390 passed / 0 failed
+agent                  91 passed / 0 failed
+memgrowth              15 passed / 0 failed
+合计                 2053 passed / 0 failed   （exit=0，ASan + LSan）
+```
+
+日志：`/tmp/p4-sweep3.log`、`/tmp/p4-dso-tests3.log`。
 
 ### 7.15 本会话最终扩展回归（全部插件相关模块）
 
