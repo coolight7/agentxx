@@ -145,7 +145,7 @@ asio::awaitable<TestResult>
         StateTuple state{&opStatus, &payload, &done};
 
         auto* op = ctx->pluginManager->invokeCapabilityAsync(
-            inst.get(), ///< Reset-v1: 能力调用必须携带 caller 实例 (租约保护)
+            inst.get(), ///< 能力调用必须携带 caller 实例 (租约保护)
             "agentxx.system_usage",
             "query",
             "{}",
@@ -214,7 +214,7 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(spawned);
         if (spawned) {
             // spawn 协程持 inflight (waitInflightZero 的计数来源)
-            size_t inflightBefore = inst->inflight.load(std::memory_order_acquire);
+            size_t inflightBefore = inst->lifetime ? inst->lifetime->leaseCount() : 0;
             XX_TEST_EXPECT_TRUE(inflightBefore > 0);
 
             // 卸载: detachAll cancel spawn → 协程退出 → notify → inflight 归零;

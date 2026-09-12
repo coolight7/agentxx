@@ -48,7 +48,7 @@ struct CachedGpuAdapter {
 /// 两者都是 **CpuGpuMonitor::Impl 的实例成员** (不再是函数级 static):
 /// 枚举/PDH 采样都带 lazy 构建与可变的查询句柄, 同进程多实例并发查询会读写同一
 /// 份 static (数据竞争); 且 PDH 句柄的创建/释放必须与实例生命周期配对,
-/// 见 Reset-v1 多实例契约"禁止可变全局/函数级 static 保存实例状态"。
+/// 见多实例契约"禁止可变全局/函数级 static 保存实例状态"。
 struct GpuAdapterCache {
     std::vector<CachedGpuAdapter> adapters;
     bool                          built = false;
@@ -546,7 +546,7 @@ struct LinuxGpuCacheEntry {
 ///
 /// 属于 **CpuGpuMonitor::Impl 实例成员**: 枚举本身读写 sysfs 且带 lazy 构建,
 /// 若放在函数级 static 中, 同进程多个插件实例 (各自线程/io_context) 并发查询
-/// 会同时读写同一份缓存 (数据竞争, TSan 可复现); 同时违反 Reset-v1 的多实例
+/// 会同时读写同一份缓存 (数据竞争, TSan 可复现); 同时违反多实例契约
 /// 契约"禁止可变全局/函数级 static 保存实例状态"。
 struct LinuxGpuCache {
     std::vector<LinuxGpuCacheEntry> entries;

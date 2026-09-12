@@ -134,83 +134,107 @@ void AudioStreamHolder::stop() {
 
 } // namespace
 
+/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+
+static void* audioStreamAgentStart(
+    AudioStreamPluginCtx&            ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString* err
+) {
+    ctx.holder      = std::make_unique<AudioStreamHolder>();
+    ctx.holder->ctx = &ctx;
+
+    auto schema
+        = ctx.schema("agentxx_audio_stream")
+              .enumString(
+                  "command",
+                  "Operation command: start capturing, stop capturing, or query status.",
+                  {"start", "stop", "status"},
+                  /*required=*/true
+              )
+              .enumString(
+                  "source",
+                  "Audio source to capture (default: system_output). Only applies to start command.",
+                  {"system_output", "program_output", "microphone_input"},
+                  false,
+                  "system_output"
+              )
+              .integer(
+                  "target_process_id",
+                  "Target PID for program_output mode (default: 0). Only applies to start command.",
+                  false,
+                  0
+              )
+              .build();
+
+    agentxx::plugin::blocking_tool(
+        ctx,
+        "agentxx_audio_stream",
+        "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
+        schema,
+        [](AudioStreamPluginCtx& c, std::string_view args_json) -> std::string {
+            agentxx::plugin::ArgReader args(args_json);
+            auto                       command = args.require<std::string>("command");
+            if (!args.ok()) {
+                return args.errorMessage();
+            }
+
+            AudioStreamHolder& holder = *c.holder;
+
+            if (command == "start") {
+                std::string srcStr = args.value("source", "system_output");
+                int64_t     pid    = args.value("target_process_id", int64_t{0});
+                auto        source = parseSource(srcStr);
+                bool        ok     = holder.start(source, static_cast<uint32_t>(pid));
+                return fmt::format(
+                    R"({{"ok":{},"running":true,"source":"{}","process_id":{}}})",
+                    ok ? "true" : "false",
+                    sourceName(source),
+                    pid
+                );
+            }
+
+            if (command == "stop") {
+                holder.stop();
+                return R"({"ok":true,"running":false})";
+            }
+
+            if (command == "status") {
+                bool running = holder.stream_.isRunning();
+                return fmt::format(
+                    R"({{"ok":true,"running":{},"source":"{}"}})",
+                    running ? "true" : "false",
+                    sourceName(holder.source_)
+                );
+            }
+
+            return R"({"ok":false,"error":"unknown command"})";
+        }
+    );
+
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// stop: 停止采集并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
+static void* audioStreamAgentStop(
+    AudioStreamPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    if (ctx.holder) {
+        try {
+            ctx.holder->stop();
+        } catch (...) {
+        }
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 AGENTXX_PLUGIN_AGENT_EXPORT(
     AudioStreamPluginCtx,
     "agentxx_audio_stream",
     "1.0.0",
     "System audio stream capture event stream (WASAPI loopback/mic on Windows)",
-    [](AudioStreamPluginCtx& ctx) -> int32_t {
-        ctx.holder      = std::make_unique<AudioStreamHolder>();
-        ctx.holder->ctx = &ctx;
-
-        auto schema
-            = ctx.schema("agentxx_audio_stream")
-                  .enumString(
-                      "command",
-                      "Operation command: start capturing, stop capturing, or query status.",
-                      {"start", "stop", "status"},
-                      /*required=*/true
-                  )
-                  .enumString(
-                      "source",
-                      "Audio source to capture (default: system_output). Only applies to start command.",
-                      {"system_output", "program_output", "microphone_input"},
-                      false,
-                      "system_output"
-                  )
-                  .integer(
-                      "target_process_id",
-                      "Target PID for program_output mode (default: 0). Only applies to start command.",
-                      false,
-                      0
-                  )
-                  .build();
-
-        agentxx::plugin::blocking_tool(
-            ctx,
-            "agentxx_audio_stream",
-            "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
-            schema,
-            [](AudioStreamPluginCtx& c, std::string_view args_json) -> std::string {
-                agentxx::plugin::ArgReader args(args_json);
-                auto                       command = args.require<std::string>("command");
-                if (!args.ok()) {
-                    return args.errorMessage();
-                }
-
-                AudioStreamHolder& holder = *c.holder;
-
-                if (command == "start") {
-                    std::string srcStr = args.value("source", "system_output");
-                    int64_t     pid    = args.value("target_process_id", int64_t{0});
-                    auto        source = parseSource(srcStr);
-                    bool        ok     = holder.start(source, static_cast<uint32_t>(pid));
-                    return fmt::format(
-                        R"({{"ok":{},"running":true,"source":"{}","process_id":{}}})",
-                        ok ? "true" : "false",
-                        sourceName(source),
-                        pid
-                    );
-                }
-
-                if (command == "stop") {
-                    holder.stop();
-                    return R"({"ok":true,"running":false})";
-                }
-
-                if (command == "status") {
-                    bool running = holder.stream_.isRunning();
-                    return fmt::format(
-                        R"({{"ok":true,"running":{},"source":"{}"}})",
-                        running ? "true" : "false",
-                        sourceName(holder.source_)
-                    );
-                }
-
-                return R"({"ok":false,"error":"unknown command"})";
-            }
-        );
-
-        return 0;
-    }
+    audioStreamAgentStart,
+    audioStreamAgentStop
 );

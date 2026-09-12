@@ -17,8 +17,9 @@
 ///   继承; 持有元信息/标志/inflight/宿主句柄/InflightGuard)
 /// - PluginManagerBase<InstanceT>: 管理器公共基类 (CRTP/模板注入实例类型;
 ///   持有 io executor/ioThreadId_/插件表, 提供 io 投递/查找/等待/级联收集)
-/// - hostMemoryAlloc/hostMemoryFree/hostMemoryStrdup: C ABI 跨 CRT 堆三件套
+/// - hostMemoryAlloc/hostMemoryFree: C ABI 跨 CRT 堆内存操作
 ///   (两侧 vtable 共用同一实现)
+/// - hostMemoryCreateString/hostMemorySetString: 经上述内存操作构造宿主堆字符串
 /// - getExecutableDirPath: 跨平台可执行目录 helper (builtin:// 回退探测用)
 ///
 /// 线程约定: 与两侧一致 —— 注册表/插件表仅 io 线程读写; 本类不引入锁
@@ -100,17 +101,20 @@ struct PluginInstanceBase {
     bool pluginDestroyed = false;
     /// 同步关闭发现活动 lease 时，等待最后一个 lease 释放后再执行 destroy。
     bool destroyDeferred = false;
-    /// Optional Reset-v1 lifecycle hooks discovered beside create/destroy.
-    /// Legacy plugins keep these null and retain their create-time setup.
+    /// 实例生命周期入口 (加载成功的插件必有这两个符号, 见 plugin_api.h):
+    /// - start: 注册事务 (工具/钩子/能力/订阅/自管线程), 在宿主 IO 线程执行;
+    /// - stop: 撤销自管资源, destroy 之前必须先完成。
     AgentxxPluginStartFn lifecycleStart = nullptr;
     AgentxxPluginStopFn  lifecycleStop  = nullptr;
-    /// 实例已经完全激活 (start 事务成功, 或该插件没有 start 导出)。
-    /// 只有为 true 的实例才需要 (且必须) 先执行 stop 才能 destroy/dlclose。
+    /// start 事务是否已成功完成 (加载成功即置位)。
     bool lifecycleStarted = false;
+    /// stop 事务是否已执行完成 (destroy 的前提)。
     bool lifecycleStopped = false;
 
-    /// stop 事务仍待执行。同步关闭路径无法等待该事务，因此必须保留实例、
+    /// stop 事务仍未执行: 同步关闭路径无法等待该事务，因此必须保留实例、
     /// 上下文与动态库，交由仍运行的异步 owner (unloadAsync/shutdownAsync) 收尾。
+    /// - 加载成功的实例 start/stop 都在, `lifecycleStarted` 即"stop 欠着"的判据;
+    /// - start 失败/未 start 的实例无需 stop (宿主回滚已声明注册), 可直接 destroy。
     bool lifecycleStopPending() const noexcept {
         return lifecycleStop != nullptr && lifecycleStarted && !lifecycleStopped;
     }
@@ -241,18 +245,14 @@ public:
     /// 由实例创建路径设置，供只拿到裸指针的宿主回调升级 owner。
     std::weak_ptr<PluginInstanceBase> ownerSelf;
 
-    /// Reset-v1 宿主生命周期。实例对象本身只保存业务注册信息；所有跨线程
-    /// 执行都通过 lifetime lease 保证 stop/destroy/dlclose 前已经返回。
+    /// 宿主生命周期控制块 (状态机 + 执行 lease)。实例对象本身只保存业务注册信息；
+    /// 所有跨线程执行都通过 lease 保证 stop/destroy/dlclose 前已经返回。
     std::shared_ptr<InstanceLifetime> lifetime;
 
     /// 宿主控制块：交给插件的 `AgentxxPluginHost` 视图保存在控制块内（进程级
     /// 稳定地址），插件在实例卸载后继续使用旧 host 指针时只会安全失败。
     /// 见 [PluginHostControl]。
     std::shared_ptr<PluginHostControl> hostControl;
-
-    /// 兼容查询字段：值与 lifetime->leaseCount() 同步更新，待所有调用方迁移
-    /// 到 lifetime 后可移除。
-    std::atomic<size_t> inflight{0};
 
     explicit PluginInstanceBase(std::string in_name) :
         name(std::move(in_name)) {}
@@ -262,51 +262,32 @@ public:
     PluginInstanceBase(const PluginInstanceBase&)            = delete;
     PluginInstanceBase& operator=(const PluginInstanceBase&) = delete;
 
-    /// 执行 lease RAII。优先使用 Reset-v1 lifetime；尚未装配 lifetime 的测试
-    /// 伪实例仍更新兼容 inflight 字段。
+    /// 执行 lease RAII: 把一段可能进入插件代码的执行登记到实例生命周期,
+    /// 卸载路径的 `waitIdleUntil` 因此必然覆盖它, dlclose 不会越过仍在运行的插件代码。
+    /// - `allowClosing=false` (默认): "开始新动作", 实例进入 Closing/Disabled 后获取失败;
+    /// - `allowClosing=true`: 只读查询 / 取消 / 完成清理, 关闭过程中仍需执行。
+    ///
+    /// 未装配 lifetime 的实例 (单元测试直接构造的伪实例) 视为无租约约束。
     struct InflightGuard {
         PluginInstanceBase*                 inst = nullptr;
         std::shared_ptr<PluginInstanceBase> owner;
         InstanceLease                       lease;
-        bool                                legacy = false;
 
         explicit InflightGuard(std::shared_ptr<PluginInstanceBase> i, bool allowClosing = false) :
             inst(i.get()),
             owner(std::move(i)),
-            lease(inst ? InstanceLease::acquire(inst->lifetime, allowClosing) : InstanceLease{}) {
-            if (inst && inst->lifetime) {
-                if (lease) {
-                    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-                }
-            } else if (inst) {
-                legacy = true;
-                inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-            }
-        }
+            lease(inst ? InstanceLease::acquire(inst->lifetime, allowClosing) : InstanceLease{}) {}
 
         explicit InflightGuard(PluginInstanceBase* i, bool allowClosing = false) :
             inst(i),
             owner(i ? i->ownerSelf.lock() : nullptr),
-            lease(i ? InstanceLease::acquire(i->lifetime, allowClosing) : InstanceLease{}) {
-            if (inst && inst->lifetime) {
-                if (lease) {
-                    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-                }
-            } else if (inst) {
-                legacy = true;
-                inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-            }
-        }
+            lease(i ? InstanceLease::acquire(i->lifetime, allowClosing) : InstanceLease{}) {}
 
         explicit operator bool() const noexcept {
-            return legacy || static_cast<bool>(lease);
+            return inst == nullptr || inst->lifetime == nullptr || static_cast<bool>(lease);
         }
 
-        ~InflightGuard() {
-            if (inst && (legacy || lease)) {
-                inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
-            }
-        }
+        ~InflightGuard() = default;
     };
 
     /// 交给插件的宿主视图（控制块内地址，永不失效）；未装配控制块返回 nullptr。
@@ -593,7 +574,7 @@ public:
     /// vtable 入口在调用方线程已取到 admission lease，但请求可能排在 IO 线程
     /// 队列里、等真正执行时实例已经进入 Closing/Disabled。此时注册必须被拒绝，
     /// 否则会在撤销注册之后又留下工具/hook/能力等残留。
-    /// - 未装配 lifetime 的测试伪实例按“允许”处理（兼容旧用例）；
+    /// - 未装配 lifetime 的测试伪实例按"允许"处理；
     /// - 实例被显式禁用（enabled=false）时不再接受注册。
     bool acceptsRegistration(const PluginInstanceBase* inst) const {
         if (!inst || !inst->enabled) {
@@ -619,10 +600,9 @@ public:
 
     bool isIoThread() const {
         const auto tid = ioThreadId_.load(std::memory_order_acquire);
-        // A stopped io_context cannot safely execute an inline operation even
-        // when the last thread that bound the executor happens to be calling
-        // now.  Treat it as unavailable so synchronous ABI callers fail fast
-        // instead of running against a closed runtime.
+        // io_context 已停止时, 即使当前调用线程正是最后绑定 executor 的线程,
+        // 也不能内联执行: 视为"不可用", 让同步 ABI 调用快速失败而不是在已关闭的
+        // runtime 上执行。
         if (!ioExecutor_ || runtimeExecutorStopped(ioExecutor_)) {
             return false;
         }
@@ -707,8 +687,8 @@ public:
             co_return true;
         }
         if (!inst->lifetime) {
-            // 仅兼容未装配 runtime 的测试伪实例；生产实例始终有 lifetime。
-            co_return inst->inflight.load(std::memory_order_acquire) == 0;
+            // 未装配运行时控制块的测试伪实例: 没有租约可等, 直接视为已归零。
+            co_return true;
         }
         const auto deadline = std::chrono::steady_clock::now() + timeout;
         const bool idle     = co_await inst->lifetime->waitIdleUntil(deadline);
@@ -758,7 +738,7 @@ protected:
 };
 
 // =====================================================================
-// C ABI 内存三件套 (跨 CRT 堆边界; 两侧 vtable 共用)
+// C ABI 内存操作 + 宿主堆字符串构造 (跨 CRT 堆边界; 两侧 vtable 共用)
 // =====================================================================
 
 inline void* hostMemoryAlloc(uint64_t size) {
@@ -767,32 +747,6 @@ inline void* hostMemoryAlloc(uint64_t size) {
 
 inline void hostMemoryFree(void* ptr) {
     ::free(ptr);
-}
-
-inline char* hostMemoryStrdup(const AgentxxPluginStringView* s) {
-    if (!s || (!s->data && s->size == 0)) {
-        return nullptr;
-    }
-    char* p = static_cast<char*>(hostMemoryAlloc(s->size + 1));
-    if (p) {
-        if (s->size > 0 && s->data) {
-            std::memcpy(p, s->data, static_cast<size_t>(s->size));
-        }
-        p[s->size] = '\0';
-    }
-    return p;
-}
-
-inline char* hostMemoryStrdup(AgentxxPluginStringView s) {
-    return hostMemoryStrdup(&s);
-}
-
-inline char* hostMemoryStrdup(const char* s) {
-    if (!s) {
-        return nullptr;
-    }
-    auto sv = agentxx::plugin::PluginStringView::from(s, std::strlen(s));
-    return hostMemoryStrdup(&sv);
 }
 
 inline AgentxxPluginString hostMemoryCreateString(AgentxxPluginStringView s) {

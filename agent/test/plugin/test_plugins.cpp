@@ -800,7 +800,8 @@ throw new Error("top-level rollback probe");
                 //   inflight==0 (回调未开始), 卸载立即完成, 时序断言失真
                 // - 注意不能以 execDone 作为轮询出口: 它由超时返回 (100ms)
                 //   置位, 早于回调真正开始; 仅 inflight>0 能确认回调在跑
-                for (int i = 0; i < 200 && inst23->inflight.load(std::memory_order_acquire) == 0;
+                for (int i = 0;
+                     i < 200 && (inst23->lifetime ? inst23->lifetime->leaseCount() : 0) == 0;
                      ++i) {
                     co_await sleepMs(10);
                 }
@@ -881,7 +882,7 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 25b. JS 引擎/脚本插件 disable→enable 往返: 引擎线程与脚本按事务重建 ----
-    // Reset-v1: 引擎线程、JSRuntime 与脚本上下文都属于 start 事务 —— disable 停
+    // 引擎线程、JSRuntime 与脚本上下文都属于 start 事务 —— disable 停
     // 线程 (stop), enable 重建线程并重放脚本 (start)。断言能力/工具的可观察状态
     // 往返一致, 且 stop/destroy 顺序不会把实例提前销毁。
     {
@@ -1209,7 +1210,7 @@ throw new Error("top-level rollback probe");
             }
         }
 
-        // 31.2 异步工具两件套: 经 notify.done 上报完成
+        // 31.2 异步工具操作: 经 notify.done 上报完成
         {
             static AgentxxPluginToolSpec asyncSpec;
             asyncSpec.name = agentxx::plugin::PluginStringView::fromCstr("async_notify_tool");

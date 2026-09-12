@@ -271,17 +271,13 @@ static void* sysMonStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(SysMonCtx, sysMonStart, sysMonStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     SysMonCtx,
     "agentxx_system_monitor",
     "1.0.0",
     "System resource monitor: CPU/memory/GPU usage tool",
-    [](SysMonCtx&) -> int32_t {
-        // create 只构造上下文; 工具/能力/订阅注册在 start 事务中执行。
-        return 0;
-    }
+    sysMonStart,
+    sysMonStop
 );
 
 struct SysMonClientCtx : public ClientPluginBase {
@@ -522,15 +518,11 @@ static void* sysMonClientStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(SysMonClientCtx, sysMonClientStart, sysMonClientStop)
-
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     SysMonClientCtx,
     "agentxx_system_monitor",
     "1.0.0",
     "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle",
-    [](SysMonClientCtx&) -> int32_t {
-        // create 只构造上下文; Info 段落/订阅/命令注册在 start 事务中执行。
-        return 0;
-    }
+    sysMonClientStart,
+    sysMonClientStop
 );

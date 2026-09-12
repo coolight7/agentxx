@@ -4,7 +4,7 @@
 /// - start 阶段经 interpreter.js 能力把同目录 plugin.js 交给 QuickJS 引擎执行
 /// - plugin.js 内注册 agentxx_execute_javascript 工具（仿照 agentxx_execute_command）
 ///
-/// Reset-v1 生命周期 (见 plugin.md 第 5.2 节):
+/// 实例生命周期: create 只构造, start 加载脚本, stop 停止脚本执行
 /// - create: 只构造上下文 (查询接口表 + 解析自身路径), 不注册、不启动线程;
 /// - start:  校验 "interpreter.js" 能力后加载脚本, 脚本注册的工具属于本实例;
 /// - stop:   通知引擎卸载脚本 (撤销脚本注册), 引擎不可用时只记录;
@@ -191,7 +191,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 /// create: 只构造上下文 (查询接口表 + 解析自身名称/脚本路径), 不做运行时注册,
-/// 不启动线程, 不调用能力 (Reset-v1 第 5.2 节)。
+/// 不启动线程, 不调用能力。
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ShellCtx* raw = nullptr;

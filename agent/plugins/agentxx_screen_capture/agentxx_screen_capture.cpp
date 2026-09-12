@@ -277,38 +277,57 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
 
 } // namespace agentxx_screen_capture_plugin
 
+/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+
+static void* screenCaptureAgentStart(
+    ScreenCapturePluginCtx&            ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               err
+) {
+    ctx.holder      = std::make_unique<ScreenCaptureHolder>();
+    ctx.holder->ctx = &ctx;
+
+    std::string cfgStr = ctx.config();
+    if (!cfgStr.empty() && cfgStr != "{}") {
+        try {
+            auto        j       = agentxx::util::Json::parse(cfgStr);
+            std::string dataDir = j.value("dataDir", std::string{});
+            if (!dataDir.empty()) {
+                namespace fs              = std::filesystem;
+                fs::path        targetDir = fs::path(dataDir) / "captures";
+                std::error_code ec;
+                fs::create_directories(targetDir, ec);
+                if (!ec) {
+                    ctx.captures_dir = targetDir.string();
+                }
+            }
+        } catch (...) {
+        }
+    }
+
+    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
+        return nullptr;
+    }
+
+    registerScreenCaptureTool(ctx);
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
+static void* screenCaptureAgentStop(
+    ScreenCapturePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 AGENTXX_PLUGIN_AGENT_EXPORT(
     ScreenCapturePluginCtx,
     "agentxx_screen_capture",
     "1.0.0",
     "Screen capture and streaming on Windows (DXGI Desktop Duplication with GDI fallback)",
-    [](ScreenCapturePluginCtx& ctx) -> int32_t {
-        ctx.holder      = std::make_unique<ScreenCaptureHolder>();
-        ctx.holder->ctx = &ctx;
-
-        std::string cfgStr = ctx.config();
-        if (!cfgStr.empty() && cfgStr != "{}") {
-            try {
-                auto        j       = agentxx::util::Json::parse(cfgStr);
-                std::string dataDir = j.value("dataDir", std::string{});
-                if (!dataDir.empty()) {
-                    namespace fs              = std::filesystem;
-                    fs::path        targetDir = fs::path(dataDir) / "captures";
-                    std::error_code ec;
-                    fs::create_directories(targetDir, ec);
-                    if (!ec) {
-                        ctx.captures_dir = targetDir.string();
-                    }
-                }
-            } catch (...) {
-            }
-        }
-
-        if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
-            return -1;
-        }
-
-        registerScreenCaptureTool(ctx);
-        return 0;
-    }
+    screenCaptureAgentStart,
+    screenCaptureAgentStop
 );

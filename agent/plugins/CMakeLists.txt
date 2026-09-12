@@ -217,6 +217,9 @@ agentxx_load_plugin(agentxx_websearch AGENTXX_ENABLE_PLUGIN_WEBSEARCH)
 agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
 
 # ===== 内置清单生成 =====
+# 说明: 各插件子目录只登记"插件名 + 需要改名的入口符号"(避免合并编译时符号冲突),
+# 清单内容在这里统一生成 —— 子目录不再各自拼装清单片段 (曾出现两处生成、其中一处
+# 被覆盖的重复实现)。
 list(LENGTH AGENTXX_BUILTIN_PLUGIN_NAMES AGENTXX_BUILTIN_PLUGIN_COUNT)
 set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "")
 set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
@@ -226,10 +229,12 @@ foreach(_bp IN LISTS AGENTXX_BUILTIN_PLUGIN_NAMES)
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
 extern \"C\" const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_get_info_${_bp}(void);
 extern \"C\" int32_t AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_create_${_bp}(const AgentxxPluginHost* host, void** plugin_ctx);
-extern \"C\" void AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);")
+extern \"C\" void AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);
+extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_start_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
+extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_stop_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);")
   set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
-    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp} },")
+    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp}, agentxx_plugin_agent_builtin_start_${_bp}, agentxx_plugin_agent_builtin_stop_${_bp} },")
 
   set(_yaml_path "${CMAKE_CURRENT_SOURCE_DIR}/${_bp}/plugin.yaml")
   if(EXISTS "${_yaml_path}")

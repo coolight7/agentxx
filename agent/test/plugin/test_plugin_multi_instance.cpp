@@ -213,7 +213,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 }
             );
             XX_TEST_EXPECT_TRUE(tracked);
-            size_t inflightBefore = instC->inflight.load(std::memory_order_acquire);
+            size_t inflightBefore = instC->lifetime ? instC->lifetime->leaseCount() : 0;
 
             // 通知完成 (模拟插件协程结束上报) → inflight-1 + 句柄回收 (异步)
             auto nullSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
@@ -245,7 +245,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 }
             );
             XX_TEST_EXPECT_FALSE(trackedAfter); ///< 完成后句柄被回收
-            size_t inflightAfter = instC->inflight.load(std::memory_order_acquire);
+            size_t inflightAfter = instC->lifetime ? instC->lifetime->leaseCount() : 0;
             XX_TEST_EXPECT_TRUE(inflightAfter < inflightBefore || inflightBefore == 0);
             if (err.data) {
                 agentxx::plugin::PluginString::free(instC->hostView(), &err);

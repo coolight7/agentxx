@@ -334,9 +334,8 @@ public:
                     [completion] { (*completion)(); },
                     true
                 )) {
-                // Never invoke plugin or caller code from this completion
-                // thread. The runtime retains accepted actions while its IO
-                // executor is stopped.
+                // 完成线程不得进入插件或调用方代码: runtime 会在 IO executor
+                // 停止期间保留已接受的动作, 待恢复后重放。
                 XX_LOGE("Unable to enqueue plugin completion; runtime is unavailable");
             }
         } catch (...) {
@@ -464,8 +463,7 @@ inline void cancelPluginOperation(AgentxxPluginOperatorHandle* handle) noexcept 
             return;
         }
     } catch (...) {
-        // Fall through to the diagnostic below. Calling plugin code here
-        // would violate the ABI's IO-thread contract.
+        // 落到下方诊断: 在这里调用插件代码会违反 ABI 的 IO 线程约定。
     }
     if (keep) {
         if (auto runtime = keep->runtime.lock()) {
@@ -543,10 +541,9 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
     co_return core->payload();
 }
 
-/// Invoke an optional Reset-v1 instance lifecycle hook through the same
-/// completion protocol as tools and capabilities. The hook is called while a
-/// lifecycle lease is held, and its completion is always observed on the
-/// manager's IO executor before the caller proceeds to the next phase.
+/// 调用实例生命周期入口 (start/stop), 复用与工具/能力相同的完成协议:
+/// - 调用期间持 lifecycle lease, 因此卸载的 idle 等待会覆盖它;
+/// - 完成通知必定在管理器的 IO executor 上被观察到, 调用方随后才推进下一阶段。
 template<typename HookFn>
 inline asio::awaitable<bool> awaitPluginLifecycle(
     const std::shared_ptr<PluginRuntime>& runtime,

@@ -184,15 +184,11 @@ static void* ragStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(RagPluginCtx, ragStart, ragStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     RagPluginCtx,
     "agentxx_rag_search",
     "1.0.0",
     "RAG semantic search over configured docs paths (embedding based)",
-    [](RagPluginCtx&) -> int32_t {
-        // create 只构造上下文; 索引构建与工具注册在 start 事务中执行。
-        return 0;
-    }
+    ragStart,
+    ragStop
 );

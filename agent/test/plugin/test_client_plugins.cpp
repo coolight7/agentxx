@@ -405,7 +405,7 @@ private:
     std::string        lastOverlayClosePlugin_;
 };
 
-/// 工具语义渲染 (Reset-v1 模型):
+/// 工具语义渲染模型:
 /// - decor / 预设模版: 纯宿主计算, 直接返回
 /// - 自定义 renderer: 只在 client io 线程执行; 未命中时提交请求并等待结果写入
 ///   缓存, 再从缓存读取 (UI 线程只读宿主语义快照, 不进入插件代码)
@@ -2169,7 +2169,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_FALSE(fake->pluginDestroyed);
         XX_TEST_EXPECT_TRUE(syncMgr->hasPendingClose());
 
-        // 无 stop 导出的 legacy 实例仍走同步关闭, 不因新守卫变成无条件泄漏。
+        // 直接构造的伪实例 (无 stop 入口, 只有测试会这样构造) 仍走同步关闭:
+        // 契约要求真实插件必须导出 start/stop, 但关闭守卫不能因此变成无条件泄漏。
         auto legacy      = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_legacy");
         legacy->manager  = syncMgr;
         legacy->self     = legacy;

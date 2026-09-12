@@ -13,7 +13,7 @@
 ///    用户输入 → llm (识别意图) → intent_router (路由) → datetime 直接结束
 ///    轮次 / normal 进入原 agent loop (llm→tool→llm→...→end)
 ///
-/// 节点实现遵循"统一异步操作模型" (两件套 run_start/run_cancel):
+/// 节点实现遵循"统一异步操作模型" (操作 run_start/run_cancel):
 /// - run_start 在宿主 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
 /// - state_json 为 GraphState::serialize() 结果, 只读; 修改经返回 writes
 #include "agentxx/plugin/api/plugin_api.h"
@@ -146,86 +146,86 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
     auto                   state       = agentxx::util::Json::parse(req.state());
     auto                   messages    = stateMessages(state);
 
-        // 解析 config: intents 枚举 + fallback
-        std::vector<std::string> intents;
-        std::string              fallback = "normal";
-        if (!config_json.empty()) {
-            auto cfg = agentxx::util::Json::parse(config_json);
-            if (cfg.is_object()) {
-                if (cfg.contains("intents") && cfg["intents"].is_array()) {
-                    for (const auto& i : cfg["intents"]) {
-                        if (i.is_string()) {
-                            intents.push_back(i.get<std::string>());
-                        }
+    // 解析 config: intents 枚举 + fallback
+    std::vector<std::string> intents;
+    std::string              fallback = "normal";
+    if (!config_json.empty()) {
+        auto cfg = agentxx::util::Json::parse(config_json);
+        if (cfg.is_object()) {
+            if (cfg.contains("intents") && cfg["intents"].is_array()) {
+                for (const auto& i : cfg["intents"]) {
+                    if (i.is_string()) {
+                        intents.push_back(i.get<std::string>());
                     }
                 }
-                if (cfg.contains("fallback") && cfg["fallback"].is_string()) {
-                    fallback = cfg["fallback"].get<std::string>();
-                }
+            }
+            if (cfg.contains("fallback") && cfg["fallback"].is_string()) {
+                fallback = cfg["fallback"].get<std::string>();
             }
         }
+    }
 
-        bool intentChecked = false;
-        if (state.is_object() && state.contains("channels") && state["channels"].is_object()
-            && state["channels"].contains("__intent_checked")
-            && state["channels"]["__intent_checked"].is_object()
-            && state["channels"]["__intent_checked"].contains("value")
-            && state["channels"]["__intent_checked"]["value"].is_boolean()) {
-            intentChecked = state["channels"]["__intent_checked"]["value"].get<bool>();
-        }
+    bool intentChecked = false;
+    if (state.is_object() && state.contains("channels") && state["channels"].is_object()
+        && state["channels"].contains("__intent_checked")
+        && state["channels"]["__intent_checked"].is_object()
+        && state["channels"]["__intent_checked"].contains("value")
+        && state["channels"]["__intent_checked"]["value"].is_boolean()) {
+        intentChecked = state["channels"]["__intent_checked"]["value"].get<bool>();
+    }
 
-        std::string route;
-        if (!intentChecked) {
-            // 第一次: 识别意图
-            intentChecked      = true;
-            const auto content = normalizeIntent(lastAssistantContent(messages));
-            route              = fallback;
-            for (const auto& i : intents) {
-                if (normalizeIntent(i) == content) {
-                    route = i;
-                    break;
-                }
+    std::string route;
+    if (!intentChecked) {
+        // 第一次: 识别意图
+        intentChecked      = true;
+        const auto content = normalizeIntent(lastAssistantContent(messages));
+        route              = fallback;
+        for (const auto& i : intents) {
+            if (normalizeIntent(i) == content) {
+                route = i;
+                break;
             }
-            // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
-            if (route != fallback && messages.is_array() && !messages.empty()) {
-                auto origin          = stateMessages(state);
-                messages             = agentxx::util::Json::array();
-                const size_t n       = origin.size();
-                bool         removed = false;
-                for (size_t i = 0; i < n; ++i) {
-                    const auto m = origin[static_cast<int>(i)];
-                    if (!removed && m.is_object() && m.contains("role") && m["role"].is_string()
-                        && m["role"].get<std::string>() == "assistant") {
-                        removed = true; // 跳过最后一条 assistant (纯意图输出)
-                        continue;
-                    }
-                    messages.push_back(m);
-                }
-                if (removed) {
-                    // overwrite messages (去掉意图消息)
-                    const std::string payload = fmt::format(
-                        R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})",
-                        agentxx::util::Json(route).dump(),
-                        messages.dump()
-                    );
-                    return payload;
-                }
-            }
-            // 未命中/未移除: 仅写路由标记
-            const std::string payload = fmt::format(
-                R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})",
-                agentxx::util::Json(route).dump()
-            );
-            return payload;
         }
-
-        // 后续轮次: 等价 has_tool_calls 条件
-        route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
+        // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
+        if (route != fallback && messages.is_array() && !messages.empty()) {
+            auto origin          = stateMessages(state);
+            messages             = agentxx::util::Json::array();
+            const size_t n       = origin.size();
+            bool         removed = false;
+            for (size_t i = 0; i < n; ++i) {
+                const auto m = origin[static_cast<int>(i)];
+                if (!removed && m.is_object() && m.contains("role") && m["role"].is_string()
+                    && m["role"].get<std::string>() == "assistant") {
+                    removed = true; // 跳过最后一条 assistant (纯意图输出)
+                    continue;
+                }
+                messages.push_back(m);
+            }
+            if (removed) {
+                // overwrite messages (去掉意图消息)
+                const std::string payload = fmt::format(
+                    R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})",
+                    agentxx::util::Json(route).dump(),
+                    messages.dump()
+                );
+                return payload;
+            }
+        }
+        // 未命中/未移除: 仅写路由标记
         const std::string payload = fmt::format(
-            R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
+            R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})",
             agentxx::util::Json(route).dump()
         );
         return payload;
+    }
+
+    // 后续轮次: 等价 has_tool_calls 条件
+    route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
+    const std::string payload = fmt::format(
+        R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
+        agentxx::util::Json(route).dump()
+    );
+    return payload;
 }
 
 /// 时间输出节点执行 (快同步): 写当前系统日期时间到 messages channel
@@ -445,7 +445,12 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
         return -1;
     }
     // 2. 注册时间输出节点类型
-    if (agentxx::plugin::graph_node(ctx, "example_datetime", R"({"type":"object"})", datetimeNodeRun)
+    if (agentxx::plugin::graph_node(
+            ctx,
+            "example_datetime",
+            R"({"type":"object"})",
+            datetimeNodeRun
+        )
         != 0) {
         return -1;
     }
@@ -460,18 +465,26 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
 }
 
 static void* exampleGraphAgentStart(
-    AgentCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    AgentCtx&                          ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
-            agentxx::plugin::PluginString::set(ctx.host, error, "example_graph_node start: notify required");
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_graph_node start: notify required"
+            );
         }
         return nullptr;
     }
     if (exampleGraphAgentSetup(ctx) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "example_graph_node start: registration transaction failed"
+                ctx.host,
+                error,
+                "example_graph_node start: registration transaction failed"
             );
         }
         return nullptr;
@@ -481,9 +494,8 @@ static void* exampleGraphAgentStart(
     return nullptr;
 }
 
-static void* exampleGraphAgentStop(
-    AgentCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    exampleGraphAgentStop(AgentCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     // 没有自管线程/定时器; 注册记录由宿主在 stop 后撤销。
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;

@@ -172,7 +172,7 @@ ClientPluginInstance::~ClientPluginInstance() {
         XX_LOGE(
             "[client_plugin] `{}` destroyed while {} lease(s) remain; refusing to dlclose",
             name,
-            lifetime ? lifetime->leaseCount() : inflight.load(std::memory_order_acquire)
+            lifetime ? lifetime->leaseCount() : 0
         );
         return;
     }
@@ -309,7 +309,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // ---- 目录插件: 解析 plugin.yaml 取 entry 库路径 (与 agent 侧一致) ----
     // - manifest: name/entry/depends/optional_depends/interfaces(接口声明)
     // - entry 平台化 + 配置子目录回退见公共 resolvePluginEntryPath
-    // - 依赖解析与正式加载合并 (B3): 不再先 dlopen 探测再 close 后重新
+    // - 依赖解析与正式加载合并: 不再先 dlopen 探测再 close 后重新
     //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 装配
     std::error_code          ec;
     std::string              libPath = path;
@@ -425,7 +425,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         }
     }
 
-    // entry 入口 (必需): 探测与加载合并 (B3) —— 一次 dlopen 内查符号
+    // entry 入口 (必需): 探测与加载合并 —— 一次 dlopen 内查符号
     std::string entryErr;
     auto        entryFn = reinterpret_cast<AgentxxClientPluginCreateFn>(
         NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE, entryErr)
@@ -438,6 +438,22 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     auto lifecycleStop = reinterpret_cast<AgentxxPluginStopFn>(
         NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP, lifecycleErr)
     );
+    // start/stop 是必备入口 (create 只构造, start 注册, stop 撤销):
+    // 缺少任一符号说明插件未按当前契约导出, 直接拒绝加载。
+    if (entryFn && (!lifecycleStart || !lifecycleStop)) {
+        XX_LOGE(
+            "[client_plugin] `{}` missing lifecycle entry ({}: {}; {}: {}); plugins must export "
+            "start/stop",
+            path,
+            AGENTXX_PLUGIN_CLIENT_SYMBOL_START,
+            lifecycleStart ? "ok" : lifecycleErr,
+            AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP,
+            lifecycleStop ? "ok" : lifecycleErr
+        );
+        releasePluginName(name);
+        NativeLoader::close(handle);
+        co_return nullptr;
+    }
     if (!entryFn) {
         // 接口声明意图预检: manifest 声明依赖 client 侧接口却未导出
         // client 入口 → 明确报错 (声明的期望优先于 sides==Auto 的静默容忍)
@@ -484,7 +500,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->version     = version;
     inst->description = desc;
     inst->path        = path;
-    // 插件配置参数随加载直接传入 (C2, 与 agent 侧一致): 宿主不解析字段语义,
+    // 插件配置参数随加载直接传入 (与 agent 侧一致): 宿主不解析字段语义,
     // 插件经 vtable get_plugin_args 整体读取; 直连路径 cfg 为 nullptr → {}
     inst->args            = cfg ? cfg->args : agentxx::util::Json::object();
     inst->configPath      = cfg ? cfg->configPath : std::string{};
@@ -501,10 +517,6 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // 卸载后继续调用，控制块 tombstone 保证这类迟到调用安全失败（见
     // [PluginHostControl]）。
     inst->hostControl = PluginHostControl::create(inst, hostVtable());
-
-    // (v4) min_ui_caps 位图限制已移除: 接口要求统一由上方清单 interfaces
-    // require 限制承担 (字符串集, 见
-    // [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h) 接口协商节)
 
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
     // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
@@ -528,35 +540,32 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     );
     if (rc != 0) {
         XX_LOGE("[client_plugin] `{}` entry failed (rc={})", name, rc);
-        detachAll(inst.get(), false);
+        detachAll(inst.get());
         inst->destroyPlugin();
         releasePluginName(name);
         // inst 随局部释放析构 → ~ClientPluginInstance → dlclose
         co_return nullptr;
     }
 
-    if (inst->lifecycleStart) {
-        std::string startError;
-        if (!co_await awaitPluginLifecycle(
-                runtime(),
-                inst,
-                inst->pluginCtx,
-                inst->lifecycleStart,
-                "client plugin start",
-                startError
-            )) {
-            XX_LOGE("[client_plugin] `{}` start failed: {}", name, startError);
-            detachAll(inst.get(), false);
-            inst->destroyPlugin();
-            releasePluginName(name);
-            if (inst->dlHandle) {
-                NativeLoader::close(inst->dlHandle);
-                inst->dlHandle = nullptr;
-            }
-            co_return nullptr;
+    std::string startError;
+    if (!co_await awaitPluginLifecycle(
+            runtime(),
+            inst,
+            inst->pluginCtx,
+            inst->lifecycleStart,
+            "client plugin start",
+            startError
+        )) {
+        XX_LOGE("[client_plugin] `{}` start failed: {}", name, startError);
+        detachAll(inst.get());
+        inst->destroyPlugin();
+        releasePluginName(name);
+        if (inst->dlHandle) {
+            NativeLoader::close(inst->dlHandle);
+            inst->dlHandle = nullptr;
         }
+        co_return nullptr;
     }
-    // 无 start 导出的插件在 create 之后即已激活：此后 destroy 前必须先 stop。
     inst->lifecycleStarted = true;
 
     inst->lifetime->setState(PluginInstanceState::Ready);
@@ -606,7 +615,7 @@ asio::awaitable<bool> ClientPluginManager::unloadAsyncUntil(
 
     // 摘除注册 (adapter 通知 UI 移除; 彻底清理) —— 先于等待, 插件卸载期间
     // 不再收到任何回调
-    detachAll(inst.get(), false);
+    detachAll(inst.get());
 
     if (inst->lifecycleStopPending()) {
         std::string stopError;
@@ -708,7 +717,7 @@ void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated)
     }
 
     // 摘除 UI 注册 (adapter 通知); 注册信息保留, enable 可恢复
-    detachAll(inst.get(), true);
+    detachAll(inst.get());
     XX_LOGI("[client_plugin] disabled: {}", inst->name);
 
     // 导出 stop 的插件: 把 stop 事务投递到 client io 线程, 撤销自管线程/定时器
@@ -744,13 +753,8 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
         enableImpl(d, false);
     }
 
-    if (inst->lifecycleStart) {
-        // 托管插件 (导出 start): 注册由插件 start 事务重新声明, 宿主不直接恢复记录
-        requestStartForEnable(inst);
-    } else {
-        // legacy 插件: 按宿主侧保存的注册记录恢复 UI 项 (句柄 + 注册表 + adapter 通知)
-        restoreHostSideUiRegistrations(inst.get());
-    }
+    // UI 注册由插件 start 事务重新声明 (宿主只负责投递与结果处理)
+    requestStartForEnable(inst);
     XX_LOGI("[client_plugin] enabled: {}", inst->name);
 
     // 级联恢复被级联禁用的依赖者 (用户显式禁用的不恢复)
@@ -760,184 +764,8 @@ void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) 
     }
 }
 
-/// 恢复宿主侧已保存的 UI 注册记录 (legacy 插件路径; 无 start 导出时使用):
-/// 重建句柄 + 写回 COW 注册表 + 通知 UI 适配器。
-void ClientPluginManager::restoreHostSideUiRegistrations(ClientPluginInstance* inst) {
-    if (!inst) {
-        return;
-    }
-    // 恢复 UI 注册 (注册信息在 disable 时保留): 重建句柄 + 写回注册表 + adapter 通知
-    for (const auto& reg : inst->statusItemRegs) {
-        auto h    = std::make_shared<AgentxxStatusItem>();
-        h->inst   = inst;
-        h->id     = reg.id;
-        h->plugin = reg.plugin;
-        {
-            std::lock_guard<std::mutex> lock(uiMutex_);
-            auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-            bool                        dup = false;
-            for (const auto& s : cur->statusItems) {
-                if (s.id == reg.id) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) {
-                cur->statusItems.push_back(reg);
-            }
-            uiRegistry_ = std::move(cur);
-        }
-        inst->statusItemHandles.push_back(h);
-        if (uiAdapter_) {
-            agentxx::util::Json props = agentxx::util::Json::object();
-            props["text"]             = reg.text;
-            uiAdapter_->onStatusItemRegistered(reg.id, props, reg.align, reg.order);
-        }
-    }
-    for (const auto& reg : inst->panelRegs) {
-        auto h    = std::make_shared<AgentxxPanel>();
-        h->inst   = inst;
-        h->id     = reg.id;
-        h->plugin = reg.plugin;
-        {
-            std::lock_guard<std::mutex> lock(uiMutex_);
-            auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-            bool                        dup = false;
-            for (const auto& p : cur->panels) {
-                if (p.id == reg.id) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) {
-                cur->panels.push_back(reg);
-            }
-            uiRegistry_ = std::move(cur);
-        }
-        inst->panelHandles.push_back(h);
-        if (uiAdapter_) {
-            agentxx::util::Json props = agentxx::util::Json::object();
-            props["title"]            = reg.title;
-            uiAdapter_->onPanelRegistered(reg.id, props);
-        }
-    }
-    for (const auto& reg : inst->infoSectionRegs) {
-        auto h    = std::make_shared<AgentxxInfoSection>();
-        h->inst   = inst;
-        h->id     = reg.id;
-        h->plugin = reg.plugin;
-        {
-            std::lock_guard<std::mutex> lock(uiMutex_);
-            auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-            bool                        dup = false;
-            for (const auto& s : cur->infoSections) {
-                if (s.id == reg.id) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) {
-                cur->infoSections.push_back(reg);
-            }
-            uiRegistry_ = std::move(cur);
-        }
-        inst->infoSectionHandles.push_back(h);
-        if (uiAdapter_) {
-            agentxx::util::Json props = agentxx::util::Json::object();
-            props["title"]            = reg.title;
-            uiAdapter_->onInfoSectionRegistered(reg.id, props);
-        }
-    }
-    for (const auto& reg : inst->commandRegs) {
-        {
-            std::lock_guard<std::mutex> lock(uiMutex_);
-            auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-            bool                        dup = false;
-            for (const auto& c : cur->commands) {
-                if (c.name == reg.name && c.plugin == reg.plugin) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) {
-                cur->commands.push_back(reg);
-            }
-            uiRegistry_ = std::move(cur);
-        }
-    }
-    // 工具消息装饰恢复 (无句柄, 直接写回注册表)
-    for (const auto& reg : inst->toolDecorRegs) {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        bool                        dup = false;
-        for (const auto& d : cur->toolDecors) {
-            if (d.plugin == inst->name && d.toolCallId == reg.toolCallId) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            cur->toolDecors.push_back(reg);
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    // 工具特化渲染器恢复 (直接写回注册表)
-    for (auto& stored : inst->toolRenderRegs) {
-        auto reg            = stored;
-        reg.lease           = std::make_shared<ClientToolRendererLease>();
-        reg.lease->instance = inst->self;
-        stored.lease        = reg.lease;
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        bool                        dup = false;
-        for (const auto& r : cur->toolRenderers) {
-            if (r.plugin == inst->name && r.toolName == reg.toolName) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            cur->toolRenderers.push_back(reg);
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    // 通用动作绑定恢复 (直接写回注册表快照, UI 线程恢复可点)
-    for (const auto& reg : inst->actionRegs) {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        bool                        dup = false;
-        for (const auto& b : cur->actionBindings) {
-            if (b.plugin == inst->name && b.targetId == reg.targetId) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            cur->actionBindings.push_back(reg);
-        }
-        uiRegistry_ = std::move(cur);
-    }
-}
-
 void ClientPluginManager::enable(std::string_view name) {
     enableImpl(name, true);
-}
-
-/// 清空"由插件 start 事务重新声明"的注册记录 (stop 成功后调用):
-/// 避免下次 start 在旧记录上重复累积 (UI 项/订阅/渲染器/动作绑定)。
-void ClientPluginManager::clearPluginOwnedUiRegistrations(ClientPluginInstance* inst) {
-    if (!inst) {
-        return;
-    }
-    inst->statusItemRegs.clear();
-    inst->panelRegs.clear();
-    inst->infoSectionRegs.clear();
-    inst->commandRegs.clear();
-    inst->toolDecorRegs.clear();
-    inst->toolRenderRegs.clear();
-    inst->actionRegs.clear();
-    inst->subscriptions.clear();
-    inst->subHandles.clear();
 }
 
 /// 按需投递禁用事务 (仅导出 stop 且"已 start 未 stop"的实例需要)。
@@ -1027,7 +855,6 @@ asio::awaitable<void> ClientPluginManager::stopForDisable(std::shared_ptr<Client
         co_return;
     }
     inst->lifecycleStopped = true;
-    clearPluginOwnedUiRegistrations(inst.get());
     XX_LOGI("[client_plugin] `{}` stopped for disable", inst->name);
     co_return;
 }
@@ -1056,7 +883,6 @@ asio::awaitable<void> ClientPluginManager::startForEnable(std::shared_ptr<Client
             co_return;
         }
         inst->lifecycleStopped = true;
-        clearPluginOwnedUiRegistrations(inst.get());
     }
     if (!inst->enabled) {
         co_return; // 等待 stop 期间用户又禁用了该插件
@@ -1075,8 +901,7 @@ asio::awaitable<void> ClientPluginManager::startForEnable(std::shared_ptr<Client
         if (inst->lifetime) {
             inst->lifetime->setState(PluginInstanceState::Disabled);
         }
-        detachAll(inst.get(), true);
-        clearPluginOwnedUiRegistrations(inst.get());
+        detachAll(inst.get());
         XX_LOGE("[client_plugin] `{}` start failed while enabling: {}", inst->name, error);
         co_return;
     }
@@ -1169,7 +994,7 @@ asio::awaitable<void>
     // 由 loadNativeAsync 的依赖检查报错)
     auto ordered = topoSortPlugins(std::move(items));
 
-    // 依次加载 (Auto 无 client 入口时由 loadNativeAsync 静默跳过; B3:
+    // 依次加载 (Auto 无 client 入口时由 loadNativeAsync 静默跳过:
     // 探测与正式加载合并为一次 dlopen)
     for (const auto& it : ordered) {
         if (it.name.empty()) {
@@ -1257,7 +1082,7 @@ void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPlugi
             shutdownClientPlugin(depInst);
         }
     }
-    detachAll(inst.get(), false);
+    detachAll(inst.get());
     // stop 事务尚未完成时不能 destroy/dlclose：同步路径无法等待该事务，
     // 只能保留实例并标记 CloseFailed，等待 shutdownAsync/unloadAsync 收尾。
     if (inst->lifecycleStopPending()) {
@@ -1308,7 +1133,7 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
         v.path               = inst->path;
         v.configPath         = inst->configPath;
         v.enabled            = inst->enabled;
-        v.inflight           = inst->inflight.load(std::memory_order_relaxed);
+        v.inflight           = inst->lifetime ? inst->lifetime->leaseCount() : 0;
         v.depends            = inst->depends;
         v.optionalDepends    = inst->optionalDepends;
         v.requiredInterfaces = inst->interfaces.require;
@@ -1611,7 +1436,7 @@ void ClientPluginManager::performToolRender(
             }
         }
     }
-    // 输出字段无论成功/失败/异常路径都由宿主释放 (plugin.md 第 8.2 节)
+    // 输出字段无论成功/失败/异常路径都由宿主释放
     hostMemoryFree(output.displayName.data);
     hostMemoryFree(output.summary.data);
     hostMemoryFree(output.items_json.data);
@@ -1891,82 +1716,43 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
 
 // ==================== 内部 ====================
 
-void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
+/// 摘除插件在宿主侧的 UI 注册与订阅 (禁用与卸载共用):
+/// - 旧 COW 快照中的自定义 renderer 先失效, UI 线程只能回退通用渲染;
+/// - UI 注册表一次性重建 (COW), adapter 按注册记录逐项通知移除;
+/// - 注册记录与订阅句柄一并清空: 重新启用时由插件 start 事务重新声明。
+///
+/// 句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles) 不在此释放:
+/// 插件的 stop 回调可能主动反注册, 句柄必须存活到实例析构, 由 ~ClientPluginInstance 统一释放。
+void ClientPluginManager::detachAll(ClientPluginInstance* inst) {
     if (!inst) {
         return;
     }
-    // 先使所有旧 COW 快照中的自定义 renderer 失效；UI 线程即使还持有
-    // 快照也只能回退通用展示，不能在 dlclose 后调用插件函数指针。
     for (auto& renderer : inst->toolRenderRegs) {
         if (renderer.lease) {
             renderer.lease->alive.store(false, std::memory_order_release);
         }
     }
-    // 语义缓存同步失效: 禁用/卸载后 UI 只读缓存, 不重算就应回退通用渲染
+    // 语义渲染缓存同步失效: 禁用/卸载后 UI 只读缓存, 未重算即回退通用渲染
     toolRenderCache_->invalidatePlugin(inst->name);
-    // 从 UI 注册表摘除 (adapter 通知)
+
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        reg = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        auto&                       st  = reg->statusItems;
-        for (auto it = st.begin(); it != st.end();) {
-            if (it->plugin == inst->name) {
-                it = st.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        auto& pn = reg->panels;
-        for (auto it = pn.begin(); it != pn.end();) {
-            if (it->plugin == inst->name) {
-                it = pn.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        auto& inf = reg->infoSections;
-        for (auto it = inf.begin(); it != inf.end();) {
-            if (it->plugin == inst->name) {
-                it = inf.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        auto& td = reg->toolDecors;
-        for (auto it = td.begin(); it != td.end();) {
-            if (it->plugin == inst->name) {
-                it = td.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        auto& tr = reg->toolRenderers;
-        for (auto it = tr.begin(); it != tr.end();) {
-            if (it->plugin == inst->name) {
-                it = tr.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        auto& ab = reg->actionBindings;
-        for (auto it = ab.begin(); it != ab.end();) {
-            if (it->plugin == inst->name) {
-                it = ab.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        auto& cm = reg->commands;
-        for (auto it = cm.begin(); it != cm.end();) {
-            if (it->plugin == inst->name) {
-                it = cm.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        auto                        reg  = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        auto                        drop = [inst](auto& entries) {
+            std::erase_if(entries, [inst](const auto& item) {
+                return item.plugin == inst->name;
+            });
+        };
+        drop(reg->statusItems);
+        drop(reg->panels);
+        drop(reg->infoSections);
+        drop(reg->toolDecors);
+        drop(reg->toolRenderers);
+        drop(reg->actionBindings);
+        drop(reg->commands);
         uiRegistry_ = std::move(reg);
     }
-    // adapter 信号
+
     if (uiAdapter_) {
         for (const auto& s : inst->statusItemRegs) {
             uiAdapter_->onStatusItemRemoved(s.id);
@@ -1978,30 +1764,23 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst, bool keepInfo) {
             uiAdapter_->onInfoSectionRemoved(is.id);
         }
     }
-    // 注意: 句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles)
-    // 不在此释放 —— 插件的 unload 回调 (detachAll 之后、实例析构之前调用)
-    // 可能主动反注册 (unregister_status_item 等), 句柄必须存活到实例析构;
-    // 由 ~ClientPluginInstance 统一释放 (实例在 plugins_.erase 后所有
-    // shared_ptr 释放时析构, 晚于 unload 回调)
-    if (!keepInfo) {
-        // 彻底清理 (unload/shutdown 路径):
-        // - 订阅句柄断链 (B8): unload 回调内插件主动 unsubscribe 时,
-        //   impl->inst 已置空 → xx_cunsubscribe 安全跳过 (句柄由 subHandles
-        //   保活到实例析构, 不解引用已释放内存)
-        for (const auto& h : inst->subHandles) {
-            auto impl  = std::static_pointer_cast<ClientSubscriptionImpl>(h);
-            impl->inst = nullptr;
-            impl->sub.reset();
-        }
-        inst->statusItemRegs.clear();
-        inst->panelRegs.clear();
-        inst->infoSectionRegs.clear();
-        inst->commandRegs.clear();
-        inst->toolDecorRegs.clear();
-        inst->toolRenderRegs.clear();
-        inst->actionRegs.clear();
-        inst->subscriptions.clear();
+
+    // 订阅句柄断链: stop 回调内插件主动 unsubscribe 时 impl->inst 已置空,
+    // xx_cunsubscribe 安全跳过 (句柄由 subHandles 保活到实例析构, 不解引用已释放内存)
+    for (const auto& h : inst->subHandles) {
+        auto impl  = std::static_pointer_cast<ClientSubscriptionImpl>(h);
+        impl->inst = nullptr;
+        impl->sub.reset();
     }
+    inst->statusItemRegs.clear();
+    inst->panelRegs.clear();
+    inst->infoSectionRegs.clear();
+    inst->commandRegs.clear();
+    inst->toolDecorRegs.clear();
+    inst->toolRenderRegs.clear();
+    inst->actionRegs.clear();
+    inst->subscriptions.clear();
+    inst->subHandles.clear();
 }
 
 /// 反向必选依赖收集 → 公共 collectReverseRequiredDeps
@@ -2077,6 +1856,66 @@ using ClientHostCall = PluginHostCall<ClientPluginInstance, ClientPluginManager>
 ///   IO 线程执行"的阶段，见 [ioCallSyncKeep]。
 static ClientHostCall enterClientHost(const AgentxxPluginHost* host, bool allowClosing = false) {
     return enterPluginHost<ClientPluginInstance, ClientPluginManager>(host, allowClosing);
+}
+
+/// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 client IO 线程执行。
+///
+/// - 参数视图只在本次调用内有效, 闭包必须按值捕获自己需要的拷贝;
+/// - `fallback` 是失败返回值 (句柄入口传 nullptr, 状态码入口传 -1);
+/// - `fn` 拿到实例与管理器 (投递期间由 `keep` 保活, 含 admission lease),
+///   业务参数校验由入口自己完成后传入。
+template<typename Ret, typename Fn>
+static Ret onClientIo(const AgentxxPluginHost* host, Ret fallback, Fn&& fn) {
+    return agentxx::plugin::guardVtableCall(fallback, [&]() -> Ret {
+        auto call = enterClientHost(host);
+        if (!call.ok()) {
+            return fallback;
+        }
+        auto keep = call; // 投递期间持实例/管理器强引用与 admission lease
+        return ioCallSyncKeep<Ret>(
+            keep,
+            keep.manager(),
+            [keep, fn = std::forward<Fn>(fn)]() -> Ret {
+                return fn(keep.instance(), keep.manager());
+            }
+        );
+    });
+}
+
+/// 撤销类入口 (无返回值) 的公共骨架
+template<typename Fn>
+static void onClientIoVoid(const AgentxxPluginHost* host, Fn&& fn) {
+    agentxx::plugin::guardVtableCallVoid([&]() {
+        auto call = enterClientHost(host);
+        if (!call.ok()) {
+            return;
+        }
+        auto keep = call;
+        ioCallSyncVoidKeep(keep, keep.manager(), [keep, fn = std::forward<Fn>(fn)]() {
+            fn(keep.instance(), keep.manager());
+        });
+    });
+}
+
+/// 只读查询类入口的公共骨架 (允许关闭中查询):
+/// 在 IO 线程取字符串结果 → 经 host->alloc 写入 `out`; 结果为空按失败返回 -1。
+template<typename Fn>
+static int32_t queryClientString(const AgentxxPluginHost* host, AgentxxPluginString* out, Fn&& fn) {
+    if (!out) {
+        return -1;
+    }
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [out, fn = std::forward<Fn>(fn)](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+            auto text = fn(inst, mgr);
+            if (text.empty()) {
+                return -1;
+            }
+            hostMemorySetString(out, text);
+            return 0;
+        }
+    );
 }
 
 /// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表装配区, 需在
@@ -2296,22 +2135,21 @@ AgentxxStatusItem* AGENTXX_PLUGIN_CALL xx_cregister_status_item(
     int32_t                        align,
     int32_t                        order
 ) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxStatusItem* {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
-            return static_cast<AgentxxStatusItem*>(nullptr);
-        }
-        auto idVal = *id;
-        auto jsonVal
-            = initial_json ? *initial_json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSyncKeep<AgentxxStatusItem*>(call, mgr, [&]() -> AgentxxStatusItem* {
+    if (agentxx::plugin::PluginStringView::empty(id)) {
+        return nullptr;
+    }
+    auto idVal   = *id;
+    auto jsonVal = initial_json ? *initial_json : agentxx::plugin::PluginStringView::from("{}", 2);
+    return onClientIo<AgentxxStatusItem*>(
+        host,
+        nullptr,
+        [idVal, jsonVal, align, order](ClientPluginInstance* inst, ClientPluginManager* mgr)
+            -> AgentxxStatusItem* {
             return static_cast<AgentxxStatusItem*>(
                 mgr->registerStatusItem(inst, idVal, jsonVal, align, order)
             );
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL xx_cupdate_status_item(
@@ -2319,32 +2157,26 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_status_item(
     AgentxxStatusItem*             item,
     const AgentxxPluginStringView* json
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !item || !json) {
-            return -1;
-        }
-        auto jsonVal = *json;
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!item || !json) {
+        return -1;
+    }
+    auto jsonVal = *json;
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [item, jsonVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->updateStatusItem(inst, item, jsonVal);
-        });
-    });
+        }
+    );
 }
 
 void AGENTXX_PLUGIN_CALL
     xx_cunregister_status_item(const AgentxxPluginHost* host, AgentxxStatusItem* item) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !item) {
-            return;
-        }
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->unregisterStatusItem(inst, item);
-        });
+    if (!item) {
+        return;
+    }
+    onClientIoVoid(host, [item](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->unregisterStatusItem(inst, item);
     });
 }
 
@@ -2355,19 +2187,18 @@ AgentxxPanel* AGENTXX_PLUGIN_CALL xx_cregister_panel(
     const AgentxxPluginStringView* id,
     const AgentxxPluginStringView* props_json
 ) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPanel* {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
-            return static_cast<AgentxxPanel*>(nullptr);
-        }
-        auto idVal    = *id;
-        auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSyncKeep<AgentxxPanel*>(call, mgr, [&]() -> AgentxxPanel* {
+    if (agentxx::plugin::PluginStringView::empty(id)) {
+        return nullptr;
+    }
+    auto idVal    = *id;
+    auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
+    return onClientIo<AgentxxPanel*>(
+        host,
+        nullptr,
+        [idVal, propsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) -> AgentxxPanel* {
             return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idVal, propsVal));
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL xx_cupdate_panel(
@@ -2375,31 +2206,25 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_panel(
     AgentxxPanel*                  panel,
     const AgentxxPluginStringView* items_json
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !panel || !items_json) {
-            return -1;
-        }
-        auto itemsVal = *items_json;
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!panel || !items_json) {
+        return -1;
+    }
+    auto itemsVal = *items_json;
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [panel, itemsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->updatePanel(inst, panel, itemsVal);
-        });
-    });
+        }
+    );
 }
 
 void AGENTXX_PLUGIN_CALL xx_cunregister_panel(const AgentxxPluginHost* host, AgentxxPanel* panel) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !panel) {
-            return;
-        }
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->unregisterPanel(inst, panel);
-        });
+    if (!panel) {
+        return;
+    }
+    onClientIoVoid(host, [panel](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->unregisterPanel(inst, panel);
     });
 }
 
@@ -2410,20 +2235,20 @@ AgentxxInfoSection* AGENTXX_PLUGIN_CALL xx_cregister_info_section(
     const AgentxxPluginStringView* id,
     const AgentxxPluginStringView* props_json
 ) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxInfoSection* {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(id)) {
-            return static_cast<AgentxxInfoSection*>(nullptr);
-        }
-        auto idVal    = *id;
-        auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSyncKeep<AgentxxInfoSection*>(call, mgr, [&]() -> AgentxxInfoSection* {
+    if (agentxx::plugin::PluginStringView::empty(id)) {
+        return nullptr;
+    }
+    auto idVal    = *id;
+    auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
+    return onClientIo<AgentxxInfoSection*>(
+        host,
+        nullptr,
+        [idVal,
+         propsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) -> AgentxxInfoSection* {
             return static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(inst, idVal, propsVal)
             );
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL xx_cupdate_info_section(
@@ -2431,32 +2256,26 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_info_section(
     AgentxxInfoSection*            section,
     const AgentxxPluginStringView* items_json
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !section || !items_json) {
-            return -1;
-        }
-        auto itemsVal = *items_json;
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!section || !items_json) {
+        return -1;
+    }
+    auto itemsVal = *items_json;
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [section, itemsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->updateInfoSection(inst, section, itemsVal);
-        });
-    });
+        }
+    );
 }
 
 void AGENTXX_PLUGIN_CALL
     xx_cunregister_info_section(const AgentxxPluginHost* host, AgentxxInfoSection* section) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !section) {
-            return;
-        }
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->unregisterInfoSection(inst, section);
-        });
+    if (!section) {
+        return;
+    }
+    onClientIoVoid(host, [section](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->unregisterInfoSection(inst, section);
     });
 }
 
@@ -2465,53 +2284,46 @@ int32_t AGENTXX_PLUGIN_CALL xx_cupdate_tool_decor(
     const AgentxxPluginStringView* tool_call_id,
     const AgentxxPluginStringView* decor_json
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return -1;
-        }
-        auto tcidVal
-            = tool_call_id ? *tool_call_id : agentxx::plugin::PluginStringView::from("", 0);
-        auto decorVal = decor_json ? *decor_json : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    auto tcidVal  = tool_call_id ? *tool_call_id : agentxx::plugin::PluginStringView::from("", 0);
+    auto decorVal = decor_json ? *decor_json : agentxx::plugin::PluginStringView::from("", 0);
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [tcidVal, decorVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->updateToolDecor(inst, tcidVal, decorVal);
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_cregister_tool_renderer(const AgentxxPluginHost* host, const AgentxxToolRenderSpec* spec) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !spec) {
-            return -1;
-        }
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!spec) {
+        return -1;
+    }
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->registerToolRenderer(inst, spec);
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL xx_cunregister_tool_renderer(
     const AgentxxPluginHost*       host,
     const AgentxxPluginStringView* tool_name
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !tool_name) {
-            return -1;
-        }
-        auto tnameVal = *tool_name;
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!tool_name) {
+        return -1;
+    }
+    auto tnameVal = *tool_name;
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [tnameVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->unregisterToolRenderer(inst, tnameVal);
-        });
-    });
+        }
+    );
 }
 
 // ---- 命令 ----
@@ -2524,35 +2336,33 @@ int32_t AGENTXX_PLUGIN_CALL xx_cregister_command(
                 execute)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
     void* ud
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !execute || agentxx::plugin::PluginStringView::empty(name)) {
-            return -1;
-        }
-        auto nameVal = *name;
-        auto descVal = description ? *description : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!execute || agentxx::plugin::PluginStringView::empty(name)) {
+        return -1;
+    }
+    auto nameVal = *name;
+    auto descVal = description ? *description : agentxx::plugin::PluginStringView::from("", 0);
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [nameVal, descVal, execute, ud](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->registerCommand(inst, nameVal, descVal, execute, ud);
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_cunregister_command(const AgentxxPluginHost* host, const AgentxxPluginStringView* name) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(name)) {
-            return -1;
-        }
-        auto nameVal = *name;
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (agentxx::plugin::PluginStringView::empty(name)) {
+        return -1;
+    }
+    auto nameVal = *name;
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [nameVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->unregisterCommand(inst, nameVal);
-        });
-    });
+        }
+    );
 }
 
 // ---- toast ----
@@ -2562,16 +2372,14 @@ void AGENTXX_PLUGIN_CALL xx_cshow_toast(
     const AgentxxPluginStringView* text,
     int32_t                        level
 ) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        if (!mgr || !mgr->uiAdapter() || !text) {
-            return;
+    if (!text || !text->data) {
+        return;
+    }
+    std::string textStr{text->data, static_cast<size_t>(text->size)};
+    onClientIoVoid(host, [textStr, level](ClientPluginInstance*, ClientPluginManager* mgr) {
+        if (auto adapter = mgr->uiAdapter()) {
+            adapter->onToast(textStr, level);
         }
-        std::string textStr{text->data ? text->data : "", static_cast<size_t>(text->size)};
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->uiAdapter()->onToast(textStr, level);
-        });
     });
 }
 
@@ -2583,26 +2391,19 @@ AgentxxPluginSubscription* AGENTXX_PLUGIN_CALL xx_csubscribe(
     void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView*, void*),
     void* ud
 ) {
-    return agentxx::plugin::guardVtableCall(nullptr, [&]() -> AgentxxPluginSubscription* {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !handler) {
-            return static_cast<AgentxxPluginSubscription*>(nullptr);
+    if (!handler || event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
+        return nullptr;
+    }
+    return onClientIo<AgentxxPluginSubscription*>(
+        host,
+        nullptr,
+        [event,
+         handler,
+         ud](ClientPluginInstance* inst, ClientPluginManager* mgr) -> AgentxxPluginSubscription* {
+            return static_cast<AgentxxPluginSubscription*>(mgr->subscribe(inst, event, handler, ud)
+            );
         }
-        if (event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
-            return static_cast<AgentxxPluginSubscription*>(nullptr);
-        }
-        return ioCallSyncKeep<AgentxxPluginSubscription*>(
-            call,
-            mgr,
-            [&]() -> AgentxxPluginSubscription* {
-                return static_cast<AgentxxPluginSubscription*>(
-                    mgr->subscribe(inst, event, handler, ud)
-                );
-            }
-        );
-    });
+    );
 }
 
 void AGENTXX_PLUGIN_CALL xx_cunsubscribe(AgentxxPluginSubscription* sub) {
@@ -2627,20 +2428,8 @@ void AGENTXX_PLUGIN_CALL xx_cunsubscribe(AgentxxPluginSubscription* sub) {
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_cget_client_state(const AgentxxPluginHost* host, AgentxxPluginString* out) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        if (!out) {
-            return -1;
-        }
-        auto call = enterClientHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        if (!mgr) {
-            return -1;
-        }
-        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
-            return mgr->clientStateJson();
-        });
-        hostMemorySetString(out, s);
-        return 0;
+    return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
+        return mgr->clientStateJson();
     });
 }
 
@@ -2651,35 +2440,26 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_user_input(
     const AgentxxPluginStringView* thread_id,
     const AgentxxPluginStringView* text
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(text)) {
-            return -1;
-        }
-        auto tidVal  = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
-        auto textVal = *text;
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (agentxx::plugin::PluginStringView::empty(text)) {
+        return -1;
+    }
+    auto tidVal  = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
+    auto textVal = *text;
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [tidVal, textVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             mgr->sendUserInputToPeer(inst, tidVal, textVal);
             return 0;
-        });
-    });
+        }
+    );
 }
 
 void AGENTXX_PLUGIN_CALL
     xx_crequest_cancel(const AgentxxPluginHost* host, const AgentxxPluginStringView* thread_id) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return;
-        }
-        auto tidVal = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->requestCancelToPeer(inst, tidVal);
-        });
+    auto tidVal = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
+    onClientIoVoid(host, [tidVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->requestCancelToPeer(inst, tidVal);
     });
 }
 
@@ -2690,122 +2470,58 @@ int32_t AGENTXX_PLUGIN_CALL xx_csend_plugin_data(
     const AgentxxPluginStringView* event,
     const AgentxxPluginStringView* json
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(event)) {
-            return -1;
-        }
-        auto evtVal  = *event;
-        auto jsonVal = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (agentxx::plugin::PluginStringView::empty(event)) {
+        return -1;
+    }
+    auto evtVal  = *event;
+    auto jsonVal = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [evtVal, jsonVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->sendPluginDataToPeer(inst, evtVal, jsonVal);
-        });
-    });
+        }
+    );
 }
 
 // ---- 自描述 ----
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_cget_own_info(const AgentxxPluginHost* host, AgentxxPluginString* out) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        if (!out) {
-            return -1;
-        }
-        auto call = enterClientHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return -1;
-        }
-        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
-            return mgr->getOwnInfoJson(inst);
-        });
-        hostMemorySetString(out, s);
-        return 0;
+    return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        return mgr->getOwnInfoJson(inst);
     });
 }
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_cget_plugin_args(const AgentxxPluginHost* host, AgentxxPluginString* out) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        if (!out) {
-            return -1;
-        }
-        auto call = enterClientHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return -1;
-        }
-        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
-            return mgr->getPluginArgsJson(inst);
-        });
-        hostMemorySetString(out, s);
-        return 0;
+    return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        return mgr->getPluginArgsJson(inst);
     });
 }
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_cget_plugin_config_path(const AgentxxPluginHost* host, AgentxxPluginString* out) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        if (!out) {
-            return -1;
-        }
-        auto call = enterClientHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || inst->configPath.empty()) {
-            return -1;
-        }
-        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
-            return mgr->getPluginConfigPath(inst);
-        });
-        if (s.empty()) {
-            return -1;
-        }
-        hostMemorySetString(out, s);
-        return 0;
+    return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        return mgr->getPluginConfigPath(inst);
     });
 }
 
 static int32_t AGENTXX_PLUGIN_CALL
     xx_cget_language(const AgentxxPluginHost* host, AgentxxPluginString* out) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        if (!out) {
-            return -1;
-        }
-        auto call = enterClientHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        if (!mgr) {
-            return -1;
-        }
-        auto s = ioCallSyncKeep<std::string>(call, mgr, [&]() -> std::string {
-            return mgr->getLanguage();
-        });
-        if (s.empty()) {
-            s = "en";
-        }
-        hostMemorySetString(out, s);
-        return 0;
+    return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
+        auto lang = mgr->getLanguage();
+        return lang.empty() ? std::string{"en"} : lang;
     });
 }
 
 static int32_t AGENTXX_PLUGIN_CALL
     xx_cset_language(const AgentxxPluginHost* host, const AgentxxPluginStringView* language) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        if (!mgr) {
-            return -1;
-        }
-        std::string lang = (language && language->data)
-                               ? std::string(language->data, static_cast<size_t>(language->size))
-                               : std::string{};
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->setLanguage(lang);
-        });
+    std::string lang = (language && language->data)
+                           ? std::string(language->data, static_cast<size_t>(language->size))
+                           : std::string{};
+    return onClientIo<int32_t>(host, -1, [lang](ClientPluginInstance*, ClientPluginManager* mgr) {
+        mgr->setLanguage(lang);
         return 0;
     });
 }
@@ -2818,64 +2534,50 @@ int32_t AGENTXX_PLUGIN_CALL xx_cbind_action_handler(
     AgentxxUiActionFn              on_action,
     void*                          user_data
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !on_action) {
-            return -1;
-        }
-        auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!on_action) {
+        return -1;
+    }
+    auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [targetVal, on_action, user_data](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->bindActionHandler(inst, targetVal, on_action, user_data);
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL xx_cunbind_action_handler(
     const AgentxxPluginHost*       host,
     const AgentxxPluginStringView* target_id
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return -1;
-        }
-        auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [targetVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->unbindActionHandler(inst, targetVal);
-        });
-    });
+        }
+    );
 }
 
 int32_t AGENTXX_PLUGIN_CALL
     xx_copen_overlay(const AgentxxPluginHost* host, const AgentxxOverlaySpec* spec) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !spec) {
-            return -1;
-        }
-        return ioCallSyncKeep<int32_t>(call, mgr, [&]() -> int32_t {
+    if (!spec) {
+        return -1;
+    }
+    return onClientIo<int32_t>(
+        host,
+        -1,
+        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             return mgr->openOverlay(inst, spec);
-        });
-    });
+        }
+    );
 }
 
 void AGENTXX_PLUGIN_CALL xx_cclose_overlay(const AgentxxPluginHost* host) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return;
-        }
-        ioCallSyncVoidKeep(call, mgr, [&]() {
-            mgr->closeOverlay(inst);
-        });
+    onClientIoVoid(host, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->closeOverlay(inst);
     });
 }
 
@@ -2966,7 +2668,7 @@ const AgentxxPluginCoroutineRuntimeIface g_clientIfaceCoroutineRuntime = {
     /* is_io_thread */ xx_cis_io_thread,
 };
 
-/// 核心 vtable (契约冻结: 仅内存两件套 + query_interface)
+/// 核心 vtable (契约冻结: 仅内存操作 + query_interface)
 const AgentxxHostVtable g_clientHostVtable = {
     /* alloc */ xx_calloc,
     /* free */ xx_cfree,
@@ -4130,7 +3832,7 @@ ClientToolRenderResult renderClientTool(
         for (const auto& r : reg->toolRenderers) {
             if (r.toolName == toolName) {
                 if (r.renderFn) {
-                    // 自定义 renderer 只在 client io 线程执行 (plugin.md 第 8.2 节):
+                    // 自定义 renderer 只在 client io 线程执行:
                     // UI 线程只用语义缓存; 未命中则本次通用回退 + 提交渲染请求。
                     if (!cache) {
                         return res;

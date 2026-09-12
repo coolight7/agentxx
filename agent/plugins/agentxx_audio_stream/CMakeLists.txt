@@ -12,8 +12,8 @@ set(PLUGIN_NAME agentxx_audio_stream)
 # 当前为**全平台跳过** (平台列表为空):
 # - Windows WASAPI 实现尚未启用 (audio_stream.cpp 中 `#if XX_IS_WIN_D && false`,
 #   实际走 "not implemented on this platform" 桩分支), 即本插件在所有平台都只是
-#   桩实现; 按 Reset-v1 要求 (见 resource/history/plugin-refactor-2/plugin.md 2.3),
-#   CMake 不得把未实现能力伪装为已支持 → 在真实实现完成并通过验证前不进入构建产物。
+#   桩实现; 宿主不把未实现能力伪装为已支持 → 在真实实现完成并通过验证前
+#   不进入构建产物。
 # - 恢复方式: 实现可用后在下面的 gate 调用中声明平台 (如 windows) 并同步更新
 #   docs/zh-cn/design/plugins.md 平台矩阵。
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
@@ -34,6 +34,8 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "agentxx_plugin_agent_create=agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}"
     "agentxx_plugin_agent_get_info=agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}"
     "agentxx_plugin_agent_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_start=agentxx_plugin_agent_builtin_start_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_stop=agentxx_plugin_agent_builtin_stop_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # audio_stream.h / audio_stream_plugin.h
@@ -48,14 +50,6 @@ set_target_properties(${_target} PROPERTIES
     CXX_STANDARD 26
     CXX_STANDARD_REQUIRED OFF
   )
-  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
-    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
-extern \"C\" const AgentxxPluginInfo* agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}(void);
-extern \"C\" int agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}(const AgentxxHost* host, void** plugin_ctx);
-extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plugin_ctx);")
-  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
-    "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
-    {\"${PLUGIN_NAME}\", agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}, agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}},")
   if (XX_IS_WIN_D)
     # audio_stream: WASAPI (mmdevapi) / COM (ole32) / 进程名查询 (psapi)
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
@@ -67,8 +61,6 @@ extern \"C\" void agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}(void* plug
   # 不会误登记; 原由父目录 plugins/CMakeLists.txt 无条件追加, 现统一走此通道)
   list(APPEND AGENTXX_BUILTIN_PLUGIN_NAMES ${PLUGIN_NAME})
   set(AGENTXX_BUILTIN_PLUGIN_NAMES "${AGENTXX_BUILTIN_PLUGIN_NAMES}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}" PARENT_SCOPE)
-  set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}" PARENT_SCOPE)
   # 资源: plugin.yaml (运行期目录配置推导 depends/入口)
   set(_res "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
   # 资源拷贝 (自包含 ALL 目标: 跨目录 OUTPUT 不进构建图, 见 plugins.md;

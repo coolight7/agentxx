@@ -123,15 +123,11 @@ static void* stringStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(StringPluginCtx, stringStart, stringStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     StringPluginCtx,
     "agentxx_string",
     "1.0.0",
     "String tools: regex operations and html to markdown conversion",
-    [](StringPluginCtx&) -> int32_t {
-        // create 只构造上下文; 工具注册在 start 事务中执行。
-        return 0;
-    }
+    stringStart,
+    stringStop
 );

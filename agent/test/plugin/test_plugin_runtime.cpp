@@ -1071,7 +1071,8 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());
     }
 
-    /// 无 stop 导出的 legacy 插件仍走同步关闭 (新守卫不能变成无条件泄漏)。
+    /// 直接构造的伪实例 (无 stop 入口) 仍走同步关闭: 加载路径已要求真实插件
+    /// 必须导出 start/stop, 但关闭守卫不能因此变成无条件泄漏。
     {
         RuntimeFixture f;
         gLifecycleDestroys        = 0;

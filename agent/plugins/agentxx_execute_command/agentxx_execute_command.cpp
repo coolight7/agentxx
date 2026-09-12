@@ -252,17 +252,13 @@ static void* execStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ExecPluginCtx, execStart, execStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     ExecPluginCtx,
     "agentxx_execute_command",
     "1.0.0",
     "Execute system commands (bash/windows terminal) with timeout/cancellation",
-    [](ExecPluginCtx&) -> int32_t {
-        // create 只构造上下文; 工具注册在 start 事务中执行。
-        return 0;
-    }
+    execStart,
+    execStop
 );
 
 struct ExecClientCtx : public ClientPluginBase {};
@@ -309,15 +305,11 @@ static void* execClientStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ExecClientCtx, execClientStart, execClientStop)
-
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     ExecClientCtx,
     "agentxx_execute_command",
     "1.0.0",
     "Command execution specialized UI template renderer",
-    [](ExecClientCtx&) -> int32_t {
-        // create 只构造上下文; UI 注册在 start 事务中执行。
-        return 0;
-    }
+    execClientStart,
+    execClientStop
 );

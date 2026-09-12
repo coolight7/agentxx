@@ -21,6 +21,7 @@
 - **注释**: 
     - 编写代码时在需要注意的地方、设计描述应当有清晰的注释，请勿随意移除原代码中的注释
     - 注释和功能名称尽量不要用黑话、新名或比喻类比，应当使用简单易懂的词语和语句，比如不要使用 `在途, 触达, 水位, 对标, 赋能, 抓手, 沉淀, 组合拳, 弹药, 倒逼, 脱节, 旗标, 旁路, 门禁` 等词语
+    - 实现的代码注释不应添加 `A1`、`C2`、`B1` 等任务规划章节
     - 编写注释时，统一使用 markdown 风格，多行注释使用 `///` 开头, 示例(其中的 args 和 return 不必每一个都详细说明，尽量对需要注意、不容易从名称了解含义的进行说明):
 ```c++
 /// 英文字母转小写
@@ -106,7 +107,15 @@ path/to/agentxx_test string_util regex
 ## C++插件开发
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
-  【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `AGENTXX_PLUGIN_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 两件套 (去除了 `strdup`，采用头文件内联 `agentxx_plugin_strdup`)。
+  【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `AGENTXX_PLUGIN_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `agentxx_plugin_strdup`)。
+  【生命周期契约 (必备)】所有插件必须导出 `agentxx_plugin_{agent,client}_{start,stop}`:
+  `create` 只构造上下文 (`new Ctx + init(host)`, 不注册/不起线程), `start` 是注册事务
+  (在宿主 IO 线程执行, 失败返回 `NULL + error` 由宿主回滚), `stop` 撤销自管资源
+  (线程/定时器/订阅, 可重复), `destroy` 只释放本地对象。缺失 start/stop 的插件
+  宿主拒绝加载 (不再支持 create 期注册的旧形态)。
+  SDK 侧用 `AGENTXX_PLUGIN_AGENT_EXPORT(Ctx, Name, Ver, Desc, StartFn, StopFn)`
+  (client 侧同名参数) 一次生成五个入口; 手写 create/destroy 的插件用
+  `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 只生成 start/stop。
   【多实例契约】同一动态库可被同进程内不同 agent 宿主各自创建多个并存实例:
   ① 禁止可变全局/函数级 static 缓存; ② 实例状态只能放 `*plugin_ctx` 堆块,
   回调经 `spec.user_data` 恢复; ③ 接口表查询结果存实例上下文。
@@ -160,7 +169,7 @@ path/to/agentxx_test string_util regex
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
-Reset-v2 协程驱动 (2026-09, 见 docs/zh-cn/design/plugins.md §16, 方案 resource/history/plugin-refactor-3/):
+协程驱动 (见 docs/zh-cn/design/plugins.md §16):
 - 新增 C ABI 表 `agentxx.agent.coroutine_runtime` v1 (`request_driver` / `cancel_driver` /
   `is_io_thread`): 插件申请"有界驱动请求"、宿主异步执行一次 `poll_one` 式有限步骤;
   宿主 **永不内联** 回调, 一次票至多执行一次, 请求在排队/执行期间持实例 lease;
@@ -169,11 +178,11 @@ Reset-v2 协程驱动 (2026-09, 见 docs/zh-cn/design/plugins.md §16, 方案 re
   ready 队列; 按"已投递未执行步骤数"记账申请请求 (无工作不申请、不自旋);
   宿主回调只 `postToLocal + wake`, 绝不在回调栈内恢复插件协程;
   活跃根由桥持强引用、被放弃的根活到桥销毁 (帧与 op 句柄统一在 `destroyFrame` 释放)
-- 宿主不提供该表 (伪宿主/旧宿主) 时 kit 自动回退 `post_to_io` 路径
+- `coroutine_runtime` 是宿主必备能力: 不提供时 kit 无法推进插件协程
+  (驱动请求失败会终结在途根并记日志), 不保留 `post_to_io` 回退路径
 - **声明式受控轮询 (`polled_tool`)**: 插件私有 reactor 上的内核就绪等待 (socket/子进程
   管道/文件/本地 timer) 由桥按"只有有在途操作时轮询 (10ms 退避量子、有进展立即续、
   连续 256 步后让出 1ms)"驱动 —— 参数显式可观测, 禁止**隐藏**轮询;
-  宿主无 `coroutine_runtime`/`scheduler.sleep` 时自动降级为 offload 工作线程跑完;
   未声明 polled 却依赖私有 reactor 时桥只输出诊断 (8 次无进展告警), 不自旋
 - 已迁移 `polled_tool`: `agentxx_websearch` (search/fetch/fetch_markdown)、
   `agentxx_execute_command` (bash/windows, Boost.Process v2 分支)、

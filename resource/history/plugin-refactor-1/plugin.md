@@ -34,7 +34,7 @@ Agentxx 插件系统基于纯 C ABI 与 COM 风格接口表查询，但在演进
 3. **显式调用约定**：跨边界导出符号、接口表函数指针与回调统一标注 `AGENTXX_PLUGIN_CALL`（Windows: `__stdcall`，x64 Linux/Unix 为空）；
 4. **结构体传递与返回值规范**：禁止按值跨边界传递非 POD 聚合体，结构体入参统一为指针（`const Struct*`）；结构体返回值统一为函数出参（`Struct* out`）并以 `int32_t` 作为状态码返回（`0` 表示成功）；
 5. **冻结核心 vtable（极简正交基）**：
-   - 跨 CRT 堆内存管理两件套：`alloc(uint64_t)` / `free(void*)`；
+   - 跨 CRT 堆内存管理操作：`alloc(uint64_t)` / `free(void*)`；
    - COM 风格能力查询：`query_interface(host, iid)`。
 
 ### 2.2 全局版本与接口表重置清单（全部为 Version 1）

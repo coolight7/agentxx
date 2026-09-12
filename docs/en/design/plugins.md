@@ -171,7 +171,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         //     Registration declares "this tool needs controlled polling"; the bridge then keeps
         //     requesting tickets while the operation is in flight (immediate on progress, 10ms
         //     backoff when idle, zero overhead when idle) and never occupies a host worker
-        //     thread. Hosts without coroutine_runtime downgrade to an offload worker. See §15.5.
+        //     thread. See §15.5.
         polled_tool(
             ctx,
             "my_polled_tool",
@@ -243,7 +243,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - **Registration**: `spawn()` automatically calls `register_task` (on the IO thread) → Host records the handle into the instance's `outstandingOps` (shared with tool ops) and holds an `inflight` reference.
 - **Execution**: The coroutine suspends via `sleep`/`offload` through the host; transparent to the host.
 - **Unload Coordination**: When the plugin unloads, the host's `detachAll` cancels all registered tasks (invoking the plugin's `cancel_fn`, setting `cancelFlag` and waking sleeping/offloaded tasks) → Coroutine exits `while(!cancelled())` loop → `finishIfDone` (after coroutine frame destruction, reports completion exactly once via `notify.done`) → Host decrements `inflight` (`guard.reset`) and releases handle → `waitInflightZero` cleanly awaits zero active operations → `dlclose` occurs safely without dangling frames or UAF.
-- **Graceful Fallback**: If the host lacks the `agentxx.agent.tasks` table or registration fails, `spawn` degrades to an unmanaged coroutine (warns via log, cannot be cleanly reclaimed on unload)—a known constraint when running across mismatched versions.
+- **No fallback**: `spawn` fails directly when the host lacks the `agentxx.agent.tasks` table or registration is refused (there is no unmanaged-coroutine degradation path).
 - **Threading Rules**: `cancel_fn` is invoked by the host on the IO thread (cooperative); `notify.done` may be reported from any plugin thread (host handles atomic CAS in `OpCore::onDone` and posts back to IO); `kit` coroutine completion is guaranteed on the IO thread.
 
 ---
@@ -389,16 +389,16 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 ## 14. Build System & Platform Support
 
 - **Platform Matrix**: Each plugin determines platform compatibility at the start of its `CMakeLists.txt` via the `gate` function in `plugin_platform_support.cmake`, leveraging top-level `XX_IS_*_D` flags. Unsupported platforms are skipped during compilation (`screen_capture`, `computer_use`, and `text_selection_monitor` are Windows only; `audio_stream` is skipped on all platforms since its WASAPI implementation is not enabled, etc.). An empty platform list means "skip everywhere".
-- **Verified platforms (Reset-v1 acceptance scope)**: Windows (MSVC 14.51 / VS18, Debug + ASan: full plugin build, plugin-focused 1765/0, extended regression 2251/0) and Linux (GCC, Debug + ASan/LSan, targeted UBSan/TSan). Android is not verified.
+- **Verified platforms (current implementation)**: Windows (MSVC 14.51 / VS18, Debug + ASan: full plugin build, plugin-focused 1765/0, extended regression 2251/0) and Linux (GCC, Debug + ASan/LSan, targeted UBSan/TSan). Android is not verified.
 - **Running the test binary on Windows**: the working directory must be the executable's directory (`exec/`), because plugin paths are derived from `GetModuleFileNameW` (Linux uses `/proc/self/exe`).
 - **Monolithic Built-in Compilation**: Plugins specified in `AGENTXX_PLUGIN_BUILTIN_LIST` are merged into `libagentxx`. In this mode, `test_ffi_c_api` and `client_plugins` tests conditionally bypass dynamic library path checks.
 - **Artifact Layout**: Standalone shared libraries output to `{build}/exec/plugins/<plugin_name>/` (organized into subdirectories when accompanied by a `plugin.yaml` manifest).
 
 ---
 
-## 15. Reset-v2 Coroutine Driver (Generic pump/wake Protocol + `PollOneBridge`)
+## 15. Coroutine Driver (Generic pump/wake Protocol + `PollOneBridge`)
 
-> This section describes the **coroutine driver protocol** introduced by Reset-v2: plugin
+> This section describes the **coroutine driver protocol**: plugin
 > coroutines and host coroutines interleave inside the *same* host IO execution sequence,
 > without extra threads and without blocking the IO thread. Wait sources are primarily
 > "host-visible"; kernel-readiness waits on a plugin-private reactor are driven by
@@ -479,9 +479,8 @@ typedef struct AgentxxPluginCoroutineRuntimeIface {
 
 ### 15.4 Kit implementation (`detail::PollOneBridge` + `detail::BridgeRoot` / `detail::PolledRoot`)
 
-`PluginBase::bridgeOrNull()` returns the per-instance bridge when the host provides
-`coroutine_runtime`, otherwise `nullptr` and the kit falls back to the legacy `post_to_io`
-path (pseudo hosts / older hosts).
+`PluginBase::bridge()` returns the per-instance bridge; the kit requires the host
+`coroutine_runtime` table and keeps no `post_to_io` fallback path.
 
 **State machine (all three race windows are covered)**
 
@@ -591,7 +590,7 @@ with explicit, observable parameters:
 | No progress | 10ms backoff | `PollOneBridge::kPollIntervalMs` via host `scheduler.sleep`; the expiry callback only calls `request_driver` |
 | Burst cap | 1ms yield after 256 consecutive steps | `kPollBurstMax` / `kPollBurstYieldMs`; prevents one instance from monopolising the IO thread |
 | Cancel | set the cancel flag + cancel the in-flight backoff + write into `CancelRegistry` | the plugin sees cancellation without waiting a full backoff quantum, then drains its root |
-| Host without drivers | automatic downgrade | without `coroutine_runtime`/`scheduler.sleep` the coroutine runs to completion on an offload worker with a local `io_context` (equivalent to `blocking_tool`) |
+| Host without drivers | unsupported | `coroutine_runtime` is a mandatory host capability; without it a driver request fails, finalises in-flight roots and is logged (no offload downgrade path) |
 
 The business signature matches `blocking_tool` (only the return type becomes
 `asio::awaitable<std::string>`), so migration is usually a renamed registration call:
@@ -682,8 +681,8 @@ Costs and rules that must be respected together with the implementation:
 |---|---|
 | C ABI | `test_plugin_abi_c17.c`: driver table 8-byte alignment, `version/struct_size` offsets, version value; item-by-item C++ cross-check (`plugin_runtime`) |
 | Host tickets | `plugin_runtime`: never inlined, at most one execution per ticket, no execution after cancel, lease held while queued, idempotent cancel, forged handle safely ignored, `Closing` admitted / `Closed` rejected, null callback returns `NULL + error_out` |
-| Kit bridge | `plugin_bridge` (fake host implementing the C ABI driver): no inlining, one `poll_one` per ticket, no spinning when idle, wake preserved in all three windows, no re-entrancy from host callbacks, single terminal state on cancel, refused driver finalises roots, stop cancels queued tickets, multi-instance isolation, fallback without `coroutine_runtime` |
-| Kit controlled polling | `plugin_bridge`: first step never inlined; ticket requested immediately on progress; exactly one 10ms backoff when idle (no extra ticket); polling stops when the root finishes (in-flight backoff cancelled); cancel cancels the in-flight backoff and yields a single `CANCELLED` terminal state; `stop` finalises in-flight polled roots as `FAILED` exactly once and releases the `Job`; the burst cap produces a 1ms yield; without `coroutine_runtime` the operation completes through offload and no bridge is created |
+| Kit bridge | `plugin_bridge` (fake host implementing the C ABI driver): no inlining, one `poll_one` per ticket, no spinning when idle, wake preserved in all three windows, no re-entrancy from host callbacks, single terminal state on cancel, refused driver finalises roots, stop cancels queued tickets, multi-instance isolation |
+| Kit controlled polling | `plugin_bridge`: first step never inlined; ticket requested immediately on progress; exactly one 10ms backoff when idle (no extra ticket); polling stops when the root finishes (in-flight backoff cancelled); cancel cancels the in-flight backoff and yields a single `CANCELLED` terminal state; `stop` finalises in-flight polled roots as `FAILED` exactly once and releases the `Job`; the burst cap produces a 1ms yield |
 | End-to-end | `plugins`: `example_bridge` and `example_polled_timer` through the real host asserting `driverAvailable/onHostIoThread/pumpOnStart`, that host work keeps progressing while the plugin is suspended (same IO sequence) and that the native asio timer really expires; plus the 1000-concurrent tool-call stress case |
 | End-to-end (migrated plugins) | `plugins`: `agentxx_filesystem` read/write/edit (polled) alongside list (offload) in one instance; `agentxx_websearch` fetching through a local loopback HTTP server including 6 concurrent requests (non-blocking); `agentxx_execute_command` unloaded while `sleep 5` is in flight — cancel drain, pump stop, inflight reaching zero well before the command's own timeout |
 | Memory | `plugin_bridge` alone reports 0 leaks; plugin-focused ASan+LSan matches the pre-refactor baseline item by item (4480 bytes / 64 allocations) and is unchanged after adding the controlled-polling cases (in-flight unload / abandoned path) |

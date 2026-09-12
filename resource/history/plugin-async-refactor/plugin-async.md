@@ -33,7 +33,7 @@
 | G3 | 调用异步函数**零轮询**、真协程切换 | 全链路事件驱动：channel kick / 完成回调 / cancellation slot |
 | G4 | 边界保持 COM 式查询 + 纯 C API，不传 C++ 对象 | 核心 vtable 冻结四成员 + 接口表；跨边界仅 函数指针/void*/字符串视图 |
 | G5 | 兼容不同编译器 / 依赖库版本 / 标准库版本 | 插件本地 C++（协程帧、awaiter、asio 版本）永不跨界传递 |
-| G6 | 降低插件开发复杂度与整体复杂度 | 三件套收缩为 start/cancel 两件套；删除寄生轮询层；SDK 一套 API |
+| G6 | 降低插件开发复杂度与整体复杂度 | 三件套收缩为 start/cancel 操作；删除寄生轮询层；SDK 一套 API |
 
 ### 1.2 不变量（重构中不动的东西）
 
@@ -92,7 +92,7 @@ C++20 协程帧是插件自己的堆内存；**`coroutine_handle::resume()` 从�
 
 结论：自定义极简 `Task<T>`（约 150 行 header-only）作为锚定载体；两者分层共存，中间地带全部删除。
 
-### 2.3 操作协议：从三件套到两件套
+### 2.3 操作协议：从三件套到操作
 
 旧协议 `start/poll/cancel` 中，`poll` 的唯一处理者是寄生轮询层。仓库内迁移后不再有任何 poll 型操作，故 **ABI 直接删除 poll**：
 
@@ -206,9 +206,9 @@ client 侧对称三符号不变 (client_plugin_api.h 同步小改, 见 4.4)
 | IID | 结构体 | 相对旧版变更 |
 |-----|--------|--------------|
 | `agentxx.agent.tools` | `AgentxxToolsIface` | register/unregister 不变；`call_tool_async` 改为**完成回调形**（见下）；**删除**阻塞版 `call_tool`（kit 提供）；**删除** `AgentxxHostOp` 句柄族 |
-| `agentxx.agent.hooks` | `AgentxxHooksIface` | HookSpec 删除 `hook_poll`（start/cancel 两件套），其余不变 |
+| `agentxx.agent.hooks` | `AgentxxHooksIface` | HookSpec 删除 `hook_poll`（start/cancel 操作），其余不变 |
 | `agentxx.agent.events` | `AgentxxEventsIface` | 不变 |
-| `agentxx.agent.capabilities` | `AgentxxCapabilitiesIface` | `register_capability_ex` 的方法处理器同两件套化；`invoke_capability_async` 改完成回调形；**删除**阻塞版 `invoke_capability` |
+| `agentxx.agent.capabilities` | `AgentxxCapabilitiesIface` | `register_capability_ex` 的方法处理器同操作化；`invoke_capability_async` 改完成回调形；**删除**阻塞版 `invoke_capability` |
 | `agentxx.agent.scheduler` | `AgentxxSchedulerIface` | 成员重排为 `{version, is_io_thread, post, sleep, cancel_sleep, offload}`；**新增一次性 `sleep`**；**删除周期 `add_timer/cancel_timer`**（由 `spawn`+sleep 循环取代，见 5.5） |
 | `agentxx.agent.session` | `AgentxxSessionIface` | 不变 |
 | `agentxx.agent.plugins` | `AgentxxPluginsIface` | 不变 |
@@ -283,7 +283,7 @@ client 侧维持纯同步回调模型，本次仅做对齐性修订：全局版�
 
 header-only（`agent/lib/include/agentxx/plugin/plugin_kit.h`），编译进插件本体，仅依赖 plugin_api.h。
 文件处置：**plugin_poll_loop.h 删除**；plugin_tool_sync.h 的 inline/sync 包装并入注册族
-（保留薄层供纯 C 作者直用两件套）；plugin_iface_helper.h 的 `AgentIfaces/ClientIfaces`
+（保留薄层供纯 C 作者直用操作）；plugin_iface_helper.h 的 `AgentIfaces/ClientIfaces`
 成为 `PluginBase::iface` 成员类型（头保留，被 kit 包含）；plugin_guard.h 保留
 （entry 边界处理仍需要）。
 
@@ -351,7 +351,7 @@ awaiter 通用纪律（挂起前完成竞态）：挂起动作就绪（登记恢
 
 ```cpp
 kit::tool(base, name, depict, schema, &my_task_fn);      // Task<T>(*)(Ctx&,ArgsView,OpCtl)
-                                                          // → start/cancel 两件套自动包装
+                                                          // → start/cancel 操作自动包装
 kit::fast_tool(base, spec, &my_sync_fn);                  // 内联完成 (<~1ms)
 kit::blocking_tool(base, spec, &my_blocking_fn);          // offload 委托 (带 cancel_flag)
 kit::hook(base, point, &my_hook_fn);                      // 快钩子内联 / Task 钩子可选
@@ -450,7 +450,7 @@ awaitPluginOp(args):
 | text_selection_monitor delayMs | offload（delayMs 在执行函数内） | `blocking_tool` | 机械替换 |
 | audio_stream / screen_capture / computer_use | offload | `blocking_tool` | 机械替换 |
 | codegraph | offload + 全局日志 sink | `blocking_tool` + Logger 成员化 | 多实例日志串扰修复 |
-| javascript_engine | 自有线程 + 手写两件套 | 不动（仅删 poll 字段置 NULL 处） | 已是新模型的自管线程形态；其 JS 线程内 `iface.tools->call_tool` 改用 kit condvar 助手 |
+| javascript_engine | 自有线程 + 手写操作 | 不动（仅删 poll 字段置 NULL 处） | 已是新模型的自管线程形态；其 JS 线程内 `iface.tools->call_tool` 改用 kit condvar 助手 |
 | example_js / example_plugin 互调 | 阻塞 call_tool / invoke_capability | kit condvar 助手（签名同形） | offload 工作线程场景专用 |
 | planning client 段 / 双端 UI | 同步回调 | 不动 | client 侧模型不变 |
 
@@ -461,7 +461,7 @@ awaitPluginOp(args):
 | `AgentxxHostOp` / `makeHostOp` / hop_* | lib 内部（op_driver.h、plugin_manager.*）+ **test_plugins.cpp §31 起 4 组用例**（op->poll / op->take / 恰一次 / 句柄语义断言）——并非零处理者 | 宿主侧重写时移除；测试用例同步改写为回调形断言（cb 状态/payload/恰一次/free 义务），验证目标不变 |
 | 阻塞版 `call_tool` / `invoke_capability` | javascript_engine ×1、example_js ×2、example_plugin ×1 | kit 提供 condvar 助手，签名同形，机械替换 |
 | `add_timer` / `cancel_timer` | 仅 system_monitor | spawn+sleep 循环重写采集器 |
-| `execute_poll` / `hook_poll` 字段 | javascript_engine（置 NULL 处）、example_plugin sleeper、test_plugins.cpp 3 个 poll 用例 | 字段删除 + 用例按两件套协议重写（取消语义测试目标不变） |
+| `execute_poll` / `hook_poll` 字段 | javascript_engine（置 NULL 处）、example_plugin sleeper、test_plugins.cpp 3 个 poll 用例 | 字段删除 + 用例按操作协议重写（取消语义测试目标不变） |
 | `plugin_poll_loop.h` | execute_command / websearch / filesystem(read/write/edit) / system_monitor 能力 | 随迁移删除 |
 | `register_sync_tool` 等旧offload线程池适配异步接口 API | 10 个插件 | 并入 kit 注册族后原头文件退役 |
 
@@ -516,7 +516,7 @@ Phase A 即删 poll/HostOp，会使 4 个 polled 插件与 7 组测试用例当�
 9. **三姿势等价**：fast/blocking/task 三种注册的同名行为一致性；
 10. **回调契约**：sleep/offload/call_tool_cb 的回调线程 == 宿主 io 线程（线程 id 断言）；
 11. **JS 引擎回归**：interpreter.js load/unload 经新回调形能力表正常工作；
-12. **既有 poll 用例重写**：test_plugins.cpp 中 3 处 `execute_poll` 型用例按两件套协议重写
+12. **既有 poll 用例重写**：test_plugins.cpp 中 3 处 `execute_poll` 型用例按操作协议重写
     （验证目标不变：协议违约合成失败、取消联动、慢操作终结）。
 13. **挂起前完成竞态**：`co_await c.call_tool(...)` 目标为内联完成型 fast_tool——
     回调早于挂起完成时不丢结果、不重入、不崩溃（awaiter 原子完成标志路径，
@@ -537,7 +537,7 @@ Phase A 即删 poll/HostOp，会使 4 个 polled 插件与 7 组测试用例当�
 | slot 链路个别路径未绑定导致取消失灵 | 有界 100ms 停靠兜底 + 注入测试覆盖两条路径 |
 | Task resume 边界抛异常 | 包装层全捕获 → FAILED；铁律写入 kit 注释与文档 |
 | execute_command 常驻线程成本 | 每实例 1 线程、空闲 park 零 CPU；destroy join；与 JS 引擎同款成熟模式 |
-| 第三方手写两件套的学习曲线 | kit 默认姿势只需写一个协程函数；两件套仅框架作者接触；纯 C 作者可用 sleep+post+cb 组合（§2.3） |
+| 第三方手写操作的学习曲线 | kit 默认姿势只需写一个协程函数；操作仅框架作者接触；纯 C 作者可用 sleep+post+cb 组合（§2.3） |
 | 删除 add_timer 影响潜在第三方 | 项目未推广、无外部处理者；且 sleep 循环表达力覆盖其全部用例 |
 | 完成回调早于 awaiter 挂起（内联完成型目标） | 宿主侧一律 post 派发 + kit awaiter 原子完成标志双保险（§4.3/§5.3）；测试 #13 覆盖 |
 | 卸载撞上挂起中的长 sleep / 不可取消后台任务 | detachAll 对 outstanding-op 登记表逐项发 cancel（§3.3）；仍不可取消者走既有 30s 超时放弃路径 |
@@ -548,7 +548,7 @@ Phase A 即删 poll/HostOp，会使 4 个 polled 插件与 7 组测试用例当�
 
 | 维度 | 旧 | 新 |
 |------|----|----|
-| 操作协议 | start/**poll**/cancel 三件套 | start/cancel 两件套（notify 不变） |
+| 操作协议 | start/**poll**/cancel 三件套 | start/cancel 操作（notify 不变） |
 | 插件异步姿势 | inline/sync/polled/手写 四选一，样板 ×13 | task(默认)/fast/blocking/reactor 四命名注册，一套 SDK |
 | 事件唤醒 | 15ms 轮询步进（寄生 loop） | 完成回调精确唤醒（零轮询） |
 | 取消传播 | 每 op 一个 20ms watcher 轮询 | asio slot 链精确中断 + 100ms 有界兜底 |

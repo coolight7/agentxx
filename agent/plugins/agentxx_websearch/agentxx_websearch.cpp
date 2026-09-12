@@ -234,30 +234,40 @@ static void* websearchStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(WebsearchPluginCtx, websearchStart, websearchStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     WebsearchPluginCtx,
     "agentxx_websearch",
     "1.0.0",
     "Web access tools: HTTP fetch, Markdown fetch, and web search",
-    ([](WebsearchPluginCtx&) -> int32_t {
-        // create 只构造上下文; 工具注册与配置读取在 start 事务中执行。
-        return 0;
-    })
+    websearchStart,
+    websearchStop
 );
 
 struct WebsearchClientCtx : public ClientPluginBase {};
+
+/// client 侧 start: 注册 3 个工具的折叠头模版 (stop 无需撤销, 宿主负责摘除)
+static void* websearchClientStart(
+    WebsearchClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    ctx.registerTemplate(kNameSearch, "Search", "query");
+    ctx.registerTemplate(kNameFetch, "Fetch", "url");
+    ctx.registerTemplate(kNameFetchMd, "FetchMd", "url");
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* websearchClientStop(
+    WebsearchClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
 
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     WebsearchClientCtx,
     "agentxx_websearch",
     "1.0.0",
     "Websearch tools specialized UI renderer",
-    ([](WebsearchClientCtx& ctx) -> int32_t {
-        ctx.registerTemplate(kNameSearch, "Search", "query");
-        ctx.registerTemplate(kNameFetch, "Fetch", "url");
-        ctx.registerTemplate(kNameFetchMd, "FetchMd", "url");
-        return 0;
-    })
+    websearchClientStart,
+    websearchClientStop
 );

@@ -104,33 +104,52 @@ using namespace agentxx_computer_use_plugin;
 
 struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 
+/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+
+static void* computerUseAgentStart(
+    ComputerUsePluginCtx&            ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               err
+) {
+    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
+        return nullptr;
+    }
+
+    auto        p      = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
+    std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
+
+    agentxx::plugin::blocking_tool(
+        ctx,
+        "agentxx_ui_control_keyboard_mouse",
+        depict,
+        makeUiControlSchema(),
+        [](ComputerUsePluginCtx&, std::string_view args_json) -> std::string {
+            agentxx::plugin::ArgReader reader(args_json);
+            if (reader.hasParseError()) {
+                throw std::runtime_error("invalid args json");
+            }
+            return uiControlExecute(reader.raw());
+        }
+    );
+
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
+static void* computerUseAgentStop(
+    ComputerUsePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 AGENTXX_PLUGIN_AGENT_EXPORT(
     ComputerUsePluginCtx,
     "agentxx_computer_use",
     "1.0.0",
     "Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)",
-    [](ComputerUsePluginCtx& ctx) -> int32_t {
-        if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
-            return -1;
-        }
-
-        auto        p      = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
-        std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
-
-        agentxx::plugin::blocking_tool(
-            ctx,
-            "agentxx_ui_control_keyboard_mouse",
-            depict,
-            makeUiControlSchema(),
-            [](ComputerUsePluginCtx&, std::string_view args_json) -> std::string {
-                agentxx::plugin::ArgReader reader(args_json);
-                if (reader.hasParseError()) {
-                    throw std::runtime_error("invalid args json");
-                }
-                return uiControlExecute(reader.raw());
-            }
-        );
-
-        return 0;
-    }
+    computerUseAgentStart,
+    computerUseAgentStop
 );

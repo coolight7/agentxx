@@ -97,10 +97,6 @@ void NativeLoader::close(void* handle) {
 #endif
 }
 
-void NativeLoader::addSearchPath(std::string_view dir) {
-    (void)dir;
-}
-
 // =====================================================================
 // PluginInstance
 // =====================================================================
@@ -156,7 +152,7 @@ PluginInstance::~PluginInstance() {
         XX_LOGE(
             "Plugin `{}` destroyed while {} lease(s) remain; refusing to dlclose",
             name,
-            lifetime ? lifetime->leaseCount() : inflight.load(std::memory_order_acquire)
+            lifetime ? lifetime->leaseCount() : 0
         );
         return;
     }
@@ -502,7 +498,7 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
         return;
     }
     if (!userInitiated && inst->userDisabled) {
-        // 用户显式禁用的插件不被级联恢复（F09 / M8）。
+        // 用户显式禁用的插件不被级联恢复。
         return;
     }
     // 先置位再递归: 既让注册复查通过，也让循环依赖不会无限递归。
@@ -520,16 +516,11 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
         enableImpl(dep, /*userInitiated=*/false);
     }
 
-    if (inst->lifecycleStart) {
-        // 托管插件: 注册由插件 start 事务重新声明，宿主只负责投递与结果处理。
-        requestStartForEnable(inst);
-    } else {
-        // legacy 插件: 按宿主侧保存的记录恢复注册。
-        restoreHostSideRegistrations(inst.get());
-    }
+    // 注册由插件 start 事务重新声明: 宿主只负责投递并处理结果 (失败则回到 Disabled)。
+    requestStartForEnable(inst);
     XX_LOGI("Plugin `{}` enabled ({})", inst->name, userInitiated ? "user" : "dependency");
 
-    // 级联恢复因本插件被禁用的依赖者（不覆盖用户显式禁用，F09）。
+    // 级联恢复因本插件被禁用的依赖者（不覆盖用户显式禁用）。
     for (const auto& child :
          collectReverseRequiredDeps(plugins_, inst->name, /*onlyEnabled=*/false)) {
         enableImpl(child, /*userInitiated=*/false);
@@ -688,7 +679,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
             error
         )) {
         // start 失败: 回到 Disabled 且不留部分注册；实例保持"stop 仍欠着"，
-        // 卸载或下次启用时先 stop 清理，符合 plugin.md 第 7.2 节回滚顺序。
+        // 卸载或下次启用时先 stop 清理, 保证回滚顺序为"先撤销注册, 再释放资源"。
         inst->enabled               = false;
         inst->blockedByDependencies = false;
         if (inst->lifetime && !inst->lifetime->closeRequested()) {
@@ -708,61 +699,6 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
     }
     XX_LOGI("Plugin `{}` restarted after enable", inst->name);
     co_return;
-}
-
-/// 恢复宿主侧已保存的注册记录（legacy 插件路径；也用于 start 事务前的基础恢复）。
-void PluginManager::restoreHostSideRegistrations(PluginInstance* inst) {
-    if (!inst) {
-        return;
-    }
-    for (const auto& tool : inst->tools) {
-        registry_->registerTool(tool->get_definition().name, tool);
-    }
-    if (!inst->hookRegistrations.empty()) {
-        auto ctx  = agentContext_.lock();
-        auto self = inst->self.lock();
-        if (ctx && ctx->middlewareHandleContext && self) {
-            inst->middleware = std::make_shared<PluginMiddlewareHandle>(
-                fmt::format("{}_middleware", inst->name),
-                agentContext_,
-                std::move(self)
-            );
-            ctx->middlewareHandleContext->handles.push_back(inst->middleware);
-            for (const auto& hook : inst->hookRegistrations) {
-                AgentxxPluginHookSpec spec{};
-                spec.point       = hook.point;
-                spec.hook_start  = hook.start;
-                spec.hook_cancel = hook.cancel;
-                spec.user_data   = hook.ud;
-                inst->middleware->setHook(spec);
-            }
-        }
-    }
-    for (const auto& cap : inst->capabilityRegistrations) {
-        if (cap.start) {
-            capabilities_->registerCapability(cap.name, inst->name, cap.start, cap.cancel, cap.ctx);
-        } else {
-            capabilities_->registerCapability(cap.name, inst->name);
-        }
-    }
-    for (const auto& graph : inst->graphNodeTypes) {
-        if (!graph.slot) {
-            continue;
-        }
-        AgentxxPluginGraphNodeTypeSpec spec{};
-        spec.type               = strToSv(graph.type);
-        spec.run_start          = graph.run_start;
-        spec.run_cancel         = graph.run_cancel;
-        spec.user_data          = graph.user_data;
-        spec.config_schema_json = strToSv(graph.config_schema_json);
-        graph.slot
-            ->activate(inst->self.lock(), spec, inst->lifetime ? inst->lifetime->generation() : 0);
-    }
-    if (auto c = agentContext_.lock()) {
-        if (c->resourceApplier) {
-            c->resourceApplier->setOwnerEnabled(inst->name, true);
-        }
-    }
 }
 
 void PluginManager::flushPendingCleanup() {
@@ -919,7 +855,7 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
         view.path               = inst->path;
         view.configPath         = inst->configPath;
         view.enabled            = inst->enabled;
-        view.inflight           = inst->inflight.load(std::memory_order_acquire);
+        view.inflight           = inst->lifetime ? inst->lifetime->leaseCount() : 0;
         view.tools              = inst->toolNames;
         view.depends            = inst->depends;
         view.optionalDepends    = inst->optionalDepends;
@@ -993,6 +929,69 @@ static inline std::string parseBuiltinName(std::string_view p) {
     return std::string(p.substr(10));
 }
 
+/// 加载失败 / start 失败的统一回滚: 摘除宿主侧注册 → 销毁插件上下文 →
+/// 移出插件表 → 释放名称预占 (动态库句柄由调用方决定是否关闭)。
+void PluginManager::rollbackLoad(const std::shared_ptr<PluginInstance>& inst, bool closeHandle) {
+    if (!inst) {
+        return;
+    }
+    detachAll(inst.get());
+    eraseMiddleware(inst->middleware.get());
+    inst->middleware = nullptr;
+    if (auto c = agentContext_.lock(); c && c->resourceApplier) {
+        c->resourceApplier->removeAllOwned(inst->name);
+    }
+    inst->destroyPlugin();
+    plugins_.erase(inst->name);
+    releasePluginName(inst->name);
+    if (closeHandle && inst->dlHandle) {
+        NativeLoader::close(inst->dlHandle);
+        inst->dlHandle = nullptr;
+    }
+}
+
+/// 插件实例的公共装配 (两种加载路径共用): 元信息/生命周期入口/配置/宿主控制块。
+std::shared_ptr<PluginInstance> PluginManager::makeInstance(
+    std::string                name,
+    const AgentxxPluginInfo*   info,
+    std::string                path,
+    const AgentxxPluginStartFn startFn,
+    const AgentxxPluginStopFn  stopFn
+) {
+    auto inst      = std::make_shared<PluginInstance>(name);
+    inst->lifetime = makeLifetime(name);
+    inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
+                                               : "1.0.0";
+    inst->description    = info && info->description.data
+                               ? std::string(info->description.data, info->description.size)
+                               : "";
+    inst->path           = std::move(path);
+    inst->lifecycleStart = startFn;
+    inst->lifecycleStop  = stopFn;
+    inst->self           = inst;
+    inst->ownerSelf      = inst;
+    inst->manager        = shared_from_this();
+    // 交给插件的 host 视图必须放在进程级稳定的控制块里：插件可能在卸载后继续
+    // 使用旧 host 指针，控制块 tombstone 保证这类迟到调用安全失败。
+    auto vtableSv     = agentxx::plugin::PluginStringView::fromCstr("__vtable");
+    inst->hostControl = PluginHostControl::create(
+        inst,
+        (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
+    );
+    return inst;
+}
+
+/// create + start 都成功后的公共收尾: 应用声明式资源、冻结资源、置 Ready。
+void PluginManager::finishLoad(
+    const std::shared_ptr<PluginInstance>&  inst,
+    const plugin::PluginManifestResources&  resources
+) {
+    applyDeclaredResources(*inst, resources);
+    inst->resourcesFrozen = true;
+    inst->lifetime->setState(PluginInstanceState::Ready);
+    releasePluginName(inst->name);
+}
+
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     std::string                             path,
     const agentxx::agent::PluginConfig*     cfg,
@@ -1015,13 +1014,13 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     auto        createFn = reinterpret_cast<AgentxxPluginCreateFn>(
         NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE, createErr)
     );
-    std::string lifecycleErr;
-    auto        lifecycleStart = reinterpret_cast<AgentxxPluginStartFn>(
-        NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_START, lifecycleErr)
+    std::string startErr;
+    auto        startFn = reinterpret_cast<AgentxxPluginStartFn>(
+        NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_START, startErr)
     );
-    lifecycleErr.clear();
-    auto lifecycleStop = reinterpret_cast<AgentxxPluginStopFn>(
-        NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_STOP, lifecycleErr)
+    std::string stopErr;
+    auto        stopFn = reinterpret_cast<AgentxxPluginStopFn>(
+        NativeLoader::sym(dl, AGENTXX_PLUGIN_AGENT_SYMBOL_STOP, stopErr)
     );
 
     if (!createFn) {
@@ -1030,7 +1029,22 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
             XX_LOGW("Plugin `{}` skipped: no agent entry (client only)", path);
             co_return nullptr;
         }
-        XX_LOGE("Plugin `{}` missing {}", path, AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE);
+        XX_LOGE("Plugin `{}` missing {}: {}", path, AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE, createErr);
+        co_return nullptr;
+    }
+    // start/stop 是必备入口 (create 只构造, start 注册, stop 撤销):
+    // 缺少任一符号说明插件未按当前契约导出, 直接拒绝加载。
+    if (!startFn || !stopFn) {
+        NativeLoader::close(dl);
+        XX_LOGE(
+            "Plugin `{}` missing lifecycle entry ({}: {}; {}: {}); plugins must export "
+            "start/stop",
+            path,
+            AGENTXX_PLUGIN_AGENT_SYMBOL_START,
+            startFn ? "ok" : startErr,
+            AGENTXX_PLUGIN_AGENT_SYMBOL_STOP,
+            stopFn ? "ok" : stopErr
+        );
         co_return nullptr;
     }
 
@@ -1065,28 +1079,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         co_return nullptr;
     }
 
-    auto inst      = std::make_shared<PluginInstance>(name);
-    inst->lifetime = makeLifetime(name);
-    inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
-                                               : "1.0.0";
-    inst->description    = info && info->description.data
-                               ? std::string(info->description.data, info->description.size)
-                               : "";
-    inst->path           = path;
-    inst->dlHandle       = dl;
-    inst->lifecycleStart = lifecycleStart;
-    inst->lifecycleStop  = lifecycleStop;
-    inst->interfaces     = interfaces;
-    inst->self           = inst;
-    inst->ownerSelf      = inst;
-    inst->manager        = shared_from_this();
-    auto vtableSv        = agentxx::plugin::PluginStringView::fromCstr("__vtable");
-    // 交给插件的 host 视图必须放在进程级稳定的控制块里：插件可能在卸载后继续
-    // 使用旧 host 指针，控制块 tombstone 保证这类迟到调用安全失败。
-    inst->hostControl = PluginHostControl::create(
-        inst,
-        (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
-    );
+    auto inst      = makeInstance(name, info, path, startFn, stopFn);
+    inst->dlHandle = dl;
+    inst->interfaces = interfaces;
     if (cfg) {
         inst->args       = cfg->args;
         inst->configPath = cfg->configPath;
@@ -1108,62 +1103,26 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
 
     if (rc != 0) {
         XX_LOGE("Plugin `{}` create failed (code={}), performing rollback", name, rc);
-        detachAll(inst.get());
-        eraseMiddleware(inst->middleware.get());
-        inst->middleware = nullptr;
-        if (auto c = agentContext_.lock()) {
-            if (c->resourceApplier) {
-                c->resourceApplier->removeAllOwned(inst->name);
-            }
-        }
-        inst->destroyPlugin();
-        plugins_.erase(name);
-        releasePluginName(name);
-        if (inst->dlHandle) {
-            NativeLoader::close(inst->dlHandle);
-            inst->dlHandle = nullptr;
-        }
+        rollbackLoad(inst, /*closeHandle=*/true);
         co_return nullptr;
     }
 
-    // New Reset-v1 plugins may split construction from registration/activation.
-    // Legacy plugins have no lifecycle symbol and are already fully active after
-    // create, so they continue directly to Ready.
-    if (inst->lifecycleStart) {
-        std::string startError;
-        if (!co_await awaitPluginLifecycle(
-                runtime(),
-                inst,
-                inst->pluginCtx,
-                inst->lifecycleStart,
-                "plugin start",
-                startError
-            )) {
-            XX_LOGE("Plugin `{}` start failed: {}", name, startError);
-            detachAll(inst.get());
-            eraseMiddleware(inst->middleware.get());
-            inst->middleware = nullptr;
-            if (auto c = agentContext_.lock(); c && c->resourceApplier) {
-                c->resourceApplier->removeAllOwned(inst->name);
-            }
-            inst->destroyPlugin();
-            plugins_.erase(name);
-            releasePluginName(name);
-            if (inst->dlHandle) {
-                NativeLoader::close(inst->dlHandle);
-                inst->dlHandle = nullptr;
-            }
-            co_return nullptr;
-        }
+    std::string startError;
+    if (!co_await awaitPluginLifecycle(
+            runtime(),
+            inst,
+            inst->pluginCtx,
+            inst->lifecycleStart,
+            "plugin start",
+            startError
+        )) {
+        XX_LOGE("Plugin `{}` start failed: {}", name, startError);
+        rollbackLoad(inst, /*closeHandle=*/true);
+        co_return nullptr;
     }
-    // 无论是否有 start 导出，走到这里实例都已激活：此后 destroy 前必须先
-    // 完成 stop (若插件导出了 stop)。
     inst->lifecycleStarted = true;
 
-    applyDeclaredResources(*inst, resources);
-    inst->resourcesFrozen = true;
-    inst->lifetime->setState(PluginInstanceState::Ready);
-    releasePluginName(name);
+    finishLoad(inst, resources);
     XX_LOGI("Plugin `{}` loaded successfully", name);
     co_return inst;
 }
@@ -1180,6 +1139,10 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     auto entry = agentxx::plugin::findBuiltinPlugin(name);
     if (!entry) {
         XX_LOGE("Built-in plugin `{}` not found in registry", name);
+        co_return nullptr;
+    }
+    if (!entry->create || !entry->start || !entry->stop) {
+        XX_LOGE("Built-in plugin `{}` does not export create/start/stop", name);
         co_return nullptr;
     }
 
@@ -1199,28 +1162,11 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         co_return nullptr;
     }
 
-    auto inst      = std::make_shared<PluginInstance>(name);
-    inst->lifetime = makeLifetime(name);
-    inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
-                                               : "1.0.0";
-    inst->description     = info && info->description.data
-                                ? std::string(info->description.data, info->description.size)
-                                : "";
-    inst->path            = path;
+    auto inst             = makeInstance(name, info, path, entry->start, entry->stop);
+    inst->builtinUnload   = entry->destroy;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
     inst->interfaces      = interfaces;
-    inst->self            = inst;
-    inst->ownerSelf       = inst;
-    inst->manager         = shared_from_this();
-    auto vtableSv2        = agentxx::plugin::PluginStringView::fromCstr("__vtable");
-    inst->hostControl     = PluginHostControl::create(
-        inst,
-        (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv2)
-    );
-    inst->builtinUnload  = entry->destroy;
-    inst->lifecycleStart = entry->start;
-    inst->lifecycleStop  = entry->stop;
     if (cfg) {
         inst->args       = cfg->args;
         inst->configPath = cfg->configPath;
@@ -1238,52 +1184,28 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         XX_LOGE("Builtin plugin `{}` create threw unknown exception", name);
         rc = -1;
     }
-
     if (rc != 0) {
         XX_LOGE("Builtin plugin `{}` create failed (code={}), performing rollback", name, rc);
-        detachAll(inst.get());
-        eraseMiddleware(inst->middleware.get());
-        inst->middleware = nullptr;
-        if (auto c = agentContext_.lock()) {
-            if (c->resourceApplier) {
-                c->resourceApplier->removeAllOwned(inst->name);
-            }
-        }
-        inst->destroyPlugin();
-        plugins_.erase(name);
-        releasePluginName(name);
+        rollbackLoad(inst, /*closeHandle=*/false);
         co_return nullptr;
     }
 
-    if (inst->lifecycleStart) {
-        std::string startError;
-        if (!co_await awaitPluginLifecycle(
-                runtime(),
-                inst,
-                inst->pluginCtx,
-                inst->lifecycleStart,
-                "plugin start",
-                startError
-            )) {
-            XX_LOGE("Builtin plugin `{}` start failed: {}", name, startError);
-            detachAll(inst.get());
-            eraseMiddleware(inst->middleware.get());
-            inst->middleware = nullptr;
-            if (auto c = agentContext_.lock(); c && c->resourceApplier) {
-                c->resourceApplier->removeAllOwned(inst->name);
-            }
-            inst->destroyPlugin();
-            plugins_.erase(name);
-            releasePluginName(name);
-            co_return nullptr;
-        }
+    std::string startError;
+    if (!co_await awaitPluginLifecycle(
+            runtime(),
+            inst,
+            inst->pluginCtx,
+            inst->lifecycleStart,
+            "plugin start",
+            startError
+        )) {
+        XX_LOGE("Builtin plugin `{}` start failed: {}", name, startError);
+        rollbackLoad(inst, /*closeHandle=*/false);
+        co_return nullptr;
     }
     inst->lifecycleStarted = true;
 
-    applyDeclaredResources(*inst, resources);
-    inst->resourcesFrozen = true;
-    inst->lifetime->setState(PluginInstanceState::Ready);
-    releasePluginName(name);
+    finishLoad(inst, resources);
     XX_LOGI("Builtin plugin `{}` loaded successfully", name);
     co_return inst;
 }

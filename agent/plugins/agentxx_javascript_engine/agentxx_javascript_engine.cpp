@@ -166,7 +166,7 @@ struct JsPluginCtx {
 class JsEngine {
 public:
 
-    /// 引擎生命周期状态 (Reset-v1: create 只构造, runtime 与 JS 线程属于 start)
+    /// 引擎生命周期状态 (create 只构造; runtime 与 JS 线程属于 start 事务)
     enum class State {
         Stopped,  ///< 未启动或已完全停止 (无 JS 线程、无 runtime、无收尾线程)
         Running,  ///< 运行中: 接受 post
@@ -1085,7 +1085,7 @@ private:
     // ==================== Promise 驱动 ====================
 
     /// Promise 驱动结果: 调用方必须据此映射 Operation 终态 ——
-    /// 拒绝/超时是失败, 引擎停止是取消, 不能当成成功文本 (plugin.md 第 8.4 节)。
+    /// 拒绝/超时是失败, 引擎停止是取消, 不能当成成功文本。
     struct PromiseOutcome {
         enum class Kind { Value, Rejected, Timeout, Cancelled };
 
@@ -2388,7 +2388,7 @@ static void* AGENTXX_PLUGIN_CALL jsCapStart(
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 装配宿主句柄),
-    // 不创建 runtime/线程, 也不提交任何运行时注册 (Reset-v1 §5.2); 异常返回
+    // 不创建 runtime/线程, 也不提交任何运行时注册; 异常返回
     // -1 走宿主加载失败清理路径
     JsEngine* raw = nullptr;
     return agentxx::plugin::guardCall(
@@ -2420,7 +2420,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-/// 引擎 start (Reset-v1 start 事务): 创建 JSRuntime + 专用 JS 线程, 并注册
+/// 引擎 start (start 事务): 创建 JSRuntime + 专用 JS 线程, 并注册
 /// 能力 "interpreter.js"。
 ///
 /// - create 阶段不启动线程/不注册: disable→enable 往返等价于一次 stop+start,
@@ -2493,7 +2493,7 @@ static void* AGENTXX_PLUGIN_CALL jsEngineStart(
     }
 }
 
-/// 引擎 stop (Reset-v1 stop 事务): 停止 JS 线程并释放 runtime。
+/// 引擎 stop (stop 事务): 停止 JS 线程并释放 runtime。
 ///
 /// - 立即拒绝新任务: 之后到达的能力调用/工具执行一律失败, 不再排队;
 /// - 队列中尚未开始的任务按取消终结 (不执行插件 JS 代码); 已经开始的执行

@@ -1094,6 +1094,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
     return &info;
 }
 
+/// client 侧 create: 只构造上下文 (查询接口表, 不注册任何 UI 项)
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
@@ -1115,39 +1116,56 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 host,
                 AGENTXX_IFACE_CLIENT_UI
             );
-            raw = ctx.get();
-
-            if (ctx->ui && ctx->ui->register_info_section) {
-                auto idSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-                auto titleSv
-                    = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"CodeGraph"})");
-                ctx->section = ctx->ui->register_info_section(host, &idSv, &titleSv);
-                if (ctx->section) {
-                    refreshSection(*ctx);
-                }
-            }
-
-            if (!ctx->iface.events || !ctx->iface.events->subscribe
-                || !ctx->iface.events->subscribe(
-                    host,
-                    AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-                    onClientPluginData,
-                    ctx.get()
-                )) {
-                return -1;
-            }
-
-            if (ctx->iface.log && ctx->iface.log->log) {
-                auto msgSv
-                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded"
-                    );
-                ctx->iface.log->log(host, 2, &msgSv);
-            }
             *plugin_ctx = ctx.release();
             return 0;
         }
     );
 }
+
+/// client 侧 start: 注册 Info 段落与跨端数据订阅 (注册事务)
+static void* codegraphClientStart(
+    ClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err
+) {
+    if (ctx.ui && ctx.ui->register_info_section) {
+        auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"CodeGraph"})");
+        ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &titleSv);
+        if (ctx.section) {
+            refreshSection(ctx);
+        }
+    }
+    if (!ctx.iface.events || !ctx.iface.events->subscribe
+        || !ctx.iface.events->subscribe(
+            ctx.host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            onClientPluginData,
+            &ctx
+        )) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "events subscribe failed");
+        return nullptr;
+    }
+    if (ctx.iface.log && ctx.iface.log->log) {
+        auto msgSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded");
+        ctx.iface.log->log(ctx.host, 2, &msgSv);
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// client 侧 stop: 撤销 Info 段落 (可重复调用)
+static void* codegraphClientStop(
+    ClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
+) {
+    if (ctx.section && ctx.ui && ctx.ui->unregister_info_section) {
+        ctx.ui->unregister_info_section(ctx.host, ctx.section);
+        ctx.section = nullptr;
+    }
+    ctx.current_file.clear();
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ClientCtx, codegraphClientStart, codegraphClientStop)
 
 extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
@@ -1162,11 +1180,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin
                 delete ctx;
                 return;
             }
-            if (ctx->section && ctx->ui && ctx->ui->unregister_info_section) {
-                ctx->ui->unregister_info_section(ctx->host, ctx->section);
-                ctx->section = nullptr;
-            }
-            ctx->current_file.clear();
+            // destroy 只释放本地状态: UI 项撤销已由 stop 完成
             if (ctx->iface.log && ctx->iface.log->log) {
                 auto msgSv = agentxx::plugin::PluginStringView::fromCstr(
                     "agentxx_codegraph client unloaded"

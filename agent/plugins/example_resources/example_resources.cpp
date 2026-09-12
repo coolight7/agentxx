@@ -132,7 +132,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     );
 }
 
-/// ---------------- 生命周期 (Reset-v1) ----------------
+/// ---------------- 实例生命周期 (create 构造 / start 注册 / stop 撤销) ----------------
 ///
 /// 入口语义 (见 docs/zh-cn/design/plugins.md 第 15 节):
 /// - `create`: 只分配上下文、查询接口, 不提交运行时注册。

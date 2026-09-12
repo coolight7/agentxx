@@ -19,11 +19,11 @@ class PluginInstance;
 struct GraphTypeSlot {
     struct Snapshot {
         std::shared_ptr<PluginInstance> instance;
-        AgentxxPluginGraphNodeTypeSpec spec{};
-        std::string type;
-        std::string configSchemaJson;
-        uint64_t generation = 0;
-        bool active = false;
+        AgentxxPluginGraphNodeTypeSpec  spec{};
+        std::string                     type;
+        std::string                     configSchemaJson;
+        uint64_t                        generation = 0;
+        bool                            active     = false;
 
         Snapshot() = default;
 
@@ -39,12 +39,12 @@ struct GraphTypeSlot {
 
         Snapshot& operator=(const Snapshot& other) {
             if (this != &other) {
-                instance = other.instance;
-                spec = other.spec;
-                type = other.type;
+                instance         = other.instance;
+                spec             = other.spec;
+                type             = other.type;
                 configSchemaJson = other.configSchemaJson;
-                generation = other.generation;
-                active = other.active;
+                generation       = other.generation;
+                active           = other.active;
                 rebindSpec();
             }
             return *this;
@@ -62,12 +62,12 @@ struct GraphTypeSlot {
 
         Snapshot& operator=(Snapshot&& other) noexcept {
             if (this != &other) {
-                instance = std::move(other.instance);
-                spec = other.spec;
-                type = std::move(other.type);
+                instance         = std::move(other.instance);
+                spec             = other.spec;
+                type             = std::move(other.type);
                 configSchemaJson = std::move(other.configSchemaJson);
-                generation = other.generation;
-                active = other.active;
+                generation       = other.generation;
+                active           = other.active;
                 rebindSpec();
             }
             return *this;
@@ -84,38 +84,39 @@ struct GraphTypeSlot {
 
     Snapshot snapshot() const {
         std::lock_guard lock(mutex);
-        Snapshot out;
-        out.instance = instance.lock();
-        out.spec = spec;
-        out.type = type;
+        Snapshot        out;
+        out.instance         = instance.lock();
+        out.spec             = spec;
+        out.type             = type;
         out.configSchemaJson = configSchemaJson;
         out.rebindSpec();
         out.generation = generation;
-        out.active = active;
+        out.active     = active;
         return out;
     }
 
     void activate(
         const std::shared_ptr<PluginInstance>& owner,
-        AgentxxPluginGraphNodeTypeSpec          inSpec,
-        uint64_t                                inGeneration
+        AgentxxPluginGraphNodeTypeSpec         inSpec,
+        uint64_t                               inGeneration
     ) {
         std::lock_guard lock(mutex);
         instance = owner;
-        // lifetime generation distinguishes plugin instances. The additional
-        // activation counter also invalidates already compiled nodes when the
-        // same live instance replaces its registration.
+        // 实例代次区分不同插件实例; 额外的激活计数让"同一实例替换自己的注册"时
+        // 已编译的节点立即失效。
         const auto nextGeneration = generation == UINT64_MAX ? 1 : generation + 1;
-        generation = std::max(inGeneration, nextGeneration);
-        spec = inSpec;
+        generation                = std::max(inGeneration, nextGeneration);
+        spec                      = inSpec;
         type.assign(inSpec.type.data ? inSpec.type.data : "", inSpec.type.size);
         configSchemaJson.assign(
             inSpec.config_schema_json.data ? inSpec.config_schema_json.data : "",
             inSpec.config_schema_json.size
         );
-        spec.type = agentxx::plugin::PluginStringView::from(type.data(), type.size());
-        spec.config_schema_json
-            = agentxx::plugin::PluginStringView::from(configSchemaJson.data(), configSchemaJson.size());
+        spec.type               = agentxx::plugin::PluginStringView::from(type.data(), type.size());
+        spec.config_schema_json = agentxx::plugin::PluginStringView::from(
+            configSchemaJson.data(),
+            configSchemaJson.size()
+        );
         active = true;
     }
 
@@ -132,18 +133,19 @@ struct GraphTypeSlot {
     }
 
 private:
-    mutable std::mutex mutex;
-    std::weak_ptr<PluginInstance> instance;
+
+    mutable std::mutex             mutex;
+    std::weak_ptr<PluginInstance>  instance;
     AgentxxPluginGraphNodeTypeSpec spec{};
-    std::string type;
-    std::string configSchemaJson;
-    uint64_t generation = 0;
-    bool active = false;
+    std::string                    type;
+    std::string                    configSchemaJson;
+    uint64_t                       generation = 0;
+    bool                           active     = false;
 };
 
 /// 插件自定义节点 (宿主侧 GraphNode 子类, 委托插件 C 回调执行)
 ///
-/// 设计: 遵循插件系统"统一异步操作模型" (两件套 start/cancel + 锚定协程):
+/// 设计: 遵循插件系统"统一异步操作模型" (操作 start/cancel + 锚定协程):
 /// - 引擎调用 run(NodeInput) → 序列化 GraphState → 调插件 run_start 回调
 /// - 插件完成时经 notify->done 上报节点输出 JSON (writes/command/sends)
 /// - 宿主解析 JSON 构造 NodeOutput; 取消经 run_cancel 联动
@@ -159,7 +161,7 @@ public:
         std::string_view                configJson,
         std::shared_ptr<PluginInstance> instance,
         AgentxxPluginGraphNodeTypeSpec  spec,
-        std::shared_ptr<GraphTypeSlot>  slot = {},
+        std::shared_ptr<GraphTypeSlot>  slot       = {},
         uint64_t                        generation = 0
     );
 
@@ -177,7 +179,7 @@ private:
     std::string                     configSchemaJson_;
     std::shared_ptr<PluginInstance> instance_;
     AgentxxPluginGraphNodeTypeSpec  spec_;
-    std::shared_ptr<GraphTypeSlot>   slot_;
+    std::shared_ptr<GraphTypeSlot>  slot_;
     uint64_t                        generation_ = 0;
 };
 

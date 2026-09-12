@@ -352,7 +352,7 @@ const void* AGENTXX_PLUGIN_CALL
     return nullptr;
 }
 
-/// 伪宿主内存两件套: kit 会用 host->vtable->free 释放 request_driver 的
+/// 伪宿主内存操作: kit 会用 host->vtable->free 释放 request_driver 的
 /// error_out (缺失该函数会导致测试进程真的泄漏, 不是被测代码的问题)。
 void* AGENTXX_PLUGIN_CALL fakeAlloc(uint64_t size) {
     return std::malloc(static_cast<size_t>(size));
@@ -437,7 +437,7 @@ struct BridgeGate {
             return;
         }
         auto handle = std::coroutine_handle<Promise>::from_address(addr);
-        detail::resumePluginCoroutine(bridge, bridge->host(), handle);
+        detail::resumePluginCoroutine(bridge, handle);
     }
 };
 
@@ -490,8 +490,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.calls, 0);
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
 
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_EQ(bridge->ticketsIssued(), uint64_t{1});
         XX_TEST_EXPECT_EQ(bridge->driverSteps(), uint64_t{0});
         // 请求已登记但尚未执行; 首步仍挂在本地执行器上 (待推进步骤数 = 1)
@@ -533,7 +532,7 @@ TestResult testPluginBridge() {
             "depict",
             "{}",
             [&](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
-                gate.bridge = c.bridgeOrNull();
+                gate.bridge = &c.bridge();
                 co_await gate;
                 resumed = true;
                 co_return "woke";
@@ -544,7 +543,7 @@ TestResult testPluginBridge() {
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
 
-        auto* bridge = ctx.bridgeIfCreated();
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步: 协程挂到 gate 上
         XX_TEST_EXPECT_EQ(probe.calls, 0);
         XX_TEST_EXPECT_FALSE(bridge->hasPendingWake());
@@ -578,7 +577,7 @@ TestResult testPluginBridge() {
             "depict",
             "{}",
             [&wokeDuringDriver](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
-                auto* bridge = c.bridgeOrNull();
+                auto* bridge = &c.bridge();
                 // 模拟"执行本步时外部完成到达": 投递新工作并唤醒。
                 // 此刻请求仍在执行中 (driverRunning), wake 只能记为 wakePending_,
                 // 由本轮回调收尾时补票 —— 这正是"窗口 2 不丢唤醒"的可观察形式。
@@ -593,7 +592,7 @@ TestResult testPluginBridge() {
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
 
-        auto* bridge = ctx.bridgeIfCreated();
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_TRUE(wokeDuringDriver);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
@@ -630,7 +629,7 @@ TestResult testPluginBridge() {
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
 
-        auto* bridge = ctx.bridgeIfCreated();
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_EQ(bridge->ticketsIssued(), uint64_t{1});
 
         // 首步请求仍在排队时, 外部完成到达: wake 被合并 (不新增请求), 但不丢失
@@ -677,7 +676,7 @@ TestResult testPluginBridge() {
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
 
-        auto* bridge = ctx.bridgeIfCreated();
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步 -> 注册 sleep 并挂起
         XX_TEST_EXPECT_EQ(harness.sleeps.size(), size_t{1});
         XX_TEST_EXPECT_EQ(harness.sleeps.front().ms, int64_t{25});
@@ -765,7 +764,7 @@ TestResult testPluginBridge() {
         auto  spec          = g_capturedTool.spec;
         void* op            = startTool(spec, probe);
         // 操作已被接受 (返回 provider 句柄), 但宿主拒绝驱动 -> 立刻以 FAILED 终结;
-        // 这是 ABI 两件套契约允许的形态 (返回句柄就必须 exactly-once 通知, 而不是
+        // 这是 ABI 内存操作契约允许的形态 (返回句柄就必须 exactly-once 通知, 而不是
         // 返回 NULL + error_out)。返回 NULL 只用于参数/实例状态非法的同步拒绝。
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_FALSE(bodyRan);
@@ -801,8 +800,7 @@ TestResult testPluginBridge() {
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
+        auto* bridge = &ctx.bridge();
 
         XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步 -> 挂到 sleep 上
         XX_TEST_EXPECT_TRUE(sleepStarted);
@@ -855,8 +853,6 @@ TestResult testPluginBridge() {
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
 
         ctx.stopBridge();
         XX_TEST_EXPECT_FALSE(bodyRan);
@@ -908,9 +904,8 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(opB != nullptr);
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{2});
 
-        auto* bridgeA = ctxA.bridgeIfCreated();
-        auto* bridgeB = ctxB.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridgeA != nullptr && bridgeB != nullptr);
+        auto* bridgeA = &ctxA.bridge();
+        auto* bridgeB = &ctxB.bridge();
         XX_TEST_EXPECT_TRUE(bridgeA != bridgeB);
         XX_TEST_EXPECT_EQ(bridgeA->ticketsIssued(), uint64_t{1});
         XX_TEST_EXPECT_EQ(bridgeB->ticketsIssued(), uint64_t{1});
@@ -926,39 +921,6 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(bridgeA->isStopping());
         XX_TEST_EXPECT_FALSE(bridgeB->isStopping());
         XX_TEST_EXPECT_EQ(harness.cancelCalls, 0); // 两者请求都已执行, 无需取消
-    }
-
-    /// 10. 宿主不提供 coroutine_runtime: 回退旧路径 (start 内同步跑首步), 不创建桥。
-    {
-        harness.clear();
-        g_runtimeForTest = nullptr;
-        NotifyProbe probe;
-        BridgeCtx   ctx;
-        ctx.init(&host);
-        g_capturedTool = CapturedTool{};
-        int steps      = 0;
-        agentxx::plugin::tool(
-            ctx,
-            "legacy_no_runtime",
-            "depict",
-            "{}",
-            [&steps](BridgeCtx&, std::string_view, OpCtl&) -> Task<std::string> {
-                ++steps;
-                co_return "legacy";
-            }
-        );
-        XX_TEST_EXPECT_TRUE(g_capturedTool.has);
-        XX_TEST_EXPECT_TRUE(ctx.bridgeIfCreated() == nullptr);
-
-        auto  spec = g_capturedTool.spec;
-        void* op   = startTool(spec, probe);
-        // 无桥: 快同步完成的协程在 start 内跑完 -> NULL 句柄 + 已完成
-        XX_TEST_EXPECT_TRUE(op == nullptr);
-        XX_TEST_EXPECT_EQ(steps, 1);
-        XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"legacy"});
-        XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
-        g_runtimeForTest = &g_fakeRuntime;
     }
 
     /// 11. 受控轮询 (`polled_tool`): 插件本地 reactor 上的等待由 pump 推进。
@@ -986,7 +948,7 @@ TestResult testPluginBridge() {
                 std::string_view,
                 const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
                 ++bodyRuns;
-                auto* bridge = c.bridgeOrNull();
+                auto* bridge = &c.bridge();
                 sawPumping   = bridge != nullptr && bridge->isPumping();
                 // 插件本地 reactor 上的等待 (没有宿主可见唤醒源)
                 auto               ex = co_await asio::this_coro::executor;
@@ -1004,8 +966,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_EQ(bodyRuns, 0); // 首步不内联
         XX_TEST_EXPECT_EQ(probe.calls, 0);
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{1});
         XX_TEST_EXPECT_TRUE(bridge->isPumping());
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
@@ -1092,8 +1053,7 @@ TestResult testPluginBridge() {
         auto  spec = g_capturedTool.spec;
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
+        auto* bridge = &ctx.bridge();
 
         // 驱动到"退避在途"状态 (本地 timer 未到期, 本轮无进展)
         XX_TEST_EXPECT_TRUE(harness.runOne());
@@ -1168,8 +1128,7 @@ TestResult testPluginBridge() {
         auto  spec = g_capturedTool.spec;
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
+        auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_TRUE(harness.runOne()); // 业务体挂到 30s timer 上
         XX_TEST_EXPECT_EQ(bodyRuns, 1);
         XX_TEST_EXPECT_TRUE(harness.runOne()); // 无进展 -> 退避在途
@@ -1224,8 +1183,7 @@ TestResult testPluginBridge() {
         auto  spec = g_capturedTool.spec;
         void* op   = startTool(spec, probe);
         XX_TEST_EXPECT_TRUE(op != nullptr);
-        auto* bridge = ctx.bridgeIfCreated();
-        XX_TEST_EXPECT_TRUE(bridge != nullptr);
+        auto* bridge = &ctx.bridge();
 
         bool sawBurstYield = false;
         int  rounds        = 0;
@@ -1251,46 +1209,6 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_GE(bridge->idlePollCount(), uint64_t{1});
         XX_TEST_EXPECT_EQ(rounds < 4000, true); // 未超轮次上限 (无自旋)
-    }
-
-    /// 15. 降级路径: 宿主不提供 coroutine_runtime 时, polled_tool 用 offload
-    ///     工作线程 + 局部 io_context 跑完业务协程 (与 blocking_tool 等价),
-    ///     不创建桥、不产生请求、不涉及 pump。
-    {
-        harness.clear();
-        g_runtimeForTest = nullptr;
-        NotifyProbe probe;
-        BridgeCtx   ctx;
-        ctx.init(&host);
-        g_capturedTool = CapturedTool{};
-
-        int bodyRuns = 0;
-        agentxx::plugin::polled_tool(
-            ctx,
-            "polled_fallback",
-            "depict",
-            "{}",
-            [&bodyRuns](BridgeCtx&, std::string_view, std::string_view, std::string_view, const AgentxxPluginCancelToken*)
-                -> asio::awaitable<std::string> {
-                ++bodyRuns;
-                auto               ex = co_await asio::this_coro::executor;
-                asio::steady_timer t(ex, std::chrono::milliseconds(2));
-                co_await t.async_wait(asio::use_awaitable);
-                co_return "fallback-ok";
-            }
-        );
-
-        auto  spec = g_capturedTool.spec;
-        void* op   = startTool(spec, probe);
-        XX_TEST_EXPECT_TRUE(op != nullptr);
-        XX_TEST_EXPECT_EQ(harness.offloadCalls, 1); // 走 offload 工作线程
-        XX_TEST_EXPECT_EQ(bodyRuns, 1);
-        XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"fallback-ok"});
-        XX_TEST_EXPECT_TRUE(ctx.bridgeIfCreated() == nullptr); // 不创建桥
-        XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
-        g_runtimeForTest = &g_fakeRuntime;
     }
 
     harness.clear();

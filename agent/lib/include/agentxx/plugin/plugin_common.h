@@ -36,9 +36,7 @@
 #include <vector>
 
 /// C ABI 边界异常兜底 (函数式): vtable 函数内部不得让 C++ 异常逃逸 (跨边界 UB),
-/// 统一捕获转日志并按失败返回值返回。
-/// 历史宏 XX_PLUGIN_CATCH_BEGIN/END 已移除，统一使用 guardVtableCall / guardVtableCallVoid
-/// 函数式接口 (见下方)，调用示例:
+/// 统一捕获转日志并按失败返回值返回。调用示例:
 ///   return guardVtableCall(-1, [&]() { ... });
 ///   guardVtableCallVoid([&]() { ... });
 

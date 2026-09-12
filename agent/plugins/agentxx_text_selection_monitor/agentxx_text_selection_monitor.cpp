@@ -97,62 +97,86 @@ void TextSelectionHolder::stop() {
 
 } // namespace
 
+/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+
+static void* textSelectionAgentStart(
+    TextSelectionPluginCtx&            ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               err
+) {
+    ctx.holder.ctx = &ctx;
+
+    auto schema
+        = ctx.schema("agentxx_text_selection_monitor")
+              .enumString(
+                  "command",
+                  "Operation command: start listening, stop listening, or query running status.",
+                  {"start", "stop", "status"},
+                  /*required=*/true
+              )
+              .integer(
+                  "debounce_ms",
+                  "Debounce interval in milliseconds (default: 150). Only applies to start command."
+              )
+              .build();
+
+    blocking_tool(
+        ctx,
+        "agentxx_text_selection_monitor",
+        "Monitor system-wide text selection events. Supports start, stop, and status query.",
+        schema,
+        [](TextSelectionPluginCtx& c, std::string_view args_json) -> std::string {
+            ArgReader args(args_json);
+            auto      command = args.require<std::string>("command");
+            if (!args.ok()) {
+                return args.errorMessage();
+            }
+
+            TextSelectionHolder& holder = c.holder;
+
+            if (command == "start") {
+                int64_t debounceMs = args.value("debounce_ms", int64_t{0});
+                bool    ok         = holder.start(static_cast<int>(debounceMs));
+                return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
+            }
+
+            if (command == "stop") {
+                holder.stop();
+                return R"({"ok":true,"running":false})";
+            }
+
+            if (command == "status") {
+                bool running = holder.monitor_.isRunning();
+                return fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false");
+            }
+
+            return R"({"ok":false,"error":"unknown command"})";
+        }
+    );
+
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// stop: 停止监听并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
+static void* textSelectionAgentStop(
+    TextSelectionPluginCtx&            ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*
+) {
+    try {
+        ctx.holder.stop();
+    } catch (...) {
+    }
+    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 AGENTXX_PLUGIN_AGENT_EXPORT(
     TextSelectionPluginCtx,
     "agentxx_text_selection_monitor",
     "1.0.0",
     "System-wide text selection monitor event stream",
-    [](TextSelectionPluginCtx& ctx) -> int32_t {
-        ctx.holder.ctx = &ctx;
-
-        auto schema
-            = ctx.schema("agentxx_text_selection_monitor")
-                  .enumString(
-                      "command",
-                      "Operation command: start listening, stop listening, or query running status.",
-                      {"start", "stop", "status"},
-                      /*required=*/true
-                  )
-                  .integer(
-                      "debounce_ms",
-                      "Debounce interval in milliseconds (default: 150). Only applies to start command."
-                  )
-                  .build();
-
-        blocking_tool(
-            ctx,
-            "agentxx_text_selection_monitor",
-            "Monitor system-wide text selection events. Supports start, stop, and status query.",
-            schema,
-            [](TextSelectionPluginCtx& c, std::string_view args_json) -> std::string {
-                ArgReader args(args_json);
-                auto      command = args.require<std::string>("command");
-                if (!args.ok()) {
-                    return args.errorMessage();
-                }
-
-                TextSelectionHolder& holder = c.holder;
-
-                if (command == "start") {
-                    int64_t debounceMs = args.value("debounce_ms", int64_t{0});
-                    bool    ok         = holder.start(static_cast<int>(debounceMs));
-                    return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
-                }
-
-                if (command == "stop") {
-                    holder.stop();
-                    return R"({"ok":true,"running":false})";
-                }
-
-                if (command == "status") {
-                    bool running = holder.monitor_.isRunning();
-                    return fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false");
-                }
-
-                return R"({"ok":false,"error":"unknown command"})";
-            }
-        );
-
-        return 0;
-    }
+    textSelectionAgentStart,
+    textSelectionAgentStop
 );

@@ -68,8 +68,8 @@ struct AgentxxPluginOperationCompletionEndpoint {
 
 struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginOperatorHandle> {
     std::weak_ptr<agentxx::plugin::PluginInstanceBase> caller;
-    /// Runtime used to retain an IO-bound cancellation request if its executor
-    /// is temporarily stopped while the operation is still accepted.
+    /// 取消请求需要投递回 IO 线程执行; executor 暂时停止时由它保留请求,
+    /// 使"已接受但尚未终结"的操作仍能在 executor 恢复后完成取消。
     std::weak_ptr<agentxx::plugin::PluginRuntime> runtime;
     asio::any_io_executor                          executor;
     std::function<void()>                          cancelFn;
@@ -165,40 +165,6 @@ public:
     /// 在所有活动 lease 归零后销毁插件上下文；析构时也作为最后一道安全收尾。
     /// 返回 false 表示仍有活动 lease，调用方不得关闭动态库。
     bool destroyPlugin() noexcept;
-
-    struct InflightGuard {
-        std::shared_ptr<PluginInstance> inst;
-        InstanceLease                  lease;
-        bool                            legacy = false;
-
-        explicit InflightGuard(std::shared_ptr<PluginInstance> i, bool allowClosing = false) :
-            inst(std::move(i)),
-            lease(inst && inst->lifetime
-                      ? InstanceLease::acquire(inst->lifetime, allowClosing)
-                      : InstanceLease{}) {
-            if (inst && inst->lifetime) {
-                if (lease) {
-                    inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-                }
-            } else if (inst) {
-                legacy = true;
-                inst->inflight.fetch_add(1, std::memory_order_acq_rel);
-            }
-        }
-
-        explicit InflightGuard(PluginInstance* i, bool allowClosing = false) :
-            InflightGuard(i ? i->self.lock() : nullptr, allowClosing) {}
-
-        explicit operator bool() const noexcept {
-            return legacy || static_cast<bool>(lease);
-        }
-
-        ~InflightGuard() {
-            if (inst && (legacy || lease)) {
-                inst->inflight.fetch_sub(1, std::memory_order_acq_rel);
-            }
-        }
-    };
 };
 
 class PluginTool : public agentxx::tools::XXToolBase {
@@ -663,16 +629,12 @@ public:
     void enableImpl(std::string_view name, bool userInitiated);
 
     /// 摘除实例在宿主侧的注册（工具/hook/capability/graph/订阅/prompt 贡献），
-    /// 但保留实例内的注册记录；启用时由 start 事务或
-    /// [restoreHostSideRegistrations] 按记录恢复。禁用与卸载共用。
+    /// 但保留实例内的注册记录；启用时由 start 事务重新声明。
     void detachInstanceRegistrations(PluginInstance* inst);
 
     /// 清空"由插件 start 事务重新声明"的注册记录（工具/hook/capability/graph）。
     /// stop 成功后调用，避免下次 start 在旧记录上重复累积。
     void clearPluginOwnedRegistrations(PluginInstance* inst);
-
-    /// 恢复宿主侧已保存的注册记录（legacy 插件路径；无 start/stop 导出时使用）。
-    void restoreHostSideRegistrations(PluginInstance* inst);
 
     /// 按需投递禁用/启用事务到本管理器 IO executor（同步入口的异步收尾）。
     void requestStopForDisable(const std::shared_ptr<PluginInstance>& inst);
@@ -682,11 +644,10 @@ public:
     /// - `stopForDisable`：调用插件 stop 导出，撤销插件自管资源（订阅/线程/定时器）；
     ///   失败只记录日志并保持 Disabled（可再次 disable/enable 重试）。
     /// - `startForEnable`：调用插件 start 导出重新注册；成功后状态回到 Ready。
-    /// 没有 start/stop 导出的 legacy 插件不进入这两个事务（沿用宿主侧已保存注册）。
     asio::awaitable<void> stopForDisable(std::shared_ptr<PluginInstance> inst);
     asio::awaitable<void> startForEnable(std::shared_ptr<PluginInstance> inst);
 
-    // ==================== prompt 贡献模型 (R5 / F20) ====================
+    // ==================== prompt 贡献模型 ====================
     //
     // 插件对 prompt 的修改不再用"备份后无条件写回"，而是记录为
     // (owner, key, sequence, value) 贡献：
@@ -730,6 +691,24 @@ private:
 
     void shutdownPlugin(const std::shared_ptr<PluginInstance>& inst);
 
+    /// 加载/启动失败时的统一回滚 (摘除注册 → 销毁上下文 → 移出插件表 → 释放名称预占)
+    void rollbackLoad(const std::shared_ptr<PluginInstance>& inst, bool closeHandle);
+
+    /// 装配插件实例 (元信息/生命周期入口/宿主控制块; 两种加载路径共用)
+    std::shared_ptr<PluginInstance> makeInstance(
+        std::string                name,
+        const AgentxxPluginInfo*   info,
+        std::string                path,
+        const AgentxxPluginStartFn startFn,
+        const AgentxxPluginStopFn  stopFn
+    );
+
+    /// create + start 成功后的公共收尾 (应用声明式资源 → 冻结 → Ready)
+    void finishLoad(
+        const std::shared_ptr<PluginInstance>& inst,
+        const plugin::PluginManifestResources& resources
+    );
+
     asio::awaitable<bool> unloadAsyncUntil(
         std::string name,
         std::chrono::steady_clock::time_point deadline
@@ -748,7 +727,6 @@ struct NativeLoader {
     static void* open(const std::string& path, std::string& err);
     static void* sym(void* handle, const char* name, std::string& err);
     static void  close(void* handle);
-    static void  addSearchPath(std::string_view dir);
 };
 
 class CapabilityRegistry {

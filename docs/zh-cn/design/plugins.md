@@ -10,7 +10,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 - **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `AgentxxPluginStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
 - **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
-- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free` (核心 vtable 内存管理两件套) 管理，接收方用后 `host->free`；字符串复制采用头文件内联助手 `agentxx_plugin_strdup(host, ...)`
+- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free` (核心 vtable 内存管理操作) 管理，接收方用后 `host->free`；字符串复制采用头文件内联助手 `agentxx_plugin_strdup(host, ...)`
 - **原生协程异步支持**：经 `plugin_kit.h` 的 `Task<T>`，插件协程执行于宿主 IO 线程，挂起让出、完成经 IO 线程回调唤醒，宿主与插件的协程执行可互相交错切换，且运行于同一线程无锁，无轮询、无私有事件循环
 - **单线程会话**：宿主会话可变状态仅在主 IO 线程串行访问；插件注册/状态访问由宿主内部按需 `post` 回 IO 线程，插件无感
 
@@ -40,8 +40,8 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - C++ 辅助便捷层：`AgentxxPluginStringView` 与 `AgentxxPluginString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `agentxx_plugin_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
 - **版本限制**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时要求 `>=` 宿主版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；两件套 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxPluginOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
-- **实例生命周期、Operation 终态与租约**：见第 15 节（Reset-v1 契约，内置插件必须遵守）
+- **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；操作 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxPluginOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
+- **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
 
 ---
 
@@ -112,7 +112,7 @@ auto b64 = agentxx::util::base64Encode(data);
 推荐使用官方 header-only SDK `plugin_kit.h` (位于 `agentxx/plugin/api/plugin_kit.h`)。
 最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心。
 其中 `Task<T>` 协程 (以及 `sleep`/`yield`/`offload`/`call_tool`/`invoke_cap` 原语) 的推进
-交由宿主的**协程驱动桥** (Reset-v2) 调度：见 §16 与 §15 的生命周期契约。
+交由宿主的**协程驱动桥**调度：见 §16 与 §15 的生命周期契约。
 
 ```cpp
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -183,8 +183,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         // 4b. 受控轮询工具: 业务体是 asio 协程, 等待插件本地 reactor 上的内核就绪事件
         //     (socket/子进程管道/文件/本地 timer)。插件注册时声明"需要受控轮询驱动",
         //     桥据此在有在途操作时继续申请请求 (有进展立即续 / 无进展退避 10ms /
-        //     空闲零开销), 不占宿主工作线程; 无 coroutine_runtime 的宿主自动降级为
-        //     offload 工作线程跑完。详见 §16.5。
+        //     空闲零开销), 不占宿主工作线程。详见 §16.5。
         polled_tool(
             ctx,
             "my_polled_tool",
@@ -248,8 +247,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - `ctx.init()` 自动订阅 `plugin.agentxx.round_start` 事件，新轮次开始时自动清除对应会话的历史已取消标记
    - 支持 `registerCallback(key, cb)` 注册基于会话标识的取消回调，支持 RAII `ScopedRegistration` 守卫，提供排他互斥与防悬挂锁保护，避免回调访问已析构的局部资源
    - 适用于长时间运行的外部进程或底层阻塞 IO（如 `agentxx_execute_command`），一旦宿主发起取消即可毫秒级即时终止子进程组，无需等待轮询间隔
-5. **统一异步操作模型 (两件套 start/cancel)**：
-   - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxPluginOperatorNotify.done(status,payload)` 恰好一次上报
+5. **统一异步操作模型 (操作 start/cancel)**：
+   - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `AgentxxPluginOperatorNotify.done(status,payload)` 恰好一次上报
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
      等待插件本地 reactor 上的内核就绪事件，由桥按声明式受控轮询推进（§16.5）
@@ -265,7 +264,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - **注册**：`spawn()` 内部自动调 `register_task` (io 线程) → 宿主把句柄推入实例 `outstandingOps` (与工具 op 同列表) 并持 `inflight` (存活标记)
 - **运行**：协程照常经 `sleep`/`offload` 挂起于宿主；宿主无感，句柄静默
 - **卸载**：插件卸载时宿主 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleep/offload) → 协程 `while(!cancelled())` 退出 → `finishIfDone` (帧销毁后经 `notify.done` 恰好一次上报) → 宿主 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
-- **无降级**：宿主无 `agentxx.agent.tasks` 表或注册失败时 `spawn` 直接失败 (Reset-v1 不再提供无人托管的自管协程退化路径)
+- **无降级**：宿主无 `agentxx.agent.tasks` 表或注册失败时 `spawn` 直接失败 (不提供无人托管的自管协程退化路径)
 - **线程约束**：`cancel_fn` 由宿主在 io 线程回调 (协作式)；`notify.done` 可从插件任意线程上报 (宿主 `OpCore::onDone` 原子 CAS + 投递回 io)；kit 协程完成路径恒在 io 线程
 
 
@@ -289,7 +288,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |
-| `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 两件套) |
+| `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 操作) |
 | `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=宿主计时器; offload=阻塞池委托, 需 cancel_token) |
@@ -348,7 +347,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
    - 插件卸载/禁用时宿主自动摘除注册并还原兜底展示，启用时无损恢复。
 
-4. **语义渲染缓存 (Reset-v1)**：
+4. **语义渲染缓存**：
    - 自定义 `render_fn` **只在 client IO 线程执行**：UI 线程提交
      `ClientToolRenderRequest` (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝)，
      宿主在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用，
@@ -392,7 +391,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agentxx_javascript_engine` 引擎插件承载：
 
 - **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`
-- **执行流程 (Reset-v1)**：宿主加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎在专用线程中解析并执行脚本，把脚本声明的工具/钩子反向注册到宿主；脚本注册属于壳实例的 start 事务，因此壳的 start 完成必须等脚本加载结束 (异步 done)，失败由宿主回滚
+- **执行流程**：宿主加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎在专用线程中解析并执行脚本，把脚本声明的工具/钩子反向注册到宿主；脚本注册属于壳实例的 start 事务，因此壳的 start 完成必须等脚本加载结束 (异步 done)，失败由宿主回滚
 - **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本上下文按事务重建 (壳插件在自身 start 中重新加载脚本)
 - **stop 不阻塞 IO 线程**：JS 线程可能在宿主 vtable 调用中等待 IO 线程，因此 `stop` 由独立收尾线程完成 `join` 与 runtime 释放，完成通知从该线程上报；JS 线程空闲时走调用线程直接收尾的快路径，使紧邻的 stop→start 顺序确定。停止后不再执行插件 JS：新任务被拒绝，队列任务按 `CANCELLED`/`FAILED` 终结，事件投递丢弃
 - **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中宿主插件工具时经 `call_tool_async` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待宿主，A/B 脚本互调不存在线程自锁
@@ -446,7 +445,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 
 ---
 
-## 15. Reset-v1 实例生命周期与异步契约
+## 15. 实例生命周期与异步契约
 
 > 本节描述宿主 (agent 侧 `PluginManager` / client 侧 `ClientPluginManager`) 与插件之间的
 > 实例生命周期、Operation 终态与线程契约。它是插件实现的**必须遵守项**；
@@ -472,10 +471,14 @@ Closing → CloseFailed → Closing (可重试)
   可重复尝试，失败时实例保持 `Disabled`/`CloseFailed` 且保留上下文与动态库。
 - `destroy`：只在 `stop` 完成且租约归零后调用；不得创建异步工作、不得调用宿主
   注册接口。
-- SDK：`AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 与
-  `AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 生成带异常兜底的
-  `agentxx_plugin_{agent,client}_{start,stop}` trampoline；不使用它们的插件保持
-  create 期注册的 legacy 行为（宿主按注册记录恢复/摘除）。
+- **start/stop 是必备入口**：插件(无论 agent 侧/client 侧)都必须导出
+  `agentxx_plugin_{agent,client}_{start,stop}`；缺失时宿主拒绝加载并给出明确原因。
+  加载路径不再支持"create 期注册、无生命周期入口"的旧形态。
+- SDK：`AGENTXX_PLUGIN_AGENT_EXPORT(Ctx, Name, Ver, Desc, StartFn, StopFn)` /
+  `AGENTXX_PLUGIN_CLIENT_EXPORT(...)` 一次生成 `get_info/create/start/stop/destroy`
+  五个入口符号 (带异常兜底)；手写 `create/destroy` 的插件用
+  `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 只生成
+  `start/stop` trampoline。
 
 ### 15.2 Operation 终态协议
 
@@ -503,9 +506,9 @@ Closing → CloseFailed → Closing (可重试)
 
 - `disable(name)`：宿主同步摘除该实例的注册（工具/hook/能力/事件/资源/prompt 贡献/
   graph/UI），并把 `stop` 事务投递到所属 IO 线程；级联按直接依赖者递归处理。
-- `enable(name)`：宿主恢复启用状态后，导出 `start` 的插件由 start 事务重新声明注册
-  （未完成前不恢复宿主侧记录），legacy 插件按宿主保存的记录恢复；启用顺序为
-  "先依赖、后依赖者"，用户显式禁用的插件不被级联恢复。
+- `enable(name)`：宿主恢复启用状态后，由插件的 start 事务重新声明注册
+  （start 成功前不恢复宿主侧记录）；启用顺序为"先依赖、后依赖者"，
+  用户显式禁用的插件不被级联恢复。
 - prompt 以 `(owner, key, sequence, value)` 贡献模型合成：卸载/禁用只删除该 owner 的
   贡献并重新合成，不覆盖其他 owner，也不写回已卸载 owner 的旧值。
 - Client 侧动作按钮在渲染时记录 `plugin/generation/owner`，派发到 IO 线程复查：
@@ -540,7 +543,7 @@ Closing → CloseFailed → Closing (可重试)
 - 当前矩阵：`screen_capture` / `computer_use` / `text_selection_monitor` 仅 Windows；
   `agentxx_audio_stream` **全平台跳过**（WASAPI 实现未启用，`audio_stream.cpp` 中该分支
   带 `&& false`，仅剩桩实现；实现可用后声明 `windows` 并同步本节）。
-- **已验证平台**（Reset-v1 重构验收范围）：
+- **已验证平台**（当前实现的验收范围）：
   - Windows（MSVC 14.51 / VS18，Debug + ASan）：全插件构建（19 个 DSO）、插件专项
     1765/0、扩展回归 2251/0、工具模块 360/0；
   - Linux（GCC 16.1，Debug + ASan/LSan、定向 UBSan、定向 TSan）：插件框架 TSan 0 告警，
@@ -553,9 +556,9 @@ Closing → CloseFailed → Closing (可重试)
 
 ---
 
-## 16. Reset-v2 协程驱动 (通用 pump/wake 协议 + `PollOneBridge`)
+## 16. 协程驱动 (通用 pump/wake 协议 + `PollOneBridge`)
 
-> 本节描述 Reset-v2 引入的**协程驱动协议**：插件协程与宿主协程在同一宿主 IO 执行
+> 本节描述**协程驱动协议**：插件协程与宿主协程在同一宿主 IO 执行
 > 序列中交错推进，不额外开线程、不阻塞 IO；等待以"宿主可见唤醒源"为主，插件本地 reactor 上的
 > 内核就绪等待由**声明式受控轮询**（`polled_tool`）驱动，见 §16.5。方案与阶段划分见
 > `resource/history/plugin-refactor-3/plugin.md`，实施记录见
@@ -633,9 +636,8 @@ typedef struct AgentxxPluginCoroutineRuntimeIface {
 
 ### 16.4 kit 侧实现 (`detail::PollOneBridge` + `detail::BridgeRoot` / `detail::PolledRoot`)
 
-`PluginBase::bridgeOrNull()` 在宿主提供 `coroutine_runtime` 时返回本实例的桥
-（每实例一份，无任何进程级可变状态）；否则返回 `nullptr`，kit 自动回退到
-`post_to_io` 的旧路径（伪宿主/旧宿主）。
+`PluginBase::bridge()` 返回本实例的桥
+（每实例一份，无任何进程级可变状态）。
 
 **状态机（三个竞态窗口都覆盖）**
 
@@ -732,7 +734,7 @@ polledRoots_ 归零
 | 无进展 | 退避 10ms | `PollOneBridge::kPollIntervalMs`，经宿主 `scheduler.sleep`；到期回调只 `request_driver` |
 | 突发上限 | 连续 256 步后让出 1ms | `kPollBurstMax` / `kPollBurstYieldMs`，避免同实例自循环独占 IO 线程 |
 | 取消 | 置取消标志 + 取消在途退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避量子即可看到取消并收束根 |
-| 无 driver 的宿主 | 自动降级 | 无 `coroutine_runtime`/`scheduler.sleep` 时用 offload 工作线程 + 局部 `io_context` 跑完（等价 `blocking_tool`） |
+| 无 driver 的宿主 | 不支持 | `coroutine_runtime` 是宿主必备能力：缺失时 kit 无法推进协程（驱动请求失败会终结在途根并记日志），不再有 offload 降级路径 |
 
 业务签名与 `blocking_tool` 同形（只是返回 `asio::awaitable<std::string>`），因此迁移
 通常只是换一个注册函数名：
@@ -809,8 +811,8 @@ polled_tool(ctx, name, depict, schema,
 |------|------|
 | C ABI | `test_plugin_abi_c17.c`：协程驱动表 8 字节对齐、`version/struct_size` 偏移、版本号；C++ 侧逐项对照（`plugin_runtime`） |
 | 宿主请求 | `plugin_runtime`：恒异步、每票至多一次、取消后不再执行、排队持 lease、幂等取消、伪造句柄安全忽略、Closing 允许 / Closed 拒绝、空回调返回 `NULL + error_out` |
-| kit 桥接 | `plugin_bridge`（伪宿主 C ABI 驱动）：不内联、每票一次 `poll_one`、空闲不自旋、wake 三个窗口不丢、宿主回调不重入、取消唯一终态、拒绝驱动即终结、stop 取消排队请求、多实例隔离、无 `coroutine_runtime` 时回退 |
-| kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消在途退避）、取消会取消在途退避并只产生一个 `CANCELLED` 终态、`stop` 时在途 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出、无 `coroutine_runtime` 时降级为 offload 跑完且不创建桥 |
+| kit 桥接 | `plugin_bridge`（伪宿主 C ABI 驱动）：不内联、每票一次 `poll_one`、空闲不自旋、wake 三个窗口不丢、宿主回调不重入、取消唯一终态、拒绝驱动即终结、stop 取消排队请求、多实例隔离 |
+| kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消在途退避）、取消会取消在途退避并只产生一个 `CANCELLED` 终态、`stop` 时在途 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出 |
 | 端到端 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实宿主执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间宿主任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
 | 端到端（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收束、pump 停止、inflight 归零且耗时远小于命令自身超时 |
 | 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（在途卸载/放弃路径）后不变 |

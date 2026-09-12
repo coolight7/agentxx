@@ -12,7 +12,7 @@
 ///   * 结构体入参统一采用指针传递 (const Struct*)，杜绝结构体按值传参
 ///   * 结构体返回值统一改为函数出参 (Struct* out) 并返回 int32_t 状态码 (0=成功)
 /// - 核心 vtable 极简与最小正交基:
-///   * 跨堆内存两件套: alloc(uint64_t) / free(void*)
+///   * 跨堆内存操作: alloc(uint64_t) / free(void*)
 ///   * COM 风格能力查询: query_interface (strdup 移出 vtable 改由内联函数基于 alloc 实现)
 /// - 版本策略:
 ///   * 全局 AGENTXX_PLUGIN_API_VERSION 版本限制 (要求 >= AGENTXX_PLUGIN_API_VERSION，当前为 1)
@@ -157,7 +157,7 @@ typedef struct AgentxxPluginToolSpec {
     AgentxxPluginStringView description;
     AgentxxPluginStringView parameters_json; ///< JSON Schema 字符串 (json object)
 
-    /// 启动执行 (【宿主 io 线程调用】, 非阻塞; 两件套契约):
+    /// 启动执行 (【宿主 io 线程调用】, 非阻塞; 操作契约):
     /// - 入参均为指针传递 (只读借用, 仅本次调用有效)
     /// - 快同步工具: 算完 → notify->done(AGENTXX_PLUGIN_OPERATOR_OK, &res_sv) → 返回 NULL
     /// - 锚定协程/自管异步: 创建/挂起任务 → 返回 op 句柄
@@ -192,7 +192,6 @@ typedef enum AgentxxPluginHookPoint {
     AGENTXX_PLUGIN_HOOK_COUNT
 } AgentxxPluginHookPoint;
 
-/// 钩子规格: 两件套形态
 typedef struct AgentxxPluginHookSpec {
     int32_t  point;     ///< AgentxxPluginHookPoint (明确 32 位整型)
     uint32_t _reserved; ///< 8 字节补齐
@@ -211,7 +210,7 @@ typedef struct AgentxxPluginHookSpec {
 
 typedef struct AgentxxPluginSubscription AgentxxPluginSubscription;
 
-/// 能力方法处理器启动函数 (两件套契约):
+/// 能力方法处理器启动函数 (操作契约):
 typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginCapabilityStartFunction)(
     void*                              ctx,
     const AgentxxPluginHost*           caller_host,
@@ -223,7 +222,7 @@ typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginCapabilityStartFunction)(
 
 /* ==================== 核心宿主函数表 ==================== */
 
-/// 核心 vtable: 极简正交基 (内存两件套 + COM 风格接口表查询)
+/// 核心 vtable: 极简正交基 (内存操作 + COM 风格接口表查询)
 typedef struct AgentxxHostVtable {
     /* ---- 内存 (跨 CRT 堆边界的唯一分配通道; 任意线程可调用) ---- */
     void*(AGENTXX_PLUGIN_CALL* alloc)(uint64_t size);
@@ -709,7 +708,7 @@ typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginGraphNodeRunCancelFn)(void* user_
 /// 插件节点类型注册规格
 typedef struct AgentxxPluginGraphNodeTypeSpec {
     AgentxxPluginStringView           type;       ///< 节点类型名 (须全局唯一)
-    AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (两件套契约)
+    AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (操作契约)
     AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
     void*                             user_data;  ///< 透传给 run_start/run_cancel
     /// 可选节点 config JSON Schema (Draft 2020-12 片段; 仅供导出/文档, 引擎不校验)
@@ -806,9 +805,10 @@ typedef int32_t(AGENTXX_PLUGIN_CALL* AgentxxPluginCreateFn)(
 );
 typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDestroyFn)(void* plugin_ctx);
 
-/// Optional instance lifecycle hooks. The host invokes start after create and
-/// stop during Closing, both on the plugin IO executor. A NULL hook preserves
-/// the synchronous behavior of existing Reset-v1 plugins.
+/// 实例生命周期入口 (必备, 见 plugin_kit.h 的导出宏):
+/// - create 只构造上下文, 不做注册、不起线程;
+/// - start 是注册事务, 在插件所属 IO executor 上执行;
+/// - stop 撤销自管资源, 宿主在 Closing 阶段调用, 完成后才调用 destroy。
 typedef void*(AGENTXX_PLUGIN_CALL* AgentxxPluginStartFn)(
     void*                              plugin_ctx,
     const AgentxxPluginOperatorNotify* notify,

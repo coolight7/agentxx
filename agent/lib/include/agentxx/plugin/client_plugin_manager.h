@@ -128,7 +128,7 @@ struct ClientUiRegistry {
     std::vector<ClientActionBinding> actionBindings;
     /// 插件名 → 实例代次 (重载同名插件后代次改变)。UI 渲染时把代次记进按钮命中框,
     /// 点击派发时由 io 线程复查: 代次不匹配说明实例已重载, 旧点击只能丢弃,
-    /// 不得转交同名新实例 (plugin.md 第 8.3 节)。
+    /// 不得转交同名新实例。
     std::map<std::string, uint64_t, std::less<>> instanceGenerations;
 
     /// 查询插件实例代次 (0 = 未知/未登记)
@@ -147,7 +147,7 @@ struct ClientToolRenderResult {
     bool                isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
     /// 命中"按 tool_name 注册的自定义 renderer"但语义结果尚未计算出来:
     /// 调用方本次用通用回退渲染, 并按 [ClientToolRenderRequest] 提交一次请求。
-    /// 自定义 renderer 不在 UI 线程执行 (见 plugin.md 第 8.2 节)。
+    /// 自定义 renderer 不在 UI 线程执行 (只在 client IO 线程)。
     bool pendingRender = false;
     /// pendingRender=true 时的 renderer 归属插件 (空 = 未知)
     std::string pendingPlugin;
@@ -161,7 +161,7 @@ struct ClientToolRenderResult {
 /// 工具语义渲染结果条目 (宿主拥有; 写入后不再修改, UI 线程只读快照)
 /// - 由 client io 线程在持有 renderer lease 时执行插件回调, 并把
 ///   displayName/summary/items 拷成宿主字符串/JSON 后写入
-/// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退通用渲染 (F03)
+/// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退通用渲染
 struct ClientToolRenderEntry {
     std::string         key;        ///< 缓存键 (toolCallId, 空则 "#toolName")
     std::string         plugin;     ///< 产出该结果的插件名
@@ -452,7 +452,7 @@ public:
     std::shared_ptr<const ClientUiRegistry> uiRegistrySnapshot() const;
 
     /// 工具语义渲染缓存 (任意线程可读; 内部短锁)。UI 线程只读其中的宿主拷贝,
-    /// 自定义 renderer 的插件回调一律在 client io 线程执行 (plugin.md 第 8.2 节)。
+    /// 自定义 renderer 的插件回调一律在 client io 线程执行。
     std::shared_ptr<ClientToolRenderCache> toolRenderCache() const {
         return toolRenderCache_;
     }
@@ -743,10 +743,8 @@ private:
 
     friend class ClientPluginInstance;
 
-    /// 插件卸载清理: 摘除注册/退订/adapter 通知 (io 线程)
-    /// - keepInfo=true: disable 路径, 注册信息保留 (enable 可恢复)
-    /// - keepInfo=false: unload/shutdown 路径, 彻底清理
-    void detachAll(ClientPluginInstance* inst, bool keepInfo = true);
+    /// 插件卸载/禁用清理 (io 线程): 摘除 UI 注册与订阅 + adapter 通知 + 失效语义渲染缓存
+    void detachAll(ClientPluginInstance* inst);
 
     /// 禁用/启用内部实现 (级联递归用; userInitiated=false 表示级联, 不改 userDisabled)
     void disableImpl(std::string_view name, bool userInitiated);
@@ -785,17 +783,12 @@ private:
     /// [ClientUiRegistry::instanceGenerations])
     void setRegistryGeneration(std::string_view plugin, uint64_t generation, bool present);
 
-    /// legacy 插件启用时的 UI 注册恢复 (重建句柄 + 写回注册表 + adapter 通知)
-    void restoreHostSideUiRegistrations(ClientPluginInstance* inst);
-
-    /// 清空由插件 start 事务重新声明的注册记录 (stop 成功后调用)
-    void clearPluginOwnedUiRegistrations(ClientPluginInstance* inst);
-
     /// 按需投递禁用/启用事务到 client io executor (同步入口的异步收尾)
     void requestStopForDisable(const std::shared_ptr<ClientPluginInstance>& inst);
     void requestStartForEnable(const std::shared_ptr<ClientPluginInstance>& inst);
 
-    /// 禁用/启用事务的异步部分 (仅 client io 线程; 见 plugin.md 第 7.4 节)
+    /// 禁用/启用事务的异步部分 (仅 client io 线程):
+    /// stop 撤销插件自管资源, start 重新声明 UI 注册; 见 docs/zh-cn/design/plugins.md
     asio::awaitable<void> stopForDisable(std::shared_ptr<ClientPluginInstance> inst);
     asio::awaitable<void> startForEnable(std::shared_ptr<ClientPluginInstance> inst);
 
@@ -814,7 +807,7 @@ private:
 
     /// 工具语义渲染缓存 (client io 线程写, UI 线程读; 见
     /// [ClientToolRenderCache])。自定义 renderer 的插件回调只在 client io
-    /// 线程执行, UI 线程只消费这里已经拷成宿主对象的语义结果 (F03/R2)。
+    /// 线程执行, UI 线程只消费这里已经拷成宿主对象的语义结果。
     std::shared_ptr<ClientToolRenderCache> toolRenderCache_
         = std::make_shared<ClientToolRenderCache>();
 

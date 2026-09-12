@@ -225,7 +225,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         auto self = shared_from_this();
         auto owner = caller ? caller->self.lock() : nullptr;
         /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
-        auto admission = std::make_shared<PluginInstance::InflightGuard>(owner);
+        auto admission = std::make_shared<PluginInstanceBase::InflightGuard>(owner);
         if (!*admission) {
             hostMemorySetString(error_out, "plugin caller is closing");
             return nullptr;
@@ -296,7 +296,7 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
         auto self = shared_from_this();
         auto owner = caller ? caller->self.lock() : nullptr;
         /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
-        auto admission = std::make_shared<PluginInstance::InflightGuard>(owner);
+        auto admission = std::make_shared<PluginInstanceBase::InflightGuard>(owner);
         if (!*admission) {
             hostMemorySetString(error_out, "plugin caller is closing");
             return nullptr;

@@ -53,15 +53,11 @@ static void* sysStop(SysPluginCtx&, const AgentxxPluginOperatorNotify* notify, A
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(SysPluginCtx, sysStart, sysStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     SysPluginCtx,
     "agentxx_system",
     "1.0.0",
     "System info tools: current date/time with Unix timestamp",
-    [](SysPluginCtx&) -> int32_t {
-        // create 只构造上下文; 工具注册在 start 事务中执行。
-        return 0;
-    }
+    sysStart,
+    sysStop
 );

@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <coroutine>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -27,13 +28,13 @@ using namespace agentxx::plugin;
 
 /// SDK helper 注册出来的 spec 捕获（替代真实宿主的注册表）。
 struct CapturedRegistration {
-    AgentxxPluginToolSpec tool{};
-    bool                  hasTool = false;
-    AgentxxPluginHookSpec hook{};
-    bool                  hasHook = false;
-    AgentxxPluginCapabilityStartFunction capStart = nullptr;
-    AgentxxPluginOperatorCancelFunction  capCancel = nullptr;
-    void*                                capUd     = nullptr;
+    AgentxxPluginToolSpec                tool{};
+    bool                                 hasTool = false;
+    AgentxxPluginHookSpec                hook{};
+    bool                                 hasHook       = false;
+    AgentxxPluginCapabilityStartFunction capStart      = nullptr;
+    AgentxxPluginOperatorCancelFunction  capCancel     = nullptr;
+    void*                                capUd         = nullptr;
     bool                                 hasCapability = false;
     AgentxxPluginGraphNodeTypeSpec       graphNode{};
     bool                                 hasGraphNode = false;
@@ -75,8 +76,10 @@ int32_t AGENTXX_PLUGIN_CALL fakeRegisterCapabilityEx(
     return 0;
 }
 
-int32_t AGENTXX_PLUGIN_CALL
-    fakeRegisterGraphNodeType(const AgentxxPluginHost*, const AgentxxPluginGraphNodeTypeSpec* spec) {
+int32_t AGENTXX_PLUGIN_CALL fakeRegisterGraphNodeType(
+    const AgentxxPluginHost*,
+    const AgentxxPluginGraphNodeTypeSpec* spec
+) {
     if (!spec) {
         return -1;
     }
@@ -122,6 +125,80 @@ const AgentxxPluginGraphIface g_fakeGraph = {
     /* set_graph_json */ nullptr,
 };
 
+/// 伪宿主内存操作 (kit 会用 host->vtable->free 释放 request_driver 的 error_out)
+void* AGENTXX_PLUGIN_CALL fakeAlloc(uint64_t size) {
+    return std::malloc(static_cast<size_t>(size));
+}
+
+void AGENTXX_PLUGIN_CALL fakeFree(void* ptr) {
+    std::free(ptr);
+}
+
+/// 伪宿主驱动票据: 记录待执行的驱动回调, 由用例经 [runDriver] 手动执行
+/// (等价于宿主 IO 线程执行一次 `poll_one`)。
+struct FakeDriverTicket {
+    AgentxxPluginDriveOnceFn drive = nullptr;
+    void*                    ud    = nullptr;
+    bool                     done  = false;
+};
+
+FakeDriverTicket* g_pendingDriver = nullptr;
+
+AgentxxPluginDriver* AGENTXX_PLUGIN_CALL
+    fakeRequestDriver(const AgentxxPluginHost*, AgentxxPluginDriveOnceFn drive, void* ud, AgentxxPluginString*) {
+    auto* ticket    = new FakeDriverTicket{drive, ud, false};
+    g_pendingDriver = ticket;
+    return reinterpret_cast<AgentxxPluginDriver*>(ticket);
+}
+
+void AGENTXX_PLUGIN_CALL fakeCancelDriver(AgentxxPluginDriver* driver) {
+    auto* ticket = reinterpret_cast<FakeDriverTicket*>(driver);
+    if (ticket) {
+        ticket->done = true;
+    }
+    if (g_pendingDriver == ticket) {
+        g_pendingDriver = nullptr;
+    }
+}
+
+int32_t AGENTXX_PLUGIN_CALL fakeIsIoThread(const AgentxxPluginHost*) {
+    return 1;
+}
+
+const AgentxxPluginCoroutineRuntimeIface g_fakeRuntime = {
+    /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginCoroutineRuntimeIface),
+    /* request_driver */ fakeRequestDriver,
+    /* cancel_driver */ fakeCancelDriver,
+    /* is_io_thread */ fakeIsIoThread,
+};
+
+/// 执行一次待处理的驱动请求 (推进桥的本地执行器一个有限步骤);
+/// 反复调用直到 `false` 表示当前没有可推进的工作。
+bool runDriver() {
+    auto* ticket = g_pendingDriver;
+    if (!ticket || ticket->done) {
+        return false;
+    }
+    g_pendingDriver = nullptr;
+    ticket->done    = true;
+    if (ticket->drive) {
+        ticket->drive(ticket->ud);
+    }
+    delete ticket;
+    return true;
+}
+
+/// 接口表查询 (定义见下方: 需要先声明伪 runtime 表)
+const void* AGENTXX_PLUGIN_CALL
+    fakeQueryInterface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+
+const AgentxxHostVtable g_fakeVtable = {
+    /* alloc */ fakeAlloc,
+    /* free */ fakeFree,
+    /* query_interface */ fakeQueryInterface,
+};
+
 const void* AGENTXX_PLUGIN_CALL
     fakeQueryInterface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
     if (!iid || !iid->data) {
@@ -140,14 +217,11 @@ const void* AGENTXX_PLUGIN_CALL
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH) {
         return &g_fakeGraph;
     }
+    if (name == AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME) {
+        return &g_fakeRuntime;
+    }
     return nullptr;
 }
-
-const AgentxxHostVtable g_fakeVtable = {
-    /* alloc */ nullptr,
-    /* free */ nullptr,
-    /* query_interface */ fakeQueryInterface,
-};
 
 /// 完成通知探针：记录回调次数、状态与载荷。
 struct NotifyProbe {
@@ -155,10 +229,9 @@ struct NotifyProbe {
     int32_t     status = -1;
     std::string payload;
 
-    static void AGENTXX_PLUGIN_CALL done(
-        void* ud, int32_t status, const AgentxxPluginStringView* payload
-    ) {
-        auto& probe  = *static_cast<NotifyProbe*>(ud);
+    static void AGENTXX_PLUGIN_CALL
+        done(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+        auto& probe = *static_cast<NotifyProbe*>(ud);
         ++probe.calls;
         probe.status = status;
         if (payload && payload->data && payload->size > 0) {
@@ -201,7 +274,7 @@ void finishRoot(std::coroutine_handle<> h) {
 } // namespace
 
 TestResult testPluginSdk() {
-    TestResult result;
+    TestResult              result;
     const AgentxxPluginHost host{&g_fakeVtable, nullptr};
 
     /// F13：tool 根操作的输入由 Request 拥有 —— 宿主借用缓冲区失效后，协程挂起
@@ -252,16 +325,11 @@ TestResult testPluginSdk() {
 
         NotifyProbe probe;
         auto        notify = probe.notify();
-        void*       op = spec.execute_start(
-            spec.user_data,
-            &argsSv,
-            &sidSv,
-            &cidSv,
-            &notify,
-            nullptr
-        );
+        void* op = spec.execute_start(spec.user_data, &argsSv, &sidSv, &cidSv, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_EQ(probe.calls, 0);
+        // 首步由 host driver 推进: 跑一次驱动让协程挂起到 Gate
+        XX_TEST_EXPECT_TRUE(runDriver());
         // 借用缓冲区失效
         borrowedArgs.assign(borrowedArgs.size(), 'x');
         borrowedSid.assign(borrowedSid.size(), 'y');
@@ -291,12 +359,11 @@ TestResult testPluginSdk() {
         );
         XX_TEST_EXPECT_TRUE(g_captured.hasHook);
         {
-            auto                spec = g_captured.hook;
-            auto                in   = PluginStringView::fromCstr(R"({"k":1})");
-            NotifyProbe         probe;
-            auto                notify = probe.notify();
-            void*               op
-                = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
+            auto        spec = g_captured.hook;
+            auto        in   = PluginStringView::fromCstr(R"({"k":1})");
+            NotifyProbe probe;
+            auto        notify = probe.notify();
+            void*       op     = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
             XX_TEST_EXPECT_TRUE(op == nullptr);
             XX_TEST_EXPECT_EQ(probe.calls, 1);
             XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
@@ -318,7 +385,7 @@ TestResult testPluginSdk() {
             auto        in   = PluginStringView::fromCstr("{}");
             NotifyProbe probe;
             auto        notify = probe.notify();
-            void*       op = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
+            void*       op     = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
             XX_TEST_EXPECT_TRUE(op == nullptr);
             XX_TEST_EXPECT_EQ(probe.calls, 1);
             XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
@@ -356,15 +423,16 @@ TestResult testPluginSdk() {
         );
         XX_TEST_EXPECT_TRUE(g_captured.hasHook);
 
-        auto        spec = g_captured.hook;
+        auto spec = g_captured.hook;
         XX_TEST_EXPECT_TRUE(spec.hook_cancel != nullptr);
         auto        in = PluginStringView::fromCstr(R"({"hook":true})");
         NotifyProbe probe;
         auto        notify = probe.notify();
-        void*       op = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
+        void*       op     = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
 
         XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> 返回 provider 句柄
         XX_TEST_EXPECT_EQ(probe.calls, 0);  ///< 不得提前完成
+        XX_TEST_EXPECT_TRUE(runDriver());   ///< 首步由 host driver 推进 (挂起到 Gate)
         XX_TEST_EXPECT_EQ(seenInput, std::string{R"({"hook":true})"});
         XX_TEST_EXPECT_FALSE(finished);
 
@@ -396,14 +464,7 @@ TestResult testPluginSdk() {
         auto        notify = probe.notify();
         auto        method = PluginStringView::fromCstr("ping");
         auto        args   = PluginStringView::fromCstr(R"({"n":1})");
-        void*       op = g_captured.capStart(
-            g_captured.capUd,
-            nullptr,
-            &method,
-            &args,
-            &notify,
-            nullptr
-        );
+        void* op = g_captured.capStart(g_captured.capUd, nullptr, &method, &args, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op == nullptr); ///< 同步完成不返回句柄
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
@@ -439,16 +500,10 @@ TestResult testPluginSdk() {
         auto        notify = probe.notify();
         auto        method = PluginStringView::fromCstr("async-ping");
         auto        args   = PluginStringView::fromCstr("{}");
-        void*       op = g_captured.capStart(
-            g_captured.capUd,
-            nullptr,
-            &method,
-            &args,
-            &notify,
-            nullptr
-        );
+        void* op = g_captured.capStart(g_captured.capUd, nullptr, &method, &args, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> provider 句柄
         XX_TEST_EXPECT_EQ(probe.calls, 0);  ///< 不得提前完成
+        XX_TEST_EXPECT_TRUE(runDriver());   ///< 首步由 host driver 推进 (挂起到 Gate)
         XX_TEST_EXPECT_FALSE(finished);
 
         // 借用缓冲区 (method/args 视图) 失效后协程仍能完成 (Request 拥有输入)。
@@ -466,7 +521,7 @@ TestResult testPluginSdk() {
     {
         SdkCtx ctx;
         ctx.init(&host);
-        g_captured = CapturedRegistration{};
+        g_captured       = CapturedRegistration{};
         const int32_t rc = agentxx::plugin::graph_node(
             ctx,
             "test.node.sync",
@@ -492,15 +547,8 @@ TestResult testPluginSdk() {
         auto        tidSv   = PluginStringView::fromCstr("sess-1");
         NotifyProbe probe;
         auto        notify = probe.notify();
-        void*       op = spec.run_start(
-            spec.user_data,
-            &nameSv,
-            &cfgSv,
-            &stateSv,
-            &tidSv,
-            &notify,
-            nullptr
-        );
+        void*       op
+            = spec.run_start(spec.user_data, &nameSv, &cfgSv, &stateSv, &tidSv, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op == nullptr); ///< 快同步: 调用内完成, 不返回句柄
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
@@ -513,7 +561,7 @@ TestResult testPluginSdk() {
     {
         SdkCtx ctx;
         ctx.init(&host);
-        g_captured = CapturedRegistration{};
+        g_captured       = CapturedRegistration{};
         const int32_t rc = agentxx::plugin::graph_node(
             ctx,
             "test.node.throw",
@@ -523,12 +571,11 @@ TestResult testPluginSdk() {
             }
         );
         XX_TEST_EXPECT_EQ(rc, 0);
-        auto        spec    = g_captured.graphNode;
+        auto        spec = g_captured.graphNode;
         NotifyProbe probe;
         auto        notify = probe.notify();
-        void*       op = spec.run_start(
-            spec.user_data, nullptr, nullptr, nullptr, nullptr, &notify, nullptr
-        );
+        void*       op
+            = spec.run_start(spec.user_data, nullptr, nullptr, nullptr, nullptr, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op == nullptr);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
@@ -543,15 +590,15 @@ TestResult testPluginSdk() {
         std::string             seenState;
 
         struct AsyncBox {
-            bool*                    released = nullptr;
-            std::coroutine_handle<>* handle   = nullptr;
-            bool*                    finished = nullptr;
+            bool*                    released  = nullptr;
+            std::coroutine_handle<>* handle    = nullptr;
+            bool*                    finished  = nullptr;
             std::string*             seenState = nullptr;
         } box{&released, &handle, &finished, &seenState};
 
         SdkCtx ctx;
         ctx.init(&host);
-        g_captured = CapturedRegistration{};
+        g_captured       = CapturedRegistration{};
         const int32_t rc = agentxx::plugin::graph_node(
             ctx,
             "test.node.async",
@@ -564,7 +611,7 @@ TestResult testPluginSdk() {
                     co_return std::string{"cancelled"};
                 }
                 *box.seenState = state;
-                *box.finished = true;
+                *box.finished  = true;
                 co_return fmt::format(R"({{"async":"{}"}})", node);
             }
         );
@@ -579,17 +626,11 @@ TestResult testPluginSdk() {
         auto        tidSv   = PluginStringView::fromCstr("sess-2");
         NotifyProbe probe;
         auto        notify = probe.notify();
-        void*       op = spec.run_start(
-            spec.user_data,
-            &nameSv,
-            &cfgSv,
-            &stateSv,
-            &tidSv,
-            &notify,
-            nullptr
-        );
+        void*       op
+            = spec.run_start(spec.user_data, &nameSv, &cfgSv, &stateSv, &tidSv, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> provider 句柄
         XX_TEST_EXPECT_EQ(probe.calls, 0);
+        XX_TEST_EXPECT_TRUE(runDriver()); ///< 首步由 host driver 推进 (挂起到 Gate)
         XX_TEST_EXPECT_FALSE(finished);
 
         // 宿主借用缓冲区失效后 (置空视图) 协程仍能完成 (Request 拥有输入)

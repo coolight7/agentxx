@@ -438,17 +438,13 @@ static void* fsStop(FsPluginCtx&, const AgentxxPluginOperatorNotify* notify, Age
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(FsPluginCtx, fsStart, fsStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     FsPluginCtx,
     "agentxx_filesystem",
     "1.0.0",
     "File system tools: list, read, write, edit, glob, grep",
-    [](FsPluginCtx&) -> int32_t {
-        // create 只构造上下文; 工具注册在 start 事务中执行。
-        return 0;
-    }
+    fsStart,
+    fsStop
 );
 
 struct FsClientCtx : public ClientPluginBase {};
@@ -614,15 +610,11 @@ static void* fsClientStop(
     return nullptr;
 }
 
-AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(FsClientCtx, fsClientStart, fsClientStop)
-
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     FsClientCtx,
     "agentxx_filesystem",
     "1.0.0",
     "Filesystem specialized renderer",
-    [](FsClientCtx&) -> int32_t {
-        // create 只构造上下文; UI 注册在 start 事务中执行。
-        return 0;
-    }
+    fsClientStart,
+    fsClientStop
 );

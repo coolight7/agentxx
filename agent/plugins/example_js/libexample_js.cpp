@@ -1,6 +1,6 @@
 /// libexample_js.so —— example_js 插件的 C++ 壳 (统一插件模型示例)
 ///
-/// Reset-v1 生命周期 (见 plugin.md 第 5.2 节):
+/// 实例生命周期: create 只构造, start 加载脚本, stop 停止脚本执行
 /// - create: 只构造上下文 (查询接口表 + 解析自身路径), 不注册、不启动线程;
 /// - start:  校验 "interpreter.js" 能力可用后, 把同目录 plugin.js 交给引擎执行,
 ///           脚本内注册的工具/订阅全部属于本实例的注册事务;
@@ -181,7 +181,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 }
 
 /// create: 只构造上下文 (查询接口表 + 解析自身名称/路径), 不做运行时注册,
-/// 不启动线程, 不调用能力 (Reset-v1 第 5.2 节)。
+/// 不启动线程, 不调用能力。
 extern "C" AGENTXX_PLUGIN_EXPORT int
     agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
     ShellCtx* raw = nullptr;

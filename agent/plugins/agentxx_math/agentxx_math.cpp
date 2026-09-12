@@ -85,15 +85,11 @@ static void* mathStop(MathPluginCtx&, const AgentxxPluginOperatorNotify* notify,
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(MathPluginCtx, mathStart, mathStop)
-
 AGENTXX_PLUGIN_AGENT_EXPORT(
     MathPluginCtx,
     "agentxx_math",
     "1.0.0",
     "Mathematical expression evaluator: parse and calculate math expressions",
-    [](MathPluginCtx&) -> int32_t {
-        // create 只构造上下文; 工具注册在 start 事务中执行。
-        return 0;
-    }
+    mathStart,
+    mathStop
 );

@@ -99,9 +99,9 @@ static void AGENTXX_PLUGIN_CALL on_client_hello(const AgentxxPluginStringView*, 
     });
 }
 
-/// ---------------- 生命周期 (Reset-v1) ----------------
+/// ---------------- 实例生命周期 (create 构造 / start 注册 / stop 撤销) ----------------
 ///
-/// 入口语义 (见 plugin.md 第 5.2 / 7.2 节):
+/// 入口语义 (见 docs/zh-cn/design/plugins.md 生命周期小节):
 /// - `create`: 只分配上下文、查询接口、初始化纯本地字段; 不提交任何运行时注册,
 ///   不启动不受托管的线程。
 /// - `start`: 在宿主 IO 线程执行注册事务 (工具/hook/事件/能力/prompt); 失败时
@@ -191,7 +191,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
 
     // 1.4 bridge: 协程驱动桥诊断 (plugin.md 样例)
     //
-    // 这个工具演示驱动桥的两个"真实唤醒源" (plugin.md 第 3 节):
+    // 这个工具演示驱动桥的两个"真实唤醒源":
     //   1. 宿主已有 scheduler timer 回调 (`co_await sleep`) —— 到期时 adapter 只把
     //      continuation 投递到本地执行器并唤醒, 下一步由下一次 host driver 推进;
     //   2. 宿主回调式异步接口 (`co_await call_tool`) —— 完成回调同样不重入插件协程。
@@ -217,8 +217,8 @@ static int exampleAgentSetup(AgentCtx& ctx) {
             if (ticks > 32) {
                 ticks = 32;
             }
-            auto* bridge      = c.bridgeOrNull();
-            bool  onIoAtStart = bridge ? bridge->onHostIoThread() : false;
+            auto* bridge      = &c.bridge();
+            bool  onIoAtStart = bridge->onHostIoThread();
             for (int i = 0; i < ticks; ++i) {
                 // 宿主计时器适配: 到期 -> 投递 continuation + wake -> 下一次 driver 恢复
                 co_await agentxx::plugin::sleep(c, 1);
@@ -283,9 +283,9 @@ static int exampleAgentSetup(AgentCtx& ctx) {
                 intervalMs = 1;
             }
 
-            auto*      bridge      = c.bridgeOrNull();
-            const bool pumpOnStart = bridge != nullptr && bridge->isPumping();
-            const bool onIoThread  = bridge != nullptr && bridge->onHostIoThread();
+            auto*      bridge      = &c.bridge();
+            const bool pumpOnStart = bridge->isPumping();
+            const bool onIoThread  = bridge->onHostIoThread();
 
             auto ex      = co_await asio::this_coro::executor;
             auto startAt = std::chrono::steady_clock::now();

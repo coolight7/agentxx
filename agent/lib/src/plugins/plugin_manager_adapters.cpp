@@ -596,7 +596,7 @@ AgentxxPluginSubscription* PluginManager::subscribe(
                 || !inst->lifetime->acceptsOperations()) {
                 co_return;
             }
-            PluginInstance::InflightGuard guard(inst);
+            PluginInstanceBase::InflightGuard guard(inst);
             if (!guard || !sub->alive.load(std::memory_order_acquire)) {
                 co_return;
             }

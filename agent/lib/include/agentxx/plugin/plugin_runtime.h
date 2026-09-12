@@ -31,9 +31,8 @@ using RuntimeErrorCode = util::AsioErrorCode;
 
 struct PluginRuntime;
 
-/// A runtime-owned action may be observed by both an old executor queue and a
-/// replay on a newly attached executor. The claim bit makes that race
-/// exactly-once without requiring cancellation of an already posted handler.
+/// 运行时动作可能同时被"旧 executor 队列"和"新 executor 上的重放"看到;
+/// claim 位让这场竞争只产生一次执行, 且无需取消已经投递的 handler。
 struct RuntimeAction {
     std::atomic<bool> claimed{false};
     std::function<void()> fn;
@@ -338,10 +337,9 @@ inline bool runtimeExecutorStopped(const asio::any_io_executor& executor) noexce
         return true;
     }
     try {
-        // A direct io_context executor is the runtime's supported binding.
-        // Type-erased execution_context is not polymorphic, so do not use
-        // RTTI here. Unknown executor adapters remain usable; their owner is
-        // responsible for rebinding before a synchronous call is made.
+        // runtime 支持的绑定是 io_context 的 executor; 类型擦除后的
+        // execution_context 没有多态接口, 因此这里不用 RTTI 判断。
+        // 其它 executor 适配器依然可用, 只是其持有者需要在同步调用前完成重绑定。
         if (const auto* ioExecutor = executor.target<asio::io_context::executor_type>()) {
             return ioExecutor->context().stopped();
         }
@@ -395,10 +393,9 @@ inline bool enqueueRuntimeAction(
     if (!retainWhenStopped && runtimeExecutorStopped(executor)) {
         return false;
     }
-    // Register reliable actions before posting. An io_context can transition
-    // to stopped between the probe and asio::post (and a naturally idle
-    // context also reports stopped); the posted handler and this pending
-    // record then race safely through RuntimeAction::claimed.
+    // 先登记再投递: io_context 可能在探测与 asio::post 之间转为 stopped
+    // (自然空闲的 context 同样报告 stopped), 此时已投递的 handler 与这里的
+    // 待执行记录通过 RuntimeAction::claimed 安全竞争, 只会执行一次。
     if (retainWhenStopped) {
         std::lock_guard lock(runtime->pendingMutex);
         runtime->pendingActions.push_back(action);
