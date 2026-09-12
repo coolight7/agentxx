@@ -38,6 +38,39 @@
 
 using namespace ftxui;
 
+namespace {
+
+/// 文本消息的正文是否无可见内容 (空串或仅空白字符, 如 `""` / `" "` / `"\n"`)
+///
+/// 用于过滤"空 content 消息": 这类消息在列表中渲染为一个空块 (只占一行空白),
+/// 直接不进入消息列表 (TUI 忽略其渲染)。
+/// - 仅适用于正文类角色 (User/Assistant/System/Tip): Tool 消息的正文是工具参数、
+///   Think 消息可为空思考载体 (仍有 "[Think] 时长" 头部)、Interrupt 消息内嵌
+///   交互控件, 均不按正文过滤
+/// - 带附件的消息视为有内容 (纯附件消息无正文但需渲染附件卡片)
+bool isBlankContentMessage(const TUIMessage& msg) {
+    if (!msg.attachments.empty()) {
+        return false;
+    }
+    switch (msg.role) {
+        case TUIMessage::Role::User:
+        case TUIMessage::Role::Assistant:
+        case TUIMessage::Role::System:
+        case TUIMessage::Role::Tip:
+            break;
+        default:
+            return false;
+    }
+    for (char c : msg.text) {
+        if (!agentxx::util::charIsSpace(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // 构造 / 析构
 // ---------------------------------------------------------------------------
@@ -1631,7 +1664,11 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     }
     msg->durationMs  = st.pendingTokenDurationMs;
     msg->startTimeMs = st.pendingTokenStartTimeMs;
-    st.messages.push_back(std::move(msg));
+    // 空 content 消息过滤: 流式正文 (Assistant) 全为空白时不落入消息列表
+    // (如模型只输出了空格/换行); Think 消息仍保留 (头部显示思考时长)
+    if (!isBlankContentMessage(*msg)) {
+        st.messages.push_back(std::move(msg));
+    }
     st.pendingTokenDurationMs  = 0;
     st.pendingTokenStartTimeMs = 0;
     st.pendingTokenThink.reset();
@@ -1759,13 +1796,21 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
             }
         }
         prependedCount = page.messages.size();
+        prependedCount = page.messages.size();
         anchored       = !st.messages.empty();
         // ViewMessage → TUIMessage (shared_ptr) 转换后按页内顺序整体前插
+        // (空 content 消息过滤: 不入列表, 前插条数按实际插入项计数,
+        //  滚动锚定依赖该条数估算新增行数)
         std::vector<std::shared_ptr<TUIMessage>> converted;
         converted.reserve(page.messages.size());
         for (const auto& vm : page.messages) {
-            converted.push_back(std::make_shared<TUIMessage>(vm));
+            auto msg = std::make_shared<TUIMessage>(vm);
+            if (isBlankContentMessage(*msg)) {
+                continue;
+            }
+            converted.push_back(std::move(msg));
         }
+        prependedCount = converted.size();
         st.messages.insert(st.messages.begin(), converted.begin(), converted.end());
         st.historyWindowStart = page.startIndex;
         if (page.totalCount > st.historyTotal) {
@@ -2085,7 +2130,10 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         msg->tip->tipLevel = TUIMessage::TipLevel::Error;
                         break;
                 }
-                st.messages.push_back(std::move(msg));
+                // 空 content 消息过滤 (提示文本为空/全空白时无展示意义)
+                if (!isBlankContentMessage(*msg)) {
+                    st.messages.push_back(std::move(msg));
+                }
                 st.isStreaming = true;
             } break;
             case Type::InsertMessage: {
@@ -2093,7 +2141,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 // 服务端已完成 appendViewMessage 与持久化, 客户端直接装载展示
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
-                if (delta.message) {
+                // 空 content 消息过滤 (如正文为空/全空白的 assistant 消息)
+                if (delta.message && false == isBlankContentMessage(*delta.message)) {
                     st.messages.push_back(delta.message);
                 }
             } break;
@@ -2104,7 +2153,12 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 if (delta.message && !delta.message->id.empty()) {
                     for (size_t i = 0; i < st.messages.size(); ++i) {
                         if (st.messages[i]->id == delta.message->id) {
-                            st.messages[i] = delta.message;
+                            if (isBlankContentMessage(*delta.message)) {
+                                // 更新后变为空 content: 从列表中移除 (不保留空块)
+                                st.messages.erase(st.messages.begin() + static_cast<int64_t>(i));
+                            } else {
+                                st.messages[i] = delta.message;
+                            }
                             break;
                         }
                     }
@@ -2113,19 +2167,22 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             case Type::TurnStart: {
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
-                // 空文本+有附件的纯附件消息也需回显（此前 !text.empty() 会吞掉）
-                if (!delta.text.empty() || !delta.attachments.empty()) {
+                // 空文本+有附件的纯附件消息也需回显（此前 !text.empty() 会吞掉）;
+                // 正文为空/全空白且无附件的用户消息不入列表 (TUI 忽略空 content)
+                {
                     auto msg = std::make_shared<TUIMessage>(
                         TUIMessage::makeText(TUIMessage::Role::User, delta.text, delta.startTimeMs)
                     );
                     msg->id          = delta.msgId;
                     msg->attachments = delta.attachments;
-                    st.messages.push_back(std::move(msg));
-                    enqueueUiAction([this]() {
-                        if (messageList_) {
-                            messageList_->setStickToBottom(true);
-                        }
-                    });
+                    if (false == isBlankContentMessage(*msg)) {
+                        st.messages.push_back(std::move(msg));
+                        enqueueUiAction([this]() {
+                            if (messageList_) {
+                                messageList_->setStickToBottom(true);
+                            }
+                        });
+                    }
                 }
                 st.isStreaming = true;
             } break;
@@ -2178,9 +2235,16 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
 
             // 历史消息与 server viewMessages 同型 (ViewMessage), 直接拷贝;
             // 原 json→TUIMessage 拆解逻辑已下沉到 server (event_stream 展开)
+            // - 空 content 消息 (正文为空/全空白) 不入列表 (TUI 忽略其渲染);
+            //   历史分页的窗口下标/总数仍按服务端 viewMessages 计数,
+            //   与本地列表条数解耦 (见 historyWindowStart/historyTotal)
             st->messages.reserve(payload.messages.size());
             for (const auto& vm : payload.messages) {
-                st->messages.push_back(std::make_shared<TUIMessage>(vm));
+                auto msg = std::make_shared<TUIMessage>(vm);
+                if (isBlankContentMessage(*msg)) {
+                    continue;
+                }
+                st->messages.push_back(std::move(msg));
             }
             // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
             // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 全量同步时为 0);
