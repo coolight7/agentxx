@@ -774,6 +774,10 @@ asio::awaitable<void>
         const auto oldTokens = tokenUsage;
 
         // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
+        // - 自动压缩经 NodeInterrupt 中断父轮次派生压缩子代理, resume 后本函数
+        //   从头重新执行 (压缩请求命中中断结果缓存, 不再派生): 第二次执行必须
+        //   复用首次创建的提示消息 (更新而非追加), 否则每次压缩都会遗留一条
+        //   永远停留在 "Summarizing LLM Context..." 的重复提示消息
         agentxx::agent::ViewMessage vm = agentxx::agent::ViewMessage::makeText(
             agentxx::agent::ViewMessage::Role::Tip,
             "Summarizing LLM Context...",
@@ -782,13 +786,36 @@ asio::awaitable<void>
         vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
         vm.collapsed     = true;
         if (session) {
-            vm.id = session->appendViewMessage(vm);
-            if (session->io) {
-                session->io->sendToPeer(agentxx::agent::WireDelta{
-                    .type    = agentxx::agent::WireDelta::Type::InsertMessage,
-                    .seq     = session->nextDeltaSeq(),
-                    .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
-                });
+            const std::string pendingTipId
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<std::string>(
+                    sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
+                );
+            if (pendingTipId.empty()) {
+                vm.id = session->appendViewMessage(vm);
+                agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<std::string>(
+                    sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId,
+                    vm.id
+                );
+                if (session->io) {
+                    session->io->sendToPeer(agentxx::agent::WireDelta{
+                        .type    = agentxx::agent::WireDelta::Type::InsertMessage,
+                        .seq     = session->nextDeltaSeq(),
+                        .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                    });
+                }
+            } else {
+                // 续跑 (中断恢复后重新执行): 复用首次的提示消息
+                vm.id = pendingTipId;
+                session->updateViewMessage(vm);
+                if (session->io) {
+                    session->io->sendToPeer(agentxx::agent::WireDelta{
+                        .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
+                        .seq     = session->nextDeltaSeq(),
+                        .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                    });
+                }
             }
         }
 
@@ -960,6 +987,19 @@ asio::awaitable<void>
         neograph::to_json(neoNewMsgs, compressedMessages);
         in.state.overwrite("messages", neoNewMsgs);
 
+        // ---- 压缩结果同步回会话上下文 (崩溃安全 + 避免重复压缩) ----
+        // 压缩只改写图 state 的 messages channel, 会话的 llmMessages 原本仅在轮末
+        // (AgentRunner 由图最终状态) 回写。若进程在压缩后到轮末之间退出 (崩溃/被
+        // 强制结束), 落库的仍是压缩前的历史: 重启后上下文重新超限, 下一轮立即再次
+        // 触发压缩 (表现为"反复压缩"), 本次压缩的子代理开销全部白费。
+        // 故压缩完成即回写会话上下文, 并请求一次节流落盘 (落库失败仅记日志)。
+        // - 安全性: 压缩结果由图 state 生成, 与本轮已结算的消息一致 (含本轮
+        //   已追加的 assistant/tool 消息), 轮末权威写回会再次覆盖收敛
+        if (session) {
+            session->llmMessages = agentxx::util::fromNeographJson(neoNewMsgs);
+            session->requestSaveLlmMessages();
+        }
+
         if (compacted) {
             // 成功压缩: 记录本次压缩后的消息条数, 供后续轮次做冷却判断
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
@@ -1005,6 +1045,11 @@ asio::awaitable<void>
                 session->contextStats->contextTokens    = newTokens;
                 session->contextStats->maxContextTokens = modelContenxtMaxToken;
             }
+            // 本次压缩结束: 清除挂起提示标记 (下次压缩重新追加提示消息)
+            agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
+                sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
+            );
         }
     }
 

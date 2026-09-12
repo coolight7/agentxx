@@ -335,6 +335,10 @@ public:
     void testOnDelta(const WireDelta& d) {
         onDelta(d);
     }
+
+    void testOnSync(const WireSyncPayload& p) {
+        onSync(p);
+    }
 };
 
 // 场景 1: 加密 thinking (text 为空, think.isEncrypted=true) -> 思考开始时立即展示 ->
@@ -807,6 +811,217 @@ void testTuiStreamScenario9(asio::io_context& ioCtx) {
     }
 }
 
+// 场景 10: 空 content 消息过滤 (TUI 忽略空串 / " " / 全空白正文的消息渲染)
+// - TurnStart 空文本无附件: 不入列表; 有附件: 入列表 (纯附件消息需渲染卡片)
+// - 流式正文全空白: 不生成 Assistant 消息
+// - MessageUITip / InsertMessage 空文本: 不入列表
+// - UpdateMessage 更新为空 content: 移除已存在的同名消息
+// - onSync / Sync 全量历史中的空 content 消息: 过滤
+void testTuiStreamScenario10(asio::io_context& ioCtx) {
+    // ①② TurnStart 空文本 (无附件不入列表; 有附件入列表)
+    {
+        TestTUIClientIO client(ioCtx);
+
+        // ① TurnStart 文本为单个空格且无附件 -> 不入列表
+        {
+            WireDelta d;
+            d.type        = WireDelta::Type::TurnStart;
+            d.text        = " ";
+            d.msgId       = "msg_000001";
+            d.startTimeMs = 1000;
+            client.testOnDelta(d);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+        }
+
+        // ② TurnStart 文本为空 + 有附件 -> 入列表 (附件卡片需展示)
+        {
+            WireDelta d;
+            d.type        = WireDelta::Type::TurnStart;
+            d.text        = "";
+            d.msgId       = "msg_000002";
+            d.startTimeMs = 1100;
+            MediaAttachment att;
+            att.type        = MediaType::Image;
+            att.displayName = "a.png";
+            att.mimeType    = "image/png";
+            att.pathOrUrl   = "/tmp/a.png";
+            d.attachments.push_back(att);
+            client.testOnDelta(d);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+            if (snap->messages.size() == 1) {
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::User);
+                XX_TEST_EXPECT_EQ(snap->messages[0]->attachments.size(), (size_t)1);
+            }
+        }
+    }
+
+    // ③④ 流式正文全为空白 -> 不生成 Assistant 消息; 有效正文仍保留
+    {
+        TestTUIClientIO client(ioCtx);
+
+        // ③ 流式正文全为空白 -> 不生成 Assistant 消息
+        {
+            WireDelta d_token;
+            d_token.type = WireDelta::Type::TextToken;
+            d_token.text = "   ";
+            client.testOnDelta(d_token);
+
+            WireDelta d_blank;
+            d_blank.type = WireDelta::Type::TextToken;
+            d_blank.text = "\n ";
+            client.testOnDelta(d_blank);
+
+            WireDelta d_end;
+            d_end.type = WireDelta::Type::TurnEnd;
+            client.testOnDelta(d_end);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+        }
+
+        // ④ 空白正文后紧跟有效正文 -> 仅保留有效正文消息
+        {
+            WireDelta d_token;
+            d_token.type = WireDelta::Type::TextToken;
+            d_token.text = " ";
+            client.testOnDelta(d_token);
+
+            WireDelta d_end;
+            d_end.type = WireDelta::Type::TurnEnd;
+            client.testOnDelta(d_end);
+
+            WireDelta d_token2;
+            d_token2.type = WireDelta::Type::TextToken;
+            d_token2.text = "有效回答";
+            client.testOnDelta(d_token2);
+
+            WireDelta d_end2;
+            d_end2.type = WireDelta::Type::TurnEnd;
+            client.testOnDelta(d_end2);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+            if (snap->messages.size() == 1) {
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Assistant);
+                XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"有效回答"});
+            }
+        }
+    }
+
+    // ⑤⑥⑦ 提示/插入/更新消息的空 content 过滤
+    {
+        TestTUIClientIO client(ioCtx);
+
+        // ⑤ MessageUITip 空白文本 -> 不入列表
+        {
+            WireDelta d;
+            d.type    = WireDelta::Type::MessageUITip;
+            d.text    = "  ";
+            d.tipType = WireDelta::TipType::Warning;
+            client.testOnDelta(d);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+        }
+
+        // ⑥ InsertMessage 空 content ViewMessage -> 不入列表
+        {
+            WireDelta d;
+            d.type    = WireDelta::Type::InsertMessage;
+            d.message = std::make_shared<ViewMessage>(
+                ViewMessage::makeText(ViewMessage::Role::Assistant, " ")
+            );
+            d.message->id = "msg_blank_insert";
+            client.testOnDelta(d);
+
+            auto snap = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+        }
+
+        // ⑦ UpdateMessage 更新为空白 content -> 移除该消息
+        {
+            WireDelta d_ins;
+            d_ins.type    = WireDelta::Type::InsertMessage;
+            d_ins.message = std::make_shared<ViewMessage>(
+                ViewMessage::makeText(ViewMessage::Role::Assistant, "占位内容")
+            );
+            d_ins.message->id = "msg_update_target";
+            client.testOnDelta(d_ins);
+
+            auto snap1 = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)1);
+
+            WireDelta d_upd;
+            d_upd.type    = WireDelta::Type::UpdateMessage;
+            d_upd.message = std::make_shared<ViewMessage>(
+                ViewMessage::makeText(ViewMessage::Role::Assistant, " ")
+            );
+            d_upd.message->id = "msg_update_target";
+            client.testOnDelta(d_upd);
+
+            auto snap2 = client.sharedState().snapshot();
+            XX_TEST_EXPECT_EQ(snap2->messages.size(), (size_t)0);
+        }
+    }
+
+    // ⑧ onSync 全量历史: 空 content 消息过滤, 非空消息保留
+    {
+        TestTUIClientIO client(ioCtx);
+
+        WireSyncPayload payload;
+        payload.fromIndex = 0;
+        payload.messages.push_back(
+            ViewMessage::makeText(ViewMessage::Role::User, "历史用户消息")
+        );
+        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, ""));
+        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, " "));
+        payload.messages.push_back(
+            ViewMessage::makeText(ViewMessage::Role::Assistant, "历史回答")
+        );
+        payload.totalMessages = payload.messages.size();
+        client.testOnSync(payload);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+        if (snap->messages.size() == 2) {
+            XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"历史用户消息"});
+            XX_TEST_EXPECT_EQ(snap->messages[1]->text, std::string{"历史回答"});
+        }
+        // 历史窗口元数据仍按服务端 viewMessages 计数 (与本地列表条数解耦)
+        XX_TEST_EXPECT_EQ(snap->historyTotal, uint64_t{4});
+        XX_TEST_EXPECT_EQ(snap->historyWindowStart, uint64_t{0});
+    }
+
+    // ⑨ Tool / Think 不受空 content 过滤影响 (头部/思考时长仍有意义)
+    {
+        TestTUIClientIO client(ioCtx);
+
+        WireDelta d_tool;
+        d_tool.type       = WireDelta::Type::ToolStart;
+        d_tool.toolName   = "agentxx_execute_bash_command";
+        d_tool.toolCallId = "call_empty_args";
+        d_tool.arguments  = ""; // 无参数工具: Tool 消息正文为空
+        client.testOnDelta(d_tool);
+
+        WireDelta d_think;
+        d_think.type  = WireDelta::Type::ThinkToken;
+        d_think.text  = "";
+        d_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
+        client.testOnDelta(d_think);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+        if (snap->messages.size() == 2) {
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+            XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Think);
+        }
+    }
+}
+
 } // namespace
 
 TestResult testTuiStream() {
@@ -822,6 +1037,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario7(ioCtx);
     testTuiStreamScenario8(ioCtx);
     testTuiStreamScenario9(ioCtx);
+    testTuiStreamScenario10(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

@@ -2040,6 +2040,185 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(env->handle->countTokens({}, res, false) < size_t{950});
     }
 
+    // ==================== 压缩稳定性 (重复压缩 / 中断续跑 / 写回) ====================
+
+    // --- T19. 同一会话反复压缩: 每次压缩追加并更新自己的提示消息, 上下文被
+    //           压缩结果替换 (崩溃安全写回), 无残留 "Summarizing..." 提示 ---
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small"); // max=1000, budget=30
+        env->subagent->summary = "S1";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+
+        constexpr int kRounds = 5;
+        for (int round = 0; round < kRounds; ++round) {
+            auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
+            // 每轮压缩结果作为下一轮输入 (模拟同一会话持续推进)
+            XX_TEST_EXPECT_FALSE(res.empty());
+            XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
+            msgs = res;
+
+            // 压缩结果同步回会话上下文 (崩溃后重启不丢压缩结果, 也不会立即重复压缩)
+            auto& session = *env->session();
+            XX_TEST_EXPECT_TRUE(session.llmMessages.is_array());
+            XX_TEST_EXPECT_EQ(session.llmMessages.size(), res.size());
+        }
+
+        // 提示消息: 每轮各一条且均已更新为结果文本; 无停留在 "Summarizing..." 的残留
+        size_t summarizingCount = 0;
+        size_t summarizedCount  = 0;
+        for (const auto& vm : env->session()->viewMessages) {
+            if (vm.text.starts_with("Summarizing LLM Context...")) {
+                ++summarizingCount;
+            } else if (vm.text.starts_with("Summarized LLM Context ")) {
+                ++summarizedCount;
+            }
+        }
+        XX_TEST_EXPECT_EQ(summarizingCount, size_t{0});
+        XX_TEST_EXPECT_EQ(summarizedCount, size_t{kRounds});
+        // 挂起提示标记已清理 (下次压缩重新追加提示)
+        XX_TEST_EXPECT_TRUE(
+            env->ctx->middlewareHandleContext
+                ->getGraphDataItemValue<std::string>(
+                    env->sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
+                )
+                .empty()
+        );
+        // 压缩结果中保留摘要消息 (最近一次成功压缩的产物仍在上下文中)
+        bool hasSummaryNote = false;
+        for (const auto& item : env->session()->llmMessages) {
+            if (item.value("content", std::string{}).starts_with("[Previous conversation summary]")
+                    == true
+                || item.value("content", std::string{})
+                       == "[Please compact context to save space]") {
+                hasSummaryNote = true;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasSummaryNote);
+    }
+
+    // --- T20. 中断续跑: 压缩提示消息复用 (不重复追加), 压缩结果写回会话上下文 ---
+    // 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后 onModelcallRunFunc 从头
+    // 重新执行: 第二次执行的提示消息必须复用首次创建的 (否则遗留永远停留在
+    // "Summarizing LLM Context..." 的重复提示)
+    {
+        auto                    ctx = std::make_shared<agentxx::agent::AgentContext>();
+        static asio::io_context s_ioCtx;
+        ctx->bus         = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
+        ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+        ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+        agentxx::agent::ModelConfig mcfg;
+        mcfg.name                  = "m";
+        mcfg.modelName             = "m-model";
+        mcfg.modelContenxtMaxToken = 1000;
+        ctx->modelRegistry->registerModel("m", mcfg);
+        ctx->agentConfig->model.modelName = "m";
+
+        // 真实 SubAgentManagerTool: 首次调用抛 NodeInterrupt (与生产一致)
+        auto realTool
+            = std::make_shared<agentxx::tools::SubAgentManagerTool>("subagent_manager", ctx);
+        realTool->registerOnBus(ctx->bus);
+        realTool->subAgentList.insert(std::make_pair(
+            "subagent_task",
+            std::make_shared<agentxx::tools::SubAgentNormalTask>("subagent_task", "isolation")
+        ));
+
+        const std::string sid = "sum_resume_tip_thread";
+        auto              session = ctx->sessions->getOrCreate(sid);
+        // recentTokenBudgetRatio=0.03 (与 SummarizationTestEnv 一致): 使压缩段非空,
+        // 走 LLM 压缩路径 (默认 0.20 时短消息全部落入 recent, 不触发压缩)
+        auto handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(
+            ctx,
+            2048,
+            4.0,
+            1.1,
+            400.0,
+            3.0,
+            0.03
+        );
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+
+        // ① 首次执行: 中断 (压缩子代理待派生), 提示消息已追加
+        bool threwInterrupt = false;
+        try {
+            (void)co_await runModelcall(handle, ctx, sid, msgs, 900);
+        } catch (const neograph::graph::NodeInterrupt&) {
+            threwInterrupt = true;
+        }
+        XX_TEST_EXPECT_TRUE(threwInterrupt);
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            session->viewMessages[0].text.starts_with("Summarizing LLM Context...")
+        );
+        const auto pendingTipId
+            = ctx->middlewareHandleContext->getGraphDataItemValue<std::string>(
+                sid,
+                agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
+            );
+        XX_TEST_EXPECT_EQ(pendingTipId, session->viewMessages[0].id);
+
+        // ② 续跑 (resume): 预置中断结果, 再次执行 → 复用同一提示消息并更新为结果文本
+        ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+            sid,
+            agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
+            agentxx::util::Json{
+                {"1", "resume summary"}
+        }
+        );
+        auto res = co_await runModelcall(handle, ctx, sid, msgs, 900);
+        XX_TEST_EXPECT_FALSE(res.empty());
+        // 提示消息仍只有一条, 且已更新为压缩结果 (无重复/无残留)
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(session->viewMessages[0].text.starts_with("Summarized LLM Context "));
+        XX_TEST_EXPECT_EQ(session->viewMessages[0].id, pendingTipId);
+        // 挂起提示标记已清理
+        XX_TEST_EXPECT_TRUE(
+            ctx->middlewareHandleContext
+                ->getGraphDataItemValue<std::string>(
+                    sid,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
+                )
+                .empty()
+        );
+        // 压缩结果写回会话上下文 (崩溃后重启不丢)
+        XX_TEST_EXPECT_TRUE(session->llmMessages.is_array());
+        XX_TEST_EXPECT_EQ(session->llmMessages.size(), res.size());
+        bool hasSummaryNote = false;
+        for (const auto& item : session->llmMessages) {
+            if (item.value("content", std::string{})
+                    .starts_with("[Previous conversation summary]: \nresume summary")) {
+                hasSummaryNote = true;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasSummaryNote);
+    }
+
     co_return TestResult{g_sum_passed, g_sum_failed};
 }
 

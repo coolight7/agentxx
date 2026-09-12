@@ -155,6 +155,12 @@ path/to/agentxx_test string_util regex
   详见 `docs/zh-cn/design/plugins.md` §5 节
 
 ## 编译
+- 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`
+  传入嵌套构建, 代码中一律使用 `XX_IS_*_D` (勿使用编译器内置平台宏):
+  - 平台: `XX_IS_LINUX_D` / `XX_IS_WIN_D` / `XX_IS_MACOS_D` / `XX_IS_ANDROID_D` / `XX_IS_IOS_D`
+  - 工具链: `XX_IS_MSVC_D` / `XX_IS_GCC_D` / `XX_IS_CLANG_D` /
+    `XX_IS_MINGW_D` (Windows 目标 + 非 MSVC, 取代 `__MINGW32__`; 独立构建
+    plugins 目录时由 `plugins/cmake/plugin_platform_support.cmake` 本地推导)
 - Linux:
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
 - Windows:
@@ -169,6 +175,20 @@ path/to/agentxx_test string_util regex
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
+### 上下文压缩 (summarization)
+- 压缩结果写回时机: 自动压缩在轮内改写图 state 的 messages channel 后, **立即**
+  回写会话 `llmMessages` 并请求节流落盘 (`Session::requestSaveLlmMessages`) ——
+  若只等轮末写回, 进程在压缩后到轮末之间退出会让压缩结果丢失, 重启后上下文
+  重新超限将触发重复压缩 (表现为"反复压缩")
+- 压缩提示消息复用: 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后
+  `onModelcallRunFunc` 从头重新执行, 依据 `graphDataKey_summarizationTipMsgId`
+  复用首次创建的 "Summarizing LLM Context..." 提示消息 (更新而非追加), 不再
+  遗留永久停留的重复提示
+### 会话持久化 (SQLite)
+- 入库文本统一经 `dumpJsonUtf8` 保证 UTF-8 合法 (`Json::dump` 对 >= 0x80 字节原样
+  透传, 非法编码文本会让读取端 simdjson 解析失败)
+- `loadSession` 分区容错: 单行历史脏数据只跳过该行; 展示历史 / meta / LLM 上下文
+  三段独立捕获, 任一段失败不丢弃其余 (原实现任一异常会清空整个会话数据)
 协程驱动 (见 docs/zh-cn/design/plugins.md §16):
 - 新增 C ABI 表 `agentxx.agent.coroutine_runtime` v1 (`request_driver` / `cancel_driver` /
   `is_io_thread`): 插件申请"有界驱动请求"、宿主异步执行一次 `poll_one` 式有限步骤;

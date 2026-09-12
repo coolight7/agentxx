@@ -28,6 +28,10 @@ public:
 ///   - 压缩完成时更新 viewMessage 为 "压缩上下文
 ///   {旧上下文token量}->{新上下文token量}/{最大上下文限制} · {耗时}"
 /// - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要] | 最近消息
+/// - 压缩完成即回写会话 llmMessages 并请求落盘: 进程在压缩后到轮末之间退出
+///   (崩溃/被杀) 时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩
+/// - 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后本中间件从头重新执行:
+///   压缩提示消息按挂起 id 复用 (更新而非追加), 不产生重复提示
 /// - 压缩失败 >= 2 次 (同一轮内) 或 token >= 95% 上限: 硬截断兜底, 保证请求能发出
 class SummarizationMiddlewareHandle : public BaseMiddlewareHandle<_SummarizationMiddlewareState> {
 protected:

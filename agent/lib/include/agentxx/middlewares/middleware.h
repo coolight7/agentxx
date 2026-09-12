@@ -449,6 +449,11 @@ public:
     inline static const std::string graphDataKey_summarizationLastMsgCount{
         "xx_summarizationLastMsgCount"
     };
+    /// 本次压缩挂起中的提示消息 id ("Summarizing LLM Context..." 的 viewMessage id)
+    /// - 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后压缩中间件从头重新执行,
+    ///   需据该 id 复用首次创建的提示消息 (更新而非再追加), 避免每次压缩遗留重复提示
+    /// - 压缩完成 (摘要结果写回提示消息) 时清除
+    inline static const std::string graphDataKey_summarizationTipMsgId{"xx_summarizationTipMsgId"};
     inline static const std::string graphDataKey_interruptArgs{"xx_interruptArgs"};
     inline static const std::string graphDataKey_interruptResult{"xx_interruptResult"};
     /// 中断发生的节点名 (供程序重启恢复中断时复用)

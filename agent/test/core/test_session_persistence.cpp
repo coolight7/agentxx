@@ -8,6 +8,8 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/sqlite.h"
+#include "agentxx/util/string_util.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
@@ -1051,6 +1053,67 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
     co_return;
 }
 
+/// 持久化健壮性 (崩溃/脏数据后尽量少丢数据):
+/// ① 正文含非法 UTF-8 (工具输出的 GBK/二进制文本) 时入库前修复, 读取不失败
+/// ② 单行历史脏数据 (非 JSON) 只跳过该行, 其余历史正常恢复 (不整体丢弃)
+/// ③ LLM 上下文脏数据按空上下文恢复, 展示历史不受影响
+static void testPersistenceResilience() {
+    using agentxx::agent::SessionStore;
+    using V = agentxx::agent::ViewMessage;
+
+    auto root = makeTempRoot();
+    {
+        auto p = std::make_shared<SessionStore>(root);
+
+        // ① 非法 UTF-8 正文: 落库前按 U+FFFD 修复 (Json::dump 原样透传非法字节,
+        //    读取端 simdjson 解析会抛异常 -> 原实现表现为会话整体丢失)
+        std::string dirty = "GBK: ";
+        dirty.push_back(static_cast<char>(0xB2));
+        dirty.push_back(static_cast<char>(0xE2));
+        dirty.push_back(static_cast<char>(0xCA));
+        dirty.push_back(static_cast<char>(0xD4));
+        dirty += " end";
+        XX_TEST_EXPECT_FALSE(agentxx::util::utf8IsAvail(dirty));
+
+        p->appendViewMessage("r_utf8", makeMsg(V::Role::User, "before"), 1);
+        p->appendViewMessage("r_utf8", makeMsg(V::Role::Assistant, dirty), 2);
+        p->appendViewMessage("r_utf8", makeMsg(V::Role::User, "after"), 3);
+
+        auto loaded = p->loadSession("r_utf8");
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{3});
+        if (loaded.viewMessages.size() == 3) {
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[0].text, std::string{"before"});
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[2].text, std::string{"after"});
+            // 非法字节被替换, 合法文本保留
+            XX_TEST_EXPECT_TRUE(loaded.viewMessages[1].text.starts_with("GBK: "));
+            XX_TEST_EXPECT_TRUE(loaded.viewMessages[1].text.find(" end") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(agentxx::util::utf8IsAvail(loaded.viewMessages[1].text));
+        }
+
+        // ②③ 脏数据注入: 直接经 SQLite 写入无法解析的行 (模拟历史脏数据)
+        p->appendViewMessage("r_dirty", makeMsg(V::Role::User, "keep-me"), 1);
+        p->saveLlmMessages("r_dirty", agentxx::util::Json::array({agentxx::util::Json{{"role", "user"}, {"content", "ctx"}}}));
+        {
+            auto dir = fs::path(root) / SessionStore::sanitizeSessionId("r_dirty");
+            agentxx::util::SqliteDb db;
+            db.open((dir / "session.db").string());
+            db.exec("INSERT INTO view_message(json) VALUES ('{not valid json')");
+            db.exec("DELETE FROM llm_context");
+            db.exec("INSERT INTO llm_context(id, json) VALUES (1, '{oops')");
+        }
+
+        auto dirtyLoaded = p->loadSession("r_dirty");
+        // 可解析的历史行仍恢复 (坏行被跳过); 脏 LLM 上下文按空上下文恢复
+        XX_TEST_EXPECT_EQ(dirtyLoaded.viewMessages.size(), size_t{1});
+        if (!dirtyLoaded.viewMessages.empty()) {
+            XX_TEST_EXPECT_EQ(dirtyLoaded.viewMessages[0].text, std::string{"keep-me"});
+        }
+        XX_TEST_EXPECT_TRUE(dirtyLoaded.llmMessages.is_array());
+        XX_TEST_EXPECT_TRUE(dirtyLoaded.llmMessages.empty());
+    }
+    fs::remove_all(root);
+}
+
 /// P0-4 回归: Session 析构函数线程安全
 /// - 绑定的 io 线程析构时正常 flushPendingViewOps
 /// - 非 io 线程析构时安全丢弃 pendingViewOps, 禁止跨线程调用 SQLite hooks
@@ -1131,6 +1194,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testSanitizeThreadId();
     testSessionListPagination();
     testSessionDestructorThreadSafety();
+    testPersistenceResilience();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;
