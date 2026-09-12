@@ -169,6 +169,10 @@ endif ()
 set(XX_IS_MSVC_D 0)
 set(XX_IS_GCC_D 0)
 set(XX_IS_CLANG_D 0)
+# MinGW 工具链 (Windows + GNU/Clang 前端, 非 MSVC): 供代码内条件编译使用,
+# 取代编译器内置的 __MINGW32__ 宏 (内置宏无法由 CMake 统一控制, 交叉编译/
+# 模拟环境/未来工具链变化时判定口径分散)
+set(XX_IS_MINGW_D 0)
 
 if (MSVC)
   set(XX_IS_MSVC_D 1)
@@ -178,6 +182,12 @@ elseif (CMAKE_C_COMPILER_ID MATCHES "Clang")
   set(XX_IS_CLANG_D 1)
 else ()
   message(FATAL_ERROR "[agentxx] 不支持的编译器: ${CMAKE_C_COMPILER_ID}")
+endif ()
+
+# MinGW 判定: Windows 目标平台 + 非 MSVC 编译器 (GNU/Clang 均为 MinGW 工具链,
+# 交叉编译与原生 MSYS2/MinGW 环境一致)
+if (XX_IS_WIN_D AND NOT XX_IS_MSVC_D)
+  set(XX_IS_MINGW_D 1)
 endif ()
 
 # Sanitizer 可用性 guard / 提示 (需先确定编译器):
@@ -203,10 +213,10 @@ else ()
 endif ()
 
 # MinGW 交叉编译不受支持的特性自动降级:
-# - HyperScan 仅支持 Linux (MSVC 分支受限支持), MinGW (GCC 交叉到 Windows)
-#   无可用实现, 强制关闭以避免 hyperscan_repo ExternalProject 构建失败;
-#   正则能力自动回退到 std::regex (见 lib/src/util/regex.cpp)
-if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D AND NOT XX_IS_MSVC_D AND AGENTXX_ENABLE_HYPERSCAN)
+# - HyperScan 仅支持 Linux (MSVC 分支受限支持), MinGW (GCC/Clang 交叉到
+#   Windows) 无可用实现, 强制关闭以避免 hyperscan_repo ExternalProject 构建
+#   失败; 正则能力自动回退到 std::regex (见 lib/src/util/regex.cpp)
+if (CMAKE_CROSSCOMPILING AND XX_IS_MINGW_D AND AGENTXX_ENABLE_HYPERSCAN)
   message(WARNING "[agentxx] HyperScan not supported on MinGW cross (Windows+GCC), force AGENTXX_ENABLE_HYPERSCAN=OFF")
   set(AGENTXX_ENABLE_HYPERSCAN OFF CACHE BOOL "Add HyperScan for regex support. Use std::regex if disable." FORCE)
 endif()
@@ -389,7 +399,7 @@ else ()
   
   # 交叉编译到 Windows (MinGW) 时禁用 LTO: 旧版 bfd ld 无 LLVMgold 插件, 无法链接 -flto 产生的 LLVM bitcode
   # - 需 lld 才能处理, 但为简化 hermetic 构建, 直接禁用 LTO
-  if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
+  if (CMAKE_CROSSCOMPILING AND XX_IS_MINGW_D)
     set(_AGENTXX_LTO_FLAGS "")
   elseif (XX_IS_GCC_D)
     # GCC 下 -flto 会导致 lto-wrapper 默认以单线程串行编译全部 LTRANS 任务
@@ -659,6 +669,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DXX_IS_ANDROID_D=${XX_IS_ANDROID_D}
     -DXX_IS_IOS_D=${XX_IS_IOS_D}
 
+    -DXX_IS_MINGW_D=${XX_IS_MINGW_D}
     -DXX_IS_MSVC_D=${XX_IS_MSVC_D}
     -DXX_IS_GCC_D=${XX_IS_GCC_D}
     -DXX_IS_CLANG_D=${XX_IS_CLANG_D}

@@ -20,9 +20,9 @@ inline std::string currentDatetimeExecute() {
     // 会抛异常, 降级为 C 库 localtime 计算
     // NOTE: Android NDK / llvm-mingw libc++ 未实现 chrono tzdb (current_zone/zoned_time 不存在),
     // 属于编译期缺失而非运行时异常, 必须条件编译直接走 localtime 路径
+    // (_MSC_VER 之外的 Windows 目标即 MinGW 工具链, 与 XX_IS_MINGW_D 同义)
     std::string localTimeStr;
-#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION) || defined(__MINGW32__) \
-    || (XX_IS_WIN_D && !defined(_MSC_VER))
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION) || XX_IS_MINGW_D
     {
         std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm     tmv{};

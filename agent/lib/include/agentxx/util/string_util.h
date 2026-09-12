@@ -1259,8 +1259,8 @@ inline PinyinCallback s_pinyinCallback = nullptr;
     return fmt::format("{:.1f}s", sec);
 }
 
-#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION) || (XX_IS_WIN_D && !XX_IS_MSVC_D)
-// Android NDK / llvm-mingw libc++ / MinGW-Clang 均未实现 chrono 时区数据库
+#if XX_IS_ANDROID_D || defined(_LIBCPP_VERSION) || XX_IS_MINGW_D
+// Android NDK / libc++ (含 llvm-mingw) / MinGW 均未实现 chrono 时区数据库
 // (current_zone/zoned_time 不可用或链接期缺 tzdb), 回退为 POSIX/Win32 本地时间格式化
 // - bionic 与 MinGW 提供 localtime_r/localtime_s, MSVC 仅 localtime_s
 #include <cstdio>

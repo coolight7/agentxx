@@ -4,7 +4,7 @@
 # (内置合并/独立动态库两模式均在子目录入口处拦截), 判定依据与平台矩阵说明
 # 见 docs/zh-cn/plugins.md 9.3.1
 
-# XX_IS_WIN_D/LINUX_D/MACOS_D/ANDROID_D/IOS_D 平台变量:
+# XX_IS_WIN_D/LINUX_D/MACOS_D/ANDROID_D/IOS_D/MINGW_D 平台变量:
 # - 嵌套构建由顶层 agent/CMakeLists.txt 统一推导并经 _AGENTXX_COMMON_CMAKE_ARGS
 #   传入 (-DXX_IS_LINUX_D=... 等)
 # - 独立构建本目录/插件子目录 (不经 superbuild, 如文档 9.3 的独立构建方式) 时
