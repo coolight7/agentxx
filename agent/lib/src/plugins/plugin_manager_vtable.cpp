@@ -1,5 +1,5 @@
-#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/op_driver.h"
+#include "agentxx/plugin/plugin_manager.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -93,15 +93,22 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_call_tool_async(
     AgentxxPluginString*           error_out
 ) {
     return guardVtableCall<::AgentxxPluginOperatorHandle*>(nullptr, [&]() {
-        auto call = enterHost(host);
+        auto  call = enterHost(host);
         auto* inst = call.instance();
-        auto* mgr = call.manager();
+        auto* mgr  = call.manager();
         if (!mgr || !inst || !name) {
             hostMemorySetString(error_out, "call_tool_async: plugin runtime unavailable");
             return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
-        return mgr->callToolAsync(inst, *name, args_json ? *args_json : AgentxxPluginStringView{},
-                                  session_id ? *session_id : AgentxxPluginStringView{}, cb, ud, error_out);
+        return mgr->callToolAsync(
+            inst,
+            *name,
+            args_json ? *args_json : AgentxxPluginStringView{},
+            session_id ? *session_id : AgentxxPluginStringView{},
+            cb,
+            ud,
+            error_out
+        );
     });
 }
 
@@ -159,7 +166,8 @@ static AgentxxPluginSubscription* AGENTXX_PLUGIN_CALL xx_subscribe(
         auto instPtr  = inst;
         auto topicVal = *topic;
         return ioCallSyncKeep<AgentxxPluginSubscription*>(
-            call, mgrPtr,
+            call,
+            mgrPtr,
             [mgrPtr, instPtr, topicVal, handler, ud]() {
                 return mgrPtr->subscribe(instPtr, topicVal, handler, ud);
             }
@@ -249,7 +257,7 @@ static int32_t AGENTXX_PLUGIN_CALL
     xx_has_capability(const AgentxxPluginHost* host, const AgentxxPluginStringView* capability) {
     return agentxx::plugin::guardVtableCall(0, [&]() -> int32_t {
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr || agentxx::plugin::PluginStringView::empty(capability)) {
             return 0;
         }
@@ -278,9 +286,13 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_capability_ex(
         auto mgrPtr  = mgr;
         auto instPtr = inst;
         auto capVal  = *capability;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, capVal, start, cancel, ctx]() {
-            return mgrPtr->registerCapabilityEx(instPtr, capVal, start, cancel, ctx);
-        });
+        return ioCallSyncKeep<int32_t>(
+            call,
+            mgrPtr,
+            [mgrPtr, instPtr, capVal, start, cancel, ctx]() {
+                return mgrPtr->registerCapabilityEx(instPtr, capVal, start, cancel, ctx);
+            }
+        );
     });
 }
 
@@ -329,7 +341,8 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_register_task(
             auto mgrPtr  = mgr;
             auto instPtr = inst;
             return ioCallSyncKeep<::AgentxxPluginOperatorHandle*>(
-                call, mgrPtr,
+                call,
+                mgrPtr,
                 [mgrPtr, instPtr, cancel_fn, cancel_ud, notify, error_out]() {
                     return mgrPtr->registerTask(instPtr, cancel_fn, cancel_ud, notify, error_out);
                 }
@@ -345,7 +358,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr) {
             return -1;
         }
@@ -368,7 +381,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_plugin(
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr || agentxx::plugin::PluginStringView::empty(name)) {
             return -1;
         }
@@ -430,7 +443,8 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_share_store(
         auto instPtr = inst;
         auto sid     = *session_id;
         *out         = ioCallSyncKeep<AgentxxPluginString>(
-            call, mgrPtr,
+            call,
+            mgrPtr,
             [mgrPtr, instPtr, sid, id]() -> AgentxxPluginString {
                 return mgrPtr->getShareStore(instPtr, sid, id);
             }
@@ -455,9 +469,13 @@ static int64_t AGENTXX_PLUGIN_CALL xx_add_share_store(
         auto instPtr    = inst;
         auto sid        = *session_id;
         auto contentVal = *content;
-        return ioCallSyncKeep<int64_t>(call, mgrPtr, [mgrPtr, instPtr, sid, contentVal]() -> int64_t {
-            return mgrPtr->addShareStore(instPtr, sid, contentVal);
-        });
+        return ioCallSyncKeep<int64_t>(
+            call,
+            mgrPtr,
+            [mgrPtr, instPtr, sid, contentVal]() -> int64_t {
+                return mgrPtr->addShareStore(instPtr, sid, contentVal);
+            }
+        );
     });
 }
 
@@ -602,11 +620,11 @@ static int32_t AGENTXX_PLUGIN_CALL
 }
 
 static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_sleep(
-    const AgentxxPluginHost*       host,
-    int64_t                        ms,
-    AgentxxPluginOperatorCallback  cb,
-    void*                          ud,
-    AgentxxPluginString*           error_out
+    const AgentxxPluginHost*      host,
+    int64_t                       ms,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    AgentxxPluginString*          error_out
 ) {
     return agentxx::plugin::guardVtableCall<::AgentxxPluginOperatorHandle*>(nullptr, [&]() {
         auto call = enterHost(host);
@@ -616,14 +634,15 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_sleep(
             hostMemorySetString(error_out, "scheduler sleep: plugin runtime unavailable");
             return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
-        auto manager = inst->manager.lock();
+        auto manager   = inst->manager.lock();
         auto admission = std::make_shared<PluginInstance::InflightGuard>(inst->self.lock());
         if (!*admission) {
             hostMemorySetString(error_out, "scheduler sleep: plugin is closing");
             return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
         return ioCallSyncKeep<::AgentxxPluginOperatorHandle*>(
-            call, manager.get(),
+            call,
+            manager.get(),
             [manager, admission, ms, cb, ud, error_out]() {
                 return manager->sleep(admission->inst.get(), ms, cb, ud, error_out);
             }
@@ -633,12 +652,8 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_sleep(
 
 static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_offload(
     const AgentxxPluginHost* host,
-    void*(AGENTXX_PLUGIN_CALL* work)(
-        void*, const AgentxxPluginCancelToken*, AgentxxPluginString*
-    ),
-    void(AGENTXX_PLUGIN_CALL* done)(
-        void*, int32_t, void*, const AgentxxPluginStringView*
-    ),
+    void*(AGENTXX_PLUGIN_CALL* work)(void*, const AgentxxPluginCancelToken*, AgentxxPluginString*),
+    void(AGENTXX_PLUGIN_CALL* done)(void*, int32_t, void*, const AgentxxPluginStringView*),
     void*                ud,
     AgentxxPluginString* error_out
 ) {
@@ -650,14 +665,15 @@ static ::AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL xx_offload(
             hostMemorySetString(error_out, "scheduler offload: plugin runtime unavailable");
             return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
-        auto manager = inst->manager.lock();
+        auto manager   = inst->manager.lock();
         auto admission = std::make_shared<PluginInstance::InflightGuard>(inst->self.lock());
         if (!*admission) {
             hostMemorySetString(error_out, "scheduler offload: plugin is closing");
             return static_cast<::AgentxxPluginOperatorHandle*>(nullptr);
         }
         return ioCallSyncKeep<::AgentxxPluginOperatorHandle*>(
-            call, manager.get(),
+            call,
+            manager.get(),
             [manager, admission, work, done, ud, error_out]() {
                 return manager->offload(admission->inst.get(), work, done, ud, error_out);
             }
@@ -672,16 +688,89 @@ static int32_t AGENTXX_PLUGIN_CALL xx_is_io_thread(const AgentxxPluginHost* host
     return (mgr && mgr->isIoThread()) ? 1 : 0;
 }
 
+// =====================================================================
+// 协程驱动 (agentxx.agent.coroutine_runtime)
+// =====================================================================
+
+/// 申请一次驱动请求 (任意线程可调用; 永不内联回调)。
+///
+/// 具体语义见 plugin_api.h 的接口表声明与 plugin_driver.h 的实现说明:
+/// - admission 采用 `allowClosing=/*true*/` 的 lifecycle lease: 实例进入 Closing
+///   后仍必须允许驱动, 否则"取消全部 Operation → 插件收束 root"会因为拿不到
+///   驱动而永远无法跑完;
+/// - Disabled/Closed 拒绝 (lease 获取失败);
+/// - 入队失败 (IO executor 不可用/已停止) 返回 NULL, 调用方必须把受影响的操作
+///   以失败终结, 并且请求此时已经收束 (不会泄漏 lease)。
+static ::AgentxxPluginDriver* AGENTXX_PLUGIN_CALL xx_request_driver(
+    const AgentxxPluginHost*   host,
+    ::AgentxxPluginDriveOnceFn drive_once,
+    void*                      user_data,
+    AgentxxPluginString*       error_out
+) {
+    return agentxx::plugin::guardVtableCall<::AgentxxPluginDriver*>(nullptr, [&]() {
+        if (!drive_once) {
+            hostMemorySetString(error_out, "coroutine runtime: null drive callback");
+            return static_cast<::AgentxxPluginDriver*>(nullptr);
+        }
+        auto call = enterHost(host, /*allowClosing=*/true);
+        auto inst = call.instance();
+        auto mgr  = call.manager();
+        if (!mgr || !inst || !inst->lifetime) {
+            hostMemorySetString(
+                error_out,
+                "coroutine runtime: plugin instance is closed or unavailable"
+            );
+            return static_cast<::AgentxxPluginDriver*>(nullptr);
+        }
+        auto driver = AgentxxPluginDriver::create(
+            mgr->runtime(),
+            inst->lifetime,
+            drive_once,
+            user_data,
+            inst->name + " driver"
+        );
+        if (!driver) {
+            hostMemorySetString(
+                error_out,
+                "coroutine runtime: plugin instance is closing or closed"
+            );
+            return static_cast<::AgentxxPluginDriver*>(nullptr);
+        }
+        // 句柄墓碑先登记再排队: 迟到 cancel_driver 只会观察终态, 不会解引用已释放对象。
+        inst->retainDriverHandle(driver);
+        if (!driver->schedule()) {
+            hostMemorySetString(error_out, "coroutine runtime: host IO executor is unavailable");
+            return static_cast<::AgentxxPluginDriver*>(nullptr);
+        }
+        return driver.get();
+    });
+}
+
+/// 取消尚未开始的请求 (幂等, 非阻塞, 任意线程可调用)。
+///
+/// `cancel_driver` 的 ABI 形态不含 host 参数, 因此句柄校验走请求自身的进程级
+/// 地址注册表: 命中才解引用 (weak_ptr 升级为强引用), 伪造/过期指针安全忽略。
+static void AGENTXX_PLUGIN_CALL xx_cancel_driver(::AgentxxPluginDriver* driver) {
+    if (!driver) {
+        return;
+    }
+    agentxx::plugin::guardVtableCallVoid([&] {
+        if (!AgentxxPluginDriver::cancelByHandle(driver)) {
+            XX_LOGW("Plugin driver cancellation ignored: handle is not an active ticket");
+        }
+    });
+}
+
 static int32_t AGENTXX_PLUGIN_CALL xx_post_to_io(
     const AgentxxPluginHost* host,
     void(AGENTXX_PLUGIN_CALL* fn)(void* ud),
     void* ud
 ) {
     return agentxx::plugin::guardVtableCall<int32_t>(-1, [&]() -> int32_t {
-        auto  call = enterHost(host);
-        auto* inst = call.instance();
-        auto mgr   = call.mgr;
-        auto owner = inst ? inst->self.lock() : nullptr;
+        auto  call  = enterHost(host);
+        auto* inst  = call.instance();
+        auto  mgr   = call.mgr;
+        auto  owner = inst ? inst->self.lock() : nullptr;
         if (!mgr || !owner || !fn) {
             return -1;
         }
@@ -689,12 +778,9 @@ static int32_t AGENTXX_PLUGIN_CALL xx_post_to_io(
         if (!*admission) {
             return -1;
         }
-        return ioCallSyncKeep<int32_t>(
-            call, mgr.get(),
-            [mgr, admission, fn, ud]() -> int32_t {
-                return mgr->postCallback(admission->inst.get(), fn, ud) ? 0 : -1;
-            }
-        );
+        return ioCallSyncKeep<int32_t>(call, mgr.get(), [mgr, admission, fn, ud]() -> int32_t {
+            return mgr->postCallback(admission->inst.get(), fn, ud) ? 0 : -1;
+        });
     });
 }
 
@@ -817,7 +903,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr) {
             return -1;
         }
@@ -865,7 +951,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_get_tool_prompt(
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr || agentxx::plugin::PluginStringView::empty(tool_name)) {
             return -1;
         }
@@ -944,7 +1030,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr) {
             return -1;
         }
@@ -964,7 +1050,7 @@ static int32_t AGENTXX_PLUGIN_CALL
     xx_set_language(const AgentxxPluginHost* host, const AgentxxPluginStringView* language) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto call = enterHost(host);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr) {
             return -1;
         }
@@ -986,7 +1072,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr) {
             return -1;
         }
@@ -1027,7 +1113,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             return -1;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr) {
             return -1;
         }
@@ -1049,14 +1135,15 @@ static int32_t AGENTXX_PLUGIN_CALL xx_cancel_is_cancelled(
 ) {
     return agentxx::plugin::guardVtableCall(0, [&]() -> int32_t {
         auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr = call.manager();
+        auto mgr  = call.manager();
         if (!mgr || agentxx::plugin::PluginStringView::empty(thread_id)) {
             return 0;
         }
         auto        mgrPtr = mgr;
         std::string tid{thread_id->data, static_cast<size_t>(thread_id->size)};
         return ioCallSyncKeep<bool>(
-                   call, mgrPtr,
+                   call,
+                   mgrPtr,
                    [mgrPtr, tid]() {
                        return mgrPtr->isSessionCancelled(tid);
                    }
@@ -1248,6 +1335,14 @@ static const AgentxxPluginSchedulerIface g_ifaceScheduler = {
     /* offload */ xx_offload,
 };
 
+static const AgentxxPluginCoroutineRuntimeIface g_ifaceCoroutineRuntime = {
+    /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginCoroutineRuntimeIface),
+    /* request_driver */ xx_request_driver,
+    /* cancel_driver */ xx_cancel_driver,
+    /* is_io_thread */ xx_is_io_thread,
+};
+
 static const AgentxxPluginSessionIface g_ifaceSession = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION,
     /* struct_size */ sizeof(AgentxxPluginSessionIface),
@@ -1369,6 +1464,9 @@ const void* AGENTXX_PLUGIN_CALL
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER) {
         return &g_ifaceScheduler;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME) {
+        return &g_ifaceCoroutineRuntime;
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;
@@ -1736,9 +1834,11 @@ namespace {
 std::string promptSystemKey() {
     return "system";
 }
+
 std::string promptAppendKey(const std::string& key) {
     return "append:" + key;
 }
+
 std::string promptToolKey(const std::string& toolName) {
     return "tool:" + toolName;
 }
@@ -1778,8 +1878,8 @@ std::optional<PluginManager::PromptValue>
 
 /// 写入键值（`nullopt` = 删除该键；systemPrompt 视为写空串）。
 void writePromptKey(
-    agentxx::agent::AgentPrompt&                    prompt,
-    const std::string&                              key,
+    agentxx::agent::AgentPrompt&                     prompt,
+    const std::string&                               key,
     const std::optional<PluginManager::PromptValue>& value
 ) {
     if (key == promptSystemKey()) {
@@ -1935,7 +2035,7 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
         std::vector<std::string> touched;
         /// 记录/更新本 owner 对某个键的贡献，并登记待重新合成。
         auto record = [&](const std::string& key, PromptValue value) {
-            auto& state = promptKeys_[key];
+            auto& state                     = promptKeys_[key];
             state.contributions[inst->name] = {++promptSequence_, std::move(value)};
             touched.push_back(key);
         };

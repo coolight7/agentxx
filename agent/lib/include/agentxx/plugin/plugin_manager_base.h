@@ -27,6 +27,7 @@
 
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_driver.h"
 #include "agentxx/plugin/plugin_runtime.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
@@ -39,13 +40,14 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
-#include <set>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -89,11 +91,11 @@ struct PluginInstanceBase {
     void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
     bool                     enabled   = true; ///< 是否启用 (禁用: 注册摘除/命令停用)
-    bool userDisabled    = false; ///< 是否被用户显式禁用 (区别于级联禁用)
+    bool userDisabled          = false; ///< 是否被用户显式禁用 (区别于级联禁用)
     bool blockedByDependencies = false; ///< 是否因必选依赖不可用而级联禁用
-    bool unloadRequested = false; ///< 已请求卸载 (防重复)
+    bool unloadRequested       = false; ///< 已请求卸载 (防重复)
     /// create 是否成功产出可销毁的 pluginCtx。
-    bool pluginCreated   = false;
+    bool pluginCreated = false;
     /// 插件上下文是否已经调用 destroy。只在所属 IO 线程更新。
     bool pluginDestroyed = false;
     /// 同步关闭发现活动 lease 时，等待最后一个 lease 释放后再执行 destroy。
@@ -113,9 +115,128 @@ struct PluginInstanceBase {
         return lifecycleStop != nullptr && lifecycleStarted && !lifecycleStopped;
     }
 
-    std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>> operatorHandles;
+    std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>>              operatorHandles;
     std::vector<std::shared_ptr<::AgentxxPluginOperationCompletionEndpoint>> completionEndpoints;
-    std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>> outstandingOps;
+    std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>>              outstandingOps;
+
+    /// 驱动请求登记表 (`agentxx.agent.coroutine_runtime` 的 ticket 句柄)。
+    ///
+    /// 为什么需要这张表:
+    /// - 插件桥接持有宿主发放的**裸指针**句柄, 它的有效性必须由宿主兜底: 宿主
+    ///   只把指针当**查表键**使用, 命中才解引用 (`shared_ptr` 保活), 因此即使
+    ///   插件违约传入已收束/无效的句柄, 宿主也只是安全地忽略, 不会解引用悬垂内存;
+    /// - 关闭超时需要"最后防线": 插件自身没能撤销的排队请求会一直持有实例 lease,
+    ///   必须由宿主撤销 (见 [cancelPendingDrivers])。
+    ///
+    /// 内存有界: 只保留**未收束**请求 + 最近 [kFinishedDriverRetention] 张已收束
+    /// 请求 (墓碑)。墓碑窗口保证"刚收束就取消"这类迟到 cancel 能按地址命中并
+    /// 观察终态, 而不会命中"地址刚被回收给新请求"的旧句柄; 每次登记新请求时清理
+    /// 超出窗口的墓碑, 因此长期运行不会无限增长。
+    ///
+    /// 线程: `request_driver`/`cancel_driver` 允许任意线程调用 (与其它注册表只由
+    /// IO 线程访问不同), 因此本表用独立互斥保护。
+    static constexpr size_t kFinishedDriverRetention = 16;
+
+    mutable std::mutex                                 driversMutex;
+    std::deque<std::shared_ptr<::AgentxxPluginDriver>> drivers;
+
+    /// 登记请求句柄 (任意线程; 由 request_driver 在排队前调用)。
+    void retainDriverHandle(const std::shared_ptr<::AgentxxPluginDriver>& driver) {
+        if (!driver) {
+            return;
+        }
+        std::lock_guard lock(driversMutex);
+        pruneFinishedDriversLocked();
+        drivers.push_back(driver);
+    }
+
+    /// 按地址取消一次请求 (**任意线程可调用; 幂等**)。
+    /// - `return`: true = 命中了登记表 (无论请求是否已收束, 都会调一次 cancel())
+    /// - 未命中表示该句柄不属于本实例的有效窗口 (已收束且墓碑已过期, 或无效句柄):
+    ///   安全忽略并记日志, 绝不解引用。
+    bool cancelDriver(const ::AgentxxPluginDriver* driver) noexcept {
+        if (!driver) {
+            return false;
+        }
+        std::shared_ptr<::AgentxxPluginDriver> target;
+        {
+            std::lock_guard lock(driversMutex);
+            for (const auto& entry : drivers) {
+                if (entry.get() == driver) {
+                    target = entry;
+                    break;
+                }
+            }
+        }
+        if (!target) {
+            XX_LOGW("Late plugin driver cancellation ignored (handle is not registered)");
+            return false;
+        }
+        // 在锁外调用: cancel 可能触发请求收束后的收尾, 不能持表锁进入。
+        target->cancel();
+        return true;
+    }
+
+    /// 取消该实例全部**尚未开始**的请求 (关闭超时/最终收尾的安全网)。
+    ///
+    /// 正常关闭**不依赖**这里: 插件桥接在实例上下文销毁时自行 `cancel_driver`,
+    /// 且 root 的取消收束依赖驱动继续流动 (见 plugin_driver.h 文件头)。宿主只在
+    /// 已判定实例关闭失败 (关闭超时、lease 未归零) 时调用它, 避免 lease 永久残留。
+    ///
+    /// - `return`: 本次实际取消的请求数量 (0 表示没有排队中的请求)
+    size_t cancelPendingDrivers() noexcept {
+        std::vector<std::shared_ptr<::AgentxxPluginDriver>> pending;
+        {
+            std::lock_guard lock(driversMutex);
+            pending.reserve(drivers.size());
+            for (const auto& driver : drivers) {
+                if (driver && !driver->finished() && !driver->running()) {
+                    pending.push_back(driver);
+                }
+            }
+        }
+        for (const auto& driver : pending) {
+            driver->cancel();
+        }
+        return pending.size();
+    }
+
+    /// 尚未收束 (排队或执行中) 的请求数量, 供诊断与测试观察。
+    size_t activeDriverCount() const noexcept {
+        std::lock_guard lock(driversMutex);
+        size_t          count = 0;
+        for (const auto& driver : drivers) {
+            if (driver && !driver->finished()) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+private:
+
+    /// 从最旧一端清理已收束请求, 只保留最近 [kFinishedDriverRetention] 张作为墓碑。
+    /// 调用方须持有 [driversMutex]。
+    void pruneFinishedDriversLocked() {
+        size_t finished = 0;
+        for (const auto& driver : drivers) {
+            if (!driver || driver->finished()) {
+                ++finished;
+            }
+        }
+        while (finished > kFinishedDriverRetention && !drivers.empty()) {
+            const auto& oldest = drivers.front();
+            if (oldest && !oldest->finished()) {
+                // 未收束请求仍在排队/执行: 不能丢弃 (它持有实例 lease), 也不能
+                // 越过它去回收后面的墓碑 (保持时间顺序, 避免误回收窗口内的句柄)。
+                return;
+            }
+            drivers.pop_front();
+            --finished;
+        }
+    }
+
+public:
 
     /// 由实例创建路径设置，供只拿到裸指针的宿主回调升级 owner。
     std::weak_ptr<PluginInstanceBase> ownerSelf;
@@ -144,15 +265,12 @@ struct PluginInstanceBase {
     /// 执行 lease RAII。优先使用 Reset-v1 lifetime；尚未装配 lifetime 的测试
     /// 伪实例仍更新兼容 inflight 字段。
     struct InflightGuard {
-        PluginInstanceBase* inst = nullptr;
+        PluginInstanceBase*                 inst = nullptr;
         std::shared_ptr<PluginInstanceBase> owner;
-        InstanceLease       lease;
-        bool                legacy = false;
+        InstanceLease                       lease;
+        bool                                legacy = false;
 
-        explicit InflightGuard(
-            std::shared_ptr<PluginInstanceBase> i,
-            bool allowClosing = false
-        ) :
+        explicit InflightGuard(std::shared_ptr<PluginInstanceBase> i, bool allowClosing = false) :
             inst(i.get()),
             owner(std::move(i)),
             lease(inst ? InstanceLease::acquire(inst->lifetime, allowClosing) : InstanceLease{}) {
@@ -322,8 +440,8 @@ inline void PluginInstanceBase::retireHostControl() noexcept {
 /// 解析插件传入的 host 视图对应的控制块。
 /// - 未注册的令牌（含插件复制的 host 结构被篡改、旧内存被复用后的垃圾值）返回空；
 /// - 已关闭实例返回控制块本身，调用方据此区分“实例不存在”与“参数非法”。
-inline std::shared_ptr<PluginHostControl>
-    resolvePluginHostControl(const AgentxxPluginHost* host) noexcept {
+inline std::shared_ptr<PluginHostControl> resolvePluginHostControl(const AgentxxPluginHost* host
+) noexcept {
     if (!host || !host->opaque) {
         return nullptr;
     }
@@ -519,16 +637,23 @@ public:
         }
         if (isIoThread()) {
             fn();
-        } else if (!enqueueRuntimeAction(runtime_, [runtime = runtime_, fn = std::move(fn)]() mutable {
-                runtime->ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
-                try {
-                    fn();
-                } catch (const std::exception& e) {
-                    XX_LOGW("Plugin IO task threw: {}", e.what());
-                } catch (...) {
-                    XX_LOGW("Plugin IO task threw unknown exception");
-                }
-            }, false)) {
+        } else if (!enqueueRuntimeAction(
+                       runtime_,
+                       [runtime = runtime_, fn = std::move(fn)]() mutable {
+                           runtime->ioThreadId.store(
+                               std::this_thread::get_id(),
+                               std::memory_order_release
+                           );
+                           try {
+                               fn();
+                           } catch (const std::exception& e) {
+                               XX_LOGW("Plugin IO task threw: {}", e.what());
+                           } catch (...) {
+                               XX_LOGW("Plugin IO task threw unknown exception");
+                           }
+                       },
+                       false
+                   )) {
             if (!ioExecutor_) {
                 throw std::runtime_error("plugin runtime has no IO executor");
             }
@@ -541,16 +666,23 @@ public:
         if (!fn) {
             return;
         }
-        if (!enqueueRuntimeAction(runtime_, [runtime = runtime_, fn = std::move(fn)]() mutable {
-                runtime->ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
-                try {
-                    fn();
-                } catch (const std::exception& e) {
-                    XX_LOGW("Plugin asynchronous IO task threw: {}", e.what());
-                } catch (...) {
-                    XX_LOGW("Plugin asynchronous IO task threw unknown exception");
-                }
-            }, false)) {
+        if (!enqueueRuntimeAction(
+                runtime_,
+                [runtime = runtime_, fn = std::move(fn)]() mutable {
+                    runtime->ioThreadId.store(
+                        std::this_thread::get_id(),
+                        std::memory_order_release
+                    );
+                    try {
+                        fn();
+                    } catch (const std::exception& e) {
+                        XX_LOGW("Plugin asynchronous IO task threw: {}", e.what());
+                    } catch (...) {
+                        XX_LOGW("Plugin asynchronous IO task threw unknown exception");
+                    }
+                },
+                false
+            )) {
             if (!ioExecutor_) {
                 throw std::runtime_error("plugin runtime has no IO executor");
             }
@@ -590,7 +722,9 @@ public:
         co_return idle;
     }
 
-    const std::shared_ptr<PluginRuntime>& runtime() const noexcept { return runtime_; }
+    const std::shared_ptr<PluginRuntime>& runtime() const noexcept {
+        return runtime_;
+    }
 
     const asio::any_io_executor& ioExecutor() const {
         return ioExecutor_;
@@ -617,9 +751,9 @@ protected:
         );
     }
 
-    std::shared_ptr<PluginRuntime> runtime_ = std::make_shared<PluginRuntime>();
-    asio::any_io_executor& ioExecutor_ = runtime_->executor;
-    std::atomic<std::thread::id>& ioThreadId_ = runtime_->ioThreadId;
+    std::shared_ptr<PluginRuntime>     runtime_    = std::make_shared<PluginRuntime>();
+    asio::any_io_executor&             ioExecutor_ = runtime_->executor;
+    std::atomic<std::thread::id>&      ioThreadId_ = runtime_->ioThreadId;
     std::set<std::string, std::less<>> loadingNames_;
 };
 

@@ -110,7 +110,9 @@ auto b64 = agentxx::util::base64Encode(data);
 ## 6. C++ 插件开发方式 (SDK `plugin_kit.h`)
 
 推荐使用官方 header-only SDK `plugin_kit.h` (位于 `agentxx/plugin/api/plugin_kit.h`)。
-最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心：
+最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心。
+其中 `Task<T>` 协程 (以及 `sleep`/`yield`/`offload`/`call_tool`/`invoke_cap` 原语) 的推进
+交由宿主的**协程驱动桥** (Reset-v2) 调度：见 §16 与 §15 的生命周期契约。
 
 ```cpp
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -178,6 +180,31 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         );
 
+        // 4b. 受控轮询工具: 业务体是 asio 协程, 等待插件本地 reactor 上的内核就绪事件
+        //     (socket/子进程管道/文件/本地 timer)。插件注册时声明"需要受控轮询驱动",
+        //     桥据此在有在途操作时继续申请请求 (有进展立即续 / 无进展退避 10ms /
+        //     空闲零开销), 不占宿主工作线程; 无 coroutine_runtime 的宿主自动降级为
+        //     offload 工作线程跑完。详见 §16.5。
+        polled_tool(
+            ctx,
+            "my_polled_tool",
+            "Async IO tool driven by controlled polling",
+            R"({"type":"object","properties":{"url":{"type":"string"}}})",
+            [](MyPluginCtx&     c,
+               std::string_view args_json,
+               std::string_view tid,
+               std::string_view workDir,
+               const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+                ArgReader args(args_json);
+                std::string workDirStr(workDir);
+                if (agentxx_plugin_cancel_is_requested(cancel)) {
+                    throw CancelledException("cancelled");
+                }
+                // 业务体直接 co_await 现成的 asio 协程实现 (无需局部 io_context + run())
+                co_return co_await doHttpGetAsync(args.raw(), workDirStr);
+            }
+        );
+
         // 5. 后台协作任务 (宿主托管: 自动注册 agentxx.agent.tasks, 卸载时宿主统一取消并精确等待退出)
         spawn(ctx, [](MyPluginCtx& c, OpCtl ctl) -> Task<void> {
             while (!ctl.cancelled()) {
@@ -224,6 +251,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 5. **统一异步操作模型 (两件套 start/cancel)**：
    - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 两件套，终结经 `AgentxxPluginOperatorNotify.done(status,payload)` 恰好一次上报
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
+   - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
+     等待插件本地 reactor 上的内核就绪事件，由桥按声明式受控轮询推进（§16.5）
    - hook / capability 的 SDK helper 按**返回类型严格分发**：返回 `void`/字符串的同步业务在
      调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收束（provider 句柄可取消，
      完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
@@ -263,7 +292,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 两件套) |
 | `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
-| `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/pump_io`, `sleep/cancel_sleep`, `offload` (阻塞池委托, 需 cancel_flag) |
+| `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=宿主计时器; offload=阻塞池委托, 需 cancel_token) |
+| `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
 | `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
 | `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (get_session_work_dir session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言) |
@@ -375,7 +405,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 
 | 插件 | 说明 |
 |------|------|
-| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/钩子/事件/能力/client 入口) |
+| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/**协程驱动桥**/**受控轮询 polled_tool**/钩子/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx.agent.graph` 接口) |
 | `example_js` | JS 脚本插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
@@ -520,3 +550,267 @@ Closing → CloseFailed → Closing (可重试)
   （`exec/`），因为插件目录按 `GetModuleFileNameW` 推导；Linux 用 `/proc/self/exe`。
 - 平台矩阵的迁移记录与逐条验证结果见
   `resource/history/plugin-refactor-2/work.md`（1.10、3.6 节）。
+
+---
+
+## 16. Reset-v2 协程驱动 (通用 pump/wake 协议 + `PollOneBridge`)
+
+> 本节描述 Reset-v2 引入的**协程驱动协议**：插件协程与宿主协程在同一宿主 IO 执行
+> 序列中交错推进，不额外开线程、不阻塞 IO；等待以"宿主可见唤醒源"为主，插件本地 reactor 上的
+> 内核就绪等待由**声明式受控轮询**（`polled_tool`）驱动，见 §16.5。方案与阶段划分见
+> `resource/history/plugin-refactor-3/plugin.md`，实施记录见
+> `resource/history/plugin-refactor-3/work.md`。
+
+### 16.1 为什么需要它
+
+插件可以自带协程库、事件循环与第三方异步库，而宿主不能把插件私有 reactor 的等待
+对象接进自己的执行序列（一个私有 `io_context` 没有跨平台公共 API 能把它注册给另一个
+`io_context`）。因此两端只经两类动作协作：
+
+- **driver / pump**：插件申请宿主异步执行一次**有界回调**（推进本地运行时一个有限
+  步骤：例如一次 `poll_one`，即一个就绪 handler）；
+- **wake**：插件适配器知道本地已有可运行工作时（新 root 首步、宿主回调投递的
+  continuation、本地 post），向宿主请求一次 driver 请求；重复 wake 由适配器合并。
+
+宿主不需要知道插件用哪种 coroutine/future/actor，插件也拿不到宿主 executor。
+
+```
+宿主 IO 线程                       插件适配器/桥                    插件本地运行时
+  │ request_driver ───────────────────▶│ 登记请求 (持实例 lease)
+  │◀──────────────────── 请求 (异步) ──│
+  │ drive_once() ─────────────────────▶│ poll_one() ───────────▶ 推进一个 continuation
+  │                                    │ ◀── 外部完成回调 (post + wake)
+  │ drive_once() ─────────────────────▶│ poll_one()
+  │◀──────────── done(status, payload) │ 根操作终结 (exactly-once)
+```
+
+### 16.2 C ABI (`agentxx.agent.coroutine_runtime`, version 1)
+
+```c
+typedef struct AgentxxPluginDriver AgentxxPluginDriver;
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDriveOnceFn)(void* user_data);
+
+typedef struct AgentxxPluginCoroutineRuntimeIface {
+    int32_t  version;      // == 1
+    uint32_t struct_size;
+    AgentxxPluginDriver* (AGENTXX_PLUGIN_CALL* request_driver)(
+        const AgentxxPluginHost*, AgentxxPluginDriveOnceFn, void* user_data, AgentxxPluginString* error_out);
+    void   (AGENTXX_PLUGIN_CALL* cancel_driver)(AgentxxPluginDriver*);
+    int32_t(AGENTXX_PLUGIN_CALL* is_io_thread)(const AgentxxPluginHost*);
+} AgentxxPluginCoroutineRuntimeIface;
+```
+
+**契约（宿主与插件共同遵守）**
+
+1. `request_driver` **任意线程可调用、永不内联**回调：即使调用者就在 IO 线程，请求也
+   经宿主任务队列异步投递。否则 root start / completion / cancel 会形成意外重入，
+   并失去交错执行的公平性。
+2. 一次请求**至多执行一次**回调，且回调只推进一个有限步骤：**不得阻塞、不得等待
+   事件、不得同步调用宿主业务接口**；异常必须由插件自己捕获。
+3. 插件侧适配器**自行合并 wake**（同一实例同时只登记一次请求）；宿主仍会做去重
+   （同一时刻只保留一次已登记的请求）与关闭救援作为最后防线。
+4. `cancel_driver` **幂等、非阻塞**：尚未开始的请求之后不再执行回调；正在执行的
+   回调不会被强行中断，由插件自己的 root 收束协议收尾。
+5. 请求在**排队与执行期间持有实例执行 lease**，因此 `dlclose` 不会越过仍在排队或
+   正在执行的插件代码（卸载的 idle 等待必然覆盖它）。
+6. 失败语义：`request_driver` 返回 `NULL + error_out` 表示宿主不再提供驱动；插件必须
+   把受影响的操作以失败/取消终结，不得静默丢弃（kit 会自动如此处理）。
+
+### 16.3 宿主侧实现语义
+
+- **请求状态机**：`Idle → Running → Finished` 或 `Idle → Finished`（取消），迁移由
+  一次 CAS 仲裁，保证"取消后不再执行回调"与"lease 恰好释放一次"。
+- **句柄校验**：`cancel_driver` 的 ABI 形态不含 host 参数，宿主无法从实例反查合法
+  句柄，因此请求在创建时登记进**进程级地址注册表**（只存 `weak_ptr`，收束时按地址
+  摘除）。伪造/过期指针只会被安全忽略并记日志，**绝不解引用**。
+- **admission 模式**：请求采用 `lifecycle` 模式的实例 lease —— 实例进入 `Closing`
+  后仍允许驱动。这是必需的：关闭的第一步是取消全部 Operation，而插件的取消收束
+  （取消回调 → 唤醒 → 下一个有限步骤）必须能继续跑完，否则关闭必然超时。
+  `Disabled`/`Closed` 一律拒绝。
+- **关闭救援**：宿主只在**已判定关闭失败**（`waitInflightZero` 超时）时调用
+  `cancelPendingDrivers()`，取消仍未开始的请求以免 lease 永久残留并记日志。
+  正常关闭不依赖它：kit 在实例上下文销毁时自行 `cancel_driver`。
+
+### 16.4 kit 侧实现 (`detail::PollOneBridge` + `detail::BridgeRoot` / `detail::PolledRoot`)
+
+`PluginBase::bridgeOrNull()` 在宿主提供 `coroutine_runtime` 时返回本实例的桥
+（每实例一份，无任何进程级可变状态）；否则返回 `nullptr`，kit 自动回退到
+`post_to_io` 的旧路径（伪宿主/旧宿主）。
+
+**状态机（三个竞态窗口都覆盖）**
+
+| 状态 | 含义 |
+|------|------|
+| `readySteps_` | 已投递但尚未执行的本地步骤数（每一步需要一次 `poll_one`） |
+| `wakePending_` | 一次显式 `wake` 尚未被请求覆盖（兼容"插件直接向 `local_executor` 投递"） |
+| `driverQueued_` / `driverRunning_` | 已申请请求（含 `request_driver` 正在返回的窗口）/ 回调正在执行 |
+| `pendingEpoch_` / `nextEpoch_` | 请求世代，用于识别"回调已消费本轮请求"的窗口 |
+| `polledRoots_` | 在途**受控轮询根**数（声明式 `polled_tool`；0 = 不轮询、不建定时器） |
+| `pumpPending_` | 受控轮询判定"该继续驱动"（第二类申请请求理由） |
+| `pumpWaitScheduled_` / `pumpWaitOp_` | 在途退避定时器（宿主 `scheduler.sleep`）与其句柄 |
+| `pollBurst_` | 连续"有进展"步数（用于突发上限让出） |
+
+关键不变量：
+
+1. 每张请求**恰好一次** `localIo_.poll_one()`（一个 host driver ⇔ 一个局部 continuation）；
+2. 只有确实还有可运行工作（`readySteps_ > 0`、未覆盖的显式 wake，或有在途 polled 操作
+   且轮询策略判定需要续票）才申请下一次请求，`poll_one()==0` **不会**在无工作的状态下
+   重新排队 —— 空闲时既不占宿主任务队列也不建定时器；
+3. 宿主回调完成后只做 `postToLocal(continuation) + wake()`，**绝不在宿主回调栈内
+   恢复插件协程**，也不在宿主 IO 线程上跑插件业务代码；
+4. 并发投递 N 个步骤最终会得到 N 张请求（不会因 wake 合并只推进一个）；
+5. 宿主拒绝驱动/桥停止时，所有活跃根（含受控轮询根）被终结为失败（`FAILED`），
+   宿主 Operation 因此不会悬挂。
+
+**受控轮询（pump）调度策略**（只作用于 `polled_tool` 的根，见 §16.5）：
+
+```
+本轮 poll_one 执行到了 handler（有进展）且 pollBurst_ < kPollBurstMax(256)
+    → 立即申请下一次请求        （等待中的 socket/管道/文件就绪能被尽快收走）
+否则（无进展 / 达到突发上限）
+    → scheduler.sleep 安排一次退避（无进展 10ms；突发上限后让出 1ms）
+      → 到期回调只 request_driver（不恢复插件协程）
+polledRoots_ 归零
+    → 取消在途退避，之后不再申请请求（空闲零开销）
+```
+
+**根的生命周期（`BridgeRoot` / `PolledRoot`）**
+
+- 根对象由**桥持有强引用**（`roots_`）：挂起中的根除了"下一次恢复任务"没有任何持有者，
+  桥若不持有，排队任务执行完就会销毁帧，之后到达的宿主回调就会访问已释放的协程帧；
+- 完成/放弃的仲裁是 **exactly-once**（CAS）：正常完成走 `finishIfDone`，宿主拒绝
+  驱动走 `abandon`，两条路径只有一个能上报终态；
+- 被放弃的根移入 `abandonedRoots_`，**帧活到桥销毁为止**（那时实例已无未完成的宿主
+  操作），期间迟到的宿主回调因 `shouldAdvance()==false` 安全跳过；
+- 协程帧的销毁与 op 句柄（`Job`）的释放统一发生在一个"协程已终止或不可能再被恢复"
+  的时点（`destroyFrame()`）：正常完成时在 `finishIfDone` 内；放弃路径在桥销毁时。
+  释放动作**不能**放在 `abandon` 里 —— 被放弃的根可能正在 driver 内执行，其输入
+  (`RootRequest`/`OpCtl`) 仍被协程以引用使用。
+
+受控轮询根用同一套仲裁语义但形态更简单（`PolledRoot`，见 `polled_tool`）：
+
+- 协程是 `asio::awaitable`，其**帧由 asio 自己持有**（completion handler / 本地 reactor
+  销毁时统一释放），因此 `PolledRoot` 不销毁帧，只做"终态上报 + Job 回收"的
+  exactly-once 仲裁（正常完成 vs 桥停止时放弃，用一次 CAS 决定）；
+- 正常完成：`detail::runPolledPumpJob` 认领 → 注销登记（`polledRoots_` 递减，必要时
+  停止 pump）→ 上报终态 → 执行清理回收 `Job`；
+- 桥停止：`failAllPolledRoots` 把在途根整批摘下 → 每个根按 `FAILED` 上报一次 →
+  执行清理回收 `Job`；挂起的帧随本地 reactor 销毁而释放。
+
+**已接桥的 kit 路径**
+
+| kit 组件 | 桥接语义 |
+|----------|----------|
+| `tool` / `hook` / `capability` / `graph_node`（返回 `Task<T>`） | 首步由 host driver 推进；start 内不跑插件协程 |
+| `spawn`（后台任务） | 同上（首步不在调用方栈内执行） |
+| `sleep(ctx, ms)` | 宿主计时器适配：到期回调只 post + wake |
+| `call_tool` / `invoke_cap` | 宿主回调式互调：完成回调只 post + wake |
+| `yield(ctx)` | 让出一轮：投递 continuation 后由下一次请求推进 |
+| `offload(ctx, work)` | **工作体仍在宿主工作线程池**（显式例外），只有完成后的恢复回到 driver 序列 |
+| `polled_tool(ctx, name, …)` | **声明式受控轮询**：业务体是 `asio::awaitable<std::string>`，跑在桥的本地执行器上，由"有进展立即续 + 无进展 10ms 退避 + 突发上限 256 后让出 1ms"推进（见 §16.5） |
+| `fast_tool` / 同步 hook / `blocking_tool` | 不变（同步路径本就不需要驱动） |
+
+`bridge().local_executor()` 暴露本地执行器，插件可用 `asio::co_spawn` 把自己的
+`asio::awaitable` 排进同一序列；这些 awaitable 需要等待"有宿主可见唤醒源"的操作
+（宿主回调适配器 / 宿主计时器 / 已 post 的 continuation），或者改用 `polled_tool`
+声明"该操作用受控轮询驱动"（见 §16.5）。
+
+### 16.5 受控轮询（`polled_tool`）与明确不支持
+
+**为什么需要它**：`poll_one()` 只能"执行已就绪的 handler"，不会让**插件本地 reactor**
+上的等待对象到期。因此"业务体本来就是 asio 协程、等待的是 socket/管道/文件/本地 timer
+的内核就绪事件"这类工具（websearch 的 HTTP、execute_command 的子进程管道、filesystem
+的 `asio::stream_file`），在没有 wake source 时无法被推进。
+
+**方案：声明式受控轮询（`polled_tool`）**。插件在注册时就**声明**"该工具需要受控轮询
+驱动"（而不是隐藏轮询），参数显式且可观测：
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 触发条件 | `polledRoots_ > 0` | 只在有在途 polled 操作时轮询；空闲零请求、零定时器 |
+| 有进展 | 立即续票 | 本轮 `poll_one` 执行到了 handler（就绪事件被收走） |
+| 无进展 | 退避 10ms | `PollOneBridge::kPollIntervalMs`，经宿主 `scheduler.sleep`；到期回调只 `request_driver` |
+| 突发上限 | 连续 256 步后让出 1ms | `kPollBurstMax` / `kPollBurstYieldMs`，避免同实例自循环独占 IO 线程 |
+| 取消 | 置取消标志 + 取消在途退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避量子即可看到取消并收束根 |
+| 无 driver 的宿主 | 自动降级 | 无 `coroutine_runtime`/`scheduler.sleep` 时用 offload 工作线程 + 局部 `io_context` 跑完（等价 `blocking_tool`） |
+
+业务签名与 `blocking_tool` 同形（只是返回 `asio::awaitable<std::string>`），因此迁移
+通常只是换一个注册函数名：
+
+```cpp
+polled_tool(ctx, name, depict, schema,
+    [](Ctx& c, std::string_view args, std::string_view tid, std::string_view workDir,
+       const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+        ArgReader reader(args);
+        co_return co_await doSomethingAsync(reader.raw(), c.workDir(tid));
+    });
+```
+
+代价与约束（必须与实现一起遵守）：
+
+1. **10ms 量子**：单实例等待期间 ≈100 次/秒驱动（每次 ≈1 个宿主 post + 1 次
+   `epoll_wait(0)`），等待阶段最坏多 10ms 延迟（网络/子进程可接受）；实现为常量便于调优。
+2. **重 CPU 段不得留在 polled 协程里**：它运行在宿主 IO 线程上（>100ms 会触发宿主
+   看门狗告警）。目录遍历 / 全文件扫描 / 向量相似度继续用 `blocking_tool`；确需在
+   polled 协程内做重计算的用宿主 `offload` 显式卸载。
+3. **polled 协程内不使用 kit 的 `Task` 型原语**（`sleep`/`call_tool`/`invoke_cap`）：
+   它们的 awaiter 依赖 kit 自有 promise 接口，而 polled 协程是 `asio::awaitable`。
+   需要计时用 asio 原生 `steady_timer`（pump 下可用），需要宿主回调式接口时经
+   `bridge().local_executor()` 自行投递后续步骤（后续可选补 asio 版适配器）。
+4. **可替换性**：将来实现 `wait_source`（宿主等待插件交出的 fd/handle）或宿主侧 IO
+   服务后，只需把"何时申请下一次请求"的策略从"10ms 退避"换成"就绪通知"，polled 工具
+   的业务代码与 ABI 形态不变。
+
+**仍然明确不支持 / 需要显式例外**：
+
+- **未声明 polled 却依赖私有 reactor**：仅依赖私有 `io_context` 的 socket/timer/
+  process/file 等待**不会**被桥推进。桥在同一实例持续 8 次 driver 无进展且仍有活跃根时
+  输出一次警告（"awaited work has no host-visible wake source"），提示改用
+  ①宿主回调式完成（适配器 post + wake）②宿主计时器（`co_await sleep`）
+  ③`polled_tool` 声明式受控轮询 ④显式受限工作线程（`offload` / `blocking_tool`，并在
+  能力说明里标注）；它不会自旋，因此警告之后请求数不再增长。
+- **误用检查**：首次驱动会校验是否运行在宿主 IO 线程（`is_io_thread`），不符时记日志。
+
+### 16.6 内置插件迁移状态
+
+- **所有使用 kit 的插件自动接桥**：`tool`/`hook`/`capability`/`graph`/`spawn` 与
+  `sleep`/`call_tool`/`invoke_cap`/`yield`/`offload` 的恢复路径都已走驱动序列，插件
+  业务代码无需改动。
+- **已迁移到受控轮询（`polled_tool`）**：
+
+  | 插件 / 工具 | 依据 |
+  |---|---|
+  | `agentxx_websearch`：`web_search` / `web_fetch` / `web_fetch_markdown` | 实现体本就是 asio 协程（`co_await HttpClient::*Async`）；网络等待不再占用宿主工作线程池，同实例的 HTTP keep-alive 连接池天然复用 |
+  | `agentxx_execute_command`：`execute_bash_command` / `execute_windows_command`（Boost.Process v2 分支） | 子进程管道/计时器绑定协程 executor；并发多命令共享同一 poll 序列与同一个本地 reactor，不再各占一个池线程直到超时 |
+  | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；本构建启用 io_uring 时文件 IO 真异步，避免大文件读写占用池线程 |
+
+- **保持 `blocking_tool`（显式例外）**：
+  - `agentxx_filesystem`：`list` / `glob` / `grep` —— 目录遍历 + 全文件扫描 + 正则/编码
+    转换属 CPU/阻塞 IO（asio 无异步目录 API），放进 pump 只会阻塞同实例其它工具；
+  - `agentxx_execute_command`：非 Boost.Process v2 的 popen 回退分支（同步实现）；
+  - `agentxx_filesystem`：`BOOST_ASIO_HAS_FILE` 不可用平台（同步回退，注册侧自动切回
+    `blocking_tool`）；
+  - `agentxx_rag_search`：embedding 网络段先把实现体恢复为协程形态（其注释记录了
+    "原版 asio 协程接口改为同步实现"）再迁移；分块/相似度等 CPU 段继续 offload（**二期**）。
+- **保持现状（无私有 reactor 等待）**：codegraph / planning / system_monitor / math /
+  string / system / JS 系插件；JS 引擎是既有"自管线程 + notify"正确形态。
+- **`ClientPluginManager` 的 `asio::thread_pool(1)`**：只用于 `dlopen`/entry 这类不可避免的
+  阻塞动态库工作（entry 内的注册动作仍经 vtable 投递回 IO 线程），保持为独立、可关闭的
+  后台设施；client 侧插件不产生需要驱动的协程根，因此 client kit 不创建桥
+  （宿主已暴露同一 IID，后续需要时可直接接入）。
+- **样例**：
+  - `example_bridge`：两个"真实唤醒源"（宿主计时器 + 宿主回调式互调）与桥诊断字段；
+  - `example_polled_timer`：**受控轮询**样例 —— 在插件本地 executor 上 `co_await`
+    3 次 asio `steady_timer`，返回实测耗时与 `driverAvailable/onHostIoThread/pumpOnStart`。
+
+### 16.7 验证
+
+| 层次 | 用例 |
+|------|------|
+| C ABI | `test_plugin_abi_c17.c`：协程驱动表 8 字节对齐、`version/struct_size` 偏移、版本号；C++ 侧逐项对照（`plugin_runtime`） |
+| 宿主请求 | `plugin_runtime`：恒异步、每票至多一次、取消后不再执行、排队持 lease、幂等取消、伪造句柄安全忽略、Closing 允许 / Closed 拒绝、空回调返回 `NULL + error_out` |
+| kit 桥接 | `plugin_bridge`（伪宿主 C ABI 驱动）：不内联、每票一次 `poll_one`、空闲不自旋、wake 三个窗口不丢、宿主回调不重入、取消唯一终态、拒绝驱动即终结、stop 取消排队请求、多实例隔离、无 `coroutine_runtime` 时回退 |
+| kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消在途退避）、取消会取消在途退避并只产生一个 `CANCELLED` 终态、`stop` 时在途 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出、无 `coroutine_runtime` 时降级为 offload 跑完且不创建桥 |
+| 端到端 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实宿主执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间宿主任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
+| 端到端（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收束、pump 停止、inflight 归零且耗时远小于命令自身超时 |
+| 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（在途卸载/放弃路径）后不变 |

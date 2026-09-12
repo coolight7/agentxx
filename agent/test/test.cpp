@@ -38,6 +38,7 @@
 #include "test_misc_fixes.h"
 #include "test_network_timeout.h"
 #include "test_openai_provider.h"
+#include "test_plugin_bridge.h"
 #include "test_plugin_multi_instance.h"
 #include "test_plugin_resources.h"
 #include "test_plugin_runtime.h"
@@ -188,6 +189,7 @@ int main(int argn, char** argv) {
         runSync("ffi_c_api", agentxx::test::testFfiCApi);
         runSync("plugin_runtime", agentxx::test::testPluginRuntime);
         runSync("plugin_sdk", agentxx::test::testPluginSdk);
+        runSync("plugin_bridge", agentxx::test::testPluginBridge);
 #ifdef AGENTXX_BUILD_CLIENT
         runSync("config_loader", agentxx::test::testConfigLoader);
         runSync("tui_settings", agentxx::test::testTuiSettings);

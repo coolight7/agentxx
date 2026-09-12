@@ -25,4 +25,18 @@ void usePositive(Ctx& ctx) {
     graph_node(ctx, "pos.node", "{}", [](Ctx&, const RootRequest&) -> std::string {
         return "{}";
     });
+    // 受控轮询工具: 业务体是 asio 协程 (等待插件本地 reactor 上的内核就绪事件)
+    polled_tool(
+        ctx,
+        "pos.polled",
+        "d",
+        "{}",
+        [](Ctx&,
+           std::string_view,
+           std::string_view,
+           std::string_view,
+           const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+            co_return std::string{};
+        }
+    );
 }

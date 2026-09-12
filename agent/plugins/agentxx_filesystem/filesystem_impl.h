@@ -1128,10 +1128,13 @@ inline std::string fileGrepExecute(
 }
 
 // =====================================================================
-// 协程版执行体
-// - 插件入口已统一改用 plugin_kit::blocking_tool + Scheduler::offload
-//   卸载到线程池，上述协程路径不再被注册，仅保留于头文件内供测试直调；
-//   BOOST_ASIO_HAS_FILE 不可用平台回退到同步实现，行为与 offload 一致
+// 协程版执行体 (read / write / edit)
+// - 插件入口经 plugin_kit::polled_tool 注册: 协程跑在插件本地 reactor 上,
+//   由宿主受控轮询 (driver 请求 + poll_one) 驱动 asio::stream_file 的异步 IO;
+//   上述 *Execute 同步版仍由 list / glob / grep 使用 (CPU/遍历类工具走
+//   blocking_tool + offload, 是显式例外);
+//   BOOST_ASIO_HAS_FILE 不可用平台回退到同步实现, 注册侧改走 blocking_tool,
+//   行为与 offload 一致; 本回退亦供测试等直调场景保持单一入口
 // =====================================================================
 #if defined(BOOST_ASIO_HAS_FILE)
 
@@ -1436,7 +1439,7 @@ inline asio::awaitable<std::string>
 #endif // BOOST_ASIO_HAS_FILE
 
 /// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转为
-/// "[Error] ..." 错误文本返回, 保证 polled 寄生驱动路径与测试直测行为一致
+/// "[Error] ..." 错误文本返回, 保证受控轮询路径与测试直测行为一致
 /// (单文件读写为短操作不轮询取消, 故不设 isCancelled 形参)
 /// - 注意: 本包装自身必须是协程 (而非返回惰性协程的普通函数) —— 参数引用在
 ///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂

@@ -1,6 +1,15 @@
 /// agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
+///
+/// 分工 (见 plugin_kit.h 的 polled_tool 说明):
+/// - `read` / `write` / `edit`: 实现体是 asio 协程 (`asio::stream_file` 异步读写),
+///   等待的是插件本地 reactor 上的文件 IO 就绪事件, 因此注册为**声明式受控轮询**
+///   工具 —— 大文件读写不再占用宿主工作线程池; `BOOST_ASIO_HAS_FILE` 不可用的平台
+///   回退同步实现, 仍用 `blocking_tool` (offload 工作线程);
+/// - `list` / `glob` / `grep`: 目录遍历 + 全文件扫描 + 正则/编码转换, 这是 CPU/阻塞
+///   工作而非异步 IO, 放进受控轮询只会阻塞宿主 IO 线程, 因此保持 `blocking_tool`。
 #include "agentxx_fs_plugin.h"
 #include "filesystem_impl.h"
+#include "asio/awaitable.hpp"
 #include "fmt/format.h"
 #include <algorithm>
 #include <string>
@@ -103,6 +112,28 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   )
                   .build();
 
+#if defined(BOOST_ASIO_HAS_FILE)
+        polled_tool(
+            ctx,
+            kNameRead,
+            kDepictRead,
+            readSchema,
+            [](FsPluginCtx&,
+               std::string_view args_json,
+               std::string_view,
+               std::string_view workDir,
+               const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+                ArgReader args(args_json);
+                auto      path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    co_return args.errorMessage();
+                }
+                // 局部量: 其生命周期覆盖整个 co_await (异步读完整文件/逐行读)
+                std::string workDirStr(workDir);
+                co_return co_await fileReadExecuteAsync(args.raw(), workDirStr);
+            }
+        );
+#else
         blocking_tool(
             ctx,
             kNameRead,
@@ -123,6 +154,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 });
             }
         );
+#endif
 
         // 3. Write
         auto writeSchema
@@ -143,6 +175,28 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   )
                   .build();
 
+#if defined(BOOST_ASIO_HAS_FILE)
+        polled_tool(
+            ctx,
+            kNameWrite,
+            kDepictWrite,
+            writeSchema,
+            [](FsPluginCtx&,
+               std::string_view args_json,
+               std::string_view,
+               std::string_view workDir,
+               const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+                ArgReader args(args_json);
+                auto      path    = args.require<std::string>("path");
+                auto      content = args.require<std::string>("content");
+                if (!args.ok()) {
+                    co_return args.errorMessage();
+                }
+                std::string workDirStr(workDir);
+                co_return co_await fileWriteExecuteAsync(args.raw(), workDirStr);
+            }
+        );
+#else
         blocking_tool(
             ctx,
             kNameWrite,
@@ -164,6 +218,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 });
             }
         );
+#endif
 
         // 4. Edit
         auto editSchema
@@ -187,6 +242,29 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   )
                   .build();
 
+#if defined(BOOST_ASIO_HAS_FILE)
+        polled_tool(
+            ctx,
+            kNameEdit,
+            kDepictEdit,
+            editSchema,
+            [](FsPluginCtx&,
+               std::string_view args_json,
+               std::string_view,
+               std::string_view workDir,
+               const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+                ArgReader args(args_json);
+                auto      path   = args.require<std::string>("path");
+                auto      oldStr = args.require<std::string>("old_str");
+                auto      newStr = args.require<std::string>("new_str");
+                if (!args.ok()) {
+                    co_return args.errorMessage();
+                }
+                std::string workDirStr(workDir);
+                co_return co_await fileEditExecuteAsync(args.raw(), workDirStr);
+            }
+        );
+#else
         blocking_tool(
             ctx,
             kNameEdit,
@@ -209,6 +287,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 });
             }
         );
+#endif
 
         // 5. Glob
         auto globSchema

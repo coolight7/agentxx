@@ -1,8 +1,6 @@
 /// agentxx_websearch —— 网络访问工具插件
 #include "agentxx_websearch_plugin.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/io_context.hpp"
+#include "asio/awaitable.hpp"
 #include "websearch_impl.h"
 #include <string>
 
@@ -38,6 +36,11 @@ struct WebsearchPluginCtx : public PluginBase {
 };
 
 /// 注册事务 (start 的实际内容): 读取宿主配置并注册三个工具。
+///
+/// 三个工具的实现体都是 asio 协程 (`co_await HttpClient::*Async`), 等待的是
+/// 插件本地 reactor 上的 socket 就绪事件, 因此注册为**声明式受控轮询**工具
+/// (`polled_tool`): 网络等待不再占用宿主工作线程池, 同一实例的并发请求共享
+/// 一个本地 reactor 与 HTTP keep-alive 连接池。
 static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
         if (ctx.iface.model && ctx.iface.model->get_config) {
             AgentxxPluginString json{nullptr, 0};
@@ -78,40 +81,26 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
                   .array("header", kHeaderArgDesc, "object")
                   .build();
 
-        blocking_tool(
+        polled_tool(
             ctx,
             kNameFetch,
             kDepictFetch,
             fetchSchema,
             [](WebsearchPluginCtx&,
                std::string_view args_json,
-               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+               std::string_view,
+               std::string_view,
+               const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
                 if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     throw CancelledException("web_fetch cancelled");
                 }
-                ArgReader          args(args_json);
-                asio::io_context   io;
-                std::string        result;
-                std::exception_ptr ep;
-                asio::co_spawn(
-                    io,
-                    [&]() -> asio::awaitable<void> {
-                        try {
-                            result = co_await webFetchExecuteAsync(args.raw());
-                        } catch (...) {
-                            ep = std::current_exception();
-                        }
-                    },
-                    asio::detached
-                );
-                io.run();
+                ArgReader args(args_json);
+                // args 是本协程帧的局部量: 其生命周期覆盖整个 co_await
+                auto result = co_await webFetchExecuteAsync(args.raw());
                 if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     throw CancelledException("web_fetch cancelled");
                 }
-                if (ep) {
-                    std::rethrow_exception(ep);
-                }
-                return result;
+                co_return result;
             }
         );
 
@@ -141,40 +130,25 @@ When resolving relative links found in the returned Markdown, combine them with 
                                  .array("header", kHeaderArgDesc, "object")
                                  .build();
 
-        blocking_tool(
+        polled_tool(
             ctx,
             kNameFetchMd,
             kDepictFetchMd,
             fetchMdSchema,
             [](WebsearchPluginCtx&,
                std::string_view args_json,
-               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+               std::string_view,
+               std::string_view,
+               const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
                 if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     throw CancelledException("web_fetch_markdown cancelled");
                 }
-                ArgReader          args(args_json);
-                asio::io_context   io;
-                std::string        result;
-                std::exception_ptr ep;
-                asio::co_spawn(
-                    io,
-                    [&]() -> asio::awaitable<void> {
-                        try {
-                            result = co_await webFetchMarkdownExecuteAsync(args.raw());
-                        } catch (...) {
-                            ep = std::current_exception();
-                        }
-                    },
-                    asio::detached
-                );
-                io.run();
+                ArgReader args(args_json);
+                auto      result = co_await webFetchMarkdownExecuteAsync(args.raw());
                 if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     throw CancelledException("web_fetch_markdown cancelled");
                 }
-                if (ep) {
-                    std::rethrow_exception(ep);
-                }
-                return result;
+                co_return result;
             }
         );
 
@@ -194,49 +168,35 @@ When resolving relative links found in the returned Markdown, combine them with 
                                     )
                                     .build();
 
-            blocking_tool(
+            polled_tool(
                 ctx,
                 kNameSearch,
                 kDepictSearch,
                 searchSchema,
                 [](WebsearchPluginCtx& c,
                    std::string_view args_json,
-                   const AgentxxPluginCancelToken* cancel_token) -> std::string {
+                   std::string_view,
+                   std::string_view,
+                   const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
                     if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                         throw CancelledException("web_search cancelled");
                     }
-                    ArgReader          args(args_json);
-                    asio::io_context   io;
-                    std::string        result;
-                    std::exception_ptr ep;
-                    asio::co_spawn(
-                        io,
-                        [&]() -> asio::awaitable<void> {
-                            try {
-                                if (c.use_model_search) {
-                                    ModelSearchConfig mcfg = c.model_cfg;
-                                    result = co_await modelWebSearchExecuteAsync(args.raw(), mcfg);
-                                } else {
-                                    result = co_await webSearchExecuteAsync(
-                                        args.raw(),
-                                        c.search_api_url,
-                                        c.convert_html2markdown
-                                    );
-                                }
-                            } catch (...) {
-                                ep = std::current_exception();
-                            }
-                        },
-                        asio::detached
-                    );
-                    io.run();
+                    ArgReader   args(args_json);
+                    std::string result;
+                    if (c.use_model_search) {
+                        ModelSearchConfig mcfg = c.model_cfg;
+                        result = co_await modelWebSearchExecuteAsync(args.raw(), mcfg);
+                    } else {
+                        result = co_await webSearchExecuteAsync(
+                            args.raw(),
+                            c.search_api_url,
+                            c.convert_html2markdown
+                        );
+                    }
                     if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                         throw CancelledException("web_search cancelled");
                     }
-                    if (ep) {
-                        std::rethrow_exception(ep);
-                    }
-                    return result;
+                    co_return result;
                 }
             );
         }

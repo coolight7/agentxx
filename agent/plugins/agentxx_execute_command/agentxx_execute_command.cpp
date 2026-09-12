@@ -1,6 +1,15 @@
 /// agentxx_execute_command —— 命令执行工具插件
+///
+/// 两个工具的实现体都是 asio 协程 (`bashExecuteAsync` / `windowsExecuteAsync`):
+/// 子进程管道绑定到协程 executor, 等待的是插件本地 reactor 上的管道就绪事件,
+/// 因此注册为**声明式受控轮询**工具 (`polled_tool`, 见 plugin_kit.h)。
+/// 并发多条命令共享同一条 polled 驱动序列与同一个本地 reactor, 不再每条命令
+/// 占死一个宿主工作线程直到超时 (会话取消经 CancelRegistry 事件驱动 kill 进程组)。
+/// 只有关闭 `AGENTXX_ENABLE_BOOST_PROCESS` 的 popen 回退实现仍是阻塞函数,
+/// 继续走 `blocking_tool` (offload 工作线程)。
 #include "agentxx_execmd_plugin.h"
 #include "execute_command_impl.h"
+#include "asio/awaitable.hpp"
 #include <string>
 
 using namespace agentxx_execmd_plugin;
@@ -43,7 +52,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                   .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        blocking_tool(
+        polled_tool(
             ctx,
             kNameWindows,
             kDepictWinPlaceholder,
@@ -52,47 +61,35 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+               const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
                 ArgReader   args(args_json);
                 std::string tidStr(tid);
                 if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     c.cancelRegistry.cancel(tidStr);
                 }
+                auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+                    if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                        return true;
+                    }
+                    return c.cancelRegistry.isCancelled(tidStr);
+                };
                 StoreFn storeFn = nullptr;
-                if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
                     storeFn = [&c, tidStr](std::string_view content) -> long long {
                         return c.addShareStore(tidStr, content);
                     };
                 }
-                asio::io_context   io;
-                std::string        result;
-                std::exception_ptr ep;
-                asio::co_spawn(
-                    io,
-                    [&]() -> asio::awaitable<void> {
-                        try {
-                            result = co_await windowsExecuteAsync(
-                                args.raw(),
-                                std::string(workDir),
-                                [&c, tidStr, cancel_token]() -> bool {
-                                    if (agentxx_plugin_cancel_is_requested(cancel_token))
-                                        return true;
-                                    return c.cancelRegistry.isCancelled(tidStr);
-                                },
-                                storeFn,
-                                &c.cancelRegistry,
-                                tidStr
-                            );
-                        } catch (...) {
-                            ep = std::current_exception();
-                        }
-                    },
-                    asio::detached
+                // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
+                // 由受控轮询推进; workDir 用局部量保证整个 co_await 期间有效。
+                std::string workDirStr(workDir);
+                co_return co_await windowsExecuteAsync(
+                    args.raw(),
+                    workDirStr,
+                    isCancelled,
+                    storeFn,
+                    &c.cancelRegistry,
+                    tidStr
                 );
-                io.run();
-                if (ep)
-                    std::rethrow_exception(ep);
-                return result;
             }
         );
 #else
@@ -142,7 +139,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                               .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        blocking_tool(
+        polled_tool(
             ctx,
             kNameBash,
             kDepictBash,
@@ -151,47 +148,35 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
                std::string_view  args_json,
                std::string_view  tid,
                std::string_view  workDir,
-               const AgentxxPluginCancelToken* cancel_token) -> std::string {
+               const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
                 ArgReader   args(args_json);
                 std::string tidStr(tid);
                 if (agentxx_plugin_cancel_is_requested(cancel_token)) {
                     c.cancelRegistry.cancel(tidStr);
                 }
+                auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+                    if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                        return true;
+                    }
+                    return c.cancelRegistry.isCancelled(tidStr);
+                };
                 StoreFn storeFn = nullptr;
-                if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
                     storeFn = [&c, tidStr](std::string_view content) -> long long {
                         return c.addShareStore(tidStr, content);
                     };
                 }
-                asio::io_context   io;
-                std::string        result;
-                std::exception_ptr ep;
-                asio::co_spawn(
-                    io,
-                    [&]() -> asio::awaitable<void> {
-                        try {
-                            result = co_await bashExecuteAsync(
-                                args.raw(),
-                                std::string(workDir),
-                                [&c, tidStr, cancel_token]() -> bool {
-                                    if (agentxx_plugin_cancel_is_requested(cancel_token))
-                                        return true;
-                                    return c.cancelRegistry.isCancelled(tidStr);
-                                },
-                                storeFn,
-                                &c.cancelRegistry,
-                                tidStr
-                            );
-                        } catch (...) {
-                            ep = std::current_exception();
-                        }
-                    },
-                    asio::detached
+                // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
+                // 由受控轮询推进; workDir 用局部量保证整个 co_await 期间有效。
+                std::string workDirStr(workDir);
+                co_return co_await bashExecuteAsync(
+                    args.raw(),
+                    workDirStr,
+                    isCancelled,
+                    storeFn,
+                    &c.cancelRegistry,
+                    tidStr
                 );
-                io.run();
-                if (ep)
-                    std::rethrow_exception(ep);
-                return result;
             }
         );
 #else

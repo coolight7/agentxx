@@ -114,6 +114,20 @@ typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginOperatorCallback)(
 /// 异步调用句柄 (仅用于取消; 不可轮询/收尸; 宿主托管生命周期)
 typedef struct AgentxxPluginOperatorHandle AgentxxPluginOperatorHandle;
 
+/// 单次驱动请求 (宿主托管生命周期; 插件只持有裸指针用于取消)
+///
+/// 语义 (见 `agentxx.agent.coroutine_runtime` 接口表):
+/// - 一次 ticket 至多执行一次 drive_once 回调, 且永不内联执行 (宿主异步投递);
+/// - ticket 持有插件实例的执行 lease, 因此 dlclose 不会越过它;
+/// - 宿主保证 `cancel_driver` 之后该 ticket 不再执行回调。
+typedef struct AgentxxPluginDriver AgentxxPluginDriver;
+
+/// 驱动回调: 插件在此推进本地运行时一个有限步骤
+/// - **不得阻塞、不得等待事件、不得同步调用宿主业务接口**;
+/// - 在宿主 IO 线程执行 (可用 `is_io_thread` 校验);
+/// - 异常必须由插件自行捕获 (跨越 C ABI 的异常是未定义行为)。
+typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDriveOnceFn)(void* user_data);
+
 /// 不透明协作式取消令牌。
 /// 令牌只在当前受管工作函数执行期间有效；插件不得保存该指针。
 typedef struct AgentxxPluginCancelToken AgentxxPluginCancelToken;
@@ -126,9 +140,7 @@ struct AgentxxPluginCancelToken {
     void*                            host_ud;
 };
 
-static inline int32_t agentxx_plugin_cancel_is_requested(
-    const AgentxxPluginCancelToken* token
-) {
+static inline int32_t agentxx_plugin_cancel_is_requested(const AgentxxPluginCancelToken* token) {
     return token && token->is_requested ? token->is_requested(token) : 0;
 }
 
@@ -235,7 +247,7 @@ struct AgentxxPluginHost {
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION 1
 
 typedef struct AgentxxPluginToolsIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
+    int32_t  version;     ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
     uint32_t struct_size; ///< sizeof(AgentxxPluginToolsIface) or a larger known table
 
     /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
@@ -360,8 +372,8 @@ typedef struct AgentxxPluginSchedulerIface {
         void* ud
     );
     AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* sleep)(
-        const AgentxxPluginHost* host,
-        int64_t                  ms,
+        const AgentxxPluginHost*      host,
+        int64_t                       ms,
         AgentxxPluginOperatorCallback cb,
         void*                         ud,
         AgentxxPluginString*          error_out
@@ -370,16 +382,69 @@ typedef struct AgentxxPluginSchedulerIface {
 
     AgentxxPluginOperatorHandle*(AGENTXX_PLUGIN_CALL* offload)(
         const AgentxxPluginHost* host,
-        void*(AGENTXX_PLUGIN_CALL*
-                  work)(void* ud, const AgentxxPluginCancelToken* token,
-                        AgentxxPluginString* error_out),
-        void(AGENTXX_PLUGIN_CALL*
-                 done)(void* ud, int32_t status, void* result,
-                       const AgentxxPluginStringView* error),
+        void*(AGENTXX_PLUGIN_CALL* work)(
+            void*                           ud,
+            const AgentxxPluginCancelToken* token,
+            AgentxxPluginString*            error_out
+        ),
+        void(AGENTXX_PLUGIN_CALL* done)(
+            void*                          ud,
+            int32_t                        status,
+            void*                          result,
+            const AgentxxPluginStringView* error
+        ),
         void*                ud,
         AgentxxPluginString* error_out
     );
 } AgentxxPluginSchedulerIface;
+
+/* ==================== 接口表: 协程驱动 (agentxx.agent.coroutine_runtime) ==================== */
+
+/// 通用协程驱动接口 (与协程库无关)
+///
+/// 定位: 插件协程与宿主协程在**同一宿主 IO 执行序列**中交错推进的基础设施。
+/// 核心只有两类动作:
+/// - **driver/pump**: 插件申请宿主异步执行一次有界回调 (push 一个有限步骤);
+/// - **wake 合并**: 插件本地有新工作时自行合并重复请求, 再申请下一次 ticket。
+///
+/// 关键约束 (宿主与插件共同遵守):
+/// - `request_driver` **永不内联**回调, 即使调用者就在宿主 IO 线程; 否则 root start /
+///   completion / cancel 会形成意外重入, 并失去交错执行的公平性;
+/// - 一次 ticket 至多执行一次回调, 且回调只推进一个有限步骤 (不阻塞、不等待);
+/// - 宿主不得把插件私有 reactor 的内部等待对象接进自己的执行序列; 插件必须保证
+///   每个 driver 都对应"已知的、真实存在的可运行工作" (外部完成回调 / 定时器回调 /
+///   已 post 的 continuation), 不得在无工作时持续申请 ticket (那是隐藏轮询);
+/// - 重复 wake 由插件适配器自行合并 (同一实例同时只登记一次 ticket); 宿主另做
+///   ticket 去重与关闭时取消作为最后防线。
+#define AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME         "agentxx.agent.coroutine_runtime"
+#define AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION 1
+
+typedef struct AgentxxPluginCoroutineRuntimeIface {
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION
+    uint32_t struct_size;
+
+    /// 申请一次驱动请求 (**任意线程可调用**, 非阻塞):
+    /// - 成功返回宿主托管的 ticket (宿主只会**异步**调用 drive_once, 每张至多一次);
+    /// - 失败返回 NULL 并在 error_out 输出原因 (host->alloc 分配; 实例已关闭/已停用,
+    ///   或宿主无可用 IO executor);
+    /// - 失败时调用方必须把受影响的操作以失败/取消终结, 不得静默丢弃。
+    AgentxxPluginDriver*(AGENTXX_PLUGIN_CALL* request_driver)(
+        const AgentxxPluginHost* host,
+        AgentxxPluginDriveOnceFn drive_once,
+        void*                    user_data,
+        AgentxxPluginString*     error_out
+    );
+
+    /// 取消尚未开始的 ticket (**幂等、非阻塞**; 任意线程可调用):
+    /// - 尚未执行的 ticket 之后不再执行回调; 正在执行的回调不会被强行中断,
+    ///   它由插件自己的 root 收束协议 (取消/完成) 收尾;
+    /// - 取消后票不再持有实例 lease, 因此关闭等待可以继续推进。
+    void(AGENTXX_PLUGIN_CALL* cancel_driver)(AgentxxPluginDriver* driver);
+
+    /// 当前线程是否为该实例的 IO 线程 (**仅用于断言与诊断**):
+    /// - 只允许插件据此检查自己的用法, **不允许**据此内联执行 driver 回调。
+    int32_t(AGENTXX_PLUGIN_CALL* is_io_thread)(const AgentxxPluginHost* host);
+} AgentxxPluginCoroutineRuntimeIface;
 
 /* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
 
@@ -768,7 +833,7 @@ typedef struct AgentxxPluginBuiltinInfo {
     AgentxxPluginCreateFn create; ///< 必需 (实例创建, 与 agentxx_plugin_agent_create 同契约)
     AgentxxPluginDestroyFn destroy; ///< 可空 (实例销毁, 与 agentxx_plugin_agent_destroy 同契约)
     AgentxxPluginStartFn start; ///< 可空 (create 后的注册/启动事务)
-    AgentxxPluginStopFn stop; ///< 可空 (关闭事务, destroy 前调用)
+    AgentxxPluginStopFn  stop;  ///< 可空 (关闭事务, destroy 前调用)
 } AgentxxPluginBuiltinInfo;
 
 // 与 BuiltinPluginInfo 同步生成于

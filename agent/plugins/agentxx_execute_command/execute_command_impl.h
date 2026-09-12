@@ -6,13 +6,15 @@
 ///   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
 ///     由插件入口从宿主接口表取值 (agentxx.agent.config.get_session_work_dir /
 ///     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
-///   - 统一异步操作模型 (poll 寄生驱动): 协程版执行体 *ExecuteAsync 在插件
-///     实例的 PollLoop (agentxx.plugin.PollLoop, 无线程寄生事件循环) 上运行,
-///     经三件套嫁接到宿主 io 线程协作式交错执行 —— 与内置工具完全同线程,
-///     并发多条命令共享一个寄生 loop 等就绪事件, 不再每命令占死一个阻塞池
-///     线程至超时 (原局部 io_context + io.run() 同步驱动模式已移除)
+///   - 统一异步操作模型 (受控轮询): 协程版执行体 *ExecuteAsync 由插件入口经
+///     `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
+///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由宿主 IO
+///     线程经 driver 请求 `poll_one` 有界步进 (有进展立即续, 无进展退避,
+///     无在途操作时不驱动); 并发多条命令共享同一条驱动序列与同一个 reactor,
+///     不再每条命令占死一个宿主阻塞线程至超时
+///     (见 plugin_kit.h 与 docs/zh-cn/design/plugins.md §16)
 ///   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
-///     同步函数), 由入口经 plugin_kit.h 的 SyncToolSpec/registerSyncTool 适配注册
+///     同步函数), 由入口经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册
 
 /// ## 输出结果压缩
 /// - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
@@ -226,7 +228,7 @@ inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe
 /// - 【关键生命周期语义】动作完成后不立即结束, 而是挂起直至被并行组取消:
 ///   || 组合下"任一先完成即整体完成并取消其余", 若本协程在 kill 后立刻返回,
 ///   会在主工作组装结果前把它整体取消 (丢失输出); 挂起让主工作自然收尾,
-///   由主工作完成驱动整体终结 —— 同时保证寄生 loop 不会被无限轮询的 watcher
+///   由主工作完成驱动整体终结 —— 同时保证本地 reactor 不会被无限轮询的 watcher
 ///   吊住 (历史 bug: detached watcher + RAII guard 互相死等)
 /// - Linux: 子进程经 setsid 启动 (pgid == pid), `kill(-pid)` 可整组清理
 /// - Windows: 子进程挂入 Job Object, `TerminateJobObject` 整树清理
@@ -627,8 +629,9 @@ inline asio::awaitable<std::string> runProcPipeline(
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 // =====================================================================
-// 执行体 —— 协程版 (poll 寄生驱动路径; BOOST_PROCESS 可用时唯一注册路径)
-// - 在插件实例 PollLoop 的 io_context 上 spawn, 挂起点让出给宿主 io 线程;
+// 执行体 —— 协程版 (受控轮询路径; BOOST_PROCESS 可用时唯一注册路径)
+// - 在插件实例本地 reactor 上 spawn (经 plugin_kit::polled_tool), 挂起点让出给
+//   宿主 IO 线程;
 //   返回结果文本, 失败抛出异常 (由 C ABI 边界/适配器捕获转 error_out)
 // =====================================================================
 
@@ -667,8 +670,8 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         co_return "[ExitCode]\n130\n[Error]\nCommand cancelled before execution.\n";
     }
 
-    // 寄生驱动: 管道/进程绑定到当前协程的 executor (插件实例 PollLoop),
-    // 由宿主 io 线程经 pollOnce 非阻塞步进 (不再自建 io_context + run())
+    // 受控轮询: 管道/进程绑定到当前协程的 executor (插件实例本地 reactor),
+    // 由宿主 IO 线程经 driver 请求 poll_one 有界步进 (不再自建 io_context + run())
     auto                ex = co_await asio::this_coro::executor;
     asio::readable_pipe outpip{ex}, errpip{ex};
     // 创建管道，用于接收子进程的输出
@@ -827,8 +830,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 #else
 // =====================================================================
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
-// - 阻塞实现: 只允许经 plugin_kit.h 的 SyncToolSpec/registerSyncTool 适配注册,
-// 禁止在宿主 io 线程/poll 寄生 loop 上直接调用
+// - 阻塞实现: 只允许经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册,
+// 禁止在宿主 IO 线程 / 受控轮询协程内直接调用
 // - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
 // =====================================================================
 

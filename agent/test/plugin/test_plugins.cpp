@@ -3,8 +3,8 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
-#include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/memory_file.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
@@ -12,6 +12,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/async_offload.h"
+#include "agentxx/util/http_server.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -20,6 +21,7 @@
 #include "neograph/graph/compiler.h"
 #include "neograph/graph/validator.h"
 #include <algorithm>
+#include <boost/beast/http.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -525,8 +527,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 bool        failed = false;
                 std::string message;
                 try {
-                    (void)co_await tool->execute_async(agentxx::util::Json{{"reason", "boom-demo"}}
-                    );
+                    (void)co_await tool->execute_async(agentxx::util::Json{
+                        {"reason", "boom-demo"}
+                    });
                 } catch (const std::exception& e) {
                     failed  = true;
                     message = e.what();
@@ -567,8 +570,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             namespace fs = std::filesystem;
             std::error_code ec;
             const auto      uniqueId = std::chrono::steady_clock::now().time_since_epoch().count();
-            auto scriptPath = fs::temp_directory_path(ec)
-                              / fmt::format("agentxx_js_rollback_{}.js", uniqueId);
+            auto            scriptPath
+                = fs::temp_directory_path(ec) / fmt::format("agentxx_js_rollback_{}.js", uniqueId);
             {
                 std::ofstream f(scriptPath, std::ios::binary);
                 f << R"JS(
@@ -586,11 +589,13 @@ throw new Error("top-level rollback probe");
                 R"({{"name":"rollback_probe","path":{}}})",
                 agentxx::util::Json(std::string(scriptPath.string())).dump()
             );
+
             struct LoadState {
                 int         status = -1;
                 bool        done   = false;
                 std::string payload;
             } st;
+
             AgentxxPluginString loadErr{nullptr, 0};
             auto*               jsInst = ctx->pluginManager->find("example_js").get();
             XX_TEST_EXPECT_TRUE(jsInst != nullptr);
@@ -600,9 +605,9 @@ throw new Error("top-level rollback probe");
                 "load",
                 args,
                 [](void* ud, int32_t status, const AgentxxPluginStringView* payload) {
-                    auto* s    = static_cast<LoadState*>(ud);
-                    s->status  = status;
-                    s->done    = true;
+                    auto* s   = static_cast<LoadState*>(ud);
+                    s->status = status;
+                    s->done   = true;
                     if (payload && payload->data) {
                         s->payload.assign(payload->data, static_cast<size_t>(payload->size));
                     }
@@ -625,8 +630,9 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
             auto hello = ctx->toolRegistry->find("js_hello");
             if (hello) {
-                auto out = co_await hello->execute_async(agentxx::util::Json{{"name", "after-rollback"}}
-                );
+                auto out = co_await hello->execute_async(agentxx::util::Json{
+                    {"name", "after-rollback"}
+                });
                 XX_TEST_EXPECT_TRUE(out.find("after-rollback") != std::string::npos);
             }
             fs::remove(scriptPath, ec);
@@ -916,8 +922,9 @@ throw new Error("top-level rollback probe");
         auto hello25b = ctx->toolRegistry->find("js_hello");
         XX_TEST_EXPECT_TRUE(hello25b != nullptr);
         if (hello25b) {
-            auto out = co_await hello25b->execute_async(agentxx::util::Json{{"name", "reenabled"}}
-            );
+            auto out = co_await hello25b->execute_async(agentxx::util::Json{
+                {"name", "reenabled"}
+            });
             XX_TEST_EXPECT_TRUE(out.find("reenabled") != std::string::npos);
         }
 
@@ -934,16 +941,17 @@ throw new Error("top-level rollback probe");
         auto hello25b2 = ctx->toolRegistry->find("js_hello");
         XX_TEST_EXPECT_TRUE(hello25b2 != nullptr);
         if (hello25b2) {
-            auto out = co_await hello25b2->execute_async(agentxx::util::Json{{"name", "storm"}});
+            auto out = co_await hello25b2->execute_async(agentxx::util::Json{
+                {"name", "storm"}
+            });
             XX_TEST_EXPECT_TRUE(out.find("storm") != std::string::npos);
         }
 
         // 清理: 卸载引擎级联卸载脚本插件
-        XX_TEST_EXPECT_TRUE(
-            co_await ctx->pluginManager->unloadAsync(
-                "agentxx_javascript_engine", std::chrono::seconds{30}
-            )
-        );
+        XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync(
+            "agentxx_javascript_engine",
+            std::chrono::seconds{30}
+        ));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
@@ -2180,6 +2188,343 @@ throw new Error("top-level rollback probe");
         co_await ctx->pluginManager->unloadAsync("example_plugin");
     }
 
+    // ---- 38b. 协程驱动桥端到端: 真实宿主下 driver/wake 交错执行 (plugin.md 6/10) ----
+    //
+    // `example_bridge` 每步都经"宿主 timer 回调 -> 投递 continuation + wake -> 下一次
+    // driver"推进, 因此:
+    // - 插件执行期间宿主 IO 线程必须仍能推进其它任务 (hostTicks 递增 = 没有被插件独占);
+    // - 结果里 driverAvailable/onHostIoThread 必须为真 (真宿主提供 coroutine_runtime);
+    // - 只有真实唤醒源 (timer/callback) 才产生请求, 因此 ticks=3 时不应有自旋。
+    {
+        auto instBridge = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(instBridge != nullptr);
+        auto bridgeTool = ctx->toolRegistry->find("example_bridge");
+        XX_TEST_EXPECT_TRUE(bridgeTool != nullptr);
+        if (bridgeTool) {
+            std::atomic<int>  hostTicks{0};
+            std::atomic<bool> pluginDone{false};
+            auto              ex = co_await asio::this_coro::executor;
+            asio::co_spawn(
+                ex,
+                [&hostTicks, &pluginDone]() -> asio::awaitable<void> {
+                    for (int i = 0; i < 200 && !pluginDone.load(std::memory_order_acquire); ++i) {
+                        hostTicks.fetch_add(1, std::memory_order_relaxed);
+                        co_await sleepMs(1);
+                    }
+                },
+                asio::detached
+            );
+
+            auto out = co_await bridgeTool->execute_async(agentxx::util::Json{
+                {"sessionId", "bridge_e2e"},
+                {"ticks",     3           }
+            });
+            pluginDone.store(true, std::memory_order_release);
+            auto j = agentxx::util::Json::parse(out);
+            XX_TEST_EXPECT_EQ(j["driverAvailable"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["onHostIoThread"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["ticks"].get<int>(), 3);
+            XX_TEST_EXPECT_EQ(
+                j["calls"]["echo"]["from"].get<std::string>(),
+                std::string{"example_bridge"}
+            );
+            // 插件挂起期间宿主任务推进过 => 两者在同一 IO 序列中交错执行
+            XX_TEST_EXPECT_GE(hostTicks.load(), 2);
+        }
+        co_await ctx->pluginManager->unloadAsync("example_plugin");
+    }
+
+    // ---- 38c. 受控轮询端到端: 插件本地 reactor 上的 asio 等待由 pump 推进 ----
+    //
+    // `example_polled_timer` 的等待是插件本地 reactor 上的 asio::steady_timer
+    // (没有宿主可见唤醒源), 只能由声明式受控轮询推进。因此:
+    // - 计时器必须真正到期 (elapsedMs ≈ ticks*intervalMs), 说明本地 reactor 被
+    //   持续驱动, 而不是"挂死在那里等宿主回调";
+    // - 插件执行期间宿主 IO 线程必须仍能推进其它任务 (hostTicks 递增 = 未被独占);
+    // - pumpOnStart/driverAvailable/onHostIoThread 为真 (真实宿主提供 coroutine_runtime)。
+    {
+        auto instPolled = co_await ctx->pluginManager->loadPluginAsync(path);
+        XX_TEST_EXPECT_TRUE(instPolled != nullptr);
+        auto polledTool = ctx->toolRegistry->find("example_polled_timer");
+        XX_TEST_EXPECT_TRUE(polledTool != nullptr);
+        if (polledTool) {
+            std::atomic<int>  hostTicks{0};
+            std::atomic<bool> polledDone{false};
+            auto              ex = co_await asio::this_coro::executor;
+            asio::co_spawn(
+                ex,
+                [&hostTicks, &polledDone]() -> asio::awaitable<void> {
+                    for (int i = 0; i < 600 && !polledDone.load(std::memory_order_acquire); ++i) {
+                        hostTicks.fetch_add(1, std::memory_order_relaxed);
+                        co_await sleepMs(1);
+                    }
+                },
+                asio::detached
+            );
+
+            auto t0  = std::chrono::steady_clock::now();
+            auto out = co_await polledTool->execute_async(agentxx::util::Json{
+                {"sessionId",  "polled_e2e"},
+                {"ticks",      3           },
+                {"intervalMs", 15          },
+            });
+            polledDone.store(true, std::memory_order_release);
+            auto wallMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - t0
+            )
+                              .count();
+
+            auto j = agentxx::util::Json::parse(out);
+            XX_TEST_EXPECT_EQ(j["driverAvailable"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["onHostIoThread"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["pumpOnStart"].get<bool>(), true);
+            XX_TEST_EXPECT_EQ(j["ticks"].get<int>(), 3);
+            // asio 原生 timer 在 pump 下真正到期 (退避量子 10ms, 因此放宽下界)
+            XX_TEST_EXPECT_GE(j["elapsedMs"].get<int64_t>(), int64_t{40});
+            XX_TEST_EXPECT_TRUE(wallMs < 3000);
+            // 插件等待期间宿主任务持续推进 => 两者在同一 IO 序列中交错
+            XX_TEST_EXPECT_GE(hostTicks.load(), 2);
+        }
+        XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("example_plugin"));
+        XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_polled_timer"));
+    }
+
+    // ---- 38d. agentxx_filesystem 端到端: read/write/edit 走受控轮询 (asio::stream_file),
+    //          list 仍走 offload 阻塞池 —— 两类工具在同一实例内共存 ----
+    {
+        auto fsPath = findPluginDir("agentxx_filesystem");
+        auto fsInst = co_await ctx->pluginManager->loadPluginAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            namespace fsx = std::filesystem;
+            std::error_code ec;
+            const auto      uniqueId = std::chrono::steady_clock::now().time_since_epoch().count();
+            const auto      dir
+                = fsx::temp_directory_path(ec) / fmt::format("agentxx_polled_fs_{}", uniqueId);
+            fsx::create_directories(dir, ec);
+            const std::string file = (dir / "polled.txt").string();
+
+            auto writeTool = ctx->toolRegistry->find("agentxx_filesystem_write");
+            auto readTool  = ctx->toolRegistry->find("agentxx_filesystem_read");
+            auto editTool  = ctx->toolRegistry->find("agentxx_filesystem_edit");
+            auto listTool  = ctx->toolRegistry->find("agentxx_filesystem_list");
+            XX_TEST_EXPECT_TRUE(writeTool != nullptr);
+            XX_TEST_EXPECT_TRUE(readTool != nullptr);
+            XX_TEST_EXPECT_TRUE(editTool != nullptr);
+            XX_TEST_EXPECT_TRUE(listTool != nullptr);
+
+            if (writeTool && readTool && editTool && listTool) {
+                // 1. write (受控轮询 + stream_file)
+                auto w = co_await writeTool->execute_async(agentxx::util::Json{
+                    {"path",      file                         },
+                    {"content",   "hello polled\nsecond line\n"},
+                    {"overwrite", true                         },
+                });
+                XX_TEST_EXPECT_TRUE(w.find("success") != std::string::npos);
+
+                // 2. read (受控轮询, 带行区间)
+                auto r = co_await readTool->execute_async(agentxx::util::Json{
+                    {"path",        file},
+                    {"line_offset", 0   },
+                    {"line_limit",  2   },
+                });
+                XX_TEST_EXPECT_TRUE(r.find("hello polled") != std::string::npos);
+
+                // 3. edit (受控轮询: 异步读 + 原子写)
+                auto e = co_await editTool->execute_async(agentxx::util::Json{
+                    {"path",    file         },
+                    {"old_str", "second line"},
+                    {"new_str", "SECOND"     },
+                });
+                XX_TEST_EXPECT_TRUE(e.find("success") != std::string::npos);
+                auto r2 = co_await readTool->execute_async(agentxx::util::Json{
+                    {"path", file}
+                });
+                XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
+
+                // 4. list (仍走 offload 阻塞池): 两类工具在同一实例内共存
+                auto l = co_await listTool->execute_async(agentxx::util::Json{
+                    {"path", dir.string()}
+                });
+                XX_TEST_EXPECT_TRUE(l.find("polled.txt") != std::string::npos);
+            }
+            fsx::remove_all(dir, ec);
+            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));
+        }
+    }
+
+    // ---- 38e. agentxx_websearch 端到端: 网络等待走受控轮询 (本地回环 HTTP 服务) ----
+    //
+    // 覆盖: 单请求完成、并发多请求 (共享同一 polled 驱动序列与 HTTP keep-alive 池,
+    // 互不阻塞)、插件等待期间宿主 IO 线程仍在推进。
+    {
+        using Server = agentxx::util::HttpServer;
+        Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+        server.router().add(
+            "/hello",
+            0,
+            std::make_shared<Server::Handler>(
+                [](Server::Request&, Server::Response& resp, std::string_view
+                ) -> asio::awaitable<void> {
+                    resp.result(boost::beast::http::status::ok);
+                    resp.set(boost::beast::http::field::content_type, "text/plain");
+                    resp.body() = "polled_web_ok";
+                    resp.prepare_payload();
+                    co_return;
+                }
+            )
+        );
+        std::thread serverThread([&server]() {
+            server.start();
+        });
+        uint16_t    port = 0;
+        for (int i = 0; i < 200; ++i) {
+            port = server.port();
+            if (port != 0) {
+                break;
+            }
+            co_await sleepMs(10);
+        }
+        XX_TEST_EXPECT_TRUE(port != 0);
+
+        auto webPath = findPluginDir("agentxx_websearch");
+        auto webInst = co_await ctx->pluginManager->loadPluginAsync(webPath);
+        XX_TEST_EXPECT_TRUE(webInst != nullptr);
+        if (webInst && port != 0) {
+            const std::string baseUrl     = "http://127.0.0.1:" + std::to_string(port);
+            auto              fetchTool   = ctx->toolRegistry->find("agentxx_web_fetch");
+            auto              fetchMdTool = ctx->toolRegistry->find("agentxx_web_fetch_markdown");
+            XX_TEST_EXPECT_TRUE(fetchTool != nullptr);
+            XX_TEST_EXPECT_TRUE(fetchMdTool != nullptr);
+
+            if (fetchTool && fetchMdTool) {
+                std::atomic<int>  hostTicks{0};
+                std::atomic<bool> netDone{false};
+                auto              ex = co_await asio::this_coro::executor;
+                asio::co_spawn(
+                    ex,
+                    [&hostTicks, &netDone]() -> asio::awaitable<void> {
+                        for (int i = 0; i < 2000 && !netDone.load(std::memory_order_acquire); ++i) {
+                            hostTicks.fetch_add(1, std::memory_order_relaxed);
+                            co_await sleepMs(1);
+                        }
+                    },
+                    asio::detached
+                );
+
+                // 1. 单请求 (受控轮询驱动 socket 收发)
+                auto out1 = co_await fetchTool->execute_async(agentxx::util::Json{
+                    {"url",     baseUrl + "/hello"},
+                    {"timeout", 10                },
+                });
+                XX_TEST_EXPECT_TRUE(out1.find("polled_web_ok") != std::string::npos);
+
+                // 2. markdown 路径
+                auto out2 = co_await fetchMdTool->execute_async(agentxx::util::Json{
+                    {"url",     baseUrl + "/hello"},
+                    {"timeout", 10                },
+                });
+                XX_TEST_EXPECT_TRUE(out2.find("polled_web_ok") != std::string::npos);
+
+                // 3. 并发 6 路请求: 共享同一实例的 polled 驱动序列, 互不阻塞
+                constexpr int    kConcurrent = 6;
+                std::atomic<int> okCount{0};
+                for (int i = 0; i < kConcurrent; ++i) {
+                    asio::co_spawn(
+                        ex,
+                        [fetchTool, &okCount, baseUrl]() -> asio::awaitable<void> {
+                            auto out = co_await fetchTool->execute_async(agentxx::util::Json{
+                                {"url",     baseUrl + "/hello"},
+                                {"timeout", 10                },
+                            });
+                            if (out.find("polled_web_ok") != std::string::npos) {
+                                okCount.fetch_add(1, std::memory_order_relaxed);
+                            }
+                        },
+                        asio::detached
+                    );
+                }
+                for (int i = 0; i < 2000 && okCount.load(std::memory_order_relaxed) < kConcurrent;
+                     ++i) {
+                    co_await sleepMs(5);
+                }
+                netDone.store(true, std::memory_order_release);
+                XX_TEST_EXPECT_EQ(okCount.load(), kConcurrent);
+                // 插件等待网络期间宿主任务仍在推进
+                XX_TEST_EXPECT_GE(hostTicks.load(), 2);
+            }
+            // 卸载: 无在途操作 -> pump 已停止, 无残留
+            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_websearch"));
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_web_fetch"));
+        }
+        server.stop();
+        serverThread.join();
+    }
+
+    // ---- 38f. 受控轮询的在途卸载: 命令挂起时卸载, pump 停止且不泄漏 ----
+    {
+        auto instExec2
+            = co_await ctx->pluginManager->loadPluginAsync(findPluginDir("agentxx_execute_command")
+            );
+        XX_TEST_EXPECT_TRUE(instExec2 != nullptr);
+        if (instExec2) {
+#if XX_IS_WIN_D
+            const char* cmdToolName2 = "agentxx_execute_windows_command";
+            const char* slowCommand  = "ping -n 6 127.0.0.1 > nul";
+#else
+            const char* cmdToolName2 = "agentxx_execute_bash_command";
+            const char* slowCommand  = "sleep 5";
+#endif
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(cmdToolName2));
+            auto                ex = co_await asio::this_coro::executor;
+            AgentxxPluginString e2{nullptr, 0};
+
+            struct UnloadRes {
+                int               status = -1;
+                std::atomic<bool> done{false};
+            } ures;
+
+            auto* op2 = ctx->pluginManager->callToolAsync(
+                instExec2.get(),
+                cmdToolName2,
+                agentxx::util::Json{
+                    {"command", slowCommand},
+                    {"timeout", 20         }
+            }.dump(),
+                "t_polled_unload",
+                [](void* ud, int32_t st, const AgentxxPluginStringView*) {
+                    auto* r   = static_cast<UnloadRes*>(ud);
+                    r->status = st;
+                    r->done.store(true, std::memory_order_release);
+                },
+                &ures,
+                &e2
+            );
+            XX_TEST_EXPECT_TRUE(op2 != nullptr);
+            // 让子进程真正跑起来 (pump 已进入轮询等待)
+            co_await sleepMs(150);
+            XX_TEST_EXPECT_FALSE(ures.done.load());
+            auto t0 = std::chrono::steady_clock::now();
+            // 卸载: 宿主取消操作 -> 插件收束 (kill 进程组) -> pump 停止 -> inflight 归零
+            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_execute_command")
+            );
+            auto unloadMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - t0
+            )
+                                .count();
+            XX_TEST_EXPECT_TRUE(unloadMs < 5000);
+            for (int i = 0; i < 200 && !ures.done.load(std::memory_order_acquire); ++i) {
+                co_await sleepMs(5);
+            }
+            XX_TEST_EXPECT_TRUE(ures.done.load());
+            XX_TEST_EXPECT_TRUE(ures.status != AGENTXX_PLUGIN_OPERATOR_OK);
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains(cmdToolName2));
+            if (e2.data) {
+                agentxx::plugin::PluginString::free(instExec2->hostView(), &e2);
+            }
+        }
+    }
+
     // ---- 39. 多实例并发隔离 (10 个独立 AgentContext 并行加载 agentxx_system_monitor) ----
     {
         auto sysMonPath = findPluginDir("agentxx_system_monitor");
@@ -2236,10 +2581,10 @@ throw new Error("top-level rollback probe");
     {
 #ifdef AGENTXX_TEST_START_FAIL_PLUGIN_PATH
         std::vector<std::string> reports; ///< 先声明: 保证晚于 bus 析构 (回调安全)
-        auto sctx                     = std::make_shared<agent::AgentContext>();
+        auto                     sctx = std::make_shared<agent::AgentContext>();
         sctx->agentConfig             = std::make_shared<agent::AgentConfig>();
         sctx->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
-        sctx->bus = std::make_shared<event::EventBus>(co_await asio::this_coro::executor);
+        sctx->bus           = std::make_shared<event::EventBus>(co_await asio::this_coro::executor);
         sctx->toolRegistry  = std::make_shared<plugin::ToolRegistry>();
         sctx->pluginManager = std::make_shared<plugin::PluginManager>(sctx);
         sctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
@@ -2275,9 +2620,8 @@ throw new Error("top-level rollback probe");
         };
 
         // 第一次加载: 全注册后失败, 宿主回滚
-        auto fail1 = co_await sctx->pluginManager->loadPluginAsync(
-            AGENTXX_TEST_START_FAIL_PLUGIN_PATH
-        );
+        auto fail1
+            = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
         XX_TEST_EXPECT_TRUE(fail1 == nullptr);
         co_await waitReports(1);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
@@ -2304,16 +2648,13 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_FALSE(found);
         }
         // 资源已摘除: 失败实例不得留下 skill 目录所有权记录
-        XX_TEST_EXPECT_TRUE(
-            applier->ownedBy("test_start_fail_plugin").skillDirs.empty()
-        );
+        XX_TEST_EXPECT_TRUE(applier->ownedBy("test_start_fail_plugin").skillDirs.empty());
         co_await sleepMs(5);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
 
         // 第二次加载: 同名注册必须全部重新成功 (无残留冲突)
-        auto fail2 = co_await sctx->pluginManager->loadPluginAsync(
-            AGENTXX_TEST_START_FAIL_PLUGIN_PATH
-        );
+        auto fail2
+            = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
         XX_TEST_EXPECT_TRUE(fail2 == nullptr);
         co_await waitReports(2);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{2});
@@ -2327,9 +2668,7 @@ throw new Error("top-level rollback probe");
         );
         XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
         XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
-        XX_TEST_EXPECT_TRUE(
-            applier->ownedBy("test_start_fail_plugin").skillDirs.empty()
-        );
+        XX_TEST_EXPECT_TRUE(applier->ownedBy("test_start_fail_plugin").skillDirs.empty());
         sctx->pluginManager->shutdownAll();
 #else
         // 独立构建未接线测试插件: 跳过

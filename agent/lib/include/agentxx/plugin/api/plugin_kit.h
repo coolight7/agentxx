@@ -18,6 +18,12 @@
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/json_view.h"
+#include "asio/awaitable.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/executor_work_guard.hpp"
+#include "asio/io_context.hpp"
+#include "asio/post.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include <type_traits>
@@ -28,6 +34,7 @@
 #include <condition_variable>
 #include <coroutine>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -36,13 +43,16 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <variant>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
+
+/// asio 命名空间别名 (header-only SDK 不引入 util 的 asio_error.h, 避免插件多带依赖)
+namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace plugin {
@@ -215,9 +225,8 @@ public:
     }
 
     /// Replace an ABI string and release an existing host allocation first.
-    static void set(
-        const AgentxxPluginHost* h, AgentxxPluginString* out, std::string_view sv
-    ) noexcept {
+    static void
+        set(const AgentxxPluginHost* h, AgentxxPluginString* out, std::string_view sv) noexcept {
         if (!out) {
             return;
         }
@@ -406,6 +415,9 @@ struct AgentIfaces {
     const AgentxxPluginCancelIface*       cancel       = nullptr; ///< "agentxx.agent.cancel"
     const AgentxxPluginGraphIface*        graph        = nullptr; ///< "agentxx.agent.graph"
     const AgentxxPluginTasksIface*        tasks        = nullptr; ///< "agentxx.agent.tasks"
+    /// "agentxx.agent.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
+    /// 为 NULL 表示宿主不提供驱动 (伪宿主/旧宿主): kit 自动回退到 post_to_io 路径。
+    const AgentxxPluginCoroutineRuntimeIface* coroutineRuntime = nullptr;
 
     /// 从宿主查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const AgentxxPluginHost* host) {
@@ -443,6 +455,10 @@ struct AgentIfaces {
             = queryInterface<AgentxxPluginCancelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CANCEL);
         f.graph = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
         f.tasks = queryInterface<AgentxxPluginTasksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TASKS);
+        f.coroutineRuntime = queryInterface<AgentxxPluginCoroutineRuntimeIface>(
+            host,
+            AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME
+        );
         return f;
     }
 };
@@ -533,6 +549,1012 @@ struct Logger {
         log(4, msg);
     }
 };
+
+/* ==================== 协程驱动桥 (PollOneBridge) ====================
+ *
+ * 定位: 让插件协程与宿主协程在**同一宿主 IO 执行序列**中交错推进的适配层。
+ *
+ * 协议 (与协程库无关):
+ * - 插件侧适配器把本地协程的推进单位记为"一次有限步骤" (poll_one 一个就绪 handler);
+ * - 只要本地有**已知**可运行工作 (新 root 首步 / 宿主回调完成投递的 continuation /
+ *   本地 post), 就调用 [wake]; wake 合并重复请求后向宿主申请一次驱动请求;
+ * - 宿主把请求异步投递到自己的 IO 线程, 回调里只做一次 `poll_one()`; 完成后若又
+ *   有新 wake 才申请下一次请求; 没有新工作时**不再申请**, 因此空闲时不消耗宿主
+ *   任务队列, 也不自旋;
+ * - **绝不在宿主回调栈内直接恢复插件协程**: 宿主回调只复制结果并
+ *   `postToLocal + wake`, continuation 仍由下一次 driver 推进。
+ *
+ * 状态机 (三个竞态窗口都必须覆盖: driver 前 / driver 执行中 / driver 返回后):
+ * - `readySteps_`: 已投递但尚未执行的本地步骤数 (每一步需要一次 poll_one);
+ * - `wakePending_`: 显式 wake 尚未被请求覆盖 (覆盖"插件直接向 local_executor 投递,
+ *   kit 看不到该投递"的用法; 每次 wake 至多多花一次请求, 不会自旋);
+ * - `driverQueued_`: 已申请请求 (含 request_driver 正在返回的窗口);
+ * - `driverRunning_`: 回调正在执行;
+ * 单个 `bool scheduled` 会在"回调收尾清标志"与"外部投递写标志"之间丢通知: 例如
+ * 并发启动 N 个根时, N 次 wake 若被合并成一次请求, 就只有 1 个根会被推进。因此
+ * 这里用"步骤计数 + 显式 wake 标记 + 两个在途标志 + epoch"组合, 保证任何窗口中的
+ * 投递最终都会被推进, 且没有新工作时请求数不再增长。
+ *
+ * 线程: `wake()` 可从外部完成回调线程调用; `driveOnce()` 在宿主 IO 线程执行;
+ * `stop()` 从 stop/destroy 路径调用。三者用一把**短**临界区互斥线性化 —— 临界区内
+ * 不调用插件业务代码、不投递、不等待, 因此既不会与宿主形成死锁, 也不影响
+ * "插件状态只在宿主 IO 线程访问"这一无锁前提 (真正的插件代码只在 driveOnce 的
+ * `poll_one` 里跑)。
+ */
+namespace detail {
+
+/// 单实例协程驱动桥 (定义在下方; 这里前置声明供 [BridgeRoot] 引用)。
+class PollOneBridge;
+
+/// 根协程帧的销毁函数 (类型擦除到具体 promise)。
+template<typename Promise>
+inline void destroyBridgeFrame(void* frame) noexcept {
+    if (!frame) {
+        return;
+    }
+    auto handle = std::coroutine_handle<Promise>::from_address(frame);
+    if (handle) {
+        handle.destroy();
+    }
+}
+
+/// 根操作在桥接中的仲裁对象: 完成/放弃的 exactly-once 与协程帧的销毁责任。
+///
+/// 为什么不直接用 promise 里的 notify:
+/// - 根协程的推进由 host driver 触发, 因此"根仍在本地排队"与"宿主拒绝提供驱动"
+///   可能并发出现; 本对象用原子 CAS 保证 `notify.done` 至多一次, 并保证 op 句柄
+///   等资源只释放一次;
+/// - 宿主拒绝再提供驱动 (实例关闭 / 无 IO executor) 时, 根必须被终结为失败, 否则
+///   宿主持有的 Operation 永远不完成、卸载等待必然超时;
+/// - 协程帧的销毁责任跟着本对象的生命周期: 排队中的本地任务 (或桥析构释放队列)
+///   持有它的强引用, 最后一个引用释放时销毁仍挂起的帧。放弃路径只置标志, 因此
+///   **不会有跨线程销毁一个仍可能被恢复的协程帧**。
+class BridgeRoot : public std::enable_shared_from_this<BridgeRoot> {
+public:
+
+    using DestroyFrameFn = void (*)(void* frame) noexcept;
+
+    BridgeRoot(
+        const AgentxxPluginOperatorNotify& notify,
+        void*                              frame,
+        DestroyFrameFn                     destroyFrame
+    ) :
+        notify_(notify),
+        frame_(frame),
+        destroyFrame_(destroyFrame) {}
+
+    /// 绑定所属桥 (由 [startBridgedRoot] 设置): 放弃的根需要由桥保活协程帧。
+    void setOwner(PollOneBridge* owner) noexcept {
+        owner_ = owner;
+    }
+
+    BridgeRoot(const BridgeRoot&)            = delete;
+    BridgeRoot& operator=(const BridgeRoot&) = delete;
+
+    ~BridgeRoot() {
+        // 最后一个引用 (排队中的本地任务 / 桥登记 / 桥析构) 释放: 销毁仍挂起的帧。
+        // 已正常完成的帧在 [finishIfDone] 中已销毁 (frame_ 置空), 这里是幂等空操作。
+        destroyFrame();
+    }
+
+    /// 认领"根已终结"的所有权 (CAS); 只有第一个调用者能走完成/放弃流程。
+    bool claimFinish() noexcept {
+        bool expected = false;
+        return claimed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+    }
+
+    /// 向宿主上报终态 (仅在 [claimFinish] 成功后调用, 保证 exactly-once)。
+    void notifyHost(int32_t status, std::string_view payload) noexcept {
+        if (!notify_.done) {
+            return;
+        }
+        auto sv = PluginStringView::from(payload.data(), payload.size());
+        try {
+            notify_.done(notify_.host_ud, status, &sv);
+        } catch (...) {
+            // 宿主回调不得抛异常; 即便抛了也已经认领过完成权, 不重复派发。
+        }
+    }
+
+    /// 宿主不再提供驱动: 终结为失败 (幂等)。
+    ///
+    /// 帧的处置: 不能在这里销毁 —— 该根可能有仍在外部的宿主回调 (例如已排队或正在
+    /// 执行的 sleep/offload 完成), 它们随后会尝试恢复本帧; 因此把根交给桥托管
+    /// (`owner_`), 由桥在**销毁时** (此时插件上下文已无任何未完成宿主操作) 统一销毁,
+    /// 期间迟到的回调会因 `shouldAdvance()==false` 而安全跳过。
+    /// (定义在 [PollOneBridge] 之后: 需要完整的桥类型来登记托管。)
+    void abandon(std::string_view reason) noexcept;
+
+    /// 释放 op 侧资源 (幂等)。
+    void runCleanup() noexcept {
+        if (cleanup_) {
+            auto cleanup = std::move(cleanup_);
+            cleanup_     = nullptr;
+            try {
+                cleanup();
+            } catch (...) {
+            }
+        }
+    }
+
+    /// 本地任务实际推进前检查: 被放弃的根不再推进 (帧由引用释放路径销毁)。
+    bool shouldAdvance() const noexcept {
+        return !abandoned_.load(std::memory_order_acquire) && hasFrame();
+    }
+
+    bool hasFrame() const noexcept {
+        return frame_.load(std::memory_order_acquire) != nullptr;
+    }
+
+    bool finished() const noexcept {
+        return claimed_.load(std::memory_order_acquire);
+    }
+
+    bool abandoned() const noexcept {
+        return abandoned_.load(std::memory_order_acquire);
+    }
+
+    /// 完成权被认领时释放 op 侧资源 (op 句柄对象等)。
+    void setCleanup(std::function<void()> cleanup) {
+        cleanup_ = std::move(cleanup);
+    }
+
+    /// 销毁仍然挂起的协程帧 (幂等) 并释放 op 侧资源。
+    ///
+    /// 调用点都满足"协程已终止或不可能再被恢复":
+    /// - [finishIfDone] 的桥接分支 (协程刚结束, 挂在 final_suspend);
+    /// - 桥销毁 / 最后一个引用释放 (此后不存在宿主回调访问该帧)。
+    /// op 资源在这里释放, 而不是在 [abandon]: 被放弃的根可能正在 host driver 内
+    /// 执行, 其输入 (Request/OpCtl) 仍被协程以引用使用。
+    void destroyFrame() noexcept {
+        void* frame = frame_.exchange(nullptr, std::memory_order_acq_rel);
+        if (frame && destroyFrame_) {
+            destroyFrame_(frame);
+        }
+        runCleanup();
+    }
+
+private:
+
+    AgentxxPluginOperatorNotify notify_{nullptr, nullptr};
+    std::atomic<void*>          frame_{nullptr};
+    DestroyFrameFn              destroyFrame_ = nullptr;
+    PollOneBridge*              owner_        = nullptr;
+    std::function<void()>       cleanup_;
+    std::atomic<bool>           claimed_{false};
+    std::atomic<bool>           abandoned_{false};
+};
+
+/// 受控轮询根 (asio 协程) 的仲裁对象。
+///
+/// 与 [BridgeRoot] 的区别: `asio::awaitable` 的协程帧由 asio 自己的 completion
+/// handler 持有 (本地 reactor 销毁时统一释放), 因此本对象**不负责销毁帧**, 只负责:
+/// - 终态上报与资源释放的 **exactly-once** 仲裁 (正常完成 vs 桥停止时放弃);
+/// - 被放弃时执行一次类型擦除的清理 (回收 Job 等宿主可见资源)。
+///
+/// (完成/放弃两条路径都可能释放同一个 Job, 因此用一次 CAS 决定谁来做。)
+class PolledRoot : public std::enable_shared_from_this<PolledRoot> {
+public:
+
+    explicit PolledRoot(const AgentxxPluginOperatorNotify& notify) :
+        notify_(notify) {}
+
+    PolledRoot(const PolledRoot&)            = delete;
+    PolledRoot& operator=(const PolledRoot&) = delete;
+
+    ~PolledRoot() {
+        runCleanup();
+    }
+
+    /// 认领"根已终结"的所有权 (CAS); 只有第一个调用者能走完成/放弃流程。
+    bool claimFinish() noexcept {
+        bool expected = false;
+        return claimed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+    }
+
+    bool finished() const noexcept {
+        return claimed_.load(std::memory_order_acquire);
+    }
+
+    /// 向宿主上报终态 (仅在 [claimFinish] 成功后调用, 保证 exactly-once)。
+    void notifyHost(int32_t status, std::string_view payload) noexcept {
+        if (!notify_.done) {
+            return;
+        }
+        auto sv = PluginStringView::from(payload.data(), payload.size());
+        try {
+            notify_.done(notify_.host_ud, status, &sv);
+        } catch (...) {
+            // 宿主回调不得抛异常; 即便抛了也已经认领过完成权, 不重复派发。
+        }
+    }
+
+    /// 设置资源清理回调 (回收 Job); 由 [claimFinish] 的赢家执行恰好一次。
+    void setCleanup(std::function<void()> cleanup) {
+        cleanup_ = std::move(cleanup);
+    }
+
+    /// 执行清理 (幂等)。先把回调移出再调用, 避免回调内部释放本对象导致
+    /// "在成员函数内自销毁"。
+    void runCleanup() noexcept {
+        if (!cleanup_) {
+            return;
+        }
+        auto cleanup = std::move(cleanup_);
+        cleanup_     = nullptr;
+        try {
+            cleanup();
+        } catch (...) {
+        }
+    }
+
+private:
+
+    AgentxxPluginOperatorNotify notify_{nullptr, nullptr};
+    std::function<void()>       cleanup_;
+    std::atomic<bool>           claimed_{false};
+};
+
+/// 单实例协程驱动桥 (每个插件实例独立一份; 无任何进程级可变状态)。
+///
+/// kit 内部用法:
+/// - 根操作启动: `postToLocal(首步)` + `wake()`, 并用 [addRoot] 登记 [BridgeRoot],
+///   以便宿主拒绝驱动时终结它;
+/// - 宿主回调完成: `postToLocal(continuation)` + `wake()`;
+/// - stop/destroy: [stop] (拒绝新 wake、取消排队请求、停止本地 reactor、终结活跃根)。
+///
+/// 两类根:
+/// - **事件驱动根** ([BridgeRoot]): 等的都是"宿主可见唤醒源" (宿主回调/宿主计时器),
+///   空闲时不自旋;
+/// - **受控轮询根** ([PolledRoot], 声明式 `polled_tool`): 等的是插件本地 reactor 上
+///   的内核就绪事件 (socket/管道/文件/本地 timer)。`poll_one` 只能"执行已就绪
+///   handler", 不会让等待对象到期, 因此这类根需要"有在途操作时轮询":
+///   有进展立即续票、无进展退避 `kPollIntervalMs`, 空闲 (无在途 polled 操作) 时
+///   不申请请求、不建定时器, 与事件驱动路径共享同一次请求/同一次 `poll_one`。
+class PollOneBridge {
+public:
+
+    using LocalExecutor = asio::io_context::executor_type;
+
+    /// 连续多少次 driver 无进展后提示"等待没有宿主可见的唤醒源"。
+    /// 取 8 是为了容忍合理的偶发空转 (同一轮 wake 与已被消费的 continuation 重叠),
+    /// 又不至于让真正的私有 reactor 等待被静默掩盖。
+    static constexpr int kNoProgressWarnStreak = 8;
+
+    /// ---- 受控轮询 (pump) 参数: 只作用于声明式 `polled_tool` 的根 ----
+    /// 无进展时的退避量子 (ms): 等待内核就绪期间约 100 次/秒驱动,
+    /// 每次 ≈1 个宿主 post + 1 次 `epoll_wait(0)`, 空闲时不产生任何驱动。
+    static constexpr int64_t kPollIntervalMs = 10;
+    /// 连续"有进展"多少步后强制让出一次 (给宿主其它任务与同实例其它操作机会),
+    /// 避免插件自循环 (自己给自己 post) 长期独占 IO 线程。
+    static constexpr int kPollBurstMax = 256;
+    /// 突发上限触发后的让出时长 (ms)。
+    static constexpr int64_t kPollBurstYieldMs = 1;
+
+    PollOneBridge(
+        const AgentxxPluginHost*                  host,
+        const AgentxxPluginCoroutineRuntimeIface* runtime,
+        const AgentxxPluginSchedulerIface*        scheduler = nullptr
+    ) :
+        localIo_(1),
+        work_(asio::make_work_guard(localIo_)),
+        host_(host),
+        runtime_(runtime),
+        sched_(scheduler) {}
+
+    PollOneBridge(const PollOneBridge&)            = delete;
+    PollOneBridge& operator=(const PollOneBridge&) = delete;
+
+    ~PollOneBridge() {
+        stop();
+        // 桥销毁 = 插件上下文销毁的最后边界: 此时不会再有宿主回调访问插件帧
+        // (实例 lease 已归零), 可以安全销毁被放弃仍挂起的根。
+        std::vector<std::shared_ptr<BridgeRoot>> abandoned;
+        {
+            std::lock_guard lock(rootsMutex_);
+            abandoned = std::move(abandonedRoots_);
+            abandonedRoots_.clear();
+        }
+        abandoned.clear();
+        // 被放弃的受控轮询根: 协程帧由 asio 随本地 reactor 释放 (见 [stop]),
+        // 这里回收它们的 Job (清理回调幂等, 正常完成时已执行过)。
+        std::vector<std::function<void()>> cleanups;
+        {
+            std::lock_guard lock(rootsMutex_);
+            cleanups = std::move(abandonedCleanups_);
+            abandonedCleanups_.clear();
+        }
+        cleanups.clear();
+    }
+
+    /// 宿主是否提供协程驱动接口 (缺失时 kit 回退到 post_to_io 路径)。
+    bool available() const noexcept {
+        return host_ != nullptr && runtime_ != nullptr && runtime_->request_driver != nullptr;
+    }
+
+    /// 本地执行器: 插件协程首步/continuation 的排队目标 (由 host driver 推进)。
+    LocalExecutor local_executor() noexcept {
+        return localIo_.get_executor();
+    }
+
+    const AgentxxPluginHost* host() const noexcept {
+        return host_;
+    }
+
+    const AgentxxPluginCoroutineRuntimeIface* runtime() const noexcept {
+        return runtime_;
+    }
+
+    /// 是否仍有已知可运行工作 (显式 wake 未被请求覆盖, 或有已投递未执行的步骤)。
+    bool hasPendingWake() const noexcept {
+        std::lock_guard lock(mutex_);
+        return wakePending_ || readySteps_.load(std::memory_order_acquire) > 0;
+    }
+
+    /// 已投递但尚未执行的本地步骤数 (诊断)。
+    uint64_t readySteps() const noexcept {
+        return readySteps_.load(std::memory_order_acquire);
+    }
+
+    bool isDriverQueued() const noexcept {
+        std::lock_guard lock(mutex_);
+        return driverQueued_;
+    }
+
+    bool isDriverRunning() const noexcept {
+        std::lock_guard lock(mutex_);
+        return driverRunning_;
+    }
+
+    bool isStopping() const noexcept {
+        std::lock_guard lock(mutex_);
+        return stopping_;
+    }
+
+    /// 已申请的请求总数 (诊断: 用于验证"空闲时请求数不再增长")。
+    uint64_t ticketsIssued() const noexcept {
+        return ticketsIssued_.load(std::memory_order_acquire);
+    }
+
+    /// 已完成的驱动步数 (诊断)。
+    uint64_t driverSteps() const noexcept {
+        return driverSteps_.load(std::memory_order_acquire);
+    }
+
+    /// 活跃 (未终结) 根数量 (诊断)。
+    size_t activeRootCount() const {
+        std::lock_guard lock(rootsMutex_);
+        return roots_.size();
+    }
+
+    /// 在途受控轮询操作数 (诊断: 0 表示"不轮询、不建定时器")。
+    uint64_t polledRootCount() const noexcept {
+        return polledRoots_.load(std::memory_order_acquire);
+    }
+
+    /// 已发生的"无进展退避"次数 (诊断: 验证退避确实发生且空闲时不增长)。
+    uint64_t idlePollCount() const noexcept {
+        return idlePollCount_.load(std::memory_order_acquire);
+    }
+
+    /// 是否有在途的退避定时器 (诊断)。
+    bool isPumpWaitScheduled() const {
+        std::lock_guard lock(mutex_);
+        return pumpWaitScheduled_;
+    }
+
+    /// 是否正在受控轮询 (有在途 polled 操作)。
+    bool isPumping() const noexcept {
+        return polledRoots_.load(std::memory_order_acquire) > 0;
+    }
+
+    /// 当前线程是否宿主 IO 线程 (仅诊断; 不得据此内联执行 driver 回调)。
+    bool onHostIoThread() const noexcept {
+        if (!host_ || !runtime_ || !runtime_->is_io_thread) {
+            return false;
+        }
+        return runtime_->is_io_thread(host_) != 0;
+    }
+
+    /// 把一段插件侧代码投递到本地执行器, 由后续 host driver 推进。
+    /// - 恒异步 (即使调用者就在本地执行上下文内): 这是"一轮只推进一个 continuation"
+    ///   的实现基础;
+    /// - 不自动 wake: 调用方投递后必须调用 [wake] (语义上"投递 = 有工作")。
+    void postToLocal(std::function<void()> fn) {
+        if (!fn) {
+            return;
+        }
+        readySteps_.fetch_add(1, std::memory_order_acq_rel);
+        auto* self = this;
+        asio::post(localIo_, [self, fn = std::move(fn)]() mutable {
+            // 本 handler 已被 host driver 选中执行: 消费投递时记下的那一步。
+            self->readySteps_.fetch_sub(1, std::memory_order_acq_rel);
+            try {
+                fn();
+            } catch (const std::exception& e) {
+                logFallback(fmt::format("plugin local task threw: {}", e.what()));
+            } catch (...) {
+                logFallback("plugin local task threw unknown exception");
+            }
+        });
+    }
+
+    /// 登记一个根 (**桥持有强引用**; 宿主拒绝驱动时统一终结)。
+    ///
+    /// 为什么必须持有强引用: 挂起中的根除了"下一次恢复任务"之外没有任何持有者 ——
+    /// 排队任务一旦执行完就会释放它, 若桥不持有, 帧会被立刻销毁, 之后到达的宿主
+    /// 回调就会访问已释放的协程帧。根对象因此由桥保活到 [removeRoot] (正常完成)
+    /// 或桥销毁 (放弃路径)。
+    void addRoot(const std::shared_ptr<BridgeRoot>& root) {
+        if (!root) {
+            return;
+        }
+        std::lock_guard lock(rootsMutex_);
+        roots_.push_back(root);
+    }
+
+    /// 注销一个根 (正常完成时调用; 释放桥对它的强引用)。
+    void removeRoot(const std::shared_ptr<BridgeRoot>& root) {
+        std::lock_guard lock(rootsMutex_);
+        std::erase_if(roots_, [&root](const std::shared_ptr<BridgeRoot>& alive) {
+            return !alive || alive == root;
+        });
+    }
+
+    /// 登记一个受控轮询根 (声明式 `polled_tool` 的根)。
+    ///
+    /// 必须在把该协程排进本地执行器之前调用: 登记之后 `polledRoots_ > 0`,
+    /// 桥才知道"等待期间需要按受控轮询策略继续申请请求"。
+    void addPolledRoot(const std::shared_ptr<PolledRoot>& root) {
+        if (!root) {
+            return;
+        }
+        std::lock_guard lock(rootsMutex_);
+        polledRootList_.push_back(root);
+        polledRoots_.store(polledRootList_.size(), std::memory_order_release);
+    }
+
+    /// 注销一个受控轮询根 (协程结束后调用)。
+    /// 计数归零时停止轮询: 取消在途退避定时器, 之后不再申请请求。
+    void removePolledRoot(const std::shared_ptr<PolledRoot>& root) noexcept {
+        bool                         last   = false;
+        AgentxxPluginOperatorHandle* waitOp = nullptr;
+        {
+            std::lock_guard lock(rootsMutex_);
+            const auto      it = std::find(polledRootList_.begin(), polledRootList_.end(), root);
+            if (it == polledRootList_.end()) {
+                // 已被 [failAllPolledRoots] 清理 (停桥路径): 只保留终态仲裁语义,
+                // 不再触碰 pump 状态 (Job 的回收由该路径负责)。
+                return;
+            }
+            polledRootList_.erase(it);
+            polledRoots_.store(polledRootList_.size(), std::memory_order_release);
+            last = polledRootList_.empty();
+            if (last) {
+                std::lock_guard pumpLock(mutex_);
+                waitOp = takePumpWaitLocked();
+            }
+        }
+        if (last) {
+            cancelSchedulerOp(waitOp);
+        }
+    }
+
+    /// 立即结束在途退避 (取消退避定时器, 让下一次驱动马上到来)。
+    /// 用于 `execute_cancel`: 插件不必等满一个退避量子就能看到取消并收束根。
+    void kickPumpWait() noexcept {
+        AgentxxPluginOperatorHandle* waitOp = nullptr;
+        {
+            std::lock_guard lock(mutex_);
+            waitOp = takePumpWaitLocked();
+        }
+        cancelSchedulerOp(waitOp);
+    }
+
+    /// 宿主拒绝再提供驱动 / 桥停止时, 终结全部在途受控轮询根 (幂等)。
+    ///
+    /// 帧不在这里销毁 (由 asio 随本地 reactor 释放); 这里只负责:
+    /// - 每个根按 FAILED 上报一次 (`claimFinish` 仲裁, 与正常完成路径互斥);
+    /// - 执行类型擦除清理 (回收 Job), 避免放弃路径泄漏插件侧资源。
+    void failAllPolledRoots(std::string_view reason) noexcept {
+        std::vector<std::shared_ptr<PolledRoot>> roots;
+        {
+            std::lock_guard lock(rootsMutex_);
+            roots = std::move(polledRootList_);
+            polledRootList_.clear();
+            polledRoots_.store(0, std::memory_order_release);
+        }
+        for (const auto& root : roots) {
+            if (!root || !root->claimFinish()) {
+                continue;
+            }
+            root->notifyHost(AGENTXX_PLUGIN_OPERATOR_FAILED, reason);
+            // `roots` 在循环期间持有强引用: 清理回调释放 Job 时不会被自销毁打断。
+            root->runCleanup();
+        }
+    }
+
+    /// 本地已有可运行工作 (新 root 首步 / 宿主回调 continuation / 本地 post 之后)。
+    ///
+    /// 幂等且可合并: 同一实例同时最多登记一次请求; 没有新工作时**不会**继续申请,
+    /// 因此空闲时不消耗宿主任务队列, 也不自旋。
+    void wake() noexcept {
+        bool needRequest = false;
+        {
+            std::lock_guard lock(mutex_);
+            if (stopping_) {
+                return;
+            }
+            wakePending_ = true;
+            needRequest  = prepareScheduleLocked();
+        }
+        if (needRequest) {
+            requestDriverNow();
+        }
+    }
+
+    /// 停止接入 (stop/destroy 路径):
+    /// - 拒绝新的 wake 与请求申请;
+    /// - 取消**尚未开始**的请求 (正在执行的回调不打断, 由插件自己的 root 收束协议收尾);
+    /// - 停止本地 reactor 并释放 work guard: 之后即便有迟到请求也不会再执行插件代码;
+    /// - 活跃根统一终结为失败 (宿主不会再有驱动来推进它们); 本地排队的 continuation
+    ///   随桥析构释放, 其持有的帧由 [BridgeRoot] 的引用释放路径销毁。
+    void stop() noexcept {
+        AgentxxPluginDriver*         toCancel = nullptr;
+        AgentxxPluginOperatorHandle* waitOp   = nullptr;
+        {
+            std::lock_guard lock(mutex_);
+            if (stopping_) {
+                return;
+            }
+            stopping_    = true;
+            wakePending_ = false;
+            pumpPending_ = false;
+            if (driverQueued_) {
+                // driver_ 为空表示 request_driver 正在返回窗口: 该分支由
+                // [requestDriverNow] 观察到停止状态后自行取消请求。
+                toCancel      = driver_;
+                driver_       = nullptr;
+                driverQueued_ = false;
+                pendingEpoch_ = 0;
+            }
+            waitOp = takePumpWaitLocked();
+        }
+        cancelTicket(toCancel);
+        cancelSchedulerOp(waitOp);
+        work_.reset();
+        localIo_.stop();
+        failAllRoots("plugin coroutine bridge stopped");
+        failAllPolledRoots("plugin coroutine bridge stopped");
+    }
+
+    /// 托管一个被放弃的根: 帧必须活到桥销毁 (之后不会再有宿主回调访问它)。
+    /// 由 [BridgeRoot::abandon] 调用 (任意线程)。
+    void retainAbandonedRoot(const std::shared_ptr<BridgeRoot>& root) {
+        if (!root) {
+            return;
+        }
+        std::lock_guard lock(rootsMutex_);
+        abandonedRoots_.push_back(root);
+    }
+
+    /// 宿主拒绝再提供驱动 (实例关闭/无 executor) 时, 终结全部活跃根。
+    ///
+    /// 顺序很关键: 先从 `roots_` 摘下 (桥不再持有), 再逐个 [BridgeRoot::abandon] ——
+    /// abandon 会把根登记进 `abandonedRoots_`, 帧因此活到桥销毁为止。
+    void failAllRoots(std::string_view reason) noexcept {
+        std::vector<std::shared_ptr<BridgeRoot>> roots;
+        {
+            std::lock_guard lock(rootsMutex_);
+            roots = std::move(roots_);
+            roots_.clear();
+        }
+        for (const auto& root : roots) {
+            root->abandon(reason);
+        }
+    }
+
+    void logWarn(std::string_view message) const noexcept {
+        logToHost(host_, 3, message);
+    }
+
+    void logError(std::string_view message) const noexcept {
+        logToHost(host_, 4, message);
+    }
+
+    /// 静态上下文 (asio handler 内部) 使用的兜底日志入口。
+    static void logFallback(std::string_view message) noexcept {
+        std::fputs("[plugin kit] ", stderr);
+        std::fwrite(message.data(), 1, message.size(), stderr);
+        std::fputc('\n', stderr);
+    }
+
+    /// 经宿主日志接口表输出 (缺失时退回 stderr); 不保存跨实例状态。
+    static void
+        logToHost(const AgentxxPluginHost* host, int32_t level, std::string_view message) noexcept {
+        if (!host || !host->vtable || !host->vtable->query_interface) {
+            logFallback(message);
+            return;
+        }
+        AgentxxPluginStringView iid = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG);
+        const auto*             logIface
+            = static_cast<const AgentxxPluginLogIface*>(host->vtable->query_interface(host, &iid));
+        if (!logIface || !logIface->log) {
+            logFallback(message);
+            return;
+        }
+        try {
+            AgentxxPluginStringView msg = PluginStringView::from(message.data(), message.size());
+            logIface->log(host, level, &msg);
+        } catch (...) {
+        }
+    }
+
+private:
+
+    /// 申请请求前的状态迁移 (调用方须持有 [mutex_])。
+    /// `return`: true = 调用方应立刻调用 [requestDriverNow]
+    bool prepareScheduleLocked() noexcept {
+        if (stopping_ || driverQueued_ || driverRunning_) {
+            return false;
+        }
+        // 只在"确实还有可运行工作"时申请: 已投递未执行的步骤, 或一次尚未被覆盖的
+        // 显式 wake (覆盖插件直接向 local_executor 投递、kit 看不到的用法), 或
+        // 受控轮询判定"该继续驱动" (pumpPending_, 见 [pumpNextLocked])。
+        if (readySteps_.load(std::memory_order_acquire) == 0 && !wakePending_ && !pumpPending_) {
+            return false;
+        }
+        wakePending_  = false;
+        pumpPending_  = false;
+        driverQueued_ = true;
+        pendingEpoch_ = ++nextEpoch_;
+        ticketsIssued_.fetch_add(1, std::memory_order_acq_rel);
+        return true;
+    }
+
+    /// 向宿主申请请求 (可在任意线程执行; 宿主保证异步投递回调, 且每张至多一次)。
+    void requestDriverNow() noexcept {
+        uint64_t epoch = 0;
+        {
+            std::lock_guard lock(mutex_);
+            epoch = pendingEpoch_;
+        }
+        if (epoch == 0) {
+            return;
+        }
+        AgentxxPluginString  error{nullptr, 0};
+        AgentxxPluginDriver* ticket
+            = runtime_->request_driver(host_, &PollOneBridge::driveOnceTrampoline, this, &error);
+        if (!ticket) {
+            std::string message = "host refused coroutine driver";
+            if (error.data) {
+                message.assign(error.data, static_cast<size_t>(error.size));
+                PluginString::free(host_, &error);
+            }
+            {
+                std::lock_guard lock(mutex_);
+                if (pendingEpoch_ == epoch) {
+                    pendingEpoch_ = 0;
+                    driverQueued_ = false;
+                }
+            }
+            logError(fmt::format("coroutine driver request failed: {}", message));
+            failAllRoots(message);
+            return;
+        }
+        bool cancelImmediately = false;
+        {
+            std::lock_guard lock(mutex_);
+            // 该请求仍归本轮所有 (回调尚未消费它) 时才记录句柄; 否则说明回调已经
+            // 跑完 (或实例已停止): 此时请求已收束, 取消是幂等空操作。
+            if (pendingEpoch_ == epoch && driverQueued_ && !stopping_) {
+                driver_ = ticket;
+            } else {
+                cancelImmediately = true;
+            }
+        }
+        if (cancelImmediately) {
+            cancelTicket(ticket);
+        }
+    }
+
+    void cancelTicket(AgentxxPluginDriver* ticket) noexcept {
+        if (ticket && runtime_ && runtime_->cancel_driver) {
+            runtime_->cancel_driver(ticket);
+        }
+    }
+
+    static void AGENTXX_PLUGIN_CALL driveOnceTrampoline(void* ud) {
+        auto* self = static_cast<PollOneBridge*>(ud);
+        if (!self) {
+            return;
+        }
+        self->driveOnce();
+    }
+
+    /// host driver 回调 (宿主 IO 线程): 严格推进**一个**有限步骤。
+    void driveOnce() noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            if (stopping_) {
+                // 停止后到达的迟到请求: 不执行任何插件代码 (请求由宿主自行收束)。
+                driverQueued_ = false;
+                driver_       = nullptr;
+                pendingEpoch_ = 0;
+                return;
+            }
+            driverQueued_  = false;
+            driver_        = nullptr; // 请求已消费, 不再需要取消
+            pendingEpoch_  = 0;
+            driverRunning_ = true;
+        }
+
+        if (!ranOnIoThread_.exchange(true, std::memory_order_acq_rel) && !onHostIoThread()) {
+            // 首次驱动做一次线程断言 (仅诊断; 不影响语义)。
+            logWarn("coroutine driver is not running on the host IO thread; plugin state must not "
+                    "be shared with other threads");
+        }
+
+        std::size_t progressed = 0;
+        try {
+            // 严格只调用一次: 一个 driver 对应一个局部 continuation, 宿主与插件任务
+            // 因此自然轮换, 单个插件无法长时间独占宿主 executor。
+            progressed = localIo_.poll_one();
+        } catch (const std::exception& e) {
+            logError(fmt::format("plugin local runtime step threw: {}", e.what()));
+        } catch (...) {
+            logError("plugin local runtime step threw unknown exception");
+        }
+
+        // 受控轮询期间"本轮无进展"是常态 (等待内核就绪 / 退避), 不算异常; 因此
+        // 警告只在"既没有 polled 操作在轮询、又持续空转且仍有活跃根"时出现 ——
+        // 那正是"插件依赖私有 reactor 却没有声明 polled"的误用信号。
+        const bool pumping = polledRoots_.load(std::memory_order_acquire) > 0;
+        if (progressed == 0 && !pumping && activeRootCount() > 0) {
+            if (++noProgressStreak_ >= kNoProgressWarnStreak) {
+                noProgressStreak_ = 0;
+                logWarn(
+                    "coroutine driver made no progress while roots are active: the awaited work "
+                    "has no host-visible wake source (private reactor waits are not driven by "
+                    "this bridge); use host callbacks, the host timer adapter, or declare the "
+                    "root as a polled tool"
+                );
+            }
+        } else {
+            noProgressStreak_ = 0;
+        }
+        driverSteps_.fetch_add(1, std::memory_order_acq_rel);
+
+        bool    needRequest = false;
+        bool    backoff     = false;
+        int64_t backoffMs   = 0;
+        {
+            std::lock_guard lock(mutex_);
+            driverRunning_ = false;
+            // 只消费本轮之前或本轮中出现的真实 wake; 没有新 wake 就停止, 外部事件
+            // 到达时会自己调用 [wake]。
+            needRequest = prepareScheduleLocked();
+            if (!needRequest) {
+                // 受控轮询: 有在途 polled 操作时按"有进展立即续, 无进展退避"继续，
+                // 否则不申请请求 (空闲零开销)。
+                switch (pumpNextLocked(progressed, backoffMs)) {
+                    case PumpDecision::Immediate:
+                        needRequest = prepareScheduleLocked();
+                        break;
+                    case PumpDecision::Backoff:
+                        backoff = true;
+                        break;
+                    case PumpDecision::Stop:
+                        break;
+                }
+            }
+        }
+        if (needRequest) {
+            requestDriverNow();
+        } else if (backoff) {
+            schedulePumpWait(backoffMs);
+        }
+    }
+
+    /// 下一轮驱动的决策 (调用方持 [mutex_]; 不在此处调用宿主接口)。
+    enum class PumpDecision {
+        Stop,      ///< 不轮询: 无在途 polled 操作, 或已停止
+        Immediate, ///< 有进展: 立即申请下一次请求 (不等退避)
+        Backoff,   ///< 无进展或达到突发上限: 安排一次退避后再驱动
+    };
+
+    /// 受控轮询的调度策略 (调用方持 [mutex_])。
+    ///
+    /// - 无在途 polled 操作 (`polledRoots_ == 0`): 不轮询, 突发计数归零;
+    /// - 本轮 `poll_one` 执行到了 handler (有进展) 且未达突发上限: 立即续票,
+    ///   等待中的网络/子进程/文件就能在就绪的下一个瞬间被处理 (最坏延迟 = 退避量子);
+    /// - 否则: 安排一次退避 (无进展 = `kPollIntervalMs`; 达到突发上限 = 让出
+    ///   `kPollBurstYieldMs` 给宿主与同实例其它操作), 已有在途退避时不重复安排。
+    PumpDecision pumpNextLocked(std::size_t progressed, int64_t& backoffMs) noexcept {
+        backoffMs = 0;
+        if (stopping_ || polledRoots_.load(std::memory_order_acquire) == 0) {
+            pollBurst_ = 0;
+            return PumpDecision::Stop;
+        }
+        const bool advanced = progressed > 0;
+        if (advanced && pollBurst_ < kPollBurstMax) {
+            ++pollBurst_;
+            pumpPending_ = true;
+            return PumpDecision::Immediate;
+        }
+        if (advanced) {
+            // 突发上限: 连续快进后强制让出, 避免同实例自循环长期独占 IO 线程。
+            pollBurst_ = 0;
+            backoffMs  = kPollBurstYieldMs;
+        } else {
+            pollBurst_ = 0;
+            backoffMs  = kPollIntervalMs;
+        }
+        if (pumpWaitScheduled_) {
+            return PumpDecision::Stop; // 已有在途退避: 到点后会自己续票
+        }
+        pumpWaitScheduled_ = true;
+        idlePollCount_.fetch_add(1, std::memory_order_acq_rel);
+        return PumpDecision::Backoff;
+    }
+
+    /// 安排一次"退避后驱动" (宿主计时器适配; 只能在宿主 IO 线程调用)。
+    ///
+    /// - 到期回调 [pumpWaitDone] 只做"请求下一次请求", 不恢复插件协程;
+    /// - 必须在 [mutex_] 之外调用宿主 `sleep` (回调可能同步到达);
+    /// - 宿主没有计时器适配时无法退避: 记一次错误并终结在途 polled 根, 避免
+    ///   "根永远不被推进"这种静默悬挂 (真实宿主有 scheduler.sleep;
+    ///   `polled_tool` 在缺失时会直接走 offload 降级路径, 这里是最后防线)。
+    void schedulePumpWait(int64_t ms) noexcept {
+        if (!sched_ || !sched_->sleep) {
+            {
+                std::lock_guard lock(mutex_);
+                pumpWaitScheduled_ = false;
+            }
+            logError("polled coroutine needs the host scheduler timer, but it is unavailable: "
+                     "terminating the polled operations instead of hanging");
+            failAllPolledRoots("host scheduler timer unavailable for polled coroutine");
+            return;
+        }
+        AgentxxPluginString error{nullptr, 0};
+        auto* op = sched_->sleep(host_, ms, &PollOneBridge::pumpWaitDone, this, &error);
+        if (!op) {
+            std::string message = "scheduler timer rejected";
+            if (error.data) {
+                message.assign(error.data, static_cast<size_t>(error.size));
+                PluginString::free(host_, &error);
+            }
+            {
+                std::lock_guard lock(mutex_);
+                pumpWaitScheduled_ = false;
+            }
+            logError(fmt::format("polled coroutine backoff timer failed: {}", message));
+            failAllPolledRoots(message);
+            return;
+        }
+        bool keep = false;
+        {
+            std::lock_guard lock(mutex_);
+            // 回调可能在 sleep 返回前同步到达 (伪宿主/立即取消): 此时它已把
+            // pumpWaitScheduled_ 清掉, 句柄收束完毕, 这里只需取消该请求。
+            if (pumpWaitScheduled_ && !stopping_) {
+                pumpWaitOp_ = op;
+                keep        = true;
+            }
+        }
+        if (!keep) {
+            cancelSchedulerOp(op);
+        }
+    }
+
+    /// 退避定时器到期 (或被 `op_cancel` 取消) 的回调: 请求下一次请求。
+    ///
+    /// 被取消也算"退避结束" —— `execute_cancel` 正是靠取消退避来让插件立刻获得一次
+    /// 驱动, 从而不必等满整个退避量子才看到取消。
+    static void AGENTXX_PLUGIN_CALL
+        pumpWaitDone(void* ud, int32_t status, const AgentxxPluginStringView* payload) noexcept {
+        (void)status;
+        (void)payload;
+        auto* self = static_cast<PollOneBridge*>(ud);
+        if (!self) {
+            return;
+        }
+        bool needRequest = false;
+        {
+            std::lock_guard lock(self->mutex_);
+            self->pumpWaitScheduled_ = false;
+            self->pumpWaitOp_        = nullptr;
+            if (!self->stopping_ && self->polledRoots_.load(std::memory_order_acquire) > 0) {
+                self->pumpPending_ = true;
+                needRequest        = self->prepareScheduleLocked();
+            }
+        }
+        if (needRequest) {
+            self->requestDriverNow();
+        }
+    }
+
+    /// 取出在途退避句柄并复位调度状态 (调用方持 [mutex_]; 取消动作在锁外执行)。
+    AgentxxPluginOperatorHandle* takePumpWaitLocked() noexcept {
+        auto* op           = pumpWaitOp_;
+        pumpWaitOp_        = nullptr;
+        pumpWaitScheduled_ = false;
+        return op;
+    }
+
+    /// 取消一个宿主调度句柄 (幂等; 已收束的句柄由宿主按空操作处理)。
+    void cancelSchedulerOp(AgentxxPluginOperatorHandle* op) noexcept {
+        if (op && sched_ && sched_->op_cancel) {
+            sched_->op_cancel(op);
+        }
+    }
+
+    /// 状态机锁: 保护下面前五组状态 (wake 可从任意线程调用)。
+    /// `mutable` 是为了让只读诊断方法 (hasPendingWake 等) 也能加锁。
+    mutable std::mutex                                         mutex_;
+    asio::io_context                                           localIo_;
+    asio::executor_work_guard<asio::io_context::executor_type> work_;
+    const AgentxxPluginHost*                                   host_    = nullptr;
+    const AgentxxPluginCoroutineRuntimeIface*                  runtime_ = nullptr;
+    /// 宿主计时器/卸载接口表 (`scheduler.sleep` 用于受控轮询的退避量子,
+    /// `op_cancel` 用于取消在途退避); 缺失时为 nullptr。
+    const AgentxxPluginSchedulerIface* sched_ = nullptr;
+
+    bool                 stopping_      = false;
+    bool                 wakePending_   = false;
+    bool                 driverQueued_  = false;
+    bool                 driverRunning_ = false;
+    AgentxxPluginDriver* driver_        = nullptr;
+    uint64_t             nextEpoch_     = 0;
+    uint64_t             pendingEpoch_  = 0;
+
+    /// 受控轮询的下一次请求理由 (见 [pumpNextLocked]/[prepareScheduleLocked])。
+    bool pumpPending_ = false;
+    /// 在途退避定时器 (调度状态与其句柄同属 [mutex_])。
+    bool                         pumpWaitScheduled_ = false;
+    AgentxxPluginOperatorHandle* pumpWaitOp_        = nullptr;
+    /// 连续"有进展"步数 (受控轮询突发计数)。
+    int pollBurst_ = 0;
+
+    std::atomic<bool> ranOnIoThread_{false};
+    /// 已投递但尚未执行的本地步骤数 (见 [postToLocal] 与文件头的状态机说明)。
+    std::atomic<uint64_t> readySteps_{0};
+    std::atomic<uint64_t> ticketsIssued_{0};
+    std::atomic<uint64_t> driverSteps_{0};
+    /// 在途受控轮询操作数 (与 `polledRootList_` 同步; 读端不加锁)。
+    std::atomic<uint64_t> polledRoots_{0};
+    /// 已发生的"无进展退避"次数 (诊断)。
+    std::atomic<uint64_t> idlePollCount_{0};
+    int                   noProgressStreak_ = 0;
+
+    /// 根登记表用的锁。**锁序**: 允许 `rootsMutex_` → `mutex_` (见
+    /// [removePolledRoot]), 反向嵌套不存在, 因此不会死锁。
+    mutable std::mutex rootsMutex_;
+    /// 活跃根 (桥持有强引用; 见 [addRoot] 说明)。
+    std::vector<std::shared_ptr<BridgeRoot>> roots_;
+    /// 被放弃 (宿主拒绝驱动/桥停止) 的根: 保活到桥销毁, 期间迟到回调只会安全跳过。
+    std::vector<std::shared_ptr<BridgeRoot>> abandonedRoots_;
+    /// 在途受控轮询根 (与 `polledRoots_` 计数一致)。
+    std::vector<std::shared_ptr<PolledRoot>> polledRootList_;
+    /// 被放弃的受控轮询根留下的清理回调 (回收 Job); 桥销毁时执行。
+    std::vector<std::function<void()>> abandonedCleanups_;
+};
+
+inline void BridgeRoot::abandon(std::string_view reason) noexcept {
+    if (!claimFinish()) {
+        return;
+    }
+    abandoned_.store(true, std::memory_order_release);
+    notifyHost(AGENTXX_PLUGIN_OPERATOR_FAILED, reason);
+    // op 资源释放延后到 [destroyFrame]: 此刻该根可能正由 host driver 执行, 其输入
+    // (Request/OpCtl) 仍被协程以引用使用, 现在释放就是 use-after-free。
+    if (owner_) {
+        // 帧交给桥保活到桥销毁 (见函数声明处的说明)。
+        owner_->retainAbandonedRoot(shared_from_this());
+    }
+}
+
+} // namespace detail
 
 /* ==================== 插件框架事件驱动取消注册表 (CancelRegistry) ==================== */
 
@@ -1248,22 +2270,145 @@ inline void finishIfDone(std::coroutine_handle<Promise> h) {
     AgentxxPluginOperatorNotify notify  = p.notify_;
     auto                        cleanup = std::move(p.opCleanup_);
     p.opCleanup_                        = nullptr;
+    auto root                           = std::move(p.bridgeRoot_);
+
+    // 终态 payload: OK=结果, FAILED=错误信息, CANCELLED=空 (与既有契约一致)
+    std::string_view payload;
+    if (status == AGENTXX_PLUGIN_OPERATOR_FAILED) {
+        payload = errPayload;
+    } else if (status == AGENTXX_PLUGIN_OPERATOR_OK) {
+        payload = resPayload;
+    }
+
+    if (auto bridgeRoot = root.lock()) {
+        // 桥接根: 完成/放弃的仲裁与帧销毁都收敛在 [BridgeRoot] 上。
+        // - 先认领完成权: 宿主可能在放弃路径 (failAllRoots) 已上报过 FAILED,
+        //   此时这里不得重复上报;
+        // - 再销毁帧 (幂等): 排队中的本地任务之后不会再恢复一个已销毁的帧;
+        // - 最后释放 op 句柄等资源 (与 notify 一样恰好一次)。
+        const bool claimed = bridgeRoot->claimFinish();
+        // destroyFrame 同时释放 op 侧资源 (幂等); 协程已挂在 final_suspend, 销毁安全。
+        bridgeRoot->destroyFrame();
+        if (!claimed) {
+            return; // 宿主已在放弃路径上报过终态, 不重复上报
+        }
+        bridgeRoot->notifyHost(status, payload);
+        return;
+    }
 
     h.destroy();
 
     if (notify.done) {
-        AgentxxPluginStringView sv = PluginStringView::from(nullptr, 0);
-        if (status == AGENTXX_PLUGIN_OPERATOR_FAILED) {
-            sv = PluginStringView::from(errPayload.data(), errPayload.size());
-        } else if (status == AGENTXX_PLUGIN_OPERATOR_OK) {
-            sv = PluginStringView::from(resPayload.data(), resPayload.size());
-        }
+        auto sv = PluginStringView::from(payload.data(), payload.size());
         notify.done(notify.host_ud, status, &sv);
     }
 
     if (cleanup) {
         cleanup();
     }
+}
+
+/* ==================== 桥接 (host driver) 路径的公共辅助 ==================== */
+
+/// 宿主侧恢复入口的前置声明 (定义在 [resumeCoroutine]; 无桥 (伪造/旧宿主) 时使用)。
+template<typename Promise>
+inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle<Promise> handle);
+
+/// 桥接根推进一次: 恢复协程帧并收束终态 (仅在 host driver 的 `poll_one` 内调用)。
+template<typename Promise>
+inline void advanceRootOnce(std::coroutine_handle<Promise> h) noexcept {
+    if (!h) {
+        return;
+    }
+    if (!h.done()) {
+        try {
+            h.resume();
+        } catch (...) {
+            h.promise().set_exception(std::current_exception());
+        }
+    }
+    finishIfDone(h);
+}
+
+/// 恢复插件协程的统一入口 (**桥接优先**)。
+///
+/// - 有桥: 先 `postToLocal` 再 `wake`, continuation 由**下一次 host driver** 的
+///   `poll_one` 执行 —— 因此绝不会从宿主回调栈内重入插件协程, 也不会占用宿主 IO
+///   线程做插件工作 (只投递一个小闭包);
+/// - 无桥 (宿主没有 `agentxx.agent.coroutine_runtime`): 沿用宿主 `post_to_io` /
+///   已就绪时的直接 resume 路径, 行为与历史版本一致。
+///
+/// 被放弃的根 (宿主拒绝驱动) 不再恢复: 直接返回, 帧由引用释放路径销毁。
+template<typename Promise>
+inline void resumePluginCoroutine(
+    detail::PollOneBridge*         bridge,
+    const AgentxxPluginHost*       host,
+    std::coroutine_handle<Promise> handle
+) noexcept {
+    if (bridge && bridge->available()) {
+        std::weak_ptr<detail::BridgeRoot> weakRoot = handle.promise().bridgeRoot_;
+        bridge->postToLocal([handle, weakRoot] {
+            if (auto root = weakRoot.lock()) {
+                if (!root->shouldAdvance()) {
+                    return; // 已放弃: 不恢复, 帧由引用释放路径销毁
+                }
+            }
+            try {
+                handle.resume();
+            } catch (...) {
+                handle.promise().set_exception(std::current_exception());
+            }
+            finishIfDone(handle);
+        });
+        bridge->wake();
+        return;
+    }
+    resumeCoroutine(host, handle);
+}
+
+/// 启动一个桥接根协程 (plugin.md 6.2):
+/// - 首步经本地执行器排队, 由**下一次 host driver** 执行; `execute_start` 因此不会
+///   在宿主 IO 线程上同步跑插件业务代码 (也不会有 completion 重入);
+/// - 帧的销毁责任交给 [BridgeRoot]: 排队中的本地任务持强引用, 最后一个引用释放
+///   时销毁仍挂起的帧;
+/// - `cleanup` 在"根终结恰好一次"时执行 (释放 op 句柄 / 注销根登记)。
+///
+/// `return`: 该根的仲裁对象 (调用方通常不再需要, 资源释放已由 cleanup 覆盖)。
+template<typename Promise>
+inline std::shared_ptr<detail::BridgeRoot> startBridgedRoot(
+    detail::PollOneBridge&             bridge,
+    const AgentxxPluginOperatorNotify& notify,
+    std::coroutine_handle<Promise>     h,
+    std::function<void()>              cleanup
+) {
+    auto root
+        = std::make_shared<detail::BridgeRoot>(notify, h.address(), &destroyBridgeFrame<Promise>);
+    root->setOwner(&bridge);
+    {
+        auto  userCleanup = std::move(cleanup);
+        auto* bridgePtr   = &bridge;
+        // 注销登记用 weak 引用: cleanup 本身保存在 root 内部, 若捕获 shared_ptr 就会
+        // 形成自引用环 (被放弃的根将永不析构, 帧与 op 句柄一起泄漏)。
+        std::weak_ptr<detail::BridgeRoot> weakRoot = root;
+        root->setCleanup([bridgePtr, weakRoot, userCleanup] {
+            if (auto alive = weakRoot.lock()) {
+                bridgePtr->removeRoot(alive);
+            }
+            if (userCleanup) {
+                userCleanup();
+            }
+        });
+    }
+    h.promise().bridgeRoot_ = root;
+    bridge.addRoot(root);
+    bridge.postToLocal([h, root] {
+        if (!root->shouldAdvance()) {
+            return; // 已放弃: 帧由引用释放路径销毁
+        }
+        advanceRootOnce(h);
+    });
+    bridge.wake();
+    return root;
 }
 
 /* ==================== 根操作 Request 与完成守卫 ====================
@@ -1282,15 +2427,15 @@ inline void finishIfDone(std::coroutine_handle<Promise> h) {
 ///   一起释放；
 /// - 业务需要跨操作保留时仍要自己复制（Request 之外不保证）。
 struct RootRequest {
-    std::string argsJson;  ///< 工具参数 / 能力参数 JSON（空则为 "{}"）
-    std::string sessionId; ///< ABI thread_id / session_id
-    std::string callId;    ///< 工具 tool_call_id；能力方法名放 method
-    std::string method;    ///< 能力方法名（非能力操作为空）
-    std::string nodeName;  ///< 图节点实例名（仅图节点操作）
+    std::string argsJson;   ///< 工具参数 / 能力参数 JSON（空则为 "{}"）
+    std::string sessionId;  ///< ABI thread_id / session_id
+    std::string callId;     ///< 工具 tool_call_id；能力方法名放 method
+    std::string method;     ///< 能力方法名（非能力操作为空）
+    std::string nodeName;   ///< 图节点实例名（仅图节点操作）
     std::string configJson; ///< 图节点 config JSON（仅图节点操作）
     std::string stateJson;  ///< GraphState::serialize() 只读快照（仅图节点操作）
 
-    const AgentxxPluginHost*        host        = nullptr;
+    const AgentxxPluginHost* host = nullptr;
     const AgentxxPluginCancelToken* cancelToken = nullptr; ///< offload/worker 内的取消令牌视图
 
     static std::string copyView(const AgentxxPluginStringView* sv, const char* fallback = "") {
@@ -1316,9 +2461,8 @@ struct RootRequest {
     }
 
     /// 钩子：node_input_json（args 为空时按 "{}"）
-    static RootRequest forHook(
-        const AgentxxPluginHost* host, const AgentxxPluginStringView* nodeInputJson
-    ) {
+    static RootRequest
+        forHook(const AgentxxPluginHost* host, const AgentxxPluginStringView* nodeInputJson) {
         RootRequest req;
         req.host     = host;
         req.argsJson = copyView(nodeInputJson, "{}");
@@ -1355,13 +2499,33 @@ struct RootRequest {
         return req;
     }
 
-    std::string_view args() const noexcept { return argsJson; }
-    std::string_view session() const noexcept { return sessionId; }
-    std::string_view call() const noexcept { return callId; }
-    std::string_view capMethod() const noexcept { return method; }
-    std::string_view node() const noexcept { return nodeName; }
-    std::string_view config() const noexcept { return configJson; }
-    std::string_view state() const noexcept { return stateJson; }
+    std::string_view args() const noexcept {
+        return argsJson;
+    }
+
+    std::string_view session() const noexcept {
+        return sessionId;
+    }
+
+    std::string_view call() const noexcept {
+        return callId;
+    }
+
+    std::string_view capMethod() const noexcept {
+        return method;
+    }
+
+    std::string_view node() const noexcept {
+        return nodeName;
+    }
+
+    std::string_view config() const noexcept {
+        return configJson;
+    }
+
+    std::string_view state() const noexcept {
+        return stateJson;
+    }
 };
 
 /// 根操作完成守卫：保证 notify.done 恰好一次，并把异常统一映射为终态。
@@ -1454,13 +2618,21 @@ struct PromiseBase {
     std::exception_ptr                 exception_{nullptr};
     std::function<void()>              opCleanup_{nullptr};
     std::coroutine_handle<>            continuation_{};
+    /// 桥接根仲裁对象 (仅"根操作"帧持有; 子 Task 帧为空)。
+    /// - 弱引用: 强引用由排队中的本地任务持有, 最后一个引用释放时销毁仍挂起的帧,
+    ///   因此不会和帧本身形成引用环;
+    /// - [finishIfDone] 经它做 exactly-once 上报, awaiter 的恢复任务经它判断
+    ///   "根是否已被放弃"。
+    std::weak_ptr<detail::BridgeRoot> bridgeRoot_{};
 
     std::suspend_always initial_suspend() noexcept {
         return {};
     }
 
     struct FinalAwaiter {
-        bool await_ready() const noexcept { return false; }
+        bool await_ready() const noexcept {
+            return false;
+        }
 
         template<typename Promise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) const noexcept {
@@ -1566,7 +2738,9 @@ struct Task {
     struct Awaiter {
         std::coroutine_handle<promise_type> handle;
 
-        bool await_ready() const noexcept { return !handle || handle.done(); }
+        bool await_ready() const noexcept {
+            return !handle || handle.done();
+        }
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> parent) {
             handle.promise().continuation_ = parent;
@@ -1634,7 +2808,9 @@ struct Task<void> {
     struct Awaiter {
         std::coroutine_handle<promise_type> handle;
 
-        bool await_ready() const noexcept { return !handle || handle.done(); }
+        bool await_ready() const noexcept {
+            return !handle || handle.done();
+        }
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> parent) {
             handle.promise().continuation_ = parent;
@@ -1677,10 +2853,49 @@ public:
         }
         cancelRegistry.cancelAll();
         stopSpawns();
+        // 桥 (协程驱动) 必须最后销毁: 它会取消排队请求并终结仍在排队的根, 而根的
+        // 收束可能仍需访问上面的实例状态。
+        stopBridge();
     }
 
     std::shared_ptr<std::atomic<bool>> lifeToken() const {
         return lifeToken_;
+    }
+
+    /// 本实例的协程驱动桥 (延迟创建; 宿主不提供 `agentxx.agent.coroutine_runtime`
+    /// 时返回一个 `available()==false` 的桥, kit 会自动回退到 post_to_io 路径)。
+    /// - 线程: 只应在宿主 IO 线程调用 (与实例状态同一串行上下文)
+    detail::PollOneBridge& bridge() const {
+        if (!bridge_) {
+            bridge_ = std::make_unique<detail::PollOneBridge>(
+                host,
+                iface.coroutineRuntime,
+                iface.scheduler
+            );
+        }
+        return *bridge_;
+    }
+
+    /// 宿主提供协程驱动接口时返回桥 (需要时才创建), 否则返回 nullptr。
+    /// kit 内部统一用它判断"走 driver 路径还是回退路径"。
+    detail::PollOneBridge* bridgeOrNull() const {
+        if (!host || !iface.coroutineRuntime || !iface.coroutineRuntime->request_driver) {
+            return nullptr;
+        }
+        return &bridge();
+    }
+
+    /// 已创建桥则返回它 (不触发创建)。
+    detail::PollOneBridge* bridgeIfCreated() const noexcept {
+        return bridge_.get();
+    }
+
+    /// 桥 (协程驱动) 必须最后销毁: 它会取消排队请求并终结仍在排队的根, 而根的
+    /// 收束可能仍需访问上面的实例状态。
+    void stopBridge() noexcept {
+        if (bridge_) {
+            bridge_->stop();
+        }
     }
 
     void init(const AgentxxPluginHost* h) {
@@ -1986,6 +3201,9 @@ private:
 
     std::shared_ptr<std::atomic<bool>> lifeToken_     = std::make_shared<std::atomic<bool>>(true);
     AgentxxPluginSubscription*         roundStartSub_ = nullptr;
+    /// 协程驱动桥 (延迟创建; 见 [bridge])。声明在最后: 析构顺序需要它在其它成员
+    /// 之后销毁 (它在 stop 时会终结仍在排队的根)。
+    mutable std::unique_ptr<detail::PollOneBridge> bridge_;
 };
 
 /* ==================== 锚定原语 awaiter 族 ==================== */
@@ -1995,9 +3213,12 @@ namespace detail {
 struct SleepAwaiter {
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
-    int64_t                            ms;
-    AgentxxPluginOperatorHandle*       operation = nullptr;
-    std::string                        error;
+    /// 协程驱动桥 (宿主支持时为非空): 完成回调经它投递 continuation 并唤醒 driver。
+    PollOneBridge*               bridge = nullptr;
+    int64_t                      ms;
+    void*                        coroAddr  = nullptr;
+    AgentxxPluginOperatorHandle* operation = nullptr;
+    std::string                  error;
 
     bool await_ready() noexcept {
         if (ms <= 0) {
@@ -2012,33 +3233,30 @@ struct SleepAwaiter {
 
     template<typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        auto& p = h.promise();
+        auto& p  = h.promise();
+        coroAddr = h.address();
         AgentxxPluginString errorOut{};
         operation = sched->sleep(
             host,
             ms,
             [](void* ud, int32_t status, const AgentxxPluginStringView* payload) {
-                auto handle = std::coroutine_handle<Promise>::from_address(ud);
+                auto* self   = static_cast<SleepAwaiter*>(ud);
+                auto  handle = std::coroutine_handle<Promise>::from_address(self->coroAddr);
                 auto& prom   = handle.promise();
                 prom.clear_outstanding();
                 if (status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
-                    prom.set_exception(std::make_exception_ptr(
-                        CancelledException("sleep cancelled")
+                    prom.set_exception(std::make_exception_ptr(CancelledException("sleep cancelled")
                     ));
                 } else if (status == AGENTXX_PLUGIN_OPERATOR_FAILED) {
                     auto message = PluginStringView::str(payload);
-                    prom.set_exception(std::make_exception_ptr(std::runtime_error(
-                        message.empty() ? "sleep failed" : std::string(message)
-                    )));
+                    prom.set_exception(std::make_exception_ptr(
+                        std::runtime_error(message.empty() ? "sleep failed" : std::string(message))
+                    ));
                 }
-                try {
-                    handle.resume();
-                } catch (...) {
-                    prom.set_exception(std::current_exception());
-                }
-                finishIfDone(handle);
+                // 桥接路径不在宿主回调栈内恢复协程 (见 [resumePluginCoroutine])。
+                resumePluginCoroutine(self->bridge, self->host, handle);
             },
-            h.address(),
+            this,
             &errorOut
         );
         if (!operation) {
@@ -2064,9 +3282,15 @@ struct SleepAwaiter {
 struct YieldAwaiter {
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
-    std::string                        error;
+    /// 协程驱动桥 (可空): 有桥时"让出"= 投递到本地执行器 + 唤醒 driver,
+    /// 由下一次请求推进, 因此宿主与插件任务按轮次交替。
+    PollOneBridge* bridge = nullptr;
+    std::string    error;
 
     bool await_ready() noexcept {
+        if (bridge && bridge->available()) {
+            return false;
+        }
         if (!sched || !sched->post_to_io) {
             error = "scheduler yield is unavailable";
             return true;
@@ -2076,6 +3300,10 @@ struct YieldAwaiter {
 
     template<typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
+        if (bridge && bridge->available()) {
+            resumePluginCoroutine(bridge, host, h);
+            return true;
+        }
         auto status = sched->post_to_io(
             host,
             [](void* ud) {
@@ -2105,17 +3333,19 @@ struct YieldAwaiter {
 
 template<typename WorkFn>
 struct OffloadAwaiter {
-    using ResultType = std::decay_t<
-        std::invoke_result_t<WorkFn, const AgentxxPluginCancelToken*>>;
+    using ResultType = std::decay_t<std::invoke_result_t<WorkFn, const AgentxxPluginCancelToken*>>;
 
     const AgentxxPluginHost*           host;
     const AgentxxPluginSchedulerIface* sched;
     WorkFn                             work;
-    std::exception_ptr                 exPtr      = nullptr;
+    /// 协程驱动桥 (可空)。**注意**: offload 的工作体本身仍运行在宿主工作线程池
+    /// (显式声明的例外), 只有"完成后的恢复"经桥回到 driver 序列。
+    PollOneBridge*     bridge = nullptr;
+    std::exception_ptr exPtr  = nullptr;
     std::conditional_t<std::is_void_v<ResultType>, std::monostate, std::optional<ResultType>>
-        result;
+                                 result;
     AgentxxPluginOperatorHandle* operation = nullptr;
-    int32_t                      status = AGENTXX_PLUGIN_OPERATOR_OK;
+    int32_t                      status    = AGENTXX_PLUGIN_OPERATOR_OK;
     std::string                  error;
 
     bool await_ready() noexcept {
@@ -2133,8 +3363,8 @@ struct OffloadAwaiter {
         AgentxxPluginString errorOut{};
         operation = sched->offload(
             host,
-            [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString* error_out)
-                -> void* {
+            [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString* error_out
+            ) -> void* {
                 auto* self = static_cast<OffloadAwaiter*>(ud);
                 try {
                     if constexpr (std::is_void_v<ResultType>) {
@@ -2153,16 +3383,12 @@ struct OffloadAwaiter {
             [](void* ud, int32_t status, void*, const AgentxxPluginStringView* err) {
                 auto* self   = static_cast<OffloadAwaiter*>(ud);
                 self->status = status;
-                self->error = PluginStringView::str(err);
+                self->error  = PluginStringView::str(err);
                 auto  handle = std::coroutine_handle<Promise>::from_address(self->coroAddr_);
                 auto& prom   = handle.promise();
                 prom.clear_outstanding();
-                try {
-                    handle.resume();
-                } catch (...) {
-                    prom.set_exception(std::current_exception());
-                }
-                finishIfDone(handle);
+                // 桥接路径: 恢复走 driver 序列 (不在宿主完成回调栈内重入插件协程)。
+                resumePluginCoroutine(self->bridge, self->host, handle);
             },
             this,
             &errorOut
@@ -2221,7 +3447,7 @@ inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle
                 std::coroutine_handle<Promise> h;
             };
 
-            auto* d = new ResumeData{handle};
+            auto*      d      = new ResumeData{handle};
             const auto status = ifs.scheduler->post_to_io(
                 host,
                 [](void* ud) {
@@ -2253,16 +3479,17 @@ inline void resumeCoroutine(const AgentxxPluginHost* host, std::coroutine_handle
 struct CallToolState {
     const AgentxxPluginHost*       host  = nullptr;
     const AgentxxPluginToolsIface* tools = nullptr;
-    std::string                    name;
-    std::string                    argsJson;
-    std::string                    threadId;
-    AgentxxPluginOperatorHandle*   opHandle = nullptr;
-    int32_t                        status   = AGENTXX_PLUGIN_OPERATOR_OK;
-    std::string                    payload;
-    std::string                    startError;
-    std::atomic<AwaiterState>      state{AwaiterState::INIT};
-    void*                          coroAddr            = nullptr;
-    void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
+    /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
+    PollOneBridge*               bridge = nullptr;
+    std::string                  name;
+    std::string                  argsJson;
+    std::string                  threadId;
+    AgentxxPluginOperatorHandle* opHandle = nullptr;
+    int32_t                      status   = AGENTXX_PLUGIN_OPERATOR_OK;
+    std::string                  payload;
+    std::string                  startError;
+    std::atomic<AwaiterState>    state{AwaiterState::INIT};
+    void*                        coroAddr = nullptr;
 };
 
 struct CallToolAwaiter {
@@ -2274,15 +3501,15 @@ struct CallToolAwaiter {
         std::string_view               in_name,
         std::string_view               in_args,
         std::string_view               in_tid,
-        void (*in_post)(const AgentxxPluginHost*, void*) = nullptr
+        PollOneBridge*                 in_bridge = nullptr
     ) :
         st(std::make_shared<CallToolState>()) {
-        st->host      = in_host;
-        st->tools     = in_tools;
-        st->name      = std::string(in_name);
-        st->argsJson  = std::string(in_args);
-        st->threadId  = std::string(in_tid);
-        st->schedPost = in_post;
+        st->host     = in_host;
+        st->tools    = in_tools;
+        st->name     = std::string(in_name);
+        st->argsJson = std::string(in_args);
+        st->threadId = std::string(in_tid);
+        st->bridge   = in_bridge;
     }
 
     bool await_ready() const noexcept {
@@ -2327,7 +3554,8 @@ struct CallToolAwaiter {
                 auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
                 handle.promise().clear_outstanding();
 
-                resumeCoroutine(s->host, handle);
+                // 桥接路径不在宿主回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
+                resumePluginCoroutine(s->bridge, s->host, handle);
             },
             holder,
             &err
@@ -2376,16 +3604,17 @@ struct CallToolAwaiter {
 struct InvokeCapState {
     const AgentxxPluginHost*              host = nullptr;
     const AgentxxPluginCapabilitiesIface* caps = nullptr;
-    std::string                           capability;
-    std::string                           method;
-    std::string                           argsJson;
-    AgentxxPluginOperatorHandle*          opHandle = nullptr;
-    int32_t                               status   = AGENTXX_PLUGIN_OPERATOR_OK;
-    std::string                           payload;
-    std::string                           startError;
-    std::atomic<AwaiterState>             state{AwaiterState::INIT};
-    void*                                 coroAddr     = nullptr;
-    void (*schedPost)(const AgentxxPluginHost*, void*) = nullptr;
+    /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
+    PollOneBridge*               bridge = nullptr;
+    std::string                  capability;
+    std::string                  method;
+    std::string                  argsJson;
+    AgentxxPluginOperatorHandle* opHandle = nullptr;
+    int32_t                      status   = AGENTXX_PLUGIN_OPERATOR_OK;
+    std::string                  payload;
+    std::string                  startError;
+    std::atomic<AwaiterState>    state{AwaiterState::INIT};
+    void*                        coroAddr = nullptr;
 };
 
 struct InvokeCapAwaiter {
@@ -2397,7 +3626,7 @@ struct InvokeCapAwaiter {
         std::string_view                      in_cap,
         std::string_view                      in_method,
         std::string_view                      in_args,
-        void (*in_post)(const AgentxxPluginHost*, void*) = nullptr
+        PollOneBridge*                        in_bridge = nullptr
     ) :
         st(std::make_shared<InvokeCapState>()) {
         st->host       = in_host;
@@ -2405,7 +3634,7 @@ struct InvokeCapAwaiter {
         st->capability = std::string(in_cap);
         st->method     = std::string(in_method);
         st->argsJson   = std::string(in_args);
-        st->schedPost  = in_post;
+        st->bridge     = in_bridge;
     }
 
     bool await_ready() const noexcept {
@@ -2450,7 +3679,8 @@ struct InvokeCapAwaiter {
                 auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
                 handle.promise().clear_outstanding();
 
-                resumeCoroutine(s->host, handle);
+                // 桥接路径不在宿主回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
+                resumePluginCoroutine(s->bridge, s->host, handle);
             },
             holder,
             &err
@@ -2502,20 +3732,28 @@ struct InvokeCapAwaiter {
 
 } // namespace detail
 
+/// 宿主计时器适配 (非轮询): 计时器到期时宿主回调 adapter, adapter 把 continuation
+/// 投递到本地执行器并 [detail::PollOneBridge::wake]; continuation 由下一次 driver
+/// 推进, 因此既不需要额外线程, 也不占用宿主 IO 线程执行插件工作。
 inline detail::SleepAwaiter sleep(const PluginBase& ctx, int64_t ms) noexcept {
-    return detail::SleepAwaiter{ctx.host, ctx.iface.scheduler, ms};
+    return detail::SleepAwaiter{ctx.host, ctx.iface.scheduler, ctx.bridgeOrNull(), ms};
 }
 
+/// 让出一轮 (等价于"下一位"): 有桥时投递 continuation + 唤醒 driver,
+/// 由下一次请求推进; 无桥时沿用宿主 post_to_io。
 inline detail::YieldAwaiter yield(const PluginBase& ctx) noexcept {
-    return detail::YieldAwaiter{ctx.host, ctx.iface.scheduler};
+    return detail::YieldAwaiter{ctx.host, ctx.iface.scheduler, ctx.bridgeOrNull()};
 }
 
+/// 阻塞工作委托 (宿主工作线程池): **显式例外**, 工作体本身不在 driver 序列里运行;
+/// 完成后的恢复仍回到 driver 序列 (见 [detail::OffloadAwaiter])。
 template<typename WorkFn>
 inline auto offload(const PluginBase& ctx, WorkFn&& work) {
     return detail::OffloadAwaiter<std::decay_t<WorkFn>>{
         ctx.host,
         ctx.iface.scheduler,
-        std::forward<WorkFn>(work)
+        std::forward<WorkFn>(work),
+        ctx.bridgeOrNull()
     };
 }
 
@@ -2531,22 +3769,7 @@ inline detail::CallToolAwaiter call_tool(
         name,
         argsJson,
         threadId,
-        [](const AgentxxPluginHost* h, void* addr) {
-            auto ifs = agentxx::plugin::AgentIfaces::query(h);
-            if (ifs.scheduler && ifs.scheduler->post_to_io) {
-                ifs.scheduler->post_to_io(
-                    h,
-                    [](void* ud) {
-                        auto handle
-                            = std::coroutine_handle<detail::PromiseBase<std::string>>::from_address(
-                                ud
-                            );
-                        handle.resume();
-                    },
-                    addr
-                );
-            }
-        }
+        ctx.bridgeOrNull()
     };
 }
 
@@ -2562,22 +3785,7 @@ inline detail::InvokeCapAwaiter invoke_cap(
         capability,
         method,
         argsJson,
-        [](const AgentxxPluginHost* h, void* addr) {
-            auto ifs = agentxx::plugin::AgentIfaces::query(h);
-            if (ifs.scheduler && ifs.scheduler->post_to_io) {
-                ifs.scheduler->post_to_io(
-                    h,
-                    [](void* ud) {
-                        auto handle
-                            = std::coroutine_handle<detail::PromiseBase<std::string>>::from_address(
-                                ud
-                            );
-                        handle.resume();
-                    },
-                    addr
-                );
-            }
-        }
+        ctx.bridgeOrNull()
     };
 }
 
@@ -2592,11 +3800,11 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     rec->cancelFlag                                = cancelFlag;
     std::weak_ptr<PluginBase::SpawnRecord> recWeak = rec;
 
-    AgentxxPluginOperatorNotify hostNotify{nullptr, nullptr};
+    AgentxxPluginOperatorNotify  hostNotify{nullptr, nullptr};
     AgentxxPluginOperatorHandle* taskHandle = nullptr;
     if (ctx.iface.tasks && ctx.iface.tasks->register_task) {
-        AgentxxPluginOperatorNotify  notify{nullptr, nullptr};
-        AgentxxPluginString          err{nullptr, 0};
+        AgentxxPluginOperatorNotify notify{nullptr, nullptr};
+        AgentxxPluginString         err{nullptr, 0};
         taskHandle = ctx.iface.tasks->register_task(
             ctx.host,
             [](void* ud, void*) {
@@ -2640,11 +3848,9 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
         // 任务协程以引用接收 ctl：必须由 SpawnRecord 持有到任务结束（不能放在
         // starter 的栈上，否则任务一挂起就悬垂）。
         if (!rec->ctl) {
-            rec->ctl = std::make_shared<OpCtl>(
-                OpCtl{cancelFlag, ctx.host, ctx.iface.cancel, ""}
-            );
+            rec->ctl = std::make_shared<OpCtl>(OpCtl{cancelFlag, ctx.host, ctx.iface.cancel, ""});
         }
-        auto  task = fn(ctx, *rec->ctl);
+        auto task = fn(ctx, *rec->ctl);
         if (task.handle_) {
             auto h        = task.handle_;
             task.handle_  = nullptr;
@@ -2652,6 +3858,24 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
             p.host_       = ctx.host;
             p.cancelFlag_ = cancelFlag;
             p.notify_     = hostNotify;
+            if (!h.done()) {
+                if (auto recSp = recWeak.lock()) {
+                    recSp->coroAddr = h.address();
+                }
+            }
+
+            // 宿主提供协程驱动: 任务首步由 host driver 推进, 因此 spawn 不会在
+            // 调用方栈里同步跑任务体 (调用方可能正处在宿主 start/注册事务中)。
+            // 桥停止时会经 [BridgeRoot] 把任务上报为失败, 帧也随之销毁。
+            if (auto* bridge = ctx.bridgeOrNull()) {
+                detail::startBridgedRoot(*bridge, hostNotify, h, [recWeak] {
+                    if (auto recSp = recWeak.lock()) {
+                        recSp->coroAddr = nullptr;
+                    }
+                });
+                return;
+            }
+
             try {
                 h.resume();
             } catch (...) {
@@ -2673,7 +3897,7 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
     rec->starter = starter;
     ctx.spawns_.push_back(rec);
     if (ctx.iface.scheduler && ctx.iface.scheduler->post_to_io) {
-        auto* raw = rec.get();
+        auto*      raw    = rec.get();
         const auto status = ctx.iface.scheduler->post_to_io(
             ctx.host,
             [](void* ud) {
@@ -2809,6 +4033,17 @@ inline void tool(
         p.host_       = shim->ctx->host;
         p.cancelFlag_ = cancelFlag;
 
+        job->coroAddr = h.address();
+
+        // 宿主提供协程驱动: 根的首步由 host driver 推进 (不在 execute_start 里同步
+        // 跑插件协程, 因此不会有 completion 重入, 也不会占住宿主 IO 线程)。
+        if (auto* bridge = shim->ctx ? shim->ctx->bridgeOrNull() : nullptr) {
+            detail::startBridgedRoot(*bridge, p.notify_, h, [job] {
+                delete job;
+            });
+            return job;
+        }
+
         try {
             h.resume();
         } catch (...) {
@@ -2821,7 +4056,6 @@ inline void tool(
             return nullptr;
         }
 
-        job->coroAddr = h.address();
         p.opCleanup_ = [job]() {
             delete job;
         };
@@ -2972,16 +4206,16 @@ inline void blocking_tool(
         = ctx.storeShim(std::make_unique<BlockShim>(BlockShim{&ctx, std::forward<BlockFn>(fn)}));
 
     struct Job {
-        BlockShim*                  shim = nullptr;
-        AgentxxPluginOperatorNotify notify{};
-        std::string                 args;
-        std::string                 tid;
-        std::string                 tcid;
-        std::string                 workDir;
-        std::string                 argsJson;
-        std::string                 resultPayload;
-        std::string                 errorPayload;
-        bool                        isCancelled = false;
+        BlockShim*                   shim = nullptr;
+        AgentxxPluginOperatorNotify  notify{};
+        std::string                  args;
+        std::string                  tid;
+        std::string                  tcid;
+        std::string                  workDir;
+        std::string                  argsJson;
+        std::string                  resultPayload;
+        std::string                  errorPayload;
+        bool                         isCancelled   = false;
         AgentxxPluginOperatorHandle* offloadHandle = nullptr;
     };
 
@@ -3042,8 +4276,8 @@ inline void blocking_tool(
             && shim->ctx->iface.scheduler->offload) {
             job->offloadHandle = shim->ctx->iface.scheduler->offload(
                 shim->ctx->host,
-                [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString* err_out)
-                    -> void* {
+                [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString* err_out
+                ) -> void* {
                     (void)err_out;
                     auto* j = static_cast<Job*>(ud);
                     try {
@@ -3148,7 +4382,7 @@ inline void blocking_tool(
             if (!job->offloadHandle) {
                 if (scheduleError.data) {
                     if (error_out) {
-                        *error_out = scheduleError;
+                        *error_out    = scheduleError;
                         scheduleError = {};
                     } else {
                         PluginString::free(shim->ctx->host, &scheduleError);
@@ -3180,14 +4414,404 @@ inline void blocking_tool(
         if (!op) {
             return;
         }
-        auto* job       = static_cast<Job*>(op);
-        if (job->offloadHandle && job->shim && job->shim->ctx
-            && job->shim->ctx->iface.scheduler
+        auto* job = static_cast<Job*>(op);
+        if (job->offloadHandle && job->shim && job->shim->ctx && job->shim->ctx->iface.scheduler
             && job->shim->ctx->iface.scheduler->op_cancel) {
             job->shim->ctx->iface.scheduler->op_cancel(job->offloadHandle);
         }
         if (job->shim && job->shim->ctx && !job->tid.empty()) {
             job->shim->ctx->cancelRegistry.cancel(job->tid);
+        }
+    };
+
+    if (ctx.iface.tools && ctx.iface.tools->register_tool) {
+        ctx.iface.tools->register_tool(ctx.host, &spec);
+    }
+}
+
+/* ==================== 受控轮询工具 (polled_tool) ====================
+ *
+ * 适用: 业务体是 **asio 协程**、等待的是**插件本地 reactor 上的内核就绪事件**
+ * (socket 收发 / 子进程管道 / 文件 IO / 本地 steady_timer) 的工具。
+ *
+ * 为什么需要它: 这类等待没有"宿主可见唤醒源" —— driver 里的 `poll_one` 只会执行
+ * 已经就绪的 handler, 不会让私有 reactor 的等待对象到期。因此插件在注册时就
+ * **声明**"该工具需要受控轮询驱动", 桥据此在有在途操作时继续申请请求:
+ * - 有进展 (本轮 `poll_one` 执行到了 handler) → 立即续下一次请求;
+ * - 无进展 → 退避 `PollOneBridge::kPollIntervalMs` (宿主计时器) 后再驱动;
+ * - 连续有进展超过 `PollOneBridge::kPollBurstMax` 步 → 强制让出一次, 交给宿主;
+ * - **没有在途 polled 操作时不申请请求、不建定时器** (空闲零开销)。
+ *
+ * 业务签名与 [blocking_tool] 完全一致 (只把返回值换成 `asio::awaitable<std::string>`),
+ * 因此迁移通常只是换一个注册函数名:
+ * ```cpp
+ * polled_tool(ctx, name, depict, schema,
+ *     [](Ctx& c, std::string_view args, std::string_view tid, std::string_view workDir,
+ *        const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+ *         ArgReader reader(args);
+ *         co_return co_await doAsync(reader.raw(), c.workDir? ...);
+ *     });
+ * ```
+ *
+ * 约束 (与实现一起遵守):
+ * - **不要**在 polled 协程里做重 CPU/阻塞工作: 它运行在宿主 IO 线程上
+ *   (目录遍历 / 全文件扫描 / 向量相似度这类继续用 `blocking_tool`);
+ * - **不要**在 polled 协程里 `co_await` kit 的 `Task` 型原语 (`sleep`/`call_tool`/
+ *   `invoke_cap`): 它们的 awaiter 依赖 kit 自有 promise 接口, 而这里是
+ *   `asio::awaitable`。需要等待时用 asio 原生 `steady_timer` (pump 下可用) 或经
+ *   `bridge().local_executor()` 投递后续步骤;
+ * - 宿主不提供 `coroutine_runtime` 或 `scheduler.sleep` 时自动**降级**为
+ *   `blocking_tool` 等价形态 (offload 工作线程 + 局部 io_context 跑完), 保证
+ *   伪宿主/旧宿主行为不变。
+ */
+
+namespace detail {
+
+/// 受控轮询工具的 Job 侧取消查询 (kit 自造的会话级令牌, 不是宿主 token):
+/// 只读 Job 的取消标志与实例 CancelRegistry, 生命周期与该 polled 根相同。
+/// 模板参数是 `polled_tool` 内的局部 Job 类型 (在其完整之后实例化)。
+template<typename Job>
+inline int32_t AGENTXX_PLUGIN_CALL
+    polledJobTokenIsRequestedAbi(const AgentxxPluginCancelToken* token) {
+    auto* job = (token && token->host_ud) ? static_cast<const Job*>(token->host_ud) : nullptr;
+    return (job && job->cancelled()) ? 1 : 0;
+}
+
+/// 受控轮询工具的业务体包装 (两条路径共用): 运行业务协程并把终态写回 Job。
+///
+/// - 异常映射: `CancelledException` → CANCELLED, 其它异常 → FAILED;
+/// - 业务体正常返回但期间已请求取消 → CANCELLED (payload 为空, 与
+///   `blocking_tool` 的取消语义一致);
+/// - 本协程自身不决定"由谁上报/释放 Job": 泵路径由 [runPolledPumpJob] 收尾,
+///   降级路径由 offload 完成回调收尾。
+template<typename Job>
+inline asio::awaitable<void> runPolledJobBody(Job* job) {
+    try {
+        if (job->cancelled()) {
+            throw CancelledException("polled tool cancelled before execution");
+        }
+        job->payload = co_await job->shim
+                           ->fn(*job->shim->ctx, job->args, job->tid, job->workDir, &job->token);
+        job->status = AGENTXX_PLUGIN_OPERATOR_OK;
+    } catch (const CancelledException& e) {
+        job->status  = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+        job->payload = e.what();
+    } catch (const std::exception& e) {
+        job->status  = AGENTXX_PLUGIN_OPERATOR_FAILED;
+        job->payload = e.what();
+    } catch (...) {
+        job->status  = AGENTXX_PLUGIN_OPERATOR_FAILED;
+        job->payload = "unknown polled tool error";
+    }
+    if (job->status == AGENTXX_PLUGIN_OPERATOR_OK && job->cancelled()) {
+        job->status = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+        job->payload.clear();
+    }
+}
+
+/// 受控轮询工具的业务体包装 (泵路径): 在桥的本地执行器上跑完业务协程, 然后
+/// 上报终态并回收 Job (泵路径下 Job 由本协程回收)。
+///
+/// 停止/关闭路径 (桥 `stop` → [PollOneBridge::failAllPolledRoots]) 可能先一步
+/// 认领完成权并回收 Job: 那时 `claimFinish()` 返回 false, 本协程只做退出。
+template<typename Job>
+inline asio::awaitable<void> runPolledPumpJob(Job* job) {
+    co_await runPolledJobBody(job);
+    // 先取本地副本: 收尾 (cleanup) 会释放 Job 本身。
+    auto          root    = job->root;
+    auto*         bridge  = job->bridge;
+    const int32_t status  = job->status;
+    std::string   payload = job->payload;
+    if (!root || !root->claimFinish()) {
+        co_return;
+    }
+    if (bridge) {
+        bridge->removePolledRoot(root);
+    }
+    root->notifyHost(status, payload);
+    // cleanup 释放 Job (幂等); 本地 `root` 保证 PolledRoot 自身活到本语句之后。
+    root->runCleanup();
+}
+
+} // namespace detail
+
+template<typename Ctx, typename PolledFn>
+inline void polled_tool(
+    Ctx&             ctx,
+    std::string_view name,
+    std::string_view depict,
+    std::string_view schema,
+    PolledFn&&       fn,
+    int64_t          default_timeout_ms = 0,
+    int32_t          flags              = 0
+) {
+    using PolledFnType = std::decay_t<PolledFn>;
+    static_assert(
+        std::is_invocable_v<
+            PolledFnType,
+            Ctx&,
+            std::string_view,
+            std::string_view,
+            std::string_view,
+            const AgentxxPluginCancelToken*>,
+        "polled_tool 业务体签名必须是 (Ctx&, std::string_view args, std::string_view tid, "
+        "std::string_view workDir, const AgentxxPluginCancelToken*) -> asio::awaitable<std::string>"
+    );
+
+    auto&       storage     = ctx.storage_;
+    std::string finalDepict = ctx.toolPrompt(name).depict;
+    if (finalDepict.empty()) {
+        finalDepict = depict;
+    }
+    storage.push_back(std::move(finalDepict));
+    storage.push_back(std::string(schema));
+
+    struct PolledShim {
+        Ctx*         ctx = nullptr;
+        PolledFnType fn;
+    };
+
+    auto shim
+        = ctx.storeShim(std::make_unique<PolledShim>(PolledShim{&ctx, std::forward<PolledFn>(fn)}));
+
+    /// 一次 polled 根操作的拥有型状态。
+    /// 生命周期: 泵路径 = 业务协程帧 + [detail::runPolledPumpJob] 的收尾;
+    /// 降级路径 = offload 工作线程 + 宿主完成回调。两条路径都由
+    /// [detail::PolledRoot] 的 cleanup 兜底回收 (停止/关闭时会提前接管)。
+    struct Job {
+        PolledShim*                         shim   = nullptr;
+        detail::PollOneBridge*              bridge = nullptr; ///< 非空 = 泵路径
+        std::shared_ptr<detail::PolledRoot> root;
+        AgentxxPluginOperatorNotify         notify{};
+        detail::RootRequest                 request;
+        std::string                         tid;     ///< 会话标识 (= request.sessionId)
+        std::string                         args;    ///< 工具参数 JSON
+        std::string                         workDir; ///< 会话工作目录 (IO 线程预取)
+        std::shared_ptr<std::atomic<bool>>  cancelFlag;
+        /// 传给业务体的取消令牌: 泵路径 = kit 自造 (is_requested 读取消标志 +
+        /// CancelRegistry); 降级路径 = 宿主在 offload 工作期间给出的 token。
+        AgentxxPluginCancelToken token{nullptr, nullptr};
+        /// 降级路径的 offload 句柄 (泵路径为 nullptr)。
+        AgentxxPluginOperatorHandle* offloadHandle = nullptr;
+        /// execute_start 是否已经返回 (用于 inline 完成的伪宿主: 完成回调不能
+        /// 在 execute_start 还在写 `offloadHandle` 时回收 Job)。
+        std::atomic<bool> startReturned{false};
+        /// 终态 (由业务体包装写入; 上报方见上)。
+        int32_t     status = AGENTXX_PLUGIN_OPERATOR_OK;
+        std::string payload;
+
+        /// 是否已请求取消 (本实例取消标志 + 会话级 CancelRegistry)。
+        bool cancelled() const noexcept {
+            if (cancelFlag && cancelFlag->load(std::memory_order_acquire)) {
+                return true;
+            }
+            if (shim && shim->ctx && !tid.empty() && shim->ctx->cancelRegistry.isCancelled(tid)) {
+                return true;
+            }
+            return false;
+        }
+    };
+
+    // 自造取消令牌的查询函数: 按 host_ud 还原 Job (Job 为局部类型, 因此用
+    // 上面的模板实例化; 此处 Job 已完整)。
+    constexpr auto kTokenIsRequested = &detail::polledJobTokenIsRequestedAbi<Job>;
+
+    AgentxxPluginToolSpec spec{};
+    spec.name        = PluginStringView::from(name.data(), name.size());
+    spec.description = PluginStringView::from(
+        storage[storage.size() - 2].data(),
+        storage[storage.size() - 2].size()
+    );
+    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
+    spec.user_data          = shim;
+    spec.default_timeout_ms = default_timeout_ms;
+    spec.flags              = flags;
+    spec._reserved          = 0;
+
+    spec.execute_start = [](void*                              user_data,
+                            const AgentxxPluginStringView*     args_json,
+                            const AgentxxPluginStringView*     thread_id,
+                            const AgentxxPluginStringView*     tool_call_id,
+                            const AgentxxPluginOperatorNotify* notify,
+                            AgentxxPluginString*               error_out) -> void* {
+        auto* s = static_cast<PolledShim*>(user_data);
+        if (!s || !s->ctx) {
+            if (error_out) {
+                *error_out = PluginString::fromCstr(nullptr, "polled tool: context released");
+            }
+            return nullptr;
+        }
+        auto& c = *s->ctx;
+        // 拥有型 Request: args/session/tool_call_id 在整个 polled 根期间有效
+        // (协程会挂起并继续读取它们)。
+        auto request    = detail::RootRequest::forTool(c.host, args_json, thread_id, tool_call_id);
+        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        if (!request.sessionId.empty() && c.cancelRegistry.isCancelled(request.sessionId)) {
+            cancelFlag->store(true, std::memory_order_release);
+        }
+
+        auto* job       = new Job();
+        job->shim       = s;
+        job->notify     = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
+        job->request    = std::move(request);
+        job->tid        = job->request.sessionId;
+        job->args       = job->request.argsJson;
+        job->workDir    = c.workDir(job->tid);
+        job->cancelFlag = cancelFlag;
+        job->root       = std::make_shared<detail::PolledRoot>(job->notify);
+        job->token      = AgentxxPluginCancelToken{kTokenIsRequested, job};
+        {
+            // 兜底回收: 停止/关闭路径 (failAllPolledRoots) 会执行它; 正常完成时
+            // 由各自的上报方先执行, 这里保持幂等。
+            auto* jobPtr = job;
+            job->root->setCleanup([jobPtr] {
+                delete jobPtr;
+            });
+        }
+
+        auto*       bridge  = c.bridgeOrNull();
+        const auto* sched   = c.iface.scheduler;
+        const bool  canPump = bridge != nullptr && sched != nullptr && sched->sleep != nullptr
+                             && sched->op_cancel != nullptr;
+
+        if (canPump) {
+            job->bridge = bridge;
+            bridge->addPolledRoot(job->root);
+            try {
+                // 业务协程跑在**桥的本地执行器**上: 它的 socket/管道/文件等待因此
+                // 注册到桥的 reactor, 由受控轮询推进 (首步恒异步, 不在本调用内执行)。
+                asio::co_spawn(
+                    bridge->local_executor(),
+                    detail::runPolledPumpJob(job),
+                    asio::detached
+                );
+            } catch (...) {
+                // 首步都无法排队: 按**拒绝**处理 (未产生任何宿主可见副作用),
+                // 回收 Job 并返回 NULL + error。
+                bridge->removePolledRoot(job->root);
+                auto keep = job->root;
+                job->root->claimFinish();
+                job->root->runCleanup();
+                if (error_out) {
+                    *error_out = PluginString::fromCstr(
+                        c.host,
+                        "polled tool: failed to schedule coroutine"
+                    );
+                }
+                return nullptr;
+            }
+            // co_spawn 已把首步投递到本地执行器, 但 kit 看不到这次投递
+            // (不计入 readySteps_), 因此必须显式 wake —— 否则首步不会被驱动。
+            bridge->wake();
+            return job;
+        }
+
+        // ---- 降级路径: 宿主无 coroutine_runtime / 无计时器适配 ----
+        // 在 offload 工作线程里用局部 io_context 把协程跑完, 完成回调在 IO 线程
+        // 上报终态 (与 blocking_tool 的形态、线程模型、取消语义一致)。
+        if (sched == nullptr || sched->offload == nullptr) {
+            auto keep = job->root;
+            job->root->claimFinish();
+            job->root->runCleanup();
+            if (error_out) {
+                *error_out = PluginString::fromCstr(
+                    c.host,
+                    "polled tool: host provides neither coroutine driver with sleep nor offload"
+                );
+            }
+            return nullptr;
+        }
+        AgentxxPluginString scheduleError{};
+        job->offloadHandle = sched->offload(
+            c.host,
+            [](void* ud, const AgentxxPluginCancelToken* token, AgentxxPluginString*) -> void* {
+                auto* j = static_cast<Job*>(ud);
+                // 宿主 token 只在本次工作期间有效: 复制进 Job 供业务体查询取消
+                // (业务协程整个生命周期都在本次工作之内)。
+                if (token) {
+                    j->token = *token;
+                }
+                asio::io_context io;
+                asio::co_spawn(io, detail::runPolledJobBody(j), asio::detached);
+                io.run();
+                return nullptr;
+            },
+            [](void* ud, int32_t status, void*, const AgentxxPluginStringView* err) {
+                auto* j    = static_cast<Job*>(ud);
+                auto  root = j->root;
+                if (!root) {
+                    return;
+                }
+                int32_t     st      = j->status;
+                std::string payload = j->payload;
+                if (!PluginStringView::empty(err)) {
+                    st      = AGENTXX_PLUGIN_OPERATOR_FAILED;
+                    payload = PluginStringView::str(err);
+                } else if (st == AGENTXX_PLUGIN_OPERATOR_OK
+                           && status == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
+                    st = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+                }
+                if (!root->claimFinish()) {
+                    return; // 停止/关闭路径已终结并回收
+                }
+                root->notifyHost(st, payload);
+                // 正常情况下这里回收 Job; 但伪宿主/内联调度方可能在 offload 调用
+                // 内部就完成工作 (execute_start 仍在写 offloadHandle), 此时把回收
+                // 交给 execute_start 返回前的检查 (见下)。
+                if (j->startReturned.load(std::memory_order_acquire)) {
+                    root->runCleanup();
+                }
+            },
+            job,
+            &scheduleError
+        );
+        if (!job->offloadHandle) {
+            std::string message = "polled tool: scheduler offload rejected";
+            if (scheduleError.data) {
+                message.assign(scheduleError.data, static_cast<size_t>(scheduleError.size));
+                PluginString::free(c.host, &scheduleError);
+            }
+            auto keep = job->root;
+            job->root->claimFinish();
+            job->root->runCleanup();
+            if (error_out) {
+                *error_out = PluginString::fromCstr(c.host, message.c_str());
+            }
+            return nullptr;
+        }
+        // 工作体可能已在 offload 调用内跑完并上报 (伪宿主/内联调度): 此时
+        // 完成回调没有回收 Job (execute_start 尚未返回), 由这里补上。
+        job->startReturned.store(true, std::memory_order_release);
+        if (job->root->finished()) {
+            auto keep = job->root;
+            job->root->runCleanup();
+        }
+        return job;
+    };
+
+    spec.execute_cancel = [](void* user_data, void* op) {
+        (void)user_data;
+        if (!op) {
+            return;
+        }
+        auto* job = static_cast<Job*>(op);
+        if (job->cancelFlag) {
+            job->cancelFlag->store(true, std::memory_order_release);
+        }
+        if (job->shim && job->shim->ctx) {
+            if (!job->tid.empty()) {
+                job->shim->ctx->cancelRegistry.cancel(job->tid);
+            }
+            // 泵路径: 取消在途退避定时器, 让插件立刻得到一次驱动 (不必等满
+            // 一个退避量子), 从而尽快在阶段边界看到取消并收束根。
+            if (job->bridge) {
+                job->bridge->kickPumpWait();
+            }
+        }
+        // 降级路径: 请求宿主取消 offload 工作 (工作体内的 cancel token 随之为真)。
+        if (job->offloadHandle && job->shim && job->shim->ctx && job->shim->ctx->iface.scheduler
+            && job->shim->ctx->iface.scheduler->op_cancel) {
+            job->shim->ctx->iface.scheduler->op_cancel(job->offloadHandle);
         }
     };
 
@@ -3255,9 +4879,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
         /// 持有到协程真正结束（F13）。
         auto request = detail::RootRequest::forHook(shim->ctx->host, node_input_json);
 
-        using HookRet = decltype(
-            detail::invokeHook(shim->fn, *shim->ctx, pt, std::string_view{})
-        );
+        using HookRet = decltype(detail::invokeHook(shim->fn, *shim->ctx, pt, std::string_view{}));
         if constexpr (std::is_void_v<HookRet>) {
             /// 同步 void 钩子：调用返回即完成；异常统一映射为终态。
             detail::CompletionGuard guard(notify);
@@ -3284,12 +4906,23 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
                 guard.failed("hook returned an empty task");
                 return nullptr;
             }
-            auto  h      = task.handle_;
-            task.handle_ = nullptr;
-            auto& p      = h.promise();
+            auto h        = task.handle_;
+            task.handle_  = nullptr;
+            auto& p       = h.promise();
             p.notify_     = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
             p.host_       = job->request.host;
             p.cancelFlag_ = job->cancelFlag;
+            job->coroAddr = h.address();
+
+            // 宿主提供协程驱动: 根的首步由 host driver 推进 (不在 start 里同步跑
+            // 插件协程, 因此没有 completion 重入, 也不占住宿主 IO 线程)。
+            if (auto* bridge = shim->ctx ? shim->ctx->bridgeOrNull() : nullptr) {
+                detail::startBridgedRoot(*bridge, p.notify_, h, [job] {
+                    delete job;
+                });
+                return job;
+            }
+
             try {
                 h.resume();
             } catch (...) {
@@ -3300,8 +4933,9 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
                 delete job;
                 return nullptr;
             }
-            job->coroAddr = h.address();
-            p.opCleanup_  = [job]() { delete job; };
+            p.opCleanup_ = [job]() {
+                delete job;
+            };
             return job;
         }
     };
@@ -3335,11 +4969,11 @@ namespace detail {
 /// （与 [invokeHook] 相同的严格分发策略）。
 template<typename CapFn, typename Ctx>
 inline decltype(auto) invokeCap(
-    CapFn&                    fn,
-    Ctx&                      ctx,
-    const AgentxxPluginHost*  caller,
-    std::string_view          method,
-    std::string_view          args
+    CapFn&                   fn,
+    Ctx&                     ctx,
+    const AgentxxPluginHost* caller,
+    std::string_view         method,
+    std::string_view         args
 ) {
     if constexpr (std::is_invocable_v<
                       CapFn,
@@ -3394,11 +5028,8 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                 }
                 // 能力入参纳入拥有型 Request：业务只读到 Request 拥有的
                 // method/args（F13），不再依赖宿主借用缓冲区。
-                auto request = detail::RootRequest::forCapability(
-                    shim->ctx->host,
-                    method,
-                    args_json
-                );
+                auto request
+                    = detail::RootRequest::forCapability(shim->ctx->host, method, args_json);
 
                 using CapRet = decltype(detail::invokeCap(
                     shim->fn,
@@ -3408,8 +5039,8 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                     std::string_view{}
                 ));
                 // 同步能力: void 或字符串类返回值；其余 (Task<T>) 走异步路径。
-                constexpr bool kSyncCap = std::is_void_v<CapRet>
-                                          || std::is_convertible_v<CapRet, std::string_view>;
+                constexpr bool kSyncCap
+                    = std::is_void_v<CapRet> || std::is_convertible_v<CapRet, std::string_view>;
                 if constexpr (kSyncCap) {
                     /// 同步能力：调用返回即完成；异常统一映射为终态。
                     detail::CompletionGuard guard(notify);
@@ -3458,12 +5089,22 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                         guard.failed("capability returned an empty task");
                         return nullptr;
                     }
-                    auto  h      = task.handle_;
+                    auto h       = task.handle_;
                     task.handle_ = nullptr;
                     auto& p      = h.promise();
-                    p.notify_ = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
-                    p.host_   = job->request.host;
+                    p.notify_    = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
+                    p.host_      = job->request.host;
                     p.cancelFlag_ = job->cancelFlag;
+                    job->coroAddr = h.address();
+
+                    // 宿主提供协程驱动: 根的首步由 host driver 推进 (同一模型)。
+                    if (auto* bridge = shim->ctx ? shim->ctx->bridgeOrNull() : nullptr) {
+                        detail::startBridgedRoot(*bridge, p.notify_, h, [job] {
+                            delete job;
+                        });
+                        return job;
+                    }
+
                     try {
                         h.resume();
                     } catch (...) {
@@ -3474,8 +5115,9 @@ inline void capability(Ctx& ctx, std::string_view capName, CapFn&& fn) {
                         delete job;
                         return nullptr;
                     }
-                    job->coroAddr = h.address();
-                    p.opCleanup_  = [job]() { delete job; };
+                    p.opCleanup_ = [job]() {
+                        delete job;
+                    };
                     return job;
                 }
             },
@@ -3527,12 +5169,8 @@ inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& r
 ///
 /// `return`: 0 = 注册成功；非 0 = 类型名冲突或宿主不支持（调用方应使 start 事务失败）。
 template<typename Ctx, typename NodeFn>
-inline int32_t graph_node(
-    Ctx&             ctx,
-    std::string_view type,
-    std::string_view configSchema,
-    NodeFn&&         fn
-) {
+inline int32_t
+    graph_node(Ctx& ctx, std::string_view type, std::string_view configSchema, NodeFn&& fn) {
     if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
         return -1;
     }
@@ -3550,14 +5188,12 @@ inline int32_t graph_node(
         detail::RootRequest                request;
     };
 
-    auto shim
-        = ctx.storeShim(std::make_unique<NodeShim>(NodeShim{&ctx, std::forward<NodeFn>(fn)}));
+    auto shim = ctx.storeShim(std::make_unique<NodeShim>(NodeShim{&ctx, std::forward<NodeFn>(fn)}));
 
     AgentxxPluginGraphNodeTypeSpec spec{};
-    spec.type = PluginStringView::from(type.data(), type.size());
-    spec.config_schema_json
-        = PluginStringView::from(configSchema.data(), configSchema.size());
-    spec.user_data = shim;
+    spec.type               = PluginStringView::from(type.data(), type.size());
+    spec.config_schema_json = PluginStringView::from(configSchema.data(), configSchema.size());
+    spec.user_data          = shim;
 
     spec.run_start = [](void*                              user_data,
                         const AgentxxPluginStringView*     node_name,
@@ -3582,7 +5218,7 @@ inline int32_t graph_node(
             state_json,
             thread_id
         );
-        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        auto  cancelFlag = std::make_shared<std::atomic<bool>>(false);
         OpCtl ctl{
             cancelFlag,
             shim->ctx->host,
@@ -3591,11 +5227,8 @@ inline int32_t graph_node(
             &shim->ctx->cancelRegistry
         };
 
-        using NodeRet = decltype(
-            detail::invokeGraphNode(shim->fn, *shim->ctx, request, ctl)
-        );
-        if constexpr (std::is_void_v<NodeRet>
-                      || std::is_convertible_v<NodeRet, std::string_view>) {
+        using NodeRet = decltype(detail::invokeGraphNode(shim->fn, *shim->ctx, request, ctl));
+        if constexpr (std::is_void_v<NodeRet> || std::is_convertible_v<NodeRet, std::string_view>) {
             /// 快同步节点：调用返回即完成；异常统一映射为终态。
             detail::CompletionGuard guard(notify);
             try {
@@ -3603,8 +5236,7 @@ inline int32_t graph_node(
                     detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl));
                     guard.ok();
                 } else {
-                    guard.ok(
-                        detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl))
+                    guard.ok(detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl))
                     );
                 }
             } catch (...) {
@@ -3614,12 +5246,7 @@ inline int32_t graph_node(
         } else {
             /// Task<T> 节点：由 promise 在协程结束后收束完成通知，
             /// 返回 Job 作为宿主可取消的 provider 句柄。
-            auto* job = new NodeJob{
-                shim,
-                std::move(cancelFlag),
-                nullptr,
-                std::move(request)
-            };
+            auto* job = new NodeJob{shim, std::move(cancelFlag), nullptr, std::move(request)};
             auto task = detail::invokeGraphNode(shim->fn, *shim->ctx, job->request, std::move(ctl));
             if (!task.handle_) {
                 delete job;
@@ -3627,12 +5254,23 @@ inline int32_t graph_node(
                 guard.failed("graph node returned an empty task");
                 return nullptr;
             }
-            auto  h      = task.handle_;
-            task.handle_ = nullptr;
-            auto& p      = h.promise();
+            auto h        = task.handle_;
+            task.handle_  = nullptr;
+            auto& p       = h.promise();
             p.notify_     = notify ? *notify : AgentxxPluginOperatorNotify{nullptr, nullptr};
             p.host_       = job->request.host;
             p.cancelFlag_ = job->cancelFlag;
+            job->coroAddr = h.address();
+
+            // 宿主提供协程驱动: 根的首步由 host driver 推进 (不在 start 里同步跑
+            // 插件协程, 因此没有 completion 重入, 也不占住宿主 IO 线程)。
+            if (auto* bridge = shim->ctx ? shim->ctx->bridgeOrNull() : nullptr) {
+                detail::startBridgedRoot(*bridge, p.notify_, h, [job] {
+                    delete job;
+                });
+                return job;
+            }
+
             try {
                 h.resume();
             } catch (...) {
@@ -3643,8 +5281,9 @@ inline int32_t graph_node(
                 delete job;
                 return nullptr;
             }
-            job->coroAddr = h.address();
-            p.opCleanup_  = [job]() { delete job; };
+            p.opCleanup_ = [job]() {
+                delete job;
+            };
             return job;
         }
     };
@@ -4228,40 +5867,62 @@ private:
 /// separate from the legacy create macro so existing plugins keep their
 /// create-time registration behavior while new plugins can opt into a
 /// start/stop transaction without hand-writing ABI trampolines.
-#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                         \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(                       \
-        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err  \
-    ) {                                                                                         \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        try {                                                                                   \
-            if (!ctx) {                                                                         \
-                if (err) agentxx::plugin::PluginString::set(nullptr, err, "plugin start: null context"); \
-                return nullptr;                                                                \
-            }                                                                                   \
-            return (StartFn)(*ctx, notify, err);                                                \
-        } catch (const std::exception& e) {                                                     \
-            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what()); \
-        } catch (...) {                                                                         \
-            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, "plugin start threw"); \
-        }                                                                                       \
-        return nullptr;                                                                         \
-    }                                                                                           \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(                        \
-        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err  \
-    ) {                                                                                         \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        try {                                                                                   \
-            if (!ctx) {                                                                         \
-                if (err) agentxx::plugin::PluginString::set(nullptr, err, "plugin stop: null context"); \
-                return nullptr;                                                                \
-            }                                                                                   \
-            return (StopFn)(*ctx, notify, err);                                                 \
-        } catch (const std::exception& e) {                                                     \
-            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what()); \
-        } catch (...) {                                                                         \
-            if (err) agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, "plugin stop threw"); \
-        }                                                                                       \
-        return nullptr;                                                                         \
+#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(                             \
+        void*                              plugin_ctx,                                             \
+        const AgentxxPluginOperatorNotify* notify,                                                 \
+        AgentxxPluginString*               err                                                     \
+    ) {                                                                                            \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                             \
+        try {                                                                                      \
+            if (!ctx) {                                                                            \
+                if (err)                                                                           \
+                    agentxx::plugin::PluginString::set(                                            \
+                        nullptr,                                                                   \
+                        err,                                                                       \
+                        "plugin start: null context"                                               \
+                    );                                                                             \
+                return nullptr;                                                                    \
+            }                                                                                      \
+            return (StartFn)(*ctx, notify, err);                                                   \
+        } catch (const std::exception& e) {                                                        \
+            if (err)                                                                               \
+                agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what());      \
+        } catch (...) {                                                                            \
+            if (err)                                                                               \
+                agentxx::plugin::PluginString::set(                                                \
+                    ctx ? ctx->host : nullptr,                                                     \
+                    err,                                                                           \
+                    "plugin start threw"                                                           \
+                );                                                                                 \
+        }                                                                                          \
+        return nullptr;                                                                            \
+    }                                                                                              \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(                              \
+        void*                              plugin_ctx,                                             \
+        const AgentxxPluginOperatorNotify* notify,                                                 \
+        AgentxxPluginString*               err                                                     \
+    ) {                                                                                            \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                             \
+        try {                                                                                      \
+            if (!ctx) {                                                                            \
+                if (err)                                                                           \
+                    agentxx::plugin::PluginString::set(nullptr, err, "plugin stop: null context"); \
+                return nullptr;                                                                    \
+            }                                                                                      \
+            return (StopFn)(*ctx, notify, err);                                                    \
+        } catch (const std::exception& e) {                                                        \
+            if (err)                                                                               \
+                agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what());      \
+        } catch (...) {                                                                            \
+            if (err)                                                                               \
+                agentxx::plugin::PluginString::set(                                                \
+                    ctx ? ctx->host : nullptr,                                                     \
+                    err,                                                                           \
+                    "plugin stop threw"                                                            \
+                );                                                                                 \
+        }                                                                                          \
+        return nullptr;                                                                            \
     }
 
 #define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, ...)                         \
@@ -4309,58 +5970,66 @@ private:
 ///   AgentxxPluginString*)`;
 /// - 只导出 client 入口的插件用它把 UI 注册事务放进 start、撤销放进 stop;
 ///   使用 `AGENTXX_PLUGIN_CLIENT_EXPORT` 的插件不导出这两个符号 (legacy 路径)。
-#define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                   \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(                    \
-        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err \
-    ) {                                                                                     \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
-        try {                                                                               \
-            if (!ctx) {                                                                     \
-                if (err)                                                                    \
-                    agentxx::plugin::PluginString::set(                                     \
-                        nullptr, err, "client plugin start: null context"                   \
-                    );                                                                      \
-                return nullptr;                                                             \
-            }                                                                               \
-            return (StartFn)(*ctx, notify, err);                                            \
-        } catch (const std::exception& e) {                                                 \
-            if (err)                                                                        \
-                agentxx::plugin::PluginString::set(                                         \
-                    ctx ? ctx->host : nullptr, err, e.what()                                \
-                );                                                                          \
-        } catch (...) {                                                                     \
-            if (err)                                                                        \
-                agentxx::plugin::PluginString::set(                                         \
-                    ctx ? ctx->host : nullptr, err, "client plugin start threw"             \
-                );                                                                          \
-        }                                                                                   \
-        return nullptr;                                                                     \
-    }                                                                                       \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(                     \
-        void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err \
-    ) {                                                                                     \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
-        try {                                                                               \
-            if (!ctx) {                                                                     \
-                if (err)                                                                    \
-                    agentxx::plugin::PluginString::set(                                     \
-                        nullptr, err, "client plugin stop: null context"                    \
-                    );                                                                      \
-                return nullptr;                                                             \
-            }                                                                               \
-            return (StopFn)(*ctx, notify, err);                                             \
-        } catch (const std::exception& e) {                                                 \
-            if (err)                                                                        \
-                agentxx::plugin::PluginString::set(                                         \
-                    ctx ? ctx->host : nullptr, err, e.what()                                \
-                );                                                                          \
-        } catch (...) {                                                                     \
-            if (err)                                                                        \
-                agentxx::plugin::PluginString::set(                                         \
-                    ctx ? ctx->host : nullptr, err, "client plugin stop threw"              \
-                );                                                                          \
-        }                                                                                   \
-        return nullptr;                                                                     \
+#define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                      \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(                       \
+        void*                              plugin_ctx,                                        \
+        const AgentxxPluginOperatorNotify* notify,                                            \
+        AgentxxPluginString*               err                                                \
+    ) {                                                                                       \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
+        try {                                                                                 \
+            if (!ctx) {                                                                       \
+                if (err)                                                                      \
+                    agentxx::plugin::PluginString::set(                                       \
+                        nullptr,                                                              \
+                        err,                                                                  \
+                        "client plugin start: null context"                                   \
+                    );                                                                        \
+                return nullptr;                                                               \
+            }                                                                                 \
+            return (StartFn)(*ctx, notify, err);                                              \
+        } catch (const std::exception& e) {                                                   \
+            if (err)                                                                          \
+                agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what()); \
+        } catch (...) {                                                                       \
+            if (err)                                                                          \
+                agentxx::plugin::PluginString::set(                                           \
+                    ctx ? ctx->host : nullptr,                                                \
+                    err,                                                                      \
+                    "client plugin start threw"                                               \
+                );                                                                            \
+        }                                                                                     \
+        return nullptr;                                                                       \
+    }                                                                                         \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(                        \
+        void*                              plugin_ctx,                                        \
+        const AgentxxPluginOperatorNotify* notify,                                            \
+        AgentxxPluginString*               err                                                \
+    ) {                                                                                       \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
+        try {                                                                                 \
+            if (!ctx) {                                                                       \
+                if (err)                                                                      \
+                    agentxx::plugin::PluginString::set(                                       \
+                        nullptr,                                                              \
+                        err,                                                                  \
+                        "client plugin stop: null context"                                    \
+                    );                                                                        \
+                return nullptr;                                                               \
+            }                                                                                 \
+            return (StopFn)(*ctx, notify, err);                                               \
+        } catch (const std::exception& e) {                                                   \
+            if (err)                                                                          \
+                agentxx::plugin::PluginString::set(ctx ? ctx->host : nullptr, err, e.what()); \
+        } catch (...) {                                                                       \
+            if (err)                                                                          \
+                agentxx::plugin::PluginString::set(                                           \
+                    ctx ? ctx->host : nullptr,                                                \
+                    err,                                                                      \
+                    "client plugin stop threw"                                                \
+                );                                                                            \
+        }                                                                                     \
+        return nullptr;                                                                       \
     }
 
 } // namespace plugin

@@ -160,6 +160,29 @@ path/to/agentxx_test string_util regex
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
+Reset-v2 协程驱动 (2026-09, 见 docs/zh-cn/design/plugins.md §16, 方案 resource/history/plugin-refactor-3/):
+- 新增 C ABI 表 `agentxx.agent.coroutine_runtime` v1 (`request_driver` / `cancel_driver` /
+  `is_io_thread`): 插件申请"有界驱动请求"、宿主异步执行一次 `poll_one` 式有限步骤;
+  宿主 **永不内联** 回调, 一次票至多执行一次, 请求在排队/执行期间持实例 lease;
+  `cancel_driver` 幂等且**不解引用伪造句柄** (走进程级地址注册表校验)
+- kit `detail::PollOneBridge` + `detail::BridgeRoot`: 每实例一份私有 `io_context` 作
+  ready 队列; 按"已投递未执行步骤数"记账申请请求 (无工作不申请、不自旋);
+  宿主回调只 `postToLocal + wake`, 绝不在回调栈内恢复插件协程;
+  活跃根由桥持强引用、被放弃的根活到桥销毁 (帧与 op 句柄统一在 `destroyFrame` 释放)
+- 宿主不提供该表 (伪宿主/旧宿主) 时 kit 自动回退 `post_to_io` 路径
+- **声明式受控轮询 (`polled_tool`)**: 插件私有 reactor 上的内核就绪等待 (socket/子进程
+  管道/文件/本地 timer) 由桥按"只有有在途操作时轮询 (10ms 退避量子、有进展立即续、
+  连续 256 步后让出 1ms)"驱动 —— 参数显式可观测, 禁止**隐藏**轮询;
+  宿主无 `coroutine_runtime`/`scheduler.sleep` 时自动降级为 offload 工作线程跑完;
+  未声明 polled 却依赖私有 reactor 时桥只输出诊断 (8 次无进展告警), 不自旋
+- 已迁移 `polled_tool`: `agentxx_websearch` (search/fetch/fetch_markdown)、
+  `agentxx_execute_command` (bash/windows, Boost.Process v2 分支)、
+  `agentxx_filesystem` (read/write/edit); 保持 `blocking_tool` 的显式例外:
+  filesystem 的 list/glob/grep、popen 回退分支、无 `BOOST_ASIO_HAS_FILE` 平台、
+  rag_search 的 CPU 段与 embedding 网络段 (二期)
+- 测试: `plugin_bridge` (伪宿主驱动用例 + 受控轮询用例) + `plugin_runtime` 宿主请求用例
+  + `plugins` 端到端 (`example_bridge` / `example_polled_timer` / 迁移插件 / 在途卸载)
+  + C17 ABI 布局检查 + SDK 反例编译检查 (`wrong_polled_return.cpp` 必须编译失败)
 - Windows/MSVC 禁止添加 `/FS` `/MP` 编译选项 (2026-08): 命令行出现重复 `/FS` 时
   VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
   导致每次构建都全量重编 (增量编译完全失效)。参数经 superbuild 多层 CMake

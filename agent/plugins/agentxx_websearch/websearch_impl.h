@@ -3,10 +3,12 @@
 ///     agentxx_web_search / agentxx_web_fetch / agentxx_web_fetch_markdown
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 依赖: agentxx_util (HttpClient / 字符串编码转换)
-/// - 统一异步操作模型 (poll 寄生驱动): 执行体为协程 (*ExecuteAsync), 在插件
-///   实例的 PollLoop (无线程寄生事件循环) 上 spawn, 由宿主 io 线程经 pollOnce
-///   非阻塞步进 —— 与内置工具同线程交错执行; HttpClient 为协程接口直接
-///   co_await, 不再经局部 io_context 同步驱动 (原 runSync 模式已移除)
+/// - 统一异步操作模型 (受控轮询): 执行体为协程 (*ExecuteAsync), 由插件入口经
+///   `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
+///   local_executor) 上, 由宿主 IO 线程经 driver 请求 `poll_one` 有界步进
+///   (有进展立即续, 无进展退避, 无在途操作时不驱动), 见 plugin_kit.h 与
+///   docs/zh-cn/design/plugins.md §16; HttpClient 为协程接口直接 co_await,
+///   不再经局部 io_context + io.run() 同步驱动
 /// - 取消语义: 协程内阶段边界轮询 cancel_flag (多请求路径的请求间生效);
 ///   单请求中断依赖 chunk 超时 (HttpClient 暂未暴露外部 cancellation slot)
 /// - html→markdown 转换 (cmark-gfm) 为同步 CPU 段, 典型页面 <10ms; 超大页面
