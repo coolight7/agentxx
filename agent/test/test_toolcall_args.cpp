@@ -1023,6 +1023,200 @@ TestResult testToolcallArgs() {
         );
     }
 
+    // ===================== 枚举字符串大小写自动修正 =====================
+    // #55 单值枚举: 传入值大小写与枚举规范值不同 -> 改写为规范值
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum1";
+        def.parameters = makeParams({
+            "mode",
+            {{"type", "string"}, {"enum", agentxx::util::Json::array({"file", "dir"})}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"mode", "File"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"file"});
+    }
+
+    // #56 单值枚举全大写: 缩写形式同样命中 (FILE -> file)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum2";
+        def.parameters = makeParams({
+            "mode",
+            {{"type", "string"}, {"enum", agentxx::util::Json::array({"file", "dir"})}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"mode", "FILE"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"file"});
+    }
+
+    // #57 大小写已一致 / 未命中枚举: 保持原样 (未命中交由工具自身报错)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum3";
+        def.parameters = makeParams({
+            "mode",
+            {{"type", "string"}, {"enum", agentxx::util::Json::array({"file", "dir"})}}
+        });
+        auto argsSame = agentxx::util::Json{
+            {"mode", "file"}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, argsSame));
+        XX_TEST_EXPECT_EQ(argsSame["mode"].get<std::string>(), std::string{"file"});
+
+        auto argsMiss = agentxx::util::Json{
+            {"mode", "socket"}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, argsMiss));
+        XX_TEST_EXPECT_EQ(argsMiss["mode"].get<std::string>(), std::string{"socket"});
+    }
+
+    // #58 混合枚举 (含数值/布尔项): 仅字符串项参与, 规范值以枚举声明为准
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum4";
+        def.parameters = makeParams({
+            "level",
+            {{"type", "string"},
+             {"enum", agentxx::util::Json::array({"Low", 1, true, "High"})}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"level", "HIGH"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["level"].get<std::string>(), std::string{"High"});
+    }
+
+    // #59 无 enum 声明的参数: 不做大小写改写
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum5";
+        def.parameters = makeParams({"mode", {{"type", "string"}}});
+        auto args      = agentxx::util::Json{
+                 {"mode", "File"}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"File"});
+    }
+
+    // #60 枚举 + 数值类型转换互不影响: 枚举为数值时不参与字符串改写
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum6";
+        def.parameters = makeParams({
+            "code",
+            {{"type", "integer"}, {"enum", agentxx::util::Json::array({1, 2, 3})}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"code", "2"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["code"].is_number_integer());
+        XX_TEST_EXPECT_EQ(args["code"].get<long long>(), 2);
+    }
+
+    // #61 数组元素枚举: 字符串被包装为数组后, 按 items.enum 逐项改写
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum7";
+        def.parameters = makeParams({
+            "perms",
+            {{"type", "array"},
+             {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"perms", "READ"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["perms"].is_array());
+        XX_TEST_EXPECT_EQ(args["perms"].size(), size_t{1});
+        XX_TEST_EXPECT_EQ(args["perms"][0].get<std::string>(), std::string{"read"});
+    }
+
+    // #62 数组元素枚举: 已为数组时逐项改写, 未命中的元素保持原样
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum8";
+        def.parameters = makeParams({
+            "perms",
+            {{"type", "array"},
+             {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"perms", agentxx::util::Json::array({"WRITE", "read", "other", 7})}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["perms"][0].get<std::string>(), std::string{"write"});
+        XX_TEST_EXPECT_EQ(args["perms"][1].get<std::string>(), std::string{"read"});
+        XX_TEST_EXPECT_EQ(args["perms"][2].get<std::string>(), std::string{"other"});
+        XX_TEST_EXPECT_TRUE(args["perms"][3].is_number_integer());
+    }
+
+    // #63 数组元素枚举全部为规范值: 不发生改写 (返回 false)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum9";
+        def.parameters = makeParams({
+            "perms",
+            {{"type", "array"},
+             {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"perms", agentxx::util::Json::array({"read", "write"})}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+    }
+
+    // #64 联合类型 + 枚举: 字符串分支仍做大小写改写
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum10";
+        def.parameters = makeParams({
+            "mode",
+            {{"type", agentxx::util::Json::array({"string", "null"})},
+             {"enum", agentxx::util::Json::array({"Auto", "Manual"})}      }
+        });
+        auto args      = agentxx::util::Json{
+                 {"mode", "AUTO"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"Auto"});
+    }
+
+    // #65 枚举声明大小写重复项 (["A","a"]): 保留先出现项, 不产生不确定改写
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum11";
+        def.parameters = makeParams({
+            "mode",
+            {{"type", "string"}, {"enum", agentxx::util::Json::array({"A", "a"})}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"mode", "a"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"A"});
+    }
+
+    // #66 空字符串枚举值: 不参与改写 (避免把参数改为空串)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_enum12";
+        def.parameters = makeParams({
+            "mode",
+            {{"type", "string"}, {"enum", agentxx::util::Json::array({"", "on"})}}
+        });
+        auto args      = agentxx::util::Json{
+                 {"mode", "ON"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"on"});
+    }
+
     return TestResult{g_tca_passed, g_tca_failed};
 }
 

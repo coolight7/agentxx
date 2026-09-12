@@ -163,7 +163,7 @@
     - 预设文件读写权限限制
     - ⬜沙盒执行 Shell/File RW
 - ✅**异常处理和自动重试**
-    - Toolcall 自动转换参数类型（String、Array、Number互转），提高兼容性
+    - Toolcall 自动转换参数类型（String、Array、Number互转、枚举字符串大小写修正），提高兼容性
     - Toolcall/LLM 节点支持自动重试，支持自定义重试次数
     - Toolcall/LLM 节点异常时 自动判断保留已生成的消息、补充添加消息到上下文，保持角色消息顺序正确
     - 轮次开始时，自动检查和修复消息上下文角色顺序和内容

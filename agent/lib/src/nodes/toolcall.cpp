@@ -191,6 +191,103 @@ bool isStringArrayItems(const agentxx::util::Json& schema) {
     return true;
 }
 
+/// 收集 schema 声明的字符串枚举值, 构造"忽略大小写 -> 规范值"映射 (Set 语义):
+/// - 仅取 `enum` 数组中的字符串项 (数值/布尔枚举与字符串参数无关, 不参与);
+///   枚举项本身大小写不同 (如 `["A", "a"]`) 时保留先出现者, 避免不确定改写
+/// - 查询经 agentxx::util::IgnoreCaseMap (IgnoreCaseHash/IgnoreCaseEqual):
+///   "File" / "FILE" / "file" 均命中规范值 `File`, 取出后按规范值重新赋值
+/// - `return` 该 schema 的字符串枚举映射 (无字符串枚举时为空)
+agentxx::util::IgnoreCaseMap<std::string>
+    makeEnumIgnoreCaseMap(const agentxx::util::Json& schema) {
+    agentxx::util::IgnoreCaseMap<std::string> enumMap;
+    if (!schema.is_object() || !schema.contains("enum")) {
+        return enumMap;
+    }
+    const auto& enumValues = schema["enum"];
+    if (!enumValues.is_array()) {
+        return enumMap;
+    }
+    for (const auto& item : enumValues) {
+        if (!item.is_string()) {
+            continue;
+        }
+        const auto value = item.get<std::string>();
+        if (value.empty() || enumMap.contains(value)) {
+            continue; // 空枚举值 / 大小写重复项: 保留先出现者, 避免不确定改写
+        }
+        // 键为规范值本身 (查询经忽略大小写哈希/相等比较)
+        enumMap.emplace(value, value);
+    }
+    return enumMap;
+}
+
+/// 枚举字符串值的大小写自动修正 (对 [schema] 声明的 `enum` 逐项做忽略大小写匹配):
+/// - [value] 为字符串: 命中枚举项且与规范值大小写不一致时改写为规范值
+/// - [value] 为字符串数组: 按 `items.enum` 对每个字符串元素分别修正
+///   (元素类型错误等其它情况不动, 交由工具自身校验)
+/// - [fixInfo] 发生改写时追加描述 (供调用方记日志; 已有内容时以 ", " 连接)
+/// `return` 是否发生了改写
+bool autoFixEnumStringCase(
+    const agentxx::util::Json& schema,
+    agentxx::util::Json&       value,
+    std::string&               fixInfo
+) {
+    auto appendFixInfo = [&fixInfo](std::string_view one) {
+        if (fixInfo.empty()) {
+            fixInfo = one;
+        } else {
+            fixInfo += ", ";
+            fixInfo += one;
+        }
+    };
+    if (value.is_string()) {
+        const auto enumMap = makeEnumIgnoreCaseMap(schema);
+        if (enumMap.empty()) {
+            return false;
+        }
+        const auto cur = value.get<std::string>();
+        auto       it  = enumMap.find(cur);
+        if (it == enumMap.end() || it->second == cur) {
+            return false; // 未命中枚举 (工具自身报错) / 大小写已一致
+        }
+        appendFixInfo(fmt::format("enum string case: `{}` -> `{}`", cur, it->second));
+        value = it->second;
+        return true;
+    }
+    if (value.is_array()) {
+        const auto itemsIt = schema.find("items");
+        if (itemsIt == schema.end() || !itemsIt->is_object()) {
+            return false;
+        }
+        const auto enumMap = makeEnumIgnoreCaseMap(*itemsIt);
+        if (enumMap.empty()) {
+            return false;
+        }
+        bool        changed = false;
+        std::string oneInfo;
+        for (auto& item : value) {
+            if (!item.is_string()) {
+                continue;
+            }
+            const auto cur = item.get<std::string>();
+            auto       it  = enumMap.find(cur);
+            if (it == enumMap.end() || it->second == cur) {
+                continue;
+            }
+            if (oneInfo.empty()) {
+                oneInfo = fmt::format("enum string case: `{}` -> `{}`", cur, it->second);
+            }
+            item    = it->second;
+            changed = true;
+        }
+        if (changed) {
+            appendFixInfo(oneInfo);
+        }
+        return changed;
+    }
+    return false;
+}
+
 } // namespace
 
 std::string
@@ -279,6 +376,8 @@ std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
 ///   int64 表示范围内才无损转换, 如 3.0 转 3, 3.5 保持原样)
 /// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
 /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
+/// - 枚举字符串大小写: 参数值命中 schema `enum` 声明的字符串枚举项 (忽略大小写)
+///   时改写为规范值, 如 LLM 传 "File" 而枚举声明为 `["file","dir"]` 时转为 "file"
 /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
 /// `return` 是否发生了参数转换
 bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, agentxx::util::Json& args) {
@@ -388,6 +487,14 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, agentxx::u
                 fixInfo    = "[string] -> string";
                 changed    = true;
             }
+        }
+
+        // 枚举字符串大小写自动修正: 先按 schema `enum` 构造忽略大小写的映射
+        // (Set 语义), 参数传入值经该映射取值后按枚举的规范值重新赋值
+        // - 放在类型转换之后: 以最终写入的值为准 (字符串被包装为数组时,
+        //   按 `items.enum` 对元素逐项修正)
+        if (autoFixEnumStringCase(schema, args[name], fixInfo)) {
+            changed = true;
         }
 
         if (!fixInfo.empty()) {
