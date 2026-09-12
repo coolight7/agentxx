@@ -5,6 +5,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/hash.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/string_util.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -150,6 +151,21 @@ ViewMessage stripAttachmentDataUrl(const ViewMessage& msg) {
     return copy;
 }
 
+/// 序列化 JSON 文本并保证其 UTF-8 合法 (入库前统一入口):
+/// - Json::dump 对 >= 0x80 的字节原样透传 (仅转义控制字符/引号/反斜杠), 若字符串
+///   内容含非法 UTF-8 (如工具输出的 GBK/二进制文本), 落库文本即为非法 UTF-8 JSON;
+///   读取端 (simdjson) 要求 UTF-8, 解析该行会抛异常 —— 表现为会话历史/上下文
+///   部分乃至整体无法恢复 (数据丢失)
+/// - 此处对非法序列按 U+FFFD 修复 (仅替换本就非法的字节, 合法文本原样保留),
+///   保证落库内容始终可被解析
+std::string dumpJsonUtf8(const agentxx::util::Json& j) {
+    std::string text = j.dump();
+    if (false == agentxx::util::utf8IsAvail(text)) {
+        agentxx::util::utf8Repair(text);
+    }
+    return text;
+}
+
 } // namespace
 
 void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessage& msg) {
@@ -165,7 +181,7 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
             auto update
                 = db.prepare("UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
                 );
-            update.bindText(1, stripAttachmentDataUrl(msg).toJson().dump());
+            update.bindText(1, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
             update.bindText(2, msg.id);
             update.step();
             return true;
@@ -256,38 +272,85 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     if (!sessionDataDirExists(sessionId)) {
         return out;
     }
+    // 分区恢复 (崩溃/断电后尽量少丢数据):
+    // - 单行 JSON 解析失败 (历史遗留脏数据/编码异常) 只跳过该行, 不再整体丢弃
+    //   —— 原实现任一异常都会把 LoadedSession 重置为空, 表现为"会话数据全部
+    //   丢失", 且后续 saveLlmMessages 会用新上下文覆盖库内旧数据 (不可恢复)
+    // - 展示历史 / LLM 上下文 / meta 三段各自独立捕获, 一段失败不影响其余
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             auto& db = dbs(sessionId).sessionDb;
-
             // 展示历史 (按追加顺序)
-            auto stmt = db.prepare("SELECT json FROM view_message ORDER BY seq");
+            auto stmt = db.prepare("SELECT seq, json FROM view_message ORDER BY seq");
             while (stmt.step()) {
-                auto j = agentxx::util::Json::parse(stmt.columnText(0));
-                out.viewMessages.push_back(ViewMessage::fromJson(j));
-            }
-            // LLM 上下文 (单行)
-            auto ctxStmt = db.prepare("SELECT json FROM llm_context WHERE id = 1");
-            if (ctxStmt.step()) {
-                out.llmMessages = agentxx::util::Json::parse(ctxStmt.columnText(0));
-            }
-            // meta: msgIdCounter
-            auto metaStmt = db.prepare("SELECT key, value FROM meta");
-            while (metaStmt.step()) {
-                if (metaStmt.columnText(0) == kMetaMsgIdCounter) {
-                    out.msgIdCounter = static_cast<uint64_t>(metaStmt.columnInt64(1));
-                }
-            }
-            // 兜底: 老数据无 msgIdCounter 记录时按历史条数恢复
-            // (历史 append-only, id 连续分配, 条数即最后序号)
-            if (out.msgIdCounter == 0) {
-                out.msgIdCounter = out.viewMessages.size();
+                const auto jsonText = stmt.columnText(1);
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        auto j = agentxx::util::Json::parse(jsonText);
+                        out.viewMessages.push_back(ViewMessage::fromJson(j));
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGW(
+                            "SessionStore: loadSession({}) 跳过无法解析的历史消息 (seq={}): {}",
+                            sessionId,
+                            stmt.columnInt64(0),
+                            errmsg
+                        );
+                        return false;
+                    }
+                );
             }
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionStore: loadSession({}) failed: {}", sessionId, errmsg);
-            out = LoadedSession{};
+            XX_LOGE(
+                "SessionStore: loadSession({}) 读取展示历史失败 (保留已恢复部分): {}",
+                sessionId,
+                errmsg
+            );
+            return false;
+        }
+    );
+    // meta: msgIdCounter (失败时按历史条数兜底, 不丢弃历史)
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare("SELECT key, value FROM meta");
+            while (stmt.step()) {
+                if (stmt.columnText(0) == kMetaMsgIdCounter) {
+                    out.msgIdCounter = static_cast<uint64_t>(stmt.columnInt64(1));
+                }
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: loadSession({}) 读取 meta 失败: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    // 兜底: 老数据无 msgIdCounter 记录时按历史条数恢复
+    // (历史 append-only, id 连续分配, 条数即最后序号)
+    if (out.msgIdCounter == 0) {
+        out.msgIdCounter = out.viewMessages.size();
+    }
+    // LLM 上下文 (单行; 解析失败时保留空上下文, 展示历史不受影响)
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare("SELECT json FROM llm_context WHERE id = 1");
+            if (stmt.step()) {
+                out.llmMessages = agentxx::util::Json::parse(stmt.columnText(0));
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE(
+                "SessionStore: loadSession({}) 读取 LLM 上下文失败 (按空上下文恢复): {}",
+                sessionId,
+                errmsg
+            );
+            out.llmMessages = agentxx::util::Json::array();
             return false;
         }
     );
@@ -537,7 +600,7 @@ void SessionStore::appendViewMessage(
             bool inTx = true;
             try {
                 auto insert = db.prepare("INSERT INTO view_message(json) VALUES (?)");
-                insert.bindText(1, stripAttachmentDataUrl(msg).toJson().dump());
+                insert.bindText(1, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
                 insert.step();
 
                 // UPSERT 计数: 新线程首条消息时 meta 不存在, 需 INSERT
@@ -611,7 +674,7 @@ void SessionStore::saveLlmMessages(
                 // 整表替换 (单行上下文)
                 db.exec("DELETE FROM llm_context");
                 auto insert = db.prepare("INSERT INTO llm_context(id, json) VALUES (1, ?)");
-                insert.bindText(1, llmMessages.dump());
+                insert.bindText(1, dumpJsonUtf8(llmMessages));
                 insert.step();
                 db.commit();
                 inTx = false;
