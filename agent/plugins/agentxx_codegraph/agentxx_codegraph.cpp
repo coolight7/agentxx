@@ -629,7 +629,10 @@ static void registerAllTools(PluginCtx& ctx) {
 }
 
 static void snapshotQueryDone(
-    void* ud, int32_t status, void* result, const AgentxxPluginStringView* error
+    void*                          ud,
+    int32_t                        status,
+    void*                          result,
+    const AgentxxPluginStringView* error
 ) {
     (void)error;
     auto* ctx   = static_cast<PluginCtx*>(ud);
@@ -673,9 +676,7 @@ static void snapshotQueryDone(
     }
 }
 
-static void* snapshotQueryWork(
-    void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*
-) {
+static void* snapshotQueryWork(void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) {
     auto* ctx = static_cast<PluginCtx*>(ud);
     return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
@@ -709,13 +710,8 @@ static void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView
             if (!ctx || !ctx->host || !ctx->iface.scheduler || !ctx->iface.scheduler->offload) {
                 return;
             }
-            ctx->iface.scheduler->offload(
-                ctx->host,
-                snapshotQueryWork,
-                snapshotQueryDone,
-                ctx,
-                nullptr
-            );
+            ctx->iface.scheduler
+                ->offload(ctx->host, snapshotQueryWork, snapshotQueryDone, ctx, nullptr);
         }
     );
 }
@@ -861,10 +857,9 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
             co_return;
         }
         const auto startedAt = std::chrono::steady_clock::now();
-        const bool ok        = co_await agentxx::plugin::offload(
-            c,
-            [&c](const AgentxxPluginCancelToken*) { return c.mgr->updateIndex(); }
-        );
+        const bool ok = co_await agentxx::plugin::offload(c, [&c](const AgentxxPluginCancelToken*) {
+            return c.mgr->updateIndex();
+        });
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - startedAt
         )
@@ -873,9 +868,7 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
             c.host,
             c.iface.log,
             ok ? 2 : 3,
-            fmt::format(
-                "[codegraph] background warmup index {} ({}ms)", ok ? "done" : "failed", ms
-            )
+            fmt::format("[codegraph] background warmup index {} ({}ms)", ok ? "done" : "failed", ms)
         );
     });
 
@@ -884,9 +877,8 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
         j["loaded"]         = true;
         j["project_root"]   = ctx.projectRoot;
         std::string payload = j.dump();
-        auto        statusTopic
-            = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-        auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+        auto statusTopic = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+        auto payloadSv   = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
         ctx.iface.events->publish(ctx.host, &statusTopic, &payloadSv);
     }
     pluginLog(ctx.host, ctx.iface.log, 2, "agentxx_codegraph started (6 tools)");
@@ -894,12 +886,16 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
 }
 
 static void* codegraphAgentStart(
-    PluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    PluginCtx&                         ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_codegraph start: notify required"
+                ctx.host,
+                error,
+                "agentxx_codegraph start: notify required"
             );
         }
         return nullptr;
@@ -907,7 +903,9 @@ static void* codegraphAgentStart(
     if (codegraphAgentSetup(ctx) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_codegraph start: setup failed"
+                ctx.host,
+                error,
+                "agentxx_codegraph start: setup failed"
             );
         }
         return nullptr;
@@ -916,9 +914,8 @@ static void* codegraphAgentStart(
     return nullptr;
 }
 
-static void* codegraphAgentStop(
-    PluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    codegraphAgentStop(PluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     // 注册记录与后台任务句柄由宿主在 stop 后统一撤销/取消; 索引数据保留在
     // 实例上下文中, 下次 start 直接复用。
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
@@ -1124,7 +1121,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 /// client 侧 start: 注册 Info 段落与跨端数据订阅 (注册事务)
 static void* codegraphClientStart(
-    ClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err
+    ClientCtx&                         ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               err
 ) {
     if (ctx.ui && ctx.ui->register_info_section) {
         auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
@@ -1135,12 +1134,8 @@ static void* codegraphClientStart(
         }
     }
     if (!ctx.iface.events || !ctx.iface.events->subscribe
-        || !ctx.iface.events->subscribe(
-            ctx.host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            onClientPluginData,
-            &ctx
-        )) {
+        || !ctx.iface.events
+                ->subscribe(ctx.host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, onClientPluginData, &ctx)) {
         agentxx::plugin::PluginString::set(ctx.host, err, "events subscribe failed");
         return nullptr;
     }
@@ -1153,9 +1148,8 @@ static void* codegraphClientStart(
 }
 
 /// client 侧 stop: 撤销 Info 段落 (可重复调用)
-static void* codegraphClientStop(
-    ClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    codegraphClientStop(ClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (ctx.section && ctx.ui && ctx.ui->unregister_info_section) {
         ctx.ui->unregister_info_section(ctx.host, ctx.section);
         ctx.section = nullptr;

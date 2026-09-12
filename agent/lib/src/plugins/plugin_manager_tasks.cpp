@@ -4,8 +4,11 @@
 namespace agentxx::plugin {
 
 AgentxxPluginOperatorHandle* PluginManager::registerTask(
-    PluginInstance* inst, AgentxxPluginOperatorCancelFunction cancel_fn, void* cancel_ud,
-    AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error_out
+    PluginInstance*                     inst,
+    AgentxxPluginOperatorCancelFunction cancel_fn,
+    void*                               cancel_ud,
+    AgentxxPluginOperatorNotify*        notify,
+    AgentxxPluginString*                error_out
 ) {
     if (notify) {
         *notify = {};

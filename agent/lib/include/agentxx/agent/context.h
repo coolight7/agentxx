@@ -434,9 +434,8 @@ public:
     ~AgentContext();
 
     /// 在所属 IO executor 仍运行时安全关闭本上下文的全部插件。
-    asio::awaitable<bool> shutdownPluginsAsync(
-        std::chrono::milliseconds timeout = std::chrono::seconds{30}
-    );
+    asio::awaitable<bool>
+        shutdownPluginsAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
 
     std::shared_ptr<agentxx::agent::AgentConfig>            agentConfig             = nullptr;
     std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext = nullptr;

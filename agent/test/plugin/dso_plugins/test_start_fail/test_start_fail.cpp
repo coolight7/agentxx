@@ -42,9 +42,9 @@ void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const cha
     if (!out) {
         return;
     }
-    const auto view = sv(text);
-    const uint64_t size = view.size;
-    auto* buffer = static_cast<char*>(host->vtable->alloc(size + 1));
+    const auto     view   = sv(text);
+    const uint64_t size   = view.size;
+    auto*          buffer = static_cast<char*>(host->vtable->alloc(size + 1));
     if (!buffer) {
         out->data = nullptr;
         out->size = 0;
@@ -52,8 +52,8 @@ void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const cha
     }
     std::memcpy(buffer, text, size);
     buffer[size] = '\0';
-    out->data = buffer;
-    out->size = size;
+    out->data    = buffer;
+    out->size    = size;
 }
 
 const void* queryIface(const AgentxxPluginHost* host, const char* iid) {
@@ -70,8 +70,8 @@ void report(const AgentxxPluginHost* host, const char* step, bool ok) {
         return;
     }
     const auto topic = sv("dso_rollback.probe");
-    char buffer[64];
-    const int length = std::snprintf(
+    char       buffer[64];
+    const int  length = std::snprintf(
         buffer,
         sizeof(buffer),
         R"({"step":"%s","ok":%s})",
@@ -89,14 +89,8 @@ const char* failStep(const AgentxxPluginHost* host, const char* step) {
     return step;
 }
 
-void* AGENTXX_PLUGIN_CALL probeToolStart(
-    void*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    probeToolStart(void*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (notify && notify->done) {
         const auto payload = sv(R"({"ok":true})");
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payload);
@@ -104,15 +98,8 @@ void* AGENTXX_PLUGIN_CALL probeToolStart(
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL probeNodeRunStart(
-    void*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    probeNodeRunStart(void*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (notify && notify->done) {
         const auto payload = sv("{}");
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payload);
@@ -124,27 +111,16 @@ void AGENTXX_PLUGIN_CALL onProbeEvent(const AgentxxPluginStringView*, void*) {
     // 回滚用例只需要"订阅存在/被撤销"这一事实；handler 本身不做任何事。
 }
 
-void* AGENTXX_PLUGIN_CALL probeHookStart(
-    void*,
-    int32_t,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    probeHookStart(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     }
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL probeCapabilityStart(
-    void*,
-    const AgentxxPluginHost*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginStringView*,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*
-) {
+void* AGENTXX_PLUGIN_CALL
+    probeCapabilityStart(void*, const AgentxxPluginHost*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     }
@@ -177,13 +153,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     if (!ctx) {
         return -1;
     }
-    ctx->host  = host;
+    ctx->host   = host;
     *plugin_ctx = ctx;
     return 0;
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
-    void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error_out
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
 ) {
     (void)notify;
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
@@ -311,9 +289,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(
-    void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+extern "C" AGENTXX_PLUGIN_EXPORT void*
+    agentxx_plugin_agent_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     }

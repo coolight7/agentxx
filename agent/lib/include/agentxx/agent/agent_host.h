@@ -153,7 +153,7 @@ public:
 
     /// 等待 agent 所属 IO executor 完成插件关闭后再移除节点。
     asio::awaitable<bool> destroyAgentAsync(
-        std::string_view agentId,
+        std::string_view          agentId,
         std::chrono::milliseconds timeout = std::chrono::seconds{30}
     );
 

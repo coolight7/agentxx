@@ -26,7 +26,7 @@ struct ScreenCaptureHolder {
     void stopStreaming();
 
     agentxx_screen_capture_plugin::ScreenCapture capture_;
-    ScreenCapturePluginCtx*                       ctx = nullptr;
+    ScreenCapturePluginCtx*                      ctx = nullptr;
 };
 
 struct ScreenCapturePluginCtx : public agentxx::plugin::PluginBase {
@@ -141,7 +141,7 @@ static agentxx::util::Json frameToJson(
 }
 
 static std::string framesResult(
-    ScreenCapturePluginCtx&                                       ctx,
+    ScreenCapturePluginCtx&                                        ctx,
     const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames,
     bool                                                           saveImages
 ) {
@@ -316,9 +316,8 @@ static void* screenCaptureAgentStart(
 }
 
 /// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
-static void* screenCaptureAgentStop(
-    ScreenCapturePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    screenCaptureAgentStop(ScreenCapturePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }

@@ -31,7 +31,7 @@ PluginGraphNode::PluginGraphNode(
     spec_(spec),
     slot_(std::move(slot)),
     generation_(generation) {
-    spec_.type = agentxx::plugin::PluginStringView::from(type_.data(), type_.size());
+    spec_.type               = agentxx::plugin::PluginStringView::from(type_.data(), type_.size());
     spec_.config_schema_json = agentxx::plugin::PluginStringView::from(
         configSchemaJson_.data(),
         configSchemaJson_.size()

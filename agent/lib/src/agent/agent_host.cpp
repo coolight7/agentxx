@@ -3,8 +3,8 @@
 #include "agentxx/agent/agent_runner.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/event/event_stream.h"
-#include "agentxx/protocol/a2a_client.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/protocol/a2a_client.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
@@ -972,9 +972,8 @@ void AgentHost::destroyAgent(std::string_view agentId) {
     }
 }
 
-asio::awaitable<bool> AgentHost::destroyAgentAsync(
-    std::string_view agentId, std::chrono::milliseconds timeout
-) {
+asio::awaitable<bool>
+    AgentHost::destroyAgentAsync(std::string_view agentId, std::chrono::milliseconds timeout) {
     // Children must close before their parent so dependency/session callbacks
     // cannot observe a parent context that has already been destroyed.
     for (auto& child : registry_.childrenOf(agentId)) {

@@ -272,10 +272,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                         Element btn = agentxx::client::renderPluginButton(desc, theme);
                         if (desc.clickable) {
                             UiHitTarget t;
-                            t.plugin   = panel->plugin;
-                            t.ownerId  = panel->id;
-                            t.actionId = desc.actionId;
-                            t.argsJson = desc.argsJson;
+                            t.plugin     = panel->plugin;
+                            t.ownerId    = panel->id;
+                            t.actionId   = desc.actionId;
+                            t.argsJson   = desc.argsJson;
                             t.generation = reg->generationOf(t.plugin);
                             hitTargets_.push_back(std::move(t));
                             btn = btn | reflect(hitTargets_.back().box);
@@ -318,10 +318,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                 Element btn = agentxx::client::renderPluginButton(desc, theme);
                 if (desc.clickable) {
                     UiHitTarget t;
-                    t.plugin   = panel->plugin;
-                    t.ownerId  = panel->id;
-                    t.actionId = desc.actionId;
-                    t.argsJson = desc.argsJson;
+                    t.plugin     = panel->plugin;
+                    t.ownerId    = panel->id;
+                    t.actionId   = desc.actionId;
+                    t.argsJson   = desc.argsJson;
                     t.generation = reg->generationOf(t.plugin);
                     hitTargets_.push_back(std::move(t));
                     btn = btn | reflect(hitTargets_.back().box);

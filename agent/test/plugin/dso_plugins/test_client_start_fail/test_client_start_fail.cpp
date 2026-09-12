@@ -41,9 +41,9 @@ void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const cha
     if (!out) {
         return;
     }
-    const auto view = sv(text);
-    const uint64_t size = view.size;
-    auto* buffer = static_cast<char*>(host->vtable->alloc(size + 1));
+    const auto     view   = sv(text);
+    const uint64_t size   = view.size;
+    auto*          buffer = static_cast<char*>(host->vtable->alloc(size + 1));
     if (!buffer) {
         out->data = nullptr;
         out->size = 0;
@@ -51,8 +51,8 @@ void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const cha
     }
     std::memcpy(buffer, text, size);
     buffer[size] = '\0';
-    out->data = buffer;
-    out->size = size;
+    out->data    = buffer;
+    out->size    = size;
 }
 
 const void* queryIface(const AgentxxPluginHost* host, const char* iid) {
@@ -64,12 +64,8 @@ void AGENTXX_PLUGIN_CALL onReadyEvent(const AgentxxPluginStringView*, void*) {
     // 回滚用例只关心订阅是否被撤销; handler 本身不做任何事。
 }
 
-int32_t AGENTXX_PLUGIN_CALL probeCommandExecute(
-    void*,
-    const AgentxxPluginStringView*,
-    AgentxxPluginString* actionOut,
-    AgentxxPluginString*
-) {
+int32_t AGENTXX_PLUGIN_CALL
+    probeCommandExecute(void*, const AgentxxPluginStringView*, AgentxxPluginString* actionOut, AgentxxPluginString*) {
     if (actionOut) {
         actionOut->data = nullptr;
         actionOut->size = 0;
@@ -78,22 +74,21 @@ int32_t AGENTXX_PLUGIN_CALL probeCommandExecute(
 }
 
 struct ProbeCtx {
-    const AgentxxPluginHost* host = nullptr;
+    const AgentxxPluginHost* host    = nullptr;
     bool                     started = false;
 };
 
 /// 注册事务: 每步注册后立即用句柄操作自检, 失败返回 false。
 bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
-    const auto* ui = static_cast<const AgentxxClientUiIface*>(
-        queryIface(host, AGENTXX_IFACE_CLIENT_UI)
-    );
+    const auto* ui
+        = static_cast<const AgentxxClientUiIface*>(queryIface(host, AGENTXX_IFACE_CLIENT_UI));
     if (!ui || !ui->register_status_item) {
         return false;
     }
 
     const auto statusInit = sv(R"({"text":"probe: 0"})");
     const auto statusId   = sv("test_client_start_fail.status");
-    auto* status = ui->register_status_item(host, &statusId, &statusInit, 0, 10);
+    auto*      status     = ui->register_status_item(host, &statusId, &statusInit, 0, 10);
     if (!status) {
         return false;
     }
@@ -107,7 +102,7 @@ bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
     }
     const auto panelId    = sv("test_client_start_fail.panel");
     const auto panelProps = sv(R"({"title":"Probe"})");
-    auto* panel = ui->register_panel(host, &panelId, &panelProps);
+    auto*      panel      = ui->register_panel(host, &panelId, &panelProps);
     if (!panel) {
         return false;
     }
@@ -121,7 +116,7 @@ bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
     }
     const auto infoId    = sv("test_client_start_fail.info");
     const auto infoProps = sv(R"({"title":"Probe Info"})");
-    auto* info = ui->register_info_section(host, &infoId, &infoProps);
+    auto*      info      = ui->register_info_section(host, &infoId, &infoProps);
     if (!info) {
         return false;
     }
@@ -139,9 +134,9 @@ bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
         return false;
     }
 
-    const auto* events = static_cast<const AgentxxClientEventsIface*>(
-        queryIface(host, AGENTXX_IFACE_CLIENT_EVENTS)
-    );
+    const auto* events
+        = static_cast<const AgentxxClientEventsIface*>(queryIface(host, AGENTXX_IFACE_CLIENT_EVENTS)
+        );
     if (!events || !events->subscribe) {
         return false;
     }
@@ -153,14 +148,16 @@ bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
 
 } // namespace
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo*
-    agentxx_plugin_client_get_info(void) {
+extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         0,
         cstrView("test_client_start_fail_plugin"),
         cstrView("1.0.0"),
-        cstrView("Test-only client plugin: fails start after full UI registration (rollback fixture)"),
+        cstrView(
+            "Test-only client plugin: fails start after full UI registration (rollback fixture)"
+        ),
     };
     return &info;
 }
@@ -181,7 +178,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 }
 
 extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(
-    void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error_out
+    void*                              plugin_ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error_out
 ) {
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (!ctx || !ctx->host) {
@@ -207,9 +206,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(
-    void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+extern "C" AGENTXX_PLUGIN_EXPORT void*
+    agentxx_plugin_client_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     }

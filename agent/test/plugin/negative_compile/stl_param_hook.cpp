@@ -11,9 +11,6 @@ using namespace agentxx::plugin;
 struct Ctx : PluginBase {};
 
 void useStlParam(Ctx& ctx) {
-    hook(
-        ctx,
-        AGENTXX_PLUGIN_HOOK_AGENT_START,
-        [](Ctx&, const std::vector<std::string>&) -> void {}
-    );
+    hook(ctx, AGENTXX_PLUGIN_HOOK_AGENT_START, [](Ctx&, const std::vector<std::string>&) -> void {
+    });
 }

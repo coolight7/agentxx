@@ -85,10 +85,10 @@ static void appendPluginItems(
                     Element btn = agentxx::client::renderPluginButton(desc, theme);
                     if (desc.clickable) {
                         TUIClientAgentIO::UiHitTarget t;
-                        t.plugin   = std::string{plugin};
-                        t.ownerId  = std::string{ownerId};
-                        t.actionId = desc.actionId;
-                        t.argsJson = desc.argsJson;
+                        t.plugin     = std::string{plugin};
+                        t.ownerId    = std::string{ownerId};
+                        t.actionId   = desc.actionId;
+                        t.argsJson   = desc.argsJson;
                         t.generation = reg ? reg->generationOf(plugin) : 0;
                         hits.push_back(std::move(t));
                         btn = btn | reflect(hits.back().box);

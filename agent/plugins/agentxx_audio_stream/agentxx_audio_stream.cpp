@@ -69,8 +69,8 @@ struct AudioStreamHolder {
     bool start(agentxx_audio_stream_plugin::AudioDataSource source, uint32_t targetProcessId);
     void stop();
 
-    agentxx_audio_stream_plugin::AudioStream stream_;
-    AudioStreamPluginCtx*                    ctx = nullptr;
+    agentxx_audio_stream_plugin::AudioStream     stream_;
+    AudioStreamPluginCtx*                        ctx = nullptr;
     agentxx_audio_stream_plugin::AudioDataSource source_
         = agentxx_audio_stream_plugin::AudioDataSource::SystemOutput;
 };
@@ -137,9 +137,9 @@ void AudioStreamHolder::stop() {
 /// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
 
 static void* audioStreamAgentStart(
-    AudioStreamPluginCtx&            ctx,
+    AudioStreamPluginCtx&              ctx,
     const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString* err
+    AgentxxPluginString*               err
 ) {
     ctx.holder      = std::make_unique<AudioStreamHolder>();
     ctx.holder->ctx = &ctx;
@@ -217,9 +217,8 @@ static void* audioStreamAgentStart(
 }
 
 /// stop: 停止采集并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
-static void* audioStreamAgentStop(
-    AudioStreamPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    audioStreamAgentStop(AudioStreamPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (ctx.holder) {
         try {
             ctx.holder->stop();

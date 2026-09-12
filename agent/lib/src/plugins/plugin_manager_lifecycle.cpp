@@ -983,8 +983,8 @@ std::shared_ptr<PluginInstance> PluginManager::makeInstance(
 
 /// create + start 都成功后的公共收尾: 应用声明式资源、冻结资源、置 Ready。
 void PluginManager::finishLoad(
-    const std::shared_ptr<PluginInstance>&  inst,
-    const plugin::PluginManifestResources&  resources
+    const std::shared_ptr<PluginInstance>& inst,
+    const plugin::PluginManifestResources& resources
 ) {
     applyDeclaredResources(*inst, resources);
     inst->resourcesFrozen = true;
@@ -1079,8 +1079,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         co_return nullptr;
     }
 
-    auto inst      = makeInstance(name, info, path, startFn, stopFn);
-    inst->dlHandle = dl;
+    auto inst        = makeInstance(name, info, path, startFn, stopFn);
+    inst->dlHandle   = dl;
     inst->interfaces = interfaces;
     if (cfg) {
         inst->args       = cfg->args;

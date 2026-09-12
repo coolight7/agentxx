@@ -1871,7 +1871,7 @@ CustomOverlay::CustomOverlay(
         if (regPtr) {
             ownerGeneration_ = regPtr->generationOf(ownerPlugin_);
         }
-        Elements    els;
+        Elements els;
         hits_.clear();
         if (items_.is_array()) {
             auto push = [&](Element el) {

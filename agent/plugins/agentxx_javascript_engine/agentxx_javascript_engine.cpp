@@ -51,10 +51,10 @@ namespace {
 
 namespace {
 
-constexpr size_t kMemoryLimit   = 64 * 1024 * 1024; ///< JS 内存上限 64MB
-constexpr size_t kStackLimit    = 512 * 1024;       ///< JS 栈上限 512KB
-constexpr size_t kTaskTimeoutMs = 60000;            ///< 单任务 (工具执行等) 超时
-constexpr int64_t kPromiseWaitLimitMs = 120000;    ///< Promise 等待上限 (绝对截止时间)
+constexpr size_t  kMemoryLimit        = 64 * 1024 * 1024; ///< JS 内存上限 64MB
+constexpr size_t  kStackLimit         = 512 * 1024;       ///< JS 栈上限 512KB
+constexpr size_t  kTaskTimeoutMs      = 60000;            ///< 单任务 (工具执行等) 超时
+constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
 /// agentxx 桥方法 magic
 enum BridgeMagic {
@@ -87,10 +87,10 @@ struct ToolExecReq {
     std::string args, tid, tcid;
     std::string result, error;
     /// Promise 被拒绝或超时: 工具调用必须映射为 FAILED (不再当成成功文本)
-    bool        failed    = false;
+    bool failed = false;
     /// 引擎停止/取消: 工具调用映射为 CANCELLED
-    bool        cancelled = false;
-    bool        done      = false;
+    bool cancelled = false;
+    bool done      = false;
 };
 
 /// 工具绑定 (注册工具时创建, 由 JsPluginCtx 持有; execute 回调期间存活
@@ -177,7 +177,9 @@ public:
 
     /// 析构: 只处理已经安全停止 (或可以同步收尾) 的对象。
     /// 宿主协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
-    ~JsEngine() { stopAndWait(); }
+    ~JsEngine() {
+        stopAndWait();
+    }
 
     // ==================== 生命周期 (start / stop) ====================
 
@@ -339,7 +341,9 @@ public:
     }
 
     /// 能力 "load" 的活动 op 占位句柄 (每实例独立; 仅作不透明非空 token)
-    void* capOpToken() { return &capOpToken_; }
+    void* capOpToken() {
+        return &capOpToken_;
+    }
 
 private:
 
@@ -411,9 +415,8 @@ public:
     /// - 完成回调由宿主在调用方 IO 线程派发, 调用期间 caller/provider lease
     ///   均被持有, 因此 engine 与其 JS 线程必然存活。
     /// - 引擎已停止时 post 失败: 不触碰 JSValue, 只释放桥 (JSContext 即将整体释放)。
-    static void AGENTXX_PLUGIN_CALL onCallToolDone(
-        void* ud, int32_t status, const AgentxxPluginStringView* payload
-    ) noexcept {
+    static void AGENTXX_PLUGIN_CALL
+        onCallToolDone(void* ud, int32_t status, const AgentxxPluginStringView* payload) noexcept {
         auto* bridge = static_cast<JsCallBridge*>(ud);
         if (!bridge || !bridge->engine) {
             return;
@@ -472,9 +475,8 @@ public:
     }
 
     /// 【JS 线程】立即拒绝 (宿主同步拒绝 call_tool_async 的路径)
-    static void rejectCallNow(
-        JSContext* ctx, JSValue resolve, JSValue reject, const std::string& msg
-    ) {
+    static void
+        rejectCallNow(JSContext* ctx, JSValue resolve, JSValue reject, const std::string& msg) {
         JSValue err = JS_NewError(ctx);
         JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, msg.c_str()));
         JSValue argv[1] = {err};
@@ -688,15 +690,14 @@ private:
             if (!pctx || pctx->deleted || !pctx->ctx) {
                 continue; // 上下文已销毁, fn 引用随 JsPluginCtx 释放
             }
-            JSValue ret = JS_Call(pctx->ctx, timer.fn, JS_UNDEFINED, 0, nullptr);
+            JSValue ret     = JS_Call(pctx->ctx, timer.fn, JS_UNDEFINED, 0, nullptr);
             auto    outcome = drivePromise(pctx->ctx, ret);
             if (outcome.kind == PromiseOutcome::Kind::Rejected) {
-                guardLog(
-                    fmt::format(
-                        "[interpreter.js] timer callback rejected: {}",
-                        rejectedText(pctx->ctx, outcome)
-                    ).c_str()
-                );
+                guardLog(fmt::format(
+                             "[interpreter.js] timer callback rejected: {}",
+                             rejectedText(pctx->ctx, outcome)
+                )
+                             .c_str());
             }
             JS_FreeValue(pctx->ctx, outcome.value);
             JS_FreeValue(pctx->ctx, ret);
@@ -947,15 +948,15 @@ private:
                 req.result = valueToJsonString(pctx->ctx, outcome.value);
                 break;
             case PromiseOutcome::Kind::Rejected:
-                req.error = rejectedText(pctx->ctx, outcome);
+                req.error  = rejectedText(pctx->ctx, outcome);
                 req.failed = true;
                 break;
             case PromiseOutcome::Kind::Timeout:
-                req.error = rejectedText(pctx->ctx, outcome);
+                req.error  = rejectedText(pctx->ctx, outcome);
                 req.failed = true;
                 break;
             case PromiseOutcome::Kind::Cancelled:
-                req.error   = rejectedText(pctx->ctx, outcome);
+                req.error     = rejectedText(pctx->ctx, outcome);
                 req.cancelled = true;
                 break;
         }
@@ -971,9 +972,9 @@ private:
         const std::string&                payload,
         const AgentxxPluginOperatorNotify notify
     ) {
-        bool        ok      = true;
+        bool        ok = true;
         std::string errText;
-        auto pctx = findPlugin(binding->plugin);
+        auto        pctx = findPlugin(binding->plugin);
         if (!pctx || pctx->deleted || !pctx->ctx) {
             ok      = false;
             errText = "js plugin unloaded";
@@ -991,11 +992,7 @@ private:
                 }
             } guard(pctx.get());
 
-            JSValue fn = JS_GetPropertyUint32(
-                pctx->ctx,
-                pctx->hooks,
-                static_cast<uint32_t>(point)
-            );
+            JSValue fn = JS_GetPropertyUint32(pctx->ctx, pctx->hooks, static_cast<uint32_t>(point));
             if (JS_IsFunction(pctx->ctx, fn)) {
                 JSValue arg = JS_ParseJSON(pctx->ctx, payload.c_str(), payload.size(), "<hook>");
                 if (JS_IsException(arg)) {
@@ -1007,8 +1004,9 @@ private:
                 if (outcome.kind != PromiseOutcome::Kind::Value) {
                     ok      = false;
                     errText = rejectedText(pctx->ctx, outcome);
-                    guardLog(fmt::format("[interpreter.js] hook callback failed: {}", errText)
-                                 .c_str());
+                    guardLog(
+                        fmt::format("[interpreter.js] hook callback failed: {}", errText).c_str()
+                    );
                 }
                 JS_FreeValue(pctx->ctx, outcome.value);
                 JS_FreeValue(pctx->ctx, ret);
@@ -1062,15 +1060,14 @@ private:
                         JS_FreeValue(pctx->ctx, arg);
                         arg = JS_NewString(pctx->ctx, payload.c_str());
                     }
-                    JSValue ret = JS_Call(pctx->ctx, handler, JS_UNDEFINED, 1, &arg);
+                    JSValue ret     = JS_Call(pctx->ctx, handler, JS_UNDEFINED, 1, &arg);
                     auto    outcome = drivePromise(pctx->ctx, ret);
                     if (outcome.kind == PromiseOutcome::Kind::Rejected) {
-                        guardLog(
-                            fmt::format(
-                                "[interpreter.js] event handler rejected: {}",
-                                rejectedText(pctx->ctx, outcome)
-                            ).c_str()
-                        );
+                        guardLog(fmt::format(
+                                     "[interpreter.js] event handler rejected: {}",
+                                     rejectedText(pctx->ctx, outcome)
+                        )
+                                     .c_str());
                     }
                     JS_FreeValue(pctx->ctx, outcome.value);
                     JS_FreeValue(pctx->ctx, ret);
@@ -1087,7 +1084,12 @@ private:
     /// Promise 驱动结果: 调用方必须据此映射 Operation 终态 ——
     /// 拒绝/超时是失败, 引擎停止是取消, 不能当成成功文本。
     struct PromiseOutcome {
-        enum class Kind { Value, Rejected, Timeout, Cancelled };
+        enum class Kind {
+            Value,
+            Rejected,
+            Timeout,
+            Cancelled
+        };
 
         Kind        kind  = Kind::Value;
         JSValue     value = JS_UNDEFINED; ///< Value=结果值; Rejected=拒绝原因 (均拥有)
@@ -1111,8 +1113,8 @@ private:
             out.value = JS_DupValue(ctx, value);
             return out;
         }
-        const auto deadline = std::chrono::steady_clock::now()
-                              + std::chrono::milliseconds(kPromiseWaitLimitMs);
+        const auto deadline
+            = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPromiseWaitLimitMs);
         while (JS_PromiseState(ctx, value) == JS_PROMISE_PENDING) {
             if (stop_.load(std::memory_order_acquire)) {
                 out.kind = PromiseOutcome::Kind::Cancelled;
@@ -1149,8 +1151,7 @@ private:
                 // job 抛出的异常同样按"拒绝"处理, 不再吞成普通字符串
                 JSValue exc = jobCtx ? JS_GetException(jobCtx) : JS_UNDEFINED;
                 out.kind    = PromiseOutcome::Kind::Rejected;
-                out.value   = JS_IsUndefined(exc) ? JS_NewString(ctx, "pending job exception")
-                                                  : exc;
+                out.value = JS_IsUndefined(exc) ? JS_NewString(ctx, "pending job exception") : exc;
                 return out;
             }
             if (rc > 0) {
@@ -1165,9 +1166,9 @@ private:
             auto                         next = nextTimerLocked();
             std::unique_lock<std::mutex> lk(mtx_);
             const uint64_t               epoch = timerEpoch_;
-            auto                         wake = (next == std::chrono::steady_clock::time_point::max())
-                                                   ? deadline
-                                                   : std::min(next, deadline);
+            auto wake = (next == std::chrono::steady_clock::time_point::max())
+                            ? deadline
+                            : std::min(next, deadline);
             cv_.wait_until(lk, wake, [&]() {
                 return stop_.load(std::memory_order_acquire) || !queue_.empty()
                        || timerEpoch_ != epoch;
@@ -1340,9 +1341,9 @@ private:
 
     /// 生命周期互斥量: 只保护引擎状态与停止完成回调 (不与 mtx_ 组成嵌套
     /// 死锁: 需要同时持有时一律先 lifecycleMtx_ 再 mtx_)。
-    mutable std::mutex                 lifecycleMtx_;
-    State                              state_ = State::Stopped;
-    std::thread                        stopper_;  ///< 停止收尾线程 (join JS 线程 + 释放 runtime)
+    mutable std::mutex lifecycleMtx_;
+    State              state_ = State::Stopped;
+    std::thread        stopper_; ///< 停止收尾线程 (join JS 线程 + 释放 runtime)
     std::vector<std::function<void()>> stopCompletions_; ///< 停止完成回调 (可能多个: 重复 stop)
 
     std::chrono::steady_clock::time_point taskStart_;
@@ -1520,13 +1521,14 @@ void* JsEngine::hookStart(
             node_input_json && node_input_json->data ? node_input_json->data : "",
             node_input_json ? static_cast<size_t>(node_input_json->size) : 0
         };
-        int pt               = static_cast<int>(point);
-        auto ntfCopy         = *notify;
+        int  pt      = static_cast<int>(point);
+        auto ntfCopy = *notify;
         if (!engine->post([engine, binding, payload, pt, ntfCopy]() {
                 if (engine->stopping()) {
                     // 停止中: 不执行插件 JS 回调, 仍按失败终结本次 hook op
-                    auto errSv
-                        = agentxx::plugin::PluginStringView::fromCstr("interpreter.js engine stopped");
+                    auto errSv = agentxx::plugin::PluginStringView::fromCstr(
+                        "interpreter.js engine stopped"
+                    );
                     ntfCopy.done(ntfCopy.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
                     return;
                 }
@@ -1790,10 +1792,11 @@ JSValue JsEngine::bridgeCall(
             JS_FreeValue(ctx, entry);
 
             // 2) 宿主插件工具: 异步互调, 完成回调经 JS 线程 settle
-            auto* bridge        = new JsCallBridge{engine, ctx, resolving[0], resolving[1]};
-            auto  nameSv        = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            auto  argsSv        = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-            auto  sidSv         = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
+            auto* bridge = new JsCallBridge{engine, ctx, resolving[0], resolving[1]};
+            auto  nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
+            auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+            auto sidSv
+                = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             AgentxxPluginString err{nullptr, 0};
             auto*               handle = iface.tools->call_tool_async(
                 host,
@@ -2031,7 +2034,7 @@ JSValue JsEngine::bridgeCall(
             t.plugin            = pctx->name;
             t.fn                = JS_DupValue(ctx, argv[0]);
             engine->timers_[id] = std::move(t);
-            ++engine->timerEpoch_;    // 定时器集合变化: 唤醒等待中的 JS 线程重算
+            ++engine->timerEpoch_; // 定时器集合变化: 唤醒等待中的 JS 线程重算
             engine->cv_.notify_all();
             return JS_NewInt32(ctx, static_cast<int32_t>(id));
         }
@@ -2105,16 +2108,14 @@ JSValue JsEngine::bridgeCall(
                 );
             }
             const bool isSkillDir = (magic == B_ADD_SKILL_DIR);
-            pctx->rollbackActions.push_back(
-                [host, resIface = iface.resources, p, isSkillDir]() {
-                    auto pSv2 = agentxx::plugin::PluginStringView::from(p.data(), p.size());
-                    if (isSkillDir) {
-                        resIface->unregister_skill_dir(host, &pSv2);
-                    } else {
-                        resIface->unregister_memory_file(host, &pSv2);
-                    }
+            pctx->rollbackActions.push_back([host, resIface = iface.resources, p, isSkillDir]() {
+                auto pSv2 = agentxx::plugin::PluginStringView::from(p.data(), p.size());
+                if (isSkillDir) {
+                    resIface->unregister_skill_dir(host, &pSv2);
+                } else {
+                    resIface->unregister_memory_file(host, &pSv2);
                 }
-            );
+            });
             return JS_TRUE;
         }
 
@@ -2447,7 +2448,7 @@ static void* AGENTXX_PLUGIN_CALL jsEngineStart(
         if (!engine->start()) {
             return setErr("interpreter.js start: JS runtime init failed");
         }
-        const AgentxxPluginHost* host = engine->host();
+        const AgentxxPluginHost*           host  = engine->host();
         const agentxx::plugin::AgentIfaces iface = agentxx::plugin::AgentIfaces::query(host);
         if (!iface.capabilities || !iface.capabilities->register_capability_ex) {
             engine->requestStop(nullptr);
@@ -2460,8 +2461,8 @@ static void* AGENTXX_PLUGIN_CALL jsEngineStart(
             // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
             // 宿主不参与; load/unload 均为异步完成 (JS 线程执行)
             auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-            int  rc = iface.capabilities
-                          ->register_capability_ex(host, &capSv, &jsCapStart, nullptr, engine);
+            int  rc    = iface.capabilities
+                         ->register_capability_ex(host, &capSv, &jsCapStart, nullptr, engine);
             if (rc != 0) {
                 // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会
                 // 等待收尾完成, 不留线程/运行时残留)

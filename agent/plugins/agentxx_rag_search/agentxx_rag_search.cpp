@@ -27,140 +27,142 @@ struct RagPluginCtx : public PluginBase {
 
 /// 注册事务 (start 的实际内容): 读取配置、构建索引并注册检索工具。
 static int32_t ragSetup(RagPluginCtx& ctx) {
-        if (!ctx.iface.model || !ctx.iface.model->get_config) {
-            ctx.log.warn(fmt::format(
-                "agentxx_rag_search: host model iface unavailable, `{}` not registered",
-                kNameSearch
-            ));
-            return 0;
+    if (!ctx.iface.model || !ctx.iface.model->get_config) {
+        ctx.log.warn(fmt::format(
+            "agentxx_rag_search: host model iface unavailable, `{}` not registered",
+            kNameSearch
+        ));
+        return 0;
+    }
+    AgentxxPluginString json{nullptr, 0};
+    ctx.iface.model->get_config(ctx.host, &json);
+    agentxx::util::Json cfg;
+    bool                hasCfg = false;
+    if (json.data) {
+        std::string cfgJson(json.data, static_cast<size_t>(json.size));
+        PluginString::free(ctx.host, &json);
+        try {
+            cfg    = agentxx::util::Json::parse(cfgJson);
+            hasCfg = true;
+        } catch (...) {
+            hasCfg = false;
         }
-        AgentxxPluginString json{nullptr, 0};
-        ctx.iface.model->get_config(ctx.host, &json);
-        agentxx::util::Json cfg;
-        bool                hasCfg = false;
-        if (json.data) {
-            std::string cfgJson(json.data, static_cast<size_t>(json.size));
-            PluginString::free(ctx.host, &json);
-            try {
-                cfg    = agentxx::util::Json::parse(cfgJson);
-                hasCfg = true;
-            } catch (...) {
-                hasCfg = false;
-            }
-        }
+    }
 
-        std::vector<std::string> ragDocsPaths;
-        std::string              baseUrl;
-        std::string              modelName;
-        if (hasCfg) {
-            baseUrl   = cfg.value("baseUrl", std::string{});
-            modelName = cfg.value("modelName", std::string{});
-            if (cfg.contains("ragDocsPaths") && cfg["ragDocsPaths"].is_array()) {
-                for (const auto& item : cfg["ragDocsPaths"]) {
-                    if (item.is_string()) {
-                        ragDocsPaths.push_back(item.get<std::string>());
-                    }
+    std::vector<std::string> ragDocsPaths;
+    std::string              baseUrl;
+    std::string              modelName;
+    if (hasCfg) {
+        baseUrl   = cfg.value("baseUrl", std::string{});
+        modelName = cfg.value("modelName", std::string{});
+        if (cfg.contains("ragDocsPaths") && cfg["ragDocsPaths"].is_array()) {
+            for (const auto& item : cfg["ragDocsPaths"]) {
+                if (item.is_string()) {
+                    ragDocsPaths.push_back(item.get<std::string>());
                 }
             }
         }
-        if (ragDocsPaths.empty()) {
-            ctx.log.info(
-                "agentxx_rag_search: `ragDocsPaths` not configured or empty, search tool skipped"
-            );
-            return 0;
-        }
-
-        ctx.store = std::make_unique<VectorStore>(makeHttpEmbedder(baseUrl, modelName));
-
-        ctx.log.info("RAG: loading documents and generating vector index ...");
-        auto docs         = ctx.store->scanDocument(ragDocsPaths);
-        auto docxSize     = docs.size();
-        bool isAddSuccess = ctx.store->addDocuments(std::move(docs));
-        ctx.log.log(
-            isAddSuccess ? 2 : 3,
-            fmt::format(
-                "RAG: loading {} documents to vector index {}",
-                docxSize,
-                isAddSuccess ? "done" : "failed"
-            )
+    }
+    if (ragDocsPaths.empty()) {
+        ctx.log.info(
+            "agentxx_rag_search: `ragDocsPaths` not configured or empty, search tool skipped"
         );
+        return 0;
+    }
 
-        if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
-            return 0;
-        }
+    ctx.store = std::make_unique<VectorStore>(makeHttpEmbedder(baseUrl, modelName));
 
-        auto schema
-            = ctx.schema(kNameSearch)
-                  .string(
-                      "query",
-                      "Search query text to find relevant documents.",
-                      /*required=*/true
-                  )
-                  .integer(
-                      "top_k",
-                      "Number of top relevant results to return (default 3, min 1, max 50).",
-                      false,
-                      3
-                  )
-                  .build();
+    ctx.log.info("RAG: loading documents and generating vector index ...");
+    auto docs         = ctx.store->scanDocument(ragDocsPaths);
+    auto docxSize     = docs.size();
+    bool isAddSuccess = ctx.store->addDocuments(std::move(docs));
+    ctx.log.log(
+        isAddSuccess ? 2 : 3,
+        fmt::format(
+            "RAG: loading {} documents to vector index {}",
+            docxSize,
+            isAddSuccess ? "done" : "failed"
+        )
+    );
 
-        blocking_tool(
-            ctx,
-            kNameSearch,
-            kDepictSearch,
-            schema,
-            [](RagPluginCtx& c,
-               std::string_view args_json,
-               const AgentxxPluginCancelToken* cancel_token) -> std::string {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("rag_search cancelled");
-                }
-                ArgReader args(args_json);
-                auto      query = args.require<std::string>("query");
-                if (!args.ok()) {
-                    return args.errorMessage();
-                }
-                int top_k = std::clamp(args.value("top_k", 3), 1, 50);
+    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+        return 0;
+    }
 
-                if (!c.store) {
-                    return R"({"error":"rag index not initialized"})";
-                }
-                auto results = c.store->search(query, static_cast<size_t>(top_k));
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("rag_search cancelled");
-                }
-                if (!results.has_value()) {
-                    return fmt::format("Search error: {}", results.error());
-                }
-                if (results->empty()) {
-                    return fmt::format("No relevant documents found for: {}", query);
-                }
+    auto schema = ctx.schema(kNameSearch)
+                      .string(
+                          "query",
+                          "Search query text to find relevant documents.",
+                          /*required=*/true
+                      )
+                      .integer(
+                          "top_k",
+                          "Number of top relevant results to return (default 3, min 1, max 50).",
+                          false,
+                          3
+                      )
+                      .build();
 
-                auto output = agentxx::util::Json::array();
-                for (const auto& [doc, contentIndex, score] : results.value()) {
-                    output.push_back({
-                        {"id",           doc.id                             },
-                        {"title",        doc.title                          },
-                        {"contentIndex", contentIndex                       },
-                        {"content",      doc.content[contentIndex]          },
-                        {"source",       doc.source                         },
-                        {"similarity",   std::round(score * 1000.0) / 1000.0},
-                    });
-                }
-                return output.dump(2);
+    blocking_tool(
+        ctx,
+        kNameSearch,
+        kDepictSearch,
+        schema,
+        [](RagPluginCtx& c, std::string_view args_json, const AgentxxPluginCancelToken* cancel_token
+        ) -> std::string {
+            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CancelledException("rag_search cancelled");
             }
-        );
+            ArgReader args(args_json);
+            auto      query = args.require<std::string>("query");
+            if (!args.ok()) {
+                return args.errorMessage();
+            }
+            int top_k = std::clamp(args.value("top_k", 3), 1, 50);
+
+            if (!c.store) {
+                return R"({"error":"rag index not initialized"})";
+            }
+            auto results = c.store->search(query, static_cast<size_t>(top_k));
+            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CancelledException("rag_search cancelled");
+            }
+            if (!results.has_value()) {
+                return fmt::format("Search error: {}", results.error());
+            }
+            if (results->empty()) {
+                return fmt::format("No relevant documents found for: {}", query);
+            }
+
+            auto output = agentxx::util::Json::array();
+            for (const auto& [doc, contentIndex, score] : results.value()) {
+                output.push_back({
+                    {"id",           doc.id                             },
+                    {"title",        doc.title                          },
+                    {"contentIndex", contentIndex                       },
+                    {"content",      doc.content[contentIndex]          },
+                    {"source",       doc.source                         },
+                    {"similarity",   std::round(score * 1000.0) / 1000.0},
+                });
+            }
+            return output.dump(2);
+        }
+    );
 
     return 0;
 }
 
 static void* ragStart(
-    RagPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    RagPluginCtx&                      ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_rag_search start: notify required"
+                ctx.host,
+                error,
+                "agentxx_rag_search start: notify required"
             );
         }
         return nullptr;
@@ -168,7 +170,9 @@ static void* ragStart(
     if (ragSetup(ctx) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_rag_search start: registration failed"
+                ctx.host,
+                error,
+                "agentxx_rag_search start: registration failed"
             );
         }
         return nullptr;
@@ -177,9 +181,8 @@ static void* ragStart(
     return nullptr;
 }
 
-static void* ragStop(
-    RagPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    ragStop(RagPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }

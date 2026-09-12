@@ -6,5 +6,7 @@ using namespace agentxx::plugin;
 struct Ctx : PluginBase {};
 
 void useBadTool(Ctx& ctx) {
-    tool(ctx, "bad.tool", "d", "{}", [](Ctx&, std::string_view, OpCtl) -> int { return 0; });
+    tool(ctx, "bad.tool", "d", "{}", [](Ctx&, std::string_view, OpCtl) -> int {
+        return 0;
+    });
 }

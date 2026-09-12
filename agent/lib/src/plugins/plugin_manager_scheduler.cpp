@@ -30,14 +30,18 @@ int32_t AGENTXX_PLUGIN_CALL isOffloadCancelled(const AgentxxPluginCancelToken* t
 } // namespace
 
 AgentxxPluginOperatorHandle* PluginManager::postCallback(
-    PluginInstance* inst, void(AGENTXX_PLUGIN_CALL* fn)(void*), void* ud
+    PluginInstance* inst,
+    void(AGENTXX_PLUGIN_CALL* fn)(void*),
+    void* ud
 ) {
     if (!inst || !fn || !isIoThread()) {
         return nullptr;
     }
     auto core = OpCore::create(runtime(), inst->self.lock(), nullptr, "scheduler post");
     try {
-        core->setCompletionHandler([fn, ud](int32_t, std::string_view) { fn(ud); });
+        core->setCompletionHandler([fn, ud](int32_t, std::string_view) {
+            fn(ud);
+        });
         core->accept();
         // OpCore always posts its completion to the IO executor, so post_to_io never
         // re-enters the caller while await_suspend is still active.
@@ -74,14 +78,16 @@ AgentxxPluginOperatorHandle* PluginManager::sleep(
 
     std::shared_ptr<OpCore> core;
     try {
-        core = OpCore::create(runtime(), owner, nullptr, "scheduler sleep");
-        auto timer = std::make_shared<asio::steady_timer>(ioExecutor_);
+        core         = OpCore::create(runtime(), owner, nullptr, "scheduler sleep");
+        auto  timer  = std::make_shared<asio::steady_timer>(ioExecutor_);
         auto* handle = core->handle();
         core->setCallback(cb, ud);
         core->setCompletionHandler([owner, handle](int32_t, std::string_view) {
             owner->sleepTimers.erase(handle);
         });
-        core->accept([timer] { timer->cancel(); });
+        core->accept([timer] {
+            timer->cancel();
+        });
         owner->sleepTimers.emplace(handle, handle->shared_from_this());
         timer->expires_after(std::chrono::milliseconds(ms));
         timer->async_wait([core, timer](const util::AsioErrorCode& ec) {
@@ -116,12 +122,8 @@ AgentxxPluginOperatorHandle* PluginManager::sleep(
 
 AgentxxPluginOperatorHandle* PluginManager::offload(
     PluginInstance* inst,
-    void*(AGENTXX_PLUGIN_CALL* work)(
-        void*, const AgentxxPluginCancelToken*, AgentxxPluginString*
-    ),
-    void(AGENTXX_PLUGIN_CALL* done)(
-        void*, int32_t, void*, const AgentxxPluginStringView*
-    ),
+    void*(AGENTXX_PLUGIN_CALL* work)(void*, const AgentxxPluginCancelToken*, AgentxxPluginString*),
+    void(AGENTXX_PLUGIN_CALL* done)(void*, int32_t, void*, const AgentxxPluginStringView*),
     void*                ud,
     AgentxxPluginString* error_out
 ) {
@@ -142,8 +144,8 @@ AgentxxPluginOperatorHandle* PluginManager::offload(
 
     std::shared_ptr<OpCore> core;
     try {
-        core = OpCore::create(runtime(), owner, nullptr, "scheduler offload");
-        auto result = std::make_shared<WorkResult>();
+        core             = OpCore::create(runtime(), owner, nullptr, "scheduler offload");
+        auto result      = std::make_shared<WorkResult>();
         auto cancelState = std::make_shared<OffloadCancelState>();
         core->setCompletionHandler([result, done, ud](int32_t status, std::string_view error) {
             if (!done) {
@@ -162,52 +164,48 @@ AgentxxPluginOperatorHandle* PluginManager::offload(
         auto ctx = agentContext_.lock();
         if (!ctx || !ctx->threadPool) {
             auto notify = core->notify();
-            auto error = PluginStringView::fromCstr("plugin offload: no thread pool");
+            auto error  = PluginStringView::fromCstr("plugin offload: no thread pool");
             notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &error);
             return core->handle();
         }
 
         AgentxxPluginCancelToken token{&isOffloadCancelled, cancelState.get()};
         try {
-            asio::post(*ctx->threadPool,
-                       [core, result, cancelState, token, work, ud]() mutable {
-                           AgentxxPluginString workError{};
-                           int32_t status = AGENTXX_PLUGIN_OPERATOR_OK;
-                           std::string error;
-                           try {
-                               result->value = work(ud, &token, &workError);
-                               if (workError.data) {
-                                   error.assign(
-                                       workError.data,
-                                       static_cast<size_t>(workError.size)
-                                   );
-                                   status = AGENTXX_PLUGIN_OPERATOR_FAILED;
-                               }
-                               if (cancelState->requested.load(std::memory_order_acquire)) {
-                                   status = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
-                               }
-                           } catch (const std::exception& e) {
-                               status = AGENTXX_PLUGIN_OPERATOR_FAILED;
-                               try {
-                                   error = e.what();
-                               } catch (...) {
-                               }
-                           } catch (...) {
-                               status = AGENTXX_PLUGIN_OPERATOR_FAILED;
-                               error = "plugin offload worker threw unknown exception";
-                           }
-                           hostMemoryFree(workError.data);
-                           auto notify = core->notify();
-                           auto view = PluginStringView::from(error);
-                           notify.done(notify.host_ud, status, &view);
-                       });
+            asio::post(*ctx->threadPool, [core, result, cancelState, token, work, ud]() mutable {
+                AgentxxPluginString workError{};
+                int32_t             status = AGENTXX_PLUGIN_OPERATOR_OK;
+                std::string         error;
+                try {
+                    result->value = work(ud, &token, &workError);
+                    if (workError.data) {
+                        error.assign(workError.data, static_cast<size_t>(workError.size));
+                        status = AGENTXX_PLUGIN_OPERATOR_FAILED;
+                    }
+                    if (cancelState->requested.load(std::memory_order_acquire)) {
+                        status = AGENTXX_PLUGIN_OPERATOR_CANCELLED;
+                    }
+                } catch (const std::exception& e) {
+                    status = AGENTXX_PLUGIN_OPERATOR_FAILED;
+                    try {
+                        error = e.what();
+                    } catch (...) {
+                    }
+                } catch (...) {
+                    status = AGENTXX_PLUGIN_OPERATOR_FAILED;
+                    error  = "plugin offload worker threw unknown exception";
+                }
+                hostMemoryFree(workError.data);
+                auto notify = core->notify();
+                auto view   = PluginStringView::from(error);
+                notify.done(notify.host_ud, status, &view);
+            });
         } catch (const std::exception& e) {
             auto notify = core->notify();
-            auto view = PluginStringView::from(e.what());
+            auto view   = PluginStringView::from(e.what());
             notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &view);
         } catch (...) {
             auto notify = core->notify();
-            auto view = PluginStringView::fromCstr("plugin offload: failed to queue worker");
+            auto view   = PluginStringView::fromCstr("plugin offload: failed to queue worker");
             notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &view);
         }
         return core->handle();

@@ -19,8 +19,8 @@
 #include "neograph/graph/engine.h"
 #include "neograph/graph/registry.h"
 #include "neograph/graph/types.h"
-#include <functional>
 #include <chrono>
+#include <functional>
 #include <memory>
 
 namespace agentxx {
@@ -91,9 +91,8 @@ public:
     virtual ~BaseAgent();
 
     /// 安全停止 Agent 插件。协程会切换到 agent IO executor 执行关闭。
-    asio::awaitable<bool> shutdownAsync(
-        std::chrono::milliseconds timeout = std::chrono::seconds{30}
-    );
+    asio::awaitable<bool>
+        shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
 
     /// 获取底层图引擎 (注意生命周期: 与 BaseAgent 共享所有权)
     neograph::graph::GraphEngine* getEngine();

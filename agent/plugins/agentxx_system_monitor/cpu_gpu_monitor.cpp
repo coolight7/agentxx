@@ -448,7 +448,7 @@ private:
     ULONGLONG prevTotalTime_ = 0;
 
     /// GPU 适配器枚举缓存 (每实例一份; 见 [GpuAdapterCache] 说明)
-    GpuAdapterCache  _adapterCache;
+    GpuAdapterCache _adapterCache;
     /// PDH 查询句柄与计数器 (每实例一份, 随实例析构释放)
     SharedPdhContext _pdh;
 };
@@ -606,9 +606,9 @@ public:
 
 protected:
 
-    CpuTimes       _sample;
+    CpuTimes _sample;
     /// GPU 枚举缓存 (每实例一份; 见 [LinuxGpuCache] 的说明)
-    LinuxGpuCache  _gpuCache;
+    LinuxGpuCache _gpuCache;
 
     static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE

@@ -216,13 +216,17 @@ int PluginManager::registerCapabilityEx(
 }
 
 AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
-    PluginInstance* caller, AgentxxPluginStringView name, AgentxxPluginStringView args_json,
-    AgentxxPluginStringView thread_id, AgentxxPluginOperatorCallback cb, void* ud,
-    AgentxxPluginString* error_out
+    PluginInstance*               caller,
+    AgentxxPluginStringView       name,
+    AgentxxPluginStringView       args_json,
+    AgentxxPluginStringView       thread_id,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    AgentxxPluginString*          error_out
 ) {
     // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。
     if (!isIoThread()) {
-        auto self = shared_from_this();
+        auto self  = shared_from_this();
         auto owner = caller ? caller->self.lock() : nullptr;
         /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
         auto admission = std::make_shared<PluginInstanceBase::InflightGuard>(owner);
@@ -230,10 +234,14 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
             hostMemorySetString(error_out, "plugin caller is closing");
             return nullptr;
         }
-        const std::string toolName = svToStr(name), args = svToStr(args_json), sid = svToStr(thread_id);
-        return ioCallSync<AgentxxPluginOperatorHandle*>(this, [self, owner, admission, toolName, args, sid, cb, ud, error_out] {
-            return self->callToolAsync(owner.get(), toolName, args, sid, cb, ud, error_out);
-        });
+        const std::string toolName = svToStr(name), args = svToStr(args_json),
+                          sid = svToStr(thread_id);
+        return ioCallSync<AgentxxPluginOperatorHandle*>(
+            this,
+            [self, owner, admission, toolName, args, sid, cb, ud, error_out] {
+                return self->callToolAsync(owner.get(), toolName, args, sid, cb, ud, error_out);
+            }
+        );
     }
     std::shared_ptr<OpCore> core;
     try {
@@ -242,28 +250,34 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
             throw std::runtime_error("call_tool_async: missing caller or IO executor");
         }
         const auto toolName = svToStr(name);
-        auto tool = std::dynamic_pointer_cast<PluginTool>(registry_->find(toolName));
-        auto provider = tool ? tool->instance() : nullptr;
-        if (!provider || !provider->enabled || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
+        auto       tool     = std::dynamic_pointer_cast<PluginTool>(registry_->find(toolName));
+        auto       provider = tool ? tool->instance() : nullptr;
+        if (!provider || !provider->enabled
+            || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
             throw std::runtime_error("call_tool_async: plugin tool not available: " + toolName);
         }
         const auto spec = tool->spec();
         if (!spec.execute_start) {
             throw std::runtime_error("call_tool_async: tool has no start callback");
         }
-        auto parsed = PluginStringView::empty(args_json) ? util::Json::object()
-                                                       : util::Json::parse(PluginStringView::str(args_json));
+        auto parsed = PluginStringView::empty(args_json)
+                          ? util::Json::object()
+                          : util::Json::parse(PluginStringView::str(args_json));
         if (!parsed.is_object()) {
             throw std::runtime_error("call_tool_async: arguments must be a JSON object");
         }
-        const auto session = svToStr(thread_id);
-        core = OpCore::create(runtime(), provider, owner, toolName);
-        const auto callId = fmt::format("plugin_call_{}", core->id());
-        parsed["sessionId"] = session;
+        const auto session     = svToStr(thread_id);
+        core                   = OpCore::create(runtime(), provider, owner, toolName);
+        const auto callId      = fmt::format("plugin_call_{}", core->id());
+        parsed["sessionId"]    = session;
         parsed["tool_call_id"] = callId;
         OpDrive drive;
-        drive.start = [spec, args = parsed.dump(), session, callId](const auto* notify, auto* error) -> void* {
-            const auto a = PluginStringView::from(args), s = PluginStringView::from(session), id = PluginStringView::from(callId);
+        drive.start = [spec,
+                       args = parsed.dump(),
+                       session,
+                       callId](const auto* notify, auto* error) -> void* {
+            const auto a = PluginStringView::from(args), s = PluginStringView::from(session),
+                       id = PluginStringView::from(callId);
             return spec.execute_start(spec.user_data, &a, &s, &id, notify, error);
         };
         drive.cancel = [spec](void* op) {
@@ -288,12 +302,16 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
 }
 
 AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
-    PluginInstance* caller, AgentxxPluginStringView capability, AgentxxPluginStringView method,
-    AgentxxPluginStringView args_json, AgentxxPluginOperatorCallback cb, void* ud,
-    AgentxxPluginString* error_out
+    PluginInstance*               caller,
+    AgentxxPluginStringView       capability,
+    AgentxxPluginStringView       method,
+    AgentxxPluginStringView       args_json,
+    AgentxxPluginOperatorCallback cb,
+    void*                         ud,
+    AgentxxPluginString*          error_out
 ) {
     if (!isIoThread()) {
-        auto self = shared_from_this();
+        auto self  = shared_from_this();
         auto owner = caller ? caller->self.lock() : nullptr;
         /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
         auto admission = std::make_shared<PluginInstanceBase::InflightGuard>(owner);
@@ -301,10 +319,14 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
             hostMemorySetString(error_out, "plugin caller is closing");
             return nullptr;
         }
-        const std::string cap = svToStr(capability), meth = svToStr(method), args = svToStr(args_json);
-        return ioCallSync<AgentxxPluginOperatorHandle*>(this, [self, owner, admission, cap, meth, args, cb, ud, error_out] {
-            return self->invokeCapabilityAsync(owner.get(), cap, meth, args, cb, ud, error_out);
-        });
+        const std::string cap = svToStr(capability), meth = svToStr(method),
+                          args = svToStr(args_json);
+        return ioCallSync<AgentxxPluginOperatorHandle*>(
+            this,
+            [self, owner, admission, cap, meth, args, cb, ud, error_out] {
+                return self->invokeCapabilityAsync(owner.get(), cap, meth, args, cb, ud, error_out);
+            }
+        );
     }
     std::shared_ptr<OpCore> core;
     try {
@@ -312,16 +334,19 @@ AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
         if (!owner || !ioExecutor_) {
             throw std::runtime_error("invoke_capability_async: missing caller or IO executor");
         }
-        const auto cap = svToStr(capability);
-        const auto* entry = capabilities_->get(cap);
-        auto provider = entry ? find(entry->provider) : nullptr;
+        const auto  cap      = svToStr(capability);
+        const auto* entry    = capabilities_->get(cap);
+        auto        provider = entry ? find(entry->provider) : nullptr;
         if (!entry || !entry->start || !provider || !provider->enabled
             || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
             throw std::runtime_error("invoke_capability_async: capability not available: " + cap);
         }
         const auto binding = *entry;
-        OpDrive drive;
-        drive.start = [binding, owner, meth = svToStr(method), args = svToStr(args_json)](const auto* notify, auto* error) -> void* {
+        OpDrive    drive;
+        drive.start = [binding,
+                       owner,
+                       meth = svToStr(method),
+                       args = svToStr(args_json)](const auto* notify, auto* error) -> void* {
             const auto m = PluginStringView::from(meth), a = PluginStringView::from(args);
             return binding.start(binding.ctx, owner->hostView(), &m, &a, notify, error);
         };

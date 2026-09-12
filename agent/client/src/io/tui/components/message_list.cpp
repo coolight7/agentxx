@@ -45,19 +45,19 @@ const agentxx::plugin::ClientToolDecor*
 ///   后台渲染请求, 本帧用通用回退; 结果写入缓存后 adapter 触发重绘, 下一帧
 ///   由缓存命中上屏 (不在 UI 线程执行插件回调, plugin.md 第 8.2 节)
 agentxx::plugin::ClientToolRenderResult queryToolRender(
-    const TUICtx&      ctx,
+    const TUICtx&         ctx,
     const TUIRenderState& st,
-    std::string_view   toolCallId,
-    std::string_view   toolName,
-    std::string_view   argsJson,
-    std::string_view   resultText,
-    bool               isFinished,
-    bool               isError,
-    int                maxWidth
+    std::string_view      toolCallId,
+    std::string_view      toolName,
+    std::string_view      argsJson,
+    std::string_view      resultText,
+    bool                  isFinished,
+    bool                  isError,
+    int                   maxWidth
 ) {
     namespace plugin = agentxx::plugin;
-    auto cache = ctx.pluginManager ? ctx.pluginManager->toolRenderCache() : nullptr;
-    auto res   = plugin::renderClientTool(
+    auto cache       = ctx.pluginManager ? ctx.pluginManager->toolRenderCache() : nullptr;
+    auto res         = plugin::renderClientTool(
         st.pluginRegistry.get(),
         cache.get(),
         toolCallId,
@@ -746,7 +746,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             // 触发该块重建, 从"通用回退"切换为插件语义内容
             if (ctx_.pluginManager && m.tool) {
                 const auto cache = ctx_.pluginManager->toolRenderCache();
-                h = combine(
+                h                = combine(
                     h,
                     cache->version(agentxx::plugin::ClientToolRenderRequest::keyFor(
                         m.tool->toolCallId,

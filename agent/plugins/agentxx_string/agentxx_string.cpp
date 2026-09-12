@@ -22,84 +22,89 @@ struct StringPluginCtx : public PluginBase {};
 
 /// 注册事务 (start 的实际内容)。
 static int32_t stringSetup(StringPluginCtx& ctx) {
-        // 1. html_to_markdown
-        auto html2mdSchema
-            = ctx.schema(kNameHtml2Md)
-                  .string("content", "The HTML string to convert.", /*required=*/true)
-                  .build();
+    // 1. html_to_markdown
+    auto html2mdSchema = ctx.schema(kNameHtml2Md)
+                             .string("content", "The HTML string to convert.", /*required=*/true)
+                             .build();
 
-        blocking_tool(
-            ctx,
-            kNameHtml2Md,
-            kDepictHtml2Md,
-            html2mdSchema,
-            [](std::string_view args_json, const AgentxxPluginCancelToken* cancel_token) -> std::string {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("html2markdown cancelled");
-                }
-                ArgReader args(args_json);
-                auto      out = htmlToMarkdownExecute(args.raw());
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("html2markdown cancelled");
-                }
-                return out;
+    blocking_tool(
+        ctx,
+        kNameHtml2Md,
+        kDepictHtml2Md,
+        html2mdSchema,
+        [](std::string_view                args_json,
+           const AgentxxPluginCancelToken* cancel_token) -> std::string {
+            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CancelledException("html2markdown cancelled");
             }
-        );
+            ArgReader args(args_json);
+            auto      out = htmlToMarkdownExecute(args.raw());
+            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CancelledException("html2markdown cancelled");
+            }
+            return out;
+        }
+    );
 
-        // 2. regexp
-        auto regexpSchema
-            = ctx.schema(kNameRegexp)
-                  .string("content", "The input text to operate on.", /*required=*/true)
-                  .stringArray(
-                      "exps",
-                      "Array of regex patterns. A match succeeds if ANY pattern matches.",
-                      /*required=*/true
-                  )
-                  .enumString(
-                      "opt",
-                      R"(Operation mode:
+    // 2. regexp
+    auto regexpSchema
+        = ctx.schema(kNameRegexp)
+              .string("content", "The input text to operate on.", /*required=*/true)
+              .stringArray(
+                  "exps",
+                  "Array of regex patterns. A match succeeds if ANY pattern matches.",
+                  /*required=*/true
+              )
+              .enumString(
+                  "opt",
+                  R"(Operation mode:
 `search`: Return all match results.
 `replace`: Replace matches with `replace_str` and return the resulting text.
 `remove`: Remove all matches and return the resulting text.)",
-                      {"search", "replace", "remove"},
-                      /*required=*/true
-                  )
-                  .string(
-                      "replace_str",
-                      "Default: empty string. The replacement string used when `opt` is `replace`.",
-                      false,
-                      ""
-                  )
-                  .build();
+                  {"search", "replace", "remove"},
+                  /*required=*/true
+              )
+              .string(
+                  "replace_str",
+                  "Default: empty string. The replacement string used when `opt` is `replace`.",
+                  false,
+                  ""
+              )
+              .build();
 
-        blocking_tool(
-            ctx,
-            kNameRegexp,
-            kDepictRegexp,
-            regexpSchema,
-            [](std::string_view args_json, const AgentxxPluginCancelToken* cancel_token) -> std::string {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("regexp cancelled");
-                }
-                ArgReader args(args_json);
-                auto      out = regexpExecute(args.raw());
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("regexp cancelled");
-                }
-                return out;
+    blocking_tool(
+        ctx,
+        kNameRegexp,
+        kDepictRegexp,
+        regexpSchema,
+        [](std::string_view                args_json,
+           const AgentxxPluginCancelToken* cancel_token) -> std::string {
+            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CancelledException("regexp cancelled");
             }
-        );
+            ArgReader args(args_json);
+            auto      out = regexpExecute(args.raw());
+            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CancelledException("regexp cancelled");
+            }
+            return out;
+        }
+    );
 
     return 0;
 }
 
 static void* stringStart(
-    StringPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    StringPluginCtx&                   ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_string start: notify required"
+                ctx.host,
+                error,
+                "agentxx_string start: notify required"
             );
         }
         return nullptr;
@@ -107,7 +112,9 @@ static void* stringStart(
     if (stringSetup(ctx) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_string start: registration failed"
+                ctx.host,
+                error,
+                "agentxx_string start: registration failed"
             );
         }
         return nullptr;
@@ -116,9 +123,8 @@ static void* stringStart(
     return nullptr;
 }
 
-static void* stringStop(
-    StringPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    stringStop(StringPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }

@@ -95,10 +95,10 @@ public:
     ///   构建阶段记录值为空 Box, 点击读最新布局位置)
     /// - 点击命中后拷贝 (plugin/ownerId/actionId/argsJson) 经 dispatchAction 投递
     struct DecorHitBox {
-        std::string                 plugin;
-        std::string                 ownerId;
-        std::string                 actionId;
-        std::string                 argsJson;
+        std::string plugin;
+        std::string ownerId;
+        std::string actionId;
+        std::string argsJson;
         /// 渲染时快照中的实例代次 (点击派发时复查; 重载同名插件后旧点击被丢弃)
         uint64_t                    generation = 0;
         std::shared_ptr<ftxui::Box> box;

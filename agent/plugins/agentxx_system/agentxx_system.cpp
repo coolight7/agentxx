@@ -26,12 +26,16 @@ static int32_t sysSetup(SysPluginCtx& ctx) {
 }
 
 static void* sysStart(
-    SysPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    SysPluginCtx&                      ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_system start: notify required"
+                ctx.host,
+                error,
+                "agentxx_system start: notify required"
             );
         }
         return nullptr;
@@ -39,7 +43,9 @@ static void* sysStart(
     if (sysSetup(ctx) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
-                ctx.host, error, "agentxx_system start: registration failed"
+                ctx.host,
+                error,
+                "agentxx_system start: registration failed"
             );
         }
         return nullptr;
@@ -48,7 +54,8 @@ static void* sysStart(
     return nullptr;
 }
 
-static void* sysStop(SysPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+static void*
+    sysStop(SysPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }

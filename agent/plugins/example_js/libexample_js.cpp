@@ -73,9 +73,8 @@ std::string scriptArgsJson(const ShellCtx& ctx) {
 
 /// 脚本加载完成 (异步 start 的收尾): 宿主 io 线程派发, 期间 caller lease
 /// 保证本实例上下文存活。
-void AGENTXX_PLUGIN_CALL onScriptLoadDone(
-    void* ud, int32_t status, const AgentxxPluginStringView* payload
-) {
+void AGENTXX_PLUGIN_CALL
+    onScriptLoadDone(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
     auto* state = static_cast<std::pair<ShellCtx*, AgentxxPluginOperatorNotify>*>(ud);
     if (!state) {
         return;
@@ -110,9 +109,8 @@ void AGENTXX_PLUGIN_CALL onScriptLoadDone(
 }
 
 /// 脚本卸载完成 (stop 事务的收尾, fire-and-forget: 结果只记录)
-void AGENTXX_PLUGIN_CALL onScriptUnloadDone(
-    void* ud, int32_t status, const AgentxxPluginStringView* payload
-) {
+void AGENTXX_PLUGIN_CALL
+    onScriptUnloadDone(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
     auto* ctx = static_cast<ShellCtx*>(ud);
     if (!ctx || status == AGENTXX_PLUGIN_OPERATOR_OK) {
         return;
@@ -137,10 +135,10 @@ void dispatchScriptUnload(ShellCtx& ctx) {
     if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability_async) {
         return;
     }
-    auto        capSv    = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-    auto        unloadSv = agentxx::plugin::PluginStringView::fromCstr("unload");
-    std::string args     = fmt::format("{{\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
-    auto        argsSv   = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+    auto                capSv    = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
+    auto                unloadSv = agentxx::plugin::PluginStringView::fromCstr("unload");
+    std::string         args     = fmt::format("{{\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
+    auto                argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     AgentxxPluginString err{nullptr, 0};
     auto*               h = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
@@ -258,7 +256,9 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 /// - 能力不可用或脚本缺失 → 返回 NULL + error (拒绝); 加载失败 → done FAILED;
 ///   两条路径都由宿主回滚本次加载, 不留注册残留。
 static void* jsShellAgentStart(
-    ShellCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    ShellCtx&                          ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     auto setErr = [&](const std::string& msg) -> void* {
         if (error) {
@@ -286,9 +286,9 @@ static void* jsShellAgentStart(
         return nullptr;
     }
 
-    std::string args   = scriptArgsJson(ctx);
-    auto        loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
-    auto        argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+    std::string         args   = scriptArgsJson(ctx);
+    auto                loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
+    auto                argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     AgentxxPluginString err{nullptr, 0};
     auto* state = new std::pair<ShellCtx*, AgentxxPluginOperatorNotify>(&ctx, *notify);
     auto* h     = ctx.iface.capabilities->invoke_capability_async(
@@ -320,9 +320,8 @@ static void* jsShellAgentStart(
 /// - 引擎已停用/卸载时卸载调用失败: 只记录, 脚本上下文由引擎的停止路径释放;
 /// - 卸载 op 自身持有本实例 caller lease, 宿主会等它完成后才 destroy;
 /// - 本函数同步完成 stop 本身 (卸载为 fire-and-forget, 无阻塞等待)。
-static void* jsShellAgentStop(
-    ShellCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    jsShellAgentStop(ShellCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     if (!notify || !notify->done) {
         return nullptr;
     }

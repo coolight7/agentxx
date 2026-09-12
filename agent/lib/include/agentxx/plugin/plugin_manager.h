@@ -52,7 +52,7 @@ struct OpCore;
 /// 插件仍持有 notify.host_ud 时也不会落到已经释放的 OpCore；第一次完成会
 /// 原子化地取走这份强引用，随后由完成包继续保活到 IO 提交结束。
 struct AgentxxPluginOperationCompletionEndpoint {
-    std::mutex                              mutex;
+    std::mutex                               mutex;
     std::shared_ptr<agentxx::plugin::OpCore> operation;
 
     std::shared_ptr<agentxx::plugin::OpCore> takeOperation() noexcept {
@@ -70,19 +70,19 @@ struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginO
     std::weak_ptr<agentxx::plugin::PluginInstanceBase> caller;
     /// 取消请求需要投递回 IO 线程执行; executor 暂时停止时由它保留请求,
     /// 使"已接受但尚未终结"的操作仍能在 executor 恢复后完成取消。
-    std::weak_ptr<agentxx::plugin::PluginRuntime> runtime;
-    asio::any_io_executor                          executor;
-    std::function<void()>                          cancelFn;
+    std::weak_ptr<agentxx::plugin::PluginRuntime>             runtime;
+    asio::any_io_executor                                     executor;
+    std::function<void()>                                     cancelFn;
     std::shared_ptr<AgentxxPluginOperationCompletionEndpoint> completionEndpoint;
-    std::atomic<bool> cancelled{false};
-    std::atomic<bool>                              completed{false};
+    std::atomic<bool>                                         cancelled{false};
+    std::atomic<bool>                                         completed{false};
 };
 
 struct AgentxxPluginSubscription {
-    std::shared_ptr<agentxx::event::EventBus>       bus;
-    std::string                                     topic;
-    size_t                                          subscriptionId = 0;
-    std::weak_ptr<agentxx::plugin::PluginInstance>  inst;
+    std::shared_ptr<agentxx::event::EventBus>      bus;
+    std::string                                    topic;
+    size_t                                         subscriptionId = 0;
+    std::weak_ptr<agentxx::plugin::PluginInstance> inst;
     void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud)
         = nullptr;
     void*             ud = nullptr;
@@ -127,7 +127,7 @@ public:
         AgentxxPluginGraphNodeRunCancelFn run_cancel = nullptr;
         void*                             user_data  = nullptr;
         std::string                       config_schema_json;
-        std::shared_ptr<GraphTypeSlot>     slot;
+        std::shared_ptr<GraphTypeSlot>    slot;
     };
 
     struct PromptBackup {
@@ -137,8 +137,8 @@ public:
         std::map<std::string, std::optional<std::string>, std::less<>> appliedAppendSystemPrompts;
         std::map<std::string, std::optional<agentxx::agent::ToolPrompt>, std::less<>> toolPrompt;
         std::map<std::string, std::optional<std::string>, std::less<>> appliedToolPromptJson;
-        std::vector<std::string>                                                      backedUpTools;
-        bool backedUpSystem = false;
+        std::vector<std::string>                                       backedUpTools;
+        bool                                                           backedUpSystem = false;
     };
 
     std::vector<std::string>                                toolNames;
@@ -149,7 +149,7 @@ public:
     std::vector<GraphNodeTypeRegistration>                  graphNodeTypes;
     /// 活跃 sleep 使用 Operation 句柄索引；完成回调开始前移除，取消查询 O(1)。
     std::unordered_map<void*, std::shared_ptr<AgentxxPluginOperatorHandle>> sleepTimers;
-    PromptBackup                                                 promptBackup;
+    PromptBackup                                                            promptBackup;
 
     std::shared_ptr<PluginMiddlewareHandle>  middleware = nullptr;
     std::vector<std::shared_ptr<PluginTool>> tools;
@@ -290,15 +290,17 @@ public:
         const plugin::PluginManifestInterfaces& interfaces = {}
     );
 
-    asio::awaitable<bool>
-        unloadAsync(std::string_view name, std::chrono::milliseconds timeout = std::chrono::seconds{30});
+    asio::awaitable<bool> unloadAsync(
+        std::string_view          name,
+        std::chrono::milliseconds timeout = std::chrono::seconds{30}
+    );
     /// 在所属 IO executor 仍运行时等待所有实例安全关闭。
     /// 失败实例保留 context/DSO，可再次调用本方法重试。
     asio::awaitable<bool>
-        shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
-    void                  disable(std::string_view name);
-    void                  enable(std::string_view name);
-    void                  flushPendingCleanup();
+         shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
+    void disable(std::string_view name);
+    void enable(std::string_view name);
+    void flushPendingCleanup();
 
     asio::awaitable<void>
         loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
@@ -451,9 +453,8 @@ public:
         emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
     }
 
-    AgentxxPluginOperatorHandle* postCallback(
-        PluginInstance* inst, void(AGENTXX_PLUGIN_CALL* fn)(void*), void* ud
-    );
+    AgentxxPluginOperatorHandle*
+        postCallback(PluginInstance* inst, void(AGENTXX_PLUGIN_CALL* fn)(void*), void* ud);
 
     AgentxxPluginOperatorHandle* sleep(
         PluginInstance*               inst,
@@ -464,12 +465,17 @@ public:
     );
     AgentxxPluginOperatorHandle* offload(
         PluginInstance* inst,
-        void*(AGENTXX_PLUGIN_CALL*
-                  work)(void* ud, const AgentxxPluginCancelToken* token,
-                        AgentxxPluginString* error_out),
-        void(AGENTXX_PLUGIN_CALL*
-                 done)(void* ud, int32_t status, void* result,
-                       const AgentxxPluginStringView* error),
+        void*(AGENTXX_PLUGIN_CALL* work)(
+            void*                           ud,
+            const AgentxxPluginCancelToken* token,
+            AgentxxPluginString*            error_out
+        ),
+        void(AGENTXX_PLUGIN_CALL* done)(
+            void*                          ud,
+            int32_t                        status,
+            void*                          result,
+            const AgentxxPluginStringView* error
+        ),
         void*                ud,
         AgentxxPluginString* error_out
     );
@@ -709,18 +715,16 @@ private:
         const plugin::PluginManifestResources& resources
     );
 
-    asio::awaitable<bool> unloadAsyncUntil(
-        std::string name,
-        std::chrono::steady_clock::time_point deadline
-    );
+    asio::awaitable<bool>
+        unloadAsyncUntil(std::string name, std::chrono::steady_clock::time_point deadline);
 
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext_;
-    std::shared_ptr<ToolRegistry>               registry_;
-    std::shared_ptr<CapabilityRegistry>         capabilities_;
+    std::weak_ptr<agentxx::agent::AgentContext>                        agentContext_;
+    std::shared_ptr<ToolRegistry>                                      registry_;
+    std::shared_ptr<CapabilityRegistry>                                capabilities_;
     std::map<std::string, std::shared_ptr<GraphTypeSlot>, std::less<>> graphTypeSlots_;
-    size_t                                      runningTurns_ = 0;
-    std::map<std::string, PromptKeyState, std::less<>> promptKeys_;
-    uint64_t                                           promptSequence_ = 0;
+    size_t                                                             runningTurns_ = 0;
+    std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
+    uint64_t                                                           promptSequence_ = 0;
 };
 
 struct NativeLoader {

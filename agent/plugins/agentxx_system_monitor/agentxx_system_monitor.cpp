@@ -110,8 +110,8 @@ struct SysMonCtx : public PluginBase {
 
     CpuGpuUsage querySync() {
         std::lock_guard<std::mutex> lock(queryMutex);
-        asio::io_context io;
-        CpuGpuUsage      usage;
+        asio::io_context            io;
+        CpuGpuUsage                 usage;
         asio::co_spawn(
             io,
             [this, &usage]() -> asio::awaitable<void> {
@@ -126,122 +126,124 @@ struct SysMonCtx : public PluginBase {
 
 /// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
 static int32_t sysMonSetup(SysMonCtx& ctx) {
-        // 1. 工具
-        auto schema = ctx.schema("agentxx_get_system_core_info").build();
-        blocking_tool(
-            ctx,
-            "agentxx_get_system_core_info",
-            "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU memory usage.",
-            schema,
-            [](SysMonCtx& c, std::string_view) -> std::string {
-                auto usage = c.querySync();
-                return formatUsageText(usage);
-            }
-        );
-
-        // 2. 能力: agentxx.system_usage
-        capability(
-            ctx,
-            "agentxx.system_usage",
-            [](SysMonCtx& c, const AgentxxPluginHost*, std::string_view, std::string_view
-            ) -> std::string {
-                auto usage = c.querySync();
-                return usageToJson(usage);
-            }
-        );
-
-        // 3. 事件订阅
-        if (ctx.iface.events && ctx.iface.events->subscribe) {
-            auto t1 = PluginStringView::fromCstr("client.agentxx_system_monitor.usage_enabled");
-            ctx.iface.events->subscribe(
-                ctx.host,
-                &t1,
-                [](const AgentxxPluginStringView* event_json, void* ud) {
-                    auto* c = static_cast<SysMonCtx*>(ud);
-                    if (!c) {
-                        return;
-                    }
-                    try {
-                        std::string s(
-                            event_json && event_json->data ? event_json->data : "{}",
-                            event_json ? static_cast<size_t>(event_json->size) : 0
-                        );
-                        auto j = agentxx::util::Json::parse(s);
-                        c->usageEnabled.store(j.value("enabled", true), std::memory_order_release);
-                    } catch (...) {
-                    }
-                },
-                &ctx
-            );
-
-            auto t2 = PluginStringView::fromCstr("agentxx_host.client_attached");
-            ctx.iface.events->subscribe(
-                ctx.host,
-                &t2,
-                [](const AgentxxPluginStringView*, void* ud) {
-                    auto* c = static_cast<SysMonCtx*>(ud);
-                    if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
-                        return;
-                    }
-                    if (!c->iface.scheduler || !c->iface.scheduler->offload) {
-                        return;
-                    }
-                    c->iface.scheduler->offload(
-                        c->host,
-                        [](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
-                            auto* c = static_cast<SysMonCtx*>(ud);
-                            return new CpuGpuUsage(c->querySync());
-                        },
-                        [](void* ud, int32_t status, void* res, const AgentxxPluginStringView*) {
-                            auto* c = static_cast<SysMonCtx*>(ud);
-                            if (status == AGENTXX_PLUGIN_OPERATOR_OK && res && c && c->host && c->iface.events
-                                && c->iface.events->publish) {
-                                auto*       u    = static_cast<CpuGpuUsage*>(res);
-                                std::string json = usageToJson(*u);
-                                auto        topicSv
-                                    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-                                auto jsonSv = PluginStringView::from(json.data(), json.size());
-                                c->iface.events->publish(c->host, &topicSv, &jsonSv);
-                                delete u;
-                            } else {
-                                delete static_cast<CpuGpuUsage*>(res);
-                            }
-                        },
-                        c,
-                        nullptr
-                    );
-                },
-                &ctx
-            );
+    // 1. 工具
+    auto schema = ctx.schema("agentxx_get_system_core_info").build();
+    blocking_tool(
+        ctx,
+        "agentxx_get_system_core_info",
+        "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU memory usage.",
+        schema,
+        [](SysMonCtx& c, std::string_view) -> std::string {
+            auto usage = c.querySync();
+            return formatUsageText(usage);
         }
+    );
 
-        // 4. 后台采样任务
-        ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> Task<void> {
-            while (!ctl.cancelled()) {
-                if (c.usageEnabled.load(std::memory_order_relaxed)) {
-                    auto usage = co_await offload(c, [&](const AgentxxPluginCancelToken*) {
-                        return c.querySync();
-                    });
-                    if (ctl.cancelled()) {
-                        break;
-                    }
+    // 2. 能力: agentxx.system_usage
+    capability(
+        ctx,
+        "agentxx.system_usage",
+        [](SysMonCtx& c, const AgentxxPluginHost*, std::string_view, std::string_view
+        ) -> std::string {
+            auto usage = c.querySync();
+            return usageToJson(usage);
+        }
+    );
 
-                    std::string json = usageToJson(usage);
-                    auto topicSv     = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-                    auto jsonSv      = PluginStringView::from(json.data(), json.size());
-                    if (c.iface.events && c.iface.events->publish) {
-                        c.iface.events->publish(c.host, &topicSv, &jsonSv);
-                    }
+    // 3. 事件订阅
+    if (ctx.iface.events && ctx.iface.events->subscribe) {
+        auto t1 = PluginStringView::fromCstr("client.agentxx_system_monitor.usage_enabled");
+        ctx.iface.events->subscribe(
+            ctx.host,
+            &t1,
+            [](const AgentxxPluginStringView* event_json, void* ud) {
+                auto* c = static_cast<SysMonCtx*>(ud);
+                if (!c) {
+                    return;
                 }
-                co_await sleep(c, kUsageIntervalSec * 1000);
-            }
-        });
+                try {
+                    std::string s(
+                        event_json && event_json->data ? event_json->data : "{}",
+                        event_json ? static_cast<size_t>(event_json->size) : 0
+                    );
+                    auto j = agentxx::util::Json::parse(s);
+                    c->usageEnabled.store(j.value("enabled", true), std::memory_order_release);
+                } catch (...) {
+                }
+            },
+            &ctx
+        );
 
-        return 0;
+        auto t2 = PluginStringView::fromCstr("agentxx_host.client_attached");
+        ctx.iface.events->subscribe(
+            ctx.host,
+            &t2,
+            [](const AgentxxPluginStringView*, void* ud) {
+                auto* c = static_cast<SysMonCtx*>(ud);
+                if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (!c->iface.scheduler || !c->iface.scheduler->offload) {
+                    return;
+                }
+                c->iface.scheduler->offload(
+                    c->host,
+                    [](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
+                        auto* c = static_cast<SysMonCtx*>(ud);
+                        return new CpuGpuUsage(c->querySync());
+                    },
+                    [](void* ud, int32_t status, void* res, const AgentxxPluginStringView*) {
+                        auto* c = static_cast<SysMonCtx*>(ud);
+                        if (status == AGENTXX_PLUGIN_OPERATOR_OK && res && c && c->host
+                            && c->iface.events && c->iface.events->publish) {
+                            auto*       u    = static_cast<CpuGpuUsage*>(res);
+                            std::string json = usageToJson(*u);
+                            auto        topicSv
+                                = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                            auto jsonSv = PluginStringView::from(json.data(), json.size());
+                            c->iface.events->publish(c->host, &topicSv, &jsonSv);
+                            delete u;
+                        } else {
+                            delete static_cast<CpuGpuUsage*>(res);
+                        }
+                    },
+                    c,
+                    nullptr
+                );
+            },
+            &ctx
+        );
+    }
+
+    // 4. 后台采样任务
+    ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> Task<void> {
+        while (!ctl.cancelled()) {
+            if (c.usageEnabled.load(std::memory_order_relaxed)) {
+                auto usage = co_await offload(c, [&](const AgentxxPluginCancelToken*) {
+                    return c.querySync();
+                });
+                if (ctl.cancelled()) {
+                    break;
+                }
+
+                std::string json    = usageToJson(usage);
+                auto        topicSv = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                auto        jsonSv  = PluginStringView::from(json.data(), json.size());
+                if (c.iface.events && c.iface.events->publish) {
+                    c.iface.events->publish(c.host, &topicSv, &jsonSv);
+                }
+            }
+            co_await sleep(c, kUsageIntervalSec * 1000);
+        }
+    });
+
+    return 0;
 }
 
 static void* sysMonStart(
-    SysMonCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    SysMonCtx&                         ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -251,11 +253,7 @@ static void* sysMonStart(
     }
     if (sysMonSetup(ctx) != 0) {
         if (error) {
-            PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_system_monitor start: registration failed"
-            );
+            PluginString::set(ctx.host, error, "agentxx_system_monitor start: registration failed");
         }
         return nullptr;
     }
@@ -263,9 +261,8 @@ static void* sysMonStart(
     return nullptr;
 }
 
-static void* sysMonStop(
-    SysMonCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    sysMonStop(SysMonCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     // 无自管线程/定时器 (采样按需在工具/能力调用内完成); 注册记录由宿主统一撤销。
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
@@ -380,111 +377,111 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
 
 /// client 侧注册事务 (start 的实际内容); 无 UI 能力时静默降级 (返回 0)。
 static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
-        if (!ctx.iface.ui) {
-            return 0;
-        }
+    if (!ctx.iface.ui) {
+        return 0;
+    }
 
-        auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-        auto propsSv = PluginStringView::fromCstr(R"({"title":"System"})");
-        ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
+    auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+    auto propsSv = PluginStringView::fromCstr(R"({"title":"System"})");
+    ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
 
-        if (ctx.iface.events && ctx.iface.events->subscribe) {
-            ctx.iface.events->subscribe(
-                ctx.host,
-                AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-                [](const AgentxxPluginStringView* payload_json, void* ud) {
-                    auto* ctx = static_cast<SysMonClientCtx*>(ud);
-                    if (!ctx || PluginStringView::empty(payload_json)) {
+    if (ctx.iface.events && ctx.iface.events->subscribe) {
+        ctx.iface.events->subscribe(
+            ctx.host,
+            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            [](const AgentxxPluginStringView* payload_json, void* ud) {
+                auto* ctx = static_cast<SysMonClientCtx*>(ud);
+                if (!ctx || PluginStringView::empty(payload_json)) {
+                    return;
+                }
+                try {
+                    auto j = agentxx::util::Json::parse(
+                        std::string_view(payload_json->data, payload_json->size)
+                    );
+                    if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
+                        || j.value("event", std::string{}) != "usage") {
                         return;
                     }
+                    if (j.contains("data") && j["data"].is_string()) {
+                        ctx->last_usage_json = j["data"].get<std::string>();
+                        refreshUsageDisplay(*ctx);
+                    }
+                } catch (...) {
+                }
+            },
+            &ctx
+        );
+    }
+
+    if (ctx.iface.ui->register_command) {
+        auto nameSv = PluginStringView::fromCstr("sysinfo");
+        auto descSv = PluginStringView::fromCstr(
+            "Toggle system resource usage display in sidebar Info section"
+        );
+        ctx.iface.ui->register_command(
+            ctx.host,
+            &nameSv,
+            &descSv,
+            [](void* ud,
+               const AgentxxPluginStringView*,
+               AgentxxPluginString* actionOut,
+               AgentxxPluginString*) -> int32_t {
+                auto* ctx = static_cast<SysMonClientCtx*>(ud);
+                if (!ctx) {
+                    return -1;
+                }
+                const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
+                ctx->usage_enabled.store(next, std::memory_order_relaxed);
+                refreshUsageDisplay(*ctx);
+                if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
+                    std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
+                    auto        evtSv   = PluginStringView::fromCstr("usage_enabled");
+                    auto        paySv   = PluginStringView::from(payload.data(), payload.size());
+                    ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
+                }
+                std::string text = next ? "System resource info: ON" : "System resource info: OFF";
+                std::string stateStr = ctx->clientState();
+                if (!stateStr.empty() && stateStr != "{}") {
                     try {
-                        auto j = agentxx::util::Json::parse(
-                            std::string_view(payload_json->data, payload_json->size)
-                        );
-                        if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
-                            || j.value("event", std::string{}) != "usage") {
-                            return;
-                        }
-                        if (j.contains("data") && j["data"].is_string()) {
-                            ctx->last_usage_json = j["data"].get<std::string>();
-                            refreshUsageDisplay(*ctx);
+                        auto st = agentxx::util::Json::parse(stateStr);
+                        if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
+                            bool found = false;
+                            for (const auto& v : st["agentPlugins"]) {
+                                if (v.is_object()
+                                    && v.value("name", std::string{}) == "agentxx_system_monitor") {
+                                    found = true;
+                                }
+                            }
+                            if (!found) {
+                                text
+                                    += " (warn: plugin missing on server side; toggle is local only)";
+                            }
                         }
                     } catch (...) {
                     }
-                },
-                &ctx
-            );
-        }
+                }
+                agentxx::util::Json out;
+                out["action"]      = "toast";
+                out["text"]        = text;
+                out["level"]       = 0;
+                std::string dumped = out.dump();
+                auto        paySv  = PluginStringView::from(dumped.data(), dumped.size());
+                if (actionOut) {
+                    *actionOut = PluginString::from(ctx->host, &paySv);
+                }
+                return 0;
+            },
+            &ctx
+        );
+    }
 
-        if (ctx.iface.ui->register_command) {
-            auto nameSv = PluginStringView::fromCstr("sysinfo");
-            auto descSv = PluginStringView::fromCstr(
-                "Toggle system resource usage display in sidebar Info section"
-            );
-            ctx.iface.ui->register_command(
-                ctx.host,
-                &nameSv,
-                &descSv,
-                [](void* ud,
-                   const AgentxxPluginStringView*,
-                   AgentxxPluginString* actionOut,
-                   AgentxxPluginString*) -> int32_t {
-                    auto* ctx = static_cast<SysMonClientCtx*>(ud);
-                    if (!ctx) {
-                        return -1;
-                    }
-                    const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
-                    ctx->usage_enabled.store(next, std::memory_order_relaxed);
-                    refreshUsageDisplay(*ctx);
-                    if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-                        std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-                        auto        evtSv   = PluginStringView::fromCstr("usage_enabled");
-                        auto        paySv = PluginStringView::from(payload.data(), payload.size());
-                        ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
-                    }
-                    std::string text
-                        = next ? "System resource info: ON" : "System resource info: OFF";
-                    std::string stateStr = ctx->clientState();
-                    if (!stateStr.empty() && stateStr != "{}") {
-                        try {
-                            auto st = agentxx::util::Json::parse(stateStr);
-                            if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
-                                bool found = false;
-                                for (const auto& v : st["agentPlugins"]) {
-                                    if (v.is_object()
-                                        && v.value("name", std::string{})
-                                               == "agentxx_system_monitor") {
-                                        found = true;
-                                    }
-                                }
-                                if (!found) {
-                                    text
-                                        += " (warn: plugin missing on server side; toggle is local only)";
-                                }
-                            }
-                        } catch (...) {
-                        }
-                    }
-                    agentxx::util::Json out;
-                    out["action"]      = "toast";
-                    out["text"]        = text;
-                    out["level"]       = 0;
-                    std::string dumped = out.dump();
-                    auto        paySv  = PluginStringView::from(dumped.data(), dumped.size());
-                    if (actionOut) {
-                        *actionOut = PluginString::from(ctx->host, &paySv);
-                    }
-                    return 0;
-                },
-                &ctx
-            );
-        }
-
-        return 0;
+    return 0;
 }
 
 static void* sysMonClientStart(
-    SysMonClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    SysMonClientCtx&                   ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -510,9 +507,8 @@ static void* sysMonClientStart(
     return nullptr;
 }
 
-static void* sysMonClientStop(
-    SysMonClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    sysMonClientStop(SysMonClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     // UI 注册与订阅由宿主在 stop 后统一撤销。
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;

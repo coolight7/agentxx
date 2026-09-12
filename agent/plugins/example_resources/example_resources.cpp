@@ -143,11 +143,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 /// - `destroy`: 只释放本地内存, 不创建异步工作、不调用宿主注册接口。
 
 static void* resAgentStart(
-    ResCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* error
+    ResCtx&                            ctx,
+    const AgentxxPluginOperatorNotify* notify,
+    AgentxxPluginString*               error
 ) {
     if (!notify) {
         if (error) {
-            agentxx::plugin::PluginString::set(ctx.host, error, "example_resources start: notify required");
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_resources start: notify required"
+            );
         }
         return nullptr;
     }
@@ -158,7 +164,7 @@ static void* resAgentStart(
     //   start 事务本身仍成功, 已生效的注册由宿主在 stop 后统一撤销。
     if (ctx.iface.resources && ctx.iface.resources->register_skill_dir && ctx.iface.log
         && ctx.iface.log->log) {
-        auto base                   = dirOf(ownInfoString(host, ctx.iface, "path"));
+        auto        base            = dirOf(ownInfoString(host, ctx.iface, "path"));
         std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
         auto        skillDirSv      = agentxx::plugin::PluginStringView::from(
             runtimeSkillDir.data(),
@@ -184,16 +190,16 @@ static void* resAgentStart(
     // agentxx::plugin::PluginStringView::from(spec.data(), spec.size()));
 
     if (ctx.iface.log && ctx.iface.log->log) {
-        auto infoSv = agentxx::plugin::PluginStringView::fromCstr("[example_resources] plugin started");
+        auto infoSv
+            = agentxx::plugin::PluginStringView::fromCstr("[example_resources] plugin started");
         ctx.iface.log->log(host, 2, &infoSv);
     }
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-static void* resAgentStop(
-    ResCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    resAgentStop(ResCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -210,6 +216,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
                 ctx->logErr(m);
             }
         },
-        [&] { delete ctx; }
+        [&] {
+            delete ctx;
+        }
     );
 }

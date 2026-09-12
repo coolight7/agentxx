@@ -12,7 +12,12 @@ void useBadPolledTool(Ctx& ctx) {
         "bad.polled",
         "d",
         "{}",
-        [](Ctx&, std::string_view, std::string_view, std::string_view, const AgentxxPluginCancelToken*)
-            -> std::string { return {}; }
+        [](Ctx&,
+           std::string_view,
+           std::string_view,
+           std::string_view,
+           const AgentxxPluginCancelToken*) -> std::string {
+            return {};
+        }
     );
 }

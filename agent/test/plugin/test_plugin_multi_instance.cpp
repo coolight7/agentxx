@@ -322,11 +322,10 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
 
                 // 卸载 A: A 的采样任务被取消并回收, B 的实例与任务不受影响
-                XX_TEST_EXPECT_TRUE(
-                    co_await ctxA->pluginManager->unloadAsync(
-                        "agentxx_system_monitor", std::chrono::seconds{10}
-                    )
-                );
+                XX_TEST_EXPECT_TRUE(co_await ctxA->pluginManager->unloadAsync(
+                    "agentxx_system_monitor",
+                    std::chrono::seconds{10}
+                ));
                 XX_TEST_EXPECT_EQ(monA->lifetime->leaseCount(), size_t{0});
                 XX_TEST_EXPECT_FALSE(ctxA->toolRegistry->contains("agentxx_get_system_core_info"));
                 XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
@@ -339,11 +338,10 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                     auto out = co_await toolB->execute_async(agentxx::util::Json::object());
                     XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
                 }
-                XX_TEST_EXPECT_TRUE(
-                    co_await ctxB->pluginManager->unloadAsync(
-                        "agentxx_system_monitor", std::chrono::seconds{10}
-                    )
-                );
+                XX_TEST_EXPECT_TRUE(co_await ctxB->pluginManager->unloadAsync(
+                    "agentxx_system_monitor",
+                    std::chrono::seconds{10}
+                ));
                 XX_TEST_EXPECT_FALSE(ctxB->toolRegistry->contains("agentxx_get_system_core_info"));
             }
         }
@@ -372,8 +370,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             auto scriptB = co_await ctxB->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(scriptB != nullptr);
             for (int i = 0; i < 40
-                 && (!ctxA->toolRegistry->contains("js_hello")
-                     || !ctxB->toolRegistry->contains("js_hello"));
+                            && (!ctxA->toolRegistry->contains("js_hello")
+                                || !ctxB->toolRegistry->contains("js_hello"));
                  ++i) {
                 co_await sleepMsMI(25);
             }
@@ -384,8 +382,12 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             auto toolA = ctxA->toolRegistry->find("js_hello");
             auto toolB = ctxB->toolRegistry->find("js_hello");
             if (toolA && toolB) {
-                auto outA = co_await toolA->execute_async(agentxx::util::Json{{"name", "mi-A"}});
-                auto outB = co_await toolB->execute_async(agentxx::util::Json{{"name", "mi-B"}});
+                auto outA = co_await toolA->execute_async(agentxx::util::Json{
+                    {"name", "mi-A"}
+                });
+                auto outB = co_await toolB->execute_async(agentxx::util::Json{
+                    {"name", "mi-B"}
+                });
                 XX_TEST_EXPECT_TRUE(outA.find("mi-A") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(outB.find("mi-B") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(outA.find("mi-B") == std::string::npos);
@@ -404,8 +406,9 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
             auto toolB2 = ctxB->toolRegistry->find("js_hello");
             if (toolB2) {
-                auto outB2 = co_await toolB2->execute_async(agentxx::util::Json{{"name", "mi-B2"}}
-                );
+                auto outB2 = co_await toolB2->execute_async(agentxx::util::Json{
+                    {"name", "mi-B2"}
+                });
                 XX_TEST_EXPECT_TRUE(outB2.find("mi-B2") != std::string::npos);
             }
 
@@ -419,21 +422,19 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
 
             // A 卸载引擎 (级联脚本插件) → B 仍可调用能力与工具
-            XX_TEST_EXPECT_TRUE(
-                co_await ctxA->pluginManager->unloadAsync(
-                    "agentxx_javascript_engine", std::chrono::seconds{30}
-                )
-            );
+            XX_TEST_EXPECT_TRUE(co_await ctxA->pluginManager->unloadAsync(
+                "agentxx_javascript_engine",
+                std::chrono::seconds{30}
+            ));
             XX_TEST_EXPECT_TRUE(ctxA->pluginManager->find("agentxx_javascript_engine") == nullptr);
             XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("interpreter.js"));
             XX_TEST_EXPECT_TRUE(ctxB->pluginManager->find("agentxx_javascript_engine") == jsB);
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
 
-            XX_TEST_EXPECT_TRUE(
-                co_await ctxB->pluginManager->unloadAsync(
-                    "agentxx_javascript_engine", std::chrono::seconds{30}
-                )
-            );
+            XX_TEST_EXPECT_TRUE(co_await ctxB->pluginManager->unloadAsync(
+                "agentxx_javascript_engine",
+                std::chrono::seconds{30}
+            ));
             XX_TEST_EXPECT_TRUE(ctxB->pluginManager->find("example_js") == nullptr);
             XX_TEST_EXPECT_FALSE(ctxB->toolRegistry->contains("js_hello"));
         }

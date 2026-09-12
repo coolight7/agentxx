@@ -417,7 +417,7 @@ T ioCallSync(Mgr* mgr, std::function<T()> fn) {
     if (mgr->isIoThread()) {
         return fn();
     }
-    auto p = std::make_shared<std::promise<T>>();
+    auto p   = std::make_shared<std::promise<T>>();
     auto fut = p->get_future();
     mgr->postToIo([p, fn = std::move(fn)]() {
         try {
@@ -439,7 +439,7 @@ void ioCallSyncVoid(Mgr* mgr, std::function<void()> fn) {
         fn();
         return;
     }
-    auto p = std::make_shared<std::promise<void>>();
+    auto p   = std::make_shared<std::promise<void>>();
     auto fut = p->get_future();
     mgr->postToIo([p, fn = std::move(fn)]() {
         try {

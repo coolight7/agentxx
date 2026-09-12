@@ -37,8 +37,7 @@ static std::string findTextSelectionPluginPath() {
     DWORD   n         = ::GetModuleFileNameW(nullptr, buf, 4096);
     if (n > 0 && n < 4096) {
         candidates.push_back(
-            std::filesystem::path(buf, buf + n).parent_path()
-            / "plugins"
+            std::filesystem::path(buf, buf + n).parent_path() / "plugins"
             / "agentxx_text_selection_monitor"
         );
     }

@@ -407,14 +407,18 @@ int PluginManager::registerGraphNodeType(
         return -1;
     }
     std::string type{spec->type.data, spec->type.size};
-    auto shared = inst->self.lock();
+    auto        shared = inst->self.lock();
     if (!shared) {
         return -1;
     }
     auto slotIt = graphTypeSlots_.find(type);
     if (slotIt == graphTypeSlots_.end()) {
         if (ctx->graphRegistry->contains_type(type)) {
-            XX_LOGW("Plugin `{}` graph node type `{}` conflicts with existing type", inst->name, type);
+            XX_LOGW(
+                "Plugin `{}` graph node type `{}` conflicts with existing type",
+                inst->name,
+                type
+            );
             return -1;
         }
         slotIt = graphTypeSlots_.emplace(type, std::make_shared<GraphTypeSlot>()).first;
@@ -455,16 +459,18 @@ int PluginManager::registerGraphNodeType(
             : std::string{},
         slot,
     });
-    auto& registration = inst->graphNodeTypes.back();
+    auto&                          registration = inst->graphNodeTypes.back();
     AgentxxPluginGraphNodeTypeSpec slotSpec{};
     slotSpec.type = agentxx::plugin::PluginStringView::from(
-        registration.type.data(), registration.type.size()
+        registration.type.data(),
+        registration.type.size()
     );
-    slotSpec.run_start = registration.run_start;
-    slotSpec.run_cancel = registration.run_cancel;
-    slotSpec.user_data = registration.user_data;
+    slotSpec.run_start          = registration.run_start;
+    slotSpec.run_cancel         = registration.run_cancel;
+    slotSpec.user_data          = registration.user_data;
     slotSpec.config_schema_json = agentxx::plugin::PluginStringView::from(
-        registration.config_schema_json.data(), registration.config_schema_json.size()
+        registration.config_schema_json.data(),
+        registration.config_schema_json.size()
     );
     slot->activate(shared, slotSpec, inst->lifetime ? inst->lifetime->generation() : 0);
 

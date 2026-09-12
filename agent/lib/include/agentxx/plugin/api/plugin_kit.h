@@ -2312,7 +2312,8 @@ inline void advanceRootOnce(std::coroutine_handle<Promise> h) noexcept {
 /// 被放弃的根 (宿主拒绝驱动) 不再恢复: 直接返回, 帧由引用释放路径销毁。
 template<typename Promise>
 inline void resumePluginCoroutine(
-    detail::PollOneBridge* bridge, std::coroutine_handle<Promise> handle
+    detail::PollOneBridge*         bridge,
+    std::coroutine_handle<Promise> handle
 ) noexcept {
     std::weak_ptr<detail::BridgeRoot> weakRoot = handle.promise().bridgeRoot_;
     bridge->postToLocal([handle, weakRoot] {
@@ -4502,10 +4503,8 @@ inline void polled_tool(
             job->root->claimFinish();
             job->root->runCleanup();
             if (error_out) {
-                *error_out = PluginString::fromCstr(
-                    c.host,
-                    "polled tool: failed to schedule coroutine"
-                );
+                *error_out
+                    = PluginString::fromCstr(c.host, "polled tool: failed to schedule coroutine");
             }
             return nullptr;
         }
@@ -5529,15 +5528,16 @@ inline void* callLifecycleEntry(
 
 /// create 阶段异常上报 (上下文可能尚未构造成功, 直接经宿主日志接口输出)
 inline void logCreateFailure(
-    const AgentxxPluginHost* host, std::string_view plugin, std::string_view msg
+    const AgentxxPluginHost* host,
+    std::string_view         plugin,
+    std::string_view         msg
 ) noexcept {
     if (!host || !host->vtable || !host->vtable->query_interface) {
         return;
     }
-    auto  iid   = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG);
-    auto* iface = static_cast<const AgentxxPluginLogIface*>(
-        host->vtable->query_interface(host, &iid)
-    );
+    auto  iid = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_LOG);
+    auto* iface
+        = static_cast<const AgentxxPluginLogIface*>(host->vtable->query_interface(host, &iid));
     if (!iface || !iface->log) {
         return;
     }
@@ -5548,15 +5548,16 @@ inline void logCreateFailure(
 
 /// client 侧 create 阶段异常上报 (client 日志接口表为独立类型)
 inline void logClientCreateFailure(
-    const AgentxxPluginHost* host, std::string_view plugin, std::string_view msg
+    const AgentxxPluginHost* host,
+    std::string_view         plugin,
+    std::string_view         msg
 ) noexcept {
     if (!host || !host->vtable || !host->vtable->query_interface) {
         return;
     }
-    auto  iid   = PluginStringView::fromCstr(AGENTXX_IFACE_CLIENT_LOG);
-    auto* iface = static_cast<const AgentxxClientLogIface*>(
-        host->vtable->query_interface(host, &iid)
-    );
+    auto  iid = PluginStringView::fromCstr(AGENTXX_IFACE_CLIENT_LOG);
+    auto* iface
+        = static_cast<const AgentxxClientLogIface*>(host->vtable->query_interface(host, &iid));
     if (!iface || !iface->log) {
         return;
     }
@@ -5577,70 +5578,74 @@ inline void logClientCreateFailure(
 ///
 /// `StartFn` / `StopFn` 形如
 /// `void*(CtxType&, const AgentxxPluginOperatorNotify*, AgentxxPluginString* error_out)`。
-#define AGENTXX_PLUGIN_AGENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)                    \
+#define AGENTXX_PLUGIN_AGENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)                   \
     extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void \
-    ) {                                                                                           \
-        static const AgentxxPluginInfo info{                                                      \
-            AGENTXX_PLUGIN_API_VERSION,                                                           \
-            0,                                                                                    \
-            agentxx::plugin::PluginStringView::fromCstr(Name),                                    \
-            agentxx::plugin::PluginStringView::fromCstr(Ver),                                     \
-            agentxx::plugin::PluginStringView::fromCstr(Desc),                                    \
-        };                                                                                        \
-        return &info;                                                                             \
-    }                                                                                             \
-    extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                                      \
-        agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {           \
-        if (!host || !plugin_ctx) {                                                               \
-            return -1;                                                                            \
-        }                                                                                         \
-        try {                                                                                     \
-            auto ctx = std::make_unique<CtxType>();                                               \
-            ctx->init(host);                                                                      \
-            *plugin_ctx = ctx.release();                                                          \
-            return 0;                                                                             \
-        } catch (const std::exception& e) {                                                       \
-            agentxx::plugin::logCreateFailure(host, Name, e.what());                              \
-        } catch (...) {                                                                           \
-            agentxx::plugin::logCreateFailure(host, Name, "unknown exception");                   \
-        }                                                                                         \
-        return -1;                                                                                \
-    }                                                                                             \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(                            \
-        void*                              plugin_ctx,                                            \
-        const AgentxxPluginOperatorNotify* notify,                                                \
-        AgentxxPluginString*               err                                                    \
-    ) {                                                                                           \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
-        return agentxx::plugin::detail::callLifecycleEntry(                                       \
-            ctx ? ctx->host : nullptr,                                                            \
-            plugin_ctx,                                                                           \
-            notify,                                                                               \
-            err,                                                                                  \
-            "plugin start",                                                                       \
-            [&]() -> void* { return (StartFn)(*ctx, notify, err); }                               \
-        );                                                                                        \
-    }                                                                                             \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(                             \
-        void*                              plugin_ctx,                                            \
-        const AgentxxPluginOperatorNotify* notify,                                                \
-        AgentxxPluginString*               err                                                    \
-    ) {                                                                                           \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
-        return agentxx::plugin::detail::callLifecycleEntry(                                       \
-            ctx ? ctx->host : nullptr,                                                            \
-            plugin_ctx,                                                                           \
-            notify,                                                                               \
-            err,                                                                                  \
-            "plugin stop",                                                                        \
-            [&]() -> void* { return (StopFn)(*ctx, notify, err); }                                \
-        );                                                                                        \
-    }                                                                                             \
-    extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {        \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
-        if (ctx) {                                                                                \
-            delete ctx;                                                                           \
-        }                                                                                         \
+    ) {                                                                                          \
+        static const AgentxxPluginInfo info{                                                     \
+            AGENTXX_PLUGIN_API_VERSION,                                                          \
+            0,                                                                                   \
+            agentxx::plugin::PluginStringView::fromCstr(Name),                                   \
+            agentxx::plugin::PluginStringView::fromCstr(Ver),                                    \
+            agentxx::plugin::PluginStringView::fromCstr(Desc),                                   \
+        };                                                                                       \
+        return &info;                                                                            \
+    }                                                                                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                                     \
+        agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {          \
+        if (!host || !plugin_ctx) {                                                              \
+            return -1;                                                                           \
+        }                                                                                        \
+        try {                                                                                    \
+            auto ctx = std::make_unique<CtxType>();                                              \
+            ctx->init(host);                                                                     \
+            *plugin_ctx = ctx.release();                                                         \
+            return 0;                                                                            \
+        } catch (const std::exception& e) {                                                      \
+            agentxx::plugin::logCreateFailure(host, Name, e.what());                             \
+        } catch (...) {                                                                          \
+            agentxx::plugin::logCreateFailure(host, Name, "unknown exception");                  \
+        }                                                                                        \
+        return -1;                                                                               \
+    }                                                                                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(                           \
+        void*                              plugin_ctx,                                           \
+        const AgentxxPluginOperatorNotify* notify,                                               \
+        AgentxxPluginString*               err                                                   \
+    ) {                                                                                          \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                           \
+        return agentxx::plugin::detail::callLifecycleEntry(                                      \
+            ctx ? ctx->host : nullptr,                                                           \
+            plugin_ctx,                                                                          \
+            notify,                                                                              \
+            err,                                                                                 \
+            "plugin start",                                                                      \
+            [&]() -> void* {                                                                     \
+                return (StartFn)(*ctx, notify, err);                                             \
+            }                                                                                    \
+        );                                                                                       \
+    }                                                                                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(                            \
+        void*                              plugin_ctx,                                           \
+        const AgentxxPluginOperatorNotify* notify,                                               \
+        AgentxxPluginString*               err                                                   \
+    ) {                                                                                          \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                           \
+        return agentxx::plugin::detail::callLifecycleEntry(                                      \
+            ctx ? ctx->host : nullptr,                                                           \
+            plugin_ctx,                                                                          \
+            notify,                                                                              \
+            err,                                                                                 \
+            "plugin stop",                                                                       \
+            [&]() -> void* {                                                                     \
+                return (StopFn)(*ctx, notify, err);                                              \
+            }                                                                                    \
+        );                                                                                       \
+    }                                                                                            \
+    extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {       \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                           \
+        if (ctx) {                                                                               \
+            delete ctx;                                                                          \
+        }                                                                                        \
     }
 
 /// 只导出 start/stop 两个入口 (供手写 create/destroy 的插件使用)。
@@ -5649,70 +5654,78 @@ inline void logClientCreateFailure(
 /// 它们手写 `agentxx_plugin_agent_create` / `agentxx_plugin_agent_destroy`, 但仍用本宏
 /// 生成带异常兜底的 start/stop trampoline —— 与 [AGENTXX_PLUGIN_AGENT_EXPORT] 的生命周期
 /// 部分同语义。
-#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                         \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(                          \
-        void*                              plugin_ctx,                                          \
-        const AgentxxPluginOperatorNotify* notify,                                              \
-        AgentxxPluginString*               err                                                  \
-    ) {                                                                                         \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        return agentxx::plugin::detail::callLifecycleEntry(                                     \
-            ctx ? ctx->host : nullptr,                                                          \
-            plugin_ctx,                                                                         \
-            notify,                                                                             \
-            err,                                                                                \
-            "plugin start",                                                                     \
-            [&]() -> void* { return (StartFn)(*ctx, notify, err); }                             \
-        );                                                                                      \
-    }                                                                                           \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(                           \
-        void*                              plugin_ctx,                                          \
-        const AgentxxPluginOperatorNotify* notify,                                              \
-        AgentxxPluginString*               err                                                  \
-    ) {                                                                                         \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        return agentxx::plugin::detail::callLifecycleEntry(                                     \
-            ctx ? ctx->host : nullptr,                                                          \
-            plugin_ctx,                                                                         \
-            notify,                                                                             \
-            err,                                                                                \
-            "plugin stop",                                                                      \
-            [&]() -> void* { return (StopFn)(*ctx, notify, err); }                              \
-        );                                                                                      \
+#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn) \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(  \
+        void*                              plugin_ctx,                  \
+        const AgentxxPluginOperatorNotify* notify,                      \
+        AgentxxPluginString*               err                          \
+    ) {                                                                 \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                  \
+        return agentxx::plugin::detail::callLifecycleEntry(             \
+            ctx ? ctx->host : nullptr,                                  \
+            plugin_ctx,                                                 \
+            notify,                                                     \
+            err,                                                        \
+            "plugin start",                                             \
+            [&]() -> void* {                                            \
+                return (StartFn)(*ctx, notify, err);                    \
+            }                                                           \
+        );                                                              \
+    }                                                                   \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_stop(   \
+        void*                              plugin_ctx,                  \
+        const AgentxxPluginOperatorNotify* notify,                      \
+        AgentxxPluginString*               err                          \
+    ) {                                                                 \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                  \
+        return agentxx::plugin::detail::callLifecycleEntry(             \
+            ctx ? ctx->host : nullptr,                                  \
+            plugin_ctx,                                                 \
+            notify,                                                     \
+            err,                                                        \
+            "plugin stop",                                              \
+            [&]() -> void* {                                            \
+                return (StopFn)(*ctx, notify, err);                     \
+            }                                                           \
+        );                                                              \
     }
 
 /// Client 侧只导出 start/stop 两个入口 (与
 /// [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 对称)。
-#define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn)                        \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(                         \
-        void*                              plugin_ctx,                                          \
-        const AgentxxPluginOperatorNotify* notify,                                              \
-        AgentxxPluginString*               err                                                  \
-    ) {                                                                                         \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        return agentxx::plugin::detail::callLifecycleEntry(                                     \
-            ctx ? ctx->host : nullptr,                                                          \
-            plugin_ctx,                                                                         \
-            notify,                                                                             \
-            err,                                                                                \
-            "client plugin start",                                                              \
-            [&]() -> void* { return (StartFn)(*ctx, notify, err); }                             \
-        );                                                                                      \
-    }                                                                                           \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(                          \
-        void*                              plugin_ctx,                                          \
-        const AgentxxPluginOperatorNotify* notify,                                              \
-        AgentxxPluginString*               err                                                  \
-    ) {                                                                                         \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        return agentxx::plugin::detail::callLifecycleEntry(                                     \
-            ctx ? ctx->host : nullptr,                                                          \
-            plugin_ctx,                                                                         \
-            notify,                                                                             \
-            err,                                                                                \
-            "client plugin stop",                                                               \
-            [&]() -> void* { return (StopFn)(*ctx, notify, err); }                              \
-        );                                                                                      \
+#define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn) \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(  \
+        void*                              plugin_ctx,                   \
+        const AgentxxPluginOperatorNotify* notify,                       \
+        AgentxxPluginString*               err                           \
+    ) {                                                                  \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                   \
+        return agentxx::plugin::detail::callLifecycleEntry(              \
+            ctx ? ctx->host : nullptr,                                   \
+            plugin_ctx,                                                  \
+            notify,                                                      \
+            err,                                                         \
+            "client plugin start",                                       \
+            [&]() -> void* {                                             \
+                return (StartFn)(*ctx, notify, err);                     \
+            }                                                            \
+        );                                                               \
+    }                                                                    \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(   \
+        void*                              plugin_ctx,                   \
+        const AgentxxPluginOperatorNotify* notify,                       \
+        AgentxxPluginString*               err                           \
+    ) {                                                                  \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                   \
+        return agentxx::plugin::detail::callLifecycleEntry(              \
+            ctx ? ctx->host : nullptr,                                   \
+            plugin_ctx,                                                  \
+            notify,                                                      \
+            err,                                                         \
+            "client plugin stop",                                        \
+            [&]() -> void* {                                             \
+                return (StopFn)(*ctx, notify, err);                      \
+            }                                                            \
+        );                                                               \
     }
 
 /// Client 侧插件入口导出 (与 [AGENTXX_PLUGIN_AGENT_EXPORT] 对称)。
@@ -5721,70 +5734,74 @@ inline void logClientCreateFailure(
 /// `void*(CtxType&, const AgentxxPluginOperatorNotify*, AgentxxPluginString* error_out)`;
 /// start 里做 UI 项/命令/订阅注册, stop 里撤销插件自管资源 (线程/定时器/订阅)。
 /// 纯 UI 插件 (无 agent 侧入口) 只导出 get_info + 下列四个入口即可。
-#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)               \
-    extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo*                           \
-        agentxx_plugin_client_get_info(void) {                                                \
-        static const AgentxxClientPluginInfo info{                                            \
-            AGENTXX_CLIENT_PLUGIN_API_VERSION,                                                \
-            0,                                                                                \
-            agentxx::plugin::PluginStringView::fromCstr(Name),                                \
-            agentxx::plugin::PluginStringView::fromCstr(Ver),                                 \
-            agentxx::plugin::PluginStringView::fromCstr(Desc),                                \
-        };                                                                                    \
-        return &info;                                                                         \
-    }                                                                                         \
-    extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                                  \
-        agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {      \
-        if (!host || !plugin_ctx) {                                                           \
-            return -1;                                                                        \
-        }                                                                                     \
-        try {                                                                                 \
-            auto ctx = std::make_unique<CtxType>();                                           \
-            ctx->init(host);                                                                  \
-            *plugin_ctx = ctx.release();                                                      \
-            return 0;                                                                         \
-        } catch (const std::exception& e) {                                                   \
-            agentxx::plugin::logClientCreateFailure(host, Name, e.what());                    \
-        } catch (...) {                                                                       \
-            agentxx::plugin::logClientCreateFailure(host, Name, "unknown exception");         \
-        }                                                                                     \
-        return -1;                                                                            \
-    }                                                                                         \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(                       \
-        void*                              plugin_ctx,                                        \
-        const AgentxxPluginOperatorNotify* notify,                                            \
-        AgentxxPluginString*               err                                                \
-    ) {                                                                                       \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
-        return agentxx::plugin::detail::callLifecycleEntry(                                   \
-            ctx ? ctx->host : nullptr,                                                        \
-            plugin_ctx,                                                                       \
-            notify,                                                                           \
-            err,                                                                              \
-            "client plugin start",                                                            \
-            [&]() -> void* { return (StartFn)(*ctx, notify, err); }                           \
-        );                                                                                    \
-    }                                                                                         \
-    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(                        \
-        void*                              plugin_ctx,                                        \
-        const AgentxxPluginOperatorNotify* notify,                                            \
-        AgentxxPluginString*               err                                                \
-    ) {                                                                                       \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
-        return agentxx::plugin::detail::callLifecycleEntry(                                   \
-            ctx ? ctx->host : nullptr,                                                        \
-            plugin_ctx,                                                                       \
-            notify,                                                                           \
-            err,                                                                              \
-            "client plugin stop",                                                             \
-            [&]() -> void* { return (StopFn)(*ctx, notify, err); }                            \
-        );                                                                                    \
-    }                                                                                         \
-    extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {   \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
-        if (ctx) {                                                                            \
-            delete ctx;                                                                       \
-        }                                                                                     \
+#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)             \
+    extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo*                         \
+        agentxx_plugin_client_get_info(void) {                                              \
+        static const AgentxxClientPluginInfo info{                                          \
+            AGENTXX_CLIENT_PLUGIN_API_VERSION,                                              \
+            0,                                                                              \
+            agentxx::plugin::PluginStringView::fromCstr(Name),                              \
+            agentxx::plugin::PluginStringView::fromCstr(Ver),                               \
+            agentxx::plugin::PluginStringView::fromCstr(Desc),                              \
+        };                                                                                  \
+        return &info;                                                                       \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT int32_t                                                \
+        agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {    \
+        if (!host || !plugin_ctx) {                                                         \
+            return -1;                                                                      \
+        }                                                                                   \
+        try {                                                                               \
+            auto ctx = std::make_unique<CtxType>();                                         \
+            ctx->init(host);                                                                \
+            *plugin_ctx = ctx.release();                                                    \
+            return 0;                                                                       \
+        } catch (const std::exception& e) {                                                 \
+            agentxx::plugin::logClientCreateFailure(host, Name, e.what());                  \
+        } catch (...) {                                                                     \
+            agentxx::plugin::logClientCreateFailure(host, Name, "unknown exception");       \
+        }                                                                                   \
+        return -1;                                                                          \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(                     \
+        void*                              plugin_ctx,                                      \
+        const AgentxxPluginOperatorNotify* notify,                                          \
+        AgentxxPluginString*               err                                              \
+    ) {                                                                                     \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
+        return agentxx::plugin::detail::callLifecycleEntry(                                 \
+            ctx ? ctx->host : nullptr,                                                      \
+            plugin_ctx,                                                                     \
+            notify,                                                                         \
+            err,                                                                            \
+            "client plugin start",                                                          \
+            [&]() -> void* {                                                                \
+                return (StartFn)(*ctx, notify, err);                                        \
+            }                                                                               \
+        );                                                                                  \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_stop(                      \
+        void*                              plugin_ctx,                                      \
+        const AgentxxPluginOperatorNotify* notify,                                          \
+        AgentxxPluginString*               err                                              \
+    ) {                                                                                     \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
+        return agentxx::plugin::detail::callLifecycleEntry(                                 \
+            ctx ? ctx->host : nullptr,                                                      \
+            plugin_ctx,                                                                     \
+            notify,                                                                         \
+            err,                                                                            \
+            "client plugin stop",                                                           \
+            [&]() -> void* {                                                                \
+                return (StopFn)(*ctx, notify, err);                                         \
+            }                                                                               \
+        );                                                                                  \
+    }                                                                                       \
+    extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) { \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
+        if (ctx) {                                                                          \
+            delete ctx;                                                                     \
+        }                                                                                   \
     }
 
 } // namespace plugin

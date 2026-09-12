@@ -1090,13 +1090,12 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
         first = false;
 
         UiCmdFields f;
-        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction
-            || f.action.empty()) {
+        if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction || f.action.empty()) {
             agentxx::util::Json item = agentxx::util::Json::object();
-            item["index"]  = static_cast<int64_t>(i);
-            item["action"] = "";
-            item["ok"]     = false;
-            item["msg"]    = "missing `action` field";
+            item["index"]            = static_cast<int64_t>(i);
+            item["action"]           = "";
+            item["ok"]               = false;
+            item["msg"]              = "missing `action` field";
             results.push_back(std::move(item));
             ++fail_count;
             break;
@@ -1108,10 +1107,10 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
             ++fail_count;
         }
         agentxx::util::Json item = agentxx::util::Json::object();
-        item["index"]  = static_cast<int64_t>(i);
-        item["action"] = f.action;
-        item["ok"]     = r.ok;
-        item["msg"]    = r.msg;
+        item["index"]            = static_cast<int64_t>(i);
+        item["action"]           = f.action;
+        item["ok"]               = r.ok;
+        item["msg"]              = r.msg;
         results.push_back(std::move(item));
         if (!r.ok) {
             break;
@@ -1127,4 +1126,4 @@ std::string uiControlExecute(const agentxx::util::Json&) {
 }
 #endif
 
-    } // namespace agentxx_computer_use_plugin
+} // namespace agentxx_computer_use_plugin

@@ -107,7 +107,7 @@ struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 /// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
 
 static void* computerUseAgentStart(
-    ComputerUsePluginCtx&            ctx,
+    ComputerUsePluginCtx&              ctx,
     const AgentxxPluginOperatorNotify* notify,
     AgentxxPluginString*               err
 ) {
@@ -138,9 +138,8 @@ static void* computerUseAgentStart(
 }
 
 /// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
-static void* computerUseAgentStop(
-    ComputerUsePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*
-) {
+static void*
+    computerUseAgentStop(ComputerUsePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }

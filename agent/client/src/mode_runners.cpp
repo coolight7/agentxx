@@ -145,7 +145,9 @@ static asio::awaitable<void> shutdownAgentPlugins(std::shared_ptr<agent::CodeAge
     }
     try {
         if (!co_await asio::co_spawn(
-                agent->ioCtx->get_executor(), agent->shutdownAsync(), asio::use_awaitable
+                agent->ioCtx->get_executor(),
+                agent->shutdownAsync(),
+                asio::use_awaitable
             )) {
             XX_LOGW("[local] agent plugin shutdown incomplete; instances marked CloseFailed");
         }

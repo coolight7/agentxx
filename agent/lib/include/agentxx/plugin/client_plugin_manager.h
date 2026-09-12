@@ -19,8 +19,8 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace agentxx {
@@ -34,7 +34,7 @@ class ClientPluginInstance;
 /// 失效控制块，旧快照只能回退，不能再跳入已经卸载的插件代码。
 struct ClientToolRendererLease {
     std::weak_ptr<ClientPluginInstance> instance;
-    std::atomic<bool>                    alive{true};
+    std::atomic<bool>                   alive{true};
 };
 
 /// 状态栏项注册记录 (UI 注册表快照条目; 所有字段为宿主拷贝, 可跨线程读取)
@@ -95,15 +95,15 @@ struct ClientCommand {
 
 /// 工具特化渲染器注册记录 (UI 注册表快照条目)
 struct ClientToolRenderReg {
-    std::string         plugin;
-    std::string         toolName;
-    AgentxxToolRenderFn renderFn = nullptr;
-    void*               userData = nullptr;
+    std::string                              plugin;
+    std::string                              toolName;
+    AgentxxToolRenderFn                      renderFn = nullptr;
+    void*                                    userData = nullptr;
     std::shared_ptr<ClientToolRendererLease> lease;
-    std::string         templateJson;
-    std::string         templateDisplayName;
-    std::string         templateSummaryKey;
-    std::string         templateSummaryTemplate;
+    std::string                              templateJson;
+    std::string                              templateDisplayName;
+    std::string                              templateSummaryKey;
+    std::string                              templateSummaryTemplate;
 };
 
 /// 通用动作绑定记录 (UI 注册表快照条目; bind_action_handler 写入)
@@ -163,8 +163,8 @@ struct ClientToolRenderResult {
 ///   displayName/summary/items 拷成宿主字符串/JSON 后写入
 /// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退通用渲染
 struct ClientToolRenderEntry {
-    std::string         key;        ///< 缓存键 (toolCallId, 空则 "#toolName")
-    std::string         plugin;     ///< 产出该结果的插件名
+    std::string         key;            ///< 缓存键 (toolCallId, 空则 "#toolName")
+    std::string         plugin;         ///< 产出该结果的插件名
     uint64_t            generation = 0; ///< 产出时的实例代次
     uint64_t            inputHash  = 0; ///< 输入特征 (args/结果/宽度等)
     bool                matched    = false;
@@ -202,7 +202,8 @@ public:
     /// 因此 `version(key)` 对已淘汰键返回 0 (视为从未渲染, UI 缓存键变化后
     /// 重建为通用回退, 再次渲染完成后回到语义内容)。默认 512 远超单屏
     /// 可见块数, 正常会话不触发；长时间会话不再按 tool_call_id 无限增长。
-    explicit ClientToolRenderCache(size_t maxEntries = 512) : maxEntries_(maxEntries == 0 ? 1 : maxEntries) {}
+    explicit ClientToolRenderCache(size_t maxEntries = 512) :
+        maxEntries_(maxEntries == 0 ? 1 : maxEntries) {}
 
     std::shared_ptr<const ClientToolRenderEntry>
         lookup(const std::string& key, uint64_t inputHash) const;
@@ -233,11 +234,11 @@ private:
     void evictLocked();
 
     const size_t                                                                  maxEntries_;
-    mutable std::mutex                                                           mutex_;
+    mutable std::mutex                                                            mutex_;
     std::unordered_map<std::string, std::shared_ptr<const ClientToolRenderEntry>> entries_;
     std::unordered_map<std::string, uint64_t>                                     versions_;
     /// 条目写入顺序 (仅记录当前在 entries_ 中的键, 每键一条)
-    std::deque<std::string>                                                       order_;
+    std::deque<std::string> order_;
     /// 键 → 在途请求的输入特征
     std::unordered_map<std::string, uint64_t> pending_;
 };
@@ -250,15 +251,15 @@ private:
 ///    未命中返回 matched=false + pendingRender=true (调用方提交渲染请求)
 /// 4. 若均未命中, 返回 matched = false
 ClientToolRenderResult renderClientTool(
-    const ClientUiRegistry* reg,
+    const ClientUiRegistry*      reg,
     const ClientToolRenderCache* cache,
-    std::string_view        toolCallId,
-    std::string_view        toolName,
-    std::string_view        argsJson,
-    std::string_view        resultText,
-    bool                    isFinished,
-    bool                    isError,
-    int                     maxWidth
+    std::string_view             toolCallId,
+    std::string_view             toolName,
+    std::string_view             argsJson,
+    std::string_view             resultText,
+    bool                         isFinished,
+    bool                         isError,
+    int                          maxWidth
 );
 
 /// client 插件实例 (宿主侧状态)
@@ -406,8 +407,10 @@ public:
     );
 
     /// 卸载插件 (按名称; 等全部执行中回调完成后才 dlclose)
-    asio::awaitable<bool>
-        unloadAsync(std::string_view name, std::chrono::milliseconds timeout = std::chrono::seconds{10});
+    asio::awaitable<bool> unloadAsync(
+        std::string_view          name,
+        std::chrono::milliseconds timeout = std::chrono::seconds{10}
+    );
     /// 在 client IO executor 仍运行时等待所有插件安全关闭。
     asio::awaitable<bool>
         shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
@@ -755,10 +758,8 @@ private:
     ///   dlclose, 与 agent 侧 shutdownPlugin 语义一致
     void shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst);
 
-    asio::awaitable<bool> unloadAsyncUntil(
-        std::string name,
-        std::chrono::steady_clock::time_point deadline
-    );
+    asio::awaitable<bool>
+        unloadAsyncUntil(std::string name, std::chrono::steady_clock::time_point deadline);
 
     /// 事件分发: 遍历全部插件订阅, 匹配 event → InflightGuard → handler
     /// (io 线程; payload 为宿主构造的 JSON 字符串)
@@ -773,11 +774,7 @@ private:
     /// 执行一次工具语义渲染 (仅 client io 线程; 见 [requestToolRender]):
     /// 从当前注册表取自定义 renderer, 复查 lease/实例状态后代次, 持 lease 调用
     /// 插件回调, 把输出拷成宿主对象写入缓存并通知 UI 重绘。
-    void performToolRender(
-        ClientToolRenderRequest req,
-        std::string            key,
-        uint64_t               inputHash
-    );
+    void performToolRender(ClientToolRenderRequest req, std::string key, uint64_t inputHash);
 
     /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见
     /// [ClientUiRegistry::instanceGenerations])

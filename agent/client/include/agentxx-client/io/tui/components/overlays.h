@@ -509,10 +509,10 @@ public:
 
 private:
 
-    TUICtx&                     ctx_;
-    std::string                 title_;
-    agentxx::util::Json         items_;
-    std::string                 ownerPlugin_;
+    TUICtx&             ctx_;
+    std::string         title_;
+    agentxx::util::Json items_;
+    std::string         ownerPlugin_;
     /// ownerPlugin_ 在最近一次渲染快照中的实例代次 (点击复查; 见 dispatchAction)
     uint64_t                    ownerGeneration_ = 0;
     std::shared_ptr<Scrollable> scrollable_;

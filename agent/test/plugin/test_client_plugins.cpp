@@ -784,11 +784,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(events8 != nullptr && events8->subscribe != nullptr);
         for (int i = 0; i < 4; ++i) {
             subs[i] = events8 ? events8->subscribe(
-                          inst2->hostView(),
-                          AGENTXX_CLIENT_EVT_CONN_STATE,
-                          subFn,
-                          &hits
-                      )
+                                    inst2->hostView(),
+                                    AGENTXX_CLIENT_EVT_CONN_STATE,
+                                    subFn,
+                                    &hits
+                                )
                               : nullptr;
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
@@ -871,19 +871,19 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 先订阅"执行退订的 handler", 再订阅"被退订的 handler" —— 派发按
         // 订阅顺序执行, 保证 first 在 second 之前被调用。
         auto firstSub = events8 ? events8->subscribe(
-                            inst2->hostView(),
-                            AGENTXX_CLIENT_EVT_CONN_STATE,
-                            firstFn,
-                            us.get()
-                        )
+                                      inst2->hostView(),
+                                      AGENTXX_CLIENT_EVT_CONN_STATE,
+                                      firstFn,
+                                      us.get()
+                                  )
                                 : nullptr;
         XX_TEST_EXPECT_TRUE(firstSub != nullptr);
         us->next = events8 ? events8->subscribe(
-                       inst2->hostView(),
-                       AGENTXX_CLIENT_EVT_CONN_STATE,
-                       secondFn,
-                       us.get()
-                   )
+                                 inst2->hostView(),
+                                 AGENTXX_CLIENT_EVT_CONN_STATE,
+                                 secondFn,
+                                 us.get()
+                             )
                            : nullptr;
         XX_TEST_EXPECT_TRUE(us->next != nullptr);
         mgr->onConnStateChanged("connected", "100%");
@@ -1094,11 +1094,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 const auto events11
                     = agentxx::plugin::ClientIfaces::query(okInst->hostView()).events;
                 auto sub = events11 ? events11->subscribe(
-                               okInst->hostView(),
-                               AGENTXX_CLIENT_EVT_READY,
-                               readyFn,
-                               &readyPayload
-                           )
+                                          okInst->hostView(),
+                                          AGENTXX_CLIENT_EVT_READY,
+                                          readyFn,
+                                          &readyPayload
+                                      )
                                     : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
