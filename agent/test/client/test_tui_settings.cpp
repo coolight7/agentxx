@@ -323,7 +323,7 @@ void test_i18n_lookup_switches_with_language() {
     // 默认简体中文
     settings.setLanguage(TuiLanguage::ZhCn);
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
-    XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("+ 新会话"));
+    XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("[ + 新会话 ]"));
     // 带格式参数的查询
     XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string(" 主题: Dark "));
     // 未配置 key: 原样返回 key 本身
@@ -332,7 +332,7 @@ void test_i18n_lookup_switches_with_language() {
     // 切换到 English
     settings.setLanguage(TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
-    XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("+ New Session"));
+    XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("[ + New Session ]"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string(" Theme: Dark "));
 
     // 恢复默认 (简体中文)

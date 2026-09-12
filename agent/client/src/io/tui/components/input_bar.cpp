@@ -85,12 +85,12 @@ Element InputComponent::OnRender() {
             const auto& att     = attachments_[i];
             auto        icon    = agentxx::agent::MediaAttachment::mediaTypeIcon(att.type);
             auto        sizeStr = agentxx::util::formatSize(att.sizeBytes);
-            auto delBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
+            auto delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
                           | bold | reflect(attachmentDeleteBoxes_[i]);
             auto pill = hbox({
-                            text(fmt::format(" [{} {} {} ", icon, att.displayName, sizeStr)),
+                            text(fmt::format(" [ {} {} ( {} ) ", icon, att.displayName, sizeStr)),
                             delBtn,
-                            text("] "),
+                            text(" ] "),
                         })
                         | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor);
             trayItems.push_back(pill);

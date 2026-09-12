@@ -3,6 +3,5 @@
     "python-envs.defaultEnvManager": "ms-python.python:system",
     "editor.defaultFormatter": "ms-vscode.cpptools",
     "editor.formatOnSave": true,
-    "git.detectSubmodulesLimit": 1000,
-    "cmake.sourceDirectory": "D:/0Acoolight/Program/cpp/agentxx/agent"
+    "git.detectSubmodulesLimit": 1000
 }

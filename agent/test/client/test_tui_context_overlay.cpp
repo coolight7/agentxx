@@ -301,7 +301,7 @@ TestResult testTuiContextOverlay() {
         ContextOverlayFixture fx;
         fx.setMessages(agentxx::util::Json::array());
         auto screen = fx.render();
-        XX_TEST_EXPECT_TRUE(screen.find("(空)") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screen.find("( 空 )") != std::string::npos);
     }
 
     // ---- 场景 7: 滚轮滚动不崩溃且可滚动 (多消息展开后) ----
