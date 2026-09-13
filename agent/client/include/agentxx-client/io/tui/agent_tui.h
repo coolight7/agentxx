@@ -207,10 +207,7 @@ public:
     explicit TUIClientAgentIO(
         asio::any_io_executor ex,
         std::string           sessionId = "session",
-        TUITheme              theme     = TUITheme::darkTheme(),
-        /// 权限询问处理模式 (来自 yaml 配置 `permission.mode`, 见
-        /// [config.h](/agent/lib/include/agentxx/agent/config.h))
-        agentxx::agent::PermissionMode permissionMode = agentxx::agent::PermissionMode::Ask
+        TUITheme              theme     = TUITheme::darkTheme()
     );
     ~TUIClientAgentIO() override;
 
@@ -506,8 +503,6 @@ private:
     std::string           sessionId_;
     mutable std::mutex    sessionIdMutex_;
     asio::any_io_executor ex_;
-    /// 权限询问处理模式 (yaml 配置 `permission.mode` 注入, 不可运行时切换)
-    agentxx::agent::PermissionMode permissionMode_ = agentxx::agent::PermissionMode::Ask;
 
     std::mutex                                screenMutex_;
     std::shared_ptr<ftxui::ScreenInteractive> screen_;

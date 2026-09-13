@@ -1,8 +1,10 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/agent_tui.h" // formatDurationMilliseconds / oneLinePreview
+#include "agentxx-client/io/tui/components/interrupt_view.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
+#include "agentxx-client/io/tui/text_layout.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
@@ -117,129 +119,10 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
 /// maxWidth 为 scrollable_->contentWidth() (已扣除滚动条 gutter);
 /// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。
 /// 极窄终端下保底 8 列, 避免预览被完全挤没。
-inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
-    constexpr int kSlack     = 1;
-    constexpr int kMinBudget = 8;
-    const int     avail      = maxWidth - prefixCols - kSlack;
-    return (avail >= kMinBudget) ? avail : kMinBudget;
-}
-
-/// 取最后一个非空行 (供"末尾思考"折叠预览使用):
-inline std::string_view lastNonBlankLine(std::string_view s) {
-    size_t end = s.size();
-    while (end > 0) {
-        const size_t nl    = s.rfind('\n', end - 1);
-        const size_t begin = (nl == std::string_view::npos) ? 0 : nl + 1;
-        bool         blank = true;
-        for (size_t i = begin; i < end; ++i) {
-            const unsigned char c = static_cast<unsigned char>(s[i]);
-            if (c != ' ' && c != '\t' && c != '\r') {
-                blank = false;
-                break;
-            }
-        }
-        if (!blank) {
-            return s.substr(begin, end - begin);
-        }
-        // 当前行全为空白 (如 token 恰好以换行结尾): 向前回退一行
-        end = (nl == std::string_view::npos) ? 0 : nl;
-    }
-    return {};
-}
-
-/// 估算文本显示行数 (换行符计数 + 按显示宽度折行估算)。
-/// 仅用于不可见子项的高度估算 (影响滚动条/滚动定位), 子项进入视口后实测修正。
-/// 宽字符 (CJK/emoji 等) 按 2 列计, 与 markdown::utf8_display_width 一致,
-/// 修复旧实现按 UTF-8 码点计宽 (宽字符算 1 列) 导致 CJK 文本高度低估、
-/// 滚动定位抖动的问题。线性扫描, 不整串调用 utf8_display_width (避免 O(n²))。
-size_t estimateLines(std::string_view s, int width) {
-    if (s.empty()) {
-        return 1;
-    }
-    size_t useWidth = (width <= 0) ? 80 : static_cast<size_t>(width);
-    size_t lines    = 1;
-    size_t col      = 0;
-    size_t i        = 0;
-    while (i < s.size()) {
-        if (s[i] == '\n') {
-            ++lines;
-            col = 0;
-            ++i;
-            continue;
-        }
-        size_t len  = markdown::utf8_byte_length(s[i]);
-        len         = std::min(len, s.size() - i);
-        const int w = markdown::codepoint_width(markdown::utf8_codepoint(s.data() + i, len));
-        if (w > 0) {
-            // 组合字符/零宽字符不占列, 不触发折行
-            col += w;
-            if (col >= useWidth) {
-                ++lines;
-                col = 0;
-            }
-        }
-        i += len;
-    }
-    return lines;
-}
-
-/// 将单行或多行文本按可用显示宽度折行为多段字符串
-/// - 支持按 \n 换行，同时对超宽单行（如无空格的长文件路径/URL）按 UTF-8 字符显示宽度硬折行
-/// - 宽字符（CJK、emoji 等）按 2 列计，与 markdown::utf8_display_width 口径一致
-///
-/// - `args`:
-///     - [textContent] 源文本
-///     - [maxWidth] 单行最大可用显示列宽，应当 >= 1
-///
-/// - `return` 折行后的字符串行列表（至少包含 1 行）
-std::vector<std::string> wrapTextToLines(std::string_view textContent, int maxWidth) {
-    std::vector<std::string> result;
-    if (textContent.empty()) {
-        return result;
-    }
-    const size_t targetWidth = static_cast<size_t>(std::max(1, maxWidth));
-
-    size_t start = 0;
-    while (start < textContent.size()) {
-        const size_t nextNl = textContent.find('\n', start);
-        std::string_view line = (nextNl == std::string_view::npos)
-                                    ? textContent.substr(start)
-                                    : textContent.substr(start, nextNl - start);
-        start = (nextNl == std::string_view::npos) ? textContent.size() : nextNl + 1;
-
-        if (!line.empty() && line.back() == '\r') {
-            line.remove_suffix(1);
-        }
-        if (line.empty()) {
-            result.emplace_back();
-            continue;
-        }
-
-        size_t chunkStart   = 0;
-        size_t currentWidth = 0;
-        size_t i            = 0;
-        while (i < line.size()) {
-            size_t charLen = markdown::utf8_byte_length(line[i]);
-            charLen        = std::min(charLen, line.size() - i);
-            const int w    = markdown::codepoint_width(
-                markdown::utf8_codepoint(line.data() + i, charLen)
-            );
-            const int charWidth = std::max(0, w);
-
-            if (currentWidth + charWidth > targetWidth && currentWidth > 0) {
-                result.push_back(std::string(line.substr(chunkStart, i - chunkStart)));
-                chunkStart   = i;
-                currentWidth = 0;
-            }
-            currentWidth += charWidth;
-            i += charLen;
-        }
-        if (chunkStart < line.size()) {
-            result.push_back(std::string(line.substr(chunkStart)));
-        }
-    }
-    return result;
-}
+/// (实现见 text_layout.cpp: 与中断视图/其他组件共用)
+using agentxx::client::collapsedPreviewBudget;
+using agentxx::client::estimateLines;
+using agentxx::client::lastNonBlankLine;
 
 /// 估算 markdown 渲染高度 (行), 与 renderMarkdown (cmark-gfm + DomBuilder)
 /// 的渲染语义对齐 (仅用于未进入视口的消息; 进入视口后实测修正)。
@@ -419,6 +302,9 @@ std::string attachmentSizeText(uint64_t bytes);
 } // namespace
 
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
+    // 成员初始化顺序与声明顺序一致: 中断通用视图 (渲染/估算/交互/结果组装;
+    // 形态由中断 UI 描述数据决定) 先于 ctx_ (两者都只持有外部对象的引用)
+    interruptView_(ctx),
     ctx_(ctx) {
     LazyScrollable::CacheBudget budget;
     // 渲染树内存放大: FTXUI text()/paragraph() 按 glyph/词拆对象, 实测渲染树
@@ -552,11 +438,11 @@ Element MessageListComponent::OnRender() {
         }
     }
 
-    // 中断控件命中区域: 清空后由本帧 scrollable_->Render() 中构建可见
-    // Interrupt 消息时填充 (buildInterruptControl), 供下一帧点击命中检测
-    interruptHits_.clear();
+    // 中断控件命中区域: 由本帧 scrollable_->Render() 中构建可见 Interrupt 消息
+    // 时填充 (InterruptView::build), 供下一帧点击命中检测
+    interruptView_.beginFrame();
 
-    // decor 按钮命中: 同 interruptHits_ 生命期 (OnRender 清空 + 构建期填充)
+    // decor 按钮命中: 同中断控件命中区域生命期 (OnRender 清空 + 构建期填充)
     decorHits_.clear();
 
     // 附件卡片命中: 同 decorHits_ 生命期
@@ -582,7 +468,9 @@ bool MessageListComponent::OnEvent(Event event) {
         if (handleCollapsibleClick(mouse)) {
             return true;
         }
-        if (handleInterruptClick(mouse)) {
+        // 中断输入项控件 (值按钮/枚举/数值步进/输入框/勾选项/确认/取消):
+        // 语义完全由中断 UI 描述数据决定 (InterruptView 通用实现)
+        if (interruptView_.handleClick(mouse, areaBox_)) {
             return true;
         }
         const bool handled = scrollable_->OnEvent(event);
@@ -594,8 +482,8 @@ bool MessageListComponent::OnEvent(Event event) {
         return handled;
     }
     // 键盘: 优先作用于当前激活的中断消息 (输入框编辑/选中切换/确认/取消)
-    if (activeInterruptMsg_ != static_cast<size_t>(-1)) {
-        if (handleInterruptKey(event)) {
+    if (interruptView_.activeMsg() != static_cast<size_t>(-1)) {
+        if (interruptView_.handleKey(event)) {
             return true;
         }
     }
@@ -773,14 +661,10 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         );
         h = combine(h, m.interrupt ? static_cast<uint64_t>(m.interrupt->inputIndex) : uint64_t{0});
         h = combine(h, m.interrupt ? m.interrupt->interruptResult.size() : size_t{0});
-        // 中断 UI 状态 (编辑文本/选中项/提示) 变化经 version 递增反映到 key,
-        // 触发高度重估 (tip 增删影响估算行数)
+        // 中断表单状态 (编辑文本/选中项/勾选项/提示) 变化经 version 递增反映到
+        // key, 触发高度重估 (提示增删影响估算行数)
         if (m.role == TUIMessage::Role::Interrupt) {
-            InterruptKey key;
-            if (interruptKeyOf(m, key)) {
-                auto it = interruptUi_.find(key);
-                h       = combine(h, it != interruptUi_.end() ? it->second.version : 0);
-            }
+            h = combine(h, interruptView_.stateVersion(m));
         }
         if (m.role == TUIMessage::Role::Think) {
             h = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
@@ -952,59 +836,11 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 lines += finished ? estimateLines(msg.tool->toolResult, width) : 1;
                 return lines + 1; // +1: 尾部空行
             }
-            case TUIMessage::Role::Interrupt: {
-                // 粗略估算 (进入视口后实测修正): 头行 + label + depict +
-                // 控件区 + 提示/状态行 + 尾部空行
-                // (编辑文本/选中项高度恒定, 不参与估算)
-                const bool waiting
-                    = msg.interrupt
-                      && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
-                if (waiting) {
-                    const bool isPermission = [&]() -> bool {
-                        auto it = interruptChannels_.find(msg.interrupt->interruptId);
-                        return it != interruptChannels_.end() && it->second.rememberable;
-                    }();
-
-                    if (isPermission) {
-                        // 权限卡片布局: 头行 1 + 描述行 (按宽折行) + 空行 1 +
-                        // 记住选择项 1 + 空行 1 + 允许/拒绝按钮 1 = 5 + depictLines
-                        size_t lines = 5;
-                        std::string_view dep = !msg.interrupt->inputDepict.empty()
-                                                   ? std::string_view{msg.interrupt->inputDepict}
-                                                   : std::string_view{msg.text};
-                        if (!dep.empty()) {
-                            lines += estimateLines(dep, std::max(10, width - 2));
-                        }
-                        InterruptKey key;
-                        if (interruptKeyOf(msg, key)) {
-                            auto it = interruptUi_.find(key);
-                            if (it != interruptUi_.end() && !it->second.tip.empty()) {
-                                ++lines;
-                            }
-                        }
-                        return static_cast<int>(lines) + 1; // +1: 尾部空行
-                    }
-
-                    size_t lines = 4;
-                    auto   type  = msg.interrupt->inputType;
-                    if (type == "enum") {
-                        // 枚举项全部渲染 (buildInterruptControl 逐项输出), 不能截断:
-                        // 截断估算 (如 min(n,5)) 使 >5 项的中断消息严重低估 ->
-                        // 被 continue 跳过 (消息区空白), 同 Tool diff/mermaid 机制
-                        lines += msg.interrupt->inputEnums.size();
-                    }
-                    InterruptKey key;
-                    if (interruptKeyOf(msg, key)) {
-                        auto it = interruptUi_.find(key);
-                        if (it != interruptUi_.end() && !it->second.tip.empty()) {
-                            ++lines;
-                        }
-                    }
-                    return static_cast<int>(lines) + 1; // +1: 尾部空行
-                }
-                // 非 waiting: 状态行 1 行 + 尾部空行 = 2
-                return 2;
-            }
+            case TUIMessage::Role::Interrupt:
+                // 中断消息: 形态由消息携带的 UI 描述决定 (InterruptView 通用
+                // 实现), 估算与渲染同一套项判定 —— 本处不再按询问类型分支。
+                // 注意 enter 视口后仍会实测修正, 估算偏差不影响正确性
+                return static_cast<int>(interruptView_.estimate(msg, width)) + 1; // +1: 尾部空行
         }
         return 2; // 未知角色兜底: 内容 1 行 + 空行
     }
@@ -1172,11 +1008,11 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
 
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
     const size_t                                       decorHitsBefore     = decorHits_.size();
-    const size_t                                       interruptHitsBefore = interruptHits_.size();
+    const size_t                                       interruptHitsBefore = interruptView_.hitBoxes().size();
     const size_t attachmentHitsBefore                                      = attachmentHits_.size();
     auto         block             = buildMessageBlock(msg, index, maxWidth, builders);
     const bool   hasDecorHits      = (decorHits_.size() > decorHitsBefore);
-    const bool   hasInterruptHits  = (interruptHits_.size() > interruptHitsBefore);
+    const bool   hasInterruptHits  = (interruptView_.hitBoxes().size() > interruptHitsBefore);
     const bool   hasAttachmentHits = (attachmentHits_.size() > attachmentHitsBefore);
 
     LazyBuiltItem out;
@@ -1188,7 +1024,7 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     // LazyScrollable 的字节预算 (maxBytes) 约束真实驻留内存而非源文本字节
     // (见构造函数预算注释; 系数取实测范围上沿, 宁紧勿松)
     out.sourceBytes = srcBytes * 64;
-    // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (interruptHits_),
+    // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (InterruptView),
     // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
     // 带有可点击 decor 按钮的工具消息同样不缓存: 每帧重建以刷新 decorHits_,
     // 避免缓存命中时 reflect 持有的 Box 随 decorHits_.clear() 被释放导致 UAF,
@@ -1206,16 +1042,16 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
         out.attachments.push_back(std::move(b));
     }
     // 控件 Box 的生命周期与 Element 绑定:
-    // 即使 decorHits_ / interruptHits_ 在下一帧被清空, Reflect 所引用的 Box
+    // 即使 decorHits_ / 中断命中区域在下一帧被清空, Reflect 所引用的 Box
     // 也由 Element 的 attachments 持有而不会被提前析构, 杜绝 UAF 悬空指针
     for (size_t i = decorHitsBefore; i < decorHits_.size(); ++i) {
         if (decorHits_[i].box) {
             out.attachments.push_back(decorHits_[i].box);
         }
     }
-    for (size_t i = interruptHitsBefore; i < interruptHits_.size(); ++i) {
-        if (interruptHits_[i].box) {
-            out.attachments.push_back(interruptHits_[i].box);
+    for (size_t i = interruptHitsBefore; i < interruptView_.hitBoxes().size(); ++i) {
+        if (interruptView_.hitBoxes()[i].box) {
+            out.attachments.push_back(interruptView_.hitBoxes()[i].box);
         }
     }
     for (size_t i = attachmentHitsBefore; i < attachmentHits_.size(); ++i) {
@@ -1815,103 +1651,11 @@ Element MessageListComponent::buildMessageBlock(
             }
             return vbox(std::move(lines));
         }
-        case TUIMessage::Role::Interrupt: {
-            // 中断输入消息: 内嵌交互控件, 直接渲染在消息列表中
-            Elements lines;
-
-            const bool waiting
-                = msg.interrupt
-                  && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
-            if (waiting) {
-                // 是否权限询问 (与控件区判定一致: interruptChannels_ 的 rememberable 标记)
-                const bool isPermission = [&]() -> bool {
-                    auto it = interruptChannels_.find(msg.interrupt->interruptId);
-                    return it != interruptChannels_.end() && it->second.rememberable;
-                }();
-
-                if (isPermission) {
-                    // 权限询问头两行:
-                    //   行1: ! [Permission] <工具名> <请求的权限>
-                    //   行2: 描述 (受约束目标等)
-                    // label 由服务端拼装为 "{toolName} {category}", 此处拆开分段着色;
-                    // 无空格时整体作为工具名展示 (权限询问恒为单输入项, 不展示进度)
-                    std::string toolName = msg.interrupt->inputLabel;
-                    std::string category;
-                    const auto  sp = msg.interrupt->inputLabel.find(' ');
-                    if (sp != std::string::npos) {
-                        toolName = msg.interrupt->inputLabel.substr(0, sp);
-                        category = msg.interrupt->inputLabel.substr(sp + 1);
-                    }
-                    Elements header;
-                    header.push_back(text("! [Permission] ") | color(theme.errorColor) | bold);
-                    header.push_back(text(toolName) | color(theme.accentColor) | bold);
-                    if (!category.empty()) {
-                        header.push_back(text(" " + category) | color(theme.hintColor));
-                    }
-                    lines.push_back(hbox(std::move(header)));
-
-                    // 描述/提示信息内容 (受约束目标路径等): 优先取 inputDepict,
-                    // 缺失时回退 msg.text; 按内容区可用宽度 (预留 2 空格缩进) 硬折行,
-                    // 彻底解决 paragraph 在无空格长路径下不换行以及在 hbox 内因布局
-                    // shrink 误算导致被压为 0 宽消失的问题
-                    std::string depictText = !msg.interrupt->inputDepict.empty()
-                                                 ? msg.interrupt->inputDepict
-                                                 : msg.text;
-                    if (!depictText.empty()) {
-                        const int availWidth = std::max(10, maxWidth - 2);
-                        auto      wrapped    = wrapTextToLines(depictText, availWidth);
-                        for (auto& wline : wrapped) {
-                            lines.push_back(hbox({
-                                text("  "),
-                                text(std::move(wline)) | color(theme.hintColor),
-                            }));
-                        }
-                    }
-                } else {
-                    // 头行: 类型 + 进度
-                    Elements header;
-                    header.push_back(
-                        text(
-                            trf("interrupt.header",
-                                msg.interrupt->inputIndex,
-                                msg.interrupt->inputTotal)
-                        )
-                        | color(theme.accentColor) | bold
-                    );
-                    header.push_back(
-                        text(msg.interrupt->inputLabel) | color(theme.accentColor) | xflex_shrink
-                    );
-                    lines.push_back(hbox(std::move(header)));
-
-                    if (!msg.interrupt->inputDepict.empty()) {
-                        lines.push_back(hbox({
-                            text("  ") | color(theme.hintColor),
-                            text(msg.interrupt->inputDepict) | color(theme.hintColor)
-                                | xflex_shrink,
-                        }));
-                    }
-                }
-
-                lines.push_back(text(" "));
-                lines.push_back(buildInterruptControl(msg, msgIndex));
-
-                // 校验失败提示: 从 UI 状态表读取 (消息结构不承载 UI 状态)
-                InterruptKey key;
-                if (interruptKeyOf(msg, key)) {
-                    auto it = interruptUi_.find(key);
-                    if (it != interruptUi_.end() && !it->second.tip.empty()) {
-                        lines.push_back(hbox({
-                            text("  ") | color(theme.hintColor),
-                            text(it->second.tip) | color(theme.errorColor) | xflex_shrink,
-                        }));
-                    }
-                }
-            } else {
-                lines.push_back(buildInterruptStatusLine(msg));
-            }
-
-            return vbox(std::move(lines));
-        }
+        case TUIMessage::Role::Interrupt:
+            // 中断输入消息: 渲染/交互完全由消息携带的 UI 描述数据决定
+            // (InterruptView 通用实现: 头行 + 描述项 + 控件 + 状态行),
+            // 本组件不感知任何具体询问类型 (含权限)
+            return interruptView_.build(msg, msgIndex, maxWidth);
     }
     return text("");
 }
@@ -2225,693 +1969,31 @@ bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
 }
 
 // ---------------------------------------------------------------------------
-// 中断输入消息: 控件渲染 + 交互
-// ---------------------------------------------------------------------------
-
-namespace {
-
-/// double 步进后的显示格式: 整数值按 "1.0" 风格, 非整数保留有效精度
-std::string formatStepDouble(double v) {
-    if (v == std::floor(v) && std::abs(v) < 1e15) {
-        return fmt::format("{:.1f}", v);
-    }
-    return fmt::format("{:.10g}", v);
-}
-
-} // namespace
-
-Element MessageListComponent::buildInterruptStatusLine(const TUIMessage& msg) {
-    const auto& theme = *ctx_.theme;
-    if (!msg.interrupt) {
-        return text("");
-    }
-    const auto& it = *msg.interrupt;
-    switch (it.interruptStatus) {
-        case TUIMessage::InterruptStatus::Confirmed:
-            return hbox({
-                text(trf("interrupt.header", it.inputIndex, it.inputTotal))
-                    | color(theme.hintColor),
-                text(trf("interrupt.confirmed", it.inputLabel, it.interruptResult))
-                    | color(theme.accentColor) | dim | xflex_shrink,
-            });
-        case TUIMessage::InterruptStatus::Cancelled:
-            return hbox({
-                text(trf("interrupt.header", it.inputIndex, it.inputTotal))
-                    | color(theme.hintColor),
-                text(trf("interrupt.cancelled", it.inputLabel)) | color(theme.errorColor) | dim
-                    | xflex_shrink,
-            });
-        case TUIMessage::InterruptStatus::Expired:
-            return hbox({
-                text(trf("interrupt.header", it.inputIndex, it.inputTotal))
-                    | color(theme.hintColor),
-                text(trf("interrupt.expired", it.inputLabel)) | color(theme.errorColor) | dim
-                    | xflex_shrink,
-            });
-        default:
-            return text("");
-    }
-}
-
-Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_t msgIndex) {
-    const auto& theme = *ctx_.theme;
-    if (!msg.interrupt) {
-        return text("");
-    }
-    // UI 状态 (编辑文本/选中项): 惰性创建并读取 (渲染是 UI 线程独占路径)
-    const auto& ui = uiStateFor(msg);
-    const auto& id = *msg.interrupt;
-
-    // 记录命中区域: box 经 shared_ptr 持有, reflect 在布局 (SetBox) 时写回,
-    // 点击检测读到的是最新布局位置 (构建阶段记录值会拿到空 Box)
-    auto hit = [this, msgIndex](uint8_t kind, int sub, const std::shared_ptr<Box>& box) {
-        InterruptHitBox hb;
-        hb.msgIndex = msgIndex;
-        hb.kind     = kind;
-        hb.sub      = sub;
-        hb.box      = box;
-        interruptHits_.push_back(std::move(hb));
-    };
-    auto mkBox = []() {
-        return std::make_shared<Box>();
-    };
-
-    // 按钮样式 (label 为翻译文本, 取 string_view 直接构造 text)
-    auto btn = [&theme](std::string_view label, bool active) {
-        if (active) {
-            return text(label) | bgcolor(theme.buttonActiveBgColor)
-                   | color(theme.buttonActiveTextColor) | bold;
-        }
-        return text(label) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    };
-
-    // 确认 / 取消按钮行 (按需创建): 命中区域必须与实际渲染的控件一一对应,
-    // 未渲染却注册命中会产生幽灵点击区, 故由各分支调用本函数就地创建;
-    // 权限卡片布局 (bool + rememberable) 不含确认/取消按钮 (允许/拒绝即确认)
-    auto makeConfirmCancelRow = [&]() {
-        auto confirmBox = mkBox();
-        auto cancelBox  = mkBox();
-        hit(kHitConfirm, 0, confirmBox);
-        hit(kHitCancel, 0, cancelBox);
-        return hbox({
-            btn(tr("interrupt.confirm"), false) | reflect(*confirmBox),
-            text("  "),
-            text(tr("interrupt.cancel")) | color(theme.errorColor) | reflect(*cancelBox),
-        });
-    };
-
-    Element control;
-    if (id.inputType == "bool") {
-        // 权限询问 (rememberable): 卡片式布局 ——
-        //   头两行 (工具名+请求权限 / 描述) 由消息块渲染 (见 buildMessageBlock);
-        //   控件区 = 设置项列表 + 底部 允许/拒绝 按钮:
-        //   - 设置项每项一行, 左侧名称右侧选中状态指示 (两端对齐), 整行可点击
-        //     切换 ("记住此选择": 勾选后确认时按本次允许/拒绝注册路径规则,
-        //     后续访问该路径或其子目录不再询问)
-        //   - 允许/拒绝即确认操作 (点击直接回传 true/false), 不再单设确认键;
-        //     键盘 ←/→ 切换高亮项, Enter 确认当前选中项
-        const bool rememberable = [&]() -> bool {
-            auto it = interruptChannels_.find(id.interruptId);
-            return it != interruptChannels_.end() && it->second.rememberable;
-        }();
-
-        if (rememberable) {
-            Elements rows;
-
-            // ---- 设置项区: 每项一行, 状态指示 + 设置项文本, 整行可点击 ----
-            // (后续新增设置项在此按同一样式追加)
-            {
-                auto remBox    = mkBox();
-                auto indicator = ui.remember ? text("[ ✓ ] ") | color(theme.accentColor) | bold
-                                             : text("[   ] ") | color(theme.hintColor);
-                // 文字采用 normalColor: buttonTextColor 在深色主题下为纯黑色 (RGB 0,0,0),
-                // 设置项整行无按钮背景色, 黑色文本在深色终端背景上会导致文字隐形不可见
-                auto row = hbox({
-                               std::move(indicator),
-                               text(tr("interrupt.remember")) | color(theme.normalColor),
-                           })
-                           | reflect(*remBox);
-                hit(kHitRemember, 0, remBox);
-                rows.push_back(std::move(row));
-            }
-
-            // ---- 底部按钮: 允许 / 拒绝 (复用 kHitBoolYes/kHitBoolNo 点击直接确认语义) ----
-            auto allowBox = mkBox();
-            auto denyBox  = mkBox();
-            hit(kHitBoolYes, 0, allowBox);
-            hit(kHitBoolNo, 0, denyBox);
-            rows.push_back(text(" "));
-            rows.push_back(hbox({
-                btn(tr("interrupt.allow"), ui.selected == 0) | reflect(*allowBox),
-                text("  "),
-                btn(tr("interrupt.deny"), ui.selected == 1) | reflect(*denyBox),
-            }));
-            control = vbox(std::move(rows));
-        } else {
-            auto yesBox = mkBox();
-            auto noBox  = mkBox();
-            auto yes    = btn(tr("interrupt.yes"), ui.selected == 0) | reflect(*yesBox);
-            auto no     = btn(tr("interrupt.no"), ui.selected == 1) | reflect(*noBox);
-            hit(kHitBoolYes, 0, yesBox);
-            hit(kHitBoolNo, 0, noBox);
-            control = hbox({
-                yes,
-                text(" "),
-                no,
-                text("  "),
-                makeConfirmCancelRow(),
-            });
-        }
-    } else if (id.inputType == "int" || id.inputType == "double") {
-        auto minusBox = mkBox();
-        auto plusBox  = mkBox();
-        auto editBox  = mkBox();
-        auto minus    = btn("[ - ]", false) | reflect(*minusBox);
-        auto plus     = btn("[ + ]", false) | reflect(*plusBox);
-        hit(kHitNumMinus, 0, minusBox);
-        hit(kHitNumPlus, 0, plusBox);
-        hit(kHitEdit, 0, editBox);
-        control = hbox({
-            minus,
-            text(" "),
-            text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
-                | color(theme.inputTextColor) | reflect(*editBox) | xflex_shrink,
-            text(" "),
-            plus,
-            text("  "),
-            makeConfirmCancelRow(),
-        });
-    } else if (id.inputType == "enum") {
-        // 枚举项竖直列表 (选中项高亮)
-        Elements items;
-        for (size_t i = 0; i < id.inputEnums.size(); ++i) {
-            auto enumBox = mkBox();
-            auto entry   = text(fmt::format(
-                " {} {}",
-                (static_cast<int>(i) == ui.selected) ? "▸" : " ",
-                id.inputEnums[i]
-            ));
-            if (static_cast<int>(i) == ui.selected) {
-                entry = entry | bgcolor(theme.buttonActiveBgColor)
-                        | color(theme.buttonActiveTextColor) | bold;
-            } else {
-                entry = entry | color(theme.buttonTextColor);
-            }
-            entry = entry | reflect(*enumBox);
-            hit(kHitEnumItem, static_cast<int>(i), enumBox);
-            items.push_back(entry);
-        }
-        // 底部操作行: 确认 + 取消
-        control = vbox({
-            vbox(std::move(items)),
-            text(" "),
-            makeConfirmCancelRow(),
-        });
-    } else { // string
-        auto editBox = mkBox();
-        hit(kHitEdit, 0, editBox);
-        control = hbox({
-            text(" " + ui.editText + " ") | bgcolor(theme.inputBgColor)
-                | color(theme.inputTextColor) | reflect(*editBox) | xflex_shrink,
-            text("  "),
-            makeConfirmCancelRow(),
-        });
-    }
-    return control;
-}
-
-// ---------------------------------------------------------------------------
-// 中断 UI 状态表 (UI 线程独占; key = (interruptId, inputIndex))
+// 中断输入消息 (渲染/交互由 InterruptView 通用实现, 见 interrupt_view.{h,cpp}):
+// 本组件仅转发通道注入与命中区域/状态查询, 并以 interruptView_ 作为
+// buildMessageBlock / estimateHeight / itemKey / OnEvent 的实现
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::attachInterruptChannel(
     int64_t                                 wireId,
-    std::shared_ptr<InterruptResultChannel> ch,
-    bool                                    rememberable
+    std::shared_ptr<InterruptResultChannel> ch
 ) {
-    interruptChannels_[wireId] = InterruptChannelInfo{std::move(ch), rememberable};
+    interruptView_.attachChannel(wireId, std::move(ch));
 }
 
 void MessageListComponent::releaseInterruptChannel(int64_t wireId) {
-    interruptChannels_.erase(wireId);
-    for (auto it = interruptUi_.begin(); it != interruptUi_.end();) {
-        if (it->first.id == wireId) {
-            it = interruptUi_.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    interruptView_.releaseChannel(wireId);
 }
 
 void MessageListComponent::clearInterruptUiState() {
-    interruptUi_.clear();
-    interruptChannels_.clear();
+    interruptView_.clear();
 }
 
-bool MessageListComponent::interruptKeyOf(const TUIMessage& msg, InterruptKey& out) {
-    if (msg.role != TUIMessage::Role::Interrupt || !msg.interrupt) {
-        return false;
+size_t MessageListComponent::interruptEstimate(size_t msgIndex, int width) const {
+    // 取实时快照 (测试辅助路径: 不依赖上一帧 frameState 的刷新时机)
+    auto st = ctx_.state ? ctx_.state->readSnapshot() : ctx_.frameState;
+    if (!st || msgIndex >= st->messages.size()) {
+        return 1;
     }
-    out.id    = msg.interrupt->interruptId;
-    out.index = msg.interrupt->inputIndex;
-    return true;
-}
-
-MessageListComponent::InterruptUIState& MessageListComponent::uiStateFor(const TUIMessage& msg) {
-    InterruptKey key;
-    if (!interruptKeyOf(msg, key)) {
-        // 非中断消息不应请求 UI 状态; 返回静态兜底条目 (调用方按角色分支, 不会走到)
-        static InterruptUIState fallback;
-        return fallback;
-    }
-    auto [it, inserted] = interruptUi_.try_emplace(key);
-    if (inserted) {
-        // 惰性初始化: 编辑文本 = 默认值 (数值无默认时 "0"/"0.0"), string 无默认为空;
-        // 选中项 = bool 按默认值 (false/no/n → "否"), enum 按默认值匹配 (无匹配首项)
-        const auto& id = *msg.interrupt;
-        auto&       ui = it->second;
-        ui.editText    = id.inputDefault;
-        if ((id.inputType == "int" || id.inputType == "double") && id.inputDefault.empty()) {
-            ui.editText = (id.inputType == "double") ? "0.0" : "0";
-        }
-        if (id.inputType == "bool") {
-            std::string def = id.inputDefault;
-            agentxx::util::toLowerSelf(def);
-            ui.selected = (def == "false" || def == "no" || def == "n") ? 1 : 0;
-        } else if (id.inputType == "enum") {
-            for (size_t i = 0; i < id.inputEnums.size(); ++i) {
-                if (id.inputEnums[i] == id.inputDefault) {
-                    ui.selected = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
-    }
-    return it->second;
-}
-
-MessageListComponent::InterruptUIState&
-    MessageListComponent::mutateInterruptUiState(const TUIMessage& msg) {
-    auto& ui = uiStateFor(msg);
-    ++ui.version; // 驱动 itemKey 变化 → 懒列表缓存失效 (高度/滚动重估)
-    return ui;
-}
-
-MessageListComponent::InterruptUIState MessageListComponent::interruptUiState(size_t msgIndex
-) const {
-    const auto& st = *ctx_.frameState;
-    if (msgIndex >= st.messages.size()) {
-        return {};
-    }
-    const auto&  msg = *st.messages[msgIndex];
-    InterruptKey key;
-    if (!interruptKeyOf(msg, key)) {
-        return {};
-    }
-    auto it = interruptUi_.find(key);
-    return it == interruptUi_.end() ? InterruptUIState{} : it->second;
-}
-
-// ---------------------------------------------------------------------------
-// 中断输入消息交互
-// ---------------------------------------------------------------------------
-
-bool MessageListComponent::handleInterruptClick(const Mouse& mouse) {
-    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
-        return false;
-    }
-    if (areaBox_.x_max < areaBox_.x_min) {
-        return false; // 尚未布局
-    }
-    if (mouse.x < areaBox_.x_min || mouse.x > areaBox_.x_max) {
-        return false;
-    }
-    // 命中检测: 后渲染的控件优先 (enum 项与底部按钮同帧注册, 无重叠; 直接顺序查找)
-    for (const auto& h : interruptHits_) {
-        if (!h.box) {
-            continue;
-        }
-        const auto& box = *h.box;
-        if (mouse.y < box.y_min || mouse.y > box.y_max || mouse.x < box.x_min
-            || mouse.x > box.x_max) {
-            continue;
-        }
-        switch (h.kind) {
-            case kHitBoolYes:
-                // 点击是/否直接确认 (先设置选中, 再确认)
-                ctx_.state->mutate([&](TUIRenderState& st) {
-                    if (h.msgIndex < st.messages.size()) {
-                        auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
-                        ui.selected = 0;
-                        ui.tip.clear();
-                    }
-                });
-                setInterruptActive(h.msgIndex);
-                confirmInterrupt(h.msgIndex);
-                return true;
-            case kHitBoolNo:
-                ctx_.state->mutate([&](TUIRenderState& st) {
-                    if (h.msgIndex < st.messages.size()) {
-                        auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
-                        ui.selected = 1;
-                        ui.tip.clear();
-                    }
-                });
-                setInterruptActive(h.msgIndex);
-                confirmInterrupt(h.msgIndex);
-                return true;
-            case kHitNumMinus:
-                setInterruptActive(h.msgIndex);
-                stepInterrupt(h.msgIndex, -1.0);
-                return true;
-            case kHitNumPlus:
-                setInterruptActive(h.msgIndex);
-                stepInterrupt(h.msgIndex, 1.0);
-                return true;
-            case kHitEnumItem: {
-                // 选中枚举项
-                ctx_.state->mutate([&](TUIRenderState& st) {
-                    if (h.msgIndex >= st.messages.size()) {
-                        return;
-                    }
-                    auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
-                    ui.selected = h.sub;
-                    ui.tip.clear();
-                });
-                setInterruptActive(h.msgIndex);
-                ctx_.postRedraw();
-                return true;
-            }
-            case kHitRemember: {
-                // 权限询问: 切换"记住本次选择"
-                ctx_.state->mutate([&](TUIRenderState& st) {
-                    if (h.msgIndex >= st.messages.size()) {
-                        return;
-                    }
-                    auto& ui    = mutateInterruptUiState(*st.messages[h.msgIndex]);
-                    ui.remember = !ui.remember;
-                });
-                setInterruptActive(h.msgIndex);
-                ctx_.postRedraw();
-                return true;
-            }
-            case kHitEdit:
-                setInterruptActive(h.msgIndex);
-                return true;
-            case kHitConfirm:
-                setInterruptActive(h.msgIndex);
-                confirmInterrupt(h.msgIndex);
-                return true;
-            case kHitCancel:
-                cancelInterrupt(h.msgIndex);
-                return true;
-            default:
-                return false;
-        }
-    }
-    return false;
-}
-
-bool MessageListComponent::handleInterruptKey(Event event) {
-    const size_t mi = activeInterruptMsg_;
-
-    // 校验 active 消息仍存在且可交互
-    std::string type;
-    bool        valid = false;
-    ctx_.state->mutate([&](TUIRenderState& st) {
-        if (mi < st.messages.size()) {
-            const auto& m = *st.messages[mi];
-            if (m.role == TUIMessage::Role::Interrupt && m.interrupt
-                && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {
-                valid = true;
-                type  = m.interrupt->inputType;
-            }
-        }
-    });
-    if (!valid) {
-        activeInterruptMsg_ = static_cast<size_t>(-1);
-        return false;
-    }
-
-    if (event == Event::Escape) {
-        // 退出编辑态 (不取消中断)
-        activeInterruptMsg_ = static_cast<size_t>(-1);
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::Return) {
-        confirmInterrupt(mi);
-        return true;
-    }
-    if (type == "bool") {
-        if (event == Event::ArrowLeft || event == Event::ArrowRight) {
-            ctx_.state->mutate([&](TUIRenderState& st) {
-                if (mi < st.messages.size()) {
-                    auto& ui    = mutateInterruptUiState(*st.messages[mi]);
-                    ui.selected = 1 - ui.selected;
-                }
-            });
-            ctx_.postRedraw();
-            return true;
-        }
-        return false;
-    }
-    if (type == "enum") {
-        int delta = 0;
-        if (event == Event::ArrowUp) {
-            delta = -1;
-        } else if (event == Event::ArrowDown) {
-            delta = 1;
-        }
-        if (delta != 0) {
-            ctx_.state->mutate([&](TUIRenderState& st) {
-                if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
-                    return;
-                }
-                auto& ui    = mutateInterruptUiState(*st.messages[mi]);
-                int   size  = static_cast<int>(st.messages[mi]->interrupt->inputEnums.size());
-                ui.selected = std::clamp(ui.selected + delta, 0, size - 1);
-            });
-            ctx_.postRedraw();
-            return true;
-        }
-        return false;
-    }
-    if (type == "int" || type == "double") {
-        if (event == Event::ArrowUp) {
-            stepInterrupt(mi, 1.0);
-            return true;
-        }
-        if (event == Event::ArrowDown) {
-            stepInterrupt(mi, -1.0);
-            return true;
-        }
-    }
-    // 数值/string: 文本编辑
-    if (event.is_character() || event == Event::Backspace || event == Event::Delete
-        || event == Event::ArrowLeft || event == Event::ArrowRight) {
-        ctx_.state->mutate([&](TUIRenderState& st) {
-            if (mi >= st.messages.size()) {
-                return;
-            }
-            auto& ui = mutateInterruptUiState(*st.messages[mi]);
-            if (event.is_character()) {
-                if (!ui.edited) {
-                    // 首次输入替换默认值 (与输入框激活时保留默认值的语义一致)
-                    ui.editText.clear();
-                    ui.edited = true;
-                }
-                ui.editText += event.character();
-            } else if (event == Event::Backspace && !ui.editText.empty()) {
-                ui.editText.pop_back();
-                ui.edited = true;
-            } else if (event == Event::Delete && !ui.editText.empty()) {
-                // 简化: 与 Backspace 同义 (单行输入无光标定位)
-                ui.editText.pop_back();
-                ui.edited = true;
-            }
-            ui.tip.clear();
-        });
-        ctx_.postRedraw();
-        return true;
-    }
-    return false;
-}
-
-void MessageListComponent::setInterruptActive(size_t mi) {
-    activeInterruptMsg_ = mi;
-    // 数值/string: 激活时确保 UI 状态已初始化 (编辑文本 = 默认值);
-    // 首次编辑前 edited=false, 编辑后不再覆盖
-    ctx_.state->mutate([&](TUIRenderState& st) {
-        if (mi >= st.messages.size()) {
-            return;
-        }
-        uiStateFor(*st.messages[mi]); // 惰性创建 (初始化默认编辑文本/选中项)
-    });
-    ctx_.postRedraw();
-}
-
-void MessageListComponent::confirmInterrupt(size_t mi) {
-    std::string value;
-    bool        confirmed = false;
-    bool remember = false; // 权限询问: 是否记住本次选择 (mutate 内收集, 锁外发送)
-    InterruptKey key;      // 确认成功时记录 (mutate 内收集, 锁外发送结果)
-    ctx_.state->mutate([&](TUIRenderState& st) {
-        if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
-            return;
-        }
-        const auto& src = *st.messages[mi];
-        if (src.role != TUIMessage::Role::Interrupt
-            || src.interrupt->interruptStatus != TUIMessage::InterruptStatus::Waiting) {
-            return;
-        }
-        const std::string& type = src.interrupt->inputType;
-        auto&              ui   = uiStateFor(src);
-        if (type == "bool") {
-            value     = (ui.selected == 0) ? "true" : "false";
-            confirmed = true;
-        } else if (type == "enum") {
-            if (ui.selected >= 0
-                && ui.selected < static_cast<int>(src.interrupt->inputEnums.size())) {
-                value     = src.interrupt->inputEnums[static_cast<size_t>(ui.selected)];
-                confirmed = true;
-            }
-        } else if (type == "int" || type == "double") {
-            std::string errTip;
-            if (type == "int") {
-                int64_t num = 0;
-                auto    r   = agentxx::util::parseNumberFromString(ui.editText, num);
-                if (r.ec != std::errc{}) {
-                    errTip = std::string(tr("interrupt.tipInt"));
-                }
-            } else {
-                double num = 0.0;
-                auto   r   = agentxx::util::parseNumberFromString(ui.editText, num);
-                if (r.ec != std::errc{}) {
-                    errTip = std::string(tr("interrupt.tipNum"));
-                }
-            }
-            if (!errTip.empty()) {
-                ui.tip = std::move(errTip);
-                ctx_.postRedraw();
-                return;
-            }
-            value     = ui.editText;
-            confirmed = true;
-        } else { // string
-            value     = ui.editText;
-            confirmed = true;
-        }
-        if (confirmed) {
-            // 先取 key (src 引用随后被 mutableMessage 替换失效)
-            interruptKeyOf(src, key);
-            remember = ui.remember; // 权限询问"记住本次选择"标记
-            // 确认结果写入消息 (跨线程共享的展示状态); UI 状态表保留编辑残留
-            auto& mm                      = ctx_.state->mutableMessage(st, mi);
-            mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Confirmed;
-            mm.interrupt->interruptResult = value;
-        }
-    });
-    if (confirmed) {
-        // 发送结果到 client 线程 (channel 线程安全):
-        // 通道从 interruptChannels_ 取最新 (同请求共享, 经 attachInterruptChannel 注入)
-        auto chIt = interruptChannels_.find(key.id);
-        if (chIt != interruptChannels_.end() && chIt->second.ch) {
-            chIt->second.ch->async_send(
-                neograph_asio_error_code{},
-                key.index,
-                std::optional<std::string>(value),
-                remember,
-                [](neograph_asio_error_code) {}
-            );
-        }
-        ctx_.postRedraw();
-    }
-}
-
-void MessageListComponent::cancelInterrupt(size_t mi) {
-    int64_t      id = 0;
-    InterruptKey key; // mutate 内收集, 锁外发送整体取消
-    ctx_.state->mutate([&](TUIRenderState& st) {
-        if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
-            return;
-        }
-        id = st.messages[mi]->interrupt->interruptId;
-        interruptKeyOf(*st.messages[mi], key);
-        // 标记同请求所有未操作消息为 Cancelled
-        for (size_t i = 0; i < st.messages.size(); ++i) {
-            const auto& m = *st.messages[i];
-            if (m.role == TUIMessage::Role::Interrupt && m.interrupt
-                && m.interrupt->interruptId == id
-                && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {
-                auto& mm                      = ctx_.state->mutableMessage(st, i);
-                mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Cancelled;
-            }
-        }
-        // 清理同请求的 UI 状态 (消息已固定状态, 编辑残留不再需要)
-        for (auto it = interruptUi_.begin(); it != interruptUi_.end();) {
-            if (it->first.id == id) {
-                it = interruptUi_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    });
-    // 整体取消: inputIndex = -1, value = nullopt (经同请求共享通道发送)
-    auto chIt = interruptChannels_.find(id);
-    if (chIt != interruptChannels_.end() && chIt->second.ch) {
-        chIt->second.ch->async_send(
-            neograph_asio_error_code{},
-            -1,
-            std::optional<std::string>(),
-            false,
-            [](neograph_asio_error_code) {}
-        );
-    }
-    activeInterruptMsg_ = static_cast<size_t>(-1);
-    ctx_.postRedraw();
-}
-
-void MessageListComponent::stepInterrupt(size_t mi, double delta) {
-    ctx_.state->mutate([&](TUIRenderState& st) {
-        if (mi >= st.messages.size() || !st.messages[mi]->interrupt) {
-            return;
-        }
-        const auto& src = *st.messages[mi];
-        if (src.role != TUIMessage::Role::Interrupt
-            || src.interrupt->interruptStatus != TUIMessage::InterruptStatus::Waiting) {
-            return;
-        }
-        const std::string& type = src.interrupt->inputType;
-        if (type != "int" && type != "double") {
-            return;
-        }
-        auto&  ui  = uiStateFor(src);
-        double val = 0.0;
-        if (type == "int") {
-            int64_t num = 0;
-            auto    r   = agentxx::util::parseNumberFromString(ui.editText, num);
-            if (r.ec != std::errc{}) {
-                return; // 编辑值非法时步进无效
-            }
-            val = static_cast<double>(num);
-        } else {
-            double num = 0.0;
-            auto   r   = agentxx::util::parseNumberFromString(ui.editText, num);
-            if (r.ec != std::errc{}) {
-                return;
-            }
-            val = num;
-        }
-        val += delta;
-        // 注意: src 为快照引用, 修改 UI 状态表不改变消息, 引用保持有效
-        if (type == "int") {
-            ui.editText = fmt::format("{}", static_cast<int64_t>(val));
-        } else {
-            ui.editText = formatStepDouble(val);
-        }
-        ui.edited = true;
-        ui.tip.clear();
-    });
-    ctx_.postRedraw();
+    return interruptView_.estimate(*st->messages[msgIndex], width);
 }

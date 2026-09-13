@@ -169,6 +169,9 @@ std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const agentxx::ut
                 result.inputs.push_back(InterruptHandleInputItem::fromJson(input));
             }
         }
+        if (data["ui"].is_object()) {
+            result.ui = InterruptUi::fromJson(data["ui"]);
+        }
     }
     return result;
 }
@@ -178,12 +181,17 @@ agentxx::util::Json InterruptHandleArg::toJson() const {
     for (const auto& item : inputs) {
         inputsJson.push_back(item.toJson());
     }
-    return agentxx::util::Json{
+    auto j = agentxx::util::Json{
         {"name",     name      },
         {"arg",      arg       },
         {"inputs",   inputsJson},
         {"resultId", resultId  },
     };
+    // UI 描述 (可选): 客户端按描述通用渲染中断控件; 缺省时用通用默认模板
+    if (!ui.empty()) {
+        j["ui"] = ui.toJson();
+    }
+    return j;
 }
 
 std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const agentxx::util::Json& data) {

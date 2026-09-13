@@ -706,7 +706,6 @@ Options:
                 agentUrl,
                 agentToken,
                 remoteModel,
-                yamlCfg.permissionMode,
                 config->plugins
             );
         } else {
@@ -742,7 +741,7 @@ Options:
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         // 双端插件: agent 侧经 BaseAgent::init 加载 (同 config->plugins),
         // client 侧经 runLocalTuiUnified 加载 (sides 过滤)
-        runLocalTuiUnified(agent, yamlCfg.permissionMode, config->plugins);
+        runLocalTuiUnified(agent, config->plugins);
     } else {
         agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;

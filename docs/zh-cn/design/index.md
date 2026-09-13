@@ -124,7 +124,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 | 中间件 | 功能 |
 |--------|------|
-| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择" (WireSetPermission 将路径规则注册回服务端，后续直接放行/拒绝不再询问) |
+| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 的 `permissionUi`)，勾选值经中断结果的 `options.remember` 回传，由权限处理器在 agent 侧注册路径规则 (后续直接放行/拒绝不再询问；客户端不参与权限语义) |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
@@ -335,7 +335,8 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     命中区域由上一帧 visibleBoxes 反推 (collapsibleBoxes_ +
     collapsibleIsStream_ 区分消息区/流式区)
   - 流式 token 实时渲染 (COW 按需拷贝避免 O(n²) 累积拷贝)
-  - 权限请求弹窗 + "记住本次选择" (经 WireSetPermission 将路径规则注册到服务端权限中间件)
+  - 权限询问卡片 + "记住本次选择" (中断 UI 描述驱动; 勾选值经结果 options 回传,
+    由权限处理器在 agent 侧注册路径规则)
   - 模型选择器 (运行时切换)
   - 右侧边栏 (日志窗口 / 信息面板 / Planning 展示)
   - 待发送消息队列 (执行中排队，轮次结束自动派发; 队列由服务端按会话维护并经
@@ -359,6 +360,23 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件降级为
     [用户附带了图片/音频/视频] 纯文本标签
   - 文件编辑 diff 对比渲染
+  - 中断询问的**声明式 UI 描述**渲染 (通用机制, TUI 不含任何具体询问类型
+    ——含权限询问——的特化分支): agent 侧在 `InterruptHandleArg.ui`
+    (schema 见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h))
+    声明头行分段与项列表 (text/gap/toggle/input/submit/separator/diff),
+    客户端 `InterruptView` 统一负责渲染/高度估算/命中区域/交互/结果组装:
+    - 输入项形态: `view=buttons` (值按钮, 点击即确认) / `number` (减-输入框-加) /
+      `text` / `list` (枚举竖直列表, 全部渲染不截断);
+      描述字段留空时取消息字段 (inputType/inputDefault/inputEnums/inputDepict),
+      故同一份描述可服务多输入项的中断请求 (每项一条消息)
+    - 勾选项 (toggle) 的值进入结果 options: 权限询问的"记住此选择"由此实现,
+      结果回传 `{"values":[...], "options":{"remember":true}}`, **规则注册在
+      agent 侧完成** (权限处理器按 options.remember 经总线注册路径规则),
+      客户端不参与权限语义
+    - 缺省描述 (旧服务端/未声明) 回退通用默认模板 (进度头行 + 描述 + 类型控件
+      + 确认行), 与历史外观等价; 未知项类型忽略 (向前兼容)
+    - 渲染与估算同源: 同一套描述项判定, 避免布局与估算两处漂移
+      (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h))
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
@@ -1344,8 +1362,10 @@ Client                              Server
   │ (可选) 上下文统计
   │←── ContextStats ──────────────────│ token 用量推送 (含流式期间窗口平均 tps)
   │                                    │
-  │ (可选) 客户端记住权限选择
+  │ (可选) 宿主注册权限规则 (FFI agentxx_ffi_set_permission)
   │──── SetPermission (path, allow) ──│ 注册路径规则到服务端权限中间件
+  │                                    │ (TUI 的"记住本次选择"不走上行消息:
+  │                                    │  中断结果 options.remember 由服务端注册)
   │                                    │
   │ (可选) 会话选择弹窗 (TUI F4)
   │──── ListSessions ─────────────────│ 列举持久化会话 (阻塞 I/O 卸载到线程池)
@@ -1511,9 +1531,12 @@ agent/
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
 │   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/动画/日志等级)
-│   │   │       │   └── modal_container.h # 浮层容器 (权限/中断弹窗)
+│   │   │       │   ├── modal_container.h # 浮层容器 (权限/中断弹窗)
+│   │   │       │   └── tui_i18n.h       # 界面翻译表 (en/zh 两列, 缺键回退)
+│   │   │       ├── text_layout.h # 文本布局辅助 (行数估算/硬折行; 消息列表与中断视图共用)
 │   │   │       └── components/   # TUI 渲染组件
 │   │   │           ├── message_list.h # 消息列表渲染
+│   │   │           ├── interrupt_view.h # 中断输入项通用视图 (渲染/估算/交互; 形态由 UI 描述数据决定)
 │   │   │           ├── sidebar.h      # 右侧边栏 (日志/信息/Planning)
 │   │   │           ├── overlays.h     # 浮层 (权限/中断/模型选择)
 │   │   │           ├── input_bar.h    # 输入栏

@@ -35,7 +35,12 @@ public:
 
     std::string interruptTag    = "answered";
     bool        permissionAllow = true;
-    int         interruptCalls  = 0;
+    /// 权限结果是否使用对象形态 ({"values":[...], "options":{"remember":true}}):
+    /// true = 新客户端 (勾选"记住本次选择"), false = 旧客户端 (纯值数组)
+    bool        permissionRemember = false;
+    int         interruptCalls     = 0;
+    /// 最近一次中断请求参数 (InterruptHandleArg JSON; 供断言 UI 描述下发)
+    std::string lastInterruptArgJson;
 
     void onDelta(const agentxx::agent::WireDelta&) override {}
 
@@ -49,10 +54,18 @@ public:
         std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
-        std::string_view /*interruptArgJson*/
+        std::string_view interruptArgJson
     ) override {
         ++interruptCalls;
+        lastInterruptArgJson = std::string{interruptArgJson};
         if (interruptNode == "permission") {
+            if (permissionRemember) {
+                co_return agentxx::util::Json{
+                    {"values",
+                     agentxx::util::Json::array({permissionAllow ? "true" : "false"})},
+                    {"options", agentxx::util::Json{{"remember", true}}},
+                };
+            }
             co_return agentxx::util::Json::array({permissionAllow ? "true" : "false"});
         }
         co_return agentxx::util::Json::array({interruptTag});
@@ -454,6 +467,197 @@ asio::awaitable<void> test_permission_remember_rule() {
     co_return;
 }
 
+/// 中断结果组装 (客户端 → agent 的 JSON 形态):
+/// 无勾选项时为纯值数组 (兼容旧服务端), 有勾选项时为 {values, options}
+void test_make_interrupt_result_forms() {
+    using agentxx::middleware::makeInterruptResult;
+    using agentxx::util::Json;
+
+    // 无 options (未声明勾选项): 纯值数组
+    auto arrayForm = makeInterruptResult(Json::array({"true"}), Json::object());
+    XX_TEST_EXPECT_TRUE(arrayForm.is_array());
+    XX_TEST_EXPECT_EQ(arrayForm.size(), size_t{1});
+
+    // 有 options (描述声明了勾选项): 对象形态
+    auto objForm = makeInterruptResult(
+        Json::array({"false"}),
+        Json{{"remember", true}}
+    );
+    XX_TEST_EXPECT_TRUE(objForm.is_object());
+    XX_TEST_EXPECT_TRUE(objForm.contains("values"));
+    XX_TEST_EXPECT_TRUE(objForm.contains("options"));
+    if (objForm.contains("values") && objForm["values"].is_array()) {
+        XX_TEST_EXPECT_EQ(objForm["values"][0].get<std::string>(), std::string("false"));
+    }
+    if (objForm.contains("options") && objForm["options"].is_object()) {
+        XX_TEST_EXPECT_TRUE(objForm["options"].value("remember", false));
+    }
+}
+
+/// 权限询问的 UI 描述下发: 中断参数须携带声明式描述 (`ui` 字段),
+/// 客户端据此通用渲染 (分段头/勾选项/一键按钮), 不再识别 permission 语义
+asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+
+    auto io             = std::make_shared<MockIO>();
+    io->permissionAllow = true;
+    io->registerOnBus(sessionBus);
+
+    auto req = agentxx::events::ReqPermission{
+        .agentName     = "test",
+        .sessionId     = "t1",
+        .toolName      = "agentxx_filesystem_write",
+        .category      = "filesystem_write",
+        .target        = "/data/projects/ui/out.txt",
+        .argumentsJson = R"({"path":"/data/projects/ui/out.txt"})",
+    };
+    auto resp = co_await sessionBus
+                    ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                        agentxx::events::Topic::Permission,
+                        req,
+                        std::chrono::seconds(5)
+                    );
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+
+    // 描述解析: 头行分段含权限标记/工具名/分类, 项含勾选项与允许/拒绝按钮,
+    // 结果映射声明 options=remember (客户端只回传该选项的值)
+    const auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+        agentxx::util::Json::parse(io->lastInterruptArgJson)
+    );
+    XX_TEST_EXPECT_TRUE(argOpt.has_value());
+    if (argOpt.has_value()) {
+        const auto& ui = argOpt->ui;
+        XX_TEST_EXPECT_FALSE(ui.empty());
+        XX_TEST_EXPECT_EQ(ui.header.segments.size(), size_t{3});
+        if (ui.header.segments.size() == 3) {
+            XX_TEST_EXPECT_EQ(ui.header.segments[0].text, std::string("! [Permission] "));
+            XX_TEST_EXPECT_EQ(ui.header.segments[1].text, std::string("agentxx_filesystem_write"));
+            XX_TEST_EXPECT_EQ(ui.header.segments[2].text, std::string(" filesystem_write"));
+        }
+        // 描述项: 目标描述(硬折行) / 空行 / 勾选项 / 空行 / 一键按钮
+        XX_TEST_EXPECT_EQ(ui.items.size(), size_t{5});
+        size_t toggles = 0;
+        size_t inputs  = 0;
+        for (const auto& item : ui.items) {
+            if (item.kind == "toggle") {
+                ++toggles;
+                XX_TEST_EXPECT_EQ(item.id, std::string("remember"));
+            } else if (item.kind == "input") {
+                ++inputs;
+                XX_TEST_EXPECT_EQ(item.view, std::string("buttons"));
+                XX_TEST_EXPECT_EQ(item.buttons.size(), size_t{2});
+            }
+        }
+        XX_TEST_EXPECT_EQ(toggles, size_t{1});
+        XX_TEST_EXPECT_EQ(inputs, size_t{1});
+        XX_TEST_EXPECT_EQ(ui.options.size(), size_t{1});
+        if (!ui.options.empty()) {
+            XX_TEST_EXPECT_EQ(ui.options[0], std::string("remember"));
+        }
+        // 输入项字段仍保留 (旧客户端按 inputs 渲染的兼容路径)
+        XX_TEST_EXPECT_EQ(argOpt->inputs.size(), size_t{1});
+    }
+    co_return;
+}
+
+/// 权限询问 + "记住本次选择" (结果对象形态):
+/// 客户端只回传 {values, options.remember}; 规则注册由 agent 侧 permission
+/// 处理器完成 (客户端不再发 WireSetPermission, 也不参与权限语义)
+asio::awaitable<void> test_permission_remember_via_result_options() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+
+    auto io                = std::make_shared<MockIO>();
+    io->permissionAllow    = true;
+    io->permissionRemember = true; // 结果 = {"values":["true"], "options":{"remember":true}}
+    io->registerOnBus(sessionBus);
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto session      = agentContext->getSession("remember_options");
+    session->bus      = sessionBus;
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+    // 订阅权限规则设置事件 (记住选择经总线注册规则到本中间件)
+    permission->registerOnBus(sessionBus);
+    // 无任何已注册规则 → 一律询问 (走 HIL 权限询问路径)
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+
+    MockTool          item("agentxx_filesystem_write");
+    const std::string targetPath = "/data/projects/remember_opts/out.txt";
+
+    auto write = [&](std::string_view path) -> asio::awaitable<bool> {
+        auto args = agentxx::util::Json{
+            {"path",      std::string{path}       },
+            {"sessionId", "remember_options"      }
+        };
+        co_return co_await permission->defOnFilesystemHandle(
+            item,
+            args,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+    };
+
+    // 首次: 询问 (MockIO 应答 允许 + 记住)
+    bool ok = co_await write(targetPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+
+    // 记住生效: 同一目标路径直接放行, 不再询问
+    ok = co_await write(targetPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 未再询问
+
+    // 规则仅覆盖记住的目标: 其他路径仍会询问 (注册按目标路径前缀匹配)
+    const std::string otherPath = "/data/projects/remember_opts/other.txt";
+    ok                          = co_await write(otherPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 2);
+
+    // 目录型目标: 记住后其子路径一并放行
+    const std::string dirPath   = "/data/projects/remember_opts/sub";
+    const std::string childPath = "/data/projects/remember_opts/sub/deep.txt";
+    ok                          = co_await write(dirPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 3);
+    ok = co_await write(childPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 3); // 子路径未再询问
+
+    co_return;
+}
+
+/// HIL 中断结果对象形态: 结果 {"values":[...], "options":{...}} 只取值数组
+/// 写回 resume 值 (options 为界面声明项, 由对应服务端消费)
+asio::awaitable<void> test_hil_interrupt_result_object_values_only() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+
+    auto io = std::make_shared<MockIO>();
+    io->registerOnBus(sessionBus);
+
+    // 直接经总线请求 HIL 中断 (MockIO 返回纯数组形态), 断言 resultJson 为数组
+    auto resp = co_await sessionBus
+                    ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+                        agentxx::events::Topic::Interrupt,
+                        agentxx::events::ReqInterrupt{
+                            .agentName         = "test",
+                            .sessionId         = "t1",
+                            .interruptNode     = "tool_x",
+                            .handleName        = "default",
+                            .interruptArgsJson = "{}",
+                            .resultId          = "call_1",
+                        },
+                        std::chrono::seconds(5)
+                    );
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_TRUE(resp->handled);
+        XX_TEST_EXPECT_EQ(resp->resultJson, "[\"answered\"]");
+    }
+    co_return;
+}
+
 asio::awaitable<TestResult> run_interrupt_bus_tests() {
     g_ib_passed = 0;
     g_ib_failed = 0;
@@ -464,6 +668,10 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_interrupt_bus_custom_handler();
         co_await test_permission_relative_path();
         co_await test_permission_remember_rule();
+        co_await test_permission_prompt_carries_ui_descriptor();
+        co_await test_permission_remember_via_result_options();
+        co_await test_hil_interrupt_result_object_values_only();
+        test_make_interrupt_result_forms();
     } catch (const std::exception& e) {
         TEST_FAIL << "interrupt_bus suite exception: " << e.what() << std::endl;
         g_ib_failed++;

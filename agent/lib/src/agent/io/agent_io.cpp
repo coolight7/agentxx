@@ -3,6 +3,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/middlewares/permission.h"
 #include "neograph/graph/cancel.h"
 
 namespace agentxx {
@@ -181,6 +182,12 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             // 取消标记: handleInterrupt 被取消时返回 {"__cancelled__":true},
             // handled=false 使调用方不写回 resume 值 (见 AgentRunner)
             bool cancelled = result.is_object() && result.value("__cancelled__", false);
+            if (!cancelled && result.is_object() && result.contains("values")) {
+                // 结果对象形态 ({"values":[...], "options":{...}}) 只取 values:
+                // 图状态 resume 只接收值列表; options 由声明该选项的服务端消费
+                // (权限询问在 permission 处理器内消费, 见 rememberPermission)
+                result = result["values"];
+            }
             co_return events::RespInterrupt{
                 .handled    = !cancelled,
                 .resultJson = result.dump(),
@@ -212,6 +219,13 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 {"category", req.category},
                 {"target",   req.target  },
             };
+            // 中断 UI 描述 (声明式): 权限卡片形态由此描述数据决定, 客户端不含
+            // 任何 permission 分支 —— 与普通中断共用同一套通用渲染/交互实现
+            arg.ui = agentxx::middleware::InterruptUi::permissionUi(
+                req.toolName,
+                req.category,
+                req.target
+            );
 
             auto result = co_await this->handleInterrupt(
                 req.sessionId,
@@ -226,14 +240,31 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             if (result.is_object() && result.value("__cancelled__", false)) {
                 throw neograph::graph::CancelledException("permission interrupted by cancel");
             }
+            // 结果解析 (兼容两种形态, 见 client_plugin_api/中断 UI 描述):
+            // - ["true"/"false"]                            旧客户端: 纯值数组
+            // - {"values":[...], "options":{"remember":..}} 新客户端: 值 + 选项
+            agentxx::util::Json values = result;
+            bool                remember = false;
+            if (result.is_object() && result.contains("values")) {
+                values = result["values"];
+                if (result.contains("options") && result["options"].is_object()) {
+                    remember = result["options"].value("remember", false);
+                }
+            }
             bool allowed = false;
-            if (result.is_array() && !result.empty()) {
-                auto val = result[0];
+            if (values.is_array() && !values.empty()) {
+                auto val = values[0];
                 if (val.is_string()) {
-                    allowed = (val.get<std::string>() == "true" || val.get<std::string>() == "yes");
+                    auto s   = val.get<std::string>();
+                    allowed  = (s == "true" || s == "yes");
                 } else if (val.is_boolean()) {
                     allowed = val.get<bool>();
                 }
+            }
+            // 记住本次选择: 客户端只回传表单值/选项, 规则注册在 agent 侧完成
+            // (客户端不参与权限语义; 见 rememberPermission)
+            if (remember && confirmedValues(values)) {
+                co_await this->rememberPermission(req.category, req.target, allowed);
             }
             co_return events::RespPermission{
                 .decision = allowed ? events::RespPermission::Decision::Allow
@@ -242,6 +273,47 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             };
         }
     );
+}
+
+/// 结果是否包含已确认的输入值 (空数组 = 用户取消/中断过期, 不注册规则)
+bool AgentIOBase::confirmedValues(const agentxx::util::Json& values) {
+    return values.is_array() && !values.empty();
+}
+
+asio::awaitable<void> AgentIOBase::rememberPermission(
+    std::string_view category,
+    std::string_view target,
+    bool             allow
+) {
+    auto bus = registeredBus_.lock();
+    if (!bus) {
+        // 总线已释放 (会话结束/端点析构): 规则无处注册, 记录后结束
+        XX_LOGW("[io] rememberPermission without bus, rule dropped: {}", target);
+        co_return;
+    }
+    if (target.empty()) {
+        co_return;
+    }
+    // 权限分类 → 中间件规则作用域索引 (读/写各一套规则)
+    const size_t index
+        = (category == "filesystem_write")
+              ? agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+              : agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
+    co_await bus->publish<events::EventSetPermissionRule>(
+        events::Topic::PermissionSetRule,
+        events::EventSetPermissionRule{
+            .path  = std::string{target},
+            .allow = allow,
+            .index = index,
+        }
+    );
+    XX_LOGI(
+        "[io] remembered permission rule: {} {} (index={})",
+        target,
+        allow ? "ALLOW" : "DENY",
+        index
+    );
+    co_return;
 }
 
 } // namespace agent

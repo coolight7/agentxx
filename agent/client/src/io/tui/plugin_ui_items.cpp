@@ -123,18 +123,40 @@ Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& theme) 
     return btn;
 }
 
+ftxui::Color uiRoleColor(std::string_view role, const TUITheme& theme) {
+    if (role == "title" || role == "accent") {
+        return theme.accentColor;
+    }
+    if (role == "hint") {
+        return theme.hintColor;
+    }
+    if (role == "error") {
+        return theme.errorColor;
+    }
+    if (role == "thinking") {
+        return theme.thinkingColor;
+    }
+    if (role == "tool") {
+        return theme.toolColor;
+    }
+    if (role == "text" || role == "user") {
+        return theme.userColor;
+    }
+    if (role == "assistant" || role == "content") {
+        return theme.assistantColor;
+    }
+    return theme.normalColor;
+}
+
 Element renderPluginTextItem(
     const std::string& textStr,
     const std::string& role,
     const TUITheme&    theme
 ) {
     Element el = paragraph(textStr);
+    el         = el | color(uiRoleColor(role, theme));
     if (role == "title") {
-        el = el | color(theme.accentColor) | bold;
-    } else if (role == "hint") {
-        el = el | color(theme.hintColor);
-    } else {
-        el = el | color(theme.normalColor);
+        el = el | bold;
     }
     return el;
 }

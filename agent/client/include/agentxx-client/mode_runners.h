@@ -23,8 +23,7 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginCon
 
 void runLocalTuiUnified(
     std::shared_ptr<agent::CodeAgent> agent,
-    agent::PermissionMode             permissionMode = agent::PermissionMode::Ask,
-    ClientPluginConfigs               plugins        = {}
+    ClientPluginConfigs               plugins = {}
 );
 
 void runRemoteCli(
@@ -35,11 +34,10 @@ void runRemoteCli(
 );
 
 void runRemoteTui(
-    std::string_view      url,
-    std::string_view      token,
-    std::string_view      model,
-    agent::PermissionMode permissionMode = agent::PermissionMode::Ask,
-    ClientPluginConfigs   plugins        = {}
+    std::string_view    url,
+    std::string_view    token,
+    std::string_view    model,
+    ClientPluginConfigs plugins = {}
 );
 
 } // namespace client

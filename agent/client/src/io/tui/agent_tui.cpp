@@ -76,15 +76,13 @@ bool isBlankContentMessage(const TUIMessage& msg) {
 // ---------------------------------------------------------------------------
 
 TUIClientAgentIO::TUIClientAgentIO(
-    asio::any_io_executor          ex,
-    std::string                    sessionId,
-    TUITheme                       theme,
-    agentxx::agent::PermissionMode permissionMode
+    asio::any_io_executor ex,
+    std::string           sessionId,
+    TUITheme              theme
 ) :
     theme_(theme),
     sessionId_(std::move(sessionId)),
     ex_(ex),
-    permissionMode_(permissionMode),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
     // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 server-io
@@ -2290,15 +2288,19 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 // 中断输入直接渲染在消息列表中 (Role::Interrupt 消息内嵌交互控件), 不弹窗:
 // - 每个输入项一条中断消息, 共享同一结果回传通道 (经 MessageListComponent
 //   attachInterruptChannel 注入 UI 线程)
-// - UI 线程 (MessageListComponent) 确认/取消后经通道发送 {inputIndex, value}
+// - 消息携带 agent 侧声明的 UI 描述 (InterruptHandleArg.ui): 控件形态
+//   (值按钮/输入框/枚举/勾选项/确认行) 完全由描述数据决定, 客户端不含任何
+//   具体询问 (含权限) 的特化分支
+// - UI 线程确认/取消后经通道回传 {inputIndex, value, options}; 规则注册等
+//   业务语义由 agent 侧消费结果完成 (客户端只回传表单值/选项)
 // - 本协程收集全部输入项结果后按序组装返回; 收到整体取消 (inputIndex=-1) 或
 //   通道关闭 (server 过期通知 / TUI 退出) 时终止, 返回已收集结果
 // ---------------------------------------------------------------------------
 
 asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     std::string_view sessionId,
-    std::string_view interruptNode,
-    std::string_view interruptValue,
+    std::string_view /*interruptNode*/,
+    std::string_view /*interruptValue*/,
     std::string_view interruptArgJson
 ) {
     std::optional<agentxx::middleware::InterruptHandleArg> argOpt;
@@ -2318,55 +2320,8 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         co_return agentxx::util::Json::array();
     }
     const auto& handleArg = argOpt.value();
-
-    // ---- 权限询问 (interruptNode == "permission") 的客户端侧处理 ----
-    // 服务端权限处理器经 InterruptHandleArg.arg 透传权限上下文 {category, target}:
-    // - category: 权限分类 ("filesystem_read" / "filesystem_write"), 决定规则作用域
-    // - target:   受约束目标 (已标准化的绝对路径, 与中间件规则匹配口径一致)
-    const bool  isPermission = (interruptNode == "permission");
-    std::string permCategory;
-    std::string permTarget;
-    std::string shownTarget;
-    if (isPermission) {
-        if (handleArg.arg.is_object()) {
-            permCategory = handleArg.arg.value("category", std::string{});
-            permTarget   = handleArg.arg.value("target", std::string{});
-        }
-        shownTarget = permTarget.empty() ? std::string{interruptValue} : permTarget;
-        // 客户端兜底处理 (模式来自 yaml 配置 `permission.mode`):
-        // 中间件已注册的显式规则 (ALLOW/DENY) 在服务端先行判定, 能走到这里
-        // 说明服务端策略为 INTERRUPT (如远程 server 与本地配置不一致时)。
-        // - pass: 视为允许, 无需用户介入
-        // - deny: 视为拒绝, 无需用户介入
-        // - ask/all_ask: 询问用户 (ask 模式下工作目录内的路径由服务端规则
-        //   直接放行, 到达客户端的均为需要询问的路径)
-        if (permissionMode_ == agentxx::agent::PermissionMode::Pass) {
-            {
-                std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                auto&                       st = sharedState_.mutableState();
-                resetTrailingRunningToolsLocked(st);
-                st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
-                    TUIMessage::Role::Tip,
-                    fmt::format("[Permission] Pass mode: allow {} ({})", shownTarget, permCategory)
-                )));
-            }
-            postRedraw();
-            co_return agentxx::util::Json::array({"true"});
-        }
-        if (permissionMode_ == agentxx::agent::PermissionMode::Deny) {
-            {
-                std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                auto&                       st = sharedState_.mutableState();
-                resetTrailingRunningToolsLocked(st);
-                st.messages.push_back(std::make_shared<TUIMessage>(TUIMessage::makeText(
-                    TUIMessage::Role::Tip,
-                    fmt::format("[Permission] Deny mode: reject {} ({})", shownTarget, permCategory)
-                )));
-            }
-            postRedraw();
-            co_return agentxx::util::Json::array({"false"});
-        }
-    }
+    // ui 描述只构造一次 (所有输入项消息共享同一份声明)
+    const agentxx::util::Json uiJson = handleArg.ui.toJson();
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
@@ -2378,12 +2333,11 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     auto          ch          = std::make_shared<InterruptResultChannel>(ex_, 64);
     activeInterrupts_[wireId] = ch;
 
-    // 结果回传通道注入 UI 线程 (MessageListComponent 中断 UI 状态表):
-    // 通道由 client 线程创建, UI 线程交互 (确认/取消) 需经其发送结果;
-    // 权限询问标记 rememberable: 渲染"记住"开关, 用户可勾选记住本次选择
-    enqueueUiAction([this, wireId, ch, rememberable = isPermission]() {
+    // 结果回传通道注入 UI 线程 (MessageListComponent 中断视图):
+    // 通道由 client 线程创建, UI 线程交互 (确认/取消) 需经其发送结果
+    enqueueUiAction([this, wireId, ch]() {
         if (messageList_) {
-            messageList_->attachInterruptChannel(wireId, ch, rememberable);
+            messageList_->attachInterruptChannel(wireId, ch);
         }
     });
 
@@ -2399,17 +2353,15 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         m->interrupt               = TUIMessage::InterruptData{};
         m->interrupt->interruptId  = wireId;
         m->interrupt->inputLabel   = input.label;
-        m->interrupt->inputDepict
-            = (!input.depict.empty()) ? input.depict
-              : (isPermission && !shownTarget.empty()) ? shownTarget
-                                                       : std::string{};
+        m->interrupt->inputDepict  = input.depict;
         m->interrupt->inputType    = input.type;
         m->interrupt->inputDefault = input.defaultValue;
         m->interrupt->inputEnums   = input.enumValues;
         m->interrupt->inputIndex   = index;
         m->interrupt->inputTotal   = total;
-        // 编辑文本/选中项等纯 UI 状态由 MessageListComponent 按
-        // interrupt->inputType/inputDefault/inputEnums 惰性初始化, 不存于消息
+        m->interrupt->ui           = uiJson;
+        // 编辑文本/选中项/勾选项等纯 UI 状态由 InterruptView 按描述 +
+        // 消息字段 (inputType/inputDefault/inputEnums) 惰性初始化, 不存于消息
         {
             std::lock_guard<std::mutex> lock(sharedState_.mutex());
             auto&                       st = sharedState_.mutableState();
@@ -2420,12 +2372,13 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
 
     // 收集结果: 各输入项确认后按 inputIndex 回填 (支持任意顺序确认),
     // 整体取消 (inputIndex=-1) 或通道关闭 (过期/退出) 时终止
-    auto                                    result = agentxx::util::Json::array();
-    std::vector<std::optional<std::string>> values(total);
+    auto                                    values = agentxx::util::Json::array();
+    std::vector<std::optional<std::string>> items(total);
+    agentxx::util::Json                     options = agentxx::util::Json::object();
     size_t                                  confirmedCount = 0;
-    bool                                    remember = false; // 权限询问: 记住本次选择
-    while (confirmedCount < values.size()) {
-        auto [ec, idx, val, rem] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+    while (confirmedCount < items.size()) {
+        auto [ec, idx, val, opts]
+            = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
         if (ec) {
             // 通道关闭: server 过期通知 / TUI 退出 → 终止, 返回已收集结果
             break;
@@ -2434,44 +2387,36 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
             // 用户整体取消
             break;
         }
-        if (idx < 1 || idx > total || values[static_cast<size_t>(idx - 1)].has_value()) {
+        if (idx < 1 || idx > total || items[static_cast<size_t>(idx - 1)].has_value()) {
             continue; // 防御: 非法/重复序号
         }
-        values[static_cast<size_t>(idx - 1)]  = val;
-        remember                             |= rem;
+        items[static_cast<size_t>(idx - 1)] = val;
+        // 勾选项 (如权限询问的"记住此选择") 合并到结果: 语义由 agent 侧消费
+        if (opts.is_object()) {
+            for (auto it = opts.begin(); it != opts.end(); ++it) {
+                if (it->is_boolean()) {
+                    options[it.key()] = it->get<bool>();
+                }
+            }
+        }
         ++confirmedCount;
     }
-    for (auto& v : values) {
+    for (auto& v : items) {
         if (v.has_value()) {
-            result.push_back(std::move(*v));
+            values.push_back(std::move(*v));
         }
     }
 
-    // 记住本次选择: 将路径规则注册到服务端权限中间件,
-    // 后续访问该路径或其子目录时按本次允许/拒绝处理, 不再询问
-    if (isPermission && remember && !permTarget.empty() && confirmedCount > 0
-        && values[0].has_value()) {
-        const auto&  v     = *values[0];
-        const bool   allow = (v == "true" || v == "yes");
-        const size_t index
-            = (permCategory == "filesystem_write")
-                  ? agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-                  : agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
-        if (transport_) {
-            sendToPeer(agentxx::agent::WireSetPermission{
-                .sessionId = std::string{sessionId},
-                .path      = permTarget,
-                .allow     = allow,
-                .index     = index,
-            });
-        }
-    }
+    // 结果形态 (与 agent 侧解析一致):
+    // - 无勾选项: 纯值数组 ["true"] (兼容旧服务端)
+    // - 有勾选项: {"values":[...], "options":{"remember":true}}
+    const agentxx::util::Json result
+        = agentxx::middleware::makeInterruptResult(values, options);
 
     activeInterrupts_.erase(wireId);
     awaitingInterruptInput_.store(false, std::memory_order_release);
     // 中断流程结束 (全部确认/取消/过期): 清理 UI 线程的 channel 映射与
-    // 该请求的 UI 状态 (消息已固定为 Confirmed/Cancelled/Expired, 状态行
-    // 渲染不再需要编辑状态)
+    // 该请求的表单状态 (消息已固定为 Confirmed/Cancelled/Expired)
     enqueueUiAction([this, wireId]() {
         if (messageList_) {
             messageList_->releaseInterruptChannel(wireId);

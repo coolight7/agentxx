@@ -347,7 +347,6 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginCon
 
 static asio::awaitable<void> runLocalTuiUnifiedAsync(
     std::shared_ptr<agent::CodeAgent> agent,
-    agent::PermissionMode             permissionMode,
     ClientPluginConfigs               plugins
 ) {
     auto clientEx = co_await asio::this_coro::executor;
@@ -356,12 +355,7 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
 
     // 注意: TUI 不持有 AgentContext/Session (属于 server-io 线程), 所有
     // agent 侧信息 (模型列表/上下文统计/LLM 上下文) 均经 Wire 消息由服务端获取
-    auto tui = std::make_shared<TUIClientAgentIO>(
-        clientEx,
-        sessionId,
-        resolveTuiTheme(),
-        permissionMode
-    );
+    auto tui = std::make_shared<TUIClientAgentIO>(clientEx, sessionId, resolveTuiTheme());
     if (agent && agent->agentContext && agent->agentContext->agentConfig) {
         tui->setDataDir(
             agentxx::agent::AgentConfigStatic::getDataDir(agent->agentContext->agentConfig->dataDir)
@@ -405,12 +399,8 @@ static asio::awaitable<void> runLocalTuiUnifiedAsync(
     co_await pluginMgr->shutdownAsync();
 }
 
-void runLocalTuiUnified(
-    std::shared_ptr<agent::CodeAgent> agent,
-    agent::PermissionMode             permissionMode,
-    ClientPluginConfigs               plugins
-) {
-    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, permissionMode, std::move(plugins)));
+void runLocalTuiUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginConfigs plugins) {
+    runLocalUnifiedMain(agent, runLocalTuiUnifiedAsync(agent, std::move(plugins)));
 }
 
 // ---------------------------------------------------------------------------
@@ -514,11 +504,10 @@ void runRemoteCli(
 }
 
 static asio::awaitable<void> runRemoteTuiAsync(
-    std::string           url,
-    std::string           token,
-    std::string           model,
-    agent::PermissionMode permissionMode,
-    ClientPluginConfigs   plugins
+    std::string         url,
+    std::string         token,
+    std::string         model,
+    ClientPluginConfigs plugins
 ) {
     auto ex = co_await asio::this_coro::executor;
 
@@ -527,7 +516,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     const std::string sessionId = generateUniqueSessionId();
     // 注意: TUI 不持有 AgentContext/Session (属于 server-io 线程),
     // 模型名/上下文统计等均经 Wire 消息由服务端获取
-    auto io = std::make_shared<TUIClientAgentIO>(ex, sessionId, resolveTuiTheme(), permissionMode);
+    auto io = std::make_shared<TUIClientAgentIO>(ex, sessionId, resolveTuiTheme());
     io->setRemoteUrl(url);
     // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载在 start() 后进行 (面板经 postToUi 排队挂载)
@@ -626,11 +615,10 @@ static asio::awaitable<void> runRemoteTuiAsync(
 }
 
 void runRemoteTui(
-    std::string_view      url,
-    std::string_view      token,
-    std::string_view      model,
-    agent::PermissionMode permissionMode,
-    ClientPluginConfigs   plugins
+    std::string_view    url,
+    std::string_view    token,
+    std::string_view    model,
+    ClientPluginConfigs plugins
 ) {
     asio::io_context ctx;
     asio::co_spawn(
@@ -639,7 +627,6 @@ void runRemoteTui(
             std::string{url},
             std::string{token},
             std::string{model},
-            permissionMode,
             std::move(plugins)
         ),
         asio::detached

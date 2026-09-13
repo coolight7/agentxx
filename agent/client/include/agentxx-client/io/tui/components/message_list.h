@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx-client/io/tui/components/interrupt_view.h"
 #include "agentxx-client/io/tui/components/spinner.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/lazy_scrollable.h"
@@ -35,60 +36,19 @@ struct ClientToolDecor;
 /// 事件处理:
 /// - 滚轮: 由内部 LazyScrollable 处理
 /// - 左键点击 Think/Tool 消息: 折叠/展开
-/// - 左键点击中断输入消息的控件 (是/否、±、枚举项、输入框、确认、取消):
-///   切换选中 / 步进 / 聚焦编辑 / 确认 / 取消; 键盘 (字符/Backspace/方向键/
-///   Enter/Esc) 作用于最近点击激活的中断消息
+/// - 左键点击中断输入消息的控件: 由 InterruptView 按中断 UI 描述通用处理
+///   (值按钮/枚举/数值步进/输入框/勾选项/确认/取消); 键盘 (字符/Backspace/
+///   方向键/Enter/Esc) 作用于最近点击激活的中断消息
 class MessageListComponent : public ftxui::ComponentBase {
 public:
 
-    /// 中断输入项 UI 状态 (UI 线程独占; 从 TUIMessage 迁出, 非消息内容)
-    /// - 初始值按消息 InterruptData (inputType/inputDefault/inputEnums) 惰性计算
-    /// - 经 mutateInterruptUiState 修改时 version 递增, 驱动 itemKey 变化
-    ///   (编辑文本/校验提示变化影响渲染高度, 需使懒列表缓存失效重估)
-    struct InterruptUIState {
-        /// 数值/string 输入框编辑文本 (初始 = 默认值, 数值无默认时 "0"/"0.0")
-        std::string editText;
-        /// 输入框是否已编辑 (首次字符输入/步进后置 true):
-        /// 初始默认值展示在输入框, 首次输入以新值覆盖默认 (与 stdio 逐行输入语义一致)
-        bool edited = false;
-        /// bool/enum 选中索引 (0=是/首项)
-        int selected = 0;
-        /// 权限询问: 是否记住本次选择 (确认后按本次允许/拒绝注册路径规则,
-        /// 后续访问该路径或其子目录不再询问; 仅 rememberable 的权限询问显示开关)
-        bool remember = false;
-        /// 校验失败等提示 (显示于控件下方; 下次编辑时清除)
-        std::string tip;
-        /// 修改计数 (itemKey 失效用)
-        uint64_t version = 0;
-        // 结果回传通道不存于此: 经 attachInterruptChannel 注入 interruptChannels_
-        // 映射 (同请求共享), 确认/取消时从映射取最新通道发送, 避免快照过期
-    };
+    /// 中断控件命中区域 (转发自 InterruptView; 见其 HitBox 说明)
+    using InterruptHitBox = agentxx::client::InterruptView::HitBox;
 
-    /// 中断消息控件种类 (命中检测用)
-    enum HitKind : uint8_t {
-        kHitBoolYes  = 0, // bool "是" (点击即选中并激活)
-        kHitBoolNo   = 1, // bool "否"
-        kHitNumMinus = 2, // 数值 "-" 步进
-        kHitNumPlus  = 3, // 数值 "+" 步进
-        kHitEnumItem = 4, // 枚举项 (sub = 项索引)
-        kHitEdit     = 5, // 输入框 (激活编辑)
-        kHitConfirm  = 6, // 确认
-        kHitCancel   = 7, // 取消整个中断请求
-        kHitRemember = 8, // 权限询问 "记住" 开关 (切换 remember 状态)
-    };
+    /// 中断输入项表单状态 (转发自 InterruptView::FormState)
+    using InterruptUIState = agentxx::client::InterruptView::FormState;
 
-    /// 中断控件命中区域 (渲染时 reflect 填充, 供点击命中检测)
-    struct InterruptHitBox {
-        size_t  msgIndex = static_cast<size_t>(-1);
-        uint8_t kind     = 0;
-        int     sub      = 0;
-        /// 指向控件 Box (布局时 reflect 填充): hits 在构建阶段 (布局前) 记录,
-        /// 若值拷贝则拿到的是空 Box (reflect 在 SetBox 时才写回), 故持引用,
-        /// 点击时读取的始终是最新布局位置
-        std::shared_ptr<ftxui::Box> box;
-    };
-
-    /// decor 按钮命中检测 (UI 线程独占; 与 interruptHits_ 同生命期):
+    /// decor 按钮命中检测 (UI 线程独占; 与中断控件命中区域同生命期):
     /// - OnRender 开头清空, 本帧 scrollable_->Render() 中构建可见 Tool 消息的
     ///   decor 按钮时填充 (buildMessageBlock → appendDecorItems)
     /// - box 经 shared_ptr 持有 (reflect 在布局 SetBox 时写回, 与中断控件同机制;
@@ -171,9 +131,12 @@ public:
     /// - 流式末尾正在输出的 Think 子项: 切换流式折叠覆盖态 (streamThinkOverride_)
     bool handleCollapsibleClick(const ftxui::Mouse& mouse);
 
-    /// 测试辅助: 最近一次渲染的中断控件命中区域
+    /// 测试辅助: 中断消息块的高度估算 (行数; 不含消息尾部空行)
+    size_t interruptEstimate(size_t msgIndex, int width) const;
+
+    /// 测试辅助: 最近一次渲染的中断控件命中区域 (转发自 InterruptView)
     const std::vector<InterruptHitBox>& interruptHitBoxes() const {
-        return interruptHits_;
+        return interruptView_.hitBoxes();
     }
 
     /// 测试辅助: 上一帧可折叠消息 (Think/Tool/System) 的命中区域
@@ -213,19 +176,14 @@ public:
 
     /// 测试辅助: 当前激活的中断消息索引 (npos = 无)
     size_t activeInterruptMsg() const {
-        return activeInterruptMsg_;
+        return interruptView_.activeMsg();
     }
 
     // ---- 中断 UI 状态 (client 线程注入 / 组件内部维护) ----
 
     /// 注册中断请求结果回传通道 (client 线程经 enqueueUiAction 调用;
     /// 同请求的所有输入项共享同一通道)
-    /// - rememberable: 该请求是否为可记住选择的权限询问 (渲染"记住"开关)
-    void attachInterruptChannel(
-        int64_t                                 wireId,
-        std::shared_ptr<InterruptResultChannel> ch,
-        bool                                    rememberable = false
-    );
+    void attachInterruptChannel(int64_t wireId, std::shared_ptr<InterruptResultChannel> ch);
 
     /// 释放指定中断请求的通道映射与该请求全部 UI 状态 (中断流程结束时调用;
     /// 消息已固定状态, 状态行渲染不再需要编辑状态)
@@ -234,14 +192,13 @@ public:
     /// 清空全部中断 UI 状态与通道映射 (消息整体替换/重连时调用)
     void clearInterruptUiState();
 
-    /// 测试辅助: 指定消息的中断 UI 状态副本 (非 Interrupt 消息或无状态时返回默认)
-    InterruptUIState interruptUiState(size_t msgIndex) const;
+    /// 测试辅助: 指定消息的中断表单状态副本 (必要时按描述惰性初始化;
+    /// 非 Interrupt 消息返回默认值)
+    InterruptUIState interruptUiState(size_t msgIndex) {
+        return interruptView_.formState(msgIndex);
+    }
 
 private:
-
-    /// 最近一次渲染时记录的中断控件命中区域 (UI 线程独占; 渲染时填充,
-    /// 点击时命中检测; 与 collapsibleBoxes_ 生命周期一致)
-    std::vector<InterruptHitBox> interruptHits_;
 
     std::vector<DecorHitBox> decorHits_;
 
@@ -250,53 +207,10 @@ private:
     /// 连接失败 banner 的"重试"按钮命中区域 (UI 线程独占; buildBanner 渲染时
     /// reflect 填充, TUIClientAgentIO 全局鼠标事件检测点击)
     ftxui::Box retryButtonBox_;
-    /// 当前激活编辑的中断消息索引 (点击输入框/控件时设置, Esc 清除)
-    size_t activeInterruptMsg_ = static_cast<size_t>(-1);
 
-    // ---- 中断消息交互 ----
-    /// 点击命中中断控件 (是/否、±、枚举项、输入框、确认、取消); 命中返回 true
-    bool handleInterruptClick(const ftxui::Mouse& mouse);
-    /// 键盘事件作用于当前激活的中断消息 (字符/Backspace/方向键/Enter/Esc)
-    bool handleInterruptKey(ftxui::Event event);
-    /// 将指定消息设为激活编辑状态 (bool/enum 为选中, 数值/string 为输入框)
-    void setInterruptActive(size_t mi);
-    /// 确认指定中断消息 (校验失败写 tip, 不关闭); 成功发送结果到通道
-    void confirmInterrupt(size_t mi);
-    /// 取消指定中断消息所属的整个中断请求 (所有未操作项标记 Cancelled)
-    void cancelInterrupt(size_t mi);
-    /// 数值步进: 以 delta (int: 1 / double: 1.0) 增减编辑值
-    void stepInterrupt(size_t mi, double delta);
-
-    // ---- 中断 UI 状态表 (UI 线程独占; key = (interruptId, inputIndex)) ----
-    /// 中断输入项 key (消息中 interruptId + inputIndex 唯一确定一个输入项)
-    struct InterruptKey {
-        int64_t id    = 0;
-        int     index = 0;
-
-        bool operator<(const InterruptKey& o) const {
-            return id != o.id ? id < o.id : index < o.index;
-        }
-    };
-
-    /// 获取/惰性创建指定消息的 UI 状态 (按消息 InterruptData 初始化:
-    /// editText=默认值(数值无默认时 "0"/"0.0"), selected=默认匹配项,
-    /// ch=attachInterruptChannel 注入的通道)
-    InterruptUIState& uiStateFor(const TUIMessage& msg);
-    /// 修改指定消息的 UI 状态 (version 递增, 使 itemKey 变化)
-    InterruptUIState& mutateInterruptUiState(const TUIMessage& msg);
-    /// 由消息推导 UI 状态 key (非 Interrupt 消息返回 false)
-    static bool interruptKeyOf(const TUIMessage& msg, InterruptKey& out);
-
-    std::map<InterruptKey, InterruptUIState> interruptUi_;
-
-    /// 中断请求信息: wireId → 通道 + 权限询问标记 (client 线程注入; 同请求共享)
-    struct InterruptChannelInfo {
-        std::shared_ptr<InterruptResultChannel> ch;
-        /// 是否为可记住选择的权限询问 (渲染"记住"开关)
-        bool rememberable = false;
-    };
-
-    std::map<int64_t, InterruptChannelInfo> interruptChannels_;
+    /// 中断输入项通用视图 (渲染/估算/交互/结果组装; 形态由中断 UI 描述数据决定,
+    /// 本组件不再含任何具体询问 (含权限) 的特化分支)
+    agentxx::client::InterruptView interruptView_;
 
     // ---- LazyScrollable 回调 ----
     size_t        itemCount();
@@ -341,11 +255,6 @@ private:
     /// 的 cacheable 处理), 缓存的旧帧快照不会随动画推进更新
     ftxui::Element runningHeaderMark(bool expanded) const;
 
-    /// 中断消息控件区 (仅 Waiting 状态; 渲染控件并把命中区域记入 interruptHits_)
-    ftxui::Element buildInterruptControl(const TUIMessage& msg, size_t msgIndex);
-    /// 中断消息状态行 (Confirmed/Cancelled/Expired)
-    ftxui::Element buildInterruptStatusLine(const TUIMessage& msg);
-
     /// 历史分页预取判定 (滚轮事件处理后调用): 滚动接近已加载窗口顶部且
     /// 还有更早历史时经 ctx_.requestMoreHistory 发起分页请求。
     /// - 请求去重由实现方 (TUIClientAgentIO::requestOlderHistory) 保证,
@@ -360,7 +269,8 @@ private:
     /// 插件装饰工具体通用渲染 (items: text/button/diagram/separator/diff; 内容由插件定义)
     /// - button 走通用 action_id 派发: owner=tool_call_id (decor 按钮以 toolCallId
     ///   作 owner_id, 插件 bind 一次永久生效, 见方案 A fallback)
-    /// - decor 按钮命中挂载到 decorHits_ (与 interruptHits_/collapsibleBoxes_ 同生命期:
+    /// - decor 按钮命中挂载到 decorHits_ (与 InterruptView 的控件命中区域/
+    ///   collapsibleBoxes_ 同生命期:
     ///   OnRender 清空 + 构建期填充, OnEvent/命中检测读取); 全局 CatchEvent 侧经
     ///   pluginDecorHits() 读取 (MessageListComponent 有独立事件流, 不能只靠全局)
     /// - text/button 解析与配色走 plugin_ui_items 共享 helper; diff 走 renderPluginDiff

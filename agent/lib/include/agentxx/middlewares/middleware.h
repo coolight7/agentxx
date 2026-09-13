@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/context.h"
+#include "agentxx/middlewares/interrupt_ui.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/neograph_json_bridge.h"
@@ -399,6 +400,12 @@ public:
     agentxx::util::Json                   arg;
     std::vector<InterruptHandleInputItem> inputs;
     std::string                           resultId;
+    /// 中断 UI 描述 (声明式; 客户端通用渲染, 见 [interrupt_ui.h])
+    /// - 空 = 客户端按输入项字段用通用默认模板渲染 (兼容未提供描述的服务端);
+    ///   服务端未显式设置时由 toJson 省略该字段
+    /// - 同一请求的多个输入项共享同一份描述 (每项消息按自身字段渲染值域,
+    ///   见 InterruptUiItem 的模板语义), 常为 InterruptUi::defaultUi()
+    InterruptUi ui;
 
     static bool isAccordingFormat(const agentxx::util::Json& data);
 

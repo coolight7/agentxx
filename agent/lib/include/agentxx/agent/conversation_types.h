@@ -269,6 +269,10 @@ struct ViewMessage {
         /// 输入项序号 (1-based) / 总数 (仅进度展示)
         int inputIndex = 0;
         int inputTotal = 0;
+        /// 中断 UI 描述 (声明式; 由 agent 侧生成, 客户端通用渲染)
+        /// - 见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h);
+        ///   空 (null) = 客户端按上述输入项字段用通用默认模板渲染
+        agentxx::util::Json ui;
         /// 中断输入项状态
         InterruptStatus interruptStatus = InterruptStatus::Waiting;
         /// 确认结果 (interruptStatus == Confirmed 时有效)
@@ -624,6 +628,10 @@ inline agentxx::util::Json ViewMessage::toJson() const {
         }
         it["input_index"] = interrupt->inputIndex;
         it["input_total"] = interrupt->inputTotal;
+        // 中断 UI 描述 (声明式, 服务端生成): 客户端据此通用渲染控件
+        if (!interrupt->ui.is_null()) {
+            it["ui"] = interrupt->ui;
+        }
         it["interrupt_status"]
             = std::string(viewMessageInterruptStatusToString(interrupt->interruptStatus));
         if (!interrupt->interruptResult.empty()) {
@@ -692,6 +700,9 @@ inline ViewMessage ViewMessage::fromJson(const agentxx::util::Json& j) {
                     ij.value("interrupt_status", std::string{})
                 );
                 it.interruptResult = ij.value("interrupt_result", std::string{});
+                if (ij.contains("ui") && ij["ui"].is_object()) {
+                    it.ui = ij["ui"];
+                }
                 if (ij.contains("input_enums") && ij["input_enums"].is_array()) {
                     for (const auto& e : ij["input_enums"]) {
                         it.inputEnums.push_back(
