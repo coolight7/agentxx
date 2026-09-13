@@ -348,6 +348,78 @@ void test_permission_card_layout() {
     XX_TEST_EXPECT_TRUE(text.find("允许") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("拒绝") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("确认") == std::string::npos);
+
+    // 设置项文本颜色校验: 不能是黑色 RGB(0,0,0), 必须使用 normalColor 保证在深色背景下可见
+    f.ctx.frameState = f.sharedState.readSnapshot();
+    auto el     = f.comp->Render();
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(20));
+    ftxui::Render(screen, el);
+    bool foundRememberText = false;
+    for (int y = 0; y < 20; ++y) {
+        for (int x = 0; x < 110; ++x) {
+            if (screen.PixelAt(x, y).character == "记") {
+                foundRememberText = true;
+                XX_TEST_EXPECT_TRUE(screen.PixelAt(x, y).foreground_color != ftxui::Color::RGB(0, 0, 0));
+                break;
+            }
+        }
+        if (foundRememberText) {
+            break;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(foundRememberText);
+}
+
+void test_permission_depict_long_path_wrapping() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    // 构造超长无空格路径 (82 字符)
+    const std::string longPath
+        = "/home/coolight/program/agentxx/agent/lib/include/agentxx/agent/conversation_types.h";
+    f.addInterrupt(
+        ch,
+        "bool",
+        "no",
+        "read_file filesystem_read",
+        {},
+        1,
+        1,
+        1,
+        true,
+        longPath
+    );
+    // 在 40 列窄宽度下渲染
+    f.ctx.frameState = f.sharedState.readSnapshot();
+    auto el     = f.comp->Render();
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(20));
+    ftxui::Render(screen, el);
+    const std::string text = screen.ToString();
+    // 校验长路径在窄宽下没有被整体丢弃为 0 宽, 前部与尾部均被成功折行渲染出来
+    XX_TEST_EXPECT_TRUE(text.find("/home/coolight") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("conversation_types.h") != std::string::npos);
+}
+
+void test_permission_depict_fallback_to_text() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    // inputDepict 为空, 但 TUIMessage.text 非空
+    auto m                     = std::make_shared<TUIMessage>();
+    m->role                    = TUIMessage::Role::Interrupt;
+    m->text                    = "Custom permission description text";
+    m->interrupt               = TUIMessage::InterruptData{};
+    m->interrupt->interruptId  = 1;
+    m->interrupt->inputLabel   = "edit_file filesystem_write";
+    m->interrupt->inputDepict  = "";
+    m->interrupt->inputType    = "bool";
+    m->interrupt->inputDefault = "no";
+    m->interrupt->inputIndex   = 1;
+    m->interrupt->inputTotal   = 1;
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        st.messages.push_back(std::move(m));
+    });
+    f.comp->attachInterruptChannel(1, ch, true);
+    const std::string text = f.render();
+    XX_TEST_EXPECT_TRUE(text.find("Custom permission description text") != std::string::npos);
 }
 
 void test_permission_remember_indicator_updates() {
@@ -813,6 +885,8 @@ TestResult testTuiInterrupt() {
     test_permission_remember_without_toggle();
     // 权限请求卡片布局
     test_permission_card_layout();
+    test_permission_depict_long_path_wrapping();
+    test_permission_depict_fallback_to_text();
     test_permission_remember_indicator_updates();
     test_permission_settings_row_full_width();
     // 客户端权限通行模式 (yaml permission_mode: pass)

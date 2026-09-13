@@ -183,6 +183,64 @@ size_t estimateLines(std::string_view s, int width) {
     return lines;
 }
 
+/// 将单行或多行文本按可用显示宽度折行为多段字符串
+/// - 支持按 \n 换行，同时对超宽单行（如无空格的长文件路径/URL）按 UTF-8 字符显示宽度硬折行
+/// - 宽字符（CJK、emoji 等）按 2 列计，与 markdown::utf8_display_width 口径一致
+///
+/// - `args`:
+///     - [textContent] 源文本
+///     - [maxWidth] 单行最大可用显示列宽，应当 >= 1
+///
+/// - `return` 折行后的字符串行列表（至少包含 1 行）
+std::vector<std::string> wrapTextToLines(std::string_view textContent, int maxWidth) {
+    std::vector<std::string> result;
+    if (textContent.empty()) {
+        return result;
+    }
+    const size_t targetWidth = static_cast<size_t>(std::max(1, maxWidth));
+
+    size_t start = 0;
+    while (start < textContent.size()) {
+        const size_t nextNl = textContent.find('\n', start);
+        std::string_view line = (nextNl == std::string_view::npos)
+                                    ? textContent.substr(start)
+                                    : textContent.substr(start, nextNl - start);
+        start = (nextNl == std::string_view::npos) ? textContent.size() : nextNl + 1;
+
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        if (line.empty()) {
+            result.emplace_back();
+            continue;
+        }
+
+        size_t chunkStart   = 0;
+        size_t currentWidth = 0;
+        size_t i            = 0;
+        while (i < line.size()) {
+            size_t charLen = markdown::utf8_byte_length(line[i]);
+            charLen        = std::min(charLen, line.size() - i);
+            const int w    = markdown::codepoint_width(
+                markdown::utf8_codepoint(line.data() + i, charLen)
+            );
+            const int charWidth = std::max(0, w);
+
+            if (currentWidth + charWidth > targetWidth && currentWidth > 0) {
+                result.push_back(std::string(line.substr(chunkStart, i - chunkStart)));
+                chunkStart   = i;
+                currentWidth = 0;
+            }
+            currentWidth += charWidth;
+            i += charLen;
+        }
+        if (chunkStart < line.size()) {
+            result.push_back(std::string(line.substr(chunkStart)));
+        }
+    }
+    return result;
+}
+
 /// 估算 markdown 渲染高度 (行), 与 renderMarkdown (cmark-gfm + DomBuilder)
 /// 的渲染语义对齐 (仅用于未进入视口的消息; 进入视口后实测修正)。
 ///
@@ -902,6 +960,31 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                     = msg.interrupt
                       && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting;
                 if (waiting) {
+                    const bool isPermission = [&]() -> bool {
+                        auto it = interruptChannels_.find(msg.interrupt->interruptId);
+                        return it != interruptChannels_.end() && it->second.rememberable;
+                    }();
+
+                    if (isPermission) {
+                        // 权限卡片布局: 头行 1 + 描述行 (按宽折行) + 空行 1 +
+                        // 记住选择项 1 + 空行 1 + 允许/拒绝按钮 1 = 5 + depictLines
+                        size_t lines = 5;
+                        std::string_view dep = !msg.interrupt->inputDepict.empty()
+                                                   ? std::string_view{msg.interrupt->inputDepict}
+                                                   : std::string_view{msg.text};
+                        if (!dep.empty()) {
+                            lines += estimateLines(dep, std::max(10, width - 2));
+                        }
+                        InterruptKey key;
+                        if (interruptKeyOf(msg, key)) {
+                            auto it = interruptUi_.find(key);
+                            if (it != interruptUi_.end() && !it->second.tip.empty()) {
+                                ++lines;
+                            }
+                        }
+                        return static_cast<int>(lines) + 1; // +1: 尾部空行
+                    }
+
                     size_t lines = 4;
                     auto   type  = msg.interrupt->inputType;
                     if (type == "enum") {
@@ -1767,13 +1850,22 @@ Element MessageListComponent::buildMessageBlock(
                     }
                     lines.push_back(hbox(std::move(header)));
 
-                    if (!msg.interrupt->inputDepict.empty()) {
-                        // paragraph 自动折行 (长路径不截断), text 仅裁剪
-                        lines.push_back(hbox({
-                            text("  "),
-                            paragraph(msg.interrupt->inputDepict) | color(theme.hintColor)
-                                | xflex_shrink,
-                        }));
+                    // 描述/提示信息内容 (受约束目标路径等): 优先取 inputDepict,
+                    // 缺失时回退 msg.text; 按内容区可用宽度 (预留 2 空格缩进) 硬折行,
+                    // 彻底解决 paragraph 在无空格长路径下不换行以及在 hbox 内因布局
+                    // shrink 误算导致被压为 0 宽消失的问题
+                    std::string depictText = !msg.interrupt->inputDepict.empty()
+                                                 ? msg.interrupt->inputDepict
+                                                 : msg.text;
+                    if (!depictText.empty()) {
+                        const int availWidth = std::max(10, maxWidth - 2);
+                        auto      wrapped    = wrapTextToLines(depictText, availWidth);
+                        for (auto& wline : wrapped) {
+                            lines.push_back(hbox({
+                                text("  "),
+                                text(std::move(wline)) | color(theme.hintColor),
+                            }));
+                        }
                     }
                 } else {
                     // 头行: 类型 + 进度
@@ -2246,16 +2338,17 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         if (rememberable) {
             Elements rows;
 
-            // ---- 设置项区: 每项一行, 左侧名称右侧状态指示, 两端对齐 ----
+            // ---- 设置项区: 每项一行, 状态指示 + 设置项文本, 整行可点击 ----
             // (后续新增设置项在此按同一样式追加)
             {
                 auto remBox    = mkBox();
                 auto indicator = ui.remember ? text("[ ✓ ] ") | color(theme.accentColor) | bold
                                              : text("[   ] ") | color(theme.hintColor);
-                // reflect 于整行 → 点击行内任意位置均可切换
+                // 文字采用 normalColor: buttonTextColor 在深色主题下为纯黑色 (RGB 0,0,0),
+                // 设置项整行无按钮背景色, 黑色文本在深色终端背景上会导致文字隐形不可见
                 auto row = hbox({
                                std::move(indicator),
-                               text(tr("interrupt.remember")) | color(theme.buttonTextColor),
+                               text(tr("interrupt.remember")) | color(theme.normalColor),
                            })
                            | reflect(*remBox);
                 hit(kHitRemember, 0, remBox);
