@@ -790,17 +790,21 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
         items.push_back(ScrollItem{text(""), false});
     };
 
-    // Header: Agentxx & Version
+    // Header: Agentxx
     items.push_back(ScrollItem{
-        hbox({
-            text("Agentxx ") | bold | color(theme.accentColor),
-            text(fmt::format("v{}", TUIClientAgentIO::kAgentxxVersion)) | bold
-                | color(theme.normalColor),
-        }),
+        text("Agentxx") | bold | color(theme.accentColor),
         false
     });
     items.push_back(ScrollItem{text(""), false});
 
+    addSection(
+        tr("about.version"),
+        fmt::format(
+            "v{} · {}",
+            TUIClientAgentIO::kAgentxxVersion,
+            TUIClientAgentIO::kAgentxxBuildDate
+        )
+    );
     addSection("GitHub · MIT", "https://github.com/coolight7/agentxx");
     addSection(tr("about.develop"), "coolight · 郑泳坤 · 2465045051@qq.com");
     addSection(tr("about.execPath"), kExePath);

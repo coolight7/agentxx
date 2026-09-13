@@ -129,6 +129,7 @@ constexpr Entry kTable[] = {
 
     // ---- About 弹窗 ----
     {"about.title",              " About ",                                              " 关于 "                                                                                         },
+    {"about.version",            "Version",                                              "版本"                                                                                           },
     {"about.develop",            "Develop",                                              "开发"                                                                                           },
     {"about.execPath",           "Executable Path",                                      "可执行文件路径"                                                                            },
     {"about.serverIoType",       "Server-IO Type",                                       "Server-IO 类型"                                                                                 },

@@ -15,6 +15,7 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/util/json.h"
+#include "agentxx/version.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -334,6 +335,77 @@ TestResult testTuiContextOverlay() {
         );
         // 滚动偏移已下移 (内容超高时) 或保持 (内容未超高)
         XX_TEST_EXPECT_TRUE(fx.comp->headerBoxes().size() == 4);
+    }
+
+    // ---- 场景 8: 关于弹窗 (AboutOverlay) 独立版本段与构建日期 ----
+    {
+        // 校验 kBuildDate 格式: "YYYY-MM-DD"
+        XX_TEST_EXPECT_EQ(agentxx::kBuildDate.size(), size_t(10));
+        XX_TEST_EXPECT_EQ(agentxx::kBuildDate[4], '-');
+        XX_TEST_EXPECT_EQ(agentxx::kBuildDate[7], '-');
+
+        // 测试 parseBuildDate 各种月份与单/双位日期
+        auto d1 = agentxx::detail::parseBuildDate("Jan  5 2026");
+        XX_TEST_EXPECT_EQ(std::string(d1.data), "2026-01-05");
+
+        auto d2 = agentxx::detail::parseBuildDate("Feb 28 2024");
+        XX_TEST_EXPECT_EQ(std::string(d2.data), "2024-02-28");
+
+        auto d3 = agentxx::detail::parseBuildDate("Mar 29 2026");
+        XX_TEST_EXPECT_EQ(std::string(d3.data), "2026-03-29");
+
+        auto d4 = agentxx::detail::parseBuildDate("Dec 31 2025");
+        XX_TEST_EXPECT_EQ(std::string(d4.data), "2025-12-31");
+
+        // 测试 AboutOverlay 渲染: 验证版本作为独立列表段呈现 "v0.3.0 · {构建日期}"
+        TUISharedState sharedState;
+        TUITheme       theme = TUITheme::darkTheme();
+        TUICtx         aboutCtx;
+        aboutCtx.state          = &sharedState;
+        aboutCtx.frameState     = sharedState.readSnapshot();
+        aboutCtx.postRedraw     = [] {};
+        aboutCtx.theme          = &theme;
+        aboutCtx.sessionId      = "s";
+        aboutCtx.remoteUrl      = "";
+        aboutCtx.viewportWidth  = 100;
+        aboutCtx.viewportHeight = 30;
+
+        const std::string expectedVersionContent
+            = fmt::format("v{} · {}", agentxx::kVersion, agentxx::kBuildDate);
+
+        // 中文语言: 标题应为 "版本"
+        TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+        {
+            auto aboutComp = std::make_shared<AboutOverlay>(aboutCtx);
+            auto el        = aboutComp->Render();
+            auto screen    = ftxui::Screen::Create(
+                ftxui::Dimension::Fixed(100),
+                ftxui::Dimension::Fixed(30)
+            );
+            ftxui::Render(screen, el);
+            auto str = ContextOverlayFixture::normalizeScreenText(screen.ToString());
+            XX_TEST_EXPECT_TRUE(str.find("Agentxx") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(str.find("版本") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(str.find(expectedVersionContent) != std::string::npos);
+            XX_TEST_EXPECT_TRUE(str.find("GitHub · MIT") != std::string::npos);
+        }
+
+        // 英文语言: 标题应为 "Version"
+        TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+        {
+            auto aboutCompEn = std::make_shared<AboutOverlay>(aboutCtx);
+            auto elEn        = aboutCompEn->Render();
+            auto screenEn    = ftxui::Screen::Create(
+                ftxui::Dimension::Fixed(100),
+                ftxui::Dimension::Fixed(30)
+            );
+            ftxui::Render(screenEn, elEn);
+            auto strEn = ContextOverlayFixture::normalizeScreenText(screenEn.ToString());
+            XX_TEST_EXPECT_TRUE(strEn.find("Agentxx") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(strEn.find("Version") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(strEn.find(expectedVersionContent) != std::string::npos);
+            XX_TEST_EXPECT_TRUE(strEn.find("GitHub · MIT") != std::string::npos);
+        }
     }
 
     TUISettings::instance().setLanguage(savedLang);

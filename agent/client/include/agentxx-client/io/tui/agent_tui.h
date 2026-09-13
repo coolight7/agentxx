@@ -192,7 +192,8 @@ public:
     using LineChannel
         = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
 
-    static constexpr std::string_view kAgentxxVersion = agentxx::kVersion;
+    static constexpr std::string_view kAgentxxVersion   = agentxx::kVersion;
+    static constexpr std::string_view kAgentxxBuildDate = agentxx::kBuildDate;
 
     /// 复制鼠标选中的文本到系统剪贴板 (鼠标左键拖选后松开时调用, UI 线程):
     /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection, 取上一绘制帧
