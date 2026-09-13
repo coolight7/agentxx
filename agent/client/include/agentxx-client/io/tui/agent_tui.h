@@ -192,7 +192,8 @@ public:
     using LineChannel
         = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
 
-    static constexpr std::string_view kAgentxxVersion = agentxx::kVersion;
+    static constexpr std::string_view kAgentxxVersion   = agentxx::kVersion;
+    static constexpr std::string_view kAgentxxBuildDate = agentxx::kBuildDate;
 
     /// 复制鼠标选中的文本到系统剪贴板 (鼠标左键拖选后松开时调用, UI 线程):
     /// - 从 FTXUI Screen 的当前 selection 提取文本 (GetSelection, 取上一绘制帧
@@ -582,8 +583,6 @@ private:
     std::atomic<bool> retryRequested_{false};
 
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
-    ftxui::Box pendingCounterBox_;
-    ftxui::Box pendingInsertButtonBox_;
     ftxui::Box contextButtonBox_;
     /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
     /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)

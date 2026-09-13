@@ -152,6 +152,9 @@ fi
 # - 目标: {build}/exec 与 agentxx_cli 同目录携带 libstdc++/libgcc_s 等，
 #   参考 client/CMakeLists.txt `install(... DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")`
 #   的 exec 目录布局，解压即运行，无需目标机安装同版本 GCC。
+# - 运行期加载: 产物已带 $ORIGIN (优先搜索自身所在目录, 见
+#   agent/cmake/agentxx_runtime_search_path.cmake), 复制到同目录的运行库即
+#   优先生效, 不会被目标机器上的旧版系统 libstdc++ 抢先命中
 # - 跳过: AGENTXX_SKIP_BUNDLE_RUNTIME=1 ./linux_release_build.sh
 if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
     EXEC_DIR="$build_dir/exec"
@@ -201,27 +204,6 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
             unset _line
         done < <(find "$EXEC_DIR" -type f \( -name "agentxx_*" -o -name "lib*.so*" \) ! -name "*.a" 2>/dev/null | sort -u)
         unset _f
-    fi
-    # 3) RPATH 指向 $ORIGIN，使 exe/.so 优先从同目录加载复制的运行时
-    #    - exe/libagentxx.so: $ORIGIN
-    #    - exec/plugins/<name>/*.so: $ORIGIN:$ORIGIN/../.. (dlopen 插件需回查 exec/)
-    if command -v patchelf >/dev/null 2>&1; then
-        for _f in "$EXEC_DIR/agentxx_cli" "$EXEC_DIR/agentxx_benchmark" "$EXEC_DIR/agentxx_test"; do
-            if [[ -f "$_f" ]]; then
-                patchelf --set-rpath '$ORIGIN' "$_f" || echo "WARNING: patchelf failed: $_f"
-            fi
-        done
-        unset _f
-        if [[ -f "$EXEC_DIR/libagentxx.so" ]]; then
-            patchelf --set-rpath '$ORIGIN' "$EXEC_DIR/libagentxx.so" || true
-        fi
-        if [[ -d "$EXEC_DIR/plugins" ]]; then
-            find "$EXEC_DIR/plugins" -type f -name "*.so" -exec patchelf --set-rpath '$ORIGIN:$ORIGIN/../..' {} \; 2>/dev/null || true
-        fi
-        echo "[runtime] RPATH patched to \$ORIGIN"
-    else
-        echo "WARNING: patchelf not found, skip RPATH patch (sudo apt-get install patchelf)"
-        echo "  bundled libs still copied, but loader will prefer system libstdc++ unless LD_LIBRARY_PATH=. "
     fi
     echo "[runtime] exec libs:"
     ls -lh "$EXEC_DIR/"*.so* 2>/dev/null || true

@@ -81,7 +81,7 @@ jobs:
         run: |
           sudo apt-get update
           # 1) 基础编译工具 (ragel 缺失时由构建脚本自建)
-          sudo apt-get install -y ninja-build patchelf ccache zip \
+          sudo apt-get install -y ninja-build ccache zip \
               libtool autoconf automake make bzip2 xz-utils unzip curl wget || exit 1
           # 2) 新 GCC (ubuntu-toolchain-r/test PPA, 提供 gcc-14 等; 系统自带 gcc-9)
           if ! command -v add-apt-repository >/dev/null 2>&1; then

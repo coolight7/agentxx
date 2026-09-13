@@ -790,17 +790,21 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
         items.push_back(ScrollItem{text(""), false});
     };
 
-    // Header: Agentxx & Version
+    // Header: Agentxx
     items.push_back(ScrollItem{
-        hbox({
-            text("Agentxx ") | bold | color(theme.accentColor),
-            text(fmt::format("v{}", TUIClientAgentIO::kAgentxxVersion)) | bold
-                | color(theme.normalColor),
-        }),
+        text("Agentxx") | bold | color(theme.accentColor),
         false
     });
     items.push_back(ScrollItem{text(""), false});
 
+    addSection(
+        tr("about.version"),
+        fmt::format(
+            "v{} · {}",
+            TUIClientAgentIO::kAgentxxVersion,
+            TUIClientAgentIO::kAgentxxBuildDate
+        )
+    );
     addSection("GitHub · MIT", "https://github.com/coolight7/agentxx");
     addSection(tr("about.develop"), "coolight · 郑泳坤 · 2465045051@qq.com");
     addSection(tr("about.execPath"), kExePath);
@@ -901,8 +905,8 @@ Element PendingInputsOverlay::OnRender() {
         items.push_back(text(tr("queue.empty")) | dim);
     }
     for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
-        const auto& pi     = st.pendingInputs[i];
-        auto        delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
+        const auto& pi = st.pendingInputs[i];
+        auto delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
                       | reflect(delBoxes_[i]);
         Element row;
         auto    body = pi.expanded ? paragraph(pi.text) | flex

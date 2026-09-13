@@ -32,9 +32,9 @@
 
 ## Manual Compilation
 
-- Prepare build prerequisites using `apt` or equivalent package manager: `cmake`, `ninja-build`, `make`, `curl|wget`, `tar`, `python3`, and optionally `ccache` / `patchelf` / `ragel` (required by Hyperscan):
+- Prepare build prerequisites using `apt` or equivalent package manager: `cmake`, `ninja-build`, `make`, `curl|wget`, `tar`, `python3`, and optionally `ccache` / `ragel` (required by Hyperscan):
 ```sh
-sudo apt-get install -y cmake ninja-build patchelf ccache zip ragel \
+sudo apt-get install -y cmake ninja-build ccache zip ragel \
     libtool autoconf automake make bzip2 xz-utils unzip curl wget
 ```
 - `g++>=14` (or `clang++>=18`), GCC 16.1 is recommended.
@@ -113,6 +113,16 @@ cd {PROJECT_ROOT}
 - Executables: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
 - Plugin Shared Libraries (Standalone Dynamic Library Mode): `agent/build/{platform}-{mode}/exec/plugins/<plugin_name>/` (dispatched by directory when containing a `plugin.yaml` manifest)
 - Shared Library (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (Exports C symbols; see `agent/lib/ffi_symbols.map`)
+- Runtime library search path: the executables and shared library above carry `$ORIGIN`
+  (RUNPATH), i.e. dynamic dependencies are searched **in the artifact's own directory
+  first**, before `LD_LIBRARY_PATH` and the system directories. So after the release
+  packaging copies `libstdc++.so.6` / `libgcc_s.so.1` next to the executables, an older
+  system `libstdc++` on the target machine is no longer preferred (avoids
+  `GLIBCXX_3.4.xx not found`). This path is written at build/install time by
+  `agent/cmake/agentxx_runtime_search_path.cmake` (executables and `libagentxx.so` use
+  `$ORIGIN`; `exec/plugins/<plugin_name>/*.so` use `$ORIGIN:$ORIGIN/../..` to also look
+  in `exec/`)
+
 
 ## Debug Build Acceleration
 

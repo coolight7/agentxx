@@ -262,8 +262,8 @@ static void* sysMonStart(
 }
 
 static void*
-    sysMonStop(SysMonCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    // 无自管线程/定时器 (采样按需在工具/能力调用内完成); 注册记录由宿主统一撤销。
+    sysMonStop(SysMonCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    ctx.stopSpawns();
     notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
     return nullptr;
 }

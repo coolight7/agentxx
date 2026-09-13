@@ -3832,31 +3832,83 @@ ClientToolRenderResult renderClientTool(
         for (const auto& r : reg->toolRenderers) {
             if (r.toolName == toolName) {
                 if (r.renderFn) {
-                    // 自定义 renderer 只在 client io 线程执行:
-                    // UI 线程只用语义缓存; 未命中则本次通用回退 + 提交渲染请求。
-                    if (!cache) {
+                    if (cache) {
+                        ClientToolRenderRequest req;
+                        req.toolCallId        = std::string{toolCallId};
+                        req.toolName          = std::string{toolName};
+                        req.argsJson          = std::string{argsJson};
+                        req.resultText        = std::string{resultText};
+                        req.isFinished        = isFinished;
+                        req.isError           = isError;
+                        req.maxWidth          = maxWidth;
+                        const std::string key = ClientToolRenderRequest::keyFor(toolCallId, toolName);
+                        auto              cached = cache->lookup(key, req.inputHash());
+                        if (!cached || cached->plugin != r.plugin) {
+                            res.matched       = false;
+                            res.pendingRender = true;
+                            res.pendingPlugin = r.plugin;
+                            return res;
+                        }
+                        res.matched     = cached->matched;
+                        res.displayName = cached->displayName;
+                        res.summary     = cached->summary;
+                        res.items       = cached->items;
                         return res;
                     }
-                    ClientToolRenderRequest req;
-                    req.toolCallId        = std::string{toolCallId};
-                    req.toolName          = std::string{toolName};
-                    req.argsJson          = std::string{argsJson};
-                    req.resultText        = std::string{resultText};
-                    req.isFinished        = isFinished;
-                    req.isError           = isError;
-                    req.maxWidth          = maxWidth;
-                    const std::string key = ClientToolRenderRequest::keyFor(toolCallId, toolName);
-                    auto              cached = cache->lookup(key, req.inputHash());
-                    if (!cached || cached->plugin != r.plugin) {
-                        res.matched       = false;
-                        res.pendingRender = true;
-                        res.pendingPlugin = r.plugin;
-                        return res;
+
+                    // 无语义缓存 (如单元测试/未装配 pluginManager 环境): 同步执行 renderer
+                    AgentxxToolRenderInput input{};
+                    input.version      = 1;
+                    input.tool_call_id = agentxx::plugin::PluginStringView::from(
+                        toolCallId.data(),
+                        toolCallId.size()
+                    );
+                    input.tool_name
+                        = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+                    input.args_json
+                        = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+                    input.result_text = agentxx::plugin::PluginStringView::from(
+                        resultText.data(),
+                        resultText.size()
+                    );
+                    input.is_finished = isFinished ? 1 : 0;
+                    input.is_error    = isError ? 1 : 0;
+                    input.max_width   = maxWidth;
+
+                    AgentxxToolRenderOutput output{};
+                    int32_t                 rc = -1;
+                    try {
+                        rc = r.renderFn(r.userData, &input, &output);
+                    } catch (...) {
+                        rc = -1;
                     }
-                    res.matched     = cached->matched;
-                    res.displayName = cached->displayName;
-                    res.summary     = cached->summary;
-                    res.items       = cached->items;
+                    if (rc == 0) {
+                        res.matched = true;
+                        if (output.displayName.data) {
+                            res.displayName.assign(
+                                output.displayName.data,
+                                static_cast<size_t>(output.displayName.size)
+                            );
+                        }
+                        if (output.summary.data) {
+                            res.summary.assign(
+                                output.summary.data,
+                                static_cast<size_t>(output.summary.size)
+                            );
+                        }
+                        if (output.items_json.data) {
+                            try {
+                                res.items = agentxx::util::Json::parse(std::string_view{
+                                    output.items_json.data,
+                                    static_cast<size_t>(output.items_json.size)
+                                });
+                            } catch (...) {
+                            }
+                        }
+                    }
+                    hostMemoryFree(output.displayName.data);
+                    hostMemoryFree(output.summary.data);
+                    hostMemoryFree(output.items_json.data);
                     return res;
                 } else if (!r.templateDisplayName.empty() || !r.templateSummaryKey.empty()) {
                     res.displayName = r.templateDisplayName;

@@ -62,7 +62,7 @@ constexpr Entry kTable[] = {
 
     // ---- 输入框 ----
     {"input.placeholder",
-     "Type a message... [ESC] Interrupt, [Enter] Send, [Alt+Enter] Newline",             "输入消息... [Esc] 中断, [Enter] 发送, [Alt+Enter] 换行"                                 },
+     "Type a message... [ESC] Interrupt [Enter] Send [Alt+Enter] Newline",               "输入消息... [Esc] 中断 [Enter] 发送 [Alt+Enter] 换行"                                   },
     {"input.attach",             "[ 📎︎ ]",                                          "[ 📎︎ ]"                                                                                      },
     {"input.attachTray",         " 📎︎ Pending ({}): ",                              " 📎︎ 待发附件 ({}): "                                                                     },
     {"msg.attachImage",          "📷︎ Image",                                        "📷︎ 图像附件"                                                                             },
@@ -129,6 +129,7 @@ constexpr Entry kTable[] = {
 
     // ---- About 弹窗 ----
     {"about.title",              " About ",                                              " 关于 "                                                                                         },
+    {"about.version",            "Version",                                              "版本"                                                                                           },
     {"about.develop",            "Develop",                                              "开发"                                                                                           },
     {"about.execPath",           "Executable Path",                                      "可执行文件路径"                                                                            },
     {"about.serverIoType",       "Server-IO Type",                                       "Server-IO 类型"                                                                                 },

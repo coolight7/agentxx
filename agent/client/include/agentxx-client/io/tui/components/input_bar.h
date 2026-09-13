@@ -86,6 +86,16 @@ public:
         ctx_.postRedraw();
     }
 
+    /// 获取待发送消息队列计数区域 (渲染时由 reflect 填充, 点击打开待发弹窗)
+    const ftxui::Box& pendingCounterBox() const {
+        return pendingCounterBox_;
+    }
+
+    /// 获取待发送消息队列立即发送按钮区域 (渲染时由 reflect 填充, 点击立即发送下一条)
+    const ftxui::Box& pendingInsertButtonBox() const {
+        return pendingInsertButtonBox_;
+    }
+
 private:
 
     /// 括号粘贴起始/结束标记 (终端启用 \x1B[?2004h 后包裹粘贴内容)
@@ -105,6 +115,10 @@ private:
     ftxui::Box attachButtonBox_;
     /// 托盘各附件删除按钮 [✕] 点击命中区域
     std::vector<ftxui::Box> attachmentDeleteBoxes_;
+    /// 待发送消息队列计数区域 (渲染时 reflect 填充)
+    ftxui::Box pendingCounterBox_;
+    /// 待发送消息队列立即发送按钮区域 (渲染时 reflect 填充)
+    ftxui::Box pendingInsertButtonBox_;
 
     /// 输入框占位符 (绑定到 Input 的 placeholder 引用: Input 渲染时实时读取,
     /// 语言切换后刷新本成员即生效, 无需重建组件)

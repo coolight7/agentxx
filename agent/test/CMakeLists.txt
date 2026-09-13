@@ -99,10 +99,13 @@ if(test_plugin_C_SOURCES)
 		# MSVC 没有 -pedantic-errors; /W4 下同样禁止隐式声明等违规写法
 		set_source_files_properties(${test_plugin_C_SOURCES} PROPERTIES
 			COMPILE_OPTIONS "/std:c17;/W4"
+			SKIP_PRECOMPILE_HEADERS ON
 		)
 	else()
+		# 纯 C17 ABI 测试源文件必须跳过 C++ 预编译头 (PCH), 避免 C 编译器包含 C++ STL 头
 		set_source_files_properties(${test_plugin_C_SOURCES} PROPERTIES
 			COMPILE_OPTIONS "-std=c17;-pedantic-errors;-Wall;-Wextra"
+			SKIP_PRECOMPILE_HEADERS ON
 		)
 	endif()
 endif()
@@ -303,10 +306,11 @@ if (XX_IS_MSVC_D)
 		strncasecmp=_strnicmp
 	)
 endif ()
-if (XX_IS_MACOS_D)
-  target_link_options(agentxx_test PRIVATE 
-    "-Wl,-rpath,@executable_path"
-  )
-endif()
+# ===== 运行期动态库搜索路径: 优先从可执行文件所在目录搜索 =====
+# release 分发会把 libstdc++.so.6 / libgcc_s.so.1 等运行库复制到 exec (与
+# agentxx_test 同目录), 不带该搜索项时加载器不会看自身目录, 目标机器上的旧版
+# 系统 libstdc++ 会被优先加载 (详见 cmake/agentxx_runtime_search_path.cmake)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake")
+agentxx_set_own_dir_rpath(agentxx_test)
 
 install(TARGETS agentxx_test DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")

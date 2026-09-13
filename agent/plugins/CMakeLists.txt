@@ -189,6 +189,20 @@ set(AGENTXX_BUILTIN_PLUGIN_NAMES "")
 set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS "")
 set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 
+# ===== 插件动态库运行期动态库搜索路径 =====
+# 插件动态库 (独立动态库模式) 由各插件 CMakeLists 直接输出到
+# ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/<插件名>/ (不经 install(TARGETS)),
+# 运行期应从 "插件自身所在目录" 与 exec 目录 ("../../") 搜索动态库依赖:
+# release 分发把 libstdc++.so.6 / libgcc_s.so.1 等复制到 exec, 宿主 dlopen 插件
+# 时优先复用其中的运行库, 而不是先命中系统库 (与可执行文件/共享库
+# agentxx_cli/agentxx_test/agentxx_benchmark/libagentxx.so 的处理一致);
+# 传入的相对子目录 "../.." 即 exec 目录 (插件位于 exec/plugins/<插件名>/)
+# - 目录级默认值: 对本目录及插件子目录 "之后创建" 的目标生效, 故须在下方
+#   agentxx_load_plugin() 之前调用 (见 cmake/agentxx_runtime_search_path.cmake)
+# - 内置合并编译模式 (OBJECT 库) 无运行期依赖, 设置后不生效亦无副作用
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/agentxx_runtime_search_path.cmake")
+agentxx_set_own_dir_rpath_defaults("../..")
+
 # ===== 各插件装载 (启用开关判定 + 内置/动态库双模式) =====
 # - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
 #   (见 cmake/plugin_platform_support.cmake 与各插件声明处); 内置清单登记

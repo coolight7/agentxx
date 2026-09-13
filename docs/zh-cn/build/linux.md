@@ -36,10 +36,10 @@
 ## 手动编译
 
 - 准备编译环境，使用 apt 等工具安装: `cmake`、`ninja-build`、`make`、`curl|wget`、
-  `tar`、`python3`、可选 `ccache` / `patchelf` /
+  `tar`、`python3`、可选 `ccache` /
   `ragel` (hyperscan 需要), 例如:
 ```sh
-sudo apt-get install -y cmake ninja-build patchelf ccache zip ragel \
+sudo apt-get install -y cmake ninja-build ccache zip ragel \
     libtool autoconf automake make bzip2 xz-utils unzip curl wget
 ```
 - `g++>=14` (或 `clang++>=18`) 建议安装 GCC 16.1
@@ -116,6 +116,14 @@ cd {项目根目录}
 - 可执行文件: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
 - 插件动态库 (独立动态库模式): `agent/build/{platform}-{mode}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
 - 共享库 (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (导出 C 符号见 `agent/lib/ffi_symbols.map`)
+- 运行期动态库搜索路径: 上述可执行文件与共享库都写入 `$ORIGIN` (RUNPATH), 即
+  **优先从产物自身所在目录** 搜索动态库依赖, 之后才查 `LD_LIBRARY_PATH`/系统目录。
+  因此 release 分发把 `libstdc++.so.6` / `libgcc_s.so.1` 复制到 exec 目录后, 目标
+  机器上更旧的系统 `libstdc++` 不会被优先加载 (避免 `GLIBCXX_3.4.xx not found`)。
+  该路径由 `agent/cmake/agentxx_runtime_search_path.cmake` 在构建/安装期写入
+  (可执行文件与 `libagentxx.so` 为 `$ORIGIN`, `exec/plugins/<插件名>/*.so` 为
+  `$ORIGIN:$ORIGIN/../..` 以回查 exec)
+
 
 ## Debug 构建加速
 

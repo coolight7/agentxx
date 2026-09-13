@@ -610,24 +610,9 @@ void TUIClientAgentIO::start() {
             // 通用插件按钮命中表: 每帧重建 (renderPluginPanel/renderInfoSidebar
             // 追加, 仅存可点项; 缩放/滚动/伸缩导致坐标每帧变动)
             hitTargets_.clear();
-            const auto& st = *ctx_.frameState;
-
-            Element pendingBar = text("");
-            if (!st.pendingInputs.empty()) {
-                pendingBar = hbox({
-                    text(" "),
-                    text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme_.accentColor)
-                        | bold | reflect(pendingCounterBox_),
-                    text(" "),
-                    text(tr("queue.insert")) | bgcolor(theme_.buttonBgColor)
-                        | color(theme_.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
-                    filler(),
-                });
-            }
 
             auto mainWidget = vbox({
                 messageList_->Render() | flex,
-                pendingBar,
                 inputBar_->Render(),
                 statusBar_->Render(),
                 text(" "),
@@ -742,8 +727,8 @@ void TUIClientAgentIO::start() {
                         return true;
                     }
                     // 待发送消息队列 insert 按钮点击 → 取消当前轮次并立即从队列弹出执行
-                    if (!ctx_.frameState->pendingInputs.empty()
-                        && pendingInsertButtonBox_.Contain(mouse.x, mouse.y)) {
+                    if (inputBar_ && !ctx_.frameState->pendingInputs.empty()
+                        && inputBar_->pendingInsertButtonBox().Contain(mouse.x, mouse.y)) {
                         if (transport_) {
                             sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentSessionId()});
                         }
@@ -756,8 +741,8 @@ void TUIClientAgentIO::start() {
                         return true;
                     }
                     // 待发送消息计数点击
-                    if (!ctx_.frameState->pendingInputs.empty()
-                        && pendingCounterBox_.Contain(mouse.x, mouse.y)) {
+                    if (inputBar_ && !ctx_.frameState->pendingInputs.empty()
+                        && inputBar_->pendingCounterBox().Contain(mouse.x, mouse.y)) {
                         auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
                         overlay->onClear([this] {
                             if (transport_) {
@@ -2341,13 +2326,13 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     const bool  isPermission = (interruptNode == "permission");
     std::string permCategory;
     std::string permTarget;
+    std::string shownTarget;
     if (isPermission) {
         if (handleArg.arg.is_object()) {
             permCategory = handleArg.arg.value("category", std::string{});
             permTarget   = handleArg.arg.value("target", std::string{});
         }
-        const std::string_view shownTarget
-            = permTarget.empty() ? interruptValue : std::string_view{permTarget};
+        shownTarget = permTarget.empty() ? std::string{interruptValue} : permTarget;
         // 客户端兜底处理 (模式来自 yaml 配置 `permission.mode`):
         // 中间件已注册的显式规则 (ALLOW/DENY) 在服务端先行判定, 能走到这里
         // 说明服务端策略为 INTERRUPT (如远程 server 与本地配置不一致时)。
@@ -2414,7 +2399,10 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         m->interrupt               = TUIMessage::InterruptData{};
         m->interrupt->interruptId  = wireId;
         m->interrupt->inputLabel   = input.label;
-        m->interrupt->inputDepict  = input.depict;
+        m->interrupt->inputDepict
+            = (!input.depict.empty()) ? input.depict
+              : (isPermission && !shownTarget.empty()) ? shownTarget
+                                                       : std::string{};
         m->interrupt->inputType    = input.type;
         m->interrupt->inputDefault = input.defaultValue;
         m->interrupt->inputEnums   = input.enumValues;

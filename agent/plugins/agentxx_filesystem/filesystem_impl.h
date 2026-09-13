@@ -159,12 +159,23 @@ inline bool isExcluded(const std::string& pathStr, const std::vector<std::regex>
 
 /// 读取完整文件文本 (同步); 打开失败抛出异常
 inline std::string readFileContent(const std::string& filepath) {
-    auto p = agentxx::util::utf8ToPath(filepath);
+    auto            p = agentxx::util::utf8ToPath(filepath);
+    std::error_code fsEc;
+    bool            exists = std::filesystem::exists(p, fsEc);
+    if (fsEc) {
+        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+    }
+    if (!exists) {
+        throw std::runtime_error{"File not exist"};
+    }
+    if (std::filesystem::is_directory(p, fsEc)) {
+        throw std::runtime_error{"Path is a directory"};
+    }
 
     std::ifstream stream;
     stream.open(p, std::ios_base::binary);
     if (!stream) {
-        auto ec = std::error_code{errno, std::system_category()};
+        auto ec = std::error_code{errno, std::generic_category()};
         throw std::runtime_error(fmt::format(R"(Can not open file. Error: {})", ec.message()));
     }
     auto result
@@ -230,8 +241,7 @@ inline std::string fileListExecuteImpl(
                 }
 
                 auto timeStr = std::format("{:%Y-%m-%d %H:%M}", sys_time);
-                lines.push_back(fmt::format("{} {:>10}  {}  {}", typeStr, sizeStr, timeStr, pathStr)
-                );
+                lines.push_back(fmt::format("{} {} {} {}", typeStr, sizeStr, timeStr, pathStr));
                 return true;
             },
             [&](std::string errmsg) -> bool {
@@ -324,7 +334,18 @@ inline std::string fileReadExecuteImpl(
     if (filepath.empty()) {
         return R"([Error] Arg `path` is empty)";
     }
-    auto fsPath           = agentxx::util::utf8ToPath(filepath);
+    auto            fsPath = agentxx::util::utf8ToPath(filepath);
+    std::error_code fsEc;
+    bool            exists = std::filesystem::exists(fsPath, fsEc);
+    if (fsEc) {
+        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+    }
+    if (!exists) {
+        throw std::runtime_error{"File not exist"};
+    }
+    if (std::filesystem::is_directory(fsPath, fsEc)) {
+        throw std::runtime_error{"Path is a directory"};
+    }
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
 
@@ -332,7 +353,7 @@ inline std::string fileReadExecuteImpl(
     std::ifstream stream;
     stream.open(fsPath, std::ios_base::binary);
     if (!stream) {
-        auto ec = std::error_code{errno, std::system_category()};
+        auto ec = std::error_code{errno, std::generic_category()};
         throw std::runtime_error(fmt::format(R"(Can not open file. Error: {})", ec.message()));
     }
 
@@ -471,9 +492,17 @@ inline std::string fileEditExecuteImpl(
     detail::normalizeCrlfToLf(old_str);
     detail::normalizeCrlfToLf(new_str);
 
-    auto path = agentxx::util::utf8ToPath(filepath);
-    if (false == std::filesystem::exists(path)) {
+    auto            path = agentxx::util::utf8ToPath(filepath);
+    std::error_code fsEc;
+    bool            exists = std::filesystem::exists(path, fsEc);
+    if (fsEc) {
+        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+    }
+    if (!exists) {
         throw std::runtime_error{"File not exist"};
+    }
+    if (std::filesystem::is_directory(path, fsEc)) {
+        throw std::runtime_error{"Path is a directory"};
     }
 
     // 读取完整文件并预处理 (先转 UTF-8 使 GBK 等编码文件可正常匹配, 再统一换行符)
@@ -1144,6 +1173,18 @@ namespace detail {
 /// - 打开失败抛出异常; 读到 EOF 视为正常结束
 inline asio::awaitable<std::string>
     asyncReadWholeFile(const asio::any_io_executor& executor, const std::string& utf8FilePath) {
+    auto            fsPath = agentxx::util::utf8ToPath(utf8FilePath);
+    std::error_code fsEc;
+    bool            exists = std::filesystem::exists(fsPath, fsEc);
+    if (fsEc) {
+        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+    }
+    if (!exists) {
+        throw std::runtime_error{"File not exist"};
+    }
+    if (std::filesystem::is_directory(fsPath, fsEc)) {
+        throw std::runtime_error{"Path is a directory"};
+    }
     asio::stream_file        stream{executor};
     neograph_asio_error_code errCode;
     stream.open(utf8FilePath, asio::stream_file::read_only, errCode);
@@ -1175,6 +1216,18 @@ inline asio::awaitable<std::string>
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
+    }
+    auto            fsPath = agentxx::util::utf8ToPath(filepath);
+    std::error_code fsEc;
+    bool            exists = std::filesystem::exists(fsPath, fsEc);
+    if (fsEc) {
+        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+    }
+    if (!exists) {
+        throw std::runtime_error{"File not exist"};
+    }
+    if (std::filesystem::is_directory(fsPath, fsEc)) {
+        throw std::runtime_error{"Path is a directory"};
     }
     auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
     auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
@@ -1337,9 +1390,17 @@ inline asio::awaitable<std::string>
     detail::normalizeCrlfToLf(old_str);
     detail::normalizeCrlfToLf(new_str);
 
-    auto path = agentxx::util::utf8ToPath(filepath);
-    if (false == std::filesystem::exists(path)) {
+    auto            path = agentxx::util::utf8ToPath(filepath);
+    std::error_code fsEc;
+    bool            exists = std::filesystem::exists(path, fsEc);
+    if (fsEc) {
+        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+    }
+    if (!exists) {
         throw std::runtime_error{"File not exist"};
+    }
+    if (std::filesystem::is_directory(path, fsEc)) {
+        throw std::runtime_error{"Path is a directory"};
     }
 
     // 异步读取完整文件并预处理 (先转 UTF-8 使 GBK 等编码文件可正常匹配, 再统一换行符)
