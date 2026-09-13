@@ -474,6 +474,16 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   target_link_libraries(agentxx_util PUBLIC PkgConfig::uring)
 endif()
 
+# ===== 运行期动态库搜索路径: 优先从动态库自身所在目录搜索 =====
+# release 分发会把 libstdc++.so.6 / libgcc_s.so.1 等运行库复制到 exec (与
+# libagentxx.so 同目录), 不带该搜索项时加载器不会看自身目录, 目标机器上的旧版
+# 系统 libstdc++ 会被优先加载 (详见 cmake/agentxx_runtime_search_path.cmake)
+# - agentxx_shared: 安装到 exec, 供其他程序 (含 FFI/dlopen) 使用时优先复用
+#   同目录携带的运行库
+# - agentxx_static/agentxx_util: 静态库无运行期依赖, 调用后直接返回
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake")
+agentxx_set_own_dir_rpath(agentxx_shared)
+
 install(TARGETS agentxx_shared agentxx_static agentxx_util
   DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
 )

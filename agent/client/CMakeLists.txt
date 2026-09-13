@@ -140,10 +140,11 @@ if (XX_IS_MSVC_D)
 		strncasecmp=_strnicmp
 	)
 endif ()
-if (XX_IS_MACOS_D)
-  target_link_options(agentxx_cli PRIVATE 
-    "-Wl,-rpath,@executable_path"
-  )
-endif()
+# ===== 运行期动态库搜索路径: 优先从可执行文件所在目录搜索 =====
+# release 分发会把 libstdc++.so.6 / libgcc_s.so.1 等运行库复制到 exec (与
+# agentxx_cli 同目录), 不带该搜索项时加载器不会看自身目录, 目标机器上的旧版
+# 系统 libstdc++ 会被优先加载 (详见 cmake/agentxx_runtime_search_path.cmake)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake")
+agentxx_set_own_dir_rpath(agentxx_cli)
 
 install(TARGETS agentxx_cli DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")
