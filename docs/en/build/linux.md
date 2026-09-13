@@ -121,8 +121,7 @@ cd {PROJECT_ROOT}
   `GLIBCXX_3.4.xx not found`). This path is written at build/install time by
   `agent/cmake/agentxx_runtime_search_path.cmake` (executables and `libagentxx.so` use
   `$ORIGIN`; `exec/plugins/<plugin_name>/*.so` use `$ORIGIN:$ORIGIN/../..` to also look
-  in `exec/`), with no dependency on external tools such as `patchelf`, so the packaging
-  stage of the release script needs no RPATH post-processing
+  in `exec/`)
 
 
 ## Debug Build Acceleration

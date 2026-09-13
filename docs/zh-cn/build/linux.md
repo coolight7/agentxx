@@ -122,8 +122,7 @@ cd {项目根目录}
   机器上更旧的系统 `libstdc++` 不会被优先加载 (避免 `GLIBCXX_3.4.xx not found`)。
   该路径由 `agent/cmake/agentxx_runtime_search_path.cmake` 在构建/安装期写入
   (可执行文件与 `libagentxx.so` 为 `$ORIGIN`, `exec/plugins/<插件名>/*.so` 为
-  `$ORIGIN:$ORIGIN/../..` 以回查 exec), 不依赖 `patchelf` 等外部工具, release
-  脚本的打包阶段无需再做 RPATH 修正
+  `$ORIGIN:$ORIGIN/../..` 以回查 exec)
 
 
 ## Debug 构建加速

@@ -29,9 +29,8 @@
 #   动态库位于 exec/plugins/<插件名>/ 时传 "../../" 可回查 exec 目录
 #
 # 说明: 同时设置 BUILD_RPATH (构建树内的产物) 与 INSTALL_RPATH (经
-# install(TARGETS) 安装到 exec 的产物), 两者都由 CMake 写入链接/安装命令,
-# 无需 patchelf 等外部工具二次修改。目录级默认入口额外设置
-# BUILD_WITH_INSTALL_RPATH (产物直接输出到最终位置, 链接期即写入最终值)。
+# install(TARGETS) 安装到 exec 的产物), 两者都由 CMake 写入链接/安装命令。
+# 目录级默认入口额外设置 BUILD_WITH_INSTALL_RPATH (产物直接输出到最终位置, 链接期即写入最终值)。
 
 # 内部: 计算某类目标的 "自身所在目录" 搜索项
 # - [out_var] 输出变量: 搜索项列表 (当前平台无需设置时返回空)
