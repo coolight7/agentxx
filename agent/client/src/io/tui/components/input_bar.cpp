@@ -85,8 +85,9 @@ Element InputComponent::OnRender() {
             const auto& att     = attachments_[i];
             auto        icon    = agentxx::agent::MediaAttachment::mediaTypeIcon(att.type);
             auto        sizeStr = agentxx::util::formatSize(att.sizeBytes);
-            auto delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
-                          | bold | reflect(attachmentDeleteBoxes_[i]);
+            auto        delBtn  = text("[ ✕ ]") | bgcolor(theme.buttonBgColor)
+                          | color(theme.buttonTextColor) | bold
+                          | reflect(attachmentDeleteBoxes_[i]);
             auto pill = hbox({
                             text(fmt::format(" [ {} {} ( {} ) ", icon, att.displayName, sizeStr)),
                             delBtn,
@@ -102,14 +103,16 @@ Element InputComponent::OnRender() {
     Element queueElement = text("");
     if (ctx_.frameState && !ctx_.frameState->pendingInputs.empty()) {
         const auto& st = *ctx_.frameState;
-        queueElement   = hbox({
-            text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme.accentColor)
-                | bold | reflect(pendingCounterBox_),
-            text(" "),
-            text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
-                | color(theme.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
-            filler(),
-        }) | bgcolor(theme.inputBgColor) | xflex;
+        queueElement
+            = hbox({
+                  text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme.accentColor)
+                      | bold | reflect(pendingCounterBox_),
+                  text(" "),
+                  text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
+                      | color(theme.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
+                  filler(),
+              })
+              | bgcolor(theme.inputBgColor) | xflex;
     } else {
         pendingCounterBox_      = Box{};
         pendingInsertButtonBox_ = Box{};

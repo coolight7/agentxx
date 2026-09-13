@@ -901,8 +901,8 @@ Element PendingInputsOverlay::OnRender() {
         items.push_back(text(tr("queue.empty")) | dim);
     }
     for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
-        const auto& pi     = st.pendingInputs[i];
-        auto        delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
+        const auto& pi = st.pendingInputs[i];
+        auto delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
                       | reflect(delBoxes_[i]);
         Element row;
         auto    body = pi.expanded ? paragraph(pi.text) | flex
