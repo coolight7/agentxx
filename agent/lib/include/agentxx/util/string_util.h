@@ -326,7 +326,8 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
 ///   (0xE0 0x80~0x9F、0xF0 0x80~0x8F)、序列中途出现非延续字节、序列被截断、
 ///   孤立延续字节、串内 '\0'
 /// - `return` 合法时返回字符数 (空串为 0), 非法返回 0
-[[nodiscard]] inline constexpr size_t utf8GetLengthCheckAvail(std::string_view str) {
+[[nodiscard]] inline constexpr size_t
+    utf8GetLengthCheckAvail(std::string_view str, bool allowBackstop = true) {
     size_t     length = 0;
     const auto strLen = str.length();
     for (size_t i = 0, step = 0; i < strLen; i += step) {
@@ -349,14 +350,16 @@ using IgnoreCaseSet = std::unordered_set<std::string, IgnoreCaseHash, IgnoreCase
                 // 0xE0 0x80~0x9F 对应 0~0x7FF
                 return 0;
             }
-            // 部分转换需要用 � 替代非法编码，因此这里放行
-            // if (ch == 0xEF && i + 2 < strLen) {
-            //     unsigned char ch1 = static_cast<unsigned char>(str[i + 1]);
-            //     unsigned char ch2 = static_cast<unsigned char>(str[i + 2]);
-            //     if (ch1 == 0xBF && ch2 == 0xBD) {
-            //         return 0; // 匹配�，判定为无效UTF-8
-            //     }
-            // }
+            if (false == allowBackstop) {
+                if (ch == 0xEF && i + 2 < strLen) {
+                    // 部分转换需要用 � 替代非法编码，因此这里放行
+                    unsigned char ch1 = static_cast<unsigned char>(str[i + 1]);
+                    unsigned char ch2 = static_cast<unsigned char>(str[i + 2]);
+                    if (ch1 == 0xBF && ch2 == 0xBD) {
+                        return 0; // 匹配�，判定为无效UTF-8
+                    }
+                }
+            }
             step = 3;
         } else if (ch >= 0xC0) {
             if (ch == 0xC0 || ch == 0xC1) {
