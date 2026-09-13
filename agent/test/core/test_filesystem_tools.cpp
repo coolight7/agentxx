@@ -2223,6 +2223,24 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(linkCtx->toolRegistry->contains(name));
     }
 
+    // 验证 glob、grep、read、list 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩)
+    XX_TEST_EXPECT_EQ(
+        linkCtx->toolRegistry->find("agentxx_filesystem_glob")->extra["autoSummaryOutput"],
+        std::string{"true"}
+    );
+    XX_TEST_EXPECT_EQ(
+        linkCtx->toolRegistry->find("agentxx_filesystem_grep")->extra["autoSummaryOutput"],
+        std::string{"true"}
+    );
+    XX_TEST_EXPECT_EQ(
+        linkCtx->toolRegistry->find("agentxx_filesystem_read")->extra["autoSummaryOutput"],
+        std::string{"true"}
+    );
+    XX_TEST_EXPECT_EQ(
+        linkCtx->toolRegistry->find("agentxx_filesystem_list")->extra["autoSummaryOutput"],
+        std::string{"true"}
+    );
+
     // 经 ToolRegistry 全链路执行 (op_driver 驱动插件三件套); sessionId 注入
     // thread_id → 会话工作目录解析链路
     auto callTool

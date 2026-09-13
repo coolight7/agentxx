@@ -5,7 +5,6 @@
 - 验证subagent
 
 - 冻结 system prompt
-- OpWatchdog debug 时启用、配置启用
 
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
