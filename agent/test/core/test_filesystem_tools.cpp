@@ -517,22 +517,107 @@ asio::awaitable<void>
     };
     try {
         auto result = co_await tool.execute_async(args);
-        if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+        if (agentxx::util::isIgnoreCaseContains(result, "error")
+            && agentxx::util::isIgnoreCaseContains(result, "not exist")
+            && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
             g_fs_passed++;
-            TEST_PASS << "FilesystemReadTextFileTool returns error for non-existent file"
+            TEST_PASS << "FilesystemReadTextFileTool returns 'not exist' error for non-existent file"
                       << std::endl;
         } else {
             g_fs_failed++;
-            TEST_FAIL << "FilesystemReadTextFileTool should return error for non-existent file, "
+            TEST_FAIL << "FilesystemReadTextFileTool should return 'not exist' error for non-existent file, "
                          "got: "
                       << result << std::endl;
         }
     } catch (const std::exception& e) {
-        g_fs_passed++;
-        TEST_PASS << "FilesystemReadTextFileTool throws for non-existent "
-                     "file: "
-                  << e.what() << std::endl;
+        if (agentxx::util::isIgnoreCaseContains(e.what(), "not exist")
+            && !agentxx::util::isIgnoreCaseContains(e.what(), "permission")) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemReadTextFileTool throws 'not exist' for non-existent file: "
+                      << e.what() << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemReadTextFileTool unexpected exception for non-existent file: "
+                      << e.what() << std::endl;
+        }
     }
+
+    // 测试带 line_offset / line_limit 读取不存在文件
+    try {
+        auto offsetArgs = agentxx::util::Json{
+            {"path",        testDir + "/nonexistent.txt"},
+            {"line_offset", 0                           },
+            {"line_limit",  10                          },
+        };
+        auto result = co_await tool.execute_async(offsetArgs);
+        if (agentxx::util::isIgnoreCaseContains(result, "not exist")
+            && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
+            g_fs_passed++;
+            TEST_PASS
+                << "FilesystemReadTextFileTool with offset/limit returns 'not exist' for non-existent file"
+                << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemReadTextFileTool with offset/limit should return 'not exist', got: "
+                      << result << std::endl;
+        }
+    } catch (const std::exception& e) {
+        if (agentxx::util::isIgnoreCaseContains(e.what(), "not exist")) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemReadTextFileTool with offset/limit throws 'not exist': "
+                      << e.what() << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemReadTextFileTool with offset/limit unexpected exception: "
+                      << e.what() << std::endl;
+        }
+    }
+
+    // 测试同步版 fileReadExecute 读取不存在文件
+    {
+        auto syncResult
+            = ::agentxx_fs_plugin::fileReadExecute(args, agentxx::tools::testResolvedWorkDir(agentContext));
+        if (agentxx::util::isIgnoreCaseContains(syncResult, "not exist")
+            && !agentxx::util::isIgnoreCaseContains(syncResult, "permission")) {
+            g_fs_passed++;
+            TEST_PASS << "fileReadExecute (sync) returns 'not exist' for non-existent file"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "fileReadExecute (sync) should return 'not exist', got: " << syncResult
+                      << std::endl;
+        }
+    }
+
+    // 测试读取目录路径应返回目录错误而非权限错误
+    try {
+        auto dirArgs = agentxx::util::Json{
+            {"path", testDir}
+        };
+        auto result = co_await tool.execute_async(dirArgs);
+        if (agentxx::util::isIgnoreCaseContains(result, "directory")
+            && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
+            g_fs_passed++;
+            TEST_PASS
+                << "FilesystemReadTextFileTool returns directory error when reading a directory"
+                << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemReadTextFileTool should return directory error, got: "
+                      << result << std::endl;
+        }
+    } catch (const std::exception& e) {
+        if (agentxx::util::isIgnoreCaseContains(e.what(), "directory")) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemReadTextFileTool throws directory error: " << e.what()
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "FilesystemReadTextFileTool unexpected exception for directory: "
+                      << e.what() << std::endl;
+        }
+    }
+
     co_return;
 }
 
