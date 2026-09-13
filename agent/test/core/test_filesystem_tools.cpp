@@ -2223,7 +2223,7 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(linkCtx->toolRegistry->contains(name));
     }
 
-    // 验证 glob、grep、read、list 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩)
+    // 验证 glob、grep、list 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩), read 不开启
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_glob")->extra["autoSummaryOutput"],
         std::string{"true"}
@@ -2234,7 +2234,7 @@ asio::awaitable<void> test_plugin_real_link() {
     );
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_read")->extra["autoSummaryOutput"],
-        std::string{"true"}
+        std::string{"false"}
     );
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_list")->extra["autoSummaryOutput"],

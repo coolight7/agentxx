@@ -62,7 +62,7 @@ constexpr Entry kTable[] = {
 
     // ---- 输入框 ----
     {"input.placeholder",
-     "Type a message... ( [ESC] Interrupt, [Enter] Send, [Alt+Enter] Newline )",         "输入消息... ( [Esc] 中断, [Enter] 发送, [Alt+Enter] 换行 )"                             },
+     "Type a message... [ESC] Interrupt, [Enter] Send, [Alt+Enter] Newline",             "输入消息... [Esc] 中断, [Enter] 发送, [Alt+Enter] 换行"                                 },
     {"input.attach",             "[ 📎︎ ]",                                          "[ 📎︎ ]"                                                                                      },
     {"input.attachTray",         " 📎︎ Pending ({}): ",                              " 📎︎ 待发附件 ({}): "                                                                     },
     {"msg.attachImage",          "📷︎ Image",                                        "📷︎ 图像附件"                                                                             },

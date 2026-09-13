@@ -19,6 +19,8 @@ constexpr std::string_view kDepictSearch = R"(Search the knowledge base using se
 Use this to find relevant documents before answering questions.
 Returns the most relevant documents with content, source, and similarity score.)";
 
+constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
+
 } // namespace
 
 struct RagPluginCtx : public PluginBase {
@@ -146,7 +148,9 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
                 });
             }
             return output.dump(2);
-        }
+        },
+        0,
+        kAutoSummary
     );
 
     return 0;

@@ -26,6 +26,8 @@ constexpr const char* kHeaderArgDesc =
     R"(Custom HTTP request headers to send, as a JSON object of header name to value.
 Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})";
 
+constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
+
 } // namespace
 
 struct WebsearchPluginCtx : public PluginBase {
@@ -95,7 +97,9 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
                 throw CancelledException("web_fetch cancelled");
             }
             co_return result;
-        }
+        },
+        0,
+        kAutoSummary
     );
 
     // 2. fetch_markdown
@@ -139,7 +143,9 @@ When resolving relative links found in the returned Markdown, combine them with 
                 throw CancelledException("web_fetch_markdown cancelled");
             }
             co_return result;
-        }
+        },
+        0,
+        kAutoSummary
     );
 
     // 3. search
@@ -187,7 +193,9 @@ When resolving relative links found in the returned Markdown, combine them with 
                     throw CancelledException("web_search cancelled");
                 }
                 co_return result;
-            }
+            },
+            0,
+            kAutoSummary
         );
     }
 

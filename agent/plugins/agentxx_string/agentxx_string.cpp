@@ -16,6 +16,8 @@ constexpr std::string_view kDepictRegexp =
     R"(Search, replace, or remove text using regular expressions.
 Operates on in-memory text content (not files).)";
 
+constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
+
 } // namespace
 
 struct StringPluginCtx : public PluginBase {};
@@ -43,7 +45,9 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
                 throw agentxx::plugin::CancelledException("html2markdown cancelled");
             }
             return out;
-        }
+        },
+        0,
+        kAutoSummary
     );
 
     // 2. regexp
@@ -88,7 +92,9 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
                 throw agentxx::plugin::CancelledException("regexp cancelled");
             }
             return out;
-        }
+        },
+        0,
+        kAutoSummary
     );
 
     return 0;

@@ -135,9 +135,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             // 局部量: 其生命周期覆盖整个 co_await (异步读完整文件/逐行读)
             std::string workDirStr(workDir);
             co_return co_await fileReadExecuteAsync(args.raw(), workDirStr);
-        },
-        0,
-        kAutoSummary
+        }
     );
 #else
     blocking_tool(
@@ -158,9 +156,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             return fileReadExecute(args.raw(), std::string(workDir), [&] {
                 return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
             });
-        },
-        0,
-        kAutoSummary
+        }
     );
 #endif
 
