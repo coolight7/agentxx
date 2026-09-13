@@ -582,8 +582,6 @@ private:
     std::atomic<bool> retryRequested_{false};
 
     /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
-    ftxui::Box pendingCounterBox_;
-    ftxui::Box pendingInsertButtonBox_;
     ftxui::Box contextButtonBox_;
     /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
     /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)

@@ -610,24 +610,9 @@ void TUIClientAgentIO::start() {
             // 通用插件按钮命中表: 每帧重建 (renderPluginPanel/renderInfoSidebar
             // 追加, 仅存可点项; 缩放/滚动/伸缩导致坐标每帧变动)
             hitTargets_.clear();
-            const auto& st = *ctx_.frameState;
-
-            Element pendingBar = text("");
-            if (!st.pendingInputs.empty()) {
-                pendingBar = hbox({
-                    text(" "),
-                    text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme_.accentColor)
-                        | bold | reflect(pendingCounterBox_),
-                    text(" "),
-                    text(tr("queue.insert")) | bgcolor(theme_.buttonBgColor)
-                        | color(theme_.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
-                    filler(),
-                });
-            }
 
             auto mainWidget = vbox({
                 messageList_->Render() | flex,
-                pendingBar,
                 inputBar_->Render(),
                 statusBar_->Render(),
                 text(" "),
@@ -742,8 +727,8 @@ void TUIClientAgentIO::start() {
                         return true;
                     }
                     // 待发送消息队列 insert 按钮点击 → 取消当前轮次并立即从队列弹出执行
-                    if (!ctx_.frameState->pendingInputs.empty()
-                        && pendingInsertButtonBox_.Contain(mouse.x, mouse.y)) {
+                    if (inputBar_ && !ctx_.frameState->pendingInputs.empty()
+                        && inputBar_->pendingInsertButtonBox().Contain(mouse.x, mouse.y)) {
                         if (transport_) {
                             sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentSessionId()});
                         }
@@ -756,8 +741,8 @@ void TUIClientAgentIO::start() {
                         return true;
                     }
                     // 待发送消息计数点击
-                    if (!ctx_.frameState->pendingInputs.empty()
-                        && pendingCounterBox_.Contain(mouse.x, mouse.y)) {
+                    if (inputBar_ && !ctx_.frameState->pendingInputs.empty()
+                        && inputBar_->pendingCounterBox().Contain(mouse.x, mouse.y)) {
                         auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
                         overlay->onClear([this] {
                             if (transport_) {

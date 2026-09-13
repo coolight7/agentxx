@@ -98,9 +98,31 @@ Element InputComponent::OnRender() {
         trayElement = hbox(std::move(trayItems)) | bgcolor(theme.inputBgColor) | xflex;
     }
 
+    // 待发送消息队列挂载行 (渲染在附件行之上)
+    Element queueElement = text("");
+    if (ctx_.frameState && !ctx_.frameState->pendingInputs.empty()) {
+        const auto& st = *ctx_.frameState;
+        queueElement   = hbox({
+            text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme.accentColor)
+                | bold | reflect(pendingCounterBox_),
+            text(" "),
+            text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
+                | color(theme.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
+            filler(),
+        }) | bgcolor(theme.inputBgColor) | xflex;
+    } else {
+        pendingCounterBox_      = Box{};
+        pendingInsertButtonBox_ = Box{};
+    }
+
     const int maxInputTotalLines = std::max(3, Terminal::Size().dimy / 2);
 
     Elements vboxChildren;
+    if (ctx_.frameState && !ctx_.frameState->pendingInputs.empty()) {
+        vboxChildren.push_back(text(" "));
+        vboxChildren.push_back(queueElement);
+        vboxChildren.push_back(separator() | color(theme.hintColor));
+    }
     if (!attachments_.empty()) {
         vboxChildren.push_back(text(" "));
         vboxChildren.push_back(trayElement);

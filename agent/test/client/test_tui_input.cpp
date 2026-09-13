@@ -451,6 +451,111 @@ void test_spinner_frame_advances_via_tree() {
     XX_TEST_EXPECT_TRUE(renderToString(*comp).find(">") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// 待发送消息队列渲染:
+// 1. pendingInputs 为空时不展示
+// 2. pendingInputs 非空时渲染在输入框内
+// 3. 同时存在 pendingInputs 与附件时, 待发送队列严格渲染在附件行之上
+// ---------------------------------------------------------------------------
+
+void test_input_pending_queue_visibility() {
+    InputFixture f;
+    auto         comp = f.makeComponent();
+
+    // 1. pendingInputs 为空时: 屏幕中不含队列关键字, Box 为空
+    {
+        ftxui::Screen screen(80, 10);
+        ftxui::Render(screen, comp->OnRender());
+        std::string out = screen.ToString();
+        XX_TEST_EXPECT_TRUE(out.find("Message Queue") == std::string::npos
+                            && out.find("待发送消息队列") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().x_min == 0
+                            && comp->pendingCounterBox().x_max == 0);
+        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().x_min == 0
+                            && comp->pendingInsertButtonBox().x_max == 0);
+    }
+
+    // 2. pendingInputs 非空时: 屏幕中出现队列标题与立即发送按钮, Box 被 reflect 填充有效尺寸
+    f.sharedState.mutate([](TUIRenderState& st) {
+        TUIPendingInput pi;
+        pi.id   = "q-1";
+        pi.text = "queued task";
+        st.pendingInputs.push_back(std::move(pi));
+    });
+    f.ctx.frameState = f.sharedState.readSnapshot();
+
+    {
+        ftxui::Screen screen(80, 10);
+        ftxui::Render(screen, comp->OnRender());
+        std::string out = screen.ToString();
+        XX_TEST_EXPECT_TRUE(out.find("Message Queue") != std::string::npos
+                            || out.find("待发送消息队列") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("Insert") != std::string::npos
+                            || out.find("立即发送") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().x_max > comp->pendingCounterBox().x_min);
+        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().x_max > comp->pendingInsertButtonBox().x_min);
+    }
+
+    // 3. pendingInputs 清空后: 重新渲染, 队列消失, Box 重置
+    f.sharedState.mutate([](TUIRenderState& st) {
+        st.pendingInputs.clear();
+    });
+    f.ctx.frameState = f.sharedState.readSnapshot();
+
+    {
+        ftxui::Screen screen(80, 10);
+        ftxui::Render(screen, comp->OnRender());
+        std::string out = screen.ToString();
+        XX_TEST_EXPECT_TRUE(out.find("Message Queue") == std::string::npos
+                            && out.find("待发送消息队列") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().x_min == 0
+                            && comp->pendingCounterBox().x_max == 0);
+        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().x_min == 0
+                            && comp->pendingInsertButtonBox().x_max == 0);
+    }
+}
+
+void test_input_pending_queue_above_attachments() {
+    InputFixture f;
+    auto         comp = f.makeComponent();
+
+    // 注入待发送队列
+    f.sharedState.mutate([](TUIRenderState& st) {
+        TUIPendingInput pi;
+        pi.id   = "q-1";
+        pi.text = "task queued";
+        st.pendingInputs.push_back(std::move(pi));
+    });
+    f.ctx.frameState = f.sharedState.readSnapshot();
+
+    // 挂载附件
+    agentxx::agent::MediaAttachment att;
+    att.type        = agentxx::agent::MediaType::Image;
+    att.displayName = "photo.jpg";
+    att.sizeBytes   = 5678;
+    comp->addAttachment(std::move(att));
+
+    ftxui::Screen screen(100, 15);
+    ftxui::Render(screen, comp->OnRender());
+    std::string out = screen.ToString();
+
+    // 查找待发送队列、附件、输入提示符的位置
+    size_t queuePos = out.find("Message Queue");
+    if (queuePos == std::string::npos) {
+        queuePos = out.find("待发送消息队列");
+    }
+    size_t attachPos = out.find("photo.jpg");
+    size_t inputPos  = out.find(">");
+
+    XX_TEST_EXPECT_TRUE(queuePos != std::string::npos);
+    XX_TEST_EXPECT_TRUE(attachPos != std::string::npos);
+    XX_TEST_EXPECT_TRUE(inputPos != std::string::npos);
+
+    // 验证严格顺序: 待发送队列在附件之上, 附件在输入文本行之上
+    XX_TEST_EXPECT_TRUE(queuePos < attachPos);
+    XX_TEST_EXPECT_TRUE(attachPos < inputPos);
+}
+
 TestResult testTuiInput() {
     g_tui_input_passed = 0;
     g_tui_input_failed = 0;
@@ -472,6 +577,8 @@ TestResult testTuiInput() {
     test_tui_state_message_queue_sync();
     test_input_attachment_tray_send();
     test_input_attach_button_visibility();
+    test_input_pending_queue_visibility();
+    test_input_pending_queue_above_attachments();
 
     return TestResult{g_tui_input_passed, g_tui_input_failed};
 }

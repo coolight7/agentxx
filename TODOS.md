@@ -9,7 +9,7 @@
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
 - 整理 中断 渲染，统一通用的渲染支持，不特化 permission 渲染
-- tui 修改待发送消息队列渲染到输入框内、附件行之上
+- agentxx_filesystem_read 读取失败文件不存在却提示 permission denied
 
 - 调整 tui 亮色配置
 - SVG绘制支持
