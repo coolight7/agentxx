@@ -2293,8 +2293,8 @@ Element MessageListComponent::buildInterruptControl(const TUIMessage& msg, size_
         auto minusBox = mkBox();
         auto plusBox  = mkBox();
         auto editBox  = mkBox();
-        auto minus    = btn(" - ", false) | reflect(*minusBox);
-        auto plus     = btn(" + ", false) | reflect(*plusBox);
+        auto minus    = btn("[ - ]", false) | reflect(*minusBox);
+        auto plus     = btn("[ + ]", false) | reflect(*plusBox);
         hit(kHitNumMinus, 0, minusBox);
         hit(kHitNumPlus, 0, plusBox);
         hit(kHitEdit, 0, editBox);

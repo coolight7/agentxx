@@ -462,7 +462,7 @@ Element LogMenuOverlay::OnRender() {
 
     auto renderBtn = [&](int idx, std::string_view label, Box& box) {
         const bool selected = (selectedIndex_ == idx);
-        auto       el       = text(fmt::format(" {} ", label));
+        auto       el       = text(fmt::format("[ {} ]", label));
         if (selected) {
             el = el | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
                  | bold;
@@ -499,7 +499,7 @@ Element LogMenuOverlay::OnRender() {
                separator(),
                text(tr("menu.hint")) | center | dim,
            })
-           | border | size(WIDTH, EQUAL, 32) | color(theme.accentColor);
+           | border | size(WIDTH, EQUAL, 36) | color(theme.accentColor);
 }
 
 bool LogMenuOverlay::OnEvent(Event event) {
@@ -668,7 +668,7 @@ std::string getExecutablePath() noexcept {
     for (;;) {
         DWORD len = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
         if (len == 0) {
-            return "[Unknown]";
+            return "( Unknown )";
         }
         if (len < buf.size()) {
             buf.resize(len);
@@ -681,7 +681,7 @@ std::string getExecutablePath() noexcept {
     std::error_code ec;
     auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
     if (ec) {
-        return "[Unknown]";
+        return "( Unknown )";
     }
     return exe.generic_string();
 #endif
@@ -758,7 +758,7 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
         workDirStr = agentxx::agent::AgentConfigStatic::getCurrentWorkPath();
     }
     if (workDirStr.empty()) {
-        workDirStr = "[Unknown]";
+        workDirStr = "( Unknown )";
     }
 
     auto formatList = [](const std::vector<std::string>& list) -> std::string {
@@ -902,7 +902,7 @@ Element PendingInputsOverlay::OnRender() {
     }
     for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
         const auto& pi     = st.pendingInputs[i];
-        auto        delBtn = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
+        auto        delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.systemColor)
                       | reflect(delBoxes_[i]);
         Element row;
         auto    body = pi.expanded ? paragraph(pi.text) | flex

@@ -294,7 +294,7 @@ Element FilePickerOverlay::OnRender() {
             rowItems.push_back(text(entry.name) | color(theme.normalColor));
             rowItems.push_back(filler());
             rowItems.push_back(
-                text(fmt::format("({}) ", agentxx::util::formatSize(entry.sizeBytes))) | dim
+                text(fmt::format("( {} ) ", agentxx::util::formatSize(entry.sizeBytes))) | dim
             );
         } else {
             const char* labelKey
