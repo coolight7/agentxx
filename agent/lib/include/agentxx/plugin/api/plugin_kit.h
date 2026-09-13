@@ -3133,16 +3133,20 @@ public:
 
     void stopSpawns() {
         for (auto& rec : spawns_) {
-            if (!rec || !rec->cancelFlag) {
+            if (!rec) {
                 continue;
             }
-            rec->cancelFlag->store(true, std::memory_order_release);
+            rec->starter = nullptr;
+            if (rec->cancelFlag) {
+                rec->cancelFlag->store(true, std::memory_order_release);
+            }
             if (rec->coroAddr) {
                 auto handle
                     = std::coroutine_handle<detail::PromiseBase<void>>::from_address(rec->coroAddr);
                 handle.promise().cancel_outstanding();
             }
         }
+        spawns_.clear();
     }
 
     template<typename Self, typename Fn>
@@ -3717,7 +3721,11 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
         return;
     }
 
-    auto starter = [&ctx, fn, cancelFlag, rec, recWeak, hostNotify]() {
+    auto starter = [&ctx, fn, cancelFlag, recWeak, hostNotify]() {
+        auto rec = recWeak.lock();
+        if (!rec) {
+            return;
+        }
         // 任务协程以引用接收 ctl：必须由 SpawnRecord 持有到任务结束（不能放在
         // starter 的栈上，否则任务一挂起就悬垂）。
         if (!rec->ctl) {
@@ -3732,9 +3740,7 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
             p.cancelFlag_ = cancelFlag;
             p.notify_     = hostNotify;
             if (!h.done()) {
-                if (auto recSp = recWeak.lock()) {
-                    recSp->coroAddr = h.address();
-                }
+                rec->coroAddr = h.address();
             }
 
             // 任务首步由 host driver 推进, 因此 spawn 不会在调用方栈里同步跑任务体
@@ -3756,7 +3762,9 @@ inline void spawnTaskImpl(Ctx& ctx, Fn&& fn) {
         [](void* ud) {
             auto* rec = static_cast<PluginBase::SpawnRecord*>(ud);
             if (rec && rec->starter) {
-                rec->starter();
+                auto starterFn = std::move(rec->starter);
+                rec->starter   = nullptr;
+                starterFn();
             }
         },
         raw
@@ -5524,6 +5532,15 @@ inline void* callLifecycleEntry(
     return nullptr;
 }
 
+template<typename Ctx>
+inline void autoStopSpawns(Ctx* ctx) noexcept {
+    if constexpr (requires { ctx->stopSpawns(); }) {
+        if (ctx) {
+            ctx->stopSpawns();
+        }
+    }
+}
+
 } // namespace detail
 
 /// create 阶段异常上报 (上下文可能尚未构造成功, 直接经宿主日志接口输出)
@@ -5637,6 +5654,7 @@ inline void logClientCreateFailure(
             err,                                                                                 \
             "plugin stop",                                                                       \
             [&]() -> void* {                                                                     \
+                agentxx::plugin::detail::autoStopSpawns(ctx);                                    \
                 return (StopFn)(*ctx, notify, err);                                              \
             }                                                                                    \
         );                                                                                       \
@@ -5685,6 +5703,7 @@ inline void logClientCreateFailure(
             err,                                                        \
             "plugin stop",                                              \
             [&]() -> void* {                                            \
+                agentxx::plugin::detail::autoStopSpawns(ctx);           \
                 return (StopFn)(*ctx, notify, err);                     \
             }                                                           \
         );                                                              \
