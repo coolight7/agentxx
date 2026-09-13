@@ -99,10 +99,13 @@ if(test_plugin_C_SOURCES)
 		# MSVC 没有 -pedantic-errors; /W4 下同样禁止隐式声明等违规写法
 		set_source_files_properties(${test_plugin_C_SOURCES} PROPERTIES
 			COMPILE_OPTIONS "/std:c17;/W4"
+			SKIP_PRECOMPILE_HEADERS ON
 		)
 	else()
+		# 纯 C17 ABI 测试源文件必须跳过 C++ 预编译头 (PCH), 避免 C 编译器包含 C++ STL 头
 		set_source_files_properties(${test_plugin_C_SOURCES} PROPERTIES
 			COMPILE_OPTIONS "-std=c17;-pedantic-errors;-Wall;-Wextra"
+			SKIP_PRECOMPILE_HEADERS ON
 		)
 	endif()
 endif()

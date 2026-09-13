@@ -42,6 +42,7 @@ target_compile_definitions(agentxx_benchmark PRIVATE
 target_include_directories(agentxx_benchmark PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/"
+  "${neograph_SOURCE_DIR}/deps/yyjson/"
 )
 
 if (AGENTXX_BUILD_CLIENT)
