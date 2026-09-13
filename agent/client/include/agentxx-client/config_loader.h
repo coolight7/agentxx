@@ -122,6 +122,12 @@ inline constexpr std::string_view kBuiltinExecDirEnv = "AGENTXX_EXEC_DIR";
 /// - 传入空值表示清除该变量 (回退惰性解析)
 void setBuiltinEnvVar(std::string_view name, std::string value);
 
+/// 配置文件名 (overlay 层: 工作目录或 `--config` 指定的文件;
+/// base 层: data_dir 目录下的同名文件)
+inline constexpr std::string_view kDefaultConfigFileName = "agentxx-config.yaml";
+/// 环境变量文件名 (base 层: data_dir 目录下的该文件)
+inline constexpr std::string_view kDefaultEnvFileName = ".env";
+
 std::map<std::string, std::string> loadDotEnv(std::string_view path);
 std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& paths);
 std::map<std::string, std::string> loadOverrideEnv(std::string_view path);
@@ -132,11 +138,132 @@ std::string resolveEnvVars(
     const std::map<std::string, std::string>& overrideEnvVars
 );
 
+/// 加载单个配置文件为应用配置 (单层; 分层合并见 loadYamlConfigLayered)
+/// - 同样按新段结构归一化 (`model.list` / `plugin.list` / `*/list` + `overwrite`),
+///   解析层只读归一化后的形状
 YamlAppConfig loadYamlConfig(
     std::string_view                          path,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 );
+
+/// 解析 yaml `data_dir` 配置值为绝对路径 (含 `~` 展开与相对路径按程序工作目录绝对化)
+/// - 空值返回空串 (表示不持久化数据)
+/// - `default` 关键字返回系统数据目录 (Linux/macOS: ~/.agentxx/,
+///   Windows: %APPDATA%/agentxx/)
+std::string resolveDataDirValue(std::string_view raw);
+
+/// 读取 yaml 配置中 `data_dir` 字段的原始值 (经 `${VAR}` 展开, 不做路径归一化)
+/// - 仅用于分层加载时定位 base 配置所在目录 (此时 base 的 .env 尚未加载)
+/// - 文件不存在/根节点非映射/无 `data_dir` 字段时返回空串; 解析失败抛出异常
+std::string readYamlDataDirValue(
+    std::string_view                          path,
+    const std::map<std::string, std::string>& dotEnvVars,
+    const std::map<std::string, std::string>& overrideEnvVars
+);
+
+/// 合并加载 base + overlay 两个配置文件 (base 为底, overlay 覆盖, 路径为空表示该层不存在)
+///
+/// 配置结构 (列表型配置段统一为 `list:` + 可选 `overwrite:` 两键):
+/// ```yaml
+/// model:
+///     overwrite:                 # 与 base 的合并策略 (可省略, 默认 merge)
+///         mode: merge            # merge(默认, 继承并叠加 base) | replace(整段只用本层)
+///         remove:                # 可选: 从合并结果中剔除的条目 (按身份匹配)
+///             - old-model
+///     list:                      # 本层条目 (可省略 = 空)
+///         - name: my-model
+///           type: openai
+///     use:                       # 各用途使用的模型名 (原顶层 use_model 段)
+///         default: my-model
+/// plugin:
+///     overwrite: {mode: merge, remove: [agentxx_codegraph]}
+///     list:
+///         - path: builtin://agentxx_filesystem
+/// skill:
+///     overwrite: {mode: replace}  # 只用本层技能列表
+///     list: [./skills]
+/// permission:
+///     mode: ask
+///     whitelist:
+///         overwrite: {mode: merge, remove: [/home/other]}
+///         list: [/workspace]
+/// ```
+/// - 适用段: `model` / `plugin` / `mcp` / `skill` / `memory` /
+///   `permission.whitelist` / `permission.blacklist`
+/// - 段值必须是映射 (`list:` 存条目, `overwrite:` 存策略); 旧写法直接给列表
+///   (`skill: [a, b]`) 或给空字符串 (`skill: ""`) 已不再支持, 会记警告并忽略该段
+/// - `remove` 匹配身份: `model` 按 `name`, `plugin` 按 `path`(`name` 与
+///   `builtin://<name>` 写法同样可匹配), `mcp` 按 `namespace`,
+///   `skill`/`memory`/权限名单按字符串本身 (按原始文本比较, 不展开 `${VAR}`)
+/// - `remove` 在两种模式下都生效 (从最终结果中剔除); 未匹配到任何条目时记警告
+/// - 策略只由 overlay 层生效: base 自身作为底层没有继承对象, 其 `overwrite` 忽略
+/// - 其他配置段 (标量/映射) 仍按 `data_dir`/`work_dir` 覆盖、
+///   `subagent`/`worktree` 等逐键递归合并, 列表型字段整体覆盖
+///
+/// 合并规则 (逐键判断, 只有 overlay 中出现的键才会覆盖 base):
+/// - 标量 (`data_dir` / `work_dir` / `permission.mode` 等): overlay 覆盖
+/// - 映射 (`permission` 的其余键, 模型 `extra_headers` / `extra_api_config`,
+///   插件 `args` 等): 逐键递归合并, 同键 overlay 覆盖; 映射内列表整体覆盖
+/// - 列表段: 见上方 `list` / `overwrite` 结构 (`mode: merge` 时按键归并或追加去重)
+/// - 显式空值 (`key:` 无内容 = null) 视为该层未配置, 不参与覆盖
+/// - 列表归并保持 base 项在前, 结果顺序稳定 (便于日志与测试比对)
+YamlAppConfig loadYamlConfigLayered(
+    std::string_view                          basePath,
+    std::string_view                          overlayPath,
+    const std::map<std::string, std::string>& dotEnvVars,
+    const std::map<std::string, std::string>& overrideEnvVars
+);
+
+/// 分层配置加载参数 (base 为底, overlay 覆盖)
+struct LayeredConfigOptions {
+    /// 上层 (overlay) 配置路径; 默认 `agentxx-config.yaml`, 可经 `--config` 指定
+    std::string overlayConfigPath;
+    /// 上层 .env 文件路径列表 (后者覆盖前者; 通常为
+    /// [程序工作目录/.env, 上层配置所在目录/.env])
+    std::vector<std::string> overlayEnvPaths;
+    /// `--env` 指定的覆盖式环境变量文件 (最高优先级; 空表示未指定)
+    std::string overrideEnvPath;
+};
+
+/// 分层配置加载结果
+struct LayeredConfigLoad {
+    /// 合并后的配置 (base 为底 + overlay 覆盖)
+    YamlAppConfig cfg;
+    /// 上层配置文件路径 (原样回传)
+    std::string overlayConfigPath;
+    /// base 配置文件路径 ({baseDir}/agentxx-config.yaml)
+    std::string baseConfigPath;
+    /// base .env 文件路径 ({baseDir}/.env)
+    std::string baseEnvPath;
+    /// 定位 base 用的数据目录: overlay 的 `data_dir` (经 `~`/相对路径归一化);
+    /// overlay 未配置 `data_dir` 或 overlay 不存在时取系统数据目录
+    std::string baseDir;
+    /// 各层配置文件是否存在并加载成功
+    bool overlayLoaded = false;
+    bool baseLoaded    = false;
+    /// 合并后的 .env 变量 (overlay 优先: base 同名变量被舍弃)
+    std::map<std::string, std::string> dotEnvVars;
+    /// `--env` 覆盖式文件变量 (最高优先级)
+    std::map<std::string, std::string> overrideEnvVars;
+    /// base .env 变量总数 / 其中因 overlay 同名而被舍弃的数量 (日志与测试用)
+    size_t baseEnvTotal   = 0;
+    size_t baseEnvDropped = 0;
+};
+
+/// 分层加载应用配置 (data_dir 目录下的 base 配置为底, overlay 配置覆盖)
+/// - overlay: `opts.overlayConfigPath` (程序工作目录或 `--config` 指定)
+/// - base: overlay 的 `data_dir` 目录下的 `agentxx-config.yaml` 与 `.env`;
+///   overlay 未配置 `data_dir` (或 overlay 配置不存在) 时使用系统数据目录,
+///   即程序工作目录无配置时直接加载数据目录下的配置
+/// - 只加载一层 base: base 配置内的 `data_dir` 不再向下查找
+/// - base 与 overlay 指向同一文件 (如 `--config <data_dir>/agentxx-config.yaml`) 时
+///   只加载一次, 不重复合并
+/// - .env 变量: 内置变量 > `--env` > overlay .env > base .env (同名舍弃 base 值)
+///   > 系统环境变量; 合并后的变量同时用于展开两层 yaml 中的 `${VAR}`
+/// - base 层解析失败 (文件损坏等) 仅记错误日志并忽略 base, 不影响 overlay;
+///   overlay 层解析失败抛出异常, 由调用方决定是否退出
+LayeredConfigLoad loadLayeredConfig(const LayeredConfigOptions& opts);
 
 agent::ModelConfig resolveModelConfig(
     const std::map<std::string, agent::ModelConfig>& models,

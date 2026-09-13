@@ -88,48 +88,60 @@ static std::string getExecutableDir() noexcept {
 ///   在构造 CodeAgent 之前拦截, 输出配置引导后退出,
 ///   避免携带无效模型进入 BaseAgent 构造触发断言 abort 崩溃
 ///   (base_agent.cpp: assert(in_config->model.isValid()))
-/// - configLoaded: 配置文件是否成功加载 (区分"文件缺失"与"文件内未配置"引导文案)
+/// - overlayPath/basePath: 两层配置的候选路径 (base 为 data_dir 下的配置;
+///   basePath 为空表示数据目录无法确定), 仅用于引导文案
+/// - configLoaded: 是否有任一层配置文件成功加载
+///   (区分"文件缺失"与"文件内未配置"引导文案)
 static bool ensureModelConfigured(
     const std::map<std::string, agentxx::agent::ModelConfig>& models,
     std::string_view                                          useModelKey,
     std::string_view                                          roleDesc,
-    std::string_view                                          configPath,
+    std::string_view                                          overlayPath,
+    std::string_view                                          basePath,
     bool                                                      configLoaded
 ) {
     if (resolveModelConfig(models, useModelKey).isValid()) {
         return true;
     }
+    // 配置路径描述: overlay (工作目录/--config 指定的配置)
+    // + base (data_dir 目录下的配置, 不存在时省略)
+    std::string pathDesc = std::string{overlayPath};
+    if (!basePath.empty()) {
+        pathDesc += " (base: ";
+        pathDesc += basePath;
+        pathDesc += ")";
+    }
     if (!configLoaded) {
         XX_LOGE(
             R"_([Config] .yaml config file '{}' not found. 
 Please copy the template to create one (agentxx-config.yaml in the project root directory, or refer to the README for usage instructions), and configure `models` and `use_model`.)_",
-            configPath
+            pathDesc
         );
-    } else {
-        XX_LOGE(
-            "[Config] No available LLM model configured: {} (use_model.{}), startup aborted.",
-            roleDesc,
-            useModelKey
-        );
-        XX_LOGE(
-            R"_([Config] No valid model entry found in .yaml config file '{}' (use_model.{} = '{}'). 
-Please add a model to the models list and specify the default model.
+        return false;
+    }
+    XX_LOGE(
+        "[Config] No available LLM model configured: {} (use_model.{}), startup aborted.",
+        roleDesc,
+        useModelKey
+    );
+    XX_LOGE(
+        R"_([Config] No valid model entry found in .yaml config file(s) '{}' (model.use.{} = '{}'). 
+Please add a model to the `model.list` and specify the model to use in `model.use`.
 For example:
 
-models:
-    - name: my-model
-        type: openai
-        base_url: https://api.openai.com/v1
-        api_key: ${{LLM_API_KEY}}
-
-use_model:
-    default: my-model
+model:
+    list:
+        - name: my-model
+          type: openai
+          base_url: https://api.openai.com/v1
+          api_key: ${{LLM_API_KEY}}
+    use:
+        default: my-model
 )_",
-            configPath,
-            useModelKey,
-            useModelKey
-        );
-    }
+        pathDesc,
+        useModelKey,
+        useModelKey
+    );
     return false;
 }
 
@@ -284,7 +296,7 @@ int main(int argn, char** argv) {
     auto defaultLogSink = std::make_shared<StderrLogSink>();
     agentxx::util::LogDispatcher::instance().addSink(defaultLogSink);
 
-    std::string configPath = "agentxx-config.yaml";
+    std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
     std::string overrideEnvPath;
     std::string mode = "tui";
@@ -362,59 +374,82 @@ Options:
         agentToken = extractTokenFromUrl(agentUrl);
     }
 
-    // 加载覆盖式 env 文件（--env，最高优先级）
-    std::map<std::string, std::string> overrideEnvVars;
-    if (!overrideEnvPath.empty()) {
-        overrideEnvVars = loadOverrideEnv(overrideEnvPath);
-        XX_LOGI(
-            "[Config] Loaded {} override variables from: {}",
-            overrideEnvVars.size(),
-            overrideEnvPath
-        );
-    }
-
-    // 加载 .env 文件（从当前目录和配置文件所在目录，优先级高于系统环境变量）
-    // - 完整查找顺序: 程序内置变量 > --env 覆盖文件 > .env 文件 > 系统环境变量 > 保留 ${VAR} 原样
-    std::map<std::string, std::string> dotEnvVars;
-    {
-        std::vector<std::string> envPaths;
-        envPaths.push_back(".env");
-        auto configDir = std::filesystem::path(configPath).parent_path();
-        if (!configDir.empty()) {
-            envPaths.push_back((configDir / ".env").string());
-        }
-        dotEnvVars = loadDotEnv(envPaths);
-        if (!dotEnvVars.empty()) {
-            XX_LOGI("[Config] Loaded {} variables from .env", dotEnvVars.size());
-        }
-    }
-
-    // 加载 YAML 配置
-    YamlAppConfig yamlCfg;
-    bool configLoaded = false; ///< 配置文件是否成功加载 (用于模型缺失引导文案区分)
-    if (std::filesystem::exists(configPath)) {
-        auto code = agentxx::util::catchError<int>(
-            [&]() -> int {
-                yamlCfg = loadYamlConfig(configPath, dotEnvVars, overrideEnvVars);
-                XX_LOGI("[Config] Loaded config from: {}", configPath);
-                configLoaded = true;
-                return 0;
-            },
-            [&](std::string errmsg) -> int {
-                XX_LOGE("[Config] Failed to load config: {}, {}", configPath, errmsg);
-                return 1;
-            }
-        );
-        if (0 != code) {
-            return code;
-        }
-    } else if (configExplicit) {
+    // ======================== 分层配置加载 ========================
+    // - overlay 层: `--config` 指定的配置文件 (默认 `工作目录/agentxx-config.yaml`)
+    //   与其所在目录的 .env
+    // - base 层: overlay 的 `data_dir` 目录下的 `agentxx-config.yaml` / `.env`
+    //   (overlay 未配置 data_dir 时取系统数据目录, 即工作目录无配置时
+    //   直接加载数据目录下的配置); base 不存在时仅用 overlay
+    // - 合并: base 为底, overlay 覆盖 (同名标量/映射键覆盖; models/mcp/plugins
+    //   按键归并; skill/memory/permission 白黑名单追加合并; .env 同名舍弃 base 值)
+    // - 只加载一层 base (base 内的 data_dir 不再向下查找)
+    if (configExplicit && !std::filesystem::exists(configPath)) {
         // 显式 --config 指定的文件不存在: 大概率是路径拼写错误, 直接报错
         XX_LOGE("[Config] Config file not found: {}", configPath);
         return 1;
     }
-    // 默认路径不存在: 静默跳过加载, 由后续模型可用性检查 (ensureModelConfigured)
-    // 输出"未找到配置文件"引导后退出
+
+    LayeredConfigOptions loadOpts;
+    loadOpts.overlayConfigPath = configPath;
+    loadOpts.overrideEnvPath   = overrideEnvPath;
+    // .env 查找: 工作目录/.env, 其次 overlay 配置所在目录/.env (后者覆盖前者)
+    loadOpts.overlayEnvPaths.push_back(".env");
+    {
+        auto configDir = std::filesystem::path(configPath).parent_path();
+        if (!configDir.empty()) {
+            loadOpts.overlayEnvPaths.push_back(
+                (configDir / agentxx::client::kDefaultEnvFileName).string()
+            );
+        }
+    }
+
+    LayeredConfigLoad loadedCfg;
+    auto              loadCode = agentxx::util::catchError<int>(
+        [&]() -> int {
+            loadedCfg = loadLayeredConfig(loadOpts);
+            return 0;
+        },
+        [&](std::string errmsg) -> int {
+            XX_LOGE("[Config] Failed to load config: {}, {}", configPath, errmsg);
+            return 1;
+        }
+    );
+    if (0 != loadCode) {
+        return loadCode;
+    }
+
+    const YamlAppConfig& yamlCfg      = loadedCfg.cfg;
+    bool                 configLoaded = loadedCfg.overlayLoaded || loadedCfg.baseLoaded;
+    if (loadedCfg.overlayLoaded && loadedCfg.baseLoaded) {
+        XX_LOGI(
+            "[Config] Loaded layered config: base={} + overlay={} (overlay overrides base)",
+            loadedCfg.baseConfigPath,
+            configPath
+        );
+    } else if (loadedCfg.baseLoaded) {
+        XX_LOGI(
+            "[Config] Loaded config from base (data_dir): {} (no overlay config: {})",
+            loadedCfg.baseConfigPath,
+            configPath
+        );
+    } else if (loadedCfg.overlayLoaded) {
+        XX_LOGI("[Config] Loaded config from: {}", configPath);
+    }
+    if (!loadedCfg.dotEnvVars.empty()) {
+        XX_LOGI(
+            "[Config] Loaded {} variables from .env (base .env: {}, dropped by overlay: {})",
+            loadedCfg.dotEnvVars.size(),
+            loadedCfg.baseEnvTotal,
+            loadedCfg.baseEnvDropped
+        );
+    }
+    if (!loadedCfg.overrideEnvVars.empty()) {
+        XX_LOGI(
+            "[Config] Loaded {} override variables from: {}",
+            loadedCfg.overrideEnvVars.size(),
+            overrideEnvPath
+        );
+    }
 
     // 统一数据根目录: 可在 yaml 配置 data_dir 指定
     // - tui/cli 模式支持关键字 `default`: 使用当前系统数据目录 (平台惯例,
@@ -423,19 +458,11 @@ Options:
     // - 数据子路径: {dataDir}/sqlite/global.db (全局设置),
     //   {dataDir}/sqlite/sessions/{sessionId}/ (会话数据),
     //   {dataDir}/sqlite/codegraph/... (CodeGraph 索引)
-    std::string resolvedDataDir;
+    std::string resolvedDataDir = resolveDataDirValue(yamlCfg.dataDir);
     if (!yamlCfg.dataDir.empty()) {
         if (yamlCfg.dataDir == agentxx::agent::AgentConfigStatic::kDefaultDataDirKey) {
-            // 关键字 default: 取系统数据目录 (平台惯例)
-            resolvedDataDir = agentxx::agent::AgentConfigStatic::systemDataDir();
             XX_LOGI("[Config] data_dir: default -> {}", resolvedDataDir);
         } else {
-            auto dataDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.dataDir);
-            std::filesystem::path fp{dataDirExpanded};
-            resolvedDataDir
-                = fp.is_absolute()
-                      ? fp.lexically_normal().string()
-                      : (std::filesystem::current_path() / fp).lexically_normal().string();
             XX_LOGI("[Config] data_dir: {}", resolvedDataDir);
         }
     }
@@ -491,6 +518,7 @@ Options:
                 yamlCfg.useModelTrain,
                 "train model",
                 configPath,
+                loadedCfg.baseConfigPath,
                 configLoaded
             )
             || !ensureModelConfigured(
@@ -498,6 +526,7 @@ Options:
                 yamlCfg.useModelTrainScorer,
                 "train scorer model",
                 configPath,
+                loadedCfg.baseConfigPath,
                 configLoaded
             )
             || !ensureModelConfigured(
@@ -505,6 +534,7 @@ Options:
                 yamlCfg.useModelTrainOptimizer,
                 "train ooptimizer model",
                 configPath,
+                loadedCfg.baseConfigPath,
                 configLoaded
             )) {
             return 1;
@@ -547,6 +577,7 @@ Options:
                 yamlCfg.useModelAcp,
                 "ACP model",
                 configPath,
+                loadedCfg.baseConfigPath,
                 configLoaded
             )) {
             return 1;
@@ -615,6 +646,7 @@ Options:
                 yamlCfg.useModelDefault,
                 "default model",
                 configPath,
+                loadedCfg.baseConfigPath,
                 configLoaded
             )) {
             return 1;
@@ -695,6 +727,7 @@ Options:
             yamlCfg.useModelDefault,
             "default model",
             configPath,
+            loadedCfg.baseConfigPath,
             configLoaded
         )) {
         return 1;

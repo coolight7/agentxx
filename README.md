@@ -377,12 +377,27 @@ npm install --legacy-peer-deps
 ## 配置文件和运行
 - 参考 `{项目根目录}` 下的 `agentxx-config.yaml`，修改它在里面配置你的模型 llm api，然后 cd 到 `agentxx-config.yaml` 所在目录，运行 agentxx_cli 即可
 - （可选）`agentxx-config.yaml` 内配置 llm api key 时，建议放到同目录的 `.env` 中，模版参考 `.env.example`, 复制并重命名为 `.env` 然后添加环境变量即可
+- 配置支持**分层加载** (base + overlay)：
+    - overlay 层: 工作目录下的 `agentxx-config.yaml` / `.env` (或 `--config` 指定的文件 + 其同目录 `.env`)
+    - base 层: 该配置 `data_dir` 目录下的 `agentxx-config.yaml` / `.env`
+    - 合并: base 为底、overlay 覆盖 (标量覆盖 / 映射逐键合并 / 列表段按段内策略归并,
+      `.env` 同名变量取 overlay 值)
+    - 列表段 (`model` / `plugin` / `mcp` / `skill` / `memory` / `permission` 白黑名单) 统一结构:
+      `list:` 写条目, `overwrite: {mode: merge|replace, remove: [...]}` 控制继承
+      (merge 默认继承叠加; replace 整段只用本层; remove 按身份剔除 base 项)
+    - 因此可将常用模型/插件/密钥放 `~/.agentxx/agentxx-config.yaml` + `~/.agentxx/.env`，
+      项目目录只写差异项; 工作目录没有配置文件时也会直接加载数据目录下的配置
 ```sh
 cd {项目根目录}
 # 修改 agentxx-config.yaml 
 # 可选: 
 #       cp .env.example .env
 #       修改 .env 添加环境变量 api key
+
+# 可选: 把通用配置放数据目录, 项目里只写差异
+#       mkdir -p ~/.agentxx
+#       cp agentxx-config.yaml ~/.agentxx/agentxx-config.yaml
+#       cp .env.example ~/.agentxx/.env
 
 # client 负责UI渲染和输入输出交互
 # server-io 运行 agent-loop 的 server 端，负责执行会话、调用 llm api 等实际操作

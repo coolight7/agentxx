@@ -38,7 +38,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 丰富的工具集，按功能分类。编程基础类工具 (文件系统 / 命令执行 / 网络 /
 知识检索 / 字符串 / 系统时间 / 规划写入) 已从 lib 内置实现拆分为**独立插件**
-(同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugins` 段配置加载，
+(同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugin.list` 段配置加载，
 或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
 合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent /
 git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当前未独立注册为 tool)：
@@ -63,7 +63,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
-| | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个为计数口径含 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugins` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
+| | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个为计数口径含 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经工具装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
@@ -423,7 +423,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 ### 扩展能力
 
-以下能力均已从 lib 内置拆分为 `agent/plugins/` 下的独立插件 (经 yaml `plugins` 段配置加载, 见 plugins.md):
+以下能力均已从 lib 内置拆分为 `agent/plugins/` 下的独立插件 (经 yaml `plugin.list` 段配置加载, 见 plugins.md):
 
 | 模块 | 说明 |
 |------|------|
@@ -431,7 +431,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 全平台跳过构建: 实现未启用) |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (插件 `agentxx_text_selection_monitor`, 仅 Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`; 工具 + 周期采集 + client 侧渲染) |
-| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugins` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
+| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugin.list` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
 
 ### 依赖注入
 
@@ -494,58 +494,68 @@ path/to/agentxx_test string_util regex agent
 
 ### 配置文件
 
-配置文件为 YAML 格式 (默认 `{程序运行目录}/agentxx-config.yaml`, 支持 agentxx_cli --config 指定文件路径)，其中部分变量支持 `${VAR}` 环境变量替换：
+配置文件为 YAML 格式 (默认 `{程序运行目录}/agentxx-config.yaml`, 支持 agentxx_cli --config 指定文件路径)，
+按 base + overlay 两层加载 (见下方"分层配置"; base 为数据目录下的 `agentxx-config.yaml`, overlay 覆盖 base)，
+其中部分变量支持 `${VAR}` 环境变量替换：
 
 ```yaml
-models:
-  - name: "my-model"
-    type: "openai"              # "openai" / "anthropic" / "openai-responses"
-    base_url: "https://api.example.com"
-    api_key: "${MY_API_KEY}"    # 从 .env 或系统环境变量解析
-    model_name: "gpt-4"
-    api_path: ""                # 自定义 API 路径 (如 "/v1/chat/completions"); 空则用默认
-    send_thinking: false        # 是否把 thinking/reasoning_content 随上下文发送给模型
-    request_reasoning_summary: true # send_thinking 开启时, 是否请求上游返回思考摘要 (Responses
-                                # API 的 include 参数)。opencode-muse-spark 等网关不支持
-                                # reasoning.summary_text 变体, 需设 false, 否则 API 400
-                                # (unknown variant reasoning.summary_text);
-                                # 也可用 extra_api_config 显式指定 include 数组覆盖
-    ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
-    connect_timeout: 16
-    read_chunk_timeout: 60
-    max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
-                                    # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
-                                    # 超过上限的并发请求排队等待空闲连接
-    image_input: false              # 是否支持图像输入 (多模态; 默认 false)
-    audio_input: false              # 是否支持音频输入 (多模态; 默认 false)
-    video_input: false              # 是否支持视频输入 (多模态; 默认 false)
-                                    # 任一为 true 时 TUI 输入框右侧展示 [+ 📎︎︎ 附件] 按钮;
-                                    # 文件选择弹窗按此过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp
-                                    # ≤10MB; 音频 wav/mp3/ogg/m4a/aac/flac ≤25MB;
-                                    # 视频 mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)。
-                                    # 客户端读取并 Base64 编码为 RFC 2397 Data URL 传输;
-                                    # SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件
-                                    # 降级为 [用户附带了图片/音频/视频] 纯文本标签
-    model_context_max_token: 128000
-    extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
-      x-custom-header: "value"
-    extra_api_config:           # 合并到请求 body 的扩展配置
-      temperature: 0.7
-    # 输出 token 上限自动发送 params.max_tokens: 普通模型发送 max_tokens,
-    # 新模型 (o1/o3/o4/gpt-5 等) 自动切换为 max_completion_tokens 字段
+model:
+  # 合并策略 (可选; 与 base 层叠加时生效, 默认 merge = 继承并叠加)
+  # overwrite:
+  #   mode: merge          # merge(默认) | replace(整段只用本层, 不继承 base)
+  #   remove:              # 从合并结果中剔除 base 的指定模型 (按 name)
+  #     - some-old-model
+  list:
+    - name: "my-model"
+      type: "openai"              # "openai" / "anthropic" / "openai-responses"
+      base_url: "https://api.example.com"
+      api_key: "${MY_API_KEY}"    # 从 .env 或系统环境变量解析
+      model_name: "gpt-4"
+      api_path: ""                # 自定义 API 路径 (如 "/v1/chat/completions"); 空则用默认
+      send_thinking: false        # 是否把 thinking/reasoning_content 随上下文发送给模型
+      request_reasoning_summary: true # send_thinking 开启时, 是否请求上游返回思考摘要 (Responses
+                                  # API 的 include 参数)。opencode-muse-spark 等网关不支持
+                                  # reasoning.summary_text 变体, 需设 false, 否则 API 400
+                                  # (unknown variant reasoning.summary_text);
+                                  # 也可用 extra_api_config 显式指定 include 数组覆盖
+      ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
+      connect_timeout: 16
+      read_chunk_timeout: 60
+      max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
+                                      # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
+                                      # 超过上限的并发请求排队等待空闲连接
+      image_input: false              # 是否支持图像输入 (多模态; 默认 false)
+      audio_input: false              # 是否支持音频输入 (多模态; 默认 false)
+      video_input: false              # 是否支持视频输入 (多模态; 默认 false)
+                                      # 任一为 true 时 TUI 输入框右侧展示 [+ 📎︎︎ 附件] 按钮;
+                                      # 文件选择弹窗按此过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp
+                                      # ≤10MB; 音频 wav/mp3/ogg/m4a/aac/flac ≤25MB;
+                                      # 视频 mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)。
+                                      # 客户端读取并 Base64 编码为 RFC 2397 Data URL 传输;
+                                      # SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件
+                                      # 降级为 [用户附带了图片/音频/视频] 纯文本标签
+      model_context_max_token: 128000
+      extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
+        x-custom-header: "value"
+      extra_api_config:           # 合并到请求 body 的扩展配置
+        temperature: 0.7
+      # 输出 token 上限自动发送 params.max_tokens: 普通模型发送 max_tokens,
+      # 新模型 (o1/o3/o4/gpt-5 等) 自动切换为 max_completion_tokens 字段
 
-use_model:
-  default: "my-model"           # 主模型
-  subagent: "my-model"          # 子代理模型 (未指定时用主模型)
-  web_search: ""                # 模型搜索 (空则用传统搜索)
-  acp: "my-model"               # ACP 服务模式模型
-  train: "my-model"             # 训练模型
-  train_scorer: "my-model"      # 训练评分模型
-  train_optimizer: "my-model"   # 训练优化模型
+  # 各模式/用途使用的模型名 (对应上面 list 中的 name; 原顶层 `use_model` 段)
+  use:
+    default: "my-model"           # 主模型
+    subagent: "my-model"          # 子代理模型 (未指定时用主模型)
+    web_search: ""                # 模型搜索 (空则用传统搜索)
+    acp: "my-model"               # ACP 服务模式模型
+    train: "my-model"             # 训练模型
+    train_scorer: "my-model"      # 训练评分模型
+    train_optimizer: "my-model"   # 训练优化模型
 
 mcp:
-  - namespace: "my_mcp"
-    url: "http://localhost:3000/mcp"
+  list:
+    - namespace: "my_mcp"
+      url: "http://localhost:3000/mcp"
 
 # 统一数据根目录 (留空/不配置 = 不持久化: 设置/会话/codegraph 仅存内存,
 # 重启后无法恢复; 支持 ~ 与 ${VAR} 展开, 相对路径按工作目录解析)
@@ -569,11 +579,13 @@ mcp:
 
 # 技能目录列表 (SKILL.md 渐进式发现与加载; 相对路径按工作目录解析)
 skill:
-  - "./skills"
+  list:
+    - "./skills"
 
 # 上下文文件列表 (Memory; 每次模型调用时内容注入系统提示词)
 memory:
-  - "./AGENT.md"
+  list:
+    - "./AGENT.md"
 
 # 子代理委派开关 (默认 true; false 时 subagent 管理中间件不注入
 # `agentxx_subagent` 工具, 模型无法发起子代理委派; 事件总线服务
@@ -588,23 +600,25 @@ subagent:
 worktree:
   enable: false
 
-# 插件配置 (所有插件统一经 path 外置指定加载, 不区分内置/外置;
+# 插件配置 (列表段 `plugin.list`; 所有插件统一经 path 外置指定加载, 不区分内置/外置;
 # 相对路径按程序工作目录解析为绝对路径; 编译产物位于 exec/plugins/<插件名>/;
 # CodeGraph 即由此加载: 需编译启用 AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
-plugins:
-  - path: "./plugins/agentxx_codegraph"  # 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
-    enabled: true                        # 默认 true
-    sides: auto                          # auto|agent|client (双端插件用; 默认 auto 按导出符号自动决定)
-    args:                                # 插件参数 (宿主原样保存并整体传递, 字段语义由插件定义)
-      # ---- agentxx_codegraph 参数 ----
-      paths:                             # 加载(索引)路径列表 (可选, 可多个目录)
-        - "/path/to/proj_a"
-      ignore_paths:                      # 忽略路径列表 (支持 * 通配符; 命中即跳过)
-        - "**/third_party/**"
-      load_cwd: true                     # 未配置 paths 时默认加载当前工作目录
-      use_gitignore: true                # 默认忽略 .gitignore 规则/.gitmodules 子模块/.git
-                                         # 索引库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-                                         # (data_dir 未配置时不落盘、插件自动跳过)
+# - 段结构: `overwrite` 合并策略 (merge 默认 / replace) + `remove` 按 path 剔除继承项
+plugin:
+  list:
+    - path: "./plugins/agentxx_codegraph"  # 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
+      enabled: true                        # 默认 true
+      sides: auto                          # auto|agent|client (双端插件用; 默认 auto 按导出符号自动决定)
+      args:                                # 插件参数 (宿主原样保存并整体传递, 字段语义由插件定义)
+        # ---- agentxx_codegraph 参数 ----
+        paths:                             # 加载(索引)路径列表 (可选, 可多个目录)
+          - "/path/to/proj_a"
+        ignore_paths:                      # 忽略路径列表 (支持 * 通配符; 命中即跳过)
+          - "**/third_party/**"
+        load_cwd: true                     # 未配置 paths 时默认加载当前工作目录
+        use_gitignore: true                # 默认忽略 .gitignore 规则/.gitmodules 子模块/.git
+                                           # 索引库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
+                                           # (data_dir 未配置时不落盘、插件自动跳过)
 
 # 权限询问处理模式 (默认 ask, 见 PermissionMode)
 # - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
@@ -613,27 +627,154 @@ plugins:
 # - deny:    全部拒绝, 不询问
 permission:
   mode: ask
-  whitelist: []   # 始终放行路径 (最长前缀匹配, 支持 * 通配; 优先级高于模式默认规则)
-  blacklist: []   # 始终拒绝路径 (与白名单同路径时黑名单优先)
+  whitelist:      # 始终放行路径 (最长前缀匹配, 支持 * 通配; 优先级高于模式默认规则)
+    list: []
+  blacklist:      # 始终拒绝路径 (与白名单同路径时黑名单优先)
+    list: []
 ```
 
 > **Codex (Responses API) 配置示例**:
 > ```yaml
-> models:
->   - name: "openai-responses"
->     type: "openai-responses"                       # 使用 OpenAI Responses API (/responses)
->     base_url: "https://api.openai.com"  # 或 ChatGPT Codex 兼容网关
->     api_key: "${CODEX_API_KEY}"
->     model_name: "gpt-5-codex"
->     extra_api_config:                   # 可选覆盖: 推理强度 / 是否落盘等
->       reasoning:
->         effort: "high"
+> model:
+>   list:
+>     - name: "openai-responses"
+>       type: "openai-responses"          # 使用 OpenAI Responses API (/responses)
+>       base_url: "https://api.openai.com"  # 或 ChatGPT Codex 兼容网关
+>       api_key: "${CODEX_API_KEY}"
+>       model_name: "gpt-5-codex"
+>       extra_api_config:                 # 可选覆盖: 推理强度 / 是否落盘等
+>         reasoning:
+>           effort: "high"
 > ```
 
 环境变量加载优先级: `程序内置变量` > `--env 覆盖文件` > `.env 文件` > `系统环境变量` > 保留 `${VAR}` 原样。
 程序内置变量 (main 启动时注入, 供 yaml `${VAR}` 展开使用):
 - `${AGENTXX_WORK_DIR}`: 程序启动后的工作目录 (正斜杠格式)
 - `${AGENTXX_EXEC_DIR}`: agentxx_cli 可执行程序所在目录 (正斜杠格式)
+
+**分层配置 (base + overlay)**:
+
+agentxx_cli 启动时按两层加载配置, 用于"全局默认配置 + 项目局部覆盖":
+
+| 层 | 配置文件 | .env |
+|----|----------|------|
+| overlay (上层) | `--config` 指定 (默认 `{工作目录}/agentxx-config.yaml`) | `{工作目录}/.env`, 其次 overlay 配置所在目录/.env |
+| base (底层) | `{data_dir}/agentxx-config.yaml` | `{data_dir}/.env` |
+
+- base 目录取自 overlay 的 `data_dir` (支持 `~` / `${VAR}` / 相对路径 / `default` 关键字);
+  overlay 未配置 `data_dir` 或 overlay 配置不存在时取系统数据目录
+  (Linux/macOS: `~/.agentxx/`, Windows: `%APPDATA%/agentxx/`) —— 即工作目录无配置时
+  直接加载数据目录下的配置
+- 只加载一层 base (base 内的 `data_dir` 不再向下查找)
+- base 与 overlay 指向同一文件 (如 `--config <data_dir>/agentxx-config.yaml`) 时只加载一次,
+  不会因"同一配置当成两层"而出现重复条目
+- base 配置缺失/解析失败仅告警跳过 (不影响 overlay 启动); overlay 配置解析失败则报错退出
+- 定位 base 用的 `data_dir` 仅由 overlay 的环境变量展开 (base 的 `.env` 此时尚未加载);
+  两层合并后的最终 `data_dir` 用合并后的环境变量解析
+
+**列表段结构** (`model` / `plugin` / `mcp` / `skill` / `memory` /
+`permission.whitelist` / `permission.blacklist`):
+
+```yaml
+model:
+    overwrite:                 # 与 base 的合并策略 (可省略; 默认 mode: merge)
+        mode: merge            # merge(默认: 继承并叠加 base) | replace(整段只用本层)
+        remove:                # 可选: 从合并结果中剔除的条目 (按身份匹配)
+            - old-model
+    list:                      # 本层条目 (可省略 = 空列表)
+        - name: my-model
+          type: openai
+    use:                       # model 段专属: 各用途使用的模型名 (原顶层 use_model)
+        default: my-model
+plugin:
+    overwrite: {mode: merge, remove: [agentxx_codegraph]}
+    list:
+        - path: builtin://agentxx_filesystem
+skill:
+    overwrite: {mode: replace}  # 只用本层技能列表 (不写 list = 清空继承)
+    list: [./skills]
+permission:
+    mode: ask
+    whitelist:
+        overwrite: {mode: merge, remove: [/home/other]}
+        list: [/workspace]
+```
+
+- 段值必须是映射; 旧写法直接给列表 (`skill: [a, b]`) 或空字符串 (`skill: ""`)
+  已不再支持, 会记警告并忽略该段
+- `remove` 匹配身份: `model` 按 `name`; `plugin` 按 `path`
+  (`name` 与 `builtin://<name>` 写法也可匹配); `mcp` 按 `namespace`;
+  `skill` / `memory` / 权限名单按字符串本身 (按原始文本比较, 不展开 `${VAR}`)
+- `remove` 在两种模式下都生效 (从最终结果中剔除, 含本层 `list` 中的条目);
+  未匹配到任何条目时记警告
+- 策略只由 overlay 层生效 (base 作为底层没有继承对象, 其 `overwrite` 忽略)
+- 清空 base 的某个列表段: `overwrite: {mode: replace}` + 不写 `list`
+
+**其他配置段的合并规则** (base 为底, overlay 覆盖; 仅 overlay 出现的键才覆盖 base):
+
+| yaml 键 | 规则 |
+|---------|------|
+| 标量 (`data_dir` / `work_dir` / `subagent.enable` / `worktree.enable` / `permission.mode` 等) | overlay 覆盖 |
+| 映射 (`permission` 其余键 / `subagent` / `worktree`; 模型条目的 `extra_headers`、`extra_api_config`; 插件条目的 `args`) | 逐键递归合并, 同键 overlay 覆盖; 映射内的列表整体覆盖 |
+| 列表段 (见上方段结构) | 按 `overwrite` 策略: 默认按键归并 (身份同 `remove` 匹配规则) 或追加去重; `mode: replace` 则整段不继承 |
+| 其他列表 | overlay 整体覆盖 |
+| 显式空值 (`key:` 无内容 = null) | 视为该层未配置, base 项保留 |
+
+`.env` 变量: 同名变量舍弃 base 值 (overlay 优先), 查找顺序扩展为
+`程序内置变量` > `--env 覆盖文件` > `overlay .env` > `base .env` > `系统环境变量`;
+合并后的变量同时用于展开**两层** yaml 的 `${VAR}` (即 base 配置可引用项目 `.env` 中的密钥)。
+
+示例 (全局配置放数据目录, 项目配置放项目目录):
+
+```yaml
+# ~/.agentxx/agentxx-config.yaml (base: 全局模型/插件/技能)
+data_dir: default
+model:
+    list:
+        - name: gpt-5
+          type: openai-responses
+          base_url: https://api.example.com
+          api_key: ${LLM_API_KEY}      # 密钥放 ~/.agentxx/.env
+          model_name: gpt-5
+    use:
+        default: gpt-5
+skill:
+    list:
+        - ~/.agentxx/skills
+plugin:
+    list:
+        - path: builtin://agentxx_codegraph
+        - path: builtin://agentxx_system_monitor
+```
+
+```yaml
+# {项目}/agentxx-config.yaml (overlay: 仅写项目差异)
+data_dir: default                # 用于定位 base (~/.agentxx/)
+skill:
+    overwrite:
+        mode: merge              # 默认值, 可省略
+        remove: [~/.agentxx/skills]  # 本项目不加载全局技能
+    list:
+        - ./skills
+permission:
+    mode: pass                   # 覆盖 base 的 permission.mode
+model:
+    list:
+        - name: gpt-5
+          model_name: gpt-5.1    # 同名模型: 只覆盖该字段, base_url/api_key 保留
+plugin:
+    overwrite:
+        remove: [agentxx_codegraph]  # 本项目不需要 base 的代码索引插件
+    list:
+        - path: builtin://agentxx_planning
+```
+
+启动日志会输出实际生效的两层路径与 `.env` 合并统计:
+
+```
+[Config] Loaded layered config: base=~/.agentxx/agentxx-config.yaml + overlay=agentxx-config.yaml (overlay overrides base)
+[Config] Loaded 2 variables from .env (base .env: 2, dropped by overlay: 1)
+```
 
 ### 命令行使用
 
@@ -1558,7 +1699,7 @@ BaseAgent (基类)
 
 CodeAgent (继承 BaseAgent)
   ├── 工具: lib 内仅 share_store/subagent/git_worktree (+延迟加载装配); 文件系统/命令/网络/
-  │   RAG/字符串/系统时间/规划/CodeGraph 等全部经插件注入 (yaml plugins 段)
+  │   RAG/字符串/系统时间/规划/CodeGraph 等全部经插件注入 (yaml plugin.list 段)
   └── 中间件: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint
       (planning/worktree 为插件+工具形态, 非中间件)
 

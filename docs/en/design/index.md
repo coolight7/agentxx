@@ -365,87 +365,91 @@ Conventions for adding new test modules: Headers contain only function declarati
 Configuration files use YAML format (defaults to `{program_cwd}/agentxx-config.yaml`, overrideable via `agentxx_cli --config <path>`). Selected values support `${VAR}` environment variable expansion:
 
 ```yaml
-models:
-  - name: "my-model"
-    type: "openai"              # "openai" / "anthropic" / "openai-responses"
-    base_url: "https://api.example.com"
-    api_key: "${MY_API_KEY}"    # Resolved from .env or system environment
-    model_name: "gpt-4"
-    api_path: ""                # Custom API endpoint path (e.g. "/v1/chat/completions"); empty uses default
-    send_thinking: false        # Whether to echo thinking/reasoning_content back in context to the model
-    request_reasoning_summary: true # When send_thinking is true, requests reasoning summary from upstream
-                                # (Responses API include parameter). Gateways like opencode-muse-spark do not
-                                # support the reasoning.summary_text variant and require this to be false
-                                # to avoid HTTP 400 errors; can also be overridden via extra_api_config include array
-    ssl_verify: null            # Explicitly toggle TLS certificate verification (true/false); omitted uses default
-    connect_timeout: 16
-    read_chunk_timeout: 60
-    max_concurrent_connections: 5   # Maximum concurrent HTTP connections for this model endpoint (default 5, 0=unlimited)
-                                    # LLM requests use an HTTP keep-alive connection pool: idle connections are reused;
-                                    # excess concurrent requests queue for available connections
-    image_input: false              # Whether image input is supported (multimodal; default false)
-    audio_input: false              # Whether audio input is supported (multimodal; default false)
-    video_input: false              # Whether video input is supported (multimodal; default false)
-                                    # When any is true, the TUI input bar shows a [+ Attach] button;
-                                    # the file picker filters by these types (images png/jpg/jpeg/webp/gif/bmp
-                                    # <=10MB; audio wav/mp3/ogg/m4a/aac/flac <=25MB;
-                                    # video mp4/mov/webm/mkv <=50MB; <=5 attachments per message).
-                                    # The client reads files and transmits them as RFC 2397 Data URL (Base64);
-                                    # SQLite persistence strips dataUrl keeping only metadata; during context
-                                    # compaction old attachments downgrade to plain-text tags
-    model_context_max_token: 128000
-    extra_headers:              # Additional HTTP request headers (e.g. custom authentication/gateway headers)
-      x-custom-header: "value"
-    extra_api_config:           # Extended configuration merged into request body
-      temperature: 0.7
-    # Max output tokens automatically selects parameter name: standard models send max_tokens,
-    # newer reasoning models (o1/o3/o4/gpt-5) automatically map to max_completion_tokens
+model:
+  list:
+    - name: "my-model"
+      type: "openai"              # "openai" / "anthropic" / "openai-responses"
+      base_url: "https://api.example.com"
+      api_key: "${MY_API_KEY}"    # Resolved from .env or system environment
+      model_name: "gpt-4"
+      api_path: ""                # Custom API endpoint path (e.g. "/v1/chat/completions"); empty uses default
+      send_thinking: false        # Whether to echo thinking/reasoning_content back in context to the model
+      request_reasoning_summary: true # When send_thinking is true, requests reasoning summary from upstream
+                                  # (Responses API include parameter). Gateways like opencode-muse-spark do not
+                                  # support the reasoning.summary_text variant and require this to be false
+                                  # to avoid HTTP 400 errors; can also be overridden via extra_api_config include array
+      ssl_verify: null            # Explicitly toggle TLS certificate verification (true/false); omitted uses default
+      connect_timeout: 16
+      read_chunk_timeout: 60
+      max_concurrent_connections: 5   # Maximum concurrent HTTP connections for this model endpoint (default 5, 0=unlimited)
+                                      # LLM requests use an HTTP keep-alive connection pool: idle connections are reused;
+                                      # excess concurrent requests queue for available connections
+      image_input: false              # Whether image input is supported (multimodal; default false)
+      audio_input: false              # Whether audio input is supported (multimodal; default false)
+      video_input: false              # Whether video input is supported (multimodal; default false)
+                                      # When any is true, the TUI input bar shows a [+ Attach] button;
+                                      # the file picker filters by these types (images png/jpg/jpeg/webp/gif/bmp
+                                      # <=10MB; audio wav/mp3/ogg/m4a/aac/flac <=25MB;
+                                      # video mp4/mov/webm/mkv <=50MB; <=5 attachments per message).
+                                      # The client reads files and transmits them as RFC 2397 Data URL (Base64);
+                                      # SQLite persistence strips dataUrl keeping only metadata; during context
+                                      # compaction old attachments downgrade to plain-text tags
+      model_context_max_token: 128000
+      extra_headers:              # Additional HTTP request headers (e.g. custom authentication/gateway headers)
+        x-custom-header: "value"
+      extra_api_config:           # Extended configuration merged into request body
+        temperature: 0.7
+      # Max output tokens automatically selects parameter name: standard models send max_tokens,
+      # newer reasoning models (o1/o3/o4/gpt-5) automatically map to max_completion_tokens
 
-use_model:
-  default: "my-model"           # Primary model
-  subagent: "my-model"          # Subagent model (falls back to primary if unspecified)
-  web_search: ""                # Model-driven search (empty uses traditional search)
-  acp: "my-model"               # ACP service mode model
-  train: "my-model"             # Training agent model
-  train_scorer: "my-model"      # Training scoring model
-  train_optimizer: "my-model"   # Training prompt optimizer model
+  use:
+    default: "my-model"           # Primary model
+    subagent: "my-model"          # Subagent model (falls back to primary if unspecified)
+    web_search: ""                # Model-driven search (empty uses traditional search)
+    acp: "my-model"               # ACP service mode model
+    train: "my-model"             # Training agent model
+    train_scorer: "my-model"      # Training scoring model
+    train_optimizer: "my-model"   # Training prompt optimizer model
 
 mcp:
-  - namespace: "my_mcp"
-    url: "http://localhost:3000/mcp"
+  list:
+    - namespace: "my_mcp"
+      url: "http://localhost:3000/mcp"
 
-# Unified data root directory (leave empty/unconfigured = no persistence: settings/sessions/codegraph
-# remain strictly in memory and will not survive restarts; supports ~ and ${VAR} expansion, relative
-# paths resolve against working directory)
-# Special keyword `default` (tui/cli modes only): uses the system data directory
-#   - Linux/macOS: ~/.agentxx/
-#   - Windows: %APPDATA%/agentxx/
-# Sub-paths created under data_dir:
-#   - {data_dir}/sqlite/global.db                     Global settings (TUI settings, themes, etc.)
-#   - {data_dir}/sqlite/sessions/{sessionId}/          Session data (session.db, including store table)
-#   - {data_dir}/sqlite/codegraph/<hashed_path>/index.db CodeGraph index database
-# data_dir: ~/.agentxx
+  # Unified data root directory (leave empty/unconfigured = no persistence: settings/sessions/codegraph
+  # remain strictly in memory and will not survive restarts; supports ~ and ${VAR} expansion, relative
+  # paths resolve against working directory)
+  # Special keyword `default` (tui/cli modes only): uses the system data directory
+  #   - Linux/macOS: ~/.agentxx/
+  #   - Windows: %APPDATA%/agentxx/
+  # Sub-paths created under data_dir:
+  #   - {data_dir}/sqlite/global.db                     Global settings (TUI settings, themes, etc.)
+  #   - {data_dir}/sqlite/sessions/{sessionId}/          Session data (session.db, including store table)
+  #   - {data_dir}/sqlite/codegraph/<hashed_path>/index.db CodeGraph index database
+  # data_dir: ~/.agentxx
 
-# Session working directory (leave empty/unconfigured = uses current process working directory)
-# - Supports ~ and ${VAR} expansion, relative paths resolve against startup directory
-# - Effective scope: default approval boundary for permission.mode=ask / base directory for filesystem
-#   tools and permission checks / initial working directory for spawned child processes /
-#   plugin projectRoot (get_config; e.g. codegraph indexes this path by default if paths is unconfigured)
-# - Use case: In server deployments and multi-instance FFI embeddings, binds agent execution to a specific
-#   directory independent of process launch path (empty behaves identically to default cwd)
-# work_dir: ${AGENTXX_WORK_DIR}
+  # Session working directory (leave empty/unconfigured = uses current process working directory)
+  # - Supports ~ and ${VAR} expansion, relative paths resolve against startup directory
+  # - Effective scope: default approval boundary for permission.mode=ask / base directory for filesystem
+  #   tools and permission checks / initial working directory for spawned child processes /
+  #   plugin projectRoot (get_config; e.g. codegraph indexes this path by default if paths is unconfigured)
+  # - Use case: In server deployments and multi-instance FFI embeddings, binds agent execution to a specific
+  #   directory independent of process launch path (empty behaves identically to default cwd)
+  # work_dir: ${AGENTXX_WORK_DIR}
 
-# Skill directory list (progressive discovery and loading of SKILL.md; relative paths resolve to work_dir)
+  # Skill directory list (progressive discovery and loading of SKILL.md; relative paths resolve to work_dir)
 skill:
-  - "./skills"
+  list:
+    - "./skills"
 
-# Context file list (Memory; injected into system prompts prior to every model call)
+  # Context file list (Memory; injected into system prompts prior to every model call)
 memory:
-  - "./AGENT.md"
+  list:
+    - "./AGENT.md"
 
-# Subagent delegation toggle (default true; when false, SubagentManagerMiddleware does not inject
-# the `agentxx_subagent` tool, preventing model-initiated delegations; event bus service
-# service.subagent.execute remains registered for internal uses like context compaction)
+  # Subagent delegation toggle (default true; when false, SubagentManagerMiddleware does not inject
+  # the `agentxx_subagent` tool, preventing model-initiated delegations; event bus service
+  # service.subagent.execute remains registered for internal uses like context compaction)
 subagent:
   enable: true
 
@@ -459,49 +463,101 @@ worktree:
 # Plugin configuration (all plugins loaded dynamically via path; relative paths resolve to absolute
 # against process working directory; build artifacts reside under exec/plugins/<plugin_name>/;
 # CodeGraph loaded here: requires AGENTXX_ENABLE_PLUGIN_CODEGRAPH at compile time)
-plugins:
-  - path: "./plugins/agentxx_codegraph"  # Path to plugin shared library or directory (with plugin.yaml)
-    enabled: true                        # Default true
-    sides: auto                          # auto|agent|client (for dual-sided plugins; auto detects via exports)
-    args:                                # Plugin arguments (passed verbatim to plugin, schema defined by plugin)
-      # ---- agentxx_codegraph args ----
-      paths:                             # Indexing paths list (optional, multiple directories)
-        - "/path/to/proj_a"
-      ignore_paths:                      # Ignore patterns (supports * wildcards; skipped on match)
-        - "**/third_party/**"
-      load_cwd: true                     # Indexes current working directory if paths is omitted
-      use_gitignore: true                # Respects .gitignore rules, .gitmodules submodules, and .git
-                                         # Index database: {data_dir}/sqlite/codegraph/<hashed_path>/index.db
-                                         # (skipped if data_dir is unconfigured)
+plugin:
+  list:
+    - path: "./plugins/agentxx_codegraph"  # Path to plugin shared library or directory (with plugin.yaml)
+      enabled: true                        # Default true
+      sides: auto                          # auto|agent|client (for dual-sided plugins; auto detects via exports)
+      args:                                # Plugin arguments (passed verbatim to plugin, schema defined by plugin)
+        # ---- agentxx_codegraph args ----
+        paths:                             # Indexing paths list (optional, multiple directories)
+          - "/path/to/proj_a"
+        ignore_paths:                      # Ignore patterns (supports * wildcards; skipped on match)
+          - "**/third_party/**"
+        load_cwd: true                     # Indexes current working directory if paths is omitted
+        use_gitignore: true                # Respects .gitignore rules, .gitmodules submodules, and .git
+                                           # Index database: {data_dir}/sqlite/codegraph/<hashed_path>/index.db
+                                           # (skipped if data_dir is unconfigured)
 
-# Permission prompt mode (default ask; see PermissionMode)
-# - ask:     Allows reads/writes within working directory, prompts user for external paths (default)
-# - all_ask: Prompts user for all file reads and writes
-# - pass:    Allows all operations without prompt
-# - deny:    Denies all operations without prompt
+  # Permission prompt mode (default ask; see PermissionMode)
+  # - ask:     Allows reads/writes within working directory, prompts user for external paths (default)
+  # - all_ask: Prompts user for all file reads and writes
+  # - pass:    Allows all operations without prompt
+  # - deny:    Denies all operations without prompt
 permission:
   mode: ask
-  whitelist: []   # Always allowed paths (longest prefix matching with * wildcard; overrides mode default)
-  blacklist: []   # Always denied paths (blacklists take precedence over whitelists on collision)
+  whitelist:      # Always allowed paths (longest prefix matching with * wildcard; overrides mode default)
+    list: []
+  blacklist:      # Always denied paths (blacklists take precedence over whitelists on collision)
+    list: []
 ```
 
 > **Codex (Responses API) Configuration Example**:
 > ```yaml
-> models:
->   - name: "openai-responses"
->     type: "openai-responses"          # OpenAI Responses API (/responses)
->     base_url: "https://api.openai.com"  # Or ChatGPT Codex compatible gateway
->     api_key: "${CODEX_API_KEY}"
->     model_name: "gpt-5-codex"
->     extra_api_config:                 # Optional overrides: reasoning effort, persistence, etc.
->       reasoning:
->         effort: "high"
+> model:
+>   list:
+>     - name: "openai-responses"
+>       type: "openai-responses"          # OpenAI Responses API (/responses)
+>       base_url: "https://api.openai.com"  # Or ChatGPT Codex compatible gateway
+>       api_key: "${CODEX_API_KEY}"
+>       model_name: "gpt-5-codex"
+>       extra_api_config:                 # Optional overrides: reasoning effort, persistence, etc.
+>         reasoning:
+>           effort: "high"
 > ```
 
 Environment variable precedence: `Built-in variables` > `--env override file` > `.env file` > `System environment variables` > Retain `${VAR}` literal.
 Built-in variables (injected by `main` at startup for YAML expansion):
 - `${AGENTXX_WORK_DIR}`: Process working directory after launch (forward slash format).
 - `${AGENTXX_EXEC_DIR}`: Directory containing the `agentxx_cli` binary (forward slash format).
+
+**Layered configuration (base + overlay)**:
+
+| Layer | Config file | .env |
+|-------|-------------|------|
+| overlay | `--config` path (default `{cwd}/agentxx-config.yaml`) | `{cwd}/.env`, then `<config dir>/.env` |
+| base | `{data_dir}/agentxx-config.yaml` | `{data_dir}/.env` |
+
+- The base directory comes from the overlay's `data_dir` (`~` / `${VAR}` / relative paths /
+  keyword `default` supported); when the overlay has no `data_dir` (or no overlay config
+  exists) the system data directory is used (`~/.agentxx/`, Windows `%APPDATA%/agentxx/`),
+  i.e. a working directory without a config file loads the data directory config directly.
+- Only one base layer is loaded (the base's own `data_dir` is not followed further).
+- When base and overlay resolve to the same file (e.g. `--config <data_dir>/agentxx-config.yaml`)
+  it is loaded once, so items are not duplicated.
+- A missing/broken base only logs and is skipped; a broken overlay aborts startup.
+- `.env` precedence: built-ins > `--env` > overlay `.env` > base `.env` > system environment.
+  Merged variables expand `${VAR}` in both layers.
+
+**List sections** (`model` / `plugin` / `mcp` / `skill` / `memory` /
+`permission.whitelist` / `permission.blacklist`) use a fixed structure:
+
+```yaml
+model:
+    overwrite:                 # merge policy (optional; defaults to mode: merge)
+        mode: merge            # merge (default: inherit and stack base) | replace (only this layer)
+        remove:                # optional: drop entries from the merged result (matched by identity)
+            - old-model
+    list:                      # entries provided by this layer (omitted = empty list)
+        - name: my-model
+    use:                       # model section only: model per purpose (formerly top-level use_model)
+        default: my-model
+plugin:
+    overwrite: {mode: merge, remove: [agentxx_codegraph]}
+    list:
+        - path: builtin://agentxx_filesystem
+```
+
+- Identity used by `remove` (and by keyed merging): `model` by `name`, `plugin` by `path`
+  (`name` / `builtin://<name>` also match), `mcp` by `namespace`, `skill` / `memory` /
+  permission lists by the string itself.
+- `remove` applies in both modes (also to entries of this layer's own `list`); unmatched
+  entries produce a warning. Policies come from the overlay only.
+- Clear an inherited list: `overwrite: {mode: replace}` without `list`.
+- The old keys `models` / `plugins` / `use_model` are deprecated: use
+  `model.list` / `plugin.list` / `model.use`; they are warned about and ignored.
+- Other sections: scalars are overridden by the overlay, mappings merge key by key,
+  and lists inside mappings replace wholesale.
 
 ### Command-Line Usage
 

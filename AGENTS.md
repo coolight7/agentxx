@@ -175,6 +175,23 @@ path/to/agentxx_test string_util regex
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
+### 配置分层 (base + overlay)
+- agentxx_cli 启动加载两层 yaml / .env: overlay (工作目录 `agentxx-config.yaml` 或 `--config`
+  指定, 加同目录 `.env`) 覆盖 base (overlay 的 `data_dir` 目录下 `agentxx-config.yaml` / `.env`;
+  overlay 未配置 `data_dir` 或 overlay 不存在时取系统数据目录 `~/.agentxx/`,
+  即工作目录无配置时直接加载数据目录下的配置); 只加载一层 base (base 的 data_dir 不再向下找)
+- 段结构 (2026-09 定稿): 列表段统一为 `{ overwrite: {mode: merge|replace, remove: [...]},
+  list: [...] }` 映射形式 (纯列表写法已废弃); `models`→`model.list`, `plugins`→`plugin.list`,
+  顶层 `use_model`→`model.use`; 旧键出现时告警并忽略; `model` 段同时承载 `list` 与 `use`
+- 合并在 YAML **节点层**进行 (`agent/client/src/config_loader.cpp`): 节点层才能区分
+  "未配置该键" 与 "显式配置为默认值"; 策略只由 overlay 生效; 默认 `mode: merge`
+  (按键归并/追加去重), `mode: replace` 整段不继承, `remove` 两种模式都从结果中剔除
+  (匹配身份: model=name, plugin=path/name/builtin://name, mcp=namespace, 路径列表=字符串);
+  其余键为 标量覆盖 / 映射逐键合并 / 映射内列表覆盖; `.env` 同名变量取 overlay 值,
+  合并后的变量用于展开两层 yaml 的 `${VAR}`
+- base 与 overlay 指向同一文件时只加载一次 (避免同配置被当两层而出现重复条目);
+  base 解析失败仅告警跳过, overlay 解析失败报错退出; 列表段清空用
+  `overwrite: {mode: replace}` + 不写 `list`
 ### 上下文压缩 (summarization)
 - 压缩结果写回时机: 自动压缩在轮内改写图 state 的 messages channel 后, **立即**
   回写会话 `llmMessages` 并请求节流落盘 (`Session::requestSaveLlmMessages`) ——
