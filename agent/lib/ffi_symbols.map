@@ -29,7 +29,6 @@
     agentxx_ffi_send_input;
     agentxx_ffi_cancel;
     agentxx_ffi_select_model;
-    agentxx_ffi_set_permission;
     agentxx_ffi_switch_session;
     agentxx_ffi_set_language;
     agentxx_ffi_get_language;

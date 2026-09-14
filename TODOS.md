@@ -8,6 +8,9 @@
 
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
+- 整理 中断渲染实现
+- 权限请求 按钮 [] 重复、文件路径总是添加末尾 /
+- 权限请求支持 `完全授权`、`授权子目录`
 
 - 调整 tui 亮色配置
 - SVG绘制支持
@@ -24,3 +27,12 @@
 - exec_command 可以通过在多条命令中穿插 echo === xxx === 隔开输出
 
 ## 问题
+
+D2  插件能否自带   ui  /  client  侧插件能否注册渲染器
+
+  •  现状 ：agent  侧插件无询问通道；(b)  client  侧已有   register_tool_renderer / update_tool_decor / bind_action_handler / open_overlay
+，无中断渲染器。
+  •  A  只做  (a) ：新增   agentxx.agent.interrupt  v1（ request_interrupt_async(inputs_json, ui_json, timeout, cb) ），语义= 工具执行内阻塞式询问
+（不参与图  resume、不落历史）； B  (a)+(b)  再加  client  侧按  node/handleName  渲染器； C  暂缓  3.3 ； D  完整图中断/resume ：跨  C  ABI
+ 无法展开插件协程帧，需宿主外层包装"中断-恢复"，成本与语义复杂度高。
+  •  建议 ：先   A （阻塞式），(b)  等真实宿主需求。

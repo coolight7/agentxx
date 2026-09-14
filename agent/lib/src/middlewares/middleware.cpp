@@ -181,15 +181,31 @@ agentxx::util::Json InterruptHandleArg::toJson() const {
     for (const auto& item : inputs) {
         inputsJson.push_back(item.toJson());
     }
+    // 中断 UI 描述 (必填): 生产者未声明时按 [inputs] 展开通用默认表单
+    // (标签行 + 说明行 + 类型控件 + 确认取消行), 客户端不再有"无描述"分支
+    agentxx::util::Json uiJson;
+    if (ui.empty()) {
+        std::vector<InterruptUiInputSpec> specs;
+        specs.reserve(inputs.size());
+        for (const auto& item : inputs) {
+            specs.push_back(InterruptUiInputSpec{
+                .label        = item.label,
+                .depict       = item.depict,
+                .type         = item.type,
+                .defaultValue = item.defaultValue,
+                .enumValues   = item.enumValues,
+            });
+        }
+        uiJson = InterruptUi::defaultUi(specs).toJson();
+    } else {
+        uiJson = ui.toJson();
+    }
     auto j = agentxx::util::Json{
         {"name",     name      },
         {"arg",      arg       },
         {"inputs",   inputsJson},
         {"resultId", resultId  },
-        // 中断 UI 描述 (必填): 客户端按描述通用渲染控件; 生产者未声明时下发
-        // 通用默认模板 (进度头行 + 描述 + 按消息类型的输入控件 + 确认取消行),
-        // 客户端不再有"无描述"的渲染分支
-        {"ui",       ui.empty() ? InterruptUi::defaultUi().toJson() : ui.toJson()},
+        {"ui",       std::move(uiJson)},
     };
     return j;
 }

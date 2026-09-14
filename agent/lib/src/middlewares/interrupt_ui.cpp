@@ -1,9 +1,14 @@
 #include "agentxx/middlewares/interrupt_ui.h"
 
+#include "fmt/format.h"
+
 namespace agentxx {
 namespace middleware {
 
 namespace {
+
+/// 通用默认描述的单项控件 id (多项时追加序号: "value1".."valueN")
+constexpr std::string_view kSingleInputId = "value";
 
 /// 读取字符串字段 (缺失/类型不符返回空)
 std::string jsonString(const agentxx::util::Json& j, std::string_view key) {
@@ -96,8 +101,6 @@ agentxx::util::Json InterruptUiSegment::toJson() const {
 
 InterruptUiHeader InterruptUiHeader::fromJson(const agentxx::util::Json& j) {
     InterruptUiHeader header;
-    header.progress = jsonBool(j, "progress", false);
-    header.label    = jsonBool(j, "label", true);
     if (j.is_object()) {
         auto it = j.find("segments");
         if (it != j.end() && it->is_array()) {
@@ -111,10 +114,6 @@ InterruptUiHeader InterruptUiHeader::fromJson(const agentxx::util::Json& j) {
 
 agentxx::util::Json InterruptUiHeader::toJson() const {
     auto j = agentxx::util::Json::object();
-    putIfTrue(j, "progress", progress);
-    if (!label) {
-        j["label"] = false;
-    }
     if (!segments.empty()) {
         auto arr = agentxx::util::Json::array();
         for (const auto& s : segments) {
@@ -243,7 +242,7 @@ InterruptUi InterruptUi::fromJson(const agentxx::util::Json& j) {
 agentxx::util::Json InterruptUi::toJson() const {
     auto j       = agentxx::util::Json::object();
     j["version"] = version;
-    if (!header.segments.empty() || header.progress || !header.label) {
+    if (!header.segments.empty()) {
         j["header"] = header.toJson();
     }
     if (!items.empty()) {
@@ -270,32 +269,62 @@ agentxx::util::Json InterruptUi::toJson() const {
 }
 
 // ---------------------------------------------------------------------------
-// 内置描述: 默认 (通用兜底) / 权限询问卡片
+// 内置描述: 默认 (按输入项展开的自包含表单) / 权限询问卡片
 // ---------------------------------------------------------------------------
 
-InterruptUi InterruptUi::defaultUi() {
+InterruptUi InterruptUi::defaultUi(const std::vector<InterruptUiInputSpec>& inputs) {
     InterruptUi ui;
-    ui.header.progress = true;
-    ui.header.label    = true;
+    // 头行留空: 客户端渲染通用默认前缀 (i18n 键 interrupt.header)
 
-    // 描述文本: text 留空 → 客户端取消息 inputDepict (无描述时不渲染该行)
-    InterruptUiItem desc;
-    desc.kind   = "text";
-    desc.color  = "hint";
-    desc.indent = 2;
-    ui.items.push_back(std::move(desc));
+    const size_t total   = inputs.size();
+    bool         hasPrev = false;
+    for (size_t k = 0; k < total; ++k) {
+        const auto& spec = inputs[k];
+        if (hasPrev) {
+            InterruptUiItem gap;
+            gap.kind = "gap";
+            ui.items.push_back(std::move(gap));
+        }
 
-    // 输入控件: 类型/默认值/枚举候选留空 → 客户端取消息字段 (模板语义)
-    InterruptUiItem input;
-    input.kind = "input";
-    input.id   = "value";
-    ui.items.push_back(std::move(input));
+        // 控件标签 (accent, 如 "[read] Repeated identical call")
+        if (!spec.label.empty()) {
+            InterruptUiItem label;
+            label.kind   = "text";
+            label.text   = spec.label;
+            label.color  = "accent";
+            label.bold   = true;
+            label.indent = 2;
+            ui.items.push_back(std::move(label));
+        }
+
+        // 控件说明 (hint, 硬折行; 如受约束路径/询问原因)
+        if (!spec.depict.empty()) {
+            InterruptUiItem desc;
+            desc.kind   = "text";
+            desc.text   = spec.depict;
+            desc.color  = "hint";
+            desc.indent = 2;
+            desc.wrap   = true;
+            ui.items.push_back(std::move(desc));
+        }
+
+        // 输入控件 (自包含: 类型/默认值/枚举候选来自声明)
+        InterruptUiItem input;
+        input.kind         = "input";
+        input.id           = (total == 1) ? std::string{kSingleInputId}
+                                          : fmt::format("{}{}", kSingleInputId, k + 1);
+        input.inputType    = spec.type;
+        input.defaultValue = spec.defaultValue;
+        input.enumValues   = spec.enumValues;
+        ui.items.push_back(std::move(input));
+        ui.values.push_back(ui.items.back().id);
+
+        hasPrev = true;
+    }
 
     InterruptUiItem submit;
     submit.kind = "submit";
     ui.items.push_back(std::move(submit));
-
-    ui.values = {"value"};
     return ui;
 }
 
@@ -305,21 +334,25 @@ InterruptUi InterruptUi::permissionUi(
     std::string_view target
 ) {
     InterruptUi ui;
-    // 头行: 权限标记 + 工具名 + 权限分类 (不使用默认进度头, 权限询问恒为单输入项)
-    ui.header.label    = false;
-    ui.header.progress = false;
-    ui.header.segments.push_back(
-        InterruptUiSegment{.text = "! [Permission] ", .color = "error", .bold = true}
-    );
+    // 头行: 权限标记 + 工具名 + 权限分类 (权限询问恒为单控件表单)
+    InterruptUiSegment badge;
+    badge.text     = "! [Permission] ";
+    badge.labelKey = "interrupt.permissionBadge";
+    badge.color    = "error";
+    badge.bold     = true;
+    ui.header.segments.push_back(std::move(badge));
     if (!toolName.empty()) {
-        ui.header.segments.push_back(
-            InterruptUiSegment{.text = std::string{toolName}, .color = "accent", .bold = true}
-        );
+        InterruptUiSegment tool;
+        tool.text  = std::string{toolName};
+        tool.color = "accent";
+        tool.bold  = true;
+        ui.header.segments.push_back(std::move(tool));
     }
     if (!category.empty()) {
-        ui.header.segments.push_back(
-            InterruptUiSegment{.text = " " + std::string{category}, .color = "hint"}
-        );
+        InterruptUiSegment cat;
+        cat.text  = " " + std::string{category};
+        cat.color = "hint";
+        ui.header.segments.push_back(std::move(cat));
     }
 
     // 目标描述 (受约束路径等): 硬折行, 避免无空格长路径不换行/被压为 0 宽
@@ -335,11 +368,11 @@ InterruptUi InterruptUi::permissionUi(
     gap1.kind = "gap";
     ui.items.push_back(std::move(gap1));
 
-    // 设置项: 记住此选择 (勾选后确认时按本次选择注册路径规则)
+    // 设置项: 记住此选择 (勾选后提交时按本次选择注册路径规则)
     InterruptUiItem remember;
-    remember.kind       = "toggle";
-    remember.id         = "remember";
-    remember.labelKey   = "interrupt.remember";
+    remember.kind        = "toggle";
+    remember.id          = "remember";
+    remember.labelKey    = "interrupt.remember";
     // 字面回退文本 (无 i18n 词表的前端/缺键时使用)
     remember.text = "Remember this choice";
     ui.items.push_back(std::move(remember));
@@ -348,11 +381,11 @@ InterruptUi InterruptUi::permissionUi(
     gap2.kind = "gap";
     ui.items.push_back(std::move(gap2));
 
-    // 一键取值按钮: 允许 / 拒绝 (点击即确认该输入项)
+    // 一键取值按钮: 允许 / 拒绝 (点击即提交)
     InterruptUiItem value;
-    value.kind = "input";
-    value.id   = "value";
-    value.view = "buttons";
+    value.kind      = "input";
+    value.id        = std::string{kSingleInputId};
+    value.view      = "buttons";
     value.inputType = "bool";
     InterruptUiButton allow;
     allow.value    = "true";
@@ -366,7 +399,7 @@ InterruptUi InterruptUi::permissionUi(
     value.buttons.push_back(std::move(deny));
     ui.items.push_back(std::move(value));
 
-    ui.values  = {"value"};
+    ui.values  = {std::string{kSingleInputId}};
     ui.options = {"remember"};
     return ui;
 }

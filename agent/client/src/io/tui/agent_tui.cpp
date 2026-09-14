@@ -2285,16 +2285,16 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 // ---------------------------------------------------------------------------
 // handleInterrupt (client 线程, co_spawn)
 //
-// 中断输入直接渲染在消息列表中 (Role::Interrupt 消息内嵌交互控件), 不弹窗:
-// - 每个输入项一条中断消息, 共享同一结果回传通道 (经 MessageListComponent
-//   attachInterruptChannel 注入 UI 线程)
+// 中断表单直接渲染在消息列表中 (Role::Interrupt 消息内嵌交互控件), 不弹窗:
+// - 一条中断请求 = 一条消息 = 一份表单 (描述 ui.items 内可含多个输入控件),
+//   结果经通道回传 (经 MessageListComponent attachInterruptChannel 注入 UI 线程)
 // - 消息携带 agent 侧声明的 UI 描述 (InterruptHandleArg.ui): 控件形态
 //   (值按钮/输入框/枚举/勾选项/确认行) 完全由描述数据决定, 客户端不含任何
 //   具体询问 (含权限) 的特化分支
-// - UI 线程确认/取消后经通道回传 {inputIndex, value, options}; 规则注册等
-//   业务语义由 agent 侧消费结果完成 (客户端只回传表单值/选项)
-// - 本协程收集全部输入项结果后按序组装返回; 收到整体取消 (inputIndex=-1) 或
-//   通道关闭 (server 过期通知 / TUI 退出) 时终止, 返回已收集结果
+// - UI 线程提交/取消后经通道回传 InterruptFormSubmit {cancelled, values, options};
+//   规则注册等业务语义由 agent 侧消费结果完成 (客户端只回传表单值/选项)
+// - 本协程等待一次提交或取消; 通道关闭 (server 过期通知 / TUI 退出) 时终止,
+//   返回已收集结果 (空 values = 未应答)
 // ---------------------------------------------------------------------------
 
 asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
@@ -2320,92 +2320,59 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         co_return agentxx::util::Json::array();
     }
     const auto& handleArg = argOpt.value();
-    // 中断 UI 描述 (服务端必填, 见 InterruptHandleArg::toJson): 所有输入项消息
-    // 共享同一份声明; 缺失 (版本不匹配) 时留空, 客户端渲染诊断行且不可交互
+    // 中断 UI 描述 (服务端必填, 见 InterruptHandleArg::toJson): 一份描述对应
+    // 一份表单 (一条消息); 缺失 (版本不匹配) 时留空, 客户端渲染诊断行且不可交互
     const agentxx::util::Json uiJson
         = handleArg.ui.empty() ? agentxx::util::Json{} : handleArg.ui.toJson();
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
     // 中断头消息已由 agent 线程插入会话历史并经 MessageTip WireDelta 送达
-    // (在发起中断请求前插入, 顺序先于本函数的输入项消息), 此处不再构造
+    // (在发起中断请求前插入, 顺序先于本函数的中断表单消息), 此处不再构造
 
-    // 每个输入项一条中断消息 (共享结果通道)
+    // 一条中断请求 = 一条消息 = 一份表单 (共享结果通道)
     const int64_t wireId      = interruptWireId_;
     auto          ch          = std::make_shared<InterruptResultChannel>(ex_, 64);
     activeInterrupts_[wireId] = ch;
 
     // 结果回传通道注入 UI 线程 (MessageListComponent 中断视图):
-    // 通道由 client 线程创建, UI 线程交互 (确认/取消) 需经其发送结果
+    // 通道由 client 线程创建, UI 线程交互 (提交/取消) 需经其发送结果
     enqueueUiAction([this, wireId, ch]() {
         if (messageList_) {
             messageList_->attachInterruptChannel(wireId, ch);
         }
     });
 
-    const int total = static_cast<int>(handleArg.inputs.size());
-    int       index = 0;
-    for (const auto& input : handleArg.inputs) {
-        ++index;
-        if (input.type.empty()) {
-            continue;
-        }
-        auto m                     = std::make_shared<TUIMessage>();
-        m->role                    = TUIMessage::Role::Interrupt;
-        m->interrupt               = TUIMessage::InterruptData{};
-        m->interrupt->interruptId  = wireId;
-        m->interrupt->inputLabel   = input.label;
-        m->interrupt->inputDepict  = input.depict;
-        m->interrupt->inputType    = input.type;
-        m->interrupt->inputDefault = input.defaultValue;
-        m->interrupt->inputEnums   = input.enumValues;
-        m->interrupt->inputIndex   = index;
-        m->interrupt->inputTotal   = total;
-        m->interrupt->ui           = uiJson;
-        // 编辑文本/选中项/勾选项等纯 UI 状态由 InterruptView 按描述 +
-        // 消息字段 (inputType/inputDefault/inputEnums) 惰性初始化, 不存于消息
-        {
-            std::lock_guard<std::mutex> lock(sharedState_.mutex());
-            auto&                       st = sharedState_.mutableState();
-            st.messages.push_back(std::move(m));
-        }
-        postRedraw();
+    {
+        auto m                    = std::make_shared<TUIMessage>();
+        m->role                   = TUIMessage::Role::Interrupt;
+        m->interrupt              = TUIMessage::InterruptData{};
+        m->interrupt->interruptId = wireId;
+        // 表单形态完全由描述数据决定 (各控件字段自包含); 编辑文本/选中项/
+        // 勾选项等纯 UI 状态由 InterruptView 按描述惰性初始化, 不存于消息
+        m->interrupt->ui = uiJson;
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.messages.push_back(std::move(m));
     }
+    postRedraw();
 
-    // 收集结果: 各输入项确认后按 inputIndex 回填 (支持任意顺序确认),
-    // 整体取消 (inputIndex=-1) 或通道关闭 (过期/退出) 时终止
-    auto                                    values = agentxx::util::Json::array();
-    std::vector<std::optional<std::string>> items(total);
-    agentxx::util::Json                     options = agentxx::util::Json::object();
-    size_t                                  confirmedCount = 0;
-    while (confirmedCount < items.size()) {
-        auto [ec, idx, val, opts]
-            = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
-        if (ec) {
-            // 通道关闭: server 过期通知 / TUI 退出 → 终止, 返回已收集结果
-            break;
+    // 等待一次提交或取消 (通道关闭 = server 过期通知 / TUI 退出 → 按未应答返回)
+    auto                values  = agentxx::util::Json::array();
+    agentxx::util::Json options = agentxx::util::Json::object();
+    auto [ec, gotSubmit] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+    if (!ec && !gotSubmit.cancelled) {
+        // 一次提交: values 顺序由描述声明 (见 InterruptUi::values), options
+        // 为勾选项映射; 语义由 agent 侧消费
+        if (gotSubmit.values.is_array()) {
+            values = std::move(gotSubmit.values);
         }
-        if (idx < 0) {
-            // 用户整体取消
-            break;
-        }
-        if (idx < 1 || idx > total || items[static_cast<size_t>(idx - 1)].has_value()) {
-            continue; // 防御: 非法/重复序号
-        }
-        items[static_cast<size_t>(idx - 1)] = val;
-        // 勾选项 (如权限询问的"记住此选择") 合并到结果: 语义由 agent 侧消费
-        if (opts.is_object()) {
-            for (auto it = opts.begin(); it != opts.end(); ++it) {
+        if (gotSubmit.options.is_object()) {
+            for (auto it = gotSubmit.options.begin(); it != gotSubmit.options.end(); ++it) {
                 if (it->is_boolean()) {
                     options[it.key()] = it->get<bool>();
                 }
             }
-        }
-        ++confirmedCount;
-    }
-    for (auto& v : items) {
-        if (v.has_value()) {
-            values.push_back(std::move(*v));
         }
     }
 
@@ -2416,8 +2383,8 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
 
     activeInterrupts_.erase(wireId);
     awaitingInterruptInput_.store(false, std::memory_order_release);
-    // 中断流程结束 (全部确认/取消/过期): 清理 UI 线程的 channel 映射与
-    // 该请求的表单状态 (消息已固定为 Confirmed/Cancelled/Expired)
+    // 中断流程结束 (提交/取消/过期): 清理 UI 线程的 channel 映射与该请求的
+    // 表单状态 (消息已固定为 Confirmed/Cancelled/Expired)
     enqueueUiAction([this, wireId]() {
         if (messageList_) {
             messageList_->releaseInterruptChannel(wireId);

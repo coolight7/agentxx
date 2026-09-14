@@ -293,7 +293,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/SetPermission/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp);
+- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp);
   排队消息管理: 执行中排队由服务端按会话维护并经 MessageQueueUpdate 同步,
   客户端可删除单条 (RemoveQueueItem) / 清空队列 (ClearMessageQueue) /
   打断当前轮次立即执行队列首条 (InterruptAndRunNext); 插件事件经
@@ -365,20 +365,24 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     (schema 见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h))
     声明头行分段与项列表 (text/gap/toggle/input/submit/separator/diff),
     客户端 `InterruptView` 统一负责渲染/高度估算/命中区域/交互/结果组装:
-    - 输入项形态: `view=buttons` (值按钮, 点击即确认) / `number` (减-输入框-加) /
-      `text` / `list` (枚举竖直列表, 全部渲染不截断);
-      描述字段留空时取消息字段 (inputType/inputDefault/inputEnums/inputDepict),
-      故同一份描述可服务多输入项的中断请求 (每项一条消息)
+    - **一条中断请求 = 一条消息 = 一份表单** (描述 v1): 描述内可含多个 `input` 项
+      (每个 = 一个控件), 用户一次提交全部值; 控件字段**自包含**
+      (`inputType`/`defaultValue`/`enumValues`/`view`/`buttons`, 客户端不读取
+      消息字段); 结果 values 顺序由 `ui.values` 声明 (留空 = 按 items 中 input 项顺序)
+    - 控件形态: `view=buttons` (值按钮, 点击即提交) / `number` (减-输入框-加) /
+      `text` / `list` (枚举竖直列表, 全部渲染不截断); 校验失败 (int/double 解析)
+      在该控件下方提示且阻止提交; 键盘作用于最近点击的控件 (焦点由点击切换)
     - 勾选项 (toggle) 的值进入结果 options: 权限询问的"记住此选择"由此实现,
       结果**恒为对象形态** `{"values":[...], "options":{"remember":true}}`
       (无勾选项时 options 为空对象), **规则注册在 agent 侧完成** (权限处理器按
       options.remember 经总线注册路径规则), 客户端不参与权限语义;
       非对象形态的结果按契约违规处理 (HIL 视为未应答/权限视为拒绝并告警)
     - 描述**必填**: 服务端构造中断请求时总是下发 (`InterruptHandleArg::toJson`
-      在生产方未声明时下发通用默认描述: 进度头行 + 描述 + 类型控件 + 确认行),
-      客户端不含"无描述"的渲染回退 —— 缺失即输出诊断行且不可交互
-      (契约违规, 如两端版本不匹配); 未知项类型忽略 (向前兼容)
-    - 渲染与估算同源: 同一套描述项判定, 避免布局与估算两处漂移
+      在生产方未声明时按输入项展开通用默认表单: 标签行 + 说明行 + 控件 + 提交行,
+      见 `InterruptUi::defaultUi`), 客户端不含"无描述"的渲染回退 —— 缺失即输出
+      诊断行且不可交互 (契约违规, 如两端版本不匹配); 未知项类型忽略 (向前兼容)
+    - 命中区域按**描述项下标** + 子序号定位 (同一份描述内多个控件 id 重复也不会
+      错位); 渲染与估算同源: 同一套描述项判定, 避免布局与估算两处漂移
       (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h))
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
@@ -1132,7 +1136,8 @@ AgentIOBase (公共契约)
 AgentIOBase (客户端端点: TUIClientAgentIO / StdIOClientAgentIO)
     ├── onDelta/onSync/onTurnResult/onContextStats (protected) ← 收对端事件 → 渲染
     ├── getInput()         → 从 stdin/FTXUI 读输入
-    ├── handleInterrupt()  → 弹出交互框收集用户响应
+    ├── handleInterrupt()  → 在消息列表内联渲染中断表单并等待提交/取消
+    │                        (TUI: Role::Interrupt 消息 + InterruptView; CLI: 逐项问答)
     └── onPeerMessage()    → 覆写: 额外处理 InterruptRequest/Log/ModelInfo 等
 
 AgentIOBase (服务端端点: SessionServerAgentIO)
@@ -1143,7 +1148,7 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应 (超时/过期通知)
     ├── onPeerMessage()    → 覆写: 处理 Hello/UserInput/Cancel/SelectModel/InterruptResponse/
     │                          GetModel/GetAppendComponentInfo/GetContext/ListSessions/
-    │                          SwitchSession/SetPermission/GetViewMessages/ClearMessageQueue/
+    │                          SwitchSession/GetViewMessages/ClearMessageQueue/
     │                          RemoveQueueItem/InterruptAndRunNext/PluginDataUp 等
     ├── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
     ├── stop()             → 停止驱动循环 (关闭输入 channel/取消轮次/fail pending)
@@ -1365,10 +1370,9 @@ Client                              Server
   │ (可选) 上下文统计
   │←── ContextStats ──────────────────│ token 用量推送 (含流式期间窗口平均 tps)
   │                                    │
-  │ (可选) 宿主注册权限规则 (FFI agentxx_ffi_set_permission)
-  │──── SetPermission (path, allow) ──│ 注册路径规则到服务端权限中间件
-  │                                    │ (TUI 的"记住本次选择"不走上行消息:
-  │                                    │  中断结果 options.remember 由服务端注册)
+  │ 无上行权限规则消息: "记住本次选择" 随    │
+  │ 中断结果 options.remember 回传,        │
+  │ 规则由服务端权限处理器注册              │
   │                                    │
   │ (可选) 会话选择弹窗 (TUI F4)
   │──── ListSessions ─────────────────│ 列举持久化会话 (阻塞 I/O 卸载到线程池)
@@ -1758,7 +1762,7 @@ EventBus (事件总线)
   - Tool: ToolData {toolName, toolCallId, toolResult, diff (edit diff 预留), toolFinished}
   - Think: ThinkData {reasoningTokens, isEncrypted}
   - Tip: TipData {tipLevel: Info/Warning/Error} — 系统提示与 Turn 统计经 InsertMessage 原子插入
-  - Interrupt: InterruptData {interruptId, inputLabel/Depict/Type/Default/Enums, inputIndex/Total, interruptStatus (Waiting/Confirmed/Cancelled/Expired), interruptResult}
+  - Interrupt: InterruptData {interruptId, ui (声明式表单描述), interruptStatus (Waiting/Confirmed/Cancelled/Expired), interruptResult (提交值展示文本)}
 - 序列化: toJson/fromJson 供 Wire Sync 与链式哈希共用; 对应 role 下保证子结构非空
 
 ### Delta (流式增量事件, 统一 seq)

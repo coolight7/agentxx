@@ -574,18 +574,18 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         if (!ui.options.empty()) {
             XX_TEST_EXPECT_EQ(ui.options[0], std::string("remember"));
         }
-        // 输入项字段仍保留 (旧客户端按 inputs 渲染的兼容路径)
+        // 输入项数组保留: 值契约顺序 (结果 values 与之对应) + 行式前端问答元数据
         XX_TEST_EXPECT_EQ(argOpt->inputs.size(), size_t{1});
     }
     co_return;
 }
 
-/// 中断参数必带 UI 描述 (描述必填): 生产者未声明时 toJson 下发通用默认模板
+/// 中断参数必带 UI 描述 (描述必填): 生产者未声明时 toJson 按输入项展开通用默认表单
 void test_interrupt_arg_ui_always_present() {
     using agentxx::middleware::InterruptHandleArg;
     using agentxx::middleware::InterruptUi;
 
-    // 未声明描述: toJson 仍下发默认描述 (进度头行 + 输入控件 + 确认行)
+    // 未声明描述: toJson 按输入项展开默认表单 (标签行 + 说明行 + 控件 + 提交行)
     InterruptHandleArg arg;
     arg.name                      = "default";
     InterruptHandleArg::InterruptHandleInputItem item;
@@ -598,10 +598,19 @@ void test_interrupt_arg_ui_always_present() {
     XX_TEST_EXPECT_TRUE(j.contains("ui"));
     const auto ui = InterruptUi::fromJson(j.contains("ui") ? j["ui"] : agentxx::util::Json{});
     XX_TEST_EXPECT_FALSE(ui.empty());
-    XX_TEST_EXPECT_EQ(ui.items.size(), size_t{3}); // text + input + submit
+    XX_TEST_EXPECT_EQ(ui.items.size(), size_t{4}); // 标签 + 说明 + 控件 + 提交行
     XX_TEST_EXPECT_EQ(ui.values.size(), size_t{1});
     if (!ui.values.empty()) {
         XX_TEST_EXPECT_EQ(ui.values[0], std::string("value"));
+    }
+    // 展开出的控件自包含 (客户端不再读取消息/消息字段): 类型与默认值来自声明
+    for (const auto& it : ui.items) {
+        if (it.kind != "input") {
+            continue;
+        }
+        XX_TEST_EXPECT_EQ(it.inputType, std::string("bool"));
+        XX_TEST_EXPECT_EQ(it.defaultValue, std::string("no"));
+        XX_TEST_EXPECT_EQ(it.view, std::string("")); // 空 = 客户端按类型推导 (bool→buttons)
     }
 
     // 显式声明描述: 原样下发 (权限卡片等自定义形态)

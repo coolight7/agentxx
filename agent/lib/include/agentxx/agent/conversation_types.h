@@ -184,7 +184,7 @@ struct MediaAttachment {
 /// 设计: 通用字段 (role/text/时间戳/折叠) 平铺, 角色专属字段按 role 放入
 /// optional 子结构, 避免单结构背负所有角色的字段:
 /// - Role::Tool:      tool (toolName/toolCallId/toolResult/toolFinished/diff)
-/// - Role::Interrupt: interrupt (中断输入项数据)
+/// - Role::Interrupt: interrupt (中断 UI 描述 + 表单状态/结果)
 /// - Role::Tip:       tip (tipLevel)
 ///
 /// 注意: 纯 UI 交互状态 (输入框编辑文本/选中项/校验提示/结果回传通道等) 不属于
@@ -199,7 +199,7 @@ struct ViewMessage {
         Think,
         System,
         Tool,
-        /// 中断输入项消息 (内嵌交互控件, 直接渲染在消息列表中)
+        /// 中断表单消息 (内嵌交互控件, 直接渲染在消息列表中)
         Interrupt,
         /// 消息提示
         Tip
@@ -210,11 +210,11 @@ struct ViewMessage {
         Warning,
         Error
     };
-    /// 中断输入项状态 (Role::Interrupt 消息使用)
+    /// 中断表单状态 (Role::Interrupt 消息使用)
     enum class InterruptStatus : uint8_t {
         /// 等待用户操作 (可交互)
         Waiting,
-        /// 已确认 (interruptResult 保存结果)
+        /// 已提交 (interruptResult 保存结果展示文本)
         Confirmed,
         /// 已取消 (用户主动取消整个中断请求)
         Cancelled,
@@ -259,23 +259,16 @@ struct ViewMessage {
     struct InterruptData {
         /// 中断请求 wire id (对应 WireInterruptRequest.id); 0 = 非中断消息
         int64_t interruptId = 0;
-        /// 输入项描述 (InterruptHandleInputItem 字段)
-        std::string inputLabel;
-        std::string inputDepict;
-        /// 返回值类型: bool / int / double / string / enum
-        std::string              inputType;
-        std::string              inputDefault;
-        std::vector<std::string> inputEnums;
-        /// 输入项序号 (1-based) / 总数 (仅进度展示)
-        int inputIndex = 0;
-        int inputTotal = 0;
         /// 中断 UI 描述 (声明式; 由 agent 侧生成, 客户端通用渲染)
-        /// - 见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h);
-        ///   空 (null) = 客户端按上述输入项字段用通用默认模板渲染
+        /// - 一条中断请求 = 一份表单 (一条消息, ui.items 内可含多个输入控件),
+        ///   见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h)
+        /// - **必填** (服务端 InterruptHandleArg::toJson 恒下发; 缺失 = 契约违规,
+        ///   客户端输出诊断行且不可交互)
         agentxx::util::Json ui;
-        /// 中断输入项状态
+        /// 表单状态
         InterruptStatus interruptStatus = InterruptStatus::Waiting;
-        /// 确认结果 (interruptStatus == Confirmed 时有效)
+        /// 提交结果展示文本 (interruptStatus == Confirmed 时有效; 多控件时为
+        /// 各控件结果值的展示拼接)
         std::string interruptResult;
     };
 
@@ -607,28 +600,7 @@ inline agentxx::util::Json ViewMessage::toJson() const {
     if (interrupt) {
         agentxx::util::Json it = agentxx::util::Json::object();
         it["interrupt_id"]     = interrupt->interruptId;
-        if (!interrupt->inputLabel.empty()) {
-            it["input_label"] = interrupt->inputLabel;
-        }
-        if (!interrupt->inputDepict.empty()) {
-            it["input_depict"] = interrupt->inputDepict;
-        }
-        if (!interrupt->inputType.empty()) {
-            it["input_type"] = interrupt->inputType;
-        }
-        if (!interrupt->inputDefault.empty()) {
-            it["input_default"] = interrupt->inputDefault;
-        }
-        if (!interrupt->inputEnums.empty()) {
-            agentxx::util::Json arr = agentxx::util::Json::array();
-            for (const auto& e : interrupt->inputEnums) {
-                arr.push_back(e);
-            }
-            it["input_enums"] = std::move(arr);
-        }
-        it["input_index"] = interrupt->inputIndex;
-        it["input_total"] = interrupt->inputTotal;
-        // 中断 UI 描述 (声明式, 服务端生成): 客户端据此通用渲染控件
+        // 中断 UI 描述 (声明式, 服务端生成): 客户端据此通用渲染表单控件
         if (!interrupt->ui.is_null()) {
             it["ui"] = interrupt->ui;
         }
@@ -690,25 +662,12 @@ inline ViewMessage ViewMessage::fromJson(const agentxx::util::Json& j) {
             if (j.contains("interrupt")) {
                 const auto& ij     = j["interrupt"];
                 it.interruptId     = ij.value("interrupt_id", int64_t{0});
-                it.inputLabel      = ij.value("input_label", std::string{});
-                it.inputDepict     = ij.value("input_depict", std::string{});
-                it.inputType       = ij.value("input_type", std::string{});
-                it.inputDefault    = ij.value("input_default", std::string{});
-                it.inputIndex      = ij.value("input_index", 0);
-                it.inputTotal      = ij.value("input_total", 0);
                 it.interruptStatus = viewMessageInterruptStatusFromString(
                     ij.value("interrupt_status", std::string{})
                 );
                 it.interruptResult = ij.value("interrupt_result", std::string{});
                 if (ij.contains("ui") && ij["ui"].is_object()) {
                     it.ui = ij["ui"];
-                }
-                if (ij.contains("input_enums") && ij["input_enums"].is_array()) {
-                    for (const auto& e : ij["input_enums"]) {
-                        it.inputEnums.push_back(
-                            e.is_string() ? e.get<std::string>() : std::string{}
-                        );
-                    }
                 }
             }
             m.interrupt = std::move(it);

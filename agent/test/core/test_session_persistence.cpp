@@ -74,14 +74,25 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
         }
         case V::Role::Interrupt: {
             V::InterruptData it;
-            it.interruptId     = 7;
-            it.inputLabel      = "choice";
-            it.inputDepict     = "pick one";
-            it.inputType       = "enum";
-            it.inputDefault    = "b";
-            it.inputEnums      = {"a", "b", "c"};
-            it.inputIndex      = 1;
-            it.inputTotal      = 2;
+            it.interruptId = 7;
+            // 中断 UI 描述 (声明式表单: 一条消息 = 一份表单)
+            agentxx::middleware::InterruptUi ui;
+            agentxx::middleware::InterruptUiItem title;
+            title.kind = "text";
+            title.text = "pick one";
+            ui.items.push_back(title);
+            agentxx::middleware::InterruptUiItem input;
+            input.kind         = "input";
+            input.id           = "value";
+            input.inputType    = "enum";
+            input.defaultValue = "b";
+            input.enumValues   = {"a", "b", "c"};
+            ui.items.push_back(input);
+            agentxx::middleware::InterruptUiItem submit;
+            submit.kind = "submit";
+            ui.items.push_back(submit);
+            ui.values          = {"value"};
+            it.ui              = ui.toJson();
             it.interruptStatus = V::InterruptStatus::Confirmed;
             it.interruptResult = "b";
             msg.interrupt      = std::move(it);
@@ -155,8 +166,20 @@ static TestResult testViewMessagesRoundtrip() {
         XX_TEST_EXPECT_TRUE(intMsg.interrupt.has_value());
         if (intMsg.interrupt) {
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptId, int64_t{7});
-            XX_TEST_EXPECT_EQ(intMsg.interrupt->inputType, "enum");
-            XX_TEST_EXPECT_EQ(intMsg.interrupt->inputEnums.size(), size_t{3});
+            // 中断 UI 描述随消息持久化往返 (表单控件自包含)
+            const auto ui = agentxx::middleware::InterruptUi::fromJson(intMsg.interrupt->ui);
+            XX_TEST_EXPECT_EQ(ui.values.size(), size_t{1});
+            XX_TEST_EXPECT_EQ(ui.values[0], std::string("value"));
+            size_t inputCount = 0;
+            for (const auto& item : ui.items) {
+                if (item.kind != "input") {
+                    continue;
+                }
+                ++inputCount;
+                XX_TEST_EXPECT_EQ(item.inputType, std::string("enum"));
+                XX_TEST_EXPECT_EQ(item.enumValues.size(), size_t{3});
+            }
+            XX_TEST_EXPECT_EQ(inputCount, size_t{1});
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptStatus, V::InterruptStatus::Confirmed);
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptResult, "b");
         }

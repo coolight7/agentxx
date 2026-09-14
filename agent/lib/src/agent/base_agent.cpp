@@ -971,7 +971,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                         ) {
                             // 中断头消息: 由 agent 线程插入会话历史并通知 UI
                             // (原由 client 端 handleInterrupt 构造); 后续中断
-                            // 输入项消息 (Role::Interrupt) 仍由 client 端插入
+                            // 表单消息 (Role::Interrupt) 仍由 client 端插入
                             std::string msg
                                 = fmt::format("Interrupted at: {}\nValue: {}", node, value);
                             if (!handle.empty()) {

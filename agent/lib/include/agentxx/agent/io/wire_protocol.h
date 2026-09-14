@@ -28,8 +28,6 @@ struct MsgType {
     inline static constexpr std::string_view Ping                   = "ping";
     /// 客户端请求压缩当前会话上下文
     inline static constexpr std::string_view CompactContext = "compact_context";
-    /// 客户端记住权限选择: 注册路径规则到服务端权限中间件
-    inline static constexpr std::string_view SetPermission = "set_permission";
     /// 客户端请求持久化会话列表 (会话选择弹窗数据源)
     inline static constexpr std::string_view ListSessions = "list_sessions";
     /// 客户端请求切换当前连接的会话 (重新绑定 sessionId 并回推历史)
@@ -704,27 +702,6 @@ inline agentxx::util::Json makeCompactContext(std::string_view sessionId) {
     };
 }
 
-/// 客户端记住权限选择 (Client -> Server): 注册路径规则到服务端权限中间件
-inline agentxx::util::Json
-    makeSetPermission(std::string_view sessionId, std::string_view path, bool allow, size_t index) {
-    return agentxx::util::Json{
-        {"type",      MsgType::SetPermission},
-        {"sessionId", sessionId             },
-        {"path",      path                  },
-        {"allow",     allow                 },
-        {"index",     index                 },
-    };
-}
-
-inline WireSetPermission setPermissionFromJson(const agentxx::util::Json& j) {
-    WireSetPermission m;
-    m.sessionId = j.value("sessionId", std::string{});
-    m.path      = j.value("path", std::string{});
-    m.allow     = j.value("allow", true);
-    m.index     = j.value("index", size_t{0});
-    return m;
-}
-
 inline agentxx::util::Json makeContextMessages(const agentxx::util::Json& messages) {
     return agentxx::util::Json{
         {"type",     MsgType::ContextMessages},
@@ -1117,8 +1094,6 @@ agentxx::util::Json toJson(const WireListSessions& msg);
 agentxx::util::Json toJson(const WireSessionList& msg);
 
 agentxx::util::Json toJson(const WireSwitchSession& msg);
-
-agentxx::util::Json toJson(const WireSetPermission& msg);
 
 agentxx::util::Json toJson(const WirePluginData& msg);
 

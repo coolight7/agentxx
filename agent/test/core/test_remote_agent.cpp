@@ -339,36 +339,6 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // 客户端记住权限选择 (WireSetPermission) 序列化往返
-        agentxx::agent::WireSetPermission perm{"sess", "/data/projects", true, 1};
-        auto                              json = WsAgentIOTransport::serialize(WireMessage{perm});
-        auto                              back = WsAgentIOTransport::deserialize(json);
-        XX_TEST_EXPECT_TRUE(back.has_value());
-        if (back) {
-            auto* p = std::get_if<agentxx::agent::WireSetPermission>(&*back);
-            XX_TEST_EXPECT_TRUE(p != nullptr);
-            if (p) {
-                XX_TEST_EXPECT_EQ(p->sessionId, std::string("sess"));
-                XX_TEST_EXPECT_EQ(p->path, std::string("/data/projects"));
-                XX_TEST_EXPECT_TRUE(p->allow);
-                XX_TEST_EXPECT_EQ(p->index, size_t{1});
-            }
-        }
-        // 拒绝规则往返
-        agentxx::agent::WireSetPermission deny{"sess", "/etc/secret", false, 0};
-        auto denyJson = WsAgentIOTransport::serialize(WireMessage{deny});
-        auto denyBack = WsAgentIOTransport::deserialize(denyJson);
-        XX_TEST_EXPECT_TRUE(denyBack.has_value());
-        if (denyBack) {
-            auto* p = std::get_if<agentxx::agent::WireSetPermission>(&*denyBack);
-            XX_TEST_EXPECT_TRUE(p != nullptr);
-            if (p) {
-                XX_TEST_EXPECT_FALSE(p->allow);
-                XX_TEST_EXPECT_EQ(p->index, size_t{0});
-            }
-        }
-    }
-    {
         // 用户输入附带模型选择 (TUI 切模型随下一条消息携带, BaseAgent 新一轮
         // 会话自动切换): 序列化往返须完整保留 model 字段
         agentxx::agent::WireUserInput ui{"sess", "hello", "model-b"};

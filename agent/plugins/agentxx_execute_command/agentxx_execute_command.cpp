@@ -268,7 +268,7 @@ struct ExecClientCtx : public ClientPluginBase {};
 /// client 侧注册事务 (start 的实际内容)。
 static int32_t setupExecClient(ExecClientCtx& ctx) {
     ctx.registerTemplate(kNameBash, "Bash", "command");
-    ctx.registerTemplate(kNameWindows, "Cmd", "command");
+    ctx.registerTemplate(kNameWindows, "Bash", "command");
     return 0;
 }
 

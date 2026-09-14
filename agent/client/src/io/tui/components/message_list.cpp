@@ -659,7 +659,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
                 m.interrupt ? m.interrupt->interruptStatus : TUIMessage::InterruptStatus::Waiting
             )
         );
-        h = combine(h, m.interrupt ? static_cast<uint64_t>(m.interrupt->inputIndex) : uint64_t{0});
+        h = combine(h, static_cast<uint64_t>(m.interrupt ? m.interrupt->interruptId : 0));
         h = combine(h, m.interrupt ? m.interrupt->interruptResult.size() : size_t{0});
         // 中断表单状态 (编辑文本/选中项/勾选项/提示) 变化经 version 递增反映到
         // key, 触发高度重估 (提示增删影响估算行数)

@@ -108,7 +108,6 @@ public:
     int         sendInput(std::string_view text, std::string& err);
     int         cancel(std::string& err);
     int         selectModel(std::string_view modelName, std::string& err);
-    int         setPermission(std::string_view path, int allow, int op, std::string& err);
     int         switchSession(std::string_view sessionId, std::string& err);
     int         setLanguage(std::string_view language, std::string& err);
     std::string getLanguage(std::string& err);

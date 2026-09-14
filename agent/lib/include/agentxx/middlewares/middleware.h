@@ -398,13 +398,20 @@ public:
 
     std::string                           name;
     agentxx::util::Json                   arg;
+    /// 输入项声明 (值契约 + 行式前端问答元数据)
+    /// - **顺序即结果 values 顺序** (与描述声明的 values 顺序一一对应):
+    ///   客户端提交的 values[k] 即第 k 个输入项的值
+    /// - 行式前端 (stdio CLI / 宿主表单) 按此逐项问答; 富前端 (TUI / FFI GUI)
+    ///   按 [ui] 描述渲染 (同一份值契约)
     std::vector<InterruptHandleInputItem> inputs;
     std::string                           resultId;
     /// 中断 UI 描述 (声明式; 客户端通用渲染, 见 [interrupt_ui.h])
-    /// - **必填**: 生产者未显式设置时由 toJson 下发通用默认模板
-    ///   (InterruptUi::defaultUi()) —— 客户端不含"无描述"的渲染分支
-    /// - 同一请求的多个输入项共享同一份描述 (每项消息按自身字段渲染值域,
-    ///   见 InterruptUiItem 的模板语义), 常为 InterruptUi::defaultUi()
+    /// - **必填**: 生产者未显式设置时由 toJson 按 [inputs] 展开通用默认表单
+    ///   (InterruptUi::defaultUi) —— 客户端不含"无描述"的渲染分支
+    /// - 一条中断请求 = 一份表单 (客户端渲染为一条消息, 可含多个控件),
+    ///   用户一次提交全部值; 描述**自包含** (客户端不读取消息上的输入项字段),
+    ///   故自定义描述须为每个 input 项声明
+    ///   inputType/defaultValue/enumValues (或 view/buttons)
     InterruptUi ui;
 
     static bool isAccordingFormat(const agentxx::util::Json& data);

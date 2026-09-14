@@ -112,10 +112,6 @@ agentxx::util::Json toJson(const WireSwitchSession& msg) {
     return makeSwitchSession(msg.sessionId);
 }
 
-agentxx::util::Json toJson(const WireSetPermission& msg) {
-    return makeSetPermission(msg.sessionId, msg.path, msg.allow, msg.index);
-}
-
 agentxx::util::Json toJson(const WirePluginData& msg) {
     return makePluginData(msg);
 }
@@ -452,10 +448,6 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::SwitchSession,
          [](const agentxx::util::Json& j) -> std::optional<WireMessage> {
              return switchSessionFromJson(j);
-         }},
-        {MsgType::SetPermission,
-         [](const agentxx::util::Json& j) -> std::optional<WireMessage> {
-             return setPermissionFromJson(j);
          }},
         {MsgType::PluginData,
          [](const agentxx::util::Json& j) -> std::optional<WireMessage> {

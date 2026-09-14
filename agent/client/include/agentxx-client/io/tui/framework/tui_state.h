@@ -16,18 +16,28 @@
 #include <string>
 #include <vector>
 
-/// 中断输入结果回传通道 (UI 线程 → client 线程):
-/// - 参数 1: 输入项序号 inputIndex (对应 TUIMessage::inputIndex);
-///   负数 (-1) 表示整体取消 (仅当 value 为 nullopt)
-/// - 参数 2: 用户确认值 (bool 规范化 "true"/"false", 其余原样字符串);
-///   nullopt 表示该输入项无结果 (取消/整体取消)
-/// - 参数 3: 勾选项结果 —— 中断 UI 描述 (`InterruptData::ui`) 中 toggle 项的值
-///   (如权限询问的 "记住此选择"): {"remember": true}; 无勾选项时为空对象。
-///   语义由 agent 侧消费 (客户端只回传表单值/选项, 不解释业务含义)
-/// 同一次中断请求的所有输入项共享同一 channel; client 线程 handleInterrupt
-/// 挂起接收, UI 线程 (消息列表中断视图) 确认/取消后发送。
+/// 中断表单提交结果 (UI 线程 → client 线程; 一次提交/取消整份表单)
+///
+/// - `cancelled == false`: `values` 为输入控件值数组 (顺序 = 描述声明的
+///   `InterruptUi::values` / 控件顺序), `options` 为勾选项映射
+///   (中断 UI 描述中 toggle 项的值, 如权限询问的"记住此选择": {"remember": true};
+///   无勾选项时为空对象) —— 语义由 agent 侧消费 (客户端只回传表单值/选项,
+///   不解释业务含义)
+/// - `cancelled == true`: 用户取消整份表单, values/options 无意义
+///
+/// 一次中断请求 (一份表单 = 一条消息) 对应一个 channel: client 线程
+/// handleInterrupt 挂起接收, UI 线程 (消息列表中断视图) 提交/取消后发送。
+struct InterruptFormSubmit {
+    /// true = 用户取消整份表单 (表单值全部丢弃)
+    bool                cancelled = false;
+    /// 输入控件值数组 (字符串值; bool 规范化 "true"/"false")
+    agentxx::util::Json values  = agentxx::util::Json::array();
+    /// 勾选项映射 (toggle 项 id → 布尔值)
+    agentxx::util::Json options = agentxx::util::Json::object();
+};
+
 using InterruptResultChannel = asio::experimental::concurrent_channel<
-    void(neograph_asio_error_code, int, std::optional<std::string>, agentxx::util::Json)>;
+    void(neograph_asio_error_code, InterruptFormSubmit)>;
 
 /// TUI 消息模型: 统一使用 agentxx::agent::ViewMessage
 /// (与 server Session::viewMessages / wire Sync 同型, 见

@@ -611,31 +611,6 @@ void SessionServerAgentIO::onPeerMessage(
                     },
                     asio::detached
                 );
-            } else if constexpr (std::is_same_v<T, WireSetPermission>) {
-                // 客户端记住权限选择: 经 EventBus 发布规则到权限中间件,
-                // 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
-                auto agent = agent_.lock();
-                if (!agent || !agent->agentContext || !agent->agentContext->bus) {
-                    return;
-                }
-                asio::co_spawn(
-                    agent->agentContext->bus->executor(),
-                    agent->agentContext->bus->publish<events::EventSetPermissionRule>(
-                        events::Topic::PermissionSetRule,
-                        events::EventSetPermissionRule{
-                            .path  = m.path,
-                            .allow = m.allow,
-                            .index = m.index,
-                        }
-                    ),
-                    asio::detached
-                );
-                XX_LOGI(
-                    "[session_ctrl] remembered permission rule: {} {} (index={})",
-                    m.path,
-                    m.allow ? "ALLOW" : "DENY",
-                    m.index
-                );
             } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
                 // 宿主约定上行事件拦截: client_interfaces (client 宿主接口集
                 // 上报, 三期6) —— controller 与 client 是 1:N (同会话可多

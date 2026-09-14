@@ -323,27 +323,9 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_select_model(
     }
 }
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_set_permission(
-    AgentxxFFIAgent*         a,
-    const AgentxxStringView* path,
-    int32_t                  allow,
-    int32_t                  op,
-    AgentxxString*           log
-) {
-    if (a == nullptr || !a->impl) {
-        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
-    }
-    if (path == nullptr || path->data == nullptr) {
-        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null path", log);
-    }
-    std::string err;
-    try {
-        const int rc = a->impl->setPermission(svToCpp(path), allow, op, err);
-        return ffiFinish(rc, err, log);
-    } catch (...) {
-        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
-    }
-}
+// ---------------------------------------------------------------------------
+// 会话切换
+// ---------------------------------------------------------------------------
 
 int32_t AGENTXX_FFI_CALL agentxx_ffi_switch_session(
     AgentxxFFIAgent*         a,

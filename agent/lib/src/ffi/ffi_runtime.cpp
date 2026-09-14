@@ -678,32 +678,6 @@ int FfiAgentRuntime::selectModel(std::string_view modelName, std::string& err) {
     return AGENTXX_FFI_OK;
 }
 
-int FfiAgentRuntime::setPermission(std::string_view path, int allow, int op, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    if (path.empty()) {
-        err = "路径为空";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    auto clientIO = clientIO_;
-    auto tid      = sessionId_;
-    auto pathStr  = std::string{path};
-    asio::post(
-        *clientIoCtx_,
-        [clientIO, tid = std::move(tid), path = std::move(pathStr), allow, op]() mutable {
-            clientIO->sendToPeer(agent::WireSetPermission{
-                std::move(tid),
-                std::move(path),
-                allow != 0,
-                static_cast<size_t>(op > 0 ? 1 : 0),
-            });
-        }
-    );
-    return AGENTXX_FFI_OK;
-}
-
 int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";

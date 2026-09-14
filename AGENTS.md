@@ -192,6 +192,23 @@ path/to/agentxx_test string_util regex
 - base 与 overlay 指向同一文件时只加载一次 (避免同配置被当两层而出现重复条目);
   base 解析失败仅告警跳过, overlay 解析失败报错退出; 列表段清空用
   `overwrite: {mode: replace}` + 不写 `list`
+### 中断 UI 描述 (声明式表单, 2026-09 定稿)
+- 一条中断请求 = **一条消息 = 一份表单**: 描述 `InterruptUi` (schema:
+  `agent/lib/include/agentxx/middlewares/interrupt_ui.h`, `version = 1`,
+  无历史版本兼容) 的 `items[]` 内可含多个 `input` 项 (控件), 用户一次提交全部值;
+  控件字段**自包含** (`inputType`/`defaultValue`/`enumValues`/`view`/`buttons`),
+  客户端**不读取消息上的输入项字段** (旧"模板语义"/"每输入项一条消息"已删除)
+- 结果恒为对象 `{"values":[...],"options":{...}}`: values 顺序 = `ui.values` 声明的
+  id 顺序 (留空 = items 中 input 项顺序), 且**与 `InterruptHandleArg::inputs` 顺序
+  一致** (inputs 同时是行式前端 (stdio CLI) 的问答元数据); options = toggle 项
+- 描述**必填**: 生产者未声明时 `InterruptHandleArg::toJson` 按 `inputs` 展开
+  `InterruptUi::defaultUi` (标签行 + 说明行 + 控件 + 提交行; 多控件 id
+  `value1..valueN`); 客户端无"无描述"回退 → 诊断行 + 不可交互
+- TUI 命中区域按**描述项下标**定位 (`HitBox.itemIndex`), 与项 id 无关 (同 id 多控件
+  不会错位); 校验提示行紧贴控件且阻止提交行与其合并 (`InterruptView::Prev`)
+- 权限"记住本次选择"唯一路径: 中断结果 `options.remember` → 服务端权限处理器注册
+  路径规则 (会话内存规则, 非持久化); `WireSetPermission` 与 FFI
+  `agentxx_ffi_set_permission` 已彻底删除 (2026-09)
 ### 上下文压缩 (summarization)
 - 压缩结果写回时机: 自动压缩在轮内改写图 state 的 messages channel 后, **立即**
   回写会话 `llmMessages` 并请求节流落盘 (`Session::requestSaveLlmMessages`) ——

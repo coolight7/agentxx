@@ -216,7 +216,7 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
 ### Remote Communication
 
 - **WebSocket Service**: `AgentServer` provides WebSocket services with token authentication.
-- **Wire Protocol**: Bidirectional JSON message protocol (Hello, HelloAck, UserInput, Cancel, SelectModel, GetModel, Delta, Sync, InterruptRequest, InterruptResponse, InterruptExpired, TurnResult, ContextStats, Error, Log, ModelInfo, GetAppendComponentInfo, AppendComponentInfo, GetContext, ContextMessages, Ping, Pong, SetPermission, ListSessions, SessionList, SwitchSession, GetViewMessages, ViewMessagesPage, ClearMessageQueue, RemoveQueueItem, InterruptAndRunNext, MessageQueueUpdate, PluginData, PluginDataUp).
+- **Wire Protocol**: Bidirectional JSON message protocol (Hello, HelloAck, UserInput, Cancel, SelectModel, GetModel, Delta, Sync, InterruptRequest, InterruptResponse, InterruptExpired, TurnResult, ContextStats, Error, Log, ModelInfo, GetAppendComponentInfo, AppendComponentInfo, GetContext, ContextMessages, Ping, Pong, ListSessions, SessionList, SwitchSession, GetViewMessages, ViewMessagesPage, ClearMessageQueue, RemoveQueueItem, InterruptAndRunNext, MessageQueueUpdate, PluginData, PluginDataUp).
   - Queued message management: Active turn queues are maintained per session by the server and synchronized via `MessageQueueUpdate`. Clients can remove individual items (`RemoveQueueItem`), clear the queue (`ClearMessageQueue`), or interrupt the active turn to immediately run the front queue item (`InterruptAndRunNext`).
   - Plugin events are forwarded transparently via `PluginData` (agent→client downlink) and `PluginDataUp` (client→agent uplink).
 - **Automatic Reconnection**: Clients reconnect automatically with `lastSeq` for incremental Delta replay; reverts to full `Sync` if `seq` continuity is broken.
@@ -243,10 +243,11 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
   - Interactive click-to-fold/expand: Clicking finalized messages toggles `msg.collapsed`; clicking the tail Thinking block during active streaming toggles in-component override state (`MessageListComponent::streamThinkOverride_`, cycling: unset follows TailThinkingMode / folded / expanded), resetting on stream start and finish. Hit areas are mapped from the previous frame's `visibleBoxes` (`collapsibleBoxes_` + `collapsibleIsStream_`).
   - Real-time streaming token rendering with Copy-on-Write (COW) semantics, preventing O(n²) string accumulation.
   - Declarative interrupt-prompt rendering (generic mechanism; the TUI holds no specialization for any prompt type, including permission): the agent side declares the header segments and item list (text/gap/toggle/input/submit/separator/diff) in `InterruptHandleArg.ui` (schema: [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h)); the client `InterruptView` implements rendering, height estimation, hit areas, interaction and result assembly:
-    - Input views: `buttons` (value buttons, click confirms), `number` (minus/input/plus), `text`, `list` (vertical enum list, fully rendered). Empty descriptor fields fall back to the message fields (inputType/inputDefault/inputEnums/inputDepict), so one descriptor serves every input item of a request (one message per item).
+    - **One interrupt request = one message = one form** (descriptor v1): the descriptor may contain multiple `input` items (each = one control) and the user submits all values at once; control fields are **self-contained** (`inputType`/`defaultValue`/`enumValues`/`view`/`buttons`; the client never reads message fields). The `values` order is declared by `ui.values` (empty = input item order in `items`).
+    - Input views: `buttons` (value buttons, click submits), `number` (minus/input/plus), `text`, `list` (vertical enum list, fully rendered). Validation failures (int/double parsing) show a tip under that control and block submission; the keyboard acts on the most recently clicked control (click moves focus).
     - Toggle items feed the result `options` (this is how permission's "remember this choice" works); the result is **always an object** `{"values":[...], "options":{"remember":true}}` (empty `options` object when no toggles exist) and the **rule is registered agent-side** (the permission handler consumes `options.remember`); non-object results are treated as contract violations (HIL: unanswered / permission: denied, with a warning).
-    - The descriptor is **required**: the agent always sends one (`InterruptHandleArg::toJson` falls back to the generic default descriptor when the producer declared none: progress header + description + typed control + confirm row). The client has no "no descriptor" rendering fallback — a missing descriptor renders a diagnostic line and stays non-interactive (contract violation, e.g. version mismatch); unknown item kinds are ignored (forward compatible).
-    - Rendering and estimation share one item-based decision path, avoiding layout/estimate drift (see [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h)).
+    - The descriptor is **required**: the agent always sends one (`InterruptHandleArg::toJson` expands the generic default form from the declared inputs when the producer declared none: label row + description row + control + submit row, see `InterruptUi::defaultUi`). The client has no "no descriptor" rendering fallback — a missing descriptor renders a diagnostic line and stays non-interactive (contract violation, e.g. version mismatch); unknown item kinds are ignored (forward compatible).
+    - Hit areas are keyed by **descriptor item index** + sub index (duplicate control ids inside one descriptor cannot mis-route clicks); rendering and estimation share one item-based decision path, avoiding layout/estimate drift (see [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h)).
   - Permission card with "Remember this choice" (declarative interrupt UI descriptor; the toggle value is returned via the result `options` and the rule is registered agent-side).
   - Runtime model selector dialog.
   - Right-hand sidebar (Log console, Information panels, Planning visualization).
@@ -873,7 +874,8 @@ AgentIOBase (Public Contract)
 AgentIOBase (Client Endpoints: TUIClientAgentIO / StdIOClientAgentIO)
     ├── onDelta/onSync/onTurnResult/onContextStats (protected) ← Receives peer events → Render
     ├── getInput()         → Reads input from stdin / FTXUI
-    ├── handleInterrupt()  → Displays interactive dialog to collect user response
+    ├── handleInterrupt()  → Renders the interrupt form inline in the message list and awaits
+    │                        submit/cancel (TUI: Role::Interrupt message + InterruptView; CLI: item-by-item Q&A)
     └── onPeerMessage()    → Overridden: handles InterruptRequest / Log / ModelInfo, etc.
 
 AgentIOBase (Server Endpoint: SessionServerAgentIO)
@@ -884,7 +886,7 @@ AgentIOBase (Server Endpoint: SessionServerAgentIO)
     ├── handleInterrupt()  → Sends InterruptRequest, awaiting client response (with timeout/expiration)
     ├── onPeerMessage()    → Overridden: processes Hello / UserInput / Cancel / SelectModel /
     │                          InterruptResponse / GetModel / GetAppendComponentInfo / GetContext /
-    │                          ListSessions / SwitchSession / SetPermission / GetViewMessages /
+    │                          ListSessions / SwitchSession / GetViewMessages /
     │                          ClearMessageQueue / RemoveQueueItem / InterruptAndRunNext / PluginDataUp
     ├── run()              → Driver loop: fetch input → execute turn → push result
     ├── stop()             → Halts driver loop (closes channel / cancels turn / fails pending)
@@ -1092,8 +1094,12 @@ Client                              Server
   │ (Optional) Context Statistics      │
   │←── ContextStats ──────────────────│ Token usage & windowed TPS updates
   │                                    │
-  │ (Optional) Remember Permission     │
-  │──── SetPermission (path, allow) ──│ Registers path rule in server PermissionMiddleware
+  │ No upstream permission-rule       │
+  │ messages: "remember this choice"  │
+  │ rides on the interrupt result     │
+  │ options.remember (answered via    │
+  │ InterruptResponse); the server    │
+  │ permission handler registers it   │
   │                                    │
   │ (Optional) Session Modal (TUI F4)  │
   │──── ListSessions ─────────────────│ Lists persisted sessions (offloaded to thread pool)
@@ -1483,7 +1489,7 @@ EventBus (Event Bus)
   - Tool: `ToolData` (`toolName`, `toolCallId`, `toolResult`, `diff`, `toolFinished`).
   - Think: `ThinkData` (`reasoningTokens`, `isEncrypted`).
   - Tip: `TipData` (`tipLevel`: `Info`/`Warning`/`Error`)—system notifications and turn statistics are atomically inserted via `InsertMessage`.
-  - Interrupt: `InterruptData` (`interruptId`, input schema `inputLabel`/`Depict`/`Type`/`Default`/`Enums`, `inputIndex`/`Total`, status `Waiting`/`Confirmed`/`Cancelled`/`Expired`, `interruptResult`).
+  - Interrupt: `InterruptData` (`interruptId`, `ui` = declarative form descriptor, status `Waiting`/`Confirmed`/`Cancelled`/`Expired`, `interruptResult` = submitted values display text).
 - Serialization: `toJson`/`fromJson` shared between Wire Sync and chained hashing.
 
 ### Delta (Streaming Incremental Event, Unified seq)

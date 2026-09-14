@@ -130,7 +130,7 @@ agentxx_ffi_event_queue_free(q);
 - Bounded Queue (capacity 16,384): Drops oldest events when host stops polling, injecting an `EVT_ERROR` warning event.
 - Implementation: `agent/lib/src/ffi/event_queue.cpp`.
 
-### 4.3 Exported Symbol Inventory (26 symbols, see whitelist in `agent/lib/ffi_symbols.map`)
+### 4.3 Exported Symbol Inventory (27 entries = 26 FFI C API + 1 built-in plugin manifest entry, see whitelist in `agent/lib/ffi_symbols.map`)
 
 | Category | Symbols | Description |
 |---|---|---|
@@ -138,12 +138,12 @@ agentxx_ffi_event_queue_free(q);
 | Version | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API version check / Library version string view out-parameter |
 | Error | `agentxx_ffi_strerror` | Error code → static string view out-parameter |
 | Lifecycle | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | Create (does not start threads) / Async start (`EVT_READY`) / Sync stop (idempotent) / Destroy (auto-stops if running) |
-| Session (Async) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_set_permission` / `agentxx_ffi_switch_session` | Dispatched to IO thread for serial execution; inputs sent before READY are auto-queued |
+| Session (Async) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | Dispatched to IO thread for serial execution; inputs sent before READY are auto-queued |
 | Synchronous Queries | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | Blocks waiting for server response (max 10s); results written to `AgentxxString* out` (freed via `agentxx_ffi_string_free`); only one in-flight query per handle |
-| HITL Response | `agentxx_ffi_interrupt_respond` | Submits response for `EVT_INTERRUPT_REQ` (payload is always an object `{"values":[...],"options":{...}}`: `values` maps 1:1 to inputs order, `options` carries declared toggles; non-object payloads return `AGENTXX_FFI_ERR_INVALID`) |
+| HITL Response | `agentxx_ffi_interrupt_respond` | Submits the response for `EVT_INTERRUPT_REQ` (payload is always an object `{"values":[...],"options":{...}}`: `values` order follows the descriptor's declared controls, `options` carries declared toggles; non-object payloads return `AGENTXX_FFI_ERR_INVALID`) |
 | Logging | `agentxx_ffi_drain_logs` | Drains pending logs `[{"level","message"},...]` into `AgentxxString* out` (for post-failure diagnostics) |
 | Event Queue | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | See Section 4.2 |
-| Built-in Plugins | `agentxx_plugin_get_builtin_plugins` | Manifest entry for monolithic embedded plugin mode (used by PluginManager; 26th whitelist symbol, hiding 170k C++ symbols) |
+| Built-in Plugins | `agentxx_plugin_get_builtin_plugins` | Manifest entry for monolithic embedded plugin mode (used by PluginManager; 27th whitelist symbol, hiding 170k C++ symbols) |
 
 Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
 
@@ -158,7 +158,7 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) |
 | `EVT_MODEL_INFO` | wire model_info JSON | Current model information (query/switch result) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | Startup components (MCP, Skills, Memory, Plugins) loading status |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation, user input collection); `argJson` is the serialized `InterruptHandleArg`: `inputs` describes input fields (`bool`/`int`/`double`/`string`/`enum` + `defaultValue`/`enumValues`) and **`ui` is the required declarative UI descriptor** (header segments + items text/gap/toggle/input/submit/separator/diff + result mapping) for generic host rendering |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg`: **`ui` is the required declarative form descriptor** (header segments + items text/gap/toggle/input/submit/separator/diff + result mapping) and `inputs` is the values contract plus line-based prompt metadata (`bool`/`int`/`double`/`string`/`enum` + `defaultValue`/`enumValues`). See 4.6 for the rendering guide |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | Interrupt expired or cancelled; can no longer be answered |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | Agent-side plugin event forwarding (`{plugin,event,data}`) |
 | `EVT_ERROR` | `{"code","message"}` | Internal error |
@@ -197,6 +197,86 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
   "extraHeaders": {"k":"v"}, "extraConfig": {} }
 ```
 
+### 4.6 Interrupt UI Descriptor Rendering Guide (zero-semantics host rendering)
+
+`EVT_INTERRUPT_REQ.argJson.ui` is a **self-contained form descriptor**: the host needs
+no knowledge of any concrete prompt type (permission confirmation, repeat-call warning,
+future prompts) — just render the item kinds below and answer via
+`agentxx_ffi_interrupt_respond` with `{"values":[...],"options":{...}}`.
+
+> `version` is currently 1 (= form semantics). **Backward compatibility with the old
+> schema is intentionally dropped**: when host and library (or client and server)
+> versions differ, unknown item kinds/fields can only be ignored — no semantic
+> downgrade is performed.
+
+**Structure**
+
+```
+ui = { "version": 1,
+       "header": { "segments": [ {"text","labelKey","color","bold","dim"}, ... ] },  // optional
+       "items":  [ ... ],                                     // render in order
+       "values": ["<input item id>", ...],                    // result values order
+       "options": ["<toggle item id>", ...] }                 // result options order
+```
+
+**Item kinds (`items[].kind`)**
+
+| kind | Fields | Rendering |
+|------|--------|-----------|
+| `text` | `text`/`labelKey`, `color`, `bold`, `dim`, `wrap`, `indent` | Text line (`wrap` = hard-wrap to width) |
+| `gap` | `lines` | Blank line(s) |
+| `separator` | `indent` | Divider line |
+| `toggle` | `id`, `text`, `defaultToggle` | Checkbox row → result `options[id]` |
+| `input` | `id`, `text` (control label), `inputType` (bool/int/double/string/enum), `defaultValue`, `enumValues`, `view` (buttons/number/text/list), `buttons[{value,label,labelKey,color}]` | Input control → one entry in result `values` |
+| `submit` | `text`/`labelKey` | Confirm/cancel row (submits or cancels the whole form) |
+| `diff` | `path`, `oldStr`, `newStr` | Diff view (optional; hosts may degrade to plain text) |
+
+- Unknown `kind` / unknown fields: **ignore** (forward compatible — do not fail)
+- Empty `view` is derived from `inputType`: `bool`→`buttons` (Yes/No when `buttons` is
+  absent) / `enum`→`list` / `int`|`double`→`number` / otherwise→`text`
+- `color` ∈ `error`/`accent`/`hint`/`normal`/`thinking`/`tool`; map to your own theme
+- Result **`values` order = the `ui.values` id order** (empty = `items` input order,
+  identical to `argJson.inputs[]` order). A cancelled form answers with an empty array
+
+**Example (permission card answer with a toggle)**
+
+```jsonc
+// EVT_INTERRUPT_REQ.argJson.ui (excerpt)
+{ "version": 1,
+  "header": { "segments": [ {"text":"! [Permission] ","labelKey":"interrupt.permissionBadge",
+                             "color":"error","bold":true},
+                            {"text":"read_file","color":"accent","bold":true},
+                            {"text":" filesystem_read","color":"hint"} ] },
+  "items": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
+             {"kind":"gap"},
+             {"kind":"toggle","id":"remember","text":"Remember this choice",
+              "labelKey":"interrupt.remember"},
+             {"kind":"gap"},
+             {"kind":"input","id":"value","view":"buttons","inputType":"bool",
+              "buttons":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
+                         {"value":"false","label":"Deny","labelKey":"interrupt.deny"}] } ],
+  "values": ["value"], "options": ["remember"] }
+
+// Host answer (allow + remember this choice):
+{"values":["true"],"options":{"remember":true}}
+```
+
+**Example (multi-control form with a toggle)**
+
+```jsonc
+// items: two input controls (path + count) plus a toggle; values order = ["path","count"]
+{"values":["/tmp/a.txt","4"],"options":{"force":true}}
+```
+
+Pseudocode (any language): iterate `items`, keep two maps `valuesById`/`optionsById`;
+on the `submit` confirm, emit values in `ui.values`/`ui.options` order →
+`{"values":[...],"options":{...}}` → `agentxx_ffi_interrupt_respond(handle, interruptId, json)`;
+on cancel answer `{"values":[],"options":{}}` (same "unanswered" semantics as permission).
+
+> Reference implementations: the console host in `agent/example/ffi/dart/` (minimal
+> `inputs[]`-driven Q&A) and the fully descriptor-driven TUI `InterruptView`
+> (`agent/client/.../components/interrupt_view.cpp`).
+
 ## 5. Language Bindings & Examples
 
 | Directory | Description |
@@ -218,5 +298,5 @@ Other languages integrate via the same pattern: load whitelisted symbols via `dl
 - **Working Directory Resolution**: `config_json.workDir` supports `~`/`${VAR}` expansion and relative paths (resolved to absolute against process `cwd`). If unspecified, it falls back to process `cwd`, matching `AgentConfig::resolvedWorkDir()` semantics. Session-level worktree bindings (`Session::WorktreeBinding`) and multi-source fallbacks via `AgentContext::getSessionWorkDir` operate identically for FFI handles (all relative paths within the session adapt dynamically).
 - **Plugin Sides Option**: `plugins[].sides` accepts `auto` (default, detected automatically via `agentxx_plugin_client_create` export), `agent` (loaded only on agent side), or `client` (loaded only on client side; FFI typically uses `agent`).
 - **Synchronous Query Concurrency**: For `get_model_info`/`get_context_messages`/`list_sessions`, only one in-flight request per handle is permitted at any given time (server protocols are strictly sequential). On 10s timeout, it returns `AGENTXX_FFI_ERR_TIMEOUT`, and an `EVT_ERROR` payload `{"code","message"}` is also dispatched.
-- **HITL Input Schema**: In `EVT_INTERRUPT_REQ`, `argJson` is the serialized `InterruptHandleArg`. Each element of `inputs[]` contains `label`, `depict`, `type` (`bool`/`int`/`double`/`string`/`enum`), `defaultValue`, and `enumValues`. `ui` is the required declarative UI descriptor (schema: `agent/middlewares/interrupt_ui.h`; item kinds text/gap/toggle/input/submit/separator/diff and the `values`/`options` result mapping). An empty `type` indicates no input is required (respond with `{"values":[],"options":{}}`).
+- **HITL Input Schema**: In `EVT_INTERRUPT_REQ`, `argJson` is the serialized `InterruptHandleArg`. `ui` is the required declarative form descriptor (schema: `agent/middlewares/interrupt_ui.h`; item kinds text/gap/toggle/input/submit/separator/diff plus the `values`/`options` result mapping) — see section 4.6 for the generic host rendering guide. `inputs[]` carries `label`, `depict`, `type` (`bool`/`int`/`double`/`string`/`enum`), `defaultValue`, `enumValues`; its order is the result `values` order (line-based hosts can simply prompt item by item; an empty `type` means no input is required — respond with `{"values":[],"options":{}}`).
 - **Cross-CRT Heap Management**: All `char*` return values and `char** log` pointers are allocated via `agentxx_ffi_malloc`; hosts must release them using `agentxx_ffi_free`. `agentxx_ffi_strdup_n` is the standard copy helper.

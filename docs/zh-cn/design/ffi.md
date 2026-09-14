@@ -145,7 +145,7 @@ agentxx_ffi_event_queue_free(q);
 - 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
 - 实现: `agent/lib/src/ffi/event_queue.cpp`
 
-### 4.3 导出符号清单 (26 个, 白名单见 `agent/lib/ffi_symbols.map`)
+### 4.3 导出符号清单 (27 个 = 26 个 FFI C API + 1 个内置插件清单入口, 白名单见 `agent/lib/ffi_symbols.map`)
 
 | 分组 | 符号 | 说明 |
 |------|------|------|
@@ -153,12 +153,12 @@ agentxx_ffi_event_queue_free(q);
 | 版本 | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API 版本校验 / 库版本字符串视图出参 |
 | 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串视图出参 |
 | 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
-| 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_set_permission` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
+| 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
 | 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 结果写入 `AgentxxString* out` 出参 (`agentxx_ffi_string_free` 释放); 同一句柄同一时刻仅允许一个在途 |
-| HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (载荷恒为对象形态 `{"values":[...],"options":{...}}`: values 与 inputs 顺序一一对应; options 对应描述声明的勾选项, 非对象形态返回 AGENTXX_FFI_ERR_INVALID) |
+| HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (载荷恒为对象形态 `{"values":[...],"options":{...}}`: values 顺序 = 描述声明的控件顺序; options 对应描述声明的勾选项, 非对象形态返回 AGENTXX_FFI_ERR_INVALID) |
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
 | 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | 见 4.2 |
-| 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 26 个符号, 隐藏 17 万 C++ 符号) |
+| 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 27 个符号, 隐藏 17 万 C++ 符号) |
 
 版本策略: 全局 `AGENTXX_FFI_API_VERSION` 重置为 1;
 调用方/宿主绑定加载时应当校验 `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION`，
@@ -175,7 +175,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化: `inputs` 描述输入项 (bool/int/double/string/enum + defaultValue/enumValues), **`ui` 为必填的中断 UI 描述** (声明式: 头行分段 + 项列表 text/gap/toggle/input/submit/separator/diff + 结果映射; 宿主可通用渲染) |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化: **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 项列表 text/gap/toggle/input/submit/separator/diff + 结果映射), `inputs` 为值契约顺序与行式前端问答元数据 (bool/int/double/string/enum + defaultValue/enumValues); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
@@ -213,6 +213,83 @@ agentxx_ffi_event_queue_free(q);
   "extraHeaders": {"k":"v"}, "extraConfig": {} }
 ```
 
+### 4.6 中断 UI 描述渲染指引 (宿主 GUI 零语义渲染)
+
+`EVT_INTERRUPT_REQ.argJson.ui` 是**自包含的表单描述**: 宿主不需要了解任何具体
+询问类型 (权限确认/repeat 提醒/未来新增), 按下面的项类型表依次渲染即可;
+应答经 `agentxx_ffi_interrupt_respond` 回传 `{"values":[...],"options":{...}}`。
+
+> `version` 当前为 1 (= 表单语义)。**不保留旧版本兼容**: 宿主与库 (或 client 与
+> server) 版本不一致时, 未识别的项类型/字段只能忽略, 语义变化不另行降级
+> (混用旧版宿主可能渲染出缺控件或多余控件的表单)。
+
+**结构**
+
+```
+ui = { "version": 1,
+       "header": { "segments": [ {"text","labelKey","color","bold","dim"}, ... ] },  // 可空
+       "items":  [ ... ],                                     // 按顺序渲染
+       "values": ["<input 项 id>", ...],                      // 结果 values 顺序
+       "options": ["<toggle 项 id>", ...] }                   // 结果 options 顺序
+```
+
+**项类型 (`items[].kind`)**
+
+| kind | 字段 | 渲染 |
+|------|------|------|
+| `text` | `text`/`labelKey`, `color`, `bold`, `dim`, `wrap`, `indent` | 文本行 (wrap=按宽度硬折行) |
+| `gap` | `lines` | 空行 |
+| `separator` | `indent` | 分隔线 |
+| `toggle` | `id`, `text`, `defaultToggle` | 勾选行 → 结果 `options[id]` |
+| `input` | `id`, `text`(控件标签), `inputType` (bool/int/double/string/enum), `defaultValue`, `enumValues`, `view` (buttons/number/text/list), `buttons[{value,label,labelKey,color}]` | 输入控件 → 结果 `values` 中的一项 |
+| `submit` | `text`/`labelKey` | 确认/取消行 (提交或取消整份表单) |
+| `diff` | `path`, `oldStr`, `newStr` | 差异对比 (可选, 宿主可降级为文本) |
+
+- 未知 `kind` / 未知字段: **忽略** (向前兼容, 不要报错)
+- `view` 留空时按 `inputType` 推导: `bool`→`buttons`(未声明 `buttons` 时用是/否) /
+  `enum`→`list` / `int`|`double`→`number` / 其余→`text`
+- `color` 取值 `error`/`accent`/`hint`/`normal`/`thinking`/`tool`, 宿主按自身主题映射
+- 结果 **values 顺序 = `ui.values` 声明的 id 顺序** (留空 = `items` 中 `input` 项顺序;
+  与 `argJson.inputs[]` 顺序一致), 未提交 (取消) 时回传空数组
+
+**示例 (权限询问的应答, 含勾选项)**
+
+```jsonc
+// EVT_INTERRUPT_REQ.argJson.ui (节选)
+{ "version": 1,
+  "header": { "segments": [ {"text":"! [Permission] ","labelKey":"interrupt.permissionBadge",
+                             "color":"error","bold":true},
+                            {"text":"read_file","color":"accent","bold":true},
+                            {"text":" filesystem_read","color":"hint"} ] },
+  "items": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
+             {"kind":"gap"},
+             {"kind":"toggle","id":"remember","text":"Remember this choice",
+              "labelKey":"interrupt.remember"},
+             {"kind":"gap"},
+             {"kind":"input","id":"value","view":"buttons","inputType":"bool",
+              "buttons":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
+                         {"value":"false","label":"Deny","labelKey":"interrupt.deny"}] } ],
+  "values": ["value"], "options": ["remember"] }
+
+// 宿主应答 (允许 + 记住本次选择):
+{"values":["true"],"options":{"remember":true}}
+```
+
+**示例 (多控件表单 + 勾选项)**
+
+```jsonc
+// items: 两个输入控件 (路径 + 次数) + 勾选项; values 顺序 = ["path","count"]
+{"values":["/tmp/a.txt","4"],"options":{"force":true}}
+```
+
+伪代码 (任意语言): 遍历 `items`, 维护 `valuesById`/`optionsById` 两个 map; 点击
+`submit` 的确认时按 `ui.values`/`ui.options` 顺序取值 → 拼 `{"values":[...],"options":{...}}`
+→ `agentxx_ffi_interrupt_respond(handle, interruptId, json)`; 取消时回传
+`{"values":[],"options":{}}` (与 HTTP/权限语义一致: 未应答)。
+
+> 参考实现: 控制台宿主见 `agent/example/ffi/dart/` (按 `inputs[]` 逐项问答的最小形态);
+> 完整描述驱动渲染见 TUI 的 `InterruptView` (`agent/client/.../components/interrupt_view.cpp`)。
+
 ## 5. 语言绑定与示例
 
 | 目录 | 说明 |
@@ -237,7 +314,7 @@ agentxx_ffi_event_queue_free(q);
 - **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
 - **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_plugin_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
 - **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_FFI_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
-- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化，`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此通用渲染 (项类型 text/gap/toggle/input/submit/separator/diff，结果映射声明 values/options)；空 `type` 表示无需输入 (应答 `{"values":[],"options":{}}`)
+- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此零语义通用渲染 (项类型 text/gap/toggle/input/submit/separator/diff，渲染指引见 4.6)；`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`，其顺序即结果 values 顺序 (行式前端可直接逐项问答；空 `type` 表示无需输入，应答 `{"values":[],"options":{}}`)
 - **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_ffi_malloc` 分配，宿主必须 `agentxx_ffi_free` 释放；`agentxx_ffi_strdup_n` 为统一拷贝入口
 
 

@@ -196,18 +196,6 @@ struct WireSwitchSession {
     std::string sessionId;
 };
 
-/// 客户端记住权限选择 (Client -> Server): 将路径规则注册到服务端权限中间件,
-/// 后续访问该路径或其子目录时按规则直接允许/拒绝, 不再询问
-struct WireSetPermission {
-    std::string sessionId;
-    /// 标准化绝对路径 (规则作用于该路径及其子目录, 最长前缀匹配)
-    std::string path;
-    /// true = 允许 (PermissionOperator::ALLOW), false = 拒绝 (PermissionOperator::DENY)
-    bool allow = true;
-    /// 规则作用域: FilesystemPermissionREAD(0) / FilesystemPermissionWRITE(1)
-    size_t index = 0;
-};
-
 /// 插件事件转发 (Server -> Client)
 /// - 插件经事件总线发布 (topic 约定 `{插件名}.{事件名}`) 的事件原样转发,
 ///   宿主不解析载荷语义; 频率由插件自身控制
@@ -313,7 +301,6 @@ using WireMessage = std::variant<
     WireListSessions,
     WireSessionList,
     WireSwitchSession,
-    WireSetPermission,
     WirePluginData,
     WirePluginDataUp,
     WireMessageQueueUpdate,

@@ -248,16 +248,6 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_select_model(
     AgentxxString*           log
 );
 
-/// 记住权限选择 (服务端注册路径规则, 后续同路径不再询问):
-/// op: 0=读取 1=写入; allow: 1=允许 0=拒绝
-AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_set_permission(
-    AgentxxFFIAgent*         a,
-    const AgentxxStringView* path,
-    int32_t                  allow,
-    int32_t                  op,
-    AgentxxString*           log
-);
-
 /// 切换当前连接会话 (sessionId 为空 = 关闭持久化时非法):
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_switch_session(
     AgentxxFFIAgent*         a,

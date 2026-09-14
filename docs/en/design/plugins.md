@@ -324,6 +324,11 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
 3. **Priority Order and Fallback Path**:
    - Lookup order during rendering: `toolDecors` (by `tool_call_id`) > `toolRenderers` (by `tool_name`) > Generic fallback presentation (raw `toolName` + arguments/result text).
    - When a plugin unloads or is disabled, the host automatically strips its registrations and cleanly reverts to the fallback presentation, restoring specialized views losslessly upon re-enablement.
+4. **Vocabulary Boundary vs. Interrupt Form Descriptors (2026-09)**:
+   - **Shared rendering helpers**: plugin `items` (panels / Info sections / tool decors / overlays) and interrupt form descriptors (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`, declared agent-side and rendered by the TUI `InterruptView`) share `uiRoleColor` (role → theme color), `renderPluginButton` (button styling) and `renderPluginDiff` (diff view) from `agent/client/include/agentxx-client/io/tui/plugin_ui_items.h`. The two data structures are **not one schema**, and plugins are **not required** to produce interrupt descriptors (core generates them: permission card `InterruptUi::permissionUi` / expanded generic form `InterruptUi::defaultUi`; plugin-declared interrupt UI is **not open yet**).
+   - **Interrupt-descriptor-only kinds**: `gap` / `toggle` / `input` (self-contained control: inputType/defaultValue/enumValues/view/buttons) / `submit`; one interrupt request = one form (multiple controls, submitted at once).
+   - **Plugin-items-only kinds**: `button` (`action_id` dispatched to `bind_action_handler`) / `progress` / `diagram`.
+   - **Shared kinds**: `text` (role-colored) / `diff` (same `path`/`old_str`/`new_str` fields). When adding a kind, decide whether both sides need it — the current policy is independent evolution while sharing colors and the diff implementation, so no second style table appears.
 
 ---
 
