@@ -62,10 +62,7 @@ public:
     asio::awaitable<agentxx::util::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json::array(),
-            agentxx::util::Json::object()
-        );
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
     }
 };
 

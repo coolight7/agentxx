@@ -124,7 +124,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 | 中间件 | 功能 |
 |--------|------|
-| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 的 `permissionUi`)，勾选值经中断结果的 `options.remember` 回传，由权限处理器在 agent 侧注册路径规则 (后续直接放行/拒绝不再询问；客户端不参与权限语义) |
+| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，由权限处理器在 agent 侧注册路径规则 (后续直接放行/拒绝不再询问；客户端不参与权限语义) |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
@@ -363,27 +363,34 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 中断询问的**声明式 UI 描述**渲染 (通用机制, TUI 不含任何具体询问类型
     ——含权限询问——的特化分支): agent 侧在 `InterruptHandleArg.ui`
     (schema 见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h))
-    声明头行分段与项列表 (text/gap/toggle/input/submit/separator/diff),
-    客户端 `InterruptView` 统一负责渲染/高度估算/命中区域/交互/结果组装:
-    - **一条中断请求 = 一条消息 = 一份表单** (描述 v1): 描述内可含多个 `input` 项
-      (每个 = 一个控件), 用户一次提交全部值; 控件字段**自包含**
-      (`inputType`/`defaultValue`/`enumValues`/`view`/`buttons`, 客户端不读取
-      消息字段); 结果 values 顺序由 `ui.values` 声明 (留空 = 按 items 中 input 项顺序)
-    - 控件形态: `view=buttons` (值按钮, 点击即提交) / `number` (减-输入框-加) /
-      `text` / `list` (枚举竖直列表, 全部渲染不截断); 校验失败 (int/double 解析)
-      在该控件下方提示且阻止提交; 键盘作用于最近点击的控件 (焦点由点击切换)
-    - 勾选项 (toggle) 的值进入结果 options: 权限询问的"记住此选择"由此实现,
-      结果**恒为对象形态** `{"values":[...], "options":{"remember":true}}`
-      (无勾选项时 options 为空对象), **规则注册在 agent 侧完成** (权限处理器按
-      options.remember 经总线注册路径规则), 客户端不参与权限语义;
-      非对象形态的结果按契约违规处理 (HIL 视为未应答/权限视为拒绝并告警)
-    - 描述**必填**: 服务端构造中断请求时总是下发 (`InterruptHandleArg::toJson`
-      在生产方未声明时按输入项展开通用默认表单: 标签行 + 说明行 + 控件 + 提交行,
-      见 `InterruptUi::defaultUi`), 客户端不含"无描述"的渲染回退 —— 缺失即输出
-      诊断行且不可交互 (契约违规, 如两端版本不匹配); 未知项类型忽略 (向前兼容)
-    - 命中区域按**描述项下标** + 子序号定位 (同一份描述内多个控件 id 重复也不会
-      错位); 渲染与估算同源: 同一套描述项判定, 避免布局与估算两处漂移
-      (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h))
+    声明头行分段与**有序块列表**, 客户端 `InterruptView` 统一负责渲染/高度估算/
+    命中区域/交互/结果组装:
+    - **一条中断请求 = 一条消息 = 一份表单**: 描述可含多个控件块, 用户一次提交
+      全部值; 描述**自包含** (客户端不读取消息上的其他字段)
+    - **内容块可自由组合** (自定义渲染): `text` (样式/缩进/硬折行) / `markdown`
+      (富文本, 客户端按 markdown 渲染; 行式前端打印原文) / `diff` / `separator` /
+      `gap`; 预留 `custom` 块 (组件名 + 属性; 客户端组件渲染器未实现前渲染
+      `fallback` 文本)
+    - **控件块按交互形态声明** (`control`): `buttons` (候选项按钮,
+      `commitOnPick` 点击即提交) / `select` (竖直单选列表) / `checkbox` /
+      `text` / `number` (`integer`/`min`/`max`/`step`); 校验失败在该控件下方提示
+      并阻止提交; 键盘作用于最近点击的控件 (焦点由点击切换)。**协议内没有
+      "参数类型" (bool/int/enum...) 概念** —— 需要"若干类型化输入 + 确认"形态时由
+      生产者用预设模板 ([interrupt_presets.h](/agent/lib/include/agentxx/middlewares/interrupt_presets.h):
+      `preset::inputForm`/`permissionCard`/`confirmCard`) 生成描述
+    - 结果**恒为对象形态** `{"values": {"<控件 id>": 值}}` (复选框=布尔/数值控件=
+      数值/按钮与列表=候选项原始值/文本=字符串); 空对象 = 未应答/取消。权限询问的
+      "记住此选择" 即勾选控件 (id `remember`), **规则注册在 agent 侧完成**
+      (权限处理器按 `values.remember` 经总线注册路径规则), 客户端不参与权限语义
+    - 描述**必填**: 走客户端 HIL 的中断必须携带描述 (生产者用预设模板/组装器构造);
+      经总线由宿主处理、不进入客户端渲染路径的中断 (如 subagent 委派) 可为空。
+      描述缺失/非法按契约错误处理 (诊断行且不可交互); 未知块类型忽略/降级
+      (向前兼容); **不保留历史版本兼容**
+    - 命中区域按**描述块下标** + 控件 id + 子序号定位; 渲染与估算同源: 单一布局
+      过程 (行模型) 同时产出渲染元素与行数, 避免布局与估算两处漂移
+      (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h));
+      内容块渲染与插件工具装饰 items 复用同一实现
+      ([ui_items_render.h](/agent/client/include/agentxx-client/io/tui/ui_items_render.h))
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
@@ -1371,7 +1378,7 @@ Client                              Server
   │←── ContextStats ──────────────────│ token 用量推送 (含流式期间窗口平均 tps)
   │                                    │
   │ 无上行权限规则消息: "记住本次选择" 随    │
-  │ 中断结果 options.remember 回传,        │
+  │ 中断结果 values.remember 回传,         │
   │ 规则由服务端权限处理器注册              │
   │                                    │
   │ (可选) 会话选择弹窗 (TUI F4)

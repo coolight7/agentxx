@@ -347,24 +347,27 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
    - 插件卸载/禁用时宿主自动摘除注册并还原兜底展示，启用时无损恢复。
 
-4. **items 词汇与中断表单描述的边界 (2026-09)**：
-   - **共用同一套渲染 helper**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与
-     中断表单描述 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`, 由
-     agent 侧声明、TUI `InterruptView` 渲染) 共用
-     `agent/client/include/agentxx-client/io/tui/plugin_ui_items.h` 的
-     `uiRoleColor` (role → 主题色映射) / `renderPluginButton` (按钮配色) /
-     `renderPluginDiff` (diff 对比)；两套数据结构**不共用同一 schema**，
-     也**不要求插件产出中断描述** (中断描述由 agent 核心生成: 权限卡片
-     `InterruptUi::permissionUi` / 按输入项展开的通用默认表单
-     `InterruptUi::defaultUi`；插件自带中断 UI 的能力**暂未开放**)。
-   - **仅中断描述有此 kind**：`gap` / `toggle` / `input` (控件) / `submit`；
-     其中 `input` 项自包含 (inputType/defaultValue/enumValues/view/buttons)，
-     一条中断请求 = 一份表单 (可含多个控件，一次提交)。
+4. **items 渲染与中断内容的复用边界 (重构后)**：
+   - **静态块同一实现**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
+     的内容块 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`) 在 TUI 侧
+     复用同一套块渲染实现
+     ([ui_items_render.h](/agent/client/include/agentxx-client/io/tui/ui_items_render.h),
+     渲染产出"行模型", 渲染与高度估算同源); 颜色 role 映射 / 按钮配色 / diff 渲染
+     仍来自
+     [plugin_ui_items.h](/agent/client/include/agentxx-client/io/tui/plugin_ui_items.h)。
+     两套数据结构**不共用同一 schema**。
+   - **中断描述由生产者用预设模板生成** (权限卡片 `preset::permissionCard` /
+     类型化输入表单 `preset::inputForm` / 确认卡片 `preset::confirmCard`,
+     见 [interrupt_presets.h](/agent/lib/include/agentxx/middlewares/interrupt_presets.h));
+     **插件自带中断 UI 的能力暂未开放**。描述块类型: 内容块 `text`/`markdown`/
+     `diff`/`separator`/`gap`, 控件块 `control` (`buttons`/`select`/`text`/
+     `number`/`checkbox`), 提交行 `submit`, 预留 `custom` (组件名 + 属性; 客户端
+     组件渲染器未实现前渲染 `fallback` 文本)。
+   - **协议内没有"参数类型"概念** (bool/int/enum 等已删除): 需要类型化输入时由
+     生产者调用预设模板生成描述 (类型→控件的映射只存在于预设内)。
    - **仅插件 items 有此 kind**：`button`(`action_id` 派发到 `bind_action_handler`) /
      `progress` / `diagram`。
-   - **两者共有的 kind**：`text` (role 着色) / `diff` (path/old_str/new_str 同字段)。
-     新增 kind 时应评估是否需要两侧同时支持 (当前策略: 各自演进, 共用配色与
-     diff 实现，避免出现第二份样式表)。
+   - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
 4. **语义渲染缓存**：
    - 自定义 `render_fn` **只在 client IO 线程执行**：UI 线程提交

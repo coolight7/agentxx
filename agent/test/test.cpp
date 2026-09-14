@@ -28,6 +28,7 @@
 #include "test_filesystem_tools.h"
 #include "test_http.h"
 #include "test_interrupt_bus.h"
+#include "test_interrupt_ui.h"
 #include "test_json.h"
 #include "test_json_reflection.h"
 #include "test_json_view.h"
@@ -186,6 +187,7 @@ int main(int argn, char** argv) {
         runSync("training", agentxx::test::testTraining);
         runSync("settings_db", agentxx::test::testSettingsDb);
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
+        runSync("interrupt_ui", agentxx::test::testInterruptUi);
         runSync("ffi_c_api", agentxx::test::testFfiCApi);
         runSync("plugin_runtime", agentxx::test::testPluginRuntime);
         runSync("plugin_sdk", agentxx::test::testPluginSdk);

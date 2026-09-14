@@ -5,6 +5,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
@@ -75,24 +76,14 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
         case V::Role::Interrupt: {
             V::InterruptData it;
             it.interruptId = 7;
-            // 中断 UI 描述 (声明式表单: 一条消息 = 一份表单)
-            agentxx::middleware::InterruptUi ui;
-            agentxx::middleware::InterruptUiItem title;
-            title.kind = "text";
-            title.text = "pick one";
-            ui.items.push_back(title);
-            agentxx::middleware::InterruptUiItem input;
-            input.kind         = "input";
-            input.id           = "value";
-            input.inputType    = "enum";
-            input.defaultValue = "b";
-            input.enumValues   = {"a", "b", "c"};
-            ui.items.push_back(input);
-            agentxx::middleware::InterruptUiItem submit;
-            submit.kind = "submit";
-            ui.items.push_back(submit);
-            ui.values          = {"value"};
-            it.ui              = ui.toJson();
+            // 中断 UI 描述 (声明式表单: 一条消息 = 一份表单; 预设模板生成)
+            agentxx::middleware::preset::InputSpec spec;
+            spec.label        = "pick one";
+            spec.type         = "enum";
+            spec.defaultValue = "b";
+            spec.enumValues   = {"a", "b", "c"};
+            auto ui           = agentxx::middleware::preset::inputForm({spec});
+            it.ui             = ui.toJson();
             it.interruptStatus = V::InterruptStatus::Confirmed;
             it.interruptResult = "b";
             msg.interrupt      = std::move(it);
@@ -166,20 +157,19 @@ static TestResult testViewMessagesRoundtrip() {
         XX_TEST_EXPECT_TRUE(intMsg.interrupt.has_value());
         if (intMsg.interrupt) {
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptId, int64_t{7});
-            // 中断 UI 描述随消息持久化往返 (表单控件自包含)
+            // 中断 UI 描述随消息持久化往返 (控件自包含: 候选值/默认值在块上)
             const auto ui = agentxx::middleware::InterruptUi::fromJson(intMsg.interrupt->ui);
-            XX_TEST_EXPECT_EQ(ui.values.size(), size_t{1});
-            XX_TEST_EXPECT_EQ(ui.values[0], std::string("value"));
-            size_t inputCount = 0;
-            for (const auto& item : ui.items) {
-                if (item.kind != "input") {
+            size_t     controlCount = 0;
+            for (const auto& block : ui.blocks) {
+                if (block.kind != "control") {
                     continue;
                 }
-                ++inputCount;
-                XX_TEST_EXPECT_EQ(item.inputType, std::string("enum"));
-                XX_TEST_EXPECT_EQ(item.enumValues.size(), size_t{3});
+                ++controlCount;
+                XX_TEST_EXPECT_EQ(block.control, std::string("select"));
+                XX_TEST_EXPECT_EQ(block.id, std::string("value"));
+                XX_TEST_EXPECT_EQ(block.options.size(), size_t{3});
             }
-            XX_TEST_EXPECT_EQ(inputCount, size_t{1});
+            XX_TEST_EXPECT_EQ(controlCount, size_t{1});
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptStatus, V::InterruptStatus::Confirmed);
             XX_TEST_EXPECT_EQ(intMsg.interrupt->interruptResult, "b");
         }

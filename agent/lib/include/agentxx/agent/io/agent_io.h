@@ -163,7 +163,7 @@ public:
     virtual void registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessionBus);
 
     /// 记住本次权限选择: 在会话总线上注册路径规则 (允许/拒绝)
-    /// - 由 permission 处理器按中断结果的 options.remember 调用 —— 客户端只
+    /// - 由 permission 处理器按中断结果的 values.remember 调用 —— 客户端只
     ///   回传表单值/选项, 规则注册完全在 agent 侧完成 (客户端不参与权限语义)
     ///
     /// - `args`:
@@ -173,7 +173,7 @@ public:
     asio::awaitable<void>
         rememberPermission(std::string_view category, std::string_view target, bool allow);
 
-    /// 中断结果是否包含已确认的输入值 (空数组 = 取消/过期, 不注册规则)
+    /// 中断结果是否包含已确认的输入值 (空对象 = 取消/过期, 不注册规则)
     static bool confirmedValues(const agentxx::util::Json& values);
 
 protected:

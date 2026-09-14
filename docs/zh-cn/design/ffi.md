@@ -175,7 +175,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化: **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 项列表 text/gap/toggle/input/submit/separator/diff + 结果映射), `inputs` 为值契约顺序与行式前端问答元数据 (bool/int/double/string/enum + defaultValue/enumValues); 渲染指引见 4.6 |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
@@ -216,78 +216,92 @@ agentxx_ffi_event_queue_free(q);
 ### 4.6 中断 UI 描述渲染指引 (宿主 GUI 零语义渲染)
 
 `EVT_INTERRUPT_REQ.argJson.ui` 是**自包含的表单描述**: 宿主不需要了解任何具体
-询问类型 (权限确认/repeat 提醒/未来新增), 按下面的项类型表依次渲染即可;
-应答经 `agentxx_ffi_interrupt_respond` 回传 `{"values":[...],"options":{...}}`。
+询问类型 (权限确认/repeat 提醒/未来新增), 按下面的块类型表依次渲染即可;
+应答经 `agentxx_ffi_interrupt_respond` 回传 `{"values": {"<控件 id>": 值}}`。
 
-> `version` 当前为 1 (= 表单语义)。**不保留旧版本兼容**: 宿主与库 (或 client 与
-> server) 版本不一致时, 未识别的项类型/字段只能忽略, 语义变化不另行降级
-> (混用旧版宿主可能渲染出缺控件或多余控件的表单)。
+> `version` 当前为 1 (schema 首版)。**不保留旧版本兼容**: 描述缺失/非法按契约
+> 错误处理 (输出提示且不可交互); 未识别的块类型/字段忽略或降级为 `fallback`
+> 文本 (向前兼容, 不要报错)。
 
 **结构**
 
 ```
 ui = { "version": 1,
-       "header": { "segments": [ {"text","labelKey","color","bold","dim"}, ... ] },  // 可空
-       "items":  [ ... ],                                     // 按顺序渲染
-       "values": ["<input 项 id>", ...],                      // 结果 values 顺序
-       "options": ["<toggle 项 id>", ...] }                   // 结果 options 顺序
+       "header": { "segments": [ {"text","labelKey","color","bold","dim"}, ... ] },  // 可空 = 默认前缀
+       "blocks": [ ... ] }                                    // 按顺序渲染 (内容块与控件块混排)
 ```
 
-**项类型 (`items[].kind`)**
+**内容块 (`blocks[].kind`)**
 
 | kind | 字段 | 渲染 |
 |------|------|------|
-| `text` | `text`/`labelKey`, `color`, `bold`, `dim`, `wrap`, `indent` | 文本行 (wrap=按宽度硬折行) |
-| `gap` | `lines` | 空行 |
+| `text` | `text`/`textKey`, `color`, `bold`, `dim`, `wrap`, `indent` | 文本行 (wrap=按宽度硬折行; 空文本不渲染) |
+| `markdown` | `text`, `indent` | markdown 富文本 (标题/列表/表格/代码块均可由此表达; 无 markdown 能力的宿主可直接打印原文) |
+| `diff` | `path`, `oldStr`, `newStr` | 差异对比 (宿主可降级为统一 diff 文本) |
 | `separator` | `indent` | 分隔线 |
-| `toggle` | `id`, `text`, `defaultToggle` | 勾选行 → 结果 `options[id]` |
-| `input` | `id`, `text`(控件标签), `inputType` (bool/int/double/string/enum), `defaultValue`, `enumValues`, `view` (buttons/number/text/list), `buttons[{value,label,labelKey,color}]` | 输入控件 → 结果 `values` 中的一项 |
-| `submit` | `text`/`labelKey` | 确认/取消行 (提交或取消整份表单) |
-| `diff` | `path`, `oldStr`, `newStr` | 差异对比 (可选, 宿主可降级为文本) |
+| `gap` | `lines` | 空行 |
+| `custom` | `component`, `props`, `fallback` | **预留字段**: 客户端自定义渲染组件 (组件名 + 属性); 宿主无该组件时渲染 `fallback` 文本 |
 
-- 未知 `kind` / 未知字段: **忽略** (向前兼容, 不要报错)
-- `view` 留空时按 `inputType` 推导: `bool`→`buttons`(未声明 `buttons` 时用是/否) /
-  `enum`→`list` / `int`|`double`→`number` / 其余→`text`
+**控件块 (`blocks[].kind == "control"`)**
+
+| `control` | 字段 | 渲染 | 结果值 |
+|-----------|------|------|--------|
+| `buttons` | `options[{value,label,labelKey,color}]`, `defaultValue`, `commitOnPick` | 横排按钮; `commitOnPick=true` 点击即选中并提交整份表单 (一问一答形态) | 选中项 `value` (原始 JSON) |
+| `select` | `options`, `defaultValue` | 竖排单选列表 | 选中项 `value` |
+| `checkbox` | `label`/`labelKey`, `defaultValue`(bool) | 勾选行 | 布尔 |
+| `text` | `label`/`labelKey`, `help`/`helpKey`, `defaultValue`, `multiline`(预留) | 文本输入框 | 字符串 |
+| `number` | `defaultValue`, `integer`, `min`, `max`, `step` | 数值控件 (- 输入 +) | 数值 (integer=true 时为整数) |
+
+通用控件字段: `id` (结果键, 同一描述内唯一; 缺省 "value")、`label`/`labelKey`
+(控件上方标签)、`help`/`helpKey` (标签下方说明)、`indent`。
+
+**提交行 (`blocks[].kind == "submit"`)**
+
+`label`/`labelKey` = 确认按钮 (缺省 "确认"), `cancelLabel`/`cancelLabelKey` = 取消
+(缺省 "取消")。点击确认 = 提交整份表单; 点击取消 = 取消整个中断请求。
+
 - `color` 取值 `error`/`accent`/`hint`/`normal`/`thinking`/`tool`, 宿主按自身主题映射
-- 结果 **values 顺序 = `ui.values` 声明的 id 顺序** (留空 = `items` 中 `input` 项顺序;
-  与 `argJson.inputs[]` 顺序一致), 未提交 (取消) 时回传空数组
+- 结果恒为对象 `{"values": {"<控件 id>": 值}}`; **空对象 = 未提交/取消** (消费端按
+  未应答处理, 与 HTTP/权限语义一致)
+- 内容块与控件块可任意混排 (版式完全由生产者决定); 未知块类型忽略
 
 **示例 (权限询问的应答, 含勾选项)**
 
 ```jsonc
-// EVT_INTERRUPT_REQ.argJson.ui (节选)
+// EVT_INTERRUPT_REQ.argJson.ui (节选; 由 preset::permissionCard 生成)
 { "version": 1,
   "header": { "segments": [ {"text":"! [Permission] ","labelKey":"interrupt.permissionBadge",
                              "color":"error","bold":true},
                             {"text":"read_file","color":"accent","bold":true},
                             {"text":" filesystem_read","color":"hint"} ] },
-  "items": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
-             {"kind":"gap"},
-             {"kind":"toggle","id":"remember","text":"Remember this choice",
-              "labelKey":"interrupt.remember"},
-             {"kind":"gap"},
-             {"kind":"input","id":"value","view":"buttons","inputType":"bool",
-              "buttons":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
-                         {"value":"false","label":"Deny","labelKey":"interrupt.deny"}] } ],
-  "values": ["value"], "options": ["remember"] }
+  "blocks": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
+              {"kind":"gap"},
+              {"kind":"control","id":"remember","control":"checkbox",
+               "label":"Remember this choice","labelKey":"interrupt.remember","defaultValue":false},
+              {"kind":"gap"},
+              {"kind":"control","id":"decision","control":"buttons","commitOnPick":true,
+               "defaultValue":"false",
+               "options":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
+                          {"value":"false","label":"Deny","labelKey":"interrupt.deny",
+                           "color":"error"}]} ] }
 
 // 宿主应答 (允许 + 记住本次选择):
-{"values":["true"],"options":{"remember":true}}
+{"values":{"decision":"true","remember":true}}
 ```
 
-**示例 (多控件表单 + 勾选项)**
+**示例 (多控件表单 + 提交行)**
 
 ```jsonc
-// items: 两个输入控件 (路径 + 次数) + 勾选项; values 顺序 = ["path","count"]
-{"values":["/tmp/a.txt","4"],"options":{"force":true}}
+// 控件 id: path / count / force
+{"values":{"path":"/tmp/a.txt","count":4,"force":true}}
 ```
 
-伪代码 (任意语言): 遍历 `items`, 维护 `valuesById`/`optionsById` 两个 map; 点击
-`submit` 的确认时按 `ui.values`/`ui.options` 顺序取值 → 拼 `{"values":[...],"options":{...}}`
-→ `agentxx_ffi_interrupt_respond(handle, interruptId, json)`; 取消时回传
-`{"values":[],"options":{}}` (与 HTTP/权限语义一致: 未应答)。
+伪代码 (任意语言): 遍历 `blocks`, 内容块直接渲染, `control` 块按 `control` 字段渲染
+控件并维护 `id → 值` map; 点击 `submit` 的确认 (或 `commitOnPick` 按钮) 时把 map 拼成
+`{"values":{...}}` → `agentxx_ffi_interrupt_respond(handle, interruptId, json)`;
+取消时回传 `{"values":{}}`。
 
-> 参考实现: 控制台宿主见 `agent/example/ffi/dart/` (按 `inputs[]` 逐项问答的最小形态);
+> 参考实现: 控制台宿主见 `agent/example/ffi/dart/` (按 `control` 块逐项问答的最小形态);
 > 完整描述驱动渲染见 TUI 的 `InterruptView` (`agent/client/.../components/interrupt_view.cpp`)。
 
 ## 5. 语言绑定与示例
@@ -314,7 +328,7 @@ ui = { "version": 1,
 - **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
 - **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_plugin_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
 - **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_FFI_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
-- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此零语义通用渲染 (项类型 text/gap/toggle/input/submit/separator/diff，渲染指引见 4.6)；`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`，其顺序即结果 values 顺序 (行式前端可直接逐项问答；空 `type` 表示无需输入，应答 `{"values":[],"options":{}}`)
+- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化 (`{name,arg,resultId,ui}`)；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此零语义通用渲染 (块类型 text/markdown/diff/separator/gap/control/submit，渲染指引见 4.6)；结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。参数类型化声明 (`inputs[]`) 与"参数类型"概念已删除：需要"若干类型化输入 + 确认"形态时由生产者用预设模板 `preset::inputForm` 生成描述
 - **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_ffi_malloc` 分配，宿主必须 `agentxx_ffi_free` 释放；`agentxx_ffi_strdup_n` 为统一拷贝入口
 
 

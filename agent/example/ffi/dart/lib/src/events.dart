@@ -90,34 +90,76 @@ class PluginDataEvent extends AgentEvent {
   PluginDataEvent(super.raw);
 }
 
-/// HIL 中断输入项 (InterruptHandleArg::InterruptHandleInputItem 对应)
-class InterruptInputItem {
-  InterruptInputItem._(
-      this.label, this.depict, this.type, this.defaultValue, this.enumValues);
+/// 中断描述中的候选项 (control: buttons / select)
+class InterruptOption {
+  InterruptOption._(this.value, this.label);
 
-  factory InterruptInputItem.fromJson(Map<String, dynamic> j) {
-    return InterruptInputItem._(
-      j['label'] as String? ?? '',
-      j['depict'] as String? ?? '',
-      j['type'] as String? ?? '',
-      j['defaultValue'] as String? ?? '',
-      (j['enumValues'] as List<dynamic>?)?.cast<String>() ?? const [],
+  factory InterruptOption.fromJson(Map<String, dynamic> j) {
+    final v = j['value'];
+    return InterruptOption._(
+      v ?? '',
+      j['label'] as String? ?? (v is String ? v : '${v ?? ''}'),
     );
   }
 
+  /// 候选项原始值 (字符串/数值/布尔; 应答原样回传)
+  final dynamic value;
   final String label;
-  final String depict;
-
-  /// '' | bool | int | double | string | enum
-  final String type;
-  final String defaultValue;
-  final List<String> enumValues;
 }
 
-/// EVT_INTERRUPT_REQ: HIL 中断询问 (权限确认 / 输入收集)
+/// 中断描述中的控件块 (kind == "control")
+///
+/// 形态即语义 (协议内没有"参数类型"): buttons / select / checkbox / text / number
+class InterruptControl {
+  InterruptControl._({
+    required this.id,
+    required this.control,
+    required this.label,
+    required this.help,
+    required this.options,
+    required this.defaultValue,
+    required this.integer,
+    required this.min,
+    required this.max,
+  });
+
+  factory InterruptControl.fromJson(Map<String, dynamic> j) {
+    return InterruptControl._(
+      id: j['id'] as String? ?? 'value',
+      control: j['control'] as String? ?? 'text',
+      label: j['label'] as String? ?? '',
+      help: j['help'] as String? ?? '',
+      options: (j['options'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(InterruptOption.fromJson)
+          .toList(growable: false),
+      defaultValue: j['defaultValue'],
+      integer: j['integer'] as bool? ?? false,
+      min: (j['min'] as num?)?.toDouble(),
+      max: (j['max'] as num?)?.toDouble(),
+    );
+  }
+
+  /// 结果键 (应答 JSON 的 values 键)
+  final String id;
+  final String control;
+  final String label;
+  final String help;
+  final List<InterruptOption> options;
+  final dynamic defaultValue;
+  final bool integer;
+  final double? min;
+  final double? max;
+
+  /// 结果值的 JSON 形态 (checkbox=布尔 / number=数值 / 其余=字符串/原始值)
+  bool get isBoolean => control == 'checkbox';
+  bool get isNumber => control == 'number';
+  bool get isChoice => control == 'buttons' || control == 'select';
+}
+
 class InterruptReqEvent extends AgentEvent {
   InterruptReqEvent(super.raw) {
-    // argJson 为内嵌 JSON 字符串 (InterruptHandleArg): {name,arg,inputs,resultId}
+    // argJson 为内嵌 JSON 字符串 (InterruptHandleArg): {name,arg,resultId,ui}
     var arg = raw['argJson'];
     if (arg is String && arg.isNotEmpty) {
       try {
@@ -129,10 +171,12 @@ class InterruptReqEvent extends AgentEvent {
     if (arg is Map<String, dynamic>) {
       interruptName = arg['name'] as String? ?? '';
       argData = arg['arg'];
-      inputs = (arg['inputs'] as List<dynamic>? ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .map(InterruptInputItem.fromJson)
-          .toList(growable: false);
+      final ui = arg['ui'];
+      if (ui is Map<String, dynamic>) {
+        uiBlocks = (ui['blocks'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .toList(growable: false);
+      }
     }
   }
 
@@ -145,7 +189,23 @@ class InterruptReqEvent extends AgentEvent {
   /// 中断名: "permission" | "subagent" | 自定义输入收集 ...
   String interruptName = '';
   dynamic argData;
-  List<InterruptInputItem> inputs = const [];
+
+  /// 描述块 (原始 JSON; 内容块用于展示, 控件块解析为 [controls])
+  List<Map<String, dynamic>> uiBlocks = const [];
+
+  /// 控件块 (按描述顺序; 应答 values 的键为控件 id)
+  List<InterruptControl> get controls => uiBlocks
+      .where((b) => b['kind'] == 'control')
+      .map(InterruptControl.fromJson)
+      .toList(growable: false);
+
+  /// 内容块纯文本 (text/markdown 原文; 供控制台宿主展示)
+  List<String> get contentLines => uiBlocks
+      .where((b) =>
+          b['kind'] == 'text' || b['kind'] == 'markdown')
+      .map((b) => b['text'] as String? ?? '')
+      .where((s) => s.isNotEmpty)
+      .toList(growable: false);
 
   /// 权限中断上下文: argJson.arg = {"category": "filesystem_read|...", "target": "path"}
   String get permissionCategory {

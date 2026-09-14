@@ -228,18 +228,6 @@ class AgentClient {
     }
   }
 
-  /// 记住权限选择 ([op]: 0=读取 1=写入; [allow]: 允许/拒绝)
-  void setPermission(String path, {required bool allow, required int op}) {
-    _checkHandle('记住权限');
-    final (rc, log) = withUtf8(
-        path,
-        (pathPtr) => _withLog((logPtr) => _bind.agentxx_ffi_set_permission(
-            _handle, pathPtr, allow ? 1 : 0, op, logPtr)));
-    if (rc != bind.AGENTXX_FFI_OK) {
-      throw AgentxxException(rc, log ?? '记住权限失败');
-    }
-  }
-
   /// 切换会话 (需开启持久化; 结果经 Sync/ModelInfo/ContextStats 事件回推)
   void switchSession(String sid) {
     _checkHandle('切换会话');
@@ -252,7 +240,8 @@ class AgentClient {
     }
   }
 
-  /// 应答 HIL 中断 ([valuesJson]: 与中断 inputs 顺序一一对应的 JSON 字符串数组)
+  /// 应答 HIL 中断 ([valuesJson]: `{"values": {"<控件 id>": 值}}` JSON 对象;
+  /// 空对象 = 未应答。权限"记住本次选择"即 values.remember, 规则由服务端注册)
   void interruptRespond(int interruptId, String valuesJson) {
     _checkHandle('应答中断');
     final (rc, log) = withUtf8(

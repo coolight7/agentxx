@@ -18,22 +18,19 @@
 
 /// 中断表单提交结果 (UI 线程 → client 线程; 一次提交/取消整份表单)
 ///
-/// - `cancelled == false`: `values` 为输入控件值数组 (顺序 = 描述声明的
-///   `InterruptUi::values` / 控件顺序), `options` 为勾选项映射
-///   (中断 UI 描述中 toggle 项的值, 如权限询问的"记住此选择": {"remember": true};
-///   无勾选项时为空对象) —— 语义由 agent 侧消费 (客户端只回传表单值/选项,
-///   不解释业务含义)
-/// - `cancelled == true`: 用户取消整份表单, values/options 无意义
+/// - `cancelled == false`: `values` 为 **控件 id → 值** 的对象
+///   (`{"decision": "true", "remember": false}`; 值类型随控件形态:
+///   checkbox=布尔 / number=数值 / buttons|select=候选项原始值 / text=字符串),
+///   语义由 agent 侧消费 (客户端只回传表单值, 不解释业务含义)
+/// - `cancelled == true`: 用户取消整份表单, values 无意义 (空对象)
 ///
 /// 一次中断请求 (一份表单 = 一条消息) 对应一个 channel: client 线程
 /// handleInterrupt 挂起接收, UI 线程 (消息列表中断视图) 提交/取消后发送。
 struct InterruptFormSubmit {
     /// true = 用户取消整份表单 (表单值全部丢弃)
-    bool                cancelled = false;
-    /// 输入控件值数组 (字符串值; bool 规范化 "true"/"false")
-    agentxx::util::Json values  = agentxx::util::Json::array();
-    /// 勾选项映射 (toggle 项 id → 布尔值)
-    agentxx::util::Json options = agentxx::util::Json::object();
+    bool cancelled = false;
+    /// 控件 id → 值 (对象; 空对象 = 未提交/取消)
+    agentxx::util::Json values = agentxx::util::Json::object();
 };
 
 using InterruptResultChannel = asio::experimental::concurrent_channel<

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
@@ -241,7 +242,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
         }
     );
     if (!argOpt.has_value()) {
-        co_return agentxx::util::Json::array();
+        co_return agentxx::util::Json::object();
     }
     const auto& handleArg = argOpt.value();
 
@@ -260,90 +261,209 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                                   : "┣━ Unknown InterruptHandleArg"
     ) << std::endl;
 
-    auto result = agentxx::util::Json::array();
-    std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
-    bool haveWaitInput = false;
+    // 内容 + 控件全部来自描述 (无 inputs[] 参数类型声明; 行式前端按控件形态问答)
+    const auto&        ui    = handleArg.ui;
+    const std::string  plain = agentxx::middleware::interruptUiPlainText(ui, 0);
+    if (!plain.empty()) {
+        // 内容块降级为纯文本 (markdown 打印原文; diff 统一 diff 文本;
+        // 控件块的候选/默认值说明也在其中)
+        std::cout << "\n  ┏━━━━━━ Prompt ━━━━━━┓\n" << plain << "\n"
+                  << "  ┗━━━━━━ Prompt ━━━━━━┛\n" << std::flush;
+    }
 
-    for (const auto& input : handleArg.inputs) {
+    namespace mw = agentxx::middleware;
+    agentxx::util::Json values        = agentxx::util::Json::object();
+    bool                haveWaitInput = false;
+    std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
+
+    /// 候选项标签 (label 优先, 空则用原始值文本)
+    auto optionLabelOf = [](const mw::InterruptUiOption& opt) -> std::string {
+        if (!opt.label.empty()) {
+            return opt.label;
+        }
+        if (opt.value.is_string()) {
+            return opt.value.get<std::string>();
+        }
+        return opt.value.is_null() ? std::string{"-"} : opt.value.dump();
+    };
+
+    for (const auto& block : ui.blocks) {
+        if (block.kind != "control") {
+            continue;
+        }
+        const std::string id    = block.id.empty() ? std::string{"value"} : block.id;
+        std::string       title = block.label.empty() ? id : block.label;
+        if (!block.help.empty()) {
+            title += fmt::format(" ({})", block.help);
+        }
+
+        // 候选项为空的可选控件 (buttons/select): 无可取值, 跳过并提示
+        if ((block.control == "buttons" || block.control == "select") && block.options.empty()) {
+            std::cout << fmt::format("  ┣━ ## {} : (no options, skipped)\n", title) << std::flush;
+            continue;
+        }
+
         bool inputSuccess = false;
         do {
-            std::cout << fmt::format("  ┣━ ## {} : {}\n", input.label, input.depict) << std::flush;
-
-            if (input.type.empty()) {
-                inputSuccess = true;
+            std::cout << fmt::format("  ┣━ ## {}\n", title) << std::flush;
+            // 控件形态提示 (与候选列表)
+            if (block.control == "buttons" || block.control == "select") {
+                for (size_t i = 0; i < block.options.size(); ++i) {
+                    std::cout << fmt::format(
+                        "  ┣━ [{}] {}\n",
+                        i + 1,
+                        optionLabelOf(block.options[i])
+                    ) << std::flush;
+                }
+                std::cout << "  ┣━ Type | option index or value\n";
+            } else if (block.control == "checkbox") {
+                std::cout << "  ┣━ Type | checkbox | `yes/y` or `no/n`\n";
+            } else if (block.control == "number") {
+                std::cout << fmt::format(
+                    "  ┣━ Type | {}{}{}\n",
+                    block.integer ? "integer" : "number",
+                    block.hasMin ? fmt::format(", min {}", block.minValue) : "",
+                    block.hasMax ? fmt::format(", max {}", block.maxValue) : ""
+                );
             } else {
-                std::string typeHint;
-                if ("bool" == input.type) {
-                    typeHint = "  ┣━ Type | bool | `yes/y` or `no/n`\n";
-                } else if ("enum" == input.type) {
-                    std::string vals;
-                    for (const auto& val : input.enumValues) {
-                        vals += fmt::format("{}, ", val);
-                    }
-                    typeHint = fmt::format("  ┣━ Type | enum | value of [{}]\n", vals);
-                } else {
-                    typeHint = fmt::format("  ┣━ Type | {}\n", input.type);
+                std::cout << "  ┣━ Type | string\n";
+            }
+            // 默认值提示
+            std::string defaultText;
+            if (block.control == "buttons" || block.control == "select") {
+                if (!block.defaultValue.is_null()) {
+                    defaultText = block.defaultValue.is_string()
+                                      ? block.defaultValue.get<std::string>()
+                                      : block.defaultValue.dump();
                 }
-                std::cout << typeHint << std::flush;
-                std::cout << fmt::format("  ┣━ Default Value: {}\n", input.defaultValue)
-                          << std::flush;
-                std::cout << "  ┣━ >>> " << std::flush;
+            } else if (block.control == "checkbox") {
+                defaultText = (block.defaultValue.is_boolean() && block.defaultValue.get<bool>())
+                                  ? "yes"
+                                  : "no";
+            } else if (block.control == "number") {
+                defaultText = block.defaultValue.is_number()
+                                  ? fmt::format("{}", block.defaultValue.get<double>())
+                                  : "0";
+            } else if (!block.defaultValue.is_null()) {
+                defaultText = block.defaultValue.is_string() ? block.defaultValue.get<std::string>()
+                                                              : block.defaultValue.dump();
+            }
+            std::cout << fmt::format("  ┣━ Default Value: {}\n", defaultText) << std::flush;
+            std::cout << "  ┣━ >>> " << std::flush;
 
-                haveWaitInput = true;
-                std::string inputValue;
-                auto        inputValueOpt = co_await getInput();
-                if (inputValueOpt.has_value()) {
-                    inputValue = inputValueOpt.value();
-                }
+            haveWaitInput        = true;
+            std::string inputValue;
+            auto        inputValueOpt = co_await getInput();
+            if (inputValueOpt.has_value()) {
+                inputValue = inputValueOpt.value();
+            }
+
+            if (block.control == "buttons" || block.control == "select") {
+                // 空输入: 取默认值 (默认值即候选项 value; 缺失取首项)
                 if (inputValue.empty()) {
-                    inputValue = input.defaultValue;
-                }
-
-                if ("bool" == input.type) {
-                    agentxx::util::toLowerSelf(inputValue);
-                    if (inputValue == "yes" || inputValue == "y") {
-                        inputValue   = "true";
-                        inputSuccess = true;
-                    } else if (inputValue == "no" || inputValue == "n") {
-                        inputValue   = "false";
+                    size_t index = 0;
+                    if (!block.defaultValue.is_null()) {
+                        for (size_t i = 0; i < block.options.size(); ++i) {
+                            if (block.options[i].value.dump() == block.defaultValue.dump()) {
+                                index = i;
+                                break;
+                            }
+                        }
+                    }
+                    values[id]   = block.options[index].value;
+                    inputSuccess = true;
+                } else {
+                    // 输入序号 (1-based) 或候选项值
+                    int64_t index = 0;
+                    const bool isIndex
+                        = agentxx::util::parseNumberFromString(inputValue, index).ec == std::errc{}
+                          && index >= 1 && index <= static_cast<int64_t>(block.options.size());
+                    if (isIndex) {
+                        values[id]   = block.options[static_cast<size_t>(index - 1)].value;
                         inputSuccess = true;
                     } else {
-                        inputSuccess = false;
-                    }
-                } else if ("int" == input.type) {
-                    int64_t num  = 0;
-                    auto    r    = agentxx::util::parseNumberFromString(inputValue, num);
-                    inputSuccess = (r.ec == std::errc{});
-                } else if ("double" == input.type) {
-                    double num;
-                    auto   r     = agentxx::util::parseNumberFromString(inputValue, num);
-                    inputSuccess = (r.ec == std::errc{});
-                } else if ("string" == input.type) {
-                    inputSuccess = true;
-                } else if ("enum" == input.type) {
-                    for (const auto& val : input.enumValues) {
-                        if (val == inputValue) {
-                            inputSuccess = true;
-                            break;
+                        for (const auto& opt : block.options) {
+                            if (opt.value.is_string()
+                                && opt.value.get<std::string>() == inputValue) {
+                                values[id]   = opt.value;
+                                inputSuccess = true;
+                                break;
+                            }
+                            if (optionLabelOf(opt) == inputValue) {
+                                values[id]   = opt.value;
+                                inputSuccess = true;
+                                break;
+                            }
                         }
                     }
                 }
-
-                if (inputSuccess) {
-                    result.push_back(inputValue);
-                } else {
-                    std::cout << "  ┣━ Invalid Input, please try again.\n" << std::flush;
+            } else if (block.control == "checkbox") {
+                std::string v = inputValue;
+                agentxx::util::toLowerSelf(v);
+                if (v.empty()) {
+                    values[id]   = block.defaultValue.is_boolean() && block.defaultValue.get<bool>();
+                    inputSuccess = true;
+                } else if (v == "yes" || v == "y" || v == "true" || v == "1") {
+                    values[id]   = true;
+                    inputSuccess = true;
+                } else if (v == "no" || v == "n" || v == "false" || v == "0") {
+                    values[id]   = false;
+                    inputSuccess = true;
                 }
+            } else if (block.control == "number") {
+                double num = 0.0;
+                if (inputValue.empty()) {
+                    num = block.defaultValue.is_number() ? block.defaultValue.get<double>() : 0.0;
+                    if (block.integer) {
+                        num = std::trunc(num);
+                    }
+                    inputSuccess = true;
+                } else if (agentxx::util::parseNumberFromString(inputValue, num).ec == std::errc{}
+                           && (!block.integer || num == std::trunc(num))
+                           && (!block.hasMin || num >= block.minValue)
+                           && (!block.hasMax || num <= block.maxValue)) {
+                    inputSuccess = true;
+                }
+                if (inputSuccess) {
+                    // 括号构造: 单元素花括号会生成数组而非数值
+                    values[id] = block.integer ? agentxx::util::Json(static_cast<int64_t>(num))
+                                               : agentxx::util::Json(num);
+                }
+            } else if (block.control == "text") {
+                // 文本控件: 空输入取默认值 (默认值可为空串)
+                if (inputValue.empty()) {
+                    values[id] = block.defaultValue.is_string()
+                                     ? block.defaultValue.get<std::string>()
+                                     : std::string{};
+                } else {
+                    values[id] = inputValue;
+                }
+                inputSuccess = true;
+            } else {
+                // 未知控件形态: 跳过 (不参与结果; 与 TUI 诊断行口径一致)
+                std::cout << "  ┣━ Unsupported control, skipped.\n" << std::flush;
+                inputSuccess = true;
+                continue;
+            }
+
+            if (inputSuccess) {
+                std::cout << fmt::format(
+                    "  ┣━ Value: {}\n",
+                    values[id].is_string() ? values[id].get<std::string>() : values[id].dump()
+                ) << std::flush;
+            } else {
+                std::cout << "  ┣━ Invalid Input, please try again.\n" << std::flush;
             }
         } while (false == inputSuccess);
     }
+
     if (false == haveWaitInput) {
         std::cout << "  ┣━ Wait user review, `Enter` to continue.\n" << std::flush;
         std::cout << "  ┣━ >>> " << std::flush;
         co_await getInput();
     }
     std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n\n" << std::flush;
-    // 结果恒为对象形态 {"values":[...], "options":{...}} (与客户端契约一致;
-    // 本前端暂不支持勾选项, options 为空对象)
-    co_return agentxx::middleware::makeInterruptResult(result, agentxx::util::Json::object());
+    // 结果恒为对象形态 {"values": {控件 id: 值}} (与客户端契约一致;
+    // 空对象 = 未提交/取消, 消费端按未应答处理)
+    co_return agentxx::middleware::makeInterruptResult(values);
 }

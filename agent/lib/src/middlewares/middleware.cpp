@@ -116,39 +116,6 @@ void BaseMiddlewareHandleInterface::printMessages(
     }
 }
 
-InterruptHandleArg::InterruptHandleInputItem
-    InterruptHandleArg::InterruptHandleInputItem::fromJson(const agentxx::util::Json& data) {
-    auto result = InterruptHandleInputItem{};
-    if (data.is_object()) {
-        if (data["label"].is_string()) {
-            result.label = data["label"].get<std::string>();
-        }
-        if (data["depict"].is_string()) {
-            result.depict = data["depict"].get<std::string>();
-        }
-        if (data["type"].is_string()) {
-            result.type = data["type"].get<std::string>();
-        }
-        if (data["enumValues"].is_array()) {
-            result.enumValues = data["enumValues"].get<std::vector<std::string>>();
-        }
-        if (data["defaultValue"].is_string()) {
-            result.defaultValue = data["defaultValue"].get<std::string>();
-        }
-    }
-    return result;
-}
-
-agentxx::util::Json InterruptHandleArg::InterruptHandleInputItem::toJson() const {
-    return agentxx::util::Json{
-        {"label",        label       },
-        {"depict",       depict      },
-        {"type",         type        },
-        {"enumValues",   enumValues  },
-        {"defaultValue", defaultValue},
-    };
-}
-
 bool InterruptHandleArg::isAccordingFormat(const agentxx::util::Json& data) {
     return data.is_object() && data["name"].is_string();
 }
@@ -164,11 +131,6 @@ std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const agentxx::ut
         }
         result.arg      = data["arg"];
         result.resultId = data.value("resultId", std::string{});
-        if (data["inputs"].is_array()) {
-            for (const auto& input : data["inputs"]) {
-                result.inputs.push_back(InterruptHandleInputItem::fromJson(input));
-            }
-        }
         if (data["ui"].is_object()) {
             result.ui = InterruptUi::fromJson(data["ui"]);
         }
@@ -177,35 +139,13 @@ std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const agentxx::ut
 }
 
 agentxx::util::Json InterruptHandleArg::toJson() const {
-    auto inputsJson = agentxx::util::Json::array();
-    for (const auto& item : inputs) {
-        inputsJson.push_back(item.toJson());
-    }
-    // 中断 UI 描述 (必填): 生产者未声明时按 [inputs] 展开通用默认表单
-    // (标签行 + 说明行 + 类型控件 + 确认取消行), 客户端不再有"无描述"分支
-    agentxx::util::Json uiJson;
-    if (ui.empty()) {
-        std::vector<InterruptUiInputSpec> specs;
-        specs.reserve(inputs.size());
-        for (const auto& item : inputs) {
-            specs.push_back(InterruptUiInputSpec{
-                .label        = item.label,
-                .depict       = item.depict,
-                .type         = item.type,
-                .defaultValue = item.defaultValue,
-                .enumValues   = item.enumValues,
-            });
-        }
-        uiJson = InterruptUi::defaultUi(specs).toJson();
-    } else {
-        uiJson = ui.toJson();
-    }
+    // 描述原样下发 (生产者负责构造; 缺失 = 该中断不进入客户端渲染路径,
+    // 客户端按契约错误处理并输出诊断行)
     auto j = agentxx::util::Json{
-        {"name",     name      },
-        {"arg",      arg       },
-        {"inputs",   inputsJson},
-        {"resultId", resultId  },
-        {"ui",       std::move(uiJson)},
+        {"name",     name                },
+        {"arg",      arg                 },
+        {"resultId", resultId            },
+        {"ui",       ui.toJson()         },
     };
     return j;
 }

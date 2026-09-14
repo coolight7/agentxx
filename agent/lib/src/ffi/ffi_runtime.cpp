@@ -843,12 +843,12 @@ int FfiAgentRuntime::interruptRespond(
             return AGENTXX_FFI_ERR_JSON;
         }
     }
-    // 应答载荷恒为对象形态 {"values":[...], "options":{...}} (见
+    // 应答载荷恒为对象形态 {"values": {"<控件 id>": 值}} (见
     // agentxx::middleware::makeInterruptResult); 非对象形态直接拒绝,
     // 避免契约外的载荷被静默当成"空应答"导致权限被误判为拒绝。
     // (参数校验先于中断 id 校验: 载荷错误与 id 状态无关, 报错更确定)
-    if (!val.is_object() || !val.contains("values") || !val["values"].is_array()) {
-        err = "valuesJson 须为 {\"values\":[...], \"options\":{...}} 对象形态";
+    if (!val.is_object() || !val.contains("values") || !val["values"].is_object()) {
+        err = "valuesJson 须为 {\"values\":{\"<控件 id>\":值}} 对象形态";
         return AGENTXX_FFI_ERR_INVALID;
     }
     if (!hasPendingInterrupt(interruptId)) {

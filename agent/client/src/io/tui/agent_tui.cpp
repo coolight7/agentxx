@@ -2317,11 +2317,11 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         }
     );
     if (!argOpt.has_value()) {
-        co_return agentxx::util::Json::array();
+        co_return agentxx::util::Json::object();
     }
     const auto& handleArg = argOpt.value();
-    // 中断 UI 描述 (服务端必填, 见 InterruptHandleArg::toJson): 一份描述对应
-    // 一份表单 (一条消息); 缺失 (版本不匹配) 时留空, 客户端渲染诊断行且不可交互
+    // 中断 UI 描述 (HIL 中断必填, 见 InterruptHandleArg::ui): 一份描述对应
+    // 一份表单 (一条消息); 缺失/非法时留空, 客户端渲染诊断行且不可交互
     const agentxx::util::Json uiJson
         = handleArg.ui.empty() ? agentxx::util::Json{} : handleArg.ui.toJson();
 
@@ -2358,28 +2358,19 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     postRedraw();
 
     // 等待一次提交或取消 (通道关闭 = server 过期通知 / TUI 退出 → 按未应答返回)
-    auto                values  = agentxx::util::Json::array();
-    agentxx::util::Json options = agentxx::util::Json::object();
+    auto values          = agentxx::util::Json::object();
     auto [ec, gotSubmit] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
     if (!ec && !gotSubmit.cancelled) {
-        // 一次提交: values 顺序由描述声明 (见 InterruptUi::values), options
-        // 为勾选项映射; 语义由 agent 侧消费
-        if (gotSubmit.values.is_array()) {
+        // 一次提交: values 为控件 id → 值 的对象 (控件形态决定值类型);
+        // 语义由 agent 侧消费 (客户端只回传表单值, 不解释业务含义)
+        if (gotSubmit.values.is_object()) {
             values = std::move(gotSubmit.values);
-        }
-        if (gotSubmit.options.is_object()) {
-            for (auto it = gotSubmit.options.begin(); it != gotSubmit.options.end(); ++it) {
-                if (it->is_boolean()) {
-                    options[it.key()] = it->get<bool>();
-                }
-            }
         }
     }
 
-    // 结果形态: 恒为对象 {"values":[...], "options":{...}} (见 makeInterruptResult;
-    // 无勾选项时 options 为空对象 —— 消费端按同一结构解析, 无"纯数组"分支)
-    const agentxx::util::Json result
-        = agentxx::middleware::makeInterruptResult(values, options);
+    // 结果形态: 恒为对象 {"values": {控件 id: 值}} (见 makeInterruptResult;
+    // 未提交/取消 = 空对象 —— 消费端按未应答处理)
+    const agentxx::util::Json result = agentxx::middleware::makeInterruptResult(values);
 
     activeInterrupts_.erase(wireId);
     awaitingInterruptInput_.store(false, std::memory_order_release);

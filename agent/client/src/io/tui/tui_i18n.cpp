@@ -180,6 +180,8 @@ constexpr Entry kTable[] = {
     {"interrupt.remember",        "Remember this choice",                                "记住此选择"                                                                                  },
     {"interrupt.tipInt",          "( Invalid integer, please input again. )",            "( 无效整数, 请重新输入。 )"                                                             },
     {"interrupt.tipNum",          "( Invalid number, please input again. )",             "( 无效数字, 请重新输入。 )"                                                             },
+    {"interrupt.tipRange",        "( Out of range (limit: {}), please input again. )",   "( 超出范围 (限制: {}), 请重新输入。 )"                                                   },
+    {"interrupt.tipNoOptions",    "( This control has no selectable option. )",          "( 该控件没有可选候选项。 )"                                                             },
 
     // ---- 思考消息 (加密思考占位) ----
     {"think.encryptedTokens",     "encrypted thinking {} tokens",                        "加密思考 {} 词元"                                                                           },

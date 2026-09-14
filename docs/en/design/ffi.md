@@ -158,7 +158,7 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) |
 | `EVT_MODEL_INFO` | wire model_info JSON | Current model information (query/switch result) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | Startup components (MCP, Skills, Memory, Plugins) loading status |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg`: **`ui` is the required declarative form descriptor** (header segments + items text/gap/toggle/input/submit/separator/diff + result mapping) and `inputs` is the values contract plus line-based prompt metadata (`bool`/`int`/`double`/`string`/`enum` + `defaultValue`/`enumValues`). See 4.6 for the rendering guide |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`): **`ui` is the required declarative form descriptor** (header segments + ordered blocks text/markdown/diff/separator/gap/control/submit + reserved custom). See 4.6 for the rendering guide |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | Interrupt expired or cancelled; can no longer be answered |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | Agent-side plugin event forwarding (`{plugin,event,data}`) |
 | `EVT_ERROR` | `{"code","message"}` | Internal error |
@@ -201,80 +201,98 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
 
 `EVT_INTERRUPT_REQ.argJson.ui` is a **self-contained form descriptor**: the host needs
 no knowledge of any concrete prompt type (permission confirmation, repeat-call warning,
-future prompts) — just render the item kinds below and answer via
-`agentxx_ffi_interrupt_respond` with `{"values":[...],"options":{...}}`.
+future prompts) — just render the block kinds below and answer via
+`agentxx_ffi_interrupt_respond` with `{"values": {"<control id>": value}}`.
 
-> `version` is currently 1 (= form semantics). **Backward compatibility with the old
-> schema is intentionally dropped**: when host and library (or client and server)
-> versions differ, unknown item kinds/fields can only be ignored — no semantic
-> downgrade is performed.
+> `version` is currently 1 (first version of the schema). **No backward compatibility**:
+> a missing/invalid descriptor is treated as a contract error (show a notice, keep it
+> non-interactive); unknown block kinds/fields are ignored or degraded to their
+> `fallback` text (forward compatible — do not fail).
 
 **Structure**
 
 ```
 ui = { "version": 1,
-       "header": { "segments": [ {"text","labelKey","color","bold","dim"}, ... ] },  // optional
-       "items":  [ ... ],                                     // render in order
-       "values": ["<input item id>", ...],                    // result values order
-       "options": ["<toggle item id>", ...] }                 // result options order
+       "header": { "segments": [ {"text","labelKey","color","bold","dim"}, ... ] },  // optional = default prefix
+       "blocks": [ ... ] }                                    // render in order (content and controls interleaved)
 ```
 
-**Item kinds (`items[].kind`)**
+**Content blocks (`blocks[].kind`)**
 
 | kind | Fields | Rendering |
 |------|--------|-----------|
-| `text` | `text`/`labelKey`, `color`, `bold`, `dim`, `wrap`, `indent` | Text line (`wrap` = hard-wrap to width) |
-| `gap` | `lines` | Blank line(s) |
+| `text` | `text`/`textKey`, `color`, `bold`, `dim`, `wrap`, `indent` | Text line (`wrap` = hard-wrap to width; empty text renders nothing) |
+| `markdown` | `text`, `indent` | Rich markdown (headings/lists/tables/code fences; hosts without markdown may print the raw source) |
+| `diff` | `path`, `oldStr`, `newStr` | Diff view (hosts may degrade to unified diff text) |
 | `separator` | `indent` | Divider line |
-| `toggle` | `id`, `text`, `defaultToggle` | Checkbox row → result `options[id]` |
-| `input` | `id`, `text` (control label), `inputType` (bool/int/double/string/enum), `defaultValue`, `enumValues`, `view` (buttons/number/text/list), `buttons[{value,label,labelKey,color}]` | Input control → one entry in result `values` |
-| `submit` | `text`/`labelKey` | Confirm/cancel row (submits or cancels the whole form) |
-| `diff` | `path`, `oldStr`, `newStr` | Diff view (optional; hosts may degrade to plain text) |
+| `gap` | `lines` | Blank line(s) |
+| `custom` | `component`, `props`, `fallback` | **Reserved fields**: client-side custom component (name + props); hosts without it render `fallback` |
 
-- Unknown `kind` / unknown fields: **ignore** (forward compatible — do not fail)
-- Empty `view` is derived from `inputType`: `bool`→`buttons` (Yes/No when `buttons` is
-  absent) / `enum`→`list` / `int`|`double`→`number` / otherwise→`text`
+**Control blocks (`blocks[].kind == "control"`)**
+
+| `control` | Fields | Rendering | Result value |
+|-----------|--------|-----------|--------------|
+| `buttons` | `options[{value,label,labelKey,color}]`, `defaultValue`, `commitOnPick` | Horizontal buttons; `commitOnPick=true` selects and submits the whole form on click (one-question-one-answer) | Selected option `value` (raw JSON) |
+| `select` | `options`, `defaultValue` | Vertical single-choice list | Selected option `value` |
+| `checkbox` | `label`/`labelKey`, `defaultValue`(bool) | Checkbox row | Bool |
+| `text` | `label`/`labelKey`, `help`/`helpKey`, `defaultValue`, `multiline`(reserved) | Text input | String |
+| `number` | `defaultValue`, `integer`, `min`, `max`, `step` | Numeric control (- input +) | Number (integer when `integer=true`) |
+
+Common control fields: `id` (result key, unique per descriptor; defaults to `"value"`),
+`label`/`labelKey` (label above the control), `help`/`helpKey` (description below),
+`indent`.
+
+**Submit row (`blocks[].kind == "submit"`)**
+
+`label`/`labelKey` = confirm button (default localized "Confirm"), `cancelLabel`/
+`cancelLabelKey` = cancel (default localized "Cancel"). Confirm submits the whole form;
+cancel aborts the interrupt request.
+
 - `color` ∈ `error`/`accent`/`hint`/`normal`/`thinking`/`tool`; map to your own theme
-- Result **`values` order = the `ui.values` id order** (empty = `items` input order,
-  identical to `argJson.inputs[]` order). A cancelled form answers with an empty array
+- The answer is always an object `{"values": {"<control id>": value}}`; **an empty object
+  means "not answered"/cancelled** (same semantics as HTTP/permission)
+- Content and control blocks may be interleaved freely (layout is decided by the
+  producer); unknown block kinds are ignored
 
-**Example (permission card answer with a toggle)**
+**Example (permission card answer with a checkbox)**
 
 ```jsonc
-// EVT_INTERRUPT_REQ.argJson.ui (excerpt)
+// EVT_INTERRUPT_REQ.argJson.ui (excerpt; generated by preset::permissionCard)
 { "version": 1,
   "header": { "segments": [ {"text":"! [Permission] ","labelKey":"interrupt.permissionBadge",
                              "color":"error","bold":true},
                             {"text":"read_file","color":"accent","bold":true},
                             {"text":" filesystem_read","color":"hint"} ] },
-  "items": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
-             {"kind":"gap"},
-             {"kind":"toggle","id":"remember","text":"Remember this choice",
-              "labelKey":"interrupt.remember"},
-             {"kind":"gap"},
-             {"kind":"input","id":"value","view":"buttons","inputType":"bool",
-              "buttons":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
-                         {"value":"false","label":"Deny","labelKey":"interrupt.deny"}] } ],
-  "values": ["value"], "options": ["remember"] }
+  "blocks": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
+              {"kind":"gap"},
+              {"kind":"control","id":"remember","control":"checkbox",
+               "label":"Remember this choice","labelKey":"interrupt.remember","defaultValue":false},
+              {"kind":"gap"},
+              {"kind":"control","id":"decision","control":"buttons","commitOnPick":true,
+               "defaultValue":"false",
+               "options":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
+                          {"value":"false","label":"Deny","labelKey":"interrupt.deny",
+                           "color":"error"}]} ] }
 
 // Host answer (allow + remember this choice):
-{"values":["true"],"options":{"remember":true}}
+{"values":{"decision":"true","remember":true}}
 ```
 
-**Example (multi-control form with a toggle)**
+**Example (multi-control form with a submit row)**
 
 ```jsonc
-// items: two input controls (path + count) plus a toggle; values order = ["path","count"]
-{"values":["/tmp/a.txt","4"],"options":{"force":true}}
+// control ids: path / count / force
+{"values":{"path":"/tmp/a.txt","count":4,"force":true}}
 ```
 
-Pseudocode (any language): iterate `items`, keep two maps `valuesById`/`optionsById`;
-on the `submit` confirm, emit values in `ui.values`/`ui.options` order →
-`{"values":[...],"options":{...}}` → `agentxx_ffi_interrupt_respond(handle, interruptId, json)`;
-on cancel answer `{"values":[],"options":{}}` (same "unanswered" semantics as permission).
+Pseudocode (any language): iterate `blocks`; render content blocks directly and render
+`control` blocks according to their `control` field while maintaining an
+`id → value` map; on the `submit` confirm (or a `commitOnPick` button) build
+`{"values":{...}}` → `agentxx_ffi_interrupt_respond(handle, interruptId, json)`;
+answer `{"values":{}}` on cancel.
 
 > Reference implementations: the console host in `agent/example/ffi/dart/` (minimal
-> `inputs[]`-driven Q&A) and the fully descriptor-driven TUI `InterruptView`
+> `control`-block-driven Q&A) and the fully descriptor-driven TUI `InterruptView`
 > (`agent/client/.../components/interrupt_view.cpp`).
 
 ## 5. Language Bindings & Examples
@@ -298,5 +316,5 @@ Other languages integrate via the same pattern: load whitelisted symbols via `dl
 - **Working Directory Resolution**: `config_json.workDir` supports `~`/`${VAR}` expansion and relative paths (resolved to absolute against process `cwd`). If unspecified, it falls back to process `cwd`, matching `AgentConfig::resolvedWorkDir()` semantics. Session-level worktree bindings (`Session::WorktreeBinding`) and multi-source fallbacks via `AgentContext::getSessionWorkDir` operate identically for FFI handles (all relative paths within the session adapt dynamically).
 - **Plugin Sides Option**: `plugins[].sides` accepts `auto` (default, detected automatically via `agentxx_plugin_client_create` export), `agent` (loaded only on agent side), or `client` (loaded only on client side; FFI typically uses `agent`).
 - **Synchronous Query Concurrency**: For `get_model_info`/`get_context_messages`/`list_sessions`, only one in-flight request per handle is permitted at any given time (server protocols are strictly sequential). On 10s timeout, it returns `AGENTXX_FFI_ERR_TIMEOUT`, and an `EVT_ERROR` payload `{"code","message"}` is also dispatched.
-- **HITL Input Schema**: In `EVT_INTERRUPT_REQ`, `argJson` is the serialized `InterruptHandleArg`. `ui` is the required declarative form descriptor (schema: `agent/middlewares/interrupt_ui.h`; item kinds text/gap/toggle/input/submit/separator/diff plus the `values`/`options` result mapping) — see section 4.6 for the generic host rendering guide. `inputs[]` carries `label`, `depict`, `type` (`bool`/`int`/`double`/`string`/`enum`), `defaultValue`, `enumValues`; its order is the result `values` order (line-based hosts can simply prompt item by item; an empty `type` means no input is required — respond with `{"values":[],"options":{}}`).
+- **HITL Input Schema**: In `EVT_INTERRUPT_REQ`, `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`). `ui` is the required declarative form descriptor (schema: `agent/middlewares/interrupt_ui.h`; block kinds text/markdown/diff/separator/gap/control/submit) — see section 4.6 for the generic host rendering guide. The answer is always `{"values": {"<control id>": value}}` (empty object = not answered). The typed-parameter declaration (`inputs[]`) and the whole "parameter type" concept were removed: producers that want a "typed inputs + confirm" form use the preset template `preset::inputForm` to generate the descriptor.
 - **Cross-CRT Heap Management**: All `char*` return values and `char** log` pointers are allocated via `agentxx_ffi_malloc`; hosts must release them using `agentxx_ffi_free`. `agentxx_ffi_strdup_n` is the standard copy helper.

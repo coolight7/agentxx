@@ -73,11 +73,8 @@ public:
         std::string_view /*interruptValue*/,
         std::string_view /*interruptArgJson*/
     ) override {
-        // 中断结果恒为对象形态 {values, options} (客户端契约)
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json::array(),
-            agentxx::util::Json::object()
-        );
+        // 中断结果恒为对象形态 {"values": {控件 id: 值}} (客户端契约)
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
     }
 };
 
@@ -113,24 +110,23 @@ public:
                     lastTarget = parsed["arg"].value("target", std::string{});
                 }
                 if (parsed.contains("ui") && parsed["ui"].is_object()) {
-                    auto items = parsed["ui"].value("items", agentxx::util::Json::array());
-                    for (const auto& item : items) {
-                        if (item.value("kind", "") == "text" && item.value("color", "") == "hint") {
-                            lastUiDescText = item.value("text", std::string{});
+                    // 描述块: 目标路径为 hint 色文本块 (权限卡片预设生成)
+                    auto blocks = parsed["ui"].value("blocks", agentxx::util::Json::array());
+                    for (const auto& block : blocks) {
+                        if (block.value("kind", "") == "text"
+                            && block.value("color", "") == "hint") {
+                            lastUiDescText = block.value("text", std::string{});
                             break;
                         }
                     }
                 }
             }
-            co_return agentxx::middleware::makeInterruptResult(
-                agentxx::util::Json::array({"true"}),
-                agentxx::util::Json::object()
-            );
+            co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+                {"decision", "true"},
+                {"remember", false},
+            });
         }
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json::array(),
-            agentxx::util::Json::object()
-        );
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
     }
 };
 

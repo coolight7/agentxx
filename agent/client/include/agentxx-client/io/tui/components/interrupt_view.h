@@ -2,6 +2,7 @@
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
+#include "agentxx-client/io/tui/ui_items_render.h"
 #include "agentxx/middlewares/interrupt_ui.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
@@ -10,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace agentxx {
@@ -20,21 +22,25 @@ namespace client {
 /// 设计目标: 中断询问的形态完全由**声明的 UI 描述**决定
 /// (TUIMessage::InterruptData::ui, schema 见
 /// [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h)),
-/// 本类不包含任何具体工具/节点 (含 permission) 的分支 —— 权限卡片、普通输入
-/// 询问、后续新增的询问形态都走同一套渲染与交互实现:
-/// - 渲染: 描述项 (text/gap/toggle/input/submit/separator/diff) → ftxui Element;
-///   text/button/diff 等复用 plugin_ui_items 的共享 helper (与工具装饰同实现)
-/// - 估算: 同一份描述逐项求行数 (与渲染同一套判定, 避免两处布局知识漂移)
-/// - 交互: 命中区域 = (消息下标, 描述项下标, 子序号), 语义按项类型处理
-/// - 结果: 输入控件值数组 + 勾选项映射 (options) 经结果通道回传 client 线程;
-///   规则注册等持久化语义完全由 agent 侧消费结果完成 (客户端不参与)
+/// 本类不含任何具体工具/节点 (含 permission) 的分支 —— 权限卡片、普通询问、
+/// 后续新增的询问形态都走同一套渲染与交互实现:
+/// - 描述 = 有序块列表 ([middleware::InterruptUi::blocks]): 内容块
+///   (text/markdown/diff/separator/gap) 交给共享块渲染层
+///   ([ui_items_render.h], 与插件装饰 items 同一实现), 控件块 (control) 与本
+///   类的提交行 (submit) 由本类渲染 (需要表单状态)
+/// - **单一布局过程**: [layoutForm] 依描述 + 表单状态逐块生成行模型
+///   ([UiRow] 序列); 渲染 = 行序列包成 vbox, 高度估算 = 各行行数之和 ——
+///   两者同源, 不存在"渲染与估算两套判定漂移"的问题
+/// - 交互: 命中区域 = (消息下标, 块下标, 控件 id, 子序号), 语义按控件形态处理
+/// - 结果: 控件 id → 值 的对象 (`{"values": {...}}`), 经结果通道回传 client
+///   线程; 规则注册等业务语义完全由 agent 侧消费结果完成 (客户端不参与)
 ///
 /// 约束: **一条中断消息 = 一份表单** (一次中断请求渲染为一条消息), 描述中的
-/// 全部 input 项都是可交互控件, 用户一次提交全部值 (values 顺序 = 描述声明的
-/// `InterruptUi::values`, 未声明时按 items 中 input 项顺序)。
+/// 全部 control 块都是可交互控件, 用户一次提交全部值。
 ///
 /// UI 状态 (各控件编辑文本/选中项/勾选项/校验提示) 存于本类的状态表,
-/// key = 中断请求 id, 与消息内容 (可被复制/重放) 分离。
+/// key = 中断请求 id, 与消息内容 (可被复制/重放) 分离; 控件状态按 **控件 id**
+/// 索引 (而非块下标), 版式变化不影响状态归属。
 class InterruptView {
 public:
 
@@ -43,48 +49,45 @@ public:
     struct HitBox {
         /// 消息下标 (0-based, 对应 TUIRenderState::messages)
         size_t msgIndex = 0;
-        /// 描述项下标 (ui.items 的下标; 点击派发按它定位具体项, 与项 id 无关,
-        /// 故描述内多个控件即使 id 相同也不会错位)
-        size_t itemIndex = 0;
-        /// 描述项 id (input/toggle 项为描述声明的 id, 提交行为 "submit";
-        /// 供测试与诊断查询)
-        std::string itemId;
-        /// 子序号: 值按钮下标 / 枚举项下标 / 数值控件 (0=减,1=加,2=输入框) /
-        /// 提交行 (0=确认,1=取消)
+        /// 描述块下标 (ui.blocks 的下标; 点击派发按它定位具体块, 与控件 id 无关)
+        size_t blockIndex = 0;
+        /// 控件 id (control 块为描述声明的 id; 提交行固定 "submit")
+        std::string controlId;
+        /// 子序号:
+        /// - buttons / select: 候选项下标
+        /// - number: 0=减, 1=加, 2=输入框
+        /// - checkbox / text: 0
+        /// - submit: 0=确认, 1=取消
         int sub = 0;
         /// 控件 Box (布局时 reflect 填充)
         std::shared_ptr<ftxui::Box> box;
     };
 
-    /// 单个输入控件的表单状态 (UI 线程独占; 非消息内容)
-    struct InputState {
-        /// 文本/数值输入框的当前文本 (初始 = 描述声明的默认值)
+    /// 单个控件的表单状态 (UI 线程独占; 非消息内容)
+    struct ControlState {
+        /// text/number 输入框的当前文本 (初始 = 描述声明的默认值)
         std::string editText;
         /// 输入框是否已被编辑 (首次输入替换默认值, 与输入框激活语义一致)
         bool edited = false;
-        /// 值按钮/枚举项的选中下标
+        /// buttons/select 的选中下标
         int selected = 0;
+        /// checkbox 的勾选状态
+        bool checked = false;
         /// 校验失败提示 (显示于该控件下方; 下次编辑时清除)
         std::string tip;
     };
 
     /// 中断表单状态 (UI 线程独占; 非消息内容)
     struct FormState {
-        /// 各输入控件状态 (下标 = 描述中 input 项的顺序)
-        std::vector<InputState> inputs;
-        /// 键盘作用的输入控件下标 (点击控件时更新; 空表单时为 0)
-        int focused = 0;
-        /// 勾选项状态 (描述项 id → 是否勾选)
-        std::map<std::string, bool> toggles;
+        /// 各控件状态 (key = 控件 id)
+        std::map<std::string, ControlState, std::less<>> controls;
+        /// 键盘作用的控件 id (点击控件时更新; 无控件时为空)
+        std::string focusedId;
         /// 修改计数 (驱动消息列表缓存失效与高度重估)
         uint64_t version = 0;
 
-        /// 取指定输入控件状态 (越界返回静态默认值)
-        const InputState& input(size_t index) const;
-        /// 取聚焦输入控件状态 (无控件时返回静态默认值)
-        const InputState& focus() const {
-            return input(static_cast<size_t>(focused < 0 ? 0 : focused));
-        }
+        /// 取指定控件状态 (不存在返回静态默认值)
+        const ControlState& control(std::string_view id) const;
     };
 
     explicit InterruptView(TUICtx& ctx);
@@ -117,11 +120,18 @@ public:
     /// 懒列表缓存失效并重估高度; 无状态返回 0)
     uint64_t stateVersion(const TUIMessage& msg) const;
 
-    /// 高度估算 (行数; 不含消息尾部空行) —— 与 build 使用同一套项判定
+    /// 高度估算 (行数; 不含消息尾部空行) —— 与 build 同一套布局过程
     size_t estimate(const TUIMessage& msg, int width) const;
 
-    /// 构建中断消息块 (Waiting 时渲染描述项与控件, 否则渲染状态行)
-    ftxui::Element build(const TUIMessage& msg, size_t msgIndex, int maxWidth);
+    /// 构建中断消息块 (Waiting 时渲染描述块与控件, 否则渲染状态行)
+    /// - [mdBuilders] markdown 渲染器生命周期 (Element 内部容器指向它;
+    ///   调用方 (消息列表) 须随 Element 持有, 否则悬空)
+    ftxui::Element build(
+        const TUIMessage&                                   msg,
+        size_t                                              msgIndex,
+        int                                                 maxWidth,
+        std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+    );
 
     /// 鼠标点击命中处理 (命中并处理返回 true)
     /// - [areaBox] 消息列表内容区 (限制命中范围, 未布局时为空 Box)
@@ -141,53 +151,6 @@ public:
 
 private:
 
-    /// 描述项解析结果 (自包含: 字段直接来自描述, 不再回退消息字段)
-    struct Resolved {
-        size_t      itemIndex = 0;
-        std::string kind;
-        // text / toggle 标签 / input 控件标签
-        std::string text;
-        std::string labelKey;
-        std::string color;
-        bool        bold   = false;
-        bool        dim    = false;
-        bool        wrap   = false;
-        int         indent = 0;
-        // gap
-        int lines = 1;
-        // toggle / input
-        std::string                                id;
-        bool                                       defaultToggle = false;
-        std::string                                inputType;
-        std::string                                defaultValue;
-        std::vector<std::string>                   enums;
-        std::string                                view;
-        std::vector<middleware::InterruptUiButton> buttons;
-        // diff
-        std::string path, oldStr, newStr;
-
-        /// 是否为可交互输入控件 (kind == input)
-        bool isInput() const {
-            return kind == "input";
-        }
-    };
-
-    /// 前一项的渲染形态 (决定提交行是否与控件同行 / 是否需前置空行):
-    /// 描述项按顺序渲染, 提交行紧跟前一项处理
-    struct Prev {
-        /// 前一项为输入控件
-        bool isInput = false;
-        /// 前一项为枚举列表控件 (多行渲染, 提交行另起一行)
-        bool isList = false;
-        /// 前一项下方已输出控件校验提示行 (提交行不再同行合并)
-        bool rowIsTip = false;
-
-        /// 提交行是否可与前一项同行 (值按钮/数值/文本控件且无提示行)
-        bool inlineSubmit() const {
-            return isInput && !isList && !rowIsTip;
-        }
-    };
-
     /// 数值输入控件子命中序号: 0=减, 1=加, 2=输入框 (文本输入框恒为 0)
     static constexpr int kSubNumMinus = 0;
     static constexpr int kSubNumPlus  = 1;
@@ -195,97 +158,104 @@ private:
     /// 提交行子命中序号: 0=确认, 1=取消 (整体取消中断请求)
     static constexpr int kSubSubmitConfirm = 0;
     static constexpr int kSubSubmitCancel  = 1;
-    /// 提交行在描述项未声明 id 时使用的固定 id
+    /// 提交行在描述块未声明 id 时使用的固定命中 id
     static constexpr std::string_view kItemIdSubmit = "submit";
 
-    /// 取消息对应的 UI 描述 (描述必填; 缺失/空描述返回空描述, 由 build 输出诊断行)
+    /// 取消息对应的 UI 描述 (描述必填; 缺失/非法返回空描述, 由 build 输出诊断行)
     middleware::InterruptUi resolveUi(const TUIMessage& msg) const;
-
-    /// 由描述项解析出渲染所需的字段 (含按钮内置回退)
-    Resolved resolveItem(const middleware::InterruptUiItem& item, size_t itemIndex) const;
-
-    /// 取表单内全部输入控件 (顺序 = 结果 values 顺序: 描述声明的 values id 优先,
-    /// 未声明时按 items 中 input 项顺序; 声明的 id 未命中项时忽略并记日志)
-    std::vector<Resolved> resolveInputs(const TUIMessage& msg) const;
-
-    /// 取描述项在输入控件列表中的下标 (非 input 项返回 -1)
-    static int inputIndexOf(const std::vector<Resolved>& inputs, size_t itemIndex);
 
     /// 消息 → 中断请求 id (非中断消息返回 false)
     static bool requestIdOf(const TUIMessage& msg, int64_t& out);
+
+    /// 控件 id (空 id 回退 "value")
+    static std::string controlIdOf(const middleware::InterruptUiBlock& block);
+
+    /// 按描述初始化单个控件状态 (默认值/选中项/勾选态)
+    static void initControlState(
+        const middleware::InterruptUiBlock& block,
+        ControlState&                       state
+    );
 
     /// 表单状态 (惰性创建并按描述初始化)
     FormState&       uiStateFor(const TUIMessage& msg);
     /// 修改表单状态 (version 递增, 使消息列表缓存失效)
     FormState&       mutateUiState(const TUIMessage& msg);
 
-    /// 勾选项当前值 (未设置时取 defaultValue)
-    bool toggleValue(const TUIMessage& msg, std::string_view id, bool defaultValue) const;
+    /// 取消息的表单状态 (不创建; 不存在返回 nullptr) —— 估算路径使用
+    const FormState* stateOf(const TUIMessage& msg) const;
 
-    /// 输入类型 → 默认控件形态 (bool=buttons / enum=list / int|double=number / 其余=text)
-    static std::string defaultViewFor(std::string_view inputType);
-
-    /// 内置的是/否值按钮 (描述未声明 buttons 时用于 bool 输入项)
-    static std::vector<middleware::InterruptUiButton> builtinBoolButtons();
-
-    /// 文本解析: labelKey 优先 (客户端词表), 缺键回退字面文本
+    /// 文本解析: labelKey/textKey 优先 (客户端词表), 缺键回退字面文本
     std::string resolveLabel(std::string_view labelKey, std::string_view text) const;
+
+    /// **单一布局过程**: 描述 + 表单状态 → 行模型 (UiRenderResult)
+    /// - [state] 为空时按描述默认值布局 (估算路径)
+    /// - [registerHits] 为真时把控件命中区域写入 hits_ (渲染路径)
+    /// - [msgIndex] 仅命中登记使用 (估算路径可传 0)
+    void layoutForm(
+        const TUIMessage&                         msg,
+        size_t                                    msgIndex,
+        const FormState*                          state,
+        int                                       width,
+        bool                                      registerHits,
+        UiRenderResult&                           out
+    ) const;
+
+    /// 控件块布局 (标签/说明 + 控件行 + 校验提示行; 命中区域按 [registerHits] 登记)
+    void layoutControl(
+        size_t                                    msgIndex,
+        size_t                                    blockIndex,
+        const middleware::InterruptUiBlock&       block,
+        const ControlState&                       state,
+        int                                       width,
+        bool                                      registerHits,
+        UiRenderResult&                           out
+    ) const;
+
+    /// 提交行布局 (确认/取消)
+    void layoutSubmit(
+        size_t                              msgIndex,
+        size_t                              blockIndex,
+        const middleware::InterruptUiBlock& block,
+        bool                                registerHits,
+        UiRenderResult&                     out
+    ) const;
 
     /// 头行渲染 (默认前缀 / 自定义分段)
     ftxui::Element buildHeader(const middleware::InterruptUi& ui) const;
 
-    /// 渲染单个描述项到 rows (prev 为前一项的形态, 决定提交行是否与控件同行)
-    void appendItemRows(
-        const TUIMessage& msg,
-        size_t            msgIndex,
-        const Resolved&   item,
-        int               inputStateIndex,
-        const Prev&       prev,
-        int               maxWidth,
-        ftxui::Elements&  rows
-    );
-
-    /// 单个描述项的估算行数 (与 appendItemRows 同一套判定)
-    size_t estimateItemLines(
-        const TUIMessage& msg,
-        const Resolved&   item,
-        int               inputStateIndex,
-        const Prev&       prev,
-        int               width
-    ) const;
-
-    /// 状态行 (Confirmed/Cancelled/Expired)
+    /// 状态行 (Confirmed/Cancelled/Expired; 描述缺失时输出诊断行)
     ftxui::Element buildStatusLine(const TUIMessage& msg) const;
 
     /// 值按钮渲染 (复用插件按钮配色; active 时高亮)
-    ftxui::Element renderValueButton(const middleware::InterruptUiButton& btn, bool active) const;
+    ftxui::Element renderValueButton(const middleware::InterruptUiOption& opt, bool active) const;
 
-    /// 记录命中区域 (msgIndex + 项下标/id + 子序号; box 经 shared_ptr 持有)
+    /// 记录命中区域 (msgIndex + 块下标 + 控件 id + 子序号; box 经 shared_ptr 持有)
     void hit(
-        size_t                      msgIndex,
-        size_t                      itemIndex,
-        std::string                 itemId,
-        int                         sub,
+        size_t                             msgIndex,
+        size_t                             blockIndex,
+        std::string                        controlId,
+        int                                sub,
         const std::shared_ptr<ftxui::Box>& box
-    );
+    ) const;
 
     /// 经结果通道回传 (通道缺失时静默丢弃并记日志)
     void sendSubmit(int64_t wireId, const InterruptFormSubmit& submit);
 
     /// 提交整份表单: 校验全部控件 (失败写各自 tip 不提交); 成功经通道回传
-    /// values + options
+    /// `{"values": {控件 id: 值}}`
     void confirm(size_t msgIndex);
 
     /// 取消整个中断请求 (通道回传整体取消)
     void cancel(size_t msgIndex);
 
-    /// 数值步进 (int/double; 作用于指定输入控件)
-    void step(size_t msgIndex, size_t inputStateIndex, double delta);
+    /// 数值步进 (作用于指定控件; delta = ±step)
+    void step(size_t msgIndex, std::string_view controlId, double delta);
 
     TUICtx& ctx_;
 
-    /// 最近一次渲染的命中区域 (UI 线程独占; beginFrame 清空, 构建期填充)
-    std::vector<HitBox> hits_;
+    /// 最近一次渲染的命中区域 (UI 线程独占; beginFrame 清空, 构建期填充;
+    /// 布局函数为 const, 故此处 mutable)
+    mutable std::vector<HitBox> hits_;
 
     /// 当前激活 (键盘作用) 的中断消息下标
     size_t activeMsg_ = static_cast<size_t>(-1);

@@ -2,6 +2,7 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
+#include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "neograph/graph/cancel.h"
@@ -184,12 +185,10 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             if (result.is_object() && result.value("__cancelled__", false)) {
                 co_return events::RespInterrupt{.handled = false, .resultJson = result.dump()};
             }
-            // 结果恒为对象形态 {"values":[...], "options":{...}} (见
-            // makeInterruptResult): 图状态 resume 只接收值列表, 故取 values 写回;
-            // options 由声明该选项的服务端消费 (权限询问在 permission 处理器内
-            // 消费, 见 rememberPermission)
+            // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult):
+            // 图状态 resume 只接收值对象, 故取 values 写回 (消费端按控件 id 取值)
             if (!result.is_object() || !result.contains("values")) {
-                // 契约违规 (旧前端/宿主回传非对象形态): 按中断未应答处理并告警
+                // 契约违规 (非对象形态): 按中断未应答处理并告警
                 XX_LOGW(
                     "[io] interrupt `{}` result is not an object with values, dropped: {}",
                     req.interruptNode,
@@ -211,15 +210,8 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
     permissionServerId_ = permRR.registerServer(
         [this](const events::ReqPermission& req, size_t /*corrId*/)
             -> asio::awaitable<events::RespPermission> {
-            auto inputItem   = agentxx::middleware::InterruptHandleArg::InterruptHandleInputItem{};
-            inputItem.label  = fmt::format("{} {}", req.toolName, req.category);
-            inputItem.depict = req.target;
-            inputItem.type   = "bool";
-            inputItem.defaultValue = "no";
-
             auto arg     = agentxx::middleware::InterruptHandleArg{};
             arg.name     = "permission";
-            arg.inputs   = {std::move(inputItem)};
             arg.resultId = "";
             // 透传权限上下文给客户端 (记住权限选择时使用):
             // - category: 权限分类 ("filesystem_read" / "filesystem_write")
@@ -228,9 +220,10 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 {"category", req.category},
                 {"target",   req.target  },
             };
-            // 中断 UI 描述 (声明式): 权限卡片形态由此描述数据决定, 客户端不含
-            // 任何 permission 分支 —— 与普通中断共用同一套通用渲染/交互实现
-            arg.ui = agentxx::middleware::InterruptUi::permissionUi(
+            // 中断 UI 描述 (预设模板生成): 权限卡片形态由此描述数据决定, 客户端
+            // 不含任何 permission 分支 —— 与普通中断共用同一套通用渲染/交互实现;
+            // 结果控件: decision (允许 "true" / 拒绝 "false") + remember (勾选项)
+            arg.ui = agentxx::middleware::preset::permissionCard(
                 req.toolName,
                 req.category,
                 req.target
@@ -249,32 +242,25 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             if (result.is_object() && result.value("__cancelled__", false)) {
                 throw neograph::graph::CancelledException("permission interrupted by cancel");
             }
-            // 结果恒为对象形态 {"values":[...], "options":{...}} (见
-            // makeInterruptResult); 非对象形态 (旧前端/宿主) 按拒绝处理并告警
+            // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult);
+            // 非对象形态按"未应答"处理并告警。权限卡片控件: decision + remember
             bool                allowed  = false;
             bool                remember = false;
-            agentxx::util::Json values   = agentxx::util::Json::array();
+            agentxx::util::Json values   = agentxx::util::Json::object();
             if (!result.is_object() || !result.contains("values")) {
                 XX_LOGW(
                     "[io] permission result is not an object with values, denied: {}",
                     result.dump()
                 );
             } else {
-                values = result["values"];
-                if (result.contains("options") && result["options"].is_object()) {
-                    remember = result["options"].value("remember", false);
+                const auto& valueObj = result["values"];
+                if (valueObj.is_object()) {
+                    values = valueObj;
                 }
-                if (values.is_array() && !values.empty()) {
-                    auto val = values[0];
-                    if (val.is_string()) {
-                        auto s  = val.get<std::string>();
-                        allowed = (s == "true" || s == "yes");
-                    } else if (val.is_boolean()) {
-                        allowed = val.get<bool>();
-                    }
-                }
+                allowed  = agentxx::middleware::interruptValueBool(valueObj, "decision", false);
+                remember = agentxx::middleware::interruptValueBool(valueObj, "remember", false);
             }
-            // 记住本次选择: 客户端只回传表单值/选项, 规则注册在 agent 侧完成
+            // 记住本次选择: 客户端只回传表单值, 规则注册在 agent 侧完成
             // (客户端不参与权限语义; 见 rememberPermission)
             if (remember && confirmedValues(values)) {
                 co_await this->rememberPermission(req.category, req.target, allowed);
@@ -288,9 +274,9 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
     );
 }
 
-/// 结果是否包含已确认的输入值 (空数组 = 用户取消/中断过期, 不注册规则)
+/// 结果是否包含已确认的输入值 (空对象 = 用户取消/中断过期, 不注册规则)
 bool AgentIOBase::confirmedValues(const agentxx::util::Json& values) {
-    return values.is_array() && !values.empty();
+    return values.is_object() && !values.empty();
 }
 
 asio::awaitable<void> AgentIOBase::rememberPermission(

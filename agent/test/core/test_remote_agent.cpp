@@ -89,8 +89,7 @@ public:
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
         co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json::array({"true"}),
-            agentxx::util::Json::object()
+            agentxx::util::Json{{"allow", "true"}}
         );
     }
 

@@ -3,8 +3,10 @@
 #include "agentxx-client/io/tui/components/interrupt_view.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/text_layout.h"
+#include "agentxx-client/io/tui/ui_items_render.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
@@ -23,7 +25,22 @@
 
 using namespace ftxui;
 
+// 本文件的消息列表组件定义在全局作用域 (见 message_list.h), 库内类型须显式引入
+using agentxx::client::collapsedPreviewBudget;
+using agentxx::client::estimateLines;
+using agentxx::client::estimateMarkdownLines;
+using agentxx::client::lastNonBlankLine;
+using agentxx::client::measureUiItem;
+using agentxx::client::renderMarkdown;
+using agentxx::client::renderUiItem;
+using agentxx::client::UiRenderCtx;
+using agentxx::client::UiRenderResult;
+using agentxx::client::uiItemFromPluginJson;
+
 namespace {
+
+/// 插件装饰 items 的基础缩进列数 (与历史渲染 "    " 一致)
+constexpr int kDecorItemIndent = 4;
 
 /// 查找工具调用装饰 (client 插件经 update_tool_decor 推送的语义层渲染声明;
 /// 每帧快照 pluginRegistry, 无锁读取; 无插件管理器/无装饰返回空)
@@ -93,179 +110,8 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
     return res;
 }
 
-/// 渲染 markdown 为 ftxui Element; 其中 ```mermaid 代码块由 DomBuilder 渲染为
-/// 状态图 (见 markdown::build_code_block), 其余按 markdown 主题渲染
-std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
-    std::string_view       content,
-    Color                  color,
-    markdown::Theme const& mdTheme,
-    int                    maxWidth = 0
-) {
-    if (content.empty()) {
-        return {ftxui::text(""), nullptr};
-    }
-    auto parser  = markdown::make_cmark_parser();
-    auto ast     = parser->parse(content);
-    auto builder = std::make_unique<markdown::DomBuilder>();
-    if (maxWidth > 0) {
-        builder->set_max_width(maxWidth);
-    }
-    auto el = builder->build(ast, -1, mdTheme);
-    return {el | ftxui::color(color), std::move(builder)};
-}
-
-/// 折叠消息头部单行预览的可用列数预算 (自适应宽度核心):
-/// 内容区总列数 - 头部前缀显示列数 - 安全余量。
-/// maxWidth 为 scrollable_->contentWidth() (已扣除滚动条 gutter);
-/// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。
-/// 极窄终端下保底 8 列, 避免预览被完全挤没。
-/// (实现见 text_layout.cpp: 与中断视图/其他组件共用)
-using agentxx::client::collapsedPreviewBudget;
-using agentxx::client::estimateLines;
-using agentxx::client::lastNonBlankLine;
-
-/// 估算 markdown 渲染高度 (行), 与 renderMarkdown (cmark-gfm + DomBuilder)
-/// 的渲染语义对齐 (仅用于未进入视口的消息; 进入视口后实测修正)。
-///
-/// 背景: estimateLines 把每个 \n 都当硬换行, 但 DomBuilder 对普通段落把段内
-/// 单个换行 (cmark softbreak) 合并为空格, 段落只按宽度折行 (仅空行分隔的
-/// 段落间插入 1 行空行)。对"多行短句"文本 (LLM 输出常见, 如每行一个要点
-/// 但无空行分隔), 按 \n 计数会严重高估 —— 例: 80 行 × 40 字符在 97 列下
-/// 估算 80 行, 实际合并折行仅 ~33 行。不可见项高估即总高度虚高 ->
-/// stickToBottom 滚动偏移偏大, 顶部消息被推出视口显示空白, 且不可见项
-/// 永不进入视口实测 -> 空白持续 (用户报告"上半几条消息不渲染/可用高度
-/// 变小")。
-///
-/// 估算规则 (近似, 尽量不高估):
-/// - 普通段落: 段内换行折叠为单个空格, 再按宽度折行 (与
-///   build_wrapping_container 的 ftxui::paragraph 合并语义一致)
-/// - 行首标记行 (标题 # / 引用 > / 列表 - * + 数字. / 表格 |): 每源行渲染
-///   1+ 行, 按去除标记后内容宽度折行估算 (build_list_item/blockquote 等
-///   均为每源行一行, 内容处再按段落折行)
-/// - ``` / ~~~ 围栏代码块: 开始围栏 1 行 + 内容每行 1 行 (含围栏内空行) +
-///   结束围栏 1 行 (build_code_block 逐行渲染)
-/// - ```mermaid 围栏: 渲染为状态图 (节点框 + 箭头), 图形高度与源行数无关,
-///   实测约为源行数 × 3 + 3 (4 节点 5 边 TB 图: 7 源行 -> 24 行)。若按
-///   普通代码块估算 (每行 1 行), 严重低估 (7 -> 8), 视口外消息总高度偏低,
-///   滚动偏移偏小, 底部内容被推出视口且该 mermaid 消息被 continue 跳过
-///   永不实测 -> 视口内显示空白 (用户报告"某些消息显示为空白, 滑动到
-///   某些位置又正常")。故按 源行数 × 3 + 3 估算, 残余偏差由
-///   LazyScrollable 的可见性容错 (kEstimateSlack) 提前实测自愈
-/// - 块级元素间空行: 与 build_document 的 vbox({text(""), ...}) 一致,
-///   第 2 个块起每块前 +1 行
-size_t estimateMarkdownLines(std::string_view s, int width) {
-    if (s.empty()) {
-        return 1;
-    }
-    const size_t useWidth       = (width <= 0) ? 80 : static_cast<size_t>(width);
-    size_t       total          = 0;
-    size_t       blocks         = 0; // 渲染块计数 (块间空行 +1, build_document 语义)
-    bool         inFence        = false;
-    bool         fenceIsMermaid = false; // 当前围栏是否为 ```mermaid (图形估算)
-    size_t       fenceLines     = 0;     // 当前围栏源行数 (含开始/结束围栏)
-
-    std::string para; // 普通段落累积 (softbreak -> 空格合并)
-    auto        flushParagraph = [&]() {
-        if (para.empty()) {
-            return;
-        }
-        total += estimateLines(para, static_cast<int>(useWidth));
-        para.clear();
-        ++blocks;
-    };
-
-    /// 围栏信息串是否为 mermaid (大小写不敏感, 容忍首尾空白) —— 与
-    /// dom_builder 的 is_mermaid_fence 语义一致
-    auto isMermaidInfo = [](std::string_view info) {
-        size_t b = info.find_first_not_of(" \t");
-        size_t e = info.find_last_not_of(" \t");
-        if (b == std::string_view::npos) {
-            return false;
-        }
-        info = info.substr(b, e - b + 1);
-        return info.size() >= 7 && info.substr(0, 7) == "mermaid";
-    };
-
-    const size_t n = s.size();
-    size_t       i = 0;
-    while (i < n) {
-        const size_t     eol     = s.find('\n', i);
-        const size_t     lineEnd = (eol == std::string_view::npos) ? n : eol;
-        std::string_view line    = s.substr(i, lineEnd - i);
-        const size_t     b       = line.find_first_not_of(" \t");
-        const size_t     e       = line.find_last_not_of(" \t");
-        line = (b == std::string_view::npos) ? std::string_view{} : line.substr(b, e - b + 1);
-        if (line.empty()) {
-            // 空行: 段落终止 (围栏内空行属于代码内容, 渲染 1 行)
-            if (inFence) {
-                ++total;
-                ++fenceLines;
-            } else {
-                flushParagraph();
-            }
-            i = (eol == std::string_view::npos) ? n : eol + 1;
-            continue;
-        }
-        if (inFence) {
-            ++total;
-            ++fenceLines;
-            if (line.size() >= 3 && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~")) {
-                inFence = false; // 结束围栏 (已计 1 行)
-                if (fenceIsMermaid) {
-                    // 图形高度估算: 源行数 × 3 + 3 (实测 4 节点 5 边 TB 图
-                    // 7 源行 = 24 行); 已按普通行计 fenceLines 行, 补足差额
-                    total += fenceLines * 2 + 3;
-                }
-                fenceIsMermaid = false;
-                fenceLines     = 0;
-            }
-            i = (eol == std::string_view::npos) ? n : eol + 1;
-            continue;
-        }
-        const bool isFenceStart
-            = line.size() >= 3 && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~");
-        if (isFenceStart) {
-            flushParagraph();
-            ++total; // 开始围栏 1 行
-            ++blocks;
-            inFence        = true;
-            fenceIsMermaid = isMermaidInfo(line.substr(3));
-            fenceLines     = 1;
-            i              = (eol == std::string_view::npos) ? n : eol + 1;
-            continue;
-        }
-        // 块级标记行 (标题/引用/列表/分隔线/表格): 每源行渲染 1+ 行
-        const char c0           = line[0];
-        const bool isMarkerLine = (c0 == '#') || (c0 == '>') || (c0 == '-') || (c0 == '*')
-                                  || (c0 == '+') || (c0 == '|') || (c0 == '=');
-        const bool isOrderedList
-            = (line.size() >= 2 && c0 >= '0' && c0 <= '9' && (line[1] == '.' || line[1] == ')'));
-        if (isMarkerLine || isOrderedList) {
-            flushParagraph();
-            // 去除行首标记序列后按内容折行估算 (渲染时内容宽度更窄, 已偏低估)
-            const size_t cs       = line.find_first_not_of("#>-*+|= .");
-            const auto   content  = (cs == std::string_view::npos || cs >= line.size())
-                                        ? std::string_view{}
-                                        : line.substr(cs);
-            total                += estimateLines(content, static_cast<int>(useWidth));
-            ++blocks;
-            i = (eol == std::string_view::npos) ? n : eol + 1;
-            continue;
-        }
-        // 普通文本行: 并入段落 (softbreak 合并, 行间以单个空格连接)
-        if (!para.empty()) {
-            para += ' ';
-        }
-        para += line;
-        i     = (eol == std::string_view::npos) ? n : eol + 1;
-    }
-    flushParagraph();
-    // 块间空行 (build_document: 第 2 个块起每块前 1 行空行)
-    if (blocks > 1) {
-        total += blocks - 1;
-    }
-    return std::max<size_t>(1, total);
-}
+// markdown 渲染与行数估算已抽取到共享实现 (message_list 与中断视图共用):
+// 见 agentxx-client/io/tui/markdown_block.h (renderMarkdown / estimateMarkdownLines)
 
 /// 将工具调用参数 JSON 缩进格式化 (2 空格) 便于展开阅读, 例如:
 /// {
@@ -787,35 +633,15 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                     if (finished && isError) {
                         decorLines += estimateLines(msg.tool->toolResult, width);
                     } else if (!renderRes.items.empty()) {
+                        // 装饰 items 行数走共享块渲染层 (与渲染同一套判定; 见
+                        // ui_items_render.h): 内容块/按钮/diff/状态图逐项累加
+                        UiRenderCtx rc;
+                        rc.theme = ctx_.theme;
+                        rc.width = width;
+                        rc.indent = kDecorItemIndent;
                         for (const auto& it : renderRes.items) {
-                            if (!it.is_object()) {
-                                continue;
-                            }
-                            const auto kind = it.value("kind", std::string{"text"});
-                            if (kind == "text") {
-                                decorLines += estimateLines(it.value("text", std::string{}), width);
-                            } else if (kind == "button" || kind == "action") {
-                                decorLines += 1;
-                            } else if (kind == "separator") {
-                                decorLines += 1;
-                            } else if (kind == "diagram") {
-                                const auto mermaid = it.value("mermaid", std::string{});
-                                size_t     rmLines = 1;
-                                for (char ch : mermaid) {
-                                    if (ch == '\n') {
-                                        ++rmLines;
-                                    }
-                                }
-                                decorLines += rmLines * 3 + 3;
-                            } else if (kind == "diff") {
-                                const auto   path   = it.value("path", std::string{});
-                                const auto   oldStr = it.value("old_str", std::string{});
-                                const auto   newStr = it.value("new_str", std::string{});
-                                const auto   diff = agentxx::util::computeLineDiff(oldStr, newStr);
-                                const bool   sideBySide = ftxui::Terminal::Size().dimx >= 100;
-                                const size_t diffLines
-                                    = sideBySide ? (diff.size() / 2 + 1) : diff.size();
-                                decorLines += (!path.empty() ? 1 : 0) + diffLines;
+                            if (auto item = uiItemFromPluginJson(it)) {
+                                decorLines += measureUiItem(*item, rc);
                             }
                         }
                     } else {
@@ -1627,7 +1453,7 @@ Element MessageListComponent::buildMessageBlock(
                         decorForBody.toolCallId = msg.tool->toolCallId;
                         decorForBody.items      = renderRes.items;
                     }
-                    appendDecorToolBody(decorForBody, lines, maxWidth);
+                    appendDecorToolBody(decorForBody, lines, maxWidth, mdBuilders);
                 } else {
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
@@ -1653,9 +1479,9 @@ Element MessageListComponent::buildMessageBlock(
         }
         case TUIMessage::Role::Interrupt:
             // 中断输入消息: 渲染/交互完全由消息携带的 UI 描述数据决定
-            // (InterruptView 通用实现: 头行 + 描述项 + 控件 + 状态行),
-            // 本组件不感知任何具体询问类型 (含权限)
-            return interruptView_.build(msg, msgIndex, maxWidth);
+            // (InterruptView 通用实现: 头行 + 描述块 (内容块共享块渲染层,
+            // 控件块/提交行由中断视图实现)), 本组件不感知任何具体询问类型 (含权限)
+            return interruptView_.build(msg, msgIndex, maxWidth, mdBuilders);
     }
     return text("");
 }
@@ -1713,110 +1539,61 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::appendDecorToolBody(
-    const agentxx::plugin::ClientToolDecor& decor,
-    Elements&                               lines,
-    int                                     maxWidth
+    const agentxx::plugin::ClientToolDecor&              decor,
+    Elements&                                           lines,
+    int                                                 maxWidth,
+    std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
 ) {
-    appendDecorItems(decor.items, decor.plugin, decor.toolCallId, lines, maxWidth);
+    appendDecorItems(decor.items, decor.plugin, decor.toolCallId, lines, maxWidth, mdBuilders);
 }
 
 void MessageListComponent::appendDecorItems(
-    const agentxx::util::Json& items,
-    const std::string&         plugin,
-    const std::string&         ownerId,
-    Elements&                  lines,
-    int                        maxWidth
+    const agentxx::util::Json&                          items,
+    const std::string&                                  plugin,
+    const std::string&                                  ownerId,
+    Elements&                                           lines,
+    int                                                 maxWidth,
+    std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
 ) {
-    const auto& theme = *ctx_.theme;
-    // 状态图渲染宽度预算: 内容缩进 (4) + 边界余量 (2); 下限保底可读
-    const int diagW = (maxWidth > 0) ? std::max(20, maxWidth - 6) : 0;
-    auto      reg   = ctx_.frameState && ctx_.frameState->pluginRegistry
-                          ? ctx_.frameState->pluginRegistry.get()
-                          : nullptr;
+    auto reg = ctx_.frameState && ctx_.frameState->pluginRegistry
+                   ? ctx_.frameState->pluginRegistry.get()
+                   : nullptr;
 
-    auto hit = [this, &plugin, &ownerId, reg](std::string actionId, std::string argsJson) {
-        DecorHitBox hb;
-        hb.plugin     = plugin;
-        hb.ownerId    = ownerId;
-        hb.actionId   = std::move(actionId);
-        hb.argsJson   = std::move(argsJson);
-        hb.generation = reg ? reg->generationOf(plugin) : 0;
-        hb.box        = std::make_shared<Box>();
-        decorHits_.push_back(std::move(hb));
-        return decorHits_.back().box;
-    };
+    // 插件装饰 items 与中断内容块**共用同一渲染实现** (见 ui_items_render.h):
+    // 逐项归一化 → 行模型 (元素 + 行数 + 命中信息), 再把行元素追加到 lines,
+    // 可点按钮的行转写为 decorHits_ 命中区域。
+    // 高度估算侧 (estimateHeight) 用同一模块的 measureUiItem, 两侧判定同源。
+    UiRenderCtx rc;
+    rc.theme    = ctx_.theme;
+    rc.width    = maxWidth;
+    rc.indent   = kDecorItemIndent;
+    rc.plugin   = plugin;
+    rc.ownerId  = ownerId;
+    rc.registry = reg;
 
+    UiRenderResult out;
     for (const auto& it : items) {
-        if (!it.is_object()) {
-            continue;
+        if (auto item = uiItemFromPluginJson(it)) {
+            renderUiItem(*item, rc, out);
         }
-        const auto kind = it.value("kind", std::string{"text"});
-        if (kind == "text") {
-            // role 样式映射走共享 helper (title=高亮强调 / normal=普通 / hint=减淡提示)
-            const auto& txt = it.value("text", std::string{});
-            Element     el  = agentxx::client::renderPluginTextItem(
-                txt,
-                it.value("role", std::string{"normal"}),
-                theme
-            );
-            // hint 减淡: 共享 helper 未加 dim, 此处补 (与历史渲染一致)
-            if (it.value("role", std::string{"normal"}) == "hint") {
-                el = el | dim;
-            }
-            // title 加粗: 共享 helper 已加 bold, 此处不再重复
-            lines.push_back(hbox({
-                text("    "),
-                el | xflex_shrink,
-            }));
-        } else if (kind == "button" || kind == "action") {
-            // 通用按钮: 解析 + 配色走共享 helper; 可点时挂 decorHits_ + reflect
-            // (owner=tool_call_id, 以 toolCallId 作 owner_id, fallback 覆盖)
-            agentxx::client::PluginButtonDesc desc;
-            if (!agentxx::client::parsePluginButton(it, plugin, reg, desc)) {
-                continue;
-            }
-            Element btn = agentxx::client::renderPluginButton(desc, theme);
-            if (desc.clickable) {
-                auto box = hit(desc.actionId, desc.argsJson);
-                btn      = btn | reflect(*box);
-            }
-            lines.push_back(hbox({
-                text("    "),
-                btn | xflex_shrink,
-            }));
-        } else if (kind == "diagram") {
-            // Mermaid stateDiagram-v2 ASCII 状态图 (通用组件; 解析失败静默跳过)
-            // 兼容保留渲染, 不承担交互 (交互走 button + action_id)
-            const auto mermaid = it.value("mermaid", std::string{});
-            auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
-            if (!diagram.nodes.empty()) {
-                auto diagEl = markdown::renderMermaidStateDiagram(
-                    diagram,
-                    diagW,
-                    theme.normalColor,
-                    markdown::diagramNodeColor(theme.markdownTheme)
-                );
-                lines.push_back(hbox({
-                    text("    "),
-                    diagEl | flex,
-                }));
-            }
-        } else if (kind == "separator") {
-            // 分区分隔线 (Todo / Note 独立分区)
-            lines.push_back(hbox({
-                text("    "),
-                text("─") | color(theme.hintColor) | dim | xflex_shrink,
-            }));
-        } else if (kind == "diff") {
-            // 差异对比渲染走共享 helper (与 DiffOverlay 同实现)
-            lines.push_back(agentxx::client::renderPluginDiff(
-                it.value("path", std::string{}),
-                it.value("old_str", std::string{}),
-                it.value("new_str", std::string{}),
-                theme
-            ));
+    }
+    // markdown 渲染器生命周期交回调用方 (随 LazyBuiltItem.attachments 与 Element 同存活)
+    for (auto& builder : out.builders) {
+        mdBuilders.push_back(std::move(builder));
+    }
+    for (auto& row : out.rows) {
+        // 可点按钮命中: owner=tool_call_id (以 toolCallId 作 owner_id, fallback 覆盖)
+        if (row.box && !row.hitId.empty()) {
+            DecorHitBox hb;
+            hb.plugin     = plugin;
+            hb.ownerId    = row.hitOwner.empty() ? ownerId : row.hitOwner;
+            hb.actionId   = std::move(row.hitId);
+            hb.argsJson   = std::move(row.hitArgs);
+            hb.generation = reg ? reg->generationOf(plugin) : 0;
+            hb.box        = std::move(row.box);
+            decorHits_.push_back(std::move(hb));
         }
-        // 其余 kind 忽略 (未知项向前兼容)
+        lines.push_back(std::move(row.element));
     }
 }
 

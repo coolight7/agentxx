@@ -3,6 +3,7 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
+#include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/log.h"
@@ -663,35 +664,24 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                                     {"tool_name", tool->get_name()},
                                     {"key",       repeatCallKey   },
                         };
-                        auto inputItem = InterruptHandleArg::InterruptHandleInputItem{};
-                        inputItem.label
+                        // 确认卡片 (预设模板生成): 标题 + 说明 + 是/否一键按钮
+                        // (结果控件 id = "allow", 取值 "true"/"false")
+                        agentxx::middleware::preset::ConfirmCardOptions card;
+                        card.title
                             = fmt::format("[{}] Repeated identical call", tool->get_name());
-                        inputItem.depict = fmt::format(
+                        card.text = fmt::format(
                             "This tool has been called repeatedly with identical arguments "
-                               "({}). Allow it to run again?",
+                            "({}). Allow it to run again?",
                             repeatCallKey
                         );
-                        inputItem.type         = "bool";
-                        inputItem.defaultValue = "no";
-                        arg.inputs             = {std::move(inputItem)};
+                        arg.ui = agentxx::middleware::preset::confirmCard(card);
                         return arg;
                     },
                     nullptr
                 );
-                // 解析用户响应: agent_runner 将客户端 handleInterrupt 的返回值
-                // (输入项数组, 如 ["true"]) 按 resultId 写入 interruptResult
-                bool allow = false;
-                if (result.is_array() && !result.empty()) {
-                    const auto& val = result[0];
-                    if (val.is_string()) {
-                        allow
-                            = (val.get<std::string>() == "true" || val.get<std::string>() == "yes");
-                    } else if (val.is_boolean()) {
-                        allow = val.get<bool>();
-                    }
-                } else if (result.is_boolean()) {
-                    allow = result.get<bool>();
-                }
+                // 解析用户响应: agent_runner 将结果 values 对象 (控件 id → 值)
+                // 按 resultId 写回 interruptResult; 未应答/取消 = 空对象 → 拒绝
+                bool allow = agentxx::middleware::interruptValueBool(result, "allow", false);
                 if (false == allow) {
                     XX_LOGD(
                         "Toolcall repeat check: deny '{}' ({})",

@@ -13,19 +13,23 @@ import 'console_setup.dart' show Ansi;
 import 'agent_client.dart';
 import 'events.dart';
 
-/// 单个 HIL 中断的应答流程 (多输入项按顺序逐项收集)
+/// 单个 HIL 中断的应答流程 (按控件块顺序逐项收集; 结果 = {控件 id: 值})
 class _InterruptFlow {
-  _InterruptFlow(this.event);
+  _InterruptFlow(this.event) : controls = event.controls;
 
   final InterruptReqEvent event;
-  final List<String> answers = <String>[];
+  final List<InterruptControl> controls;
 
-  /// 权限询问选择 "always" 时置位 (应答后额外注册路径规则)
+  /// 控件 id → 值 (应答 JSON 的 values; checkbox=布尔 / number=数值 / 其余=原始值)
+  final Map<String, dynamic> values = <String, dynamic>{};
+
+  /// 权限询问的"记住此选择" (复选框控件 id = remember)
   bool rememberPermission = false;
 
-  bool get done => answers.length >= event.inputs.length;
+  bool get done => values.length >= controls.length;
 
-  InterruptInputItem get currentItem => event.inputs[answers.length];
+  /// 当前待应答控件 (全部收集完成时返回最后一个)
+  InterruptControl get currentItem => controls[values.length.clamp(0, controls.length - 1)];
 }
 
 /// CLI 渲染器: 把 agent 事件渲染为终端输出
@@ -265,15 +269,6 @@ class CliRepl {
     final flow = _InterruptFlow(e);
     _flows.add(flow);
 
-    // 无需输入的中断 (inputs 为空): 直接空数组应答, 不进入逐项询问
-    if (!e.isPermissionAsk && e.inputs.isEmpty) {
-      stdout.writeln();
-      stdout.writeln(
-          Ansi.paint('❓ 需要确认 (${e.interruptName}, 无输入项)', Ansi.magenta));
-      _respondFlow(flow);
-      return;
-    }
-
     if (e.isPermissionAsk) {
       final op = e.permissionCategory.contains('write') ? '写入' : '读取';
       stdout.writeln();
@@ -283,16 +278,15 @@ class CliRepl {
     } else {
       stdout.writeln();
       stdout.writeln(Ansi.paint('❓ 需要补充输入 (${e.interruptName})', Ansi.magenta));
-      for (final item in e.inputs) {
-        final depict = item.depict.isEmpty ? '' : ' —— ${item.depict}';
-        final enumHint = item.enumValues.isNotEmpty
-            ? ' 可选: ${item.enumValues.join('|')}'
-            : '';
-        final defHint =
-            item.defaultValue.isEmpty ? '' : ' (回车默认: ${item.defaultValue})';
-        stdout.writeln('   · ${item.label}$depict$enumHint$defHint');
+      // 内容块 (text/markdown) 由描述驱动; 行式宿主直接打印文本
+      for (final line in e.contentLines) {
+        stdout.writeln('   $line');
       }
-      stdout.writeln('   请按顺序逐项回答:');
+      if (flow.controls.isEmpty) {
+        stdout.writeln('   该询问无输入项, 回车确认');
+      } else {
+        stdout.writeln('   请按顺序逐项回答:');
+      }
     }
     _askCurrentItem(flow);
   }
@@ -305,72 +299,89 @@ class CliRepl {
     if (flow.event.isPermissionAsk) {
       return; // 权限询问的提示已在头部打印
     }
-    final enumHint = item.type == 'enum'
-        ? ' [1-${item.enumValues.length}]'
-        : (item.type == 'bool' ? ' [y/n]' : '');
-    stdout.write('   ${item.label}$enumHint > ');
+    final hint = item.isChoice
+        ? ' [1-${item.options.length}]'
+        : (item.isBoolean ? ' [y/n]' : '');
+    stdout.write('   ${item.label.isEmpty ? item.id : item.label}$hint > ');
   }
 
   void _feedAnswer(String line) {
     final flow = _flows.first;
-    final input = flow.currentItem;
+    final item = flow.currentItem;
     final trimmed = line.trim();
 
-    String? value;
-    switch (input.type) {
-      case 'bool':
-        if (flow.event.isPermissionAsk && (trimmed == 'a' || trimmed == 'A')) {
-          flow.rememberPermission = true;
-          value = 'true';
-          break;
+    /// 结果值 (null = 输入无效需重问)
+    dynamic value;
+
+    if (item.isChoice) {
+      // 候选项按钮/单选列表: 输入序号 (1-based) 或候选项值
+      if (trimmed.isEmpty) {
+        // 空输入取默认值 (候选项 value; 缺失取首项)
+        if (item.defaultValue != null && item.options.isNotEmpty) {
+          value = item.options
+              .firstWhere(
+                (o) => '${o.value}' == '${item.defaultValue}',
+                orElse: () => item.options.first,
+              )
+              .value;
+        } else if (item.options.isNotEmpty) {
+          value = item.options.first.value;
         }
-        value = trimmed.isEmpty
-            ? _normalizeBool(input.defaultValue)
-            : _parseBool(trimmed);
-        if (value != null) {
-          break;
-        }
-        // 显式输入非法: 置空走统一的无效重问流程
-        value = null;
-      case 'int':
-        final v = trimmed.isEmpty ? input.defaultValue : trimmed;
-        if (int.tryParse(v) != null) {
-          value = v;
-        }
-      case 'double':
-        final v = trimmed.isEmpty ? input.defaultValue : trimmed;
-        if (double.tryParse(v) != null || int.tryParse(v) != null) {
-          value = v;
-        }
-      case 'enum':
-        // 无默认值时空输入必须重问, 不得发送空串占位
-        if (trimmed.isEmpty) {
-          if (input.defaultValue.isNotEmpty) {
-            value = input.defaultValue;
-          }
-          break;
-        }
+      } else {
         final byIndex = int.tryParse(trimmed);
-        if (byIndex != null &&
-            byIndex >= 1 &&
-            byIndex <= input.enumValues.length) {
-          value = input.enumValues[byIndex - 1];
-        } else if (input.enumValues.contains(trimmed)) {
-          value = trimmed;
+        if (byIndex != null && byIndex >= 1 && byIndex <= item.options.length) {
+          value = item.options[byIndex - 1].value;
+        } else {
+          for (final opt in item.options) {
+            if ('${opt.value}' == trimmed || opt.label == trimmed) {
+              value = opt.value;
+              break;
+            }
+          }
         }
-      default: // string 或未知类型按文本处理
-        value = trimmed.isEmpty ? input.defaultValue : trimmed;
+      }
+    } else if (item.isBoolean) {
+      // 权限询问: a = 允许并记住 (记住由结果 values.remember 回传, 规则服务端注册)
+      if (flow.event.isPermissionAsk && (trimmed == 'a' || trimmed == 'A')) {
+        flow.rememberPermission = true;
+        value = true;
+      } else {
+        value = trimmed.isEmpty
+            ? (item.defaultValue as bool? ?? false)
+            : _parseBool(trimmed);
+      }
+    } else if (item.isNumber) {
+      final raw = trimmed.isEmpty ? '${item.defaultValue ?? 0}' : trimmed;
+      final parsed = double.tryParse(raw);
+      if (parsed != null &&
+          (!item.integer || parsed == parsed.truncateToDouble()) &&
+          (item.min == null || parsed >= item.min!) &&
+          (item.max == null || parsed <= item.max!)) {
+        value = item.integer ? parsed.toInt() : parsed;
+      }
+    } else {
+      // text (或未知形态): 空输入取字符串默认值
+      value = trimmed.isEmpty
+          ? (item.defaultValue is String ? item.defaultValue as String : '')
+          : trimmed;
     }
 
     if (value == null) {
-      stdout.writeln(Ansi.paint(
-          '   输入无效, 请重新输入 (${input.type == 'enum' ? '可选: ${input.enumValues.join('|')}' : '期望类型: ${input.type.isEmpty ? '文本' : input.type}'})',
-          Ansi.yellow));
+      final hint = item.isChoice
+          ? '可选: ${item.options.map((o) => '${o.value}').join('|')}'
+          : (item.isNumber
+              ? '期望数值${item.integer ? ' (整数)' : ''}${item.min != null ? ', 最小 ${item.min}' : ''}${item.max != null ? ', 最大 ${item.max}' : ''}'
+              : '期望 y/n');
+      stdout.writeln(Ansi.paint('   输入无效, 请重新输入 ($hint)', Ansi.yellow));
       _askCurrentItem(flow);
       return;
     }
 
-    flow.answers.add(value);
+    flow.values[item.id] = value;
+    // 权限 "记住本次选择": 复选框值随结果回传 (规则由服务端权限处理器注册)
+    if (flow.event.isPermissionAsk && flow.rememberPermission) {
+      flow.values['remember'] = true;
+    }
     if (!flow.done) {
       _askCurrentItem(flow);
     } else {
@@ -380,23 +391,12 @@ class CliRepl {
 
   void _respondFlow(_InterruptFlow flow) {
     try {
-      client.interruptRespond(flow.event.interruptId, jsonEncode(flow.answers));
-      stdout.writeln(
-          Ansi.paint('   已应答 (${flow.answers.join(", ")})', Ansi.gray));
-      // 权限 "always": 注册路径规则, 同路径后续不再询问
-      if (flow.rememberPermission && flow.event.isPermissionAsk) {
-        try {
-          client.setPermission(
-            flow.event.permissionTarget,
-            allow: true,
-            op: flow.event.permissionCategory.contains('write') ? 1 : 0,
-          );
-          stdout.writeln(Ansi.paint(
-              '   已记住路径权限: ${flow.event.permissionTarget}', Ansi.gray));
-        } on AgentxxException catch (err) {
-          stdout.writeln(Ansi.paint('   记住权限失败: $err', Ansi.yellow));
-        }
-      }
+      // 结果恒为对象 {"values": {控件 id: 值}} (空对象 = 未应答)
+      client.interruptRespond(
+          flow.event.interruptId, jsonEncode(<String, dynamic>{'values': flow.values}));
+      stdout.writeln(Ansi.paint(
+          '   已应答 (${flow.values.entries.map((e) => '${e.key}=${e.value}').join(', ')})',
+          Ansi.gray));
     } on AgentxxException catch (err) {
       stdout.writeln(Ansi.paint('   应答失败: $err', Ansi.red));
     } finally {
@@ -405,16 +405,17 @@ class CliRepl {
     }
   }
 
-  static String? _parseBool(String s) {
+
+  static bool? _parseBool(String s) {
     switch (s.toLowerCase()) {
       case 'y':
       case 'yes':
       case 'true':
-        return 'true';
+        return true;
       case 'n':
       case 'no':
       case 'false':
-        return 'false';
+        return false;
       default:
         return null;
     }
@@ -422,8 +423,6 @@ class CliRepl {
 
   /// 把中断输入项的 defaultValue ("no"/"yes"/"true"/"false") 规范化为
   /// 应答协议要求的 "true"/"false"; 无法识别返回 null (走无效重问)
-  static String? _normalizeBool(String s) => _parseBool(s);
-
   // -------------------------------------------------------------------------
   // 本地命令
   // -------------------------------------------------------------------------

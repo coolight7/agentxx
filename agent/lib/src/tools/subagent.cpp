@@ -419,6 +419,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::u
                 .name     = "subagent",
                 .arg      = agentxx::util::Json{{"tasks", std::move(tasksJson)}},
                 .resultId = resultId,
+                // ui 留空: 该中断由 AgentRunner 按 name 拦截并经总线请求
+                // service.subagent 交宿主执行子代理, **不进入客户端渲染路径**
+                // (客户端 HIL 中断才需要描述, 见 InterruptHandleArg::ui)
             };
         },
         nullptr
