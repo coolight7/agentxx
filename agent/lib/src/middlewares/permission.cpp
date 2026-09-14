@@ -5,6 +5,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/util/string_util.h"
 #include <cctype>
+#include <filesystem>
 
 namespace agentxx {
 namespace middleware {
@@ -30,25 +31,33 @@ public:
     }
 };
 
-/// 判断规范化路径 (尾斜杠目录前缀) 是否位于指定目录子树内
-inline bool isUnderDir(std::string_view dirWithTrailingSlash, std::string_view path) {
-    if (dirWithTrailingSlash.empty() || path.empty()) {
+/// 判断规范化路径 path 是否位于指定目录 dir 子树内 (或就是目录自身)
+inline bool isUnderDir(std::string_view dir, std::string_view path) {
+    if (dir.empty() || path.empty()) {
         return false;
     }
-    if (path == dirWithTrailingSlash) {
-        return true; // 目录自身
+    while (dir.size() > 1 && dir.back() == '/') {
+        dir.remove_suffix(1);
     }
-    // 去掉 path 尾斜杠后做前缀比较 (normalizePermissionPath 输出带尾斜杠)
-    if (!path.empty() && path.back() == '/') {
+    while (path.size() > 1 && path.back() == '/') {
         path.remove_suffix(1);
     }
-    return path.size() >= dirWithTrailingSlash.size()
-           && path.compare(0, dirWithTrailingSlash.size(), dirWithTrailingSlash) == 0;
+    if (path == dir) {
+        return true; // 目录自身
+    }
+    if (dir == "/") {
+        return path.starts_with('/');
+    }
+    return path.size() > dir.size() && path[dir.size()] == '/'
+           && path.compare(0, dir.size(), dir) == 0;
 }
 
 } // namespace
 
-/// 权限路径规范化: 绝对路径 + Unix 分隔符 + 目录尾斜杠
+/// 权限路径规范化: 绝对路径 + Unix 分隔符 (+ Windows 转小写)
+/// - 目录路径 (在文件系统中实际存在且为目录, 或原路径以 '/' 或 '\\' 结尾) 追加/保留尾斜杠
+/// - 文件路径 (在文件系统中实际存在且为普通文件, 或实际不存在且原路径未以斜杠结尾) 确保不带尾斜杠,
+///   避免对普通文件请求权限时被错误添加末尾 '/'
 /// - Windows 文件系统大小写不敏感, 统一转小写使注册规则 (来自配置/工作目录)
 ///   与请求路径 (模型可能传任意大小写, 如 `d:/...` 或 `D:\...`) 稳定匹配;
 ///   XXRouter 的树节点按字符串精确查找 (区分大小写), 不统一大小写会漏匹配,
@@ -61,6 +70,9 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(
     std::string_view path,
     std::string_view sessionId
 ) const {
+    if (path.empty()) {
+        return {};
+    }
     // 相对路径解析基准: 会话生效工作目录 (worktree 绑定 > 会话工作目录覆写,
     // 回退 AgentConfig::workDir / 进程 cwd), 与 filesystem 工具的解析基准
     // 保持一致, 使注册规则与工具实际访问路径稳定匹配
@@ -68,9 +80,33 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(
     if (auto ctx = agentContext.lock()) {
         baseDir = ctx->getSessionWorkDir(sessionId);
     }
-    std::string s = agentxx::util::toUnixStandardDirPath(
-        agentxx::util::toCurrentSystemAbsolutePath(path, baseDir)
-    );
+    std::string absPath = agentxx::util::toCurrentSystemAbsolutePath(path, baseDir);
+    std::string s       = agentxx::util::toUnixStandardPath(absPath);
+
+    // 判断是否为目录:
+    // 1. 在文件系统上实际存在且为目录
+    // 2. 或文件系统上不存在, 但原路径末尾显式带有斜杠 (如 "dir/" 或 "dir\\") 表达目录意图
+    // 对于普通文件 (或不存在且原路径无尾斜杠的文件路径), 绝不添加尾部 '/', 若有则去除
+    std::error_code ec;
+    auto            fsPath = agentxx::util::utf8ToPath(absPath);
+    bool            exists = std::filesystem::exists(fsPath, ec);
+    bool            isDir  = false;
+    if (!ec && exists) {
+        isDir = std::filesystem::is_directory(fsPath, ec);
+    } else {
+        isDir = (path.back() == '/' || path.back() == '\\');
+    }
+
+    if (isDir) {
+        if (s.empty() || s.back() != '/') {
+            s += '/';
+        }
+    } else {
+        while (s.size() > 1 && s.back() == '/') {
+            s.pop_back();
+        }
+    }
+
 #if XX_IS_WIN_D
     agentxx::util::toLowerSelf(s);
 #endif

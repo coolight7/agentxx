@@ -86,6 +86,8 @@ class PermissionTestIO : public agentxx::agent::AgentIOBase {
 public:
 
     std::atomic<int> permissionCalls{0};
+    std::string      lastTarget;
+    std::string      lastUiDescText;
 
     void sendToPeer(agentxx::agent::WireMessage /*msg*/) override {}
 
@@ -101,10 +103,25 @@ public:
         std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
-        std::string_view /*interruptArgJson*/
+        std::string_view interruptArgJson
     ) override {
         if (interruptNode == "permission") {
             permissionCalls++;
+            auto parsed = agentxx::util::Json::parse(interruptArgJson);
+            if (parsed.is_object()) {
+                if (parsed.contains("arg") && parsed["arg"].is_object()) {
+                    lastTarget = parsed["arg"].value("target", std::string{});
+                }
+                if (parsed.contains("ui") && parsed["ui"].is_object()) {
+                    auto items = parsed["ui"].value("items", agentxx::util::Json::array());
+                    for (const auto& item : items) {
+                        if (item.value("kind", "") == "text" && item.value("color", "") == "hint") {
+                            lastUiDescText = item.value("text", std::string{});
+                            break;
+                        }
+                    }
+                }
+            }
             co_return agentxx::middleware::makeInterruptResult(
                 agentxx::util::Json::array({"true"}),
                 agentxx::util::Json::object()
@@ -588,6 +605,11 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         ok = co_await check(agent, outsidePath, "perm_ask");
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 1);
+        // 验证文件路径权限请求 target 及 UI 描述文本绝不带末尾 '/'
+        XX_TEST_EXPECT_FALSE(io->lastTarget.empty());
+        XX_TEST_EXPECT_TRUE(io->lastTarget.back() != '/');
+        XX_TEST_EXPECT_EQ(io->lastTarget, outsidePath);
+        XX_TEST_EXPECT_EQ(io->lastUiDescText, outsidePath);
     }
 
     // ---- 模式 all_ask: 所有路径均询问 ----
@@ -659,6 +681,41 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
     }
+
+    co_return;
+}
+
+/// 权限路径规范化行为测试:
+/// 验证文件路径绝不追加尾斜杠 '/', 目录路径 (存在或显式带 '/') 保留/追加尾斜杠
+asio::awaitable<void> test_permission_normalize_path() {
+    auto ctx = std::make_shared<agentxx::agent::AgentContext>();
+    agentxx::middleware::PermissionMiddlewareHandle perm(ctx);
+
+    const std::string cwd = std::filesystem::current_path().generic_string();
+
+    // 1. 普通文件 (不存在或存在) 规范化后绝无尾斜杠
+    auto normFile = perm.normalizePermissionPath("/data/projects/foo.txt");
+    XX_TEST_EXPECT_EQ(normFile, "/data/projects/foo.txt");
+    XX_TEST_EXPECT_TRUE(normFile.back() != '/');
+
+    // 2. 相对文件路径
+    auto normRelFile = perm.normalizePermissionPath("foo.cpp");
+    XX_TEST_EXPECT_FALSE(normRelFile.empty());
+    XX_TEST_EXPECT_TRUE(normRelFile.back() != '/');
+
+    // 3. 真实存在的目录应带尾斜杠
+    auto normCwd = perm.normalizePermissionPath(cwd);
+    XX_TEST_EXPECT_FALSE(normCwd.empty());
+    XX_TEST_EXPECT_EQ(normCwd.back(), '/');
+
+    // 4. 显式带有尾斜杠的路径保持为目录形态
+    auto normExplicitDir = perm.normalizePermissionPath("/data/some_dir/");
+    XX_TEST_EXPECT_FALSE(normExplicitDir.empty());
+    XX_TEST_EXPECT_EQ(normExplicitDir.back(), '/');
+
+    // 5. 根目录保持为 "/"
+    auto normRoot = perm.normalizePermissionPath("/");
+    XX_TEST_EXPECT_EQ(normRoot, "/");
 
     co_return;
 }
@@ -1257,6 +1314,7 @@ asio::awaitable<TestResult> run_agent_tests() {
     try {
         co_await test_agent_init();
         co_await test_agent_permission_mode_rules();
+        co_await test_permission_normalize_path();
         co_await test_agent_single_input();
         co_await test_agent_conversation_turn();
         co_await test_agent_tool_calls();
