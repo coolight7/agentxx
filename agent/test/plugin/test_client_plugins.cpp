@@ -1417,7 +1417,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(readRes.matched);
             XX_TEST_EXPECT_EQ(readRes.displayName, "Read");
-            XX_TEST_EXPECT_TRUE(readRes.summary.find("[10, 50]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(readRes.summary.find("[10, 60]") != std::string::npos);
             XX_TEST_EXPECT_TRUE(readRes.summary.find("/home/user/a.cpp") != std::string::npos);
 
             // 15.3 edit (回调函数: path 摘要 + diff items)
@@ -2048,7 +2048,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(second.matched);
             XX_TEST_EXPECT_FALSE(second.pendingRender);
             XX_TEST_EXPECT_EQ(second.displayName, std::string{"Read"});
-            XX_TEST_EXPECT_TRUE(second.summary.find("[10, 50]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(second.summary.find("[10, 60]") != std::string::npos);
 
             // 输入变化 (参数/宽度) → 缓存不命中, 需要重新渲染
             req.argsJson = R"({"path":"/home/user/a.cpp","line_offset":1,"line_limit":2})";

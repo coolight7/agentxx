@@ -484,9 +484,9 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
         } else if (off <= 0) {
             rangeStr = fmt::format("0, {}", lim);
         } else if (lim <= 0) {
-            rangeStr = fmt::format("{}", off);
+            rangeStr = fmt::format("{}, ~", off);
         } else {
-            rangeStr = fmt::format("{}, {}", off, lim);
+            rangeStr = fmt::format("{}, {}", off, off + lim);
         }
         std::string summary = " ·";
         if (!rangeStr.empty()) {
