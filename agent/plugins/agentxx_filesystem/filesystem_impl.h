@@ -1162,10 +1162,12 @@ inline std::string fileGrepExecute(
 //   由宿主受控轮询 (driver 请求 + poll_one) 驱动 asio::stream_file 的异步 IO;
 //   上述 *Execute 同步版仍由 list / glob / grep 使用 (CPU/遍历类工具走
 //   blocking_tool + offload, 是显式例外);
-//   BOOST_ASIO_HAS_FILE 不可用平台回退到同步实现, 注册侧改走 blocking_tool,
-//   行为与 offload 一致; 本回退亦供测试等直调场景保持单一入口
+// - 文件异步 I/O 的可用性由 agentxx::util::isAsyncFileIoSupported() 判断
+//   (编译期宏 + 运行时 io_uring 探测), 不可用时 *ExecuteAsync 回退同步实现,
+//   注册侧同样按该判断改走 blocking_tool, 行为与 offload 一致;
+//   本回退亦供测试等直调场景保持单一入口
 // =====================================================================
-#if defined(BOOST_ASIO_HAS_FILE)
+#if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)
 
 namespace detail {
 
@@ -1477,11 +1479,11 @@ inline asio::awaitable<std::string>
     co_return "success";
 }
 
-#else // !BOOST_ASIO_HAS_FILE
+#else // !ASIO_HAS_FILE && !BOOST_ASIO_HAS_FILE
 
-/// 文件异步 I/O 不可用平台 (无 io_uring/iocp 文件支持): 回退同步实现。
-/// 注册侧检测同一宏, 会改走 offload线程池适配异步接口 注册, 本回退仅供
-/// 测试等直调场景保持单一入口
+/// 文件异步 I/O 编译期不可用平台 (无 io_uring/iocp 文件支持): 回退同步实现。
+/// 此时 agentxx::util::isAsyncFileIoSupported() 恒为 false, 注册侧会改走
+/// offload线程池适配异步接口 注册, 本回退仅供测试等直调场景保持单一入口
 inline asio::awaitable<std::string>
     fileReadExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
     co_return fileReadExecuteImpl(arguments, workDir);
@@ -1497,22 +1499,22 @@ inline asio::awaitable<std::string>
     co_return fileEditExecuteImpl(arguments, workDir);
 }
 
-#endif // BOOST_ASIO_HAS_FILE
+#endif // ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
 
 /// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转为
 /// "[Error] ..." 错误文本返回, 保证受控轮询路径与测试直测行为一致
 /// (单文件读写为短操作不轮询取消, 故不设 isCancelled 形参)
+/// - 文件异步 I/O 可用时走真异步实现 (受控轮询), 否则走同步实现
 /// - 注意: 本包装自身必须是协程 (而非返回惰性协程的普通函数) —— 参数引用在
 ///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂
 ///   (ASan stack-use-after-return 已复现)
 inline asio::awaitable<std::string>
     fileReadExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
     try {
-#if defined(BOOST_ASIO_HAS_FILE)
-        co_return co_await fileReadExecuteAsyncImpl(arguments, workDir);
-#else
+        if (agentxx::util::isAsyncFileIoSupported()) {
+            co_return co_await fileReadExecuteAsyncImpl(arguments, workDir);
+        }
         co_return fileReadExecuteImpl(arguments, workDir);
-#endif
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
         co_return fmt::format("[Error] {}", ex.what());
@@ -1522,11 +1524,10 @@ inline asio::awaitable<std::string>
 inline asio::awaitable<std::string>
     fileWriteExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
     try {
-#if defined(BOOST_ASIO_HAS_FILE)
-        co_return co_await fileWriteExecuteAsyncImpl(arguments, workDir);
-#else
+        if (agentxx::util::isAsyncFileIoSupported()) {
+            co_return co_await fileWriteExecuteAsyncImpl(arguments, workDir);
+        }
         co_return fileWriteExecuteImpl(arguments, workDir);
-#endif
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
         co_return fmt::format("[Error] {}", ex.what());
@@ -1536,11 +1537,10 @@ inline asio::awaitable<std::string>
 inline asio::awaitable<std::string>
     fileEditExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
     try {
-#if defined(BOOST_ASIO_HAS_FILE)
-        co_return co_await fileEditExecuteAsyncImpl(arguments, workDir);
-#else
+        if (agentxx::util::isAsyncFileIoSupported()) {
+            co_return co_await fileEditExecuteAsyncImpl(arguments, workDir);
+        }
         co_return fileEditExecuteImpl(arguments, workDir);
-#endif
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
         co_return fmt::format("[Error] {}", ex.what());

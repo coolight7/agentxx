@@ -2,6 +2,7 @@
 
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
+#include "agentxx/util/util.h"
 #include "asio/read.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/stream_file.hpp"
@@ -28,6 +29,8 @@ asio::awaitable<void>
         needReloadMemoryFiles = false;
 
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
+        /// 文件异步 I/O 可用时取其 executor (可用的实际判断见 util 的
+        /// isAsyncFileIoSupported, 编译期不支持的平台不会走到异步分支)
         auto currentIoCtx = co_await asio::this_coro::executor;
 #endif
 
@@ -40,47 +43,51 @@ asio::awaitable<void>
             );
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
-#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
-                    /// 异步加载文件, 避免同步读盘阻塞 io_context 事件循环
-                    asio::stream_file        stream{currentIoCtx};
-                    neograph_asio_error_code errCode;
-                    stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
-                    if (false == stream.is_open()) {
-                        logContent += fmt::format(
-                            "┣━ ❌ Can not open Memory file: `{}` | {}\n",
-                            filepath,
-                            errCode.message()
-                        );
-                        co_return false;
-                    }
-
                     std::string content;
-                    co_await asio::async_read(
-                        stream,
-                        asio::dynamic_buffer(content),
-                        asio::transfer_all(),
-                        asio::redirect_error(asio::use_awaitable, errCode)
-                    );
-                    stream.close();
-                    if (errCode && errCode != asio::error::eof) {
-                        throw std::system_error{errCode};
-                    }
-#else
-                    /// 同步阻塞读取文件
-                    std::ifstream stream(systemCharsetFilePath);
-                    if (!stream.is_open()) {
-                        logContent
-                            += fmt::format("┣━ ❌ Can not open Memory file: `{}`\n", filepath);
-                        // NOTE: 此处位于协程 lambda 内 (不在外层 for 循环作用域),
-                        // 打开失败与 asio 分支一致, 记录日志后直接结束本次加载
-                        co_return false;
-                    }
-                    auto content = std::string{
-                        std::istreambuf_iterator<char>(stream),
-                        std::istreambuf_iterator<char>()
-                    };
-                    stream.close();
+#if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
+                    /// 文件异步 I/O 可用 (含运行时可真正使用 io_uring) 时异步加载,
+                    /// 避免同步读盘阻塞 io_context 事件循环
+                    if (agentxx::util::isAsyncFileIoSupported()) {
+                        asio::stream_file        stream{currentIoCtx};
+                        neograph_asio_error_code errCode;
+                        stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
+                        if (false == stream.is_open()) {
+                            logContent += fmt::format(
+                                "┣━ ❌ Can not open Memory file: `{}` | {}\n",
+                                filepath,
+                                errCode.message()
+                            );
+                            co_return false;
+                        }
+
+                        co_await asio::async_read(
+                            stream,
+                            asio::dynamic_buffer(content),
+                            asio::transfer_all(),
+                            asio::redirect_error(asio::use_awaitable, errCode)
+                        );
+                        stream.close();
+                        if (errCode && errCode != asio::error::eof) {
+                            throw std::system_error{errCode};
+                        }
+                    } else
 #endif
+                    {
+                        /// 同步阻塞读取文件 (兜底实现)
+                        std::ifstream stream(systemCharsetFilePath);
+                        if (!stream.is_open()) {
+                            logContent
+                                += fmt::format("┣━ ❌ Can not open Memory file: `{}`\n", filepath);
+                            // NOTE: 此处位于协程 lambda 内 (不在外层 for 循环作用域),
+                            // 打开失败与 asio 分支一致, 记录日志后直接结束本次加载
+                            co_return false;
+                        }
+                        content.assign(
+                            std::istreambuf_iterator<char>(stream),
+                            std::istreambuf_iterator<char>()
+                        );
+                        stream.close();
+                    }
                     agentxx::util::autoConvertToUtf8(content);
                     fileContents.emplace_back(filepath, content);
                     logContent += fmt::format("┣━ ✅ Loaded Memory file: `{}`\n", filepath);

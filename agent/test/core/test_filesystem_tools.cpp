@@ -2237,6 +2237,116 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 同步兜底路径测试: 模拟"文件异步 I/O 不可用"的环境 —— 经
+/// agentxx::util::setAsyncFileIoSupported(false) 强制关闭后, read/write/edit 的
+/// 协程执行体应回退同步实现 (编译期无 asio 文件 I/O, 或运行环境 io_uring 被
+/// seccomp 拦截时的实际路径), 且产出与自动探测路径完全一致。
+/// 关闭只作用于本测试作用域, 结束时恢复自动探测
+asio::awaitable<void> test_sync_fallback_without_async_file_io(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    namespace fs = std::filesystem;
+    auto dirPath = testDir + "/同步兜底测试目录";
+    fs::create_directories(agentxx::util::utf8ToPath(dirPath));
+    auto filePath = dirPath + "/sync_fallback.txt";
+
+    auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
+    auto readTool  = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+    auto editTool  = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+
+    auto writeArgs = agentxx::util::Json{
+        {"path",      filePath                                     },
+        {"content",   "同步兜底第一行\n目标旧字符串\n"},
+        {"overwrite", true                                         }
+    };
+    auto readArgs = agentxx::util::Json{
+        {"path", filePath}
+    };
+    auto readPartArgs = agentxx::util::Json{
+        {"path",        filePath},
+        {"line_offset", 1       },
+        {"line_limit",  1       }
+    };
+    auto editArgs = agentxx::util::Json{
+        {"path",          filePath               },
+        {"old_str",       "目标旧字符串"   },
+        {"new_str",       "已替换新字符串"},
+        {"multi_replace", false                  }
+    };
+
+    // 记录一段完整 写→读→改→读 的输出 (供两种路径比对)
+    struct RunResult {
+        std::string writeRes;
+        std::string readRes;
+        std::string readPartRes;
+        std::string editRes;
+        std::string finalContent;
+    };
+
+    auto runOnce = [&]() -> asio::awaitable<RunResult> {
+        RunResult r;
+        r.writeRes    = co_await writeTool.execute_async(writeArgs);
+        r.readRes     = co_await readTool.execute_async(readArgs);
+        r.readPartRes = co_await readTool.execute_async(readPartArgs);
+        r.editRes     = co_await editTool.execute_async(editArgs);
+        std::ifstream in{agentxx::util::utf8ToPath(filePath)};
+        r.finalContent
+            = std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+        co_return r;
+    };
+
+    RunResult syncRun;
+    // 关闭前的自动探测结果 (首次调用即触发探测并缓存, 供恢复后比对)
+    const bool autoDetected = agentxx::util::isAsyncFileIoSupported();
+    {
+        /// 作用域内强制关闭文件异步 I/O, 退出时 (含异常) 恢复自动探测
+        struct ScopedDisableAsyncFileIo {
+            ScopedDisableAsyncFileIo() {
+                agentxx::util::setAsyncFileIoSupported(false);
+            }
+
+            ~ScopedDisableAsyncFileIo() {
+                agentxx::util::resetAsyncFileIoSupported();
+            }
+        } scopedDisable;
+
+        XX_TEST_EXPECT_FALSE(agentxx::util::isAsyncFileIoSupported());
+        syncRun = co_await runOnce();
+        XX_TEST_EXPECT_FALSE(agentxx::util::isAsyncFileIoSupported());
+    }
+    // 作用域结束恢复自动探测: 判断结果回到探测值, 不再被强制关闭
+    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), autoDetected);
+
+    // 同步兜底路径本身必须可用且行为正确
+    bool syncOk = syncRun.writeRes.find("success") != std::string::npos
+                  && syncRun.readRes.find("同步兜底第一行") != std::string::npos
+                  && syncRun.readPartRes.find("目标旧字符串") != std::string::npos
+                  && syncRun.editRes == "success"
+                  && syncRun.finalContent.find("已替换新字符串") != std::string::npos
+                  && syncRun.finalContent.find("目标旧字符串") == std::string::npos;
+
+    // 自动探测路径 (本机可用则为真异步实现) 与同步兜底路径产出应完全一致
+    auto autoRun = co_await runOnce();
+    bool sameOk  = autoRun.writeRes == syncRun.writeRes && autoRun.readRes == syncRun.readRes
+                  && autoRun.readPartRes == syncRun.readPartRes
+                  && autoRun.editRes == syncRun.editRes
+                  && autoRun.finalContent == syncRun.finalContent;
+
+    fs::remove_all(agentxx::util::utf8ToPath(dirPath));
+
+    if (syncOk && sameOk) {
+        g_fs_passed++;
+        TEST_PASS << "Filesystem tools sync fallback (async file io disabled) matches async path"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "Filesystem tools sync fallback failed, syncOk: " << syncOk
+                  << ", sameOk: " << sameOk << ", syncRead: " << syncRun.readRes
+                  << ", autoRead: " << autoRun.readRes << std::endl;
+    }
+    co_return;
+}
+
 /// 插件真实链路冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
 /// op_driver 全链路执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
@@ -2565,6 +2675,9 @@ asio::awaitable<TestResult>
     co_await run(test_edit_text_file_chinese_path);
     co_await run(test_glob_chinese_paths);
     co_await run(test_grep_chinese_path_and_content);
+
+    // 同步兜底路径 (强制关闭文件异步 I/O 后 read/write/edit 走同步实现)
+    co_await run(test_sync_fallback_without_async_file_io);
 
     // 插件真实链路冒烟 (dlopen + 宿主 op_driver 全链路; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)

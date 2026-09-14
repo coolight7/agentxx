@@ -653,15 +653,21 @@ Costs and rules that must be respected together with the implementation:
   |---|---|
   | `agentxx_websearch`: `web_search` / `web_fetch` / `web_fetch_markdown` | the bodies already were asio coroutines (`co_await HttpClient::*Async`); network waits no longer occupy the host worker pool and the per-instance HTTP keep-alive pool is reused |
   | `agentxx_execute_command`: `execute_bash_command` / `execute_windows_command` (Boost.Process v2 branch) | subprocess pipes and timers bind to the coroutine executor; concurrent commands share one poll sequence and one local reactor instead of each occupying a pool thread until its timeout |
-  | `agentxx_filesystem`: `read` / `write` / `edit` | `asio::stream_file` async IO; with io_uring enabled in this build file IO is genuinely asynchronous, avoiding pool-thread occupation for large files |
+  | `agentxx_filesystem`: `read` / `write` / `edit` | `asio::stream_file` async IO; file IO is genuinely asynchronous (availability decided by `agentxx::util::isAsyncFileIoSupported()`: compile-time macro plus a runtime io_uring probe), avoiding pool-thread occupation for large files |
 
 - **Kept on `blocking_tool` (explicit exceptions)**:
   - `agentxx_filesystem`: `list` / `glob` / `grep` — directory traversal plus whole-file
     scanning plus regex/encoding conversion is CPU/blocking IO (asio has no async directory
     API); putting it under the pump would only block the instance's other tools;
   - `agentxx_execute_command`: the non-Boost.Process-v2 `popen` fallback (synchronous);
-  - `agentxx_filesystem`: platforms without `BOOST_ASIO_HAS_FILE` (synchronous fallback; the
-    registration side automatically switches back to `blocking_tool`);
+  - `agentxx_filesystem`: environments without asynchronous file IO (synchronous fallback;
+    the registration side automatically switches back to `blocking_tool`) — availability is
+    decided by `agentxx::util::isAsyncFileIoSupported()`: either asio file IO is not enabled
+    at compile time (neither `ASIO_HAS_FILE` nor `BOOST_ASIO_HAS_FILE` defined), or on
+    Linux/Android no io_uring ring can be created at runtime (the seccomp filter of
+    containers/VMs — `Seccomp: 2` in `/proc/self/status` — blocks `io_uring_setup`, and old
+    kernels return `ENOSYS`); the result is cached per process and tests may force it off
+    via `setAsyncFileIoSupported(false)` to cover the synchronous fallback path;
   - `agentxx_rag_search`: the embedding network request path needs its implementation restored
     to a coroutine shape first (its comments record "the original asio coroutine interface was
     rewritten synchronously"), then it can migrate; chunking/similarity CPU parts keep using

@@ -137,6 +137,33 @@ void test_system_utils() {
 }
 
 // ---------------------------------------------------------------------------
+// 文件异步 I/O 可用性 (util/util.h)
+// ---------------------------------------------------------------------------
+
+void test_async_file_io_support() {
+    // 自动探测: 结果按进程缓存, 重复调用应一致 (首次调用即触发探测)
+    const bool detected = agentxx::util::isAsyncFileIoSupported();
+    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+
+    // 强制关闭: 判断结果直接为 false (测试据此覆盖同步兜底实现)
+    agentxx::util::setAsyncFileIoSupported(false);
+    XX_TEST_EXPECT_FALSE(agentxx::util::isAsyncFileIoSupported());
+
+    // 强制开启: 覆盖为 true
+    agentxx::util::setAsyncFileIoSupported(true);
+    XX_TEST_EXPECT_TRUE(agentxx::util::isAsyncFileIoSupported());
+
+    // 恢复自动探测: 回到探测值 (与强制开启的结果无必然关系)
+    agentxx::util::resetAsyncFileIoSupported();
+    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+
+    // 重复恢复幂等
+    agentxx::util::resetAsyncFileIoSupported();
+    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+}
+
+// ---------------------------------------------------------------------------
 // util/stream.h: Throttle (节流) / Debounce (防抖)
 // ---------------------------------------------------------------------------
 void test_stream_throttle_debounce() {
@@ -295,6 +322,7 @@ TestResult testUtilMisc() {
     test_catch_error_std_exception();
     test_catch_error_unknown();
     test_system_utils();
+    test_async_file_io_support();
     test_stream_throttle_debounce();
     test_container_util_heterogeneous();
 

@@ -14,6 +14,7 @@
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
@@ -2348,6 +2349,73 @@ throw new Error("top-level rollback probe");
                     {"path", dir.string()}
                 });
                 XX_TEST_EXPECT_TRUE(l.find("polled.txt") != std::string::npos);
+            }
+            fsx::remove_all(dir, ec);
+            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));
+        }
+    }
+
+    // ---- 38d-2. agentxx_filesystem 兜底注册: 关闭文件异步 I/O 后重新加载插件,
+    //          read/write/edit 应改注册 blocking_tool (offload 阻塞池) 且功能不变
+    //          (对应容器/虚拟化下 io_uring 被 seccomp 拦截的部署环境) ----
+    {
+        /// 作用域结束恢复自动探测 (含异常路径)
+        struct ScopedDisableAsyncFileIo {
+            ScopedDisableAsyncFileIo() {
+                agentxx::util::setAsyncFileIoSupported(false);
+            }
+
+            ~ScopedDisableAsyncFileIo() {
+                agentxx::util::resetAsyncFileIoSupported();
+            }
+        } scopedDisable;
+
+        auto fsPath = findPluginDir("agentxx_filesystem");
+        auto fsInst = co_await ctx->pluginManager->loadPluginAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            namespace fsx = std::filesystem;
+            std::error_code ec;
+            const auto      uniqueId = std::chrono::steady_clock::now().time_since_epoch().count();
+            const auto      dir
+                = fsx::temp_directory_path(ec) / fmt::format("agentxx_fallback_fs_{}", uniqueId);
+            fsx::create_directories(dir, ec);
+            const std::string file = (dir / "fallback.txt").string();
+
+            auto writeTool = ctx->toolRegistry->find("agentxx_filesystem_write");
+            auto readTool  = ctx->toolRegistry->find("agentxx_filesystem_read");
+            auto editTool  = ctx->toolRegistry->find("agentxx_filesystem_edit");
+            XX_TEST_EXPECT_TRUE(writeTool != nullptr);
+            XX_TEST_EXPECT_TRUE(readTool != nullptr);
+            XX_TEST_EXPECT_TRUE(editTool != nullptr);
+
+            if (writeTool && readTool && editTool) {
+                // write / read / edit 全程走同步兜底实现 (blocking_tool)
+                auto w = co_await writeTool->execute_async(agentxx::util::Json{
+                    {"path",      file                           },
+                    {"content",   "hello fallback\nsecond line\n"},
+                    {"overwrite", true                           },
+                });
+                XX_TEST_EXPECT_TRUE(w.find("success") != std::string::npos);
+
+                auto r = co_await readTool->execute_async(agentxx::util::Json{
+                    {"path",        file},
+                    {"line_offset", 0   },
+                    {"line_limit",  2   },
+                });
+                XX_TEST_EXPECT_TRUE(r.find("hello fallback") != std::string::npos);
+
+                auto e = co_await editTool->execute_async(agentxx::util::Json{
+                    {"path",    file         },
+                    {"old_str", "second line"},
+                    {"new_str", "SECOND"     },
+                });
+                XX_TEST_EXPECT_TRUE(e.find("success") != std::string::npos);
+
+                auto r2 = co_await readTool->execute_async(agentxx::util::Json{
+                    {"path", file}
+                });
+                XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
             }
             fsx::remove_all(dir, ec);
             XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));

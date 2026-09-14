@@ -1,4 +1,5 @@
 #include "cpu_gpu_monitor.h"
+#include "agentxx/util/util.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "system_monitor_plugin.h"
@@ -612,7 +613,9 @@ protected:
 
     static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
-        {
+        /// 文件异步 I/O 可用时异步读取, 避免同步读盘阻塞事件循环
+        /// (可用性含运行时 io_uring 探测, 见 agentxx::util::isAsyncFileIoSupported)
+        if (agentxx::util::isAsyncFileIoSupported()) {
             auto                      executor = co_await asio::this_coro::executor;
             asio::stream_file         stream{executor};
             boost::system::error_code errCode;
@@ -633,7 +636,8 @@ protected:
             }
             co_return data;
         }
-#else
+#endif
+        /// 同步兜底读取 (文件异步 I/O 不可用)
         std::ifstream stream;
         stream.open(std::string{path});
         if (!stream) {
@@ -644,7 +648,6 @@ protected:
             = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
         stream.close();
         co_return result;
-#endif
     }
 
     static asio::awaitable<CpuTimes> readCpuStat() {

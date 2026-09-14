@@ -806,14 +806,19 @@ polled_tool(ctx, name, depict, schema,
   |---|---|
   | `agentxx_websearch`：`web_search` / `web_fetch` / `web_fetch_markdown` | 实现体本就是 asio 协程（`co_await HttpClient::*Async`）；网络等待不再占用宿主工作线程池，同实例的 HTTP keep-alive 连接池天然复用 |
   | `agentxx_execute_command`：`execute_bash_command` / `execute_windows_command`（Boost.Process v2 分支） | 子进程管道/计时器绑定协程 executor；并发多命令共享同一 poll 序列与同一个本地 reactor，不再各占一个池线程直到超时 |
-  | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；本构建启用 io_uring 时文件 IO 真异步，避免大文件读写占用池线程 |
+  | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；文件 IO 真异步（可用性经 `agentxx::util::isAsyncFileIoSupported()` 判断：编译期宏 + 运行时 io_uring 探测），避免大文件读写占用池线程 |
 
 - **保持 `blocking_tool`（显式例外）**：
   - `agentxx_filesystem`：`list` / `glob` / `grep` —— 目录遍历 + 全文件扫描 + 正则/编码
     转换属 CPU/阻塞 IO（asio 无异步目录 API），放进 pump 只会阻塞同实例其它工具；
   - `agentxx_execute_command`：非 Boost.Process v2 的 popen 回退分支（同步实现）；
-  - `agentxx_filesystem`：`BOOST_ASIO_HAS_FILE` 不可用平台（同步回退，注册侧自动切回
-    `blocking_tool`）；
+  - `agentxx_filesystem`：文件异步 I/O 不可用环境（同步回退，注册侧自动切回
+    `blocking_tool`）—— 可用性统一经 `agentxx::util::isAsyncFileIoSupported()` 判断：
+    编译期未启用 asio 文件 I/O（`ASIO_HAS_FILE` / `BOOST_ASIO_HAS_FILE` 均未定义），
+    或 Linux/Android 上运行时无法创建 io_uring 环（容器/虚拟化的 seccomp 过滤
+    ——`/proc/self/status` 的 `Seccomp: 2`——会拦截 `io_uring_setup`，内核过旧返回
+    `ENOSYS`）；判断结果按进程缓存，测试可经 `setAsyncFileIoSupported(false)` 强制
+    关闭以覆盖同步兜底路径；
   - `agentxx_rag_search`：embedding 网络段先把实现体恢复为协程形态（其注释记录了
     "原版 asio 协程接口改为同步实现"）再迁移；分块/相似度等 CPU 段继续 offload（**二期**）。
 - **保持现状（无私有 reactor 等待）**：codegraph / planning / system_monitor / math /

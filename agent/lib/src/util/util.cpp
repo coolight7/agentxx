@@ -11,6 +11,19 @@
 #include <optional>
 #include <string>
 
+#include <asio/detail/config.hpp>
+#include <cstddef>
+
+#if (XX_IS_LINUX_D || XX_IS_ANDROID_D) && (defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)) \
+    && (defined(ASIO_HAS_IO_URING) || defined(BOOST_ASIO_HAS_IO_URING))
+// io_uring 运行时探测 (asio 的 Linux 文件异步 I/O 由 io_uring 提供);
+// 包含路径/链接库由 agentxx_util 的 PkgConfig::uring 传递
+#include <liburing.h>
+#endif
+
+#include <atomic>
+#include <cstring>
+
 namespace {
 
 /// 去掉首尾空白符 (\r\n\t 等)
@@ -408,3 +421,105 @@ agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool /*forceRefres
 }
 
 #endif
+
+// =====================================================================
+// 文件异步 I/O 可用性 (asio::stream_file 的文件异步读写是否有效)
+// =====================================================================
+
+namespace {
+
+/// 自动探测结果缓存: 0 未探测 / 1 可用 / 2 不可用
+/// - 按进程只探测一次, 之后直接返回缓存值; 原子量用于多线程/多协程并发读取
+std::atomic<int> asyncFileIoProbeState{0};
+
+/// 强制设置值: -1 未设置 / 0 强制不可用 / 1 强制可用 (优先于探测结果)
+std::atomic<int> asyncFileIoOverrideState{-1};
+
+#if (XX_IS_LINUX_D || XX_IS_ANDROID_D) && (defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)) \
+    && (defined(ASIO_HAS_IO_URING) || defined(BOOST_ASIO_HAS_IO_URING))
+/// 读取 /proc/self/status 的 `Seccomp` 字段 (仅探测失败时用于日志定位, 失败返回 -1)
+/// - 0: 未启用 seccomp; 1: SECCOMP_MODE_STRICT; 2: SECCOMP_MODE_FILTER
+int readSeccompMode() {
+    std::ifstream status{"/proc/self/status"};
+    if (false == status.is_open()) {
+        return -1;
+    }
+    for (std::string line; std::getline(status, line);) {
+        if (line.rfind("Seccomp:", 0) != 0) {
+            continue;
+        }
+        int mode = -1;
+        if (std::sscanf(line.c_str(), "Seccomp: %d", &mode) != 1) {
+            return -1;
+        }
+        return mode;
+    }
+    return -1;
+}
+#endif
+
+/// 探测文件异步 I/O 是否可用 (由 [isAsyncFileIoSupported] 首次调用时触发, 只跑一次)
+bool probeAsyncFileIoSupported() {
+#if !(defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE))
+    // 编译期未启用 asio 文件 I/O (该平台无 io_uring/IOCP 文件句柄支持), 直接用同步实现
+    XX_LOGD("Async file io unsupported: `ASIO_HAS_FILE`/`BOOST_ASIO_HAS_FILE` not defined");
+    return false;
+#elif XX_IS_LINUX_D || XX_IS_ANDROID_D
+#if defined(ASIO_HAS_IO_URING) || defined(BOOST_ASIO_HAS_IO_URING)
+    /// Linux/Android: asio 的文件异步 I/O 由 io_uring 提供, 编译期可用不代表运行
+    /// 环境可用 —— 容器/虚拟化的 seccomp 过滤 (Seccomp: 2) 会拦截 `io_uring_setup`,
+    /// 内核过旧时该调用返回 ENOSYS, 故实际创建一个 io_uring 环来确认
+    io_uring ring{};
+    int      initRet     = io_uring_queue_init(2, &ring, 0);
+    int      seccompMode = readSeccompMode();
+    if (initRet < 0) {
+        XX_LOGW(
+            "Async file io unsupported: io_uring_queue_init failed, errno={} ({}) seccomp={}",
+            -initRet,
+            std::strerror(-initRet),
+            seccompMode
+        );
+        return false;
+    }
+    io_uring_queue_exit(&ring);
+    XX_LOGD("Async file io supported: io_uring ring created, seccomp={}", seccompMode);
+    return true;
+#else
+    // Linux 上 asio 的文件 I/O 只能由 io_uring 提供: 该宏缺失即编译期未启用
+    XX_LOGW("Async file io unsupported: built without io_uring (`ASIO_HAS_IO_URING` undefined)");
+    return false;
+#endif
+#else
+    // 其他平台 (Windows: IOCP + 随机访问句柄): 编译期宏已确认文件异步 I/O 可用
+    XX_LOGD("Async file io supported: provided by platform native async file handle");
+    return true;
+#endif
+}
+
+} // namespace
+
+bool agentxx::util::isAsyncFileIoSupported() {
+    // 强制设置优先 (供测试关闭异步路径, 覆盖同步兜底实现)
+    int overrideState = asyncFileIoOverrideState.load(std::memory_order_acquire);
+    if (overrideState >= 0) {
+        return overrideState == 1;
+    }
+
+    int probeState = asyncFileIoProbeState.load(std::memory_order_acquire);
+    if (probeState != 0) {
+        return probeState == 1;
+    }
+
+    // 首次探测: 并发调用时可能各探测一次, 结果一致且代价仅一次系统调用, 故不加锁
+    bool supported = probeAsyncFileIoSupported();
+    asyncFileIoProbeState.store(supported ? 1 : 2, std::memory_order_release);
+    return supported;
+}
+
+void agentxx::util::setAsyncFileIoSupported(bool supported) {
+    asyncFileIoOverrideState.store(supported ? 1 : 0, std::memory_order_release);
+}
+
+void agentxx::util::resetAsyncFileIoSupported() {
+    asyncFileIoOverrideState.store(-1, std::memory_order_release);
+}
