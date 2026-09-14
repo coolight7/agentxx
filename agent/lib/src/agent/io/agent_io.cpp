@@ -260,15 +260,16 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 allowed  = agentxx::middleware::interruptValueBool(valueObj, "decision", false);
                 remember = agentxx::middleware::interruptValueBool(valueObj, "remember", false);
             }
-            // 记住本次选择: 客户端只回传表单值, 规则注册在 agent 侧完成
-            // (客户端不参与权限语义; 见 rememberPermission)
-            if (remember && confirmedValues(values)) {
-                co_await this->rememberPermission(req.category, req.target, allowed);
-            }
+            // 记住本次选择: 客户端只回传表单值 (是否勾选 remember), 规则注册由
+            // 请求方 ([PermissionMiddlewareHandle]) 按响应中的 remember 自行完成
+            // —— 规则表归中间件所有, 它订阅的是 agent 全局总线, 而本端点的权限
+            // 服务注册在会话总线上, 端点不能跨总线直接改规则表 (会丢失)
+            const bool rememberRule = remember && confirmedValues(values);
             co_return events::RespPermission{
                 .decision = allowed ? events::RespPermission::Decision::Allow
                                     : events::RespPermission::Decision::Deny,
                 .reason   = allowed ? "" : "user denied",
+                .remember = rememberRule,
             };
         }
     );
@@ -277,42 +278,6 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
 /// 结果是否包含已确认的输入值 (空对象 = 用户取消/中断过期, 不注册规则)
 bool AgentIOBase::confirmedValues(const agentxx::util::Json& values) {
     return values.is_object() && !values.empty();
-}
-
-asio::awaitable<void> AgentIOBase::rememberPermission(
-    std::string_view category,
-    std::string_view target,
-    bool             allow
-) {
-    auto bus = registeredBus_.lock();
-    if (!bus) {
-        // 总线已释放 (会话结束/端点析构): 规则无处注册, 记录后结束
-        XX_LOGW("[io] rememberPermission without bus, rule dropped: {}", target);
-        co_return;
-    }
-    if (target.empty()) {
-        co_return;
-    }
-    // 权限分类 → 中间件规则作用域索引 (读/写各一套规则)
-    const size_t index
-        = (category == "filesystem_write")
-              ? agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-              : agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
-    co_await bus->publish<events::EventSetPermissionRule>(
-        events::Topic::PermissionSetRule,
-        events::EventSetPermissionRule{
-            .path  = std::string{target},
-            .allow = allow,
-            .index = index,
-        }
-    );
-    XX_LOGI(
-        "[io] remembered permission rule: {} {} (index={})",
-        target,
-        allow ? "ALLOW" : "DENY",
-        index
-    );
-    co_return;
 }
 
 } // namespace agent

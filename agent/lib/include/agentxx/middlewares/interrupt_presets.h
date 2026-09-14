@@ -170,6 +170,8 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts);
 /// - 头行: "! [Permission] " (i18n) + 工具名 (accent) + 权限分类 (hint)
 /// - 目标描述 (hint, 硬折行) + 空行 + "记住此选择" 勾选 (id = "remember")
 ///   + 空行 + 允许/拒绝一键按钮 (控件 id = "decision", 点击即提交)
+/// - 目标为目录 (规范化路径带尾斜杠) 时, 勾选项附生效范围提示: 记住的目录规则
+///   按最长前缀匹配覆盖其全部子目录与文件 (见 [PermissionMiddlewareHandle])
 /// - 结果形态: `{"values": {"decision": "true", "remember": false}}`
 InterruptUi
     permissionCard(std::string_view toolName, std::string_view category, std::string_view target);

@@ -66,9 +66,6 @@ struct Topic {
     /// 工具执行权限检查: ReqToolPermissionCheck / RespToolPermissionCheck
     inline static constexpr std::string_view ToolPermissionCheck{"service.permission.check"};
 
-    /// 文件系统权限规则设置 (单向事件): EventSetPermissionRule
-    inline static constexpr std::string_view PermissionSetRule{"service.permission.set_rule"};
-
     /// 每会话文件系统隔离边界设置/清除 (单向事件): EventSetSessionIsolation /
     /// EventClearSessionIsolation
     inline static constexpr std::string_view PermissionSetIsolation{
@@ -239,6 +236,12 @@ struct RespPermission {
     Decision decision = Decision::Deny;
     /// 拒绝原因 (供 LLM/日志参考)
     std::string reason;
+    /// 用户是否选择"记住本次选择" (权限询问卡片的 remember 勾选项):
+    /// - true 时由请求方 ([PermissionMiddlewareHandle]) 按本次 target 为其子树
+    ///   注册允许/拒绝规则, 后续同目标访问直接按规则处理, 不再询问
+    /// - 应答者只回传用户意图, 不参与规则注册 (规则表归权限中间件所有);
+    ///   取消/未提交 (结果无 values) 时应答者需保持为 false
+    bool remember = false;
 };
 
 /// ===== 请求-响应: subagent 委派 (统一批量) =====
@@ -340,13 +343,6 @@ struct ReqToolPermissionCheck {
 struct RespToolPermissionCheck {
     bool        allow = true;
     std::string reason;
-};
-
-/// 权限规则设置 (service.permission.set_rule)
-struct EventSetPermissionRule {
-    std::string path;
-    bool        allow = false;
-    size_t      index = 0; // 0 = read, 1 = write
 };
 
 /// 会话文件系统隔离设置 (service.permission.set_isolation)

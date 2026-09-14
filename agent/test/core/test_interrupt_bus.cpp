@@ -447,7 +447,8 @@ asio::awaitable<void> test_permission_remember_rule() {
     XX_TEST_EXPECT_TRUE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
 
-    // 用户选择"记住 (允许)": 注册 ALLOW 规则 (等价于客户端发送 WireSetPermission)
+    // 用户选择"记住 (允许)": 注册 ALLOW 规则
+    // (等价于权限中间件按应答 RespPermission.remember 自行注册)
     permission->setFilesystemPermission(
         "/data/projects/remember",
         agentxx::middleware::PermissionOperator::ALLOW,
@@ -471,6 +472,229 @@ asio::awaitable<void> test_permission_remember_rule() {
     XX_TEST_EXPECT_FALSE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 仍未再询问
 
+    co_return;
+}
+
+/// 记住权限选择 (生产总线拓扑) + 目录规则覆盖子目录与文件:
+/// - 生产环境中权限中间件注册在 agent 全局总线 (agentContext->bus) 上, 而 IO 端点
+///   的 interrupt/permission 服务注册在会话总线 (session->bus) 上 —— 两者是不同对象
+/// - 规则表归中间件所有, 因此"记住本次选择"经 RespPermission.remember 回传给中间件
+///   自行注册 (若改由端点经会话总线发布规则事件, 中间件收不到, 表现为勾选记住后
+///   下次访问仍反复询问)
+/// - 目录规则按最长前缀匹配覆盖其下全部子目录与文件 (读/写各自一套规则)
+asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
+    // 生产拓扑: 两个独立总线 (agent 全局总线 / 会话总线)
+    auto agentBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+
+    // 客户端权限应答 (勾选"记住本次选择", 允许)
+    auto io                = std::make_shared<MockIO>();
+    io->permissionAllow    = true;
+    io->permissionRemember = true;
+    io->registerOnBus(sessionBus);
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->bus = agentBus;
+    auto session      = agentContext->getSession("remember_cross_bus");
+    session->bus      = sessionBus;
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+    permission->registerOnBus(agentBus);
+    // 无任何已注册规则 → 一律询问
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+
+    // 真实临时目录树: <tmp>/agentxx_perm_remember/{allowed/{file.txt,sub/deep.txt},
+    // wdir/{file.txt,sub/deep.txt}, other/, denied/inner.txt}
+    const auto      tmpRoot = std::filesystem::temp_directory_path() / "agentxx_perm_remember";
+    std::error_code ec;
+    std::filesystem::remove_all(tmpRoot, ec);
+    std::filesystem::create_directories(tmpRoot / "allowed" / "sub", ec);
+    std::filesystem::create_directories(tmpRoot / "wdir" / "sub", ec);
+    std::filesystem::create_directories(tmpRoot / "other", ec);
+    std::filesystem::create_directories(tmpRoot / "denied", ec);
+    const std::string allowedDir  = (tmpRoot / "allowed").generic_string();
+    const std::string allowedSub  = (tmpRoot / "allowed" / "sub").generic_string();
+    const std::string allowedDeep = (tmpRoot / "allowed" / "sub" / "deep.txt").generic_string();
+    const std::string allowedFile = (tmpRoot / "allowed" / "file.txt").generic_string();
+    const std::string wdirDir     = (tmpRoot / "wdir").generic_string();
+    const std::string wdirSub     = (tmpRoot / "wdir" / "sub").generic_string();
+    const std::string wdirFile    = (tmpRoot / "wdir" / "file.txt").generic_string();
+    const std::string otherPath   = (tmpRoot / "other" / "x.txt").generic_string();
+    const std::string otherPath2  = (tmpRoot / "other" / "y.txt").generic_string();
+    const std::string deniedDir   = (tmpRoot / "denied").generic_string();
+    const std::string deniedInner = (tmpRoot / "denied" / "inner.txt").generic_string();
+
+    MockTool readItem("agentxx_filesystem_read");
+    MockTool writeItem("agentxx_filesystem_write");
+
+    auto check = [&](const MockTool&  item,
+                     std::string_view path,
+                     size_t           index) -> asio::awaitable<bool> {
+        auto args = agentxx::util::Json{
+            {"path",      std::string{path}   },
+            {"sessionId", "remember_cross_bus"}
+        };
+        co_return co_await permission->defOnFilesystemHandle(item, args, index);
+    };
+    auto read = [&](std::string_view path) -> asio::awaitable<bool> {
+        co_return co_await check(
+            readItem,
+            path,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+        );
+    };
+    auto write = [&](std::string_view path) -> asio::awaitable<bool> {
+        co_return co_await check(
+            writeItem,
+            path,
+            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+        );
+    };
+
+    // 1. 读目录: 首次询问 → 勾选记住 (允许) → 目录规则立即生效
+    bool ok = co_await read(allowedDir);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+
+    // 2. 记住目录后: 目录自身/其下文件/子目录/子目录内文件均直接放行, 不再询问
+    ok = co_await read(allowedFile);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 未再询问
+    ok = co_await read(allowedSub);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+    ok = co_await read(allowedDeep);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+
+    // 3. 读规则不外溢: 兄弟目录仍需询问 (询问后同样记住其子树)
+    ok = co_await read(otherPath);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 2);
+
+    // 4. 写规则独立于读规则: 写目录询问一次并记住后, 写其下文件/子目录均放行
+    ok = co_await write(wdirDir);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 3);
+    ok = co_await write(wdirFile);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 3);
+    ok = co_await write(wdirSub);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 3);
+
+    // 5. 记住"拒绝": 该目录及其子目录后续直接拒绝, 不再询问
+    io->permissionAllow = false;
+    ok                  = co_await read(deniedDir);
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 4);
+    ok = co_await read(deniedInner);
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 4); // 拒绝规则覆盖子树且未再询问
+
+    // 6. 未勾选记住时不注册规则: 每次访问都继续询问
+    io->permissionAllow    = true;
+    io->permissionRemember = false;
+    ok                     = co_await read(otherPath2);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 5);
+    ok = co_await read(otherPath2);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 6);
+
+    std::filesystem::remove_all(tmpRoot, ec);
+    co_return;
+}
+
+/// worktree 会话隔离边界: worktree 子树 (allowPath) 内读写放行, 主检出子树
+/// (denyWritePath) 内写操作拒绝 (读不受限)
+/// - 真实 worktree 位于主检出的 `.agentxx/agent/worktrees/{name}` 下 (见
+///   agentxx::util::worktree::worktreesRoot), 即 allowPath 本身就在 denyWritePath
+///   子树内; 因此 allowPath 必须先于 denyWritePath 判定, 否则会话对自身工作区的
+///   写操作也会被"主检出写拒绝"命中 (表现为绑定 worktree 后无法写任何文件)
+asio::awaitable<void> test_permission_worktree_isolation_subtree() {
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+    // 未命中任何规则 → 询问 (无 prompter 时拒绝, 用于断言"未放行")
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+
+    // 真实目录布局: <tmp>/agentxx_wt_iso/repo/{src, .agentxx/agent/worktrees/wt-1/src}
+    const auto      tmpRoot = std::filesystem::temp_directory_path() / "agentxx_wt_iso";
+    std::error_code ec;
+    std::filesystem::remove_all(tmpRoot, ec);
+    const std::string repoDir  = (tmpRoot / "repo").generic_string();
+    const std::string worktree = (tmpRoot / "repo" / ".agentxx" / "agent" / "worktrees" / "wt-1")
+                                     .generic_string();
+    std::filesystem::create_directories(worktree + "/src", ec);
+    std::filesystem::create_directories(repoDir + "/src", ec);
+    const std::string wtFile    = worktree + "/src/wt.cpp";
+    const std::string mainFile  = repoDir + "/src/main.cpp";
+
+    // Ask 模式默认规则: 工作目录 (主检出根) 内读写放行
+    permission->setFilesystemPermission(
+        repoDir,
+        agentxx::middleware::PermissionOperator::ALLOW,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+    );
+    permission->setFilesystemPermission(
+        repoDir,
+        agentxx::middleware::PermissionOperator::ALLOW,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    // 会话绑定 worktree: worktree 子树放行, 主检出子树写拒绝
+    permission->setSessionIsolation(
+        "wt_session",
+        agentxx::middleware::SessionFsIsolation{
+            .allowPath     = worktree,
+            .denyWritePath = repoDir,
+        }
+    );
+
+    MockTool readItem("agentxx_filesystem_read");
+    MockTool writeItem("agentxx_filesystem_write");
+    auto     check = [&](const MockTool&  item,
+                     std::string_view path,
+                     size_t           index) -> asio::awaitable<bool> {
+        auto args = agentxx::util::Json{
+            {"path",      std::string{path} },
+            {"sessionId", "wt_session"       }
+        };
+        co_return co_await permission->defOnFilesystemHandle(item, args, index);
+    };
+
+    using Mw = agentxx::middleware::PermissionMiddlewareHandle;
+    // 1. worktree 子树内写: 放行 (未被主检出写拒绝命中)
+    XX_TEST_EXPECT_TRUE(
+        co_await check(writeItem, wtFile, Mw::FilesystemPermissionWRITE)
+    );
+    XX_TEST_EXPECT_TRUE(
+        co_await check(writeItem, worktree, Mw::FilesystemPermissionWRITE)
+    );
+    // 2. worktree 子树内读: 放行
+    XX_TEST_EXPECT_TRUE(
+        co_await check(readItem, wtFile, Mw::FilesystemPermissionREAD)
+    );
+    // 3. 主检出子树写 (worktree 之外): 拒绝 (读不受限)
+    XX_TEST_EXPECT_FALSE(
+        co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE)
+    );
+    XX_TEST_EXPECT_FALSE(
+        co_await check(writeItem, repoDir, Mw::FilesystemPermissionWRITE)
+    );
+    // 4. 主检出子树读: 不受隔离影响 (按已注册规则放行)
+    XX_TEST_EXPECT_TRUE(
+        co_await check(readItem, mainFile, Mw::FilesystemPermissionREAD)
+    );
+
+    // 5. 清除隔离后: 主检出写恢复按规则放行
+    permission->clearSessionIsolation("wt_session");
+    XX_TEST_EXPECT_TRUE(
+        co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE)
+    );
+
+    std::filesystem::remove_all(tmpRoot, ec);
     co_return;
 }
 
@@ -574,6 +798,41 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         XX_TEST_EXPECT_EQ(hintTexts, size_t{1});
         XX_TEST_EXPECT_EQ(checkbox, size_t{1});
         XX_TEST_EXPECT_EQ(buttons, size_t{1});
+        // 文件目标: 勾选项不附生效范围提示 (仅记住该文件本身)
+        for (const auto& block : ui.blocks) {
+            if (block.kind == "control" && block.control == "checkbox") {
+                XX_TEST_EXPECT_TRUE(block.help.empty());
+                XX_TEST_EXPECT_TRUE(block.helpKey.empty());
+            }
+        }
+    }
+
+    // 目录目标 (规范化路径带尾斜杠): 勾选项附生效范围提示 —— 记住的目录规则同时
+    // 覆盖其子目录与文件 (与中间件最长前缀匹配语义一致)
+    auto reqDir     = req;
+    reqDir.target   = "/data/projects/ui/";
+    auto respDir    = co_await sessionBus
+                       ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                           agentxx::events::Topic::Permission,
+                           reqDir,
+                           std::chrono::seconds(5)
+                       );
+    XX_TEST_EXPECT_TRUE(respDir.has_value());
+    const auto argDirOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+        agentxx::util::Json::parse(io->lastInterruptArgJson)
+    );
+    XX_TEST_EXPECT_TRUE(argDirOpt.has_value());
+    if (argDirOpt.has_value()) {
+        bool checkedDirHelp = false;
+        for (const auto& block : argDirOpt->ui.blocks) {
+            if (block.kind == "control" && block.control == "checkbox") {
+                XX_TEST_EXPECT_EQ(block.id, std::string("remember"));
+                XX_TEST_EXPECT_EQ(block.helpKey, std::string("interrupt.rememberDir"));
+                XX_TEST_EXPECT_FALSE(block.help.empty());
+                checkedDirHelp = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(checkedDirHelp);
     }
     co_return;
 }
@@ -688,9 +947,12 @@ asio::awaitable<void> test_malformed_result_rejected() {
 
 /// 权限询问 + "记住本次选择" (结果对象形态):
 /// 客户端只回传 {"values": {...}} (含 remember); 规则注册由 agent 侧 permission
-/// 处理器完成 (客户端不再发 WireSetPermission, 也不参与权限语义)
+/// 处理器完成 (客户端不参与权限语义)
 asio::awaitable<void> test_permission_remember_via_result_options() {
     auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    // agent 全局总线 (权限中间件注册在此; 与 IO 端点所在的会话总线相互独立)
+    auto agentBus
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     auto io                = std::make_shared<MockIO>();
@@ -699,12 +961,13 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
     io->registerOnBus(sessionBus);
 
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->bus = agentBus;
     auto session      = agentContext->getSession("remember_options");
     session->bus      = sessionBus;
     auto permission
         = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
-    // 订阅权限规则设置事件 (记住选择经总线注册规则到本中间件)
-    permission->registerOnBus(sessionBus);
+    // 规则表归权限中间件所有, 记住选择经应答 (RespPermission.remember) 由本中间件注册
+    permission->registerOnBus(agentBus);
     // 无任何已注册规则 → 一律询问 (走 HIL 权限询问路径)
     permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
 
@@ -795,6 +1058,8 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_permission_remember_rule();
         co_await test_permission_prompt_carries_ui_descriptor();
         co_await test_permission_remember_via_result_options();
+        co_await test_permission_remember_across_bus_and_dir_subtree();
+        co_await test_permission_worktree_isolation_subtree();
         co_await test_hil_interrupt_result_object_values_only();
         co_await test_malformed_result_rejected();
         test_make_interrupt_result_forms();

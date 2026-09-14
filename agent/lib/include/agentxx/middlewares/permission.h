@@ -32,7 +32,10 @@ public:
 
 /// 每会话文件系统隔离边界 (worktree 模式; 见 setSessionIsolation)
 struct SessionFsIsolation {
-    /// worktree 根 (规范化目录路径, 尾斜杠): 该子树内读写放行
+    /// worktree 根 (规范化目录路径, 尾斜杠): 该子树内读写不受隔离约束
+    /// (即不会被下面的 denyWritePath 写拒绝命中; 读写本身仍按已注册规则处理)
+    /// - 真实 worktree 位于主检出的 `.agentxx/agent/worktrees/` 下, 故本字段是
+    ///   denyWritePath 之内的例外子树, 必须优先判定
     std::string allowPath;
     /// 主检出仓库根 (规范化目录路径, 尾斜杠): 该子树内写操作拒绝 (读不受限)
     std::string denyWritePath;
@@ -69,7 +72,8 @@ public:
     /// 设置/更新指定会话的隔离边界 (worktree 绑定时由 agentxx_git_worktree 调用)
     /// - 生效规则: 命中 denyWritePath 的写操作直接拒绝 —— 隔离优先于白名单
     ///   与模式默认规则 (与 Claude Code "绑定 worktree 后阻止针对主检出的
-    ///   文件编辑" 同语义); 读操作与其他路径完全不受影响
+    ///   文件编辑" 同语义); 命中 allowPath 的路径是该约束的例外 (worktree
+    ///   本身位于主检出内), 按已注册规则照常处理; 读操作与其他路径完全不受影响
     void setSessionIsolation(std::string_view sessionId, SessionFsIsolation isolation);
 
     /// 清除指定会话的隔离边界 (解绑/删除 worktree 时)
@@ -93,11 +97,20 @@ public:
     asio::awaitable<bool>
         defOnFilesystemHandle(const neograph::Tool& item, agentxx::util::Json& args, size_t index);
 
-    /// 经总线发起权限询问; 无 prompter 或被拒绝时返回 false
+    /// 经会话总线发起权限询问, 并按应答处理"记住本次选择"
+    /// - 无 prompter (无 IO 端点注册应答) 或被拒绝时返回 false
+    /// - 应答携带 [events::RespPermission::remember] 时, 为本目标注册允许/拒绝
+    ///   规则 (作用域由 [index] 决定), 后续同目标及其子路径不再询问
+    ///
+    /// - `args`:
+    ///     - [item]  被检查的 tool (取工具名下发询问)
+    ///     - [args]  tool 调用参数 (取 sessionId 定位会话总线; 原样下发)
+    ///     - [index] 规则作用域: [FilesystemPermissionREAD] / [FilesystemPermissionWRITE]
+    ///     - [target] 受约束目标 (已规范化的绝对路径, 与规则匹配口径一致)
     asio::awaitable<bool> requestPermission(
         const neograph::Tool& item,
         agentxx::util::Json&  args,
-        std::string           category,
+        size_t                index,
         std::string           target
     );
 
@@ -107,7 +120,12 @@ public:
 
     ~PermissionMiddlewareHandle() override;
 
-    /// 在 EventBus 上注册权限检查服务与规则订阅
+    /// 在 EventBus 上注册权限检查服务与会话隔离订阅
+    /// - 须传入 **agent 全局总线** (agentContext->bus): 工具权限检查服务
+    ///   (service.permission.check) 与会话隔离事件 (worktree) 订阅都注册在此总线上
+    /// - 权限询问 (service.permission) 不同: 由 [requestPermission] 经**会话总线**
+    ///   (session->bus) 发起, 因为应答方是绑定到会话的 IO 端点
+    /// - 重复调用会先注销上一次注册 (见 unregisterFromBus)
     void registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus);
 
     /// 从 EventBus 注销
@@ -120,7 +138,6 @@ private:
 
     std::weak_ptr<agentxx::event::EventBus> registeredBus_;
     size_t                                  checkServerId_       = 0;
-    size_t                                  setRuleSubId_        = 0;
     size_t                                  setIsolationSubId_   = 0;
     size_t                                  clearIsolationSubId_ = 0;
 };

@@ -178,6 +178,7 @@ constexpr Entry kTable[] = {
     {"interrupt.allow",           "Allow",                                               "允许"                                                                                           },
     {"interrupt.deny",            "Deny",                                                "拒绝"                                                                                           },
     {"interrupt.remember",        "Remember this choice",                                "记住此选择"                                                                                  },
+    {"interrupt.rememberDir",     "Also covers its subdirectories and files",            "同时覆盖其子目录与文件"                                                                      },
     {"interrupt.tipInt",          "( Invalid integer, please input again. )",            "( 无效整数, 请重新输入。 )"                                                             },
     {"interrupt.tipNum",          "( Invalid number, please input again. )",             "( 无效数字, 请重新输入。 )"                                                             },
     {"interrupt.tipRange",        "( Out of range (limit: {}), please input again. )",   "( 超出范围 (限制: {}), 请重新输入。 )"                                                   },

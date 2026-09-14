@@ -289,6 +289,12 @@ ui = { "version": 1,
 {"values":{"decision":"true","remember":true}}
 ```
 
+> `remember: true` 表示"记住本次选择": agent 侧权限中间件按本次目标路径注册
+> 允许/拒绝规则, 后续同目标访问直接按规则处理, 不再询问; 目标为目录时
+> (描述内目标路径带尾斜杠) 该规则同时覆盖其全部子目录与文件 —— 此时勾选项
+> 附 `helpKey = "interrupt.rememberDir"` 的生效范围提示, 宿主按通用
+> `help`/`helpKey` 字段渲染即可 (不区分控件语义)
+
 **示例 (多控件表单 + 提交行)**
 
 ```jsonc

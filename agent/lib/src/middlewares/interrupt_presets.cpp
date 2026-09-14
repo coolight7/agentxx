@@ -374,7 +374,18 @@ InterruptUi
     ui.blocks.push_back(gapBlock(1));
 
     // 设置项: 记住此选择 (勾选后提交时按本次选择注册路径规则)
-    ui.blocks.push_back(checkboxControl("remember", "Remember this choice", "interrupt.remember"));
+    // - 目录目标 (规范化路径带尾斜杠; 见 PermissionMiddlewareHandle::
+    //   normalizePermissionPath): 规则按最长前缀匹配覆盖该目录及其全部子目录与
+    //   文件, 在勾选项下方提示生效范围 (避免误解为只记住单个路径)
+    const bool isDirTarget = !target.empty() && target.back() == '/';
+    ui.blocks.push_back(checkboxControl(
+        "remember",
+        "Remember this choice",
+        "interrupt.remember",
+        false,
+        isDirTarget ? "Also covers its subdirectories and files" : std::string{},
+        isDirTarget ? "interrupt.rememberDir" : std::string{}
+    ));
     ui.blocks.push_back(gapBlock(1));
 
     // 一键取值按钮: 允许 / 拒绝 (点击即提交; 默认选中"拒绝" = 安全语义)

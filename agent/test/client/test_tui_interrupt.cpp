@@ -836,6 +836,24 @@ void test_permission_card_render_and_result() {
     XX_TEST_EXPECT_TRUE(f2.recvForm(ch2, s2));
     XX_TEST_EXPECT_EQ(s2.get("decision").value_or(""), std::string("false"));
     XX_TEST_EXPECT_FALSE(s2.values.value("remember", true));
+
+    // 文件目标: 勾选项无生效范围提示; 目录目标 (尾斜杠): 提示记住的目录规则
+    // 同时覆盖其子目录与文件 (与中间件最长前缀匹配语义一致)
+    XX_TEST_EXPECT_TRUE(text.find("同时覆盖其子目录与文件") == std::string::npos);
+
+    InterruptFixture f3;
+    auto             ch3 = f3.makeChannel();
+    f3.addInterrupt(
+        ch3,
+        agentxx::middleware::preset::permissionCard(
+            "list_dir",
+            "filesystem_read",
+            "/workspace/data/"
+        )
+    );
+    const std::string dirText = f3.render();
+    XX_TEST_EXPECT_TRUE(dirText.find("同时覆盖其子目录与文件") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(dirText.find("/workspace/data/") != std::string::npos);
 }
 
 void test_permission_wrapped_long_path() {

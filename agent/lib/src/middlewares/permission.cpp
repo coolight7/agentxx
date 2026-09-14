@@ -164,18 +164,24 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
         co_return true;
     }
     // worktree 会话隔离边界 (优先于一切已注册规则):
-    // - 绑定 worktree 的会话对主检出子树的写操作直接拒绝 (读不受限),
+    // - worktree 子树 (allowPath) 内读写照常处理 (不参与下面的主检出写拒绝):
+    //   该子树是本会话自己的工作区, 而真实 worktree 位于主检出的
+    //   `.agentxx/agent/worktrees/` 下 (见 util::worktree::worktreesRoot),
+    //   即 allowPath 本身就在 denyWritePath 子树内 —— 必须先于 denyWritePath
+    //   判定, 否则会话对自身工作区的写操作也会被命中, 表现为绑定 worktree 后
+    //   无法写任何文件
+    // - 主检出子树 (denyWritePath) 内其余位置的写操作直接拒绝 (读不受限),
     //   保证多会话并行开发互不干扰; 拒绝以 tool 结果形式反馈给模型
-    if (index == FilesystemPermissionWRITE) {
-        if (auto iso = sessionIsolation(sessionId); iso && !iso->denyWritePath.empty()) {
-            if (isUnderDir(iso->denyWritePath, path)) {
-                XX_LOGD(
-                    "Permission: session '{}' isolated by worktree, deny write to main checkout: {}",
-                    sessionId,
-                    path
-                );
-                co_return false;
-            }
+    const SessionFsIsolation* iso = sessionIsolation(sessionId);
+    const bool insideWorktree = iso && !iso->allowPath.empty() && isUnderDir(iso->allowPath, path);
+    if (index == FilesystemPermissionWRITE && !insideWorktree) {
+        if (iso && !iso->denyWritePath.empty() && isUnderDir(iso->denyWritePath, path)) {
+            XX_LOGD(
+                "Permission: session '{}' isolated by worktree, deny write to main checkout: {}",
+                sessionId,
+                path
+            );
+            co_return false;
         }
     }
     std::string re_path;
@@ -191,12 +197,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
             case PermissionOperator::INTERRUPT:
                 // 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
                 // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
-                co_return co_await requestPermission(
-                    item,
-                    args,
-                    index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
-                    path
-                );
+                co_return co_await requestPermission(item, args, index, path);
         }
     }
     // 未命中任何规则: 按 noRuleOperator 处理 (CodeAgent 按 permission.mode 设置;
@@ -207,12 +208,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
         case PermissionOperator::DENY:
             co_return false;
         case PermissionOperator::INTERRUPT:
-            co_return co_await requestPermission(
-                item,
-                args,
-                index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
-                path
-            );
+            co_return co_await requestPermission(item, args, index, path);
     }
     co_return true;
 }
@@ -220,7 +216,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     const neograph::Tool& item,
     agentxx::util::Json&  args,
-    std::string           category,
+    size_t                index,
     std::string           target
 ) {
     auto ctxPtr = agentContext.lock();
@@ -239,11 +235,11 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     auto resp = co_await bus->request<events::ReqPermission, events::RespPermission>(
         events::Topic::Permission,
         events::ReqPermission{
-            .agentName     = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName : std::string{},
-            .sessionId     = std::move(sessionId),
-            .toolName      = item.get_name(),
-            .category      = std::move(category),
-            .target        = std::move(target),
+            .agentName = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName : std::string{},
+            .sessionId = std::move(sessionId),
+            .toolName  = item.get_name(),
+            .category  = index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
+            .target    = target,
             .argumentsJson = args.dump(),
         },
         std::chrono::milliseconds{0} // 0 = 不限制
@@ -251,7 +247,27 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     if (!resp.has_value()) {
         co_return false; // 无 prompter, 拒绝
     }
-    co_return resp->decision == events::RespPermission::Decision::Allow;
+    const bool allow = resp->decision == events::RespPermission::Decision::Allow;
+    // 记住本次选择: 应答者只回传用户意图 (RespPermission.remember), 规则表归本
+    // 中间件所有, 因此在此注册 —— 目录规则按最长前缀匹配自动覆盖其全部子目录与
+    // 文件 (如 /data/proj 的规则对 /data/proj/src/main.cpp 生效)
+    // - 不能改由 IO 端点注册: 端点经会话总线 (session->bus) 发布规则事件, 而本
+    //   中间件订阅的是 agent 全局总线 (agentContext->bus), 事件不会到达, 表现为
+    //   "勾选记住后下次访问仍反复询问"
+    if (resp->remember && !target.empty()) {
+        setFilesystemPermission(
+            target,
+            allow ? PermissionOperator::ALLOW : PermissionOperator::DENY,
+            index
+        );
+        XX_LOGI(
+            "Permission: remembered {} rule for {} (index={})",
+            allow ? "ALLOW" : "DENY",
+            target,
+            index
+        );
+    }
+    co_return allow;
 }
 
 void PermissionMiddlewareHandle::registerFilesystemHandles() {
@@ -309,21 +325,11 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                              }
                          );
 
-    // 2. 订阅文件系统规则设置事件 (EventSetPermissionRule)
-    setRuleSubId_
-        = bus->get<events::EventSetPermissionRule>(events::Topic::PermissionSetRule)
-              .subscribe(
-                  [this](const events::EventSetPermissionRule& evt) -> asio::awaitable<void> {
-                      setFilesystemPermission(
-                          evt.path,
-                          evt.allow ? PermissionOperator::ALLOW : PermissionOperator::DENY,
-                          evt.index
-                      );
-                      co_return;
-                  }
-              );
-
-    // 3. 订阅会话隔离设置事件 (EventSetSessionIsolation)
+    // 2. 订阅会话隔离设置事件 (EventSetSessionIsolation)
+    // - 发布方: agentxx_git_worktree (工具, 经 ctx->bus 即本总线发布)
+    // - 注意: 文件系统规则 ("记住本次选择"/白黑名单) 不经总线注入 —— 记住选择由
+    //   询问应答 (RespPermission.remember) 在 [requestPermission] 内直接注册,
+    //   配置规则由 BaseAgent 启动时直接注册; 二者都在本中间件内完成, 无需事件
     setIsolationSubId_
         = bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
               .subscribe(
@@ -336,7 +342,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                   }
               );
 
-    // 4. 订阅会话隔离清除事件 (EventClearSessionIsolation)
+    // 3. 订阅会话隔离清除事件 (EventClearSessionIsolation)
     clearIsolationSubId_
         = bus->get<events::EventClearSessionIsolation>(events::Topic::PermissionClearIsolation)
               .subscribe(
@@ -355,11 +361,6 @@ void PermissionMiddlewareHandle::unregisterFromBus() {
             )
                 .unregisterServer(checkServerId_);
             checkServerId_ = 0;
-        }
-        if (setRuleSubId_ != 0) {
-            bus->get<events::EventSetPermissionRule>(events::Topic::PermissionSetRule)
-                .unsubscribe(setRuleSubId_);
-            setRuleSubId_ = 0;
         }
         if (setIsolationSubId_ != 0) {
             bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
