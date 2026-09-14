@@ -853,7 +853,7 @@ void test_permission_card_render_and_result() {
 
     // 文件目标: 勾选项无生效范围提示; 目录目标 (尾斜杠): 提示记住的目录规则
     // 同时覆盖其子目录与文件 (与中间件最长前缀匹配语义一致)
-    XX_TEST_EXPECT_TRUE(text.find("同时覆盖其子目录与文件") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("且授权子目录与文件") == std::string::npos);
 
     InterruptFixture f3;
     auto             ch3 = f3.makeChannel();
@@ -866,7 +866,7 @@ void test_permission_card_render_and_result() {
         )
     );
     const std::string dirText = f3.render();
-    XX_TEST_EXPECT_TRUE(dirText.find("同时覆盖其子目录与文件") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(dirText.find("且授权子目录与文件") != std::string::npos);
     XX_TEST_EXPECT_TRUE(dirText.find("/workspace/data/") != std::string::npos);
 }
 

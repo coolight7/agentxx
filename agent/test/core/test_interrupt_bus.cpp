@@ -771,7 +771,12 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         XX_TEST_EXPECT_FALSE(ui.empty());
         XX_TEST_EXPECT_EQ(ui.header.segments.size(), size_t{3});
         if (ui.header.segments.size() == 3) {
-            XX_TEST_EXPECT_EQ(ui.header.segments[0].text, std::string("! [Permission] "));
+            // 权限标记只声明 i18n 键 (字面文本由客户端词表提供)
+            XX_TEST_EXPECT_TRUE(ui.header.segments[0].text.empty());
+            XX_TEST_EXPECT_EQ(
+                ui.header.segments[0].labelKey,
+                std::string("interrupt.permissionBadge")
+            );
             XX_TEST_EXPECT_EQ(ui.header.segments[1].text, std::string("agentxx_filesystem_write"));
             XX_TEST_EXPECT_EQ(ui.header.segments[2].text, std::string(" filesystem_write"));
         }
@@ -813,8 +818,8 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         }
     }
 
-    // 目录目标 (规范化路径带尾斜杠): 勾选项附生效范围提示 —— 记住的目录规则同时
-    // 覆盖其子目录与文件 (与中间件最长前缀匹配语义一致)
+    // 目录目标 (规范化路径带尾斜杠): 目标描述后紧随生效范围提示 (interrupt.rememberDir)
+    // —— 点击授权或完全授权均覆盖子目录与文件, remember 勾选项不附 help
     auto reqDir     = req;
     reqDir.target   = "/data/projects/ui/";
     auto respDir    = co_await sessionBus
@@ -829,21 +834,22 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
     );
     XX_TEST_EXPECT_TRUE(argDirOpt.has_value());
     if (argDirOpt.has_value()) {
-        bool checkedDirHelp = false;
+        size_t hintTexts      = 0;
+        bool   hasDirPrompt   = false;
         for (const auto& block : argDirOpt->ui.blocks) {
-            if (block.kind == "control" && block.control == "checkbox") {
-                if (block.id == "remember") {
-                    XX_TEST_EXPECT_EQ(block.id, std::string("remember"));
-                    XX_TEST_EXPECT_EQ(block.helpKey, std::string("interrupt.rememberDir"));
-                    XX_TEST_EXPECT_FALSE(block.help.empty());
-                    checkedDirHelp = true;
-                } else if (block.id == "fullAuth") {
-                    XX_TEST_EXPECT_EQ(block.labelKey, std::string("interrupt.fullAuth"));
-                    XX_TEST_EXPECT_TRUE(block.help.empty());
+            if (block.kind == "text" && block.color == "hint") {
+                ++hintTexts;
+                if (block.textKey == "interrupt.rememberDir") {
+                    hasDirPrompt = true;
+                    XX_TEST_EXPECT_TRUE(block.text.empty());
                 }
+            } else if (block.kind == "control" && block.control == "checkbox") {
+                XX_TEST_EXPECT_TRUE(block.help.empty());
+                XX_TEST_EXPECT_TRUE(block.helpKey.empty());
             }
         }
-        XX_TEST_EXPECT_TRUE(checkedDirHelp);
+        XX_TEST_EXPECT_EQ(hintTexts, size_t{2});
+        XX_TEST_EXPECT_TRUE(hasDirPrompt);
     }
     co_return;
 }

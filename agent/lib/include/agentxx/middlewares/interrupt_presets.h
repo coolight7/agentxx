@@ -14,6 +14,10 @@ namespace middleware {
 /// 询问只需要 "若干类型化输入 + 确认" 这种常见形态 —— 该形态由本命名空间内的
 /// 预设模板生成, 类型 → 控件的映射只存在于此处; 自定义版式的生产者可直接用
 /// 下面的块构造 helper 拼装 [InterruptUi::blocks], 或直接构造 [InterruptUiBlock]。
+///
+/// 文案约定: 内置预设模板与固定文案只声明 **i18n 键** (labelKey/helpKey/textKey),
+/// 字面文本留空 —— 文案由客户端词表提供, 避免同一文案在服务端与客户端两处
+/// 重复维护; 调用方自定义的字面文本 (无对应键) 仍按字面渲染。
 namespace preset {
 
 /// 类型化输入项声明 (**仅生产者侧使用**, 不是协议字段)
@@ -149,11 +153,13 @@ struct ConfirmCardOptions {
     std::string title;
     /// 说明文本 (markdown 块; 空 = 不渲染)
     std::string text;
-    /// 是按钮标签/i18n 键 (空 = i18n `interrupt.yes`)
+    /// "是"按钮标签 (字面文本; 与 [yesLabelKey] 同时给出时以键为准, 文本忽略)
     std::string yesLabel;
+    /// "是"按钮标签的 i18n 键 (空且 [yesLabel] 也为空时取 i18n `interrupt.yes`)
     std::string yesLabelKey;
-    /// 否按钮标签/i18n 键 (空 = i18n `interrupt.no`)
+    /// "否"按钮标签 (字面文本; 与 [noLabelKey] 同时给出时以键为准, 文本忽略)
     std::string noLabel;
+    /// "否"按钮标签的 i18n 键 (空且 [noLabel] 也为空时取 i18n `interrupt.no`)
     std::string noLabelKey;
     /// 结果控件 id (取值 "true"/"false"; 消费端按该 id 读结果)
     std::string controlId = "allow";
@@ -167,12 +173,16 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts);
 
 /// 权限询问卡片 (预设模板; 由权限服务端构造, 客户端不感知 permission 语义)
 ///
-/// - 头行: "! [Permission] " (i18n) + 工具名 (accent) + 权限分类 (hint)
-/// - 目标描述 (hint, 硬折行) + 空行 + "记住此选择" 勾选 (id = "remember")
-///   + "完全授权所有权限" 勾选 (id = "fullAuth") + 空行 + 允许/拒绝一键按钮
-///   (控件 id = "decision", 点击即提交)
-/// - 目标为目录 (规范化路径带尾斜杠) 时, 勾选项附生效范围提示: 记住的目录规则
-///   按最长前缀匹配覆盖其全部子目录与文件 (见 [PermissionMiddlewareHandle])
+/// - 头行: 权限标记 (i18n `interrupt.permissionBadge`) + 工具名 (accent) +
+///   权限分类 (hint)
+/// - 目标描述 (hint, 硬折行); 目标为目录 (规范化路径带尾斜杠) 时紧随生效范围提示行
+///   (textKey = `interrupt.rememberDir`, hint, 硬折行): 点击授权或完全授权均表示
+///   同时授权子目录与文件
+///   + 空行 + "记住此选择" 勾选 (id = "remember", i18n `interrupt.remember`)
+///   + "完全授权所有权限" 勾选 (id = "fullAuth", i18n `interrupt.fullAuth`)
+///   + 空行 + 允许/拒绝一键按钮
+///   (控件 id = "decision", 点击即提交, i18n `interrupt.allow`/`interrupt.deny`)
+/// - 文案只给 i18n 键, 不携带字面文本 (见命名空间说明)
 /// - 结果形态: `{"values": {"decision": "true", "remember": false, "fullAuth": false}}`
 InterruptUi
     permissionCard(std::string_view toolName, std::string_view category, std::string_view target);

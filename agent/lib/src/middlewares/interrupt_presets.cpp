@@ -3,6 +3,7 @@
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
+#include <utility>
 
 namespace agentxx {
 namespace middleware {
@@ -36,6 +37,31 @@ double numberFromString(std::string_view s) {
         return 0.0;
     }
     return v;
+}
+
+/// 候选项/按钮标签取值: **键与字面文本不同时给** (文案只在一处维护)
+/// - 有 i18n 键: 只给键, 字面文本留空 (文案由客户端词表提供)
+/// - 无键但有字面文本: 只给字面文本 (调用方自定义文案)
+/// - 都没有: 给默认 i18n 键
+///
+/// - `args`:
+///     - [label] 调用方给的字面文本
+///     - [labelKey] 调用方给的 i18n 键
+///     - [defaultKey] 两者都为空时使用的默认 i18n 键
+///
+/// - `return` 取值结果 (first = 字面文本, second = i18n 键)
+std::pair<std::string, std::string> pickOptionLabel(
+    const std::string& label,
+    const std::string& labelKey,
+    std::string_view   defaultKey
+) {
+    if (!labelKey.empty()) {
+        return {std::string{}, labelKey};
+    }
+    if (!label.empty()) {
+        return {label, std::string{}};
+    }
+    return {std::string{}, std::string{defaultKey}};
 }
 
 } // namespace
@@ -261,9 +287,11 @@ InterruptUi inputForm(const std::vector<InputSpec>& inputs) {
 
         if (spec.type == "bool") {
             // 是/否一键按钮 (点击即提交: 一问一答形态)
+            // - 候选标签只声明 i18n 键, 字面文本留空 (文案由客户端词表提供,
+            //   避免同一文案在服务端与客户端两处重复维护)
             ui.blocks.push_back(buttonControl(
                 id,
-                {option("true", "Yes", "interrupt.yes"), option("false", "No", "interrupt.no")},
+                {option("true", {}, "interrupt.yes"), option("false", {}, "interrupt.no")},
                 {},
                 {},
                 // 默认值须与候选项 value 同型 (字符串), 否则无法命中默认选中项
@@ -316,17 +344,18 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts) {
     ui.blocks.push_back(gapBlock(1));
 
     if (opts.remember) {
-        ui.blocks.push_back(
-            checkboxControl("remember", "Remember this choice", "interrupt.remember")
-        );
+        ui.blocks.push_back(checkboxControl("remember", {}, "interrupt.remember"));
         ui.blocks.push_back(gapBlock(1));
     }
 
     // 是/否一键按钮 (点击即选中并提交整份表单)
-    const std::string yesLabel = opts.yesLabel.empty() ? "Yes" : opts.yesLabel;
-    const std::string yesKey   = opts.yesLabelKey.empty() ? "interrupt.yes" : opts.yesLabelKey;
-    const std::string noLabel  = opts.noLabel.empty() ? "No" : opts.noLabel;
-    const std::string noKey    = opts.noLabelKey.empty() ? "interrupt.no" : opts.noLabelKey;
+    // - 标签: 有键只给键, 无键才用调用方给的字面文本, 都没有时用默认键
+    //   (键优先, 字面文本由客户端词表提供; 调用方给文本时不补默认键,
+    //    否则客户端按词表渲染会忽略调用方的文本)
+    const auto [yesLabel, yesKey]
+        = pickOptionLabel(opts.yesLabel, opts.yesLabelKey, "interrupt.yes");
+    const auto [noLabel, noKey]
+        = pickOptionLabel(opts.noLabel, opts.noLabelKey, "interrupt.no");
     ui.blocks.push_back(buttonControl(
         opts.controlId.empty() ? std::string{"allow"} : opts.controlId,
         {option("true", yesLabel, yesKey), option("false", noLabel, noKey)},
@@ -344,7 +373,7 @@ InterruptUi
     InterruptUi ui;
     // 头行: 权限标记 + 工具名 + 权限分类
     InterruptUiSegment badge;
-    badge.text     = "! [Permission] ";
+    // 权限标记文案只声明 i18n 键, 字面文本留空 (由客户端词表提供)
     badge.labelKey = "interrupt.permissionBadge";
     badge.color    = "error";
     badge.bold     = true;
@@ -364,36 +393,28 @@ InterruptUi
     }
 
     // 目标描述 (受约束路径等): 硬折行, 避免无空格长路径不换行/被压为 0 宽
+    // - 目录目标 (规范化路径带尾斜杠; 见 PermissionMiddlewareHandle::
+    //   normalizePermissionPath): 规则按最长前缀匹配覆盖该目录及其全部子目录与文件;
+    //   点击授权或完全授权均表示同时授权子目录, 紧随目标描述后提示生效范围
+    const bool isDirTarget = !target.empty() && target.back() == '/';
     ui.blocks.push_back(textBlock(fmt::format("• {}", target), "hint", 2, true));
-    ui.blocks.push_back(textBlockKey("interrupt.rememberDir", "", "hint", 2, true));
+    if (isDirTarget) {
+        ui.blocks.push_back(textBlockKey("interrupt.rememberDir", {}, "hint", 2, true));
+    }
     ui.blocks.push_back(gapBlock(1));
 
     // 设置项: 记住此选择 (勾选后提交时按本次选择注册路径规则)
-    // - 目录目标 (规范化路径带尾斜杠; 见 PermissionMiddlewareHandle::
-    //   normalizePermissionPath): 规则按最长前缀匹配覆盖该目录及其全部子目录与
-    //   文件, 在勾选项下方提示生效范围 (避免误解为只记住单个路径)
-    const bool isDirTarget = !target.empty() && target.back() == '/';
-    ui.blocks.push_back(checkboxControl(
-        "remember",
-        "Remember this choice",
-        "interrupt.remember",
-        false,
-        isDirTarget ? "Also covers its subdirectories and files" : std::string{},
-        isDirTarget ? "interrupt.rememberDir" : std::string{}
-    ));
+    ui.blocks.push_back(checkboxControl("remember", {}, "interrupt.remember", false));
 
     // 设置项: 完全授权所有权限 (勾选并确认后不再询问权限, 允许任意权限访问;
     // 配置文件拒绝的路径仍然保持拒绝)
-    ui.blocks.push_back(
-        checkboxControl("fullAuth", "Fully authorize all permissions", "interrupt.fullAuth", false)
-    );
+    ui.blocks.push_back(checkboxControl("fullAuth", {}, "interrupt.fullAuth", false));
     ui.blocks.push_back(gapBlock(1));
 
     // 一键取值按钮: 允许 / 拒绝 (点击即提交; 默认选中"拒绝" = 安全语义)
     ui.blocks.push_back(buttonControl(
         "decision",
-        {option("true", "Allow", "interrupt.allow"),
-         option("false", "Deny", "interrupt.deny", "error")},
+        {option("true", {}, "interrupt.allow"), option("false", {}, "interrupt.deny", "error")},
         {},
         {},
         // 默认选中"拒绝" (安全语义; 字符串型与候选项 value 一致)

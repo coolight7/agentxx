@@ -94,9 +94,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         } else if (off <= 0) {
             range = fmt::format("0, {}", lim);
         } else if (lim <= 0) {
-            range = fmt::format("{}", off);
+            range = fmt::format("{}, ~", off);
         } else {
-            range = fmt::format("{}, {}", off, lim);
+            range = fmt::format("{}, {}", off, off + lim);
         }
         std::string summary = " ·";
         if (!range.empty()) {
@@ -527,7 +527,7 @@ void testTuiToolHeaderFilesystem() {
 
     // read_text_file: 仅 offset
     f.pushTool("agentxx_filesystem_read", R"({"path":"/home/d.cpp","line_offset":10})");
-    XX_TEST_EXPECT_TRUE(f.render().find("Read · [10] /home/d.cpp") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Read · [10, ~] /home/d.cpp") != std::string::npos);
 
     // list
     f.pushTool("agentxx_filesystem_list", R"({"path":"/home"})");

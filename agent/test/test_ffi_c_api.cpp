@@ -556,8 +556,9 @@ void testHilInterrupt() {
             std::string argJson = j.value("argJson", std::string{});
             XX_TEST_EXPECT_TRUE(argJson.find("permission") != std::string::npos);
             // UI 描述必填: 权限询问下发权限卡片描述 (分段头/勾选项/一键按钮)
+            // - 文案只带 i18n 键 (字面文本由客户端词表提供), 故按键校验
             XX_TEST_EXPECT_TRUE(argJson.find("\"ui\"") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(argJson.find("! [Permission] ") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(argJson.find("interrupt.permissionBadge") != std::string::npos);
         } catch (...) {
             g_ffi_failed++;
             TEST_FAIL << "interrupt payload not JSON: " << payload << std::endl;

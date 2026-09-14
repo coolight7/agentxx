@@ -207,6 +207,11 @@ void test_preset_input_form() {
         XX_TEST_EXPECT_TRUE(buttons->commitOnPick);
         XX_TEST_EXPECT_EQ(buttons->options.size(), size_t{2});
         XX_TEST_EXPECT_EQ(buttons->defaultValue.get<std::string>(), std::string("false"));
+        // 固定文案只给 i18n 键 (字面文本由客户端词表提供)
+        XX_TEST_EXPECT_EQ(buttons->options[0].labelKey, std::string("interrupt.yes"));
+        XX_TEST_EXPECT_EQ(buttons->options[1].labelKey, std::string("interrupt.no"));
+        XX_TEST_EXPECT_TRUE(buttons->options[0].label.empty());
+        XX_TEST_EXPECT_TRUE(buttons->options[1].label.empty());
     }
     XX_TEST_EXPECT_EQ(ui.blocks.back().kind, std::string("submit"));
 
@@ -227,14 +232,18 @@ void test_preset_permission_and_confirm_card() {
     using namespace agentxx::middleware;
 
     // 权限卡片: 头行分段 + 目标描述 + 勾选项 + 允许/拒绝按钮
+    // - 固定文案只给 i18n 键 (字面文本由客户端词表提供), 故校验键且文本为空
     const auto perm = preset::permissionCard("read_file", "filesystem_read", "/tmp/x");
     XX_TEST_EXPECT_EQ(perm.header.segments.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(perm.header.segments[0].labelKey, std::string("interrupt.permissionBadge"));
+    XX_TEST_EXPECT_TRUE(perm.header.segments[0].text.empty());
     XX_TEST_EXPECT_EQ(countControls(perm, "checkbox"), size_t{2});
     const auto* remember = findControl(perm, "checkbox");
     XX_TEST_EXPECT_TRUE(remember != nullptr);
     if (remember) {
         XX_TEST_EXPECT_EQ(remember->id, std::string("remember"));
         XX_TEST_EXPECT_EQ(remember->labelKey, std::string("interrupt.remember"));
+        XX_TEST_EXPECT_TRUE(remember->label.empty());
     }
     const InterruptUiBlock* fullAuth = nullptr;
     for (const auto& b : perm.blocks) {
@@ -247,6 +256,7 @@ void test_preset_permission_and_confirm_card() {
     if (fullAuth) {
         XX_TEST_EXPECT_EQ(fullAuth->id, std::string("fullAuth"));
         XX_TEST_EXPECT_EQ(fullAuth->labelKey, std::string("interrupt.fullAuth"));
+        XX_TEST_EXPECT_TRUE(fullAuth->label.empty());
         XX_TEST_EXPECT_FALSE(fullAuth->defaultValue.is_boolean() && fullAuth->defaultValue.get<bool>());
     }
     const auto* decision = findControl(perm, "buttons");
@@ -257,8 +267,35 @@ void test_preset_permission_and_confirm_card() {
         XX_TEST_EXPECT_EQ(decision->options.size(), size_t{2});
         XX_TEST_EXPECT_EQ(decision->options[0].value.get<std::string>(), std::string("true"));
         XX_TEST_EXPECT_EQ(decision->options[1].value.get<std::string>(), std::string("false"));
+        XX_TEST_EXPECT_EQ(decision->options[0].labelKey, std::string("interrupt.allow"));
+        XX_TEST_EXPECT_EQ(decision->options[1].labelKey, std::string("interrupt.deny"));
+        XX_TEST_EXPECT_TRUE(decision->options[0].label.empty());
+        XX_TEST_EXPECT_TRUE(decision->options[1].label.empty());
         // 默认选中"拒绝" (安全语义; 默认值与候选项同型)
         XX_TEST_EXPECT_EQ(decision->defaultValue.get<std::string>(), std::string("false"));
+    }
+
+    // 权限卡片 (目录目标): 紧随目标描述后附加生效范围提示行 (interrupt.rememberDir)
+    // 且勾选项 remember/fullAuth 均无 help (提示归属路径本身)
+    const auto permDir = preset::permissionCard("list_dir", "filesystem_read", "/tmp/dir/");
+    size_t     dirHintTexts = 0;
+    bool       hasDirPrompt = false;
+    for (const auto& b : permDir.blocks) {
+        if (b.kind == "text" && b.color == "hint") {
+            ++dirHintTexts;
+            if (b.textKey == "interrupt.rememberDir") {
+                hasDirPrompt = true;
+                XX_TEST_EXPECT_TRUE(b.text.empty());
+            }
+        }
+    }
+    XX_TEST_EXPECT_EQ(dirHintTexts, size_t{2});
+    XX_TEST_EXPECT_TRUE(hasDirPrompt);
+    const auto* dirRemember = findControl(permDir, "checkbox");
+    XX_TEST_EXPECT_TRUE(dirRemember != nullptr);
+    if (dirRemember) {
+        XX_TEST_EXPECT_TRUE(dirRemember->help.empty());
+        XX_TEST_EXPECT_TRUE(dirRemember->helpKey.empty());
     }
 
     // 确认卡片: 标题/说明 + 是/否按钮 (控件 id 可定制) + 可选勾选项
@@ -270,12 +307,37 @@ void test_preset_permission_and_confirm_card() {
     opts.remember    = true;
     const auto card  = preset::confirmCard(opts);
     XX_TEST_EXPECT_EQ(countControls(card, "checkbox"), size_t{1});
+    const auto* cardRemember = findControl(card, "checkbox");
+    XX_TEST_EXPECT_TRUE(cardRemember != nullptr);
+    if (cardRemember) {
+        XX_TEST_EXPECT_EQ(cardRemember->labelKey, std::string("interrupt.remember"));
+        XX_TEST_EXPECT_TRUE(cardRemember->label.empty());
+    }
     const auto* allow = findControl(card, "buttons");
     XX_TEST_EXPECT_TRUE(allow != nullptr);
     if (allow) {
         XX_TEST_EXPECT_EQ(allow->id, std::string("allow"));
         XX_TEST_EXPECT_EQ(allow->defaultValue.get<std::string>(), std::string("false"));
         XX_TEST_EXPECT_TRUE(allow->commitOnPick);
+        // 未自定义标签时: 只给默认 i18n 键, 字面文本为空
+        XX_TEST_EXPECT_EQ(allow->options[0].labelKey, std::string("interrupt.yes"));
+        XX_TEST_EXPECT_EQ(allow->options[1].labelKey, std::string("interrupt.no"));
+        XX_TEST_EXPECT_TRUE(allow->options[0].label.empty());
+        XX_TEST_EXPECT_TRUE(allow->options[1].label.empty());
+    }
+
+    // 自定义字面文本 (无键): 不再补默认键, 按字面文本渲染
+    preset::ConfirmCardOptions customOpts;
+    customOpts.yesLabel = "继续";
+    customOpts.noLabel  = "停止";
+    const auto  customCard  = preset::confirmCard(customOpts);
+    const auto* customAllow = findControl(customCard, "buttons");
+    XX_TEST_EXPECT_TRUE(customAllow != nullptr);
+    if (customAllow) {
+        XX_TEST_EXPECT_TRUE(customAllow->options[0].labelKey.empty());
+        XX_TEST_EXPECT_TRUE(customAllow->options[1].labelKey.empty());
+        XX_TEST_EXPECT_EQ(customAllow->options[0].label, std::string("继续"));
+        XX_TEST_EXPECT_EQ(customAllow->options[1].label, std::string("停止"));
     }
     size_t markdowns = 0;
     for (const auto& b : card.blocks) {

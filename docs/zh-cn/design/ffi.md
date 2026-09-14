@@ -269,31 +269,39 @@ ui = { "version": 1,
 
 ```jsonc
 // EVT_INTERRUPT_REQ.argJson.ui (节选; 由 preset::permissionCard 生成)
+// 固定文案只带 i18n 键 (text/label/help 为空, 见下"文案约定"), 故示例中无字面文本
 { "version": 1,
-  "header": { "segments": [ {"text":"! [Permission] ","labelKey":"interrupt.permissionBadge",
+  "header": { "segments": [ {"labelKey":"interrupt.permissionBadge",
                              "color":"error","bold":true},
                             {"text":"read_file","color":"accent","bold":true},
                             {"text":" filesystem_read","color":"hint"} ] },
-  "blocks": [ {"kind":"text","text":"/workspace/data/x.txt","color":"hint","indent":2,"wrap":true},
+  "blocks": [ {"kind":"text","text":"• /workspace/data/x.txt","color":"hint","wrap":true,"indent":2},
               {"kind":"gap"},
               {"kind":"control","id":"remember","control":"checkbox",
-               "label":"Remember this choice","labelKey":"interrupt.remember","defaultValue":false},
+               "labelKey":"interrupt.remember","defaultValue":false},
+              {"kind":"control","id":"fullAuth","control":"checkbox",
+               "labelKey":"interrupt.fullAuth","defaultValue":false},
               {"kind":"gap"},
-              {"kind":"control","id":"decision","control":"buttons","commitOnPick":true,
-               "defaultValue":"false",
-               "options":[{"value":"true","label":"Allow","labelKey":"interrupt.allow"},
-                          {"value":"false","label":"Deny","labelKey":"interrupt.deny",
-                           "color":"error"}]} ] }
+              {"kind":"control","id":"decision","control":"buttons",
+               "options":[{"value":"true","labelKey":"interrupt.allow"},
+                          {"value":"false","labelKey":"interrupt.deny",
+                           "color":"error"}],
+               "defaultValue":"false","commitOnPick":true} ] }
 
 // 宿主应答 (允许 + 记住本次选择):
 {"values":{"decision":"true","remember":true}}
 ```
 
+> **文案约定**: agent 侧内置预设模板生成的固定文案**只声明 i18n 键**
+> (`labelKey`/`helpKey`/`textKey`), 字面文本 (`label`/`help`/`text`) 留空 ——
+> 文案由客户端词表提供 (同一文案不在服务端与客户端两处重复维护); 生产者
+> 自定义的文本没有对应键, 仍按字面文本渲染 (客户端缺键时回退字面文本)。
+> 宿主未实现词表时可直接用键名或自备映射, 键名为稳定契约。
+
 > `remember: true` 表示"记住本次选择": agent 侧权限中间件按本次目标路径注册
 > 允许/拒绝规则, 后续同目标访问直接按规则处理, 不再询问; 目标为目录时
-> (描述内目标路径带尾斜杠) 该规则同时覆盖其全部子目录与文件 —— 此时勾选项
-> 附 `helpKey = "interrupt.rememberDir"` 的生效范围提示, 宿主按通用
-> `help`/`helpKey` 字段渲染即可 (不区分控件语义)
+> (描述内目标路径带尾斜杠) 点击授权或完全授权均表示同时授权其全部子目录与文件
+> —— 此时在目标描述行后附加 `textKey = "interrupt.rememberDir"` 的生效范围提示行
 
 **示例 (多控件表单 + 提交行)**
 
