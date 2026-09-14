@@ -51,7 +51,7 @@ constexpr Entry kTable[] = {
     {"toast.attachBadType",       "Unsupported file type",                               "不支持的文件类型"                                                                         },
 
     // ---- 待发送消息队列 (顶栏 + 弹窗) ----
-    {"queue.barTitle",            "  · Message Queue: {}",                              "  · 待发送消息队列: {}"                                                                   },
+    {"queue.barTitle",            "  • Message Queue: {}",                             "  • 待发送消息队列: {}"                                                                  },
     {"queue.insert",              "[ Insert ]",                                          "[ 立即发送 ]"                                                                                 },
     {"queue.title",               " Pending Message Queue ",                             " 待发送消息队列 "                                                                          },
     {"queue.clear",               "[ Clear ]",                                           "[ 清空 ]"                                                                                       },
@@ -178,11 +178,15 @@ constexpr Entry kTable[] = {
     {"interrupt.allow",           "Allow",                                               "允许"                                                                                           },
     {"interrupt.deny",            "Deny",                                                "拒绝"                                                                                           },
     {"interrupt.remember",        "Remember this choice",                                "记住此选择"                                                                                  },
-    {"interrupt.rememberDir",     "Also covers its subdirectories and files",            "同时覆盖其子目录与文件"                                                                      },
+    {"interrupt.rememberDir",
+     "• Will also authorize its subdirectories and files",                             "• 且授权子目录与文件"                                                                  },
+    {"interrupt.fullAuth",        "Fully authorize all permissions",                     "完全授权所有权限"                                                                         },
     {"interrupt.tipInt",          "( Invalid integer, please input again. )",            "( 无效整数, 请重新输入。 )"                                                             },
     {"interrupt.tipNum",          "( Invalid number, please input again. )",             "( 无效数字, 请重新输入。 )"                                                             },
-    {"interrupt.tipRange",        "( Out of range (limit: {}), please input again. )",   "( 超出范围 (限制: {}), 请重新输入。 )"                                                   },
-    {"interrupt.tipNoOptions",    "( This control has no selectable option. )",          "( 该控件没有可选候选项。 )"                                                             },
+    {"interrupt.tipRange",
+     "( Out of range (limit: {}), please input again. )",                                "( 超出范围 (限制: {}), 请重新输入。 )"                                                },
+    {"interrupt.tipNoOptions",
+     "( This control has no selectable option. )",                                       "( 该控件没有可选候选项。 )"                                                            },
 
     // ---- 思考消息 (加密思考占位) ----
     {"think.encryptedTokens",     "encrypted thinking {} tokens",                        "加密思考 {} 词元"                                                                           },

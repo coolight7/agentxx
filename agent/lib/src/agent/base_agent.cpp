@@ -567,16 +567,7 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
             );
         }
         for (const auto& p : config->permissionDenyPaths) {
-            permission->setFilesystemPermission(
-                p,
-                agentxx::middleware::PermissionOperator::DENY,
-                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-            );
-            permission->setFilesystemPermission(
-                p,
-                agentxx::middleware::PermissionOperator::DENY,
-                agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-            );
+            permission->addConfigDenyPath(p);
         }
         switch (config->permissionMode) {
             case agentxx::agent::PermissionMode::Pass:

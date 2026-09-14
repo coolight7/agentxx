@@ -242,6 +242,10 @@ struct RespPermission {
     /// - 应答者只回传用户意图, 不参与规则注册 (规则表归权限中间件所有);
     ///   取消/未提交 (结果无 values) 时应答者需保持为 false
     bool remember = false;
+    /// 用户是否选择"完全授权所有权限" (权限询问卡片的 fullAuth 勾选项):
+    /// - true 时由请求方 ([PermissionMiddlewareHandle]) 切换为全授权模式,
+    ///   后续不再询问权限, 允许任意权限访问; 但配置文件中显式拒绝的路径仍然保持拒绝
+    bool fullAuth = false;
 };
 
 /// ===== 请求-响应: subagent 委派 (统一批量) =====

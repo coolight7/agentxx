@@ -229,11 +229,25 @@ void test_preset_permission_and_confirm_card() {
     // 权限卡片: 头行分段 + 目标描述 + 勾选项 + 允许/拒绝按钮
     const auto perm = preset::permissionCard("read_file", "filesystem_read", "/tmp/x");
     XX_TEST_EXPECT_EQ(perm.header.segments.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(countControls(perm, "checkbox"), size_t{2});
     const auto* remember = findControl(perm, "checkbox");
     XX_TEST_EXPECT_TRUE(remember != nullptr);
     if (remember) {
         XX_TEST_EXPECT_EQ(remember->id, std::string("remember"));
         XX_TEST_EXPECT_EQ(remember->labelKey, std::string("interrupt.remember"));
+    }
+    const InterruptUiBlock* fullAuth = nullptr;
+    for (const auto& b : perm.blocks) {
+        if (b.kind == "control" && b.control == "checkbox" && b.id == "fullAuth") {
+            fullAuth = &b;
+            break;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(fullAuth != nullptr);
+    if (fullAuth) {
+        XX_TEST_EXPECT_EQ(fullAuth->id, std::string("fullAuth"));
+        XX_TEST_EXPECT_EQ(fullAuth->labelKey, std::string("interrupt.fullAuth"));
+        XX_TEST_EXPECT_FALSE(fullAuth->defaultValue.is_boolean() && fullAuth->defaultValue.get<bool>());
     }
     const auto* decision = findControl(perm, "buttons");
     XX_TEST_EXPECT_TRUE(decision != nullptr);

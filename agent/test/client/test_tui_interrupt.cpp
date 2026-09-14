@@ -810,15 +810,17 @@ void test_permission_card_render_and_result() {
     XX_TEST_EXPECT_TRUE(text.find("read_file") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("/workspace/data/x.txt") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("记住此选择") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("完全授权所有权限") != std::string::npos);
     // 勾选控件标签即行内文本: 只渲染一次 (无额外标题行)
     XX_TEST_EXPECT_EQ(countOccurrences(text, "记住此选择"), size_t{1});
+    XX_TEST_EXPECT_EQ(countOccurrences(text, "完全授权所有权限"), size_t{1});
     XX_TEST_EXPECT_TRUE(text.find("[   ]") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("允许") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("拒绝") != std::string::npos);
     // 权限卡片预设无提交行 (允许/拒绝点击即提交)
     XX_TEST_EXPECT_TRUE(text.find("确认") == std::string::npos);
 
-    // 勾选"记住此选择" → 点击"允许"提交: values = {decision: "true", remember: true}
+    // 勾选"记住此选择" → 点击"允许"提交: values = {decision: "true", remember: true, fullAuth: false}
     XX_TEST_EXPECT_TRUE(f.click(mi, "remember", 0));
     XX_TEST_EXPECT_TRUE(f.render().find("[ ✓ ]") != std::string::npos);
     XX_TEST_EXPECT_TRUE(f.click(mi, "decision", 0));
@@ -826,6 +828,18 @@ void test_permission_card_render_and_result() {
     XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
     XX_TEST_EXPECT_EQ(s.get("decision").value_or(""), std::string("true"));
     XX_TEST_EXPECT_TRUE(s.values.value("remember", false));
+    XX_TEST_EXPECT_FALSE(s.values.value("fullAuth", false));
+
+    // 勾选"完全授权所有权限" → 点击"允许"提交: values = {decision: "true", fullAuth: true}
+    InterruptFixture fFull;
+    auto             chFull = fFull.makeChannel();
+    auto             miFull = fFull.addInterrupt(chFull, InterruptFixture::permissionUi());
+    XX_TEST_EXPECT_TRUE(fFull.click(miFull, "fullAuth", 0));
+    XX_TEST_EXPECT_TRUE(fFull.click(miFull, "decision", 0));
+    InterruptFixture::Submit sFull;
+    XX_TEST_EXPECT_TRUE(fFull.recvForm(chFull, sFull));
+    XX_TEST_EXPECT_EQ(sFull.get("decision").value_or(""), std::string("true"));
+    XX_TEST_EXPECT_TRUE(sFull.values.value("fullAuth", false));
 
     // 拒绝 (未勾选 remember): values.decision = "false"
     InterruptFixture f2;

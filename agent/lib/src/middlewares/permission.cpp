@@ -149,6 +149,51 @@ void PermissionMiddlewareHandle::setFilesystemPermission(
     );
 }
 
+void PermissionMiddlewareHandle::addConfigDenyPath(std::string_view path) {
+    if (path.empty()) {
+        return;
+    }
+    const auto norm = normalizePermissionPath(path);
+    if (norm.empty()) {
+        return;
+    }
+    configDenyPermission_.add(
+        norm,
+        static_cast<int>(FilesystemPermissionREAD),
+        std::make_shared<PermissionOperator>(PermissionOperator::DENY)
+    );
+    configDenyPermission_.add(
+        norm,
+        static_cast<int>(FilesystemPermissionWRITE),
+        std::make_shared<PermissionOperator>(PermissionOperator::DENY)
+    );
+    // 同时注册到常规 filesystemPermission 规则表 (保持统一)
+    filesystemPermission.add(
+        norm,
+        static_cast<int>(FilesystemPermissionREAD),
+        std::make_shared<PermissionOperator>(PermissionOperator::DENY)
+    );
+    filesystemPermission.add(
+        norm,
+        static_cast<int>(FilesystemPermissionWRITE),
+        std::make_shared<PermissionOperator>(PermissionOperator::DENY)
+    );
+}
+
+bool PermissionMiddlewareHandle::isConfigDenied(std::string_view path, size_t index) const {
+    if (index >= 2 || path.empty()) {
+        return false;
+    }
+    std::string re_path;
+    auto handle = const_cast<XXRouter<PermissionOperator, 2>&>(configDenyPermission_).get(
+        std::string{path},
+        static_cast<int>(index),
+        re_path,
+        true
+    );
+    return handle != nullptr && *handle == PermissionOperator::DENY;
+}
+
 asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
     const neograph::Tool& item,
     agentxx::util::Json&  args,
@@ -184,6 +229,18 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
             co_return false;
         }
     }
+
+    // 配置文件显式拒绝的路径: 无论后续是否完全授权, 始终保持拒绝且不询问
+    if (isConfigDenied(path, index)) {
+        XX_LOGD("Permission: path '{}' matches config deny rule, denied", path);
+        co_return false;
+    }
+
+    // 若用户已完全授权所有权限: 允许任意权限访问, 不再询问
+    if (isFullAuthorized()) {
+        co_return true;
+    }
+
     std::string re_path;
     // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效
     auto handle = filesystemPermission.get(path, static_cast<int>(index), re_path, true);
@@ -266,6 +323,12 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
             target,
             index
         );
+    }
+    // 选择启用"完全授权所有权限"并确认允许后, 切换为全授权状态,
+    // 后续不再询问权限, 允许任意权限访问 (配置文件中拒绝的路径仍然保持拒绝)
+    if (resp->fullAuth && allow) {
+        setFullAuthorized(true);
+        XX_LOGI("Permission: fully authorized all permissions (config denied paths remain denied)");
     }
     co_return allow;
 }

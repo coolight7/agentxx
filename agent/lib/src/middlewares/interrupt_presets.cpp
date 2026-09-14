@@ -50,14 +50,8 @@ InterruptUiOption
     return o;
 }
 
-InterruptUiBlock textBlock(
-    std::string text,
-    std::string color,
-    int         indent,
-    bool        wrap,
-    bool        bold,
-    bool        dim
-) {
+InterruptUiBlock
+    textBlock(std::string text, std::string color, int indent, bool wrap, bool bold, bool dim) {
     InterruptUiBlock b;
     b.kind   = "text";
     b.text   = std::move(text);
@@ -262,9 +256,8 @@ InterruptUi inputForm(const std::vector<InputSpec>& inputs) {
         }
 
         // 控件 id: 单项 = "value"; 多项 = "value1".."valueN" (结果 values 的键)
-        const std::string id = (total == 1)
-                                   ? std::string{kSingleInputId}
-                                   : fmt::format("{}{}", kSingleInputId, k + 1);
+        const std::string id = (total == 1) ? std::string{kSingleInputId}
+                                            : fmt::format("{}{}", kSingleInputId, k + 1);
 
         if (spec.type == "bool") {
             // 是/否一键按钮 (点击即提交: 一问一答形态)
@@ -323,7 +316,8 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts) {
     ui.blocks.push_back(gapBlock(1));
 
     if (opts.remember) {
-        ui.blocks.push_back(checkboxControl("remember", "Remember this choice", "interrupt.remember")
+        ui.blocks.push_back(
+            checkboxControl("remember", "Remember this choice", "interrupt.remember")
         );
         ui.blocks.push_back(gapBlock(1));
     }
@@ -370,7 +364,8 @@ InterruptUi
     }
 
     // 目标描述 (受约束路径等): 硬折行, 避免无空格长路径不换行/被压为 0 宽
-    ui.blocks.push_back(textBlock(std::string{target}, "hint", 2, true));
+    ui.blocks.push_back(textBlock(fmt::format("• {}", target), "hint", 2, true));
+    ui.blocks.push_back(textBlockKey("interrupt.rememberDir", "", "hint", 2, true));
     ui.blocks.push_back(gapBlock(1));
 
     // 设置项: 记住此选择 (勾选后提交时按本次选择注册路径规则)
@@ -386,6 +381,12 @@ InterruptUi
         isDirTarget ? "Also covers its subdirectories and files" : std::string{},
         isDirTarget ? "interrupt.rememberDir" : std::string{}
     ));
+
+    // 设置项: 完全授权所有权限 (勾选并确认后不再询问权限, 允许任意权限访问;
+    // 配置文件拒绝的路径仍然保持拒绝)
+    ui.blocks.push_back(
+        checkboxControl("fullAuth", "Fully authorize all permissions", "interrupt.fullAuth", false)
+    );
     ui.blocks.push_back(gapBlock(1));
 
     // 一键取值按钮: 允许 / 拒绝 (点击即提交; 默认选中"拒绝" = 安全语义)

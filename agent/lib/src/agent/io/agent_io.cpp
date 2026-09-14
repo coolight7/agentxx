@@ -243,9 +243,10 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 throw neograph::graph::CancelledException("permission interrupted by cancel");
             }
             // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult);
-            // 非对象形态按"未应答"处理并告警。权限卡片控件: decision + remember
+            // 非对象形态按"未应答"处理并告警。权限卡片控件: decision + remember + fullAuth
             bool                allowed  = false;
             bool                remember = false;
+            bool                fullAuth = false;
             agentxx::util::Json values   = agentxx::util::Json::object();
             if (!result.is_object() || !result.contains("values")) {
                 XX_LOGW(
@@ -259,17 +260,20 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
                 }
                 allowed  = agentxx::middleware::interruptValueBool(valueObj, "decision", false);
                 remember = agentxx::middleware::interruptValueBool(valueObj, "remember", false);
+                fullAuth = agentxx::middleware::interruptValueBool(valueObj, "fullAuth", false);
             }
             // 记住本次选择: 客户端只回传表单值 (是否勾选 remember), 规则注册由
             // 请求方 ([PermissionMiddlewareHandle]) 按响应中的 remember 自行完成
             // —— 规则表归中间件所有, 它订阅的是 agent 全局总线, 而本端点的权限
             // 服务注册在会话总线上, 端点不能跨总线直接改规则表 (会丢失)
             const bool rememberRule = remember && confirmedValues(values);
+            const bool fullAuthRule = fullAuth && allowed && confirmedValues(values);
             co_return events::RespPermission{
                 .decision = allowed ? events::RespPermission::Decision::Allow
                                     : events::RespPermission::Decision::Deny,
                 .reason   = allowed ? "" : "user denied",
                 .remember = rememberRule,
+                .fullAuth = fullAuthRule,
             };
         }
     );

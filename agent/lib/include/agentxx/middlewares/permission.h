@@ -67,6 +67,24 @@ public:
 
     void setFilesystemPermission(std::string_view path, PermissionOperator op, size_t index);
 
+    /// 添加配置文件显式拒绝的路径 (配置中的 permissionDenyPaths / blacklist;
+    /// 无论后续是否完全授权, 始终保持拒绝且不询问)
+    /// - 内部同时向 [configDenyPermission_] 以及常规 [filesystemPermission] 注册 READ/WRITE 的 DENY
+    void addConfigDenyPath(std::string_view path);
+
+    /// 查询指定路径是否命中配置文件显式拒绝的规则 (最长前缀匹配, 支持 * 通配符)
+    bool isConfigDenied(std::string_view path, size_t index) const;
+
+    /// 是否已完全授权所有权限 (用户在权限询问中勾选并确认 "完全授权所有权限")
+    bool isFullAuthorized() const noexcept {
+        return fullAuthorized_;
+    }
+
+    /// 设置完全授权状态
+    void setFullAuthorized(bool authorized = true) noexcept {
+        fullAuthorized_ = authorized;
+    }
+
     // ---------------- worktree 会话隔离边界 (仅 io 线程调用) ----------------
 
     /// 设置/更新指定会话的隔离边界 (worktree 绑定时由 agentxx_git_worktree 调用)
@@ -132,6 +150,12 @@ public:
     void unregisterFromBus();
 
 private:
+
+    /// 配置文件显式拒绝的路径路由 (优先判定, 无论是否完全授权均保持拒绝)
+    XXRouter<PermissionOperator, 2> configDenyPermission_{};
+
+    /// 是否完全授权所有权限 (经由权限询问勾选 fullAuth 且确认允许激活)
+    bool fullAuthorized_ = false;
 
     /// <sessionId, 隔离边界> (仅 io 线程读写, 与中间件链同线程模型, 无需锁)
     std::map<std::string, SessionFsIsolation, std::less<>> sessionIsolations_;

@@ -38,6 +38,8 @@ public:
     bool        permissionAllow = true;
     /// 权限询问是否勾选"记住本次选择" (结果 values.remember = true)
     bool        permissionRemember = false;
+    /// 权限询问是否勾选"完全授权所有权限" (结果 values.fullAuth = true)
+    bool        permissionFullAuth = false;
     int         interruptCalls     = 0;
     /// 最近一次中断请求参数 (InterruptHandleArg JSON; 供断言 UI 描述下发)
     std::string lastInterruptArgJson;
@@ -66,10 +68,11 @@ public:
         // 结果恒为对象形态 {"values": {控件 id: 值}} (客户端契约:
         // agentxx::middleware::makeInterruptResult)
         if (interruptNode == "permission") {
-            // 权限卡片控件: decision (允许/拒绝) + remember (勾选项)
+            // 权限卡片控件: decision (允许/拒绝) + remember (勾选项) + fullAuth (完全授权)
             co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
                 {"decision", permissionAllow ? "true" : "false"},
                 {"remember", permissionRemember},
+                {"fullAuth", permissionFullAuth},
             });
         }
         // 通用确认卡片控件: allow
@@ -782,8 +785,11 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
                 XX_TEST_EXPECT_TRUE(block.wrap);
             } else if (block.kind == "control" && block.control == "checkbox") {
                 ++checkbox;
-                XX_TEST_EXPECT_EQ(block.id, std::string("remember"));
-                XX_TEST_EXPECT_EQ(block.labelKey, std::string("interrupt.remember"));
+                if (block.id == "remember") {
+                    XX_TEST_EXPECT_EQ(block.labelKey, std::string("interrupt.remember"));
+                } else if (block.id == "fullAuth") {
+                    XX_TEST_EXPECT_EQ(block.labelKey, std::string("interrupt.fullAuth"));
+                }
             } else if (block.kind == "control" && block.control == "buttons") {
                 ++buttons;
                 XX_TEST_EXPECT_EQ(block.id, std::string("decision"));
@@ -796,7 +802,7 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
             }
         }
         XX_TEST_EXPECT_EQ(hintTexts, size_t{1});
-        XX_TEST_EXPECT_EQ(checkbox, size_t{1});
+        XX_TEST_EXPECT_EQ(checkbox, size_t{2});
         XX_TEST_EXPECT_EQ(buttons, size_t{1});
         // 文件目标: 勾选项不附生效范围提示 (仅记住该文件本身)
         for (const auto& block : ui.blocks) {
@@ -826,10 +832,15 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         bool checkedDirHelp = false;
         for (const auto& block : argDirOpt->ui.blocks) {
             if (block.kind == "control" && block.control == "checkbox") {
-                XX_TEST_EXPECT_EQ(block.id, std::string("remember"));
-                XX_TEST_EXPECT_EQ(block.helpKey, std::string("interrupt.rememberDir"));
-                XX_TEST_EXPECT_FALSE(block.help.empty());
-                checkedDirHelp = true;
+                if (block.id == "remember") {
+                    XX_TEST_EXPECT_EQ(block.id, std::string("remember"));
+                    XX_TEST_EXPECT_EQ(block.helpKey, std::string("interrupt.rememberDir"));
+                    XX_TEST_EXPECT_FALSE(block.help.empty());
+                    checkedDirHelp = true;
+                } else if (block.id == "fullAuth") {
+                    XX_TEST_EXPECT_EQ(block.labelKey, std::string("interrupt.fullAuth"));
+                    XX_TEST_EXPECT_TRUE(block.help.empty());
+                }
             }
         }
         XX_TEST_EXPECT_TRUE(checkedDirHelp);
@@ -1015,6 +1026,113 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
     co_return;
 }
 
+/// 完全授权所有权限 (fullAuth):
+/// - 用户在权限询问中勾选 "完全授权所有权限" (fullAuth) 并确认 (Allow)
+/// - 激活后不再询问权限, 允许任意权限访问
+/// - 但配置文件中显式拒绝的路径 (addConfigDenyPath) 仍然保持拒绝且不询问
+asio::awaitable<void> test_permission_full_auth_rule() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto agentBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+
+    auto io                = std::make_shared<MockIO>();
+    io->permissionAllow    = true;
+    io->permissionFullAuth = true; // 勾选"完全授权所有权限"
+    io->registerOnBus(sessionBus);
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->bus = agentBus;
+    auto session      = agentContext->getSession("full_auth_test");
+    session->bus      = sessionBus;
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+    permission->registerOnBus(agentBus);
+
+    // 配置文件显式拒绝的路径
+    permission->addConfigDenyPath("/data/config_deny_dir");
+    permission->addConfigDenyPath("/data/secret.pem");
+
+    // 默认模式: 无规则即询问
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+
+    MockTool writeItem("agentxx_filesystem_write");
+    MockTool readItem("agentxx_filesystem_read");
+
+    auto check = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
+        auto args = agentxx::util::Json{
+            {"path",      std::string{path} },
+            {"sessionId", "full_auth_test" }
+        };
+        co_return co_await permission->defOnFilesystemHandle(item, args, index);
+    };
+
+    XX_TEST_EXPECT_FALSE(permission->isFullAuthorized());
+
+    // 1. 首次访问常规路径: 触发询问, MockIO 返回允许 + 完全授权所有权限
+    bool ok = co_await check(
+        writeItem,
+        "/data/workspace/src/main.cpp",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+    XX_TEST_EXPECT_TRUE(permission->isFullAuthorized());
+
+    // 2. 任意其它非黑名单路径: 直接放行, 不再询问权限
+    ok = co_await check(
+        writeItem,
+        "/data/workspace/docs/readme.md",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 未再询问
+
+    ok = co_await check(
+        readItem,
+        "/tmp/random/path/test.txt",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+    );
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 仍未再询问
+
+    // 3. 配置文件中拒绝的路径 (文件): 必须保持拒绝, 且不询问权限
+    ok = co_await check(
+        readItem,
+        "/data/secret.pem",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+    );
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
+
+    ok = co_await check(
+        writeItem,
+        "/data/secret.pem",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
+
+    // 4. 配置文件中拒绝的路径 (目录及其子路径): 必须保持拒绝, 且不询问权限
+    ok = co_await check(
+        writeItem,
+        "/data/config_deny_dir/sub/file.txt",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
+    );
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
+
+    ok = co_await check(
+        readItem,
+        "/data/config_deny_dir/any.key",
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+    );
+    XX_TEST_EXPECT_FALSE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
+
+    co_return;
+}
+
 /// HIL 中断结果对象形态: 结果 {"values": {控件 id: 值}} 只取 values 对象写回
 /// resume 值 (消费端按控件 id 取值)
 asio::awaitable<void> test_hil_interrupt_result_object_values_only() {
@@ -1060,6 +1178,7 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_permission_remember_via_result_options();
         co_await test_permission_remember_across_bus_and_dir_subtree();
         co_await test_permission_worktree_isolation_subtree();
+        co_await test_permission_full_auth_rule();
         co_await test_hil_interrupt_result_object_values_only();
         co_await test_malformed_result_rejected();
         test_make_interrupt_result_forms();
