@@ -209,14 +209,13 @@ InterruptView::FormState InterruptView::formState(size_t msgIndex) {
 // ---------------------------------------------------------------------------
 
 middleware::InterruptUi InterruptView::resolveUi(const TUIMessage& msg) const {
-    if (msg.interrupt && msg.interrupt->ui.is_object()) {
-        auto ui = middleware::InterruptUi::fromJson(msg.interrupt->ui);
-        if (!ui.empty()) {
-            return ui;
-        }
+    // 描述必填 (服务端/宿主构造中断请求时总是下发, 见 InterruptHandleArg::toJson);
+    // 缺失属于契约违规 (如版本不匹配), 由 build/estimate 输出诊断行, 不再静默
+    // 回退到默认模板 (避免用户在"看起来正常但语义已变"的控件上误操作)
+    if (!msg.interrupt || !msg.interrupt->ui.is_object()) {
+        return {};
     }
-    // 无描述 (旧服务端/未声明): 通用默认模板 (与 agent 侧 defaultUi 同语义)
-    return middleware::InterruptUi::defaultUi();
+    return middleware::InterruptUi::fromJson(msg.interrupt->ui);
 }
 
 std::string InterruptView::defaultViewFor(std::string_view inputType) {
@@ -586,7 +585,7 @@ void InterruptView::appendItemRows(
         }
         return;
     }
-    // 未知 kind: 忽略 (描述向前兼容; 后续版本新增项不会破坏旧客户端渲染)
+    // 未知 kind: 忽略 (描述向前兼容: 服务端新增项类型不会破坏已发布的客户端渲染)
 }
 
 size_t InterruptView::estimateItemLines(
@@ -688,6 +687,18 @@ Element InterruptView::build(const TUIMessage& msg, size_t msgIndex, int maxWidt
 
     const auto& theme = *ctx_.theme;
     const auto  ui    = resolveUi(msg);
+    if (ui.empty()) {
+        // 描述缺失 (契约违规): 仅输出诊断行, 不渲染任何控件 (无命中区域)
+        XX_LOGE(
+            "[tui] interrupt #{} input {} has no UI descriptor, prompt not interactive",
+            msg.interrupt->interruptId,
+            msg.interrupt->inputIndex
+        );
+        return hbox({
+            text(tr("interrupt.noDescriptor")) | color(theme.errorColor) | bold,
+            text(msg.interrupt->inputLabel) | color(theme.hintColor) | xflex_shrink,
+        });
+    }
 
     Elements rows;
     rows.push_back(buildHeader(msg, ui));
@@ -730,8 +741,11 @@ size_t InterruptView::estimate(const TUIMessage& msg, int width) const {
     if (!isWaiting(msg)) {
         return 1; // 状态行
     }
-    const auto ui    = resolveUi(msg);
-    size_t     lines = 1; // 头行
+    const auto ui = resolveUi(msg);
+    if (ui.empty()) {
+        return 1; // 描述缺失: 诊断行
+    }
+    size_t lines = 1; // 头行
 
     const auto*             inputItem = findInputItem(ui, msg);
     std::optional<Resolved> prev;

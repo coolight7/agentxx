@@ -2320,8 +2320,10 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         co_return agentxx::util::Json::array();
     }
     const auto& handleArg = argOpt.value();
-    // ui 描述只构造一次 (所有输入项消息共享同一份声明)
-    const agentxx::util::Json uiJson = handleArg.ui.toJson();
+    // 中断 UI 描述 (服务端必填, 见 InterruptHandleArg::toJson): 所有输入项消息
+    // 共享同一份声明; 缺失 (版本不匹配) 时留空, 客户端渲染诊断行且不可交互
+    const agentxx::util::Json uiJson
+        = handleArg.ui.empty() ? agentxx::util::Json{} : handleArg.ui.toJson();
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
@@ -2407,9 +2409,8 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         }
     }
 
-    // 结果形态 (与 agent 侧解析一致):
-    // - 无勾选项: 纯值数组 ["true"] (兼容旧服务端)
-    // - 有勾选项: {"values":[...], "options":{"remember":true}}
+    // 结果形态: 恒为对象 {"values":[...], "options":{...}} (见 makeInterruptResult;
+    // 无勾选项时 options 为空对象 —— 消费端按同一结构解析, 无"纯数组"分支)
     const agentxx::util::Json result
         = agentxx::middleware::makeInterruptResult(values, options);
 

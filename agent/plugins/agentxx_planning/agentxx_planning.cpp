@@ -838,9 +838,8 @@ static void refreshPlanSection(ClientCtx& ctx) {
         ));
     };
 
-    auto buttonItem = [&](const std::string& label, const std::string& mermaid) {
-        // Graph 按钮: 通用 action_id 派发 (新宿主点击回调 → open_overlay MERMAID);
-        // 双发 mermaid 字段供老宿主兼容 (下版删除 mermaid)
+    auto buttonItem = [&](const std::string& label) {
+        // Graph 按钮: 通用 action_id 派发 (宿主点击回调 → open_overlay MERMAID)
         items.push_back(fmt::format(
             R"({{"kind":"button","label":{},"action_id":"{}","args":{{}},"role":"normal"}})",
             clientJsonEscape(ctx, label),
@@ -852,7 +851,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
         textItem("|- ", "normal");
-        buttonItem("Graph", roadmap);
+        buttonItem("Graph");
     }
 
     // ---- Todo & Note 渲染 ----

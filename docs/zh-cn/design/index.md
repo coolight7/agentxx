@@ -370,11 +370,14 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
       描述字段留空时取消息字段 (inputType/inputDefault/inputEnums/inputDepict),
       故同一份描述可服务多输入项的中断请求 (每项一条消息)
     - 勾选项 (toggle) 的值进入结果 options: 权限询问的"记住此选择"由此实现,
-      结果回传 `{"values":[...], "options":{"remember":true}}`, **规则注册在
-      agent 侧完成** (权限处理器按 options.remember 经总线注册路径规则),
-      客户端不参与权限语义
-    - 缺省描述 (旧服务端/未声明) 回退通用默认模板 (进度头行 + 描述 + 类型控件
-      + 确认行), 与历史外观等价; 未知项类型忽略 (向前兼容)
+      结果**恒为对象形态** `{"values":[...], "options":{"remember":true}}`
+      (无勾选项时 options 为空对象), **规则注册在 agent 侧完成** (权限处理器按
+      options.remember 经总线注册路径规则), 客户端不参与权限语义;
+      非对象形态的结果按契约违规处理 (HIL 视为未应答/权限视为拒绝并告警)
+    - 描述**必填**: 服务端构造中断请求时总是下发 (`InterruptHandleArg::toJson`
+      在生产方未声明时下发通用默认描述: 进度头行 + 描述 + 类型控件 + 确认行),
+      客户端不含"无描述"的渲染回退 —— 缺失即输出诊断行且不可交互
+      (契约违规, 如两端版本不匹配); 未知项类型忽略 (向前兼容)
     - 渲染与估算同源: 同一套描述项判定, 避免布局与估算两处漂移
       (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h))
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)

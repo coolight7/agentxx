@@ -555,6 +555,9 @@ void testHilInterrupt() {
             XX_TEST_EXPECT_TRUE(interruptId > 0);
             std::string argJson = j.value("argJson", std::string{});
             XX_TEST_EXPECT_TRUE(argJson.find("permission") != std::string::npos);
+            // UI 描述必填: 权限询问下发权限卡片描述 (分段头/勾选项/一键按钮)
+            XX_TEST_EXPECT_TRUE(argJson.find("\"ui\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(argJson.find("! [Permission] ") != std::string::npos);
         } catch (...) {
             g_ffi_failed++;
             TEST_FAIL << "interrupt payload not JSON: " << payload << std::endl;
@@ -566,8 +569,9 @@ void testHilInterrupt() {
     std::thread responder([a, interruptId, &respondRc]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         AgentxxString lg{};
-        auto          valSv = agentxx_string_view_cstr(R"(["true"])");
-        respondRc           = agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg);
+        // 应答载荷恒为对象形态 {"values":[...], "options":{...}}
+        auto valSv = agentxx_string_view_cstr(R"({"values":["true"],"options":{"remember":false}})");
+        respondRc  = agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg);
         agentxx_ffi_string_free(&lg);
     });
 
@@ -588,12 +592,23 @@ void testHilInterrupt() {
 
     // 已应答后, 再次应答同一 id 应报无效
     AgentxxString lg{};
-    auto          valSv = agentxx_string_view_cstr(R"(["true"])");
+    auto          valSv = agentxx_string_view_cstr(R"({"values":["true"],"options":{}})");
     XX_TEST_EXPECT_EQ(
         agentxx_ffi_interrupt_respond(a, interruptId, &valSv, &lg),
         AGENTXX_FFI_ERR_INTERRUPT
     );
     agentxx_ffi_string_free(&lg);
+
+    // 契约外载荷 (非对象形态) 应被拒绝 (不再兼容旧的纯数组应答)
+    {
+        AgentxxString lg2{};
+        auto          arrSv = agentxx_string_view_cstr(R"(["true"])");
+        XX_TEST_EXPECT_EQ(
+            agentxx_ffi_interrupt_respond(a, interruptId, &arrSv, &lg2),
+            AGENTXX_FFI_ERR_INVALID
+        );
+        agentxx_ffi_string_free(&lg2);
+    }
 
     XX_TEST_EXPECT_EQ(agentxx_ffi_stop(a, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);

@@ -181,16 +181,25 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             );
             // 取消标记: handleInterrupt 被取消时返回 {"__cancelled__":true},
             // handled=false 使调用方不写回 resume 值 (见 AgentRunner)
-            bool cancelled = result.is_object() && result.value("__cancelled__", false);
-            if (!cancelled && result.is_object() && result.contains("values")) {
-                // 结果对象形态 ({"values":[...], "options":{...}}) 只取 values:
-                // 图状态 resume 只接收值列表; options 由声明该选项的服务端消费
-                // (权限询问在 permission 处理器内消费, 见 rememberPermission)
-                result = result["values"];
+            if (result.is_object() && result.value("__cancelled__", false)) {
+                co_return events::RespInterrupt{.handled = false, .resultJson = result.dump()};
+            }
+            // 结果恒为对象形态 {"values":[...], "options":{...}} (见
+            // makeInterruptResult): 图状态 resume 只接收值列表, 故取 values 写回;
+            // options 由声明该选项的服务端消费 (权限询问在 permission 处理器内
+            // 消费, 见 rememberPermission)
+            if (!result.is_object() || !result.contains("values")) {
+                // 契约违规 (旧前端/宿主回传非对象形态): 按中断未应答处理并告警
+                XX_LOGW(
+                    "[io] interrupt `{}` result is not an object with values, dropped: {}",
+                    req.interruptNode,
+                    result.dump()
+                );
+                co_return events::RespInterrupt{.handled = false, .resultJson = "{}"};
             }
             co_return events::RespInterrupt{
-                .handled    = !cancelled,
-                .resultJson = result.dump(),
+                .handled    = true,
+                .resultJson = result["values"].dump(),
             };
         }
     );
@@ -240,25 +249,29 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessio
             if (result.is_object() && result.value("__cancelled__", false)) {
                 throw neograph::graph::CancelledException("permission interrupted by cancel");
             }
-            // 结果解析 (兼容两种形态, 见 client_plugin_api/中断 UI 描述):
-            // - ["true"/"false"]                            旧客户端: 纯值数组
-            // - {"values":[...], "options":{"remember":..}} 新客户端: 值 + 选项
-            agentxx::util::Json values = result;
+            // 结果恒为对象形态 {"values":[...], "options":{...}} (见
+            // makeInterruptResult); 非对象形态 (旧前端/宿主) 按拒绝处理并告警
+            bool                allowed  = false;
             bool                remember = false;
-            if (result.is_object() && result.contains("values")) {
+            agentxx::util::Json values   = agentxx::util::Json::array();
+            if (!result.is_object() || !result.contains("values")) {
+                XX_LOGW(
+                    "[io] permission result is not an object with values, denied: {}",
+                    result.dump()
+                );
+            } else {
                 values = result["values"];
                 if (result.contains("options") && result["options"].is_object()) {
                     remember = result["options"].value("remember", false);
                 }
-            }
-            bool allowed = false;
-            if (values.is_array() && !values.empty()) {
-                auto val = values[0];
-                if (val.is_string()) {
-                    auto s   = val.get<std::string>();
-                    allowed  = (s == "true" || s == "yes");
-                } else if (val.is_boolean()) {
-                    allowed = val.get<bool>();
+                if (values.is_array() && !values.empty()) {
+                    auto val = values[0];
+                    if (val.is_string()) {
+                        auto s  = val.get<std::string>();
+                        allowed = (s == "true" || s == "yes");
+                    } else if (val.is_boolean()) {
+                        allowed = val.get<bool>();
+                    }
                 }
             }
             // 记住本次选择: 客户端只回传表单值/选项, 规则注册在 agent 侧完成

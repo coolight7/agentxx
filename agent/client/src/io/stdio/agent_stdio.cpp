@@ -343,5 +343,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
         co_await getInput();
     }
     std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n\n" << std::flush;
-    co_return result;
+    // 结果恒为对象形态 {"values":[...], "options":{...}} (与客户端契约一致;
+    // 本前端暂不支持勾选项, options 为空对象)
+    co_return agentxx::middleware::makeInterruptResult(result, agentxx::util::Json::object());
 }

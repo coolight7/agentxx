@@ -295,7 +295,10 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 
 /* ==================== HIL 中断应答 ==================== */
 
-/// 提交 EVT_INTERRUPT_REQ 的应答 (values_json 经 JSON 数组表示)
+/// 提交 EVT_INTERRUPT_REQ 的应答: 载荷恒为对象形态
+/// `{"values":[...], "options":{"id":bool,...}}` (无勾选项时 options 为空对象;
+/// 见 agentxx::middleware::makeInterruptResult); 非对象形态返回
+/// AGENTXX_FFI_ERR_INVALID
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_interrupt_respond(
     AgentxxFFIAgent*         a,
     int64_t                  interrupt_id,

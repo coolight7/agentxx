@@ -1290,7 +1290,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         sec.items[1].value("action_id", ""),
                         std::string{"planning.open_graph"}
                     );
-                    XX_TEST_EXPECT_TRUE(sec.items[1].contains("mermaid"));
+                    // 状态图源码经 action_id 派发时由插件自持, 不再随按钮双发
+                    // (旧宿主兼容字段 mermaid 已移除)
                 }
             }
             XX_TEST_EXPECT_TRUE(hasPlanSection);

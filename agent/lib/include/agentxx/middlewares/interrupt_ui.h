@@ -152,11 +152,13 @@ struct InterruptUi {
 };
 
 /// 中断结果组装 (客户端确认后回传的 JSON 形态; 与 agent 侧解析口径一致)
-/// - options 为空: 纯值数组 (兼容未声明勾选项的中断与旧服务端)
-/// - options 非空: {"values":[...], "options":{"id":bool,...}}
+///
+/// 结果**恒为对象形态**: `{"values":[...], "options":{"id":bool,...}}`
+/// - values: 输入项值数组 (按 inputIndex 顺序)
+/// - options: 勾选项映射 (描述 result.options 声明的 id → 布尔值; 无勾选项时为空对象)
 ///
 /// - `args`:
-///     - [values]  输入项值数组 (按 inputIndex 顺序)
+///     - [values]  输入项值数组
 ///     - [options] 勾选项映射 (描述 result.options 声明的 id → 布尔值)
 agentxx::util::Json
     makeInterruptResult(const agentxx::util::Json& values, const agentxx::util::Json& options);

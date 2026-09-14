@@ -859,11 +859,7 @@ int FfiAgentRuntime::interruptRespond(
         err = "状态错误: 未启动或已停止";
         return AGENTXX_FFI_ERR_STATE;
     }
-    if (!hasPendingInterrupt(interruptId)) {
-        err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
-        return AGENTXX_FFI_ERR_INTERRUPT;
-    }
-    agentxx::util::Json val   = agentxx::util::Json::array();
+    agentxx::util::Json val   = agentxx::util::Json::object();
     auto                valSv = toSv(valuesJson);
     if (!valSv.empty()) {
         try {
@@ -872,6 +868,18 @@ int FfiAgentRuntime::interruptRespond(
             err = fmt::format("valuesJson 非法 JSON: {}", e.what());
             return AGENTXX_FFI_ERR_JSON;
         }
+    }
+    // 应答载荷恒为对象形态 {"values":[...], "options":{...}} (见
+    // agentxx::middleware::makeInterruptResult); 非对象形态直接拒绝,
+    // 避免契约外的载荷被静默当成"空应答"导致权限被误判为拒绝。
+    // (参数校验先于中断 id 校验: 载荷错误与 id 状态无关, 报错更确定)
+    if (!val.is_object() || !val.contains("values") || !val["values"].is_array()) {
+        err = "valuesJson 须为 {\"values\":[...], \"options\":{...}} 对象形态";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (!hasPendingInterrupt(interruptId)) {
+        err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
+        return AGENTXX_FFI_ERR_INTERRUPT;
     }
     auto clientIO = clientIO_;
     asio::post(*clientIoCtx_, [clientIO, interruptId, val = std::move(val)]() mutable {

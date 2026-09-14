@@ -90,7 +90,10 @@ public:
         ++interruptCalls;
         auto ctx = agentContext.lock();
         if (!ctx || !ctx->middlewareHandleContext) {
-            co_return agentxx::util::Json{};
+            co_return agentxx::middleware::makeInterruptResult(
+                agentxx::util::Json::array(),
+                agentxx::util::Json::object()
+            );
         }
         auto& graphData = ctx->middlewareHandleContext;
 
@@ -128,7 +131,10 @@ public:
                   && temp[2]["tool_calls"][0].value("id", std::string{}) == "call_it_1";
         }
 
-        co_return agentxx::util::Json(std::string{"handled"});
+        co_return agentxx::middleware::makeInterruptResult(
+            agentxx::util::Json::array({"handled"}),
+            agentxx::util::Json::object()
+        );
     }
 };
 
@@ -172,10 +178,16 @@ public:
         );
 
         // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取
+        // - 客户端结果恒为对象形态 {"values":[...], "options":{...}}: 服务端取
+        //   values 写回 resume 值, 故此处按输入项值数组解析 (单输入项取 [0],
+        //   与 toolcall 重复调用检查等生产消费者同口径)
         if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
             auto val = result[resultId];
             if (val.is_string()) {
                 co_return val.get<std::string>();
+            }
+            if (val.is_array() && val.size() == 1 && val[0].is_string()) {
+                co_return val[0].get<std::string>();
             }
             co_return val.dump();
         }

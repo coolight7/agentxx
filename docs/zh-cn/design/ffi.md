@@ -155,7 +155,7 @@ agentxx_ffi_event_queue_free(q);
 | 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
 | 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_set_permission` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
 | 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 结果写入 `AgentxxString* out` 出参 (`agentxx_ffi_string_free` 释放); 同一句柄同一时刻仅允许一个在途 |
-| HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (values_json 数组与 inputs 顺序一一对应) |
+| HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (载荷恒为对象形态 `{"values":[...],"options":{...}}`: values 与 inputs 顺序一一对应; options 对应描述声明的勾选项, 非对象形态返回 AGENTXX_FFI_ERR_INVALID) |
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
 | 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | 见 4.2 |
 | 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 26 个符号, 隐藏 17 万 C++ 符号) |
@@ -175,7 +175,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson.inputs 描述输入项 (bool/int/double/string/enum + defaultValue/enumValues) |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化: `inputs` 描述输入项 (bool/int/double/string/enum + defaultValue/enumValues), **`ui` 为必填的中断 UI 描述** (声明式: 头行分段 + 项列表 text/gap/toggle/input/submit/separator/diff + 结果映射; 宿主可通用渲染) |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
@@ -237,7 +237,7 @@ agentxx_ffi_event_queue_free(q);
 - **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
 - **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_plugin_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
 - **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个在途 (服务端逐条协议)；超时 10s 返回 `AGENTXX_FFI_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
-- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化，`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`；空 `type` 表示无需输入 (应答空数组 `[]` 即可)
+- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化，`inputs[]` 含 `label/depict/type (bool/int/double/string/enum)/defaultValue/enumValues`；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此通用渲染 (项类型 text/gap/toggle/input/submit/separator/diff，结果映射声明 values/options)；空 `type` 表示无需输入 (应答 `{"values":[],"options":{}}`)
 - **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_ffi_malloc` 分配，宿主必须 `agentxx_ffi_free` 释放；`agentxx_ffi_strdup_n` 为统一拷贝入口
 
 

@@ -39,9 +39,9 @@ namespace test {
 //
 // 中断形态完全由消息携带的 UI 描述 (`InterruptData::ui`, 见
 // agentxx/middlewares/interrupt_ui.h) 决定: 本文件按描述数据构造消息, 断言
-// 通用渲染/交互/结果组装 (客户端不含任何 permission 特化分支)。描述的缺省
-// 形态 (无 ui 字段) 即通用默认模板 (进度头行 + 描述 + 类型控件 + 确认行),
-// 与旧实现外观等价。
+// 通用渲染/交互/结果组装 (客户端不含任何 permission 特化分支)。描述**必填**
+// (服务端 InterruptHandleArg::toJson 恒下发; 通用默认描述 = 进度头行 + 描述
+// + 按消息类型的输入控件 + 确认取消行), 缺失按契约违规输出诊断行。
 //
 // 命中区域: (msgIndex, 描述项 id, 子序号); 描述项 id 约定:
 // - 输入项: "value" (值按钮下标 = sub / 枚举项下标 = sub /
@@ -81,7 +81,9 @@ struct InterruptFixture {
     }
 
     /// 追加一条中断输入消息, 返回其消息索引
-    /// - ui: 中断 UI 描述 (空 = 缺省, 客户端按通用默认模板渲染)
+    /// - ui: 中断 UI 描述 (缺省 = 服务端通用默认描述 InterruptUi::defaultUi(),
+    ///   与 InterruptHandleArg::toJson 在生产者未声明时的下发内容一致;
+    ///   客户端不再有"无描述"的渲染回退 —— 见 test_missing_descriptor_diagnostic)
     size_t addInterrupt(
         std::shared_ptr<InterruptResultChannel> ch,
         std::string                             type,
@@ -105,7 +107,10 @@ struct InterruptFixture {
         m->interrupt->inputIndex   = inputIndex;
         m->interrupt->inputTotal   = inputTotal;
         m->interrupt->inputEnums   = std::move(enumValues);
-        m->interrupt->ui           = std::move(ui);
+        // 描述必填: 未显式给出时用通用默认描述 (服务端 toJson 的兜底行为)
+        m->interrupt->ui = ui.is_object() && !middleware::InterruptUi::fromJson(ui).empty()
+                               ? std::move(ui)
+                               : middleware::InterruptUi::defaultUi().toJson();
         // 表单状态 (编辑文本/选中项/勾选项) 不存于消息: 由中断视图惰性初始化
         sharedState.mutate([&](TUIRenderState& st) {
             st.messages.push_back(std::move(m));
@@ -219,10 +224,10 @@ struct InterruptFixture {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// 缺省描述 (无 ui 字段): 通用默认模板 (进度头行 + 描述 + 类型控件 + 确认行)
+// 通用默认描述 (InterruptUi::defaultUi): 进度头行 + 描述 + 类型控件 + 确认行
 // ---------------------------------------------------------------------------
 
-void test_default_template_bool_render() {
+void test_default_descriptor_bool_render() {
     InterruptFixture  f;
     auto              ch = f.makeChannel();
     auto              mi = f.addInterrupt(
@@ -251,7 +256,7 @@ void test_default_template_bool_render() {
     XX_TEST_EXPECT_EQ(f.comp->interruptUiState(mi).selected, 0);
 }
 
-void test_default_template_value_buttons_confirm() {
+void test_default_descriptor_value_buttons_confirm() {
     InterruptFixture f;
     auto             ch  = f.makeChannel();
     auto             mi1 = f.addInterrupt(ch, "bool", "true");
@@ -282,7 +287,7 @@ void test_default_template_value_buttons_confirm() {
     }
 }
 
-void test_default_template_bool_default_no_selected() {
+void test_default_descriptor_bool_default_no_selected() {
     InterruptFixture f;
     auto             ch = f.makeChannel();
     auto             mi = f.addInterrupt(ch, "bool", "no");
@@ -936,6 +941,35 @@ void test_form_state_version_bumps_on_change() {
     XX_TEST_EXPECT_TRUE(v2 > v1);
 }
 
+void test_missing_descriptor_diagnostic() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    // 直接构造无描述的消息 (契约违规: 服务端必填; 客户端不再回退默认模板)
+    auto m                     = std::make_shared<TUIMessage>();
+    m->role                    = TUIMessage::Role::Interrupt;
+    m->interrupt               = TUIMessage::InterruptData{};
+    m->interrupt->interruptId  = 1;
+    m->interrupt->inputLabel   = "label";
+    m->interrupt->inputType    = "bool";
+    m->interrupt->inputDefault = "no";
+    m->interrupt->inputIndex   = 1;
+    m->interrupt->inputTotal   = 1;
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        st.messages.push_back(std::move(m));
+    });
+    f.comp->attachInterruptChannel(1, ch);
+
+    const std::string text = f.render();
+    XX_TEST_EXPECT_TRUE(text.find("缺少 UI 描述") != std::string::npos);
+    // 不可交互: 无任何命中区域
+    XX_TEST_EXPECT_TRUE(f.comp->interruptHitBoxes().empty());
+    XX_TEST_EXPECT_FALSE(f.click(0, "value", 0));
+    XX_TEST_EXPECT_FALSE(f.click(0, "submit", 0));
+    // 估算与实际渲染一致 (诊断行 1 行 + 消息尾部空行)
+    XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(0, 120), size_t{1});
+    XX_TEST_EXPECT_EQ(f.renderedRows(), size_t{1});
+}
+
 TestResult testTuiInterrupt() {
     g_tui_interrupt_passed = 0;
     g_tui_interrupt_failed = 0;
@@ -943,10 +977,10 @@ TestResult testTuiInterrupt() {
     auto savedLang = TUISettings::instance().language();
     TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
 
-    // 缺省模板 (无 ui 描述)
-    test_default_template_bool_render();
-    test_default_template_value_buttons_confirm();
-    test_default_template_bool_default_no_selected();
+    // 通用默认描述 (defaultUi)
+    test_default_descriptor_bool_render();
+    test_default_descriptor_value_buttons_confirm();
+    test_default_descriptor_bool_default_no_selected();
     test_confirm_renders_status_line();
     test_escape_blurs_active_message();
     // 数值
@@ -970,6 +1004,8 @@ TestResult testTuiInterrupt() {
     // 描述扩展性
     test_custom_descriptor_renders_items();
     test_custom_value_buttons_and_toggle_options();
+    // 描述缺失 (契约违规): 诊断行 + 不可交互
+    test_missing_descriptor_diagnostic();
     // 取消 / 过期 / 状态清理
     test_cancel_marks_all_and_notifies();
     test_cancel_renders_status_line();

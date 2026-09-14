@@ -35,12 +35,13 @@ public:
 
     std::string interruptTag    = "answered";
     bool        permissionAllow = true;
-    /// 权限结果是否使用对象形态 ({"values":[...], "options":{"remember":true}}):
-    /// true = 新客户端 (勾选"记住本次选择"), false = 旧客户端 (纯值数组)
+    /// 权限询问是否勾选"记住本次选择" (结果 options.remember = true)
     bool        permissionRemember = false;
     int         interruptCalls     = 0;
     /// 最近一次中断请求参数 (InterruptHandleArg JSON; 供断言 UI 描述下发)
     std::string lastInterruptArgJson;
+    /// true = 故意回传契约外的非对象结果 (验证服务端按未应答/拒绝处理)
+    bool        malformedResult = false;
 
     void onDelta(const agentxx::agent::WireDelta&) override {}
 
@@ -58,17 +59,25 @@ public:
     ) override {
         ++interruptCalls;
         lastInterruptArgJson = std::string{interruptArgJson};
-        if (interruptNode == "permission") {
-            if (permissionRemember) {
-                co_return agentxx::util::Json{
-                    {"values",
-                     agentxx::util::Json::array({permissionAllow ? "true" : "false"})},
-                    {"options", agentxx::util::Json{{"remember", true}}},
-                };
-            }
-            co_return agentxx::util::Json::array({permissionAllow ? "true" : "false"});
+        if (malformedResult) {
+            co_return agentxx::util::Json::array({interruptTag}); // 契约外形态
         }
-        co_return agentxx::util::Json::array({interruptTag});
+        // 结果恒为对象形态 {"values":[...], "options":{...}} (客户端契约:
+        // agentxx::middleware::makeInterruptResult)
+        if (interruptNode == "permission") {
+            auto options = agentxx::util::Json::object();
+            if (permissionRemember) {
+                options["remember"] = true;
+            }
+            co_return agentxx::middleware::makeInterruptResult(
+                agentxx::util::Json::array({permissionAllow ? "true" : "false"}),
+                options
+            );
+        }
+        co_return agentxx::middleware::makeInterruptResult(
+            agentxx::util::Json::array({interruptTag}),
+            agentxx::util::Json::object()
+        );
     }
 };
 
@@ -467,22 +476,26 @@ asio::awaitable<void> test_permission_remember_rule() {
     co_return;
 }
 
-/// 中断结果组装 (客户端 → agent 的 JSON 形态):
-/// 无勾选项时为纯值数组 (兼容旧服务端), 有勾选项时为 {values, options}
+/// 中断结果组装 (客户端 → agent 的 JSON 形态): 恒为对象 {values, options}
 void test_make_interrupt_result_forms() {
     using agentxx::middleware::makeInterruptResult;
     using agentxx::util::Json;
 
-    // 无 options (未声明勾选项): 纯值数组
-    auto arrayForm = makeInterruptResult(Json::array({"true"}), Json::object());
-    XX_TEST_EXPECT_TRUE(arrayForm.is_array());
-    XX_TEST_EXPECT_EQ(arrayForm.size(), size_t{1});
+    // 无勾选项: 仍为对象形态, options 为空对象
+    auto emptyOptsForm = makeInterruptResult(Json::array({"true"}), Json::object());
+    XX_TEST_EXPECT_TRUE(emptyOptsForm.is_object());
+    XX_TEST_EXPECT_TRUE(emptyOptsForm.contains("values"));
+    XX_TEST_EXPECT_TRUE(emptyOptsForm.contains("options"));
+    if (emptyOptsForm.contains("values") && emptyOptsForm["values"].is_array()) {
+        XX_TEST_EXPECT_EQ(emptyOptsForm["values"].size(), size_t{1});
+        XX_TEST_EXPECT_EQ(emptyOptsForm["values"][0].get<std::string>(), std::string("true"));
+    }
+    if (emptyOptsForm.contains("options") && emptyOptsForm["options"].is_object()) {
+        XX_TEST_EXPECT_TRUE(emptyOptsForm["options"].empty());
+    }
 
-    // 有 options (描述声明了勾选项): 对象形态
-    auto objForm = makeInterruptResult(
-        Json::array({"false"}),
-        Json{{"remember", true}}
-    );
+    // 有勾选项: 对象形态携带 options
+    auto objForm = makeInterruptResult(Json::array({"false"}), Json{{"remember", true}});
     XX_TEST_EXPECT_TRUE(objForm.is_object());
     XX_TEST_EXPECT_TRUE(objForm.contains("values"));
     XX_TEST_EXPECT_TRUE(objForm.contains("options"));
@@ -492,6 +505,12 @@ void test_make_interrupt_result_forms() {
     if (objForm.contains("options") && objForm["options"].is_object()) {
         XX_TEST_EXPECT_TRUE(objForm["options"].value("remember", false));
     }
+
+    // 非数组 values / 非对象 options 归一化为合法形态 (契约兜底)
+    auto normalized = makeInterruptResult(Json::object(), Json::array());
+    XX_TEST_EXPECT_TRUE(normalized.is_object());
+    XX_TEST_EXPECT_TRUE(normalized["values"].is_array());
+    XX_TEST_EXPECT_TRUE(normalized["options"].is_object());
 }
 
 /// 权限询问的 UI 描述下发: 中断参数须携带声明式描述 (`ui` 字段),
@@ -557,6 +576,87 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         }
         // 输入项字段仍保留 (旧客户端按 inputs 渲染的兼容路径)
         XX_TEST_EXPECT_EQ(argOpt->inputs.size(), size_t{1});
+    }
+    co_return;
+}
+
+/// 中断参数必带 UI 描述 (描述必填): 生产者未声明时 toJson 下发通用默认模板
+void test_interrupt_arg_ui_always_present() {
+    using agentxx::middleware::InterruptHandleArg;
+    using agentxx::middleware::InterruptUi;
+
+    // 未声明描述: toJson 仍下发默认描述 (进度头行 + 输入控件 + 确认行)
+    InterruptHandleArg arg;
+    arg.name                      = "default";
+    InterruptHandleArg::InterruptHandleInputItem item;
+    item.label                    = "label";
+    item.depict                   = "/tmp/x";
+    item.type                     = "bool";
+    item.defaultValue             = "no";
+    arg.inputs                    = {item};
+    const auto j                  = arg.toJson();
+    XX_TEST_EXPECT_TRUE(j.contains("ui"));
+    const auto ui = InterruptUi::fromJson(j.contains("ui") ? j["ui"] : agentxx::util::Json{});
+    XX_TEST_EXPECT_FALSE(ui.empty());
+    XX_TEST_EXPECT_EQ(ui.items.size(), size_t{3}); // text + input + submit
+    XX_TEST_EXPECT_EQ(ui.values.size(), size_t{1});
+    if (!ui.values.empty()) {
+        XX_TEST_EXPECT_EQ(ui.values[0], std::string("value"));
+    }
+
+    // 显式声明描述: 原样下发 (权限卡片等自定义形态)
+    arg.ui = InterruptUi::permissionUi("read_file", "filesystem_read", "/tmp/y");
+    const auto jPerm     = arg.toJson();
+    const auto uiPerm    = InterruptUi::fromJson(jPerm["ui"]);
+    XX_TEST_EXPECT_EQ(uiPerm.header.segments.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(uiPerm.options.size(), size_t{1});
+}
+
+/// 契约外的中断结果 (非对象形态) 不被接受: HIL 按未应答处理, 权限询问按拒绝处理
+asio::awaitable<void> test_malformed_result_rejected() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+
+    // HIL: 结果非对象 → handled = false (AgentRunner 据此不 resume)
+    auto io                = std::make_shared<MockIO>();
+    io->interruptTag       = "answered";
+    io->malformedResult    = true;
+    io->registerOnBus(sessionBus);
+    auto resp = co_await sessionBus
+                    ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+                        agentxx::events::Topic::Interrupt,
+                        agentxx::events::ReqInterrupt{
+                            .agentName         = "test",
+                            .sessionId         = "t1",
+                            .interruptNode     = "tool_x",
+                            .handleName        = "default",
+                            .interruptArgsJson = "{}",
+                            .resultId          = "call_1",
+                        },
+                        std::chrono::seconds(5)
+                    );
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_FALSE(resp->handled);
+    }
+
+    // 权限: 结果非对象 → 拒绝
+    auto respPerm
+        = co_await sessionBus->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+            agentxx::events::Topic::Permission,
+            agentxx::events::ReqPermission{
+                .agentName     = "test",
+                .sessionId     = "t1",
+                .toolName      = "agentxx_filesystem_write",
+                .category      = "filesystem_write",
+                .target        = "/tmp/z",
+                .argumentsJson = R"({"path":"/tmp/z"})",
+            },
+            std::chrono::seconds(5)
+        );
+    XX_TEST_EXPECT_TRUE(respPerm.has_value());
+    if (respPerm.has_value()) {
+        XX_TEST_EXPECT_TRUE(respPerm->decision == agentxx::events::RespPermission::Decision::Deny);
     }
     co_return;
 }
@@ -671,7 +771,9 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_permission_prompt_carries_ui_descriptor();
         co_await test_permission_remember_via_result_options();
         co_await test_hil_interrupt_result_object_values_only();
+        co_await test_malformed_result_rejected();
         test_make_interrupt_result_forms();
+        test_interrupt_arg_ui_always_present();
     } catch (const std::exception& e) {
         TEST_FAIL << "interrupt_bus suite exception: " << e.what() << std::endl;
         g_ib_failed++;

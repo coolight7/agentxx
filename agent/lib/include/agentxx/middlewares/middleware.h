@@ -401,8 +401,8 @@ public:
     std::vector<InterruptHandleInputItem> inputs;
     std::string                           resultId;
     /// 中断 UI 描述 (声明式; 客户端通用渲染, 见 [interrupt_ui.h])
-    /// - 空 = 客户端按输入项字段用通用默认模板渲染 (兼容未提供描述的服务端);
-    ///   服务端未显式设置时由 toJson 省略该字段
+    /// - **必填**: 生产者未显式设置时由 toJson 下发通用默认模板
+    ///   (InterruptUi::defaultUi()) —— 客户端不含"无描述"的渲染分支
     /// - 同一请求的多个输入项共享同一份描述 (每项消息按自身字段渲染值域,
     ///   见 InterruptUiItem 的模板语义), 常为 InterruptUi::defaultUi()
     InterruptUi ui;

@@ -73,7 +73,11 @@ public:
         std::string_view /*interruptValue*/,
         std::string_view /*interruptArgJson*/
     ) override {
-        co_return agentxx::util::Json::array();
+        // 中断结果恒为对象形态 {values, options} (客户端契约)
+        co_return agentxx::middleware::makeInterruptResult(
+            agentxx::util::Json::array(),
+            agentxx::util::Json::object()
+        );
     }
 };
 
@@ -101,9 +105,15 @@ public:
     ) override {
         if (interruptNode == "permission") {
             permissionCalls++;
-            co_return agentxx::util::Json::array({"true"});
+            co_return agentxx::middleware::makeInterruptResult(
+                agentxx::util::Json::array({"true"}),
+                agentxx::util::Json::object()
+            );
         }
-        co_return agentxx::util::Json::array();
+        co_return agentxx::middleware::makeInterruptResult(
+            agentxx::util::Json::array(),
+            agentxx::util::Json::object()
+        );
     }
 };
 

@@ -1,4 +1,5 @@
 #include "test_remote_agent.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -87,7 +88,10 @@ public:
     asio::awaitable<agentxx::util::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return agentxx::util::Json::array({"true"});
+        co_return agentxx::middleware::makeInterruptResult(
+            agentxx::util::Json::array({"true"}),
+            agentxx::util::Json::object()
+        );
     }
 
     size_t deltaCount() {

@@ -186,11 +186,11 @@ agentxx::util::Json InterruptHandleArg::toJson() const {
         {"arg",      arg       },
         {"inputs",   inputsJson},
         {"resultId", resultId  },
+        // 中断 UI 描述 (必填): 客户端按描述通用渲染控件; 生产者未声明时下发
+        // 通用默认模板 (进度头行 + 描述 + 按消息类型的输入控件 + 确认取消行),
+        // 客户端不再有"无描述"的渲染分支
+        {"ui",       ui.empty() ? InterruptUi::defaultUi().toJson() : ui.toJson()},
     };
-    // UI 描述 (可选): 客户端按描述通用渲染中断控件; 缺省时用通用默认模板
-    if (!ui.empty()) {
-        j["ui"] = ui.toJson();
-    }
     return j;
 }
 

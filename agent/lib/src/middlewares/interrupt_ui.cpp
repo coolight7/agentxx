@@ -373,12 +373,11 @@ InterruptUi InterruptUi::permissionUi(
 
 agentxx::util::Json
     makeInterruptResult(const agentxx::util::Json& values, const agentxx::util::Json& options) {
-    if (!options.is_object() || options.empty()) {
-        return values.is_array() ? values : agentxx::util::Json::array();
-    }
+    // 恒为对象形态 (无勾选项时 options 为空对象): 消费端按同一结构解析,
+    // 不再存在"纯数组"形态的分支
     return agentxx::util::Json{
         {"values",  values.is_array() ? values : agentxx::util::Json::array()},
-        {"options", options                                             },
+        {"options", options.is_object() ? options : agentxx::util::Json::object()},
     };
 }
 

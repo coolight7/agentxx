@@ -166,6 +166,7 @@ constexpr Entry kTable[] = {
     // ---- 中断输入控件 ----
     {"interrupt.header",         "! [Interrupt] Input {}/{}: ",                          "! [中断] 输入 {}/{}: "                                                                        },
     {"interrupt.headerNoProgress", "! [Interrupt] ",                                      "! [中断] "                                                                                     },
+    {"interrupt.noDescriptor",   "! [Interrupt] missing UI descriptor: ",                 "! [中断] 缺少 UI 描述: "                                                                     },
     {"interrupt.confirmed",      "Confirmed {}: {}",                                     "已确认 {}: {}"                                                                                 },
     {"interrupt.cancelled",      "{}: Cancelled",                                        "{}: 已取消"                                                                                    },
     {"interrupt.expired",        "{}: Expired",                                          "{}: 已过期"                                                                                    },
