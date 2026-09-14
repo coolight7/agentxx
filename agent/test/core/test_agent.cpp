@@ -605,7 +605,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         XX_TEST_EXPECT_FALSE(io->lastTarget.empty());
         XX_TEST_EXPECT_TRUE(io->lastTarget.back() != '/');
         XX_TEST_EXPECT_EQ(io->lastTarget, outsidePath);
-        XX_TEST_EXPECT_EQ(io->lastUiDescText, outsidePath);
+        XX_TEST_EXPECT_EQ(io->lastUiDescText, fmt::format("• {}", outsidePath));
     }
 
     // ---- 模式 all_ask: 所有路径均询问 ----

@@ -191,11 +191,15 @@ void EventBridge::finalizeThinkSegment() {
                                    std::chrono::system_clock::now() - thinkSegStart_
         )
                                    .count());
+    if (lastThinkSegStartMs_ == 0) {
+        lastThinkSegStartMs_ = thinkSegStartMs_;
+    }
+    lastThinkSegDurationMs_ += durationMs;
     emitDelta(agentxx::agent::WireDelta{
         .type        = agentxx::agent::WireDelta::Type::ThinkToken,
         .text        = {},
         .startTimeMs = thinkSegStartMs_,
-        .durationMs  = durationMs,
+        .durationMs  = lastThinkSegDurationMs_,
     });
 }
 
@@ -254,12 +258,33 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     isEncrypted = true;
                 }
             }
+            int64_t thinkStartTimeMs = jm.value("startTimeMs", int64_t{0});
+            int64_t thinkDurationMs  = jm.value("durationMs", int64_t{0});
+            if (thinkStartTimeMs == 0) {
+                thinkStartTimeMs = lastThinkSegStartMs_ > 0 ? lastThinkSegStartMs_ : nodeStartTimeMs_;
+            }
+            if (thinkDurationMs == 0) {
+                thinkDurationMs = lastThinkSegDurationMs_;
+            }
+            // 兜底: 若为非流式或无独立 THINKING chunk 的思考 (如仅返回 reasoning_tokens / encrypted reasoning),
+            // 但有节点计时, 则以节点运行耗时兜底
+            if (thinkDurationMs == 0 && (isEncrypted || reasoningTokens > 0 || !reasoning.empty())) {
+                if (nodeStartTimeMs_ > 0) {
+                    const int64_t nowMs = static_cast<int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()
+                        )
+                            .count()
+                    );
+                    thinkDurationMs = std::max(int64_t{0}, nowMs - nodeStartTimeMs_);
+                }
+            }
             if (!reasoning.empty() || isEncrypted || reasoningTokens > 0) {
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Think,
                     reasoning,
-                    jm.value("startTimeMs", int64_t{0}),
-                    jm.value("durationMs", int64_t{0})
+                    thinkStartTimeMs,
+                    thinkDurationMs
                 );
                 if (isEncrypted || reasoningTokens > 0) {
                     m.think = ViewMessage::ThinkData{
@@ -277,18 +302,34 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                             .reasoningTokens = reasoningTokens,
                             .isEncrypted     = isEncrypted,
                         },
-                        .startTimeMs = jm.value("startTimeMs", int64_t{0}),
-                        .durationMs  = jm.value("durationMs", int64_t{0}),
+                        .startTimeMs = thinkStartTimeMs,
+                        .durationMs  = thinkDurationMs,
                     });
                 }
+                lastThinkSegStartMs_    = 0;
+                lastThinkSegDurationMs_ = 0;
             }
             auto content = jm.value("content", std::string{});
             if (!content.empty()) {
+                int64_t assistantStartTimeMs = jm.value("startTimeMs", int64_t{0});
+                int64_t assistantDurationMs  = jm.value("durationMs", int64_t{0});
+                if (assistantStartTimeMs == 0) {
+                    assistantStartTimeMs = nodeStartTimeMs_ > 0 ? nodeStartTimeMs_ : thinkStartTimeMs;
+                }
+                if (assistantDurationMs == 0 && nodeStartTimeMs_ > 0) {
+                    const int64_t nowMs = static_cast<int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()
+                        )
+                            .count()
+                    );
+                    assistantDurationMs = std::max(int64_t{0}, nowMs - nodeStartTimeMs_);
+                }
                 auto m = ViewMessage::makeText(
                     ViewMessage::Role::Assistant,
                     content,
-                    jm.value("startTimeMs", int64_t{0}),
-                    jm.value("durationMs", int64_t{0})
+                    assistantStartTimeMs,
+                    assistantDurationMs
                 );
                 session_->appendViewMessage(std::move(m));
             }
@@ -434,8 +475,10 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
 
 void EventBridge::handleTurnStart() {
     // 重置轮级 tps 统计 (上一轮残留: 流已结算, 计数归零)
-    turnTpsTokenCount_  = 0.0;
-    turnTpsDurationSec_ = 0.0;
+    turnTpsTokenCount_      = 0.0;
+    turnTpsDurationSec_     = 0.0;
+    lastThinkSegStartMs_    = 0;
+    lastThinkSegDurationMs_ = 0;
     // 重置流级统计 (防御: 上轮异常结束可能未结算)
     tpsStartTime_  = {};
     tpsTokenCount_ = 0.0;
@@ -489,7 +532,9 @@ double EventBridge::takeTurnTps() {
 void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
     // 防御: 上一节点遗留未结算的 THINKING 段 (正常应已在节点结束/出错时结算)
     finalizeThinkSegment();
-    lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
+    lastThinkSegStartMs_    = 0;
+    lastThinkSegDurationMs_ = 0;
+    lastChatChunkType_      = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     nodeStartTime_     = std::chrono::system_clock::now();
     nodeStartTimeMs_   = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(nodeStartTime_.time_since_epoch())

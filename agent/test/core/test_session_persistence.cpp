@@ -927,6 +927,8 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
                 std::string{"E2E reasoning before tool call"}
             );
             XX_TEST_EXPECT_TRUE(sess->viewMessages[1].collapsed);
+            XX_TEST_EXPECT_TRUE(sess->viewMessages[1].startTimeMs > 0);
+            XX_TEST_EXPECT_TRUE(sess->viewMessages[1].durationMs > 0);
             XX_TEST_EXPECT_TRUE(
                 sess->viewMessages[2].role == agentxx::agent::ViewMessage::Role::Tool
             );

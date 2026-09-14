@@ -625,8 +625,8 @@ inline ViewMessage ViewMessage::fromJson(const agentxx::util::Json& j) {
     ViewMessage m;
     m.id          = j.value("id", std::string{});
     m.text        = j.value("text", std::string{});
-    m.startTimeMs = j.value("startTimeMs", int64_t{0});
-    m.durationMs  = j.value("durationMs", int64_t{0});
+    m.startTimeMs = j.value("startTimeMs", j.value("start_time_ms", int64_t{0}));
+    m.durationMs  = j.value("durationMs", j.value("duration_ms", int64_t{0}));
     m.collapsed   = j.value("collapsed", false);
     if (auto role = viewMessageRoleFromString(j.value("role", std::string{}))) {
         m.role = *role;

@@ -631,6 +631,11 @@ private:
     std::chrono::system_clock::time_point thinkSegStart_{};
     int64_t                               thinkSegStartMs_ = 0;
     bool                                  thinkSegActive_  = false;
+    /// 最近一次 THINKING 段的开始时间戳与累计耗时 (毫秒)
+    /// - 用于在 handleChannelWrite 展开写入 viewMessages 历史时带入 Think 消息,
+    ///   保证落库持久化后重启恢复仍能显示思考耗时; 写入后清零
+    int64_t lastThinkSegStartMs_    = 0;
+    int64_t lastThinkSegDurationMs_ = 0;
 
     /// toolCallId → viewMessages 索引 映射 (加速 tool 结果回填 O(1) 定位)
     /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果

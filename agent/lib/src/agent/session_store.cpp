@@ -429,7 +429,7 @@ static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
             // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
             if (info.lastActiveMs <= 0) {
                 auto lastStmt
-                    = db.prepare("SELECT json_extract(json, '$.start_time_ms') FROM view_message "
+                    = db.prepare("SELECT COALESCE(json_extract(json, '$.startTimeMs'), json_extract(json, '$.start_time_ms')) FROM view_message "
                                  "ORDER BY seq DESC LIMIT 1");
                 if (lastStmt.step() && !lastStmt.columnIsNull(0)) {
                     info.lastActiveMs = lastStmt.columnInt64(0);

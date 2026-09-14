@@ -845,6 +845,60 @@ asio::awaitable<void> test_eventbridge_think_duration() {
         }
     }
 
+    // ---- 流程 5: think 流式 -> CHANNEL_WRITE: 历史 Think 消息必须包含思考耗时 ----
+    {
+        auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+        auto session      = std::make_shared<agentxx::agent::Session>();
+        auto io           = std::make_shared<TestEbIO>();
+        auto bridge       = makeTestBridge(agentContext, session, io);
+        auto bridgeCb     = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "thinking...")
+        });
+        co_await asio::steady_timer(
+            co_await asio::this_coro::executor,
+            std::chrono::milliseconds(50)
+        )
+            .async_wait(asio::use_awaitable);
+
+        // 切换到正文, 触发 finalizeThinkSegment
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "ans")
+        });
+
+        neograph::json msgJson{
+            {"role",              "assistant"  },
+            {"content",           "ans"        },
+            {"reasoning_content", "thinking..."},
+        };
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{{"channel", "messages"}, {"value", neograph::json::array({msgJson})}}
+        });
+
+        // session->viewMessages 包含 Think + Assistant
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
+        if (session->viewMessages.size() == 2) {
+            const auto& th = session->viewMessages[0];
+            XX_TEST_EXPECT_TRUE(th.role == agentxx::agent::ViewMessage::Role::Think);
+            XX_TEST_EXPECT_EQ(th.text, std::string{"thinking..."});
+            XX_TEST_EXPECT_TRUE(th.startTimeMs > 0);
+            XX_TEST_EXPECT_TRUE(th.durationMs >= 40);
+
+            const auto& asst = session->viewMessages[1];
+            XX_TEST_EXPECT_TRUE(asst.role == agentxx::agent::ViewMessage::Role::Assistant);
+            XX_TEST_EXPECT_EQ(asst.text, std::string{"ans"});
+            XX_TEST_EXPECT_TRUE(asst.startTimeMs > 0);
+        }
+    }
+
     co_return;
 }
 
