@@ -51,6 +51,18 @@ Element ModelSelectorOverlay::OnRender() {
     const auto& theme      = *ctx_.theme;
     const int   maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
 
+    // 首次渲染且尚未手动设置/对齐时, 若 cachedModelName 在列表中, 对齐选中项
+    if (!initialAligned_ && !st.cachedModelName.empty()) {
+        for (size_t i = 0; i < st.modelNames.size(); ++i) {
+            if (st.modelNames[i] == st.cachedModelName) {
+                selectedIndex_  = static_cast<int>(i);
+                initialAligned_ = true;
+                break;
+            }
+        }
+    }
+
+    itemBoxes_.assign(st.modelNames.size(), Box{});
     Elements items;
     for (size_t i = 0; i < st.modelNames.size(); ++i) {
         auto entry = text(st.modelNames[i]);
@@ -60,7 +72,7 @@ Element ModelSelectorOverlay::OnRender() {
         } else {
             entry = entry | color(theme.normalColor);
         }
-        items.push_back(entry);
+        items.push_back(entry | reflect(itemBoxes_[i]));
     }
 
     Element list;
@@ -120,6 +132,22 @@ bool ModelSelectorOverlay::OnEvent(Event event) {
             onClose_();
         }
         return true;
+    }
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+            for (size_t i = 0; i < itemBoxes_.size(); ++i) {
+                if (itemBoxes_[i].Contain(mouse.x, mouse.y)) {
+                    selectedIndex_ = static_cast<int>(i);
+                    confirmSelection();
+                    ctx_.postRedraw();
+                    if (onClose_) {
+                        onClose_();
+                    }
+                    return true;
+                }
+            }
+        }
     }
     return true;
 }

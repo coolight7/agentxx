@@ -1055,12 +1055,14 @@ void TUIClientAgentIO::openModelSelector() {
             break;
         }
     }
-    // 确认选择: 不即时通知 server-io 切换 (不发送 WireSelectModel), 仅记录为
-    // 待应用选择 (setPendingModel), 随下一次发送的用户消息 (WireUserInput.model)
-    // 携带, BaseAgent 执行新一轮会话时 (runTurnAsync 开头 selectModel) 自动切换。
-    // 状态栏显示已由 confirmSelection 更新 cachedModelName, 此处仅登记待应用
+    // 确认选择: 记录为待应用选择 (setPendingModel), 同时立即向服务端发送
+    // WireSelectModel 同步当前会话的模型设定。
+    // 状态栏显示已由 confirmSelection 更新 cachedModelName
     overlay->onConfirm([this](std::string model) {
-        setPendingModel(std::move(model));
+        setPendingModel(model);
+        if (transport_) {
+            sendToPeer(agentxx::agent::WireSelectModel{currentSessionId(), std::move(model)});
+        }
     });
     overlay->onClose([this] {
         modal_->popModal();
@@ -1431,17 +1433,26 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     }
     awaitingInterruptInput_.store(false, std::memory_order_release);
     // 清理上一会话遗留的排队输入与上下文弹窗数据 (正常路径下切换前
-    // isStreaming == false 时排队输入已清空, 此处兜底防御), 避免串扰新会话
-    sharedState_.mutate([](TUIRenderState& st) {
+    // isStreaming == false 时排队输入已清空, 此处兜底防御), 避免串扰新会话;
+    // 保持当前选定模型不变 (不随会话切换自动重置), 记录为新会话的 pendingModel
+    std::string currentModel;
+    sharedState_.mutate([&](TUIRenderState& st) {
         st.pendingInputs.clear();
         st.contextMessages.reset();
         st.showContextOverlay = false;
+        currentModel          = st.cachedModelName;
+        if (!currentModel.empty()) {
+            st.pendingModel = currentModel;
+        }
     });
     // WS 模式: 更新重连握手 sessionId 并复位增量重放状态 (新会话 delta seq 独立编号);
     // Channel/进程内模式为 no-op
     if (transport_) {
         transport_->updateReconnectSessionId(newThreadId);
         sendToPeer(agentxx::agent::WireSwitchSession{newThreadId});
+        if (!currentModel.empty()) {
+            sendToPeer(agentxx::agent::WireSelectModel{newThreadId, currentModel});
+        }
     }
     postRedraw();
     // 通知事件接收器: 会话切换 (post 到 client io 线程)
@@ -1470,7 +1481,9 @@ void TUIClientAgentIO::setPendingModel(std::string model) {
         return;
     }
     std::lock_guard<std::mutex> lock(sharedState_.mutex());
-    sharedState_.mutableState().pendingModel = std::move(model);
+    auto&                       st = sharedState_.mutableState();
+    st.cachedModelName             = model;
+    st.pendingModel                = std::move(model);
 }
 
 // ---------------------------------------------------------------------------
@@ -1551,7 +1564,10 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     if (!m.models.empty()) {
                         st.modelNames = m.models;
                     }
-                    if (!m.currentModel.empty()) {
+                    // 仅当客户端尚未记录任何模型 (初始加载) 时才从服务端填充;
+                    // 若客户端已有选定模型 (无论是默认初始还是用户手动选择),
+                    // 不被服务端推送的模型信息覆盖 (避免弹窗打开/关闭或切换会话时自动变回默认模型)
+                    if (!m.currentModel.empty() && st.cachedModelName.empty()) {
                         st.cachedModelName = m.currentModel;
                     }
                     for (const auto& cap : m.capabilities) {

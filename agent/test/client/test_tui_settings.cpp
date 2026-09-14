@@ -1,10 +1,13 @@
 #include "test_tui_settings.h"
 
 #include "agentxx-client/io/tui/agent_tui.h"
+#include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx/agent/io/channel_io_transport.h"
 #include "agentxx/util/env.h"
 #include "agentxx/util/settings_db.h"
+#include "ftxui/component/event.hpp"
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
@@ -604,6 +607,131 @@ void test_persist_to_db() {
     fs::remove_all(root, ec);
 }
 
+void test_model_selector_overlay_esc_and_confirm() {
+    TUISharedState sharedState;
+    TUITheme       theme = TUITheme::darkTheme();
+    TUICtx         ctx;
+    ctx.state      = &sharedState;
+    ctx.theme      = &theme;
+    ctx.sessionId  = "test-session";
+    ctx.postRedraw = [] {};
+
+    // 初始状态包含可用模型，当前模型为 model-b
+    sharedState.mutate([](TUIRenderState& st) {
+        st.modelNames      = {"model-a", "model-b", "model-c"};
+        st.cachedModelName = "model-b";
+        st.modelInfoLoaded = true;
+    });
+    ctx.frameState = sharedState.readSnapshot();
+
+    auto        overlay = std::make_shared<ModelSelectorOverlay>(ctx);
+    bool        confirmed = false;
+    bool        closed    = false;
+    std::string confirmedModel;
+    overlay->onConfirm([&](std::string m) {
+        confirmed      = true;
+        confirmedModel = std::move(m);
+    });
+    overlay->onClose([&] {
+        closed = true;
+    });
+
+    // 首次渲染: 验证自动对齐到 cachedModelName ("model-b", index 1)
+    (void)overlay->Render();
+
+    // 模拟按向下箭头: 选定项从 index 1 移到 index 2 ("model-c")
+    overlay->OnEvent(ftxui::Event::ArrowDown);
+
+    // 模拟按 ESC: 仅触发关闭，不应触发确认，cachedModelName 保持为 "model-b"
+    overlay->OnEvent(ftxui::Event::Escape);
+    XX_TEST_EXPECT_TRUE(closed);
+    XX_TEST_EXPECT_FALSE(confirmed);
+    XX_TEST_EXPECT_EQ(sharedState.readSnapshot()->cachedModelName, std::string("model-b"));
+
+    // 再次测试回车确认选择: 选定项已被移到 index 2 ("model-c")
+    closed    = false;
+    confirmed = false;
+    overlay->OnEvent(ftxui::Event::Return);
+    XX_TEST_EXPECT_TRUE(closed);
+    XX_TEST_EXPECT_TRUE(confirmed);
+    XX_TEST_EXPECT_EQ(confirmedModel, std::string("model-c"));
+    XX_TEST_EXPECT_EQ(sharedState.readSnapshot()->cachedModelName, std::string("model-c"));
+}
+
+class MockTestTransport : public agentxx::agent::AgentIOTransportBase {
+public:
+    std::vector<agentxx::agent::WireMessage> sentMessages;
+    bool                                     isAlive = true;
+
+    void send(agentxx::agent::WireMessage msg) override {
+        sentMessages.push_back(std::move(msg));
+    }
+    asio::awaitable<std::optional<agentxx::agent::WireMessage>> recv() override {
+        co_return std::nullopt;
+    }
+    void close() override {
+        isAlive = false;
+    }
+    bool alive() const noexcept override {
+        return isAlive;
+    }
+};
+
+void test_tui_model_retention_on_wire_model_info_and_switch_session() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    // 1. 初始接入时 cachedModelName 为空，收到 WireModelInfo 后被初始化为服务端默认模型
+    tui->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireModelInfo{
+            .currentModel = "default-model",
+            .models       = {"default-model", "custom-model"},
+        }
+    });
+    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("default-model"));
+
+    // 2. 用户选定新模型 custom-model
+    tui->setPendingModel("custom-model");
+    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("custom-model"));
+
+    // 3. 模拟后续弹窗拉取/切换 session 时服务端又推来默认模型，不应覆盖客户端已选定的 custom-model
+    tui->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireModelInfo{
+            .currentModel = "default-model",
+            .models       = {"default-model", "custom-model"},
+        }
+    });
+    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("custom-model"));
+
+    // 4. 切换会话到 session-2: 验证 custom-model 保持不变，并向服务端同步 WireSelectModel
+    transport->sentMessages.clear();
+    tui->switchToSession("session-2");
+    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("custom-model"));
+    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->pendingModel, std::string("custom-model"));
+    XX_TEST_EXPECT_EQ(tui->currentSessionId(), std::string("session-2"));
+
+    // 检查 transport 接收到的消息: 包含 WireSwitchSession 和 WireSelectModel
+    bool sawSwitch = false;
+    bool sawSelect = false;
+    for (const auto& msg : transport->sentMessages) {
+        if (auto* sw = std::get_if<agentxx::agent::WireSwitchSession>(&msg)) {
+            sawSwitch = true;
+            XX_TEST_EXPECT_EQ(sw->sessionId, std::string("session-2"));
+        } else if (auto* sel = std::get_if<agentxx::agent::WireSelectModel>(&msg)) {
+            sawSelect = true;
+            XX_TEST_EXPECT_EQ(sel->sessionId, std::string("session-2"));
+            XX_TEST_EXPECT_EQ(sel->model, std::string("custom-model"));
+        }
+    }
+    XX_TEST_EXPECT_TRUE(sawSwitch);
+    XX_TEST_EXPECT_TRUE(sawSelect);
+}
+
 TestResult testTuiSettings() {
     g_tui_settings_passed = 0;
     g_tui_settings_failed = 0;
@@ -625,6 +753,8 @@ TestResult testTuiSettings() {
     test_log_sink_level_filter();
     test_concurrent_access();
     test_persist_to_db();
+    test_model_selector_overlay_esc_and_confirm();
+    test_tui_model_retention_on_wire_model_info_and_switch_session();
 
     return TestResult{g_tui_settings_passed, g_tui_settings_failed};
 }

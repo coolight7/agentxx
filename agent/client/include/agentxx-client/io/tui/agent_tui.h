@@ -367,6 +367,26 @@ public:
         return sharedState_;
     }
 
+    /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
+    /// - 更新本地 sessionId 绑定与重连握手 sessionId (WS 模式)
+    /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
+    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 server-io 线程)
+    void switchToSession(std::string newSessionId);
+
+    /// 当前会话 sessionId 的跨线程安全读写:
+    /// UI 线程切换会话时写入, client 线程发送用户输入时读取
+    std::string currentSessionId() const {
+        std::lock_guard<std::mutex> lock(sessionIdMutex_);
+        return sessionId_;
+    }
+
+    void setCurrentSessionId(std::string newSessionId) {
+        std::lock_guard<std::mutex> lock(sessionIdMutex_);
+        sessionId_ = std::move(newSessionId);
+    }
+
+    void onPeerMessage(agentxx::agent::WireMessage msg) override;
+
 protected:
 
     // ---- AgentIOBase 被动接收回调 (client 端点实现; 仅由 onPeerMessage 分发) ----
@@ -374,8 +394,6 @@ protected:
     void onSync(const agentxx::agent::WireSyncPayload& payload) override;
     void onTurnResult(const agentxx::agent::WireTurnResult& result) override;
     void onContextStats(const agentxx::agent::WireContextStats& stats) override;
-
-    void onPeerMessage(agentxx::agent::WireMessage msg) override;
 
 private:
 
@@ -453,23 +471,6 @@ private:
     /// 通知事件接收器: 用户输入已发送 (sendUserInputLocked 内部调用;
     /// 任意线程, 内部按需 post 到 client io 线程)
     void notifyUserInputSent(const std::string& sessionId, const std::string& text);
-    /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
-    /// - 更新本地 sessionId 绑定与重连握手 sessionId (WS 模式)
-    /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
-    ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 server-io 线程)
-    void switchToSession(std::string newSessionId);
-
-    /// 当前会话 sessionId 的跨线程安全读写:
-    /// UI 线程切换会话时写入, client 线程发送用户输入时读取
-    std::string currentSessionId() const {
-        std::lock_guard<std::mutex> lock(sessionIdMutex_);
-        return sessionId_;
-    }
-
-    void setCurrentSessionId(std::string newSessionId) {
-        std::lock_guard<std::mutex> lock(sessionIdMutex_);
-        sessionId_ = std::move(newSessionId);
-    }
 
     /// client 插件管理器 (装配后不可变; uiRegistrySnapshot/hasCommand 线程安全)
     std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager_;

@@ -23,7 +23,8 @@ public:
         ctx_(ctx) {}
 
     void setInitialIndex(int idx) {
-        selectedIndex_ = idx;
+        selectedIndex_  = idx;
+        initialAligned_ = true;
     }
 
     void onClose(std::function<void()> fn) {
@@ -42,9 +43,11 @@ private:
     void confirmSelection();
 
     TUICtx&                          ctx_;
-    int                              selectedIndex_ = 0;
+    int                              selectedIndex_  = 0;
+    bool                             initialAligned_ = false;
     std::function<void()>            onClose_;
     std::function<void(std::string)> onConfirm_;
+    std::vector<ftxui::Box>          itemBoxes_;
 };
 
 /// 会话选择弹窗组件 (F4 / 状态栏 [F4] Sessions 按钮)
