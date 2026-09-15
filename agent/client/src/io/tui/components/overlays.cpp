@@ -342,31 +342,34 @@ Element SettingsOverlay::OnRender() {
 
     Elements items;
 
-    // 单条设置项: 标签行 (弱化文字) + 值行 (值色块 + 余下留白; 整行可点击)
-    // - 值色块 (chip) 仅覆盖自身文字宽度, 命中区域为整行 (鼠标点击更宽松)
-    // - 面性风格: 不使用边框/下划线, 选中态以高亮背景色块表示
+    // 单条设置项: 标签行 (弱化文字) + 值行 (整行宽; 整行可点击)
+    // - 值行 = 值文字 + 余下留白 (撑满整行, 留白参与鼠标命中与选中高亮)
+    // - 选中态: 高亮背景覆盖整行 (与模型/会话列表弹窗的整行高亮一致)
+    // - 非选中态: 浅色底色只覆盖值文字本身 (值色块, 内容区保持干净)
+    // - 面性风格: 不使用边框/下划线
     // - 左右留白由外框统一提供, 标签与值行都不再补空格
     auto addItem = [&](std::string_view label, std::string value, int idx, Box& hitBox) {
         const bool selected = (selectedIndex_ == idx);
-        // 值色块只覆盖文字本身 (留白由外框提供, 色块内不再补空格)
-        Element chip = text(value);
+        // 值行: 文字 + 余下留白撑满整行
+        Element valueText = text(value);
+        if (!selected) {
+            // 非选中: 值色块只覆盖文字本身 (留白由外框提供, 色块内不再补空格)
+            valueText = valueText | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+        }
+        Element row = hbox({
+            std::move(valueText),
+            filler(),
+        });
         if (selected) {
-            chip = chip | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
-                   | bold;
-        } else {
-            chip = chip | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+            // 选中: 背景与文字色施加在整行上, 高亮色带铺满整行
+            row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                  | bold;
         }
         if (idx != 0) {
             items.push_back(text("")); // 条目之间留一空行 (背景同内容区)
         }
         items.push_back(text(label) | color(theme.hintColor));
-        items.push_back(
-            hbox({
-                std::move(chip),
-                filler(),
-            })
-            | reflect(hitBox)
-        );
+        items.push_back(std::move(row) | reflect(hitBox));
     };
 
     // 主题 (单行显示当前值, 点击/Enter 循环切换 Dark <-> Light)
