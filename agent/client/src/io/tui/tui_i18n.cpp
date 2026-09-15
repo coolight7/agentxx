@@ -55,7 +55,7 @@ constexpr Entry kTable[] = {
     {"queue.insert",              "[ Insert ]",                                          "[ 立即发送 ]"                                                                                 },
     {"queue.title",               "Pending Message Queue",                               "待发送消息队列"                                                                            },
     {"queue.clear",               "[ Clear ]",                                           "[ 清空 ]"                                                                                       },
-    {"queue.empty",               " ( empty ) ",                                         " ( 空 ) "                                                                                        },
+    {"queue.empty",               "( empty )",                                           "( 空 )"                                                                                          },
     {"queue.attachCount",         "[ 📎︎ x{} ]",                                     "[ 📎︎ x{} ]"                                                                                  },
     {"queue.hint",
      " Click message to expand/collapse  Click ✕ to delete  [Esc] Close ",             " 点击消息展开/折叠  点击 ✕ 删除  [Esc] 关闭 "                                     },
@@ -68,7 +68,7 @@ constexpr Entry kTable[] = {
     {"msg.attachImage",           "📷︎ Image",                                       "📷︎ 图像附件"                                                                             },
     {"msg.attachAudio",           "🎵︎ Audio",                                       "🎵︎ 音频附件"                                                                             },
     {"msg.attachVideo",           "🎬︎ Video",                                       "🎬︎ 视频附件"                                                                             },
-    {"msg.attachOpen",            " ( Click to show in file manager )",                  " ( 点击在文件管理器中显示 )"                                                           },
+    {"msg.attachOpen",            "( Click to show in file manager )",                   "( 点击在文件管理器中显示 )"                                                            },
 
     // ---- 文件选择弹窗 ----
     {"picker.title",              "Select File ( model supports: {} )",                  "选择文件 ( 当前模型支持: {} )"                                                          },
@@ -104,17 +104,17 @@ constexpr Entry kTable[] = {
 
     // ---- 设置弹窗 ----
     {"settings.title",            "Settings",                                            "设置"                                                                                           },
-    {"settings.themeLabel",       " Theme ",                                             " 主题 "                                                                                         },
+    {"settings.themeLabel",       "Theme",                                               "主题"                                                                                           },
     {"settings.themeValue",       "Theme: {}",                                           "主题: {}"                                                                                       },
-    {"settings.animLabel",        " Animation ",                                         " 动画 "                                                                                         },
+    {"settings.animLabel",        "Animation",                                           "动画"                                                                                           },
     {"settings.animValue",        "Animation Level: {}",                                 "动画等级: {}"                                                                                 },
-    {"settings.logLabel",         " Log ",                                               " 日志 "                                                                                         },
+    {"settings.logLabel",         "Log",                                                 "日志"                                                                                           },
     {"settings.logValue",         "Log Level: {}",                                       "日志等级: {}"                                                                                 },
-    {"settings.thinkLabel",       " Thinking ",                                          " 思考 "                                                                                         },
+    {"settings.thinkLabel",       "Thinking",                                            "思考"                                                                                           },
     {"settings.thinkValue",       "Tail Thinking: {}",                                   "末尾思考显示: {}"                                                                           },
-    {"settings.langLabel",        " Language ",                                          " 语言 "                                                                                         },
+    {"settings.langLabel",        "Language",                                            "语言"                                                                                           },
     {"settings.langValue",        "Language: {}",                                        "语言: {}"                                                                                       },
-    {"settings.infoLabel",        " Info ",                                              " 信息 "                                                                                         },
+    {"settings.infoLabel",        "Info",                                                "信息"                                                                                           },
     {"settings.aboutValue",       "About",                                               "关于"                                                                                           },
     {"settings.hint",
      " [Up/Down] Move [Enter] Toggle [Esc] Close ",                                      " [方向键] 移动 [Enter] 切换 [Esc] 关闭 "                                                 },
@@ -146,13 +146,13 @@ constexpr Entry kTable[] = {
 
     // ---- 上下文弹窗 ----
     {"ctx.title",                 "LLM Context · {}",                                   "LLM 上下文 · {}"                                                                              },
-    {"ctx.empty",                 " ( empty ) ",                                         " ( 空 ) "                                                                                        },
+    {"ctx.empty",                 "( empty )",                                           "( 空 )"                                                                                          },
     {"ctx.hint",
      " [Click/Enter/Space] Toggle [Wheel/Up/Down] Scroll [PgUp/PgDn] Page [Esc] Close ", " [点击/Enter/空格] 展开或折叠 [滚轮/方向键] 滚动 [PgUp/PgDn] 翻页 [Esc] 关闭 "},
 
     // ---- Mermaid 状态图弹窗 ----
     {"graph.title",               "Graph",                                               "状态图"                                                                                        },
-    {"graph.noDiagram",           " ( no diagram ) ",                                    " ( 无状态图 ) "                                                                               },
+    {"graph.noDiagram",           "( no diagram )",                                      "( 无状态图 )"                                                                                 },
 
     // ---- 通用滚动弹窗提示 (Mermaid/加载失败共用) ----
     {"overlay.scrollHint",        " [Wheel/Up/Down] Scroll [Esc] Close ",                " [滚轮/方向键] 滚动 [Esc] 关闭 "
@@ -160,7 +160,7 @@ constexpr Entry kTable[] = {
 
     // ---- 加载失败组件弹窗 ----
     {"failed.title",              "Failed Components",                                   "加载失败的组件"                                                                            },
-    {"failed.empty",              " ( no failed components ) ",                          " ( 无失败组件 ) "                                                                            },
+    {"failed.empty",              "( no failed components )",                            "( 无失败组件 )"                                                                              },
     {"failed.unknownType",        "Unknown",                                             "未知"                                                                                           },
 
     // ---- 中断表单控件 ----
