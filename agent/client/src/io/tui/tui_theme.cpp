@@ -20,7 +20,15 @@ TUITheme TUITheme::darkTheme() {
         .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(102, 204, 255), // #66ccff
         .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000
-        .markdownTheme         = markdown::Theme{
+        // 弹窗配色: 内容区比整体背景 (#000) 稍亮, 标题栏再亮一档并带强调色色调,
+        // 底栏介于两者之间, 使同一弹窗内三个区域可仅凭背景色区分 (无边框/分割线)
+        .surfaceColor            = ftxui::Color::RGB(22, 24, 29),  // #16181d
+        .surfaceHeaderColor      = ftxui::Color::RGB(32, 40, 52),  // #202834
+        .surfaceFooterColor      = ftxui::Color::RGB(26, 30, 36),  // #1a1e24
+        .surfaceTitleColor       = ftxui::Color::RGB(102, 204, 255), // accentColor
+        .surfaceErrorHeaderColor = ftxui::Color::RGB(58, 22, 24),  // #3a1618
+        .surfaceScrimColor       = ftxui::Color::RGB(0, 0, 0),     // 同整体背景
+        .markdownTheme           = markdown::Theme{
             .name        = "Dark",
             .syntax      = ftxui::color(ftxui::Color::RGB(245, 245, 52)),
             .gutter      = ftxui::color(ftxui::Color::RGB(140, 140, 140)),
@@ -63,7 +71,14 @@ TUITheme TUITheme::lightTheme() {
         .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(60, 80, 130),
         .buttonActiveTextColor = ftxui::Color::White,
-        .markdownTheme         = markdown::Theme{
+        // 弹窗配色: 浅色终端下以灰色蒙版衬托白色弹窗表面, 标题栏带强调色浅色调
+        .surfaceColor            = ftxui::Color::RGB(255, 255, 255), // #ffffff
+        .surfaceHeaderColor      = ftxui::Color::RGB(223, 233, 245), // #dfe9f5
+        .surfaceFooterColor      = ftxui::Color::RGB(238, 242, 247), // #eef2f7
+        .surfaceTitleColor       = ftxui::Color::RGB(60, 80, 130),   // 深蓝, 在浅色标题栏上清晰
+        .surfaceErrorHeaderColor = ftxui::Color::RGB(252, 233, 233), // #fce9e9
+        .surfaceScrimColor       = ftxui::Color::RGB(232, 236, 241), // #e8ecf1 (灰蒙版)
+        .markdownTheme           = markdown::Theme{
             .name        = "Light",
             .syntax      = ftxui::color(ftxui::Color::Yellow4),
             .gutter      = ftxui::color(ftxui::Color::Grey53),

@@ -396,6 +396,12 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
+  - 弹窗  面性风格: 不使用边框与分割线, 标题栏/内容区/底部提示栏分别以主题的
+    `surfaceHeaderColor`/`surfaceColor`/`surfaceFooterColor` 背景色区分 (错误类弹窗标题栏用
+    `surfaceErrorHeaderColor` + 错误色标题文字); 弹窗打开时屏幕下层以 `surfaceScrimColor`
+    铺满衬托弹窗表面; 弹窗外框辅助函数见
+    [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h),
+    配色定义见 [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h)
   - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
     向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
@@ -425,7 +431,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 插件 Info 栏段落扩展: client 插件可经 register_info_section 向侧边栏
     Info tab 注入段落 (标题 + items, items schema 与面板一致), 渲染在
     Append 组件列表之后; TUI 每帧从 client 插件注册表快照读取, 无需缓存
-- **TUI 渲染模块化**: 将消息列表、侧边栏、浮层、编辑工具渲染拆分到独立文件
+- **TUI 渲染模块化**: 将消息列表、侧边栏、弹窗、编辑工具渲染拆分到独立文件
 - **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
   通过 itemCount/itemKey/estimateHeight/buildItem 回调描述列表，仅构建与视口相交的
   可见子项并局部布局/绘制；已构建子项按 LRU 有界缓存 (条数 + 源字节双预算)，
@@ -1547,19 +1553,20 @@ agent/
 │   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── scroll_common.h # 两个滚动容器共用逻辑 (元素布局测量/滚轮事件)
-│   │   │       ├── tui_theme.h   # TUI 主题配色
+│   │   │       ├── tui_theme.h   # TUI 主题配色 (含弹窗 surface* 面性风格配色)
+│   │   │       ├── surface.h     # 弹窗面性风格外框 (标题栏/留白行/底部提示栏)
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
 │   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/动画/日志等级)
-│   │   │       │   ├── modal_container.h # 浮层容器 (权限/中断弹窗)
+│   │   │       │   ├── modal_container.h # 弹窗容器 (权限/中断弹窗)
 │   │   │       │   └── tui_i18n.h       # 界面翻译表 (en/zh 两列, 缺键回退)
 │   │   │       ├── text_layout.h # 文本布局辅助 (行数估算/硬折行; 消息列表与中断视图共用)
 │   │   │       └── components/   # TUI 渲染组件
 │   │   │           ├── message_list.h # 消息列表渲染
 │   │   │           ├── interrupt_view.h # 中断输入项通用视图 (渲染/估算/交互; 形态由 UI 描述数据决定)
 │   │   │           ├── sidebar.h      # 右侧边栏 (日志/信息/Planning)
-│   │   │           ├── overlays.h     # 浮层 (权限/中断/模型选择)
+│   │   │           ├── overlays.h     # 弹窗 (权限/中断/模型选择)
 │   │   │           ├── input_bar.h    # 输入栏
 │   │   │           ├── status_bar.h   # 状态栏 (上下文占用/活动状态)
 │   │   │           └── spinner.h      # 加载动画

@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/surface.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "fmt/format.h"
@@ -51,9 +52,21 @@ FilePickerOverlay::FilePickerOverlay(
     }
 
     // 过滤输入框
+    // - 面性风格: 聚焦/悬停以输入区背景色区分, 不使用下划线/整行反色
+    //   (占位符仍保持弱化显示)
     auto option      = InputOption();
     option.multiline = false;
-    filterInput_     = Input(&filterText_, option);
+    option.transform = [this](InputState state) {
+        const auto& theme = *ctx_.theme;
+        if (state.is_placeholder) {
+            state.element |= dim;
+        }
+        if (state.focused || state.hovered) {
+            state.element |= bgcolor(theme.inputBgColor);
+        }
+        return state.element;
+    };
+    filterInput_ = Input(&filterText_, option);
 
     navigateTo(initialDir);
 }
@@ -247,27 +260,27 @@ Element FilePickerOverlay::OnRender() {
         );
     }
     std::string caps;
-    // header 仍用单行组合, 避免 hbox 嵌套翻译占位复杂度
-    auto header = hbox({
-        text(trf(
-            "picker.title",
-            fmt::format(
-                "{}{}{}",
-                capability_.imageInput ? std::string(TuiI18n::instance().t("picker.image")) : "",
-                capability_.audioInput ? std::string(TuiI18n::instance().t("picker.audio")) : "",
-                capability_.videoInput ? std::string(TuiI18n::instance().t("picker.video")) : ""
-            )
-        )) | bold,
-    });
+    // 标题: 单行组合, 避免 hbox 嵌套翻译占位复杂度
+    const std::string titleText = trf(
+        "picker.title",
+        fmt::format(
+            "{}{}{}",
+            capability_.imageInput ? std::string(TuiI18n::instance().t("picker.image")) : "",
+            capability_.audioInput ? std::string(TuiI18n::instance().t("picker.audio")) : "",
+            capability_.videoInput ? std::string(TuiI18n::instance().t("picker.video")) : ""
+        )
+    );
     (void)typeIndicators;
     (void)caps;
 
     auto pathLine = hbox({
+        text(" "),
         text(std::string(TuiI18n::instance().t("picker.path"))) | color(theme.hintColor),
         paragraph(currentDir_) | color(theme.normalColor) | xflex_shrink,
     });
 
     auto filterLine = hbox({
+        text(" "),
         text(std::string(TuiI18n::instance().t("picker.filter"))) | color(theme.hintColor),
         filterInput_->Render() | flex | color(theme.inputTextColor),
     });
@@ -323,26 +336,30 @@ Element FilePickerOverlay::OnRender() {
         items.push_back(text(std::string(TuiI18n::instance().t("picker.empty"))) | dim);
     }
 
-    auto helpLine = hbox({
-        text(std::string(TuiI18n::instance().t("picker.hint"))) | dim,
-    });
-
+    // 面性风格: 无边框与分割线, 标题栏/内容区/底部提示栏以背景色区分;
+    // 列表选中行整行高亮 (列表 vbox 由外层 vbox 拉伸铺满整行宽度)
     const int dimX     = Terminal::Size().dimx;
     const int dimY     = Terminal::Size().dimy;
     const int overlayW = std::max(40, dimX * 3 / 5);
     const int overlayH = std::max(12, dimY * 4 / 5);
 
-    auto content = vbox({
-                       header | bold | inverted,
-                       pathLine,
-                       filterLine,
-                       separator() | color(theme.hintColor),
-                       vbox(std::move(items)) | flex | size(HEIGHT, LESS_THAN, overlayH - 8),
-                       separator() | color(theme.hintColor),
-                       helpLine,
-                   })
-                   | border | size(WIDTH, EQUAL, overlayW) | size(HEIGHT, LESS_THAN, overlayH)
-                   | bgcolor(theme.blockColor);
+    auto content
+        = vbox({
+              tuiSurfaceTitleBar(titleText, theme.surfaceTitleColor, theme.surfaceHeaderColor),
+              tuiSurfacePadRow(theme.surfaceColor),
+              pathLine | bgcolor(theme.surfaceColor),
+              filterLine | bgcolor(theme.surfaceColor),
+              tuiSurfacePadRow(theme.surfaceColor),
+              vbox(std::move(items)) | flex | size(HEIGHT, LESS_THAN, overlayH - 8)
+                  | bgcolor(theme.surfaceColor),
+              tuiSurfacePadRow(theme.surfaceColor),
+              tuiSurfaceFooterBar(
+                  std::string(TuiI18n::instance().t("picker.hint")),
+                  theme.hintColor,
+                  theme.surfaceFooterColor
+              ),
+          })
+          | size(WIDTH, EQUAL, overlayW) | size(HEIGHT, LESS_THAN, overlayH);
 
     return content | center;
 }

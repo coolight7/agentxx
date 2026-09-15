@@ -72,6 +72,7 @@
 #include "test_tui_settings.h"
 #include "test_tui_sidebar.h"
 #include "test_tui_stream.h"
+#include "test_tui_surface.h"
 #include "test_tui_tool_header.h"
 #endif
 #include "test_util_misc.h"
@@ -201,6 +202,7 @@ int main(int argn, char** argv) {
         runSync("tui_sidebar", agentxx::test::testTuiSidebar);
         runSync("tui_context_overlay", agentxx::test::testTuiContextOverlay);
         runSync("tui_stream", agentxx::test::testTuiStream);
+        runSync("tui_surface", agentxx::test::testTuiSurface);
         runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
         runSync("sessionId", agentxx::test::testSessionId);
         runSync("mermaid_state", agentxx::test::testMermaidState);

@@ -58,7 +58,7 @@ constexpr Entry kTable[] = {
     {"queue.empty",               " ( empty ) ",                                         " ( 空 ) "                                                                                        },
     {"queue.attachCount",         "[ 📎︎ x{} ]",                                     "[ 📎︎ x{} ]"                                                                                  },
     {"queue.hint",
-     " Click message to expand/collapse  Click [ ✕ ] to delete  [Esc] Close ",         " 点击消息展开/折叠  点击 [ ✕ ] 删除  [Esc] 关闭 "                                 },
+     " Click message to expand/collapse  Click ✕ to delete  [Esc] Close ",             " 点击消息展开/折叠  点击 ✕ 删除  [Esc] 关闭 "                                     },
 
     // ---- 输入框 ----
     {"input.placeholder",

@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
+#include "agentxx-client/io/tui/surface.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/util/exception.h"
@@ -43,6 +44,11 @@ inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
 }
 
 // ---------------------------------------------------------------------------
+// 弹窗  面性风格外框见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h):
+// 标题栏/内容区/底部提示栏以不同背景色区分, 不使用边框与分割线。
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // ModelSelectorOverlay
 // ---------------------------------------------------------------------------
 
@@ -65,7 +71,11 @@ Element ModelSelectorOverlay::OnRender() {
     itemBoxes_.assign(st.modelNames.size(), Box{});
     Elements items;
     for (size_t i = 0; i < st.modelNames.size(); ++i) {
-        auto entry = text(st.modelNames[i]);
+        // 整行可选: 文本 + filler 撑满整行, 选中项背景覆盖整行 (面性风格)
+        auto entry = hbox({
+            text(fmt::format(" {} ", st.modelNames[i])),
+            filler(),
+        });
         if (static_cast<int>(i) == selectedIndex_) {
             entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
                     | focus;
@@ -84,22 +94,22 @@ Element ModelSelectorOverlay::OnRender() {
             list = text(tr("model.empty")) | dim;
         }
     } else {
-        list = hbox({
-                   text(" "),
-                   vbox(std::move(items)) | bold | yframe | vscroll_indicator,
-                   text(" "),
-               })
+        list = vbox(std::move(items)) | bold | yframe | vscroll_indicator | xflex
                | size(HEIGHT, LESS_THAN, maxVisible);
     }
 
     return vbox({
-               text(tr("model.title")) | bold | inverted,
-               separator(),
-               list,
-               separator(),
-               text(tr("model.hint")) | center | dim,
+               tuiSurfaceTitleBar(
+                   tr("model.title"),
+                   theme.surfaceTitleColor,
+                   theme.surfaceHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               list | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("model.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, LESS_THAN, 50) | color(theme.accentColor);
+           | size(WIDTH, LESS_THAN, 50);
 }
 
 bool ModelSelectorOverlay::OnEvent(Event event) {
@@ -181,7 +191,10 @@ Element SessionSelectorOverlay::OnRender() {
 
     // 顶部固定 "新会话" 项 (列表加载中也常驻, 保证始终可新建)
     {
-        auto newEntry = text(tr("session.new"));
+        auto newEntry = hbox({
+            text(fmt::format(" {} ", tr("session.new"))),
+            filler(),
+        });
         if (selectedIndex_ == 0) {
             newEntry = newEntry | bgcolor(theme.buttonActiveBgColor)
                        | color(theme.buttonActiveTextColor) | focus;
@@ -203,11 +216,13 @@ Element SessionSelectorOverlay::OnRender() {
             const std::string title     = s.title.empty() ? s.sessionId : s.title;
             const bool        isCurrent = (s.sessionId == ctx_.sessionId);
             // 第二行: 最近活动日期
-            auto dateLine = text(agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs)) | dim;
+            const std::string dateStr  = agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs);
+            auto              dateLine = text(fmt::format(" {}", dateStr)) | dim;
 
             // 当前会话条目: 名称后附加 "(current)" 标记
             Element row = vbox({
-                isCurrent ? text(trf("session.current", title)) : text(title),
+                isCurrent ? text(fmt::format(" {}", trf("session.current", title)))
+                          : text(fmt::format(" {}", title)),
                 dateLine,
             });
 
@@ -235,17 +250,18 @@ Element SessionSelectorOverlay::OnRender() {
     }
 
     return vbox({
-               text(tr("session.title")) | bold | inverted,
-               separator(),
-               hbox({
-                   text(" "),
-                   vbox(std::move(items)) | bold | yframe | vscroll_indicator,
-                   text(" "),
-               }) | size(HEIGHT, LESS_THAN, maxVisible),
-               separator(),
-               text(tr("session.hint")) | center | dim,
+               tuiSurfaceTitleBar(
+                   tr("session.title"),
+                   theme.surfaceTitleColor,
+                   theme.surfaceHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               vbox(std::move(items)) | bold | yframe | vscroll_indicator | xflex
+                   | size(HEIGHT, LESS_THAN, maxVisible) | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("session.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, LESS_THAN, 70) | color(theme.accentColor);
+           | size(WIDTH, LESS_THAN, 70);
 }
 
 bool SessionSelectorOverlay::OnEvent(Event event) {
@@ -339,86 +355,77 @@ Element SettingsOverlay::OnRender() {
 
     Elements items;
 
+    // 单条设置项: 标签行 (弱化文字) + 值行 (整行留白 + 值色块; 整行可点击)
+    // - 值色块 (chip) 仅覆盖自身文字宽度, 命中区域为整行 (鼠标点击更宽松)
+    // - 面性风格: 不使用边框/下划线, 选中态以高亮背景色块表示
+    auto addItem = [&](std::string_view label, std::string value, int idx, Box& hitBox) {
+        const bool selected = (selectedIndex_ == idx);
+        Element    chip     = text(fmt::format(" {} ", value));
+        if (selected) {
+            chip = chip | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                   | bold;
+        } else {
+            chip = chip | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+        }
+        if (idx != 0) {
+            items.push_back(text("")); // 条目之间留一空行 (背景同内容区)
+        }
+        items.push_back(text(fmt::format(" {}", label)) | color(theme.hintColor));
+        items.push_back(
+            hbox({
+                text(" "),
+                std::move(chip),
+                filler(),
+            })
+            | reflect(hitBox)
+        );
+    };
+
     // 主题 (单行显示当前值, 点击/Enter 循环切换 Dark <-> Light)
-    items.push_back(text(tr("settings.themeLabel")) | color(theme.hintColor));
-    auto themeEntry = text(trf("settings.themeValue", curThemeName));
-    if (selectedIndex_ == 0) {
-        themeEntry = themeEntry | bgcolor(theme.buttonActiveBgColor)
-                     | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        themeEntry = themeEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(themeEntry | reflect(themeBox_));
-
+    addItem(tr("settings.themeLabel"), trf("settings.themeValue", curThemeName), 0, themeBox_);
     // 动画等级 (点击/Enter 循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
-    items.push_back(text(" "));
-    items.push_back(text(tr("settings.animLabel")) | color(theme.hintColor));
-    auto animEntry = text(trf("settings.animValue", TUISettings::instance().animationLevelName()));
-    if (selectedIndex_ == 1) {
-        animEntry = animEntry | bgcolor(theme.buttonActiveBgColor)
-                    | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        animEntry = animEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(animEntry | reflect(animLevelBox_));
-
+    addItem(
+        tr("settings.animLabel"),
+        trf("settings.animValue", TUISettings::instance().animationLevelName()),
+        1,
+        animLevelBox_
+    );
     // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
-    items.push_back(text(" "));
-    items.push_back(text(tr("settings.logLabel")) | color(theme.hintColor));
-    auto logEntry = text(trf("settings.logValue", TUISettings::instance().logLevelName()));
-    if (selectedIndex_ == 2) {
-        logEntry = logEntry | bgcolor(theme.buttonActiveBgColor)
-                   | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        logEntry = logEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(logEntry | reflect(logLevelBox_));
-
+    addItem(
+        tr("settings.logLabel"),
+        trf("settings.logValue", TUISettings::instance().logLevelName()),
+        2,
+        logLevelBox_
+    );
     // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
-    items.push_back(text(" "));
-    items.push_back(text(tr("settings.thinkLabel")) | color(theme.hintColor));
-    auto thinkEntry
-        = text(trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()));
-    if (selectedIndex_ == 3) {
-        thinkEntry = thinkEntry | bgcolor(theme.buttonActiveBgColor)
-                     | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        thinkEntry = thinkEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(thinkEntry | reflect(tailThinkingBox_));
-
+    addItem(
+        tr("settings.thinkLabel"),
+        trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
+        3,
+        tailThinkingBox_
+    );
     // 界面语言 (点击/Enter 循环切换: 自动 Auto <-> 简体中文 zh-cn <-> English en-us)
-    items.push_back(text(" "));
-    items.push_back(text(tr("settings.langLabel")) | color(theme.hintColor));
-    auto langEntry = text(trf("settings.langValue", TUISettings::instance().languageName()));
-    if (selectedIndex_ == 4) {
-        langEntry = langEntry | bgcolor(theme.buttonActiveBgColor)
-                    | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        langEntry = langEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(langEntry | reflect(langBox_));
-
+    addItem(
+        tr("settings.langLabel"),
+        trf("settings.langValue", TUISettings::instance().languageName()),
+        4,
+        langBox_
+    );
     // Info (点击/Enter 打开关于弹窗)
-    items.push_back(text(" "));
-    items.push_back(text(tr("settings.infoLabel")) | color(theme.hintColor));
-    auto aboutEntry = text(tr("settings.aboutValue"));
-    if (selectedIndex_ == 5) {
-        aboutEntry = aboutEntry | bgcolor(theme.buttonActiveBgColor)
-                     | color(theme.buttonActiveTextColor) | bold | focus;
-    } else {
-        aboutEntry = aboutEntry | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    }
-    items.push_back(aboutEntry | reflect(aboutBox_));
+    addItem(tr("settings.infoLabel"), std::string(tr("settings.aboutValue")), 5, aboutBox_);
 
     return vbox({
-               text(tr("settings.title")) | bold | inverted,
-               separator(),
-               vbox(std::move(items)),
-               separator(),
-               text(tr("settings.hint")) | center | dim,
+               tuiSurfaceTitleBar(
+                   tr("settings.title"),
+                   theme.surfaceTitleColor,
+                   theme.surfaceHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               vbox(std::move(items)) | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("settings.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, LESS_THAN, 80) | color(theme.accentColor);
+           | size(WIDTH, LESS_THAN, 80);
 }
 
 bool SettingsOverlay::OnEvent(Event event) {
@@ -488,46 +495,46 @@ bool SettingsOverlay::OnEvent(Event event) {
 Element LogMenuOverlay::OnRender() {
     const auto& theme = *ctx_.theme;
 
+    // 菜单项: 整行背景色块 (面性风格: 不用 [] 括号描边, 选中态换高亮背景)
     auto renderBtn = [&](int idx, std::string_view label, Box& box) {
         const bool selected = (selectedIndex_ == idx);
-        auto       el       = text(fmt::format("[ {} ]", label));
+        auto       el       = hbox({
+            text(fmt::format(" {} ", label)),
+            filler(),
+        });
         if (selected) {
             el = el | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
                  | bold;
         } else {
             el = el | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
-        return hbox({
-                   text("  "),
-                   std::move(el) | reflect(box) | xflex,
-                   text("  "),
-               })
-               | xflex;
+        return el | reflect(box);
     };
 
     auto btn1 = renderBtn(0, tr("menu.llmContext"), llmContextBox_);
     auto btn2 = renderBtn(1, tr("menu.summaryContext"), summyContextBox_);
     auto btn3 = renderBtn(2, tr("menu.clearLogs"), clearLogsBox_);
 
-    auto header = hbox({
-        text(tr("menu.title")) | bold | inverted,
-        filler(),
-    });
+    Elements items = {
+        std::move(btn1),
+        text(""),
+        std::move(btn2),
+        text(""),
+        std::move(btn3),
+    };
 
     return vbox({
-               header,
-               separator(),
-               text(" "),
-               std::move(btn1),
-               text(" "),
-               std::move(btn2),
-               text(" "),
-               std::move(btn3),
-               text(" "),
-               separator(),
-               text(tr("menu.hint")) | center | dim,
+               tuiSurfaceTitleBarContent(
+                   text(fmt::format(" {} ", tr("menu.title"))) | bold
+                       | color(theme.surfaceTitleColor),
+                   theme.surfaceHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               vbox(std::move(items)) | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("menu.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, EQUAL, 36) | color(theme.accentColor);
+           | size(WIDTH, EQUAL, 36);
 }
 
 bool LogMenuOverlay::OnEvent(Event event) {
@@ -843,33 +850,31 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
 }
 
 Element AboutOverlay::OnRender() {
-    const auto& theme  = *ctx_.theme;
-    auto        header = hbox({
-        text(tr("about.title")) | bold | inverted,
-        filler(),
-        text(" "),
-    });
-
-    const auto termSize = ctx_.terminalSize();
-    const int  margin   = 2;
-    const int  termW    = termSize.dimx;
-    const int  termH    = termSize.dimy;
-    const int  wantW    = std::max(50, std::min(76, termW * 4 / 5));
-    const int  wantH    = std::max(12, std::min(24, termH * 4 / 5));
-    const int  availW   = std::max(1, termW - margin * 2);
-    const int  availH   = std::max(1, termH - margin * 2);
-    const int  popupW   = std::min(wantW, availW);
-    const int  popupH   = std::min(wantH, availH);
+    const auto& theme    = *ctx_.theme;
+    const auto  termSize = ctx_.terminalSize();
+    const int   margin   = 2;
+    const int   termW    = termSize.dimx;
+    const int   termH    = termSize.dimy;
+    const int   wantW    = std::max(50, std::min(76, termW * 4 / 5));
+    const int   wantH    = std::max(12, std::min(24, termH * 4 / 5));
+    const int   availW   = std::max(1, termW - margin * 2);
+    const int   availH   = std::max(1, termH - margin * 2);
+    const int   popupW   = std::min(wantW, availW);
+    const int   popupH   = std::min(wantH, availH);
     return vbox({
-               header,
-               separator(),
-               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
-               separator(),
-               text(tr("about.hint")) | center | dim,
+               tuiSurfaceTitleBar(
+                   tr("about.title"),
+                   theme.surfaceTitleColor,
+                   theme.surfaceHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex
+                   | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("about.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
-           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
-           | color(theme.accentColor);
+           | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
 
 bool AboutOverlay::OnEvent(Event event) {
@@ -916,14 +921,18 @@ Element PendingInputsOverlay::OnRender() {
     itemBoxes_.assign(st.pendingInputs.size(), Box{});
     delBoxes_.assign(st.pendingInputs.size(), Box{});
 
-    auto clearBtn = text(tr("queue.clear")) | bgcolor(theme.buttonBgColor)
+    auto clearBtn = text(fmt::format(" {} ", tr("queue.clear"))) | bgcolor(theme.buttonBgColor)
                     | color(theme.buttonTextColor) | bold | reflect(clearBox_);
-    auto header = hbox({
-        text(tr("queue.title")) | bold,
-        filler(),
-        clearBtn,
-        text(" "),
-    });
+    // 标题栏: 左侧标题文字, 右侧"清空"按钮 (面性风格: 标题栏整体背景色区分)
+    Element header = tuiSurfaceTitleBarContent(
+        hbox({
+            text(fmt::format(" {} ", tr("queue.title"))) | bold | color(theme.surfaceTitleColor),
+            filler(),
+            clearBtn,
+            text(" "),
+        }),
+        theme.surfaceHeaderColor
+    );
 
     Elements items;
     if (st.pendingInputs.empty()) {
@@ -931,7 +940,7 @@ Element PendingInputsOverlay::OnRender() {
     }
     for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
         const auto& pi = st.pendingInputs[i];
-        auto delBtn = text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
+        auto delBtn    = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
                       | reflect(delBoxes_[i]);
         Element row;
         auto    body = pi.expanded ? paragraph(pi.text) | flex
@@ -961,15 +970,14 @@ Element PendingInputsOverlay::OnRender() {
 
     const int maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
     return vbox({
-               header,
-               separator(),
+               std::move(header),
+               tuiSurfacePadRow(theme.surfaceColor),
                vbox(std::move(items)) | yframe | vscroll_indicator
-                   | size(HEIGHT, LESS_THAN, maxVisible),
-               separator(),
-               text(tr("queue.hint")) | center | dim,
+                   | size(HEIGHT, LESS_THAN, maxVisible) | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("queue.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, LESS_THAN, 70) | size(WIDTH, GREATER_THAN, 40)
-           | color(theme.accentColor);
+           | size(WIDTH, LESS_THAN, 70) | size(WIDTH, GREATER_THAN, 40);
 }
 
 bool PendingInputsOverlay::OnEvent(Event event) {
@@ -1229,15 +1237,14 @@ Element ContextOverlay::OnRender() {
     Element body = scrollable_->Render() | flex;
 
     return vbox({
-               text(title) | bold | inverted,
-               separator(),
-               hbox({text(" "), body, text(" ")}) | flex,
-               separator(),
-               text(tr("ctx.hint")) | center | dim,
+               tuiSurfaceTitleBar(title, theme.surfaceTitleColor, theme.surfaceHeaderColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               hbox({text(" "), body, text(" ")}) | flex | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(tr("ctx.hint"), theme.hintColor, theme.surfaceFooterColor),
            })
-           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
-           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
-           | color(theme.accentColor);
+           | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
 
 bool ContextOverlay::OnEvent(Event event) {
@@ -1398,11 +1405,6 @@ ftxui::Element MermaidDiagramOverlay::OnRender() {
     const auto& theme = *ctx_.theme;
     // 标题: 插件自定义优先, 空则回退通用翻译
     const std::string titleText = title_.empty() ? std::string(tr("graph.title")) : title_;
-    auto              header    = ftxui::hbox({
-        ftxui::text(titleText) | ftxui::bold,
-        ftxui::filler(),
-        ftxui::text(" "),
-    });
     const int         margin    = 2;
     const auto        termSize  = ctx_.terminalSize();
     const int         termW     = termSize.dimx;
@@ -1414,17 +1416,22 @@ ftxui::Element MermaidDiagramOverlay::OnRender() {
     const int         popupW    = std::min(wantW, availW);
     const int         popupH    = std::min(wantH, availH);
     return ftxui::vbox({
-               header,
-               ftxui::separator(),
+               tuiSurfaceTitleBar(titleText, theme.surfaceTitleColor, theme.surfaceHeaderColor),
+               tuiSurfacePadRow(theme.surfaceColor),
                ftxui::hbox({ftxui::text(" "), scrollable_->Render() | ftxui::flex, ftxui::text(" ")}
-               ) | ftxui::flex,
-               ftxui::separator(),
-               ftxui::text(tr("overlay.scrollHint")) | ftxui::center | ftxui::dim,
+               ) | ftxui::flex
+                   | ftxui::bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(
+                   tr("overlay.scrollHint"),
+                   theme.hintColor,
+                   theme.surfaceFooterColor
+               ),
            })
-           | ftxui::border | ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, popupW)
+           | ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, popupW)
            | ftxui::size(ftxui::WIDTH, ftxui::LESS_THAN, popupW)
            | ftxui::size(ftxui::HEIGHT, ftxui::GREATER_THAN, popupH)
-           | ftxui::size(ftxui::HEIGHT, ftxui::LESS_THAN, popupH) | ftxui::color(theme.accentColor);
+           | ftxui::size(ftxui::HEIGHT, ftxui::LESS_THAN, popupH);
 }
 
 bool MermaidDiagramOverlay::OnEvent(ftxui::Event event) {
@@ -1532,12 +1539,7 @@ std::vector<ScrollItem> FailedComponentsOverlay::buildItems() {
 }
 
 Element FailedComponentsOverlay::OnRender() {
-    const auto& theme  = *ctx_.theme;
-    auto        header = hbox({
-        text(tr("failed.title")) | bold,
-        filler(),
-        text(" "),
-    });
+    const auto& theme = *ctx_.theme;
 
     // 弹窗大小: 宽 3/5 屏、高 2/5 屏, 不超过窗口可用空间 (减去边距);
     // 高度同时给 GREATER_THAN 下限, 避免惰性 viewport 自然高度塌缩成单行
@@ -1552,16 +1554,25 @@ Element FailedComponentsOverlay::OnRender() {
     const int  availH   = std::max(1, termH - margin * 2);
     const int  popupW   = std::min(wantW, availW);
     const int  popupH   = std::min(wantH, availH);
+    // 错误类弹窗: 标题栏用偏红背景 + 错误色标题文字 (替代原错误色边框)
     return vbox({
-               header,
-               separator(),
-               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex,
-               separator(),
-               text(tr("overlay.scrollHint")) | center | dim,
+               tuiSurfaceTitleBar(
+                   tr("failed.title"),
+                   theme.errorColor,
+                   theme.surfaceErrorHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex
+                   | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(
+                   tr("overlay.scrollHint"),
+                   theme.hintColor,
+                   theme.surfaceFooterColor
+               ),
            })
-           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
-           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH)
-           | color(theme.errorColor);
+           | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
 
 bool FailedComponentsOverlay::OnEvent(Event event) {
@@ -1649,25 +1660,33 @@ bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollab
 }
 
 Element overlayFrame(
-    TUICtx&             ctx,
-    const std::string&  title,
-    const ftxui::Color& accent,
-    Scrollable&         scrollable,
-    int                 widthFracNum,
-    int                 widthFracDen
+    TUICtx&            ctx,
+    const TUITheme&    theme,
+    const std::string& title,
+    Scrollable&        scrollable,
+    int                widthFracNum,
+    int                widthFracDen
 ) {
     int popupW = 0, popupH = 0;
     overlayPopupSize(ctx, widthFracNum, widthFracDen, 4, 5, popupW, popupH);
-    (void)ctx;
     return vbox({
-               hbox({text(title.empty() ? " " : title) | bold, filler(), text(" ")}),
-               separator(),
-               hbox({text(" "), scrollable.Render() | flex, text(" ")}) | flex,
-               separator(),
-               text(tr("overlay.scrollHint")) | center | dim,
+               tuiSurfaceTitleBar(
+                   title.empty() ? " " : title,
+                   theme.surfaceTitleColor,
+                   theme.surfaceHeaderColor
+               ),
+               tuiSurfacePadRow(theme.surfaceColor),
+               hbox({text(" "), scrollable.Render() | flex, text(" ")}) | flex
+                   | bgcolor(theme.surfaceColor),
+               tuiSurfacePadRow(theme.surfaceColor),
+               tuiSurfaceFooterBar(
+                   tr("overlay.scrollHint"),
+                   theme.hintColor,
+                   theme.surfaceFooterColor
+               ),
            })
-           | border | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
-           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH) | color(accent);
+           | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
 
 } // namespace
@@ -1714,8 +1733,7 @@ std::vector<ScrollItem> TextOverlay::buildItems() {
 }
 
 Element TextOverlay::OnRender() {
-    const auto& theme = *ctx_.theme;
-    return overlayFrame(ctx_, title_, theme.accentColor, *scrollable_, 3, 5);
+    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, 3, 5);
 }
 
 bool TextOverlay::OnEvent(Event event) {
@@ -1855,8 +1873,7 @@ std::vector<ScrollItem> DiffOverlay::buildItems() {
 }
 
 Element DiffOverlay::OnRender() {
-    const auto& theme = *ctx_.theme;
-    return overlayFrame(ctx_, title_, theme.accentColor, *scrollable_, 4, 5);
+    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, 4, 5);
 }
 
 bool DiffOverlay::OnEvent(Event event) {
@@ -1942,7 +1959,8 @@ CustomOverlay::CustomOverlay(
                     continue;
                 }
                 if (kind == "separator") {
-                    push(text("─") | color(theme.hintColor) | dim);
+                    // 面性风格: 分隔不画横线, 改用一条浅色背景区块 (整行)
+                    push(text("") | bgcolor(theme.surfaceFooterColor));
                     continue;
                 }
                 agentxx::client::PluginButtonDesc desc;
@@ -2011,8 +2029,7 @@ CustomOverlay::CustomOverlay(
 }
 
 Element CustomOverlay::OnRender() {
-    const auto& theme = *ctx_.theme;
-    return overlayFrame(ctx_, title_, theme.accentColor, *scrollable_, 3, 5);
+    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, 3, 5);
 }
 
 bool CustomOverlay::OnEvent(Event event) {

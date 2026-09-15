@@ -637,10 +637,11 @@ void TUIClientAgentIO::start() {
                             text(" "),
                             hbox({
                                 filler(),
-                                hbox({
-                                    text(toastText_) | bold | bgcolor(theme_.buttonActiveBgColor)
-                                        | color(theme_.buttonActiveTextColor),
-                                }) | border,
+                                // 面性风格: 不使用边框, 以整块背景色承载提示文字
+                                // (左右各留 1 列内边距)
+                                text(" " + toastText_ + " ") | bold
+                                    | bgcolor(theme_.buttonActiveBgColor)
+                                    | color(theme_.buttonActiveTextColor),
                                 filler(),
                             }),
                             filler(),
@@ -652,8 +653,9 @@ void TUIClientAgentIO::start() {
         });
 
         // 模态容器: 主布局 + 弹窗层
+        // 背景色用 surfaceScrimColor: 弹窗打开时铺满屏幕, 衬托弹窗表面
         modal_ = ModalContainer::Create(mainRenderer);
-        modal_->setBgColor(theme_.backgroundColor);
+        modal_->setBgColor(theme_.surfaceScrimColor);
 
         // 全局快捷键 + 鼠标 (F2/F3/F12/Escape/点击): 组件未处理的事件到此处理
         auto handler = CatchEvent(modal_, [&](Event event) -> bool {
@@ -1093,7 +1095,7 @@ void TUIClientAgentIO::openSettings() {
         // 若不更新, 设置弹窗背景仍是旧主题背景色 (弹窗内部元素每帧重建,
         // 已自动使用新主题; 背景由 ModalContainer 的 bgColor_ 提供)
         if (modal_) {
-            modal_->setBgColor(theme_.backgroundColor);
+            modal_->setBgColor(theme_.surfaceScrimColor);
         }
     });
     // 日志等级变化: 清空已收集日志行 (重新按新等级收集);

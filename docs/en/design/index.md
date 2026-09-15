@@ -273,6 +273,13 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
   - Mermaid stateDiagram-v2 state machine rendering (renders ```mermaid blocks in messages, and Plan dialog roadmap state diagrams).
   - Context token utilization status bar.
   - Theme switching (persisted to `{dataDir}/sqlite/global.db`).
+  - Flat (surface-based) overlay style: No borders or divider lines - title bar, content
+    area and bottom hint bar are told apart purely by background colors
+    (`surfaceHeaderColor` / `surfaceColor` / `surfaceFooterColor`; error overlays use
+    `surfaceErrorHeaderColor` with error-colored title text), while `surfaceScrimColor`
+    fills the screen behind an open modal. Frame helpers live in
+    [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h), palette tokens in
+    [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h).
   - Session selector modal (F4): Lists persisted sessions (`WireListSessions`), switching via `WireSwitchSession`, with server pushing new session Sync (tail-window paginated), model info, and context statistics.
   - Paginated history loading: Restoring long sessions initially renders only the server's trailing window (100 items locally). Scrolling upward automatically paginates older history via `WireGetViewMessages`, anchoring scroll position stably until reaching session beginning (`historyWindowStart=0`).
   - Connection status banner: Displays server-io connection states (Connecting / Failed with clickable [Retry] button / Connected). Local mode is set ready prior to `SessionServerAgentIO` driver loop; remote mode is driven via `mode_runners` connection coroutines (`TUIRenderState::connState`).

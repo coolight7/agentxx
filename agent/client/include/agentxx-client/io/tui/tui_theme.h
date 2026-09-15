@@ -31,6 +31,17 @@ public:
     ftxui::Color buttonActiveBgColor;   // 高亮按钮背景
     ftxui::Color buttonActiveTextColor; // 高亮按钮文字
 
+    /// 弹窗配色: 面性风格
+    /// - 浮层不使用边框和分割线, 标题栏/内容区/底部提示栏各自以背景色区分;
+    ///   各区域背景行由 vbox 在交叉轴上拉伸铺满整行宽度 (见 overlays.cpp 外框辅助函数)
+    /// - 命名对应 "[surface] 表面" 语义: 内容区是最外层表面, 标题栏/底栏是附着的次级表面
+    ftxui::Color surfaceColor;            // 浮层内容区背景
+    ftxui::Color surfaceHeaderColor;      // 浮层标题栏背景
+    ftxui::Color surfaceFooterColor;      // 浮层底部提示栏背景
+    ftxui::Color surfaceTitleColor;       // 浮层标题文字
+    ftxui::Color surfaceErrorHeaderColor; // 错误类浮层标题栏背景 (如加载失败列表)
+    ftxui::Color surfaceScrimColor; // 浮层打开时铺满屏幕的下层背景色 (衬托浮层表面)
+
     markdown::Theme markdownTheme; // markdown-ui 渲染主题
 
     /// 黑色主题 (默认)

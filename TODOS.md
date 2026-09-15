@@ -8,6 +8,7 @@
 
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
+- 启动时检测 python、nodejs、版本和环境是否可用
 
 - 调整 tui 亮色配置
 - SVG绘制支持
