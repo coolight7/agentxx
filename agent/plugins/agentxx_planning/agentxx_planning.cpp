@@ -63,8 +63,6 @@ State diagram conventions:
 === Tactical Layer: `todos` (write, optional) ===
 A short list of IMMEDIATE and NEXT-STEP tasks only. Do NOT list every state
 from the diagram — only the tasks you are actively working on or about to start.
-Each item records execution details, lessons learned, and issues encountered
-to help with re-planning.
 
 === MEMO Layer: `notes` (write, optional) ===
 Record any important information, tips, reminders, or identity/role-playing prompts.
@@ -118,9 +116,33 @@ It helps break down large objectives into smaller, manageable steps.
 ### Finishing a Task
 
 When all work is done, write your final answer in the message AFTER your last `agentxx_planning` call — not in the same turn.
-Start the final message with the substantive content the user asked for (data, computation, or analysis).
+Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
 The user wants the result, not confirmation that the work is done.
 )_";
+
+constexpr std::string_view kArgModeDesc = R"(Operation mode:
+`write`: Save/update the planning content (requires `roadmap`; optional `todos`/`notes`).
+`read`: Return the planning content previously saved in this session (no other arguments).)";
+
+constexpr std::string_view kArgRoadmapDesc =
+    R"((write only) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
+Include ALL phases even if not yet started. Each phase gets state nodes for its
+statuses (pending/in_progress/completed/failed) with transitions showing
+dependencies and error recovery paths. Use `[*]` for start/end.
+Replace the entire diagram each call.)";
+
+constexpr std::string_view kArgTodosDesc = R"((write only) TACTICAL LAYER: Near-term task items.
+Focus on what you are actively doing NOW and what comes NEXT.
+Do NOT list all phases from the diagram — only immediate execution items.
+
+Item struct:
+{
+    "state": "pending",   // enum: pending, in_progress, completed, failed
+    "content": ""         // task description
+})";
+
+constexpr std::string_view kArgNotesDesc = R"((write only) MEMO LAYER: Any additional notes.
+Use this to record important information, tips, reminders, or identity/role-playing prompts.)";
 
 /// ==================== 规划持久化 ({dataDir}/plans/) ====================
 /// - 文件名: thread_id 经字符清洗 (非 [A-Za-z0-9._-] → '_') 截断后追加
@@ -349,20 +371,33 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
 /// 注册事务 (start 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
 static int planningSetup(PluginCtx* ctx) {
     const AgentxxPluginHost* host = ctx->host;
-    // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts)
+    // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts 与 toolPrompt)
     if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
         agentxx::util::Json j;
         j["appendSystemPrompts"]             = agentxx::util::Json::object();
         j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
-        std::string js                       = j.dump();
+
+        agentxx::util::Json toolPrompt     = agentxx::util::Json::object();
+        agentxx::util::Json planningPrompt = agentxx::util::Json::object();
+        planningPrompt["depict"]           = std::string{kDepictPlanning};
+        agentxx::util::Json args           = agentxx::util::Json::object();
+        args["mode"]                       = std::string{kArgModeDesc};
+        args["roadmap"]                    = std::string{kArgRoadmapDesc};
+        args["todos"]                      = std::string{kArgTodosDesc};
+        args["notes"]                      = std::string{kArgNotesDesc};
+        planningPrompt["args"]             = std::move(args);
+        toolPrompt[std::string{kNamePlanning}] = std::move(planningPrompt);
+        j["toolPrompt"]                    = std::move(toolPrompt);
+
+        std::string js       = j.dump();
         auto        promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
         if (ctx->iface.prompt->set_prompt(host, &promptSv) != 0) {
-            pluginLog(ctx, 3, "agentxx_planning: set appendSystemPrompts[planning] failed");
+            pluginLog(ctx, 3, "agentxx_planning: set prompts failed");
         } else {
             pluginLog(
                 ctx,
                 2,
-                "agentxx_planning: appendSystemPrompts[planning] injected via prompt iface"
+                "agentxx_planning: appendSystemPrompts[planning] & toolPrompt injected via prompt iface"
             );
         }
     }
@@ -374,24 +409,22 @@ static int planningSetup(PluginCtx* ctx) {
             = ctx->schema(kNamePlanning)
                   .enumString(
                       "mode",
-                      "Operation mode: `write` saves/updates the planning content "
-                      "(requires `roadmap`); `read` returns the previously saved "
-                      "planning content of this session.",
+                      kArgModeDesc,
                       {"write", "read"},
                       /*required=*/true
                   )
                   .string(
                       "roadmap",
-                      "(write only, required) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow."
+                      kArgRoadmapDesc
                   )
                   .array(
                       "todos",
-                      "(write only) TACTICAL LAYER: Near-term task items (state/content).",
+                      kArgTodosDesc,
                       "object"
                   )
                   .string(
                       "notes",
-                      "(write only) MEMO LAYER: Any additional notes, tips, reminders."
+                      kArgNotesDesc
                   )
                   .build();
 

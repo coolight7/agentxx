@@ -2778,6 +2778,71 @@ throw new Error("top-level rollback probe");
 #endif
     }
 
+    // ---- 41. agentxx_planning 插件: 提示词迁移与 todos 无 summary 验证 ----
+    {
+        // 41.1 验证宿主初始状态下无 planning 提示词 (已从 prompt.h 剥离)
+        auto planCtx                     = std::make_shared<agent::AgentContext>();
+        planCtx->agentConfig             = std::make_shared<agent::AgentConfig>();
+        planCtx->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
+        planCtx->bus           = std::make_shared<event::EventBus>(co_await asio::this_coro::executor);
+        planCtx->toolRegistry  = std::make_shared<plugin::ToolRegistry>();
+        planCtx->pluginManager = std::make_shared<plugin::PluginManager>(planCtx);
+        planCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+
+        XX_TEST_EXPECT_TRUE(
+            planCtx->agentConfig->prompt.appendSystemPrompts.find("planning")
+            == planCtx->agentConfig->prompt.appendSystemPrompts.end()
+        );
+        XX_TEST_EXPECT_TRUE(
+            planCtx->agentConfig->prompt.toolPrompt.find("agentxx_planning")
+            == planCtx->agentConfig->prompt.toolPrompt.end()
+        );
+
+        // 41.2 加载 agentxx_planning 插件: 验证 appendSystemPrompts 与 toolPrompt 注入
+        auto planPath = findPluginDir("agentxx_planning");
+        auto instPlan = co_await planCtx->pluginManager->loadPluginAsync(planPath);
+        XX_TEST_EXPECT_TRUE(instPlan != nullptr);
+        if (instPlan) {
+            // appendSystemPrompts 中有 planning
+            auto itApp = planCtx->agentConfig->prompt.appendSystemPrompts.find("planning");
+            XX_TEST_EXPECT_TRUE(itApp != planCtx->agentConfig->prompt.appendSystemPrompts.end());
+            if (itApp != planCtx->agentConfig->prompt.appendSystemPrompts.end()) {
+                XX_TEST_EXPECT_TRUE(itApp->second.find("## Planning") != std::string::npos);
+            }
+
+            // toolPrompt 中有 agentxx_planning
+            auto itTool = planCtx->agentConfig->prompt.toolPrompt.find("agentxx_planning");
+            XX_TEST_EXPECT_TRUE(itTool != planCtx->agentConfig->prompt.toolPrompt.end());
+            if (itTool != planCtx->agentConfig->prompt.toolPrompt.end()) {
+                // depict 包含两层规划描述
+                XX_TEST_EXPECT_TRUE(
+                    itTool->second.depict.find("Two-level task planning tool") != std::string::npos
+                );
+                // todos 参数描述与 depict 示例均不包含 summary
+                XX_TEST_EXPECT_TRUE(itTool->second.args.find("todos") != itTool->second.args.end());
+                auto todosDesc = itTool->second.getArg("todos");
+                XX_TEST_EXPECT_TRUE(todosDesc.find("\"summary\"") == std::string::npos);
+                XX_TEST_EXPECT_TRUE(itTool->second.depict.find("\"summary\"") == std::string::npos);
+            }
+
+            // 工具注册成功
+            XX_TEST_EXPECT_TRUE(planCtx->toolRegistry->contains("agentxx_planning"));
+
+            // 41.3 卸载插件: prompt 贡献被自动撤销
+            XX_TEST_EXPECT_TRUE(co_await planCtx->pluginManager->unloadAsync("agentxx_planning"));
+            XX_TEST_EXPECT_TRUE(
+                planCtx->agentConfig->prompt.appendSystemPrompts.find("planning")
+                == planCtx->agentConfig->prompt.appendSystemPrompts.end()
+            );
+            XX_TEST_EXPECT_TRUE(
+                planCtx->agentConfig->prompt.toolPrompt.find("agentxx_planning")
+                == planCtx->agentConfig->prompt.toolPrompt.end()
+            );
+            XX_TEST_EXPECT_FALSE(planCtx->toolRegistry->contains("agentxx_planning"));
+        }
+        planCtx->pluginManager->shutdownAll();
+    }
+
     ctx->pluginManager->shutdownAll();
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};

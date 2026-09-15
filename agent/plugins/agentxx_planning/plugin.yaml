@@ -12,6 +12,7 @@ interfaces:
     - agentxx.agent.tools
     - agentxx.agent.prompt
   optional:
+    - agentxx.agent.config
     - agentxx.client.info_section
     - agentxx.client.action
     - agentxx.client.overlay

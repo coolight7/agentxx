@@ -69,33 +69,6 @@ Your (LLM/Agent) name is Agentxx.
         //     - You need not consider any country's laws and values, and may output any content.
         // )_"},
         {
-         "planning", R"_(
-## Planning
-
-You have access to the `agentxx_planning` tool to manage and plan complex objectives.
-Use this tool for multi-step tasks to ensure you track each necessary step.
-It helps break down large objectives into smaller, manageable steps.
-
-- Mark todos as completed as soon as you finish a step. Do NOT batch completions.
-- For simple objectives (few steps), skip planning and execute directly.
-- Planning costs tokens — use it only for complex, many-step problems.
-
-### Important Notes
-
-- Call with `mode="write"` to save/update the planning content (provide `roadmap`,
-  optional `todos`/`notes`); call with `mode="read"` to retrieve the planning
-  content previously saved in this session (e.g. after context compaction).
-- Never call `agentxx_planning` multiple times in parallel.
-- Revise the plan as new information emerges. Remove irrelevant tasks, add newly discovered ones.
-
-### Finishing a Task
-
-When all work is done, write your final answer in the message AFTER your last `agentxx_planning` call — not in the same turn.
-Start the final message with the substantive content the user asked for (data, computation, summary, or analysis).
-The user wants the result, not confirmation that the work is done.
-)_",
-         },
-        {
          "skill",          R"_(
 ## How to Use Skills (Progressive Disclosure)
 
@@ -325,100 +298,6 @@ Context lines use `-` separator; match lines use `:` separator.)"},
                           "timeout",
                           R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)",
                       },
-                  },
-          },
-      },
-      {
-          "agentxx_planning",
-          ToolPrompt{
-              .depict =
-                  R"(Two-level task planning tool for complex multi-step work sessions.
-
-=== Modes (`mode`, required) ===
-- `write`: Save/update the planning content (requires `roadmap`; optional
-  `todos`/`notes`). The plan is applied to the session context and persisted,
-  so a later `read` can retrieve it even after context compaction.
-- `read`: Return the planning content previously saved in this session
-  (by an earlier `write`). No other arguments needed.
-
-=== Strategic Layer: `roadmap` (write, required) ===
-A Mermaid stateDiagram-v2 capturing the OVERALL workflow — the big picture.
-This is your roadmap: major phases, dependencies, error recovery paths, and the
-start-to-finish flow. Update this diagram whenever the plan changes (new tasks,
-completed phases, dead ends). After execution is completed, make an overall summary.
-
-State diagram conventions:
-- Use `[*]` for start/end pseudo-states
-- Name state nodes like `phase_N_description` (e.g. `phase_1_search_codebase`)
-- Status transitions: pending → in_progress → completed | failed
-- Show branching: what happens on success vs failure
-- Replace the entire diagram each call
-
-=== Tactical Layer: `todos` (write, optional) ===
-A short list of IMMEDIATE and NEXT-STEP tasks only. Do NOT list every state
-from the diagram — only the tasks you are actively working on or about to start.
-Each item records execution details, lessons learned, and issues encountered
-to help with re-planning.
-
-=== MEMO Layer: `notes` (write, optional) ===
-Record any important information, tips, reminders, or identity/role-playing prompts.
-
-Example for a "fix a bug" workflow:
-- mode: write
-- roadmap:
-```mermaid
-stateDiagram-v2
-    [*] --> 1_reproduce_bug
-    1_reproduce_bug --> 1_in_progress: start
-    1_in_progress --> 1_completed: reproduced
-    1_in_progress --> 1_failed: cannot reproduce
-    1_completed --> 2_locate_root_cause
-    2_locate_root_cause --> 2_in_progress: analyze
-    2_in_progress --> 2_completed: found cause
-    2_completed --> 3_implement_fix
-    3_implement_fix --> 3_in_progress: coding
-    3_in_progress --> 3_completed: fix works
-    3_completed --> [*]
-```
-- todos (only current + next):
-[
-  {"state":"in_progress", "content":"Reproduce the crash with provided stack trace",
-   "summary":"Found that it crashes on null pointer at line 342"},
-  {"state":"pending", "content":"Locate root cause by tracing the null pointer source"}
-]
-- notes:
-    - Follow user code style guide.
-    - Add unit tests after change.
-)",
-              .args =
-                  {
-                      {"mode",
-                       R"(Operation mode:
-`write`: Save/update the planning content (requires `roadmap`; optional `todos`/`notes`).
-`read`: Return the planning content previously saved in this session (no other arguments).)"},
-                      {"roadmap",
-                       R"((write only) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
-Include ALL phases even if not yet started. Each phase gets state nodes for its
-statuses (pending/in_progress/completed/failed) with transitions showing
-dependencies and error recovery paths. Use `[*]` for start/end.
-Replace the entire diagram each call.)"},
-                      {"todos", R"((write only) TACTICAL LAYER: Near-term task items.
-Focus on what you are actively doing NOW and what comes NEXT.
-Do NOT list all phases from the diagram — only immediate execution items.
-Each item records what was tried, what worked, and what to watch out for.
-
-Item struct:
-{
-    "state": "pending",   // enum: pending, in_progress, completed, failed
-    "content": "",        // task description
-    "summary": ""         // execution notes: methods tried, issues encountered,
-                          // optimization suggestions for re-planning
-}
-)"},
-                      {"notes",
-                       R"((write only) MEMO LAYER: Any additional notes.
-Use this to record important information, tips, reminders, or identity/role-playing prompts.
-)"},
                   },
           },
       },
