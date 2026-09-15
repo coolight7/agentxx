@@ -294,7 +294,11 @@ class AgentxxFfiBindings {
           ffi.Pointer<ffi.Char> Function(ffi.Pointer<AgentxxFFIAgent>,
               ffi.Pointer<ffi.Pointer<ffi.Char>>)>();
 
-  /// 当前模型信息: {"currentModel","models":[...]}
+  /// 当前模型信息:
+  /// `{"currentModel","models":[...],"capabilities":[{"name","image_input","audio_input","video_input"},...]}`
+  /// - capabilities 为各可用模型的多模态输入能力 (与 wire model_info 同构),
+  ///   宿主据此判断是否展示图片/音频/视频输入入口 (model_json 的
+  ///   imageInput/audioInput/videoInput 配置决定, 兼容下划线写法)
   ffi.Pointer<ffi.Char> agentxx_ffi_get_model_info(
     ffi.Pointer<AgentxxFFIAgent> a,
     ffi.Pointer<ffi.Pointer<ffi.Char>> log,

@@ -204,7 +204,9 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 j["interruptId"]      = m.id;
                 emitEvent(AGENTXX_FFI_EVT_INTERRUPT_EXPIRED, dump(j));
             } else if constexpr (std::is_same_v<T, agent::WireModelInfo>) {
-                auto j = agent::io::makeModelInfo(m.currentModel, m.models);
+                // 能力清单 (各模型多模态输入支持) 一并下发: 宿主据此判断
+                // 是否展示图片/音频/视频输入入口 (与 TUI 的附件按钮判定同源)
+                auto j = agent::io::makeModelInfo(m.currentModel, m.models, m.capabilities);
                 emitEvent(AGENTXX_FFI_EVT_MODEL_INFO, dump(j));
                 if (onSyncReply) {
                     onSyncReply(SyncKind::ModelInfo, std::move(j));

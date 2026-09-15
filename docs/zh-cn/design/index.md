@@ -404,8 +404,9 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     `surfaceHeaderColor`/`surfaceColor`/`surfaceFooterColor` 背景色区分 (错误类弹窗标题栏用
     `surfaceErrorHeaderColor` + 错误色标题文字); 弹窗打开时屏幕下层以 `surfaceScrimColor`
     铺满衬托弹窗表面
-  - 弹窗外框 (圆角 + 统一留白): 弹窗是纯色填充的圆角矩形 (四角以圆角字符绘制, 字符前景取
-    内容区背景色、背景取弹窗外部色), 且由外框统一提供留白 —— 上下左右各 1 格内边距、
+  - 弹窗外框 (+ 角标 + 统一留白): 弹窗是纯色填充的矩形, 四角以 "+" 角标绘制 (字符前景取
+    内容区背景色、背景取弹窗外部色, 角标横向占 2 列: "+" 与其后/前的留白), 且由外框统一提供
+    留白 —— 上下左右各 2 格内边距、
     标题栏/内容区/底部提示栏之间各 1 行间距, 因此标题文本与内容行都不需要自带首尾空格
     (翻译表相应键也已去掉装饰性空格); 弹窗按自然尺寸居中, 高度被约束时由内容区吸收多余高度;
     外框见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
@@ -429,7 +430,8 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 多语言与国际化 (TuiI18n): 界面显示语言已完全与 YAML 解耦，统一由 TUI 设置窗口直接切换并持久化到 `{dataDir}/sqlite/global.db` 的 `tui.lang` (支持 Auto 自动识别系统语言 / ZhCn 简体中文 / EnUs 英文)，运行时无锁查表且支持格式化占位符。会话与模型提示词语言则由 Agent 端独立支持 `getLanguage/setLanguage`
     消息列表的角色标签与 Tip 级别文本同样随语言切换 (折叠态形如
     `+ [Think] ...` / `+ [Tip] # Warn · ...`，中文为 `+ [思考] ...` /
-    `+ [提示] # 警告 · ...`；展开态只显示 `- [Tip] # Warn` 前缀, 正文在下一行)，
+    `+ [提示] # 警告 · ...`；展开态只显示 `- [Tip] # Warn` 前缀, 正文在下一行;
+    Warning/Error 才附加级别文本, Info 级别不附加 (前缀为 `[Tip] #` 后直接接预览分隔符))，
     头部前缀的列宽预算按标签实际显示宽度计算 (markdown::utf8_display_width),
     不按英文宽度写死; 切换语言时消息列表渲染缓存整体失效重建
     (agent_tui 的 onLanguageChange → MessageListComponent::invalidateCache)
@@ -1569,7 +1571,7 @@ agent/
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── scroll_common.h # 两个滚动容器共用逻辑 (元素布局测量/滚轮事件)
 │   │   │       ├── tui_theme.h   # TUI 主题配色 (含弹窗 surface* 面性风格配色)
-│   │   │       ├── surface.h     # 弹窗面性风格外框 (圆角 + 内外留白 + 三区域组装)
+│   │   │       ├── surface.h     # 弹窗面性风格外框 (+ 角标 + 内外留白 + 三区域组装)
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)

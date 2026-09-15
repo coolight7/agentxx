@@ -72,12 +72,49 @@ class ContextStatsEvent extends AgentEvent {
   double get tps => (raw['tps'] as num?)?.toDouble() ?? 0;
 }
 
-/// EVT_MODEL_INFO: 当前模型信息 / 可用模型列表
+/// 单个模型的多模态输入能力 (capabilities[] 单项)
+///
+/// 来自 agent 侧模型配置 (model_json 的 imageInput/audioInput/videoInput 或
+/// yaml 的 image_input/audio_input/video_input); 宿主据此判断是否展示
+/// 图片/音频/视频输入入口 —— 与 TUI 的附件按钮判定同源。
+class ModelCapability {
+  ModelCapability._(this.name, this.imageInput, this.audioInput, this.videoInput);
+
+  factory ModelCapability.fromJson(Map<String, dynamic> j) => ModelCapability._(
+        j['name'] as String? ?? '',
+        j['image_input'] as bool? ?? false,
+        j['audio_input'] as bool? ?? false,
+        j['video_input'] as bool? ?? false,
+      );
+
+  final String name;
+  final bool imageInput;
+  final bool audioInput;
+  final bool videoInput;
+
+  /// 是否支持任一多模态输入
+  bool get hasMultimodalInput => imageInput || audioInput || videoInput;
+}
+
+/// EVT_MODEL_INFO: 当前模型信息 / 可用模型列表 / 各模型多模态能力
 class ModelInfoEvent extends AgentEvent {
   ModelInfoEvent(super.raw);
 
   String get currentModel => raw['currentModel'] as String? ?? '';
   List<dynamic> get models => raw['models'] as List<dynamic>? ?? const [];
+
+  /// 各模型的多模态输入能力 (旧版 agent 可能不带该字段, 此时为空列表)
+  List<ModelCapability> get capabilities =>
+      (raw['capabilities'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ModelCapability.fromJson)
+          .toList(growable: false);
+
+  /// 当前模型的多模态输入能力 (列表中无匹配项时按不支持处理)
+  ModelCapability get currentCapability => capabilities.firstWhere(
+        (c) => c.name == currentModel,
+        orElse: () => ModelCapability._(currentModel, false, false, false),
+      );
 }
 
 /// EVT_COMPONENTS: 启动组件信息 (MCP/Skill/Memory/插件)

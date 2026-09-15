@@ -271,7 +271,11 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
  * 返回值: int32_t 状态码 (AGENTXX_FFI_OK 成功); out 填入 JSON 结果 (agentxx_ffi_string_free 释放);
  * 失败时 log 含详情 */
 
-/// 当前模型信息: {"currentModel","models":[...]}
+/// 当前模型信息:
+/// `{"currentModel","models":[...],"capabilities":[{"name","image_input","audio_input","video_input"},...]}`
+/// - capabilities 为各可用模型的多模态输入能力 (与 wire model_info 同构),
+///   宿主据此判断是否展示图片/音频/视频输入入口 (model_json 的
+///   imageInput/audioInput/videoInput 配置决定, 兼容下划线写法)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
     agentxx_ffi_get_model_info(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
 

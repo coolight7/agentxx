@@ -255,6 +255,12 @@ bool FfiAgentRuntime::buildConfigs(
     mc.anthropicVersion         = mj.value("anthropicVersion", "2023-06-01");
     mc.modelContenxtMaxToken    = mj.value("modelContextMaxToken", size_t{0});
     mc.sendThinking             = mj.value("sendThinking", false);
+    // 多模态输入能力 (与 yaml 的 image_input/audio_input/video_input 同义):
+    // 决定宿主能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发
+    // (见 agentxx_ffi_get_model_info 与 EVT_MODEL_INFO); 字段名兼容驼峰与下划线
+    mc.imageInput = mj.value("imageInput", mj.value("image_input", false));
+    mc.audioInput = mj.value("audioInput", mj.value("audio_input", false));
+    mc.videoInput = mj.value("videoInput", mj.value("video_input", false));
     if (mj.contains("sslVerify") && !mj["sslVerify"].is_null() && mj["sslVerify"].is_boolean()) {
         mc.sslVerify = mj["sslVerify"].get<bool>();
     }

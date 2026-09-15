@@ -279,9 +279,10 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
     (`surfaceHeaderColor` / `surfaceColor` / `surfaceFooterColor`; error modals use
     `surfaceErrorHeaderColor` with error-colored title text), while `surfaceScrimColor`
     fills the screen behind an open modal.
-  - Rounded modal frame with built-in padding: A modal is a filled rounded rectangle (rounded
-    corner glyphs take the body color as foreground and the outside color as background) and the
-    frame itself provides all spacing - 1 cell of padding on every side plus 1 blank row between
+  - Flat (+ corner) modal frame with built-in padding: A modal is a filled rectangle whose four
+    corners are drawn with "+" markers (the marker cell takes the body color as foreground and the
+    outside color as background; each marker spans 2 columns - the "+" plus its adjacent blank) and the
+    frame itself provides all spacing - 2 cells of padding on every side plus 1 blank row between
     the title bar, content area and bottom hint bar, so titles and content rows carry no padding
     of their own (translation entries no longer include decorative spaces either). Modals are
     centered at their natural size; when the height is constrained the content area absorbs the

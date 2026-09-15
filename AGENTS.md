@@ -43,6 +43,7 @@ int charToLower(int c) {
 - 使用 grep、glob 等工具前参考以下代码结构缩小范围，非必要不应去搜索 `agent/**` 整个代码库，里面包含了 build、third_party 等文件夹太大
 - 需要捕获异常时，建议优先考虑 [agentxx::util::catchError 系列](D:\0Acoolight\Program\cpp\agentxx\agent\lib\include\agentxx\util\exception.h)，尤其是协程异常，不应 try {} catch(...) 捕获全部异常，应当使用 `agentxx::util::catchErrorAsync` 放行 取消和中断
 - 如果需要编译或运行测试，一般跑 debug 即可
+- 修改代码后无需自动执行 `clang-format` 等格式化处理
 
 ## 代码结构
 - `agent`: 

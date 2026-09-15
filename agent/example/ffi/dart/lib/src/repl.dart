@@ -69,8 +69,10 @@ class CliRenderer {
             Ansi.gray));
       case ModelInfoEvent():
         _endThinking();
+        final cap = event.currentCapability;
         stdout.writeln(Ansi.paint(
-            '模型: ${event.currentModel} (共 ${event.models.length} 个可用)',
+            '模型: ${event.currentModel} (共 ${event.models.length} 个可用'
+            '${cap.hasMultimodalInput ? ', 支持多模态输入' : ''})',
             Ansi.cyan));
       case ComponentsEvent():
         stdout.writeln(Ansi.paint('[组件信息已加载]', Ansi.gray));

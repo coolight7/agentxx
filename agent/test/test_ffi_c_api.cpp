@@ -290,15 +290,22 @@ struct FfiMockLLM {
     }
 
     /// 构造 model_json 指向本 mock
-    std::string modelJson() const {
-        return agentxx::util::Json{
+    /// - `multimodal` 为 true 时声明多模态输入能力 (对齐 yaml 的
+    ///   image_input/audio_input/video_input), 用于校验能力经
+    ///   EVT_MODEL_INFO / get_model_info 的 capabilities 下发
+    std::string modelJson(bool multimodal = false) const {
+        auto j = agentxx::util::Json{
             {"name",      "ffi-mock"                                          },
             {"type",      "openai"                                            },
             {"baseUrl",   "http://127.0.0.1:" + std::to_string(server->port())},
             {"apiKey",    "EMPTY"                                             },
             {"modelName", "ffi-mock"                                          },
+        };
+        if (multimodal) {
+            j["imageInput"] = true;
+            j["videoInput"] = true;
         }
-            .dump();
+        return j.dump();
     }
 };
 
@@ -387,8 +394,9 @@ void testLifecycleAndConversation() {
     cb.on_event  = FfiEventRecorder::onEvent;
     cb.user_data = &rec;
 
+    // 本用例声明多模态能力: 校验能力清单经 get_model_info / EVT_MODEL_INFO 下发
     AgentxxString    log{};
-    auto             modelJsonStr = mock.modelJson();
+    auto             modelJsonStr = mock.modelJson(/*multimodal=*/true);
     auto             modelJsonSv  = agentxx_string_view(modelJsonStr.data(), modelJsonStr.size());
     AgentxxFFIAgent* a            = agentxx_ffi_create(nullptr, &modelJsonSv, &cb, &log);
     if (a == nullptr) {
@@ -408,10 +416,34 @@ void testLifecycleAndConversation() {
         XX_TEST_EXPECT_TRUE(ready.find("\"sessionId\"") != std::string::npos);
     }
 
-    // 同步查询: 模型信息
+    // 同步查询: 模型信息 (含各模型多模态能力清单)
     AgentxxString mi{};
     XX_TEST_EXPECT_EQ(agentxx_ffi_get_model_info(a, &mi, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(mi.data != nullptr && std::strstr(mi.data, "currentModel") != nullptr);
+    // 能力清单: model_json 的 imageInput/videoInput 声明应原样出现在 capabilities 中
+    // (宿主据此判断是否展示图片/视频输入入口; 缺失时能力判定失效)
+    XX_TEST_EXPECT_TRUE(mi.data != nullptr && std::strstr(mi.data, "capabilities") != nullptr);
+    if (mi.data != nullptr) {
+        try {
+            auto j      = agentxx::util::Json::parse(std::string_view(mi.data, mi.size));
+            auto caps   = j.value("capabilities", agentxx::util::Json::array());
+            bool hasCap = false;
+            for (const auto& c : caps) {
+                if (c.value("name", std::string{}) != "ffi-mock") {
+                    continue;
+                }
+                hasCap = true;
+                XX_TEST_EXPECT_TRUE(c.value("image_input", false));
+                XX_TEST_EXPECT_TRUE(c.value("video_input", false));
+                // 未声明的能力保持 false (音频输入)
+                XX_TEST_EXPECT_FALSE(c.value("audio_input", true));
+            }
+            XX_TEST_EXPECT_TRUE(hasCap);
+        } catch (...) {
+            g_ffi_failed++;
+            TEST_FAIL << "model_info payload not JSON" << std::endl;
+        }
+    }
     agentxx_ffi_string_free(&mi);
 
     // 发送输入 → 流式 delta → 轮次结束
@@ -430,8 +462,27 @@ void testLifecycleAndConversation() {
             TEST_FAIL << "TURN_END payload not JSON: " << turn << std::endl;
         }
     }
-    // 应收到过 EVT_MODEL_INFO (启动时自动请求)
+    // 应收到过 EVT_MODEL_INFO (启动时自动请求); 事件载荷同样带能力清单
     XX_TEST_EXPECT_TRUE(rec.has(AGENTXX_FFI_EVT_MODEL_INFO));
+    {
+        auto info = rec.first(AGENTXX_FFI_EVT_MODEL_INFO);
+        try {
+            auto j = agentxx::util::Json::parse(info);
+            XX_TEST_EXPECT_TRUE(j.contains("capabilities"));
+            auto caps = j.value("capabilities", agentxx::util::Json::array());
+            XX_TEST_EXPECT_FALSE(caps.empty());
+            bool imageInput = false;
+            for (const auto& c : caps) {
+                if (c.value("image_input", false)) {
+                    imageInput = true;
+                }
+            }
+            XX_TEST_EXPECT_TRUE(imageInput);
+        } catch (...) {
+            g_ffi_failed++;
+            TEST_FAIL << "MODEL_INFO payload not JSON: " << info << std::endl;
+        }
+    }
 
     // 同步查询: LLM 上下文 (一轮后应有 user/assistant 消息)
     AgentxxString ctx{};
@@ -837,6 +888,29 @@ void testLanguageApis() {
             agentxx_ffi_set_language(nullptr, &zhSv, nullptr),
             AGENTXX_FFI_ERR_INVALID
         );
+
+        // 未声明多模态的模型 (本用例的 model_json 无 imageInput/audioInput/videoInput):
+        // 能力清单仍在, 但各项均为 false (不误报可用)
+        AgentxxString mi{};
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_model_info(a, &mi, &log), AGENTXX_FFI_OK);
+        if (mi.data != nullptr) {
+            try {
+                auto j = agentxx::util::Json::parse(std::string_view(mi.data, mi.size));
+                XX_TEST_EXPECT_TRUE(j.contains("capabilities"));
+                for (const auto& c : j.value("capabilities", agentxx::util::Json::array())) {
+                    if (c.value("name", std::string{}) != "ffi-mock") {
+                        continue;
+                    }
+                    XX_TEST_EXPECT_FALSE(c.value("image_input", true));
+                    XX_TEST_EXPECT_FALSE(c.value("audio_input", true));
+                    XX_TEST_EXPECT_FALSE(c.value("video_input", true));
+                }
+            } catch (...) {
+                g_ffi_failed++;
+                TEST_FAIL << "model_info payload not JSON" << std::endl;
+            }
+        }
+        agentxx_ffi_string_free(&mi);
 
         XX_TEST_EXPECT_EQ(agentxx_ffi_stop(a, &log), AGENTXX_FFI_OK);
         XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);

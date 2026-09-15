@@ -173,7 +173,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_DELTA` | wire delta JSON | 流式增量 (kind=text_token/thinking_token/tool_start/tool_end/turn_end/...) |
 | `EVT_TURN_END` | wire turn_result JSON | 轮次结束 (`has_error` 字段报告异步错误) |
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
-| `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果) |
+| `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果): `{currentModel, models[], capabilities[]}`; `capabilities` 为各模型多模态输入能力 `{name, image_input, audio_input, video_input}`, 宿主据此判断是否展示图片/音频/视频输入入口 |
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
@@ -210,6 +210,10 @@ agentxx_ffi_event_queue_free(q);
   "apiPath": "", "connectTimeoutSeconds": 16, "readChunkTimeoutSeconds": 100,
   "sslVerify": true|null, "maxConcurrentConnections": 5,
   "anthropicVersion": "2023-06-01", "modelContextMaxToken": 0,
+  "imageInput": false, "audioInput": false, "videoInput": false,
+  // ↑ 多模态输入能力 (对齐 yaml 的 image_input/audio_input/video_input,
+  //   字段名兼容下划线写法): 经 EVT_MODEL_INFO / get_model_info 的
+  //   capabilities 下发给宿主, 供其决定是否展示图片/音频/视频输入入口
   "extraHeaders": {"k":"v"}, "extraConfig": {} }
 ```
 
