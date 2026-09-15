@@ -1218,10 +1218,14 @@ agent/
 │   │   │   ├── a2a_client.h      # A2A Client (Agent Card / SendMessage / Task management)
 │   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, task state machine)
 │   │   │   ├── acp_server.h      # ACP Server (stdio mode)
+│   │   │   ├── provider_common.h # Shared helpers for LLM providers / model-call node
+│   │   │   │                     #   (unique tool_call id, empty-response check)
 │   │   │   └── protocol_base.h   # Protocol base class
 │   │   └── util/                 # Utilities
 │   │       ├── log.h             # Logging system (XX_LOG macro, LogDispatcher, LogSink)
 │   │       ├── string_util.h     # String utilities (encoding conversion, path normalization, base64, natural sort, IgnoreCaseMap, etc.)
+│   │       ├── path_sanitize.h   # Path-segment sanitizing (invalid char replacement, over-long
+│   │       │                     #   truncation with hash suffix, Windows reserved-name check)
 │   │       ├── http_client.h     # HTTP Client (Boost.Beast based)
 │   │       │                     #   Connection pool: keep-alive idle connection reuse + per-endpoint concurrency cap
 │   │       │                     #   (maxConcurrentConnections, default 5); auto-retries on stale connection failure;
@@ -1260,6 +1264,7 @@ agent/
 │   │   │       ├── tui_plugin_adapter.h # TUI plugin adapter (UI registry / command pipeline / client event forwarding)
 │   │   │       ├── scrollable.h  # Scrollable (fully-constructed scrollable container for short lists such as sidebars)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (lazy construction + bounded LRU cache + viewport partial rendering)
+│   │   │       ├── scroll_common.h # Logic shared by both scroll containers (measure / wheel events)
 │   │   │       ├── tui_theme.h   # TUI theme styling and palettes
 │   │   │       ├── framework/    # TUI Framework Layer
 │   │   │       │   ├── tui_state.h       # Aggregated TUI state (messages, sidebar, pending input queue, etc.)

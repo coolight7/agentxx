@@ -549,6 +549,146 @@ struct Logger {
     }
 };
 
+/* ==================== 公共便捷助手 ====================
+ *
+ * 插件各处反复手写的三件小事, 统一由 SDK 提供, 插件内可
+ * `using agentxx::plugin::xxx;` 引入后按原名调用:
+ * - [pluginLog]        经实例日志接口输出 (上下文为空时静默)
+ * - [pluginStrdup]     经宿主 alloc 复制 C 串 (C ABI 出参直接赋值用)
+ * - [ctxGuardLogger]   C ABI 边界异常守卫 (`guardCall`/`guardCallVoid`) 的日志闭包
+ */
+
+/// 实例日志便捷函数 (ctx 为空时静默)
+///
+/// - `args`:
+///     - [ctx] 插件实例上下文 (须继承 [PluginBase], 即具备 `log` 成员)
+///     - [level] 日志等级: 0=trace 1=debug 2=info 3=warn 4=error
+///     - [msg] 日志内容
+template<typename Ctx>
+inline void pluginLog(const Ctx* ctx, int32_t level, std::string_view msg) {
+    if (ctx) {
+        ctx->log.log(level, msg);
+    }
+}
+
+/// 实例日志便捷函数 (直接持有宿主与日志接口表、无实例上下文的插件使用)
+///
+/// - 已格式化的内容原样输出 (不做前缀/截断; 异常上报路径见 [logTo])
+/// - 宿主或日志接口缺失时静默丢弃
+///
+/// - `args`:
+///     - [host] 宿主句柄 (由插件入口传入, 须非空)
+///     - [logIf] 日志接口表 (经宿主 query_interface 取得)
+///     - [level] 日志等级: 0=trace 1=debug 2=info 3=warn 4=error
+///     - [msg] 日志内容
+inline void pluginLog(
+    const AgentxxPluginHost*     host,
+    const AgentxxPluginLogIface* logIf,
+    int32_t                      level,
+    std::string_view             msg
+) {
+    if (!host || !logIf || !logIf->log) {
+        return;
+    }
+    auto sv = PluginStringView::from(msg.data(), msg.size());
+    logIf->log(host, level, &sv);
+}
+
+/// 经宿主 alloc 复制 C 串, 供 C ABI 出参 (`char*`) 直接赋值
+/// - 包装 [PluginString::strdup], 省去每处手写视图构造
+/// - 与 `pluginStrdup` 语义一致: 宿主或入参为空返回 nullptr
+/// - `return` 宿主堆内存, 调用方负责经宿主 free 释放
+inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
+    if (!host || !s) {
+        return nullptr;
+    }
+    auto sv = PluginStringView::fromCstr(s);
+    return PluginString::strdup(host, &sv);
+}
+
+/// 生成 C ABI 边界异常守卫使用的日志闭包 (error 级; ctx 为空时静默)
+///
+/// - 用法: `agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] { ... });`
+/// - `return` 可拷贝的日志闭包 (仅捕获上下文指针, 不持有实例所有权)
+template<typename Ctx>
+inline auto ctxGuardLogger(Ctx* ctx) noexcept {
+    return [ctx](const char* msg) noexcept {
+        if (ctx) {
+            ctx->log.error(msg ? msg : "");
+        }
+    };
+}
+
+/// 文本 → JSON 字符串字面量 (含首尾双引号), 供手工拼装 JSON 文本的插件使用
+///
+/// - 优先经宿主 `json_escape` 接口转义 (正确处理引号/反斜杠/控制字符/非 ASCII);
+///   接口缺失或调用失败时回退为本地转义 (转义 `"` `\` 与 ASCII 控制字符, 其余原样),
+///   保证结果始终是合法 JSON 字符串字面量
+/// - 常用场景: 把插件侧构造的字符串 (插件名/脚本路径/MCP 地址等) 拼进 JSON 文本
+///   (如 `fmt::format("{{\"name\":{}}}", jsonEscape(...))`)
+///
+/// - `args`:
+///     - [host] 宿主句柄
+///     - [jsonIface] 宿主 json 接口表 (agent/client 两侧共用, 可空)
+///     - [text] 待转义文本 (内容可含任意字节, 含非法 UTF-8 时应先自行修复)
+///
+/// - `return` 形如 `"..."` 的 JSON 字符串字面量
+template<typename JsonIface>
+inline std::string
+    jsonEscape(const AgentxxPluginHost* host, const JsonIface* jsonIface, std::string_view text) {
+    if (host && jsonIface && jsonIface->json_escape) {
+        AgentxxPluginString esc{nullptr, 0};
+        auto                sv = PluginStringView::from(text.data(), text.size());
+        if (jsonIface->json_escape(host, &sv, &esc) == 0 && esc.data) {
+            std::string out(esc.data, static_cast<size_t>(esc.size));
+            PluginString::free(host, &esc);
+            return out;
+        }
+    }
+    // 回退: 最小化转义 (宿主接口不可用时仍给出合法 JSON 字符串)
+    std::string out;
+    out.reserve(text.size() + 2);
+    out.push_back('"');
+    for (char c : text) {
+        const auto uc = static_cast<unsigned char>(c);
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (uc < 0x20) {
+                    constexpr char kHex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out.push_back(kHex[(uc >> 4) & 0xfu]);
+                    out.push_back(kHex[uc & 0xfu]);
+                } else {
+                    out.push_back(c);
+                }
+                break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
 /* ==================== 协程驱动桥 (PollOneBridge) ====================
  *
  * 定位: 让插件协程与宿主协程在**同一宿主 IO 执行序列**中交错推进的适配层。

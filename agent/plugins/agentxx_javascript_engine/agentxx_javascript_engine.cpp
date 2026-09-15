@@ -2154,31 +2154,17 @@ JSValue JsEngine::bridgeCall(
                 }
                 JS_FreeValue(ctx, tv);
             }
-            // spec JSON 拼装经宿主 json_escape (防注入/转义错误)
-            AgentxxPluginString nsEsc{nullptr, 0};
-            AgentxxPluginString urlEsc{nullptr, 0};
-            auto    nsSv  = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-            auto    urlSv = agentxx::plugin::PluginStringView::from(url.data(), url.size());
-            int32_t rc1   = iface.json->json_escape(host, &nsSv, &nsEsc);
-            int32_t rc2   = iface.json->json_escape(host, &urlSv, &urlEsc);
-            if (rc1 != 0 || rc2 != 0 || !nsEsc.data || !urlEsc.data) {
-                if (nsEsc.data) {
-                    agentxx::plugin::PluginString::free(host, &nsEsc);
-                }
-                if (urlEsc.data) {
-                    agentxx::plugin::PluginString::free(host, &urlEsc);
-                }
-                return JS_ThrowInternalError(ctx, "addMcpServer: escape failed");
+            // spec JSON 拼装经宿主 json_escape (防注入/转义错误; 失败时 SDK 内部回退为本地转义)
+            if (!iface.json) {
+                return JS_ThrowInternalError(ctx, "addMcpServer: json interface unavailable");
             }
             long long   t    = static_cast<long long>(timeoutSec < 0 ? 0 : timeoutSec);
             std::string spec = fmt::format(
                 "{{\"namespace\":{},\"url\":{},\"timeout\":{}}}",
-                nsEsc.data,
-                urlEsc.data,
+                agentxx::plugin::jsonEscape(host, iface.json, ns),
+                agentxx::plugin::jsonEscape(host, iface.json, url),
                 t
             );
-            agentxx::plugin::PluginString::free(host, &nsEsc);
-            agentxx::plugin::PluginString::free(host, &urlEsc);
             auto specSv = agentxx::plugin::PluginStringView::fromCstr(spec.c_str());
             if (iface.resources->register_mcp_server(host, &specSv) != 0) {
                 return throwJsError(

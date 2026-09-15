@@ -128,9 +128,9 @@ public:
                   && temp[2]["tool_calls"][0].value("id", std::string{}) == "call_it_1";
         }
 
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json{{"handled", "handled"}}
-        );
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+            {"handled", "handled"}
+        });
     }
 };
 

@@ -624,7 +624,7 @@ void test_model_selector_overlay_esc_and_confirm() {
     });
     ctx.frameState = sharedState.readSnapshot();
 
-    auto        overlay = std::make_shared<ModelSelectorOverlay>(ctx);
+    auto        overlay   = std::make_shared<ModelSelectorOverlay>(ctx);
     bool        confirmed = false;
     bool        closed    = false;
     std::string confirmedModel;
@@ -660,18 +660,22 @@ void test_model_selector_overlay_esc_and_confirm() {
 
 class MockTestTransport : public agentxx::agent::AgentIOTransportBase {
 public:
+
     std::vector<agentxx::agent::WireMessage> sentMessages;
     bool                                     isAlive = true;
 
     void send(agentxx::agent::WireMessage msg) override {
         sentMessages.push_back(std::move(msg));
     }
+
     asio::awaitable<std::optional<agentxx::agent::WireMessage>> recv() override {
         co_return std::nullopt;
     }
+
     void close() override {
         isAlive = false;
     }
+
     bool alive() const noexcept override {
         return isAlive;
     }
@@ -689,29 +693,41 @@ void test_tui_model_retention_on_wire_model_info_and_switch_session() {
     // 1. 初始接入时 cachedModelName 为空，收到 WireModelInfo 后被初始化为服务端默认模型
     tui->onPeerMessage(agentxx::agent::WireMessage{
         agentxx::agent::WireModelInfo{
-            .currentModel = "default-model",
-            .models       = {"default-model", "custom-model"},
-        }
+                                      .currentModel = "default-model",
+                                      .models       = {"default-model", "custom-model"},
+                                      }
     });
-    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("default-model"));
+    XX_TEST_EXPECT_EQ(
+        tui->sharedState().readSnapshot()->cachedModelName,
+        std::string("default-model")
+    );
 
     // 2. 用户选定新模型 custom-model
     tui->setPendingModel("custom-model");
-    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("custom-model"));
+    XX_TEST_EXPECT_EQ(
+        tui->sharedState().readSnapshot()->cachedModelName,
+        std::string("custom-model")
+    );
 
     // 3. 模拟后续弹窗拉取/切换 session 时服务端又推来默认模型，不应覆盖客户端已选定的 custom-model
     tui->onPeerMessage(agentxx::agent::WireMessage{
         agentxx::agent::WireModelInfo{
-            .currentModel = "default-model",
-            .models       = {"default-model", "custom-model"},
-        }
+                                      .currentModel = "default-model",
+                                      .models       = {"default-model", "custom-model"},
+                                      }
     });
-    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("custom-model"));
+    XX_TEST_EXPECT_EQ(
+        tui->sharedState().readSnapshot()->cachedModelName,
+        std::string("custom-model")
+    );
 
     // 4. 切换会话到 session-2: 验证 custom-model 保持不变，并向服务端同步 WireSelectModel
     transport->sentMessages.clear();
     tui->switchToSession("session-2");
-    XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->cachedModelName, std::string("custom-model"));
+    XX_TEST_EXPECT_EQ(
+        tui->sharedState().readSnapshot()->cachedModelName,
+        std::string("custom-model")
+    );
     XX_TEST_EXPECT_EQ(tui->sharedState().readSnapshot()->pendingModel, std::string("custom-model"));
     XX_TEST_EXPECT_EQ(tui->currentSessionId(), std::string("session-2"));
 

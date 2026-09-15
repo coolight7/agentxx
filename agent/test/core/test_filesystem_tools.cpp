@@ -521,13 +521,15 @@ asio::awaitable<void>
             && agentxx::util::isIgnoreCaseContains(result, "not exist")
             && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
             g_fs_passed++;
-            TEST_PASS << "FilesystemReadTextFileTool returns 'not exist' error for non-existent file"
-                      << std::endl;
+            TEST_PASS
+                << "FilesystemReadTextFileTool returns 'not exist' error for non-existent file"
+                << std::endl;
         } else {
             g_fs_failed++;
-            TEST_FAIL << "FilesystemReadTextFileTool should return 'not exist' error for non-existent file, "
-                         "got: "
-                      << result << std::endl;
+            TEST_FAIL
+                << "FilesystemReadTextFileTool should return 'not exist' error for non-existent file, "
+                   "got: "
+                << result << std::endl;
         }
     } catch (const std::exception& e) {
         if (agentxx::util::isIgnoreCaseContains(e.what(), "not exist")
@@ -558,8 +560,9 @@ asio::awaitable<void>
                 << std::endl;
         } else {
             g_fs_failed++;
-            TEST_FAIL << "FilesystemReadTextFileTool with offset/limit should return 'not exist', got: "
-                      << result << std::endl;
+            TEST_FAIL
+                << "FilesystemReadTextFileTool with offset/limit should return 'not exist', got: "
+                << result << std::endl;
         }
     } catch (const std::exception& e) {
         if (agentxx::util::isIgnoreCaseContains(e.what(), "not exist")) {
@@ -575,8 +578,10 @@ asio::awaitable<void>
 
     // 测试同步版 fileReadExecute 读取不存在文件
     {
-        auto syncResult
-            = ::agentxx_fs_plugin::fileReadExecute(args, agentxx::tools::testResolvedWorkDir(agentContext));
+        auto syncResult = ::agentxx_fs_plugin::fileReadExecute(
+            args,
+            agentxx::tools::testResolvedWorkDir(agentContext)
+        );
         if (agentxx::util::isIgnoreCaseContains(syncResult, "not exist")
             && !agentxx::util::isIgnoreCaseContains(syncResult, "permission")) {
             g_fs_passed++;
@@ -603,8 +608,8 @@ asio::awaitable<void>
                 << std::endl;
         } else {
             g_fs_failed++;
-            TEST_FAIL << "FilesystemReadTextFileTool should return directory error, got: "
-                      << result << std::endl;
+            TEST_FAIL << "FilesystemReadTextFileTool should return directory error, got: " << result
+                      << std::endl;
         }
     } catch (const std::exception& e) {
         if (agentxx::util::isIgnoreCaseContains(e.what(), "directory")) {
@@ -2418,7 +2423,8 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(linkCtx->toolRegistry->contains(name));
     }
 
-    // 验证 glob、grep、list 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩), read 不开启
+    // 验证 glob、grep、list 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩),
+    // read 不开启
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_glob")->extra["autoSummaryOutput"],
         std::string{"true"}

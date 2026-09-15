@@ -80,14 +80,6 @@ inline void ScreenCaptureHolder::stopStreaming() {
     capture_.stopStreaming();
 }
 
-static auto ctxGuardLogger(ScreenCapturePluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx) {
-            ctx->log.error(msg ? msg : "");
-        }
-    };
-}
-
 static std::string buildCapturePath(ScreenCapturePluginCtx& ctx, int screenIndex) {
     const auto now = std::chrono::system_clock::now();
     const auto tt  = std::chrono::system_clock::to_time_t(now);

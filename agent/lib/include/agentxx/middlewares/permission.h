@@ -103,7 +103,8 @@ public:
     /// 权限路径规范化: 绝对路径 (基准 = AgentConfig::resolvedWorkDir, workDir
     /// 未配置时回退进程 cwd) + Unix 分隔符 (+ Windows 转小写)
     /// - 目录路径 (在文件系统中实际存在为目录, 或原路径显式以 '/' 或 '\\' 结尾) 追加/保留尾斜杠
-    /// - 文件路径 (在文件系统中实际存在为普通文件, 或实际不存在且原路径未以斜杠结尾) 确保不带尾斜杠,
+    /// - 文件路径 (在文件系统中实际存在为普通文件, 或实际不存在且原路径未以斜杠结尾)
+    /// 确保不带尾斜杠,
     ///   避免对文件请求权限时被错误添加末尾 '/'
     std::string normalizePermissionPath(std::string_view path) const;
 

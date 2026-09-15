@@ -82,16 +82,16 @@ constexpr BuildDateHolder parseBuildDate(const char* date = __DATE__) noexcept {
     const char d1 = date[5];
 
     BuildDateHolder res{};
-    res.data[0] = date[7];
-    res.data[1] = date[8];
-    res.data[2] = date[9];
-    res.data[3] = date[10];
-    res.data[4] = '-';
-    res.data[5] = m0;
-    res.data[6] = m1;
-    res.data[7] = '-';
-    res.data[8] = d0;
-    res.data[9] = d1;
+    res.data[0]  = date[7];
+    res.data[1]  = date[8];
+    res.data[2]  = date[9];
+    res.data[3]  = date[10];
+    res.data[4]  = '-';
+    res.data[5]  = m0;
+    res.data[6]  = m1;
+    res.data[7]  = '-';
+    res.data[8]  = d0;
+    res.data[9]  = d1;
     res.data[10] = '\0';
     return res;
 }

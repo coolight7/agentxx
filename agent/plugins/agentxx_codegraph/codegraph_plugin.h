@@ -12,19 +12,11 @@
 
 namespace agentxx_codegraph_plugin {
 
-class CodeGraphManager;
+/// 公共助手统一由插件 SDK 提供 (实现见 plugin_kit.h)
+using agentxx::plugin::pluginLog;
+using agentxx::plugin::pluginStrdup;
 
-inline void pluginLog(
-    const AgentxxPluginHost*     host,
-    const AgentxxPluginLogIface* logIf,
-    int32_t                      level,
-    const std::string&           msg
-) {
-    if (host && logIf && logIf->log) {
-        auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
-        logIf->log(host, level, &sv);
-    }
-}
+class CodeGraphManager;
 
 /// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
 /// 不再手写 simdjson 解析桩 (历史 SimpleJson/jsonGet* 已删除)

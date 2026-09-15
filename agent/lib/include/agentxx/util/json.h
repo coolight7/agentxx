@@ -475,6 +475,36 @@ inline std::ostream& operator<<(std::ostream& os, const Json& j) {
     return os << j.dump();
 }
 
+/// 宽松读取字符串数组字段: 缺失/非数组返回空列表, 数组内非字符串元素跳过
+///
+/// - 常用场景: 解析外部输入 (yaml 桥接配置 / FFI 入参 / 插件参数) 中的字符串列表,
+///   这类输入不该因个别元素类型不符而整体失败
+/// - 单值字段的宽松读取直接用 [Json::value] (`value<T>(key, 默认值)`), 无需本函数
+///
+/// - `args`:
+///     - [j] 源 JSON (非对象时返回空列表)
+///     - [key] 字段名
+///
+/// - `return` 字符串列表 (顺序与源数组一致)
+[[nodiscard]] inline std::vector<std::string>
+    jsonGetStringArray(const Json& j, std::string_view key) {
+    std::vector<std::string> out;
+    if (!j.is_object() || !j.contains(key)) {
+        return out;
+    }
+    const Json& v = j[key];
+    if (!v.is_array()) {
+        return out;
+    }
+    out.reserve(v.size());
+    for (const auto& item : v) {
+        if (item.is_string()) {
+            out.push_back(item.get<std::string>());
+        }
+    }
+    return out;
+}
+
 /// ADL 兼容辅助 (agentxx::util::Json 的 to_json/from_json 惯用法迁移用)
 inline void toJson(Json& j, const Json& v) {
     j = v;

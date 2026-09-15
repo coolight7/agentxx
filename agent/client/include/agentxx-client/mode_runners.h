@@ -21,10 +21,7 @@ using ClientPluginConfigs = std::vector<agent::PluginConfig>;
 
 void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginConfigs plugins = {});
 
-void runLocalTuiUnified(
-    std::shared_ptr<agent::CodeAgent> agent,
-    ClientPluginConfigs               plugins = {}
-);
+void runLocalTuiUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginConfigs plugins = {});
 
 void runRemoteCli(
     std::string_view    url,

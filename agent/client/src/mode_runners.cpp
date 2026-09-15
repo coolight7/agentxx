@@ -345,10 +345,8 @@ void runLocalCliUnified(std::shared_ptr<agent::CodeAgent> agent, ClientPluginCon
     runLocalUnifiedMain(agent, runLocalCliUnifiedAsync(agent, std::move(plugins)));
 }
 
-static asio::awaitable<void> runLocalTuiUnifiedAsync(
-    std::shared_ptr<agent::CodeAgent> agent,
-    ClientPluginConfigs               plugins
-) {
+static asio::awaitable<void>
+    runLocalTuiUnifiedAsync(std::shared_ptr<agent::CodeAgent> agent, ClientPluginConfigs plugins) {
     auto clientEx = co_await asio::this_coro::executor;
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
     const std::string sessionId = generateUniqueSessionId();

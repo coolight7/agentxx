@@ -3,6 +3,7 @@
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/aho_corasick.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -13,7 +14,6 @@
 #include "fmt/ranges.h"
 #include <algorithm>
 #include <chrono>
-#include <random>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,16 +40,8 @@ inline static const auto defaultRateLimitTag = agentxx::util::AhoCorasick<char>{
 // 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
 // - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
 // - 相比按下标回填 call_{i}, 不会与 LLM 返回的 call_N 形式 id 冲突
-inline static std::string makeUniqueToolCallId(size_t i) {
-    thread_local std::mt19937_64 rng{
-        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())
-    };
-    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()
-    )
-                        .count();
-    return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
-}
+// - 实现与各 Provider 共用 (见 provider_common.h), 避免多处拷贝漂移
+using agentxx::server::makeUniqueToolCallId;
 
 ModelCallWrapNode::ModelCallWrapNode(
     std::string_view                            name,

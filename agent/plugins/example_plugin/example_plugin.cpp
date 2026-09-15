@@ -430,18 +430,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
     );
 }
 
+/// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号)
+/// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
 static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text) {
-    if (ctx.iface.json && ctx.iface.json->json_escape) {
-        AgentxxPluginString esc{nullptr, 0};
-        auto textSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-        ctx.iface.json->json_escape(ctx.host, &textSv, &esc);
-        if (esc.data) {
-            std::string s(esc.data, static_cast<size_t>(esc.size));
-            agentxx::plugin::PluginString::free(ctx.host, &esc);
-            return s;
-        }
-    }
-    return fmt::format("\"{}\"", text);
+    return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, text);
 }
 
 static int32_t AGENTXX_PLUGIN_CALL example_cmd_execute(

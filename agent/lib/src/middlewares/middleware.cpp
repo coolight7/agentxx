@@ -142,10 +142,10 @@ agentxx::util::Json InterruptHandleArg::toJson() const {
     // 描述原样下发 (生产者负责构造; 缺失 = 该中断不进入客户端渲染路径,
     // 客户端按契约错误处理并输出诊断行)
     auto j = agentxx::util::Json{
-        {"name",     name                },
-        {"arg",      arg                 },
-        {"resultId", resultId            },
-        {"ui",       ui.toJson()         },
+        {"name",     name       },
+        {"arg",      arg        },
+        {"resultId", resultId   },
+        {"ui",       ui.toJson()},
     };
     return j;
 }

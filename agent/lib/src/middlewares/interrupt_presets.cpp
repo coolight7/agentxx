@@ -354,8 +354,7 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts) {
     //    否则客户端按词表渲染会忽略调用方的文本)
     const auto [yesLabel, yesKey]
         = pickOptionLabel(opts.yesLabel, opts.yesLabelKey, "interrupt.yes");
-    const auto [noLabel, noKey]
-        = pickOptionLabel(opts.noLabel, opts.noLabelKey, "interrupt.no");
+    const auto [noLabel, noKey] = pickOptionLabel(opts.noLabel, opts.noLabelKey, "interrupt.no");
     ui.blocks.push_back(buttonControl(
         opts.controlId.empty() ? std::string{"allow"} : opts.controlId,
         {option("true", yesLabel, yesKey), option("false", noLabel, noKey)},

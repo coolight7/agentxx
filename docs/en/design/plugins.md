@@ -238,6 +238,15 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 **Unified Asynchronous Operation Model (Two-piece start/cancel)**: Tools, hooks, and capabilities all adhere to the `start` (non-blocking invocation on IO thread) + `cancel` (cooperative cancellation) lifecycle. Completion is reported exactly once via `AgentxxOpNotify.done(status, payload)`. `Task` coroutine frames are destroyed before invoking `done`, supporting `offload` blocking-pool delegation and `call_tool` / `invoke_cap` cross-plugin invocations.
 
+**Shared Convenience Helpers (the small things every plugin used to hand-write)**:
+- `pluginLog(ctx, level, msg)` / `pluginLog(host, logIf, level, msg)`: instance logging
+  (silent when the context is null; the 4-arg form serves plugins that only hold host + log iface)
+- `pluginStrdup(host, s)`: copy a C string via host `alloc` (for C ABI `char*` out-parameters)
+- `ctxGuardLogger(ctx)`: log closure used by `guardCall`/`guardCallVoid` C ABI guards
+- `jsonEscape(host, jsonIface, text)`: text to JSON string literal (host `json_escape` when
+  available, local escaping as fallback) for hand-assembled JSON text
+- Import inside the plugin namespace with `using agentxx::plugin::xxx;` (all built-in plugins do)
+
 **Host-Managed Background Task Spawning (`spawn`)**: Background cooperative tasks started via `spawn` (e.g. periodic collection `while(!cancelled()) { offload; sleep; }`) are registered to the host `agentxx.agent.tasks` interface table since API v1, managed isomorphically with tool/capability ops:
 
 - **Registration**: `spawn()` automatically calls `register_task` (on the IO thread) → Host records the handle into the instance's `outstandingOps` (shared with tool ops) and holds an `inflight` reference.

@@ -12,13 +12,12 @@
 
 namespace agentxx_fs_plugin {
 
-struct PluginCtx : public agentxx::plugin::PluginBase {};
+/// 公共助手统一由插件 SDK 提供 (实现见 plugin_kit.h)
+using agentxx::plugin::ctxGuardLogger;
+using agentxx::plugin::pluginLog;
+using agentxx::plugin::pluginStrdup;
 
-inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
-    if (ctx) {
-        ctx->log.log(level, msg);
-    }
-}
+struct PluginCtx : public agentxx::plugin::PluginBase {};
 
 /// 提取"字符串列表"参数 (client 渲染摘要用):
 /// - 值为数组时逐项提取其中的字符串元素 (跳过非字符串元素)
@@ -43,22 +42,6 @@ inline std::vector<std::string>
         }
     }
     return out;
-}
-
-inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
-    if (!host || !s) {
-        return nullptr;
-    }
-    auto sv = agentxx::plugin::PluginStringView::fromCstr(s);
-    return agentxx::plugin::PluginString::strdup(host, &sv);
-}
-
-inline auto ctxGuardLogger(PluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx) {
-            ctx->log.error(msg ? msg : "");
-        }
-    };
 }
 
 } // namespace agentxx_fs_plugin

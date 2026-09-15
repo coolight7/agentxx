@@ -467,12 +467,16 @@ void test_input_pending_queue_visibility() {
         ftxui::Screen screen(80, 10);
         ftxui::Render(screen, comp->OnRender());
         std::string out = screen.ToString();
-        XX_TEST_EXPECT_TRUE(out.find("Message Queue") == std::string::npos
-                            && out.find("待发送消息队列") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().x_min == 0
-                            && comp->pendingCounterBox().x_max == 0);
-        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().x_min == 0
-                            && comp->pendingInsertButtonBox().x_max == 0);
+        XX_TEST_EXPECT_TRUE(
+            out.find("Message Queue") == std::string::npos
+            && out.find("待发送消息队列") == std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            comp->pendingCounterBox().x_min == 0 && comp->pendingCounterBox().x_max == 0
+        );
+        XX_TEST_EXPECT_TRUE(
+            comp->pendingInsertButtonBox().x_min == 0 && comp->pendingInsertButtonBox().x_max == 0
+        );
     }
 
     // 2. pendingInputs 非空时: 屏幕中出现队列标题与立即发送按钮, Box 被 reflect 填充有效尺寸
@@ -488,12 +492,17 @@ void test_input_pending_queue_visibility() {
         ftxui::Screen screen(80, 10);
         ftxui::Render(screen, comp->OnRender());
         std::string out = screen.ToString();
-        XX_TEST_EXPECT_TRUE(out.find("Message Queue") != std::string::npos
-                            || out.find("待发送消息队列") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("Insert") != std::string::npos
-                            || out.find("立即发送") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            out.find("Message Queue") != std::string::npos
+            || out.find("待发送消息队列") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            out.find("Insert") != std::string::npos || out.find("立即发送") != std::string::npos
+        );
         XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().x_max > comp->pendingCounterBox().x_min);
-        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().x_max > comp->pendingInsertButtonBox().x_min);
+        XX_TEST_EXPECT_TRUE(
+            comp->pendingInsertButtonBox().x_max > comp->pendingInsertButtonBox().x_min
+        );
     }
 
     // 3. pendingInputs 清空后: 重新渲染, 队列消失, Box 重置
@@ -506,12 +515,16 @@ void test_input_pending_queue_visibility() {
         ftxui::Screen screen(80, 10);
         ftxui::Render(screen, comp->OnRender());
         std::string out = screen.ToString();
-        XX_TEST_EXPECT_TRUE(out.find("Message Queue") == std::string::npos
-                            && out.find("待发送消息队列") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().x_min == 0
-                            && comp->pendingCounterBox().x_max == 0);
-        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().x_min == 0
-                            && comp->pendingInsertButtonBox().x_max == 0);
+        XX_TEST_EXPECT_TRUE(
+            out.find("Message Queue") == std::string::npos
+            && out.find("待发送消息队列") == std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            comp->pendingCounterBox().x_min == 0 && comp->pendingCounterBox().x_max == 0
+        );
+        XX_TEST_EXPECT_TRUE(
+            comp->pendingInsertButtonBox().x_min == 0 && comp->pendingInsertButtonBox().x_max == 0
+        );
     }
 }
 

@@ -35,43 +35,6 @@ using agentxx::agent::ModelConfig;
 
 namespace {
 
-/// 宽松读取字符串 (非字符串时返回默认值)
-std::string jsonStr(const agentxx::util::Json& j, const char* key, std::string def) {
-    if (j.contains(key) && j[key].is_string()) {
-        return j[key].get<std::string>();
-    }
-    return def;
-}
-
-/// 宽松读取整数 (非数字时返回默认值)
-template<typename T>
-T jsonInt(const agentxx::util::Json& j, const char* key, T def) {
-    if (j.contains(key) && j[key].is_number_integer()) {
-        return j[key].get<T>();
-    }
-    return def;
-}
-
-/// 宽松读取 bool
-bool jsonBool(const agentxx::util::Json& j, const char* key, bool def) {
-    if (j.contains(key) && j[key].is_boolean()) {
-        return j[key].get<bool>();
-    }
-    return def;
-}
-
-/// 宽松读取字符串数组
-void jsonStrArray(const agentxx::util::Json& j, const char* key, std::vector<std::string>& out) {
-    if (!j.contains(key) || !j[key].is_array()) {
-        return;
-    }
-    for (const auto& v : j[key]) {
-        if (v.is_string()) {
-            out.push_back(v.get<std::string>());
-        }
-    }
-}
-
 agentxx::agent::PermissionMode permissionModeFromString(const std::string& s) {
     if (s == "all_ask") {
         return agentxx::agent::PermissionMode::AllAsk;
@@ -93,13 +56,6 @@ agentxx::agent::PluginSide pluginSideFromString(const std::string& s) {
         return agentxx::agent::PluginSide::Client;
     }
     return agentxx::agent::PluginSide::Auto;
-}
-
-std::string_view toSv(const AgentxxStringView* sv) {
-    if (sv == nullptr || sv->data == nullptr || sv->size == 0) {
-        return {};
-    }
-    return std::string_view{sv->data, static_cast<size_t>(sv->size)};
 }
 
 } // namespace
@@ -199,11 +155,11 @@ bool FfiAgentRuntime::buildConfigs(
             err = fmt::format("config_json 非法 JSON: {}", e.what());
             return false;
         }
-        config->dataDir = jsonStr(cfgJ, "dataDir", "");
+        config->dataDir = cfgJ.value("dataDir", "");
         // 会话工作目录: 相对路径/`~` 在此按进程 cwd 展开为绝对路径
         // (嵌入多实例场景下各句柄可绑定独立项目目录, 见 AgentConfig::workDir)
         {
-            auto workDir = agentxx::util::expandUserHomePath(jsonStr(cfgJ, "workDir", ""));
+            auto workDir = agentxx::util::expandUserHomePath(cfgJ.value("workDir", ""));
             if (!workDir.empty()) {
                 std::filesystem::path wp{workDir};
                 config->workDir = wp.is_absolute() ? wp.lexically_normal().generic_string()
@@ -212,21 +168,21 @@ bool FfiAgentRuntime::buildConfigs(
                                                          .generic_string();
             }
         }
-        config->enableSessionStore    = jsonBool(cfgJ, "enableSessionStore", false);
-        config->sessionStoreDirectory = jsonStr(cfgJ, "sessionStoreDirectory", "");
-        config->agentName             = jsonStr(cfgJ, "agentName", config->agentName);
-        config->llmMaxRetry           = jsonInt(cfgJ, "llmMaxRetry", config->llmMaxRetry);
-        config->language              = agent::normalizeLanguage(jsonStr(cfgJ, "language", "en"));
+        config->enableSessionStore    = cfgJ.value("enableSessionStore", false);
+        config->sessionStoreDirectory = cfgJ.value("sessionStoreDirectory", "");
+        config->agentName             = cfgJ.value("agentName", config->agentName);
+        config->llmMaxRetry           = cfgJ.value("llmMaxRetry", config->llmMaxRetry);
+        config->language              = agent::normalizeLanguage(cfgJ.value("language", "en"));
         {
             std::lock_guard<std::mutex> lock(langMutex_);
             language_ = config->language;
         }
-        config->permissionMode = permissionModeFromString(jsonStr(cfgJ, "permissionMode", "ask"));
-        jsonStrArray(cfgJ, "permissionAllowPaths", config->permissionAllowPaths);
-        jsonStrArray(cfgJ, "permissionDenyPaths", config->permissionDenyPaths);
-        jsonStrArray(cfgJ, "skills", config->skillDirPaths);
-        jsonStrArray(cfgJ, "memoryFiles", config->memoryFilePaths);
-        config->websearchApiUrl = jsonStr(cfgJ, "websearchApiUrl", config->websearchApiUrl);
+        config->permissionMode = permissionModeFromString(cfgJ.value("permissionMode", "ask"));
+        config->permissionAllowPaths = agentxx::util::jsonGetStringArray(cfgJ, "permissionAllowPaths");
+        config->permissionDenyPaths  = agentxx::util::jsonGetStringArray(cfgJ, "permissionDenyPaths");
+        config->skillDirPaths        = agentxx::util::jsonGetStringArray(cfgJ, "skills");
+        config->memoryFilePaths      = agentxx::util::jsonGetStringArray(cfgJ, "memoryFiles");
+        config->websearchApiUrl = cfgJ.value("websearchApiUrl", config->websearchApiUrl);
 
         // MCP 服务器: {"ns": {"url": "...", "timeoutSec": 120}}
         if (cfgJ.contains("mcpServers") && cfgJ["mcpServers"].is_object()) {
@@ -236,8 +192,8 @@ bool FfiAgentRuntime::buildConfigs(
                     continue;
                 }
                 agentxx::agent::McpServerConfig mc;
-                mc.url                       = jsonStr(v, "url", "");
-                const int timeoutSec         = jsonInt(v, "timeoutSec", 120);
+                mc.url                       = v.value("url", "");
+                const int timeoutSec         = v.value("timeoutSec", 120);
                 mc.toolTimeout               = std::chrono::milliseconds(timeoutSec * 1000);
                 config->mcpServerUrls[nsStr] = std::move(mc);
             }
@@ -250,9 +206,9 @@ bool FfiAgentRuntime::buildConfigs(
                     continue;
                 }
                 agentxx::agent::PluginConfig pc;
-                pc.path    = jsonStr(item, "path", "");
-                pc.enabled = jsonBool(item, "enabled", true);
-                pc.sides   = pluginSideFromString(jsonStr(item, "sides", "auto"));
+                pc.path    = item.value("path", "");
+                pc.enabled = item.value("enabled", true);
+                pc.sides   = pluginSideFromString(item.value("sides", "auto"));
                 if (item.contains("args")) {
                     pc.args = item["args"];
                 }
@@ -264,7 +220,7 @@ bool FfiAgentRuntime::buildConfigs(
 
         // HIL 中断等待宿主应答超时 (秒; 0=不限)
         interruptTimeout_
-            = std::chrono::milliseconds(jsonInt(cfgJ, "interruptTimeoutSec", int64_t{0}) * 1000);
+            = std::chrono::milliseconds(cfgJ.value("interruptTimeoutSec", int64_t{0}) * 1000);
     }
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
@@ -285,18 +241,18 @@ bool FfiAgentRuntime::buildConfigs(
         return false;
     }
     ModelConfig mc;
-    mc.name                     = jsonStr(mj, "name", "");
-    mc.type                     = jsonStr(mj, "type", "openai");
-    mc.baseUrl                  = jsonStr(mj, "baseUrl", "");
-    mc.apiKey                   = jsonStr(mj, "apiKey", "EMPTY");
-    mc.modelName                = jsonStr(mj, "modelName", "");
-    mc.apiPath                  = jsonStr(mj, "apiPath", "");
-    mc.connectTimeoutSeconds    = jsonInt(mj, "connectTimeoutSeconds", 16);
-    mc.readChunkTimeoutSeconds  = jsonInt(mj, "readChunkTimeoutSeconds", 100);
-    mc.maxConcurrentConnections = jsonInt(mj, "maxConcurrentConnections", size_t{5});
-    mc.anthropicVersion         = jsonStr(mj, "anthropicVersion", "2023-06-01");
-    mc.modelContenxtMaxToken    = jsonInt(mj, "modelContextMaxToken", size_t{0});
-    mc.sendThinking             = jsonBool(mj, "sendThinking", false);
+    mc.name                     = mj.value("name", "");
+    mc.type                     = mj.value("type", "openai");
+    mc.baseUrl                  = mj.value("baseUrl", "");
+    mc.apiKey                   = mj.value("apiKey", "EMPTY");
+    mc.modelName                = mj.value("modelName", "");
+    mc.apiPath                  = mj.value("apiPath", "");
+    mc.connectTimeoutSeconds    = mj.value("connectTimeoutSeconds", 16);
+    mc.readChunkTimeoutSeconds  = mj.value("readChunkTimeoutSeconds", 100);
+    mc.maxConcurrentConnections = mj.value("maxConcurrentConnections", size_t{5});
+    mc.anthropicVersion         = mj.value("anthropicVersion", "2023-06-01");
+    mc.modelContenxtMaxToken    = mj.value("modelContextMaxToken", size_t{0});
+    mc.sendThinking             = mj.value("sendThinking", false);
     if (mj.contains("sslVerify") && !mj["sslVerify"].is_null() && mj["sslVerify"].is_boolean()) {
         mc.sslVerify = mj["sslVerify"].get<bool>();
     }

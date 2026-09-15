@@ -27,6 +27,17 @@ class SessionServerAgentIO;
 
 namespace ffi {
 
+/// 把 C ABI 字符串视图转为 std::string_view (零拷贝; NULL/空视图返回空)
+///
+/// - 供 ffi_api.cpp (C 导出面) 与 ffi_runtime.cpp (运行时) 共用,
+///   避免"入参读取"语义在两处各写一份
+inline std::string_view toSv(const AgentxxStringView* sv) {
+    if (sv == nullptr || sv->data == nullptr || sv->size == 0) {
+        return {};
+    }
+    return std::string_view{sv->data, static_cast<size_t>(sv->size)};
+}
+
 /// FFI 运行时 (agentxx_ffi_create 返回句柄的实体)
 ///
 /// 线程拓扑 (独立 Client-IO 线程 + 独立 Server-IO 线程):

@@ -123,7 +123,7 @@ public:
             }
             co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
                 {"decision", "true"},
-                {"remember", false},
+                {"remember", false },
             });
         }
         co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());

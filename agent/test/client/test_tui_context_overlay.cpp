@@ -378,10 +378,8 @@ TestResult testTuiContextOverlay() {
         {
             auto aboutComp = std::make_shared<AboutOverlay>(aboutCtx);
             auto el        = aboutComp->Render();
-            auto screen    = ftxui::Screen::Create(
-                ftxui::Dimension::Fixed(100),
-                ftxui::Dimension::Fixed(30)
-            );
+            auto screen
+                = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(30));
             ftxui::Render(screen, el);
             auto str = ContextOverlayFixture::normalizeScreenText(screen.ToString());
             XX_TEST_EXPECT_TRUE(str.find("Agentxx") != std::string::npos);
@@ -395,10 +393,8 @@ TestResult testTuiContextOverlay() {
         {
             auto aboutCompEn = std::make_shared<AboutOverlay>(aboutCtx);
             auto elEn        = aboutCompEn->Render();
-            auto screenEn    = ftxui::Screen::Create(
-                ftxui::Dimension::Fixed(100),
-                ftxui::Dimension::Fixed(30)
-            );
+            auto screenEn
+                = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(30));
             ftxui::Render(screenEn, elEn);
             auto strEn = ContextOverlayFixture::normalizeScreenText(screenEn.ToString());
             XX_TEST_EXPECT_TRUE(strEn.find("Agentxx") != std::string::npos);

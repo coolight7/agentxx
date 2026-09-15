@@ -37,14 +37,14 @@ public:
     std::string interruptTag    = "answered";
     bool        permissionAllow = true;
     /// 权限询问是否勾选"记住本次选择" (结果 values.remember = true)
-    bool        permissionRemember = false;
+    bool permissionRemember = false;
     /// 权限询问是否勾选"完全授权所有权限" (结果 values.fullAuth = true)
-    bool        permissionFullAuth = false;
-    int         interruptCalls     = 0;
+    bool permissionFullAuth = false;
+    int  interruptCalls     = 0;
     /// 最近一次中断请求参数 (InterruptHandleArg JSON; 供断言 UI 描述下发)
     std::string lastInterruptArgJson;
     /// true = 故意回传契约外的非对象结果 (验证服务端按未应答/拒绝处理)
-    bool        malformedResult = false;
+    bool malformedResult = false;
 
     void onDelta(const agentxx::agent::WireDelta&) override {}
 
@@ -71,14 +71,14 @@ public:
             // 权限卡片控件: decision (允许/拒绝) + remember (勾选项) + fullAuth (完全授权)
             co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
                 {"decision", permissionAllow ? "true" : "false"},
-                {"remember", permissionRemember},
-                {"fullAuth", permissionFullAuth},
+                {"remember", permissionRemember                },
+                {"fullAuth", permissionFullAuth                },
             });
         }
         // 通用确认卡片控件: allow
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json{{"allow", interruptTag}}
-        );
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+            {"allow", interruptTag}
+        });
     }
 };
 
@@ -531,9 +531,8 @@ asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
     MockTool readItem("agentxx_filesystem_read");
     MockTool writeItem("agentxx_filesystem_write");
 
-    auto check = [&](const MockTool&  item,
-                     std::string_view path,
-                     size_t           index) -> asio::awaitable<bool> {
+    auto check
+        = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
             {"path",      std::string{path}   },
             {"sessionId", "remember_cross_bus"}
@@ -627,13 +626,13 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
     const auto      tmpRoot = std::filesystem::temp_directory_path() / "agentxx_wt_iso";
     std::error_code ec;
     std::filesystem::remove_all(tmpRoot, ec);
-    const std::string repoDir  = (tmpRoot / "repo").generic_string();
-    const std::string worktree = (tmpRoot / "repo" / ".agentxx" / "agent" / "worktrees" / "wt-1")
-                                     .generic_string();
+    const std::string repoDir = (tmpRoot / "repo").generic_string();
+    const std::string worktree
+        = (tmpRoot / "repo" / ".agentxx" / "agent" / "worktrees" / "wt-1").generic_string();
     std::filesystem::create_directories(worktree + "/src", ec);
     std::filesystem::create_directories(repoDir + "/src", ec);
-    const std::string wtFile    = worktree + "/src/wt.cpp";
-    const std::string mainFile  = repoDir + "/src/main.cpp";
+    const std::string wtFile   = worktree + "/src/wt.cpp";
+    const std::string mainFile = repoDir + "/src/main.cpp";
 
     // Ask 模式默认规则: 工作目录 (主检出根) 内读写放行
     permission->setFilesystemPermission(
@@ -657,45 +656,30 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
 
     MockTool readItem("agentxx_filesystem_read");
     MockTool writeItem("agentxx_filesystem_write");
-    auto     check = [&](const MockTool&  item,
-                     std::string_view path,
-                     size_t           index) -> asio::awaitable<bool> {
+    auto     check
+        = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
-            {"path",      std::string{path} },
-            {"sessionId", "wt_session"       }
+            {"path",      std::string{path}},
+            {"sessionId", "wt_session"     }
         };
         co_return co_await permission->defOnFilesystemHandle(item, args, index);
     };
 
     using Mw = agentxx::middleware::PermissionMiddlewareHandle;
     // 1. worktree 子树内写: 放行 (未被主检出写拒绝命中)
-    XX_TEST_EXPECT_TRUE(
-        co_await check(writeItem, wtFile, Mw::FilesystemPermissionWRITE)
-    );
-    XX_TEST_EXPECT_TRUE(
-        co_await check(writeItem, worktree, Mw::FilesystemPermissionWRITE)
-    );
+    XX_TEST_EXPECT_TRUE(co_await check(writeItem, wtFile, Mw::FilesystemPermissionWRITE));
+    XX_TEST_EXPECT_TRUE(co_await check(writeItem, worktree, Mw::FilesystemPermissionWRITE));
     // 2. worktree 子树内读: 放行
-    XX_TEST_EXPECT_TRUE(
-        co_await check(readItem, wtFile, Mw::FilesystemPermissionREAD)
-    );
+    XX_TEST_EXPECT_TRUE(co_await check(readItem, wtFile, Mw::FilesystemPermissionREAD));
     // 3. 主检出子树写 (worktree 之外): 拒绝 (读不受限)
-    XX_TEST_EXPECT_FALSE(
-        co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE)
-    );
-    XX_TEST_EXPECT_FALSE(
-        co_await check(writeItem, repoDir, Mw::FilesystemPermissionWRITE)
-    );
+    XX_TEST_EXPECT_FALSE(co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE));
+    XX_TEST_EXPECT_FALSE(co_await check(writeItem, repoDir, Mw::FilesystemPermissionWRITE));
     // 4. 主检出子树读: 不受隔离影响 (按已注册规则放行)
-    XX_TEST_EXPECT_TRUE(
-        co_await check(readItem, mainFile, Mw::FilesystemPermissionREAD)
-    );
+    XX_TEST_EXPECT_TRUE(co_await check(readItem, mainFile, Mw::FilesystemPermissionREAD));
 
     // 5. 清除隔离后: 主检出写恢复按规则放行
     permission->clearSessionIsolation("wt_session");
-    XX_TEST_EXPECT_TRUE(
-        co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE)
-    );
+    XX_TEST_EXPECT_TRUE(co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE));
 
     std::filesystem::remove_all(tmpRoot, ec);
     co_return;
@@ -707,7 +691,10 @@ void test_make_interrupt_result_forms() {
     using agentxx::util::Json;
 
     // 正常提交: 控件 id → 值
-    auto form = makeInterruptResult(Json{{"decision", "true"}, {"remember", true}});
+    auto form = makeInterruptResult(Json{
+        {"decision", "true"},
+        {"remember", true  }
+    });
     XX_TEST_EXPECT_TRUE(form.is_object());
     XX_TEST_EXPECT_TRUE(form.contains("values"));
     if (form.contains("values") && form["values"].is_object()) {
@@ -722,7 +709,9 @@ void test_make_interrupt_result_forms() {
     XX_TEST_EXPECT_TRUE(normalized["values"].empty());
 
     // 结果取值 helper: 整体结果对象与纯 values 对象两种口径均可
-    const auto boolTrue = Json{{"decision", "true"}};
+    const auto boolTrue = Json{
+        {"decision", "true"}
+    };
     XX_TEST_EXPECT_TRUE(agentxx::middleware::interruptValueBool(form, "decision", false));
     XX_TEST_EXPECT_TRUE(agentxx::middleware::interruptValueBool(boolTrue, "decision", false));
     XX_TEST_EXPECT_FALSE(agentxx::middleware::interruptValueBool(form, "missing", false));
@@ -730,8 +719,23 @@ void test_make_interrupt_result_forms() {
         agentxx::middleware::interruptValueString(form, "decision", ""),
         std::string("true")
     );
-    XX_TEST_EXPECT_TRUE(agentxx::middleware::interruptValueBool(Json{{"n", 3}}, "n", false));
-    XX_TEST_EXPECT_EQ(agentxx::middleware::interruptValueInt(Json{{"n", "42"}}, "n", 0), int64_t{42});
+    XX_TEST_EXPECT_TRUE(agentxx::middleware::interruptValueBool(
+        Json{
+            {"n", 3}
+    },
+        "n",
+        false
+    ));
+    XX_TEST_EXPECT_EQ(
+        agentxx::middleware::interruptValueInt(
+            Json{
+                {"n", "42"}
+    },
+            "n",
+            0
+        ),
+        int64_t{42}
+    );
 }
 
 /// 权限询问的 UI 描述下发: 中断参数须携带声明式描述 (`ui` 字段),
@@ -801,8 +805,14 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
                 XX_TEST_EXPECT_TRUE(block.commitOnPick);
                 XX_TEST_EXPECT_EQ(block.options.size(), size_t{2});
                 if (block.options.size() == 2) {
-                    XX_TEST_EXPECT_EQ(block.options[0].value.get<std::string>(), std::string("true"));
-                    XX_TEST_EXPECT_EQ(block.options[1].value.get<std::string>(), std::string("false"));
+                    XX_TEST_EXPECT_EQ(
+                        block.options[0].value.get<std::string>(),
+                        std::string("true")
+                    );
+                    XX_TEST_EXPECT_EQ(
+                        block.options[1].value.get<std::string>(),
+                        std::string("false")
+                    );
                 }
             }
         }
@@ -820,9 +830,9 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
 
     // 目录目标 (规范化路径带尾斜杠): 目标描述后紧随生效范围提示 (interrupt.rememberDir)
     // —— 点击授权或完全授权均覆盖子目录与文件, remember 勾选项不附 help
-    auto reqDir     = req;
-    reqDir.target   = "/data/projects/ui/";
-    auto respDir    = co_await sessionBus
+    auto reqDir   = req;
+    reqDir.target = "/data/projects/ui/";
+    auto respDir  = co_await sessionBus
                        ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
                            agentxx::events::Topic::Permission,
                            reqDir,
@@ -834,8 +844,8 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
     );
     XX_TEST_EXPECT_TRUE(argDirOpt.has_value());
     if (argDirOpt.has_value()) {
-        size_t hintTexts      = 0;
-        bool   hasDirPrompt   = false;
+        size_t hintTexts    = 0;
+        bool   hasDirPrompt = false;
         for (const auto& block : argDirOpt->ui.blocks) {
             if (block.kind == "text" && block.color == "hint") {
                 ++hintTexts;
@@ -862,7 +872,7 @@ void test_interrupt_arg_ui_roundtrip() {
     // 未声明描述: 序列化为空 ui (该中断不进入客户端渲染路径 —— 如 subagent 委派;
     // 客户端收到空 ui 时按契约错误渲染诊断行, 不静默回退默认表单)
     InterruptHandleArg arg;
-    arg.name = "default";
+    arg.name     = "default";
     const auto j = arg.toJson();
     XX_TEST_EXPECT_TRUE(j.contains("ui"));
     XX_TEST_EXPECT_TRUE(InterruptUi::fromJson(j["ui"]).empty());
@@ -881,7 +891,7 @@ void test_interrupt_arg_ui_roundtrip() {
     retries.defaultValue = "1";
     arg.ui               = agentxx::middleware::preset::inputForm({mode, retries});
 
-    const auto jForm = arg.toJson();
+    const auto jForm  = arg.toJson();
     const auto uiForm = InterruptUi::fromJson(jForm["ui"]);
     XX_TEST_EXPECT_FALSE(uiForm.empty());
     size_t controls = 0;
@@ -900,12 +910,8 @@ void test_interrupt_arg_ui_roundtrip() {
     XX_TEST_EXPECT_EQ(uiForm.blocks.back().kind, std::string("submit"));
 
     // 权限卡片预设: 序列化往返一致 (含头行分段)
-    arg.ui               = agentxx::middleware::preset::permissionCard(
-        "read_file",
-        "filesystem_read",
-        "/tmp/y"
-    );
-    const auto jPerm = arg.toJson();
+    arg.ui = agentxx::middleware::preset::permissionCard("read_file", "filesystem_read", "/tmp/y");
+    const auto jPerm  = arg.toJson();
     const auto uiPerm = InterruptUi::fromJson(jPerm["ui"]);
     XX_TEST_EXPECT_EQ(uiPerm.header.segments.size(), size_t{3});
     const auto roundtrip = InterruptUi::fromJson(uiPerm.toJson());
@@ -919,9 +925,9 @@ asio::awaitable<void> test_malformed_result_rejected() {
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     // HIL: 结果非对象 → handled = false (AgentRunner 据此不 resume)
-    auto io                = std::make_shared<MockIO>();
-    io->interruptTag       = "answered";
-    io->malformedResult    = true;
+    auto io             = std::make_shared<MockIO>();
+    io->interruptTag    = "answered";
+    io->malformedResult = true;
     io->registerOnBus(sessionBus);
     auto resp = co_await sessionBus
                     ->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
@@ -942,19 +948,19 @@ asio::awaitable<void> test_malformed_result_rejected() {
     }
 
     // 权限: 结果非对象 → 拒绝
-    auto respPerm
-        = co_await sessionBus->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
-            agentxx::events::Topic::Permission,
-            agentxx::events::ReqPermission{
-                .agentName     = "test",
-                .sessionId     = "t1",
-                .toolName      = "agentxx_filesystem_write",
-                .category      = "filesystem_write",
-                .target        = "/tmp/z",
-                .argumentsJson = R"({"path":"/tmp/z"})",
-            },
-            std::chrono::seconds(5)
-        );
+    auto respPerm = co_await sessionBus
+                        ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                            agentxx::events::Topic::Permission,
+                            agentxx::events::ReqPermission{
+                                .agentName     = "test",
+                                .sessionId     = "t1",
+                                .toolName      = "agentxx_filesystem_write",
+                                .category      = "filesystem_write",
+                                .target        = "/tmp/z",
+                                .argumentsJson = R"({"path":"/tmp/z"})",
+                            },
+                            std::chrono::seconds(5)
+                        );
     XX_TEST_EXPECT_TRUE(respPerm.has_value());
     if (respPerm.has_value()) {
         XX_TEST_EXPECT_TRUE(respPerm->decision == agentxx::events::RespPermission::Decision::Deny);
@@ -969,8 +975,7 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
     auto sessionBus
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
     // agent 全局总线 (权限中间件注册在此; 与 IO 端点所在的会话总线相互独立)
-    auto agentBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto agentBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     auto io                = std::make_shared<MockIO>();
     io->permissionAllow    = true;
@@ -993,8 +998,8 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
-            {"path",      std::string{path}       },
-            {"sessionId", "remember_options"      }
+            {"path",      std::string{path} },
+            {"sessionId", "remember_options"}
         };
         co_return co_await permission->defOnFilesystemHandle(
             item,
@@ -1039,8 +1044,7 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
 asio::awaitable<void> test_permission_full_auth_rule() {
     auto sessionBus
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-    auto agentBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto agentBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
 
     auto io                = std::make_shared<MockIO>();
     io->permissionAllow    = true;
@@ -1065,9 +1069,10 @@ asio::awaitable<void> test_permission_full_auth_rule() {
     MockTool writeItem("agentxx_filesystem_write");
     MockTool readItem("agentxx_filesystem_read");
 
-    auto check = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
+    auto check
+        = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
-            {"path",      std::string{path} },
+            {"path",      std::string{path}},
             {"sessionId", "full_auth_test" }
         };
         co_return co_await permission->defOnFilesystemHandle(item, args, index);

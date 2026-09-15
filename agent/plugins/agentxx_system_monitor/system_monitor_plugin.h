@@ -13,25 +13,9 @@
 
 namespace agentxx_system_monitor_plugin {
 
-inline void pluginLog(
-    const AgentxxPluginHost*     host,
-    const AgentxxPluginLogIface* logIf,
-    int32_t                      level,
-    const std::string&           msg
-) {
-    if (host && logIf && logIf->log) {
-        auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
-        logIf->log(host, level, &sv);
-    }
-}
-
-inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
-    if (!host || !s) {
-        return nullptr;
-    }
-    auto sv = agentxx::plugin::PluginStringView::fromCstr(s);
-    return agentxx::plugin::PluginString::strdup(host, &sv);
-}
+/// 公共助手统一由插件 SDK 提供 (实现见 plugin_kit.h)
+using agentxx::plugin::pluginLog;
+using agentxx::plugin::pluginStrdup;
 
 /// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
 /// 不再手写 simdjson::ondemand 局部解析桩 (历史 SimpleJson/jsonGet* 已删除)

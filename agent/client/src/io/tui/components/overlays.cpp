@@ -819,10 +819,7 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
     };
 
     // Header: Agentxx
-    items.push_back(ScrollItem{
-        text("Agentxx") | bold | color(theme.accentColor),
-        false
-    });
+    items.push_back(ScrollItem{text("Agentxx") | bold | color(theme.accentColor), false});
     items.push_back(ScrollItem{text(""), false});
 
     addSection(

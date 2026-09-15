@@ -14,40 +14,6 @@ namespace {
 
 using agentxx::util::Json;
 
-/// 读取字符串字段 (缺失/类型不符返回空)
-std::string jsonString(const Json& j, std::string_view key) {
-    if (!j.is_object()) {
-        return {};
-    }
-    auto it = j.find(key);
-    if (it == j.end() || !it->is_string()) {
-        return {};
-    }
-    return it->get<std::string>();
-}
-
-bool jsonBool(const Json& j, std::string_view key, bool defaultValue) {
-    if (!j.is_object()) {
-        return defaultValue;
-    }
-    auto it = j.find(key);
-    if (it == j.end() || !it->is_boolean()) {
-        return defaultValue;
-    }
-    return it->get<bool>();
-}
-
-int jsonInt(const Json& j, std::string_view key, int defaultValue) {
-    if (!j.is_object()) {
-        return defaultValue;
-    }
-    auto it = j.find(key);
-    if (it == j.end() || !it->is_number()) {
-        return defaultValue;
-    }
-    return it->get<int>();
-}
-
 /// 读取数值字段 (缺失/类型不符时 has = false)
 double jsonNumber(const Json& j, std::string_view key, bool& has) {
     has = false;
@@ -160,10 +126,10 @@ std::string jsonValueText(const Json& v) {
 std::string controlPlainText(const InterruptUiBlock& b) {
     std::string line;
     if (!b.label.empty()) {
-        line = b.label;
+        line  = b.label;
         line += ": ";
     } else {
-        line = b.id.empty() ? std::string{"-" } : b.id;
+        line  = b.id.empty() ? std::string{"-"} : b.id;
         line += ": ";
     }
     if (!b.options.empty()) {
@@ -197,11 +163,11 @@ std::string controlPlainText(const InterruptUiBlock& b) {
 
 InterruptUiSegment InterruptUiSegment::fromJson(const Json& j) {
     InterruptUiSegment seg;
-    seg.text     = jsonString(j, "text");
-    seg.labelKey = jsonString(j, "labelKey");
-    seg.color    = jsonString(j, "color");
-    seg.bold     = jsonBool(j, "bold", false);
-    seg.dim      = jsonBool(j, "dim", false);
+    seg.text     = j.value("text", "");
+    seg.labelKey = j.value("labelKey", "");
+    seg.color    = j.value("color", "");
+    seg.bold     = j.value("bold", false);
+    seg.dim      = j.value("dim", false);
     return seg;
 }
 
@@ -246,9 +212,9 @@ InterruptUiOption InterruptUiOption::fromJson(const Json& j) {
         auto it = j.find("value");
         o.value = (it != j.end()) ? *it : Json{};
     }
-    o.label    = jsonString(j, "label");
-    o.labelKey = jsonString(j, "labelKey");
-    o.color    = jsonString(j, "color");
+    o.label    = j.value("label", "");
+    o.labelKey = j.value("labelKey", "");
+    o.color    = j.value("color", "");
     return o;
 }
 
@@ -265,31 +231,31 @@ Json InterruptUiOption::toJson() const {
 
 InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
     InterruptUiBlock b;
-    b.kind = jsonString(j, "kind");
+    b.kind = j.value("kind", "");
 
-    b.text    = jsonString(j, "text");
-    b.textKey = jsonString(j, "textKey");
-    b.color   = jsonString(j, "color");
-    b.bold    = jsonBool(j, "bold", false);
-    b.dim     = jsonBool(j, "dim", false);
-    b.wrap    = jsonBool(j, "wrap", false);
-    b.indent  = std::max(0, jsonInt(j, "indent", 0));
+    b.text    = j.value("text", "");
+    b.textKey = j.value("textKey", "");
+    b.color   = j.value("color", "");
+    b.bold    = j.value("bold", false);
+    b.dim     = j.value("dim", false);
+    b.wrap    = j.value("wrap", false);
+    b.indent  = std::max(0, j.value("indent", 0));
 
-    b.lines = std::max(0, jsonInt(j, "lines", 1));
+    b.lines = std::max(0, j.value("lines", 1));
 
-    b.path   = jsonString(j, "path");
-    b.oldStr = jsonString(j, "oldStr");
-    b.newStr = jsonString(j, "newStr");
+    b.path   = j.value("path", "");
+    b.oldStr = j.value("oldStr", "");
+    b.newStr = j.value("newStr", "");
 
-    b.id       = jsonString(j, "id");
-    b.control  = jsonString(j, "control");
-    b.label    = jsonString(j, "label");
-    b.labelKey = jsonString(j, "labelKey");
-    b.help     = jsonString(j, "help");
-    b.helpKey  = jsonString(j, "helpKey");
+    b.id       = j.value("id", "");
+    b.control  = j.value("control", "");
+    b.label    = j.value("label", "");
+    b.labelKey = j.value("labelKey", "");
+    b.help     = j.value("help", "");
+    b.helpKey  = j.value("helpKey", "");
 
     b.options      = jsonOptions(j, "options");
-    b.commitOnPick = jsonBool(j, "commitOnPick", false);
+    b.commitOnPick = j.value("commitOnPick", false);
     if (j.is_object()) {
         auto it = j.find("defaultValue");
         if (it != j.end()) {
@@ -297,14 +263,14 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
         }
     }
 
-    b.integer = jsonBool(j, "integer", false);
+    b.integer = j.value("integer", false);
     {
-        bool has  = false;
+        bool has   = false;
         b.minValue = jsonNumber(j, "min", has);
         b.hasMin   = has;
     }
     {
-        bool has  = false;
+        bool has   = false;
         b.maxValue = jsonNumber(j, "max", has);
         b.hasMax   = has;
     }
@@ -315,14 +281,14 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
             b.step = v;
         }
     }
-    b.multiline = jsonBool(j, "multiline", false);
+    b.multiline = j.value("multiline", false);
 
-    b.cancelLabel    = jsonString(j, "cancelLabel");
-    b.cancelLabelKey = jsonString(j, "cancelLabelKey");
+    b.cancelLabel    = j.value("cancelLabel", "");
+    b.cancelLabelKey = j.value("cancelLabelKey", "");
 
     // custom (预留字段: 解析/序列化往返保留, 渲染暂未实现)
-    b.component = jsonString(j, "component");
-    b.fallback  = jsonString(j, "fallback");
+    b.component = j.value("component", "");
+    b.fallback  = j.value("fallback", "");
     if (j.is_object()) {
         auto it = j.find("props");
         if (it != j.end()) {
@@ -399,7 +365,7 @@ InterruptUi InterruptUi::fromJson(const Json& j) {
     if (!j.is_object()) {
         return ui;
     }
-    ui.version = jsonInt(j, "version", 1);
+    ui.version = j.value("version", 1);
     auto hIt   = j.find("header");
     if (hIt != j.end() && hIt->is_object()) {
         ui.header = InterruptUiHeader::fromJson(*hIt);
@@ -505,7 +471,8 @@ bool interruptValueBool(const Json& values, std::string_view id, bool defaultVal
     return defaultValue;
 }
 
-std::string interruptValueString(const Json& values, std::string_view id, std::string_view defaultValue) {
+std::string
+    interruptValueString(const Json& values, std::string_view id, std::string_view defaultValue) {
     const auto* v = valueOf(values, id);
     if (!v || v->is_null()) {
         return std::string{defaultValue};
@@ -579,7 +546,11 @@ std::string interruptUiPlainText(const InterruptUi& ui, int width) {
             lines.push_back(std::string(static_cast<size_t>(std::max(0, b.indent)), ' ') + "---");
         } else if (b.kind == "diff") {
             if (!b.path.empty()) {
-                lines.push_back(fmt::format("{}file: {}", std::string(static_cast<size_t>(b.indent), ' '), b.path));
+                lines.push_back(fmt::format(
+                    "{}file: {}",
+                    std::string(static_cast<size_t>(b.indent), ' '),
+                    b.path
+                ));
             }
             const auto diff = agentxx::util::computeLineDiff(b.oldStr, b.newStr);
             for (const auto& l : diff) {
@@ -595,11 +566,11 @@ std::string interruptUiPlainText(const InterruptUi& ui, int width) {
             appendWrapped(controlPlainText(b), b.indent);
         } else if (b.kind == "custom") {
             // 预留块: 无 fallback 时输出组件名占位 (便于行式前端提示缺失)
-            const auto text = !b.fallback.empty()
-                                  ? b.fallback
-                                  : (b.component.empty()
-                                         ? std::string{"[unsupported block]"}
-                                         : fmt::format("[custom component: {}]", b.component));
+            const auto text
+                = !b.fallback.empty()
+                      ? b.fallback
+                      : (b.component.empty() ? std::string{"[unsupported block]"}
+                                             : fmt::format("[custom component: {}]", b.component));
             appendWrapped(text, b.indent);
         }
         // submit: 仅交互语义, 纯文本不输出

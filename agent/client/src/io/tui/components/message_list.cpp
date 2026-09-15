@@ -33,9 +33,9 @@ using agentxx::client::lastNonBlankLine;
 using agentxx::client::measureUiItem;
 using agentxx::client::renderMarkdown;
 using agentxx::client::renderUiItem;
+using agentxx::client::uiItemFromPluginJson;
 using agentxx::client::UiRenderCtx;
 using agentxx::client::UiRenderResult;
-using agentxx::client::uiItemFromPluginJson;
 
 namespace {
 
@@ -636,8 +636,8 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                         // 装饰 items 行数走共享块渲染层 (与渲染同一套判定; 见
                         // ui_items_render.h): 内容块/按钮/diff/状态图逐项累加
                         UiRenderCtx rc;
-                        rc.theme = ctx_.theme;
-                        rc.width = width;
+                        rc.theme  = ctx_.theme;
+                        rc.width  = width;
                         rc.indent = kDecorItemIndent;
                         for (const auto& it : renderRes.items) {
                             if (auto item = uiItemFromPluginJson(it)) {
@@ -833,13 +833,13 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     const int maxWidth = std::max(1, scrollable_->contentWidth());
 
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
-    const size_t                                       decorHitsBefore     = decorHits_.size();
-    const size_t                                       interruptHitsBefore = interruptView_.hitBoxes().size();
-    const size_t attachmentHitsBefore                                      = attachmentHits_.size();
-    auto         block             = buildMessageBlock(msg, index, maxWidth, builders);
-    const bool   hasDecorHits      = (decorHits_.size() > decorHitsBefore);
-    const bool   hasInterruptHits  = (interruptView_.hitBoxes().size() > interruptHitsBefore);
-    const bool   hasAttachmentHits = (attachmentHits_.size() > attachmentHitsBefore);
+    const size_t                                       decorHitsBefore = decorHits_.size();
+    const size_t interruptHitsBefore  = interruptView_.hitBoxes().size();
+    const size_t attachmentHitsBefore = attachmentHits_.size();
+    auto         block                = buildMessageBlock(msg, index, maxWidth, builders);
+    const bool   hasDecorHits         = (decorHits_.size() > decorHitsBefore);
+    const bool   hasInterruptHits     = (interruptView_.hitBoxes().size() > interruptHitsBefore);
+    const bool   hasAttachmentHits    = (attachmentHits_.size() > attachmentHitsBefore);
 
     LazyBuiltItem out;
     out.element           = vbox({std::move(block), text("")});
@@ -1539,7 +1539,7 @@ Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::s
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::appendDecorToolBody(
-    const agentxx::plugin::ClientToolDecor&              decor,
+    const agentxx::plugin::ClientToolDecor&             decor,
     Elements&                                           lines,
     int                                                 maxWidth,
     std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders

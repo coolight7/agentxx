@@ -26,16 +26,6 @@
 
 namespace {
 
-/// 去掉首尾空白符 (\r\n\t 等)
-std::string trimWhitespace(std::string_view sv) {
-    auto begin = sv.find_first_not_of(" \t\r\n\v\f");
-    if (begin == std::string_view::npos) {
-        return {};
-    }
-    auto end = sv.find_last_not_of(" \t\r\n\v\f");
-    return std::string{sv.substr(begin, end - begin + 1)};
-}
-
 /// 校验 PowerShell 版本字符串格式: 纯数字与点的组合, 如 "7.5.4" / "5.1.26100.7462"
 /// - 防御探测到同名无关程序输出无关内容的情况 (视为未找到)
 bool isValidPsVersion(std::string_view version) {
@@ -252,12 +242,12 @@ agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh)
                 for (const auto& [exeName, isPwsh] : candidates) {
                     // 探测超时给足裕量: 首次运行 powershell.exe 可能较慢
                     auto output  = runPsVersionProbe(exeName, 12000);
-                    auto version = trimWhitespace(output);
+                    auto version = agentxx::util::removeBetweenSpace(output);
                     // 版本可能带 BOM/多余内容, 只取第一行
                     if (auto nlPos = version.find_first_of("\r\n"); nlPos != std::string::npos) {
                         version.erase(nlPos);
                     }
-                    version          = trimWhitespace(version);
+                    version          = agentxx::util::removeBetweenSpace(version);
                     bool validOutput = isValidPsVersion(version);
                     XX_LOGD(
                         "detectPowerShell probe {}: output='{}' version='{}' valid={}",
@@ -361,11 +351,11 @@ agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh)
             };
             for (const auto& [exeName, isPwsh] : candidates) {
                 auto output  = runPsVersionProbeWin(exeName);
-                auto version = trimWhitespace(output);
+                auto version = agentxx::util::removeBetweenSpace(output);
                 if (auto nlPos = version.find_first_of("\r\n"); nlPos != std::string::npos) {
                     version.erase(nlPos);
                 }
-                version          = trimWhitespace(version);
+                version          = agentxx::util::removeBetweenSpace(version);
                 bool validOutput = isValidPsVersion(version);
                 XX_LOGD(
                     "detectPowerShell probe {}: output='{}' version='{}' valid={}",

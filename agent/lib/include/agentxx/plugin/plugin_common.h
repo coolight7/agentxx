@@ -140,6 +140,18 @@ namespace plugin {
 
 std::string_view pluginStringView2std(AgentxxPluginStringView str);
 
+/// yaml 配置中内置插件路径简写 `builtin://<name>` 的判定
+/// - 只认前缀, 不校验名称非空 (空名称由调用方按非法路径处理)
+inline bool isBuiltinScheme(std::string_view p) noexcept {
+    return p.size() > 10 && p.substr(0, 10) == "builtin://";
+}
+
+/// 提取 `builtin://<name>` 中的插件名
+/// - 非 `builtin://` 前缀时按原样取第 10 字节起的子串 (调用方先经 [isBuiltinScheme] 判定)
+inline std::string parseBuiltinName(std::string_view p) {
+    return std::string(p.substr(10));
+}
+
 const AgentxxPluginBuiltinInfo* findBuiltinPlugin(std::string_view name);
 
 const AgentxxPluginBuiltinManifest* findBuiltinManifest(std::string_view name);

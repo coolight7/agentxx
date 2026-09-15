@@ -258,6 +258,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - `graph_node` 使用同一 root adapter 注册自定义图节点类型：快同步节点返回节点输出
      JSON（`std::string`），异步节点返回 `Task<std::string>`；node/config/state/thread_id
      由拥有型 `RootRequest` 保证跨挂起点有效，`run_cancel` 置取消标志并取消嵌套 awaiter
+6. **公共便捷助手 (各插件重复手写的三件小事)**:
+   - `pluginLog(ctx, level, msg)` / `pluginLog(host, logIf, level, msg)`: 实例日志输出
+     (上下文为空静默; 后者供直接持有宿主 + 日志接口表的插件使用)
+   - `pluginStrdup(host, s)`: 经宿主 alloc 复制 C 串, 供 C ABI `char*` 出参直接赋值
+   - `ctxGuardLogger(ctx)`: `guardCall`/`guardCallVoid` 异常守卫的日志闭包 (error 级)
+   - `jsonEscape(host, jsonIface, text)`: 文本 → JSON 字符串字面量 (含引号);
+     优先经宿主 `json_escape` 接口, 接口缺失/失败时回退本地转义, 供手工拼装 JSON 文本
+   - 插件内 `using agentxx::plugin::xxx;` 引入后按原名调用 (内置插件已统一改用)
 
 **后台任务 spawn (宿主托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!cancelled()) { offload; sleep; }`) 自 API v1 起注册到宿主 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 

@@ -51,18 +51,9 @@ bool fileExists(const std::string& p) {
 }
 
 /// 拼装 JSON 转义后的字符串字段 (经宿主 json 接口表, 避免路径/名称转义错误)
+/// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
 std::string jsonEscapedString(const ShellCtx& ctx, const std::string& value) {
-    if (!ctx.iface.json || !ctx.iface.json->json_escape) {
-        return fmt::format("\"{}\"", value);
-    }
-    AgentxxPluginString esc{nullptr, 0};
-    auto                sv = agentxx::plugin::PluginStringView::from(value.data(), value.size());
-    if (ctx.iface.json->json_escape(ctx.host, &sv, &esc) != 0 || !esc.data) {
-        return fmt::format("\"{}\"", value);
-    }
-    std::string out(esc.data, static_cast<size_t>(esc.size));
-    agentxx::plugin::PluginString::free(ctx.host, &esc);
-    return out;
+    return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, value);
 }
 
 /// "interpreter.js" 能力调用参数: {"name": <插件名>, "path": <脚本路径>}

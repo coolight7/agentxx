@@ -14,6 +14,7 @@
 #include <string_view>
 
 using agentxx::ffi::FfiAgentRuntime;
+using agentxx::ffi::toSv;
 
 namespace {
 
@@ -40,13 +41,6 @@ void fillString(AgentxxString* out, std::string_view s) {
     }
     AgentxxStringView sv{s.data(), static_cast<uint64_t>(s.size())};
     agentxx_ffi_strdup_n(&sv, out);
-}
-
-std::string_view svToCpp(const AgentxxStringView* sv) {
-    if (sv == nullptr || sv->data == nullptr || sv->size == 0) {
-        return {};
-    }
-    return std::string_view{sv->data, static_cast<size_t>(sv->size)};
 }
 
 /// 失败: 填 log (如有) 并返回错误码
@@ -283,7 +277,7 @@ int32_t AGENTXX_FFI_CALL
     }
     std::string err;
     try {
-        const int rc = a->impl->sendInput(svToCpp(text), err);
+        const int rc = a->impl->sendInput(toSv(text), err);
         return ffiFinish(rc, err, log);
     } catch (...) {
         return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
@@ -316,7 +310,7 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_select_model(
     }
     std::string err;
     try {
-        const int rc = a->impl->selectModel(svToCpp(model_name), err);
+        const int rc = a->impl->selectModel(toSv(model_name), err);
         return ffiFinish(rc, err, log);
     } catch (...) {
         return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
@@ -340,7 +334,7 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_switch_session(
     }
     std::string err;
     try {
-        const int rc = a->impl->switchSession(svToCpp(sessionId), err);
+        const int rc = a->impl->switchSession(toSv(sessionId), err);
         return ffiFinish(rc, err, log);
     } catch (...) {
         return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
@@ -358,7 +352,7 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_set_language(
     std::string err;
     try {
         std::string_view langSv = (language != nullptr && language->data != nullptr)
-                                      ? svToCpp(language)
+                                      ? toSv(language)
                                       : std::string_view{"en"};
         const int        rc     = a->impl->setLanguage(langSv, err);
         return ffiFinish(rc, err, log);

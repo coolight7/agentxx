@@ -1,5 +1,4 @@
 #include "test_remote_agent.h"
-#include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -8,6 +7,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/io/ws_io_transport.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/ws_client.h"
 #include "test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
@@ -88,9 +88,9 @@ public:
     asio::awaitable<agentxx::util::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json{{"allow", "true"}}
-        );
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+            {"allow", "true"}
+        });
     }
 
     size_t deltaCount() {

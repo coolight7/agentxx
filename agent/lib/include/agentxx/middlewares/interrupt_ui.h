@@ -20,7 +20,7 @@ struct InterruptUiSegment {
     bool        dim  = false;
 
     static InterruptUiSegment fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json      toJson() const;
+    agentxx::util::Json       toJson() const;
 };
 
 /// 中断头行描述
@@ -159,7 +159,7 @@ struct InterruptUiBlock {
     std::string fallback;
 
     static InterruptUiBlock fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json      toJson() const;
+    agentxx::util::Json     toJson() const;
 };
 
 /// 中断 UI 描述 (整份下发; 服务端声明, 客户端通用渲染)
@@ -202,14 +202,26 @@ agentxx::util::Json makeInterruptResult(const agentxx::util::Json& values);
 /// - 未命中 id / 类型不符时返回 defaultValue
 /// - 布尔口径: 布尔值直取; 字符串 "true"/"yes"/"y"/"1" 视为 true
 ///   (与 [preset::inputForm] 生成的 bool 控件取值口径一致)
-bool        interruptValueBool(const agentxx::util::Json& values, std::string_view id, bool defaultValue = false);
+bool interruptValueBool(
+    const agentxx::util::Json& values,
+    std::string_view           id,
+    bool                       defaultValue = false
+);
 std::string interruptValueString(
     const agentxx::util::Json& values,
     std::string_view           id,
     std::string_view           defaultValue = {}
 );
-int64_t interruptValueInt(const agentxx::util::Json& values, std::string_view id, int64_t defaultValue = 0);
-double  interruptValueDouble(const agentxx::util::Json& values, std::string_view id, double defaultValue = 0.0);
+int64_t interruptValueInt(
+    const agentxx::util::Json& values,
+    std::string_view           id,
+    int64_t                    defaultValue = 0
+);
+double interruptValueDouble(
+    const agentxx::util::Json& values,
+    std::string_view           id,
+    double                     defaultValue = 0.0
+);
 
 /// 描述降级为纯文本 (行式前端/日志/FFI 文本宿主用)
 ///

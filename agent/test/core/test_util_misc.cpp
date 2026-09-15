@@ -3,6 +3,7 @@
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_header.h"
+#include "agentxx/util/path_sanitize.h"
 #include "agentxx/util/stream.h"
 #include "agentxx/util/util.h"
 #include <chrono>
@@ -311,6 +312,76 @@ void test_container_util_heterogeneous() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 路径段安全化 (path_sanitize.h)
+// ---------------------------------------------------------------------------
+
+void test_path_segment_sanitize() {
+    using agentxx::util::sanitizeFsSegment;
+    using agentxx::util::truncateFsSegment;
+    using agentxx::util::truncateFsSegmentWithHash;
+
+    // 非法字符替换为 '_' (长度不变)
+    XX_TEST_EXPECT_EQ(sanitizeFsSegment("a/b\\c:d*e?f\"g<h>i|j"), std::string("a_b_c_d_e_f_g_h_i_j"));
+    XX_TEST_EXPECT_EQ(sanitizeFsSegment("a\x01\x1f" "b"), std::string("a__b"));
+    // 合法字符 (含 UTF-8 中文) 原样保留
+    XX_TEST_EXPECT_EQ(sanitizeFsSegment("会话-01.ok"), std::string("会话-01.ok"));
+    XX_TEST_EXPECT_EQ(sanitizeFsSegment(""), std::string(""));
+    XX_TEST_EXPECT_EQ(sanitizeFsSegment("..."), std::string("..."));
+
+    // 纯截断: 超长才截断, 不追加尾缀
+    XX_TEST_EXPECT_EQ(truncateFsSegment("abcdef", 10), std::string("abcdef"));
+    XX_TEST_EXPECT_EQ(truncateFsSegment("abcdef", 6), std::string("abcdef"));
+    XX_TEST_EXPECT_EQ(truncateFsSegment("abcdef", 3), std::string("abc"));
+    XX_TEST_EXPECT_EQ(truncateFsSegment("abcdef", 0), std::string(""));
+
+    // 截断 + 哈希尾缀: 长度不超过上限, 前部可读, 尾缀 8 位 hex
+    {
+        std::string longSeg(100, 'x');
+        auto        out = truncateFsSegmentWithHash(longSeg, 48);
+        XX_TEST_EXPECT_EQ(out.size(), (size_t)48);
+        XX_TEST_EXPECT_EQ(out.substr(0, 39), std::string(39, 'x'));
+        XX_TEST_EXPECT_EQ(out[39], '_');
+        XX_TEST_EXPECT_TRUE(out.substr(40).find_first_not_of("0123456789abcdef") == std::string::npos);
+        // 确定性: 相同输入相同输出
+        XX_TEST_EXPECT_EQ(truncateFsSegmentWithHash(longSeg, 48), out);
+        // 不同输入 (前部相同) 尾缀不同, 避免截断后碰撞到同一目录
+        std::string other = longSeg;
+        other.back()      = 'y';
+        XX_TEST_EXPECT_TRUE(truncateFsSegmentWithHash(other, 48) != out);
+        // 未超长 / 上限过小: 原样 / 退化为纯截断
+        XX_TEST_EXPECT_EQ(truncateFsSegmentWithHash("abcdef", 48), std::string("abcdef"));
+        XX_TEST_EXPECT_EQ(truncateFsSegmentWithHash("abcdef", 9), std::string("abcdef"));
+        XX_TEST_EXPECT_EQ(truncateFsSegmentWithHash("abcdef", 3), std::string("abc"));
+        // 哈希源与截断内容不同的情况 (调用方传原始文本)
+        XX_TEST_EXPECT_TRUE(
+            truncateFsSegmentWithHash(longSeg, 48, "src-a")
+            != truncateFsSegmentWithHash(longSeg, 48, "src-b")
+        );
+    }
+}
+
+void test_windows_reserved_name() {
+    using agentxx::util::isWindowsReservedName;
+
+    // 保留设备名 (大小写不敏感, 忽略扩展名)
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("CON"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("con"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("Con"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("con.txt"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("NUL"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("com1"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("COM9"));
+    XX_TEST_EXPECT_TRUE(isWindowsReservedName("lpt9.log"));
+    // 非保留名
+    XX_TEST_EXPECT_FALSE(isWindowsReservedName("COM10"));
+    XX_TEST_EXPECT_FALSE(isWindowsReservedName("CONS"));
+    XX_TEST_EXPECT_FALSE(isWindowsReservedName("console"));
+    XX_TEST_EXPECT_FALSE(isWindowsReservedName("session"));
+    XX_TEST_EXPECT_FALSE(isWindowsReservedName(""));
+    XX_TEST_EXPECT_FALSE(isWindowsReservedName("会话"));
+}
+
 TestResult testUtilMisc() {
     g_um_passed = 0;
     g_um_failed = 0;
@@ -325,6 +396,8 @@ TestResult testUtilMisc() {
     test_async_file_io_support();
     test_stream_throttle_debounce();
     test_container_util_heterogeneous();
+    test_path_segment_sanitize();
+    test_windows_reserved_name();
 
     return TestResult{g_um_passed, g_um_failed};
 }

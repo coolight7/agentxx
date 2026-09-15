@@ -68,7 +68,8 @@ std::vector<std::string> wrapTextToLines(std::string_view textContent, int maxWi
         while (i < line.size()) {
             size_t charLen = markdown::utf8_byte_length(line[i]);
             charLen        = std::min(charLen, line.size() - i);
-            const int w = markdown::codepoint_width(markdown::utf8_codepoint(line.data() + i, charLen));
+            const int w
+                = markdown::codepoint_width(markdown::utf8_codepoint(line.data() + i, charLen));
             const int charWidth = std::max(0, w);
 
             if (currentWidth + charWidth > targetWidth && currentWidth > 0) {
@@ -77,7 +78,7 @@ std::vector<std::string> wrapTextToLines(std::string_view textContent, int maxWi
                 currentWidth = 0;
             }
             currentWidth += charWidth;
-            i += charLen;
+            i            += charLen;
         }
         if (chunkStart < line.size()) {
             result.push_back(std::string(line.substr(chunkStart)));

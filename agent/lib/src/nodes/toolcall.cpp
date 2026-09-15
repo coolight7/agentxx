@@ -198,8 +198,7 @@ bool isStringArrayItems(const agentxx::util::Json& schema) {
 /// - 查询经 agentxx::util::IgnoreCaseMap (IgnoreCaseHash/IgnoreCaseEqual):
 ///   "File" / "FILE" / "file" 均命中规范值 `File`, 取出后按规范值重新赋值
 /// - `return` 该 schema 的字符串枚举映射 (无字符串枚举时为空)
-agentxx::util::IgnoreCaseMap<std::string>
-    makeEnumIgnoreCaseMap(const agentxx::util::Json& schema) {
+agentxx::util::IgnoreCaseMap<std::string> makeEnumIgnoreCaseMap(const agentxx::util::Json& schema) {
     agentxx::util::IgnoreCaseMap<std::string> enumMap;
     if (!schema.is_object() || !schema.contains("enum")) {
         return enumMap;
@@ -667,11 +666,10 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                         // 确认卡片 (预设模板生成): 标题 + 说明 + 是/否一键按钮
                         // (结果控件 id = "allow", 取值 "true"/"false")
                         agentxx::middleware::preset::ConfirmCardOptions card;
-                        card.title
-                            = fmt::format("[{}] Repeated identical call", tool->get_name());
-                        card.text = fmt::format(
+                        card.title = fmt::format("[{}] Repeated identical call", tool->get_name());
+                        card.text  = fmt::format(
                             "This tool has been called repeatedly with identical arguments "
-                            "({}). Allow it to run again?",
+                                "({}). Allow it to run again?",
                             repeatCallKey
                         );
                         arg.ui = agentxx::middleware::preset::confirmCard(card);

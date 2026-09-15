@@ -1,4 +1,5 @@
 #include "agentxx-client/io/tui/scrollable.h"
+#include "agentxx-client/io/tui/scroll_common.h"
 #include "ftxui/dom/node.hpp"
 #include "ftxui/dom/requirement.hpp"
 #include "ftxui/screen/screen.hpp"
@@ -8,40 +9,6 @@
 using namespace ftxui;
 
 namespace {
-
-/// 布局迭代上限 (与 ftxui::Render 内部保持一致)
-constexpr int kMaxLayoutIteration = 20;
-/// 测量/布局时给出的"足够大"高度 (换行仅依赖宽度, 高度给足即可读取自然高度)
-constexpr int kTallHeight = 1000000;
-
-/// 对元素执行完整迭代布局 (ComputeRequirement + SetBox 多轮直至收敛),
-/// 返回其在该宽度下的自然高度 (行)。
-///
-/// 原理: flexbox/paragraph 的换行高度在布局迭代收敛后体现为 requirement().min_y,
-/// 故布局收敛后直接读取 min_y 即为该宽度下的实际高度。
-int layoutAndMeasure(const Element& el, Box box) {
-    if (!el) {
-        return 1;
-    }
-    Node::Status status;
-    el->Check(&status);
-    int  iteration = 0;
-    bool laidOut   = false;
-    while (status.need_iteration && iteration < kMaxLayoutIteration) {
-        el->ComputeRequirement();
-        el->SetBox(box);
-        laidOut               = true;
-        status.need_iteration = false;
-        status.iteration++;
-        el->Check(&status);
-        ++iteration;
-    }
-    if (!laidOut) {
-        el->ComputeRequirement();
-        el->SetBox(box);
-    }
-    return std::max(1, el->requirement().min_y);
-}
 
 /// 传递给 ListView 布局节点的可变状态 (均指向 Scrollable 的成员, 地址稳定)
 struct ListViewState {

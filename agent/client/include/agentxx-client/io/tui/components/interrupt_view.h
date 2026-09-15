@@ -171,15 +171,12 @@ private:
     static std::string controlIdOf(const middleware::InterruptUiBlock& block);
 
     /// 按描述初始化单个控件状态 (默认值/选中项/勾选态)
-    static void initControlState(
-        const middleware::InterruptUiBlock& block,
-        ControlState&                       state
-    );
+    static void initControlState(const middleware::InterruptUiBlock& block, ControlState& state);
 
     /// 表单状态 (惰性创建并按描述初始化)
-    FormState&       uiStateFor(const TUIMessage& msg);
+    FormState& uiStateFor(const TUIMessage& msg);
     /// 修改表单状态 (version 递增, 使消息列表缓存失效)
-    FormState&       mutateUiState(const TUIMessage& msg);
+    FormState& mutateUiState(const TUIMessage& msg);
 
     /// 取消息的表单状态 (不创建; 不存在返回 nullptr) —— 估算路径使用
     const FormState* stateOf(const TUIMessage& msg) const;
@@ -192,23 +189,23 @@ private:
     /// - [registerHits] 为真时把控件命中区域写入 hits_ (渲染路径)
     /// - [msgIndex] 仅命中登记使用 (估算路径可传 0)
     void layoutForm(
-        const TUIMessage&                         msg,
-        size_t                                    msgIndex,
-        const FormState*                          state,
-        int                                       width,
-        bool                                      registerHits,
-        UiRenderResult&                           out
+        const TUIMessage& msg,
+        size_t            msgIndex,
+        const FormState*  state,
+        int               width,
+        bool              registerHits,
+        UiRenderResult&   out
     ) const;
 
     /// 控件块布局 (标签/说明 + 控件行 + 校验提示行; 命中区域按 [registerHits] 登记)
     void layoutControl(
-        size_t                                    msgIndex,
-        size_t                                    blockIndex,
-        const middleware::InterruptUiBlock&       block,
-        const ControlState&                       state,
-        int                                       width,
-        bool                                      registerHits,
-        UiRenderResult&                           out
+        size_t                              msgIndex,
+        size_t                              blockIndex,
+        const middleware::InterruptUiBlock& block,
+        const ControlState&                 state,
+        int                                 width,
+        bool                                registerHits,
+        UiRenderResult&                     out
     ) const;
 
     /// 提交行布局 (确认/取消)
@@ -230,13 +227,12 @@ private:
     ftxui::Element renderValueButton(const middleware::InterruptUiOption& opt, bool active) const;
 
     /// 记录命中区域 (msgIndex + 块下标 + 控件 id + 子序号; box 经 shared_ptr 持有)
-    void hit(
-        size_t                             msgIndex,
-        size_t                             blockIndex,
-        std::string                        controlId,
-        int                                sub,
-        const std::shared_ptr<ftxui::Box>& box
-    ) const;
+    void
+        hit(size_t                             msgIndex,
+            size_t                             blockIndex,
+            std::string                        controlId,
+            int                                sub,
+            const std::shared_ptr<ftxui::Box>& box) const;
 
     /// 经结果通道回传 (通道缺失时静默丢弃并记日志)
     void sendSubmit(int64_t wireId, const InterruptFormSubmit& submit);

@@ -1062,8 +1062,8 @@ TestResult testToolcallArgs() {
             "mode",
             {{"type", "string"}, {"enum", agentxx::util::Json::array({"file", "dir"})}}
         });
-        auto argsSame = agentxx::util::Json{
-            {"mode", "file"}
+        auto argsSame  = agentxx::util::Json{
+             {"mode", "file"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, argsSame));
         XX_TEST_EXPECT_EQ(argsSame["mode"].get<std::string>(), std::string{"file"});
@@ -1081,8 +1081,7 @@ TestResult testToolcallArgs() {
         def.name       = "tool_enum4";
         def.parameters = makeParams({
             "level",
-            {{"type", "string"},
-             {"enum", agentxx::util::Json::array({"Low", 1, true, "High"})}}
+            {{"type", "string"}, {"enum", agentxx::util::Json::array({"Low", 1, true, "High"})}}
         });
         auto args      = agentxx::util::Json{
                  {"level", "HIGH"}
@@ -1126,7 +1125,8 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "perms",
             {{"type", "array"},
-             {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}}}
+              {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}
+             }}
         });
         auto args      = agentxx::util::Json{
                  {"perms", "READ"}
@@ -1144,7 +1144,8 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "perms",
             {{"type", "array"},
-             {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}}}
+              {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}
+             }}
         });
         auto args      = agentxx::util::Json{
                  {"perms", agentxx::util::Json::array({"WRITE", "read", "other", 7})}
@@ -1163,7 +1164,8 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "perms",
             {{"type", "array"},
-             {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}}}
+              {"items", {{"type", "string"}, {"enum", agentxx::util::Json::array({"read", "write"})}}
+             }}
         });
         auto args      = agentxx::util::Json{
                  {"perms", agentxx::util::Json::array({"read", "write"})}
@@ -1178,7 +1180,7 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "mode",
             {{"type", agentxx::util::Json::array({"string", "null"})},
-             {"enum", agentxx::util::Json::array({"Auto", "Manual"})}      }
+              {"enum", agentxx::util::Json::array({"Auto", "Manual"})}}
         });
         auto args      = agentxx::util::Json{
                  {"mode", "AUTO"}

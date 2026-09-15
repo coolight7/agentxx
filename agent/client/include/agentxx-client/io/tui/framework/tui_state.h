@@ -33,8 +33,8 @@ struct InterruptFormSubmit {
     agentxx::util::Json values = agentxx::util::Json::object();
 };
 
-using InterruptResultChannel = asio::experimental::concurrent_channel<
-    void(neograph_asio_error_code, InterruptFormSubmit)>;
+using InterruptResultChannel
+    = asio::experimental::concurrent_channel<void(neograph_asio_error_code, InterruptFormSubmit)>;
 
 /// TUI 消息模型: 统一使用 agentxx::agent::ViewMessage
 /// (与 server Session::viewMessages / wire Sync 同型, 见

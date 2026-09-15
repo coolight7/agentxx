@@ -262,16 +262,18 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
     ) << std::endl;
 
     // 内容 + 控件全部来自描述 (无 inputs[] 参数类型声明; 行式前端按控件形态问答)
-    const auto&        ui    = handleArg.ui;
-    const std::string  plain = agentxx::middleware::interruptUiPlainText(ui, 0);
+    const auto&       ui    = handleArg.ui;
+    const std::string plain = agentxx::middleware::interruptUiPlainText(ui, 0);
     if (!plain.empty()) {
         // 内容块降级为纯文本 (markdown 打印原文; diff 统一 diff 文本;
         // 控件块的候选/默认值说明也在其中)
-        std::cout << "\n  ┏━━━━━━ Prompt ━━━━━━┓\n" << plain << "\n"
-                  << "  ┗━━━━━━ Prompt ━━━━━━┛\n" << std::flush;
+        std::cout << "\n  ┏━━━━━━ Prompt ━━━━━━┓\n"
+                  << plain << "\n"
+                  << "  ┗━━━━━━ Prompt ━━━━━━┛\n"
+                  << std::flush;
     }
 
-    namespace mw = agentxx::middleware;
+    namespace mw                      = agentxx::middleware;
     agentxx::util::Json values        = agentxx::util::Json::object();
     bool                haveWaitInput = false;
     std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
@@ -309,11 +311,9 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
             // 控件形态提示 (与候选列表)
             if (block.control == "buttons" || block.control == "select") {
                 for (size_t i = 0; i < block.options.size(); ++i) {
-                    std::cout << fmt::format(
-                        "  ┣━ [{}] {}\n",
-                        i + 1,
-                        optionLabelOf(block.options[i])
-                    ) << std::flush;
+                    std::cout
+                        << fmt::format("  ┣━ [{}] {}\n", i + 1, optionLabelOf(block.options[i]))
+                        << std::flush;
                 }
                 std::cout << "  ┣━ Type | option index or value\n";
             } else if (block.control == "checkbox") {
@@ -346,12 +346,12 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                                   : "0";
             } else if (!block.defaultValue.is_null()) {
                 defaultText = block.defaultValue.is_string() ? block.defaultValue.get<std::string>()
-                                                              : block.defaultValue.dump();
+                                                             : block.defaultValue.dump();
             }
             std::cout << fmt::format("  ┣━ Default Value: {}\n", defaultText) << std::flush;
             std::cout << "  ┣━ >>> " << std::flush;
 
-            haveWaitInput        = true;
+            haveWaitInput = true;
             std::string inputValue;
             auto        inputValueOpt = co_await getInput();
             if (inputValueOpt.has_value()) {
@@ -374,7 +374,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                     inputSuccess = true;
                 } else {
                     // 输入序号 (1-based) 或候选项值
-                    int64_t index = 0;
+                    int64_t    index = 0;
                     const bool isIndex
                         = agentxx::util::parseNumberFromString(inputValue, index).ec == std::errc{}
                           && index >= 1 && index <= static_cast<int64_t>(block.options.size());
@@ -401,7 +401,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                 std::string v = inputValue;
                 agentxx::util::toLowerSelf(v);
                 if (v.empty()) {
-                    values[id]   = block.defaultValue.is_boolean() && block.defaultValue.get<bool>();
+                    values[id] = block.defaultValue.is_boolean() && block.defaultValue.get<bool>();
                     inputSuccess = true;
                 } else if (v == "yes" || v == "y" || v == "true" || v == "1") {
                     values[id]   = true;

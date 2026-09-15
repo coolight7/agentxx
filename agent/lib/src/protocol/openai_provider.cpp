@@ -1,10 +1,10 @@
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/json_view.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
 #include <chrono>
-#include <random>
 
 namespace agentxx {
 namespace server {
@@ -456,36 +456,16 @@ std::string OpenAIProvider::extractApiError(const std::string& body) {
 
 namespace {
 
-// 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
-// - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
-// - 相比按下标回填 call_{i}, 不会与 LLM 返回的 call_N 形式 id 冲突
-std::string makeUniqueToolCallId(size_t i = 0) {
-    thread_local std::mt19937_64 rng{
-        static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())
-    };
-    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()
-    )
-                        .count();
-    return fmt::format("call_{}_{}_{:08x}", ts, i, static_cast<uint32_t>(rng()));
-}
-
-// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考载体
-// - 加密思考载体 (Responses API reasoning items) 存于 message.extra
-//   [kResponsesReasoningItemsKey], gemini 等载体网关可能返回 summary/content 均空、
-//   仅 enc 的响应, 不视为空; 捕获侧保证 item 的 encrypted_content 非空,
-//   数组非空即存在有效载体
-// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
-//   由调用方抛出异常, 经 modelcall 重试链路自动重试并提示 UI
+/// 本协议的空响应判定 (加密思考载体键固定)
+/// - 加密思考载体 (Responses API reasoning items) 存于 message.extra
+///   [kResponsesReasoningItemsKey], gemini 等载体网关可能返回 summary/content 均空、
+///   仅 enc 的响应, 不视为空; 捕获侧保证 item 的 encrypted_content 非空,
+///   数组非空即存在有效载体
+/// - 判定实现与 Anthropic 等协议共用, 见 [isEmptyResponse]
 bool isEmptyResponse(const neograph::ChatCompletion& completion) {
-    const auto& msg = completion.message;
-    if (!msg.content.empty() || !msg.reasoning_content.empty() || !msg.tool_calls.empty()) {
-        return false;
-    }
-    return !(
-        msg.extra.contains(OpenAIProvider::kResponsesReasoningItemsKey)
-        && msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].is_array()
-        && !msg.extra[OpenAIProvider::kResponsesReasoningItemsKey].empty()
+    return agentxx::server::isEmptyResponse(
+        completion,
+        OpenAIProvider::kResponsesReasoningItemsKey
     );
 }
 

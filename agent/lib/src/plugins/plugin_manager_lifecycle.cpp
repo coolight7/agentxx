@@ -825,23 +825,13 @@ asio::awaitable<bool> PluginManager::unloadAsyncUntil(
 }
 
 asio::awaitable<bool> PluginManager::shutdownAsync(std::chrono::milliseconds timeout) {
-    std::vector<std::string> names;
-    names.reserve(plugins_.size());
-    for (const auto& [name, inst] : plugins_) {
-        (void)inst;
-        names.push_back(name);
-    }
-
-    const auto deadline  = std::chrono::steady_clock::now() + timeout;
-    bool       allClosed = true;
-    for (const auto& name : names) {
-        if (!find(name)) {
-            continue;
+    // 逐个卸载 (快照/超时/残留判定) 由基类公共实现完成
+    co_return co_await this->shutdownAllAsync(
+        timeout,
+        [this](const std::string& name, std::chrono::steady_clock::time_point deadline) {
+            return unloadAsyncUntil(name, deadline);
         }
-        const bool closed = co_await unloadAsyncUntil(name, deadline);
-        allClosed         = closed && allClosed;
-    }
-    co_return allClosed&& plugins_.empty();
+    );
 }
 
 std::vector<PluginManager::PluginListView> PluginManager::list() const {
@@ -921,14 +911,6 @@ std::string PluginManager::getPluginJson(const std::string& name) {
 // ---------------------------------------------------------------------------
 // 内置插件路径 helper (yaml `builtin://<name>` 简写)
 // ---------------------------------------------------------------------------
-static inline bool isBuiltinScheme(std::string_view p) noexcept {
-    return p.size() > 10 && p.substr(0, 10) == "builtin://";
-}
-
-static inline std::string parseBuiltinName(std::string_view p) {
-    return std::string(p.substr(10));
-}
-
 /// 加载失败 / start 失败的统一回滚: 摘除宿主侧注册 → 销毁插件上下文 →
 /// 移出插件表 → 释放名称预占 (动态库句柄由调用方决定是否关闭)。
 void PluginManager::rollbackLoad(const std::shared_ptr<PluginInstance>& inst, bool closeHandle) {

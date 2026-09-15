@@ -11,14 +11,11 @@
 
 namespace agentxx_system_plugin {
 
-struct PluginCtx : public agentxx::plugin::PluginBase {};
+/// 公共助手统一由插件 SDK 提供 (实现见 plugin_kit.h)
+using agentxx::plugin::ctxGuardLogger;
+using agentxx::plugin::pluginLog;
+using agentxx::plugin::pluginStrdup;
 
-inline auto ctxGuardLogger(PluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx) {
-            ctx->log.error(msg ? msg : "");
-        }
-    };
-}
+struct PluginCtx : public agentxx::plugin::PluginBase {};
 
 } // namespace agentxx_system_plugin

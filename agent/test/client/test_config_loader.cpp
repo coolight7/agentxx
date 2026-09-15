@@ -1154,13 +1154,13 @@ model:
 permission:
   mode: deny
 )");
-    auto overlay = dir.write("overlay.yaml", R"(permission:
+    auto          overlay = dir.write("overlay.yaml", R"(permission:
   mode: pass
 model:
   use:
     subagent: m2
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
 
     // overlay 未配置的标量: 保留 base 值
     XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("/data/base"));
@@ -1197,7 +1197,7 @@ void test_layered_models_merge() {
       type: openai
       base_url: https://base2.example.com
 )");
-    auto overlay = dir.write("overlay.yaml", R"(model:
+    auto          overlay = dir.write("overlay.yaml", R"(model:
   list:
     - name: shared
       model_name: shared-v2
@@ -1206,7 +1206,7 @@ void test_layered_models_merge() {
     - name: overlay-only
       type: anthropic
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
 
     XX_TEST_EXPECT_EQ(cfg.models.size(), size_t{3});
     auto shared = cfg.models.find("shared");
@@ -1247,7 +1247,7 @@ plugin:
       args:
         k: v
 )");
-    auto overlay = dir.write("overlay.yaml", R"(mcp:
+    auto          overlay = dir.write("overlay.yaml", R"(mcp:
   list:
     - namespace: ns1
       url: "http://overlay/mcp"
@@ -1259,7 +1259,7 @@ plugin:
         b: 3
         c: 4
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
 
     // mcp 按 namespace 归并: url 覆盖, 未配置的 timeout 保留 base 值
     XX_TEST_EXPECT_EQ(cfg.mcpServers.size(), size_t{2});
@@ -1309,7 +1309,7 @@ permission:
     list:
       - /deny/x
 )");
-    auto overlay = dir.write("overlay.yaml", R"(skill:
+    auto          overlay = dir.write("overlay.yaml", R"(skill:
   list:
     - /skills/s2
     - /skills/s3
@@ -1318,7 +1318,7 @@ permission:
     list:
       - /allow/b
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
 
     // 路径列表追加合并 (base 在前, overlay 去重后追加)
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{3});
@@ -1347,14 +1347,14 @@ void test_layered_plugin_args_list_replaced() {
         paths:
           - /proj/base_a
 )");
-    auto overlay = dir.write("overlay.yaml", R"(plugin:
+    auto          overlay = dir.write("overlay.yaml", R"(plugin:
   list:
     - path: "builtin://agentxx_codegraph"
       args:
         paths:
           - /proj/overlay_b
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
 
     XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
     if (cfg.plugins.size() == 1) {
@@ -1365,7 +1365,10 @@ void test_layered_plugin_args_list_replaced() {
         if (args.contains("paths")) {
             XX_TEST_EXPECT_EQ(args["paths"].size(), size_t{1});
             if (args["paths"].size() == 1) {
-                XX_TEST_EXPECT_EQ(args["paths"][0].get<std::string>(), std::string("/proj/overlay_b"));
+                XX_TEST_EXPECT_EQ(
+                    args["paths"][0].get<std::string>(),
+                    std::string("/proj/overlay_b")
+                );
             }
         }
         // 映射内其他键保留 base 值
@@ -1384,11 +1387,11 @@ skill:
   list:
     - /skills/s1
 )");
-    auto overlay = dir.write("overlay.yaml", R"(data_dir:
+    auto          overlay = dir.write("overlay.yaml", R"(data_dir:
 skill:
   list:
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("/data/base"));
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{1});
 
@@ -1396,7 +1399,7 @@ skill:
     auto overlayLegacy = dir.write("overlay_legacy.yaml", R"(skill:
   - /skills/s9
 )");
-    auto cfgLegacy = agentxx::client::loadYamlConfigLayered(base, overlayLegacy, {}, {});
+    auto cfgLegacy     = agentxx::client::loadYamlConfigLayered(base, overlayLegacy, {}, {});
     XX_TEST_EXPECT_EQ(cfgLegacy.skillDirPaths.size(), size_t{1});
     if (cfgLegacy.skillDirPaths.size() == 1) {
         XX_TEST_EXPECT_EQ(cfgLegacy.skillDirPaths[0], std::string("/skills/s1"));
@@ -1407,8 +1410,7 @@ skill:
 
     // 标量仍按覆盖处理: `data_dir: ""` 清空 base 值
     auto overlayDataDir = dir.write("overlay_datadir.yaml", "data_dir: \"\"\n");
-    auto cfgDataDir
-        = agentxx::client::loadYamlConfigLayered(base, overlayDataDir, {}, {});
+    auto cfgDataDir     = agentxx::client::loadYamlConfigLayered(base, overlayDataDir, {}, {});
     XX_TEST_EXPECT_TRUE(cfgDataDir.dataDir.empty());
 
     // 清空列表段: `overwrite.mode: replace` + 无 list (= 空列表)
@@ -1416,7 +1418,7 @@ skill:
   overwrite:
     mode: replace
 )");
-    auto cfgClear = agentxx::client::loadYamlConfigLayered(base, overlayClear, {}, {});
+    auto cfgClear     = agentxx::client::loadYamlConfigLayered(base, overlayClear, {}, {});
     XX_TEST_EXPECT_TRUE(cfgClear.skillDirPaths.empty());
 }
 
@@ -1469,7 +1471,10 @@ model:
     XX_TEST_EXPECT_TRUE(loaded.overlayLoaded);
     XX_TEST_EXPECT_TRUE(loaded.baseLoaded);
     XX_TEST_EXPECT_EQ(loaded.baseDir, dataDir);
-    XX_TEST_EXPECT_EQ(loaded.baseConfigPath, (fs::path{dataDir} / "agentxx-config.yaml").generic_string());
+    XX_TEST_EXPECT_EQ(
+        loaded.baseConfigPath,
+        (fs::path{dataDir} / "agentxx-config.yaml").generic_string()
+    );
 
     // base .env: BOTH 被 overlay 同名变量舍弃, BASE_ONLY 并入
     XX_TEST_EXPECT_EQ(loaded.baseEnvTotal, size_t{2});
@@ -1535,7 +1540,7 @@ void test_layered_base_missing() {
 void test_layered_overlay_equals_base() {
     // overlay 配置即 data_dir 目录下的配置 (文件名与 base 相同): 只加载一次, 不重复合并
     TempConfigDir dir;
-    const auto    dirPath = dir.path().generic_string();
+    const auto    dirPath     = dir.path().generic_string();
     const auto    overlayPath = dir.write(
         "agentxx-config.yaml",
         fmt::format("data_dir: \"{}\"\nskill:\n  list:\n    - /skills/s1\n", dirPath)
@@ -1568,10 +1573,7 @@ void test_layered_base_dir_defaults_to_system_dir() {
     agentxx::client::LayeredConfigOptions opts;
     opts.overlayConfigPath = overlayPath;
     auto loaded            = agentxx::client::loadLayeredConfig(opts);
-    XX_TEST_EXPECT_EQ(
-        loaded.baseDir,
-        agentxx::agent::AgentConfigStatic::systemDataDir()
-    );
+    XX_TEST_EXPECT_EQ(loaded.baseDir, agentxx::agent::AgentConfigStatic::systemDataDir());
     XX_TEST_EXPECT_EQ(
         loaded.baseConfigPath,
         (fs::path{loaded.baseDir} / "agentxx-config.yaml").generic_string()
@@ -1638,7 +1640,9 @@ void test_read_yaml_data_dir_value() {
     XX_TEST_EXPECT_EQ(
         agentxx::client::readYamlDataDirValue(
             withDataDir,
-            {{"AGENTXX_TEST_DD", "/dd"}},
+            {
+                {"AGENTXX_TEST_DD", "/dd"}
+    },
             {}
         ),
         std::string("/dd/sub")
@@ -1648,10 +1652,12 @@ void test_read_yaml_data_dir_value() {
     XX_TEST_EXPECT_TRUE(agentxx::client::readYamlDataDirValue(noDataDir, {}, {}).empty());
     auto empty = dir.write("c.yaml", "");
     XX_TEST_EXPECT_TRUE(agentxx::client::readYamlDataDirValue(empty, {}, {}).empty());
-    XX_TEST_EXPECT_TRUE(
-        agentxx::client::readYamlDataDirValue((dir.path() / "missing.yaml").generic_string(), {}, {})
-            .empty()
-    );
+    XX_TEST_EXPECT_TRUE(agentxx::client::readYamlDataDirValue(
+                            (dir.path() / "missing.yaml").generic_string(),
+                            {},
+                            {}
+    )
+                            .empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -1669,7 +1675,7 @@ plugin:
   list:
     - path: builtin://keep
 )");
-    auto overlay = dir.write("overlay.yaml", R"(skill:
+    auto          overlay = dir.write("overlay.yaml", R"(skill:
   overwrite:
     mode: replace
   list:
@@ -1680,7 +1686,7 @@ plugin:
   list:
     - path: builtin://only-mine
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{1});
     if (cfg.skillDirPaths.size() == 1) {
         XX_TEST_EXPECT_EQ(cfg.skillDirPaths[0], std::string("/s/mine"));
@@ -1700,13 +1706,13 @@ void test_section_overwrite_remove_keyed() {
     - path: builtin://p2
     - name: p3
 )");
-    auto overlay = dir.write("overlay.yaml", R"(plugin:
+    auto          overlay = dir.write("overlay.yaml", R"(plugin:
   overwrite:
     remove:
       - "/p1"
       - p3
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
     if (cfg.plugins.size() == 1) {
         XX_TEST_EXPECT_EQ(cfg.plugins[0].path, std::string("builtin://p2"));
@@ -1718,7 +1724,7 @@ void test_section_overwrite_remove_keyed() {
     remove:
       - does-not-exist
 )");
-    auto cfgNoMatch = agentxx::client::loadYamlConfigLayered(base, overlayNoMatch, {}, {});
+    auto cfgNoMatch     = agentxx::client::loadYamlConfigLayered(base, overlayNoMatch, {}, {});
     XX_TEST_EXPECT_EQ(cfgNoMatch.plugins.size(), size_t{3});
 }
 
@@ -1734,7 +1740,7 @@ memory:
     - /m/keep
     - /m/drop
 )");
-    auto overlay = dir.write("overlay.yaml", R"(skill:
+    auto          overlay = dir.write("overlay.yaml", R"(skill:
   overwrite:
     remove:
       - /s/base1
@@ -1745,7 +1751,7 @@ memory:
     remove:
       - /m/drop
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{2});
     if (cfg.skillDirPaths.size() == 2) {
         XX_TEST_EXPECT_EQ(cfg.skillDirPaths[0], std::string("/s/base2"));
@@ -1764,7 +1770,7 @@ void test_section_overwrite_remove_with_replace_mode() {
   list:
     - /s/base1
 )");
-    auto overlay = dir.write("overlay.yaml", R"(skill:
+    auto          overlay = dir.write("overlay.yaml", R"(skill:
   overwrite:
     mode: replace
     remove:
@@ -1773,7 +1779,7 @@ void test_section_overwrite_remove_with_replace_mode() {
     - /s/mine1
     - /s/mine2
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{1});
     if (cfg.skillDirPaths.size() == 1) {
         XX_TEST_EXPECT_EQ(cfg.skillDirPaths[0], std::string("/s/mine1"));
@@ -1791,7 +1797,7 @@ plugin:
     - path: "/p1"
       enabled: true
 )");
-    auto overlay = dir.write("overlay.yaml", R"(skill:
+    auto          overlay = dir.write("overlay.yaml", R"(skill:
   list:
     - /s/mine
 plugin:
@@ -1799,7 +1805,7 @@ plugin:
     - path: "/p1"
       enabled: false
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{2});
     XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
     if (cfg.plugins.size() == 1) {
@@ -1820,7 +1826,7 @@ void test_section_invalid_overwrite_values() {
   list:
     - /s/mine
 )");
-    auto cfgScalar = agentxx::client::loadYamlConfigLayered(base, overlayScalar, {}, {});
+    auto cfgScalar     = agentxx::client::loadYamlConfigLayered(base, overlayScalar, {}, {});
     XX_TEST_EXPECT_EQ(cfgScalar.skillDirPaths.size(), size_t{2}); // 回退 merge: 追加
 
     auto overlayBadMode = dir.write("overlay_badmode.yaml", R"(skill:
@@ -1830,23 +1836,23 @@ void test_section_invalid_overwrite_values() {
   list:
     - /s/mine2
 )");
-    auto cfgBadMode = agentxx::client::loadYamlConfigLayered(base, overlayBadMode, {}, {});
+    auto cfgBadMode     = agentxx::client::loadYamlConfigLayered(base, overlayBadMode, {}, {});
     XX_TEST_EXPECT_EQ(cfgBadMode.skillDirPaths.size(), size_t{2}); // mode 回退 merge, remove 忽略
 }
 
 void test_section_unknown_key_ignored() {
     // 段内未知键 (拼写错误等): 记警告并忽略, 不影响 `list` 生效
     TempConfigDir dir;
-    auto          base = dir.write("base.yaml", R"(skill:
+    auto          base    = dir.write("base.yaml", R"(skill:
   list:
     - /s/base1
 )");
-    auto overlay = dir.write("overlay.yaml", R"(skill:
+    auto          overlay = dir.write("overlay.yaml", R"(skill:
   miswritten: true
   list:
     - /s/mine
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_EQ(cfg.skillDirPaths.size(), size_t{2});
 }
 
@@ -1876,7 +1882,7 @@ void test_section_model_list_and_use() {
   use:
     default: m1
 )");
-    auto overlay = dir.write("overlay.yaml", R"(model:
+    auto          overlay = dir.write("overlay.yaml", R"(model:
   overwrite:
     remove:
       - m2
@@ -1886,7 +1892,7 @@ void test_section_model_list_and_use() {
   use:
     subagent: m3
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     // m2 被 remove 剔除 (remove 对 overlay 自身条目同样生效)
     XX_TEST_EXPECT_EQ(cfg.models.size(), size_t{2});
     XX_TEST_EXPECT_TRUE(cfg.models.contains("m1"));
@@ -1913,7 +1919,7 @@ void test_section_permission_overwrite() {
     list:
       - /deny/x
 )");
-    auto overlay = dir.write("overlay.yaml", R"(permission:
+    auto          overlay = dir.write("overlay.yaml", R"(permission:
   mode: pass
   whitelist:
     overwrite:
@@ -1927,7 +1933,7 @@ void test_section_permission_overwrite() {
       remove:
         - /deny/x
 )");
-    auto cfg = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
+    auto          cfg     = agentxx::client::loadYamlConfigLayered(base, overlay, {}, {});
     XX_TEST_EXPECT_TRUE(cfg.permissionMode == agent::PermissionMode::Pass);
     // whitelist 整段替换 (/allow/c 又被 remove 剔除)
     XX_TEST_EXPECT_TRUE(cfg.permissionAllowPaths.empty());

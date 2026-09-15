@@ -5,6 +5,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/hash.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/path_sanitize.h"
 #include "agentxx/util/string_util.h"
 #include <algorithm>
 #include <chrono>
@@ -31,47 +32,6 @@ using agentxx::util::hash::fnv1a64;
 /// - dataDir 为空时回退 ~/.agentxx/ (取不到用户主目录时回退系统临时目录)
 static std::string defaultRootDir() {
     return agentxx::agent::AgentConfigStatic::getSessionsDir("");
-}
-
-/// Windows 保留设备名 (CON/PRN/AUX/NUL/COM1-9/LPT1-9, 忽略扩展名)
-/// - 用作目录名会导致 Windows 无法创建, 需加前缀规避
-#if XX_IS_WIN_D
-static bool isWindowsReservedName(std::string_view seg) {
-    std::string name{seg};
-    auto        dot = name.find('.');
-    if (dot != std::string::npos) {
-        name = name.substr(0, dot);
-    }
-    for (auto& c : name) {
-        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    }
-    static const char* kReserved[] = {
-        "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    };
-    for (const auto* r : kReserved) {
-        if (name == r) {
-            return true;
-        }
-    }
-    return false;
-}
-#endif
-
-/// 单段清洗: 替换文件系统非法字符为 `_`
-/// - Windows 非法字符: < > : " / \ | ? * 及 ASCII 0-31
-static std::string sanitizeSegment(std::string_view seg) {
-    std::string out;
-    out.reserve(seg.size());
-    for (char c : seg) {
-        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':' || c == '"'
-            || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
-            out.push_back('_');
-        } else {
-            out.push_back(c);
-        }
-    }
-    return out;
 }
 
 /// 会话全量状态 SQL (session.db: view_message/llm_context/meta/store 单库)
@@ -160,8 +120,9 @@ ViewMessage stripAttachmentDataUrl(const ViewMessage& msg) {
 ///   保证落库内容始终可被解析
 std::string dumpJsonUtf8(const agentxx::util::Json& j) {
     std::string text = j.dump();
-    if (false == agentxx::util::utf8IsAvail(text)) {
-        agentxx::util::utf8Repair(text);
+    if (!agentxx::util::utf8IsAvail(text)) {
+        // 返回值表示"是否真的发生过替换" (此处仅关心修复后的文本内容)
+        (void)agentxx::util::utf8Repair(text);
     }
     return text;
 }
@@ -209,7 +170,7 @@ std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
     if (sessionId.empty()) {
         return "default";
     }
-    auto seg = sanitizeSegment(sessionId);
+    auto seg = agentxx::util::sanitizeFsSegment(sessionId);
     // 空串 / "." / ".." 不能作为目录名 (路径穿越/上级目录)
     if (seg.empty() || seg == "." || seg == "..") {
         seg = "session";
@@ -217,14 +178,16 @@ std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
     // 是否发生过改写 (需要附加哈希尾缀保证不同 sessionId 不碰撞到同一目录)
     bool changed = (seg != sessionId);
 #if XX_IS_WIN_D
-    if (isWindowsReservedName(seg)) {
+    if (agentxx::util::isWindowsReservedName(seg)) {
         seg     = "t_" + seg;
         changed = true;
     }
 #endif
-    // 超长截断: 保留前部可读信息 + 8 位 hex hash 尾缀防碰撞
+    // 超长截断: 保留前部可读信息, 最终由下方统一附加 8 位 hex hash 尾缀防碰撞
+    // (尾缀占 9 字符 "_" + 8 hex, 故此处先让出; 哈希取自原始 sessionId,
+    //  与截断/清洗结果无关, 保证同一会话稳定映射到同一目录)
     if (seg.size() > kMaxSessionDataDirLen) {
-        seg     = seg.substr(0, kMaxSessionDataDirLen - 9);
+        seg     = agentxx::util::truncateFsSegment(seg, kMaxSessionDataDirLen - 9);
         changed = true;
     }
     if (changed) {
@@ -428,9 +391,10 @@ static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
             // (历史消息均无时间戳) 时回退 session.db 文件修改时间,
             // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
             if (info.lastActiveMs <= 0) {
-                auto lastStmt
-                    = db.prepare("SELECT COALESCE(json_extract(json, '$.startTimeMs'), json_extract(json, '$.start_time_ms')) FROM view_message "
-                                 "ORDER BY seq DESC LIMIT 1");
+                auto lastStmt = db.prepare(
+                    "SELECT COALESCE(json_extract(json, '$.startTimeMs'), json_extract(json, '$.start_time_ms')) FROM view_message "
+                    "ORDER BY seq DESC LIMIT 1"
+                );
                 if (lastStmt.step() && !lastStmt.columnIsNull(0)) {
                     info.lastActiveMs = lastStmt.columnInt64(0);
                 }

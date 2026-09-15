@@ -304,25 +304,6 @@ inline asio::awaitable<void> procCancelWatchLoop(
     co_await cancelTimer->async_wait(asio::as_tuple(asio::use_awaitable));
 }
 
-/// 兼容旧签名的重载
-inline asio::awaitable<void> procCancelWatchLoop(
-    boost::process::process& proc,
-    asio::readable_pipe&     outpip,
-    asio::readable_pipe&     errpip,
-    void*                    winJob,
-    const IsCancelledFn&     isCancelled
-) {
-    co_return co_await procCancelWatchLoop(
-        proc,
-        outpip,
-        errpip,
-        winJob,
-        /*cancelRegistry=*/nullptr,
-        /*sessionKey=*/"",
-        isCancelled
-    );
-}
-
 #if XX_IS_WIN_D
 /// Windows Job Object 句柄封装 (仅 Windows + bp::v2 编译路径存在):
 /// - CreateJobObject 创建, 配置 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:

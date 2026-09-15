@@ -550,6 +550,37 @@ public:
         return false;
     }
 
+    /// 逐个卸载全部插件, 共享同一超时时刻 (agent/client 两侧 shutdownAsync 的公共实现)
+    ///
+    /// - 先快照插件名再逐个卸载: 卸载过程会改动插件表, 不能边遍历边卸载
+    /// - 每个实例调用派生类的 [unloadUntil] (name, deadline) 完成实际卸载
+    /// - `return` 全部实例已关闭且插件表已空; 任一实例未关闭/超时返回 false
+    ///
+    /// - `args`:
+    ///     - [timeout] 整体关闭超时 (各实例共享同一截止时刻, 不是每实例各自计时)
+    ///     - [unloadUntil] 派生类的单实例卸载协程: (name, deadline) -> 是否已关闭
+    template<typename UnloadUntilFn>
+    asio::awaitable<bool>
+        shutdownAllAsync(std::chrono::milliseconds timeout, UnloadUntilFn unloadUntil) {
+        std::vector<std::string> names;
+        names.reserve(plugins_.size());
+        for (const auto& [name, inst] : plugins_) {
+            (void)inst;
+            names.push_back(name);
+        }
+
+        const auto deadline  = std::chrono::steady_clock::now() + timeout;
+        bool       allClosed = true;
+        for (const auto& name : names) {
+            if (!find(name)) {
+                continue; // 已被前序卸载级联移除
+            }
+            const bool closed = co_await unloadUntil(name, deadline);
+            allClosed         = closed && allClosed;
+        }
+        co_return allClosed && plugins_.empty();
+    }
+
     /// 预占插件名称，覆盖 Loading 期间的并发重复加载。
     /// 调用方必须在加载成功或失败时调用 releasePluginName()。
     bool reservePluginName(std::string_view name) {

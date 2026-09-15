@@ -702,12 +702,7 @@ Options:
             config->logPrintSummarizationResultTokenCount  = true;
             // 远程 client 进程只加载 client 侧插件 (yaml plugins 段经 sides
             // 过滤, 见 ClientPluginManager::loadConfiguredClientPlugins)
-            runRemoteTui(
-                agentUrl,
-                agentToken,
-                remoteModel,
-                config->plugins
-            );
+            runRemoteTui(agentUrl, agentToken, remoteModel, config->plugins);
         } else {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;

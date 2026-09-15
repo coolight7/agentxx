@@ -261,14 +261,16 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             int64_t thinkStartTimeMs = jm.value("startTimeMs", int64_t{0});
             int64_t thinkDurationMs  = jm.value("durationMs", int64_t{0});
             if (thinkStartTimeMs == 0) {
-                thinkStartTimeMs = lastThinkSegStartMs_ > 0 ? lastThinkSegStartMs_ : nodeStartTimeMs_;
+                thinkStartTimeMs
+                    = lastThinkSegStartMs_ > 0 ? lastThinkSegStartMs_ : nodeStartTimeMs_;
             }
             if (thinkDurationMs == 0) {
                 thinkDurationMs = lastThinkSegDurationMs_;
             }
-            // 兜底: 若为非流式或无独立 THINKING chunk 的思考 (如仅返回 reasoning_tokens / encrypted reasoning),
-            // 但有节点计时, 则以节点运行耗时兜底
-            if (thinkDurationMs == 0 && (isEncrypted || reasoningTokens > 0 || !reasoning.empty())) {
+            // 兜底: 若为非流式或无独立 THINKING chunk 的思考 (如仅返回 reasoning_tokens / encrypted
+            // reasoning), 但有节点计时, 则以节点运行耗时兜底
+            if (thinkDurationMs == 0
+                && (isEncrypted || reasoningTokens > 0 || !reasoning.empty())) {
                 if (nodeStartTimeMs_ > 0) {
                     const int64_t nowMs = static_cast<int64_t>(
                         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -314,7 +316,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 int64_t assistantStartTimeMs = jm.value("startTimeMs", int64_t{0});
                 int64_t assistantDurationMs  = jm.value("durationMs", int64_t{0});
                 if (assistantStartTimeMs == 0) {
-                    assistantStartTimeMs = nodeStartTimeMs_ > 0 ? nodeStartTimeMs_ : thinkStartTimeMs;
+                    assistantStartTimeMs
+                        = nodeStartTimeMs_ > 0 ? nodeStartTimeMs_ : thinkStartTimeMs;
                 }
                 if (assistantDurationMs == 0 && nodeStartTimeMs_ > 0) {
                     const int64_t nowMs = static_cast<int64_t>(
@@ -535,8 +538,8 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
     lastThinkSegStartMs_    = 0;
     lastThinkSegDurationMs_ = 0;
     lastChatChunkType_      = neograph::ChatStreamChunk::TYPE_UNKNOWN;
-    nodeStartTime_     = std::chrono::system_clock::now();
-    nodeStartTimeMs_   = static_cast<int64_t>(
+    nodeStartTime_          = std::chrono::system_clock::now();
+    nodeStartTimeMs_        = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(nodeStartTime_.time_since_epoch())
             .count()
     );

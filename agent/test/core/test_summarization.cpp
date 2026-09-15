@@ -2137,7 +2137,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             std::make_shared<agentxx::tools::SubAgentNormalTask>("subagent_task", "isolation")
         ));
 
-        const std::string sid = "sum_resume_tip_thread";
+        const std::string sid     = "sum_resume_tip_thread";
         auto              session = ctx->sessions->getOrCreate(sid);
         // recentTokenBudgetRatio=0.03 (与 SummarizationTestEnv 一致): 使压缩段非空,
         // 走 LLM 压缩路径 (默认 0.20 时短消息全部落入 recent, 不触发压缩)
@@ -2172,14 +2172,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
         }
         XX_TEST_EXPECT_TRUE(threwInterrupt);
         XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
-        XX_TEST_EXPECT_TRUE(
-            session->viewMessages[0].text.starts_with("Summarizing LLM Context...")
+        XX_TEST_EXPECT_TRUE(session->viewMessages[0].text.starts_with("Summarizing LLM Context...")
         );
-        const auto pendingTipId
-            = ctx->middlewareHandleContext->getGraphDataItemValue<std::string>(
-                sid,
-                agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
-            );
+        const auto pendingTipId = ctx->middlewareHandleContext->getGraphDataItemValue<std::string>(
+            sid,
+            agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
+        );
         XX_TEST_EXPECT_EQ(pendingTipId, session->viewMessages[0].id);
 
         // ② 续跑 (resume): 预置中断结果, 再次执行 → 复用同一提示消息并更新为结果文本

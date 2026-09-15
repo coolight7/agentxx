@@ -1500,10 +1500,14 @@ agent/
 │   │   │   ├── a2a_client.h      # A2A Client (Agent Card / SendMessage / Task 管理)
 │   │   │   ├── a2a_server.h      # A2A Server (JSON-RPC, 任务状态机)
 │   │   │   ├── acp_server.h      # ACP Server (stdio 模式)
+│   │   │   ├── provider_common.h # 各 LLM Provider 与模型调用节点共用 helper
+│   │   │   │                     #   (唯一 tool_call id 生成 / 空响应判定)
 │   │   │   └── protocol_base.h   # 协议基类
 │   │   └── util/                 # 工具类
 │   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
 │   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
+│   │       ├── path_sanitize.h   # 路径段安全化 (非法字符替换/超长截断+哈希尾缀/
+│   │       │                     #   Windows 保留设备名判定; 会话与索引目录名构造共用)
 │   │       ├── http_client.h     # HTTP 客户端 (基于 Boost.Beast)
 │   │       │                     #   连接池: keep-alive 空闲连接复用 + 每端点并发上限
 │   │       │                     #   (maxConcurrentConnections, 默认 5), 复用失效自动重试;
@@ -1542,6 +1546,7 @@ agent/
 │   │   │       ├── tui_plugin_adapter.h # TUI 插件适配器 (UI 注册表/命令管线/client 事件转发)
 │   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
+│   │   │       ├── scroll_common.h # 两个滚动容器共用逻辑 (元素布局测量/滚轮事件)
 │   │   │       ├── tui_theme.h   # TUI 主题配色
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)

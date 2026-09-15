@@ -616,19 +616,9 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
 }
 
 /// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号)
+/// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
 static std::string clientJsonEscape(const ClientCtx& ctx, const std::string& s) {
-    if (!ctx.host || !ctx.iface.json || !ctx.iface.json->json_escape || s.empty()) {
-        return "\"\"";
-    }
-    AgentxxPluginString esc{nullptr, 0};
-    auto                sSv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
-    ctx.iface.json->json_escape(ctx.host, &sSv, &esc);
-    if (!esc.data) {
-        return "\"\"";
-    }
-    std::string out(esc.data, static_cast<size_t>(esc.size));
-    agentxx::plugin::PluginString::free(ctx.host, &esc);
-    return out;
+    return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, s);
 }
 
 namespace {

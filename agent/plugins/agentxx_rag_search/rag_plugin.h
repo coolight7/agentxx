@@ -11,30 +11,13 @@
 
 namespace agentxx_rag_plugin {
 
+/// 公共助手统一由插件 SDK 提供 (实现见 plugin_kit.h)
+using agentxx::plugin::ctxGuardLogger;
+using agentxx::plugin::pluginLog;
+using agentxx::plugin::pluginStrdup;
+
 struct PluginCtx : public agentxx::plugin::PluginBase {
     void* store_opaque = nullptr;
 };
-
-inline void pluginLog(const PluginCtx* ctx, int level, const std::string& msg) {
-    if (ctx) {
-        ctx->log.log(level, msg);
-    }
-}
-
-inline char* pluginStrdup(const AgentxxPluginHost* host, const char* s) {
-    if (!host || !s) {
-        return nullptr;
-    }
-    auto sv = agentxx::plugin::PluginStringView::fromCstr(s);
-    return agentxx::plugin::PluginString::strdup(host, &sv);
-}
-
-inline auto ctxGuardLogger(PluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx) {
-            ctx->log.error(msg ? msg : "");
-        }
-    };
-}
 
 } // namespace agentxx_rag_plugin

@@ -59,7 +59,7 @@ std::pair<Element, size_t> buildDiagram(const UiItem& item, const UiRenderCtx& c
     }
     // 图形宽度预算: 可用宽度扣除缩进与边界余量, 下限保底可读
     const int avail = (ctx.width > 0) ? std::max(20, ctx.width - ctx.indent - item.indent - 6) : 0;
-    const auto& theme = *ctx.theme;
+    const auto& theme  = *ctx.theme;
     auto        diagEl = markdown::renderMermaidStateDiagram(
         diagram,
         avail,
@@ -87,17 +87,17 @@ void pushRow(
     const UiRenderCtx&   ctx,
     const UiItem&        item,
     Element              el,
-    size_t               lines                 = 1,
-    std::shared_ptr<Box> box                   = nullptr,
-    std::string          hitId                 = {},
-    int                  hitSub                = 0
+    size_t               lines  = 1,
+    std::shared_ptr<Box> box    = nullptr,
+    std::string          hitId  = {},
+    int                  hitSub = 0
 ) {
     UiRow row;
-    row.lines = std::max<size_t>(1, lines);
-    row.hitId = std::move(hitId);
-    row.hitSub = hitSub;
-    row.hitOwner = ctx.ownerId;
-    row.box      = std::move(box);
+    row.lines      = std::max<size_t>(1, lines);
+    row.hitId      = std::move(hitId);
+    row.hitSub     = hitSub;
+    row.hitOwner   = ctx.ownerId;
+    row.box        = std::move(box);
     const auto pad = indentText(ctx.indent + item.indent);
     if (pad.empty()) {
         row.element = std::move(el);
@@ -117,7 +117,7 @@ std::optional<UiItem> uiItemFromPluginJson(const agentxx::util::Json& item) {
     UiItem     ui;
     ui.kind = kind;
     if (kind == "text") {
-        ui.text  = item.value("text", std::string{});
+        ui.text = item.value("text", std::string{});
         // 插件 items 的 role 与中断块的 color 是同一套主题色名
         ui.color = item.value("role", std::string{"normal"});
         // 历史渲染语义: title 加粗 / hint 减淡; 文本按宽度硬折行 (行数估算同源)
@@ -297,10 +297,9 @@ void renderUiItem(const UiItem& item, const UiRenderCtx& ctx, UiRenderResult& ou
         }
         PluginButtonDesc desc = item.button;
         // 可点性: 有 action_id 且插件在 UI 注册表内存在绑定
-        desc.clickable = !desc.actionId.empty()
-                         && hasPluginBinding(ctx.plugin, ctx.registry);
-        auto box = desc.clickable ? std::make_shared<Box>() : nullptr;
-        Element btn = renderPluginButton(desc, theme);
+        desc.clickable = !desc.actionId.empty() && hasPluginBinding(ctx.plugin, ctx.registry);
+        auto    box    = desc.clickable ? std::make_shared<Box>() : nullptr;
+        Element btn    = renderPluginButton(desc, theme);
         if (box) {
             btn = btn | reflect(*box);
         }

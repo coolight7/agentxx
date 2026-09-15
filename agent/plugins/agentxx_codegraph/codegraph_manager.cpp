@@ -6,6 +6,8 @@
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 
+#include "agentxx/util/path_sanitize.h"
+
 #define XX_LOGT(...)                            \
     do {                                        \
         this->log(0, fmt::format(__VA_ARGS__)); \
@@ -102,66 +104,20 @@ static constexpr size_t kCodeGraphMaxSegLen = 48;
 /// - 最坏存储路径长度 ≈ 主目录(≤40) + 固定前缀(24) + 折叠段(16) + 3*48 + 分隔符 < 260
 static constexpr size_t kCodeGraphMaxTailSegs = 3;
 
-/// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
-/// - 仅用于超长段/折叠段的短标识, 确定性跨平台一致
-static uint64_t fnv1a64(std::string_view s) {
-    uint64_t hash = 1469598103934665603ULL;
-    for (unsigned char c : s) {
-        hash ^= c;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
+/// FNV-1a 64 位哈希 (折叠段/超长段短标识, 与 session_store 等共用同一实现)
+using agentxx::util::hash::fnv1a64;
 
-/// 路径段清洗: 替换文件系统非法字符为 `_`
-/// - Windows 非法字符: < > : " / \ | ? * 及 ASCII 0-31
+/// 路径段清洗 (实现复用 agentxx::util): 非法字符替换为 `_`, 超长段截断
+/// - 非法字符 (Windows 保留字符与 ASCII 控制符) 见 [agentxx::util::sanitizeFsSegment]
+/// - 超长段截断保留前部可读信息 + 8 位 hex hash 尾缀防碰撞 (总长受控):
+///   避免单个目录名超过文件系统限制 (NAME_MAX=255) 及撑爆总路径长度
+/// - Windows 保留设备名判定见 [agentxx::util::isWindowsReservedName]
 static std::string sanitizeSegment(std::string_view seg) {
-    std::string out;
-    out.reserve(seg.size());
-    for (char c : seg) {
-        if (static_cast<unsigned char>(c) < 0x20 || c == '<' || c == '>' || c == ':' || c == '"'
-            || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
-            out.push_back('_');
-        } else {
-            out.push_back(c);
-        }
-    }
-    // 超长段截断: 保留前部可读信息 + 8 位 hex hash 尾缀防碰撞, 总长受控
-    // - 避免单个目录名超过文件系统限制 (NAME_MAX=255) 及撑爆总路径长度
-    if (out.size() > kCodeGraphMaxSegLen) {
-        out = fmt::format(
-            "{}_{:08x}",
-            out.substr(0, kCodeGraphMaxSegLen - 9),
-            static_cast<uint32_t>(fnv1a64(out) & 0xffffffffu)
-        );
-    }
-    return out;
+    return agentxx::util::truncateFsSegmentWithHash(
+        agentxx::util::sanitizeFsSegment(seg),
+        kCodeGraphMaxSegLen
+    );
 }
-
-/// Windows 保留设备名 (CON/PRN/AUX/NUL/COM1-9/LPT1-9, 忽略扩展名)
-/// - 用作目录名会导致 Windows 无法创建, 需加前缀规避
-#if XX_IS_WIN_D
-static bool isWindowsReservedName(std::string_view seg) {
-    std::string name{seg};
-    auto        dot = name.find('.');
-    if (dot != std::string::npos) {
-        name = name.substr(0, dot);
-    }
-    for (auto& c : name) {
-        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    }
-    static const char* kReserved[] = {
-        "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    };
-    for (const auto* r : kReserved) {
-        if (name == r) {
-            return true;
-        }
-    }
-    return false;
-}
-#endif
 
 /// 将项目根目录转换为 sqlite 目录下的相对路径段序列
 /// - Linux:   /home/user/proj     -> {home, user, proj}
@@ -209,7 +165,7 @@ static std::vector<std::string> projectRootToSegments(std::string_view project_r
             continue;
         }
 #if XX_IS_WIN_D
-        if (isWindowsReservedName(seg)) {
+        if (agentxx::util::isWindowsReservedName(seg)) {
             seg = fmt::format("_{}", seg);
         }
 #endif

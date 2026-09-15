@@ -60,7 +60,7 @@ size_t countOccurrences(std::string_view text, std::string_view needle) {
     }
     size_t count = 0;
     for (size_t pos = text.find(needle); pos != std::string_view::npos;
-         pos       = text.find(needle, pos + needle.size())) {
+         pos        = text.find(needle, pos + needle.size())) {
         ++count;
     }
     return count;
@@ -125,8 +125,10 @@ struct InterruptFixture {
     std::string render(int width = 120, int height = 60) {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
-        auto screen
-            = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(height));
+        auto screen    = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(width),
+            ftxui::Dimension::Fixed(height)
+        );
         ftxui::Render(screen, el);
         return screen.ToString();
     }
@@ -136,8 +138,10 @@ struct InterruptFixture {
     size_t renderedRows(int width = 120, int height = 60) {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
-        auto screen
-            = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(height));
+        auto screen    = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(width),
+            ftxui::Dimension::Fixed(height)
+        );
         ftxui::Render(screen, el);
         int first = -1;
         int last  = -1;
@@ -203,6 +207,7 @@ struct InterruptFixture {
     struct Submit {
         bool                cancelled = false;
         agentxx::util::Json values    = agentxx::util::Json::object();
+
         /// 便捷: 指定控件 id 的字符串值 (不存在返回 nullopt)
         std::optional<std::string> get(const std::string& id) const {
             if (!values.is_object() || !values.contains(id)) {
@@ -212,6 +217,7 @@ struct InterruptFixture {
             return v.is_string() ? std::optional<std::string>{v.get<std::string>()}
                                  : std::optional<std::string>{v.dump()};
         }
+
         bool has(const std::string& id) const {
             return values.is_object() && values.contains(id);
         }
@@ -219,12 +225,10 @@ struct InterruptFixture {
 
     /// 从通道读取一次提交结果; 返回 false = 无可用消息
     bool recvForm(std::shared_ptr<InterruptResultChannel> ch, Submit& out) {
-        bool got = ch->try_receive(
-            [&](neograph_asio_error_code, InterruptFormSubmit s) {
-                out.cancelled = s.cancelled;
-                out.values    = std::move(s.values);
-            }
-        );
+        bool got = ch->try_receive([&](neograph_asio_error_code, InterruptFormSubmit s) {
+            out.cancelled = s.cancelled;
+            out.values    = std::move(s.values);
+        });
         io.run(); // 排空 async_send 投递的完成 handler (数据本身已入队)
         return got;
     }
@@ -369,8 +373,8 @@ void test_diff_block_render() {
     XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), f.renderedRows());
 
     // 无差异: 渲染 "(no changes)"
-    InterruptFixture f2;
-    auto             ch2 = f2.makeChannel();
+    InterruptFixture                 f2;
+    auto                             ch2 = f2.makeChannel();
     agentxx::middleware::InterruptUi uiSame;
     uiSame.blocks.push_back(agentxx::middleware::preset::diffBlock("b.txt", "same\n", "same\n"));
     auto miSame = f2.addInterrupt(ch2, uiSame);
@@ -395,7 +399,7 @@ void test_gap_unknown_and_custom_blocks() {
 
     // 自定义渲染块 (字段预留, 暂未实现): 渲染 fallback 文本
     agentxx::middleware::InterruptUiBlock custom;
-    custom.kind     = "custom";
+    custom.kind      = "custom";
     custom.component = "my_component";
     custom.fallback  = "custom fallback text";
     ui.blocks.push_back(custom);
@@ -463,7 +467,9 @@ void test_buttons_commit_on_pick() {
             static_cast<int>(msg.interrupt->interruptStatus),
             static_cast<int>(TUIMessage::InterruptStatus::Confirmed)
         );
-        XX_TEST_EXPECT_TRUE(msg.interrupt->interruptResult.find("allow: true") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            msg.interrupt->interruptResult.find("allow: true") != std::string::npos
+        );
     }
     // 提交后控件不再可交互
     XX_TEST_EXPECT_FALSE(f.click(mi, "allow", 1));
@@ -511,7 +517,8 @@ void test_select_click_and_keyboard() {
     InterruptUi ui;
     ui.blocks.push_back(preset::selectControl(
         "mode",
-        {preset::option("fast", "fast"), preset::option("balanced", "balanced"),
+        {preset::option("fast", "fast"),
+         preset::option("balanced", "balanced"),
          preset::option("slow", "slow")},
         {},
         {},
@@ -544,7 +551,8 @@ void test_checkbox_click_and_space() {
 
     using namespace agentxx::middleware;
     InterruptUi ui;
-    ui.blocks.push_back(preset::checkboxControl("remember", "Remember this choice", "interrupt.remember")
+    ui.blocks.push_back(
+        preset::checkboxControl("remember", "Remember this choice", "interrupt.remember")
     );
     ui.blocks.push_back(preset::submitBlock());
     auto mi = f.addInterrupt(ch, ui);
@@ -820,7 +828,8 @@ void test_permission_card_render_and_result() {
     // 权限卡片预设无提交行 (允许/拒绝点击即提交)
     XX_TEST_EXPECT_TRUE(text.find("确认") == std::string::npos);
 
-    // 勾选"记住此选择" → 点击"允许"提交: values = {decision: "true", remember: true, fullAuth: false}
+    // 勾选"记住此选择" → 点击"允许"提交: values = {decision: "true", remember: true, fullAuth:
+    // false}
     XX_TEST_EXPECT_TRUE(f.click(mi, "remember", 0));
     XX_TEST_EXPECT_TRUE(f.render().find("[ ✓ ]") != std::string::npos);
     XX_TEST_EXPECT_TRUE(f.click(mi, "decision", 0));
@@ -897,7 +906,11 @@ void test_input_form_preset_types() {
     using namespace agentxx::middleware;
     auto ui = preset::inputForm({
         preset::InputSpec{
-                          .label = "Mode", .depict = "pick one", .type = "enum", .defaultValue = "fast", .enumValues = {"fast", "slow"}
+                          .label        = "Mode",
+                          .depict       = "pick one",
+                          .type         = "enum",
+                          .defaultValue = "fast",
+                          .enumValues   = {"fast", "slow"}
         },
         preset::InputSpec{.label = "Retries", .type = "int", .defaultValue = "1"},
         preset::InputSpec{.label = "Enable", .type = "bool", .defaultValue = "yes"},
@@ -933,7 +946,7 @@ void test_input_form_preset_types() {
     auto             ui2 = preset::inputForm({
         preset::InputSpec{.label = "Enable", .type = "bool", .defaultValue = "yes"},
     });
-    auto mi2 = f2.addInterrupt(ch2, ui2);
+    auto             mi2 = f2.addInterrupt(ch2, ui2);
     XX_TEST_EXPECT_TRUE(f2.click(mi2, "value", 0));
     InterruptFixture::Submit s2;
     XX_TEST_EXPECT_TRUE(f2.recvForm(ch2, s2));
@@ -965,7 +978,7 @@ void test_unknown_control_diagnostic_and_others_usable() {
     auto             ch = f.makeChannel();
 
     using namespace agentxx::middleware;
-    InterruptUi ui;
+    InterruptUi      ui;
     InterruptUiBlock future;
     future.kind    = "control";
     future.control = "future_widget";
@@ -1077,12 +1090,17 @@ void test_estimate_matches_rendered_rows() {
     {
         InterruptFixture f;
         auto             ch = f.makeChannel();
-        f.addInterrupt(ch, agentxx::middleware::preset::inputForm({
-                              agentxx::middleware::preset::InputSpec{
-                                  .label = "Mode", .depict = "pick one", .type = "enum", .enumValues = {"a", "b", "c"}
-        },
-                              agentxx::middleware::preset::InputSpec{.label = "Count", .type = "int"},
-                          })
+        f.addInterrupt(
+            ch,
+            agentxx::middleware::preset::inputForm({
+                agentxx::middleware::preset::InputSpec{
+                                                       .label      = "Mode",
+                                                       .depict     = "pick one",
+                                                       .type       = "enum",
+                                                       .enumValues = {"a", "b", "c"}
+                },
+                agentxx::middleware::preset::InputSpec{.label = "Count", .type = "int"},
+        })
         );
         XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(0, 120), f.renderedRows());
     }

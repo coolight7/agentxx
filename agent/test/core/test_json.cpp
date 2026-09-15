@@ -439,6 +439,65 @@ void test_json_equal() {
 namespace agentxx {
 namespace test {
 
+/// 宽松读取字符串数组 (jsonGetStringArray): 缺失/非数组/非字符串元素的容错
+void test_json_get_string_array() {
+    // 正常: 字符串数组按序返回
+    {
+        auto j = Json::parse(R"({"skills":["a","b","c"]})");
+        auto v = jsonGetStringArray(j, "skills");
+        XX_TEST_EXPECT_EQ(v.size(), (size_t)3);
+        XX_TEST_EXPECT_EQ(v[0], std::string("a"));
+        XX_TEST_EXPECT_EQ(v[2], std::string("c"));
+    }
+    // 数组内非字符串元素跳过
+    {
+        auto j = Json::parse(R"({"list":["a",1,null,true,{"k":1},["x"],"b"]})");
+        auto v = jsonGetStringArray(j, "list");
+        XX_TEST_EXPECT_EQ(v.size(), (size_t)2);
+        XX_TEST_EXPECT_EQ(v[0], std::string("a"));
+        XX_TEST_EXPECT_EQ(v[1], std::string("b"));
+    }
+    // 缺失键 / 类型不符 / 非对象输入: 均返回空列表 (不抛异常)
+    {
+        auto j = Json::parse(R"({"other":1})");
+        XX_TEST_EXPECT_TRUE(jsonGetStringArray(j, "skills").empty());
+        XX_TEST_EXPECT_TRUE(jsonGetStringArray(j, "other").empty());
+        XX_TEST_EXPECT_TRUE(jsonGetStringArray(Json::array({1, 2}), "skills").empty());
+        XX_TEST_EXPECT_TRUE(jsonGetStringArray(Json("text"), "skills").empty());
+        XX_TEST_EXPECT_TRUE(jsonGetStringArray(Json{}, "skills").empty());
+    }
+    // 空数组
+    {
+        auto j = Json::parse(R"({"skills":[]})");
+        XX_TEST_EXPECT_TRUE(jsonGetStringArray(j, "skills").empty());
+    }
+}
+
+/// Json::value 宽松读取 (宽松读取收敛后的共用入口)
+void test_json_value_loose_read() {
+    auto j = Json::parse(R"({"s":"x","n":7,"f":1.5,"b":true,"z":null,"arr":[1]})");
+    // 命中类型: 取实际值
+    XX_TEST_EXPECT_EQ(j.value("s", ""), std::string("x"));
+    XX_TEST_EXPECT_EQ(j.value("n", 0), 7);
+    XX_TEST_EXPECT_EQ(j.value("n", (size_t)0), (size_t)7);
+    XX_TEST_EXPECT_TRUE(j.value("b", false));
+    // 类型不符: 返回默认值 (与旧局部 helper 语义一致)
+    XX_TEST_EXPECT_EQ(j.value("n", "x"), std::string("x")); // 数字字段读字符串
+    XX_TEST_EXPECT_FALSE(j.value("s", false));              // 字符串字段读 bool
+    XX_TEST_EXPECT_EQ(j.value("b", 9), 9);                  // bool 字段读数字
+    XX_TEST_EXPECT_EQ(j.value("arr", 9), 9);                // 数组字段读数字
+    // 缺失 / null: 返回默认值
+    XX_TEST_EXPECT_EQ(j.value("missing", 3), 3);
+    XX_TEST_EXPECT_EQ(j.value("z", 3), 3);
+    XX_TEST_EXPECT_EQ(j.value("missing", std::string("d")), std::string("d"));
+    // 数值类型互转: 整数读取接受浮点 (截断), 浮点读取接受整数
+    XX_TEST_EXPECT_EQ(j.value("f", 0), 1);
+    XX_TEST_EXPECT_TRUE(j.value("n", 0.0) == 7.0);
+    // 非对象输入: 返回默认值
+    XX_TEST_EXPECT_TRUE(Json::array().value("s", "").empty());
+    XX_TEST_EXPECT_EQ(Json("t").value("n", 5), 5);
+}
+
 TestResult testJson() {
     test_json_ctor_scalar();
     test_json_factory_initlist();
@@ -449,6 +508,8 @@ TestResult testJson() {
     test_json_iter_items();
     test_json_dump();
     test_json_equal();
+    test_json_get_string_array();
+    test_json_value_loose_read();
     return TestResult{g_json_passed, g_json_failed};
 }
 

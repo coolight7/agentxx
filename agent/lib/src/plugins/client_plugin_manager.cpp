@@ -78,52 +78,6 @@ using agentxx::agent::PluginConfig;
 namespace {
 
 // ==================== 工具 ====================
-static inline bool isBuiltinScheme(std::string_view p) noexcept {
-    return p.size() > 10 && p.substr(0, 10) == "builtin://";
-}
-
-static inline std::string parseBuiltinName(std::string_view p) {
-    return std::string(p.substr(10));
-}
-
-/// 从 JSON 提取字符串字段 (缺失/非字符串返回空)
-std::string jsonStr(const agentxx::util::Json& j, std::string_view key) {
-    if (!j.is_object()) {
-        return {};
-    }
-    std::string k{key};
-    if (!j.contains(k)) {
-        return {};
-    }
-    try {
-        const auto& v = j[k];
-        if (v.is_string()) {
-            return v.get<std::string>();
-        }
-    } catch (...) {
-    }
-    return {};
-}
-
-/// 从 JSON 提取 int 字段 (缺失/非数字返回默认)
-int jsonInt(const agentxx::util::Json& j, std::string_view key, int def) {
-    if (!j.is_object()) {
-        return def;
-    }
-    std::string k{key};
-    if (!j.contains(k)) {
-        return def;
-    }
-    try {
-        const auto& v = j[k];
-        if (v.is_number()) {
-            return static_cast<int>(v.get<double>());
-        }
-    } catch (...) {
-    }
-    return def;
-}
-
 /// 解析 action 动作 JSON: {"action": "send"|"toast"|"none", ...}
 /// 返回 true 表示 action 字段可识别 (含 none); false 表示非法/空
 bool parseCommandAction(const std::string& jsonText, std::string& action) {
@@ -136,7 +90,7 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
         if (!j.is_object()) {
             return false;
         }
-        action = jsonStr(j, "action");
+        action = j.value("action", "");
         if (action.empty()) {
             return false;
         }
@@ -672,23 +626,13 @@ asio::awaitable<bool> ClientPluginManager::unloadAsyncUntil(
 }
 
 asio::awaitable<bool> ClientPluginManager::shutdownAsync(std::chrono::milliseconds timeout) {
-    std::vector<std::string> names;
-    names.reserve(plugins_.size());
-    for (const auto& [name, inst] : plugins_) {
-        (void)inst;
-        names.push_back(name);
-    }
-
-    const auto deadline  = std::chrono::steady_clock::now() + timeout;
-    bool       allClosed = true;
-    for (const auto& name : names) {
-        if (!find(name)) {
-            continue;
+    // 逐个卸载 (快照/超时/残留判定) 由基类公共实现完成
+    co_return co_await this->shutdownAllAsync(
+        timeout,
+        [this](const std::string& name, std::chrono::steady_clock::time_point deadline) {
+            return unloadAsyncUntil(name, deadline);
         }
-        const bool closed = co_await unloadAsyncUntil(name, deadline);
-        allClosed         = closed && allClosed;
-    }
-    co_return allClosed&& plugins_.empty();
+    );
 }
 
 void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated) {
@@ -1527,7 +1471,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
     if (action == "toast") {
         try {
             auto j = agentxx::util::Json::parse(actionJson);
-            uiAdapter_->onToast(jsonStr(j, "text"), jsonInt(j, "level", 0));
+            uiAdapter_->onToast(j.value("text", ""), j.value("level", 0));
         } catch (...) {
             uiAdapter_->onToast("(plugin toast)", 0);
         }
@@ -1536,7 +1480,7 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
     if (action == "send") {
         try {
             auto j = agentxx::util::Json::parse(actionJson);
-            uiAdapter_->sendPluginMessage(jsonStr(j, "text"));
+            uiAdapter_->sendPluginMessage(j.value("text", ""));
         } catch (const std::exception& e) {
             XX_LOGE("[client_plugin] invalid send action: {}", e.what());
         }
@@ -1988,7 +1932,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_get_string(
     try {
         auto j
             = agentxx::util::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
-        auto v = jsonStr(j, std::string_view{key->data, static_cast<size_t>(key->size)});
+        auto v = j.value(std::string_view{key->data, static_cast<size_t>(key->size)}, "");
         if (v.empty() && !j.contains(std::string{key->data, static_cast<size_t>(key->size)})) {
             return -1;
         }
@@ -2728,7 +2672,7 @@ void* ClientPluginManager::registerStatusItem(
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
         );
-        text = jsonStr(props, "text");
+        text = props.value("text", "");
     } catch (...) {
         text.clear();
     }
@@ -2776,7 +2720,7 @@ int ClientPluginManager::updateStatusItem(
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
         );
-        text = jsonStr(props, "text");
+        text = props.value("text", "");
     } catch (...) {
         text.clear();
     }
@@ -2875,7 +2819,7 @@ void* ClientPluginManager::registerPanel(
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
         );
-        title = jsonStr(props, "title");
+        title = props.value("title", "");
     } catch (...) {
         title.clear();
     }
@@ -3023,7 +2967,7 @@ void* ClientPluginManager::registerInfoSection(
         props = agentxx::util::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
         );
-        title = jsonStr(props, "title");
+        title = props.value("title", "");
     } catch (...) {
         title.clear();
     }
@@ -3834,15 +3778,16 @@ ClientToolRenderResult renderClientTool(
                 if (r.renderFn) {
                     if (cache) {
                         ClientToolRenderRequest req;
-                        req.toolCallId        = std::string{toolCallId};
-                        req.toolName          = std::string{toolName};
-                        req.argsJson          = std::string{argsJson};
-                        req.resultText        = std::string{resultText};
-                        req.isFinished        = isFinished;
-                        req.isError           = isError;
-                        req.maxWidth          = maxWidth;
-                        const std::string key = ClientToolRenderRequest::keyFor(toolCallId, toolName);
-                        auto              cached = cache->lookup(key, req.inputHash());
+                        req.toolCallId = std::string{toolCallId};
+                        req.toolName   = std::string{toolName};
+                        req.argsJson   = std::string{argsJson};
+                        req.resultText = std::string{resultText};
+                        req.isFinished = isFinished;
+                        req.isError    = isError;
+                        req.maxWidth   = maxWidth;
+                        const std::string key
+                            = ClientToolRenderRequest::keyFor(toolCallId, toolName);
+                        auto cached = cache->lookup(key, req.inputHash());
                         if (!cached || cached->plugin != r.plugin) {
                             res.matched       = false;
                             res.pendingRender = true;

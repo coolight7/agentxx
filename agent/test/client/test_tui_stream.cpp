@@ -974,14 +974,10 @@ void testTuiStreamScenario10(asio::io_context& ioCtx) {
 
         WireSyncPayload payload;
         payload.fromIndex = 0;
-        payload.messages.push_back(
-            ViewMessage::makeText(ViewMessage::Role::User, "历史用户消息")
-        );
+        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::User, "历史用户消息"));
         payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, ""));
         payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, " "));
-        payload.messages.push_back(
-            ViewMessage::makeText(ViewMessage::Role::Assistant, "历史回答")
-        );
+        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, "历史回答"));
         payload.totalMessages = payload.messages.size();
         client.testOnSync(payload);
 

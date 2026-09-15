@@ -59,12 +59,14 @@ void test_ui_json_roundtrip() {
         .color    = "error",
         .bold     = true,
     });
-    ui.blocks.push_back(agentxx::middleware::preset::textBlock("hello", "hint", 2, true, false, true));
+    ui.blocks.push_back(
+        agentxx::middleware::preset::textBlock("hello", "hint", 2, true, false, true)
+    );
     ui.blocks.push_back(agentxx::middleware::preset::markdownBlock("**md**", 1));
     ui.blocks.push_back(agentxx::middleware::preset::diffBlock("a.txt", "old", "new"));
     ui.blocks.push_back(agentxx::middleware::preset::separatorBlock(1));
     ui.blocks.push_back(agentxx::middleware::preset::gapBlock(3));
-    auto number = agentxx::middleware::preset::numberControl("n", "N", "n.key", 2.0, true, 2.0);
+    auto number     = agentxx::middleware::preset::numberControl("n", "N", "n.key", 2.0, true, 2.0);
     number.hasMin   = true;
     number.minValue = -1.0;
     number.hasMax   = true;
@@ -78,7 +80,8 @@ void test_ui_json_roundtrip() {
         "help",
         "help.key"
     ));
-    ui.blocks.push_back(agentxx::middleware::preset::submitBlock("Go", "go.key", "Back", "back.key"));
+    ui.blocks.push_back(agentxx::middleware::preset::submitBlock("Go", "go.key", "Back", "back.key")
+    );
 
     const auto dumped = ui.toJson();
     XX_TEST_EXPECT_TRUE(dumped.is_object());
@@ -137,7 +140,7 @@ void test_ui_unknown_and_custom_fields() {
             {"kind": "custom", "component": "comp", "props": {"a": 1}, "fallback": "fb"}
         ]
     })");
-    const auto ui = InterruptUi::fromJson(json);
+    const auto ui   = InterruptUi::fromJson(json);
     XX_TEST_EXPECT_EQ(ui.blocks.size(), size_t{2});
     XX_TEST_EXPECT_EQ(ui.blocks[0].kind, std::string("future_kind"));
     XX_TEST_EXPECT_EQ(ui.blocks[0].text, std::string("x"));
@@ -161,7 +164,11 @@ void test_preset_input_form() {
     using namespace agentxx::middleware;
     const auto ui = preset::inputForm({
         preset::InputSpec{
-                           .label = "Mode", .depict = "choose", .type = "enum", .defaultValue = "b", .enumValues = {"a", "b"}
+                          .label        = "Mode",
+                          .depict       = "choose",
+                          .type         = "enum",
+                          .defaultValue = "b",
+                          .enumValues   = {"a", "b"}
         },
         preset::InputSpec{.label = "Count", .type = "int", .defaultValue = "3"},
         preset::InputSpec{.label = "Ratio", .type = "double"},
@@ -176,7 +183,7 @@ void test_preset_input_form() {
     XX_TEST_EXPECT_EQ(countControls(ui, "text"), size_t{1});
 
     // 标签/说明文本块存在
-    size_t hintTexts = 0;
+    size_t hintTexts  = 0;
     size_t labelTexts = 0;
     for (const auto& b : ui.blocks) {
         if (b.kind != "text") {
@@ -257,7 +264,9 @@ void test_preset_permission_and_confirm_card() {
         XX_TEST_EXPECT_EQ(fullAuth->id, std::string("fullAuth"));
         XX_TEST_EXPECT_EQ(fullAuth->labelKey, std::string("interrupt.fullAuth"));
         XX_TEST_EXPECT_TRUE(fullAuth->label.empty());
-        XX_TEST_EXPECT_FALSE(fullAuth->defaultValue.is_boolean() && fullAuth->defaultValue.get<bool>());
+        XX_TEST_EXPECT_FALSE(
+            fullAuth->defaultValue.is_boolean() && fullAuth->defaultValue.get<bool>()
+        );
     }
     const auto* decision = findControl(perm, "buttons");
     XX_TEST_EXPECT_TRUE(decision != nullptr);
@@ -277,7 +286,7 @@ void test_preset_permission_and_confirm_card() {
 
     // 权限卡片 (目录目标): 紧随目标描述后附加生效范围提示行 (interrupt.rememberDir)
     // 且勾选项 remember/fullAuth 均无 help (提示归属路径本身)
-    const auto permDir = preset::permissionCard("list_dir", "filesystem_read", "/tmp/dir/");
+    const auto permDir      = preset::permissionCard("list_dir", "filesystem_read", "/tmp/dir/");
     size_t     dirHintTexts = 0;
     bool       hasDirPrompt = false;
     for (const auto& b : permDir.blocks) {
@@ -300,12 +309,12 @@ void test_preset_permission_and_confirm_card() {
 
     // 确认卡片: 标题/说明 + 是/否按钮 (控件 id 可定制) + 可选勾选项
     preset::ConfirmCardOptions opts;
-    opts.title       = "[tool] Repeated call";
-    opts.text        = "Allow it to run again?";
-    opts.controlId   = "allow";
+    opts.title        = "[tool] Repeated call";
+    opts.text         = "Allow it to run again?";
+    opts.controlId    = "allow";
     opts.defaultValue = false;
-    opts.remember    = true;
-    const auto card  = preset::confirmCard(opts);
+    opts.remember     = true;
+    const auto card   = preset::confirmCard(opts);
     XX_TEST_EXPECT_EQ(countControls(card, "checkbox"), size_t{1});
     const auto* cardRemember = findControl(card, "checkbox");
     XX_TEST_EXPECT_TRUE(cardRemember != nullptr);
@@ -328,8 +337,8 @@ void test_preset_permission_and_confirm_card() {
 
     // 自定义字面文本 (无键): 不再补默认键, 按字面文本渲染
     preset::ConfirmCardOptions customOpts;
-    customOpts.yesLabel = "继续";
-    customOpts.noLabel  = "停止";
+    customOpts.yesLabel     = "继续";
+    customOpts.noLabel      = "停止";
     const auto  customCard  = preset::confirmCard(customOpts);
     const auto* customAllow = findControl(customCard, "buttons");
     XX_TEST_EXPECT_TRUE(customAllow != nullptr);
@@ -361,9 +370,9 @@ void test_result_contract_helpers() {
 
     const auto result = makeInterruptResult(Json{
         {"decision", "true"},
-        {"remember", false},
-        {"count",   3      },
-        {"ratio",   2.5    },
+        {"remember", false },
+        {"count",    3     },
+        {"ratio",    2.5   },
     });
     XX_TEST_EXPECT_TRUE(result.is_object());
     XX_TEST_EXPECT_TRUE(result["values"].is_object());
@@ -379,17 +388,68 @@ void test_result_contract_helpers() {
     // 未命中 / 类型不符: 返回默认值
     XX_TEST_EXPECT_FALSE(interruptValueBool(result, "missing", false));
     XX_TEST_EXPECT_EQ(interruptValueString(result, "missing", "d"), std::string("d"));
-    XX_TEST_EXPECT_EQ(interruptValueInt(Json{{"s", "abc"}}, "s", -1), int64_t{-1});
+    XX_TEST_EXPECT_EQ(
+        interruptValueInt(
+            Json{
+                {"s", "abc"}
+    },
+            "s",
+            -1
+        ),
+        int64_t{-1}
+    );
 
     // 布尔容错口径: 字符串 "true"/"yes"/"y"/"1" 与非 0 数值均为 true
-    XX_TEST_EXPECT_TRUE(interruptValueBool(Json{{"a", "yes"}}, "a", false));
-    XX_TEST_EXPECT_TRUE(interruptValueBool(Json{{"a", "1"}}, "a", false));
-    XX_TEST_EXPECT_TRUE(interruptValueBool(Json{{"a", 2}}, "a", false));
-    XX_TEST_EXPECT_FALSE(interruptValueBool(Json{{"a", "no"}}, "a", true));
+    XX_TEST_EXPECT_TRUE(interruptValueBool(
+        Json{
+            {"a", "yes"}
+    },
+        "a",
+        false
+    ));
+    XX_TEST_EXPECT_TRUE(interruptValueBool(
+        Json{
+            {"a", "1"}
+    },
+        "a",
+        false
+    ));
+    XX_TEST_EXPECT_TRUE(interruptValueBool(
+        Json{
+            {"a", 2}
+    },
+        "a",
+        false
+    ));
+    XX_TEST_EXPECT_FALSE(interruptValueBool(
+        Json{
+            {"a", "no"}
+    },
+        "a",
+        true
+    ));
 
     // 数值字符串可解析为数值
-    XX_TEST_EXPECT_EQ(interruptValueInt(Json{{"n", "42"}}, "n", 0), int64_t{42});
-    XX_TEST_EXPECT_EQ(interruptValueDouble(Json{{"n", " 1.5 "}}, "n", 0.0), 1.5);
+    XX_TEST_EXPECT_EQ(
+        interruptValueInt(
+            Json{
+                {"n", "42"}
+    },
+            "n",
+            0
+        ),
+        int64_t{42}
+    );
+    XX_TEST_EXPECT_EQ(
+        interruptValueDouble(
+            Json{
+                {"n", " 1.5 "}
+    },
+            "n",
+            0.0
+        ),
+        1.5
+    );
 
     // 非对象 values 归一化: 空对象 (未应答语义)
     const auto empty = makeInterruptResult(Json::array());
@@ -418,9 +478,9 @@ void test_plain_text_degrade() {
     ));
     ui.blocks.push_back(preset::submitBlock());
     InterruptUiBlock custom;
-    custom.kind     = "custom";
+    custom.kind      = "custom";
     custom.component = "comp";
-    custom.fallback = "fallback text";
+    custom.fallback  = "fallback text";
     ui.blocks.push_back(custom);
 
     const auto text = interruptUiPlainText(ui, 0);
@@ -455,8 +515,8 @@ void test_interrupt_handle_arg_serialization() {
     arg.name     = "permission";
     arg.resultId = "call_1";
     arg.arg      = Json{
-        {"category", "filesystem_write"},
-        {"target",   "/tmp/x"           },
+             {"category", "filesystem_write"},
+             {"target",   "/tmp/x"          },
     };
     arg.ui = agentxx::middleware::preset::permissionCard("write", "filesystem_write", "/tmp/x");
 
@@ -476,7 +536,10 @@ void test_interrupt_handle_arg_serialization() {
     }
 
     // 非法格式 (缺 name): 解析失败
-    XX_TEST_EXPECT_FALSE(InterruptHandleArg::fromJson(Json{{"arg", 1}}).has_value());
+    XX_TEST_EXPECT_FALSE(InterruptHandleArg::fromJson(Json{
+                                                          {"arg", 1}
+    }
+    ).has_value());
     // 列表往返
     const auto list = InterruptHandleArg::listFromJson(Json::array({json, json}));
     XX_TEST_EXPECT_EQ(list.size(), size_t{2});

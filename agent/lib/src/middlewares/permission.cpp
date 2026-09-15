@@ -185,12 +185,8 @@ bool PermissionMiddlewareHandle::isConfigDenied(std::string_view path, size_t in
         return false;
     }
     std::string re_path;
-    auto handle = const_cast<XXRouter<PermissionOperator, 2>&>(configDenyPermission_).get(
-        std::string{path},
-        static_cast<int>(index),
-        re_path,
-        true
-    );
+    auto        handle = const_cast<XXRouter<PermissionOperator, 2>&>(configDenyPermission_)
+                      .get(std::string{path}, static_cast<int>(index), re_path, true);
     return handle != nullptr && *handle == PermissionOperator::DENY;
 }
 

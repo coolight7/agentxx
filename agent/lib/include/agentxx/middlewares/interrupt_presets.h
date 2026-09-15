@@ -45,7 +45,7 @@ InterruptUiOption
 /// 文本行 (字面文本)
 InterruptUiBlock textBlock(
     std::string text,
-    std::string color = {},
+    std::string color  = {},
     int         indent = 0,
     bool        wrap   = false,
     bool        bold   = false,
@@ -56,7 +56,7 @@ InterruptUiBlock textBlock(
 InterruptUiBlock textBlockKey(
     std::string textKey,
     std::string text,
-    std::string color = {},
+    std::string color  = {},
     int         indent = 0,
     bool        wrap   = false,
     bool        bold   = false,
@@ -77,10 +77,10 @@ InterruptUiBlock gapBlock(int lines = 1);
 
 /// 确认/取消行 (label/labelKey 空 = 客户端 i18n 默认 "确认"/"取消")
 InterruptUiBlock submitBlock(
-    std::string label           = {},
-    std::string labelKey        = {},
-    std::string cancelLabel     = {},
-    std::string cancelLabelKey  = {}
+    std::string label          = {},
+    std::string labelKey       = {},
+    std::string cancelLabel    = {},
+    std::string cancelLabelKey = {}
 );
 
 /// 横排按钮控件 (commitOnPick = 点击即选中并提交; 一问一答形态)
@@ -95,12 +95,12 @@ InterruptUiBlock buttonControl(
 
 /// 勾选控件 (布尔值)
 InterruptUiBlock checkboxControl(
-    std::string         id,
-    std::string         label,
-    std::string         labelKey    = {},
-    bool                defaultValue = false,
-    std::string         help        = {},
-    std::string         helpKey     = {}
+    std::string id,
+    std::string label,
+    std::string labelKey     = {},
+    bool        defaultValue = false,
+    std::string help         = {},
+    std::string helpKey      = {}
 );
 
 /// 文本输入控件
@@ -127,10 +127,10 @@ InterruptUiBlock numberControl(
 InterruptUiBlock selectControl(
     std::string                    id,
     std::vector<InterruptUiOption> options,
-    std::string                    label           = {},
-    std::string                    labelKey        = {},
-    agentxx::util::Json            defaultValue    = {},
-    std::string                    help            = {}
+    std::string                    label        = {},
+    std::string                    labelKey     = {},
+    agentxx::util::Json            defaultValue = {},
+    std::string                    help         = {}
 );
 
 // ---------------------------------------------------------------------------

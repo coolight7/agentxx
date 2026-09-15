@@ -326,10 +326,10 @@ void InterruptView::layoutSubmit(
         cancelLabel = std::string{tr("interrupt.cancel")};
     }
 
-    auto confirmBox = registerHits ? std::make_shared<Box>() : nullptr;
-    auto cancelBox  = registerHits ? std::make_shared<Box>() : nullptr;
-    Element confirmEl = text(confirmLabel) | bgcolor(theme.buttonBgColor)
-                        | color(theme.buttonTextColor);
+    auto    confirmBox = registerHits ? std::make_shared<Box>() : nullptr;
+    auto    cancelBox  = registerHits ? std::make_shared<Box>() : nullptr;
+    Element confirmEl
+        = text(confirmLabel) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
     Element cancelEl = text(cancelLabel) | color(theme.errorColor);
     if (confirmBox) {
         confirmEl = confirmEl | reflect(*confirmBox);
@@ -363,21 +363,22 @@ void InterruptView::layoutControl(
     rc.indent = 0;
 
     // 控件标签与说明复用内容块的文本渲染 (与描述内其他文本同款样式)
-    auto pushText = [&](std::string text, const char* color, bool bold, bool wrap, int extraIndent) {
-        if (text.empty()) {
-            return;
-        }
-        middleware::InterruptUiBlock tb;
-        tb.kind   = "text";
-        tb.text   = std::move(text);
-        tb.color  = color;
-        tb.bold   = bold;
-        tb.wrap   = wrap;
-        tb.indent = indent + extraIndent;
-        if (auto item = uiItemFromInterruptBlock(tb)) {
-            renderUiItem(*item, rc, out);
-        }
-    };
+    auto pushText
+        = [&](std::string text, const char* color, bool bold, bool wrap, int extraIndent) {
+              if (text.empty()) {
+                  return;
+              }
+              middleware::InterruptUiBlock tb;
+              tb.kind   = "text";
+              tb.text   = std::move(text);
+              tb.color  = color;
+              tb.bold   = bold;
+              tb.wrap   = wrap;
+              tb.indent = indent + extraIndent;
+              if (auto item = uiItemFromInterruptBlock(tb)) {
+                  renderUiItem(*item, rc, out);
+              }
+          };
     // 标签行: checkbox 的标签即勾选行的行内文本 (不再单独渲染标题行, 避免重复)
     if (block.control != "checkbox") {
         pushText(resolveLabel(block.labelKey, block.label), "accent", true, false, 0);
@@ -391,7 +392,8 @@ void InterruptView::layoutControl(
         Elements els;
         for (size_t i = 0; i < block.options.size(); ++i) {
             auto    box = registerHits ? std::make_shared<Box>() : nullptr;
-            Element btn = renderValueButton(block.options[i], state.selected == static_cast<int>(i));
+            Element btn
+                = renderValueButton(block.options[i], state.selected == static_cast<int>(i));
             if (box) {
                 btn = btn | reflect(*box);
                 hit(msgIndex, blockIndex, id, static_cast<int>(i), box);
@@ -500,8 +502,8 @@ void InterruptView::layoutControl(
     } else {
         // 未知控件形态: 诊断行 (不可交互; 不使整份描述失效)
         rows.push(
-            text(fmt::format("[unsupported control: {}]", block.control))
-            | color(theme.errorColor) | dim
+            text(fmt::format("[unsupported control: {}]", block.control)) | color(theme.errorColor)
+            | dim
         );
     }
 
@@ -609,10 +611,8 @@ void InterruptView::layoutForm(
 // 渲染
 // ---------------------------------------------------------------------------
 
-Element InterruptView::renderValueButton(
-    const middleware::InterruptUiOption& opt,
-    bool                                 active
-) const {
+Element
+    InterruptView::renderValueButton(const middleware::InterruptUiOption& opt, bool active) const {
     const auto& theme = *ctx_.theme;
     auto        label = resolveLabel(opt.labelKey, opt.label);
     if (label.empty()) {
@@ -731,7 +731,7 @@ Element InterruptView::build(
     }
 
     // 表单状态 (惰性初始化: 按描述默认值填充各控件)
-    auto& state = uiStateFor(msg);
+    auto&          state = uiStateFor(msg);
     UiRenderResult layout;
     layoutForm(msg, msgIndex, &state, maxWidth, true, layout);
     // markdown 渲染器生命周期交回调用方 (Element 内部容器/链接 Box 指向它)
@@ -843,9 +843,9 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
                 return; // 内容块不可交互
             }
 
-            const auto id  = controlIdOf(block);
-            auto&      state = mutateUiState(msg);
-            state.focusedId  = id;
+            const auto id        = controlIdOf(block);
+            auto&      state     = mutateUiState(msg);
+            state.focusedId      = id;
             auto [cit, inserted] = state.controls.try_emplace(id);
             auto& cs             = cit->second;
             if (inserted) {
@@ -864,7 +864,8 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
                 return;
             }
             if (block.control == "select") {
-                cs.selected = std::clamp(h.sub, 0, std::max(0, static_cast<int>(block.options.size()) - 1));
+                cs.selected
+                    = std::clamp(h.sub, 0, std::max(0, static_cast<int>(block.options.size()) - 1));
                 cs.tip.clear();
                 act = Act::StateChanged;
                 return;
@@ -960,7 +961,7 @@ bool InterruptView::handleKey(Event event) {
 
         const auto ui = resolveUi(msg);
         // 表单状态 (惰性初始化) + 聚焦控件定位
-        auto& state = mutateUiState(msg);
+        auto&                               state = mutateUiState(msg);
         const middleware::InterruptUiBlock* block = nullptr;
         if (!state.focusedId.empty()) {
             for (const auto& b : ui.blocks) {
@@ -984,8 +985,8 @@ bool InterruptView::handleKey(Event event) {
             return;
         }
 
-        const auto id = controlIdOf(*block);
-        state.focusedId = id;
+        const auto id        = controlIdOf(*block);
+        state.focusedId      = id;
         auto [cit, inserted] = state.controls.try_emplace(id);
         auto& cs             = cit->second;
         if (inserted) {
@@ -997,17 +998,15 @@ bool InterruptView::handleKey(Event event) {
             if (event == Event::ArrowLeft || event == Event::ArrowRight) {
                 const int n = static_cast<int>(block->options.size());
                 if (n > 0) {
-                    const int dir  = (event == Event::ArrowRight) ? 1 : n - 1;
-                    cs.selected    = (cs.selected + dir) % n;
+                    const int dir = (event == Event::ArrowRight) ? 1 : n - 1;
+                    cs.selected   = (cs.selected + dir) % n;
                 }
                 act = Act::Handled;
             }
             return;
         }
         if (block->control == "select") {
-            const int delta = (event == Event::ArrowUp)     ? -1
-                              : (event == Event::ArrowDown) ? 1
-                                                            : 0;
+            const int delta = (event == Event::ArrowUp) ? -1 : (event == Event::ArrowDown) ? 1 : 0;
             if (delta != 0) {
                 const int n = static_cast<int>(block->options.size());
                 cs.selected = std::clamp(cs.selected + delta, 0, std::max(0, n - 1));
@@ -1082,9 +1081,9 @@ bool InterruptView::handleKey(Event event) {
 
 void InterruptView::confirm(size_t msgIndex) {
     InterruptFormSubmit submit;
-    bool                confirmed = false;
+    bool                confirmed  = false;
     bool                needRedraw = false;
-    int64_t             wireId    = 0;
+    int64_t             wireId     = 0;
     std::string         display;
 
     ctx_.state->mutate([&](TUIRenderState& st) {
@@ -1095,15 +1094,15 @@ void InterruptView::confirm(size_t msgIndex) {
         if (!isWaiting(src)) {
             return;
         }
-        const auto ui     = resolveUi(src);
-        auto&      state  = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
+        const auto ui = resolveUi(src);
+        auto& state = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
 
         agentxx::util::Json values = agentxx::util::Json::object();
         for (const auto& block : ui.blocks) {
             if (block.kind != "control") {
                 continue;
             }
-            const auto id = controlIdOf(block);
+            const auto id        = controlIdOf(block);
             auto [cit, inserted] = state.controls.try_emplace(id);
             auto& cs             = cit->second;
             if (inserted) {
@@ -1114,7 +1113,7 @@ void InterruptView::confirm(size_t msgIndex) {
             if (block.control == "buttons" || block.control == "select") {
                 const int n = static_cast<int>(block.options.size());
                 if (n <= 0) {
-                    cs.tip = std::string{tr("interrupt.tipNoOptions")};
+                    cs.tip     = std::string{tr("interrupt.tipNoOptions")};
                     needRedraw = true;
                     return; // 校验失败: 不提交
                 }
@@ -1125,11 +1124,12 @@ void InterruptView::confirm(size_t msgIndex) {
             } else if (block.control == "number") {
                 // 数值校验: 可解析 + integer 约束 + min/max 范围
                 std::string errTip;
-                double      num = 0.0;
+                double      num     = 0.0;
                 auto        trimmed = agentxx::util::removeBetweenSpace(cs.editText);
                 if (trimmed.empty()
                     || agentxx::util::parseNumberFromString(trimmed, num).ec != std::errc{}) {
-                    errTip = std::string{tr(block.integer ? "interrupt.tipInt" : "interrupt.tipNum")};
+                    errTip
+                        = std::string{tr(block.integer ? "interrupt.tipInt" : "interrupt.tipNum")};
                 } else if (block.integer && num != std::trunc(num)) {
                     errTip = std::string{tr("interrupt.tipInt")};
                 } else if (block.hasMin && num < block.minValue) {
@@ -1153,8 +1153,8 @@ void InterruptView::confirm(size_t msgIndex) {
                 continue;
             }
 
-            cs.tip        = {};
-            values[id]    = std::move(value);
+            cs.tip     = {};
+            values[id] = std::move(value);
         }
 
         // 提交结果展示文本 (状态行): 各控件结果值拼接 (标签: 值)
@@ -1240,7 +1240,7 @@ void InterruptView::step(size_t msgIndex, std::string_view controlId, double del
         if (!isWaiting(src)) {
             return;
         }
-        const auto ui = resolveUi(src);
+        const auto                          ui    = resolveUi(src);
         const middleware::InterruptUiBlock* block = nullptr;
         for (const auto& b : ui.blocks) {
             if (b.kind == "control" && controlIdOf(b) == controlId) {
@@ -1251,13 +1251,13 @@ void InterruptView::step(size_t msgIndex, std::string_view controlId, double del
         if (!block || block->control != "number") {
             return;
         }
-        auto& state = mutateUiState(src);
+        auto& state          = mutateUiState(src);
         auto [cit, inserted] = state.controls.try_emplace(std::string{controlId});
         auto& cs             = cit->second;
         if (inserted) {
             initControlState(*block, cs);
         }
-        double val = 0.0;
+        double val     = 0.0;
         auto   trimmed = agentxx::util::removeBetweenSpace(cs.editText);
         if (trimmed.empty()
             || agentxx::util::parseNumberFromString(trimmed, val).ec != std::errc{}) {

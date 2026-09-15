@@ -10,14 +10,6 @@ std::string uiControlExecute(const agentxx::util::Json& arguments);
 
 struct PluginCtx : public agentxx::plugin::PluginBase {};
 
-static auto ctxGuardLogger(PluginCtx* ctx) noexcept {
-    return [ctx](const char* msg) noexcept {
-        if (ctx) {
-            ctx->log.error(msg ? msg : "");
-        }
-    };
-}
-
 static const char* kUiControlDefaultDepict
     = "Send mouse, keyboard, and scroll commands in a single batch (Windows). "
       "Commands are executed sequentially in order with optional delays. "

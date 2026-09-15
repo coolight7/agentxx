@@ -78,12 +78,12 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
             it.interruptId = 7;
             // 中断 UI 描述 (声明式表单: 一条消息 = 一份表单; 预设模板生成)
             agentxx::middleware::preset::InputSpec spec;
-            spec.label        = "pick one";
-            spec.type         = "enum";
-            spec.defaultValue = "b";
-            spec.enumValues   = {"a", "b", "c"};
-            auto ui           = agentxx::middleware::preset::inputForm({spec});
-            it.ui             = ui.toJson();
+            spec.label         = "pick one";
+            spec.type          = "enum";
+            spec.defaultValue  = "b";
+            spec.enumValues    = {"a", "b", "c"};
+            auto ui            = agentxx::middleware::preset::inputForm({spec});
+            it.ui              = ui.toJson();
             it.interruptStatus = V::InterruptStatus::Confirmed;
             it.interruptResult = "b";
             msg.interrupt      = std::move(it);
@@ -1107,7 +1107,12 @@ static void testPersistenceResilience() {
 
         // ②③ 脏数据注入: 直接经 SQLite 写入无法解析的行 (模拟历史脏数据)
         p->appendViewMessage("r_dirty", makeMsg(V::Role::User, "keep-me"), 1);
-        p->saveLlmMessages("r_dirty", agentxx::util::Json::array({agentxx::util::Json{{"role", "user"}, {"content", "ctx"}}}));
+        p->saveLlmMessages(
+            "r_dirty",
+            agentxx::util::Json::array({
+                agentxx::util::Json{{"role", "user"}, {"content", "ctx"}}
+        })
+        );
         {
             auto dir = fs::path(root) / SessionStore::sanitizeSessionId("r_dirty");
             agentxx::util::SqliteDb db;
