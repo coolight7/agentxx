@@ -33,7 +33,7 @@
 
 - **内置工具**：已全部迁移至插件 (`agent/plugins/agentxx_*`)，新增工具优先以插件形式实现 (经 `plugin_kit.h` 的 `tool/fast_tool/blocking_tool` 注册)，同名同行为，测试直测同一 `*_impl.h` 实现
 - **中间件**：继承 `MiddlewareHandleBase`，在 `CodeAgent::initMiddleware` 中按栈顺序注册；`onHandleStart/End` 可挂载到 `agent_start/modelcall/toolcall` 三节点
-- **权限**：文件系统权限经 `PermissionMiddleware` 的最长前缀匹配 (`XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义 `category` 并走 `service.permission` 询问
+- **权限**：文件系统权限经 `PermissionMiddleware` 的最长前缀匹配 (`XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义 `category` 并走 `service.permission` 询问。插件工具的工具权限限制由插件自己在注册工具后声明（`agentxx.agent.permission` 接口表，含作用域与目标参数）；未声明的工具不参与权限判定
 
 ## 3. 插件开发
 

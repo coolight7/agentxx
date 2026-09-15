@@ -6,6 +6,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
@@ -369,6 +370,13 @@ void PluginManager::detachAll(PluginInstance* inst) {
     for (const auto& name : inst->toolNames) {
         registry_->unregisterTool(name);
     }
+    // 工具权限声明随工具一并撤销 (工具不再可调用, 声明无需保留)
+    if (auto* permission = permissionMiddleware()) {
+        for (const auto& name : inst->permissionToolNames) {
+            permission->unregisterToolPermission(name);
+        }
+    }
+    inst->permissionToolNames.clear();
     for (const auto& sub : inst->subscriptions) {
         if (sub && sub->bus && sub->subscriptionId != 0) {
             sub->bus->get<std::string>(sub->topic).unsubscribe(sub->subscriptionId);
@@ -446,6 +454,7 @@ void PluginManager::clearPluginOwnedRegistrations(PluginInstance* inst) {
         return;
     }
     inst->toolNames.clear();
+    inst->permissionToolNames.clear();
     inst->tools.clear();
     inst->hookRegistrations.clear();
     inst->capabilityRegistrations.clear();

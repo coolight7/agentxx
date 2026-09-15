@@ -152,34 +152,6 @@ public:
         ) {}
 };
 
-/// 最小 Tool 实现: 仅提供名称 (权限路由测试用)
-class TestTool : public neograph::Tool {
-public:
-
-    explicit TestTool(std::string name) :
-        name_(std::move(name)) {}
-
-    neograph::ChatTool get_definition() const override {
-        return neograph::ChatTool{
-            .name        = name_,
-            .description = "",
-            .parameters  = neograph::json::object(),
-        };
-    }
-
-    std::string get_name() const override {
-        return name_;
-    }
-
-    std::string execute(const neograph::json&) override {
-        return "";
-    }
-
-private:
-
-    std::string name_;
-};
-
 // ===========================================================================
 // Enhanced LLM Simulator Implementation
 // ===========================================================================
@@ -502,10 +474,44 @@ asio::awaitable<void> test_agent_init() {
     co_return;
 }
 
+/// 取 agent 装配的权限中间件 (工具权限声明落地点; 未装配返回 nullptr)
+agentxx::middleware::PermissionMiddlewareHandle*
+    findPermissionMiddleware(agentxx::agent::CodeAgent& agent) {
+    auto ctx = agent.agentContext;
+    if (!ctx || !ctx->middlewareHandleContext) {
+        return nullptr;
+    }
+    for (auto& handle : ctx->middlewareHandleContext->handles) {
+        if (auto* permission
+            = dynamic_cast<agentxx::middleware::PermissionMiddlewareHandle*>(handle.get())) {
+            return permission;
+        }
+    }
+    return nullptr;
+}
+
+/// 声明文件系统写工具的权限限制:
+/// 真实运行中由 agentxx_filesystem 插件在注册工具后经 agentxx.agent.permission
+/// 接口表声明 (写作用域 + 目标参数 `path`); 本测试未加载插件, 在此等效声明
+void declareFilesystemWritePermission(agentxx::agent::CodeAgent& agent) {
+    auto* permission = findPermissionMiddleware(agent);
+    XX_TEST_EXPECT_TRUE(permission != nullptr);
+    if (!permission) {
+        return;
+    }
+    agentxx::middleware::ToolPermissionSpec spec;
+    spec.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    spec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
+    spec.targetArgs = {"path"};
+    permission->registerToolPermission("agentxx_filesystem_write", std::move(spec));
+}
+
 /// 权限模式规则集成测试:
 /// CodeAgent 按 yaml 配置的 permission_mode 与白/黑名单注册文件系统读写规则,
 /// 验证各模式下路径命中行为 (cwd 内允许/询问/拒绝/白名单放行/黑名单拒绝)。
 /// 会话总线挂 PermissionTestIO 模拟客户端询问应答 (计数 + 允许)。
+/// 工具权限限制由工具来源方 (插件) 声明: 未声明权限的工具不参与权限判定,
+/// 测试中按 agentxx_filesystem 插件的方式声明写工具权限后再验证规则。
 asio::awaitable<void> test_agent_permission_mode_rules() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -523,8 +529,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     const std::string secretPath  = cwd + "/secret/secret.txt";
     const std::string outsidePath = "/data/outside.txt";
 
-    // 工具 + 会话总线 + 权限应答 IO (每次构造新 CodeAgent 前重建, 保证计数独立)
-    TestTool tool("agentxx_filesystem_write");
+    // 会话总线 + 权限应答 IO (每次构造新 CodeAgent 前重建, 保证计数独立)
 
     // 检查辅助: 走 EventBus 请求权限检查
     auto check
@@ -567,6 +572,12 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
+        // 工具权限限制由插件声明: 未声明时该工具不参与权限判定 (直接放行)
+        bool undeclaredOk = co_await check(agent, secretPath, "perm_ask");
+        XX_TEST_EXPECT_TRUE(undeclaredOk);
+        XX_TEST_EXPECT_EQ(io->permissionCalls.load(), 0);
+        // 按 agentxx_filesystem 插件的方式声明写工具权限后再验证规则
+        declareFilesystemWritePermission(agent);
 
         // 工作目录内: 直接允许, 不询问
         bool ok = co_await check(agent, insidePath, "perm_ask");
@@ -621,6 +632,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
+        declareFilesystemWritePermission(agent);
 
         // 工作目录内/外均询问
         bool ok = co_await check(agent, insidePath, "perm_allask");
@@ -643,6 +655,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
+        declareFilesystemWritePermission(agent);
 
         bool ok = co_await check(agent, outsidePath, "perm_pass");
         XX_TEST_EXPECT_TRUE(ok);
@@ -665,6 +678,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
         auto io  = std::make_shared<PermissionTestIO>();
         io->registerOnBus(bus);
         session->bus = bus;
+        declareFilesystemWritePermission(agent);
 
         // 工作目录内/外均拒绝, 不询问
         bool ok = co_await check(agent, insidePath, "perm_deny");

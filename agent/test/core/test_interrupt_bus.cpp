@@ -30,6 +30,30 @@ int g_ib_failed = 0;
 namespace agentxx {
 namespace test {
 
+/// 声明文件系统读写工具的权限限制 (等效于 agentxx_filesystem 插件在注册工具后
+/// 经 agentxx.agent.permission 接口表所做的声明): 目标参数为 `path`, 路径类目标;
+/// 测试直接向权限中间件声明同一内容, 判定路径与真实插件完全一致
+inline void declareFilesystemPermissions(
+    agentxx::middleware::PermissionMiddlewareHandle& permission
+) {
+    using Mw = agentxx::middleware::PermissionMiddlewareHandle;
+    auto makeSpec = [](size_t scope) {
+        agentxx::middleware::ToolPermissionSpec spec;
+        spec.scope      = scope;
+        spec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
+        spec.targetArgs = {"path"};
+        return spec;
+    };
+    permission.registerToolPermission(
+        "agentxx_filesystem_read",
+        makeSpec(Mw::FilesystemPermissionREAD)
+    );
+    permission.registerToolPermission(
+        "agentxx_filesystem_write",
+        makeSpec(Mw::FilesystemPermissionWRITE)
+    );
+}
+
 /// 确定性 Mock IO: handleInterrupt 不依赖 stdin, 返回可控结果, 供总线往返测试
 class MockIO : public agentxx::agent::AgentIOBase {
 public:
@@ -336,27 +360,20 @@ asio::awaitable<void> test_permission_relative_path() {
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
 
-    MockTool item("agentxx_filesystem_write");
+    // 按插件方式声明工具权限 (写作用域, 目标参数 `path`): 目标从 args 解析
+    declareFilesystemPermissions(*permission);
 
     auto check = [&](std::string_view rel, std::string_view abs) -> asio::awaitable<void> {
         // 相对路径访问
         auto relArgs = agentxx::util::Json{
             {"path", std::string{rel}}
         };
-        auto relOk = co_await permission->defOnFilesystemHandle(
-            item,
-            relArgs,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
+        auto relOk = co_await permission->checkToolPermission("agentxx_filesystem_write", relArgs);
         // 对应绝对路径访问
         auto absArgs = agentxx::util::Json{
             {"path", std::string{abs}}
         };
-        auto absOk = co_await permission->defOnFilesystemHandle(
-            item,
-            absArgs,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
+        auto absOk = co_await permission->checkToolPermission("agentxx_filesystem_write", absArgs);
         XX_TEST_EXPECT_EQ(relOk, absOk);
     };
 
@@ -374,25 +391,156 @@ asio::awaitable<void> test_permission_relative_path() {
         co_await check("../outside.txt", fmt::format("{}/outside.txt", parent));
     }
 
-    // 4. 空路径与 cwd 路径均不命中 {cwd}/* 规则, 回退到 /* INTERRUPT
-    //    (无 prompter 时均拒绝, 行为一致)
+    // 4. 空路径 (目标缺省, 不参与判定) 与 cwd 路径 (按规则处理) 均放行:
+    //    cwd 命中上面的 {cwd}/* ALLOW 规则 (最长前缀回退), 行为一致
     auto emptyArgs = agentxx::util::Json{
         {"path", ""}
     };
-    auto emptyOk = co_await permission->defOnFilesystemHandle(
-        item,
-        emptyArgs,
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-    );
+    auto emptyOk = co_await permission->checkToolPermission("agentxx_filesystem_write", emptyArgs);
     auto cwdArgs = agentxx::util::Json{
         {"path", cwd}
     };
-    auto cwdOk = co_await permission->defOnFilesystemHandle(
-        item,
-        cwdArgs,
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-    );
+    auto cwdOk = co_await permission->checkToolPermission("agentxx_filesystem_write", cwdArgs);
     XX_TEST_EXPECT_EQ(emptyOk, cwdOk);
+
+    co_return;
+}
+
+/// 工具权限声明: 声明的分类文本随询问下发 (覆盖按作用域生成的默认值),
+/// 无目标声明 (工具级) 的询问不下发目标描述块
+asio::awaitable<void> test_permission_declared_category_and_tool_level() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto io = std::make_shared<MockIO>();
+    io->permissionAllow = true;
+    io->registerOnBus(sessionBus);
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto session      = agentContext->getSession("declared_category");
+    session->bus      = sessionBus;
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+    // 无任何已注册规则 → 一律询问 (走 HIL 权限询问路径)
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+
+    // 1. 声明分类文本的工具 (由插件声明; 如命令执行类工具)
+    agentxx::middleware::ToolPermissionSpec textSpec;
+    textSpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    textSpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Text;
+    textSpec.targetArgs = {"command"};
+    textSpec.category   = "shell_command";
+    permission->registerToolPermission("plugin_exec_command", std::move(textSpec));
+
+    auto args = agentxx::util::Json{
+        {"command",   "rm -rf /tmp/x"},
+        {"sessionId", "declared_category"}
+    };
+    bool ok = co_await permission->checkToolPermission("plugin_exec_command", args);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+    {
+        auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+            agentxx::util::Json::parse(io->lastInterruptArgJson)
+        );
+        XX_TEST_EXPECT_TRUE(argOpt.has_value());
+        if (argOpt.has_value()) {
+            // 询问分类: 插件声明优先于按作用域生成的 "filesystem_write"
+            XX_TEST_EXPECT_EQ(
+                argOpt->arg.value("category", std::string{}),
+                std::string("shell_command")
+            );
+            // 文本目标原样下发 (不做路径规范化)
+            XX_TEST_EXPECT_EQ(
+                argOpt->arg.value("target", std::string{}),
+                std::string("rm -rf /tmp/x")
+            );
+        }
+    }
+
+    // 2. 无目标声明 (工具级): 询问目标为空, 卡片不含目标描述块
+    agentxx::middleware::ToolPermissionSpec noneSpec;
+    noneSpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    noneSpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::None;
+    permission->registerToolPermission("plugin_no_target", std::move(noneSpec));
+
+    auto noneArgs = agentxx::util::Json{
+        {"sessionId", "declared_category"}
+    };
+    ok = co_await permission->checkToolPermission("plugin_no_target", noneArgs);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 2);
+    {
+        auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
+            agentxx::util::Json::parse(io->lastInterruptArgJson)
+        );
+        XX_TEST_EXPECT_TRUE(argOpt.has_value());
+        if (argOpt.has_value()) {
+            XX_TEST_EXPECT_TRUE(argOpt->arg.value("target", std::string{}).empty());
+            // 默认分类按作用域生成 (声明未指定 category)
+            XX_TEST_EXPECT_EQ(
+                argOpt->arg.value("category", std::string{}),
+                std::string("filesystem_write")
+            );
+            // 目标为空时不产生 "• " 目标描述块 (卡片首块即空行)
+            for (const auto& block : argOpt->ui.blocks) {
+                if (block.kind == "text") {
+                    XX_TEST_EXPECT_TRUE(block.text.find("• ") != 0);
+                }
+            }
+        }
+    }
+
+    // 3. 撤销声明后该工具不再参与权限判定 (直接放行, 不询问)
+    XX_TEST_EXPECT_TRUE(permission->unregisterToolPermission("plugin_no_target"));
+    ok = co_await permission->checkToolPermission("plugin_no_target", noneArgs);
+    XX_TEST_EXPECT_TRUE(ok);
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 2); // 未再询问
+
+    // 4. 数组目标声明 (如 glob 的 file_patterns): 逐项判定, 任一目标被拒绝即拒绝
+    agentxx::middleware::ToolPermissionSpec arraySpec;
+    arraySpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
+    arraySpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
+    arraySpec.targetArgs = {"file_patterns"};
+    arraySpec.arrayArg   = true;
+    permission->registerToolPermission("plugin_glob", std::move(arraySpec));
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::ALLOW;
+    permission->setFilesystemPermission(
+        "/data/deny_dir",
+        agentxx::middleware::PermissionOperator::DENY,
+        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+    );
+
+    auto globArgs = [](std::initializer_list<const char*> patterns) {
+        agentxx::util::Json arr = agentxx::util::Json::array();
+        for (const char* p : patterns) {
+            arr.push_back(std::string{p});
+        }
+        return agentxx::util::Json{
+            {"file_patterns", std::move(arr)}
+        };
+    };
+    {
+        // 全部目标未被拒绝: 放行 (无规则 → noRuleOperator = ALLOW)
+        auto argsOk = globArgs({"/data/ok_dir/*.cpp"});
+        XX_TEST_EXPECT_TRUE(
+            co_await permission->checkToolPermission("plugin_glob", argsOk)
+        );
+        // 单个目标命中 DENY: 拒绝
+        auto argsDenied = globArgs({"/data/deny_dir/*.cpp"});
+        XX_TEST_EXPECT_FALSE(
+            co_await permission->checkToolPermission("plugin_glob", argsDenied)
+        );
+        // 多个目标中任一命中 DENY: 整体拒绝
+        auto argsMixed = globArgs({"/data/ok_dir/*.cpp", "/data/deny_dir/x.cpp"});
+        XX_TEST_EXPECT_FALSE(
+            co_await permission->checkToolPermission("plugin_glob", argsMixed)
+        );
+        // 参数缺省 (无 file_patterns): 无目标参与判定, 放行
+        auto argsEmpty = agentxx::util::Json::object();
+        XX_TEST_EXPECT_TRUE(
+            co_await permission->checkToolPermission("plugin_glob", argsEmpty)
+        );
+    }
 
     co_return;
 }
@@ -427,10 +575,10 @@ asio::awaitable<void> test_permission_remember_rule() {
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
 
-    MockTool          item("agentxx_filesystem_write");
     const std::string outsidePath = "/data/projects/remember/out.txt";
     const std::string subPath     = "/data/projects/remember/sub/deep.txt";
     const std::string secretPath  = "/data/projects/remember/secret/key.txt";
+    declareFilesystemPermissions(*permission);
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         // 必须携带 sessionId: requestPermission 经 sessions->get(sessionId) 取会话总线
@@ -438,11 +586,7 @@ asio::awaitable<void> test_permission_remember_rule() {
             {"path",      std::string{path}},
             {"sessionId", "remember_test"  }
         };
-        co_return co_await permission->defOnFilesystemHandle(
-            item,
-            args,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
+        co_return co_await permission->checkToolPermission("agentxx_filesystem_write", args);
     };
 
     // 初始: 未注册规则 → INTERRUPT → 经总线询问 (prompter 应答允许)
@@ -530,28 +674,21 @@ asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
 
     MockTool readItem("agentxx_filesystem_read");
     MockTool writeItem("agentxx_filesystem_write");
+    // 权限声明由插件提供 (测试中等效声明): 读/写各自作用域, 目标参数 `path`
+    declareFilesystemPermissions(*permission);
 
-    auto check
-        = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
+    auto check = [&](const MockTool& item, std::string_view path) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
             {"path",      std::string{path}   },
             {"sessionId", "remember_cross_bus"}
         };
-        co_return co_await permission->defOnFilesystemHandle(item, args, index);
+        co_return co_await permission->checkToolPermission(item.get_name(), args);
     };
     auto read = [&](std::string_view path) -> asio::awaitable<bool> {
-        co_return co_await check(
-            readItem,
-            path,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-        );
+        co_return co_await check(readItem, path);
     };
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
-        co_return co_await check(
-            writeItem,
-            path,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
+        co_return co_await check(writeItem, path);
     };
 
     // 1. 读目录: 首次询问 → 勾选记住 (允许) → 目录规则立即生效
@@ -656,30 +793,32 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
 
     MockTool readItem("agentxx_filesystem_read");
     MockTool writeItem("agentxx_filesystem_write");
-    auto     check
-        = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
+    // 权限声明由插件提供 (测试中等效声明): 读/写各自作用域, 目标参数 `path`
+    declareFilesystemPermissions(*permission);
+
+    auto check = [&](const MockTool& item, std::string_view path) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
             {"path",      std::string{path}},
             {"sessionId", "wt_session"     }
         };
-        co_return co_await permission->defOnFilesystemHandle(item, args, index);
+        co_return co_await permission->checkToolPermission(item.get_name(), args);
     };
 
     using Mw = agentxx::middleware::PermissionMiddlewareHandle;
     // 1. worktree 子树内写: 放行 (未被主检出写拒绝命中)
-    XX_TEST_EXPECT_TRUE(co_await check(writeItem, wtFile, Mw::FilesystemPermissionWRITE));
-    XX_TEST_EXPECT_TRUE(co_await check(writeItem, worktree, Mw::FilesystemPermissionWRITE));
+    XX_TEST_EXPECT_TRUE(co_await check(writeItem, wtFile));
+    XX_TEST_EXPECT_TRUE(co_await check(writeItem, worktree));
     // 2. worktree 子树内读: 放行
-    XX_TEST_EXPECT_TRUE(co_await check(readItem, wtFile, Mw::FilesystemPermissionREAD));
+    XX_TEST_EXPECT_TRUE(co_await check(readItem, wtFile));
     // 3. 主检出子树写 (worktree 之外): 拒绝 (读不受限)
-    XX_TEST_EXPECT_FALSE(co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE));
-    XX_TEST_EXPECT_FALSE(co_await check(writeItem, repoDir, Mw::FilesystemPermissionWRITE));
+    XX_TEST_EXPECT_FALSE(co_await check(writeItem, mainFile));
+    XX_TEST_EXPECT_FALSE(co_await check(writeItem, repoDir));
     // 4. 主检出子树读: 不受隔离影响 (按已注册规则放行)
-    XX_TEST_EXPECT_TRUE(co_await check(readItem, mainFile, Mw::FilesystemPermissionREAD));
+    XX_TEST_EXPECT_TRUE(co_await check(readItem, mainFile));
 
     // 5. 清除隔离后: 主检出写恢复按规则放行
     permission->clearSessionIsolation("wt_session");
-    XX_TEST_EXPECT_TRUE(co_await check(writeItem, mainFile, Mw::FilesystemPermissionWRITE));
+    XX_TEST_EXPECT_TRUE(co_await check(writeItem, mainFile));
 
     std::filesystem::remove_all(tmpRoot, ec);
     co_return;
@@ -993,19 +1132,16 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
     // 无任何已注册规则 → 一律询问 (走 HIL 权限询问路径)
     permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
 
-    MockTool          item("agentxx_filesystem_write");
     const std::string targetPath = "/data/projects/remember_opts/out.txt";
+    // 权限声明由插件提供 (测试中等效声明): 写作用域, 目标参数 `path`
+    declareFilesystemPermissions(*permission);
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
             {"path",      std::string{path} },
             {"sessionId", "remember_options"}
         };
-        co_return co_await permission->defOnFilesystemHandle(
-            item,
-            args,
-            agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-        );
+        co_return co_await permission->checkToolPermission("agentxx_filesystem_write", args);
     };
 
     // 首次: 询问 (MockIO 应答 允许 + 记住)
@@ -1068,76 +1204,49 @@ asio::awaitable<void> test_permission_full_auth_rule() {
 
     MockTool writeItem("agentxx_filesystem_write");
     MockTool readItem("agentxx_filesystem_read");
+    // 权限声明由插件提供 (测试中等效声明): 读/写各自作用域, 目标参数 `path`
+    declareFilesystemPermissions(*permission);
 
-    auto check
-        = [&](const MockTool& item, std::string_view path, size_t index) -> asio::awaitable<bool> {
+    auto check = [&](const MockTool& item, std::string_view path) -> asio::awaitable<bool> {
         auto args = agentxx::util::Json{
             {"path",      std::string{path}},
             {"sessionId", "full_auth_test" }
         };
-        co_return co_await permission->defOnFilesystemHandle(item, args, index);
+        co_return co_await permission->checkToolPermission(item.get_name(), args);
     };
 
     XX_TEST_EXPECT_FALSE(permission->isFullAuthorized());
 
     // 1. 首次访问常规路径: 触发询问, MockIO 返回允许 + 完全授权所有权限
-    bool ok = co_await check(
-        writeItem,
-        "/data/workspace/src/main.cpp",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-    );
+    bool ok = co_await check(writeItem, "/data/workspace/src/main.cpp");
     XX_TEST_EXPECT_TRUE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
     XX_TEST_EXPECT_TRUE(permission->isFullAuthorized());
 
     // 2. 任意其它非黑名单路径: 直接放行, 不再询问权限
-    ok = co_await check(
-        writeItem,
-        "/data/workspace/docs/readme.md",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-    );
+    ok = co_await check(writeItem, "/data/workspace/docs/readme.md");
     XX_TEST_EXPECT_TRUE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 未再询问
 
-    ok = co_await check(
-        readItem,
-        "/tmp/random/path/test.txt",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-    );
+    ok = co_await check(readItem, "/tmp/random/path/test.txt");
     XX_TEST_EXPECT_TRUE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 仍未再询问
 
     // 3. 配置文件中拒绝的路径 (文件): 必须保持拒绝, 且不询问权限
-    ok = co_await check(
-        readItem,
-        "/data/secret.pem",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-    );
+    ok = co_await check(readItem, "/data/secret.pem");
     XX_TEST_EXPECT_FALSE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
 
-    ok = co_await check(
-        writeItem,
-        "/data/secret.pem",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-    );
+    ok = co_await check(writeItem, "/data/secret.pem");
     XX_TEST_EXPECT_FALSE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
 
     // 4. 配置文件中拒绝的路径 (目录及其子路径): 必须保持拒绝, 且不询问权限
-    ok = co_await check(
-        writeItem,
-        "/data/config_deny_dir/sub/file.txt",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
-    );
+    ok = co_await check(writeItem, "/data/config_deny_dir/sub/file.txt");
     XX_TEST_EXPECT_FALSE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
 
-    ok = co_await check(
-        readItem,
-        "/data/config_deny_dir/any.key",
-        agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
-    );
+    ok = co_await check(readItem, "/data/config_deny_dir/any.key");
     XX_TEST_EXPECT_FALSE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 拒绝且不询问
 
@@ -1184,6 +1293,7 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_registerOnBus_no_accumulation();
         co_await test_interrupt_bus_custom_handler();
         co_await test_permission_relative_path();
+        co_await test_permission_declared_category_and_tool_level();
         co_await test_permission_remember_rule();
         co_await test_permission_prompt_carries_ui_descriptor();
         co_await test_permission_remember_via_result_options();

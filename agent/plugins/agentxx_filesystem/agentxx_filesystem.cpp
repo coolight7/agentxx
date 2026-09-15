@@ -66,6 +66,10 @@ struct FsPluginCtx : public PluginBase {};
 
 /// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
 static int32_t fsSetup(FsPluginCtx& ctx) {
+    // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
+    // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由宿主
+    // 权限中间件执行; 未声明的工具不参与权限判定 (直接放行)
+
     // 1. List
     auto listSchema
         = ctx.schema(kNameList)
@@ -108,6 +112,8 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
         0,
         kAutoSummary
     );
+    // 列表按读取类工具处理 (列出目录/文件)
+    registerReadPathPermission(ctx, kNameList, "path");
 
     // 2. Read
     auto readSchema
@@ -169,6 +175,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             }
         );
     }
+    registerReadPathPermission(ctx, kNameRead, "path");
 
     // 3. Write
     auto writeSchema
@@ -234,6 +241,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             }
         );
     }
+    registerWritePathPermission(ctx, kNameWrite, "path");
 
     // 4. Edit
     auto editSchema
@@ -304,8 +312,14 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             }
         );
     }
+    registerWritePathPermission(ctx, kNameEdit, "path");
 
     // 5. Glob
+    // 注: glob/grep 的路径来自多个 glob 表达式的 `file_patterns` (可含 `*` 通配符),
+    // 与单个路径参数的权限规则口径不同, 暂不声明权限限制 (不参与权限判定, 与迁移前
+    // 行为一致); 如需拦截, 可用 ToolPermissionSpec 声明数组目标:
+    //   spec.target = PermissionTarget::Path; spec.targetArg = "file_patterns";
+    //   spec.targetIsArray = true
     auto globSchema
         = ctx.schema(kNameGlob)
               .stringArray(

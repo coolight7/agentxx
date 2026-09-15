@@ -32,6 +32,10 @@ namespace event {
 class EventBus;
 }
 
+namespace middleware {
+class PermissionMiddlewareHandle;
+}
+
 namespace plugin {
 
 class PluginManager;
@@ -142,6 +146,8 @@ public:
     };
 
     std::vector<std::string>                                toolNames;
+    /// 已声明权限限制的工具名 (随工具注销/实例禁用卸载一并撤销)
+    std::vector<std::string>                                permissionToolNames;
     std::vector<HookRegistration>                           hookRegistrations;
     std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptions;
     std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptionHandles;
@@ -334,6 +340,23 @@ public:
 
     int unregisterTool(PluginInstance* inst, std::string_view name) {
         return unregisterTool(inst, strToSv(name));
+    }
+
+    /// 声明工具权限限制 (插件在注册工具后调用)
+    /// - 声明内容: 权限作用域 (读/写)、目标参数名、目标类型 (路径/文本/无)
+    /// - 落地点为 agent 装配的权限中间件 ([PermissionMiddlewareHandle]):
+    ///   工具调用时的判定 (白/黑名单、permission.mode 默认、记住的选择、
+    ///   工作区隔离、完全授权) 全部由该中间件执行, 插件只声明"哪些参数受约束"
+    /// - 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略
+    /// `return`: 0 成功, 非 0 失败 (工具非本实例所有 / 中间件不可用 / 声明非法)
+    int registerToolPermission(PluginInstance* inst, const AgentxxPluginToolPermissionSpec* spec);
+
+    /// 撤销工具权限声明 (按工具名; 工具注销、插件禁用/卸载时由宿主自动撤销)
+    /// `return`: 0 成功, 非 0 不存在
+    int unregisterToolPermission(PluginInstance* inst, AgentxxPluginStringView toolName);
+
+    int unregisterToolPermission(PluginInstance* inst, std::string_view toolName) {
+        return unregisterToolPermission(inst, strToSv(toolName));
     }
 
     int registerSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
@@ -634,11 +657,11 @@ public:
     void disableImpl(std::string_view name, bool userInitiated);
     void enableImpl(std::string_view name, bool userInitiated);
 
-    /// 摘除实例在宿主侧的注册（工具/hook/capability/graph/订阅/prompt 贡献），
+    /// 摘除实例在宿主侧的注册（工具/工具权限/hook/capability/graph/订阅/prompt 贡献），
     /// 但保留实例内的注册记录；启用时由 start 事务重新声明。
     void detachInstanceRegistrations(PluginInstance* inst);
 
-    /// 清空"由插件 start 事务重新声明"的注册记录（工具/hook/capability/graph）。
+    /// 清空"由插件 start 事务重新声明"的注册记录（工具/工具权限/hook/capability/graph）。
     /// stop 成功后调用，避免下次 start 在旧记录上重复累积。
     void clearPluginOwnedRegistrations(PluginInstance* inst);
 
@@ -687,6 +710,11 @@ private:
     friend class PluginInstance;
 
     void eraseMiddleware(PluginMiddlewareHandle* mw);
+
+    /// agent 装配的权限中间件 (插件工具权限声明的落地处; 未装配返回 nullptr)
+    /// - 在中间件链中查找; 权限中间件由 BaseAgent::initMiddleware 装配, 插件
+    ///   加载 (create/start 事务) 在其后执行, 正常运行期可查到
+    agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware();
 
     struct PendingMiddlewareCleanup {
         std::string                           name;

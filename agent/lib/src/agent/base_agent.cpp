@@ -608,8 +608,9 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
                 permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
                 break;
         }
-        // 注册 tool 名 -> 权限处理函数; 未调用则 handles 为空, 权限拦截不会触发
-        permission->registerHandles();
+        // 工具权限限制由工具来源方声明: 插件在注册工具后经
+        // agentxx.agent.permission 接口表声明 (见 PluginManager::registerToolPermission),
+        // 本中间件按声明解析目标并执行上面注册的规则; 未声明的工具不参与权限判定
         permission->registerOnBus(agentContext->bus);
         agentContext->middlewareHandleContext->handles.push_back(permission);
     }

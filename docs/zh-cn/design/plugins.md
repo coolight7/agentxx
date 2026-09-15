@@ -23,7 +23,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...16 张 agent + 7 张 client
+         │ tools       │ hooks       │ events       │ scheduler   │  ...17 张 agent + 7 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -296,6 +296,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |
+| `agentxx.agent.permission` | 1 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明, 见下方说明) |
 | `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 操作) |
 | `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
@@ -312,6 +313,27 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.resources` | 1 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 1 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改宿主执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 宿主构建 engine 前处理) |
 | `agentxx.agent.tasks` | 1 | 后台任务宿主托管: `register_task/cancel_task` (kit `spawn` 自动注册; 宿主登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
+
+### 工具权限声明的语义 (agentxx.agent.permission)
+
+工具权限限制**由工具来源方 (插件) 声明**, 宿主权限中间件只负责按声明执行统一判定:
+
+- **声明内容** (`AgentxxPluginToolPermissionSpec`): 工具名 (须为本实例已注册的工具)、
+  作用域 (读/写, 各自一套规则)、目标来源 (`无` / `路径` / `文本`)、目标参数名
+  (工具 args 中的字段名)、目标参数值形态 (单字符串 / 字符串数组, 数组逐项判定) 与
+  可选的权限分类文本 (权限询问卡片显示, 留空按作用域生成)
+- **声明落地**: 宿主把声明交给权限中间件 (工具名 → 声明表)。工具调用时中间件按声明
+  从 args 解析目标 (路径目标按会话生效工作目录规范化为绝对路径), 再按既有规则判定
+  (白/黑名单、`permission.mode` 默认规则、用户"记住本次选择"、工作区隔离、完全授权);
+  插件不参与判定
+- **未声明的工具不参与权限判定** (直接放行): 权限限制随工具来源走, 与仅加载部分插件
+  的场景一致
+- **生命周期**: 工具注销、插件禁用/卸载时宿主自动撤销对应声明 (重新 start 时按新声明
+  恢复); 声明属于附加能力, 宿主未装配权限中间件时注册返回非 0, 插件可忽略
+- **失败拒绝**: 非本实例所有的工具名、未知作用域/目标来源取值都会被拒绝并记日志
+- **kit 便捷层**: `registerReadPathPermission(ctx, tool, "path")` /
+  `registerWritePathPermission(...)` (最常用的"路径参数 + 读/写"形态),
+  以及通用 `registerToolPermission(ctx, ToolPermissionSpec{...})`
 
 ---
 

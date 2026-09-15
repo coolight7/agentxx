@@ -275,6 +275,62 @@ typedef struct AgentxxPluginToolsIface {
     void(AGENTXX_PLUGIN_CALL* op_cancel)(AgentxxPluginOperatorHandle* op);
 } AgentxxPluginToolsIface;
 
+/* ==================== 接口表: 工具权限声明 (agentxx.agent.permission) ==================== */
+
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION         "agentxx.agent.permission"
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION 1
+
+/// 权限作用域 (读/写各自一套规则表, 互不影响)
+#define AGENTXX_PLUGIN_PERMISSION_SCOPE_READ  1
+#define AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE 2
+
+/// 权限目标来源
+#define AGENTXX_PLUGIN_PERMISSION_TARGET_NONE 0 ///< 无目标 (仅工具级判定)
+#define AGENTXX_PLUGIN_PERMISSION_TARGET_PATH 1 ///< 参数值为路径 (按会话工作目录规范化后匹配规则)
+#define AGENTXX_PLUGIN_PERMISSION_TARGET_TEXT 2 ///< 参数值为普通文本 (如命令/网址; 原样匹配规则)
+
+/// 目标参数值的形态
+#define AGENTXX_PLUGIN_PERMISSION_ARG_STRING       0 ///< 单个字符串
+#define AGENTXX_PLUGIN_PERMISSION_ARG_STRING_ARRAY 1 ///< 字符串数组 (逐项判定)
+
+/// 工具权限声明 (插件在注册工具后为自身工具声明权限限制; 由宿主统一判定)
+typedef struct AgentxxPluginToolPermissionSpec {
+    /// 目标工具名 (须为本实例已注册的工具)
+    AgentxxPluginStringView tool_name;
+    /// 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_*)
+    int32_t scope;
+    /// 权限目标来源 (AGENTXX_PLUGIN_PERMISSION_TARGET_*)
+    int32_t target_kind;
+    /// 目标参数名 (工具 args JSON 中的字段名; TARGET_NONE 时可留空)
+    AgentxxPluginStringView target_arg;
+    /// 目标参数值形态 (AGENTXX_PLUGIN_PERMISSION_ARG_*)
+    int32_t arg_kind;
+    uint32_t _reserved; ///< 8 字节补齐
+    /// 权限分类文本 (权限询问卡片上显示; 留空则按作用域生成)
+    AgentxxPluginStringView category;
+} AgentxxPluginToolPermissionSpec;
+
+typedef struct AgentxxPluginPermissionIface {
+    int32_t  version;     ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
+    uint32_t struct_size; ///< sizeof(AgentxxPluginPermissionIface) or a larger known table
+
+    /// 声明工具权限限制 (工具注册后调用; 同工具重复声明为覆盖)
+    /// - 未声明的工具不参与权限判定 (直接放行); 声明后由宿主按权限规则
+    ///   (白/黑名单、permission.mode、记住的选择、工作区隔离) 统一判定
+    /// - 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略
+    /// `return`: 0 成功, 非 0 不支持或失败
+    int32_t(AGENTXX_PLUGIN_CALL* register_tool_permission)(
+        const AgentxxPluginHost*               host,
+        const AgentxxPluginToolPermissionSpec* spec
+    );
+    /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由宿主自动撤销, 一般无需手动调用)
+    /// `return`: 0 成功, 非 0 不存在
+    int32_t(AGENTXX_PLUGIN_CALL* unregister_tool_permission)(
+        const AgentxxPluginHost*       host,
+        const AgentxxPluginStringView* tool_name
+    );
+} AgentxxPluginPermissionIface;
+
 /* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS         "agentxx.agent.hooks"

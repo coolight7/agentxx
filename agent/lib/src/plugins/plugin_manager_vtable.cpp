@@ -123,6 +123,61 @@ static int32_t AGENTXX_PLUGIN_CALL
     });
 }
 
+static int32_t AGENTXX_PLUGIN_CALL xx_register_tool_permission(
+    const AgentxxPluginHost*               host,
+    const AgentxxPluginToolPermissionSpec* spec
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto call = enterHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || !spec
+            || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
+            return -1;
+        }
+        auto mgrPtr  = mgr;
+        auto instPtr = inst;
+        // 声明内容按值复制: 跨边界视图只在本次调用期间有效, 复制为自有字符串后
+        // 再交给 IO 线程执行 (视图指向闭包持有的字符串)
+        AgentxxPluginToolPermissionSpec specCopy = *spec;
+        auto toolName  = std::make_shared<std::string>(
+            spec->tool_name.data ? spec->tool_name.data : "",
+            static_cast<size_t>(spec->tool_name.size)
+        );
+        auto targetArg = std::make_shared<std::string>(
+            spec->target_arg.data ? spec->target_arg.data : "",
+            static_cast<size_t>(spec->target_arg.size)
+        );
+        auto category = std::make_shared<std::string>(
+            spec->category.data ? spec->category.data : "",
+            static_cast<size_t>(spec->category.size)
+        );
+        specCopy.tool_name  = agentxx::plugin::PluginStringView::from(*toolName);
+        specCopy.target_arg = agentxx::plugin::PluginStringView::from(*targetArg);
+        specCopy.category   = agentxx::plugin::PluginStringView::from(*category);
+        return ioCallSyncKeep<int32_t>(
+            call,
+            mgrPtr,
+            [mgrPtr, instPtr, specCopy, toolName, targetArg, category]() {
+                return mgrPtr->registerToolPermission(instPtr, &specCopy);
+            }
+        );
+    });
+}
+
+static int32_t AGENTXX_PLUGIN_CALL xx_unregister_tool_permission(
+    const AgentxxPluginHost*       host,
+    const AgentxxPluginStringView* tool_name
+) {
+    if (agentxx::plugin::PluginStringView::empty(tool_name)) {
+        return -1;
+    }
+    auto nameValCopy = *tool_name;
+    return onInstanceIo(host, [nameValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->unregisterToolPermission(inst, nameValCopy);
+    });
+}
+
 static void AGENTXX_PLUGIN_CALL xx_op_cancel(::AgentxxPluginOperatorHandle* op) {
     cancelPluginOperation(op);
 }
@@ -1172,6 +1227,13 @@ static const AgentxxPluginToolsIface g_ifaceTools = {
     /* op_cancel */ xx_op_cancel,
 };
 
+static const AgentxxPluginPermissionIface g_ifacePermission = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginPermissionIface),
+    /* register_tool_permission */ xx_register_tool_permission,
+    /* unregister_tool_permission */ xx_unregister_tool_permission,
+};
+
 static const AgentxxPluginHooksIface g_ifaceHooks = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION,
     /* struct_size */ sizeof(AgentxxPluginHooksIface),
@@ -1325,6 +1387,9 @@ const void* AGENTXX_PLUGIN_CALL
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS) {
         return &g_ifaceTools;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION) {
+        return &g_ifacePermission;
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
         return &g_ifaceHooks;

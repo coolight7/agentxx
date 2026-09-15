@@ -126,7 +126,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 | 中间件 | 功能 |
 |--------|------|
-| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，IO 端点据此在应答 (`RespPermission.remember`) 中带回用户意图，由权限中间件注册路径规则 (后续直接放行/拒绝不再询问；客户端与端点都不参与权限语义，规则表归中间件所有)。记住目录时该规则自动覆盖其全部子目录与文件 (同一最长前缀匹配语义)，读、写各自一套规则互不影响 |
+| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。**工具权限限制由工具来源方声明**: 插件在注册工具后经 `agentxx.agent.permission` 接口表声明 (作用域 读/写、目标参数名、目标类型 路径/文本/无, 见 [plugins.md](plugins.md) §8)，未声明的工具不参与权限判定 (直接放行)；中间件内不再硬编码任何工具名。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，IO 端点据此在应答 (`RespPermission.remember`) 中带回用户意图，由权限中间件注册路径规则 (后续直接放行/拒绝不再询问；客户端与端点都不参与权限语义，规则表归中间件所有)。记住目录时该规则自动覆盖其全部子目录与文件 (同一最长前缀匹配语义)，读、写各自一套规则互不影响 |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，每次模型调用时注入系统提示词 |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
@@ -1487,7 +1487,7 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 16 张 agent 接口表 + 7 张 client 接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 17 张 agent 接口表 + 7 张 client 接口表)
 │   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
 │   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/zh-cn/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
 │   │   │   │   ├── client_plugin_api.h # client 侧插件纯 C ABI 契约 (UI 无关语义层)

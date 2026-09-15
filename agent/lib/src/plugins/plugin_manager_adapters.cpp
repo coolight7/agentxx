@@ -2,6 +2,7 @@
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/util/async_offload.h"
@@ -301,6 +302,8 @@ int PluginManager::unregisterTool(PluginInstance* inst, AgentxxPluginStringView 
     }
     inst->toolNames.erase(it);
     registry_->unregisterTool(toolName);
+    // 工具注销后其权限声明一并撤销: 避免残留声明影响后续同名工具
+    unregisterToolPermission(inst, toolName);
     inst->tools.erase(
         std::remove_if(
             inst->tools.begin(),
@@ -312,6 +315,143 @@ int PluginManager::unregisterTool(PluginInstance* inst, AgentxxPluginStringView 
         inst->tools.end()
     );
     XX_LOGI("Plugin `{}` unregistered tool `{}`", inst->name, toolName);
+    return 0;
+}
+
+agentxx::middleware::PermissionMiddlewareHandle* PluginManager::permissionMiddleware() {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->middlewareHandleContext) {
+        return nullptr;
+    }
+    for (auto& handle : ctx->middlewareHandleContext->handles) {
+        if (auto* permission
+            = dynamic_cast<agentxx::middleware::PermissionMiddlewareHandle*>(handle.get())) {
+            return permission;
+        }
+    }
+    return nullptr;
+}
+
+int PluginManager::registerToolPermission(
+    PluginInstance*                        inst,
+    const AgentxxPluginToolPermissionSpec* spec
+) {
+    if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->tool_name)) {
+        return -1;
+    }
+    // 执行期复查: 请求可能排在 IO 队列里, 等执行时实例已进入 Closing/Disabled。
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW(
+            "Plugin `{}` register tool permission rejected: instance is closing or disabled",
+            inst->name
+        );
+        return -1;
+    }
+    std::string toolName{spec->tool_name.data, spec->tool_name.size};
+    // 只接受本实例注册过的工具: 防止插件为其他插件/内置工具声明权限
+    if (std::find(inst->toolNames.begin(), inst->toolNames.end(), toolName) == inst->toolNames.end()
+    ) {
+        XX_LOGW(
+            "Plugin `{}` register tool permission rejected: tool `{}` not owned by this plugin",
+            inst->name,
+            toolName
+        );
+        return -1;
+    }
+    auto* permission = permissionMiddleware();
+    if (!permission) {
+        XX_LOGW(
+            "Plugin `{}` register tool permission `{}`: permission middleware not assembled",
+            inst->name,
+            toolName
+        );
+        return -1;
+    }
+
+    // C ABI 声明 -> 中间件声明 (枚举值非法时拒绝, 避免插件笔误静默生效)
+    agentxx::middleware::ToolPermissionSpec decl;
+    switch (spec->scope) {
+        case AGENTXX_PLUGIN_PERMISSION_SCOPE_READ:
+            decl.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
+            break;
+        case AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE:
+            decl.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+            break;
+        default:
+            XX_LOGW(
+                "Plugin `{}` register tool permission `{}`: invalid scope {}",
+                inst->name,
+                toolName,
+                static_cast<int>(spec->scope)
+            );
+            return -1;
+    }
+    switch (spec->target_kind) {
+        case AGENTXX_PLUGIN_PERMISSION_TARGET_NONE:
+            decl.targetKind = agentxx::middleware::ToolPermissionTargetKind::None;
+            break;
+        case AGENTXX_PLUGIN_PERMISSION_TARGET_PATH:
+            decl.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
+            break;
+        case AGENTXX_PLUGIN_PERMISSION_TARGET_TEXT:
+            decl.targetKind = agentxx::middleware::ToolPermissionTargetKind::Text;
+            break;
+        default:
+            XX_LOGW(
+                "Plugin `{}` register tool permission `{}`: invalid target kind {}",
+                inst->name,
+                toolName,
+                static_cast<int>(spec->target_kind)
+            );
+            return -1;
+    }
+    switch (spec->arg_kind) {
+        case AGENTXX_PLUGIN_PERMISSION_ARG_STRING:
+            decl.arrayArg = false;
+            break;
+        case AGENTXX_PLUGIN_PERMISSION_ARG_STRING_ARRAY:
+            decl.arrayArg = true;
+            break;
+        default:
+            XX_LOGW(
+                "Plugin `{}` register tool permission `{}`: invalid arg kind {}",
+                inst->name,
+                toolName,
+                static_cast<int>(spec->arg_kind)
+            );
+            return -1;
+    }
+    if (!agentxx::plugin::PluginStringView::empty(spec->target_arg)) {
+        decl.targetArgs.emplace_back(spec->target_arg.data, spec->target_arg.size);
+    }
+    if (!agentxx::plugin::PluginStringView::empty(spec->category)) {
+        decl.category.assign(spec->category.data, spec->category.size);
+    }
+    permission->registerToolPermission(toolName, std::move(decl));
+    if (std::find(inst->permissionToolNames.begin(), inst->permissionToolNames.end(), toolName)
+        == inst->permissionToolNames.end()) {
+        inst->permissionToolNames.push_back(toolName);
+    }
+    XX_LOGI("Plugin `{}` registered tool permission for `{}`", inst->name, toolName);
+    return 0;
+}
+
+int PluginManager::unregisterToolPermission(PluginInstance* inst, AgentxxPluginStringView toolName) {
+    if (!inst || agentxx::plugin::PluginStringView::empty(toolName)) {
+        return -1;
+    }
+    std::string name = svToStr(toolName);
+    auto        it
+        = std::find(inst->permissionToolNames.begin(), inst->permissionToolNames.end(), name);
+    if (it == inst->permissionToolNames.end()) {
+        return -1;
+    }
+    inst->permissionToolNames.erase(it);
+    // 中间件未装配时无声明可撤销 (禁用/卸载阶段始终调用本函数做收尾)
+    if (auto* permission = permissionMiddleware()) {
+        permission->unregisterToolPermission(name);
+    }
+    XX_LOGI("Plugin `{}` unregistered tool permission for `{}`", inst->name, name);
     return 0;
 }
 

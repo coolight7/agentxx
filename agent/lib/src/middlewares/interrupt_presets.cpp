@@ -395,8 +395,11 @@ InterruptUi
     // - 目录目标 (规范化路径带尾斜杠; 见 PermissionMiddlewareHandle::
     //   normalizePermissionPath): 规则按最长前缀匹配覆盖该目录及其全部子目录与文件;
     //   点击授权或完全授权均表示同时授权子目录, 紧随目标描述后提示生效范围
+    // - 无目标 (工具级权限声明, 如无参数目标的工具): 不下发目标描述块
     const bool isDirTarget = !target.empty() && target.back() == '/';
-    ui.blocks.push_back(textBlock(fmt::format("• {}", target), "hint", 2, true));
+    if (!target.empty()) {
+        ui.blocks.push_back(textBlock(fmt::format("• {}", target), "hint", 2, true));
+    }
     if (isDirTarget) {
         ui.blocks.push_back(textBlockKey("interrupt.rememberDir", {}, "hint", 2, true));
     }

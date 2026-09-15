@@ -154,6 +154,15 @@ path/to/agentxx_test string_util regex
   第三方插件不需要它 (纯 C ABI 头即可, 甚至不用 C++);
   未引用模块按目标文件提取自动裁剪 (9 插件 DT_NEEDED 仅系统库);
   详见 `docs/zh-cn/design/plugins.md` §5 节
+- 工具权限限制由插件声明 (2026-09): 插件在注册工具后经 `agentxx.agent.permission`
+  接口表 (`register_tool_permission`/`unregister_tool_permission`, SDK 便捷层
+  `registerReadPathPermission`/`registerWritePathPermission`/`registerToolPermission`)
+  声明自身工具的权限限制 (作用域 读/写、目标来源 无/路径/文本、目标参数名、参数形态
+  单值/数组、可选分类文本); 权限中间件不再硬编码任何工具名 —— 未声明权限的工具不参与
+  权限判定 (直接放行), 声明解析目标后仍由宿主统一按规则判定 (白/黑名单、
+  permission.mode、记住的选择、工作区隔离、完全授权)。声明随工具注销/插件禁用卸载
+  自动撤销; 非本实例工具名或非法枚举取值会被拒绝并记日志;
+  详见 `docs/zh-cn/design/plugins.md` §8 节
 
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`

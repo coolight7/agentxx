@@ -30,6 +30,42 @@ public:
     PermissionMiddlewareState() {}
 };
 
+/// 工具权限目标来源 (工具权限声明的一部分; 见 [ToolPermissionSpec])
+enum class ToolPermissionTargetKind {
+    /// 无目标: 仅做工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
+    None,
+
+    /// 路径: 参数值按会话工作目录规范化为绝对路径后匹配规则 (最长前缀匹配)
+    Path,
+
+    /// 文本: 参数值原样作为目标 (如命令/网址), 规则按精确或前缀文本匹配
+    Text,
+};
+
+/// 工具权限声明: 由插件在注册工具后声明自身工具的权限限制, 宿主据此解析目标
+/// 并执行统一规则判定 (白/黑名单、permission.mode 默认规则、记住的选择、
+/// 工作区隔离、完全授权)
+/// - 权限规则本身不在此结构内: 结构只描述"哪些参数是受约束目标", 判定口径
+///   与内置规则一致 (见 [PermissionMiddlewareHandle::checkTargetPermission])
+/// - 未声明权限的工具不参与权限判定 (直接放行): 无权限需求的工具无需任何声明
+struct ToolPermissionSpec {
+    /// 权限作用域 (规则表索引): [PermissionMiddlewareHandle::FilesystemPermissionREAD] /
+    /// [PermissionMiddlewareHandle::FilesystemPermissionWRITE]
+    size_t scope = 0;
+
+    /// 权限目标来源
+    ToolPermissionTargetKind targetKind = ToolPermissionTargetKind::None;
+
+    /// 目标参数名 (工具 args 中的字段名; 依次判定, 任一目标被拒绝即拒绝)
+    std::vector<std::string> targetArgs{};
+
+    /// 目标参数值为字符串数组时逐项判定 (如 glob 的 file_patterns)
+    bool arrayArg = false;
+
+    /// 权限分类文本 (权限询问卡片上显示; 空 = 按作用域生成)
+    std::string category{};
+};
+
 /// 每会话文件系统隔离边界 (worktree 模式; 见 setSessionIsolation)
 struct SessionFsIsolation {
     /// worktree 根 (规范化目录路径, 尾斜杠): 该子树内读写不受隔离约束
@@ -50,11 +86,6 @@ public:
 
     /// 遵循最长路径匹配，支持 * 通配符
     XXRouter<PermissionOperator, 2> filesystemPermission{};
-    /// <name, handle>
-    std::map<
-        std::string,
-        std::function<asio::awaitable<bool>(const neograph::Tool& item, agentxx::util::Json& args)>>
-        handles{};
 
     /// 未命中任何已注册规则时 (router 返回 nullptr) 的默认处理操作。
     /// - 默认 ALLOW: 与历史行为一致 (无规则即放行)
@@ -64,6 +95,54 @@ public:
     PermissionOperator noRuleOperator = PermissionOperator::ALLOW;
 
     PermissionMiddlewareHandle(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext);
+
+    /// 声明工具权限限制 (插件在注册工具后经 PluginManager 调用)
+    /// - 同工具重复声明为覆盖 (插件重新 start 时按新声明生效)
+    /// - 未声明的工具不参与权限判定 (权限检查直接放行), 与仅加载部分插件的
+    ///   场景一致: 工具权限随工具来源 (插件) 走
+    void registerToolPermission(std::string_view toolName, ToolPermissionSpec spec);
+
+    /// 撤销工具权限声明 (工具注销/插件禁用卸载时由 PluginManager 调用)
+    /// `return` 是否存在被撤销的声明
+    bool unregisterToolPermission(std::string_view toolName);
+
+    /// 查询工具权限声明 (未声明返回 nullptr)
+    const ToolPermissionSpec* toolPermission(std::string_view toolName) const;
+
+    /// 按已声明的权限判定工具调用是否允许 (未声明权限的工具直接放行)
+    /// - 工具调用的统一权限入口: 权限检查服务 (service.permission.check) 与
+    ///   直接判定的调用方都走这里
+    asio::awaitable<bool> checkToolPermission(std::string_view toolName, agentxx::util::Json& args);
+
+    /// 按声明判定工具调用是否允许 (目标按声明从 args 解析, 依次判定全部目标)
+    /// - 声明无目标或目标参数缺省/为空: 退化为工具级判定 (见 [checkTargetPermission])
+    asio::awaitable<bool> checkToolPermission(
+        std::string_view          toolName,
+        agentxx::util::Json&      args,
+        const ToolPermissionSpec& spec
+    );
+
+    /// 判定单个目标是否允许 (权限规则统一入口)
+    /// - 依次: 工作区隔离写拒绝 → 配置拒绝路径 → 完全授权 → 规则表命中
+    ///   (ALLOW/DENY/INTERRUPT) → [noRuleOperator] 兜底
+    /// - INTERRUPT 时经会话总线询问 (target 为空表示工具级询问)
+    ///
+    /// - `args`:
+    ///     - [toolName] 被检查的工具名 (询问时下发给外部授权者)
+    ///     - [args]     tool 调用参数 (取 sessionId 定位会话总线; 原样下发)
+    ///     - [scope]    规则作用域: [FilesystemPermissionREAD] / [FilesystemPermissionWRITE]
+    ///     - [target]   受约束目标 (已规范化的绝对路径或文本, 与规则匹配口径一致)
+    ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
+    asio::awaitable<bool> checkTargetPermission(
+        std::string_view     toolName,
+        agentxx::util::Json& args,
+        size_t               scope,
+        std::string_view     target,
+        std::string_view     category = {}
+    );
+
+    /// 权限分类文本: 声明未指定 category 时按作用域生成
+    static std::string_view defaultCategory(size_t scope);
 
     void setFilesystemPermission(std::string_view path, PermissionOperator op, size_t index);
 
@@ -113,29 +192,24 @@ public:
     /// 等价单参版本)
     std::string normalizePermissionPath(std::string_view path, std::string_view sessionId) const;
 
-    asio::awaitable<bool>
-        defOnFilesystemHandle(const neograph::Tool& item, agentxx::util::Json& args, size_t index);
-
     /// 经会话总线发起权限询问, 并按应答处理"记住本次选择"
     /// - 无 prompter (无 IO 端点注册应答) 或被拒绝时返回 false
     /// - 应答携带 [events::RespPermission::remember] 时, 为本目标注册允许/拒绝
-    ///   规则 (作用域由 [index] 决定), 后续同目标及其子路径不再询问
+    ///   规则 (作用域由 [scope] 决定), 后续同目标及其子路径不再询问
     ///
     /// - `args`:
-    ///     - [item]  被检查的 tool (取工具名下发询问)
+    ///     - [toolName] 被检查的 tool 名 (询问时下发给外部授权者)
     ///     - [args]  tool 调用参数 (取 sessionId 定位会话总线; 原样下发)
-    ///     - [index] 规则作用域: [FilesystemPermissionREAD] / [FilesystemPermissionWRITE]
+    ///     - [scope] 规则作用域: [FilesystemPermissionREAD] / [FilesystemPermissionWRITE]
     ///     - [target] 受约束目标 (已规范化的绝对路径, 与规则匹配口径一致)
+    ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> requestPermission(
-        const neograph::Tool& item,
-        agentxx::util::Json&  args,
-        size_t                index,
-        std::string           target
+        std::string_view     toolName,
+        agentxx::util::Json& args,
+        size_t               scope,
+        std::string          target,
+        std::string_view     category = {}
     );
-
-    void registerFilesystemHandles();
-
-    void registerHandles();
 
     ~PermissionMiddlewareHandle() override;
 
@@ -154,6 +228,9 @@ private:
 
     /// 配置文件显式拒绝的路径路由 (优先判定, 无论是否完全授权均保持拒绝)
     XXRouter<PermissionOperator, 2> configDenyPermission_{};
+
+    /// <工具名, 权限声明> (插件注册工具后声明; 仅 io 线程读写, 与中间件链同线程模型)
+    std::map<std::string, ToolPermissionSpec, std::less<>> toolPermissions_{};
 
     /// 是否完全授权所有权限 (经由权限询问勾选 fullAuth 且确认允许激活)
     bool fullAuthorized_ = false;

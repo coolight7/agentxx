@@ -1,8 +1,8 @@
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/tools/tool.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
+#include "agentxx/util/json.h"
 #include "agentxx/util/string_util.h"
 #include <cctype>
 #include <filesystem>
@@ -11,25 +11,6 @@ namespace agentxx {
 namespace middleware {
 
 namespace {
-
-class DummyPermissionTool : public agentxx::tools::XXToolBase {
-public:
-
-    explicit DummyPermissionTool(std::string name) :
-        agentxx::tools::XXToolBase(name, {}) {}
-
-    neograph::ChatTool get_definition() const override {
-        return neograph::ChatTool{
-            .name        = name,
-            .description = "",
-            .parameters  = neograph::json::object(),
-        };
-    }
-
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
-        co_return std::string{};
-    }
-};
 
 /// 判断规范化路径 path 是否位于指定目录 dir 子树内 (或就是目录自身)
 inline bool isUnderDir(std::string_view dir, std::string_view path) {
@@ -190,20 +171,128 @@ bool PermissionMiddlewareHandle::isConfigDenied(std::string_view path, size_t in
     return handle != nullptr && *handle == PermissionOperator::DENY;
 }
 
-asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
-    const neograph::Tool& item,
-    agentxx::util::Json&  args,
-    size_t                index
+/// 权限分类文本: 声明未指定 category 时按作用域生成
+std::string_view PermissionMiddlewareHandle::defaultCategory(size_t scope) {
+    return scope == FilesystemPermissionWRITE ? "filesystem_write" : "filesystem_read";
+}
+
+/// 声明工具权限限制 (插件在注册工具后调用; 见 plugin_api.h 的
+/// agentxx.agent.permission 接口表)
+void PermissionMiddlewareHandle::registerToolPermission(
+    std::string_view  toolName,
+    ToolPermissionSpec spec
 ) {
-    auto path      = args.value<std::string>("path", "");
-    auto sessionId = args.value("sessionId", std::string{});
-    // 支持相对路径: 非绝对路径基于会话生效工作目录 (worktree 绑定优先, 回退
-    // AgentConfig::workDir / 进程 cwd) 拼接为绝对路径, 与 filesystem 工具实际
-    // 访问的路径保持一致, 使注册的绝对路径规则也能匹配相对路径访问
-    path = normalizePermissionPath(path, sessionId);
-    if (path.empty()) {
+    if (toolName.empty()) {
+        return;
+    }
+    toolPermissions_.insert_or_assign(std::string{toolName}, std::move(spec));
+}
+
+bool PermissionMiddlewareHandle::unregisterToolPermission(std::string_view toolName) {
+    return toolPermissions_.erase(std::string{toolName}) > 0;
+}
+
+const ToolPermissionSpec* PermissionMiddlewareHandle::toolPermission(std::string_view toolName) const {
+    auto it = toolPermissions_.find(toolName);
+    return it == toolPermissions_.end() ? nullptr : &it->second;
+}
+
+asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
+    std::string_view     toolName,
+    agentxx::util::Json& args
+) {
+    // 未声明权限的工具不参与权限判定 (直接放行): 权限限制随工具来源 (插件) 走,
+    // 未加载/未声明的工具与无权限需求一致
+    const auto* spec = toolPermission(toolName);
+    if (!spec) {
         co_return true;
     }
+    co_return co_await checkToolPermission(toolName, args, *spec);
+}
+
+asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
+    std::string_view          toolName,
+    agentxx::util::Json&      args,
+    const ToolPermissionSpec& spec
+) {
+    // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
+    if (spec.targetKind == ToolPermissionTargetKind::None || spec.targetArgs.empty()) {
+        co_return co_await checkTargetPermission(
+            toolName,
+            args,
+            spec.scope,
+            {},
+            spec.category
+        );
+    }
+    const auto sessionId = args.value("sessionId", std::string{});
+    for (const auto& argName : spec.targetArgs) {
+        // 目标值: 单字符串参数直接取; 数组参数逐项判定 (如 glob 的 file_patterns)
+        std::vector<std::string> rawTargets;
+        if (spec.arrayArg) {
+            rawTargets = agentxx::util::jsonGetStringArray(args, argName);
+        } else {
+            auto raw = args.value(argName, std::string{});
+            if (!raw.empty()) {
+                rawTargets.push_back(std::move(raw));
+            }
+        }
+        for (const auto& raw : rawTargets) {
+            // 路径目标按会话生效工作目录规范化为绝对路径 (与工具实际访问路径
+            // 一致, 使注册的绝对路径规则也能匹配相对路径访问); 文本目标原样使用
+            std::string target;
+            if (spec.targetKind == ToolPermissionTargetKind::Path) {
+                target = normalizePermissionPath(raw, sessionId);
+            } else {
+                target = raw;
+            }
+            // 参数缺省/为空的目标不参与判定 (如可选路径参数未提供):
+            // 空目标命中不到任何规则, 判定结果恒为 noRuleOperator, 无意义
+            if (target.empty()) {
+                continue;
+            }
+            // 依次判定: 任一目标被拒绝即拒绝整个调用 (询问逐个进行)
+            if (!co_await checkTargetPermission(
+                    toolName,
+                    args,
+                    spec.scope,
+                    target,
+                    spec.category
+                )) {
+                co_return false;
+            }
+        }
+    }
+    co_return true;
+}
+
+asio::awaitable<bool> PermissionMiddlewareHandle::checkTargetPermission(
+    std::string_view     toolName,
+    agentxx::util::Json& args,
+    size_t               index,
+    std::string_view     target,
+    std::string_view     category
+) {
+    auto sessionId = args.value("sessionId", std::string{});
+    if (target.empty()) {
+        // 工具级判定 (无目标): 规则表按空目标查询恒不命中, 直接按 noRuleOperator 处理
+        switch (noRuleOperator) {
+            case PermissionOperator::ALLOW:
+                co_return true;
+            case PermissionOperator::DENY:
+                co_return false;
+            case PermissionOperator::INTERRUPT:
+                co_return co_await requestPermission(
+                    toolName,
+                    args,
+                    index,
+                    std::string{},
+                    category
+                );
+        }
+        co_return true;
+    }
+    std::string path{target};
     // worktree 会话隔离边界 (优先于一切已注册规则):
     // - worktree 子树 (allowPath) 内读写照常处理 (不参与下面的主检出写拒绝):
     //   该子树是本会话自己的工作区, 而真实 worktree 位于主检出的
@@ -250,7 +339,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
             case PermissionOperator::INTERRUPT:
                 // 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
                 // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
-                co_return co_await requestPermission(item, args, index, path);
+                co_return co_await requestPermission(toolName, args, index, path, category);
         }
     }
     // 未命中任何规则: 按 noRuleOperator 处理 (CodeAgent 按 permission.mode 设置;
@@ -261,16 +350,17 @@ asio::awaitable<bool> PermissionMiddlewareHandle::defOnFilesystemHandle(
         case PermissionOperator::DENY:
             co_return false;
         case PermissionOperator::INTERRUPT:
-            co_return co_await requestPermission(item, args, index, path);
+            co_return co_await requestPermission(toolName, args, index, path, category);
     }
     co_return true;
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
-    const neograph::Tool& item,
-    agentxx::util::Json&  args,
-    size_t                index,
-    std::string           target
+    std::string_view     toolName,
+    agentxx::util::Json& args,
+    size_t               index,
+    std::string          target,
+    std::string_view     category
 ) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr) {
@@ -290,8 +380,9 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
         events::ReqPermission{
             .agentName = ctxPtr->agentConfig ? ctxPtr->agentConfig->agentName : std::string{},
             .sessionId = std::move(sessionId),
-            .toolName  = item.get_name(),
-            .category  = index == FilesystemPermissionREAD ? "filesystem_read" : "filesystem_write",
+            .toolName  = std::string{toolName},
+            // 分类文本: 工具声明的优先级高于按作用域生成的默认值
+            .category  = std::string{category.empty() ? defaultCategory(index) : category},
             .target    = target,
             .argumentsJson = args.dump(),
         },
@@ -329,30 +420,6 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     co_return allow;
 }
 
-void PermissionMiddlewareHandle::registerFilesystemHandles() {
-    auto readHandle
-        = [this](const neograph::Tool& item, agentxx::util::Json& args) -> asio::awaitable<bool> {
-        co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionREAD);
-    };
-
-    handles["agentxx_filesystem_list"] = readHandle;
-    handles["agentxx_filesystem_read"] = readHandle;
-    handles["agentxx_filesystem_write"]
-        = [this](const neograph::Tool& item, agentxx::util::Json& args) -> asio::awaitable<bool> {
-        co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
-    };
-    handles["agentxx_filesystem_edit"]
-        = [this](const neograph::Tool& item, agentxx::util::Json& args) -> asio::awaitable<bool> {
-        co_return co_await defOnFilesystemHandle(item, args, FilesystemPermissionWRITE);
-    };
-    // handles["agentxx_filesystem_glob"] = readHandle;
-    // handles["agentxx_filesystem_grep"] = readHandle;
-}
-
-void PermissionMiddlewareHandle::registerHandles() {
-    registerFilesystemHandles();
-}
-
 PermissionMiddlewareHandle::~PermissionMiddlewareHandle() {
     unregisterFromBus();
 }
@@ -366,21 +433,18 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
     registeredBus_ = bus;
 
     // 1. 注册权限检查服务端 (ReqToolPermissionCheck -> RespToolPermissionCheck)
+    // - 工具权限限制由工具来源方声明: 插件在注册工具后经 agentxx.agent.permission
+    //   接口表声明 (见 PluginManager::registerToolPermission), 本中间件据此判定
+    // - 未声明权限的工具不参与权限判定 (直接放行)
     checkServerId_ = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
                             events::Topic::ToolPermissionCheck
     )
                          .registerServer(
                              [this](const events::ReqToolPermissionCheck& req, size_t)
                                  -> asio::awaitable<events::RespToolPermissionCheck> {
-                                 auto it = handles.find(req.toolName);
-                                 if (it != handles.end()) {
-                                     DummyPermissionTool dummyTool(req.toolName);
-                                     agentxx::util::Json argsCopy = req.arguments;
-                                     auto allow = co_await it->second(dummyTool, argsCopy);
-                                     co_return events::RespToolPermissionCheck{.allow = allow};
-                                 }
-                                 // 未注册权限拦截 handle 的普通工具直接放行
-                                 co_return events::RespToolPermissionCheck{.allow = true};
+                                 agentxx::util::Json argsCopy = req.arguments;
+                                 auto allow = co_await checkToolPermission(req.toolName, argsCopy);
+                                 co_return events::RespToolPermissionCheck{.allow = allow};
                              }
                          );
 

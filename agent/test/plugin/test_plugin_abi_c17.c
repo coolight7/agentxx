@@ -136,7 +136,11 @@ enum {
     AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_SIZE        = 18,
     AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_SIZE_OFFSET = 19,
     AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_VERSION     = 20,
-    AGENTXX_ABI_VALUE_VALUE_COUNT                         = 21
+    AGENTXX_ABI_VALUE_PERMISSION_SPEC_SIZE                = 21,
+    AGENTXX_ABI_VALUE_PERMISSION_SPEC_ARGS_OFFSET         = 22,
+    AGENTXX_ABI_VALUE_PERMISSION_IFACE_SIZE               = 23,
+    AGENTXX_ABI_VALUE_PERMISSION_IFACE_VERSION            = 24,
+    AGENTXX_ABI_VALUE_VALUE_COUNT                         = 25
 };
 
 /// C 侧看到的 `sizeof`/`offsetof`/版本号取值。
@@ -184,6 +188,14 @@ uint64_t agentxx_test_abi_value(int32_t id) {
             return (uint64_t)offsetof(AgentxxPluginCoroutineRuntimeIface, struct_size);
         case AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_VERSION:
             return (uint64_t)AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION;
+        case AGENTXX_ABI_VALUE_PERMISSION_SPEC_SIZE:
+            return (uint64_t)sizeof(AgentxxPluginToolPermissionSpec);
+        case AGENTXX_ABI_VALUE_PERMISSION_SPEC_ARGS_OFFSET:
+            return (uint64_t)offsetof(AgentxxPluginToolPermissionSpec, target_arg);
+        case AGENTXX_ABI_VALUE_PERMISSION_IFACE_SIZE:
+            return (uint64_t)sizeof(AgentxxPluginPermissionIface);
+        case AGENTXX_ABI_VALUE_PERMISSION_IFACE_VERSION:
+            return (uint64_t)AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION;
         default:
             return UINT64_MAX;
     }
@@ -214,6 +226,18 @@ int32_t agentxx_test_abi_c_probe(void) {
     }
     if (sizeof(AgentxxPluginCoroutineRuntimeIface) % 8 != 0) {
         return 91;
+    }
+    /* 工具权限声明: 结构体 8 字节对齐 + 版本 1 */
+    if (AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION != 1) {
+        return 92;
+    }
+    if (sizeof(AgentxxPluginToolPermissionSpec) % 8 != 0
+        || sizeof(AgentxxPluginPermissionIface) % 8 != 0) {
+        return 93;
+    }
+    if (AGENTXX_PLUGIN_PERMISSION_SCOPE_READ == AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE
+        || AGENTXX_PLUGIN_PERMISSION_TARGET_NONE == AGENTXX_PLUGIN_PERMISSION_TARGET_PATH) {
+        return 94; /* 枚举取值必须互不相同 */
     }
     return 0;
 }

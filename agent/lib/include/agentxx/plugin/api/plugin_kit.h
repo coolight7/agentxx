@@ -8,7 +8,7 @@
 /// - Task<T>: 极简锚定协程类型 (无外部执行器依赖, 帧先销毁后 done 上报)
 /// - 锚定原语 awaiter 族: sleep / yield / offload / call_tool / invoke_cap
 /// - 注册族: tool (Task协程) / fast_tool (快同步内联) / blocking_tool (阻塞池委托) / hook /
-/// capability
+/// capability / tool_permission (工具权限声明)
 /// - spawn: 后台协作任务 (sleep 循环, 卸载取消)
 /// - 阻塞便捷助手: 供 JS 引擎及非 io 线程使用 (基于 condvar)
 #pragma once
@@ -400,6 +400,7 @@ const Iface* queryInterface(const AgentxxPluginHost* host, const char* iid) noex
 /// agent 侧接口表聚合 (一次查询; 成员为 NULL 表示宿主未实现该接口)
 struct AgentIfaces {
     const AgentxxPluginToolsIface*        tools        = nullptr; ///< "agentxx.agent.tools"
+    const AgentxxPluginPermissionIface*   permission   = nullptr; ///< "agentxx.agent.permission"
     const AgentxxPluginHooksIface*        hooks        = nullptr; ///< "agentxx.agent.hooks"
     const AgentxxPluginEventsIface*       events       = nullptr; ///< "agentxx.agent.events"
     const AgentxxPluginCapabilitiesIface* capabilities = nullptr; ///< "agentxx.agent.capabilities"
@@ -425,6 +426,10 @@ struct AgentIfaces {
             return f;
         }
         f.tools = queryInterface<AgentxxPluginToolsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
+        f.permission = queryInterface<AgentxxPluginPermissionIface>(
+            host,
+            AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
+        );
         f.hooks = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
         f.events
             = queryInterface<AgentxxPluginEventsIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_EVENTS);
@@ -5122,6 +5127,108 @@ inline int32_t
     };
 
     return ctx.iface.graph->register_node_type(ctx.host, &spec);
+}
+
+/* ==================== 工具权限声明 ====================
+ *
+ * 工具权限限制由工具来源方 (插件) 在注册工具后声明: 声明"哪些参数是受约束
+ * 目标"以及读/写作用域; 具体判定 (白/黑名单、permission.mode 默认规则、
+ * 用户记住的选择、工作区隔离、完全授权) 由宿主权限中间件统一执行, 插件
+ * 不参与判定。
+ *
+ * 典型用法 (文件系统类工具):
+ *     blocking_tool(ctx, "my_read", depict, schema, fn);
+ *     registerReadPathPermission(ctx, "my_read", "path");
+ *
+ * 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略 (工具
+ * 照常可用, 只是不参与权限判定)。
+ */
+
+/// 工具权限作用域 (读/写各自一套规则, 互不影响)
+enum class PermissionScope : int32_t {
+    Read  = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ,
+    Write = AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE,
+};
+
+/// 工具权限目标来源
+enum class PermissionTarget : int32_t {
+    None = AGENTXX_PLUGIN_PERMISSION_TARGET_NONE,
+    Path = AGENTXX_PLUGIN_PERMISSION_TARGET_PATH,
+    Text = AGENTXX_PLUGIN_PERMISSION_TARGET_TEXT,
+};
+
+/// 工具权限声明 (字段含义见 C ABI 的 AgentxxPluginToolPermissionSpec)
+struct ToolPermissionSpec {
+    std::string_view toolName{};                              ///< 目标工具名 (须已注册)
+    PermissionScope  scope{PermissionScope::Read};            ///< 权限作用域
+    PermissionTarget target{PermissionTarget::None};          ///< 目标来源
+    std::string_view targetArg{};                             ///< 目标参数名 (args 字段名)
+    bool             targetIsArray{false};                    ///< 参数值为字符串数组时逐项判定
+    std::string_view category{};                              ///< 权限分类文本 (空 = 按作用域生成)
+};
+
+/// 声明工具权限 (工具注册后调用); 返回 C ABI 状态码 (0 成功)
+inline int32_t registerToolPermission(
+    const AgentxxPluginHost*            host,
+    const AgentxxPluginPermissionIface* iface,
+    const ToolPermissionSpec&           spec
+) {
+    if (!host || !iface || !iface->register_tool_permission || spec.toolName.empty()) {
+        return -1;
+    }
+    AgentxxPluginToolPermissionSpec abiSpec{};
+    abiSpec.tool_name   = PluginStringView::from(spec.toolName);
+    abiSpec.scope       = static_cast<int32_t>(spec.scope);
+    abiSpec.target_kind = static_cast<int32_t>(spec.target);
+    abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
+    abiSpec.arg_kind    = spec.targetIsArray ? AGENTXX_PLUGIN_PERMISSION_ARG_STRING_ARRAY
+                                             : AGENTXX_PLUGIN_PERMISSION_ARG_STRING;
+    abiSpec.category    = PluginStringView::from(spec.category);
+    return iface->register_tool_permission(host, &abiSpec);
+}
+
+/// 声明工具权限 (从插件实例上下文取宿主与接口表)
+template<typename Ctx>
+inline int32_t registerToolPermission(const Ctx& ctx, const ToolPermissionSpec& spec) {
+    return registerToolPermission(ctx.host, ctx.iface.permission, spec);
+}
+
+/// 便捷: 声明"路径参数 + 读作用域" (读取类工具, 目标参数值为路径)
+template<typename Ctx>
+inline int32_t
+    registerReadPathPermission(const Ctx& ctx, std::string_view toolName, std::string_view pathArg) {
+    ToolPermissionSpec spec;
+    spec.toolName  = toolName;
+    spec.scope     = PermissionScope::Read;
+    spec.target    = PermissionTarget::Path;
+    spec.targetArg = pathArg;
+    return registerToolPermission(ctx, spec);
+}
+
+/// 便捷: 声明"路径参数 + 写作用域" (写入/编辑类工具, 目标参数值为路径)
+template<typename Ctx>
+inline int32_t registerWritePathPermission(
+    const Ctx&       ctx,
+    std::string_view toolName,
+    std::string_view pathArg
+) {
+    ToolPermissionSpec spec;
+    spec.toolName  = toolName;
+    spec.scope     = PermissionScope::Write;
+    spec.target    = PermissionTarget::Path;
+    spec.targetArg = pathArg;
+    return registerToolPermission(ctx, spec);
+}
+
+/// 撤销工具权限声明 (工具注销/插件禁用卸载时由宿主自动撤销, 一般无需手动调用)
+template<typename Ctx>
+inline int32_t unregisterToolPermission(const Ctx& ctx, std::string_view toolName) {
+    if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->unregister_tool_permission
+        || toolName.empty()) {
+        return -1;
+    }
+    auto nameSv = PluginStringView::from(toolName);
+    return ctx.iface.permission->unregister_tool_permission(ctx.host, &nameSv);
 }
 
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */

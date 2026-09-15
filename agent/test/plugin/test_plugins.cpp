@@ -5,6 +5,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/nodes/agentcall.h"
 #include "agentxx/nodes/modelcall.h"
@@ -2454,6 +2455,122 @@ throw new Error("top-level rollback probe");
             fsx::remove_all(dir, ec);
             XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));
         }
+    }
+
+    // ---- 38d-3. 工具权限声明: 插件在注册工具后声明自身工具的权限限制
+    //             (agentxx.agent.permission 接口表), 声明落地于权限中间件并由
+    //             宿主统一判定; 插件禁用/卸载时声明随工具一并撤销 ----
+    {
+        // 装配权限中间件 (真实运行中由 BaseAgent::initMiddleware 装配)
+        auto permission = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(ctx);
+        ctx->middlewareHandleContext->handles.push_back(permission);
+        using Mw = agentxx::middleware::PermissionMiddlewareHandle;
+
+        auto fsPath = findPluginDir("agentxx_filesystem");
+        auto fsInst = co_await ctx->pluginManager->loadPluginAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            // 1. 读/写工具声明了路径目标 (目标参数 `path`), 作用域各自独立
+            const auto* writeSpec = permission->toolPermission("agentxx_filesystem_write");
+            XX_TEST_EXPECT_TRUE(writeSpec != nullptr);
+            if (writeSpec) {
+                XX_TEST_EXPECT_EQ(writeSpec->scope, Mw::FilesystemPermissionWRITE);
+                XX_TEST_EXPECT_TRUE(
+                    writeSpec->targetKind == agentxx::middleware::ToolPermissionTargetKind::Path
+                );
+                XX_TEST_EXPECT_EQ(writeSpec->targetArgs.size(), size_t{1});
+                if (!writeSpec->targetArgs.empty()) {
+                    XX_TEST_EXPECT_EQ(writeSpec->targetArgs[0], std::string{"path"});
+                }
+            }
+            const auto* readSpec = permission->toolPermission("agentxx_filesystem_read");
+            XX_TEST_EXPECT_TRUE(readSpec != nullptr);
+            if (readSpec) {
+                XX_TEST_EXPECT_EQ(readSpec->scope, Mw::FilesystemPermissionREAD);
+            }
+            // 2. 未声明权限的工具 (glob/grep) 不参与权限判定
+            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_glob") == nullptr);
+            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_grep") == nullptr);
+
+            // 3. 判定: 已声明工具按规则表兜底 (无规则 = noRuleOperator),
+            //    未声明工具直接放行
+            permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
+            auto writeArgs = agentxx::util::Json{
+                {"path", "/tmp/agentxx_permission_decl/x.txt"}
+            };
+            XX_TEST_EXPECT_FALSE(
+                co_await permission->checkToolPermission("agentxx_filesystem_write", writeArgs)
+            );
+            auto globArgs = agentxx::util::Json{
+                {"file_patterns", agentxx::util::Json::array({"*.cpp"})}
+            };
+            XX_TEST_EXPECT_TRUE(
+                co_await permission->checkToolPermission("agentxx_filesystem_glob", globArgs)
+            );
+
+            // 4. 禁用: 工具与权限声明一并摘除 (未声明 => 直接放行)
+            ctx->pluginManager->disable("agentxx_filesystem");
+            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_write") == nullptr);
+            XX_TEST_EXPECT_TRUE(
+                co_await permission->checkToolPermission("agentxx_filesystem_write", writeArgs)
+            );
+
+            // 5. 重新启用: start 事务重新注册工具并重新声明权限 (异步收尾, 等它就绪)
+            ctx->pluginManager->enable("agentxx_filesystem");
+            for (int i = 0; i < 200 && permission->toolPermission("agentxx_filesystem_write") == nullptr;
+                 ++i) {
+                co_await sleepMs(10);
+            }
+            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_write") != nullptr);
+            XX_TEST_EXPECT_FALSE(
+                co_await permission->checkToolPermission("agentxx_filesystem_write", writeArgs)
+            );
+
+            // 6. 非法声明被拒绝: 非本实例所有的工具 / 未知作用域取值
+            auto ifacePermission = agentxx::plugin::queryInterface<AgentxxPluginPermissionIface>(
+                fsInst->hostView(),
+                AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
+            );
+            XX_TEST_EXPECT_TRUE(ifacePermission != nullptr);
+            if (ifacePermission) {
+                XX_TEST_EXPECT_EQ(
+                    ifacePermission->version,
+                    AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
+                );
+                auto argSv = agentxx::plugin::PluginStringView::fromCstr("path");
+                AgentxxPluginToolPermissionSpec spec{};
+                spec.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE;
+                spec.target_kind = AGENTXX_PLUGIN_PERMISSION_TARGET_PATH;
+                spec.target_arg  = argSv;
+                spec.arg_kind    = AGENTXX_PLUGIN_PERMISSION_ARG_STRING;
+
+                // 非本插件工具 (内置工具名)
+                spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_share_store");
+                XX_TEST_EXPECT_TRUE(
+                    ifacePermission->register_tool_permission(fsInst->hostView(), &spec) != 0
+                );
+
+                // 本插件工具 + 未知作用域取值
+                spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem_write");
+                spec.scope     = 999;
+                XX_TEST_EXPECT_TRUE(
+                    ifacePermission->register_tool_permission(fsInst->hostView(), &spec) != 0
+                );
+                // 非法声明不得改变已生效的声明 (作用域仍为写)
+                const auto* specAfterBad = permission->toolPermission("agentxx_filesystem_write");
+                XX_TEST_EXPECT_TRUE(specAfterBad != nullptr);
+                if (specAfterBad) {
+                    XX_TEST_EXPECT_EQ(specAfterBad->scope, Mw::FilesystemPermissionWRITE);
+                }
+            }
+
+            // 7. 卸载: 声明撤销
+            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));
+            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_write") == nullptr);
+            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_read") == nullptr);
+        }
+        // 摘除本用例装配的权限中间件 (避免影响后续用例)
+        ctx->middlewareHandleContext->handles.pop_back();
     }
 
     // ---- 38e. agentxx_websearch 端到端: 网络等待走受控轮询 (本地回环 HTTP 服务) ----
