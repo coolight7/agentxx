@@ -173,8 +173,7 @@ Element SidebarComponent::OnRender() {
     layout.push_back(hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex);
     if (tabs_[activeTab_].footer) {
         layout.push_back(
-            hbox({text(" "), tabs_[activeTab_].footer() | flex, text(" ")}) | xframe
-            | reflect(footerBox_)
+            hbox({text(" "), tabs_[activeTab_].footer() | flex, text(" ")}) | reflect(footerBox_)
         );
         layout.push_back(text(" "));
     } else {

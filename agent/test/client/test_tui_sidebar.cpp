@@ -187,6 +187,32 @@ struct SidebarFixture {
         return false;
     }
 
+    /// 取包含 needle 的屏幕行 (原始行文本, 含行尾空格); 未找到返回空串
+    static std::string lineWith(const std::string& screen, const std::string& needle) {
+        size_t start = 0;
+        while (start <= screen.size()) {
+            size_t      end = screen.find('\n', start);
+            std::string line
+                = screen.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (line.find(needle) != std::string::npos) {
+                return line;
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+        return {};
+    }
+
+    /// 去除行尾空白 (含行尾空格)
+    static std::string rtrim(std::string s) {
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\r')) {
+            s.pop_back();
+        }
+        return s;
+    }
+
     /// 在 (x, y) 模拟一次左键点击 (Pressed + Released)
     /// - 组件仅在 Released 时处理点击 (Pressed 由拖选跟踪处理, 不改变状态),
     ///   故以 Released 的处理结果为准
@@ -305,7 +331,50 @@ TestResult testTuiSidebar() {
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kLogTabId));
     }
 
-    // ---- 场景 6: LogMenuOverlay 弹窗交互 (LLM Context / Summy Context / Clear Logs) ----
+    // ---- 场景 6: footer 按内容区可用宽度布局 (不越过右侧 padding / 分隔线) ----
+    // 回归: footer 行曾用 | xframe 包裹 —— FTXUI 的 Frame 会把子元素放到
+    // "虚拟区域" 布局 (宽度 = max(min_x, 盒宽-1) + 1), 文本按比可见区域更宽
+    // 的宽度排版, 右端被裁掉 1~2 个字并吞掉右侧 padding 与分隔线
+    {
+        SidebarFixture fx;
+        fx.comp->addTab(
+            "diag",
+            "Diag",
+            []() -> std::vector<ScrollItem> {
+                return {
+                    ScrollItem{ftxui::text("CONTENT_MARK"), false}
+                };
+            },
+            []() -> ftxui::Element {
+                return ftxui::vbox({
+                    ftxui::hbox({
+                        ftxui::text("Agentxx 0.3.0 "),
+                        ftxui::filler(),
+                        ftxui::text("内置服务") | ftxui::xflex_shrink,
+                    }),
+                    ftxui::hbox({
+                        ftxui::text("workdir "),
+                        ftxui::filler(),
+                        ftxui::text("/home/user/very/long/work/dir/path") | ftxui::xflex_shrink,
+                    }),
+                });
+            }
+        );
+        auto screen = fx.render();
+        // 短文本 (含双宽中文) 完整可见: 布局宽度 = 内容区可用宽度
+        XX_TEST_EXPECT_TRUE(screen.find("内置服务") != std::string::npos);
+        // 行尾保留右侧 padding 与内容区分隔线 (超长路径被裁在自身盒内)
+        XX_TEST_EXPECT_TRUE(
+            SidebarFixture::rtrim(SidebarFixture::lineWith(screen, "Agentxx 0.3.0")).ends_with("│")
+        );
+        XX_TEST_EXPECT_TRUE(
+            SidebarFixture::rtrim(SidebarFixture::lineWith(screen, "workdir ")).ends_with("│")
+        );
+        // 内容区主体仍正常渲染
+        XX_TEST_EXPECT_TRUE(screen.find("CONTENT_MARK") != std::string::npos);
+    }
+
+    // ---- 场景 7: LogMenuOverlay 弹窗交互 (LLM Context / Summy Context / Clear Logs) ----
     {
         SidebarFixture fx;
         auto           overlay      = std::make_shared<LogMenuOverlay>(fx.ctx);
