@@ -91,7 +91,7 @@ void SidebarComponent::buildTabList() {
     auto pushButton = [&](bool active, std::string_view title, ListEntry entry) {
         listEntries_.push_back(entry);
         auto row = hbox({
-            text(fmt::format(" {} ", title)),
+            text(fmt::format("[{}]", title)),
             filler(),
         });
         if (active) {

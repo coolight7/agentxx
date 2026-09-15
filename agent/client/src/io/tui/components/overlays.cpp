@@ -351,19 +351,16 @@ Element SettingsOverlay::OnRender() {
     auto addItem = [&](std::string_view label, std::string value, int idx, Box& hitBox) {
         const bool selected = (selectedIndex_ == idx);
         // 值行: 文字 + 余下留白撑满整行
-        Element valueText = text(value);
-        if (!selected) {
-            // 非选中: 值色块只覆盖文字本身 (留白由外框提供, 色块内不再补空格)
-            valueText = valueText | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-        }
         Element row = hbox({
-            std::move(valueText),
+            text(value),
             filler(),
         });
         if (selected) {
             // 选中: 背景与文字色施加在整行上, 高亮色带铺满整行
             row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
                   | bold;
+        } else {
+            row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
         if (idx != 0) {
             items.push_back(text("")); // 条目之间留一空行 (背景同内容区)
