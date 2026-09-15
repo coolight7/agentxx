@@ -329,6 +329,14 @@ void test_i18n_lookup_switches_with_language() {
     XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("[ + 新会话 ]"));
     // 带格式参数的查询
     XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string("主题: Dark"));
+    // 消息列表角色标签 (值自带首尾空格, 拼在 1 列折叠标记后) 与 Tip 前缀/级别文本
+    XX_TEST_EXPECT_EQ(i18n.t("msg.roleThink"), std::string_view(" [思考] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.roleTool"), std::string_view(" [工具] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.roleSystem"), std::string_view(" [系统] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelInfo"), std::string_view("信息"));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelWarn"), std::string_view("警告"));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelError"), std::string_view("错误"));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "警告"), std::string(" [提示] # 警告"));
     // 未配置 key: 原样返回 key 本身
     XX_TEST_EXPECT_EQ(i18n.t("no.such.key"), std::string_view("no.such.key"));
 
@@ -337,6 +345,10 @@ void test_i18n_lookup_switches_with_language() {
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
     XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("[ + New Session ]"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string("Theme: Dark"));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.roleThink"), std::string_view(" [Think] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.roleTool"), std::string_view(" [Tool] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.roleSystem"), std::string_view(" [System] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "Warn"), std::string(" [Tip] # Warn"));
 
     // 恢复默认 (简体中文)
     settings.setLanguage(TUISettings::kDefaultLanguage);

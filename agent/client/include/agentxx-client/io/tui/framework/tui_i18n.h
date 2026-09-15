@@ -14,8 +14,10 @@
 /// 设计约定:
 /// - 每条目 = { key, en, zh }: en 列等于原英文界面文本, zh 列是简体中文;
 ///   键缺失时回退英文列, 仍缺失时返回 key 本身 (便于尽早发现漏配)
-/// - 消息角色标记 ([Think]/[Tool]/[System]/[Permission]/[Interrupt] 等)、
-///   协议字段标签 (args:/result:/tool_calls: 等)、插件提供文本保持原样不翻译
+/// - 消息角色标记 ([Think]/[Tool]/[System]/[Tip]/[Permission]/[Interrupt] 等)
+///   随语言切换; 日志前缀与协议字段标签 (role/args:/result:/tool_calls: 等)
+///   属技术字段, 保持原样不翻译
+/// - 插件提供文本保持原样不翻译
 /// - 语言切换只切换查找表 (原子整数), 查询本身无锁, 任意线程可调用
 class TuiI18n {
 public:
@@ -29,6 +31,9 @@ public:
     /// 带格式参数的查询 (占位符 {} 同 fmt 语义, 如 t("x", count))
     template<typename... Args>
     std::string t(std::string_view key, Args&&... args) const {
+        if (key.empty()) {
+            return "";
+        }
         return fmt::format(fmt::runtime(t(key)), std::forward<Args>(args)...);
     }
 

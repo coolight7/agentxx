@@ -10,8 +10,8 @@
 // 界面代码只引用 key, 展示文本完全由当前语言决定 (见 TuiI18n::t)。
 //
 // 约定 (与 tui_i18n.h 一致):
-// - 消息角色标记 ([Think]/[Tool]/[System]/[Permission]/[Interrupt] 等) 与
-//   日志前缀/协议字段标签 (args:/result:/tool_calls: 等) 不翻译, 两列相同
+// - 日志前缀与协议字段标签 (role/args:/result:/
+//   tool_calls: 等) 属技术字段, 不翻译
 // - 插件提供的内容 (工具名/面板/Info 段) 由插件方决定, 不经本表
 // - 含格式占位符的条目用 {} (fmt 语义), 调用侧经 TuiI18n::t(key, args...)
 //   填充
@@ -192,7 +192,17 @@ constexpr Entry kTable[] = {
     {"think.encryptedTokens",     "encrypted thinking {} tokens",                        "加密思考 {} 词元"                                                                           },
     {"think.encrypted",           "Thinking content is encrypted",                       "思考内容被加密"                                                                            },
 
-    // ---- 工具消息正文标签 (字段前缀, 保持两语言一致) ----
+    // ---- 消息列表角色标签 (随语言切换; 值自带首尾空格, 直接拼在 1 列折叠标记后;
+    //      列宽预算经 markdown::utf8_display_width 计算, 不按英文宽度写死) ----
+    {"msg.roleSystem",            " [System] ",                                          " [系统] "                                                                                       },
+    {"msg.roleThink",             " [Think] ",                                           " [思考] "                                                                                       },
+    {"msg.roleTool",              " [Tool] ",                                            " [工具] "                                                                                       },
+    {"msg.tipPrefix",             " [Tip] # {}",                                         " [提示] # {}"                                                                                   },
+    {"msg.tipLevelInfo",          "Info",                                                "信息"                                                                                           },
+    {"msg.tipLevelWarn",          "Warn",                                                "警告"                                                                                           },
+    {"msg.tipLevelError",         "Error",                                               "错误"                                                                                           },
+
+    // ---- 工具消息正文标签 (字段前缀, 随语言切换) ----
     {"tool.args",                 "  args: ",                                            "  参数: "                                                                                       },
     {"tool.result",               "  result: ",                                          "  结果: "                                                                                       },
     {"tool.file",                 "  file: ",                                            "  文件: "                                                                                       },

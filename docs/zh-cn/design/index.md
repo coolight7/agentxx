@@ -423,6 +423,12 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     connState+startupProgress 使 LazyScrollable 缓存失效重建)
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 多语言与国际化 (TuiI18n): 界面显示语言已完全与 YAML 解耦，统一由 TUI 设置窗口直接切换并持久化到 `{dataDir}/sqlite/global.db` 的 `tui.lang` (支持 Auto 自动识别系统语言 / ZhCn 简体中文 / EnUs 英文)，运行时无锁查表且支持格式化占位符。会话与模型提示词语言则由 Agent 端独立支持 `getLanguage/setLanguage`
+    消息列表的角色标签与 Tip 级别文本同样随语言切换 (折叠态形如
+    `+ [Think] ...` / `+ [Tip] # Warn · ...`，中文为 `+ [思考] ...` /
+    `+ [提示] # 警告 · ...`；展开态只显示 `- [Tip] # Warn` 前缀, 正文在下一行)，
+    头部前缀的列宽预算按标签实际显示宽度计算 (markdown::utf8_display_width),
+    不按英文宽度写死; 切换语言时消息列表渲染缓存整体失效重建
+    (agent_tui 的 onLanguageChange → MessageListComponent::invalidateCache)
   - 屏幕上方 toast 提示
   - 鼠标拖选复制: 左键拖选后松开复制到系统剪贴板 (Windows 走 Win32 API,
     其他平台走 OSC 52 转义序列, 依赖终端支持; 复制结果经 toast 提示)

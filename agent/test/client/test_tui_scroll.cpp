@@ -339,13 +339,88 @@ static void testHistoryPrependAnchoring() {
 }
 
 // ---------------------------------------------------------------------------
+// 消息列表头部角色标签与 Tip 级别文本的界面语言切换
+// ---------------------------------------------------------------------------
+
+/// 头部角色标签 ("[Think]"/"[Tool]"/"[System]") 与 Tip 前缀 ("[Tip] # <级别> · ")
+/// 随界面语言切换; Tip 折叠态格式为 "+ [Tip] # Warn · <单行预览>"
+static void testRoleLabelLocalization() {
+    auto&      settings  = TUISettings::instance();
+    const auto savedLang = settings.language();
+
+    // 中文界面: 四种角色的折叠态消息头部均为中文标签
+    settings.setLanguage(TuiLanguage::ZhCn);
+    {
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto think       = std::make_shared<TUIMessage>();
+            think->role      = TUIMessage::Role::Think;
+            think->collapsed = true;
+            think->text      = "think body";
+            st.messages.push_back(std::move(think));
+
+            auto tool                = std::make_shared<TUIMessage>();
+            tool->role               = TUIMessage::Role::Tool;
+            tool->collapsed          = true;
+            tool->text               = R"({"path":"/tmp/a.txt"})";
+            tool->tool               = TUIMessage::ToolData{};
+            tool->tool->toolName     = "agentxx_filesystem_read";
+            tool->tool->toolFinished = true;
+            tool->tool->toolResult   = "ok";
+            st.messages.push_back(std::move(tool));
+
+            auto tip           = std::make_shared<TUIMessage>();
+            tip->role          = TUIMessage::Role::Tip;
+            tip->collapsed     = true;
+            tip->text          = "disk space low";
+            tip->tip           = TUIMessage::TipData{};
+            tip->tip->tipLevel = TUIMessage::TipLevel::Warning;
+            st.messages.push_back(std::move(tip));
+
+            auto sys       = std::make_shared<TUIMessage>();
+            sys->role      = TUIMessage::Role::System;
+            sys->collapsed = true;
+            sys->text      = "system note";
+            st.messages.push_back(std::move(sys));
+        });
+
+        f.render();
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("+ [思考]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("+ [工具]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("+ [系统]") != std::string::npos);
+        // Tip 折叠态: "+ [提示] # 警告 · <单行预览>"
+        XX_TEST_EXPECT_TRUE(frame.find("+ [提示] # 警告 · disk space low") != std::string::npos);
+
+        // 语言切换 (与 agent_tui 的 onLanguageChange 一致: 清缓存后重建) -> 英文标签
+        settings.setLanguage(TuiLanguage::EnUs);
+        f.comp->invalidateCache();
+        std::string en = f.render();
+        XX_TEST_EXPECT_TRUE(en.find("+ [Think]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(en.find("+ [Tool]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(en.find("+ [System]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(en.find("+ [Tip] # Warn · disk space low") != std::string::npos);
+    }
+
+    settings.setLanguage(savedLang);
+}
+
+// ---------------------------------------------------------------------------
 // 回归: 内容更新帧与同内容再渲染帧必须完全一致 (流式抖动)
 // ---------------------------------------------------------------------------
 
 TestResult testTuiScroll() {
     XX_TEST_EXPECT_TRUE(true);
 
+    // 消息列表头部角色标签 ([Think]/[Tool]/[System]/[Tip]) 随界面语言切换
+    // (见 TuiI18n): 本模块断言英文标签, 固定界面语言为英文, 避免跟随系统语言
+    auto&      tuiSettings = TUISettings::instance();
+    const auto savedLang   = tuiSettings.language();
+    tuiSettings.setLanguage(TuiLanguage::EnUs);
+
     testHistoryPrependAnchoring();
+
+    testRoleLabelLocalization();
 
     {
         // 场景 1: 流式输出中, 内容更新帧 vs 同内容再渲染帧 (鼠标移动帧)
@@ -621,10 +696,10 @@ TestResult testTuiScroll() {
         f.render();
         f.render();
 
-        // 折叠态: header 显示 "+ " 折叠标记 + "# " 前缀 + 单行预览,
+        // 折叠态: header 显示 "+ " 折叠标记 + "[Tip] # Info · " 前缀 + 单行预览,
         // 正文尾部标记 (超出 preview 截断) 不显示
         std::string collapsed1 = f.render();
-        XX_TEST_EXPECT_TRUE(collapsed1.find("+ # ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(collapsed1.find("+ [Tip] # Info · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed1.find("SYSM_TAIL_9XYZ") == std::string::npos);
 
         // 模拟点击 header → 展开 (处理事件, 且消息折叠状态翻转)
@@ -645,7 +720,7 @@ TestResult testTuiScroll() {
 
         // 展开态: "- " 展开标记 + 正文完整显示 (尾部标记可见)
         std::string expanded = f.render();
-        XX_TEST_EXPECT_TRUE(expanded.find("- # ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(expanded.find("- [Tip] # Info") != std::string::npos);
         XX_TEST_EXPECT_TRUE(expanded.find("SYSM_TAIL_9XYZ") != std::string::npos);
 
         // 状态确实更新为展开
@@ -669,7 +744,7 @@ TestResult testTuiScroll() {
         }
         XX_TEST_EXPECT_TRUE(clicked);
         std::string collapsed2 = f.render();
-        XX_TEST_EXPECT_TRUE(collapsed2.find("+ # ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tip] # Info · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed2.find("SYSM_TAIL_9XYZ") == std::string::npos);
         snap = f.sharedState.readSnapshot();
         XX_TEST_EXPECT_TRUE(!snap->messages.empty() && snap->messages[0]->collapsed);
@@ -705,8 +780,10 @@ TestResult testTuiScroll() {
         f.render();
         f.render();
         std::string frame = f.render();
-        XX_TEST_EXPECT_TRUE(frame.find("# [Warn]") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(frame.find("# [Error]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Warn · ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Error · ") != std::string::npos);
+        // Info 级别同格式显示级别文本
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Info · ") != std::string::npos);
         // 三条 System 消息均渲染 (折叠态预览含完整短文本 marker)
         XX_TEST_EXPECT_TRUE(frame.find("WRN_TAIL_7K") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("ERR_TAIL_8M") != std::string::npos);
@@ -1752,6 +1829,9 @@ TestResult testTuiScroll() {
         // 恢复原始设置
         settings.setAnimationLevel(origAnim);
     }
+
+    // 恢复原始界面语言
+    tuiSettings.setLanguage(savedLang);
 
     return TestResult{g_tui_scroll_passed, g_tui_scroll_failed};
 }

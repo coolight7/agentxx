@@ -11,6 +11,7 @@
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "asio/io_context.hpp"
@@ -1014,6 +1015,12 @@ void testTuiToolHeaderDuration() {
 }
 
 TestResult testTuiToolHeader() {
+    // 消息列表头部角色标签 ([Tool]/[Think] 等) 随界面语言切换 (见 TuiI18n):
+    // 本模块断言英文标签, 固定界面语言为英文, 避免跟随系统语言
+    auto&      tuiSettings = TUISettings::instance();
+    const auto savedLang   = tuiSettings.language();
+    tuiSettings.setLanguage(TuiLanguage::EnUs);
+
     testTuiToolHeaderFilesystem();
     testTuiToolHeaderWeb();
     testTuiToolHeaderFallback();
@@ -1023,6 +1030,10 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderDecorButtonMultiFrame();
     testTuiToolHeaderFailed();
     testTuiToolHeaderDuration();
+
+    // 恢复原始界面语言
+    tuiSettings.setLanguage(savedLang);
+
     return {g_tui_tool_header_passed, g_tui_tool_header_failed};
 }
 

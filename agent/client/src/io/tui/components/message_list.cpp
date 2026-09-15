@@ -905,26 +905,26 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
         const int64_t durationMs = st.pendingTokenDurationMs;
 
         // 折叠态 (SingleLine 设置或用户点击折叠): 单行 header + 末尾截取预览;
-        // 展开态: "- [Think]" header + 全文多行渲染。
+        // 展开态: "- " + 角色标签 header + 全文多行渲染 (标签随界面语言切换)。
         // 两种形态均支持点击切换 (见 OnRender 流式区命中登记)
+        // 头部前缀 = 1 列折叠标记/加载动画 + 角色标签 (标签值自带首尾空格)
+        const std::string_view roleLabel = tr("msg.roleThink");
         if (streamThinkCollapsed()) {
             Elements header;
             // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "+"
             header.push_back(runningHeaderMark(false) | color(theme.thinkingColor));
-            header.push_back(text(" [Think] ") | color(theme.thinkingColor));
+            header.push_back(text(roleLabel) | color(theme.thinkingColor));
+            // 前缀显示列数 (按实际标签宽度计, 宽字符占 2 列): 供预览宽度预算使用
+            int prefixCols = 1 + static_cast<int>(markdown::utf8_display_width(roleLabel));
             if (durationMs > 0) {
-                header.push_back(
-                    text(agentxx::util::formatDurationMilliseconds(durationMs))
-                    | color(theme.thinkingColor)
-                );
+                const std::string durationText
+                    = agentxx::util::formatDurationMilliseconds(durationMs);
+                header.push_back(text(durationText) | color(theme.thinkingColor));
                 header.push_back(text(" "));
+                prefixCols += static_cast<int>(markdown::utf8_display_width(durationText)) + 1;
             }
             if (st.currentToken && !st.currentToken->empty()) {
                 // 预览自适应宽度: 内容区剩余列数与用户设置截取长度取较小值
-                int prefixCols = 10; // "+ [Think] "
-                if (durationMs > 0) {
-                    prefixCols += 6;
-                }
                 const int budget
                     = collapsedPreviewBudget(std::max(1, scrollable_->contentWidth()), prefixCols);
                 const size_t previewLen = budget > 0 ? static_cast<size_t>(budget) : prefixCols;
@@ -948,7 +948,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             Elements header;
             // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "-"
             header.push_back(runningHeaderMark(true) | color(theme.thinkingColor));
-            header.push_back(text(" [Think] ") | color(theme.thinkingColor));
+            header.push_back(text(roleLabel) | color(theme.thinkingColor));
             if (durationMs > 0) {
                 header.push_back(
                     text(agentxx::util::formatDurationMilliseconds(durationMs))
@@ -968,7 +968,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {
-    // thinking 头部项: "[Think] <时长>" 单行
+    // thinking 头部项: "[Think] <时长>" 单行 (角色标签随界面语言切换)
     const auto& theme = *ctx_.theme;
     Elements    header;
     // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "-"。
@@ -976,7 +976,7 @@ LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& s
     // 不可缓存项由 LazyScrollable 每帧重建, spinner 帧随动画推进刷新
     const bool animMark = runSpinner_->animationEnabled();
     header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(theme.thinkingColor));
-    header.push_back(text(" [Think] ") | color(theme.thinkingColor));
+    header.push_back(text(tr("msg.roleThink")) | color(theme.thinkingColor));
     // 流式输出期间不显示耗时 (同 buildStreamingItem): think 耗时在输出完成时
     // 才由 agent 端结算回填到已提交消息; pendingTokenDurationMs 平时恒为 0。
     // 不回退读取上一条同角色消息的时长 (旧数据与当前流无关)
@@ -1173,16 +1173,19 @@ Element MessageListComponent::buildMessageBlock(
             ftxui::Color tipColor = theme.systemColor;
             // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
             // (与 Think 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
-            // 角色标签 "[System] " 属技术标记, 不随语言切换
-            const bool expanded = !msg.collapsed;
-            Elements   lines;
-            Elements   header;
-            header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
-            header.push_back(text("[System] ") | color(tipColor));
+            // 角色标签 "[System] " 随界面语言切换 (见 tui_i18n.h)
+            const std::string_view roleLabel = tr("msg.roleSystem");
+            const bool             expanded  = !msg.collapsed;
+            Elements               lines;
+            Elements               header;
+            header.push_back(text(expanded ? "-" : "+") | color(tipColor));
+            header.push_back(text(roleLabel) | color(tipColor));
             if (!expanded) {
                 // 预览自适应宽度: 按内容区剩余列数截断 (宽字符按 2 列计),
                 // 不再固定 60 字符; 超出部分仍由 xflex_shrink 右缘裁剪兜底
-                const int budget = collapsedPreviewBudget(maxWidth, 11); // "+ [System] "
+                const int prefixCols
+                    = 1 + static_cast<int>(markdown::utf8_display_width(roleLabel));
+                const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 header.push_back(
                     text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
                     | dim | xflex_shrink
@@ -1195,33 +1198,39 @@ Element MessageListComponent::buildMessageBlock(
             return vbox(std::move(lines));
         }
         case TUIMessage::Role::Tip: {
-            // 按提示级别区分前缀与颜色 (Info/Warning/Error)
-            std::string  prefix   = "# ";
-            ftxui::Color tipColor = theme.hintColor;
-            const auto   tipLevel = msg.tip ? msg.tip->tipLevel : TUIMessage::TipLevel::Info;
+            // 按提示级别区分颜色与级别标签 (Info/Warning/Error; 标签随界面语言切换)
+            ftxui::Color     tipColor = theme.hintColor;
+            std::string_view levelKey = "";
+            const auto       tipLevel = msg.tip ? msg.tip->tipLevel : TUIMessage::TipLevel::Info;
             switch (tipLevel) {
                 case TUIMessage::TipLevel::Warning:
-                    prefix   = "# [Warn] ";
                     tipColor = theme.thinkingColor;
+                    levelKey = "msg.tipLevelWarn";
                     break;
                 case TUIMessage::TipLevel::Error:
-                    prefix   = "# [Error] ";
                     tipColor = theme.errorColor;
+                    levelKey = "msg.tipLevelError";
                     break;
                 case TUIMessage::TipLevel::Info:
+                    // 不增加提示
+                    // levelKey = "msg.tipLevelInfo";
                     break;
             }
+            // 头部前缀 "[Tip] # <级别>" (例: "+ [Tip] # Warn"), 级别文本随语言切换;
+            // 折叠态在其后追加 " · " 与单行预览
+            const std::string prefix = trf("msg.tipPrefix", tr(levelKey));
             // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
             // (与 Think 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
-            header.push_back(text(expanded ? "- " : "+ ") | color(tipColor));
+            header.push_back(text(expanded ? "-" : "+") | color(tipColor));
             header.push_back(text(prefix) | color(tipColor));
             if (!expanded) {
                 // 同 System: 预览自适应内容区剩余列宽, 超宽时右缘裁剪兜底
+                header.push_back(text(" · ") | color(tipColor));
                 const int prefixCols
-                    = static_cast<int>(markdown::utf8_display_width(fmt::format("+ {}", prefix)));
+                    = 1 + static_cast<int>(markdown::utf8_display_width(prefix)) + 3; // " · "
                 const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 header.push_back(
                     text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
@@ -1243,17 +1252,19 @@ Element MessageListComponent::buildMessageBlock(
             if (msg.durationMs > 0) {
                 durationText = agentxx::util::formatDurationMilliseconds(msg.durationMs);
             }
-            header.push_back(text(expanded ? "- " : "+ ") | color(theme.thinkingColor));
-            header.push_back(text("[Think] ") | color(theme.thinkingColor));
+            header.push_back(text(expanded ? "-" : "+") | color(theme.thinkingColor));
+            header.push_back(text(tr("msg.roleThink")) | color(theme.thinkingColor));
             if (!durationText.empty()) {
                 header.push_back(text(durationText) | color(theme.thinkingColor));
                 header.push_back(text(" "));
             }
             if (!expanded) {
-                // 预览自适应宽度: 前缀列数 = "+/- [Think] "(10) + 时长 + 空格
-                int prefixCols = 10;
+                // 预览自适应宽度: 前缀列数 = 折叠标记 (1 列) + 角色标签 + 时长 + 空格
+                // (标签随语言切换, 按实际显示宽度计, 不按英文宽度写死)
+                int prefixCols
+                    = 1 + static_cast<int>(markdown::utf8_display_width(tr("msg.roleThink")));
                 if (!durationText.empty()) {
-                    prefixCols += 6;
+                    prefixCols += static_cast<int>(markdown::utf8_display_width(durationText)) + 1;
                 }
                 const int   budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 std::string previewText;
@@ -1339,13 +1350,13 @@ Element MessageListComponent::buildMessageBlock(
             {
                 // 头部折叠标记: 运行中且动画等级 >= High 时用加载动画 (braille
                 // 点阵, 同输入框前缀) 替代静态 +/-; 已完成/等级不足保持原标识。
-                // spinner 与 +/- 均为 1 列宽, 后续 "[Tool] " 文本与预览列宽预算不变
+                // spinner 与 +/- 均为 1 列宽, 后续角色标签文本与预览列宽预算不变
                 if (!finished) {
                     header.push_back(runningHeaderMark(expanded) | color(theme.toolColor));
                 } else {
                     header.push_back(text(expanded ? "-" : "+") | color(theme.toolColor));
                 }
-                header.push_back(text(" [Tool] ") | color(theme.toolColor));
+                header.push_back(text(tr("msg.roleTool")) | color(theme.toolColor));
             }
 
             // 显示名: renderRes 提供的 displayName 优先, 回退原始 toolName
@@ -1355,13 +1366,17 @@ Element MessageListComponent::buildMessageBlock(
 
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
-                const int   nameCols = static_cast<int>(markdown::utf8_display_width(displayName));
+                const int nameCols = static_cast<int>(markdown::utf8_display_width(displayName));
+                // 头部前缀列数 (折叠标记 1 列 + 角色标签; 标签随语言切换, 不按英文宽度写死)
+                const int prefixCols
+                    = 1 + static_cast<int>(markdown::utf8_display_width(tr("msg.roleTool")));
                 std::string resOrArgsSummary;
 
                 if (isError) {
                     // 执行失败: 保持特化 toolName, 后续内容显示为异常结果 (红色)
-                    const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                    auto      resPreview
+                    const int budget
+                        = collapsedPreviewBudget(maxWidth, prefixCols + nameCols + 1); // " "
+                    auto resPreview
                         = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                     if (!resPreview.empty()) {
                         resOrArgsSummary = " · " + std::move(resPreview);
@@ -1376,15 +1391,18 @@ Element MessageListComponent::buildMessageBlock(
                     // 运行中无特化摘要回退
                     resOrArgsSummary = " ·";
                     if (!msg.text.empty()) {
-                        const int budget
-                            = collapsedPreviewBudget(maxWidth, 9 + nameCols + 3); // " · "
+                        const int budget = collapsedPreviewBudget(
+                            maxWidth,
+                            prefixCols + nameCols + 3
+                        ); // " · "
                         resOrArgsSummary
                             += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
                     }
                 } else {
                     // 已完成无特化摘要回退: 展示结果预览
-                    const int budget = collapsedPreviewBudget(maxWidth, 9 + nameCols + 1); // " "
-                    auto      resPreview
+                    const int budget
+                        = collapsedPreviewBudget(maxWidth, prefixCols + nameCols + 1); // " "
+                    auto resPreview
                         = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
                     if (!resPreview.empty()) {
                         resOrArgsSummary = " " + std::move(resPreview);
