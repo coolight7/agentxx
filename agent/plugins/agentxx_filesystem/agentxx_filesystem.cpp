@@ -33,7 +33,9 @@ constexpr std::string_view kNameGrep  = "agentxx_filesystem_grep";
 constexpr std::string_view kDepictList
     = R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
 Directory paths end with `/`, symlinks show their target. Types: `d` directory, `-` file, `l` symlink.
-Can also be used to check whether a specific file or directory exists.)";
+Can also be used to check whether a specific file or directory exists.
+`path` may contain shell wildcards as in bash: `*` any characters, `?` one character, `[...]` a character class, `**` any directory depth (e.g. `src/*.cpp`, `src/**/*.h`). Matched entries themselves are then listed (like `ls -d`); with `recursive` = `true`, matched directories are expanded as well.
+Wildcard matching is case-sensitive and does not match hidden entries (name starting with `.`).)";
 constexpr std::string_view kDepictRead
     = R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
 Supports offset/limit for reading portions of large files.)";
@@ -50,6 +52,9 @@ Use this to locate code, find references, or search logs across a project.)";
 
 constexpr std::string_view kPathDesc
     = R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)";
+constexpr std::string_view kPathDescList
+    = R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.
+Shell wildcards are supported (`*`, `?`, `[...]`, and `**` for any directory depth), e.g. `src/*.cpp`; matching entries are listed instead of expanding their contents.)";
 constexpr std::string_view kTimeoutDesc
     = R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)";
 
@@ -64,16 +69,17 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
     // 1. List
     auto listSchema
         = ctx.schema(kNameList)
-              .string("path", kPathDesc, /*required=*/true)
+              .string("path", kPathDescList, /*required=*/true)
               .boolean(
                   "recursive",
-                  "Default `false`. If `true`, list subdirectories recursively.",
+                  "Default `false`. If `true`, list subdirectories recursively; when `path` "
+                  "contains wildcards, matched directories are expanded as well.",
                   false,
                   false
               )
               .integer(
                   "limit",
-                  "Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited.",
+                  "Default `100`. Maximum number of entries to return (total lines in output). Set `limit <= 0` for unlimited.",
                   false,
                   100
               )
@@ -560,16 +566,9 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
         if (files.size() > 2) {
             filesStr += ", ...";
         }
-        std::string summary;
-        if (!quoted.empty() && !filesStr.empty()) {
-            summary = fmt::format(" · {} in {}", quoted, filesStr);
-        } else if (!quoted.empty()) {
-            summary = " · " + quoted;
-        } else if (!filesStr.empty()) {
-            summary = " · in " + filesStr;
-        }
-        out.displayName = "Grep";
-        out.summary     = std::move(summary);
+        std::string summary = fmt::format(" · [{}] {}", quoted, filesStr);
+        out.displayName     = "Grep";
+        out.summary         = std::move(summary);
     });
 
     // 6. Edit

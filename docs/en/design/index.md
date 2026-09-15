@@ -40,7 +40,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 
 | Category | Tool | Description |
 |---|---|---|
-| **Filesystem** | `agentxx_filesystem_list` | Lists file and directory metadata (size, type, modification time), supporting recursive traversal. |
+| **Filesystem** | `agentxx_filesystem_list` | Lists file and directory metadata (size, type, modification time), supporting recursive traversal and shell wildcards (`*`, `?`, `[...]`, `**`) in `path`: matched entries themselves are listed, and `recursive` expands matched directories as well. |
 | | `agentxx_filesystem_read` | Reads text files line by line, supporting offset and limit parameters. |
 | | `agentxx_filesystem_write` | Creates or overwrites text files. |
 | | `agentxx_filesystem_edit` | Performs exact string replacement edits on text files. |

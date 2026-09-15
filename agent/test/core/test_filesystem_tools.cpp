@@ -471,6 +471,237 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 通配模式 `*`: 展开匹配到的条目本身 (等价 `ls -d`), 不展开匹配到的目录
+asio::awaitable<void>
+    test_list_glob_star_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path", testDir + "/*.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    // 非递归: `*.txt` 只匹配 testDir 当前层, 不含 subdir/subtest.txt
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subtest.txt") == std::string::npos
+        && result.find("-rw-") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool expands `*` wildcard to matched entries" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool `*` wildcard listing failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// 通配模式 `?`: 匹配单个字符
+asio::awaitable<void>
+    test_list_glob_question_mark(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path", testDir + "/test?.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subtest.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool expands `?` wildcard to matched entries" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool `?` wildcard listing failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// 通配模式 `**`: 递归匹配任意目录深度 (与 glob 工具一致, 不递归时 `*.txt` 只匹配当前层)
+asio::awaitable<void>
+    test_list_glob_recursive_segment(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path", testDir + "/**/*.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subtest.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool expands `**` wildcard recursively" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool `**` wildcard listing failed, got: " << result << std::endl;
+    }
+
+    // `**` 单独使用: 匹配目录自身与其下全部层级
+    auto allArgs = agentxx::util::Json{
+        {"path", testDir + "/**"}
+    };
+    auto allResult = co_await tool.execute_async(allArgs);
+    if (allResult.find("subdir/") != std::string::npos
+        && allResult.find("subtest.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool `**` lists directories and files" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool `**` full listing failed, got: " << allResult << std::endl;
+    }
+    co_return;
+}
+
+/// 通配匹配到目录 + recursive = true: 目录条目本身与其内容都被列出
+asio::awaitable<void>
+    test_list_glob_dir_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path",      testDir + "/sub*"},
+        {"recursive", true             },
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("subdir/") != std::string::npos
+        && result.find("subtest.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool expands matched directories when recursive" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool wildcard recursive expand failed, got: " << result
+                  << std::endl;
+    }
+
+    // `**` 已覆盖全部后代, 再叠加 recursive 时同一条目只应出现一次 (按路径去重)
+    auto dupArgs = agentxx::util::Json{
+        {"path",      testDir + "/**"},
+        {"recursive", true           },
+    };
+    auto dupResult  = co_await tool.execute_async(dupArgs);
+    int  subtestHit = 0;
+    for (size_t pos = dupResult.find("subtest.txt"); pos != std::string::npos;
+         pos        = dupResult.find("subtest.txt", pos + 1)) {
+        subtestHit++;
+    }
+    if (subtestHit == 1) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool dedups wildcard matches combined with recursive"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool wildcard recursive dedup failed (hits=" << subtestHit
+                  << "), got: " << dupResult << std::endl;
+    }
+    co_return;
+}
+
+/// 通配模式的相对路径同样以 workDir 为基准展开
+asio::awaitable<void>
+    test_list_glob_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
+    auto ctx  = makeWorkDirContext(testDir);
+    auto tool = agentxx::tools::FileSystemListTool{ctx};
+    auto args = agentxx::util::Json{
+        {"path", "*.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("test1.txt") != std::string::npos
+        && result.find("test2.txt") != std::string::npos
+        && result.find("subtest.txt") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool expands relative wildcard against workDir" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool workDir relative wildcard failed, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+/// 通配无匹配: 返回错误说明而非 "Path not exist" 混淆
+asio::awaitable<void>
+    test_list_glob_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path", testDir + "/no_such_*.txt"}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("No match") != std::string::npos
+        && result.find("no_such_*.txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool reports no match for wildcard without hits" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool wildcard no-match message wrong, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+/// 通配匹配大小写敏感 (与 glob 工具一致)
+asio::awaitable<void>
+    test_list_glob_case_sensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path", testDir + "/*.TXT"}
+    };
+    auto result = co_await tool.execute_async(args);
+    if (result.find("No match") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool wildcard match is case-sensitive" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool wildcard should be case-sensitive, got: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+/// 通配模式下 limit 同样限制输出条目总数 (多个匹配条目共用一个上限)
+asio::awaitable<void>
+    test_list_glob_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path",  testDir + "/*"},
+        {"limit", 1            },
+    };
+    auto result = co_await tool.execute_async(args);
+    size_t lineCount = 0;
+    for (size_t i = 0; i < result.size(); i++) {
+        if (result[i] == '\n') {
+            lineCount++;
+        }
+    }
+    if (lineCount <= 1) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool applies limit to wildcard results" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool wildcard limit failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
+/// 文件名本身含通配字符 (`[`): 通配无匹配时回退为字面路径处理
+/// (与 shell "无匹配时保留模式原样" 一致, 保证含特殊字符的真实文件仍可列出)
+asio::awaitable<void>
+    test_list_glob_literal_fallback(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto literalFile = testDir + "/literal[1].txt";
+    {
+        std::ofstream f(literalFile);
+        f << "literal fallback\n";
+    }
+    auto tool = agentxx::tools::FileSystemListTool{agentContext};
+    auto args = agentxx::util::Json{
+        {"path", literalFile}
+    };
+    auto result = co_await tool.execute_async(args);
+    std::error_code ec;
+    std::filesystem::remove(agentxx::util::utf8ToPath(literalFile), ec);
+    if (result.find("literal[1].txt") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool falls back to literal path when no wildcard hit"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool literal fallback failed, got: " << result << std::endl;
+    }
+    co_return;
+}
+
 asio::awaitable<void>
     test_read_text_file_get_definition(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
@@ -2519,6 +2750,19 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
     }
 
+    // list offload线程池适配异步接口: 通配模式 (`*`) 展开后列出匹配条目
+    {
+        auto out = co_await callTool(
+            "agentxx_filesystem_list",
+            agentxx::util::Json{
+                {"path", "*.txt"}
+        }
+        );
+        XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
+        // 通配只匹配当前层: subdir 内的文件不出现在结果里
+        XX_TEST_EXPECT_TRUE(out.find("subtest.txt") == std::string::npos);
+    }
+
     // grep offload线程池适配异步接口: 文本搜索命中
     {
         auto out = co_await callTool(
@@ -2567,7 +2811,7 @@ asio::awaitable<void> test_plugin_real_link() {
         auto outL = co_await callTool(
             "agentxx_filesystem_list",
             agentxx::util::Json{
-                {"path", "中文目录_真实链路"}
+                {"path", "中文目录_真实链路/*.txt"}
         }
         );
         XX_TEST_EXPECT_TRUE(outL.find("中文文件.txt") != std::string::npos);
@@ -2617,6 +2861,15 @@ asio::awaitable<TestResult>
     co_await run(test_read_relative_with_workdir);
     co_await run(test_glob_relative_pattern_with_workdir);
     co_await run(test_list_file_tilde_path);
+    co_await run(test_list_glob_star_pattern);
+    co_await run(test_list_glob_question_mark);
+    co_await run(test_list_glob_recursive_segment);
+    co_await run(test_list_glob_dir_recursive);
+    co_await run(test_list_glob_relative_with_workdir);
+    co_await run(test_list_glob_no_match);
+    co_await run(test_list_glob_case_sensitive);
+    co_await run(test_list_glob_limit);
+    co_await run(test_list_glob_literal_fallback);
 
     co_await run(test_read_text_file_get_definition);
     co_await run(test_read_text_file_empty_path);

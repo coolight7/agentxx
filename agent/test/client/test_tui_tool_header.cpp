@@ -241,15 +241,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (files.size() > 2) {
             joinedFiles += (n > 0 ? ", ..." : "...");
         }
-        std::string summary = " ·";
-        if (!quoted.empty()) {
-            summary += " [" + quoted + "]";
-        }
-        if (!joinedFiles.empty()) {
-            summary += " " + joinedFiles;
-        }
-        out->displayName = makeTestString("Grep");
-        out->summary     = makeTestString(summary);
+        std::string summary = fmt::format(" · [{}] {}", quoted, joinedFiles);
+        out->displayName    = makeTestString("Grep");
+        out->summary        = makeTestString(summary);
         return 0;
     };
     reg->toolRenderers.push_back({
@@ -1088,7 +1082,9 @@ void testTuiToolHeaderBuiltin() {
         true,
         "ok"
     );
-    XX_TEST_EXPECT_TRUE(f.render().find("Subagent · 2 tasks: explorer, coder") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        f.render().find("Subagent · 2 tasks: explorer, coder") != std::string::npos
+    );
 
     // 运行中 (未完成) 的 share_store: 无新增 id 后缀, 且显示名保持运行态高亮
     ToolHeaderFixture g;

@@ -139,15 +139,19 @@ Read-only tasks (analysis/questions) don't need a worktree.
               .depict =
                   R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
 Directory paths end with `/`, symlinks show their target. Types: `d` directory, `-` file, `l` symlink.
-Can also be used to check whether a specific file or directory exists.)",
+Can also be used to check whether a specific file or directory exists.
+`path` may contain shell wildcards as in bash: `*` any characters, `?` one character, `[...]` a character class, `**` any directory depth (e.g. `src/*.cpp`, `src/**/*.h`). Matched entries themselves are then listed (like `ls -d`); with `recursive` = `true`, matched directories are expanded as well.
+Wildcard matching is case-sensitive and does not match hidden entries (name starting with `.`).)",
               .args =
                   {
                       {"path",
-                       R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
-                      {"recursive", "Default `false`. If `true`, list subdirectories recursively."},
+                       R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.
+Shell wildcards are supported (`*`, `?`, `[...]`, and `**` for any directory depth), e.g. `src/*.cpp`; matching entries are listed instead of expanding their contents.)"},
+                      {"recursive",
+                       "Default `false`. If `true`, list subdirectories recursively; when `path` contains wildcards, matched directories are expanded as well."},
                       {
                         "limit",
-                        R"(Default `100`. Maximum number of entries to return. Set `limit <= 0` for unlimited.)",
+                        R"(Default `100`. Maximum number of entries to return (total lines in output). Set `limit <= 0` for unlimited.)",
                       },
                       {
                           "timeout",

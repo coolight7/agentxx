@@ -45,7 +45,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
-| **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归 |
+| **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归与 `path` 通配 (`*` / `?` / `[...]` / `**`：含通配符时展开模式并列出匹配条目本身，`recursive` 再下钻匹配到的目录) |
 | | `agentxx_filesystem_read` | 按行读取文本文件，支持 offset/limit |
 | | `agentxx_filesystem_write` | 创建/覆盖文本文件 |
 | | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 |

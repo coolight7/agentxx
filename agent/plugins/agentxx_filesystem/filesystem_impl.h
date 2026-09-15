@@ -85,6 +85,13 @@ inline void normalizeCrlfToLf(std::string& text) {
     agentxx::util::normalizeCrlfToLf(text);
 }
 
+/// 判断路径是否含 shell 通配符 (`*` `?` `[`)。
+/// 与 glob 库内部判定 (has_magic) 及 bash 一致: 只有这三个字符触发通配展开,
+/// `]` 单独出现不触发
+inline bool hasGlobMagic(std::string_view path) {
+    return path.find_first_of("*?[") != std::string_view::npos;
+}
+
 /// 解析 `type` 参数为类型集合。支持 string 或 array 两种形式。
 /// 返回空集合表示 "any" (不按类型过滤)。合法值: file / dir / symlink / other / any。
 inline std::set<std::string> collectTypeFilter(const agentxx::util::Json& typeArg) {
@@ -184,6 +191,18 @@ inline std::string readFileContent(const std::string& filepath) {
     return result;
 }
 
+/// 拼接多行文本 (与命令行 ls 一致, 行间以 `\n` 分隔, 末尾不加换行)
+inline std::string joinLines(const std::vector<std::string>& lines) {
+    std::string output;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) {
+            output += '\n';
+        }
+        output += lines[i];
+    }
+    return output;
+}
+
 } // namespace detail
 
 // =====================================================================
@@ -194,7 +213,8 @@ inline std::string fileListExecuteImpl(
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr
 ) {
-    auto targetPath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
+    auto rawPath    = arguments.value("path", std::string{});
+    auto targetPath = detail::wsAbs(workDir, rawPath);
     if (targetPath.empty()) {
         return R"([Error] Arg `path` is empty)";
     }
@@ -268,38 +288,122 @@ inline std::string fileListExecuteImpl(
         return false;
     };
 
+    /// 是否已达到输出条目上限 (limit <= 0 表示不限)
+    auto limitReached = [&]() -> bool {
+        return limit > 0 && static_cast<int64_t>(lines.size()) >= limit;
+    };
+
+    // 通配模式下 recursive 的目录下钻结果可能与 `**` 匹配结果重叠 (如 `src/**` 已含
+    // 全部后代, 再叠加 recursive 会重复列出), 此时按路径去重; 普通路径模式不去重
+    bool                  dedupByPath = false;
+    std::set<std::string> listedPaths;
+
+    /// 追加一个条目 (按路径去重生效时同一路径只输出一次)
+    auto appendEntry = [&](const std::filesystem::directory_entry& entity) {
+        if (dedupByPath && false == listedPaths.insert(detail::toUtf8(entity.path())).second) {
+            return;
+        }
+        onAppendItem(entity);
+    };
+
+    /// 列出目录内容 (recursive 为 true 时递归子目录); 返回 true 表示应停止
+    /// (已取消 / 超时 / 达到 limit)
+    auto appendDirContents = [&](const std::filesystem::path& fsPath) -> bool {
+        // skip_permission_denied: 单个不可读目录被跳过而非中断整个列表
+        auto options = std::filesystem::directory_options::skip_permission_denied;
+        if (recursive) {
+            for (const auto& entity :
+                 std::filesystem::recursive_directory_iterator(fsPath, options)) {
+                if (checkStop() || limitReached()) {
+                    return true;
+                }
+                appendEntry(entity);
+            }
+            return false;
+        }
+        for (const auto& entity : std::filesystem::directory_iterator(fsPath, options)) {
+            if (checkStop() || limitReached()) {
+                return true;
+            }
+            appendEntry(entity);
+        }
+        return false;
+    };
+
+    // ---- 通配模式展开 (`*` `?` `[`) ----
+    // path 含 shell 通配符时按 bash 语义展开 (与 agentxx_filesystem_glob 同一 glob
+    // 实现: 大小写敏感、不匹配 `.` 开头的隐藏条目、`**` 表示递归任意层级),
+    // 输出匹配到的条目本身; recursive 为 true 时再下钻匹配到的目录
+    // (recursive 始终表示"展开子目录", 与普通目录路径的语义一致)
+    std::vector<std::filesystem::path> matched;
+    if (detail::hasGlobMagic(targetPath)) {
+        // 展开期间无法回调 isCancelled (glob 库只接受 atomic 标志), 与 glob 工具一致
+        // 传恒假标志, 取消/超时由外层 checkStop 在条目之间轮询
+        std::atomic<bool> globNeverCancel{false};
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                if (glob::has_recursive_segment(targetPath)) {
+                    matched = glob::rglob(targetPath, true, globNeverCancel);
+                } else {
+                    matched = glob::glob(targetPath, true, globNeverCancel);
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                // 遍历失败 (如 MSVC 下目录中存在系统代码页无法表示的条目名):
+                // 记录日志后按无匹配处理
+                XX_LOGW("filesystem_list: glob pattern '{}' failed: {}", targetPath, errmsg);
+                return false;
+            }
+        );
+
+        if (false == matched.empty()) {
+            // glob 的 `**` 以 `dir/.` 形式返回目录自身, 词法规范化后自带尾部 `/`,
+            // 去掉尾部斜杠: 路径写法唯一 (便于显示与按路径去重, 目录的 `/` 后缀由
+            // 条目格式化统一补)
+            for (auto& item : matched) {
+                if (item.filename().empty()) {
+                    auto parent = item.parent_path();
+                    if (false == parent.empty()) {
+                        item = std::move(parent);
+                    }
+                }
+            }
+            // 排序去重: 输出顺序只取决于名称 (与 `ls` 一致), 不受目录遍历顺序影响
+            std::sort(matched.begin(), matched.end());
+            matched.erase(std::unique(matched.begin(), matched.end()), matched.end());
+
+            // 只有 recursive 下的目录下钻才可能与 `**` 匹配结果重叠, 故仅此时去重
+            dedupByPath = recursive;
+            for (const auto& item : matched) {
+                if (checkStop() || limitReached()) {
+                    break;
+                }
+                appendEntry(std::filesystem::directory_entry{item});
+                std::error_code ec;
+                if (recursive && std::filesystem::is_directory(item, ec)) {
+                    if (appendDirContents(item)) {
+                        break;
+                    }
+                }
+            }
+            return detail::joinLines(lines);
+        }
+
+        // 通配符无匹配: 字面路径确实存在时 (文件名本身含 `*`/`[` 等) 按普通路径处理,
+        // 与 shell "无匹配时保留模式原样" 的行为一致
+        std::error_code ec;
+        if (false == std::filesystem::exists(agentxx::util::utf8ToPath(targetPath), ec)) {
+            lines.push_back(fmt::format(R"([Error] No match `path`({}) file found)", rawPath));
+            return detail::joinLines(lines);
+        }
+    }
+
     auto fsPath = agentxx::util::utf8ToPath(targetPath);
     if (false == std::filesystem::exists(fsPath)) {
         lines.push_back("[Error] Path not exist");
     } else if (std::filesystem::is_directory(fsPath)) {
-        if (recursive) {
-            // skip_permission_denied: 单个不可读目录被跳过而非中断整个列表
-            for (const auto& entity : std::filesystem::recursive_directory_iterator(
-                     fsPath,
-                     std::filesystem::directory_options::skip_permission_denied
-                 )) {
-                if (checkStop()) {
-                    break;
-                }
-                onAppendItem(entity);
-                if (limit > 0 && static_cast<int64_t>(lines.size()) >= limit) {
-                    break;
-                }
-            }
-        } else {
-            for (const auto& entity : std::filesystem::directory_iterator(
-                     fsPath,
-                     std::filesystem::directory_options::skip_permission_denied
-                 )) {
-                if (checkStop()) {
-                    break;
-                }
-                onAppendItem(entity);
-                if (limit > 0 && static_cast<int64_t>(lines.size()) >= limit) {
-                    break;
-                }
-            }
-        }
+        appendDirContents(fsPath);
     } else if (std::filesystem::is_regular_file(fsPath)) {
         onAppendItem(std::filesystem::directory_entry(fsPath));
     } else {
@@ -312,14 +416,7 @@ inline std::string fileListExecuteImpl(
     }
 
     // 拼接为多行文本 (与命令行 ls 一致)
-    std::string output;
-    for (size_t i = 0; i < lines.size(); ++i) {
-        if (i) {
-            output += '\n';
-        }
-        output += lines[i];
-    }
-    return output;
+    return detail::joinLines(lines);
 }
 
 // =====================================================================
