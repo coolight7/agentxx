@@ -178,10 +178,12 @@ bool FfiAgentRuntime::buildConfigs(
             language_ = config->language;
         }
         config->permissionMode = permissionModeFromString(cfgJ.value("permissionMode", "ask"));
-        config->permissionAllowPaths = agentxx::util::jsonGetStringArray(cfgJ, "permissionAllowPaths");
-        config->permissionDenyPaths  = agentxx::util::jsonGetStringArray(cfgJ, "permissionDenyPaths");
-        config->skillDirPaths        = agentxx::util::jsonGetStringArray(cfgJ, "skills");
-        config->memoryFilePaths      = agentxx::util::jsonGetStringArray(cfgJ, "memoryFiles");
+        config->permissionAllowPaths
+            = agentxx::util::jsonGetStringArray(cfgJ, "permissionAllowPaths");
+        config->permissionDenyPaths
+            = agentxx::util::jsonGetStringArray(cfgJ, "permissionDenyPaths");
+        config->skillDirPaths   = agentxx::util::jsonGetStringArray(cfgJ, "skills");
+        config->memoryFilePaths = agentxx::util::jsonGetStringArray(cfgJ, "memoryFiles");
         config->websearchApiUrl = cfgJ.value("websearchApiUrl", config->websearchApiUrl);
 
         // MCP 服务器: {"ns": {"url": "...", "timeoutSec": 120}}

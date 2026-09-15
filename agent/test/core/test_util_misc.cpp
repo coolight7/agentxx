@@ -322,8 +322,15 @@ void test_path_segment_sanitize() {
     using agentxx::util::truncateFsSegmentWithHash;
 
     // 非法字符替换为 '_' (长度不变)
-    XX_TEST_EXPECT_EQ(sanitizeFsSegment("a/b\\c:d*e?f\"g<h>i|j"), std::string("a_b_c_d_e_f_g_h_i_j"));
-    XX_TEST_EXPECT_EQ(sanitizeFsSegment("a\x01\x1f" "b"), std::string("a__b"));
+    XX_TEST_EXPECT_EQ(
+        sanitizeFsSegment("a/b\\c:d*e?f\"g<h>i|j"),
+        std::string("a_b_c_d_e_f_g_h_i_j")
+    );
+    XX_TEST_EXPECT_EQ(
+        sanitizeFsSegment("a\x01\x1f"
+                          "b"),
+        std::string("a__b")
+    );
     // 合法字符 (含 UTF-8 中文) 原样保留
     XX_TEST_EXPECT_EQ(sanitizeFsSegment("会话-01.ok"), std::string("会话-01.ok"));
     XX_TEST_EXPECT_EQ(sanitizeFsSegment(""), std::string(""));
@@ -342,7 +349,9 @@ void test_path_segment_sanitize() {
         XX_TEST_EXPECT_EQ(out.size(), (size_t)48);
         XX_TEST_EXPECT_EQ(out.substr(0, 39), std::string(39, 'x'));
         XX_TEST_EXPECT_EQ(out[39], '_');
-        XX_TEST_EXPECT_TRUE(out.substr(40).find_first_not_of("0123456789abcdef") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            out.substr(40).find_first_not_of("0123456789abcdef") == std::string::npos
+        );
         // 确定性: 相同输入相同输出
         XX_TEST_EXPECT_EQ(truncateFsSegmentWithHash(longSeg, 48), out);
         // 不同输入 (前部相同) 尾缀不同, 避免截断后碰撞到同一目录

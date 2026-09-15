@@ -578,7 +578,7 @@ public:
             const bool closed = co_await unloadUntil(name, deadline);
             allClosed         = closed && allClosed;
         }
-        co_return allClosed && plugins_.empty();
+        co_return allClosed&& plugins_.empty();
     }
 
     /// 预占插件名称，覆盖 Loading 期间的并发重复加载。

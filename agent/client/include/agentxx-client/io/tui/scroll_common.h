@@ -62,7 +62,7 @@ inline int layoutAndMeasure(const ftxui::Element& el, ftxui::Box box) {
 ///
 /// - `return` true 表示事件已被消费 (调用方应返回 true)
 inline bool handleWheelScroll(
-    ftxui::Event& event,
+    ftxui::Event&     event,
     const ftxui::Box& box,
     int&              scrollOffset,
     bool&             stickToBottom,

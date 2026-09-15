@@ -675,8 +675,8 @@ inline std::string
                 break;
             default:
                 if (uc < 0x20) {
-                    constexpr char kHex[] = "0123456789abcdef";
-                    out += "\\u00";
+                    constexpr char kHex[]  = "0123456789abcdef";
+                    out                   += "\\u00";
                     out.push_back(kHex[(uc >> 4) & 0xfu]);
                     out.push_back(kHex[uc & 0xfu]);
                 } else {
