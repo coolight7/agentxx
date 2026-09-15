@@ -1309,6 +1309,7 @@ void ClientPluginManager::performToolRender(
         snapshot = uiRegistry_;
     }
     // 快照强引用保活: hit 指向快照内的注册记录, 后续插件回调期间不得失效
+    // 查找顺序与 [renderClientTool] 一致: 插件注册项优先, 未命中再查宿主内置项
     const ClientToolRenderReg* hit = nullptr;
     for (const auto& r : snapshot->toolRenderers) {
         if (r.toolName == req.toolName && r.renderFn) {
@@ -1317,10 +1318,79 @@ void ClientPluginManager::performToolRender(
         }
     }
     if (!hit) {
+        for (const auto& r : snapshot->builtinToolRenderers) {
+            if (r.toolName == req.toolName && r.renderFn) {
+                hit = &r;
+                break;
+            }
+        }
+    }
+    if (!hit) {
         toolRenderCache_->store(std::move(entry));
         return;
     }
     entry.plugin = hit->plugin;
+
+    /// 调用渲染器回调 → 拷贝输出 → 写缓存并通知 UI 重绘。
+    /// 定义成闭包: 插件渲染器分支的 InflightGuard 须存活到回调返回,
+    /// 用内部作用域 + 闭包调用可避免其在回调前析构。
+    auto runRenderer = [&]() {
+        AgentxxToolRenderInput input{};
+        input.version      = 1;
+        input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
+        input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
+        input.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
+        input.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
+        input.is_finished  = req.isFinished ? 1 : 0;
+        input.is_error     = req.isError ? 1 : 0;
+        input.max_width    = req.maxWidth;
+
+        AgentxxToolRenderOutput output{};
+        int32_t                 rc = -1;
+        try {
+            rc = hit->renderFn(hit->userData, &input, &output);
+        } catch (...) {
+            rc = -1;
+        }
+        if (rc == 0) {
+            entry.matched = true;
+            if (output.displayName.data) {
+                entry.displayName.assign(
+                    output.displayName.data,
+                    static_cast<size_t>(output.displayName.size)
+                );
+            }
+            if (output.summary.data) {
+                entry.summary.assign(output.summary.data, static_cast<size_t>(output.summary.size));
+            }
+            if (output.items_json.data) {
+                try {
+                    entry.items = agentxx::util::Json::parse(std::string_view{
+                        output.items_json.data,
+                        static_cast<size_t>(output.items_json.size)
+                    });
+                } catch (...) {
+                }
+            }
+        }
+        // 输出字段无论成功/失败/异常路径都由宿主释放
+        hostMemoryFree(output.displayName.data);
+        hostMemoryFree(output.summary.data);
+        hostMemoryFree(output.items_json.data);
+
+        toolRenderCache_->store(std::move(entry));
+        if (uiAdapter_) {
+            uiAdapter_->onToolRenderUpdated(req.toolCallId, req.toolName);
+        }
+    };
+
+    // 宿主内置渲染器: 进程生命周期函数 (宿主自身实现), 无插件实例/租约,
+    // 不经插件禁用/卸载路径, 直接执行
+    if (hit->builtin) {
+        runRenderer();
+        return;
+    }
+
     if (auto rendererOwner = hit->lease ? hit->lease->instance.lock() : nullptr) {
         entry.generation = rendererOwner->lifetime ? rendererOwner->lifetime->generation() : 0;
     }
@@ -1342,53 +1412,8 @@ void ClientPluginManager::performToolRender(
         return;
     }
 
-    AgentxxToolRenderInput input{};
-    input.version      = 1;
-    input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
-    input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
-    input.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
-    input.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
-    input.is_finished  = req.isFinished ? 1 : 0;
-    input.is_error     = req.isError ? 1 : 0;
-    input.max_width    = req.maxWidth;
-
-    AgentxxToolRenderOutput output{};
-    int32_t                 rc = -1;
-    try {
-        rc = hit->renderFn(hit->userData, &input, &output);
-    } catch (...) {
-        rc = -1;
-    }
-    if (rc == 0) {
-        entry.matched = true;
-        if (output.displayName.data) {
-            entry.displayName.assign(
-                output.displayName.data,
-                static_cast<size_t>(output.displayName.size)
-            );
-        }
-        if (output.summary.data) {
-            entry.summary.assign(output.summary.data, static_cast<size_t>(output.summary.size));
-        }
-        if (output.items_json.data) {
-            try {
-                entry.items = agentxx::util::Json::parse(std::string_view{
-                    output.items_json.data,
-                    static_cast<size_t>(output.items_json.size)
-                });
-            } catch (...) {
-            }
-        }
-    }
-    // 输出字段无论成功/失败/异常路径都由宿主释放
-    hostMemoryFree(output.displayName.data);
-    hostMemoryFree(output.summary.data);
-    hostMemoryFree(output.items_json.data);
-
-    toolRenderCache_->store(std::move(entry));
-    if (uiAdapter_) {
-        uiAdapter_->onToolRenderUpdated(req.toolCallId, req.toolName);
-    }
+    // 租约仍有效: 回调期间实例由 guard 保活 (禁止卸载 dlclose)
+    runRenderer();
 }
 
 bool ClientPluginManager::hasCommand(std::string_view name) const {
@@ -3390,6 +3415,39 @@ std::string truncateToolSummary(std::string_view s, size_t maxCols = 80) {
 
 } // namespace
 
+int ClientPluginManager::registerBuiltinToolRenderer(
+    std::string_view    toolName,
+    AgentxxToolRenderFn fn,
+    void*               userData
+) {
+    if (toolName.empty() || !fn) {
+        return -1;
+    }
+    ClientToolRenderReg reg;
+    reg.plugin   = std::string{kBuiltinRendererOwner};
+    reg.toolName = std::string{toolName};
+    reg.renderFn = fn;
+    reg.userData = userData;
+    reg.builtin  = true;
+    // 内置渲染器无插件实例与 lease: 不做租约登记, 也不进入实例的
+    // toolRenderRegs (disable/enable 不涉及进程级内置渲染器)
+    std::lock_guard<std::mutex> lock(uiMutex_);
+    auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+    bool                        replaced = false;
+    for (auto& r : cur->builtinToolRenderers) {
+        if (r.toolName == reg.toolName) {
+            r        = reg;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        cur->builtinToolRenderers.push_back(std::move(reg));
+    }
+    uiRegistry_ = std::move(cur);
+    return 0;
+}
+
 int ClientPluginManager::registerToolRenderer(
     ClientPluginInstance*        inst,
     const AgentxxToolRenderSpec* spec
@@ -3771,134 +3829,137 @@ ClientToolRenderResult renderClientTool(
         }
     }
 
-    // 2. 匹配按 toolName 注册的工具特化渲染器 (render_fn 或 预设模版)
+    // 2. 匹配按 toolName 注册的工具特化渲染器 (render_fn 或 预设模版):
+    //    插件注册项优先, 未命中再查宿主内置项 (插件可覆盖内置渲染)
     if (!toolName.empty()) {
-        for (const auto& r : reg->toolRenderers) {
-            if (r.toolName == toolName) {
-                if (r.renderFn) {
-                    if (cache) {
-                        ClientToolRenderRequest req;
-                        req.toolCallId = std::string{toolCallId};
-                        req.toolName   = std::string{toolName};
-                        req.argsJson   = std::string{argsJson};
-                        req.resultText = std::string{resultText};
-                        req.isFinished = isFinished;
-                        req.isError    = isError;
-                        req.maxWidth   = maxWidth;
-                        const std::string key
-                            = ClientToolRenderRequest::keyFor(toolCallId, toolName);
-                        auto cached = cache->lookup(key, req.inputHash());
-                        if (!cached || cached->plugin != r.plugin) {
-                            res.matched       = false;
-                            res.pendingRender = true;
-                            res.pendingPlugin = r.plugin;
+        for (const auto* rendererList : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
+            for (const auto& r : *rendererList) {
+                if (r.toolName == toolName) {
+                    if (r.renderFn) {
+                        if (cache) {
+                            ClientToolRenderRequest req;
+                            req.toolCallId = std::string{toolCallId};
+                            req.toolName   = std::string{toolName};
+                            req.argsJson   = std::string{argsJson};
+                            req.resultText = std::string{resultText};
+                            req.isFinished = isFinished;
+                            req.isError    = isError;
+                            req.maxWidth   = maxWidth;
+                            const std::string key
+                                = ClientToolRenderRequest::keyFor(toolCallId, toolName);
+                            auto cached = cache->lookup(key, req.inputHash());
+                            if (!cached || cached->plugin != r.plugin) {
+                                res.matched       = false;
+                                res.pendingRender = true;
+                                res.pendingPlugin = r.plugin;
+                                return res;
+                            }
+                            res.matched     = cached->matched;
+                            res.displayName = cached->displayName;
+                            res.summary     = cached->summary;
+                            res.items       = cached->items;
                             return res;
                         }
-                        res.matched     = cached->matched;
-                        res.displayName = cached->displayName;
-                        res.summary     = cached->summary;
-                        res.items       = cached->items;
+
+                        // 无语义缓存 (如单元测试/未装配 pluginManager 环境): 同步执行 renderer
+                        AgentxxToolRenderInput input{};
+                        input.version      = 1;
+                        input.tool_call_id = agentxx::plugin::PluginStringView::from(
+                            toolCallId.data(),
+                            toolCallId.size()
+                        );
+                        input.tool_name
+                            = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+                        input.args_json
+                            = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+                        input.result_text = agentxx::plugin::PluginStringView::from(
+                            resultText.data(),
+                            resultText.size()
+                        );
+                        input.is_finished = isFinished ? 1 : 0;
+                        input.is_error    = isError ? 1 : 0;
+                        input.max_width   = maxWidth;
+
+                        AgentxxToolRenderOutput output{};
+                        int32_t                 rc = -1;
+                        try {
+                            rc = r.renderFn(r.userData, &input, &output);
+                        } catch (...) {
+                            rc = -1;
+                        }
+                        if (rc == 0) {
+                            res.matched = true;
+                            if (output.displayName.data) {
+                                res.displayName.assign(
+                                    output.displayName.data,
+                                    static_cast<size_t>(output.displayName.size)
+                                );
+                            }
+                            if (output.summary.data) {
+                                res.summary.assign(
+                                    output.summary.data,
+                                    static_cast<size_t>(output.summary.size)
+                                );
+                            }
+                            if (output.items_json.data) {
+                                try {
+                                    res.items = agentxx::util::Json::parse(std::string_view{
+                                        output.items_json.data,
+                                        static_cast<size_t>(output.items_json.size)
+                                    });
+                                } catch (...) {
+                                }
+                            }
+                        }
+                        hostMemoryFree(output.displayName.data);
+                        hostMemoryFree(output.summary.data);
+                        hostMemoryFree(output.items_json.data);
+                        return res;
+                    } else if (!r.templateDisplayName.empty() || !r.templateSummaryKey.empty()) {
+                        res.displayName = r.templateDisplayName;
+                        res.matched     = true;
+
+                        if (!r.templateSummaryKey.empty() && !argsJson.empty()) {
+                            try {
+                                auto j = agentxx::util::Json::parse(argsJson);
+                                if (j.is_object() && j.contains(r.templateSummaryKey)) {
+                                    const auto& val = j[r.templateSummaryKey];
+                                    std::string rawVal;
+                                    if (val.is_string()) {
+                                        rawVal = val.get<std::string>();
+                                    } else if (val.is_array()) {
+                                        std::string joined;
+                                        size_t      count = 0;
+                                        for (const auto& item : val) {
+                                            if (count > 0) {
+                                                joined += ", ";
+                                            }
+                                            if (item.is_string()) {
+                                                joined += item.get<std::string>();
+                                            } else {
+                                                joined += item.dump();
+                                            }
+                                            if (++count >= 2 && val.size() > 2) {
+                                                joined += ", ...";
+                                                break;
+                                            }
+                                        }
+                                        rawVal = std::move(joined);
+                                    } else {
+                                        rawVal = val.dump();
+                                    }
+                                    const size_t limit
+                                        = (maxWidth > 20) ? static_cast<size_t>(maxWidth - 15) : 80;
+                                    res.summary = truncateToolSummary(rawVal, limit);
+                                }
+                            } catch (...) {
+                                res.matched = false;
+                                res.displayName.clear();
+                                return res;
+                            }
+                        }
                         return res;
                     }
-
-                    // 无语义缓存 (如单元测试/未装配 pluginManager 环境): 同步执行 renderer
-                    AgentxxToolRenderInput input{};
-                    input.version      = 1;
-                    input.tool_call_id = agentxx::plugin::PluginStringView::from(
-                        toolCallId.data(),
-                        toolCallId.size()
-                    );
-                    input.tool_name
-                        = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-                    input.args_json
-                        = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-                    input.result_text = agentxx::plugin::PluginStringView::from(
-                        resultText.data(),
-                        resultText.size()
-                    );
-                    input.is_finished = isFinished ? 1 : 0;
-                    input.is_error    = isError ? 1 : 0;
-                    input.max_width   = maxWidth;
-
-                    AgentxxToolRenderOutput output{};
-                    int32_t                 rc = -1;
-                    try {
-                        rc = r.renderFn(r.userData, &input, &output);
-                    } catch (...) {
-                        rc = -1;
-                    }
-                    if (rc == 0) {
-                        res.matched = true;
-                        if (output.displayName.data) {
-                            res.displayName.assign(
-                                output.displayName.data,
-                                static_cast<size_t>(output.displayName.size)
-                            );
-                        }
-                        if (output.summary.data) {
-                            res.summary.assign(
-                                output.summary.data,
-                                static_cast<size_t>(output.summary.size)
-                            );
-                        }
-                        if (output.items_json.data) {
-                            try {
-                                res.items = agentxx::util::Json::parse(std::string_view{
-                                    output.items_json.data,
-                                    static_cast<size_t>(output.items_json.size)
-                                });
-                            } catch (...) {
-                            }
-                        }
-                    }
-                    hostMemoryFree(output.displayName.data);
-                    hostMemoryFree(output.summary.data);
-                    hostMemoryFree(output.items_json.data);
-                    return res;
-                } else if (!r.templateDisplayName.empty() || !r.templateSummaryKey.empty()) {
-                    res.displayName = r.templateDisplayName;
-                    res.matched     = true;
-
-                    if (!r.templateSummaryKey.empty() && !argsJson.empty()) {
-                        try {
-                            auto j = agentxx::util::Json::parse(argsJson);
-                            if (j.is_object() && j.contains(r.templateSummaryKey)) {
-                                const auto& val = j[r.templateSummaryKey];
-                                std::string rawVal;
-                                if (val.is_string()) {
-                                    rawVal = val.get<std::string>();
-                                } else if (val.is_array()) {
-                                    std::string joined;
-                                    size_t      count = 0;
-                                    for (const auto& item : val) {
-                                        if (count > 0) {
-                                            joined += ", ";
-                                        }
-                                        if (item.is_string()) {
-                                            joined += item.get<std::string>();
-                                        } else {
-                                            joined += item.dump();
-                                        }
-                                        if (++count >= 2 && val.size() > 2) {
-                                            joined += ", ...";
-                                            break;
-                                        }
-                                    }
-                                    rawVal = std::move(joined);
-                                } else {
-                                    rawVal = val.dump();
-                                }
-                                const size_t limit
-                                    = (maxWidth > 20) ? static_cast<size_t>(maxWidth - 15) : 80;
-                                res.summary = truncateToolSummary(rawVal, limit);
-                            }
-                        } catch (...) {
-                            res.matched = false;
-                            res.displayName.clear();
-                            return res;
-                        }
-                    }
-                    return res;
                 }
             }
         }

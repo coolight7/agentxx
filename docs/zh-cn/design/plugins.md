@@ -349,13 +349,29 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
          ctx.shimStorage
      );
      ```
-2. **实例级工具装饰 (`update_tool_decor`)**：
+2. **宿主内置工具渲染器 (lib 内置工具, 无对应插件)**：
+   - 少数工具由 **lib 内置实现**提供、没有对应插件 (当前为 `agentxx_share_store` 会话共享存储
+     与 `agentxx_subagent` 子代理委派)，其特化渲染由宿主自身注册：
+     `agentxx::plugin::registerBuiltinToolRenderers(mgr)`
+     (见 [builtin_tool_renderers.h](/agent/lib/include/agentxx/plugin/builtin_tool_renderers.h))，
+     内部经 `ClientPluginManager::registerBuiltinToolRenderer` 存入 UI 注册表的
+     `builtinToolRenderers` 分表 (归属名固定为 `agentxx.core`)。
+   - client 侧在 `setupClientPlugins` (agent/client/src/mode_runners.cpp) 装配时注册一次
+     (本地/远程、TUI/CLI 各模式共用)；渲染与插件渲染器同一条路径 (client IO 线程执行 +
+     语义渲染缓存), 展开体保持宿主通用展示 (不提供 items)。
+   - 匹配优先级低于插件注册项 (插件可为同名工具注册渲染器覆盖内置渲染)；
+     内置项与进程同生命周期，不随插件禁用/卸载失效。
+   - 当前覆盖：`agentxx_share_store` → `Store` (`insert 152 lines → #7` / `get #7 [0, 100]` /
+     `set #7` / `delete #7`)、`agentxx_subagent` → `Subagent`
+     (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)。
+3. **实例级工具装饰 (`update_tool_decor`)**：
    - 订阅 `EVT_DELTA` 的 `tool_start` 后，按特定调用 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；典型实现见 `agentxx_planning` (运行时生成 ASCII/Mermaid 状态图与动态待办列表)。
-3. **优先级与降级路径**：
-   - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
-   - 插件卸载/禁用时宿主自动摘除注册并还原兜底展示，启用时无损恢复。
+4. **优先级与降级路径**：
+   - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`, 插件注册) >
+     `builtinToolRenderers` (按 `tool_name`, 宿主内置) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
+   - 插件卸载/禁用时宿主自动摘除注册并还原兜底展示，启用时无损恢复 (宿主内置渲染器不受影响)。
 
-4. **items 渲染与中断内容的复用边界 (重构后)**：
+5. **items 渲染与中断内容的复用边界 (重构后)**：
    - **静态块同一实现**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
      的内容块 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`) 在 TUI 侧
      复用同一套块渲染实现
@@ -377,7 +393,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      `progress` / `diagram`。
    - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
-4. **语义渲染缓存**：
+6. **语义渲染缓存**：
    - 自定义 `render_fn` **只在 client IO 线程执行**：UI 线程提交
      `ClientToolRenderRequest` (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝)，
      宿主在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用，

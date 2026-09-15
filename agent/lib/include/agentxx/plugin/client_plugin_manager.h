@@ -100,11 +100,21 @@ struct ClientToolRenderReg {
     AgentxxToolRenderFn                      renderFn = nullptr;
     void*                                    userData = nullptr;
     std::shared_ptr<ClientToolRendererLease> lease;
+    /// 宿主内置渲染器标记 (lib 内置工具无对应插件, 由宿主自身注册;
+    /// 见 [ClientPluginManager::registerBuiltinToolRenderer]):
+    /// - true 时无插件实例与 lease, 渲染时不做租约/启用状态复查
+    /// - 归属名固定为 [kBuiltinRendererOwner]; 不随插件禁用/卸载失效
+    bool                                     builtin = false;
     std::string                              templateJson;
     std::string                              templateDisplayName;
     std::string                              templateSummaryKey;
     std::string                              templateSummaryTemplate;
 };
+
+/// 宿主内置渲染器的保留归属名 (写入 [ClientToolRenderReg::plugin] 与语义渲染
+/// 缓存条目, 非插件名): lib 内置工具 (如 agentxx_share_store/agentxx_subagent)
+/// 没有对应插件, 其特化渲染由宿主自身注册
+inline constexpr std::string_view kBuiltinRendererOwner = "agentxx.core";
 
 /// 通用动作绑定记录 (UI 注册表快照条目; bind_action_handler 写入)
 /// - targetId 空串 = 本实例兜底 (方案 A fallback: 精确匹配优先, 未命中回落 "")
@@ -124,6 +134,11 @@ struct ClientUiRegistry {
     std::vector<ClientCommand>       commands;
     std::vector<ClientToolDecor>     toolDecors;
     std::vector<ClientToolRenderReg> toolRenderers;
+    /// 宿主内置工具特化渲染器 (lib 内置工具无插件归属, 由宿主自身注册;
+    /// 见 [ClientPluginManager::registerBuiltinToolRenderer])
+    /// - 与 toolRenderers 分表存放: 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
+    /// - 随 UI 注册表快照 (COW) 一并拷贝; 生命周期 = 进程, 不随插件禁用/卸载变化
+    std::vector<ClientToolRenderReg> builtinToolRenderers;
     /// 通用动作绑定 (COW 快照: UI 线程渲染时查"该按钮是否可点", 无锁读)
     std::vector<ClientActionBinding> actionBindings;
     /// 插件名 → 实例代次 (重载同名插件后代次改变)。UI 渲染时把代次记进按钮命中框,
@@ -246,8 +261,9 @@ private:
 /// 渲染客户端工具特化内容 (折叠头/展开体; UI 线程可调, 不进入插件代码)
 /// 查询顺序:
 /// 1. toolDecors (按 toolCallId 匹配动态实例级装饰, 如 planning 推送)
-/// 2. toolRenderers 预设模版 (纯宿主计算, 直接在 UI 线程算)
-/// 3. toolRenderers 自定义 renderer: 只读 `cache` 中的语义结果;
+/// 2. toolRenderers / builtinToolRenderers (按 toolName; 插件注册项优先) 预设模版
+///    (纯宿主计算, 直接在 UI 线程算)
+/// 3. 同上的自定义 renderer: 只读 `cache` 中的语义结果;
 ///    未命中返回 matched=false + pendingRender=true (调用方提交渲染请求)
 /// 4. 若均未命中, 返回 matched = false
 ClientToolRenderResult renderClientTool(
@@ -608,6 +624,19 @@ public:
         return unregisterToolRenderer(inst, strToSv(tool_name));
     }
 
+    /// 注册宿主内置工具特化渲染器 (非插件; lib 内置工具无对应插件, 由宿主自身声明)
+    /// - 存入 [ClientUiRegistry::builtinToolRenderers], 归属名固定为
+    ///   [kBuiltinRendererOwner]; 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
+    /// - renderFn 为进程生命周期函数 (宿主自身实现), userData 由调用方保证存活;
+    ///   无插件实例/lease 语义: 不受插件禁用/卸载影响, 渲染前不做租约复查
+    /// - 任意线程可调 (uiMutex_ 保护); 同一 tool_name 重复注册覆盖旧项
+    /// 返回 0 成功
+    int registerBuiltinToolRenderer(
+        std::string_view    toolName,
+        AgentxxToolRenderFn fn,
+        void*               userData = nullptr
+    );
+
     /// 绑定动作处理器 (io 线程; cb 空则失败; 同 (plugin,targetId) 覆盖)
     /// - targetId 空串 = 本实例兜底 (方案 A fallback)
     /// - 同步写 uiRegistry_ (COW) + inst->actionRegs (disable/enable 恢复用)
@@ -772,8 +801,10 @@ private:
     void dispatchCommandAction(const std::string& actionJson);
 
     /// 执行一次工具语义渲染 (仅 client io 线程; 见 [requestToolRender]):
-    /// 从当前注册表取自定义 renderer, 复查 lease/实例状态后代次, 持 lease 调用
-    /// 插件回调, 把输出拷成宿主对象写入缓存并通知 UI 重绘。
+    /// 从当前注册表取自定义 renderer (插件注册项优先, 未命中再查宿主内置项),
+    /// 插件渲染器需复查 lease/实例状态后代次, 持 lease 调用插件回调;
+    /// 宿主内置渲染器 (无插件归属) 直接调用。输出统一拷成宿主对象写入缓存
+    /// 并通知 UI 重绘。
     void performToolRender(ClientToolRenderRequest req, std::string key, uint64_t inputHash);
 
     /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见

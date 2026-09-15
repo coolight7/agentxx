@@ -11,6 +11,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/json.h"
@@ -86,6 +87,9 @@ std::string generateUniqueSessionId() {
 /// loadConfiguredClientPlugins):
 /// - 端点经 setEventSink 注入 (AgentIOBase 关键路径事件 → 插件订阅分发)
 /// - TUI 额外经 setPluginManager 注入 (组件渲染/命令管线读取)
+/// - 注册 lib 内置工具 (agentxx_share_store/agentxx_subagent 等, 无对应插件)
+///   的特化渲染器: 与插件渲染器同路径 (client io 线程执行 + 语义缓存),
+///   须在任何工具消息渲染前完成
 template<typename IoT, typename AdapterT>
 static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     asio::any_io_executor      ex,
@@ -96,6 +100,7 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
     mgr->setUiAdapter(std::make_shared<AdapterT>(io));
     mgr->setSessionId(sessionId);
+    agentxx::plugin::registerBuiltinToolRenderers(*mgr);
     // TUI 端点: 组件上下文 (ctx_.pluginManager) 在 start() 的 UI 线程构建时
     // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式装配顺序)
     if constexpr (std::is_same_v<IoT, TUIClientAgentIO>) {

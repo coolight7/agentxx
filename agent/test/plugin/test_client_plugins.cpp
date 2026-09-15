@@ -11,10 +11,13 @@
 /// 19. 通用 overlay: open/close 参数校验 + 适配器信号
 /// 20. planning 端到端: dispatch(open_graph) → open_overlay(MERMAID)
 /// 21. kit::ActionController 单测 (header-only, 无宿主)
+/// 28. 宿主内置工具特化渲染: agentxx_share_store / agentxx_subagent
+///     (lib 内置工具无对应插件, 由宿主注册内置渲染器)
 #include "test_client_plugins.h"
 
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"
@@ -2525,6 +2528,326 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(cache.lookup("k7", 1) != nullptr);
         XX_TEST_EXPECT_EQ(cache.version("k2"), uint64_t{0});
         XX_TEST_EXPECT_EQ(cache.version("k3"), uint64_t{0});
+    }
+
+    // ---- 28. 宿主内置工具特化渲染: agentxx_share_store / agentxx_subagent ----
+    // lib 内置工具没有对应插件, 渲染器由宿主自身注册
+    // (registerBuiltinToolRenderers → ClientPluginManager::registerBuiltinToolRenderer):
+    // 存入 builtinToolRenderers 分表, 渲染走与插件渲染器相同的路径
+    // (client io 线程执行 + 语义缓存), 展开体保持宿主通用展示 (不提供 items)。
+    {
+        auto mgr2     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        auto adapter2 = std::make_shared<MockPluginUiAdapter>();
+        mgr2->setUiAdapter(adapter2);
+        mgr2->setSessionId("sess-builtin");
+
+        // 28.1 注册前: 无特化渲染 (UI 回退通用展示)
+        {
+            auto res = co_await renderToolAsync(
+                mgr2,
+                "call_bs_before",
+                "agentxx_share_store",
+                R"({"opt":"insert","text":"a\nb"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_FALSE(res.matched);
+        }
+
+        // 28.2 注册: 内置渲染器与插件渲染器分表存放; 重复注册幂等
+        agentxx::plugin::registerBuiltinToolRenderers(*mgr2);
+        {
+            auto reg = mgr2->uiRegistrySnapshot();
+            XX_TEST_EXPECT_TRUE(reg != nullptr);
+            if (reg) {
+                XX_TEST_EXPECT_EQ(reg->builtinToolRenderers.size(), size_t{2});
+                XX_TEST_EXPECT_TRUE(reg->toolRenderers.empty());
+                for (const auto& r : reg->builtinToolRenderers) {
+                    XX_TEST_EXPECT_TRUE(r.builtin);
+                    XX_TEST_EXPECT_EQ(
+                        r.plugin,
+                        std::string{agentxx::plugin::kBuiltinRendererOwner}
+                    );
+                    XX_TEST_EXPECT_TRUE(r.renderFn != nullptr);
+                }
+            }
+        }
+        agentxx::plugin::registerBuiltinToolRenderers(*mgr2);
+        XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
+
+        // 28.3 share_store insert: 操作 + 行数 + 新增 id (取自结果 JSON)
+        {
+            auto res = co_await renderToolAsync(
+                mgr2,
+                "call_bs_insert",
+                "agentxx_share_store",
+                R"({"opt":"insert","text":"line1\nline2\nline3"})",
+                R"({"id":7})",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(res.matched);
+            XX_TEST_EXPECT_EQ(res.displayName, "Store");
+            XX_TEST_EXPECT_EQ(res.summary, " · insert 3 lines → #7");
+            XX_TEST_EXPECT_TRUE(res.items.empty()); ///< 展开体保持通用展示 (无 items)
+        }
+
+        // 28.4 运行中 (结果未回): 摘要不含新增 id
+        {
+            auto res = co_await renderToolAsync(
+                mgr2,
+                "call_bs_insert_running",
+                "agentxx_share_store",
+                R"({"opt":"insert","text":"a\nb"})",
+                "",
+                false,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(res.matched);
+            XX_TEST_EXPECT_EQ(res.summary, " · insert 2 lines");
+        }
+
+        // 28.5 get/set/delete: id 与行区间 (仅一侧时另一侧开放)
+        {
+            auto getRes = co_await renderToolAsync(
+                mgr2,
+                "call_bs_get",
+                "agentxx_share_store",
+                R"({"opt":"get","id":12,"line_offset":0,"line_limit":100})",
+                "content",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(getRes.displayName, "Store");
+            XX_TEST_EXPECT_EQ(getRes.summary, " · get #12 [0, 100]");
+
+            auto getOpen = co_await renderToolAsync(
+                mgr2,
+                "call_bs_get_open",
+                "agentxx_share_store",
+                R"({"opt":"get","id":12,"line_offset":40})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(getOpen.summary, " · get #12 [40, ~]");
+
+            auto setRes = co_await renderToolAsync(
+                mgr2,
+                "call_bs_set",
+                "agentxx_share_store",
+                R"({"opt":"set","id":3,"text":"x\ny"})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(setRes.summary, " · set #3 2 lines");
+
+            auto delRes = co_await renderToolAsync(
+                mgr2,
+                "call_bs_delete",
+                "agentxx_share_store",
+                R"({"opt":"delete","id":3})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(delRes.summary, " · delete #3");
+        }
+
+        // 28.6 参数未就绪 (空串 / 半截 JSON): 只提供显示名, 摘要为空 (不报错)
+        {
+            auto emptyArgs = co_await renderToolAsync(
+                mgr2,
+                "call_bs_empty",
+                "agentxx_share_store",
+                "",
+                "",
+                false,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(emptyArgs.matched);
+            XX_TEST_EXPECT_EQ(emptyArgs.displayName, "Store");
+            XX_TEST_EXPECT_TRUE(emptyArgs.summary.empty());
+
+            auto partialArgs = co_await renderToolAsync(
+                mgr2,
+                "call_bs_partial",
+                "agentxx_share_store",
+                R"({"opt":"ins)",
+                "",
+                false,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(partialArgs.matched);
+            XX_TEST_EXPECT_EQ(partialArgs.displayName, "Store");
+            XX_TEST_EXPECT_TRUE(partialArgs.summary.empty());
+        }
+
+        // 28.7 subagent 单发: 子代理名 + 任务首行 (多行只取首行)
+        {
+            auto res = co_await renderToolAsync(
+                mgr2,
+                "call_sa_single",
+                "agentxx_subagent",
+                R"({"subagent":"explorer","message":"fix login\ndetails"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(res.matched);
+            XX_TEST_EXPECT_EQ(res.displayName, "Subagent");
+            XX_TEST_EXPECT_EQ(res.summary, " · explorer · fix login");
+        }
+
+        // 28.8 subagent 批量: 任务数 + 子代理名 (最多 3 个, 其余折叠为 ...)
+        {
+            auto batch = co_await renderToolAsync(
+                mgr2,
+                "call_sa_batch",
+                "agentxx_subagent",
+                R"({"tasks":[{"subagent":"explorer","message":"a"},{"subagent":"coder","message":"b"},{"subagent":"planner","message":"c"},{"subagent":"writer","message":"d"}]})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(batch.summary, " · 4 tasks: explorer, coder, planner, ...");
+        }
+
+        // 28.9 subagent 仅 messages 形态 (任务文本取最后一条 content) / 无名任务 /
+        //      长文本截断
+        {
+            auto msgOnly = co_await renderToolAsync(
+                mgr2,
+                "call_sa_messages",
+                "agentxx_subagent",
+                R"({"subagent":"x","messages":[{"role":"user","content":"hi there"}]})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(msgOnly.summary, " · x · hi there");
+
+            // 无子代理名 (仅任务文本): 摘要直接接在 " ·" 之后, 不留双分隔符
+            auto noName = co_await renderToolAsync(
+                mgr2,
+                "call_sa_noname",
+                "agentxx_subagent",
+                R"({"message":"summarize the module"})",
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_EQ(noName.summary, " · summarize the module");
+
+            // 宽度预算不足 (<20) 时按固定 80 列预算截断
+            const std::string longTask(200, 't');
+            auto              longRes = co_await renderToolAsync(
+                mgr2,
+                "call_sa_long",
+                "agentxx_subagent",
+                R"({"subagent":"x","message":")" + longTask + R"("})",
+                "",
+                true,
+                false,
+                10
+            );
+            XX_TEST_EXPECT_TRUE(longRes.summary.size() < longTask.size());
+            XX_TEST_EXPECT_TRUE(longRes.summary.find("...") != std::string::npos);
+        }
+
+        // 28.10 匹配优先级: 插件注册项优先于宿主内置项 (同一 tool_name)
+        {
+            agentxx::plugin::ClientUiRegistry reg;
+            reg.builtinToolRenderers.push_back({
+                .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
+                .toolName = "agentxx_share_store",
+                .renderFn = &agentxx::plugin::builtinRenderShareStore,
+                .builtin  = true,
+            });
+            auto pluginFn
+                = +[](void*, const AgentxxToolRenderInput*, AgentxxToolRenderOutput* out
+                      ) -> int32_t {
+                agentxx::plugin::hostMemorySetString(&out->displayName, "PluginStore");
+                agentxx::plugin::hostMemorySetString(&out->summary, " · plugin wins");
+                return 0;
+            };
+            reg.toolRenderers.push_back({
+                .plugin   = "some_plugin",
+                .toolName = "agentxx_share_store",
+                .renderFn = pluginFn,
+            });
+
+            const std::string args = R"({"opt":"insert","text":"a\nb"})";
+            auto              withPlugin = agentxx::plugin::renderClientTool(
+                &reg,
+                nullptr, // 无语义缓存: renderer 同步执行 (不进入异步请求路径)
+                "call_prec_1",
+                "agentxx_share_store",
+                args,
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(withPlugin.matched);
+            XX_TEST_EXPECT_EQ(withPlugin.displayName, "PluginStore");
+            XX_TEST_EXPECT_EQ(withPlugin.summary, " · plugin wins");
+
+            // 插件项不存在时回退宿主内置渲染器
+            reg.toolRenderers.clear();
+            auto builtinOnly = agentxx::plugin::renderClientTool(
+                &reg,
+                nullptr,
+                "call_prec_2",
+                "agentxx_share_store",
+                args,
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(builtinOnly.matched);
+            XX_TEST_EXPECT_EQ(builtinOnly.displayName, "Store");
+            XX_TEST_EXPECT_EQ(builtinOnly.summary, " · insert 2 lines");
+        }
+
+        // 28.11 内置渲染器不受插件禁用/卸载影响 (进程级注册, 与插件生命周期无关)
+        {
+            auto exInst = co_await mgr2->loadNativeAsync(findExamplePluginPath());
+            XX_TEST_EXPECT_TRUE(exInst != nullptr);
+            if (exInst) {
+                co_await mgr2->unloadAsync("example_plugin");
+                XX_TEST_EXPECT_TRUE(mgr2->find("example_plugin") == nullptr);
+            }
+            auto afterUnload = co_await renderToolAsync(
+                mgr2,
+                "call_bs_after_unload",
+                "agentxx_share_store",
+                R"({"opt":"insert","text":"a\nb"})",
+                R"({"id":9})",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(afterUnload.matched);
+            XX_TEST_EXPECT_EQ(afterUnload.summary, " · insert 2 lines → #9");
+            XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
+        }
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};

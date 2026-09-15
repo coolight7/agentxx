@@ -14,6 +14,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx/plugin/builtin_tool_renderers.h"
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
@@ -341,6 +342,21 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         .userData            = nullptr,
         .templateDisplayName = "Bash",
         .templateSummaryKey  = "command",
+    });
+
+    // 宿主内置工具 (lib 内置实现, 没有对应插件): 宿主自身注册的渲染器
+    // - 见 agentxx/plugin/builtin_tool_renderers.h
+    reg->builtinToolRenderers.push_back({
+        .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
+        .toolName = "agentxx_share_store",
+        .renderFn = &agentxx::plugin::builtinRenderShareStore,
+        .builtin  = true,
+    });
+    reg->builtinToolRenderers.push_back({
+        .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
+        .toolName = "agentxx_subagent",
+        .renderFn = &agentxx::plugin::builtinRenderSubagent,
+        .builtin  = true,
     });
 
     return reg;
@@ -1014,6 +1030,73 @@ void testTuiToolHeaderDuration() {
     XX_TEST_EXPECT_TRUE(f9.plainRender().find("0.0s") == std::string::npos);
 }
 
+// 宿主内置工具 (lib 内置实现: agentxx_share_store / agentxx_subagent) 头部特化渲染:
+// 显示名 + 一行摘要 (插件渲染器之外的"宿主内置渲染器"路径, 见
+// agentxx/plugin/builtin_tool_renderers.h)。展开体不受影响 (仍为参数/结果)。
+void testTuiToolHeaderBuiltin() {
+    ToolHeaderFixture f;
+
+    // share_store insert: 操作 + 行数 + 新增 id (取自结果 JSON)
+    f.pushTool(
+        "agentxx_share_store",
+        R"({"opt":"insert","text":"line1\nline2\nline3"})",
+        true,
+        true,
+        R"({"id":7})"
+    );
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · insert 3 lines → #7") != std::string::npos);
+
+    // share_store get: id + 行区间
+    f.pushTool(
+        "agentxx_share_store",
+        R"({"opt":"get","id":12,"line_offset":0,"line_limit":100})",
+        true,
+        true,
+        "content"
+    );
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · get #12 [0, 100]") != std::string::npos);
+
+    // share_store set / delete
+    f.pushTool(
+        "agentxx_share_store",
+        R"({"opt":"set","id":3,"text":"x\ny"})",
+        true,
+        true,
+        "success"
+    );
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · set #3 2 lines") != std::string::npos);
+    f.pushTool("agentxx_share_store", R"({"opt":"delete","id":3})", true, true, "success");
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · delete #3") != std::string::npos);
+
+    // subagent 单发: 子代理名 + 任务首行
+    f.pushTool(
+        "agentxx_subagent",
+        R"({"subagent":"explorer","message":"fix login bug\nmore details"})",
+        true,
+        true,
+        "done"
+    );
+    XX_TEST_EXPECT_TRUE(
+        f.render().find("Subagent · explorer · fix login bug") != std::string::npos
+    );
+
+    // subagent 批量: 任务数 + 子代理名
+    f.pushTool(
+        "agentxx_subagent",
+        R"({"tasks":[{"subagent":"explorer","message":"a"},{"subagent":"coder","message":"b"}]})",
+        true,
+        true,
+        "ok"
+    );
+    XX_TEST_EXPECT_TRUE(f.render().find("Subagent · 2 tasks: explorer, coder") != std::string::npos);
+
+    // 运行中 (未完成) 的 share_store: 无新增 id 后缀, 且显示名保持运行态高亮
+    ToolHeaderFixture g;
+    g.pushTool("agentxx_share_store", R"({"opt":"insert","text":"a\nb"})", false);
+    XX_TEST_EXPECT_TRUE(g.plainRender().find("Store · insert 2 lines") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(g.render().find("102;204;255") != std::string::npos);
+}
+
 TestResult testTuiToolHeader() {
     // 消息列表头部角色标签 ([Tool]/[Think] 等) 随界面语言切换 (见 TuiI18n):
     // 本模块断言英文标签, 固定界面语言为英文, 避免跟随系统语言
@@ -1030,6 +1113,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderDecorButtonMultiFrame();
     testTuiToolHeaderFailed();
     testTuiToolHeaderDuration();
+    testTuiToolHeaderBuiltin();
 
     // 恢复原始界面语言
     tuiSettings.setLanguage(savedLang);
