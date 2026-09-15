@@ -21,10 +21,11 @@ TUITheme TUITheme::darkTheme() {
         .buttonActiveBgColor   = ftxui::Color::RGB(102, 204, 255), // #66ccff
         .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000
         // 弹窗配色: 内容区比整体背景 (#000) 稍亮, 标题栏再亮一档并带强调色色调,
-        // 底栏介于两者之间, 使同一弹窗内三个区域可仅凭背景色区分 (无边框/分割线)
-        .surfaceColor            = ftxui::Color::RGB(22, 24, 29),  // #16181d
-        .surfaceHeaderColor      = ftxui::Color::RGB(32, 40, 52),  // #202834
-        .surfaceFooterColor      = ftxui::Color::RGB(26, 30, 36),  // #1a1e24
+        // 底栏介于两者之间, 使同一弹窗内三个区域可仅凭背景色区分 (无边框/分割线);
+        // 表面与蒙版的明度差同时决定圆角的可见度
+        .surfaceColor            = ftxui::Color::RGB(27, 30, 36),  // #1b1e24
+        .surfaceHeaderColor      = ftxui::Color::RGB(40, 50, 66),  // #283242
+        .surfaceFooterColor      = ftxui::Color::RGB(33, 37, 44),  // #21252c
         .surfaceTitleColor       = ftxui::Color::RGB(102, 204, 255), // accentColor
         .surfaceErrorHeaderColor = ftxui::Color::RGB(58, 22, 24),  // #3a1618
         .surfaceScrimColor       = ftxui::Color::RGB(0, 0, 0),     // 同整体背景

@@ -396,11 +396,16 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
-  - 弹窗  面性风格: 不使用边框与分割线, 标题栏/内容区/底部提示栏分别以主题的
+  - 弹窗面性风格: 不使用边框与分割线, 标题栏/内容区/底部提示栏分别以主题的
     `surfaceHeaderColor`/`surfaceColor`/`surfaceFooterColor` 背景色区分 (错误类弹窗标题栏用
     `surfaceErrorHeaderColor` + 错误色标题文字); 弹窗打开时屏幕下层以 `surfaceScrimColor`
-    铺满衬托弹窗表面; 弹窗外框辅助函数见
-    [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h),
+    铺满衬托弹窗表面
+  - 弹窗外框 (圆角 + 统一留白): 弹窗是纯色填充的圆角矩形 (四角以圆角字符绘制, 字符前景取
+    内容区背景色、背景取弹窗外部色), 且由外框统一提供留白 —— 上下左右各 1 格内边距、
+    标题栏/内容区/底部提示栏之间各 1 行间距, 因此标题文本与内容行都不需要自带首尾空格
+    (翻译表相应键也已去掉装饰性空格); 弹窗按自然尺寸居中, 高度被约束时由内容区吸收多余高度;
+    外框见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
+    (`TuiSurfaceStyle` + `tuiSurfacePopup`/`tuiSurfaceFrame`),
     配色定义见 [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h)
   - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
@@ -1554,7 +1559,7 @@ agent/
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── scroll_common.h # 两个滚动容器共用逻辑 (元素布局测量/滚轮事件)
 │   │   │       ├── tui_theme.h   # TUI 主题配色 (含弹窗 surface* 面性风格配色)
-│   │   │       ├── surface.h     # 弹窗面性风格外框 (标题栏/留白行/底部提示栏)
+│   │   │       ├── surface.h     # 弹窗面性风格外框 (圆角 + 内外留白 + 三区域组装)
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
 │   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)

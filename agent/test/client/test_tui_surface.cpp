@@ -4,7 +4,10 @@
 // - [区域背景色] 标题栏 / 内容区 / 底部提示栏分别使用主题的
 //   surfaceHeaderColor / surfaceColor / surfaceFooterColor
 //   (错误类弹窗标题栏改用 surfaceErrorHeaderColor)
-// - [无边框与分割线] 弹窗渲染结果不含边框字符与水平分割线字符
+// - [圆角与外框] 四角为圆角字符 (前景=内容区背景色, 背景=弹窗外部色), 且不含边框/
+//   分割线字符
+// - [外框留白] 上下左右各 1 格内边距 + 三区域之间各 1 行间距, 全部由外框提供:
+//   标题/内容行都不再自带首尾留白 (文字直接贴外框留白左边界)
 // - [区域顺序] 标题栏位于弹窗顶部, 底部提示栏位于弹窗底部, 之间为内容区
 // - [整行高亮] 列表类弹窗选中项背景覆盖整行 (面性风格的选中表达)
 // - [主题配色] Dark/Light 下三个区域背景色两两不同, 且区别于整体背景与蒙版色
@@ -126,7 +129,9 @@ struct ProbeResult {
 /// - 弹窗按自身逻辑决定尺寸 (未被弹窗覆盖的区域保持默认背景, 用于包围盒扫描)
 ProbeResult renderProbe(ftxui::Component comp, int w, int h) {
     ProbeResult result(w, h);
-    auto        el = comp->Render();
+    // 与 ModalContainer 一致: 弹窗按**自然尺寸**居中 (center = hcenter|vcenter,
+    // 由 filler 吸收多余空间), 弹窗自身不随屏幕尺寸被拉伸
+    auto el = comp->Render() | ftxui::center;
     ftxui::Render(result.screen, el);
     result.text = stripAnsi(result.screen.ToString());
 
@@ -148,12 +153,44 @@ ProbeResult renderProbe(ftxui::Component comp, int w, int h) {
     return result;
 }
 
-/// 面性风格区域检查: 标题栏 (顶部行) / 内容区 (标题栏下一行留白) / 底部提示栏 (底部行)
+/// 单元格是否为空白填充 (无可见字符; 内边距区域应为纯填充)
+bool isBlankCell(const ProbeResult& r, int x, int y) {
+    const auto& ch = r.screen.CellAt(x, y).character;
+    return ch.empty() || ch == " ";
+}
+
+/// 四角圆角检查: 角格为圆角字符, 前景=内容区背景色, 背景=弹窗外部色 (蒙版色)
+void checkRoundedCorners(const ProbeResult& r, const TUITheme& theme, int line) {
+    struct Corner {
+        int         x;
+        int         y;
+        const char* glyph;
+    };
+
+    const Corner corners[4] = {
+        {r.bounds.x_min, r.bounds.y_min, "╭"},
+        {r.bounds.x_max, r.bounds.y_min, "╮"},
+        {r.bounds.x_min, r.bounds.y_max, "╰"},
+        {r.bounds.x_max, r.bounds.y_max, "╯"},
+    };
+    for (const auto& c : corners) {
+        const auto& cell = r.screen.CellAt(c.x, c.y);
+        XX_TEST_EXPECT_EQ(cell.character, std::string(c.glyph));
+        XX_TEST_EXPECT_EQ(cell.foreground_color, theme.surfaceColor);
+        XX_TEST_EXPECT_EQ(cell.background_color, theme.surfaceScrimColor);
+    }
+    (void)line;
+}
+
+/// 面性风格外框检查:
+/// - 纵向: 上内边距 (圆角行) / 标题栏 / 间距 / 内容区 / 间距 / 底部提示栏 / 下内边距 (圆角行)
+/// - 横向: 左右各 1 格内边距 (标题栏与底栏背景色不越界到内边距列)
 void checkSurfaceRegions(
     const ProbeResult&  r,
     const TUITheme&     theme,
     const ftxui::Color& headerBg,
-    int                 line
+    int                 line,
+    bool                headerTrailingControl = false
 ) {
     if (r.isEmpty()) {
         XX_TEST_FAILED++;
@@ -163,14 +200,47 @@ void checkSurfaceRegions(
     XX_TEST_PASSED++; // 弹窗已渲染出面性区域
 
     const int midX = r.midX();
-    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min), headerBg);
-    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min + 1), theme.surfaceColor);
-    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_max), theme.surfaceFooterColor);
-    // 区域背景铺满整行 (左端/右端同样为区域背景色), 即"整行色带"而非居中色块
-    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min, r.bounds.y_min), headerBg);
-    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max, r.bounds.y_min), headerBg);
-    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min, r.bounds.y_max), theme.surfaceFooterColor);
-    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max, r.bounds.y_max), theme.surfaceFooterColor);
+    // 上/下内边距 (圆角行) 为内容区背景色; 标题栏/底栏各在其内侧一行, 与内容区之间各 1 行间距
+    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min), theme.surfaceColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min + 1), headerBg);
+    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min + 2), theme.surfaceColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_max - 2), theme.surfaceColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_max - 1), theme.surfaceFooterColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_max), theme.surfaceColor);
+    // 左右各 1 格内边距为内容区背景色 (区域背景不越界到内边距列)
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min, r.bounds.y_min + 1), theme.surfaceColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max, r.bounds.y_min + 1), theme.surfaceColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min, r.bounds.y_max - 1), theme.surfaceColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max, r.bounds.y_max - 1), theme.surfaceColor);
+    // 区域背景铺满整行 (内容区宽度内的左端/右端同样为区域背景色), 即"整行色带"
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min + 1, r.bounds.y_min + 1), headerBg);
+    if (!headerTrailingControl) { // 标题栏右端有控件时该列被控件背景占用
+        XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - 1, r.bounds.y_min + 1), headerBg);
+    }
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min + 1, r.bounds.y_max - 1), theme.surfaceFooterColor);
+    XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - 1, r.bounds.y_max - 1), theme.surfaceFooterColor);
+    // 四角圆角
+    checkRoundedCorners(r, theme, line);
+    // 内边距为纯填充 (四角圆角格除外): 上下内边距行与左右内边距列不含任何字符,
+    // 即各区域文字/控件都被外框挡在内边距之内
+    int padChars = 0;
+    for (int x = r.bounds.x_min + 1; x < r.bounds.x_max; ++x) {
+        if (!isBlankCell(r, x, r.bounds.y_min)) {
+            ++padChars;
+        }
+        if (!isBlankCell(r, x, r.bounds.y_max)) {
+            ++padChars;
+        }
+    }
+    for (int y = r.bounds.y_min + 1; y < r.bounds.y_max; ++y) {
+        if (!isBlankCell(r, r.bounds.x_min, y)) {
+            ++padChars;
+        }
+        if (!isBlankCell(r, r.bounds.x_max, y)) {
+            ++padChars;
+        }
+    }
+    XX_TEST_EXPECT_EQ(padChars, 0);
     // 弹窗表面完整: 内部每一行都落在某个区域背景上 (无镂空/断口)
     int hollowRows = 0;
     for (int y = r.bounds.y_min; y <= r.bounds.y_max; ++y) {
@@ -185,14 +255,24 @@ void checkSurfaceRegions(
     XX_TEST_EXPECT_TRUE(theme.surfaceColor != theme.surfaceFooterColor);
 }
 
-/// 弹窗内不应出现边框/分割线字符
+/// 弹窗内不应出现边框/分割线字符 (四角圆角字符除外, 由 checkRoundedCorners 检查)
 void checkNoFrameGlyphs(const ProbeResult& r, int line) {
-    for (const char* glyph : kFrameGlyphs) {
-        if (r.text.find(glyph) != std::string::npos) {
-            XX_TEST_FAILED++;
-            TEST_FAIL << "line " << line << ": popup contains frame/divider glyph '" << glyph << "'"
-                      << std::endl;
-            return;
+    for (int y = r.bounds.y_min; y <= r.bounds.y_max; ++y) {
+        for (int x = r.bounds.x_min; x <= r.bounds.x_max; ++x) {
+            const bool isCorner = (x == r.bounds.x_min || x == r.bounds.x_max)
+                                  && (y == r.bounds.y_min || y == r.bounds.y_max);
+            if (isCorner) {
+                continue;
+            }
+            const auto& ch = r.screen.CellAt(x, y).character;
+            for (const char* glyph : kFrameGlyphs) {
+                if (ch == glyph) {
+                    XX_TEST_FAILED++;
+                    TEST_FAIL << "line " << line << ": popup contains frame/divider glyph '"
+                              << glyph << "' at (" << x << "," << y << ")" << std::endl;
+                    return;
+                }
+            }
         }
     }
     XX_TEST_PASSED++;
@@ -265,20 +345,31 @@ TestResult testTuiSurface() {
         checkNoFrameGlyphs(r, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("选择模型") != std::string::npos);
 
-        // 选中项 (cachedModelName 首帧对齐) 整行高亮: 行中与行尾 (滚动条 gutter 左侧)
-        // 皆为高亮背景色 —— 面性风格以整行色块表达选中
+        // 标题与内容行都直接贴外框左内边距 (x_min + 1), 行内不再自带首尾空格
+        int        tx = -1, ty = -1;
+        const bool titleFound = r.findText("选择模型", tx, ty);
+        XX_TEST_EXPECT_TRUE(titleFound);
+        if (titleFound) {
+            XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 1);
+            XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1); // 标题栏位于上内边距下一行
+        }
+
+        // 选中项 (cachedModelName 首帧对齐) 整行高亮: 行中与行尾
+        // (右侧滚动条 gutter 之内一列) 皆为高亮背景色 —— 面性风格以整行色块表达选中
         int        sx = -1, sy = -1;
         const bool found = r.findText("claude-3", sx, sy);
         XX_TEST_EXPECT_TRUE(found);
         if (found) {
+            XX_TEST_EXPECT_EQ(sx, r.bounds.x_min + 1);
             XX_TEST_EXPECT_EQ(r.bgAt(r.midX(), sy), fx.theme.buttonActiveBgColor);
-            XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - 1, sy), fx.theme.buttonActiveBgColor);
+            XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - 2, sy), fx.theme.buttonActiveBgColor);
         }
         // 非选中项无高亮背景 (内容区背景色)
         int        ux = -1, uy = -1;
         const bool foundOthers = r.findText("gpt-4o", ux, uy);
         XX_TEST_EXPECT_TRUE(foundOthers);
         if (foundOthers) {
+            XX_TEST_EXPECT_EQ(ux, r.bounds.x_min + 1);
             XX_TEST_EXPECT_EQ(r.bgAt(r.midX(), uy), fx.theme.surfaceColor);
         }
     }
@@ -300,7 +391,12 @@ TestResult testTuiSurface() {
         checkNoFrameGlyphs(r, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("选择会话") != std::string::npos);
         XX_TEST_EXPECT_TRUE(r.text.find("新会话") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(r.text.find("会话一") != std::string::npos);
+        int        ix = -1, iy = -1;
+        const bool itemFound = r.findText("会话一", ix, iy);
+        XX_TEST_EXPECT_TRUE(itemFound);
+        if (itemFound) {
+            XX_TEST_EXPECT_EQ(ix, r.bounds.x_min + 1); // 条目贴外框左内边距
+        }
     }
 
     // ---- 设置弹窗 ----
@@ -348,7 +444,8 @@ TestResult testTuiSurface() {
         auto comp = std::make_shared<PendingInputsOverlay>(fx.ctx);
         auto r    = fx.probe(comp);
 
-        checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
+        // 标题栏右端为"清空"按钮 (按钮背景色), 故不校验右端为标题栏背景色
+        checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__, true);
         checkNoFrameGlyphs(r, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("待发送消息队列") != std::string::npos);
         XX_TEST_EXPECT_TRUE(r.text.find("排队中的消息") != std::string::npos);
@@ -440,25 +537,35 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(r.text.find("加载失败原因") != std::string::npos);
     }
 
-    // ---- Mermaid 状态图弹窗 (无边框外框; 图内容自身的框线不计) ----
+    // ---- 多模态文件选择弹窗 (内容区 = 路径行 + 过滤行 + 文件列表) ----
+    {
+        SurfaceFixture fx;
+        agentxx::agent::ModelCapabilityInfo caps;
+        caps.name       = "test-model";
+        caps.imageInput = true;
+        auto comp = std::make_shared<FilePickerOverlay>(fx.ctx, caps, "/tmp");
+        auto r    = fx.probe(comp);
+
+        checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
+        checkNoFrameGlyphs(r, __LINE__);
+        XX_TEST_EXPECT_TRUE(r.text.find("选择文件") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(r.text.find("/tmp") != std::string::npos);
+    }
+
+    // ---- Mermaid 状态图弹窗 (外框为圆角面性外框; 状态图自身的框线在内容区, 不参与) ----
     {
         SurfaceFixture fx;
         auto           mermaid = std::string("stateDiagram-v2\n  [*] --> A\n  A --> B\n");
         auto           comp = std::make_shared<MermaidDiagramOverlay>(fx.ctx, mermaid, "状态图");
         auto           r    = fx.probe(comp);
 
+        // checkSurfaceRegions 内含圆角/内边距检查 (外框不含直线字符; 图内容自身框线不计)
         checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("状态图") != std::string::npos);
-        // 外框首行/末行不得出现边框字符 (状态图框线在内容区中间)
-        const auto firstRow = r.text.substr(0, r.text.find('\n'));
-        for (const char* glyph : {"─", "│", "┌", "┐", "└", "┘", "╭", "╮", "╰", "╯"}) {
-            XX_TEST_EXPECT_TRUE(firstRow.find(glyph) == std::string::npos);
-        }
-        const auto lastNl  = r.text.rfind('\n', r.text.size() - 2);
-        const auto lastRow = r.text.substr(lastNl == std::string::npos ? 0 : lastNl + 1);
-        for (const char* glyph : {"─", "│", "┌", "┐", "└", "┘", "╭", "╮", "╰", "╯"}) {
-            XX_TEST_EXPECT_TRUE(lastRow.find(glyph) == std::string::npos);
-        }
+        int gx = -1, gy = -1;
+        XX_TEST_EXPECT_TRUE(r.findText("状态图", gx, gy));
+        XX_TEST_EXPECT_EQ(gx, r.bounds.x_min + 1);
+        XX_TEST_EXPECT_EQ(gy, r.bounds.y_min + 1);
     }
 
     TUISettings::instance().setLanguage(savedLang);

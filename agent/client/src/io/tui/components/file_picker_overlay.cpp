@@ -274,13 +274,11 @@ Element FilePickerOverlay::OnRender() {
     (void)caps;
 
     auto pathLine = hbox({
-        text(" "),
         text(std::string(TuiI18n::instance().t("picker.path"))) | color(theme.hintColor),
         paragraph(currentDir_) | color(theme.normalColor) | xflex_shrink,
     });
 
     auto filterLine = hbox({
-        text(" "),
         text(std::string(TuiI18n::instance().t("picker.filter"))) | color(theme.hintColor),
         filterInput_->Render() | flex | color(theme.inputTextColor),
     });
@@ -299,7 +297,6 @@ Element FilePickerOverlay::OnRender() {
         const bool  selected = (i == selectedIndex_);
 
         Elements rowItems;
-        rowItems.push_back(text("  "));
 
         if (entry.isDir) {
             rowItems.push_back(text(entry.name) | color(theme.normalColor));
@@ -336,32 +333,29 @@ Element FilePickerOverlay::OnRender() {
         items.push_back(text(std::string(TuiI18n::instance().t("picker.empty"))) | dim);
     }
 
-    // 面性风格: 无边框与分割线, 标题栏/内容区/底部提示栏以背景色区分;
-    // 列表选中行整行高亮 (列表 vbox 由外层 vbox 拉伸铺满整行宽度)
+    // 面性风格外框: 圆角 + 内外留白由外框统一提供 (各部分不再手工补留白),
+    // 标题栏/内容区/底部提示栏以背景色区分; 列表选中行整行高亮
     const int dimX     = Terminal::Size().dimx;
     const int dimY     = Terminal::Size().dimy;
     const int overlayW = std::max(40, dimX * 3 / 5);
     const int overlayH = std::max(12, dimY * 4 / 5);
 
-    auto content
-        = vbox({
-              tuiSurfaceTitleBar(titleText, theme.surfaceTitleColor, theme.surfaceHeaderColor),
-              tuiSurfacePadRow(theme.surfaceColor),
-              pathLine | bgcolor(theme.surfaceColor),
-              filterLine | bgcolor(theme.surfaceColor),
-              tuiSurfacePadRow(theme.surfaceColor),
-              vbox(std::move(items)) | flex | size(HEIGHT, LESS_THAN, overlayH - 8)
-                  | bgcolor(theme.surfaceColor),
-              tuiSurfacePadRow(theme.surfaceColor),
-              tuiSurfaceFooterBar(
-                  std::string(TuiI18n::instance().t("picker.hint")),
-                  theme.hintColor,
-                  theme.surfaceFooterColor
-              ),
-          })
-          | size(WIDTH, EQUAL, overlayW) | size(HEIGHT, LESS_THAN, overlayH);
+    const auto style = TuiSurfaceStyle::fromTheme(theme);
 
-    return content | center;
+    // 内容区: 路径行 + 过滤行 + 空行 + 文件列表 (左右留白由外框提供)
+    Elements content;
+    content.push_back(pathLine);
+    content.push_back(filterLine);
+    content.push_back(tuiSurfaceGapRow(style.body));
+    content.push_back(vbox(std::move(items)) | flex | size(HEIGHT, LESS_THAN, overlayH - 10));
+
+    return tuiSurfacePopup(
+               style,
+               titleText,
+               vbox(std::move(content)) | flex,
+               std::string(TuiI18n::instance().t("picker.hint"))
+           )
+           | size(WIDTH, EQUAL, overlayW) | size(HEIGHT, LESS_THAN, overlayH) | center;
 }
 
 bool FilePickerOverlay::OnEvent(Event event) {

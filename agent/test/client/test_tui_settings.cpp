@@ -255,33 +255,33 @@ void test_auto_language_detection() {
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
 
     // 模拟中文系统环境
     env.set("LANG", std::string_view{"zh_CN.UTF-8"});
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("zh-cn"));
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("设置"));
 
     // 模拟其它语言系统环境 (回退 EnUs)
     env.set("LANG", std::string_view{"ja_JP.UTF-8"});
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
 
     // 当用户显式指定语言时, effectiveLanguage 忽略系统环境
     settings.setLanguage(TuiLanguage::ZhCn);
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("zh-cn"));
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("设置"));
 
     settings.setLanguage(TuiLanguage::EnUs);
     env.set("LANG", std::string_view{"zh_CN.UTF-8"});
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
 
     // 按语言代码切换: 传入 auto 时设置为 Auto, 但 languageCode 始终返回具体语言代码
     settings.setLanguageByCode("auto");
@@ -325,18 +325,18 @@ void test_i18n_lookup_switches_with_language() {
 
     // 默认简体中文
     settings.setLanguage(TuiLanguage::ZhCn);
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" 设置 "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("设置"));
     XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("[ + 新会话 ]"));
     // 带格式参数的查询
-    XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string(" 主题: Dark "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string("主题: Dark"));
     // 未配置 key: 原样返回 key 本身
     XX_TEST_EXPECT_EQ(i18n.t("no.such.key"), std::string_view("no.such.key"));
 
     // 切换到 English
     settings.setLanguage(TuiLanguage::EnUs);
-    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view(" Settings "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
     XX_TEST_EXPECT_EQ(i18n.t("session.new"), std::string_view("[ + New Session ]"));
-    XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string(" Theme: Dark "));
+    XX_TEST_EXPECT_EQ(i18n.t("settings.themeValue", "Dark"), std::string("Theme: Dark"));
 
     // 恢复默认 (简体中文)
     settings.setLanguage(TUISettings::kDefaultLanguage);
