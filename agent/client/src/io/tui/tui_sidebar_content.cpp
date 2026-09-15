@@ -349,14 +349,23 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
             return std::string(tr("info.workDirUnknown"));
         }
     );
-    elements.push_back(text(kCwd) | color(theme_.hintColor));
+    elements.push_back(
+        hbox({
+            text(fmt::format("{} ", agentxx::util::getFileName(kCwd))),
+            filler(),
+            text(kCwd) | xflex_shrink,
+        })
+        | color(theme_.hintColor)
+    );
 
-    std::string mode = remoteUrl_.empty() ? "Inner Server" : remoteUrl_;
+    // 程序名、版本、连接的服务端类型
     elements.push_back(
         hbox({
             text(fmt::format("Agentxx {} ", kAgentxxVersion)),
             filler(),
-            text(mode) | xflex_shrink,
+            text(
+                ctx_.remoteUrl.empty() ? tr("info.innerServer") : trf("info.remote", ctx_.remoteUrl)
+            ) | xflex_shrink,
         })
         | xflex | color(theme_.hintColor)
     );
