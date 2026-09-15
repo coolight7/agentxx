@@ -7,8 +7,13 @@
 /// 占死一个宿主工作线程直到超时 (会话取消经 CancelRegistry 事件驱动 kill 进程组)。
 /// 只有关闭 `AGENTXX_ENABLE_BOOST_PROCESS` 的 popen 回退实现仍是阻塞函数,
 /// 继续走 `blocking_tool` (offload 工作线程)。
+///
+/// 工具提示词由本插件负责 (原 libagentxx 的 AgentPrompt 环境探测已迁移至此):
+/// start 事务内先探测运行环境 (python/node 与 Windows 侧 PowerShell), 再把
+/// 生成的提示词作为本实例贡献注入宿主 (见 [publishToolPrompt])。
 #include "agentxx_execmd_plugin.h"
 #include "asio/awaitable.hpp"
+#include "execute_command_env.h"
 #include "execute_command_impl.h"
 #include <string>
 
@@ -20,41 +25,115 @@ namespace {
 constexpr std::string_view kNameBash    = "agentxx_execute_bash_command";
 constexpr std::string_view kNameWindows = "agentxx_execute_windows_command";
 
-constexpr std::string_view kDepictBash = "Execute a shell/bash command and return its output.";
-constexpr std::string_view kDepictWinPlaceholder =
-    R"(Execute a Windows command and return its output.
-The command is executed in the Windows terminal. Do NOT prepend any wrapper (`cmd.exe /c`, `powershell.exe -Command`, ...) — write the plain command; the executor is selected automatically.)";
-
-constexpr std::string_view kAllOutputDesc =
-    R"(Default `true`.
-`true`: Always return stdout and stderr output.
-`false`: Only return output when the command fails.)";
-constexpr std::string_view kTimeoutDesc
-    = "Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.";
-constexpr std::string_view kBashCommandDesc =
-    R"(The shell command to execute.
-The command string is passed as-is to `bash -c` (no extra escaping layer):
-- `$` starts variable expansion — wrap literal `$` in single quotes (`echo 'a$b'`) or escape it (`echo \$HOME`).
-- Prefer single quotes for text with spaces/special characters; use double quotes when `$` expansion is intended.
-- Chain commands with `&&` / `||` / `;`; redirect with `>` / `2>&1`.)";
+/// 取参数描述 (提示词里没有该参数时回退给定文本)
+/// - 提示词来自本插件自身生成, 正常都命中; 回退保证宿主提示词接口缺失时
+///   schema 描述仍完整
+std::string_view argDescOr(
+    const ExecPromptText& prompt,
+    std::string_view      name,
+    std::string_view      fallback
+) {
+    const auto it = prompt.args.find(name);
+    if (it != prompt.args.end() && !it->second.empty()) {
+        return it->second;
+    }
+    return fallback;
+}
 
 } // namespace
 
-struct ExecPluginCtx : public PluginBase {};
+struct ExecPluginCtx : public PluginBase {
+    /// 运行环境探测结果 (start 事务内探测一次, 工具提示词与 schema 由此生成)
+    ExecEnvInfo env;
+};
+
+/// 把工具提示词 (depict + 参数描述) 作为本实例的贡献注入宿主提示词表
+/// - 宿主按所有者记录贡献 (见 PluginManager::setPromptJson), 插件卸载/禁用时
+///   自动撤销并恢复基础值; 同一工具由多个插件实例贡献时互不覆盖
+/// - 宿主未提供 prompt 接口表 (精简宿主) 时跳过: 描述文本仍随工具注册直接生效
+static void
+    publishToolPrompt(ExecPluginCtx& ctx, std::string_view toolName, const ExecPromptText& prompt) {
+    if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
+        pluginLog(
+            &ctx,
+            2,
+            "agentxx_execute_command: host has no prompt iface, tool prompt skipped"
+        );
+        return;
+    }
+    agentxx::util::Json args = agentxx::util::Json::object();
+    for (const auto& [name, desc] : prompt.args) {
+        args[name] = desc;
+    }
+    agentxx::util::Json tool = agentxx::util::Json::object();
+    tool["depict"]           = prompt.depict;
+    tool["args"]             = std::move(args);
+
+    agentxx::util::Json tools = agentxx::util::Json::object();
+    tools[std::string{toolName}] = std::move(tool);
+
+    agentxx::util::Json patch = agentxx::util::Json::object();
+    patch["toolPrompt"]       = std::move(tools);
+
+    const std::string js = patch.dump();
+    const auto        jsSv = PluginStringView::from(js.data(), js.size());
+    if (ctx.iface.prompt->set_prompt(ctx.host, &jsSv) != 0) {
+        pluginLog(
+            &ctx,
+            3,
+            fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName)
+        );
+        return;
+    }
+    pluginLog(
+        &ctx,
+        2,
+        fmt::format("agentxx_execute_command: tool prompt of {} injected", toolName)
+    );
+}
 
 static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
+    // 环境探测 (python/node 可用性与版本, Windows 侧含 PowerShell 版本):
+    // - 阻塞式子进程探测, 每次 start 只执行一次, 结果存实例上下文
+    // - 必须在工具注册前完成: 工具 definition 的 description/parameters 在注册时
+    //   由宿主固化, 之后无法再刷新 (提示词注入了也只能改宿主提示词表)
+    ctx.env = detectExecEnv();
+
 #if XX_IS_WIN_D
+    // Windows 侧命令的语法指引随实际执行路径变化: boost.process v2 直传 argv
+    // (命令作为单个 -Command 参数) 与 popen 回退 (命令经外层 shell 解析) 的
+    // 引号/转义要求不同, 故按编译期路径选择对应描述
+    const bool viaProcessSpawn =
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+        true;
+#else
+        false;
+#endif
+    const auto winPrompt = windowsToolPrompt(ctx.env, viaProcessSpawn);
+    // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
+    // 读取宿主提示词的 depict 作为工具描述, 注册后无法再改
+    publishToolPrompt(ctx, kNameWindows, winPrompt);
+
     auto winSchema = ctx.schema(kNameWindows)
-                         .string("command", "The Windows command to execute.", /*required=*/true)
-                         .integer("timeout", kTimeoutDesc, false, 60)
-                         .boolean("all_output", kAllOutputDesc, false, true)
+                         .string(
+                             "command",
+                             argDescOr(winPrompt, "command", kWindowsCommandArgDescFallback),
+                             /*required=*/true
+                         )
+                         .integer("timeout", argDescOr(winPrompt, "timeout", kTimeoutArgDesc), false, 60)
+                         .boolean(
+                             "all_output",
+                             argDescOr(winPrompt, "all_output", kAllOutputArgDesc),
+                             false,
+                             true
+                         )
                          .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     polled_tool(
         ctx,
         kNameWindows,
-        kDepictWinPlaceholder,
+        winPrompt.depict,
         winSchema,
         [](ExecPluginCtx&                  c,
            std::string_view                args_json,
@@ -95,7 +174,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     blocking_tool(
         ctx,
         kNameWindows,
-        kDepictWinPlaceholder,
+        winPrompt.depict,
         winSchema,
         [](ExecPluginCtx&                  c,
            std::string_view                args_json,
@@ -132,17 +211,31 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #endif
 
 #else // Linux / POSIX
+    const auto bashPrompt = bashToolPrompt(ctx.env);
+    // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
+    // 读取宿主提示词的 depict 作为工具描述, 注册后无法再改
+    publishToolPrompt(ctx, kNameBash, bashPrompt);
+
     auto bashSchema = ctx.schema(kNameBash)
-                          .string("command", kBashCommandDesc, /*required=*/true)
-                          .integer("timeout", kTimeoutDesc, false, 60)
-                          .boolean("all_output", kAllOutputDesc, false, true)
+                          .string(
+                              "command",
+                              argDescOr(bashPrompt, "command", kBashToolDepict),
+                              /*required=*/true
+                          )
+                          .integer("timeout", argDescOr(bashPrompt, "timeout", kTimeoutArgDesc), false, 60)
+                          .boolean(
+                              "all_output",
+                              argDescOr(bashPrompt, "all_output", kAllOutputArgDesc),
+                              false,
+                              true
+                          )
                           .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     polled_tool(
         ctx,
         kNameBash,
-        kDepictBash,
+        bashPrompt.depict,
         bashSchema,
         [](ExecPluginCtx&                  c,
            std::string_view                args_json,
@@ -183,7 +276,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     blocking_tool(
         ctx,
         kNameBash,
-        kDepictBash,
+        bashPrompt.depict,
         bashSchema,
         [](ExecPluginCtx&                  c,
            std::string_view                args_json,

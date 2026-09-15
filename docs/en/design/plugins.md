@@ -383,7 +383,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `example_js` | JavaScript script plugin example (C++ shell wrapper + `plugin.js`). |
 | `example_resources` | Session resource contribution example (declarative & programmatic MCP, Skills, rules, session environments). |
 | `agentxx_filesystem` | Filesystem tools (list, read, write, edit, glob, grep; includes unit-tested `*_impl.h`). |
-| `agentxx_execute_command` | Command execution tools (bash, windows; includes timeout handling and PowerShell detection). |
+| `agentxx_execute_command` | Command execution tools (bash, windows; includes timeout handling); probes python/node (plus PowerShell on Windows) in its start transaction and writes the results into its own tool prompts. |
 | `agentxx_websearch` | Web search and retrieval tools (search, fetch, fetch_markdown). |
 | `agentxx_rag_search` | Vector semantic search. |
 | `agentxx_string` | String tools (html_to_markdown, regexp). |
@@ -398,6 +398,17 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_text_selection_monitor` | Text selection event listener (Windows UIAutomation only). |
 | `agentxx_javascript_engine` | QuickJS execution engine (exports `interpreter.js` capability). |
 | `agentxx_execute_javascript` | JS code execution tool (`agentxx_execute_javascript`; depends on `agentxx_javascript_engine`). |
+
+> **Plugins own their tool prompts (including runtime env probing)**: tool definitions
+> (`description` / `parameters`) are frozen by `register_tool`, so a plugin must finish any
+> probing/decisions **before** registering its tools (refreshing prompts afterwards does not
+> change an already frozen tool definition). `agentxx_execute_command` follows this by probing
+> python/node availability + version (and the PowerShell executable name + version on Windows)
+> inside its `start` transaction, then injecting the resulting depict and argument descriptions
+> as this instance's contribution through the `agentxx.agent.prompt` interface; the contribution
+> is removed automatically on `disable` / unload. Probe results live only in the
+> instance context (`ExecPluginCtx::env`) — no process-wide mutable statics (multi-instance
+> constraint, see §4).
 
 ---
 

@@ -46,8 +46,8 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_filesystem_edit` | Performs exact string replacement edits on text files. |
 | | `agentxx_filesystem_glob` | Searches files matching glob patterns. |
 | | `agentxx_filesystem_grep` | Searches file contents via literal text (`text_patterns`) or regular expressions (`regex_patterns`) (can search both simultaneously). |
-| **Command Execution** | `agentxx_execute_bash_command` | Executes Linux shell commands with timeout enforcement (Linux / macOS). |
-| | `agentxx_execute_windows_command` | Executes Windows commands, defaulting to PowerShell (auto-probes pwsh/powershell and injects version into prompts), falling back to cmd.exe (Windows / callable under WSL). |
+| **Command Execution** | `agentxx_execute_bash_command` | Executes Linux shell commands with timeout enforcement (Linux / macOS); the plugin probes python/node availability + version at start and writes them into the tool prompt. |
+| | `agentxx_execute_windows_command` | Executes Windows commands, defaulting to PowerShell (the plugin auto-probes pwsh/powershell at start and injects the executable name + version into the tool prompt), falling back to cmd.exe (Windows / callable under WSL). |
 | | `agentxx_execute_javascript` | Executes JavaScript code via the QuickJS interpreter (the JS equivalent of execute_bash_command; depends on `agentxx_javascript_engine` plugin). |
 | **Mathematics** | `agentxx_math_calculate` | Mathematical expression parsing and evaluation (arithmetic, exponentiation, factorials, bitwise, logic, constants, trigonometric/hyperbolic/logarithmic/combinatorial functions, implicit multiplication). |
 | **Network** | `agentxx_web_search` | Web search (DuckDuckGo / Model Search). |
@@ -293,7 +293,7 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
   - Session selector modal (F4): Lists persisted sessions (`WireListSessions`), switching via `WireSwitchSession`, with server pushing new session Sync (tail-window paginated), model info, and context statistics.
   - Paginated history loading: Restoring long sessions initially renders only the server's trailing window (100 items locally). Scrolling upward automatically paginates older history via `WireGetViewMessages`, anchoring scroll position stably until reaching session beginning (`historyWindowStart=0`).
   - Connection status banner: Displays server-io connection states (Connecting / Failed with clickable [Retry] button / Connected). Local mode is set ready prior to `SessionServerAgentIO` driver loop; remote mode is driven via `mode_runners` connection coroutines (`TUIRenderState::connState`).
-  - Step-by-step startup progress banner: Initialization phases in `server-io init()` (environment checks, model registry, middlewares, loading MCP/RAG/plugins) report via `AgentContext::initNotifier` → `AgentIOBase::onServerProgress`. The banner dynamically reflects the active startup task, switching to keyboard shortcuts once ready.
+  - Step-by-step startup progress banner: Initialization phases in `server-io init()` (model registry, middlewares, loading MCP/RAG/plugins — plugin loading includes runtime environment probing for python/node and PowerShell) report via `AgentContext::initNotifier` → `AgentIOBase::onServerProgress`. The banner dynamically reflects the active startup task, switching to keyboard shortcuts once ready.
   - Top-of-screen toast notifications.
   - Mouse drag-selection copying: Left-click drag and release copies text to the system clipboard (Win32 API on Windows, OSC 52 escape sequences on Linux/macOS subject to terminal support, confirmed via toast).
   - Auto-scroll lock to bottom (`Scrollable` component).

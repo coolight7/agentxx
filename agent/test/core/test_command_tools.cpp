@@ -2,8 +2,10 @@
 #include "agentxx/agent/context.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_execute_command 插件 (同名同行为); 测试
-// 直测插件同一实现 (execute_command_impl.h), 保证插件行为与测试覆盖一致
+// 直测插件同一实现 (execute_command_impl.h / execute_command_env.h), 保证
+// 插件行为与测试覆盖一致
 #include "agentxx/util/util.h"
+#include "agentxx_execute_command/execute_command_env.h"
 #include "agentxx_execute_command/execute_command_impl.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -31,8 +33,8 @@ int g_cmd_failed = 0;
 namespace agentxx {
 namespace tools {
 
-/// 与插件入口同源: 优先宿主 toolPrompt (AgentPrompt 含环境探测后的动态
-/// 描述, 经 refreshEnvDetectedPrompts 刷新), 未配置回退内置默认描述
+/// 与插件入口同源: 优先宿主 toolPrompt (由插件 start 注入, 含启动时探测到的
+/// python/node/PowerShell 描述), 未配置回退内置默认描述
 inline neograph::ChatTool execmdDefinitionOf(
     const std::weak_ptr<agentxx::agent::AgentContext>& ctx,
     const char*                                        name,
@@ -622,32 +624,103 @@ asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::Agent
     co_return;
 }
 
-asio::awaitable<void>
-    test_windows_definition_ps_info(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    // AgentPrompt 构造时为避免启动阻塞使用非阻塞占位文本 (不探测 PowerShell);
-    // 此处显式完成探测+刷新, 等价于 BaseAgent::init (agent 线程) 的行为
-    if (auto agentPtr = agentContext.lock(); agentPtr && agentPtr->agentConfig) {
-        agentPtr->agentConfig->prompt.refreshEnvDetectedPrompts();
-    }
-    auto psInfo = agentxx::util::detectPowerShell();
-    auto tool   = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
-    auto def    = tool.get_definition();
-    if (psInfo.available) {
-        // depict 与 command 参数描述都应包含探测到的可执行文件名与版本号
-        XX_TEST_EXPECT_TRUE(def.description.find(psInfo.exeName) != std::string::npos);
-        XX_TEST_EXPECT_TRUE(def.description.find(psInfo.version) != std::string::npos);
-        auto props = def.parameters["properties"];
-        XX_TEST_EXPECT_TRUE(props.contains("command"));
-        XX_TEST_EXPECT_TRUE(
-            props["command"]["description"].get<std::string>().find(psInfo.exeName)
-            != std::string::npos
-        );
+// ---- 运行环境探测与工具提示词 (原 AgentPrompt 环境探测, 已迁移到插件) ----
+
+/// 环境探测结果字段自洽性: available 与 exeName/version 一致, 版本号形如 "1.2.3"
+static void expectInterpreterInfo(const agentxx_execmd_plugin::InterpreterInfo& info, const char* name) {
+    if (info.available) {
+        XX_TEST_EXPECT_TRUE(false == info.exeName.empty());
+        XX_TEST_EXPECT_TRUE(info.version.find('.') != std::string::npos);
+        TEST_INFO << name << " detected: " << info.exeName << " " << info.version << std::endl;
     } else {
-        // 回退: 提示词应描述 cmd.exe 语义
-        XX_TEST_EXPECT_TRUE(def.description.find("cmd.exe") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(info.exeName.empty());
+        XX_TEST_EXPECT_TRUE(info.version.empty());
+        TEST_INFO << name << " not detected (tool prompt will state it is missing)" << std::endl;
+    }
+}
+
+asio::awaitable<void> test_exec_env_detection(std::weak_ptr<agentxx::agent::AgentContext>) {
+    const auto env = agentxx_execmd_plugin::detectExecEnv();
+    XX_TEST_EXPECT_TRUE(false == env.systemName.empty());
+    expectInterpreterInfo(env.python, "python");
+    expectInterpreterInfo(env.node, "node");
+    // 探测结果不得来自进程级静态缓存: 二次探测结果与首次一致
+    const auto env2 = agentxx_execmd_plugin::detectExecEnv();
+    XX_TEST_EXPECT_EQ(env.python.exeName, env2.python.exeName);
+    XX_TEST_EXPECT_EQ(env.python.version, env2.python.version);
+    XX_TEST_EXPECT_EQ(env.node.exeName, env2.node.exeName);
+    XX_TEST_EXPECT_EQ(env.node.version, env2.node.version);
+    co_return;
+}
+
+/// 提示词文本: 系统信息 + 探测到的解释器信息必须写入 `command` 参数描述,
+/// 未探测到的解释器写"未找到" (引导模型改用其他方式)
+asio::awaitable<void> test_exec_env_prompt(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    (void)agentContext;
+    const auto env = agentxx_execmd_plugin::detectExecEnv();
+
+    const auto bashPrompt = agentxx_execmd_plugin::bashToolPrompt(env);
+    XX_TEST_EXPECT_TRUE(false == bashPrompt.depict.empty());
+    auto bashCmdIt = bashPrompt.args.find("command");
+    XX_TEST_EXPECT_TRUE(bashCmdIt != bashPrompt.args.end());
+    if (bashCmdIt != bashPrompt.args.end()) {
+        const auto& desc = bashCmdIt->second;
+        XX_TEST_EXPECT_TRUE(desc.find(env.systemName) != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            desc.find("## Interpreters detected at startup") != std::string::npos
+        );
+        if (env.python.available) {
+            XX_TEST_EXPECT_TRUE(desc.find(env.python.exeName) != std::string::npos);
+            XX_TEST_EXPECT_TRUE(desc.find(env.python.version) != std::string::npos);
+        } else {
+            XX_TEST_EXPECT_TRUE(desc.find("python: NOT found") != std::string::npos);
+        }
+        if (env.node.available) {
+            XX_TEST_EXPECT_TRUE(desc.find(env.node.exeName) != std::string::npos);
+            XX_TEST_EXPECT_TRUE(desc.find(env.node.version) != std::string::npos);
+        } else {
+            XX_TEST_EXPECT_TRUE(desc.find("node: NOT found") != std::string::npos);
+        }
+    }
+    XX_TEST_EXPECT_TRUE(bashPrompt.args.find("all_output") != bashPrompt.args.end());
+    XX_TEST_EXPECT_TRUE(bashPrompt.args.find("timeout") != bashPrompt.args.end());
+
+    // Windows 工具的提示词: depict 标明实际执行器 (PowerShell 版本号 / cmd.exe),
+    // `command` 描述附带同一份解释器探测结果
+    const auto winPrompt = agentxx_execmd_plugin::windowsToolPrompt(
+        env,
+        /*viaProcessSpawn=*/true
+    );
+    if (env.powershell.available) {
+        XX_TEST_EXPECT_TRUE(winPrompt.depict.find(env.powershell.exeName) != std::string::npos);
+        XX_TEST_EXPECT_TRUE(winPrompt.depict.find(env.powershell.version) != std::string::npos);
+    } else {
+        XX_TEST_EXPECT_TRUE(winPrompt.depict.find("cmd.exe") != std::string::npos);
+    }
+    auto winCmdIt = winPrompt.args.find("command");
+    XX_TEST_EXPECT_TRUE(winCmdIt != winPrompt.args.end());
+    if (winCmdIt != winPrompt.args.end()) {
+        XX_TEST_EXPECT_TRUE(
+            winCmdIt->second.find("## Interpreters detected at startup") != std::string::npos
+        );
+    }
+    // popen 回退路径的 `command` 描述同样带解释器段 (与直传路径共用环境段)
+    const auto winPromptPopen = agentxx_execmd_plugin::windowsToolPrompt(
+        env,
+        /*viaProcessSpawn=*/false
+    );
+    auto popenCmdIt = winPromptPopen.args.find("command");
+    XX_TEST_EXPECT_TRUE(popenCmdIt != winPromptPopen.args.end());
+    if (popenCmdIt != winPromptPopen.args.end()) {
+        XX_TEST_EXPECT_TRUE(
+            popenCmdIt->second.find("## Interpreters detected at startup") != std::string::npos
+        );
     }
     co_return;
 }
+
 
 asio::awaitable<void>
     test_windows_execute_ps(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
@@ -1226,7 +1299,8 @@ asio::awaitable<TestResult>
 
     co_await run(test_command_subprocess_workdir);
     co_await run(test_detect_powershell);
-    co_await run(test_windows_definition_ps_info);
+    co_await run(test_exec_env_detection);
+    co_await run(test_exec_env_prompt);
     co_await run(test_windows_execute_ps);
 
     co_return TestResult{g_cmd_passed, g_cmd_failed};

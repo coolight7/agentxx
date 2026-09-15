@@ -51,8 +51,8 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 |
 | | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
 | | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集) |
-| **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS) |
-| | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (自动探测 pwsh/powershell 并注入版本号到提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
+| **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS)；插件启动时探测 python/node 可用性与版本并写入工具提示词 |
+| | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (插件启动时自动探测 pwsh/powershell 并注入可执行文件名与版本号到工具提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
 | | `agentxx_execute_javascript` | 通过 QuickJS 解释器执行 JavaScript 代码 (execute_bash_command 的 JS 等价物, 依赖插件 `agentxx_javascript_engine`) |
 | **数学计算** | `agentxx_math_calculate` | 数学表达式解析与计算 (四则运算、幂、阶乘、位运算、比较逻辑、常量、三角/双曲/对数/组合排列等函数、隐式乘法) |
 | **网络** | `agentxx_web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
@@ -421,8 +421,9 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     连接失败 (Failed, 显示"连接失败 + [重试]"可点击按钮重新连接) / 已连接 (正常输入);
     本地模式由 SessionServerAgentIO 驱动循环启动前回调 onServerReady 置就绪,
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
-  - 启动进度逐步展示: server-io init() 各阶段 (检测系统环境/模型注册表/中间件/
-    加载 MCP server/RAG/插件等) 经 AgentContext::ThreadSafeInitNotifier (互斥锁保证线程安全)
+  - 启动进度逐步展示: server-io init() 各阶段 (模型注册表/中间件/加载 MCP server/RAG/
+    加载插件(含运行环境检测: python/node 与 PowerShell 探测)等) 经
+    AgentContext::ThreadSafeInitNotifier (互斥锁保证线程安全)
     → AgentIOBase::onServerProgress 上报, "启动中"banner 同步显示当前执行的操作,
     完成后显示按键提示 (banner itemKey 计入
     connState+startupProgress 使 LazyScrollable 缓存失效重建)

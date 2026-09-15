@@ -153,14 +153,6 @@ asio::awaitable<void> BaseAgent::init() {
     }
 
     // 逐步上报启动进度 (客户端 TUI 在"启动中"banner 展示当前正在执行的操作)
-    notifyInitProgress("检测系统环境 ...");
-    // 在 agent 线程完成环境探测 (PowerShell 等) 并刷新依赖它的提示词:
-    // - AgentPrompt 构造时为避免阻塞 UI/主线程启动使用非阻塞占位描述 (不探测)
-    // - 此处 (agent ioCtx 线程, UI 已先行启动) 执行阻塞式子进程探测并覆盖占位;
-    //   tool definition 每次 LLM 请求时从 toolPrompt 重读 (见 modelcall build_params),
-    //   首个请求前必然拿到最终描述
-    agentContext->agentConfig->prompt.refreshEnvDetectedPrompts();
-
     notifyInitProgress("初始化模型注册表 ...");
     initModelRegistry();
     notifyInitProgress("初始化事件总线 ...");

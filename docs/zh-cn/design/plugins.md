@@ -439,7 +439,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `example_js` | JS 脚本插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `agentxx_filesystem` | 文件系统 6 工具 (list/read/write/edit/glob/grep, 含 `*_impl.h` 直测实现) |
-| `agentxx_execute_command` | 命令执行 2 工具 (bash/windows, 含超时与 PowerShell 探测) |
+| `agentxx_execute_command` | 命令执行 2 工具 (bash/windows, 含超时); 在 start 事务内探测 python/node (Windows 侧含 PowerShell) 并把结果写入自身工具提示词 |
 | `agentxx_websearch` | 网络搜索 3 工具 (search/fetch/fetch_markdown) |
 | `agentxx_rag_search` | 向量语义搜索 |
 | `agentxx_string` | 字符串 2 工具 (html_to_markdown/regexp) |
@@ -454,6 +454,14 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `agentxx_execute_javascript` | JS 代码执行工具 (`agentxx_execute_javascript`, 依赖 `agentxx_javascript_engine`) |
+
+> **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
+> `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策
+> （注册后再刷新提示词不会改变已经固化的工具定义）。`agentxx_execute_command` 即按此在
+> `start` 事务内探测 python/node 可用性与版本（Windows 侧另探测 PowerShell 可执行文件名与
+> 版本），随后把生成好的 depict 与参数描述经 `agentxx.agent.prompt` 接口表作为本实例贡献注入
+> 宿主；`disable` / 卸载时该贡献自动撤销并恢复基础值（见 §15.4）。
+> 探测结果只存实例上下文 (`ExecPluginCtx::env`)，不使用进程级可变静态量（多实例约束，见 §4）。
 
 ---
 

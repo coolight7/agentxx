@@ -1,12 +1,17 @@
 name: agentxx_execute_command
 version: 1.0.0
-description: "Command execution tools: agentxx_execute_bash_command, agentxx_execute_windows_command (PowerShell/cmd via WSL interop)"
+description: "Command execution tools: agentxx_execute_bash_command, agentxx_execute_windows_command (PowerShell/cmd via WSL interop); probes python/node/PowerShell at plugin start and injects the results into the tool prompts"
 entry: libagentxx_execute_command.so
 depends:
+# ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
+# - agentxx.agent.prompt: 插件在 start 事务注入自身工具的提示词 (depict + 参数
+#   描述, 含启动时探测到的 python/node 与 PowerShell 信息); 宿主按所有者记录
+#   贡献, 插件卸载/禁用时自动撤销
 interfaces:
   require:
     - agentxx.agent.core
     - agentxx.agent.tools
+    - agentxx.agent.prompt
   optional:
     - agentxx.agent.config
     - agentxx.agent.cancel

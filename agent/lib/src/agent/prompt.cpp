@@ -17,27 +17,6 @@ const std::string& ToolPrompt::getArg(std::string_view name) const {
     return it->second;
 }
 
-void AgentPrompt::refreshEnvDetectedPrompts() {
-    // 触发 PowerShell 探测 (首次调用阻塞, 结果按进程缓存):
-    // - 必须在 agent 线程 (BaseAgent::init) 执行, 避免阻塞 UI/主线程启动
-    // - 探测结果同时供 execute_command tool 运行时使用 (见 buildWinProcLaunch),
-    //   与提示词文本相互独立, 刷新前后执行均正确
-    (void)agentxx::util::detectPowerShell();
-    const auto& ps  = cachedPowerShellInfo();
-    auto&       win = util::getOrCreateHeterogeneous(toolPrompt, "agentxx_execute_windows_command");
-    win.depict      = winCommandToolDepict();
-    util::insertOrAssignHeterogeneous(
-        win.args,
-        "command_process",
-        ps.available ? winCommandProcessPwsh() : winCommandProcessCmd()
-    );
-    util::insertOrAssignHeterogeneous(
-        win.args,
-        "command_popen",
-        ps.available ? winCommandPopenPwsh() : winCommandPopenCmd()
-    );
-}
-
 agentxx::util::Json AgentPrompt::toJson() const {
     agentxx::util::Json j;
     j["systemPrompt"] = systemPrompt;

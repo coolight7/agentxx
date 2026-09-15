@@ -201,18 +201,50 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 4.5 真实插件端到端 (agentxx_execute_command 插件) ----
     {
-        auto execPath = findPluginDir("agentxx_execute_command");
+        auto& prompt  = ctx->agentConfig->prompt;
+        auto  execPath = findPluginDir("agentxx_execute_command");
+#if XX_IS_WIN_D
+        const char* cmdToolName = "agentxx_execute_windows_command";
+#else
+        const char* cmdToolName = "agentxx_execute_bash_command";
+#endif
+        // 加载前: 提示词表无该工具条目 (工具提示词完全由插件贡献)
+        XX_TEST_EXPECT_FALSE(prompt.toolPrompt.contains(cmdToolName));
+
         auto execInst = co_await ctx->pluginManager->loadPluginAsync(execPath);
         XX_TEST_EXPECT_TRUE(execInst != nullptr);
         if (execInst) {
-#if XX_IS_WIN_D
-            const char* cmdToolName = "agentxx_execute_windows_command";
-#else
-            const char* cmdToolName = "agentxx_execute_bash_command";
-#endif
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(cmdToolName));
+
+            // 插件 start 注入的工具提示词 (depict + 参数描述, 含启动时探测到的
+            // python/node 信息) 必须落到宿主提示词表与工具定义里
+            XX_TEST_EXPECT_TRUE(prompt.toolPrompt.contains(cmdToolName));
+            if (prompt.toolPrompt.contains(cmdToolName)) {
+                auto it = prompt.toolPrompt.find(cmdToolName);
+                XX_TEST_EXPECT_TRUE(it->second.args.contains("command"));
+                if (it->second.args.contains("command")) {
+                    XX_TEST_EXPECT_TRUE(
+                        it->second.args.at("command").find("Interpreters detected at startup")
+                        != std::string::npos
+                    );
+                }
+            }
+
             auto tool = ctx->toolRegistry->find(cmdToolName);
             if (tool) {
+                auto def = tool->get_definition();
+                XX_TEST_EXPECT_FALSE(def.description.empty());
+                // LLM 侧 schema 的 command 描述含环境段 (注册时固化, 与提示词同源)
+                auto props = def.parameters["properties"];
+                XX_TEST_EXPECT_TRUE(props.contains("command"));
+                if (props.contains("command")) {
+                    XX_TEST_EXPECT_TRUE(
+                        props["command"]["description"].get<std::string>().find(
+                            "Interpreters detected at startup"
+                        ) != std::string::npos
+                    );
+                }
+
                 auto out = co_await tool->execute_async(agentxx::util::Json{
                     {"command", "echo polled_e2e_ok"},
                     {"timeout", 15                  },
@@ -222,6 +254,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
             co_await ctx->pluginManager->unloadAsync("agentxx_execute_command");
             XX_TEST_EXPECT_TRUE(false == ctx->toolRegistry->contains(cmdToolName));
+            // 卸载后插件贡献撤销: 工具提示词条目回到加载前状态 (不存在)
+            XX_TEST_EXPECT_FALSE(prompt.toolPrompt.contains(cmdToolName));
         }
     }
 
