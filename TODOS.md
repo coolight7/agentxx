@@ -13,6 +13,8 @@
 - 插件tool权限限制由插件注册
 - 迁移 planning 提示词到插件内
 - agentxx_share_store 特化渲染
+- agentxx_execute_javascript 更名
+- agentxx_filesystem_list 支持 * 等模糊匹配
 
 - 调整 tui 亮色配置
 - SVG绘制支持
