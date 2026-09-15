@@ -73,7 +73,6 @@ constexpr Entry kTable[] = {
     // ---- 文件选择弹窗 ----
     {"picker.title",              "Select File ( model supports: {} )",                  "选择文件 ( 当前模型支持: {} )"                                                          },
     {"picker.path",               "Path: ",                                              "路径: "                                                                                         },
-    {"picker.filter",             "Filter: ",                                            "过滤: "                                                                                         },
     {"picker.image",              " Image 📷︎ ",                                     " 图像 📷︎ "                                                                                 },
     {"picker.audio",              " Audio 🎵︎ ",                                     " 音频 🎵︎ "                                                                                 },
     {"picker.video",              " Video 🎬︎ ",                                     " 视频 🎬︎ "                                                                                 },

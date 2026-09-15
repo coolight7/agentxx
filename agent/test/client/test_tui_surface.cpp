@@ -557,19 +557,22 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(r.text.find("加载失败原因") != std::string::npos);
     }
 
-    // ---- 多模态文件选择弹窗 (内容区 = 路径行 + 过滤行 + 文件列表) ----
+    // ---- 多模态文件选择弹窗 (内容区 = 路径行 + 文件列表, 无过滤输入框) ----
     {
-        SurfaceFixture fx;
+        SurfaceFixture                      fx;
         agentxx::agent::ModelCapabilityInfo caps;
         caps.name       = "test-model";
         caps.imageInput = true;
-        auto comp = std::make_shared<FilePickerOverlay>(fx.ctx, caps, "/tmp");
-        auto r    = fx.probe(comp);
+        auto comp       = std::make_shared<FilePickerOverlay>(fx.ctx, caps, "/tmp");
+        auto r          = fx.probe(comp);
 
         checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
         checkNoFrameGlyphs(r, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("选择文件") != std::string::npos);
         XX_TEST_EXPECT_TRUE(r.text.find("/tmp") != std::string::npos);
+        // 过滤输入框已移除: 弹窗内不再出现过滤标签
+        XX_TEST_EXPECT_TRUE(r.text.find("过滤") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(r.text.find("Filter") == std::string::npos);
     }
 
     // ---- Mermaid 状态图弹窗 (外框为圆角面性外框; 状态图自身的框线在内容区, 不参与) ----

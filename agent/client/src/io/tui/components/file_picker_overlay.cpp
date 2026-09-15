@@ -51,27 +51,10 @@ FilePickerOverlay::FilePickerOverlay(
         }
     }
 
-    // 过滤输入框
-    // - 面性风格: 聚焦/悬停以输入区背景色区分, 不使用下划线/整行反色
-    //   (占位符仍保持弱化显示)
-    auto option      = InputOption();
-    option.multiline = false;
-    option.transform = [this](InputState state) {
-        const auto& theme = *ctx_.theme;
-        if (state.is_placeholder) {
-            state.element |= dim;
-        }
-        if (state.focused || state.hovered) {
-            state.element |= bgcolor(theme.inputBgColor);
-        }
-        return state.element;
-    };
-    filterInput_ = Input(&filterText_, option);
-
     navigateTo(initialDir);
 }
 
-void FilePickerOverlay::navigateTo(const std::string& dirPath) {
+void FilePickerOverlay::navigateTo(std::string dirPath) {
     currentDir_ = dirPath;
     entries_.clear();
     selectedIndex_ = 0;
@@ -100,7 +83,6 @@ void FilePickerOverlay::navigateTo(const std::string& dirPath) {
     auto iter = std::filesystem::directory_iterator(canonical, ec);
     if (ec) {
         XX_LOGW("[FilePicker] cannot list {}: {}", currentDir_, ec.message());
-        applyFilter();
         return;
     }
     for (const auto& entry : iter) {
@@ -154,8 +136,6 @@ void FilePickerOverlay::navigateTo(const std::string& dirPath) {
     for (auto& f : files) {
         entries_.push_back(std::move(f));
     }
-
-    applyFilter();
 }
 
 bool FilePickerOverlay::isMediaFile(const std::string& ext) const {
@@ -198,29 +178,12 @@ agentxx::agent::MediaType FilePickerOverlay::guessMediaType(const std::string& e
     return agentxx::agent::MediaType::Video;
 }
 
-void FilePickerOverlay::applyFilter() {
-    filteredEntries_.clear();
-    if (filterText_.empty()) {
-        filteredEntries_ = entries_;
-    } else {
-        for (const auto& e : entries_) {
-            if (e.isDir || agentxx::util::isIgnoreCaseContains(e.name, filterText_)) {
-                filteredEntries_.push_back(e);
-            }
-        }
-    }
-    if (selectedIndex_ >= static_cast<int>(filteredEntries_.size())) {
-        selectedIndex_ = std::max(0, static_cast<int>(filteredEntries_.size()) - 1);
-    }
-}
-
 void FilePickerOverlay::confirmSelection() {
-    if (selectedIndex_ < 0 || selectedIndex_ >= static_cast<int>(filteredEntries_.size())) {
+    if (selectedIndex_ < 0 || selectedIndex_ >= static_cast<int>(entries_.size())) {
         return;
     }
-    const auto& entry = filteredEntries_[selectedIndex_];
+    const auto& entry = entries_[selectedIndex_];
     if (entry.isDir) {
-        filterText_.clear();
         navigateTo(entry.fullPath);
         ctx_.postRedraw();
     } else if (entry.supported) {
@@ -278,22 +241,16 @@ Element FilePickerOverlay::OnRender() {
         paragraph(currentDir_) | color(theme.normalColor) | xflex_shrink,
     });
 
-    auto filterLine = hbox({
-        text(std::string(TuiI18n::instance().t("picker.filter"))) | color(theme.hintColor),
-        filterInput_->Render() | flex | color(theme.inputTextColor),
-    });
-
-    // 构建文件列表项 (itemBoxes_ 与 filteredEntries_ 一一对应, 供鼠标命中)
+    // 构建文件列表项 (itemBoxes_ 与 entries_ 一一对应, 供鼠标命中)
     Elements items;
-    itemBoxes_.assign(filteredEntries_.size(), Box{});
+    itemBoxes_.assign(entries_.size(), Box{});
     const int maxVisible = std::max(5, Terminal::Size().dimy / 2);
     // 确保 selectedIndex_ 在滚动视口中可见
     const int scrollStart = std::max(0, selectedIndex_ - maxVisible + 2);
-    const int scrollEnd
-        = std::min(static_cast<int>(filteredEntries_.size()), scrollStart + maxVisible);
+    const int scrollEnd   = std::min(static_cast<int>(entries_.size()), scrollStart + maxVisible);
 
     for (int i = scrollStart; i < scrollEnd; ++i) {
-        const auto& entry    = filteredEntries_[i];
+        const auto& entry    = entries_[i];
         const bool  selected = (i == selectedIndex_);
 
         Elements rowItems;
@@ -329,7 +286,7 @@ Element FilePickerOverlay::OnRender() {
         items.push_back(row | reflect(itemBoxes_[static_cast<size_t>(i)]));
     }
 
-    if (filteredEntries_.empty()) {
+    if (entries_.empty()) {
         items.push_back(text(std::string(TuiI18n::instance().t("picker.empty"))) | dim);
     }
 
@@ -342,10 +299,9 @@ Element FilePickerOverlay::OnRender() {
 
     const auto style = TuiSurfaceStyle::fromTheme(theme);
 
-    // 内容区: 路径行 + 过滤行 + 空行 + 文件列表 (左右留白由外框提供)
+    // 内容区: 路径行 + 空行 + 文件列表 (左右留白由外框提供)
     Elements content;
     content.push_back(pathLine);
-    content.push_back(filterLine);
     content.push_back(tuiSurfaceGapRow(style.body));
     content.push_back(vbox(std::move(items)) | flex | size(HEIGHT, LESS_THAN, overlayH - 10));
 
@@ -378,7 +334,7 @@ bool FilePickerOverlay::OnEvent(Event event) {
             return true;
         }
         if (mouse.button == Mouse::WheelDown
-            && selectedIndex_ + 1 < static_cast<int>(filteredEntries_.size())) {
+            && selectedIndex_ + 1 < static_cast<int>(entries_.size())) {
             ++selectedIndex_;
             ctx_.postRedraw();
             return true;
@@ -406,19 +362,13 @@ bool FilePickerOverlay::OnEvent(Event event) {
     }
 
     if (event == Event::ArrowDown) {
-        if (selectedIndex_ < static_cast<int>(filteredEntries_.size()) - 1) {
+        if (selectedIndex_ < static_cast<int>(entries_.size()) - 1) {
             ++selectedIndex_;
             ctx_.postRedraw();
         }
         return true;
     }
 
-    // 其他按键交给过滤输入框
-    auto oldFilter = filterText_;
-    bool handled   = filterInput_->OnEvent(event);
-    if (filterText_ != oldFilter) {
-        applyFilter();
-        ctx_.postRedraw();
-    }
-    return handled;
+    // 其余按键不处理 (弹窗为纯导航列表, 无文本输入控件)
+    return false;
 }

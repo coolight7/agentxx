@@ -548,7 +548,6 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
 /// - 初始化时接收当前模型的 `ModelCapabilityInfo`, 按支持的媒体类型动态
 ///   过滤目录中的文件 (不支持的类型灰显且不可选, 非媒体文件不展示)
 /// - 目录导航: ↑/↓ 选择, Enter 进入子目录或确认选中文件, Esc 关闭
-/// - 过滤: 输入框实时按文件名子串过滤
 /// - 确认选中文件后调用 onSelectFile 回调, 外部完成预检、Base64 编码并挂载到托盘
 class FilePickerOverlay : public ftxui::ComponentBase {
 public:
@@ -583,7 +582,11 @@ private:
         agentxx::agent::MediaType mediaType = agentxx::agent::MediaType::Image;
     };
 
-    void                      navigateTo(const std::string& dirPath);
+    /// 切换当前目录并重建条目列表
+    /// - 参数按值传入: 调用方可能传入 [entries_] 内条目的路径 (见
+    ///   [confirmSelection] 进入子目录), 而本函数开头会清空 entries_,
+    ///   传引用会在清空后悬垂 (use-after-free)
+    void                      navigateTo(std::string dirPath);
     void                      confirmSelection();
     bool                      isMediaFile(const std::string& ext) const;
     bool                      isSupportedMedia(const std::string& ext) const;
@@ -592,16 +595,11 @@ private:
     TUICtx&                             ctx_;
     agentxx::agent::ModelCapabilityInfo capability_;
     std::string                         currentDir_;
-    std::vector<DirEntry>               entries_;
-    std::vector<DirEntry>               filteredEntries_;
-    int                                 selectedIndex_ = 0;
-    std::string                         filterText_;
-    ftxui::Component                    filterInput_;
-    std::function<void()>               onClose_;
-    std::function<void(std::string)>    onSelectFile_;
-    std::set<std::string>               allowedExtensions_;
-    std::vector<ftxui::Box>             itemBoxes_;
-
-    /// 重新过滤条目 (按 filterText_ 子串匹配文件名)
-    void applyFilter();
+    /// 当前目录条目 (目录在前, 文件在后; 渲染与鼠标命中均直接使用该列表)
+    std::vector<DirEntry>            entries_;
+    int                              selectedIndex_ = 0;
+    std::function<void()>            onClose_;
+    std::function<void(std::string)> onSelectFile_;
+    std::set<std::string>            allowedExtensions_;
+    std::vector<ftxui::Box>          itemBoxes_;
 };

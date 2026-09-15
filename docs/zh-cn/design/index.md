@@ -227,6 +227,9 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - 仅当无进行中轮次时切换 (客户端前置拦截 + 服务端双重保护)
 - 新会话历史由 SessionStore 从持久化恢复 (不存在时创建空会话)
 - 会话列表数据源: `{dataDir}/sqlite/sessions/` 目录扫描 + meta 表 (sessionId/title/lastActiveMs)
+- 回推的 WireModelInfo 与客户端接入时的 WireGetModel 响应同构 (含各模型多模态能力
+  `capabilities`): 客户端据此判断输入框右侧 [+ 📎︎︎ 附件] 按钮是否展示; 客户端侧
+  模型能力表与会话无关 (来自 agent 配置), 跨 Sync 保留不清空
 
 #### Subagent 执行链路 (NodeInterrupt → 总线派发 → 宿主派生独立 agent)
 
@@ -352,7 +355,8 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     (无键盘快捷键, 鼠标点击经 `modal_->pushModal` 打开 FilePickerOverlay);
     弹窗按模型能力过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp; 音频
     wav/mp3/ogg/m4a/aac/flac; 视频 mp4/mov/webm/mkv; 非媒体不展示,
-    不支持类型灰显不可选), 目录导航 (↑/↓ + Enter + Esc + 过滤 + 鼠标);
+    不支持类型灰显不可选), 目录导航 (↑/↓ + Enter + Esc + 鼠标; 弹窗为
+    纯导航列表, 不含文件名过滤输入框);
     选中后客户端读取并 Base64 编码为 RFC 2397 Data URL, 经大小预检
     (图像 ≤10MB / 音频 ≤25MB / 视频 ≤50MB / 单次 ≤5, 超限 toast 拒绝)
     挂载到输入框上方附件托盘 (✕ 可移除, Enter 随文本打包经

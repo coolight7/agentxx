@@ -216,6 +216,19 @@ private:
     WireSyncPayload          buildTailSync(size_t tailCount);
     std::shared_ptr<Session> session();
 
+    /// 构建模型信息响应 (WireModelInfo): 当前会话模型名 + 可用模型列表 +
+    /// 各模型多模态能力
+    /// - 能力 (image/audio/video 输入) 取自 agent 配置的 availableModels,
+    ///   与具体会话无关; 客户端据此判断输入栏是否展示附件按钮
+    /// - 客户端接入 (WireGetModel) 与会话切换 (switchSession) 都必须带上
+    ///   该字段, 否则切换会话后客户端的能力表为空, 附件按钮会消失
+    ///
+    /// - `args`:
+    ///     - [sessionId] 目标会话 id (取该会话的当前模型名)
+    ///
+    /// - `return` agent 已释放时返回除空模型名外全空的响应
+    WireModelInfo buildModelInfo(std::string_view sessionId);
+
     /// 向客户端推送当前上下文统计 (target 指定时仅发向该客户端; 为空时向所有客户端广播)
     void sendContextStats(const std::shared_ptr<AgentIOTransportBase>& target = nullptr);
 

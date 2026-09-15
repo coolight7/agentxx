@@ -1833,7 +1833,17 @@ static asio::awaitable<void> test_session_controller_switch_session() {
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl   = "http://127.0.0.1:1";
     cfg->model.modelName = "test-model";
-    auto agent           = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    // 可用模型 + 多模态能力 (客户端据此展示输入栏的附件按钮)
+    agentxx::agent::ModelConfig visionModel;
+    visionModel.name                   = "test-model";
+    visionModel.modelName              = "test-model";
+    visionModel.imageInput             = true;
+    cfg->availableModels["test-model"] = visionModel;
+    agentxx::agent::ModelConfig textOnlyModel;
+    textOnlyModel.name                 = "text-model";
+    textOnlyModel.modelName            = "text-model";
+    cfg->availableModels["text-model"] = textOnlyModel;
+    auto agent                         = std::make_shared<agentxx::agent::BaseAgent>(cfg);
 
     // 预置目标会话历史 (io 线程未绑定, assertIoThread 为 no-op)
     auto target = agent->agentContext->getSession("target-session");
@@ -1872,12 +1882,40 @@ static asio::awaitable<void> test_session_controller_switch_session() {
         XX_TEST_EXPECT_TRUE(mi != nullptr);
         if (mi) {
             XX_TEST_EXPECT_EQ(mi->currentModel, std::string("test-model"));
+            // 回归: 切换会话回推的模型信息必须带上各模型多模态能力
+            // (与 WireGetModel 响应同构); 缺失时客户端模型能力表为空,
+            // 输入栏的 [+ 附件] 按钮在切换会话后消失
+            XX_TEST_EXPECT_EQ(mi->models.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(mi->capabilities.size(), size_t{2});
+            for (const auto& cap : mi->capabilities) {
+                XX_TEST_EXPECT_TRUE(cap.name == "test-model" || cap.name == "text-model");
+                if (cap.name == "test-model") {
+                    XX_TEST_EXPECT_TRUE(cap.imageInput);
+                    XX_TEST_EXPECT_TRUE(cap.hasMultimodalInput());
+                } else {
+                    XX_TEST_EXPECT_FALSE(cap.hasMultimodalInput());
+                }
+            }
         }
     }
     auto statsMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(statsMsg.has_value());
     if (statsMsg) {
         XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireContextStats>(&*statsMsg) != nullptr);
+    }
+
+    // ---- 请求模型信息 (WireGetModel): 与切换会话路径同构 (同样带能力清单) ----
+    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireGetModel{"target-session"}});
+    auto getModelMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(getModelMsg.has_value());
+    if (getModelMsg) {
+        auto* mi = std::get_if<agentxx::agent::WireModelInfo>(&*getModelMsg);
+        XX_TEST_EXPECT_TRUE(mi != nullptr);
+        if (mi) {
+            XX_TEST_EXPECT_EQ(mi->currentModel, std::string("test-model"));
+            XX_TEST_EXPECT_EQ(mi->models.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(mi->capabilities.size(), size_t{2});
+        }
     }
 
     // ---- 运行态拒绝切换 (客户端已前置拦截, 服务端兜底; 不产生任何消息) ----

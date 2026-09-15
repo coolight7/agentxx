@@ -1,6 +1,7 @@
 #include "test_tui_input.h"
 
 #include "agentxx-client/io/tui/components/input_bar.h"
+#include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
@@ -8,6 +9,9 @@
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/screen.hpp"
 #include <chrono>
+#include <filesystem>
+#include <fmt/format.h>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -569,6 +573,127 @@ void test_input_pending_queue_above_attachments() {
     XX_TEST_EXPECT_TRUE(attachPos < inputPos);
 }
 
+// ---------------------------------------------------------------------------
+// 附件选择弹窗 (FilePickerOverlay): 纯导航列表 (已移除过滤输入框)
+// - 内容区只有路径行 + 文件列表, 不再渲染过滤行
+// - ↑/↓ 移动 + Enter 进入目录/确认文件仍然工作
+// - 输入字符不再过滤列表 (列表内容与选中项不变)
+// - 不支持当前模型的媒体文件 (如仅图像输入时的音频) 不可选中
+// ---------------------------------------------------------------------------
+
+void test_file_picker_navigation_without_filter() {
+    namespace fs = std::filesystem;
+
+    // 临时目录: 子目录 (内含一个 png) + 两个 png + 一个文本 + 一个当前模型不支持的 mp3
+    const auto root = fs::temp_directory_path()
+                      / fmt::format(
+                          "agentxx_tui_picker_test_{}",
+                          std::chrono::steady_clock::now().time_since_epoch().count()
+                      );
+    std::error_code ec;
+    fs::create_directories(root / "sub", ec);
+    XX_TEST_EXPECT_FALSE(ec);
+    for (const char* name : {"a.png", "b.png", "note.txt", "song.mp3", "sub/inner.png"}) {
+        std::ofstream ofs((root / name).string(), std::ios::binary);
+        ofs << "x";
+    }
+
+    InputFixture                        f;
+    agentxx::agent::ModelCapabilityInfo caps;
+    caps.name       = "vision-model";
+    caps.imageInput = true; // 仅图像: .mp3 属于媒体文件但当前模型不支持
+    auto comp       = std::make_shared<FilePickerOverlay>(f.ctx, caps, root.string());
+
+    std::string selectedPath;
+    bool        closed = false;
+    comp->onSelectFile([&](std::string p) {
+        selectedPath = std::move(p);
+    });
+    comp->onClose([&] {
+        closed = true;
+    });
+
+    auto renderToString = [](FilePickerOverlay& c) {
+        ftxui::Screen screen(100, 30);
+        ftxui::Render(screen, c.OnRender());
+        return screen.ToString();
+    };
+
+    // 1. 列表内容: 子目录 + 两个 png 展示; 非媒体文件 (note.txt) 不展示;
+    //    不支持的媒体文件 (song.mp3) 展示但标记为不支持
+    std::string out = renderToString(*comp);
+    XX_TEST_EXPECT_TRUE(out.find("sub") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("a.png") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("b.png") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("note.txt") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("song.mp3") != std::string::npos);
+    // 过滤输入框已移除: 弹窗内不再出现过滤标签 (中英文界面都不得出现)
+    XX_TEST_EXPECT_TRUE(out.find("过滤") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("Filter") == std::string::npos);
+
+    // 2. 输入字符不再过滤列表 (旧实现会按子串过滤, 使列表只剩匹配项):
+    //    输入 "zzz" 后列表内容不变, 选中项仍为第 0 项
+    for (char c : std::string("zzz")) {
+        comp->OnEvent(ftxui::Event::Character(c));
+    }
+    out = renderToString(*comp);
+    XX_TEST_EXPECT_TRUE(out.find("a.png") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("b.png") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("sub") != std::string::npos);
+
+    // 3. 目录在前: 第 0 项 = 上级目录, 第 1 项 = sub/; Enter 进入 sub/
+    //    (用子目录内的文件确认已切换目录: 长路径在路径行会被折行, 不宜按整串匹配)
+    comp->OnEvent(ftxui::Event::ArrowDown);
+    comp->OnEvent(ftxui::Event::Return);
+    XX_TEST_EXPECT_FALSE(closed); // 进入目录不关闭弹窗
+    out = renderToString(*comp);
+    XX_TEST_EXPECT_TRUE(out.find("inner.png") != std::string::npos); // 子目录内容
+    XX_TEST_EXPECT_TRUE(out.find("a.png") == std::string::npos);     // 父目录内容不再显示
+
+    // 4. Enter 进入上级目录回到原目录 (原目录内容重新出现)
+    comp->OnEvent(ftxui::Event::Return);
+    out = renderToString(*comp);
+    XX_TEST_EXPECT_TRUE(out.find("a.png") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("b.png") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("inner.png") == std::string::npos);
+
+    // 5. 选择支持的媒体文件: 列表 = [上级目录, sub/, a.png, b.png, song.mp3],
+    //    下移到 b.png 并确认 -> 回调文件路径并关闭弹窗
+    comp->OnEvent(ftxui::Event::ArrowDown); // -> sub/
+    comp->OnEvent(ftxui::Event::ArrowDown); // -> a.png
+    comp->OnEvent(ftxui::Event::ArrowDown); // -> b.png
+    comp->OnEvent(ftxui::Event::Return);
+    XX_TEST_EXPECT_TRUE(closed);
+    XX_TEST_EXPECT_EQ(fs::path(selectedPath).filename().string(), std::string("b.png"));
+
+    // 6. 不支持的媒体文件不可选中 (另起弹窗, 下移到 song.mp3 并确认)
+    {
+        auto comp2     = std::make_shared<FilePickerOverlay>(f.ctx, caps, root.string());
+        bool selected2 = false;
+        comp2->onSelectFile([&](std::string) {
+            selected2 = true;
+        });
+        for (int i = 0; i < 4; ++i) { // 上级目录 -> sub/ -> a.png -> b.png -> song.mp3
+            comp2->OnEvent(ftxui::Event::ArrowDown);
+        }
+        comp2->OnEvent(ftxui::Event::Return);
+        XX_TEST_EXPECT_FALSE(selected2);
+    }
+
+    // 7. Esc 关闭弹窗
+    {
+        auto comp3   = std::make_shared<FilePickerOverlay>(f.ctx, caps, root.string());
+        bool closed3 = false;
+        comp3->onClose([&] {
+            closed3 = true;
+        });
+        comp3->OnEvent(ftxui::Event::Escape);
+        XX_TEST_EXPECT_TRUE(closed3);
+    }
+
+    fs::remove_all(root, ec);
+}
+
 TestResult testTuiInput() {
     g_tui_input_passed = 0;
     g_tui_input_failed = 0;
@@ -592,6 +717,7 @@ TestResult testTuiInput() {
     test_input_attach_button_visibility();
     test_input_pending_queue_visibility();
     test_input_pending_queue_above_attachments();
+    test_file_picker_navigation_without_filter();
 
     return TestResult{g_tui_input_passed, g_tui_input_failed};
 }

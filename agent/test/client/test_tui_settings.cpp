@@ -760,6 +760,100 @@ void test_tui_model_retention_on_wire_model_info_and_switch_session() {
     XX_TEST_EXPECT_TRUE(sawSelect);
 }
 
+/// 暴露受保护回调的 TUI 端点 (测试用): onSync 由服务端回推 (会话切换/重连),
+/// 生产路径经 onPeerMessage 分发, 测试直接调用以模拟"服务端回推全量 Sync"
+class TestableTuiClientIO : public TUIClientAgentIO {
+public:
+
+    using TUIClientAgentIO::TUIClientAgentIO;
+
+    void pushSync(const agentxx::agent::WireSyncPayload& payload) {
+        onSync(payload);
+    }
+};
+
+/// 回归: 切换会话后输入栏的 [+ 📎 附件] 按钮不消失
+///
+/// 服务端切换会话时先回推新会话的全量 Sync (onSync 整体重建 TUIRenderState),
+/// 再回推模型信息。模型能力表来自 agent 配置 (与会话无关), 必须跨 Sync 保留:
+/// 否则能力表变空 -> currentModelCapability() 无多模态能力 ->
+/// inputCfg.canAttach 返回 false -> 输入栏的附件按钮消失 (点击弹窗也无法打开)。
+void test_tui_multimodal_capability_survives_session_sync() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    auto tui       = std::make_shared<TestableTuiClientIO>(ex, "session-1", TUITheme::darkTheme());
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    // 1. 客户端接入: 服务端回推模型信息 (含各模型多模态能力)
+    agentxx::agent::WireModelInfo info;
+    info.currentModel = "vision-model";
+    info.models       = {"vision-model", "text-only-model"};
+    info.capabilities.push_back(agentxx::agent::ModelCapabilityInfo{
+        .name       = "vision-model",
+        .imageInput = true,
+    });
+    info.capabilities.push_back(agentxx::agent::ModelCapabilityInfo{
+        .name = "text-only-model",
+    });
+    tui->onPeerMessage(agentxx::agent::WireMessage{info});
+
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        XX_TEST_EXPECT_TRUE(snap->modelInfoLoaded);
+        XX_TEST_EXPECT_EQ(snap->modelCapabilities.size(), size_t{2});
+        // 附件按钮显隐依据 (InputComponent::Config::canAttach)
+        XX_TEST_EXPECT_TRUE(snap->currentModelCapability().hasMultimodalInput());
+    }
+
+    // 2. 切换会话: 服务端回推新会话的全量 Sync (onSync 整体重建渲染状态)
+    agentxx::agent::WireSyncPayload payload;
+    payload.messages.push_back(
+        agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::User, "hi")
+    );
+    tui->pushSync(payload);
+
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        // 历史消息被整体替换
+        XX_TEST_EXPECT_EQ(snap->messages.size(), size_t{1});
+        // 模型能力表跨 Sync 保留: 附件按钮不消失 (修复前此处为空 -> 按钮隐藏)
+        XX_TEST_EXPECT_EQ(snap->modelCapabilities.size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(snap->currentModelCapability().hasMultimodalInput());
+        XX_TEST_EXPECT_TRUE(snap->modelInfoLoaded);
+        XX_TEST_EXPECT_EQ(snap->modelNames.size(), size_t{2});
+    }
+
+    // 3. 兼容旧服务端: 切换会话后回推的模型信息不带 capabilities 时,
+    //    能力表按已加载内容合并, 不被清空
+    agentxx::agent::WireModelInfo legacyInfo;
+    legacyInfo.currentModel = "vision-model";
+    legacyInfo.models       = {"vision-model", "text-only-model"};
+    tui->onPeerMessage(agentxx::agent::WireMessage{legacyInfo});
+
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        XX_TEST_EXPECT_TRUE(snap->currentModelCapability().hasMultimodalInput());
+    }
+
+    // 4. 能力按模型区分: 切到不支持多模态的模型后不再认为可附件
+    tui->setPendingModel("text-only-model");
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        XX_TEST_EXPECT_EQ(snap->currentModelCapability().name, std::string("text-only-model"));
+        XX_TEST_EXPECT_FALSE(snap->currentModelCapability().hasMultimodalInput());
+    }
+
+    // 5. 再次 Sync (如断线重连) 后能力仍按模型名正确匹配
+    tui->pushSync(payload);
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        XX_TEST_EXPECT_EQ(snap->modelCapabilities.size(), size_t{2});
+        XX_TEST_EXPECT_FALSE(snap->currentModelCapability().hasMultimodalInput());
+    }
+}
+
 TestResult testTuiSettings() {
     g_tui_settings_passed = 0;
     g_tui_settings_failed = 0;
@@ -783,6 +877,7 @@ TestResult testTuiSettings() {
     test_persist_to_db();
     test_model_selector_overlay_esc_and_confirm();
     test_tui_model_retention_on_wire_model_info_and_switch_session();
+    test_tui_multimodal_capability_survives_session_sync();
 
     return TestResult{g_tui_settings_passed, g_tui_settings_failed};
 }

@@ -476,33 +476,10 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
                 resolveInterrupt(m.id, std::move(m.result));
             } else if constexpr (std::is_same_v<T, WireGetModel>) {
-                auto agent = agent_.lock();
-                if (!agent) {
+                if (!agent_.lock()) {
                     return;
                 }
-                std::string              currentModel = agent->getCurrentModelName(m.sessionId);
-                std::vector<std::string> models;
-                std::vector<ModelCapabilityInfo> capabilities;
-                if (agent->agentContext && agent->agentContext->agentConfig) {
-                    for (const auto& [name, mc] :
-                         agent->agentContext->agentConfig->availableModels) {
-                        models.push_back(name);
-                        capabilities.push_back(ModelCapabilityInfo{
-                            .name       = name,
-                            .imageInput = mc.imageInput,
-                            .audioInput = mc.audioInput,
-                            .videoInput = mc.videoInput,
-                        });
-                    }
-                }
-                sendToClient(
-                    sender,
-                    WireModelInfo{
-                        std::move(currentModel),
-                        std::move(models),
-                        std::move(capabilities)
-                    }
-                );
+                sendToClient(sender, buildModelInfo(m.sessionId));
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 auto agent = agent_.lock();
                 if (!agent) {
@@ -878,14 +855,10 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     auto sync = buildTailSync(config_.initialSyncTailCount);
     sendToPeer(std::move(sync));
 
-    std::string              currentModel = agent->getCurrentModelName(config_.sessionId);
-    std::vector<std::string> models;
-    if (agent->agentContext->agentConfig) {
-        for (const auto& [name, mc] : agent->agentContext->agentConfig->availableModels) {
-            models.push_back(name);
-        }
-    }
-    sendToPeer(WireModelInfo{std::move(currentModel), std::move(models)});
+    // 模型信息必须与客户端接入路径 (WireGetModel) 同构: 除当前模型名与可用
+    // 模型列表外还要带上各模型的多模态能力 —— 客户端切换会话后收到的
+    // WireModelInfo 若缺 capabilities, 其能力表将为空, 输入栏的附件按钮消失
+    sendToPeer(buildModelInfo(config_.sessionId));
 
     sendContextStats();
 }
@@ -1252,6 +1225,30 @@ void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTranspo
     } else {
         sendToPeer(stats);
     }
+}
+
+WireModelInfo SessionServerAgentIO::buildModelInfo(std::string_view sessionId) {
+    WireModelInfo info;
+    auto          agent = agent_.lock();
+    if (!agent) {
+        return info;
+    }
+    info.currentModel = agent->getCurrentModelName(sessionId);
+    if (!agent->agentContext || !agent->agentContext->agentConfig) {
+        return info;
+    }
+    // 可用模型与各模型多模态能力均取自 agent 配置 (与会话无关的静态配置),
+    // 供客户端填充模型选择弹窗与判断是否展示附件按钮
+    for (const auto& [name, mc] : agent->agentContext->agentConfig->availableModels) {
+        info.models.push_back(name);
+        info.capabilities.push_back(ModelCapabilityInfo{
+            .name       = name,
+            .imageInput = mc.imageInput,
+            .audioInput = mc.audioInput,
+            .videoInput = mc.videoInput,
+        });
+    }
+    return info;
 }
 
 std::shared_ptr<Session> SessionServerAgentIO::session() {

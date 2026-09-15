@@ -2215,6 +2215,13 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             st->appendComponents = prev->appendComponents;
             st->contextMessages  = prev->contextMessages;
             st->isStreaming      = false;
+            // 模型能力表 (多模态输入支持) 与会话无关, 来自 agent 配置的
+            // availableModels, 不随 Sync 重置: 切换会话时服务端先回推 Sync
+            // 再回推 WireModelInfo, 若此处清空, 重置后能力表为空 ->
+            // 输入栏的附件按钮消失 (直到客户端再次拉取模型信息才恢复)
+            st->modelCapabilities = prev->modelCapabilities;
+            // 模型列表加载标志同理: 已收到过服务端模型信息就不应退回"加载中"
+            st->modelInfoLoaded = prev->modelInfoLoaded;
             // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
             // Connecting (默认值), banner 会错误地回到"启动中"
             st->connState = prev->connState;

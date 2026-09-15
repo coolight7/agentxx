@@ -260,7 +260,8 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
     the picker filters by model capability (images png/jpg/jpeg/webp/gif/bmp; audio
     wav/mp3/ogg/m4a/aac/flac; video mp4/mov/webm/mkv; non-media hidden,
     unsupported types dimmed and unselectable) with directory navigation
-    (Up/Down + Enter + Esc + filter + mouse); the client reads the file and Base64-encodes
+    (Up/Down + Enter + Esc + mouse; the picker is a pure navigation list without
+    a filename filter input); the client reads the file and Base64-encodes
     it as an RFC 2397 Data URL, mounts it to the attachment tray after size pre-check
     (image <=10MB / audio <=25MB / video <=50MB / <=5 per message, oversize rejected
     via toast), and sends it with text via `WireUserInput.attachments`; the server queues
