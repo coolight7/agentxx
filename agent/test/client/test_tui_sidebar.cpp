@@ -264,9 +264,9 @@ TestResult testTuiSidebar() {
         SidebarFixture fx;
         auto           screen = fx.render();
         int            x = -1, y = -1;
-        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, " Info ", x, y));
+        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, "[Info]", x, y));
         int x2 = -1, y2 = -1;
-        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, " Logs ", x2, y2));
+        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, "[Logs]", x2, y2));
         // 无激活 tab: 内容区不渲染 (无 INFO_CONTENT_MARK)
         XX_TEST_EXPECT_TRUE(screen.find("INFO_CONTENT_MARK") == std::string::npos);
     }
@@ -275,7 +275,7 @@ TestResult testTuiSidebar() {
     {
         SidebarFixture fx;
         auto           screen = fx.render();
-        XX_TEST_EXPECT_TRUE(fx.clickText(screen, " Info "));
+        XX_TEST_EXPECT_TRUE(fx.clickText(screen, "[Info]"));
         XX_TEST_EXPECT_TRUE(fx.comp->hasTab(SidebarFixture::kInfoTabId));
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kInfoTabId));
         auto screen2 = fx.render();
@@ -287,7 +287,7 @@ TestResult testTuiSidebar() {
     {
         SidebarFixture fx;
         auto           screen = fx.render();
-        XX_TEST_EXPECT_TRUE(fx.clickText(screen, " Logs "));
+        XX_TEST_EXPECT_TRUE(fx.clickText(screen, "[Logs]"));
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kLogTabId));
         auto screen2 = fx.render();
         XX_TEST_EXPECT_TRUE(screen2.find("Menu") != std::string::npos);
@@ -297,16 +297,16 @@ TestResult testTuiSidebar() {
     {
         SidebarFixture fx;
         auto           screen = fx.render();
-        XX_TEST_EXPECT_TRUE(fx.clickText(screen, " Info "));
+        XX_TEST_EXPECT_TRUE(fx.clickText(screen, "[Info]"));
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kInfoTabId));
         auto screen2 = fx.render();
-        XX_TEST_EXPECT_TRUE(fx.clickText(screen2, " Info "));
+        XX_TEST_EXPECT_TRUE(fx.clickText(screen2, "[Info]"));
         XX_TEST_EXPECT_FALSE(fx.comp->isTabActive(SidebarFixture::kInfoTabId));
         auto screen3 = fx.render();
         XX_TEST_EXPECT_TRUE(screen3.find("INFO_CONTENT_MARK") == std::string::npos);
         // 取消激活后常驻按钮仍在列表中
         int x = -1, y = -1;
-        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen3, " Info ", x, y));
+        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen3, "[Info]", x, y));
     }
 
     // ---- 场景 5: 动态 tab 显示于常驻按钮之后, 点击切换 ----
@@ -322,12 +322,12 @@ TestResult testTuiSidebar() {
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive("dyn"));
         auto screen = fx.render();
         int  xi = -1, yi = -1, xd = -1, yd = -1;
-        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, " Info ", xi, yi));
-        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, " Dyn ", xd, yd));
+        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, "[Info]", xi, yi));
+        XX_TEST_EXPECT_TRUE(SidebarFixture::findText(screen, "[Dyn]", xd, yd));
         // 动态 tab 在常驻按钮下方
         XX_TEST_EXPECT_TRUE(yd > yi);
         // 切回 logs
-        XX_TEST_EXPECT_TRUE(fx.clickText(screen, " Logs "));
+        XX_TEST_EXPECT_TRUE(fx.clickText(screen, "[Logs]"));
         XX_TEST_EXPECT_TRUE(fx.comp->isTabActive(SidebarFixture::kLogTabId));
     }
 

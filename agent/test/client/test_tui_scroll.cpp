@@ -696,10 +696,11 @@ TestResult testTuiScroll() {
         f.render();
         f.render();
 
-        // 折叠态: header 显示 "+ " 折叠标记 + "[Tip] # Info · " 前缀 + 单行预览,
-        // 正文尾部标记 (超出 preview 截断) 不显示
+        // 折叠态: header 显示 "+" 折叠标记 + "[Tip] #" 前缀 + 单行预览,
+        // 正文尾部标记 (超出 preview 截断) 不显示;
+        // Info 级别不附加级别文本 (levelKey 为空), 故 "#" 后直接接预览分隔符 " · "
         std::string collapsed1 = f.render();
-        XX_TEST_EXPECT_TRUE(collapsed1.find("+ [Tip] # Info · ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(collapsed1.find("+ [Tip] #  · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed1.find("SYSM_TAIL_9XYZ") == std::string::npos);
 
         // 模拟点击 header → 展开 (处理事件, 且消息折叠状态翻转)
@@ -718,9 +719,9 @@ TestResult testTuiScroll() {
         }
         XX_TEST_EXPECT_TRUE(clicked);
 
-        // 展开态: "- " 展开标记 + 正文完整显示 (尾部标记可见)
+        // 展开态: "-" 展开标记 + "[Tip] #" 前缀 + 正文完整显示 (尾部标记可见)
         std::string expanded = f.render();
-        XX_TEST_EXPECT_TRUE(expanded.find("- [Tip] # Info") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(expanded.find("- [Tip] # ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(expanded.find("SYSM_TAIL_9XYZ") != std::string::npos);
 
         // 状态确实更新为展开
@@ -744,7 +745,7 @@ TestResult testTuiScroll() {
         }
         XX_TEST_EXPECT_TRUE(clicked);
         std::string collapsed2 = f.render();
-        XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tip] # Info · ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tip] #  · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed2.find("SYSM_TAIL_9XYZ") == std::string::npos);
         snap = f.sharedState.readSnapshot();
         XX_TEST_EXPECT_TRUE(!snap->messages.empty() && snap->messages[0]->collapsed);
@@ -782,8 +783,10 @@ TestResult testTuiScroll() {
         std::string frame = f.render();
         XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Warn · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Error · ") != std::string::npos);
-        // Info 级别同格式显示级别文本
-        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Info · ") != std::string::npos);
+        // Info 级别不附加级别文本 (levelKey 为空): 前缀为 "[Tip] #" 后直接接 " · ",
+        // 即 "#" 与 "·" 之间为两个空格 (前缀自带尾空格 + 分隔符首空格)
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] #  · ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Info") == std::string::npos);
         // 三条 System 消息均渲染 (折叠态预览含完整短文本 marker)
         XX_TEST_EXPECT_TRUE(frame.find("WRN_TAIL_7K") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("ERR_TAIL_8M") != std::string::npos);
