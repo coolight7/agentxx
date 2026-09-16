@@ -227,9 +227,10 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
     }
     const auto sessionId = args.value("sessionId", std::string{});
     for (const auto& argName : spec.targetArgs) {
-        // 目标值: 单字符串参数直接取; 数组参数逐项判定 (如 glob 的 file_patterns)
+        // 目标值按参数实际 JSON 类型处理: 数组逐项判定 (如 glob 的 file_patterns),
+        // 字符串视为单个目标; 数组为空/参数缺省时该参数不参与判定
         std::vector<std::string> rawTargets;
-        if (spec.arrayArg) {
+        if (args.contains(argName) && args[argName].is_array()) {
             rawTargets = agentxx::util::jsonGetStringArray(args, argName);
         } else {
             auto raw = args.value(argName, std::string{});
@@ -273,7 +274,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkTargetPermission(
     std::string_view     target,
     std::string_view     category
 ) {
-    auto sessionId = args.value("sessionId", std::string{});
+    const auto sessionId = args.value("sessionId", std::string{});
     if (target.empty()) {
         // 工具级判定 (无目标): 规则表按空目标查询恒不命中, 直接按 noRuleOperator 处理
         switch (noRuleOperator) {
@@ -292,7 +293,39 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkTargetPermission(
         }
         co_return true;
     }
-    std::string path{target};
+    switch (decideTarget(target, index, sessionId)) {
+        case PathDecision::Allow:
+            co_return true;
+        case PathDecision::Deny:
+            co_return false;
+        case PathDecision::Ask:
+            // 需要询问: 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
+            // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
+            co_return co_await requestPermission(
+                toolName,
+                args,
+                index,
+                std::string{target},
+                category
+            );
+    }
+    co_return true;
+}
+
+PathDecision PermissionMiddlewareHandle::decideTarget(
+    std::string_view path,
+    size_t           index,
+    std::string_view sessionId
+) const {
+    // TODO(符号链接穿透): 本判定基于词法规范化路径, 不解析符号链接 —— 允许范围
+    // 内的链接 (如 <root>/link -> <root>/deny) 被读取/写入时会穿透到被拒目录,
+    // 逐路径过滤接口也看不到链接目标 (枚举出的只是链接自身路径)。彻底处理需对
+    // 已存在路径取 std::filesystem::weakly_canonical 后再判定一次 (影响所有工具
+    // 与查询接口, 需评估性能与 Windows 语义), 暂不处理。
+    if (path.empty()) {
+        // 空目标无法判定: 不按"已批准"处理 (调用方按未获批准丢弃)
+        return PathDecision::Ask;
+    }
     // worktree 会话隔离边界 (优先于一切已注册规则):
     // - worktree 子树 (allowPath) 内读写照常处理 (不参与下面的主检出写拒绝):
     //   该子树是本会话自己的工作区, 而真实 worktree 位于主检出的
@@ -311,48 +344,64 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkTargetPermission(
                 sessionId,
                 path
             );
-            co_return false;
+            return PathDecision::Deny;
         }
     }
 
     // 配置文件显式拒绝的路径: 无论后续是否完全授权, 始终保持拒绝且不询问
     if (isConfigDenied(path, index)) {
         XX_LOGD("Permission: path '{}' matches config deny rule, denied", path);
-        co_return false;
+        return PathDecision::Deny;
     }
 
     // 若用户已完全授权所有权限: 允许任意权限访问, 不再询问
     if (isFullAuthorized()) {
-        co_return true;
+        return PathDecision::Allow;
     }
 
     std::string re_path;
     // 最长前缀匹配: 注册的文件夹规则 (如 /data/projects) 对其下任意子路径生效
-    auto handle = filesystemPermission.get(path, static_cast<int>(index), re_path, true);
+    auto handle = const_cast<XXRouter<PermissionOperator, 2>&>(filesystemPermission)
+                      .get(std::string{path}, static_cast<int>(index), re_path, true);
     if (nullptr != handle) {
-        auto permission = *handle;
-        switch (permission) {
+        switch (*handle) {
             case PermissionOperator::ALLOW:
-                co_return true;
+                return PathDecision::Allow;
             case PermissionOperator::DENY:
-                co_return false;
+                return PathDecision::Deny;
             case PermissionOperator::INTERRUPT:
-                // 经总线询问外部授权者 (CLI/GUI/ACP 各注册自己的 prompter)
-                // - 无 prompter 注册时 request 返回 nullopt, 默认拒绝以保安全
-                co_return co_await requestPermission(toolName, args, index, path, category);
+                return PathDecision::Ask;
         }
     }
     // 未命中任何规则: 按 noRuleOperator 处理 (CodeAgent 按 permission.mode 设置;
     // 默认 ALLOW 与历史行为一致, 无规则即放行)
     switch (noRuleOperator) {
         case PermissionOperator::ALLOW:
-            co_return true;
+            return PathDecision::Allow;
         case PermissionOperator::DENY:
-            co_return false;
+            return PathDecision::Deny;
         case PermissionOperator::INTERRUPT:
-            co_return co_await requestPermission(toolName, args, index, path, category);
+            return PathDecision::Ask;
     }
-    co_return true;
+    return PathDecision::Allow;
+}
+
+std::vector<PathDecision> PermissionMiddlewareHandle::decidePaths(
+    const std::vector<std::string>& paths,
+    size_t                          index,
+    std::string_view                sessionId
+) const {
+    std::vector<PathDecision> decisions;
+    decisions.reserve(paths.size());
+    for (const auto& raw : paths) {
+        // 相对路径按会话生效工作目录规范化为绝对路径 (与工具实际访问路径、
+        // 规则匹配口径一致); 规范化失败 (空路径) 按未获批准处理
+        const auto normalized = normalizePermissionPath(raw, sessionId);
+        decisions.push_back(
+            normalized.empty() ? PathDecision::Ask : decideTarget(normalized, index, sessionId)
+        );
+    }
+    return decisions;
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(

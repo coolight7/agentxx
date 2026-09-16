@@ -296,7 +296,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |
-| `agentxx.agent.permission` | 1 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明, 见下方说明) |
+| `agentxx.agent.permission` | 1 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 操作) |
 | `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
@@ -320,8 +320,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 - **声明内容** (`AgentxxPluginToolPermissionSpec`): 工具名 (须为本实例已注册的工具)、
   作用域 (读/写, 各自一套规则)、目标来源 (`无` / `路径` / `文本`)、目标参数名
-  (工具 args 中的字段名)、目标参数值形态 (单字符串 / 字符串数组, 数组逐项判定) 与
-  可选的权限分类文本 (权限询问卡片显示, 留空按作用域生成)
+  (工具 args 中的字段名; 目标值按**参数实际 JSON 类型**处理 —— 字符串为单目标,
+  数组 (如 `file_patterns`) 自动逐项判定) 与可选的权限分类文本 (权限询问卡片显示,
+  留空按作用域生成)
 - **声明落地**: 宿主把声明交给权限中间件 (工具名 → 声明表)。工具调用时中间件按声明
   从 args 解析目标 (路径目标按会话生效工作目录规范化为绝对路径), 再按既有规则判定
   (白/黑名单、`permission.mode` 默认规则、用户"记住本次选择"、工作区隔离、完全授权);
@@ -331,9 +332,27 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - **生命周期**: 工具注销、插件禁用/卸载时宿主自动撤销对应声明 (重新 start 时按新声明
   恢复); 声明属于附加能力, 宿主未装配权限中间件时注册返回非 0, 插件可忽略
 - **失败拒绝**: 非本实例所有的工具名、未知作用域/目标来源取值都会被拒绝并记日志
-- **kit 便捷层**: `registerReadPathPermission(ctx, tool, "path")` /
-  `registerWritePathPermission(...)` (最常用的"路径参数 + 读/写"形态),
-  以及通用 `registerToolPermission(ctx, ToolPermissionSpec{...})`
+- **模式/前缀参数工具的分工** (`agentxx_filesystem` 的 `glob` / `grep` / `list`):
+  声明式目标 (如 `file_patterns`、可为通配模式的 `path`) 决定"是否询问用户一次"
+  (目标是模式表达的扫描起点); 模式/遍历实际产生出的每条路径必须在工具内用
+  `check_paths` 逐项复核后再访问或输出 —— 否则 `**` 之类模式会绕过"针对子目录的
+  拒绝规则"(允许 `/x/a/*` 但拒绝 `/x/a/b/c` 时, 只检查扫描起点 `/x/a` 会放行 `b/c`
+  下的文件)。`list` 采用**待处理缓冲 + 满批复核**: 条目先缓冲 (256 条/批), 批量查询
+  后只输出"已明确允许"的条目, 因此 `limit` 只统计真正输出的条目 (被拒条目不会
+  占掉额度), 且不会退化成"每个条目一次跨线程查询"
+- **`check_paths` 语义**: 批量入参 (路径数组 + 作用域 + 会话), 出参三态
+  (`DENY` 已明确拒绝 / `ALLOW` 已明确允许 / `ASK` 未获批准); 判定口径与工具调用
+  权限检查一致 (工作区隔离 → 配置拒绝 → 完全授权 → 规则表 → `noRuleOperator`),
+  区别仅在于 `ASK` 不发起询问。工具侧约定: `DENY` 丢弃, `ASK` 同样不作为
+  (未获批准的范围不进入结果); 空路径/规范化失败按 `ASK` 返回 (不按已批准处理)。
+  任意线程可调用 (非 io 线程由宿主投递到 io 线程同步等待), 单次批量建议 ≤ 512 项
+  (宿主在 io 线程执行), 宿主上限 16384; 宿主未装配权限中间件时返回非 0, 工具应
+  跳过过滤 (保持原行为) 而不是把所有路径当成拒绝
+- **kit 便捷层**: 声明侧 `registerReadPathPermission(ctx, tool, "path")` /
+  `registerWritePathPermission(...)` (最常用的"路径参数 + 读/写"形态) 与通用
+  `registerToolPermission(ctx, ToolPermissionSpec{...})`; 查询侧
+  `filterPathPermissions` (分批 + 同路径去重, 返回等长允许标记) /
+  `checkPathDecisions` (原始三态) / `checkPathDecision` (单路径)
 
 ---
 

@@ -5159,12 +5159,13 @@ enum class PermissionTarget : int32_t {
 
 /// 工具权限声明 (字段含义见 C ABI 的 AgentxxPluginToolPermissionSpec)
 struct ToolPermissionSpec {
-    std::string_view toolName{};                              ///< 目标工具名 (须已注册)
-    PermissionScope  scope{PermissionScope::Read};            ///< 权限作用域
-    PermissionTarget target{PermissionTarget::None};          ///< 目标来源
-    std::string_view targetArg{};                             ///< 目标参数名 (args 字段名)
-    bool             targetIsArray{false};                    ///< 参数值为字符串数组时逐项判定
-    std::string_view category{};                              ///< 权限分类文本 (空 = 按作用域生成)
+    std::string_view toolName{};                       ///< 目标工具名 (须已注册)
+    PermissionScope  scope{PermissionScope::Read};     ///< 权限作用域
+    PermissionTarget target{PermissionTarget::None};   ///< 目标来源
+    /// 目标参数名 (args 字段名); 目标值按实际 JSON 类型处理: 字符串为单目标,
+    /// 数组 (如 `file_patterns`) 逐项判定
+    std::string_view targetArg{};
+    std::string_view category{};                       ///< 权限分类文本 (空 = 按作用域生成)
 };
 
 /// 声明工具权限 (工具注册后调用); 返回 C ABI 状态码 (0 成功)
@@ -5181,8 +5182,7 @@ inline int32_t registerToolPermission(
     abiSpec.scope       = static_cast<int32_t>(spec.scope);
     abiSpec.target_kind = static_cast<int32_t>(spec.target);
     abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
-    abiSpec.arg_kind    = spec.targetIsArray ? AGENTXX_PLUGIN_PERMISSION_ARG_STRING_ARRAY
-                                             : AGENTXX_PLUGIN_PERMISSION_ARG_STRING;
+    abiSpec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
     abiSpec.category    = PluginStringView::from(spec.category);
     return iface->register_tool_permission(host, &abiSpec);
 }
@@ -5194,6 +5194,9 @@ inline int32_t registerToolPermission(const Ctx& ctx, const ToolPermissionSpec& 
 }
 
 /// 便捷: 声明"路径参数 + 读作用域" (读取类工具, 目标参数值为路径)
+/// - 参数值为字符串数组时自动逐项判定 (如 `file_patterns`), 无需额外设置
+/// - 模式/前缀类参数 (glob 表达式) 建议配合 checkPathDecisions/filterPathPermissions
+///   在工具内对展开出的实际路径逐项复核 (见"路径权限查询"一节)
 template<typename Ctx>
 inline int32_t
     registerReadPathPermission(const Ctx& ctx, std::string_view toolName, std::string_view pathArg) {
@@ -5229,6 +5232,171 @@ inline int32_t unregisterToolPermission(const Ctx& ctx, std::string_view toolNam
     }
     auto nameSv = PluginStringView::from(toolName);
     return ctx.iface.permission->unregister_tool_permission(ctx.host, &nameSv);
+}
+
+/* ---- 路径权限查询 (供模式/前缀参数工具逐项过滤) ----
+ *
+ * 用途: 声明式权限目标只能描述"扫描起点"(决定是否询问用户一次); 对 glob/grep
+ * 这类模式参数, 模式展开后可能触及被拒绝的子目录, 因此工具在枚举出实际路径后
+ * 还要逐项查询一次, 只处理已明确允许的路径。
+ *
+ * 判定三态 (见 PathDecision): 与工具调用权限检查同一口径, 只是"需要询问"的场合
+ * 返回 Ask 而**不发起任何询问/中断** (本查询纯只读)。
+ * 工具侧约定: Deny 丢弃; Ask 表示"未获批准", 同样不应访问 (fail-closed)。
+ */
+
+/// 路径权限判定结果 (与 C ABI AGENTXX_PLUGIN_PERMISSION_DECISION_* 对应)
+enum class PathDecision : int32_t {
+    Deny  = AGENTXX_PLUGIN_PERMISSION_DECISION_DENY,  ///< 已明确拒绝
+    Allow = AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW, ///< 已明确允许
+    Ask   = AGENTXX_PLUGIN_PERMISSION_DECISION_ASK,   ///< 未获批准 (本查询不询问)
+};
+
+/// 批量查询路径权限 (三态; 不发起询问/不产生中断)
+/// - 入参 [paths] 建议为绝对路径 (相对路径按会话工作目录解析)
+/// - `return` 与 [paths] 等长的判定数组; 宿主不支持或调用失败时返回**空数组**
+///   (调用方应跳过过滤按原行为处理, 而不是把路径当成拒绝)
+inline std::vector<PathDecision> checkPathDecisions(
+    const AgentxxPluginHost*            host,
+    const AgentxxPluginPermissionIface* iface,
+    PermissionScope                     scope,
+    std::string_view                    sessionId,
+    const std::vector<std::string>&     paths
+) {
+    // 单次批量上限与宿主一致 (见 plugin_manager_vtable.cpp); 超出由调用方分批
+    constexpr size_t kMaxBatch = 16384;
+    if (!host || !iface || !iface->check_paths || paths.empty() || paths.size() > kMaxBatch) {
+        return {};
+    }
+    std::vector<AgentxxPluginStringView> views;
+    views.reserve(paths.size());
+    for (const auto& path : paths) {
+        views.push_back(PluginStringView::from(path));
+    }
+    AgentxxPluginPermissionPathQuery query{};
+    query.struct_size = sizeof(AgentxxPluginPermissionPathQuery);
+    query.scope       = static_cast<int32_t>(scope);
+    query.path_count  = static_cast<int32_t>(views.size());
+    query.session_id  = PluginStringView::from(sessionId);
+    query.paths       = views.data();
+
+    std::vector<int32_t> decisions(views.size(), AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
+    if (iface->check_paths(host, &query, decisions.data()) != 0) {
+        return {};
+    }
+    std::vector<PathDecision> out;
+    out.reserve(decisions.size());
+    for (auto decision : decisions) {
+        out.push_back(static_cast<PathDecision>(decision));
+    }
+    return out;
+}
+
+/// 同上 (从插件实例上下文取宿主与接口表)
+template<typename Ctx>
+inline std::vector<PathDecision> checkPathDecisions(
+    const Ctx&                      ctx,
+    PermissionScope                 scope,
+    std::string_view                sessionId,
+    const std::vector<std::string>& paths
+) {
+    return checkPathDecisions(ctx.host, ctx.iface.permission, scope, sessionId, paths);
+}
+
+/// 单路径权限查询 (便捷; 内部走批量接口)
+/// - 查询不可用或失败时返回 [PathDecision::Ask] (调用方按未获批准处理)
+template<typename Ctx>
+inline PathDecision checkPathDecision(
+    const Ctx&         ctx,
+    std::string_view   path,
+    PermissionScope    scope,
+    std::string_view   sessionId = {}
+) {
+    std::vector<std::string> paths{std::string{path}};
+    auto                     decisions = checkPathDecisions(ctx, scope, sessionId, paths);
+    if (decisions.size() != 1) {
+        return PathDecision::Ask;
+    }
+    return decisions.front();
+}
+
+/// 批量过滤路径 (工具内使用): 返回与 [paths] 等长的标记数组 (1 = 已明确允许)
+/// - Deny 与 Ask 都标记为不可访问 (fail-closed: 未获批准的范围不进入结果)
+/// - 宿主不支持查询时返回**空数组**, 调用方应跳过过滤 (保持原行为)
+/// - 内部按 [batchSize] 分批调用宿主 (默认 512 项, 避免长占宿主 io 线程),
+///   并对相同路径去重后查询
+inline std::vector<uint8_t> filterPathPermissions(
+    const AgentxxPluginHost*            host,
+    const AgentxxPluginPermissionIface* iface,
+    PermissionScope                     scope,
+    std::string_view                    sessionId,
+    const std::vector<std::string>&     paths,
+    size_t                              batchSize = 512
+) {
+    if (!host || !iface || !iface->check_paths || paths.empty()) {
+        return {};
+    }
+    if (batchSize == 0) {
+        batchSize = 512;
+    }
+    std::vector<uint8_t>           allowed(paths.size(), 0);
+    std::unordered_map<std::string, uint8_t> queried;
+    std::vector<std::string>       pending;
+    std::vector<size_t>            pendingIndex;
+
+    auto flush = [&]() -> bool {
+        if (pending.empty()) {
+            return true;
+        }
+        auto decisions = checkPathDecisions(host, iface, scope, sessionId, pending);
+        if (decisions.size() != pending.size()) {
+            return false; // 查询失败: 交由调用方跳过过滤
+        }
+        for (size_t i = 0; i < decisions.size(); ++i) {
+            const uint8_t ok = decisions[i] == PathDecision::Allow ? 1 : 0;
+            allowed[pendingIndex[i]] = ok;
+            queried.insert_or_assign(pending[i], ok);
+        }
+        pending.clear();
+        pendingIndex.clear();
+        return true;
+    };
+
+    for (size_t i = 0; i < paths.size(); ++i) {
+        auto it = queried.find(paths[i]);
+        if (it != queried.end()) {
+            allowed[i] = it->second;
+            continue;
+        }
+        pending.push_back(paths[i]);
+        pendingIndex.push_back(i);
+        if (pending.size() >= batchSize && !flush()) {
+            return {};
+        }
+    }
+    if (!flush()) {
+        return {};
+    }
+    return allowed;
+}
+
+/// 同上 (从插件实例上下文取宿主与接口表)
+template<typename Ctx>
+inline std::vector<uint8_t> filterPathPermissions(
+    const Ctx&                      ctx,
+    PermissionScope                 scope,
+    std::string_view                sessionId,
+    const std::vector<std::string>& paths,
+    size_t                          batchSize = 512
+) {
+    return filterPathPermissions(
+        ctx.host,
+        ctx.iface.permission,
+        scope,
+        sessionId,
+        paths,
+        batchSize
+    );
 }
 
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */

@@ -140,7 +140,11 @@ enum {
     AGENTXX_ABI_VALUE_PERMISSION_SPEC_ARGS_OFFSET         = 22,
     AGENTXX_ABI_VALUE_PERMISSION_IFACE_SIZE               = 23,
     AGENTXX_ABI_VALUE_PERMISSION_IFACE_VERSION            = 24,
-    AGENTXX_ABI_VALUE_VALUE_COUNT                         = 25
+    AGENTXX_ABI_VALUE_PERMISSION_PATH_QUERY_SIZE          = 25,
+    AGENTXX_ABI_VALUE_PERMISSION_PATH_QUERY_PATHS_OFFSET  = 26,
+    AGENTXX_ABI_VALUE_PERMISSION_DECISION_ASK             = 27,
+    AGENTXX_ABI_VALUE_PERMISSION_SPEC_SIZE_OFFSET         = 28,
+    AGENTXX_ABI_VALUE_VALUE_COUNT                         = 29
 };
 
 /// C 侧看到的 `sizeof`/`offsetof`/版本号取值。
@@ -196,6 +200,14 @@ uint64_t agentxx_test_abi_value(int32_t id) {
             return (uint64_t)sizeof(AgentxxPluginPermissionIface);
         case AGENTXX_ABI_VALUE_PERMISSION_IFACE_VERSION:
             return (uint64_t)AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION;
+        case AGENTXX_ABI_VALUE_PERMISSION_PATH_QUERY_SIZE:
+            return (uint64_t)sizeof(AgentxxPluginPermissionPathQuery);
+        case AGENTXX_ABI_VALUE_PERMISSION_PATH_QUERY_PATHS_OFFSET:
+            return (uint64_t)offsetof(AgentxxPluginPermissionPathQuery, paths);
+        case AGENTXX_ABI_VALUE_PERMISSION_DECISION_ASK:
+            return (uint64_t)AGENTXX_PLUGIN_PERMISSION_DECISION_ASK;
+        case AGENTXX_ABI_VALUE_PERMISSION_SPEC_SIZE_OFFSET:
+            return (uint64_t)offsetof(AgentxxPluginToolPermissionSpec, struct_size);
         default:
             return UINT64_MAX;
     }
@@ -238,6 +250,15 @@ int32_t agentxx_test_abi_c_probe(void) {
     if (AGENTXX_PLUGIN_PERMISSION_SCOPE_READ == AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE
         || AGENTXX_PLUGIN_PERMISSION_TARGET_NONE == AGENTXX_PLUGIN_PERMISSION_TARGET_PATH) {
         return 94; /* 枚举取值必须互不相同 */
+    }
+    /* 路径权限批量查询: 结构体 8 字节对齐 + 三态取值互不相同且与判定语义一致 */
+    if (sizeof(AgentxxPluginPermissionPathQuery) % 8 != 0) {
+        return 95;
+    }
+    if (AGENTXX_PLUGIN_PERMISSION_DECISION_DENY == AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW
+        || AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW == AGENTXX_PLUGIN_PERMISSION_DECISION_ASK
+        || AGENTXX_PLUGIN_PERMISSION_DECISION_DENY == AGENTXX_PLUGIN_PERMISSION_DECISION_ASK) {
+        return 96;
     }
     return 0;
 }

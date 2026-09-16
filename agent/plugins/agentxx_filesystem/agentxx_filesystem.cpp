@@ -64,6 +64,20 @@ constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
 struct FsPluginCtx : public PluginBase {};
 
+/// 构造按模式参数展开后的路径权限过滤器 (读作用域; 见 filesystem_impl.h 的 PathFilterFn)
+/// - 已明确允许(Allow)才保留; 被拒绝(Deny)与未获批准(Ask)一律不进入结果 (fail-closed)
+/// - 宿主未装配权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
+static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessionId) {
+    return [&ctx, sid = std::string{sessionId}](const std::vector<std::string>& paths) {
+        return agentxx::plugin::filterPathPermissions(
+            ctx,
+            agentxx::plugin::PermissionScope::Read,
+            sid,
+            paths
+        );
+    };
+}
+
 /// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
 static int32_t fsSetup(FsPluginCtx& ctx) {
     // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
@@ -105,14 +119,21 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             if (!args.ok()) {
                 return args.errorMessage();
             }
-            return fileListExecute(args.raw(), std::string(workDir), [&] {
-                return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
-            });
+            return fileListExecute(
+                args.raw(),
+                std::string(workDir),
+                [&] {
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                           || c.sessionCancelled(tid);
+                },
+                makeReadPathFilter(c, tid)
+            );
         },
         0,
         kAutoSummary
     );
-    // 列表按读取类工具处理 (列出目录/文件)
+    // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
+    // 列出的条目 (含 recursive 下钻结果) 在工具内逐项复核权限后才输出
     registerReadPathPermission(ctx, kNameList, "path");
 
     // 2. Read
@@ -315,11 +336,10 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
     registerWritePathPermission(ctx, kNameEdit, "path");
 
     // 5. Glob
-    // 注: glob/grep 的路径来自多个 glob 表达式的 `file_patterns` (可含 `*` 通配符),
-    // 与单个路径参数的权限规则口径不同, 暂不声明权限限制 (不参与权限判定, 与迁移前
-    // 行为一致); 如需拦截, 可用 ToolPermissionSpec 声明数组目标:
-    //   spec.target = PermissionTarget::Path; spec.targetArg = "file_patterns";
-    //   spec.targetIsArray = true
+    // 权限限制: 先按 `file_patterns` (数组) 声明读权限 —— 这决定"是否询问用户一次"
+    // (目标是模式表达的扫描起点); 模式实际展开出的路径在工具内用
+    // makeReadPathFilter 逐项复核 (拒绝/未获批准的路径不进入结果), 防止
+    // `**` 之类模式绕过针对子目录的拒绝规则
     auto globSchema
         = ctx.schema(kNameGlob)
               .stringArray(
@@ -367,13 +387,20 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             if (!args.ok()) {
                 return args.errorMessage();
             }
-            return fileGlobExecute(args.raw(), std::string(workDir), [&] {
-                return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
-            });
+            return fileGlobExecute(
+                args.raw(),
+                std::string(workDir),
+                [&] {
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                           || c.sessionCancelled(tid);
+                },
+                makeReadPathFilter(c, tid)
+            );
         },
         0,
         kAutoSummary
     );
+    registerReadPathPermission(ctx, kNameGlob, "file_patterns");
 
     // 6. Grep
     auto grepSchema
@@ -436,13 +463,22 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             if (!args.ok()) {
                 return args.errorMessage();
             }
-            return fileGrepExecute(args.raw(), std::string(workDir), [&] {
-                return agentxx_plugin_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
-            });
+            return fileGrepExecute(
+                args.raw(),
+                std::string(workDir),
+                [&] {
+                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                           || c.sessionCancelled(tid);
+                },
+                makeReadPathFilter(c, tid)
+            );
         },
         0,
         kAutoSummary
     );
+    // 权限限制: 同 glob —— 按 `file_patterns` (数组) 声明读权限决定是否询问,
+    // 扫描出的文件在工具内逐项复核后才读取 (被拒/未获批准的文件不读)
+    registerReadPathPermission(ctx, kNameGrep, "file_patterns");
 
     return 0;
 }

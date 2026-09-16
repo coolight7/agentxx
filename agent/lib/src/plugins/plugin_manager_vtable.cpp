@@ -178,6 +178,63 @@ static int32_t AGENTXX_PLUGIN_CALL xx_unregister_tool_permission(
     });
 }
 
+/// check_paths 单次批量上限: 判定在宿主 io 线程执行, 限制单次规模避免长时间占用
+/// (插件侧建议按 512 项分批; 上限仅作为异常调用的保护)
+static constexpr int32_t kPermissionCheckPathsMax = 16384;
+
+static int32_t AGENTXX_PLUGIN_CALL xx_check_paths(
+    const AgentxxPluginHost*                host,
+    const AgentxxPluginPermissionPathQuery* query,
+    int32_t*                                out_decisions
+) {
+    if (!query || !out_decisions || !query->paths || query->path_count <= 0) {
+        return -1;
+    }
+    if (query->path_count > kPermissionCheckPathsMax) {
+        return -1;
+    }
+    // 旧布局保护: struct_size 非 0 时必须覆盖当前结构体
+    if (query->struct_size != 0 && query->struct_size < sizeof(AgentxxPluginPermissionPathQuery)) {
+        return -1;
+    }
+    // 入参按值复制后交给 io 线程执行 (跨边界视图只在本次调用期间有效)
+    auto paths = std::make_shared<std::vector<std::string>>();
+    paths->reserve(static_cast<size_t>(query->path_count));
+    for (int32_t i = 0; i < query->path_count; ++i) {
+        const auto& item = query->paths[i];
+        paths->emplace_back(item.data ? item.data : "", static_cast<size_t>(item.size));
+    }
+    auto sessionId = std::make_shared<std::string>(
+        query->session_id.data ? query->session_id.data : "",
+        static_cast<size_t>(query->session_id.size)
+    );
+    const int32_t scope = query->scope;
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        // 只读查询: 允许关闭中调用 (实例收尾时其工具仍可能在执行)
+        auto call = enterHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst) {
+            return -1;
+        }
+        auto                 mgrPtr  = mgr;
+        auto                 instPtr = inst;
+        std::vector<int32_t> decisions;
+        auto                 rc = ioCallSyncKeep<int32_t>(
+            call,
+            mgrPtr,
+            [mgrPtr, instPtr, scope, sessionId, paths, &decisions]() {
+                return mgrPtr->checkPermissionPaths(instPtr, scope, *sessionId, *paths, decisions);
+            }
+        );
+        if (rc != 0 || decisions.size() != paths->size()) {
+            return -1;
+        }
+        std::copy(decisions.begin(), decisions.end(), out_decisions);
+        return 0;
+    });
+}
+
 static void AGENTXX_PLUGIN_CALL xx_op_cancel(::AgentxxPluginOperatorHandle* op) {
     cancelPluginOperation(op);
 }
@@ -1232,6 +1289,7 @@ static const AgentxxPluginPermissionIface g_ifacePermission = {
     /* struct_size */ sizeof(AgentxxPluginPermissionIface),
     /* register_tool_permission */ xx_register_tool_permission,
     /* unregister_tool_permission */ xx_unregister_tool_permission,
+    /* check_paths */ xx_check_paths,
 };
 
 static const AgentxxPluginHooksIface g_ifaceHooks = {

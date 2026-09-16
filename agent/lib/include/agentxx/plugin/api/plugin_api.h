@@ -289,9 +289,10 @@ typedef struct AgentxxPluginToolsIface {
 #define AGENTXX_PLUGIN_PERMISSION_TARGET_PATH 1 ///< 参数值为路径 (按会话工作目录规范化后匹配规则)
 #define AGENTXX_PLUGIN_PERMISSION_TARGET_TEXT 2 ///< 参数值为普通文本 (如命令/网址; 原样匹配规则)
 
-/// 目标参数值的形态
-#define AGENTXX_PLUGIN_PERMISSION_ARG_STRING       0 ///< 单个字符串
-#define AGENTXX_PLUGIN_PERMISSION_ARG_STRING_ARRAY 1 ///< 字符串数组 (逐项判定)
+/// 路径权限判定结果 (check_paths 出参; 三态)
+#define AGENTXX_PLUGIN_PERMISSION_DECISION_DENY  0 ///< 已明确拒绝 (黑名单/记住的拒绝/写边界)
+#define AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW 1 ///< 已明确允许 (白名单/工作目录/完全授权等)
+#define AGENTXX_PLUGIN_PERMISSION_DECISION_ASK   2 ///< 未获批准 (本查询不发起询问)
 
 /// 工具权限声明 (插件在注册工具后为自身工具声明权限限制; 由宿主统一判定)
 typedef struct AgentxxPluginToolPermissionSpec {
@@ -302,13 +303,30 @@ typedef struct AgentxxPluginToolPermissionSpec {
     /// 权限目标来源 (AGENTXX_PLUGIN_PERMISSION_TARGET_*)
     int32_t target_kind;
     /// 目标参数名 (工具 args JSON 中的字段名; TARGET_NONE 时可留空)
+    /// - 目标值按**参数实际 JSON 类型**处理: 字符串视为单个目标, 数组则逐项判定
+    ///   (无需声明形态)
     AgentxxPluginStringView target_arg;
-    /// 目标参数值形态 (AGENTXX_PLUGIN_PERMISSION_ARG_*)
-    int32_t arg_kind;
+    /// 本结构体字节数 (sizeof(AgentxxPluginToolPermissionSpec)); 传 0 时按当前布局解析
+    uint32_t struct_size;
     uint32_t _reserved; ///< 8 字节补齐
     /// 权限分类文本 (权限询问卡片上显示; 留空则按作用域生成)
     AgentxxPluginStringView category;
 } AgentxxPluginToolPermissionSpec;
+
+/// 路径权限批量查询入参 (check_paths; 三态判定, 不发起询问)
+typedef struct AgentxxPluginPermissionPathQuery {
+    /// 本结构体字节数 (sizeof(AgentxxPluginPermissionPathQuery)); 传 0 时按当前布局解析
+    uint32_t struct_size;
+    /// 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_READ / _WRITE)
+    int32_t scope;
+    /// paths 元素个数 (须 > 0 且不超过宿主上限)
+    int32_t path_count;
+    uint32_t _reserved; ///< 8 字节补齐
+    /// 会话 (解析会话工作目录与工作区隔离边界; 可为空, 为空时按进程工作目录解析)
+    AgentxxPluginStringView session_id;
+    /// 待查路径数组 (只读借用, 仅本次调用有效): 绝对路径优先; 相对路径按会话工作目录解析
+    const AgentxxPluginStringView* paths;
+} AgentxxPluginPermissionPathQuery;
 
 typedef struct AgentxxPluginPermissionIface {
     int32_t  version;     ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
@@ -328,6 +346,26 @@ typedef struct AgentxxPluginPermissionIface {
     int32_t(AGENTXX_PLUGIN_CALL* unregister_tool_permission)(
         const AgentxxPluginHost*       host,
         const AgentxxPluginStringView* tool_name
+    );
+
+    /// 批量查询路径权限判定 (advisory; 只读已生效规则)
+    /// - **不发起权限询问、不产生中断、不弹任何界面、不做阻塞等待**: 纯只读判定,
+    ///   用于支持模式/前缀参数的插件工具 (如 glob/grep) 在枚举出实际路径后逐项过滤
+    /// - 判定口径与工具调用权限检查一致 (工作区隔离 → 配置拒绝 → 完全授权 →
+    ///   规则表 → noRuleOperator); 区别仅在于"应询问(INTERRUPT)"以 ASK 返回而不询问
+    /// - 工具侧建议: DENY 丢弃; ASK 表示"未获批准"同样不应访问 (按未批准处理)
+    /// - 线程: 任意线程可调用 (非 io 线程由宿主投递到 io 线程同步等待);
+    ///   单次批量不宜过大 (宿主在 io 线程执行), 建议按需分批 (如 512 项)
+    ///
+    /// - `args`:
+    ///     - [query] 查询入参 (路径数组/作用域/会话)
+    ///     - [out_decisions] 调用方提供的等长出参数组 (path_count 项)
+    ///
+    /// `return`: 0 成功; 非 0 不支持或失败 (失败时调用方应跳过过滤, 按原行为处理)
+    int32_t(AGENTXX_PLUGIN_CALL* check_paths)(
+        const AgentxxPluginHost*                host,
+        const AgentxxPluginPermissionPathQuery* query,
+        int32_t*                                out_decisions
     );
 } AgentxxPluginPermissionIface;
 

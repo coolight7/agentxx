@@ -43,6 +43,12 @@ namespace agentxx_fs_plugin {
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
 using IsCancelledFn = std::function<bool()>;
 
+/// 路径权限过滤回调 (批量): 入参为工具枚举出的**完整路径数组**, 返回等长允许标记
+/// (1 = 已明确允许); 返回空数组表示查询不可用, 调用方跳过过滤 (保持原行为)
+/// - 由模式类工具 (glob / grep) 使用: 声明的权限目标只描述"扫描起点"
+///   (决定是否询问用户一次), 模式实际展开出的路径在此逐项复核
+using PathFilterFn = std::function<std::vector<uint8_t>(const std::vector<std::string>&)>;
+
 /// 超时上下文: 循环内经 expired() 轮询 (deadline <= 0 表示不限时)
 struct Deadline {
     std::chrono::steady_clock::time_point point{};
@@ -203,6 +209,48 @@ inline std::string joinLines(const std::vector<std::string>& lines) {
     return output;
 }
 
+/// 按权限规则逐项过滤路径列表 (模式类工具用: 模式展开后复核实际路径)
+/// - 仅保留"已明确允许"的路径: 被拒绝 (Deny) 与未获批准 (Ask) 都不进入结果,
+///   避免模式展开绕过针对子目录的拒绝规则
+/// - [pathFilter] 为空或查询不可用 (返回空标记数组) 时不做过滤: 保持原行为,
+///   且不会把所有路径误判为拒绝
+///
+/// - `return` 过滤后的路径列表 (顺序不变)
+inline std::vector<std::filesystem::path> filterByPermission(
+    std::vector<std::filesystem::path> paths,
+    const PathFilterFn&                pathFilter
+) {
+    if (!pathFilter || paths.empty()) {
+        return paths;
+    }
+    std::vector<std::string> candidates;
+    candidates.reserve(paths.size());
+    for (const auto& p : paths) {
+        candidates.push_back(toUtf8(p));
+    }
+    // 批量查询 (过滤器内部按批调用宿主并对相同路径去重)
+    const auto allowed = pathFilter(candidates);
+    if (allowed.size() != candidates.size()) {
+        // 宿主不支持路径查询或调用失败: 跳过过滤 (日志留痕便于排查)
+        XX_LOGW("filesystem: path permission query unavailable, path filtering skipped");
+        return paths;
+    }
+    std::vector<std::filesystem::path> kept;
+    kept.reserve(paths.size());
+    size_t dropped = 0;
+    for (size_t i = 0; i < paths.size(); ++i) {
+        if (allowed[i] != 0) {
+            kept.push_back(std::move(paths[i]));
+        } else {
+            ++dropped;
+        }
+    }
+    if (dropped > 0) {
+        XX_LOGD("filesystem: {} path(s) excluded by permission rules", dropped);
+    }
+    return kept;
+}
+
 } // namespace detail
 
 // =====================================================================
@@ -211,7 +259,8 @@ inline std::string joinLines(const std::vector<std::string>& lines) {
 inline std::string fileListExecuteImpl(
     const agentxx::util::Json& arguments,
     const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const IsCancelledFn&       isCancelled = nullptr,
+    const PathFilterFn&        pathFilter  = nullptr
 ) {
     auto rawPath    = arguments.value("path", std::string{});
     auto targetPath = detail::wsAbs(workDir, rawPath);
@@ -298,12 +347,63 @@ inline std::string fileListExecuteImpl(
     bool                  dedupByPath = false;
     std::set<std::string> listedPaths;
 
+    /// 权限过滤批次大小: 条目先入待处理缓冲, 满批后批量查询权限再输出
+    constexpr size_t                              kPermissionBatch = 256;
+    std::vector<std::filesystem::directory_entry> pending;
+    size_t                                        excludedTotal = 0;
+
+    /// 输出待处理条目 (按权限过滤后输出 "已明确允许" 的条目)
+    /// - 只在这里应用输出上限: 达到 limit 后丢弃剩余待处理条目 (与未过滤时
+    ///   "读到一个条目就判断上限" 的输出结果一致)
+    /// - 不在此检查取消/超时: 由外层循环处理 (避免重复输出终止提示行)
+    /// - 查询不可用 (宿主未装配权限中间件/失败) 时不过滤, 保持原行为
+    auto flushPending = [&]() {
+        if (pending.empty()) {
+            return;
+        }
+        if (pathFilter) {
+            std::vector<std::string> paths;
+            paths.reserve(pending.size());
+            for (const auto& entity : pending) {
+                paths.push_back(detail::toUtf8(entity.path()));
+            }
+            const auto allowed = pathFilter(paths);
+            if (allowed.size() == paths.size()) {
+                for (size_t i = 0; i < pending.size(); ++i) {
+                    if (allowed[i] == 0) {
+                        ++excludedTotal;
+                        continue;
+                    }
+                    if (limitReached()) {
+                        break;
+                    }
+                    onAppendItem(pending[i]);
+                }
+                pending.clear();
+                return;
+            }
+            XX_LOGW("filesystem_list: path permission query unavailable, path filtering skipped");
+        }
+        for (const auto& entity : pending) {
+            if (limitReached()) {
+                break;
+            }
+            onAppendItem(entity);
+        }
+        pending.clear();
+    };
+
     /// 追加一个条目 (按路径去重生效时同一路径只输出一次)
+    /// - 条目先进入待处理缓冲, 满批后经权限批量查询再输出: `limit` 只统计真正
+    ///   输出的条目, 且避免"每条目一次跨线程查询"
     auto appendEntry = [&](const std::filesystem::directory_entry& entity) {
         if (dedupByPath && false == listedPaths.insert(detail::toUtf8(entity.path())).second) {
             return;
         }
-        onAppendItem(entity);
+        pending.push_back(entity);
+        if (pending.size() >= kPermissionBatch) {
+            flushPending();
+        }
     };
 
     /// 列出目录内容 (recursive 为 true 时递归子目录); 返回 true 表示应停止
@@ -387,6 +487,7 @@ inline std::string fileListExecuteImpl(
                     }
                 }
             }
+            flushPending();
             return detail::joinLines(lines);
         }
 
@@ -405,14 +506,21 @@ inline std::string fileListExecuteImpl(
     } else if (std::filesystem::is_directory(fsPath)) {
         appendDirContents(fsPath);
     } else if (std::filesystem::is_regular_file(fsPath)) {
-        onAppendItem(std::filesystem::directory_entry(fsPath));
+        // 单文件同样走待处理缓冲, 使权限过滤对"直接指定的文件"同样生效
+        // (与 read/write/edit 等按路径判定的工具保持一致)
+        appendEntry(std::filesystem::directory_entry(fsPath));
     } else {
         lines.push_back("[Error] Path exist, but is not a directory or file");
     }
 
+    flushPending();
+
     // 未触发提前终止且无条目: 空目录提示行, 让 LLM 能区分 "空目录" 与失败
     if (lines.empty()) {
         lines.push_back("[Empty]");
+    }
+    if (excludedTotal > 0) {
+        XX_LOGD("filesystem_list: {} entries excluded by permission rules", excludedTotal);
     }
 
     // 拼接为多行文本 (与命令行 ls 一致)
@@ -675,7 +783,8 @@ inline std::string fileEditExecuteImpl(
 inline std::string fileGlobExecuteImpl(
     const agentxx::util::Json& arguments,
     const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const IsCancelledFn&       isCancelled = nullptr,
+    const PathFilterFn&        pathFilter  = nullptr
 ) {
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
@@ -800,6 +909,10 @@ inline std::string fileGlobExecuteImpl(
         std::sort(resultList.begin(), resultList.end());
     }
 
+    // 权限逐项过滤: 模式 (可含 `*`/`**`) 展开出的路径可能与"针对子目录的拒绝规则"
+    // 相交, 声明的权限目标只覆盖"扫描起点", 因此在此对实际路径逐项复核
+    resultList = detail::filterByPermission(std::move(resultList), pathFilter);
+
     if (resultList.empty()) {
         return R"([Error] No match `file_patterns` file found after filtering)";
     }
@@ -820,7 +933,8 @@ inline std::string fileGlobExecuteImpl(
 inline std::string fileGrepExecuteImpl(
     const agentxx::util::Json& arguments,
     const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const IsCancelledFn&       isCancelled = nullptr,
+    const PathFilterFn&        pathFilter  = nullptr
 ) {
     // 搜索模式参数 (两者均可省略, 但至少指定其一; 同时指定时结果为两者并集):
     // - text_patterns  : 纯文本字面量匹配 (对齐 grep -F, 不经正则解释)
@@ -904,6 +1018,10 @@ inline std::string fileGrepExecuteImpl(
         ),
         refilelist.end()
     );
+
+    // 权限逐项过滤: `file_patterns` 展开出的文件可能与"针对子目录的拒绝规则"相交
+    // (声明的权限目标只覆盖扫描起点), 在此按实际文件路径复核, 未获批准的文件不读
+    refilelist = detail::filterByPermission(std::move(refilelist), pathFilter);
 
     if (refilelist.empty()) {
         throw std::runtime_error{"No match `file_patterns` file found"};
@@ -1196,10 +1314,11 @@ inline std::string asErrorText(Fn&& fn) {
 inline std::string fileListExecute(
     const agentxx::util::Json& arguments,
     const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const IsCancelledFn&       isCancelled = nullptr,
+    const PathFilterFn&        pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileListExecuteImpl(arguments, workDir, isCancelled);
+        return fileListExecuteImpl(arguments, workDir, isCancelled, pathFilter);
     });
 }
 
@@ -1236,20 +1355,22 @@ inline std::string fileEditExecute(
 inline std::string fileGlobExecute(
     const agentxx::util::Json& arguments,
     const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const IsCancelledFn&       isCancelled = nullptr,
+    const PathFilterFn&        pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileGlobExecuteImpl(arguments, workDir, isCancelled);
+        return fileGlobExecuteImpl(arguments, workDir, isCancelled, pathFilter);
     });
 }
 
 inline std::string fileGrepExecute(
     const agentxx::util::Json& arguments,
     const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const IsCancelledFn&       isCancelled = nullptr,
+    const PathFilterFn&        pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileGrepExecuteImpl(arguments, workDir, isCancelled);
+        return fileGrepExecuteImpl(arguments, workDir, isCancelled, pathFilter);
     });
 }
 

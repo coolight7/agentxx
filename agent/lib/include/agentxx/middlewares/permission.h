@@ -57,13 +57,27 @@ struct ToolPermissionSpec {
     ToolPermissionTargetKind targetKind = ToolPermissionTargetKind::None;
 
     /// 目标参数名 (工具 args 中的字段名; 依次判定, 任一目标被拒绝即拒绝)
+    /// - 目标值按**参数实际 JSON 类型**处理: 字符串视为单个目标, 数组逐项判定
+    ///   (如 glob 的 `file_patterns`), 无需额外声明形态
     std::vector<std::string> targetArgs{};
-
-    /// 目标参数值为字符串数组时逐项判定 (如 glob 的 file_patterns)
-    bool arrayArg = false;
 
     /// 权限分类文本 (权限询问卡片上显示; 空 = 按作用域生成)
     std::string category{};
+};
+
+/// 目标权限判定结果 (三态)
+/// - 与"工具调用权限检查"完全同一口径, 区别仅在于 [Ask] 不在判定阶段发起询问:
+///   需要询问的场合由调用方决定 (工具调用检查会经总线询问用户, 路径查询接口
+///   则把它作为"未获批准"返回, 不弹任何界面)
+enum class PathDecision {
+    /// 已明确拒绝: 配置黑名单 / 记住的拒绝规则 / 工作区隔离的写边界
+    Deny,
+
+    /// 已明确允许: 白名单 / 工作目录规则 / 完全授权 / 模式默认放行 (pass)
+    Allow,
+
+    /// 未获批准: 命中 INTERRUPT 规则, 或未命中任何规则且模式默认为询问 (ask/all_ask)
+    Ask,
 };
 
 /// 每会话文件系统隔离边界 (worktree 模式; 见 setSessionIsolation)
@@ -143,6 +157,22 @@ public:
 
     /// 权限分类文本: 声明未指定 category 时按作用域生成
     static std::string_view defaultCategory(size_t scope);
+
+    /// 判定单个路径目标 (纯只读判定: 不发起询问、不产生中断、不修改任何状态)
+    /// - 依次: 工作区隔离写拒绝 → 配置拒绝路径 → 完全授权 → 规则表命中
+    ///   (ALLOW/DENY/INTERRUPT) → [noRuleOperator] 兜底; INTERRUPT 场合返回
+    ///   [PathDecision::Ask] 而不询问
+    /// - `path` 须为已规范化的绝对路径 (见 [normalizePermissionPath])
+    PathDecision
+        decideTarget(std::string_view path, size_t scope, std::string_view sessionId) const;
+
+    /// 批量判定路径 (相对路径按会话生效工作目录规范化; 空路径或规范化失败按
+    /// [PathDecision::Ask] 返回: 无法判定时不按"已批准"处理)
+    /// - 供插件路径查询接口 (agentxx.agent.permission 的 check_paths) 使用:
+    ///   支持模式/前缀参数的插件工具在枚举出实际路径后逐项过滤
+    std::vector<PathDecision>
+        decidePaths(const std::vector<std::string>& paths, size_t scope, std::string_view sessionId)
+            const;
 
     void setFilesystemPermission(std::string_view path, PermissionOperator op, size_t index);
 

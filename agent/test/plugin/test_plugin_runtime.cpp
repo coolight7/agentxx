@@ -1136,6 +1136,10 @@ TestResult testPluginRuntime() {
             {22, offsetof(AgentxxPluginToolPermissionSpec, target_arg)},
             {23, sizeof(AgentxxPluginPermissionIface)},
             {24, AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION},
+            {25, sizeof(AgentxxPluginPermissionPathQuery)},
+            {26, offsetof(AgentxxPluginPermissionPathQuery, paths)},
+            {27, AGENTXX_PLUGIN_PERMISSION_DECISION_ASK},
+            {28, offsetof(AgentxxPluginToolPermissionSpec, struct_size)},
         };
         for (const auto& item : expectations) {
             XX_TEST_EXPECT_EQ(agentxx_test_abi_value(item.id), item.expected);

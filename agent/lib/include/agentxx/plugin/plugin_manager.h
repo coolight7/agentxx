@@ -359,6 +359,26 @@ public:
         return unregisterToolPermission(inst, strToSv(toolName));
     }
 
+    /// 批量查询路径权限判定 (只读; 不发起询问/不产生中断)
+    /// - 判定口径与工具调用权限检查一致, 仅把"应询问"以 ASK 返回 (见 agentxx.agent.permission)
+    /// - 供支持模式/前缀参数的插件工具在枚举出实际路径后逐项过滤 (glob/grep 等)
+    ///
+    /// - `args`:
+    ///     - [inst]  调用方插件实例 (仅用于日志/归属)
+    ///     - [scope] 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_*)
+    ///     - [sessionId] 会话 (取会话工作目录/隔离边界; 可为空)
+    ///     - [paths] 待判定路径 (绝对路径优先; 相对路径按会话工作目录解析)
+    ///     - [outDecisions] 等长出参 (AGENTXX_PLUGIN_PERMISSION_DECISION_*)
+    ///
+    /// `return`: 0 成功; 非 0 不支持或失败 (权限中间件未装配时调用方应跳过过滤)
+    int checkPermissionPaths(
+        PluginInstance*                 inst,
+        int32_t                         scope,
+        std::string_view                sessionId,
+        const std::vector<std::string>& paths,
+        std::vector<int32_t>&           outDecisions
+    );
+
     int registerSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
 
     int registerSkillDir(PluginInstance* inst, std::string_view path) {

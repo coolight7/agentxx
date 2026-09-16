@@ -406,6 +406,117 @@ asio::awaitable<void> test_permission_relative_path() {
     co_return;
 }
 
+/// 路径权限批量查询 (插件接口 check_paths 的落地): 三态判定且**不发起询问**
+/// - 供模式/前缀参数工具 (glob/grep) 在枚举出实际路径后逐项过滤使用
+/// - 三态: Allow(已明确允许) / Deny(已明确拒绝) / Ask(未获批准, 不询问)
+asio::awaitable<void> test_permission_path_query_decisions() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto io             = std::make_shared<MockIO>(); // 记录询问次数 (查询不应产生任何询问)
+    io->permissionAllow = true;
+    io->registerOnBus(sessionBus);
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto session      = agentContext->getSession("path_query");
+    session->bus      = sessionBus;
+
+    using Mw = agentxx::middleware::PermissionMiddlewareHandle;
+    auto permission
+        = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+
+    const std::string cwd = std::filesystem::current_path().generic_string();
+    // 规则: 工作目录读放行; 工作目录内 secret 子目录读拒绝; 工作目录内 blacklist 为配置黑名单
+    permission->setFilesystemPermission(
+        cwd,
+        agentxx::middleware::PermissionOperator::ALLOW,
+        Mw::FilesystemPermissionREAD
+    );
+    permission->setFilesystemPermission(
+        cwd + "/secret",
+        agentxx::middleware::PermissionOperator::DENY,
+        Mw::FilesystemPermissionREAD
+    );
+    permission->addConfigDenyPath(cwd + "/blacklist");
+    // ask 模式: 未命中规则时需要询问
+    permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+
+    const std::vector<std::string> paths{
+        cwd + "/a.txt",                  // Allow: 工作目录规则覆盖
+        cwd + "/secret/key.pem",         // Deny: 规则表拒绝 (更深规则覆盖外层放行)
+        cwd + "/blacklist/dump.bin",     // Deny: 配置黑名单
+        "/data/outside.txt",             // Ask: 无规则 (ask 模式)
+        "",                              // Ask: 空路径无法判定 (不按已批准处理)
+    };
+    auto decisions = permission->decidePaths(paths, Mw::FilesystemPermissionREAD, "path_query");
+    XX_TEST_EXPECT_EQ(decisions.size(), paths.size());
+    if (decisions.size() == paths.size()) {
+        XX_TEST_EXPECT_TRUE(decisions[0] == agentxx::middleware::PathDecision::Allow);
+        XX_TEST_EXPECT_TRUE(decisions[1] == agentxx::middleware::PathDecision::Deny);
+        XX_TEST_EXPECT_TRUE(decisions[2] == agentxx::middleware::PathDecision::Deny);
+        XX_TEST_EXPECT_TRUE(decisions[3] == agentxx::middleware::PathDecision::Ask);
+        XX_TEST_EXPECT_TRUE(decisions[4] == agentxx::middleware::PathDecision::Ask);
+    }
+    // 关键保证: 批量判定全程不发起权限询问 (工具调用级检查才会询问)
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
+
+    // 相对路径按会话工作目录解析 (与工具实际访问口径一致)
+    auto relDecisions = permission->decidePaths(
+        {"a.txt", "secret/key.pem", "../outside.txt"},
+        Mw::FilesystemPermissionREAD,
+        "path_query"
+    );
+    XX_TEST_EXPECT_EQ(relDecisions.size(), size_t{3});
+    if (relDecisions.size() == 3) {
+        XX_TEST_EXPECT_TRUE(relDecisions[0] == agentxx::middleware::PathDecision::Allow);
+        XX_TEST_EXPECT_TRUE(relDecisions[1] == agentxx::middleware::PathDecision::Deny);
+        XX_TEST_EXPECT_TRUE(relDecisions[2] == agentxx::middleware::PathDecision::Ask);
+    }
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
+
+    // 完全授权后: 规则表不再拦截 (记住的拒绝一并放开, 与工具调用级检查一致),
+    // 配置黑名单仍然拒绝
+    permission->setFullAuthorized(true);
+    auto fullDecisions = permission->decidePaths(paths, Mw::FilesystemPermissionREAD, "path_query");
+    XX_TEST_EXPECT_EQ(fullDecisions.size(), paths.size());
+    if (fullDecisions.size() == paths.size()) {
+        XX_TEST_EXPECT_TRUE(fullDecisions[1] == agentxx::middleware::PathDecision::Allow);
+        XX_TEST_EXPECT_TRUE(fullDecisions[2] == agentxx::middleware::PathDecision::Deny);
+        XX_TEST_EXPECT_TRUE(fullDecisions[3] == agentxx::middleware::PathDecision::Allow);
+    }
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
+
+    // 工作区隔离: 主检出子树写拒绝, worktree 子树例外 (与工具调用级检查同一口径)
+    {
+        auto wtPermission
+            = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+        wtPermission->setFilesystemPermission(
+            cwd,
+            agentxx::middleware::PermissionOperator::ALLOW,
+            Mw::FilesystemPermissionWRITE
+        );
+        wtPermission->setSessionIsolation(
+            "path_query_wt",
+            agentxx::middleware::SessionFsIsolation{
+                .allowPath     = cwd + "/wt",
+                .denyWritePath = cwd,
+            }
+        );
+        auto writeDecisions = wtPermission->decidePaths(
+            {cwd + "/main.cpp", cwd + "/wt/wt.cpp"},
+            Mw::FilesystemPermissionWRITE,
+            "path_query_wt"
+        );
+        XX_TEST_EXPECT_EQ(writeDecisions.size(), size_t{2});
+        if (writeDecisions.size() == 2) {
+            XX_TEST_EXPECT_TRUE(writeDecisions[0] == agentxx::middleware::PathDecision::Deny);
+            XX_TEST_EXPECT_TRUE(writeDecisions[1] == agentxx::middleware::PathDecision::Allow);
+        }
+    }
+    XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
+
+    co_return;
+}
+
 /// 工具权限声明: 声明的分类文本随询问下发 (覆盖按作用域生成的默认值),
 /// 无目标声明 (工具级) 的询问不下发目标描述块
 asio::awaitable<void> test_permission_declared_category_and_tool_level() {
@@ -496,12 +607,12 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     XX_TEST_EXPECT_TRUE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 2); // 未再询问
 
-    // 4. 数组目标声明 (如 glob 的 file_patterns): 逐项判定, 任一目标被拒绝即拒绝
+    // 4. 数组目标 (如 glob 的 file_patterns): 按参数实际 JSON 类型自动逐项判定,
+    //    任一目标被拒绝即拒绝 (无需声明数组形态)
     agentxx::middleware::ToolPermissionSpec arraySpec;
     arraySpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
     arraySpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
     arraySpec.targetArgs = {"file_patterns"};
-    arraySpec.arrayArg   = true;
     permission->registerToolPermission("plugin_glob", std::move(arraySpec));
     permission->noRuleOperator = agentxx::middleware::PermissionOperator::ALLOW;
     permission->setFilesystemPermission(
@@ -534,6 +645,19 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
         auto argsMixed = globArgs({"/data/ok_dir/*.cpp", "/data/deny_dir/x.cpp"});
         XX_TEST_EXPECT_FALSE(
             co_await permission->checkToolPermission("plugin_glob", argsMixed)
+        );
+        // 同一声明下参数为单字符串: 视为单个目标 (类型自动判定, 非数组)
+        auto argsSingle = agentxx::util::Json{
+            {"file_patterns", "/data/deny_dir/single.cpp"}
+        };
+        XX_TEST_EXPECT_FALSE(
+            co_await permission->checkToolPermission("plugin_glob", argsSingle)
+        );
+        auto argsSingleOk = agentxx::util::Json{
+            {"file_patterns", "/data/ok_dir/single.cpp"}
+        };
+        XX_TEST_EXPECT_TRUE(
+            co_await permission->checkToolPermission("plugin_glob", argsSingleOk)
         );
         // 参数缺省 (无 file_patterns): 无目标参与判定, 放行
         auto argsEmpty = agentxx::util::Json::object();
@@ -741,6 +865,114 @@ asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
     ok = co_await read(otherPath2);
     XX_TEST_EXPECT_TRUE(ok);
     XX_TEST_EXPECT_EQ(io->interruptCalls, 6);
+
+    std::filesystem::remove_all(tmpRoot, ec);
+    co_return;
+}
+
+/// 权限路由: "通配符放行 + 子目录拒绝" 的覆盖关系
+/// - 场景: 允许 `/x/a/*` 但拒绝 `/x/a/b/c` 时, `b/c` 子树 (目录自身与更深路径)
+///   必须被拒绝 —— 规则树按最长前缀匹配, 深层 DENY 节点覆盖外层 ALLOW
+/// - 注册形式对比 (`/x/a/*` 通配子节点 与 `/x/a` 目录节点):
+///   与拒绝分支同名的兄弟路径 (`/x/a/b/x.txt`) 在通配形式下路由会进入精确子节点
+///   `b` 且其后无规则, 父链 (b/a/…) 上也没有规则 → 落到 noRuleOperator;
+///   目录形式则经父链回退命中 `/x/a` 的 ALLOW。两种形式都**不会**绕过深层 DENY
+asio::awaitable<void> test_permission_subdir_deny_over_wildcard_allow() {
+    auto sessionBus
+        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto io = std::make_shared<MockIO>(); // 记录询问次数
+    io->permissionAllow = true;
+    io->registerOnBus(sessionBus);
+
+    auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+    auto session      = agentContext->getSession("subdir_deny");
+    session->bus      = sessionBus;
+
+    // 真实目录树: <tmp>/agentxx_perm_subdeny/{a/b/c, a/b, a/x}
+    std::error_code ec;
+    const auto      tmpRoot = std::filesystem::temp_directory_path() / "agentxx_perm_subdeny";
+    std::filesystem::remove_all(tmpRoot, ec);
+    std::filesystem::create_directories(tmpRoot / "a" / "b" / "c", ec);
+    std::filesystem::create_directories(tmpRoot / "a" / "x", ec);
+    const std::string rootDir = (tmpRoot / "a").generic_string();
+    const std::string denyDir = (tmpRoot / "a" / "b" / "c").generic_string();
+
+    using Mw = agentxx::middleware::PermissionMiddlewareHandle;
+    // 无规则 = 询问 (便于观测"规则是否命中": 命中 ALLOW 不询问, 未命中才询问)
+    auto makePermission = [&]() {
+        auto permission
+            = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
+        permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
+        declareFilesystemPermissions(*permission);
+        return permission;
+    };
+    auto makeCheck = [&](std::shared_ptr<Mw> permission) {
+        return [permission](std::string_view path) -> asio::awaitable<bool> {
+            auto args = agentxx::util::Json{
+                {"path",      std::string{path}},
+                {"sessionId", "subdir_deny"    }
+            };
+            co_return co_await permission->checkToolPermission("agentxx_filesystem_write", args);
+        };
+    };
+
+    // ---- 1. 放行规则写成通配形式: `<root>/*` ALLOW + `<root>/b/c` DENY ----
+    {
+        auto permission = makePermission();
+        permission->setFilesystemPermission(
+            rootDir + "/*",
+            agentxx::middleware::PermissionOperator::ALLOW,
+            Mw::FilesystemPermissionWRITE
+        );
+        permission->setFilesystemPermission(
+            denyDir,
+            agentxx::middleware::PermissionOperator::DENY,
+            Mw::FilesystemPermissionWRITE
+        );
+        auto check = makeCheck(permission);
+
+        // 拒绝子树: 目录自身与更深路径 (含子目录内的文件) 全部拒绝, 且不询问
+        XX_TEST_EXPECT_FALSE(co_await check(denyDir));
+        XX_TEST_EXPECT_FALSE(co_await check(denyDir + "/file.txt"));
+        XX_TEST_EXPECT_FALSE(co_await check(denyDir + "/sub/deep.txt"));
+        XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
+
+        // 通配放行的其它分支: 放行, 不询问
+        XX_TEST_EXPECT_TRUE(co_await check(rootDir + "/x/y.txt"));
+        XX_TEST_EXPECT_TRUE(co_await check(rootDir + "/z/deep/deeper.txt"));
+        XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
+
+        // 与拒绝分支同名的兄弟路径 (b 下、c 之外): 通配形式不回退到 `*` 节点,
+        // 落到 noRuleOperator (此处 INTERRUPT) → 询问用户 (不绕过拒绝, 仅多问一次)
+        XX_TEST_EXPECT_TRUE(co_await check(rootDir + "/b/x.txt"));
+        XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+    }
+
+    // ---- 2. 放行规则写成目录形式: `<root>` ALLOW + `<root>/b/c` DENY ----
+    {
+        auto permission = makePermission();
+        permission->setFilesystemPermission(
+            rootDir,
+            agentxx::middleware::PermissionOperator::ALLOW,
+            Mw::FilesystemPermissionWRITE
+        );
+        permission->setFilesystemPermission(
+            denyDir,
+            agentxx::middleware::PermissionOperator::DENY,
+            Mw::FilesystemPermissionWRITE
+        );
+        auto check = makeCheck(permission);
+
+        // 深层拒绝同样生效 (拒绝子树内不询问)
+        XX_TEST_EXPECT_FALSE(co_await check(denyDir));
+        XX_TEST_EXPECT_FALSE(co_await check(denyDir + "/file.txt"));
+        XX_TEST_EXPECT_EQ(io->interruptCalls, 1); // 未新增询问
+
+        // 目录形式经父链回退命中 `<root>` ALLOW: 同层兄弟路径也放行且不询问
+        XX_TEST_EXPECT_TRUE(co_await check(rootDir + "/b/x.txt"));
+        XX_TEST_EXPECT_TRUE(co_await check(rootDir + "/x/y.txt"));
+        XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
+    }
 
     std::filesystem::remove_all(tmpRoot, ec);
     co_return;
@@ -1293,11 +1525,13 @@ asio::awaitable<TestResult> run_interrupt_bus_tests() {
         co_await test_registerOnBus_no_accumulation();
         co_await test_interrupt_bus_custom_handler();
         co_await test_permission_relative_path();
+        co_await test_permission_path_query_decisions();
         co_await test_permission_declared_category_and_tool_level();
         co_await test_permission_remember_rule();
         co_await test_permission_prompt_carries_ui_descriptor();
         co_await test_permission_remember_via_result_options();
         co_await test_permission_remember_across_bus_and_dir_subtree();
+        co_await test_permission_subdir_deny_over_wildcard_allow();
         co_await test_permission_worktree_isolation_subtree();
         co_await test_permission_full_auth_rule();
         co_await test_hil_interrupt_result_object_values_only();

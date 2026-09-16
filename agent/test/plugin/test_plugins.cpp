@@ -2488,12 +2488,25 @@ throw new Error("top-level rollback probe");
             if (readSpec) {
                 XX_TEST_EXPECT_EQ(readSpec->scope, Mw::FilesystemPermissionREAD);
             }
-            // 2. 未声明权限的工具 (glob/grep) 不参与权限判定
-            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_glob") == nullptr);
-            XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_grep") == nullptr);
+            // 2. 模式类工具 (glob/grep) 声明的是 `file_patterns` (数组) 的读权限:
+            //    声明的目标只描述扫描起点 (决定是否询问), 展开出的实际路径由工具
+            //    内批量查询逐项复核 (见 38d-4)
+            const auto* globSpec = permission->toolPermission("agentxx_filesystem_glob");
+            const auto* grepSpec = permission->toolPermission("agentxx_filesystem_grep");
+            XX_TEST_EXPECT_TRUE(globSpec != nullptr);
+            XX_TEST_EXPECT_TRUE(grepSpec != nullptr);
+            if (globSpec) {
+                XX_TEST_EXPECT_EQ(globSpec->scope, Mw::FilesystemPermissionREAD);
+                XX_TEST_EXPECT_EQ(globSpec->targetArgs.size(), size_t{1});
+                if (!globSpec->targetArgs.empty()) {
+                    XX_TEST_EXPECT_EQ(globSpec->targetArgs[0], std::string{"file_patterns"});
+                }
+            }
+            if (grepSpec) {
+                XX_TEST_EXPECT_EQ(grepSpec->scope, Mw::FilesystemPermissionREAD);
+            }
 
-            // 3. 判定: 已声明工具按规则表兜底 (无规则 = noRuleOperator),
-            //    未声明工具直接放行
+            // 3. 判定: 已声明工具按规则表兜底 (无规则 = noRuleOperator); 未声明工具直接放行
             permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
             auto writeArgs = agentxx::util::Json{
                 {"path", "/tmp/agentxx_permission_decl/x.txt"}
@@ -2501,11 +2514,16 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_FALSE(
                 co_await permission->checkToolPermission("agentxx_filesystem_write", writeArgs)
             );
+            // 模式类工具: `file_patterns` 数组逐项判定 (此处两项都未命中规则 → DENY)
             auto globArgs = agentxx::util::Json{
-                {"file_patterns", agentxx::util::Json::array({"*.cpp"})}
+                {"file_patterns", agentxx::util::Json::array({"/tmp/a/*.cpp", "/tmp/b/*.h"})}
             };
-            XX_TEST_EXPECT_TRUE(
+            XX_TEST_EXPECT_FALSE(
                 co_await permission->checkToolPermission("agentxx_filesystem_glob", globArgs)
+            );
+            // 未声明权限的工具: 直接放行 (权限限制随工具来源走)
+            XX_TEST_EXPECT_TRUE(
+                co_await permission->checkToolPermission("plugin_undeclared_tool", globArgs)
             );
 
             // 4. 禁用: 工具与权限声明一并摘除 (未声明 => 直接放行)
@@ -2542,7 +2560,6 @@ throw new Error("top-level rollback probe");
                 spec.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE;
                 spec.target_kind = AGENTXX_PLUGIN_PERMISSION_TARGET_PATH;
                 spec.target_arg  = argSv;
-                spec.arg_kind    = AGENTXX_PLUGIN_PERMISSION_ARG_STRING;
 
                 // 非本插件工具 (内置工具名)
                 spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_share_store");
@@ -2571,6 +2588,225 @@ throw new Error("top-level rollback probe");
         }
         // 摘除本用例装配的权限中间件 (避免影响后续用例)
         ctx->middlewareHandleContext->handles.pop_back();
+    }
+
+    // ---- 38d-4. 模式类工具 (glob / grep) 的路径权限: 声明的目标只决定"是否询问",
+    //             模式展开出的实际路径在工具内逐项查询过滤 (check_paths, 三态不询问) ----
+    {
+        namespace fsx = std::filesystem;
+        std::error_code ec;
+        const auto      uniqueId = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto      root
+            = fsx::temp_directory_path(ec) / fmt::format("agentxx_perm_glob_{}", uniqueId);
+        fsx::create_directories(root / "keep", ec);
+        fsx::create_directories(root / "secret" / "deep", ec);
+        {
+            std::ofstream(root / "keep" / "ok.txt") << "needle_keep\n";
+            std::ofstream(root / "secret" / "hidden.txt") << "needle_secret\n";
+            std::ofstream(root / "secret" / "deep" / "hidden2.txt") << "needle_secret_deep\n";
+        }
+
+        auto permission = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(ctx);
+        ctx->middlewareHandleContext->handles.push_back(permission);
+        // 无规则即放行 (对照用例先验证"未拒绝时全部可见")
+        permission->noRuleOperator = agentxx::middleware::PermissionOperator::ALLOW;
+
+        auto fsPath = findPluginDir("agentxx_filesystem");
+        auto fsInst = co_await ctx->pluginManager->loadPluginAsync(fsPath);
+        XX_TEST_EXPECT_TRUE(fsInst != nullptr);
+        if (fsInst) {
+            // glob/grep 现在声明了 `file_patterns` (数组) 的读权限: 目标为模式扫描起点
+            const auto* globSpec = permission->toolPermission("agentxx_filesystem_glob");
+            const auto* grepSpec = permission->toolPermission("agentxx_filesystem_grep");
+            XX_TEST_EXPECT_TRUE(globSpec != nullptr);
+            XX_TEST_EXPECT_TRUE(grepSpec != nullptr);
+            if (globSpec) {
+                XX_TEST_EXPECT_EQ(
+                    globSpec->scope,
+                    agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD
+                );
+                XX_TEST_EXPECT_EQ(globSpec->targetArgs.size(), size_t{1});
+                if (!globSpec->targetArgs.empty()) {
+                    XX_TEST_EXPECT_EQ(globSpec->targetArgs[0], std::string{"file_patterns"});
+                }
+            }
+
+            auto globTool = ctx->toolRegistry->find("agentxx_filesystem_glob");
+            auto grepTool = ctx->toolRegistry->find("agentxx_filesystem_grep");
+            XX_TEST_EXPECT_TRUE(globTool != nullptr);
+            XX_TEST_EXPECT_TRUE(grepTool != nullptr);
+            const std::string patternAll = (root / "**" / "*.txt").generic_string();
+
+            // (1) 对照: 未配置拒绝规则 → 被扫目录的文件全部出现在结果中
+            if (globTool && grepTool) {
+                auto globOut = co_await globTool->execute_async(agentxx::util::Json{
+                    {"file_patterns", agentxx::util::Json::array({patternAll})},
+                });
+                XX_TEST_EXPECT_TRUE(globOut.find("ok.txt") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(globOut.find("hidden.txt") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(globOut.find("hidden2.txt") != std::string::npos);
+
+                // 默认输出模式 (files_with_matches): 列出命中的文件路径与计数
+                auto grepOut = co_await grepTool->execute_async(agentxx::util::Json{
+                    {"file_patterns", agentxx::util::Json::array({patternAll})},
+                    {"text_patterns", agentxx::util::Json::array({"needle_"})},
+                });
+                XX_TEST_EXPECT_TRUE(grepOut.find("hidden.txt") != std::string::npos);
+                // content 模式: 命中行内容 (含被拒目录内的内容, 此时尚未配置拒绝规则)
+                auto grepContentOut = co_await grepTool->execute_async(agentxx::util::Json{
+                    {"file_patterns", agentxx::util::Json::array({patternAll})},
+                    {"text_patterns", agentxx::util::Json::array({"needle_"})},
+                    {"output_mode",   "content"                                       },
+                });
+                XX_TEST_EXPECT_TRUE(grepContentOut.find("needle_secret") != std::string::npos);
+            }
+
+            // (2) 配置拒绝 secret 子目录 (权限黑名单; 见用户场景: 允许 /a/* 但拒绝 /a/b/c)
+            permission->addConfigDenyPath((root / "secret").generic_string());
+
+            // (3) glob: 模式仍可匹配到 secret 下文件, 但逐路径过滤后不出现在结果里
+            if (globTool) {
+                auto globOut = co_await globTool->execute_async(agentxx::util::Json{
+                    {"file_patterns", agentxx::util::Json::array({patternAll})},
+                });
+                XX_TEST_EXPECT_TRUE(globOut.find("ok.txt") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(globOut.find("hidden.txt") == std::string::npos);
+                XX_TEST_EXPECT_TRUE(globOut.find("hidden2.txt") == std::string::npos);
+            }
+
+            // (4) grep: 被拒目录的文件不读取, 命中行不出现在结果里 (keep 目录仍可搜索)
+            if (grepTool) {
+                auto grepOut = co_await grepTool->execute_async(agentxx::util::Json{
+                    {"file_patterns", agentxx::util::Json::array({patternAll})},
+                    {"text_patterns", agentxx::util::Json::array({"needle_"})},
+                    {"output_mode",   "content"                                       },
+                });
+                XX_TEST_EXPECT_TRUE(grepOut.find("needle_keep") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(grepOut.find("needle_secret") == std::string::npos);
+            }
+
+            // (4b) list: 条目实时过滤 (recursive 下钻 + limit 只统计真正输出的条目)
+            {
+                const auto listRoot = root / "listed";
+                fsx::create_directories(listRoot / "deny_dir", ec);
+                fsx::create_directories(listRoot / "keep_dir", ec);
+                for (int i = 0; i < 10; ++i) {
+                    std::ofstream(listRoot / "deny_dir" / fmt::format("d{}.txt", i)) << "x";
+                    std::ofstream(listRoot / "keep_dir" / fmt::format("k{}.txt", i)) << "x";
+                }
+                permission->addConfigDenyPath((listRoot / "deny_dir").generic_string());
+                auto listTool = ctx->toolRegistry->find("agentxx_filesystem_list");
+                XX_TEST_EXPECT_TRUE(listTool != nullptr);
+                if (listTool) {
+                    auto listOut = co_await listTool->execute_async(agentxx::util::Json{
+                        {"path",      listRoot.generic_string()},
+                        {"recursive", true                      },
+                        {"limit",     5                         },
+                    });
+                    // 被拒目录自身与其下条目都不输出
+                    XX_TEST_EXPECT_TRUE(listOut.find("deny_dir") == std::string::npos);
+                    XX_TEST_EXPECT_TRUE(listOut.find("d0.txt") == std::string::npos);
+                    // limit 只统计真正输出的条目: 过滤后仍给出 5 条允许条目
+                    const auto lineCount
+                        = static_cast<size_t>(std::count(listOut.begin(), listOut.end(), '\n'))
+                          + (listOut.empty() ? 0 : 1);
+                    XX_TEST_EXPECT_EQ(lineCount, size_t{5});
+                    XX_TEST_EXPECT_TRUE(listOut.find("k0.txt") != std::string::npos);
+                }
+            }
+
+            // (5) C ABI: 批量路径查询 (三态; 不发起询问)
+            {
+                auto ifacePermission
+                    = agentxx::plugin::queryInterface<AgentxxPluginPermissionIface>(
+                        fsInst->hostView(),
+                        AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
+                    );
+                XX_TEST_EXPECT_TRUE(ifacePermission != nullptr);
+                if (ifacePermission) {
+                    XX_TEST_EXPECT_TRUE(ifacePermission->check_paths != nullptr);
+                    const std::vector<std::string> paths{
+                        (root / "keep" / "ok.txt").generic_string(),
+                        (root / "secret" / "hidden.txt").generic_string(),
+                        "/data/outside_query.txt",
+                    };
+                    std::vector<AgentxxPluginStringView> views;
+                    views.reserve(paths.size());
+                    for (const auto& p : paths) {
+                        views.push_back(agentxx::plugin::PluginStringView::from(p));
+                    }
+                    AgentxxPluginPermissionPathQuery query{};
+                    query.struct_size = sizeof(AgentxxPluginPermissionPathQuery);
+                    query.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
+                    query.path_count  = static_cast<int32_t>(views.size());
+                    query.paths       = views.data();
+                    std::vector<int32_t> decisions(views.size(), -1);
+                    XX_TEST_EXPECT_EQ(
+                        ifacePermission->check_paths(fsInst->hostView(), &query, decisions.data()),
+                        0
+                    );
+                    XX_TEST_EXPECT_EQ(decisions[0], AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW);
+                    XX_TEST_EXPECT_EQ(decisions[1], AGENTXX_PLUGIN_PERMISSION_DECISION_DENY);
+                    // 未命中任何规则 + noRuleOperator=ALLOW → 已明确允许
+                    XX_TEST_EXPECT_EQ(decisions[2], AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW);
+
+                    // 非法入参: 空数组 / 空指针 → 失败 (调用方跳过过滤)
+                    query.path_count = 0;
+                    XX_TEST_EXPECT_TRUE(
+                        ifacePermission->check_paths(fsInst->hostView(), &query, decisions.data())
+                        != 0
+                    );
+                }
+            }
+
+            // (6) 宿主未装配权限中间件: 查询返回失败 → 工具跳过过滤 (保持原行为)
+            ctx->middlewareHandleContext->handles.pop_back();
+            if (globTool) {
+                auto globOut = co_await globTool->execute_async(agentxx::util::Json{
+                    {"file_patterns", agentxx::util::Json::array({patternAll})},
+                });
+                XX_TEST_EXPECT_TRUE(globOut.find("ok.txt") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(globOut.find("hidden.txt") != std::string::npos);
+            }
+            {
+                // list 同样按"不过滤"处理 (查询不可用时不把条目当成拒绝)
+                auto listTool = ctx->toolRegistry->find("agentxx_filesystem_list");
+                if (listTool) {
+                    auto listOut = co_await listTool->execute_async(agentxx::util::Json{
+                        {"path",      root.generic_string()},
+                        {"recursive", true                  },
+                    });
+                    XX_TEST_EXPECT_TRUE(listOut.find("keep") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(listOut.find("hidden.txt") != std::string::npos);
+                }
+            }
+            {
+                auto ifacePermission
+                    = agentxx::plugin::queryInterface<AgentxxPluginPermissionIface>(
+                        fsInst->hostView(),
+                        AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
+                    );
+                if (ifacePermission) {
+                    const std::vector<std::string>        paths{(root / "keep" / "ok.txt").string()};
+                    std::vector<AgentxxPluginStringView> views;
+                    for (const auto& p : paths) {
+                        views.push_back(agentxx::plugin::PluginStringView::from(p));
+                    }
+                    AgentxxPluginPermissionPathQuery query{};
+                    query.struct_size = sizeof(AgentxxPluginPermissionPathQuery);
+                    query.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
+                    query.path_count  = 1;
+                    query.paths       = views.data();
+                    int32_t decision  = -1;
+                    XX_TEST_EXPECT_TRUE(
+                        ifacePermission->check_paths(fsInst->hostView(), &query, &decision) != 0
+                    );
+                }
+            }
+
+            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));
+        }
+        fsx::remove_all(root, ec);
     }
 
     // ---- 38e. agentxx_websearch 端到端: 网络等待走受控轮询 (本地回环 HTTP 服务) ----

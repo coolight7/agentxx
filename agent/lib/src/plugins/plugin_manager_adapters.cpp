@@ -339,6 +339,15 @@ int PluginManager::registerToolPermission(
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->tool_name)) {
         return -1;
     }
+    // 旧布局保护: struct_size 非 0 时必须覆盖当前结构体 (传 0 视为当前布局)
+    if (spec->struct_size != 0 && spec->struct_size < sizeof(AgentxxPluginToolPermissionSpec)) {
+        XX_LOGW(
+            "Plugin `{}` register tool permission: stale spec struct_size {}",
+            inst->name,
+            static_cast<int>(spec->struct_size)
+        );
+        return -1;
+    }
     // 执行期复查: 请求可能排在 IO 队列里, 等执行时实例已进入 Closing/Disabled。
     if (!acceptsRegistration(inst)) {
         XX_LOGW(
@@ -405,22 +414,6 @@ int PluginManager::registerToolPermission(
             );
             return -1;
     }
-    switch (spec->arg_kind) {
-        case AGENTXX_PLUGIN_PERMISSION_ARG_STRING:
-            decl.arrayArg = false;
-            break;
-        case AGENTXX_PLUGIN_PERMISSION_ARG_STRING_ARRAY:
-            decl.arrayArg = true;
-            break;
-        default:
-            XX_LOGW(
-                "Plugin `{}` register tool permission `{}`: invalid arg kind {}",
-                inst->name,
-                toolName,
-                static_cast<int>(spec->arg_kind)
-            );
-            return -1;
-    }
     if (!agentxx::plugin::PluginStringView::empty(spec->target_arg)) {
         decl.targetArgs.emplace_back(spec->target_arg.data, spec->target_arg.size);
     }
@@ -452,6 +445,58 @@ int PluginManager::unregisterToolPermission(PluginInstance* inst, AgentxxPluginS
         permission->unregisterToolPermission(name);
     }
     XX_LOGI("Plugin `{}` unregistered tool permission for `{}`", inst->name, name);
+    return 0;
+}
+
+int PluginManager::checkPermissionPaths(
+    PluginInstance*                 inst,
+    int32_t                         scope,
+    std::string_view                sessionId,
+    const std::vector<std::string>& paths,
+    std::vector<int32_t>&           outDecisions
+) {
+    if (!inst || paths.empty()) {
+        return -1;
+    }
+    size_t permissionScope = 0;
+    switch (scope) {
+        case AGENTXX_PLUGIN_PERMISSION_SCOPE_READ:
+            permissionScope
+                = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
+            break;
+        case AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE:
+            permissionScope
+                = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+            break;
+        default:
+            XX_LOGW(
+                "Plugin `{}` check_paths: invalid scope {}",
+                inst->name,
+                static_cast<int>(scope)
+            );
+            return -1;
+    }
+    // 权限中间件未装配: 无规则可判定, 返回失败让调用方跳过过滤 (按原行为处理)
+    auto* permission = permissionMiddleware();
+    if (!permission) {
+        return -1;
+    }
+    auto decisions = permission->decidePaths(paths, permissionScope, sessionId);
+    outDecisions.clear();
+    outDecisions.reserve(decisions.size());
+    for (auto decision : decisions) {
+        switch (decision) {
+            case agentxx::middleware::PathDecision::Deny:
+                outDecisions.push_back(AGENTXX_PLUGIN_PERMISSION_DECISION_DENY);
+                break;
+            case agentxx::middleware::PathDecision::Allow:
+                outDecisions.push_back(AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW);
+                break;
+            case agentxx::middleware::PathDecision::Ask:
+                outDecisions.push_back(AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
+                break;
+        }
+    }
     return 0;
 }
 
