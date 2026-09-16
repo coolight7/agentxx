@@ -361,6 +361,159 @@ TestResult testTuiContextOverlay() {
         XX_TEST_EXPECT_TRUE(screen2.find("Core Behavior") != std::string::npos);
     }
 
+    // ---- 场景 10: 滚动后点击折叠头 -> 必须切换被点击的那条消息 ----
+    // 回归: 折叠头命中区域曾用子项元素自带的 reflect 命中框, 而 Scrollable
+    // 的测量阶段会用"测量用大框" (局部坐标, 覆盖 x=0..内容宽 / y=0..很大)
+    // 调用 SetBox, 未被定位的视口外子项残留该框 —— 点屏幕左半部分时它会
+    // 先于真实子项命中 (取首个命中项), 于是展开/折叠的是视口外的消息。
+    // 复现要点: 消息数足够多 + 列表滚动 (前面消息移出视口上方)。
+    {
+        ContextOverlayFixture fx;
+        fx.width  = 100;
+        fx.height = 20;
+
+        constexpr size_t    kMsgCount = 30;
+        agentxx::util::Json msgs      = agentxx::util::Json::array();
+        for (size_t i = 0; i < kMsgCount; ++i) {
+            msgs.push_back(agentxx::util::Json{
+                {"role", "user"},
+                {"content", fmt::format("marker-{:02d} payload", i)},
+            });
+        }
+        fx.setMessages(std::move(msgs));
+        auto screen = fx.render();
+
+        // 向下滚动: 前面的消息移出视口上方 (至少一条不可见 -> 复现前提)
+        for (int i = 0; i < 10; ++i) {
+            ftxui::Mouse wheel;
+            wheel.button = ftxui::Mouse::WheelDown;
+            wheel.motion = ftxui::Mouse::Pressed;
+            wheel.x      = fx.width / 2;
+            wheel.y      = fx.height / 2;
+            fx.comp->OnEvent(ftxui::Event::Mouse("", wheel));
+        }
+        screen = fx.render();
+
+        // 以唯一内容标记定位一个当前可见的折叠头 (取自上而下第一条)
+        size_t      clickedMsg = kMsgCount;
+        int         cx = -1, cy = -1;
+        std::string clickedMarker;
+        for (size_t i = 0; i < kMsgCount; ++i) {
+            const std::string marker = fmt::format("marker-{:02d}", i);
+            if (ContextOverlayFixture::findText(screen, marker, cx, cy)) {
+                clickedMsg    = i;
+                clickedMarker = marker;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(clickedMsg < kMsgCount);
+        // 上方已有消息滚出视口 (否则该场景退化为"未滚动"的普通点击)
+        XX_TEST_EXPECT_TRUE(clickedMsg > 0);
+
+        // 视口外的折叠头不得登记命中区域; 视口内的命中区域必须落在屏幕行范围内
+        const auto boxes = fx.comp->headerBoxes();
+        XX_TEST_EXPECT_EQ(boxes.size(), kMsgCount);
+        size_t visibleHeaders = 0;
+        for (const auto& b : boxes) {
+            if (b.IsEmpty()) {
+                continue;
+            }
+            ++visibleHeaders;
+            XX_TEST_EXPECT_TRUE(b.y_min >= 0 && b.y_max < fx.height);
+        }
+        XX_TEST_EXPECT_TRUE(visibleHeaders > 0);
+        XX_TEST_EXPECT_TRUE(visibleHeaders < kMsgCount);
+
+        // 点击该折叠头 -> 只有被点击的消息展开
+        XX_TEST_EXPECT_TRUE(fx.clickAt(cx, cy));
+        auto screen2 = fx.render();
+        XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(
+            screen2,
+            fmt::format("- [user] {}", clickedMarker),
+            cx,
+            cy
+        ));
+        // 展开体出现 (该消息的 JSON 内容)
+        XX_TEST_EXPECT_TRUE(screen2.find(fmt::format("\"content\": \"{} payload\"", clickedMarker))
+                            != std::string::npos);
+        // 其余可见消息仍为折叠态
+        XX_TEST_EXPECT_TRUE(screen2.find("+ [user] ") != std::string::npos);
+        // 视口外消息 (第一条) 不应被误展开: 折叠头是 "+" 且列表未跳到顶部
+        XX_TEST_EXPECT_TRUE(screen2.find("- [user] marker-00") == std::string::npos);
+    }
+
+    // ---- 场景 11: 长消息展开 (内容远超视口) 后滚动, 点击其它消息仍是点击的那条切换 ----
+    // 对应实际遇到的问题: 上下文里某条消息很长 (如 system prompt / 大工具结果),
+    // 展开后列表可滚动; 滚动后点击某条消息时展开/折叠的是别的消息。
+    {
+        ContextOverlayFixture fx;
+        fx.width  = 100;
+        fx.height = 24;
+
+        // 第 1 条极长 (展开体占多屏), 其余为短消息
+        // 注意: dump(2) 会把 content 里的换行转义为 \n 单行, 需用足够长的
+        // 文本 (按内容宽度折行) 才能真正超过视口高度
+        std::string longBody;
+        while (longBody.size() < 4000) {
+            longBody += "lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
+        }
+        agentxx::util::Json msgs = agentxx::util::Json::array();
+        msgs.push_back(agentxx::util::Json{{"role", "system"}, {"content", longBody}});
+        for (size_t i = 1; i <= 4; ++i) {
+            msgs.push_back(agentxx::util::Json{
+                {"role", "user"},
+                {"content", fmt::format("tail-{:02d} payload", i)},
+            });
+        }
+        fx.setMessages(std::move(msgs));
+
+        // 展开长消息 (第一条)
+        auto screen = fx.render();
+        int  x = -1, y = -1;
+        XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(screen, "+ [system]", x, y));
+        XX_TEST_EXPECT_TRUE(fx.clickAt(x, y));
+        screen = fx.render();
+        XX_TEST_EXPECT_TRUE(screen.find("- [system]") != std::string::npos);
+
+        // 滚到底部 (短消息进入视口, 长消息的展开体滚到视口上方)
+        for (int i = 0; i < 200; ++i) {
+            ftxui::Mouse wheel;
+            wheel.button = ftxui::Mouse::WheelDown;
+            wheel.motion = ftxui::Mouse::Pressed;
+            wheel.x      = fx.width / 2;
+            wheel.y      = fx.height / 2;
+            fx.comp->OnEvent(ftxui::Event::Mouse("", wheel));
+        }
+        screen = fx.render();
+
+        // 前提: 长消息的折叠头已滚出视口上方 (即列表确实滚动起来了,
+        // 否则该场景退化为"未滚动"的普通点击, 覆盖不到本回归点)
+        int sx = -1, sy = -1;
+        XX_TEST_EXPECT_TRUE(!ContextOverlayFixture::findText(screen, "[system]", sx, sy));
+        XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(screen, "tail-04", sx, sy));
+
+        // 点击最后一条短消息的折叠头 -> 展开的是它自己
+        int tx = -1, ty = -1;
+        XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(screen, "tail-04", tx, ty));
+        XX_TEST_EXPECT_TRUE(fx.clickAt(tx, ty));
+        auto screen2 = fx.render();
+        XX_TEST_EXPECT_TRUE(
+            screen2.find("\"content\": \"tail-04 payload\"") != std::string::npos
+        );
+
+        // 回到顶部: 长消息仍是展开态 (未被误折叠)
+        for (int i = 0; i < 200; ++i) {
+            ftxui::Mouse wheel;
+            wheel.button = ftxui::Mouse::WheelUp;
+            wheel.motion = ftxui::Mouse::Pressed;
+            wheel.x      = fx.width / 2;
+            wheel.y      = fx.height / 2;
+            fx.comp->OnEvent(ftxui::Event::Mouse("", wheel));
+        }
+        auto screen3 = fx.render();
+        XX_TEST_EXPECT_TRUE(screen3.find("- [system]") != std::string::npos);
+    }
+
     // ---- 场景 8: 关于弹窗 (AboutOverlay) 独立版本段与构建日期 ----
     {
         // 校验 kBuildDate 格式: "YYYY-MM-DD"

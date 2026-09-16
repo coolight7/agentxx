@@ -350,19 +350,30 @@ public:
 
 private:
 
+    /// itemMessages_ 中"非折叠头子项"的取值 (展开体子项, 不参与点击命中)
+    static constexpr size_t kNoMessage = static_cast<size_t>(-1);
+
     /// 弹窗内容项构建 (Scrollable 渲染回调; 每帧从本帧快照构建)
+    /// 同时重建 itemMessages_ (子项下标 -> 消息下标 映射)
     std::vector<ScrollItem> buildItems();
 
-    /// 构建单条消息的折叠头 (含 +/- 标记与单行预览) 并登记命中
+    /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
     ftxui::Element buildMessageHeader(
         const agentxx::util::Json& m,
-        size_t                     index,
         bool                       expanded,
         const ftxui::Color&        roleColor
     );
 
     /// 构建单条消息的展开体: 完整原始 JSON (dump(2) 美化多行)
     ftxui::Element buildMessageBody(const agentxx::util::Json& m);
+
+    /// 屏幕坐标命中的折叠头所属消息下标 (未命中返回 [kNoMessage])
+    /// 命中区域取 [Scrollable::visibleBoxes] 的上一帧可见子项区域 ——
+    /// 视口外的子项区域为空, 因此不会命中到看不见的消息
+    size_t headerMessageAt(int x, int y) const;
+
+    /// 自上而下第一个可见折叠头所属消息下标 (无可见折叠头返回 [kNoMessage])
+    size_t firstVisibleHeaderMessage() const;
 
     /// 鼠标左键释放时切换命中的消息行折叠状态
     bool handleHeaderClick(const ftxui::Mouse& mouse);
@@ -377,11 +388,13 @@ private:
     /// 已展开的消息索引集合 (UI 线程独占; 默认全部折叠)
     std::set<size_t> expandedSet_;
 
-    /// 折叠头命中登记表 (每帧由 buildItems 重建)
-    /// - 载荷 = 消息下标 (命中后直接定位到消息, 无需回查索引映射)
-    /// - 每条消息仅在**渲染出折叠头**时登记; 未被 Scrollable 布局的条目命中框
-    ///   保持空区域, 因此视口外的折叠头不会被点击命中
-    agentxx::client::UiHitRegistry<size_t> headerHits_;
+    /// 本帧子项下标 -> 消息下标 映射 (由 buildItems 重建, 与 Scrollable
+    /// 上一帧的 visibleBoxes 一一对应)
+    /// - 折叠头子项: 值为消息下标; 展开体子项: [kNoMessage]
+    /// - 不使用子项元素自带的 reflect 命中框: Scrollable 测量子项高度时
+    ///   会用"测量用临时大框" (局部坐标) 调用 SetBox, 未被定位的视口外
+    ///   子项残留该框, 点击时会先于真实子项命中 (点错消息)
+    std::vector<size_t> itemMessages_;
 };
 
 /// Mermaid 状态图弹窗 (通用 open_overlay MERMAID 驱动; 标题可自定义)

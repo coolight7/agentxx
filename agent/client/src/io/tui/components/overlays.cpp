@@ -928,11 +928,13 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
     const auto& theme   = *ctx_.theme;
     const auto& msgsPtr = ctx_.frameState->contextMessages;
 
-    // 帧首清空命中表: 本帧未渲染出来的折叠头 (视口外) 不会被点击命中
-    headerHits_.beginFrame();
+    // 子项下标 -> 消息下标 映射随本帧子项列表一起重建 (与 Scrollable 保存的
+    // visibleBoxes 一一对应, 供鼠标点击命中换算被点击的消息)
+    itemMessages_.clear();
 
     std::vector<ScrollItem> items;
     if (!msgsPtr || !msgsPtr->is_array() || msgsPtr->empty()) {
+        itemMessages_.push_back(kNoMessage);
         items.push_back(ScrollItem{text(tr("ctx.empty")) | dim, true});
         return items;
     }
@@ -945,8 +947,10 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
         const Color roleColor = ctxRoleColor(theme, role);
         const bool  expanded  = expandedSet_.contains(i);
 
-        items.push_back(ScrollItem{buildMessageHeader(m, i, expanded, roleColor), false});
+        itemMessages_.push_back(i);
+        items.push_back(ScrollItem{buildMessageHeader(m, expanded, roleColor), false});
         if (expanded) {
+            itemMessages_.push_back(kNoMessage);
             items.push_back(ScrollItem{buildMessageBody(m), false});
         }
     }
@@ -954,24 +958,62 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
 }
 
 std::vector<ftxui::Box> ContextOverlay::headerBoxes() const {
-    // 从命中登记表反推各消息折叠头的屏幕区域 (载荷 = 消息下标):
-    // 未被布局的条目 (视口外) 保持空区域, 不含测量盒, 点击不会误命中
+    // 由 Scrollable 上一帧的可见子项区域反推各消息折叠头的屏幕区域 (载荷 =
+    // 消息下标): 未被布局的子项 (视口外) 区域为空, 点击不会误命中
     const auto&  msgsPtr = ctx_.frameState->contextMessages;
     const size_t nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
     std::vector<ftxui::Box> boxes(nMsgs, agentxx::client::kNoBox);
-    for (const auto& entry : headerHits_.entries()) {
-        if (entry.payload < boxes.size()) {
-            boxes[entry.payload] = *entry.box;
+
+    const auto&  vboxes = scrollable_->visibleBoxes();
+    const size_t n      = std::min(vboxes.size(), itemMessages_.size());
+    for (size_t i = 0; i < n; ++i) {
+        const size_t msgIndex = itemMessages_[i];
+        if (msgIndex < boxes.size() && !vboxes[i].IsEmpty()) {
+            boxes[msgIndex] = vboxes[i];
         }
     }
     return boxes;
 }
 
+size_t ContextOverlay::headerMessageAt(int x, int y) const {
+    // 命中判定用 Scrollable 上一帧的可见子项区域 (与用户当前看到的屏幕内容
+    // 一致; 本组件每帧重建子项元素, 该区域与本帧子项列表同源)。
+    //
+    // 不能用子项元素自带的 reflect 命中框: Scrollable 测量子项高度时以
+    // "测量用临时大框" (局部坐标: x = 0..内容宽, y = 0..很大) 调用 SetBox,
+    // 之后只有视口内的子项会被重新定位到真实屏幕坐标 —— 视口外 (上方/下方)
+    // 的子项残留测量大框, 该框的局部坐标与弹窗屏幕坐标部分重叠, 于是点击会
+    // 命中到看不见的消息 (命中的是消息列表中靠前的那条, 与长消息滚动后尤为
+    // 明显)。可见子项区域仅在子项真正被定位时写入, 视口外恒为空, 无此问题。
+    const auto&  boxes = scrollable_->visibleBoxes();
+    const size_t n     = std::min(boxes.size(), itemMessages_.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (itemMessages_[i] == kNoMessage || boxes[i].IsEmpty()) {
+            continue;
+        }
+        if (boxes[i].Contain(x, y)) {
+            return itemMessages_[i];
+        }
+    }
+    return kNoMessage;
+}
+
+size_t ContextOverlay::firstVisibleHeaderMessage() const {
+    // 子项按列表顺序 (自上而下) 排列, 首个非空区域即视口内最上方的折叠头
+    const auto&  boxes = scrollable_->visibleBoxes();
+    const size_t n     = std::min(boxes.size(), itemMessages_.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (itemMessages_[i] != kNoMessage && !boxes[i].IsEmpty()) {
+            return itemMessages_[i];
+        }
+    }
+    return kNoMessage;
+}
+
 ftxui::Element ContextOverlay::buildMessageHeader(
     const agentxx::util::Json& m,
-    size_t                     index,
     bool                       expanded,
-    const ftxui::Color&        roleColor
+    const Color&               roleColor
 ) {
     const auto& theme     = *ctx_.theme;
     const auto  role      = ctxMsgRole(m);
@@ -1006,8 +1048,9 @@ ftxui::Element ContextOverlay::buildMessageHeader(
         text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
         text(preview) | color(theme.normalColor) | xflex_shrink,
     });
-    // 折叠头整行可点: 登记命中 (载荷 = 消息下标, 点击直接切换该消息的折叠状态)
-    return headerHits_.add(std::move(head), index);
+    // 折叠头整行可点 (命中区域由事件处理时按 Scrollable 可见子项区域换算:
+    // 见 headerMessageAt —— 此处不附加 reflect 命中框)
+    return head;
 }
 
 ftxui::Element ContextOverlay::buildMessageBody(const agentxx::util::Json& m) {
@@ -1135,27 +1178,29 @@ bool ContextOverlay::OnEvent(Event event) {
         ctx_.postRedraw();
         return true;
     }
-    // Enter / Space: 切换首个可见消息的折叠状态 (命中表中已布局的折叠头按消息下标有序)
+    // Enter / Space: 切换视口内首个可见消息的折叠状态
     if (event == Event::Return || event == Event::Character(" ")) {
-        for (const auto& entry : headerHits_.entries()) {
-            if (entry.box->IsEmpty()) {
-                continue; // 视口外 (本帧未被布局)
-            }
-            toggleExpanded(entry.payload);
+        const size_t index = firstVisibleHeaderMessage();
+        if (index != kNoMessage) {
+            toggleExpanded(index);
             ctx_.postRedraw();
-            return true;
         }
+        return true;
     }
     return true;
 }
 
 bool ContextOverlay::handleHeaderClick(const Mouse& mouse) {
-    // 命中折叠头 -> 切换该消息的折叠状态 (视口外折叠头未登记/区域为空, 不命中)
-    const auto* hit = headerHits_.findClick(mouse);
-    if (hit == nullptr) {
+    // 一次点击以左键释放为准; 命中折叠头 -> 切换该消息的折叠状态
+    // (视口外折叠头的可见区域为空, 不会命中)
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
         return false;
     }
-    toggleExpanded(hit->payload);
+    const size_t index = headerMessageAt(mouse.x, mouse.y);
+    if (index == kNoMessage) {
+        return false;
+    }
+    toggleExpanded(index);
     return true;
 }
 

@@ -82,6 +82,12 @@ public:
 
     /// 上一帧各子项的可见屏幕区域 (索引与 render 返回的 items 对应)。
     /// 不可见子项为空 Box (IsEmpty() 为 true)。供外部鼠标命中检测。
+    ///
+    /// 注意: 鼠标命中检测应使用本接口, 不要用子项元素内的 `ftxui::reflect`
+    /// 命中框 —— 本组件测量子项高度时会以"测量用临时大框" (局部坐标: x = 0..
+    /// 内容宽, y = 0..很大) 调用 SetBox, 视口外子项会残留该框; 它的局部坐标
+    /// 与屏幕坐标部分重叠, 点击会先命中到视口外 (看不见) 的子项。
+    /// 参考 [ContextOverlay] 与 [MessageListComponent] 的可见区域命中判定。
     const std::vector<ftxui::Box>& visibleBoxes() const {
         return visibleBoxes_;
     }

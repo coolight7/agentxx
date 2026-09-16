@@ -52,7 +52,13 @@
 
 - `ftxui::Box{x_min, x_max, y_min, y_max}` 为**闭区间**的屏幕绝对坐标。
 - `reflect(Box&)`: 一个装饰器; 布局 (`SetBox`) 时把该元素的区域写回 `Box`, 绘制时再与
-  `screen.stencil` 求交 (`Box::Intersection`), 因此**被滚动/裁剪到视口外的元素其 Box 会变空**。
+  `screen.stencil` 求交 (`Box::Intersection`)。注意求交发生在**绘制**阶段: 只有本帧真正
+  `Render()` 到的元素才会被收敛为空区域 —— 本项目自实现的滚动容器
+  ([Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h) /
+  [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h))
+  只为视口内的子项做定位与绘制, 视口外子项的 Box 会停在测量阶段写入的"测量用临时大框"
+  (局部坐标, 与屏幕坐标部分重叠, 见 3.1)。
+  因此**滚动容器内的子项命中不要用 `reflect`, 用容器输出的 `visibleBoxes()`**。
 - 命中检测的常规写法是"组件持有 `Box` 成员 + `reflect(box_)` + `OnEvent` 里 `box_.Contain(x,y)`"
   (FTXUI 内置的 Button/Hoverable/Window 都是这样)。
   **局限**: `reflect` 只在元素参与布局时写回坐标 ——
@@ -240,6 +246,16 @@ struct UiActionItem {
     "OnRender 帧首清空 -> 同帧重新构建元素", 次序天然满足)。
 - 组件"消失"的判定以**是否渲染**为准, 不要再用 `Box{}` 之类的"清零"表达
   (它等于屏幕左上角, 会造成 (0,0) 处误触)。
+- **滚动容器内的可点击子项用 `visibleBoxes()`, 不要用子项元素内的 `reflect`**:
+  [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h) /
+  [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h)
+  测量子项高度时会以"测量用临时大框" (局部坐标: x = 0..内容宽, y = 0..很大) 调用 `SetBox`,
+  之后只有视口内的子项会被重新定位到真实屏幕坐标, 视口外 (上方/下方) 的子项会残留该大框。
+  大框的局部 `x` 与屏幕坐标的左侧区域重叠, 于是按 `reflect` 框命中的点击会命中到
+  **看不见的子项** (通常是列表中靠前的那条), 且横向点击位置不同命中结果还不同。
+  正确做法: 记"子项下标 -> 业务下标"映射, 事件里遍历 `visibleBoxes()` (视口外恒为空区域)
+  换算命中 —— 见 [ContextOverlay](/agent/client/src/io/tui/components/overlays.cpp)
+  的 `headerMessageAt` 与 `MessageListComponent` 的可见区域命中登记。
 
 ### 3.2 事件消费
 
@@ -277,3 +293,4 @@ struct UiActionItem {
 | 每帧多次 `Terminal::Size()` (ioctl), 帧中途 resize 可能造成组件间尺寸不一致 | 各组件 | `TUICtx::refreshFrameSize()` 帧首刷新 + `terminalSize()` |
 | 侧边栏 tab 列表维护"可见下标 -> tab 下标"映射表 | `SidebarComponent` | 命中载荷直接携带条目归属 |
 | 状态栏/输入栏/消息列表的按钮点击散落在全局事件处理里 | `agent_tui.cpp` | 各组件自行处理自身区域内点击 (回调在装配时注入) |
+| 上下文弹窗点击消息, 展开/折叠的是"别的消息" (消息多、滚动后尤其明显) | `ContextOverlay` 折叠头命中框 (子项元素内的 `reflect`: 视口外子项残留测量大框) | 改为按 `Scrollable::visibleBoxes()` + 子项->消息下标映射命中 (回归测试见 `agentxx_test tui_context_overlay`) |
