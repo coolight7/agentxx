@@ -546,7 +546,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         .model     = "",
         .language  = TUISettings::instance().languageCode(),
     };
-    bool connected = false;
+    bool                                       connected = false;
     std::shared_ptr<agent::WsAgentIOTransport> transport;
     while (!connected) {
         agent::WsAgentIOTransport::Config transportCfg;

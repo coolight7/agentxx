@@ -662,9 +662,9 @@ TestResult testTuiSurface() {
     // 2. Light 主题 toast
     {
         SurfaceFixture fx;
-        fx.theme          = TUITheme::lightTheme();
-        const auto  style = TuiSurfaceStyle::fromTheme(fx.theme);
-        const auto  toast = tuiSurfaceToast(style, "Light Toast");
+        fx.theme         = TUITheme::lightTheme();
+        const auto style = TuiSurfaceStyle::fromTheme(fx.theme);
+        const auto toast = tuiSurfaceToast(style, "Light Toast");
 
         ProbeResult r(fx.kScreenW, fx.kScreenH);
         auto        el = toast | ftxui::center;
@@ -700,7 +700,7 @@ TestResult testTuiSurface() {
     {
         SurfaceFixture fx;
         const auto     style = TuiSurfaceStyle::fromTheme(fx.theme);
-        const auto     toast = tuiSurfaceToast(style, "第一行提示\n第二行更长的提示文本");
+        const auto toast = tuiSurfaceToast(style, "第一行提示\n第二行更长的提示文本");
 
         ProbeResult r(fx.kScreenW, fx.kScreenH);
         auto        el = toast | ftxui::center;

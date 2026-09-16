@@ -42,10 +42,11 @@ struct TUICtx {
 
     /// 请求服务端列举目录 (跨设备附件选择; 线程安全, 回调由 UI 线程执行)
     std::function<void(
-        std::string                                                    path,
-        std::vector<std::string>                                       allowedExtensions,
-        std::function<void(const agentxx::agent::WireListDirResult&)>  callback
-    )> requestServerListDir;
+        std::string                                                   path,
+        std::vector<std::string>                                      allowedExtensions,
+        std::function<void(const agentxx::agent::WireListDirResult&)> callback
+    )>
+        requestServerListDir;
 
     /// 屏幕上方 Toast 提示 (UI 线程独占调用)
     std::function<void(std::string)> showToast;

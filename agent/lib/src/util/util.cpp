@@ -533,7 +533,14 @@ std::string readMachineGuidWin() {
         char  buf[256] = {0};
         DWORD bufSize  = sizeof(buf);
         DWORD type     = 0;
-        if (RegQueryValueExA(hKey, "MachineGuid", nullptr, &type, reinterpret_cast<LPBYTE>(buf), &bufSize)
+        if (RegQueryValueExA(
+                hKey,
+                "MachineGuid",
+                nullptr,
+                &type,
+                reinterpret_cast<LPBYTE>(buf),
+                &bufSize
+            )
             == ERROR_SUCCESS) {
             RegCloseKey(hKey);
             return std::string(buf);
@@ -613,11 +620,10 @@ std::string agentxx::util::md5Hex(std::string_view input) {
 }
 
 std::string agentxx::util::getDeviceId() {
-    static std::string cachedId;
+    static std::string    cachedId;
     static std::once_flag flag;
     std::call_once(flag, []() {
         cachedId = md5Hex(readPlatformRawDeviceId());
     });
     return cachedId;
 }
-

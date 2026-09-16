@@ -491,9 +491,9 @@ void SessionServerAgentIO::onPeerMessage(
                 agent->collectAppendComponentInfo(notifications);
                 sendToClient(sender, WireAppendComponentInfo{std::move(notifications)});
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
-                auto agent = agent_.lock();
-                auto sess = session();
-                agentxx::util::Json msgs = agentxx::util::Json::array();
+                auto                agent = agent_.lock();
+                auto                sess  = session();
+                agentxx::util::Json msgs  = agentxx::util::Json::array();
                 if (sess && sess->llmMessages.is_array()) {
                     msgs = sess->llmMessages;
                 }
@@ -507,9 +507,9 @@ void SessionServerAgentIO::onPeerMessage(
                 if (!hasSystem && agent) {
                     std::string sysPrompt = agent->buildSystemPrompt(m.sessionId);
                     if (!sysPrompt.empty()) {
-                        agentxx::util::Json sysMsg = agentxx::util::Json::object();
-                        sysMsg["role"] = "system";
-                        sysMsg["content"] = std::move(sysPrompt);
+                        agentxx::util::Json sysMsg  = agentxx::util::Json::object();
+                        sysMsg["role"]              = "system";
+                        sysMsg["content"]           = std::move(sysPrompt);
                         agentxx::util::Json newMsgs = agentxx::util::Json::array();
                         newMsgs.push_back(std::move(sysMsg));
                         for (auto item : msgs.items()) {
@@ -669,9 +669,8 @@ void SessionServerAgentIO::onPeerMessage(
                                     de.supported = true;
                                     dirs.push_back(std::move(de));
                                 } else if (std::filesystem::is_regular_file(status)) {
-                                    auto ext = agentxx::util::toLower(
-                                        entry.path().extension().string()
-                                    );
+                                    auto ext
+                                        = agentxx::util::toLower(entry.path().extension().string());
                                     auto mt = agentxx::agent::mediaTypeFromExtension(ext);
                                     if (!mt.has_value()) {
                                         continue;
@@ -682,7 +681,8 @@ void SessionServerAgentIO::onPeerMessage(
                                     de.isDir     = false;
                                     de.sizeBytes = std::filesystem::file_size(entry.path(), ec2);
                                     de.mediaType = *mt;
-                                    de.supported = (allowedSet.empty() || allowedSet.count(ext) > 0);
+                                    de.supported
+                                        = (allowedSet.empty() || allowedSet.count(ext) > 0);
                                     files.push_back(std::move(de));
                                 }
                             }

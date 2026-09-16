@@ -226,7 +226,9 @@ inline std::string runProbeCommand(const char* exeName, int timeoutMs) {
         struct pollfd pfd {
             .fd = pipefd[0], .events = POLLIN
         };
-        const int pollRet = ::poll(&pfd, 1, static_cast<int>(std::min<long long>(remainMs, INT_MAX)));
+
+        const int pollRet
+            = ::poll(&pfd, 1, static_cast<int>(std::min<long long>(remainMs, INT_MAX)));
         if (pollRet > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
             const ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
             if (n > 0) {
@@ -285,7 +287,8 @@ inline ExecEnvInfo detectExecEnv() {
     const auto start = std::chrono::steady_clock::now();
 #if XX_IS_WIN_D
     // Windows 侧: 优先 python.exe / python3.exe, 再回退 Python 启动器 py.exe
-    env.python     = detectInterpreter({"python.exe", "python3.exe", "py.exe"}, kInterpreterProbeTimeoutMs);
+    env.python
+        = detectInterpreter({"python.exe", "python3.exe", "py.exe"}, kInterpreterProbeTimeoutMs);
     env.node       = detectInterpreter({"node.exe"}, kInterpreterProbeTimeoutMs);
     env.powershell = agentxx::util::detectPowerShell();
 #else
@@ -308,12 +311,9 @@ inline ExecEnvInfo detectExecEnv() {
                              : std::string{"not found"},
         env.node.available ? fmt::format("{} {}", env.node.exeName, env.node.version)
                            : std::string{"not found"},
-        env.powershell.available ? fmt::format(
-                                       "{} {}",
-                                       env.powershell.exeName,
-                                       env.powershell.version
-                                   )
-                                 : std::string{"not found"}
+        env.powershell.available
+            ? fmt::format("{} {}", env.powershell.exeName, env.powershell.version)
+            : std::string{"not found"}
     );
     return env;
 }
@@ -329,16 +329,17 @@ inline constexpr std::string_view kAllOutputArgDesc =
 `false`: Only return output when the command fails.)";
 
 /// `timeout` 参数描述 (bash / windows 工具共用)
-inline constexpr std::string_view kTimeoutArgDesc =
-    "Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.";
+inline constexpr std::string_view kTimeoutArgDesc
+    = "Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.";
 
 /// bash 工具 depict (POSIX 侧工具描述)
-inline constexpr std::string_view kBashToolDepict =
-    "Execute a shell/bash command and return its output.";
+inline constexpr std::string_view kBashToolDepict
+    = "Execute a shell/bash command and return its output.";
 
 /// Windows 命令工具 `command` 参数的兜底描述 (提示词/探测结果不可用时使用;
 /// 正常路径由 [windowsToolPrompt] 生成的描述覆盖)
-inline constexpr std::string_view kWindowsCommandArgDescFallback = "The Windows command to execute.";
+inline constexpr std::string_view kWindowsCommandArgDescFallback
+    = "The Windows command to execute.";
 
 /// Windows 命令参数描述的公共前缀 (区分 WSL / 原生 Windows)
 inline std::string winCommandPrefix(const ExecEnvInfo& env) {
@@ -356,11 +357,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
 inline std::string interpreterEnvSection(const ExecEnvInfo& env) {
     std::string out = "\n\n## Interpreters detected at startup\n";
     if (env.python.available) {
-        out += fmt::format(
-            "- python: `{}` (Python {})\n",
-            env.python.exeName,
-            env.python.version
-        );
+        out += fmt::format("- python: `{}` (Python {})\n", env.python.exeName, env.python.version);
     } else {
         out += "- python: NOT found in PATH — do not run `python` / `pip` commands\n";
     }
@@ -390,8 +387,9 @@ inline std::string winCommandToolDepict(const ExecEnvInfo& env) {
 /// - 不可用: 回退 cmd.exe, 语法要点按 cmd 给出
 inline std::string winCommandProcessArgDesc(const ExecEnvInfo& env) {
     if (env.powershell.available) {
-        const auto& ps = env.powershell;
-        std::string out = fmt::format(R"({}
+        const auto& ps  = env.powershell;
+        std::string out = fmt::format(
+            R"({}
 
 The command is executed by {} (PowerShell {}) as ONE `-Command` argument — do NOT prepend `{}`, `-Command`, `powershell.exe`, or `cmd.exe /c` yourself.
 Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$` errors):
@@ -535,7 +533,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
 /// - `command` 描述含系统名、WSL 标记与探测到的解释器列表
 inline ExecPromptText bashToolPrompt(const ExecEnvInfo& env) {
     ExecPromptText prompt;
-    prompt.depict = std::string{kBashToolDepict};
+    prompt.depict          = std::string{kBashToolDepict};
     prompt.args["command"] = fmt::format(
         R"(The shell command to execute.
 Current system: {}{}. Use standard shell/bash syntax.

@@ -320,7 +320,7 @@ typedef struct AgentxxPluginPermissionPathQuery {
     /// 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_READ / _WRITE)
     int32_t scope;
     /// paths 元素个数 (须 > 0 且不超过宿主上限)
-    int32_t path_count;
+    int32_t  path_count;
     uint32_t _reserved; ///< 8 字节补齐
     /// 会话 (解析会话工作目录与工作区隔离边界; 可为空, 为空时按进程工作目录解析)
     AgentxxPluginStringView session_id;

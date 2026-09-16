@@ -202,7 +202,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 4.5 真实插件端到端 (agentxx_execute_command 插件) ----
     {
-        auto& prompt  = ctx->agentConfig->prompt;
+        auto& prompt   = ctx->agentConfig->prompt;
         auto  execPath = findPluginDir("agentxx_execute_command");
 #if XX_IS_WIN_D
         const char* cmdToolName = "agentxx_execute_windows_command";
@@ -242,7 +242,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(
                         props["command"]["description"].get<std::string>().find(
                             "Interpreters detected at startup"
-                        ) != std::string::npos
+                        )
+                        != std::string::npos
                     );
                 }
 
@@ -2508,8 +2509,8 @@ throw new Error("top-level rollback probe");
 
             // 3. 判定: 已声明工具按规则表兜底 (无规则 = noRuleOperator); 未声明工具直接放行
             permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
-            auto writeArgs = agentxx::util::Json{
-                {"path", "/tmp/agentxx_permission_decl/x.txt"}
+            auto writeArgs             = agentxx::util::Json{
+                            {"path", "/tmp/agentxx_permission_decl/x.txt"}
             };
             XX_TEST_EXPECT_FALSE(
                 co_await permission->checkToolPermission("agentxx_filesystem_write", writeArgs)
@@ -2535,7 +2536,8 @@ throw new Error("top-level rollback probe");
 
             // 5. 重新启用: start 事务重新注册工具并重新声明权限 (异步收尾, 等它就绪)
             ctx->pluginManager->enable("agentxx_filesystem");
-            for (int i = 0; i < 200 && permission->toolPermission("agentxx_filesystem_write") == nullptr;
+            for (int i = 0;
+                 i < 200 && permission->toolPermission("agentxx_filesystem_write") == nullptr;
                  ++i) {
                 co_await sleepMs(10);
             }
@@ -2568,8 +2570,9 @@ throw new Error("top-level rollback probe");
                 );
 
                 // 本插件工具 + 未知作用域取值
-                spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem_write");
-                spec.scope     = 999;
+                spec.tool_name
+                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem_write");
+                spec.scope = 999;
                 XX_TEST_EXPECT_TRUE(
                     ifacePermission->register_tool_permission(fsInst->hostView(), &spec) != 0
                 );
@@ -2649,14 +2652,14 @@ throw new Error("top-level rollback probe");
                 // 默认输出模式 (files_with_matches): 列出命中的文件路径与计数
                 auto grepOut = co_await grepTool->execute_async(agentxx::util::Json{
                     {"file_patterns", agentxx::util::Json::array({patternAll})},
-                    {"text_patterns", agentxx::util::Json::array({"needle_"})},
+                    {"text_patterns", agentxx::util::Json::array({"needle_"}) },
                 });
                 XX_TEST_EXPECT_TRUE(grepOut.find("hidden.txt") != std::string::npos);
                 // content 模式: 命中行内容 (含被拒目录内的内容, 此时尚未配置拒绝规则)
                 auto grepContentOut = co_await grepTool->execute_async(agentxx::util::Json{
                     {"file_patterns", agentxx::util::Json::array({patternAll})},
-                    {"text_patterns", agentxx::util::Json::array({"needle_"})},
-                    {"output_mode",   "content"                                       },
+                    {"text_patterns", agentxx::util::Json::array({"needle_"}) },
+                    {"output_mode",   "content"                               },
                 });
                 XX_TEST_EXPECT_TRUE(grepContentOut.find("needle_secret") != std::string::npos);
             }
@@ -2678,8 +2681,8 @@ throw new Error("top-level rollback probe");
             if (grepTool) {
                 auto grepOut = co_await grepTool->execute_async(agentxx::util::Json{
                     {"file_patterns", agentxx::util::Json::array({patternAll})},
-                    {"text_patterns", agentxx::util::Json::array({"needle_"})},
-                    {"output_mode",   "content"                                       },
+                    {"text_patterns", agentxx::util::Json::array({"needle_"}) },
+                    {"output_mode",   "content"                               },
                 });
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_keep") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_secret") == std::string::npos);
@@ -2700,8 +2703,8 @@ throw new Error("top-level rollback probe");
                 if (listTool) {
                     auto listOut = co_await listTool->execute_async(agentxx::util::Json{
                         {"path",      listRoot.generic_string()},
-                        {"recursive", true                      },
-                        {"limit",     5                         },
+                        {"recursive", true                     },
+                        {"limit",     5                        },
                     });
                     // 被拒目录自身与其下条目都不输出
                     XX_TEST_EXPECT_TRUE(listOut.find("deny_dir") == std::string::npos);
@@ -2774,7 +2777,7 @@ throw new Error("top-level rollback probe");
                 if (listTool) {
                     auto listOut = co_await listTool->execute_async(agentxx::util::Json{
                         {"path",      root.generic_string()},
-                        {"recursive", true                  },
+                        {"recursive", true                 },
                     });
                     XX_TEST_EXPECT_TRUE(listOut.find("keep") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(listOut.find("hidden.txt") != std::string::npos);
@@ -2787,7 +2790,7 @@ throw new Error("top-level rollback probe");
                         AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
                     );
                 if (ifacePermission) {
-                    const std::vector<std::string>        paths{(root / "keep" / "ok.txt").string()};
+                    const std::vector<std::string>       paths{(root / "keep" / "ok.txt").string()};
                     std::vector<AgentxxPluginStringView> views;
                     for (const auto& p : paths) {
                         views.push_back(agentxx::plugin::PluginStringView::from(p));
@@ -3137,7 +3140,7 @@ throw new Error("top-level rollback probe");
         auto planCtx                     = std::make_shared<agent::AgentContext>();
         planCtx->agentConfig             = std::make_shared<agent::AgentConfig>();
         planCtx->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
-        planCtx->bus           = std::make_shared<event::EventBus>(co_await asio::this_coro::executor);
+        planCtx->bus = std::make_shared<event::EventBus>(co_await asio::this_coro::executor);
         planCtx->toolRegistry  = std::make_shared<plugin::ToolRegistry>();
         planCtx->pluginManager = std::make_shared<plugin::PluginManager>(planCtx);
         planCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);

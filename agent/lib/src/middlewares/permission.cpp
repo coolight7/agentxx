@@ -179,7 +179,7 @@ std::string_view PermissionMiddlewareHandle::defaultCategory(size_t scope) {
 /// 声明工具权限限制 (插件在注册工具后调用; 见 plugin_api.h 的
 /// agentxx.agent.permission 接口表)
 void PermissionMiddlewareHandle::registerToolPermission(
-    std::string_view  toolName,
+    std::string_view   toolName,
     ToolPermissionSpec spec
 ) {
     if (toolName.empty()) {
@@ -192,7 +192,8 @@ bool PermissionMiddlewareHandle::unregisterToolPermission(std::string_view toolN
     return toolPermissions_.erase(std::string{toolName}) > 0;
 }
 
-const ToolPermissionSpec* PermissionMiddlewareHandle::toolPermission(std::string_view toolName) const {
+const ToolPermissionSpec* PermissionMiddlewareHandle::toolPermission(std::string_view toolName
+) const {
     auto it = toolPermissions_.find(toolName);
     return it == toolPermissions_.end() ? nullptr : &it->second;
 }
@@ -217,13 +218,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
 ) {
     // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
     if (spec.targetKind == ToolPermissionTargetKind::None || spec.targetArgs.empty()) {
-        co_return co_await checkTargetPermission(
-            toolName,
-            args,
-            spec.scope,
-            {},
-            spec.category
-        );
+        co_return co_await checkTargetPermission(toolName, args, spec.scope, {}, spec.category);
     }
     const auto sessionId = args.value("sessionId", std::string{});
     for (const auto& argName : spec.targetArgs) {
@@ -431,8 +426,8 @@ asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
             .sessionId = std::move(sessionId),
             .toolName  = std::string{toolName},
             // 分类文本: 工具声明的优先级高于按作用域生成的默认值
-            .category  = std::string{category.empty() ? defaultCategory(index) : category},
-            .target    = target,
+            .category      = std::string{category.empty() ? defaultCategory(index) : category},
+            .target        = target,
             .argumentsJson = args.dump(),
         },
         std::chrono::milliseconds{0} // 0 = 不限制

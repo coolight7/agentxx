@@ -33,10 +33,9 @@ namespace test {
 /// 声明文件系统读写工具的权限限制 (等效于 agentxx_filesystem 插件在注册工具后
 /// 经 agentxx.agent.permission 接口表所做的声明): 目标参数为 `path`, 路径类目标;
 /// 测试直接向权限中间件声明同一内容, 判定路径与真实插件完全一致
-inline void declareFilesystemPermissions(
-    agentxx::middleware::PermissionMiddlewareHandle& permission
+inline void declareFilesystemPermissions(agentxx::middleware::PermissionMiddlewareHandle& permission
 ) {
-    using Mw = agentxx::middleware::PermissionMiddlewareHandle;
+    using Mw      = agentxx::middleware::PermissionMiddlewareHandle;
     auto makeSpec = [](size_t scope) {
         agentxx::middleware::ToolPermissionSpec spec;
         spec.scope      = scope;
@@ -412,7 +411,7 @@ asio::awaitable<void> test_permission_relative_path() {
 asio::awaitable<void> test_permission_path_query_decisions() {
     auto sessionBus
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-    auto io             = std::make_shared<MockIO>(); // 记录询问次数 (查询不应产生任何询问)
+    auto io = std::make_shared<MockIO>(); // 记录询问次数 (查询不应产生任何询问)
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
 
@@ -441,11 +440,11 @@ asio::awaitable<void> test_permission_path_query_decisions() {
     permission->noRuleOperator = agentxx::middleware::PermissionOperator::INTERRUPT;
 
     const std::vector<std::string> paths{
-        cwd + "/a.txt",                  // Allow: 工作目录规则覆盖
-        cwd + "/secret/key.pem",         // Deny: 规则表拒绝 (更深规则覆盖外层放行)
-        cwd + "/blacklist/dump.bin",     // Deny: 配置黑名单
-        "/data/outside.txt",             // Ask: 无规则 (ask 模式)
-        "",                              // Ask: 空路径无法判定 (不按已批准处理)
+        cwd + "/a.txt",              // Allow: 工作目录规则覆盖
+        cwd + "/secret/key.pem",     // Deny: 规则表拒绝 (更深规则覆盖外层放行)
+        cwd + "/blacklist/dump.bin", // Deny: 配置黑名单
+        "/data/outside.txt",         // Ask: 无规则 (ask 模式)
+        "",                          // Ask: 空路径无法判定 (不按已批准处理)
     };
     auto decisions = permission->decidePaths(paths, Mw::FilesystemPermissionREAD, "path_query");
     XX_TEST_EXPECT_EQ(decisions.size(), paths.size());
@@ -522,7 +521,7 @@ asio::awaitable<void> test_permission_path_query_decisions() {
 asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     auto sessionBus
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-    auto io = std::make_shared<MockIO>();
+    auto io             = std::make_shared<MockIO>();
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
 
@@ -536,14 +535,14 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
 
     // 1. 声明分类文本的工具 (由插件声明; 如命令执行类工具)
     agentxx::middleware::ToolPermissionSpec textSpec;
-    textSpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    textSpec.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
     textSpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Text;
     textSpec.targetArgs = {"command"};
     textSpec.category   = "shell_command";
     permission->registerToolPermission("plugin_exec_command", std::move(textSpec));
 
     auto args = agentxx::util::Json{
-        {"command",   "rm -rf /tmp/x"},
+        {"command",   "rm -rf /tmp/x"    },
         {"sessionId", "declared_category"}
     };
     bool ok = co_await permission->checkToolPermission("plugin_exec_command", args);
@@ -570,7 +569,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
 
     // 2. 无目标声明 (工具级): 询问目标为空, 卡片不含目标描述块
     agentxx::middleware::ToolPermissionSpec noneSpec;
-    noneSpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    noneSpec.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
     noneSpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::None;
     permission->registerToolPermission("plugin_no_target", std::move(noneSpec));
 
@@ -610,7 +609,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     // 4. 数组目标 (如 glob 的 file_patterns): 按参数实际 JSON 类型自动逐项判定,
     //    任一目标被拒绝即拒绝 (无需声明数组形态)
     agentxx::middleware::ToolPermissionSpec arraySpec;
-    arraySpec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
+    arraySpec.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionREAD;
     arraySpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
     arraySpec.targetArgs = {"file_patterns"};
     permission->registerToolPermission("plugin_glob", std::move(arraySpec));
@@ -633,37 +632,25 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     {
         // 全部目标未被拒绝: 放行 (无规则 → noRuleOperator = ALLOW)
         auto argsOk = globArgs({"/data/ok_dir/*.cpp"});
-        XX_TEST_EXPECT_TRUE(
-            co_await permission->checkToolPermission("plugin_glob", argsOk)
-        );
+        XX_TEST_EXPECT_TRUE(co_await permission->checkToolPermission("plugin_glob", argsOk));
         // 单个目标命中 DENY: 拒绝
         auto argsDenied = globArgs({"/data/deny_dir/*.cpp"});
-        XX_TEST_EXPECT_FALSE(
-            co_await permission->checkToolPermission("plugin_glob", argsDenied)
-        );
+        XX_TEST_EXPECT_FALSE(co_await permission->checkToolPermission("plugin_glob", argsDenied));
         // 多个目标中任一命中 DENY: 整体拒绝
         auto argsMixed = globArgs({"/data/ok_dir/*.cpp", "/data/deny_dir/x.cpp"});
-        XX_TEST_EXPECT_FALSE(
-            co_await permission->checkToolPermission("plugin_glob", argsMixed)
-        );
+        XX_TEST_EXPECT_FALSE(co_await permission->checkToolPermission("plugin_glob", argsMixed));
         // 同一声明下参数为单字符串: 视为单个目标 (类型自动判定, 非数组)
         auto argsSingle = agentxx::util::Json{
             {"file_patterns", "/data/deny_dir/single.cpp"}
         };
-        XX_TEST_EXPECT_FALSE(
-            co_await permission->checkToolPermission("plugin_glob", argsSingle)
-        );
+        XX_TEST_EXPECT_FALSE(co_await permission->checkToolPermission("plugin_glob", argsSingle));
         auto argsSingleOk = agentxx::util::Json{
             {"file_patterns", "/data/ok_dir/single.cpp"}
         };
-        XX_TEST_EXPECT_TRUE(
-            co_await permission->checkToolPermission("plugin_glob", argsSingleOk)
-        );
+        XX_TEST_EXPECT_TRUE(co_await permission->checkToolPermission("plugin_glob", argsSingleOk));
         // 参数缺省 (无 file_patterns): 无目标参与判定, 放行
         auto argsEmpty = agentxx::util::Json::object();
-        XX_TEST_EXPECT_TRUE(
-            co_await permission->checkToolPermission("plugin_glob", argsEmpty)
-        );
+        XX_TEST_EXPECT_TRUE(co_await permission->checkToolPermission("plugin_glob", argsEmpty));
     }
 
     co_return;
@@ -880,7 +867,7 @@ asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
 asio::awaitable<void> test_permission_subdir_deny_over_wildcard_allow() {
     auto sessionBus
         = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-    auto io = std::make_shared<MockIO>(); // 记录询问次数
+    auto io             = std::make_shared<MockIO>(); // 记录询问次数
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
 

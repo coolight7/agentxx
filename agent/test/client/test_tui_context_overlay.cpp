@@ -340,12 +340,10 @@ TestResult testTuiContextOverlay() {
     // ---- 场景 9: 带前导换行的多行 systemPrompt 在 LLMContext 中正确展示 ----
     {
         ContextOverlayFixture fx;
-        std::string multilinePrompt = "\n\nYou are a helpful, knowledgeable AI coding assistant.\n\n## Core Behavior\n- Assist user.";
+        std::string           multilinePrompt
+            = "\n\nYou are a helpful, knowledgeable AI coding assistant.\n\n## Core Behavior\n- Assist user.";
         agentxx::util::Json msgs = agentxx::util::Json::array({
-            agentxx::util::Json{
-                {"role",    "system"},
-                {"content", multilinePrompt}
-            }
+            agentxx::util::Json{{"role", "system"}, {"content", multilinePrompt}}
         });
         fx.setMessages(std::move(msgs));
         auto screen = fx.render();

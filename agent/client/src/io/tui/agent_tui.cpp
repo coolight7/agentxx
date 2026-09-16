@@ -444,17 +444,18 @@ void TUIClientAgentIO::start() {
         ctx_.requestMoreSessions = [this] {
             requestNextSessionListPage();
         };
-        ctx_.requestServerListDir = [this](
-                                        std::string                                                   path,
-                                        std::vector<std::string>                                      allowedExtensions,
-                                        std::function<void(const agentxx::agent::WireListDirResult&)> callback
-                                    ) {
-            requestServerListDir(
-                std::move(path),
-                std::move(allowedExtensions),
-                std::move(callback)
-            );
-        };
+        ctx_.requestServerListDir
+            = [this](
+                  std::string                                                   path,
+                  std::vector<std::string>                                      allowedExtensions,
+                  std::function<void(const agentxx::agent::WireListDirResult&)> callback
+              ) {
+                  requestServerListDir(
+                      std::move(path),
+                      std::move(allowedExtensions),
+                      std::move(callback)
+                  );
+              };
         ctx_.showToast = [this](std::string msg) {
             showToast(std::move(msg));
         };
@@ -652,7 +653,7 @@ void TUIClientAgentIO::start() {
                     toastText_.clear();
                 } else {
                     const auto surfaceStyle = TuiSurfaceStyle::fromTheme(theme_);
-                    body = dbox({
+                    body                    = dbox({
                         body,
                         vbox({
                             text(" "),
@@ -1589,7 +1590,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 std::function<void(const agentxx::agent::WireListDirResult&)> cb;
                 {
                     std::lock_guard<std::mutex> lock(listDirMutex_);
-                    auto it = pendingListDirCallbacks_.find(m.reqId);
+                    auto                        it = pendingListDirCallbacks_.find(m.reqId);
                     if (it != pendingListDirCallbacks_.end()) {
                         cb = std::move(it->second);
                         pendingListDirCallbacks_.erase(it);

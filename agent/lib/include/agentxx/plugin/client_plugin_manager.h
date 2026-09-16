@@ -104,11 +104,11 @@ struct ClientToolRenderReg {
     /// 见 [ClientPluginManager::registerBuiltinToolRenderer]):
     /// - true 时无插件实例与 lease, 渲染时不做租约/启用状态复查
     /// - 归属名固定为 [kBuiltinRendererOwner]; 不随插件禁用/卸载失效
-    bool                                     builtin = false;
-    std::string                              templateJson;
-    std::string                              templateDisplayName;
-    std::string                              templateSummaryKey;
-    std::string                              templateSummaryTemplate;
+    bool        builtin = false;
+    std::string templateJson;
+    std::string templateDisplayName;
+    std::string templateSummaryKey;
+    std::string templateSummaryTemplate;
 };
 
 /// 宿主内置渲染器的保留归属名 (写入 [ClientToolRenderReg::plugin] 与语义渲染

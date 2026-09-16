@@ -216,10 +216,8 @@ inline std::string joinLines(const std::vector<std::string>& lines) {
 ///   且不会把所有路径误判为拒绝
 ///
 /// - `return` 过滤后的路径列表 (顺序不变)
-inline std::vector<std::filesystem::path> filterByPermission(
-    std::vector<std::filesystem::path> paths,
-    const PathFilterFn&                pathFilter
-) {
+inline std::vector<std::filesystem::path>
+    filterByPermission(std::vector<std::filesystem::path> paths, const PathFilterFn& pathFilter) {
     if (!pathFilter || paths.empty()) {
         return paths;
     }

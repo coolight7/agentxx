@@ -405,8 +405,8 @@ std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
     if (!agentConfig) {
         return "";
     }
-    std::string combined = agentConfig->prompt.systemPrompt;
-    auto appendIfNonEmpty = [&](const std::string& seg) {
+    std::string combined         = agentConfig->prompt.systemPrompt;
+    auto        appendIfNonEmpty = [&](const std::string& seg) {
         if (seg.empty()) {
             return;
         }
@@ -420,8 +420,8 @@ std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
         combined += seg;
     };
 
-    const auto& appendMap = agentConfig->prompt.appendSystemPrompts;
-    auto appendByKey = [&](const std::string& key) {
+    const auto& appendMap   = agentConfig->prompt.appendSystemPrompts;
+    auto        appendByKey = [&](const std::string& key) {
         auto it = appendMap.find(key);
         if (it != appendMap.end()) {
             appendIfNonEmpty(it->second);

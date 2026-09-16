@@ -1,5 +1,6 @@
 #include "test_util_misc.h"
 
+#include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/container_util.h"
@@ -8,7 +9,6 @@
 #include "agentxx/util/path_sanitize.h"
 #include "agentxx/util/stream.h"
 #include "agentxx/util/util.h"
-#include "agentxx-client/io/tui/framework/tui_context.h"
 #include <chrono>
 #include <set>
 #include <stdexcept>

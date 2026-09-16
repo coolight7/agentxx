@@ -358,8 +358,8 @@ int PluginManager::registerToolPermission(
     }
     std::string toolName{spec->tool_name.data, spec->tool_name.size};
     // 只接受本实例注册过的工具: 防止插件为其他插件/内置工具声明权限
-    if (std::find(inst->toolNames.begin(), inst->toolNames.end(), toolName) == inst->toolNames.end()
-    ) {
+    if (std::find(inst->toolNames.begin(), inst->toolNames.end(), toolName)
+        == inst->toolNames.end()) {
         XX_LOGW(
             "Plugin `{}` register tool permission rejected: tool `{}` not owned by this plugin",
             inst->name,
@@ -429,13 +429,15 @@ int PluginManager::registerToolPermission(
     return 0;
 }
 
-int PluginManager::unregisterToolPermission(PluginInstance* inst, AgentxxPluginStringView toolName) {
+int PluginManager::unregisterToolPermission(
+    PluginInstance*         inst,
+    AgentxxPluginStringView toolName
+) {
     if (!inst || agentxx::plugin::PluginStringView::empty(toolName)) {
         return -1;
     }
     std::string name = svToStr(toolName);
-    auto        it
-        = std::find(inst->permissionToolNames.begin(), inst->permissionToolNames.end(), name);
+    auto it = std::find(inst->permissionToolNames.begin(), inst->permissionToolNames.end(), name);
     if (it == inst->permissionToolNames.end()) {
         return -1;
     }

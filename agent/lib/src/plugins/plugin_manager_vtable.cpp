@@ -131,8 +131,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_tool_permission(
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
-        if (!mgr || !inst || !spec
-            || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
+        if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
             return -1;
         }
         auto mgrPtr  = mgr;
@@ -140,7 +139,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_register_tool_permission(
         // 声明内容按值复制: 跨边界视图只在本次调用期间有效, 复制为自有字符串后
         // 再交给 IO 线程执行 (视图指向闭包持有的字符串)
         AgentxxPluginToolPermissionSpec specCopy = *spec;
-        auto toolName  = std::make_shared<std::string>(
+        auto                            toolName = std::make_shared<std::string>(
             spec->tool_name.data ? spec->tool_name.data : "",
             static_cast<size_t>(spec->tool_name.size)
         );

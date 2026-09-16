@@ -627,7 +627,8 @@ asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::Agent
 // ---- 运行环境探测与工具提示词 (原 AgentPrompt 环境探测, 已迁移到插件) ----
 
 /// 环境探测结果字段自洽性: available 与 exeName/version 一致, 版本号形如 "1.2.3"
-static void expectInterpreterInfo(const agentxx_execmd_plugin::InterpreterInfo& info, const char* name) {
+static void
+    expectInterpreterInfo(const agentxx_execmd_plugin::InterpreterInfo& info, const char* name) {
     if (info.available) {
         XX_TEST_EXPECT_TRUE(false == info.exeName.empty());
         XX_TEST_EXPECT_TRUE(info.version.find('.') != std::string::npos);
@@ -655,8 +656,7 @@ asio::awaitable<void> test_exec_env_detection(std::weak_ptr<agentxx::agent::Agen
 
 /// 提示词文本: 系统信息 + 探测到的解释器信息必须写入 `command` 参数描述,
 /// 未探测到的解释器写"未找到" (引导模型改用其他方式)
-asio::awaitable<void> test_exec_env_prompt(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+asio::awaitable<void> test_exec_env_prompt(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     (void)agentContext;
     const auto env = agentxx_execmd_plugin::detectExecEnv();
@@ -668,9 +668,7 @@ asio::awaitable<void> test_exec_env_prompt(
     if (bashCmdIt != bashPrompt.args.end()) {
         const auto& desc = bashCmdIt->second;
         XX_TEST_EXPECT_TRUE(desc.find(env.systemName) != std::string::npos);
-        XX_TEST_EXPECT_TRUE(
-            desc.find("## Interpreters detected at startup") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(desc.find("## Interpreters detected at startup") != std::string::npos);
         if (env.python.available) {
             XX_TEST_EXPECT_TRUE(desc.find(env.python.exeName) != std::string::npos);
             XX_TEST_EXPECT_TRUE(desc.find(env.python.version) != std::string::npos);
@@ -720,7 +718,6 @@ asio::awaitable<void> test_exec_env_prompt(
     }
     co_return;
 }
-
 
 asio::awaitable<void>
     test_windows_execute_ps(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {

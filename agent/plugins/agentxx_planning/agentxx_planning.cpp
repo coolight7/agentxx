@@ -377,17 +377,17 @@ static int planningSetup(PluginCtx* ctx) {
         j["appendSystemPrompts"]             = agentxx::util::Json::object();
         j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
 
-        agentxx::util::Json toolPrompt     = agentxx::util::Json::object();
-        agentxx::util::Json planningPrompt = agentxx::util::Json::object();
-        planningPrompt["depict"]           = std::string{kDepictPlanning};
-        agentxx::util::Json args           = agentxx::util::Json::object();
-        args["mode"]                       = std::string{kArgModeDesc};
-        args["roadmap"]                    = std::string{kArgRoadmapDesc};
-        args["todos"]                      = std::string{kArgTodosDesc};
-        args["notes"]                      = std::string{kArgNotesDesc};
-        planningPrompt["args"]             = std::move(args);
+        agentxx::util::Json toolPrompt         = agentxx::util::Json::object();
+        agentxx::util::Json planningPrompt     = agentxx::util::Json::object();
+        planningPrompt["depict"]               = std::string{kDepictPlanning};
+        agentxx::util::Json args               = agentxx::util::Json::object();
+        args["mode"]                           = std::string{kArgModeDesc};
+        args["roadmap"]                        = std::string{kArgRoadmapDesc};
+        args["todos"]                          = std::string{kArgTodosDesc};
+        args["notes"]                          = std::string{kArgNotesDesc};
+        planningPrompt["args"]                 = std::move(args);
         toolPrompt[std::string{kNamePlanning}] = std::move(planningPrompt);
-        j["toolPrompt"]                    = std::move(toolPrompt);
+        j["toolPrompt"]                        = std::move(toolPrompt);
 
         std::string js       = j.dump();
         auto        promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
@@ -405,28 +405,17 @@ static int planningSetup(PluginCtx* ctx) {
     // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
     {
-        std::string schema
-            = ctx->schema(kNamePlanning)
-                  .enumString(
-                      "mode",
-                      kArgModeDesc,
-                      {"write", "read"},
-                      /*required=*/true
-                  )
-                  .string(
-                      "roadmap",
-                      kArgRoadmapDesc
-                  )
-                  .array(
-                      "todos",
-                      kArgTodosDesc,
-                      "object"
-                  )
-                  .string(
-                      "notes",
-                      kArgNotesDesc
-                  )
-                  .build();
+        std::string schema = ctx->schema(kNamePlanning)
+                                 .enumString(
+                                     "mode",
+                                     kArgModeDesc,
+                                     {"write", "read"},
+                                     /*required=*/true
+                                 )
+                                 .string("roadmap", kArgRoadmapDesc)
+                                 .array("todos", kArgTodosDesc, "object")
+                                 .string("notes", kArgNotesDesc)
+                                 .build();
 
         agentxx::plugin::fast_tool(
             *ctx,

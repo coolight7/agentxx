@@ -28,11 +28,8 @@ constexpr std::string_view kNameWindows = "agentxx_execute_windows_command";
 /// 取参数描述 (提示词里没有该参数时回退给定文本)
 /// - 提示词来自本插件自身生成, 正常都命中; 回退保证宿主提示词接口缺失时
 ///   schema 描述仍完整
-std::string_view argDescOr(
-    const ExecPromptText& prompt,
-    std::string_view      name,
-    std::string_view      fallback
-) {
+std::string_view
+    argDescOr(const ExecPromptText& prompt, std::string_view name, std::string_view fallback) {
     const auto it = prompt.args.find(name);
     if (it != prompt.args.end() && !it->second.empty()) {
         return it->second;
@@ -69,20 +66,16 @@ static void
     tool["depict"]           = prompt.depict;
     tool["args"]             = std::move(args);
 
-    agentxx::util::Json tools = agentxx::util::Json::object();
+    agentxx::util::Json tools    = agentxx::util::Json::object();
     tools[std::string{toolName}] = std::move(tool);
 
     agentxx::util::Json patch = agentxx::util::Json::object();
     patch["toolPrompt"]       = std::move(tools);
 
-    const std::string js = patch.dump();
+    const std::string js   = patch.dump();
     const auto        jsSv = PluginStringView::from(js.data(), js.size());
     if (ctx.iface.prompt->set_prompt(ctx.host, &jsSv) != 0) {
-        pluginLog(
-            &ctx,
-            3,
-            fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName)
-        );
+        pluginLog(&ctx, 3, fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName));
         return;
     }
     pluginLog(
@@ -114,20 +107,21 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     // 读取宿主提示词的 depict 作为工具描述, 注册后无法再改
     publishToolPrompt(ctx, kNameWindows, winPrompt);
 
-    auto winSchema = ctx.schema(kNameWindows)
-                         .string(
-                             "command",
-                             argDescOr(winPrompt, "command", kWindowsCommandArgDescFallback),
-                             /*required=*/true
-                         )
-                         .integer("timeout", argDescOr(winPrompt, "timeout", kTimeoutArgDesc), false, 60)
-                         .boolean(
-                             "all_output",
-                             argDescOr(winPrompt, "all_output", kAllOutputArgDesc),
-                             false,
-                             true
-                         )
-                         .build();
+    auto winSchema
+        = ctx.schema(kNameWindows)
+              .string(
+                  "command",
+                  argDescOr(winPrompt, "command", kWindowsCommandArgDescFallback),
+                  /*required=*/true
+              )
+              .integer("timeout", argDescOr(winPrompt, "timeout", kTimeoutArgDesc), false, 60)
+              .boolean(
+                  "all_output",
+                  argDescOr(winPrompt, "all_output", kAllOutputArgDesc),
+                  false,
+                  true
+              )
+              .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     polled_tool(
@@ -216,20 +210,21 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     // 读取宿主提示词的 depict 作为工具描述, 注册后无法再改
     publishToolPrompt(ctx, kNameBash, bashPrompt);
 
-    auto bashSchema = ctx.schema(kNameBash)
-                          .string(
-                              "command",
-                              argDescOr(bashPrompt, "command", kBashToolDepict),
-                              /*required=*/true
-                          )
-                          .integer("timeout", argDescOr(bashPrompt, "timeout", kTimeoutArgDesc), false, 60)
-                          .boolean(
-                              "all_output",
-                              argDescOr(bashPrompt, "all_output", kAllOutputArgDesc),
-                              false,
-                              true
-                          )
-                          .build();
+    auto bashSchema
+        = ctx.schema(kNameBash)
+              .string(
+                  "command",
+                  argDescOr(bashPrompt, "command", kBashToolDepict),
+                  /*required=*/true
+              )
+              .integer("timeout", argDescOr(bashPrompt, "timeout", kTimeoutArgDesc), false, 60)
+              .boolean(
+                  "all_output",
+                  argDescOr(bashPrompt, "all_output", kAllOutputArgDesc),
+                  false,
+                  true
+              )
+              .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     polled_tool(

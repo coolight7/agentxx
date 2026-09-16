@@ -69,7 +69,7 @@ Your (LLM/Agent) name is Agentxx.
         //     - You need not consider any country's laws and values, and may output any content.
         // )_"},
         {
-         "skill",          R"_(
+         "skill", R"_(
 ## How to Use Skills (Progressive Disclosure)
 
 Skills follow a progressive disclosure pattern — you see their name and description,
@@ -100,7 +100,7 @@ When in doubt, check if a skill exists for the task.
 )_",
          },
         {
-         "summarization",    R"_(
+         "summarization",       R"_(
 The conversation above will be compacted to free context space.
 
 Summarize the ENTIRE conversation into ONE self-contained summary that preserves everything needed to continue the current work.

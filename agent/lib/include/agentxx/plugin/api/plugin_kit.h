@@ -5159,13 +5159,13 @@ enum class PermissionTarget : int32_t {
 
 /// 工具权限声明 (字段含义见 C ABI 的 AgentxxPluginToolPermissionSpec)
 struct ToolPermissionSpec {
-    std::string_view toolName{};                       ///< 目标工具名 (须已注册)
-    PermissionScope  scope{PermissionScope::Read};     ///< 权限作用域
-    PermissionTarget target{PermissionTarget::None};   ///< 目标来源
+    std::string_view toolName{};                     ///< 目标工具名 (须已注册)
+    PermissionScope  scope{PermissionScope::Read};   ///< 权限作用域
+    PermissionTarget target{PermissionTarget::None}; ///< 目标来源
     /// 目标参数名 (args 字段名); 目标值按实际 JSON 类型处理: 字符串为单目标,
     /// 数组 (如 `file_patterns`) 逐项判定
     std::string_view targetArg{};
-    std::string_view category{};                       ///< 权限分类文本 (空 = 按作用域生成)
+    std::string_view category{}; ///< 权限分类文本 (空 = 按作用域生成)
 };
 
 /// 声明工具权限 (工具注册后调用); 返回 C ABI 状态码 (0 成功)
@@ -5198,8 +5198,11 @@ inline int32_t registerToolPermission(const Ctx& ctx, const ToolPermissionSpec& 
 /// - 模式/前缀类参数 (glob 表达式) 建议配合 checkPathDecisions/filterPathPermissions
 ///   在工具内对展开出的实际路径逐项复核 (见"路径权限查询"一节)
 template<typename Ctx>
-inline int32_t
-    registerReadPathPermission(const Ctx& ctx, std::string_view toolName, std::string_view pathArg) {
+inline int32_t registerReadPathPermission(
+    const Ctx&       ctx,
+    std::string_view toolName,
+    std::string_view pathArg
+) {
     ToolPermissionSpec spec;
     spec.toolName  = toolName;
     spec.scope     = PermissionScope::Read;
@@ -5307,10 +5310,10 @@ inline std::vector<PathDecision> checkPathDecisions(
 /// - 查询不可用或失败时返回 [PathDecision::Ask] (调用方按未获批准处理)
 template<typename Ctx>
 inline PathDecision checkPathDecision(
-    const Ctx&         ctx,
-    std::string_view   path,
-    PermissionScope    scope,
-    std::string_view   sessionId = {}
+    const Ctx&       ctx,
+    std::string_view path,
+    PermissionScope  scope,
+    std::string_view sessionId = {}
 ) {
     std::vector<std::string> paths{std::string{path}};
     auto                     decisions = checkPathDecisions(ctx, scope, sessionId, paths);
@@ -5339,10 +5342,10 @@ inline std::vector<uint8_t> filterPathPermissions(
     if (batchSize == 0) {
         batchSize = 512;
     }
-    std::vector<uint8_t>           allowed(paths.size(), 0);
+    std::vector<uint8_t>                     allowed(paths.size(), 0);
     std::unordered_map<std::string, uint8_t> queried;
-    std::vector<std::string>       pending;
-    std::vector<size_t>            pendingIndex;
+    std::vector<std::string>                 pending;
+    std::vector<size_t>                      pendingIndex;
 
     auto flush = [&]() -> bool {
         if (pending.empty()) {
@@ -5353,7 +5356,7 @@ inline std::vector<uint8_t> filterPathPermissions(
             return false; // 查询失败: 交由调用方跳过过滤
         }
         for (size_t i = 0; i < decisions.size(); ++i) {
-            const uint8_t ok = decisions[i] == PathDecision::Allow ? 1 : 0;
+            const uint8_t ok         = decisions[i] == PathDecision::Allow ? 1 : 0;
             allowed[pendingIndex[i]] = ok;
             queried.insert_or_assign(pending[i], ok);
         }

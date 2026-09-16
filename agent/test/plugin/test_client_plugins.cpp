@@ -151,18 +151,17 @@ public:
 
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
         namespace pi = agentxx::plugin::plugin_interfaces;
-        return {
-            // 与 TuiPluginAdapter 声明集保持一致 (完整消息渲染面宿主):
-            // ui 表整体 + 全部子能力
-            std::string{pi::ClientUi},
-            std::string{pi::ClientStatusItem},
-            std::string{pi::ClientPanel},
-            std::string{pi::ClientToast},
-            std::string{pi::ClientInfoSection},
-            std::string{pi::ClientCommand},
-            std::string{pi::ClientMsgDecor},
-            std::string{pi::ClientAction},
-            std::string{pi::ClientOverlay}
+        return {// 与 TuiPluginAdapter 声明集保持一致 (完整消息渲染面宿主):
+                // ui 表整体 + 全部子能力
+                std::string{pi::ClientUi},
+                std::string{pi::ClientStatusItem},
+                std::string{pi::ClientPanel},
+                std::string{pi::ClientToast},
+                std::string{pi::ClientInfoSection},
+                std::string{pi::ClientCommand},
+                std::string{pi::ClientMsgDecor},
+                std::string{pi::ClientAction},
+                std::string{pi::ClientOverlay}
         };
     }
 
@@ -2786,9 +2785,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .renderFn = &agentxx::plugin::builtinRenderShareStore,
                 .builtin  = true,
             });
-            auto pluginFn
-                = +[](void*, const AgentxxToolRenderInput*, AgentxxToolRenderOutput* out
-                      ) -> int32_t {
+            auto pluginFn = +[](void*, const AgentxxToolRenderInput*, AgentxxToolRenderOutput* out
+                             ) -> int32_t {
                 agentxx::plugin::hostMemorySetString(&out->displayName, "PluginStore");
                 agentxx::plugin::hostMemorySetString(&out->summary, " · plugin wins");
                 return 0;
@@ -2799,7 +2797,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .renderFn = pluginFn,
             });
 
-            const std::string args = R"({"opt":"insert","text":"a\nb"})";
+            const std::string args       = R"({"opt":"insert","text":"a\nb"})";
             auto              withPlugin = agentxx::plugin::renderClientTool(
                 &reg,
                 nullptr, // 无语义缓存: renderer 同步执行 (不进入异步请求路径)
@@ -2868,7 +2866,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         namespace pi = agentxx::plugin::plugin_interfaces;
 
         agentxx::client::TuiPluginAdapter tuiAdapter{std::weak_ptr<::TUIClientAgentIO>{}};
-        const auto tuiIfaces = tuiAdapter.supportedInterfaces();
+        const auto                        tuiIfaces = tuiAdapter.supportedInterfaces();
 
         // 29.1 表整体 + 全部已实现子能力 (第三方插件按表名声明时同样不再误报)
         const std::string_view tuiUiInterfaces[] = {
@@ -2888,8 +2886,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 29.2 构建产物中的内置插件清单: client 侧声明 (require + optional) 必须全部
         // 被 TUI 支持集满足 (未满足即启动告警/插件被跳过, 属于本次修复要消除的情况)
-        const fs::path pluginsRoot = fs::path{findPluginPath("agentxx_filesystem")}
-                                         .parent_path();
+        const fs::path  pluginsRoot = fs::path{findPluginPath("agentxx_filesystem")}.parent_path();
         std::error_code ec;
         if (fs::is_directory(pluginsRoot, ec)) {
             int checkedPlugins = 0;
@@ -2900,10 +2897,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 if (!fs::exists(entry.path() / "plugin.yaml", ec)) {
                     continue;
                 }
-                std::string                              pluginName;
-                std::string                              entryName;
-                std::vector<std::string>                 depends;
-                std::vector<std::string>                 optionalDepends;
+                std::string                               pluginName;
+                std::string                               entryName;
+                std::vector<std::string>                  depends;
+                std::vector<std::string>                  optionalDepends;
                 agentxx::plugin::PluginManifestInterfaces decl;
                 if (!agentxx::plugin::parsePluginManifest(
                         entry.path(),

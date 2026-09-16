@@ -537,8 +537,8 @@ private:
     std::string                  serverDeviceId_;
     std::string                  serverWorkDir_;
 
-    std::mutex                                                                            listDirMutex_;
-    uint64_t                                                                              nextListDirReqId_{0};
+    std::mutex listDirMutex_;
+    uint64_t   nextListDirReqId_{0};
     std::unordered_map<uint64_t, std::function<void(const agentxx::agent::WireListDirResult&)>>
         pendingListDirCallbacks_;
 

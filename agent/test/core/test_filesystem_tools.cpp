@@ -528,7 +528,8 @@ asio::awaitable<void>
         TEST_PASS << "FileSystemListTool expands `**` wildcard recursively" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FileSystemListTool `**` wildcard listing failed, got: " << result << std::endl;
+        TEST_FAIL << "FileSystemListTool `**` wildcard listing failed, got: " << result
+                  << std::endl;
     }
 
     // `**` 单独使用: 匹配目录自身与其下全部层级
@@ -651,14 +652,14 @@ asio::awaitable<void>
 }
 
 /// 通配模式下 limit 同样限制输出条目总数 (多个匹配条目共用一个上限)
-asio::awaitable<void>
-    test_list_glob_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_list_glob_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
     auto args = agentxx::util::Json{
         {"path",  testDir + "/*"},
-        {"limit", 1            },
+        {"limit", 1             },
     };
-    auto result = co_await tool.execute_async(args);
+    auto   result    = co_await tool.execute_async(args);
     size_t lineCount = 0;
     for (size_t i = 0; i < result.size(); i++) {
         if (result[i] == '\n') {
@@ -688,7 +689,7 @@ asio::awaitable<void>
     auto args = agentxx::util::Json{
         {"path", literalFile}
     };
-    auto result = co_await tool.execute_async(args);
+    auto            result = co_await tool.execute_async(args);
     std::error_code ec;
     std::filesystem::remove(agentxx::util::utf8ToPath(literalFile), ec);
     if (result.find("literal[1].txt") != std::string::npos) {

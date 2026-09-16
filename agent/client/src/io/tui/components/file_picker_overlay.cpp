@@ -141,7 +141,7 @@ void FilePickerOverlay::navigateToLocal(std::string dirPath) {
 }
 
 void FilePickerOverlay::navigateToServer(std::string dirPath) {
-    serverTab_.loading       = true;
+    serverTab_.loading = true;
     serverTab_.error.clear();
     serverTab_.currentDir    = dirPath;
     serverTab_.selectedIndex = 0;
@@ -247,7 +247,8 @@ agentxx::agent::MediaType FilePickerOverlay::guessMediaType(const std::string& e
 
 void FilePickerOverlay::confirmSelection() {
     auto& curTab = (activeTab_ == PickerTab::Local) ? localTab_ : serverTab_;
-    if (curTab.selectedIndex < 0 || curTab.selectedIndex >= static_cast<int>(curTab.entries.size())) {
+    if (curTab.selectedIndex < 0
+        || curTab.selectedIndex >= static_cast<int>(curTab.entries.size())) {
         return;
     }
     const auto& entry = curTab.entries[curTab.selectedIndex];
@@ -276,7 +277,8 @@ void FilePickerOverlay::confirmSelection() {
             }
             return;
         }
-        auto ext  = agentxx::util::toLower(std::filesystem::path(entry.fullPath).extension().string());
+        auto ext
+            = agentxx::util::toLower(std::filesystem::path(entry.fullPath).extension().string());
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
         if (mime.empty()) {
             if (ctx_.showToast) {
@@ -287,11 +289,11 @@ void FilePickerOverlay::confirmSelection() {
         uint64_t maxSize = agentxx::agent::maxBytesForMediaType(entry.mediaType);
         if (fileSize > maxSize) {
             if (ctx_.showToast) {
-                ctx_.showToast(trf(
-                    "toast.attachTooLarge",
-                    fmt::format("{:.1f} MB", static_cast<double>(fileSize) / (1024.0 * 1024.0)),
-                    fmt::format("{:.0f} MB", static_cast<double>(maxSize) / (1024.0 * 1024.0))
-                ));
+                ctx_.showToast(
+                    trf("toast.attachTooLarge",
+                        fmt::format("{:.1f} MB", static_cast<double>(fileSize) / (1024.0 * 1024.0)),
+                        fmt::format("{:.0f} MB", static_cast<double>(maxSize) / (1024.0 * 1024.0)))
+                );
             }
             return;
         }
@@ -314,8 +316,8 @@ void FilePickerOverlay::confirmSelection() {
         att.displayName = entry.name;
         att.mimeType    = std::string(mime);
         att.pathOrUrl   = entry.fullPath;
-        att.dataUrl     = fmt::format("data:{};base64,{}", mime, agentxx::util::base64Encode(fileData));
-        att.sizeBytes   = fileSize;
+        att.dataUrl = fmt::format("data:{};base64,{}", mime, agentxx::util::base64Encode(fileData));
+        att.sizeBytes = fileSize;
 
         if (onSelectAttachment_) {
             onSelectAttachment_(std::move(att));
@@ -324,7 +326,8 @@ void FilePickerOverlay::confirmSelection() {
         }
     } else {
         // 服务端附件: 直接构造服务端路径附件 (dataUrl 留空, 服务端自主加载并转 Base64)
-        auto ext  = agentxx::util::toLower(std::filesystem::path(entry.fullPath).extension().string());
+        auto ext
+            = agentxx::util::toLower(std::filesystem::path(entry.fullPath).extension().string());
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
 
         agentxx::agent::MediaAttachment att;
@@ -407,17 +410,13 @@ Element FilePickerOverlay::OnRender() {
     curTab.itemBoxes.assign(curTab.entries.size(), Box{});
     const int maxVisible  = std::max(5, Terminal::Size().dimy / 2);
     const int scrollStart = std::max(0, curTab.selectedIndex - maxVisible + 2);
-    const int scrollEnd   = std::min(
-        static_cast<int>(curTab.entries.size()),
-        scrollStart + maxVisible
-    );
+    const int scrollEnd
+        = std::min(static_cast<int>(curTab.entries.size()), scrollStart + maxVisible);
 
     if (activeTab_ == PickerTab::Server && curTab.loading) {
         items.push_back(text(std::string(TuiI18n::instance().t("picker.server_loading"))) | dim);
     } else if (activeTab_ == PickerTab::Server && !curTab.error.empty()) {
-        items.push_back(
-            text(trf("picker.server_error", curTab.error)) | color(theme.errorColor)
-        );
+        items.push_back(text(trf("picker.server_error", curTab.error)) | color(theme.errorColor));
     } else {
         const std::string parentNameStr = std::string(TuiI18n::instance().t("picker.parent"));
         for (int i = scrollStart; i < scrollEnd; ++i) {
@@ -464,8 +463,8 @@ Element FilePickerOverlay::OnRender() {
 
             auto row = hbox(std::move(rowItems));
             if (selected) {
-                row = row | bgcolor(theme.buttonActiveBgColor)
-                      | color(theme.buttonActiveTextColor) | focus;
+                row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                      | focus;
             }
             if (!entry.isDir && !entry.supported) {
                 row = row | dim;
@@ -490,12 +489,7 @@ Element FilePickerOverlay::OnRender() {
                                      ? std::string(TuiI18n::instance().t("picker.hint_tabs"))
                                      : std::string(TuiI18n::instance().t("picker.hint"));
 
-    return tuiSurfacePopup(
-               style,
-               titleText,
-               vbox(std::move(content)) | flex,
-               hintText
-           )
+    return tuiSurfacePopup(style, titleText, vbox(std::move(content)) | flex, hintText)
            | size(WIDTH, EQUAL, overlayW) | size(HEIGHT, LESS_THAN, overlayH) | center;
 }
 

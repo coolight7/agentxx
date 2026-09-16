@@ -145,7 +145,7 @@ public:
         bool                                                           backedUpSystem = false;
     };
 
-    std::vector<std::string>                                toolNames;
+    std::vector<std::string> toolNames;
     /// 已声明权限限制的工具名 (随工具注销/实例禁用卸载一并撤销)
     std::vector<std::string>                                permissionToolNames;
     std::vector<HookRegistration>                           hookRegistrations;

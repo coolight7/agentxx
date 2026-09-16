@@ -502,7 +502,7 @@ void declareFilesystemWritePermission(agentxx::agent::CodeAgent& agent) {
         return;
     }
     agentxx::middleware::ToolPermissionSpec spec;
-    spec.scope = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
+    spec.scope      = agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE;
     spec.targetKind = agentxx::middleware::ToolPermissionTargetKind::Path;
     spec.targetArgs = {"path"};
     permission->registerToolPermission("agentxx_filesystem_write", std::move(spec));
@@ -1323,10 +1323,10 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
 /// 2) 客户端请求 WireGetContext 时, 服务端返回的上下文中包含 role 为 "system" 的消息,
 ///    且 content 等于 buildSystemPrompt 的结果
 asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
-    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl        = "http://127.0.0.1:1234";
-    cfg->model.modelName      = "test-sim";
-    cfg->prompt.systemPrompt  = "You are a helpful coding assistant.";
+    auto cfg                                    = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl                          = "http://127.0.0.1:1234";
+    cfg->model.modelName                        = "test-sim";
+    cfg->prompt.systemPrompt                    = "You are a helpful coding assistant.";
     cfg->prompt.appendSystemPrompts["planning"] = "## Planning Guide";
 
     auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
@@ -1338,14 +1338,10 @@ asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
     XX_TEST_EXPECT_TRUE(prompt.find("## Planning Guide") != std::string::npos);
 
     // 2) 验证新会话下请求 WireGetContext 时, 服务端自动补充 systemPrompt
-    auto ex = co_await asio::this_coro::executor;
+    auto                                         ex = co_await asio::this_coro::executor;
     agentxx::agent::SessionServerAgentIO::Config ioCfg;
     ioCfg.sessionId = "sys_prompt_session";
-    auto serverIo = std::make_shared<agentxx::agent::SessionServerAgentIO>(
-        ex,
-        agent,
-        ioCfg
-    );
+    auto serverIo   = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, ioCfg);
 
     // 创建虚拟客户端 IO 接入测试传输通道
     auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
@@ -1354,7 +1350,9 @@ asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
     serverIo->setTransport(std::move(serverT));
 
     // 发送 WireGetContext
-    serverIo->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireGetContext{"sys_prompt_session"}});
+    serverIo->onPeerMessage(
+        agentxx::agent::WireMessage{agentxx::agent::WireGetContext{"sys_prompt_session"}}
+    );
 
     // 客户端等待接收 WireContextMessages 响应
     auto resp = co_await clientT->recv();

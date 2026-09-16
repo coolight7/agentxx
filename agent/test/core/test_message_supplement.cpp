@@ -957,7 +957,8 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
     agentxx::nodes::ModelCallWrapNode node("test_modelcall_wrap", nodeCtx, ctx);
 
     std::string prompt1 = "You are a helpful coding assistant v1.";
-    std::string prompt2 = "You are a helpful coding assistant v2."; // 长度相同 (39 chars)，但内容不同
+    std::string prompt2
+        = "You are a helpful coding assistant v2."; // 长度相同 (39 chars)，但内容不同
     XX_TEST_EXPECT_EQ(prompt1.size(), prompt2.size());
 
     const auto hash1 = agentxx::util::hash::fnv1a64(prompt1);

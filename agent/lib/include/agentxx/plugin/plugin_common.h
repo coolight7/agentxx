@@ -298,7 +298,7 @@ inline constexpr std::string_view AgentCoroutineRuntime = AGENTXX_PLUGIN_IFACE_C
 /// 宿主才会声明本项 (tui; cli 只有 toast/command 故不声明)。插件应优先按下方的
 /// 细粒度能力名精确声明自己实际使用的子能力 —— 声明表整体会让"宿主缺某子能力"
 /// 变成"整个插件不可加载/告警"
-inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI;
+inline constexpr std::string_view ClientUi          = AGENTXX_IFACE_CLIENT_UI;
 inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";
 inline constexpr std::string_view ClientToast       = "agentxx.client.toast";

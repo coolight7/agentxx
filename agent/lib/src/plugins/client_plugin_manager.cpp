@@ -3868,10 +3868,14 @@ ClientToolRenderResult renderClientTool(
                             toolCallId.data(),
                             toolCallId.size()
                         );
-                        input.tool_name
-                            = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-                        input.args_json
-                            = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+                        input.tool_name = agentxx::plugin::PluginStringView::from(
+                            toolName.data(),
+                            toolName.size()
+                        );
+                        input.args_json = agentxx::plugin::PluginStringView::from(
+                            argsJson.data(),
+                            argsJson.size()
+                        );
                         input.result_text = agentxx::plugin::PluginStringView::from(
                             resultText.data(),
                             resultText.size()
