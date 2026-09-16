@@ -6,6 +6,7 @@
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/aho_corasick.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/hash.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
 #include "asio/steady_timer.hpp"
@@ -570,17 +571,19 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         for (auto& msg : msgs) {
             bool doPrint = false;
             if (msg.role == "system") {
-                if (checkInfo.contains("system_message_length")
-                    && checkInfo["system_message_length"].is_number_integer()
-                    && checkInfo.value<size_t>("system_message_length", 0) != msg.content.size()) {
+                const auto sysPromptHash = agentxx::util::hash::fnv1a64(msg.content);
+                if (checkInfo.contains("system_prompt_hash")
+                    && checkInfo["system_prompt_hash"].is_number_integer()
+                    && checkInfo.value<uint64_t>("system_prompt_hash", 0) != sysPromptHash) {
                     XX_LOGE(
-                        "LLM System-Message content length changed: old({}) -> current({})",
-                        checkInfo.value<size_t>("system_message_length", 0),
+                        "LLM System-Prompt content hash changed: old({:016x}) -> current({:016x}) (length: {})",
+                        checkInfo.value<uint64_t>("system_prompt_hash", 0),
+                        sysPromptHash,
                         msg.content.size()
                     );
                     doPrint = true;
                 }
-                checkInfo["system_message_length"] = msg.content.size();
+                checkInfo["system_prompt_hash"] = sysPromptHash;
             }
             // 检查消息非空
             if (msg.reasoning_content.empty() && msg.content.empty() && msg.tool_calls.empty()) {
@@ -649,58 +652,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             }
         }
 
-        {
-            const auto& appendSystemMsgList
-                = agentCtxPtr->middlewareHandleContext
-                      ->getGraphDataItemValue<std::vector<std::string>>(
-                          in.ctx.thread_id,
-                          agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
-                      );
-
-            // 组装最终 system prompt:
-            // systemPrompt + appendSystemPrompts(有序) + appendSystemMessage(动态 skill/memory)
-            // - appendSystemPrompts 为通用扩展点 (planning/skill/codegraph
-            // 等均经此注入，键字典序拼接)
-            // - 空段不占位，避免无对应工具时误导模型
-            std::string combined         = agentCtxPtr->agentConfig->prompt.systemPrompt;
-            auto        appendIfNonEmpty = [&](const std::string& seg) {
-                if (seg.empty()) {
-                    return;
-                }
-                if (!combined.empty() && combined.back() != '\n') {
-                    combined += "\n";
-                }
-                // 段间用一个空行分隔, 保持可读性
-                if (!combined.empty() && combined.size() >= 2
-                    && combined.compare(combined.size() - 2, 2, "\n\n") != 0) {
-                    combined += "\n";
-                }
-                combined += seg;
-            };
-            // 通用附加提示词按固定优先级拼接：planning -> skill -> codegraph -> 其他(字典序)
-            // summarization 为压缩模板，不参与 system 拼接
-            const auto& appendMap   = agentCtxPtr->agentConfig->prompt.appendSystemPrompts;
-            auto        appendByKey = [&](const std::string& key) {
-                auto it = appendMap.find(key);
-                if (it != appendMap.end()) {
-                    appendIfNonEmpty(it->second);
-                }
-            };
-            appendByKey("planning");
-            appendByKey("skill");
-            appendByKey("codegraph");
-            for (const auto& kv : appendMap) {
-                if (kv.first == "planning" || kv.first == "skill" || kv.first == "codegraph"
-                    || kv.first == "summarization") {
-                    continue;
-                }
-                appendIfNonEmpty(kv.second);
-            }
-            if (!appendSystemMsgList.empty()) {
-                std::string appendJoined = fmt::format("{}", fmt::join(appendSystemMsgList, "\n"));
-                appendIfNonEmpty(appendJoined);
-            }
-            newSystemMsg.content = std::move(combined);
+        if (agentCtxPtr) {
+            newSystemMsg.content = agentCtxPtr->buildSystemPrompt(in.ctx.thread_id);
         }
 
         neograph::json sysMsgJson;
