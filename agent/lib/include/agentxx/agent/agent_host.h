@@ -9,14 +9,14 @@
 #include <memory>
 #include <string>
 
-namespace agentxx::event {
+namespace agentxx::events {
 class EventBus;
-} // namespace agentxx::event
+} // namespace agentxx::events
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 class A2aClient;
-} // namespace server
+} // namespace protocol
 
 namespace agent {
 
@@ -90,7 +90,7 @@ public:
     ~AgentHost();
 
     std::shared_ptr<asio::io_context>         ioCtx();
-    std::shared_ptr<agentxx::event::EventBus> hostBus();
+    std::shared_ptr<agentxx::events::EventBus> hostBus();
     std::shared_ptr<asio::thread_pool>        threadPool();
     AgentRegistry&                            registry();
 
@@ -142,7 +142,7 @@ public:
     /// - 本地 agent 与远程 agent 在消息面完全同构 (agent.message RR 统一路由)
     void registerRemoteAgent(
         std::string_view                            agentId,
-        std::shared_ptr<agentxx::server::A2aClient> client
+        std::shared_ptr<agentxx::protocol::A2aClient> client
     );
 
     /// 注销远程 agent
@@ -187,7 +187,7 @@ private:
     );
     /// 经 A2A 协议向远程 agent 发送消息并等待终态 (轮询 GetTask)
     asio::awaitable<events::RespHostMessage> sendViaA2a(
-        std::shared_ptr<agentxx::server::A2aClient> client,
+        std::shared_ptr<agentxx::protocol::A2aClient> client,
         const events::ReqHostMessage&               req
     );
     std::string nextAgentId();
@@ -201,12 +201,12 @@ private:
     Config                                      cfg_;
     std::shared_ptr<asio::io_context>           ioCtx_;
     std::shared_ptr<asio::thread_pool>          threadPool_;
-    std::shared_ptr<agentxx::event::EventBus>   hostBus_;
+    std::shared_ptr<agentxx::events::EventBus>   hostBus_;
     AgentRegistry                               registry_;
     std::shared_ptr<BaseAgent>                  rootAgent_;
     std::map<std::string, Mailbox, std::less<>> mailboxes_;
     /// 远程 agent (A2A 桥接): agentId -> A2A 客户端
-    std::map<std::string, std::shared_ptr<agentxx::server::A2aClient>, std::less<>> remoteAgents_;
+    std::map<std::string, std::shared_ptr<agentxx::protocol::A2aClient>, std::less<>> remoteAgents_;
     /// 根 agent 全局总线上的 subagent server id (attachRoot 注册)
     size_t subagentServerId_ = 0;
     /// agent id 自增序号 (单线程协作式调度, 无需原子)

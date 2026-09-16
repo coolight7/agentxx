@@ -7,6 +7,8 @@
 #include <functional>
 #include <vector>
 
+namespace agentxx::client {
+
 /// 可滚动列表子项 (仿 Flutter ListView 的 child)
 struct ScrollItem {
     ftxui::Element element;
@@ -128,3 +130,5 @@ private:
 
     ftxui::Box box_; // 本组件渲染区域 (reflect 填充, 用于滚轮命中检测)
 };
+
+} // namespace agentxx::client

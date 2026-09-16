@@ -11,7 +11,7 @@
 #include <thread>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 // ---------------------------------------------------------------------------
 // Construction / Destruction
@@ -868,5 +868,5 @@ std::string A2aServer::extractTextFromParts(const json& parts) {
     return result;
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

@@ -37,6 +37,8 @@ int g_tui_interrupt_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 // ---------------------------------------------------------------------------
 // 测试夹具: 消息列表内嵌中断表单 (Role::Interrupt) 的通用渲染与交互
 //

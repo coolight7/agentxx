@@ -29,7 +29,7 @@ namespace test {
 asio::awaitable<void> test_subagent_bus_request_response() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     // 注册模拟 server
     auto& rr = agentContext->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
@@ -89,7 +89,7 @@ asio::awaitable<void> test_subagent_bus_request_response() {
 asio::awaitable<void> test_subagent_progress_events() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     std::atomic<int> tokenCount{0};
     std::string      lastToken;
@@ -136,7 +136,7 @@ asio::awaitable<void> test_subagent_progress_events() {
 asio::awaitable<void> test_subagent_bus_timeout() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     // 注册一个永不响应的 server
     auto& rr = agentContext->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(

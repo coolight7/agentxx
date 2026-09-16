@@ -16,7 +16,7 @@
 #include <vector>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 /// OpenAI 协议 Provider
 /// API 文档
@@ -183,5 +183,5 @@ private:
     agentxx::agent::ModelConfig config_;
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

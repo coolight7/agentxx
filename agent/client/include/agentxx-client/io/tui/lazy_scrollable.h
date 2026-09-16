@@ -11,6 +11,8 @@
 #include <memory>
 #include <vector>
 
+namespace agentxx::client {
+
 /// buildItem 回调的返回值
 struct LazyBuiltItem {
     ftxui::Element element;
@@ -255,3 +257,5 @@ private:
         long long appliedRows = 0;     // 已应用到 scrollOffset_ 的新增区高度 (行)
     } pendingPrepend_;
 };
+
+} // namespace agentxx::client

@@ -46,14 +46,14 @@ public:
     void applyConfig(const std::shared_ptr<agentxx::agent::AgentConfig>& config);
 
     /// 在 EventBus 上注册 subagent 执行服务 (委托 tool)
-    void registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus);
+    void registerOnBus(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
     /// 从 EventBus 注销
     void unregisterFromBus();
 
 private:
 
-    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
+    std::weak_ptr<agentxx::events::EventBus> registeredBus_;
 };
 
 } // namespace middleware

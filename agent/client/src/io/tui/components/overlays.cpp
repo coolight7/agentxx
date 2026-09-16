@@ -24,6 +24,8 @@
 #include <windows.h>
 #endif
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 // ---------------------------------------------------------------------------
@@ -1585,6 +1587,8 @@ bool TextOverlay::OnEvent(Event event) {
     return true;
 }
 
+
+
 std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
     TUICtx&               ctx,
     int                   type,
@@ -1893,3 +1897,5 @@ bool CustomOverlay::OnEvent(Event event) {
     }
     return true;
 }
+
+} // namespace agentxx::client

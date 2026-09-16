@@ -57,14 +57,14 @@ public:
     ~SubAgentManagerTool() override;
 
     /// 在 EventBus 上注册 subagent 执行服务 (service.subagent.execute)
-    void registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus);
+    void registerOnBus(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
     /// 从 EventBus 注销
     void unregisterFromBus();
 
 private:
 
-    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
+    std::weak_ptr<agentxx::events::EventBus> registeredBus_;
     size_t                                  executeServerId_ = 0;
 };
 

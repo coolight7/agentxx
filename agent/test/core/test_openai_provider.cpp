@@ -37,7 +37,7 @@ namespace agentxx {
 namespace test {
 
 using namespace agentxx::util;
-namespace server = agentxx::server;
+namespace server = agentxx::protocol;
 
 namespace {
 agentxx::agent::ModelConfig makeOaiCfg(

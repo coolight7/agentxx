@@ -34,6 +34,8 @@ int g_tui_sidebar_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 /// 测试夹具: 最小 TUICtx + SidebarComponent (常驻 Info/Logs 标签)

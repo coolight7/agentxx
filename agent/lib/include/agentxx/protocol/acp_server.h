@@ -18,7 +18,7 @@
 #include "agentxx/version.h"
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 using json = agentxx::util::Json;
 
@@ -292,5 +292,5 @@ private:
     std::atomic<bool>                          running_{false};
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 // ---------------------------------------------------------------------------
@@ -636,3 +638,5 @@ bool FilePickerOverlay::OnEvent(Event event) {
     // 模态是遮挡层: 其余事件一律吞掉 (输入字符不得落到被遮挡的输入框)
     return true;
 }
+
+} // namespace agentxx::client

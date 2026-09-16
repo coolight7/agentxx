@@ -35,7 +35,7 @@
 #include <vector>
 
 namespace agentxx {
-namespace event {
+namespace events {
 
 /// 仅用作 EventStream<> 模板参数的类型擦除基类
 /// - 所有具体事件流都是 EventStream<T> 或 RequestResponseStream<TReq,TResp>
@@ -666,5 +666,9 @@ private:
     double turnTpsDurationSec_ = 0.0; ///< 本轮累计流式耗时 (秒)
 };
 
-} // namespace event
+} // namespace events
+
+// 兼容别名
+namespace event = events;
+
 } // namespace agentxx

@@ -108,7 +108,7 @@ public:
 /// 中断总线往返: MockIO 注册后, request 应确定性拿到结果 (不依赖 stdin/不超时)
 asio::awaitable<void> test_interrupt_bus_request_response() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto io          = std::make_shared<MockIO>();
     io->interruptTag = "answered";
@@ -136,7 +136,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
 
     // 新总线 (无任何 server) 上 request 应超时返回 nullopt
-    auto deadBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto deadBus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto resp2
         = co_await deadBus->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
             agentxx::events::Topic::Interrupt,
@@ -158,7 +158,7 @@ asio::awaitable<void> test_interrupt_bus_request_response() {
 /// 权限总线往返: MockIO 注册后, request 应确定性拿到 Allow/Deny 决策
 asio::awaitable<void> test_permission_bus_request_response() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto io             = std::make_shared<MockIO>();
     io->permissionAllow = true;
@@ -198,7 +198,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
     }
 
     // 无 server 的总线应超时
-    auto deadBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto deadBus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto resp2   = co_await deadBus
                      ->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
                          agentxx::events::Topic::Permission,
@@ -213,7 +213,7 @@ asio::awaitable<void> test_permission_bus_request_response() {
 /// #4: 同一 IO 重复 registerOnBus 不应累积 handler (泄漏) 且最新 handler 生效
 asio::awaitable<void> test_registerOnBus_no_accumulation() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto& interruptRR
         = sessionBus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
@@ -265,7 +265,7 @@ asio::awaitable<void> test_registerOnBus_no_accumulation() {
 asio::awaitable<void> test_interrupt_bus_custom_handler() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     // 注册一个自定义 handler, 直接返回固定结果
     auto& rr
@@ -410,7 +410,7 @@ asio::awaitable<void> test_permission_relative_path() {
 /// - 三态: Allow(已明确允许) / Deny(已明确拒绝) / Ask(未获批准, 不询问)
 asio::awaitable<void> test_permission_path_query_decisions() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto io = std::make_shared<MockIO>(); // 记录询问次数 (查询不应产生任何询问)
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
@@ -520,7 +520,7 @@ asio::awaitable<void> test_permission_path_query_decisions() {
 /// 无目标声明 (工具级) 的询问不下发目标描述块
 asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto io             = std::make_shared<MockIO>();
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
@@ -660,7 +660,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
 /// 后续访问该路径或其子目录直接按规则处理, 不再经总线询问 (prompter 不被调用)
 asio::awaitable<void> test_permission_remember_rule() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     // prompter (模拟客户端权限询问应答): 记录被询问次数
     auto io             = std::make_shared<MockIO>();
@@ -742,9 +742,9 @@ asio::awaitable<void> test_permission_remember_rule() {
 /// - 目录规则按最长前缀匹配覆盖其下全部子目录与文件 (读/写各自一套规则)
 asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
     // 生产拓扑: 两个独立总线 (agent 全局总线 / 会话总线)
-    auto agentBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto agentBus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     // 客户端权限应答 (勾选"记住本次选择", 允许)
     auto io                = std::make_shared<MockIO>();
@@ -866,7 +866,7 @@ asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
 ///   目录形式则经父链回退命中 `/x/a` 的 ALLOW。两种形式都**不会**绕过深层 DENY
 asio::awaitable<void> test_permission_subdir_deny_over_wildcard_allow() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto io             = std::make_shared<MockIO>(); // 记录询问次数
     io->permissionAllow = true;
     io->registerOnBus(sessionBus);
@@ -1100,7 +1100,7 @@ void test_make_interrupt_result_forms() {
 /// 客户端据此通用渲染 (分段头/勾选项/一键按钮), 不再识别 permission 语义
 asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto io             = std::make_shared<MockIO>();
     io->permissionAllow = true;
@@ -1280,7 +1280,7 @@ void test_interrupt_arg_ui_roundtrip() {
 /// 契约外的中断结果 (非对象形态) 不被接受: HIL 按未应答处理, 权限询问按拒绝处理
 asio::awaitable<void> test_malformed_result_rejected() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     // HIL: 结果非对象 → handled = false (AgentRunner 据此不 resume)
     auto io             = std::make_shared<MockIO>();
@@ -1331,9 +1331,9 @@ asio::awaitable<void> test_malformed_result_rejected() {
 /// 处理器完成 (客户端不参与权限语义)
 asio::awaitable<void> test_permission_remember_via_result_options() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     // agent 全局总线 (权限中间件注册在此; 与 IO 端点所在的会话总线相互独立)
-    auto agentBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    auto agentBus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto io                = std::make_shared<MockIO>();
     io->permissionAllow    = true;
@@ -1398,8 +1398,8 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
 /// - 但配置文件中显式拒绝的路径 (addConfigDenyPath) 仍然保持拒绝且不询问
 asio::awaitable<void> test_permission_full_auth_rule() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
-    auto agentBus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
+    auto agentBus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto io                = std::make_shared<MockIO>();
     io->permissionAllow    = true;
@@ -1476,7 +1476,7 @@ asio::awaitable<void> test_permission_full_auth_rule() {
 /// resume 值 (消费端按控件 id 取值)
 asio::awaitable<void> test_hil_interrupt_result_object_values_only() {
     auto sessionBus
-        = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
     auto io = std::make_shared<MockIO>();
     io->registerOnBus(sessionBus);

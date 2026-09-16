@@ -11,6 +11,8 @@
 #include "ftxui/screen/box.hpp"
 #include <algorithm>
 
+namespace agentxx::client {
+
 /// 布局迭代上限 (与 ftxui::Render 内部保持一致)
 inline constexpr int kMaxLayoutIteration = 20;
 
@@ -92,3 +94,5 @@ inline bool handleWheelScroll(
     }
     return false;
 }
+
+} // namespace agentxx::client

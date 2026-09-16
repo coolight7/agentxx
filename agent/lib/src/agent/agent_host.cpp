@@ -150,7 +150,7 @@ AgentHost::AgentHost(Config cfg) :
         poolThreads = std::max(2u, std::thread::hardware_concurrency() / 2);
     }
     threadPool_ = std::make_shared<asio::thread_pool>(poolThreads);
-    hostBus_    = std::make_shared<agentxx::event::EventBus>(ioCtx_->get_executor());
+    hostBus_    = std::make_shared<agentxx::events::EventBus>(ioCtx_->get_executor());
 }
 
 AgentHost::~AgentHost() = default;
@@ -159,7 +159,7 @@ std::shared_ptr<asio::io_context> AgentHost::ioCtx() {
     return ioCtx_;
 }
 
-std::shared_ptr<agentxx::event::EventBus> AgentHost::hostBus() {
+std::shared_ptr<agentxx::events::EventBus> AgentHost::hostBus() {
     return hostBus_;
 }
 
@@ -867,7 +867,7 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendMessage(events::ReqHostM
 
 void AgentHost::registerRemoteAgent(
     std::string_view                            agentId,
-    std::shared_ptr<agentxx::server::A2aClient> client
+    std::shared_ptr<agentxx::protocol::A2aClient> client
 ) {
     if (client) {
         util::insertOrAssignHeterogeneous(remoteAgents_, agentId, std::move(client));
@@ -881,7 +881,7 @@ void AgentHost::unregisterRemoteAgent(std::string_view agentId) {
 }
 
 asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
-    std::shared_ptr<agentxx::server::A2aClient> client,
+    std::shared_ptr<agentxx::protocol::A2aClient> client,
     const events::ReqHostMessage&               req
 ) {
     // 1) SendMessage → 服务端创建 task
@@ -892,7 +892,7 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
             .errorMessage = fmt::format("A2A SendMessage failed: {}", sendResult.error()),
         };
     }
-    auto taskId = agentxx::server::A2aClient::extractTaskId(sendResult.value());
+    auto taskId = agentxx::protocol::A2aClient::extractTaskId(sendResult.value());
     if (taskId.empty()) {
         co_return events::RespHostMessage{
             .hasError     = true,
@@ -917,10 +917,10 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
             };
         }
         const auto& task  = taskResult.value();
-        auto        state = agentxx::server::A2aClient::extractTaskState(task);
+        auto        state = agentxx::protocol::A2aClient::extractTaskState(task);
         if (state == "TASK_STATE_COMPLETED") {
             co_return events::RespHostMessage{
-                .content = agentxx::server::A2aClient::extractArtifactText(task),
+                .content = agentxx::protocol::A2aClient::extractArtifactText(task),
             };
         }
         if (state == "TASK_STATE_FAILED" || state == "TASK_STATE_CANCELED"

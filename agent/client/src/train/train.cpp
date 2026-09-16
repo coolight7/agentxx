@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+namespace agentxx::client {
+
 std::string findProjectRoot() {
     auto exeDir    = std::filesystem::current_path();
     auto candidate = exeDir;
@@ -217,3 +219,5 @@ void runTrainingMode(
 
     trainIoCtx.run();
 }
+
+} // namespace agentxx::client

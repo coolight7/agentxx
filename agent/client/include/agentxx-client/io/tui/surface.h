@@ -33,6 +33,8 @@
 #include <string_view>
 #include <utility>
 
+namespace agentxx::client {
+
 /// 弹窗面性风格配色 (取值自当前主题, 见 TUITheme::surface*)
 struct TuiSurfaceStyle {
     ftxui::Color body;    ///< 内容区背景 (同时填充内边距与区域间距)
@@ -213,3 +215,5 @@ inline ftxui::Element tuiSurfaceToast(
 inline ftxui::Element tuiSurfaceToast(const TuiSurfaceStyle& style, std::string_view message) {
     return tuiSurfaceToast(style, message, style.title);
 }
+
+} // namespace agentxx::client

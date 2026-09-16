@@ -3,7 +3,7 @@
 #include "agentxx/util/log.h"
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 A2aClient::A2aClient(Config config) :
     config_(std::move(config)) {}
@@ -186,5 +186,5 @@ std::string A2aClient::extractArtifactText(const json& task) {
     return result;
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

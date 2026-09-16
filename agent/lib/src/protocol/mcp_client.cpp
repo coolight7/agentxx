@@ -40,7 +40,7 @@
 #include <sstream>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 namespace {
 /// 计算命名空间前缀后的对外 tool 名称 (namespace 非空时为 "namespace_name")
@@ -608,12 +608,12 @@ std::string McpClient::effectiveProtocolVersion() const {
 
 json McpClient::buildModernMeta() const {
     json meta;
-    meta[std::string{agentxx::server::kMetaProtocolVersion}] = effectiveProtocolVersion();
+    meta[std::string{agentxx::protocol::kMetaProtocolVersion}] = effectiveProtocolVersion();
     json info;
-    info["name"]                                                = config_.clientName;
-    info["version"]                                             = config_.clientVersion;
-    meta[std::string{agentxx::server::kMetaClientInfo}]         = std::move(info);
-    meta[std::string{agentxx::server::kMetaClientCapabilities}] = json::object();
+    info["name"]                                                  = config_.clientName;
+    info["version"]                                               = config_.clientVersion;
+    meta[std::string{agentxx::protocol::kMetaClientInfo}]         = std::move(info);
+    meta[std::string{agentxx::protocol::kMetaClientCapabilities}] = json::object();
     return meta;
 }
 
@@ -2379,5 +2379,5 @@ std::string McpClientTool::namespacedName() const {
     return makeNamespacedName(toolNamespace_, def_.name);
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

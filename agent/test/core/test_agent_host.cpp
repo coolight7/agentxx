@@ -142,7 +142,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
             // 父会话: 供子代理继承 bus (HIL 冒泡路径)
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->bus
-                = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+                = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
             agentxx::events::ReqSubagentBatch e2eReq{
@@ -246,7 +246,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->setModelName("parent-model");
             parentSession->bus
-                = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+                = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:8406)
             agentxx::events::ReqSubagentBatch sameCtxReq{
@@ -743,7 +743,7 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
             // 空总线即可)
             auto parentSession = agent->getContext()->getSession("parent-session");
             parentSession->bus
-                = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+                = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
 
             // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE (gimplify.cc:841)
             agentxx::events::ReqSubagentBatch nestedReq{
@@ -950,7 +950,7 @@ asio::awaitable<void> test_host_remote_a2a() {
     std::expected<agentxx::events::RespHostMessage, std::string> resp;
     std::atomic<bool>                                            finished{false};
     std::thread                                                  serverThread;
-    std::shared_ptr<agentxx::server::A2aServer>                  a2aServer;
+    std::shared_ptr<agentxx::protocol::A2aServer>                  a2aServer;
 
     asio::co_spawn(
         *io,
@@ -959,11 +959,11 @@ asio::awaitable<void> test_host_remote_a2a() {
             auto remoteAgent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await remoteAgent->init();
 
-            agentxx::server::A2aServer::Config scfg;
+            agentxx::protocol::A2aServer::Config scfg;
             scfg.httpConfig.address = "127.0.0.1";
             scfg.httpConfig.port    = 0;
             scfg.serverName         = "remote-worker";
-            a2aServer = std::make_shared<agentxx::server::A2aServer>(remoteAgent, std::move(scfg));
+            a2aServer = std::make_shared<agentxx::protocol::A2aServer>(remoteAgent, std::move(scfg));
             serverThread = std::thread([s = a2aServer]() {
                 s->start();
             });
@@ -974,9 +974,9 @@ asio::awaitable<void> test_host_remote_a2a() {
                 co_await t.async_wait(asio::use_awaitable);
             }
 
-            agentxx::server::A2aClient::Config cc;
+            agentxx::protocol::A2aClient::Config cc;
             cc.baseUrl  = "http://127.0.0.1:" + std::to_string(a2aServer->port());
-            auto client = std::make_shared<agentxx::server::A2aClient>(std::move(cc));
+            auto client = std::make_shared<agentxx::protocol::A2aClient>(std::move(cc));
 
             // 宿主 + 根 agent + 远程注册
             agentxx::agent::AgentHost::Config hostCfg;

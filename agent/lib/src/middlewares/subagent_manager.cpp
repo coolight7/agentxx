@@ -89,7 +89,7 @@ void SubagentManagerMiddlewareHandle::applyConfig(
 }
 
 void SubagentManagerMiddlewareHandle::registerOnBus(
-    const std::shared_ptr<agentxx::event::EventBus>& bus
+    const std::shared_ptr<agentxx::events::EventBus>& bus
 ) {
     if (!bus) {
         return;

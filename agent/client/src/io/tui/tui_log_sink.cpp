@@ -1,6 +1,8 @@
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 
+namespace agentxx::client {
+
 void TUILogSink::onLog(const agentxx::util::LogEntry& entry) {
     // 日志等级过滤: 低于当前设置的日志等级不入列 (设置弹窗可调整)。
     // Out (stdout 输出类) 恒显示 —— 它是模型输出/工具结果等重要内容,
@@ -24,3 +26,5 @@ std::vector<TUILogSink::Line> TUILogSink::snapshot() const {
 void TUILogSink::clear() {
     lines_.clear();
 }
+
+} // namespace agentxx::client

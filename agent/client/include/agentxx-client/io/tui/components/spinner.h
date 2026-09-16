@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+namespace agentxx::client {
+
 /// 循环加载动画组件 (Spinner)
 ///
 /// 基于 FTXUI 动画机制实现时间驱动的帧序列动画:
@@ -97,3 +99,5 @@ private:
     /// (如 ScreenInteractive 尚未启动), 后续渲染仍可重新启动循环
     bool animating_ = false;
 };
+
+} // namespace agentxx::client

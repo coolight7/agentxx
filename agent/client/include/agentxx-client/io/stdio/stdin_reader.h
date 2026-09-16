@@ -9,6 +9,8 @@
 #include <string>
 #include <thread>
 
+namespace agentxx::client {
+
 /// 异步 stdin 读取器
 /// - 在独立线程上阻塞读取 std::cin, 通过 channel 提供行给 io_context 协程
 /// - 避免在单线程 io_context 上直接 std::getline 阻塞整个事件循环
@@ -39,3 +41,5 @@ public:
 
     ~StdinReader();
 };
+
+} // namespace agentxx::client

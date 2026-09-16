@@ -148,7 +148,7 @@ void testModelRegistryConcurrency() {
 // ---------------------------------------------------------------------------
 
 void testMcpServerRegistrationConcurrency() {
-    using namespace agentxx::server;
+    using namespace agentxx::protocol;
 
     McpServer server;
 

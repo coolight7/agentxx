@@ -5,6 +5,8 @@
 #include <string_view>
 #include <utility>
 
+namespace agentxx::client {
+
 /// 界面翻译表列 (与 TUISettings 语言设置一致)
 ///
 /// 语言取值定义在 tui_settings.h 的 TuiLanguage (Auto=0 自动 / ZhCn=1 简体中文 /
@@ -53,3 +55,5 @@ template<typename... Args>
 inline std::string trf(std::string_view key, Args&&... args) {
     return TuiI18n::instance().t(key, std::forward<Args>(args)...);
 }
+
+} // namespace agentxx::client

@@ -26,7 +26,7 @@ namespace test {
 
 /// 1. 单向事件流: 多订阅者派发 + execHit 自动移除 + 异常隔离
 asio::awaitable<void> test_eventstream_publish() {
-    auto  bus    = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto  bus    = agentxx::events::EventBus{co_await asio::this_coro::executor};
     auto& stream = bus.get<TestEvent>("test.ping");
 
     std::atomic<int> permanentCount{0};
@@ -102,7 +102,7 @@ asio::awaitable<void> test_eventstream_publish() {
 
 /// 2. 请求-响应: 正常响应 + correlationId 关联
 asio::awaitable<void> test_requestresponse_normal() {
-    auto  bus = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto  bus = agentxx::events::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa");
 
     auto serverId
@@ -121,7 +121,7 @@ asio::awaitable<void> test_requestresponse_normal() {
 
 /// 3. 请求-响应: 超时返回 nullopt
 asio::awaitable<void> test_requestresponse_timeout() {
-    auto  bus = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto  bus = agentxx::events::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.slow");
 
     // server 永不 respond (sleep 久于 timeout)
@@ -146,7 +146,7 @@ asio::awaitable<void> test_requestresponse_timeout() {
 
 /// 4. 请求-响应: 无 server 时返回 nullopt
 asio::awaitable<void> test_requestresponse_noserver() {
-    auto  bus = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto  bus = agentxx::events::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.empty");
 
     auto resp = co_await rr.request(TestReq{.question = "x"}, std::chrono::seconds(2));
@@ -158,7 +158,7 @@ asio::awaitable<void> test_requestresponse_noserver() {
 /// 回归: server 处理器抛异常时, request 须返回 unexpected(错误),
 /// 而非默认构造的"成功"响应 (修复前 catch 仅记日志, out 保持默认成功值 → 误判成功)
 asio::awaitable<void> test_requestresponse_server_exception() {
-    auto  bus = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto  bus = agentxx::events::EventBus{co_await asio::this_coro::executor};
     auto& rr  = bus.getRR<TestReq, TestResp>("test.qa.throw");
 
     // server 处理器抛异常 -> 经 channel_cancelled 传回, 请求方 waitResp 抛异常
@@ -175,7 +175,7 @@ asio::awaitable<void> test_requestresponse_server_exception() {
 
 /// 5. 定时器事件流: once 触发一次且不阻塞调用者
 asio::awaitable<void> test_timer_once() {
-    auto             bus = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto             bus = agentxx::events::EventBus{co_await asio::this_coro::executor};
     std::atomic<int> fireCount{0};
 
     auto id = bus.timer<TestEvent>().once(
@@ -200,7 +200,7 @@ asio::awaitable<void> test_timer_once() {
 
 /// 6. EventBus 便捷方法 publish/request 与复用同 topic
 asio::awaitable<void> test_eventbus_convenience() {
-    auto bus = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto bus = agentxx::events::EventBus{co_await asio::this_coro::executor};
 
     std::atomic<int> seen{0};
     bus.get<TestEvent>("conv.topic").subscribe([&](const TestEvent& e) -> asio::awaitable<void> {
@@ -231,7 +231,7 @@ asio::awaitable<void> test_eventbus_convenience() {
 
 /// 8. EventBus 前缀订阅: 匹配 topic 前缀的事件经 any 转发, 取消后不再触发
 asio::awaitable<void> test_eventbus_prefix_subscribe() {
-    auto bus       = agentxx::event::EventBus{co_await asio::this_coro::executor};
+    auto bus       = agentxx::events::EventBus{co_await asio::this_coro::executor};
     int  matched   = 0;
     int  unrelated = 0;
     auto id = bus.listenPrefix("plugin.", [&](std::string_view topic, const std::any& payload) {

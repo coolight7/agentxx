@@ -37,6 +37,8 @@ int g_tui_context_overlay_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 /// 测试夹具: 最小 TUICtx + ContextOverlay

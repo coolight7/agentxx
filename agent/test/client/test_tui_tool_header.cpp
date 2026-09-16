@@ -37,6 +37,8 @@ int g_tui_tool_header_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 static AgentxxPluginString makeTestString(std::string_view s) {

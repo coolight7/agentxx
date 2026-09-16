@@ -7,7 +7,7 @@
 #include <chrono>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 std::unique_ptr<OpenAIProvider> OpenAIProvider::create(const agentxx::agent::ModelConfig& config) {
     return std::unique_ptr<OpenAIProvider>(new OpenAIProvider(config));
@@ -471,7 +471,7 @@ namespace {
 ///   数组非空即存在有效载体
 /// - 判定实现与 Anthropic 等协议共用, 见 [isEmptyResponse]
 bool isEmptyResponse(const neograph::ChatCompletion& completion) {
-    return agentxx::server::isEmptyResponse(
+    return agentxx::protocol::isEmptyResponse(
         completion,
         OpenAIProvider::kResponsesReasoningItemsKey
     );
@@ -2179,5 +2179,5 @@ void OpenAIProvider::extractThinkTags(std::string& content, std::string& thinkin
     content = cleaned;
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

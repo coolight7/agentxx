@@ -7,7 +7,7 @@
 #include <chrono>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 namespace {
 
@@ -16,7 +16,7 @@ namespace {
 ///   思考载体 (回传上下文时需要), 不视为空; 数组非空即存在有效载体
 /// - 判定实现与 OpenAI 等协议共用, 见 [isEmptyResponse]
 bool isEmptyResponse(const neograph::ChatCompletion& completion) {
-    return agentxx::server::isEmptyResponse(completion, AnthropicProvider::kThinkingBlocksKey);
+    return agentxx::protocol::isEmptyResponse(completion, AnthropicProvider::kThinkingBlocksKey);
 }
 
 } // namespace
@@ -603,5 +603,5 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     co_return completion;
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

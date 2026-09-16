@@ -17,6 +17,8 @@
 #include <windows.h>
 #endif
 
+namespace agentxx::client {
+
 namespace {
 
 /// 解析单个语言标签/区域标识符并尝试在已支持语言中匹配
@@ -187,3 +189,5 @@ std::string detectSystemLocale() {
 TuiLanguage detectSystemLanguage() {
     return matchSupportedLanguage(detectSystemLocale());
 }
+
+} // namespace agentxx::client

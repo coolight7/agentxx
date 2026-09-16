@@ -41,6 +41,8 @@ int g_tui_surface_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 /// 边框字符集 (面性风格弹窗不应出现)

@@ -490,7 +490,7 @@ void test_wire_list_dir_protocol() {
 }
 
 void test_cross_device_determination() {
-    TUICtx ctx;
+    agentxx::client::TUICtx ctx;
 
     // 内置模式: remoteUrl 为空 -> 始终判定为同设备 (false)
     ctx.remoteUrl      = "";

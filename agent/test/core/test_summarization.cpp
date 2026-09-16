@@ -111,7 +111,7 @@ struct SummarizationTestEnv {
     ) {
         ctx = std::make_shared<agentxx::agent::AgentContext>();
         static asio::io_context s_ioCtx;
-        ctx->bus         = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
+        ctx->bus         = std::make_shared<agentxx::events::EventBus>(s_ioCtx.get_executor());
         ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
@@ -1627,7 +1627,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
     {
         auto                    ctx = std::make_shared<agentxx::agent::AgentContext>();
         static asio::io_context s_ioCtx;
-        ctx->bus         = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
+        ctx->bus         = std::make_shared<agentxx::events::EventBus>(s_ioCtx.get_executor());
         ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
@@ -2117,7 +2117,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
     {
         auto                    ctx = std::make_shared<agentxx::agent::AgentContext>();
         static asio::io_context s_ioCtx;
-        ctx->bus         = std::make_shared<agentxx::event::EventBus>(s_ioCtx.get_executor());
+        ctx->bus         = std::make_shared<agentxx::events::EventBus>(s_ioCtx.get_executor());
         ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();

@@ -2631,7 +2631,7 @@ asio::awaitable<void> test_plugin_real_link() {
     linkCtx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
     linkCtx->agentConfig->workDir    = testDir; ///< 相对路径基准经宿主接口注入
     linkCtx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    linkCtx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    linkCtx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     linkCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     linkCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(linkCtx);
     linkCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);

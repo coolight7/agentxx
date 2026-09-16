@@ -36,6 +36,8 @@ int g_tui_widget_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 using agentxx::client::kNoBox;

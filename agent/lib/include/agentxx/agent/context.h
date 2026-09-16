@@ -17,9 +17,9 @@
 #include <thread>
 #include <vector>
 
-namespace agentxx::event {
+namespace agentxx::events {
 class EventBus;
-} // namespace agentxx::event
+} // namespace agentxx::events
 
 namespace neograph::graph {
 class CancelToken;
@@ -122,7 +122,7 @@ public:
     std::shared_ptr<AgentIOBase> io = nullptr;
 
     /// 本会话的事件总线 (会话级事件: interrupt/permission/tool 等)
-    std::shared_ptr<agentxx::event::EventBus> bus = nullptr;
+    std::shared_ptr<agentxx::events::EventBus> bus = nullptr;
 
     /// 本会话的上下文统计
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
@@ -444,7 +444,7 @@ public:
     /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
     ///   weak_ptr<AgentContext> 取用
     /// - 完整定义在使用点 ([base_agent.h](/agent/lib/include/agentxx/agent/base_agent.h)) 引入
-    std::shared_ptr<agentxx::event::EventBus> bus = nullptr;
+    std::shared_ptr<agentxx::events::EventBus> bus = nullptr;
 
     /// 模型 Provider 注册表 (共享)
     /// - 由 BaseAgent 在 init() 中创建并注入

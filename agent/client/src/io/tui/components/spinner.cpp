@@ -1,6 +1,8 @@
 #include "agentxx-client/io/tui/components/spinner.h"
 #include "ftxui/component/animation.hpp"
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 SpinnerComponent::SpinnerComponent(Config config) :
@@ -93,3 +95,5 @@ void SpinnerComponent::setRunning(bool runningState) {
     frameIndex_ = 0;
     elapsed_    = {};
 }
+
+} // namespace agentxx::client

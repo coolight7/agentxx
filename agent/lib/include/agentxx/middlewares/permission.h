@@ -249,7 +249,7 @@ public:
     /// - 权限询问 (service.permission) 不同: 由 [requestPermission] 经**会话总线**
     ///   (session->bus) 发起, 因为应答方是绑定到会话的 IO 端点
     /// - 重复调用会先注销上一次注册 (见 unregisterFromBus)
-    void registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus);
+    void registerOnBus(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
     /// 从 EventBus 注销
     void unregisterFromBus();
@@ -268,7 +268,7 @@ private:
     /// <sessionId, 隔离边界> (仅 io 线程读写, 与中间件链同线程模型, 无需锁)
     std::map<std::string, SessionFsIsolation, std::less<>> sessionIsolations_;
 
-    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
+    std::weak_ptr<agentxx::events::EventBus> registeredBus_;
     size_t                                  checkServerId_       = 0;
     size_t                                  setIsolationSubId_   = 0;
     size_t                                  clearIsolationSubId_ = 0;

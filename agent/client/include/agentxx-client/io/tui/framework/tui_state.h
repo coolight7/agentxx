@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+namespace agentxx::client {
+
 /// 中断表单提交结果 (UI 线程 → client 线程; 一次提交/取消整份表单)
 ///
 /// - `cancelled == false`: `values` 为 **控件 id → 值** 的对象
@@ -258,3 +260,5 @@ private:
     std::mutex                      mutex_;
     std::shared_ptr<TUIRenderState> state_;
 };
+
+} // namespace agentxx::client

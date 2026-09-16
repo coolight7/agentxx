@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 
+namespace agentxx::client {
+
 /// 动画等级 (从低到高)
 ///
 /// 组件按所需效果声明最低动画等级, 经 TUISettings::isAnimationEnabled()
@@ -405,3 +407,5 @@ private:
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
     std::shared_ptr<agentxx::util::SettingsDb> db_;
 };
+
+} // namespace agentxx::client

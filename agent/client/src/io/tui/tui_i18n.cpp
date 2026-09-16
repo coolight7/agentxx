@@ -3,6 +3,8 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include <unordered_map>
 
+namespace agentxx::client {
+
 // ---------------------------------------------------------------------------
 // 翻译表
 //
@@ -267,3 +269,5 @@ std::string_view TuiI18n::t(std::string_view key) const noexcept {
     const TuiLanguage lang = TUISettings::instance().effectiveLanguage();
     return (lang == TuiLanguage::EnUs) ? it->second.first : it->second.second;
 }
+
+} // namespace agentxx::client

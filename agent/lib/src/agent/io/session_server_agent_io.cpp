@@ -64,9 +64,9 @@ static constexpr auto kUplinkWarnCooldown = std::chrono::seconds{30};
 /// 向总线发布宿主约定事件 (异步投递到总线 executor, 不阻塞调用方;
 /// 总线为空时跳过)。topic 组装为 "plugin.{kHostPluginName}.{event}"。
 static void publishHostEvent(
-    const std::shared_ptr<agentxx::event::EventBus>& bus,
-    std::string_view                                 event,
-    std::string                                      dataJson
+    const std::shared_ptr<agentxx::events::EventBus>& bus,
+    std::string_view                                  event,
+    std::string                                       dataJson
 ) {
     if (!bus) {
         return;

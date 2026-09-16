@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 
+namespace agentxx::client {
+
 class StderrLogSink : public agentxx::util::ThreadedLogSink {
 public:
 
@@ -76,3 +78,5 @@ protected:
     /// 处理对端消息: 拦截 WireAppendComponentInfo (启动信息统计), 其余委托基类
     void onPeerMessage(agentxx::agent::WireMessage msg) override;
 };
+
+} // namespace agentxx::client

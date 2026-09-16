@@ -38,6 +38,8 @@
 #include <thread>
 #include <vector>
 
+namespace agentxx::client {
+
 // ---------------------------------------------------------------------------
 // TUI 共享工具函数
 // (时长/时间戳格式化已迁移到
@@ -637,3 +639,5 @@ private:
     static constexpr const char* kInfoTabId           = "xx_info";
     static constexpr int         kInfoSidebarMinWidth = 120;
 };
+
+} // namespace agentxx::client

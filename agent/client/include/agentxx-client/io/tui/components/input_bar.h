@@ -16,6 +16,8 @@
 #include <string_view>
 #include <vector>
 
+namespace agentxx::client {
+
 /// 输入栏组件: 指示器 + 多行文本输入 + 附件挂载托盘 + 多模态选择按钮
 ///
 /// 事件处理:
@@ -161,3 +163,5 @@ private:
     /// 上一次粘贴事件时间 (用于粘贴中断超时检测)
     std::chrono::steady_clock::time_point lastPasteEventTime_;
 };
+
+} // namespace agentxx::client

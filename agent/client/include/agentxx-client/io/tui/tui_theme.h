@@ -4,6 +4,8 @@
 #include <markdown/theme.hpp>
 #include <string>
 
+namespace agentxx::client {
+
 /// TUI 主题配色
 /// - 通过静态函数 darkTheme()/lightTheme() 生成内置主题
 /// - 默认使用黑色主题 darkTheme()
@@ -52,3 +54,5 @@ public:
     /// - 适用于浅色终端背景
     static TUITheme lightTheme();
 };
+
+} // namespace agentxx::client

@@ -602,7 +602,7 @@ Options:
             *agent->ioCtx,
             [agent]() -> asio::awaitable<void> {
                 co_await agent->init();
-                agentxx::server::StdioAcpServer server(agent, agentxx::util::Json::object());
+                agentxx::protocol::StdioAcpServer server(agent, agentxx::util::Json::object());
                 server.run();
                 co_return;
             },

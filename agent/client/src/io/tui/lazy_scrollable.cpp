@@ -6,6 +6,8 @@
 #include "ftxui/util/autoreset.hpp"
 #include <algorithm>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 /// 视口布局节点: SetBox/Render 委托给 LazyScrollable 组件。
@@ -556,3 +558,5 @@ void LazyScrollable::drawScrollbar(ftxui::Screen& screen) {
         screen.CellAt(x, y).character = c;
     }
 }
+
+} // namespace agentxx::client

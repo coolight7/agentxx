@@ -33,7 +33,7 @@ int g_mcp_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::server;
+using namespace agentxx::protocol;
 using namespace agentxx::util;
 
 // Unit test for version negotiation logic (doesn't require a server instance)

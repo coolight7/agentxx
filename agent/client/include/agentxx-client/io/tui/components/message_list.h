@@ -24,6 +24,8 @@ namespace agentxx::plugin {
 struct ClientToolDecor;
 }
 
+namespace agentxx::client {
+
 /// 消息列表组件 (Flutter ListView.builder 风格)
 ///
 /// 渲染架构: 封装 LazyScrollable, 经 itemCount/itemKey/estimateHeight/buildItem
@@ -365,3 +367,5 @@ private:
     std::vector<char> collapsibleIsStream_;
     ftxui::Box        areaBox_;
 };
+
+} // namespace agentxx::client

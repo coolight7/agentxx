@@ -106,7 +106,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    ctx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    ctx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     // 装配 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
@@ -1724,7 +1724,7 @@ throw new Error("top-level rollback probe");
         auto gctx                     = std::make_shared<agentxx::agent::AgentContext>();
         gctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
         gctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-        gctx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+        gctx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
         gctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
         gctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(gctx);
         gctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
@@ -2170,7 +2170,7 @@ throw new Error("top-level rollback probe");
         rollbackCtx->middlewareHandleContext
             = std::make_shared<agentxx::middleware::MiddlewareContext>();
         rollbackCtx->bus
-            = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+            = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
         rollbackCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
         rollbackCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(rollbackCtx);
         rollbackCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);

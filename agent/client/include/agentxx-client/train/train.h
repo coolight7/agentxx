@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+namespace agentxx::client {
+
 // ======================== 训练模式 ========================
 // 测试用例加载复用 agentxx::agent::loadTestCasesFromDirectory(dir, true)
 // 的递归实现, 不再在客户端重复维护一份目录遍历/JSON 解析代码。
@@ -22,3 +24,5 @@ void runTrainingMode(
     std::shared_ptr<agentxx::agent::AgentConfig> scorerConfig,
     std::shared_ptr<agentxx::agent::AgentConfig> optimizerConfig
 );
+
+} // namespace agentxx::client

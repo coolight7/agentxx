@@ -18,7 +18,7 @@
 #include "agentxx/util/http_server.h"
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 using json = agentxx::util::Json;
 
@@ -299,5 +299,5 @@ private:
     std::atomic<bool> stopped_{false};
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

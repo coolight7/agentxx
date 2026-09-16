@@ -17,6 +17,8 @@
 #include <mutex>
 #include <utility>
 
+namespace agentxx::client {
+
 // 首次会话启动通知的计数器 (仅用于控制台输出, 单会话场景下无需严格同步)
 static bool g_firstSessionDone = false;
 static int  g_mcpCount         = 0;
@@ -467,3 +469,5 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
     // 空对象 = 未提交/取消, 消费端按未应答处理)
     co_return agentxx::middleware::makeInterruptResult(values);
 }
+
+} // namespace agentxx::client

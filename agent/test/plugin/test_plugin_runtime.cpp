@@ -1886,7 +1886,7 @@ TestResult testPluginRuntime() {
     {
         auto           ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture f(ctx);
-        ctx->bus = std::make_shared<agentxx::event::EventBus>(f.io.get_executor());
+        ctx->bus = std::make_shared<agentxx::events::EventBus>(f.io.get_executor());
 
         const auto* host   = f.provider->hostView();
         const auto  ifaces = AgentIfaces::query(host);

@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 
+namespace agentxx::client {
+
 // ======================== 共享配置构建 ========================
 std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig();
 
@@ -11,3 +13,5 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeSubAgentConfig(
     std::shared_ptr<agentxx::agent::AgentConfig> base,
     std::string_view                             systemPrompt
 );
+
+} // namespace agentxx::client

@@ -19,7 +19,7 @@
 #include <vector>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 /// Anthropic Messages API provider (非流式/流式/tool_use/扩展思考)
 /// 文档: https://vercel.com/docs/ai-gateway/sdks-and-apis/anthropic-messages-api
@@ -362,5 +362,5 @@ private:
     agentxx::agent::ModelConfig config_;
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

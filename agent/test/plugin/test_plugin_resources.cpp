@@ -143,7 +143,7 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
     auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
     ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    ctx->bus = std::make_shared<agentxx::event::EventBus>(co_await asio::this_coro::executor);
+    ctx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);

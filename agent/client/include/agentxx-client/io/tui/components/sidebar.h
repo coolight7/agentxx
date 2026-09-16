@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace agentxx::client {
+
 /// 右侧边栏组件: 横向布局 = [当前高亮 tab 内容] | [tabs 竖向可滚动列表] + 左侧拖拽手柄
 ///
 /// - 左侧内容区: 当前激活 tab 的可滚动内容 + 底部 footer; 无激活 tab 时不渲染
@@ -156,3 +158,5 @@ private:
     static constexpr int kMaxWidth     = 120;
     static constexpr int kDefaultWidth = 46;
 };
+
+} // namespace agentxx::client

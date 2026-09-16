@@ -29,6 +29,8 @@ int g_tui_input_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 // ---------------------------------------------------------------------------
 // 测试夹具: 构建最小 TUICtx + InputComponent, 直接驱动 OnEvent
 // ---------------------------------------------------------------------------

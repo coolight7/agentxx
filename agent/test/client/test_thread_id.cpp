@@ -25,6 +25,8 @@ int g_thread_id_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 // ---------------------------------------------------------------------------
 // generateUniqueSessionId 唯一性验证
 // ---------------------------------------------------------------------------

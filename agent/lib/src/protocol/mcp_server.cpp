@@ -8,7 +8,7 @@
 #include <iostream>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 namespace {
 
@@ -1694,5 +1694,5 @@ void McpServer::writeJsonResponse(
     resp.prepare_payload();
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

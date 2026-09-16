@@ -11,6 +11,8 @@
 #include <functional>
 #include <string_view>
 
+namespace agentxx::client {
+
 /// 底部状态栏组件: 左侧模型名 + 上下文占用, 右侧会话选择 + 设置快捷键提示
 /// 展示组件 + 鼠标点击处理; 每帧重建渲染内容 (上下文 token 数实时变化)
 ///
@@ -53,3 +55,5 @@ private:
     Config                    config_;
     agentxx::client::UiHitMap hits_;
 };
+
+} // namespace agentxx::client

@@ -8,7 +8,7 @@
 #include "fmt/format.h"
 
 namespace agentxx {
-namespace event {
+namespace events {
 
 EventStreamInterface::EventStreamInterface(
     std::string_view      in_name,
@@ -707,5 +707,5 @@ void EventBridge::publishError(std::string message, std::string where) {
     );
 }
 
-} // namespace event
+} // namespace events
 } // namespace agentxx

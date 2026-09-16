@@ -1,5 +1,7 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 
+namespace agentxx::client {
+
 TUITheme TUITheme::darkTheme() {
     return TUITheme{
         .name                  = "Dark",
@@ -101,3 +103,5 @@ TUITheme TUITheme::lightTheme() {
         },
     };
 }
+
+} // namespace agentxx::client

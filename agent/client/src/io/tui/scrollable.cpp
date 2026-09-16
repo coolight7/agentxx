@@ -6,6 +6,8 @@
 #include "ftxui/util/autoreset.hpp"
 #include <algorithm>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 namespace {
@@ -264,3 +266,5 @@ bool Scrollable::OnEvent(ftxui::Event event) {
     }
     return false;
 }
+
+} // namespace agentxx::client

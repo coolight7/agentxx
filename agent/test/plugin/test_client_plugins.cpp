@@ -2865,7 +2865,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         namespace fs = std::filesystem;
         namespace pi = agentxx::plugin::plugin_interfaces;
 
-        agentxx::client::TuiPluginAdapter tuiAdapter{std::weak_ptr<::TUIClientAgentIO>{}};
+        agentxx::client::TuiPluginAdapter tuiAdapter{
+            std::weak_ptr<agentxx::client::TUIClientAgentIO>{}
+        };
         const auto                        tuiIfaces = tuiAdapter.supportedInterfaces();
 
         // 29.1 表整体 + 全部已实现子能力 (第三方插件按表名声明时同样不再误报)

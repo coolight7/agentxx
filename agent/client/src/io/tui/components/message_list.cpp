@@ -23,19 +23,9 @@
 #include <fstream>
 #include <thread>
 
-using namespace ftxui;
+namespace agentxx::client {
 
-// 本文件的消息列表组件定义在全局作用域 (见 message_list.h), 库内类型须显式引入
-using agentxx::client::collapsedPreviewBudget;
-using agentxx::client::estimateLines;
-using agentxx::client::estimateMarkdownLines;
-using agentxx::client::lastNonBlankLine;
-using agentxx::client::measureUiItem;
-using agentxx::client::renderMarkdown;
-using agentxx::client::renderUiItem;
-using agentxx::client::uiItemFromPluginJson;
-using agentxx::client::UiRenderCtx;
-using agentxx::client::UiRenderResult;
+using namespace ftxui;
 
 namespace {
 
@@ -1829,3 +1819,5 @@ size_t MessageListComponent::interruptEstimate(size_t msgIndex, int width) const
     }
     return interruptView_.estimate(*st->messages[msgIndex], width);
 }
+
+} // namespace agentxx::client

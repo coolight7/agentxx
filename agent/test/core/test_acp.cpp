@@ -30,7 +30,7 @@ int g_acp_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::server;
+using namespace agentxx::protocol;
 using namespace agentxx::util;
 
 // -------------------------------------------------------------------

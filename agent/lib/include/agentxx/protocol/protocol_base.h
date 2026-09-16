@@ -5,7 +5,7 @@
 #include "agentxx/util/log.h"
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 // JSON-RPC 统一错误码 (MCP/A2A/ACP 共用)
 inline constexpr int kJsonRpcParseError     = -32700;
@@ -52,5 +52,9 @@ inline void writeJsonResponse(
     resp.prepare_payload();
 }
 
-} // namespace server
+} // namespace protocol
+
+// 兼容别名
+namespace server = protocol;
+
 } // namespace agentxx

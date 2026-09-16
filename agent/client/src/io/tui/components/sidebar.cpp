@@ -5,6 +5,8 @@
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 SidebarComponent::SidebarComponent(TUICtx& ctx) :
@@ -294,3 +296,5 @@ bool SidebarComponent::handleListMouse(const Mouse& mouse) {
     }
     return true;
 }
+
+} // namespace agentxx::client

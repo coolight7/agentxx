@@ -23,11 +23,11 @@ int g_a2a_failed = 0;
 namespace agentxx {
 namespace test {
 
-using agentxx::server::A2aClient;
-using agentxx::server::A2aServer;
-using agentxx::server::A2aTaskState;
-using agentxx::server::taskStateFromString;
-using agentxx::server::taskStateToString;
+using agentxx::protocol::A2aClient;
+using agentxx::protocol::A2aServer;
+using agentxx::protocol::A2aTaskState;
+using agentxx::protocol::taskStateFromString;
+using agentxx::protocol::taskStateToString;
 using json = agentxx::util::Json;
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ static void test_task_state_conversion() {
 }
 
 static void test_terminal_state() {
-    using agentxx::server::isTerminalState;
+    using agentxx::protocol::isTerminalState;
     XX_TEST_EXPECT_TRUE(isTerminalState(A2aTaskState::Completed));
     XX_TEST_EXPECT_TRUE(isTerminalState(A2aTaskState::Failed));
     XX_TEST_EXPECT_TRUE(isTerminalState(A2aTaskState::Canceled));

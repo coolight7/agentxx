@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <vector>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 namespace {
@@ -183,3 +185,5 @@ bool StatusBarComponent::OnEvent(Event event) {
     (*action)();
     return true;
 }
+
+} // namespace agentxx::client

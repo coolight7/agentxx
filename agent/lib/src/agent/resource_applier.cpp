@@ -325,9 +325,9 @@ bool AgentResourceApplier::addMcpServer(
     // 连接身份: client 在登记前创建, 协程各阶段经指针比对识别 stale 条目
     // (注销后旧协程不再写回任何状态; 连接释放依赖 shared_ptr 引用计数 —— 不与
     // 执行中网络操作并发 close, 由最后一个引用析构时关闭, 规避竞态)
-    auto client = std::make_shared<server::McpClient>(server::McpClient::Config{
+    auto client = std::make_shared<protocol::McpClient>(protocol::McpClient::Config{
         .serverUrl       = cfg.url,
-        .protocolVersion = std::string{server::McpClient::kProtocol2026_07_28},
+        .protocolVersion = std::string{protocol::McpClient::kProtocol2026_07_28},
         .toolNamespace   = ns,
         .initTimeout
         = cfg.toolTimeout.count() > 0 ? cfg.toolTimeout : std::chrono::milliseconds{10000},
@@ -396,6 +396,7 @@ bool AgentResourceApplier::deactivateMcp(std::string_view nameSpace) {
             ioExecutor_,
             [c = it->second.client]() -> asio::awaitable<void> {
                 co_await c->close();
+                co_return;
             },
             asio::detached
         );
@@ -406,7 +407,7 @@ bool AgentResourceApplier::deactivateMcp(std::string_view nameSpace) {
 
 void AgentResourceApplier::failMcp(
     const std::string&                        ns,
-    const std::shared_ptr<server::McpClient>& client
+    const std::shared_ptr<protocol::McpClient>& client
 ) {
     auto it = mcpEntries_.find(ns);
     if (it == mcpEntries_.end() || it->second.client != client) {
@@ -418,7 +419,7 @@ void AgentResourceApplier::failMcp(
 
 void AgentResourceApplier::spawnMcpConnect(
     std::string                        ns,
-    std::shared_ptr<server::McpClient> client
+    std::shared_ptr<protocol::McpClient> client
 ) {
     // self 保活: applier 析构 (随 AgentContext) 后协程仍可安全完成清理;
     // 各阶段经 ctx 弱引用判活, agent 已销毁时静默退出

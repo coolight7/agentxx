@@ -12,7 +12,7 @@
 #include "agentxx/util/http_client.h"
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 using json = agentxx::util::Json;
 
@@ -99,5 +99,5 @@ private:
     int64_t nextId_ = 1;
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

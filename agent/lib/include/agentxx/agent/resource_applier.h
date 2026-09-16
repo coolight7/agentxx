@@ -15,7 +15,7 @@ class SkillMiddlewareHandle;
 class MemoryFileMiddlewareHandle;
 } // namespace middleware
 
-namespace server {
+namespace protocol {
 class McpClient;
 }
 
@@ -123,7 +123,7 @@ private:
     struct McpEntry {
         std::string                        owner;
         McpServerConfig                    cfg;
-        std::shared_ptr<server::McpClient> client; ///< add 时即创建 (连接身份标识);
+        std::shared_ptr<protocol::McpClient> client; ///< add 时即创建 (连接身份标识);
                                                    ///< 注销后旧协程经指针比对识别 stale
         enum class Status {
             Connecting,
@@ -155,10 +155,10 @@ private:
     bool deactivateMcp(std::string_view nameSpace);
 
     /// MCP 条目失败清理 (erase + 关闭连接); stale (条目已不存在/已被替换) 时 no-op
-    void failMcp(const std::string& nameSpace, const std::shared_ptr<server::McpClient>& client);
+    void failMcp(const std::string& nameSpace, const std::shared_ptr<protocol::McpClient>& client);
 
     /// 派发异步连接协程 (io executor; 各阶段检查 abort/stale)
-    void spawnMcpConnect(std::string nameSpace, std::shared_ptr<server::McpClient> client);
+    void spawnMcpConnect(std::string nameSpace, std::shared_ptr<protocol::McpClient> client);
 
     McpEntry* findMcp(const std::string& nameSpace) {
         auto it = mcpEntries_.find(nameSpace);

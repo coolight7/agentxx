@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <charconv>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 namespace {
@@ -333,3 +335,5 @@ bool InputComponent::handleClick(const Mouse& mouse) {
     }
     return false;
 }
+
+} // namespace agentxx::client

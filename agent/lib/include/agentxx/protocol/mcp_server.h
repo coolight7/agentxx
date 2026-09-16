@@ -20,7 +20,7 @@
 #include "agentxx/version.h"
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 using json = agentxx::util::Json;
 
@@ -471,5 +471,5 @@ private:
     void writeStdioMessage(const json& msg);
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

@@ -155,7 +155,7 @@ void AgentIOBase::unregisterFromBus() {
     }
 }
 
-void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessionBus) {
+void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessionBus) {
     if (!sessionBus) {
         return;
     }

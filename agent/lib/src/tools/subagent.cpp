@@ -472,7 +472,7 @@ SubAgentManagerTool::~SubAgentManagerTool() {
     unregisterFromBus();
 }
 
-void SubAgentManagerTool::registerOnBus(const std::shared_ptr<agentxx::event::EventBus>& bus) {
+void SubAgentManagerTool::registerOnBus(const std::shared_ptr<agentxx::events::EventBus>& bus) {
     if (!bus) {
         return;
     }

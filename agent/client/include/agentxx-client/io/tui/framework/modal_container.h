@@ -6,6 +6,8 @@
 #include "ftxui/screen/color.hpp"
 #include <memory>
 
+namespace agentxx::client {
+
 /// 模态层容器 (参考 Flutter 的 Navigator / Overlay 分层)
 ///
 /// 设计:
@@ -90,3 +92,5 @@ private:
     ftxui::Component activeModal_;
     ftxui::Color     bgColor_ = ftxui::Color::Default;
 };
+
+} // namespace agentxx::client

@@ -3,6 +3,8 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/util/string_util.h"
 
+namespace agentxx::client {
+
 std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
     auto config               = std::make_shared<agentxx::agent::AgentConfig>();
     config->currentSystemName = agentxx::util::getSystemName();
@@ -29,3 +31,5 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeSubAgentConfig(
     cfg->logPrintSummarizationResultTokenCount = false;
     return cfg;
 }
+
+} // namespace agentxx::client

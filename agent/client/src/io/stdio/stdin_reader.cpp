@@ -6,6 +6,8 @@
 #include <mutex>
 #include <utility>
 
+namespace agentxx::client {
+
 StdinReader::StdinReader(asio::any_io_executor ex) :
     channel_(std::make_shared<LineChannel>(ex, 64)) {
     running_    = true;
@@ -63,3 +65,5 @@ StdinReader::~StdinReader() {
         readThread_.detach(); // 不阻塞析构 (进程退出时线程被回收)
     }
 }
+
+} // namespace agentxx::client

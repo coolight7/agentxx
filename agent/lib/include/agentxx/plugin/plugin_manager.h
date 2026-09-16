@@ -28,7 +28,7 @@ class AgentContext;
 class AgentResourceApplier;
 } // namespace agent
 
-namespace event {
+namespace events {
 class EventBus;
 }
 
@@ -83,7 +83,7 @@ struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginO
 };
 
 struct AgentxxPluginSubscription {
-    std::shared_ptr<agentxx::event::EventBus>      bus;
+    std::shared_ptr<agentxx::events::EventBus>      bus;
     std::string                                    topic;
     size_t                                         subscriptionId = 0;
     std::weak_ptr<agentxx::plugin::PluginInstance> inst;

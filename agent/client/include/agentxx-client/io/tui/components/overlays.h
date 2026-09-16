@@ -18,15 +18,7 @@
 #include <string_view>
 #include <vector>
 
-// 弹窗条目列表 (菜单/设置项/列表项) 与鼠标命中区域的框架类型:
-// - [agentxx::client::UiActionList] 统一"条目表 + 键盘导航 + 鼠标命中 + 高亮"
-// - [agentxx::client::UiHitMap]    统一"每帧重建的命中区域登记表"
-// 见 [ui_action_list.h](/agent/client/include/agentxx-client/io/tui/framework/ui_action_list.h)
-// 与 [ui_hit.h](/agent/client/include/agentxx-client/io/tui/framework/ui_hit.h)。
-using agentxx::client::UiActionItem;
-using agentxx::client::UiActionList;
-using agentxx::client::UiActionStyle;
-using agentxx::client::UiHitMap;
+namespace agentxx::client {
 
 /// 模型选择器弹窗组件 (每帧按服务端模型列表重建条目)
 ///
@@ -736,3 +728,5 @@ private:
     static constexpr std::string_view kLocalTabHitId  = "tab/local";
     static constexpr std::string_view kServerTabHitId = "tab/server";
 };
+
+} // namespace agentxx::client

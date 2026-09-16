@@ -12,7 +12,7 @@
 #include <thread>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 // ---------------------------------------------------------------------------
 // AcpProtocolHandler
@@ -921,5 +921,5 @@ AcpProtocolHandler& StdioAcpServer::handler() {
     return handler_;
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

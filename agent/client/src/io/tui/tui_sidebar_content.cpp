@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <markdown/state_diagram.hpp>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 namespace {
@@ -401,3 +403,5 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
 
     return hbox(std::move(row));
 }
+
+} // namespace agentxx::client

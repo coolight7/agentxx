@@ -42,7 +42,7 @@ inline static const auto defaultRateLimitTag = agentxx::util::AhoCorasick<char>{
 // - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
 // - 相比按下标回填 call_{i}, 不会与 LLM 返回的 call_N 形式 id 冲突
 // - 实现与各 Provider 共用 (见 provider_common.h), 避免多处拷贝漂移
-using agentxx::server::makeUniqueToolCallId;
+using agentxx::protocol::makeUniqueToolCallId;
 
 ModelCallWrapNode::ModelCallWrapNode(
     std::string_view                            name,
@@ -197,7 +197,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
     params.messages = std::move(messages);
     params.tools    = std::move(tool_defs);
     if (!sessionId.empty()) {
-        params.extra_fields[std::string(agentxx::server::kExtraFieldSessionId)]
+        params.extra_fields[std::string(agentxx::protocol::kExtraFieldSessionId)]
             = std::string{sessionId};
     }
     return params;

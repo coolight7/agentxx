@@ -32,6 +32,8 @@ int g_mermaid_state_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 using markdown::MermaidStateDiagram;

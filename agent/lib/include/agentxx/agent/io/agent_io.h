@@ -18,9 +18,9 @@ namespace agentxx::middleware {
 class EventBus;
 } // namespace agentxx::middleware
 
-namespace agentxx::event {
+namespace agentxx::events {
 class EventBus;
-} // namespace agentxx::event
+} // namespace agentxx::events
 
 namespace agentxx {
 namespace agent {
@@ -160,7 +160,7 @@ public:
     /// 在会话总线上注册本 IO 的事件处理器 (interrupt / permission)
     /// - 由 BaseAgent::runTurnAsync 调用
     /// - 重复调用会先移除上一次注册的处理器, 避免 handler 累积、泄漏与悬空 this
-    virtual void registerOnBus(std::shared_ptr<agentxx::event::EventBus> sessionBus);
+    virtual void registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessionBus);
 
     /// 中断结果是否包含已确认的输入值 (空对象 = 取消/过期, 不注册规则)
     /// - 权限应答据此判定用户是否真的提交了表单: 结果为已确认的输入值时,
@@ -209,7 +209,7 @@ protected:
 
     std::shared_ptr<AgentIOTransportBase>   transport_;
     std::shared_ptr<ClientEventSink>        eventSink_;
-    std::weak_ptr<agentxx::event::EventBus> registeredBus_;
+    std::weak_ptr<agentxx::events::EventBus> registeredBus_;
     size_t                                  interruptServerId_  = 0;
     size_t                                  permissionServerId_ = 0;
 };

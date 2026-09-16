@@ -18,7 +18,7 @@
 #include <string_view>
 
 namespace agentxx {
-namespace server {
+namespace protocol {
 
 /// 会话 ID 关联请求头键名
 inline constexpr std::string_view kHeaderSessionId       = "X-Session-Id";
@@ -147,5 +147,5 @@ inline bool
     return !(msg.extra.contains(key) && msg.extra[key].is_array() && !msg.extra[key].empty());
 }
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx

@@ -10,6 +10,8 @@
 #include <memory>
 #include <string>
 
+namespace agentxx::client {
+
 /// TUI 组件共享上下文 (类似 Flutter 的 BuildContext / InheritedWidget)
 ///
 /// 所有 TUI 组件通过此结构访问共享状态, 避免直接依赖 TUIClientAgentIO 全部接口。
@@ -126,3 +128,5 @@ struct TUICtx {
         return ftxui::Terminal::Size();
     }
 };
+
+} // namespace agentxx::client

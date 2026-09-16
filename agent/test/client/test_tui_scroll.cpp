@@ -38,6 +38,8 @@ int g_tui_scroll_failed = 0;
 namespace agentxx {
 namespace test {
 
+using namespace agentxx::client;
+
 namespace {
 
 /// 测试夹具: 固定 100x20 视口的消息列表

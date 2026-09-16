@@ -38,6 +38,8 @@
 #include <iostream>
 #include <memory>
 
+namespace agentxx::client {
+
 using namespace ftxui;
 
 namespace {
@@ -2440,3 +2442,5 @@ asio::awaitable<std::optional<std::string>> TUIClientAgentIO::getInput() {
     }
     co_return std::optional<std::string>(std::move(line));
 }
+
+} // namespace agentxx::client

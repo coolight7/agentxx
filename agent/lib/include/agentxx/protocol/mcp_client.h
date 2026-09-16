@@ -26,7 +26,7 @@ namespace util {
 class AsyncMutex;
 } // namespace util
 
-namespace server {
+namespace protocol {
 
 // ---------------------------------------------------------------------------
 // McpClient —— 异步 MCP 客户端 (HTTP + stdio 传输)
@@ -377,5 +377,5 @@ private:
     std::string                toolNamespace_;
 };
 
-} // namespace server
+} // namespace protocol
 } // namespace agentxx
