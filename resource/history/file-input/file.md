@@ -3,7 +3,7 @@
 > **目标**: 为 Agentxx 构建端到端的多模态（图像、音频、视频）文件输入架构，并在 TUI（终端用户界面）中实现基于模型能力驱动的交互式文件选择、预览管理与消息呈现。
 >
 > **已确认决策**:
-> 1. **交互入口**: TUI 中采用模态文件选择弹窗（FilePickerOverlay），**不绑定键盘快捷键**，在输入框右侧新增点击按钮（`[+ 📎︎︎]`）触发打开。
+> 1. **交互入口**: TUI 中采用模态文件选择弹窗（FilePickerOverlay），**不绑定键盘快捷键**，在输入框右侧新增点击按钮（`[ 📎︎︎ ]`）触发打开。
 > 2. **能力门控与过滤**: 在模型配置（YAML / `ModelConfig`）中显式声明是否支持 `image_input`、`audio_input`、`video_input`。仅当当前选中的模型支持其中至少一种多模态输入时，输入框右侧才展示/启用文件选择按钮；同时，文件选择弹窗严格依据当前模型所支持的媒体类型对文件进行过滤和可选性约束。
 > 3. **全链路架构**: 客户端本地读取并转换为 RFC 2397 Data URL（Base64 编码），通过增强的 `WireUserInput` 传输至服务端；底层与已支持多模态的 `neograph::ChatMessage` 和 `OpenAIProvider` / `AnthropicProvider` 对齐。
 
@@ -223,7 +223,7 @@ struct MediaAttachment {
 ```
 - **条件显隐**:
   - `currentModel.hasMultimodalInput() == false`（纯文本模型）：右侧不显示按钮，保持干净的纯文本输入状态。
-  - `currentModel.hasMultimodalInput() == true`（支持多模态）：在输入框内部右侧渲染 `[+ 📎︎︎ 附件]` 或 `[+ 📎︎︎]`，文本使用主题的高亮色（`theme.accentColor`）。
+  - `currentModel.hasMultimodalInput() == true`（支持多模态）：在输入框内部右侧渲染 `[ 📎︎︎ ]` 或 `[ 📎︎︎ ]`，文本使用主题的高亮色（`theme.accentColor`）。
 - **事件绑定**:
   - **不绑定键盘快捷键**（完全避免热键冲突）。
   - 通过 FTXUI 的 `Box::Contain(x, y)` 监听鼠标左键释放事件（Released），点击命中时触发回调 `config.onOpenAttachPicker()`。
@@ -248,7 +248,7 @@ struct MediaAttachment {
 
 ## 5. 多模态文件选择弹窗 (FilePickerOverlay) 设计
 
-点击输入框右侧的 `[+ 📎︎︎]` 按钮后，通过 `modal_->pushModal(...)` 弹出全屏居中的模态文件选择弹窗。
+点击输入框右侧的 `[ 📎︎︎ ]` 按钮后，通过 `modal_->pushModal(...)` 弹出全屏居中的模态文件选择弹窗。
 
 ### 5.1 动态类型限制与过滤
 弹窗初始化时接收当前模型的 `ModelCapabilityInfo`，动态计算允许的后缀白名单：
@@ -321,7 +321,7 @@ struct MediaAttachment {
 | **会话模型** | `agent/lib/include/agentxx/agent/conversation_types.h`<br>`agent/lib/src/agent/wire_protocol.cpp` | 定义 `MediaAttachment`；在 `ViewMessage` 中集成 `attachments` 及 JSON 序列化 |
 | **传输协议** | `agent/lib/include/agentxx/agent/io/agent_io_transport.h`<br>`agent/lib/include/agentxx/agent/io/wire_protocol.h` | 扩充 `WireModelInfo`（携带各模型能力）与 `WireUserInput`（携带附件数组） |
 | **服务端驱动**| `agent/lib/include/agentxx/agent/io/session_server_agent_io.h`<br>`agent/lib/src/agent/io/session_server_agent_io.cpp`<br>`agent/lib/src/agent/base_agent.cpp` | `MessageQueueItem` 支持附件；`BaseAgent::runTurnAsync` 组装 `neograph::ChatMessage` 多模态 URL |
-| **TUI 输入栏**| `agent/client/include/agentxx-client/io/tui/components/input_bar.h`<br>`agent/client/src/io/tui/components/input_bar.cpp` | 输入框右侧根据模型能力条件渲染 `[+ 📎︎︎]` 按钮，监听鼠标点击，集成待发附件托盘 |
+| **TUI 输入栏**| `agent/client/include/agentxx-client/io/tui/components/input_bar.h`<br>`agent/client/src/io/tui/components/input_bar.cpp` | 输入框右侧根据模型能力条件渲染 `[ 📎︎︎ ]` 按钮，监听鼠标点击，集成待发附件托盘 |
 | **TUI 弹窗**  | `agent/client/include/agentxx-client/io/tui/components/overlays.h`<br>`agent/client/src/io/tui/components/file_picker_overlay.cpp` (新增) | 实现 `FilePickerOverlay`，支持目录导航、按模型能力动态过滤、选中回调 |
 | **TUI 消息渲染**| `agent/client/src/io/tui/components/message_list.cpp` | 渲染消息历史中的多媒体附件卡片，集成系统默认查看器打开动作 |
 | **持久化**   | `agent/lib/src/agent/session_store.cpp` | 会话 SQLite 落库时剥离 Base64，仅保留附件路径与元数据，保障存储轻量 |

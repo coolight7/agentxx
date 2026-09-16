@@ -20,7 +20,7 @@
 /// - Alt+Enter: 插入换行 (经 Input 组件插入逻辑, 光标随之后移)
 /// - Enter: 发送 (经 onSend 回调, 携带输入文本与待发附件列表)
 /// - Ctrl+L: 清空输入与附件
-/// - 鼠标点击右侧 [+ 📎︎︎]: 触发打开模态文件选择弹窗 (不绑定键盘热键)
+/// - 鼠标点击右侧 [ 📎︎︎ ]: 触发打开模态文件选择弹窗 (不绑定键盘热键)
 /// - 鼠标点击附件 [✕]: 从待发附件托盘移除对应附件
 /// - 括号粘贴 (bracketed paste): 终端启用 \x1B[?2004h 后, 粘贴内容以
 ///   \x1B[200~ ... \x1B[201~ 包裹到达, 本组件拦截并整体插入光标处,
@@ -39,9 +39,9 @@ public:
         std::function<bool()> isAwaitingInterrupt;
         /// 是否正在流式输出 (影响指示器显示)
         std::function<bool()> isStreaming;
-        /// 当前活动模型是否支持多模态输入 (决定是否展示 [+ 📎︎︎] 按钮)
+        /// 当前活动模型是否支持多模态输入 (决定是否展示 [ 📎︎︎ ] 按钮)
         std::function<bool()> canAttach;
-        /// 点击 [+ 📎︎︎] 按钮触发打开文件选择弹窗
+        /// 点击 [ 📎︎︎ ] 按钮触发打开文件选择弹窗
         std::function<void()> onOpenAttachPicker;
     };
 
@@ -111,7 +111,7 @@ private:
     ftxui::Component                             input_;
     std::vector<agentxx::agent::MediaAttachment> attachments_;
 
-    /// 输入框右侧 [+ 📎︎︎] 按钮点击命中区域
+    /// 输入框右侧 [ 📎︎︎ ] 按钮点击命中区域
     ftxui::Box attachButtonBox_;
     /// 托盘各附件删除按钮 [✕] 点击命中区域
     std::vector<ftxui::Box> attachmentDeleteBoxes_;
