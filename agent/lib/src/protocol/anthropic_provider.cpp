@@ -375,6 +375,9 @@ agentxx::util::Json AnthropicProvider::buildBody(const neograph::CompletionParam
 
     if (!params.extra_fields.empty()) {
         for (const auto& [key, val] : params.extra_fields.items()) {
+            if (isInternalExtraField(key)) {
+                continue;
+            }
             body[key] = agentxx::util::fromNeographJson(val);
         }
     }
@@ -387,6 +390,22 @@ agentxx::util::Json AnthropicProvider::buildBody(const neograph::CompletionParam
     return body;
 }
 
+void AnthropicProvider::applyHeaders(
+    agentxx::util::HeaderMap&         headers,
+    const neograph::CompletionParams& params
+) const {
+    if (!config_.apiKey.empty()) {
+        headers.set("x-api-key", config_.apiKey);
+    }
+    if (!config_.anthropicVersion.empty()) {
+        headers.set("anthropic-version", config_.anthropicVersion);
+    }
+    for (const auto& [k, v] : config_.extraHeaders) {
+        headers.set(k, v);
+    }
+    applySessionHeaders(headers, params);
+}
+
 asio::awaitable<neograph::ChatCompletion>
     AnthropicProvider::completeAsync(const neograph::CompletionParams& params) {
     using namespace agentxx::util;
@@ -395,8 +414,7 @@ asio::awaitable<neograph::ChatCompletion>
     auto bodyStr  = bodyJson.dump();
 
     HeaderMap headers;
-    headers.set("x-api-key", config_.apiKey);
-    headers.set("anthropic-version", config_.anthropicVersion);
+    applyHeaders(headers, params);
 
     auto resp = co_await HttpClient::postAsync(
         fmt::format("{}/v1/messages", config_.baseUrl),
@@ -462,8 +480,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     auto bodyStr = body.dump();
 
     HeaderMap headers;
-    headers.set("x-api-key", config_.apiKey);
-    headers.set("anthropic-version", config_.anthropicVersion);
+    applyHeaders(headers, params);
 
     neograph::ChatCompletion completion;
     completion.message.role = "assistant";

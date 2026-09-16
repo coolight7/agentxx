@@ -105,6 +105,14 @@ void OpenAIProvider::applyHeaders(agentxx::util::HeaderMap& headers) const {
     }
 }
 
+void OpenAIProvider::applyHeaders(
+    agentxx::util::HeaderMap&         headers,
+    const neograph::CompletionParams& params
+) const {
+    applyHeaders(headers);
+    applySessionHeaders(headers, params);
+}
+
 /// 安全提取 Responses API 事件的 output_index: 缺失/非数字时返回 0
 /// (j.value("output_index", 0) 在字段为字符串等类型时会抛异常)
 [[maybe_unused]] static int safeOutputIndex(const agentxx::util::Json& j) {
@@ -535,6 +543,9 @@ agentxx::util::Json OpenAIProvider::buildBody(const neograph::CompletionParams& 
 
     if (!params.extra_fields.empty()) {
         for (const auto& [key, val] : params.extra_fields.items()) {
+            if (isInternalExtraField(key)) {
+                continue;
+            }
             body[key] = agentxx::util::fromNeographJson(val);
         }
     }
@@ -724,6 +735,9 @@ agentxx::util::Json OpenAIProvider::buildResponsesBody(const neograph::Completio
 
     if (!params.extra_fields.empty()) {
         for (const auto& [key, val] : params.extra_fields.items()) {
+            if (isInternalExtraField(key)) {
+                continue;
+            }
             body[key] = agentxx::util::fromNeographJson(val);
         }
     }
@@ -739,7 +753,7 @@ asio::awaitable<neograph::ChatCompletion>
     auto bodyStr  = bodyJson.dump();
 
     HeaderMap headers;
-    applyHeaders(headers);
+    applyHeaders(headers, params);
 
     auto resp = co_await HttpClient::postAsync(
         apiUrl(),
@@ -862,7 +876,7 @@ asio::awaitable<neograph::ChatCompletion>
     auto bodyStr  = bodyJson.dump();
 
     HeaderMap headers;
-    applyHeaders(headers);
+    applyHeaders(headers, params);
 
     auto resp = co_await HttpClient::postAsync(
         apiUrl(),
@@ -1040,7 +1054,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     auto bodyStr = body.dump();
 
     HeaderMap headers;
-    applyHeaders(headers);
+    applyHeaders(headers, params);
 
     neograph::ChatCompletion completion;
     completion.message.role = "assistant";
@@ -1171,7 +1185,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     auto bodyStr = body.dump();
 
     HeaderMap headers;
-    applyHeaders(headers);
+    applyHeaders(headers, params);
 
     neograph::ChatCompletion completion;
     completion.message.role = "assistant";

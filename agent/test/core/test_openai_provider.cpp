@@ -280,6 +280,8 @@ public:
     std::string                 lastRequestBody;
     std::string                 lastAuthHeader;
     std::string                 lastCustomHeader;
+    std::string                 lastSessionIdHeader;
+    std::string                 lastOpencodeSessionHeader;
 
     // SSE chunks to emit in streaming mode
     std::vector<std::string> sseChunks;
@@ -505,9 +507,11 @@ std::unique_ptr<MockOpenAIServer> startMockServer(uint16_t& outPort) {
         return std::make_shared<HttpServer::Handler>(
             [mock](HttpServer::Request& req, HttpServer::Response& resp, std::string_view)
                 -> asio::awaitable<void> {
-                mock->lastRequestBody  = req.body();
-                mock->lastAuthHeader   = std::string(req["authorization"]);
-                mock->lastCustomHeader = std::string(req["x-custom-test"]);
+                mock->lastRequestBody           = req.body();
+                mock->lastAuthHeader            = std::string(req["authorization"]);
+                mock->lastCustomHeader          = std::string(req["x-custom-test"]);
+                mock->lastSessionIdHeader       = std::string(req["x-session-id"]);
+                mock->lastOpencodeSessionHeader = std::string(req["x-opencode-session"]);
 
                 switch (mock->mode) {
                     case MockMode::RateLimit:
@@ -3208,6 +3212,102 @@ asio::awaitable<void> test_extra_headers_sent(MockOpenAIServer& mock, uint16_t p
     }
 }
 
+/// 会话 ID 请求头测试: Provider 需在请求头携带 X-Session-Id 和 X-Opencode-Session
+asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    // 1. 非流式 Chat Completions API 携带 session_id
+    {
+        neograph::CompletionParams params;
+        params.model                      = "gpt-4o-mini";
+        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "session test"}};
+        params.extra_fields["session_id"] = "test-session-openai-001";
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, "test-session-openai-001");
+            XX_TEST_EXPECT_EQ(mock.lastOpencodeSessionHeader, "test-session-openai-001");
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
+
+            // 校验内部控制字段未泄露到 upstream JSON 请求体中
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "session id headers (chat completions) test failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 2. 流式 Chat Completions API 携带 session_id
+    {
+        mock.mode      = MockMode::Streaming;
+        mock.sseChunks = {
+            mock.sseData(R"({"choices":[{"delta":{"content":"hi"}}]})"),
+            mock.sseDone()
+        };
+
+        neograph::CompletionParams params;
+        params.model                      = "gpt-4o-mini";
+        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "stream session"}};
+        params.extra_fields["session_id"] = "test-session-stream-002";
+
+        try {
+            co_await provider->invoke(params, [](const std::string&) {});
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, "test-session-stream-002");
+            XX_TEST_EXPECT_EQ(mock.lastOpencodeSessionHeader, "test-session-stream-002");
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "session id headers (chat completions stream) test failed: " << e.what() << std::endl;
+        }
+        mock.mode = MockMode::Normal;
+    }
+
+    // 3. Responses API (Codex) 携带 session_id
+    {
+        mock.mode       = MockMode::ResponsesNormal;
+        auto codexProv  = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+
+        neograph::CompletionParams params;
+        params.model                      = "codex-test";
+        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "responses session"}};
+        params.extra_fields["session_id"] = "test-session-codex-003";
+
+        try {
+            co_await codexProv->invoke(params, nullptr);
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, "test-session-codex-003");
+            XX_TEST_EXPECT_EQ(mock.lastOpencodeSessionHeader, "test-session-codex-003");
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
+
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "session id headers (responses API) test failed: " << e.what() << std::endl;
+        }
+        mock.mode = MockMode::Normal;
+    }
+
+    // 4. 无 session_id 时不发送对应请求头
+    {
+        neograph::CompletionParams params;
+        params.model    = "gpt-4o-mini";
+        params.messages = {neograph::ChatMessage{.role = "user", .content = "no session"}};
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            XX_TEST_EXPECT_TRUE(mock.lastSessionIdHeader.empty());
+            XX_TEST_EXPECT_TRUE(mock.lastOpencodeSessionHeader.empty());
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "empty session id test failed: " << e.what() << std::endl;
+        }
+    }
+}
+
 /// Chat Completions API: 用户消息携带图片/音频/视频附件时, 请求体应组装为多模态 content parts
 asio::awaitable<void> test_multimodal_body_chat_completions(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
@@ -4474,6 +4574,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_custom_api_path(*mock, port);
     co_await test_send_temperature_disabled(*mock, port);
     co_await test_extra_headers_sent(*mock, port);
+    co_await test_session_id_headers_sent(*mock, port);
 
     // 多模态消息体 (图片/音频/视频附件)
     co_await test_multimodal_body_chat_completions(*mock, port);

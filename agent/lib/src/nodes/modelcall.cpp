@@ -196,6 +196,10 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
     params.model    = resolveCurrentModelName(sessionId);
     params.messages = std::move(messages);
     params.tools    = std::move(tool_defs);
+    if (!sessionId.empty()) {
+        params.extra_fields[std::string(agentxx::server::kExtraFieldSessionId)]
+            = std::string{sessionId};
+    }
     return params;
 }
 

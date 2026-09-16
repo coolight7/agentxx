@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/json_view.h"
@@ -340,6 +341,12 @@ private:
     static constexpr std::string_view kDefaultBaseUrl{"https://api.anthropic.com"};
 
     explicit AnthropicProvider(agentxx::agent::ModelConfig config);
+
+    /// 填充请求头: x-api-key + anthropic-version + extraHeaders + 会话 Header (X-Session-Id, X-Opencode-Session)
+    void applyHeaders(
+        agentxx::util::HeaderMap&         headers,
+        const neograph::CompletionParams& params
+    ) const;
 
     agentxx::util::Json buildBody(const neograph::CompletionParams& params) const;
 

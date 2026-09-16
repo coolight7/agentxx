@@ -405,6 +405,8 @@ public:
     AnthropicMockMode           mode = AnthropicMockMode::Normal;
     std::string                 lastRequestBody;
     std::string                 lastRequestHeaders;
+    std::string                 lastSessionIdHeader;
+    std::string                 lastOpencodeSessionHeader;
 
     std::vector<std::string>           sseChunks;
     std::optional<agentxx::util::Json> customResponse;
@@ -503,7 +505,9 @@ std::unique_ptr<MockAnthropicServer> startAnthropicMockServer(uint16_t& outPort)
         for (const auto& field : req) {
             headers += std::string(field.name_string()) + ": " + std::string(field.value()) + "\n";
         }
-        mock->lastRequestHeaders = headers;
+        mock->lastRequestHeaders        = headers;
+        mock->lastSessionIdHeader       = std::string(req["x-session-id"]);
+        mock->lastOpencodeSessionHeader = std::string(req["x-opencode-session"]);
 
         switch (mock->mode) {
             case AnthropicMockMode::RateLimit:
@@ -783,6 +787,99 @@ asio::awaitable<void> test_request_headers(MockAnthropicServer& mock, uint16_t p
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "request headers test failed: " << e.what() << std::endl;
+    }
+}
+
+/// 会话 ID 请求头测试: AnthropicProvider 需在请求头携带 X-Session-Id 和 X-Opencode-Session
+asio::awaitable<void> test_session_id_headers_sent(MockAnthropicServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = AnthropicMockMode::Normal;
+
+    auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+
+    // 1. 非流式调用携带 session_id
+    {
+        neograph::CompletionParams params;
+        params.model                      = "claude-sonnet-4-20250514";
+        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "session test"}};
+        params.extra_fields["session_id"] = "test-session-anthropic-001";
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, "test-session-anthropic-001");
+            XX_TEST_EXPECT_EQ(mock.lastOpencodeSessionHeader, "test-session-anthropic-001");
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
+
+            // 校验内部控制字段未泄露进 request body
+            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "session id headers (anthropic non-streaming) test failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 2. 流式调用携带 session_id
+    {
+        mock.mode      = AnthropicMockMode::Streaming;
+        mock.sseChunks = {
+            MockAnthropicServer::sseEvent(
+                "message_start",
+                R"({"type":"message_start","message":{"id":"msg_s","type":"message","role":"assistant","usage":{"input_tokens":5}}})"
+            ),
+            MockAnthropicServer::sseEvent(
+                "content_block_start",
+                R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+            ),
+            MockAnthropicServer::sseEvent(
+                "content_block_delta",
+                R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}})"
+            ),
+            MockAnthropicServer::sseEvent(
+                "content_block_stop",
+                R"({"type":"content_block_stop","index":0})"
+            ),
+            MockAnthropicServer::sseEvent(
+                "message_delta",
+                R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}})"
+            ),
+            MockAnthropicServer::sseEvent(
+                "message_stop",
+                R"({"type":"message_stop"})"
+            )
+        };
+
+        neograph::CompletionParams params;
+        params.model                      = "claude-sonnet-4-20250514";
+        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "session stream test"}};
+        params.extra_fields["session_id"] = "test-session-anthropic-stream-002";
+
+        try {
+            co_await provider->invoke(params, [](const std::string&) {});
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, "test-session-anthropic-stream-002");
+            XX_TEST_EXPECT_EQ(mock.lastOpencodeSessionHeader, "test-session-anthropic-stream-002");
+            XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "session id headers (anthropic streaming) test failed: " << e.what() << std::endl;
+        }
+        mock.mode = AnthropicMockMode::Normal;
+    }
+
+    // 3. 无 session_id 时不发送对应请求头
+    {
+        neograph::CompletionParams params;
+        params.model    = "claude-sonnet-4-20250514";
+        params.messages = {neograph::ChatMessage{.role = "user", .content = "no session"}};
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            XX_TEST_EXPECT_TRUE(mock.lastSessionIdHeader.empty());
+            XX_TEST_EXPECT_TRUE(mock.lastOpencodeSessionHeader.empty());
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "empty session id test failed: " << e.what() << std::endl;
+        }
     }
 }
 
@@ -2244,6 +2341,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     co_await test_rate_limit_error(*mock, port);
     co_await test_server_error(*mock, port);
     co_await test_request_headers(*mock, port);
+    co_await test_session_id_headers_sent(*mock, port);
     co_await test_request_body_format(*mock, port);
     co_await test_streaming_completion(*mock, port);
     co_await test_streaming_thinking(*mock, port);
