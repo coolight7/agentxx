@@ -18,6 +18,7 @@
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
+#include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/util/json.h"
 #include "ftxui/dom/elements.hpp"
@@ -592,6 +593,137 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(r.findText("状态图", gx, gy));
         XX_TEST_EXPECT_EQ(gx, r.bounds.x_min + 2);
         XX_TEST_EXPECT_EQ(gy, r.bounds.y_min + 1);
+    }
+
+    // ---- Toast 提示 (仿照弹窗背景: 上下左右各 1 格内边距, 四角为 '+') ----
+    // 1. Dark 主题单行 toast
+    {
+        SurfaceFixture fx;
+        const auto     style = TuiSurfaceStyle::fromTheme(fx.theme);
+        const auto     toast = tuiSurfaceToast(style, "通知内容");
+
+        ProbeResult r(fx.kScreenW, fx.kScreenH);
+        auto        el = toast | ftxui::center;
+        ftxui::Render(r.screen, el);
+        r.text = stripAnsi(r.screen.ToString());
+
+        int xMin = fx.kScreenW, xMax = -1, yMin = fx.kScreenH, yMax = -1;
+        for (int y = 0; y < fx.kScreenH; ++y) {
+            for (int x = 0; x < fx.kScreenW; ++x) {
+                if (r.bgAt(x, y) == ftxui::Color::Default) {
+                    continue;
+                }
+                xMin = std::min(xMin, x);
+                xMax = std::max(xMax, x);
+                yMin = std::min(yMin, y);
+                yMax = std::max(yMax, y);
+            }
+        }
+        XX_TEST_EXPECT_TRUE(xMax >= 0);
+        r.bounds = ftxui::Box{xMin, xMax, yMin, yMax};
+
+        // 四角角标: 字符为 '+', 前景=surfaceColor, 背景=surfaceScrimColor
+        checkCornerCells(r, fx.theme, __LINE__);
+        checkNoFrameGlyphs(r, __LINE__);
+
+        // 高度为 3 行 (上内边距 1 行 + 文本 1 行 + 下内边距 1 行)
+        XX_TEST_EXPECT_EQ(r.bounds.y_max - r.bounds.y_min + 1, 3);
+
+        // 文本位于中间行 (y_min + 1), 左侧内边距正好 1 格 (x_min + 1)
+        int tx = -1, ty = -1;
+        XX_TEST_EXPECT_TRUE(r.findText("通知内容", tx, ty));
+        XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1);
+        XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 1);
+
+        const int midX = r.midX();
+        // 上内边距行、文本行、下内边距行中间单元格背景色均为 surfaceColor
+        XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min), fx.theme.surfaceColor);
+        XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_min + 1), fx.theme.surfaceColor);
+        XX_TEST_EXPECT_EQ(r.bgAt(midX, r.bounds.y_max), fx.theme.surfaceColor);
+
+        // 文本前景色默认采用 style.title
+        XX_TEST_EXPECT_EQ(r.screen.CellAt(tx, ty).foreground_color, style.title);
+
+        // 左右留白单元格为空格, 背景为 surfaceColor
+        XX_TEST_EXPECT_EQ(r.screen.CellAt(r.bounds.x_min, ty).character, " ");
+        XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min, ty), fx.theme.surfaceColor);
+        XX_TEST_EXPECT_EQ(r.screen.CellAt(r.bounds.x_max, ty).character, " ");
+        XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max, ty), fx.theme.surfaceColor);
+
+        // 上下内边距行除四角角标外均为纯空白填充
+        for (int x = r.bounds.x_min + 1; x < r.bounds.x_max; ++x) {
+            XX_TEST_EXPECT_TRUE(isBlankCell(r, x, r.bounds.y_min));
+            XX_TEST_EXPECT_TRUE(isBlankCell(r, x, r.bounds.y_max));
+        }
+    }
+
+    // 2. Light 主题 toast
+    {
+        SurfaceFixture fx;
+        fx.theme          = TUITheme::lightTheme();
+        const auto  style = TuiSurfaceStyle::fromTheme(fx.theme);
+        const auto  toast = tuiSurfaceToast(style, "Light Toast");
+
+        ProbeResult r(fx.kScreenW, fx.kScreenH);
+        auto        el = toast | ftxui::center;
+        ftxui::Render(r.screen, el);
+        r.text = stripAnsi(r.screen.ToString());
+
+        int xMin = fx.kScreenW, xMax = -1, yMin = fx.kScreenH, yMax = -1;
+        for (int y = 0; y < fx.kScreenH; ++y) {
+            for (int x = 0; x < fx.kScreenW; ++x) {
+                if (r.bgAt(x, y) == ftxui::Color::Default) {
+                    continue;
+                }
+                xMin = std::min(xMin, x);
+                xMax = std::max(xMax, x);
+                yMin = std::min(yMin, y);
+                yMax = std::max(yMax, y);
+            }
+        }
+        XX_TEST_EXPECT_TRUE(xMax >= 0);
+        r.bounds = ftxui::Box{xMin, xMax, yMin, yMax};
+
+        checkCornerCells(r, fx.theme, __LINE__);
+        checkNoFrameGlyphs(r, __LINE__);
+        XX_TEST_EXPECT_EQ(r.bounds.y_max - r.bounds.y_min + 1, 3);
+        int tx = -1, ty = -1;
+        XX_TEST_EXPECT_TRUE(r.findText("Light Toast", tx, ty));
+        XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 1);
+        XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1);
+        XX_TEST_EXPECT_EQ(r.screen.CellAt(tx, ty).foreground_color, style.title);
+    }
+
+    // 3. 多行换行 toast
+    {
+        SurfaceFixture fx;
+        const auto     style = TuiSurfaceStyle::fromTheme(fx.theme);
+        const auto     toast = tuiSurfaceToast(style, "第一行提示\n第二行更长的提示文本");
+
+        ProbeResult r(fx.kScreenW, fx.kScreenH);
+        auto        el = toast | ftxui::center;
+        ftxui::Render(r.screen, el);
+        r.text = stripAnsi(r.screen.ToString());
+
+        int xMin = fx.kScreenW, xMax = -1, yMin = fx.kScreenH, yMax = -1;
+        for (int y = 0; y < fx.kScreenH; ++y) {
+            for (int x = 0; x < fx.kScreenW; ++x) {
+                if (r.bgAt(x, y) == ftxui::Color::Default) {
+                    continue;
+                }
+                xMin = std::min(xMin, x);
+                xMax = std::max(xMax, x);
+                yMin = std::min(yMin, y);
+                yMax = std::max(yMax, y);
+            }
+        }
+        XX_TEST_EXPECT_TRUE(xMax >= 0);
+        r.bounds = ftxui::Box{xMin, xMax, yMin, yMax};
+
+        checkCornerCells(r, fx.theme, __LINE__);
+        checkNoFrameGlyphs(r, __LINE__);
+        // 2 行文本 + 上下各 1 行内边距 = 4 行
+        XX_TEST_EXPECT_EQ(r.bounds.y_max - r.bounds.y_min + 1, 4);
     }
 
     TUISettings::instance().setLanguage(savedLang);

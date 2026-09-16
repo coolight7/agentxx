@@ -6,6 +6,7 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
+#include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/util/clipboard.h"
 #include "agentxx/agent/model_registry.h"
@@ -631,17 +632,16 @@ void TUIClientAgentIO::start() {
                 if (elapsed >= kToastDuration) {
                     toastText_.clear();
                 } else {
+                    const auto surfaceStyle = TuiSurfaceStyle::fromTheme(theme_);
                     body = dbox({
                         body,
                         vbox({
                             text(" "),
                             hbox({
                                 filler(),
-                                // 面性风格: 不使用边框, 以整块背景色承载提示文字
-                                // (左右各留 1 列内边距)
-                                text(" " + toastText_ + " ") | bold
-                                    | bgcolor(theme_.buttonActiveBgColor)
-                                    | color(theme_.buttonActiveTextColor),
+                                // 仿照弹窗背景面性风格: 上下左右各 1 格内边距, 四角为 '+' 角标,
+                                // 以弹窗内容区背景色 (theme_.surfaceColor) 承载提示文字
+                                tuiSurfaceToast(surfaceStyle, toastText_),
                                 filler(),
                             }),
                             filler(),

@@ -146,3 +146,70 @@ inline ftxui::Element tuiSurfacePopup(
         tuiSurfaceFooterBar(hint, style.hint, style.footer)
     );
 }
+
+/// Toast 提示外框 (仿照弹窗背景面性风格: 上下左右各 1 格内边距, 且四角为 '+')
+/// - [content] 为提示内容 (文本或自定义元素), 无需自带首尾留白
+/// - 纵向: 上内边距 (四角行: 左 '+'、右 '+') → 内容行 (左右各 1 格内边距) → 下内边距 (四角行: 左
+/// '+'、右 '+')
+/// - 横向: 左 1 格留白 + 内容 + 右 1 格留白
+/// - 背景色与角标取自 [style]: 提示区填充 [style.body], 四角背景取 [style.outside], 角标前景取
+/// [style.body]
+///
+/// - `args`:
+///     - [style] 弹窗面性配色 (来自 TuiSurfaceStyle::fromTheme)
+///     - [content] 提示内容元素
+///
+/// - `return` 组装完成的 Toast 提示元素
+inline ftxui::Element tuiSurfaceToast(const TuiSurfaceStyle& style, ftxui::Element content) {
+    ftxui::Element middle = ftxui::hbox({
+                                ftxui::text("  ") | ftxui::bgcolor(style.body),
+                                std::move(content),
+                                ftxui::text("  ") | ftxui::bgcolor(style.body),
+                            })
+                            | ftxui::bgcolor(style.body);
+
+    return ftxui::vbox({
+        tuiSurfaceCornerRow(style.body, style.outside, "+ ", " +"),
+        std::move(middle),
+        tuiSurfaceCornerRow(style.body, style.outside, "+ ", " +"),
+    });
+}
+
+/// Toast 提示 (纯文本便捷形态: 加粗, 多行按换行拆分, 文字颜色可指定)
+///
+/// - `args`:
+///     - [style] 弹窗面性配色
+///     - [message] 提示文本 (无需自带首尾空格)
+///     - [textColor] 文字前景色
+inline ftxui::Element tuiSurfaceToast(
+    const TuiSurfaceStyle& style,
+    std::string_view       message,
+    const ftxui::Color&    textColor
+) {
+    if (message.find('\n') == std::string_view::npos) {
+        return tuiSurfaceToast(
+            style,
+            ftxui::text(std::string(message)) | ftxui::bold | ftxui::color(textColor)
+        );
+    }
+    ftxui::Elements lines;
+    size_t          start = 0;
+    while (start <= message.size()) {
+        const size_t end  = message.find('\n', start);
+        const auto   line = message.substr(
+            start,
+            end == std::string_view::npos ? std::string_view::npos : end - start
+        );
+        lines.push_back(ftxui::text(std::string(line)) | ftxui::bold | ftxui::color(textColor));
+        if (end == std::string_view::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return tuiSurfaceToast(style, ftxui::vbox(std::move(lines)));
+}
+
+/// Toast 提示 (纯文本便捷形态, 文字颜色默认采用弹窗标题色 [style.title])
+inline ftxui::Element tuiSurfaceToast(const TuiSurfaceStyle& style, std::string_view message) {
+    return tuiSurfaceToast(style, message, style.title);
+}

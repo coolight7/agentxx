@@ -9,7 +9,6 @@
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
 
-- 修改 tui 弹窗提示样式
 - 分析 ftxui 的源码，整理 tui 实现和架构
 - 检查tui选择附件来源，增加区分如果 server 跟 client 不同设备，则分区支持选择附件
 - agentxx_execute_javascript 更名
