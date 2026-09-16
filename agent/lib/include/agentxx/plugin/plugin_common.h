@@ -294,13 +294,18 @@ inline constexpr std::string_view AgentTasks        = AGENTXX_PLUGIN_IFACE_AGENT
 inline constexpr std::string_view AgentCoroutineRuntime = AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME;
 
 /// ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ----
-inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI; ///< 展示扩展表整体
+/// 展示扩展表整体: 声明它等价于"需要 ui 表内全部子能力", 只有覆盖全部子能力的
+/// 宿主才会声明本项 (tui; cli 只有 toast/command 故不声明)。插件应优先按下方的
+/// 细粒度能力名精确声明自己实际使用的子能力 —— 声明表整体会让"宿主缺某子能力"
+/// 变成"整个插件不可加载/告警"
+inline constexpr std::string_view ClientUi = AGENTXX_IFACE_CLIENT_UI;
 inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";
 inline constexpr std::string_view ClientToast       = "agentxx.client.toast";
 inline constexpr std::string_view ClientKeybind     = "agentxx.client.keybind";      // 预留
 inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal"; // 预留
-/// 工具消息装饰 (ui 表 v2 update_tool_decor; TUI 声明, CLI 无消息渲染面不声明)
+/// 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor / register_tool_renderer;
+/// TUI 声明, CLI 无消息渲染面不声明)
 inline constexpr std::string_view ClientMsgDecor    = "agentxx.client.msg_decor";
 inline constexpr std::string_view ClientInfoSection = "agentxx.client.info_section";
 inline constexpr std::string_view ClientCommand     = "agentxx.client.command";

@@ -621,6 +621,10 @@ public:
     // 可能会变，建议仅在同步代码中使用
     const ModelConfig& getSessionCurrentModelConfig(std::string_view sessionId) const;
 
+    /// 拼装指定会话的完整系统提示词 (systemPrompt + appendSystemPrompts + 动态 appendSystemMessage)
+    /// - 供 modelcall 节点及上下文查看 (WireGetContext / TUI LLMContext) 使用
+    std::string buildSystemPrompt(std::string_view sessionId = "") const;
+
 private:
 
     /// 会话级工作目录覆写 ({sessionId → 绝对路径}; 见 getSessionWorkDir)

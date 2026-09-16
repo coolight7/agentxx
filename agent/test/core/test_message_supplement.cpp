@@ -8,6 +8,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/hash.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/deferred.hpp"
@@ -942,6 +943,129 @@ asio::awaitable<void> test_repair_middle_dangling_group_fixed() {
     co_return;
 }
 
+// ===========================================================================
+// repairMessages systemPrompt 哈希值计算与记录验证
+// ===========================================================================
+static asio::awaitable<void> test_repair_system_prompt_hash() {
+    auto ctx                         = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig                 = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->agentConfig->repairMessages = true;
+    ctx->middlewareHandleContext     = std::make_shared<agentxx::middleware::MiddlewareContext>();
+
+    neograph::graph::NodeContext nodeCtx;
+    nodeCtx.model = "test-model";
+    agentxx::nodes::ModelCallWrapNode node("test_modelcall_wrap", nodeCtx, ctx);
+
+    std::string prompt1 = "You are a helpful coding assistant v1.";
+    std::string prompt2 = "You are a helpful coding assistant v2."; // 长度相同 (39 chars)，但内容不同
+    XX_TEST_EXPECT_EQ(prompt1.size(), prompt2.size());
+
+    const auto hash1 = agentxx::util::hash::fnv1a64(prompt1);
+    const auto hash2 = agentxx::util::hash::fnv1a64(prompt2);
+    XX_TEST_EXPECT_TRUE(hash1 != hash2);
+
+    // 1) 初始执行 repairMessages: 记录 system_prompt_hash
+    {
+        neograph::json msgs = neograph::json::array();
+        msgs.push_back(neograph::json{
+            {"role",    "system"},
+            {"content", prompt1 }
+        });
+        msgs.push_back(neograph::json{
+            {"role",    "user" },
+            {"content", "hello"}
+        });
+
+        neograph::graph::GraphState state;
+        state.init_channel(
+            "messages",
+            neograph::graph::ReducerType::APPEND,
+            neograph::graph::ReducerRegistry::instance().get("append"),
+            msgs
+        );
+        neograph::graph::RunContext runCtx;
+        runCtx.thread_id = "test_sys_hash_session";
+        neograph::graph::NodeInput in{state, runCtx, nullptr};
+
+        node.repairMessages(in);
+
+        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            "test_sys_hash_session",
+            agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
+        );
+        XX_TEST_EXPECT_TRUE(checkInfo.contains("system_prompt_hash"));
+        XX_TEST_EXPECT_TRUE(checkInfo["system_prompt_hash"].is_number_integer());
+        XX_TEST_EXPECT_EQ(checkInfo.value<uint64_t>("system_prompt_hash", 0), hash1);
+    }
+
+    // 2) 再次执行 (相同 prompt): 哈希值不变
+    {
+        neograph::json msgs = neograph::json::array();
+        msgs.push_back(neograph::json{
+            {"role",    "system"},
+            {"content", prompt1 }
+        });
+        msgs.push_back(neograph::json{
+            {"role",    "user" },
+            {"content", "hello"}
+        });
+
+        neograph::graph::GraphState state;
+        state.init_channel(
+            "messages",
+            neograph::graph::ReducerType::APPEND,
+            neograph::graph::ReducerRegistry::instance().get("append"),
+            msgs
+        );
+        neograph::graph::RunContext runCtx;
+        runCtx.thread_id = "test_sys_hash_session";
+        neograph::graph::NodeInput in{state, runCtx, nullptr};
+
+        node.repairMessages(in);
+
+        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            "test_sys_hash_session",
+            agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
+        );
+        XX_TEST_EXPECT_EQ(checkInfo.value<uint64_t>("system_prompt_hash", 0), hash1);
+    }
+
+    // 3) 修改 prompt (等长但内容改变 prompt2): 能够检测到哈希变化并更新记录
+    {
+        neograph::json msgs = neograph::json::array();
+        msgs.push_back(neograph::json{
+            {"role",    "system"},
+            {"content", prompt2 }
+        });
+        msgs.push_back(neograph::json{
+            {"role",    "user" },
+            {"content", "hello"}
+        });
+
+        neograph::graph::GraphState state;
+        state.init_channel(
+            "messages",
+            neograph::graph::ReducerType::APPEND,
+            neograph::graph::ReducerRegistry::instance().get("append"),
+            msgs
+        );
+        neograph::graph::RunContext runCtx;
+        runCtx.thread_id = "test_sys_hash_session";
+        neograph::graph::NodeInput in{state, runCtx, nullptr};
+
+        node.repairMessages(in);
+
+        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            "test_sys_hash_session",
+            agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
+        );
+        XX_TEST_EXPECT_TRUE(checkInfo.contains("system_prompt_hash"));
+        XX_TEST_EXPECT_EQ(checkInfo.value<uint64_t>("system_prompt_hash", 0), hash2);
+    }
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_message_supplement_tests() {
     g_ms_passed = 0;
     g_ms_failed = 0;
@@ -955,6 +1079,7 @@ asio::awaitable<TestResult> run_message_supplement_tests() {
         co_await test_repair_all_replied_no_cleanup();
         co_await test_repair_multiple_complete_groups_kept();
         co_await test_repair_middle_dangling_group_fixed();
+        co_await test_repair_system_prompt_hash();
     } catch (const std::exception& e) {
         TEST_FAIL << "message_supplement suite exception: " << e.what() << std::endl;
         g_ms_failed++;

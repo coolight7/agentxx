@@ -1,5 +1,7 @@
 #include "test_agent.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/io/channel_io_transport.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -1316,6 +1318,65 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     co_return;
 }
 
+/// 验证 buildSystemPrompt 与 WireGetContext 上下文查询携带 systemPrompt:
+/// 1) agent.buildSystemPrompt 正确拼装配置的系统提示词
+/// 2) 客户端请求 WireGetContext 时, 服务端返回的上下文中包含 role 为 "system" 的消息,
+///    且 content 等于 buildSystemPrompt 的结果
+asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
+    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl        = "http://127.0.0.1:1234";
+    cfg->model.modelName      = "test-sim";
+    cfg->prompt.systemPrompt  = "You are a helpful coding assistant.";
+    cfg->prompt.appendSystemPrompts["planning"] = "## Planning Guide";
+
+    auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+    co_await agent->init();
+
+    // 1) 验证 buildSystemPrompt 正确拼接主 prompt 与附加 prompt
+    auto prompt = agent->buildSystemPrompt("sys_prompt_session");
+    XX_TEST_EXPECT_TRUE(prompt.find("You are a helpful coding assistant.") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(prompt.find("## Planning Guide") != std::string::npos);
+
+    // 2) 验证新会话下请求 WireGetContext 时, 服务端自动补充 systemPrompt
+    auto ex = co_await asio::this_coro::executor;
+    agentxx::agent::SessionServerAgentIO::Config ioCfg;
+    ioCfg.sessionId = "sys_prompt_session";
+    auto serverIo = std::make_shared<agentxx::agent::SessionServerAgentIO>(
+        ex,
+        agent,
+        ioCfg
+    );
+
+    // 创建虚拟客户端 IO 接入测试传输通道
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+    serverIo->setTransport(std::move(serverT));
+
+    // 发送 WireGetContext
+    serverIo->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireGetContext{"sys_prompt_session"}});
+
+    // 客户端等待接收 WireContextMessages 响应
+    auto resp = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        XX_TEST_EXPECT_TRUE(std::holds_alternative<agentxx::agent::WireContextMessages>(*resp));
+        if (std::holds_alternative<agentxx::agent::WireContextMessages>(*resp)) {
+            const auto& m = std::get<agentxx::agent::WireContextMessages>(*resp);
+            XX_TEST_EXPECT_TRUE(m.messages.is_array());
+            XX_TEST_EXPECT_TRUE(!m.messages.empty());
+            if (!m.messages.empty()) {
+                const auto& first = m.messages.front();
+                XX_TEST_EXPECT_EQ(first.value("role", std::string{}), std::string{"system"});
+                XX_TEST_EXPECT_EQ(first.value("content", std::string{}), prompt);
+            }
+        }
+    }
+    clientT->close();
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_agent_tests() {
     // 注: g_da_* 为本编译单元匿名命名空间私有变量,
     // 其他模块 (test_agent_host/session_persistence/remote_agent 等) 的断言
@@ -1341,6 +1402,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_reuse_session_bus();
         co_await test_agent_llm_retry_exhaust();
         co_await test_agent_toolcall_intercept_exception();
+        co_await test_agent_build_system_prompt_and_wire_get_context();
     } catch (const std::exception& e) {
         TEST_FAIL << "agent suite exception: " << e.what() << std::endl;
         g_da_failed++;

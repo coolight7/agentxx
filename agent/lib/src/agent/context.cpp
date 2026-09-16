@@ -1,6 +1,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/async_offload.h"
@@ -9,6 +10,7 @@
 #include "neograph/graph/registry.h"
 #include <chrono>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 namespace agentxx {
 namespace agent {
@@ -397,6 +399,57 @@ const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view s
     }
     // 未初始化 registry 时(测试/嵌入场景)回退主模型
     return agentConfig ? agentConfig->model : ModelConfig::defaultModelConfig;
+}
+
+std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
+    if (!agentConfig) {
+        return "";
+    }
+    std::string combined = agentConfig->prompt.systemPrompt;
+    auto appendIfNonEmpty = [&](const std::string& seg) {
+        if (seg.empty()) {
+            return;
+        }
+        if (!combined.empty() && combined.back() != '\n') {
+            combined += "\n";
+        }
+        if (!combined.empty() && combined.size() >= 2
+            && combined.compare(combined.size() - 2, 2, "\n\n") != 0) {
+            combined += "\n";
+        }
+        combined += seg;
+    };
+
+    const auto& appendMap = agentConfig->prompt.appendSystemPrompts;
+    auto appendByKey = [&](const std::string& key) {
+        auto it = appendMap.find(key);
+        if (it != appendMap.end()) {
+            appendIfNonEmpty(it->second);
+        }
+    };
+    appendByKey("planning");
+    appendByKey("skill");
+    appendByKey("codegraph");
+    for (const auto& kv : appendMap) {
+        if (kv.first == "planning" || kv.first == "skill" || kv.first == "codegraph"
+            || kv.first == "summarization") {
+            continue;
+        }
+        appendIfNonEmpty(kv.second);
+    }
+
+    if (middlewareHandleContext && !sessionId.empty()) {
+        const auto& appendSystemMsgList
+            = middlewareHandleContext->getGraphDataItemValue<std::vector<std::string>>(
+                sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
+            );
+        if (!appendSystemMsgList.empty()) {
+            std::string appendJoined = fmt::format("{}", fmt::join(appendSystemMsgList, "\n"));
+            appendIfNonEmpty(appendJoined);
+        }
+    }
+    return combined;
 }
 
 } // namespace agent

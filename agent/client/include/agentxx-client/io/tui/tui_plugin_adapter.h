@@ -30,13 +30,18 @@ public:
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
         namespace pi = agentxx::plugin::plugin_interfaces;
         return {
+            // ui 表整体 (表 IID): 本适配器覆盖 "agentxx.client.ui" 表的全部子能力
+            // (下方逐个声明), 因此同时声明表整体 —— 清单里按表名声明依赖的插件
+            // 视为已满足; 子能力不全的宿主 (cli) 不声明本项
+            std::string{pi::ClientUi},
             std::string{pi::ClientStatusItem},
             std::string{pi::ClientPanel},
             std::string{pi::ClientToast},
             std::string{pi::ClientInfoSection},
             std::string{pi::ClientCommand},
-            // 工具消息装饰 (ui 表 v2 update_tool_decor): 消息列表按装饰
-            // items 通用渲染插件推送的工具体内容
+            // 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor /
+            // register_tool_renderer): 消息列表按装饰 items 通用渲染插件推送的
+            // 工具体内容, 并按插件注册的渲染定义生成折叠头/展开体
             std::string{pi::ClientMsgDecor},
             // 通用交互 (ui 表 v3 bind/unbind + button 拾取派发)
             std::string{pi::ClientAction},

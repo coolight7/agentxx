@@ -13,9 +13,12 @@
 /// 21. kit::ActionController 单测 (header-only, 无宿主)
 /// 28. 宿主内置工具特化渲染: agentxx_share_store / agentxx_subagent
 ///     (lib 内置工具无对应插件, 由宿主注册内置渲染器)
+/// 29. 接口协商: TUI 宿主声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
+///     client 侧声明必须全部被满足 (避免启动误报"可选接口不支持")
 #include "test_client_plugins.h"
 
 #include "agentxx-client/io/tui/plugin_ui_items.h"
+#include "agentxx-client/io/tui/tui_plugin_adapter.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -30,6 +33,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -148,6 +152,9 @@ public:
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
         namespace pi = agentxx::plugin::plugin_interfaces;
         return {
+            // 与 TuiPluginAdapter 声明集保持一致 (完整消息渲染面宿主):
+            // ui 表整体 + 全部子能力
+            std::string{pi::ClientUi},
             std::string{pi::ClientStatusItem},
             std::string{pi::ClientPanel},
             std::string{pi::ClientToast},
@@ -2847,6 +2854,88 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(afterUnload.matched);
             XX_TEST_EXPECT_EQ(afterUnload.summary, " · insert 2 lines → #9");
             XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
+        }
+    }
+
+    // ---- 29. 接口协商: TUI 宿主声明 ui 表整体 + 内置插件 client 侧声明全被满足 ----
+    // "agentxx.client.ui" 是 ui 表 IID (表整体): 只有覆盖表内全部子能力的宿主才声明它;
+    // 内置插件的 client 入口只用到工具消息特化渲染, 清单按细粒度名
+    // agentxx.client.msg_decor 声明。两者必须互相对应 —— 否则 TUI 启动会误报
+    // "optional interface `...` not supported by host, related features disabled"
+    // (或 require 该接口的插件被跳过加载)。
+    {
+        namespace fs = std::filesystem;
+        namespace pi = agentxx::plugin::plugin_interfaces;
+
+        agentxx::client::TuiPluginAdapter tuiAdapter{std::weak_ptr<::TUIClientAgentIO>{}};
+        const auto tuiIfaces = tuiAdapter.supportedInterfaces();
+
+        // 29.1 表整体 + 全部已实现子能力 (第三方插件按表名声明时同样不再误报)
+        const std::string_view tuiUiInterfaces[] = {
+            pi::ClientUi,
+            pi::ClientStatusItem,
+            pi::ClientPanel,
+            pi::ClientToast,
+            pi::ClientInfoSection,
+            pi::ClientCommand,
+            pi::ClientMsgDecor,
+            pi::ClientAction,
+            pi::ClientOverlay,
+        };
+        for (auto ifaceName : tuiUiInterfaces) {
+            XX_TEST_EXPECT_TRUE(tuiIfaces.contains(std::string{ifaceName}));
+        }
+
+        // 29.2 构建产物中的内置插件清单: client 侧声明 (require + optional) 必须全部
+        // 被 TUI 支持集满足 (未满足即启动告警/插件被跳过, 属于本次修复要消除的情况)
+        const fs::path pluginsRoot = fs::path{findPluginPath("agentxx_filesystem")}
+                                         .parent_path();
+        std::error_code ec;
+        if (fs::is_directory(pluginsRoot, ec)) {
+            int checkedPlugins = 0;
+            for (const auto& entry : fs::directory_iterator{pluginsRoot, ec}) {
+                if (ec || !entry.is_directory()) {
+                    continue;
+                }
+                if (!fs::exists(entry.path() / "plugin.yaml", ec)) {
+                    continue;
+                }
+                std::string                              pluginName;
+                std::string                              entryName;
+                std::vector<std::string>                 depends;
+                std::vector<std::string>                 optionalDepends;
+                agentxx::plugin::PluginManifestInterfaces decl;
+                if (!agentxx::plugin::parsePluginManifest(
+                        entry.path(),
+                        pluginName,
+                        entryName,
+                        depends,
+                        optionalDepends,
+                        nullptr,
+                        &decl
+                    )) {
+                    continue;
+                }
+                auto check = agentxx::plugin::checkInterfacesForSide(decl, tuiIfaces, false);
+                if (!check.satisfied || !check.missingOptional.empty()) {
+                    std::string missing;
+                    for (const auto& n : check.missingRequired) {
+                        missing += " " + n;
+                    }
+                    for (const auto& n : check.missingOptional) {
+                        missing += " " + n;
+                    }
+                    XX_LOGW(
+                        "[test] plugin `{}` client 侧接口声明未被 TUI 宿主支持: {}",
+                        pluginName,
+                        missing
+                    );
+                }
+                XX_TEST_EXPECT_TRUE(check.satisfied);
+                XX_TEST_EXPECT_TRUE(check.missingOptional.empty());
+                ++checkedPlugins;
+            }
+            XX_TEST_EXPECT_TRUE(checkedPlugins > 0);
         }
     }
 

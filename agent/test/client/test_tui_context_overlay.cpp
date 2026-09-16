@@ -337,6 +337,32 @@ TestResult testTuiContextOverlay() {
         XX_TEST_EXPECT_TRUE(fx.comp->headerBoxes().size() == 4);
     }
 
+    // ---- 场景 9: 带前导换行的多行 systemPrompt 在 LLMContext 中正确展示 ----
+    {
+        ContextOverlayFixture fx;
+        std::string multilinePrompt = "\n\nYou are a helpful, knowledgeable AI coding assistant.\n\n## Core Behavior\n- Assist user.";
+        agentxx::util::Json msgs = agentxx::util::Json::array({
+            agentxx::util::Json{
+                {"role",    "system"},
+                {"content", multilinePrompt}
+            }
+        });
+        fx.setMessages(std::move(msgs));
+        auto screen = fx.render();
+
+        // 验证折叠头跳过前导换行, 正确显示首行有效文本预览
+        int x = -1, y = -1;
+        XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(screen, "+ [system]", x, y));
+        XX_TEST_EXPECT_TRUE(screen.find("You are") != std::string::npos);
+
+        // 点击展开 systemPrompt
+        XX_TEST_EXPECT_TRUE(fx.clickAt(x, y));
+        auto screen2 = fx.render();
+        XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(screen2, "- [system]", x, y));
+        XX_TEST_EXPECT_TRUE(screen2.find("content[") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screen2.find("Core Behavior") != std::string::npos);
+    }
+
     // ---- 场景 8: 关于弹窗 (AboutOverlay) 独立版本段与构建日期 ----
     {
         // 校验 kBuildDate 格式: "YYYY-MM-DD"

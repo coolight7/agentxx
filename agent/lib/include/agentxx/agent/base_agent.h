@@ -100,6 +100,10 @@ public:
     /// 获取 agent 上下文 (ioCtx / middleware / 会话存储等)
     std::shared_ptr<AgentContext> getContext();
 
+    /// 拼装指定会话的完整系统提示词 (systemPrompt + appendSystemPrompts + 动态 appendSystemMessage)
+    /// - 供 modelcall 节点及上下文查看 (WireGetContext / TUI LLMContext) 使用
+    std::string buildSystemPrompt(std::string_view sessionId = "") const;
+
     /// 以指定消息列表运行一轮 agent (可自定义 system prompt 等效消息),
     /// 收集完整输出为字符串
     /// - [messages] 直接作为本轮输入消息 (含 system 角色即自定义系统提示)

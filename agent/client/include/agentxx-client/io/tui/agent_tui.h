@@ -47,6 +47,13 @@
 /// 2 列计), 截断时以 "..." 收尾。max 为最大显示列数且含省略号占用;
 /// 折叠消息头部应按实际剩余列宽传入以实现自适应 (而非固定字符数)。
 inline std::string oneLinePreview(std::string_view s, size_t max = 60) {
+    // 跳过前导空白/空行, 保证第一行有效内容能作为预览展示 (如前导换行的系统提示词)
+    size_t start = 0;
+    while (start < s.size()
+           && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' || s[start] == '\n')) {
+        ++start;
+    }
+    s.remove_prefix(start);
     const auto  nl = s.find('\n');
     std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
     if (max == 0 || line.empty()) {

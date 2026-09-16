@@ -1172,6 +1172,13 @@ std::shared_ptr<AgentContext> BaseAgent::getContext() {
     return agentContext;
 }
 
+std::string BaseAgent::buildSystemPrompt(std::string_view sessionId) const {
+    if (!agentContext) {
+        return "";
+    }
+    return agentContext->buildSystemPrompt(sessionId);
+}
+
 asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
     std::string_view                     sessionId,
     std::vector<neograph::ChatMessage>   messages,

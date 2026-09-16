@@ -491,12 +491,34 @@ void SessionServerAgentIO::onPeerMessage(
                 agent->collectAppendComponentInfo(notifications);
                 sendToClient(sender, WireAppendComponentInfo{std::move(notifications)});
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
+                auto agent = agent_.lock();
                 auto sess = session();
-                if (!sess) {
-                    sendToClient(sender, WireContextMessages{agentxx::util::Json::array()});
-                    return;
+                agentxx::util::Json msgs = agentxx::util::Json::array();
+                if (sess && sess->llmMessages.is_array()) {
+                    msgs = sess->llmMessages;
                 }
-                sendToClient(sender, WireContextMessages{sess->llmMessages});
+                // 确保包含 systemPrompt:
+                // 若上下文首条不是 system 消息, 补充当前会话拼装的 systemPrompt
+                bool hasSystem = false;
+                if (!msgs.empty() && msgs.front().is_object()
+                    && msgs.front().value("role", std::string{}) == "system") {
+                    hasSystem = true;
+                }
+                if (!hasSystem && agent) {
+                    std::string sysPrompt = agent->buildSystemPrompt(m.sessionId);
+                    if (!sysPrompt.empty()) {
+                        agentxx::util::Json sysMsg = agentxx::util::Json::object();
+                        sysMsg["role"] = "system";
+                        sysMsg["content"] = std::move(sysPrompt);
+                        agentxx::util::Json newMsgs = agentxx::util::Json::array();
+                        newMsgs.push_back(std::move(sysMsg));
+                        for (auto item : msgs.items()) {
+                            newMsgs.push_back(std::move(item.second));
+                        }
+                        msgs = std::move(newMsgs);
+                    }
+                }
+                sendToClient(sender, WireContextMessages{std::move(msgs)});
             } else if constexpr (std::is_same_v<T, WireCompactContext>) {
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext || !agent->agentContext->bus) {
