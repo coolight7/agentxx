@@ -595,7 +595,7 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_EQ(gy, r.bounds.y_min + 1);
     }
 
-    // ---- Toast 提示 (仿照弹窗背景: 上下左右各 1 格内边距, 四角为 '+') ----
+    // ---- Toast 提示 (仿照弹窗背景: 左右各 2 格留白, 四角为 '+') ----
     // 1. Dark 主题单行 toast
     {
         SurfaceFixture fx;
@@ -629,11 +629,11 @@ TestResult testTuiSurface() {
         // 高度为 3 行 (上内边距 1 行 + 文本 1 行 + 下内边距 1 行)
         XX_TEST_EXPECT_EQ(r.bounds.y_max - r.bounds.y_min + 1, 3);
 
-        // 文本位于中间行 (y_min + 1), 左侧内边距正好 1 格 (x_min + 1)
+        // 文本位于中间行 (y_min + 1), 左侧内边距正好 2 格 (x_min + 2)
         int tx = -1, ty = -1;
         XX_TEST_EXPECT_TRUE(r.findText("通知内容", tx, ty));
         XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1);
-        XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 1);
+        XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 2);
 
         const int midX = r.midX();
         // 上内边距行、文本行、下内边距行中间单元格背景色均为 surfaceColor
@@ -644,11 +644,13 @@ TestResult testTuiSurface() {
         // 文本前景色默认采用 style.title
         XX_TEST_EXPECT_EQ(r.screen.CellAt(tx, ty).foreground_color, style.title);
 
-        // 左右留白单元格为空格, 背景为 surfaceColor
-        XX_TEST_EXPECT_EQ(r.screen.CellAt(r.bounds.x_min, ty).character, " ");
-        XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min, ty), fx.theme.surfaceColor);
-        XX_TEST_EXPECT_EQ(r.screen.CellAt(r.bounds.x_max, ty).character, " ");
-        XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max, ty), fx.theme.surfaceColor);
+        // 左右各 2 格留白单元格为空格, 背景为 surfaceColor
+        for (int dx = 0; dx <= 1; ++dx) {
+            XX_TEST_EXPECT_EQ(r.screen.CellAt(r.bounds.x_min + dx, ty).character, " ");
+            XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_min + dx, ty), fx.theme.surfaceColor);
+            XX_TEST_EXPECT_EQ(r.screen.CellAt(r.bounds.x_max - dx, ty).character, " ");
+            XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - dx, ty), fx.theme.surfaceColor);
+        }
 
         // 上下内边距行除四角角标外均为纯空白填充
         for (int x = r.bounds.x_min + 1; x < r.bounds.x_max; ++x) {
@@ -689,7 +691,7 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_EQ(r.bounds.y_max - r.bounds.y_min + 1, 3);
         int tx = -1, ty = -1;
         XX_TEST_EXPECT_TRUE(r.findText("Light Toast", tx, ty));
-        XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 1);
+        XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 2);
         XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1);
         XX_TEST_EXPECT_EQ(r.screen.CellAt(tx, ty).foreground_color, style.title);
     }
