@@ -10,4 +10,6 @@ interfaces:
   optional:
     - agentxx.agent.config
     - agentxx.agent.cancel
-    - agentxx.client.ui
+    # 工具消息特化渲染 (client 入口经 ui 表 register_tool_renderer 注册折叠头/展开体):
+    # 无消息渲染面的宿主 (cli) 不支持时注册被拒绝, 工具按通用样式展示
+    - agentxx.client.msg_decor

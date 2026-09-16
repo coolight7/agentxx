@@ -368,6 +368,17 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
 
+清单声明层约定 (`plugin.yaml` 的 `interfaces.require/optional`, 按前缀归属侧):
+
+- client 侧应声明**细粒度能力名** (`agentxx.client.msg_decor` / `...panel` / `...toast`
+  等, 各自映射到 ui 表的非空成员), 宿主据此判断插件功能是否可用; 未实现的预留名
+  一律视为"宿主不支持" (保守失败)
+- `agentxx.client.ui` (ui 表 IID) 表示**表整体**: 只有覆盖表内全部子能力的宿主才声明
+  它 (TUI); 插件声明表整体等价于"需要全部子能力", 子能力不全的宿主 (CLI) 会按缺失
+  处理 (`optional` 告警 / `require` 跳过加载)。因此只用到工具特化渲染的插件应声明
+  `agentxx.client.msg_decor`, 而不是表整体 —— 否则会被误报为"缺少 agentxx.client.ui,
+  相关功能停用"
+
 ### 工具特化渲染架构 (Tool Rendering & Decor)
 
 Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层完全解耦，不包含任何具体工具名称的硬编码：

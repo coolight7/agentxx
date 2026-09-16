@@ -306,6 +306,18 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.client.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.client.log` | 1 | `log(level, msg)`. |
 
+Manifest declaration conventions (`interfaces.require/optional`; the side is determined by prefix):
+
+- The client side should declare **fine-grained capability names** (`agentxx.client.msg_decor`,
+  `...panel`, `...toast`, ... — each maps to a non-NULL member of the ui table) so the host can
+  decide whether the feature is usable; reserved/unimplemented names are always treated as
+  "not supported by host" (fail safe).
+- `agentxx.client.ui` (the ui table IID) means the **whole table**: only hosts covering every
+  sub-capability advertise it (TUI). Declaring it is equivalent to requiring all sub-capabilities,
+  so hosts missing some of them (CLI) treat it as missing (`optional` → warning, `require` → skip
+  loading). A plugin that only uses specialized tool rendering should therefore declare
+  `agentxx.client.msg_decor` rather than the table IID.
+
 ### Specialized Tool Rendering Architecture (Tool Rendering & Decor)
 
 The Agentxx client adopts a unified, layered tool-specialized rendering mechanism. The TUI core is completely decoupled, containing zero hardcoded tool names:
