@@ -48,7 +48,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_filesystem_grep` | Searches file contents via literal text (`text_patterns`) or regular expressions (`regex_patterns`) (can search both simultaneously). |
 | **Command Execution** | `agentxx_execute_bash_command` | Executes Linux shell commands with timeout enforcement (Linux / macOS); the plugin probes python/node availability + version at start and writes them into the tool prompt. |
 | | `agentxx_execute_windows_command` | Executes Windows commands, defaulting to PowerShell (the plugin auto-probes pwsh/powershell at start and injects the executable name + version into the tool prompt), falling back to cmd.exe (Windows / callable under WSL). |
-| | `agentxx_execute_javascript` | Executes JavaScript code via the QuickJS interpreter (the JS equivalent of execute_bash_command; depends on `agentxx_javascript_engine` plugin). |
+| | `example_js_execute_command` | Executes JavaScript code via the QuickJS interpreter (the JS equivalent of execute_bash_command; depends on `agentxx_javascript_engine` plugin). |
 | **Mathematics** | `agentxx_math_calculate` | Mathematical expression parsing and evaluation (arithmetic, exponentiation, factorials, bitwise, logic, constants, trigonometric/hyperbolic/logarithmic/combinatorial functions, implicit multiplication). |
 | **Network** | `agentxx_web_search` | Web search (DuckDuckGo / Model Search). |
 | | `agentxx_web_fetch` | HTTP GET retrieving raw webpage content. |
@@ -71,7 +71,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | **Screen Capture** | `agentxx_screen_capture` | Screen capture and streaming (Windows only). |
 | **Audio Stream** | `agentxx_audio_stream` | System/application/microphone audio capture (**skipped on all platforms**: WASAPI implementation not enabled, stub only; see platform matrix in plugins.md). |
 | **Text Selection Monitor** | `agentxx_text_selection_monitor` | System-wide text selection event stream (Windows UIAutomation only). |
-| **JS Execution** | `agentxx_execute_javascript` | Executes JS code via QuickJS (depends: `interpreter.js` capability of `agentxx_javascript_engine`). |
+| **JS Execution** | `example_js_execute_command` | Executes JS code via QuickJS (depends: `interpreter.js` capability of `agentxx_javascript_engine`). |
 
 Tool Characteristics:
 - **Automatic Compaction**: Compresses summaries when tool outputs exceed `toolcallSummaryLimitOutputLength` (default 2K) and the tool enables `autoSummaryOutput` (original text offloaded via share_store).
@@ -1423,9 +1423,9 @@ agent/
 │   ├── example_plugin/           # Example C++ plugin (dual-sided): tools, hooks, events, capabilities, client entry
 │   ├── example_graph_node/       # Graph extension sample plugin (custom node types + set_graph_json graph modification; depends on agent.graph)
 │   ├── example_js/               # Example JavaScript plugin (C++ shell wrapper + plugin.js; depends: javascript_engine)
+│   ├── example_js_execute_command/ # JS code execution tool plugin (example_js_execute_command; depends: javascript_engine)
 │   ├── example_resources/        # Session resource contribution example (declarative & programmatic MCP/Skills/rules)
 │   ├── agentxx_javascript_engine/ # QuickJS engine plugin (exports capability interpreter.js; dedicated JS thread + sandbox)
-│   ├── agentxx_execute_javascript/ # JS code execution tool plugin (agentxx_execute_javascript; depends: javascript_engine)
 │   ├── agentxx_codegraph/        # CodeGraph code analysis plugin (search/context/callers/callees/path, 5 tools + client Info section)
 │   ├── agentxx_filesystem/       # Filesystem tools plugin (6 tools: list/read/write/edit/glob/grep)
 │   ├── agentxx_execute_command/  # Command execution plugin (2 tools: bash/windows)

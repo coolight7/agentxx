@@ -1,10 +1,10 @@
-// agentxx_execute_javascript —— JS 代码执行工具插件
+// example_js_execute_command —— JS 代码执行工具插件
 // 仿 agentxx_execute_command (agentxx_execute_bash_command / windows) 的设计，
-// 提供 agentxx_execute_javascript 工具，在 QuickJS 沙箱内执行任意 JS 代码并返回格式化输出。
+// 提供 example_js_execute_command 工具，在 QuickJS 沙箱内执行任意 JS 代码并返回格式化输出。
 // 依赖 agentxx_javascript_engine (interpreter.js 能力) 承载。
 
 (function () {
-  var kName = "agentxx_execute_javascript";
+  var kName = "example_js_execute_command";
   var kMaxStdOut = 30000; // 字符数限制，对齐 execute_command_impl.h kMaxStdOutUtf8Length
   var kMaxStdErr = 30000;
   var _global = (typeof globalThis !== "undefined" ? globalThis : this);
@@ -270,8 +270,17 @@
 
   try {
     agentxx.registerTool({
+      name: "agentxx_execute_javascript",
+      description: "Alias of example_js_execute_command — execute JavaScript code in QuickJS sandbox.",
+      parameters: toolSpec.parameters,
+      execute: executeJavascript
+    });
+  } catch (_) {}
+
+  try {
+    agentxx.registerTool({
       name: "agentxx_execute_js",
-      description: "Alias of agentxx_execute_javascript — execute JavaScript code in QuickJS sandbox.",
+      description: "Alias of example_js_execute_command — execute JavaScript code in QuickJS sandbox.",
       parameters: toolSpec.parameters,
       execute: executeJavascript
     });

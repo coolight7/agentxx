@@ -1,8 +1,8 @@
-# agentxx_execute_javascript —— JS 版 `execute_bash_command`，用于测试 JS 插件开发
-# - 默认: libagentxx_execute_javascript.so: C++ 壳 (MODULE, 经 interpreter.js 能力委派 plugin.js 给引擎)
+# example_js_execute_command —— JS 版 `execute_bash_command`，用于测试 JS 插件开发
+# - 默认: libexample_js_execute_command.so: C++ 壳 (MODULE, 经 interpreter.js 能力委派 plugin.js 给引擎)
 # - 内置模式: 壳编译为 OBJECT 库合并进 libagentxx,
 #   plugin.yaml + plugin.js 仍拷贝到运行期插件目录 (壳经 get_own_info 的 path 推导同目录 plugin.js)
-set(PLUGIN_NAME agentxx_execute_javascript)
+set(PLUGIN_NAME example_js_execute_command)
 
 # ===== 平台支持判定 =====
 # QuickJS 引擎全平台可用（与 agentxx_javascript_engine 一致），本插件纯 JS 逻辑无额外平台限制
@@ -18,7 +18,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
   set(_target abp_${PLUGIN_NAME})
   add_library(${_target} OBJECT
-    ${CMAKE_CURRENT_SOURCE_DIR}/libagentxx_execute_javascript.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/libexample_js_execute_command.cpp
   )
   target_compile_definitions(${_target} PRIVATE
     "AGENTXX_PLUGIN_BUILTIN=1"
@@ -58,10 +58,10 @@ if (_AGENTXX_ADD_AS_BUILTIN)
 endif()
 
 # ===== 独立动态库编译 (默认) =====
-# - libagentxx_execute_javascript.so: C++ 壳 (MODULE, 经能力调用委派脚本给引擎)
+# - libexample_js_execute_command.so: C++ 壳 (MODULE, 经能力调用委派脚本给引擎)
 # - plugin.yaml + plugin.js 拷贝到同目录 (壳推导同目录 plugin.js)
 add_library(${PLUGIN_NAME} SHARED
-  libagentxx_execute_javascript.cpp
+  libexample_js_execute_command.cpp
 )
 
 if (NOT TARGET agentxx_util)

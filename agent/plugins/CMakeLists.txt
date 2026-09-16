@@ -27,7 +27,6 @@ option(AGENTXX_ENABLE_PLUGIN_MATH "Build agentxx_math plugin (math calculation).
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
-option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
@@ -214,6 +213,7 @@ agentxx_load_plugin(example_graph_node AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 # JS 相关 (example_js 依赖 quickjs 引擎目标)
 agentxx_load_plugin(agentxx_javascript_engine AGENTXX_ENABLE_PLUGIN_JS)
 agentxx_load_plugin(example_js AGENTXX_ENABLE_PLUGIN_EXAMPLE)
+agentxx_load_plugin(example_js_execute_command AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 
 # agentxx_computer_use (运行时依赖 agentxx_screen_capture)
 agentxx_load_plugin(agentxx_screen_capture AGENTXX_ENABLE_PLUGIN_SCREEN_CAPTURE)
@@ -225,7 +225,6 @@ agentxx_load_plugin(agentxx_system_monitor AGENTXX_ENABLE_PLUGIN_SYSTEM_MONITOR)
 # gate), 全平台跳过编译, 不进入构建产物; 开关保留以便实现完成后直接启用
 agentxx_load_plugin(agentxx_audio_stream AGENTXX_ENABLE_PLUGIN_AUDIO_STREAM)
 agentxx_load_plugin(agentxx_text_selection_monitor AGENTXX_ENABLE_PLUGIN_TEXT_SELECTION)
-agentxx_load_plugin(agentxx_execute_javascript AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT)
 agentxx_load_plugin(agentxx_string AGENTXX_ENABLE_PLUGIN_STRING)
 agentxx_load_plugin(agentxx_math AGENTXX_ENABLE_PLUGIN_MATH)
 

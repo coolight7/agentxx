@@ -409,7 +409,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_audio_stream` | Audio stream capture (**skipped on all platforms**: WASAPI implementation not enabled; stub only). |
 | `agentxx_text_selection_monitor` | Text selection event listener (Windows UIAutomation only). |
 | `agentxx_javascript_engine` | QuickJS execution engine (exports `interpreter.js` capability). |
-| `agentxx_execute_javascript` | JS code execution tool (`agentxx_execute_javascript`; depends on `agentxx_javascript_engine`). |
+| `example_js_execute_command` | JS code execution tool (`example_js_execute_command`; depends on `agentxx_javascript_engine`). |
 
 > **Plugins own their tool prompts (including runtime env probing)**: tool definitions
 > (`description` / `parameters`) are frozen by `register_tool`, so a plugin must finish any

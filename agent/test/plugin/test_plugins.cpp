@@ -261,26 +261,27 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // ---- 4.6 agentxx_execute_javascript 插件端到端 (仿 execute_command 的 JS 实现) ----
+    // ---- 4.6 example_js_execute_command 插件端到端 (仿 execute_command 的 JS 实现) ----
     {
         auto jsEnginePath = findPluginDir("agentxx_javascript_engine");
         if (!ctx->pluginManager->hasCapability("interpreter.js")) {
             auto eInst = co_await ctx->pluginManager->loadPluginAsync(jsEnginePath);
             XX_TEST_EXPECT_TRUE(eInst != nullptr);
         }
-        auto jsExecPath = findPluginDir("agentxx_execute_javascript");
+        auto jsExecPath = findPluginDir("example_js_execute_command");
         auto jsExecInst = co_await ctx->pluginManager->loadPluginAsync(jsExecPath);
         XX_TEST_EXPECT_TRUE(jsExecInst != nullptr);
         if (jsExecInst) {
-            for (int i = 0; i < 30 && !ctx->toolRegistry->contains("agentxx_execute_javascript");
+            for (int i = 0; i < 30 && !ctx->toolRegistry->contains("example_js_execute_command");
                  ++i) {
                 co_await sleepMs(50);
             }
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_js_execute_command"));
+            // 别名工具 agentxx_execute_javascript 与 agentxx_execute_js
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_javascript"));
-            // 别名工具 agentxx_execute_js
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_execute_js"));
 
-            auto tool = ctx->toolRegistry->find("agentxx_execute_javascript");
+            auto tool = ctx->toolRegistry->find("example_js_execute_command");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 // 1. 同步计算与返回值
@@ -345,9 +346,18 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 });
                 XX_TEST_EXPECT_TRUE(outAlias.find("alias_ok") != std::string::npos);
             }
+            auto aliasTool2 = ctx->toolRegistry->find("agentxx_execute_javascript");
+            XX_TEST_EXPECT_TRUE(aliasTool2 != nullptr);
+            if (aliasTool2) {
+                auto outAlias2 = co_await aliasTool2->execute_async(agentxx::util::Json{
+                    {"code", "return 'alias2_ok';"},
+                });
+                XX_TEST_EXPECT_TRUE(outAlias2.find("alias2_ok") != std::string::npos);
+            }
 
             // 8. 卸载与清理
-            co_await ctx->pluginManager->unloadAsync("agentxx_execute_javascript");
+            co_await ctx->pluginManager->unloadAsync("example_js_execute_command");
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_js_execute_command"));
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_execute_javascript"));
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_execute_js"));
         }

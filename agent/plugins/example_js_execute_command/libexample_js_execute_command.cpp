@@ -1,8 +1,8 @@
-/// libagentxx_execute_javascript.so —— JS 执行工具插件的 C++ 壳
+/// libexample_js_execute_command.so —— JS 执行工具插件的 C++ 壳
 /// 仿 example_js / agentxx_execute_command 结构：
-/// - 本体为 C++ 插件，entry 指向 libagentxx_execute_javascript.so
+/// - 本体为 C++ 插件，entry 指向 libexample_js_execute_command.so
 /// - start 阶段经 interpreter.js 能力把同目录 plugin.js 交给 QuickJS 引擎执行
-/// - plugin.js 内注册 agentxx_execute_javascript 工具（仿照 agentxx_execute_command）
+/// - plugin.js 内注册 example_js_execute_command 工具（仿照 agentxx_execute_command）
 ///
 /// 实例生命周期: create 只构造, start 加载脚本, stop 停止脚本执行
 /// - create: 只构造上下文 (查询接口表 + 解析自身路径), 不注册、不启动线程;
@@ -85,7 +85,7 @@ void AGENTXX_PLUGIN_CALL
         if (ctx) {
             ctx->scriptLoaded = true;
             if (!text.empty()) {
-                shellLog(ctx, 2, fmt::format("agentxx_execute_javascript: loaded tools {}", text));
+                shellLog(ctx, 2, fmt::format("example_js_execute_command: loaded tools {}", text));
             }
         }
         notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
@@ -99,7 +99,7 @@ void AGENTXX_PLUGIN_CALL
         shellLog(
             ctx,
             4,
-            fmt::format("agentxx_execute_javascript: interpreter load failed: {}", msg)
+            fmt::format("example_js_execute_command: interpreter load failed: {}", msg)
         );
     }
     auto errSv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
@@ -121,7 +121,7 @@ void AGENTXX_PLUGIN_CALL
         ctx,
         3,
         fmt::format(
-            "agentxx_execute_javascript: interpreter unload failed: {}",
+            "example_js_execute_command: interpreter unload failed: {}",
             text.empty() ? "?" : text
         )
     );
@@ -155,7 +155,7 @@ void dispatchScriptUnload(ShellCtx& ctx) {
             shellLog(
                 &ctx,
                 3,
-                fmt::format("agentxx_execute_javascript: unload dispatch failed: {}", err.data)
+                fmt::format("example_js_execute_command: unload dispatch failed: {}", err.data)
             );
         }
         agentxx::plugin::PluginString::free(ctx.host, &err);
@@ -172,7 +172,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
             static const AgentxxPluginInfo info{
                 AGENTXX_PLUGIN_API_VERSION,
                 0,
-                agentxx::plugin::PluginStringView::fromCstr("agentxx_execute_javascript"),
+                agentxx::plugin::PluginStringView::fromCstr("example_js_execute_command"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
                     "Execute JavaScript code (JS equivalent of bash command) via QuickJS"
@@ -214,7 +214,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             AgentxxPluginString info{nullptr, 0};
             s_if.plugins->get_own_info(host, &info);
             if (!info.data) {
-                logE("agentxx_execute_javascript: get_own_info failed");
+                logE("example_js_execute_command: get_own_info failed");
                 return -1;
             }
             auto field = [&](const char* key) -> std::string {
@@ -233,7 +233,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             ctx->name           = field("name");
             agentxx::plugin::PluginString::free(host, &info);
             if (ctx->name.empty() || libPath.empty()) {
-                logE("agentxx_execute_javascript: own info invalid");
+                logE("example_js_execute_command: own info invalid");
                 return -1;
             }
             ctx->dir = dirOf(libPath);
@@ -252,7 +252,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
             // 开发期兜底：若按 get_own_info 推导的 plugin.js 不存在，尝试源码目录
             // (host 传入的 path 在内置模式下可能为虚路径，此分支仅为本地调试兜底)
             if (!fileExists(ctx->scriptPath)) {
-                std::string fallback = "agent/plugins/agentxx_execute_javascript/plugin.js";
+                std::string fallback = "agent/plugins/example_js_execute_command/plugin.js";
                 if (fileExists(fallback)) {
                     ctx->scriptPath = fallback;
                 }
@@ -280,20 +280,20 @@ static void* jsShellAgentStart(
         return nullptr;
     };
     if (!notify || !notify->done) {
-        return setErr("agentxx_execute_javascript start: notify required");
+        return setErr("example_js_execute_command start: notify required");
     }
     if (!ctx.iface.capabilities || !ctx.iface.capabilities->has_capability
         || !ctx.iface.capabilities->invoke_capability_async) {
-        return setErr("agentxx_execute_javascript start: host lacks capabilities interface");
+        return setErr("example_js_execute_command start: host lacks capabilities interface");
     }
     auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
     if (!ctx.iface.capabilities->has_capability(ctx.host, &capSv)) {
-        return setErr("agentxx_execute_javascript start: interpreter.js capability not available "
+        return setErr("example_js_execute_command start: interpreter.js capability not available "
                       "(need agentxx_javascript_engine)");
     }
     if (!fileExists(ctx.scriptPath)) {
         return setErr(
-            "agentxx_execute_javascript start: plugin.js not found next to the plugin library"
+            "example_js_execute_command start: plugin.js not found next to the plugin library"
         );
     }
     if (ctx.scriptLoaded) {
@@ -328,7 +328,7 @@ static void* jsShellAgentStart(
     if (err.data) {
         agentxx::plugin::PluginString::free(ctx.host, &err);
     }
-    shellLog(&ctx, 2, fmt::format("agentxx_execute_javascript: loading script {}", ctx.scriptPath));
+    shellLog(&ctx, 2, fmt::format("example_js_execute_command: loading script {}", ctx.scriptPath));
     return &ctx.opToken; ///< 已接受: 完成通知在加载回调中发出
 }
 

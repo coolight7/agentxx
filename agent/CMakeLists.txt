@@ -72,7 +72,6 @@ option(AGENTXX_ENABLE_PLUGIN_MATH "Build agentxx_math plugin (math calculation).
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
-option(AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT "Build agentxx_execute_javascript plugin (JS execution via QuickJS, bash equivalent)." ON)
 # 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx, 运行期无需插件
 # 动态库 (无 dlopen; 适合嵌入式/单文件分发)。
 # 
@@ -693,7 +692,6 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_SYSTEM=${AGENTXX_ENABLE_PLUGIN_SYSTEM}
     -DAGENTXX_ENABLE_PLUGIN_WEBSEARCH=${AGENTXX_ENABLE_PLUGIN_WEBSEARCH}
     -DAGENTXX_ENABLE_PLUGIN_RAG_SEARCH=${AGENTXX_ENABLE_PLUGIN_RAG_SEARCH}
-    -DAGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT=${AGENTXX_ENABLE_PLUGIN_EXECUTE_JAVASCRIPT}
     "-DAGENTXX_PLUGIN_BUILTIN_LIST=${AGENTXX_PLUGIN_BUILTIN_LIST}"
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"

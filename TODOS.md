@@ -9,9 +9,6 @@
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
 
-- 分析 ftxui 的源码，整理 tui 实现和架构
-- agentxx_execute_javascript 更名
-
 - 调整 tui 亮色配置
 - SVG绘制支持
 - 链式 session 任务队列

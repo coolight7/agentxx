@@ -521,7 +521,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `agentxx_audio_stream` | 音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现) |
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
-| `agentxx_execute_javascript` | JS 代码执行工具 (`agentxx_execute_javascript`, 依赖 `agentxx_javascript_engine`) |
+| `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
 
 > **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
 > `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策

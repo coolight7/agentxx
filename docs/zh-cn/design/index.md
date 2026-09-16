@@ -53,7 +53,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集) |
 | **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS)；插件启动时探测 python/node 可用性与版本并写入工具提示词 |
 | | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (插件启动时自动探测 pwsh/powershell 并注入可执行文件名与版本号到工具提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
-| | `agentxx_execute_javascript` | 通过 QuickJS 解释器执行 JavaScript 代码 (execute_bash_command 的 JS 等价物, 依赖插件 `agentxx_javascript_engine`) |
+| | `example_js_execute_command` | 通过 QuickJS 解释器执行 JavaScript 代码 (execute_bash_command 的 JS 等价物, 依赖插件 `agentxx_javascript_engine`) |
 | **数学计算** | `agentxx_math_calculate` | 数学表达式解析与计算 (四则运算、幂、阶乘、位运算、比较逻辑、常量、三角/双曲/对数/组合排列等函数、隐式乘法) |
 | **网络** | `agentxx_web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
 | | `agentxx_web_fetch` | HTTP GET 获取网页原文 |
@@ -76,7 +76,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | **屏幕捕获** | `agentxx_screen_capture` | 屏幕截图/流式捕获 (仅 Windows) |
 | **音频流** | `agentxx_audio_stream` | 系统/程序/麦克风音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现; 平台矩阵见 plugins.md) |
 | **文本选择监听** | `agentxx_text_selection_monitor` | 系统级文本选择事件流 (仅 Windows UIAutomation) |
-| **JS 执行** | `agentxx_execute_javascript` | QuickJS 执行 JS 代码 (depends: `agentxx_javascript_engine` 的 `interpreter.js` 能力) |
+| **JS 执行** | `example_js_execute_command` | QuickJS 执行 JS 代码 (depends: `agentxx_javascript_engine` 的 `interpreter.js` 能力) |
 
 工具特性：
 - **自动压缩**: 工具输出超过阈值 (`toolcallSummaryLimitOutputLength`, 默认 2K) 且该 tool 启用 `autoSummaryOutput` 时压缩摘要 (经 share_store 卸载原文)
@@ -1716,9 +1716,9 @@ agent/
 │   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/钩子/事件/能力/client 入口
 │   ├── example_graph_node/       # Graph 扩展示例插件 (自定义节点类型 + set_graph_json 改图, 依赖 agent.graph 接口)
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
+│   ├── example_js_execute_command/ # JS 代码执行工具插件 (example_js_execute_command; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
 │   ├── agentxx_javascript_engine/ # QuickJS 引擎插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
-│   ├── agentxx_execute_javascript/ # JS 代码执行工具插件 (agentxx_execute_javascript; depends: javascript_engine)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)
 │   ├── agentxx_filesystem/       # 文件系统 6 工具 (list/read/write/edit/glob/grep)
 │   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)

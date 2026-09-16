@@ -409,7 +409,7 @@ plugin:
     # === JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ===
     # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
     #   enabled: true
-    # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_javascript"
+    # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js_execute_command"
     #   enabled: true
     # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js"
     #   enabled: true

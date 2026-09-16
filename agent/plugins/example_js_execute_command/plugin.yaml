@@ -1,0 +1,12 @@
+# example_js_execute_command —— JS 代码执行工具插件 (execute_bash_command 的 JS 等价)
+# 仿 execute_bash_command 设计: 依赖 QuickJS 引擎 (interpreter.js 能力)
+# 提供 example_js_execute_command 工具，执行任意 JS 代码并返回格式化输出
+name: example_js_execute_command
+version: 1.0.0
+description: "Execute JavaScript code (JS equivalent of bash command): example_js_execute_command via QuickJS interpreter"
+entry: libexample_js_execute_command.so
+depends:
+  - agentxx_javascript_engine
+interfaces:
+  require:
+    - agentxx.agent.core
