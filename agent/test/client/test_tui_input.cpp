@@ -475,12 +475,10 @@ void test_input_pending_queue_visibility() {
             out.find("Message Queue") == std::string::npos
             && out.find("待发送消息队列") == std::string::npos
         );
-        XX_TEST_EXPECT_TRUE(
-            comp->pendingCounterBox().x_min == 0 && comp->pendingCounterBox().x_max == 0
-        );
-        XX_TEST_EXPECT_TRUE(
-            comp->pendingInsertButtonBox().x_min == 0 && comp->pendingInsertButtonBox().x_max == 0
-        );
+        // 未渲染的按钮不登记命中: 命中框为空区域 (空区域用 IsEmpty 判定,
+        // 默认构造的 ftxui::Box 四分量皆为 0 并不是空区域)
+        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().IsEmpty());
+        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().IsEmpty());
     }
 
     // 2. pendingInputs 非空时: 屏幕中出现队列标题与立即发送按钮, Box 被 reflect 填充有效尺寸
@@ -507,6 +505,8 @@ void test_input_pending_queue_visibility() {
         XX_TEST_EXPECT_TRUE(
             comp->pendingInsertButtonBox().x_max > comp->pendingInsertButtonBox().x_min
         );
+        XX_TEST_EXPECT_TRUE(!comp->pendingCounterBox().IsEmpty());
+        XX_TEST_EXPECT_TRUE(!comp->pendingInsertButtonBox().IsEmpty());
     }
 
     // 3. pendingInputs 清空后: 重新渲染, 队列消失, Box 重置
@@ -523,12 +523,10 @@ void test_input_pending_queue_visibility() {
             out.find("Message Queue") == std::string::npos
             && out.find("待发送消息队列") == std::string::npos
         );
-        XX_TEST_EXPECT_TRUE(
-            comp->pendingCounterBox().x_min == 0 && comp->pendingCounterBox().x_max == 0
-        );
-        XX_TEST_EXPECT_TRUE(
-            comp->pendingInsertButtonBox().x_min == 0 && comp->pendingInsertButtonBox().x_max == 0
-        );
+        // 未渲染的按钮不登记命中: 命中框为空区域 (空区域用 IsEmpty 判定,
+        // 默认构造的 ftxui::Box 四分量皆为 0 并不是空区域)
+        XX_TEST_EXPECT_TRUE(comp->pendingCounterBox().IsEmpty());
+        XX_TEST_EXPECT_TRUE(comp->pendingInsertButtonBox().IsEmpty());
     }
 }
 

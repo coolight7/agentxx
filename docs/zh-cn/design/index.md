@@ -1,5 +1,5 @@
 # Agentxx 整体设计文档
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计)
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构)
 
 ## 目录
 

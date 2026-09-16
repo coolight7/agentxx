@@ -4,8 +4,42 @@
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include <algorithm>
+#include <charconv>
 
 using namespace ftxui;
+
+namespace {
+
+/// 解析附件删除按钮命中 id 中的下标 ("input/attach-delete/<n>"); 失败返回 -1
+int parseAttachDeleteIndex(std::string_view id) {
+    if (!id.starts_with(InputComponent::kAttachDeletePrefix)) {
+        return -1;
+    }
+    const auto  number = id.substr(InputComponent::kAttachDeletePrefix.size());
+    int         index  = -1;
+    const auto* begin  = number.data();
+    const auto* end    = number.data() + number.size();
+    if (number.empty() || std::from_chars(begin, end, index).ec != std::errc{} || index < 0) {
+        return -1;
+    }
+    return index;
+}
+
+} // namespace
+
+ftxui::Box InputComponent::hitBox(std::string_view id) const {
+    for (const auto& entry : hits_.entries()) {
+        if (entry.payload.id == id) {
+            return *entry.box;
+        }
+    }
+    return agentxx::client::kNoBox;
+}
+
+ftxui::Box InputComponent::attachmentDeleteBox(size_t index) const {
+    return hitBox(fmt::format("{}{}", kAttachDeletePrefix, index));
+}
 
 InputComponent::InputComponent(TUICtx& ctx, Config config) :
     ctx_(ctx),
@@ -49,6 +83,9 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
 Element InputComponent::OnRender() {
     const auto& theme = *ctx_.theme;
 
+    // 帧首清空命中表: 本帧未渲染的按钮 (隐藏的 [📎︎︎] / 附件删除 / 队列行) 不命中
+    hits_.beginFrame();
+
     Element indicator;
     if (config_.isAwaitingInterrupt && config_.isAwaitingInterrupt()) {
         // 闪烁为 Low 级动画, 动画等级低于 Low (如 Disabled) 时仅静态高亮
@@ -61,21 +98,21 @@ Element InputComponent::OnRender() {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
 
-    // 多模态文件选择按钮 [+ 📎︎︎ 附件] (仅当当前模型支持多模态输入时展示)
+    // 多模态文件选择按钮 [+ 📎︎︎ 附件] (仅当当前模型支持多模态输入时展示并登记命中)
     Element attachButton = text("");
     if (config_.canAttach && config_.canAttach()) {
         attachButton = hbox({
             text(" "),
-            text(std::string(TuiI18n::instance().t("input.attach"))) | color(theme.accentColor)
-                | bold | reflect(attachButtonBox_),
+            hits_.add(
+                text(std::string(TuiI18n::instance().t("input.attach"))) | color(theme.accentColor)
+                    | bold,
+                std::string{kAttachHitId}
+            ),
         });
-    } else {
-        attachButtonBox_ = Box{};
     }
 
-    // 待发附件挂载托盘 (Attachment Tray)
+    // 待发附件挂载托盘 (Attachment Tray): 每个附件一个 [✕] 删除按钮
     Element trayElement = text("");
-    attachmentDeleteBoxes_.assign(attachments_.size(), Box{});
     if (!attachments_.empty()) {
         Elements trayItems;
         trayItems.push_back(
@@ -85,12 +122,15 @@ Element InputComponent::OnRender() {
             const auto& att     = attachments_[i];
             auto        icon    = agentxx::agent::MediaAttachment::mediaTypeIcon(att.type);
             auto        sizeStr = agentxx::util::formatSize(att.sizeBytes);
-            auto        delBtn  = text("[ ✕ ]") | bgcolor(theme.buttonBgColor)
-                          | color(theme.buttonTextColor) | bold
-                          | reflect(attachmentDeleteBoxes_[i]);
+            auto        delBtn
+                = hits_.add(
+                      text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
+                          | bold,
+                      fmt::format("{}{}", kAttachDeletePrefix, i)
+                  );
             auto pill = hbox({
                             text(fmt::format(" [ {} {} ( {} ) ", icon, att.displayName, sizeStr)),
-                            delBtn,
+                            std::move(delBtn),
                             text(" ] "),
                         })
                         | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor);
@@ -105,20 +145,23 @@ Element InputComponent::OnRender() {
         const auto& st = *ctx_.frameState;
         queueElement
             = hbox({
-                  text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme.accentColor)
-                      | bold | reflect(pendingCounterBox_),
+                  hits_.add(
+                      text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme.accentColor)
+                          | bold,
+                      std::string{kPendingCounterHitId}
+                  ),
                   text(" "),
-                  text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
-                      | color(theme.buttonTextColor) | bold | reflect(pendingInsertButtonBox_),
+                  hits_.add(
+                      text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
+                          | color(theme.buttonTextColor) | bold,
+                      std::string{kPendingInsertHitId}
+                  ),
                   filler(),
               })
               | bgcolor(theme.inputBgColor) | xflex;
-    } else {
-        pendingCounterBox_      = Box{};
-        pendingInsertButtonBox_ = Box{};
     }
 
-    const int maxInputTotalLines = std::max(3, Terminal::Size().dimy / 2);
+    const int maxInputTotalLines = std::max(3, ctx_.terminalSize().dimy / 2);
 
     Elements vboxChildren;
     if (ctx_.frameState && !ctx_.frameState->pendingInputs.empty()) {
@@ -152,25 +195,8 @@ Element InputComponent::OnRender() {
 
 bool InputComponent::OnEvent(Event event) {
     if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            // 点击 [+ 📎︎︎ 附件] 按钮
-            if (attachButtonBox_.Contain(mouse.x, mouse.y)) {
-                if (config_.onOpenAttachPicker) {
-                    config_.onOpenAttachPicker();
-                }
-                return true;
-            }
-            // 点击附件删除按钮 ✕
-            for (size_t i = 0; i < attachmentDeleteBoxes_.size(); ++i) {
-                if (attachmentDeleteBoxes_[i].Contain(mouse.x, mouse.y)) {
-                    if (i < attachments_.size()) {
-                        attachments_.erase(attachments_.begin() + i);
-                        ctx_.postRedraw();
-                        return true;
-                    }
-                }
-            }
+        if (handleClick(event.mouse())) {
+            return true;
         }
     }
 
@@ -267,4 +293,43 @@ bool InputComponent::OnEvent(Event event) {
     }
 
     return input_->OnEvent(event);
+}
+
+bool InputComponent::handleClick(const Mouse& mouse) {
+    const auto* hit = hits_.findClick(mouse);
+    if (hit == nullptr) {
+        return false;
+    }
+    const std::string& id = hit->payload.id;
+
+    // [ 📎︎︎ ] 附件选择按钮
+    if (id == kAttachHitId) {
+        if (config_.onOpenAttachPicker) {
+            config_.onOpenAttachPicker();
+        }
+        return true;
+    }
+    // 附件删除按钮 [✕] (下标在渲染与点击之间可能已失效: 越界忽略)
+    if (const int index = parseAttachDeleteIndex(id); index >= 0) {
+        if (static_cast<size_t>(index) < attachments_.size()) {
+            attachments_.erase(attachments_.begin() + index);
+            ctx_.postRedraw();
+        }
+        return true;
+    }
+    // 待发队列计数 (打开待发送队列弹窗)
+    if (id == kPendingCounterHitId) {
+        if (config_.onOpenPendingQueue) {
+            config_.onOpenPendingQueue();
+        }
+        return true;
+    }
+    // 待发队列 [立即发送] (中断当前轮次, 立即执行队列下一条)
+    if (id == kPendingInsertHitId) {
+        if (config_.onRunNextPending) {
+            config_.onRunNextPending();
+        }
+        return true;
+    }
+    return false;
 }

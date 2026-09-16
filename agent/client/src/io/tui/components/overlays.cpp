@@ -52,118 +52,98 @@ inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
 // ModelSelectorOverlay
 // ---------------------------------------------------------------------------
 
+ModelSelectorOverlay::ModelSelectorOverlay(TUICtx& ctx) :
+    ctx_(ctx),
+    style_(UiActionStyle::fromTheme(*ctx.theme)) {}
+
+void ModelSelectorOverlay::buildItems() {
+    const auto& st = *ctx_.frameState;
+
+    std::vector<UiActionItem> items;
+    items.reserve(st.modelNames.size());
+    for (const auto& name : st.modelNames) {
+        items.push_back(UiActionItem{
+            .id         = name,
+            .label      = name,
+            .onActivate = [this, model = std::string{name}] {
+                confirmItem(model);
+            },
+        });
+    }
+    list_.setItems(std::move(items));
+
+    // 首次渲染时把选中项对齐到当前使用中的模型 (须在 setItems 之后: 选中项按
+    // 条目表定位; 之后以用户的选择为准)
+    if (!initialAligned_) {
+        list_.selectById(st.cachedModelName);
+        initialAligned_ = true;
+    }
+}
+
 Element ModelSelectorOverlay::OnRender() {
-    const auto& st         = *ctx_.frameState;
     const auto& theme      = *ctx_.theme;
     const int   maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
 
-    // 首次渲染且尚未手动设置/对齐时, 若 cachedModelName 在列表中, 对齐选中项
-    if (!initialAligned_ && !st.cachedModelName.empty()) {
-        for (size_t i = 0; i < st.modelNames.size(); ++i) {
-            if (st.modelNames[i] == st.cachedModelName) {
-                selectedIndex_  = static_cast<int>(i);
-                initialAligned_ = true;
-                break;
-            }
-        }
-    }
-
-    itemBoxes_.assign(st.modelNames.size(), Box{});
-    Elements items;
-    for (size_t i = 0; i < st.modelNames.size(); ++i) {
-        // 整行可选: 文本 + filler 撑满整行, 选中项背景覆盖整行
-        // (左右留白由外框统一提供, 行内不再补空格)
-        auto entry = hbox({
-            text(st.modelNames[i]),
-            filler(),
-        });
-        if (static_cast<int>(i) == selectedIndex_) {
-            entry = entry | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
-                    | focus;
-        } else {
-            entry = entry | color(theme.normalColor);
-        }
-        items.push_back(entry | reflect(itemBoxes_[i]));
-    }
+    // 主题可能被设置弹窗切换: 每帧按当前主题刷新条目配色
+    style_ = UiActionStyle::fromTheme(theme);
+    hits_.beginFrame();
+    buildItems();
 
     Element list;
-    if (st.modelNames.empty()) {
+    if (list_.empty()) {
         // 尚未收到服务端模型信息响应 → 加载中; 已收到但为空 → 确实无可用模型
-        if (!st.modelInfoLoaded) {
-            list = text(tr("model.loading")) | dim;
-        } else {
-            list = text(tr("model.empty")) | dim;
-        }
+        list = text(ctx_.frameState->modelInfoLoaded ? tr("model.empty") : tr("model.loading")) | dim;
     } else {
-        list = vbox(std::move(items)) | bold | yframe | vscroll_indicator
+        // 条目整行高亮由 UiActionStyle 提供; 选中项带 focus, 配合 yframe 自动滚入视口
+        list = list_.render(hits_, style_) | bold | yframe | vscroll_indicator
                | size(HEIGHT, LESS_THAN, maxVisible);
     }
 
-    const auto style = TuiSurfaceStyle::fromTheme(theme);
-    return tuiSurfacePopup(style, tr("model.title"), std::move(list), tr("model.hint"))
+    const auto surface = TuiSurfaceStyle::fromTheme(theme);
+    return tuiSurfacePopup(surface, tr("model.title"), std::move(list), tr("model.hint"))
            | size(WIDTH, LESS_THAN, 50);
 }
 
 bool ModelSelectorOverlay::OnEvent(Event event) {
-    if (event == Event::ArrowUp) {
-        if (selectedIndex_ > 0) {
-            --selectedIndex_;
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::ArrowDown) {
-        auto snap = ctx_.state->readSnapshot();
-        if (selectedIndex_ + 1 < static_cast<int>(snap->modelNames.size())) {
-            ++selectedIndex_;
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::Return) {
-        confirmSelection();
-        ctx_.postRedraw();
-        if (onClose_) {
-            onClose_();
-        }
-        return true;
-    }
     if (event == Event::Escape) {
         ctx_.postRedraw();
-        if (onClose_) {
-            onClose_();
-        }
+        close();
         return true;
     }
-    if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            for (size_t i = 0; i < itemBoxes_.size(); ++i) {
-                if (itemBoxes_[i].Contain(mouse.x, mouse.y)) {
-                    selectedIndex_ = static_cast<int>(i);
-                    confirmSelection();
-                    ctx_.postRedraw();
-                    if (onClose_) {
-                        onClose_();
-                    }
-                    return true;
-                }
-            }
-        }
+    // 上下键/Enter/鼠标点击命中统一由条目列表处理 (命中 = 选中 + 激活 = 切换模型)
+    const bool handled = event.is_mouse() ? list_.onMouseEvent(event.mouse(), hits_)
+                                          : list_.onKeyEvent(event);
+    if (handled) {
+        ctx_.postRedraw();
+        flushActivation();
+        return true;
     }
     return true;
 }
 
-void ModelSelectorOverlay::confirmSelection() {
-    std::string selected;
+void ModelSelectorOverlay::confirmItem(std::string_view model) {
+    if (model.empty()) {
+        return;
+    }
     ctx_.state->mutate([&](TUIRenderState& st) {
-        if (selectedIndex_ >= 0 && selectedIndex_ < static_cast<int>(st.modelNames.size())) {
-            st.cachedModelName = st.modelNames[selectedIndex_];
-            selected           = st.cachedModelName;
-        }
+        st.cachedModelName = std::string{model};
     });
-    if (onConfirm_ && !selected.empty()) {
-        onConfirm_(selected);
+    if (onConfirm_) {
+        onConfirm_(std::string{model});
+    }
+    closeRequested_ = true;
+}
+
+void ModelSelectorOverlay::flushActivation() {
+    if (closeRequested_) {
+        close();
+    }
+}
+
+void ModelSelectorOverlay::close() {
+    closeRequested_ = false;
+    if (onClose_) {
+        onClose_();
     }
 }
 
@@ -171,80 +151,100 @@ void ModelSelectorOverlay::confirmSelection() {
 // SessionSelectorOverlay
 // ---------------------------------------------------------------------------
 
+SessionSelectorOverlay::SessionSelectorOverlay(TUICtx& ctx) :
+    ctx_(ctx),
+    style_(UiActionStyle::fromTheme(*ctx.theme)) {
+    // 选择项接近已加载列表末尾时预取下一页 (提前 kSessionPrefetchAhead 项):
+    // 实现方内部做执行中去重与 hasMore 边界判断, 高频调用安全
+    list_.onSelectionChanged([this](int index) {
+        if (index + kSessionPrefetchAhead >= static_cast<int>(list_.size())
+            && ctx_.requestMoreSessions) {
+            ctx_.requestMoreSessions();
+        }
+    });
+}
+
+void SessionSelectorOverlay::buildItems() {
+    const auto& st = *ctx_.frameState;
+
+    std::vector<UiActionItem> items;
+    items.reserve(st.sessionList.size() + 1);
+
+    // 顶部固定 "新会话" 入口 (列表加载中也常驻, 保证始终可新建)
+    items.push_back(UiActionItem{
+        .id         = kNewSessionId,
+        .label      = std::string{tr("session.new")},
+        .onActivate = [this] {
+            requestClose({});
+        },
+    });
+
+    for (const auto& s : st.sessionList) {
+        // 第一行: 会话名称 (title 为空时回退 sessionId); 第二行: 最近活动日期
+        const bool        isCurrent = (s.sessionId == ctx_.sessionId);
+        const std::string title     = s.title.empty() ? s.sessionId : s.title;
+        items.push_back(UiActionItem{
+            .id         = std::string{kSessionIdPrefix} + s.sessionId,
+            .label      = isCurrent ? trf("session.current", title) : title,
+            .hint       = agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs),
+            .onActivate = [this, id = s.sessionId] {
+                requestClose(id);
+            },
+        });
+    }
+    list_.setItems(std::move(items));
+}
+
 Element SessionSelectorOverlay::OnRender() {
-    const auto& st         = *ctx_.frameState;
     const auto& theme      = *ctx_.theme;
     const int   maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
 
-    // 列表项布局: 索引 0 = 固定 "新会话" 入口, 其后为持久化会话 (sessionList[0..])
-    itemBoxes_.assign(st.sessionList.size() + 1, Box{});
+    style_ = UiActionStyle::fromTheme(theme);
+    hits_.beginFrame();
+    buildItems();
 
-    Elements items;
-
-    // 顶部固定 "新会话" 项 (列表加载中也常驻, 保证始终可新建)
-    {
-        auto newEntry = hbox({
-            text(tr("session.new")),
-            filler(),
+    // 条目版式: 两行 (名称 / 最近活动时间)
+    auto rowBuilder = [&](const UiActionItem& item, bool selected, size_t) -> Element {
+        Element row = vbox({
+            text(item.label),
+            text(item.hint) | dim,
         });
-        if (selectedIndex_ == 0) {
-            newEntry = newEntry | bgcolor(theme.buttonActiveBgColor)
-                       | color(theme.buttonActiveTextColor) | focus;
+        if (selected) {
+            row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
+                  | focus;
         } else {
-            newEntry = newEntry | color(theme.normalColor);
+            row = row | color(theme.normalColor);
         }
-        items.push_back(newEntry | reflect(itemBoxes_[0]));
-    }
+        return row;
+    };
 
+    // 分页状态行 (非选择项, 不登记命中): 加载中显示提示; 还有未加载会话时显示
+    // 续取提示与已加载进度
+    const auto& st = *ctx_.frameState;
+    std::string tailHint;
     if (!st.sessionListLoaded) {
-        // 列表请求已发出, 响应尚未到达
-        items.push_back(text(tr("session.loading")) | dim);
+        tailHint = std::string{tr("session.loading")};
     } else if (st.sessionList.empty()) {
-        items.push_back(text(tr("session.empty")) | dim);
-    } else {
-        for (size_t i = 0; i < st.sessionList.size(); ++i) {
-            const auto& s = st.sessionList[i];
-            // 第一行: 会话名称 (title 为空时回退 sessionId)
-            const std::string title     = s.title.empty() ? s.sessionId : s.title;
-            const bool        isCurrent = (s.sessionId == ctx_.sessionId);
-            // 第二行: 最近活动日期
-            const std::string dateStr  = agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs);
-            const auto        dateLine = text(dateStr) | dim;
-
-            // 当前会话条目: 名称后附加 "(current)" 标记
-            Element row = vbox({
-                isCurrent ? text(trf("session.current", title)) : text(title),
-                dateLine,
-            });
-
-            // +1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
-            if (static_cast<int>(i) + 1 == selectedIndex_) {
-                row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
-                      | focus;
-            } else {
-                row = row | color(theme.normalColor);
-            }
-            items.push_back(row | reflect(itemBoxes_[i + 1]));
-        }
-
-        // 尾部分页状态行 (非选择项, 无命中区域): 分页加载中显示加载提示;
-        // 还有未加载会话时显示续取提示与已加载进度 (选择下移接近末尾时自动预取)
-        if (st.sessionListLoadingMore) {
-            items.push_back(text(tr("session.loadingMore")) | dim);
-        } else if (st.sessionListHasMore) {
-            const std::string hint
-                = st.sessionListTotalCount > 0
-                      ? trf("session.loadedMore", st.sessionList.size(), st.sessionListTotalCount)
-                      : std::string(tr("session.loadMore"));
-            items.push_back(text(hint) | dim);
-        }
+        tailHint = std::string{tr("session.empty")};
+    } else if (st.sessionListLoadingMore) {
+        tailHint = std::string{tr("session.loadingMore")};
+    } else if (st.sessionListHasMore) {
+        tailHint = st.sessionListTotalCount > 0
+                       ? trf("session.loadedMore", st.sessionList.size(), st.sessionListTotalCount)
+                       : std::string{tr("session.loadMore")};
     }
 
-    const auto style = TuiSurfaceStyle::fromTheme(theme);
+    Elements rows;
+    rows.push_back(list_.render(hits_, style_, rowBuilder));
+    if (!tailHint.empty()) {
+        rows.push_back(text(tailHint) | dim);
+    }
+
+    const auto surface = TuiSurfaceStyle::fromTheme(theme);
     return tuiSurfacePopup(
-               style,
+               surface,
                tr("session.title"),
-               vbox(std::move(items)) | bold | yframe | vscroll_indicator
+               vbox(std::move(rows)) | bold | yframe | vscroll_indicator
                    | size(HEIGHT, LESS_THAN, maxVisible),
                tr("session.hint")
            )
@@ -252,34 +252,6 @@ Element SessionSelectorOverlay::OnRender() {
 }
 
 bool SessionSelectorOverlay::OnEvent(Event event) {
-    auto snap = ctx_.state->readSnapshot();
-    // 可选项总数: "新会话" 入口 (0) + 持久化会话
-    const int count = 1 + static_cast<int>(snap->sessionList.size());
-
-    if (event == Event::ArrowUp) {
-        if (selectedIndex_ > 0) {
-            --selectedIndex_;
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::ArrowDown) {
-        if (selectedIndex_ + 1 < count) {
-            ++selectedIndex_;
-        }
-        // 选择项接近已加载列表末尾时预取下一页 (提前 kSessionPrefetchAhead 项):
-        // 实现方内部做执行中去重与 hasMore 边界判断, 高频调用安全
-        constexpr int kSessionPrefetchAhead = 3;
-        if (ctx_.requestMoreSessions && selectedIndex_ + kSessionPrefetchAhead >= count) {
-            ctx_.requestMoreSessions();
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::Return) {
-        confirmSelection();
-        return true;
-    }
     if (event == Event::Escape) {
         ctx_.postRedraw();
         if (onClose_) {
@@ -287,46 +259,43 @@ bool SessionSelectorOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            for (size_t i = 0; i < itemBoxes_.size(); ++i) {
-                if (itemBoxes_[i].Contain(mouse.x, mouse.y)) {
-                    selectedIndex_ = static_cast<int>(i);
-                    confirmSelection();
-                    return true;
-                }
-            }
-        }
+    // Up/Down/Home/End 移动 (接近末尾时自动预取), Enter/鼠标点击命中 = 确认
+    const bool handled = event.is_mouse() ? list_.onMouseEvent(event.mouse(), hits_)
+                                          : list_.onKeyEvent(event);
+    if (handled) {
+        ctx_.postRedraw();
+        flushActivation();
+        return true;
     }
     return true;
 }
 
-void SessionSelectorOverlay::confirmSelection() {
-    if (selectedIndex_ == 0) {
-        // 顶部 "新会话" 入口: 新建会话 (无历史)
-        if (onClose_) {
-            onClose_();
-        }
+void SessionSelectorOverlay::requestClose(std::string sessionId) {
+    // 只记录目标: 真正的关闭/切换在条目列表事件处理返回后执行 —— 在条目激活动作内
+    // 关闭弹窗会析构正在被遍历的条目表 (闭包正在执行中)
+    closeRequested_   = true;
+    pendingSessionId_ = std::move(sessionId);
+}
+
+void SessionSelectorOverlay::flushActivation() {
+    if (!closeRequested_) {
+        return;
+    }
+    closeRequested_ = false;
+    std::string target = std::move(pendingSessionId_);
+    pendingSessionId_.clear();
+    if (onClose_) {
+        onClose_();
+    }
+    if (target.empty()) {
+        // "新会话" 入口: 新建会话 (无历史)
         if (onNewSession_) {
             onNewSession_();
         }
         return;
     }
-    std::string selected;
-    {
-        auto snap = ctx_.state->readSnapshot();
-        // -1: 会话条目从索引 1 开始 (0 为 "新会话" 入口)
-        const int sessionIdx = selectedIndex_ - 1;
-        if (sessionIdx >= 0 && sessionIdx < static_cast<int>(snap->sessionList.size())) {
-            selected = snap->sessionList[sessionIdx].sessionId;
-        }
-    }
-    if (onClose_) {
-        onClose_();
-    }
-    if (onSelect_ && !selected.empty()) {
-        onSelect_(std::move(selected));
+    if (onSelect_) {
+        onSelect_(std::move(target));
     }
 }
 
@@ -334,125 +303,97 @@ void SessionSelectorOverlay::confirmSelection() {
 // SettingsOverlay
 // ---------------------------------------------------------------------------
 
+SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
+    ctx_(ctx) {}
+
+void SettingsOverlay::buildItems() {
+    list_.setItems({
+        // 主题 (点击/Enter 循环切换 Dark <-> Light)
+        {.id         = "theme",
+         .label      = std::string{tr("settings.themeLabel")},
+         .value      = trf("settings.themeValue", ctx_.theme->name),
+         .onActivate = [this] {
+             cycleTheme();
+         }},
+        // 动画等级 (点击/Enter 循环切换)
+        {.id         = "animation",
+         .label      = std::string{tr("settings.animLabel")},
+         .value      = trf("settings.animValue", TUISettings::instance().animationLevelName()),
+         .onActivate = [] {
+             cycleAnimationLevel();
+         }},
+        // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+        {.id         = "log-level",
+         .label      = std::string{tr("settings.logLabel")},
+         .value      = trf("settings.logValue", TUISettings::instance().logLevelName()),
+         .onActivate = [this] {
+             cycleLogLevel();
+         }},
+        // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
+        {.id         = "tail-thinking",
+         .label      = std::string{tr("settings.thinkLabel")},
+         .value      = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
+         .onActivate = [] {
+             cycleTailThinkingMode();
+         }},
+        // 界面语言 (点击/Enter 循环切换)
+        {.id         = "language",
+         .label      = std::string{tr("settings.langLabel")},
+         .value      = trf("settings.langValue", TUISettings::instance().languageName()),
+         .onActivate = [this] {
+             cycleLanguage();
+         }},
+        // Info (点击/Enter 打开关于弹窗)
+        {.id         = "about",
+         .label      = std::string{tr("settings.infoLabel")},
+         .value      = std::string{tr("settings.aboutValue")},
+         .onActivate = [this] {
+             if (onAbout_) {
+                 onAbout_();
+             }
+         }},
+    });
+}
+
 Element SettingsOverlay::OnRender() {
     const auto& theme = *ctx_.theme;
 
-    // 当前主题名 (Dark/Light)
-    const char* curThemeName = (theme.name == "Light") ? "Light" : "Dark";
+    hits_.beginFrame();
+    buildItems();
 
-    Elements items;
-
-    // 单条设置项: 标签行 (弱化文字) + 值行 (整行宽; 整行可点击)
-    // - 值行 = 值文字 + 余下留白 (撑满整行, 留白参与鼠标命中与选中高亮)
-    // - 选中态: 高亮背景覆盖整行 (与模型/会话列表弹窗的整行高亮一致)
+    // 条目版式: 标签行 (弱化文字) + 值行 (整行色带, 即命中区域); 条目之间留一空行
+    // - 选中态: 高亮背景覆盖值行整行 (与模型/会话列表弹窗的整行高亮一致)
     // - 非选中态: 浅色值色带同样覆盖整行 (仅配色不同, 行宽与选中态一致)
-    // - 面性风格: 不使用边框/下划线
-    // - 左右留白由外框统一提供, 标签与值行都不再补空格
-    auto addItem = [&](std::string_view label, std::string value, int idx, Box& hitBox) {
-        const bool selected = (selectedIndex_ == idx);
-        // 值行: 文字 + 余下留白撑满整行
+    // - 面性风格: 不使用边框/下划线; 左右留白由外框统一提供
+    auto rowBuilder = [&](const UiActionItem& item, bool selected, size_t) -> Element {
         Element row = hbox({
-            text(value),
+            text(item.value),
             filler(),
         });
         if (selected) {
-            // 选中: 背景与文字色施加在整行上, 高亮色带铺满整行
             row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
                   | bold;
         } else {
             row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
-        if (idx != 0) {
-            items.push_back(text("")); // 条目之间留一空行 (背景同内容区)
-        }
-        items.push_back(text(label) | color(theme.hintColor));
-        items.push_back(std::move(row) | reflect(hitBox));
+        return vbox({
+            text(item.label) | color(theme.hintColor),
+            std::move(row),
+        });
     };
+    list_.setRowGap(1);
 
-    // 主题 (单行显示当前值, 点击/Enter 循环切换 Dark <-> Light)
-    addItem(tr("settings.themeLabel"), trf("settings.themeValue", curThemeName), 0, themeBox_);
-    // 动画等级 (点击/Enter 循环切换; 组件经 TUISettings::isAnimationEnabled() 判断启用)
-    addItem(
-        tr("settings.animLabel"),
-        trf("settings.animValue", TUISettings::instance().animationLevelName()),
-        1,
-        animLevelBox_
-    );
-    // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
-    addItem(
-        tr("settings.logLabel"),
-        trf("settings.logValue", TUISettings::instance().logLevelName()),
-        2,
-        logLevelBox_
-    );
-    // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
-    addItem(
-        tr("settings.thinkLabel"),
-        trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
-        3,
-        tailThinkingBox_
-    );
-    // 界面语言 (点击/Enter 循环切换: 自动 Auto <-> 简体中文 zh-cn <-> English en-us)
-    addItem(
-        tr("settings.langLabel"),
-        trf("settings.langValue", TUISettings::instance().languageName()),
-        4,
-        langBox_
-    );
-    // Info (点击/Enter 打开关于弹窗)
-    addItem(tr("settings.infoLabel"), std::string(tr("settings.aboutValue")), 5, aboutBox_);
-
-    const auto style = TuiSurfaceStyle::fromTheme(theme);
-    return tuiSurfacePopup(style, tr("settings.title"), vbox(std::move(items)), tr("settings.hint"))
+    const auto surface = TuiSurfaceStyle::fromTheme(theme);
+    return tuiSurfacePopup(
+               surface,
+               tr("settings.title"),
+               list_.render(hits_, style_, rowBuilder),
+               tr("settings.hint")
+           )
            | size(WIDTH, LESS_THAN, 80);
 }
 
 bool SettingsOverlay::OnEvent(Event event) {
-    if (event == Event::ArrowUp) {
-        if (selectedIndex_ > 0) {
-            --selectedIndex_;
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::ArrowDown) {
-        if (selectedIndex_ + 1 < kItemCount) {
-            ++selectedIndex_;
-        }
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::Return) {
-        if (selectedIndex_ == 0) {
-            // 主题循环切换; 切换后保持弹窗打开, 便于继续调整
-            // (主题变化经 onThemeChange_ 通知外部清理渲染缓存)
-            cycleTheme();
-            ctx_.postRedraw();
-        } else if (selectedIndex_ == 1) {
-            // 动画等级循环切换; 切换后保持弹窗打开, 便于继续调整
-            cycleAnimationLevel();
-            ctx_.postRedraw();
-        } else if (selectedIndex_ == 2) {
-            // 日志等级循环切换; 切换后保持弹窗打开, 便于继续调整
-            cycleLogLevel();
-            ctx_.postRedraw();
-        } else if (selectedIndex_ == 3) {
-            // 末尾思考模式循环切换; 切换后保持弹窗打开, 便于继续调整
-            cycleTailThinkingMode();
-            ctx_.postRedraw();
-        } else if (selectedIndex_ == 4) {
-            // 界面语言循环切换; 切换后保持弹窗打开, 便于继续调整
-            // (语言变化经 onLanguageChange_ 通知外部刷新静态文本/缓存)
-            cycleLanguage();
-            ctx_.postRedraw();
-        } else if (selectedIndex_ == 5) {
-            // About: 打开关于弹窗 (经回调通知外部)
-            if (onAbout_) {
-                onAbout_();
-            }
-        }
-        return true;
-    }
     if (event == Event::Escape) {
         ctx_.postRedraw();
         if (onClose_) {
@@ -460,10 +401,14 @@ bool SettingsOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    if (event.is_mouse() && handleMouse(event.mouse())) {
+    // 上下键选择条目, Enter/鼠标点击命中激活 (切换设置项; 弹窗保持打开便于连续调整)
+    const bool handled = event.is_mouse() ? list_.onMouseEvent(event.mouse(), hits_)
+                                          : list_.onKeyEvent(event);
+    if (handled) {
         ctx_.postRedraw();
         return true;
     }
+    // 弹窗吞掉其余事件 (模态: 不得落到被遮挡的主界面)
     return true;
 }
 
@@ -471,39 +416,48 @@ bool SettingsOverlay::OnEvent(Event event) {
 // LogMenuOverlay
 // ---------------------------------------------------------------------------
 
+LogMenuOverlay::LogMenuOverlay(TUICtx& ctx) :
+    ctx_(ctx) {}
+
+void LogMenuOverlay::buildItems() {
+    list_.setItems({
+        {.id         = "llm-context",
+         .label      = std::string{tr("menu.llmContext")},
+         .onActivate = [this] {
+             if (onLlmContext_) {
+                 onLlmContext_();
+             }
+         }},
+        {.id         = "summary-context",
+         .label      = std::string{tr("menu.summaryContext")},
+         .onActivate = [this] {
+             if (onSummyContext_) {
+                 onSummyContext_();
+             }
+         }},
+        {.id         = "clear-logs",
+         .label      = std::string{tr("menu.clearLogs")},
+         .onActivate = [this] {
+             if (onClearLogs_) {
+                 onClearLogs_();
+             }
+         }},
+    });
+}
+
 Element LogMenuOverlay::OnRender() {
     const auto& theme = *ctx_.theme;
 
+    style_             = UiActionStyle::fromTheme(theme);
+    style_.normalBg    = theme.buttonBgColor;
+    style_.normalFg    = theme.buttonTextColor;
+    hits_.beginFrame();
+    buildItems();
     // 菜单项: 整行背景色块 (面性风格: 不用 [] 括号描边, 选中态换高亮背景)
-    auto renderBtn = [&](int idx, std::string_view label, Box& box) {
-        const bool selected = (selectedIndex_ == idx);
-        auto       el       = hbox({
-            text(label),
-            filler(),
-        });
-        if (selected) {
-            el = el | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
-                 | bold;
-        } else {
-            el = el | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-        }
-        return el | reflect(box);
-    };
+    list_.setRowGap(1);
 
-    auto btn1 = renderBtn(0, tr("menu.llmContext"), llmContextBox_);
-    auto btn2 = renderBtn(1, tr("menu.summaryContext"), summyContextBox_);
-    auto btn3 = renderBtn(2, tr("menu.clearLogs"), clearLogsBox_);
-
-    Elements items = {
-        std::move(btn1),
-        text(""),
-        std::move(btn2),
-        text(""),
-        std::move(btn3),
-    };
-
-    const auto style = TuiSurfaceStyle::fromTheme(theme);
-    return tuiSurfacePopup(style, tr("menu.title"), vbox(std::move(items)), tr("menu.hint"))
+    const auto surface = TuiSurfaceStyle::fromTheme(theme);
+    return tuiSurfacePopup(surface, tr("menu.title"), list_.render(hits_, style_), tr("menu.hint"))
            | size(WIDTH, EQUAL, 36);
 }
 
@@ -515,104 +469,15 @@ bool LogMenuOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    if (event == Event::ArrowUp) {
-        selectedIndex_ = (selectedIndex_ - 1 + kItemCount) % kItemCount;
+    // 上下键选择, Enter/鼠标点击命中激活 (LLM Context / 总结上下文 / 清空日志)
+    const bool handled = event.is_mouse() ? list_.onMouseEvent(event.mouse(), hits_)
+                                          : list_.onKeyEvent(event);
+    if (handled) {
         ctx_.postRedraw();
         return true;
     }
-    if (event == Event::ArrowDown) {
-        selectedIndex_ = (selectedIndex_ + 1) % kItemCount;
-        ctx_.postRedraw();
-        return true;
-    }
-    if (event == Event::Return) {
-        confirmSelection();
-        return true;
-    }
-    if (event.is_mouse() && handleMouse(event.mouse())) {
-        ctx_.postRedraw();
-        return true;
-    }
+    // 弹窗吞掉其余事件
     return true;
-}
-
-void LogMenuOverlay::confirmSelection() {
-    ctx_.postRedraw();
-    if (selectedIndex_ == 0) {
-        if (onLlmContext_) {
-            onLlmContext_();
-        }
-    } else if (selectedIndex_ == 1) {
-        if (onSummyContext_) {
-            onSummyContext_();
-        }
-    } else if (selectedIndex_ == 2) {
-        if (onClearLogs_) {
-            onClearLogs_();
-        }
-    }
-}
-
-bool LogMenuOverlay::handleMouse(const Mouse& mouse) {
-    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
-        return false;
-    }
-    if (llmContextBox_.Contain(mouse.x, mouse.y)) {
-        selectedIndex_ = 0;
-        if (onLlmContext_) {
-            onLlmContext_();
-        }
-        return true;
-    }
-    if (summyContextBox_.Contain(mouse.x, mouse.y)) {
-        selectedIndex_ = 1;
-        if (onSummyContext_) {
-            onSummyContext_();
-        }
-        return true;
-    }
-    if (clearLogsBox_.Contain(mouse.x, mouse.y)) {
-        selectedIndex_ = 2;
-        if (onClearLogs_) {
-            onClearLogs_();
-        }
-        return true;
-    }
-    return false;
-}
-
-bool SettingsOverlay::handleMouse(const Mouse& mouse) {
-    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
-        return false;
-    }
-    if (themeBox_.Contain(mouse.x, mouse.y)) {
-        // 主题循环切换 (与键盘 Enter 路径一致, 经 onThemeChange_ 通知外部清理缓存)
-        cycleTheme();
-        return true;
-    }
-    if (animLevelBox_.Contain(mouse.x, mouse.y)) {
-        cycleAnimationLevel();
-        return true;
-    }
-    if (logLevelBox_.Contain(mouse.x, mouse.y)) {
-        cycleLogLevel();
-        return true;
-    }
-    if (tailThinkingBox_.Contain(mouse.x, mouse.y)) {
-        cycleTailThinkingMode();
-        return true;
-    }
-    if (langBox_.Contain(mouse.x, mouse.y)) {
-        cycleLanguage();
-        return true;
-    }
-    if (aboutBox_.Contain(mouse.x, mouse.y)) {
-        if (onAbout_) {
-            onAbout_();
-        }
-        return true;
-    }
-    return false;
 }
 
 void SettingsOverlay::cycleTheme() {
@@ -878,34 +743,40 @@ Element PendingInputsOverlay::OnRender() {
     const auto& st    = *ctx_.frameState;
     const auto& theme = *ctx_.theme;
 
-    itemBoxes_.assign(st.pendingInputs.size(), Box{});
-    delBoxes_.assign(st.pendingInputs.size(), Box{});
+    // 帧首清空命中表: 本帧未渲染出来的按钮 (空列表时没有删除按钮/条目) 不会命中
+    hits_.beginFrame();
 
-    const auto style = TuiSurfaceStyle::fromTheme(theme);
+    const auto surface = TuiSurfaceStyle::fromTheme(theme);
 
-    auto clearBtn = text(fmt::format(" {} ", tr("queue.clear"))) | bgcolor(theme.buttonBgColor)
-                    | color(theme.buttonTextColor) | bold | reflect(clearBox_);
-    // 标题栏: 左侧标题文字, 右侧"清空"按钮 (面性风格: 标题栏整体背景色区分)
+    // 标题栏右侧 "清空" 按钮; 标题栏: 左侧标题文字 (面性风格: 标题栏整体背景色区分)
+    Element clearBtn = hits_.add(
+        text(fmt::format(" {} ", tr("queue.clear"))) | bgcolor(theme.buttonBgColor)
+            | color(theme.buttonTextColor) | bold,
+        HitInfo{HitInfo::Kind::Clear, {}}
+    );
     Element header = tuiSurfaceHeaderRow(
         hbox({
-            text(tr("queue.title")) | bold | color(style.title),
+            text(tr("queue.title")) | bold | color(surface.title),
             filler(),
-            clearBtn,
+            std::move(clearBtn),
         }),
-        style.header
+        surface.header
     );
 
     Elements items;
     if (st.pendingInputs.empty()) {
         items.push_back(text(tr("queue.empty")) | dim);
     }
-    for (size_t i = 0; i < st.pendingInputs.size(); ++i) {
-        const auto& pi = st.pendingInputs[i];
-        auto delBtn    = text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
-                      | reflect(delBoxes_[i]);
-        Element row;
-        auto    body = pi.expanded ? paragraph(pi.text) | flex
-                                   : text(oneLinePreview(pi.text)) | color(theme.userColor) | flex;
+    for (const auto& pi : st.pendingInputs) {
+        // 删除按钮登记在条目之前: 命中查询按登记顺序返回首个匹配项, 因此删除优先于
+        // 条目本体 (条目命中 = 展开/折叠)
+        Element delBtn = hits_.add(
+            text(" ✕ ") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor),
+            HitInfo{HitInfo::Kind::Delete, pi.id}
+        );
+        Element body = pi.expanded
+                           ? paragraph(pi.text) | flex
+                           : text(oneLinePreview(pi.text)) | color(theme.userColor) | flex;
         // 多模态排队项: 标题行后缀附件计数, 不展示 Base64 内容
         if (!pi.attachments.empty()) {
             body = hbox({
@@ -913,29 +784,27 @@ Element PendingInputsOverlay::OnRender() {
                 text(trf("queue.attachCount", pi.attachments.size())) | color(theme.accentColor),
             });
         }
-        if (pi.expanded) {
-            row = hbox({
-                text("- ") | color(theme.hintColor),
-                std::move(body),
-                delBtn,
-            });
-        } else {
-            row = hbox({
-                text("+ ") | color(theme.userColor),
-                std::move(body),
-                delBtn,
-            });
-        }
-        items.push_back(row | reflect(itemBoxes_[i]));
+        Element row = pi.expanded
+                          ? hbox({
+                                text("- ") | color(theme.hintColor),
+                                std::move(body),
+                                std::move(delBtn),
+                            })
+                          : hbox({
+                                text("+ ") | color(theme.userColor),
+                                std::move(body),
+                                std::move(delBtn),
+                            });
+        items.push_back(hits_.add(std::move(row), HitInfo{HitInfo::Kind::Item, pi.id}));
     }
 
     const int maxVisible = std::max(5, ctx_.terminalSize().dimy / 2);
     return tuiSurfaceFrame(
-               style,
+               surface,
                std::move(header),
                vbox(std::move(items)) | yframe | vscroll_indicator
                    | size(HEIGHT, LESS_THAN, maxVisible),
-               tuiSurfaceFooterBar(tr("queue.hint"), style.hint, style.footer)
+               tuiSurfaceFooterBar(tr("queue.hint"), surface.hint, surface.footer)
            )
            | size(WIDTH, LESS_THAN, 70) | size(WIDTH, GREATER_THAN, 40);
 }
@@ -948,18 +817,21 @@ bool PendingInputsOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    if (event.is_mouse() && handleMouse(event.mouse())) {
+    if (event.is_mouse() && handleClick(event.mouse())) {
         ctx_.postRedraw();
         return true;
     }
     return true;
 }
 
-bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
-    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+bool PendingInputsOverlay::handleClick(const Mouse& mouse) {
+    const auto* hit = hits_.findClick(mouse);
+    if (hit == nullptr) {
         return false;
     }
-    if (clearBox_.Contain(mouse.x, mouse.y)) {
+    const auto& info = hit->payload;
+
+    if (info.kind == HitInfo::Kind::Clear) {
         if (onClear_) {
             onClear_();
         }
@@ -971,28 +843,38 @@ bool PendingInputsOverlay::handleMouse(const Mouse& mouse) {
         }
         return true;
     }
-    bool handled = false;
+
+    // 条目: 按条目 id 定位 (列表重建后行下标可能变化)
     ctx_.state->mutate([&](TUIRenderState& st) {
-        for (size_t i = 0; i < delBoxes_.size() && i < st.pendingInputs.size(); ++i) {
-            if (delBoxes_[i].Contain(mouse.x, mouse.y)) {
-                auto itemId = st.pendingInputs[i].id;
+        for (auto it = st.pendingInputs.begin(); it != st.pendingInputs.end(); ++it) {
+            if (it->id != info.itemId) {
+                continue;
+            }
+            if (info.kind == HitInfo::Kind::Delete) {
                 if (onDeleteItem_) {
-                    onDeleteItem_(std::move(itemId));
+                    onDeleteItem_(info.itemId);
                 }
-                st.pendingInputs.erase(st.pendingInputs.begin() + static_cast<std::ptrdiff_t>(i));
-                handled = true;
-                return;
+                st.pendingInputs.erase(it);
+            } else {
+                it->expanded = !it->expanded;
             }
-        }
-        for (size_t i = 0; i < itemBoxes_.size() && i < st.pendingInputs.size(); ++i) {
-            if (itemBoxes_[i].Contain(mouse.x, mouse.y)) {
-                st.pendingInputs[i].expanded = !st.pendingInputs[i].expanded;
-                handled                      = true;
-                return;
-            }
+            return;
         }
     });
-    return handled;
+    return true;
+}
+
+ftxui::Box PendingInputsOverlay::boxOf(HitInfo::Kind kind, std::string_view itemId) const {
+    for (const auto& entry : hits_.entries()) {
+        if (entry.payload.kind != kind) {
+            continue;
+        }
+        if (!itemId.empty() && entry.payload.itemId != itemId) {
+            continue;
+        }
+        return *entry.box;
+    }
+    return agentxx::client::kNoBox;
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,6 +928,9 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
     const auto& theme   = *ctx_.theme;
     const auto& msgsPtr = ctx_.frameState->contextMessages;
 
+    // 帧首清空命中表: 本帧未渲染出来的折叠头 (视口外) 不会被点击命中
+    headerHits_.beginFrame();
+
     std::vector<ScrollItem> items;
     if (!msgsPtr || !msgsPtr->is_array() || msgsPtr->empty()) {
         items.push_back(ScrollItem{text(tr("ctx.empty")) | dim, true});
@@ -1054,17 +939,13 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
 
     const auto& msgs = *msgsPtr;
     items.reserve(msgs.size() * 2 + 1);
-    headerItemIndex_.assign(msgs.size(), 0);
     for (size_t i = 0; i < msgs.size(); ++i) {
         const auto& m         = msgs[i];
         const auto  role      = ctxMsgRole(m);
         const Color roleColor = ctxRoleColor(theme, role);
         const bool  expanded  = expandedSet_.contains(i);
 
-        // 记录折叠头在 items 中的子项索引 (消息可能展开插入 body, 头索引不固定)
-        headerItemIndex_[i] = items.size();
-        items.push_back(ScrollItem{buildMessageHeader(m, expanded, roleColor), false});
-
+        items.push_back(ScrollItem{buildMessageHeader(m, i, expanded, roleColor), false});
         if (expanded) {
             items.push_back(ScrollItem{buildMessageBody(m), false});
         }
@@ -1073,18 +954,14 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
 }
 
 std::vector<ftxui::Box> ContextOverlay::headerBoxes() const {
-    // 从 Scrollable 最近一次渲染的可见区域反推各消息折叠头命中区域:
-    // visibleBoxes 与 buildItems 返回的 items 一一对应, 消息 i 的折叠头
-    // 子项索引由 headerItemIndex_ 记录 (展开体插入会使索引不固定)。
-    // 已按视口裁剪 —— 视口外子项为空 Box, 不含测量盒, 点击不会误命中。
-    const auto&             msgsPtr = ctx_.frameState->contextMessages;
-    const size_t            nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
-    std::vector<ftxui::Box> boxes(nMsgs, ftxui::Box{0, -1, 0, -1});
-    const auto&             vis = scrollable_->visibleBoxes();
-    for (size_t i = 0; i < nMsgs && i < headerItemIndex_.size(); ++i) {
-        const size_t itemIdx = headerItemIndex_[i];
-        if (itemIdx < vis.size()) {
-            boxes[i] = vis[itemIdx];
+    // 从命中登记表反推各消息折叠头的屏幕区域 (载荷 = 消息下标):
+    // 未被布局的条目 (视口外) 保持空区域, 不含测量盒, 点击不会误命中
+    const auto&  msgsPtr = ctx_.frameState->contextMessages;
+    const size_t nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
+    std::vector<ftxui::Box> boxes(nMsgs, agentxx::client::kNoBox);
+    for (const auto& entry : headerHits_.entries()) {
+        if (entry.payload < boxes.size()) {
+            boxes[entry.payload] = *entry.box;
         }
     }
     return boxes;
@@ -1092,6 +969,7 @@ std::vector<ftxui::Box> ContextOverlay::headerBoxes() const {
 
 ftxui::Element ContextOverlay::buildMessageHeader(
     const agentxx::util::Json& m,
+    size_t                     index,
     bool                       expanded,
     const ftxui::Color&        roleColor
 ) {
@@ -1128,7 +1006,8 @@ ftxui::Element ContextOverlay::buildMessageHeader(
         text(fmt::format("[{}] ", role)) | color(roleColor) | bold,
         text(preview) | color(theme.normalColor) | xflex_shrink,
     });
-    return head;
+    // 折叠头整行可点: 登记命中 (载荷 = 消息下标, 点击直接切换该消息的折叠状态)
+    return headerHits_.add(std::move(head), index);
 }
 
 ftxui::Element ContextOverlay::buildMessageBody(const agentxx::util::Json& m) {
@@ -1256,17 +1135,13 @@ bool ContextOverlay::OnEvent(Event event) {
         ctx_.postRedraw();
         return true;
     }
-    // Enter / Space: 切换最近可见 (首个可见) 消息的折叠状态
+    // Enter / Space: 切换首个可见消息的折叠状态 (命中表中已布局的折叠头按消息下标有序)
     if (event == Event::Return || event == Event::Character(" ")) {
-        const auto&  msgsPtr = ctx_.frameState->contextMessages;
-        const size_t nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
-        const auto&  vis     = scrollable_->visibleBoxes();
-        for (size_t i = 0; i < nMsgs && i < headerItemIndex_.size(); ++i) {
-            const size_t itemIdx = headerItemIndex_[i];
-            if (itemIdx >= vis.size() || vis[itemIdx].IsEmpty()) {
-                continue;
+        for (const auto& entry : headerHits_.entries()) {
+            if (entry.box->IsEmpty()) {
+                continue; // 视口外 (本帧未被布局)
             }
-            toggleExpanded(i);
+            toggleExpanded(entry.payload);
             ctx_.postRedraw();
             return true;
         }
@@ -1275,33 +1150,13 @@ bool ContextOverlay::OnEvent(Event event) {
 }
 
 bool ContextOverlay::handleHeaderClick(const Mouse& mouse) {
-    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+    // 命中折叠头 -> 切换该消息的折叠状态 (视口外折叠头未登记/区域为空, 不命中)
+    const auto* hit = headerHits_.findClick(mouse);
+    if (hit == nullptr) {
         return false;
     }
-    // 命中区域基于最近一次渲染的可见子项 (与 msgs 索引对应: 消息 i 的
-    // 折叠头子项索引由 headerItemIndex_ 记录); 视口外子项为空 Box, 自然跳过
-    const auto&  msgsPtr = ctx_.frameState->contextMessages;
-    const size_t nMsgs   = (msgsPtr && msgsPtr->is_array()) ? msgsPtr->size() : 0;
-    const auto&  vis     = scrollable_->visibleBoxes();
-    for (size_t i = 0; i < nMsgs && i < headerItemIndex_.size(); ++i) {
-        const size_t itemIdx = headerItemIndex_[i];
-        if (itemIdx >= vis.size()) {
-            continue;
-        }
-        const auto& box = vis[itemIdx];
-        if (box.IsEmpty()) {
-            continue;
-        }
-        if (mouse.y < box.y_min || mouse.y > box.y_max) {
-            continue;
-        }
-        if (mouse.x < box.x_min || mouse.x > box.x_max) {
-            continue;
-        }
-        toggleExpanded(i);
-        return true;
-    }
-    return false;
+    toggleExpanded(hit->payload);
+    return true;
 }
 
 void ContextOverlay::toggleExpanded(size_t index) {
@@ -1846,7 +1701,8 @@ CustomOverlay::CustomOverlay(
             ownerGeneration_ = regPtr->generationOf(ownerPlugin_);
         }
         Elements els;
-        hits_.clear();
+        // 帧首清空命中表 (Scrollable 的构建闭包每帧执行一次)
+        hits_.beginFrame();
         if (items_.is_array()) {
             auto push = [&](Element el) {
                 els.push_back(std::move(el));
@@ -1899,12 +1755,9 @@ CustomOverlay::CustomOverlay(
                     // 显式 prefix 时, 合并为单行 (与 sidebar 行为一致)
                     Element btn = agentxx::client::renderPluginButton(desc, theme);
                     if (desc.clickable) {
-                        OverlayHit hit;
-                        hit.actionId = desc.actionId;
-                        hit.argsJson = desc.argsJson;
-                        hits_.push_back(std::move(hit));
-                        const size_t hitIdx = hits_.size() - 1;
-                        btn                 = btn | reflect(hits_[hitIdx].box);
+                        // 登记命中 (载荷: actionId + 参数); 视口外按钮被 Scrollable
+                        // 裁剪 -> 命中框收敛为空 -> 点击不会被误派发
+                        btn = hits_.add(std::move(btn), desc.actionId, desc.argsJson);
                     }
                     if (!desc.prefix.empty()) {
                         push(hbox({
@@ -1969,26 +1822,20 @@ bool CustomOverlay::OnEvent(Event event) {
         return true;
     }
     if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            // overlay 局部命中: 按钮盒经 reflect 填充, 命中后走同一 dispatchAction
-            // (owner 固定 "__overlay", 被实例级 fallback 接住)
-            for (const auto& h : hits_) {
-                if (!h.box.Contain(mouse.x, mouse.y)) {
-                    continue;
-                }
-                if (auto mgr = ctx_.pluginManager) {
-                    mgr->dispatchAction(
-                        ownerPlugin_,
-                        AGENTXX_CLIENT_OVERLAY_OWNER,
-                        h.actionId,
-                        h.argsJson,
-                        ownerGeneration_
-                    );
-                }
-                ctx_.postRedraw();
-                return true;
+        // overlay 局部命中: 命中后走同一 dispatchAction
+        // (owner 固定 "__overlay", 被实例级 fallback 接住)
+        if (const auto* hit = hits_.findClick(event.mouse())) {
+            if (auto mgr = ctx_.pluginManager) {
+                mgr->dispatchAction(
+                    ownerPlugin_,
+                    AGENTXX_CLIENT_OVERLAY_OWNER,
+                    hit->payload.id,
+                    hit->payload.arg,
+                    ownerGeneration_
+                );
             }
+            ctx_.postRedraw();
+            return true;
         }
         if (scrollable_->OnEvent(event)) {
             ctx_.postRedraw();

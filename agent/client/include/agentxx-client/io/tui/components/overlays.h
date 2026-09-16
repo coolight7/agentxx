@@ -1,6 +1,8 @@
 #pragma once
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/ui_action_list.h"
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
@@ -13,24 +15,33 @@
 #include <markdown/state_diagram.hpp>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-/// 模型选择器弹窗组件 (独立处理键盘导航事件; 每帧重建以反映最新状态)
+// 弹窗条目列表 (菜单/设置项/列表项) 与鼠标命中区域的框架类型:
+// - [agentxx::client::UiActionList] 统一"条目表 + 键盘导航 + 鼠标命中 + 高亮"
+// - [agentxx::client::UiHitMap]    统一"每帧重建的命中区域登记表"
+// 见 [ui_action_list.h](/agent/client/include/agentxx-client/io/tui/framework/ui_action_list.h)
+// 与 [ui_hit.h](/agent/client/include/agentxx-client/io/tui/framework/ui_hit.h)。
+using agentxx::client::UiActionItem;
+using agentxx::client::UiActionList;
+using agentxx::client::UiActionStyle;
+using agentxx::client::UiHitMap;
+
+/// 模型选择器弹窗组件 (每帧按服务端模型列表重建条目)
+///
+/// 交互 (上下键移动/Enter 确认/鼠标点击命中/Esc 关闭) 与选中高亮由 [UiActionList]
+/// 统一实现; 本组件只负责把模型列表映射为条目表, 以及确认后的模型切换。
 class ModelSelectorOverlay : public ftxui::ComponentBase {
 public:
 
-    explicit ModelSelectorOverlay(TUICtx& ctx) :
-        ctx_(ctx) {}
-
-    void setInitialIndex(int idx) {
-        selectedIndex_  = idx;
-        initialAligned_ = true;
-    }
+    explicit ModelSelectorOverlay(TUICtx& ctx);
 
     void onClose(std::function<void()> fn) {
         onClose_ = std::move(fn);
     }
 
+    /// 确认回调 (参数: 选中的模型名)
     void onConfirm(std::function<void(std::string)> fn) {
         onConfirm_ = std::move(fn);
     }
@@ -38,16 +49,36 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 测试辅助: 选中项下标 (-1 = 无)
+    int selectedIndex() const {
+        return list_.selectedIndex();
+    }
+
 private:
 
-    void confirmSelection();
+    /// 重建条目表 (首次打开时把选中项对齐到当前使用的模型)
+    void buildItems();
+    /// 确认选中模型 (写入当前模型 + 通知外部; 关闭弹窗)
+    void confirmItem(std::string_view model);
+    /// 执行条目激活后请求的关闭 (见 [closeRequested_] 说明)
+    void flushActivation();
+    void close();
 
-    TUICtx&                          ctx_;
-    int                              selectedIndex_  = 0;
-    bool                             initialAligned_ = false;
+    TUICtx&       ctx_;
+    UiActionList  list_;
+    UiHitMap      hits_;
+    UiActionStyle style_;
+
+    /// 首次渲染时是否已把选中项对齐到当前使用的模型 (只对齐一次, 之后以用户选择为准)
+    bool initialAligned_ = false;
+
+    /// 条目激活动作里只记录"该关闭弹窗", 实际关闭 (onClose_ -> 移除模态) 在条目
+    /// 列表事件处理返回后执行 —— 直接在闭包内关闭会在列表迭代/回调执行过程中
+    /// 析构本对象 (闭包自身就在被销毁的容器里)
+    bool closeRequested_ = false;
+
     std::function<void()>            onClose_;
     std::function<void(std::string)> onConfirm_;
-    std::vector<ftxui::Box>          itemBoxes_;
 };
 
 /// 会话选择弹窗组件 (F4 / 状态栏 [F4] Sessions 按钮)
@@ -60,53 +91,75 @@ private:
 class SessionSelectorOverlay : public ftxui::ComponentBase {
 public:
 
-    explicit SessionSelectorOverlay(TUICtx& ctx) :
-        ctx_(ctx) {}
+    explicit SessionSelectorOverlay(TUICtx& ctx);
 
     void onClose(std::function<void()> fn) {
-        onClose_ = fn;
+        onClose_ = std::move(fn);
     }
 
     /// 切换会话回调 (参数: 目标 sessionId)
     void onSelect(std::function<void(std::string)> fn) {
-        onSelect_ = fn;
+        onSelect_ = std::move(fn);
     }
 
     /// 新建会话回调 (选中顶部 "新会话" 项时触发)
     void onNewSession(std::function<void()> fn) {
-        onNewSession_ = fn;
+        onNewSession_ = std::move(fn);
     }
 
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 测试辅助: 选中项下标 (-1 = 无)
+    int selectedIndex() const {
+        return list_.selectedIndex();
+    }
+
 private:
 
-    void confirmSelection();
+    /// 重建条目表 (0 = 新会话入口, 其后为持久化会话)
+    void buildItems();
+    /// 条目激活动作: 记录目标会话并请求关闭 (实际切换在列表事件处理返回后执行)
+    void requestClose(std::string sessionId);
+    /// 执行 [requestClose] 请求的关闭与切换 (空 sessionId = 新建会话)
+    void flushActivation();
 
-    TUICtx&                          ctx_;
-    int                              selectedIndex_ = 0;
+    TUICtx&       ctx_;
+    UiActionList  list_;
+    UiHitMap      hits_;
+    UiActionStyle style_;
+
+    /// 请求关闭并切换到的会话 id (空 = "新会话" 入口; 见 [requestClose])
+    bool        closeRequested_ = false;
+    std::string pendingSessionId_;
+
     std::function<void()>            onClose_;
     std::function<void(std::string)> onSelect_;
     std::function<void()>            onNewSession_;
-    std::vector<ftxui::Box>          itemBoxes_;
+
+    /// 条目 id: "新会话" 入口固定为 [kNewSessionId], 会话项为 kSessionIdPrefix + sessionId
+    static constexpr const char* kNewSessionId    = "new-session";
+    static constexpr const char* kSessionIdPrefix = "session/";
+    /// 选择项接近已加载列表末尾时的预取提前量 (项)
+    static constexpr int kSessionPrefetchAhead = 3;
 };
 
 /// 设置弹窗组件
 /// - 主题切换 (Dark/Light, 单行显示当前值, 点击/Enter 循环切换)
 /// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
 /// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
-/// - 末尾思考展示模式 (Auto Expand/Single Line)
+/// - 末尾思考展示模式 (Auto Expand / Single Line)
 /// - 界面语言 (简体中文 zh-cn / English en-us; 见 TuiI18n 翻译表)
 /// - About (打开关于弹窗; 显示版本/路径/插件等信息)
 ///
 /// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击。
 /// 所有条目切换后均保持弹窗打开, 便于连续调整; 由 [Esc] 关闭。
+/// 条目 (标签/当前值/切换动作) 由 [buildItems] 一处声明, 交互与高亮由
+/// [UiActionList] 统一实现 (新增设置项只需往条目表加一行)。
 class SettingsOverlay : public ftxui::ComponentBase {
 public:
 
-    explicit SettingsOverlay(TUICtx& ctx) :
-        ctx_(ctx) {}
+    explicit SettingsOverlay(TUICtx& ctx);
 
     void onClose(std::function<void()> fn) {
         onClose_ = std::move(fn);
@@ -136,9 +189,15 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 测试辅助: 选中项下标 (-1 = 无)
+    int selectedIndex() const {
+        return list_.selectedIndex();
+    }
+
 private:
 
-    bool handleMouse(const ftxui::Mouse& mouse);
+    /// 重建条目表 (每帧刷新各设置项的当前值文本)
+    void buildItems();
 
     /// 循环切换主题: Dark -> Light -> Dark (需要访问 ctx_.theme, 非静态)
     void cycleTheme();
@@ -152,24 +211,16 @@ private:
     /// 循环切换界面语言: 简体中文 <-> English (需要访问 onLanguageChange_, 非静态)
     void cycleLanguage();
 
-    TUICtx& ctx_;
-    /// 条目索引: 0 = 主题, 1 = 动画等级, 2 = 日志等级, 3 = 末尾思考模式,
-    ///         4 = 界面语言, 5 = About
-    /// Enter/鼠标点击索引时循环切换对应设置 (About 打开弹窗)
-    static constexpr int  kItemCount     = 6;
-    int                   selectedIndex_ = 0;
+    TUICtx&       ctx_;
+    UiActionList  list_;
+    UiHitMap      hits_;
+    UiActionStyle style_;
+
     std::function<void()> onClose_;
     std::function<void()> onThemeChange_;
     std::function<void()> onLogLevelChange_;
     std::function<void()> onLanguageChange_;
     std::function<void()> onAbout_;
-
-    ftxui::Box themeBox_;        // 主题点击区域
-    ftxui::Box animLevelBox_;    // 动画等级点击区域
-    ftxui::Box logLevelBox_;     // 日志等级点击区域
-    ftxui::Box tailThinkingBox_; // 末尾思考展示模式点击区域
-    ftxui::Box langBox_;         // 界面语言点击区域
-    ftxui::Box aboutBox_;        // About 点击区域
 };
 
 /// 关于弹窗组件 (About)
@@ -203,7 +254,14 @@ private:
     std::function<void()>       onClose_;
 };
 
-/// 待发送消息队列弹窗组件
+/// 待发送消息队列弹窗组件 (内容区条目 + 每条一个删除按钮 + 标题栏清空按钮)
+///
+/// 命中区域经 [UiHitMap] 登记, 每帧由 OnRender 重建:
+/// - 删除按钮以 `kDeleteHitPrefix + 条目 id` 登记 (登记在条目之前, 命中查询
+///   按登记顺序返回第一个匹配项, 因此删除按钮优先于条目本体)
+/// - 条目本体以条目 id 登记 (点击展开/折叠)
+/// - "清空" 按钮以 [kClearHitId] 登记
+/// - 弹窗关闭/条目消失时不登记 => 点击不会命中 (不再依赖"是否已清空成员 Box")
 class PendingInputsOverlay : public ftxui::ComponentBase {
 public:
 
@@ -225,18 +283,38 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 删除按钮命中 id 前缀 (id = kDeleteHitPrefix + 条目 id)
+    static constexpr std::string_view kDeleteHitPrefix = "delete/";
+    /// "清空" 按钮命中 id
+    static constexpr std::string_view kClearHitId = "clear";
+
 private:
 
-    bool handleMouse(const ftxui::Mouse& mouse);
+    /// 命中载荷: 控件类型 + 条目 id (条目 id 用于定位待发送队列项)
+    struct HitInfo {
+        enum class Kind : uint8_t {
+            Clear,  ///< 标题栏 "清空" 按钮
+            Delete, ///< 条目右侧删除按钮
+            Item,   ///< 条目本体 (点击展开/折叠)
+        };
 
-    TUICtx&                                 ctx_;
-    std::function<void()>                   onClose_;
-    std::function<void()>                   onClear_;
-    std::function<void(std::string itemId)> onDeleteItem_;
+        Kind        kind   = Kind::Item;
+        std::string itemId;
+    };
 
-    std::vector<ftxui::Box> itemBoxes_;
-    std::vector<ftxui::Box> delBoxes_;
-    ftxui::Box              clearBox_;
+    /// 处理左键释放命中 (返回是否消费)
+    bool handleClick(const ftxui::Mouse& mouse);
+
+    /// 测试辅助: 取指定命中项的屏幕区域 (不存在返回空区域)
+    ftxui::Box boxOf(HitInfo::Kind kind, std::string_view itemId = {}) const;
+
+    TUICtx&                          ctx_;
+    std::function<void()>            onClose_;
+    std::function<void()>            onClear_;
+    std::function<void(std::string)> onDeleteItem_;
+
+    /// 命中区域登记表 (每帧由 OnRender 重建; 未渲染的按钮/条目不命中)
+    agentxx::client::UiHitRegistry<HitInfo> hits_;
 };
 
 /// 上下文弹窗组件 (显示 llm messages)
@@ -275,9 +353,10 @@ private:
     /// 弹窗内容项构建 (Scrollable 渲染回调; 每帧从本帧快照构建)
     std::vector<ScrollItem> buildItems();
 
-    /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
+    /// 构建单条消息的折叠头 (含 +/- 标记与单行预览) 并登记命中
     ftxui::Element buildMessageHeader(
         const agentxx::util::Json& m,
+        size_t                     index,
         bool                       expanded,
         const ftxui::Color&        roleColor
     );
@@ -298,9 +377,11 @@ private:
     /// 已展开的消息索引集合 (UI 线程独占; 默认全部折叠)
     std::set<size_t> expandedSet_;
 
-    /// 消息 i 的折叠头在 items 中的子项索引 (由 buildItems 每帧重建;
-    /// 与 visibleBoxes 对应, 供鼠标命中检测)
-    std::vector<size_t> headerItemIndex_;
+    /// 折叠头命中登记表 (每帧由 buildItems 重建)
+    /// - 载荷 = 消息下标 (命中后直接定位到消息, 无需回查索引映射)
+    /// - 每条消息仅在**渲染出折叠头**时登记; 未被 Scrollable 布局的条目命中框
+    ///   保持空区域, 因此视口外的折叠头不会被点击命中
+    agentxx::client::UiHitRegistry<size_t> headerHits_;
 };
 
 /// Mermaid 状态图弹窗 (通用 open_overlay MERMAID 驱动; 标题可自定义)
@@ -369,11 +450,11 @@ private:
 /// Logs 侧边栏 Menu 菜单弹窗组件
 /// - 提供 LLM Context, Summy Context, Clear Logs 三个操作按钮
 /// - 支持键盘 Up/Down 选择, Enter 确认, Esc 关闭, 以及鼠标点击
+/// - 条目表与交互由 [UiActionList] 统一实现
 class LogMenuOverlay : public ftxui::ComponentBase {
 public:
 
-    explicit LogMenuOverlay(TUICtx& ctx) :
-        ctx_(ctx) {}
+    explicit LogMenuOverlay(TUICtx& ctx);
 
     void onClose(std::function<void()> fn) {
         onClose_ = std::move(fn);
@@ -394,23 +475,25 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 测试辅助: 选中项下标 (-1 = 无)
+    int selectedIndex() const {
+        return list_.selectedIndex();
+    }
+
 private:
 
-    bool handleMouse(const ftxui::Mouse& mouse);
-    void confirmSelection();
+    /// 重建条目表 (三项操作; 文案按当前界面语言)
+    void buildItems();
 
-    TUICtx&              ctx_;
-    int                  selectedIndex_ = 0;
-    static constexpr int kItemCount     = 3;
+    TUICtx&       ctx_;
+    UiActionList  list_;
+    UiHitMap      hits_;
+    UiActionStyle style_;
 
     std::function<void()> onClose_;
     std::function<void()> onLlmContext_;
     std::function<void()> onSummyContext_;
     std::function<void()> onClearLogs_;
-
-    ftxui::Box llmContextBox_;
-    ftxui::Box summyContextBox_;
-    ftxui::Box clearLogsBox_;
 };
 
 /// 通用文本 overlay (open_overlay TEXT 驱动; payload=原文, extra={"markdown":bool})
@@ -490,7 +573,7 @@ private:
 ///
 /// - items schema 同 panel/items (text/progress/badge/separator/button),
 ///   button 同样走 action_id + 通用派发 (owner 固定 "__overlay", 被 fallback 接住)
-/// - overlay 内局部命中: OnRender 收集按钮盒, OnEvent 命中后经
+/// - overlay 内局部命中: OnRender 经 UiHitMap 登记按钮框, OnEvent 命中后经
 ///   ctx_.pluginManager->dispatchAction(ownerPlugin, "__overlay", actionId, args)
 /// - Scrollable + Esc 关 + overlay.scrollHint 底栏; 宽 3/5、高 4/5 双约束
 class CustomOverlay : public ftxui::ComponentBase {
@@ -521,15 +604,10 @@ private:
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
 
-    /// overlay 内按钮局部命中盒 (OnRender 收集, OnEvent 命中检测;
-    /// 与 CustomOverlayItem 对应, 视口外为空 Box)
-    struct OverlayHit {
-        ftxui::Box  box;
-        std::string actionId;
-        std::string argsJson;
-    };
-
-    std::vector<OverlayHit> hits_;
+    /// overlay 内按钮命中登记 (OnRender 登记, OnEvent 命中检测)
+    /// - payload.id = actionId, payload.arg = argsJson
+    /// - 视口外按钮: 元素被 Scrollable 裁剪 -> 命中框收敛为空 -> 不命中
+    UiHitMap hits_;
 };
 
 /// 创建通用覆盖层弹窗工厂函数 (支持 Mermaid / Text / Diff / Custom 弹窗)
@@ -549,6 +627,8 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
 ///   过滤目录中的文件 (不支持的类型灰显且不可选, 非媒体文件不展示)
 /// - 目录导航: ↑/↓ 选择, Enter 进入子目录或确认选中文件, Esc 关闭
 /// - 确认选中文件后调用 onSelectFile 回调, 外部完成预检、Base64 编码并挂载到托盘
+/// - 命中区域经 UiHitMap 登记: 仅当前 tab 真正渲染出来的按钮/条目才会命中
+///   (跨设备标签页按钮仅跨设备时渲染, 因此同设备下不会被误点)
 class FilePickerOverlay : public ftxui::ComponentBase {
 public:
 
@@ -575,6 +655,12 @@ public:
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
+    /// 测试辅助: 上一帧第 index 目录条目的命中区域 (未渲染时为空区域)
+    ftxui::Box itemBox(size_t index) const;
+
+    /// 测试辅助: 上一帧 "本地" / "服务端" 标签页按钮命中区域 (未渲染时为空区域)
+    ftxui::Box tabButtonBox(bool serverTab) const;
+
 private:
 
     enum class PickerTab : uint8_t {
@@ -593,12 +679,11 @@ private:
     };
 
     struct TabState {
-        std::string             currentDir;
-        std::vector<DirEntry>   entries;
-        int                     selectedIndex = 0;
-        std::vector<ftxui::Box> itemBoxes;
-        bool                    loading = false;
-        std::string             error;
+        std::string           currentDir;
+        std::vector<DirEntry> entries;
+        int                   selectedIndex = 0;
+        bool                  loading       = false;
+        std::string           error;
     };
 
     void                      navigateToLocal(std::string dirPath);
@@ -609,15 +694,32 @@ private:
     bool                      isSupportedMedia(const std::string& ext) const;
     agentxx::agent::MediaType guessMediaType(const std::string& ext) const;
 
+    /// 当前生效的 tab 状态
+    TabState&       currentTab();
+    const TabState& currentTab() const;
+
+    /// 条目命中 id (含 tab 归属与条目下标, 避免两个 tab 的条目 id 冲突)
+    static std::string itemHitId(PickerTab tab, size_t index);
+
+    /// 从条目命中 id 解析条目下标 (不属于该 tab 或格式错误返回 -1)
+    static int itemIndexOfHitId(PickerTab tab, std::string_view hitId);
+
+    /// 取指定命中 id 的屏幕区域 (未渲染时为空区域)
+    ftxui::Box hitBox(std::string_view id) const;
+
     TUICtx&                                              ctx_;
     agentxx::agent::ModelCapabilityInfo                  capability_;
     PickerTab                                            activeTab_ = PickerTab::Local;
     TabState                                             localTab_;
     TabState                                             serverTab_;
-    ftxui::Box                                           localTabBox_;
-    ftxui::Box                                           serverTabBox_;
     std::function<void()>                                onClose_;
     std::function<void(std::string)>                     onSelectFile_;
     std::function<void(agentxx::agent::MediaAttachment)> onSelectAttachment_;
     std::set<std::string>                                allowedExtensions_;
+
+    /// 命中区域登记表 (每帧重建; 未渲染的标签页按钮/条目不会命中)
+    UiHitMap hits_;
+    /// "本地" / "服务端" 标签页按钮命中 id
+    static constexpr std::string_view kLocalTabHitId  = "tab/local";
+    static constexpr std::string_view kServerTabHitId = "tab/server";
 };

@@ -8,6 +8,7 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 
@@ -350,10 +351,59 @@ void FilePickerOverlay::confirmSelection() {
     }
 }
 
+std::string FilePickerOverlay::itemHitId(PickerTab tab, size_t index) {
+    return fmt::format("item/{}/{}", tab == PickerTab::Server ? "server" : "local", index);
+}
+
+int FilePickerOverlay::itemIndexOfHitId(PickerTab tab, std::string_view hitId) {
+    const std::string prefix = itemHitId(tab, 0);
+    const std::string head   = prefix.substr(0, prefix.rfind('/') + 1);
+    if (!hitId.starts_with(head)) {
+        return -1;
+    }
+    int         index  = -1;
+    const auto  number = hitId.substr(head.size());
+    const auto* begin  = number.data();
+    const auto* end    = number.data() + number.size();
+    if (number.empty() || std::from_chars(begin, end, index).ec != std::errc{} || index < 0) {
+        return -1;
+    }
+    return index;
+}
+
+FilePickerOverlay::TabState& FilePickerOverlay::currentTab() {
+    return (activeTab_ == PickerTab::Local) ? localTab_ : serverTab_;
+}
+
+const FilePickerOverlay::TabState& FilePickerOverlay::currentTab() const {
+    return (activeTab_ == PickerTab::Local) ? localTab_ : serverTab_;
+}
+
+ftxui::Box FilePickerOverlay::hitBox(std::string_view id) const {
+    for (const auto& entry : hits_.entries()) {
+        if (entry.payload.id == id) {
+            return *entry.box;
+        }
+    }
+    return agentxx::client::kNoBox;
+}
+
+ftxui::Box FilePickerOverlay::itemBox(size_t index) const {
+    return hitBox(itemHitId(activeTab_, index));
+}
+
+ftxui::Box FilePickerOverlay::tabButtonBox(bool serverTab) const {
+    return hitBox(serverTab ? kServerTabHitId : kLocalTabHitId);
+}
+
 Element FilePickerOverlay::OnRender() {
     const auto& theme         = *ctx_.theme;
     const bool  isCrossDevice = ctx_.isServerDifferentDevice();
-    auto&       curTab        = (activeTab_ == PickerTab::Local) ? localTab_ : serverTab_;
+    auto&       curTab        = currentTab();
+
+    // 帧首清空命中表: 本帧未渲染出来的控件 (非跨设备时的标签页按钮、当前 tab 之外
+    // 的目录条目) 不会占用任何点击区域
+    hits_.beginFrame();
 
     // 标题: 单行组合
     const std::string titleText = trf(
@@ -377,7 +427,7 @@ Element FilePickerOverlay::OnRender() {
         } else {
             localBtn = localBtn | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
-        localBtn = localBtn | reflect(localTabBox_);
+        localBtn = hits_.add(std::move(localBtn), std::string{kLocalTabHitId});
 
         auto serverBtn = text(std::string(TuiI18n::instance().t("picker.tab_server")));
         if (activeTab_ == PickerTab::Server) {
@@ -386,7 +436,7 @@ Element FilePickerOverlay::OnRender() {
         } else {
             serverBtn = serverBtn | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
-        serverBtn = serverBtn | reflect(serverTabBox_);
+        serverBtn = hits_.add(std::move(serverBtn), std::string{kServerTabHitId});
 
         content.push_back(hbox({
             localBtn,
@@ -407,8 +457,7 @@ Element FilePickerOverlay::OnRender() {
 
     // 文件列表区
     Elements items;
-    curTab.itemBoxes.assign(curTab.entries.size(), Box{});
-    const int maxVisible  = std::max(5, Terminal::Size().dimy / 2);
+    const int maxVisible  = std::max(5, ctx_.terminalSize().dimy / 2);
     const int scrollStart = std::max(0, curTab.selectedIndex - maxVisible + 2);
     const int scrollEnd
         = std::min(static_cast<int>(curTab.entries.size()), scrollStart + maxVisible);
@@ -469,7 +518,10 @@ Element FilePickerOverlay::OnRender() {
             if (!entry.isDir && !entry.supported) {
                 row = row | dim;
             }
-            items.push_back(row | reflect(curTab.itemBoxes[static_cast<size_t>(i)]));
+            // 命中登记 (id 含 tab 归属与条目下标): 仅本帧渲染出来的条目可命中
+            items.push_back(
+                hits_.add(std::move(row), itemHitId(activeTab_, static_cast<size_t>(i)))
+            );
         }
 
         if (curTab.entries.empty()) {
@@ -477,8 +529,8 @@ Element FilePickerOverlay::OnRender() {
         }
     }
 
-    const int dimX     = Terminal::Size().dimx;
-    const int dimY     = Terminal::Size().dimy;
+    const int dimX     = ctx_.terminalSize().dimx;
+    const int dimY     = ctx_.terminalSize().dimy;
     const int overlayW = std::max(40, dimX * 3 / 5);
     const int overlayH = std::max(12, dimY * 4 / 5);
 
@@ -495,30 +547,26 @@ Element FilePickerOverlay::OnRender() {
 
 bool FilePickerOverlay::OnEvent(Event event) {
     const bool isCrossDevice = ctx_.isServerDifferentDevice();
-    auto&      curTab        = (activeTab_ == PickerTab::Local) ? localTab_ : serverTab_;
+    auto&      curTab        = currentTab();
 
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            if (isCrossDevice) {
-                if (localTabBox_.Contain(mouse.x, mouse.y)) {
-                    switchTab(PickerTab::Local);
-                    return true;
-                }
-                if (serverTabBox_.Contain(mouse.x, mouse.y)) {
-                    switchTab(PickerTab::Server);
-                    return true;
-                }
+        // 命中查表: 标签页按钮 / 目录条目 (未渲染的项不在表中, 不会命中)
+        if (const auto* hit = hits_.findClick(mouse)) {
+            const std::string& hitId = hit->payload.id;
+            if (hitId == kLocalTabHitId) {
+                switchTab(PickerTab::Local);
+                return true;
             }
-            for (size_t i = 0; i < curTab.itemBoxes.size(); ++i) {
-                if (!curTab.itemBoxes[i].Contain(mouse.x, mouse.y)) {
-                    continue;
-                }
-                curTab.selectedIndex = static_cast<int>(i);
+            if (hitId == kServerTabHitId) {
+                switchTab(PickerTab::Server);
+                return true;
+            }
+            if (const int index = itemIndexOfHitId(activeTab_, hitId); index >= 0) {
+                curTab.selectedIndex = index;
                 confirmSelection();
                 return true;
             }
-            return false;
         }
         if (mouse.button == Mouse::WheelUp && curTab.selectedIndex > 0) {
             --curTab.selectedIndex;
@@ -531,7 +579,9 @@ bool FilePickerOverlay::OnEvent(Event event) {
             ctx_.postRedraw();
             return true;
         }
-        return false;
+        // 模态是遮挡层: 未命中的鼠标事件同样不再下发
+        // (否则滚轮会滚动被遮挡的消息列表)
+        return true;
     }
 
     if (event == Event::Tab && isCrossDevice) {
@@ -583,5 +633,6 @@ bool FilePickerOverlay::OnEvent(Event event) {
         }
     }
 
-    return false;
+    // 模态是遮挡层: 其余事件一律吞掉 (输入字符不得落到被遮挡的输入框)
+    return true;
 }

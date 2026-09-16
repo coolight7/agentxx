@@ -74,6 +74,7 @@
 #include "test_tui_stream.h"
 #include "test_tui_surface.h"
 #include "test_tui_tool_header.h"
+#include "test_tui_widget.h"
 #endif
 #include "test_util_misc.h"
 #include "test_web_search_tools.h"
@@ -204,6 +205,7 @@ int main(int argn, char** argv) {
         runSync("tui_stream", agentxx::test::testTuiStream);
         runSync("tui_surface", agentxx::test::testTuiSurface);
         runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
+        runSync("tui_widget", agentxx::test::testTuiWidget);
         runSync("sessionId", agentxx::test::testSessionId);
         runSync("mermaid_state", agentxx::test::testMermaidState);
 #endif

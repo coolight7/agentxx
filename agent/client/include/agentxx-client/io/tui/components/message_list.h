@@ -3,10 +3,13 @@
 #include "agentxx-client/io/tui/components/interrupt_view.h"
 #include "agentxx-client/io/tui/components/spinner.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/lazy_scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
+#include "ftxui/screen/box.hpp"
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <markdown/dom_builder.hpp>
 #include <markdown/incremental.hpp>
@@ -151,15 +154,20 @@ public:
         return k < collapsibleIsStream_.size() && collapsibleIsStream_[k] != 0;
     }
 
-    /// 连接失败 banner 的"重试"按钮命中区域 (渲染时 reflect 填充,
-    /// 供 TUIClientAgentIO 全局鼠标事件检测点击)
-    const ftxui::Box& retryButtonBox() const {
-        return retryButtonBox_;
+    /// 装配 [重试] 按钮点击回调 (连接失败 banner; 点击重新发起连接)
+    void setOnRetryClick(std::function<void()> fn) {
+        onRetryClick_ = std::move(fn);
     }
+
+    /// 测试辅助: 上一帧 [重试] 按钮的命中区域 (未渲染时为空区域)
+    ftxui::Box retryButtonBox() const;
 
     /// 处理 decor 按钮点击 (供 MessageListComponent::OnEvent 与外部调用):
     /// 命中 decorHits_ 后经 pluginManager->dispatchAction 投递 io 线程派发
     bool handleDecorButtonClick(const ftxui::Mouse& mouse);
+
+    /// 处理连接失败 banner 的 [重试] 按钮点击 (命中 bannerHits_ 时触发 onRetryClick_)
+    bool handleRetryClick(const ftxui::Mouse& mouse);
 
     /// 处理多模态附件卡片点击: 在文件管理器中定位显示对应文件
     bool handleAttachmentClick(const ftxui::Mouse& mouse);
@@ -204,9 +212,15 @@ private:
 
     std::vector<AttachmentHitBox> attachmentHits_;
 
-    /// 连接失败 banner 的"重试"按钮命中区域 (UI 线程独占; buildBanner 渲染时
-    /// reflect 填充, TUIClientAgentIO 全局鼠标事件检测点击)
-    ftxui::Box retryButtonBox_;
+    /// 连接失败 banner 的 [重试] 按钮命中登记 (UI 线程独占)
+    /// - banner 元素可能跨帧缓存 (itemKey 未变时不重建), 因此命中项也跨帧保留:
+    ///   其 Box 由同一 Element 内的 reflect 每帧更新, 仍指向屏幕上的实际位置
+    /// - 清空时机 (见 OnRender/buildBanner): banner 不在本帧列表中 (已有消息) 时,
+    ///   或 banner 重建时 —— 因此 [重试] 按钮消失后不再占用那块区域
+    agentxx::client::UiHitMap bannerHits_;
+
+    /// [重试] 按钮点击回调 (连接失败后重新发起连接; 由 TUIClientAgentIO 装配)
+    std::function<void()> onRetryClick_;
 
     /// 中断输入项通用视图 (渲染/估算/交互/结果组装; 形态由中断 UI 描述数据决定,
     /// 本组件不再含任何具体询问 (含权限) 的特化分支)

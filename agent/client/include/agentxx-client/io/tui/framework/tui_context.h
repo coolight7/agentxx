@@ -93,16 +93,35 @@ struct TUICtx {
     /// 短锁, 渲染可无锁读取返回的 snapshot)
     std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager;
 
-    /// 视口/终端尺寸覆盖 (宽, 高; 0 表示未覆盖, 运行时回退 Terminal::Size())
+    /// 视口/终端尺寸覆盖 (宽, 高; 0 表示未覆盖, 运行时回退本帧尺寸/物理终端)
     /// - 离屏测试夹具或嵌入特定容器时可通过此字段注入确定的视口尺寸,
     ///   避免组件 OnRender 直接读取外部物理终端导致测试结果随终端窗口大小漂移
     int viewportWidth  = 0;
     int viewportHeight = 0;
 
-    /// 获取当前生效的终端/视口尺寸: 若显式设置了视口尺寸则优先使用, 否则读取 Terminal::Size()
+    /// 本帧终端尺寸 (帧首由主循环经 [refreshFrameSize] 刷新)
+    /// - 同一帧内所有组件读到同一尺寸: 终端在帧中途 resize 时不会出现
+    ///   "一半组件按旧宽度换行、一半按新宽度" 的错位
+    /// - 每帧只做一次尺寸查询 (Terminal::Size 在 Linux 上是 ioctl 系统调用),
+    ///   替代此前每个组件各自查询
+    ftxui::Dimensions frameSize{0, 0};
+
+    /// 帧首刷新本帧尺寸 (主循环/主渲染器调用; 显式视口优先且不受物理终端影响)
+    void refreshFrameSize() {
+        if (viewportWidth > 0 && viewportHeight > 0) {
+            frameSize = {viewportWidth, viewportHeight};
+            return;
+        }
+        frameSize = ftxui::Terminal::Size();
+    }
+
+    /// 获取当前生效的终端/视口尺寸: 显式视口 > 本帧缓存 > 物理终端
     ftxui::Dimensions terminalSize() const {
         if (viewportWidth > 0 && viewportHeight > 0) {
             return {viewportWidth, viewportHeight};
+        }
+        if (frameSize.dimx > 0 && frameSize.dimy > 0) {
+            return frameSize;
         }
         return ftxui::Terminal::Size();
     }

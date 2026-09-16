@@ -85,11 +85,10 @@ bool SidebarComponent::isPinned(std::string_view id) const {
 
 void SidebarComponent::buildTabList() {
     pendingListItems_.clear();
-    listEntries_.clear();
 
-    // 按钮行: 文本 + filler 填满列表宽度, 使激活项呈整行高亮
-    auto pushButton = [&](bool active, std::string_view title, ListEntry entry) {
-        listEntries_.push_back(entry);
+    // 按钮行: 文本 + filler 填满列表宽度, 使激活项呈整行高亮;
+    // 行元素直接登记命中 (载荷 = 条目归属), 点击时无需回查下标映射
+    auto pushButton = [&](bool active, std::string_view title, TabHit tab) {
         auto row = hbox({
             text(fmt::format("[{}]", title)),
             filler(),
@@ -100,7 +99,9 @@ void SidebarComponent::buildTabList() {
         } else {
             row = row | color(ctx_.theme->hintColor);
         }
-        pendingListItems_.push_back(ScrollItem{std::move(row), false});
+        pendingListItems_.push_back(
+            ScrollItem{hits_.add(std::move(row), HitInfo{HitInfo::Kind::TabButton, tab}), false}
+        );
     };
 
     // 条目顺序: 常驻标签 (注册序, 固定顶部) + 动态 tab (添加序);
@@ -111,7 +112,7 @@ void SidebarComponent::buildTabList() {
         pushButton(
             tabIx >= 0 && tabIx == activeTab_,
             pin.title,
-            ListEntry{true, static_cast<int>(p)}
+            TabHit{true, static_cast<int>(p)}
         );
     }
     for (size_t i = 0; i < tabs_.size(); ++i) {
@@ -121,13 +122,16 @@ void SidebarComponent::buildTabList() {
         pushButton(
             static_cast<int>(i) == activeTab_,
             tabs_[i].title,
-            ListEntry{false, static_cast<int>(i)}
+            TabHit{false, static_cast<int>(i)}
         );
     }
 }
 
 Element SidebarComponent::OnRender() {
     const auto& theme = *ctx_.theme;
+
+    // 帧首清空命中表 (本帧未渲染的手柄不参与命中检测)
+    hits_.beginFrame();
 
     buildTabList();
 
@@ -153,16 +157,17 @@ Element SidebarComponent::OnRender() {
                   })
                   | size(WIDTH, EQUAL, listW);
 
-    auto handle
-        = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor) | reflect(handleBox_);
+    // 左侧拖拽手柄: 登记命中 (仅用于调整宽度)
+    auto handle = hits_.add(
+        separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor),
+        HitInfo{HitInfo::Kind::ResizeHandle, {}}
+    );
 
     // ===== 左侧: 当前高亮 tab 的内容 (无高亮 tab 则不渲染, 仅剩 tabs 列表) =====
     const bool hasActive = activeTab_ >= 0 && activeTab_ < static_cast<int>(tabs_.size());
     if (!hasActive) {
-        // 无 footer 渲染: 清空命中区, 避免残留旧区域导致误触
-        footerBox_ = Box{0, -1, 0, -1};
         return hbox({
-                   handle,
+                   std::move(handle),
                    std::move(tabBar),
                })
                | bgcolor(theme.blockColor);
@@ -172,18 +177,16 @@ Element SidebarComponent::OnRender() {
     layout.push_back(text(" "));
     layout.push_back(hbox({text(" "), scrollable_->Render() | flex, text(" ")}) | flex);
     if (tabs_[activeTab_].footer) {
-        layout.push_back(
-            hbox({text(" "), tabs_[activeTab_].footer() | flex, text(" ")}) | reflect(footerBox_)
-        );
+        // footer 内的按钮自行登记命中 (shell 级动作, 由渲染函数登记到
+        // TUIClientAgentIO::shellHits_), 本组件不维护 footer 命中区域
+        layout.push_back(hbox({text(" "), tabs_[activeTab_].footer() | flex, text(" ")}));
         layout.push_back(text(" "));
-    } else {
-        footerBox_ = Box{0, -1, 0, -1};
     }
 
     auto contentSep = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor);
 
     return hbox({
-               handle,
+               std::move(handle),
                vbox(std::move(layout)) | flex,
                contentSep,
                std::move(tabBar),
@@ -204,14 +207,6 @@ bool SidebarComponent::OnEvent(Event event) {
         ctx_.postRedraw();
         return true;
     }
-    // footer 区域点击 (如 "上下文" 按钮)
-    if (onFooterClick_ && mouse.button == Mouse::Left && mouse.motion == Mouse::Released
-        && footerBox_.Contain(mouse.x, mouse.y)) {
-        if (onFooterClick_(mouse)) {
-            ctx_.postRedraw();
-            return true;
-        }
-    }
     if (scrollable_->OnEvent(event)) {
         return true;
     }
@@ -230,58 +225,72 @@ bool SidebarComponent::handleResizeMouse(const Mouse& mouse) {
         width_             = std::clamp(newWidth, kMinWidth, maxW);
         return true;
     }
-    if (mouse.button == Mouse::Left && mouse.motion == Mouse::Pressed
-        && handleBox_.Contain(mouse.x, mouse.y)) {
-        resizing_     = true;
-        resizeStartX_ = mouse.x;
-        resizeStartW_ = width_;
-        return true;
+    // 按下拖拽手柄开始调整宽度 (命中表由本帧渲染建立)
+    if (mouse.button == Mouse::Left && mouse.motion == Mouse::Pressed) {
+        const auto* hit = hits_.find(mouse.x, mouse.y);
+        if (hit != nullptr && hit->payload.kind == HitInfo::Kind::ResizeHandle) {
+            resizing_     = true;
+            resizeStartX_ = mouse.x;
+            resizeStartW_ = width_;
+            return true;
+        }
     }
     return false;
 }
 
 bool SidebarComponent::handleListMouse(const Mouse& mouse) {
-    const auto& boxes = tabList_->visibleBoxes();
-    for (size_t i = 0; i < listEntries_.size() && i < boxes.size(); ++i) {
-        if (!boxes[i].Contain(mouse.x, mouse.y)) {
-            continue;
+    if (mouse.button != Mouse::Left && mouse.button != Mouse::Right) {
+        return false;
+    }
+    if (mouse.motion != Mouse::Released) {
+        return false;
+    }
+    // 命中查询: 仅本帧渲染出来的 tab 按钮在表中 (列表滚动到视口外的按钮不命中);
+    // 条目归属随载荷返回, 不需要下标映射
+    const auto* hit = hits_.find(mouse.x, mouse.y);
+    if (hit == nullptr || hit->payload.kind != HitInfo::Kind::TabButton) {
+        return false;
+    }
+    const bool isPin = hit->payload.tab.isPin;
+    const int  idx   = hit->payload.tab.index;
+    if (isPin) {
+        if (idx < 0 || idx >= static_cast<int>(pinned_.size())) {
+            return false;
         }
-        const bool isPin = listEntries_[i].isPin;
-        const int  idx   = listEntries_[i].index;
+    } else if (idx < 0 || idx >= static_cast<int>(tabs_.size())) {
+        return false;
+    }
 
-        if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-            if (isPin) {
-                const auto& pin   = pinned_[idx];
-                const int   tabIx = findTabIndex(pin.id);
-                if (tabIx < 0) {
-                    // 对应 tab 未创建: 经 ensure 回调创建 (addTab 自动激活)
-                    if (pin.ensure) {
-                        pin.ensure();
-                    }
-                } else if (tabIx == activeTab_) {
-                    activeTab_ = -1; // 已激活再点一次: 取消激活, 内容区隐藏
-                } else {
-                    activeTab_ = tabIx;
-                    scrollable_->setStickToBottom(true);
+    if (mouse.button == Mouse::Left) {
+        if (isPin) {
+            const auto& pin   = pinned_[static_cast<size_t>(idx)];
+            const int   tabIx = findTabIndex(pin.id);
+            if (tabIx < 0) {
+                // 对应 tab 未创建: 经 ensure 回调创建 (addTab 自动激活)
+                if (pin.ensure) {
+                    pin.ensure();
                 }
+            } else if (tabIx == activeTab_) {
+                activeTab_ = -1; // 已激活再点一次: 取消激活, 内容区隐藏
             } else {
-                activeTab_ = idx;
+                activeTab_ = tabIx;
                 scrollable_->setStickToBottom(true);
             }
-            return true;
+        } else {
+            activeTab_ = idx;
+            scrollable_->setStickToBottom(true);
         }
-        if (mouse.button == Mouse::Right && mouse.motion == Mouse::Released) {
-            if (isPin) {
-                // 常驻标签不可移除: 已激活则仅取消激活
-                const int tabIx = findTabIndex(pinned_[idx].id);
-                if (tabIx >= 0 && tabIx == activeTab_) {
-                    activeTab_ = -1;
-                }
-            } else {
-                removeTab(tabs_[idx].id);
-            }
-            return true;
-        }
+        return true;
     }
-    return false;
+
+    // 右键: 关闭动态 tab (常驻标签不可移除, 已激活则仅取消激活)
+    if (isPin) {
+        const int tabIx = findTabIndex(pinned_[static_cast<size_t>(idx)].id);
+        if (tabIx >= 0 && tabIx == activeTab_) {
+            activeTab_ = -1;
+        }
+    } else {
+        removeTab(tabs_[static_cast<size_t>(idx)].id);
+    }
+    return true;
 }

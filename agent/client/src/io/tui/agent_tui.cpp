@@ -257,6 +257,26 @@ void TUIClientAgentIO::removePluginPanelTab(const std::string& id) {
     postRedraw();
 }
 
+namespace {
+
+/// 组装插件按钮命中表项 (plugin/owner/action/参数/实例代次)
+TUIClientAgentIO::UiHitTarget panelHint(
+    const std::string&                        plugin,
+    const std::string&                        ownerId,
+    const agentxx::client::PluginButtonDesc&  desc,
+    const agentxx::plugin::ClientUiRegistry*  reg
+) {
+    return TUIClientAgentIO::UiHitTarget{
+        .plugin     = plugin,
+        .ownerId    = ownerId,
+        .actionId   = desc.actionId,
+        .argsJson   = desc.argsJson,
+        .generation = reg != nullptr ? reg->generationOf(plugin) : 0,
+    };
+}
+
+} // namespace
+
 std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& panelId) {
     // UI 线程调用 (侧边栏 tab render 回调); 读取注册表快照 (短锁拷贝 shared_ptr)
     // 通用 button 渲染: 走 plugin_ui_items 共享 helper + hitTargets_ 命中挂载
@@ -305,14 +325,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                         )) {
                         Element btn = agentxx::client::renderPluginButton(desc, theme);
                         if (desc.clickable) {
-                            UiHitTarget t;
-                            t.plugin     = panel->plugin;
-                            t.ownerId    = panel->id;
-                            t.actionId   = desc.actionId;
-                            t.argsJson   = desc.argsJson;
-                            t.generation = reg->generationOf(t.plugin);
-                            hitTargets_.push_back(std::move(t));
-                            btn = btn | reflect(hitTargets_.back().box);
+                            // 命中登记: box 由登记表持有并 reflect, 仅本帧渲染出来的
+                            // 按钮才命中 (面板未展开/条目不在视口时不占点击区域)
+                            btn = hitTargets_.add(std::move(btn), panelHint(panel->plugin, panel->id, desc, reg.get()));
                         }
                         out.push_back(ScrollItem{hbox({
                             agentxx::client::renderPluginTextItem(
@@ -351,14 +366,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                 }
                 Element btn = agentxx::client::renderPluginButton(desc, theme);
                 if (desc.clickable) {
-                    UiHitTarget t;
-                    t.plugin     = panel->plugin;
-                    t.ownerId    = panel->id;
-                    t.actionId   = desc.actionId;
-                    t.argsJson   = desc.argsJson;
-                    t.generation = reg->generationOf(t.plugin);
-                    hitTargets_.push_back(std::move(t));
-                    btn = btn | reflect(hitTargets_.back().box);
+                    // 命中登记 (同上方 text+button 合并分支)
+                    btn = hitTargets_.add(
+                        std::move(btn),
+                        panelHint(panel->plugin, panel->id, desc, reg.get())
+                    );
                 }
                 if (!desc.prefix.empty()) {
                     out.push_back(ScrollItem{hbox({
@@ -475,8 +487,26 @@ void TUIClientAgentIO::start() {
 
         // 创建组件
         messageList_ = std::make_shared<MessageListComponent>(ctx_);
-        statusBar_   = std::make_shared<StatusBarComponent>(ctx_);
-        sidebar_     = std::make_shared<SidebarComponent>(ctx_);
+        // 连接失败 banner 的 [重试] 按钮: 点击重新发起连接 (同 requestRetry)
+        messageList_->setOnRetryClick([this] {
+            requestRetry();
+        });
+        statusBar_ = std::make_shared<StatusBarComponent>(
+            ctx_,
+            // 状态栏点击动作 (与 F2/F4/F3 快捷键同一实现)
+            StatusBarComponent::Config{
+                .onModelClick    = [this] {
+                    openModelSelector();
+                },
+                .onSessionsClick = [this] {
+                    openSessionSelector();
+                },
+                .onSettingsClick = [this] {
+                    openSettings();
+                },
+            }
+        );
+        sidebar_ = std::make_shared<SidebarComponent>(ctx_);
 
         // tabs 竖向列表的常驻标签: Info/Logs 始终显示 (对应 tab 未创建时点击经
         // ensure 回调创建并激活; 已激活再点一次取消激活隐藏内容区)
@@ -559,6 +589,40 @@ void TUIClientAgentIO::start() {
         inputCfg.onOpenAttachPicker = [this] {
             openFilePickerOverlay();
         };
+        // 待发队列计数点击 → 打开待发送队列弹窗 (清空 / 删除 / 展开)
+        inputCfg.onOpenPendingQueue = [this] {
+            auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
+            overlay->onClear([this] {
+                if (transport_) {
+                    sendToPeer(agentxx::agent::WireClearMessageQueue{currentSessionId()});
+                }
+            });
+            overlay->onDeleteItem([this](std::string itemId) {
+                if (transport_) {
+                    sendToPeer(agentxx::agent::WireRemoveQueueItem{
+                        currentSessionId(),
+                        std::move(itemId)
+                    });
+                }
+            });
+            overlay->onClose([this] {
+                modal_->popModal();
+            });
+            modal_->pushModal(overlay);
+            postRedraw();
+        };
+        // 待发队列 [立即发送] → 中断当前轮次并让队列下一条立即执行
+        inputCfg.onRunNextPending = [this] {
+            if (transport_) {
+                sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentSessionId()});
+            }
+            std::lock_guard<std::mutex> lock(sharedState_.mutex());
+            auto&                       st = sharedState_.mutableState();
+            if (st.isStreaming) {
+                pushCurrentTokenLocked(st);
+            }
+            postRedraw();
+        };
         inputBar_ = std::make_shared<InputComponent>(ctx_, std::move(inputCfg));
 
         // 屏幕足够宽时默认展开信息侧边栏
@@ -567,68 +631,24 @@ void TUIClientAgentIO::start() {
             ensureInfoSidebarTab();
         }
 
-        // 侧边栏 footer 点击: 处理 Logs 底部 "Menu" 按钮
-        sidebar_->onFooterClick([this](const Mouse&) -> bool {
-            if (modal_ && !modal_->hasModal()) {
-                auto menu = std::make_shared<LogMenuOverlay>(ctx_);
-                menu->onClose([this] {
-                    modal_->popModal();
-                });
-                menu->onLlmContext([this] {
-                    modal_->popModal();
-                    if (transport_) {
-                        sendToPeer(agentxx::agent::WireGetContext{currentSessionId()});
-                    }
-                    if (modal_ && !modal_->hasModal()) {
-                        auto overlay = std::make_shared<ContextOverlay>(ctx_);
-                        overlay->onClose([this] {
-                            modal_->popModal();
-                        });
-                        modal_->pushModal(overlay);
-                    }
-                });
-                menu->onSummyContext([this] {
-                    if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
-                        showToast(std::string(tr("toast.notReady")));
-                        postRedraw();
-                        return;
-                    }
-                    const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
-                                      || awaitingInterruptInput_.load(std::memory_order_acquire);
-                    if (busy) {
-                        showToast(std::string(tr("toast.stopCurrent")));
-                        postRedraw();
-                        return;
-                    }
-
-                    modal_->popModal();
-                    if (transport_) {
-                        sendToPeer(agentxx::agent::WireCompactContext{currentSessionId()});
-                    }
-                });
-                menu->onClearLogs([this] {
-                    modal_->popModal();
-                    if (logSink_) {
-                        logSink_->clear();
-                    }
-                    logLineCache_.clear();
-                    postRedraw();
-                });
-                modal_->pushModal(menu);
-            }
-            return true;
-        });
+        // 侧边栏底部 [Menu] 按钮与 Info 侧边栏 [view] 按钮属于 shell 级动作
+        // (跨组件, 动作实现需要访问 transport/modal): 渲染期登记到 shellHits_,
+        // 点击由全局鼠标事件经 handleShellHit 分发 (见下方 CatchEvent)
 
         // 主布局: Stacked 让子组件接收事件, Renderer 组合渲染
-        auto stacked      = Container::Stacked({messageList_, sidebar_, inputBar_});
+        auto stacked      = Container::Stacked({messageList_, sidebar_, inputBar_, statusBar_});
         auto mainRenderer = Renderer(stacked, [&]() -> Element {
             ctx_.frameState = sharedState_.readSnapshot();
+            // 本帧终端尺寸: 同帧内所有组件读同一尺寸 (避免帧中途 resize 造成布局错位),
+            // 且每帧只查询一次 (Terminal::Size 在 Linux 上是 ioctl)
+            ctx_.refreshFrameSize();
             // client 插件 UI 注册表快照 (工具消息装饰等; 每帧刷新, 渲染期无锁读)
             ctx_.frameState->pluginRegistry
                 = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
-            // 通用插件按钮命中表: 每帧重建 (renderPluginPanel/renderInfoSidebar
-            // 追加, 仅存可点项; 缩放/滚动/伸缩导致坐标每帧变动)
-            hitTargets_.clear();
+            // 命中表: 每帧重建 (渲染期登记, 仅存本帧真正渲染出来的可点项;
+            // 缩放/滚动/伸缩/隐藏导致坐标与可见性每帧变动)
+            hitTargets_.beginFrame();
+            shellHits_.beginFrame();
 
             auto mainWidget = vbox({
                 messageList_->Render() | flex,
@@ -737,62 +757,14 @@ void TUIClientAgentIO::start() {
                     return false;
                 }
                 if (mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
-                    // 连接失败 banner 的"重试"按钮点击 → 重新发起连接
-                    if (messageList_ && messageList_->retryButtonBox().Contain(mouse.x, mouse.y)) {
-                        requestRetry();
+                    // shell 级按钮 (Info 侧边栏 [view] / Logs 底部 [Menu]):
+                    // 由渲染期登记的命中表定位, 未渲染的按钮不在表中
+                    if (const auto* hit = shellHits_.findClick(mouse)) {
+                        handleShellHit(hit->payload.id);
                         return true;
                     }
-                    // 可折叠消息点击 (Think/Tool 展开/折叠)
-                    if (messageList_ && messageList_->handleCollapsibleClick(mouse)) {
-                        return true;
-                    }
-                    // 待发送消息队列 insert 按钮点击 → 取消当前轮次并立即从队列弹出执行
-                    if (inputBar_ && !ctx_.frameState->pendingInputs.empty()
-                        && inputBar_->pendingInsertButtonBox().Contain(mouse.x, mouse.y)) {
-                        if (transport_) {
-                            sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentSessionId()});
-                        }
-                        std::lock_guard<std::mutex> lock(sharedState_.mutex());
-                        auto&                       st = sharedState_.mutableState();
-                        if (st.isStreaming) {
-                            pushCurrentTokenLocked(st);
-                        }
-                        postRedraw();
-                        return true;
-                    }
-                    // 待发送消息计数点击
-                    if (inputBar_ && !ctx_.frameState->pendingInputs.empty()
-                        && inputBar_->pendingCounterBox().Contain(mouse.x, mouse.y)) {
-                        auto overlay = std::make_shared<PendingInputsOverlay>(ctx_);
-                        overlay->onClear([this] {
-                            if (transport_) {
-                                sendToPeer(agentxx::agent::WireClearMessageQueue{currentSessionId()}
-                                );
-                            }
-                        });
-                        overlay->onDeleteItem([this](std::string itemId) {
-                            if (transport_) {
-                                sendToPeer(agentxx::agent::WireRemoveQueueItem{
-                                    currentSessionId(),
-                                    std::move(itemId)
-                                });
-                            }
-                        });
-                        overlay->onClose([this] {
-                            modal_->popModal();
-                        });
-                        modal_->pushModal(overlay);
-                        postRedraw();
-                        return true;
-                    }
-                    // Info 侧边栏 Append "Failed" 组 [view] 按钮点击 → 打开失败组件弹窗
-                    if (failedViewButtonBox_.Contain(mouse.x, mouse.y)) {
-                        openFailedAppendComponents();
-                        return true;
-                    }
-                    // 通用插件按钮点击 → 经 manager 派发到插件回调 (IO 线程)
-                    // (顺序: retry/collapsible/pending/failedView 之后、状态栏之前;
-                    // modal 打开时已在上方跳过主界面拾取)
+                    // 插件按钮 (侧边栏面板 / Info 段落 items): 归属信息随命中项登记,
+                    // 命中后投递到插件回调 (IO 线程二次校验实例代次后派发)
                     if (pluginManager_) {
                         UiHitTarget hit;
                         if (hitTestPluginButton(mouse, hit)) {
@@ -806,21 +778,9 @@ void TUIClientAgentIO::start() {
                             return true;
                         }
                     }
-                    // 状态栏模型区域点击 → 打开模型选择弹窗
-                    if (statusBar_ && statusBar_->modelBox().Contain(mouse.x, mouse.y)) {
-                        openModelSelector();
-                        return true;
-                    }
-                    // 状态栏 "Sessions" 按钮点击 → 打开会话选择弹窗 (同 F4)
-                    if (statusBar_ && statusBar_->sessionBox().Contain(mouse.x, mouse.y)) {
-                        openSessionSelector();
-                        return true;
-                    }
-                    // 状态栏 "Settings" 按钮点击 → 打开设置弹窗
-                    if (statusBar_ && statusBar_->settingsBox().Contain(mouse.x, mouse.y)) {
-                        openSettings();
-                        return true;
-                    }
+                    // 其余主界面按钮由各组件自身在组件树中处理
+                    // (消息列表: 折叠/装饰按钮/中断控件/重试; 输入栏: 附件/待发队列;
+                    //  状态栏: 模型/会话/设置; 侧边栏: tab 与拖拽), 此处不再按坐标判定
                 }
                 return false;
             }
@@ -1069,17 +1029,11 @@ void TUIClientAgentIO::openModelSelector() {
     if (transport_) {
         sendToPeer(agentxx::agent::WireGetModel{currentSessionId()});
     }
+    // 弹窗自身会把选中项对齐到当前使用中的模型 (首次渲染时按 cachedModelName)
     auto overlay = std::make_shared<ModelSelectorOverlay>(ctx_);
-    auto snap    = sharedState_.readSnapshot();
-    for (size_t i = 0; i < snap->modelNames.size(); ++i) {
-        if (snap->modelNames[i] == snap->cachedModelName) {
-            overlay->setInitialIndex(static_cast<int>(i));
-            break;
-        }
-    }
     // 确认选择: 记录为待应用选择 (setPendingModel), 同时立即向服务端发送
     // WireSelectModel 同步当前会话的模型设定。
-    // 状态栏显示已由 confirmSelection 更新 cachedModelName
+    // 状态栏显示已由弹窗确认时更新 cachedModelName
     overlay->onConfirm([this](std::string model) {
         setPendingModel(model);
         if (transport_) {
@@ -1144,6 +1098,70 @@ void TUIClientAgentIO::openAbout() {
     });
     modal_->pushModal(overlay);
     postRedraw();
+}
+
+void TUIClientAgentIO::openLogsMenu() {
+    if (!modal_ || modal_->hasModal()) {
+        return;
+    }
+    auto menu = std::make_shared<LogMenuOverlay>(ctx_);
+    menu->onClose([this] {
+        modal_->popModal();
+    });
+    menu->onLlmContext([this] {
+        modal_->popModal();
+        if (transport_) {
+            sendToPeer(agentxx::agent::WireGetContext{currentSessionId()});
+        }
+        if (modal_ && !modal_->hasModal()) {
+            auto overlay = std::make_shared<ContextOverlay>(ctx_);
+            overlay->onClose([this] {
+                modal_->popModal();
+            });
+            modal_->pushModal(overlay);
+        }
+    });
+    menu->onSummyContext([this] {
+        if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
+            showToast(std::string(tr("toast.notReady")));
+            postRedraw();
+            return;
+        }
+        const bool busy = (ctx_.frameState && ctx_.frameState->isStreaming)
+                          || awaitingInterruptInput_.load(std::memory_order_acquire);
+        if (busy) {
+            showToast(std::string(tr("toast.stopCurrent")));
+            postRedraw();
+            return;
+        }
+
+        modal_->popModal();
+        if (transport_) {
+            sendToPeer(agentxx::agent::WireCompactContext{currentSessionId()});
+        }
+    });
+    menu->onClearLogs([this] {
+        modal_->popModal();
+        if (logSink_) {
+            logSink_->clear();
+        }
+        logLineCache_.clear();
+        postRedraw();
+    });
+    modal_->pushModal(menu);
+    postRedraw();
+}
+
+void TUIClientAgentIO::handleShellHit(std::string_view id) {
+    // shell 级按钮 (跨组件; 命中表由渲染期登记, 见 mainRenderer)
+    if (id == kFailedViewHitId) {
+        openFailedAppendComponents();
+        return;
+    }
+    if (id == kLogsMenuHitId) {
+        openLogsMenu();
+        return;
+    }
 }
 
 void TUIClientAgentIO::ensureInfoSidebarTab() {
@@ -1244,13 +1262,13 @@ void TUIClientAgentIO::openFailedAppendComponents() {
 }
 
 bool TUIClientAgentIO::hitTestPluginButton(const ftxui::Mouse& mouse, UiHitTarget& out) const {
-    for (const auto& t : hitTargets_) {
-        if (t.box.Contain(mouse.x, mouse.y)) {
-            out = t;
-            return true;
-        }
+    // 命中表仅含本帧渲染出来的可点按钮 (每帧渲染入口重建)
+    const auto* hit = hitTargets_.find(mouse.x, mouse.y);
+    if (hit == nullptr) {
+        return false;
     }
-    return false;
+    out = hit->payload;
+    return true;
 }
 
 void TUIClientAgentIO::openOverlay(

@@ -50,17 +50,17 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 
 /// 渲染插件段落/面板 items JSON 元素 (通用, 零特化; 共享 helper 收敛点)
 /// - text/progress/badge/separator/button/diagram/diff 全走 plugin_ui_items
-/// - button 有 action_id 且快照有该 plugin 绑定 → 挂 hitTargets_ 并 reflect
+/// - button 有 action_id 且快照有该 plugin 绑定 → 登记到命中表 (反射坐标 + 派发信息)
 /// - text + button 隐式同行合并与 prefix 显式前缀统一在此实现
 /// - diagram 保留静态内联渲染 (历史消息兼容), 不挂点击
 static void appendPluginItems(
-    const agentxx::util::Json&                  items,
-    std::string_view                            plugin,
-    std::string_view                            ownerId,
-    const agentxx::plugin::ClientUiRegistry*    reg,
-    const TUITheme&                             theme,
-    ftxui::Elements&                            out,
-    std::vector<TUIClientAgentIO::UiHitTarget>& hits
+    const agentxx::util::Json&                                   items,
+    std::string_view                                             plugin,
+    std::string_view                                             ownerId,
+    const agentxx::plugin::ClientUiRegistry*                     reg,
+    const TUITheme&                                              theme,
+    ftxui::Elements&                                             out,
+    agentxx::client::UiHitRegistry<TUIClientAgentIO::UiHitTarget>& hits
 ) {
     if (!items.is_array()) {
         return;
@@ -84,14 +84,17 @@ static void appendPluginItems(
                 if (agentxx::client::parsePluginButton(items[i + 1], plugin, reg, desc)) {
                     Element btn = agentxx::client::renderPluginButton(desc, theme);
                     if (desc.clickable) {
-                        TUIClientAgentIO::UiHitTarget t;
-                        t.plugin     = std::string{plugin};
-                        t.ownerId    = std::string{ownerId};
-                        t.actionId   = desc.actionId;
-                        t.argsJson   = desc.argsJson;
-                        t.generation = reg ? reg->generationOf(plugin) : 0;
-                        hits.push_back(std::move(t));
-                        btn = btn | reflect(hits.back().box);
+                        // 命中登记: 坐标由登记表持有 (仅本帧渲染出来的按钮才登记)
+                        btn = hits.add(
+                            std::move(btn),
+                            TUIClientAgentIO::UiHitTarget{
+                                .plugin     = std::string{plugin},
+                                .ownerId    = std::string{ownerId},
+                                .actionId   = desc.actionId,
+                                .argsJson   = desc.argsJson,
+                                .generation = reg ? reg->generationOf(plugin) : 0,
+                            }
+                        );
                     }
                     push(hbox({
                         agentxx::client::renderPluginTextItem(
@@ -134,13 +137,16 @@ static void appendPluginItems(
             }
             Element btn = agentxx::client::renderPluginButton(desc, theme);
             if (desc.clickable) {
-                TUIClientAgentIO::UiHitTarget t;
-                t.plugin   = std::string{plugin};
-                t.ownerId  = std::string{ownerId};
-                t.actionId = desc.actionId;
-                t.argsJson = desc.argsJson;
-                hits.push_back(std::move(t));
-                btn = btn | reflect(hits.back().box);
+                btn = hits.add(
+                    std::move(btn),
+                    TUIClientAgentIO::UiHitTarget{
+                        .plugin     = std::string{plugin},
+                        .ownerId    = std::string{ownerId},
+                        .actionId   = desc.actionId,
+                        .argsJson   = desc.argsJson,
+                        .generation = reg ? reg->generationOf(plugin) : 0,
+                    }
+                );
             }
             if (!desc.prefix.empty()) {
                 push(hbox({
@@ -260,9 +266,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
     // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
     //   注入本 Info 栏 (见下方 "插件扩展 Info 段落"), TUI 不再单独渲染
-    // - 本帧渲染前先清空 Failed 组 [view] 按钮命中区域 (Append 段未渲染/
-    //   无失败项时防止残留旧区域误触); 按钮渲染时经 reflect 重新填充
-    failedViewButtonBox_ = ftxui::Box{0, -1, 0, -1};
+    // - Failed 组 [view] 按钮命中经 shellHits_ 登记 (帧首由主渲染器清空):
+    //   无失败项时该按钮不渲染, 因此不会占用任何点击区域
     if (!st.appendComponents.empty()) {
         Elements appendEls;
         appendEls.push_back(text(tr("info.append")) | color(theme_.accentColor));
@@ -301,8 +306,8 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         appendGroup("Plugins", agentxx::agent::AppendComponentNotification::Type::Plugin, false);
 
         // 加载失败组件汇总组: 统计 success=false 的通知, 展示 "|- Failed: 数量"
-        // 与 "| [view]" 按钮 (点击弹窗查看失败详情; 命中区域 reflect 到
-        // failedViewButtonBox_, 点击处理见 agent_tui 主鼠标事件分支)
+        // 与 "| [view]" 按钮 (点击弹窗查看失败详情; 命中登记到 shellHits_,
+        // 点击经 TUIClientAgentIO::handleShellHit 分发)
         size_t failedCount = 0;
         for (const auto& notif : st.appendComponents) {
             if (!notif.success) {
@@ -316,8 +321,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
             );
             appendEls.push_back(hbox({
                 text("|  ") | color(theme_.hintColor),
-                text(tr("info.viewFailed")) | bgcolor(theme_.buttonBgColor)
-                    | color(theme_.buttonTextColor) | reflect(failedViewButtonBox_),
+                shellHits_.add(
+                    text(tr("info.viewFailed")) | bgcolor(theme_.buttonBgColor)
+                        | color(theme_.buttonTextColor),
+                    std::string{kFailedViewHitId}
+                ),
             }));
         }
 
@@ -384,9 +392,12 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
     }
     row.push_back(filler());
 
-    auto menuBtn = text(tr("footer.menu")) | bgcolor(theme_.buttonBgColor)
-                   | color(theme_.buttonTextColor) | reflect(contextButtonBox_);
-    row.push_back(menuBtn);
+    // [Menu] 按钮: 登记到 shell 级命中表 (未渲染时不占点击区域; 点击经
+    // handleShellHit 打开日志菜单弹窗)
+    row.push_back(shellHits_.add(
+        text(tr("footer.menu")) | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
+        std::string{kLogsMenuHitId}
+    ));
 
     return hbox(std::move(row));
 }

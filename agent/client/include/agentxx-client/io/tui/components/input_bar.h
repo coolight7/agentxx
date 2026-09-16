@@ -3,10 +3,12 @@
 #include "agentxx-client/io/tui/components/spinner.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx/agent/conversation_types.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
+#include "ftxui/screen/box.hpp"
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -22,11 +24,16 @@
 /// - Ctrl+L: 清空输入与附件
 /// - 鼠标点击右侧 [ 📎︎︎ ]: 触发打开模态文件选择弹窗 (不绑定键盘热键)
 /// - 鼠标点击附件 [✕]: 从待发附件托盘移除对应附件
+/// - 鼠标点击待发队列计数 / [立即发送]: 打开待发队列弹窗 / 执行队列下一条
 /// - 括号粘贴 (bracketed paste): 终端启用 \x1B[?2004h 后, 粘贴内容以
 ///   \x1B[200~ ... \x1B[201~ 包裹到达, 本组件拦截并整体插入光标处,
 ///   支持多行粘贴 (粘贴的换行不会触发发送)
 ///
-/// 发送逻辑由外部 (TUIClientAgentIO) 通过 onSend 回调实现,
+/// 命中检测经 [agentxx::client::UiHitMap] (每帧渲染时登记, 帧首清空):
+/// 未展示的按钮 (如模型不支持多模态时的 [📎︎︎]、无待发队列时的队列行)
+/// 不会登记, 因此不占用任何点击区域。
+///
+/// 发送逻辑由外部 (TUIClientAgentIO) 通过 Config 回调实现,
 /// 本组件仅负责 UI 交互与文本、附件管理。
 class InputComponent : public ftxui::ComponentBase {
 public:
@@ -43,6 +50,10 @@ public:
         std::function<bool()> canAttach;
         /// 点击 [ 📎︎︎ ] 按钮触发打开文件选择弹窗
         std::function<void()> onOpenAttachPicker;
+        /// 点击待发送队列计数区域触发打开待发送队列弹窗
+        std::function<void()> onOpenPendingQueue;
+        /// 点击待发送队列 [立即发送] 按钮 (中断当前轮次, 立即执行队列下一条)
+        std::function<void()> onRunNextPending;
     };
 
     InputComponent(TUICtx& ctx, Config config);
@@ -86,15 +97,29 @@ public:
         ctx_.postRedraw();
     }
 
-    /// 获取待发送消息队列计数区域 (渲染时由 reflect 填充, 点击打开待发弹窗)
-    const ftxui::Box& pendingCounterBox() const {
-        return pendingCounterBox_;
+    /// 测试辅助: 待发送队列计数区域的命中框 (未渲染时为空区域)
+    ftxui::Box pendingCounterBox() const {
+        return hitBox(kPendingCounterHitId);
     }
 
-    /// 获取待发送消息队列立即发送按钮区域 (渲染时由 reflect 填充, 点击立即发送下一条)
-    const ftxui::Box& pendingInsertButtonBox() const {
-        return pendingInsertButtonBox_;
+    /// 测试辅助: 待发送队列 [立即发送] 按钮的命中框 (未渲染时为空区域)
+    ftxui::Box pendingInsertButtonBox() const {
+        return hitBox(kPendingInsertHitId);
     }
+
+    /// 测试辅助: [ 📎︎︎ ] 按钮的命中框 (未渲染时为空区域)
+    ftxui::Box attachButtonBox() const {
+        return hitBox(kAttachHitId);
+    }
+
+    /// 测试辅助: 第 index 个附件删除按钮 [✕] 的命中框 (未渲染时为空区域)
+    ftxui::Box attachmentDeleteBox(size_t index) const;
+
+    /// 命中 id (供测试与命中处理引用)
+    static constexpr std::string_view kAttachHitId         = "input/attach";
+    static constexpr std::string_view kAttachDeletePrefix  = "input/attach-delete/";
+    static constexpr std::string_view kPendingCounterHitId = "input/pending-counter";
+    static constexpr std::string_view kPendingInsertHitId  = "input/pending-insert";
 
 private:
 
@@ -105,20 +130,19 @@ private:
     /// 防止结束标记丢失时后续输入被吞入粘贴缓冲区
     static constexpr auto kPasteTimeout = std::chrono::milliseconds(2000);
 
+    /// 处理左键释放命中 (返回是否消费)
+    bool handleClick(const ftxui::Mouse& mouse);
+    /// 取指定命中 id 的屏幕区域 (不存在返回空区域)
+    ftxui::Box hitBox(std::string_view id) const;
+
     TUICtx&                                      ctx_;
     Config                                       config_;
     std::string                                  inputText_;
     ftxui::Component                             input_;
     std::vector<agentxx::agent::MediaAttachment> attachments_;
 
-    /// 输入框右侧 [ 📎︎︎ ] 按钮点击命中区域
-    ftxui::Box attachButtonBox_;
-    /// 托盘各附件删除按钮 [✕] 点击命中区域
-    std::vector<ftxui::Box> attachmentDeleteBoxes_;
-    /// 待发送消息队列计数区域 (渲染时 reflect 填充)
-    ftxui::Box pendingCounterBox_;
-    /// 待发送消息队列立即发送按钮区域 (渲染时 reflect 填充)
-    ftxui::Box pendingInsertButtonBox_;
+    /// 命中区域登记表 (每帧 OnRender 重建; 未展示的按钮不会登记)
+    agentxx::client::UiHitMap hits_;
 
     /// 输入框占位符 (绑定到 Input 的 placeholder 引用: Input 渲染时实时读取,
     /// 语言切换后刷新本成员即生效, 无需重建组件)

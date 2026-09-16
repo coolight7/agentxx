@@ -5,6 +5,8 @@
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
+#include "agentxx-client/io/tui/framework/ui_action_list.h"
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/context.h"
@@ -295,9 +297,11 @@ public:
     /// 通用 overlay 关闭 (UI 线程; 由 TuiPluginAdapter 经 postToUi 投递调用)
     void closeOverlay();
 
-    /// 通用插件按钮命中表项 (sidebar/panel 渲染时挂载, 全局点击时命中检测)
+    /// 通用插件按钮命中表项 (sidebar/panel 渲染时登记, 全局点击时命中检测)
+    ///
+    /// 命中区域本身由 [agentxx::client::UiHitRegistry] 持有 (它负责 reflect 与
+    /// 每帧重建), 本结构只承载"点了什么"的语义。
     struct UiHitTarget {
-        ftxui::Box  box;     ///< reflect 填充的屏幕绝对坐标
         std::string plugin;  ///< 来自 registry 条目 plugin 字段
         std::string ownerId; ///< section_id / panel_id / tool_call_id
         std::string actionId;
@@ -306,7 +310,12 @@ public:
         uint64_t generation = 0;
     };
 
-    /// 通用插件按钮命中检测 (UI 线程; 命中时拷贝出 out 并返回 true)
+    /// 插件按钮命中登记表 (UI 线程独占)
+    /// - 每帧渲染入口 [beginFrame]; 仅本帧真正渲染出来的按钮才会登记
+    ///   (面板未展开/消息不在视口时不会被点中)
+    agentxx::client::UiHitRegistry<UiHitTarget> hitTargets_;
+
+    /// 插件按钮命中检测 (UI 线程; 命中时拷贝出 out 并返回 true)
     bool hitTestPluginButton(const ftxui::Mouse& mouse, UiHitTarget& out) const;
 
     /// 显示 toast (任意线程可调用; 内部投递到 UI 线程)
@@ -603,20 +612,22 @@ private:
     /// 连接协程 waitRetry 轮询消费并据此返回重试连接)
     std::atomic<bool> retryRequested_{false};
 
-    /// 鼠标命中区域 (渲染时 reflect 填充, 全局事件处理时检测)
-    ftxui::Box contextButtonBox_;
-    /// Info 侧边栏 Append "Failed" 组 [view] 按钮命中区域
-    /// (渲染时 reflect; 无失败项时重置为无效区域防误触, 见 renderInfoSidebar)
-    ftxui::Box failedViewButtonBox_;
+    /// 主界面零散按钮的命中登记表 (跨组件、动作实现在 TUIClientAgentIO 内):
+    /// - Info 侧边栏 Append "Failed" 组 [view] 按钮 → 打开加载失败组件列表
+    /// - Logs 侧边栏底部 [Menu] 按钮 → 打开日志菜单
+    /// 由对应渲染函数在渲染期登记, 每帧渲染入口清空 (见 mainRenderer):
+    /// 按钮未渲染 (侧边栏 tab 未激活 / 无失败项) 时不会命中。
+    agentxx::client::UiHitMap shellHits_;
 
-    /// 通用插件按钮命中表 (UI 线程独占, 每帧重建):
-    /// - sidebar/panel 渲染入口 clear, message decor 以 decor 为单位追加
-    ///   (与 interruptHits_/collapsibleBoxes_ 同生命期: OnRender 填充,
-    ///   OnEvent/catch 命中检测)
-    /// - 仅存可点项 (action_id 非空 && 快照有该 plugin 绑定)
-    /// - 点击时拷贝 (plugin, ownerId, actionId, argsJson) 快照经
-    ///   manager->dispatchAction 投递 io 线程二次校验后派发
-    std::vector<UiHitTarget> hitTargets_;
+    /// 命中 id (shell 级按钮)
+    static constexpr std::string_view kFailedViewHitId = "shell/info-failed-view";
+    static constexpr std::string_view kLogsMenuHitId   = "shell/logs-menu";
+
+    /// 处理 shell 级按钮命中 (UI 线程; 由全局鼠标事件经 shellHits_ 分发)
+    void handleShellHit(std::string_view id);
+
+    /// 打开 Logs 侧边栏底部 [Menu] 菜单弹窗 (LLM 上下文 / 总结上下文 / 清空日志)
+    void openLogsMenu();
 
     /// 当前通用 overlay 的发起插件 (CUSTOM 内按钮与 close 归因用;
     /// 单模态 last-wins, 仅记日志/归因, 不做强互斥)

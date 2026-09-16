@@ -406,6 +406,73 @@ static void testRoleLabelLocalization() {
 }
 
 // ---------------------------------------------------------------------------
+// 回归: 连接失败 banner 的 [重试] 按钮命中区域随状态出现/消失
+//
+// 背景: 旧实现用成员 Box 保存命中区域, 且以 `Box{}` (四个分量为 0) 表示"清空",
+// 造成两个问题:
+// - 状态从 Failed 变为 Connected 后, 成员 Box 未被清空, 原位置仍能点中"已消失的按钮"
+// - `Box{}` 实际是屏幕左上角 (0,0), 会把该处点击当成命中
+// 现在命中经 UiHitMap 登记: banner 重建/离开列表时清空, 未渲染则不登记。
+// ---------------------------------------------------------------------------
+
+void testBannerRetryButtonHitArea() {
+    ScrollFixture f;
+
+    // 连接失败 (无消息, 空状态 banner): [重试] 按钮渲染并登记命中
+    f.sharedState.mutate([](TUIRenderState& st) {
+        st.connState = ConnState::Failed;
+    });
+    f.render();
+
+    const ftxui::Box retryBox = f.comp->retryButtonBox();
+    XX_TEST_EXPECT_TRUE(!retryBox.IsEmpty());
+    const int clickX = (retryBox.x_min + retryBox.x_max) / 2;
+    const int clickY = (retryBox.y_min + retryBox.y_max) / 2;
+
+    int retryClicks = 0;
+    f.comp->setOnRetryClick([&] {
+        ++retryClicks;
+    });
+
+    ftxui::Mouse click;
+    click.button = ftxui::Mouse::Left;
+    click.motion = ftxui::Mouse::Released;
+    click.x      = clickX;
+    click.y      = clickY;
+    XX_TEST_EXPECT_TRUE(f.comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(retryClicks, 1);
+
+    // 连接成功: banner 重建, [重试] 按钮不再渲染 -> 命中区域为空, 原位置点击无效
+    f.sharedState.mutate([](TUIRenderState& st) {
+        st.connState  = ConnState::Connected;
+        st.startupProgress.clear();
+    });
+    f.render();
+    XX_TEST_EXPECT_TRUE(f.comp->retryButtonBox().IsEmpty());
+    XX_TEST_EXPECT_FALSE(f.comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(retryClicks, 1);
+
+    // 再次失败: 按钮恢复可点
+    f.sharedState.mutate([](TUIRenderState& st) {
+        st.connState = ConnState::Failed;
+    });
+    f.render();
+    const ftxui::Box retryAgain = f.comp->retryButtonBox();
+    XX_TEST_EXPECT_TRUE(!retryAgain.IsEmpty());
+    click.x = (retryAgain.x_min + retryAgain.x_max) / 2;
+    click.y = (retryAgain.y_min + retryAgain.y_max) / 2;
+    XX_TEST_EXPECT_TRUE(f.comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(retryClicks, 2);
+
+    // 有消息后 banner 离开列表 (按钮随之失效)
+    f.addHistory(1);
+    f.render();
+    XX_TEST_EXPECT_TRUE(f.comp->retryButtonBox().IsEmpty());
+    XX_TEST_EXPECT_FALSE(f.comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(retryClicks, 2);
+}
+
+// ---------------------------------------------------------------------------
 // 回归: 内容更新帧与同内容再渲染帧必须完全一致 (流式抖动)
 // ---------------------------------------------------------------------------
 
@@ -421,6 +488,8 @@ TestResult testTuiScroll() {
     testHistoryPrependAnchoring();
 
     testRoleLabelLocalization();
+
+    testBannerRetryButtonHitArea();
 
     {
         // 场景 1: 流式输出中, 内容更新帧 vs 同内容再渲染帧 (鼠标移动帧)

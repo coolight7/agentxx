@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -16,11 +17,13 @@
 /// - 右侧 tabs 竖向列表: 常驻显示, 超出显示高度时可滚动 (复用 Scrollable);
 ///   常驻标签 (如 Info/Logs) 固定显示于列表顶部, 对应 tab 未创建时也可点击创建
 ///
-/// 事件处理:
+/// 事件处理 (命中区域经 [agentxx::client::UiHitMap] 登记, 每帧渲染时重建):
 /// - tab 左键点击切换/取消激活 (常驻标签已激活时再点一次取消激活, 内容区隐藏),
 ///   右键关闭动态 tab (常驻标签右键仅取消激活, 按钮不可移除)
 /// - 左侧手柄拖拽调整宽度 (作用于有内容时的整体宽度)
 /// - 内容区/列表滚轮分别由各自内部 Scrollable 处理
+/// - footer 区域的按钮属于 shell 级动作 (见 TUIClientAgentIO::shellHits_),
+///   本组件不再自行维护 footer 命中区域
 class SidebarComponent : public ftxui::ComponentBase {
 public:
 
@@ -90,11 +93,6 @@ public:
         return width_;
     }
 
-    /// 设置 footer 区域点击回调 (如 "上下文" 按钮)
-    void onFooterClick(std::function<bool(const ftxui::Mouse&)> fn) {
-        onFooterClick_ = std::move(fn);
-    }
-
     /// 清除侧边栏可见项的鼠标选中高亮 (拖选松开复制完成后调用;
     /// 转发给 scrollable_ 的 resetSelectionHighlight)
     void clearSelectionHighlight() {
@@ -106,13 +104,24 @@ public:
 
 private:
 
-    /// tabs 竖向列表条目: 与 tabList_->visibleBoxes() 下标一一对应 (鼠标命中检测)
-    struct ListEntry {
+    /// tab 列表按钮命中载荷: 指向被点的条目 (常驻标签或动态 tab)
+    struct TabHit {
         bool isPin = false;
-        int  index = -1; // isPin ? pinned_ 下标 : tabs_ 下标
+        int  index = -1; ///< isPin ? pinned_ 下标 : tabs_ 下标
     };
 
-    /// 构建本帧 tabs 竖向列表按钮 (填充 pendingListItems_ 与 listEntries_)
+    /// 命中项分类 (侧边栏内两类命中: tab 列表按钮 / 左侧拖拽手柄)
+    struct HitInfo {
+        enum class Kind : uint8_t {
+            TabButton,   ///< tabs 竖向列表按钮 (载荷看 [TabHit])
+            ResizeHandle ///< 左侧宽度拖拽手柄
+        };
+
+        Kind   kind = Kind::TabButton;
+        TabHit tab;
+    };
+
+    /// 构建本帧 tabs 竖向列表按钮 (命中登记进 hits_)
     void buildTabList();
     bool handleListMouse(const ftxui::Mouse& mouse);
     bool handleResizeMouse(const ftxui::Mouse& mouse);
@@ -135,11 +144,11 @@ private:
     int  resizeStartW_ = 0;
 
     std::vector<ScrollItem> pendingListItems_; // 本帧待渲染的列表按钮 (tabList_ 的 render 源)
-    std::vector<ListEntry> listEntries_;       // pendingListItems_ 与 tabs_/pinned_ 的映射
-    ftxui::Box             handleBox_;
-    ftxui::Box             footerBox_;
 
-    std::function<bool(const ftxui::Mouse&)> onFooterClick_;
+    /// 命中登记表 (每帧 OnRender 帧首清空; tab 按钮与拖拽手柄共用):
+    /// 载荷直接带条目归属, 无需再维护"可见子项下标 → tabs_/pinned_ 下标"的映射表,
+    /// 未渲染的按钮 (列表滚动到视口外) 也不会命中
+    agentxx::client::UiHitRegistry<HitInfo> hits_;
 
     // 横向布局下内容区与竖向列表共享宽度: 相比原垂直布局适度加宽,
     // 保证左侧内容区在列表占据约 10 列后仍有可用宽度

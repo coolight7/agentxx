@@ -284,6 +284,16 @@ Element MessageListComponent::OnRender() {
         }
     }
 
+    // 连接失败 banner 的 [重试] 按钮命中: banner (空状态) 不在本帧列表中时清空 ——
+    // 按钮消失后不再占用那块区域。
+    // 注意: 不能每帧无条件清空 —— banner 元素跨帧缓存时不重建, 若每帧清空则会
+    // 丢失登记 (按钮变成点不动); 缓存期间命中项连同其 Box 由 reflect 每帧更新。
+    // 判定口径与 itemCount/fillViewport 一致: "无消息且无流式内容" 才渲染 banner
+    if (ctx_.frameState
+        && !(ctx_.frameState->messages.empty() && !hasStreamingToken(*ctx_.frameState))) {
+        bannerHits_.beginFrame();
+    }
+
     // 中断控件命中区域: 由本帧 scrollable_->Render() 中构建可见 Interrupt 消息
     // 时填充 (InterruptView::build), 供下一帧点击命中检测
     interruptView_.beginFrame();
@@ -305,6 +315,9 @@ Element MessageListComponent::OnRender() {
 bool MessageListComponent::OnEvent(Event event) {
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
+        if (handleRetryClick(mouse)) {
+            return true;
+        }
         if (handleDecorButtonClick(mouse)) {
             return true;
         }
@@ -759,11 +772,15 @@ Element MessageListComponent::buildBanner() {
     const auto& theme = *ctx_.theme;
     const auto& st    = *ctx_.frameState;
 
+    // banner 命中表: 本次构建重新登记 (上一帧的 [重试] 按钮登记先清空,
+    // 因此状态切到非 Failed 后该按钮立即失去命中区域)
+    bannerHits_.beginFrame();
+
     // 连接状态行 (banner 下半部):
     // - Connecting: server-io 正在启动, 下方逐步显示当前正在执行的启动
     //   操作 (如"加载 MCP server: xxx"), 并提示输入将在连接完成后自动发送
-    // - Failed:     连接失败提示 + 可点击的 [重试] 按钮 (TUIClientAgentIO 全局
-    //               鼠标事件经 retryButtonBox 命中检测, 点击重新发起连接)
+    // - Failed:     连接失败提示 + 可点击的 [重试] 按钮 (命中经 bannerHits_ 登记,
+    //               点击经 onRetryClick_ 回调重新发起连接)
     // - Connected:  启动完成提示 + 默认按键提示
     Element statusLine;
     switch (st.connState) {
@@ -793,13 +810,14 @@ Element MessageListComponent::buildBanner() {
             break;
         }
         case ConnState::Failed: {
-            // 重置上一帧命中区域 (避免缓存命中的旧 Box 残留; 元素重建后 reflect 重新填充)
-            retryButtonBox_ = ftxui::Box{};
-            statusLine      = hbox({
+            statusLine = hbox({
                 filler(),
                 text(tr("banner.failed")) | color(theme.errorColor),
-                text(tr("banner.retry")) | bgcolor(theme.buttonBgColor)
-                    | color(theme.buttonTextColor) | bold | reflect(retryButtonBox_),
+                bannerHits_.add(
+                    text(tr("banner.retry")) | bgcolor(theme.buttonBgColor)
+                        | color(theme.buttonTextColor) | bold,
+                    std::string{}
+                ),
                 filler(),
             });
             break;
@@ -1613,6 +1631,25 @@ void MessageListComponent::appendDecorItems(
         }
         lines.push_back(std::move(row.element));
     }
+}
+
+ftxui::Box MessageListComponent::retryButtonBox() const {
+    // 测试辅助: banner 命中表仅登记 [重试] 按钮一项
+    for (const auto& entry : bannerHits_.entries()) {
+        return *entry.box;
+    }
+    return agentxx::client::kNoBox;
+}
+
+bool MessageListComponent::handleRetryClick(const Mouse& mouse) {
+    if (bannerHits_.findClick(mouse) == nullptr) {
+        return false;
+    }
+    ctx_.postRedraw();
+    if (onRetryClick_) {
+        onRetryClick_();
+    }
+    return true;
 }
 
 bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
