@@ -15,6 +15,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
 #include "agentxx/util/string_util.h"
+#include "agentxx/util/util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -86,6 +87,7 @@ TUIClientAgentIO::TUIClientAgentIO(
     ex_(ex),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
+    clientDeviceId_ = agentxx::util::getDeviceId();
     // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 server-io
     // 线程); 模型名/上下文统计等所有 agent 侧信息均经 Wire 消息 (WireModelInfo /
     // WireContextStats) 由服务端推送获取, cachedModelName 初始为空,
@@ -442,12 +444,29 @@ void TUIClientAgentIO::start() {
         ctx_.requestMoreSessions = [this] {
             requestNextSessionListPage();
         };
-        ctx_.theme         = &theme_;
-        ctx_.sessionId     = currentSessionId();
-        ctx_.remoteUrl     = remoteUrl_;
-        ctx_.dataDir       = dataDir_;
-        ctx_.workDir       = workDir_;
-        ctx_.pluginManager = pluginManager_;
+        ctx_.requestServerListDir = [this](
+                                        std::string                                                   path,
+                                        std::vector<std::string>                                      allowedExtensions,
+                                        std::function<void(const agentxx::agent::WireListDirResult&)> callback
+                                    ) {
+            requestServerListDir(
+                std::move(path),
+                std::move(allowedExtensions),
+                std::move(callback)
+            );
+        };
+        ctx_.showToast = [this](std::string msg) {
+            showToast(std::move(msg));
+        };
+        ctx_.theme          = &theme_;
+        ctx_.sessionId      = currentSessionId();
+        ctx_.remoteUrl      = remoteUrl_;
+        ctx_.dataDir        = dataDir_;
+        ctx_.workDir        = workDir_;
+        ctx_.clientDeviceId = clientDeviceId_;
+        ctx_.serverDeviceId = serverDeviceId_;
+        ctx_.serverWorkDir  = serverWorkDir_;
+        ctx_.pluginManager  = pluginManager_;
         // 注意: 不设置 ctx_.session —— TUI 不持有 Session (属于 server-io 线程),
         // 上下文统计经 WireContextStats → onContextStats → sharedState_ 更新,
         // 状态栏等组件从 frameState 读取 (见
@@ -1346,67 +1365,7 @@ void TUIClientAgentIO::openFilePickerOverlay() {
     overlay->onClose([this] {
         modal_->popModal();
     });
-    overlay->onSelectFile([this, cap](std::string filePath) {
-        // 预检: 读取文件、判断大小、Base64 编码为 Data URL、挂载到托盘
-        std::error_code ec;
-        auto            fileSize = std::filesystem::file_size(filePath, ec);
-        if (ec) {
-            showToast(trf("toast.attachReadFail", ec.message()));
-            postRedraw();
-            return;
-        }
-
-        // 推断 MIME 类型和媒体类型 (与 FilePicker 白名单收敛)
-        auto ext  = agentxx::util::toLower(std::filesystem::path(filePath).extension().string());
-        auto mt   = agentxx::agent::mediaTypeFromExtension(ext);
-        auto mime = agentxx::agent::mimeTypeFromExtension(ext);
-        if (!mt.has_value() || mime.empty()) {
-            showToast(std::string(tr("toast.attachBadType")));
-            postRedraw();
-            return;
-        }
-        agentxx::agent::MediaType mediaType = *mt;
-        std::string               mimeType(mime);
-
-        // 大小限制检查
-        uint64_t maxSize = agentxx::agent::maxBytesForMediaType(mediaType);
-        if (fileSize > maxSize) {
-            showToast(
-                trf("toast.attachTooLarge",
-                    fmt::format("{:.1f} MB", static_cast<double>(fileSize) / (1024.0 * 1024.0)),
-                    fmt::format("{:.0f} MB", static_cast<double>(maxSize) / (1024.0 * 1024.0)))
-            );
-            postRedraw();
-            return;
-        }
-
-        // 读取文件内容
-        std::ifstream ifs(filePath, std::ios::binary);
-        if (!ifs) {
-            showToast(std::string(tr("toast.attachOpenFail")));
-            postRedraw();
-            return;
-        }
-        std::string fileData(
-            (std::istreambuf_iterator<char>(ifs)),
-            std::istreambuf_iterator<char>()
-        );
-        ifs.close();
-
-        // Base64 编码为 Data URL
-        auto base64  = agentxx::util::base64Encode(fileData);
-        auto dataUrl = fmt::format("data:{};base64,{}", mimeType, base64);
-
-        // 构建 MediaAttachment
-        agentxx::agent::MediaAttachment att;
-        att.type        = mediaType;
-        att.displayName = std::filesystem::path(filePath).filename().string();
-        att.mimeType    = mimeType;
-        att.pathOrUrl   = filePath;
-        att.dataUrl     = std::move(dataUrl);
-        att.sizeBytes   = fileSize;
-
-        // 挂载到输入栏附件托盘
+    overlay->onSelectAttachment([this](agentxx::agent::MediaAttachment att) {
         if (inputBar_) {
             inputBar_->addAttachment(std::move(att));
         }
@@ -1616,6 +1575,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     }
                 });
                 postRedraw();
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireHelloAck>) {
+                onHelloAck(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireSessionList>) {
                 // 会话选择弹窗数据源: 分页响应回填/追加到已加载会话列表
                 onSessionListPage(m);
@@ -1624,6 +1585,21 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireViewMessagesPage>) {
                 // 历史分页响应: 前插到已加载窗口上方 (向上滚动加载更早历史)
                 onViewMessagesPage(m);
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireListDirResult>) {
+                std::function<void(const agentxx::agent::WireListDirResult&)> cb;
+                {
+                    std::lock_guard<std::mutex> lock(listDirMutex_);
+                    auto it = pendingListDirCallbacks_.find(m.reqId);
+                    if (it != pendingListDirCallbacks_.end()) {
+                        cb = std::move(it->second);
+                        pendingListDirCallbacks_.erase(it);
+                    }
+                }
+                if (cb) {
+                    enqueueUiAction([cb = std::move(cb), resp = std::move(m)]() {
+                        cb(resp);
+                    });
+                }
             }
         },
         std::move(msg)
@@ -1841,6 +1817,35 @@ void TUIClientAgentIO::requestOlderHistory() {
         beforeIndex       = st.historyWindowStart;
     }
     requestViewMessagesPage(currentSessionId(), beforeIndex, kHistoryPageSize);
+}
+
+void TUIClientAgentIO::onHelloAck(const agentxx::agent::WireHelloAck& ack) {
+    serverDeviceId_     = ack.deviceId;
+    serverWorkDir_      = ack.workDir;
+    ctx_.serverDeviceId = serverDeviceId_;
+    ctx_.serverWorkDir  = serverWorkDir_;
+    XX_LOGI(
+        "[tui] hello ack: serverDeviceId={}, isServerDifferentDevice={}",
+        serverDeviceId_,
+        ctx_.isServerDifferentDevice()
+    );
+}
+
+void TUIClientAgentIO::requestServerListDir(
+    std::string                                                   path,
+    std::vector<std::string>                                      allowedExtensions,
+    std::function<void(const agentxx::agent::WireListDirResult&)> callback
+) {
+    uint64_t reqId = ++nextListDirReqId_;
+    if (callback) {
+        std::lock_guard<std::mutex> lock(listDirMutex_);
+        pendingListDirCallbacks_[reqId] = std::move(callback);
+    }
+    sendToPeer(agentxx::agent::WireListDir{
+        .reqId             = reqId,
+        .path              = std::move(path),
+        .allowedExtensions = std::move(allowedExtensions),
+    });
 }
 
 // ---------------------------------------------------------------------------

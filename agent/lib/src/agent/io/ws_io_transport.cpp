@@ -129,7 +129,8 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                 auto msg = co_await recvQueue_->async_receive(
                     asio::cancel_after(config_.authTimeout, asio::use_awaitable)
                 );
-                if (std::get_if<WireHelloAck>(&msg)) {
+                if (auto* ack = std::get_if<WireHelloAck>(&msg)) {
+                    lastHelloAck_ = *ack;
                     break;
                 }
                 // 防御: 先于 HelloAck 到达的其余消息 (如 Log/ContextStats) 缓存
@@ -305,6 +306,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             } else if (auto* sync = std::get_if<WireSyncPayload>(&wireMsg.value())) {
                 lastTailHash_ = sync->tailHash;
             } else if (auto* ack = std::get_if<WireHelloAck>(&wireMsg.value())) {
+                lastHelloAck_ = *ack;
                 if (ack->ok) {
                     connected_.store(true, std::memory_order_release);
                 }

@@ -567,14 +567,24 @@ public:
         onSelectFile_ = std::move(fn);
     }
 
+    /// 附件选中回调 (参数: 构造完毕的 MediaAttachment 对象, 支持本地与服务端附件)
+    void onSelectAttachment(std::function<void(agentxx::agent::MediaAttachment)> fn) {
+        onSelectAttachment_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
 private:
 
+    enum class PickerTab : uint8_t {
+        Local,
+        Server,
+    };
+
     /// 目录条目
     struct DirEntry {
-        std::string               name;     ///< 显示名 (文件名)
+        std::string               name;     ///< 显示名 (文件名, 不含图标)
         std::string               fullPath; ///< 绝对路径
         bool                      isDir     = false;
         bool                      supported = true; ///< 当前模型是否支持该文件类型
@@ -582,24 +592,32 @@ private:
         agentxx::agent::MediaType mediaType = agentxx::agent::MediaType::Image;
     };
 
-    /// 切换当前目录并重建条目列表
-    /// - 参数按值传入: 调用方可能传入 [entries_] 内条目的路径 (见
-    ///   [confirmSelection] 进入子目录), 而本函数开头会清空 entries_,
-    ///   传引用会在清空后悬垂 (use-after-free)
-    void                      navigateTo(std::string dirPath);
+    struct TabState {
+        std::string             currentDir;
+        std::vector<DirEntry>   entries;
+        int                     selectedIndex = 0;
+        std::vector<ftxui::Box> itemBoxes;
+        bool                    loading = false;
+        std::string             error;
+    };
+
+    void                      navigateToLocal(std::string dirPath);
+    void                      navigateToServer(std::string dirPath);
+    void                      switchTab(PickerTab tab);
     void                      confirmSelection();
     bool                      isMediaFile(const std::string& ext) const;
     bool                      isSupportedMedia(const std::string& ext) const;
     agentxx::agent::MediaType guessMediaType(const std::string& ext) const;
 
-    TUICtx&                             ctx_;
-    agentxx::agent::ModelCapabilityInfo capability_;
-    std::string                         currentDir_;
-    /// 当前目录条目 (目录在前, 文件在后; 渲染与鼠标命中均直接使用该列表)
-    std::vector<DirEntry>            entries_;
-    int                              selectedIndex_ = 0;
-    std::function<void()>            onClose_;
-    std::function<void(std::string)> onSelectFile_;
-    std::set<std::string>            allowedExtensions_;
-    std::vector<ftxui::Box>          itemBoxes_;
+    TUICtx&                                              ctx_;
+    agentxx::agent::ModelCapabilityInfo                  capability_;
+    PickerTab                                            activeTab_ = PickerTab::Local;
+    TabState                                             localTab_;
+    TabState                                             serverTab_;
+    ftxui::Box                                           localTabBox_;
+    ftxui::Box                                           serverTabBox_;
+    std::function<void()>                                onClose_;
+    std::function<void(std::string)>                     onSelectFile_;
+    std::function<void(agentxx::agent::MediaAttachment)> onSelectAttachment_;
+    std::set<std::string>                                allowedExtensions_;
 };

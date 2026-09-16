@@ -305,6 +305,9 @@ public:
     /// 显示 toast (任意线程可调用; 内部投递到 UI 线程)
     void uiToast(std::string text, int level);
 
+    /// 处理服务端握手确认 (记录服务端 deviceId 与 workDir)
+    void onHelloAck(const agentxx::agent::WireHelloAck& ack);
+
     /// 代发用户消息 (client io 线程; 与用户输入同排队语义: 未连接/流式中
     /// 进 pendingInputs, 连接后按轮次分发; 发送后通知事件接收器)
     void sendPluginUserInput(std::string text);
@@ -429,6 +432,13 @@ private:
 
     // ---- 会话列表分页 (会话选择弹窗数据源, keyset 游标按最近活动降序) ----
 
+    /// 请求服务端列举目录 (跨设备附件选择)
+    void requestServerListDir(
+        std::string                                                   path,
+        std::vector<std::string>                                      allowedExtensions,
+        std::function<void(const agentxx::agent::WireListDirResult&)> callback
+    );
+
     /// 会话列表页响应处理 (client 线程): 首页/全量响应替换本地列表, 后续页追加,
     /// 更新 totalCount/hasMore 分页元数据 (旧版服务端全量响应按替换处理)
     void onSessionListPage(const agentxx::agent::WireSessionList& resp);
@@ -516,6 +526,14 @@ private:
     std::string                  remoteUrl_;
     std::string                  dataDir_;
     std::string                  workDir_;
+    std::string                  clientDeviceId_;
+    std::string                  serverDeviceId_;
+    std::string                  serverWorkDir_;
+
+    std::mutex                                                                            listDirMutex_;
+    uint64_t                                                                              nextListDirReqId_{0};
+    std::unordered_map<uint64_t, std::function<void(const agentxx::agent::WireListDirResult&)>>
+        pendingListDirCallbacks_;
 
     /// UI 线程组件 (start() 中创建, UI 线程独占)
     TUICtx                                ctx_;

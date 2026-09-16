@@ -41,6 +41,8 @@ struct MsgType {
     /// 客户端请求 viewMessages 历史分页 (恢复长会话时初始仅同步末尾窗口,
     /// 用户向上滚动时按页拉取更早历史; 见 WireGetViewMessages)
     inline static constexpr std::string_view GetViewMessages = "get_view_messages";
+    /// 客户端请求列举服务端目录 (用于跨设备附件选择)
+    inline static constexpr std::string_view ListDir = "list_dir";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -69,6 +71,8 @@ struct MsgType {
     inline static constexpr std::string_view MessageQueueUpdate = "message_queue_update";
     /// 服务端 viewMessages 历史分页响应 (WireViewMessagesPage)
     inline static constexpr std::string_view ViewMessagesPage = "view_messages_page";
+    /// 服务端列举目录响应
+    inline static constexpr std::string_view ListDirResult = "list_dir_result";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -459,7 +463,9 @@ inline agentxx::util::Json makeHelloAck(
     std::string_view                             sessionId,
     std::string_view                             tailHash,
     const std::vector<std::string>&              models,
-    const std::vector<WireHelloAck::PluginInfo>& plugins = {}
+    const std::vector<WireHelloAck::PluginInfo>& plugins  = {},
+    std::string_view                             deviceId = "",
+    std::string_view                             workDir  = ""
 ) {
     agentxx::util::Json j = {
         {"type",      MsgType::HelloAck},
@@ -471,6 +477,12 @@ inline agentxx::util::Json makeHelloAck(
     }
     if (!models.empty()) {
         j["models"] = models;
+    }
+    if (!deviceId.empty()) {
+        j["deviceId"] = deviceId;
+    }
+    if (!workDir.empty()) {
+        j["workDir"] = workDir;
     }
     // 服务端已加载插件结构化列表 (名字+版本+声明接口, client 插件据此判断
     // 对端可用性与能力); 空时不携带 (缺字段按"服务端未提供"处理)
@@ -1008,6 +1020,107 @@ inline std::string msgType(const agentxx::util::Json& j) {
     return j.is_object() ? j.value("type", std::string{}) : std::string{};
 }
 
+// ---------------------------------------------------------------------------
+// 服务端目录列举 (跨设备附件选择)
+// ---------------------------------------------------------------------------
+
+inline agentxx::util::Json wireDirEntryToJson(const WireDirEntry& e) {
+    return agentxx::util::Json{
+        {"name",      e.name                       },
+        {"fullPath",  e.fullPath                   },
+        {"isDir",     e.isDir                      },
+        {"supported", e.supported                  },
+        {"sizeBytes", e.sizeBytes                  },
+        {"mediaType", static_cast<int>(e.mediaType)},
+    };
+}
+
+inline WireDirEntry wireDirEntryFromJson(const agentxx::util::Json& j) {
+    WireDirEntry e;
+    e.name      = j.value("name", std::string{});
+    e.fullPath  = j.value("fullPath", std::string{});
+    e.isDir     = j.value("isDir", false);
+    e.supported = j.value("supported", true);
+    e.sizeBytes = j.value("sizeBytes", uint64_t{0});
+    e.mediaType = static_cast<MediaType>(j.value("mediaType", 0));
+    return e;
+}
+
+inline agentxx::util::Json makeListDir(
+    uint64_t                        reqId,
+    std::string_view                path,
+    const std::vector<std::string>& allowedExtensions = {}
+) {
+    agentxx::util::Json j = {
+        {"type",  MsgType::ListDir},
+        {"reqId", reqId           },
+        {"path",  path            },
+    };
+    if (!allowedExtensions.empty()) {
+        agentxx::util::Json arr = agentxx::util::Json::array();
+        for (const auto& ext : allowedExtensions) {
+            arr.push_back(ext);
+        }
+        j["allowedExtensions"] = std::move(arr);
+    }
+    return j;
+}
+
+inline WireListDir listDirFromJson(const agentxx::util::Json& j) {
+    WireListDir m;
+    m.reqId = j.value("reqId", uint64_t{0});
+    m.path  = j.value("path", std::string{});
+    if (j.contains("allowedExtensions") && j["allowedExtensions"].is_array()) {
+        for (const auto& ext : j["allowedExtensions"]) {
+            if (ext.is_string()) {
+                m.allowedExtensions.push_back(ext.get<std::string>());
+            }
+        }
+    }
+    return m;
+}
+
+inline agentxx::util::Json makeListDirResult(
+    uint64_t                         reqId,
+    bool                             ok,
+    std::string_view                 currentDir,
+    std::string_view                 parentDir,
+    const std::vector<WireDirEntry>& entries,
+    std::string_view                 error = ""
+) {
+    agentxx::util::Json j = {
+        {"type",       MsgType::ListDirResult},
+        {"reqId",      reqId                 },
+        {"ok",         ok                    },
+        {"currentDir", currentDir            },
+        {"parentDir",  parentDir             },
+    };
+    if (!error.empty()) {
+        j["error"] = error;
+    }
+    agentxx::util::Json arr = agentxx::util::Json::array();
+    for (const auto& e : entries) {
+        arr.push_back(wireDirEntryToJson(e));
+    }
+    j["entries"] = std::move(arr);
+    return j;
+}
+
+inline WireListDirResult listDirResultFromJson(const agentxx::util::Json& j) {
+    WireListDirResult r;
+    r.reqId      = j.value("reqId", uint64_t{0});
+    r.ok         = j.value("ok", false);
+    r.currentDir = j.value("currentDir", std::string{});
+    r.parentDir  = j.value("parentDir", std::string{});
+    r.error      = j.value("error", std::string{});
+    if (j.contains("entries") && j["entries"].is_array()) {
+        for (const auto& item : j["entries"]) {
+            r.entries.push_back(wireDirEntryFromJson(item));
+        }
+    }
+    return r;
+}
+
 /// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
 inline std::string msgTypeView(const agentxx::util::JsonView& jv) {
     if (!jv.is_object()) {
@@ -1110,6 +1223,10 @@ agentxx::util::Json toJson(const WireInterruptAndRunNext& msg);
 agentxx::util::Json toJson(const WireGetViewMessages& msg);
 
 agentxx::util::Json toJson(const WireViewMessagesPage& msg);
+
+agentxx::util::Json toJson(const WireListDir& msg);
+
+agentxx::util::Json toJson(const WireListDirResult& msg);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

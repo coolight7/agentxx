@@ -10,6 +10,7 @@
 #include "agentxx/util/async_offload.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/log.h"
+#include "agentxx/util/util.h"
 #include "asio/bind_cancellation_slot.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -574,6 +575,132 @@ void SessionServerAgentIO::onPeerMessage(
                     },
                     asio::detached
                 );
+            } else if constexpr (std::is_same_v<T, WireListDir>) {
+                // 客户端请求服务端目录列举 (跨设备附件选择):
+                // 目录扫描属阻塞 I/O, 卸载到 threadPool 执行, 避免阻塞 agent io 线程
+                auto agent = agent_.lock();
+                auto self  = shared_from_this();
+                asio::co_spawn(
+                    ex_,
+                    [self, agent, req = std::move(m), sender]() -> asio::awaitable<void> {
+                        auto scanDir = [self, agent, req]() -> WireListDirResult {
+                            WireListDirResult result;
+                            result.reqId = req.reqId;
+
+                            std::string targetDir = req.path;
+                            if (targetDir.empty()) {
+                                if (agent && agent->agentContext) {
+                                    targetDir = agent->agentContext->getSessionWorkDir(
+                                        self->config_.sessionId
+                                    );
+                                }
+                                if (targetDir.empty()) {
+                                    std::error_code ec;
+                                    targetDir = std::filesystem::current_path(ec).string();
+                                }
+                            }
+
+                            std::error_code ec;
+                            auto            canonical = std::filesystem::canonical(targetDir, ec);
+                            if (ec) {
+                                result.ok    = false;
+                                result.error = ec.message();
+                                return result;
+                            }
+                            result.currentDir = canonical.string();
+                            if (canonical.has_parent_path()
+                                && canonical.parent_path() != canonical) {
+                                result.parentDir = canonical.parent_path().string();
+                            }
+
+                            std::set<std::string> allowedSet(
+                                req.allowedExtensions.begin(),
+                                req.allowedExtensions.end()
+                            );
+
+                            std::vector<WireDirEntry> dirs;
+                            std::vector<WireDirEntry> files;
+
+                            auto iter = std::filesystem::directory_iterator(canonical, ec);
+                            if (ec) {
+                                result.ok    = false;
+                                result.error = ec.message();
+                                return result;
+                            }
+
+                            for (const auto& entry : iter) {
+                                std::error_code ec2;
+                                auto            status = entry.status(ec2);
+                                if (ec2) {
+                                    continue;
+                                }
+                                std::string filename = entry.path().filename().string();
+                                if (!filename.empty() && filename[0] == '.') {
+                                    continue;
+                                }
+
+                                if (std::filesystem::is_directory(status)) {
+                                    WireDirEntry de;
+                                    de.name      = filename;
+                                    de.fullPath  = entry.path().string();
+                                    de.isDir     = true;
+                                    de.supported = true;
+                                    dirs.push_back(std::move(de));
+                                } else if (std::filesystem::is_regular_file(status)) {
+                                    auto ext = agentxx::util::toLower(
+                                        entry.path().extension().string()
+                                    );
+                                    auto mt = agentxx::agent::mediaTypeFromExtension(ext);
+                                    if (!mt.has_value()) {
+                                        continue;
+                                    }
+                                    WireDirEntry de;
+                                    de.name      = filename;
+                                    de.fullPath  = entry.path().string();
+                                    de.isDir     = false;
+                                    de.sizeBytes = std::filesystem::file_size(entry.path(), ec2);
+                                    de.mediaType = *mt;
+                                    de.supported = (allowedSet.empty() || allowedSet.count(ext) > 0);
+                                    files.push_back(std::move(de));
+                                }
+                            }
+
+                            std::sort(dirs.begin(), dirs.end(), [](const auto& a, const auto& b) {
+                                return a.fullPath < b.fullPath;
+                            });
+                            std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+                                return a.fullPath < b.fullPath;
+                            });
+
+                            for (auto& d : dirs) {
+                                result.entries.push_back(std::move(d));
+                            }
+                            for (auto& f : files) {
+                                result.entries.push_back(std::move(f));
+                            }
+                            result.ok = true;
+                            return result;
+                        };
+
+                        WireListDirResult res;
+                        if (agent && agent->agentContext && agent->agentContext->threadPool) {
+                            res = co_await agentxx::util::offloadAsync<WireListDirResult>(
+                                *agent->agentContext->threadPool,
+                                [scanDir]() -> asio::awaitable<WireListDirResult> {
+                                    co_return scanDir();
+                                }
+                            );
+                        } else {
+                            res = scanDir();
+                        }
+                        if (sender) {
+                            self->sendToClient(sender, std::move(res));
+                        } else {
+                            self->sendToPeer(std::move(res));
+                        }
+                    },
+                    asio::detached
+                );
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
                 // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
                 // 先在线程池中异步预热加载目标会话历史, 避免在 io 线程产生阻塞 SQLite 读
@@ -727,6 +854,10 @@ void SessionServerAgentIO::handleHello(
     helloAck.tailHash  = std::move(tailHash);
     helloAck.models    = std::move(models);
     helloAck.plugins   = std::move(loadedPlugins);
+    helloAck.deviceId  = agentxx::util::getDeviceId();
+    if (auto agent = agent_.lock(); agent && agent->agentContext) {
+        helloAck.workDir = agent->agentContext->getSessionWorkDir(config_.sessionId);
+    }
 
     auto doSend = [&](WireMessage m) {
         if (sender) {

@@ -14,7 +14,7 @@
 > **README** [简体中文 zh-cn](/README.md) | [English en](/docs/en/README.md)
 
 - C++ 协程异步实现的 AI Agent，可编译为`单程序、动态库`直接启动使用。内存占用和程序包体积小、摆脱了庞大的 动态库、python、js 等依赖，可在普通性能的手机、电脑等设备上高效运行
-- 目标支持嵌入App实现高性能的Agent功能，顺带实现 cli/TUI 的 Code Agent; GUI客户端计划将由[Lumenxx](https://github.com/coolight7/lumenxx-docx)支持，并实现 音视频处理、自动化控制 等 Agent 
+- 目标支持嵌入App辅助扩展实现高性能的Agent功能，顺带实现 cli/TUI 的 Code Agent; GUI客户端计划将由[Lumenxx](https://github.com/coolight7/lumenxx-docx)支持，并实现 音视频处理、自动化控制 等 Agent 
 - 已实测过最长单轮任务自动运行8小时完成，本项目已由 Agentxx 自身介入开发
 
 > 初步完成 agent核心及服务、TUI、插件接口、FFI接口，但仍可能大幅度重构，接口可能大改动.
@@ -61,7 +61,7 @@
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少; 编译优化 控制导出符号，裁剪无用符号
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan 等可选库、采用 -Os/-Oz 体积编译优化
 - 以下是`Release倾向性能优化编译`,`添加了Hyperscan等所有可选依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/09/04, commit: f2121cec2869b6df31e1b15a2ff62305dcc1b005`
-- **内存占用** (外置加载5个常用插件 agentxx_filesystem,agentxx_execute_command,agentxx_system,agentxx_websearch,agentxx_planning):
+- **内存占用** (外置加载5个常用插件 agentxx_filesystem, agentxx_execute_command, agentxx_system, agentxx_websearch, agentxx_planning):
 
 | agentxx_cli Target | 初始化 RAM | 100K 上下文 | 200K上下文 | TIP |
 |---|---|---|---|---|

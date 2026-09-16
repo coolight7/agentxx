@@ -40,6 +40,16 @@ struct TUICtx {
     ///   hasMore 边界判断并以上一页最后一条为 keyset 游标发起请求
     std::function<void()> requestMoreSessions;
 
+    /// 请求服务端列举目录 (跨设备附件选择; 线程安全, 回调由 UI 线程执行)
+    std::function<void(
+        std::string                                                    path,
+        std::vector<std::string>                                       allowedExtensions,
+        std::function<void(const agentxx::agent::WireListDirResult&)>  callback
+    )> requestServerListDir;
+
+    /// 屏幕上方 Toast 提示 (UI 线程独占调用)
+    std::function<void(std::string)> showToast;
+
     /// 当前主题 (UI 线程独占, 渲染/事件时直接读取)
     TUITheme* theme = nullptr;
 
@@ -54,6 +64,28 @@ struct TUICtx {
 
     /// 当前会话工作目录绝对路径 (空 = 未配置, 回退进程 CWD)
     std::string workDir;
+
+    /// 客户端设备唯一标识 (32 位 MD5)
+    std::string clientDeviceId;
+
+    /// 服务端设备唯一标识 (从 WireHelloAck 获取, 32 位 MD5)
+    std::string serverDeviceId;
+
+    /// 服务端当前工作目录绝对路径 (从 WireHelloAck 获取)
+    std::string serverWorkDir;
+
+    /// 判断 Server 跟 Client 是否为不同设备
+    /// - 内置直连模式 (remoteUrl 为空) 必然为同一设备
+    /// - 远程模式下直接比对 serverDeviceId 与 clientDeviceId 是否不同
+    bool isServerDifferentDevice() const noexcept {
+        if (remoteUrl.empty()) {
+            return false;
+        }
+        if (serverDeviceId.empty() || clientDeviceId.empty()) {
+            return false;
+        }
+        return serverDeviceId != clientDeviceId;
+    }
 
     /// client 插件管理器 (mode_runners 装配后注入; 状态栏/侧边栏渲染与
     /// 命令管线经此读取 UI 注册表快照; 线程安全: uiRegistrySnapshot/hasCommand

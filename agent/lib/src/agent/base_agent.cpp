@@ -23,6 +23,8 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <unordered_set>
 
@@ -829,11 +831,62 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         {"content", processedInput},
     };
     if (!attachments.empty()) {
+        // 服务端附件自主加载: 若 dataUrl 为空且 pathOrUrl 为服务端本地路径,
+        // 服务端直接读取并转为 Base64 Data URL, 免除客户端二次下载上传中转
+        for (auto& att : attachments) {
+            if (att.dataUrl.empty() && !att.pathOrUrl.empty()
+                && !att.pathOrUrl.starts_with("http://")
+                && !att.pathOrUrl.starts_with("https://")) {
+                std::error_code ec;
+                auto            fileSize = std::filesystem::file_size(att.pathOrUrl, ec);
+                if (ec) {
+                    XX_LOGW(
+                        "[base_agent] cannot get file size for server attachment: {}, err: {}",
+                        att.pathOrUrl,
+                        ec.message()
+                    );
+                    continue;
+                }
+                uint64_t maxSize = maxBytesForMediaType(att.type);
+                if (fileSize > maxSize) {
+                    XX_LOGW(
+                        "[base_agent] server attachment too large: {} bytes > max {} bytes, path: {}",
+                        fileSize,
+                        maxSize,
+                        att.pathOrUrl
+                    );
+                    continue;
+                }
+                std::ifstream ifs(att.pathOrUrl, std::ios::binary);
+                if (!ifs) {
+                    XX_LOGW("[base_agent] cannot open server attachment: {}", att.pathOrUrl);
+                    continue;
+                }
+                std::string fileData(
+                    (std::istreambuf_iterator<char>(ifs)),
+                    std::istreambuf_iterator<char>()
+                );
+                ifs.close();
+                if (att.mimeType.empty()) {
+                    auto ext = agentxx::util::toLower(
+                        std::filesystem::path(att.pathOrUrl).extension().string()
+                    );
+                    att.mimeType = std::string(mimeTypeFromExtension(ext));
+                }
+                att.dataUrl = fmt::format(
+                    "data:{};base64,{}",
+                    att.mimeType,
+                    agentxx::util::base64Encode(fileData)
+                );
+                att.sizeBytes = fileSize;
+            }
+        }
+
         agentxx::util::Json imgUrls   = agentxx::util::Json::array();
         agentxx::util::Json audioUrls = agentxx::util::Json::array();
         agentxx::util::Json videoUrls = agentxx::util::Json::array();
         for (const auto& att : attachments) {
-            const auto& url = att.dataUrl.empty() ? att.pathOrUrl : att.dataUrl;
+            const auto& url = !att.dataUrl.empty() ? att.dataUrl : att.pathOrUrl;
             if (url.empty()) {
                 continue;
             }

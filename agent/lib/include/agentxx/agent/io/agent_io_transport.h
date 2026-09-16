@@ -48,6 +48,12 @@ struct WireHelloAck {
     /// 服务端已加载的 agent 侧插件列表 (client 插件判断对端可用性/能力的
     /// 正式通道; 服务端不携带该字段 → 反序列化为空数组, 客户端按"未知"处理)
     std::vector<PluginInfo> plugins;
+
+    /// 服务端设备唯一标识 (32 位全小写十六进制 MD5)
+    std::string deviceId;
+
+    /// 服务端当前会话工作目录绝对路径
+    std::string workDir;
 };
 
 struct WireUserInput {
@@ -275,6 +281,33 @@ struct WireViewMessagesPage {
     std::vector<ViewMessage> messages;
 };
 
+/// 目录条目 (客户端-服务端文件浏览; name 为纯文件名/目录名不含图标, 图标由 UI 自主渲染)
+struct WireDirEntry {
+    std::string name;       ///< 文件名或目录名 (纯名称, 不含图标)
+    std::string fullPath;   ///< 服务端绝对路径
+    bool        isDir = false;
+    bool        supported = true; ///< 当前模型是否支持该文件类型
+    uint64_t    sizeBytes = 0;
+    MediaType   mediaType = MediaType::Image;
+};
+
+/// 客户端请求列举服务端目录 (Client -> Server)
+struct WireListDir {
+    uint64_t                 reqId = 0;         ///< 请求自增序号
+    std::string              path;              ///< 服务端绝对路径 (空则使用服务端工作空间目录)
+    std::vector<std::string> allowedExtensions; ///< 当前模型支持的文件扩展名白名单 (.png, .jpg 等)
+};
+
+/// 服务端列举目录响应 (Server -> Client)
+struct WireListDirResult {
+    uint64_t                 reqId = 0;
+    bool                     ok    = false;
+    std::string              currentDir;
+    std::string              parentDir;
+    std::vector<WireDirEntry> entries;
+    std::string              error;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -308,7 +341,9 @@ using WireMessage = std::variant<
     WireRemoveQueueItem,
     WireInterruptAndRunNext,
     WireGetViewMessages,
-    WireViewMessagesPage>;
+    WireViewMessagesPage,
+    WireListDir,
+    WireListDirResult>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

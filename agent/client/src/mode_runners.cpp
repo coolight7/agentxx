@@ -547,6 +547,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         .language  = TUISettings::instance().languageCode(),
     };
     bool connected = false;
+    std::shared_ptr<agent::WsAgentIOTransport> transport;
     while (!connected) {
         agent::WsAgentIOTransport::Config transportCfg;
         // 有限次尝试后返回失败 (默认 0=无限内部重连, 用户永远等不到失败提示)
@@ -554,7 +555,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         util::WsClientConfig wsCfg;
         wsCfg.recvTimeout = std::chrono::seconds{60};
 
-        auto transport
+        transport
             = std::make_shared<agent::WsAgentIOTransport>(ex, url, token, transportCfg, wsCfg);
         io->setTransport(transport);
 
@@ -586,6 +587,9 @@ static asio::awaitable<void> runRemoteTuiAsync(
     }
 
     io->setConnState(ConnState::Connected);
+    if (auto ack = transport->lastHelloAck()) {
+        io->onHelloAck(*ack);
+    }
     // 通知事件接收器: 服务端就绪 (远程模式无 onServerReady 调用路径;
     // TUI 覆写版同时置 Connected + flushPendingInput, 幂等)
     io->onServerReady();

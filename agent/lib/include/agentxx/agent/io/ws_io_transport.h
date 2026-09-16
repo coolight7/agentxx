@@ -75,6 +75,11 @@ public:
     /// 投递到 ex_ 线程执行 (与 readLoop 重连路径同线程, 无数据竞争)
     void updateReconnectSessionId(std::string newThreadId) override;
 
+    /// 获取最近一次握手成功的 WireHelloAck
+    std::optional<WireHelloAck> lastHelloAck() const noexcept {
+        return lastHelloAck_;
+    }
+
     // ----- 序列化工具 (供 ServerWsIOTransport 复用) -----
 
     /// WireMessage -> JSON 文本帧
@@ -121,6 +126,7 @@ private:
     std::string           lastTailHash_;
     std::string           helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
     std::string           helloLanguage_;  // 首次 connect 时的 language, 重连时复用
+    std::optional<WireHelloAck> lastHelloAck_; // 最近一次握手成功的 HelloAck
 
     /// 握手期间 (connect 等待 HelloAck) 到达的非 HelloAck 消息 (仅 ex_ 线程访问)
     /// - 协议上服务端先发 HelloAck 再重放, 正常为空; 防御性保留先于 HelloAck

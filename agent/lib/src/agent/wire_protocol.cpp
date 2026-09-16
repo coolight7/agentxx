@@ -14,7 +14,15 @@ agentxx::util::Json toJson(const WireHello& msg) {
 }
 
 agentxx::util::Json toJson(const WireHelloAck& msg) {
-    return makeHelloAck(msg.ok, msg.sessionId, msg.tailHash, msg.models, msg.plugins);
+    return makeHelloAck(
+        msg.ok,
+        msg.sessionId,
+        msg.tailHash,
+        msg.models,
+        msg.plugins,
+        msg.deviceId,
+        msg.workDir
+    );
 }
 
 agentxx::util::Json toJson(const WireUserInput& msg) {
@@ -144,6 +152,21 @@ agentxx::util::Json toJson(const WireViewMessagesPage& msg) {
     return makeViewMessagesPage(msg.sessionId, msg.startIndex, msg.totalCount, msg.messages);
 }
 
+agentxx::util::Json toJson(const WireListDir& msg) {
+    return makeListDir(msg.reqId, msg.path, msg.allowedExtensions);
+}
+
+agentxx::util::Json toJson(const WireListDirResult& msg) {
+    return makeListDirResult(
+        msg.reqId,
+        msg.ok,
+        msg.currentDir,
+        msg.parentDir,
+        msg.entries,
+        msg.error
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 对称 fromJson 实现
 // ---------------------------------------------------------------------------
@@ -189,6 +212,8 @@ WireHelloAck helloAckFromJson(const agentxx::util::Json& j) {
             ack.plugins.push_back(std::move(info));
         }
     }
+    ack.deviceId = j.value("deviceId", std::string{});
+    ack.workDir  = j.value("workDir", std::string{});
     return ack;
 }
 
@@ -481,6 +506,14 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
          [](const agentxx::util::Json& j) -> std::optional<WireMessage> {
              auto p = viewMessagesPageFromJson(j);
              return p.has_value() ? std::optional<WireMessage>{std::move(p.value())} : std::nullopt;
+         }},
+        {MsgType::ListDir,
+         [](const agentxx::util::Json& j) -> std::optional<WireMessage> {
+             return listDirFromJson(j);
+         }},
+        {MsgType::ListDirResult,
+         [](const agentxx::util::Json& j) -> std::optional<WireMessage> {
+             return listDirResultFromJson(j);
          }},
     };
     return s_map;

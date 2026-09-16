@@ -79,8 +79,14 @@ constexpr Entry kTable[] = {
     {"picker.parent",             "[..] Parent",                                         "[..] 上级目录"                                                                                },
     {"picker.empty",              "( no matching media files )",                         "( 无匹配的媒体文件 )"                                                                     },
     {"picker.unsupported",        "( model does not support {} ) ",                      "( 当前模型不支持{} ) "                                                                     },
+    {"picker.tab_local",          " 💻 Local ",                                          " 💻 本地 "                                                                                     },
+    {"picker.tab_server",         " 🌐 Server ",                                         " 🌐 服务端 "                                                                                   },
+    {"picker.server_loading",     "( Loading server files... )",                         "( 正在加载服务端文件... )"                                                                     },
+    {"picker.server_error",       "Failed to load: {}",                                  "加载失败: {}"                                                                                 },
     {"picker.hint",
      " [Up/Down] Move [Enter] Select/Enter dir [Esc] Cancel ",                           " [↑/↓] 移动光标 [Enter] 确认选择/进入目录 [Esc] 取消/关闭 "                   },
+    {"picker.hint_tabs",
+     " [Tab] Switch device [↑/↓] Move [Enter] Select/Enter dir [Esc] Cancel ",          " [Tab] 切换设备 [↑/↓] 移动光标 [Enter] 确认选择/进入目录 [Esc] 取消/关闭 "       },
 
     // ---- 模型选择弹窗 ----
     {"model.title",               "Select Model",                                        "选择模型"                                                                                     },

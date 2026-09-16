@@ -1,11 +1,14 @@
 #include "test_util_misc.h"
 
+#include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/container_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/http_header.h"
 #include "agentxx/util/path_sanitize.h"
 #include "agentxx/util/stream.h"
 #include "agentxx/util/util.h"
+#include "agentxx-client/io/tui/framework/tui_context.h"
 #include <chrono>
 #include <set>
 #include <stdexcept>
@@ -391,6 +394,129 @@ void test_windows_reserved_name() {
     XX_TEST_EXPECT_FALSE(isWindowsReservedName("会话"));
 }
 
+void test_md5_and_device_id() {
+    using agentxx::util::getDeviceId;
+    using agentxx::util::md5Hex;
+
+    // 标准 MD5 校验向量
+    XX_TEST_EXPECT_EQ(md5Hex(""), std::string("d41d8cd98f00b204e9800998ecf8427e"));
+    XX_TEST_EXPECT_EQ(md5Hex("hello"), std::string("5d41402abc4b2a76b9719d911017c592"));
+    XX_TEST_EXPECT_EQ(
+        md5Hex("The quick brown fox jumps over the lazy dog"),
+        std::string("9e107d9d372bb6826bd81d3542a419d6")
+    );
+
+    // getDeviceId
+    auto devId = getDeviceId();
+    XX_TEST_EXPECT_EQ(devId.size(), 32);
+    for (char c : devId) {
+        bool validHex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        XX_TEST_EXPECT_TRUE(validHex);
+    }
+    // 进程内缓存验证
+    XX_TEST_EXPECT_EQ(getDeviceId(), devId);
+}
+
+void test_wire_list_dir_protocol() {
+    using namespace agentxx::agent;
+    using namespace agentxx::agent::io;
+
+    // 1. WireListDir 序列化与反序列化
+    WireListDir req;
+    req.reqId             = 42;
+    req.path              = "/home/test/workspace";
+    req.allowedExtensions = {".png", ".jpg", ".wav"};
+
+    auto reqJson = toJson(req);
+    XX_TEST_EXPECT_EQ(reqJson["type"].get<std::string>(), std::string(MsgType::ListDir));
+    XX_TEST_EXPECT_EQ(reqJson["reqId"].get<uint64_t>(), uint64_t{42});
+    XX_TEST_EXPECT_EQ(reqJson["path"].get<std::string>(), std::string("/home/test/workspace"));
+
+    auto deserReq = listDirFromJson(reqJson);
+    XX_TEST_EXPECT_EQ(deserReq.reqId, uint64_t{42});
+    XX_TEST_EXPECT_EQ(deserReq.path, std::string("/home/test/workspace"));
+    XX_TEST_EXPECT_EQ(deserReq.allowedExtensions.size(), size_t{3});
+
+    // 2. WireListDirResult 序列化与反序列化
+    WireListDirResult res;
+    res.reqId      = 42;
+    res.ok         = true;
+    res.currentDir = "/home/test/workspace";
+    res.parentDir  = "/home/test";
+
+    WireDirEntry de1;
+    de1.name      = "src";
+    de1.fullPath  = "/home/test/workspace/src";
+    de1.isDir     = true;
+    de1.supported = true;
+    res.entries.push_back(std::move(de1));
+
+    WireDirEntry de2;
+    de2.name      = "photo.png";
+    de2.fullPath  = "/home/test/workspace/photo.png";
+    de2.isDir     = false;
+    de2.supported = true;
+    de2.sizeBytes = 2048;
+    de2.mediaType = MediaType::Image;
+    res.entries.push_back(std::move(de2));
+
+    auto resJson = toJson(res);
+    XX_TEST_EXPECT_EQ(resJson["type"].get<std::string>(), std::string(MsgType::ListDirResult));
+    XX_TEST_EXPECT_TRUE(resJson["ok"].get<bool>());
+    XX_TEST_EXPECT_EQ(resJson["entries"].size(), size_t{2});
+
+    auto deserRes = listDirResultFromJson(resJson);
+    XX_TEST_EXPECT_EQ(deserRes.reqId, uint64_t{42});
+    XX_TEST_EXPECT_TRUE(deserRes.ok);
+    XX_TEST_EXPECT_EQ(deserRes.entries.size(), size_t{2});
+    XX_TEST_EXPECT_EQ(deserRes.entries[0].name, std::string("src"));
+    XX_TEST_EXPECT_TRUE(deserRes.entries[0].isDir);
+    XX_TEST_EXPECT_EQ(deserRes.entries[1].name, std::string("photo.png"));
+    XX_TEST_EXPECT_FALSE(deserRes.entries[1].isDir);
+    XX_TEST_EXPECT_EQ(deserRes.entries[1].sizeBytes, uint64_t{2048});
+    XX_TEST_EXPECT_EQ(deserRes.entries[1].mediaType, MediaType::Image);
+
+    // 3. 顶层 serialize / deserialize 验证
+    WireMessage wireMsg  = res;
+    std::string text     = serialize(wireMsg);
+    auto        deserMsg = deserialize(text);
+    XX_TEST_EXPECT_TRUE(deserMsg.has_value());
+    auto* p = std::get_if<WireListDirResult>(&deserMsg.value());
+    XX_TEST_EXPECT_TRUE(p != nullptr);
+    if (p) {
+        XX_TEST_EXPECT_EQ(p->reqId, uint64_t{42});
+        XX_TEST_EXPECT_EQ(p->entries.size(), size_t{2});
+    }
+}
+
+void test_cross_device_determination() {
+    TUICtx ctx;
+
+    // 内置模式: remoteUrl 为空 -> 始终判定为同设备 (false)
+    ctx.remoteUrl      = "";
+    ctx.clientDeviceId = "device_aaa";
+    ctx.serverDeviceId = "device_bbb";
+    XX_TEST_EXPECT_FALSE(ctx.isServerDifferentDevice());
+
+    // 远程模式: remoteUrl 非空
+    ctx.remoteUrl = "ws://192.168.1.100:8080";
+
+    // 相同 deviceId -> 同一设备 (false)
+    ctx.clientDeviceId = "device_same_12345";
+    ctx.serverDeviceId = "device_same_12345";
+    XX_TEST_EXPECT_FALSE(ctx.isServerDifferentDevice());
+
+    // 不同 deviceId -> 跨设备 (true)
+    ctx.clientDeviceId = "device_client_aaa";
+    ctx.serverDeviceId = "device_server_bbb";
+    XX_TEST_EXPECT_TRUE(ctx.isServerDifferentDevice());
+
+    // 未收到 deviceId (空值) -> 判定为同设备 (false, 防误开 tab)
+    ctx.clientDeviceId = "";
+    ctx.serverDeviceId = "device_server_bbb";
+    XX_TEST_EXPECT_FALSE(ctx.isServerDifferentDevice());
+}
+
 TestResult testUtilMisc() {
     g_um_passed = 0;
     g_um_failed = 0;
@@ -407,6 +533,9 @@ TestResult testUtilMisc() {
     test_container_util_heterogeneous();
     test_path_segment_sanitize();
     test_windows_reserved_name();
+    test_md5_and_device_id();
+    test_wire_list_dir_protocol();
+    test_cross_device_determination();
 
     return TestResult{g_um_passed, g_um_failed};
 }
