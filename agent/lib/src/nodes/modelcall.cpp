@@ -830,13 +830,13 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                      {"tipType", "warning"},
                      {"text",
                       fmt::format(
-                         "LLM API 请求失败，{} 秒后自动重试 ({}/{})，错误: {}",
-                         delaySec,
-                         retry,
-                         agentCtxPtr->agentConfig->llmMaxRetry,
-                         errInfo
-                     )},
-                }                        },
+                          "LLM API 请求失败，{} 秒后自动重试 ({}/{})，错误: {}",
+                          delaySec,
+                          retry,
+                          agentCtxPtr->agentConfig->llmMaxRetry,
+                          errInfo
+                      )},
+                 }                       },
             };
             (*in.stream_cb)(neograph::graph::GraphEvent{
                 neograph::graph::GraphEvent::Type::CHANNEL_WRITE,

@@ -298,7 +298,7 @@ SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
 
 void SettingsOverlay::buildItems() {
     list_.setItems({
-  // 主题 (点击/Enter 循环切换 Dark <-> Light)
+        // 主题 (点击/Enter 循环切换 Dark <-> Light)
         {.id    = "theme",
          .label = std::string{tr("settings.themeLabel")},
          .value = trf("settings.themeValue", ctx_.theme->name),
@@ -306,7 +306,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleTheme();
              }},
- // 动画等级 (点击/Enter 循环切换)
+        // 动画等级 (点击/Enter 循环切换)
         {.id    = "animation",
          .label = std::string{tr("settings.animLabel")},
          .value = trf("settings.animValue", TUISettings::instance().animationLevelName()),
@@ -314,7 +314,7 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleAnimationLevel();
              }},
- // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+        // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
         {.id    = "log-level",
          .label = std::string{tr("settings.logLabel")},
          .value = trf("settings.logValue", TUISettings::instance().logLevelName()),
@@ -322,7 +322,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLogLevel();
              }},
- // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
+        // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
         {.id    = "tail-thinking",
          .label = std::string{tr("settings.thinkLabel")},
          .value = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
@@ -330,7 +330,7 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleTailThinkingMode();
              }},
- // 界面语言 (点击/Enter 循环切换)
+        // 界面语言 (点击/Enter 循环切换)
         {.id    = "language",
          .label = std::string{tr("settings.langLabel")},
          .value = trf("settings.langValue", TUISettings::instance().languageName()),
@@ -338,7 +338,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLanguage();
              }},
- // Info (点击/Enter 打开关于弹窗)
+        // Info (点击/Enter 打开关于弹窗)
         {.id    = "about",
          .label = std::string{tr("settings.infoLabel")},
          .value = std::string{tr("settings.aboutValue")},
@@ -783,15 +783,15 @@ Element PendingInputsOverlay::OnRender() {
             });
         }
         Element row = pi.expanded ? hbox({
-                          text("- ") | color(theme.hintColor),
-                          std::move(body),
-                          std::move(delBtn),
-                      })
+                                        text("- ") | color(theme.hintColor),
+                                        std::move(body),
+                                        std::move(delBtn),
+                                    })
                                   : hbox({
-                                      text("+ ") | color(theme.userColor),
-                                      std::move(body),
-                                      std::move(delBtn),
-                                  });
+                                        text("+ ") | color(theme.userColor),
+                                        std::move(body),
+                                        std::move(delBtn),
+                                    });
         items.push_back(hits_.add(std::move(row), HitInfo{HitInfo::Kind::Item, pi.id}));
     }
 

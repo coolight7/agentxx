@@ -864,18 +864,15 @@ static bool planFromToolCall(
 }
 
 /// 推送/更新工具消息装饰 (client io 线程; ui 成员判空降级)
-static void pushToolDecorParts(
-    ClientCtx&            ctx,
-    const std::string&    toolCallId,
-    const PlanDecorParts& parts
-) {
+static void
+    pushToolDecorParts(ClientCtx& ctx, const std::string& toolCallId, const PlanDecorParts& parts) {
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host || toolCallId.empty()) {
         return;
     }
-    agentxx::util::Json decor = agentxx::util::Json::object();
-    decor["displayName"]      = parts.displayName;
-    decor["summary"]          = parts.summary;
-    decor["items"]            = parts.items;
+    agentxx::util::Json decor   = agentxx::util::Json::object();
+    decor["displayName"]        = parts.displayName;
+    decor["summary"]            = parts.summary;
+    decor["items"]              = parts.items;
     const std::string decorJson = decor.dump();
 
     auto tcidSv  = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
@@ -901,7 +898,7 @@ static void
 ///   ("agentxx_planning"), 折叠头与展开体与实时调用一致
 static void buildPlanningToolRender(
     const agentxx::plugin::ToolRenderInput& in,
-    agentxx::plugin::ToolRenderOutput&     out
+    agentxx::plugin::ToolRenderOutput&      out
 ) {
     out.displayName = kDisplayName;
 

@@ -555,8 +555,7 @@ private:
 
     template<typename _REQ_TYPE, typename _RESP_TYPE>
     static RequestResponseStream<_REQ_TYPE, _RESP_TYPE>& fallbackRRStream() {
-        static RequestResponseStream<_REQ_TYPE, _RESP_TYPE> stream{
-            "<eventbus:topic-type-mismatch>"
+        static RequestResponseStream<_REQ_TYPE, _RESP_TYPE> stream{"<eventbus:topic-type-mismatch>"
         };
         return stream;
     }

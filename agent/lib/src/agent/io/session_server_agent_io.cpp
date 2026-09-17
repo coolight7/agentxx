@@ -1316,7 +1316,7 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
         p.tailHash      = sess->getHashInfo().tailHex;
         p.totalMessages = p.messages.size();
         // 快照水位: 客户端据此复位去重水位 (服务端 seq 可能已重新计数)
-        p.deltaSeq      = sess->deltaSeq;
+        p.deltaSeq = sess->deltaSeq;
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;
@@ -1340,8 +1340,8 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     p.messages         = sess->getViewMessagesRange(start, total);
     p.tailHash         = sess->getHashInfo().tailHex;
     // 快照水位: 客户端据此复位去重水位 (服务端 seq 可能已重新计数)
-    p.deltaSeq         = sess->deltaSeq;
-    p.messageQueue     = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+    p.deltaSeq     = sess->deltaSeq;
+    p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;
 }
 
@@ -1449,7 +1449,7 @@ std::shared_ptr<Session> SessionServerAgentIO::session() {
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - begin
             )
-            .count()
+                .count()
         );
         return sess;
     }

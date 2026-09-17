@@ -377,8 +377,7 @@ private:
     ///   长会话 (数千条) + 大量工具调用时, 每条结果都线性重扫一遍历史开销明显
     /// - 仅在 appendViewMessage / restore / updateViewMessage 内维护; 索引未命中
     ///   或与 viewMessages 不一致时回退线性扫描并修复索引 (防御其他直接改动)
-    std::unordered_map<std::string, size_t, std::hash<std::string>, std::equal_to<>>
-        msgIndex_;
+    std::unordered_map<std::string, size_t, std::hash<std::string>, std::equal_to<>> msgIndex_;
 
     /// 压入一条待落盘 view 操作并按节流规则决定是否立即刷出
     void enqueueViewPersist(PendingViewOp op);

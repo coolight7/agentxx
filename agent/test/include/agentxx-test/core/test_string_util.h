@@ -1,7 +1,7 @@
 #pragma once
 
-#include "agentxx/util/string_util.h"
 #include "agentxx-test/test_framework.h"
+#include "agentxx/util/string_util.h"
 
 #include <cassert>
 

@@ -1477,11 +1477,12 @@ inline std::string fileGrepExecuteImpl(
                               )
                             : std::string{},
         // 遍历因数量上限提前停止: 未搜索的文件里可能有匹配, 提示调用方提高上限
-        walkTruncated ? fmt::format(
-                            " The walk stopped early at `max_files` = {}, so more matched files may exist unscanned (raise `max_files` or narrow `file_patterns`).",
-                            maxFiles
-                        )
-                      : std::string{},
+        walkTruncated
+            ? fmt::format(
+                  " The walk stopped early at `max_files` = {}, so more matched files may exist unscanned (raise `max_files` or narrow `file_patterns`).",
+                  maxFiles
+              )
+            : std::string{},
         (!text_patterns.empty() && !regex_patterns.empty())
             ? "literal text + regular expression (union)"
             : (text_patterns.empty() ? "regular expression" : "literal text")

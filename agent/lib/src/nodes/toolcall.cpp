@@ -682,8 +682,8 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                 // {"<tool_call_id>": {"allow": "true"}}; 未应答/取消 = 空对象 → 拒绝
                 // - 必须先按自身 resultId 下钻取值 (与 subagent 工具同口径):
                 //   直接对顶层对象取 "allow" 恒取不到, 会使用户点"允许"也被拒绝
-                const auto toolCallId = args.value("tool_call_id", std::string{});
-                const auto* valuesPtr = &result;
+                const auto  toolCallId = args.value("tool_call_id", std::string{});
+                const auto* valuesPtr  = &result;
                 if (result.is_object() && false == toolCallId.empty()) {
                     if (auto it = result.find(toolCallId); it != result.end()) {
                         valuesPtr = &(*it);
@@ -715,8 +715,8 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
     {
         // 用 find 读取 (operator[] 会在共享的 tool 定义 map 上插入缺失键,
         // 查询不该改状态)
-        auto it  = tool->extra.find("maxRetry");
-        auto str = (it == tool->extra.end()) ? std::string{} : it->second;
+        auto it     = tool->extra.find("maxRetry");
+        auto str    = (it == tool->extra.end()) ? std::string{} : it->second;
         auto result = agentxx::util::parseNumberFromString(str, maxRetry);
         if (result.ec != std::errc{}) {
             maxRetry = 0;
@@ -766,7 +766,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
 
     const size_t limitLength = agentCtxPtr->agentConfig->toolcallSummaryLimitOutputLength;
     // 用 find 读取 (operator[] 会插入缺失键); 缺失 = 未启用压缩
-    const auto autoSummaryIt  = tool->extra.find("autoSummaryOutput");
+    const auto autoSummaryIt = tool->extra.find("autoSummaryOutput");
     const bool autoSummary
         = (autoSummaryIt != tool->extra.end() && autoSummaryIt->second == "true");
     if (autoSummary && result.size() >= limitLength) {

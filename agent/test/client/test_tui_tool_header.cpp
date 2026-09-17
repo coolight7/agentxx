@@ -14,11 +14,11 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx-test/test_framework.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
-#include "agentxx-test/test_framework.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -394,8 +394,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             }
         }
 
-        agentxx::util::Json items = agentxx::util::Json::array();
-        const auto roadmap = plan.value("roadmap", std::string{});
+        agentxx::util::Json items   = agentxx::util::Json::array();
+        const auto          roadmap = plan.value("roadmap", std::string{});
         if (!roadmap.empty()) {
             agentxx::util::Json diagram;
             diagram["kind"]    = "diagram";
@@ -1235,16 +1235,8 @@ void testTuiToolHeaderPlanningRestored() {
 
     // read 模式历史消息: 内容取自工具结果 (保存的规划 JSON)
     ToolHeaderFixture f3(120, 16);
-    f3.pushTool(
-        "agentxx_planning",
-        R"({"mode":"read"})",
-        true,
-        true,
-        readResult
-    );
-    XX_TEST_EXPECT_TRUE(
-        f3.plainRender().find("Plan · [#] hist read task") != std::string::npos
-    );
+    f3.pushTool("agentxx_planning", R"({"mode":"read"})", true, true, readResult);
+    XX_TEST_EXPECT_TRUE(f3.plainRender().find("Plan · [#] hist read task") != std::string::npos);
 }
 
 TestResult testTuiToolHeader() {

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx-test/test_framework.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include <memory>
 
 namespace agentxx {

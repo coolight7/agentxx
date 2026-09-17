@@ -2892,10 +2892,10 @@ asio::awaitable<void>
             {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
             {"max_files",     10                                              },
         };
-        auto result      = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
-        auto pathCount   = countPathLines(result);
-        bool hasNote     = startsWithNote(result) && result.find("max_files") != std::string::npos;
-        bool erasedNote  = result.find("[Error]") == std::string::npos;
+        auto result     = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto pathCount  = countPathLines(result);
+        bool hasNote    = startsWithNote(result) && result.find("max_files") != std::string::npos;
+        bool erasedNote = result.find("[Error]") == std::string::npos;
         if (false == (hasNote && erasedNote && pathCount == 10)) {
             allPassed = false;
             TEST_FAIL << "FilesystemGlobTool should stop at `max_files` and keep matches, got: "
@@ -2926,7 +2926,7 @@ asio::awaitable<void>
     {
         auto args = agentxx::util::Json{
             {"file_patterns", agentxx::util::Json::array({limitDir + "/*.txt"})},
-            {"max_files",     100                                               },
+            {"max_files",     100                                              },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
@@ -2946,7 +2946,7 @@ asio::awaitable<void>
             {"text_patterns", agentxx::util::Json::array({"small_token"})     },
             {"max_files",     10                                              },
         };
-        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result  = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool hasNote = startsWithNote(result) && result.find("max_files") != std::string::npos;
         bool ok      = hasNote && countPathLines(result) > 0;
         if (false == ok) {
@@ -3057,8 +3057,8 @@ asio::awaitable<void>
             || limited.find("[Error]") != std::string::npos) {
             allPassed = false;
             TEST_FAIL << "FilesystemGlobTool should stop recursive `**` walk at `max_files` ("
-                      << limitCount << " of " << fullCount
-                      << "), got: " << limited.substr(0, 200) << std::endl;
+                      << limitCount << " of " << fullCount << "), got: " << limited.substr(0, 200)
+                      << std::endl;
         } else {
             TEST_PASS << "FilesystemGlobTool stops recursive `**` walk at `max_files`" << std::endl;
         }
@@ -3067,9 +3067,9 @@ asio::awaitable<void>
     // ⑩ 多 pattern 共享同一数量上限: 前一个 pattern 到限后不再展开后续 pattern
     {
         auto args = agentxx::util::Json{
-            {"file_patterns",
-             agentxx::util::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})},
-            {"max_files", 10                                                        },
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})
+            },
+            {"max_files",     10                                                                   },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
@@ -3091,7 +3091,7 @@ asio::awaitable<void>
             {"max_files",     5                                               },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
-        bool ok     = startsWithNote(result) && result.find("small_token line") != std::string::npos;
+        bool ok = startsWithNote(result) && result.find("small_token line") != std::string::npos;
         if (false == ok) {
             allPassed = false;
             TEST_FAIL

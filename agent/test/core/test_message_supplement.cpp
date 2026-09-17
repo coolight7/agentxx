@@ -1072,10 +1072,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
 class RepeatCheckTool : public agentxx::tools::XXToolBase {
 public:
 
-    RepeatCheckTool(
-        std::weak_ptr<agentxx::agent::AgentContext> ctx,
-        std::atomic<int>*                           execCount
-    ) :
+    RepeatCheckTool(std::weak_ptr<agentxx::agent::AgentContext> ctx, std::atomic<int>* execCount) :
         XXToolBase(
             "test_repeat",
             ctx,
@@ -1139,9 +1136,9 @@ public:
         }
         // 用户点"允许" (确认卡片控件取值 "true"); 走与真实客户端一致的
         // {"values": {...}} 结果形态 (AgentIOBase::registerOnBus 取 values 写回)
-        co_return agentxx::middleware::makeInterruptResult(
-            agentxx::util::Json{{"allow", "true"}}
-        );
+        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+            {"allow", "true"}
+        });
     }
 };
 
@@ -1173,11 +1170,11 @@ asio::awaitable<void> test_repeat_call_check_allow() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfg                       = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl             = baseUrl;
-    cfg->model.apiKey              = "EMPTY";
-    cfg->model.modelName           = "test-sim";
-    cfg->prompt.systemPrompt       = "You are a helpful assistant.";
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
+    cfg->prompt.systemPrompt = "You are a helpful assistant.";
     // 阈值 2: 第二次相同调用即触发询问 (默认 5 需要更多轮重复)
     cfg->toolcallRepeatCheckThreshold = 2;
 
@@ -1190,9 +1187,9 @@ asio::awaitable<void> test_repeat_call_check_allow() {
                             {"id", "call_repeat_1"},
                             {"type", "function"},
                             {"function",
-             agentxx::util::Json{
-                 {"name", "test_repeat"},
-                 {"arguments", "{}"},
+                       agentxx::util::Json{
+                           {"name", "test_repeat"},
+                           {"arguments", "{}"},
              }},
                             },
     });

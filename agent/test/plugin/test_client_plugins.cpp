@@ -1430,8 +1430,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
                 XX_TEST_EXPECT_TRUE(planReading.matched);
                 XX_TEST_EXPECT_TRUE(
-                    planReading.items.dump().find("Reading saved planning...")
-                    != std::string::npos
+                    planReading.items.dump().find("Reading saved planning...") != std::string::npos
                 );
 
                 // 14.4.4 参数不可解析: 展开体回退通用展示 (items 为空), 不产生错误内容
