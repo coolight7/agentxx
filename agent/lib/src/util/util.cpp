@@ -62,7 +62,17 @@ static std::optional<std::string>                   systemName_;
 static std::optional<bool>                          isRunningInWSL_;
 static std::optional<agentxx::util::PowerShellInfo> psInfo_;
 
+/// 上述探测结果缓存的互斥
+/// - 探测函数会从插件 offload 线程并发调用 (如 execute_command 探测 PowerShell),
+///   同进程可能多实例/多调用并发进入; 无锁的 "读-判断-写" 是数据竞争 (UB)
+/// - 各缓存独立加锁: detectPowerShell 内部会调用 isRunningInWSL (另一把锁),
+///   不构成嵌套同锁的死锁
+static std::mutex systemNameMutex;
+static std::mutex wslMutex;
+static std::mutex psInfoMutex;
+
 std::string agentxx::util::getSystemName() {
+    std::lock_guard<std::mutex> lk{systemNameMutex};
     if (systemName_.has_value()) {
         return *systemName_;
     }
@@ -82,28 +92,29 @@ std::string agentxx::util::getSystemName() {
         }
     }
     f.close();
-    systemName_ = name;
     if (!name.empty()) {
-        return name;
+        systemName_ = std::move(name);
+        return *systemName_;
     }
 
     // 备选：uname 系统调用
     struct utsname buf;
     if (uname(&buf) == 0) {
         systemName_ = fmt::format("{} {}", buf.sysname, buf.release);
-        return *systemName_;
+    } else {
+        systemName_ = "Linux";
     }
-    systemName_ = "Linux";
     return *systemName_;
 }
 
 bool agentxx::util::isRunningInWSL() {
+    std::lock_guard<std::mutex> lk{wslMutex};
+    if (isRunningInWSL_.has_value()) {
+        return *isRunningInWSL_;
+    }
     // catchError: 文件系统探测失败按非 WSL 处理, 并记录日志
     return agentxx::util::catchError<bool>(
         [&]() -> bool {
-            if (isRunningInWSL_.has_value()) {
-                return *isRunningInWSL_;
-            }
             isRunningInWSL_ = std::filesystem::exists("/proc/sys/fs/binfmt_misc/WSLInterop");
             return *isRunningInWSL_;
         },
@@ -228,6 +239,9 @@ static std::string runPsVersionProbe(const char* exeName, int timeoutMs) {
 }
 
 agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh) {
+    // 缓存 + 串行化: 探测结果可能被插件 offload 线程并发请求 (无锁读改写
+    // optional 是数据竞争); 探测期间持锁使并发调用方等待首次结果后复用缓存
+    std::lock_guard<std::mutex> lk{psInfoMutex};
     if (psInfo_.has_value() && false == forceRefresh) {
         return *psInfo_;
     }
@@ -285,8 +299,11 @@ agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh)
 #undef min
 
 static std::optional<std::string> systemName_;
+/// 系统名缓存互斥 (探测可能被插件 offload 线程并发调用, 无锁读改写是数据竞争)
+static std::mutex systemNameMutex;
 
 std::string agentxx::util::getSystemName() {
+    std::lock_guard<std::mutex> lk{systemNameMutex};
     if (systemName_.has_value()) {
         return *systemName_;
     }
@@ -316,6 +333,8 @@ bool agentxx::util::isRunningInWSL() {
 }
 
 static std::optional<agentxx::util::PowerShellInfo> psInfo_;
+/// PowerShell 探测缓存互斥 (见 Linux 分支同名注释)
+static std::mutex psInfoMutex;
 
 /// Windows 下探测 PowerShell: 直接运行 `exeName -NoProfile -NonInteractive -Command
 /// '$PSVersionTable.PSVersion.ToString()'`, 读取 stdout 获取版本
@@ -341,6 +360,8 @@ static std::string runPsVersionProbeWin(const char* exeName) {
 }
 
 agentxx::util::PowerShellInfo agentxx::util::detectPowerShell(bool forceRefresh) {
+    // 缓存 + 串行化 (见 Linux 分支同名注释)
+    std::lock_guard<std::mutex> lk{psInfoMutex};
     if (psInfo_.has_value() && false == forceRefresh) {
         return *psInfo_;
     }
@@ -607,9 +628,25 @@ std::string agentxx::util::md5Hex(std::string_view input) {
     if (ctx) {
         if (EVP_DigestInit_ex(ctx, EVP_md5(), nullptr) == 1) {
             EVP_DigestUpdate(ctx, input.data(), input.size());
-            EVP_DigestFinal_ex(ctx, digest, &digestLen);
+            // 取摘要失败时保持 digestLen == 0, 交由下方兜底
+            if (EVP_DigestFinal_ex(ctx, digest, &digestLen) != 1) {
+                digestLen = 0;
+            }
         }
         EVP_MD_CTX_free(ctx);
+    }
+    if (digestLen == 0) {
+        // OpenSSL 计算失败 (罕见): 记录日志并回退 FNV-1a 哈希 ——
+        // 调用方据此生成设备 id (WireHelloAck.deviceId), 静默返回空串会让
+        // 客户端无法区分设备且难以排查
+        XX_LOGE("md5Hex failed (OpenSSL digest error), falling back to FNV-1a hash");
+        uint64_t h = 14695981039346656037ULL; // FNV-1a offset basis
+        for (char c : input) {
+            h ^= static_cast<unsigned char>(c);
+            h *= 1099511628211ULL; // FNV-1a prime
+        }
+        // 输出 32 位十六进制 (与 MD5 输出形态一致, 调用方无需按长度分支处理)
+        return fmt::format("{:016x}{:016x}", h, h ^ 0x9E3779B97F4A7C15ULL);
     }
     std::string hex;
     hex.reserve(32);
