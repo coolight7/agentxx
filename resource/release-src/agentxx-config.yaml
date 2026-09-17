@@ -60,10 +60,6 @@ data_dir: default
 #   - 插件宿主信息 projectRoot (如 codegraph 未配置 paths 时默认索引该目录)
 # work_dir: ${AGENTXX_WORK_DIR}
 
-# === 语言配置
-# 指定使用的语言 (默认 en; 可选: en / zh-cn)
-# language: en
-
 # === 权限配置
 # - mode: 询问处理模式
 #   - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)
@@ -109,6 +105,14 @@ model:
       # - [max_concurrent_connections] 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
       # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
       max_concurrent_connections: 5
+      # - 多模态文件输入能力 (可选，默认全 false = 纯文本模型):
+      #   image_input/audio_input/video_input 任一为 true 时，TUI 输入框右侧才展示
+      #   [+ 📎︎︎ 附件] 按钮；文件选择弹窗按此过滤可选类型
+      #   (图片: png/jpg/jpeg/webp/gif/bmp ≤10MB; 音频: wav/mp3/ogg/m4a/aac/flac ≤25MB;
+      #    视频: mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)
+      image_input: false
+      audio_input: false
+      video_input: false
       extra_api_config:
         reasoning_effort: "high"
 
@@ -130,6 +134,14 @@ model:
       # - [max_concurrent_connections] 可选，默认 5；该模型 API 端点的最大并发连接数（0 = 不限制）。
       # LLM 请求启用 HTTP keep-alive 连接池，空闲连接复用，超过上限的并发请求排队等待
       max_concurrent_connections: 5
+      # - 多模态文件输入能力 (可选，默认全 false = 纯文本模型):
+      #   image_input/audio_input/video_input 任一为 true 时，TUI 输入框右侧才展示
+      #   [+ 📎︎︎ 附件] 按钮；文件选择弹窗按此过滤可选类型
+      #   (图片: png/jpg/jpeg/webp/gif/bmp ≤10MB; 音频: wav/mp3/ogg/m4a/aac/flac ≤25MB;
+      #    视频: mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)
+      image_input: false
+      audio_input: false
+      video_input: false
       model_context_max_token: 1000000 # 模型支持的最大上下文 token 数；不指定时上下文压缩使用默认值 256k
       extra_api_config:
         # - 可选; 思考强度，"none|minimal|low|medium|high|xhigh|max" 
@@ -138,12 +150,13 @@ model:
         reasoning:
           effort: high 
 
-    - name: command-code-deepseek-v4-flash
+    - name: command-code-deepseek-flash
       type: "openai"
       base_url: "https://api.commandcode.ai/provider/v1"
       api_key: "${COMMANDCODE_API_KEY}"
-      model_name: "deepseek/deepseek-v4-flash"
+      model_name: "deepseek/deepseek-v4.1-flash"
       send_thinking: true
+      image_input: true
       model_context_max_token: 1000000
       extra_api_config:
         reasoning_effort: "max"

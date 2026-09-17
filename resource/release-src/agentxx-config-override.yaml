@@ -1,0 +1,165 @@
+# Agentxx 配置文件
+# 使用方式: agentxx_cli --config agentxx-config.yaml [train|acp]
+#
+# key 字段支持 ${VAR} 环境变量占位符，会在运行时被真实环境变量替换。
+# 查找顺序: 内置变量 > --env 覆盖文件变量 > .env 文件变量 > 系统环境变量 > 保留 ${VAR} 原样
+#
+# 内置变量:
+#   - AGENTXX_WORK_DIR: 程序启动后的工作目录 (启动时所在目录, 正斜杠格式)
+#     例如: data_dir: ${AGENTXX_WORK_DIR}/.agentxx-data
+#   - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录 (正斜杠格式)
+#     例如: 插件/数据相对 exe 目录: data_dir: ${AGENTXX_EXEC_DIR}/.agentxx-data
+#
+# 可选的 .env 文件（--env 指定文件/当前目录/配置文件同目录）:
+#   LLM_API_KEY=sk-your-key-here
+#
+# === 分层配置 (base + overlay)
+# 本文件为 overlay 层 (工作目录或 --config 指定的配置); 数据目录下的同名文件为 base 层:
+#   - base 配置文件: {data_dir}/agentxx-config.yaml
+#   - base 环境变量: {data_dir}/.env
+# 加载顺序: 先读本文件 (overlay), 再按其 data_dir 去找 base, 最后以 base 为底、
+# overlay 覆盖合并; 工作目录没有本文件时直接加载系统数据目录 (~/.agentxx/ 或
+# %APPDATA%/agentxx/) 下的 base 配置。
+#
+# === 列表段结构 (model/plugin/mcp/skill/memory/permission 白黑名单)
+# 段值必须是映射, 条目写在 `list:`, 合并策略写在 `overwrite:` (可省略):
+#   model:
+#       overwrite:
+#           mode: merge     # merge(默认, 继承并叠加 base) | replace(整段只用本层)
+#           remove:         # 可选: 从合并结果中剔除的条目 (按身份匹配)
+#               - old-model
+#       list:
+#           - name: my-model
+#   匹配身份: model 按 name, plugin 按 path (name / builtin://<name> 写法也可),
+#   mcp 按 namespace, skill/memory/权限名单按字符串本身
+# 其他配置段的合并规则: 标量 (data_dir/work_dir/permission.mode 等) overlay 覆盖;
+# 映射 (`permission` 其余键 / 模型 extra_headers / 插件 args 等) 逐键递归合并;
+# 映射内列表 (如插件 args 内的 paths) 整体覆盖
+# .env: 同名变量舍弃 base 值 (overlay 优先), 合并后的变量可展开两层 yaml 的 ${VAR}
+# 加载实现源码见 [agent/client/src/config_loader.cpp]
+
+# === 统一数据根目录
+# - 留空/不配置 = 不持久化数据: 数据仅存内存, 重启后无法恢复
+# - 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析
+# - 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
+#   - Linux/macOS: ~/.agentxx/
+#   - Windows: %APPDATA%/agentxx/
+# - 配置后数据子路径:
+#   - {data_dir}/sqlite/global.db                     全局设置 (TUI 动画等级/日志等级等)
+#   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db / share_store.db)
+#   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
+# data_dir: ~/.agentxx
+data_dir: default
+
+# MCP 服务器列表
+# - namespace: 该 MCP 的命名空间，应当唯一；会作为其所有 tool 的名称前缀 (格式 "namespace_toolName")
+#              命名空间重复时会警告，且后出现的 url 覆盖先前的
+# - url:       MCP 服务器地址
+mcp:
+  list:
+    # - namespace: musicxx
+    #   url: "http://172.29.48.1:17001/mcp"
+
+    # 网络搜索，需要VPN
+    # - namespace: exa
+    #   url: "https://mcp.exa.ai"
+
+# Skill 文件夹路径列表
+# - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
+# - 每个文件夹下可包含多个 skill 子目录，每个子目录包含 SKILL.md
+skill:
+  list:
+    # - "/absolute/path/to/skills"
+    # - "relative/path/to/skills"
+
+# 上下文文件路径列表
+# - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
+# - 文件内容会在每次模型调用时注入系统提示词
+memory:
+  list:
+    # - "/absolute/path/to/context.md"
+    # - "relative/path/to/AGENTS.md"
+
+# 插件配置: 所有插件统一经 path 外置指定加载 (不区分内置/外置插件)
+#
+# - path: 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单分派, 推荐);
+#         必填; 相对路径按程序工作目录解析为绝对路径
+#         特殊前缀 `builtin://<name>` 表示内置编译插件 (无需外部文件,
+#         直接经内置注册表加载; 如 `builtin://agentxx_filesystem`);
+#         也可简写 `name: <name>` 等价于 `path: builtin://<name>` (仅内置)
+# - enabled: 是否启用 (默认 true; false 跳过加载)
+# - args:    插件参数 json (整体传递给插件, 宿主不解析其字段语义;
+#            参数含义由插件自行定义)
+# - config:  插件配置文件所在目录或文件路径 (可指向文件或目录;
+#            支持 `~`/`${VAR}`/相对路径, 归一化为绝对路径后透传给插件,
+#            插件经 `agentxx.agent.config` / `agentxx.client.self` 的
+#            `get_plugin_config_path` 查询; 为空表示未指定)
+# - 依赖排序: 加载时按 manifest depends 拓扑排序 (脚本插件须在引擎之后,
+#   配置顺序无关 —— 即使脚本插件写在引擎前面也会自动排到后面)
+#
+# 形态一: 插件目录 (含 plugin.yaml; entry 指向动态库, depends 声明依赖)
+#   plugins/example_js/ 为 JS 示例插件 (C++ 壳 + plugin.js), depends:
+#   agentxx_javascript_engine (JS 解释器引擎, 需同时配置)
+# 形态二: 直接库路径 (无 plugin.yaml; 插件名按文件名推导 libfoo.so → foo)
+#   示例插件编译产物: agent/build/linux-debug/exec/plugins/libexample_plugin.so
+#   引擎插件编译产物: agent/build/linux-debug/exec/plugins/libagentxx_javascript_engine.so
+# 形态三 (内置合并编译): 顶层构建指定 AGENTXX_PLUGIN_BUILTIN_LIST 内置编译后,
+#   插件源文件编译进 libagentxx (无插件动态库); 配置仍写插件目录路径
+#   (plugin.yaml 资源照常拷贝), 入口文件缺失时自动回退内置注册表加载;
+#   也可显式写 builtin://插件名 (无资源需求的插件/测试直连用)
+plugin:
+  list:
+    # === CodeGraph 代码分析
+    # - 参数:
+    #     paths:          加载(索引)路径列表 (可选; 相对路径按程序工作目录解析)
+    #     ignore_paths:   忽略路径列表 (支持 * 通配符; 命中即跳过)
+    #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
+    #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
+    # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
+    #   enabled: true
+    #   args:
+    #     # paths:
+    #     #   - "/path/to/project_a"
+    #     #   - "relative/path/to/project_b"
+    #     ignore_paths:
+    #       - "**/build/**"
+    #       - "**/node_modules/**"
+    #     load_cwd: true
+    #     use_gitignore: true
+
+    # === 系统资源监控
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
+    #   enabled: true
+
+    # === 数学计算工具 ===
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
+    #   enabled: false
+
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_rag_search
+    #   enabled: false
+
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_string
+    #   enabled: false
+
+    # === JS 插件 (引擎 + 脚本插件; 顺序无关, 拓扑排序自动处理) ===
+    # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_javascript_engine"
+    #   enabled: true
+    # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_execute_javascript"
+    #   enabled: true
+    # - path: "${AGENTXX_EXEC_DIR}/plugins/example_js"
+    #   enabled: true
+
+    # === Windows 桌面控制 (computer_use 依赖 screen_capture) ===
+    # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_screen_capture"
+    #   enabled: true
+    # - path: "${AGENTXX_EXEC_DIR}/plugins/agentxx_computer_use"
+    #   enabled: true
+
+    # === 音频流捕获
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_audio_stream/
+    #   enabled: true
+
+    # === 系统文本选择事件流
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_text_selection_monitor/
+    #   enabled: true
