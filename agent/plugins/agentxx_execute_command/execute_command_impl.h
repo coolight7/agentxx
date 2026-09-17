@@ -94,7 +94,7 @@ namespace detail {
 // 手动裁剪 stdout / stderr (插件侧自治, 不依赖 ToolcallNode 的 share_store 卸载)
 // - 每路独立按 UTF-8 字符数限制, 超限时截断并以 toolcall 同款格式提示
 //   [Content offloaded. Use the `agentxx_share_store` tool ... Total X lines,
-//    show [0, Y], hide [Y+1, X]]\n<cropped>...
+//    show [1, Y], hide [Y+1, X]]\n<cropped>...
 //   与 ToolcallNode::execTool 的 offload 格式统一, 便于模型用
 //   agentxx_share_store 按行分页取回 (当前插件侧暂不实际 offload 到
 //   share_store，storeId==-1 时省略 ID，仅提示可用 share_store)
@@ -152,11 +152,11 @@ inline std::string truncateWithStoreFormat(
     }
     const size_t totalLineCount = agentxx::util::countLines(s);
     if (lastLineIndex >= targetIndex / 3) {
-        // 行边界截断可行: 显示 [0, lineCount], 隐藏 [lineCount+1, total]
+        // 行边界截断可行: 显示 [1, lineCount], 隐藏 [lineCount+1, total]
         std::string header;
         if (storeId >= 0) {
             header = fmt::format(
-                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [0, {}], hide [{}, {}].]",
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [1, {}], hide [{}, {}].]",
                 storeId,
                 totalLineCount,
                 lineCount,
@@ -165,7 +165,7 @@ inline std::string truncateWithStoreFormat(
             );
         } else {
             header = fmt::format(
-                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content. Total {} lines, show [0, {}], hide [{}, {}].]",
+                "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content. Total {} lines, show [1, {}], hide [{}, {}].]",
                 totalLineCount,
                 lineCount,
                 lineCount + 1,

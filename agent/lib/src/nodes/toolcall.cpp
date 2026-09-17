@@ -785,7 +785,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             // `agentxx_share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
                 co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [0, {}], hide [{}, {}].]
+                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [1, {}], hide [{}, {}].]
 {}
 ...)",
                     storeId,

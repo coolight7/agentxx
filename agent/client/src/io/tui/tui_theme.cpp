@@ -2,6 +2,56 @@
 
 namespace agentxx::client {
 
+TUITheme TUITheme::lightTheme() {
+    return TUITheme{
+        .name                  = "Light",
+        .userColor             = ftxui::Color::RGB(60, 80, 130),
+        .assistantColor        = ftxui::Color::RGB(50, 50, 50),
+        .thinkingColor         = ftxui::Color::Yellow4,
+        .toolColor             = ftxui::Color::RGB(135, 136, 137), // #878889
+        .systemColor           = ftxui::Color::RGB(135, 136, 137),
+        .errorColor            = ftxui::Color::RGB(200, 30, 30),   // #c81e1e
+        .accentColor           = ftxui::Color::RGB(102, 204, 255),
+        .normalColor           = ftxui::Color::RGB(50, 50, 50),
+        .hintColor             = ftxui::Color::RGB(135, 136, 137),
+        .backgroundColor       = ftxui::Color::RGB(255, 255, 255),
+        .blockColor            = ftxui::Color::RGB(246, 247, 252),
+        .inputBgColor          = ftxui::Color::RGB(235, 238, 240),
+        .inputTextColor        = ftxui::Color::RGB(50, 50, 50),
+        .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 128),    // #66ccff
+        .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
+        .buttonActiveBgColor   = ftxui::Color::RGB(60, 80, 130),
+        .buttonActiveTextColor = ftxui::Color::White,
+        // 弹窗配色: 浅色终端下以灰色蒙版衬托白色弹窗表面, 标题栏带强调色浅色调
+        .surfaceColor            = ftxui::Color::RGB(255, 255, 255), // #ffffff
+        .surfaceHeaderColor      = ftxui::Color::RGB(223, 233, 245), // #dfe9f5
+        .surfaceFooterColor      = ftxui::Color::RGB(238, 242, 247), // #eef2f7
+        .surfaceTitleColor       = ftxui::Color::RGB(60, 80, 130),   // 深蓝, 在浅色标题栏上清晰
+        .surfaceErrorHeaderColor = ftxui::Color::RGB(252, 233, 233), // #fce9e9
+        .surfaceScrimColor       = ftxui::Color::RGB(232, 236, 241), // #e8ecf1 (灰蒙版)
+        .markdownTheme           = markdown::Theme{
+            .name        = "Light",
+            .syntax      = ftxui::color(ftxui::Color::Yellow4),
+            .gutter      = ftxui::color(ftxui::Color::Grey53),
+            .heading1    = ftxui::Decorator(ftxui::bold) | ftxui::underlined
+                        | ftxui::color(ftxui::Color::Blue3),
+            .heading2    = ftxui::bold | ftxui::color(ftxui::Color::Blue3),
+            .heading3    = ftxui::Decorator(ftxui::bold) | ftxui::color(ftxui::Color::Grey37),
+            .link        = ftxui::color(ftxui::Color::Blue3),
+            .code_inline = ftxui::color(ftxui::Color::RGB(150, 80, 0)),
+            .code_block  = ftxui::bgcolor(ftxui::Color::RGB(246, 247, 252)) // blockColor #f6f7fc
+                        | ftxui::color(ftxui::Color::RGB(50, 50, 50)),
+            .blockquote  = ftxui::color(ftxui::Color::RGB(135, 136, 137)),  // 引用
+            .table_header = ftxui::color(ftxui::Color::RGB(50, 50, 50)) | ftxui::bold, // 表格
+            .table_border = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
+            .diagram_pending  = ftxui::Color::RGB(135, 136, 137), // hintColor
+            .diagram_running  = ftxui::Color::Yellow4,            // thinkingColor
+            .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
+            .diagram_failed   = ftxui::Color::RGB(200, 30, 30),   // errorColor
+        },
+    };
+}
+
 TUITheme TUITheme::darkTheme() {
     return TUITheme{
         .name                  = "Dark",
@@ -50,56 +100,6 @@ TUITheme TUITheme::darkTheme() {
             .diagram_running  = ftxui::Color::RGB(245, 245, 52),  // thinkingColor
             .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
             .diagram_failed   = ftxui::Color::RGB(255, 85, 85),   // errorColor
-        },
-    };
-}
-
-TUITheme TUITheme::lightTheme() {
-    return TUITheme{
-        .name                  = "Light",
-        .userColor             = ftxui::Color::RGB(60, 80, 130),
-        .assistantColor        = ftxui::Color::RGB(50, 50, 50),
-        .thinkingColor         = ftxui::Color::Yellow4,
-        .toolColor             = ftxui::Color::RGB(135, 136, 137), // #878889
-        .systemColor           = ftxui::Color::RGB(135, 136, 137),
-        .errorColor            = ftxui::Color::RGB(200, 30, 30),   // #c81e1e
-        .accentColor           = ftxui::Color::RGB(102, 204, 255),
-        .normalColor           = ftxui::Color::RGB(50, 50, 50),
-        .hintColor             = ftxui::Color::RGB(135, 136, 137),
-        .backgroundColor       = ftxui::Color::RGB(255, 255, 255),
-        .blockColor            = ftxui::Color::RGB(246, 247, 252),
-        .inputBgColor          = ftxui::Color::RGB(235, 238, 240),
-        .inputTextColor        = ftxui::Color::RGB(50, 50, 50),
-        .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 128),    // #66ccff
-        .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
-        .buttonActiveBgColor   = ftxui::Color::RGB(60, 80, 130),
-        .buttonActiveTextColor = ftxui::Color::White,
-        // 弹窗配色: 浅色终端下以灰色蒙版衬托白色弹窗表面, 标题栏带强调色浅色调
-        .surfaceColor            = ftxui::Color::RGB(255, 255, 255), // #ffffff
-        .surfaceHeaderColor      = ftxui::Color::RGB(223, 233, 245), // #dfe9f5
-        .surfaceFooterColor      = ftxui::Color::RGB(238, 242, 247), // #eef2f7
-        .surfaceTitleColor       = ftxui::Color::RGB(60, 80, 130),   // 深蓝, 在浅色标题栏上清晰
-        .surfaceErrorHeaderColor = ftxui::Color::RGB(252, 233, 233), // #fce9e9
-        .surfaceScrimColor       = ftxui::Color::RGB(232, 236, 241), // #e8ecf1 (灰蒙版)
-        .markdownTheme           = markdown::Theme{
-            .name        = "Light",
-            .syntax      = ftxui::color(ftxui::Color::Yellow4),
-            .gutter      = ftxui::color(ftxui::Color::Grey53),
-            .heading1    = ftxui::Decorator(ftxui::bold) | ftxui::underlined
-                        | ftxui::color(ftxui::Color::Blue3),
-            .heading2    = ftxui::bold | ftxui::color(ftxui::Color::Blue3),
-            .heading3    = ftxui::Decorator(ftxui::bold) | ftxui::color(ftxui::Color::Grey37),
-            .link        = ftxui::color(ftxui::Color::Blue3),
-            .code_inline = ftxui::color(ftxui::Color::RGB(150, 80, 0)),
-            .code_block  = ftxui::bgcolor(ftxui::Color::RGB(246, 247, 252)) // blockColor #f6f7fc
-                        | ftxui::color(ftxui::Color::RGB(50, 50, 50)),
-            .blockquote  = ftxui::color(ftxui::Color::RGB(135, 136, 137)),  // 引用
-            .table_header = ftxui::color(ftxui::Color::RGB(50, 50, 50)) | ftxui::bold, // 表格
-            .table_border = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
-            .diagram_pending  = ftxui::Color::RGB(135, 136, 137), // hintColor
-            .diagram_running  = ftxui::Color::Yellow4,            // thinkingColor
-            .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
-            .diagram_failed   = ftxui::Color::RGB(200, 30, 30),   // errorColor
         },
     };
 }

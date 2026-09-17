@@ -20,7 +20,7 @@
 
   function utf8LengthApprox(s) {
     if (typeof TextEncoder !== "undefined") {
-      try { return new TextEncoder().encode(s).length; } catch (_) {}
+      try { return new TextEncoder().encode(s).length; } catch (_) { }
     }
     return s ? s.length : 0;
   }
@@ -37,7 +37,7 @@
     var totalLines = countLines(s);
     if (lastNL >= Math.floor(targetIndex / 3) && lastNL >= 0) {
       var lineCount = countLines(s.slice(0, lastNL));
-      var header = "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content. Total " + totalLines + " lines, show [0, " + lineCount + "], hide [" + (lineCount + 1) + ", " + totalLines + "].]";
+      var header = "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content. Total " + totalLines + " lines, show [1, " + lineCount + "], hide [" + (lineCount + 1) + ", " + totalLines + "].]";
       return header + "\n" + s.slice(0, lastNL) + "...";
     } else {
       var header = "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full content. Total " + totalLines + " lines.]";
@@ -86,7 +86,7 @@
     try {
       var j = JSON.stringify(v, null, 2);
       if (j !== undefined) return j;
-    } catch (_) {}
+    } catch (_) { }
     try { return String(v); } catch (_) { return "[unstringifiable]"; }
   }
 
@@ -110,7 +110,7 @@
   async function executeJavascript(args, ctx) {
     var rawCode = (args.code !== undefined && args.code !== null) ? args.code
       : (args.command !== undefined && args.command !== null) ? args.command
-      : (args.script !== undefined && args.script !== null) ? args.script : "";
+        : (args.script !== undefined && args.script !== null) ? args.script : "";
     var code = typeof rawCode === "string" ? rawCode : String(rawCode !== undefined && rawCode !== null ? rawCode : "");
     if (!code || !code.trim()) {
       return JSON.stringify({ error: "Arg `code` is empty" });
@@ -124,33 +124,33 @@
     var g = _global;
     var origConsole = g.console;
     var captureConsole = {
-      log: function() {
+      log: function () {
         var a = Array.prototype.slice.call(arguments);
-        stdoutBuf += a.map(function(x) {
+        stdoutBuf += a.map(function (x) {
           try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); }
         }).join(" ") + "\n";
       },
-      info: function() {
+      info: function () {
         var a = Array.prototype.slice.call(arguments);
-        stdoutBuf += a.map(function(x) {
+        stdoutBuf += a.map(function (x) {
           try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); }
         }).join(" ") + "\n";
       },
-      warn: function() {
+      warn: function () {
         var a = Array.prototype.slice.call(arguments);
-        stderrBuf += a.map(function(x) {
+        stderrBuf += a.map(function (x) {
           try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); }
         }).join(" ") + "\n";
       },
-      error: function() {
+      error: function () {
         var a = Array.prototype.slice.call(arguments);
-        stderrBuf += a.map(function(x) {
+        stderrBuf += a.map(function (x) {
           try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); }
         }).join(" ") + "\n";
       },
-      debug: function() {
+      debug: function () {
         var a = Array.prototype.slice.call(arguments);
-        stdoutBuf += a.map(function(x) {
+        stdoutBuf += a.map(function (x) {
           try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); }
         }).join(" ") + "\n";
       }
@@ -162,11 +162,11 @@
     var timeoutId = null;
 
     try {
-      var execPromise = (async function() {
+      var execPromise = (async function () {
         // 先尝试编译构造函数（不提前执行），避免运行异常误触回退重复执行
         var fn = null;
         try {
-          var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+          var AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
           fn = new AsyncFunction('"use strict";\n' + code + '\n');
         } catch (compileErr1) {
           try {
@@ -190,8 +190,8 @@
 
       var finalPromise = execPromise;
       if (timeout > 0) {
-        var timeoutPromise = new Promise(function(_, reject) {
-          timeoutId = setTimeout(function() {
+        var timeoutPromise = new Promise(function (_, reject) {
+          timeoutId = setTimeout(function () {
             timedOut = true;
             reject(new Error("timeout:" + timeout));
           }, timeout * 1000);
@@ -230,7 +230,7 @@
       if (origConsole) g.console = origConsole;
       else delete g.console;
       if (timeoutId !== null) {
-        try { clearTimeout(timeoutId); } catch (_) {}
+        try { clearTimeout(timeoutId); } catch (_) { }
       }
     }
 
@@ -275,7 +275,7 @@
       parameters: toolSpec.parameters,
       execute: executeJavascript
     });
-  } catch (_) {}
+  } catch (_) { }
 
   try {
     agentxx.registerTool({
@@ -284,7 +284,7 @@
       parameters: toolSpec.parameters,
       execute: executeJavascript
     });
-  } catch (_) {}
+  } catch (_) { }
 
   agentxx.log(2, kName + " plugin loaded (JS execution tool ready, mimics execute_bash_command).");
 })();
