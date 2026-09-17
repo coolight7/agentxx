@@ -64,7 +64,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
 | | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个为计数口径含 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
-| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经工具装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
+| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
@@ -1762,7 +1762,7 @@ agent/
 │   ├── agentxx_rag_search/       # 向量语义搜索
 │   ├── agentxx_string/           # 字符串 2 工具 (html_to_markdown/regexp)
 │   ├── agentxx_system/           # 系统时间 (get_current_datetime)
-│   ├── agentxx_planning/         # 规划工具 + client 侧 Plan 装饰
+│   ├── agentxx_planning/         # 规划工具 + client 侧 Plan 渲染 (类型级渲染器/实时装饰/Info 段落)
 │   ├── agentxx_screen_capture/   # 屏幕捕获插件 (仅 Windows)
 │   ├── agentxx_computer_use/     # 键鼠控制插件 (仅 Windows; depends: screen_capture)
 │   ├── agentxx_system_monitor/   # 系统资源监控插件 (工具 + 周期采集 + client 状态栏渲染)

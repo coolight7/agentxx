@@ -59,7 +59,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | Forward and reverse call-graph tracing. |
 | | `agentxx_codegraph_path` | Finds call-chain paths connecting two symbols. |
 | | | 5 tools actually registered (search/context/callers/callees/path; the 6th count in the `loaded (6 tools)` log covers the client-side Info section, not an agent tool); registered only when configured in the YAML `plugins` section and compiled with `AGENTXX_ENABLE_PLUGIN_CODEGRAPH`. |
-| **Planning** | `agentxx_planning` | Two-layer task planning (Mermaid state diagrams + Todo lists + Memo notes; dual-sided plugin: plans persisted to `{dataDir}/plans/{thread}.json`, publishes `agentxx_planning.planning` events, renders via tool decor + Info section on the client, resubscribes to `agentxx_host.client_attached` for re-attach self-healing). |
+| **Planning** | `agentxx_planning` | Two-layer task planning (Mermaid state diagrams + Todo lists + Memo notes; dual-sided plugin: plans persisted to `{dataDir}/plans/{thread}.json`, publishes `agentxx_planning.planning` events, renders on the client via a type-level tool renderer (live + replayed history) plus runtime decor and an Info section, resubscribes to `agentxx_host.client_attached` for re-attach self-healing). |
 | **Sub-Agent** | `agentxx_subagent` | Spawns and manages subagents for delegated task execution (single-task fields subagent/message, or parallel `tasks` batch; injected as a singleton by the SubagentManager middleware, default `subagent_task` registered). |
 | | `tool_skill_search` logic | Lazy tool/skill search: `ToolSkillSearchSubAgentTask` is only a system-prompt template (currently not registered as a standalone tool; retrieval logic is inlined by subagents on demand). |
 | **Data** | `agentxx_share_store` | Session-level text storage for context economy. |
@@ -1439,7 +1439,7 @@ agent/
 │   ├── agentxx_rag_search/       # Vector semantic search plugin
 │   ├── agentxx_string/           # String processing plugin (2 tools: html_to_markdown/regexp)
 │   ├── agentxx_system/           # System clock plugin (get_current_datetime)
-│   ├── agentxx_planning/         # Task planning plugin + client-side Plan visualization decor
+│   ├── agentxx_planning/         # Task planning plugin + client-side Plan rendering (type-level renderer / runtime decor / Info section)
 │   ├── agentxx_screen_capture/   # Screen capture plugin (Windows only)
 │   ├── agentxx_computer_use/     # Mouse and keyboard automation plugin (Windows only; depends: screen_capture)
 │   ├── agentxx_system_monitor/   # System resource monitoring plugin (tools + background periodic sampling + client status bar rendering)

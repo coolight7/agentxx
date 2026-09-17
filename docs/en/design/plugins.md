@@ -324,6 +324,8 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
 
 1. **Type-Level Tool Renderers (`register_tool_renderer`)**:
    - During client initialization, plugins register specialized rendering definitions (`AgentxxToolRenderSpec`) keyed by `tool_name`, universally taking effect when the TUI renders messages for that tool (both during real-time streaming and history replay).
+   - **History replay is one of the main scenarios**: `Tool` messages replayed after a session restart / reconnect / session switch carry no instance-level decoration (see item 2) — their specialized rendering relies entirely on the renderer registered here, whose only inputs are the message's own `args_json` / `result_text`.
+   - Framework nuance: **the expanded-state header display name is overridden only by instance-level decorations** (a type-level renderer match keeps the raw `toolName` in the expanded header), while renderers always drive the **collapsed header name/summary** and the **expanded body items**. Since replayed history messages start collapsed (`collapsed=true` in `event_stream`), the replayed view matches the live one.
    - **Dual-Track Mechanism**:
      - **`<key, render_fn>` Callback Function**: Provides an `AgentxxToolRenderFn` receiving `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`) and returning `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`). Suitable for tools requiring complex argument parsing, conditional formatting, or dynamic UI item generation (e.g. `read` offset-limit parameters, `glob`/`grep` patterns and file summaries, `edit` diff comparisons).
      - **Declarative Template (`template_json`)**: When `render_fn == NULL`, the host automatically extracts fields from `args_json` and formats the summary according to the declarative template, e.g. `{"displayName":"Search","summaryKey":"query"}` or `{"displayName":"Bash","summaryKey":"command"}`.
@@ -341,7 +343,8 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
      );
      ```
 2. **Instance-Level Tool Decorations (`update_tool_decor`)**:
-   - Subscribing to `tool_start` in `EVT_DELTA`, the plugin pushes semantic JSON keyed by the specific invocation's `tool_call_id` (taking higher priority than type-level renderers). A prominent implementation is `agentxx_planning` (generating dynamic ASCII / Mermaid state diagrams and reactive todo lists at runtime).
+   - Subscribing to `tool_start` / `tool_end` in `EVT_DELTA`, the plugin pushes semantic JSON keyed by the specific invocation's `tool_call_id` (taking higher priority than type-level renderers). A prominent implementation is `agentxx_planning` (Mermaid state diagrams and reactive todo lists).
+   - **Only real-time invocations of the current process are covered**: on client restart (session restore), reconnect or session switch, historical `Tool` messages are replayed by `WireSyncPayload` / `WireViewMessagesPage` with no delta events and therefore no pushed decorations. Such messages must be rendered by a **type-level renderer** derived from the message's own arguments/result (see item 1; `agentxx_planning` registers both, sharing one content builder).
 3. **Priority Order and Fallback Path**:
    - Lookup order during rendering: `toolDecors` (by `tool_call_id`) > `toolRenderers` (by `tool_name`) > Generic fallback presentation (raw `toolName` + arguments/result text).
    - When a plugin unloads or is disabled, the host automatically strips its registrations and cleanly reverts to the fallback presentation, restoring specialized views losslessly upon re-enablement.
@@ -401,7 +404,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_string` | String tools (html_to_markdown, regexp). |
 | `agentxx_system` | System clock tool (`get_current_datetime`). |
 | `agentxx_system_monitor` | System resource monitor (tool + background periodic sampling + client Info/Status bar rendering). |
-| `agentxx_planning` | Task planning tool + client-side Plan visualization decor. |
+| `agentxx_planning` | Task planning tool + client-side Plan rendering (type-level tool renderer for both live and replayed history + runtime decoration + Info section). |
 | `agentxx_math` | Math computation tool (`agentxx_math_calculate`; supports arithmetic, powers, factorials, bitwise, logic, trig, hyperbolic, log, combinations/permutations, implicit multiplication). |
 | `agentxx_codegraph` | Code index & navigation (5 tools: search/context/callers/callees/path + client Info panel). |
 | `agentxx_screen_capture` | Screen capture (Windows only). |

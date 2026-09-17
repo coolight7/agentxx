@@ -340,6 +340,108 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         .templateSummaryKey  = "command",
     });
 
+    // Planning (回调; 镜像 agentxx_planning 插件注册的类型级渲染器):
+    // 由工具参数/结果推导折叠头与展开体, 覆盖"重启恢复会话后历史 Tool 消息
+    // 没有运行时装饰"的渲染路径 (实时调用的装饰优先级更高, 见 renderClientTool)
+    static auto planningFn
+        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
+        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        agentxx::util::Json a;
+        try {
+            a = args.empty() ? agentxx::util::Json::object() : agentxx::util::Json::parse(args);
+        } catch (...) {
+            return -1; // 参数不可解析: 回退通用渲染
+        }
+        if (!a.is_object()) {
+            return -1;
+        }
+        // write: 参数即规划内容; read: 结果即保存的规划 JSON
+        agentxx::util::Json plan;
+        if (a.value("mode", std::string{}) == "read") {
+            const std::string_view result(
+                in->result_text.data ? in->result_text.data : "",
+                in->result_text.size
+            );
+            try {
+                plan = result.empty() ? agentxx::util::Json::object()
+                                      : agentxx::util::Json::parse(result);
+            } catch (...) {
+                return -1;
+            }
+        } else {
+            plan = a;
+        }
+
+        std::string summary;
+        if (plan.contains("todos") && plan["todos"].is_array()) {
+            for (const auto& td : plan["todos"]) {
+                if (!td.is_object()) {
+                    continue;
+                }
+                const auto content = td.value("content", std::string{});
+                if (content.empty()) {
+                    continue;
+                }
+                const auto state = td.value("state", std::string{});
+                if (!summary.empty()) {
+                    summary += "; ";
+                }
+                summary += fmt::format(
+                    "{} {}",
+                    state == "completed" ? "[#]" : (state == "in_progress" ? "[~]" : "[ ]"),
+                    content
+                );
+            }
+        }
+
+        agentxx::util::Json items = agentxx::util::Json::array();
+        const auto roadmap = plan.value("roadmap", std::string{});
+        if (!roadmap.empty()) {
+            agentxx::util::Json diagram;
+            diagram["kind"]    = "diagram";
+            diagram["mermaid"] = roadmap;
+            items.push_back(std::move(diagram));
+        }
+        if (plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty()) {
+            agentxx::util::Json head;
+            head["kind"] = "text";
+            head["role"] = "normal";
+            head["text"] = "|- Todo";
+            items.push_back(std::move(head));
+            for (const auto& td : plan["todos"]) {
+                if (!td.is_object() || td.value("content", std::string{}).empty()) {
+                    continue;
+                }
+                agentxx::util::Json row;
+                row["kind"] = "text";
+                row["role"] = "normal";
+                row["text"] = fmt::format(
+                    "{} {}",
+                    td.value("state", std::string{}) == "completed" ? "[#]" : "[~]",
+                    td.value("content", std::string{})
+                );
+                items.push_back(std::move(row));
+            }
+        }
+        if (plan.contains("notes") && plan["notes"].is_string()) {
+            agentxx::util::Json row;
+            row["kind"] = "text";
+            row["role"] = "hint";
+            row["text"] = "|- Note " + plan["notes"].get<std::string>();
+            items.push_back(std::move(row));
+        }
+
+        out->displayName = makeTestString("Plan");
+        out->summary     = makeTestString(summary);
+        out->items_json  = makeTestString(items.dump());
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin   = "agentxx_planning",
+        .toolName = "agentxx_planning",
+        .renderFn = planningFn,
+    });
+
     // 宿主内置工具 (lib 内置实现, 没有对应插件): 宿主自身注册的渲染器
     // - 见 agentxx/plugin/builtin_tool_renderers.h
     reg->builtinToolRenderers.push_back({
@@ -1095,6 +1197,56 @@ void testTuiToolHeaderBuiltin() {
     XX_TEST_EXPECT_TRUE(g.render().find("102;204;255") != std::string::npos);
 }
 
+// 重启恢复会话后的历史 Tool 消息特化渲染 (回归):
+// 历史消息由服务端 Sync 回放, 没有运行时装饰 (update_tool_decor 只覆盖本进程
+// 实时调用, 且装饰随会话切换清理), 特化渲染必须由按 tool_name 注册的类型级
+// 渲染器从消息自带的参数/结果推导 —— 修复前这类消息走通用渲染 (折叠头显示
+// 原始工具名 "agentxx_planning" + 参数/结果原文)
+void testTuiToolHeaderPlanningRestored() {
+    const std::string readResult
+        = R"({"roadmap":"stateDiagram-v2\n[*] --> h2\nh2 --> [*]","todos":[{"state":"completed","content":"hist read task"}]})";
+
+    // 折叠展示: 渲染器提供显示名 "Plan" + todos 摘要 (无任何装饰注入)
+    ToolHeaderFixture f(120, 16);
+    f.pushTool(
+        "agentxx_planning",
+        R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> h1\nh1 --> [*]","todos":[{"state":"in_progress","content":"hist task"}],"notes":"hist note"})",
+        true,
+        true,
+        "success"
+    );
+    std::string collapsed = f.plainRender();
+    XX_TEST_EXPECT_TRUE(collapsed.find("agentxx_planning") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(collapsed.find("Plan · [~] hist task") != std::string::npos);
+
+    // 展开展示: 展开体按 items 通用渲染 (状态图/todos/notes)
+    ToolHeaderFixture f2(120, 24);
+    f2.pushTool(
+        "agentxx_planning",
+        R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> h1\nh1 --> [*]","todos":[{"state":"in_progress","content":"hist task"}],"notes":"hist note"})",
+        true,
+        false,
+        "success"
+    );
+    std::string expanded = f2.plainRender();
+    XX_TEST_EXPECT_TRUE(expanded.find("|- Todo") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("[~] hist task") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("hist note") != std::string::npos);
+
+    // read 模式历史消息: 内容取自工具结果 (保存的规划 JSON)
+    ToolHeaderFixture f3(120, 16);
+    f3.pushTool(
+        "agentxx_planning",
+        R"({"mode":"read"})",
+        true,
+        true,
+        readResult
+    );
+    XX_TEST_EXPECT_TRUE(
+        f3.plainRender().find("Plan · [#] hist read task") != std::string::npos
+    );
+}
+
 TestResult testTuiToolHeader() {
     // 消息列表头部角色标签 ([Tool]/[Think] 等) 随界面语言切换 (见 TuiI18n):
     // 本模块断言英文标签, 固定界面语言为英文, 避免跟随系统语言
@@ -1112,6 +1264,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderFailed();
     testTuiToolHeaderDuration();
     testTuiToolHeaderBuiltin();
+    testTuiToolHeaderPlanningRestored();
 
     // 恢复原始界面语言
     tuiSettings.setLanguage(savedLang);

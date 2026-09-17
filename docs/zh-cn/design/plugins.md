@@ -385,6 +385,11 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 
 1. **类型级工具渲染器 (`register_tool_renderer`)**：
    - 插件在 client 初始化时按 `tool_name` 注册特化渲染定义 (`AgentxxToolRenderSpec`)，TUI 渲染该工具消息 (实时流式或历史回溯) 时统一生效。
+   - **历史回溯是主要场景之一**：会话重启恢复/重连/切换会话后回放的 `Tool` 消息没有实例级装饰
+     (见第 3 条), 特化渲染完全依赖此处注册的渲染器 (输入只有消息自带的 `args_json`/`result_text`)。
+   - 框架规则差异：**展开状态的头部显示名只由实例级装饰覆盖** (类型级渲染器命中时展开头保持
+     原始 `toolName`)，渲染器始终覆盖**折叠头显示名/摘要**与**展开体 items**；折叠态是历史消息的
+     默认形态 (见 `event_stream` 历史展开时 `collapsed=true`)，因此历史回溯观感与实时一致。
    - **双轨机制**：
      - **`<key, render_fn>` 回调函数**：提供 `AgentxxToolRenderFn`，接收 `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`)，输出 `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`)。适用于需要复杂参数解析、条件格式化或动态生成 UI 项的工具 (如 `read` 区间参数、`glob`/`grep` 模式与文件摘要、`edit` diff 差异对比)。
      - **预设模版 (`template_json`)**：当 `render_fn == NULL` 时，宿主按声明式模板自动从 `args_json` 中提取字段并格式化摘要，如 `{"displayName":"Search","summaryKey":"query"}` 或 `{"displayName":"Bash","summaryKey":"command"}`。
@@ -417,7 +422,12 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      `set #7` / `delete #7`)、`agentxx_subagent` → `Subagent`
      (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)。
 3. **实例级工具装饰 (`update_tool_decor`)**：
-   - 订阅 `EVT_DELTA` 的 `tool_start` 后，按特定调用 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；典型实现见 `agentxx_planning` (运行时生成 ASCII/Mermaid 状态图与动态待办列表)。
+   - 订阅 `EVT_DELTA` 的 `tool_start`/`tool_end` 后，按特定调用 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；
+     典型实现见 `agentxx_planning` (Mermaid 状态图 + 动态待办列表)。
+   - **只覆盖本进程内实时发生的调用**：重启客户端恢复会话、重连、切换会话时，历史 `Tool` 消息由
+     `WireSyncPayload`/`WireViewMessagesPage` 回放，此时没有任何 delta 事件与装饰推送 ——
+     这类消息的特化渲染必须由**类型级渲染器**从消息自带的参数/结果推导
+     (见第 1 条; `agentxx_planning` 因此同时注册类型级渲染器与实时装饰, 两条路径共用同一内容构建函数)。
 4. **优先级与降级路径**：
    - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`, 插件注册) >
      `builtinToolRenderers` (按 `tool_name`, 宿主内置) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
@@ -513,7 +523,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 | `agentxx_string` | 字符串 2 工具 (html_to_markdown/regexp) |
 | `agentxx_system` | 系统时间 (`get_current_datetime`) |
 | `agentxx_system_monitor` | 系统资源监控 (工具 + 周期采集 + client 侧 Info/状态栏渲染) |
-| `agentxx_planning` | 规划工具 + client 侧 Plan 装饰 |
+| `agentxx_planning` | 规划工具 + client 侧 Plan 渲染 (类型级工具渲染器「实时 + 历史回溯」+ 实时装饰 + Info 段落) |
 | `agentxx_math` | 数学计算工具 (`agentxx_math_calculate`, 支持四则/幂/阶乘/位运算/逻辑/三角/双曲/对数/组合排列等函数与隐式乘法) |
 | `agentxx_codegraph` | 代码索引 5 工具 (search/context/callers/callees/path) + client Info 栏 |
 | `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |

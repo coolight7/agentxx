@@ -10,9 +10,14 @@
 ///     重连时重发当前会话已保存规划 (状态快照自愈, 见
 ///     [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 ///   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
-///     ① 工具消息装饰: 订阅 EVT_DELTA 经 update_tool_decor 推送语义层装饰
-///     (折叠头显示名/摘要 + 展开体 items: 状态图/todos/notes), TUI 按通用
-///     渲染器展示, 无任何 plan 特化代码; ② Info 栏段落渲染最近一次规划概览
+///     ① 工具消息渲染两条路径, 内容同源 (同一构建函数):
+///        a. 类型级渲染器 (register_tool_renderer, 按 tool_name): 由消息自带的
+///           参数/结果推导折叠头显示名/摘要与展开体 items (状态图/todos/notes),
+///           **实时调用与历史回溯 (重启/重连/切换会话后 Sync 回放) 统一生效**;
+///        b. 运行时装饰 (update_tool_decor, 订阅 EVT_DELTA): 仅覆盖本进程实时
+///           调用, 用于展开头显示语义名 ("Plan")
+///        TUI 按通用渲染器展示, 无任何 plan 特化代码;
+///     ② Info 栏段落渲染最近一次规划概览
 #include "agentxx_planning_plugin.h"
 #include <cstdio>
 #include <cstring>
@@ -358,7 +363,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
                 AGENTXX_PLUGIN_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
-                agentxx::plugin::PluginStringView::fromCstr("1.1.0"),
+                agentxx::plugin::PluginStringView::fromCstr("1.2.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
                     "Two-level task planning tool (write/read modes) + client-side Plan rendering"
                 ),
@@ -600,12 +605,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
 /// client 侧入口 (agentxx_plugin_client_create) —— Plan 渲染 (原 TUI 硬编码的
 /// 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
 ///
-/// - 工具消息装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 时按
-///   arguments 构建装饰 (折叠头 displayName + 展开体 items:
-///   状态图/todos/notes), tool_end 时以最终内容刷新
+/// - 工具消息渲染 (两条路径内容同源, 见 buildPlanDecorParts):
+///   ① 类型级渲染器 (register_tool_renderer, 按 tool_name): 由工具参数/结果
+///      直接推导折叠头 displayName/summary 与展开体 items (状态图/todos/notes)。
+///      历史回溯路径走这里 —— 重启恢复/重连/切换会话后, 工具消息由 Sync 回放,
+///      没有 update_tool_decor 推送, 依赖类型级渲染器才能特化渲染
+///   ② 运行时装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 按 arguments
+///      推送装饰 (折叠头显示名 + 展开体 items), tool_end 以最终内容刷新;
+///      本进程内实时调用的展开头因此显示语义名 ("Plan")
 /// - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
 ///   展示最近一次规划概览; client_attached 重发快照自愈
-/// - EVT_SESSION_SWITCH → 清理装饰缓存与段落
+/// - EVT_SESSION_SWITCH → 清理装饰与段落
 /// =====================================================================
 
 /// client 侧每实例上下文 (多实例契约: 状态挂本实例, 回调经 ud 恢复)
@@ -622,6 +632,9 @@ struct ClientCtx {
     std::map<std::string, std::string> pending_args;
     /// 通用交互动作控制器 (action_id → handler; dispatch 经 ud 恢复本实例)
     agentxx::plugin::kit::ActionController actions;
+    /// 类型级渲染器回调 shim 存储 (registerToolRenderer 创建; 实例销毁时释放。
+    /// 宿主在插件停止/卸载时先摘除渲染器注册, 不会回调已释放的 shim)
+    std::vector<std::unique_ptr<void, void (*)(void*)>> renderShims;
 };
 
 /// planning 状态图动作 id (Info 段/decor 按钮共用; bind 一次永久生效)
@@ -635,12 +648,6 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
             ctx->iface.log->log(ctx->host, 4, &sv);
         }
     };
-}
-
-/// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号)
-/// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
-static std::string clientJsonEscape(const ClientCtx& ctx, const std::string& s) {
-    return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, s);
 }
 
 namespace {
@@ -704,19 +711,15 @@ static std::string buildTodosSummary(const agentxx::util::Json& plan) {
     return summary;
 }
 
-/// 提取公共渲染逻辑: 渲染 Todo 列表与 Note 备忘 (P3-5 消除 buildDecorItems 与 refreshPlanSection
-/// 的渲染重复)
-static void appendTodoAndNoteItems(
-    const ClientCtx&           ctx,
-    const agentxx::util::Json& plan,
-    std::vector<std::string>&  items
-) {
+/// 追加 Todo 列表与 Note 备忘 items (消息装饰/类型级渲染器/Info 段落共用,
+/// 避免多处渲染漂移; 调用方见 [buildPlanItems])
+static void appendTodoAndNoteItems(const agentxx::util::Json& plan, agentxx::util::Json& items) {
     auto textItem = [&](const std::string& text, const std::string& role) {
-        items.push_back(fmt::format(
-            R"({{"kind":"text","role":{},"text":{}}})",
-            clientJsonEscape(ctx, role),
-            clientJsonEscape(ctx, text)
-        ));
+        agentxx::util::Json item = agentxx::util::Json::object();
+        item["kind"]             = "text";
+        item["role"]             = role;
+        item["text"]             = text;
+        items.push_back(std::move(item));
     };
 
     // ---- Todo: 待办列表 ----
@@ -750,43 +753,169 @@ static void appendTodoAndNoteItems(
     }
 }
 
-/// 组装展开体 items JSON 数组元素 (Graph / Todo / Note 三段式, 参考剥离前的
-/// TUI appendPlanToolBody + Info 侧边栏 Plan 渲染; Graph 为按钮弹窗)
-static std::string buildDecorItems(const ClientCtx& ctx, const agentxx::util::Json& plan) {
+/// 规划 JSON → 展开体 items 数组 (Graph / Todo / Note 三段式, 参考剥离前的
+/// TUI appendPlanToolBody + Info 侧边栏 Plan 渲染; 见 [plugins.md] §9 items schema)
+/// - `graphAsButton` false: 内联状态图 ({"kind":"diagram","mermaid":...};
+///   工具消息展开体, 状态图随消息一起渲染)
+/// - `graphAsButton` true:  "|- " 前缀 + 可点 Graph 按钮 (Info 段落, 点击经
+///   action_id="planning.open_graph" 弹窗; owner_id 由宿主组装)
+/// - plan 显式带 items 数组时直接透传 (read 模式占位提示等自定义内容)
+static agentxx::util::Json buildPlanItems(const agentxx::util::Json& plan, bool graphAsButton) {
     if (plan.contains("items") && plan["items"].is_array()) {
-        return plan["items"].dump();
+        return plan["items"];
     }
-    std::vector<std::string> items;
+    agentxx::util::Json items = agentxx::util::Json::array();
 
     // ---- Graph: 状态图 ----
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
-        items.push_back(
-            fmt::format(R"({{"kind":"diagram","mermaid":{}}})", clientJsonEscape(ctx, roadmap))
-        );
+        if (graphAsButton) {
+            agentxx::util::Json prefix = agentxx::util::Json::object();
+            prefix["kind"]             = "text";
+            prefix["role"]             = "normal";
+            prefix["text"]             = "|- ";
+            items.push_back(std::move(prefix));
+
+            agentxx::util::Json button = agentxx::util::Json::object();
+            button["kind"]             = "button";
+            button["label"]            = "Graph";
+            button["action_id"]        = kActionOpenGraph;
+            button["args"]             = agentxx::util::Json::object();
+            button["role"]             = "normal";
+            items.push_back(std::move(button));
+        } else {
+            agentxx::util::Json diagram = agentxx::util::Json::object();
+            diagram["kind"]             = "diagram";
+            diagram["mermaid"]          = roadmap;
+            items.push_back(std::move(diagram));
+        }
     }
 
     // ---- Todo & Note 渲染 ----
-    appendTodoAndNoteItems(ctx, plan, items);
+    appendTodoAndNoteItems(plan, items);
 
-    return fmt::format(R"([{}])", fmt::join(items, ","));
+    return items;
+}
+
+/// read 模式结果尚未返回时的占位内容 (展开体一行提示; 结果到达后渲染器/
+/// 装饰按新的输入特征重新计算)
+static agentxx::util::Json makeReadingPlaceholderPlan() {
+    agentxx::util::Json plan = agentxx::util::Json::object();
+    plan["items"]            = agentxx::util::Json::array();
+    agentxx::util::Json hint = agentxx::util::Json::object();
+    hint["kind"]             = "text";
+    hint["role"]             = "hint";
+    hint["text"]             = "Reading saved planning...";
+    plan["items"].push_back(std::move(hint));
+    return plan;
+}
+
+/// 工具消息渲染三要素 (折叠头显示名/摘要 + 展开体 items)
+struct PlanDecorParts {
+    std::string         displayName = kDisplayName;
+    std::string         summary;
+    agentxx::util::Json items = agentxx::util::Json::array();
+};
+
+/// 规划 JSON → 渲染三要素 (实时装饰推送与类型级渲染器共用, 保证两条路径内容一致)
+static PlanDecorParts buildPlanDecorParts(const agentxx::util::Json& plan) {
+    PlanDecorParts parts;
+    parts.summary = buildTodosSummary(plan);
+    parts.items   = buildPlanItems(plan, /*graphAsButton=*/false);
+    return parts;
+}
+
+/// 工具调用参数/结果 → 规划 JSON (实时装饰推送与类型级渲染器共用同一解析):
+/// - `mode=write`: 规划内容即参数本体 (roadmap/todos/notes)
+/// - `mode=read`:  规划内容即工具结果 (调用时保存的规划 JSON dump);
+///   结果未返回时置 `readPlaceholder=true` (调用方使用 [makeReadingPlaceholderPlan])
+/// - return: 参数/结果无法解析为对象时返回 false (调用方按通用渲染降级)
+static bool planFromToolCall(
+    std::string_view     argsJson,
+    std::string_view     resultText,
+    agentxx::util::Json& plan,
+    bool&                readPlaceholder
+) {
+    readPlaceholder = false;
+    agentxx::util::Json args;
+    try {
+        args = argsJson.empty() ? agentxx::util::Json::object()
+                                : agentxx::util::Json::parse(argsJson);
+    } catch (...) {
+        return false;
+    }
+    if (!args.is_object()) {
+        return false;
+    }
+    if (args.value("mode", std::string{}) != "read") {
+        plan = std::move(args);
+        return true;
+    }
+    if (resultText.empty()) {
+        readPlaceholder = true;
+        return true;
+    }
+    try {
+        plan = agentxx::util::Json::parse(resultText);
+    } catch (...) {
+        return false;
+    }
+    return plan.is_object();
 }
 
 /// 推送/更新工具消息装饰 (client io 线程; ui 成员判空降级)
-static void
-    pushToolDecor(ClientCtx& ctx, const std::string& toolCallId, const agentxx::util::Json& plan) {
+static void pushToolDecorParts(
+    ClientCtx&            ctx,
+    const std::string&    toolCallId,
+    const PlanDecorParts& parts
+) {
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host || toolCallId.empty()) {
         return;
     }
-    const std::string decorJson = fmt::format(
-        R"({{"displayName":{},"summary":{},"items":{}}})",
-        clientJsonEscape(ctx, kDisplayName),
-        clientJsonEscape(ctx, buildTodosSummary(plan)),
-        buildDecorItems(ctx, plan)
-    );
+    agentxx::util::Json decor = agentxx::util::Json::object();
+    decor["displayName"]      = parts.displayName;
+    decor["summary"]          = parts.summary;
+    decor["items"]            = parts.items;
+    const std::string decorJson = decor.dump();
+
     auto tcidSv  = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
     auto decorSv = agentxx::plugin::PluginStringView::from(decorJson.data(), decorJson.size());
     ctx.ui->update_tool_decor(ctx.host, &tcidSv, &decorSv);
+}
+
+/// 按规划 JSON 推送装饰 (实时路径; 内容与类型级渲染器同源)
+static void
+    pushToolDecor(ClientCtx& ctx, const std::string& toolCallId, const agentxx::util::Json& plan) {
+    pushToolDecorParts(ctx, toolCallId, buildPlanDecorParts(plan));
+}
+
+/// 类型级工具渲染器 (按 tool_name 注册, 宿主在需要渲染 planning 工具消息时于
+/// client io 线程调用; 实现无实例状态):
+/// - 内容完全由消息自身 (参数/结果) 推导, 不依赖运行时事件 —— 重启恢复/重连/
+///   切换会话后由 Sync 回放的历史工具消息没有 update_tool_decor 推送,
+///   经本渲染器同样特化渲染 (见 [plugins.md] §9 工具特化渲染架构)
+/// - write 模式取参数, read 模式取结果 (结果未返回时占位提示)
+/// - 参数/结果无法解析时只保留显示名, 展开体回退通用参数/结果展示
+/// - 注意 (框架规则): 展开状态的头部显示名仅由实例级装饰覆盖, 类型级渲染器
+///   只覆盖折叠头显示名与展开体 —— 历史恢复场景展开头保留原始工具名
+///   ("agentxx_planning"), 折叠头与展开体与实时调用一致
+static void buildPlanningToolRender(
+    const agentxx::plugin::ToolRenderInput& in,
+    agentxx::plugin::ToolRenderOutput&     out
+) {
+    out.displayName = kDisplayName;
+
+    agentxx::util::Json plan;
+    bool                readPlaceholder = false;
+    if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
+        return;
+    }
+    if (readPlaceholder) {
+        plan = makeReadingPlaceholderPlan();
+    }
+    const auto parts = buildPlanDecorParts(plan);
+    out.summary      = parts.summary;
+    out.items        = parts.items;
 }
 
 /// 清理本插件全部装饰 (会话切换时调用)
@@ -841,39 +970,16 @@ static void refreshPlanSection(ClientCtx& ctx) {
         return;
     }
 
-    std::vector<std::string> items;
-    auto                     textItem = [&](const std::string& text, const std::string& role) {
-        items.push_back(fmt::format(
-            R"({{"kind":"text","role":{},"text":{}}})",
-            clientJsonEscape(ctx, role),
-            clientJsonEscape(ctx, text)
-        ));
-    };
-
-    auto buttonItem = [&](const std::string& label) {
-        // Graph 按钮: 通用 action_id 派发 (宿主点击回调 → open_overlay MERMAID)
-        items.push_back(fmt::format(
-            R"({{"kind":"button","label":{},"action_id":"{}","args":{{}},"role":"normal"}})",
-            clientJsonEscape(ctx, label),
-            kActionOpenGraph
-        ));
-    };
-
-    // ---- Graph: 状态图按钮 + 概要 ----
-    const auto roadmap = plan.value("roadmap", std::string{});
-    if (!roadmap.empty()) {
-        textItem("|- ", "normal");
-        buttonItem("Graph");
-    }
-
-    // ---- Todo & Note 渲染 ----
-    appendTodoAndNoteItems(ctx, plan, items);
-
+    // 段落 items 与工具消息展开体同源 (同一构建函数), 仅 Graph 表现形式不同:
+    // 段落用可点按钮 (点击经 action_id 派发弹窗), 消息展开体用内联状态图
+    const auto items = buildPlanItems(plan, /*graphAsButton=*/true);
     if (items.empty()) {
         return; // 内容为空不推送, 避免出现只有标题的空段落
     }
-    const std::string json   = fmt::format(R"({{"items":[{}]}})", fmt::join(items, ","));
-    auto              jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+    agentxx::util::Json payload = agentxx::util::Json::object();
+    payload["items"]            = items;
+    const std::string json      = payload.dump();
+    auto              jsonSv    = agentxx::plugin::PluginStringView::from(json.data(), json.size());
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
@@ -919,7 +1025,8 @@ static void AGENTXX_PLUGIN_CALL
     });
 }
 
-/// EVT_DELTA: planning 工具生命周期 → 工具消息装饰
+/// EVT_DELTA: planning 工具生命周期 → 工具消息装饰 (实时调用路径; 历史回溯
+/// 由类型级渲染器覆盖, 见 buildPlanningToolRender)
 /// - tool_start: 缓存参数; write 推送完整装饰 (折叠头 Plan · todos 摘要 +
 ///   展开体 状态图/todos/notes); read 推送占位 (结果未返回)
 /// - tool_end: 以缓存的最终参数重建装饰 (覆盖流式期间的不完整内容);
@@ -961,53 +1068,33 @@ static void AGENTXX_PLUGIN_CALL
         const auto callId = d.value("tool_call_id", std::string{});
 
         if (type == "tool_start") {
-            const auto          argsStr = d.value("arguments", std::string{});
-            agentxx::util::Json args;
-            try {
-                args = argsStr.empty() ? agentxx::util::Json::object()
-                                       : agentxx::util::Json::parse(argsStr);
-            } catch (...) {
+            const auto argsStr = d.value("arguments", std::string{});
+            // 与类型级渲染器同一解析 (mode=read 时结果未返回 → 占位提示)
+            agentxx::util::Json plan;
+            bool                readPlaceholder = false;
+            if (!planFromToolCall(argsStr, std::string_view{}, plan, readPlaceholder)) {
                 return;
             }
-            if (!args.is_object()) {
-                return;
-            }
-            ctx->pending_args[callId] = args.dump();
-            if (args.value("mode", std::string{}) == "read") {
-                // read: 结果尚未返回, 占位提示 (tool_end 时替换为结果摘要)
-                agentxx::util::Json placeholder = agentxx::util::Json::object();
-                placeholder["items"]            = agentxx::util::Json::array();
-                agentxx::util::Json hint        = agentxx::util::Json::object();
-                hint["kind"]                    = "text";
-                hint["role"]                    = "hint";
-                hint["text"]                    = "Reading saved planning...";
-                placeholder["items"].push_back(hint);
-                pushToolDecor(*ctx, callId, placeholder);
-                return;
-            }
-            pushToolDecor(*ctx, callId, args);
+            ctx->pending_args[callId] = argsStr;
+            pushToolDecor(*ctx, callId, readPlaceholder ? makeReadingPlaceholderPlan() : plan);
             return;
         }
 
         // tool_end: 以缓存的最终参数重建 (write 完整内容; read 展示已保存规划)
         auto it = ctx->pending_args.find(callId);
         if (it != ctx->pending_args.end()) {
-            try {
-                auto args = agentxx::util::Json::parse(it->second);
-                if (args.value("mode", std::string{}) == "read") {
-                    // read 结果即保存的规划 JSON (见 agent 侧 execute)
-                    const auto result = d.value("result", std::string{});
-                    if (!result.empty()) {
-                        try {
-                            pushToolDecor(*ctx, callId, agentxx::util::Json::parse(result));
-                        } catch (...) {
-                            // 非法结果保持占位装饰
-                        }
-                    }
-                } else {
-                    pushToolDecor(*ctx, callId, args);
+            agentxx::util::Json plan;
+            bool                readPlaceholder = false;
+            if (planFromToolCall(
+                    it->second,
+                    d.value("result", std::string{}),
+                    plan,
+                    readPlaceholder
+                )) {
+                // read 结果非法时保持 tool_start 的占位装饰 (不覆盖为空内容)
+                if (!readPlaceholder) {
+                    pushToolDecor(*ctx, callId, plan);
                 }
-            } catch (...) {
             }
             ctx->pending_args.erase(it);
         }
@@ -1040,9 +1127,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_C
                 AGENTXX_CLIENT_PLUGIN_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
-                agentxx::plugin::PluginStringView::fromCstr("1.1.0"),
+                agentxx::plugin::PluginStringView::fromCstr("1.2.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
-                    "Plan rendering driven entirely by plugin: message decor + sidebar overview"
+                    "Plan rendering driven entirely by plugin: tool renderer (live + restored "
+                    "history) + message decor + sidebar overview"
                 ),
             };
             return &info;
@@ -1050,9 +1138,33 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_C
     );
 }
 
-/// client 侧注册事务 (start 的实际内容): 动作绑定 + client 事件订阅。
+/// client 侧注册事务 (start 的实际内容): 动作绑定 + 工具渲染器 + client 事件订阅。
 static int planningClientSetup(ClientCtx* ctx) {
     const AgentxxPluginHost* host = ctx->host;
+
+    // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠头与
+    // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
+    // 渲染** (这些消息没有 EVT_DELTA 装饰推送); 实时调用也走同一渲染器, 与
+    // 装饰推送 (展开头显示语义名) 内容同源。宿主无消息渲染面 (cli) 或未装配
+    // ui 表时注册失败 → 仅记日志, 不影响其他功能
+    if (ctx->ui && ctx->ui->register_tool_renderer) {
+        const int32_t rc = agentxx::plugin::registerToolRenderer(
+            host,
+            ctx->ui,
+            kNamePlanning,
+            &buildPlanningToolRender,
+            ctx->renderShims
+        );
+        if (rc != 0) {
+            if (ctx->iface.log && ctx->iface.log->log) {
+                auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_planning client: register tool renderer failed "
+                    "(restored history keeps generic tool body)"
+                );
+                ctx->iface.log->log(host, 3, &warnSv);
+            }
+        }
+    }
     // 通用交互绑定 (方案 A fallback: target_id="" 本实例兜底, 一次永久生效):
     // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
     //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind

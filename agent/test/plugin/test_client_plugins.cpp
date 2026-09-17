@@ -1365,7 +1365,101 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
 
-            // 14.4 会话切换 -> 清除装饰与段落
+            // 14.4 历史恢复路径 (重启/重连/切换会话后由 Sync 回放的 Tool 消息):
+            // 没有任何 EVT_DELTA / update_tool_decor 推送, 渲染内容由类型级
+            // 渲染器 (register_tool_renderer 按 tool_name) 从消息自带的
+            // 参数/结果推导 —— 修复前此类消息走通用渲染 (折叠头显示原始
+            // toolName "agentxx_planning" + 参数/结果原文)
+            {
+                // 渲染器已按 tool_name 注册
+                reg              = mgr->uiRegistrySnapshot();
+                bool hasRenderer = false;
+                for (const auto& r : reg->toolRenderers) {
+                    if (r.plugin == "agentxx_planning" && r.toolName == "agentxx_planning") {
+                        hasRenderer = r.renderFn != nullptr;
+                    }
+                }
+                XX_TEST_EXPECT_TRUE(hasRenderer);
+
+                // 14.4.1 write 模式: 参数即规划内容 (历史消息只有参数, 无装饰)
+                auto planWrite = co_await renderToolAsync(
+                    mgr,
+                    "call_plan_hist_write_1",
+                    "agentxx_planning",
+                    R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> h1\nh1 --> [*]","todos":[{"state":"in_progress","content":"hist task"}],"notes":"hist note"})",
+                    "success",
+                    true,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(planWrite.matched);
+                XX_TEST_EXPECT_EQ(planWrite.displayName, "Plan");
+                XX_TEST_EXPECT_TRUE(planWrite.summary.find("[~] hist task") != std::string::npos);
+                std::string writeItems = planWrite.items.dump();
+                XX_TEST_EXPECT_TRUE(writeItems.find("diagram") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(writeItems.find("[~] hist task") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(writeItems.find("hist note") != std::string::npos);
+
+                // 14.4.2 read 模式: 结果即已保存的规划 JSON
+                auto planRead = co_await renderToolAsync(
+                    mgr,
+                    "call_plan_hist_read_1",
+                    "agentxx_planning",
+                    R"({"mode":"read"})",
+                    R"({"roadmap":"stateDiagram-v2\n[*] --> h2\nh2 --> [*]","todos":[{"state":"completed","content":"hist read task"}]})",
+                    true,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(planRead.matched);
+                XX_TEST_EXPECT_EQ(planRead.displayName, "Plan");
+                XX_TEST_EXPECT_TRUE(
+                    planRead.items.dump().find("hist read task") != std::string::npos
+                );
+
+                // 14.4.3 read 模式结果未返回: 占位提示
+                auto planReading = co_await renderToolAsync(
+                    mgr,
+                    "call_plan_hist_read_2",
+                    "agentxx_planning",
+                    R"({"mode":"read"})",
+                    "",
+                    false,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(planReading.matched);
+                XX_TEST_EXPECT_TRUE(
+                    planReading.items.dump().find("Reading saved planning...")
+                    != std::string::npos
+                );
+
+                // 14.4.4 参数不可解析: 展开体回退通用展示 (items 为空), 不产生错误内容
+                auto planBadArgs = co_await renderToolAsync(
+                    mgr,
+                    "call_plan_hist_bad_1",
+                    "agentxx_planning",
+                    R"({"mode":"write","roadmap":)",
+                    "",
+                    true,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(planBadArgs.items.empty());
+
+                // 渲染器路径不得产生运行时装饰 (历史消息没有装饰推送)
+                reg                     = mgr->uiRegistrySnapshot();
+                bool histDecorFromDelta = false;
+                for (const auto& d : reg->toolDecors) {
+                    if (d.toolCallId == "call_plan_hist_write_1"
+                        || d.toolCallId == "call_plan_hist_read_1") {
+                        histDecorFromDelta = true;
+                    }
+                }
+                XX_TEST_EXPECT_FALSE(histDecorFromDelta);
+            }
+
+            // 14.5 会话切换 -> 清除装饰与段落
             mgr->onSessionSwitched("new_session_123");
             reg                        = mgr->uiRegistrySnapshot();
             bool hasPlanSecAfterSwitch = false;

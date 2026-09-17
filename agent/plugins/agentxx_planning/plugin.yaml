@@ -1,11 +1,13 @@
 name: agentxx_planning
-version: 1.1.0
+version: 1.2.0
 description: "Two-level task planning tool (agentxx_planning, write/read modes: roadmap + todo list + memo) with client-side Plan rendering"
 entry: libagentxx_planning.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
 # - agentxx.client.info_section 可选: CLI 无 Info 栏时注册失败降级 (仅数据不渲染)
 #   (规划不再依赖专用 planning 接口，改用通用持久化+事件)
+# - agentxx.client.msg_decor 可选: 工具消息特化渲染 (register_tool_renderer 按
+#   tool_name 注册 + update_tool_decor 实时装饰); CLI 无消息渲染面时注册失败降级
 interfaces:
   require:
     - agentxx.agent.core
@@ -13,6 +15,7 @@ interfaces:
     - agentxx.agent.prompt
   optional:
     - agentxx.agent.config
+    - agentxx.client.msg_decor
     - agentxx.client.info_section
     - agentxx.client.action
     - agentxx.client.overlay
