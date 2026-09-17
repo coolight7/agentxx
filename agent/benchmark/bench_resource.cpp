@@ -617,7 +617,7 @@ void benchResourceCli() {
 
     asio::io_context clientCtx;
     auto             clientEx  = clientCtx.get_executor();
-    auto             io        = std::make_shared<StdIOClientAgentIO>();
+    auto             io        = std::make_shared<agentxx::client::StdIOClientAgentIO>();
     std::string      sessionId = generateBenchSessionId();
     io->setSessionId(sessionId);
 
@@ -977,11 +977,10 @@ void benchResourceTui() {
     std::string      sessionId = generateBenchSessionId();
 
     // 注意: TUIClientAgentIO 绝不调用 start()! 仅作端点和共享堆存储
-    auto tui = std::make_shared<TUIClientAgentIO>(
+    auto tui = std::make_shared<agentxx::client::TUIClientAgentIO>(
         clientEx,
         sessionId,
-        TUITheme::darkTheme(),
-        agent::PermissionMode::Pass
+        agentxx::client::TUITheme::darkTheme()
     );
 
     auto clientPlugins = agentConfig->plugins;
@@ -1668,11 +1667,10 @@ void benchResourceSplitTui() {
     auto             clientEx  = clientCtx.get_executor();
     std::string      sessionId = generateBenchSessionId();
 
-    auto tui = std::make_shared<TUIClientAgentIO>(
+    auto tui = std::make_shared<agentxx::client::TUIClientAgentIO>(
         clientEx,
         sessionId,
-        TUITheme::darkTheme(),
-        agent::PermissionMode::Pass
+        agentxx::client::TUITheme::darkTheme()
     );
     std::string wsUrl       = fmt::format("ws://127.0.0.1:{}/agent", serverPort);
     auto        wsTransport = std::make_shared<agent::WsAgentIOTransport>(
