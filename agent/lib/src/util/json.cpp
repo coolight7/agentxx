@@ -6,6 +6,7 @@
 #include "agentxx/util/json.h"
 
 #include <cassert>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <istream>
@@ -142,18 +143,47 @@ void appendDouble(std::string& out, double v) {
         out += "null";
         return;
     }
-    char buf[32];
-    // %.17g 保证往返精度, 再裁掉多余尾零 (保留至少一位小数点后数字)
-    int         n = std::snprintf(buf, sizeof(buf), "%.17g", v);
-    std::string s(buf, static_cast<size_t>(n > 0 ? n : 0));
-    // 纯整数写法 (如 "3") 补 ".0", 与 neograph dump 的浮点形态一致
-    const bool hasDotOrExp = (s.find('.') != std::string::npos)
-                             || (s.find('e') != std::string::npos)
-                             || (s.find('E') != std::string::npos);
-    if (!hasDotOrExp) {
-        s += ".0";
+    // std::to_chars: 最短且可往返的十进制表示
+    // - 如果用 "%.17g" 且未裁尾零, 0.7 会输出 "0.69999999999999996" (请求体
+    //   白白变大, 严格校验的网关/前端展示也可能出现意外)
+    // - 缓冲区 64 字节足够容纳 double 的最长输出 (含指数与符号)
+    char buf[64];
+    // fixedBuf 与 buf 同级声明: 指数分支会令 s 指向它, 必须保证其生命周期
+    // 覆盖到函数末尾 (声明在内层块内会立刻失效 → use-after-scope)
+    char             fixedBuf[64];
+    auto             result = std::to_chars(buf, buf + sizeof(buf), v);
+    std::string_view s{buf, static_cast<size_t>(result.ptr - buf)};
+    if (result.ec != std::errc{}) {
+        // 理论上不可达 (缓冲区足够): 回退 snprintf 保证不丢输出
+        int n = std::snprintf(buf, sizeof(buf), "%.17g", v);
+        s     = std::string_view{buf, static_cast<size_t>(n > 0 ? n : 0)};
     }
+    // 指数形态 (如 1e5 -> "1e+05") 在常见量级改用定点写法, 与旧输出
+    // ("100000.0") 及 yyjson 的口径保持一致 (短路/配置里的数值多为这类量级)
+    if (auto ePos = s.find_first_of("eE"); ePos != std::string_view::npos) {
+        auto expStr = s.substr(ePos + 1);
+        if (false == expStr.empty() && expStr.front() == '+') {
+            // from_chars 不接受前导 '+'
+            expStr.remove_prefix(1);
+        }
+        int  exp       = 0;
+        auto expResult = std::from_chars(expStr.data(), expStr.data() + expStr.size(), exp);
+        if (expResult.ec == std::errc{} && exp >= -4 && exp < 17) {
+            auto fixedResult
+                = std::to_chars(fixedBuf, fixedBuf + sizeof(fixedBuf), v, std::chars_format::fixed);
+            if (fixedResult.ec == std::errc{}) {
+                s = std::string_view{fixedBuf, static_cast<size_t>(fixedResult.ptr - fixedBuf)};
+            }
+        }
+    }
+    // 纯整数写法 (如 "3") 补 ".0", 与 neograph dump 的浮点形态一致
+    const bool hasDotOrExp = (s.find('.') != std::string_view::npos)
+                             || (s.find('e') != std::string_view::npos)
+                             || (s.find('E') != std::string_view::npos);
     out += s;
+    if (!hasDotOrExp) {
+        out += ".0";
+    }
 }
 
 void dumpInto(std::string& out, const Json& j, int indent, int depth) {
@@ -175,8 +205,8 @@ void dumpInto(std::string& out, const Json& j, int indent, int depth) {
             appendDouble(out, j.get<double>());
             return;
         case T::String: {
-            std::string s = j.get<std::string>();
-            appendEscaped(out, std::string_view{s.data(), s.size()});
+            // 用 string_view 视图转义, 避免每次 dump 都拷贝一份字符串
+            appendEscaped(out, j.get<std::string_view>());
             return;
         }
         case T::Array: {
