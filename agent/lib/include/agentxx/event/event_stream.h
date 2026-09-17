@@ -27,6 +27,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <typeinfo>
@@ -118,18 +119,12 @@ public:
             co_return;
         }
         // 暂存当前订阅者, 避免派发过程中 map 迭代器失效
+        // - 有限订阅 (execHit>0) 的递减/移除放在派发**之后** (见下方),
+        //   此处只快照, 不改动 listeners_
         auto snapshot = std::vector<EventSubscription<_DATA_TYPE>>{};
         snapshot.reserve(listeners_.size());
-        for (auto it = listeners_.begin(); it != listeners_.end();) {
-            snapshot.push_back(it->second);
-            if (it->second.execHit > 0) {
-                --it->second.execHit;
-                if (it->second.execHit <= 0) {
-                    it = listeners_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
+        for (auto& entry : listeners_) {
+            snapshot.push_back(entry.second);
         }
 
         for (auto& sub : snapshot) {
@@ -143,6 +138,23 @@ public:
                     co_return false;
                 }
             );
+        }
+
+        // 派发完成后才递减/移除有限订阅 (execHit>0):
+        // - 若在派发前递减, 中途因外层取消提前退出时剩余订阅者的次数已被扣掉,
+        //   表现为"少执行一次就消失"
+        // - 派发期间订阅者可能自行 unsubscribe, 故按 id 重新查找后再处理
+        for (auto& sub : snapshot) {
+            if (sub.execHit <= 0) {
+                continue;
+            }
+            auto found = listeners_.find(sub.id);
+            if (found == listeners_.end()) {
+                continue;
+            }
+            if (--found->second.execHit <= 0) {
+                listeners_.erase(found);
+            }
         }
     }
 };
@@ -358,6 +370,9 @@ public:
     }
 
     /// 获取或创建一个单向事件流; 同 topic 同类型复用
+    /// - 同 topic 被两处用不同类型注册/发布属调用方笔误: Debug 下断言暴露,
+    ///   Release 下**不可** static_cast (类型双关 UB) —— 记录错误并返回进程级
+    ///   兜底空流 (无订阅者, publish 直接返回, 不会破坏内存)
     template<typename _DATA_TYPE>
     EventStream<_DATA_TYPE>& get(std::string_view topic) {
         auto it = streams_.find(topic);
@@ -370,18 +385,26 @@ public:
                      std::static_pointer_cast<EventStreamInterface>(stream)
             )
                      .first;
-        } else {
-            // 类型校验: 同 topic 必须用同一 _DATA_TYPE, 否则 static_cast 是 UB
+        } else if (it->second->elementType_ != typeid(_DATA_TYPE)) {
             assert(
                 it->second->elementType_ == typeid(_DATA_TYPE)
                 && "EventBus topic type mismatch: same topic used with different "
                    "EventStream<T> payload type"
             );
+            XX_LOGE(
+                "EventBus topic `{}` type mismatch (registered typeid={}, requested typeid={}); "
+                "returning empty stream",
+                topic,
+                it->second->elementType_.name(),
+                typeid(_DATA_TYPE).name()
+            );
+            return fallbackStream<_DATA_TYPE>();
         }
         return static_cast<EventStream<_DATA_TYPE>&>(*it->second);
     }
 
     /// 获取或创建一个请求-响应事件流
+    /// - 类型不一致处理同 [get] (Release 下返回兜底空流而非 UB 强转)
     template<typename _REQ_TYPE, typename _RESP_TYPE>
     RequestResponseStream<_REQ_TYPE, _RESP_TYPE>& getRR(std::string_view topic) {
         auto it = streams_.find(topic);
@@ -393,12 +416,20 @@ public:
                      std::static_pointer_cast<EventStreamInterface>(stream)
             )
                      .first;
-        } else {
+        } else if (it->second->elementType_ != typeid(std::pair<_REQ_TYPE, _RESP_TYPE>)) {
             assert(
                 it->second->elementType_ == typeid(std::pair<_REQ_TYPE, _RESP_TYPE>)
                 && "EventBus topic type mismatch: same topic used with different "
                    "RequestResponseStream<Req,Resp> types"
             );
+            XX_LOGE(
+                "EventBus topic `{}` RR type mismatch (registered typeid={}, requested typeid={}); "
+                "returning empty stream",
+                topic,
+                it->second->elementType_.name(),
+                typeid(std::pair<_REQ_TYPE, _RESP_TYPE>).name()
+            );
+            return fallbackRRStream<_REQ_TYPE, _RESP_TYPE>();
         }
         return static_cast<RequestResponseStream<_REQ_TYPE, _RESP_TYPE>&>(*it->second);
     }
@@ -416,10 +447,16 @@ public:
     asio::awaitable<void> publish(std::string_view topic, const _DATA_TYPE& data) {
         // 前缀订阅分派 (如插件事件转发)
         if (!prefixListeners_.empty()) {
+            // 载荷仅在有前缀匹配时构造 std::any (其构造会拷贝 data, 如字符串
+            // 可能触发堆分配); 无匹配 (绝大多数 topic) 时零开销
+            std::optional<std::any> payload{};
             for (const auto& [_, sub] : prefixListeners_) {
                 if (topic.size() >= sub.prefix.size()
                     && topic.compare(0, sub.prefix.size(), sub.prefix) == 0) {
-                    sub.handler(topic, std::any(data));
+                    if (false == payload.has_value()) {
+                        payload.emplace(data);
+                    }
+                    sub.handler(topic, *payload);
                 }
             }
         }
@@ -504,6 +541,25 @@ public:
     }
 
 private:
+
+    /// 类型不匹配 topic 的进程级兜底空流 (按类型各一份)
+    /// - 函数局部 static: 线程安全初始化, 引用长期有效
+    /// - 用于替代 Release 下不安全的 static_cast 类型双关: 该流无订阅者,
+    ///   publish 立即返回; 订阅到它的回调收不到事件 (类型不一致本身就是笔误,
+    ///   调用方已记 XX_LOGE)
+    template<typename _DATA_TYPE>
+    static EventStream<_DATA_TYPE>& fallbackStream() {
+        static EventStream<_DATA_TYPE> stream{"<eventbus:topic-type-mismatch>"};
+        return stream;
+    }
+
+    template<typename _REQ_TYPE, typename _RESP_TYPE>
+    static RequestResponseStream<_REQ_TYPE, _RESP_TYPE>& fallbackRRStream() {
+        static RequestResponseStream<_REQ_TYPE, _RESP_TYPE> stream{
+            "<eventbus:topic-type-mismatch>"
+        };
+        return stream;
+    }
 
     /// 前缀订阅项 (仅 io 线程读写)
     struct PrefixSub {
