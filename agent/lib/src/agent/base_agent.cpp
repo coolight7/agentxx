@@ -10,6 +10,7 @@
 #include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/async_offload.h"
 #include "agentxx/util/diff_util.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/string_util.h"
@@ -271,45 +272,60 @@ asio::awaitable<void> BaseAgent::init() {
 
     auto config = agentContext->agentConfig;
 
-    neograph::graph::NodeContext nodeContext{};
-    nodeContext.instructions = config->prompt.systemPrompt;
-    nodeContext.provider     = ModelProviderRegistry::createProvider(config->model);
-    nodeContext.extra_config = neograph::json{
-        {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
+    /// 构建图节点上下文 (instructions / provider / tools)
+    /// - **必须每次重新构造**: NodeContext 会被 move 进 EngineConfig, 图构建失败
+    ///   回退默认图时要再构建一份 (复用已被 move 的对象只会得到空 provider/tools,
+    ///   表现为回退后 agent 启动成功但首次 modelcall 就失败)
+    auto makeNodeContext = [&]() -> neograph::graph::NodeContext {
+        neograph::graph::NodeContext ctx{};
+        ctx.instructions = config->prompt.systemPrompt;
+        ctx.provider     = ModelProviderRegistry::createProvider(config->model);
+        ctx.extra_config = neograph::json{
+            {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
+        };
+
+        std::vector<neograph::Tool*> toolPtrs;
+        toolPtrs.reserve(tools.size());
+        for (auto& t : tools) {
+            toolPtrs.push_back(t.get());
+        }
+        ctx.tools = std::move(toolPtrs);
+        return ctx;
     };
 
-    std::vector<neograph::Tool*> toolPtrs;
-    toolPtrs.reserve(tools.size());
-    for (auto& t : tools) {
-        toolPtrs.push_back(t.get());
-    }
-    nodeContext.tools = std::move(toolPtrs);
+    /// 以 [def] 构建执行图 (编译 → 校验 → link)
+    /// - 编译/校验/link 都可能抛异常 (插件改坏了图定义): 三者必须都在 try 内,
+    ///   否则 parse 抛出的异常会直接逃逸出 init(), agent 连回退机会都没有
+    /// - 每次调用都新建 NodeContext/EngineConfig/EngineResources (link 内部 move)
+    auto buildEngine
+        = [&](const neograph::json& def) -> std::unique_ptr<neograph::graph::GraphEngine> {
+        auto topology = neograph::graph::GraphCompiler::parse(def, *graphRegistry);
+        auto validated
+            = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
 
-    auto topology = neograph::graph::GraphCompiler::parse(graphDef, *graphRegistry);
-    auto validated
-        = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
+        neograph::graph::EngineConfig engineConfig;
+        engineConfig.node_context = makeNodeContext();
+        // 仅保留每个 session 最新一个 checkpoint:
+        // - engine 恢复 (resume / update_state) 只依赖最新 checkpoint 与其 pending writes
+        // - 历史 checkpoint 仅用于 fork / 时间旅行, agentxx 未使用
+        // - 避免每轮会话累积 O(super-steps) 的 checkpoint 内存, 无需轮末手动裁剪
+        engineConfig.checkpoint_store
+            = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
 
-    neograph::graph::EngineConfig engineConfig;
-    engineConfig.node_context = std::move(nodeContext);
-    // 仅保留每个 session 最新一个 checkpoint:
-    // - engine 恢复 (resume / update_state) 只依赖最新 checkpoint 与其 pending writes
-    // - 历史 checkpoint 仅用于 fork / 时间旅行, agentxx 未使用
-    // - 避免每轮会话累积 O(super-steps) 的 checkpoint 内存, 无需轮末手动裁剪
-    engineConfig.checkpoint_store
-        = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
+        neograph::graph::EngineResources resources;
+        resources.registry = graphRegistry;
 
-    neograph::graph::EngineResources resources;
-    resources.registry = graphRegistry;
-
-    try {
-        engine = neograph::graph::GraphEngine::link(
+        return neograph::graph::GraphEngine::link(
             std::move(validated),
             std::move(engineConfig),
             std::move(resources)
         );
+    };
+
+    try {
+        engine = buildEngine(graphDef);
     } catch (const std::exception& e) {
         // 插件修改的图定义非法 (未通过编译/校验): 回退默认图, 保证 agent 可启动
-        // - 注意: validated/engineConfig/resources 已被 move, 需重建
         XX_LOGE(
             "Graph build failed (plugin-modified graph likely invalid): {}\n"
             "Falling back to default graph",
@@ -317,20 +333,8 @@ asio::awaitable<void> BaseAgent::init() {
         );
         agentContext->graphDefinitionJson = initGraphDefinition();
         graphDef                          = agentContext->graphDefinitionJson;
-        auto topology2 = neograph::graph::GraphCompiler::parse(graphDef, *graphRegistry);
-        auto validated2
-            = neograph::graph::GraphValidator::require_valid(std::move(topology2), *graphRegistry);
-        neograph::graph::EngineConfig engineConfig2;
-        engineConfig2.node_context = nodeContext;
-        engineConfig2.checkpoint_store
-            = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
-        neograph::graph::EngineResources resources2;
-        resources2.registry = graphRegistry;
-        engine              = neograph::graph::GraphEngine::link(
-            std::move(validated2),
-            std::move(engineConfig2),
-            std::move(resources2)
-        );
+        // 默认图构建失败属实现错误: 异常继续上抛 (不再兜底)
+        engine = buildEngine(graphDef);
     }
     assert(nullptr != engine);
     {
@@ -833,10 +837,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     if (!attachments.empty()) {
         // 服务端附件自主加载: 若 dataUrl 为空且 pathOrUrl 为服务端本地路径,
         // 服务端直接读取并转为 Base64 Data URL, 免除客户端二次下载上传中转
-        for (auto& att : attachments) {
-            if (att.dataUrl.empty() && !att.pathOrUrl.empty()
-                && !att.pathOrUrl.starts_with("http://")
-                && !att.pathOrUrl.starts_with("https://")) {
+        // - 读文件与 base64 都是阻塞/CPU 操作 (单附件可达数 MB): 经线程池卸载,
+        //   避免在 io 线程上执行导致同一时刻所有会话的 LLM 流/工具执行停摆
+        auto loadServerAttachmentAsync
+            = [&](MediaAttachment att) -> asio::awaitable<MediaAttachment> {
+            auto doLoad = [att = std::move(att)]() mutable -> MediaAttachment {
                 std::error_code ec;
                 auto            fileSize = std::filesystem::file_size(att.pathOrUrl, ec);
                 if (ec) {
@@ -845,7 +850,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                         att.pathOrUrl,
                         ec.message()
                     );
-                    continue;
+                    return att;
                 }
                 uint64_t maxSize = maxBytesForMediaType(att.type);
                 if (fileSize > maxSize) {
@@ -855,12 +860,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                         maxSize,
                         att.pathOrUrl
                     );
-                    continue;
+                    return att;
                 }
                 std::ifstream ifs(att.pathOrUrl, std::ios::binary);
                 if (!ifs) {
                     XX_LOGW("[base_agent] cannot open server attachment: {}", att.pathOrUrl);
-                    continue;
+                    return att;
                 }
                 std::string fileData(
                     (std::istreambuf_iterator<char>(ifs)),
@@ -879,6 +884,27 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                     agentxx::util::base64Encode(fileData)
                 );
                 att.sizeBytes = fileSize;
+                return att;
+            };
+
+            auto* pool = agentContext->threadPool.get();
+            if (nullptr == pool) {
+                // 无线程池 (测试/嵌入式): 直接同步执行
+                co_return doLoad();
+            }
+            co_return co_await agentxx::util::offloadAsync<MediaAttachment>(
+                *pool,
+                [doLoad = std::move(doLoad)]() mutable -> asio::awaitable<MediaAttachment> {
+                    co_return doLoad();
+                }
+            );
+        };
+
+        for (auto& att : attachments) {
+            if (att.dataUrl.empty() && !att.pathOrUrl.empty()
+                && !att.pathOrUrl.starts_with("http://")
+                && !att.pathOrUrl.starts_with("https://")) {
+                att = co_await loadServerAttachmentAsync(std::move(att));
             }
         }
 
@@ -973,7 +999,6 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             // - 语义与旧内联循环完全一致 (checkpoint 持久化 / tempMessages 恢复 /
             //   MessageTip / IO 端点 HIL 超时)
             // - 委派经 ctx->bus 请求 service.subagent (宿主 registerServer), 不限制超时
-            //   (修复旧实现总线默认 30s 截断长任务子代理的问题)
             std::optional<neograph::graph::RunResult> recovered;
             if (resumeInterrupt) {
                 // 程序重启恢复中断: 跳过首跑, 从恢复的 graphData 重建中断结果,
