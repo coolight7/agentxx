@@ -875,6 +875,67 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 }
 
 // ---------------------------------------------------------------------------
+// SessionServerAgentIO: 客户端水位超过服务端当前 seq -> 回退全量 sync
+//   - 服务端进程重启/会话重建后 seq 从 0 重新计数, 而客户端仍带旧水位 (如 100)
+//   - 如果只判 "缓冲最旧序号 > 水位" 才回退: 水位高于缓冲尾时返回**空增量**,
+//     客户端既收不到 sync 也收不到 delta → 重连成功后界面永不刷新
+//   - 当前设计: 水位超过缓冲尾 -> 回退全量 sync (客户端据 sync.deltaSeq 复位水位)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_controller_seq_regression_fallback() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    SessionServerAgentIO::Config cfg;
+    cfg.sessionId = "session";
+    auto sc       = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    // 服务端新会话: 只产出少量 delta (seq 1..3)
+    for (uint64_t s = 1; s <= 3; ++s) {
+        agentxx::agent::WireDelta d;
+        d.type = agentxx::agent::WireDelta::Type::TextToken;
+        d.seq  = s;
+        d.text = "t" + std::to_string(s);
+        sc->sendToPeer(d);
+    }
+
+    // 客户端携带旧水位 100 (来自重启前的服务端实例)
+    agentxx::agent::WireHello hello{"session", "", 100, ""};
+    sc->handleHello(hello);
+
+    // 排空 3 条实时 delta
+    for (int i = 0; i < 3; ++i) {
+        auto live = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(live.has_value());
+    }
+
+    // HelloAck 后必须收到**全量 sync** (而非空增量): 否则客户端永远停在旧状态
+    auto ackMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(ackMsg.has_value());
+    if (ackMsg) {
+        XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireHelloAck>(&*ackMsg) != nullptr);
+    }
+    auto msg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(msg.has_value());
+    if (msg) {
+        auto* sp = std::get_if<agentxx::agent::WireSyncPayload>(&*msg);
+        XX_TEST_EXPECT_TRUE(sp != nullptr);
+    }
+
+    clientT->close();
+    sc->stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 6. SessionServerAgentIO: 请求级超时 (handleInterrupt 无响应 -> 超时返回,
 //    并通知客户端中断已过期)
 // ---------------------------------------------------------------------------
@@ -1718,9 +1779,146 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
 }
 
 // ---------------------------------------------------------------------------
-// 17. 鉴权超时: server 永不回应 hello_ack, 客户端 connect 超时失败
+// 16b. 服务端重启后重连: 客户端去重水位按 sync 复位, 增量不再被误判为重复
+//   - 服务端进程重启/会话重建后 delta seq 从 0 重新计数, 而客户端水位仍停留在
+//     旧值 (如 100): 之后 seq=1,2,... 的增量会被全部判为重复丢弃, 表现为
+//     "重连成功、历史快照也拿到了, 但界面再也不刷新"
+//   - 修复: 客户端收到 Sync 时按快照携带的 deltaSeq 覆盖去重水位
+//     (快照已含 seq <= deltaSeq 的全部增量, 据此复位既不丢也不重复)
 // ---------------------------------------------------------------------------
 
+static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
+    std::atomic<int> connCount{0};
+
+    HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+    server.enableWebSocket("/agent", [&](HttpServer::WsStream& ws) -> asio::awaitable<void> {
+        int  myConn = ++connCount;
+        auto hello  = co_await wsRecvJson(ws);
+        if (!hello) {
+            co_return;
+        }
+        co_await wsSendJson(
+            ws,
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+        );
+        if (myConn == 1) {
+            // 旧会话: 客户端在连接 1 上收到的最后一个 delta 序号 = 100 (旧水位)
+            agentxx::agent::WireDelta d;
+            d.type = agentxx::agent::WireDelta::Type::TextToken;
+            d.seq  = 100;
+            d.text = "old-session-delta";
+            co_await wsSendJson(ws, io::makeDeltaMsg(d));
+            // 主动断开 (模拟服务端重启): 客户端自动重连, 重连时携带 lastSeq=100
+            co_return;
+        }
+        // 服务端重启后: 会话重建, delta seq 从 0 重新计数
+        // 1) 全量 sync (快照水位 = 0) 之后的新增量必须被投递
+        {
+            agentxx::agent::WireSyncPayload sp;
+            sp.deltaSeq = 0;
+            sp.tailHash = "fresh-session";
+            co_await wsSendJson(ws, io::makeSyncMsg(sp));
+
+            agentxx::agent::WireDelta d;
+            d.type = agentxx::agent::WireDelta::Type::TextToken;
+            d.seq  = 1;
+            d.text = "new-session-delta-1";
+            co_await wsSendJson(ws, io::makeDeltaMsg(d));
+        }
+        // 2) 快照水位 = 5: 已包含在快照内 (seq=3) 的增量去重丢弃,
+        //    水位之后的增量 (seq=6) 正常投递
+        {
+            agentxx::agent::WireSyncPayload sp;
+            sp.deltaSeq = 5;
+            sp.tailHash = "sync-at-5";
+            co_await wsSendJson(ws, io::makeSyncMsg(sp));
+
+            agentxx::agent::WireDelta stale;
+            stale.type = agentxx::agent::WireDelta::Type::TextToken;
+            stale.seq  = 3;
+            stale.text = "stale-included-delta";
+            co_await wsSendJson(ws, io::makeDeltaMsg(stale));
+
+            agentxx::agent::WireDelta fresh;
+            fresh.type = agentxx::agent::WireDelta::Type::TextToken;
+            fresh.seq  = 6;
+            fresh.text = "new-session-delta-6";
+            co_await wsSendJson(ws, io::makeDeltaMsg(fresh));
+        }
+        for (;;) {
+            auto j = co_await wsRecvJson(ws);
+            if (!j) {
+                co_return;
+            }
+        }
+    });
+
+    std::thread th;
+    uint16_t    port = startServerAndWait(server, th);
+    if (port == 0) {
+        g_remote_failed++;
+        server.stop();
+        th.join();
+        co_return;
+    }
+
+    auto ex  = co_await asio::this_coro::executor;
+    auto url = "ws://127.0.0.1:" + std::to_string(port) + "/agent";
+
+    agentxx::agent::WsAgentIOTransport::Config cfg;
+    cfg.reconnectBackoff  = std::chrono::milliseconds{50};
+    cfg.heartbeatInterval = std::chrono::seconds{60};
+    util::WsClientConfig wsCfg;
+    wsCfg.recvTimeout = std::chrono::seconds{5};
+
+    auto transport
+        = std::make_shared<agentxx::agent::WsAgentIOTransport>(ex, url, "test-token", cfg, wsCfg);
+    auto io = std::make_shared<TestIO>();
+    io->setTransport(transport);
+
+    agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+    bool                      ok = co_await transport->connect(hello);
+    XX_TEST_EXPECT_TRUE(ok);
+
+    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+
+    // 等待重连完成并收到 (或丢弃) 全部 delta
+    std::vector<std::string> texts;
+    for (int i = 0; i < 100; ++i) {
+        {
+            std::lock_guard<std::mutex> lock(io->mu);
+            texts.clear();
+            for (const auto& d : io->deltas) {
+                if (d.type == agentxx::agent::WireDelta::Type::TextToken) {
+                    texts.push_back(d.text);
+                }
+            }
+        }
+        if (texts.size() >= 3) {
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+
+    XX_TEST_EXPECT_TRUE(connCount.load() >= 2);
+    auto hasText = [&](std::string_view t) {
+        return std::find(texts.begin(), texts.end(), t) != texts.end();
+    };
+    // 旧会话增量 + 重启后水位复位放行的增量均被投递
+    XX_TEST_EXPECT_TRUE(hasText("old-session-delta"));
+    XX_TEST_EXPECT_TRUE(hasText("new-session-delta-1"));
+    XX_TEST_EXPECT_TRUE(hasText("new-session-delta-6"));
+    // 快照水位内 (seq=3 <= deltaSeq=5) 的增量去重丢弃, 避免重复渲染
+    XX_TEST_EXPECT_FALSE(hasText("stale-included-delta"));
+
+    transport->close();
+    server.stop();
+    th.join();
+}
+
+// ---------------------------------------------------------------------------
+// 17. 鉴权超时: server 永不回应 hello_ack, 客户端 connect 超时失败
+// ---------------------------------------------------------------------------
 static asio::awaitable<void> test_remote_auth_timeout() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
     server.enableWebSocket("/agent", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
@@ -3122,6 +3320,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] session controller replay fallback..." << std::endl;
     co_await test_session_controller_replay_fallback();
 
+    std::cout << "  [remote] session controller seq regression fallback..." << std::endl;
+    co_await test_session_controller_seq_regression_fallback();
+
     std::cout << "  [remote] session controller interrupt timeout..." << std::endl;
     co_await test_session_controller_interrupt_timeout();
 
@@ -3157,6 +3358,7 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] reconnect sync..." << std::endl;
     co_await test_remote_reconnect_sync();
+    co_await test_remote_reconnect_sync_watermark();
 
     std::cout << "  [remote] auth timeout..." << std::endl;
     co_await test_remote_auth_timeout();

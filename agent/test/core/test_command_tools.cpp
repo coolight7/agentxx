@@ -792,7 +792,7 @@ asio::awaitable<void>
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP) && XX_IS_WIN_D
 /// 回归测试: 超时须整树终止孙进程 (Windows Job Object 修复)
 /// - 背景: pwsh 执行 `ping -t 127.0.0.1` 会派生孙进程 ping.exe -t;
-///   旧实现超时只 TerminateProcess(pwsh), ping 孙进程仍持 stdout 管道写端,
+///   如果超时只 TerminateProcess(pwsh), ping 孙进程仍持 stdout 管道写端,
 ///   导致 async_read 永不 EOF、工具永久挂起 (用户复现: timeout=5 不返回)
 /// - 修复: 子进程挂入 Job Object (KILL_ON_JOB_CLOSE), 超时 TerminateJobObject
 ///   整树终止; 且 kill 后关闭管道读端 (方案 B) 兜底保证到点返回

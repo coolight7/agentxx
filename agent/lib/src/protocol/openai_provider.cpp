@@ -227,10 +227,19 @@ static void parseUsage(const agentxx::util::Json& u, neograph::ChatCompletion& c
     }
 }
 
-/// JsonView 零拷贝辅助 (SSE 高频路径 §4.3: 先 View 命中再按需物化)
+/// JsonView 零拷贝辅助 (SSE 高频路径: 先 View 命中再按需物化)
 /// - View 仅做只读路由/标量提取; 需要 dump/复用时经 to_json() 物化
 /// - 数字 id 等非字符串标量经 viewToString() 归一化 (与 jsonStrField dump 语义一致:
 ///   字符串原样, 数字按 JSON 字面量, bool true/false, null/缺失为空)
+///
+/// **宽容解析约定** (含下方 jsonStrField/viewStrField 等取字段辅助函数):
+/// - 字段缺失/类型不符/take 失败一律按"未提供"降级 (返回默认值), 不抛异常也不
+///   逐个记日志 —— 这些函数处于 SSE 每个 chunk / 每个字段的热路径上, 逐次输出
+///   日志会产生大量噪声并显著增加开销;
+/// - 因此"上游网关改了字段名/结构"不会在这里报错, 而是表现为该字段静默失效。
+///   这类兼容性问题的可观测入口在响应级: 完全无输出 (无正文/无工具调用) 会由
+///   provider 判为生成失败并向调用方报错/重试。需要逐字段定位时, 用
+///   `g_da_sim_requests` 式的请求/响应抓取或代理抓包比对字段名, 不要靠日志。
 static std::string viewToString(const agentxx::util::JsonView& v) {
     if (!v.valid() || v.is_null()) {
         return {};

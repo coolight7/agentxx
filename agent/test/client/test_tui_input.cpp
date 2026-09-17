@@ -245,7 +245,7 @@ void test_alt_enter_newline_cursor_at_end() {
     comp->OnEvent(ftxui::Event::Special("\x1B\n")); // Alt+Enter
     InputFixture::type(*comp, "def");
 
-    // 旧实现 (inputText_ += '\n' 不更新光标) 会得到 "abcdef\n"
+    // 如果 (inputText_ += '\n' 不更新光标) 会得到 "abcdef\n"
     XX_TEST_EXPECT_EQ(comp->inputText(), std::string("abc\ndef"));
 }
 
@@ -631,7 +631,7 @@ void test_file_picker_navigation_without_filter() {
     XX_TEST_EXPECT_TRUE(out.find("过滤") == std::string::npos);
     XX_TEST_EXPECT_TRUE(out.find("Filter") == std::string::npos);
 
-    // 2. 输入字符不再过滤列表 (旧实现会按子串过滤, 使列表只剩匹配项):
+    // 2. 输入字符不再过滤列表:
     //    输入 "zzz" 后列表内容不变, 选中项仍为第 0 项
     for (char c : std::string("zzz")) {
         comp->OnEvent(ftxui::Event::Character(c));

@@ -384,6 +384,31 @@ void test_json_dump() {
     // 浮点形态: 纯整数写法补 .0 (与 neograph dump 口径一致)
     XX_TEST_EXPECT_EQ(Json(1.0).dump(), std::string("1.0"));
     XX_TEST_EXPECT_TRUE(Json(1.5).dump().find("1.5") != std::string::npos);
+    // 浮点最短往返表示
+    XX_TEST_EXPECT_EQ(Json(0.7).dump(), std::string("0.7"));
+    XX_TEST_EXPECT_EQ(Json(0.1).dump(), std::string("0.1"));
+    XX_TEST_EXPECT_EQ(Json(0.1 + 0.2).dump(), std::string("0.30000000000000004"));
+    XX_TEST_EXPECT_EQ(Json(3.0).dump(), std::string("3.0"));
+    XX_TEST_EXPECT_EQ(Json(-2.5).dump(), std::string("-2.5"));
+    // 常见量级的整数值保持定点写法 (与旧输出一致, 不因最短表示变成 "1e+05")
+    XX_TEST_EXPECT_EQ(Json(1e5).dump(), std::string("100000.0"));
+    XX_TEST_EXPECT_EQ(Json(1e10).dump(), std::string("10000000000.0"));
+    // 极小/极大值用指数写法
+    XX_TEST_EXPECT_EQ(Json(1e-7).dump(), std::string("1e-07"));
+    XX_TEST_EXPECT_EQ(
+        Json(std::numeric_limits<double>::max()).dump(),
+        std::string("1.7976931348623157e+308")
+    );
+    XX_TEST_EXPECT_EQ(
+        Json(std::numeric_limits<double>::min()).dump(),
+        std::string("2.2250738585072014e-308")
+    );
+    // 最短表示必须可往返 (dump → parse 得到同一个 double)
+    for (double v : {0.7, 0.1, 1e-7, 3.141592653589793, 1e10, -0.30000000000000004}) {
+        auto parsed = Json::parse(Json(v).dump());
+        XX_TEST_EXPECT_TRUE(parsed.is_number());
+        XX_TEST_EXPECT_EQ(parsed.get<double>(), v);
+    }
     // 非有限浮点降级 null
     XX_TEST_EXPECT_EQ(Json(std::numeric_limits<double>::quiet_NaN()).dump(), std::string("null"));
     XX_TEST_EXPECT_EQ(Json(std::numeric_limits<double>::infinity()).dump(), std::string("null"));

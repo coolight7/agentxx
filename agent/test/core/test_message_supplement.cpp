@@ -1067,6 +1067,166 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
     co_return;
 }
 
+/// 重复调用确认 (repeatCallCheck) 测试工具: 记录执行次数, 供断言"用户点允许后
+/// 工具真的被执行" (修复前: HIL 取值口径错误导致点允许也一律按拒绝处理)
+class RepeatCheckTool : public agentxx::tools::XXToolBase {
+public:
+
+    RepeatCheckTool(
+        std::weak_ptr<agentxx::agent::AgentContext> ctx,
+        std::atomic<int>*                           execCount
+    ) :
+        XXToolBase(
+            "test_repeat",
+            ctx,
+            /*in_autoSummaryOutput=*/false,
+            /*in_canDelayLoad=*/false,
+            /*in_maxRetry=*/0,
+            /*in_repeatCallCheck=*/true
+        ),
+        execCount_(execCount) {}
+
+    neograph::ChatTool get_definition() const override {
+        return neograph::ChatTool{
+            .name        = "test_repeat",
+            .description = "repeat call check test tool",
+            .parameters  = neograph::json{
+                {"type",       "object"},
+                {"properties", neograph::json::object()},
+            },
+        };
+    }
+
+    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+        execCount_->fetch_add(1, std::memory_order_relaxed);
+        co_return "repeat tool executed";
+    }
+
+private:
+
+    std::atomic<int>* execCount_;
+};
+
+/// 重复调用确认 E2E 专用 IO: 对中断询问一律回"允许" (确认卡片控件 id = allow)
+class RepeatCheckMockIO : public agentxx::agent::AgentIOBase {
+public:
+
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext;
+    std::atomic<int>                            interruptCalls{0};
+    /// 询问参数中是否出现 repeat_toolcall 处理器名 (确认本次询问确为重复调用确认)
+    std::atomic<bool> isRepeatCallAsk{false};
+
+    explicit RepeatCheckMockIO(std::shared_ptr<agentxx::agent::AgentContext> ctx) :
+        agentContext(ctx) {}
+
+    void onDelta(const agentxx::agent::WireDelta&) override {}
+
+    void onSync(const agentxx::agent::WireSyncPayload&) override {}
+
+    asio::awaitable<std::optional<std::string>> getInput() override {
+        co_return std::nullopt;
+    }
+
+    asio::awaitable<agentxx::util::Json> handleInterrupt(
+        std::string_view /*sessionId*/,
+        std::string_view /*interruptNode*/,
+        std::string_view /*interruptValue*/,
+        std::string_view interruptArgJson
+    ) override {
+        ++interruptCalls;
+        if (interruptArgJson.find("repeat_toolcall") != std::string_view::npos) {
+            isRepeatCallAsk.store(true, std::memory_order_release);
+        }
+        // 用户点"允许" (确认卡片控件取值 "true"); 走与真实客户端一致的
+        // {"values": {...}} 结果形态 (AgentIOBase::registerOnBus 取 values 写回)
+        co_return agentxx::middleware::makeInterruptResult(
+            agentxx::util::Json{{"allow", "true"}}
+        );
+    }
+};
+
+/// 重复调用确认 E2E 专用 Agent: 注入启用 repeatCallCheck 的工具
+class RepeatCheckTestAgent : public agentxx::agent::CodeAgent {
+public:
+
+    std::atomic<int> repeatExecCount{0};
+
+    explicit RepeatCheckTestAgent(std::shared_ptr<agentxx::agent::AgentConfig> cfg) :
+        CodeAgent(std::move(cfg)) {}
+
+protected:
+
+    asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> initTools() override {
+        auto tools = co_await CodeAgent::initTools();
+        tools.push_back(std::make_unique<RepeatCheckTool>(agentContext, &repeatExecCount));
+        co_return tools;
+    }
+};
+
+// ===========================================================================
+// 重复调用确认 E2E (M4-1 回归):
+// - 阈值 2: 第 2 次相同调用触发 HIL 询问
+// - 用户点"允许"后工具必须真的执行 (修复前: 结果取值口径错误 → 恒按拒绝处理,
+//   返回 "[Repeated call denied by user: ...]" 且不再执行)
+// ===========================================================================
+asio::awaitable<void> test_repeat_call_check_allow() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                       = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl             = baseUrl;
+    cfg->model.apiKey              = "EMPTY";
+    cfg->model.modelName           = "test-sim";
+    cfg->prompt.systemPrompt       = "You are a helpful assistant.";
+    // 阈值 2: 第二次相同调用即触发询问 (默认 5 需要更多轮重复)
+    cfg->toolcallRepeatCheckThreshold = 2;
+
+    g_da_sim_response_content = "Final answer after repeat check.";
+    // 前两次 LLM 响应返回同一个 tool_call (触发重复检查), 之后返回纯文本
+    g_da_sim_tool_calls_remaining = 2;
+    g_da_sim_tool_calls           = agentxx::util::Json::array({
+        agentxx::util::Json{
+                            {"index", 0},
+                            {"id", "call_repeat_1"},
+                            {"type", "function"},
+                            {"function",
+             agentxx::util::Json{
+                 {"name", "test_repeat"},
+                 {"arguments", "{}"},
+             }},
+                            },
+    });
+
+    RepeatCheckTestAgent agent(cfg);
+    co_await agent.init();
+
+    auto io     = std::make_shared<RepeatCheckMockIO>(agent.agentContext);
+    auto result = co_await agent.runTurnAsync("repeat_check_test", "run tool twice", io);
+
+    XX_TEST_EXPECT_FALSE(result.hasError);
+    // 第 2 次相同调用触发一次询问, 且确为重复调用确认 (处理器名 repeat_toolcall)
+    XX_TEST_EXPECT_EQ(io->interruptCalls.load(), 1);
+    XX_TEST_EXPECT_TRUE(io->isRepeatCallAsk.load());
+    // 用户点"允许": 工具执行 2 次 (修复前为 1 次)
+    XX_TEST_EXPECT_EQ(agent.repeatExecCount.load(), 2);
+
+    auto session = agent.agentContext->sessions->get("repeat_check_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    if (session) {
+        // 上下文中不应出现拒绝提示 (修复前必然出现)
+        bool denied = false;
+        for (const auto& m : session->llmMessages) {
+            if (m.contains("content") && m["content"].is_string()
+                && m["content"].get<std::string>().find("[Repeated call denied by user:")
+                       != std::string::npos) {
+                denied = true;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_FALSE(denied);
+    }
+}
+
 asio::awaitable<TestResult> run_message_supplement_tests() {
     g_ms_passed = 0;
     g_ms_failed = 0;
@@ -1081,6 +1241,7 @@ asio::awaitable<TestResult> run_message_supplement_tests() {
         co_await test_repair_multiple_complete_groups_kept();
         co_await test_repair_middle_dangling_group_fixed();
         co_await test_repair_system_prompt_hash();
+        co_await test_repeat_call_check_allow();
     } catch (const std::exception& e) {
         TEST_FAIL << "message_supplement suite exception: " << e.what() << std::endl;
         g_ms_failed++;

@@ -610,9 +610,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
-        // ---- 16b. JS 脚本顶层异常的事务化回滚 (F16) ----
+        // ---- JS 脚本顶层异常的事务化回滚 ----
         // 脚本先注册工具/事件/定时器再抛异常: load 必须失败, 且宿主注册表里
-        // 不留下任何该脚本的注册 (旧实现只释放 JSContext, 注册残留成悬垂句柄)。
+        // 不留下任何该脚本的注册
         {
             namespace fs = std::filesystem;
             std::error_code ec;

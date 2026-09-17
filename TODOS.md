@@ -8,6 +8,7 @@
 
 - wiki 记忆、项目结构
 - 测试的 include 增加目录前缀
+- 重启恢复session后，tui不特化渲染 Planning
 
 - 调整 tui 亮色配置
 - SVG绘制支持

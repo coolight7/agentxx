@@ -332,7 +332,7 @@ void test_http_client_unit() {
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1").has_value());
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://host:99999/").has_value());
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://:8080/").has_value());
-        // 回归: `]` 后非 ':' 的非法格式 (旧实现静默忽略 "abc")
+        // 回归: `]` 后非 ':' 的非法格式
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1]abc/").has_value());
         XX_TEST_EXPECT_FALSE(HttpClient::parseUrl("http://[::1]8080/").has_value());
         // `[::1]` 无端口是合法 IPv6 URL
@@ -504,7 +504,6 @@ void test_http_server_unit() {
             "http://example.com/a"
         );
         // 回归: 相对 Location 含 "./"、"../" 段时做 URL 词法规范化
-        // (旧实现原样拼接, 得到错误路径)
         XX_TEST_EXPECT_EQ(
             HttpClient::resolveRedirectUrl("http://example.com/a/b/c", "../d"),
             "http://example.com/a/d"

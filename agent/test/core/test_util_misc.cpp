@@ -9,10 +9,12 @@
 #include "agentxx/util/path_sanitize.h"
 #include "agentxx/util/stream.h"
 #include "agentxx/util/util.h"
+#include <atomic>
 #include <chrono>
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -138,6 +140,48 @@ void test_system_utils() {
 
     // isRunningInWSL 应返回 bool (不崩溃)
     (void)agentxx::util::isRunningInWSL();
+}
+
+// ---------------------------------------------------------------------------
+// 系统探测缓存的并发访问:
+// - getSystemName / isRunningInWSL / detectPowerShell 的结果缓存曾被插件
+//   offload 线程并发调用 (无锁 "读-判断-写" 是数据竞争, UB)
+// - 现在统一加锁; 本用例多线程并发调用, 校验结果一致且不崩溃
+//   (竞争本身需 TSAN 才能确定性检出, 这里防回归: 结果必须稳定且线程安全)
+// ---------------------------------------------------------------------------
+void test_system_utils_concurrent_cache() {
+    constexpr int kThreads = 8;
+
+    auto name0 = agentxx::util::getSystemName();
+    auto wsl0  = agentxx::util::isRunningInWSL();
+    auto ps0   = agentxx::util::detectPowerShell().available;
+
+    std::vector<std::thread> threads;
+    std::atomic<int>         mismatched{0};
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+        threads.emplace_back([&]() {
+            for (int n = 0; n < 64; ++n) {
+                if (agentxx::util::getSystemName() != name0) {
+                    mismatched.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (agentxx::util::isRunningInWSL() != wsl0) {
+                    mismatched.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (agentxx::util::detectPowerShell().available != ps0) {
+                    mismatched.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+    XX_TEST_EXPECT_EQ(mismatched.load(), 0);
+    // 并发调用后缓存值不变
+    XX_TEST_EXPECT_EQ(agentxx::util::getSystemName(), name0);
+    XX_TEST_EXPECT_EQ(agentxx::util::isRunningInWSL(), wsl0);
+    XX_TEST_EXPECT_EQ(agentxx::util::detectPowerShell().available, ps0);
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +572,7 @@ TestResult testUtilMisc() {
     test_catch_error_std_exception();
     test_catch_error_unknown();
     test_system_utils();
+    test_system_utils_concurrent_cache();
     test_async_file_io_support();
     test_stream_throttle_debounce();
     test_container_util_heterogeneous();

@@ -53,7 +53,7 @@ void test_compareExtend() {
         // 超 int64 范围 (饱和处理): 不崩溃, 大数仍 > 小数
         XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file99999999999999999999", "file1") > 0);
         XX_TEST_EXPECT_TRUE(agentxx::util::compareExtend("file1", "file99999999999999999999") < 0);
-        // 回归: 前缀恰为 922337203685477580 (kInt64Max/10) 时, 旧实现 leftSum*10+d
+        // 前缀恰为 922337203685477580 (kInt64Max/10) 时, 如果实现为 leftSum*10+d
         // 在 d>=8 时有符号溢出 (UB); 修复后:
         // - d<=7 走精确路径 (9223372036854775807 是最大可精确表示值)
         // - d>=8 走饱和路径 (映射到 INT64_MAX), 符号仍正确
@@ -160,6 +160,27 @@ void test_DirFilePath() {
     XX_TEST_EXPECT_EQ(agentxx::util::getParentDirPath("/...xx./xxx").value(), "/...xx./");
     XX_TEST_EXPECT_EQ(agentxx::util::getParentDirPath("./xxx").value(), "./");
     XX_TEST_EXPECT_EQ(agentxx::util::getParentDirPath("../xxx").value(), "../");
+    XX_TEST_EXPECT_EQ(
+        agentxx::util::getParentDirPath("/absolute/dir/file.txt").value(),
+        "/absolute/dir/"
+    );
+    XX_TEST_EXPECT_EQ(agentxx::util::getParentDirPath("relative.txt").value_or(""), "");
+
+    // 隐藏文件 / 多后缀 (定点行为, 防止边界推导被改坏)
+    // - 隐藏文件 (以 '.' 开头且无其它 '.'): 整体视为文件名, removeEXT 不生效
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName(".gitignore", true), ".gitignore");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("/a/b/.gitignore", true), ".gitignore");
+    // - 多后缀: removeEXT 只去掉最后一个扩展名
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a.tar.gz", true), "a.tar");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("archive.tar.gz", false), "archive.tar.gz");
+    // - 单后缀
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a.txt", true), "a");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("/a/b/a.txt", true), "a");
+    // - 目录分隔符结尾同样按"最后一段"处理
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b/", true), "b");
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("a/b//", true), "b");
+    // - UTF-8 文件名不受影响
+    XX_TEST_EXPECT_EQ(agentxx::util::getFileName("dir/文件.txt", true), "文件");
 }
 
 void test_removeSpace() {
@@ -242,6 +263,19 @@ void test_isIgnoreCaseContains() {
     XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("", "     "));
     XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("你 好abc\n\r", "不 好ABC"));
 
+    // 逐字符实现的行为定点 (等价于 "两侧 toLower 后 find"):
+    // - 空模式恒命中; 模式长于被查找串恒不命中
+    XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("abc", ""));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("", "a"));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("abc", "abcd"));
+    // - 命中位置在末尾 / 需要跳过前缀
+    XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("xxxxABC", "abc"));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("xxAbCxx", "abc"));
+    // - 大小写折叠仅作用于 ASCII 字母 (非 ASCII 字节按原样比较)
+    XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("ÄÖÜ äöü", "ÄÖÜ"));
+    XX_TEST_EXPECT_FALSE(agentxx::util::isIgnoreCaseContains("ÄÖÜ", "äöü"));
+    XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContains("中文 AbC", "abc"));
+
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny("", ""));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny(" ", " "));
     XX_TEST_EXPECT_TRUE(agentxx::util::isIgnoreCaseContainsAny("", "     "));
@@ -298,7 +332,7 @@ void test_toArgument() {
     // 回归: mark 前连续反斜杠的奇偶性决定是否转义
     // - 奇数个反斜杠 (\\"): mark 已被转义 (字面引号), 不再转义
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("a\\\"b"), "\"a\\\"b\"");
-    // - 偶数个反斜杠 (\\\\"): mark 是新界定符, 必须转义 (旧实现漏转义导致引号提前闭合)
+    // - 偶数个反斜杠 (\\\\"): mark 是新界定符, 必须转义
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("a\\\\\"b"), "\"a\\\\\\\"b\"");
     XX_TEST_EXPECT_EQ(agentxx::util::toArgument("\\\\\""), "\"\\\\\\\"\"");
     // - 奇数个反斜杠在串尾 + 后续 mark: 不转义
@@ -386,7 +420,7 @@ void test_base64() {
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm=v").has_value()); // padding 位置非法
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("Zm9v YmFy").has_value()); // 含空格非法
 
-    // 回归: 短输入含 '=' 时不应触发 size_t 下溢 (旧实现 i < str.size()-2)
+    // 短输入含 '=' 时不应触发 size_t 下溢
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("=").has_value());
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("==").has_value());
     XX_TEST_EXPECT_FALSE(agentxx::util::base64Decode("===").has_value());
@@ -879,6 +913,28 @@ void test_parseNumberFromString() {
     int  ov = 0;
     auto r8 = agentxx::util::parseNumberFromString("99999999999999999999", ov);
     XX_TEST_EXPECT_TRUE(r8.ec == std::errc::result_out_of_range);
+
+    // 浮点边界 (M1-6 回归: libc++ 回退实现曾按 errno 判定失败, 导致下溢的
+    // 极小值 (1e-320) 被误判为非法 —— 下溢返回的仍是可用数值, 只有上溢
+    // (±inf) 与无法完整消费的输入才算失败)
+    double tiny = 0.0;
+    auto   r9   = agentxx::util::parseNumberFromString("1e-320", tiny);
+    XX_TEST_EXPECT_EQ(r9.ec, std::errc{});
+    XX_TEST_EXPECT_TRUE(tiny >= 0.0 && tiny < 1e-300);
+
+    double big = 0.0;
+    auto   r10 = agentxx::util::parseNumberFromString("1e400", big);
+    XX_TEST_EXPECT_TRUE(r10.ec != std::errc{});
+
+    double neg0 = 1.0;
+    auto   r11  = agentxx::util::parseNumberFromString("-1e-320", neg0);
+    XX_TEST_EXPECT_EQ(r11.ec, std::errc{});
+    XX_TEST_EXPECT_TRUE(neg0 <= 0.0);
+
+    double pi  = 0.0;
+    auto   r12 = agentxx::util::parseNumberFromString("3.141592653589793", pi);
+    XX_TEST_EXPECT_EQ(r12.ec, std::errc{});
+    XX_TEST_EXPECT_EQ(pi, 3.141592653589793);
 }
 
 void test_formatSize() {

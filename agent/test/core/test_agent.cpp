@@ -410,7 +410,12 @@ DaSimServer startDaSimServer() {
                     resp.prepare_payload();
                 }
 
-                g_da_sim_tool_calls        = agentxx::util::Json::array();
+                // 数组仅在"未按次数控制"时清空: 未设置 remaining 时 tool_calls 只作用于
+                // 第 1 次响应 (旧行为); 显式设置 remaining >= 0 时保留数组, 使"前 N 次响应
+                // 返回 tool_calls"真正生效 (否则第 2 次起数组已空, N > 1 无意义)
+                if (g_da_sim_tool_calls_remaining < 0) {
+                    g_da_sim_tool_calls = agentxx::util::Json::array();
+                }
                 g_da_sim_reasoning_content = "";
                 co_return;
             }
@@ -1375,6 +1380,87 @@ asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
     co_return;
 }
 
+// ---------------------------------------------------------------------------
+// 图构建回退: 插件把执行图改坏 (结构非法, 编译/校验期抛异常) 时,
+// BaseAgent 必须回退默认图且**保持可用**
+// - 回归点: 回退后仍能正常跑完一轮
+// ---------------------------------------------------------------------------
+asio::awaitable<void> test_agent_graph_build_fallback() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
+    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+
+    /// 首次生成图定义时返回非法图 (模拟插件经 graph 接口表 set_graph_json
+    /// 写入非法结构): 构建抛异常 → 触发回退; 回退时取正常默认图
+    class BrokenGraphAgent : public agentxx::agent::CodeAgent {
+    public:
+
+        int graphDefCalls = 0;
+
+        using CodeAgent::CodeAgent;
+
+    protected:
+
+        neograph::json initGraphDefinition() override {
+            ++graphDefCalls;
+            if (graphDefCalls == 1) {
+                // 结构非法 ("nodes" 必须是对象): 图编译期即抛异常
+                return neograph::json{
+                    {"schema_version", 1              },
+                    {"nodes",          "not-an-object"}
+                };
+            }
+            return CodeAgent::initGraphDefinition();
+        }
+    };
+
+    g_da_sim_response_content     = "fallback graph works";
+    g_da_sim_tool_calls           = agentxx::util::Json::array();
+    g_da_sim_tool_calls_remaining = -1;
+
+    BrokenGraphAgent agent(cfg);
+    // init 不应抛异常 (回退默认图成功)
+    co_await agent.init();
+    XX_TEST_EXPECT_TRUE(agent.engine != nullptr);
+    XX_TEST_EXPECT_EQ(agent.graphDefCalls, 2);
+
+    // 回退图可用: 无工具纯文本轮次正常完成
+    auto result = co_await agent.runTurnAsync("graph_fallback_test", "hello", nullptr);
+    XX_TEST_EXPECT_FALSE(result.hasError);
+
+    auto session = agent.agentContext->sessions->get("graph_fallback_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    if (session) {
+        // 回退图确实跑完了: 上下文里有 assistant 回复
+        bool hasAssistant = false;
+        // 默认图的 system prompt (instructions) 必须已注入:
+        // 回退分支复用 moved-from NodeContext 时 instructions 为空
+        bool hasSystem = false;
+        for (const auto& m : session->llmMessages) {
+            const auto role = m.value("role", std::string{});
+            if (role == "assistant") {
+                hasAssistant = true;
+            }
+            if (role == "system") {
+                hasSystem = true;
+                // 系统消息为"主 prompt + 各附加段拼接"结果, 主 prompt 必须出现在其中
+                // (回退分支复用 moved-from NodeContext 时 instructions 为空)
+                XX_TEST_EXPECT_TRUE(
+                    m.value("content", std::string{}).find(cfg->prompt.systemPrompt)
+                    != std::string::npos
+                );
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasAssistant);
+        XX_TEST_EXPECT_TRUE(hasSystem);
+    }
+}
+
 asio::awaitable<TestResult> run_agent_tests() {
     // 注: g_da_* 为本编译单元匿名命名空间私有变量,
     // 其他模块 (test_agent_host/session_persistence/remote_agent 等) 的断言
@@ -1401,6 +1487,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_llm_retry_exhaust();
         co_await test_agent_toolcall_intercept_exception();
         co_await test_agent_build_system_prompt_and_wire_get_context();
+        co_await test_agent_graph_build_fallback();
     } catch (const std::exception& e) {
         TEST_FAIL << "agent suite exception: " << e.what() << std::endl;
         g_da_failed++;

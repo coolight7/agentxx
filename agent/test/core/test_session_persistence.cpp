@@ -1200,6 +1200,163 @@ static void testSessionDestructorThreadSafety() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SessionStore 连接缓存 LRU 淘汰
+// ---------------------------------------------------------------------------
+
+/// 当前进程打开的 fd 数量 (仅 Linux/Android 可统计; 其他平台返回 0 跳过断言)
+static size_t countOpenFileDescriptors() {
+#if XX_IS_LINUX_D || XX_IS_ANDROID_D
+    std::error_code ec;
+    size_t          n = 0;
+    for (auto it = fs::directory_iterator("/proc/self/fd", ec);
+         false == static_cast<bool>(ec) && it != fs::directory_iterator();
+         it.increment(ec)) {
+        ++n;
+    }
+    return n;
+#else
+    return 0;
+#endif
+}
+
+static TestResult testStoreConnectionLruEviction() {
+    using agentxx::agent::SessionStore;
+    using V = agentxx::agent::ViewMessage;
+
+    auto      root      = makeTempRoot();
+    const int kSessions = 200; // 远大于连接上限 (32)
+
+    auto fdBefore = countOpenFileDescriptors();
+    {
+        auto p = std::make_shared<SessionStore>(root);
+        for (int i = 0; i < kSessions; ++i) {
+            auto name = "lru_" + std::to_string(i);
+            p->appendViewMessage(name, makeMsg(V::Role::User, "hello-" + std::to_string(i)), 1);
+        }
+        auto fdAfter = countOpenFileDescriptors();
+        if (fdBefore > 0 && fdAfter > 0) {
+            // 打开连接数受上限约束: fd 增量必须远小于"每会话一个连接"
+            // (未淘汰时每会话至少 1~3 个 fd, 200 个会话将增长数百)
+            XX_TEST_EXPECT_TRUE(fdAfter - fdBefore < static_cast<size_t>(kSessions));
+        }
+        // 被淘汰的会话 (最早写入) 再次读取: 自动重开连接且数据仍在
+        auto reloaded = p->loadSession("lru_0");
+        XX_TEST_EXPECT_EQ(reloaded.viewMessages.size(), size_t{1});
+        if (reloaded.viewMessages.size() == 1) {
+            XX_TEST_EXPECT_EQ(reloaded.viewMessages[0].role, V::Role::User);
+        }
+    }
+    // 新实例逐个读回: 全部会话数据完整 (无丢失/错位)
+    {
+        auto p = std::make_shared<SessionStore>(root);
+        for (int i = 0; i < kSessions; ++i) {
+            auto name = "lru_" + std::to_string(i);
+            // 顺序访问会自动触发反复的打开/淘汰 (每次只保留最近使用的连接)
+            auto loaded = p->loadSession(name);
+            XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
+        }
+    }
+
+    return TestResult{};
+}
+
+// ---------------------------------------------------------------------------
+// view_message.msg_id 列迁移:
+// - 老库 (只有 seq/json 两列) 首次经 SessionStore 打开时: ALTER 增加 msg_id
+//   列 → 从 json 回填 → 建索引, 原有数据与 update 语义不受影响
+// - 幂等: 再次打开不再 ALTER
+// ---------------------------------------------------------------------------
+static TestResult testViewMessageMsgIdMigration() {
+    using agentxx::agent::SessionStore;
+    using agentxx::util::SqliteDb;
+    using V = agentxx::agent::ViewMessage;
+
+    auto root = makeTempRoot();
+    auto sid  = std::string{"legacy"};
+    auto dir  = fs::path(root) / SessionStore::sanitizeSessionId(sid);
+    fs::create_directories(dir);
+
+    // 1) 用"老 schema"建库并写入两行 (无 msg_id 列)
+    {
+        SqliteDb db;
+        db.open((dir / "session.db").string());
+        db.exec(
+            "CREATE TABLE view_message (seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL)"
+        );
+        db.exec(
+            "CREATE TABLE llm_context (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)"
+        );
+        db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+        db.exec("CREATE TABLE store (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+
+        auto m0 = makeMsg(V::Role::User, "legacy hello");
+        m0.id   = "msg_000001";
+        auto m1 = makeMsg(V::Role::Assistant, "legacy reply");
+        m1.id   = "msg_000002";
+        for (const auto& m : {m0, m1}) {
+            auto st = db.prepare("INSERT INTO view_message(json) VALUES (?)");
+            st.bindText(1, m.toJson().dump());
+            st.step();
+        }
+        auto meta = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?)");
+        meta.bindText(1, "msgIdCounter");
+        meta.bindInt64(2, 2);
+        meta.step();
+    }
+
+    // 2) 经 SessionStore 打开 (触发迁移) 并读回历史
+    {
+        auto p      = std::make_shared<SessionStore>(root);
+        auto loaded = p->loadSession(sid);
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{2});
+        if (loaded.viewMessages.size() == 2) {
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[0].id, std::string{"msg_000001"});
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[1].id, std::string{"msg_000002"});
+
+            // 3) 更新历史行: 走 msg_id 索引路径 (迁移已回填 msg_id)
+            auto updated = loaded.viewMessages[0];
+            updated.text = "legacy updated";
+            p->updateViewMessage(sid, updated);
+        }
+    }
+
+    // 4) 校验迁移结果: msg_id 已回填 + 内容已更新 + 索引存在
+    {
+        SqliteDb db;
+        db.open((dir / "session.db").string());
+        {
+            auto st = db.prepare("SELECT msg_id FROM view_message WHERE seq = 1");
+            XX_TEST_EXPECT_TRUE(st.step());
+            XX_TEST_EXPECT_EQ(st.columnText(0), std::string{"msg_000001"});
+        }
+        {
+            auto st = db.prepare("SELECT json FROM view_message WHERE seq = 1");
+            XX_TEST_EXPECT_TRUE(st.step());
+            XX_TEST_EXPECT_TRUE(st.columnText(0).find("legacy updated") != std::string::npos);
+        }
+        {
+            auto st = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' "
+                                 "AND name = 'idx_view_message_msg_id'");
+            XX_TEST_EXPECT_TRUE(st.step());
+        }
+    }
+
+    // 5) 再次打开 (已迁移): 幂等, 数据不变
+    {
+        auto p       = std::make_shared<SessionStore>(root);
+        auto loaded2 = p->loadSession(sid);
+        XX_TEST_EXPECT_EQ(loaded2.viewMessages.size(), size_t{2});
+        if (loaded2.viewMessages.size() == 2) {
+            XX_TEST_EXPECT_TRUE(
+                loaded2.viewMessages[0].text.find("legacy updated") != std::string::npos
+            );
+        }
+    }
+
+    return TestResult{};
+}
+
 asio::awaitable<TestResult> run_session_persistence_tests() {
     g_sp_passed = 0;
     g_sp_failed = 0;
@@ -1215,6 +1372,8 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testSessionListPagination();
     testSessionDestructorThreadSafety();
     testPersistenceResilience();
+    testStoreConnectionLruEviction();
+    testViewMessageMsgIdMigration();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;

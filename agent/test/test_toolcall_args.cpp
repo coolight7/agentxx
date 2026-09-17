@@ -922,7 +922,7 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(forwardIndex, msgs.size() - 1);
         XX_TEST_EXPECT_EQ(forwardIndex, size_t{9});
 
-        // 错误传入 0 (旧实现传倒数距离 0) -> 查 messages[0] 是 user 消息 -> 返回空
+        // 错误传入 0 -> 查 messages[0] 是 user 消息 -> 返回空
         auto hitWrong = ToolcallWrapNode::findConsecutiveRepeatCallKeys(msgs, 0, T5);
         XX_TEST_EXPECT_TRUE(hitWrong.empty());
 

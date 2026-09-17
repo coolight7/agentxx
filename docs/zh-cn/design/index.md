@@ -191,7 +191,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
     窗口内的后续触发合并 (view 压入待落盘操作队列保持 append/update 顺序回放;
     llm 仅更新内存), 待下次触发或轮末强制补存收敛。目的: 进程在轮次中途
     被杀/崩溃/自杀 (如 agent 执行 taskkill 清理自身) 时, 已结算的消息最多丢失
-    一个节流窗口 (<3s), 而非整轮 —— 旧实现 viewMessages 逐条即时落库、
+    一个节流窗口 (<3s), 而非整轮 —— 如果 viewMessages 逐条即时落库、
     llmContext 仅轮末保存, 反复中途被杀的会话会出现"view 完整而 llm 上下文
     滞后/为空"
   - `EventBridge::handleChannelWrite`: LLM 上下文增量的结算挂点 —— 节点对
@@ -206,6 +206,11 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);
   读取路径在目录不存在时直接返回空, 不创建目录/空文件 (避免 subagent 等
   只读访问产生垃圾目录)
+- 连接缓存 (LRU): 写路径按 sessionId 缓存已打开的 `session.db` 连接
+  (`SessionStore::dbs_`), 同时保持打开的连接数上限 `kMaxOpenSessionDbs` (32),
+  超出时关闭最久未使用的连接 —— 每个连接占用 fd + WAL + page cache, 长期运行
+  (会话很多) 时不淘汰会持续占用文件描述符 (Linux 默认 `ulimit -n` 常为 1024)
+  直至无法打开新库; 淘汰只关连接不丢数据 (WAL 自动 checkpoint, 下次写入重开)
 - 线程安全: `SessionStore` 内部互斥锁保护; 常规使用下调用发生在 agent io
   线程 (Session 绑定线程/工具执行), 锁仅在多线程并发访问时生效
 
@@ -278,7 +283,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - 子代理是独立 agent: 与根 agent 同构 (AgentNode), 消息上下文完全隔离
 - 中断处理循环唯一实现 (AgentRunner): 主 agent 与子代理共用, 差异收敛为
   hooks (checkpoint 持久化 / 中断头消息 / 事件回调 / resume 前后处理);
-  委派超时不限制 (子代理可能长时间运行), 修复旧实现根 agent 总线请求
+  委派超时不限制 (子代理可能长时间运行), 否则可能导致根 agent 总线请求
   默认 30s 截断长任务的问题
 - 中断结果 key 规则 (tool_call_id + "_") + (result_id | 任务序号) 收敛到
   共享实现 (makeSubagentResumeKey / buildSubagentResumeValues), 写入侧
@@ -303,7 +308,9 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   客户端可删除单条 (RemoveQueueItem) / 清空队列 (ClearMessageQueue) /
   打断当前轮次立即执行队列首条 (InterruptAndRunNext); 插件事件经
   PluginData (agent→client 下行) / PluginDataUp (client→agent 上行) 原样转发
-- **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync
+- **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync;
+  客户端水位高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退全量 Sync,
+  SyncPayload.deltaSeq 携带快照水位 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此复位去重水位
 - **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口
   (SessionServerAgentIO::Config::initialSyncTailCount, 本地 TUI 模式 =100,
   远程经 AgentServer::Config 透传, 0=全量); SyncPayload.fromIndex 携带窗口
@@ -1354,6 +1361,10 @@ AgentContext
   ├── heartbeatLoop(): 每 heartbeatInterval 发送 Ping
   └── Delta 去重: 收到 delta 时更新 lastDeltaSeq_, 重放重复投递的
       seq <= last 直接丢弃, 避免 UI 重复渲染
+      收到 Sync 时按 SyncPayload.deltaSeq **覆盖**水位 (快照已含
+      seq <= deltaSeq 的全部增量): 服务端重启/会话重建后 seq 从 0 重新
+      计数, 若保留旧水位 (如 100) 会把新增量全部判为重复而丢弃 ——
+      表现为重连成功、历史快照也拿到了, 但界面再也不刷新
 ```
 
 - 写/读队列均为有界 concurrent_channel, `try_send` 失败即丢弃; 队列关闭使挂起的 async_receive 抛异常, 循环自然退出
@@ -1382,7 +1393,10 @@ Client                              Server
   │  [连接断开]                         │ 启动 grace 定时器
   │                                    │
   │──── Hello (seq=3, tailHash) ─────→│ 增量重放 seq>3 的 delta
-  │←── HelloAck + Delta replay ───────│ seq 不连续时回退全量 Sync
+  │←── HelloAck + Delta replay ───────│ seq 不连续时回退全量 Sync;
+  │                                    │ 客户端水位 > 服务端当前 seq
+  │                                    │ (进程重启) 同样回退全量 Sync,
+  │                                    │ 客户端按 Sync.deltaSeq 复位水位
   │                                    │
   │──── Cancel ──────────────────────→│ 取消当前轮次
   │                                    │
@@ -1433,6 +1447,21 @@ deps::DependencyContainer
     ├── resolveNamed<T>(name)               → 解析有名称实例
     └── hasType<T>()                        → 检查是否存在
 ```
+
+#### 关闭顺序 (资源释放)
+
+Agent 与插件涉及 io_context / 线程池 / 动态库, 释放顺序有隐式约定, 按以下顺序执行:
+
+1. 停止输入与轮次: 断开客户端 (或收到退出信号后取消当前轮次), 使会话驱动循环退出;
+2. `co_await agent->shutdownAsync()`: 在 agent io 线程上执行插件 stop → lease 归零
+   → destroy/dlclose 全链路 (失败仅记日志: 未完成的实例保持 CloseFailed 并保留
+   上下文/动态库, 越权 dlclose 更危险); 必须在 io_context 停止之前完成, 否则
+   插件的 stop 事务没有可用的 io 线程;
+3. `agent->ioCtx->stop()` 并 join/等待 `run()` 返回: 停止会话协程、定时器与线程池任务;
+4. 释放持有者: `BaseAgent`/`AgentContext` 析构 (AgentContext 析构时会告警仍有
+   未关闭的插件实例 —— 说明第 2 步未完成), 之后才释放 transport / 客户端对象。
+
+参考实现: `agent/client/src/mode_runners.cpp` (`shutdownAgentPlugins` + 各模式的收尾)。
 
 ---
 
@@ -1810,9 +1839,13 @@ EventBus (事件总线)
 - MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步; UpdateMessage: 按 msgId 原地更新已插入消息 (如 tool 结果回填)
 
 ### SyncPayload / MessageQueueItem
-- SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, messageQueue[]}
+- SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, deltaSeq, messageQueue[]}
   - 全量同步: fromIndex=0, totalMessages==messages.size()
   - 尾窗同步: fromIndex=窗口起始下标 (>0 表示上方还有更早消息), totalMessages=会话总消息数, 客户端按 WireGetViewMessages 分页拉取
+  - deltaSeq: 快照水位 (= Session::deltaSeq, 即快照已包含 seq <= deltaSeq 的全部增量);
+    客户端据此**覆盖**去重水位 —— 服务端进程重启/会话重建后 seq 从 0 重新计数,
+    客户端若保留旧水位 (如 100) 会把之后 seq=1,2,... 的增量全部判为重复丢弃
+    (表现为重连成功但界面永不刷新); 0 表示未提供 (客户端按 0 处理, 放行后续增量)
 - MessageQueueItem {id, text, model (待应用模型, 空=默认), createdAtMs}
 - ChainHash: FNV-1a 链式哈希, append(string) 累积, tailHex 供 Hello/Sync 校验
 

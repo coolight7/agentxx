@@ -771,10 +771,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 2);
     XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
 
-    // ---- 8. A1/B8 回归: 订阅生命周期安全 ----
+    // ---- 订阅生命周期安全 ----
     // - 多次订阅触发订阅 vector 扩容, 逐个退订不得悬垂/错位
     // - 派发中动态订阅 (handler 内再订阅) 不得使 dispatch 快照中的后续
-    //   回调悬垂 (旧实现 subscriptions 按值存储 + 裸指针 → UAF)
+    //   回调悬垂
     // - unload 回调内主动退订安全 (detachAll 已断链)
     {
         auto inst2 = co_await mgr->loadNativeAsync(path);
@@ -809,8 +809,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr->onConnStateChanged("connected", "100%");
         XX_TEST_EXPECT_EQ(hits.load(), 0); // 全部退订后事件不再达
 
-        // 8.2 派发中动态订阅: 订阅回调内再 subscribe → 快照不受影响
-        // (旧实现 dispatch 快照存裸指针, 回调内订阅触发 vector 扩容后悬垂)
+        // 派发中动态订阅: 订阅回调内再 subscribe → 快照不受影响
         struct DynSubState {
             agentxx::plugin::ClientPluginInstance* inst   = nullptr;
             const AgentxxClientEventsIface*        events = nullptr;

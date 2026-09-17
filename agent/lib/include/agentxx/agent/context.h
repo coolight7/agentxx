@@ -15,6 +15,7 @@
 #include <neograph/json.h>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace agentxx::events {
@@ -370,6 +371,14 @@ private:
     int64_t viewLastPersistMs_ = 0;
     /// 上次 llm 上下文实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
     int64_t llmLastSaveMs_ = 0;
+
+    /// viewMessages 的 msgId → 下标索引 (仅 ioContext 线程读写)
+    /// - 供 updateViewMessage 的 O(1) 定位: tool 结果回填按 msgId 更新历史消息,
+    ///   长会话 (数千条) + 大量工具调用时, 每条结果都线性重扫一遍历史开销明显
+    /// - 仅在 appendViewMessage / restore / updateViewMessage 内维护; 索引未命中
+    ///   或与 viewMessages 不一致时回退线性扫描并修复索引 (防御其他直接改动)
+    std::unordered_map<std::string, size_t, std::hash<std::string>, std::equal_to<>>
+        msgIndex_;
 
     /// 压入一条待落盘 view 操作并按节流规则决定是否立即刷出
     void enqueueViewPersist(PendingViewOp op);
