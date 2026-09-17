@@ -35,10 +35,16 @@ static std::string defaultRootDir() {
 }
 
 /// 会话全量状态 SQL (session.db: view_message/llm_context/meta/store 单库)
+/// 表结构 (幂等)
+/// - view_message: seq 自增主键 + json; msg_id 为消息 id 的独立列 (带索引),
+///   供 updateViewMessage 走索引定位 (如果用 json_extract(json,'$.id') 全表
+///   扫描 + 逐行 JSON 解析, 长会话 (数千条) 下每次 tool 结果回填都要重扫一遍)
+/// - 老库 (无 msg_id 列) 由 [ensureViewMessageMsgIdColumn] 迁移补齐
 static constexpr const char* kSessionSchema = R"sql(
 CREATE TABLE IF NOT EXISTS view_message (
-    seq  INTEGER PRIMARY KEY AUTOINCREMENT,
-    json TEXT NOT NULL
+    seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+    json   TEXT NOT NULL,
+    msg_id TEXT
 );
 CREATE TABLE IF NOT EXISTS llm_context (
     id   INTEGER PRIMARY KEY CHECK (id = 1),
@@ -137,14 +143,31 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(sessionId).sessionDb;
-            // 按消息 id 定位行 (json1 json_extract; sqlite >= 3.38 内置)
-            auto update
-                = db.prepare("UPDATE view_message SET json = ? WHERE json_extract(json, '$.id') = ?"
-                );
-            update.bindText(1, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
-            update.bindText(2, msg.id);
-            update.step();
+            auto& db      = dbs(sessionId).sessionDb;
+            auto  payload = dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson());
+
+            // 主路径: 按 msg_id 索引列定位 (idx_view_message_msg_id)
+            int64_t affected = 0;
+            {
+                auto update = db.prepare("UPDATE view_message SET json = ? WHERE msg_id = ?");
+                update.bindText(1, payload);
+                update.bindText(2, msg.id);
+                update.step();
+                auto changed = db.prepare("SELECT changes()");
+                if (changed.step()) {
+                    affected = changed.columnInt64(0);
+                }
+            }
+            if (affected == 0) {
+                // 兜底: 历史行 msg_id 为空 (老库迁移前写入且 json 中无 id) ——
+                // 用 json_extract 定位并顺带回填 msg_id (下次即走索引)
+                auto update = db.prepare("UPDATE view_message SET json = ?, msg_id = ? "
+                                         "WHERE msg_id IS NULL AND json_extract(json, '$.id') = ?");
+                update.bindText(1, payload);
+                update.bindText(2, msg.id);
+                update.bindText(3, msg.id);
+                update.step();
+            }
             return true;
         },
         [&](std::string errmsg) -> bool {
@@ -209,18 +232,70 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
 
     auto it = dbs_.find(sessionId);
     if (it != dbs_.end()) {
-        return *it->second;
+        it->second.lastUseSeq = ++dbsUseSeq_; // 刷新 LRU 位置
+        return *it->second.dbs;
     }
-    auto dbs = std::make_shared<SessionDbs>();
+    auto entry = DbsEntry{};
+    entry.dbs  = std::make_shared<SessionDbs>();
     // 打开失败 (权限/磁盘) 抛异常, 由上层 catchError 记录日志
-    dbs->sessionDb.open((dir / "session.db").string());
-    ensureSchema(dbs->sessionDb);
-    auto [insertIt, _] = util::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(dbs));
-    return *insertIt->second;
+    entry.dbs->sessionDb.open((dir / "session.db").string());
+    ensureSchema(entry.dbs->sessionDb);
+    entry.lastUseSeq   = ++dbsUseSeq_;
+    auto [insertIt, _] = util::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(entry));
+    // 连接数上限 (LRU 淘汰; 刚插入的条目为最新, 不会被淘汰)
+    evictLruDbs();
+    return *insertIt->second.dbs;
+}
+
+void SessionStore::evictLruDbs() {
+    while (dbs_.size() > kMaxOpenSessionDbs) {
+        auto lru = dbs_.begin();
+        for (auto it = dbs_.begin(); it != dbs_.end(); ++it) {
+            if (it->second.lastUseSeq < lru->second.lastUseSeq) {
+                lru = it;
+            }
+        }
+        XX_LOGD(
+            "SessionStore: closing least-recently-used session db '{}' (open={} > max={})",
+            lru->first,
+            dbs_.size(),
+            kMaxOpenSessionDbs
+        );
+        // 显式 close (WAL 自动 checkpoint), 再从缓存移除
+        lru->second.dbs->sessionDb.close();
+        dbs_.erase(lru);
+    }
 }
 
 void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb) {
     sessionDb.exec(kSessionSchema);
+    ensureViewMessageMsgIdColumn(sessionDb);
+}
+
+/// 迁移: 保证 view_message 有 msg_id 列与索引 (幂等)
+/// - 新库: CREATE TABLE 已含该列, 此处只补索引
+/// - 老库 (无该列): ALTER 增加列 → 从 json 回填 → 建索引; 已有数据不受影响
+///   (回填只补 msg_id, 不触碰 json 内容)
+void SessionStore::ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb) {
+    bool hasMsgId = false;
+    {
+        auto stmt = sessionDb.prepare("PRAGMA table_info(view_message)");
+        while (stmt.step()) {
+            // 列信息: cid, name, type, notnull, dflt_value, pk
+            if (stmt.columnText(1) == "msg_id") {
+                hasMsgId = true;
+                break;
+            }
+        }
+    }
+    if (false == hasMsgId) {
+        sessionDb.exec("ALTER TABLE view_message ADD COLUMN msg_id TEXT");
+        XX_LOGI("SessionStore: view_message migrated (added msg_id column), backfilling ...");
+        sessionDb.exec(
+            "UPDATE view_message SET msg_id = json_extract(json, '$.id') WHERE msg_id IS NULL"
+        );
+    }
+    sessionDb.exec("CREATE INDEX IF NOT EXISTS idx_view_message_msg_id ON view_message(msg_id)");
 }
 
 bool SessionStore::sessionDataDirExists(std::string_view sessionId) const {
@@ -563,8 +638,9 @@ void SessionStore::appendViewMessage(
             db.beginImmediate();
             bool inTx = true;
             try {
-                auto insert = db.prepare("INSERT INTO view_message(json) VALUES (?)");
+                auto insert = db.prepare("INSERT INTO view_message(json, msg_id) VALUES (?, ?)");
                 insert.bindText(1, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
+                insert.bindText(2, msg.id);
                 insert.step();
 
                 // UPSERT 计数: 新线程首条消息时 meta 不存在, 需 INSERT

@@ -136,10 +136,27 @@ private:
         agentxx::util::SqliteDb sessionDb;
     };
 
+    /// 连接缓存条目 (含最近使用序号, 供 LRU 淘汰)
+    struct DbsEntry {
+        std::shared_ptr<SessionDbs> dbs{};
+        uint64_t                    lastUseSeq = 0;
+    };
+
+    /// 同时保持打开的会话数据库连接数上限
+    /// - 每个连接占用 fd + WAL + page cache, 进程内长期运行(会话很多)时会持续
+    ///   占用文件描述符 (Linux 默认 ulimit -n 常为 1024) 与内存
+    /// - 超出上限时按 LRU 关闭最久未使用的连接 (关闭后下次写入自动重开, 不丢数据)
+    static constexpr size_t kMaxOpenSessionDbs = 32;
+
     /// 获取 (或懒创建) 指定 session 的数据库连接; 失败抛异常
     /// - 仅写入路径调用: 读取路径在目录不存在时直接返回空数据, 避免
     ///   为只读访问 (如 subagent/未开始会话) 创建目录与空 DB 文件
+    /// - 调用方必须持有 [mutex_]
     SessionDbs& dbs(std::string_view sessionId);
+
+    /// LRU 淘汰: 连接数超出 [kMaxOpenSessionDbs] 时关闭最久未使用的连接
+    /// - 调用方必须持有 [mutex_]
+    void evictLruDbs();
 
     /// 该 session 的数据目录是否存在 (未创建过 = 无数据, 读取直接返回空)
     bool sessionDataDirExists(std::string_view sessionId) const;
@@ -147,10 +164,15 @@ private:
     /// 建表 (幂等, 单库包含 view_message/llm_context/meta/store)
     static void ensureSchema(agentxx::util::SqliteDb& sessionDb);
 
+    /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
+    static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
+
     std::string rootDir_;
     std::mutex  mutex_;
     /// key: 原始 sessionId (未清洗, 清洗仅用于目录名)
-    std::map<std::string, std::shared_ptr<SessionDbs>, std::less<>> dbs_;
+    std::map<std::string, DbsEntry, std::less<>> dbs_;
+    /// 连接使用序号 (每次取用连接时自增, 值越大越新; 仅 [mutex_] 内访问)
+    uint64_t dbsUseSeq_ = 0;
 };
 
 } // namespace agent
