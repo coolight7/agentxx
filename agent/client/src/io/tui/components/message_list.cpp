@@ -1431,8 +1431,8 @@ Element MessageListComponent::buildMessageBlock(
                 if (!resOrArgsSummary.empty()) {
                     if (isError) {
                         header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.errorColor) | theme.dim()
-                            | xflex_shrink
+                            text(std::move(resOrArgsSummary)) | color(theme.errorColor)
+                            | theme.dim() | xflex_shrink
                         );
                     } else {
                         header.push_back(

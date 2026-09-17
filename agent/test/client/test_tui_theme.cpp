@@ -44,6 +44,7 @@ using namespace ftxui;
 /// 调色板色 (终端探测结果随运行环境变化); 析构时恢复原探测值
 class ScopedTrueColor {
 public:
+
     ScopedTrueColor() :
         old_(Terminal::ColorSupport()) {
         Terminal::SetColorSupport(Terminal::Color::TrueColor);
@@ -54,6 +55,7 @@ public:
     }
 
 private:
+
     Terminal::Color old_;
 };
 
@@ -71,7 +73,7 @@ void testDimElementOutlivesTheme() {
     Element         el;
     {
         const TUITheme theme = TUITheme::lightTheme();
-        el = text("X") | color(Color::RGB(50, 50, 50)) | theme.dim();
+        el                   = text("X") | color(Color::RGB(50, 50, 50)) | theme.dim();
     }
     auto screen = renderOffscreen(el);
     XX_TEST_EXPECT_EQ(screen.CellAt(0, 0).foreground_color, Color::RGB(180, 180, 180));
@@ -132,20 +134,21 @@ void testDimUsesCellBackground() {
     const TUITheme  theme = TUITheme::lightTheme();
 
     // 白字 + 黑底: 弱化后应偏暗 (RGB(194,194,194)), 而不是保持白色
-    auto screen = renderOffscreen(text("X") | bgcolor(Color::RGB(0, 0, 0)) | color(Color::White)
-                                 | theme.dim());
+    auto screen = renderOffscreen(
+        text("X") | bgcolor(Color::RGB(0, 0, 0)) | color(Color::White) | theme.dim()
+    );
     XX_TEST_EXPECT_EQ(screen.CellAt(0, 0).foreground_color, Color::RGB(194, 194, 194));
     XX_TEST_EXPECT_FALSE(screen.CellAt(0, 0).dim);
 
     // 底色套在弱化元素之外 (整行选中底色在条目元素之外设置): ftxui 的
     // 颜色装饰器先写入单元格再渲染子元素, 因此弱化时底色已就位
-    auto outerBgScreen = renderOffscreen((text("X") | color(Color::White) | theme.dim())
-                                         | bgcolor(Color::RGB(0, 0, 0)));
+    auto outerBgScreen = renderOffscreen(
+        (text("X") | color(Color::White) | theme.dim()) | bgcolor(Color::RGB(0, 0, 0))
+    );
     XX_TEST_EXPECT_EQ(outerBgScreen.CellAt(0, 0).foreground_color, Color::RGB(194, 194, 194));
 
     // 前景色也套在弱化元素之外 (列表条目整行着色): 弱化元素渲染更晚, 结果不被外层抹掉
-    auto outerFgScreen
-        = renderOffscreen((text("X") | theme.dim()) | color(Color::RGB(50, 50, 50)));
+    auto outerFgScreen = renderOffscreen((text("X") | theme.dim()) | color(Color::RGB(50, 50, 50)));
     XX_TEST_EXPECT_EQ(outerFgScreen.CellAt(0, 0).foreground_color, Color::RGB(180, 180, 180));
 }
 

@@ -488,12 +488,8 @@ void test_status_bar_click_actions() {
         auto screen
             = ftxui::Screen::Create(ftxui::Dimension::Fixed(80), ftxui::Dimension::Fixed(3));
         ftxui::Render(screen, comp->Render());
-        XX_TEST_EXPECT_TRUE(
-            screenTextIn(screen, sessionsBox).find("[F3]") != std::string::npos
-        );
-        XX_TEST_EXPECT_TRUE(
-            screenTextIn(screen, settingsBox).find("[F4]") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(screenTextIn(screen, sessionsBox).find("[F3]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screenTextIn(screen, settingsBox).find("[F4]") != std::string::npos);
         XX_TEST_EXPECT_TRUE(sessionsBox.x_min < settingsBox.x_min);
     }
 
