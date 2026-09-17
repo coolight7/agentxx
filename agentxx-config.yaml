@@ -359,6 +359,8 @@ memory:
 #   (plugin.yaml 资源照常拷贝), 入口文件缺失时自动回退内置注册表加载;
 #   也可显式写 builtin://插件名 (无资源需求的插件/测试直连用)
 plugin:
+  # overwrite:
+  #   mode: merge
   list:
     # === 示例: 原生 C++ 插件 (直接库路径) ===
     # - path: "${AGENTXX_EXEC_DIR}/plugins/example_plugin"
@@ -396,7 +398,7 @@ plugin:
     #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
     # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
-      enabled: false
+      enabled: true
       args:
         # paths:
         #   - "/path/to/project_a"
@@ -409,7 +411,7 @@ plugin:
 
     # === 系统资源监控
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
-      enabled: false
+      enabled: true
 
     # === 数学计算工具 ===
     # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
