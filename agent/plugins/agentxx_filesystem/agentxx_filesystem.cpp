@@ -101,6 +101,14 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   false,
                   100
               )
+              .integer(
+                  "max_files",
+                  "Default `1000`. Maximum number of matched entries expanded before listing; a "
+                  "larger expansion is cut to the first entries with a `[Note]` (raise it or narrow "
+                  "`path`). Set `0` for no limit.",
+                  false,
+                  1000
+              )
               .number("timeout", kTimeoutDesc, false, 60.0)
               .build();
 
@@ -347,10 +355,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   "Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
                   /*required=*/true
               )
-              .stringArray(
-                  "exclude_patterns",
-                  "Glob patterns to exclude from results. Matched paths are removed."
-              )
+              .stringArray("exclude_patterns", "Glob patterns to exclude.).")
               .integer(
                   "max_depth",
                   "Maximum directory depth relative to the pattern's base directory. Default `-1` (no limit).",
@@ -368,6 +373,13 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   "Filter results by file type: `file`, `dir`, `symlink`, `other`, `any`. Default: `any`.",
                   false,
                   "any"
+              )
+              .integer(
+                  "max_files",
+                  "Default `1000`. Maximum number of matched paths; exceeding it returns an error "
+                  "asking to narrow `file_patterns` (set `0` for no limit).",
+                  false,
+                  1000
               )
               .number("timeout", kTimeoutDesc, false, 60.0)
               .build();
@@ -418,6 +430,12 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   "regex_patterns",
                   "One or more regular expression patterns (like `grep -E`). A match is found if ANY pattern matches."
               )
+              .stringArray(
+                  "exclude_patterns",
+                  "Glob patterns to exclude while walking. A matched entry is "
+                  "skipped; a matched directory has its whole subtree pruned, so excluding a big "
+                  "generated directory (e.g. `**/build/**`, `**/third_party/**`) also saves the walk."
+              )
               .enumString(
                   "output_mode",
                   R"(Default: `files_with_matches`.
@@ -432,6 +450,21 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   "Default `0` (no limit). Maximum matches to report per file.",
                   false,
                   0
+              )
+              .integer(
+                  "max_files",
+                  "Default `1000`. Maximum number of files to scan (after `file_patterns` expansion). "
+                  "Exceeding it returns an error instead of scanning: narrow `file_patterns`, add "
+                  "`exclude_patterns`, or raise this value. Set `0` for no limit.",
+                  false,
+                  1000
+              )
+              .number(
+                  "max_file_size_mb",
+                  "Default `32`. Files larger than this many MB are skipped (a trailing `[Note]` reports "
+                  "how many were skipped). Set `0` for no limit.",
+                  false,
+                  32.0
               )
               .integer(
                   "context_lines",

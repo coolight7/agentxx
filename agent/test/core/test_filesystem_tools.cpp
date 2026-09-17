@@ -2837,6 +2837,243 @@ asio::awaitable<void> test_plugin_real_link() {
     fs::remove(testDir + "/link_smoke.txt", ec);
 }
 
+/// 回归测试: 规模上限 (数量太多导致的内存/时间爆炸)
+/// 背景: 一次 `file_patterns = agent/**/*` 会展开 389397 个文件 (其中
+/// third_party 367089 / build 21771, 合计约 36GB), 而同一会话其余调用的模式
+/// 合计只有 512 个文件 —— 规模需要可预期地上限约束。
+/// 覆盖:
+/// - grep `max_files`: 超限报错 (不静默截断), 提高上限后正常返回
+/// - grep `max_file_size_mb`: 超大文件跳过并在结果末尾给出 `[Note]`
+/// - glob `max_files`: 超限报错
+/// - list `max_files`: 超限截断并在输出首行给出 `[Note]`
+asio::awaitable<void> test_scan_scale_limits(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    namespace fs               = std::filesystem;
+    const std::string limitDir = testDir + "/scale_limit";
+    if (fs::exists(limitDir)) {
+        fs::remove_all(limitDir);
+    }
+    fs::create_directories(limitDir);
+    // 30 个小文件 (各含 small_token) + 1 个 4KB 大文件 (含 big_token)
+    for (int i = 0; i < 30; ++i) {
+        std::ofstream f(limitDir + "/small" + std::to_string(i) + ".txt");
+        f << "small_token line " << i << "\n";
+    }
+    {
+        std::ofstream big(limitDir + "/big.txt");
+        big << "big_token\n";
+        big << std::string(4096, 'x') << "\n";
+    }
+
+    const auto workDir = agentxx::tools::testResolvedWorkDir(agentContext);
+    bool       allPassed = true;
+
+    // ① grep max_files 超限报错
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", agentxx::util::Json::array({"small_token"})      },
+            {"max_files",     10                                              },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        if (result.find("Too many files match") == std::string::npos) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGrepTool should reject too many files, got: " << result
+                      << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGrepTool rejects file count over `max_files`" << std::endl;
+        }
+    }
+
+    // ② 提高 max_files 后正常返回
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", agentxx::util::Json::array({"small_token"})      },
+            {"max_files",     100                                             },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        if (result.find("small0.txt") == std::string::npos
+            || result.find("Too many files") != std::string::npos) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGrepTool should scan when under `max_files`, got: " << result
+                      << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGrepTool scans normally under `max_files`" << std::endl;
+        }
+    }
+
+    // ③ grep max_file_size_mb: 大文件跳过并给出 [Note] (不做静默丢弃)
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns",     agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"text_patterns",     agentxx::util::Json::array({"big_token", "small_token"})},
+            {"max_file_size_mb",  0.001                                          },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        bool skippedBig   = result.find("big.txt") == std::string::npos;
+        bool matchedSmall = result.find("small0.txt") != std::string::npos;
+        bool noted        = result.find("[Note]") != std::string::npos
+                     && result.find("max_file_size_mb") != std::string::npos;
+        if (false == (skippedBig && matchedSmall && noted)) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGrepTool should skip oversized files with a note, got: " << result
+                      << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGrepTool skips oversized file and reports a note" << std::endl;
+        }
+    }
+
+    // ④ glob max_files 超限报错
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"max_files",     10                                              },
+        };
+        auto result = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        if (result.find("Too many paths match") == std::string::npos) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should reject too many matches, got: " << result
+                      << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGlobTool rejects match count over `max_files`" << std::endl;
+        }
+    }
+
+    // ⑤ list max_files 截断 + 首行提示
+    {
+        auto tool = agentxx::tools::FileSystemListTool{agentContext};
+        auto args = agentxx::util::Json{
+            {"path",      limitDir + "/**/*"},
+            {"max_files", 10                },
+        };
+        auto result = co_await tool.execute_async(args);
+        if (result.find("[Note]") == std::string::npos
+            || result.find("matched entries are listed") == std::string::npos) {
+            allPassed = false;
+            TEST_FAIL << "FileSystemListTool should truncate expansion with a note, got: " << result
+                      << std::endl;
+        } else {
+            TEST_PASS << "FileSystemListTool truncates expansion over `max_files` with a note"
+                      << std::endl;
+        }
+    }
+
+    if (allPassed) {
+        g_fs_passed++;
+    } else {
+        g_fs_failed++;
+    }
+
+    std::error_code ec;
+    fs::remove_all(agentxx::util::utf8ToPath(limitDir), ec);
+    co_return;
+}
+
+/// 回归测试: exclude_patterns 在遍历层生效 (数量上限也在遍历中拦截)
+/// 构造: src/ 2 个匹配文件; build/ 1200 个文件 (超过 max_files = 1000)
+/// - ① glob / ② grep: `exclude_patterns = …/build/**` (覆盖整棵子树) 时遍历直接剪掉
+///   build 子树, 不把其 1200 条计入数量上限 → 正常返回 src 的匹配;
+///   若排除与计数都只在遍历结果上做, 这里会先因 1201 > 1000 报 "Too many" 而失败
+/// - ③ 只匹配目录自身的模式 (`…/build`, 不含非首段 `**`) 不剪枝: 目录条目本身被排除,
+///   但其下文件仍被遍历与匹配 (与"匹配到的路径被排除"语义一致)
+asio::awaitable<void> test_walk_exclude_pruning(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    namespace fs                = std::filesystem;
+    const std::string baseDir   = testDir + "/walk_exclude";
+    const std::string buildDir  = baseDir + "/build";
+    const std::string srcDir    = baseDir + "/src";
+    if (fs::exists(baseDir)) {
+        fs::remove_all(baseDir);
+    }
+    fs::create_directories(srcDir);
+    fs::create_directories(buildDir);
+    for (int i = 0; i < 2; ++i) {
+        std::ofstream f(srcDir + "/s" + std::to_string(i) + ".txt");
+        f << "prune_token from src\n";
+    }
+    for (int i = 0; i < 1200; ++i) {
+        std::ofstream f(buildDir + "/b" + std::to_string(i) + ".txt");
+        f << "prune_token from build\n";
+    }
+
+    const auto workDir   = agentxx::tools::testResolvedWorkDir(agentContext);
+    bool       allPassed = true;
+
+    // ① glob: 覆盖子树的排除模式在遍历中剪枝, 不计入数量上限
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns",    agentxx::util::Json::array({baseDir + "/**/*"})    },
+            {"exclude_patterns", agentxx::util::Json::array({buildDir + "/**"})     },
+            {"max_files",        1000                                              },
+        };
+        auto result = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        bool ok = result.find("s0.txt") != std::string::npos
+                  && result.find("s1.txt") != std::string::npos
+                  && result.find("Too many") == std::string::npos
+                  && result.find("/build/") == std::string::npos;
+        if (ok) {
+            TEST_PASS << "FilesystemGlobTool prunes excluded subtree during walk" << std::endl;
+        } else {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should prune excluded subtree, got: "
+                      << result.substr(0, 400) << std::endl;
+        }
+    }
+
+    // ② grep: 同上 (排除的 1200 个文件既不读也不计入数量上限)
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns",    agentxx::util::Json::array({baseDir + "/**/*"})},
+            {"text_patterns",    agentxx::util::Json::array({"prune_token"})    },
+            {"exclude_patterns", agentxx::util::Json::array({buildDir + "/**"}) },
+            {"max_files",        1000                                           },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        bool ok = result.find("s0.txt") != std::string::npos
+                  && result.find("Too many") == std::string::npos
+                  && result.find("/build/") == std::string::npos;
+        if (ok) {
+            TEST_PASS << "FilesystemGrepTool prunes excluded subtree during walk" << std::endl;
+        } else {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGrepTool should prune excluded subtree, got: "
+                      << result.substr(0, 400) << std::endl;
+        }
+    }
+
+    // ③ 只匹配目录自身的模式不剪枝: build 目录条目被排除, 其下文件仍被搜索
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns",    agentxx::util::Json::array({baseDir + "/**/*"})},
+            {"text_patterns",    agentxx::util::Json::array({"prune_token"})    },
+            {"exclude_patterns", agentxx::util::Json::array({buildDir})         },
+            {"max_files",        2000                                           },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        bool ok = result.find("b0.txt") != std::string::npos     // 子树仍被遍历
+                  && result.find("build:") == std::string::npos; // 目录条目本身被排除
+        if (ok) {
+            TEST_PASS << "FilesystemGrepTool keeps traversing dir excluded by itself-only pattern"
+                      << std::endl;
+        } else {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGrepTool should keep traversing dir for itself-only pattern, got: "
+                      << result.substr(0, 400) << std::endl;
+        }
+    }
+
+    if (allPassed) {
+        g_fs_passed++;
+    } else {
+        g_fs_failed++;
+    }
+
+    std::error_code ec;
+    fs::remove_all(agentxx::util::utf8ToPath(baseDir), ec);
+    co_return;
+}
+
 asio::awaitable<TestResult>
     run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     setupTestDir();
@@ -2925,6 +3162,8 @@ asio::awaitable<TestResult>
     co_await run(test_grep_no_match_fail_fast);
     co_await run(test_grep_skip_directories);
     co_await run(test_grep_mem_stress);
+    co_await run(test_scan_scale_limits);
+    co_await run(test_walk_exclude_pruning);
     co_await run(test_glob_unicode_paths);
     co_await run(test_grep_unicode_path_and_content);
     co_await run(test_grep_multi_pattern_fault_tolerance);

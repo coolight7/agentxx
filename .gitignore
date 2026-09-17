@@ -10,3 +10,4 @@ help-dummy.o
 .env
 crash-*.log
 crash-*.dmp
+agentxx_asan.*

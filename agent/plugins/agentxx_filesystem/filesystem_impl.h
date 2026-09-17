@@ -170,6 +170,57 @@ inline bool isExcluded(const std::string& pathStr, const std::vector<std::regex>
     return false;
 }
 
+/// 构造遍历策略 ([glob::WalkPolicy]): 排除过滤 + 匹配结果数量上限, 二者都在
+/// **遍历过程中**生效 (而不是遍历完再过滤/再判断) —— 这才能省掉被排除大目录的
+/// 遍历开销, 也才能在超限时立刻停止而不是先把几十万条路径读进内存。
+///
+/// 排除语义 (与"匹配到的路径被排除"一致, 并对覆盖子树的模式做剪枝优化):
+/// - 命中的**文件**直接跳过 (不进结果, 也不计入数量上限);
+/// - 命中的**目录**:
+///     - 模式覆盖整棵子树 (除首段外含 `**`, 如 `**/build/**`、`build/**`) 时整棵
+///       子树剪枝 —— 这是跳过 build/third_party 这类大目录的主要收益;
+///     - 只匹配目录自身或单层的模式 (如 `**/build/*`、`build`) 命中目录时仍继续
+///       向下遍历, 仅由结果集后置复核剔除该目录条目, 避免误删未被模式覆盖的后代;
+/// - `maxFiles`: 匹配结果数量上限 (>0 生效); 超限时遍历抛
+///   [glob::walk_limit_exceeded], 由调用方转为 "[Error] Too many ..." 文本
+inline glob::WalkPolicy
+    makeWalkPolicy(const std::vector<std::string>& excludePatterns, int64_t maxFiles) {
+    glob::WalkPolicy policy;
+    policy.maxResults = (maxFiles > 0) ? static_cast<size_t>(maxFiles) : 0;
+    if (false == excludePatterns.empty()) {
+        std::vector<std::string> prunePatterns; // 覆盖整棵子树的排除模式 (可剪枝)
+        for (const auto& pattern : excludePatterns) {
+            if (glob::is_subtree_exclude_pattern(pattern)) {
+                prunePatterns.push_back(pattern);
+            }
+        }
+        auto allRegexes   = compileExcludeRegexes(excludePatterns);
+        auto pruneRegexes = compileExcludeRegexes(prunePatterns);
+        if (false == allRegexes.empty()) {
+            policy.keepPath = [allRegexes = std::move(allRegexes),
+                               pruneRegexes = std::move(pruneRegexes)](
+                                  const std::filesystem::path& p,
+                                  bool                         isDir
+                              ) -> bool {
+                const auto pathStr = toUtf8(p);
+                if (false == isDir) {
+                    return false == isExcluded(pathStr, allRegexes);
+                }
+                // 目录: 未被任何模式命中 -> 保留 + 继续遍历
+                if (false == isExcluded(pathStr, allRegexes)
+                    && false == isExcluded(pathStr + "/", allRegexes)) {
+                    return true;
+                }
+                // 目录被排除: 模式覆盖整棵子树时剪枝; 否则保留以便继续遍历
+                // (该目录条目本身由结果集的后置复核剔除)
+                return false == isExcluded(pathStr, pruneRegexes)
+                       && false == isExcluded(pathStr + "/", pruneRegexes);
+            };
+        }
+    }
+    return policy;
+}
+
 /// 读取完整文件文本 (同步); 打开失败抛出异常
 inline std::string readFileContent(const std::string& filepath) {
     auto            p = agentxx::util::utf8ToPath(filepath);
@@ -267,8 +318,11 @@ inline std::string fileListExecuteImpl(
     }
     auto recursive = arguments.value("recursive", false);
     auto limit     = arguments.value<int64_t>("limit", 100);
-    auto timeout   = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
-    auto deadline  = Deadline::after(timeout);
+    // 通配展开的条目上限 (防止 `agent/**/*` 这类模式一次展开出几十万条路径):
+    // 超过则只取前 N 条 (排序后) 并在输出首行说明; 0 表示不限
+    auto maxFiles = arguments.value<int64_t>("max_files", 1000);
+    auto timeout  = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
+    auto deadline = Deadline::after(timeout);
 
     std::vector<std::string> lines;
 
@@ -470,6 +524,16 @@ inline std::string fileListExecuteImpl(
             // 排序去重: 输出顺序只取决于名称 (与 `ls` 一致), 不受目录遍历顺序影响
             std::sort(matched.begin(), matched.end());
             matched.erase(std::unique(matched.begin(), matched.end()), matched.end());
+
+            // 展开条目上限: 超出部分不展开 (输出首行说明, 不做静默丢弃)
+            if (maxFiles > 0 && static_cast<int64_t>(matched.size()) > maxFiles) {
+                lines.push_back(fmt::format(
+                    "[Note] only first {} of {} matched entries are listed (`max_files`); narrow `path` or raise it.",
+                    maxFiles,
+                    matched.size()
+                ));
+                matched.resize(static_cast<size_t>(maxFiles));
+            }
 
             // 只有 recursive 下的目录下钻才可能与 `**` 匹配结果重叠, 故仅此时去重
             dedupByPath = recursive;
@@ -804,6 +868,10 @@ inline std::string fileGlobExecuteImpl(
     for (auto& item : excludePatterns) {
         item = detail::wsAbs(workDir, item);
     }
+    // 结果条目数上限 (防止 `agent/**/*` 这类模式一次展开出几十万条路径):
+    // 超过上限直接报错并给出收窄提示, 不做静默截断 (静默截断会让调用方误以为
+    // 已经拿到全部匹配); 0 表示不限
+    auto maxFiles = arguments.value<int64_t>("max_files", 1000);
 
     auto checkCancel = [&]() -> bool {
         return isCancelled && isCancelled();
@@ -813,6 +881,11 @@ inline std::string fileGlobExecuteImpl(
     // 遍历内部传入恒为 false 的局部标志 (不泄漏堆分配)
     std::atomic<bool> globNeverCancel{false};
 
+    // 遍历策略 (排除过滤 + 结果数量上限) 在多 pattern 之间共享: 排除项在遍历中
+    // 直接剪枝, 数量上限对"全部 pattern 的总匹配数"生效, 且超限立即中断遍历
+    glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
+    std::string      limitPattern{}; // 触发数量上限时正在遍历的 pattern (错误提示用)
+
     // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob (仅当前目录)
     // 对齐 shell globstar 行为: `*.txt` 只匹配当前目录, `**/*.txt` 才递归
     std::vector<std::filesystem::path> resultList;
@@ -820,19 +893,29 @@ inline std::string fileGlobExecuteImpl(
         if (checkCancel() || deadline.expired()) {
             return "[Error] Cancelled or timed out";
         }
-        if (glob::has_recursive_segment(pattern)) {
-            auto matched = glob::rglob(pattern, true, globNeverCancel);
-            resultList.insert(
-                resultList.end(),
-                std::make_move_iterator(matched.begin()),
-                std::make_move_iterator(matched.end())
-            );
-        } else {
-            auto matched = glob::glob(pattern, true, globNeverCancel);
-            resultList.insert(
-                resultList.end(),
-                std::make_move_iterator(matched.begin()),
-                std::make_move_iterator(matched.end())
+        limitPattern = pattern;
+        try {
+            if (glob::has_recursive_segment(pattern)) {
+                auto matched = glob::rglob(pattern, true, globNeverCancel, walkPolicy);
+                resultList.insert(
+                    resultList.end(),
+                    std::make_move_iterator(matched.begin()),
+                    std::make_move_iterator(matched.end())
+                );
+            } else {
+                auto matched = glob::glob(pattern, true, globNeverCancel, walkPolicy);
+                resultList.insert(
+                    resultList.end(),
+                    std::make_move_iterator(matched.begin()),
+                    std::make_move_iterator(matched.end())
+                );
+            }
+        } catch (const glob::walk_limit_exceeded&) {
+            // 遍历过程中即超过 max_files: 直接报错 (不做静默截断), 并给出收窄提示
+            return fmt::format(
+                R"([Error] Too many paths match `file_patterns` (> `max_files` = {} at pattern `{}`). Narrow `file_patterns`, add `exclude_patterns`, or raise `max_files`.)",
+                maxFiles,
+                limitPattern
             );
         }
     }
@@ -844,6 +927,16 @@ inline std::string fileGlobExecuteImpl(
     // 默认去重: 多 pattern 可能匹配到相同路径
     std::sort(resultList.begin(), resultList.end());
     resultList.erase(std::unique(resultList.begin(), resultList.end()), resultList.end());
+
+    // 结果条目数上限: 超过则报错并给出收窄提示 (在类型/exclude 过滤之前判断 ——
+    // 此时路径已经全部展开进内存, 提早告知调用方模式过宽)
+    if (maxFiles > 0 && static_cast<int64_t>(resultList.size()) > maxFiles) {
+        return fmt::format(
+            R"([Error] Too many paths match `file_patterns` ({} > `max_files` = {}). Narrow `file_patterns`, add `exclude_patterns`, or raise `max_files`.)",
+            resultList.size(),
+            maxFiles
+        );
+    }
 
     // 类型过滤 (对齐 find -type): file / dir / symlink / other / any
     if (!typeFilter.empty()) {
@@ -949,12 +1042,28 @@ inline std::string fileGrepExecuteImpl(
     for (auto& item : file_patterns) {
         item = detail::wsAbs(workDir, item);
     }
+    // 排除模式 (与 glob 工具一致): 命中的条目在**遍历过程中**被跳过, 命中目录时
+    // 整棵子树剪枝 —— 用于跳过 build/third_party 这类大目录, 省掉遍历开销
+    auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
+    for (auto& item : excludePatterns) {
+        item = detail::wsAbs(workDir, item);
+    }
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
     if (output_mode.empty()) {
         return R"([Error] Arg `output_mode` is empty)";
     }
     auto timeout  = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
     auto deadline = Deadline::after(timeout);
+
+    // 规模上限 (防止一次调用把整个大目录树 —— 如全仓库含 build/third_party 的
+    // 几十万文件/几十 GB —— 全部读入内存并扫描
+    // - max_files: 候选文件数上限, 超过直接报错而不做静默截断
+    //   (files_with_matches 模式下静默截断会把"有匹配"误报成"无匹配")
+    // - max_file_size_mb: 单文件大小上限, 超过则跳过 (结果末尾以 `[Note]` 说明),
+    //   避免超大文件 (或伪装成文本的大文件) 被整文件读入内存
+    // 0 表示不限 (与 timeout 的 0 = 不限语义一致)
+    auto maxFiles      = arguments.value<int64_t>("max_files", 1000);
+    auto maxFileSizeMb = arguments.value<double>("max_file_size_mb", 32.0);
 
     // 新增参数 (对齐 Linux grep 行为)
     auto caseSensitive   = arguments.value<bool>("case_sensitive", true);
@@ -968,6 +1077,10 @@ inline std::string fileGrepExecuteImpl(
     // ---- glob 收集候选文件 ----
     std::atomic<bool>                  globNeverCancel{false};
     std::vector<std::filesystem::path> refilelist{};
+    // 遍历策略: 数量上限在**遍历过程中**生效 (超限立即中断, 不会先把几十万条
+    // 路径读进内存); 计数在多 pattern 之间共享, 限制的是候选文件总数
+    glob::WalkPolicy  walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
+    std::string       walkLimitMsg{}; // 遍历层数量超限时的错误文本 (非空即需返回)
     for (const auto& pattern : file_patterns) {
         if (checkStop()) {
             return "[Error] Cancelled or timed out";
@@ -977,13 +1090,23 @@ inline std::string fileGrepExecuteImpl(
         // 单个 pattern 的遍历失败 (如目录树中存在系统代码页无法表示的文件名,
         // MSVC 下 fs::path 窄化转换抛 system_error) 不应中断整体搜索,
         // 经 catchError 隔离后跳过该 pattern 继续其余 pattern
+        // (数量上限不走该路径: 它是"结果过多"而非"遍历失败", 需向调用方报错)
         std::vector<std::filesystem::path> matched;
         auto                               globOk = agentxx::util::catchError<bool>(
             [&]() -> bool {
-                if (glob::has_recursive_segment(pattern)) {
-                    matched = glob::rglob(pattern, true, globNeverCancel);
-                } else {
-                    matched = glob::glob(pattern, true, globNeverCancel);
+                try {
+                    if (glob::has_recursive_segment(pattern)) {
+                        matched = glob::rglob(pattern, true, globNeverCancel, walkPolicy);
+                    } else {
+                        matched = glob::glob(pattern, true, globNeverCancel, walkPolicy);
+                    }
+                } catch (const glob::walk_limit_exceeded&) {
+                    walkLimitMsg = fmt::format(
+                        R"(Too many files match `file_patterns` (> `max_files` = {} at pattern `{}`). Narrow `file_patterns` or raise `max_files`.)",
+                        maxFiles,
+                        pattern
+                    );
+                    return false;
                 }
                 return true;
             },
@@ -992,6 +1115,9 @@ inline std::string fileGrepExecuteImpl(
                 return false;
             }
         );
+        if (false == walkLimitMsg.empty()) {
+            throw std::runtime_error{walkLimitMsg};
+        }
         if (false == globOk || matched.empty()) {
             continue;
         }
@@ -1021,8 +1147,33 @@ inline std::string fileGrepExecuteImpl(
     // (声明的权限目标只覆盖扫描起点), 在此按实际文件路径复核, 未获批准的文件不读
     refilelist = detail::filterByPermission(std::move(refilelist), pathFilter);
 
+    // exclude_patterns 复核 (遍历层已按同一判定剪枝, 此处保证结果集语义不受
+    // "目录剪枝"与"逐条匹配"的差异影响)
+    if (false == excludePatterns.empty()) {
+        auto excludeRegexes = detail::compileExcludeRegexes(excludePatterns);
+        if (false == excludeRegexes.empty()) {
+            std::vector<std::filesystem::path> filtered;
+            filtered.reserve(refilelist.size());
+            for (const auto& p : refilelist) {
+                if (false == detail::isExcluded(detail::toUtf8(p), excludeRegexes)) {
+                    filtered.push_back(p);
+                }
+            }
+            refilelist = std::move(filtered);
+        }
+    }
+
     if (refilelist.empty()) {
         throw std::runtime_error{"No match `file_patterns` file found"};
+    }
+
+    // 候选文件数上限: 超过上限直接报错并给出收窄提示 (不静默截断, 避免漏报匹配)
+    if (maxFiles > 0 && static_cast<int64_t>(refilelist.size()) > maxFiles) {
+        throw std::runtime_error{fmt::format(
+            R"(Too many files match `file_patterns` ({} > `max_files` = {}). Narrow `file_patterns`, add `exclude_patterns`, or raise `max_files`.)",
+            refilelist.size(),
+            maxFiles
+        )};
     }
 
     bool isContentMode = ("content" == output_mode);
@@ -1081,8 +1232,22 @@ inline std::string fileGrepExecuteImpl(
     /// 加载并预处理文本文件: 跳过二进制文件 (含 NUL 字节), 非 UTF-8 编码
     /// (GBK 等) 转换为 UTF-8, 转换失败视为非文本跳过。额外统一 CRLF -> LF
     /// (归一化仅作用于本次搜索的内存副本, 不修改原文件)
-    auto loadSearchableText = [](const std::string& filepath) -> std::optional<std::string> {
+    /// 超过 `max_file_size_mb` 的文件在读入前跳过并计数 (见 [skippedTooLarge])
+    size_t skippedTooLarge    = 0;
+    auto   loadSearchableText = [&](const std::string& filepath) -> std::optional<std::string> {
         try {
+            if (maxFileSizeMb > 0) {
+                std::error_code sizeEc;
+                auto            fileSize
+                    = std::filesystem::file_size(agentxx::util::utf8ToPath(filepath), sizeEc);
+                if (false == static_cast<bool>(sizeEc)
+                    && fileSize > static_cast<uintmax_t>(
+                           static_cast<double>(1024 * 1024) * maxFileSizeMb
+                       )) {
+                    ++skippedTooLarge;
+                    return std::nullopt;
+                }
+            }
             auto filetext = detail::readFileContent(filepath);
             // 仅搜索文本文件: 含 NUL 字节视为二进制, 跳过
             if (filetext.find('\0') != std::string::npos) {
@@ -1274,14 +1439,28 @@ inline std::string fileGrepExecuteImpl(
     }
 
     if (anyHit) {
+        if (skippedTooLarge > 0) {
+            // 跳过说明写在结果末尾 (不做静默丢弃): 调用方据此判断是否需要提高上限
+            resultStr << fmt::format(
+                "[Note] {} file(s) skipped: larger than `max_file_size_mb` = {}. Raise it if they are needed.\n",
+                skippedTooLarge,
+                maxFileSizeMb
+            );
+        }
         return resultStr.str();
     }
     // 无匹配错误附带当前匹配模式说明, 便于调用方排查:
     // 正则元字符 (如 `(` `[` `*`) 未转义/未成对时会匹配不到, 此时可改用
     // text_patterns 纯文本匹配 (text_patterns 不经正则解释) 或转义后重试
     throw std::runtime_error{fmt::format(
-        R"_(Found {} files match `file_patterns`, but no match `text_patterns`/`regex_patterns` file found. Active modes: {}.)_",
+        R"_(Found {} files match `file_patterns`, but no match `text_patterns`/`regex_patterns` file found.{} Active modes: {}.)_",
         refilelist.size(),
+        skippedTooLarge > 0 ? fmt::format(
+                                  " {} file(s) were skipped (larger than `max_file_size_mb` = {}).",
+                                  skippedTooLarge,
+                                  maxFileSizeMb
+                              )
+                            : std::string{},
         (!text_patterns.empty() && !regex_patterns.empty())
             ? "literal text + regular expression (union)"
             : (text_patterns.empty() ? "regular expression" : "literal text")
