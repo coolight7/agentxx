@@ -121,10 +121,10 @@ private:
 
     /// 动态 MCP 条目 (io 线程独占访问)
     struct McpEntry {
-        std::string                        owner;
-        McpServerConfig                    cfg;
+        std::string                          owner;
+        McpServerConfig                      cfg;
         std::shared_ptr<protocol::McpClient> client; ///< add 时即创建 (连接身份标识);
-                                                   ///< 注销后旧协程经指针比对识别 stale
+                                                     ///< 注销后旧协程经指针比对识别 stale
         enum class Status {
             Connecting,
             Ready

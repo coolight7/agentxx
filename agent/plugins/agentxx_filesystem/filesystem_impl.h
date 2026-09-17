@@ -197,11 +197,9 @@ inline glob::WalkPolicy
         auto allRegexes   = compileExcludeRegexes(excludePatterns);
         auto pruneRegexes = compileExcludeRegexes(prunePatterns);
         if (false == allRegexes.empty()) {
-            policy.keepPath = [allRegexes = std::move(allRegexes),
-                               pruneRegexes = std::move(pruneRegexes)](
-                                  const std::filesystem::path& p,
-                                  bool                         isDir
-                              ) -> bool {
+            policy.keepPath = [allRegexes   = std::move(allRegexes),
+                               pruneRegexes = std::move(pruneRegexes
+                               )](const std::filesystem::path& p, bool isDir) -> bool {
                 const auto pathStr = toUtf8(p);
                 if (false == isDir) {
                     return false == isExcluded(pathStr, allRegexes);
@@ -884,7 +882,7 @@ inline std::string fileGlobExecuteImpl(
     // 遍历策略 (排除过滤 + 结果数量上限) 在多 pattern 之间共享: 排除项在遍历中
     // 直接剪枝, 数量上限对"全部 pattern 的总匹配数"生效, 且超限立即中断遍历
     glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
-    std::string      limitPattern{}; // 触发数量上限时正在遍历的 pattern (错误提示用)
+    std::string limitPattern{}; // 触发数量上限时正在遍历的 pattern (错误提示用)
 
     // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob (仅当前目录)
     // 对齐 shell globstar 行为: `*.txt` 只匹配当前目录, `**/*.txt` 才递归
@@ -1079,8 +1077,8 @@ inline std::string fileGrepExecuteImpl(
     std::vector<std::filesystem::path> refilelist{};
     // 遍历策略: 数量上限在**遍历过程中**生效 (超限立即中断, 不会先把几十万条
     // 路径读进内存); 计数在多 pattern 之间共享, 限制的是候选文件总数
-    glob::WalkPolicy  walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
-    std::string       walkLimitMsg{}; // 遍历层数量超限时的错误文本 (非空即需返回)
+    glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
+    std::string      walkLimitMsg{}; // 遍历层数量超限时的错误文本 (非空即需返回)
     for (const auto& pattern : file_patterns) {
         if (checkStop()) {
             return "[Error] Cancelled or timed out";

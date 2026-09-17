@@ -111,11 +111,7 @@ void SidebarComponent::buildTabList() {
     for (size_t p = 0; p < pinned_.size(); ++p) {
         const auto& pin   = pinned_[p];
         const int   tabIx = findTabIndex(pin.id);
-        pushButton(
-            tabIx >= 0 && tabIx == activeTab_,
-            pin.title,
-            TabHit{true, static_cast<int>(p)}
-        );
+        pushButton(tabIx >= 0 && tabIx == activeTab_, pin.title, TabHit{true, static_cast<int>(p)});
     }
     for (size_t i = 0; i < tabs_.size(); ++i) {
         if (isPinned(tabs_[i].id)) {

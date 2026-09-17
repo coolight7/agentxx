@@ -124,12 +124,10 @@ Element InputComponent::OnRender() {
             const auto& att     = attachments_[i];
             auto        icon    = agentxx::agent::MediaAttachment::mediaTypeIcon(att.type);
             auto        sizeStr = agentxx::util::formatSize(att.sizeBytes);
-            auto        delBtn
-                = hits_.add(
-                      text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
-                          | bold,
-                      fmt::format("{}{}", kAttachDeletePrefix, i)
-                  );
+            auto        delBtn  = hits_.add(
+                text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor) | bold,
+                fmt::format("{}{}", kAttachDeletePrefix, i)
+            );
             auto pill = hbox({
                             text(fmt::format(" [ {} {} ( {} ) ", icon, att.displayName, sizeStr)),
                             std::move(delBtn),
@@ -145,22 +143,21 @@ Element InputComponent::OnRender() {
     Element queueElement = text("");
     if (ctx_.frameState && !ctx_.frameState->pendingInputs.empty()) {
         const auto& st = *ctx_.frameState;
-        queueElement
-            = hbox({
-                  hits_.add(
-                      text(trf("queue.barTitle", st.pendingInputs.size())) | color(theme.accentColor)
-                          | bold,
-                      std::string{kPendingCounterHitId}
-                  ),
-                  text(" "),
-                  hits_.add(
-                      text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
-                          | color(theme.buttonTextColor) | bold,
-                      std::string{kPendingInsertHitId}
-                  ),
-                  filler(),
-              })
-              | bgcolor(theme.inputBgColor) | xflex;
+        queueElement   = hbox({
+                           hits_.add(
+                               text(trf("queue.barTitle", st.pendingInputs.size()))
+                                   | color(theme.accentColor) | bold,
+                               std::string{kPendingCounterHitId}
+                           ),
+                           text(" "),
+                           hits_.add(
+                               text(tr("queue.insert")) | bgcolor(theme.buttonBgColor)
+                                   | color(theme.buttonTextColor) | bold,
+                               std::string{kPendingInsertHitId}
+                           ),
+                           filler(),
+                       })
+                       | bgcolor(theme.inputBgColor) | xflex;
     }
 
     const int maxInputTotalLines = std::max(3, ctx_.terminalSize().dimy / 2);

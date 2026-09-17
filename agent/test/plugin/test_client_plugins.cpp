@@ -2868,7 +2868,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::client::TuiPluginAdapter tuiAdapter{
             std::weak_ptr<agentxx::client::TUIClientAgentIO>{}
         };
-        const auto                        tuiIfaces = tuiAdapter.supportedInterfaces();
+        const auto tuiIfaces = tuiAdapter.supportedInterfaces();
 
         // 29.1 表整体 + 全部已实现子能力 (第三方插件按表名声明时同样不再误报)
         const std::string_view tuiUiInterfaces[] = {

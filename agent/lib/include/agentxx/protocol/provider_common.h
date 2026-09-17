@@ -72,8 +72,8 @@ inline std::string extractSessionId(const neograph::CompletionParams& params) {
 ///
 /// - `return` true 表示为内部保留控制键, 应在组装 request body 时跳过
 inline bool isInternalExtraField(std::string_view key) {
-    return key == "session_id" || key == "sessionId"
-        || key == kHeaderSessionId || key == kHeaderOpencodeSession;
+    return key == "session_id" || key == "sessionId" || key == kHeaderSessionId
+           || key == kHeaderOpencodeSession;
 }
 
 /// 向请求头中设置本次会话的 sessionId

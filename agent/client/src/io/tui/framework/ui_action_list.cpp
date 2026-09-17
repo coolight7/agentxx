@@ -130,7 +130,8 @@ void UiActionList::moveSelection(int delta) {
         return;
     }
     // 只在可激活项之间移动 (disabled 项跳过); 越界停在边界, 不循环
-    for (int i = selectedIndex_ + delta; i >= 0 && i < static_cast<int>(items_.size()); i += delta) {
+    for (int i  = selectedIndex_ + delta; i >= 0 && i < static_cast<int>(items_.size());
+         i     += delta) {
         if (items_[static_cast<size_t>(i)].enabled) {
             setSelectedIndex(i);
             return;
@@ -197,7 +198,8 @@ bool UiActionList::onMouseEvent(const Mouse& mouse, UiHitMap& hits) {
     return false;
 }
 
-Element UiActionList::render(UiHitMap& hits, const UiActionStyle& style, RowBuilder rowBuilder) const {
+Element
+    UiActionList::render(UiHitMap& hits, const UiActionStyle& style, RowBuilder rowBuilder) const {
     Elements rows;
     rows.reserve(items_.size());
     for (size_t i = 0; i < items_.size(); ++i) {

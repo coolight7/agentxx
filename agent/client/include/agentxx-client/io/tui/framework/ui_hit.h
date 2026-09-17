@@ -71,7 +71,7 @@ struct UiHitInfo {
 ///   元素若被父级裁剪/滚出视口, Box 会被收敛为空 (FTXUI 的 reflect 与
 ///   screen stencil 求交), 因此视口外子项自然不会命中
 /// - Box 由 shared_ptr 持有, vector 扩容不会使已登记项的 Box 失效
-template <class Payload>
+template<class Payload>
 class UiHitRegistry {
 public:
 
@@ -92,7 +92,7 @@ public:
 
     /// 登记可命中元素: 返回的元素已附加 reflect, 布局后写入该元素的屏幕区域
     /// - `args...` 用于构造 Payload (聚合初始化)
-    template <class... Args>
+    template<class... Args>
     ftxui::Element add(ftxui::Element element, Args&&... args) {
         entries_.push_back(Entry{
             Payload{std::forward<Args>(args)...},

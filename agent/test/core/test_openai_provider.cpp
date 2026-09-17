@@ -3222,8 +3222,10 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
     // 1. 非流式 Chat Completions API 携带 session_id
     {
         neograph::CompletionParams params;
-        params.model                      = "gpt-4o-mini";
-        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "session test"}};
+        params.model    = "gpt-4o-mini";
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "session test"}
+        };
         params.extra_fields["session_id"] = "test-session-openai-001";
 
         try {
@@ -3237,21 +3239,22 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
             XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
-            TEST_FAIL << "session id headers (chat completions) test failed: " << e.what() << std::endl;
+            TEST_FAIL << "session id headers (chat completions) test failed: " << e.what()
+                      << std::endl;
         }
     }
 
     // 2. 流式 Chat Completions API 携带 session_id
     {
-        mock.mode      = MockMode::Streaming;
-        mock.sseChunks = {
-            mock.sseData(R"({"choices":[{"delta":{"content":"hi"}}]})"),
-            mock.sseDone()
-        };
+        mock.mode = MockMode::Streaming;
+        mock.sseChunks
+            = {mock.sseData(R"({"choices":[{"delta":{"content":"hi"}}]})"), mock.sseDone()};
 
         neograph::CompletionParams params;
-        params.model                      = "gpt-4o-mini";
-        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "stream session"}};
+        params.model    = "gpt-4o-mini";
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "stream session"}
+        };
         params.extra_fields["session_id"] = "test-session-stream-002";
 
         try {
@@ -3261,19 +3264,22 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
             XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
-            TEST_FAIL << "session id headers (chat completions stream) test failed: " << e.what() << std::endl;
+            TEST_FAIL << "session id headers (chat completions stream) test failed: " << e.what()
+                      << std::endl;
         }
         mock.mode = MockMode::Normal;
     }
 
     // 3. Responses API (Codex) 携带 session_id
     {
-        mock.mode       = MockMode::ResponsesNormal;
-        auto codexProv  = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
+        mock.mode      = MockMode::ResponsesNormal;
+        auto codexProv = server::OpenAIProvider::create(makeCodexCfg(baseUrl));
 
         neograph::CompletionParams params;
-        params.model                      = "codex-test";
-        params.messages                   = {neograph::ChatMessage{.role = "user", .content = "responses session"}};
+        params.model    = "codex-test";
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "responses session"}
+        };
         params.extra_fields["session_id"] = "test-session-codex-003";
 
         try {
@@ -3286,7 +3292,8 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
             XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
-            TEST_FAIL << "session id headers (responses API) test failed: " << e.what() << std::endl;
+            TEST_FAIL << "session id headers (responses API) test failed: " << e.what()
+                      << std::endl;
         }
         mock.mode = MockMode::Normal;
     }
@@ -3295,7 +3302,9 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
     {
         neograph::CompletionParams params;
         params.model    = "gpt-4o-mini";
-        params.messages = {neograph::ChatMessage{.role = "user", .content = "no session"}};
+        params.messages = {
+            neograph::ChatMessage{.role = "user", .content = "no session"}
+        };
 
         try {
             co_await provider->invoke(params, nullptr);

@@ -89,10 +89,10 @@ public:
 
     ~AgentHost();
 
-    std::shared_ptr<asio::io_context>         ioCtx();
+    std::shared_ptr<asio::io_context>          ioCtx();
     std::shared_ptr<agentxx::events::EventBus> hostBus();
-    std::shared_ptr<asio::thread_pool>        threadPool();
-    AgentRegistry&                            registry();
+    std::shared_ptr<asio::thread_pool>         threadPool();
+    AgentRegistry&                             registry();
 
     /// 注册根 agent (主 agent):
     /// - 注入共享 threadPool 与宿主引用 (AgentContext::host)
@@ -141,7 +141,7 @@ public:
     /// 经 A2A 协议 (SendMessage + GetTask 轮询) 转发并等待终态
     /// - 本地 agent 与远程 agent 在消息面完全同构 (agent.message RR 统一路由)
     void registerRemoteAgent(
-        std::string_view                            agentId,
+        std::string_view                              agentId,
         std::shared_ptr<agentxx::protocol::A2aClient> client
     );
 
@@ -188,7 +188,7 @@ private:
     /// 经 A2A 协议向远程 agent 发送消息并等待终态 (轮询 GetTask)
     asio::awaitable<events::RespHostMessage> sendViaA2a(
         std::shared_ptr<agentxx::protocol::A2aClient> client,
-        const events::ReqHostMessage&               req
+        const events::ReqHostMessage&                 req
     );
     std::string nextAgentId();
     void        publishProgress(
@@ -201,7 +201,7 @@ private:
     Config                                      cfg_;
     std::shared_ptr<asio::io_context>           ioCtx_;
     std::shared_ptr<asio::thread_pool>          threadPool_;
-    std::shared_ptr<agentxx::events::EventBus>   hostBus_;
+    std::shared_ptr<agentxx::events::EventBus>  hostBus_;
     AgentRegistry                               registry_;
     std::shared_ptr<BaseAgent>                  rootAgent_;
     std::map<std::string, Mailbox, std::less<>> mailboxes_;

@@ -144,11 +144,10 @@ private:
     /// 填充通用请求头: Authorization + extraHeaders
     void applyHeaders(agentxx::util::HeaderMap& headers) const;
 
-    /// 填充完整请求头: Authorization + extraHeaders + 会话 Header (X-Session-Id, X-Opencode-Session)
-    void applyHeaders(
-        agentxx::util::HeaderMap&         headers,
-        const neograph::CompletionParams& params
-    ) const;
+    /// 填充完整请求头: Authorization + extraHeaders + 会话 Header (X-Session-Id,
+    /// X-Opencode-Session)
+    void applyHeaders(agentxx::util::HeaderMap& headers, const neograph::CompletionParams& params)
+        const;
 
     /// 归一化 finish_reason → stop_reason
     static std::string mapStopReason(std::string_view finishReason);

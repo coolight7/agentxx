@@ -269,9 +269,9 @@ private:
     std::map<std::string, SessionFsIsolation, std::less<>> sessionIsolations_;
 
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
-    size_t                                  checkServerId_       = 0;
-    size_t                                  setIsolationSubId_   = 0;
-    size_t                                  clearIsolationSubId_ = 0;
+    size_t                                   checkServerId_       = 0;
+    size_t                                   setIsolationSubId_   = 0;
+    size_t                                   clearIsolationSubId_ = 0;
 };
 
 } // namespace middleware

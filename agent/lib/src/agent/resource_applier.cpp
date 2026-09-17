@@ -406,7 +406,7 @@ bool AgentResourceApplier::deactivateMcp(std::string_view nameSpace) {
 }
 
 void AgentResourceApplier::failMcp(
-    const std::string&                        ns,
+    const std::string&                          ns,
     const std::shared_ptr<protocol::McpClient>& client
 ) {
     auto it = mcpEntries_.find(ns);
@@ -418,7 +418,7 @@ void AgentResourceApplier::failMcp(
 }
 
 void AgentResourceApplier::spawnMcpConnect(
-    std::string                        ns,
+    std::string                          ns,
     std::shared_ptr<protocol::McpClient> client
 ) {
     // self 保活: applier 析构 (随 AgentContext) 后协程仍可安全完成清理;

@@ -65,7 +65,7 @@ public:
 private:
 
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
-    size_t                                  executeServerId_ = 0;
+    size_t                                   executeServerId_ = 0;
 };
 
 /// 子代理委派共享逻辑 (中断处理循环写入侧 与 SubAgentManagerTool 读取侧共用)

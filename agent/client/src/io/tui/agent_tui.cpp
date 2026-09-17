@@ -263,10 +263,10 @@ namespace {
 
 /// 组装插件按钮命中表项 (plugin/owner/action/参数/实例代次)
 TUIClientAgentIO::UiHitTarget panelHint(
-    const std::string&                        plugin,
-    const std::string&                        ownerId,
-    const agentxx::client::PluginButtonDesc&  desc,
-    const agentxx::plugin::ClientUiRegistry*  reg
+    const std::string&                       plugin,
+    const std::string&                       ownerId,
+    const agentxx::client::PluginButtonDesc& desc,
+    const agentxx::plugin::ClientUiRegistry* reg
 ) {
     return TUIClientAgentIO::UiHitTarget{
         .plugin     = plugin,
@@ -329,7 +329,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                         if (desc.clickable) {
                             // 命中登记: box 由登记表持有并 reflect, 仅本帧渲染出来的
                             // 按钮才命中 (面板未展开/条目不在视口时不占点击区域)
-                            btn = hitTargets_.add(std::move(btn), panelHint(panel->plugin, panel->id, desc, reg.get()));
+                            btn = hitTargets_.add(
+                                std::move(btn),
+                                panelHint(panel->plugin, panel->id, desc, reg.get())
+                            );
                         }
                         out.push_back(ScrollItem{hbox({
                             agentxx::client::renderPluginTextItem(
@@ -497,15 +500,18 @@ void TUIClientAgentIO::start() {
             ctx_,
             // 状态栏点击动作 (与 F2/F4/F3 快捷键同一实现)
             StatusBarComponent::Config{
-                .onModelClick    = [this] {
-                    openModelSelector();
-                },
-                .onSessionsClick = [this] {
-                    openSessionSelector();
-                },
-                .onSettingsClick = [this] {
-                    openSettings();
-                },
+                .onModelClick =
+                    [this] {
+                        openModelSelector();
+                    },
+                .onSessionsClick =
+                    [this] {
+                        openSessionSelector();
+                    },
+                .onSettingsClick =
+                    [this] {
+                        openSettings();
+                    },
             }
         );
         sidebar_ = std::make_shared<SidebarComponent>(ctx_);
@@ -601,10 +607,9 @@ void TUIClientAgentIO::start() {
             });
             overlay->onDeleteItem([this](std::string itemId) {
                 if (transport_) {
-                    sendToPeer(agentxx::agent::WireRemoveQueueItem{
-                        currentSessionId(),
-                        std::move(itemId)
-                    });
+                    sendToPeer(
+                        agentxx::agent::WireRemoveQueueItem{currentSessionId(), std::move(itemId)}
+                    );
                 }
             });
             overlay->onClose([this] {

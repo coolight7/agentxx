@@ -436,8 +436,10 @@ TestResult testTuiContextOverlay() {
             cy
         ));
         // 展开体出现 (该消息的 JSON 内容)
-        XX_TEST_EXPECT_TRUE(screen2.find(fmt::format("\"content\": \"{} payload\"", clickedMarker))
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            screen2.find(fmt::format("\"content\": \"{} payload\"", clickedMarker))
+            != std::string::npos
+        );
         // 其余可见消息仍为折叠态
         XX_TEST_EXPECT_TRUE(screen2.find("+ [user] ") != std::string::npos);
         // 视口外消息 (第一条) 不应被误展开: 折叠头是 "+" 且列表未跳到顶部
@@ -460,7 +462,10 @@ TestResult testTuiContextOverlay() {
             longBody += "lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
         }
         agentxx::util::Json msgs = agentxx::util::Json::array();
-        msgs.push_back(agentxx::util::Json{{"role", "system"}, {"content", longBody}});
+        msgs.push_back(agentxx::util::Json{
+            {"role",    "system"},
+            {"content", longBody}
+        });
         for (size_t i = 1; i <= 4; ++i) {
             msgs.push_back(agentxx::util::Json{
                 {"role", "user"},
@@ -499,9 +504,7 @@ TestResult testTuiContextOverlay() {
         XX_TEST_EXPECT_TRUE(ContextOverlayFixture::findText(screen, "tail-04", tx, ty));
         XX_TEST_EXPECT_TRUE(fx.clickAt(tx, ty));
         auto screen2 = fx.render();
-        XX_TEST_EXPECT_TRUE(
-            screen2.find("\"content\": \"tail-04 payload\"") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(screen2.find("\"content\": \"tail-04 payload\"") != std::string::npos);
 
         // 回到顶部: 长消息仍是展开态 (未被误折叠)
         for (int i = 0; i < 200; ++i) {

@@ -11,10 +11,8 @@ using namespace ftxui;
 namespace {
 
 /// 命中项查找 (命中表按 id 线性查找; 命中项数量为个位数)
-const agentxx::client::UiHitMap::Entry* findEntry(
-    const agentxx::client::UiHitMap& hits,
-    std::string_view                 id
-) {
+const agentxx::client::UiHitMap::Entry*
+    findEntry(const agentxx::client::UiHitMap& hits, std::string_view id) {
     for (const auto& entry : hits.entries()) {
         if (entry.payload.id == id) {
             return &entry;
@@ -78,10 +76,8 @@ Element StatusBarComponent::OnRender() {
     }
     // 外层 hbox 也需感知 modelInfo 可收缩, 否则整块被按比例压缩 (见
     // ftxui box_helper::ComputeShrinkHard: 不可收缩元素同样被缩减)
-    auto modelInfo = hits_.add(
-        hbox(std::move(modelChildren)) | xflex_shrink,
-        std::string{kModelHitId}
-    );
+    auto modelInfo
+        = hits_.add(hbox(std::move(modelChildren)) | xflex_shrink, std::string{kModelHitId});
 
     // ---- 插件状态栏项 (client 插件注册; 左侧 align=0 / 右侧 align=1) ----
     // 从插件 UI 注册表快照读取 (短锁拷贝 shared_ptr, 渲染无锁);

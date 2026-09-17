@@ -866,7 +866,7 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendMessage(events::ReqHostM
 }
 
 void AgentHost::registerRemoteAgent(
-    std::string_view                            agentId,
+    std::string_view                              agentId,
     std::shared_ptr<agentxx::protocol::A2aClient> client
 ) {
     if (client) {
@@ -882,7 +882,7 @@ void AgentHost::unregisterRemoteAgent(std::string_view agentId) {
 
 asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
     std::shared_ptr<agentxx::protocol::A2aClient> client,
-    const events::ReqHostMessage&               req
+    const events::ReqHostMessage&                 req
 ) {
     // 1) SendMessage → 服务端创建 task
     auto sendResult = co_await client->sendMessage(req.message);

@@ -458,7 +458,7 @@ Element FilePickerOverlay::OnRender() {
     content.push_back(tuiSurfaceGapRow(theme.surfaceColor));
 
     // 文件列表区
-    Elements items;
+    Elements  items;
     const int maxVisible  = std::max(5, ctx_.terminalSize().dimy / 2);
     const int scrollStart = std::max(0, curTab.selectedIndex - maxVisible + 2);
     const int scrollEnd
@@ -521,8 +521,7 @@ Element FilePickerOverlay::OnRender() {
                 row = row | dim;
             }
             // 命中登记 (id 含 tab 归属与条目下标): 仅本帧渲染出来的条目可命中
-            items.push_back(
-                hits_.add(std::move(row), itemHitId(activeTab_, static_cast<size_t>(i)))
+            items.push_back(hits_.add(std::move(row), itemHitId(activeTab_, static_cast<size_t>(i)))
             );
         }
 

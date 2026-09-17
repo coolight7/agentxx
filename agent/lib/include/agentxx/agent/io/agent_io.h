@@ -207,11 +207,11 @@ protected:
     /// 从已注册的总线上移除本 IO 的处理器 (若总线仍存活)
     void unregisterFromBus();
 
-    std::shared_ptr<AgentIOTransportBase>   transport_;
-    std::shared_ptr<ClientEventSink>        eventSink_;
+    std::shared_ptr<AgentIOTransportBase>    transport_;
+    std::shared_ptr<ClientEventSink>         eventSink_;
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
-    size_t                                  interruptServerId_  = 0;
-    size_t                                  permissionServerId_ = 0;
+    size_t                                   interruptServerId_  = 0;
+    size_t                                   permissionServerId_ = 0;
 };
 
 } // namespace agent

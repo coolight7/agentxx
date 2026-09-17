@@ -446,7 +446,7 @@ void testBannerRetryButtonHitArea() {
 
     // 连接成功: banner 重建, [重试] 按钮不再渲染 -> 命中区域为空, 原位置点击无效
     f.sharedState.mutate([](TUIRenderState& st) {
-        st.connState  = ConnState::Connected;
+        st.connState = ConnState::Connected;
         st.startupProgress.clear();
     });
     f.render();

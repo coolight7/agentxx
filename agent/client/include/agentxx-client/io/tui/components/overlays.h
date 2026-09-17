@@ -290,7 +290,7 @@ private:
             Item,   ///< 条目本体 (点击展开/折叠)
         };
 
-        Kind        kind   = Kind::Item;
+        Kind        kind = Kind::Item;
         std::string itemId;
     };
 

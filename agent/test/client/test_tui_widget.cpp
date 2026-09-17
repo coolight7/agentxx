@@ -11,9 +11,9 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/framework/ui_action_list.h"
 #include "agentxx-client/io/tui/framework/ui_hit.h"
-#include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
@@ -175,20 +175,24 @@ void test_hit_registry_click_and_order() {
     }
 
     // 非左键 / 非释放动作不算点击
-    XX_TEST_EXPECT_TRUE(hits.findClick(ftxui::Mouse{
-                             .button = ftxui::Mouse::Right,
-                             .motion = ftxui::Mouse::Released,
-                             .x      = x,
-                             .y      = y,
-                         })
-                        == nullptr);
-    XX_TEST_EXPECT_TRUE(hits.findClick(ftxui::Mouse{
-                             .button = ftxui::Mouse::Left,
-                             .motion = ftxui::Mouse::Pressed,
-                             .x      = x,
-                             .y      = y,
-                         })
-                        == nullptr);
+    XX_TEST_EXPECT_TRUE(
+        hits.findClick(ftxui::Mouse{
+            .button = ftxui::Mouse::Right,
+            .motion = ftxui::Mouse::Released,
+            .x      = x,
+            .y      = y,
+        })
+        == nullptr
+    );
+    XX_TEST_EXPECT_TRUE(
+        hits.findClick(ftxui::Mouse{
+            .button = ftxui::Mouse::Left,
+            .motion = ftxui::Mouse::Pressed,
+            .x      = x,
+            .y      = y,
+        })
+        == nullptr
+    );
     XX_TEST_EXPECT_TRUE(hits.find(x, y) != nullptr); // 坐标查询仍可用 (拖拽等场景)
 }
 
@@ -220,8 +224,8 @@ std::vector<UiActionItem> makeActions(std::vector<std::string>& activateList) {
 } // namespace
 
 void test_action_list_selection_keeps_by_id() {
-    UiActionList  list;
-    UiHitMap      hits;
+    UiActionList             list;
+    UiHitMap                 hits;
     UiActionStyle            style = testStyle();
     std::vector<std::string> activated;
 
@@ -258,8 +262,8 @@ void test_action_list_selection_keeps_by_id() {
 }
 
 void test_action_list_keyboard_activate() {
-    UiActionList  list;
-    UiHitMap      hits;
+    UiActionList             list;
+    UiHitMap                 hits;
     UiActionStyle            style = testStyle();
     std::vector<std::string> activated;
 
@@ -291,8 +295,8 @@ void test_action_list_keyboard_activate() {
 }
 
 void test_action_list_mouse_click() {
-    UiActionList  list;
-    UiHitMap      hits;
+    UiActionList             list;
+    UiHitMap                 hits;
     UiActionStyle            style = testStyle();
     std::vector<std::string> activated;
 
@@ -379,7 +383,7 @@ void test_hidden_button_not_clickable() {
     ctx.viewportWidth  = 60;
     ctx.viewportHeight = 20;
 
-    bool opened = false;
+    bool opened        = false;
     bool attachAllowed = true;
 
     InputComponent::Config cfg;
@@ -405,7 +409,7 @@ void test_hidden_button_not_clickable() {
     XX_TEST_EXPECT_TRUE(opened);
 
     // 2. 模型不再支持多模态: 按钮不渲染 -> 命中框为空区域, 原位置点击无响应
-    opened       = false;
+    opened        = false;
     attachAllowed = false;
     renderOnce(comp);
     XX_TEST_EXPECT_TRUE(comp->attachButtonBox().IsEmpty());
@@ -417,7 +421,9 @@ void test_hidden_button_not_clickable() {
     renderOnce(comp);
     XX_TEST_EXPECT_TRUE(!comp->attachButtonBox().IsEmpty());
     const ftxui::Box restored = comp->attachButtonBox();
-    comp->OnEvent(leftClickAt((restored.x_min + restored.x_max) / 2, (restored.y_min + restored.y_max) / 2));
+    comp->OnEvent(
+        leftClickAt((restored.x_min + restored.x_max) / 2, (restored.y_min + restored.y_max) / 2)
+    );
     XX_TEST_EXPECT_TRUE(opened);
 }
 
@@ -439,15 +445,18 @@ void test_status_bar_click_actions() {
     auto comp           = std::make_shared<StatusBarComponent>(
         ctx,
         StatusBarComponent::Config{
-            .onModelClick = [&] {
-                ++modelClicks;
-            },
-            .onSessionsClick = [&] {
-                ++sessionClicks;
-            },
-            .onSettingsClick = [&] {
-                ++settingsClicks;
-            },
+                      .onModelClick =
+                [&] {
+                    ++modelClicks;
+                },
+                      .onSessionsClick =
+                [&] {
+                    ++sessionClicks;
+                },
+                      .onSettingsClick =
+                [&] {
+                    ++settingsClicks;
+                },
         }
     );
 

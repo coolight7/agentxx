@@ -950,7 +950,7 @@ asio::awaitable<void> test_host_remote_a2a() {
     std::expected<agentxx::events::RespHostMessage, std::string> resp;
     std::atomic<bool>                                            finished{false};
     std::thread                                                  serverThread;
-    std::shared_ptr<agentxx::protocol::A2aServer>                  a2aServer;
+    std::shared_ptr<agentxx::protocol::A2aServer>                a2aServer;
 
     asio::co_spawn(
         *io,
@@ -963,7 +963,8 @@ asio::awaitable<void> test_host_remote_a2a() {
             scfg.httpConfig.address = "127.0.0.1";
             scfg.httpConfig.port    = 0;
             scfg.serverName         = "remote-worker";
-            a2aServer = std::make_shared<agentxx::protocol::A2aServer>(remoteAgent, std::move(scfg));
+            a2aServer
+                = std::make_shared<agentxx::protocol::A2aServer>(remoteAgent, std::move(scfg));
             serverThread = std::thread([s = a2aServer]() {
                 s->start();
             });

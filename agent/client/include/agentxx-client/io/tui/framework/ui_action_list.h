@@ -120,11 +120,8 @@ public:
     bool onMouseEvent(const ftxui::Mouse& mouse, UiHitMap& hits);
 
     /// 渲染条目 (逐项登记命中区域; rowBuilder 为空时用 [UiActionStyle::row])
-    ftxui::Element render(
-        UiHitMap&            hits,
-        const UiActionStyle& style,
-        RowBuilder           rowBuilder = {}
-    ) const;
+    ftxui::Element
+        render(UiHitMap& hits, const UiActionStyle& style, RowBuilder rowBuilder = {}) const;
 
     /// 选中项下标 (-1 = 列表为空)
     int selectedIndex() const;

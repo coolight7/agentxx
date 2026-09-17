@@ -342,11 +342,10 @@ private:
 
     explicit AnthropicProvider(agentxx::agent::ModelConfig config);
 
-    /// 填充请求头: x-api-key + anthropic-version + extraHeaders + 会话 Header (X-Session-Id, X-Opencode-Session)
-    void applyHeaders(
-        agentxx::util::HeaderMap&         headers,
-        const neograph::CompletionParams& params
-    ) const;
+    /// 填充请求头: x-api-key + anthropic-version + extraHeaders + 会话 Header (X-Session-Id,
+    /// X-Opencode-Session)
+    void applyHeaders(agentxx::util::HeaderMap& headers, const neograph::CompletionParams& params)
+        const;
 
     agentxx::util::Json buildBody(const neograph::CompletionParams& params) const;
 

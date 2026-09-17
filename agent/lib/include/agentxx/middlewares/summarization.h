@@ -163,7 +163,7 @@ public:
 private:
 
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
-    size_t                                  compactSubId_ = 0;
+    size_t                                   compactSubId_ = 0;
 };
 
 } // namespace middleware
