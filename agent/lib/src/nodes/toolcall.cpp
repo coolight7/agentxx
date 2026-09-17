@@ -677,9 +677,19 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                     },
                     nullptr
                 );
-                // 解析用户响应: agent_runner 将结果 values 对象 (控件 id → 值)
-                // 按 resultId 写回 interruptResult; 未应答/取消 = 空对象 → 拒绝
-                bool allow = agentxx::middleware::interruptValueBool(result, "allow", false);
+                // 解析用户响应: agent_runner 把结果 values 对象 (控件 id → 值)
+                // 按 resultId (工具调用 id) 写回 interruptResult, 形如
+                // {"<tool_call_id>": {"allow": "true"}}; 未应答/取消 = 空对象 → 拒绝
+                // - 必须先按自身 resultId 下钻取值 (与 subagent 工具同口径):
+                //   直接对顶层对象取 "allow" 恒取不到, 会使用户点"允许"也被拒绝
+                const auto toolCallId = args.value("tool_call_id", std::string{});
+                const auto* valuesPtr = &result;
+                if (result.is_object() && false == toolCallId.empty()) {
+                    if (auto it = result.find(toolCallId); it != result.end()) {
+                        valuesPtr = &(*it);
+                    }
+                }
+                bool allow = agentxx::middleware::interruptValueBool(*valuesPtr, "allow", false);
                 if (false == allow) {
                     XX_LOGD(
                         "Toolcall repeat check: deny '{}' ({})",
@@ -703,7 +713,10 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
 
     size_t maxRetry = 0;
     {
-        auto str    = tool->extra["maxRetry"];
+        // 用 find 读取 (operator[] 会在共享的 tool 定义 map 上插入缺失键,
+        // 查询不该改状态)
+        auto it  = tool->extra.find("maxRetry");
+        auto str = (it == tool->extra.end()) ? std::string{} : it->second;
         auto result = agentxx::util::parseNumberFromString(str, maxRetry);
         if (result.ec != std::errc{}) {
             maxRetry = 0;
@@ -752,7 +765,11 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
     } while (true);
 
     const size_t limitLength = agentCtxPtr->agentConfig->toolcallSummaryLimitOutputLength;
-    if ("true" == tool->extra["autoSummaryOutput"] && result.size() >= limitLength) {
+    // 用 find 读取 (operator[] 会插入缺失键); 缺失 = 未启用压缩
+    const auto autoSummaryIt  = tool->extra.find("autoSummaryOutput");
+    const bool autoSummary
+        = (autoSummaryIt != tool->extra.end() && autoSummaryIt->second == "true");
+    if (autoSummary && result.size() >= limitLength) {
         // 字节数量超过，按 utf8 长度判断
         auto [targetIndex, lineCount, lastLineIndex]
             = agentxx::util::findIndexAndLastLineIndexByUtf8Length(result, limitLength);
