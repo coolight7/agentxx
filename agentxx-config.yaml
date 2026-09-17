@@ -396,7 +396,7 @@ plugin:
     #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
     # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
-      enabled: true
+      enabled: false
       args:
         # paths:
         #   - "/path/to/project_a"
@@ -409,7 +409,7 @@ plugin:
 
     # === 系统资源监控
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
-      enabled: true
+      enabled: false
 
     # === 数学计算工具 ===
     # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
