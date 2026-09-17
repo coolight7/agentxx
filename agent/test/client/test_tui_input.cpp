@@ -1,4 +1,4 @@
-#include "test_tui_input.h"
+#include "agentxx-test/client/test_tui_input.h"
 
 #include "agentxx-client/io/tui/components/input_bar.h"
 #include "agentxx-client/io/tui/components/overlays.h"

@@ -6,7 +6,7 @@
 //   write_file / edit_text_file / glob / grep
 // - web_search 系列: web_search / web_fetch_url / web_fetch_url_markdown
 // - 降级: 未知工具名 / 非 JSON 参数 -> 头部仍显示原始 toolName
-#include "test_tui_tool_header.h"
+#include "agentxx-test/client/test_tui_tool_header.h"
 
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
@@ -18,7 +18,7 @@
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
-#include "test_framework.h"
+#include "agentxx-test/test_framework.h"
 #include <memory>
 #include <string>
 #include <utility>

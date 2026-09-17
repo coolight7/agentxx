@@ -1,4 +1,4 @@
-#include "test_a2a.h"
+#include "agentxx-test/core/test_a2a.h"
 
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/protocol/a2a_server.h"

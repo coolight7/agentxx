@@ -1,5 +1,5 @@
-#include "test_agent_host.h"
-#include "test_agent.h"
+#include "agentxx-test/core/test_agent_host.h"
+#include "agentxx-test/core/test_agent.h"
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"

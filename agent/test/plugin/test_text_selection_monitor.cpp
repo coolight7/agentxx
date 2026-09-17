@@ -1,4 +1,4 @@
-#include "test_text_selection_monitor.h"
+#include "agentxx-test/plugin/test_text_selection_monitor.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"

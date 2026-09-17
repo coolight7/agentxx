@@ -1,4 +1,4 @@
-#include "test_string_tools.h"
+#include "agentxx-test/core/test_string_tools.h"
 #include "agentxx/agent/context.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_string 插件 (同名同行为); 测试直测插件

@@ -7,7 +7,7 @@
 // 输出每轮: RSS/Private 内存、viewMessages / llmMessages / shareStore 的大小,
 // 量化各模块内存占用。
 
-#include "test_memgrowth.h"
+#include "agentxx-test/core/test_memgrowth.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/env.h"
@@ -18,7 +18,7 @@
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
-#include "test_agent.h"
+#include "agentxx-test/core/test_agent.h"
 #include <chrono>
 #include <cstdio>
 #include <cstring>

@@ -1,4 +1,4 @@
-#include "test_math_tools.h"
+#include "agentxx-test/core/test_math_tools.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"

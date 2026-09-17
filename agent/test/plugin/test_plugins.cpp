@@ -1,4 +1,4 @@
-#include "test_plugins.h"
+#include "agentxx-test/plugin/test_plugins.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"

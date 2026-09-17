@@ -21,6 +21,8 @@ Test module names are listed in the registry table at the top of `agent/test/tes
 
 ### Conventions for Adding New Test Modules
 
+- Header location: `agent/test/include/agentxx-test/<core|plugin|client>/test_xxx.h` (same module name as `agent/test/<core|plugin|client>/test_xxx.cpp`); the shared `test_framework.h` lives directly under `agent/test/include/agentxx-test/`.
+- Includes always carry the `agentxx-test/` prefix (the only include root is `agent/test/include/`): `#include "agentxx-test/core/test_xxx.h"` / `#include "agentxx-test/test_framework.h"`. Source directories are no longer include roots, so test headers can never clash with same-named headers from other libraries.
 - Headers must only contain function declarations. Assertion counters should be defined in anonymous namespaces within `*.cpp`, with `#define XX_TEST_PASSED g_xxx_passed` / `XX_TEST_FAILED` mapping to `test_framework.h` macros in the `cpp` file; end with `return TestResult{g_xxx_passed, g_xxx_failed};`.
 - Macro overrides or `extern` exporting of counters in header files are strictly forbidden (macro leakage across translation units has previously caused counter mix-ups across modules).
 - Signature for async test modules: `asio::awaitable<TestResult> run_xxx_tests()`; for sync test modules: `TestResult testXxx()`.

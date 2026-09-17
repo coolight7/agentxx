@@ -1,4 +1,4 @@
-#include "test_share_store.h"
+#include "agentxx-test/core/test_share_store.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"

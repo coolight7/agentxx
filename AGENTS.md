@@ -65,6 +65,9 @@ int charToLower(int c) {
           (被 BaseAgent 驱动, delta 缓冲/重连重放)
 - `agent/test`: 编译结果 {build}/exec/agentxx_test
     - 测试
+    - 头文件统一位于 `agent/test/include/agentxx-test/{,core/,plugin/,client/}` (与源码目录
+      `core/` `plugin/` `client/` 同名对应), 该目录是测试唯一的 include 根; 源码一律写
+      `#include "agentxx-test/core/test_xxx.h"` 这类完整路径, 避免与其它库同名头文件歧义
     - 运行测试示例:
 ```bash
 # 运行所有测试模块，遇到错误也不终止继续运行

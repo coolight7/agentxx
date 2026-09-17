@@ -15,7 +15,7 @@
 ///     (lib 内置工具无对应插件, 由宿主注册内置渲染器)
 /// 29. 接口协商: TUI 宿主声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
 ///     client 侧声明必须全部被满足 (避免启动误报"可选接口不支持")
-#include "test_client_plugins.h"
+#include "agentxx-test/plugin/test_client_plugins.h"
 
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/tui_plugin_adapter.h"

@@ -1,4 +1,4 @@
-#include "test_training.h"
+#include "agentxx-test/core/test_training.h"
 
 #include "agentxx/agent/training.h"
 #include "agentxx/util/exception.h"

@@ -8,7 +8,7 @@
 /// - T4 声明式资源: entry 成功后应用 → 中间件列表/componentInfo/所有权快照;
 ///   disable 摘生效留记录 → enable 恢复; 卸载全部清除
 /// - T5 加载失败 → 声明资源不生效 ("失败不生效"语义)
-#include "test_plugin_resources.h"
+#include "agentxx-test/plugin/test_plugin_resources.h"
 
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"

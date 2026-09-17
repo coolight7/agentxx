@@ -10,7 +10,7 @@
 // - [稳定块缓存] stableBlockCount 随文档增长单调不减, 且闭合块被识别为稳定
 // - [reset] 重置后从零开始, 渲染结果与全新解析一致
 // - [边界前缀] setext 标题/表格/代码块/列表等块类型在增量下与全量一致
-#include "test_tui_stream.h"
+#include "agentxx-test/client/test_tui_stream.h"
 
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"

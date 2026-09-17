@@ -1,4 +1,4 @@
-#include "test_screen_capture.h"
+#include "agentxx-test/plugin/test_screen_capture.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"

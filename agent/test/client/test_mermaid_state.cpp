@@ -1,4 +1,4 @@
-#include "test_mermaid_state.h"
+#include "agentxx-test/client/test_mermaid_state.h"
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"

@@ -551,7 +551,9 @@ path/to/agentxx_test string_util regex agent
 - 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 透出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
 
-测试源目录划分: 根目录 (入口+框架) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译)。
+测试源目录划分: 根目录 (入口 `test.cpp`) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译);
+测试头文件统一放在 `include/agentxx-test/` 下与源码同名的子目录 (`core/` `plugin/` `client/`), 源码一律以
+`#include "agentxx-test/<子目录>/test_xxx.h"` 引用 —— 不以源码目录作为 include 根, 避免与其它库的同名头文件产生歧义。
 新增测试模块约定: 头文件仅保留函数声明; 断言计数器定义在模块 cpp 的匿名命名空间内,
 并在 cpp 内 `#define XX_TEST_PASSED g_xxx_passed` / `#define XX_TEST_FAILED g_xxx_failed`
 映射 test_framework.h 断言宏, 测试函数末尾 `return TestResult{g_xxx_passed, g_xxx_failed};`
@@ -1640,73 +1642,77 @@ agent/
 │
 ├── test/                         # agentxx_test 测试程序
 │   ├── test.cpp                  # 测试入口: 模块注册与调度 (同步/异步模块分组)
-│   ├── test_framework.h          # 测试框架 (断言宏 / TestResult)
-│   ├── test_toolcall_args.*      # 工具参数类型自动修正测试
-│   ├── test_ffi_c_api.*          # FFI C API 测试 (生命周期/交互/HIL/事件队列)
-│   ├── core/                     # lib (agentxx 核心) 测试
-│   │   ├── test_agent.*          # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
-│   │   │                         #   test_agent.h 同时提供共享 LLM 模拟器 (DaSimServer),
-│   │   │                         #   被 agent_host/session_persistence/remote_agent/cancel/memgrowth 等复用
-│   │   ├── test_agent_host.*     # AgentHost 宿主测试 (子代理派生/深度并发预算/回收)
-│   │   ├── test_training.*       # 进化训练测试 (变异/评估/优化/收敛/持久化)
-│   │   ├── test_events.*         # 事件类型测试
-│   │   ├── test_event_stream.*   # EventBus / EventStream / RequestResponseStream 测试
-│   │   ├── test_event_bridge.*   # EventBridge 事件翻译测试
-│   │   ├── test_interrupt_bus.*  # 中断总线 HIL 测试
-│   │   ├── test_subagent_bus.*   # 子代理总线测试 (含批量委派/跨 agent 路由)
-│   │   ├── test_concurrency.*    # 并发测试
-│   │   ├── test_cancel.*         # 取消语义测试 (CancelToken 双通道/operation_aborted 转换)
-│   │   ├── test_message_supplement.* # 消息补全/修复测试
-│   │   ├── test_summarization.*  # 上下文压缩测试 (token 统计/去重/LLM 压缩)
-│   │   ├── test_checkpoint_store.* # 单检查点存储测试 (InMemorySingleCheckpointStore)
-│   │   ├── test_memgrowth.*      # 多轮内存增长测试 (泄漏检测)
-│   │   ├── test_session_persistence.* # 会话 SQLite 持久化测试 (消息/上下文/share store 落库与重启恢复)
-│   │   ├── test_remote_agent.*   # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
-│   │   ├── test_mcp.*            # MCP 协议测试 (多版本/HTTP/stdio)
-│   │   ├── test_a2a.*            # A2A 协议测试
-│   │   ├── test_acp.*            # ACP 协议测试
-│   │   ├── test_websocket.*      # WebSocket 测试
-│   │   ├── test_http.*           # HTTP 客户端/服务器测试
-│   │   ├── test_network_timeout.* # 网络超时行为测试
-│   │   ├── test_openai_provider.* # OpenAI Provider 测试 (SSE/thinking/tool_calls/限流)
-│   │   ├── test_anthropic_provider.* # Anthropic Provider 测试
-│   │   ├── test_string_util.*    # 字符串工具测试
-│   │   ├── test_regex.*          # 正则引擎测试
-│   │   ├── test_diff_util.*      # Diff 工具测试
-│   │   ├── test_aho_corasick.*   # Aho-Corasick 多模式匹配测试
-│   │   ├── test_util_misc.*      # 杂项 util 测试
-│   │   ├── test_settings_db.*    # 全局设置 SQLite 测试
-│   │   ├── test_misc_fixes.*     # 杂项修复测试
-│   │   ├── test_share_store.*    # ShareStore 测试
-│   │   ├── test_subagent_tool.*  # 子代理工具参数校验与恢复测试
-│   │   ├── test_worktree.*       # Git worktree 封装与隔离测试
-│   │   ├── test_filesystem_tools.* # 文件系统工具测试 (直测插件同一 *_impl.h 实现)
-│   │   ├── test_command_tools.*  # 命令执行工具测试 (直测插件同一实现)
-│   │   ├── test_math_tools.*     # 数学计算工具测试 (直测插件同一实现)
-│   │   ├── test_web_search_tools.* # 网络搜索测试 (直测插件同一实现)
-│   │   ├── test_rag_search_tools.* # RAG 搜索测试 (直测插件同一实现)
-│   │   ├── test_string_tools.*   # 字符串工具测试 (html2md/regexp, 直测插件同一实现)
-│   │   └── test_datetime_tool.*  # 日期时间工具测试 (直测插件同一实现)
-│   ├── plugin/                   # 插件测试 (插件系统 + 各具体插件集成)
-│   │   ├── test_plugins.*        # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
-│   │   ├── test_plugin_resources.* # 插件会话资源扩展测试 (Skill/Memory/MCP 声明式+运行时)
-│   │   ├── test_plugin_multi_instance.* # 插件多实例隔离测试 (三铁律)
-│   │   ├── test_client_plugins.* # client 侧插件测试 (内置合并编译时跳过)
-│   │   ├── test_codegraph_tools.* # CodeGraph 插件集成测试 (search/context/callers/callees/path 共 5 工具)
-│   │   ├── test_cpu_gpu_use.*    # system_monitor 插件集成测试 (系统资源监控)
-│   │   ├── test_screen_capture.* # screen_capture 插件集成测试 (仅 Windows)
-│   │   └── test_text_selection_monitor.* # text_selection_monitor 插件集成测试 (仅 Windows)
-│   └── client/                   # client 侧测试 (AGENTXX_BUILD_CLIENT 条件编译)
-│       ├── test_config_loader.*  # YAML 配置加载测试
-│       ├── test_mermaid_state.*  # Mermaid 状态图解析测试
-│       ├── test_thread_id.*      # sessionId 生成唯一性测试 (模块名 `sessionId`)
-│       ├── test_tui_input.*      # TUI 输入测试
-│       ├── test_tui_interrupt.*  # TUI 中断交互测试
-│       ├── test_tui_scroll.*     # TUI 滚动测试
-│       ├── test_tui_settings.*   # TUI 设置持久化测试
-│       ├── test_tui_sidebar.*    # TUI 侧边栏内容与段落测试
-│       ├── test_tui_stream.*     # TUI 流式渲染测试
-│       └── test_tui_tool_header.* # TUI 工具消息头部渲染测试
+│   ├── core/                     # lib (agentxx 核心) 测试实现 (*.cpp)
+│   ├── plugin/                   # 插件测试实现 (*.cpp; dso_plugins/ 与 negative_compile/ 下为独立编译的用例源码)
+│   ├── client/                   # client 侧测试实现 (*.cpp; 仅 AGENTXX_BUILD_CLIENT 编译)
+│   └── include/agentxx-test/     # 测试头文件统一入口 (源码一律以 "agentxx-test/<组>/<模块>.h" 前缀引用, 与源码目录分离避免重名歧义)
+│       ├── test_framework.h                   # 测试框架 (断言宏 / TestResult)
+│       ├── test_toolcall_args.h               # 工具参数类型自动修正测试
+│       ├── test_ffi_c_api.h                   # FFI C API 测试 (生命周期/交互/HIL/事件队列)
+│       ├── core/                              # lib (agentxx 核心) 测试头 (与 core/*.cpp 同名模块)
+│       │   ├── test_agent.h                   # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
+│       │   │                                  #   test_agent.h 同时提供共享 LLM 模拟器 (DaSimServer),
+│       │   │                                  #   被 agent_host/session_persistence/remote_agent/cancel/memgrowth 等复用
+│       │   ├── test_agent_host.h              # AgentHost 宿主测试 (子代理派生/深度并发预算/回收)
+│       │   ├── test_training.h                # 进化训练测试 (变异/评估/优化/收敛/持久化)
+│       │   ├── test_events.h                  # 事件类型测试
+│       │   ├── test_event_stream.h            # EventBus / EventStream / RequestResponseStream 测试
+│       │   ├── test_event_bridge.h            # EventBridge 事件翻译测试
+│       │   ├── test_interrupt_bus.h           # 中断总线 HIL 测试
+│       │   ├── test_subagent_bus.h            # 子代理总线测试 (含批量委派/跨 agent 路由)
+│       │   ├── test_concurrency.h             # 并发测试
+│       │   ├── test_cancel.h                  # 取消语义测试 (CancelToken 双通道/operation_aborted 转换)
+│       │   ├── test_message_supplement.h      # 消息补全/修复测试
+│       │   ├── test_summarization.h           # 上下文压缩测试 (token 统计/去重/LLM 压缩)
+│       │   ├── test_checkpoint_store.h        # 单检查点存储测试 (InMemorySingleCheckpointStore)
+│       │   ├── test_memgrowth.h               # 多轮内存增长测试 (泄漏检测)
+│       │   ├── test_session_persistence.h     # 会话 SQLite 持久化测试 (消息/上下文/share store 落库与重启恢复)
+│       │   ├── test_remote_agent.h            # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试
+│       │   ├── test_mcp.h                     # MCP 协议测试 (多版本/HTTP/stdio)
+│       │   ├── test_a2a.h                     # A2A 协议测试
+│       │   ├── test_acp.h                     # ACP 协议测试
+│       │   ├── test_websocket.h               # WebSocket 测试
+│       │   ├── test_http.h                    # HTTP 客户端/服务器测试
+│       │   ├── test_network_timeout.h         # 网络超时行为测试
+│       │   ├── test_openai_provider.h         # OpenAI Provider 测试 (SSE/thinking/tool_calls/限流)
+│       │   ├── test_anthropic_provider.h      # Anthropic Provider 测试
+│       │   ├── test_string_util.h             # 字符串工具测试
+│       │   ├── test_regex.h                   # 正则引擎测试
+│       │   ├── test_diff_util.h               # Diff 工具测试
+│       │   ├── test_aho_corasick.h            # Aho-Corasick 多模式匹配测试
+│       │   ├── test_util_misc.h               # 杂项 util 测试
+│       │   ├── test_settings_db.h             # 全局设置 SQLite 测试
+│       │   ├── test_misc_fixes.h              # 杂项修复测试
+│       │   ├── test_share_store.h             # ShareStore 测试
+│       │   ├── test_subagent_tool.h           # 子代理工具参数校验与恢复测试
+│       │   ├── test_worktree.h                # Git worktree 封装与隔离测试
+│       │   ├── test_filesystem_tools.h        # 文件系统工具测试 (直测插件同一 *_impl.h 实现)
+│       │   ├── test_command_tools.h           # 命令执行工具测试 (直测插件同一实现)
+│       │   ├── test_math_tools.h              # 数学计算工具测试 (直测插件同一实现)
+│       │   ├── test_web_search_tools.h        # 网络搜索测试 (直测插件同一实现)
+│       │   ├── test_rag_search_tools.h        # RAG 搜索测试 (直测插件同一实现)
+│       │   ├── test_string_tools.h            # 字符串工具测试 (html2md/regexp, 直测插件同一实现)
+│       │   └── test_datetime_tool.h           # 日期时间工具测试 (直测插件同一实现)
+│       ├── plugin/                            # 插件测试头 (与 plugin/*.cpp 同名模块)
+│       │   ├── test_plugins.h                 # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
+│       │   ├── test_plugin_resources.h        # 插件会话资源扩展测试 (Skill/Memory/MCP 声明式+运行时)
+│       │   ├── test_plugin_multi_instance.h   # 插件多实例隔离测试 (三铁律)
+│       │   ├── test_client_plugins.h          # client 侧插件测试 (内置合并编译时跳过)
+│       │   ├── test_codegraph_tools.h         # CodeGraph 插件集成测试 (search/context/callers/callees/path 共 5 工具)
+│       │   ├── test_cpu_gpu_use.h             # system_monitor 插件集成测试 (系统资源监控)
+│       │   ├── test_screen_capture.h          # screen_capture 插件集成测试 (仅 Windows)
+│       │   └── test_text_selection_monitor.h  # text_selection_monitor 插件集成测试 (仅 Windows)
+│       └── client/                            # client 侧测试头 (与 client/*.cpp 同名模块)
+│           ├── test_config_loader.h           # YAML 配置加载测试
+│           ├── test_mermaid_state.h           # Mermaid 状态图解析测试
+│           ├── test_thread_id.h               # sessionId 生成唯一性测试 (模块名 `sessionId`)
+│           ├── test_tui_input.h               # TUI 输入测试
+│           ├── test_tui_interrupt.h           # TUI 中断交互测试
+│           ├── test_tui_scroll.h              # TUI 滚动测试
+│           ├── test_tui_settings.h            # TUI 设置持久化测试
+│           ├── test_tui_sidebar.h             # TUI 侧边栏内容与段落测试
+│           ├── test_tui_stream.h              # TUI 流式渲染测试
+│           └── test_tui_tool_header.h         # TUI 工具消息头部渲染测试
 │
 ├── benchmark/                    # 性能测试 (一般仅 release 编译)
 │

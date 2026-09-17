@@ -16,7 +16,7 @@
 //   6) 写入侧 buildSubagentResumeValues 与读取侧 execute_async 的 key 规则
 //      一致 (含 hasError 任务写 {"error": ...})
 
-#include "test_subagent_tool.h"
+#include "agentxx-test/core/test_subagent_tool.h"
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"

@@ -1,0 +1,15 @@
+#pragma once
+
+#include <asio/awaitable.hpp>
+#include <neograph/api.h>
+#include <string>
+
+#include "agentxx-test/test_framework.h"
+
+namespace agentxx {
+namespace test {
+
+asio::awaitable<TestResult> run_http_client_tests();
+
+} // namespace test
+} // namespace agentxx

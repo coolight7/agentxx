@@ -1,5 +1,5 @@
-#include "test_session_persistence.h"
-#include "test_agent.h"
+#include "agentxx-test/core/test_session_persistence.h"
+#include "agentxx-test/core/test_agent.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"

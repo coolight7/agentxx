@@ -8,7 +8,7 @@
 ///
 /// 因此用例可以断言真实实现里很难观察的不变量: 不内联、恰好一次推进、空闲不新增
 /// 请求、wake 三个窗口不丢失、宿主回调不重入插件协程、取消只产生一个终态。
-#include "test_plugin_bridge.h"
+#include "agentxx-test/plugin/test_plugin_bridge.h"
 
 #include "agentxx/plugin/api/plugin_kit.h"
 

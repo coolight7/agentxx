@@ -1,4 +1,4 @@
-#include "test_anthropic_provider.h"
+#include "agentxx-test/core/test_anthropic_provider.h"
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"

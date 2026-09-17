@@ -1,4 +1,4 @@
-#include "test_settings_db.h"
+#include "agentxx-test/core/test_settings_db.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/settings_db.h"

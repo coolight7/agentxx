@@ -1,4 +1,4 @@
-#include "test_interrupt_ui.h"
+#include "agentxx-test/core/test_interrupt_ui.h"
 
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/interrupt_ui.h"

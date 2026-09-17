@@ -1,0 +1,18 @@
+#pragma once
+
+#include "agentxx/agent/context.h"
+#include <asio/awaitable.hpp>
+#include <memory>
+#include <neograph/api.h>
+#include <string>
+
+#include "agentxx-test/test_framework.h"
+
+namespace agentxx {
+namespace test {
+
+asio::awaitable<TestResult>
+    run_web_search_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+
+} // namespace test
+} // namespace agentxx

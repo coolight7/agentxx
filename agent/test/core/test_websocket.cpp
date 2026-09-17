@@ -1,4 +1,4 @@
-#include "test_websocket.h"
+#include "agentxx-test/core/test_websocket.h"
 #include "agentxx/util/http_client.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/ws_client.h"

@@ -12,7 +12,7 @@
 // - [整行高亮] 列表类弹窗选中项背景覆盖整行 (面性风格的选中表达)
 // - [主题配色] Dark/Light 下三个区域背景色两两不同, 且区别于整体背景与蒙版色
 // - [插件 items separator 项] 渲染为浅色背景区块而非横线
-#include "test_tui_surface.h"
+#include "agentxx-test/client/test_tui_surface.h"
 
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"

@@ -1,4 +1,4 @@
-#include "test_events.h"
+#include "agentxx-test/core/test_events.h"
 #include "agentxx/event/events.h"
 
 namespace {

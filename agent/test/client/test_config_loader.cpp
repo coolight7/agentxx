@@ -1,4 +1,4 @@
-#include "test_config_loader.h"
+#include "agentxx-test/client/test_config_loader.h"
 
 #include "agentxx-client/config_loader.h"
 #include "agentxx/agent/config_static.h"

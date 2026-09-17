@@ -1,4 +1,4 @@
-#include "test_remote_agent.h"
+#include "agentxx-test/core/test_remote_agent.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -10,7 +10,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/http_server.h"
 #include "agentxx/util/ws_client.h"
-#include "test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
+#include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>

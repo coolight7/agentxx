@@ -1,4 +1,4 @@
-#include "test_aho_corasick.h"
+#include "agentxx-test/core/test_aho_corasick.h"
 
 #include "agentxx/util/aho_corasick.h"
 

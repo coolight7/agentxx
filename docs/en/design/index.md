@@ -381,7 +381,8 @@ Available test modules (matching the registry list in `agent/test/test.cpp`):
 - Asynchronous modules: `event_stream`, `event_bridge`, `interrupt_bus`, `subagent_bus`, `subagent_tool`, `agent_host`, `string_tools`, `math_tools`, `share_store`, `session_persistence`, `rag_search`, `datetime`, `filesystem`, `command`, `worktree`, `web_search`, `codegraph`, `screen_capture`, `cpu_gpu`, `text_selection`, `http`, `network_timeout`, `websocket`, `remote_agent`, `mcp`, `acp`, `a2a`, `openai_provider`, `anthropic_provider`, `plugins`, `plugin_resources`, `plugin_multi_instance`, `client_plugins`, `cancel`, `message_supplement`, `summarization`, `checkpoint_store`, `agent`, `memgrowth`.
 - Platform modules: `screen_capture`, `text_selection`.
 
-Test source directory layout: Root (entry + framework) / `core/` (lib core) / `plugin/` (plugin system & integrations) / `client/` (TUI/CLI, compiled only under `AGENTXX_BUILD_CLIENT`).
+Test source directory layout: Root (entry `test.cpp`) / `core/` (lib core) / `plugin/` (plugin system & integrations) / `client/` (TUI/CLI, compiled only under `AGENTXX_BUILD_CLIENT`).
+Test headers live under `include/agentxx-test/` in the sub-directory matching their source group (`core/`, `plugin/`, `client/`) and sources include them as `#include "agentxx-test/<group>/test_xxx.h"`—the source directories are no longer include roots, so headers can never clash with same-named files from other libraries.
 Conventions for adding new test modules: Headers contain only function declarations; assertion counters are defined in anonymous namespaces within the module's `.cpp`, with `#define XX_TEST_PASSED g_xxx_passed` / `#define XX_TEST_FAILED g_xxx_failed` mapping assertion macros from `test_framework.h`, returning `TestResult{g_xxx_passed, g_xxx_failed}` at function end—macro overrides or `extern` exports in headers are strictly forbidden to prevent cross-TU macro contamination.
 
 ### Configuration File
@@ -1318,73 +1319,77 @@ agent/
 │
 ├── test/                         # agentxx_test test executable
 │   ├── test.cpp                  # Test entry point: module registration and scheduling (synchronous/asynchronous grouping)
-│   ├── test_framework.h          # Test framework (assertion macros / TestResult)
-│   ├── test_toolcall_args.*      # Tool argument automatic type coercion tests
-│   ├── test_ffi_c_api.*          # FFI C API tests (lifecycle / interaction / HITL / event queue)
-│   ├── core/                     # Core library tests (libagentxx)
-│   │   ├── test_agent.*          # CodeAgent integration tests (mock LLM Server: tool calls / multi-turn / permissions / retry exhaustion / exception handling)
-│   │   │                         #   test_agent.h provides shared mock LLM simulator (DaSimServer),
-│   │   │                         #   reused by agent_host/session_persistence/remote_agent/cancel/memgrowth, etc.
-│   │   ├── test_agent_host.*     # AgentHost host tests (subagent derivation / depth concurrency budget / reclamation)
-│   │   ├── test_training.*       # Evolutionary training tests (mutation / evaluation / optimization / convergence / persistence)
-│   │   ├── test_events.*         # Event type tests
-│   │   ├── test_event_stream.*   # EventBus / EventStream / RequestResponseStream tests
-│   │   ├── test_event_bridge.*   # EventBridge event translation tests
-│   │   ├── test_interrupt_bus.*  # Interrupt bus HITL tests
-│   │   ├── test_subagent_bus.*   # Subagent bus tests (including batch delegation / cross-agent routing)
-│   │   ├── test_concurrency.*    # Concurrency tests
-│   │   ├── test_cancel.*         # Cancellation semantics tests (CancelToken dual channels / operation_aborted translation)
-│   │   ├── test_message_supplement.* # Message completion and repair tests
-│   │   ├── test_summarization.*  # Context compaction tests (token accounting / deduplication / LLM summarization)
-│   │   ├── test_checkpoint_store.* # Single checkpoint store tests (InMemorySingleCheckpointStore)
-│   │   ├── test_memgrowth.*      # Multi-turn memory growth tests (leak detection)
-│   │   ├── test_session_persistence.* # Session SQLite persistence tests (messages / context / share store persistence and recovery)
-│   │   ├── test_remote_agent.*   # Remote Agent tests (WebSocket transport / SessionServerAgentIO)
-│   │   ├── test_mcp.*            # MCP protocol tests (multi-version / HTTP / stdio)
-│   │   ├── test_a2a.*            # A2A protocol tests
-│   │   ├── test_acp.*            # ACP protocol tests
-│   │   ├── test_websocket.*      # WebSocket tests
-│   │   ├── test_http.*           # HTTP client and server tests
-│   │   ├── test_network_timeout.* # Network timeout behavior tests
-│   │   ├── test_openai_provider.* # OpenAI Provider tests (SSE / thinking / tool_calls / rate limits)
-│   │   ├── test_anthropic_provider.* # Anthropic Provider tests
-│   │   ├── test_string_util.*    # String utility tests
-│   │   ├── test_regex.*          # Regex engine tests
-│   │   ├── test_diff_util.*      # Diff utility tests
-│   │   ├── test_aho_corasick.*   # Aho-Corasick multi-pattern search tests
-│   │   ├── test_util_misc.*      # Miscellaneous utility tests
-│   │   ├── test_settings_db.*    # Global settings SQLite database tests
-│   │   ├── test_misc_fixes.*     # Miscellaneous bug fix regressions
-│   │   ├── test_share_store.*    # ShareStore tests
-│   │   ├── test_subagent_tool.*  # Subagent tool argument validation and recovery tests
-│   │   ├── test_worktree.*       # Git worktree wrapper and filesystem isolation tests
-│   │   ├── test_filesystem_tools.* # Filesystem tool tests (directly testing shared *_impl.h implementation)
-│   │   ├── test_command_tools.*  # Command execution tool tests (directly testing shared implementation)
-│   │   ├── test_math_tools.*     # Mathematical computation tool tests (directly testing shared implementation)
-│   │   ├── test_web_search_tools.* # Web search tool tests (directly testing shared implementation)
-│   │   ├── test_rag_search_tools.* # RAG search tests (directly testing shared implementation)
-│   │   ├── test_string_tools.*   # String tool tests (html2md / regexp; directly testing shared implementation)
-│   │   └── test_datetime_tool.*  # Datetime tool tests (directly testing shared implementation)
-│   ├── plugin/                   # Plugin tests (plugin infrastructure + specific plugin integrations)
-│   │   ├── test_plugins.*        # Plugin system tests (loading / tools / hooks / events / hot-reloading; module name `plugins`)
-│   │   ├── test_plugin_resources.* # Plugin session resource extension tests (Skills / Memory / MCP declarative + runtime)
-│   │   ├── test_plugin_multi_instance.* # Plugin multi-instance isolation tests (The Three Iron Rules)
-│   │   ├── test_client_plugins.* # Client-side plugin tests (skipped during monolithic built-in compilation)
-│   │   ├── test_codegraph_tools.* # CodeGraph plugin integration tests (5 tools: search/context/callers/callees/path)
-│   │   ├── test_cpu_gpu_use.*    # system_monitor plugin integration tests (system resource monitoring)
-│   │   ├── test_screen_capture.* # screen_capture plugin integration tests (Windows only)
-│   │   └── test_text_selection_monitor.* # text_selection_monitor plugin integration tests (Windows only)
-│   └── client/                   # Client-side tests (compiled conditionally under AGENTXX_BUILD_CLIENT)
-│       ├── test_config_loader.*  # YAML configuration loading tests
-│       ├── test_mermaid_state.*  # Mermaid state machine parser tests
-│       ├── test_thread_id.*      # sessionId uniqueness tests (module name `sessionId`)
-│       ├── test_tui_input.*      # TUI input handling tests
-│       ├── test_tui_interrupt.*  # TUI interrupt interaction tests
-│       ├── test_tui_scroll.*     # TUI scrolling tests
-│       ├── test_tui_settings.*   # TUI settings persistence tests
-│       ├── test_tui_sidebar.*    # TUI sidebar content and section tests
-│       ├── test_tui_stream.*     # TUI token streaming tests
-│       └── test_tui_tool_header.* # TUI tool header rendering tests
+│   ├── core/                     # Core library test implementations (*.cpp)
+│   ├── plugin/                   # Plugin test implementations (*.cpp; dso_plugins/ and negative_compile/ hold separately built fixtures)
+│   ├── client/                   # Client-side test implementations (*.cpp; compiled only with AGENTXX_BUILD_CLIENT)
+│   └── include/agentxx-test/     # Single test-header root (sources include them as "agentxx-test/<group>/<module>.h"; kept apart from sources to avoid name clashes)
+│       ├── test_framework.h                   # Test framework (assertion macros / TestResult)
+│       ├── test_toolcall_args.h               # Tool argument automatic type coercion tests
+│       ├── test_ffi_c_api.h                   # FFI C API tests (lifecycle / interaction / HITL / event queue)
+│       ├── core/                              # Core library test headers (module names match core/*.cpp)
+│       │   ├── test_agent.h                   # CodeAgent integration tests (mock LLM Server: tool calls / multi-turn / permissions / retry exhaustion / exception handling)
+│       │   │                                  #   test_agent.h provides shared mock LLM simulator (DaSimServer),
+│       │   │                                  #   reused by agent_host/session_persistence/remote_agent/cancel/memgrowth, etc.
+│       │   ├── test_agent_host.h              # AgentHost host tests (subagent derivation / depth concurrency budget / reclamation)
+│       │   ├── test_training.h                # Evolutionary training tests (mutation / evaluation / optimization / convergence / persistence)
+│       │   ├── test_events.h                  # Event type tests
+│       │   ├── test_event_stream.h            # EventBus / EventStream / RequestResponseStream tests
+│       │   ├── test_event_bridge.h            # EventBridge event translation tests
+│       │   ├── test_interrupt_bus.h           # Interrupt bus HITL tests
+│       │   ├── test_subagent_bus.h            # Subagent bus tests (including batch delegation / cross-agent routing)
+│       │   ├── test_concurrency.h             # Concurrency tests
+│       │   ├── test_cancel.h                  # Cancellation semantics tests (CancelToken dual channels / operation_aborted translation)
+│       │   ├── test_message_supplement.h      # Message completion and repair tests
+│       │   ├── test_summarization.h           # Context compaction tests (token accounting / deduplication / LLM summarization)
+│       │   ├── test_checkpoint_store.h        # Single checkpoint store tests (InMemorySingleCheckpointStore)
+│       │   ├── test_memgrowth.h               # Multi-turn memory growth tests (leak detection)
+│       │   ├── test_session_persistence.h     # Session SQLite persistence tests (messages / context / share store persistence and recovery)
+│       │   ├── test_remote_agent.h            # Remote Agent tests (WebSocket transport / SessionServerAgentIO)
+│       │   ├── test_mcp.h                     # MCP protocol tests (multi-version / HTTP / stdio)
+│       │   ├── test_a2a.h                     # A2A protocol tests
+│       │   ├── test_acp.h                     # ACP protocol tests
+│       │   ├── test_websocket.h               # WebSocket tests
+│       │   ├── test_http.h                    # HTTP client and server tests
+│       │   ├── test_network_timeout.h         # Network timeout behavior tests
+│       │   ├── test_openai_provider.h         # OpenAI Provider tests (SSE / thinking / tool_calls / rate limits)
+│       │   ├── test_anthropic_provider.h      # Anthropic Provider tests
+│       │   ├── test_string_util.h             # String utility tests
+│       │   ├── test_regex.h                   # Regex engine tests
+│       │   ├── test_diff_util.h               # Diff utility tests
+│       │   ├── test_aho_corasick.h            # Aho-Corasick multi-pattern search tests
+│       │   ├── test_util_misc.h               # Miscellaneous utility tests
+│       │   ├── test_settings_db.h             # Global settings SQLite database tests
+│       │   ├── test_misc_fixes.h              # Miscellaneous bug fix regressions
+│       │   ├── test_share_store.h             # ShareStore tests
+│       │   ├── test_subagent_tool.h           # Subagent tool argument validation and recovery tests
+│       │   ├── test_worktree.h                # Git worktree wrapper and filesystem isolation tests
+│       │   ├── test_filesystem_tools.h        # Filesystem tool tests (directly testing shared *_impl.h implementation)
+│       │   ├── test_command_tools.h           # Command execution tool tests (directly testing shared implementation)
+│       │   ├── test_math_tools.h              # Mathematical computation tool tests (directly testing shared implementation)
+│       │   ├── test_web_search_tools.h        # Web search tool tests (directly testing shared implementation)
+│       │   ├── test_rag_search_tools.h        # RAG search tests (directly testing shared implementation)
+│       │   ├── test_string_tools.h            # String tool tests (html2md / regexp; directly testing shared implementation)
+│       │   └── test_datetime_tool.h           # Datetime tool tests (directly testing shared implementation)
+│       ├── plugin/                            # Plugin test headers (module names match plugin/*.cpp)
+│       │   ├── test_plugins.h                 # Plugin system tests (loading / tools / hooks / events / hot-reloading; module name `plugins`)
+│       │   ├── test_plugin_resources.h        # Plugin session resource extension tests (Skills / Memory / MCP declarative + runtime)
+│       │   ├── test_plugin_multi_instance.h   # Plugin multi-instance isolation tests (The Three Iron Rules)
+│       │   ├── test_client_plugins.h          # Client-side plugin tests (skipped during monolithic built-in compilation)
+│       │   ├── test_codegraph_tools.h         # CodeGraph plugin integration tests (5 tools: search/context/callers/callees/path)
+│       │   ├── test_cpu_gpu_use.h             # system_monitor plugin integration tests (system resource monitoring)
+│       │   ├── test_screen_capture.h          # screen_capture plugin integration tests (Windows only)
+│       │   └── test_text_selection_monitor.h  # text_selection_monitor plugin integration tests (Windows only)
+│       └── client/                            # Client-side test headers (module names match client/*.cpp)
+│           ├── test_config_loader.h           # YAML configuration loading tests
+│           ├── test_mermaid_state.h           # Mermaid state machine parser tests
+│           ├── test_thread_id.h               # sessionId uniqueness tests (module name `sessionId`)
+│           ├── test_tui_input.h               # TUI input handling tests
+│           ├── test_tui_interrupt.h           # TUI interrupt interaction tests
+│           ├── test_tui_scroll.h              # TUI scrolling tests
+│           ├── test_tui_settings.h            # TUI settings persistence tests
+│           ├── test_tui_sidebar.h             # TUI sidebar content and section tests
+│           ├── test_tui_stream.h              # TUI token streaming tests
+│           └── test_tui_tool_header.h         # TUI tool header rendering tests
 │
 ├── benchmark/                    # Benchmark tests (typically compiled only in Release mode)
 │

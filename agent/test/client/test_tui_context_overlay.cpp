@@ -7,7 +7,7 @@
 // - [键盘 Enter/Space] 切换最近可见消息的折叠状态
 // - [tool_calls] 折叠头预览显示工具名列表
 // - [完整原始内容] 展开后显示 dump(2) 的完整 JSON (含 tool_calls/工具结果等)
-#include "test_tui_context_overlay.h"
+#include "agentxx-test/client/test_tui_context_overlay.h"
 
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"

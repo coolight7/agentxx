@@ -1,4 +1,4 @@
-#include "test_interrupt_bus.h"
+#include "agentxx-test/core/test_interrupt_bus.h"
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"

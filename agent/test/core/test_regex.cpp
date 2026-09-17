@@ -1,4 +1,4 @@
-#include "test_regex.h"
+#include "agentxx-test/core/test_regex.h"
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)

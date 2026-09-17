@@ -1,4 +1,4 @@
-#include "test_json_reflection.h"
+#include "agentxx-test/core/test_json_reflection.h"
 
 #include "agentxx/util/json.h"
 #include <string>

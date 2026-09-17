@@ -10,7 +10,7 @@
 //  6. 取消: 慢 LLM 响应中 agentxx_ffi_cancel → TURN_END interrupted
 //  7. 状态错误: stop 后 send_input → AGENTXX_FFI_ERR_STATE; drain_logs
 //  8. 事件队列: agentxx_ffi_event_queue_* 往返测试
-#include "test_ffi_c_api.h"
+#include "agentxx-test/test_ffi_c_api.h"
 
 #include "agentxx/ffi_api.h"
 #include "agentxx/util/http_server.h"

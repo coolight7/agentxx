@@ -9,7 +9,7 @@
 ///
 /// 用例不依赖真实管理器：用伪宿主接口表捕获 SDK 注册出来的 spec，再直接按 ABI
 /// 调用 `execute_start`/`hook_start`，因此可以精确控制借用缓冲区的生命周期。
-#include "test_plugin_sdk.h"
+#include "agentxx-test/plugin/test_plugin_sdk.h"
 
 #include "agentxx/plugin/api/plugin_kit.h"
 

@@ -1,4 +1,4 @@
-#include "test_checkpoint_store.h"
+#include "agentxx-test/core/test_checkpoint_store.h"
 
 #include "agentxx/agent/checkpoint_store.h"
 #include "neograph/graph/checkpoint.h"

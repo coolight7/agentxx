@@ -1,4 +1,4 @@
-#include "test_plugin_runtime.h"
+#include "agentxx-test/plugin/test_plugin_runtime.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"

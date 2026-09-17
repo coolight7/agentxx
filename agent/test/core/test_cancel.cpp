@@ -1,4 +1,4 @@
-#include "test_agent.h"
+#include "agentxx-test/core/test_agent.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
@@ -16,7 +16,7 @@
 #include "neograph/graph/cancel.h"
 #include "neograph/tool.h"
 
-#include "test_cancel.h"
+#include "agentxx-test/core/test_cancel.h"
 #include <atomic>
 #include <chrono>
 #include <memory>

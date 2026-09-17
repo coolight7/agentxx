@@ -1,4 +1,4 @@
-#include "test_event_stream.h"
+#include "agentxx-test/core/test_event_stream.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/util/log.h"
 #include "asio/co_spawn.hpp"

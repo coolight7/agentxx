@@ -19,7 +19,7 @@
 //   assistant(压缩总结), 然后才是未压缩的最近消息 (保留原角色与顺序)
 // - 压缩 subagent 不传入任何工具: 无 share_store, 仅对当前上下文原样压缩
 
-#include "test_summarization.h"
+#include "agentxx-test/core/test_summarization.h"
 
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/event/event_stream.h"

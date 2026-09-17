@@ -1,4 +1,4 @@
-#include "test_json.h"
+#include "agentxx-test/core/test_json.h"
 
 #include "agentxx/util/json.h"
 #include <cmath>

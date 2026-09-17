@@ -1,4 +1,4 @@
-#include "test_concurrency.h"
+#include "agentxx-test/core/test_concurrency.h"
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/model_registry.h"

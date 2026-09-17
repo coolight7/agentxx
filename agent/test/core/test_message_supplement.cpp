@@ -1,6 +1,6 @@
-#include "test_agent.h"
+#include "agentxx-test/core/test_agent.h"
 
-#include "test_message_supplement.h"
+#include "agentxx-test/core/test_message_supplement.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"

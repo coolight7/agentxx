@@ -5,7 +5,7 @@
 // - 工具执行路由正确: A 实例的回调打到 A 的宿主 (echo 回显 sessionId 可区分)
 // - 状态隔离: 卸载 A 后 B 的工具仍可用; B 重新加载亦正常
 // - 反复 load/unload 循环不泄漏 (LeakSanitizer 兜底)
-#include "test_plugin_multi_instance.h"
+#include "agentxx-test/plugin/test_plugin_multi_instance.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"

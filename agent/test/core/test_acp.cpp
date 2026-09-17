@@ -1,4 +1,4 @@
-#include "test_acp.h"
+#include "agentxx-test/core/test_acp.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/tools/tool.h"

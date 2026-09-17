@@ -1,4 +1,4 @@
-#include "test_command_tools.h"
+#include "agentxx-test/core/test_command_tools.h"
 #include "agentxx/agent/context.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_execute_command 插件 (同名同行为); 测试

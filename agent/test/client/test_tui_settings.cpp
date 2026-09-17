@@ -1,4 +1,4 @@
-#include "test_tui_settings.h"
+#include "agentxx-test/client/test_tui_settings.h"
 
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/overlays.h"

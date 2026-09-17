@@ -1,4 +1,4 @@
-#include "test_worktree.h"
+#include "agentxx-test/core/test_worktree.h"
 
 #include "agentxx/util/string_util.h"
 #include "agentxx/util/worktree.h"

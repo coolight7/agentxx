@@ -1,4 +1,4 @@
-#include "test_openai_provider.h"
+#include "agentxx-test/core/test_openai_provider.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/util/http_client.h"

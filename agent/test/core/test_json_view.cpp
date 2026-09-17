@@ -1,4 +1,4 @@
-#include "test_json_view.h"
+#include "agentxx-test/core/test_json_view.h"
 
 #include "agentxx/util/json_view.h"
 #include <string>

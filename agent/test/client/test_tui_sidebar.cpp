@@ -6,7 +6,7 @@
 // - [footer 按钮] 激活带 footer 的 tab 时 footer 内容 (如 "LLM Context" 按钮) 可见
 // - [再点取消] 已激活的常驻 tab 再点一次取消激活, 内容区隐藏
 // - [动态 tab] addTab 的动态 tab 按钮显示于常驻按钮之后, 点击可切换激活
-#include "test_tui_sidebar.h"
+#include "agentxx-test/client/test_tui_sidebar.h"
 
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/components/sidebar.h"

@@ -5,7 +5,7 @@
 // - 声明式条目列表: 选中项维护 (按 id 跨重建保持)、键盘导航 (跳过不可用项)、
 //   Enter 激活、鼠标点击命中 (置选中并激活)
 // - 隐藏按钮不占点击区域: [📎︎︎] 按钮隐藏后, 其在上一帧的屏幕位置不再可点
-#include "test_tui_widget.h"
+#include "agentxx-test/client/test_tui_widget.h"
 
 #include "agentxx-client/io/tui/components/input_bar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"

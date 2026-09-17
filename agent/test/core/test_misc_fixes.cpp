@@ -1,4 +1,4 @@
-#include "test_misc_fixes.h"
+#include "agentxx-test/core/test_misc_fixes.h"
 
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/prompt.h"

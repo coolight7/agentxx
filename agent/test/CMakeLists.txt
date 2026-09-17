@@ -47,6 +47,7 @@ add_executable(agentxx_test)
 #            text_selection_monitor, cpu_gpu_use(system_monitor), codegraph)
 # - client/: client (TUI/CLI) 测试, 仅 AGENTXX_BUILD_CLIENT 时编译其中的
 #            client/src 实现源码 (见下方 AGENTXX_BUILD_CLIENT 分支)
+# 测试头文件与上述划分一一对应, 位于 include/agentxx-test/{,core/,plugin/,client/}
 file(GLOB test_root_SOURCES
 	CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
@@ -109,18 +110,16 @@ if(test_plugin_C_SOURCES)
 		)
 	endif()
 endif()
-# include path: 根目录 (test_framework.h 等共享头) + core/ + plugin/ + client/
-# 使 test.cpp 的 #include "test_xxx.h" 与子目录测试的
-# #include "test_framework.h" 均无需改动路径
+# include path: 测试自身头文件统一放在 include/ 下, 并以 `agentxx-test/` 前缀引用
+# (include/agentxx-test/{,core/,plugin/,client/}*.h), 与源码目录分离:
+# 测试源码一律写 #include "agentxx-test/core/test_agent.h" 这类完整路径,
+# 不再把源码目录本身当 include 根, 避免与其它库的同名头文件产生歧义
 # neograph/json.h 内部 #include <yyjson.h> (构建期头, 见 lib/client 说明)
 if (DEFINED neograph_SOURCE_DIR)
   target_include_directories(agentxx_test PRIVATE "${neograph_SOURCE_DIR}/deps/yyjson/")
 endif()
 target_include_directories(agentxx_test PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}"
-  "${CMAKE_CURRENT_SOURCE_DIR}/core/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/plugin/"
-  "${CMAKE_CURRENT_SOURCE_DIR}/client/"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
   # 迁移至插件的内置工具实现 (filesystem/string/system/websearch/rag_search/
   # execute_command 的 *_impl.h): 测试直测插件同一实现, 保证行为一致;
   # 以 plugins/ 为单一 include 根, 源码用 "agentxx_xxx/xxx_impl.h" 完整路径,

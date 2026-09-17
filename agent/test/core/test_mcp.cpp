@@ -1,4 +1,4 @@
-#include "test_mcp.h"
+#include "agentxx-test/core/test_mcp.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"

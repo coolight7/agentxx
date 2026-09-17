@@ -1,4 +1,4 @@
-#include "test_event_bridge.h"
+#include "agentxx-test/core/test_event_bridge.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"

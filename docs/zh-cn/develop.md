@@ -21,6 +21,8 @@
 
 ### 新增测试模块约定
 
+- 头文件位置: `agent/test/include/agentxx-test/<core|plugin|client>/test_xxx.h` (与实现 `agent/test/<core|plugin|client>/test_xxx.cpp` 同名对应); 共享的 `test_framework.h` 位于 `agent/test/include/agentxx-test/`
+- 源码引用统一带 `agentxx-test/` 前缀 (唯一 include 根为 `agent/test/include/`): `#include "agentxx-test/core/test_xxx.h"` / `#include "agentxx-test/test_framework.h"`, 不再以源码目录作为 include 根, 避免与其它库同名头文件歧义
 - 头文件仅保留函数声明；断言计数器定义在 `*.cpp` 匿名命名空间内，并在 `cpp` 内 `#define XX_TEST_PASSED g_xxx_passed` / `XX_TEST_FAILED` 映射 `test_framework.h` 宏；末尾 `return TestResult{g_xxx_passed, g_xxx_failed};`
 - 禁止在头文件做宏覆盖或 `extern` 导出计数器 (跨 TU 宏泄漏曾导致多模块计数错乱)
 - 异步模块签名 `asio::awaitable<TestResult> run_xxx_tests()` / 同步模块 `TestResult testXxx()`

@@ -1,4 +1,4 @@
-#include "test_thread_id.h"
+#include "agentxx-test/client/test_thread_id.h"
 
 #include "agentxx-client/mode_runners.h"
 #include <mutex>
