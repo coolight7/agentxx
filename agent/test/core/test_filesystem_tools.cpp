@@ -2842,9 +2842,10 @@ asio::awaitable<void> test_plugin_real_link() {
 /// third_party 367089 / build 21771, 合计约 36GB), 而同一会话其余调用的模式
 /// 合计只有 512 个文件 —— 规模需要可预期地上限约束。
 /// 覆盖:
-/// - grep `max_files`: 超限报错 (不静默截断), 提高上限后正常返回
+/// - grep `max_files`: 到限即停止收集文件, 保留已收集文件继续搜索, 结果首行给出
+///   `[Note]` (提示还有更多文件未搜索)
 /// - grep `max_file_size_mb`: 超大文件跳过并在结果末尾给出 `[Note]`
-/// - glob `max_files`: 超限报错
+/// - glob `max_files`: 到限即停止遍历, 保留已匹配结果并在首行给出 `[Note]`
 /// - list `max_files`: 超限截断并在输出首行给出 `[Note]`
 asio::awaitable<void>
     test_scan_scale_limits(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
@@ -2868,7 +2869,77 @@ asio::awaitable<void>
     const auto workDir   = agentxx::tools::testResolvedWorkDir(agentContext);
     bool       allPassed = true;
 
-    // ① grep max_files 超限报错
+    /// 统计输出中的"路径行"数量 (排除 `[Note]`/`[Error]` 前缀行)
+    auto countPathLines = [](std::string_view text) -> size_t {
+        size_t count = 0;
+        for (auto line : agentxx::util::strSplit(text, '\n')) {
+            if (line.empty() || line.starts_with("[Note]") || line.starts_with("[Error]")) {
+                continue;
+            }
+            ++count;
+        }
+        return count;
+    };
+
+    /// 输出是否以提示行开头
+    auto startsWithNote = [](std::string_view text) -> bool {
+        return text.starts_with("[Note]");
+    };
+
+    // ① glob max_files: 到限停止遍历, 保留已匹配结果 + 首行提示
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"max_files",     10                                              },
+        };
+        auto result      = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto pathCount   = countPathLines(result);
+        bool hasNote     = startsWithNote(result) && result.find("max_files") != std::string::npos;
+        bool erasedNote  = result.find("[Error]") == std::string::npos;
+        if (false == (hasNote && erasedNote && pathCount == 10)) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should stop at `max_files` and keep matches, got: "
+                      << result.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGlobTool stops at `max_files` with a leading note" << std::endl;
+        }
+    }
+
+    // ② glob max_files = 0 (不限): 全部匹配, 无提示
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"max_files",     0                                               },
+        };
+        auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto pathCount = countPathLines(result);
+        if (pathCount != 31 || startsWithNote(result)) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should list all matches when `max_files` = 0, got "
+                      << pathCount << " lines: " << result.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGlobTool lists all matches when `max_files` = 0" << std::endl;
+        }
+    }
+
+    // ③ glob max_files 未触发 (匹配数少于上限): 无提示, 结果完整
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/*.txt"})},
+            {"max_files",     100                                               },
+        };
+        auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto pathCount = countPathLines(result);
+        if (pathCount != 31 || startsWithNote(result)) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should not truncate under `max_files`, got "
+                      << pathCount << " lines: " << result.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGlobTool keeps full result under `max_files`" << std::endl;
+        }
+    }
+
+    // ④ grep max_files: 到限停止收集文件, 已收集文件照常搜索 + 首行提示
     {
         auto args = agentxx::util::Json{
             {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
@@ -2876,16 +2947,20 @@ asio::awaitable<void>
             {"max_files",     10                                              },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
-        if (result.find("Too many files match") == std::string::npos) {
+        bool hasNote = startsWithNote(result) && result.find("max_files") != std::string::npos;
+        bool ok      = hasNote && countPathLines(result) > 0;
+        if (false == ok) {
             allPassed = false;
-            TEST_FAIL << "FilesystemGrepTool should reject too many files, got: " << result
-                      << std::endl;
+            TEST_FAIL << "FilesystemGrepTool should scan the collected files and note the "
+                         "`max_files` cutoff, got: "
+                      << result.substr(0, 200) << std::endl;
         } else {
-            TEST_PASS << "FilesystemGrepTool rejects file count over `max_files`" << std::endl;
+            TEST_PASS << "FilesystemGrepTool scans collected files with a leading `max_files` note"
+                      << std::endl;
         }
     }
 
-    // ② 提高 max_files 后正常返回
+    // ⑤ grep max_files 未触发: 正常返回, 无提示
     {
         auto args = agentxx::util::Json{
             {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
@@ -2893,17 +2968,37 @@ asio::awaitable<void>
             {"max_files",     100                                             },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
-        if (result.find("small0.txt") == std::string::npos
-            || result.find("Too many files") != std::string::npos) {
+        if (result.find("small0.txt") == std::string::npos || startsWithNote(result)) {
             allPassed = false;
-            TEST_FAIL << "FilesystemGrepTool should scan when under `max_files`, got: " << result
-                      << std::endl;
+            TEST_FAIL << "FilesystemGrepTool should scan normally under `max_files`, got: "
+                      << result.substr(0, 200) << std::endl;
         } else {
             TEST_PASS << "FilesystemGrepTool scans normally under `max_files`" << std::endl;
         }
     }
 
-    // ③ grep max_file_size_mb: 大文件跳过并给出 [Note] (不做静默丢弃)
+    // ⑥ grep 到限且已收集文件都无匹配: 错误文本说明"遍历提前停止", 不误报为"无匹配"
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", agentxx::util::Json::array({"no_such_token"})   },
+            {"max_files",     10                                              },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        bool ok     = result.find("[Error]") != std::string::npos
+                  && result.find("max_files") != std::string::npos;
+        if (false == ok) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGrepTool no-match error should mention the `max_files` cutoff, "
+                         "got: "
+                      << result.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGrepTool no-match error mentions the `max_files` cutoff"
+                      << std::endl;
+        }
+    }
+
+    // ⑦ grep max_file_size_mb: 大文件跳过并给出 [Note] (不做静默丢弃)
     {
         auto args = agentxx::util::Json{
             {"file_patterns",    agentxx::util::Json::array({limitDir + "/**/*"})        },
@@ -2924,23 +3019,7 @@ asio::awaitable<void>
         }
     }
 
-    // ④ glob max_files 超限报错
-    {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
-            {"max_files",     10                                              },
-        };
-        auto result = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
-        if (result.find("Too many paths match") == std::string::npos) {
-            allPassed = false;
-            TEST_FAIL << "FilesystemGlobTool should reject too many matches, got: " << result
-                      << std::endl;
-        } else {
-            TEST_PASS << "FilesystemGlobTool rejects match count over `max_files`" << std::endl;
-        }
-    }
-
-    // ⑤ list max_files 截断 + 首行提示
+    // ⑧ list max_files 截断 + 首行提示
     {
         auto tool = agentxx::tools::FileSystemListTool{agentContext};
         auto args = agentxx::util::Json{
@@ -2955,6 +3034,71 @@ asio::awaitable<void>
                       << std::endl;
         } else {
             TEST_PASS << "FileSystemListTool truncates expansion over `max_files` with a note"
+                      << std::endl;
+        }
+    }
+
+    // ⑨ glob 以 `**` 结尾 (递归展开分支, 计数发生在递归遍历内部): 同样到限即停
+    {
+        auto argsUnlimited = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**"})},
+            {"max_files",     0                                             },
+        };
+        auto full      = ::agentxx_fs_plugin::fileGlobExecute(argsUnlimited, workDir);
+        auto fullCount = countPathLines(full); // 目录自身 + 31 个文件
+
+        auto argsLimited = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**"})},
+            {"max_files",     10                                            },
+        };
+        auto limited    = ::agentxx_fs_plugin::fileGlobExecute(argsLimited, workDir);
+        auto limitCount = countPathLines(limited);
+        if (fullCount == 0 || limitCount != 10 || false == startsWithNote(limited)
+            || limited.find("[Error]") != std::string::npos) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should stop recursive `**` walk at `max_files` ("
+                      << limitCount << " of " << fullCount
+                      << "), got: " << limited.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGlobTool stops recursive `**` walk at `max_files`" << std::endl;
+        }
+    }
+
+    // ⑩ 多 pattern 共享同一数量上限: 前一个 pattern 到限后不再展开后续 pattern
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns",
+             agentxx::util::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})},
+            {"max_files", 10                                                        },
+        };
+        auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto pathCount = countPathLines(result);
+        if (pathCount != 10 || false == startsWithNote(result)) {
+            allPassed = false;
+            TEST_FAIL << "FilesystemGlobTool should share `max_files` across patterns, got "
+                      << pathCount << " lines: " << result.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGlobTool shares `max_files` across patterns" << std::endl;
+        }
+    }
+
+    // ⑪ grep content 模式到限: 首行提示 + 已收集文件的匹配行照常输出
+    {
+        auto args = agentxx::util::Json{
+            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", agentxx::util::Json::array({"small_token"})     },
+            {"output_mode",   "content"                                       },
+            {"max_files",     5                                               },
+        };
+        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        bool ok     = startsWithNote(result) && result.find("small_token line") != std::string::npos;
+        if (false == ok) {
+            allPassed = false;
+            TEST_FAIL
+                << "FilesystemGrepTool content mode should search collected files with a note, got: "
+                << result.substr(0, 200) << std::endl;
+        } else {
+            TEST_PASS << "FilesystemGrepTool content mode searches collected files with a note"
                       << std::endl;
         }
     }

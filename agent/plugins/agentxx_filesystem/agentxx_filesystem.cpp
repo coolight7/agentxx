@@ -376,8 +376,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               )
               .integer(
                   "max_files",
-                  "Default `1000`. Maximum number of matched paths; exceeding it returns an error "
-                  "asking to narrow `file_patterns` (set `0` for no limit).",
+                  "Default `1000`. Maximum number of matched paths; when more paths match, the walk "
+                  "stops there and the paths found so far are returned with a leading `[Note]` "
+                  "(`0` = no limit).",
                   false,
                   1000
               )
@@ -454,8 +455,10 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               .integer(
                   "max_files",
                   "Default `1000`. Maximum number of files to scan (after `file_patterns` expansion). "
-                  "Exceeding it returns an error instead of scanning: narrow `file_patterns`, add "
-                  "`exclude_patterns`, or raise this value. Set `0` for no limit.",
+                  "When more files match, the walk stops there and only the files found so far are "
+                  "scanned, with a leading `[Note]` telling you how many were scanned: narrow "
+                  "`file_patterns`, add `exclude_patterns`, or raise this value to scan more. "
+                  "Set `0` for no limit.",
                   false,
                   1000
               )
