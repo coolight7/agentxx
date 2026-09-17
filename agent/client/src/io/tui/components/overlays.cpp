@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/surface.h"
+#include "agentxx-client/io/tui/text_layout.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/util/exception.h"
@@ -27,23 +28,6 @@
 namespace agentxx::client {
 
 using namespace ftxui;
-
-// ---------------------------------------------------------------------------
-// 工具函数
-// ---------------------------------------------------------------------------
-
-/// 折叠消息头部单行预览的可用列数预算 (与
-/// [message_list.cpp](/agent/client/src/io/tui/components/message_list.cpp) 同款自适应宽度):
-/// 内容区总列数 - 头部前缀显示列数 - 安全余量。
-/// maxWidth 为 scrollable_->contentWidth() (已扣除滚动条 gutter);
-/// 余量 1 列防边界取整溢出 (超宽仍由 xflex_shrink 在右缘兜底裁剪)。
-/// 极窄终端下保底 8 列, 避免预览被完全挤没。
-inline int collapsedPreviewBudget(int maxWidth, int prefixCols) {
-    constexpr int kSlack     = 1;
-    constexpr int kMinBudget = 8;
-    const int     avail      = maxWidth - prefixCols - kSlack;
-    return (avail >= kMinBudget) ? avail : kMinBudget;
-}
 
 // ---------------------------------------------------------------------------
 // 弹窗  面性风格外框见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h):
@@ -314,7 +298,7 @@ SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
 
 void SettingsOverlay::buildItems() {
     list_.setItems({
-        // 主题 (点击/Enter 循环切换 Dark <-> Light)
+  // 主题 (点击/Enter 循环切换 Dark <-> Light)
         {.id    = "theme",
          .label = std::string{tr("settings.themeLabel")},
          .value = trf("settings.themeValue", ctx_.theme->name),
@@ -322,7 +306,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleTheme();
              }},
-        // 动画等级 (点击/Enter 循环切换)
+ // 动画等级 (点击/Enter 循环切换)
         {.id    = "animation",
          .label = std::string{tr("settings.animLabel")},
          .value = trf("settings.animValue", TUISettings::instance().animationLevelName()),
@@ -330,7 +314,7 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleAnimationLevel();
              }},
-        // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+ // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
         {.id    = "log-level",
          .label = std::string{tr("settings.logLabel")},
          .value = trf("settings.logValue", TUISettings::instance().logLevelName()),
@@ -338,7 +322,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLogLevel();
              }},
-        // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
+ // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
         {.id    = "tail-thinking",
          .label = std::string{tr("settings.thinkLabel")},
          .value = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
@@ -346,7 +330,7 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleTailThinkingMode();
              }},
-        // 界面语言 (点击/Enter 循环切换)
+ // 界面语言 (点击/Enter 循环切换)
         {.id    = "language",
          .label = std::string{tr("settings.langLabel")},
          .value = trf("settings.langValue", TUISettings::instance().languageName()),
@@ -354,7 +338,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLanguage();
              }},
-        // Info (点击/Enter 打开关于弹窗)
+ // Info (点击/Enter 打开关于弹窗)
         {.id    = "about",
          .label = std::string{tr("settings.infoLabel")},
          .value = std::string{tr("settings.aboutValue")},
@@ -799,15 +783,15 @@ Element PendingInputsOverlay::OnRender() {
             });
         }
         Element row = pi.expanded ? hbox({
-                                        text("- ") | color(theme.hintColor),
-                                        std::move(body),
-                                        std::move(delBtn),
-                                    })
+                          text("- ") | color(theme.hintColor),
+                          std::move(body),
+                          std::move(delBtn),
+                      })
                                   : hbox({
-                                        text("+ ") | color(theme.userColor),
-                                        std::move(body),
-                                        std::move(delBtn),
-                                    });
+                                      text("+ ") | color(theme.userColor),
+                                      std::move(body),
+                                      std::move(delBtn),
+                                  });
         items.push_back(hits_.add(std::move(row), HitInfo{HitInfo::Kind::Item, pi.id}));
     }
 

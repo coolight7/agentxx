@@ -176,6 +176,21 @@ model:
       video_input: false
       extra_api_config:
         reasoning_effort: xhigh
+    - name: openrouter-union-alpha
+      type: "openai-responses"
+      base_url: "https://openrouter.ai/api/v1"
+      api_key: "${OPENROUTER_API_KEY}"
+      model_name: "stealth/union-alpha"
+      image_input: false
+      audio_input: false
+      video_input: false
+      send_thinking: true
+      request_reasoning_summary: false
+      include: ["reasoning.encrypted_content"]
+      model_context_max_token: 256000
+      extra_api_config:
+        reasoning:
+          effort: max
     - name: bblabu-gpt
       type: "openai-responses"
       base_url: "https://api.bblabu.ai/v1"
