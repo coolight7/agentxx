@@ -226,7 +226,6 @@ std::vector<UiActionItem> makeActions(std::vector<std::string>& activateList) {
 void test_action_list_selection_keeps_by_id() {
     UiActionList             list;
     UiHitMap                 hits;
-    UiActionStyle            style = testStyle();
     std::vector<std::string> activated;
 
     list.setItems(makeActions(activated));
@@ -264,7 +263,6 @@ void test_action_list_selection_keeps_by_id() {
 void test_action_list_keyboard_activate() {
     UiActionList             list;
     UiHitMap                 hits;
-    UiActionStyle            style = testStyle();
     std::vector<std::string> activated;
 
     list.setItems(makeActions(activated));

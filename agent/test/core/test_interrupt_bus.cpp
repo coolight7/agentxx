@@ -1023,7 +1023,6 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
         co_return co_await permission->checkToolPermission(item.get_name(), args);
     };
 
-    using Mw = agentxx::middleware::PermissionMiddlewareHandle;
     // 1. worktree 子树内写: 放行 (未被主检出写拒绝命中)
     XX_TEST_EXPECT_TRUE(co_await check(writeItem, wtFile));
     XX_TEST_EXPECT_TRUE(co_await check(writeItem, worktree));

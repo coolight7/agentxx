@@ -103,22 +103,6 @@ void unbindSession(
     }
 }
 
-/// 格式化单个 worktree 条目行 (info 列表用)
-std::string
-    formatEntryLine(const agentxx::util::worktree::WorktreeEntry& e, bool dirty, bool isCurrent) {
-    std::string headDisp = e.head.empty() ? "(unknown)" : e.head.substr(0, 8);
-    std::string line     = fmt::format(
-        "- {}{} branch={} head={}{}{}",
-        isCurrent ? "* " : "  ",
-        e.path,
-        e.detached ? "(detached)" : (e.branch.empty() ? "(none)" : e.branch),
-        headDisp,
-        dirty ? " [dirty]" : "",
-        e.bare ? " [bare]" : ""
-    );
-    return line;
-}
-
 } // namespace
 
 GitWorktreeTool::GitWorktreeTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :

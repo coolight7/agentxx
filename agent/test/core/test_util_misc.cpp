@@ -452,7 +452,7 @@ void test_md5_and_device_id() {
 
     // getDeviceId
     auto devId = getDeviceId();
-    XX_TEST_EXPECT_EQ(devId.size(), 32);
+    XX_TEST_EXPECT_EQ(devId.size(), 32ull);
     for (char c : devId) {
         bool validHex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
         XX_TEST_EXPECT_TRUE(validHex);
