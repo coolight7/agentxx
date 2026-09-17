@@ -4,5 +4,5 @@
 - 基于commit: 4a87c47dd4ee7bf7c7f90535b7501148a88c4a95
 - 需求:
 ```md
-请实施 优化方案文档 resource/history/code-structure-refactor/code.md 修改、优化整体代码
+请完整通读 优化方案文档 resource/history/code-structure-refactor/plan.md ，然后仔细思考分析后实施修改、优化整体代码
 ```

@@ -37,7 +37,7 @@
   - `agent/third_party/fmt`（untracked）、`libiconv-native` / `liburing`（submodule 脏标记）
     —— 构建产生的既有状态，勿清理
 - 新会话开始时必须先执行 `git status --short --branch`，不得覆盖上述修改，也不得重置整个工作树。
-- `resource/history/plugin-refactor-2/plugin.md` 是本任务的最终事实来源；
+- `resource/history/plugin-refactor-2/plan.md` 是本任务的最终事实来源；
   `docs/zh-cn/design/plugins.md` 已按本文更新出 Reset-v1 章节（第 15 节）与相关修订，
   不得反过来覆盖本文的 Reset-v1 决策。
 

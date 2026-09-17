@@ -4,5 +4,5 @@
 - 基于commit: fd676923b34a27b3475f3feb132d7882780f6f4c
 - 需求:
 ```md
-请根据 多模态文件输入与 TUI 交互设计文档 resource/history/file-input/file.md，仔细思考分析后实现
+请完整通读 多模态文件输入与 TUI 交互设计文档 resource/history/file-input/plan.md，仔细思考分析后实现
 ```

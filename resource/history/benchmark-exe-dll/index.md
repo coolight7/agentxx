@@ -11,5 +11,5 @@
     4. 拆分两个进程运行tui+server时两者分别的占用
     - llm消息由程序生成不使用真实api，应当为 user、assist、tool 消息交替出现，且内容固定
 - 并测试 `libagentxx_shared 动态库` 同样在加载上述5个插件、相同条件的（加载动态库后、100K上下文、200K上下文；上下文内容一致）时的内存占用和cpu占用
-- 请参考已有的设计文档 resource/history/benchmark-exe-dll/bench.md, 实现功能需求
+- 请参考已有的设计文档 resource/history/benchmark-exe-dll/plan.md, 实现功能需求
 ```

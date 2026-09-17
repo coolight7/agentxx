@@ -2,7 +2,7 @@
 
 > 目标：彻底抛弃历史版本的兼容性包袱，完全重置插件框架与所有插件；统一所有 API 与接口表版本为 1；根除已发现的并发死锁、野指针崩溃、内存泄漏与多实例污染 Bug；大幅提升代码复用、简化插件开发并消灭样板代码。
 > 
-> 目标文件：`/home/coolight/program/agentxx/resource/history/plugin-refactor-1/plugin.md`
+> 目标文件：`/home/coolight/program/agentxx/resource/history/plugin-refactor-1/plan.md`
 
 ---
 

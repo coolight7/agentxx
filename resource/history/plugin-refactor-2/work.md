@@ -1,8 +1,8 @@
 # 插件框架 Reset-v1 重构交接文档（已完成 / 待完成）
 
-> 事实来源：`resource/history/plugin-refactor-2/plugin.md`（Reset-v1 方案、R0-R6 阶段、
-F/P 问题编号、测试矩阵）。本文件记录进度、提交边界、验证事实与待办；与 plugin.md
-冲突时以 plugin.md 为准。
+> 事实来源：`resource/history/plugin-refactor-2/plan.md`（Reset-v1 方案、R0-R6 阶段、
+F/P 问题编号、测试矩阵）。本文件记录进度、提交边界、验证事实与待办；与 plan.md
+冲突时以 plan.md 为准。
 >
 > **状态：Reset-v1 重构完成（2026-09-11）。** R0～R6 全部完成，plugin.md 第 12 节的
 > 6 项完成标准全部满足（逐项勾选见 1.1）。关键提交：`91b345a9`（R6-3 Windows 平台验证
@@ -33,7 +33,7 @@ git diff --stat && git diff --check
 
 阅读顺序：
 
-1. `plugin.md`（方案、R1-R6 验收标准、第 11 节测试矩阵、第 12 节完成标准）；
+1. `plan.md`（方案、R1-R6 验收标准、第 11 节测试矩阵、第 12 节完成标准）；
 2. 本文件第 1 节（已完成，重点是 1.8 缺陷清单、1.10 Windows 平台验证）、
    第 2 节（待完成，非阻塞）、第 5 节（已知风险）；
 3. `git show <提交号>` 按需查看；最新提交号以 `git log -1` 为准。
@@ -171,7 +171,7 @@ Windows 运行注意（本次实测）：
 
 | 阶段 | 状态 | 关键提交 | 验证 |
 |---|---|---|---|
-| R0 契约冻结 | 完成 | `plugin.md` 定稿 | 本文件只做进度记录 |
+| R0 契约冻结 | 完成 | `plan.md` 定稿 | 本文件只做进度记录 |
 | R1 Runtime / Operation | 完成 | `3a4497ba`、`b2b5114a`、`c2869f07`、`8c717236`、`cdbcc738` | `plugin_runtime` 623/0（11.2 全 10 条覆盖） |
 | R2 加载事务 / 注册事务 / 异步关闭 | 完成 | `b2b5114a`、`c2869f07`、`9be9c735`、`a321267c`、`cdbcc738`、`0bab72e3`、`e96f8f1b`、`d6ae39cd`、`75b01a56` | `plugin_runtime` 623、`plugins` 359、`plugin_resources` 83、`plugin_multi_instance` 48、`client_plugins` 421 |
 | R3 ABI v1 / SDK | 完成 | `b2b5114a`、`aa4b33ff`、`4f8d1fdf`、`3e76a143`、`0bab72e3` | `plugin_sdk` 71、C17 ABI 检查、反例编译 5/5 |
@@ -179,7 +179,7 @@ Windows 运行注意（本次实测）：
 | R5 Client / 依赖 / prompt | 完成 | `9be9c735`、`a321267c`、`e96f8f1b`、`43c93ff6` | `client_plugins` 421、`plugin_runtime` 623 |
 | R6 验证 / 文档 / 发布审查 | 完成 | `aa4b33ff`、`dfe04a6a`、`ff6fc990`、`0bab72e3`、`7a44e76d`、提交 28、提交 29 | Linux ASan/LSan 2179/0、UBSan 1670/0、TSan 插件框架 0 告警（3.5）、导出符号 16 库、**Windows 全插件构建 + 1765/0 + 2251/0 + 360/0（3.1）** |
 
-plugin.md 第 12 节完成标准（6 项，逐项对应）：
+plan.md 第 12 节完成标准（6 项，逐项对应）：
 
 | # | 完成标准 | 状态 | 证据 |
 |---|---|---|---|
@@ -570,7 +570,7 @@ vtable 投递纳入 admission lease）、`8c717236`（P0-2 终态与取消线性
 2. **`agentxx_audio_stream` 平台 gate**（见 1.8 第 13 条）：改为全平台跳过，
    避免"桩实现进入发布产物"。
 
-### 1.11 plugin.md 第 11 节测试矩阵覆盖对照
+### 1.11 plan.md 第 11 节测试矩阵覆盖对照
 
 | 矩阵条目 | 状态 | 覆盖位置 / 缺口 |
 |---|---|---|
@@ -913,10 +913,10 @@ Windows 运行 `agentxx_test.exe` 必须把工作目录设为 `exec/`。
 提交 25.1      d507d90b  重构插件框架-交接文档提交计数与边界表校正                  (仅本文档)
 提交 26（整理版）d507d90b+  重构插件框架-交接文档按已完成/待实现重组                    (仅本文档)
 提交 27（R4-5） d3dbd909  重构插件框架-R4-5 JS 引擎与脚本壳插件 start/stop 迁移       (5 文件, 2026-09-11)
-                          —— 本提交前 `plugin.md`/`work.md` 的整理版改动由本任务文档提交一并入库
+                          —— 本提交前 `plan.md`/`work.md` 的整理版改动由本任务文档提交一并入库
 提交 28（R6-2） fc3d2c9b  重构插件框架-R6-2 定向 TSan 回归与数据竞争修复            (7 文件, 2026-09-11)
                           —— 修复 log sink 成员顺序、测试顺序探针同步、
-                             system_monitor GPU/PDH/查询实例化；work.md/plugin.md 同步
+                             system_monitor GPU/PDH/查询实例化；work.md/plan.md 同步
 提交 28.1       a5f8a6e1  重构插件框架-R6-2b 提交 28 验证结果补记                    (仅本文档)
 提交 --/--      11658fd7  --（用户提交: TODOS.md + agentxx-config.yaml）
 提交 --/--      e2a7c247  fix windows build（用户提交: exception.h / test CMake / 测试跨平台化）
@@ -924,7 +924,7 @@ Windows 运行 `agentxx_test.exe` 必须把工作目录设为 `exec/`。
                           —— Windows 全插件构建 + 插件专项 1765/0 + 扩展 2251/0 +
                              工具模块 360/0；test_plugin_runtime 有界等待修复（Windows
                              IOCP 定时器投递时序）；audio_stream 改为全平台跳过；
-                             work.md/plugin.md 更新为"Reset-v1 重构完成"
+                             work.md/plan.md 更新为"Reset-v1 重构完成"
 提交 29.1       0667426b  重构插件框架-R6-3b 提交 29 记录补记                     (仅本文档)
 提交 29.2       9ac97ca5  重构插件框架-R6-3c 提交边界表补入记录补记提交           (仅本文档)
 提交 29.3       7fbbf3ba  重构插件框架-R6-3d 补记两个工作副本的同步注意事项        (仅本文档)
@@ -1010,4 +1010,4 @@ Windows 运行 `agentxx_test.exe` 必须把工作目录设为 `exec/`。
   本任务文件。
 - 文档维护：每完成一个阶段，更新本文件第 1 节（已完成）与第 2 节（待完成），
   以及第 3 节验证记录与第 4 节提交边界；不要只改代码不改文档。
-- 事实来源优先级：plugin.md > 本文件；两者冲突时以 plugin.md 为准，并回写本文件。
+- 事实来源优先级：plugin.md > 本文件；两者冲突时以 plan.md 为准，并回写本文件。

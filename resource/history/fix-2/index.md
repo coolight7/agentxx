@@ -4,5 +4,5 @@
 - 基于commit: f0fecf57daf6d1fef103fc2b9546c7ba563437a6
 - 需求:
 ```md
-请先通读当前项目的架构设计和代码，然后按 [代码审查报告](resource\history\fix-2\report.md) 修复问题
+请完整通读 [代码审查报告](resource\history\fix-2\plan.md) ，然后仔细思考分析后修复问题
 ```
