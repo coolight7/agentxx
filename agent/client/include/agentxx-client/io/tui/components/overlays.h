@@ -73,7 +73,7 @@ private:
     std::function<void(std::string)> onConfirm_;
 };
 
-/// 会话选择弹窗组件 (F4 / 状态栏 [F4] Sessions 按钮)
+/// 会话选择弹窗组件 (F3 / 状态栏 [F3] Sessions 按钮)
 /// - 列表顶部固定一项 "新会话" (选中确认后创建全新会话, 不切换历史)
 /// - 列表项两行: 第一行会话名称 (title, 空时回退 sessionId), 第二行最近活动日期
 /// - Up/Down 选择, Enter/鼠标点击切换会话, Esc 关闭

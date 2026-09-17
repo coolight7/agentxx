@@ -68,6 +68,20 @@ void renderOnce(const ftxui::Component& comp, int w = 60, int h = 12) {
     ftxui::Render(screen, comp->Render());
 }
 
+/// 取屏幕上某块矩形区域内的可见文字 (逐格拼接; 宽字符占位格为空串)
+std::string screenTextIn(const ftxui::Screen& screen, const ftxui::Box& box) {
+    std::string out;
+    for (int y = box.y_min; y <= box.y_max; ++y) {
+        for (int x = box.x_min; x <= box.x_max; ++x) {
+            if (x < 0 || y < 0 || x >= screen.dimx() || y >= screen.dimy()) {
+                continue;
+            }
+            out += screen.PixelAt(x, y).character;
+        }
+    }
+    return out;
+}
+
 /// 渲染元素一帧 (无组件包装)
 void renderElement(const ftxui::Element& el, int w = 60, int h = 12) {
     auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
@@ -467,6 +481,21 @@ void test_status_bar_click_actions() {
     XX_TEST_EXPECT_TRUE(!modelBox.IsEmpty());
     XX_TEST_EXPECT_TRUE(!sessionsBox.IsEmpty());
     XX_TEST_EXPECT_TRUE(!settingsBox.IsEmpty());
+
+    // 快捷键提示须与实际按键绑定一致 (F3 = 会话选择弹窗, F4 = 设置弹窗,
+    // 见 agent_tui.cpp 的全局快捷键处理), 且会话按钮排在设置左侧
+    {
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(80), ftxui::Dimension::Fixed(3));
+        ftxui::Render(screen, comp->Render());
+        XX_TEST_EXPECT_TRUE(
+            screenTextIn(screen, sessionsBox).find("[F3]") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            screenTextIn(screen, settingsBox).find("[F4]") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(sessionsBox.x_min < settingsBox.x_min);
+    }
 
     const auto click = [&](const ftxui::Box& box) {
         comp->OnEvent(leftClickAt((box.x_min + box.x_max) / 2, (box.y_min + box.y_max) / 2));

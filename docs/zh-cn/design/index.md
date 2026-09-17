@@ -217,7 +217,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 #### 会话切换 (TUI 会话选择弹窗)
 
 ```
-TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸载到 blockingPool)
+TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸载到 blockingPool)
   → 服务端回 WireSessionList (持久化会话列表, 按最近活动时间降序)
   → 用户确认 → WireSwitchSession(newSessionId)
   → SessionServerAgentIO::switchSession:
@@ -419,7 +419,7 @@ TUI [F4] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     外框见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
     (`TuiSurfaceStyle` + `tuiSurfacePopup`/`tuiSurfaceFrame`),
     配色定义见 [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h)
-  - 会话选择弹窗 (F4): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
+  - 会话选择弹窗 (F3): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
     向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
     前插后滚动锚定保持视口稳定; 到达会话开头 (historyWindowStart=0) 后不再请求
@@ -1423,7 +1423,7 @@ Client                              Server
   │ 中断结果 values.remember 回传,         │
   │ 规则由服务端权限处理器注册              │
   │                                    │
-  │ (可选) 会话选择弹窗 (TUI F4)
+  │ (可选) 会话选择弹窗 (TUI F3)
   │──── ListSessions ─────────────────│ 列举持久化会话 (阻塞 I/O 卸载到线程池)
   │←── SessionList ───────────────────│
   │──── SwitchSession (sessionId) ───│ 切换会话绑定: 清空 delta 缓冲,

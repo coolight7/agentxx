@@ -116,7 +116,7 @@ Element StatusBarComponent::OnRender() {
         }
     }
 
-    // Sessions 按钮: 可点击打开会话选择弹窗 (F4), 位于 Settings 左侧
+    // Sessions 按钮: 可点击打开会话选择弹窗 (F3), 位于 Settings 左侧
     auto sessionsText = hits_.add(
         text(tr("status.sessions")) | color(theme.hintColor),
         std::string{kSessionsHitId}

@@ -153,7 +153,7 @@ Stacked middleware architecture intercepting execution before and after Graph no
 #### Session Switching (TUI Session Selector Modal)
 
 ```
-TUI [F4] opens Session Selector Modal → WireListSessions (blocking I/O offloaded to blockingPool)
+TUI [F3] opens Session Selector Modal → WireListSessions (blocking I/O offloaded to blockingPool)
   → Server returns WireSessionList (persisted sessions sorted descending by lastActiveMs)
   → User confirms → WireSwitchSession(newSessionId)
   → SessionServerAgentIO::switchSession:
@@ -290,7 +290,7 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
     [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
     (`TuiSurfaceStyle` + `tuiSurfacePopup`/`tuiSurfaceFrame`), palette tokens in
     [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h).
-  - Session selector modal (F4): Lists persisted sessions (`WireListSessions`), switching via `WireSwitchSession`, with server pushing new session Sync (tail-window paginated), model info, and context statistics.
+  - Session selector modal (F3): Lists persisted sessions (`WireListSessions`), switching via `WireSwitchSession`, with server pushing new session Sync (tail-window paginated), model info, and context statistics.
   - Paginated history loading: Restoring long sessions initially renders only the server's trailing window (100 items locally). Scrolling upward automatically paginates older history via `WireGetViewMessages`, anchoring scroll position stably until reaching session beginning (`historyWindowStart=0`).
   - Connection status banner: Displays server-io connection states (Connecting / Failed with clickable [Retry] button / Connected). Local mode is set ready prior to `SessionServerAgentIO` driver loop; remote mode is driven via `mode_runners` connection coroutines (`TUIRenderState::connState`).
   - Step-by-step startup progress banner: Initialization phases in `server-io init()` (model registry, middlewares, loading MCP/RAG/plugins — plugin loading includes runtime environment probing for python/node and PowerShell) report via `AgentContext::initNotifier` → `AgentIOBase::onServerProgress`. The banner dynamically reflects the active startup task, switching to keyboard shortcuts once ready.
@@ -1120,7 +1120,7 @@ Client                              Server
   │ InterruptResponse); the server    │
   │ permission handler registers it   │
   │                                    │
-  │ (Optional) Session Modal (TUI F4)  │
+  │ (Optional) Session Modal (TUI F3)  │
   │──── ListSessions ─────────────────│ Lists persisted sessions (offloaded to thread pool)
   │←── SessionList ───────────────────│
   │──── SwitchSession (sessionId) ───│ Switches session: clears replay buffer,

@@ -481,7 +481,7 @@ private:
     void openSettings();
     /// 打开关于模态
     void openAbout();
-    /// 打开会话选择模态 (F4 / 状态栏 [F4] Sessions 按钮):
+    /// 打开会话选择模态 (F3 / 状态栏 [F3] Sessions 按钮):
     /// - 仅当前会话非运行状态时可打开 (否则提示先停止当前会话)
     /// - 请求服务端会话列表并展示; 确认后经 WireSwitchSession 切换
     void openSessionSelector();

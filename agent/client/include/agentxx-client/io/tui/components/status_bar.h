@@ -18,8 +18,8 @@ namespace agentxx::client {
 ///
 /// 可点击区域与动作:
 /// - 模型区域 → [Config::onModelClick] (打开模型选择弹窗, 同 F2)
-/// - [F4] Sessions → [Config::onSessionsClick] (打开会话选择弹窗, 同 F4)
-/// - [F3] Settings → [Config::onSettingsClick] (打开设置弹窗, 同 F3)
+/// - [F3] Sessions → [Config::onSessionsClick] (打开会话选择弹窗, 同 F3)
+/// - [F4] Settings → [Config::onSettingsClick] (打开设置弹窗, 同 F4)
 ///
 /// 命中检测经 [agentxx::client::UiHitMap]: 渲染时登记可点元素, 帧首清空 ——
 /// 无需为每个按钮维护 Box 成员, 也不用在外部事件处理里按坐标逐个判断
@@ -30,8 +30,8 @@ public:
     /// 点击动作 (均为 UI 线程回调)
     struct Config {
         std::function<void()> onModelClick;    ///< 点击模型区域
-        std::function<void()> onSessionsClick; ///< 点击 [F4] Sessions
-        std::function<void()> onSettingsClick; ///< 点击 [F3] Settings
+        std::function<void()> onSessionsClick; ///< 点击 [F3] Sessions
+        std::function<void()> onSettingsClick; ///< 点击 [F4] Settings
     };
 
     explicit StatusBarComponent(TUICtx& ctx, Config config = {}) :

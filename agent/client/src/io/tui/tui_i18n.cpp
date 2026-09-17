@@ -218,8 +218,8 @@ constexpr Entry kTable[] = {
 
     // ---- 状态栏 ----
     {"status.modelNone",          "( none )",                                            "( 未选择 )"                                                                                    },
-    {"status.sessions",           "[F4] Sessions",                                       "[F4] 会话"                                                                                      },
-    {"status.settings",           "[F3] Settings",                                       "[F3] 设置"                                                                                      },
+    {"status.sessions",           "[F3] Sessions",                                       "[F3] 会话"                                                                                      },
+    {"status.settings",           "[F4] Settings",                                       "[F4] 设置"                                                                                      },
 
     // ---- 侧边栏 (Info/Logs 常驻标签) ----
     {"sidebar.info",              "Info",                                                "信息"                                                                                           },

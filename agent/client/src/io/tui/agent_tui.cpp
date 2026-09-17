@@ -498,7 +498,7 @@ void TUIClientAgentIO::start() {
         });
         statusBar_ = std::make_shared<StatusBarComponent>(
             ctx_,
-            // 状态栏点击动作 (与 F2/F4/F3 快捷键同一实现)
+            // 状态栏点击动作 (与 F2/F3/F4 快捷键同一实现)
             StatusBarComponent::Config{
                 .onModelClick =
                     [this] {
@@ -704,7 +704,7 @@ void TUIClientAgentIO::start() {
         modal_ = ModalContainer::Create(mainRenderer);
         modal_->setBgColor(theme_.surfaceScrimColor);
 
-        // 全局快捷键 + 鼠标 (F2/F3/F12/Escape/点击): 组件未处理的事件到此处理
+        // 全局快捷键 + 鼠标 (F2/F3/F4/F12/Escape/点击): 组件未处理的事件到此处理
         auto handler = CatchEvent(modal_, [&](Event event) -> bool {
             // 全局退出快捷键: 优先处理, 弹窗打开时也放行 (否则模态期间 Ctrl+C 被
             // 弹窗 OnEvent 无条件处理, 无法退出程序)
@@ -800,11 +800,11 @@ void TUIClientAgentIO::start() {
                 return true;
             }
             if (event == Event::F3) {
-                openSettings();
+                openSessionSelector();
                 return true;
             }
             if (event == Event::F4) {
-                openSessionSelector();
+                openSettings();
                 return true;
             }
             if (event == Event::F12) {
