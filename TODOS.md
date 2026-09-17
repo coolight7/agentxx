@@ -8,6 +8,7 @@
 
 - wiki 记忆、项目结构
 - tui 按 user msg 快捷跳转、top、bottom
+- 读取/编辑 resource\history\split-util-plugin-core\plan.md 乱码
 
 - SVG绘制支持
 - 链式 session 任务队列
