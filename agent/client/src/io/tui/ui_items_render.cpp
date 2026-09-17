@@ -234,7 +234,7 @@ void renderUiItem(const UiItem& item, const UiRenderCtx& ctx, UiRenderResult& ou
                 el = el | bold;
             }
             if (item.dim) {
-                el = el | dim;
+                el = el | theme.dim();
             }
             if (!item.wrap) {
                 // 非折行形态: 超宽在右缘裁剪 (不挤压相邻元素)
@@ -280,7 +280,7 @@ void renderUiItem(const UiItem& item, const UiRenderCtx& ctx, UiRenderResult& ou
     }
 
     if (item.kind == "separator") {
-        pushRow(out, ctx, item, text("─") | color(theme.hintColor) | dim | xflex_shrink);
+        pushRow(out, ctx, item, text("─") | color(theme.hintColor) | theme.dim() | xflex_shrink);
         return;
     }
 

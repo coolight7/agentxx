@@ -80,7 +80,7 @@ Element ModelSelectorOverlay::OnRender() {
     if (list_.empty()) {
         // 尚未收到服务端模型信息响应 → 加载中; 已收到但为空 → 确实无可用模型
         list = text(ctx_.frameState->modelInfoLoaded ? tr("model.empty") : tr("model.loading"))
-               | dim;
+               | theme.dim();
     } else {
         // 条目整行高亮由 UiActionStyle 提供; 选中项带 focus, 配合 yframe 自动滚入视口
         list = list_.render(hits_, style_) | bold | yframe | vscroll_indicator
@@ -197,7 +197,7 @@ Element SessionSelectorOverlay::OnRender() {
     auto rowBuilder = [&](const UiActionItem& item, bool selected, size_t) -> Element {
         Element row = vbox({
             text(item.label),
-            text(item.hint) | dim,
+            text(item.hint) | theme.dim(),
         });
         if (selected) {
             row = row | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor)
@@ -227,7 +227,7 @@ Element SessionSelectorOverlay::OnRender() {
     Elements rows;
     rows.push_back(list_.render(hits_, style_, rowBuilder));
     if (!tailHint.empty()) {
-        rows.push_back(text(tailHint) | dim);
+        rows.push_back(text(tailHint) | theme.dim());
     }
 
     const auto surface = TuiSurfaceStyle::fromTheme(theme);
@@ -764,7 +764,7 @@ Element PendingInputsOverlay::OnRender() {
 
     Elements items;
     if (st.pendingInputs.empty()) {
-        items.push_back(text(tr("queue.empty")) | dim);
+        items.push_back(text(tr("queue.empty")) | theme.dim());
     }
     for (const auto& pi : st.pendingInputs) {
         // 删除按钮登记在条目之前: 命中查询按登记顺序返回首个匹配项, 因此删除优先于
@@ -932,7 +932,7 @@ std::vector<ScrollItem> ContextOverlay::buildItems() {
     std::vector<ScrollItem> items;
     if (!msgsPtr || !msgsPtr->is_array() || msgsPtr->empty()) {
         itemMessages_.push_back(kNoMessage);
-        items.push_back(ScrollItem{text(tr("ctx.empty")) | dim, true});
+        items.push_back(ScrollItem{text(tr("ctx.empty")) | theme.dim(), true});
         return items;
     }
 
@@ -1245,7 +1245,7 @@ std::vector<ScrollItem> MermaidDiagramOverlay::buildItems() {
     }
     if (!cachedElement_) {
         return {
-            ScrollItem{ftxui::text(tr("graph.noDiagram")) | ftxui::dim, false}
+            ScrollItem{ftxui::text(tr("graph.noDiagram")) | theme.dim(), false}
         };
     }
     return {
@@ -1379,7 +1379,7 @@ std::vector<ScrollItem> FailedComponentsOverlay::buildItems() {
         }
     }
     if (items.empty()) {
-        items.push_back(ScrollItem{text(tr("failed.empty")) | dim, false});
+        items.push_back(ScrollItem{text(tr("failed.empty")) | theme.dim(), false});
     }
     return items;
 }
@@ -1539,7 +1539,7 @@ std::vector<ScrollItem> TextOverlay::buildItems() {
         cachedMarkdown_  = markdown_;
         cachedAttachments_.clear();
         if (content_.empty()) {
-            cachedElement_ = text(tr("info.empty")) | dim;
+            cachedElement_ = text(tr("info.empty")) | theme.dim();
         } else if (markdown_) {
             auto parser  = markdown::make_cmark_parser();
             auto ast     = parser->parse(content_);

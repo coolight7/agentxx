@@ -937,16 +937,17 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
                 const size_t previewLen = budget > 0 ? static_cast<size_t>(budget) : prefixCols;
                 header.push_back(
                     text(tailLinePreview(lastNonBlankLine(*st.currentToken), previewLen))
-                    | color(theme.thinkingColor) | dim | xflex_shrink
+                    | color(theme.thinkingColor) | theme.dim() | xflex_shrink
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
                 header.push_back(
                     text(trf("think.encryptedTokens", st.pendingTokenThink->reasoningTokens))
-                    | color(theme.thinkingColor) | dim | xflex_shrink
+                    | color(theme.thinkingColor) | theme.dim() | xflex_shrink
                 );
             } else if (st.pendingTokenThink && st.pendingTokenThink->isEncrypted) {
                 header.push_back(
-                    text(tr("think.encrypted")) | color(theme.thinkingColor) | dim | xflex_shrink
+                    text(tr("think.encrypted")) | color(theme.thinkingColor) | theme.dim()
+                    | xflex_shrink
                 );
             }
             block = hbox(std::move(header));
@@ -1155,7 +1156,7 @@ Element MessageListComponent::buildMessageBlock(
                                        att.displayName
                                    )) | color(theme.accentColor)
                                        | bold,
-                                   text(attachmentSizeText(att.sizeBytes)) | dim,
+                                   text(attachmentSizeText(att.sizeBytes)) | theme.dim(),
                                    text(std::string(TuiI18n::instance().t("msg.attachOpen")))
                                        | color(theme.accentColor),
                                })
@@ -1195,7 +1196,7 @@ Element MessageListComponent::buildMessageBlock(
                 const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 header.push_back(
                     text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
-                    | dim | xflex_shrink
+                    | theme.dim() | xflex_shrink
                 );
             }
             lines.push_back(hbox(std::move(header)));
@@ -1296,7 +1297,7 @@ Element MessageListComponent::buildMessageBlock(
                 }
                 if (!previewText.empty()) {
                     header.push_back(
-                        text(std::move(previewText)) | color(theme.thinkingColor) | dim
+                        text(std::move(previewText)) | color(theme.thinkingColor) | theme.dim()
                         | xflex_shrink
                     );
                 }
@@ -1323,7 +1324,7 @@ Element MessageListComponent::buildMessageBlock(
                     }
                     if (!infoText.empty()) {
                         lines.push_back(
-                            text(std::move(infoText)) | color(theme.thinkingColor) | dim
+                            text(std::move(infoText)) | color(theme.thinkingColor) | theme.dim()
                         );
                     }
                 }
@@ -1422,18 +1423,20 @@ Element MessageListComponent::buildMessageBlock(
                         text(std::move(displayName)) | color(theme.accentColor) | bold
                     );
                 } else {
-                    header.push_back(text(std::move(displayName)) | color(theme.toolColor) | dim);
+                    header.push_back(
+                        text(std::move(displayName)) | color(theme.toolColor) | theme.dim()
+                    );
                 }
 
                 if (!resOrArgsSummary.empty()) {
                     if (isError) {
                         header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.errorColor) | dim
+                            text(std::move(resOrArgsSummary)) | color(theme.errorColor) | theme.dim()
                             | xflex_shrink
                         );
                     } else {
                         header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.toolColor) | dim
+                            text(std::move(resOrArgsSummary)) | color(theme.toolColor) | theme.dim()
                             | xflex_shrink
                         );
                     }
@@ -1452,7 +1455,7 @@ Element MessageListComponent::buildMessageBlock(
                         header.push_back(text(" "));
                         header.push_back(
                             text(agentxx::util::formatDurationMilliseconds(msg.durationMs))
-                            | color(theme.toolColor) | dim
+                            | color(theme.toolColor) | theme.dim()
                         );
                     }
                 }

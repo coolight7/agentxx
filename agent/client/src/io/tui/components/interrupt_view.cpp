@@ -406,7 +406,7 @@ void InterruptView::layoutControl(
         if (els.empty()) {
             rows.push(
                 text(fmt::format("[control `{}` has no options]", id)) | color(theme.errorColor)
-                | dim
+                | theme.dim()
             );
         } else {
             rows.push(hbox(std::move(els)));
@@ -416,7 +416,7 @@ void InterruptView::layoutControl(
         if (block.options.empty()) {
             rows.push(
                 text(fmt::format("[control `{}` has no options]", id)) | color(theme.errorColor)
-                | dim
+                | theme.dim()
             );
         } else {
             for (size_t i = 0; i < block.options.size(); ++i) {
@@ -503,7 +503,7 @@ void InterruptView::layoutControl(
         // 未知控件形态: 诊断行 (不可交互; 不使整份描述失效)
         rows.push(
             text(fmt::format("[unsupported control: {}]", block.control)) | color(theme.errorColor)
-            | dim
+            | theme.dim()
         );
     }
 
@@ -650,7 +650,7 @@ Element InterruptView::buildHeader(const middleware::InterruptUi& ui) const {
                 el = el | bold;
             }
             if (seg.dim) {
-                el = el | dim;
+                el = el | theme.dim();
             }
             segs.push_back(std::move(el));
         }
@@ -672,18 +672,20 @@ Element InterruptView::buildStatusLine(const TUIMessage& msg) const {
                                            : trf("interrupt.confirmed", it.interruptResult);
             return hbox({
                 text(tr("interrupt.header")) | color(theme.hintColor),
-                text(confirmedText) | color(theme.accentColor) | dim | xflex_shrink,
+                text(confirmedText) | color(theme.accentColor) | theme.dim() | xflex_shrink,
             });
         }
         case TUIMessage::InterruptStatus::Cancelled:
             return hbox({
                 text(tr("interrupt.header")) | color(theme.hintColor),
-                text(tr("interrupt.cancelled")) | color(theme.errorColor) | dim | xflex_shrink,
+                text(tr("interrupt.cancelled")) | color(theme.errorColor) | theme.dim()
+                    | xflex_shrink,
             });
         case TUIMessage::InterruptStatus::Expired:
             return hbox({
                 text(tr("interrupt.header")) | color(theme.hintColor),
-                text(tr("interrupt.expired")) | color(theme.errorColor) | dim | xflex_shrink,
+                text(tr("interrupt.expired")) | color(theme.errorColor) | theme.dim()
+                    | xflex_shrink,
             });
         default:
             return text("");

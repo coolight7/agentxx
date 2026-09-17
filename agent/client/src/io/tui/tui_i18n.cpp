@@ -33,7 +33,7 @@ constexpr Entry kTable[] = {
     {"banner.failed",             "  server-io connection failed  ",                     "  server-io 连接失败  "                                                                       },
     {"banner.retry",              "[ Retry ]",                                           "[ 重试 ]"                                                                                       },
     {"banner.connected",
-     "Type a message to start. [Esc] cancel, [Ctrl+C] quit.",                            "输入消息以开始对话。[Esc] 取消, [Ctrl+C] 退出。"                                   },
+     "Type a message to start. [Esc] interrupt, [Ctrl+C] quit.",                         "输入消息以开始对话。[Esc] 中断, [Ctrl+C] 退出。"                                   },
 
     // ---- toast ----
     {"toast.notReady",

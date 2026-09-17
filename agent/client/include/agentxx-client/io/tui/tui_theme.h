@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/color.hpp"
 #include <markdown/theme.hpp>
 #include <string>
@@ -13,6 +14,8 @@ class TUITheme {
 public:
 
     std::string name; // 主题名 ("Dark"/"Light"), 供设置弹窗识别当前主题
+
+    bool lightBackground = false; // 终端背景是否为浅色 (决定 [dim] 的实现方式)
 
     ftxui::Color userColor;      // 用户消息
     ftxui::Color assistantColor; // 助手消息 (content)
@@ -45,6 +48,22 @@ public:
     ftxui::Color surfaceScrimColor; // 浮层打开时铺满屏幕的下层背景色 (衬托浮层表面)
 
     markdown::Theme markdownTheme; // markdown-ui 渲染主题
+
+    /// 弱化文字装饰器 (替代直接使用 `ftxui::dim`)
+    ///
+    /// 为什么不能直接用 `ftxui::dim`: 它输出终端的 `dim` 属性 (SGR 2), 而终端
+    /// 普遍按"前景色亮度减半"实现该属性 —— 深色背景上文字变暗, 与背景更接近,
+    /// 确实变弱; 浅色背景上深色文字却变得更黑、对比更强, 反而比正文更醒目。
+    ///
+    /// 故按主题分流:
+    /// - 深色主题 ([lightBackground] 为 false): 沿用终端 `dim` 属性
+    /// - 浅色主题: 不使用 `dim`, 改为把前景色向所在单元格的背景色混合 (变淡);
+    ///   单元格未设置前景色时以 [normalColor] 为基准色
+    /// - 终端不报告颜色支持 (颜色被降级为终端默认色, 如设了 NO_COLOR) 时无法
+    ///   混合, 同样退回终端 `dim` 属性
+    ///
+    /// 用法: `text(...) | color(theme.toolColor) | theme.dim()`
+    ftxui::Decorator dim() const;
 
     /// 黑色主题 (默认)
     /// - 适用于深色终端背景

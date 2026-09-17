@@ -157,7 +157,7 @@ Element SidebarComponent::OnRender() {
 
     // 左侧拖拽手柄: 登记命中 (仅用于调整宽度)
     auto handle = hits_.add(
-        separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor),
+        separatorStyled(BorderStyle::LIGHT) | color(theme.blockColor) | theme.dim(),
         HitInfo{HitInfo::Kind::ResizeHandle, {}}
     );
 
@@ -181,7 +181,7 @@ Element SidebarComponent::OnRender() {
         layout.push_back(text(" "));
     }
 
-    auto contentSep = separatorStyled(BorderStyle::LIGHT) | color(theme.inputBgColor);
+    auto contentSep = separatorStyled(BorderStyle::LIGHT) | color(theme.blockColor) | theme.dim();
 
     return hbox({
                std::move(handle),

@@ -407,6 +407,11 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
+  - 弱化文字 (dim) 按主题分流, 不使用 `ftxui::dim`: 该属性由终端按"前景色亮度减半"
+    实现, 浅色背景上深色文字会更深、与白底对比更强, 与弱化意图相反; 故深色主题沿用
+    终端 `dim` 属性, 浅色主题改为把前景色向所在单元格背景色混合 (变淡, 无前景色的
+    单元格以正文色为基准), 统一入口为 [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h)
+    的 `TUITheme::dim()`
   - 弹窗面性风格: 不使用边框与分割线, 标题栏/内容区/底部提示栏分别以主题的
     `surfaceHeaderColor`/`surfaceColor`/`surfaceFooterColor` 背景色区分 (错误类弹窗标题栏用
     `surfaceErrorHeaderColor` + 错误色标题文字); 弹窗打开时屏幕下层以 `surfaceScrimColor`

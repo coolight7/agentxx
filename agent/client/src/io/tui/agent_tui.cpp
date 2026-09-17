@@ -390,7 +390,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
                     text("● " + it.value("text", std::string{})) | color(theme.accentColor)
                 });
             } else if (kind == "separator") {
-                out.push_back(ScrollItem{text("─") | color(theme.hintColor) | dim});
+                out.push_back(ScrollItem{text("─") | color(theme.hintColor) | theme.dim()});
             }
         }
     }

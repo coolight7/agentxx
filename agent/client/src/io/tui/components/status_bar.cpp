@@ -46,9 +46,9 @@ Element StatusBarComponent::OnRender() {
     if (maxCtx > 0) {
         ctxText = hbox({
             text(agentxx::util::formatSize(ctx, 1024, false)) | color(theme.hintColor),
-            text("/") | color(theme.hintColor) | dim,
+            text("/") | color(theme.hintColor) | theme.dim(),
             text(agentxx::util::formatSize(maxCtx, 1024, false)) | color(theme.hintColor),
-            text("·") | color(theme.hintColor) | dim,
+            text("·") | color(theme.hintColor) | theme.dim(),
             text(fmt::format(
                 "{}%",
                 static_cast<int>(100.0 * static_cast<double>(ctx) / static_cast<double>(maxCtx))
@@ -71,7 +71,7 @@ Element StatusBarComponent::OnRender() {
     };
     const int tps = static_cast<int>(st.tps);
     if (st.isStreaming && tps > 0) {
-        modelChildren.push_back(text("·") | color(theme.hintColor) | dim);
+        modelChildren.push_back(text("·") | color(theme.hintColor) | theme.dim());
         modelChildren.push_back(text(fmt::format("{}t/s", tps)) | color(theme.hintColor));
     }
     // 外层 hbox 也需感知 modelInfo 可收缩, 否则整块被按比例压缩 (见
@@ -106,7 +106,7 @@ Element StatusBarComponent::OnRender() {
                     textStr.resize(idx);
                     textStr += "...";
                 }
-                auto el = text(textStr) | color(theme.hintColor) | dim | xflex_shrink;
+                auto el = text(textStr) | color(theme.hintColor) | theme.dim() | xflex_shrink;
                 if (item.align == 0) {
                     leftPluginItems.push_back(std::move(el));
                 } else {

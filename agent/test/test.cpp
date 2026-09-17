@@ -73,6 +73,7 @@
 #include "agentxx-test/client/test_tui_sidebar.h"
 #include "agentxx-test/client/test_tui_stream.h"
 #include "agentxx-test/client/test_tui_surface.h"
+#include "agentxx-test/client/test_tui_theme.h"
 #include "agentxx-test/client/test_tui_tool_header.h"
 #include "agentxx-test/client/test_tui_widget.h"
 #endif
@@ -204,6 +205,7 @@ int main(int argn, char** argv) {
         runSync("tui_context_overlay", agentxx::test::testTuiContextOverlay);
         runSync("tui_stream", agentxx::test::testTuiStream);
         runSync("tui_surface", agentxx::test::testTuiSurface);
+        runSync("tui_theme", agentxx::test::testTuiTheme);
         runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
         runSync("tui_widget", agentxx::test::testTuiWidget);
         runSync("sessionId", agentxx::test::testSessionId);

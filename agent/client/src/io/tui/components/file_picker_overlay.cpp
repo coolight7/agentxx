@@ -465,7 +465,9 @@ Element FilePickerOverlay::OnRender() {
         = std::min(static_cast<int>(curTab.entries.size()), scrollStart + maxVisible);
 
     if (activeTab_ == PickerTab::Server && curTab.loading) {
-        items.push_back(text(std::string(TuiI18n::instance().t("picker.server_loading"))) | dim);
+        items.push_back(
+            text(std::string(TuiI18n::instance().t("picker.server_loading"))) | theme.dim()
+        );
     } else if (activeTab_ == PickerTab::Server && !curTab.error.empty()) {
         items.push_back(text(trf("picker.server_error", curTab.error)) | color(theme.errorColor));
     } else {
@@ -492,7 +494,8 @@ Element FilePickerOverlay::OnRender() {
                 rowItems.push_back(text(displayName) | color(theme.normalColor));
                 rowItems.push_back(filler());
                 rowItems.push_back(
-                    text(fmt::format("( {} ) ", agentxx::util::formatSize(entry.sizeBytes))) | dim
+                    text(fmt::format("( {} ) ", agentxx::util::formatSize(entry.sizeBytes)))
+                    | theme.dim()
                 );
             } else {
                 std::string displayName = fmt::format(
@@ -504,11 +507,11 @@ Element FilePickerOverlay::OnRender() {
                     = entry.mediaType == agentxx::agent::MediaType::Image   ? "picker.image"
                       : entry.mediaType == agentxx::agent::MediaType::Audio ? "picker.audio"
                                                                             : "picker.video";
-                rowItems.push_back(text(displayName) | dim);
+                rowItems.push_back(text(displayName) | theme.dim());
                 rowItems.push_back(filler());
                 rowItems.push_back(
                     text(trf("picker.unsupported", std::string(TuiI18n::instance().t(labelKey))))
-                    | dim
+                    | theme.dim()
                 );
             }
 
@@ -518,7 +521,7 @@ Element FilePickerOverlay::OnRender() {
                       | focus;
             }
             if (!entry.isDir && !entry.supported) {
-                row = row | dim;
+                row = row | theme.dim();
             }
             // 命中登记 (id 含 tab 归属与条目下标): 仅本帧渲染出来的条目可命中
             items.push_back(hits_.add(std::move(row), itemHitId(activeTab_, static_cast<size_t>(i)))
@@ -526,7 +529,7 @@ Element FilePickerOverlay::OnRender() {
         }
 
         if (curTab.entries.empty()) {
-            items.push_back(text(std::string(TuiI18n::instance().t("picker.empty"))) | dim);
+            items.push_back(text(std::string(TuiI18n::instance().t("picker.empty"))) | theme.dim());
         }
     }
 

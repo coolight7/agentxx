@@ -131,7 +131,7 @@ static void appendPluginItems(
         } else if (kind == "badge") {
             push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
         } else if (kind == "separator") {
-            push(text("─") | color(theme.hintColor) | dim);
+            push(text("─") | color(theme.hintColor) | theme.dim());
         } else if (kind == "button" || kind == "action") {
             agentxx::client::PluginButtonDesc desc;
             if (!agentxx::client::parsePluginButton(it, plugin, reg, desc)) {
@@ -187,7 +187,7 @@ static void appendPluginItems(
 std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     if (!logSink_) {
         return {
-            ScrollItem{text(tr("info.empty")) | dim, false}
+            ScrollItem{text(tr("info.empty")) | theme_.dim(), false}
         };
     }
     // 仅当日志内容有变化时才重新 snapshot + 重建缓存:
@@ -209,7 +209,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
     }
     if (logLineCache_.empty()) {
         return {
-            ScrollItem{text(tr("info.empty")) | dim, false}
+            ScrollItem{text(tr("info.empty")) | theme_.dim(), false}
         };
     }
     std::vector<ScrollItem> items;
