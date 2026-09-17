@@ -332,6 +332,9 @@ inline agentxx::util::Json syncToJson(const WireSyncPayload& p) {
     agentxx::util::Json j = agentxx::util::Json::object();
     j["fromIndex"]        = p.fromIndex;
     j["tailHash"]         = p.tailHash;
+    // 快照对应的服务端 delta 水位 (0 = 未提供): 客户端据此复位去重水位,
+    // 避免服务端 seq 重新计数后客户端旧水位把新增量全部判为重复 (见结构体注释)
+    j["deltaSeq"]         = p.deltaSeq;
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"]      = p.totalMessages;
@@ -358,6 +361,7 @@ inline std::optional<WireSyncPayload> syncFromJson(const agentxx::util::Json& j)
     p.fromIndex     = j.value("fromIndex", uint64_t{0});
     p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
+    p.deltaSeq      = j.value("deltaSeq", uint64_t{0});
     auto msgs       = j.value("messages", agentxx::util::Json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {

@@ -441,6 +441,13 @@ struct WireSyncPayload {
     /// 服务端会话总消息数 (0 = 未提供/未知; 全量同步时 == messages.size())
     uint64_t                      totalMessages = 0;
     std::vector<MessageQueueItem> messageQueue;
+
+    /// 本快照对应的服务端 delta 水位 (Session::deltaSeq):
+    /// 快照已包含 seq <= deltaSeq 的全部增量, 客户端据此复位其去重水位。
+    /// - 服务端进程重启/会话重建后 seq 从 0 重新计数, 客户端若保留旧水位
+    ///   (如 5000) 则会把新会话的 seq=1,2,... 全部判为重复并丢弃 (界面不再刷新)
+    /// - 0 = 未提供/无会话 (客户端按"复位为 0"处理, 放行后续全部增量)
+    uint64_t deltaSeq = 0;
 };
 
 // ---------------------------------------------------------------------------

@@ -2236,7 +2236,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
 void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
     {
         // 单次 mutate (内部加锁): 不得在持锁状态下再调 mutate() ——
-        // 旧实现先 lock_guard 再调 mutate() 会对同一非递归 mutex 二次加锁,
+        // 如果先 lock_guard 再调 mutate() 会对同一非递归 mutex 二次加锁,
         // 造成客户端线程死锁 (TUI 启动握手即触发, 界面冻结)
         sharedState_.mutate([&](TUIRenderState& cur) {
             auto st              = std::make_shared<TUIRenderState>();

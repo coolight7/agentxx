@@ -146,8 +146,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     // 渲染树内存放大: FTXUI text()/paragraph() 按 glyph/词拆对象, 实测渲染树
     // 为源文本 30~70 倍 (memprof 实测: 1MB 英文 -> text() 30.7MB, markdown
     // 全量渲染 173MB)。因此 sourceBytes 按"渲染树估算字节"(源 × 64 系数) 上报
-    // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 旧实现按
-    // 源文本字节计 (16MiB 源 ≈ 0.5~1GB 渲染树), 预算形同虚设, 实测 100K/200K
+    // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 实测 100K/200K
     // 上下文时消息列表渲染树缓存即占 10+ MB。
     budget.maxItems = 64;              // 条数预算: 可见 ~30 条 + 少量滚动余量
     budget.maxBytes = 4 * 1024 * 1024; // 渲染树估算字节预算: 4MiB
@@ -1119,7 +1118,7 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
 }
 
 // ---------------------------------------------------------------------------
-// 消息块构建 (与旧实现一致的视觉呈现)
+// 消息块构建
 // ---------------------------------------------------------------------------
 
 Element MessageListComponent::buildMessageBlock(

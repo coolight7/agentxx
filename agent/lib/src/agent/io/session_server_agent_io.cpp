@@ -21,6 +21,7 @@
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
 #include <algorithm>
+#include <chrono>
 
 namespace agentxx {
 namespace agent {
@@ -1106,6 +1107,13 @@ asio::awaitable<void> SessionServerAgentIO::run() {
     running_.store(true, std::memory_order_release);
     // 订阅插件事件 (转发 WirePluginData 供客户端展示插件状态)
     subscribePluginEvents();
+    // 预热会话: 会话历史从 SQLite 加载是阻塞操作, 若留到首个请求 (hello/分页/
+    // 用户输入) 才做, 会同步卡住 io 线程 (长历史会话可达数百毫秒), 期间所有
+    // 会话的 LLM 流/工具执行全部停摆。此处先异步预热一次 (loadSession 卸载到
+    // 线程池), 之后的 session() 都是缓存命中
+    if (auto agent = agent_.lock(); agent && agent->agentContext) {
+        co_await agent->agentContext->getSessionAsync(config_.sessionId);
+    }
     while (!stopped_.load(std::memory_order_acquire)) {
         if (pendingInsert_) {
             pendingInsert_ = false;
@@ -1273,7 +1281,21 @@ std::optional<std::vector<WireDelta>> SessionServerAgentIO::deltasSince(uint64_t
         return std::nullopt;
     }
     uint64_t oldest = deltaBuffer_.front().seq;
+    uint64_t newest = deltaBuffer_.back().seq;
     if (seq + 1 < oldest) {
+        return std::nullopt;
+    }
+    // 客户端水位超过服务端当前 seq: 服务端进程重启/会话重建后 seq 从 0 重新
+    // 计数, 按增量续传只能得到空列表 (客户端将永远收不到新增量, 界面不再刷新),
+    // 故回退全量 sync (客户端据 sync 的 deltaSeq 复位水位)
+    if (seq > newest) {
+        XX_LOGI(
+            "[session_ctrl] delta seq regressed (client={}, server={}), fallback to full sync "
+            "(thread={})",
+            seq,
+            newest,
+            config_.sessionId
+        );
         return std::nullopt;
     }
     std::vector<WireDelta> out;
@@ -1293,6 +1315,8 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
         p.messages      = sess->getFullViewMessagesCopy();
         p.tailHash      = sess->getHashInfo().tailHex;
         p.totalMessages = p.messages.size();
+        // 快照水位: 客户端据此复位去重水位 (服务端 seq 可能已重新计数)
+        p.deltaSeq      = sess->deltaSeq;
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;
@@ -1315,6 +1339,8 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     p.totalMessages    = total;
     p.messages         = sess->getViewMessagesRange(start, total);
     p.tailHash         = sess->getHashInfo().tailHex;
+    // 快照水位: 客户端据此复位去重水位 (服务端 seq 可能已重新计数)
+    p.deltaSeq         = sess->deltaSeq;
     p.messageQueue     = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;
 }
@@ -1407,7 +1433,25 @@ WireModelInfo SessionServerAgentIO::buildModelInfo(std::string_view sessionId) {
 std::shared_ptr<Session> SessionServerAgentIO::session() {
     auto agent = agent_.lock();
     if (agent && agent->agentContext) {
-        return agent->agentContext->getSession(config_.sessionId);
+        // 缓存命中 (绝大多数调用): 零开销直接返回
+        if (agent->agentContext->sessions) {
+            if (auto cached = agent->agentContext->sessions->get(config_.sessionId)) {
+                return cached;
+            }
+        }
+        // 未命中 (首次接入/切换会话): 此处会同步从 SQLite 加载会话历史,
+        // 记录耗时便于发现 io 线程被阻塞的情况 (正常路径已由 run() 预热)
+        auto begin = std::chrono::steady_clock::now();
+        auto sess  = agent->agentContext->getSession(config_.sessionId);
+        XX_LOGD(
+            "[session_ctrl] session '{}' loaded synchronously in {} ms (cache miss)",
+            config_.sessionId,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - begin
+            )
+            .count()
+        );
+        return sess;
     }
     return nullptr;
 }
@@ -1422,6 +1466,10 @@ void SessionServerAgentIO::startGraceTimer() {
         failAllPending();
         return;
     }
+    // 先取消上一个宽限定时器: 1:N 模式下多个客户端相继断开会对同一轮次重复触发
+    // 本函数, 旧定时器若不取消仍会在自己的到期时刻执行, 使宽限期被"最早创建的
+    // 定时器"提前结束 (实际宽限期短于配置), 并让旧协程多持有一份 self 引用
+    cancelGraceTimer();
     auto timer = std::make_shared<asio::steady_timer>(ex_);
     timer->expires_after(config_.gracePeriod);
     graceTimer_ = timer;

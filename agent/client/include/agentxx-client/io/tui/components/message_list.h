@@ -31,11 +31,11 @@ namespace agentxx::client {
 /// 渲染架构: 封装 LazyScrollable, 经 itemCount/itemKey/estimateHeight/buildItem
 /// 四个回调描述列表, 仅按需懒构建子项:
 /// - 有界 LRU 缓存 (条数 + 源字节双预算): 窗口外旧消息的渲染缓存被淘汰释放,
-///   内存占用与对话长度解耦 —— 修复旧实现中渲染缓存随对话无限增长的问题
+///   内存占用与对话长度解耦
 /// - 视口局部布局/绘制: 仅对可见消息做 markdown 解析与布局, 不可见消息零成本
 /// - 高度估算: 未进入视口的消息使用按文本量估算的高度, 进入视口后实测修正
 /// - itemKey 以消息指针 + 廉价特征构成 (内容变化必然伴随消息指针变化,
-///   见 TUISharedState::mutableMessage), 避免旧实现对全部消息文本逐帧哈希
+///   见 TUISharedState::mutableMessage), 避免对全部消息文本逐帧哈希
 /// - 流式增量项 (currentToken) 标记为不可缓存, 每帧重建后即释放
 ///
 /// 事件处理:
