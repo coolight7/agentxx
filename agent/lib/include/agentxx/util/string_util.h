@@ -648,26 +648,29 @@ inline std::from_chars_result parseNumberFromString(std::string_view str, T& num
 #if defined(_LIBCPP_VERSION) && __has_include(<cstdlib>)
     if constexpr (std::is_floating_point_v<T>) {
         // libc++ (llvm-mingw) 的 from_chars 浮点特化缺失，回退到 strto*
+        // - 只要求完整消费 + 结果为有限值: 不可用 `errno == 0` 判定失败 ——
+        //   strtod 对**下溢** (如 "1e-320") 会置 ERANGE 但仍返回可用数值,
+        //   按 errno 判定会把这类极小参数误判为非法
         std::string tmp(str);
         char*       end = nullptr;
         errno           = 0;
         if constexpr (std::is_same_v<T, float>) {
             float v = std::strtof(tmp.c_str(), &end);
-            if (errno == 0 && end == tmp.c_str() + tmp.size()) {
+            if (end == tmp.c_str() + tmp.size() && std::isfinite(v)) {
                 num = v;
                 return {str.data() + (end - tmp.c_str()), std::errc{}};
             }
             return {str.data(), std::errc::invalid_argument};
         } else if constexpr (std::is_same_v<T, double>) {
             double v = std::strtod(tmp.c_str(), &end);
-            if (errno == 0 && end == tmp.c_str() + tmp.size()) {
+            if (end == tmp.c_str() + tmp.size() && std::isfinite(v)) {
                 num = v;
                 return {str.data() + (end - tmp.c_str()), std::errc{}};
             }
             return {str.data(), std::errc::invalid_argument};
         } else {
             long double v = std::strtold(tmp.c_str(), &end);
-            if (errno == 0 && end == tmp.c_str() + tmp.size()) {
+            if (end == tmp.c_str() + tmp.size() && std::isfinite(v)) {
                 num = static_cast<T>(v);
                 return {str.data() + (end - tmp.c_str()), std::errc{}};
             }
@@ -1206,17 +1209,35 @@ inline PinyinCallback s_pinyinCallback = nullptr;
 
 [[nodiscard]] inline constexpr bool
     isIgnoreCaseEqual(std::string_view left, std::string_view right) {
-    if (left.size() == right.size()) {
-        return toLower(left) == toLower(right);
-    }
-    return false;
+    // 逐字符比较 (不分配两侧小写副本; 见 [IgnoreCaseEqual::equal])
+    return IgnoreCaseEqual::equal(left, right);
 }
 
 [[nodiscard]] inline constexpr bool
     isIgnoreCaseContains(std::string_view longStr, std::string_view shortStr) {
-    std::string lowerLong  = toLower(longStr);
-    std::string lowerShort = toLower(shortStr);
-    return lowerLong.find(lowerShort) != std::string::npos;
+    // 逐字符大小写不敏感查找. charToLower 只作用于 ASCII 字母,
+    // 对多字节 UTF-8 的其余字节无影响, 与 "两侧 toLower 后 find" 语义一致
+    if (shortStr.empty()) {
+        // 空模式: find("") 恒命中
+        return true;
+    }
+    if (longStr.size() < shortStr.size()) {
+        return false;
+    }
+    const size_t last = longStr.size() - shortStr.size();
+    for (size_t i = 0; i <= last; ++i) {
+        size_t j = 0;
+        for (; j < shortStr.size(); ++j) {
+            if (charToLower(static_cast<char>(static_cast<unsigned char>(longStr[i + j])))
+                != charToLower(static_cast<char>(static_cast<unsigned char>(shortStr[j])))) {
+                break;
+            }
+        }
+        if (j == shortStr.size()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 [[nodiscard]] inline constexpr bool
