@@ -112,10 +112,11 @@ void testDimLightTheme() {
         XX_TEST_EXPECT_TRUE(screen.CellAt(0, 0).foreground_color != theme.normalColor);
     }
 
-    // 提示色 (135,136,137) 更淡: RGB(199,200,200)
+    // 当前提示色 (120,122,125) 向白底混合 45%，经 gamma 2.2 插值并截断为整数后
+    // 得到 RGB(195,195,196)，期望值独立计算，不调用被测混色函数。
     {
         auto screen = renderOffscreen(text("─") | color(theme.hintColor) | theme.dim());
-        XX_TEST_EXPECT_EQ(screen.CellAt(0, 0).foreground_color, Color::RGB(199, 200, 200));
+        XX_TEST_EXPECT_EQ(screen.CellAt(0, 0).foreground_color, Color::RGB(195, 195, 196));
     }
 
     // 未设置前景色的文字 (跟随终端默认色, 无法参与混合): 以正文色为基准色,

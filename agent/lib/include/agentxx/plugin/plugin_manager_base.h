@@ -30,6 +30,7 @@
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_driver.h"
 #include "agentxx/plugin/plugin_runtime.h"
+#include "agentxx/util/container_util.h"
 #include "agentxx/util/json.h"
 #include "agentxx/util/log.h"
 #include "asio/any_io_executor.hpp"
@@ -593,7 +594,8 @@ public:
     }
 
     void releasePluginName(std::string_view name) {
-        loadingNames_.erase(name);
+        // 异构删除复用 util::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
+        util::eraseHeterogeneous(loadingNames_, name);
     }
 
     bool isPluginNameLoading(std::string_view name) const {

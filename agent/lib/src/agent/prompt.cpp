@@ -60,7 +60,8 @@ void AgentPrompt::mergeFromJson(const agentxx::util::Json& j) {
             if (val.is_string()) {
                 util::insertOrAssignHeterogeneous(appendSystemPrompts, key, val.get<std::string>());
             } else if (val.is_null()) {
-                appendSystemPrompts.erase(key);
+                // 异构删除复用 util::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
+                util::eraseHeterogeneous(appendSystemPrompts, key);
             }
         }
     }
