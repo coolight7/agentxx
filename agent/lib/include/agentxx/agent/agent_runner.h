@@ -26,8 +26,7 @@ namespace agent {
 /// - 超时策略:
 ///   - HIL 请求: 统一取 IO 端点 (SessionServerAgentIO::interruptTimeout) 配置,
 ///     <=0 不限制 (避免 HIL 弹窗被总线默认 30s 超时提前截断)
-///   - subagent 委派请求: 不限制超时 (子代理可能长时间运行; 修复旧实现
-///     根 agent 总线请求默认 30s 截断长任务的问题)
+///   - subagent 委派请求: 不限制超时 (子代理可能长时间运行)
 class AgentRunner {
 public:
 

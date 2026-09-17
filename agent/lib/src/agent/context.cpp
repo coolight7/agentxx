@@ -73,11 +73,13 @@ std::string Session::appendViewMessage(ViewMessage msg) {
     // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
     assertIoThread();
 
-    // 链式哈希对消息内容 (不含 id): 与旧实现 (json 内容 dump) 语义一致
+    // 链式哈希对消息内容 (不含 id)
     chainHash.append(msg.toJson().dump());
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
     msg.id  = id;
     viewMessages.push_back(std::move(msg));
+    // 维护 msgId → 下标索引 (updateViewMessage 的 O(1) 定位用)
+    msgIndex_.insert_or_assign(id, viewMessages.size() - 1);
     // 持久化 (节流, 尽力而为): 压入待落盘队列 — 首次立即落库, 节流窗口内合并,
     // 待下次触发或轮末 flushViewMessages() 补存 (消息 + 追加后计数同事务)
     if (hooks_.onAppendViewMessage) {
@@ -98,20 +100,35 @@ void Session::updateViewMessage(ViewMessage msg) {
         XX_LOGW("Session::updateViewMessage: empty msg id, skipped");
         return;
     }
-    // 定位同 id 消息 (历史 append-only, 顺序线性扫描即可; 低频操作)
-    for (auto& m : viewMessages) {
-        if (m.id == msg.id) {
-            m = std::move(msg);
-            // 持久化 (节流, 尽力而为): 覆盖库内对应行, 供重启恢复
-            if (hooks_.onUpdateViewMessage) {
-                enqueueViewPersist(PendingViewOp{
-                    .isAppend = false,
-                    .msg      = m,
-                    .counter  = 0,
-                });
-            }
-            return;
+    // 定位同 id 消息: 先走 msgId 索引 (O(1)); 索引缺失或指向的消息已变
+    // 则回退线性扫描并修复索引 (viewMessages/索引仅本类维护, 回退属防御)
+    size_t index = viewMessages.size();
+    if (auto idxIt = msgIndex_.find(msg.id); idxIt != msgIndex_.end()) {
+        if (idxIt->second < viewMessages.size() && viewMessages[idxIt->second].id == msg.id) {
+            index = idxIt->second;
         }
+    }
+    if (index == viewMessages.size()) {
+        for (size_t i = 0; i < viewMessages.size(); ++i) {
+            if (viewMessages[i].id == msg.id) {
+                index = i;
+                msgIndex_.insert_or_assign(msg.id, i); // 修复索引
+                break;
+            }
+        }
+    }
+    if (index < viewMessages.size()) {
+        auto& m = viewMessages[index];
+        m       = std::move(msg);
+        // 持久化 (节流, 尽力而为): 覆盖库内对应行, 供重启恢复
+        if (hooks_.onUpdateViewMessage) {
+            enqueueViewPersist(PendingViewOp{
+                .isAppend = false,
+                .msg      = m,
+                .counter  = 0,
+            });
+        }
+        return;
     }
     XX_LOGW("Session::updateViewMessage: msg id {} not found in history", msg.id);
 }
@@ -133,6 +150,14 @@ void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter) 
     }
     viewMessages  = std::move(messages);
     msgIdCounter_ = msgIdCounter;
+    // 重建 msgId → 下标索引 (与 viewMessages 同步; 恢复的历史全量建索引)
+    msgIndex_.clear();
+    msgIndex_.reserve(viewMessages.size());
+    for (size_t i = 0; i < viewMessages.size(); ++i) {
+        if (false == viewMessages[i].id.empty()) {
+            msgIndex_.insert_or_assign(viewMessages[i].id, i);
+        }
+    }
 }
 
 void Session::saveLlmMessages() {

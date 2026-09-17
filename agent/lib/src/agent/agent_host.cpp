@@ -609,7 +609,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
             std::ostringstream oss;
             // 事件回调: token 收集 (content) + hostBus 进度发布
-            // (run/resume 共用; 旧实现 resume 不传 callback, 中断恢复后的
+            // (run/resume 共用; 如果 resume 不传 callback, 中断恢复后的
             //  token 不进入输出/进度事件, 此处统一修复)
             auto progressCb = [&](const neograph::graph::GraphEvent& event) {
                 switch (event.type) {

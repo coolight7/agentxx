@@ -82,6 +82,9 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
 
     std::optional<neograph::graph::RunResult> result;
 
+    // 循环退出时中断仍未完成 (无处理者/未响应): 循环内 resumeValues 为空时置位
+    bool unresolvedInterrupt = false;
+
     if (initialResult.has_value()) {
         // 程序重启恢复中断: 跳过首跑, 直接进入中断处理循环
         result = std::move(initialResult);
@@ -146,7 +149,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                 std::expected<events::RespSubagentBatch, std::string> batchResp;
                 if (ctx->bus) {
                     // 委派请求不限制超时: 子代理可能长时间运行, 总线默认
-                    // 30s 会截断长任务 (旧实现缺陷, 统一修复)
+                    // 30s 会截断长任务
                     batchResp = co_await ctx->bus
                                     ->request<events::ReqSubagentBatch, events::RespSubagentBatch>(
                                         events::Topic::Subagent,
@@ -270,12 +273,18 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
         }
         // 无任何可注入结果: 停止循环, 按"中断未完成"处理
         // result 保持 nullopt, while 退出
+        if (resumeValues.empty()) {
+            unresolvedInterrupt = true;
+        }
     }
 
     // 循环退出条件:
     // - resume 正常完成 (result->interrupted == false) → 中断已全部处理
-    // - resumeValues 空 (无处理者/未响应) → 中断未完成
-    outcome.unresolvedInterrupt = result.has_value() && result->interrupted;
+    // - resumeValues 空 (无处理者/未响应) → 中断未完成 (result 为 nullopt)
+    // 注意: 不可用 `result.has_value() && result->interrupted` 判定 —— while 的
+    // 退出条件已保证此时 interrupted 必为 false (死条件), 会使"中断未完成"被
+    // 调用方 (子代理 spawnOneTask) 当作成功结果继续使用
+    outcome.unresolvedInterrupt = unresolvedInterrupt || !result.has_value();
     if (outcome.unresolvedInterrupt) {
         // 未完成的中断节点: 从 graphData 读取 (循环内已记录)
         outcome.interruptNode = ctx->middlewareHandleContext->getGraphDataItemValue<std::string>(
