@@ -6,7 +6,7 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -351,13 +351,13 @@ private:
 
     /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
     ftxui::Element buildMessageHeader(
-        const agentxx::util::Json& m,
+        const utilxx_base::Json& m,
         bool                       expanded,
         const ftxui::Color&        roleColor
     );
 
     /// 构建单条消息的展开体: 完整原始 JSON (dump(2) 美化多行)
-    ftxui::Element buildMessageBody(const agentxx::util::Json& m);
+    ftxui::Element buildMessageBody(const utilxx_base::Json& m);
 
     /// 屏幕坐标命中的折叠头所属消息下标 (未命中返回 [kNoMessage])
     /// 命中区域取 [Scrollable::visibleBoxes] 的上一帧可见子项区域 ——
@@ -587,7 +587,7 @@ public:
     explicit CustomOverlay(
         TUICtx&             ctx,
         std::string         title,
-        agentxx::util::Json items,
+        utilxx_base::Json items,
         std::string         ownerPlugin
     );
 
@@ -602,7 +602,7 @@ private:
 
     TUICtx&             ctx_;
     std::string         title_;
-    agentxx::util::Json items_;
+    utilxx_base::Json items_;
     std::string         ownerPlugin_;
     /// ownerPlugin_ 在最近一次渲染快照中的实例代次 (点击复查; 见 dispatchAction)
     uint64_t                    ownerGeneration_ = 0;

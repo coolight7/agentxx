@@ -4,11 +4,11 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/protocol/provider_common.h"
-#include "agentxx/util/aho_corasick.h"
+#include "utilxx/aho_corasick.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/hash.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/hash.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
@@ -27,7 +27,7 @@ inline static constexpr std::string_view defaultUserCancelTip{"[User cancelled]"
 inline static constexpr std::string_view defaultContinueTip{"[Please continue]"};
 
 // 限速
-inline static const auto defaultRateLimitTag = agentxx::util::AhoCorasick<char>{
+inline static const auto defaultRateLimitTag = utilxx::AhoCorasick<char>{
     std::vector<std::string>{
                              "429", "rate limit",
                              "has been exhausted", "insufficient",
@@ -557,7 +557,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         }
 
         auto checkInfo
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
             );
@@ -575,7 +575,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         for (auto& msg : msgs) {
             bool doPrint = false;
             if (msg.role == "system") {
-                const auto sysPromptHash = agentxx::util::hash::fnv1a64(msg.content);
+                const auto sysPromptHash = utilxx_base::hash::fnv1a64(msg.content);
                 if (checkInfo.contains("system_prompt_hash")
                     && checkInfo["system_prompt_hash"].is_number_integer()
                     && checkInfo.value<uint64_t>("system_prompt_hash", 0) != sysPromptHash) {
@@ -597,16 +597,16 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 doPrint = true;
             }
             // 检查是否符合 utf8
-            if (agentxx::util::utf8Repair(msg.reasoning_content)) {
+            if (utilxx_base::utf8Repair(msg.reasoning_content)) {
                 XX_LOGE("  - Message.reasoning_content is not utf8 available: ");
                 doPrint = true;
             }
-            if (agentxx::util::utf8Repair(msg.content)) {
+            if (utilxx_base::utf8Repair(msg.content)) {
                 XX_LOGE("  - Message.content is not utf8 available: ");
                 doPrint = true;
             }
             for (auto& tool : msg.tool_calls) {
-                if (agentxx::util::utf8Repair(tool.arguments)) {
+                if (utilxx_base::utf8Repair(tool.arguments)) {
                     XX_LOGE(
                         "  - Message.toolcall is not utf8 available: {}/{}",
                         tool.name,
@@ -620,7 +620,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 agentxx::middleware::BaseMiddlewareHandleInterface::printMessage(msg);
             }
         }
-        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo,
             std::move(checkInfo)
@@ -749,10 +749,10 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         } catch (const boost::exception& e) {
             // 注意: boost::exception 需在 std::exception 之前捕获,
             // 同时继承两者的异常 (如 boost::system::system_error) 才能取到完整诊断信息
-            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
+            errInfo  = utilxx_base::autoTryConvertToUtf8(boost::diagnostic_information(e));
             errorPtr = std::current_exception();
         } catch (const std::exception& e) {
-            errInfo  = agentxx::util::autoTryConvertToUtf8(e.what());
+            errInfo  = utilxx_base::autoTryConvertToUtf8(e.what());
             errorPtr = std::current_exception();
         } catch (...) {
             errInfo  = "unknown";

@@ -1,4 +1,4 @@
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
 #include <cctype>
@@ -137,7 +137,7 @@ static bool uiControlNeedsShift(char ch) {
     }
 }
 
-/// 大写转换 (替代 libagentxx::util::toUpper; 插件不链接 libagentxx)
+/// 大写转换 (替代 libutilxx_base::toUpper; 插件不链接 libagentxx)
 static std::string uiControlToUpper(std::string_view s) {
     std::string out;
     out.reserve(s.size());
@@ -877,7 +877,7 @@ struct UiCmdFields {
     int64_t                  delta = 0, duration = 200, ms = 100;
 };
 
-static bool jsonStr(const agentxx::util::Json& o, std::string_view key, std::string& out) {
+static bool jsonStr(const utilxx_base::Json& o, std::string_view key, std::string& out) {
     if (!o.is_object() || !o.contains(key) || !o[key].is_string()) {
         return false;
     }
@@ -885,7 +885,7 @@ static bool jsonStr(const agentxx::util::Json& o, std::string_view key, std::str
     return true;
 }
 
-static bool jsonInt(const agentxx::util::Json& o, std::string_view key, int64_t& out) {
+static bool jsonInt(const utilxx_base::Json& o, std::string_view key, int64_t& out) {
     if (!o.is_object() || !o.contains(key)) {
         return false;
     }
@@ -901,7 +901,7 @@ static bool jsonInt(const agentxx::util::Json& o, std::string_view key, int64_t&
     return false;
 }
 
-static bool uiControlParseCmd(const agentxx::util::Json& v, UiCmdFields& f) {
+static bool uiControlParseCmd(const utilxx_base::Json& v, UiCmdFields& f) {
     if (!v.is_object()) {
         return false;
     }
@@ -1062,7 +1062,7 @@ static UICmdResult uiControlExecuteOne(const UiCmdFields& f) {
     return UICmdResult{false, fmt::format("unknown action: {}", action)};
 }
 
-std::string uiControlExecute(const agentxx::util::Json& arguments) {
+std::string uiControlExecute(const utilxx_base::Json& arguments) {
     if (!arguments.is_object() || !arguments.contains("commands")
         || !arguments["commands"].is_array()) {
         return R"({"error":"Arg `commands` is required and must be an array"})";
@@ -1078,7 +1078,7 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
         }
     }
 
-    agentxx::util::Json results    = agentxx::util::Json::array();
+    utilxx_base::Json results    = utilxx_base::Json::array();
     int                 ok_count   = 0;
     int                 fail_count = 0;
     size_t              i          = 0;
@@ -1091,7 +1091,7 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
 
         UiCmdFields f;
         if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction || f.action.empty()) {
-            agentxx::util::Json item = agentxx::util::Json::object();
+            utilxx_base::Json item = utilxx_base::Json::object();
             item["index"]            = static_cast<int64_t>(i);
             item["action"]           = "";
             item["ok"]               = false;
@@ -1106,7 +1106,7 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
         } else {
             ++fail_count;
         }
-        agentxx::util::Json item = agentxx::util::Json::object();
+        utilxx_base::Json item = utilxx_base::Json::object();
         item["index"]            = static_cast<int64_t>(i);
         item["action"]           = f.action;
         item["ok"]               = r.ok;
@@ -1121,7 +1121,7 @@ std::string uiControlExecute(const agentxx::util::Json& arguments) {
     return results.dump();
 }
 #else
-std::string uiControlExecute(const agentxx::util::Json&) {
+std::string uiControlExecute(const utilxx_base::Json&) {
     return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";
 }
 #endif

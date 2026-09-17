@@ -18,7 +18,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>

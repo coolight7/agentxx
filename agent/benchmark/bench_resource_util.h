@@ -3,8 +3,8 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/summarization.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include "neograph/types.h"
 #include <algorithm>
@@ -584,7 +584,7 @@ inline size_t estimateLlmMessagesBytes(const neograph::json& llmMsgs) {
     return llmMsgs.dump().size();
 }
 
-inline size_t estimateLlmMessagesBytes(const agentxx::util::Json& llmMsgs) {
+inline size_t estimateLlmMessagesBytes(const utilxx_base::Json& llmMsgs) {
     if (!llmMsgs.is_array()) {
         return 0;
     }

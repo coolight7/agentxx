@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -146,8 +146,8 @@ struct MediaAttachment {
         return "📷︎";
     }
 
-    agentxx::util::Json toJson() const {
-        agentxx::util::Json j = agentxx::util::Json::object();
+    utilxx_base::Json toJson() const {
+        utilxx_base::Json j = utilxx_base::Json::object();
         j["type"]             = std::string(mediaTypeToString(type));
         if (!displayName.empty()) {
             j["display_name"] = displayName;
@@ -167,7 +167,7 @@ struct MediaAttachment {
         return j;
     }
 
-    static MediaAttachment fromJson(const agentxx::util::Json& j) {
+    static MediaAttachment fromJson(const utilxx_base::Json& j) {
         MediaAttachment att;
         att.type        = mediaTypeFromString(j.value("type", std::string{}));
         att.displayName = j.value("display_name", std::string{});
@@ -264,7 +264,7 @@ struct ViewMessage {
         ///   见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h)
         /// - **必填** (服务端 InterruptHandleArg::toJson 恒下发; 缺失 = 契约违规,
         ///   客户端输出诊断行且不可交互)
-        agentxx::util::Json ui;
+        utilxx_base::Json ui;
         /// 表单状态
         InterruptStatus interruptStatus = InterruptStatus::Waiting;
         /// 提交结果展示文本 (interruptStatus == Confirmed 时有效; 多控件时为
@@ -298,10 +298,10 @@ struct ViewMessage {
     }
 
     /// 序列化为 wire/哈希 JSON (角色专属字段按 role 输出)
-    agentxx::util::Json toJson() const;
+    utilxx_base::Json toJson() const;
     /// 从 wire/哈希 JSON 解析; 非法 role 或缺省字段时按默认值解析。
     /// 保证 role 专属子结构在对应 role 下非空 (Tool/System/Interrupt)
-    static ViewMessage fromJson(const agentxx::util::Json& j);
+    static ViewMessage fromJson(const utilxx_base::Json& j);
 };
 
 /// 会话列表条目摘要 (会话选择弹窗展示用)
@@ -556,8 +556,8 @@ inline ViewMessage::InterruptStatus viewMessageInterruptStatusFromString(std::st
     return S::Waiting;
 }
 
-inline agentxx::util::Json ViewMessage::toJson() const {
-    agentxx::util::Json j = agentxx::util::Json::object();
+inline utilxx_base::Json ViewMessage::toJson() const {
+    utilxx_base::Json j = utilxx_base::Json::object();
     if (!id.empty()) {
         j["id"] = id;
     }
@@ -569,7 +569,7 @@ inline agentxx::util::Json ViewMessage::toJson() const {
         j["collapsed"] = true;
     }
     if (tool) {
-        agentxx::util::Json t = agentxx::util::Json::object();
+        utilxx_base::Json t = utilxx_base::Json::object();
         if (!tool->toolName.empty()) {
             t["tool_name"] = tool->toolName;
         }
@@ -588,12 +588,12 @@ inline agentxx::util::Json ViewMessage::toJson() const {
         j["tool"] = std::move(t);
     }
     if (tip) {
-        j["tip"] = agentxx::util::Json{
+        j["tip"] = utilxx_base::Json{
             {"tip_level", std::string(viewMessageTipLevelToString(tip->tipLevel))},
         };
     }
     if (think) {
-        agentxx::util::Json th = agentxx::util::Json::object();
+        utilxx_base::Json th = utilxx_base::Json::object();
         if (think->reasoningTokens > 0) {
             th["reasoning_tokens"] = think->reasoningTokens;
         }
@@ -605,7 +605,7 @@ inline agentxx::util::Json ViewMessage::toJson() const {
         }
     }
     if (interrupt) {
-        agentxx::util::Json it = agentxx::util::Json::object();
+        utilxx_base::Json it = utilxx_base::Json::object();
         it["interrupt_id"]     = interrupt->interruptId;
         // 中断 UI 描述 (声明式, 服务端生成): 客户端据此通用渲染表单控件
         if (!interrupt->ui.is_null()) {
@@ -619,7 +619,7 @@ inline agentxx::util::Json ViewMessage::toJson() const {
         j["interrupt"] = std::move(it);
     }
     if (!attachments.empty()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& a : attachments) {
             arr.push_back(a.toJson());
         }
@@ -628,7 +628,7 @@ inline agentxx::util::Json ViewMessage::toJson() const {
     return j;
 }
 
-inline ViewMessage ViewMessage::fromJson(const agentxx::util::Json& j) {
+inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
     ViewMessage m;
     m.id          = j.value("id", std::string{});
     m.text        = j.value("text", std::string{});

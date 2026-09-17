@@ -1,5 +1,7 @@
 #include "agentxx-test/core/test_diff_util.h"
 
+#include "utilxx/diff_util.h"
+
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_diff_passed = 0;
@@ -9,7 +11,8 @@ int g_diff_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_diff_passed
 #define XX_TEST_FAILED g_diff_failed
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx;
 
 namespace {
 

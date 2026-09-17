@@ -15,9 +15,9 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 
 #include "agentxx/plugin/api/plugin_api.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/json_view.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/json_view.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -58,8 +58,8 @@ namespace agentxx {
 namespace plugin {
 
 /// 插件作用域 JSON 别名 (自主 Json 体系, 不再依赖 neograph)
-using Json     = agentxx::util::Json;
-using JsonView = agentxx::util::JsonView;
+using Json     = utilxx_base::Json;
+using JsonView = utilxx_base::JsonView;
 
 /* ==================== C++ 字符串/接口便捷工具 (非 ABI) ====================
  *
@@ -2034,7 +2034,7 @@ public:
         bool                       required = false,
         std::optional<std::string> defVal   = std::nullopt
     ) {
-        agentxx::util::Json prop;
+        utilxx_base::Json prop;
         prop["type"]        = "string";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -2053,7 +2053,7 @@ public:
         bool                   required = false,
         std::optional<int64_t> defVal   = std::nullopt
     ) {
-        agentxx::util::Json prop;
+        utilxx_base::Json prop;
         prop["type"]        = "integer";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -2072,7 +2072,7 @@ public:
         bool                  required = false,
         std::optional<double> defVal   = std::nullopt
     ) {
-        agentxx::util::Json prop;
+        utilxx_base::Json prop;
         prop["type"]        = "number";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -2091,7 +2091,7 @@ public:
         bool                required = false,
         std::optional<bool> defVal   = std::nullopt
     ) {
-        agentxx::util::Json prop;
+        utilxx_base::Json prop;
         prop["type"]        = "boolean";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (defVal.has_value()) {
@@ -2115,10 +2115,10 @@ public:
         std::string_view itemType = "string",
         bool             required = false
     ) {
-        agentxx::util::Json prop;
+        utilxx_base::Json prop;
         prop["type"]        = "array";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
-        prop["items"]       = agentxx::util::Json{
+        prop["items"]       = utilxx_base::Json{
                   {"type", std::string(itemType)}
         };
         properties_[std::string(name)] = std::move(prop);
@@ -2135,7 +2135,7 @@ public:
         bool                       required = false,
         std::optional<std::string> defVal   = std::nullopt
     ) {
-        agentxx::util::Json prop;
+        utilxx_base::Json prop;
         prop["type"]        = "string";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         prop["enum"]        = options;
@@ -2150,13 +2150,13 @@ public:
     }
 
     std::string build() const {
-        agentxx::util::Json schema;
+        utilxx_base::Json schema;
         schema["type"]       = "object";
         schema["properties"] = properties_;
         if (!required_.empty()) {
             schema["required"] = required_;
         } else {
-            schema["required"] = agentxx::util::Json::array();
+            schema["required"] = utilxx_base::Json::array();
         }
         return schema.dump();
     }
@@ -2164,7 +2164,7 @@ public:
 private:
 
     ToolPromptText           prompt_;
-    agentxx::util::Json      properties_ = agentxx::util::Json::object();
+    utilxx_base::Json      properties_ = utilxx_base::Json::object();
     std::vector<std::string> required_;
 };
 
@@ -2172,7 +2172,7 @@ private:
 
 namespace detail {
 template<typename T>
-inline T jsonGet(const agentxx::util::Json& j) {
+inline T jsonGet(const utilxx_base::Json& j) {
     if constexpr (std::is_same_v<T, std::string>) {
         return j.get<std::string>();
     } else if constexpr (std::is_same_v<T, bool>) {
@@ -2195,8 +2195,8 @@ inline T jsonGet(const agentxx::util::Json& j) {
         return j.get<unsigned>();
     } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
         return j.get<std::vector<std::string>>();
-    } else if constexpr (std::is_same_v<T, agentxx::util::Json>) {
-        return j.get<agentxx::util::Json>();
+    } else if constexpr (std::is_same_v<T, utilxx_base::Json>) {
+        return j.get<utilxx_base::Json>();
     } else {
         return j.get<T>();
     }
@@ -2209,16 +2209,16 @@ public:
     explicit ArgReader(std::string_view jsonStr) {
         if (!jsonStr.empty()) {
             try {
-                root_ = agentxx::util::Json::parse(jsonStr);
+                root_ = utilxx_base::Json::parse(jsonStr);
                 if (!root_.is_object()) {
-                    root_ = agentxx::util::Json::object();
+                    root_ = utilxx_base::Json::object();
                 }
             } catch (...) {
                 hasParseError_ = true;
-                root_          = agentxx::util::Json::object();
+                root_          = utilxx_base::Json::object();
             }
         } else {
-            root_ = agentxx::util::Json::object();
+            root_ = utilxx_base::Json::object();
         }
     }
 
@@ -2240,7 +2240,7 @@ public:
         }
 
         try {
-            if constexpr (std::is_same_v<T, agentxx::util::Json>) {
+            if constexpr (std::is_same_v<T, utilxx_base::Json>) {
                 return val;
             } else if constexpr (std::is_same_v<T, std::string>) {
                 if (val.is_string()) {
@@ -2334,13 +2334,13 @@ public:
         return fmt::format("Argument error: {}", fmt::join(errors_, "; "));
     }
 
-    const agentxx::util::Json& raw() const noexcept {
+    const utilxx_base::Json& raw() const noexcept {
         return root_;
     }
 
 private:
 
-    agentxx::util::Json      root_          = agentxx::util::Json::object();
+    utilxx_base::Json      root_          = utilxx_base::Json::object();
     bool                     hasParseError_ = false;
     std::vector<std::string> errors_;
 };
@@ -3013,7 +3013,7 @@ public:
                         return;
                     }
                     try {
-                        auto j = agentxx::util::Json::parse(
+                        auto j = utilxx_base::Json::parse(
                             std::string_view{ev->data, static_cast<size_t>(ev->size)}
                         );
                         std::string sid = j.value("sessionId", "");
@@ -3078,14 +3078,14 @@ public:
         std::string jsonStr(s.data, static_cast<size_t>(s.size));
         PluginString::free(host, &s);
         try {
-            auto j = agentxx::util::Json::parse(jsonStr);
+            auto j = utilxx_base::Json::parse(jsonStr);
             if (j.contains("depict") && j["depict"].is_string()) {
                 res.depict = j["depict"].get<std::string>();
             }
             if (j.contains("args") && j["args"].is_object()) {
                 for (const auto& [k, v] : j["args"].items()) {
                     if (v.is_string()) {
-                        util::insertOrAssignHeterogeneous(res.args, k, v.get<std::string>());
+                        utilxx_base::insertOrAssignHeterogeneous(res.args, k, v.get<std::string>());
                     }
                 }
             }
@@ -5577,7 +5577,7 @@ struct ToolRenderInput {
 struct ToolRenderOutput {
     std::string         displayName;
     std::string         summary;
-    agentxx::util::Json items = agentxx::util::Json::array();
+    utilxx_base::Json items = utilxx_base::Json::array();
 };
 
 /// 注册基于回调函数的工具特化渲染器 (<key, 渲染func>)
@@ -5659,7 +5659,7 @@ inline int32_t registerToolTemplate(
     if (!host || !ui || !ui->register_tool_renderer) {
         return -1;
     }
-    agentxx::util::Json j;
+    utilxx_base::Json j;
     j["displayName"]    = std::string(displayName);
     j["summaryKey"]     = std::string(summaryKey);
     std::string jsonStr = j.dump();
@@ -5688,7 +5688,7 @@ namespace kit {
 class ActionController {
 public:
 
-    using Handler = std::function<void(const agentxx::util::Json& args)>;
+    using Handler = std::function<void(const utilxx_base::Json& args)>;
 
     /// 注册动作处理器 (IO 线程; 同 actionId 覆盖)
     void on(std::string actionId, Handler h) {
@@ -5702,18 +5702,18 @@ public:
 
     /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
     /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
-    agentxx::util::Json makeButton(
+    utilxx_base::Json makeButton(
         std::string         label,
         Handler             onClick = nullptr,
         std::string         prefix  = "",
         std::string         role    = "normal",
-        agentxx::util::Json args    = agentxx::util::Json::object()
+        utilxx_base::Json args    = utilxx_base::Json::object()
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
         if (onClick) {
             handlers_[id] = std::move(onClick);
         }
-        agentxx::util::Json btn = agentxx::util::Json::object();
+        utilxx_base::Json btn = utilxx_base::Json::object();
         btn["kind"]             = "button";
         btn["label"]            = std::move(label);
         if (!prefix.empty()) {
@@ -5740,10 +5740,10 @@ public:
             if (it == self->handlers_.end() || !it->second) {
                 return;
             }
-            agentxx::util::Json args = agentxx::util::Json::object();
+            utilxx_base::Json args = utilxx_base::Json::object();
             if (ctx->action_args.data && ctx->action_args.size > 0) {
                 try {
-                    auto parsed = agentxx::util::Json::parse(std::string_view{
+                    auto parsed = utilxx_base::Json::parse(std::string_view{
                         ctx->action_args.data,
                         static_cast<size_t>(ctx->action_args.size)
                     });

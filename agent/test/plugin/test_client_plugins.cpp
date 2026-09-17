@@ -22,7 +22,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -167,7 +167,7 @@ public:
 
     void onStatusItemRegistered(
         const std::string& id,
-        const agentxx::util::Json& /*props*/,
+        const utilxx_base::Json& /*props*/,
         int /*align*/,
         int /*order*/
     ) override {
@@ -176,7 +176,7 @@ public:
         lastStatusId_ = id;
     }
 
-    void onStatusItemUpdated(const std::string& id, const agentxx::util::Json& /*props*/) override {
+    void onStatusItemUpdated(const std::string& id, const utilxx_base::Json& /*props*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++statusUpdated_;
         lastStatusId_ = id;
@@ -188,13 +188,13 @@ public:
         lastStatusId_ = id;
     }
 
-    void onPanelRegistered(const std::string& id, const agentxx::util::Json& /*props*/) override {
+    void onPanelRegistered(const std::string& id, const utilxx_base::Json& /*props*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++panelRegistered_;
         lastPanelId_ = id;
     }
 
-    void onPanelUpdated(const std::string& id, const agentxx::util::Json& /*items*/) override {
+    void onPanelUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++panelUpdated_;
         lastPanelId_ = id;
@@ -208,7 +208,7 @@ public:
 
     void onInfoSectionRegistered(
         const std::string& id,
-        const agentxx::util::Json& /*props*/
+        const utilxx_base::Json& /*props*/
     ) override {
         std::lock_guard<std::mutex> lock(m_);
         ++infoSectionRegistered_;
@@ -216,7 +216,7 @@ public:
     }
 
     void
-        onInfoSectionUpdated(const std::string& id, const agentxx::util::Json& /*items*/) override {
+        onInfoSectionUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++infoSectionUpdated_;
         lastInfoSectionId_ = id;
@@ -916,7 +916,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::agent::PluginConfig              pc;
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = agentxx::util::Json{
+        pc.args    = utilxx_base::Json{
                {"client_key", "client_val"}
         };
 
@@ -944,7 +944,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(json.data != nullptr);
             if (json.data) {
                 try {
-                    auto j = agentxx::util::Json::parse(std::string{json.data, json.size});
+                    auto j = utilxx_base::Json::parse(std::string{json.data, json.size});
                     XX_TEST_EXPECT_EQ(j["client_key"].get<std::string>(), "client_val");
                 } catch (const std::exception& e) {
                     XX_TEST_EXPECT_TRUE(false);
@@ -1954,18 +1954,18 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::kit::ActionController ctl;
         XX_TEST_EXPECT_TRUE(ctl.empty());
         int hitsA = 0, hitsB = 0;
-        ctl.on("a.open", [&](const agentxx::util::Json&) {
+        ctl.on("a.open", [&](const utilxx_base::Json&) {
             ++hitsA;
         });
         auto btn = ctl.makeButton(
             "Go",
-            [&](const agentxx::util::Json& args) {
+            [&](const utilxx_base::Json& args) {
                 ++hitsB;
                 XX_TEST_EXPECT_EQ(args.value("k", 0), 1);
         },
             "|- ",
             "accent",
-            agentxx::util::Json{{"k", 1}}
+            utilxx_base::Json{{"k", 1}}
         );
         XX_TEST_EXPECT_TRUE(!ctl.empty());
         XX_TEST_EXPECT_EQ(ctl.size(), 2U);
@@ -2014,7 +2014,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::ClientUiRegistry reg;
         // 无绑定 → button 不可点
         PluginButtonDesc    desc;
-        agentxx::util::Json btnJson = agentxx::util::Json::parse(
+        utilxx_base::Json btnJson = utilxx_base::Json::parse(
             R"({"kind":"button","label":"Graph","action_id":"planning.open_graph","args":{},"role":"accent"})"
         );
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
@@ -2047,21 +2047,21 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "other_plugin", &reg, desc3));
         XX_TEST_EXPECT_FALSE(desc3.clickable);
         // 旧 action kind 兼容: action_id=id, role=accent
-        agentxx::util::Json actJson
-            = agentxx::util::Json::parse(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
+        utilxx_base::Json actJson
+            = utilxx_base::Json::parse(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
         PluginButtonDesc descAct;
         XX_TEST_EXPECT_TRUE(parsePluginButton(actJson, "agentxx_planning", &reg, descAct));
         XX_TEST_EXPECT_EQ(descAct.actionId, "rebuild");
         XX_TEST_EXPECT_TRUE(descAct.role == PluginButtonRole::Accent);
         // 无 action_id → 静态 (不可点, 但解析成功)
-        agentxx::util::Json staticJson
-            = agentxx::util::Json::parse(R"({"kind":"button","label":"Static"})");
+        utilxx_base::Json staticJson
+            = utilxx_base::Json::parse(R"({"kind":"button","label":"Static"})");
         PluginButtonDesc descStatic;
         XX_TEST_EXPECT_TRUE(parsePluginButton(staticJson, "agentxx_planning", &reg, descStatic));
         XX_TEST_EXPECT_TRUE(descStatic.actionId.empty());
         XX_TEST_EXPECT_FALSE(descStatic.clickable);
         // 非 button → false
-        agentxx::util::Json textJson = agentxx::util::Json::parse(R"({"kind":"text","text":"hi"})");
+        utilxx_base::Json textJson = utilxx_base::Json::parse(R"({"kind":"text","text":"hi"})");
         PluginButtonDesc    descText;
         XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
         // role 非法值 → Normal; danger 映射

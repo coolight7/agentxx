@@ -2,7 +2,7 @@
 
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/protocol/a2a_server.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -28,7 +28,7 @@ using agentxx::protocol::A2aServer;
 using agentxx::protocol::A2aTaskState;
 using agentxx::protocol::taskStateFromString;
 using agentxx::protocol::taskStateToString;
-using json = agentxx::util::Json;
+using json = utilxx_base::Json;
 
 // ---------------------------------------------------------------------------
 // Unit tests: data model helpers
@@ -345,7 +345,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
     // --- Version negotiation: unsupported version ---
     {
         auto            url = baseUrl + "/a2a";
-        util::HeaderMap headers;
+        utilxx::HeaderMap headers;
         headers.set("A2A-Version", "99.0");
         json request;
         request["jsonrpc"] = "2.0";
@@ -355,12 +355,12 @@ static asio::awaitable<void> test_a2a_server_integration() {
              {"id", "x"}
         };
 
-        auto resp = co_await util::HttpClient::postAsync(
+        auto resp = co_await utilxx::HttpClient::postAsync(
             url,
             request.dump(),
             "application/json",
             headers,
-            util::RequestConfig{}
+            utilxx::RequestConfig{}
         );
         XX_TEST_EXPECT_TRUE(resp.has_value());
         if (resp.has_value()) {
@@ -377,7 +377,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
     // --- Version negotiation: valid version 0.3 ---
     {
         auto            url = baseUrl + "/a2a";
-        util::HeaderMap headers;
+        utilxx::HeaderMap headers;
         headers.set("A2A-Version", "0.3");
         json request;
         request["jsonrpc"] = "2.0";
@@ -385,12 +385,12 @@ static asio::awaitable<void> test_a2a_server_integration() {
         request["method"]  = "ListTasks";
         request["params"]  = json::object();
 
-        auto resp = co_await util::HttpClient::postAsync(
+        auto resp = co_await utilxx::HttpClient::postAsync(
             url,
             request.dump(),
             "application/json",
             headers,
-            util::RequestConfig{}
+            utilxx::RequestConfig{}
         );
         XX_TEST_EXPECT_TRUE(resp.has_value());
         if (resp.has_value()) {
@@ -406,12 +406,12 @@ static asio::awaitable<void> test_a2a_server_integration() {
     // --- Invalid JSON body ---
     {
         auto url  = baseUrl + "/a2a";
-        auto resp = co_await util::HttpClient::postAsync(
+        auto resp = co_await utilxx::HttpClient::postAsync(
             url,
             std::string_view("not valid json{{{"),
             "application/json",
-            util::HeaderMap{},
-            util::RequestConfig{}
+            utilxx::HeaderMap{},
+            utilxx::RequestConfig{}
         );
         XX_TEST_EXPECT_TRUE(resp.has_value());
         if (resp.has_value()) {
@@ -434,12 +434,12 @@ static asio::awaitable<void> test_a2a_server_integration() {
         request["method"]  = "ListTasks";
         request["params"]  = json::object();
 
-        auto resp = co_await util::HttpClient::postAsync(
+        auto resp = co_await utilxx::HttpClient::postAsync(
             url,
             request.dump(),
             "application/json",
-            util::HeaderMap{},
-            util::RequestConfig{}
+            utilxx::HeaderMap{},
+            utilxx::RequestConfig{}
         );
         XX_TEST_EXPECT_TRUE(resp.has_value());
         if (resp.has_value()) {

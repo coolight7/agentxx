@@ -4,7 +4,7 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <fmt/format.h>
 #include <memory>
 #include <string>
@@ -25,7 +25,7 @@ struct PluginCtx : public agentxx::plugin::PluginBase {};
 ///   (如 file_patterns 写成 "agent/test/*.cpp")
 /// - 缺失/其他类型: 返回空列表
 inline std::vector<std::string>
-    stringListArg(const agentxx::util::Json& args, std::string_view key) {
+    stringListArg(const utilxx_base::Json& args, std::string_view key) {
     std::vector<std::string> out;
     const std::string        k{key};
     if (!args.is_object() || !args.contains(k)) {

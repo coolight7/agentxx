@@ -1,6 +1,6 @@
 #include "agentxx/agent/prompt.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include <cassert>
 
 namespace agentxx {
@@ -17,22 +17,22 @@ const std::string& ToolPrompt::getArg(std::string_view name) const {
     return it->second;
 }
 
-agentxx::util::Json AgentPrompt::toJson() const {
-    agentxx::util::Json j;
+utilxx_base::Json AgentPrompt::toJson() const {
+    utilxx_base::Json j;
     j["systemPrompt"] = systemPrompt;
     {
-        agentxx::util::Json append = agentxx::util::Json::object();
+        utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& kv : appendSystemPrompts) {
             append[kv.first] = kv.second;
         }
         j["appendSystemPrompts"] = std::move(append);
     }
     {
-        agentxx::util::Json tools = agentxx::util::Json::object();
+        utilxx_base::Json tools = utilxx_base::Json::object();
         for (const auto& kv : toolPrompt) {
-            agentxx::util::Json tp;
+            utilxx_base::Json tp;
             tp["depict"]             = kv.second.depict;
-            agentxx::util::Json args = agentxx::util::Json::object();
+            utilxx_base::Json args = utilxx_base::Json::object();
             for (const auto& a : kv.second.args) {
                 args[a.first] = a.second;
             }
@@ -44,11 +44,11 @@ agentxx::util::Json AgentPrompt::toJson() const {
     return j;
 }
 
-void AgentPrompt::fromJson(const agentxx::util::Json& j) {
+void AgentPrompt::fromJson(const utilxx_base::Json& j) {
     mergeFromJson(j);
 }
 
-void AgentPrompt::mergeFromJson(const agentxx::util::Json& j) {
+void AgentPrompt::mergeFromJson(const utilxx_base::Json& j) {
     if (j.contains("systemPrompt") && j["systemPrompt"].is_string()) {
         systemPrompt = j["systemPrompt"].get<std::string>();
     }
@@ -58,10 +58,10 @@ void AgentPrompt::mergeFromJson(const agentxx::util::Json& j) {
             const auto& key = item.first;
             const auto& val = item.second;
             if (val.is_string()) {
-                util::insertOrAssignHeterogeneous(appendSystemPrompts, key, val.get<std::string>());
+                utilxx_base::insertOrAssignHeterogeneous(appendSystemPrompts, key, val.get<std::string>());
             } else if (val.is_null()) {
-                // 异构删除复用 util::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
-                util::eraseHeterogeneous(appendSystemPrompts, key);
+                // 异构删除复用 utilxx_base::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
+                utilxx_base::eraseHeterogeneous(appendSystemPrompts, key);
             }
         }
     }
@@ -70,7 +70,7 @@ void AgentPrompt::mergeFromJson(const agentxx::util::Json& j) {
         for (const auto& item : tools.items()) {
             const auto& name = item.first;
             const auto& tp   = item.second;
-            auto& target = util::getOrCreateHeterogeneous(toolPrompt, name); // 不存在则默认构造插入
+            auto& target = utilxx_base::getOrCreateHeterogeneous(toolPrompt, name); // 不存在则默认构造插入
             if (tp.contains("depict") && tp["depict"].is_string()) {
                 target.depict = tp["depict"].get<std::string>();
             }
@@ -78,7 +78,7 @@ void AgentPrompt::mergeFromJson(const agentxx::util::Json& j) {
                 auto args = tp["args"];
                 for (const auto& a : args.items()) {
                     if (a.second.is_string()) {
-                        util::insertOrAssignHeterogeneous(
+                        utilxx_base::insertOrAssignHeterogeneous(
                             target.args,
                             a.first,
                             a.second.get<std::string>()

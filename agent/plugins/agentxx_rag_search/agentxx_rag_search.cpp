@@ -1,6 +1,7 @@
 /// agentxx_rag_search —— RAG 语义检索工具插件 (agentxx_rag_search)
 #include "rag_plugin.h"
 #include "rag_search_impl.h"
+#include "utilxx_base/json.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -38,13 +39,13 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
     }
     AgentxxPluginString json{nullptr, 0};
     ctx.iface.model->get_config(ctx.host, &json);
-    agentxx::util::Json cfg;
+    utilxx_base::Json cfg;
     bool                hasCfg = false;
     if (json.data) {
         std::string cfgJson(json.data, static_cast<size_t>(json.size));
         PluginString::free(ctx.host, &json);
         try {
-            cfg    = agentxx::util::Json::parse(cfgJson);
+            cfg    = utilxx_base::Json::parse(cfgJson);
             hasCfg = true;
         } catch (...) {
             hasCfg = false;
@@ -136,7 +137,7 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
                 return fmt::format("No relevant documents found for: {}", query);
             }
 
-            auto output = agentxx::util::Json::array();
+            auto output = utilxx_base::Json::array();
             for (const auto& [doc, contentIndex, score] : results.value()) {
                 output.push_back({
                     {"id",           doc.id                             },

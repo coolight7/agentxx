@@ -3,10 +3,10 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/json_view.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx/http_client.h"
+#include "utilxx_base/json_view.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
 #include <charconv>
@@ -55,21 +55,21 @@ public:
     /// 将 neograph 消息转换为 Anthropic 格式
     /// - `return` {system_string, messages_json_array}
     /// - [sendThinking] 是否携带 thinking 内容块
-    static std::pair<std::string, agentxx::util::Json> convertMessages(
+    static std::pair<std::string, utilxx_base::Json> convertMessages(
         const std::vector<neograph::ChatMessage>& messages,
         bool                                      sendThinking = false
     );
 
     /// 将 neograph 工具定义转换为 Anthropic 格式
-    static agentxx::util::Json convertTools(const std::vector<neograph::ChatTool>& tools);
+    static utilxx_base::Json convertTools(const std::vector<neograph::ChatTool>& tools);
 
     /// 解析非流式 Anthropic 响应
-    static neograph::ChatCompletion parseResponse(const agentxx::util::Json& resp);
+    static neograph::ChatCompletion parseResponse(const utilxx_base::Json& resp);
 
     /// 向 completion.message.extra[kThinkingBlocksKey] 追加一个 thinking 相关块
     /// (thinking/redacted_thinking), 首次追加时初始化为数组
     static void
-        appendThinkingBlock(neograph::ChatCompletion& completion, const agentxx::util::Json& block);
+        appendThinkingBlock(neograph::ChatCompletion& completion, const utilxx_base::Json& block);
 
     // (实现见 anthropic_provider.cpp: 经 bridge 转入 message.extra(neograph::json))
 
@@ -195,10 +195,10 @@ public:
         // 高频路径: JsonView 零拷贝路由 (§4.3) + 命中后按需物化
         // - View 仅做只读导航 (event/usage/delta 标量提取无 DOM 堆分配)
         // - 仅 thinking/redacted 块组装需要 Json DOM (appendThinkingBlock 物化)
-        agentxx::util::JsonView jv;
+        utilxx_base::JsonView jv;
         bool                    parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
-                jv = agentxx::util::JsonView::parse(payload);
+                jv = utilxx_base::JsonView::parse(payload);
                 return true;
             },
             [](std::string) -> bool {
@@ -208,7 +208,7 @@ public:
         if (!parsed || !jv.is_object()) {
             return false;
         }
-        auto viewStr = [](const agentxx::util::JsonView& v) -> std::string {
+        auto viewStr = [](const utilxx_base::JsonView& v) -> std::string {
             if (!v.valid() || !v.is_string()) {
                 return {};
             }
@@ -218,7 +218,7 @@ public:
                 return {};
             }
         };
-        auto viewInt = [](const agentxx::util::JsonView& obj, std::string_view key, int def) {
+        auto viewInt = [](const utilxx_base::JsonView& obj, std::string_view key, int def) {
             if (!obj.is_object()) {
                 return def;
             }
@@ -268,7 +268,7 @@ public:
                     tcMap[idx].name = viewStr(cbView["name"]);
                 } else if (type == "redacted_thinking") {
                     // redacted_thinking 块必须在多轮对话中原样回传 (命中后物化)
-                    agentxx::util::Json b;
+                    utilxx_base::Json b;
                     b["type"] = "redacted_thinking";
                     b["data"] = viewStr(cbView["data"]);
                     appendThinkingBlock(completion, std::move(b));
@@ -313,7 +313,7 @@ public:
                 auto sigIt = blockSignatures.find(idx);
                 // 仅保存带 signature 的 thinking 块: 无 signature 的 thinking 回传会被 API 拒绝
                 if (sigIt != blockSignatures.end() && !sigIt->second.empty()) {
-                    agentxx::util::Json b;
+                    utilxx_base::Json b;
                     b["type"]      = "thinking";
                     b["thinking"]  = thinkingTexts[idx];
                     b["signature"] = sigIt->second;
@@ -344,17 +344,17 @@ private:
 
     /// 填充请求头: x-api-key + anthropic-version + extraHeaders + 会话 Header (X-Session-Id,
     /// X-Opencode-Session)
-    void applyHeaders(agentxx::util::HeaderMap& headers, const neograph::CompletionParams& params)
+    void applyHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params)
         const;
 
-    agentxx::util::Json buildBody(const neograph::CompletionParams& params) const;
+    utilxx_base::Json buildBody(const neograph::CompletionParams& params) const;
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const agentxx::util::Json&         body,
+        const utilxx_base::Json&         body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

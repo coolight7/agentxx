@@ -4,6 +4,7 @@
 // 原 lib 内置工具已迁移至 agentxx_string 插件 (同名同行为); 测试直测插件
 // 同一实现 (string_impl.h), 保证插件行为与测试覆盖一致
 #include "agentxx_string/string_impl.h"
+#include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
 #include <string>
@@ -26,7 +27,7 @@ struct StringHtml2MarkdownTool {
         return {"agentxx_string_html_to_markdown", "Convert HTML content to Markdown format.", {}};
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return agentxx_string_plugin::htmlToMarkdownExecute(args);
     }
 };
@@ -42,7 +43,7 @@ struct StringRegexpTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return agentxx_string_plugin::regexpExecute(args);
     }
 };
@@ -70,7 +71,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_html_to_markdown_empty_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringHtml2MarkdownTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -89,7 +90,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_html_to_markdown_convert(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringHtml2MarkdownTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "<h1>Hello</h1><p>World</p>"}
     };
     auto result = co_await tool.execute_async(args);
@@ -106,7 +107,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_html_to_markdown_simple_text(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringHtml2MarkdownTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "<b>bold</b> <i>italic</i>"}
     };
     auto result = co_await tool.execute_async(args);
@@ -140,9 +141,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_empty_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", ""                                  },
-        {"exps",    agentxx::util::Json::array({"test"})},
+        {"exps",    utilxx_base::Json::array({"test"})},
         {"opt",     "search"                            },
     };
     auto result = co_await tool.execute_async(args);
@@ -161,9 +162,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_empty_exps(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "some text"                 },
-        {"exps",    agentxx::util::Json::array()},
+        {"exps",    utilxx_base::Json::array()},
         {"opt",     "search"                    },
     };
     auto result = co_await tool.execute_async(args);
@@ -182,9 +183,9 @@ asio::awaitable<void>
 asio::awaitable<void> test_regexp_empty_opt(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "some text"                         },
-        {"exps",    agentxx::util::Json::array({"test"})},
+        {"exps",    utilxx_base::Json::array({"test"})},
         {"opt",     ""                                  },
     };
     auto result = co_await tool.execute_async(args);
@@ -203,9 +204,9 @@ asio::awaitable<void> test_regexp_empty_opt(std::weak_ptr<agentxx::agent::AgentC
 asio::awaitable<void>
     test_regexp_invalid_opt(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "some text"                         },
-        {"exps",    agentxx::util::Json::array({"test"})},
+        {"exps",    utilxx_base::Json::array({"test"})},
         {"opt",     "invalid"                           },
     };
     auto result = co_await tool.execute_async(args);
@@ -225,9 +226,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_search_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "hello world, hello everyone"        },
-        {"exps",    agentxx::util::Json::array({"hello"})},
+        {"exps",    utilxx_base::Json::array({"hello"})},
         {"opt",     "search"                             },
     };
     auto result = co_await tool.execute_async(args);
@@ -245,9 +246,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_search_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "hello world"                                },
-        {"exps",    agentxx::util::Json::array({"xyz_not_found"})},
+        {"exps",    utilxx_base::Json::array({"xyz_not_found"})},
         {"opt",     "search"                                     },
     };
     auto result = co_await tool.execute_async(args);
@@ -268,9 +269,9 @@ asio::awaitable<void>
 asio::awaitable<void> test_regexp_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content",     "hello world"                        },
-        {"exps",        agentxx::util::Json::array({"world"})},
+        {"exps",        utilxx_base::Json::array({"world"})},
         {"opt",         "replace"                            },
         {"replace_str", "universe"                           },
     };
@@ -288,9 +289,9 @@ asio::awaitable<void> test_regexp_replace(std::weak_ptr<agentxx::agent::AgentCon
 asio::awaitable<void>
     test_regexp_replace_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content",     "hello world"                                },
-        {"exps",        agentxx::util::Json::array({"xyz_not_found"})},
+        {"exps",        utilxx_base::Json::array({"xyz_not_found"})},
         {"opt",         "replace"                                    },
         {"replace_str", "universe"                                   },
     };
@@ -311,9 +312,9 @@ asio::awaitable<void>
 
 asio::awaitable<void> test_regexp_remove(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "hello world, hello everyone"         },
-        {"exps",    agentxx::util::Json::array({"hello "})},
+        {"exps",    utilxx_base::Json::array({"hello "})},
         {"opt",     "remove"                              },
     };
     auto result = co_await tool.execute_async(args);
@@ -330,9 +331,9 @@ asio::awaitable<void> test_regexp_remove(std::weak_ptr<agentxx::agent::AgentCont
 asio::awaitable<void>
     test_regexp_remove_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "hello world"                                },
-        {"exps",    agentxx::util::Json::array({"xyz_not_found"})},
+        {"exps",    utilxx_base::Json::array({"xyz_not_found"})},
         {"opt",     "remove"                                     },
     };
     auto result = co_await tool.execute_async(args);
@@ -353,9 +354,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_search_multi_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content", "apple banana cherry"                          },
-        {"exps",    agentxx::util::Json::array({"apple", "cherry"})},
+        {"exps",    utilxx_base::Json::array({"apple", "cherry"})},
         {"opt",     "search"                                       },
     };
     auto result = co_await tool.execute_async(args);
@@ -372,9 +373,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_replace_multi_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"content",     "apple banana apple"                 },
-        {"exps",        agentxx::util::Json::array({"apple"})},
+        {"exps",        utilxx_base::Json::array({"apple"})},
         {"opt",         "replace"                            },
         {"replace_str", "orange"                             },
     };

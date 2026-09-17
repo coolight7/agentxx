@@ -4,6 +4,7 @@
 #include "codegraph_plugin.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -961,9 +962,9 @@ struct ClientCtx {
 };
 
 static std::string buildInfoItemsJson(ClientCtx& c) {
-    agentxx::util::Json items = agentxx::util::Json::array();
+    utilxx_base::Json items = utilxx_base::Json::array();
     auto pushText             = [&](const std::string& text, const std::string& role = "normal") {
-        agentxx::util::Json it;
+        utilxx_base::Json it;
         it["kind"] = "text";
         it["role"] = role;
         it["text"] = text;
@@ -980,7 +981,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
                     fmt::format("|- indexing {:.0f}% ({}/{})", pct * 100.0, c.processed, c.total),
                     "normal"
                 );
-                agentxx::util::Json prog;
+                utilxx_base::Json prog;
                 prog["kind"]  = "progress";
                 prog["value"] = pct;
                 items.push_back(std::move(prog));
@@ -1001,7 +1002,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
             pushText("|- wait for index", "hint");
         }
     }
-    agentxx::util::Json out;
+    utilxx_base::Json out;
     out["items"] = std::move(items);
     return out.dump();
 }
@@ -1034,20 +1035,20 @@ static void AGENTXX_PLUGIN_CALL
         payload_json ? static_cast<size_t>(payload_json->size) : 0
     );
     try {
-        auto j      = agentxx::util::Json::parse(raw);
+        auto j      = utilxx_base::Json::parse(raw);
         auto plugin = j.value("plugin", std::string{});
         auto event  = j.value("event", std::string{});
         if (plugin != "agentxx_codegraph") {
             return;
         }
-        agentxx::util::Json d;
+        utilxx_base::Json d;
         if (j.contains("data")) {
             auto dv = j["data"];
             if (dv.is_string()) {
                 try {
-                    d = agentxx::util::Json::parse(dv.get<std::string>());
+                    d = utilxx_base::Json::parse(dv.get<std::string>());
                 } catch (...) {
-                    d = agentxx::util::Json::object();
+                    d = utilxx_base::Json::object();
                 }
             } else if (dv.is_object()) {
                 d = dv;

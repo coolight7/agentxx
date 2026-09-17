@@ -2,7 +2,9 @@
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/http_client.h"
+#include "utilxx/http_client.h"
+#include "utilxx_base/json.h"
+#include "agentxx/util/exception.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -34,7 +36,9 @@ namespace agentxx {
 namespace test {
 
 using namespace agentxx::protocol;
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 
 // Unit test for version negotiation logic (doesn't require a server instance)
 void test_mcp_version_negotiation_unit() {
@@ -442,13 +446,13 @@ asio::awaitable<void> test_mcp_server_integration() {
         std::string sseBody;
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                co_await util::HttpClient::requestSseAsync(
+                co_await utilxx::HttpClient::requestSseAsync(
                     "GET",
                     baseUrl + "/mcp/sse",
                     "",
                     "",
                     {},
-                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    utilxx::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
                     [&](std::string_view chunk) -> bool {
                         sseBody.append(chunk);
                         // 收到 endpoint 事件即停止读取 (长连接不会自行结束)
@@ -1840,7 +1844,7 @@ void test_mcp_server_2025_03_26_stdio() {
 // -----------------------------------------------------------------------
 
 asio::awaitable<void> test_mcp_client_accept_header() {
-    using Server = util::HttpServer;
+    using Server = utilxx::HttpServer;
 
     Server::Config cfg;
     cfg.address          = "127.0.0.1";
@@ -2163,13 +2167,13 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         std::string sseBody;
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                co_await util::HttpClient::requestSseAsync(
+                co_await utilxx::HttpClient::requestSseAsync(
                     "GET",
                     baseUrl + "/mcp/sse",
                     "",
                     "",
                     headers,
-                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    utilxx::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
                     [&](std::string_view chunk) -> bool {
                         sseBody.append(chunk);
                         // 收到 endpoint 事件即停止读取 (长连接不会自行结束)
@@ -2192,13 +2196,13 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         std::string sseBody;
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                co_await util::HttpClient::requestSseAsync(
+                co_await utilxx::HttpClient::requestSseAsync(
                     "GET",
                     baseUrl + "/mcp/sse",
                     "",
                     "",
                     {},
-                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    utilxx::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
                     [&](std::string_view chunk) -> bool {
                         sseBody.append(chunk);
                         return sseBody.find("event: endpoint") != std::string::npos;
@@ -2221,13 +2225,13 @@ asio::awaitable<void> test_mcp_server_accept_sse() {
         bool failed = false;
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                co_await util::HttpClient::requestSseAsync(
+                co_await utilxx::HttpClient::requestSseAsync(
                     "GET",
                     baseUrl + "/mcp/sse",
                     "",
                     "",
                     headers,
-                    util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
+                    utilxx::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{5}},
                     [&](std::string_view) -> bool {
                         return false;
                     }
@@ -2787,7 +2791,7 @@ asio::awaitable<void> test_mcp_server_2026_subscriptions_http() {
     req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
     req["params"]["notifications"]["toolsListChanged"]                   = true;
 
-    util::HeaderMap headers;
+    utilxx::HeaderMap headers;
     headers.set("MCP-Protocol-Version", "2026-07-28");
     headers.set("Mcp-Method", "subscriptions/listen");
     headers.set("Accept", "application/json, text/event-stream");
@@ -2800,13 +2804,13 @@ asio::awaitable<void> test_mcp_server_2026_subscriptions_http() {
         auto reader = [&]() -> asio::awaitable<void> {
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
-                    co_await util::HttpClient::requestSseAsync(
+                    co_await utilxx::HttpClient::requestSseAsync(
                         "POST",
                         baseUrl + "/mcp",
                         req.dump(),
                         "application/json",
                         headers,
-                        util::HttpClient::RequestConfig{
+                        utilxx::HttpClient::RequestConfig{
                             .readChunkTimeout = std::chrono::seconds{30}
                         },
                         [&](std::string_view chunk) -> bool {
@@ -2844,7 +2848,7 @@ asio::awaitable<void> test_mcp_server_2026_subscriptions_http() {
                 }
                 asio::steady_timer timer(executor);
                 timer.expires_after(std::chrono::milliseconds(20));
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
             }
             TEST_INFO << "waitFor(" << needle << ") TIMEOUT after " << maxMs << "ms (total "
@@ -2887,7 +2891,7 @@ asio::awaitable<void> test_mcp_server_2026_subscriptions_http() {
             }
             asio::steady_timer timer(executor);
             timer.expires_after(std::chrono::milliseconds(20));
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         }
         XX_TEST_EXPECT_TRUE(ended);
@@ -2972,7 +2976,7 @@ asio::awaitable<void> test_mcp_server_2026_http_headers() {
 
     // 1. 缺少 Mcp-Method → 400 + -32020
     {
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2026-07-28");
         h.set("Accept", "application/json, text/event-stream");
         auto resp = co_await HttpClient::postAsync(
@@ -2994,7 +2998,7 @@ asio::awaitable<void> test_mcp_server_2026_http_headers() {
 
     // 2. MCP-Protocol-Version 与 body _meta 不一致 → 400 + -32020
     {
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2025-11-25");
         h.set("Mcp-Method", "ping");
         h.set("Accept", "application/json, text/event-stream");
@@ -3017,7 +3021,7 @@ asio::awaitable<void> test_mcp_server_2026_http_headers() {
 
     // 3. Mcp-Name 与 body 不一致 (tools/call) → 400 + -32020
     {
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2026-07-28");
         h.set("Mcp-Method", "tools/call");
         h.set("Mcp-Name", "wrong_name");
@@ -3044,7 +3048,7 @@ asio::awaitable<void> test_mcp_server_2026_http_headers() {
 
     // 4. 正确请求头 → 200
     {
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2026-07-28");
         h.set("Mcp-Method", "tools/list");
         h.set("Accept", "application/json, text/event-stream");
@@ -3068,7 +3072,7 @@ asio::awaitable<void> test_mcp_server_2026_http_headers() {
 
     // 5. 未知方法 → 404 (现代协议)
     {
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2026-07-28");
         h.set("Mcp-Method", "no/such/method");
         h.set("Accept", "application/json, text/event-stream");
@@ -3091,7 +3095,7 @@ asio::awaitable<void> test_mcp_server_2026_http_headers() {
 
     // 6. 未知协议版本 → 400 + -32022
     {
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2099-01-01");
         h.set("Mcp-Method", "ping");
         h.set("Accept", "application/json, text/event-stream");
@@ -3237,7 +3241,7 @@ asio::awaitable<void> test_mcp_server_2026_x_mcp_header() {
         req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]    = "2026-07-28";
         req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
 
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2026-07-28");
         h.set("Mcp-Method", "tools/call");
         h.set("Mcp-Name", "sql");
@@ -3273,7 +3277,7 @@ asio::awaitable<void> test_mcp_server_2026_x_mcp_header() {
         req["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]    = "2026-07-28";
         req["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json::object();
 
-        util::HeaderMap h;
+        utilxx::HeaderMap h;
         h.set("MCP-Protocol-Version", "2026-07-28");
         h.set("Mcp-Method", "tools/call");
         h.set("Mcp-Name", "sql");
@@ -3422,7 +3426,7 @@ asio::awaitable<void> test_mcp_client_2026_modern_http() {
 
 // McpClient (2026-07-28) 连接 legacy 服务端: discover 失败 → 自动回退 initialize 握手
 asio::awaitable<void> test_mcp_client_2026_legacy_fallback() {
-    using Server = util::HttpServer;
+    using Server = utilxx::HttpServer;
 
     Server::Config cfg;
     cfg.address          = "127.0.0.1";
@@ -3586,7 +3590,7 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
             port.store(acceptor->local_endpoint().port());
             thread = std::thread([this]() {
                 while (!stopped.load()) {
-                    neograph_asio_error_code ec;
+                    utilxx_base::AsioErrorCode ec;
                     asio::ip::tcp::socket    sock(*ioCtx);
                     acceptor->accept(sock, ec);
                     if (ec) {
@@ -3599,7 +3603,7 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
 
         void handle(asio::ip::tcp::socket& sock) {
             namespace http = boost::beast::http;
-            neograph_asio_error_code         ec;
+            utilxx_base::AsioErrorCode         ec;
             boost::beast::flat_buffer        buf;
             http::request<http::string_body> req;
             http::read(sock, buf, req, ec);
@@ -3649,7 +3653,7 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
         void stop() {
             stopped.store(true);
             if (acceptor) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 // 先连接一次唤醒阻塞中的同步 accept: 跨线程 close 无法可靠
                 // 中断 asio 同步 accept (见
                 // [test_http.cpp](/agent/test/core/test_http.cpp) 同模式), 先送一个
@@ -3731,7 +3735,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
             port.store(acceptor->local_endpoint().port());
             thread = std::thread([this]() {
                 while (!stopped.load()) {
-                    neograph_asio_error_code ec;
+                    utilxx_base::AsioErrorCode ec;
                     asio::ip::tcp::socket    sock(*ioCtx);
                     acceptor->accept(sock, ec);
                     if (ec) {
@@ -3744,7 +3748,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
 
         void handle(asio::ip::tcp::socket& sock) {
             namespace http = boost::beast::http;
-            neograph_asio_error_code         ec;
+            utilxx_base::AsioErrorCode         ec;
             boost::beast::flat_buffer        buf;
             http::request<http::string_body> req;
             http::read(sock, buf, req, ec);
@@ -3872,7 +3876,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
         void stop() {
             stopped.store(true);
             if (acceptor) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    dummy(*ioCtx);
                 dummy.connect(
                     asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port.load()),

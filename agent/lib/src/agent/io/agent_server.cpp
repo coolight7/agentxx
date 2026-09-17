@@ -1,9 +1,9 @@
 #include "agentxx/agent/io/agent_server.h"
 
 #include "agentxx/agent/io/ws_io_transport.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/ws_client.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx/ws_client.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/this_coro.hpp"
@@ -15,13 +15,13 @@ namespace io {
 
 /// 将服务端日志经 transport 转发给远程客户端的 LogSink
 /// 继承 ThreadedLogSink: 后台线程串行处理, send 无需额外加锁
-class TransportLogSink : public util::ThreadedLogSink {
+class TransportLogSink : public utilxx_base::ThreadedLogSink {
 public:
 
     explicit TransportLogSink(std::shared_ptr<AgentIOTransportBase> transport) :
         transport_(std::move(transport)) {}
 
-    void onLog(const util::LogEntry& entry) override {
+    void onLog(const utilxx_base::LogEntry& entry) override {
         if (auto t = transport_.lock()) {
             t->send(WireLog{static_cast<int>(entry.level), entry.message});
         }
@@ -113,8 +113,8 @@ std::string AgentServer::generateToken(size_t bytes) {
 void AgentServer::start(asio::any_io_executor ex) {
     ex_ = ex;
     bindIoThread();
-    http_ = std::make_unique<util::HttpServer>(config_.http);
-    http_->enableWebSocket(config_.defaultBasePath, [this](util::HttpServer::WsStream& ws) {
+    http_ = std::make_unique<utilxx::HttpServer>(config_.http);
+    http_->enableWebSocket(config_.defaultBasePath, [this](utilxx::HttpServer::WsStream& ws) {
         return handleWs(ws);
     });
     http_->startAsync(ex);
@@ -159,7 +159,7 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
     cfg.initialSyncTailCount = config_.initialSyncTailCount;
 
     auto ctrl = std::make_shared<SessionServerAgentIO>(ex_, agent_, cfg);
-    util::insertOrAssignHeterogeneous(controllers_, sessionId, ctrl);
+    utilxx_base::insertOrAssignHeterogeneous(controllers_, sessionId, ctrl);
 
     // sessionId 以 std::string 值捕获: string_view 参数引用的原始字符串
     // (serveTransport 的局部 WireHello) 可能在本协程完成前已析构
@@ -184,10 +184,10 @@ std::shared_ptr<SessionServerAgentIO> AgentServer::getOrCreateController(std::st
     return ctrl;
 }
 
-asio::awaitable<void> AgentServer::handleWs(util::HttpServer::WsStream& ws) {
+asio::awaitable<void> AgentServer::handleWs(utilxx::HttpServer::WsStream& ws) {
     bindIoThreadIfUnset();
     auto ex     = co_await asio::this_coro::executor;
-    auto client = util::wrapAcceptedWs(ex, std::move(ws));
+    auto client = utilxx::wrapAcceptedWs(ex, std::move(ws));
     auto transport
         = std::make_shared<WsAgentIOTransport>(ex, std::move(client), WsAgentIOTransport::Config{});
     co_await serveTransport(std::move(transport));
@@ -246,13 +246,13 @@ asio::awaitable<void> AgentServer::serveTransport(std::shared_ptr<AgentIOTranspo
 
     // 注册日志转发 sink: 将服务端日志经 transport 推送给远程客户端
     auto logSink = std::make_shared<TransportLogSink>(transport);
-    util::LogDispatcher::instance().addSink(logSink);
+    utilxx_base::LogDispatcher::instance().addSink(logSink);
 
     // 运行针对该客户端的独立接收循环 (直到 transport 关闭)
     co_await ctrl->runTransportLoop(transport);
 
     // 该连接断开
-    util::LogDispatcher::instance().removeSink(logSink);
+    utilxx_base::LogDispatcher::instance().removeSink(logSink);
     ctrl->onDisconnect(transport);
 }
 

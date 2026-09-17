@@ -4,9 +4,9 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include "neograph/graph/registry.h"
 #include <chrono>
 #include <fmt/format.h>
@@ -169,7 +169,7 @@ void Session::saveLlmMessages() {
     }
 }
 
-void Session::appendSettledLlmMessages(const agentxx::util::Json& settledMsgs) {
+void Session::appendSettledLlmMessages(const utilxx_base::Json& settledMsgs) {
     assertIoThread();
     if (!settledMsgs.is_array() || settledMsgs.empty()) {
         return;
@@ -272,12 +272,12 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
                     sessionStore->updateViewMessage(tid, msg);
                 },
             .onSaveLlmMessages =
-                [sessionStore, tid](const agentxx::util::Json& msgs) {
+                [sessionStore, tid](const utilxx_base::Json& msgs) {
                     sessionStore->saveLlmMessages(tid, msgs);
                 },
         });
     }
-    util::insertHeterogeneous(sessions_, std::string{sessionId}, session);
+    utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     return session;
 }
 
@@ -292,7 +292,7 @@ asio::awaitable<std::shared_ptr<Session>>
     SessionStore::LoadedSession loaded;
     if (sessionStore) {
         if (pool) {
-            loaded = co_await agentxx::util::offloadAsync<SessionStore::LoadedSession>(
+            loaded = co_await utilxx::offloadAsync<SessionStore::LoadedSession>(
                 *pool,
                 [sessionStore,
                  sid = std::string(sessionId)]() -> asio::awaitable<SessionStore::LoadedSession> {
@@ -324,12 +324,12 @@ asio::awaitable<std::shared_ptr<Session>>
                     sessionStore->updateViewMessage(tid, msg);
                 },
             .onSaveLlmMessages =
-                [sessionStore, tid](const agentxx::util::Json& msgs) {
+                [sessionStore, tid](const utilxx_base::Json& msgs) {
                     sessionStore->saveLlmMessages(tid, msgs);
                 },
         });
     }
-    util::insertHeterogeneous(sessions_, std::string{sessionId}, session);
+    utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     co_return session;
 }
 
@@ -340,7 +340,7 @@ std::shared_ptr<Session> SessionsManager::get(std::string_view sessionId) {
 
 void SessionsManager::remove(std::string_view sessionId) {
     // 异构查找删除, 免除 string_view→string 拷贝 (libc++ 无 C++23 异构 erase)
-    util::eraseHeterogeneous(sessions_, sessionId);
+    utilxx_base::eraseHeterogeneous(sessions_, sessionId);
 }
 
 std::shared_ptr<Session> AgentContext::getSession(std::string_view sessionId) {
@@ -362,10 +362,10 @@ void AgentContext::setSessionWorkDir(std::string_view sessionId, std::string_vie
     // mutex 保护: 端点线程 (如 ACP HTTP handler) 与 io 线程并发读写安全
     std::lock_guard lk(sessionWorkDirMu_);
     if (absWorkDir.empty()) {
-        util::eraseHeterogeneous(sessionWorkDirs_, sessionId);
+        utilxx_base::eraseHeterogeneous(sessionWorkDirs_, sessionId);
         return;
     }
-    util::insertOrAssignHeterogeneous(
+    utilxx_base::insertOrAssignHeterogeneous(
         sessionWorkDirs_,
         std::string{sessionId},
         std::string{absWorkDir}
@@ -374,7 +374,7 @@ void AgentContext::setSessionWorkDir(std::string_view sessionId, std::string_vie
 
 void AgentContext::clearSessionWorkDir(std::string_view sessionId) {
     std::lock_guard lk(sessionWorkDirMu_);
-    util::eraseHeterogeneous(sessionWorkDirs_, sessionId);
+    utilxx_base::eraseHeterogeneous(sessionWorkDirs_, sessionId);
 }
 
 std::string AgentContext::getSessionWorkDir(std::string_view sessionId) {

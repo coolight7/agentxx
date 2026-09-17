@@ -1,5 +1,5 @@
 #include "agentxx-client/io/tui/plugin_ui_items.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 
@@ -54,7 +54,7 @@ bool hasPluginBindingFor(
 }
 
 bool parsePluginButton(
-    const agentxx::util::Json&               it,
+    const utilxx_base::Json&               it,
     std::string_view                         plugin,
     const agentxx::plugin::ClientUiRegistry* reg,
     PluginButtonDesc&                        out
@@ -168,9 +168,9 @@ Element renderPluginDiff(
     const TUITheme&  theme,
     int              screenW
 ) {
-    using agentxx::util::DiffLineType;
+    using utilxx::DiffLineType;
     const int sw   = (screenW > 0) ? screenW : Terminal::Size().dimx;
-    auto      diff = agentxx::util::computeLineDiff(oldStr, newStr);
+    auto      diff = utilxx::computeLineDiff(oldStr, newStr);
     if (diff.empty()) {
         Elements els;
         if (!path.empty()) {
@@ -186,7 +186,7 @@ Element renderPluginDiff(
     const bool sideBySide = sw >= 100;
 
     auto trunc = [](std::string_view s, size_t maxChars) -> std::string {
-        const auto idx = agentxx::util::findIndexByUtf8Length(s, maxChars);
+        const auto idx = utilxx_base::findIndexByUtf8Length(s, maxChars);
         if (idx > 0 && idx < s.size()) {
             return fmt::format("{}...", s.substr(0, idx));
         }
@@ -250,8 +250,8 @@ Element renderPluginDiff(
             ++i;
             continue;
         }
-        std::vector<const agentxx::util::DiffLine*> dels;
-        std::vector<const agentxx::util::DiffLine*> adds;
+        std::vector<const utilxx::DiffLine*> dels;
+        std::vector<const utilxx::DiffLine*> adds;
         while (i < diff.size() && diff[i].type == DiffLineType::Delete) {
             dels.push_back(&diff[i]);
             ++i;

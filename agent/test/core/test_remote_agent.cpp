@@ -9,8 +9,8 @@
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/util/http_server.h"
-#include "agentxx/util/ws_client.h"
+#include "utilxx/http_server.h"
+#include "utilxx/ws_client.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
@@ -41,7 +41,9 @@ int g_remote_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 namespace io = agentxx::agent::io;
 using agentxx::agent::SessionServerAgentIO;
 
@@ -85,10 +87,10 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<agentxx::util::Json>
+    asio::awaitable<utilxx_base::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
             {"allow", "true"}
         });
     }
@@ -107,7 +109,7 @@ public:
 static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::milliseconds d) {
     asio::steady_timer t(ex);
     t.expires_after(d);
-    neograph_asio_error_code ec;
+    utilxx_base::AsioErrorCode ec;
     co_await t.async_wait(asio::redirect_error(asio::use_awaitable, ec));
 }
 
@@ -115,23 +117,23 @@ static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::mi
 // WS 收发辅助 (服务端 handler 内使用)
 // ---------------------------------------------------------------------------
 
-static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const agentxx::util::Json& j) {
+static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const utilxx_base::Json& j) {
     auto s = j.dump();
     ws.text(true);
-    neograph_asio_error_code ec;
+    utilxx_base::AsioErrorCode ec;
     co_await ws.async_write(asio::buffer(s), asio::redirect_error(asio::use_awaitable, ec));
     co_return !ec;
 }
 
-static asio::awaitable<std::optional<agentxx::util::Json>> wsRecvJson(HttpServer::WsStream& ws) {
+static asio::awaitable<std::optional<utilxx_base::Json>> wsRecvJson(HttpServer::WsStream& ws) {
     boost::beast::flat_buffer buf;
-    neograph_asio_error_code  ec;
+    utilxx_base::AsioErrorCode  ec;
     co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     if (ec) {
         co_return std::nullopt;
     }
     try {
-        co_return agentxx::util::Json::parse(boost::beast::buffers_to_string(buf.data()));
+        co_return utilxx_base::Json::parse(boost::beast::buffers_to_string(buf.data()));
     } catch (const std::exception&) {
         co_return std::nullopt;
     }
@@ -596,7 +598,7 @@ static asio::awaitable<void> test_remote_transport_loopback() {
 
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{10};
 
     auto transport
@@ -682,7 +684,7 @@ static asio::awaitable<void> test_remote_client_handshake() {
     {
         agentxx::agent::WsAgentIOTransport::Config cfg;
         cfg.heartbeatInterval = std::chrono::seconds{60};
-        util::WsClientConfig wsCfg;
+        utilxx::WsClientConfig wsCfg;
         wsCfg.recvTimeout = std::chrono::seconds{10};
 
         auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
@@ -719,7 +721,7 @@ static asio::awaitable<void> test_remote_client_handshake() {
         agentxx::agent::WsAgentIOTransport::Config cfg;
         cfg.heartbeatInterval = std::chrono::seconds{60};
         cfg.authTimeout       = std::chrono::seconds{3};
-        util::WsClientConfig wsCfg;
+        utilxx::WsClientConfig wsCfg;
         wsCfg.recvTimeout = std::chrono::seconds{5};
 
         auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
@@ -1107,7 +1109,7 @@ static asio::awaitable<void> test_remote_client_reconnect() {
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.reconnectBackoff  = std::chrono::milliseconds{100};
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
     auto transport
@@ -1297,7 +1299,7 @@ static asio::awaitable<void> test_remote_client_context_stats() {
 
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{10};
 
     auto transport
@@ -1445,7 +1447,7 @@ static asio::awaitable<void> test_remote_echo() {
 
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{10};
 
     auto transport
@@ -1575,7 +1577,7 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.reconnectBackoff  = std::chrono::milliseconds{50};
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
     auto transport
@@ -1654,7 +1656,7 @@ static asio::awaitable<void> test_remote_cancel() {
 
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{10};
 
     auto transport
@@ -1746,7 +1748,7 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.reconnectBackoff  = std::chrono::milliseconds{50};
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
     auto transport
@@ -1868,7 +1870,7 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.reconnectBackoff  = std::chrono::milliseconds{50};
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
     auto transport
@@ -1925,7 +1927,7 @@ static asio::awaitable<void> test_remote_auth_timeout() {
         auto hello = co_await wsRecvJson(ws);
         if (hello) {
             asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds{5});
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         }
     });
@@ -1945,7 +1947,7 @@ static asio::awaitable<void> test_remote_auth_timeout() {
     agentxx::agent::WsAgentIOTransport::Config cfg;
     cfg.authTimeout       = std::chrono::milliseconds{300};
     cfg.heartbeatInterval = std::chrono::seconds{60};
-    util::WsClientConfig wsCfg;
+    utilxx::WsClientConfig wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{5};
 
     auto transport
@@ -2161,7 +2163,7 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     auto       sim            = startDaSimServer();
     const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "hello from model switch test";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl   = baseUrl;
@@ -2542,7 +2544,7 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     // 客户端 1 回复中断允许
     client1->send(agentxx::agent::WireInterruptResponse{
         .id     = reqId,
-        .result = agentxx::util::Json::array({"true"}),
+        .result = utilxx_base::Json::array({"true"}),
     });
 
     co_await testSleep(ex, std::chrono::milliseconds{50});
@@ -2979,7 +2981,7 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     auto       sim            = startDaSimServer();
     const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "echo response from queue test";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl   = baseUrl;
@@ -3139,7 +3141,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     auto       sim            = startDaSimServer();
     const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
     g_da_sim_response_content = "echo response from queue resume test";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_fail_count       = 0;
 
     auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();

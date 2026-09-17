@@ -8,9 +8,9 @@
 #include "agentxx-client/io/tui/text_layout.h"
 #include "agentxx-client/io/tui/ui_items_render.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
-#include "agentxx/util/diff_util.h"
+#include "utilxx/diff_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -112,7 +112,7 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
 std::string formatToolArgs(std::string_view argsText) {
     return agentxx::util::catchError<std::string>(
         [&]() -> std::string {
-            auto j = agentxx::util::Json::parse(argsText);
+            auto j = utilxx_base::Json::parse(argsText);
             if (!j.is_object()) {
                 return std::string{argsText};
             }
@@ -925,7 +925,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             int prefixCols = 1 + static_cast<int>(markdown::utf8_display_width(roleLabel));
             if (durationMs > 0) {
                 const std::string durationText
-                    = agentxx::util::formatDurationMilliseconds(durationMs);
+                    = utilxx_base::formatDurationMilliseconds(durationMs);
                 header.push_back(text(durationText) | color(theme.thinkingColor));
                 header.push_back(text(" "));
                 prefixCols += static_cast<int>(markdown::utf8_display_width(durationText)) + 1;
@@ -959,7 +959,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             header.push_back(text(roleLabel) | color(theme.thinkingColor));
             if (durationMs > 0) {
                 header.push_back(
-                    text(agentxx::util::formatDurationMilliseconds(durationMs))
+                    text(utilxx_base::formatDurationMilliseconds(durationMs))
                     | color(theme.thinkingColor)
                 );
                 header.push_back(text(" "));
@@ -990,7 +990,7 @@ LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& s
     // 不回退读取上一条同角色消息的时长 (旧数据与当前流无关)
     if (st.pendingTokenDurationMs > 0) {
         header.push_back(
-            text(agentxx::util::formatDurationMilliseconds(st.pendingTokenDurationMs) + " ")
+            text(utilxx_base::formatDurationMilliseconds(st.pendingTokenDurationMs) + " ")
             | color(theme.thinkingColor)
         );
     }
@@ -1258,7 +1258,7 @@ Element MessageListComponent::buildMessageBlock(
             // 时长文本先计算, 供头部渲染与预览列宽预算共用
             std::string durationText;
             if (msg.durationMs > 0) {
-                durationText = agentxx::util::formatDurationMilliseconds(msg.durationMs);
+                durationText = utilxx_base::formatDurationMilliseconds(msg.durationMs);
             }
             header.push_back(text(expanded ? "-" : "+") | color(theme.thinkingColor));
             header.push_back(text(tr("msg.roleThink")) | color(theme.thinkingColor));
@@ -1454,7 +1454,7 @@ Element MessageListComponent::buildMessageBlock(
                     if (msg.durationMs > 0) {
                         header.push_back(text(" "));
                         header.push_back(
-                            text(agentxx::util::formatDurationMilliseconds(msg.durationMs))
+                            text(utilxx_base::formatDurationMilliseconds(msg.durationMs))
                             | color(theme.toolColor) | theme.dim()
                         );
                     }
@@ -1531,7 +1531,7 @@ void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& l
     std::string path, oldStr, newStr;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto args = agentxx::util::Json::parse(msg.text);
+            auto args = utilxx_base::Json::parse(msg.text);
             path      = args.value("path", std::string{});
             oldStr    = args.value("old_str", std::string{});
             newStr    = args.value("new_str", std::string{});
@@ -1576,7 +1576,7 @@ void MessageListComponent::appendDecorToolBody(
 }
 
 void MessageListComponent::appendDecorItems(
-    const agentxx::util::Json&                          items,
+    const utilxx_base::Json&                          items,
     const std::string&                                  plugin,
     const std::string&                                  ownerId,
     Elements&                                           lines,
@@ -1684,7 +1684,7 @@ std::string resolveAttachmentLocalPath(const agentxx::agent::MediaAttachment& at
         if (comma == std::string::npos) {
             return "";
         }
-        auto raw = agentxx::util::base64Decode(std::string_view{att.dataUrl}.substr(comma + 1));
+        auto raw = utilxx_base::base64Decode(std::string_view{att.dataUrl}.substr(comma + 1));
         if (!raw.has_value()) {
             return "";
         }

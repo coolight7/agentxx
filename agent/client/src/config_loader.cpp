@@ -1,10 +1,10 @@
 #include "agentxx-client/config_loader.h"
 
 #include "agentxx/agent/config_static.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/env.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/env.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "yaml-cpp/yaml.h"
 #include <algorithm>
 #include <chrono>
@@ -24,7 +24,7 @@ namespace client {
 /// 打开文本文件输入流 (经 utf8ToPath: Windows 下非 ASCII 路径安全; 文本模式,
 /// 与 yaml-cpp LoadFile / 原 std::ifstream 行为一致)
 static std::ifstream openFileForRead(std::string_view path) {
-    return std::ifstream(agentxx::util::utf8ToPath(path));
+    return std::ifstream(utilxx_base::utf8ToPath(path));
 }
 
 /// 加载 yaml 文件为根节点 (与 YAML::LoadFile 等价, 但打开文件走 utf8ToPath,
@@ -123,16 +123,16 @@ std::map<std::string, std::string> loadDotEnv(const std::vector<std::string>& pa
 // ---------------------------------------------------------------------------
 // 程序内置环境变量 (main 启动时注入; yaml ${VAR} 展开时优先解析)
 // ---------------------------------------------------------------------------
-// 内置变量存储已迁移至 agentxx::util::ApplicationEnv 单例 (全局预设变量, 优先级高于系统环境变量)
+// 内置变量存储已迁移至 utilxx_base::ApplicationEnv 单例 (全局预设变量, 优先级高于系统环境变量)
 // - main 启动时经 setBuiltinEnvVar (= ApplicationEnv::instance().set) 注入 AGENTXX_WORK_DIR /
 // AGENTXX_EXEC_DIR
 // - 此处保留兼容层, 避免直接暴露 ApplicationEnv 细节给上层调用方
 
 void setBuiltinEnvVar(std::string_view name, std::string value) {
     if (value.empty()) {
-        agentxx::util::ApplicationEnv::instance().remove(name);
+        utilxx_base::ApplicationEnv::instance().remove(name);
     } else {
-        agentxx::util::ApplicationEnv::instance().set(name, std::move(value));
+        utilxx_base::ApplicationEnv::instance().set(name, std::move(value));
     }
 }
 
@@ -143,7 +143,7 @@ void setBuiltinEnvVar(std::string_view name, std::string value) {
 ///   (仅 main 入口注入; 未注入时无法惰性推导, 返回 nullopt 保留 ${VAR} 原样)
 static std::optional<std::string> resolveBuiltinEnvVar(std::string_view varName) {
     // 已注入的内置变量: 直接取值 (经全局单例 ApplicationEnv 预设存储)
-    if (auto preset = agentxx::util::ApplicationEnv::instance().getPreset(varName)) {
+    if (auto preset = utilxx_base::ApplicationEnv::instance().getPreset(varName)) {
         return preset;
     }
     // 未注入 (测试/嵌入场景): 各内置变量按自身语义惰性解析
@@ -211,7 +211,7 @@ std::string resolveEnvVars(
         }
         // 系统环境变量 (经全局单例 ApplicationEnv 统一封装: 预设 -> 系统, Windows 使用 _dupenv_s
         // 消除 C4996)
-        if (auto envVal = agentxx::util::ApplicationEnv::instance().get(varName)) {
+        if (auto envVal = utilxx_base::ApplicationEnv::instance().get(varName)) {
             result.append(*envVal);
             continue;
         }
@@ -230,91 +230,91 @@ std::string resolveEnvVars(
 /// YAML → JSON 并递归展开 ${VAR} (插件 args 专用)
 /// - 标量先经 resolveEnvVars 展开再判断类型 (true/false/数字/字符串)
 /// - 与 yamlToJson 语义一致, 仅多了 env 展开步骤
-static agentxx::util::Json yamlToJsonResolveEnv(
+static utilxx_base::Json yamlToJsonResolveEnv(
     const YAML::Node&                         node,
     const std::map<std::string, std::string>& dotEnvVars,
     const std::map<std::string, std::string>& overrideEnvVars
 ) {
     if (!node.IsDefined() || node.IsNull()) {
-        return agentxx::util::Json{};
+        return utilxx_base::Json{};
     }
     if (node.IsScalar()) {
         long long i;
         double    d;
         auto      s = resolveEnvVars(node.as<std::string>(), dotEnvVars, overrideEnvVars);
         if (s == "true") {
-            return agentxx::util::Json(true);
+            return utilxx_base::Json(true);
         }
         if (s == "false") {
-            return agentxx::util::Json(false);
+            return utilxx_base::Json(false);
         }
-        if (util::parseNumberFromString(s, i).ec == std::errc{}) {
-            return agentxx::util::Json(i);
+        if (utilxx_base::parseNumberFromString(s, i).ec == std::errc{}) {
+            return utilxx_base::Json(i);
         }
-        if (util::parseNumberFromString(s, d).ec == std::errc{}) {
-            return agentxx::util::Json(d);
+        if (utilxx_base::parseNumberFromString(s, d).ec == std::errc{}) {
+            return utilxx_base::Json(d);
         }
-        return agentxx::util::Json(s);
+        return utilxx_base::Json(s);
     }
     if (node.IsSequence()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& item : node) {
             arr.push_back(yamlToJsonResolveEnv(item, dotEnvVars, overrideEnvVars));
         }
         return arr;
     }
     if (node.IsMap()) {
-        agentxx::util::Json obj = agentxx::util::Json::object();
+        utilxx_base::Json obj = utilxx_base::Json::object();
         for (const auto& kv : node) {
             obj[kv.first.as<std::string>()]
                 = yamlToJsonResolveEnv(kv.second, dotEnvVars, overrideEnvVars);
         }
         return obj;
     }
-    return agentxx::util::Json{};
+    return utilxx_base::Json{};
 }
 
-static agentxx::util::Json yamlToJson(const YAML::Node& node) {
+static utilxx_base::Json yamlToJson(const YAML::Node& node) {
     if (!node.IsDefined() || node.IsNull()) {
-        return agentxx::util::Json{};
+        return utilxx_base::Json{};
     }
     if (node.IsScalar()) {
         long long i;
         double    d;
         // 注意: 必须用圆括号构造标量, 不能用花括号!
-        // agentxx::util::Json 存在 json(std::initializer_list<json>) 构造函数,
+        // utilxx_base::Json 存在 json(std::initializer_list<json>) 构造函数,
         // C++ 花括号初始化优先匹配它, 导致标量被包成单元素数组:
         //   json{true} -> [true], json{"high"} -> ["high"]
         // 圆括号才能精确匹配 json(bool)/json(int)/json(double)/json(string) 标量构造。
         if (node.as<std::string>() == "true") {
-            return agentxx::util::Json(true);
+            return utilxx_base::Json(true);
         }
         if (node.as<std::string>() == "false") {
-            return agentxx::util::Json(false);
+            return utilxx_base::Json(false);
         }
-        if (util::parseNumberFromString(node.as<std::string>(), i).ec == std::errc{}) {
-            return agentxx::util::Json(i);
+        if (utilxx_base::parseNumberFromString(node.as<std::string>(), i).ec == std::errc{}) {
+            return utilxx_base::Json(i);
         }
-        if (util::parseNumberFromString(node.as<std::string>(), d).ec == std::errc{}) {
-            return agentxx::util::Json(d);
+        if (utilxx_base::parseNumberFromString(node.as<std::string>(), d).ec == std::errc{}) {
+            return utilxx_base::Json(d);
         }
-        return agentxx::util::Json(node.as<std::string>());
+        return utilxx_base::Json(node.as<std::string>());
     }
     if (node.IsSequence()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& item : node) {
             arr.push_back(yamlToJson(item));
         }
         return arr;
     }
     if (node.IsMap()) {
-        agentxx::util::Json obj = agentxx::util::Json::object();
+        utilxx_base::Json obj = utilxx_base::Json::object();
         for (const auto& kv : node) {
             obj[kv.first.as<std::string>()] = yamlToJson(kv.second);
         }
         return obj;
     }
-    return agentxx::util::Json{};
+    return utilxx_base::Json{};
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +439,7 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 int parsed = mc.connectTimeoutSeconds;
-                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
                     mc.connectTimeoutSeconds = parsed;
                 }
             }
@@ -451,7 +451,7 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 int parsed = mc.readChunkTimeoutSeconds;
-                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
                     mc.readChunkTimeoutSeconds = parsed;
                 }
             }
@@ -475,7 +475,7 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 unsigned long long parsed = 0;
-                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
                     mc.maxConcurrentConnections = static_cast<size_t>(parsed);
                 }
             }
@@ -487,12 +487,12 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 unsigned long long parsed = 0;
-                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
                     mc.modelContenxtMaxToken = static_cast<size_t>(parsed);
                 }
             }
             if (node["image_input"]) {
-                mc.imageInput = agentxx::util::toLower(resolveEnvVars(
+                mc.imageInput = utilxx_base::toLower(resolveEnvVars(
                                     (node["image_input"]).as<std::string>("false"),
                                     dotEnvVars,
                                     overrideEnvVars
@@ -500,7 +500,7 @@ static YamlAppConfig parseYamlConfigNode(
                                 == "true";
             }
             if (node["audio_input"]) {
-                mc.audioInput = agentxx::util::toLower(resolveEnvVars(
+                mc.audioInput = utilxx_base::toLower(resolveEnvVars(
                                     (node["audio_input"]).as<std::string>("false"),
                                     dotEnvVars,
                                     overrideEnvVars
@@ -508,7 +508,7 @@ static YamlAppConfig parseYamlConfigNode(
                                 == "true";
             }
             if (node["video_input"]) {
-                mc.videoInput = agentxx::util::toLower(resolveEnvVars(
+                mc.videoInput = utilxx_base::toLower(resolveEnvVars(
                                     (node["video_input"]).as<std::string>("false"),
                                     dotEnvVars,
                                     overrideEnvVars
@@ -567,7 +567,7 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 int parsed = 120;
-                if (util::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
                     mcpCfg.toolTimeout = std::chrono::seconds{std::max(parsed, 0)};
                 }
             }
@@ -670,13 +670,13 @@ static YamlAppConfig parseYamlConfigNode(
         if (isNodePresent(permissionModeNode)) {
             auto val
                 = resolveEnvVars(nodeScalarText(permissionModeNode), dotEnvVars, overrideEnvVars);
-            if (util::isIgnoreCaseEqual(val, "pass")) {
+            if (utilxx_base::isIgnoreCaseEqual(val, "pass")) {
                 cfg.permissionMode = agent::PermissionMode::Pass;
-            } else if (util::isIgnoreCaseEqual(val, "all_ask")) {
+            } else if (utilxx_base::isIgnoreCaseEqual(val, "all_ask")) {
                 cfg.permissionMode = agent::PermissionMode::AllAsk;
-            } else if (util::isIgnoreCaseEqual(val, "deny")) {
+            } else if (utilxx_base::isIgnoreCaseEqual(val, "deny")) {
                 cfg.permissionMode = agent::PermissionMode::Deny;
-            } else if (util::isIgnoreCaseEqual(val, "ask")) {
+            } else if (utilxx_base::isIgnoreCaseEqual(val, "ask")) {
                 cfg.permissionMode = agent::PermissionMode::Ask;
             } else {
                 XX_LOGW("[Config] Warning: unknown permission.mode '{}', fallback to 'ask'", val);
@@ -757,12 +757,12 @@ static YamlAppConfig parseYamlConfigNode(
                     dotEnvVars,
                     overrideEnvVars
                 );
-                if (util::isIgnoreCaseEqual(val, "agent")) {
+                if (utilxx_base::isIgnoreCaseEqual(val, "agent")) {
                     pc.sides = agent::PluginSide::Agent;
-                } else if (util::isIgnoreCaseEqual(val, "client")) {
+                } else if (utilxx_base::isIgnoreCaseEqual(val, "client")) {
                     pc.sides = agent::PluginSide::Client;
-                } else if (!util::isIgnoreCaseEqual(val, "auto")
-                           && !util::isIgnoreCaseEqual(val, "both")) {
+                } else if (!utilxx_base::isIgnoreCaseEqual(val, "auto")
+                           && !utilxx_base::isIgnoreCaseEqual(val, "both")) {
                     XX_LOGW(
                         R"([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)",
                         pc.path,
@@ -1344,7 +1344,7 @@ static bool pathIsFile(std::string_view path) {
         return false;
     }
     std::error_code ec;
-    return std::filesystem::is_regular_file(agentxx::util::utf8ToPath(path), ec);
+    return std::filesystem::is_regular_file(utilxx_base::utf8ToPath(path), ec);
 }
 
 /// 判断两个路径是否指向同一位置 (展开 `~`、绝对化并词法规范化后比较;
@@ -1353,8 +1353,8 @@ static bool isSamePath(std::string_view a, std::string_view b) {
     if (a.empty() || b.empty()) {
         return false;
     }
-    auto na = agentxx::util::toCurrentSystemAbsolutePath(a);
-    auto nb = agentxx::util::toCurrentSystemAbsolutePath(b);
+    auto na = utilxx_base::toCurrentSystemAbsolutePath(a);
+    auto nb = utilxx_base::toCurrentSystemAbsolutePath(b);
     return !na.empty() && na == nb;
 }
 
@@ -1365,7 +1365,7 @@ std::string resolveDataDirValue(std::string_view raw) {
     if (raw == agent::AgentConfigStatic::kDefaultDataDirKey) {
         return agent::AgentConfigStatic::systemDataDir();
     }
-    return agentxx::util::toCurrentSystemAbsolutePath(raw);
+    return utilxx_base::toCurrentSystemAbsolutePath(raw);
 }
 
 std::string readYamlDataDirValue(
@@ -1410,11 +1410,11 @@ LayeredConfigLoad loadLayeredConfig(const LayeredConfigOptions& opts) {
                                          : resolveDataDirValue(overlayDataDir);
     // 路径拼接统一经 utf8ToPath/pathToUtf8Generic (Windows 下非 ASCII 路径安全),
     // 输出正斜杠格式
-    out.baseConfigPath = agentxx::util::pathToUtf8Generic(
-        agentxx::util::utf8ToPath(out.baseDir) / agentxx::util::utf8ToPath(kDefaultConfigFileName)
+    out.baseConfigPath = utilxx_base::pathToUtf8Generic(
+        utilxx_base::utf8ToPath(out.baseDir) / utilxx_base::utf8ToPath(kDefaultConfigFileName)
     );
-    out.baseEnvPath = agentxx::util::pathToUtf8Generic(
-        agentxx::util::utf8ToPath(out.baseDir) / agentxx::util::utf8ToPath(kDefaultEnvFileName)
+    out.baseEnvPath = utilxx_base::pathToUtf8Generic(
+        utilxx_base::utf8ToPath(out.baseDir) / utilxx_base::utf8ToPath(kDefaultEnvFileName)
     );
 
     // 4. base 与 overlay 指向同一文件时只加载一次 (如 --config <data_dir>/agentxx-config.yaml,

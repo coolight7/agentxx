@@ -54,21 +54,11 @@ else()
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
-# agentxx_util 重依赖的 pkg-config 模块 (与 client/test 一致):
-# - agentxx_util 的 PUBLIC 链接接口带 $<LINK_ONLY:PkgConfig::hyperscan> /
-#   $<LINK_ONLY:PkgConfig::uring>, 链接本库的插件须定义同名 imported target
-#   (目录 scope 定义, 子插件目录可见; 未链接 agentxx_util 的插件不受影响);
-#   hs_runtime 裸库名经 agentxx_util 的 PUBLIC link_directories (install/lib)
-#   自动解析, 无需额外配置
-# - 未启用对应特性时 (AGENTXX_ENABLE_HYPERSCAN=0 / 无 io_uring) 插件不链接
-#   本库的对应条件依赖, 无需定义
-find_package(PkgConfig QUIET)
-if (AGENTXX_ENABLE_HYPERSCAN)
-  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
-endif()
+# 条件依赖 (hyperscan / io_uring) 无需在此配置:
+# - 工具库已拆为 cxx_utilxx_base / cxx_utilxx 两个独立 CMake 工程, 其导出的
+#   静态目标 INTERFACE 直接携带 hyperscan/io_uring 的库文件绝对路径 (与旧的
+#   `$<LINK_ONLY:PkgConfig::hyperscan>` 传递方式不同), 插件链接后即可解析;
+# - 因此插件侧不再需要 pkg_check_modules, 也不依赖处理方定义 PkgConfig::* 目标
 
 # ===== 插件动态库导出符号控制 =====
 # - 目标: 严格限制导出面, 仅宿主 dlsym/GetProcAddress 按名查找的入口符号
@@ -141,11 +131,29 @@ add_compile_definitions(
   CPPHTTPLIB_OPENSSL_SUPPORT
 )
 
+# ===== 与 libagentxx 一致的特性宏 =====
+# 拆分前这些宏经 agentxx_util 的 PUBLIC INTERFACE 传播给插件; 工具库拆分后
+# 由 cxx_utilxx(-_base) 提供平台/asio 宏, 特性开关宏在该库中已改名为
+# UTILXX_* (本库自用), 插件侧仍需按宿主构建配置选择实现路径, 故在此显式定义。
+# 例: agentxx_execute_command 按 AGENTXX_ENABLE_BOOST_PROCESS 在
+#   boost.process v2 直传 argv / _popen 回退 两条实现路径间选择
+if (AGENTXX_ENABLE_BOOST_PROCESS)
+  add_compile_definitions(AGENTXX_ENABLE_BOOST_PROCESS=1)
+endif()
+if (AGENTXX_ENABLE_HYPERSCAN)
+  add_compile_definitions(AGENTXX_ENABLE_HYPERSCAN=1)
+endif()
+
 # (历史: 此处曾全局 include neograph yyjson 头; 自 Json 自主化重构起移除,
 #  插件统一经 agentxx_util 获得 Json/JsonView + simdjson, 不再直连图引擎)
 include_directories(
   "${AGENTXX_LIB_INCLUDE_DIR}"
   "${AGENTXX_INSTALL_DIR}/include"
+  # 插件 include 的 `agentxx/util/exception.h` 内部引用图引擎头
+  # (neograph/graph/types.h → neograph/json.h), 其 yyjson.h 位于 neograph 源码
+  # deps 目录 (仅构建期; 与 libagentxx 自身的处理一致)
+  "$<BUILD_INTERFACE:${neograph_SOURCE_DIR}/deps/yyjson/>"
+  "${neograph_SOURCE_DIR}/deps/yyjson/"
 )
 
 # --- 名单解析: AGENTXX_PLUGIN_BUILTIN_LIST → ALL 标志 / 具名名单 ---

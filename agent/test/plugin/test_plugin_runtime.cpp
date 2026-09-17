@@ -11,6 +11,7 @@
 #include "neograph/graph/run_context.h"
 #include "neograph/graph/state.h"
 #include "neograph/graph/types.h"
+#include "utilxx_base/asio_error.h"
 
 #include <barrier>
 #include <cstddef>
@@ -690,7 +691,7 @@ TestResult testPluginRuntime() {
         if (f.waitFutureReady(waited)) {
             try {
                 waited.get();
-            } catch (const util::AsioSystemError&) {
+            } catch (const utilxx_base::AsioSystemError&) {
                 aborted = true;
             }
         }

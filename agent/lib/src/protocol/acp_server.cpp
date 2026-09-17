@@ -1,10 +1,10 @@
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/version.h"
 
-#include "agentxx/util/container_util.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <fmt/format.h>
 #include <iomanip>
 #include <iostream>
@@ -279,8 +279,8 @@ json AcpProtocolHandler::handleSessionNew(const json& params, const json& id) {
 
     {
         std::lock_guard lk(sessionsMu_);
-        util::insertOrAssignHeterogeneous(sessions_, sessionId, cwd);
-        util::insertOrAssignHeterogeneous(
+        utilxx_base::insertOrAssignHeterogeneous(sessions_, sessionId, cwd);
+        utilxx_base::insertOrAssignHeterogeneous(
             cancelFlags_,
             sessionId,
             std::make_shared<std::atomic<bool>>(false)
@@ -297,7 +297,7 @@ json AcpProtocolHandler::handleSessionNew(const json& params, const json& id) {
         if (ctx) {
             // 归一为绝对路径 (~ 展开与相对路径按进程 cwd 解析; ACP 客户端
             // 通常直接发送绝对路径, 此处仅兜底非规范输入)
-            auto absCwd = agentxx::util::toCurrentSystemAbsolutePath(cwd);
+            auto absCwd = utilxx_base::toCurrentSystemAbsolutePath(cwd);
             // 词法规范化对以 '.'/'..' 结尾的路径保留尾部分隔符 (".../dir/"
             // 形式); 工作目录基准统一去除尾斜杠 (根目录 "/" 除外),
             // 便于各使用方拼接与比较
@@ -339,7 +339,7 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
     std::shared_ptr<std::atomic<bool>> cancelFlag;
     {
         std::lock_guard lk(sessionsMu_);
-        util::getOrCreateHeterogeneous(sessions_, sessionId);
+        utilxx_base::getOrCreateHeterogeneous(sessions_, sessionId);
         auto it = cancelFlags_.find(sessionId);
         if (it == cancelFlags_.end()) {
             it = cancelFlags_.emplace(sessionId, std::make_shared<std::atomic<bool>>(false)).first;
@@ -349,7 +349,7 @@ void AcpProtocolHandler::handleSessionPrompt(const json& env, const json& params
 
     {
         std::lock_guard lk(inflightMu_);
-        if (!util::insertHeterogeneous(inflightSessions_, sessionId).second) {
+        if (!utilxx_base::insertHeterogeneous(inflightSessions_, sessionId).second) {
             auto err = jsonRpcError(
                 id,
                 -32000,
@@ -486,7 +486,7 @@ void AcpProtocolHandler::workerRunPrompt(
 void AcpProtocolHandler::workerCleanup(std::string_view sessionId) {
     {
         std::lock_guard lk(inflightMu_);
-        (void)util::eraseHeterogeneous(inflightSessions_, sessionId); // 异构删除免拷贝
+        (void)utilxx_base::eraseHeterogeneous(inflightSessions_, sessionId); // 异构删除免拷贝
     }
     auto prev = inflightCount_.fetch_sub(1, std::memory_order_acq_rel);
     if (prev == 1) {
@@ -507,7 +507,7 @@ void AcpProtocolHandler::handleSessionCancel(const json& params) {
         it->second->store(true, std::memory_order_release);
         XX_LOGI("[acp] session/cancel: {}", sessionId);
     } else {
-        util::insertOrAssignHeterogeneous(
+        utilxx_base::insertOrAssignHeterogeneous(
             cancelFlags_,
             sessionId,
             std::make_shared<std::atomic<bool>>(true)
@@ -547,7 +547,7 @@ void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::
 
 HttpAcpServer::HttpAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    agentxx::util::Json                        agentInfo,
+    utilxx_base::Json                        agentInfo,
     Config                                     config
 ) :
     config_(std::move(config)),
@@ -558,7 +558,7 @@ HttpAcpServer::HttpAcpServer(
         {.serverName = config_.serverName, .serverVersion = config_.serverVersion}
     ) {
     setupHandlerSink();
-    httpServer_ = std::make_unique<util::HttpServer>(config_.httpConfig);
+    httpServer_ = std::make_unique<utilxx::HttpServer>(config_.httpConfig);
     setupRoutes();
 }
 
@@ -589,9 +589,9 @@ AcpProtocolHandler& HttpAcpServer::handler() {
 }
 
 void HttpAcpServer::setupHandlerSink() {
-    handler_.setNotificationSink([this](const agentxx::util::Json& envelope) {
+    handler_.setNotificationSink([this](const utilxx_base::Json& envelope) {
         if (!envelope.contains("method") && envelope.contains("id") && !envelope["id"].is_null()) {
-            agentxx::util::Json id    = envelope["id"];
+            utilxx_base::Json id    = envelope["id"];
             int64_t             idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
             std::unique_lock lock(pendingMutex_);
@@ -627,10 +627,10 @@ void HttpAcpServer::setupHandlerSink() {
 }
 
 void HttpAcpServer::setupRoutes() {
-    using Handler = util::HttpServer::Handler;
+    using Handler = utilxx::HttpServer::Handler;
 
     auto acpHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
+        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleAcpRequest(req, resp);
         }
@@ -638,7 +638,7 @@ void HttpAcpServer::setupRoutes() {
     httpServer_->router().add(config_.acpEndpoint, 2, acpHandler);
 
     auto sseHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
+        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleSseRequest(req, resp);
         }
@@ -647,24 +647,24 @@ void HttpAcpServer::setupRoutes() {
 }
 
 asio::awaitable<void> HttpAcpServer::handleAcpRequest(
-    util::HttpServer::Request&  req,
-    util::HttpServer::Response& resp
+    utilxx::HttpServer::Request&  req,
+    utilxx::HttpServer::Response& resp
 ) {
     namespace http = boost::beast::http;
 
     bool                isError     = false;
-    agentxx::util::Json requestJson = agentxx::util::catchError<agentxx::util::Json>(
-        [&req]() -> agentxx::util::Json {
-            return agentxx::util::Json::parse(req.body());
+    utilxx_base::Json requestJson = agentxx::util::catchError<utilxx_base::Json>(
+        [&req]() -> utilxx_base::Json {
+            return utilxx_base::Json::parse(req.body());
         },
-        [&](std::string errmsg) -> agentxx::util::Json {
+        [&](std::string errmsg) -> utilxx_base::Json {
             writeJsonResponse(
                 resp,
                 http::status::bad_request,
                 AcpProtocolHandler::makeParseError(std::move(errmsg))
             );
             isError = true;
-            return agentxx::util::Json{};
+            return utilxx_base::Json{};
         }
     );
     if (isError) {
@@ -683,13 +683,13 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         co_return;
     }
 
-    agentxx::util::Json id = requestJson.contains("id") ? requestJson["id"] : agentxx::util::Json{};
+    utilxx_base::Json id = requestJson.contains("id") ? requestJson["id"] : utilxx_base::Json{};
 
-    agentxx::util::Json response = agentxx::util::catchError<agentxx::util::Json>(
-        [&]() -> agentxx::util::Json {
+    utilxx_base::Json response = agentxx::util::catchError<utilxx_base::Json>(
+        [&]() -> utilxx_base::Json {
             return handler_.handleMessage(requestJson);
         },
-        [&](std::string errmsg) -> agentxx::util::Json {
+        [&](std::string errmsg) -> utilxx_base::Json {
             XX_LOGE("[acp] handleMessage error: {}", errmsg);
             writeJsonResponse(
                 resp,
@@ -697,7 +697,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
                 jsonRpcError(id, -32603, fmt::format("Internal error: {}", errmsg))
             );
             isError = true;
-            return agentxx::util::Json{};
+            return utilxx_base::Json{};
         }
     );
     if (isError) {
@@ -713,10 +713,10 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         writeJsonResponse(
             resp,
             http::status::accepted,
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"jsonrpc", "2.0"                        },
-                {"id",      agentxx::util::Json(nullptr) },
-                {"result",  agentxx::util::Json::object()}
+                {"id",      utilxx_base::Json(nullptr) },
+                {"result",  utilxx_base::Json::object()}
         }
         );
         co_return;
@@ -728,7 +728,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         idVal             = static_cast<int64_t>(std::hash<std::string>{}(idStr));
     }
 
-    auto promise = std::make_shared<std::promise<agentxx::util::Json>>();
+    auto promise = std::make_shared<std::promise<utilxx_base::Json>>();
     auto future  = promise->get_future().share();
 
     {
@@ -765,7 +765,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         co_return;
     }
 
-    agentxx::util::Json asyncResponse = future.get();
+    utilxx_base::Json asyncResponse = future.get();
     {
         std::unique_lock lock(pendingMutex_);
         pendingResponses_.erase(idVal);
@@ -775,8 +775,8 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
 }
 
 asio::awaitable<void> HttpAcpServer::handleSseRequest(
-    util::HttpServer::Request&  req,
-    util::HttpServer::Response& resp
+    utilxx::HttpServer::Request&  req,
+    utilxx::HttpServer::Response& resp
 ) {
     resp.version(req.version());
     resp.result(boost::beast::http::status::ok);
@@ -799,9 +799,9 @@ void HttpAcpServer::broadcastSSE(std::string_view /*data*/) {
 void HttpAcpServer::stopSSE() {}
 
 void HttpAcpServer::writeJsonResponse(
-    util::HttpServer::Response& resp,
+    utilxx::HttpServer::Response& resp,
     boost::beast::http::status  status,
-    const agentxx::util::Json&  body
+    const utilxx_base::Json&  body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
@@ -809,10 +809,10 @@ void HttpAcpServer::writeJsonResponse(
     resp.prepare_payload();
 }
 
-agentxx::util::Json
-    HttpAcpServer::jsonRpcError(const agentxx::util::Json& id, int code, std::string_view message)
+utilxx_base::Json
+    HttpAcpServer::jsonRpcError(const utilxx_base::Json& id, int code, std::string_view message)
         const {
-    agentxx::util::Json err;
+    utilxx_base::Json err;
     err["jsonrpc"] = "2.0";
     err["id"]      = id;
     err["error"]   = {
@@ -828,7 +828,7 @@ agentxx::util::Json
 
 StdioAcpServer::StdioAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    agentxx::util::Json                        agentInfo
+    utilxx_base::Json                        agentInfo
 ) :
     agent_(std::move(agent)),
     handler_(
@@ -863,7 +863,7 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
     auto outMu  = std::make_shared<std::mutex>();
     auto outPtr = &out;
 
-    handler_.setNotificationSink([outPtr, outMu](const agentxx::util::Json& env) {
+    handler_.setNotificationSink([outPtr, outMu](const utilxx_base::Json& env) {
         auto            s = env.dump();
         std::lock_guard lk(*outMu);
         (*outPtr) << s << '\n';
@@ -879,10 +879,10 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
             continue;
         }
 
-        agentxx::util::Json env;
+        utilxx_base::Json env;
         bool                parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
-                env = agentxx::util::Json::parse(line);
+                env = utilxx_base::Json::parse(line);
                 return true;
             },
             [&](std::string) -> bool {

@@ -4,7 +4,7 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "execute_command_impl.h"
 #include <fmt/format.h>
 #include <memory>

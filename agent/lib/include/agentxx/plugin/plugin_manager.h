@@ -8,6 +8,7 @@
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
+#include "utilxx_base/json.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -184,7 +185,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
 
     std::shared_ptr<PluginInstance> instance() const {
         return instance_.lock();
@@ -200,7 +201,7 @@ private:
     std::string                   description_;
     std::string                   parametersJson_;
     AgentxxPluginToolSpec         spec_;
-    agentxx::util::Json           parameters_;
+    utilxx_base::Json           parameters_;
     std::weak_ptr<PluginInstance> instance_;
 };
 

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/sqlite.h"
+#include "utilxx_base/json.h"
+#include "utilxx/sqlite.h"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -42,7 +42,7 @@ public:
 
     struct LoadedSession {
         std::vector<ViewMessage> viewMessages;
-        agentxx::util::Json      llmMessages = agentxx::util::Json::array();
+        utilxx_base::Json      llmMessages = utilxx_base::Json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
     };
@@ -96,7 +96,7 @@ public:
 
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - 失败仅记录日志, 不影响内存状态
-    void saveLlmMessages(std::string_view sessionId, const agentxx::util::Json& llmMessages);
+    void saveLlmMessages(std::string_view sessionId, const utilxx_base::Json& llmMessages);
 
     // ---- share store (session.db store 表) ----
 
@@ -133,7 +133,7 @@ public:
 private:
 
     struct SessionDbs {
-        agentxx::util::SqliteDb sessionDb;
+        utilxx::SqliteDb sessionDb;
     };
 
     /// 连接缓存条目 (含最近使用序号, 供 LRU 淘汰)
@@ -162,10 +162,10 @@ private:
     bool sessionDataDirExists(std::string_view sessionId) const;
 
     /// 建表 (幂等, 单库包含 view_message/llm_context/meta/store)
-    static void ensureSchema(agentxx::util::SqliteDb& sessionDb);
+    static void ensureSchema(utilxx::SqliteDb& sessionDb);
 
     /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
-    static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
+    static void ensureViewMessageMsgIdColumn(utilxx::SqliteDb& sessionDb);
 
     std::string rootDir_;
     std::mutex  mutex_;

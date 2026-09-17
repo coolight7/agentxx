@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/util/router.h"
+#include "utilxx/router.h"
 #include "asio/io_context.hpp"
 #include <functional>
 #include <map>
@@ -126,13 +126,13 @@ public:
     /// 按已声明的权限判定工具调用是否允许 (未声明权限的工具直接放行)
     /// - 工具调用的统一权限入口: 权限检查服务 (service.permission.check) 与
     ///   直接判定的调用方都走这里
-    asio::awaitable<bool> checkToolPermission(std::string_view toolName, agentxx::util::Json& args);
+    asio::awaitable<bool> checkToolPermission(std::string_view toolName, utilxx_base::Json& args);
 
     /// 按声明判定工具调用是否允许 (目标按声明从 args 解析, 依次判定全部目标)
     /// - 声明无目标或目标参数缺省/为空: 退化为工具级判定 (见 [checkTargetPermission])
     asio::awaitable<bool> checkToolPermission(
         std::string_view          toolName,
-        agentxx::util::Json&      args,
+        utilxx_base::Json&      args,
         const ToolPermissionSpec& spec
     );
 
@@ -149,7 +149,7 @@ public:
     ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> checkTargetPermission(
         std::string_view     toolName,
-        agentxx::util::Json& args,
+        utilxx_base::Json& args,
         size_t               scope,
         std::string_view     target,
         std::string_view     category = {}
@@ -235,7 +235,7 @@ public:
     ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> requestPermission(
         std::string_view     toolName,
-        agentxx::util::Json& args,
+        utilxx_base::Json& args,
         size_t               scope,
         std::string          target,
         std::string_view     category = {}

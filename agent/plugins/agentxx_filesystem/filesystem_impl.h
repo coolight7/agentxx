@@ -4,14 +4,14 @@
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 #pragma once
 
-#include "agentxx/util/aho_corasick.h"
-#include "agentxx/util/asio_error.h"
+#include "utilxx/aho_corasick.h"
+#include "utilxx_base/asio_error.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/regex.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx/regex.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/error.hpp"
 #include "asio/read.hpp"
@@ -76,19 +76,19 @@ namespace detail {
 
 /// 将 std::filesystem::path 转换为无损 UTF-8 字符串
 inline std::string toUtf8(const std::filesystem::path& p) {
-    return agentxx::util::pathToUtf8Generic(p);
+    return utilxx_base::pathToUtf8Generic(p);
 }
 
 /// 基于 workDir 的会话工作目录解析绝对路径
 /// - workDir 非空时以其为相对路径基准 (会话工作目录与进程 cwd 解耦);
 ///   为空时回退进程 cwd (resolvedWorkDir 兜底, 与单参 toCurrentSystemAbsolutePath 一致)
 inline std::string wsAbs(const std::string& workDir, const std::string& path) {
-    return agentxx::util::toCurrentSystemAbsolutePath(path, workDir);
+    return utilxx_base::toCurrentSystemAbsolutePath(path, workDir);
 }
 
 /// 将文本中的 CRLF (`\r\n`) 行尾统一转换为 LF (`\n`)。
 inline void normalizeCrlfToLf(std::string& text) {
-    agentxx::util::normalizeCrlfToLf(text);
+    utilxx_base::normalizeCrlfToLf(text);
 }
 
 /// 判断路径是否含 shell 通配符 (`*` `?` `[`)。
@@ -100,7 +100,7 @@ inline bool hasGlobMagic(std::string_view path) {
 
 /// 解析 `type` 参数为类型集合。支持 string 或 array 两种形式。
 /// 返回空集合表示 "any" (不按类型过滤)。合法值: file / dir / symlink / other / any。
-inline std::set<std::string> collectTypeFilter(const agentxx::util::Json& typeArg) {
+inline std::set<std::string> collectTypeFilter(const utilxx_base::Json& typeArg) {
     std::set<std::string> types;
     auto                  addOne = [&](const std::string& t) {
         if (t == "any" || t.empty()) {
@@ -224,7 +224,7 @@ inline glob::WalkPolicy
 
 /// 读取完整文件文本 (同步); 打开失败抛出异常
 inline std::string readFileContent(const std::string& filepath) {
-    auto            p = agentxx::util::utf8ToPath(filepath);
+    auto            p = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(p, fsEc);
     if (fsEc) {
@@ -307,7 +307,7 @@ inline std::vector<std::filesystem::path>
 // agentxx_filesystem_list 执行体 (原 FileSystemListTool::execute_async)
 // =====================================================================
 inline std::string fileListExecuteImpl(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr,
     const PathFilterFn&        pathFilter  = nullptr
@@ -557,13 +557,13 @@ inline std::string fileListExecuteImpl(
         // 通配符无匹配: 字面路径确实存在时 (文件名本身含 `*`/`[` 等) 按普通路径处理,
         // 与 shell "无匹配时保留模式原样" 的行为一致
         std::error_code ec;
-        if (false == std::filesystem::exists(agentxx::util::utf8ToPath(targetPath), ec)) {
+        if (false == std::filesystem::exists(utilxx_base::utf8ToPath(targetPath), ec)) {
             lines.push_back(fmt::format(R"([Error] No match `path`({}) file found)", rawPath));
             return detail::joinLines(lines);
         }
     }
 
-    auto fsPath = agentxx::util::utf8ToPath(targetPath);
+    auto fsPath = utilxx_base::utf8ToPath(targetPath);
     if (false == std::filesystem::exists(fsPath)) {
         lines.push_back("[Error] Path not exist");
     } else if (std::filesystem::is_directory(fsPath)) {
@@ -594,7 +594,7 @@ inline std::string fileListExecuteImpl(
 // agentxx_filesystem_read 执行体 (原 FilesystemReadTextFileTool::execute_async)
 // =====================================================================
 inline std::string fileReadExecuteImpl(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
@@ -602,7 +602,7 @@ inline std::string fileReadExecuteImpl(
     if (filepath.empty()) {
         return R"([Error] Arg `path` is empty)";
     }
-    auto            fsPath = agentxx::util::utf8ToPath(filepath);
+    auto            fsPath = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(fsPath, fsEc);
     if (fsEc) {
@@ -665,7 +665,7 @@ inline std::string fileReadExecuteImpl(
 
         auto rawStr = result.str();
         // 保留原始的 crlf 或 \n 换行符不转换
-        agentxx::util::autoConvertToUtf8(rawStr);
+        utilxx_base::autoConvertToUtf8(rawStr);
         return rawStr;
     }
 
@@ -674,7 +674,7 @@ inline std::string fileReadExecuteImpl(
         = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
     stream.close();
     // 保留原始的 crlf 或 \n 换行符不转换
-    agentxx::util::autoConvertToUtf8(result);
+    utilxx_base::autoConvertToUtf8(result);
     return result;
 }
 
@@ -682,7 +682,7 @@ inline std::string fileReadExecuteImpl(
 // agentxx_filesystem_write 执行体 (原 FilesystemWriteFileTool::execute_async)
 // =====================================================================
 inline std::string fileWriteExecuteImpl(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
@@ -694,7 +694,7 @@ inline std::string fileWriteExecuteImpl(
     auto overwrite = arguments.value<bool>("overwrite", false);
 
     std::ofstream stream;
-    auto          path = agentxx::util::utf8ToPath(filepath);
+    auto          path = utilxx_base::utf8ToPath(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
@@ -735,7 +735,7 @@ inline std::string fileWriteExecuteImpl(
 // agentxx_filesystem_edit 执行体 (原 FilesystemEditTextFileTool::execute_async)
 // =====================================================================
 inline std::string fileEditExecuteImpl(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
@@ -760,7 +760,7 @@ inline std::string fileEditExecuteImpl(
     detail::normalizeCrlfToLf(old_str);
     detail::normalizeCrlfToLf(new_str);
 
-    auto            path = agentxx::util::utf8ToPath(filepath);
+    auto            path = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
     if (fsEc) {
@@ -775,7 +775,7 @@ inline std::string fileEditExecuteImpl(
 
     // 读取完整文件并预处理 (先转 UTF-8 使 GBK 等编码文件可正常匹配, 再统一换行符)
     std::string content = detail::readFileContent(filepath);
-    agentxx::util::autoConvertToUtf8(content);
+    utilxx_base::autoConvertToUtf8(content);
     detail::normalizeCrlfToLf(content);
 
     int    replaceHit = 0;
@@ -801,7 +801,7 @@ inline std::string fileEditExecuteImpl(
     static std::atomic<uint64_t> s_editTmpSeq{0};
     const auto                   tmpPathStr
         = fmt::format("{}.agentxx_edit_tmp_{}", filepath, s_editTmpSeq.fetch_add(1));
-    const auto fsTmpPath = agentxx::util::utf8ToPath(tmpPathStr);
+    const auto fsTmpPath = utilxx_base::utf8ToPath(tmpPathStr);
 
     {
         std::ofstream stream(
@@ -844,7 +844,7 @@ inline std::string fileEditExecuteImpl(
 // agentxx_filesystem_glob 执行体 (原 FilesystemGlobTool::execute_async)
 // =====================================================================
 inline std::string fileGlobExecuteImpl(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr,
     const PathFilterFn&        pathFilter  = nullptr
@@ -864,7 +864,7 @@ inline std::string fileGlobExecuteImpl(
     // lib filesystem.cpp 同注释 (case_fold 会破坏 max_depth 前缀计算与盘符识别)。
     auto maxDepth   = arguments.value<int64_t>("max_depth", -1);
     auto doSort     = arguments.value<bool>("sort", false);
-    auto typeFilter = detail::collectTypeFilter(arguments.value("type", agentxx::util::Json{}));
+    auto typeFilter = detail::collectTypeFilter(arguments.value("type", utilxx_base::Json{}));
     auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
     for (auto& item : excludePatterns) {
         item = detail::wsAbs(workDir, item);
@@ -1030,7 +1030,7 @@ inline std::string fileGlobExecuteImpl(
 // agentxx_filesystem_grep 执行体 (原 FilesystemGrepTool::execute_async)
 // =====================================================================
 inline std::string fileGrepExecuteImpl(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr,
     const PathFilterFn&        pathFilter  = nullptr
@@ -1244,7 +1244,7 @@ inline std::string fileGrepExecuteImpl(
             if (maxFileSizeMb > 0) {
                 std::error_code sizeEc;
                 auto            fileSize
-                    = std::filesystem::file_size(agentxx::util::utf8ToPath(filepath), sizeEc);
+                    = std::filesystem::file_size(utilxx_base::utf8ToPath(filepath), sizeEc);
                 if (false == static_cast<bool>(sizeEc)
                     && fileSize > static_cast<uintmax_t>(
                            static_cast<double>(1024 * 1024) * maxFileSizeMb
@@ -1259,7 +1259,7 @@ inline std::string fileGrepExecuteImpl(
                 return std::nullopt;
             }
             // 非 UTF-8 编码文本转 UTF-8; 转换失败视为非文本, 跳过
-            if (false == agentxx::util::autoConvertToUtf8(filetext)) {
+            if (false == utilxx_base::autoConvertToUtf8(filetext)) {
                 return std::nullopt;
             }
             detail::normalizeCrlfToLf(filetext);
@@ -1371,14 +1371,14 @@ inline std::string fileGrepExecuteImpl(
     auto textSearch
         = text_patterns.empty()
               ? nullptr
-              : std::make_unique<agentxx::util::AhoCorasick<char>>(text_patterns, !caseSensitive);
+              : std::make_unique<utilxx::AhoCorasick<char>>(text_patterns, !caseSensitive);
 
     // 正则轮: 大小写不敏感直接由 XXRegex 后端实现
     // (Hyperscan 用 HS_FLAG_CASELESS, std::regex fallback 用 icase)
     auto regex = regex_patterns.empty() ? nullptr
-                                        : agentxx::util::XXRegex::createRegex(
+                                        : utilxx::XXRegex::createRegex(
                                               regex_patterns,
-                                              agentxx::util::XXRegex::defHSFlags_normal,
+                                              utilxx::XXRegex::defHSFlags_normal,
                                               !caseSensitive
                                           );
     if (false == regex_patterns.empty() && !regex) {
@@ -1410,7 +1410,7 @@ inline std::string fileGrepExecuteImpl(
             }
         }
         if (regex) {
-            auto matchs = std::vector<agentxx::util::XXRegexMatchResult>{};
+            auto matchs = std::vector<utilxx::XXRegexMatchResult>{};
             if (regex->match(filetext, matchs)) {
                 ranges.reserve(ranges.size() + matchs.size());
                 for (const auto& m : matchs) {
@@ -1511,7 +1511,7 @@ inline std::string asErrorText(Fn&& fn) {
 } // namespace detail
 
 inline std::string fileListExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr,
     const PathFilterFn&        pathFilter  = nullptr
@@ -1522,7 +1522,7 @@ inline std::string fileListExecute(
 }
 
 inline std::string fileReadExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr
 ) {
@@ -1532,7 +1532,7 @@ inline std::string fileReadExecute(
 }
 
 inline std::string fileWriteExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr
 ) {
@@ -1542,7 +1542,7 @@ inline std::string fileWriteExecute(
 }
 
 inline std::string fileEditExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr
 ) {
@@ -1552,7 +1552,7 @@ inline std::string fileEditExecute(
 }
 
 inline std::string fileGlobExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr,
     const PathFilterFn&        pathFilter  = nullptr
@@ -1563,7 +1563,7 @@ inline std::string fileGlobExecute(
 }
 
 inline std::string fileGrepExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled = nullptr,
     const PathFilterFn&        pathFilter  = nullptr
@@ -1579,7 +1579,7 @@ inline std::string fileGrepExecute(
 //   由宿主受控轮询 (driver 请求 + poll_one) 驱动 asio::stream_file 的异步 IO;
 //   上述 *Execute 同步版仍由 list / glob / grep 使用 (CPU/遍历类工具走
 //   blocking_tool + offload, 是显式例外);
-// - 文件异步 I/O 的可用性由 agentxx::util::isAsyncFileIoSupported() 判断
+// - 文件异步 I/O 的可用性由 utilxx_base::isAsyncFileIoSupported() 判断
 //   (编译期宏 + 运行时 io_uring 探测), 不可用时 *ExecuteAsync 回退同步实现,
 //   注册侧同样按该判断改走 blocking_tool, 行为与 offload 一致;
 //   本回退亦供测试等直调场景保持单一入口
@@ -1592,7 +1592,7 @@ namespace detail {
 /// - 打开失败抛出异常; 读到 EOF 视为正常结束
 inline asio::awaitable<std::string>
     asyncReadWholeFile(const asio::any_io_executor& executor, const std::string& utf8FilePath) {
-    auto            fsPath = agentxx::util::utf8ToPath(utf8FilePath);
+    auto            fsPath = utilxx_base::utf8ToPath(utf8FilePath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(fsPath, fsEc);
     if (fsEc) {
@@ -1605,7 +1605,7 @@ inline asio::awaitable<std::string>
         throw std::runtime_error{"Path is a directory"};
     }
     asio::stream_file        stream{executor};
-    neograph_asio_error_code errCode;
+    utilxx_base::AsioErrorCode errCode;
     stream.open(utf8FilePath, asio::stream_file::read_only, errCode);
     if (false == stream.is_open()) {
         throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
@@ -1631,12 +1631,12 @@ inline asio::awaitable<std::string>
 /// - line_offset/line_limit 模式经 async_read_until 逐行推进 (保留原始换行符);
 ///   其余整文件读取; 读取后 autoConvertToUtf8 (保留 crlf 或 \n 原样不转换)
 inline asio::awaitable<std::string>
-    fileReadExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileReadExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
     }
-    auto            fsPath = agentxx::util::utf8ToPath(filepath);
+    auto            fsPath = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(fsPath, fsEc);
     if (fsEc) {
@@ -1656,7 +1656,7 @@ inline asio::awaitable<std::string>
     if (text_line_offset >= 0 || text_line_limit > 0) {
         // 读取部分文件: 逐行 async_read_until, 跳过偏移行后收集至结果
         asio::stream_file        stream{executor};
-        neograph_asio_error_code errCode;
+        utilxx_base::AsioErrorCode errCode;
         stream.open(filepath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
             throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
@@ -1717,14 +1717,14 @@ inline asio::awaitable<std::string>
 
         auto rawStr = result.str();
         // 保留原始的 crlf 或 \n 换行符不转换
-        agentxx::util::autoConvertToUtf8(rawStr);
+        utilxx_base::autoConvertToUtf8(rawStr);
         co_return rawStr;
     }
 
     // 读取完整文件
     auto data = co_await detail::asyncReadWholeFile(executor, filepath);
     // 保留原始的 crlf 或 \n 换行符不转换
-    agentxx::util::autoConvertToUtf8(data);
+    utilxx_base::autoConvertToUtf8(data);
     co_return data;
 }
 
@@ -1732,7 +1732,7 @@ inline asio::awaitable<std::string>
 /// - overwrite=false 且目标存在时报错; 自动创建缺失的父目录;
 ///   stream_file create|truncate 打开后 async_write 全量写入
 inline asio::awaitable<std::string>
-    fileWriteExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileWriteExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return R"([Error] Arg `path` is empty)";
@@ -1741,7 +1741,7 @@ inline asio::awaitable<std::string>
     auto overwrite = arguments.value<bool>("overwrite", false);
 
     // 存在性检查与父目录创建: 快速元数据操作, 与原实现一致内联执行
-    auto path = agentxx::util::utf8ToPath(filepath);
+    auto path = utilxx_base::utf8ToPath(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
@@ -1757,7 +1757,7 @@ inline asio::awaitable<std::string>
     auto executor = co_await asio::this_coro::executor;
 
     asio::stream_file        stream{executor};
-    neograph_asio_error_code errCode;
+    utilxx_base::AsioErrorCode errCode;
     stream.open(
         filepath,
         asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
@@ -1787,7 +1787,7 @@ inline asio::awaitable<std::string>
 /// - 异步读完整文件 → UTF-8/LF 归一化 → 替换 → 原子写 (同目录临时文件 +
 ///   rename 覆盖), 与同步版行为一致
 inline asio::awaitable<std::string>
-    fileEditExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileEditExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         co_return "[Error] Arg `path` is empty";
@@ -1809,7 +1809,7 @@ inline asio::awaitable<std::string>
     detail::normalizeCrlfToLf(old_str);
     detail::normalizeCrlfToLf(new_str);
 
-    auto            path = agentxx::util::utf8ToPath(filepath);
+    auto            path = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
     if (fsEc) {
@@ -1825,7 +1825,7 @@ inline asio::awaitable<std::string>
     // 异步读取完整文件并预处理 (先转 UTF-8 使 GBK 等编码文件可正常匹配, 再统一换行符)
     auto        executor = co_await asio::this_coro::executor;
     std::string content  = co_await detail::asyncReadWholeFile(executor, filepath);
-    agentxx::util::autoConvertToUtf8(content);
+    utilxx_base::autoConvertToUtf8(content);
     detail::normalizeCrlfToLf(content);
 
     int    replaceHit = 0;
@@ -1852,11 +1852,11 @@ inline asio::awaitable<std::string>
     static std::atomic<uint64_t> s_editTmpSeq{0};
     const auto                   tmpPathStr
         = fmt::format("{}.agentxx_edit_tmp_{}", filepath, s_editTmpSeq.fetch_add(1));
-    const auto fsTmpPath = agentxx::util::utf8ToPath(tmpPathStr);
+    const auto fsTmpPath = utilxx_base::utf8ToPath(tmpPathStr);
 
     {
         asio::stream_file        stream{executor};
-        neograph_asio_error_code errCode;
+        utilxx_base::AsioErrorCode errCode;
         stream.open(
             tmpPathStr,
             asio::stream_file::write_only | asio::stream_file::create | asio::stream_file::truncate,
@@ -1899,20 +1899,20 @@ inline asio::awaitable<std::string>
 #else // !ASIO_HAS_FILE && !BOOST_ASIO_HAS_FILE
 
 /// 文件异步 I/O 编译期不可用平台 (无 io_uring/iocp 文件支持): 回退同步实现。
-/// 此时 agentxx::util::isAsyncFileIoSupported() 恒为 false, 注册侧会改走
+/// 此时 utilxx_base::isAsyncFileIoSupported() 恒为 false, 注册侧会改走
 /// offload线程池适配异步接口 注册, 本回退仅供测试等直调场景保持单一入口
 inline asio::awaitable<std::string>
-    fileReadExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileReadExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     co_return fileReadExecuteImpl(arguments, workDir);
 }
 
 inline asio::awaitable<std::string>
-    fileWriteExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileWriteExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     co_return fileWriteExecuteImpl(arguments, workDir);
 }
 
 inline asio::awaitable<std::string>
-    fileEditExecuteAsyncImpl(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileEditExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     co_return fileEditExecuteImpl(arguments, workDir);
 }
 
@@ -1926,9 +1926,9 @@ inline asio::awaitable<std::string>
 ///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂
 ///   (ASan stack-use-after-return 已复现)
 inline asio::awaitable<std::string>
-    fileReadExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileReadExecuteAsync(const utilxx_base::Json& arguments, const std::string& workDir) {
     try {
-        if (agentxx::util::isAsyncFileIoSupported()) {
+        if (utilxx_base::isAsyncFileIoSupported()) {
             co_return co_await fileReadExecuteAsyncImpl(arguments, workDir);
         }
         co_return fileReadExecuteImpl(arguments, workDir);
@@ -1939,9 +1939,9 @@ inline asio::awaitable<std::string>
 }
 
 inline asio::awaitable<std::string>
-    fileWriteExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileWriteExecuteAsync(const utilxx_base::Json& arguments, const std::string& workDir) {
     try {
-        if (agentxx::util::isAsyncFileIoSupported()) {
+        if (utilxx_base::isAsyncFileIoSupported()) {
             co_return co_await fileWriteExecuteAsyncImpl(arguments, workDir);
         }
         co_return fileWriteExecuteImpl(arguments, workDir);
@@ -1952,9 +1952,9 @@ inline asio::awaitable<std::string>
 }
 
 inline asio::awaitable<std::string>
-    fileEditExecuteAsync(const agentxx::util::Json& arguments, const std::string& workDir) {
+    fileEditExecuteAsync(const utilxx_base::Json& arguments, const std::string& workDir) {
     try {
-        if (agentxx::util::isAsyncFileIoSupported()) {
+        if (utilxx_base::isAsyncFileIoSupported()) {
             co_return co_await fileEditExecuteAsyncImpl(arguments, workDir);
         }
         co_return fileEditExecuteImpl(arguments, workDir);

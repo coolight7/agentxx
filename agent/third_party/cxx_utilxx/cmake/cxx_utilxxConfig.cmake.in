@@ -1,0 +1,21 @@
+@PACKAGE_INIT@
+
+# cxx_utilxx 包配置: 解析依赖并导入导出目标
+#   cxx_utilxx_shared  (动态库)
+#   cxx_utilxx_static  (静态库)
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(cxx_utilxx_base)
+find_dependency(Boost CONFIG)
+if (@CXX_UTILXX_ENABLE_BOOST_PROCESS@)
+  find_dependency(Boost CONFIG COMPONENTS process)
+endif ()
+find_dependency(OpenSSL)
+find_dependency(SQLite3 CONFIG)
+find_dependency(fmt)
+find_dependency(html2md)
+
+include("${CMAKE_CURRENT_LIST_DIR}/cxx_utilxxTargets.cmake")
+
+check_required_components(cxx_utilxx)

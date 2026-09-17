@@ -3,8 +3,8 @@
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 
 namespace agentxx {
@@ -21,7 +21,7 @@ EventBus::EventBus(asio::any_io_executor executor) :
     executor_(executor) {}
 
 bool EventBus::remove(std::string_view topic) {
-    return util::eraseHeterogeneous(streams_, topic);
+    return utilxx_base::eraseHeterogeneous(streams_, topic);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     auto chan = event.data.value("channel", std::string{});
     // event.data 为图边界类型 (neograph::json): value 整体转业务 Json
     auto value = event.data.contains("value") ? agentxx::util::fromNeographJson(event.data["value"])
-                                              : agentxx::util::Json{};
+                                              : utilxx_base::Json{};
 
     // 通用提示消息: 转发为 WireDelta::MessageUITip, 由 client 端插入提示消息
     if (chan == "message_tip" && value.is_object()) {
@@ -601,12 +601,12 @@ double EventBridge::countTokens(std::string_view text) {
     }
 
     // 回退: 无 summarization (测试/裸 EventBridge) 时的内置估算
-    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str / util::estimateTokenCount
+    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str / utilxx_base::estimateTokenCount
     // 完全一致:
     // - 0xF8-0xFF (无效 UTF-8 前导, 5/6 字节编码已被 RFC 3629 废弃) 按 ascii
     //   单字节处理, 避免吞掉后续字节少计
     // - ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token (分别折算后相加)
-    return util::estimateTokenCount(text, 1.1, 4.0);
+    return utilxx_base::estimateTokenCount(text, 1.1, 4.0);
 }
 
 void EventBridge::pushTpsIfDue() {

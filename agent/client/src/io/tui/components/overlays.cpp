@@ -11,6 +11,8 @@
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <filesystem>
 #include <markdown/dom_builder.hpp>
@@ -175,7 +177,7 @@ void SessionSelectorOverlay::buildItems() {
         items.push_back(UiActionItem{
             .id    = std::string{kSessionIdPrefix} + s.sessionId,
             .label = isCurrent ? trf("session.current", title) : title,
-            .hint  = agentxx::util::formatDateTimeMilliseconds(s.lastActiveMs),
+            .hint  = utilxx_base::formatDateTimeMilliseconds(s.lastActiveMs),
             .onActivate =
                 [this, id = s.sessionId] {
                     requestClose(id);
@@ -500,7 +502,7 @@ void SettingsOverlay::cycleLogLevel() {
     auto&     settings = TUISettings::instance();
     const int next     = (static_cast<int>(settings.logLevel()) + 1)
                      % static_cast<int>(TUISettings::kLogLevelNames.size());
-    settings.setLogLevel(static_cast<agentxx::util::LogLevel>(next));
+    settings.setLogLevel(static_cast<utilxx_base::LogLevel>(next));
     if (onLogLevelChange_) {
         onLogLevelChange_();
     }
@@ -881,13 +883,13 @@ ftxui::Box PendingInputsOverlay::boxOf(HitInfo::Kind kind, std::string_view item
 namespace {
 
 /// 从消息 JSON 提取 role 字符串 (缺失时返回空串)
-std::string ctxMsgRole(const agentxx::util::Json& m) {
+std::string ctxMsgRole(const utilxx_base::Json& m) {
     return m.value("role", std::string{});
 }
 
 /// 从消息 JSON 提取 tool_calls 名称列表 (缺失/非数组返回空)
 /// 用于折叠头预览与展开体摘要行
-std::vector<std::string> ctxMsgToolNames(const agentxx::util::Json& m) {
+std::vector<std::string> ctxMsgToolNames(const utilxx_base::Json& m) {
     std::vector<std::string> names;
     if (!m.contains("tool_calls")) {
         return names;
@@ -1008,7 +1010,7 @@ size_t ContextOverlay::firstVisibleHeaderMessage() const {
 }
 
 ftxui::Element ContextOverlay::buildMessageHeader(
-    const agentxx::util::Json& m,
+    const utilxx_base::Json& m,
     bool                       expanded,
     const Color&               roleColor
 ) {
@@ -1050,7 +1052,7 @@ ftxui::Element ContextOverlay::buildMessageHeader(
     return head;
 }
 
-ftxui::Element ContextOverlay::buildMessageBody(const agentxx::util::Json& m) {
+ftxui::Element ContextOverlay::buildMessageBody(const utilxx_base::Json& m) {
     const auto& theme = *ctx_.theme;
 
     // 摘要行: 完整字段清单 (role + content 长度 + tool_calls 数 + 其余字段),
@@ -1608,7 +1610,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
             bool markdown = true;
             try {
                 if (!extraJson.empty() && extraJson != "{}") {
-                    auto extra = agentxx::util::Json::parse(extraJson);
+                    auto extra = utilxx_base::Json::parse(extraJson);
                     if (extra.is_object() && extra.contains("markdown")
                         && extra["markdown"].is_boolean()) {
                         markdown = extra["markdown"].get<bool>();
@@ -1628,7 +1630,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
         case AGENTXX_OVERLAY_DIFF: {
             std::string path, oldStr, newStr;
             try {
-                auto j = agentxx::util::Json::parse(payload.empty() ? "{}" : payload);
+                auto j = utilxx_base::Json::parse(payload.empty() ? "{}" : payload);
                 path   = j.value("path", std::string{});
                 oldStr = j.value("old_str", std::string{});
                 newStr = j.value("new_str", std::string{});
@@ -1646,9 +1648,9 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
             return m;
         }
         case AGENTXX_OVERLAY_CUSTOM: {
-            agentxx::util::Json items = agentxx::util::Json::array();
+            utilxx_base::Json items = utilxx_base::Json::array();
             try {
-                auto j = agentxx::util::Json::parse(payload.empty() ? "{}" : payload);
+                auto j = utilxx_base::Json::parse(payload.empty() ? "{}" : payload);
                 if (j.is_object() && j.contains("items") && j["items"].is_array()) {
                     items = j["items"];
                 } else if (j.is_array()) {
@@ -1725,7 +1727,7 @@ bool DiffOverlay::OnEvent(Event event) {
 CustomOverlay::CustomOverlay(
     TUICtx&             ctx,
     std::string         title,
-    agentxx::util::Json items,
+    utilxx_base::Json items,
     std::string         ownerPlugin
 ) :
     ctx_(ctx),

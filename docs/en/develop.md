@@ -44,14 +44,14 @@ Test module names are listed in the registry table at the top of `agent/test/tes
 - **Event-Driven Cancellation**: Register cancellation actions for subprocesses and long-running tasks via `ctx.cancelRegistry.registerCallback(sessionKey, cb)` (yielding an RAII `ScopedRegistration` guard) for millisecond-level instant termination.
 - **Follow the Three Iron Rules**: No mutable global statics / State recovered via `user_data` closures / Interface tables cached into instance context.
 - **Record Failed Components**: External resource failures (MCP, Skills, Memory) should be recorded in `appendComponentInfo.failedComponents` for client UI reporting.
-- **Reusing `agentxx_util`**: Built-in plugins use `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (third-party plugins need only the pure C ABI header).
+- **Reusing `cxx_utilxx_base` / `cxx_utilxx`**: Built-in plugins use `find_package(cxx_utilxx_base|cxx_utilxx)` + `target_link_libraries(PRIVATE cxx_utilxx_base_static|cxx_utilxx_static)` (third-party plugins need only the pure C ABI header).
 - **Platform Matrix**: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.
 
 For details, see [plugins.md](/docs/en/design/plugins.md).
 
 ## 4. Debugging and Logging
 
-- Uniformly use `XX_LOG*` (see `agent/lib/include/agentxx/util/log.h`) rather than `std::cout/cerr`, avoiding interference with TUI rendering.
+- Uniformly use `XX_LOG*` (see `agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h`) rather than `std::cout/cerr`, avoiding interference with TUI rendering.
 - `TUILogSink` connects to the right-hand log panel; `TestWarnErrorLogSink` exposes Warn/Error to stderr during tests.
 - For catching exceptions, prefer `agentxx::util::catchError/catchErrorAsync` (which lets `CancelledException/NodeInterrupt` pass through). Never swallow cancellations with `catch(...)` in coroutines.
 

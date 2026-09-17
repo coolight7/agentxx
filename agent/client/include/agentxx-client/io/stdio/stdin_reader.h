@@ -3,6 +3,7 @@
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
+#include "utilxx_base/asio_error.h"
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -19,7 +20,7 @@ class StdinReader {
 public:
 
     using LineChannel
-        = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
+        = asio::experimental::concurrent_channel<void(utilxx_base::AsioErrorCode, std::string)>;
 
 private:
 

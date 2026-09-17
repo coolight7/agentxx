@@ -1,14 +1,15 @@
 #include "agentxx-client/util/util.h"
 
 #include "agentxx/agent/config.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 
 namespace agentxx::client {
 
 std::shared_ptr<agentxx::agent::AgentConfig> buildDefaultConfig() {
     auto config               = std::make_shared<agentxx::agent::AgentConfig>();
-    config->currentSystemName = agentxx::util::getSystemName();
-    config->isSystemWSL       = agentxx::util::isRunningInWSL();
+    config->currentSystemName = utilxx_base::getSystemName();
+    config->isSystemWSL       = utilxx_base::isRunningInWSL();
     // 会话 SQLite 持久化: 消息上下文/展示历史/share store 落库
     // {dataDir}/sqlite/sessions/{sessionId}/, 重启后恢复会话
     // (dataDir 默认 ~/.agentxx/, 可经 yaml data_dir 重定向)

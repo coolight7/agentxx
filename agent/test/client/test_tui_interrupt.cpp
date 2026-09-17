@@ -10,7 +10,7 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/interrupt_ui.h"
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -108,7 +108,7 @@ struct InterruptFixture {
     /// 追加一条中断表单消息 (原始描述 JSON; 传空 JSON = 无描述, 契约错误用例)
     size_t addInterruptJson(
         std::shared_ptr<InterruptResultChannel> ch,
-        const agentxx::util::Json&              uiJson,
+        const utilxx_base::Json&              uiJson,
         int64_t                                 interruptId = 1
     ) {
         auto m                    = std::make_shared<TUIMessage>();
@@ -208,7 +208,7 @@ struct InterruptFixture {
     /// 表单提交结果 (通道读取)
     struct Submit {
         bool                cancelled = false;
-        agentxx::util::Json values    = agentxx::util::Json::object();
+        utilxx_base::Json values    = utilxx_base::Json::object();
 
         /// 便捷: 指定控件 id 的字符串值 (不存在返回 nullopt)
         std::optional<std::string> get(const std::string& id) const {
@@ -227,7 +227,7 @@ struct InterruptFixture {
 
     /// 从通道读取一次提交结果; 返回 false = 无可用消息
     bool recvForm(std::shared_ptr<InterruptResultChannel> ch, Submit& out) {
-        bool got = ch->try_receive([&](neograph_asio_error_code, InterruptFormSubmit s) {
+        bool got = ch->try_receive([&](utilxx_base::AsioErrorCode, InterruptFormSubmit s) {
             out.cancelled = s.cancelled;
             out.values    = std::move(s.values);
         });
@@ -438,7 +438,7 @@ agentxx::middleware::InterruptUi makeBoolButtonsUi() {
          preset::option("false", "No", "interrupt.no")},
         {},
         {},
-        agentxx::util::Json(false),
+        utilxx_base::Json(false),
         true
     ));
     return ui;
@@ -489,7 +489,7 @@ void test_buttons_without_commit_selects_then_enter() {
          preset::option("false", "Deny", "interrupt.deny", "error")},
         {},
         {},
-        agentxx::util::Json("false"),
+        utilxx_base::Json("false"),
         false // 不点击即提交: 仅选中, 由提交行提交
     ));
     ui.blocks.push_back(preset::submitBlock());
@@ -524,7 +524,7 @@ void test_select_click_and_keyboard() {
          preset::option("slow", "slow")},
         {},
         {},
-        agentxx::util::Json("balanced")
+        utilxx_base::Json("balanced")
     ));
     ui.blocks.push_back(preset::submitBlock());
     auto mi = f.addInterrupt(ch, ui);
@@ -963,7 +963,7 @@ void test_missing_descriptor_diagnostic() {
     InterruptFixture f;
     auto             ch = f.makeChannel();
     // 直接构造无描述的消息 (契约错误: HIL 中断必须携带描述)
-    auto mi = f.addInterruptJson(ch, agentxx::util::Json{});
+    auto mi = f.addInterruptJson(ch, utilxx_base::Json{});
 
     const std::string text = f.render();
     XX_TEST_EXPECT_TRUE(text.find("缺少 UI 描述") != std::string::npos);

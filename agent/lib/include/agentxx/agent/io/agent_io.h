@@ -3,9 +3,9 @@
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/client_event_sink.h"
-#include "agentxx/util/asio_error.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
@@ -122,7 +122,7 @@ public:
     /// 统一的 HIL 处理: 用于权限询问、中断输入收集等所有用户交互场景
     /// - server 侧: 经会话总线 (registerOnBus) 被 BaseAgent 的中断流程调用
     /// - client 侧: 收到对端 WireInterruptRequest 后由 onPeerMessage 调用
-    virtual asio::awaitable<agentxx::util::Json> handleInterrupt(
+    virtual asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,
@@ -165,7 +165,7 @@ public:
     /// 中断结果是否包含已确认的输入值 (空对象 = 取消/过期, 不注册规则)
     /// - 权限应答据此判定用户是否真的提交了表单: 结果为已确认的输入值时,
     ///   应答中的 remember (是否"记住本次选择") 才有效
-    static bool confirmedValues(const agentxx::util::Json& values);
+    static bool confirmedValues(const utilxx_base::Json& values);
 
 protected:
 

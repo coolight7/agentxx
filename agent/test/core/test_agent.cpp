@@ -5,7 +5,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/http_client.h"
+#include "utilxx/http_client.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -69,14 +69,14 @@ public:
         co_return std::string{"test_input"};
     }
 
-    asio::awaitable<agentxx::util::Json> handleInterrupt(
+    asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view /*interruptNode*/,
         std::string_view /*interruptValue*/,
         std::string_view /*interruptArgJson*/
     ) override {
         // 中断结果恒为对象形态 {"values": {控件 id: 值}} (客户端契约)
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json::object());
     }
 };
 
@@ -98,7 +98,7 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<agentxx::util::Json> handleInterrupt(
+    asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
@@ -106,14 +106,14 @@ public:
     ) override {
         if (interruptNode == "permission") {
             permissionCalls++;
-            auto parsed = agentxx::util::Json::parse(interruptArgJson);
+            auto parsed = utilxx_base::Json::parse(interruptArgJson);
             if (parsed.is_object()) {
                 if (parsed.contains("arg") && parsed["arg"].is_object()) {
                     lastTarget = parsed["arg"].value("target", std::string{});
                 }
                 if (parsed.contains("ui") && parsed["ui"].is_object()) {
                     // 描述块: 目标路径为 hint 色文本块 (权限卡片预设生成)
-                    auto blocks = parsed["ui"].value("blocks", agentxx::util::Json::array());
+                    auto blocks = parsed["ui"].value("blocks", utilxx_base::Json::array());
                     for (const auto& block : blocks) {
                         if (block.value("kind", "") == "text"
                             && block.value("color", "") == "hint") {
@@ -123,12 +123,12 @@ public:
                     }
                 }
             }
-            co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+            co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
                 {"decision", "true"},
                 {"remember", false },
             });
         }
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json::object());
     }
 };
 
@@ -160,12 +160,12 @@ public:
 std::string         g_da_sim_response_content = "Hello! I am a simulated LLM response for testing.";
 int                 g_da_sim_prompt_tokens    = 100;
 int                 g_da_sim_completion_tokens = 50;
-agentxx::util::Json g_da_sim_tool_calls        = agentxx::util::Json::array();
+utilxx_base::Json g_da_sim_tool_calls        = utilxx_base::Json::array();
 std::string         g_da_sim_reasoning_content = "";
 int                 g_da_sim_delay_ms          = 0;
-agentxx::util::Json g_da_sim_last_request      = agentxx::util::Json::object();
+utilxx_base::Json g_da_sim_last_request      = utilxx_base::Json::object();
 /// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
-std::vector<agentxx::util::Json> g_da_sim_requests;
+std::vector<utilxx_base::Json> g_da_sim_requests;
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
 int g_da_sim_request_count = 0;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
@@ -211,7 +211,7 @@ void DaSimServer::stop() {
     port                          = 0;
     g_da_sim_delay_ms             = 0;
     g_da_sim_fail_count           = 0;
-    g_da_sim_tool_calls           = agentxx::util::Json::array();
+    g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_tool_calls_remaining = -1;
 }
 
@@ -220,19 +220,19 @@ DaSimServer startDaSimServer() {
     g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
     g_da_sim_prompt_tokens     = 100;
     g_da_sim_completion_tokens = 50;
-    g_da_sim_tool_calls        = agentxx::util::Json::array();
+    g_da_sim_tool_calls        = utilxx_base::Json::array();
     g_da_sim_reasoning_content = "";
     g_da_sim_delay_ms          = 0;
-    g_da_sim_last_request      = agentxx::util::Json::object();
+    g_da_sim_last_request      = utilxx_base::Json::object();
     g_da_sim_requests.clear();
     g_da_sim_request_count        = 0;
     g_da_sim_fail_count           = 0;
     g_da_sim_tool_calls_remaining = -1;
-    agentxx::util::HttpClient::clearConnectionPool();
+    utilxx::HttpClient::clearConnectionPool();
 
     DaSimServer sim;
 
-    agentxx::util::HttpServer::Config cfg;
+    utilxx::HttpServer::Config cfg;
     cfg.address          = "127.0.0.1";
     cfg.port             = 0;
     cfg.ioThreads        = 1;
@@ -240,15 +240,15 @@ DaSimServer startDaSimServer() {
     cfg.maxConnections   = 128;
     cfg.maxRequestBody   = 1024 * 1024;
 
-    sim.svr      = std::make_unique<agentxx::util::HttpServer>(cfg);
+    sim.svr      = std::make_unique<utilxx::HttpServer>(cfg);
     auto* rawSvr = sim.svr.get();
 
     rawSvr->router().add(
         "/chat/completions",
         2,
-        std::make_shared<agentxx::util::HttpServer::Handler>(
-            [](agentxx::util::HttpServer::Request&  req,
-               agentxx::util::HttpServer::Response& resp,
+        std::make_shared<utilxx::HttpServer::Handler>(
+            [](utilxx::HttpServer::Request&  req,
+               utilxx::HttpServer::Response& resp,
                std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
 
@@ -275,7 +275,7 @@ DaSimServer startDaSimServer() {
                     }
                 }
 
-                auto j      = agentxx::util::Json::parse(req.body());
+                auto j      = utilxx_base::Json::parse(req.body());
                 bool stream = j.value("stream", false);
                 // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
                 // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
@@ -303,14 +303,14 @@ DaSimServer startDaSimServer() {
                 if (stream) {
                     std::string sseBody;
                     auto        append
-                        = [&](const agentxx::util::Json& delta, const std::string& finishReason) {
-                              auto ev       = agentxx::util::Json::object();
+                        = [&](const utilxx_base::Json& delta, const std::string& finishReason) {
+                              auto ev       = utilxx_base::Json::object();
                               ev["id"]      = "chatcmpl-test-sim";
                               ev["object"]  = "chat.completion.chunk";
                               ev["created"] = 1234567890;
                               ev["model"]   = "test-sim";
 
-                              auto choice     = agentxx::util::Json::object();
+                              auto choice     = utilxx_base::Json::object();
                               choice["index"] = 0;
                               choice["delta"] = delta;
                               if (finishReason.empty()) {
@@ -318,13 +318,13 @@ DaSimServer startDaSimServer() {
                               } else {
                                   choice["finish_reason"] = finishReason;
                               }
-                              ev["choices"] = agentxx::util::Json::array({choice});
+                              ev["choices"] = utilxx_base::Json::array({choice});
 
                               sseBody += "data: " + ev.dump() + "\n\n";
                           };
 
                     {
-                        auto d    = agentxx::util::Json::object();
+                        auto d    = utilxx_base::Json::object();
                         d["role"] = "assistant";
                         if (hasToolCalls) {
                             d["content"] = nullptr;
@@ -336,34 +336,34 @@ DaSimServer startDaSimServer() {
 
                     // 模拟 thinking 模型: 先推送 reasoning_content 增量 (TYPE_THINKING)
                     if (!g_da_sim_reasoning_content.empty()) {
-                        auto d                 = agentxx::util::Json::object();
+                        auto d                 = utilxx_base::Json::object();
                         d["reasoning_content"] = g_da_sim_reasoning_content;
                         append(d, "");
                     }
 
                     if (hasToolCalls) {
-                        auto d          = agentxx::util::Json::object();
+                        auto d          = utilxx_base::Json::object();
                         d["tool_calls"] = g_da_sim_tool_calls;
                         append(d, "");
-                        append(agentxx::util::Json::object(), "tool_calls");
+                        append(utilxx_base::Json::object(), "tool_calls");
                     } else {
                         const auto& content = respContent;
                         std::string acc;
                         for (size_t i = 0; i < content.size(); ++i) {
                             acc += content[i];
                             if (content[i] == ' ' || acc.size() >= 10 || i == content.size() - 1) {
-                                auto d       = agentxx::util::Json::object();
+                                auto d       = utilxx_base::Json::object();
                                 d["content"] = acc;
                                 append(d, "");
                                 acc.clear();
                             }
                         }
                         if (!acc.empty()) {
-                            auto d       = agentxx::util::Json::object();
+                            auto d       = utilxx_base::Json::object();
                             d["content"] = acc;
                             append(d, "");
                         }
-                        append(agentxx::util::Json::object(), "stop");
+                        append(utilxx_base::Json::object(), "stop");
                     }
 
                     sseBody += "data: [DONE]\n\n";
@@ -374,7 +374,7 @@ DaSimServer startDaSimServer() {
                     resp.body() = std::move(sseBody);
                     resp.prepare_payload();
                 } else {
-                    auto msg    = agentxx::util::Json::object();
+                    auto msg    = utilxx_base::Json::object();
                     msg["role"] = "assistant";
                     if (!g_da_sim_reasoning_content.empty()) {
                         msg["reasoning_content"] = g_da_sim_reasoning_content;
@@ -386,22 +386,22 @@ DaSimServer startDaSimServer() {
                         msg["content"] = respContent;
                     }
 
-                    auto choice             = agentxx::util::Json::object();
+                    auto choice             = utilxx_base::Json::object();
                     choice["index"]         = 0;
                     choice["message"]       = msg;
                     choice["finish_reason"] = hasToolCalls ? "tool_calls" : "stop";
 
-                    auto usage                 = agentxx::util::Json::object();
+                    auto usage                 = utilxx_base::Json::object();
                     usage["prompt_tokens"]     = g_da_sim_prompt_tokens;
                     usage["completion_tokens"] = g_da_sim_completion_tokens;
                     usage["total_tokens"] = g_da_sim_prompt_tokens + g_da_sim_completion_tokens;
 
-                    auto respBody       = agentxx::util::Json::object();
+                    auto respBody       = utilxx_base::Json::object();
                     respBody["id"]      = "chatcmpl-test-sim";
                     respBody["object"]  = "chat.completion";
                     respBody["created"] = 1234567890;
                     respBody["model"]   = "test-sim";
-                    respBody["choices"] = agentxx::util::Json::array({choice});
+                    respBody["choices"] = utilxx_base::Json::array({choice});
                     respBody["usage"]   = usage;
 
                     resp.result(http::status::ok);
@@ -414,7 +414,7 @@ DaSimServer startDaSimServer() {
                 // 第 1 次响应 (旧行为); 显式设置 remaining >= 0 时保留数组, 使"前 N 次响应
                 // 返回 tool_calls"真正生效 (否则第 2 次起数组已空, N > 1 无意义)
                 if (g_da_sim_tool_calls_remaining < 0) {
-                    g_da_sim_tool_calls = agentxx::util::Json::array();
+                    g_da_sim_tool_calls = utilxx_base::Json::array();
                 }
                 g_da_sim_reasoning_content = "";
                 co_return;
@@ -542,7 +542,7 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     auto check
         = [&](agentxx::agent::CodeAgent& agent, std::string_view path, const std::string& sessionId
           ) -> asio::awaitable<bool> {
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      std::string{path}},
             {"sessionId", sessionId        }
         };
@@ -748,7 +748,7 @@ asio::awaitable<void> test_agent_single_input() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "This is the test response content.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -772,7 +772,7 @@ asio::awaitable<void> test_agent_conversation_turn() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Hello from the simulated LLM!";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -796,13 +796,13 @@ asio::awaitable<void> test_agent_tool_calls() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "";
-    g_da_sim_tool_calls       = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls       = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_test_1"},
                             {"type", "function"},
                             {"function",
-                   agentxx::util::Json{
+                   utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -830,7 +830,7 @@ asio::awaitable<void> test_agent_multi_turn() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Response for turn ";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -857,7 +857,7 @@ asio::awaitable<void> test_agent_large_history() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Final response after long history.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -879,7 +879,7 @@ asio::awaitable<void> test_agent_nonstream() {
     cfg->model.modelName = "test-sim";
 
     g_da_sim_response_content = "Non-stream test response.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -947,7 +947,7 @@ asio::awaitable<void> test_agent_io_session_bus() {
     cfg->model.modelName      = "test-sim";
     cfg->prompt.systemPrompt  = "You are a helpful assistant.";
     g_da_sim_response_content = "Hello from IO session bus test!";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -984,7 +984,7 @@ asio::awaitable<void> test_agent_turn_system_message() {
     cfg->model.modelName      = "test-sim";
     cfg->prompt.systemPrompt  = "You are a helpful assistant.";
     g_da_sim_response_content = "System message test!";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1035,7 +1035,7 @@ asio::awaitable<void> test_agent_io_null() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Null IO test.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1057,7 +1057,7 @@ asio::awaitable<void> test_agent_session_activity_streaming() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Activity check response.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1083,13 +1083,13 @@ asio::awaitable<void> test_agent_session_activity_toolcall() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "";
-    g_da_sim_tool_calls       = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls       = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_act_1"},
                             {"type", "function"},
                             {"function",
-                   agentxx::util::Json{
+                   utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -1119,7 +1119,7 @@ asio::awaitable<void> test_agent_multi_session_io() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Multi-session response.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1157,7 +1157,7 @@ asio::awaitable<void> test_agent_reuse_session_bus() {
     cfg->model.apiKey         = "EMPTY";
     cfg->model.modelName      = "test-sim";
     g_da_sim_response_content = "Reuse session bus test.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
@@ -1203,13 +1203,13 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 
     // ---- 第一轮: llm 返回 tool_calls, tools 执行一次 ----
     g_da_sim_response_content = "";
-    g_da_sim_tool_calls       = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls       = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_retry_1"},
                             {"type", "function"},
                             {"function",
-                   agentxx::util::Json{
+                   utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -1223,7 +1223,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 
     // ---- 第二轮: llm 持续失败 (重试耗尽后应结束本轮) ----
     g_da_sim_response_content = "fallback text"; // bug 场景下第 4 次请求会成功返回此文本
-    g_da_sim_tool_calls = agentxx::util::Json::array();
+    g_da_sim_tool_calls = utilxx_base::Json::array();
     // 接下来 2 次请求返回 500: 第 1 次失败 + 1 次重试失败
     g_da_sim_fail_count = 2;
 
@@ -1272,13 +1272,13 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     g_da_sim_request_count    = 0;
     g_da_sim_fail_count       = 0;
     g_da_sim_response_content = "Final answer after tool error.";
-    g_da_sim_tool_calls       = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls       = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_intercept_1"},
                             {"type", "function"},
                             {"function",
-                   agentxx::util::Json{
+                   utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
@@ -1420,7 +1420,7 @@ asio::awaitable<void> test_agent_graph_build_fallback() {
     };
 
     g_da_sim_response_content     = "fallback graph works";
-    g_da_sim_tool_calls           = agentxx::util::Json::array();
+    g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_tool_calls_remaining = -1;
 
     BrokenGraphAgent agent(cfg);

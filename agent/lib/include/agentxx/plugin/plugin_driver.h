@@ -26,7 +26,7 @@
 #pragma once
 
 #include "agentxx/plugin/plugin_runtime.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 
 #include <atomic>
 #include <cstdint>

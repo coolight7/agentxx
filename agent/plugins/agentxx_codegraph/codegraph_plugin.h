@@ -6,6 +6,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "codegraph/core/json.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -18,6 +19,6 @@ using agentxx::plugin::pluginStrdup;
 
 class CodeGraphManager;
 
-/// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
+/// 参数读取统一经 plugin_kit.h 的 ArgReader (utilxx_base::Json 驱动),
 /// 不再手写 simdjson 解析桩 (历史 SimpleJson/jsonGet* 已删除)
 } // namespace agentxx_codegraph_plugin

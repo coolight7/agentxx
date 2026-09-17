@@ -2,8 +2,8 @@
 
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/prompt.h"
-#include "agentxx/util/lru_cache.h"
-#include "agentxx/util/router.h"
+#include "utilxx_base/lru_cache.h"
+#include "utilxx/router.h"
 #include <memory>
 #include <string>
 
@@ -23,7 +23,7 @@ namespace test {
 static void test_lru_cache() {
     // capacity 0 不应崩溃 (修复: 运行时强制最小为 1)
     {
-        agentxx::util::LruCache<int, int> c0(0);
+        utilxx_base::LruCache<int, int> c0(0);
         XX_TEST_EXPECT_EQ(c0.capacity(), 1u);
         c0.put(1, 100);
         auto v = c0.get(1);
@@ -34,7 +34,7 @@ static void test_lru_cache() {
     }
 
     // 基本 LRU 淘汰
-    agentxx::util::LruCache<int, int> c(2);
+    utilxx_base::LruCache<int, int> c(2);
     c.put(1, 10);
     c.put(2, 20);
     XX_TEST_EXPECT_EQ(c.size(), 2u);
@@ -64,7 +64,7 @@ static void test_lru_cache() {
 static void test_lru_cache_more() {
     // capacity=1: 每次 put 都淘汰旧值
     {
-        agentxx::util::LruCache<int, int> c(1);
+        utilxx_base::LruCache<int, int> c(1);
         c.put(1, 10);
         XX_TEST_EXPECT_EQ(c.size(), 1u);
         c.put(2, 20);
@@ -76,7 +76,7 @@ static void test_lru_cache_more() {
 
     // 重复 put 已存在 key: 更新值, 不增加大小, 且提升到最新
     {
-        agentxx::util::LruCache<int, int> c(2);
+        utilxx_base::LruCache<int, int> c(2);
         c.put(1, 10);
         c.put(2, 20);
         c.put(1, 100); // 更新 1
@@ -91,7 +91,7 @@ static void test_lru_cache_more() {
 
     // evict: 显式驱逐最久未用
     {
-        agentxx::util::LruCache<int, int> c(3);
+        utilxx_base::LruCache<int, int> c(3);
         XX_TEST_EXPECT_FALSE(c.evict()); // 空缓存 evict 失败
         c.put(1, 10);
         c.put(2, 20);
@@ -104,7 +104,7 @@ static void test_lru_cache_more() {
 
     // 大量元素循环 + 淘汰 (压力)
     {
-        agentxx::util::LruCache<int, int> c(64);
+        utilxx_base::LruCache<int, int> c(64);
         for (int i = 0; i < 1000; ++i) {
             c.put(i, i);
         }
@@ -117,7 +117,7 @@ static void test_lru_cache_more() {
 
     // 字符串 key
     {
-        agentxx::util::LruCache<std::string, int> c(2);
+        utilxx_base::LruCache<std::string, int> c(2);
         c.put("key1", 1);
         c.put("key2", 2);
         XX_TEST_EXPECT_EQ(c.get("key1").value(), 1);
@@ -129,7 +129,7 @@ static void test_lru_cache_more() {
 
     // 空键 / 空值
     {
-        agentxx::util::LruCache<std::string, std::string> c(2);
+        utilxx_base::LruCache<std::string, std::string> c(2);
         c.put("", "");
         XX_TEST_EXPECT_TRUE(c.get("").has_value());
         XX_TEST_EXPECT_EQ(c.get("").value(), std::string(""));
@@ -138,7 +138,7 @@ static void test_lru_cache_more() {
 
     // 重复 put 空串提升新鲜度
     {
-        agentxx::util::LruCache<std::string, int> c(2);
+        utilxx_base::LruCache<std::string, int> c(2);
         c.put("a", 1);
         c.put("b", 2);
         c.put("a", 3); // 更新

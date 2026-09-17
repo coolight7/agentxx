@@ -20,7 +20,7 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/io/tui/tui_theme.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
 #include <algorithm>
@@ -481,7 +481,7 @@ TestResult testTuiSurface() {
     {
         SurfaceFixture fx;
         fx.sharedState.mutate([](TUIRenderState& st) {
-            st.contextMessages = std::make_shared<agentxx::util::Json>(agentxx::util::Json::parse(
+            st.contextMessages = std::make_shared<utilxx_base::Json>(utilxx_base::Json::parse(
                 R"([{"role":"user","content":"你好"},{"role":"assistant","content":"在"}])"
             ));
         });
@@ -523,7 +523,7 @@ TestResult testTuiSurface() {
     // ---- 通用 Custom 弹窗: 插件 items 的 separator 项渲染为浅色区块 (无横线) ----
     {
         SurfaceFixture fx;
-        auto           items = agentxx::util::Json::parse(R"([
+        auto           items = utilxx_base::Json::parse(R"([
             {"kind": "text", "text": "第一项", "role": "normal"},
             {"kind": "separator"},
             {"kind": "badge", "text": "状态"}

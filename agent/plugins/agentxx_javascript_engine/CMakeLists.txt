@@ -21,10 +21,10 @@ if (NOT QUICKJS_LIBRARY OR NOT QUICKJS_INCLUDE_DIR)
     "or pass -DAGENTXX_INSTALL_DIR=<path>")
 endif()
 
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_base_static)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 
 if (_AGENTXX_ADD_AS_BUILTIN)
@@ -45,9 +45,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "${AGENTXX_LIB_INCLUDE_DIR}"
     "${QUICKJS_INCLUDE_DIR}"
   )
-  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 复用 cxx_utilxx_base_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -82,7 +82,7 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${QUICKJS_INCLUDE_DIR}"
 )
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
   "${QUICKJS_LIBRARY}"
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES

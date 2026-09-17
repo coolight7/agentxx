@@ -11,6 +11,9 @@
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx/http_server.h"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <expected>
 #include <memory>
@@ -51,7 +54,7 @@ void pumpIoUntil(std::shared_ptr<asio::io_context> io, const std::atomic<bool>& 
     while (!done.load()) {
         asio::steady_timer t(*io);
         t.expires_after(std::chrono::milliseconds(5));
-        t.async_wait([](const neograph_asio_error_code&) {});
+        t.async_wait([](const utilxx_base::AsioErrorCode&) {});
         io->run();
     }
     // 排空完成信号之后遗留的发布 (progress/done 事件等)
@@ -105,7 +108,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
     auto cfg     = makeSimConfig(baseUrl);
 
     g_da_sim_response_content = "Host spawn result";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms         = 0;
 
     auto                              io = std::make_shared<asio::io_context>();
@@ -216,9 +219,9 @@ asio::awaitable<void> test_host_spawn_same_context() {
     cfg->subagentModel                           = makeModel("sub-model");
 
     g_da_sim_response_content = "same-context result";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms         = 0;
-    g_da_sim_last_request     = agentxx::util::Json::object();
+    g_da_sim_last_request     = utilxx_base::Json::object();
     g_da_sim_requests.clear();
 
     auto                              io = std::make_shared<asio::io_context>();
@@ -230,7 +233,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
     std::atomic<bool>                                              finished{false};
 
     // 透传的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
-    const agentxx::util::Json prefix = agentxx::util::Json::array({
+    const utilxx_base::Json prefix = utilxx_base::Json::array({
         {{"role", "system"},    {"content", "PARENT SYSTEM PROMPT"}},
         {{"role", "user"},      {"content", "user old msg"}        },
         {{"role", "assistant"}, {"content", "assistant old reply"} },
@@ -395,7 +398,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
     auto cfg     = makeSimConfig(baseUrl);
 
     g_da_sim_response_content = "tool policy result";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms         = 0;
     g_da_sim_requests.clear();
 
@@ -413,7 +416,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             host->attachRoot(agent);
 
             // 顺序派生 4 次 (不同工具策略), 请求体按到达顺序记录
-            auto spawnOne = [&](std::optional<agentxx::util::Json> tools,
+            auto spawnOne = [&](std::optional<utilxx_base::Json> tools,
                                 std::string                        tag) -> asio::awaitable<void> {
                 // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
                 agentxx::events::ReqSubagentBatch req{
@@ -451,11 +454,11 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             };
 
             // ① 无工具
-            co_await spawnOne(agentxx::util::Json::array(), "none");
+            co_await spawnOne(utilxx_base::Json::array(), "none");
             // ② 自定义白名单
-            co_await spawnOne(agentxx::util::Json::array({"agentxx_share_store"}), "custom");
+            co_await spawnOne(utilxx_base::Json::array({"agentxx_share_store"}), "custom");
             // ③ 全量继承父工具
-            co_await spawnOne(agentxx::util::Json::array({"*"}), "inherit");
+            co_await spawnOne(utilxx_base::Json::array({"*"}), "inherit");
             // ④ 缺省 (子代理默认全量)
             co_await spawnOne(std::nullopt, "default");
             finished = true;
@@ -476,7 +479,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
     }
     XX_TEST_EXPECT_FALSE(parentToolNames.empty());
 
-    auto toolsOf = [](const agentxx::util::Json& req) -> std::vector<std::string> {
+    auto toolsOf = [](const utilxx_base::Json& req) -> std::vector<std::string> {
         std::vector<std::string> names;
         if (req.contains("tools") && req["tools"].is_array()) {
             for (const auto& t : req["tools"]) {
@@ -533,7 +536,7 @@ asio::awaitable<void> test_subagent_summarization_switch() {
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
     g_da_sim_response_content = "ok";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     // ① enableSummarization = false → 无 summarization 服务
     {
@@ -572,7 +575,7 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
     auto cfg     = makeSimConfig(baseUrl);
 
     g_da_sim_response_content = "should not run";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
 
     auto                              io = std::make_shared<asio::io_context>();
     agentxx::agent::AgentHost::Config hostCfg;
@@ -629,7 +632,7 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
     auto cfg     = makeSimConfig(baseUrl);
 
     g_da_sim_response_content = "concurrent result";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms = 300; // 拉长首个子代理运行窗口, 让第二个请求并发到达
 
     auto                              io = std::make_shared<asio::io_context>();
@@ -713,13 +716,13 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
     // 第 1 次请求 (子代理 A) 返回 subagent tool_calls 委派孙 B, 后续 (孙 B 与 A 归约)
     // 返回纯文本
     g_da_sim_tool_calls_remaining = 1;
-    g_da_sim_tool_calls           = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls           = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_nested_1"},
                             {"type", "function"},
                             {"function",
-                       agentxx::util::Json{
+                       utilxx_base::Json{
                            {"name", "agentxx_subagent"},
                            {"arguments", R"({"tasks":[{"subagent":"subagent_task","message":"leaf task"}]})"},
              }},
@@ -798,7 +801,7 @@ asio::awaitable<void> test_host_spawn_batch() {
     auto cfg     = makeSimConfig(baseUrl);
 
     g_da_sim_response_content = "batch result";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms         = 0;
 
     auto                              io = std::make_shared<asio::io_context>();
@@ -943,7 +946,7 @@ asio::awaitable<void> test_host_remote_a2a() {
     auto cfg     = makeSimConfig(baseUrl);
 
     g_da_sim_response_content = "Remote agent result";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms         = 0;
 
     auto io = std::make_shared<asio::io_context>();
@@ -1005,7 +1008,7 @@ asio::awaitable<void> test_host_remote_a2a() {
     );
     pumpIoUntil(io, finished);
     // 停止 A2A 服务; 服务器线程分离不 join:
-    // util::HttpServer 在已执行过 agent 任务的场景存在 worker 线程回收边界问题
+    // utilxx::HttpServer 在已执行过 agent 任务的场景存在 worker 线程回收边界问题
     // (ioCtx.stop 后仍有 handler 未退出), 不影响 A2A 转发功能验证
     if (a2aServer) {
         asio::co_spawn(

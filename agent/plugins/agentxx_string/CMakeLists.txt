@@ -1,5 +1,5 @@
 # agentxx_string —— 字符串处理工具插件 (html2markdown / regexp)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util + html2md
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_static + html2md
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx; 依赖均为 libagentxx 既有链接
 set(PLUGIN_NAME agentxx_string)
@@ -29,14 +29,14 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_string_plugin.h / string_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView) html2md
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_static (Json/JsonView) html2md
   )
-  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 复用 cxx_utilxx_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径/依赖 include: XXRegex 实现于 util regex.cpp)
   # - html2md 以裸库名追加进 libagentxx 收集通道 (内置分支早于 lib 的
   #   find_package(html2md), imported target 尚未创建; 裸名经 lib 自身的
   #   link_directories(AGENTXX_INSTALL_DIR/lib) 解析, 与 _AGENTXX_LINK_LIBS 一致)
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_static)
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
     "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" html2md PARENT_SCOPE)
   set_target_properties(${_target} PROPERTIES
@@ -70,41 +70,31 @@ add_library(${PLUGIN_NAME} SHARED
 # 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
 # target_include_directories 声明头路径 / target_link_directories 提供裸库名
 # 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
-# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
+# 复用 cxx_utilxx_static 工具库 (插件静态链接, 与宿主副本符号互不冲突;
 # XXRegex 实现经静态裁剪自动收录)
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_static)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx REQUIRED)
 endif()
 find_package(html2md REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_string_plugin.h / string_impl.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView) html2md
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_static (Json/JsonView) html2md
 )
 
 # 裸库名依赖解析目录: hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
+# AGENTXX_INSTALL_DIR/lib 经 cxx_utilxx_static PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_static
   html2md
 )
-if (AGENTXX_ENABLE_HYPERSCAN)
-  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
-  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # io_uring 同上由总控统一定义 (util 的 asio 重模块在 -DASIO_HAS_IO_URING
-  # 下引用其符号)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
-endif()
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26

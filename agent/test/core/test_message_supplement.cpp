@@ -8,7 +8,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/hash.h"
+#include "utilxx_base/hash.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/deferred.hpp"
@@ -82,7 +82,7 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<agentxx::util::Json> handleInterrupt(
+    asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view sessionId,
         std::string_view /*interruptNode*/,
         std::string_view /*interruptValue*/,
@@ -91,14 +91,14 @@ public:
         ++interruptCalls;
         auto ctx = agentContext.lock();
         if (!ctx || !ctx->middlewareHandleContext) {
-            co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
+            co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json::object());
         }
         auto& graphData = ctx->middlewareHandleContext;
 
         // 1) 中断时刻自动补充的 [Interrupt] tool 消息:
         //    - 触发中断的 tool 结果以 [Interrupt] 占位 (role=tool), 保证
         //      assistant tool_call 有对应 tool 回复, 角色顺序完整
-        auto cache = graphData->getGraphDataItemValue<agentxx::util::Json>(
+        auto cache = graphData->getGraphDataItemValue<utilxx_base::Json>(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
         );
@@ -116,7 +116,7 @@ public:
         // 2) 中断时刻上下文 (wrap_handle 保存的 tempMessages):
         //    角色顺序应为 system -> user -> assistant(tool_calls)
         //    (modelcall 节点会在 state 头部补充 system 消息)
-        auto temp = graphData->getGraphDataItemValue<agentxx::util::Json>(
+        auto temp = graphData->getGraphDataItemValue<utilxx_base::Json>(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
         );
@@ -129,7 +129,7 @@ public:
                   && temp[2]["tool_calls"][0].value("id", std::string{}) == "call_it_1";
         }
 
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
             {"handled", "handled"}
         });
     }
@@ -151,7 +151,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
         auto agentCtxPtr = agentContext.lock();
         if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
             co_return R"({"error":"AgentContext not available"})";
@@ -167,7 +167,7 @@ public:
             [&]() {
                 return agentxx::middleware::InterruptHandleArg{
                     .name     = agentxx::middleware::MiddlewareContext::interruptHandleName_default,
-                    .arg      = agentxx::util::Json{{"question", "approve?"}},
+                    .arg      = utilxx_base::Json{{"question", "approve?"}},
                     .resultId = resultId,
                 };
             },
@@ -216,7 +216,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
         co_return "fast done";
     }
 };
@@ -237,7 +237,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
         started_->store(true, std::memory_order_release);
         // 模拟耗时异步 IO: 最长等待 5s (取消时被取消语义中断, 未完成
         // → 自动补充 [User canceled]; 5s 避免全量测试高负载下 2s 偶发自然完成)
@@ -289,13 +289,13 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
     g_da_sim_response_content = "Final answer after interrupt.";
     g_da_sim_delay_ms         = 0;
     // 首次 LLM 调用返回 tool_call; 响应后 sim 自动清空, 第二次调用返回 content
-    g_da_sim_tool_calls = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_it_1"},
                             {"type", "function"},
                             {"function",
-             agentxx::util::Json{
+             utilxx_base::Json{
                  {"name", "test_interrupt"},
                  {"arguments", "{}"},
              }},
@@ -379,7 +379,7 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
 ///  tool(call_slow_1=[User canceled] AutoInserted), tool(call_fast_1=[User canceled] AutoInserted)]
 /// - 串行执行: slow 先执行, 取消中断 slow 后 fast 不再执行
 /// - 未完成的 tool 全部自动补充 [User canceled] (按声明顺序), 保证角色顺序完整
-static bool checkCanceledMessageSequence(const agentxx::util::Json& msgs) {
+static bool checkCanceledMessageSequence(const utilxx_base::Json& msgs) {
     if (!msgs.is_array() || msgs.size() != 5) {
         return false;
     }
@@ -460,23 +460,23 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     g_da_sim_response_content = "";
     g_da_sim_delay_ms         = 0;
     // LLM 返回两个 toolcall: 先慢速 tool, 后快速 tool
-    g_da_sim_tool_calls = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_slow_1"},
                             {"type", "function"},
                             {"function",
-             agentxx::util::Json{
+             utilxx_base::Json{
                  {"name", "test_slow"},
                  {"arguments", "{}"},
              }},
                             },
-        agentxx::util::Json{
+        utilxx_base::Json{
                             {"index", 1},
                             {"id", "call_fast_1"},
                             {"type", "function"},
                             {"function",
-             agentxx::util::Json{
+             utilxx_base::Json{
                  {"name", "test_fast"},
                  {"arguments", "{}"},
              }},
@@ -539,13 +539,13 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         auto                ex2 = co_await asio::this_coro::executor;
         asio::steady_timer  poll(ex2);
         bool                ok = false;
-        agentxx::util::Json im;
+        utilxx_base::Json im;
         const auto          deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
             auto sess = agent.agentContext->sessions->get("cancel_msg_test");
-            im        = sess ? sess->llmMessages : agentxx::util::Json{};
+            im        = sess ? sess->llmMessages : utilxx_base::Json{};
             if (checkCanceledMessageSequence(im)) {
                 ok = true;
                 break;
@@ -556,7 +556,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         XX_TEST_EXPECT_TRUE(ok);
     }
 
-    g_da_sim_tool_calls = agentxx::util::Json::array();
+    g_da_sim_tool_calls = utilxx_base::Json::array();
     sim.stop();
     co_return;
 }
@@ -961,8 +961,8 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         = "You are a helpful coding assistant v2."; // 长度相同 (39 chars)，但内容不同
     XX_TEST_EXPECT_EQ(prompt1.size(), prompt2.size());
 
-    const auto hash1 = agentxx::util::hash::fnv1a64(prompt1);
-    const auto hash2 = agentxx::util::hash::fnv1a64(prompt2);
+    const auto hash1 = utilxx_base::hash::fnv1a64(prompt1);
+    const auto hash2 = utilxx_base::hash::fnv1a64(prompt2);
     XX_TEST_EXPECT_TRUE(hash1 != hash2);
 
     // 1) 初始执行 repairMessages: 记录 system_prompt_hash
@@ -990,7 +990,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
 
         node.repairMessages(in);
 
-        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
             "test_sys_hash_session",
             agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
         );
@@ -1024,7 +1024,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
 
         node.repairMessages(in);
 
-        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
             "test_sys_hash_session",
             agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
         );
@@ -1056,7 +1056,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
 
         node.repairMessages(in);
 
-        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+        auto checkInfo = ctx->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
             "test_sys_hash_session",
             agentxx::middleware::MiddlewareContext::graphDataKey_messageCheckInfo
         );
@@ -1094,7 +1094,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
         execCount_->fetch_add(1, std::memory_order_relaxed);
         co_return "repeat tool executed";
     }
@@ -1124,7 +1124,7 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<agentxx::util::Json> handleInterrupt(
+    asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view /*interruptNode*/,
         std::string_view /*interruptValue*/,
@@ -1136,7 +1136,7 @@ public:
         }
         // 用户点"允许" (确认卡片控件取值 "true"); 走与真实客户端一致的
         // {"values": {...}} 结果形态 (AgentIOBase::registerOnBus 取 values 写回)
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
             {"allow", "true"}
         });
     }
@@ -1181,13 +1181,13 @@ asio::awaitable<void> test_repeat_call_check_allow() {
     g_da_sim_response_content = "Final answer after repeat check.";
     // 前两次 LLM 响应返回同一个 tool_call (触发重复检查), 之后返回纯文本
     g_da_sim_tool_calls_remaining = 2;
-    g_da_sim_tool_calls           = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls           = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_repeat_1"},
                             {"type", "function"},
                             {"function",
-                       agentxx::util::Json{
+                       utilxx_base::Json{
                            {"name", "test_repeat"},
                            {"arguments", "{}"},
              }},

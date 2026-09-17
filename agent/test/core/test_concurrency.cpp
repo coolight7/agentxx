@@ -3,9 +3,10 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/mcp_server.h"
-#include "agentxx/util/async_mutex.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/async_mutex.h"
+#include "utilxx/async_offload.h"
+#include "neograph/graph/cancel.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -36,16 +37,18 @@ namespace {
 // LogDispatcher: 无锁 copy-on-write 热路径 (多线程并发 dispatch + 注册/注销)
 // ---------------------------------------------------------------------------
 
-struct CountingSink : public agentxx::util::LogSink {
+struct CountingSink : public utilxx_base::LogSink {
     std::atomic<size_t> count{0};
 
-    void onLog(const agentxx::util::LogEntry&) override {
+    void onLog(const utilxx_base::LogEntry&) override {
         count.fetch_add(1, std::memory_order_relaxed);
     }
 };
 
 void testLogDispatcherConcurrency() {
-    using namespace agentxx::util;
+    // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+    using namespace utilxx_base;
+    using namespace utilxx;
     auto& disp = LogDispatcher::instance();
 
     constexpr int kSinks     = 3;
@@ -211,7 +214,9 @@ void testMcpServerRegistrationConcurrency() {
 // ---------------------------------------------------------------------------
 
 void testAsyncMutex() {
-    using namespace agentxx::util;
+    // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+    using namespace utilxx_base;
+    using namespace utilxx;
 
     asio::io_context ioc;
     AsyncMutex       mtx(asio::any_io_executor(ioc.get_executor()));
@@ -260,7 +265,9 @@ void testAsyncMutex() {
 // 回归: Guard 移动赋值须先归还已持有的令牌, 否则令牌泄漏导致该锁永久死锁。
 // (修复前 operator=(Guard&&) 直接覆盖 ch_, 未 try_send 归还旧令牌)
 void testAsyncMutexGuardMoveAssign() {
-    using namespace agentxx::util;
+    // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+    using namespace utilxx_base;
+    using namespace utilxx;
 
     asio::io_context ioc;
     auto             ex = asio::any_io_executor(ioc.get_executor());
@@ -323,7 +330,9 @@ void testAsyncMutexGuardMoveAssign() {
 // ---------------------------------------------------------------------------
 
 void testAsyncOffload() {
-    using namespace agentxx::util;
+    // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+    using namespace utilxx_base;
+    using namespace utilxx;
 
     // 1. offloadAsync: 卸载到线程池执行并返回结果
     {
@@ -334,7 +343,7 @@ void testAsyncOffload() {
         asio::co_spawn(
             ioc,
             [&]() -> asio::awaitable<void> {
-                auto v = co_await agentxx::util::offloadAsync<int>(
+                auto v = co_await utilxx::offloadAsync<int>(
                     pool,
                     [&]() -> asio::awaitable<int> {
                         ranOnWorker.store(true, std::memory_order_release);
@@ -357,7 +366,7 @@ void testAsyncOffload() {
         asio::co_spawn(
             ioc,
             [&]() -> asio::awaitable<void> {
-                auto v = co_await agentxx::util::offloadCancellableAsync<int>(
+                auto v = co_await utilxx::offloadCancellableAsync<int>(
                     pool,
                     [](std::atomic<bool>&) -> asio::awaitable<int> {
                         co_return 7;
@@ -383,7 +392,7 @@ void testAsyncOffload() {
             [&]() -> asio::awaitable<void> {
                 bool threw = false;
                 try {
-                    co_await agentxx::util::offloadCancellableAsync<int>(
+                    co_await utilxx::offloadCancellableAsync<int>(
                         pool,
                         flag,
                         [&](std::atomic<bool>& cancel_flag) -> asio::awaitable<int> {

@@ -20,6 +20,7 @@
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 
 #include <chrono>
 #include <cstring>
@@ -87,17 +88,17 @@ std::string normalizeIntent(std::string_view s) {
 }
 
 /// 从 GraphState::serialize() 结果读取 messages channel 值 (json 数组)
-agentxx::util::Json stateMessages(const agentxx::util::Json& state) {
+utilxx_base::Json stateMessages(const utilxx_base::Json& state) {
     if (state.is_object() && state.contains("channels") && state["channels"].is_object()
         && state["channels"].contains("messages") && state["channels"]["messages"].is_object()
         && state["channels"]["messages"].contains("value")) {
         return state["channels"]["messages"]["value"];
     }
-    return agentxx::util::Json::array();
+    return utilxx_base::Json::array();
 }
 
 /// 获取最后一条 assistant 消息内容 (无则返回空)
-std::string lastAssistantContent(const agentxx::util::Json& messages) {
+std::string lastAssistantContent(const utilxx_base::Json& messages) {
     if (!messages.is_array()) {
         return {};
     }
@@ -116,7 +117,7 @@ std::string lastAssistantContent(const agentxx::util::Json& messages) {
 }
 
 /// 最后一条 assistant 消息是否含 tool_calls
-bool lastAssistantHasToolCalls(const agentxx::util::Json& messages) {
+bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
     if (!messages.is_array()) {
         return false;
     }
@@ -143,14 +144,14 @@ bool lastAssistantHasToolCalls(const agentxx::util::Json& messages) {
 std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
     (void)ctx;
     const std::string_view config_json = req.config();
-    auto                   state       = agentxx::util::Json::parse(req.state());
+    auto                   state       = utilxx_base::Json::parse(req.state());
     auto                   messages    = stateMessages(state);
 
     // 解析 config: intents 枚举 + fallback
     std::vector<std::string> intents;
     std::string              fallback = "normal";
     if (!config_json.empty()) {
-        auto cfg = agentxx::util::Json::parse(config_json);
+        auto cfg = utilxx_base::Json::parse(config_json);
         if (cfg.is_object()) {
             if (cfg.contains("intents") && cfg["intents"].is_array()) {
                 for (const auto& i : cfg["intents"]) {
@@ -189,7 +190,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
         // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
         if (route != fallback && messages.is_array() && !messages.empty()) {
             auto origin          = stateMessages(state);
-            messages             = agentxx::util::Json::array();
+            messages             = utilxx_base::Json::array();
             const size_t n       = origin.size();
             bool         removed = false;
             for (size_t i = 0; i < n; ++i) {
@@ -205,7 +206,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
                 // overwrite messages (去掉意图消息)
                 const std::string payload = fmt::format(
                     R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})",
-                    agentxx::util::Json(route).dump(),
+                    utilxx_base::Json(route).dump(),
                     messages.dump()
                 );
                 return payload;
@@ -214,7 +215,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
         // 未命中/未移除: 仅写路由标记
         const std::string payload = fmt::format(
             R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})",
-            agentxx::util::Json(route).dump()
+            utilxx_base::Json(route).dump()
         );
         return payload;
     }
@@ -223,7 +224,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
     route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
     const std::string payload = fmt::format(
         R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
-        agentxx::util::Json(route).dump()
+        utilxx_base::Json(route).dump()
     );
     return payload;
 }
@@ -250,13 +251,13 @@ std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 
     const std::string text = fmt::format("当前系统日期时间: {}", buf);
     // assistant 消息 (role/content 字段, 与图消息 JSON 字段一致)
-    agentxx::util::Json msg = agentxx::util::Json::object();
+    utilxx_base::Json msg = utilxx_base::Json::object();
     msg["role"]             = "assistant";
     msg["content"]          = text;
     msg["startTimeMs"]      = nowMs;
     msg["durationMs"]       = int64_t{0};
 
-    agentxx::util::Json msgs = agentxx::util::Json::array();
+    utilxx_base::Json msgs = utilxx_base::Json::array();
     msgs.push_back(std::move(msg));
 
     return fmt::format(R"({{"writes":[{{"channel":"messages","value":{}}}]}})", msgs.dump());
@@ -288,9 +289,9 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     std::string jsonStr(graphJson.data, static_cast<size_t>(graphJson.size));
     agentxx::plugin::PluginString::free(ctx.host, &graphJson);
 
-    agentxx::util::Json def;
+    utilxx_base::Json def;
     try {
-        def = agentxx::util::Json::parse(jsonStr);
+        def = utilxx_base::Json::parse(jsonStr);
     } catch (const std::exception& e) {
         errOut = fmt::format("default graph JSON parse failed: {}", e.what());
         return -1;
@@ -310,63 +311,63 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     }
 
     // ---- 组装新图 ----
-    agentxx::util::Json graph = agentxx::util::Json::object();
+    utilxx_base::Json graph = utilxx_base::Json::object();
     graph["name"]             = "example_graph_node.intent";
 
     // channels: 原 channels + 路由 channel
-    agentxx::util::Json channels = agentxx::util::Json::object();
+    utilxx_base::Json channels = utilxx_base::Json::object();
     if (def.contains("channels") && def["channels"].is_object()) {
         channels = def["channels"];
     }
     if (!channels.contains("__route__")) {
-        channels["__route__"] = agentxx::util::Json{
+        channels["__route__"] = utilxx_base::Json{
             {"reducer", "overwrite"}
         };
     }
     if (!channels.contains("__intent_checked")) {
-        channels["__intent_checked"] = agentxx::util::Json{
+        channels["__intent_checked"] = utilxx_base::Json{
             {"reducer", "overwrite"}
         };
     }
     graph["channels"] = std::move(channels);
 
     // nodes: 原 4 节点 + intent_router + datetime_node
-    agentxx::util::Json nodes = agentxx::util::Json::object();
+    utilxx_base::Json nodes = utilxx_base::Json::object();
     if (def.contains("nodes") && def["nodes"].is_object()) {
         nodes = def["nodes"];
     }
-    nodes["intent_router"] = agentxx::util::Json{
+    nodes["intent_router"] = utilxx_base::Json{
         {"type",     "example_intent_router"},
         {"intents",
-         agentxx::util::Json::array({agentxx::util::Json("datetime"), agentxx::util::Json("normal")}
+         utilxx_base::Json::array({utilxx_base::Json("datetime"), utilxx_base::Json("normal")}
          )                                  },
         {"fallback", "normal"               },
     };
-    nodes["datetime_node"] = agentxx::util::Json{
+    nodes["datetime_node"] = utilxx_base::Json{
         {"type", "example_datetime"},
     };
     graph["nodes"] = std::move(nodes);
 
     // edges: 意图路由流程
-    agentxx::util::Json edges = agentxx::util::Json::array();
-    edges.push_back(agentxx::util::Json{
+    utilxx_base::Json edges = utilxx_base::Json::array();
+    edges.push_back(utilxx_base::Json{
         {"from", "__start__"  },
         {"to",   "agent_start"}
     });
-    edges.push_back(agentxx::util::Json{
+    edges.push_back(utilxx_base::Json{
         {"from", "agent_start"},
         {"to",   "llm"        }
     });
-    edges.push_back(agentxx::util::Json{
+    edges.push_back(utilxx_base::Json{
         {"from", "llm"          },
         {"to",   "intent_router"}
     });
-    edges.push_back(agentxx::util::Json{
+    edges.push_back(utilxx_base::Json{
         {"from",      "intent_router"},
         {"type",      "conditional"  },
         {"condition", "route_channel"},
         {"routes",
-         agentxx::util::Json{
+         utilxx_base::Json{
              {"datetime", "datetime_node"},
              {"normal", "llm"},
              {"tools", "tools"},
@@ -374,15 +375,15 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
              {"default", "agent_end"},
          }                           },
     });
-    edges.push_back(agentxx::util::Json{
+    edges.push_back(utilxx_base::Json{
         {"from", "tools"},
         {"to",   "llm"  }
     });
-    edges.push_back(agentxx::util::Json{
+    edges.push_back(utilxx_base::Json{
         {"from", "datetime_node"},
         {"to",   "__end__"      }
     });
-    edges.push_back(agentxx::util::Json{
+    edges.push_back(utilxx_base::Json{
         {"from", "agent_end"},
         {"to",   "__end__"  }
     });

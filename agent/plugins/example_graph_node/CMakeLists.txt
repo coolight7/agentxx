@@ -47,11 +47,11 @@ add_library(${PLUGIN_NAME} SHARED
   example_graph_node.cpp
 )
 
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_base_static)
   # 经 libagentxx 嵌套构建 (add_subdirectory ../plugins) 时 util 目标已存在,
   # 此时 install 目录尚未生成 config, 跳过导入直接复用构建树目标;
   # 独立构建本插件时再经安装 config 导入
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
@@ -60,7 +60,7 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   ${_BOOST_INCLUDES}
 )
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

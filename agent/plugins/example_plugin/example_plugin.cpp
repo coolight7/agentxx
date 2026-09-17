@@ -20,6 +20,7 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 
 #include <chrono>
 #include <memory>
@@ -177,7 +178,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
         ) -> agentxx::plugin::Task<std::string> {
             int ms = 200;
             try {
-                auto j = agentxx::util::Json::parse(args);
+                auto j = utilxx_base::Json::parse(args);
                 if (j.contains("durationMs") && j["durationMs"].is_number()) {
                     ms = j["durationMs"].get<int>();
                 }
@@ -205,7 +206,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
         ) -> agentxx::plugin::Task<std::string> {
             int ticks = 1;
             try {
-                auto j = agentxx::util::Json::parse(args);
+                auto j = utilxx_base::Json::parse(args);
                 if (j.contains("ticks") && j["ticks"].is_number()) {
                     ticks = j["ticks"].get<int>();
                 }
@@ -264,7 +265,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
             int ticks      = 3;
             int intervalMs = 20;
             try {
-                auto j = agentxx::util::Json::parse(args);
+                auto j = utilxx_base::Json::parse(args);
                 if (j.contains("ticks") && j["ticks"].is_number()) {
                     ticks = j["ticks"].get<int>();
                 }

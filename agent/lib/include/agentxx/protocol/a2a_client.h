@@ -6,15 +6,15 @@
 #include <string>
 #include <vector>
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 
-#include "agentxx/util/http_client.h"
+#include "utilxx/http_client.h"
 
 namespace agentxx {
 namespace protocol {
 
-using json = agentxx::util::Json;
+using json = utilxx_base::Json;
 
 /// A2A (Agent-to-Agent) 客户端
 ///

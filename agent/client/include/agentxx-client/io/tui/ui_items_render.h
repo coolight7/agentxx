@@ -15,7 +15,7 @@
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/middlewares/interrupt_ui.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "ftxui/dom/elements.hpp"
 #include "markdown/dom_builder.hpp"
 #include <memory>
@@ -106,7 +106,7 @@ struct UiRenderResult {
 /// 插件装饰 item (JSON) → 归一化项
 /// - 支持 kind: text / button / action / separator / diagram / diff / markdown
 /// - 非对象 / 未知 kind 返回 nullopt (调用方忽略, 向前兼容)
-std::optional<UiItem> uiItemFromPluginJson(const agentxx::util::Json& item);
+std::optional<UiItem> uiItemFromPluginJson(const utilxx_base::Json& item);
 
 /// 中断内容块 → 归一化项
 /// - 支持 kind: text / markdown / diff / separator / gap

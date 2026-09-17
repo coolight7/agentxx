@@ -12,8 +12,8 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -43,7 +43,7 @@ namespace agentxx::client {
 // ---------------------------------------------------------------------------
 // TUI 共享工具函数
 // (时长/时间戳格式化已迁移到
-// [string_util.h](/agent/lib/include/agentxx/util/string_util.h), 供 agent 端构造
+// [string_util.h](/agent/third_party/cxx_utilxx_base/include/utilxx_base/string_util.h), 供 agent 端构造
 //  系统提示文本复用, 此处仅保留 UI 专用函数)
 // ---------------------------------------------------------------------------
 
@@ -64,7 +64,7 @@ inline std::string oneLinePreview(std::string_view s, size_t max = 60) {
         return {};
     }
     // 内容预算: 预留省略号 3 列, 保证截断后总宽度不超过 max
-    const auto idx = agentxx::util::findIndexByUtf8Length(line, max);
+    const auto idx = utilxx_base::findIndexByUtf8Length(line, max);
     if (idx > 0 && idx < line.size()) {
         line.resize(idx);
         line += "...";
@@ -143,11 +143,11 @@ inline std::string tailLinePreview(std::string_view s, size_t max = 60) {
 }
 
 /// TUI 日志接收器
-class TUILogSink : public agentxx::util::LogSink {
+class TUILogSink : public utilxx_base::LogSink {
 public:
 
     struct Line {
-        agentxx::util::LogLevel level;
+        utilxx_base::LogLevel level;
         std::string             text;
     };
 
@@ -164,7 +164,7 @@ public:
 
 protected:
 
-    void onLog(const agentxx::util::LogEntry& entry) override;
+    void onLog(const utilxx_base::LogEntry& entry) override;
 
 private:
 
@@ -201,7 +201,7 @@ class TUIClientAgentIO : public agentxx::agent::AgentIOBase,
 public:
 
     using LineChannel
-        = asio::experimental::concurrent_channel<void(neograph_asio_error_code, std::string)>;
+        = asio::experimental::concurrent_channel<void(utilxx_base::AsioErrorCode, std::string)>;
 
     static constexpr std::string_view kAgentxxVersion   = agentxx::kVersion;
     static constexpr std::string_view kAgentxxBuildDate = agentxx::kBuildDate;
@@ -367,7 +367,7 @@ public:
     void refreshLanguage();
 
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<agentxx::util::Json>        handleInterrupt(
+    asio::awaitable<utilxx_base::Json>        handleInterrupt(
                std::string_view sessionId,
                std::string_view interruptNode,
                std::string_view interruptValue,

@@ -2,6 +2,7 @@
 
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "utilxx_base/json.h"
 #include <memory>
 #include <string>
 
@@ -53,7 +54,7 @@ public:
     // ---- 状态栏项 ----
     void onStatusItemRegistered(
         const std::string& id,
-        const agentxx::util::Json& /*props*/,
+        const utilxx_base::Json& /*props*/,
         int /*align*/,
         int /*order*/
     ) override {
@@ -63,7 +64,7 @@ public:
         }
     }
 
-    void onStatusItemUpdated(const std::string& /*id*/, const agentxx::util::Json& /*props*/)
+    void onStatusItemUpdated(const std::string& /*id*/, const utilxx_base::Json& /*props*/)
         override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();
@@ -77,7 +78,7 @@ public:
     }
 
     // ---- 侧边栏面板 ----
-    void onPanelRegistered(const std::string& id, const agentxx::util::Json& props) override {
+    void onPanelRegistered(const std::string& id, const utilxx_base::Json& props) override {
         auto tui = tui_.lock();
         if (!tui) {
             return;
@@ -90,7 +91,7 @@ public:
         });
     }
 
-    void onPanelUpdated(const std::string& /*id*/, const agentxx::util::Json& /*items*/) override {
+    void onPanelUpdated(const std::string& /*id*/, const utilxx_base::Json& /*items*/) override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();
         }
@@ -109,7 +110,7 @@ public:
     // ---- Info 栏段落 (渲染进内置 Info tab; 每帧从注册表快照读取) ----
     void onInfoSectionRegistered(
         const std::string& /*id*/,
-        const agentxx::util::Json& /*props*/
+        const utilxx_base::Json& /*props*/
     ) override {
         // 触发重绘即可, Info tab 渲染时从注册表快照读取段落
         if (auto tui = tui_.lock()) {
@@ -119,7 +120,7 @@ public:
 
     void onInfoSectionUpdated(
         const std::string& /*id*/,
-        const agentxx::util::Json& /*items*/
+        const utilxx_base::Json& /*items*/
     ) override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();

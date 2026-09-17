@@ -2,8 +2,8 @@
 
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/text_layout.h"
-#include "agentxx/util/diff_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx/diff_util.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include "ftxui/screen/terminal.hpp"
 #include "markdown/state_diagram.hpp"
@@ -31,7 +31,7 @@ int contentWidth(const UiRenderCtx& ctx, int itemIndent) {
 
 /// diff 块渲染行数 (与 renderPluginDiff 的 side-by-side/统一两种形态一致)
 size_t diffBlockLines(const UiItem& item, const UiRenderCtx& ctx) {
-    const auto   diff       = agentxx::util::computeLineDiff(item.oldStr, item.newStr);
+    const auto   diff       = utilxx::computeLineDiff(item.oldStr, item.newStr);
     const int    sw         = (ctx.width > 0) ? ctx.width : Terminal::Size().dimx;
     const bool   sideBySide = sw >= 100;
     const size_t pathLines  = item.path.empty() ? 0 : 1;
@@ -109,7 +109,7 @@ void pushRow(
 
 } // namespace
 
-std::optional<UiItem> uiItemFromPluginJson(const agentxx::util::Json& item) {
+std::optional<UiItem> uiItemFromPluginJson(const utilxx_base::Json& item) {
     if (!item.is_object()) {
         return std::nullopt;
     }

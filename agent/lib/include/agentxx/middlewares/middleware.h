@@ -2,8 +2,8 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/interrupt_ui.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
@@ -108,7 +108,7 @@ public:
 
     virtual ~BaseMiddlewareHandleInterface();
 
-    static agentxx::util::Json getLastMessageJson(const neograph::graph::NodeInput& in);
+    static utilxx_base::Json getLastMessageJson(const neograph::graph::NodeInput& in);
 
     static std::optional<neograph::ChatMessage> getLastMessage(const neograph::graph::NodeInput& in
     );
@@ -197,7 +197,7 @@ public:
     virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view sessionId) {
         // TODO: 从磁盘读取
         auto ptr = std::make_shared<T>();
-        util::insertOrAssignHeterogeneous(states, sessionId, ptr);
+        utilxx_base::insertOrAssignHeterogeneous(states, sessionId, ptr);
         co_return ptr;
     }
 
@@ -368,7 +368,7 @@ public:
 
     /// 根据 tool call 参数生成去重 key。
     /// 返回 std::nullopt 表示该次调用不需要去重。
-    std::function<std::optional<std::string>(const agentxx::util::Json& args)>
+    std::function<std::optional<std::string>(const utilxx_base::Json& args)>
         generateDeduplicationKey;
 
     /// 当发现重复（旧数据已被新数据覆盖）时，截断旧的 toolcall request
@@ -382,7 +382,7 @@ class InterruptHandleArg {
 public:
 
     std::string         name;
-    agentxx::util::Json arg;
+    utilxx_base::Json arg;
     std::string         resultId;
     /// 中断 UI 描述 (声明式; 客户端通用渲染, 见 [interrupt_ui.h])
     ///
@@ -396,15 +396,15 @@ public:
     ///   (见 [makeInterruptResult]; 空对象 = 未应答/取消)
     InterruptUi ui;
 
-    static bool isAccordingFormat(const agentxx::util::Json& data);
+    static bool isAccordingFormat(const utilxx_base::Json& data);
 
-    static std::optional<InterruptHandleArg> fromJson(const agentxx::util::Json& data);
+    static std::optional<InterruptHandleArg> fromJson(const utilxx_base::Json& data);
 
-    agentxx::util::Json toJson() const;
+    utilxx_base::Json toJson() const;
 
-    static std::vector<InterruptHandleArg> listFromJson(const agentxx::util::Json& data);
+    static std::vector<InterruptHandleArg> listFromJson(const utilxx_base::Json& data);
 
-    static agentxx::util::Json listToJson(const std::vector<InterruptHandleArg>& data);
+    static utilxx_base::Json listToJson(const std::vector<InterruptHandleArg>& data);
 };
 
 class MiddlewareContext {
@@ -483,13 +483,13 @@ public:
     explicit MiddlewareContext(std::shared_ptr<agentxx::agent::SessionStore> sessionStore) :
         persistence_(sessionStore) {}
 
-    /// 将 std::any 转为 agentxx::util::Json（用于序列化到 state）
-    static agentxx::util::Json anyToJson(const std::any& val);
+    /// 将 std::any 转为 utilxx_base::Json（用于序列化到 state）
+    static utilxx_base::Json anyToJson(const std::any& val);
 
-    /// 将 agentxx::util::Json 转为 T（用于从 state 恢复后按需转换）
+    /// 将 utilxx_base::Json 转为 T（用于从 state 恢复后按需转换）
     template<typename T>
-    static T jsonToValue(const agentxx::util::Json& j) {
-        if constexpr (std::is_same_v<T, agentxx::util::Json>) {
+    static T jsonToValue(const utilxx_base::Json& j) {
+        if constexpr (std::is_same_v<T, utilxx_base::Json>) {
             return j;
         } else if constexpr (std::is_same_v<T, std::string>) {
             if (j.is_string()) {
@@ -534,7 +534,7 @@ public:
             if (j.is_array()) {
                 for (const auto& item : j) {
                     neograph::ChatMessage msg;
-                    // item 为 agentxx::util::Json: 经桥接转回 neograph::json 再反序列化
+                    // item 为 utilxx_base::Json: 经桥接转回 neograph::json 再反序列化
                     // (middleware.h 不直引 bridge 头, 此处经 dump/parse 文本中转,
                     //  graphData 恢复为低频路径, 开销可忽略)
                     neograph::from_json(neograph::json::parse(item.dump()), msg);
@@ -561,22 +561,22 @@ public:
         if (!val.has_value() || val.type() == typeid(T)) {
             return;
         }
-        if (val.type() == typeid(agentxx::util::Json)) {
-            auto j = std::any_cast<agentxx::util::Json>(std::move(val));
+        if (val.type() == typeid(utilxx_base::Json)) {
+            auto j = std::any_cast<utilxx_base::Json>(std::move(val));
             val    = jsonToValue<T>(j);
             return;
         }
         // 兼容: 历史存入的 neograph::json 先桥接为业务 Json 再转换
         if (val.type() == typeid(neograph::json)) {
             auto j = agentxx::util::fromNeographJson(std::any_cast<neograph::json>(std::move(val)));
-            if constexpr (std::is_same_v<T, agentxx::util::Json>) {
+            if constexpr (std::is_same_v<T, utilxx_base::Json>) {
                 val = std::move(j);
             } else {
                 val = jsonToValue<T>(j);
             }
             return;
         }
-        if constexpr (std::is_same_v<T, agentxx::util::Json>) {
+        if constexpr (std::is_same_v<T, utilxx_base::Json>) {
             val = anyToJson(val);
         }
     }
@@ -600,10 +600,10 @@ public:
 
     template<typename T>
     T& getGraphDataItemValue(std::string_view sessionId, std::string_view key) {
-        auto& itemGraphData = util::getOrCreateHeterogeneous(graphData, sessionId);
+        auto& itemGraphData = utilxx_base::getOrCreateHeterogeneous(graphData, sessionId);
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
-            auto [insertIt, _] = util::insertHeterogeneous(itemGraphData, std::string{key}, T{});
+            auto [insertIt, _] = utilxx_base::insertHeterogeneous(itemGraphData, std::string{key}, T{});
             it                 = insertIt;
         } else {
             ensureAnyType<T>(it->second);
@@ -613,8 +613,8 @@ public:
 
     template<typename T>
     void setGraphDataItemValue(std::string_view sessionId, std::string_view key, T value) {
-        auto& itemGraphData = util::getOrCreateHeterogeneous(graphData, sessionId);
-        util::insertOrAssignHeterogeneous(itemGraphData, key, std::move(value));
+        auto& itemGraphData = utilxx_base::getOrCreateHeterogeneous(graphData, sessionId);
+        utilxx_base::insertOrAssignHeterogeneous(itemGraphData, key, std::move(value));
     }
 
     template<typename T>
@@ -623,12 +623,12 @@ public:
         std::string_view          key,
         std::function<void(T&)>&& modify
     ) {
-        auto& itemGraphData = util::getOrCreateHeterogeneous(graphData, sessionId);
+        auto& itemGraphData = utilxx_base::getOrCreateHeterogeneous(graphData, sessionId);
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
             auto value = T{};
             modify(value);
-            util::insertHeterogeneous(itemGraphData, std::string{key}, std::move(value));
+            utilxx_base::insertHeterogeneous(itemGraphData, std::string{key}, std::move(value));
         } else {
             ensureAnyType<T>(it->second);
             modify(std::any_cast<T&>((it->second)));
@@ -636,13 +636,13 @@ public:
     }
 
     /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
-    void throwNodeInterruptBase(std::string_view sessionId, const agentxx::util::Json& msgs);
+    void throwNodeInterruptBase(std::string_view sessionId, const utilxx_base::Json& msgs);
 
     /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
-    asio::awaitable<agentxx::util::Json> requestInterrupt(
+    asio::awaitable<utilxx_base::Json> requestInterrupt(
         std::string_view                           sessionId,
         const std::function<InterruptHandleArg()>& onCreateArg,
-        const agentxx::util::Json&                 msgs
+        const utilxx_base::Json&                 msgs
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel
@@ -652,7 +652,7 @@ public:
     /// 从 state channel 恢复 graphData (用于中断 resume)
     void setGraphDataFromState(neograph::graph::GraphState& state, std::string_view sessionId);
 
-    void setGraphDataFromState(agentxx::util::Json j, std::string_view sessionId);
+    void setGraphDataFromState(utilxx_base::Json j, std::string_view sessionId);
 
 private:
 

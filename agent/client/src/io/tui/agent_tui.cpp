@@ -13,9 +13,9 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx/crypto.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -66,7 +66,7 @@ bool isBlankContentMessage(const TUIMessage& msg) {
             return false;
     }
     for (char c : msg.text) {
-        if (!agentxx::util::charIsSpace(c)) {
+        if (!utilxx_base::charIsSpace(c)) {
             return false;
         }
     }
@@ -89,7 +89,7 @@ TUIClientAgentIO::TUIClientAgentIO(
     ex_(ex),
     inputChannel_(std::make_shared<LineChannel>(ex, 64)),
     logSink_(std::make_shared<TUILogSink>()) {
-    clientDeviceId_ = agentxx::util::getDeviceId();
+    clientDeviceId_ = utilxx::getDeviceId();
     // 注意: TUI 是纯 client 端点, 不持有 AgentContext/Session (属于 server-io
     // 线程); 模型名/上下文统计等所有 agent 侧信息均经 Wire 消息 (WireModelInfo /
     // WireContextStats) 由服务端推送获取, cachedModelName 初始为空,
@@ -149,7 +149,7 @@ void TUIClientAgentIO::showToast(std::string text) {
     toastTimer_->expires_after(kToastDuration);
     // 回调仅触发重绘, 不写 UI 状态 (toastText_ 为 UI 线程独占, 无锁);
     // 超时清除由 UI 线程下一帧渲染时执行, 避免跨线程数据竞争
-    toastTimer_->async_wait([this](neograph_asio_error_code ec) {
+    toastTimer_->async_wait([this](utilxx_base::AsioErrorCode ec) {
         if (!ec) {
             postRedraw();
         }
@@ -193,9 +193,9 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
                 }
             });
             inputChannel_->async_send(
-                neograph_asio_error_code{},
+                utilxx_base::AsioErrorCode{},
                 std::move(text),
-                [](neograph_asio_error_code) {}
+                [](utilxx_base::AsioErrorCode) {}
             );
             return; // 中断输入不触发事件接收器 (属于中断响应, 非用户消息)
         }
@@ -434,7 +434,7 @@ bool TUIClientAgentIO::copySelectionToClipboard() {
 void TUIClientAgentIO::start() {
     running_ = true;
     if (logSink_) {
-        agentxx::util::LogDispatcher::instance().addSink(logSink_);
+        utilxx_base::LogDispatcher::instance().addSink(logSink_);
     }
 
     uiThread_ = std::thread([this]() {
@@ -551,7 +551,7 @@ void TUIClientAgentIO::start() {
                     // 参数: 剩余部分整体作为 {"text": "..."} 传入 (语义由插件定义)
                     std::string argsText
                         = spacePos == std::string::npos ? std::string{} : text.substr(spacePos + 1);
-                    agentxx::util::Json args = agentxx::util::Json::object();
+                    utilxx_base::Json args = utilxx_base::Json::object();
                     args["text"]             = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
                     return true;
@@ -567,9 +567,9 @@ void TUIClientAgentIO::start() {
                 );
                 messageList_->setStickToBottom(true);
                 inputChannel_->async_send(
-                    neograph_asio_error_code{},
+                    utilxx_base::AsioErrorCode{},
                     std::move(text),
-                    [](neograph_asio_error_code) {}
+                    [](utilxx_base::AsioErrorCode) {}
                 );
                 return true;
             } else if (st.connState != ConnState::Connected) {
@@ -900,7 +900,7 @@ void TUIClientAgentIO::start() {
 
 void TUIClientAgentIO::stop() {
     if (logSink_) {
-        agentxx::util::LogDispatcher::instance().removeSink(logSink_);
+        utilxx_base::LogDispatcher::instance().removeSink(logSink_);
     }
     running_ = false;
     // 关闭 transport, 使 runTransportLoop/connect/重连循环退出, io_context 得以排空
@@ -1540,8 +1540,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 }
                 postRedraw();
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireLog>) {
-                agentxx::util::LogDispatcher::instance().dispatch(
-                    static_cast<agentxx::util::LogLevel>(m.level),
+                utilxx_base::LogDispatcher::instance().dispatch(
+                    static_cast<utilxx_base::LogLevel>(m.level),
                     m.message
                 );
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireModelInfo>) {
@@ -1587,7 +1587,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
                     st.contextMessages
-                        = std::make_shared<agentxx::util::Json>(std::move(m.messages));
+                        = std::make_shared<utilxx_base::Json>(std::move(m.messages));
                     st.showContextOverlay = true;
                 }
                 // 打开上下文弹窗: 组件树由 UI 线程独占, 须投递到 UI 线程执行
@@ -1711,9 +1711,9 @@ void TUIClientAgentIO::sendUserInputLocked(
         // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
         // 模型选择, 已取走的 pendingModel 直接丢弃 (该模式下不切换模型)
         inputChannel_->async_send(
-            neograph_asio_error_code{},
+            utilxx_base::AsioErrorCode{},
             std::move(text),
-            [](neograph_asio_error_code) {}
+            [](utilxx_base::AsioErrorCode) {}
         );
     }
     // 通知事件接收器 (用户输入事件; 任意线程安全, 内部按需 post 到 io 线程)
@@ -2353,7 +2353,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 //   返回已收集结果 (空 values = 未应答)
 // ---------------------------------------------------------------------------
 
-asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
+asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     std::string_view sessionId,
     std::string_view /*interruptNode*/,
     std::string_view /*interruptValue*/,
@@ -2363,7 +2363,7 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-                agentxx::util::Json::parse(interruptArgJson)
+                utilxx_base::Json::parse(interruptArgJson)
             );
             return true;
         },
@@ -2373,13 +2373,13 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
         }
     );
     if (!argOpt.has_value()) {
-        co_return agentxx::util::Json::object();
+        co_return utilxx_base::Json::object();
     }
     const auto& handleArg = argOpt.value();
     // 中断 UI 描述 (HIL 中断必填, 见 InterruptHandleArg::ui): 一份描述对应
     // 一份表单 (一条消息); 缺失/非法时留空, 客户端渲染诊断行且不可交互
-    const agentxx::util::Json uiJson
-        = handleArg.ui.empty() ? agentxx::util::Json{} : handleArg.ui.toJson();
+    const utilxx_base::Json uiJson
+        = handleArg.ui.empty() ? utilxx_base::Json{} : handleArg.ui.toJson();
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
@@ -2414,7 +2414,7 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
     postRedraw();
 
     // 等待一次提交或取消 (通道关闭 = server 过期通知 / TUI 退出 → 按未应答返回)
-    auto values          = agentxx::util::Json::object();
+    auto values          = utilxx_base::Json::object();
     auto [ec, gotSubmit] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
     if (!ec && !gotSubmit.cancelled) {
         // 一次提交: values 为控件 id → 值 的对象 (控件形态决定值类型);
@@ -2426,7 +2426,7 @@ asio::awaitable<agentxx::util::Json> TUIClientAgentIO::handleInterrupt(
 
     // 结果形态: 恒为对象 {"values": {控件 id: 值}} (见 makeInterruptResult;
     // 未提交/取消 = 空对象 —— 消费端按未应答处理)
-    const agentxx::util::Json result = agentxx::middleware::makeInterruptResult(values);
+    const utilxx_base::Json result = agentxx::middleware::makeInterruptResult(values);
 
     activeInterrupts_.erase(wireId);
     awaitingInterruptInput_.store(false, std::memory_order_release);

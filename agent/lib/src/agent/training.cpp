@@ -1,7 +1,7 @@
 #include "agentxx/agent/training.h"
 
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -77,7 +77,7 @@ size_t PromptVariant::promptHash() const {
 
 // ======================== 测试用例加载 ========================
 
-std::vector<TrainingTestCase> testCasesFromJson(const agentxx::util::Json& j) {
+std::vector<TrainingTestCase> testCasesFromJson(const utilxx_base::Json& j) {
     std::vector<TrainingTestCase> cases;
     if (!j.is_array()) {
         XX_LOGE("[Training] Test case JSON is not an array");
@@ -93,7 +93,7 @@ std::vector<TrainingTestCase> testCasesFromJson(const agentxx::util::Json& j) {
         tc.input          = item.value("input", "");
         tc.expectedOutput = item.value("expectedOutput", "");
         tc.equalOutput    = item.value("equalOutput", "");
-        tc.extra          = item.value("extra", agentxx::util::Json::object());
+        tc.extra          = item.value("extra", utilxx_base::Json::object());
         if (tc.name.empty()) {
             tc.name = fmt::format("case_{}", ++autoIdx);
         }
@@ -123,7 +123,7 @@ std::vector<TrainingTestCase> loadTestCasesFromFile(std::string_view filePath) {
             );
             ifs.close();
 
-            auto j = agentxx::util::Json::parse(content);
+            auto j = utilxx_base::Json::parse(content);
             cases  = testCasesFromJson(j);
             XX_LOGD("[Training] Loaded {} test cases from {}", cases.size(), filePath);
             return true;
@@ -199,17 +199,17 @@ std::string stripMarkdownCodeBlock(std::string_view content) {
     return result;
 }
 
-agentxx::util::Json parseJsonFromResponse(std::string_view content) {
+utilxx_base::Json parseJsonFromResponse(std::string_view content) {
     auto stripped = stripMarkdownCodeBlock(content);
-    return agentxx::util::catchError<agentxx::util::Json>(
-        [&stripped]() -> agentxx::util::Json {
-            return agentxx::util::Json::parse(stripped);
+    return agentxx::util::catchError<utilxx_base::Json>(
+        [&stripped]() -> utilxx_base::Json {
+            return utilxx_base::Json::parse(stripped);
         },
-        [&stripped](std::string errmsg) -> agentxx::util::Json {
+        [&stripped](std::string errmsg) -> utilxx_base::Json {
             auto first = stripped.find('{');
             auto last  = stripped.rfind('}');
             if (first != std::string::npos && last != std::string::npos && last > first) {
-                return agentxx::util::Json::parse(stripped.substr(first, last - first + 1));
+                return utilxx_base::Json::parse(stripped.substr(first, last - first + 1));
             }
             // 两种解析均失败: 以原始错误信息抛出, 由调用方统一处理
             throw std::runtime_error(std::move(errmsg));
@@ -217,8 +217,8 @@ agentxx::util::Json parseJsonFromResponse(std::string_view content) {
     );
 }
 
-agentxx::util::Json normalizePromptPatch(const agentxx::util::Json& parsed) {
-    agentxx::util::Json patch = agentxx::util::Json::object();
+utilxx_base::Json normalizePromptPatch(const utilxx_base::Json& parsed) {
+    utilxx_base::Json patch = utilxx_base::Json::object();
 
     // 顶层字符串字段: 空串视为"保持不变", 直接剔除 (约定见 optimizer/mutation prompt)
     auto addStringIfNonEmpty = [&](const char* key) {
@@ -232,7 +232,7 @@ agentxx::util::Json normalizePromptPatch(const agentxx::util::Json& parsed) {
     addStringIfNonEmpty("systemPrompt");
     // 通用附加系统提示词：按 key 逐项处理，空串视为保持不变
     if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
-        agentxx::util::Json append = agentxx::util::Json::object();
+        utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& item : parsed["appendSystemPrompts"].items()) {
             if (item.second.is_string()) {
                 auto s = item.second.get<std::string>();
@@ -248,12 +248,12 @@ agentxx::util::Json normalizePromptPatch(const agentxx::util::Json& parsed) {
 
     // toolPrompt: 同样剔除空 depict / 空 args 值; 整个工具无有效内容时不加入 patch
     if (parsed.contains("toolPrompt") && parsed["toolPrompt"].is_object()) {
-        agentxx::util::Json tools = agentxx::util::Json::object();
+        utilxx_base::Json tools = utilxx_base::Json::object();
         for (const auto& t : parsed["toolPrompt"].items()) {
             if (!t.second.is_object()) {
                 continue;
             }
-            agentxx::util::Json tp = agentxx::util::Json::object();
+            utilxx_base::Json tp = utilxx_base::Json::object();
             if (t.second.contains("depict") && t.second["depict"].is_string()) {
                 auto depict = t.second["depict"].get<std::string>();
                 if (!depict.empty()) {
@@ -261,7 +261,7 @@ agentxx::util::Json normalizePromptPatch(const agentxx::util::Json& parsed) {
                 }
             }
             if (t.second.contains("args") && t.second["args"].is_object()) {
-                agentxx::util::Json args = agentxx::util::Json::object();
+                utilxx_base::Json args = utilxx_base::Json::object();
                 for (const auto& a : t.second["args"].items()) {
                     if (a.second.is_string()) {
                         auto v = a.second.get<std::string>();
@@ -428,8 +428,8 @@ void EvolutionTrainingAgent::applyVariantToTrainAgent(const PromptVariant& varia
     cfg->prompt = variant.prompt;
 }
 
-agentxx::util::Json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& v) const {
-    agentxx::util::Json j;
+utilxx_base::Json EvolutionTrainingAgent::promptVariantToJson(const PromptVariant& v) const {
+    utilxx_base::Json j;
     j["id"]              = v.id;
     j["prompt"]          = v.prompt.toJson();
     j["cumulativeScore"] = v.cumulativeScore;
@@ -440,7 +440,7 @@ agentxx::util::Json EvolutionTrainingAgent::promptVariantToJson(const PromptVari
     j["generation"]    = v.generation;
     j["parentId"]      = v.parentId;
     {
-        agentxx::util::Json scores = agentxx::util::Json::object();
+        utilxx_base::Json scores = utilxx_base::Json::object();
         for (const auto& kv : v.perTestCaseScores) {
             scores[kv.first] = kv.second;
         }
@@ -450,7 +450,7 @@ agentxx::util::Json EvolutionTrainingAgent::promptVariantToJson(const PromptVari
     return j;
 }
 
-PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const agentxx::util::Json& j) const {
+PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const utilxx_base::Json& j) const {
     PromptVariant v;
     v.id = j.value("id", std::string{});
     if (j.contains("prompt") && j["prompt"].is_object()) {
@@ -471,7 +471,7 @@ PromptVariant EvolutionTrainingAgent::promptVariantFromJson(const agentxx::util:
             v.perTestCaseScores[std::string{item.first}] = item.second.get<double>();
         }
     }
-    v.extra = j.value("extra", agentxx::util::Json::object());
+    v.extra = j.value("extra", utilxx_base::Json::object());
     return v;
 }
 
@@ -514,12 +514,12 @@ void EvolutionTrainingAgent::savePopulationToFile(std::string_view filePath, int
                 rotateSaveFile(filePath, backupCount);
             }
 
-            agentxx::util::Json j = agentxx::util::Json::array();
+            utilxx_base::Json j = utilxx_base::Json::array();
             for (const auto& v : population) {
                 j.push_back(promptVariantToJson(v));
             }
 
-            agentxx::util::Json root;
+            utilxx_base::Json root;
             root["population"]        = j;
             root["generationCounter"] = generationCounter;
             root["savedAt"]           = std::chrono::system_clock::now().time_since_epoch().count();
@@ -600,7 +600,7 @@ bool EvolutionTrainingAgent::loadPopulationFromFile(std::string_view filePath) {
                 return false;
             }
 
-            auto root = agentxx::util::Json::parse(content);
+            auto root = utilxx_base::Json::parse(content);
             if (!(root.contains("population") && root["population"].is_array())) {
                 return false;
             }

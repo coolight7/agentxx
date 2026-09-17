@@ -22,7 +22,7 @@
 
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 
 #include <algorithm>
 #include <filesystem>

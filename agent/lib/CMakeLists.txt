@@ -46,53 +46,17 @@ if (AGENTXX_PLUGIN_UBSAN_PROBE AND NOT XX_IS_MSVC_D)
   unset(_agentxx_plugin_probe_sources)
 endif()
 
-# ===== 工具函数静态库 agentxx_util (主程序与插件共同复用) =====
-# - 插件不链接 libagentxx (纯 C ABI 契约), 但 agentxx 内置插件 (与主程序同一
-#   superbuild 构建、依赖环境齐全) 可复用 `agent/lib/include/agentxx/util` 的
-#   全部工具函数 (字符串/编码转换/路径/http/sqlite/regex 等)。这些代码必须
-#   静态链接进主程序与各自插件内 (AGENTS.md 插件设计约束: 兼容不同版本的复用
-#   代码编译的主程序/插件), 故独立为静态库, 由 libagentxx 与插件各自链接一份
-#   (插件侧符号经导出限制隐藏, 与宿主副本互不冲突)
-# - 定位: 本库面向 agentxx 内置插件 (便捷复用); 第三方插件完全不需要它
-#   (纯 C ABI 头即可, 甚至不用 C++), 不 find_package 本库即零影响
-# - 收录范围: **src/util/ 全部源文件** (http_client/http_server/ws_client/
-#   string_util/util/sqlite/settings_db/log/regex/http_header/json/json_view) +
-#   include/agentxx/util/ 全部头文件
-# - 依赖: **全部 PUBLIC 链接 + PUBLIC include 传递** (内置插件链接本库后直接
-#   获得全部 util 能力, 无需自行配置任何依赖):
-#   - 轻量 (imported target, config find_dependency 链解析): fmt / SQLite3 /
-#     uchardet / iconv / simdjson (json.cpp/json_view.cpp 的解析底层)
-#   - 重依赖: OpenSSL (imported target,
-#     find_dependency 链解析, include 路径随 INTERFACE 传递)
-#   - 条件 pkg-config 模块: hyperscan (AGENTXX_ENABLE_HYPERSCAN) / uring
-#     (AGENTXX_LINUX_IO_URING_SUPPORTED) —— 处理方项目须定义同名 PkgConfig::*
-#     target (见 plugins/CMakeLists.txt, 与 client/test 做法一致)
-#   - PUBLIC include (install 头/neograph deps/Boost) 由下方 _AGENTXX_USAGE_TARGETS
-#     循环提供并随 INTERFACE 导出
-# - 裁剪机制: 静态库 (archive) 按目标文件提取 —— 插件只链接实际引用的符号
-#   所属的 .cpp.o, 未使用的模块 (如插件不调用 http_client) 整个目标文件不
-#   被提取, 其重依赖符号不会进入插件动态库 (DT_NEEDED 实测仅系统库)
-# - 平台/编译模式宏 (XX_IS_* 等) 经 PUBLIC 编译定义随 INTERFACE 传播:
-#   util 头文件内部 #if XX_IS_WIN_D 等分支依赖这些宏, 插件链接本库后自动获得
-# - 注意: 本目标必须在下方内置插件 add_subdirectory 之前创建 (内置模式下
-#   插件 OBJECT 库经 target_link_libraries(PRIVATE agentxx_util) 获得
-#   编译宏/头路径); 其链接依赖在 find_package 之后另行声明 (见下方)
-file(GLOB AGENTXX_UTIL_SOURCES
-  CONFIGURE_DEPENDS
-  "src/util/*.cpp"
-)
-# util 全部源文件已独立为 agentxx_util 静态库, 从 libagentxx 源文件集排除
-# (避免重复编译; libagentxx 内对 util 函数的调用经链接 agentxx_util 解析)
-list(FILTER agentxx_SOURCES EXCLUDE REGEX "/src/util/.*\\.cpp$")
-
-add_library(agentxx_util STATIC ${AGENTXX_UTIL_SOURCES})
-set_target_properties(agentxx_util PROPERTIES
-  POSITION_INDEPENDENT_CODE ON   # 静态库目标文件并入 libagentxx 共享库/插件动态库
-  CXX_STANDARD 26
-  CXX_STANDARD_REQUIRED OFF
-  PREFIX "lib"
-  OUTPUT_NAME "agentxx_util"
-)
+# ===== 工具函数库: cxx_utilxx_base / cxx_utilxx (本项目自研基础库) =====
+# - 拆分说明: 原 `agentxx_util` 静态库已拆为两个独立 CMake 工程
+#   (`agent/third_party/cxx_utilxx_base` 基础件 + `agent/third_party/cxx_utilxx`
+#   重依赖工具), 由 superbuild 先构建安装, 本处经 find_package 引用其**静态变体**
+#   (libagentxx 与各插件各链接一份, 符号互不冲突; 见 AGENTS.md 插件设计约束)
+# - 依赖解析: 两个包的 config 内含 find_dependency 链 (fmt/simdjson/Boost/
+#   SQLite3/OpenSSL/html2md/iconv/uchardet), 无需在此重复声明
+# - 包含路径/平台宏 (XX_IS_*_D) 随 INTERFACE 传播, 调用方无需自行配置
+find_package(cxx_utilxx_base REQUIRED)
+find_package(cxx_utilxx REQUIRED)
+find_package(cxx_pluginxx REQUIRED)
 
 # ===== 内置插件合并编译 =====
 # - add_subdirectory(../plugins) 以内置模式收集启用的插件源文件/依赖库/
@@ -115,13 +79,13 @@ if (XX_IS_MSVC_D)
   # 创建 动态库/静态库
   add_library(agentxx_shared SHARED ${agentxx_SOURCES})
   add_library(agentxx_static STATIC ${agentxx_SOURCES})
-  set(_AGENTXX_USAGE_TARGETS agentxx_shared agentxx_static agentxx_util)
+  set(_AGENTXX_USAGE_TARGETS agentxx_shared agentxx_static)
 else ()
   add_library(agentxx_obj OBJECT ${agentxx_SOURCES})
   set_target_properties(agentxx_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
   add_library(agentxx_shared SHARED $<TARGET_OBJECTS:agentxx_obj>)
   add_library(agentxx_static STATIC $<TARGET_OBJECTS:agentxx_obj>)
-  set(_AGENTXX_USAGE_TARGETS agentxx_obj agentxx_shared agentxx_static agentxx_util)
+  set(_AGENTXX_USAGE_TARGETS agentxx_obj agentxx_shared agentxx_static)
 
   # PCH: 只预编译稳定第三方头 (std/fmt/asio/boost.exception)，项目自身头不参与，
   # 避免项目头文件改动时触发全量重编。
@@ -197,9 +161,9 @@ unset(_agentxx_target)
 
 find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
-# (agentxx_util 为 libagentxx 的 PUBLIC 依赖: 处理方 find_package
-#  agentxx_shared/agentxx_static 时经 find_dependency(agentxx_util) 传递解析)
-set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;agentxx_util")
+# (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx 为 libagentxx 的 PUBLIC 依赖:
+#  处理方 find_package agentxx_shared/agentxx_static 时经 find_dependency 传递解析)
+set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;cxx_utilxx_base;cxx_utilxx;cxx_pluginxx")
 # 必须显式 CONFIG 模式: CMake >= 3.28 内置 Findiconv.cmake 模块在混合模式下
 # 永远优先于本项目安装的 iconvConfig.cmake (且仅创建 Iconv::Iconv 目标,
 # 无 Iconv::iconv/Iconv::charset, 还可能导致命中系统 iconv);
@@ -245,43 +209,13 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
 endforeach()
 unset(_agentxx_target)
 
-# agentxx_util 链接依赖: **全部 PUBLIC** (agentxx 内置插件便捷库, 链接后即得
-# 全部 util 能力; 第三方插件不 find_package 本库即零影响)
-# - 轻量 (imported target): 插件 find_package(agentxx_util) 后经 config 的
-#   find_dependency 链解析 —— string_util.cpp (uchardet 编码检测 + iconv
-#   编码转换), util.cpp (fmt), sqlite.cpp/settings_db.cpp (sqlite3),
-#   json.cpp/json_view.cpp (simdjson)
-# - 重依赖 (imported target):
-#   - simdjson::simdjson: json 解析底层 (PUBLIC, 插件侧 Json/JsonView 内联
-#     代码引用 simdjson 头, 需 include + 链接传播; 静态库, 无体积顾虑)
-#   - OpenSSL::SSL / OpenSSL::Crypto 为 imported target, config find_dependency
-#     解析, include 路径随 INTERFACE 传递 (插件 include http_client.h 时
-#     beast ssl 需要 openssl 头, 无需自行配置)
-# - 注意: 链接项必须用 imported target (Iconv::Iconv / fmt::fmt ...) 而非
-#   裸库名 (charset): 裸名导出后处理方需自行配置 link_directories, 插件项目
-#   无此配置会链接失败; 裸库名仅用于 install/lib 内存在的库 (hs_runtime,
-#   经 link_directories 解析)
-# - iconv 目标名兼容: Iconv::Iconv 在两种来源下均存在 (libiconv-native
-#   config 中为 Iconv::iconv 的 ALIAS, CMake 内置 Findiconv.cmake 模块为
-#   原生目标); Iconv::charset 仅 libiconv-native config 提供 (Windows),
-#   模块模式 (glibc 系统 iconv) 下不存在, 下方条件链接
-# - 历史: 本库曾 PUBLIC 链接 neograph 系 + yyjson (Json 经 neograph::json 实现);
-#   自 Json 自主化重构起彻底移除 —— 插件仅需 agentxx_util + simdjson,
-#   不再被迫链接图引擎全套库 (见 docs/zh-cn/plugins.md 4.5/4.6 节)
-
-# 裸库名依赖解析目录 (PUBLIC 传播): hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib, 插件处理本库后自动获得, 无需自行 link_directories
-target_link_directories(agentxx_util PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
-target_link_libraries(agentxx_util PUBLIC
-  fmt::fmt
-  SQLite::SQLite3
-  uchardet::libuchardet
-  Iconv::iconv
-  Iconv::charset
-  simdjson::simdjson
-  OpenSSL::SSL
-  OpenSSL::Crypto
-)
+# cxx_utilxx_base / cxx_utilxx 的链接依赖: 全部随其 config 的 find_dependency
+# 链解析 (fmt/simdjson/uchardet/iconv/SQLite3/OpenSSL/html2md + Boost 头),
+# include 路径与平台宏经 INTERFACE 传播, 本处只需链接静态变体:
+# - 静态库 (archive) 按目标文件提取: 只用到的模块对应 .cpp.o 会被并入
+#   libagentxx, 未使用的模块不产生任何依赖 (DT_NEEDED 实测仅系统库)
+# - regex.cpp 的 hyperscan 与 asio 文件 I/O 的 io_uring 依赖已由
+#   cxx_utilxx 的 INTERFACE 以库文件绝对路径携带, 处理方无需 pkg_check_modules
 
 # 统一输出名称 libagentxx
 # - 不指定时，部分系统，如win可能编译输出缺少前缀 lib
@@ -347,32 +281,9 @@ else()
   set(_AGENTXX_OBJ_LINK_TARGETS "")
 endif()
 
-if (AGENTXX_ENABLE_HYPERSCAN)
-  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
-  foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
-    target_link_libraries(${_agentxx_target} PRIVATE PkgConfig::hyperscan hs_runtime)
-  endforeach()
-  target_link_libraries(agentxx_shared PRIVATE 
-    PkgConfig::hyperscan
-    hs_runtime
-  )
-  # agentxx_static 不链接 hyperscan: 静态库的 PRIVATE 依赖导出为
-  # $<LINK_ONLY:...> 且排在 INTERFACE 开头 (在 agentxx_util 之前), 而
-  # regex.cpp.o 现在位于独立的 agentxx_util.a (在其后), GNU ld 单遍扫描
-  # 归档无法回溯解析 hs_* 符号 → 静态库处理者 (client/test/benchmark)
-  # 均已自行 PRIVATE 链接 hyperscan, 由它们按自身顺序解析
-  # agentxx_util 的 regex.cpp 在 AGENTXX_ENABLE_HYPERSCAN=1 时用 hyperscan
-  # 实现 (宏经 _AGENTXX_USAGE_TARGETS 的 PUBLIC 编译定义传播给本库);
-  # PUBLIC 链接 (与 agentxx_shared 一致): 导出 INTERFACE 带
-  # $<LINK_ONLY:PkgConfig::hyperscan> + hs_runtime 裸名, 处理方项目须
-  # pkg_check_modules(libhs) 定义同名 target (见 plugins/CMakeLists.txt,
-  # 与 client/test 一致); hs_runtime 裸名经 agentxx_util 的 PUBLIC
-  # link_directories (install/lib) 解析
-  target_link_libraries(agentxx_util PUBLIC
-    PkgConfig::hyperscan
-    hs_runtime
-  )
-endif()
+# 正则 (hyperscan / std::regex) 实现已随工具库拆分迁往 cxx_utilxx:
+# 其 INTERFACE 已携带 hyperscan 库文件绝对路径与 UTILXX_ENABLE_HYPERSCAN 宏,
+# libagentxx 自身不再直接引用 hs_* 符号, 故此处无需 pkg_check_modules
 set(_AGENTXX_LINK_LIBS
   # === neograph vvv 链接顺序是必要的
   neograph_sqlite
@@ -397,16 +308,16 @@ set(_AGENTXX_LINK_LIBS
   Iconv::charset
   uchardet::libuchardet
 )
-# libagentxx 各目标链接 agentxx_util (先于 _AGENTXX_LINK_LIBS 声明, 保证链接行
-# 顺序: 目标文件 → agentxx_util.a → 其依赖库; CMake 会把 agentxx_util 的
-# INTERFACE 依赖 (fmt/sqlite3/uchardet/iconv) 紧跟在 agentxx_util 之后展开)
+# libagentxx 各目标链接基础库静态变体 (先于 _AGENTXX_LINK_LIBS 声明, 保证链接行
+# 顺序: 目标文件 → cxx_utilxx*.a → 其依赖库)
 # - agentxx_obj PRIVATE: 仅编译期 usage requirements (头路径/宏)
 # - agentxx_shared/static PUBLIC: 目标文件并入共享库; 静态库处理者连带链接
+# - cxx_pluginxx_static 加入后 (插件框架内核), 插件宿主实现经其获得通用运行时
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
-  target_link_libraries(${_agentxx_target} PRIVATE agentxx_util)
+  target_link_libraries(${_agentxx_target} PRIVATE cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static)
 endforeach()
-target_link_libraries(agentxx_shared PUBLIC agentxx_util)
-target_link_libraries(agentxx_static PUBLIC agentxx_util)
+target_link_libraries(agentxx_shared PUBLIC cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static)
+target_link_libraries(agentxx_static PUBLIC cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static)
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
   target_link_libraries(${_agentxx_target} PRIVATE ${_AGENTXX_LINK_LIBS})
 endforeach()
@@ -459,7 +370,6 @@ if (XX_IS_WIN_D)
   #   模式经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 收集 (见各插件内置分支)
   target_link_libraries(agentxx_shared PUBLIC ws2_32 mswsock)
   target_link_libraries(agentxx_static PUBLIC ws2_32 mswsock)
-  target_link_libraries(agentxx_util PUBLIC ws2_32 mswsock)
 endif()
 
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
@@ -467,11 +377,8 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   # - pkg-config 找到的库用 PRIVATE，否则 install 时会被写入依赖中，名称却是当前项目自定义的 PkgConfig::uring,
   # 导致难以被找到，所以这里用 PRIVATE 链接，依赖当前项目的库重新 Find 再链接 liburing.a 即可
   target_link_libraries(agentxx_shared PRIVATE PkgConfig::uring)
-  # agentxx_util: asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号
-  # (宏由顶层统一传入所有子项目), PUBLIC 链接使使用 util 重模块 (http_client
-  # 等 asio 实现) 的插件直接获得; 处理方项目须 pkg_check_modules(liburing)
-  # 定义同名 target (见 plugins/CMakeLists.txt, 与 client/test 一致)
-  target_link_libraries(agentxx_util PUBLIC PkgConfig::uring)
+  # 工具库中的 asio 文件 I/O 实现在 -DASIO_HAS_IO_URING 下引用 io_uring 符号,
+  # 该依赖已由 cxx_utilxx 的 INTERFACE 携带库文件绝对路径 (处理方无需配置)
 endif()
 
 # ===== 运行期动态库搜索路径: 优先从动态库自身所在目录搜索 =====
@@ -480,11 +387,11 @@ endif()
 # 系统 libstdc++ 会被优先加载 (详见 cmake/agentxx_runtime_search_path.cmake)
 # - agentxx_shared: 安装到 exec, 供其他程序 (含 FFI/dlopen) 使用时优先复用
 #   同目录携带的运行库
-# - agentxx_static/agentxx_util: 静态库无运行期依赖, 调用后直接返回
+# - agentxx_static: 静态库无运行期依赖, 调用后直接返回
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake")
 agentxx_set_own_dir_rpath(agentxx_shared)
 
-install(TARGETS agentxx_shared agentxx_static agentxx_util
+install(TARGETS agentxx_shared agentxx_static
   DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
 )
 
@@ -512,34 +419,8 @@ packageProject(
   DISABLE_VERSION_SUFFIX YES
   DEPENDENCIES "${agentxx_DEPENDENCIES}"
 )
-# agentxx_util 独立导出: 插件经 find_package(agentxx_util) 引用 (superbuild
-# 中 agentxx_plugins_repo DEPENDS agentxx_lib_repo, 安装产物先于插件构建);
-# 依赖链由 config 内 find_dependency 传递解析
-# (注意: iconv 的 config 文件为 iconvConfig.cmake, find_dependency 须用小写
-# 包名 iconv, 大写 Iconv 无法匹配该文件; 且必须显式 CONFIG 模式 ——
-# CMake >= 3.28 内置 FindIconv.cmake 模块 (Windows 大小写不敏感会匹配到
-# FindIconv.cmake) 中 FPHSA 仅设置大写 Iconv_FOUND, 与 find_dependency(iconv)
-# 检查的小写 iconv_FOUND 不匹配, 导致依赖解析误判失败;
-# 故下方 DEPENDENCIES 条目写 "iconv CONFIG" (含空格): 经 PackageProject 模板
-# (Config.cmake.in 的 find_dependency(${args}) 展开) 生成
-# find_dependency(iconv CONFIG), 强制匹配 libiconv-native 安装的
-# iconvConfig.cmake, CONFIG 模式成功时 find_package 框架设置精确的小写
-# iconv_FOUND=TRUE; 若仅写 "iconv" 则会退化为模块模式, 目标 Iconv::iconv/
-# Iconv::charset 不存在, 处理方链接 agentxx_util 时直接报 target not found)
-# - OpenSSL::SSL/Crypto 与 simdjson::simdjson 为 INTERFACE_LINK_LIBRARIES 中的
-#   imported target, 须在 DEPENDENCIES 中声明以便处理方 find_dependency 解析
-# - hs_runtime 为裸库名, 经 PUBLIC link_directories 解析,
-#   无需 find_dependency; PkgConfig::hyperscan/uring 由处理方项目自行
-#   pkg_check_modules 定义 (见 plugins/CMakeLists.txt)
-set(agentxx_util_DEPENDENCIES "fmt;SQLite3 CONFIG;uchardet;iconv CONFIG;OpenSSL;simdjson")
-packageProject(
-  NAME agentxx_util
-  VERSION ${PROJECT_VERSION}
-  BINARY_DIR "${PROJECT_BINARY_DIR}"
-  INCLUDE_DIR "${PROJECT_SOURCE_DIR}/include/"
-  INCLUDE_DESTINATION include/
-  TARGETS agentxx_util
-  CPACK YES
-  DISABLE_VERSION_SUFFIX YES
-  DEPENDENCIES "${agentxx_util_DEPENDENCIES}"
-)
+# 工具库 (cxx_utilxx_base/cxx_utilxx) 与插件框架 (cxx_pluginxx) 已拆为独立
+# CMake 工程 (agent/third_party/ 下), 各自手写 config 导出 (不经 PackageProject /
+# CPM, 无网络依赖): 其 config 内含完整 find_dependency 链, 处理方
+# find_package(agentxx_shared/agentxx_static) 时经上方 agentxx_DEPENDENCIES
+# 声明自动解析 (iconv 仍必须 "iconv CONFIG", 理由见 libiconv 相关注释)

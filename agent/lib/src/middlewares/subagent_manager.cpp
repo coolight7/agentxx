@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/subagent_manager.h"
 
 #include "agentxx/event/event_stream.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include <memory>
 #include <string>
@@ -36,7 +36,7 @@ public:
         return tool_->get_definition();
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
         co_return co_await tool_->execute_async(arguments);
     }
 

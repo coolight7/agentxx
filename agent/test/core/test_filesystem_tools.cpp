@@ -1,13 +1,13 @@
 #include "agentxx-test/core/test_filesystem_tools.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/util/env.h"
+#include "utilxx_base/env.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
 // 插件同一实现 (filesystem_impl.h), 保证插件行为与测试覆盖一致
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "agentxx_filesystem/filesystem_impl.h"
 #include <chrono>
 #include <cstdio>
@@ -53,7 +53,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         neograph::ChatTool get_definition() const {                                          \
             return {TOOL_NAME, DEPICT, {}};                                                  \
         }                                                                                    \
-        asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {  \
+        asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {  \
             co_return ::agentxx_fs_plugin::IMPL_FN(args, testResolvedWorkDir(ctx), nullptr); \
         }                                                                                    \
     };
@@ -69,7 +69,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         neograph::ChatTool get_definition() const {                                                \
             return {TOOL_NAME, DEPICT, {}};                                                        \
         }                                                                                          \
-        asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {        \
+        asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {        \
             co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(args, testResolvedWorkDir(ctx)); \
         }                                                                                          \
     };
@@ -176,11 +176,11 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", ""}
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FileSystemListTool returns error for empty path" << std::endl;
     } else {
@@ -195,7 +195,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_list_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir}
     };
     auto result = co_await tool.execute_async(args);
@@ -215,7 +215,7 @@ asio::awaitable<void> test_list_file_basic(std::weak_ptr<agentxx::agent::AgentCo
 asio::awaitable<void>
     test_list_file_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",      testDir},
         {"recursive", true   },
     };
@@ -234,7 +234,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",  testDir},
         {"limit", 1      },
     };
@@ -259,7 +259,7 @@ asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentCo
 asio::awaitable<void>
     test_list_file_info_fields(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir}
     };
     auto result = co_await tool.execute_async(args);
@@ -286,7 +286,7 @@ asio::awaitable<void>
     test_list_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool    = agentxx::tools::FileSystemListTool{agentContext};
     auto relPath = testDirRelativeToCwd();
-    auto args    = agentxx::util::Json{
+    auto args    = utilxx_base::Json{
            {"path", relPath}
     };
     auto result = co_await tool.execute_async(args);
@@ -378,7 +378,7 @@ asio::awaitable<void>
     test_list_relative_path_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FileSystemListTool{ctx};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", "."}
     };
     auto result = co_await tool.execute_async(args);
@@ -399,7 +399,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_read_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FilesystemReadTextFileTool{ctx};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", "subdir/subtest.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -420,8 +420,8 @@ asio::awaitable<void>
     test_glob_relative_pattern_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FilesystemGlobTool{ctx};
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({"*.txt"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({"*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -441,9 +441,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_file_tilde_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
 #if XX_IS_WIN_D
-    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
+    auto homeOpt = utilxx_base::ApplicationEnv::instance().get("USERPROFILE");
 #else
-    auto homeOpt = agentxx::util::ApplicationEnv::instance().get("HOME");
+    auto homeOpt = utilxx_base::ApplicationEnv::instance().get("HOME");
 #endif
     if (!homeOpt || homeOpt->empty()) {
         g_fs_passed++;
@@ -456,7 +456,7 @@ asio::awaitable<void>
         f << "tilde probe\n";
     }
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", "~/agentxx_list_tilde_probe.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -475,7 +475,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_glob_star_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/*.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -497,7 +497,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_glob_question_mark(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/test?.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -517,7 +517,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_glob_recursive_segment(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/**/*.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -533,7 +533,7 @@ asio::awaitable<void>
     }
 
     // `**` 单独使用: 匹配目录自身与其下全部层级
-    auto allArgs = agentxx::util::Json{
+    auto allArgs = utilxx_base::Json{
         {"path", testDir + "/**"}
     };
     auto allResult = co_await tool.execute_async(allArgs);
@@ -552,7 +552,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_glob_dir_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",      testDir + "/sub*"},
         {"recursive", true             },
     };
@@ -568,7 +568,7 @@ asio::awaitable<void>
     }
 
     // `**` 已覆盖全部后代, 再叠加 recursive 时同一条目只应出现一次 (按路径去重)
-    auto dupArgs = agentxx::util::Json{
+    auto dupArgs = utilxx_base::Json{
         {"path",      testDir + "/**"},
         {"recursive", true           },
     };
@@ -595,7 +595,7 @@ asio::awaitable<void>
     test_list_glob_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto ctx  = makeWorkDirContext(testDir);
     auto tool = agentxx::tools::FileSystemListTool{ctx};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", "*.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -616,7 +616,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_glob_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/no_such_*.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -636,7 +636,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_list_glob_case_sensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/*.TXT"}
     };
     auto result = co_await tool.execute_async(args);
@@ -655,7 +655,7 @@ asio::awaitable<void>
 asio::awaitable<void> test_list_glob_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",  testDir + "/*"},
         {"limit", 1             },
     };
@@ -686,12 +686,12 @@ asio::awaitable<void>
         f << "literal fallback\n";
     }
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", literalFile}
     };
     auto            result = co_await tool.execute_async(args);
     std::error_code ec;
-    std::filesystem::remove(agentxx::util::utf8ToPath(literalFile), ec);
+    std::filesystem::remove(utilxx_base::utf8ToPath(literalFile), ec);
     if (result.find("literal[1].txt") != std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FileSystemListTool falls back to literal path when no wildcard hit"
@@ -720,12 +720,12 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", ""}
     };
     try {
         auto result = co_await tool.execute_async(args);
-        if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+        if (utilxx_base::isIgnoreCaseContains(result, "error")) {
             g_fs_passed++;
             TEST_PASS << "FilesystemReadTextFileTool returns error for empty path" << std::endl;
         } else {
@@ -744,14 +744,14 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_not_exist(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/nonexistent.txt"}
     };
     try {
         auto result = co_await tool.execute_async(args);
-        if (agentxx::util::isIgnoreCaseContains(result, "error")
-            && agentxx::util::isIgnoreCaseContains(result, "not exist")
-            && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
+        if (utilxx_base::isIgnoreCaseContains(result, "error")
+            && utilxx_base::isIgnoreCaseContains(result, "not exist")
+            && !utilxx_base::isIgnoreCaseContains(result, "permission")) {
             g_fs_passed++;
             TEST_PASS
                 << "FilesystemReadTextFileTool returns 'not exist' error for non-existent file"
@@ -764,8 +764,8 @@ asio::awaitable<void>
                 << result << std::endl;
         }
     } catch (const std::exception& e) {
-        if (agentxx::util::isIgnoreCaseContains(e.what(), "not exist")
-            && !agentxx::util::isIgnoreCaseContains(e.what(), "permission")) {
+        if (utilxx_base::isIgnoreCaseContains(e.what(), "not exist")
+            && !utilxx_base::isIgnoreCaseContains(e.what(), "permission")) {
             g_fs_passed++;
             TEST_PASS << "FilesystemReadTextFileTool throws 'not exist' for non-existent file: "
                       << e.what() << std::endl;
@@ -778,14 +778,14 @@ asio::awaitable<void>
 
     // 测试带 line_offset / line_limit 读取不存在文件
     try {
-        auto offsetArgs = agentxx::util::Json{
+        auto offsetArgs = utilxx_base::Json{
             {"path",        testDir + "/nonexistent.txt"},
             {"line_offset", 0                           },
             {"line_limit",  10                          },
         };
         auto result = co_await tool.execute_async(offsetArgs);
-        if (agentxx::util::isIgnoreCaseContains(result, "not exist")
-            && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
+        if (utilxx_base::isIgnoreCaseContains(result, "not exist")
+            && !utilxx_base::isIgnoreCaseContains(result, "permission")) {
             g_fs_passed++;
             TEST_PASS
                 << "FilesystemReadTextFileTool with offset/limit returns 'not exist' for non-existent file"
@@ -797,7 +797,7 @@ asio::awaitable<void>
                 << result << std::endl;
         }
     } catch (const std::exception& e) {
-        if (agentxx::util::isIgnoreCaseContains(e.what(), "not exist")) {
+        if (utilxx_base::isIgnoreCaseContains(e.what(), "not exist")) {
             g_fs_passed++;
             TEST_PASS << "FilesystemReadTextFileTool with offset/limit throws 'not exist': "
                       << e.what() << std::endl;
@@ -814,8 +814,8 @@ asio::awaitable<void>
             args,
             agentxx::tools::testResolvedWorkDir(agentContext)
         );
-        if (agentxx::util::isIgnoreCaseContains(syncResult, "not exist")
-            && !agentxx::util::isIgnoreCaseContains(syncResult, "permission")) {
+        if (utilxx_base::isIgnoreCaseContains(syncResult, "not exist")
+            && !utilxx_base::isIgnoreCaseContains(syncResult, "permission")) {
             g_fs_passed++;
             TEST_PASS << "fileReadExecute (sync) returns 'not exist' for non-existent file"
                       << std::endl;
@@ -828,12 +828,12 @@ asio::awaitable<void>
 
     // 测试读取目录路径应返回目录错误而非权限错误
     try {
-        auto dirArgs = agentxx::util::Json{
+        auto dirArgs = utilxx_base::Json{
             {"path", testDir}
         };
         auto result = co_await tool.execute_async(dirArgs);
-        if (agentxx::util::isIgnoreCaseContains(result, "directory")
-            && !agentxx::util::isIgnoreCaseContains(result, "permission")) {
+        if (utilxx_base::isIgnoreCaseContains(result, "directory")
+            && !utilxx_base::isIgnoreCaseContains(result, "permission")) {
             g_fs_passed++;
             TEST_PASS
                 << "FilesystemReadTextFileTool returns directory error when reading a directory"
@@ -844,7 +844,7 @@ asio::awaitable<void>
                       << std::endl;
         }
     } catch (const std::exception& e) {
-        if (agentxx::util::isIgnoreCaseContains(e.what(), "directory")) {
+        if (utilxx_base::isIgnoreCaseContains(e.what(), "directory")) {
             g_fs_passed++;
             TEST_PASS << "FilesystemReadTextFileTool throws directory error: " << e.what()
                       << std::endl;
@@ -861,7 +861,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_full(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", testDir + "/test1.txt"}
     };
     auto result = co_await tool.execute_async(args);
@@ -883,7 +883,7 @@ asio::awaitable<void>
         f << "aaaa\nbbbb\ncccc\ndddd\n";
     }
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",        offsetFile},
         {"line_offset", 0         },
     };
@@ -904,7 +904,7 @@ asio::awaitable<void>
     test_read_text_file_relative_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool    = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto relPath = testDirRelativeToCwd() + "/test1.txt";
-    auto args    = agentxx::util::Json{
+    auto args    = utilxx_base::Json{
            {"path", relPath}
     };
     auto result = co_await tool.execute_async(args);
@@ -922,7 +922,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",       testDir + "/offset_test.txt"},
         {"line_limit", 3                           },
     };
@@ -947,7 +947,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_read_text_file_offset_and_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",        testDir + "/offset_test.txt"},
         {"line_offset", 0                           },
         {"line_limit",  2                           },
@@ -981,11 +981,11 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_write_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", ""}
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemWriteFileTool returns error for empty path" << std::endl;
     } else {
@@ -1001,7 +1001,7 @@ asio::awaitable<void>
     test_write_file_create(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool     = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto filePath = testDir + "/write_test.txt";
-    auto args     = agentxx::util::Json{
+    auto args     = utilxx_base::Json{
             {"path",    filePath          },
             {"content", "hello write test"},
     };
@@ -1037,15 +1037,15 @@ asio::awaitable<void>
     ) {
     auto tool     = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto filePath = testDir + "/test1.txt";
-    auto args     = agentxx::util::Json{
+    auto args     = utilxx_base::Json{
             {"path",      filePath     },
             {"content",   "new content"},
             {"overwrite", false        },
     };
     try {
         auto result = co_await tool.execute_async(args);
-        if (agentxx::util::isIgnoreCaseContains(result, "error")
-            || agentxx::util::isIgnoreCaseContains(result, "already exist")) {
+        if (utilxx_base::isIgnoreCaseContains(result, "error")
+            || utilxx_base::isIgnoreCaseContains(result, "already exist")) {
             g_fs_passed++;
             TEST_PASS << "FilesystemWriteFileTool returns error when file exists and "
                          "overwrite=false"
@@ -1073,7 +1073,7 @@ asio::awaitable<void>
         std::ofstream f(filePath);
         f << "original content\n";
     }
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",      filePath             },
         {"content",   "overwritten content"},
         {"overwrite", true                 },
@@ -1116,13 +1116,13 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_edit_text_file_empty_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",    "" },
         {"old_str", "a"},
         {"new_str", "b"},
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemEditTextFileTool returns error for empty path" << std::endl;
     } else {
@@ -1137,13 +1137,13 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_edit_text_file_empty_old_str(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",    testDir + "/test1.txt"},
         {"old_str", ""                    },
         {"new_str", "b"                   },
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemEditTextFileTool returns error for empty old_str" << std::endl;
     } else {
@@ -1164,7 +1164,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",    filePath     },
         {"old_str", "hello world"},
         {"new_str", "hi universe"},
@@ -1199,7 +1199,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",          filePath},
         {"old_str",       "foo"   },
         {"new_str",       "baz"   },
@@ -1230,15 +1230,15 @@ asio::awaitable<void>
     test_edit_text_file_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto filePath = testDir + "/edit_test.txt";
     auto tool     = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args     = agentxx::util::Json{
+    auto args     = utilxx_base::Json{
             {"path",    filePath                },
             {"old_str", "nonexistent_string_xyz"},
             {"new_str", "replacement"           },
     };
     try {
         auto result = co_await tool.execute_async(args);
-        if (agentxx::util::isIgnoreCaseContains(result, "error")
-            || agentxx::util::isIgnoreCaseContains(result, "no match")) {
+        if (utilxx_base::isIgnoreCaseContains(result, "error")
+            || utilxx_base::isIgnoreCaseContains(result, "no match")) {
             g_fs_passed++;
             TEST_PASS << "FilesystemEditTextFileTool returns error when no match found"
                       << std::endl;
@@ -1267,7 +1267,7 @@ asio::awaitable<void>
 
     // 完整读取: 保留原始换行符 (CRLF 文件返回 CRLF 内容, 见插件注释:
     // read 保留原始内容、edit 归一化 LF 后匹配)
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path", filePath}
     };
     auto full     = co_await tool.execute_async(args);
@@ -1282,7 +1282,7 @@ asio::awaitable<void>
     }
 
     // offset/limit 读取: 同样保留原始 `\r`
-    auto args2 = agentxx::util::Json{
+    auto args2 = utilxx_base::Json{
         {"path",        filePath},
         {"line_offset", 1       },
         {"line_limit",  1       },
@@ -1311,7 +1311,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",    filePath              },
         {"old_str", "hello world\nfoo bar"},
         {"new_str", "hi universe\nfoo bar"},
@@ -1345,7 +1345,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",    filePath       },
         {"old_str", "alpha\r\nbeta"},
         {"new_str", "AA\r\nBB"     },
@@ -1380,7 +1380,7 @@ asio::awaitable<void>
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"path",          filePath},
         {"old_str",       "foo"   },
         {"new_str",       "baz"   },
@@ -1423,11 +1423,11 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_glob_empty_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array()},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array()},
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGlobTool returns error for empty file_patterns" << std::endl;
     } else {
@@ -1442,8 +1442,8 @@ asio::awaitable<void>
 asio::awaitable<void> test_glob_find_files(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -1460,8 +1460,8 @@ asio::awaitable<void> test_glob_find_files(std::weak_ptr<agentxx::agent::AgentCo
 asio::awaitable<void> test_glob_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/**/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("subtest.txt") != std::string::npos) {
@@ -1479,8 +1479,8 @@ asio::awaitable<void>
     test_glob_relative_pattern(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::FilesystemGlobTool{agentContext};
     auto relDir = testDirRelativeToCwd();
-    auto args   = agentxx::util::Json{
-          {"file_patterns", agentxx::util::Json::array({relDir + "/*.txt"})},
+    auto args   = utilxx_base::Json{
+          {"file_patterns", utilxx_base::Json::array({relDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -1512,13 +1512,13 @@ asio::awaitable<void>
     test_grep_empty_text_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // text_patterns 与 regex_patterns 均为空: 应报错 (至少指定其一)
-    auto args = agentxx::util::Json{
-        {"text_patterns",  agentxx::util::Json::array()                    },
-        {"regex_patterns", agentxx::util::Json::array()                    },
-        {"file_patterns",  agentxx::util::Json::array({testDir + "/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns",  utilxx_base::Json::array()                    },
+        {"regex_patterns", utilxx_base::Json::array()                    },
+        {"file_patterns",  utilxx_base::Json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool returns error for empty text_patterns" << std::endl;
     } else {
@@ -1533,12 +1533,12 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_empty_file_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"hello"})},
-        {"file_patterns", agentxx::util::Json::array()         },
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"hello"})},
+        {"file_patterns", utilxx_base::Json::array()         },
     };
     auto result = co_await tool.execute_async(args);
-    if (agentxx::util::isIgnoreCaseContains(result, "error")) {
+    if (utilxx_base::isIgnoreCaseContains(result, "error")) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool returns error for empty file_patterns" << std::endl;
     } else {
@@ -1554,9 +1554,9 @@ asio::awaitable<void> test_grep_text_search(std::weak_ptr<agentxx::agent::AgentC
 ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // text_patterns 现为纯文本匹配 (开关已移除)
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"hello"})           },
-        {"file_patterns", agentxx::util::Json::array({testDir + "/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"hello"})           },
+        {"file_patterns", utilxx_base::Json::array({testDir + "/*.txt"})},
         {"output_mode",   "files_with_matches"                            },
     };
     auto result = co_await tool.execute_async(args);
@@ -1574,9 +1574,9 @@ asio::awaitable<void>
     test_grep_regex_search(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 正则搜索改由 regex_patterns 指定 (text_patterns 不再按正则解释)
-    auto args = agentxx::util::Json{
-        {"regex_patterns", agentxx::util::Json::array({"line[0-9]"})           },
-        {"file_patterns",  agentxx::util::Json::array({testDir + "/test1.txt"})},
+    auto args = utilxx_base::Json{
+        {"regex_patterns", utilxx_base::Json::array({"line[0-9]"})           },
+        {"file_patterns",  utilxx_base::Json::array({testDir + "/test1.txt"})},
         {"output_mode",    "files_with_matches"                                },
     };
     auto result = co_await tool.execute_async(args);
@@ -1596,10 +1596,10 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_text_and_regex_union(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns",  agentxx::util::Json::array({"hello world"})     },
-        {"regex_patterns", agentxx::util::Json::array({"line[0-9]"})       },
-        {"file_patterns",  agentxx::util::Json::array({testDir + "/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns",  utilxx_base::Json::array({"hello world"})     },
+        {"regex_patterns", utilxx_base::Json::array({"line[0-9]"})       },
+        {"file_patterns",  utilxx_base::Json::array({testDir + "/*.txt"})},
         {"output_mode",    "files_with_matches"                            },
     };
     auto result = co_await tool.execute_async(args);
@@ -1622,10 +1622,10 @@ asio::awaitable<void>
     test_grep_text_and_regex_union_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext
     ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns",  agentxx::util::Json::array({"hello"})               },
-        {"regex_patterns", agentxx::util::Json::array({"world"})               },
-        {"file_patterns",  agentxx::util::Json::array({testDir + "/test2.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns",  utilxx_base::Json::array({"hello"})               },
+        {"regex_patterns", utilxx_base::Json::array({"world"})               },
+        {"file_patterns",  utilxx_base::Json::array({testDir + "/test2.txt"})},
         {"output_mode",    "content"                                           },
     };
     auto result = co_await tool.execute_async(args);
@@ -1650,9 +1650,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_content_mode(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"hello"})               },
-        {"file_patterns", agentxx::util::Json::array({testDir + "/test2.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"hello"})               },
+        {"file_patterns", utilxx_base::Json::array({testDir + "/test2.txt"})},
         {"output_mode",   "content"                                           },
     };
     auto result = co_await tool.execute_async(args);
@@ -1680,9 +1680,9 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 多文件 content 模式: 每个文件应有独立的组头 "{filepath}:",
     // 且每个文件的组头仅出现一次 (减少路径重复), 各文件行归属自己的组头之下
-    auto args = agentxx::util::Json{
-        {"regex_patterns",     agentxx::util::Json::array({".*e.*"})           },
-        {"file_patterns",      agentxx::util::Json::array({testDir + "/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"regex_patterns",     utilxx_base::Json::array({".*e.*"})           },
+        {"file_patterns",      utilxx_base::Json::array({testDir + "/*.txt"})},
         {"output_mode",        "content"                                       },
         {"max_count_per_file", 1                                               },
     };
@@ -1715,9 +1715,9 @@ asio::awaitable<void>
     test_grep_case_insensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 搜索 "HELLO" (大写), case_sensitive=false 应匹配到 "hello world"
-    auto args = agentxx::util::Json{
-        {"text_patterns",  agentxx::util::Json::array({"HELLO"})               },
-        {"file_patterns",  agentxx::util::Json::array({testDir + "/test2.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns",  utilxx_base::Json::array({"HELLO"})               },
+        {"file_patterns",  utilxx_base::Json::array({testDir + "/test2.txt"})},
         {"output_mode",    "files_with_matches"                                },
         {"case_sensitive", false                                               },
     };
@@ -1737,9 +1737,9 @@ asio::awaitable<void>
     test_grep_case_sensitive_default(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 搜索 "HELLO" (大写), 默认 case_sensitive=true 不应匹配到 "hello world"
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"HELLO"})               },
-        {"file_patterns", agentxx::util::Json::array({testDir + "/test2.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"HELLO"})               },
+        {"file_patterns", utilxx_base::Json::array({testDir + "/test2.txt"})},
         {"output_mode",   "files_with_matches"                                },
     };
     auto result = co_await tool.execute_async(args);
@@ -1759,9 +1759,9 @@ asio::awaitable<void>
     test_grep_max_count_per_file(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // test1.txt 有 line1~line5, 搜索 "line" 应匹配 5 次, 限制 max_count_per_file=2
-    auto args = agentxx::util::Json{
-        {"text_patterns",      agentxx::util::Json::array({"line"})                },
-        {"file_patterns",      agentxx::util::Json::array({testDir + "/test1.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns",      utilxx_base::Json::array({"line"})                },
+        {"file_patterns",      utilxx_base::Json::array({testDir + "/test1.txt"})},
         {"output_mode",        "files_with_matches"                                },
         {"max_count_per_file", 2                                                   },
     };
@@ -1782,9 +1782,9 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // test1.txt: line1\nline2\nline3\nline4\nline5\n
     // 搜索 "line3", context_lines=1, 应输出第 2,3,4 行
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"line3"})               },
-        {"file_patterns", agentxx::util::Json::array({testDir + "/test1.txt"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"line3"})               },
+        {"file_patterns", utilxx_base::Json::array({testDir + "/test1.txt"})},
         {"output_mode",   "content"                                           },
         {"context_lines", 1                                                   },
     };
@@ -1809,8 +1809,8 @@ asio::awaitable<void> test_glob_type_filter(std::weak_ptr<agentxx::agent::AgentC
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 只匹配目录
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/*"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/*"})},
         {"type",          "dir"                                       },
     };
     auto result = co_await tool.execute_async(args);
@@ -1830,9 +1830,9 @@ asio::awaitable<void>
     test_glob_exclude_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 匹配所有 txt, 排除 test1.txt
-    auto args = agentxx::util::Json{
-        {"file_patterns",    agentxx::util::Json::array({testDir + "/*.txt"})    },
-        {"exclude_patterns", agentxx::util::Json::array({testDir + "/test1.txt"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns",    utilxx_base::Json::array({testDir + "/*.txt"})    },
+        {"exclude_patterns", utilxx_base::Json::array({testDir + "/test1.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     // 应包含 test2.txt, 不应包含 test1.txt
@@ -1853,8 +1853,8 @@ asio::awaitable<void>
     test_glob_case_sensitive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // testDir 下只有小写 test1.txt, 大写模式应匹配不到 (大小写敏感)
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/TEST1.TXT"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/TEST1.TXT"})},
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") == std::string::npos) {
@@ -1872,8 +1872,8 @@ asio::awaitable<void>
 asio::awaitable<void> test_glob_max_depth(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/**/*.txt"})},
         {"max_depth",     1                                                  },
     };
     auto result = co_await tool.execute_async(args);
@@ -1893,8 +1893,8 @@ asio::awaitable<void>
     test_glob_non_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     // 不含 `**` 的模式不应递归: *.txt 只匹配当前目录
-    auto args = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/*.txt"})},
+    auto args = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/*.txt"})},
     };
     auto result = co_await tool.execute_async(args);
     // 应包含 test1.txt, test2.txt, 不应包含 subdir/subtest.txt
@@ -1915,9 +1915,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_no_match_fail_fast(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"never_match_any_text"})     },
-        {"file_patterns", agentxx::util::Json::array({testDir + "/no_such_dir/**"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"never_match_any_text"})     },
+        {"file_patterns", utilxx_base::Json::array({testDir + "/no_such_dir/**"})},
         {"timeout",       60                                                       }, // 修复前会白等 60s
     };
     auto t0     = std::chrono::steady_clock::now();
@@ -1943,9 +1943,9 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_grep_skip_directories(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"hello world"})    },
-        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*"})},
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"hello world"})    },
+        {"file_patterns", utilxx_base::Json::array({testDir + "/**/*"})},
         {"output_mode",   "files_with_matches"                           },
     };
     auto result = co_await tool.execute_async(args);
@@ -1994,9 +1994,9 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     };
 
     // 正则 + files_with_matches
-    auto args = agentxx::util::Json{
-        {"regex_patterns", agentxx::util::Json::array({"token_\\d+", "func\\d+"})},
-        {"file_patterns",  agentxx::util::Json::array({stressDir + "/**/*"})     },
+    auto args = utilxx_base::Json{
+        {"regex_patterns", utilxx_base::Json::array({"token_\\d+", "func\\d+"})},
+        {"file_patterns",  utilxx_base::Json::array({stressDir + "/**/*"})     },
     };
     auto rss0 = rssKB();
     for (int i = 0; i < 30; i++) {
@@ -2010,9 +2010,9 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     auto rss1 = rssKB();
 
     // 纯文本 (AhoCorasick) + content 模式
-    auto args2 = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"token_5", "func3"}) },
-        {"file_patterns", agentxx::util::Json::array({stressDir + "/**/*"})},
+    auto args2 = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"token_5", "func3"}) },
+        {"file_patterns", utilxx_base::Json::array({stressDir + "/**/*"})},
         {"output_mode",   "content"                                        },
     };
     for (int i = 0; i < 30; i++) {
@@ -2038,17 +2038,17 @@ asio::awaitable<void>
     test_glob_unicode_paths(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
     auto unicodeDir = testDir + "/utf8_glob_ßµ™∃";
-    fs::create_directories(agentxx::util::utf8ToPath(unicodeDir));
+    fs::create_directories(utilxx_base::utf8ToPath(unicodeDir));
     {
-        std::ofstream f(agentxx::util::utf8ToPath(unicodeDir + "/sample.txt"));
+        std::ofstream f(utilxx_base::utf8ToPath(unicodeDir + "/sample.txt"));
         f << "unicode glob content\n";
     }
 
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
 
     // 1) 递归 glob: 应能遍历该目录且路径中包含 UTF-8 字符 (不抛异常)
-    auto argsRec = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*"})},
+    auto argsRec = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/**/*"})},
         {"limit",         0                                              },
     };
     auto resRec        = co_await tool.execute_async(argsRec);
@@ -2056,13 +2056,13 @@ asio::awaitable<void>
     bool hasUnicodeDir = resRec.find("utf8_glob_ßµ™∃") != std::string::npos;
 
     // 2) 直接用含非 ASCII 字符的 pattern 匹配
-    auto argsDirect = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({unicodeDir + "/*.txt"})},
+    auto argsDirect = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({unicodeDir + "/*.txt"})},
     };
     auto resDirect      = co_await tool.execute_async(argsDirect);
     bool hasDirectMatch = resDirect.find("sample.txt") != std::string::npos;
 
-    fs::remove_all(agentxx::util::utf8ToPath(unicodeDir));
+    fs::remove_all(utilxx_base::utf8ToPath(unicodeDir));
 
     if (hasFile && hasUnicodeDir && hasDirectMatch) {
         g_fs_passed++;
@@ -2081,23 +2081,23 @@ asio::awaitable<void>
     test_grep_unicode_path_and_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
     auto unicodeDir = testDir + "/utf8_grep_ßµ™∃";
-    fs::create_directories(agentxx::util::utf8ToPath(unicodeDir));
+    fs::create_directories(utilxx_base::utf8ToPath(unicodeDir));
     {
-        std::ofstream f(agentxx::util::utf8ToPath(unicodeDir + "/target.txt"));
+        std::ofstream f(utilxx_base::utf8ToPath(unicodeDir + "/target.txt"));
         f << "match_token_in_unicode_dir_12345\nother content\n";
     }
 
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"match_token_in_unicode_dir"})},
-        {"file_patterns", agentxx::util::Json::array({testDir + "/**/*"})           },
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"match_token_in_unicode_dir"})},
+        {"file_patterns", utilxx_base::Json::array({testDir + "/**/*"})           },
         {"output_mode",   "files_with_matches"                                      },
     };
     auto result   = co_await tool.execute_async(args);
     bool hasMatch = result.find("target.txt") != std::string::npos
                     && result.find("[Error]") == std::string::npos;
 
-    fs::remove_all(agentxx::util::utf8ToPath(unicodeDir));
+    fs::remove_all(utilxx_base::utf8ToPath(unicodeDir));
 
     if (hasMatch) {
         g_fs_passed++;
@@ -2117,10 +2117,10 @@ asio::awaitable<void>
     ) {
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
     // 传入两个 pattern: 一个是指向不存在目录的 pattern, 另一个是指向有效文件的 pattern
-    auto args = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"hello world"})                               },
+    auto args = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"hello world"})                               },
         {"file_patterns",
-         agentxx::util::Json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})
+         utilxx_base::Json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})
         },
         {"output_mode",   "files_with_matches"                                                      },
     };
@@ -2145,20 +2145,20 @@ asio::awaitable<void>
     namespace fs    = std::filesystem;
     auto chineseDir = testDir + "/中文测试目录_列表";
     auto subDir     = chineseDir + "/子目录_一级";
-    fs::create_directories(agentxx::util::utf8ToPath(subDir));
+    fs::create_directories(utilxx_base::utf8ToPath(subDir));
     {
-        std::ofstream f1(agentxx::util::utf8ToPath(chineseDir + "/中文文件_一.txt"));
+        std::ofstream f1(utilxx_base::utf8ToPath(chineseDir + "/中文文件_一.txt"));
         f1 << "文件1内容\n";
     }
     {
-        std::ofstream f2(agentxx::util::utf8ToPath(subDir + "/深层中文文件.txt"));
+        std::ofstream f2(utilxx_base::utf8ToPath(subDir + "/深层中文文件.txt"));
         f2 << "深层内容\n";
     }
 
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
 
     // 1) 非递归列出
-    auto argsNonRec = agentxx::util::Json{
+    auto argsNonRec = utilxx_base::Json{
         {"path",      chineseDir},
         {"recursive", false     }
     };
@@ -2168,14 +2168,14 @@ asio::awaitable<void>
     bool noSubFile = resNonRec.find("深层中文文件.txt") == std::string::npos;
 
     // 2) 递归列出
-    auto argsRec = agentxx::util::Json{
+    auto argsRec = utilxx_base::Json{
         {"path",      chineseDir},
         {"recursive", true      }
     };
     auto resRec     = co_await tool.execute_async(argsRec);
     bool hasSubFile = resRec.find("深层中文文件.txt") != std::string::npos;
 
-    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+    fs::remove_all(utilxx_base::utf8ToPath(chineseDir));
 
     if (hasFile1 && hasSubDir && noSubFile && hasSubFile) {
         g_fs_passed++;
@@ -2193,17 +2193,17 @@ asio::awaitable<void>
     test_read_text_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
     auto chineseDir = testDir + "/中文测试目录_读取";
-    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    fs::create_directories(utilxx_base::utf8ToPath(chineseDir));
     auto filePath = chineseDir + "/读取测试文件_中文.txt";
     {
-        std::ofstream f(agentxx::util::utf8ToPath(filePath));
+        std::ofstream f(utilxx_base::utf8ToPath(filePath));
         f << "第一行中文数据\n第二行关键内容\n第三行结束行\n";
     }
 
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
 
     // 1) 全量读取 (异步/stream_file)
-    auto argsFull = agentxx::util::Json{
+    auto argsFull = utilxx_base::Json{
         {"path", filePath}
     };
     auto resFull = co_await tool.execute_async(argsFull);
@@ -2211,7 +2211,7 @@ asio::awaitable<void>
                   && resFull.find("第三行结束行") != std::string::npos;
 
     // 2) 分段读取 (offset + limit)
-    auto argsSlice = agentxx::util::Json{
+    auto argsSlice = utilxx_base::Json{
         {"path",        filePath},
         {"line_offset", 1       },
         {"line_limit",  1       }
@@ -2226,7 +2226,7 @@ asio::awaitable<void>
     bool syncOk       = resSyncFull.find("第一行中文数据") != std::string::npos
                   && resSyncSlice.find("第二行关键内容") != std::string::npos;
 
-    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+    fs::remove_all(utilxx_base::utf8ToPath(chineseDir));
 
     if (fullOk && sliceOk && syncOk) {
         g_fs_passed++;
@@ -2249,20 +2249,20 @@ asio::awaitable<void>
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
 
     // 1) 首次创建: 自动创建多层中文父目录
-    auto argsCreate = agentxx::util::Json{
+    auto argsCreate = utilxx_base::Json{
         {"path",      filePath                 },
         {"content",   "中文内容第一版\n"},
         {"overwrite", false                    }
     };
     auto resCreate = co_await tool.execute_async(argsCreate);
-    bool createOk  = (resCreate == "success") && fs::exists(agentxx::util::utf8ToPath(filePath));
+    bool createOk  = (resCreate == "success") && fs::exists(utilxx_base::utf8ToPath(filePath));
 
     // 2) overwrite=false 再次写入应报错
     bool noOverwriteThrew = false;
     try {
         auto out = co_await tool.execute_async(argsCreate);
-        if (agentxx::util::isIgnoreCaseContains(out, "error")
-            || agentxx::util::isIgnoreCaseContains(out, "already exist")) {
+        if (utilxx_base::isIgnoreCaseContains(out, "error")
+            || utilxx_base::isIgnoreCaseContains(out, "already exist")) {
             noOverwriteThrew = true;
         }
     } catch (...) {
@@ -2270,7 +2270,7 @@ asio::awaitable<void>
     }
 
     // 3) overwrite=true 成功覆盖
-    auto argsOverwrite = agentxx::util::Json{
+    auto argsOverwrite = utilxx_base::Json{
         {"path",      filePath                    },
         {"content",   "覆盖后的中文内容\n"},
         {"overwrite", true                        }
@@ -2281,7 +2281,7 @@ asio::awaitable<void>
     // 验证文件内容
     std::string readContent;
     {
-        std::ifstream in(agentxx::util::utf8ToPath(filePath));
+        std::ifstream in(utilxx_base::utf8ToPath(filePath));
         readContent
             = std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
@@ -2289,15 +2289,15 @@ asio::awaitable<void>
 
     // 4) 同步版 write 直测
     auto syncFilePath = chineseDir + "/同步写入文件.txt";
-    auto syncArgs     = agentxx::util::Json{
+    auto syncArgs     = utilxx_base::Json{
             {"path",      syncFilePath          },
             {"content",   "同步中文写入\n"},
             {"overwrite", true                  }
     };
     auto syncRes = agentxx_fs_plugin::fileWriteExecute(syncArgs, testDir);
-    bool syncOk  = (syncRes == "success") && fs::exists(agentxx::util::utf8ToPath(syncFilePath));
+    bool syncOk  = (syncRes == "success") && fs::exists(utilxx_base::utf8ToPath(syncFilePath));
 
-    fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文测试目录_写入"));
+    fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文测试目录_写入"));
 
     if (createOk && noOverwriteThrew && overwriteOk && contentOk && syncOk) {
         g_fs_passed++;
@@ -2316,17 +2316,17 @@ asio::awaitable<void>
     test_edit_text_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
     auto chineseDir = testDir + "/中文测试目录_编辑";
-    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    fs::create_directories(utilxx_base::utf8ToPath(chineseDir));
     auto filePath = chineseDir + "/编辑目标文件_中文.txt";
     {
-        std::ofstream f(agentxx::util::utf8ToPath(filePath));
+        std::ofstream f(utilxx_base::utf8ToPath(filePath));
         f << "前缀行\n目标旧字符串_AAA\n中间行\n目标旧字符串_AAA\n后缀行\n";
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
 
     // 1) 单处替换
-    auto argsSingle = agentxx::util::Json{
+    auto argsSingle = utilxx_base::Json{
         {"path",          filePath                   },
         {"old_str",       "目标旧字符串_AAA"   },
         {"new_str",       "已替换新字符串_BBB"},
@@ -2336,7 +2336,7 @@ asio::awaitable<void>
     bool singleOk  = (resSingle == "success");
 
     // 2) 多处替换 (剩余的一处替换)
-    auto argsMulti = agentxx::util::Json{
+    auto argsMulti = utilxx_base::Json{
         {"path",          filePath                   },
         {"old_str",       "目标旧字符串_AAA"   },
         {"new_str",       "已替换新字符串_CCC"},
@@ -2349,7 +2349,7 @@ asio::awaitable<void>
     // 验证文件最终内容
     std::string readContent;
     {
-        std::ifstream in(agentxx::util::utf8ToPath(filePath));
+        std::ifstream in(utilxx_base::utf8ToPath(filePath));
         readContent
             = std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
@@ -2358,7 +2358,7 @@ asio::awaitable<void>
                      && readContent.find("目标旧字符串_AAA") == std::string::npos;
 
     // 3) 同步版 edit 直测
-    auto syncArgs = agentxx::util::Json{
+    auto syncArgs = utilxx_base::Json{
         {"path",          filePath                   },
         {"old_str",       "已替换新字符串_BBB"},
         {"new_str",       "同步替换新内容"    },
@@ -2367,7 +2367,7 @@ asio::awaitable<void>
     auto syncRes = agentxx_fs_plugin::fileEditExecute(syncArgs, testDir);
     bool syncOk  = (syncRes == "success");
 
-    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+    fs::remove_all(utilxx_base::utf8ToPath(chineseDir));
 
     if (singleOk && multiOk && contentOk && syncOk) {
         g_fs_passed++;
@@ -2386,33 +2386,33 @@ asio::awaitable<void>
     test_glob_chinese_paths(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
     auto chineseDir = testDir + "/中文测试目录_通配符/子目录_中文";
-    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    fs::create_directories(utilxx_base::utf8ToPath(chineseDir));
     {
-        std::ofstream f1(agentxx::util::utf8ToPath(chineseDir + "/文档_一.txt"));
+        std::ofstream f1(utilxx_base::utf8ToPath(chineseDir + "/文档_一.txt"));
         f1 << "content1\n";
-        std::ofstream f2(agentxx::util::utf8ToPath(chineseDir + "/文档_二.log"));
+        std::ofstream f2(utilxx_base::utf8ToPath(chineseDir + "/文档_二.log"));
         f2 << "content2\n";
     }
 
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
 
     // 1) 递归 pattern 匹配中文目录下的 .txt
-    auto argsRec = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({testDir + "/中文测试目录_通配符/**/*.txt"})},
+    auto argsRec = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({testDir + "/中文测试目录_通配符/**/*.txt"})},
     };
     auto resRec = co_await tool.execute_async(argsRec);
     bool recOk  = resRec.find("文档_一.txt") != std::string::npos
                  && resRec.find("文档_二.log") == std::string::npos;
 
     // 2) 直接用含中文的 pattern 匹配
-    auto argsDirect = agentxx::util::Json{
-        {"file_patterns", agentxx::util::Json::array({chineseDir + "/*"})},
+    auto argsDirect = utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({chineseDir + "/*"})},
     };
     auto resDirect = co_await tool.execute_async(argsDirect);
     bool directOk  = resDirect.find("文档_一.txt") != std::string::npos
                     && resDirect.find("文档_二.log") != std::string::npos;
 
-    fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文测试目录_通配符"));
+    fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文测试目录_通配符"));
 
     if (recOk && directOk) {
         g_fs_passed++;
@@ -2431,19 +2431,19 @@ asio::awaitable<void>
     test_grep_chinese_path_and_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
     auto chineseDir = testDir + "/中文测试目录_检索";
-    fs::create_directories(agentxx::util::utf8ToPath(chineseDir));
+    fs::create_directories(utilxx_base::utf8ToPath(chineseDir));
     auto filePath = chineseDir + "/检索目标_中文.txt";
     {
-        std::ofstream f(agentxx::util::utf8ToPath(filePath));
+        std::ofstream f(utilxx_base::utf8ToPath(filePath));
         f << "首行无用数据\n检索特征码_中文关键字_98765\n末行结束\n";
     }
 
     auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
 
     // 1) files_with_matches 文本搜索
-    auto argsFwm = agentxx::util::Json{
-        {"text_patterns", agentxx::util::Json::array({"检索特征码_中文关键字"})},
-        {"file_patterns", agentxx::util::Json::array({chineseDir + "/*.txt"})            },
+    auto argsFwm = utilxx_base::Json{
+        {"text_patterns", utilxx_base::Json::array({"检索特征码_中文关键字"})},
+        {"file_patterns", utilxx_base::Json::array({chineseDir + "/*.txt"})            },
         {"output_mode",   "files_with_matches"                                           }
     };
     auto resFwm = co_await tool.execute_async(argsFwm);
@@ -2451,16 +2451,16 @@ asio::awaitable<void>
                  && resFwm.find("[Error]") == std::string::npos;
 
     // 2) content 模式正则搜索
-    auto argsContent = agentxx::util::Json{
-        {"regex_patterns", agentxx::util::Json::array({R"(检索特征码_中文关键字_\d+)"})},
-        {"file_patterns",  agentxx::util::Json::array({testDir + "/**/*.txt"})                   },
+    auto argsContent = utilxx_base::Json{
+        {"regex_patterns", utilxx_base::Json::array({R"(检索特征码_中文关键字_\d+)"})},
+        {"file_patterns",  utilxx_base::Json::array({testDir + "/**/*.txt"})                   },
         {"output_mode",    "content"                                                             }
     };
     auto resContent = co_await tool.execute_async(argsContent);
     bool contentOk  = resContent.find("检索目标_中文.txt") != std::string::npos
                      && resContent.find("检索特征码_中文关键字_98765") != std::string::npos;
 
-    fs::remove_all(agentxx::util::utf8ToPath(chineseDir));
+    fs::remove_all(utilxx_base::utf8ToPath(chineseDir));
 
     if (fwmOk && contentOk) {
         g_fs_passed++;
@@ -2475,7 +2475,7 @@ asio::awaitable<void>
 }
 
 /// 同步兜底路径测试: 模拟"文件异步 I/O 不可用"的环境 —— 经
-/// agentxx::util::setAsyncFileIoSupported(false) 强制关闭后, read/write/edit 的
+/// utilxx_base::setAsyncFileIoSupported(false) 强制关闭后, read/write/edit 的
 /// 协程执行体应回退同步实现 (编译期无 asio 文件 I/O, 或运行环境 io_uring 被
 /// seccomp 拦截时的实际路径), 且产出与自动探测路径完全一致。
 /// 关闭只作用于本测试作用域, 结束时恢复自动探测
@@ -2484,27 +2484,27 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
 ) {
     namespace fs = std::filesystem;
     auto dirPath = testDir + "/同步兜底测试目录";
-    fs::create_directories(agentxx::util::utf8ToPath(dirPath));
+    fs::create_directories(utilxx_base::utf8ToPath(dirPath));
     auto filePath = dirPath + "/sync_fallback.txt";
 
     auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
     auto readTool  = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto editTool  = agentxx::tools::FilesystemEditTextFileTool{agentContext};
 
-    auto writeArgs = agentxx::util::Json{
+    auto writeArgs = utilxx_base::Json{
         {"path",      filePath                                     },
         {"content",   "同步兜底第一行\n目标旧字符串\n"},
         {"overwrite", true                                         }
     };
-    auto readArgs = agentxx::util::Json{
+    auto readArgs = utilxx_base::Json{
         {"path", filePath}
     };
-    auto readPartArgs = agentxx::util::Json{
+    auto readPartArgs = utilxx_base::Json{
         {"path",        filePath},
         {"line_offset", 1       },
         {"line_limit",  1       }
     };
-    auto editArgs = agentxx::util::Json{
+    auto editArgs = utilxx_base::Json{
         {"path",          filePath               },
         {"old_str",       "目标旧字符串"   },
         {"new_str",       "已替换新字符串"},
@@ -2526,7 +2526,7 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
         r.readRes     = co_await readTool.execute_async(readArgs);
         r.readPartRes = co_await readTool.execute_async(readPartArgs);
         r.editRes     = co_await editTool.execute_async(editArgs);
-        std::ifstream in{agentxx::util::utf8ToPath(filePath)};
+        std::ifstream in{utilxx_base::utf8ToPath(filePath)};
         r.finalContent
             = std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
         co_return r;
@@ -2534,25 +2534,25 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
 
     RunResult syncRun;
     // 关闭前的自动探测结果 (首次调用即触发探测并缓存, 供恢复后比对)
-    const bool autoDetected = agentxx::util::isAsyncFileIoSupported();
+    const bool autoDetected = utilxx_base::isAsyncFileIoSupported();
     {
         /// 作用域内强制关闭文件异步 I/O, 退出时 (含异常) 恢复自动探测
         struct ScopedDisableAsyncFileIo {
             ScopedDisableAsyncFileIo() {
-                agentxx::util::setAsyncFileIoSupported(false);
+                utilxx_base::setAsyncFileIoSupported(false);
             }
 
             ~ScopedDisableAsyncFileIo() {
-                agentxx::util::resetAsyncFileIoSupported();
+                utilxx_base::resetAsyncFileIoSupported();
             }
         } scopedDisable;
 
-        XX_TEST_EXPECT_FALSE(agentxx::util::isAsyncFileIoSupported());
+        XX_TEST_EXPECT_FALSE(utilxx_base::isAsyncFileIoSupported());
         syncRun = co_await runOnce();
-        XX_TEST_EXPECT_FALSE(agentxx::util::isAsyncFileIoSupported());
+        XX_TEST_EXPECT_FALSE(utilxx_base::isAsyncFileIoSupported());
     }
     // 作用域结束恢复自动探测: 判断结果回到探测值, 不再被强制关闭
-    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), autoDetected);
+    XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), autoDetected);
 
     // 同步兜底路径本身必须可用且行为正确
     bool syncOk = syncRun.writeRes.find("success") != std::string::npos
@@ -2569,7 +2569,7 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
                   && autoRun.editRes == syncRun.editRes
                   && autoRun.finalContent == syncRun.finalContent;
 
-    fs::remove_all(agentxx::util::utf8ToPath(dirPath));
+    fs::remove_all(utilxx_base::utf8ToPath(dirPath));
 
     if (syncOk && sameOk) {
         g_fs_passed++;
@@ -2677,7 +2677,7 @@ asio::awaitable<void> test_plugin_real_link() {
     // 经 ToolRegistry 全链路执行 (op_driver 驱动插件三件套); sessionId 注入
     // thread_id → 会话工作目录解析链路
     auto callTool
-        = [&](const char* name, const agentxx::util::Json& args) -> asio::awaitable<std::string> {
+        = [&](const char* name, const utilxx_base::Json& args) -> asio::awaitable<std::string> {
         auto tool = linkCtx->toolRegistry->find(name);
         if (!tool) {
             co_return "[Error] tool not found";
@@ -2691,7 +2691,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_write",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path",    "link_smoke.txt"},
                 {"content", "alpha\nbeta\n" }
         }
@@ -2704,7 +2704,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_read",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path", "link_smoke.txt"}
         }
         );
@@ -2713,7 +2713,7 @@ asio::awaitable<void> test_plugin_real_link() {
         );
         auto part = co_await callTool(
             "agentxx_filesystem_read",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path",        "link_smoke.txt"},
                 {"line_offset", 1               },
                 {"line_limit",  1               }
@@ -2728,7 +2728,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_edit",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path",    "link_smoke.txt"},
                 {"old_str", "beta"          },
                 {"new_str", "gamma"         }
@@ -2744,7 +2744,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_list",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path", "."}
         }
         );
@@ -2755,7 +2755,7 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_list",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path", "*.txt"}
         }
         );
@@ -2768,9 +2768,9 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto out = co_await callTool(
             "agentxx_filesystem_grep",
-            agentxx::util::Json{
-                {"text_patterns", agentxx::util::Json::array({"gamma"})},
-                {"file_patterns", agentxx::util::Json::array({"*.txt"})},
+            utilxx_base::Json{
+                {"text_patterns", utilxx_base::Json::array({"gamma"})},
+                {"file_patterns", utilxx_base::Json::array({"*.txt"})},
                 {"output_mode",   "files_with_matches"                 }
         }
         );
@@ -2781,19 +2781,19 @@ asio::awaitable<void> test_plugin_real_link() {
     {
         auto outW = co_await callTool(
             "agentxx_filesystem_write",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path",    "中文目录_真实链路/中文文件.txt"},
                 {"content", "中文链路数据_初始版本\n"         }
         }
         );
         XX_TEST_EXPECT_EQ(outW, std::string{"success"});
         XX_TEST_EXPECT_TRUE(
-            fs::exists(agentxx::util::utf8ToPath(testDir + "/中文目录_真实链路/中文文件.txt"))
+            fs::exists(utilxx_base::utf8ToPath(testDir + "/中文目录_真实链路/中文文件.txt"))
         );
 
         auto outR = co_await callTool(
             "agentxx_filesystem_read",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path", "中文目录_真实链路/中文文件.txt"}
         }
         );
@@ -2801,7 +2801,7 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outE = co_await callTool(
             "agentxx_filesystem_edit",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path",    "中文目录_真实链路/中文文件.txt"},
                 {"old_str", "初始版本"                              },
                 {"new_str", "更新版本"                              }
@@ -2811,7 +2811,7 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outL = co_await callTool(
             "agentxx_filesystem_list",
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"path", "中文目录_真实链路/*.txt"}
         }
         );
@@ -2819,15 +2819,15 @@ asio::awaitable<void> test_plugin_real_link() {
 
         auto outG = co_await callTool(
             "agentxx_filesystem_grep",
-            agentxx::util::Json{
-                {"text_patterns", agentxx::util::Json::array({"更新版本"})                   },
-                {"file_patterns", agentxx::util::Json::array({"中文目录_真实链路/*.txt"})},
+            utilxx_base::Json{
+                {"text_patterns", utilxx_base::Json::array({"更新版本"})                   },
+                {"file_patterns", utilxx_base::Json::array({"中文目录_真实链路/*.txt"})},
                 {"output_mode",   "files_with_matches"                                           }
         }
         );
         XX_TEST_EXPECT_TRUE(outG.find("中文文件.txt") != std::string::npos);
 
-        fs::remove_all(agentxx::util::utf8ToPath(testDir + "/中文目录_真实链路"), ec);
+        fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文目录_真实链路"), ec);
     }
 
     // 卸载 (寄生 loop)
@@ -2872,7 +2872,7 @@ asio::awaitable<void>
     /// 统计输出中的"路径行"数量 (排除 `[Note]`/`[Error]` 前缀行)
     auto countPathLines = [](std::string_view text) -> size_t {
         size_t count = 0;
-        for (auto line : agentxx::util::strSplit(text, '\n')) {
+        for (auto line : utilxx_base::strSplit(text, '\n')) {
             if (line.empty() || line.starts_with("[Note]") || line.starts_with("[Error]")) {
                 continue;
             }
@@ -2888,8 +2888,8 @@ asio::awaitable<void>
 
     // ① glob max_files: 到限停止遍历, 保留已匹配结果 + 首行提示
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"max_files",     10                                              },
         };
         auto result     = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
@@ -2907,8 +2907,8 @@ asio::awaitable<void>
 
     // ② glob max_files = 0 (不限): 全部匹配, 无提示
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"max_files",     0                                               },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
@@ -2924,8 +2924,8 @@ asio::awaitable<void>
 
     // ③ glob max_files 未触发 (匹配数少于上限): 无提示, 结果完整
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/*.txt"})},
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/*.txt"})},
             {"max_files",     100                                              },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
@@ -2941,9 +2941,9 @@ asio::awaitable<void>
 
     // ④ grep max_files: 到限停止收集文件, 已收集文件照常搜索 + 首行提示
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
-            {"text_patterns", agentxx::util::Json::array({"small_token"})     },
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", utilxx_base::Json::array({"small_token"})     },
             {"max_files",     10                                              },
         };
         auto result  = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
@@ -2962,9 +2962,9 @@ asio::awaitable<void>
 
     // ⑤ grep max_files 未触发: 正常返回, 无提示
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
-            {"text_patterns", agentxx::util::Json::array({"small_token"})     },
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", utilxx_base::Json::array({"small_token"})     },
             {"max_files",     100                                             },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
@@ -2979,9 +2979,9 @@ asio::awaitable<void>
 
     // ⑥ grep 到限且已收集文件都无匹配: 错误文本说明"遍历提前停止", 不误报为"无匹配"
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
-            {"text_patterns", agentxx::util::Json::array({"no_such_token"})   },
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", utilxx_base::Json::array({"no_such_token"})   },
             {"max_files",     10                                              },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
@@ -3000,9 +3000,9 @@ asio::awaitable<void>
 
     // ⑦ grep max_file_size_mb: 大文件跳过并给出 [Note] (不做静默丢弃)
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns",    agentxx::util::Json::array({limitDir + "/**/*"})        },
-            {"text_patterns",    agentxx::util::Json::array({"big_token", "small_token"})},
+        auto args = utilxx_base::Json{
+            {"file_patterns",    utilxx_base::Json::array({limitDir + "/**/*"})        },
+            {"text_patterns",    utilxx_base::Json::array({"big_token", "small_token"})},
             {"max_file_size_mb", 0.001                                                   },
         };
         auto result       = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
@@ -3022,7 +3022,7 @@ asio::awaitable<void>
     // ⑧ list max_files 截断 + 首行提示
     {
         auto tool = agentxx::tools::FileSystemListTool{agentContext};
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      limitDir + "/**/*"},
             {"max_files", 10                },
         };
@@ -3040,15 +3040,15 @@ asio::awaitable<void>
 
     // ⑨ glob 以 `**` 结尾 (递归展开分支, 计数发生在递归遍历内部): 同样到限即停
     {
-        auto argsUnlimited = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**"})},
+        auto argsUnlimited = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**"})},
             {"max_files",     0                                             },
         };
         auto full      = ::agentxx_fs_plugin::fileGlobExecute(argsUnlimited, workDir);
         auto fullCount = countPathLines(full); // 目录自身 + 31 个文件
 
-        auto argsLimited = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**"})},
+        auto argsLimited = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**"})},
             {"max_files",     10                                            },
         };
         auto limited    = ::agentxx_fs_plugin::fileGlobExecute(argsLimited, workDir);
@@ -3066,8 +3066,8 @@ asio::awaitable<void>
 
     // ⑩ 多 pattern 共享同一数量上限: 前一个 pattern 到限后不再展开后续 pattern
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})
             },
             {"max_files",     10                                                                   },
         };
@@ -3084,9 +3084,9 @@ asio::awaitable<void>
 
     // ⑪ grep content 模式到限: 首行提示 + 已收集文件的匹配行照常输出
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns", agentxx::util::Json::array({limitDir + "/**/*"})},
-            {"text_patterns", agentxx::util::Json::array({"small_token"})     },
+        auto args = utilxx_base::Json{
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
+            {"text_patterns", utilxx_base::Json::array({"small_token"})     },
             {"output_mode",   "content"                                       },
             {"max_files",     5                                               },
         };
@@ -3110,7 +3110,7 @@ asio::awaitable<void>
     }
 
     std::error_code ec;
-    fs::remove_all(agentxx::util::utf8ToPath(limitDir), ec);
+    fs::remove_all(utilxx_base::utf8ToPath(limitDir), ec);
     co_return;
 }
 
@@ -3146,9 +3146,9 @@ asio::awaitable<void>
 
     // ① glob: 覆盖子树的排除模式在遍历中剪枝, 不计入数量上限
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns",    agentxx::util::Json::array({baseDir + "/**/*"})},
-            {"exclude_patterns", agentxx::util::Json::array({buildDir + "/**"}) },
+        auto args = utilxx_base::Json{
+            {"file_patterns",    utilxx_base::Json::array({baseDir + "/**/*"})},
+            {"exclude_patterns", utilxx_base::Json::array({buildDir + "/**"}) },
             {"max_files",        1000                                           },
         };
         auto result = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
@@ -3167,10 +3167,10 @@ asio::awaitable<void>
 
     // ② grep: 同上 (排除的 1200 个文件既不读也不计入数量上限)
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns",    agentxx::util::Json::array({baseDir + "/**/*"})},
-            {"text_patterns",    agentxx::util::Json::array({"prune_token"})    },
-            {"exclude_patterns", agentxx::util::Json::array({buildDir + "/**"}) },
+        auto args = utilxx_base::Json{
+            {"file_patterns",    utilxx_base::Json::array({baseDir + "/**/*"})},
+            {"text_patterns",    utilxx_base::Json::array({"prune_token"})    },
+            {"exclude_patterns", utilxx_base::Json::array({buildDir + "/**"}) },
             {"max_files",        1000                                           },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
@@ -3188,10 +3188,10 @@ asio::awaitable<void>
 
     // ③ 只匹配目录自身的模式不剪枝: build 目录条目被排除, 其下文件仍被搜索
     {
-        auto args = agentxx::util::Json{
-            {"file_patterns",    agentxx::util::Json::array({baseDir + "/**/*"})},
-            {"text_patterns",    agentxx::util::Json::array({"prune_token"})    },
-            {"exclude_patterns", agentxx::util::Json::array({buildDir})         },
+        auto args = utilxx_base::Json{
+            {"file_patterns",    utilxx_base::Json::array({baseDir + "/**/*"})},
+            {"text_patterns",    utilxx_base::Json::array({"prune_token"})    },
+            {"exclude_patterns", utilxx_base::Json::array({buildDir})         },
             {"max_files",        2000                                           },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
@@ -3215,7 +3215,7 @@ asio::awaitable<void>
     }
 
     std::error_code ec;
-    fs::remove_all(agentxx::util::utf8ToPath(baseDir), ec);
+    fs::remove_all(utilxx_base::utf8ToPath(baseDir), ec);
     co_return;
 }
 

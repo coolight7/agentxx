@@ -44,14 +44,14 @@
 - **事件驱动取消**: 长耗时外部进程或阻塞 IO 统一通过 `ctx.cancelRegistry.registerCallback(sessionKey, cb)` 注册取消动作（支持 `ScopedRegistration` RAII 自动反注册与防悬挂互斥保护），实现毫秒级即时终止
 - **遵守三铁律**：无可变全局 static / 状态经 `user_data` 闭包恢复 / 接口表缓存入实例上下文
 - **组件异常记录**：MCP、Skill、Memory 等外部资源初始化失败时统一记录于 `appendComponentInfo.failedComponents`，供客户端查看详细错误信息
-- **复用 `agentxx_util`**：内置插件 `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)` (第三方插件仅需包含纯 C ABI 头即可)
+- **复用 `cxx_utilxx_base` / `cxx_utilxx`**：内置插件 `find_package(cxx_utilxx_base|cxx_utilxx)` + `target_link_libraries(PRIVATE cxx_utilxx_base_static|cxx_utilxx_static)` (第三方插件仅需包含纯 C ABI 头即可)
 - **平台矩阵**：在各插件 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 函数按需控制编译平台
 
 详见 [plugins.md](design/plugins.md)
 
 ## 4. 调试与日志
 
-- 统一使用 `XX_LOG*` (见 `agent/lib/include/agentxx/util/log.h`)，而非 `std::cout/cerr`，避免干扰 TUI
+- 统一使用 `XX_LOG*` (见 `agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h`)，而非 `std::cout/cerr`，避免干扰 TUI
 - `TUILogSink` 接入右侧日志面板；`TestWarnErrorLogSink` 在测试中把 Warn/Error 透出到 stderr
 - 捕获异常优先 `agentxx::util::catchError/catchErrorAsync` (放行 `CancelledException/NodeInterrupt`)，协程中勿 `catch(...)` 吞取消
 

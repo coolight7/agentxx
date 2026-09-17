@@ -1,6 +1,6 @@
 #include "agentxx-test/core/test_json_reflection.h"
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <string>
 
 namespace {
@@ -13,11 +13,12 @@ int g_jr_failed = 0;
 #define XX_TEST_PASSED g_jr_passed
 #define XX_TEST_FAILED g_jr_failed
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
 
 namespace {
 
-// §5 反射当前 AGENTXX_HAS_CPP26_REFLECTION=0, 走 ADL toJson/fromJson 降级路径。
+// §5 反射当前 UTILXX_HAS_CPP26_REFLECTION=0, 走 ADL toJson/fromJson 降级路径。
 // 此处用业务类型手写 ADL 转换, 验证降级路径往返正确; 编译器未来开启
 // -freflection (宏翻 1) 后零样板 reflectToJson 将直接可用, 本用例无需改动。
 struct ServerCfg {
@@ -55,7 +56,7 @@ inline void fromJson(const Json&, EmptyCfg&) {}
 
 void test_jr_macro_is_fallback() {
     // 当前构建未带 -freflection, 必须走降级路径 (任务 §5 约定)
-    XX_TEST_EXPECT_EQ(AGENTXX_HAS_CPP26_REFLECTION, 0);
+    XX_TEST_EXPECT_EQ(UTILXX_HAS_CPP26_REFLECTION, 0);
 }
 
 void test_jr_adl_roundtrip() {

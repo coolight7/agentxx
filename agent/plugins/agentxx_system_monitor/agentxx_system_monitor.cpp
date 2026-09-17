@@ -5,10 +5,10 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
+
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -30,12 +30,12 @@ namespace {
 constexpr int kUsageIntervalSec = 5;
 
 std::string usageToJson(const CpuGpuUsage& u) {
-    agentxx::util::Json j;
+    utilxx_base::Json j;
     j["cpu"]                 = u.cpuUsagePercent;
     j["mem_total_mb"]        = u.memory.totalPhysicalMB;
     j["mem_used_mb"]         = u.memory.usedPhysicalMB;
     j["mem_percent"]         = u.memory.usagePercent;
-    agentxx::util::Json gpus = agentxx::util::Json::array();
+    utilxx_base::Json gpus = utilxx_base::Json::array();
     for (const auto& g : u.gpus) {
         gpus.push_back({
             {"name",                   g.name               },
@@ -59,8 +59,8 @@ std::string formatUsageText(const CpuGpuUsage& usage) {
     ss << fmt::format(
         "Memory: {:.1f}% · Used: {} / Total: {}\n",
         usage.memory.usagePercent,
-        agentxx::util::formatSize(mbToBytes(usage.memory.usedPhysicalMB)),
-        agentxx::util::formatSize(mbToBytes(usage.memory.totalPhysicalMB))
+        utilxx_base::formatSize(mbToBytes(usage.memory.usedPhysicalMB)),
+        utilxx_base::formatSize(mbToBytes(usage.memory.totalPhysicalMB))
     );
     for (size_t i = 0; i < usage.gpus.size(); ++i) {
         const auto& gpu = usage.gpus[i];
@@ -166,7 +166,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
                         event_json && event_json->data ? event_json->data : "{}",
                         event_json ? static_cast<size_t>(event_json->size) : 0
                     );
-                    auto j = agentxx::util::Json::parse(s);
+                    auto j = utilxx_base::Json::parse(s);
                     c->usageEnabled.store(j.value("enabled", true), std::memory_order_release);
                 } catch (...) {
                 }
@@ -295,7 +295,7 @@ struct UsageStat {
 static UsageStat parseUsage(const std::string& raw) {
     UsageStat st;
     try {
-        auto j        = agentxx::util::Json::parse(raw);
+        auto j        = utilxx_base::Json::parse(raw);
         st.cpu        = j.value("cpu", 0.0);
         st.memPct     = j.value("mem_percent", 0.0);
         st.memUsedMb  = j.value<int64_t>("mem_used_mb", 0);
@@ -318,9 +318,9 @@ static UsageStat parseUsage(const std::string& raw) {
 }
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
-    agentxx::util::Json items = agentxx::util::Json::array();
+    utilxx_base::Json items = utilxx_base::Json::array();
     auto pushText             = [&](const std::string& text, const std::string& role = "normal") {
-        agentxx::util::Json it;
+        utilxx_base::Json it;
         it["kind"] = "text";
         it["role"] = role;
         it["text"] = text;
@@ -335,8 +335,8 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
         ram = fmt::format(
             "{} · {}/{}",
             ram,
-            agentxx::util::formatSize(mbToBytes(st.memUsedMb), 1024, false),
-            agentxx::util::formatSize(mbToBytes(st.memTotalMb), 1024, false)
+            utilxx_base::formatSize(mbToBytes(st.memUsedMb), 1024, false),
+            utilxx_base::formatSize(mbToBytes(st.memTotalMb), 1024, false)
         );
     }
     pushText(ram, "normal");
@@ -345,7 +345,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
     } else if (st.gpuCount > 1) {
         pushText(fmt::format("|- GPU {}x · {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
     }
-    agentxx::util::Json out;
+    utilxx_base::Json out;
     out["items"] = std::move(items);
     return out.dump();
 }
@@ -367,8 +367,8 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     if (ctx.usage_enabled.load(std::memory_order_relaxed)) {
         json = buildUsageInfoItemsJson(ctx, parseUsage(ctx.last_usage_json));
     } else {
-        agentxx::util::Json off;
-        off["items"] = agentxx::util::Json::array();
+        utilxx_base::Json off;
+        off["items"] = utilxx_base::Json::array();
         json         = off.dump();
     }
     auto jsonSv = PluginStringView::from(json.data(), json.size());
@@ -395,7 +395,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                     return;
                 }
                 try {
-                    auto j = agentxx::util::Json::parse(
+                    auto j = utilxx_base::Json::parse(
                         std::string_view(payload_json->data, payload_json->size)
                     );
                     if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
@@ -443,7 +443,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                 std::string stateStr = ctx->clientState();
                 if (!stateStr.empty() && stateStr != "{}") {
                     try {
-                        auto st = agentxx::util::Json::parse(stateStr);
+                        auto st = utilxx_base::Json::parse(stateStr);
                         if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
                             bool found = false;
                             for (const auto& v : st["agentPlugins"]) {
@@ -460,7 +460,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                     } catch (...) {
                     }
                 }
-                agentxx::util::Json out;
+                utilxx_base::Json out;
                 out["action"]      = "toast";
                 out["text"]        = text;
                 out["level"]       = 0;

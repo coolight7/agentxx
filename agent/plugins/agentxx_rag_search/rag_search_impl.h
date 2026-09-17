@@ -12,9 +12,9 @@
 #pragma once
 
 #include "agentxx/util/exception.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx/http_client.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -95,7 +95,7 @@ inline std::vector<std::string>
     if (overlapPercent <= 0.0 || overlapPercent >= 100.0) {
         auto result = std::vector<std::string>{};
         for (size_t index = 0; index < text.size();) {
-            auto target = agentxx::util::findIndexByUtf8Length(text, blockSize, index);
+            auto target = utilxx_base::findIndexByUtf8Length(text, blockSize, index);
             if (target <= 0) {
                 target = text.size();
             }
@@ -114,7 +114,7 @@ inline std::vector<std::string>
     auto   result = std::vector<std::string>{};
     size_t index  = 0;
     while (index < text.size()) {
-        auto target = agentxx::util::findIndexByUtf8Length(text, blockSize, index);
+        auto target = utilxx_base::findIndexByUtf8Length(text, blockSize, index);
         if (target <= 0) {
             target = text.size();
         }
@@ -123,7 +123,7 @@ inline std::vector<std::string>
             break;
         }
 
-        auto nextStart = agentxx::util::findIndexByUtf8Length(text, stepChars, index);
+        auto nextStart = utilxx_base::findIndexByUtf8Length(text, stepChars, index);
         if (nextStart <= 0 || nextStart >= text.size()) {
             break;
         }
@@ -291,7 +291,7 @@ inline std::vector<std::string> splitByDelimiters(
         std::vector<std::string> result;
         bool                     allFit = true;
         for (auto& part : parts) {
-            if (agentxx::util::utf8GetLength(part) > maxUtf8Length) {
+            if (utilxx_base::utf8GetLength(part) > maxUtf8Length) {
                 allFit        = false;
                 auto subParts = splitByDelimiters(part, maxUtf8Length, delimiters);
                 for (auto& sp : subParts) {
@@ -333,7 +333,7 @@ inline std::vector<std::string> applyChunkOverlap(
 
     for (size_t i = 1; i < chunks.size(); ++i) {
         const auto& prev        = result.back();
-        size_t      prevUtf8Len = agentxx::util::utf8GetLength(prev);
+        size_t      prevUtf8Len = utilxx_base::utf8GetLength(prev);
 
         if (prevUtf8Len <= overlapChars) {
             result.push_back(chunks[i]);
@@ -341,7 +341,7 @@ inline std::vector<std::string> applyChunkOverlap(
         }
 
         size_t overlapStart
-            = agentxx::util::findIndexByUtf8Length(prev, prevUtf8Len - overlapChars);
+            = utilxx_base::findIndexByUtf8Length(prev, prevUtf8Len - overlapChars);
         if (overlapStart == 0) {
             result.push_back(chunks[i]);
             continue;
@@ -375,7 +375,7 @@ inline std::vector<std::string>
             auto                     blocks = splitByStructure(text);
             std::vector<std::string> result;
             for (auto& block : blocks) {
-                if (agentxx::util::utf8GetLength(block) <= maxLen) {
+                if (utilxx_base::utf8GetLength(block) <= maxLen) {
                     result.push_back(std::move(block));
                 } else {
                     auto fixedParts = splitByFixedLength(block, maxLen);
@@ -390,7 +390,7 @@ inline std::vector<std::string>
             auto                     blocks = splitByStructure(text);
             std::vector<std::string> result;
             for (auto& block : blocks) {
-                if (agentxx::util::utf8GetLength(block) <= maxLen) {
+                if (utilxx_base::utf8GetLength(block) <= maxLen) {
                     result.push_back(std::move(block));
                 } else {
                     auto subParts = splitByDelimiters(block, maxLen, config.delimiters);
@@ -405,12 +405,12 @@ inline std::vector<std::string>
             auto                     blocks = splitByStructure(text);
             std::vector<std::string> result;
             for (auto& block : blocks) {
-                if (agentxx::util::utf8GetLength(block) <= maxLen) {
+                if (utilxx_base::utf8GetLength(block) <= maxLen) {
                     result.push_back(std::move(block));
                 } else {
                     auto subParts = splitByDelimiters(block, maxLen, config.delimiters);
                     for (auto& sp : subParts) {
-                        if (agentxx::util::utf8GetLength(sp) <= maxLen) {
+                        if (utilxx_base::utf8GetLength(sp) <= maxLen) {
                             result.push_back(std::move(sp));
                         } else {
                             auto fixedParts = splitByFixedLength(sp, maxLen);
@@ -648,20 +648,20 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
             return std::vector<std::vector<double>>{};
         }
 
-        auto body     = agentxx::util::Json::object();
+        auto body     = utilxx_base::Json::object();
         body["model"] = model;
-        body["input"] = agentxx::util::Json(texts);
+        body["input"] = utilxx_base::Json(texts);
 
         // 与原 EmbeddingClient 一致: 不携带额外请求头 (embedding 服务多为
         // 本地部署, 原实现即空 headers)
         asio::io_context io;
-        auto             respExp = agentxx::util::HttpClient::postAsync(
+        auto             respExp = utilxx::HttpClient::postAsync(
             fmt::format("{}/embeddings", baseUrl),
             body,
-            agentxx::util::HeaderMap{},
-            agentxx::util::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}}
+            utilxx::HeaderMap{},
+            utilxx::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}}
         );
-        std::expected<agentxx::util::HttpResponse, std::string> resp;
+        std::expected<utilxx::HttpResponse, std::string> resp;
         // awaitable 为 move-only: 必须 move 捕获并 co_await 右值 (不可拷贝)
         asio::co_spawn(
             io,
@@ -673,7 +673,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
         io.run();
 
         if (false == resp.has_value()
-            || false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
+            || false == utilxx::HttpClient::respIsSucc(resp.value())) {
             std::string str;
             if (resp.has_value()) {
                 str = std::to_string(resp.value().status);
@@ -685,7 +685,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
         }
 
         try {
-            auto respBody = agentxx::util::Json::parse(resp.value().body);
+            auto respBody = utilxx_base::Json::parse(resp.value().body);
             std::vector<std::vector<double>> embeddings;
 
             for (const auto& item : respBody["data"]) {

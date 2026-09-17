@@ -1,6 +1,6 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <utility>
@@ -19,7 +19,7 @@ bool boolFromString(std::string_view s, bool defaultValue) {
     if (s.empty()) {
         return defaultValue;
     }
-    auto v = agentxx::util::toLower(agentxx::util::removeBetweenSpace(s));
+    auto v = utilxx_base::toLower(utilxx_base::removeBetweenSpace(s));
     if (v == "false" || v == "no" || v == "n" || v == "0" || v == "off") {
         return false;
     }
@@ -32,7 +32,7 @@ double numberFromString(std::string_view s) {
         return 0.0;
     }
     double v = 0.0;
-    if (agentxx::util::parseNumberFromString(agentxx::util::removeBetweenSpace(s), v).ec
+    if (utilxx_base::parseNumberFromString(utilxx_base::removeBetweenSpace(s), v).ec
         != std::errc{}) {
         return 0.0;
     }
@@ -161,7 +161,7 @@ InterruptUiBlock buttonControl(
     std::vector<InterruptUiOption> options,
     std::string                    label,
     std::string                    labelKey,
-    agentxx::util::Json            defaultValue,
+    utilxx_base::Json            defaultValue,
     bool                           commitOnPick
 ) {
     InterruptUiBlock b;
@@ -241,7 +241,7 @@ InterruptUiBlock selectControl(
     std::vector<InterruptUiOption> options,
     std::string                    label,
     std::string                    labelKey,
-    agentxx::util::Json            defaultValue,
+    utilxx_base::Json            defaultValue,
     std::string                    help
 ) {
     InterruptUiBlock b;
@@ -295,7 +295,7 @@ InterruptUi inputForm(const std::vector<InputSpec>& inputs) {
                 {},
                 {},
                 // 默认值须与候选项 value 同型 (字符串), 否则无法命中默认选中项
-                agentxx::util::Json(boolFromString(spec.defaultValue, false) ? "true" : "false"),
+                utilxx_base::Json(boolFromString(spec.defaultValue, false) ? "true" : "false"),
                 true
             ));
         } else if (spec.type == "enum") {
@@ -304,7 +304,7 @@ InterruptUi inputForm(const std::vector<InputSpec>& inputs) {
             for (const auto& v : spec.enumValues) {
                 options.push_back(option(v, v));
             }
-            agentxx::util::Json def;
+            utilxx_base::Json def;
             if (!spec.defaultValue.empty()) {
                 def = spec.defaultValue;
             } else if (!options.empty()) {
@@ -361,7 +361,7 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts) {
         {},
         {},
         // 默认值须与候选项 value 同型 (字符串): "false" 默认选中"否" (安全语义)
-        agentxx::util::Json(opts.defaultValue ? "true" : "false"),
+        utilxx_base::Json(opts.defaultValue ? "true" : "false"),
         true
     ));
     return ui;
@@ -420,7 +420,7 @@ InterruptUi
         {},
         {},
         // 默认选中"拒绝" (安全语义; 字符串型与候选项 value 一致)
-        agentxx::util::Json("false"),
+        utilxx_base::Json("false"),
         true
     ));
     return ui;

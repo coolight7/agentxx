@@ -4,7 +4,7 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include <atomic>
 #include <functional>
@@ -17,7 +17,7 @@ namespace agentxx_system_monitor_plugin {
 using agentxx::plugin::pluginLog;
 using agentxx::plugin::pluginStrdup;
 
-/// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
+/// 参数读取统一经 plugin_kit.h 的 ArgReader (utilxx_base::Json 驱动),
 /// 不再手写 simdjson::ondemand 局部解析桩 (历史 SimpleJson/jsonGet* 已删除)
 
 } // namespace agentxx_system_monitor_plugin

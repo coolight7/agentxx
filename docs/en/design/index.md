@@ -93,7 +93,7 @@ Enabling registers the `agentxx_git_worktree` tool (`agentxx::tools::GitWorktree
 - **Plugin Chain Propagation**: The `agentxx.agent.config` interface table's `get_session_work_dir(host, session_id)` prioritizes worktree bindings (empty falls back to the default session workdir). Filesystem and execute_command plugins resolve paths dynamically per invocation using injected session IDs rather than static initialization caches.
 - **Subagent Inheritance**: When `AgentHost` derives subagents, they inherit parent session worktree bindings (subagent `config.workDir` is preset to the worktree path with `inheritedWorktreePath` flag set). Permission Ask default rules and all toolchains automatically target the inherited worktree.
 - **Lifecycle Management**: Worktrees are preserved under a keep policy and do not auto-delete on session termination. Deletion via `remove` runs dual-layer safety checks (uncommitted changes, untracked files, unmerged commits); if work artifacts exist, deletion is rejected with instructions to commit first, requiring `force=true` to override.
-- Git underlying encapsulation: See `agent/lib/include/agentxx/util/worktree.h` (direct argv execution bypassing shells, terminating entire process group on timeout; tested in `worktree`).
+- Git underlying encapsulation: See `agent/third_party/cxx_utilxx/include/utilxx/worktree.h` (direct argv execution bypassing shells, terminating entire process group on timeout; tested in `worktree`).
 
 ### Middleware System
 

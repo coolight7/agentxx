@@ -8,6 +8,7 @@
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
+#include "utilxx_base/json.h"
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -291,7 +292,7 @@ private:
     ///   pluginDecorHits() 读取 (MessageListComponent 有独立事件流, 不能只靠全局)
     /// - text/button 解析与配色走 plugin_ui_items 共享 helper; diff 走 renderPluginDiff
     void appendDecorItems(
-        const agentxx::util::Json&                          items,
+        const utilxx_base::Json&                          items,
         const std::string&                                  plugin,
         const std::string&                                  ownerId,
         ftxui::Elements&                                    lines,

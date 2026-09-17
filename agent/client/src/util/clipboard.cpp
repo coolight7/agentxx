@@ -1,5 +1,5 @@
 #include "agentxx-client/util/clipboard.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include <iostream>
 
 #if XX_IS_WIN_D
@@ -59,7 +59,7 @@ bool copyTextToSystemClipboard(std::string_view text) {
         return false;
     }
     // ESC ] 52 ; c ; <base64> BEL — 无可见输出, 与 FTXUI 屏幕刷新流交错安全
-    std::cout << "\x1b]52;c;" << agentxx::util::base64Encode(text) << "\x07" << std::flush;
+    std::cout << "\x1b]52;c;" << utilxx_base::base64Encode(text) << "\x07" << std::flush;
     return true;
 }
 

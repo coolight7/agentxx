@@ -1,6 +1,7 @@
 #include "agentxx/nodes/agentcall.h"
 
 #include "agentxx/event/event_stream.h"
+#include "utilxx_base/json.h"
 
 namespace agentxx {
 namespace nodes {
@@ -20,7 +21,7 @@ asio::awaitable<void> AgentStartCallWrapNode::onNodeStart(neograph::graph::NodeI
                 ptr->middlewareHandleContext->graphData[in.ctx.thread_id].clear();
             }
             if (ptr->bus) {
-                agentxx::util::Json j;
+                utilxx_base::Json j;
                 j["sessionId"] = in.ctx.thread_id;
                 co_await ptr->bus->publish("plugin.agentxx.round_start", j.dump());
             }

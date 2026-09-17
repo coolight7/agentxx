@@ -6,6 +6,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "neograph/graph/cancel.h"
+#include "utilxx_base/json.h"
 
 namespace agentxx {
 namespace agent {
@@ -216,7 +217,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
             // 透传权限上下文给客户端 (记住权限选择时使用):
             // - category: 权限分类 ("filesystem_read" / "filesystem_write")
             // - target:   受约束目标 (已标准化的绝对路径, 与中间件规则匹配口径一致)
-            arg.arg = agentxx::util::Json{
+            arg.arg = utilxx_base::Json{
                 {"category", req.category},
                 {"target",   req.target  },
             };
@@ -247,7 +248,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
             bool                allowed  = false;
             bool                remember = false;
             bool                fullAuth = false;
-            agentxx::util::Json values   = agentxx::util::Json::object();
+            utilxx_base::Json values   = utilxx_base::Json::object();
             if (!result.is_object() || !result.contains("values")) {
                 XX_LOGW(
                     "[io] permission result is not an object with values, denied: {}",
@@ -280,7 +281,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
 }
 
 /// 结果是否包含已确认的输入值 (空对象 = 用户取消/中断过期, 不注册规则)
-bool AgentIOBase::confirmedValues(const agentxx::util::Json& values) {
+bool AgentIOBase::confirmedValues(const utilxx_base::Json& values) {
     return values.is_object() && !values.empty();
 }
 

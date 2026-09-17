@@ -4,6 +4,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/tools/tool.h"
 #include "neograph/graph/cancel.h"
+#include "utilxx_base/json.h"
 #include <map>
 #include <memory>
 #include <string>
@@ -52,7 +53,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
 
     ~SubAgentManagerTool() override;
 
@@ -102,7 +103,7 @@ inline std::string
 /// 将批量委派响应写入中断结果 map (key 规则见 makeSubagentResumeKey)
 /// - 单任务返回纯文本, 多任务按任务顺序编号; 错误任务写入 {"error": ...}
 inline void buildSubagentResumeValues(
-    agentxx::util::Json&             resumeValues,
+    utilxx_base::Json&             resumeValues,
     const events::RespSubagentBatch& batchResp,
     std::string_view                 toolCallId
 ) {
@@ -114,8 +115,8 @@ inline void buildSubagentResumeValues(
         // 否则会命中 initializer_list 构造产生 ["content"] 数组包裹,
         // 破坏读取端 "单任务返回纯文本" 语义); 错误任务保持 {"error": ...} 对象
         resumeValues[key] = r.hasError
-                                ? agentxx::util::Json{{"error", std::string{r.errorMessage}}}
-                                : agentxx::util::Json(r.content);
+                                ? utilxx_base::Json{{"error", std::string{r.errorMessage}}}
+                                : utilxx_base::Json(r.content);
     }
 }
 

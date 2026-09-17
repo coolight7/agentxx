@@ -1,7 +1,7 @@
 #pragma once
 
-#include "agentxx/util/json.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/json.h"
+
 #include "fmt/format.h"
 #include <cassert>
 #include <map>
@@ -512,15 +512,15 @@ Absent (default): the sub-agent's default full tool set.)"},
     // ----- 训练序列化辅助 -----
     // 将整个 AgentPrompt (含 toolPrompt) 序列化为 JSON, 供训练保存/加载。
 
-    agentxx::util::Json toJson() const;
+    utilxx_base::Json toJson() const;
 
     /// 用 JSON 整体覆写当前提示词 (JSON 中缺失的字段保持不变)
-    void fromJson(const agentxx::util::Json& j);
+    void fromJson(const utilxx_base::Json& j);
 
     /// 按补丁合并: 仅覆写 JSON 中出现的字段, 未出现的字段保持原样
     /// - toolPrompt 中已有工具: 仅覆写 JSON 中出现的 depict/args 子字段
     /// - toolPrompt 中尚无的工具: 插入新条目
-    void mergeFromJson(const agentxx::util::Json& j);
+    void mergeFromJson(const utilxx_base::Json& j);
 
     /// 计算整个提示词的哈希, 用于训练种群去重
     size_t promptHash() const;

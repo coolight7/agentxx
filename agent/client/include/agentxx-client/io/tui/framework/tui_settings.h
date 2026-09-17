@@ -1,7 +1,7 @@
 #pragma once
 
-#include "agentxx/util/log.h"
-#include "agentxx/util/settings_db.h"
+#include "utilxx_base/log.h"
+#include "utilxx/settings_db.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -114,13 +114,13 @@ public:
     /// 默认动画等级: Ultra (启用全部动画)
     inline static constexpr AnimationLevel kDefaultAnimationLevel = AnimationLevel::High;
 
-    /// 日志等级名称 (供设置弹窗展示; 与 agentxx::util::LogLevel 枚举值一一对应)
+    /// 日志等级名称 (供设置弹窗展示; 与 utilxx_base::LogLevel 枚举值一一对应)
     inline static constexpr std::array<const char*, 6> kLogLevelNames
         = {"Trace", "Debug", "Info", "Warn", "Error", "Out"};
 
     /// 默认日志等级: Info (TUI 日志侧边栏仅显示 Info 及以上, Out 恒显示)
-    inline static constexpr agentxx::util::LogLevel kDefaultLogLevel
-        = agentxx::util::LogLevel::Info;
+    inline static constexpr utilxx_base::LogLevel kDefaultLogLevel
+        = utilxx_base::LogLevel::Info;
 
     /// 末尾思考模式名称 (供设置弹窗展示)
     inline static constexpr std::array<const char*, 2> kTailThinkingModeNames
@@ -149,7 +149,7 @@ public:
     /// 绑定全局设置数据库并加载已存设置 (启动时调用一次)
     /// - 重复调用以首次为准; db 为空时忽略
     /// - 从库中恢复: 主题 / 动画等级 / 日志等级 / 末尾思考模式 (键: tui.*)
-    inline void attachDb(std::shared_ptr<agentxx::util::SettingsDb> db) noexcept {
+    inline void attachDb(std::shared_ptr<utilxx::SettingsDb> db) noexcept {
         if (db_ || !db) {
             return;
         }
@@ -224,17 +224,17 @@ public:
     }
 
     /// 获取当前日志等级 (TUI 日志侧边栏过滤: 显示 >= 该等级的日志, Out 恒显示)
-    agentxx::util::LogLevel logLevel() const noexcept {
+    utilxx_base::LogLevel logLevel() const noexcept {
         const int v = logLevel_.load(std::memory_order_acquire);
         if (v >= 0 && v < static_cast<int>(kLogLevelNames.size())) {
-            return static_cast<agentxx::util::LogLevel>(v);
+            return static_cast<utilxx_base::LogLevel>(v);
         }
         return kDefaultLogLevel;
     }
 
     /// 设置日志等级 (越界值回退默认 Info)
     /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
-    inline void setLogLevel(agentxx::util::LogLevel level) noexcept {
+    inline void setLogLevel(utilxx_base::LogLevel level) noexcept {
         const int v = static_cast<int>(level);
         logLevel_.store(
             (v >= 0 && v < static_cast<int>(kLogLevelNames.size()))
@@ -375,7 +375,7 @@ private:
     }
 
     /// 日志等级名称 (越界返回 "Unknown")
-    inline static constexpr std::string_view logLevelName(agentxx::util::LogLevel level) noexcept {
+    inline static constexpr std::string_view logLevelName(utilxx_base::LogLevel level) noexcept {
         const int idx = static_cast<int>(level);
         if (idx >= 0 && idx < static_cast<int>(kLogLevelNames.size())) {
             return kLogLevelNames[static_cast<size_t>(idx)];
@@ -396,7 +396,7 @@ private:
     std::atomic<int> themeKind_{kThemeDark};
     /// 动画等级 (存储为 int 以便原子读写)
     std::atomic<int> animationLevel_;
-    /// 日志等级 (存储为 int 以便原子读写; 与 agentxx::util::LogLevel 枚举值对应)
+    /// 日志等级 (存储为 int 以便原子读写; 与 utilxx_base::LogLevel 枚举值对应)
     std::atomic<int> logLevel_{static_cast<int>(kDefaultLogLevel)};
     /// 末尾思考展示模式 (存储为 int 以便原子读写; 0=AutoExpand, 1=SingleLine)
     std::atomic<int> tailThinkingMode_{static_cast<int>(kDefaultTailThinkingMode)};
@@ -405,7 +405,7 @@ private:
     /// 自动模式下解析出的生效语言 (始终为已支持的具体语言: ZhCn 或 EnUs)
     std::atomic<int> autoResolvedLanguage_{static_cast<int>(TuiLanguage::ZhCn)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
-    std::shared_ptr<agentxx::util::SettingsDb> db_;
+    std::shared_ptr<utilxx::SettingsDb> db_;
 };
 
 } // namespace agentxx::client

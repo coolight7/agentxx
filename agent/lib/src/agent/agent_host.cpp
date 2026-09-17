@@ -6,9 +6,9 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/tools/subagent.h"
-#include "agentxx/util/container_util.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -39,12 +39,12 @@ bool AgentRegistry::contains(std::string_view agentId) const {
 
 void AgentRegistry::insert(std::shared_ptr<AgentNode> node) {
     assert(node && !node->agentId.empty());
-    util::insertOrAssignHeterogeneous(nodes_, node->agentId, std::move(node));
+    utilxx_base::insertOrAssignHeterogeneous(nodes_, node->agentId, std::move(node));
 }
 
 void AgentRegistry::remove(std::string_view agentId) {
     // 异构查找删除, 免除 string_view→string 拷贝 (libc++ 无 C++23 异构 erase)
-    util::eraseHeterogeneous(nodes_, agentId);
+    utilxx_base::eraseHeterogeneous(nodes_, agentId);
 }
 
 size_t AgentRegistry::size() const {
@@ -476,7 +476,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     runningSubagentCount_++;
     if (!sameContext) {
         // 同上下文模式共享父线程: 不覆盖父线程深度记录
-        util::insertOrAssignHeterogeneous(sessionDepth_, subagentSessionId, depth);
+        utilxx_base::insertOrAssignHeterogeneous(sessionDepth_, subagentSessionId, depth);
     }
 
     // 运行边界清理 (成功/错误/取消统一回收节点)
@@ -494,7 +494,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             done = true;
             if (host) {
                 if (!sharedSession) {
-                    util::eraseHeterogeneous(host->sessionDepth_, subagentSessionId);
+                    utilxx_base::eraseHeterogeneous(host->sessionDepth_, subagentSessionId);
                 }
                 if (host->runningSubagentCount_ > 0) {
                     host->runningSubagentCount_--;
@@ -590,7 +590,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             // 否则回退 systemPrompt + message 文本 (默认独立行为)
             neograph::json inputMessages;
             if (task.messages.has_value()) {
-                // task.messages 为 agentxx::util::Json (事件层类型):
+                // task.messages 为 utilxx_base::Json (事件层类型):
                 // 经文本中转回 neograph::json (子代理派生低频路径)
                 inputMessages = neograph::json::parse(task.messages->dump());
             } else {
@@ -766,7 +766,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
 
     // 每个子代理 co_spawn 为独立协程, 完成后向 channel 发送 index (wait_for_all)
     auto doneChannel
-        = std::make_shared<asio::experimental::channel<void(neograph_asio_error_code, size_t)>>(
+        = std::make_shared<asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>(
             ex,
             static_cast<unsigned>(n)
         );
@@ -786,16 +786,16 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                 // RAII 守卫: 无论 spawnOneTask 如何退出都保证发送完成信号
                 struct BatchDoneGuard {
                     std::shared_ptr<
-                        asio::experimental::channel<void(neograph_asio_error_code, size_t)>>
+                        asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>
                            ch;
                     size_t idx;
 
                     ~BatchDoneGuard() {
                         if (ch) {
                             ch->async_send(
-                                neograph_asio_error_code{},
+                                utilxx_base::AsioErrorCode{},
                                 idx,
-                                [](neograph_asio_error_code) {}
+                                [](utilxx_base::AsioErrorCode) {}
                             );
                         }
                     }
@@ -870,14 +870,14 @@ void AgentHost::registerRemoteAgent(
     std::shared_ptr<agentxx::protocol::A2aClient> client
 ) {
     if (client) {
-        util::insertOrAssignHeterogeneous(remoteAgents_, agentId, std::move(client));
+        utilxx_base::insertOrAssignHeterogeneous(remoteAgents_, agentId, std::move(client));
     } else {
-        util::eraseHeterogeneous(remoteAgents_, agentId); // 异构删除免拷贝
+        utilxx_base::eraseHeterogeneous(remoteAgents_, agentId); // 异构删除免拷贝
     }
 }
 
 void AgentHost::unregisterRemoteAgent(std::string_view agentId) {
-    util::eraseHeterogeneous(remoteAgents_, agentId);
+    utilxx_base::eraseHeterogeneous(remoteAgents_, agentId);
 }
 
 asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
@@ -944,9 +944,9 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
 
 void AgentHost::setMailbox(std::string_view agentId, Mailbox mailbox) {
     if (mailbox) {
-        util::insertOrAssignHeterogeneous(mailboxes_, agentId, std::move(mailbox));
+        utilxx_base::insertOrAssignHeterogeneous(mailboxes_, agentId, std::move(mailbox));
     } else {
-        util::eraseHeterogeneous(mailboxes_, agentId); // 异构删除免拷贝
+        utilxx_base::eraseHeterogeneous(mailboxes_, agentId); // 异构删除免拷贝
     }
 }
 

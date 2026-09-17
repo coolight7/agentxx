@@ -1,11 +1,12 @@
 #pragma once
 
 #include "agentxx-test/test_framework.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 
 #include <cassert>
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
 
 namespace agentxx {
 namespace test {

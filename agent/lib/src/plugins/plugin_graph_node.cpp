@@ -3,7 +3,7 @@
 
 #include "agentxx/plugin/op_driver.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include <neograph/graph/state.h>
 #include <neograph/graph/types.h>
@@ -119,7 +119,7 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
     // {"writes": [{"channel","value","mode"}], "command": {...}|null, "sends": [...]}
     neograph::graph::NodeOutput out;
     try {
-        auto j = agentxx::util::Json::parse(payload);
+        auto j = utilxx_base::Json::parse(payload);
         if (!j.is_object()) {
             throw std::runtime_error("node output is not a JSON object");
         }

@@ -3,6 +3,7 @@
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "utilxx_base/json.h"
 
 #include <string>
 #include <utility>
@@ -12,7 +13,7 @@ namespace tools {
 
 std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
-    const agentxx::util::Json&                           args
+    const utilxx_base::Json&                           args
 ) {
     if (nullptr == agentCtx || nullptr == agentCtx->sessions) {
         return nullptr;
@@ -53,7 +54,7 @@ std::string XXToolBase::get_name() const {
 }
 
 // 子类未覆写 Json 主接口时默认抛错 (基类无逻辑, 不应被直接调用)
-asio::awaitable<std::string> XXToolBase::execute_async(const agentxx::util::Json&) {
+asio::awaitable<std::string> XXToolBase::execute_async(const utilxx_base::Json&) {
     throw std::runtime_error("XXToolBase::execute_async(Json) not implemented");
     co_return "";
 }
@@ -92,7 +93,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
     return std::nullopt;
     // return agentxx::middleware::SummarizationToolHandle{
     //     .generateDeduplicationKey =
-    //         [](const agentxx::util::Json &args) -> std::optional<std::string> {
+    //         [](const utilxx_base::Json &args) -> std::optional<std::string> {
     //           return "tool_name:unique_key";
     //         },
     //     .truncateRequest =
@@ -135,7 +136,7 @@ neograph::ChatTool XXToolWrap::get_definition() const {
     return inner->get_definition();
 }
 
-asio::awaitable<std::string> XXToolWrap::execute_async(const agentxx::util::Json& arguments) {
+asio::awaitable<std::string> XXToolWrap::execute_async(const utilxx_base::Json& arguments) {
     // 被包装的是原始 neograph::Tool: 经桥接把 Json 转回 neograph::json 后调用
     auto neoArgs = agentxx::util::toNeographJson(arguments);
     co_return co_await inner->execute_async(neoArgs);

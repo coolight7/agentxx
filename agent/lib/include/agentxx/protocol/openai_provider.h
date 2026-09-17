@@ -1,9 +1,9 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx/http_client.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
 #include <charconv>
@@ -142,11 +142,11 @@ private:
     std::string apiUrl() const;
 
     /// 填充通用请求头: Authorization + extraHeaders
-    void applyHeaders(agentxx::util::HeaderMap& headers) const;
+    void applyHeaders(utilxx::HeaderMap& headers) const;
 
     /// 填充完整请求头: Authorization + extraHeaders + 会话 Header (X-Session-Id,
     /// X-Opencode-Session)
-    void applyHeaders(agentxx::util::HeaderMap& headers, const neograph::CompletionParams& params)
+    void applyHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params)
         const;
 
     /// 归一化 finish_reason → stop_reason
@@ -155,9 +155,9 @@ private:
     /// 从错误响应 body 中提取 error.message / error.code, 失败时返回原 body
     static std::string extractApiError(const std::string& body);
 
-    agentxx::util::Json buildBody(const neograph::CompletionParams& params) const;
+    utilxx_base::Json buildBody(const neograph::CompletionParams& params) const;
 
-    agentxx::util::Json buildResponsesBody(const neograph::CompletionParams& params) const;
+    utilxx_base::Json buildResponsesBody(const neograph::CompletionParams& params) const;
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
     );
@@ -167,13 +167,13 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const agentxx::util::Json&         body,
+        const utilxx_base::Json&         body,
         neograph::FormatDataStreamCallback on_chunk
     );
 
     asio::awaitable<neograph::ChatCompletion> doStreamResponses(
         const neograph::CompletionParams&  params,
-        const agentxx::util::Json&         body,
+        const utilxx_base::Json&         body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

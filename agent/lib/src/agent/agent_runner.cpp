@@ -3,7 +3,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/tools/subagent.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include <optional>
 
@@ -41,7 +41,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // 中断时 [result] 内的 messages 是被 neograph::engine
             // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
             // 保存的 messages
-            auto imCopy = ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            auto imCopy = ctx->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
             );
@@ -101,7 +101,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode,
             result->interrupt_node
         );
-        ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+        ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue,
             agentxx::util::fromNeographJson(result->interrupt_value)
@@ -122,11 +122,11 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
         auto interruptValue = crudeResult->interrupt_value.dump();
         (void)interruptValue;
 
-        auto resumeValues = agentxx::util::Json{};
+        auto resumeValues = utilxx_base::Json{};
 
         // 从 [graphDataKey_interruptArgs] 提取中断参数
         const auto interruptArglist = agentxx::middleware::InterruptHandleArg::listFromJson(
-            ctx->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            ctx->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
             )
@@ -226,7 +226,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                         if (rid.empty()) {
                             rid = std::to_string(argIndex);
                         }
-                        resumeValues[rid] = agentxx::util::Json::parse(resp->resultJson);
+                        resumeValues[rid] = utilxx_base::Json::parse(resp->resultJson);
                     } else if (resp.has_value() && !resp->handled
                                && resp->resultJson.find("__cancelled__") != std::string::npos) {
                         throw neograph::graph::CancelledException("HIL interrupted by cancel");
@@ -241,7 +241,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptArgs
             );
-            ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+            ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 resumeValues

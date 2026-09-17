@@ -12,8 +12,8 @@
 #include "agentxx/tools/git_worktree.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/tools/tool_skill_search.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/log.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -205,7 +205,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
     const size_t mcpCount = config->mcpServerUrls.size();
     if (mcpCount > 0) {
         using McpDoneChannel
-            = asio::experimental::concurrent_channel<void(neograph_asio_error_code, size_t)>;
+            = asio::experimental::concurrent_channel<void(utilxx_base::AsioErrorCode, size_t)>;
         auto mcpEx  = co_await asio::this_coro::executor;
         auto doneCh = std::make_shared<McpDoneChannel>(mcpEx, mcpCount);
         // 单个 MCP server 加载 (工具 push 到 tools; 失败仅记录日志)
@@ -323,7 +323,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                             }
                         );
                     }
-                    doneCh->try_send(neograph_asio_error_code{}, 0);
+                    doneCh->try_send(utilxx_base::AsioErrorCode{}, 0);
                 }
             );
         }

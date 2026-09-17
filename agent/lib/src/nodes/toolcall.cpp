@@ -6,8 +6,8 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <cassert>
@@ -33,10 +33,10 @@ namespace {
 template<typename T>
 bool parseFullNumber(std::string_view s, T& out) {
     size_t b = 0, e = s.size();
-    while (b < e && agentxx::util::charIsSpace(s[b])) {
+    while (b < e && utilxx_base::charIsSpace(s[b])) {
         ++b;
     }
-    while (e > b && agentxx::util::charIsSpace(s[e - 1])) {
+    while (e > b && utilxx_base::charIsSpace(s[e - 1])) {
         --e;
     }
     s = s.substr(b, e - b);
@@ -105,7 +105,7 @@ bool parseFullNumber(std::string_view s, T& out) {
 }
 
 /// 数值 json -> 十进制字符串 (整数用 to_string, 浮点用最短可往返表示)
-std::string numberToJsonString(const agentxx::util::Json& v) {
+std::string numberToJsonString(const utilxx_base::Json& v) {
     if (v.is_number_unsigned()) {
         return std::to_string(v.get<unsigned long long>());
     }
@@ -148,7 +148,7 @@ struct SchemaTypes {
     }
 };
 
-SchemaTypes getSchemaTypes(const agentxx::util::Json& schema) {
+SchemaTypes getSchemaTypes(const utilxx_base::Json& schema) {
     SchemaTypes t;
     if (!schema.is_object()) {
         return t;
@@ -181,7 +181,7 @@ SchemaTypes getSchemaTypes(const agentxx::util::Json& schema) {
 }
 
 /// 数组元素是否允许为字符串 (items 未声明或声明为 string 时视为字符串数组)
-bool isStringArrayItems(const agentxx::util::Json& schema) {
+bool isStringArrayItems(const utilxx_base::Json& schema) {
     auto items = schema["items"];
     if (items.is_object()) {
         auto itemType = items.value("type", std::string{});
@@ -195,11 +195,11 @@ bool isStringArrayItems(const agentxx::util::Json& schema) {
 /// 收集 schema 声明的字符串枚举值, 构造"忽略大小写 -> 规范值"映射 (Set 语义):
 /// - 仅取 `enum` 数组中的字符串项 (数值/布尔枚举与字符串参数无关, 不参与);
 ///   枚举项本身大小写不同 (如 `["A", "a"]`) 时保留先出现者, 避免不确定改写
-/// - 查询经 agentxx::util::IgnoreCaseMap (IgnoreCaseHash/IgnoreCaseEqual):
+/// - 查询经 utilxx_base::IgnoreCaseMap (IgnoreCaseHash/IgnoreCaseEqual):
 ///   "File" / "FILE" / "file" 均命中规范值 `File`, 取出后按规范值重新赋值
 /// - `return` 该 schema 的字符串枚举映射 (无字符串枚举时为空)
-agentxx::util::IgnoreCaseMap<std::string> makeEnumIgnoreCaseMap(const agentxx::util::Json& schema) {
-    agentxx::util::IgnoreCaseMap<std::string> enumMap;
+utilxx_base::IgnoreCaseMap<std::string> makeEnumIgnoreCaseMap(const utilxx_base::Json& schema) {
+    utilxx_base::IgnoreCaseMap<std::string> enumMap;
     if (!schema.is_object() || !schema.contains("enum")) {
         return enumMap;
     }
@@ -228,8 +228,8 @@ agentxx::util::IgnoreCaseMap<std::string> makeEnumIgnoreCaseMap(const agentxx::u
 /// - [fixInfo] 发生改写时追加描述 (供调用方记日志; 已有内容时以 ", " 连接)
 /// `return` 是否发生了改写
 bool autoFixEnumStringCase(
-    const agentxx::util::Json& schema,
-    agentxx::util::Json&       value,
+    const utilxx_base::Json& schema,
+    utilxx_base::Json&       value,
     std::string&               fixInfo
 ) {
     auto appendFixInfo = [&fixInfo](std::string_view one) {
@@ -380,13 +380,13 @@ std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
 ///   时改写为规范值, 如 LLM 传 "File" 而枚举声明为 `["file","dir"]` 时转为 "file"
 /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
 /// `return` 是否发生了参数转换
-bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, agentxx::util::Json& args) {
+bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, utilxx_base::Json& args) {
     if (!args.is_object()) {
         return false;
     }
     // def.parameters 为图边界类型 (neograph::json): 快照为业务 Json 后统一处理
     // (工具 schema 为小对象，拷贝开销可忽略)
-    const agentxx::util::Json params = agentxx::util::fromNeographJson(def.parameters);
+    const utilxx_base::Json params = agentxx::util::fromNeographJson(def.parameters);
     if (!params.is_object()) {
         return false;
     }
@@ -410,7 +410,7 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, agentxx::u
             auto str = arg.get<std::string>();
             // 1) string -> 字符串数组
             if (types.isArray && isStringArrayItems(schema)) {
-                auto arr = agentxx::util::Json::array();
+                auto arr = utilxx_base::Json::array();
                 arr.push_back(arg);
                 args[name] = std::move(arr);
                 fixInfo    = "string -> [string]";
@@ -530,7 +530,7 @@ void insertAbortedToolResults(
             messages
         );
     if (assistantMsg && !assistantMsg->tool_calls.empty()) {
-        auto appendToolResult = agentxx::util::Json::array();
+        auto appendToolResult = utilxx_base::Json::array();
         for (const auto& tool : assistantMsg->tool_calls) {
             auto msg = neograph::ChatMessage{
                 .role    = "tool",
@@ -596,7 +596,7 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
 
 asio::awaitable<std::string> ToolcallWrapNode::execTool(
     neograph::Tool*                                      tool,
-    agentxx::util::Json&                                 args,
+    utilxx_base::Json&                                 args,
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
     bool                                                 repeatCallTriggered,
     std::string_view                                     repeatCallKey
@@ -659,7 +659,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                         auto arg     = InterruptHandleArg{};
                         arg.name     = "repeat_toolcall";
                         arg.resultId = args.value("tool_call_id", std::string{});
-                        arg.arg      = agentxx::util::Json{
+                        arg.arg      = utilxx_base::Json{
                                     {"tool_name", tool->get_name()},
                                     {"key",       repeatCallKey   },
                         };
@@ -717,7 +717,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         // 查询不该改状态)
         auto it     = tool->extra.find("maxRetry");
         auto str    = (it == tool->extra.end()) ? std::string{} : it->second;
-        auto result = agentxx::util::parseNumberFromString(str, maxRetry);
+        auto result = utilxx_base::parseNumberFromString(str, maxRetry);
         if (result.ec != std::errc{}) {
             maxRetry = 0;
         }
@@ -747,10 +747,10 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             errorPtr = std::current_exception();
         } catch (const boost::exception& e) {
             // boost::exception 在 std::exception 之前捕获, 保留完整诊断信息
-            errInfo  = agentxx::util::autoTryConvertToUtf8(boost::diagnostic_information(e));
+            errInfo  = utilxx_base::autoTryConvertToUtf8(boost::diagnostic_information(e));
             errorPtr = std::current_exception();
         } catch (const std::exception& e) {
-            errInfo  = agentxx::util::autoTryConvertToUtf8(e.what());
+            errInfo  = utilxx_base::autoTryConvertToUtf8(e.what());
             errorPtr = std::current_exception();
         } catch (...) {
             errorPtr = std::current_exception();
@@ -772,7 +772,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
     if (autoSummary && result.size() >= limitLength) {
         // 字节数量超过，按 utf8 长度判断
         auto [targetIndex, lineCount, lastLineIndex]
-            = agentxx::util::findIndexAndLastLineIndexByUtf8Length(result, limitLength);
+            = utilxx_base::findIndexAndLastLineIndexByUtf8Length(result, limitLength);
         if (targetIndex > 0) {
             const auto session_id = args.value("sessionId", std::string{});
             assert(false == session_id.empty());
@@ -780,7 +780,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             auto storeId
                 = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(session_id, result);
             // 总行数, 写入压缩结果便于后续用 `agentxx_share_store` 按行分页取值
-            const auto totalLineCount = agentxx::util::countLines(result);
+            const auto totalLineCount = utilxx_base::countLines(result);
             // - 如果按行摘要超过总摘要长度的 1/3 即为可行，留出行数以便后续用
             // `agentxx_share_store` 分页按行取值 否则取总摘要
             if (lastLineIndex >= targetIndex / 3) {
@@ -822,7 +822,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     auto toolcallsCache = std::map<std::string, std::string>{};
     {
         auto toolcallsCacheJson
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache
             );
@@ -897,8 +897,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 
     bool isInterrupt   = false;
     bool isCancel      = false;
-    auto interruptArgs = std::map<std::string, agentxx::util::Json>{};
-    auto results       = agentxx::util::Json::array();
+    auto interruptArgs = std::map<std::string, utilxx_base::Json>{};
+    auto results       = utilxx_base::Json::array();
     // 已执行完成的 tool_call_id (取消时用于区分已完成/未完成, 未完成的补 [User canceled])
     std::set<std::string> completedToolcallIds{};
     std::exception_ptr    cancelErrorPtr;
@@ -958,7 +958,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 co_await agentxx::util::catchErrorAsync<bool>(
                     [&]() -> asio::awaitable<bool> {
                         try {
-                            auto args = agentxx::util::Json::parse(tc.arguments);
+                            auto args = utilxx_base::Json::parse(tc.arguments);
                             if (args.is_object()) {
                                 // append arg `session_id`
                                 args["sessionId"] = in.ctx.thread_id;
@@ -1008,7 +1008,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
                     try {
-                        auto args = agentxx::util::Json::parse(tc.arguments);
+                        auto args = utilxx_base::Json::parse(tc.arguments);
                         if (args.is_object()) {
                             // append arg `session_id`
                             args["sessionId"] = in.ctx.thread_id;
@@ -1116,7 +1116,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 
     if (isInterrupt) {
         // 暂存 toolcall list 结果到 graphData
-        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
             in.ctx.thread_id,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache,
             results

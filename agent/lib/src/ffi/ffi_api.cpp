@@ -4,7 +4,7 @@
 /// 用后必须 agentxx_ffi_string_free 释放)。符号导出白名单见 lib/ffi_symbols.map。
 
 #include "agentxx/ffi_api.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "agentxx/version.h"
 #include "ffi_runtime.h"
 

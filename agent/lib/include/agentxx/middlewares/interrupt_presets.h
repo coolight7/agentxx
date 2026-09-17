@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/middlewares/interrupt_ui.h"
+#include "utilxx_base/json.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -89,7 +90,7 @@ InterruptUiBlock buttonControl(
     std::vector<InterruptUiOption> options,
     std::string                    label        = {},
     std::string                    labelKey     = {},
-    agentxx::util::Json            defaultValue = {},
+    utilxx_base::Json            defaultValue = {},
     bool                           commitOnPick = true
 );
 
@@ -129,7 +130,7 @@ InterruptUiBlock selectControl(
     std::vector<InterruptUiOption> options,
     std::string                    label        = {},
     std::string                    labelKey     = {},
-    agentxx::util::Json            defaultValue = {},
+    utilxx_base::Json            defaultValue = {},
     std::string                    help         = {}
 );
 

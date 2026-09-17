@@ -1,7 +1,7 @@
 #include "agentxx-test/core/test_anthropic_provider.h"
 #include "agentxx/protocol/anthropic_provider.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_client.h"
+#include "utilxx/http_server.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
@@ -34,7 +34,9 @@ int g_anthropic_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 namespace server = agentxx::protocol;
 
 namespace {
@@ -290,7 +292,7 @@ void test_convert_tools() {
 }
 
 void test_parse_response_text() {
-    auto resp       = agentxx::util::Json::parse(R"({
+    auto resp       = utilxx_base::Json::parse(R"({
     "id": "msg_001",
     "type": "message",
     "role": "assistant",
@@ -309,7 +311,7 @@ void test_parse_response_text() {
 }
 
 void test_parse_response_tool_use() {
-    auto resp       = agentxx::util::Json::parse(R"({
+    auto resp       = utilxx_base::Json::parse(R"({
     "id": "msg_002",
     "type": "message",
     "role": "assistant",
@@ -331,7 +333,7 @@ void test_parse_response_tool_use() {
 }
 
 void test_parse_response_thinking() {
-    auto resp       = agentxx::util::Json::parse(R"({
+    auto resp       = utilxx_base::Json::parse(R"({
     "id": "msg_003",
     "type": "message",
     "role": "assistant",
@@ -348,7 +350,7 @@ void test_parse_response_thinking() {
 }
 
 void test_parse_response_mixed() {
-    auto resp       = agentxx::util::Json::parse(R"({
+    auto resp       = utilxx_base::Json::parse(R"({
     "id": "msg_004",
     "type": "message",
     "role": "assistant",
@@ -369,7 +371,7 @@ void test_parse_response_mixed() {
 }
 
 void test_parse_response_usage() {
-    auto resp       = agentxx::util::Json::parse(R"({
+    auto resp       = utilxx_base::Json::parse(R"({
     "id": "msg_005",
     "type": "message",
     "role": "assistant",
@@ -409,15 +411,15 @@ public:
     std::string                 lastOpencodeSessionHeader;
 
     std::vector<std::string>           sseChunks;
-    std::optional<agentxx::util::Json> customResponse;
+    std::optional<utilxx_base::Json> customResponse;
 
     static std::string sseEvent(std::string_view event, std::string_view data) {
         return "event: " + std::string(event) + "\ndata: " + std::string(data) + "\n\n";
     }
 
-    agentxx::util::Json
+    utilxx_base::Json
         makeTextResponse(std::string_view content, int inputTok = 10, int outputTok = 5) const {
-        return agentxx::util::Json::parse(
+        return utilxx_base::Json::parse(
             R"({
       "id": "msg_mock",
       "type": "message",
@@ -431,8 +433,8 @@ public:
         );
     }
 
-    agentxx::util::Json makeToolCallResponse() const {
-        return agentxx::util::Json::parse(R"({
+    utilxx_base::Json makeToolCallResponse() const {
+        return utilxx_base::Json::parse(R"({
       "id": "msg_tool",
       "type": "message",
       "role": "assistant",
@@ -445,8 +447,8 @@ public:
     })");
     }
 
-    agentxx::util::Json makeThinkingResponse() const {
-        return agentxx::util::Json::parse(R"({
+    utilxx_base::Json makeThinkingResponse() const {
+        return utilxx_base::Json::parse(R"({
       "id": "msg_think",
       "type": "message",
       "role": "assistant",
@@ -632,7 +634,7 @@ asio::awaitable<void> test_non_streaming_completion(MockAnthropicServer& mock, u
         XX_TEST_EXPECT_TRUE(result.message.content.find("Hello") != std::string::npos);
         XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
 
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "claude-sonnet-4-20250514");
         XX_TEST_EXPECT_TRUE(sent.contains("messages"));
         XX_TEST_EXPECT_TRUE(sent.contains("max_tokens"));
@@ -813,7 +815,7 @@ asio::awaitable<void> test_session_id_headers_sent(MockAnthropicServer& mock, ui
             XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
 
             // 校验内部控制字段未泄露进 request body
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
@@ -910,7 +912,7 @@ asio::awaitable<void> test_request_body_format(MockAnthropicServer& mock, uint16
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
 
         // System should be top-level
         XX_TEST_EXPECT_TRUE(sent.contains("system"));
@@ -953,7 +955,7 @@ asio::awaitable<void> test_sendthinking_in_request_body(MockAnthropicServer& moc
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
 
         // First message should have thinking content block
         XX_TEST_EXPECT_TRUE(sent["messages"][0]["content"].is_array());
@@ -1496,7 +1498,7 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
@@ -1513,7 +1515,7 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
@@ -1527,7 +1529,7 @@ private:
 
     void handleConn(asio::ip::tcp::socket& sock) {
         namespace http = boost::beast::http;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;
@@ -1676,7 +1678,7 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
@@ -1693,7 +1695,7 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
@@ -1714,7 +1716,7 @@ private:
         }
 
         namespace http = boost::beast::http;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;
@@ -1913,11 +1915,11 @@ void test_anthropic_streaming_abort_after_message_stop_ignored() {
 }
 
 void test_anthropic_send_timeout_calculation() {
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(0).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(1024).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 30).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 31).count(), 31);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 500).count(), 500);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(0).count(), 30);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(1024).count(), 30);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(65536 * 30).count(), 30);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(65536 * 31).count(), 31);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(65536 * 500).count(), 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -2153,7 +2155,7 @@ void test_convert_messages_multimodal_merge() {
 
 /// 非流式响应解析: 带 signature 的 thinking 块与 redacted_thinking 块应存入 extra 以便回传
 void test_parse_response_thinking_signature() {
-    auto resp       = agentxx::util::Json::parse(R"({
+    auto resp       = utilxx_base::Json::parse(R"({
         "content": [
             {"type":"thinking","thinking":"Hmm...","signature":"sig-abc"},
             {"type":"redacted_thinking","data":"EQo=="},

@@ -3,7 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
 #include "neograph/define.h"
@@ -32,11 +32,11 @@ struct InterruptFormSubmit {
     /// true = 用户取消整份表单 (表单值全部丢弃)
     bool cancelled = false;
     /// 控件 id → 值 (对象; 空对象 = 未提交/取消)
-    agentxx::util::Json values = agentxx::util::Json::object();
+    utilxx_base::Json values = utilxx_base::Json::object();
 };
 
 using InterruptResultChannel
-    = asio::experimental::concurrent_channel<void(neograph_asio_error_code, InterruptFormSubmit)>;
+    = asio::experimental::concurrent_channel<void(utilxx_base::AsioErrorCode, InterruptFormSubmit)>;
 
 /// TUI 消息模型: 统一使用 agentxx::agent::ViewMessage
 /// (与 server Session::viewMessages / wire Sync 同型, 见
@@ -80,7 +80,7 @@ enum class ConnState : uint8_t {
 /// 性能设计 (流式输出的热路径):
 /// - currentToken 为 shared_ptr<string>: 流式追加 token 时按需 COW 字符串本体,
 ///   避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
-/// - contextMessages 为 shared_ptr<json>: agentxx::util::Json 拷贝是深拷贝
+/// - contextMessages 为 shared_ptr<json>: utilxx_base::Json 拷贝是深拷贝
 ///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 全量拷贝内,
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
@@ -155,7 +155,7 @@ struct TUIRenderState {
     std::deque<TUIPendingInput> pendingInputs;
 
     /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
-    std::shared_ptr<agentxx::util::Json> contextMessages;
+    std::shared_ptr<utilxx_base::Json> contextMessages;
 
     bool showContextOverlay = false;
 

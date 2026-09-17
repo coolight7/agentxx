@@ -1,8 +1,8 @@
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "agentxx/plugin/op_driver.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/bind_cancellation_slot.hpp"
 #include "asio/co_spawn.hpp"
@@ -59,7 +59,7 @@ bool CapabilityRegistry::registerCapability(
         );
         return false;
     }
-    util::insertHeterogeneous(
+    utilxx_base::insertHeterogeneous(
         caps_,
         std::string{name},
         Entry{std::string{provider}, start, cancel, ctx}
@@ -261,8 +261,8 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
             throw std::runtime_error("call_tool_async: tool has no start callback");
         }
         auto parsed = PluginStringView::empty(args_json)
-                          ? util::Json::object()
-                          : util::Json::parse(PluginStringView::str(args_json));
+                          ? utilxx_base::Json::object()
+                          : utilxx_base::Json::parse(PluginStringView::str(args_json));
         if (!parsed.is_object()) {
             throw std::runtime_error("call_tool_async: arguments must be a JSON object");
         }

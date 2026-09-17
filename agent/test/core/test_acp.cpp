@@ -2,7 +2,7 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/http_client.h"
+#include "utilxx/http_client.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/detached.hpp>
@@ -31,7 +31,9 @@ namespace agentxx {
 namespace test {
 
 using namespace agentxx::protocol;
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 
 // -------------------------------------------------------------------
 // Minimal TCP listener as mock OpenAI API server.
@@ -54,11 +56,11 @@ static std::shared_ptr<agentxx::agent::CodeAgent> makeTestAgent(const std::strin
     config->model.modelName = "acp-test-mock";
     auto agent              = std::make_shared<agentxx::agent::CodeAgent>(config);
 
-    agentxx::util::Json def = {
+    utilxx_base::Json def = {
         {"name",     name                                                                    },
         {"channels", {{"messages", {{"reducer", "append"}}}}                                 },
-        {"nodes",    agentxx::util::Json::object()                                           },
-        {"edges",    agentxx::util::Json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
+        {"nodes",    utilxx_base::Json::object()                                           },
+        {"edges",    utilxx_base::Json::array({{{"from", "__start__"}, {"to", "__end__"}}})},
     };
     neograph::graph::NodeContext ctx;
     agent->engine = neograph::graph::GraphEngine::compile(agentxx::util::toNeographJson(def), ctx);
@@ -316,7 +318,7 @@ void test_acp_server_stdio() {
             auto sid = responses[1]["result"]["sessionId"].get<std::string>();
             XX_TEST_EXPECT_EQ(
                 agent->getContext()->getSessionWorkDir(sid),
-                agentxx::util::toCurrentSystemAbsolutePath("/tmp")
+                utilxx_base::toCurrentSystemAbsolutePath("/tmp")
             );
         }
 
@@ -371,7 +373,7 @@ void test_acp_server_stdio_session_cwd() {
     // 会话 A 绑定 /tmp; 会话 B 相对路径 "." 归一为进程启动 cwd —— 两会话互不影响
     XX_TEST_EXPECT_EQ(
         agent->getContext()->getSessionWorkDir(sidA),
-        agentxx::util::toCurrentSystemAbsolutePath("/tmp")
+        utilxx_base::toCurrentSystemAbsolutePath("/tmp")
     );
     XX_TEST_EXPECT_EQ(
         agent->getContext()->getSessionWorkDir(sidB),

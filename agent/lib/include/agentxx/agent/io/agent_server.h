@@ -3,7 +3,7 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_server.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include <atomic>
@@ -32,7 +32,7 @@ public:
     struct Config {
         inline static const std::string defaultBasePath = "/agent";
 
-        util::HttpServer::Config http;  // address
+        utilxx::HttpServer::Config http;  // address
         std::string              token; // 空且 autoGenerateToken 时自动生成
         /// 进程内可信连接可关闭鉴权 (token 留空即不校验)
         bool autoGenerateToken = true;
@@ -80,14 +80,14 @@ public:
 
 private:
 
-    asio::awaitable<void> handleWs(util::HttpServer::WsStream& ws);
+    asio::awaitable<void> handleWs(utilxx::HttpServer::WsStream& ws);
 
     /// 取/建指定 sessionId 的 SessionServerAgentIO (并启动其驱动循环)
     std::shared_ptr<SessionServerAgentIO> getOrCreateController(std::string_view sessionId);
 
     std::shared_ptr<BaseAgent>           agent_;
     Config                               config_;
-    std::unique_ptr<util::HttpServer>    http_;
+    std::unique_ptr<utilxx::HttpServer>    http_;
     asio::any_io_executor                ex_;
     mutable std::atomic<std::thread::id> ioThreadId_{};
 

@@ -13,8 +13,8 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_manager_base.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include <optional>
 #include <string>
@@ -55,7 +55,7 @@ std::string oneLinePreview(std::string_view text, size_t maxCols) {
     if (!line.empty() && line.back() == '\r') {
         line.pop_back(); // CRLF 文本去掉行尾 '\r'
     }
-    const auto idx = util::findIndexByUtf8Length(line, maxCols);
+    const auto idx = utilxx_base::findIndexByUtf8Length(line, maxCols);
     if (idx > 0 && idx < line.size()) {
         line.resize(idx);
         line += "...";
@@ -66,12 +66,12 @@ std::string oneLinePreview(std::string_view text, size_t maxCols) {
 /// 解析工具参数 JSON
 /// - 空串/非法 JSON/非对象返回 nullopt (如参数仍在流式输出中):
 ///   调用方退化为仅提供显示名, 不做摘要
-std::optional<util::Json> parseToolArgs(std::string_view argsJson) {
+std::optional<utilxx_base::Json> parseToolArgs(std::string_view argsJson) {
     if (argsJson.empty()) {
         return std::nullopt;
     }
     try {
-        auto j = util::Json::parse(argsJson);
+        auto j = utilxx_base::Json::parse(argsJson);
         if (!j.is_object()) {
             return std::nullopt;
         }
@@ -99,7 +99,7 @@ std::string lineRangeText(int64_t offset, int64_t limit) {
 
 /// 文本行数摘要 ("152 lines"; 空文本返回空串)
 std::string linesText(std::string_view text) {
-    const size_t lines = util::countLines(text);
+    const size_t lines = utilxx_base::countLines(text);
     return (lines > 0) ? fmt::format("{} lines", lines) : std::string{};
 }
 
@@ -110,7 +110,7 @@ uint64_t shareStoreResultId(std::string_view result) {
         return 0;
     }
     try {
-        auto          j  = util::Json::parse(result);
+        auto          j  = utilxx_base::Json::parse(result);
         const int64_t id = j.is_object() ? j.value<int64_t>("id", 0) : 0;
         return (id > 0) ? static_cast<uint64_t>(id) : uint64_t{0};
     } catch (...) {
@@ -120,7 +120,7 @@ uint64_t shareStoreResultId(std::string_view result) {
 
 /// `agentxx_subagent` 任务文本: 优先取 `message`, 其次取 `messages` 最后一项的
 /// `content` (两者都是工具接受的委派输入)
-std::string subagentTaskText(const util::Json& args) {
+std::string subagentTaskText(const utilxx_base::Json& args) {
     const std::string message = args.value("message", std::string{});
     if (!message.empty()) {
         return message;

@@ -13,7 +13,8 @@ int g_regex_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx;
 
 void test_regex_create() {
     auto re = XXRegex::createRegex("hello");

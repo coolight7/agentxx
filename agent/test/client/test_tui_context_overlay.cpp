@@ -14,7 +14,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "agentxx/version.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
@@ -66,9 +66,9 @@ struct ContextOverlayFixture {
     }
 
     /// 写入 contextMessages (模拟服务端 WireContextMessages 推送)
-    void setMessages(agentxx::util::Json msgs) {
+    void setMessages(utilxx_base::Json msgs) {
         sharedState.mutate([&](TUIRenderState& st) {
-            st.contextMessages = std::make_shared<agentxx::util::Json>(std::move(msgs));
+            st.contextMessages = std::make_shared<utilxx_base::Json>(std::move(msgs));
         });
     }
 
@@ -167,8 +167,8 @@ struct ContextOverlayFixture {
 };
 
 /// 构造典型上下文消息数组: 系统 + 用户 + 助手(带 tool_calls) + 工具结果
-agentxx::util::Json makeContextMessages() {
-    return agentxx::util::Json::parse(R"([
+utilxx_base::Json makeContextMessages() {
+    return utilxx_base::Json::parse(R"([
         {"role":"system","content":"You are a helpful assistant."},
         {"role":"user","content":"Hello, please check the weather."},
         {"role":"assistant","content":"","tool_calls":[
@@ -302,7 +302,7 @@ TestResult testTuiContextOverlay() {
     // ---- 场景 6: 空消息数组显示 (空) 占位 ----
     {
         ContextOverlayFixture fx;
-        fx.setMessages(agentxx::util::Json::array());
+        fx.setMessages(utilxx_base::Json::array());
         auto screen = fx.render();
         XX_TEST_EXPECT_TRUE(screen.find("( 空 )") != std::string::npos);
     }
@@ -344,8 +344,8 @@ TestResult testTuiContextOverlay() {
         ContextOverlayFixture fx;
         std::string           multilinePrompt
             = "\n\nYou are a helpful, knowledgeable AI coding assistant.\n\n## Core Behavior\n- Assist user.";
-        agentxx::util::Json msgs = agentxx::util::Json::array({
-            agentxx::util::Json{{"role", "system"}, {"content", multilinePrompt}}
+        utilxx_base::Json msgs = utilxx_base::Json::array({
+            utilxx_base::Json{{"role", "system"}, {"content", multilinePrompt}}
         });
         fx.setMessages(std::move(msgs));
         auto screen = fx.render();
@@ -375,9 +375,9 @@ TestResult testTuiContextOverlay() {
         fx.height = 20;
 
         constexpr size_t    kMsgCount = 30;
-        agentxx::util::Json msgs      = agentxx::util::Json::array();
+        utilxx_base::Json msgs      = utilxx_base::Json::array();
         for (size_t i = 0; i < kMsgCount; ++i) {
-            msgs.push_back(agentxx::util::Json{
+            msgs.push_back(utilxx_base::Json{
                 {"role", "user"},
                 {"content", fmt::format("marker-{:02d} payload", i)},
             });
@@ -461,13 +461,13 @@ TestResult testTuiContextOverlay() {
         while (longBody.size() < 4000) {
             longBody += "lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
         }
-        agentxx::util::Json msgs = agentxx::util::Json::array();
-        msgs.push_back(agentxx::util::Json{
+        utilxx_base::Json msgs = utilxx_base::Json::array();
+        msgs.push_back(utilxx_base::Json{
             {"role",    "system"},
             {"content", longBody}
         });
         for (size_t i = 1; i <= 4; ++i) {
-            msgs.push_back(agentxx::util::Json{
+            msgs.push_back(utilxx_base::Json{
                 {"role", "user"},
                 {"content", fmt::format("tail-{:02d} payload", i)},
             });

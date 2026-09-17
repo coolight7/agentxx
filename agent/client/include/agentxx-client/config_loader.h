@@ -2,8 +2,8 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/model_registry.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include <map>
 #include <memory>
 #include <string>
@@ -116,7 +116,7 @@ inline constexpr std::string_view kBuiltinWorkDirEnv = "AGENTXX_WORK_DIR";
 inline constexpr std::string_view kBuiltinExecDirEnv = "AGENTXX_EXEC_DIR";
 
 /// 注入程序内置环境变量 (main 启动时尽早调用; 供 yaml `${VAR}` 展开使用)
-/// - 底层转发至 agentxx::util::ApplicationEnv 单例预设存储 (优先级高于系统环境变量, Windows 侧经
+/// - 底层转发至 utilxx_base::ApplicationEnv 单例预设存储 (优先级高于系统环境变量, Windows 侧经
 /// _dupenv_s 安全读取)
 /// - 内置变量在 resolveEnvVars 中优先解析 (先于 override/env/.env)
 /// - 传入空值表示清除该变量 (回退惰性解析)

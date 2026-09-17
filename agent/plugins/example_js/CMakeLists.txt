@@ -62,8 +62,8 @@ add_library(${PLUGIN_NAME} SHARED
   libexample_js.cpp
 )
 
-if (NOT TARGET agentxx_util)
-  find_package(agentxx_util REQUIRED)
+if (NOT TARGET cxx_utilxx_base_static)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
@@ -72,7 +72,7 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   ${_BOOST_INCLUDES}
 )
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

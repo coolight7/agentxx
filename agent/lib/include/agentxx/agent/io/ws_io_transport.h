@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "agentxx/util/ws_client.h"
+#include "utilxx/ws_client.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "asio/steady_timer.hpp"
@@ -43,13 +43,13 @@ public:
         std::string           url,
         std::string           token,
         Config                config,
-        util::WsClientConfig  wsConfig = {}
+        utilxx::WsClientConfig  wsConfig = {}
     );
 
     /// 服务端模式: 注入已建立的 WsClient (由 AgentServer accept 后传入)
     WsAgentIOTransport(
         asio::any_io_executor           ex,
-        std::unique_ptr<util::WsClient> client,
+        std::unique_ptr<utilxx::WsClient> client,
         Config                          config
     );
 
@@ -90,7 +90,7 @@ public:
 
 private:
 
-    using ErrorCode  = neograph_asio_error_code;
+    using ErrorCode  = utilxx_base::AsioErrorCode;
     using WriteQueue = asio::experimental::concurrent_channel<void(ErrorCode, std::string)>;
     using RecvQueue  = asio::experimental::concurrent_channel<void(ErrorCode, WireMessage)>;
 
@@ -110,11 +110,11 @@ private:
     // 客户端模式参数
     std::string          url_;
     std::string          token_;
-    util::WsClientConfig wsConfig_;
+    utilxx::WsClientConfig wsConfig_;
     bool                 clientMode_ = false;
 
     // 连接状态
-    std::shared_ptr<util::WsClient>     wsClient_;
+    std::shared_ptr<utilxx::WsClient>     wsClient_;
     std::shared_ptr<WriteQueue>         writeQueue_;
     std::shared_ptr<RecvQueue>          recvQueue_;
     std::shared_ptr<asio::steady_timer> heartbeatTimer_;

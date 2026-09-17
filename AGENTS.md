@@ -34,7 +34,7 @@ int charToLower(int c) {
 }
 ```
 - 合适的情况下，尽量使用`std::string_view`替代`const std::string&`
-- 应当使用 [XX_LOG](agent/lib/include/agentxx/util/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
+- 应当使用 [XX_LOG](agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
 - 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
 - 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效
 - 使用 grep、glob 等工具前参考以下代码结构缩小范围，非必要不应去搜索 `agent/**` 整个代码库，里面包含了 build、third_party 等文件夹太大
@@ -47,7 +47,7 @@ int charToLower(int c) {
     - C++ 实现 Agent
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 BaseAgent/CodeAgent、toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
-    - [util](agent/lib/include/agentxx/util/) 一些工具类和函数，包括 `http server/client`、`websocket server/client`、`log`、`lru cache`、`aho_corasick/regex`、[字符串工具](agent/lib/include/agentxx/util/string_util.h) (大小写转换、str转数值、自动检测字符编码并转utf8、计算utf8长度、移除空白符、base64、unix/windows/自动路径标准化、忽略大小写的判断包含/相等、split按char切割字符串)、[异常处理](agent/lib/include/agentxx/util/exception.h)
+    - [util](agent/lib/include/agentxx/util/) 只剩与图引擎/宿主耦合的少量头: [exception.h](agent/lib/include/agentxx/util/exception.h) (异常分类 + 统一捕获, 基于 utilxx_base::catchError*)、neograph_json_bridge.h、cancel_adapter.h; 通用工具已拆为独立工程 (见 `agent/third_party/cxx_utilxx*`)
     - [BaseAgent](agent/lib/include/agentxx/agent/base_agent.h) agent 运行核心基类 (ReAct 循环 + 会话执行)
     - [CodeAgent](agent/lib/include/agentxx/agent/code_agent.h) 继承 BaseAgent, 添加编程工具/中间件
 - `agent/client`: 编译结果 {build}/exec/agentxx_cli
@@ -80,7 +80,14 @@ path/to/agentxx_test string_util regex
 ```
 - `agent/benchmark`: 编译结果 {build}/exec/agentxx_benchmark
     - 性能测试（一般仅 release 启用编译该模块）
-- `agent/third_party`: 第三方库依赖
+- `agent/third_party`: 第三方库依赖 (含本项目自研、按独立工程维护的三个库)
+    - [cxx_utilxx_base](agent/third_party/cxx_utilxx_base/) 无重依赖基础件 (日志/JSON/字符串/
+      容器/环境/系统探测/取消令牌/异步卸载), 命名空间 `utilxx_base` + 跨库契约 `utilxx::CancelToken`;
+      产物 `libcxx_utilxx_base(.so|_static.a)` (Debug 加 `d`)
+    - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/SQLite/正则/路由/差异/
+      worktree/散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
+    - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架内核 (纯 C ABI 基座 pluginxx/api/、
+      SDK kit/、运行时 runtime/、宿主实现 host/), 依赖 cxx_utilxx_base; 产物 `libcxx_pluginxx(.so|_static.a)`
     - [boost](agent/third_party/boost/)
         - asio
         - beast
@@ -142,14 +149,18 @@ path/to/agentxx_test string_util regex
   复用顶层传入的 XX_IS_*_D 变量), screen_capture/computer_use/
   text_selection_monitor 仅 Windows, audio_stream 全平台未实现,
   system_monitor 无 macOS; 跨平台插件默认放行; 见 docs/zh-cn/design/plugins.md §14
-- 工具函数复用: 插件复用 `agent/lib/include/agentxx/util` 的全部工具函数经独立
-  静态库 `agentxx_util` (src/util/ 全部源文件: http_client/http_server/ws_client/
-  string_util/util/sqlite/settings_db/log/regex/http_header/json/json_view, simdjson 驱动自主 Json/JsonView),
+- 工具函数复用: 插件复用 `cxx_utilxx_base` / `cxx_utilxx` 两个独立静态库
+  (拆分自原 `agentxx_util`; 基础件 log/json/json_view/string_util/env/system/
+  container_util/hash/lru_cache/path_sanitize/stream/async_mutex/asio_error +
+  契约 utilxx/cancel.h、utilxx/async_offload.h; 重依赖 http_client/http_server/
+  ws_client/router/sqlite/settings_db/regex/aho_corasick/diff_util/worktree/crypto);
   libagentxx 与插件各自静态链接一份 (符号经导出控制隐藏, 互不冲突);
-  插件 CMakeLists: `find_package(agentxx_util)` + `target_link_libraries(PRIVATE agentxx_util)`;
-  依赖全部 PUBLIC 传递 (fmt/sqlite3/uchardet/iconv + simdjson/OpenSSL/
-  hyperscan/uring 的链接与 include; 自 JSON 自主化起已彻底移除 neograph 系/yyjson), 插件链接后直接可用全部 util
-  (含 `agentxx/util/json.h`/`json_view.h` 自主 Json/JsonView);
+  插件 CMakeLists: `find_package(cxx_utilxx_base|cxx_utilxx)` +
+  `target_link_libraries(PRIVATE cxx_utilxx_base_static|cxx_utilxx_static)`
+  (cxx_utilxx 依赖 cxx_utilxx_base, 只链后者时经 INTERFACE 自动带上);
+  依赖全部 PUBLIC 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头;
+  hyperscan/io_uring 以库文件绝对路径写入 INTERFACE, 处理方无需 pkg_check_modules),
+  插件链接后直接可用全部工具 (含 `utilxx_base/json.h`/`json_view.h` 自主 Json/JsonView);
   定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全),
   第三方插件不需要它 (纯 C ABI 头即可, 甚至不用 C++);
   未引用模块按目标文件提取自动裁剪 (9 插件 DT_NEEDED 仅系统库);

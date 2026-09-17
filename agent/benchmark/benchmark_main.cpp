@@ -1,5 +1,5 @@
-#include "agentxx/util/env.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/env.h"
+#include "utilxx_base/log.h"
 #include "bench_aho_corasick.h"
 #include "bench_code_agent.h"
 #include "bench_regex.h"
@@ -21,7 +21,7 @@
 #endif
 
 #if XX_IS_DEBUG_D && XX_IS_LINUX_D
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #endif
 
 namespace {
@@ -37,7 +37,7 @@ struct BenchModule {
 
 int main(int argn, char** argv) {
 #if XX_IS_DEBUG_D && XX_IS_LINUX_D
-    agentxx::util::signalError(argv[0]);
+    utilxx_base::signalError(argv[0]);
 #endif
 
     // 解析参数
@@ -65,18 +65,18 @@ int main(int argn, char** argv) {
     auto makeCodeAgentConfig = []() {
         agentxx::bench::CodeAgentBenchConfig config;
         config.openAIBaseUrl
-            = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
+            = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
         config.openAIApiKey
-            = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-        config.openAIModelName = agentxx::util::ApplicationEnv::instance().getOr(
+            = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
+        config.openAIModelName = utilxx_base::ApplicationEnv::instance().getOr(
             "AGENTXX_BENCH_LLM_MODEL_NAME",
             "Agentxx"
         );
-        config.systemPrompt = agentxx::util::ApplicationEnv::instance().getOr(
+        config.systemPrompt = utilxx_base::ApplicationEnv::instance().getOr(
             "AGENTXX_BENCH_LLM_SYSTEM_PROMPT",
             "You are a helpful assistant."
         );
-        config.userInput = agentxx::util::ApplicationEnv::instance().getOr(
+        config.userInput = utilxx_base::ApplicationEnv::instance().getOr(
             "AGENTXX_BENCH_LLM_USER_INPUT",
             "Hello, please respond briefly."
         );
@@ -178,7 +178,7 @@ int main(int argn, char** argv) {
 
     auto&       reporter  = agentxx::bench::BenchReporter::instance();
     std::string outputDir = AGENTXX_BENCH_OUTPUT_DIR;
-    if (auto envDir = agentxx::util::ApplicationEnv::instance().get("AGENTXX_BENCH_OUTPUT_DIR")) {
+    if (auto envDir = utilxx_base::ApplicationEnv::instance().get("AGENTXX_BENCH_OUTPUT_DIR")) {
         outputDir = *envDir;
     }
     if (!outputDir.empty()) {

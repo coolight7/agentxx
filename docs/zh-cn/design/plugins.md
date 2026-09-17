@@ -80,30 +80,46 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 - **构建侧自动化**：`plugins/CMakeLists.txt` 统一配置 ELF `-fvisibility=hidden` + version script 白名单 (通配符 `agentxx_plugin_agent_*`/`agentxx_plugin_client_*`，兼容单端插件在 Android lld 下链接)，macOS `-exported_symbols_list`，MSVC `dllexport`；第三方静态库符号自动隐藏
 - **校验脚本**：`agent/script/check_plugin_exports.sh [plugin-dir]` 用 `nm -D --defined-only`
   遍历构建产物，要求每张插件库只导出上述入口符号；出现任何其他导出符号即失败
-  (用于确认第三方静态依赖与 `agentxx_util` 的符号确实被隐藏)
+  (用于确认第三方静态依赖与 `cxx_utilxx`/`cxx_utilxx_base` 的符号确实被隐藏)
 
 ---
 
-## 5. 工具函数复用 (`agentxx_util`)
+## 5. 工具函数复用 (`cxx_utilxx_base` / `cxx_utilxx`)
 
-面向项目内置插件，可通过独立静态库 `agentxx_util` 复用主程序全部基础工具 (字符串/编码检测/UTF-8 转换/路径规范化/Base64/HTTP/SQLite/正则/日志/JSON 等)：
+面向项目内置插件，可通过两个独立静态库复用主程序的全部基础工具 (字符串/编码检测/UTF-8
+转换/路径规范化/Base64/日志/JSON + HTTP/SQLite/正则/差异/worktree 等)。二者是
+`agent/third_party/` 下本项目自研的独立 CMake 工程 (与 fmt/simdjson 同级)，经 superbuild
+先构建安装，再由 libagentxx / 各插件 `find_package` 引用其**静态变体**：
 
 ```cmake
-find_package(agentxx_util REQUIRED)
-target_link_libraries(${PLUGIN_NAME} PRIVATE agentxx_util)
+# 基础件 (无重依赖): 日志/JSON/字符串/容器/环境/系统探测/取消令牌/异步卸载
+find_package(cxx_utilxx_base REQUIRED)
+target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_base_static)
+
+# 重依赖工具 (依赖基础件): HTTP/WS/SQLite/正则/路由/差异/worktree/散列
+find_package(cxx_utilxx REQUIRED)
+target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
 ```
 
 ```cpp
-#include "agentxx/util/string_util.h"
-auto b64 = agentxx::util::base64Encode(data);
-#include "agentxx/util/json.h"
-#include "agentxx/util/json_view.h"
-// 业务/插件统一用 agentxx::util::Json/JsonView (simdjson 驱动); 高频只读先 JsonView::parse 路由, 命中后 to_json() 物化
+#include "utilxx_base/string_util.h"
+auto b64 = utilxx_base::base64Encode(data);
+#include "utilxx_base/json.h"
+#include "utilxx_base/json_view.h"
+// 业务/插件统一用 utilxx_base::Json/JsonView (simdjson 驱动); 高频只读先 JsonView::parse 路由, 命中后 to_json() 物化
 ```
 
-- `agentxx_util` 由 `agent/lib/src/util/` 全部源文件编译 (含 `json.cpp`/`json_view.cpp`, simdjson 驱动的自主 `agentxx::util::Json`/`JsonView`)，libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；依赖全部 `PUBLIC` 传递 (fmt/sqlite3/uchardet/iconv + simdjson/OpenSSL/hyperscan/uring, 自 JSON 自主化起已彻底移除 neograph 系/yyjson)
-- 定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全)；第三方插件仅需纯 C 头 `plugin_api.h` / SDK `plugin_kit.h`，无需链接宿主库
+- 库归属与命名空间：`cxx_utilxx_base` → `utilxx_base` (另含跨库共享契约 `utilxx::CancelToken`
+  与 `utilxx::offloadAsync*`, 定义在 `utilxx/cancel.h` / `utilxx/async_offload.h`)；
+  `cxx_utilxx` → `utilxx` (http/ws/sqlite/regex/router/diff/worktree/crypto)
+- 每个库同时产出静态库与动态库，命名规则同 libagentxx
+  (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`；Debug 追加 `d`)
+- libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；
+  依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头)
+- 定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全)；第三方插件仅需纯 C 头
+  `plugin_api.h` / SDK `plugin_kit.h`，无需链接宿主库
 - 未引用模块按目标文件提取自动裁剪 (9 插件 `DT_NEEDED` 仅系统库)
+- 拆分背景与迁移记录：`resource/history/split-util-plugin-core/plan.md`
 
 ---
 
@@ -900,14 +916,14 @@ polled_tool(ctx, name, depict, schema,
   |---|---|
   | `agentxx_websearch`：`web_search` / `web_fetch` / `web_fetch_markdown` | 实现体本就是 asio 协程（`co_await HttpClient::*Async`）；网络等待不再占用宿主工作线程池，同实例的 HTTP keep-alive 连接池天然复用 |
   | `agentxx_execute_command`：`execute_bash_command` / `execute_windows_command`（Boost.Process v2 分支） | 子进程管道/计时器绑定协程 executor；并发多命令共享同一 poll 序列与同一个本地 reactor，不再各占一个池线程直到超时 |
-  | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；文件 IO 真异步（可用性经 `agentxx::util::isAsyncFileIoSupported()` 判断：编译期宏 + 运行时 io_uring 探测），避免大文件读写占用池线程 |
+  | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；文件 IO 真异步（可用性经 `utilxx_base::isAsyncFileIoSupported()` 判断：编译期宏 + 运行时 io_uring 探测），避免大文件读写占用池线程 |
 
 - **保持 `blocking_tool`（显式例外）**：
   - `agentxx_filesystem`：`list` / `glob` / `grep` —— 目录遍历 + 全文件扫描 + 正则/编码
     转换属 CPU/阻塞 IO（asio 无异步目录 API），放进 pump 只会阻塞同实例其它工具；
   - `agentxx_execute_command`：非 Boost.Process v2 的 popen 回退分支（同步实现）；
   - `agentxx_filesystem`：文件异步 I/O 不可用环境（同步回退，注册侧自动切回
-    `blocking_tool`）—— 可用性统一经 `agentxx::util::isAsyncFileIoSupported()` 判断：
+    `blocking_tool`）—— 可用性统一经 `utilxx_base::isAsyncFileIoSupported()` 判断：
     编译期未启用 asio 文件 I/O（`ASIO_HAS_FILE` / `BOOST_ASIO_HAS_FILE` 均未定义），
     或 Linux/Android 上运行时无法创建 io_uring 环（容器/虚拟化的 seccomp 过滤
     ——`/proc/self/status` 的 `Seccomp: 2`——会拦截 `io_uring_setup`，内核过旧返回

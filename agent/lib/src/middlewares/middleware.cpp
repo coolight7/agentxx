@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/container_util.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include <algorithm>
 #include <charconv>
@@ -18,13 +18,13 @@ agentxx::middleware::BaseMiddlewareHandleInterface::~BaseMiddlewareHandleInterfa
 namespace agentxx {
 namespace middleware {
 
-agentxx::util::Json
+utilxx_base::Json
     BaseMiddlewareHandleInterface::getLastMessageJson(const neograph::graph::NodeInput& in) {
     auto messages = in.state.get("messages");
     if (messages.is_array() && messages.size() > 0) {
         return agentxx::util::fromNeographJson(messages.back());
     }
-    return agentxx::util::Json(nullptr);
+    return utilxx_base::Json(nullptr);
 }
 
 std::optional<neograph::ChatMessage>
@@ -116,11 +116,11 @@ void BaseMiddlewareHandleInterface::printMessages(
     }
 }
 
-bool InterruptHandleArg::isAccordingFormat(const agentxx::util::Json& data) {
+bool InterruptHandleArg::isAccordingFormat(const utilxx_base::Json& data) {
     return data.is_object() && data["name"].is_string();
 }
 
-std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const agentxx::util::Json& data) {
+std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const utilxx_base::Json& data) {
     if (false == isAccordingFormat(data)) {
         return std::nullopt;
     }
@@ -138,10 +138,10 @@ std::optional<InterruptHandleArg> InterruptHandleArg::fromJson(const agentxx::ut
     return result;
 }
 
-agentxx::util::Json InterruptHandleArg::toJson() const {
+utilxx_base::Json InterruptHandleArg::toJson() const {
     // 描述原样下发 (生产者负责构造; 缺失 = 该中断不进入客户端渲染路径,
     // 客户端按契约错误处理并输出诊断行)
-    auto j = agentxx::util::Json{
+    auto j = utilxx_base::Json{
         {"name",     name       },
         {"arg",      arg        },
         {"resultId", resultId   },
@@ -150,7 +150,7 @@ agentxx::util::Json InterruptHandleArg::toJson() const {
     return j;
 }
 
-std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const agentxx::util::Json& data) {
+std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const utilxx_base::Json& data) {
     auto relist = std::vector<InterruptHandleArg>{};
     if (data.is_array()) {
         for (const auto& item : data) {
@@ -163,21 +163,21 @@ std::vector<InterruptHandleArg> InterruptHandleArg::listFromJson(const agentxx::
     return relist;
 }
 
-agentxx::util::Json InterruptHandleArg::listToJson(const std::vector<InterruptHandleArg>& data) {
-    auto relist = agentxx::util::Json::array();
+utilxx_base::Json InterruptHandleArg::listToJson(const std::vector<InterruptHandleArg>& data) {
+    auto relist = utilxx_base::Json::array();
     for (const auto& item : data) {
         relist.push_back(item.toJson());
     }
     return relist;
 }
 
-agentxx::util::Json MiddlewareContext::anyToJson(const std::any& val) {
+utilxx_base::Json MiddlewareContext::anyToJson(const std::any& val) {
     if (!val.has_value()) {
         return nullptr;
     }
     auto& t = val.type();
-    if (t == typeid(agentxx::util::Json)) {
-        return std::any_cast<agentxx::util::Json>(val);
+    if (t == typeid(utilxx_base::Json)) {
+        return std::any_cast<utilxx_base::Json>(val);
     }
     // 兼容: 历史路径可能仍存入 neograph::json (如未迁移的调用点),
     // 经桥接转为业务 Json, 避免 checkpoint 落盘丢值
@@ -222,7 +222,7 @@ agentxx::util::Json MiddlewareContext::anyToJson(const std::any& val) {
     }
     if (t == typeid(std::vector<neograph::ChatMessage>)) {
         auto& msgs = std::any_cast<const std::vector<neograph::ChatMessage>&>(val);
-        auto  arr  = agentxx::util::Json::array();
+        auto  arr  = utilxx_base::Json::array();
         for (const auto& msg : msgs) {
             neograph::json nj;
             neograph::to_json(nj, msg);
@@ -250,7 +250,7 @@ void MiddlewareContext::ensureShareStoreLoaded(std::string_view sessionId) {
     }
     // 首次访问: 从 SQLite 恢复全部条目与 id 计数器
     auto loaded = persistence_->loadShareStore(sessionId);
-    util::insertHeterogeneous(
+    utilxx_base::insertHeterogeneous(
         shareStore,
         std::string{sessionId},
         SessionShareStore{.store = std::move(loaded.items), .storeId = loaded.nextId}
@@ -283,7 +283,7 @@ void MiddlewareContext::setShareStoreItemValue(
     if (it != shareStore.end()) {
         it->second.store[id] = value;
     } else {
-        util::insertHeterogeneous(
+        utilxx_base::insertHeterogeneous(
             shareStore,
             std::string{sessionId},
             MiddlewareContext::SessionShareStore{
@@ -327,7 +327,7 @@ size_t
             it->second.storeId = id;
         }
     } else {
-        util::insertHeterogeneous(
+        utilxx_base::insertHeterogeneous(
             shareStore,
             std::string{sessionId},
             MiddlewareContext::SessionShareStore{
@@ -365,21 +365,21 @@ void MiddlewareContext::removeGraphDataItem(std::string_view sessionId, std::str
 
 void MiddlewareContext::cleanupSession(std::string_view sessionId) {
     // 异构查找删除, 免除 string_view→string 拷贝 (libc++ 无 C++23 异构 erase)
-    util::eraseHeterogeneous(graphData, sessionId);
-    util::eraseHeterogeneous(shareStore, sessionId);
+    utilxx_base::eraseHeterogeneous(graphData, sessionId);
+    utilxx_base::eraseHeterogeneous(shareStore, sessionId);
     // 移除"已从持久化加载过"标记, 避免该 session 再次出现时跳过加载 (O(1))
     shareStoreLoaded_.erase(std::string{sessionId});
     // 各中间件按 session 的 state
     for (auto& handle : handles) {
         if (handle) {
-            util::eraseHeterogeneous(handle->states, sessionId);
+            utilxx_base::eraseHeterogeneous(handle->states, sessionId);
         }
     }
 }
 
 void MiddlewareContext::throwNodeInterruptBase(
     std::string_view           sessionId,
-    const agentxx::util::Json& msgs
+    const utilxx_base::Json& msgs
 ) {
     // if (msgs.is_array()) {
     // 直接抛异常到 neograph::engine 的话会丢失本轮 session 上下文，因此需要临时保存，这里改为交由
@@ -389,12 +389,12 @@ void MiddlewareContext::throwNodeInterruptBase(
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 
-asio::awaitable<agentxx::util::Json> MiddlewareContext::requestInterrupt(
+asio::awaitable<utilxx_base::Json> MiddlewareContext::requestInterrupt(
     std::string_view                           sessionId,
     const std::function<InterruptHandleArg()>& onCreateArg,
-    const agentxx::util::Json&                 msgs
+    const utilxx_base::Json&                 msgs
 ) {
-    auto result = std::move(getGraphDataItemValue<agentxx::util::Json>(
+    auto result = std::move(getGraphDataItemValue<utilxx_base::Json>(
         sessionId,
         MiddlewareContext::graphDataKey_interruptResult
     ));
@@ -438,13 +438,13 @@ void MiddlewareContext::setGraphDataFromState(
     );
 }
 
-void MiddlewareContext::setGraphDataFromState(agentxx::util::Json j, std::string_view sessionId) {
+void MiddlewareContext::setGraphDataFromState(utilxx_base::Json j, std::string_view sessionId) {
     if (j.is_object()) {
         auto data = std::map<std::string, std::any, std::less<>>{};
         for (auto it = j.begin(); it != j.end(); ++it) {
-            util::insertOrAssignHeterogeneous(data, it.key(), it.value());
+            utilxx_base::insertOrAssignHeterogeneous(data, it.key(), it.value());
         }
-        util::insertOrAssignHeterogeneous(graphData, sessionId, std::move(data));
+        utilxx_base::insertOrAssignHeterogeneous(graphData, sessionId, std::move(data));
     }
 }
 

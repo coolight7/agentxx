@@ -6,7 +6,7 @@
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/plugin/plugin_common.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "fmt/format.h"
 
 #include <cstring>
@@ -721,7 +721,7 @@ static int32_t AGENTXX_PLUGIN_CALL
             std::string result = "agentxx.default";
             if (!json.empty()) {
                 try {
-                    auto j = agentxx::util::Json::parse(json);
+                    auto j = utilxx_base::Json::parse(json);
                     if (j.is_object() && j.contains("name") && j["name"].is_string()) {
                         result = j["name"].get<std::string>();
                     }
@@ -904,7 +904,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_post_to_io(
 static void AGENTXX_PLUGIN_CALL
     xx_log(const AgentxxPluginHost* host, int32_t level, const AgentxxPluginStringView* msg) {
     (void)host;
-    using agentxx::util::LogLevel;
+    using utilxx_base::LogLevel;
     LogLevel lv = LogLevel::Info;
     switch (level) {
         case 0:
@@ -927,7 +927,7 @@ static void AGENTXX_PLUGIN_CALL
     }
     std::string text = (msg && msg->data) ? std::string(msg->data, static_cast<size_t>(msg->size))
                                           : std::string{};
-    agentxx::util::xxLogPrint(lv, text);
+    utilxx_base::xxLogPrint(lv, text);
 }
 
 static int32_t AGENTXX_PLUGIN_CALL xx_json_get_string(
@@ -948,7 +948,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_json_get_string(
     try {
         std::string jsonStr{json->data, static_cast<size_t>(json->size)};
         std::string keyStr{key->data, static_cast<size_t>(key->size)};
-        auto        j = agentxx::util::Json::parse(jsonStr);
+        auto        j = utilxx_base::Json::parse(jsonStr);
         if (j.is_object() && j.contains(keyStr) && j[keyStr].is_string()) {
             std::string val = j[keyStr].get<std::string>();
             hostMemorySetString(out, val);
@@ -1652,7 +1652,7 @@ int PluginManager::registerMcpServer(PluginInstance* inst, AgentxxPluginStringVi
         return -1;
     }
     try {
-        auto j = agentxx::util::Json::parse(
+        auto j = utilxx_base::Json::parse(
             std::string_view{specJson.data, static_cast<size_t>(specJson.size)}
         );
         auto ns         = j.value("namespace", std::string{});
@@ -1714,13 +1714,13 @@ std::string PluginManager::ownResourcesJson(const PluginInstance* inst) {
     }
     auto snap    = c->resourceApplier->ownedBy(inst->name);
     auto toArray = [](const std::vector<std::string>& v) {
-        agentxx::util::Json a = agentxx::util::Json::array();
+        utilxx_base::Json a = utilxx_base::Json::array();
         for (const auto& s : v) {
             a.push_back(s);
         }
         return a;
     };
-    agentxx::util::Json out;
+    utilxx_base::Json out;
     out["skills"] = toArray(snap.skillDirs);
     out["memory"] = toArray(snap.memoryFiles);
     out["mcp"]    = toArray(snap.mcpNamespaces);
@@ -1757,7 +1757,7 @@ std::string PluginManager::getConfigJson() {
     if (!c || !c->agentConfig) {
         return {};
     }
-    agentxx::util::Json out;
+    utilxx_base::Json out;
     out["dataDir"]     = c->agentConfig->dataDir;
     out["projectRoot"] = c->agentConfig->workDir;
     out["language"]    = getLanguage();
@@ -1800,9 +1800,9 @@ std::string PluginManager::getToolPromptJson(const std::string& toolName) {
     if (it == prompts.end()) {
         return {};
     }
-    agentxx::util::Json out;
+    utilxx_base::Json out;
     out["depict"]            = it->second.depict;
-    agentxx::util::Json args = agentxx::util::Json::object();
+    utilxx_base::Json args = utilxx_base::Json::object();
     for (const auto& [k, v] : it->second.args) {
         args[k] = v;
     }
@@ -1930,7 +1930,7 @@ bool samePromptValue(
 /// 部分覆盖语义一致：只覆盖出现的 depict/args 子字段）。
 PluginManager::PromptValue mergeToolPromptValue(
     const std::optional<PluginManager::PromptValue>& current,
-    const agentxx::util::Json&                       spec
+    const utilxx_base::Json&                       spec
 ) {
     PluginManager::PromptValue value;
     value.isTool = true;
@@ -2020,7 +2020,7 @@ int PluginManager::setPromptJson(PluginInstance* inst, AgentxxPluginStringView p
         return -1;
     }
     try {
-        auto j = agentxx::util::Json::parse(
+        auto j = utilxx_base::Json::parse(
             std::string_view{prompt_json.data, static_cast<size_t>(prompt_json.size)}
         );
         if (!j.is_object()) {
@@ -2120,14 +2120,14 @@ std::string PluginManager::getModelConfigJson() {
         return {};
     }
     const auto&         cfg = *c->agentConfig;
-    agentxx::util::Json out;
+    utilxx_base::Json out;
     out["baseUrl"]                       = cfg.model.baseUrl;
     out["apiKey"]                        = cfg.model.apiKey;
     out["modelName"]                     = cfg.model.modelName;
     out["websearchApiUrl"]               = cfg.websearchApiUrl;
     out["websearchConvertHtml2markdown"] = cfg.websearchConvertHtml2markdown;
     if (cfg.websearchModel) {
-        agentxx::util::Json wm;
+        utilxx_base::Json wm;
         wm["baseUrl"]                 = cfg.websearchModel->baseUrl;
         wm["apiKey"]                  = cfg.websearchModel->apiKey;
         wm["modelName"]               = cfg.websearchModel->modelName;

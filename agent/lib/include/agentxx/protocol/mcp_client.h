@@ -2,8 +2,9 @@
 
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/json.h"
+#include "utilxx/http_client.h"
+#include "utilxx_base/async_mutex.h"
+#include "utilxx_base/json.h"
 #include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include <atomic>
@@ -67,7 +68,7 @@ public:
         /// - 0 表示不限制 (无整体超时, 仅受 requestTimeout 等内部超时约束)
         /// - 默认 120 秒; 可在 yaml 中对每个 mcp 单独配置 (单位秒, 0=不限制)
         std::chrono::milliseconds toolCallTimeout{120000};
-        util::HeaderMap           extraHeaders;
+        utilxx::HeaderMap           extraHeaders;
 
         bool isHttp() const {
             return !serverUrl.empty();
@@ -229,7 +230,7 @@ private:
         pickMutualVersion(std::string_view requested, const json& serverSupportedVersions);
 
     /// 现代 HTTP 请求头 (MCP-Protocol-Version / Mcp-Method / Mcp-Name / Mcp-Param-*)
-    util::HeaderMap buildModernHttpHeaders(std::string_view method, const json& params) const;
+    utilxx::HeaderMap buildModernHttpHeaders(std::string_view method, const json& params) const;
 
     /// x-mcp-header 值编码 (Base64 sentinel 规则)
     static std::string encodeMcpHeaderValue(const json& value);
@@ -276,7 +277,7 @@ private:
     asio::awaitable<void> discoverSseEndpoint();
 
     /// 构造 MCP HTTP 请求公共头 (旧版)
-    util::HeaderMap buildHttpHeaders() const;
+    utilxx::HeaderMap buildHttpHeaders() const;
 
     asio::awaitable<std::expected<json, std::string>>
         sendHttpRequest(int64_t id, std::string_view method, const json& params);
@@ -331,10 +332,10 @@ private:
     struct StdioTransport;
     std::unique_ptr<StdioTransport> stdio_;
     /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
-    std::unique_ptr<util::AsyncMutex>                            stdioWriteMutex_;
+    std::unique_ptr<utilxx_base::AsyncMutex>                            stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;
     std::unordered_map<int64_t, std::shared_ptr<PendingRequest>> pending_;
-    neograph_asio_error_code                                     ignoreEc_;
+    utilxx_base::AsioErrorCode                                     ignoreEc_;
 
     // 工具定义缓存 (x-mcp-header 提取)
     mutable std::mutex                                 toolsCacheMutex_;
@@ -363,7 +364,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
 
     std::string get_name() const override;
 

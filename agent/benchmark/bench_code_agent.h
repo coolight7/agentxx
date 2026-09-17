@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/code_agent.h"
-#include "agentxx/util/env.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx_base/env.h"
+#include "utilxx/http_server.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -41,7 +41,7 @@ inline int g_llm_sim_completion_tokens = 50;
 inline neograph::json g_llm_sim_tool_calls = neograph::json::array();
 
 struct LlmSimServer {
-    std::unique_ptr<agentxx::util::HttpServer> svr;
+    std::unique_ptr<utilxx::HttpServer> svr;
     std::thread                                thr;
     uint16_t                                   port = 0;
 
@@ -87,7 +87,7 @@ struct LlmSimServer {
 inline LlmSimServer startLlmSimServer() {
     LlmSimServer sim;
 
-    agentxx::util::HttpServer::Config cfg;
+    utilxx::HttpServer::Config cfg;
     cfg.address          = "127.0.0.1";
     cfg.port             = 0;
     cfg.ioThreads        = 1;
@@ -95,16 +95,16 @@ inline LlmSimServer startLlmSimServer() {
     cfg.maxConnections   = 128;
     cfg.maxRequestBody   = 1024 * 1024;
 
-    sim.svr      = std::make_unique<agentxx::util::HttpServer>(cfg);
+    sim.svr      = std::make_unique<utilxx::HttpServer>(cfg);
     auto* rawSvr = sim.svr.get();
 
     // POST /v1/chat/completions
     rawSvr->router().add(
         "/v1/chat/completions",
         2,
-        std::make_shared<agentxx::util::HttpServer::Handler>(
-            [](agentxx::util::HttpServer::Request&  req,
-               agentxx::util::HttpServer::Response& resp,
+        std::make_shared<utilxx::HttpServer::Handler>(
+            [](utilxx::HttpServer::Request&  req,
+               utilxx::HttpServer::Response& resp,
                std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
 
@@ -405,10 +405,10 @@ inline void benchCodeAgentInit() {
 
     CodeAgentBenchConfig config;
     config.openAIBaseUrl
-        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
+        = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
     config.openAIApiKey
-        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-    config.openAIModelName = agentxx::util::ApplicationEnv::instance().getOr(
+        = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
+    config.openAIModelName = utilxx_base::ApplicationEnv::instance().getOr(
         "AGENTXX_BENCH_LLM_MODEL_NAME",
         "Agentxx"
     );
@@ -702,10 +702,10 @@ inline void benchCodeAgentInitWarm() {
 
     CodeAgentBenchConfig config;
     config.openAIBaseUrl
-        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
+        = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
     config.openAIApiKey
-        = agentxx::util::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-    config.openAIModelName = agentxx::util::ApplicationEnv::instance().getOr(
+        = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
+    config.openAIModelName = utilxx_base::ApplicationEnv::instance().getOr(
         "AGENTXX_BENCH_LLM_MODEL_NAME",
         "Agentxx"
     );

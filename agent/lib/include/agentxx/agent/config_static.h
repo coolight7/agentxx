@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/util/env.h"
+#include "utilxx_base/env.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include <cstdlib>
@@ -33,7 +33,7 @@ public:
     /// - 供 yaml data_dir: default 关键字使用 (tui/cli 模式)
     inline static std::string systemDataDir() noexcept {
 #if XX_IS_WIN_D
-        if (auto appdata = agentxx::util::ApplicationEnv::instance().get("APPDATA");
+        if (auto appdata = utilxx_base::ApplicationEnv::instance().get("APPDATA");
             appdata && !appdata->empty()) {
             return (std::filesystem::path(*appdata) / "agentxx").string();
         }
@@ -44,9 +44,9 @@ public:
     /// 获取用户主目录 (Unix: $HOME, Windows: %USERPROFILE%); 未设置返回空串
     inline static std::string getUserHomeDir() noexcept {
 #if XX_IS_WIN_D
-        auto home = agentxx::util::ApplicationEnv::instance().get("USERPROFILE");
+        auto home = utilxx_base::ApplicationEnv::instance().get("USERPROFILE");
 #else
-        auto home = agentxx::util::ApplicationEnv::instance().get("HOME");
+        auto home = utilxx_base::ApplicationEnv::instance().get("HOME");
 #endif
         return (home && !home->empty()) ? *home : std::string{};
     }

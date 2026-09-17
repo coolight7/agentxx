@@ -6,9 +6,9 @@
 /// - 依赖: html2md (第三方, AGENTXX_INSTALL_DIR 安装) + agentxx_util (XXRegex)
 #pragma once
 
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/regex.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx/regex.h"
 #include <html2md/html2md.h>
 #include <string>
 #include <vector>
@@ -17,7 +17,7 @@ namespace agentxx_string_plugin {
 
 /// agentxx_string_html_to_markdown 执行体 (原 StringHtml2MarkdownTool::execute_async)
 /// - content 为空返回错误 JSON; 其余异常由调用方 (C ABI 边界) 捕获
-inline std::string htmlToMarkdownExecute(const agentxx::util::Json& arguments) {
+inline std::string htmlToMarkdownExecute(const utilxx_base::Json& arguments) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
         return R"({"error":"Arg `content` is empty"})";
@@ -31,7 +31,7 @@ inline std::string htmlToMarkdownExecute(const agentxx::util::Json& arguments) {
 }
 
 /// agentxx_string_regexp 执行体 (原 StringRegexpTool::execute_async)
-inline std::string regexpExecute(const agentxx::util::Json& arguments) {
+inline std::string regexpExecute(const utilxx_base::Json& arguments) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
         return R"({"error":"Arg `content` is empty"})";
@@ -45,33 +45,33 @@ inline std::string regexpExecute(const agentxx::util::Json& arguments) {
         return R"({"error":"Arg `opt` is empty"})";
     }
 
-    auto regex = agentxx::util::XXRegex::createRegex(match_exps);
+    auto regex = utilxx::XXRegex::createRegex(match_exps);
     if (!regex) {
         return "[Error] Regex compilation failed";
     }
     if (match_opt == std::string_view{"search"}) {
-        auto results = std::vector<agentxx::util::XXRegexMatchResult>{};
+        auto results = std::vector<utilxx::XXRegexMatchResult>{};
         if (regex->match(content, results)) {
-            auto relist = agentxx::util::Json::array();
+            auto relist = utilxx_base::Json::array();
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto& item = results[i];
                 relist.push_back(content.substr(item.start, item.end - item.start));
             }
-            return agentxx::util::Json{
+            return utilxx_base::Json{
                 {"tip", fmt::format("Match found {} items.", results.size())},
                 {"result", relist},
             }
                 .dump();
         }
     } else if (match_opt == std::string_view{"replace"}) {
-        auto results = std::vector<agentxx::util::XXRegexMatchResult>{};
+        auto results = std::vector<utilxx::XXRegexMatchResult>{};
         auto restr
             = regex->replace(content, arguments.value("replace_str", std::string{}), results);
         if (false == results.empty()) {
             return restr;
         }
     } else if (match_opt == std::string_view{"remove"}) {
-        auto results = std::vector<agentxx::util::XXRegexMatchResult>{};
+        auto results = std::vector<utilxx::XXRegexMatchResult>{};
         auto restr   = regex->remove(content, results);
         if (false == results.empty()) {
             return restr;

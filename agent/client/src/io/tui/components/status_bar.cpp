@@ -1,6 +1,7 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "ftxui/dom/elements.hpp"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <vector>
 
@@ -45,9 +46,9 @@ Element StatusBarComponent::OnRender() {
     Element ctxText;
     if (maxCtx > 0) {
         ctxText = hbox({
-            text(agentxx::util::formatSize(ctx, 1024, false)) | color(theme.hintColor),
+            text(utilxx_base::formatSize(ctx, 1024, false)) | color(theme.hintColor),
             text("/") | color(theme.hintColor) | theme.dim(),
-            text(agentxx::util::formatSize(maxCtx, 1024, false)) | color(theme.hintColor),
+            text(utilxx_base::formatSize(maxCtx, 1024, false)) | color(theme.hintColor),
             text("·") | color(theme.hintColor) | theme.dim(),
             text(fmt::format(
                 "{}%",
@@ -56,7 +57,7 @@ Element StatusBarComponent::OnRender() {
                 | xflex_shrink,
         });
     } else {
-        ctxText = text(fmt::format("{}", agentxx::util::formatSize(ctx))) | color(theme.hintColor);
+        ctxText = text(fmt::format("{}", utilxx_base::formatSize(ctx))) | color(theme.hintColor);
     }
 
     // 模型区域: 整体作为可点击区域 (点击打开模型选择弹窗)
@@ -101,7 +102,7 @@ Element StatusBarComponent::OnRender() {
                 if (nl != std::string::npos) {
                     textStr.resize(nl);
                 }
-                if (auto idx = agentxx::util::findIndexByUtf8Length(textStr, 24);
+                if (auto idx = utilxx_base::findIndexByUtf8Length(textStr, 24);
                     idx > 0 && idx < textStr.size()) {
                     textStr.resize(idx);
                     textStr += "...";

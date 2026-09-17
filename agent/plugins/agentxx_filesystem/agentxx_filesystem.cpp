@@ -6,10 +6,10 @@
 ///   **声明式受控轮询**工具 —— 大文件读写不再占用宿主工作线程池;
 ///   文件异步 I/O 不可用 (编译期未启用, 或运行环境的 io_uring 被 seccomp 拦截)
 ///   时回退同步实现, 改注册 `blocking_tool` (offload 工作线程);
-///   可用性判断统一走 `agentxx::util::isAsyncFileIoSupported()`;
+///   可用性判断统一走 `utilxx_base::isAsyncFileIoSupported()`;
 /// - `list` / `glob` / `grep`: 目录遍历 + 全文件扫描 + 正则/编码转换, 这是 CPU/阻塞
 ///   工作而非异步 IO, 放进受控轮询只会阻塞宿主 IO 线程, 因此保持 `blocking_tool`。
-#include "agentxx/util/util.h"
+#include "utilxx_base/system.h"
 #include "agentxx_fs_plugin.h"
 #include "asio/awaitable.hpp"
 #include "filesystem_impl.h"
@@ -160,7 +160,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               )
               .build();
 
-    if (agentxx::util::isAsyncFileIoSupported()) {
+    if (utilxx_base::isAsyncFileIoSupported()) {
         polled_tool(
             ctx,
             kNameRead,
@@ -225,7 +225,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               )
               .build();
 
-    if (agentxx::util::isAsyncFileIoSupported()) {
+    if (utilxx_base::isAsyncFileIoSupported()) {
         polled_tool(
             ctx,
             kNameWrite,
@@ -294,7 +294,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               )
               .build();
 
-    if (agentxx::util::isAsyncFileIoSupported()) {
+    if (utilxx_base::isAsyncFileIoSupported()) {
         polled_tool(
             ctx,
             kNameEdit,
@@ -668,7 +668,7 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
         std::string oldStr = args.value("old_str", "");
         std::string newStr = args.value("new_str", "");
         if (!path.empty() && (!oldStr.empty() || !newStr.empty())) {
-            agentxx::util::Json diffItem;
+            utilxx_base::Json diffItem;
             diffItem["kind"]    = "diff";
             diffItem["path"]    = path;
             diffItem["old_str"] = std::move(oldStr);

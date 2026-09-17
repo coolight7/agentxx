@@ -2,7 +2,7 @@
 #pragma once
 
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/bind_cancellation_slot.hpp"
 #include "asio/post.hpp"
@@ -29,7 +29,7 @@ struct OpDrive {
     std::function<void(void*)>                                                     cancel;
 };
 
-using OpErrorCode = util::AsioErrorCode;
+using OpErrorCode = utilxx_base::AsioErrorCode;
 using OpGuardPtr  = std::shared_ptr<PluginInstanceBase::InflightGuard>;
 
 /// 状态只在 IO 线程访问。同步拒绝不进入完成回调协议。
@@ -382,7 +382,7 @@ public:
         }
         auto [ec] = co_await finished_.async_wait(asio::as_tuple(asio::use_awaitable));
         if (!completed()) {
-            throw util::AsioSystemError(ec ? ec : OpErrorCode(asio::error::operation_aborted));
+            throw utilxx_base::AsioSystemError(ec ? ec : OpErrorCode(asio::error::operation_aborted));
         }
     }
 

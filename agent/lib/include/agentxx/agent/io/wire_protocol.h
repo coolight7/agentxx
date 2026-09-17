@@ -2,8 +2,8 @@
 
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/json_view.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/json_view.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -153,8 +153,8 @@ inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) no
     return std::nullopt;
 }
 
-inline agentxx::util::Json deltaToJson(const WireDelta& d) {
-    agentxx::util::Json j = agentxx::util::Json::object();
+inline utilxx_base::Json deltaToJson(const WireDelta& d) {
+    utilxx_base::Json j = utilxx_base::Json::object();
     j["type"]             = std::string(deltaTypeToString(d.type));
     j["seq"]              = d.seq;
     if (!d.text.empty()) {
@@ -199,7 +199,7 @@ inline agentxx::util::Json deltaToJson(const WireDelta& d) {
     }
     // TurnStart 即时回显附件元数据（不含 dataUrl，见 WireDelta::attachments 注释）
     if (d.type == WireDelta::Type::TurnStart && !d.attachments.empty()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& a : d.attachments) {
             MediaAttachment meta = a;
             meta.dataUrl.clear();
@@ -208,7 +208,7 @@ inline agentxx::util::Json deltaToJson(const WireDelta& d) {
         j["attachments"] = std::move(arr);
     }
     if (d.think) {
-        agentxx::util::Json th = agentxx::util::Json::object();
+        utilxx_base::Json th = utilxx_base::Json::object();
         if (d.think->reasoningTokens > 0) {
             th["reasoning_tokens"] = d.think->reasoningTokens;
         }
@@ -239,7 +239,7 @@ inline agentxx::util::Json deltaToJson(const WireDelta& d) {
     return j;
 }
 
-inline std::optional<WireDelta> deltaFromJson(const agentxx::util::Json& j) {
+inline std::optional<WireDelta> deltaFromJson(const utilxx_base::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -295,8 +295,8 @@ inline std::optional<WireDelta> deltaFromJson(const agentxx::util::Json& j) {
 // WireSyncPayload <-> json
 // ---------------------------------------------------------------------------
 
-inline agentxx::util::Json messageQueueItemToJson(const MessageQueueItem& item) {
-    agentxx::util::Json j = {
+inline utilxx_base::Json messageQueueItemToJson(const MessageQueueItem& item) {
+    utilxx_base::Json j = {
         {"id",          item.id         },
         {"text",        item.text       },
         {"createdAtMs", item.createdAtMs},
@@ -305,7 +305,7 @@ inline agentxx::util::Json messageQueueItemToJson(const MessageQueueItem& item) 
         j["model"] = item.model;
     }
     if (!item.attachments.empty()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& att : item.attachments) {
             arr.push_back(att.toJson());
         }
@@ -314,7 +314,7 @@ inline agentxx::util::Json messageQueueItemToJson(const MessageQueueItem& item) 
     return j;
 }
 
-inline MessageQueueItem messageQueueItemFromJson(const agentxx::util::Json& j) {
+inline MessageQueueItem messageQueueItemFromJson(const utilxx_base::Json& j) {
     MessageQueueItem item;
     item.id          = j.value("id", std::string{});
     item.text        = j.value("text", std::string{});
@@ -328,8 +328,8 @@ inline MessageQueueItem messageQueueItemFromJson(const agentxx::util::Json& j) {
     return item;
 }
 
-inline agentxx::util::Json syncToJson(const WireSyncPayload& p) {
-    agentxx::util::Json j = agentxx::util::Json::object();
+inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
+    utilxx_base::Json j = utilxx_base::Json::object();
     j["fromIndex"]        = p.fromIndex;
     j["tailHash"]         = p.tailHash;
     // 快照对应的服务端 delta 水位 (0 = 未提供): 客户端据此复位去重水位,
@@ -338,13 +338,13 @@ inline agentxx::util::Json syncToJson(const WireSyncPayload& p) {
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"]      = p.totalMessages;
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& vm : p.messages) {
         arr.push_back(vm.toJson());
     }
     j["messages"] = std::move(arr);
     if (!p.messageQueue.empty()) {
-        agentxx::util::Json qArr = agentxx::util::Json::array();
+        utilxx_base::Json qArr = utilxx_base::Json::array();
         for (const auto& item : p.messageQueue) {
             qArr.push_back(messageQueueItemToJson(item));
         }
@@ -353,7 +353,7 @@ inline agentxx::util::Json syncToJson(const WireSyncPayload& p) {
     return j;
 }
 
-inline std::optional<WireSyncPayload> syncFromJson(const agentxx::util::Json& j) {
+inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -362,7 +362,7 @@ inline std::optional<WireSyncPayload> syncFromJson(const agentxx::util::Json& j)
     p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
     p.deltaSeq      = j.value("deltaSeq", uint64_t{0});
-    auto msgs       = j.value("messages", agentxx::util::Json::array());
+    auto msgs       = j.value("messages", utilxx_base::Json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
             p.messages.push_back(ViewMessage::fromJson(m));
@@ -380,14 +380,14 @@ inline std::optional<WireSyncPayload> syncFromJson(const agentxx::util::Json& j)
 // 消息构造 (Client -> Server)
 // ---------------------------------------------------------------------------
 
-inline agentxx::util::Json makeHello(
+inline utilxx_base::Json makeHello(
     std::string_view sessionId,
     std::string_view token,
     uint64_t         lastSeq  = 0,
     std::string_view tailHash = "",
     std::string_view language = ""
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",      MsgType::Hello},
         {"sessionId", sessionId     },
         {"token",     token         },
@@ -404,13 +404,13 @@ inline agentxx::util::Json makeHello(
     return j;
 }
 
-inline agentxx::util::Json makeUserInput(
+inline utilxx_base::Json makeUserInput(
     std::string_view                    sessionId,
     std::string_view                    text,
     std::string_view                    model       = "",
     const std::vector<MediaAttachment>& attachments = {}
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",      MsgType::UserInput},
         {"sessionId", sessionId         },
         {"text",      text              },
@@ -419,7 +419,7 @@ inline agentxx::util::Json makeUserInput(
         j["model"] = model;
     }
     if (!attachments.empty()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& att : attachments) {
             arr.push_back(att.toJson());
         }
@@ -428,31 +428,31 @@ inline agentxx::util::Json makeUserInput(
     return j;
 }
 
-inline agentxx::util::Json makeInterruptResponse(int64_t id, const agentxx::util::Json& result) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeInterruptResponse(int64_t id, const utilxx_base::Json& result) {
+    return utilxx_base::Json{
         {"type",   MsgType::InterruptResponse},
         {"id",     id                        },
         {"result", result                    },
     };
 }
 
-inline agentxx::util::Json makeCancel(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeCancel(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::Cancel},
         {"sessionId", sessionId      },
     };
 }
 
-inline agentxx::util::Json makeSelectModel(std::string_view sessionId, std::string_view model) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeSelectModel(std::string_view sessionId, std::string_view model) {
+    return utilxx_base::Json{
         {"type",      MsgType::SelectModel},
         {"sessionId", sessionId           },
         {"model",     model               },
     };
 }
 
-inline agentxx::util::Json makePing(int64_t t) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makePing(int64_t t) {
+    return utilxx_base::Json{
         {"type", MsgType::Ping},
         {"t",    t            },
     };
@@ -462,7 +462,7 @@ inline agentxx::util::Json makePing(int64_t t) {
 // 消息构造 (Server -> Client)
 // ---------------------------------------------------------------------------
 
-inline agentxx::util::Json makeHelloAck(
+inline utilxx_base::Json makeHelloAck(
     bool                                         ok,
     std::string_view                             sessionId,
     std::string_view                             tailHash,
@@ -471,7 +471,7 @@ inline agentxx::util::Json makeHelloAck(
     std::string_view                             deviceId = "",
     std::string_view                             workDir  = ""
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",      MsgType::HelloAck},
         {"ok",        ok               },
         {"sessionId", sessionId        },
@@ -491,7 +491,7 @@ inline agentxx::util::Json makeHelloAck(
     // 服务端已加载插件结构化列表 (名字+版本+声明接口, client 插件据此判断
     // 对端可用性与能力); 空时不携带 (缺字段按"服务端未提供"处理)
     if (!plugins.empty()) {
-        auto arr = agentxx::util::Json::array();
+        auto arr = utilxx_base::Json::array();
         for (const auto& p : plugins) {
             arr.push_back({
                 {"name",       p.name      },
@@ -504,8 +504,8 @@ inline agentxx::util::Json makeHelloAck(
     return j;
 }
 
-inline agentxx::util::Json makeDeltaMsg(const WireDelta& d) {
-    agentxx::util::Json j = deltaToJson(d);
+inline utilxx_base::Json makeDeltaMsg(const WireDelta& d) {
+    utilxx_base::Json j = deltaToJson(d);
     // 复用 deltaToJson 的字段, 但信封 type 固定为 "delta"
     j["type"] = MsgType::DeltaMsg;
     j["kind"] = std::string(deltaTypeToString(d.type));
@@ -513,7 +513,7 @@ inline agentxx::util::Json makeDeltaMsg(const WireDelta& d) {
 }
 
 /// 从 "delta" 信封还原 WireDelta (type 字段取自 "kind")
-inline std::optional<WireDelta> deltaMsgFromJson(const agentxx::util::Json& j) {
+inline std::optional<WireDelta> deltaMsgFromJson(const utilxx_base::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -522,8 +522,8 @@ inline std::optional<WireDelta> deltaMsgFromJson(const agentxx::util::Json& j) {
     return deltaFromJson(patched);
 }
 
-inline agentxx::util::Json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 0) {
-    agentxx::util::Json j = syncToJson(p);
+inline utilxx_base::Json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 0) {
+    utilxx_base::Json j = syncToJson(p);
     j["type"]             = MsgType::SyncMsg;
     if (deltaSeq > 0) {
         j["deltaSeq"] = deltaSeq;
@@ -531,18 +531,18 @@ inline agentxx::util::Json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaS
     return j;
 }
 
-inline std::optional<WireSyncPayload> syncMsgFromJson(const agentxx::util::Json& j) {
+inline std::optional<WireSyncPayload> syncMsgFromJson(const utilxx_base::Json& j) {
     return syncFromJson(j);
 }
 
-inline agentxx::util::Json makeInterruptRequest(
+inline utilxx_base::Json makeInterruptRequest(
     int64_t          id,
     std::string_view sessionId,
     std::string_view node,
     std::string_view value,
     std::string_view argJson
 ) {
-    return agentxx::util::Json{
+    return utilxx_base::Json{
         {"type",      MsgType::InterruptRequest},
         {"id",        id                       },
         {"sessionId", sessionId                },
@@ -553,15 +553,15 @@ inline agentxx::util::Json makeInterruptRequest(
 }
 
 /// 服务端通知中断已过期 (超时/取消): 对应 WireInterruptRequest 的 id
-inline agentxx::util::Json makeInterruptExpired(int64_t id, std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeInterruptExpired(int64_t id, std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::InterruptExpired},
         {"id",        id                       },
         {"sessionId", sessionId                },
     };
 }
 
-inline agentxx::util::Json makeTurnResult(
+inline utilxx_base::Json makeTurnResult(
     std::string_view sessionId,
     bool             hasError,
     std::string_view errorMessage,
@@ -569,7 +569,7 @@ inline agentxx::util::Json makeTurnResult(
     int64_t          startTimeMs = 0,
     int64_t          durationMs  = 0
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",        MsgType::TurnResult},
         {"sessionId",   sessionId          },
         {"hasError",    hasError           },
@@ -587,9 +587,9 @@ inline agentxx::util::Json makeTurnResult(
     return j;
 }
 
-inline agentxx::util::Json
+inline utilxx_base::Json
     makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens, double tps = 0.0) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",             MsgType::ContextStats},
         {"contextTokens",    contextTokens        },
         {"maxContextTokens", maxContextTokens     },
@@ -600,27 +600,27 @@ inline agentxx::util::Json
     return j;
 }
 
-inline agentxx::util::Json makeError(int code, std::string_view message) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeError(int code, std::string_view message) {
+    return utilxx_base::Json{
         {"type",    MsgType::ErrorMsg},
         {"code",    code             },
         {"message", message          },
     };
 }
 
-inline agentxx::util::Json makeGetModel(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeGetModel(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::GetModel},
         {"sessionId", sessionId        },
     };
 }
 
-inline agentxx::util::Json makeModelInfo(
+inline utilxx_base::Json makeModelInfo(
     std::string_view                        currentModel,
     const std::vector<std::string>&         models,
     const std::vector<ModelCapabilityInfo>& capabilities = {}
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",         MsgType::ModelInfo},
         {"currentModel", currentModel      },
     };
@@ -628,7 +628,7 @@ inline agentxx::util::Json makeModelInfo(
         j["models"] = models;
     }
     if (!capabilities.empty()) {
-        agentxx::util::Json caps = agentxx::util::Json::array();
+        utilxx_base::Json caps = utilxx_base::Json::array();
         for (const auto& cap : capabilities) {
             caps.push_back({
                 {"name",        cap.name      },
@@ -646,8 +646,8 @@ inline agentxx::util::Json makeModelInfo(
 // AppendComponentNotification <-> json (客户端拉取 MCP/Skill/Memory 启动信息)
 // ---------------------------------------------------------------------------
 
-inline agentxx::util::Json appendComponentNotificationToJson(const AppendComponentNotification& n) {
-    return agentxx::util::Json{
+inline utilxx_base::Json appendComponentNotificationToJson(const AppendComponentNotification& n) {
+    return utilxx_base::Json{
         {"type",         static_cast<int>(n.type)},
         {"name",         n.name                  },
         {"success",      n.success               },
@@ -655,7 +655,7 @@ inline agentxx::util::Json appendComponentNotificationToJson(const AppendCompone
     };
 }
 
-inline AppendComponentNotification appendComponentNotificationFromJson(const agentxx::util::Json& j
+inline AppendComponentNotification appendComponentNotificationFromJson(const utilxx_base::Json& j
 ) {
     AppendComponentNotification n;
     n.type         = static_cast<AppendComponentNotification::Type>(j.value("type", 0));
@@ -665,19 +665,19 @@ inline AppendComponentNotification appendComponentNotificationFromJson(const age
     return n;
 }
 
-inline agentxx::util::Json makeGetAppendComponentInfo(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeGetAppendComponentInfo(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::GetAppendComponentInfo},
         {"sessionId", sessionId                      },
     };
 }
 
-inline agentxx::util::Json
+inline utilxx_base::Json
     makeAppendComponentInfo(const std::vector<AppendComponentNotification>& notifications) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type", MsgType::AppendComponentInfo}
     };
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& n : notifications) {
         arr.push_back(appendComponentNotificationToJson(n));
     }
@@ -686,9 +686,9 @@ inline agentxx::util::Json
 }
 
 inline std::vector<AppendComponentNotification>
-    appendComponentInfoFromJson(const agentxx::util::Json& j) {
+    appendComponentInfoFromJson(const utilxx_base::Json& j) {
     std::vector<AppendComponentNotification> out;
-    auto arr = j.value("notifications", agentxx::util::Json::array());
+    auto arr = j.value("notifications", utilxx_base::Json::array());
     if (arr.is_array()) {
         for (const auto& item : arr) {
             out.push_back(appendComponentNotificationFromJson(item));
@@ -697,29 +697,29 @@ inline std::vector<AppendComponentNotification>
     return out;
 }
 
-inline agentxx::util::Json makePong(int64_t t) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makePong(int64_t t) {
+    return utilxx_base::Json{
         {"type", MsgType::Pong},
         {"t",    t            },
     };
 }
 
-inline agentxx::util::Json makeGetContext(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeGetContext(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::GetContext},
         {"sessionId", sessionId          },
     };
 }
 
-inline agentxx::util::Json makeCompactContext(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeCompactContext(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::CompactContext},
         {"sessionId", sessionId              },
     };
 }
 
-inline agentxx::util::Json makeContextMessages(const agentxx::util::Json& messages) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeContextMessages(const utilxx_base::Json& messages) {
+    return utilxx_base::Json{
         {"type",     MsgType::ContextMessages},
         {"messages", messages                },
     };
@@ -732,9 +732,9 @@ inline agentxx::util::Json makeContextMessages(const agentxx::util::Json& messag
 /// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
 /// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全量列举),
 ///   与旧版服务端互通
-inline agentxx::util::Json
+inline utilxx_base::Json
     makeListSessions(int64_t beforeMs = 0, std::string_view beforeId = "", uint32_t limit = 0) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type", MsgType::ListSessions},
     };
     if (beforeMs > 0) {
@@ -749,7 +749,7 @@ inline agentxx::util::Json
     return j;
 }
 
-inline WireListSessions listSessionsFromJson(const agentxx::util::Json& j) {
+inline WireListSessions listSessionsFromJson(const utilxx_base::Json& j) {
     WireListSessions m;
     m.beforeMs = j.value("beforeMs", int64_t{0});
     m.beforeId = j.value("beforeId", std::string{});
@@ -757,8 +757,8 @@ inline WireListSessions listSessionsFromJson(const agentxx::util::Json& j) {
     return m;
 }
 
-inline agentxx::util::Json sessionInfoToJson(const SessionInfo& s) {
-    agentxx::util::Json j = {
+inline utilxx_base::Json sessionInfoToJson(const SessionInfo& s) {
+    utilxx_base::Json j = {
         {"sessionId",    s.sessionId   },
         {"lastActiveMs", s.lastActiveMs},
     };
@@ -768,7 +768,7 @@ inline agentxx::util::Json sessionInfoToJson(const SessionInfo& s) {
     return j;
 }
 
-inline SessionInfo sessionInfoFromJson(const agentxx::util::Json& j) {
+inline SessionInfo sessionInfoFromJson(const utilxx_base::Json& j) {
     SessionInfo s;
     s.sessionId    = j.value("sessionId", std::string{});
     s.title        = j.value("title", std::string{});
@@ -776,15 +776,15 @@ inline SessionInfo sessionInfoFromJson(const agentxx::util::Json& j) {
     return s;
 }
 
-inline agentxx::util::Json makeSessionList(
+inline utilxx_base::Json makeSessionList(
     const std::vector<SessionInfo>& sessions,
     uint64_t                        totalCount = 0,
     bool                            hasMore    = false
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type", MsgType::SessionList}
     };
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& s : sessions) {
         arr.push_back(sessionInfoToJson(s));
     }
@@ -799,9 +799,9 @@ inline agentxx::util::Json makeSessionList(
     return j;
 }
 
-inline WireSessionList sessionListFromJson(const agentxx::util::Json& j) {
+inline WireSessionList sessionListFromJson(const utilxx_base::Json& j) {
     WireSessionList out;
-    auto            arr = j.value("sessions", agentxx::util::Json::array());
+    auto            arr = j.value("sessions", utilxx_base::Json::array());
     if (arr.is_array()) {
         for (const auto& item : arr) {
             out.sessions.push_back(sessionInfoFromJson(item));
@@ -814,14 +814,14 @@ inline WireSessionList sessionListFromJson(const agentxx::util::Json& j) {
 }
 
 /// 客户端请求切换当前连接的会话
-inline agentxx::util::Json makeSwitchSession(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeSwitchSession(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::SwitchSession},
         {"sessionId", sessionId             },
     };
 }
 
-inline WireSwitchSession switchSessionFromJson(const agentxx::util::Json& j) {
+inline WireSwitchSession switchSessionFromJson(const utilxx_base::Json& j) {
     WireSwitchSession m;
     m.sessionId = j.value("sessionId", std::string{});
     return m;
@@ -834,8 +834,8 @@ inline WireSwitchSession switchSessionFromJson(const agentxx::util::Json& j) {
 
 /// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
 /// - data 为 JSON 载荷字符串 (语义由插件定义); 频率由插件自身控制
-inline agentxx::util::Json makePluginData(const WirePluginData& p) {
-    agentxx::util::Json j = {
+inline utilxx_base::Json makePluginData(const WirePluginData& p) {
+    utilxx_base::Json j = {
         {"type",   MsgType::PluginData},
         {"plugin", p.plugin           },
         {"event",  p.event            },
@@ -844,7 +844,7 @@ inline agentxx::util::Json makePluginData(const WirePluginData& p) {
     return j;
 }
 
-inline WirePluginData pluginDataFromJson(const agentxx::util::Json& j) {
+inline WirePluginData pluginDataFromJson(const utilxx_base::Json& j) {
     WirePluginData p;
     p.plugin = j.value("plugin", std::string{});
     p.event  = j.value("event", std::string{});
@@ -855,8 +855,8 @@ inline WirePluginData pluginDataFromJson(const agentxx::util::Json& j) {
 /// client 插件事件上行 (Client -> Server): WirePluginDataUp
 /// - 载荷 JSON 原样透传 (语义由插件定义); 服务端发布到事件总线
 ///   topic `client.{插件名}.{事件名}`
-inline agentxx::util::Json makePluginDataUp(const WirePluginDataUp& p) {
-    agentxx::util::Json j = {
+inline utilxx_base::Json makePluginDataUp(const WirePluginDataUp& p) {
+    utilxx_base::Json j = {
         {"type",   MsgType::PluginDataUp},
         {"plugin", p.plugin             },
         {"event",  p.event              },
@@ -865,7 +865,7 @@ inline agentxx::util::Json makePluginDataUp(const WirePluginDataUp& p) {
     return j;
 }
 
-inline WirePluginDataUp pluginDataUpFromJson(const agentxx::util::Json& j) {
+inline WirePluginDataUp pluginDataUpFromJson(const utilxx_base::Json& j) {
     WirePluginDataUp p;
     p.plugin = j.value("plugin", std::string{});
     p.event  = j.value("event", std::string{});
@@ -877,13 +877,13 @@ inline WirePluginDataUp pluginDataUpFromJson(const agentxx::util::Json& j) {
 // 消息队列相关 (Client <-> Server)
 // ---------------------------------------------------------------------------
 
-inline agentxx::util::Json
+inline utilxx_base::Json
     makeMessageQueueUpdate(std::string_view sessionId, const std::vector<MessageQueueItem>& items) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",      MsgType::MessageQueueUpdate},
         {"sessionId", sessionId                  },
     };
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& item : items) {
         arr.push_back(messageQueueItemToJson(item));
     }
@@ -891,7 +891,7 @@ inline agentxx::util::Json
     return j;
 }
 
-inline WireMessageQueueUpdate messageQueueUpdateFromJson(const agentxx::util::Json& j) {
+inline WireMessageQueueUpdate messageQueueUpdateFromJson(const utilxx_base::Json& j) {
     WireMessageQueueUpdate u;
     u.sessionId = j.value("sessionId", std::string{});
     if (j.contains("items") && j["items"].is_array()) {
@@ -902,43 +902,43 @@ inline WireMessageQueueUpdate messageQueueUpdateFromJson(const agentxx::util::Js
     return u;
 }
 
-inline agentxx::util::Json makeClearMessageQueue(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeClearMessageQueue(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::ClearMessageQueue},
         {"sessionId", sessionId                 },
     };
 }
 
-inline WireClearMessageQueue clearMessageQueueFromJson(const agentxx::util::Json& j) {
+inline WireClearMessageQueue clearMessageQueueFromJson(const utilxx_base::Json& j) {
     WireClearMessageQueue q;
     q.sessionId = j.value("sessionId", std::string{});
     return q;
 }
 
-inline agentxx::util::Json
+inline utilxx_base::Json
     makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
-    return agentxx::util::Json{
+    return utilxx_base::Json{
         {"type",      MsgType::RemoveQueueItem},
         {"sessionId", sessionId               },
         {"itemId",    itemId                  },
     };
 }
 
-inline WireRemoveQueueItem removeQueueItemFromJson(const agentxx::util::Json& j) {
+inline WireRemoveQueueItem removeQueueItemFromJson(const utilxx_base::Json& j) {
     WireRemoveQueueItem q;
     q.sessionId = j.value("sessionId", std::string{});
     q.itemId    = j.value("itemId", std::string{});
     return q;
 }
 
-inline agentxx::util::Json makeInterruptAndRunNext(std::string_view sessionId) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeInterruptAndRunNext(std::string_view sessionId) {
+    return utilxx_base::Json{
         {"type",      MsgType::InterruptAndRunNext},
         {"sessionId", sessionId                   },
     };
 }
 
-inline WireInterruptAndRunNext interruptAndRunNextFromJson(const agentxx::util::Json& j) {
+inline WireInterruptAndRunNext interruptAndRunNextFromJson(const utilxx_base::Json& j) {
     WireInterruptAndRunNext q;
     q.sessionId = j.value("sessionId", std::string{});
     return q;
@@ -950,9 +950,9 @@ inline WireInterruptAndRunNext interruptAndRunNextFromJson(const agentxx::util::
 
 /// 客户端请求历史分页 (Client -> Server): [max(0, beforeIndex-count), beforeIndex)
 /// - beforeIndex == 0 表示"从末尾向前取 count 条"; count == 0 用服务端默认页大小
-inline agentxx::util::Json
+inline utilxx_base::Json
     makeGetViewMessages(std::string_view sessionId, uint64_t beforeIndex, uint32_t count) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",        MsgType::GetViewMessages},
         {"sessionId",   sessionId               },
         {"beforeIndex", beforeIndex             },
@@ -961,7 +961,7 @@ inline agentxx::util::Json
     return j;
 }
 
-inline WireGetViewMessages getViewMessagesFromJson(const agentxx::util::Json& j) {
+inline WireGetViewMessages getViewMessagesFromJson(const utilxx_base::Json& j) {
     WireGetViewMessages m;
     m.sessionId   = j.value("sessionId", std::string{});
     m.beforeIndex = j.value("beforeIndex", uint64_t{0});
@@ -971,19 +971,19 @@ inline WireGetViewMessages getViewMessagesFromJson(const agentxx::util::Json& j)
 
 /// 服务端历史分页响应 (Server -> Client): 绝对下标区间
 /// [startIndex, startIndex + messages.size())
-inline agentxx::util::Json makeViewMessagesPage(
+inline utilxx_base::Json makeViewMessagesPage(
     std::string_view                sessionId,
     uint64_t                        startIndex,
     uint64_t                        totalCount,
     const std::vector<ViewMessage>& messages
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",       MsgType::ViewMessagesPage},
         {"sessionId",  sessionId                },
         {"startIndex", startIndex               },
         {"totalCount", totalCount               },
     };
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& vm : messages) {
         arr.push_back(vm.toJson());
     }
@@ -991,7 +991,7 @@ inline agentxx::util::Json makeViewMessagesPage(
     return j;
 }
 
-inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const agentxx::util::Json& j) {
+inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const utilxx_base::Json& j) {
     if (!j.is_object()) {
         return std::nullopt;
     }
@@ -999,7 +999,7 @@ inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const agentx
     p.sessionId  = j.value("sessionId", std::string{});
     p.startIndex = j.value("startIndex", uint64_t{0});
     p.totalCount = j.value("totalCount", uint64_t{0});
-    auto msgs    = j.value("messages", agentxx::util::Json::array());
+    auto msgs    = j.value("messages", utilxx_base::Json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
             p.messages.push_back(ViewMessage::fromJson(m));
@@ -1008,8 +1008,8 @@ inline std::optional<WireViewMessagesPage> viewMessagesPageFromJson(const agentx
     return p;
 }
 
-inline agentxx::util::Json makeLog(int level, std::string message) {
-    return agentxx::util::Json{
+inline utilxx_base::Json makeLog(int level, std::string message) {
+    return utilxx_base::Json{
         {"type",    MsgType::LogMsg   },
         {"level",   level             },
         {"message", std::move(message)},
@@ -1020,7 +1020,7 @@ inline agentxx::util::Json makeLog(int level, std::string message) {
 // 通用字段读取
 // ---------------------------------------------------------------------------
 
-inline std::string msgType(const agentxx::util::Json& j) {
+inline std::string msgType(const utilxx_base::Json& j) {
     return j.is_object() ? j.value("type", std::string{}) : std::string{};
 }
 
@@ -1028,8 +1028,8 @@ inline std::string msgType(const agentxx::util::Json& j) {
 // 服务端目录列举 (跨设备附件选择)
 // ---------------------------------------------------------------------------
 
-inline agentxx::util::Json wireDirEntryToJson(const WireDirEntry& e) {
-    return agentxx::util::Json{
+inline utilxx_base::Json wireDirEntryToJson(const WireDirEntry& e) {
+    return utilxx_base::Json{
         {"name",      e.name                       },
         {"fullPath",  e.fullPath                   },
         {"isDir",     e.isDir                      },
@@ -1039,7 +1039,7 @@ inline agentxx::util::Json wireDirEntryToJson(const WireDirEntry& e) {
     };
 }
 
-inline WireDirEntry wireDirEntryFromJson(const agentxx::util::Json& j) {
+inline WireDirEntry wireDirEntryFromJson(const utilxx_base::Json& j) {
     WireDirEntry e;
     e.name      = j.value("name", std::string{});
     e.fullPath  = j.value("fullPath", std::string{});
@@ -1050,18 +1050,18 @@ inline WireDirEntry wireDirEntryFromJson(const agentxx::util::Json& j) {
     return e;
 }
 
-inline agentxx::util::Json makeListDir(
+inline utilxx_base::Json makeListDir(
     uint64_t                        reqId,
     std::string_view                path,
     const std::vector<std::string>& allowedExtensions = {}
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",  MsgType::ListDir},
         {"reqId", reqId           },
         {"path",  path            },
     };
     if (!allowedExtensions.empty()) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& ext : allowedExtensions) {
             arr.push_back(ext);
         }
@@ -1070,7 +1070,7 @@ inline agentxx::util::Json makeListDir(
     return j;
 }
 
-inline WireListDir listDirFromJson(const agentxx::util::Json& j) {
+inline WireListDir listDirFromJson(const utilxx_base::Json& j) {
     WireListDir m;
     m.reqId = j.value("reqId", uint64_t{0});
     m.path  = j.value("path", std::string{});
@@ -1084,7 +1084,7 @@ inline WireListDir listDirFromJson(const agentxx::util::Json& j) {
     return m;
 }
 
-inline agentxx::util::Json makeListDirResult(
+inline utilxx_base::Json makeListDirResult(
     uint64_t                         reqId,
     bool                             ok,
     std::string_view                 currentDir,
@@ -1092,7 +1092,7 @@ inline agentxx::util::Json makeListDirResult(
     const std::vector<WireDirEntry>& entries,
     std::string_view                 error = ""
 ) {
-    agentxx::util::Json j = {
+    utilxx_base::Json j = {
         {"type",       MsgType::ListDirResult},
         {"reqId",      reqId                 },
         {"ok",         ok                    },
@@ -1102,7 +1102,7 @@ inline agentxx::util::Json makeListDirResult(
     if (!error.empty()) {
         j["error"] = error;
     }
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& e : entries) {
         arr.push_back(wireDirEntryToJson(e));
     }
@@ -1110,7 +1110,7 @@ inline agentxx::util::Json makeListDirResult(
     return j;
 }
 
-inline WireListDirResult listDirResultFromJson(const agentxx::util::Json& j) {
+inline WireListDirResult listDirResultFromJson(const utilxx_base::Json& j) {
     WireListDirResult r;
     r.reqId      = j.value("reqId", uint64_t{0});
     r.ok         = j.value("ok", false);
@@ -1126,7 +1126,7 @@ inline WireListDirResult listDirResultFromJson(const agentxx::util::Json& j) {
 }
 
 /// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
-inline std::string msgTypeView(const agentxx::util::JsonView& jv) {
+inline std::string msgTypeView(const utilxx_base::JsonView& jv) {
     if (!jv.is_object()) {
         return {};
     }
@@ -1145,92 +1145,92 @@ inline std::string msgTypeView(const agentxx::util::JsonView& jv) {
 // 统一的 toJson / fromJson 声明与顶层序列化接口 (方案 1)
 // ---------------------------------------------------------------------------
 
-agentxx::util::Json toJson(const WireHello& msg);
-WireHello           helloFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireHello& msg);
+WireHello           helloFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireHelloAck& msg);
-WireHelloAck        helloAckFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireHelloAck& msg);
+WireHelloAck        helloAckFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireUserInput& msg);
-WireUserInput       userInputFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireUserInput& msg);
+WireUserInput       userInputFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireCancel& msg);
-WireCancel          cancelFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireCancel& msg);
+WireCancel          cancelFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireSelectModel& msg);
-WireSelectModel     selectModelFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireSelectModel& msg);
+WireSelectModel     selectModelFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json  toJson(const WireInterruptRequest& msg);
-WireInterruptRequest interruptRequestFromJson(const agentxx::util::Json& j);
+utilxx_base::Json  toJson(const WireInterruptRequest& msg);
+WireInterruptRequest interruptRequestFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json   toJson(const WireInterruptResponse& msg);
-WireInterruptResponse interruptResponseFromJson(const agentxx::util::Json& j);
+utilxx_base::Json   toJson(const WireInterruptResponse& msg);
+WireInterruptResponse interruptResponseFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json  toJson(const WireInterruptExpired& msg);
-WireInterruptExpired interruptExpiredFromJson(const agentxx::util::Json& j);
+utilxx_base::Json  toJson(const WireInterruptExpired& msg);
+WireInterruptExpired interruptExpiredFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireDelta& msg);
+utilxx_base::Json toJson(const WireDelta& msg);
 
-agentxx::util::Json toJson(const WireSyncPayload& msg);
+utilxx_base::Json toJson(const WireSyncPayload& msg);
 
-agentxx::util::Json toJson(const WireTurnResult& msg);
-WireTurnResult      turnResultFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireTurnResult& msg);
+WireTurnResult      turnResultFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireContextStats& msg);
-WireContextStats    contextStatsFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireContextStats& msg);
+WireContextStats    contextStatsFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireError& msg);
-WireError           errorFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireError& msg);
+WireError           errorFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireLog& msg);
-WireLog             logFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireLog& msg);
+WireLog             logFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireGetModel& msg);
-WireGetModel        getModelFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireGetModel& msg);
+WireGetModel        getModelFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireModelInfo& msg);
-WireModelInfo       modelInfoFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireModelInfo& msg);
+WireModelInfo       modelInfoFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json        toJson(const WireGetAppendComponentInfo& msg);
-WireGetAppendComponentInfo getAppendComponentInfoFromJson(const agentxx::util::Json& j);
+utilxx_base::Json        toJson(const WireGetAppendComponentInfo& msg);
+WireGetAppendComponentInfo getAppendComponentInfoFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json     toJson(const WireAppendComponentInfo& msg);
-WireAppendComponentInfo appendComponentInfoMessageFromJson(const agentxx::util::Json& j);
+utilxx_base::Json     toJson(const WireAppendComponentInfo& msg);
+WireAppendComponentInfo appendComponentInfoMessageFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireGetContext& msg);
-WireGetContext      getContextFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireGetContext& msg);
+WireGetContext      getContextFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireCompactContext& msg);
-WireCompactContext  compactContextFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireCompactContext& msg);
+WireCompactContext  compactContextFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireContextMessages& msg);
-WireContextMessages contextMessagesFromJson(const agentxx::util::Json& j);
+utilxx_base::Json toJson(const WireContextMessages& msg);
+WireContextMessages contextMessagesFromJson(const utilxx_base::Json& j);
 
-agentxx::util::Json toJson(const WireListSessions& msg);
+utilxx_base::Json toJson(const WireListSessions& msg);
 
-agentxx::util::Json toJson(const WireSessionList& msg);
+utilxx_base::Json toJson(const WireSessionList& msg);
 
-agentxx::util::Json toJson(const WireSwitchSession& msg);
+utilxx_base::Json toJson(const WireSwitchSession& msg);
 
-agentxx::util::Json toJson(const WirePluginData& msg);
+utilxx_base::Json toJson(const WirePluginData& msg);
 
-agentxx::util::Json toJson(const WirePluginDataUp& msg);
+utilxx_base::Json toJson(const WirePluginDataUp& msg);
 
-agentxx::util::Json toJson(const WireMessageQueueUpdate& msg);
+utilxx_base::Json toJson(const WireMessageQueueUpdate& msg);
 
-agentxx::util::Json toJson(const WireClearMessageQueue& msg);
+utilxx_base::Json toJson(const WireClearMessageQueue& msg);
 
-agentxx::util::Json toJson(const WireRemoveQueueItem& msg);
+utilxx_base::Json toJson(const WireRemoveQueueItem& msg);
 
-agentxx::util::Json toJson(const WireInterruptAndRunNext& msg);
+utilxx_base::Json toJson(const WireInterruptAndRunNext& msg);
 
-agentxx::util::Json toJson(const WireGetViewMessages& msg);
+utilxx_base::Json toJson(const WireGetViewMessages& msg);
 
-agentxx::util::Json toJson(const WireViewMessagesPage& msg);
+utilxx_base::Json toJson(const WireViewMessagesPage& msg);
 
-agentxx::util::Json toJson(const WireListDir& msg);
+utilxx_base::Json toJson(const WireListDir& msg);
 
-agentxx::util::Json toJson(const WireListDirResult& msg);
+utilxx_base::Json toJson(const WireListDirResult& msg);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

@@ -1,17 +1,20 @@
-/// agentxx::util::Json <-> neograph::json 桥接 (窄边界专用)
+/// utilxx_base::Json <-> neograph::json 桥接 (窄边界专用)
 ///
 /// - 唯一合法包含点: `agent/lib/src/nodes/*` 与 BaseAgent 图边界
 ///   (StateGraph channel 写入 / ChatMessage::extra / ChatTool::parameters)
-/// - 严禁泄漏到业务层、工具层、插件层: 业务代码一律使用 agentxx::util::Json
+/// - 严禁泄漏到业务层、工具层、插件层: 业务代码一律使用 utilxx_base::Json
+///   (别名见 utilxx_base/json.h)
 #pragma once
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <neograph/json.h>
 
 namespace agentxx {
 namespace util {
 
-/// agentxx::util::Json -> neograph::json (进入 NeoGraph 图边界时使用)
+using utilxx_base::Json;
+
+/// utilxx_base::Json -> neograph::json (进入 NeoGraph 图边界时使用)
 inline neograph::json toNeographJson(const Json& j) {
     switch (j.type()) {
         case Json::Type::Null:
@@ -44,7 +47,7 @@ inline neograph::json toNeographJson(const Json& j) {
     return neograph::json{};
 }
 
-/// neograph::json -> agentxx::util::Json (从 NeoGraph 图边界退出时使用)
+/// neograph::json -> utilxx_base::Json (从 NeoGraph 图边界退出时使用)
 ///
 /// - 整数区分: is_number_unsigned() (仅 uint64 大整数) -> NumberUint,
 ///   其余整数 -> NumberInt (与 Json::get<int64_t> 宽容读取一致)

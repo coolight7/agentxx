@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "asio/post.hpp"
 #include "asio/steady_timer.hpp"
+#include "utilxx_base/asio_error.h"
 
 #include <chrono>
 #include <memory>
@@ -90,7 +91,7 @@ AgentxxPluginOperatorHandle* PluginManager::sleep(
         });
         owner->sleepTimers.emplace(handle, handle->shared_from_this());
         timer->expires_after(std::chrono::milliseconds(ms));
-        timer->async_wait([core, timer](const util::AsioErrorCode& ec) {
+        timer->async_wait([core, timer](const utilxx_base::AsioErrorCode& ec) {
             auto notify = core->notify();
             notify.done(
                 notify.host_ud,

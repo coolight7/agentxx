@@ -1,5 +1,5 @@
 # agentxx_planning —— 任务规划工具插件 (agentxx_planning_write)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static (Json/JsonView)
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_planning)
@@ -37,9 +37,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_planning_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView)
   )
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -68,37 +68,27 @@ add_library(${PLUGIN_NAME} SHARED
 # 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
 # target_include_directories 声明头路径 / target_link_directories 提供裸库名
 # 解析目录 / target_link_libraries 以 imported target + 裸库名链接
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_base_static)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_planning_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView)
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_base_static (Json/JsonView)
 )
 
 # 裸库名依赖解析目录: hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
+# AGENTXX_INSTALL_DIR/lib 经 cxx_utilxx_base_static PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
 )
-if (AGENTXX_ENABLE_HYPERSCAN)
-  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
-  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # io_uring 同上由总控统一定义 (util 的 asio 重模块在 -DASIO_HAS_IO_URING
-  # 下引用其符号)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
-endif()
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26

@@ -12,6 +12,7 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/json.h"
 #include <filesystem>
 #include <fmt/format.h>
 #include <iostream>
@@ -77,7 +78,7 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<agentxx::util::Json> handleInterrupt(
+    asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view /*sessionId*/,
         std::string_view interruptNode,
         std::string_view /*interruptValue*/,
@@ -86,20 +87,20 @@ public:
         ++interruptCalls;
         lastInterruptArgJson = std::string{interruptArgJson};
         if (malformedResult) {
-            co_return agentxx::util::Json::array({interruptTag}); // 契约外形态
+            co_return utilxx_base::Json::array({interruptTag}); // 契约外形态
         }
         // 结果恒为对象形态 {"values": {控件 id: 值}} (客户端契约:
         // agentxx::middleware::makeInterruptResult)
         if (interruptNode == "permission") {
             // 权限卡片控件: decision (允许/拒绝) + remember (勾选项) + fullAuth (完全授权)
-            co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+            co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
                 {"decision", permissionAllow ? "true" : "false"},
                 {"remember", permissionRemember                },
                 {"fullAuth", permissionFullAuth                },
             });
         }
         // 通用确认卡片控件: allow
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json{
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
             {"allow", interruptTag}
         });
     }
@@ -364,12 +365,12 @@ asio::awaitable<void> test_permission_relative_path() {
 
     auto check = [&](std::string_view rel, std::string_view abs) -> asio::awaitable<void> {
         // 相对路径访问
-        auto relArgs = agentxx::util::Json{
+        auto relArgs = utilxx_base::Json{
             {"path", std::string{rel}}
         };
         auto relOk = co_await permission->checkToolPermission("agentxx_filesystem_write", relArgs);
         // 对应绝对路径访问
-        auto absArgs = agentxx::util::Json{
+        auto absArgs = utilxx_base::Json{
             {"path", std::string{abs}}
         };
         auto absOk = co_await permission->checkToolPermission("agentxx_filesystem_write", absArgs);
@@ -392,11 +393,11 @@ asio::awaitable<void> test_permission_relative_path() {
 
     // 4. 空路径 (目标缺省, 不参与判定) 与 cwd 路径 (按规则处理) 均放行:
     //    cwd 命中上面的 {cwd}/* ALLOW 规则 (最长前缀回退), 行为一致
-    auto emptyArgs = agentxx::util::Json{
+    auto emptyArgs = utilxx_base::Json{
         {"path", ""}
     };
     auto emptyOk = co_await permission->checkToolPermission("agentxx_filesystem_write", emptyArgs);
-    auto cwdArgs = agentxx::util::Json{
+    auto cwdArgs = utilxx_base::Json{
         {"path", cwd}
     };
     auto cwdOk = co_await permission->checkToolPermission("agentxx_filesystem_write", cwdArgs);
@@ -541,7 +542,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     textSpec.category   = "shell_command";
     permission->registerToolPermission("plugin_exec_command", std::move(textSpec));
 
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"command",   "rm -rf /tmp/x"    },
         {"sessionId", "declared_category"}
     };
@@ -550,7 +551,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     XX_TEST_EXPECT_EQ(io->interruptCalls, 1);
     {
         auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-            agentxx::util::Json::parse(io->lastInterruptArgJson)
+            utilxx_base::Json::parse(io->lastInterruptArgJson)
         );
         XX_TEST_EXPECT_TRUE(argOpt.has_value());
         if (argOpt.has_value()) {
@@ -573,7 +574,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     noneSpec.targetKind = agentxx::middleware::ToolPermissionTargetKind::None;
     permission->registerToolPermission("plugin_no_target", std::move(noneSpec));
 
-    auto noneArgs = agentxx::util::Json{
+    auto noneArgs = utilxx_base::Json{
         {"sessionId", "declared_category"}
     };
     ok = co_await permission->checkToolPermission("plugin_no_target", noneArgs);
@@ -581,7 +582,7 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     XX_TEST_EXPECT_EQ(io->interruptCalls, 2);
     {
         auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-            agentxx::util::Json::parse(io->lastInterruptArgJson)
+            utilxx_base::Json::parse(io->lastInterruptArgJson)
         );
         XX_TEST_EXPECT_TRUE(argOpt.has_value());
         if (argOpt.has_value()) {
@@ -621,11 +622,11 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
     );
 
     auto globArgs = [](std::initializer_list<const char*> patterns) {
-        agentxx::util::Json arr = agentxx::util::Json::array();
+        utilxx_base::Json arr = utilxx_base::Json::array();
         for (const char* p : patterns) {
             arr.push_back(std::string{p});
         }
-        return agentxx::util::Json{
+        return utilxx_base::Json{
             {"file_patterns", std::move(arr)}
         };
     };
@@ -640,16 +641,16 @@ asio::awaitable<void> test_permission_declared_category_and_tool_level() {
         auto argsMixed = globArgs({"/data/ok_dir/*.cpp", "/data/deny_dir/x.cpp"});
         XX_TEST_EXPECT_FALSE(co_await permission->checkToolPermission("plugin_glob", argsMixed));
         // 同一声明下参数为单字符串: 视为单个目标 (类型自动判定, 非数组)
-        auto argsSingle = agentxx::util::Json{
+        auto argsSingle = utilxx_base::Json{
             {"file_patterns", "/data/deny_dir/single.cpp"}
         };
         XX_TEST_EXPECT_FALSE(co_await permission->checkToolPermission("plugin_glob", argsSingle));
-        auto argsSingleOk = agentxx::util::Json{
+        auto argsSingleOk = utilxx_base::Json{
             {"file_patterns", "/data/ok_dir/single.cpp"}
         };
         XX_TEST_EXPECT_TRUE(co_await permission->checkToolPermission("plugin_glob", argsSingleOk));
         // 参数缺省 (无 file_patterns): 无目标参与判定, 放行
-        auto argsEmpty = agentxx::util::Json::object();
+        auto argsEmpty = utilxx_base::Json::object();
         XX_TEST_EXPECT_TRUE(co_await permission->checkToolPermission("plugin_glob", argsEmpty));
     }
 
@@ -693,7 +694,7 @@ asio::awaitable<void> test_permission_remember_rule() {
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
         // 必须携带 sessionId: requestPermission 经 sessions->get(sessionId) 取会话总线
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      std::string{path}},
             {"sessionId", "remember_test"  }
         };
@@ -789,7 +790,7 @@ asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
     declareFilesystemPermissions(*permission);
 
     auto check = [&](const MockTool& item, std::string_view path) -> asio::awaitable<bool> {
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      std::string{path}   },
             {"sessionId", "remember_cross_bus"}
         };
@@ -895,7 +896,7 @@ asio::awaitable<void> test_permission_subdir_deny_over_wildcard_allow() {
     };
     auto makeCheck = [&](std::shared_ptr<Mw> permission) {
         return [permission](std::string_view path) -> asio::awaitable<bool> {
-            auto args = agentxx::util::Json{
+            auto args = utilxx_base::Json{
                 {"path",      std::string{path}},
                 {"sessionId", "subdir_deny"    }
             };
@@ -968,7 +969,7 @@ asio::awaitable<void> test_permission_subdir_deny_over_wildcard_allow() {
 /// worktree 会话隔离边界: worktree 子树 (allowPath) 内读写放行, 主检出子树
 /// (denyWritePath) 内写操作拒绝 (读不受限)
 /// - 真实 worktree 位于主检出的 `.agentxx/agent/worktrees/{name}` 下 (见
-///   agentxx::util::worktree::worktreesRoot), 即 allowPath 本身就在 denyWritePath
+///   utilxx::worktree::worktreesRoot), 即 allowPath 本身就在 denyWritePath
 ///   子树内; 因此 allowPath 必须先于 denyWritePath 判定, 否则会话对自身工作区的
 ///   写操作也会被"主检出写拒绝"命中 (表现为绑定 worktree 后无法写任何文件)
 asio::awaitable<void> test_permission_worktree_isolation_subtree() {
@@ -1016,7 +1017,7 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
     declareFilesystemPermissions(*permission);
 
     auto check = [&](const MockTool& item, std::string_view path) -> asio::awaitable<bool> {
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      std::string{path}},
             {"sessionId", "wt_session"     }
         };
@@ -1045,7 +1046,7 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
 /// 中断结果组装 (客户端 → agent 的 JSON 形态): 恒为对象 {"values": {控件 id: 值}}
 void test_make_interrupt_result_forms() {
     using agentxx::middleware::makeInterruptResult;
-    using agentxx::util::Json;
+    using utilxx_base::Json;
 
     // 正常提交: 控件 id → 值
     auto form = makeInterruptResult(Json{
@@ -1124,7 +1125,7 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
     // 描述解析 (预设模板生成的权限卡片): 头行分段含权限标记/工具名/分类,
     // blocks 含目标描述文本/勾选控件 (remember)/按钮控件 (decision)
     const auto argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-        agentxx::util::Json::parse(io->lastInterruptArgJson)
+        utilxx_base::Json::parse(io->lastInterruptArgJson)
     );
     XX_TEST_EXPECT_TRUE(argOpt.has_value());
     if (argOpt.has_value()) {
@@ -1197,7 +1198,7 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
                        );
     XX_TEST_EXPECT_TRUE(respDir.has_value());
     const auto argDirOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-        agentxx::util::Json::parse(io->lastInterruptArgJson)
+        utilxx_base::Json::parse(io->lastInterruptArgJson)
     );
     XX_TEST_EXPECT_TRUE(argDirOpt.has_value());
     if (argDirOpt.has_value()) {
@@ -1355,7 +1356,7 @@ asio::awaitable<void> test_permission_remember_via_result_options() {
     declareFilesystemPermissions(*permission);
 
     auto write = [&](std::string_view path) -> asio::awaitable<bool> {
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      std::string{path} },
             {"sessionId", "remember_options"}
         };
@@ -1426,7 +1427,7 @@ asio::awaitable<void> test_permission_full_auth_rule() {
     declareFilesystemPermissions(*permission);
 
     auto check = [&](const MockTool& item, std::string_view path) -> asio::awaitable<bool> {
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"path",      std::string{path}},
             {"sessionId", "full_auth_test" }
         };

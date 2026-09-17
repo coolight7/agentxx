@@ -9,7 +9,7 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
@@ -870,9 +870,9 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
 
 std::string PluginManager::listPluginsJson() {
     auto                views = list();
-    agentxx::util::Json arr   = agentxx::util::Json::array();
+    utilxx_base::Json arr   = utilxx_base::Json::array();
     for (const auto& v : views) {
-        agentxx::util::Json item;
+        utilxx_base::Json item;
         item["name"]                = v.name;
         item["version"]             = v.version;
         item["description"]         = v.description;
@@ -895,7 +895,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     if (!inst) {
         return {};
     }
-    agentxx::util::Json item;
+    utilxx_base::Json item;
     item["name"]                = inst->name;
     item["version"]             = inst->version;
     item["description"]         = inst->description;
@@ -907,7 +907,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["optional_depends"]    = inst->optionalDepends;
     item["required_interfaces"] = inst->interfaces.require;
     item["optional_interfaces"] = inst->interfaces.optional;
-    agentxx::util::Json caps    = agentxx::util::Json::array();
+    utilxx_base::Json caps    = utilxx_base::Json::array();
     for (const auto& c : inst->capabilityRegistrations) {
         caps.push_back(c.name);
     }

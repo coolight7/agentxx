@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/interrupt_ui.h"
 
-#include "agentxx/util/diff_util.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx/diff_util.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <cmath>
@@ -12,7 +12,7 @@ namespace middleware {
 
 namespace {
 
-using agentxx::util::Json;
+using utilxx_base::Json;
 
 /// 读取数值字段 (缺失/类型不符时 has = false)
 double jsonNumber(const Json& j, std::string_view key, bool& has) {
@@ -83,12 +83,12 @@ std::vector<std::string> wrapToWidth(std::string_view text, int width) {
             size_t offset = 0;
             while (offset < line.size()) {
                 const auto remain = line.substr(offset);
-                const auto count  = agentxx::util::utf8GetLength(remain);
+                const auto count  = utilxx_base::utf8GetLength(remain);
                 if (count <= static_cast<size_t>(width)) {
                     out.emplace_back(remain);
                     break;
                 }
-                auto cut = agentxx::util::findIndexByUtf8Length(remain, static_cast<size_t>(width));
+                auto cut = utilxx_base::findIndexByUtf8Length(remain, static_cast<size_t>(width));
                 if (cut == 0 || cut > remain.size()) {
                     cut = remain.size();
                 }
@@ -433,12 +433,12 @@ const Json* valueOf(const Json& values, std::string_view id) {
 
 /// 字符串 → 数值 (整数/浮点)
 bool parseNumberValue(std::string_view s, double& out) {
-    auto trimmed = agentxx::util::removeBetweenSpace(s);
+    auto trimmed = utilxx_base::removeBetweenSpace(s);
     if (trimmed.empty()) {
         return false;
     }
     double v = 0.0;
-    if (agentxx::util::parseNumberFromString(trimmed, v).ec != std::errc{}) {
+    if (utilxx_base::parseNumberFromString(trimmed, v).ec != std::errc{}) {
         return false;
     }
     out = v;
@@ -460,7 +460,7 @@ bool interruptValueBool(const Json& values, std::string_view id, bool defaultVal
     }
     if (v->is_string()) {
         // 与 preset::inputForm 的 bool 控件取值口径一致 ("true"/"yes"/"y"/"1")
-        auto s = agentxx::util::toLower(agentxx::util::removeBetweenSpace(v->get<std::string>()));
+        auto s = utilxx_base::toLower(utilxx_base::removeBetweenSpace(v->get<std::string>()));
         if (s == "true" || s == "yes" || s == "y" || s == "1") {
             return true;
         }
@@ -552,12 +552,12 @@ std::string interruptUiPlainText(const InterruptUi& ui, int width) {
                     b.path
                 ));
             }
-            const auto diff = agentxx::util::computeLineDiff(b.oldStr, b.newStr);
+            const auto diff = utilxx::computeLineDiff(b.oldStr, b.newStr);
             for (const auto& l : diff) {
                 char prefix = ' ';
-                if (l.type == agentxx::util::DiffLineType::Add) {
+                if (l.type == utilxx::DiffLineType::Add) {
                     prefix = '+';
-                } else if (l.type == agentxx::util::DiffLineType::Delete) {
+                } else if (l.type == utilxx::DiffLineType::Delete) {
                     prefix = '-';
                 }
                 appendWrapped(fmt::format("{}{}", prefix, l.text), b.indent);
@@ -576,7 +576,7 @@ std::string interruptUiPlainText(const InterruptUi& ui, int width) {
         // submit: 仅交互语义, 纯文本不输出
         // 未知 kind: 忽略
     }
-    return agentxx::util::stringJoin(lines, "\n");
+    return utilxx_base::stringJoin(lines, "\n");
 }
 
 } // namespace middleware

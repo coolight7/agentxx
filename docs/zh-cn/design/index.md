@@ -117,7 +117,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - **生命周期**: worktree 始终保留 (keep 策略), 不随会话结束删除; remove 操作
   经双层脏检查 (未提交变更/未跟踪文件/未合并提交, 无上游时回退统计分支全部提交),
   有工作成果时拒绝并提醒先 commit, 仅 force=true 可强制删除
-- 底层 git 封装见 `agent/lib/include/agentxx/util/worktree.h` (argv 直调不经
+- 底层 git 封装见 `agent/third_party/cxx_utilxx/include/utilxx/worktree.h` (argv 直调不经
   shell, 超时整组终止; 测试模块 `worktree`)
 
 ### 中间件系统
@@ -1563,33 +1563,22 @@ agent/
 │   │   │   ├── provider_common.h # 各 LLM Provider 与模型调用节点共用 helper
 │   │   │   │                     #   (唯一 tool_call id 生成 / 空响应判定)
 │   │   │   └── protocol_base.h   # 协议基类
-│   │   └── util/                 # 工具类
-│   │       ├── log.h             # 日志系统 (XX_LOG 宏, LogDispatcher, LogSink)
-│   │       ├── string_util.h     # 字符串工具 (编码转换/路径标准化/base64/自然排序/IgnoreCaseMap 等)
-│   │       ├── path_sanitize.h   # 路径段安全化 (非法字符替换/超长截断+哈希尾缀/
-│   │       │                     #   Windows 保留设备名判定; 会话与索引目录名构造共用)
-│   │       ├── http_client.h     # HTTP 客户端 (基于 Boost.Beast)
-│   │       │                     #   连接池: keep-alive 空闲连接复用 + 每端点并发上限
-│   │       │                     #   (maxConcurrentConnections, 默认 5), 复用失效自动重试;
-│   │       │                     #   空闲连接按 io_context 分桶 (跨上下文复用 socket 是 UB),
-│   │       │                     #   HttpPoolContextGuard 服务随 io_context 销毁自动释放
-│   │       │                     #   该上下文上的空闲连接, 避免悬挂 reactor 的 use-after-free
-│   │       ├── http_server.h     # HTTP 服务器 (路由/WS/SSE/SSL)
-│   │       ├── http_header.h     # HeaderMap (忽略大小写的 HTTP 头部管理)
-│   │       ├── ws_client.h       # WebSocket 客户端
-│   │       ├── exception.h       # 异常处理工具
-│   │       ├── lru_cache.h       # LRU 缓存
-│   │       ├── diff_util.h       # 行级 diff (unified diff 格式)
-│   │       ├── regex.h           # 正则引擎 (hyperscan)
-│   │       ├── aho_corasick.h    # Aho-Corasick 多模式匹配
-│   │       ├── router.h          # HTTP 路由器
-│   │       ├── sqlite.h          # SQLite 轻量 RAII 封装 (SqliteDb/Stmt, WAL+busy_timeout)
-│   │       ├── async_mutex.h     # 协程感知异步互斥锁 (基于 concurrent_channel)
-│   │       ├── async_offload.h   # 阻塞操作线程池卸载 (offloadAsync /
-│   │       │                     #   offloadCancellableAsync / asyncWithTimeout)
-│   │       ├── worktree.h        # Git worktree 封装 (argv 直调/超时整组终止)
-│   │       └── util.h            # 通用工具 (系统检测等)
+│   │   └── util/                 # 工具类 —— 仅保留与宿主/图引擎耦合的少量头
+│   │       ├── exception.h       # 异常分类与统一捕获 (neograph 取消/中断语义 + utilxx_base::catchError*)
+│   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json 桥接
+│   │       └── cancel_adapter.h  # neograph::graph::CancelToken -> utilxx::CancelToken 适配器
+│   │       (说明: 通用工具已拆为独立工程, 见下方 third_party/ 与"基础库"小节;
+│   │        lib/src/util/ 目录已不存在)
 │   └── src/                      # 实现文件 (与 include 目录结构对应)
+│
+├── third_party/                  # 第三方依赖 (含本项目自研的三个独立库)
+│   ├── cxx_utilxx_base/          # 基础件: log/json/json_view/string_util/env/system/
+│   │                             #   container_util/hash/lru_cache/path_sanitize/stream/
+│   │                             #   async_mutex/asio_error + utilxx::CancelToken 与 offload
+│   ├── cxx_utilxx/               # 重依赖工具: http_client/http_server/ws_client/router/
+│   │                             #   sqlite/settings_db/regex/aho_corasick/diff_util/worktree/crypto
+│   ├── cxx_pluginxx/             # 插件框架内核: api/(abi.h,tables.h) + kit/ + runtime/ + host/
+│   └── (其余: boost/fmt/simdjson/sqlite3/OpenSSL/neograph/yaml-cpp/...)
 │
 ├── client/                       # agentxx_cli 可执行程序
 │   ├── main.cpp                  # 入口: 参数解析 → 配置加载 → 模式分发
@@ -1882,7 +1871,8 @@ EventBus (事件总线)
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
 - 导出控制: -fvisibility=hidden + version script 白名单 (AGENTXX_PLUGIN_EXPORT), 单端插件兼容 Android lld
 - 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows 等)
-- 工具复用: 内置插件经 agentxx_util 静态库复用全部 util (各自静态链接, 符号隐藏互不冲突)
+- 工具复用: 内置插件经 `cxx_utilxx_base` / `cxx_utilxx` 静态库复用全部基础工具
+  (各自静态链接, 符号隐藏互不冲突; 见 `docs/zh-cn/design/plugins.md` §5)
 
 ---
 

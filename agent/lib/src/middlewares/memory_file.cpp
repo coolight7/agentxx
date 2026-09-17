@@ -1,8 +1,8 @@
 #include "agentxx/middlewares/memory_file.h"
 
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include "asio/read.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/stream_file.hpp"
@@ -37,7 +37,7 @@ asio::awaitable<void>
         fileContents.clear();
         std::string logContent;
         for (const auto& filepath : memoryFilePaths) {
-            auto systemCharsetFilePath = agentxx::util::toCurrentSystemAbsolutePath(
+            auto systemCharsetFilePath = utilxx_base::toCurrentSystemAbsolutePath(
                 filepath,
                 agentContext.lock()->getSessionWorkDir(in.ctx.thread_id)
             );
@@ -47,9 +47,9 @@ asio::awaitable<void>
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
                     /// 文件异步 I/O 可用 (含运行时可真正使用 io_uring) 时异步加载,
                     /// 避免同步读盘阻塞 io_context 事件循环
-                    if (agentxx::util::isAsyncFileIoSupported()) {
+                    if (utilxx_base::isAsyncFileIoSupported()) {
                         asio::stream_file        stream{currentIoCtx};
-                        neograph_asio_error_code errCode;
+                        utilxx_base::AsioErrorCode errCode;
                         stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
                         if (false == stream.is_open()) {
                             logContent += fmt::format(
@@ -88,7 +88,7 @@ asio::awaitable<void>
                         );
                         stream.close();
                     }
-                    agentxx::util::autoConvertToUtf8(content);
+                    utilxx_base::autoConvertToUtf8(content);
                     fileContents.emplace_back(filepath, content);
                     logContent += fmt::format("┣━ ✅ Loaded Memory file: `{}`\n", filepath);
                     co_return true;

@@ -5,7 +5,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -59,10 +59,10 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<agentxx::util::Json>
+    asio::awaitable<utilxx_base::Json>
         handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
             override {
-        co_return agentxx::middleware::makeInterruptResult(agentxx::util::Json::object());
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json::object());
     }
 };
 

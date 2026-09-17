@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,8 +19,8 @@ struct InterruptUiSegment {
     bool        bold = false;
     bool        dim  = false;
 
-    static InterruptUiSegment fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json       toJson() const;
+    static InterruptUiSegment fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json       toJson() const;
 };
 
 /// 中断头行描述
@@ -31,8 +31,8 @@ struct InterruptUiHeader {
     /// 自定义分段 (空 = 客户端默认前缀)
     std::vector<InterruptUiSegment> segments;
 
-    static InterruptUiHeader fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json      toJson() const;
+    static InterruptUiHeader fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json      toJson() const;
 };
 
 /// 控件候选项 (kind=control 的 buttons / select 控件使用)
@@ -41,7 +41,7 @@ struct InterruptUiHeader {
 /// - `labelKey` 非空时客户端优先解析该 i18n 键, 缺键回退 `label`
 struct InterruptUiOption {
     /// 选中时写入结果的原始值 (缺失按空字符串)
-    agentxx::util::Json value;
+    utilxx_base::Json value;
     /// 字面标签
     std::string label;
     /// 客户端 i18n 键 (优先)
@@ -49,8 +49,8 @@ struct InterruptUiOption {
     /// 文本色覆盖 (空 = 按控件样式; 如 "error" 用于高危操作)
     std::string color;
 
-    static InterruptUiOption fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json      toJson() const;
+    static InterruptUiOption fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json      toJson() const;
 };
 
 /// 中断描述块 (客户端按 blocks 顺序渲染; 内容块与控件块可任意混排)
@@ -120,7 +120,7 @@ struct InterruptUiBlock {
     /// 候选项 (buttons/select)
     std::vector<InterruptUiOption> options;
     /// 缺省值 (checkbox = 布尔; number = 数值; 其余 = 候选项值/文本)
-    agentxx::util::Json defaultValue;
+    utilxx_base::Json defaultValue;
     /// buttons: 点击即选中并提交整份表单 (一问一答形态)
     bool commitOnPick = false;
 
@@ -154,12 +154,12 @@ struct InterruptUiBlock {
     /// 后续接入客户端插件渲染器后, 按组件名 + props 渲染, fallback 作为降级。
     std::string component;
     /// 组件属性 (原样透传给客户端渲染器)
-    agentxx::util::Json props;
+    utilxx_base::Json props;
     /// 客户端无该组件时的降级文本 (行式前端/未知组件时打印)
     std::string fallback;
 
-    static InterruptUiBlock fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json     toJson() const;
+    static InterruptUiBlock fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json     toJson() const;
 };
 
 /// 中断 UI 描述 (整份下发; 服务端声明, 客户端通用渲染)
@@ -186,15 +186,15 @@ struct InterruptUi {
         return blocks.empty() && header.segments.empty();
     }
 
-    static InterruptUi  fromJson(const agentxx::util::Json& j);
-    agentxx::util::Json toJson() const;
+    static InterruptUi  fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json toJson() const;
 };
 
 /// 中断结果组装 (客户端提交后回传的 JSON 形态; 与 agent 侧解析口径一致)
 ///
 /// 结果**恒为对象形态**: `{"values": {控件 id: 值}}`
 /// - 非对象 values 归一化为空对象 (取消/未提交时为空对象)
-agentxx::util::Json makeInterruptResult(const agentxx::util::Json& values);
+utilxx_base::Json makeInterruptResult(const utilxx_base::Json& values);
 
 /// 结果值容错读取 (结果对象或其内层 `values` 对象均可传入)
 ///
@@ -203,22 +203,22 @@ agentxx::util::Json makeInterruptResult(const agentxx::util::Json& values);
 /// - 布尔口径: 布尔值直取; 字符串 "true"/"yes"/"y"/"1" 视为 true
 ///   (与 [preset::inputForm] 生成的 bool 控件取值口径一致)
 bool interruptValueBool(
-    const agentxx::util::Json& values,
+    const utilxx_base::Json& values,
     std::string_view           id,
     bool                       defaultValue = false
 );
 std::string interruptValueString(
-    const agentxx::util::Json& values,
+    const utilxx_base::Json& values,
     std::string_view           id,
     std::string_view           defaultValue = {}
 );
 int64_t interruptValueInt(
-    const agentxx::util::Json& values,
+    const utilxx_base::Json& values,
     std::string_view           id,
     int64_t                    defaultValue = 0
 );
 double interruptValueDouble(
-    const agentxx::util::Json& values,
+    const utilxx_base::Json& values,
     std::string_view           id,
     double                     defaultValue = 0.0
 );

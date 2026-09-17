@@ -13,16 +13,16 @@
 #include <unordered_set>
 #include <vector>
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_server.h"
 #include "agentxx/version.h"
 
 namespace agentxx {
 namespace protocol {
 
-using json = agentxx::util::Json;
+using json = utilxx_base::Json;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC 工具函数
@@ -159,7 +159,7 @@ public:
          std::optional<McpPromptResult>(std::string_view name, const json& arguments)>;
 
     struct Config {
-        util::HttpServer::Config httpConfig;
+        utilxx::HttpServer::Config httpConfig;
         std::string              mcpEndpoint   = "/mcp";
         std::string              sseEndpoint   = "/mcp/sse";
         std::string              serverName    = "agentxx-mcp";
@@ -261,7 +261,7 @@ private:
     };
 
     struct SSEClient {
-        std::shared_ptr<util::HttpServer::SseWriter> writer;
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer;
         bool                                         closed = false;
     };
 
@@ -270,7 +270,7 @@ private:
         std::string        idKey; // JSON-RPC id 的规范化 key (数字/字符串)
         json               id;    // 原始 id (回显到通知 _meta)
         SubscriptionFilter filter;
-        std::shared_ptr<util::HttpServer::SseWriter> writer; // HTTP: SSE 流; stdio 为空
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer; // HTTP: SSE 流; stdio 为空
         std::atomic<bool>                            closed{false};
         /// HTTP: SSE 协程完成优雅结束 (排空 pending + close) 后置位,
         /// 供 stop() 等待, 避免 ioCtx 停止取消未完成的终止 result 写入
@@ -306,7 +306,7 @@ private:
     /// 2026-07-28 HTTP 标准请求头校验 (MCP-Protocol-Version/Mcp-Method/Mcp-Name/
     /// Mcp-Param-*); 返回错误描述 (nullopt = 通过)
     std::optional<std::string> validateModernHeaders(
-        const util::HttpServer::Request& req,
+        const utilxx::HttpServer::Request& req,
         const json&                      requestJson,
         const RequestContext&            ctx
     ) const;
@@ -346,19 +346,19 @@ private:
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
-        handleMcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
+        handleMcpRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp);
 
     /// POST 统一入口: 普通 handler (resp 非空) 与 POST SSE 路由 (writer 非空) 共用
     asio::awaitable<void> handleMcpPost(
-        util::HttpServer::Request&                   req,
-        util::HttpServer::Response*                  resp,
-        std::shared_ptr<util::HttpServer::SseWriter> writer
+        utilxx::HttpServer::Request&                   req,
+        utilxx::HttpServer::Response*                  resp,
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer
     );
 
     /// POST SSE 路由 (subscriptions/listen 长连接流)
     asio::awaitable<void> handleMcpPostSse(
-        util::HttpServer::Request&                   req,
-        std::shared_ptr<util::HttpServer::SseWriter> writer
+        utilxx::HttpServer::Request&                   req,
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer
     );
 
     // -----------------------------------------------------------------------
@@ -389,7 +389,7 @@ private:
     asio::awaitable<void> handleSubscriptionsListenSse(
         const json&                                  id,
         const json&                                  params,
-        std::shared_ptr<util::HttpServer::SseWriter> writer
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer
     );
 
     /// 下发订阅通知 (HTTP 走 SSE 流, stdio 走 stdout)
@@ -403,8 +403,8 @@ private:
     // -----------------------------------------------------------------------
 
     asio::awaitable<void> handleSseStream(
-        util::HttpServer::Request&                   req,
-        std::shared_ptr<util::HttpServer::SseWriter> writer
+        utilxx::HttpServer::Request&                   req,
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer
     );
 
     // -----------------------------------------------------------------------
@@ -431,7 +431,7 @@ private:
     // -----------------------------------------------------------------------
 
     void writeJsonResponse(
-        util::HttpServer::Response& resp,
+        utilxx::HttpServer::Response& resp,
         boost::beast::http::status  status,
         const json&                 body
     );
@@ -441,7 +441,7 @@ private:
     // -----------------------------------------------------------------------
 
     Config                            config_;
-    std::unique_ptr<util::HttpServer> httpServer_;
+    std::unique_ptr<utilxx::HttpServer> httpServer_;
     Capabilities                      capabilities_;
 
     mutable std::shared_mutex                  toolsMutex_;

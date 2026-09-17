@@ -1,6 +1,6 @@
 #include "agentxx-test/core/test_event_stream.h"
 #include "agentxx/event/event_stream.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"

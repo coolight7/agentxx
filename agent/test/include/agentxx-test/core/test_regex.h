@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/util/regex.h"
+#include "utilxx/regex.h"
 #include <cassert>
 #include <memory>
 #include <string>
@@ -11,7 +11,8 @@
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx;
 
 TestResult testRegex();
 

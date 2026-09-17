@@ -3,6 +3,7 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/interrupt_ui.h"
 #include "agentxx/middlewares/middleware.h"
+#include "utilxx_base/json.h"
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -20,7 +21,7 @@ namespace test {
 using agentxx::middleware::InterruptHandleArg;
 using agentxx::middleware::InterruptUi;
 using agentxx::middleware::InterruptUiBlock;
-using agentxx::util::Json;
+using utilxx_base::Json;
 
 namespace {
 

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/ffi_api.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include "ffi_client_io.h"
 #include <asio/awaitable.hpp>
 #include <asio/executor_work_guard.hpp>
@@ -166,7 +166,7 @@ private:
     };
 
     /// 日志接收器 (自带后台线程; 入 ring)
-    class FfiLogSink final : public util::ThreadedLogSink {
+    class FfiLogSink final : public utilxx_base::ThreadedLogSink {
     public:
 
         FfiLogSink(FfiAgentRuntime& owner) :
@@ -178,7 +178,7 @@ private:
 
     protected:
 
-        void onLog(const util::LogEntry& entry) override;
+        void onLog(const utilxx_base::LogEntry& entry) override;
 
     private:
 
@@ -205,7 +205,7 @@ private:
     void stopInternal();
 
     /// client io 线程: 处理同步应答 (完成对应 SyncWait)
-    void onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, agentxx::util::Json j);
+    void onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, utilxx_base::Json j);
 
     /// 同步查询通用实现; send 为 client io 线程执行的请求发送动作
     std::string

@@ -4,8 +4,8 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/container_util.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -227,7 +227,7 @@ public:
 
         auto out = co_await agentxx::util::catchErrorToUnexpectedAsync<RespType>(
             [&]() -> asio::awaitable<std::expected<RespType, std::string>> {
-                auto result = co_await agentxx::util::asyncWithTimeout<RespType>(
+                auto result = co_await utilxx::asyncWithTimeout<RespType>(
                     [&]() -> asio::awaitable<RespType> {
                         co_return co_await handler(req, correlationId);
                     },
@@ -283,7 +283,7 @@ public:
             ) -> asio::awaitable<void> {
                 auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
                 // 定时器取消不抛异常, 仅返回 error_code, 此处忽略
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 if (ec) {
                     co_return;
@@ -326,7 +326,7 @@ public:
             [id, delay, weak, handler = std::move(handler), data = std::move(data), streamName](
             ) -> asio::awaitable<void> {
                 auto timer = asio::steady_timer(co_await asio::this_coro::executor, delay);
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 if (ec) {
                     co_return;
@@ -379,7 +379,7 @@ public:
         if (it == streams_.end()) {
             // 新建
             auto stream = std::make_shared<EventStream<_DATA_TYPE>>(topic);
-            it          = util::insertHeterogeneous(
+            it          = utilxx_base::insertHeterogeneous(
                      streams_,
                      std::string{topic},
                      std::static_pointer_cast<EventStreamInterface>(stream)
@@ -410,7 +410,7 @@ public:
         auto it = streams_.find(topic);
         if (it == streams_.end()) {
             auto stream = std::make_shared<RequestResponseStream<_REQ_TYPE, _RESP_TYPE>>(topic);
-            it          = util::insertHeterogeneous(
+            it          = utilxx_base::insertHeterogeneous(
                      streams_,
                      std::string{topic},
                      std::static_pointer_cast<EventStreamInterface>(stream)

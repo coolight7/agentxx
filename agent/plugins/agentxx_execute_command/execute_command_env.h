@@ -20,9 +20,9 @@
 /// `ctx.schema(...)`), 保证注入宿主的提示词与实际注册的 schema 一致。
 #pragma once
 
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <chrono>
@@ -65,7 +65,7 @@ struct ExecEnvInfo {
     /// node 解释器探测结果
     InterpreterInfo node;
     /// PowerShell 探测结果 (仅 Windows 侧探测; 其他平台恒为不可用)
-    agentxx::util::PowerShellInfo powershell;
+    utilxx_base::PowerShellInfo powershell;
 };
 
 /// 工具提示词 (depict + 参数描述), 字段与宿主 AgentPrompt::ToolPrompt 对应
@@ -119,7 +119,7 @@ inline std::string parseVersionText(std::string_view output) {
         if (end == std::string_view::npos) {
             end = output.size();
         }
-        const auto line = agentxx::util::removeBetweenSpace(output.substr(pos, end - pos));
+        const auto line = utilxx_base::removeBetweenSpace(output.substr(pos, end - pos));
         if (false == line.empty()) {
             // 取行内最后一个空白分隔词: "Python 3.11.9" → "3.11.9"
             const auto sp    = line.find_last_of(" \t");
@@ -262,7 +262,7 @@ inline InterpreterInfo
         XX_LOGD(
             "execute_command probe {}: output='{}' version='{}'",
             exeName,
-            agentxx::util::removeBetweenSpace(output),
+            utilxx_base::removeBetweenSpace(output),
             version
         );
         if (false == version.empty()) {
@@ -281,8 +281,8 @@ inline InterpreterInfo
 ///   Linux/macOS 不需要 PowerShell, 直接跳过探测, 避免 WSL 下无谓的 interop 调用
 inline ExecEnvInfo detectExecEnv() {
     ExecEnvInfo env;
-    env.systemName = agentxx::util::getSystemName();
-    env.isWSL      = agentxx::util::isRunningInWSL();
+    env.systemName = utilxx_base::getSystemName();
+    env.isWSL      = utilxx_base::isRunningInWSL();
 
     const auto start = std::chrono::steady_clock::now();
 #if XX_IS_WIN_D
@@ -290,7 +290,7 @@ inline ExecEnvInfo detectExecEnv() {
     env.python
         = detectInterpreter({"python.exe", "python3.exe", "py.exe"}, kInterpreterProbeTimeoutMs);
     env.node       = detectInterpreter({"node.exe"}, kInterpreterProbeTimeoutMs);
-    env.powershell = agentxx::util::detectPowerShell();
+    env.powershell = utilxx_base::detectPowerShell();
 #else
     // POSIX 侧: python 命令名在不同发行版可能是 python3 / python
     env.python = detectInterpreter({"python3", "python"}, kInterpreterProbeTimeoutMs);

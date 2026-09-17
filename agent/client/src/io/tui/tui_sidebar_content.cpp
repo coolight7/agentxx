@@ -4,8 +4,8 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include <algorithm>
@@ -22,27 +22,27 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     ftxui::Color c = theme.normalColor;
     std::string  prefix;
     switch (line.level) {
-        case agentxx::util::LogLevel::Trace:
+        case utilxx_base::LogLevel::Trace:
             c      = theme.hintColor;
             prefix = "[T] ";
             break;
-        case agentxx::util::LogLevel::Debug:
+        case utilxx_base::LogLevel::Debug:
             c      = theme.hintColor;
             prefix = "[D] ";
             break;
-        case agentxx::util::LogLevel::Info:
+        case utilxx_base::LogLevel::Info:
             c      = theme.accentColor;
             prefix = "[I] ";
             break;
-        case agentxx::util::LogLevel::Warn:
+        case utilxx_base::LogLevel::Warn:
             c      = theme.thinkingColor;
             prefix = "[W] ";
             break;
-        case agentxx::util::LogLevel::Error:
+        case utilxx_base::LogLevel::Error:
             c      = theme.errorColor;
             prefix = "[E] ";
             break;
-        case agentxx::util::LogLevel::Out:
+        case utilxx_base::LogLevel::Out:
             c      = theme.accentColor;
             prefix = "";
             break;
@@ -56,7 +56,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 /// - text + button 隐式同行合并与 prefix 显式前缀统一在此实现
 /// - diagram 保留静态内联渲染 (历史消息兼容), 不挂点击
 static void appendPluginItems(
-    const agentxx::util::Json&                                     items,
+    const utilxx_base::Json&                                     items,
     std::string_view                                               plugin,
     std::string_view                                               ownerId,
     const agentxx::plugin::ClientUiRegistry*                       reg,
@@ -287,7 +287,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 elems.push_back(
                     (splitName ? hbox({text(fmt::format(
                                      "|  {}·{}",
-                                     agentxx::util::getFileName(notif.name),
+                                     utilxx_base::getFileName(notif.name),
                                      notif.name
                                  ))})
                                : hbox({text("|  "), text(notif.name) | xflex_shrink}))
@@ -361,7 +361,7 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     );
     elements.push_back(
         hbox({
-            text(fmt::format("{} ", agentxx::util::getFileName(kCwd))),
+            text(fmt::format("{} ", utilxx_base::getFileName(kCwd))),
             filler(),
             text(kCwd) | xflex_shrink,
         })

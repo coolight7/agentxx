@@ -9,11 +9,11 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
-#include "agentxx/util/env.h"
+#include "utilxx_base/env.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/settings_db.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx/http_client.h"
+#include "utilxx/settings_db.h"
+#include "utilxx_base/string_util.h"
 #include "agentxx/version.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -160,7 +160,7 @@ static std::string extractTokenFromUrl(std::string& url) {
             = query.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
         auto eq = kv.find('=');
         if (eq != std::string::npos && kv.substr(0, eq) == "token") {
-            token = agentxx::util::HttpClient::urlDecode(kv.substr(eq + 1));
+            token = utilxx::HttpClient::urlDecode(kv.substr(eq + 1));
         }
         if (amp == std::string::npos) {
             break;
@@ -217,7 +217,7 @@ static void applySharedRuntimeConfig(
         pluginCfg.sides   = pc.sides;
         pluginCfg.args    = pc.args;
         if (!pc.configPath.empty()) {
-            auto                  expanded = agentxx::util::expandUserHomePath(pc.configPath);
+            auto                  expanded = utilxx_base::expandUserHomePath(pc.configPath);
             std::filesystem::path cp{expanded};
             if (cp.is_absolute()) {
                 pluginCfg.configPath = cp.lexically_normal().generic_string();
@@ -252,7 +252,7 @@ int main(int argn, char** argv) {
 #endif
 
 #if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
-    agentxx::util::signalError(argv[0]);
+    utilxx_base::signalError(argv[0]);
 #endif
 
     // 注入程序内置环境变量 (启动后立即捕获, 供 yaml 配置 ${VAR} 展开使用)
@@ -272,9 +272,9 @@ int main(int argn, char** argv) {
             }
         );
         if (!workDir.empty()) {
-            agentxx::util::ApplicationEnv::instance().set(kBuiltinWorkDirEnv, workDir);
+            utilxx_base::ApplicationEnv::instance().set(kBuiltinWorkDirEnv, workDir);
         } else {
-            agentxx::util::ApplicationEnv::instance().remove(kBuiltinWorkDirEnv);
+            utilxx_base::ApplicationEnv::instance().remove(kBuiltinWorkDirEnv);
         }
         // 同步兼容层 (供旧代码/测试经 setBuiltinEnvVar 查询)
         setBuiltinEnvVar(kBuiltinWorkDirEnv, workDir);
@@ -285,16 +285,16 @@ int main(int argn, char** argv) {
     {
         auto execDir = getExecutableDir();
         if (!execDir.empty()) {
-            agentxx::util::ApplicationEnv::instance().set(kBuiltinExecDirEnv, execDir);
+            utilxx_base::ApplicationEnv::instance().set(kBuiltinExecDirEnv, execDir);
         } else {
-            agentxx::util::ApplicationEnv::instance().remove(kBuiltinExecDirEnv);
+            utilxx_base::ApplicationEnv::instance().remove(kBuiltinExecDirEnv);
         }
         setBuiltinEnvVar(kBuiltinExecDirEnv, execDir);
     }
 
     /// 默认启动 stdio 作为日志输出，对于 tui 等自己拦截日志的可以移除后添加自己的日志拦截器
     auto defaultLogSink = std::make_shared<StderrLogSink>();
-    agentxx::util::LogDispatcher::instance().addSink(defaultLogSink);
+    utilxx_base::LogDispatcher::instance().addSink(defaultLogSink);
 
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
@@ -356,7 +356,7 @@ Options:
             ++i;
             // 容错解析: 非法值报错退出, 避免 std::stoi 抛异常崩溃
             auto portArg = std::string_view{argv[i]};
-            if (auto r = agentxx::util::parseNumberFromString(portArg, srvPort);
+            if (auto r = utilxx_base::parseNumberFromString(portArg, srvPort);
                 r.ec != std::errc{} || srvPort == 0) {
                 XX_LOGE("Invalid --port value: `{}`", portArg);
                 return 1;
@@ -474,7 +474,7 @@ Options:
     //   相对路径解析基准 / 命令执行子进程初始目录 / 插件 projectRoot
     std::string resolvedWorkDir;
     if (!yamlCfg.workDir.empty()) {
-        auto                  workDirExpanded = agentxx::util::expandUserHomePath(yamlCfg.workDir);
+        auto                  workDirExpanded = utilxx_base::expandUserHomePath(yamlCfg.workDir);
         std::filesystem::path wp{workDirExpanded};
         resolvedWorkDir
             = wp.is_absolute()
@@ -602,7 +602,7 @@ Options:
             *agent->ioCtx,
             [agent]() -> asio::awaitable<void> {
                 co_await agent->init();
-                agentxx::protocol::StdioAcpServer server(agent, agentxx::util::Json::object());
+                agentxx::protocol::StdioAcpServer server(agent, utilxx_base::Json::object());
                 server.run();
                 co_return;
             },
@@ -631,7 +631,7 @@ Options:
         const std::string globalDbDir = resolvedDataDir.empty()
                                             ? agentxx::agent::AgentConfigStatic::systemDataDir()
                                             : resolvedDataDir;
-        auto              settingsDb  = std::make_shared<agentxx::util::SettingsDb>(
+        auto              settingsDb  = std::make_shared<utilxx::SettingsDb>(
             agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(globalDbDir)
         );
         TUISettings::instance().attachDb(std::move(settingsDb));
@@ -678,7 +678,7 @@ Options:
             *agent->ioCtx,
             [agent, server]() -> asio::awaitable<void> {
                 asio::signal_set         signals(*agent->ioCtx, SIGINT, SIGTERM);
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 XX_LOGI("[agent_server] signal received, shutting down ({})...", ec.message());
                 server->stop();
@@ -694,7 +694,7 @@ Options:
     // ======================== 远程 client + agent server模式 (--agent) ========================
     // client 和 agent 不在同一个进程中，使用网络交互
     if (!agentUrl.empty()) {
-        agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
+        utilxx_base::LogDispatcher::instance().removeSink(defaultLogSink);
         if (mode == "tui") {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;
@@ -728,7 +728,7 @@ Options:
     }
 
     if (mode == "tui") {
-        agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
+        utilxx_base::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;
@@ -738,7 +738,7 @@ Options:
         // client 侧经 runLocalTuiUnified 加载 (sides 过滤)
         runLocalTuiUnified(agent, config->plugins);
     } else {
-        agentxx::util::LogDispatcher::instance().removeSink(defaultLogSink);
+        utilxx_base::LogDispatcher::instance().removeSink(defaultLogSink);
         config->logPrintToolcall                       = false;
         config->logPrintMessagesBeforeLLM              = false;
         config->logPrintMessagesBeforeLLMWithSystemMsg = false;

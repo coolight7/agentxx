@@ -1,9 +1,9 @@
 #include "agentxx/protocol/a2a_server.h"
 
-#include "agentxx/util/container_util.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <random>
@@ -20,7 +20,7 @@ namespace protocol {
 A2aServer::A2aServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, Config config) :
     config_(std::move(config)),
     agent_(std::move(agent)),
-    httpServer_(std::make_unique<util::HttpServer>(config_.httpConfig)) {
+    httpServer_(std::make_unique<utilxx::HttpServer>(config_.httpConfig)) {
     setupRoutes();
 }
 
@@ -126,10 +126,10 @@ json A2aServer::agentCard() const {
 // ---------------------------------------------------------------------------
 
 void A2aServer::setupRoutes() {
-    using Handler = util::HttpServer::Handler;
+    using Handler = utilxx::HttpServer::Handler;
 
     auto cardHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
+        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleAgentCard(req, resp);
         }
@@ -137,7 +137,7 @@ void A2aServer::setupRoutes() {
     httpServer_->router().add(config_.agentCardPath, 0, cardHandler);
 
     auto a2aHandler = std::make_shared<Handler>(Handler(
-        [this](util::HttpServer::Request& req, util::HttpServer::Response& resp, std::string_view)
+        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
             -> asio::awaitable<void> {
             co_await handleA2aRequest(req, resp);
         }
@@ -146,7 +146,7 @@ void A2aServer::setupRoutes() {
 
     httpServer_->addSseRoute(
         config_.sseEndpoint,
-        [this](util::HttpServer::Request& req, std::shared_ptr<util::HttpServer::SseWriter> writer)
+        [this](utilxx::HttpServer::Request& req, std::shared_ptr<utilxx::HttpServer::SseWriter> writer)
             -> asio::awaitable<void> {
             co_await handleSseRequest(req, writer);
         }
@@ -158,15 +158,15 @@ void A2aServer::setupRoutes() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> A2aServer::handleAgentCard(
-    util::HttpServer::Request& /*req*/,
-    util::HttpServer::Response& resp
+    utilxx::HttpServer::Request& /*req*/,
+    utilxx::HttpServer::Response& resp
 ) {
     writeJsonResponse(resp, boost::beast::http::status::ok, agentCard());
     co_return;
 }
 
 asio::awaitable<void>
-    A2aServer::handleA2aRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp) {
+    A2aServer::handleA2aRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp) {
     auto versionIt = req.find("A2A-Version");
     if (versionIt != req.end()) {
         auto ver = versionIt->value();
@@ -205,8 +205,8 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void> A2aServer::handleSseRequest(
-    util::HttpServer::Request& /*req*/,
-    std::shared_ptr<util::HttpServer::SseWriter> writer
+    utilxx::HttpServer::Request& /*req*/,
+    std::shared_ptr<utilxx::HttpServer::SseWriter> writer
 ) {
     auto client    = std::make_shared<SSEClient>();
     client->writer = writer;
@@ -336,7 +336,7 @@ json A2aServer::handleSendMessage(const json& id, const json& params) {
             task->createdAt  = currentTimestamp();
             task->updatedAt  = task->createdAt;
             task->cancelFlag = std::make_shared<std::atomic<bool>>(false);
-            util::insertOrAssignHeterogeneous(tasks_, taskId, task);
+            utilxx_base::insertOrAssignHeterogeneous(tasks_, taskId, task);
             pruneOldTasks();
         }
 
@@ -739,7 +739,7 @@ void A2aServer::pruneOldTasks() {
 // ---------------------------------------------------------------------------
 
 void A2aServer::writeJsonResponse(
-    util::HttpServer::Response& resp,
+    utilxx::HttpServer::Response& resp,
     boost::beast::http::status  status,
     const json&                 body
 ) {

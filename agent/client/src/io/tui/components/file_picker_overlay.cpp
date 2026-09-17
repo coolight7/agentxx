@@ -1,8 +1,8 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/surface.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -114,7 +114,7 @@ void FilePickerOverlay::navigateToLocal(std::string dirPath) {
             de.supported = true;
             dirs.push_back(std::move(de));
         } else if (std::filesystem::is_regular_file(status)) {
-            auto ext = agentxx::util::toLower(entry.path().extension().string());
+            auto ext = utilxx_base::toLower(entry.path().extension().string());
             auto mt  = agentxx::agent::mediaTypeFromExtension(ext);
             if (!mt.has_value()) {
                 continue; // 非媒体文件不显示
@@ -281,7 +281,7 @@ void FilePickerOverlay::confirmSelection() {
             return;
         }
         auto ext
-            = agentxx::util::toLower(std::filesystem::path(entry.fullPath).extension().string());
+            = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
         if (mime.empty()) {
             if (ctx_.showToast) {
@@ -319,7 +319,7 @@ void FilePickerOverlay::confirmSelection() {
         att.displayName = entry.name;
         att.mimeType    = std::string(mime);
         att.pathOrUrl   = entry.fullPath;
-        att.dataUrl = fmt::format("data:{};base64,{}", mime, agentxx::util::base64Encode(fileData));
+        att.dataUrl = fmt::format("data:{};base64,{}", mime, utilxx_base::base64Encode(fileData));
         att.sizeBytes = fileSize;
 
         if (onSelectAttachment_) {
@@ -330,7 +330,7 @@ void FilePickerOverlay::confirmSelection() {
     } else {
         // 服务端附件: 直接构造服务端路径附件 (dataUrl 留空, 服务端自主加载并转 Base64)
         auto ext
-            = agentxx::util::toLower(std::filesystem::path(entry.fullPath).extension().string());
+            = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
 
         agentxx::agent::MediaAttachment att;
@@ -494,7 +494,7 @@ Element FilePickerOverlay::OnRender() {
                 rowItems.push_back(text(displayName) | color(theme.normalColor));
                 rowItems.push_back(filler());
                 rowItems.push_back(
-                    text(fmt::format("( {} ) ", agentxx::util::formatSize(entry.sizeBytes)))
+                    text(fmt::format("( {} ) ", utilxx_base::formatSize(entry.sizeBytes)))
                     | theme.dim()
                 );
             } else {

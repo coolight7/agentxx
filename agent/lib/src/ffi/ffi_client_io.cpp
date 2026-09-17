@@ -1,7 +1,7 @@
 #include "ffi_client_io.h"
 
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -54,7 +54,7 @@ void FfiClientAgentIO::notifyServerReady() {
 
 void FfiClientAgentIO::notifyError(int code, std::string message) {
     auto emit = [this, code, message = std::move(message)]() {
-        agentxx::util::Json j = agentxx::util::Json::object();
+        utilxx_base::Json j = utilxx_base::Json::object();
         j["code"]             = code;
         j["message"]          = message;
         emitEvent(AGENTXX_FFI_EVT_ERROR, dump(j));
@@ -74,13 +74,13 @@ asio::awaitable<std::optional<std::string>> FfiClientAgentIO::getInput() {
     co_return std::nullopt;
 }
 
-asio::awaitable<agentxx::util::Json> FfiClientAgentIO::handleInterrupt(
+asio::awaitable<utilxx_base::Json> FfiClientAgentIO::handleInterrupt(
     std::string_view /*sessionId*/,
     std::string_view /*interruptNode*/,
     std::string_view /*interruptValue*/,
     std::string_view /*interruptArgJson*/
 ) {
-    co_return agentxx::util::Json::array();
+    co_return utilxx_base::Json::array();
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ bool FfiClientAgentIO::hasPendingInterrupt(int64_t interruptId) const {
            && currentPendingInterruptId_.load(std::memory_order_acquire) == interruptId;
 }
 
-bool FfiClientAgentIO::submitInterruptResponse(int64_t interruptId, agentxx::util::Json values) {
+bool FfiClientAgentIO::submitInterruptResponse(int64_t interruptId, utilxx_base::Json values) {
     int64_t expected = interruptId;
     if (!currentPendingInterruptId_
              .compare_exchange_strong(expected, 0, std::memory_order_acq_rel)) {
@@ -154,7 +154,7 @@ void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
 }
 
 void FfiClientAgentIO::onServerReady() {
-    agentxx::util::Json j = agentxx::util::Json::object();
+    utilxx_base::Json j = utilxx_base::Json::object();
     j["sessionId"]        = sessionId_;
     emitEvent(AGENTXX_FFI_EVT_READY, dump(j));
 }
@@ -170,7 +170,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 currentPendingInterruptId_.store(id, std::memory_order_release);
 
                 // 事件: 完整中断信息
-                agentxx::util::Json j = agentxx::util::Json::object();
+                utilxx_base::Json j = utilxx_base::Json::object();
                 j["interruptId"]      = id;
                 j["sessionId"]        = m.sessionId;
                 j["node"]             = m.node;
@@ -200,7 +200,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                     it->second->close();
                     pending_.erase(it);
                 }
-                agentxx::util::Json j = agentxx::util::Json::object();
+                utilxx_base::Json j = utilxx_base::Json::object();
                 j["interruptId"]      = m.id;
                 emitEvent(AGENTXX_FFI_EVT_INTERRUPT_EXPIRED, dump(j));
             } else if constexpr (std::is_same_v<T, agent::WireModelInfo>) {
@@ -229,7 +229,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agent::WirePluginData>) {
                 emitEvent(AGENTXX_FFI_EVT_PLUGIN_DATA, dump(agent::io::makePluginData(m)));
             } else if constexpr (std::is_same_v<T, agent::WireError>) {
-                agentxx::util::Json j = agentxx::util::Json::object();
+                utilxx_base::Json j = utilxx_base::Json::object();
                 j["code"]             = m.code;
                 j["message"]          = m.message;
                 emitEvent(AGENTXX_FFI_EVT_ERROR, dump(j));
@@ -245,9 +245,9 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
 // 内部
 // ---------------------------------------------------------------------------
 
-asio::awaitable<std::pair<bool, agentxx::util::Json>>
+asio::awaitable<std::pair<bool, utilxx_base::Json>>
     FfiClientAgentIO::waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch) {
-    agentxx::util::Json result  = agentxx::util::Json::array();
+    utilxx_base::Json result  = utilxx_base::Json::array();
     bool                gotResp = false;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
@@ -280,7 +280,7 @@ void FfiClientAgentIO::emitEvent(AgentxxFFIEventType type, std::string json) {
     }
 }
 
-std::string FfiClientAgentIO::dump(const agentxx::util::Json& j) {
+std::string FfiClientAgentIO::dump(const utilxx_base::Json& j) {
     return j.dump();
 }
 

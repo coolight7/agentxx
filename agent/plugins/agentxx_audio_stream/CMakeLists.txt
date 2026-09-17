@@ -1,7 +1,7 @@
 # agentxx_audio_stream —— 音频流捕获插件 (Windows WASAPI)
 # - 默认: 独立动态库 (MODULE)
 # - 内置模式: 源文件编译为 OBJECT 库合并进
-#   libagentxx; agentxx_util 为既有依赖; WASAPI/COM 等平台库
+#   libagentxx; cxx_utilxx_base_static 为既有依赖; WASAPI/COM 等平台库
 #   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接
 # - 从 libagentxx src/expand/audio_stream 拆分独立:
 #   - 工具 agentxx_audio_stream (start/stop/status)
@@ -40,11 +40,11 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # audio_stream.h / audio_stream_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView)
   )
-  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 复用 cxx_utilxx_base_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
 set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -81,19 +81,19 @@ add_library(${PLUGIN_NAME} SHARED
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # audio_stream.h / audio_stream_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
+  "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView)
 )
-# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
+# 复用 cxx_utilxx_base_static 工具库 (插件静态链接, 与宿主副本符号互不冲突;
+# find_package 经 AGENTXX_INSTALL_DIR 的 cxx_utilxx_base_static config 解析,
 # 依赖链 fmt/SQLite3/uchardet/Iconv 由 config 内 find_dependency 传递)
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_base_static)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
-# (历史: 此处曾直连 simdjson/fmt; 自 Json 自主化重构起经 agentxx_util PUBLIC 传递, 不再单列)
+# (历史: 此处曾直连 simdjson/fmt; 自 Json 自主化重构起经 cxx_utilxx_base_static PUBLIC 传递, 不再单列)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
 )
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib"

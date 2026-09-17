@@ -1,6 +1,6 @@
 #include "agentxx/protocol/a2a_client.h"
 
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 
 namespace agentxx {
 namespace protocol {
@@ -14,10 +14,10 @@ A2aClient::A2aClient(Config config) :
 
 asio::awaitable<std::expected<json, std::string>> A2aClient::fetchAgentCard() {
     auto url  = fmt::format("{}{}", config_.baseUrl, config_.agentCardPath);
-    auto resp = co_await util::HttpClient::getAsync(
+    auto resp = co_await utilxx::HttpClient::getAsync(
         url,
-        util::HeaderMap{},
-        util::RequestConfig{
+        utilxx::HeaderMap{},
+        utilxx::RequestConfig{
             .readChunkTimeout = config_.requestTimeout,
         }
     );
@@ -91,15 +91,15 @@ asio::awaitable<std::expected<json, std::string>>
 
     auto url = config_.baseUrl + config_.a2aEndpoint;
 
-    util::HeaderMap headers;
+    utilxx::HeaderMap headers;
     headers.set("A2A-Version", config_.protocolVersion);
 
-    auto resp = co_await util::HttpClient::postAsync(
+    auto resp = co_await utilxx::HttpClient::postAsync(
         url,
         request.dump(),
         "application/json",
         headers,
-        util::RequestConfig{
+        utilxx::RequestConfig{
             .readChunkTimeout = config_.requestTimeout,
         }
     );

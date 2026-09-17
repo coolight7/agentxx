@@ -30,11 +30,11 @@
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/util/asio_error.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -117,23 +117,23 @@ inline std::string truncateWithStoreFormat(
     // 快速路径: 未超限直接返回 (先按字节粗判，避免大串的 utf8GetLength 开销)
     // 与 ToolcallNode 保持一致: 先判字节 size >= limit 再按 utf8 长度
     if (s.size() < maxLen) {
-        const size_t totalLen = agentxx::util::utf8GetLength(s);
+        const size_t totalLen = utilxx_base::utf8GetLength(s);
         if (totalLen <= maxLen) {
             return s;
         }
     } else {
         // 大串仍需精确 utf8 长度判断
-        const size_t totalLen = agentxx::util::utf8GetLength(s);
+        const size_t totalLen = utilxx_base::utf8GetLength(s);
         if (totalLen <= maxLen) {
             return s;
         }
     }
     auto [targetIndex, lineCount, lastLineIndex]
-        = agentxx::util::findIndexAndLastLineIndexByUtf8Length(s, maxLen);
+        = utilxx_base::findIndexAndLastLineIndexByUtf8Length(s, maxLen);
     if (targetIndex == 0) {
         // 极端情况 (如非法 UTF-8 导致 0) 回退按字节截断，避免返回空
         const size_t cut        = std::min(s.size(), maxLen);
-        const size_t totalLines = agentxx::util::countLines(s);
+        const size_t totalLines = utilxx_base::countLines(s);
         std::string  truncated(s.data(), cut);
         std::string  header;
         if (storeId >= 0) {
@@ -150,7 +150,7 @@ inline std::string truncateWithStoreFormat(
         }
         return fmt::format("{}\n{}...", header, truncated);
     }
-    const size_t totalLineCount = agentxx::util::countLines(s);
+    const size_t totalLineCount = utilxx_base::countLines(s);
     if (lastLineIndex >= targetIndex / 3) {
         // 行边界截断可行: 显示 [1, lineCount], 隐藏 [lineCount+1, total]
         std::string header;
@@ -362,7 +362,7 @@ inline void killProcGroup(boost::process::process& proc, void* winJob) {
         ::TerminateJobObject(static_cast<HANDLE>(winJob), 260);
         return;
     }
-    neograph_asio_error_code ec;
+    utilxx_base::AsioErrorCode ec;
     proc.terminate(ec);
 #else
     // setsid 启动, pgid == pid; kill 负 pid 整组清理 (含 bash 派生的子孙进程)
@@ -378,7 +378,7 @@ inline void killProcGroup(boost::process::process& proc, void* winJob) {
 /// - 仅在 kill 之后调用 (正常结束路径由子进程自然关闭写端, 无需关闭)
 /// - Linux 整组 SIGKILL 后子进程写端必然关闭, 此调用幂等无害
 inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip) {
-    neograph_asio_error_code ec;
+    utilxx_base::AsioErrorCode ec;
     outpip.close(ec);
     errpip.close(ec);
 }
@@ -390,21 +390,21 @@ inline std::string makeTimeoutResult(
     std::string    strerr,
     const StoreFn& storeFn = nullptr
 ) {
-    if (false == (strout.empty() || agentxx::util::autoConvertToUtf8(strout))) {
+    if (false == (strout.empty() || utilxx_base::autoConvertToUtf8(strout))) {
         strout = "[StdOut conversion to utf8 failed, discard]";
     } else if (!strout.empty()) {
         long long id = -1;
         // 仅超限时才 offload 到 share_store
-        if (storeFn && agentxx::util::utf8GetLength(strout) > kMaxStdOutUtf8Length) {
+        if (storeFn && utilxx_base::utf8GetLength(strout) > kMaxStdOutUtf8Length) {
             id = storeFn(strout);
         }
         strout = truncateStdOut(strout, id);
     }
-    if (false == (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr))) {
+    if (false == (strerr.empty() || utilxx_base::autoConvertToUtf8(strerr))) {
         strerr = "[StdErr conversion to utf8 failed, discard]";
     } else if (!strerr.empty()) {
         long long id = -1;
-        if (storeFn && agentxx::util::utf8GetLength(strerr) > kMaxStdErrUtf8Length) {
+        if (storeFn && utilxx_base::utf8GetLength(strerr) > kMaxStdErrUtf8Length) {
             id = storeFn(strerr);
         }
         strerr = truncateStdErr(strerr, id);
@@ -435,7 +435,7 @@ struct WinProcLaunch {
 };
 
 inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
-    const auto psInfo = agentxx::util::detectPowerShell();
+    const auto psInfo = utilxx_base::detectPowerShell();
     if (psInfo.available) {
         // -Command 后的多个 argv 元素会被 PowerShell 用空格拼接成一条命令串,
         // 因此必须作为单个元素传入 (脚本内可含换行, PowerShell 按语句解析)
@@ -479,7 +479,7 @@ inline asio::awaitable<std::string> runProcPipeline(
     std::string_view         sessionKey     = {}
 ) {
     std::string              strout, strerr;
-    neograph_asio_error_code errCodeStdOut, errCodeStdErr;
+    utilxx_base::AsioErrorCode errCodeStdOut, errCodeStdErr;
     // awaitable 为 move-only: 创建后 move 进 && 组合 (不可拷贝)
     auto readStdOutFuture = asio::async_read(
         outpip,
@@ -516,11 +516,11 @@ inline asio::awaitable<std::string> runProcPipeline(
                 // 手动裁剪: 每路 stdout/stderr 独立按 UTF-8 长度限制, 格式与
                 // ToolcallNode::execTool 的 [Content offloaded...] 保持一致，通过 storeFn
                 // 将完整内容 offload 到 share_store（超限时）并带 ID
-                if (strout.empty() || agentxx::util::autoConvertToUtf8(strout)) {
+                if (strout.empty() || utilxx_base::autoConvertToUtf8(strout)) {
                     if (!strout.empty()) {
                         long long id = -1;
                         if (storeFn
-                            && agentxx::util::utf8GetLength(strout)
+                            && utilxx_base::utf8GetLength(strout)
                                    > detail::kMaxStdOutUtf8Length) {
                             id = storeFn(strout);
                         }
@@ -535,11 +535,11 @@ inline asio::awaitable<std::string> runProcPipeline(
                 } else {
                     result << "[StdOut conversion to utf8 failed, discard]\n";
                 }
-                if (strerr.empty() || agentxx::util::autoConvertToUtf8(strerr)) {
+                if (strerr.empty() || utilxx_base::autoConvertToUtf8(strerr)) {
                     if (!strerr.empty()) {
                         long long id = -1;
                         if (storeFn
-                            && agentxx::util::utf8GetLength(strerr)
+                            && utilxx_base::utf8GetLength(strerr)
                                    > detail::kMaxStdErrUtf8Length) {
                             id = storeFn(strerr);
                         }
@@ -618,7 +618,7 @@ inline asio::awaitable<std::string> runProcPipeline(
 
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
 inline asio::awaitable<std::string> bashExecuteAsync(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled    = nullptr,
     const StoreFn&             storeFn        = nullptr,
@@ -702,7 +702,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 
 /// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
 inline asio::awaitable<std::string> windowsExecuteAsync(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled    = nullptr,
     const StoreFn&             storeFn        = nullptr,
@@ -817,7 +817,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 // =====================================================================
 
 inline std::string bashExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled    = nullptr,
     const StoreFn&             storeFn        = nullptr,
@@ -846,7 +846,7 @@ inline std::string bashExecute(
 #endif
     if (!pipe) {
         auto ec = std::error_code{errno, std::system_category()};
-        return agentxx::util::Json{
+        return utilxx_base::Json{
             {"error", fmt::format("Exec command failed. Error: {}", ec.message())},
         }
             .dump();
@@ -858,11 +858,11 @@ inline std::string bashExecute(
         result << buffer.data();
     }
     std::string out = result.str();
-    agentxx::util::autoConvertToUtf8(out);
+    utilxx_base::autoConvertToUtf8(out);
     // 手动裁剪: popen 回退同样按 stdout 限制截断 (不依赖 ToolcallNode)
     if (!out.empty()) {
         long long id = -1;
-        if (storeFn && agentxx::util::utf8GetLength(out) > detail::kMaxStdOutUtf8Length) {
+        if (storeFn && utilxx_base::utf8GetLength(out) > detail::kMaxStdOutUtf8Length) {
             id = storeFn(out);
         }
         out = detail::truncateStdOut(out, id);
@@ -871,7 +871,7 @@ inline std::string bashExecute(
 }
 
 inline std::string windowsExecute(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const std::string&         workDir,
     const IsCancelledFn&       isCancelled    = nullptr,
     const StoreFn&             storeFn        = nullptr,

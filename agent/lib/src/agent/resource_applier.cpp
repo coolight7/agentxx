@@ -8,7 +8,7 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 
 #include <algorithm>
 #include <asio/co_spawn.hpp>

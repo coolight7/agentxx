@@ -19,6 +19,7 @@
 ///        TUI 按通用渲染器展示, 无任何 plan 特化代码;
 ///     ② Info 栏段落渲染最近一次规划概览
 #include "agentxx_planning_plugin.h"
+#include "utilxx_base/json.h"
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -198,7 +199,7 @@ std::string hostDataDir(const PluginCtx& ctx) {
     std::string s(j.data, static_cast<size_t>(j.size));
     agentxx::plugin::PluginString::free(ctx.host, &j);
     try {
-        auto o = agentxx::util::Json::parse(s);
+        auto o = utilxx_base::Json::parse(s);
         return o.value("dataDir", std::string{});
     } catch (...) {
         return {};
@@ -329,7 +330,7 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
             }
             std::string sessionId;
             try {
-                sessionId = agentxx::util::Json::parse(
+                sessionId = utilxx_base::Json::parse(
                                 std::string{event_json->data, static_cast<size_t>(event_json->size)}
                 )
                                 .value("sessionId", std::string{});
@@ -378,14 +379,14 @@ static int planningSetup(PluginCtx* ctx) {
     const AgentxxPluginHost* host = ctx->host;
     // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts 与 toolPrompt)
     if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
-        agentxx::util::Json j;
-        j["appendSystemPrompts"]             = agentxx::util::Json::object();
+        utilxx_base::Json j;
+        j["appendSystemPrompts"]             = utilxx_base::Json::object();
         j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
 
-        agentxx::util::Json toolPrompt         = agentxx::util::Json::object();
-        agentxx::util::Json planningPrompt     = agentxx::util::Json::object();
+        utilxx_base::Json toolPrompt         = utilxx_base::Json::object();
+        utilxx_base::Json planningPrompt     = utilxx_base::Json::object();
         planningPrompt["depict"]               = std::string{kDepictPlanning};
-        agentxx::util::Json args               = agentxx::util::Json::object();
+        utilxx_base::Json args               = utilxx_base::Json::object();
         args["mode"]                           = std::string{kArgModeDesc};
         args["roadmap"]                        = std::string{kArgRoadmapDesc};
         args["todos"]                          = std::string{kArgTodosDesc};
@@ -430,8 +431,8 @@ static int planningSetup(PluginCtx* ctx) {
             [](PluginCtx& c, std::string_view args_json, std::string_view thread_id
             ) -> std::string {
                 std::string argsStr(args_json.data() ? args_json.data() : "", args_json.size());
-                auto        arguments = argsStr.empty() ? agentxx::util::Json::object()
-                                                        : agentxx::util::Json::parse(argsStr);
+                auto        arguments = argsStr.empty() ? utilxx_base::Json::object()
+                                                        : utilxx_base::Json::parse(argsStr);
 
                 const auto mode = arguments.value("mode", std::string{});
                 if (mode != "write" && mode != "read") {
@@ -448,7 +449,7 @@ static int planningSetup(PluginCtx* ctx) {
                         return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
                     }
                     try {
-                        auto v = agentxx::util::Json::parse(saved);
+                        auto v = utilxx_base::Json::parse(saved);
                         return v.dump(2);
                     } catch (...) {
                         return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
@@ -466,11 +467,11 @@ static int planningSetup(PluginCtx* ctx) {
                 }
                 std::string notes = arguments.value("notes", std::string{});
 
-                agentxx::util::Json planStore = agentxx::util::Json::object();
+                utilxx_base::Json planStore = utilxx_base::Json::object();
                 planStore["roadmap"]          = roadmap;
                 if (!todosJson.empty()) {
                     try {
-                        planStore["todos"] = agentxx::util::Json::parse(todosJson);
+                        planStore["todos"] = utilxx_base::Json::parse(todosJson);
                     } catch (...) {
                         return R"({"error":"Arg `todos` is not valid JSON"})";
                     }
@@ -683,7 +684,7 @@ std::string_view todoRole(std::string_view state) {
 } // namespace
 
 /// 折叠头一行摘要: todos 格式化为 "[~] a; [ ] b" (与历史 TUI 预览一致)
-static std::string buildTodosSummary(const agentxx::util::Json& plan) {
+static std::string buildTodosSummary(const utilxx_base::Json& plan) {
     std::string summary;
     if (!plan.contains("todos") || !plan["todos"].is_array()) {
         return summary;
@@ -713,9 +714,9 @@ static std::string buildTodosSummary(const agentxx::util::Json& plan) {
 
 /// 追加 Todo 列表与 Note 备忘 items (消息装饰/类型级渲染器/Info 段落共用,
 /// 避免多处渲染漂移; 调用方见 [buildPlanItems])
-static void appendTodoAndNoteItems(const agentxx::util::Json& plan, agentxx::util::Json& items) {
+static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::Json& items) {
     auto textItem = [&](const std::string& text, const std::string& role) {
-        agentxx::util::Json item = agentxx::util::Json::object();
+        utilxx_base::Json item = utilxx_base::Json::object();
         item["kind"]             = "text";
         item["role"]             = role;
         item["text"]             = text;
@@ -760,31 +761,31 @@ static void appendTodoAndNoteItems(const agentxx::util::Json& plan, agentxx::uti
 /// - `graphAsButton` true:  "|- " 前缀 + 可点 Graph 按钮 (Info 段落, 点击经
 ///   action_id="planning.open_graph" 弹窗; owner_id 由宿主组装)
 /// - plan 显式带 items 数组时直接透传 (read 模式占位提示等自定义内容)
-static agentxx::util::Json buildPlanItems(const agentxx::util::Json& plan, bool graphAsButton) {
+static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool graphAsButton) {
     if (plan.contains("items") && plan["items"].is_array()) {
         return plan["items"];
     }
-    agentxx::util::Json items = agentxx::util::Json::array();
+    utilxx_base::Json items = utilxx_base::Json::array();
 
     // ---- Graph: 状态图 ----
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
         if (graphAsButton) {
-            agentxx::util::Json prefix = agentxx::util::Json::object();
+            utilxx_base::Json prefix = utilxx_base::Json::object();
             prefix["kind"]             = "text";
             prefix["role"]             = "normal";
             prefix["text"]             = "|- ";
             items.push_back(std::move(prefix));
 
-            agentxx::util::Json button = agentxx::util::Json::object();
+            utilxx_base::Json button = utilxx_base::Json::object();
             button["kind"]             = "button";
             button["label"]            = "Graph";
             button["action_id"]        = kActionOpenGraph;
-            button["args"]             = agentxx::util::Json::object();
+            button["args"]             = utilxx_base::Json::object();
             button["role"]             = "normal";
             items.push_back(std::move(button));
         } else {
-            agentxx::util::Json diagram = agentxx::util::Json::object();
+            utilxx_base::Json diagram = utilxx_base::Json::object();
             diagram["kind"]             = "diagram";
             diagram["mermaid"]          = roadmap;
             items.push_back(std::move(diagram));
@@ -799,10 +800,10 @@ static agentxx::util::Json buildPlanItems(const agentxx::util::Json& plan, bool 
 
 /// read 模式结果尚未返回时的占位内容 (展开体一行提示; 结果到达后渲染器/
 /// 装饰按新的输入特征重新计算)
-static agentxx::util::Json makeReadingPlaceholderPlan() {
-    agentxx::util::Json plan = agentxx::util::Json::object();
-    plan["items"]            = agentxx::util::Json::array();
-    agentxx::util::Json hint = agentxx::util::Json::object();
+static utilxx_base::Json makeReadingPlaceholderPlan() {
+    utilxx_base::Json plan = utilxx_base::Json::object();
+    plan["items"]            = utilxx_base::Json::array();
+    utilxx_base::Json hint = utilxx_base::Json::object();
     hint["kind"]             = "text";
     hint["role"]             = "hint";
     hint["text"]             = "Reading saved planning...";
@@ -814,11 +815,11 @@ static agentxx::util::Json makeReadingPlaceholderPlan() {
 struct PlanDecorParts {
     std::string         displayName = kDisplayName;
     std::string         summary;
-    agentxx::util::Json items = agentxx::util::Json::array();
+    utilxx_base::Json items = utilxx_base::Json::array();
 };
 
 /// 规划 JSON → 渲染三要素 (实时装饰推送与类型级渲染器共用, 保证两条路径内容一致)
-static PlanDecorParts buildPlanDecorParts(const agentxx::util::Json& plan) {
+static PlanDecorParts buildPlanDecorParts(const utilxx_base::Json& plan) {
     PlanDecorParts parts;
     parts.summary = buildTodosSummary(plan);
     parts.items   = buildPlanItems(plan, /*graphAsButton=*/false);
@@ -833,14 +834,14 @@ static PlanDecorParts buildPlanDecorParts(const agentxx::util::Json& plan) {
 static bool planFromToolCall(
     std::string_view     argsJson,
     std::string_view     resultText,
-    agentxx::util::Json& plan,
+    utilxx_base::Json& plan,
     bool&                readPlaceholder
 ) {
     readPlaceholder = false;
-    agentxx::util::Json args;
+    utilxx_base::Json args;
     try {
-        args = argsJson.empty() ? agentxx::util::Json::object()
-                                : agentxx::util::Json::parse(argsJson);
+        args = argsJson.empty() ? utilxx_base::Json::object()
+                                : utilxx_base::Json::parse(argsJson);
     } catch (...) {
         return false;
     }
@@ -856,7 +857,7 @@ static bool planFromToolCall(
         return true;
     }
     try {
-        plan = agentxx::util::Json::parse(resultText);
+        plan = utilxx_base::Json::parse(resultText);
     } catch (...) {
         return false;
     }
@@ -869,7 +870,7 @@ static void
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host || toolCallId.empty()) {
         return;
     }
-    agentxx::util::Json decor   = agentxx::util::Json::object();
+    utilxx_base::Json decor   = utilxx_base::Json::object();
     decor["displayName"]        = parts.displayName;
     decor["summary"]            = parts.summary;
     decor["items"]              = parts.items;
@@ -882,7 +883,7 @@ static void
 
 /// 按规划 JSON 推送装饰 (实时路径; 内容与类型级渲染器同源)
 static void
-    pushToolDecor(ClientCtx& ctx, const std::string& toolCallId, const agentxx::util::Json& plan) {
+    pushToolDecor(ClientCtx& ctx, const std::string& toolCallId, const utilxx_base::Json& plan) {
     pushToolDecorParts(ctx, toolCallId, buildPlanDecorParts(plan));
 }
 
@@ -902,7 +903,7 @@ static void buildPlanningToolRender(
 ) {
     out.displayName = kDisplayName;
 
-    agentxx::util::Json plan;
+    utilxx_base::Json plan;
     bool                readPlaceholder = false;
     if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
         return;
@@ -957,9 +958,9 @@ static void refreshPlanSection(ClientCtx& ctx) {
     if (!ctx.section || ctx.last_plan_json.empty()) {
         return;
     }
-    agentxx::util::Json plan;
+    utilxx_base::Json plan;
     try {
-        plan = agentxx::util::Json::parse(ctx.last_plan_json);
+        plan = utilxx_base::Json::parse(ctx.last_plan_json);
     } catch (...) {
         return;
     }
@@ -973,7 +974,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     if (items.empty()) {
         return; // 内容为空不推送, 避免出现只有标题的空段落
     }
-    agentxx::util::Json payload = agentxx::util::Json::object();
+    utilxx_base::Json payload = utilxx_base::Json::object();
     payload["items"]            = items;
     const std::string json      = payload.dump();
     auto              jsonSv    = agentxx::plugin::PluginStringView::from(json.data(), json.size());
@@ -1049,9 +1050,9 @@ static void AGENTXX_PLUGIN_CALL
         if (raw.find("\"agentxx_planning\"") == std::string_view::npos) {
             return;
         }
-        agentxx::util::Json d;
+        utilxx_base::Json d;
         try {
-            d = agentxx::util::Json::parse(raw);
+            d = utilxx_base::Json::parse(raw);
         } catch (...) {
             return;
         }
@@ -1067,7 +1068,7 @@ static void AGENTXX_PLUGIN_CALL
         if (type == "tool_start") {
             const auto argsStr = d.value("arguments", std::string{});
             // 与类型级渲染器同一解析 (mode=read 时结果未返回 → 占位提示)
-            agentxx::util::Json plan;
+            utilxx_base::Json plan;
             bool                readPlaceholder = false;
             if (!planFromToolCall(argsStr, std::string_view{}, plan, readPlaceholder)) {
                 return;
@@ -1080,7 +1081,7 @@ static void AGENTXX_PLUGIN_CALL
         // tool_end: 以缓存的最终参数重建 (write 完整内容; read 展示已保存规划)
         auto it = ctx->pending_args.find(callId);
         if (it != ctx->pending_args.end()) {
-            agentxx::util::Json plan;
+            utilxx_base::Json plan;
             bool                readPlaceholder = false;
             if (planFromToolCall(
                     it->second,
@@ -1167,7 +1168,7 @@ static int planningClientSetup(ClientCtx* ctx) {
     //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind
     // - ui 缺失或 bind 为 NULL (CLI/老宿主) 时静默降级: 内容仍推送, 按钮不可点
     if (ctx->ui && ctx->ui->bind_action_handler) {
-        ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx](const agentxx::util::Json&) {
+        ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx](const utilxx_base::Json&) {
             auto* c = ctxPtr;
             if (!c || !c->host || !c->ui || !c->ui->open_overlay || c->last_plan_json.empty()) {
                 return;
@@ -1175,7 +1176,7 @@ static int planningClientSetup(ClientCtx* ctx) {
             std::string roadmap;
             try {
                 roadmap
-                    = agentxx::util::Json::parse(c->last_plan_json).value("roadmap", std::string{});
+                    = utilxx_base::Json::parse(c->last_plan_json).value("roadmap", std::string{});
             } catch (...) {
                 return;
             }

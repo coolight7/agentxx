@@ -5,6 +5,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include <map>
 #include <memory>
 #include <optional>
@@ -37,13 +38,13 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .message      = t.value("message", std::string{}),
                 // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
                 .messages = (t.contains("messages") && t["messages"].is_array())
-                                ? std::optional<agentxx::util::Json>{t["messages"]}
+                                ? std::optional<utilxx_base::Json>{t["messages"]}
                                 : std::nullopt,
                 // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
                 .sessionId = t.value("sessionId", std::string{}),
                 // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
                 .tools = (t.contains("tools") && t["tools"].is_array())
-                             ? std::optional<agentxx::util::Json>{t["tools"]}
+                             ? std::optional<utilxx_base::Json>{t["tools"]}
                              : std::nullopt,
                 // 压缩中间件开关: 缺省不设置 (继承 config 默认)
                 .enableSummarization
@@ -61,11 +62,11 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .systemPrompt = arg.value("system_prompt", std::string{}),
             .message      = arg.value("message", std::string{}),
             .messages     = (arg.contains("messages") && arg["messages"].is_array())
-                                ? std::optional<agentxx::util::Json>{arg["messages"]}
+                                ? std::optional<utilxx_base::Json>{arg["messages"]}
                                 : std::nullopt,
             .sessionId    = arg.value("sessionId", std::string{}),
             .tools        = (arg.contains("tools") && arg["tools"].is_array())
-                                ? std::optional<agentxx::util::Json>{arg["tools"]}
+                                ? std::optional<utilxx_base::Json>{arg["tools"]}
                                 : std::nullopt,
             .enableSummarization
             = (arg.contains("enable_summarization") && arg["enable_summarization"].is_boolean())
@@ -116,7 +117,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     }
 
     // 任务项结构 (tasks 数组元素, 与顶层单任务字段一致)
-    const auto taskItemSchema = agentxx::util::Json{
+    const auto taskItemSchema = utilxx_base::Json{
         {"type", "object"},
         {
          "properties", {
@@ -198,10 +199,10 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                     },
                 },
             }, },
-        {"required", agentxx::util::Json::array({"subagent", "message"})},
+        {"required", utilxx_base::Json::array({"subagent", "message"})},
     };
 
-    agentxx::util::Json params = agentxx::util::Json{
+    utilxx_base::Json params = utilxx_base::Json{
         {"type", "object"},
         {
          "properties", {
@@ -228,7 +229,7 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         // 否则重载决议会优先选择 initializer_list 构造函数,
                         // 把 vector 包成单个元素产生 [[...]] 嵌套数组,
                         // 生成非法 enum schema 导致严格校验的上游 (如 gpt-5.6-luna) HTTP 400
-                        {"enum", agentxx::util::Json(subagentNameList)},
+                        {"enum", utilxx_base::Json(subagentNameList)},
                         {
                             "description",
                             fmt::format(
@@ -286,13 +287,13 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                 },
             }, },
         {
-         "required", agentxx::util::Json::array({"subagent", "message"}),
+         "required", utilxx_base::Json::array({"subagent", "message"}),
          },
     };
     return {"agentxx_subagent", prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::util::Json& arguments
+asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_base::Json& arguments
 ) {
     // 统一批量委派 (单发与批量合并):
     // - `tasks` 数组非空: 批量模式 (每项一个子代理任务, 并行运行)
@@ -306,14 +307,14 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::u
         std::string                        subagent;
         std::string                        systemPrompt;
         std::string                        message;
-        std::optional<agentxx::util::Json> messages;
+        std::optional<utilxx_base::Json> messages;
         std::string                        sessionId;
-        std::optional<agentxx::util::Json> tools;
+        std::optional<utilxx_base::Json> tools;
         std::optional<bool>                enableSummarization;
         std::string                        resultId;
     };
 
-    auto parseTask = [](const agentxx::util::Json& t) -> TaskArg {
+    auto parseTask = [](const utilxx_base::Json& t) -> TaskArg {
         TaskArg task;
         task.subagent     = t.value("subagent", std::string{});
         task.systemPrompt = t.value("system_prompt", std::string{});
@@ -386,9 +387,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::u
     auto result = co_await agentCtxPtr->middlewareHandleContext->requestInterrupt(
         sessionId,
         [&]() {
-            auto tasksJson = agentxx::util::Json::array();
+            auto tasksJson = utilxx_base::Json::array();
             for (const auto& task : tasks) {
-                auto t = agentxx::util::Json{
+                auto t = utilxx_base::Json{
                     {"subagent",      task.subagent    },
                     {"system_prompt", task.systemPrompt},
                     {"message",       task.message     },
@@ -417,7 +418,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::u
             }
             return agentxx::middleware::InterruptHandleArg{
                 .name     = "subagent",
-                .arg      = agentxx::util::Json{{"tasks", std::move(tasksJson)}},
+                .arg      = utilxx_base::Json{{"tasks", std::move(tasksJson)}},
                 .resultId = resultId,
                 // ui 留空: 该中断由 AgentRunner 按 name 拦截并经总线请求
                 // service.subagent 交宿主执行子代理, **不进入客户端渲染路径**
@@ -430,7 +431,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const agentxx::u
     // 提取结果: key = (tool_call_id + "_") + (task.result_id | 任务序号)
     // (与中断处理循环 buildSubagentResumeValues 共用 makeSubagentResumeKey 规则;
     //  前缀避免同一轮多个中断的序号 key 互相覆盖)
-    auto   outputs = agentxx::util::Json::array();
+    auto   outputs = utilxx_base::Json::array();
     size_t idx     = 0;
     for (const auto& task : tasks) {
         ++idx;

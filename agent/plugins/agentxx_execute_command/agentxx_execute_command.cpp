@@ -15,6 +15,7 @@
 #include "asio/awaitable.hpp"
 #include "execute_command_env.h"
 #include "execute_command_impl.h"
+#include "utilxx_base/json.h"
 #include <string>
 
 using namespace agentxx_execmd_plugin;
@@ -58,18 +59,18 @@ static void
         );
         return;
     }
-    agentxx::util::Json args = agentxx::util::Json::object();
+    utilxx_base::Json args = utilxx_base::Json::object();
     for (const auto& [name, desc] : prompt.args) {
         args[name] = desc;
     }
-    agentxx::util::Json tool = agentxx::util::Json::object();
+    utilxx_base::Json tool = utilxx_base::Json::object();
     tool["depict"]           = prompt.depict;
     tool["args"]             = std::move(args);
 
-    agentxx::util::Json tools    = agentxx::util::Json::object();
+    utilxx_base::Json tools    = utilxx_base::Json::object();
     tools[std::string{toolName}] = std::move(tool);
 
-    agentxx::util::Json patch = agentxx::util::Json::object();
+    utilxx_base::Json patch = utilxx_base::Json::object();
     patch["toolPrompt"]       = std::move(tools);
 
     const std::string js   = patch.dump();

@@ -72,26 +72,35 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 ---
 
-## 5. Tool Function Reuse (`agentxx_util`)
+## 5. Tool Function Reuse (`cxx_utilxx_base` / `cxx_utilxx`)
 
-Built-in plugins can reuse all core utility functions (string manipulation, encoding detection, UTF-8 conversion, path normalization, Base64, HTTP, SQLite, regex, logging, JSON, etc.) via the standalone static library `agentxx_util`:
+Built-in plugins can reuse all core utility functions (string manipulation, encoding detection, UTF-8 conversion, path normalization, Base64, logging, JSON, plus HTTP/SQLite/regex/diff/worktree) via two standalone static libraries. They live under `agent/third_party/` as project-maintained independent CMake projects (siblings of fmt/simdjson); the superbuild builds and installs them first, then `libagentxx` and each plugin pull the **static variants** via `find_package`:
 
 ```cmake
-find_package(agentxx_util REQUIRED)
-target_link_libraries(${PLUGIN_NAME} PRIVATE agentxx_util)
+# base utilities (no heavy deps): log/json/string/container/env/system probe/
+# cancel token/async offload
+find_package(cxx_utilxx_base REQUIRED)
+target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_base_static)
+
+# heavy utilities (depend on the base): HTTP/WS/SQLite/regex/router/diff/worktree/crypto
+find_package(cxx_utilxx REQUIRED)
+target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
 ```
 
 ```cpp
-#include "agentxx/util/string_util.h"
-auto b64 = agentxx::util::base64Encode(data);
-#include "agentxx/util/json.h"
-#include "agentxx/util/json_view.h"
-// Business/plugin code uniformly uses agentxx::util::Json/JsonView (simdjson-backed); hot read-only paths route via JsonView::parse first, then to_json() on hit
+#include "utilxx_base/string_util.h"
+auto b64 = utilxx_base::base64Encode(data);
+#include "utilxx_base/json.h"
+#include "utilxx_base/json_view.h"
+// Business/plugin code uniformly uses utilxx_base::Json/JsonView (simdjson-backed); hot read-only paths route via JsonView::parse first, then to_json() on hit
 ```
 
-- `agentxx_util` is compiled from all source files in `agent/lib/src/util/` (including `json.cpp`/`json_view.cpp`, simdjson-backed `agentxx::util::Json`/`JsonView`). Both `libagentxx` and individual plugins statically link their own copy; symbols are hidden via export visibility control without conflict. Dependencies are transitively propagated as `PUBLIC` (fmt, sqlite3, uchardet, iconv + simdjson, OpenSSL, hyperscan, uring; neograph/yyjson fully removed since JSON autonomization).
+- Library/namespace mapping: `cxx_utilxx_base` → `utilxx_base` (plus the cross-library contract `utilxx::CancelToken` and `utilxx::offloadAsync*` in `utilxx/cancel.h` / `utilxx/async_offload.h`); `cxx_utilxx` → `utilxx` (http/ws/sqlite/regex/router/diff/worktree/crypto).
+- Both build a shared and a static variant with libagentxx-style naming (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`; Debug appends `d`).
+- Both `libagentxx` and individual plugins statically link their own copy; symbols are hidden via export visibility control without conflict. Dependencies are transitively propagated as `PUBLIC` (fmt, simdjson, uchardet, iconv + OpenSSL, SQLite, html2md, Boost headers; hyper scan / io_uring are carried as absolute library paths so consumers need no pkg-config).
 - Intended as a convenience library for built-in plugins (built within the same superbuild with full dependencies). Third-party plugins only need the pure C header `plugin_api.h` / SDK `plugin_kit.h` without linking against host libraries.
 - Unreferenced modules are automatically pruned based on object file extraction (9 built-in plugins have `DT_NEEDED` pointing only to system libraries).
+- Split background and migration record: `resource/history/split-util-plugin-core/plan.md`.
 
 ---
 
@@ -688,7 +697,7 @@ Costs and rules that must be respected together with the implementation:
   |---|---|
   | `agentxx_websearch`: `web_search` / `web_fetch` / `web_fetch_markdown` | the bodies already were asio coroutines (`co_await HttpClient::*Async`); network waits no longer occupy the host worker pool and the per-instance HTTP keep-alive pool is reused |
   | `agentxx_execute_command`: `execute_bash_command` / `execute_windows_command` (Boost.Process v2 branch) | subprocess pipes and timers bind to the coroutine executor; concurrent commands share one poll sequence and one local reactor instead of each occupying a pool thread until its timeout |
-  | `agentxx_filesystem`: `read` / `write` / `edit` | `asio::stream_file` async IO; file IO is genuinely asynchronous (availability decided by `agentxx::util::isAsyncFileIoSupported()`: compile-time macro plus a runtime io_uring probe), avoiding pool-thread occupation for large files |
+  | `agentxx_filesystem`: `read` / `write` / `edit` | `asio::stream_file` async IO; file IO is genuinely asynchronous (availability decided by `utilxx_base::isAsyncFileIoSupported()`: compile-time macro plus a runtime io_uring probe), avoiding pool-thread occupation for large files |
 
 - **Kept on `blocking_tool` (explicit exceptions)**:
   - `agentxx_filesystem`: `list` / `glob` / `grep` — directory traversal plus whole-file
@@ -697,7 +706,7 @@ Costs and rules that must be respected together with the implementation:
   - `agentxx_execute_command`: the non-Boost.Process-v2 `popen` fallback (synchronous);
   - `agentxx_filesystem`: environments without asynchronous file IO (synchronous fallback;
     the registration side automatically switches back to `blocking_tool`) — availability is
-    decided by `agentxx::util::isAsyncFileIoSupported()`: either asio file IO is not enabled
+    decided by `utilxx_base::isAsyncFileIoSupported()`: either asio file IO is not enabled
     at compile time (neither `ASIO_HAS_FILE` nor `BOOST_ASIO_HAS_FILE` defined), or on
     Linux/Android no io_uring ring can be created at runtime (the seccomp filter of
     containers/VMs — `Seccomp: 2` in `/proc/self/status` — blocks `io_uring_setup`, and old

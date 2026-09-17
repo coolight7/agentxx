@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/tools/tool.h"
+#include "utilxx_base/json.h"
 
 namespace agentxx {
 namespace tools {
@@ -27,7 +28,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
 };
 
 } // namespace tools

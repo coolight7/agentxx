@@ -1,6 +1,6 @@
 #include "agentxx-test/core/test_aho_corasick.h"
 
-#include "agentxx/util/aho_corasick.h"
+#include "utilxx/aho_corasick.h"
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -15,7 +15,8 @@ int g_ac_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx;
 
 namespace {
 

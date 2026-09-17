@@ -1,5 +1,5 @@
 # agentxx_math —— 数学计算工具插件 (表达式求值)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static (Json/JsonView)
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_math)
@@ -29,9 +29,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_math_plugin.h / math_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView)
   )
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -56,13 +56,13 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-if (NOT TARGET agentxx_util)
-  find_package(agentxx_util REQUIRED)
+if (NOT TARGET cxx_utilxx_base_static)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_math_plugin.h / math_impl.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView)
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_base_static (Json/JsonView)
 )
 
 # 裸库名依赖解析目录
@@ -72,14 +72,8 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
 )
-if (AGENTXX_ENABLE_HYPERSCAN)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
-endif()
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26

@@ -4,8 +4,8 @@
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include <atomic>
@@ -28,12 +28,12 @@ static int  g_pluginCount      = 0;
 
 StdIOClientAgentIO::StdIOClientAgentIO() :
     logSink_(std::make_shared<StderrLogSink>()) {
-    agentxx::util::LogDispatcher::instance().addSink(logSink_);
+    utilxx_base::LogDispatcher::instance().addSink(logSink_);
 }
 
 StdIOClientAgentIO::~StdIOClientAgentIO() {
     if (logSink_) {
-        agentxx::util::LogDispatcher::instance().removeSink(logSink_);
+        utilxx_base::LogDispatcher::instance().removeSink(logSink_);
     }
 }
 
@@ -223,7 +223,7 @@ bool StdIOClientAgentIO::sendPluginDataUp(
     return true;
 }
 
-asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
+asio::awaitable<utilxx_base::Json> StdIOClientAgentIO::handleInterrupt(
     std::string_view sessionId,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -234,7 +234,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             argOpt = agentxx::middleware::InterruptHandleArg::fromJson(
-                agentxx::util::Json::parse(interruptArgJson)
+                utilxx_base::Json::parse(interruptArgJson)
             );
             return true;
         },
@@ -244,7 +244,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
         }
     );
     if (!argOpt.has_value()) {
-        co_return agentxx::util::Json::object();
+        co_return utilxx_base::Json::object();
     }
     const auto& handleArg = argOpt.value();
 
@@ -276,7 +276,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
     }
 
     namespace mw                      = agentxx::middleware;
-    agentxx::util::Json values        = agentxx::util::Json::object();
+    utilxx_base::Json values        = utilxx_base::Json::object();
     bool                haveWaitInput = false;
     std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
 
@@ -378,7 +378,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                     // 输入序号 (1-based) 或候选项值
                     int64_t    index = 0;
                     const bool isIndex
-                        = agentxx::util::parseNumberFromString(inputValue, index).ec == std::errc{}
+                        = utilxx_base::parseNumberFromString(inputValue, index).ec == std::errc{}
                           && index >= 1 && index <= static_cast<int64_t>(block.options.size());
                     if (isIndex) {
                         values[id]   = block.options[static_cast<size_t>(index - 1)].value;
@@ -401,7 +401,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                 }
             } else if (block.control == "checkbox") {
                 std::string v = inputValue;
-                agentxx::util::toLowerSelf(v);
+                utilxx_base::toLowerSelf(v);
                 if (v.empty()) {
                     values[id] = block.defaultValue.is_boolean() && block.defaultValue.get<bool>();
                     inputSuccess = true;
@@ -420,7 +420,7 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                         num = std::trunc(num);
                     }
                     inputSuccess = true;
-                } else if (agentxx::util::parseNumberFromString(inputValue, num).ec == std::errc{}
+                } else if (utilxx_base::parseNumberFromString(inputValue, num).ec == std::errc{}
                            && (!block.integer || num == std::trunc(num))
                            && (!block.hasMin || num >= block.minValue)
                            && (!block.hasMax || num <= block.maxValue)) {
@@ -428,8 +428,8 @@ asio::awaitable<agentxx::util::Json> StdIOClientAgentIO::handleInterrupt(
                 }
                 if (inputSuccess) {
                     // 括号构造: 单元素花括号会生成数组而非数值
-                    values[id] = block.integer ? agentxx::util::Json(static_cast<int64_t>(num))
-                                               : agentxx::util::Json(num);
+                    values[id] = block.integer ? utilxx_base::Json(static_cast<int64_t>(num))
+                                               : utilxx_base::Json(num);
                 }
             } else if (block.control == "text") {
                 // 文本控件: 空输入取默认值 (默认值可为空串)

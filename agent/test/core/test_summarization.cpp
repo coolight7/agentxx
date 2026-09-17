@@ -32,6 +32,7 @@
 #include "neograph/graph/run_context.h"
 #include "neograph/graph/state.h"
 #include "neograph/types.h"
+#include "utilxx_base/json.h"
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -64,7 +65,7 @@ public:
     /// 预设的摘要文本 (空串模拟压缩失败)
     std::string summary;
     /// 记录每次调用收到的参数
-    std::vector<agentxx::util::Json> receivedArguments;
+    std::vector<utilxx_base::Json> receivedArguments;
     /// 是否返回错误 (true 时返回 error json, 模拟 subagent 执行失败)
     bool failWithError = false;
     /// 是否抛出异常 (true 时 execute_async 抛 std::runtime_error,
@@ -77,7 +78,7 @@ public:
     ) :
         SubAgentManagerTool(in_nodeName, std::move(in_agentContext)) {}
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
         receivedArguments.emplace_back(arguments);
         if (throwException) {
             throw std::runtime_error("fake subagent crashed");
@@ -246,7 +247,7 @@ static size_t maxContextTokensOf(
 static agentxx::middleware::SummarizationToolHandle makeReadFileHandle() {
     agentxx::middleware::SummarizationToolHandle th;
     th.generateDeduplicationKey
-        = [](const agentxx::util::Json& args) -> std::optional<std::string> {
+        = [](const utilxx_base::Json& args) -> std::optional<std::string> {
         if (!args.is_object()) {
             return std::nullopt;
         }
@@ -266,7 +267,7 @@ static agentxx::middleware::SummarizationToolHandle makeReadFileHandle() {
 /// planning 风格: 恒定 key, 仅截断旧 request
 static agentxx::middleware::SummarizationToolHandle makeConstantKeyHandle(std::string key) {
     agentxx::middleware::SummarizationToolHandle th;
-    th.generateDeduplicationKey = [key = std::move(key)](const agentxx::util::Json&) {
+    th.generateDeduplicationKey = [key = std::move(key)](const utilxx_base::Json&) {
         return std::optional<std::string>{key};
     };
     th.truncateRequest = [](neograph::ToolCall& tc) {
@@ -312,7 +313,7 @@ static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
         ctx->middlewareHandleContext->setGraphDataItemValue(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
-            agentxx::util::Json(*apiTokenUsage)
+            utilxx_base::Json(*apiTokenUsage)
         );
     } else {
         ctx->middlewareHandleContext->removeGraphDataItem(
@@ -687,7 +688,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             p3.mergeFromJson(p2.toJson());
             XX_TEST_EXPECT_EQ(p3.appendSystemPrompts.at("summarization"), std::string{"CUSTOM"});
             // 缺失字段合并: 保持原值
-            agentxx::util::Json partial = agentxx::util::Json{
+            utilxx_base::Json partial = utilxx_base::Json{
                 {"systemPrompt", "SYS"}
             };
             p3.mergeFromJson(partial);
@@ -1698,10 +1699,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
         // ② resume: 按 key 规则回填结果 ("1" = 无 resultId 时按序号兜底),
         //    再次调用返回摘要文本, 不再抛中断
-        ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+        ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
             sid,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"1", "real-tool summary"}
         }
         );
@@ -2181,10 +2182,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(pendingTipId, session->viewMessages[0].id);
 
         // ② 续跑 (resume): 预置中断结果, 再次执行 → 复用同一提示消息并更新为结果文本
-        ctx->middlewareHandleContext->setGraphDataItemValue<agentxx::util::Json>(
+        ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
             sid,
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"1", "resume summary"}
         }
         );

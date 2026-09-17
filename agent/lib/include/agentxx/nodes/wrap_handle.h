@@ -3,7 +3,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/neograph_json_bridge.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
 #include <cstdlib>

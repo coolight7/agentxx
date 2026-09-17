@@ -30,9 +30,9 @@
 #include "agentxx/plugin/plugin_common.h"
 #include "agentxx/plugin/plugin_driver.h"
 #include "agentxx/plugin/plugin_runtime.h"
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/post.hpp"
@@ -85,7 +85,7 @@ struct PluginInstanceBase {
     std::string path;        ///< 加载的库路径/内置路径
     /// 插件配置参数 (yaml `plugins` 条目 args; 宿主原样保存, 经 vtable
     /// get_plugin_args 整体返回给插件, 不解析其字段语义)
-    agentxx::util::Json args = agentxx::util::Json::object();
+    utilxx_base::Json args = utilxx_base::Json::object();
     /// 插件配置文件所在目录或文件路径 (yaml `config`, 归一化为绝对路径)
     std::string              configPath;
     std::vector<std::string> depends; ///< 必选依赖 (未安装加载失败; 卸载/禁用级联)
@@ -594,8 +594,8 @@ public:
     }
 
     void releasePluginName(std::string_view name) {
-        // 异构删除复用 util::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
-        util::eraseHeterogeneous(loadingNames_, name);
+        // 异构删除复用 utilxx_base::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
+        utilxx_base::eraseHeterogeneous(loadingNames_, name);
     }
 
     bool isPluginNameLoading(std::string_view name) const {

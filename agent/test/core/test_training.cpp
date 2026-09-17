@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/training.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -89,7 +89,7 @@ void testParseJsonFromResponse() {
 }
 
 void testTestCasesFromJson() {
-    auto j = agentxx::util::Json::parse(
+    auto j = utilxx_base::Json::parse(
         R"([
             {"name": "caseA", "input": "i1"},
             {"name": "caseA", "input": "i2"},
@@ -110,7 +110,7 @@ void testTestCasesFromJson() {
     XX_TEST_EXPECT_EQ(names.size(), size_t{4});
 
     // 非数组输入返回空且不抛异常
-    XX_TEST_EXPECT_TRUE(testCasesFromJson(agentxx::util::Json::object()).empty());
+    XX_TEST_EXPECT_TRUE(testCasesFromJson(utilxx_base::Json::object()).empty());
 }
 
 void testLoadTestCasesFromFile() {
@@ -138,7 +138,7 @@ void testLoadTestCasesFromFile() {
 }
 
 void testNormalizePromptPatch() {
-    auto parsed = agentxx::util::Json::parse(
+    auto parsed = utilxx_base::Json::parse(
         R"({
             "systemPrompt": "",
             "appendSystemPrompts": {
@@ -175,7 +175,7 @@ void testNormalizePromptPatch() {
 
     // 全部为空串时 patch 为空对象 (表示无修改)
     auto allEmpty = normalizePromptPatch(
-        agentxx::util::Json::parse(R"({"systemPrompt": "", "appendSystemPrompts": {"skill": ""}})")
+        utilxx_base::Json::parse(R"({"systemPrompt": "", "appendSystemPrompts": {"skill": ""}})")
     );
     XX_TEST_EXPECT_TRUE(allEmpty.is_object());
     XX_TEST_EXPECT_TRUE(allEmpty.empty());
@@ -189,7 +189,7 @@ void testMutateStringUtf8() {
     // 高变异率下输出仍是合法 UTF-8 (多字节字符不被拆坏)
     for (int round = 0; round < 20; ++round) {
         auto out = mutateStringUtf8(chinese, 0.8, rng);
-        XX_TEST_EXPECT_TRUE(agentxx::util::utf8IsAvail(out));
+        XX_TEST_EXPECT_TRUE(utilxx_base::utf8IsAvail(out));
         XX_TEST_EXPECT_FALSE(out.empty());
     }
     // 空串输入原样返回
@@ -241,7 +241,7 @@ void testVariantSerializationRoundtrip() {
     XX_TEST_EXPECT_EQ(back.promptHash(), v.promptHash());
 
     // 兼容旧格式: 无 smoothedScore/evalRounds 字段时取默认值
-    agentxx::util::Json old = agentxx::util::Json::object();
+    utilxx_base::Json old = utilxx_base::Json::object();
     old["id"]               = "legacy";
     old["cumulativeScore"]  = 1.0;
     old["testCount"]        = 2;

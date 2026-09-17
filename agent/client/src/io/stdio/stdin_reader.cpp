@@ -2,6 +2,7 @@
 
 #include "asio/as_tuple.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/asio_error.h"
 #include <iostream>
 #include <mutex>
 #include <utility>
@@ -16,9 +17,9 @@ StdinReader::StdinReader(asio::any_io_executor ex) :
         while (running_) {
             if (std::getline(std::cin, line)) {
                 channel_->async_send(
-                    neograph_asio_error_code{},
+                    utilxx_base::AsioErrorCode{},
                     std::move(line),
-                    [](neograph_asio_error_code) {}
+                    [](utilxx_base::AsioErrorCode) {}
                 );
             } else {
                 // EOF 或错误: 标记 eof, 并发一个 cancel 消息唤醒等待中的 readLine
@@ -26,7 +27,7 @@ StdinReader::StdinReader(asio::any_io_executor ex) :
                 channel_->async_send(
                     asio::experimental::channel_errc::channel_cancelled,
                     std::string{},
-                    [](neograph_asio_error_code) {}
+                    [](utilxx_base::AsioErrorCode) {}
                 );
                 break;
             }

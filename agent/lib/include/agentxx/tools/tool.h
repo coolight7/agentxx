@@ -6,6 +6,7 @@
 #include "fmt/base.h"
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
+#include "utilxx_base/json.h"
 #include <functional>
 #include <neograph/llm/rate_limited_provider.h>
 #include <neograph/llm/schema_provider.h>
@@ -25,7 +26,7 @@ namespace tools {
 /// - 会话不存在 (如非 toolcall 路径调用) 或令牌为空时返回 nullptr (无取消支持)
 std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
-    const agentxx::util::Json&                           args
+    const utilxx_base::Json&                           args
 );
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能
@@ -85,7 +86,7 @@ public:
     /// 业务主接口 (Json): 子类覆写此函数实现工具逻辑
     /// - 注意: 这不是 `neograph::Tool` 的虚覆盖 (签名不同), 而是本类新增虚函数;
     ///   子类用 `override` 关键字覆盖本函数 (如 GitWorktreeTool 等)
-    virtual asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments);
+    virtual asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments);
 
     /// 图兼容桥接: `neograph::Tool::execute_async` 的 override,
     /// 经 `fromNeographJson` 转发到 Json 主接口
@@ -130,7 +131,7 @@ public:
     neograph::ChatTool get_definition() const override;
 
     /// 业务主接口: 转发到被包装的 inner tool (Json 经桥接转换)
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& arguments) override;
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
 };
 
 } // namespace tools

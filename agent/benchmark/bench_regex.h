@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/util/regex.h"
+#include "utilxx/regex.h"
 #include "bench_util.h"
 #include <memory>
 #include <string>
@@ -14,7 +14,7 @@ inline void benchRegex() {
 
     {
         auto r = runBench("XXRegex::createRegex [single simple pattern]", 1000, [&]() {
-            auto re = agentxx::util::XXRegex::createRegex("hello");
+            auto re = utilxx::XXRegex::createRegex("hello");
             (void)re;
         });
         printResult(r);
@@ -22,7 +22,7 @@ inline void benchRegex() {
 
     {
         auto r = runBench("XXRegex::createRegex [single complex pattern]", 1000, [&]() {
-            auto re = agentxx::util::XXRegex::createRegex("\\d+\\.\\d+");
+            auto re = utilxx::XXRegex::createRegex("\\d+\\.\\d+");
             (void)re;
         });
         printResult(r);
@@ -32,21 +32,21 @@ inline void benchRegex() {
         std::vector<std::string> patterns
             = {"hello", "world", "foo", "bar", "baz", "\\d+", "[a-z]+", "test", "abc", "xyz"};
         auto r = runBench("XXRegex::createRegex [10 patterns]", 500, [&]() {
-            auto re = agentxx::util::XXRegex::createRegex(patterns);
+            auto re = utilxx::XXRegex::createRegex(patterns);
             (void)re;
         });
         printResult(r);
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("hello");
+        auto        re = utilxx::XXRegex::createRegex("hello");
         std::string text;
         for (int i = 0; i < 10000; ++i) {
             text += "hello world this is a test ";
         }
 
         auto r = runBench("XXRegex::match [single pattern, 250KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -54,14 +54,14 @@ inline void benchRegex() {
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("\\d+");
+        auto        re = utilxx::XXRegex::createRegex("\\d+");
         std::string text;
         for (int i = 0; i < 10000; ++i) {
             text += "abc123def456ghi789jkl";
         }
 
         auto r = runBench("XXRegex::match [\\d+ pattern, 200KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -70,14 +70,14 @@ inline void benchRegex() {
 
     {
         std::vector<std::string> patterns = {"hello", "world", "\\d+", "[a-z]+"};
-        auto                     re       = agentxx::util::XXRegex::createRegex(patterns);
+        auto                     re       = utilxx::XXRegex::createRegex(patterns);
         std::string              text;
         for (int i = 0; i < 10000; ++i) {
             text += "hello world 123 abc ";
         }
 
         auto r = runBench("XXRegex::match [4 patterns, 200KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -85,14 +85,14 @@ inline void benchRegex() {
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("hello");
+        auto        re = utilxx::XXRegex::createRegex("hello");
         std::string text;
         for (int i = 0; i < 10000; ++i) {
             text += "hello world this is a test ";
         }
 
         auto r = runBench("XXRegex::remove [single pattern, 250KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             auto                                           result = re->remove(text, results);
             (void)result;
         });
@@ -100,14 +100,14 @@ inline void benchRegex() {
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("\\d+");
+        auto        re = utilxx::XXRegex::createRegex("\\d+");
         std::string text;
         for (int i = 0; i < 10000; ++i) {
             text += "abc123def456ghi789jkl";
         }
 
         auto r = runBench("XXRegex::remove [\\d+ pattern, 200KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             auto                                           result = re->remove(text, results);
             (void)result;
         });
@@ -115,14 +115,14 @@ inline void benchRegex() {
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("hello");
+        auto        re = utilxx::XXRegex::createRegex("hello");
         std::string text;
         for (int i = 0; i < 10000; ++i) {
             text += "hello world this is a test ";
         }
 
         auto r = runBench("XXRegex::replace [single pattern, 250KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             auto result = re->replace(text, "HI", results);
             (void)result;
         });
@@ -130,14 +130,14 @@ inline void benchRegex() {
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("\\d+");
+        auto        re = utilxx::XXRegex::createRegex("\\d+");
         std::string text;
         for (int i = 0; i < 10000; ++i) {
             text += "abc123def456ghi789jkl";
         }
 
         auto r = runBench("XXRegex::replace [\\d+ pattern, 200KB text]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             auto result = re->replace(text, "NUM", results);
             (void)result;
         });
@@ -145,14 +145,14 @@ inline void benchRegex() {
     }
 
     {
-        auto        re = agentxx::util::XXRegex::createRegex("hello");
+        auto        re = utilxx::XXRegex::createRegex("hello");
         std::string text;
         for (int i = 0; i < 100000; ++i) {
             text += "no match here just regular text ";
         }
 
         auto r = runBench("XXRegex::match [no match, 3MB text]", 20, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -160,9 +160,9 @@ inline void benchRegex() {
     }
 
     {
-        auto re = agentxx::util::XXRegex::createRegex(
+        auto re = utilxx::XXRegex::createRegex(
             "hello",
-            agentxx::util::XXRegex::defHSFlags_onlyContains
+            utilxx::XXRegex::defHSFlags_onlyContains
         );
         std::string text;
         for (int i = 0; i < 10000; ++i) {
@@ -170,7 +170,7 @@ inline void benchRegex() {
         }
 
         auto r = runBench("XXRegex::match [onlyContains, match at start, 250KB]", 500, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -178,9 +178,9 @@ inline void benchRegex() {
     }
 
     {
-        auto re = agentxx::util::XXRegex::createRegex(
+        auto re = utilxx::XXRegex::createRegex(
             "hello",
-            agentxx::util::XXRegex::defHSFlags_onlyContains
+            utilxx::XXRegex::defHSFlags_onlyContains
         );
         std::string text;
         for (int i = 0; i < 100000; ++i) {
@@ -188,7 +188,7 @@ inline void benchRegex() {
         }
 
         auto r = runBench("XXRegex::match [onlyContains, no match, 3MB]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -196,9 +196,9 @@ inline void benchRegex() {
     }
 
     {
-        auto re = agentxx::util::XXRegex::createRegex(
+        auto re = utilxx::XXRegex::createRegex(
             "hello",
-            agentxx::util::XXRegex::defHSFlags_onlyContains
+            utilxx::XXRegex::defHSFlags_onlyContains
         );
         std::string text;
         for (int i = 0; i < 99999; ++i) {
@@ -207,7 +207,7 @@ inline void benchRegex() {
         text += "hello at the very end";
 
         auto r = runBench("XXRegex::match [onlyContains, match at end, 3MB]", 100, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             re->match(text, results);
             (void)results;
         });
@@ -215,10 +215,10 @@ inline void benchRegex() {
     }
 
     {
-        auto reNormal       = agentxx::util::XXRegex::createRegex("hello");
-        auto reOnlyContains = agentxx::util::XXRegex::createRegex(
+        auto reNormal       = utilxx::XXRegex::createRegex("hello");
+        auto reOnlyContains = utilxx::XXRegex::createRegex(
             "hello",
-            agentxx::util::XXRegex::defHSFlags_onlyContains
+            utilxx::XXRegex::defHSFlags_onlyContains
         );
         std::string text;
         for (int i = 0; i < 10000; ++i) {
@@ -226,7 +226,7 @@ inline void benchRegex() {
         }
 
         auto r1 = runBench("XXRegex::match [normal vs onlyContains - normal, 250KB]", 200, [&]() {
-            std::vector<agentxx::util::XXRegexMatchResult> results;
+            std::vector<utilxx::XXRegexMatchResult> results;
             reNormal->match(text, results);
             (void)results;
         });
@@ -236,7 +236,7 @@ inline void benchRegex() {
             "XXRegex::match [normal vs onlyContains - onlyContains, 250KB]",
             2000,
             [&]() {
-                std::vector<agentxx::util::XXRegexMatchResult> results;
+                std::vector<utilxx::XXRegexMatchResult> results;
                 reOnlyContains->match(text, results);
                 (void)results;
             }

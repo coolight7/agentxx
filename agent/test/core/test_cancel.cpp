@@ -3,9 +3,10 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/tools/tool.h"
-#include "agentxx/util/async_offload.h"
+#include "utilxx/async_offload.h"
+#include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/deferred.hpp"
@@ -85,20 +86,20 @@ asio::awaitable<void> test_isCancelAbort() {
     auto active = std::make_shared<neograph::graph::CancelToken>();
 
     XX_TEST_EXPECT_TRUE(agentxx::util::isCancelAbort(
-        neograph_asio_system_error(asio::error::operation_aborted),
+        utilxx_base::AsioSystemError(asio::error::operation_aborted),
         cancelled
     ));
     // 非 operation_aborted 错误码不算取消
     XX_TEST_EXPECT_FALSE(
-        agentxx::util::isCancelAbort(neograph_asio_system_error(asio::error::timed_out), cancelled)
+        agentxx::util::isCancelAbort(utilxx_base::AsioSystemError(asio::error::timed_out), cancelled)
     );
     // 无令牌 / 令牌未取消时按超时处理, 不算取消
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
-        neograph_asio_system_error(asio::error::operation_aborted),
+        utilxx_base::AsioSystemError(asio::error::operation_aborted),
         nullptr
     ));
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
-        neograph_asio_system_error(asio::error::operation_aborted),
+        utilxx_base::AsioSystemError(asio::error::operation_aborted),
         active
     ));
     co_return;
@@ -112,7 +113,7 @@ asio::awaitable<void> test_catchError_cancel_conversion() {
     try {
         agentxx::util::catchError<int>(
             []() -> int {
-                throw neograph_asio_system_error(asio::error::operation_aborted);
+                throw utilxx_base::AsioSystemError(asio::error::operation_aborted);
             },
             [](std::string) -> int {
                 return -1;
@@ -130,7 +131,7 @@ asio::awaitable<void> test_catchError_cancel_conversion() {
     auto errMsg = std::string{};
     auto result = agentxx::util::catchError<int>(
         []() -> int {
-            throw neograph_asio_system_error(asio::error::operation_aborted);
+            throw utilxx_base::AsioSystemError(asio::error::operation_aborted);
         },
         [&](std::string msg) -> int {
             errMsg = std::move(msg);
@@ -153,7 +154,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         try {
             co_await agentxx::util::catchErrorAsync<bool>(
                 []() -> asio::awaitable<bool> {
-                    throw neograph_asio_system_error(asio::error::operation_aborted);
+                    throw utilxx_base::AsioSystemError(asio::error::operation_aborted);
                     co_return true;
                 },
                 [](std::string) -> asio::awaitable<bool> {
@@ -175,7 +176,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         bool rethrowCalled = false;
         auto r             = co_await agentxx::util::catchErrorAsync<int>(
             []() -> asio::awaitable<int> {
-                throw neograph_asio_system_error(asio::error::operation_aborted);
+                throw utilxx_base::AsioSystemError(asio::error::operation_aborted);
                 co_return 0;
             },
             [](std::string) -> asio::awaitable<int> {
@@ -196,7 +197,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         auto errMsg = std::string{};
         auto r      = co_await agentxx::util::catchErrorAsync<int>(
             []() -> asio::awaitable<int> {
-                throw neograph_asio_system_error(asio::error::operation_aborted);
+                throw utilxx_base::AsioSystemError(asio::error::operation_aborted);
                 co_return 0;
             },
             [&](std::string msg) -> asio::awaitable<int> {
@@ -214,7 +215,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
         auto errMsg = std::string{};
         auto r      = co_await agentxx::util::catchErrorAsync<int>(
             []() -> asio::awaitable<int> {
-                throw neograph_asio_system_error(asio::error::operation_aborted);
+                throw utilxx_base::AsioSystemError(asio::error::operation_aborted);
                 co_return 0;
             },
             [&](std::string msg) -> asio::awaitable<int> {
@@ -245,7 +246,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
     g_da_sim_response_content = "Should never arrive";
-    g_da_sim_tool_calls       = agentxx::util::Json::array();
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
     g_da_sim_delay_ms         = 5000;
 
     agentxx::agent::CodeAgent agent(cfg);
@@ -331,7 +332,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
         std::fprintf(stderr, "[cancel-test-dbg] CancelSlowTool execute_async called!\n");
         executed_->store(true, std::memory_order_release);
         try {
@@ -370,7 +371,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json&) override {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
         // 标记 tool: 串行 toolcall 下排在 slow 之后, slow 被取消中断后不再执行
         executed_->store(true, std::memory_order_release);
         co_return "marker";
@@ -416,23 +417,23 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     g_da_sim_response_content = "";
     g_da_sim_delay_ms         = 0;
     // LLM 返回两个 toolcall: 先慢速 tool, 后标记 tool
-    g_da_sim_tool_calls = agentxx::util::Json::array({
-        agentxx::util::Json{
+    g_da_sim_tool_calls = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"index", 0},
                             {"id", "call_slow_1"},
                             {"type", "function"},
                             {"function",
-             agentxx::util::Json{
+             utilxx_base::Json{
                  {"name", "test_slow"},
                  {"arguments", "{}"},
              }},
                             },
-        agentxx::util::Json{
+        utilxx_base::Json{
                             {"index", 1},
                             {"id", "call_marker_1"},
                             {"type", "function"},
                             {"function",
-             agentxx::util::Json{
+             utilxx_base::Json{
                  {"name", "test_marker"},
                  {"arguments", "{}"},
              }},
@@ -522,7 +523,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     {
         auto                ex2 = co_await asio::this_coro::executor;
         asio::steady_timer  poll(ex2);
-        agentxx::util::Json im;
+        utilxx_base::Json im;
         bool                slowCanceled   = false;
         bool                markerCanceled = false;
         const auto          deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -530,7 +531,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
             auto sess      = agent.agentContext->sessions->get("cancel_tool_test");
-            im             = sess ? sess->llmMessages : agentxx::util::Json{};
+            im             = sess ? sess->llmMessages : utilxx_base::Json{};
             slowCanceled   = false;
             markerCanceled = false;
             if (im.is_array()) {
@@ -560,7 +561,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
         XX_TEST_EXPECT_TRUE(markerCanceled);
     }
 
-    g_da_sim_tool_calls = agentxx::util::Json::array();
+    g_da_sim_tool_calls = utilxx_base::Json::array();
     sim.stop();
     co_return;
 }
@@ -590,9 +591,9 @@ asio::awaitable<void> test_offload_cancel_token() {
     const auto startAt      = std::chrono::steady_clock::now();
     bool       caughtCancel = false;
     try {
-        co_await agentxx::util::offloadCancellableAsync<int>(
+        co_await utilxx::offloadCancellableAsync<int>(
             pool,
-            token,
+            agentxx::util::adaptCancelToken(token),
             [](std::atomic<bool>& cancelFlag) -> asio::awaitable<int> {
                 // 模拟长时间同步工作 (从不挂起): 每 10ms 轮询 flag, 取消时提前退出
                 for (int i = 0; i < 1000; ++i) {
@@ -621,9 +622,9 @@ asio::awaitable<void> test_offload_cancel_token() {
     cancelledToken->cancel();
     bool caughtCancel2 = false;
     try {
-        co_await agentxx::util::offloadCancellableAsync<int>(
+        co_await utilxx::offloadCancellableAsync<int>(
             pool,
-            cancelledToken,
+            agentxx::util::adaptCancelToken(cancelledToken),
             [](std::atomic<bool>& cancelFlag) -> asio::awaitable<int> {
                 if (cancelFlag.load(std::memory_order_acquire)) {
                     throw neograph::graph::CancelledException("offload cancelled");

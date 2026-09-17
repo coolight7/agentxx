@@ -11,16 +11,16 @@
 #include <thread>
 #include <vector>
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 
 #include "agentxx/agent/base_agent.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_server.h"
 
 namespace agentxx {
 namespace protocol {
 
-using json = agentxx::util::Json;
+using json = utilxx_base::Json;
 
 // ---------------------------------------------------------------------------
 // A2A 协议数据模型 (v1.0)
@@ -129,7 +129,7 @@ public:
     };
 
     struct Config {
-        util::HttpServer::Config httpConfig;
+        utilxx::HttpServer::Config httpConfig;
         std::string              a2aEndpoint   = "/a2a";
         std::string              sseEndpoint   = "/a2a/sse";
         std::string              agentCardPath = "/.well-known/agent-card.json";
@@ -208,14 +208,14 @@ private:
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
-        handleAgentCard(util::HttpServer::Request& req, util::HttpServer::Response& resp);
+        handleAgentCard(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp);
 
     asio::awaitable<void>
-        handleA2aRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
+        handleA2aRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp);
 
     asio::awaitable<void> handleSseRequest(
-        util::HttpServer::Request&                   req,
-        std::shared_ptr<util::HttpServer::SseWriter> writer
+        utilxx::HttpServer::Request&                   req,
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer
     );
 
     // -----------------------------------------------------------------------
@@ -259,7 +259,7 @@ private:
     // -----------------------------------------------------------------------
 
     void writeJsonResponse(
-        util::HttpServer::Response& resp,
+        utilxx::HttpServer::Response& resp,
         boost::beast::http::status  status,
         const json&                 body
     );
@@ -270,13 +270,13 @@ private:
 
     Config                                     config_;
     std::shared_ptr<agentxx::agent::BaseAgent> agent_;
-    std::unique_ptr<util::HttpServer>          httpServer_;
+    std::unique_ptr<utilxx::HttpServer>          httpServer_;
 
     mutable std::mutex                                              tasksMutex_;
     std::map<std::string, std::shared_ptr<TaskRecord>, std::less<>> tasks_;
 
     struct SSEClient {
-        std::shared_ptr<util::HttpServer::SseWriter> writer;
+        std::shared_ptr<utilxx::HttpServer::SseWriter> writer;
         std::atomic<bool>                            closed{false};
     };
 

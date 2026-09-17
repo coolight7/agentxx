@@ -5,7 +5,7 @@
 #include "agentxx/plugin/plugin_common.h"
 
 #include "agentxx/plugin/api/client_plugin_api.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "yaml-cpp/yaml.h"
 
 #include <system_error>

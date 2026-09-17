@@ -18,8 +18,8 @@
 ///   取回 choices[0].message.content 文本)
 #pragma once
 
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx/http_client.h"
+#include "utilxx_base/string_util.h"
 #include "asio/awaitable.hpp"
 #include <charconv>
 #include <chrono>
@@ -45,7 +45,7 @@ namespace detail {
 /// 解析 tool 参数中的 `timeout` (秒)
 /// - 支持数字或数字字符串 (部分模型会传字符串)
 /// - 非法/缺失时返回默认值; 返回值 <= 0 表示未指定, 使用默认配置
-inline int parseTimeoutArg(const agentxx::util::Json& args, int defaultSeconds) {
+inline int parseTimeoutArg(const utilxx_base::Json& args, int defaultSeconds) {
     if (!args.is_object()) {
         return defaultSeconds;
     }
@@ -68,8 +68,8 @@ inline int parseTimeoutArg(const agentxx::util::Json& args, int defaultSeconds) 
 /// - JSON 对象: {"User-Agent": "xx", "X-Api-Key": "v"} (非字符串值转为文本)
 /// - JSON 字符串数组: ["User-Agent: xx", "X-Api-Key: v"]
 /// - JSON 字符串: "User-Agent: xx" (多行时按行解析 "Name: value")
-inline agentxx::util::HeaderMap parseHeaderArg(const agentxx::util::Json& args) {
-    agentxx::util::HeaderMap headers;
+inline utilxx::HeaderMap parseHeaderArg(const utilxx_base::Json& args) {
+    utilxx::HeaderMap headers;
     if (!args.is_object()) {
         return headers;
     }
@@ -77,7 +77,7 @@ inline agentxx::util::HeaderMap parseHeaderArg(const agentxx::util::Json& args) 
 
     // 解析单行 "Name: value"
     auto addHeaderLine = [&headers](std::string line) {
-        line = agentxx::util::removeBetweenSpace(line);
+        line = utilxx_base::removeBetweenSpace(line);
         if (line.empty()) {
             return;
         }
@@ -85,11 +85,11 @@ inline agentxx::util::HeaderMap parseHeaderArg(const agentxx::util::Json& args) 
         if (pos == std::string::npos) {
             return;
         }
-        auto name = agentxx::util::removeBetweenSpace(line.substr(0, pos));
+        auto name = utilxx_base::removeBetweenSpace(line.substr(0, pos));
         if (name.empty()) {
             return;
         }
-        auto value = agentxx::util::removeBetweenSpace(line.substr(pos + 1));
+        auto value = utilxx_base::removeBetweenSpace(line.substr(pos + 1));
         headers.set(name, value);
     };
 
@@ -127,9 +127,9 @@ inline agentxx::util::HeaderMap parseHeaderArg(const agentxx::util::Json& args) 
     return headers;
 }
 
-inline agentxx::util::HttpClient::RequestConfig
+inline utilxx::HttpClient::RequestConfig
     makeConfig(int timeout, std::chrono::seconds defaultTimeout) {
-    auto config             = agentxx::util::HttpClient::RequestConfig{};
+    auto config             = utilxx::HttpClient::RequestConfig{};
     config.connectTimeout   = defaultTimeout;
     config.readChunkTimeout = (timeout > 0) ? std::chrono::seconds{timeout} : defaultTimeout;
     return config;
@@ -144,7 +144,7 @@ inline agentxx::util::HttpClient::RequestConfig
 // =====================================================================
 
 /// agentxx_web_fetch 执行体 (原 WebFetchUrlTool::execute_async)
-inline asio::awaitable<std::string> webFetchExecuteAsync(const agentxx::util::Json& arguments) {
+inline asio::awaitable<std::string> webFetchExecuteAsync(const utilxx_base::Json& arguments) {
     auto url = arguments.value("url", std::string{});
     if (url.empty()) {
         co_return R"({"error":"Arg `url` is empty"})";
@@ -154,13 +154,13 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const agentxx::util::Js
     const auto headers = detail::parseHeaderArg(arguments);
     const int  timeout = detail::parseTimeoutArg(arguments, 30);
 
-    auto resp = co_await agentxx::util::HttpClient::getAsync(
+    auto resp = co_await utilxx::HttpClient::getAsync(
         url,
         headers,
         detail::makeConfig(timeout, std::chrono::seconds{30})
     );
     if (resp.has_value()) {
-        if (false == agentxx::util::HttpClient::respIsSucc(resp.value())) {
+        if (false == utilxx::HttpClient::respIsSucc(resp.value())) {
             co_return fmt::format(
                 R"({{"error":"web_fetch_url failed, status {}, error: {}"}})",
                 resp.value().status,
@@ -172,7 +172,7 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const agentxx::util::Js
         if (data.empty()) {
             co_return R"({"error": "Http GET request Success, but got empty body."})";
         }
-        if (agentxx::util::autoConvertToUtf8(data)) {
+        if (utilxx_base::autoConvertToUtf8(data)) {
             co_return data;
         }
         co_return data;
@@ -182,7 +182,7 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const agentxx::util::Js
 
 /// agentxx_web_fetch_markdown 执行体 (原 WebFetchUrlMarkdownTool::execute_async)
 inline asio::awaitable<std::string>
-    webFetchMarkdownExecuteAsync(const agentxx::util::Json& arguments) {
+    webFetchMarkdownExecuteAsync(const utilxx_base::Json& arguments) {
     std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
         co_return R"({"error":"Arg `url` is empty"})";
@@ -192,7 +192,7 @@ inline asio::awaitable<std::string>
     const auto headers = detail::parseHeaderArg(arguments);
     const int  timeout = detail::parseTimeoutArg(arguments, 15);
 
-    auto resp = co_await agentxx::util::HttpClient::fetchMarkdown(
+    auto resp = co_await utilxx::HttpClient::fetchMarkdown(
         url,
         headers,
         detail::makeConfig(timeout, std::chrono::seconds{15})
@@ -210,7 +210,7 @@ inline asio::awaitable<std::string>
 /// agentxx_web_search 执行体 —— API URL 路径 (原 WebSearchTool::execute_async)
 /// - searchApiUrl 含 `{}` 占位符 (fmt::runtime), URL 编码后的 query 填入
 inline asio::awaitable<std::string> webSearchExecuteAsync(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     std::string_view           searchApiUrl,
     bool                       convertHtml2markdown
 ) {
@@ -219,7 +219,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
         co_return R"({"error":"Arg `query` is empty"})";
     }
     auto search_url
-        = fmt::format(fmt::runtime(searchApiUrl), agentxx::util::HttpClient::urlEncode(query));
+        = fmt::format(fmt::runtime(searchApiUrl), utilxx::HttpClient::urlEncode(query));
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
     const auto headers = detail::parseHeaderArg(arguments);
@@ -229,7 +229,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
         // 转换 HTML 结果为 Markdown
-        auto resp = co_await agentxx::util::HttpClient::fetchMarkdown(search_url, headers, config);
+        auto resp = co_await utilxx::HttpClient::fetchMarkdown(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& data = resp.value();
@@ -240,11 +240,11 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
         }
     } else {
         // 返回原始响应体
-        auto resp    = co_await agentxx::util::HttpClient::getAsync(search_url, headers, config);
+        auto resp    = co_await utilxx::HttpClient::getAsync(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& respVal = resp.value();
-            if (agentxx::util::HttpClient::respIsSucc(respVal)) {
+            if (utilxx::HttpClient::respIsSucc(respVal)) {
                 auto& data = respVal.body;
                 if (data.empty()) {
                     co_return R"({"error": "Empty search result."})";
@@ -267,7 +267,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
 /// agentxx_web_search 执行体 —— 模型搜索路径 (原 ModelWebSearchTool::execute_async)
 /// - 经 OpenAI 兼容 chat/completions 非流式请求实现 (见文件头注释)
 inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
-    const agentxx::util::Json& arguments,
+    const utilxx_base::Json& arguments,
     const ModelSearchConfig&   modelCfg
 ) {
     std::string query = arguments.value("query", std::string{});
@@ -292,11 +292,11 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
 
     // 构造 chat/completions 请求体: system+user 两条消息, temperature=0
     // (与原 OpenAIProvider 调用参数一致)
-    agentxx::util::Json body = agentxx::util::Json::object();
+    utilxx_base::Json body = utilxx_base::Json::object();
     body["model"]            = cfg.modelName;
     body["temperature"]      = 0.0f;
-    body["messages"]         = agentxx::util::Json::array({
-        agentxx::util::Json{
+    body["messages"]         = utilxx_base::Json::array({
+        utilxx_base::Json{
                             {"role", "system"},
                             {"content",
                      "You are a web search assistant. Search the internet "
@@ -304,13 +304,13 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
                              "accurate results with sources. Respond in the same "
                              "language as the query."},
                             },
-        agentxx::util::Json{
+        utilxx_base::Json{
                             {"role", "user"},
                             {"content", query},
                             },
     });
 
-    auto extraHeaders = agentxx::util::HeaderMap{};
+    auto extraHeaders = utilxx::HeaderMap{};
     extraHeaders.set("Authorization", fmt::format("Bearer {}", cfg.apiKey));
     for (const auto& [k, v] : cfg.extraHeaders) {
         extraHeaders.set(k, v);
@@ -319,7 +319,7 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
     auto defaultSec = cfg.readChunkTimeoutSeconds > 0 ? cfg.readChunkTimeoutSeconds : 100;
     auto config = detail::makeConfig(cfg.readChunkTimeoutSeconds, std::chrono::seconds{defaultSec});
 
-    auto resp = co_await agentxx::util::HttpClient::postAsync(
+    auto resp = co_await utilxx::HttpClient::postAsync(
         fmt::format("{}/chat/completions", cfg.baseUrl),
         body,
         extraHeaders,
@@ -329,12 +329,12 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
         throw std::runtime_error(resp.error_or("[unknown]"));
     }
     auto& respVal = resp.value();
-    if (false == agentxx::util::HttpClient::respIsSucc(respVal)) {
+    if (false == utilxx::HttpClient::respIsSucc(respVal)) {
         auto bodySnippet = respVal.body.substr(0, 512);
         throw std::runtime_error(fmt::format("HTTP status {}: {}", respVal.status, bodySnippet));
     }
     try {
-        auto parsed  = agentxx::util::Json::parse(respVal.body);
+        auto parsed  = utilxx_base::Json::parse(respVal.body);
         auto content = parsed["choices"][0]["message"]["content"].get<std::string>();
         if (content.empty()) {
             co_return R"({"error": "Model web search returned empty result."})";

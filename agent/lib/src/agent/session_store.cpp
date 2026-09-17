@@ -1,12 +1,12 @@
 #include "agentxx/agent/session_store.h"
 
 #include "agentxx/agent/config_static.h"
-#include "agentxx/util/container_util.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/hash.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/path_sanitize.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/hash.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/path_sanitize.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -25,8 +25,8 @@ namespace {
 static constexpr size_t kMaxSessionDataDirLen = 96;
 
 /// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
-/// - 统一使用 agentxx::util::hash::fnv1a64 算法
-using agentxx::util::hash::fnv1a64;
+/// - 统一使用 utilxx_base::hash::fnv1a64 算法
+using utilxx_base::hash::fnv1a64;
 
 /// 默认数据根目录: {dataDir}/sqlite/sessions/
 /// - dataDir 为空时回退 ~/.agentxx/ (取不到用户主目录时回退系统临时目录)
@@ -124,11 +124,11 @@ ViewMessage stripAttachmentDataUrl(const ViewMessage& msg) {
 ///   部分乃至整体无法恢复 (数据丢失)
 /// - 此处对非法序列按 U+FFFD 修复 (仅替换本就非法的字节, 合法文本原样保留),
 ///   保证落库内容始终可被解析
-std::string dumpJsonUtf8(const agentxx::util::Json& j) {
+std::string dumpJsonUtf8(const utilxx_base::Json& j) {
     std::string text = j.dump();
-    if (!agentxx::util::utf8IsAvail(text)) {
+    if (!utilxx_base::utf8IsAvail(text)) {
         // 返回值表示"是否真的发生过替换" (此处仅关心修复后的文本内容)
-        (void)agentxx::util::utf8Repair(text);
+        (void)utilxx_base::utf8Repair(text);
     }
     return text;
 }
@@ -193,7 +193,7 @@ std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
     if (sessionId.empty()) {
         return "default";
     }
-    auto seg = agentxx::util::sanitizeFsSegment(sessionId);
+    auto seg = utilxx_base::sanitizeFsSegment(sessionId);
     // 空串 / "." / ".." 不能作为目录名 (路径穿越/上级目录)
     if (seg.empty() || seg == "." || seg == "..") {
         seg = "session";
@@ -201,7 +201,7 @@ std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
     // 是否发生过改写 (需要附加哈希尾缀保证不同 sessionId 不碰撞到同一目录)
     bool changed = (seg != sessionId);
 #if XX_IS_WIN_D
-    if (agentxx::util::isWindowsReservedName(seg)) {
+    if (utilxx_base::isWindowsReservedName(seg)) {
         seg     = "t_" + seg;
         changed = true;
     }
@@ -210,7 +210,7 @@ std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
     // (尾缀占 9 字符 "_" + 8 hex, 故此处先让出; 哈希取自原始 sessionId,
     //  与截断/清洗结果无关, 保证同一会话稳定映射到同一目录)
     if (seg.size() > kMaxSessionDataDirLen) {
-        seg     = agentxx::util::truncateFsSegment(seg, kMaxSessionDataDirLen - 9);
+        seg     = utilxx_base::truncateFsSegment(seg, kMaxSessionDataDirLen - 9);
         changed = true;
     }
     if (changed) {
@@ -241,7 +241,7 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     entry.dbs->sessionDb.open((dir / "session.db").string());
     ensureSchema(entry.dbs->sessionDb);
     entry.lastUseSeq   = ++dbsUseSeq_;
-    auto [insertIt, _] = util::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(entry));
+    auto [insertIt, _] = utilxx_base::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(entry));
     // 连接数上限 (LRU 淘汰; 刚插入的条目为最新, 不会被淘汰)
     evictLruDbs();
     return *insertIt->second.dbs;
@@ -267,7 +267,7 @@ void SessionStore::evictLruDbs() {
     }
 }
 
-void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb) {
+void SessionStore::ensureSchema(utilxx::SqliteDb& sessionDb) {
     sessionDb.exec(kSessionSchema);
     ensureViewMessageMsgIdColumn(sessionDb);
 }
@@ -276,7 +276,7 @@ void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb) {
 /// - 新库: CREATE TABLE 已含该列, 此处只补索引
 /// - 老库 (无该列): ALTER 增加列 → 从 json 回填 → 建索引; 已有数据不受影响
 ///   (回填只补 msg_id, 不触碰 json 内容)
-void SessionStore::ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb) {
+void SessionStore::ensureViewMessageMsgIdColumn(utilxx::SqliteDb& sessionDb) {
     bool hasMsgId = false;
     {
         auto stmt = sessionDb.prepare("PRAGMA table_info(view_message)");
@@ -324,7 +324,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                 const auto jsonText = stmt.columnText(1);
                 agentxx::util::catchError<bool>(
                     [&]() -> bool {
-                        auto j = agentxx::util::Json::parse(jsonText);
+                        auto j = utilxx_base::Json::parse(jsonText);
                         out.viewMessages.push_back(ViewMessage::fromJson(j));
                         return true;
                     },
@@ -378,7 +378,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             auto& db   = dbs(sessionId).sessionDb;
             auto  stmt = db.prepare("SELECT json FROM llm_context WHERE id = 1");
             if (stmt.step()) {
-                out.llmMessages = agentxx::util::Json::parse(stmt.columnText(0));
+                out.llmMessages = utilxx_base::Json::parse(stmt.columnText(0));
             }
             return true;
         },
@@ -388,7 +388,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                 sessionId,
                 errmsg
             );
-            out.llmMessages = agentxx::util::Json::array();
+            out.llmMessages = utilxx_base::Json::array();
             return false;
         }
     );
@@ -420,7 +420,7 @@ static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
 }
 
 /// 目录最近写入时刻启发式 (unix 毫秒): max(session.db, session.db-wal) 的修改时间。
-/// SQLite 为 WAL 模式 (见 [sqlite.h](/agent/lib/include/agentxx/util/sqlite.h)),
+/// SQLite 为 WAL 模式 (见 [sqlite.h](/agent/third_party/cxx_utilxx/include/utilxx/sqlite.h)),
 /// 最近提交可能仍在 -wal 文件中未合并回主库, 仅 stat 主库会低估活动时间;
 /// 取两者最大值近似最近写入时刻。
 /// - 两个文件都不存在/不可读时返回 0 (排序时自然落在最后)
@@ -445,7 +445,7 @@ static int64_t sessionDirActivityHintMs(const fs::path& dir) {
 static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
     return agentxx::util::catchError<bool>(
         [&]() -> bool {
-            agentxx::util::SqliteDb db;
+            utilxx::SqliteDb db;
             db.open((dir / "session.db").string());
             auto stmt = db.prepare("SELECT key, value FROM meta");
             while (stmt.step()) {
@@ -702,7 +702,7 @@ void SessionStore::appendViewMessage(
 
 void SessionStore::saveLlmMessages(
     std::string_view           sessionId,
-    const agentxx::util::Json& llmMessages
+    const utilxx_base::Json& llmMessages
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(

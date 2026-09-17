@@ -11,8 +11,8 @@
 #include "agentxx-test/core/test_agent.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/env.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/env.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/experimental/channel.hpp"
@@ -92,7 +92,7 @@ size_t estimateHistoryBytes(const std::vector<agentxx::agent::ViewMessage>& h) {
     return total;
 }
 
-size_t estimateJsonBytes(const agentxx::util::Json& j) {
+size_t estimateJsonBytes(const utilxx_base::Json& j) {
     return j.dump().size();
 }
 
@@ -162,7 +162,7 @@ asio::awaitable<int> runScenario(
         big.resize(k);
     }
     g_da_sim_response_content  = big;
-    g_da_sim_tool_calls        = agentxx::util::Json::array();
+    g_da_sim_tool_calls        = utilxx_base::Json::array();
     g_da_sim_prompt_tokens     = static_cast<int>(k / 4);
     g_da_sim_completion_tokens = static_cast<int>(k / 4);
 
@@ -191,7 +191,7 @@ asio::awaitable<int> runScenario(
     // 注意: 进程存活分配字节较多时 _CrtMemCheckpoint 遍历整个堆极慢,
     // 可设置环境变量 MEM_NO_CRT=1 跳过该指标以加速长时间跑测
     _CrtMemState crtA, crtB;
-    bool         useCrt = !agentxx::util::ApplicationEnv::instance().has("MEM_NO_CRT");
+    bool         useCrt = !utilxx_base::ApplicationEnv::instance().has("MEM_NO_CRT");
     if (useCrt) {
         _CrtMemCheckpoint(&crtA);
     }
@@ -234,7 +234,7 @@ asio::awaitable<int> runScenario(
         bool ok    = true;
         if (runAgentCtx) {
             // 在 agent io_context 上执行 turn (与真实 CLI 一致), 经 channel 等待完成
-            using ResCh = asio::experimental::channel<void(neograph_asio_error_code, bool)>;
+            using ResCh = asio::experimental::channel<void(utilxx_base::AsioErrorCode, bool)>;
             auto ch     = std::make_shared<ResCh>(agent->ioCtx->get_executor(), 1);
             asio::co_spawn(
                 *agent->ioCtx,
@@ -253,7 +253,7 @@ asio::awaitable<int> runScenario(
                         success     = !result.hasError;
                     }
                     co_await ch
-                        ->async_send(neograph_asio_error_code{}, success, asio::use_awaitable);
+                        ->async_send(utilxx_base::AsioErrorCode{}, success, asio::use_awaitable);
                     co_return;
                 },
                 asio::detached
@@ -405,24 +405,24 @@ asio::awaitable<TestResult> run_memgrowth_tests() {
     bool   hugeLimit  = false;
 
     // 兼容原占位循环 (无实际效果, 保留以维持原代码结构; 改用安全封装避免 C4996)
-    for (int i = 1; !agentxx::util::ApplicationEnv::instance().has("MEM_TURNS") && i < 0; ++i) {
+    for (int i = 1; !utilxx_base::ApplicationEnv::instance().has("MEM_TURNS") && i < 0; ++i) {
         (void)i;
     }
     // 支持通过环境变量覆盖: MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT (经全局单例统一封装, Windows
     // 安全)
-    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_TURNS")) {
+    if (auto vOpt = utilxx_base::ApplicationEnv::instance().get("MEM_TURNS")) {
         turns = static_cast<size_t>(std::strtoull(vOpt->c_str(), nullptr, 10));
     }
-    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_RESP_KB")) {
+    if (auto vOpt = utilxx_base::ApplicationEnv::instance().get("MEM_RESP_KB")) {
         responseKB = static_cast<size_t>(std::strtoull(vOpt->c_str(), nullptr, 10));
     }
-    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_HUGE_LIMIT")) {
+    if (auto vOpt = utilxx_base::ApplicationEnv::instance().get("MEM_HUGE_LIMIT")) {
         hugeLimit = (std::strtoull(vOpt->c_str(), nullptr, 10) != 0);
     }
     // MEM_SCENARIOS: 逗号分隔的子集选择 (0=stream16k, 1=stream16k_ctx, 2=nostream16k),
     // 未设置时默认全跑 (轻量参数下三场景仍很快)
     std::set<int> scenarios{0, 1, 2};
-    if (auto vOpt = agentxx::util::ApplicationEnv::instance().get("MEM_SCENARIOS")) {
+    if (auto vOpt = utilxx_base::ApplicationEnv::instance().get("MEM_SCENARIOS")) {
         scenarios.clear();
         std::string cur;
         for (char c : *vOpt) {

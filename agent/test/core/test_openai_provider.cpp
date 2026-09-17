@@ -1,8 +1,8 @@
 #include "agentxx-test/core/test_openai_provider.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_client.h"
+#include "utilxx/http_server.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
@@ -36,7 +36,9 @@ int g_openai_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 namespace server = agentxx::protocol;
 
 namespace {
@@ -188,13 +190,13 @@ void test_config_defaults() {
     mc.name   = "test";
     mc.apiKey = "sk-defaults-test";
     mc.extraConfig
-        = agentxx::util::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
+        = utilxx_base::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
     auto p = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
 }
 
 void test_extra_body_with_custom_params() {
-    auto extra                 = agentxx::util::Json::object();
+    auto extra                 = utilxx_base::Json::object();
     extra["top_p"]             = 0.95;
     extra["frequency_penalty"] = 0.5;
     extra["presence_penalty"]  = 0.3;
@@ -202,7 +204,7 @@ void test_extra_body_with_custom_params() {
     extra["response_format"]   = {
         {"type", "json_object"}
     };
-    extra["stop"] = agentxx::util::Json::parse(R"(["\n\n","STOP"])");
+    extra["stop"] = utilxx_base::Json::parse(R"(["\n\n","STOP"])");
 
     agentxx::agent::ModelConfig mc;
     mc.name        = "test";
@@ -287,7 +289,7 @@ public:
     std::vector<std::string> sseChunks;
 
     // Optional override: when non-null, used for the next non-streaming response
-    std::optional<agentxx::util::Json> customResponse;
+    std::optional<utilxx_base::Json> customResponse;
 
     // MockMode::Raw 使用的原始状态码与 body
     int         rawStatus = 200;
@@ -306,15 +308,15 @@ public:
         return "data: [DONE]\n\n";
     }
 
-    agentxx::util::Json
+    utilxx_base::Json
         makeCompletionResponse(std::string_view content, int prompt = 10, int completion = 5)
             const {
-        agentxx::util::Json resp;
+        utilxx_base::Json resp;
         resp["id"]                  = "chatcmpl-mock";
         resp["object"]              = "chat.completion";
         resp["created"]             = 1700000000;
         resp["model"]               = "mock-model";
-        resp["choices"]             = agentxx::util::Json::array({agentxx::util::Json::object()});
+        resp["choices"]             = utilxx_base::Json::array({utilxx_base::Json::object()});
         resp["choices"][0]["index"] = 0;
         resp["choices"][0]["message"]["role"]    = "assistant";
         resp["choices"][0]["message"]["content"] = std::string(content);
@@ -325,7 +327,7 @@ public:
         return resp;
     }
 
-    agentxx::util::Json makeCompletionResponse(
+    utilxx_base::Json makeCompletionResponse(
         std::string_view content,
         std::string_view reasoning,
         int              prompt     = 10,
@@ -336,27 +338,27 @@ public:
         return resp;
     }
 
-    agentxx::util::Json makeToolCallResponse() const {
-        auto tcFunc         = agentxx::util::Json::object();
+    utilxx_base::Json makeToolCallResponse() const {
+        auto tcFunc         = utilxx_base::Json::object();
         tcFunc["name"]      = "get_weather";
         tcFunc["arguments"] = R"({"location":"Tokyo"})";
-        auto tc             = agentxx::util::Json::object();
+        auto tc             = utilxx_base::Json::object();
         tc["id"]            = "call_abc123";
         tc["type"]          = "function";
         tc["function"]      = tcFunc;
-        auto tcArr          = agentxx::util::Json::array();
+        auto tcArr          = utilxx_base::Json::array();
         tcArr.push_back(tc);
-        auto msg                = agentxx::util::Json::object();
+        auto msg                = utilxx_base::Json::object();
         msg["role"]             = "assistant";
-        msg["content"]          = agentxx::util::Json(nullptr);
+        msg["content"]          = utilxx_base::Json(nullptr);
         msg["tool_calls"]       = tcArr;
-        auto choice             = agentxx::util::Json::object();
+        auto choice             = utilxx_base::Json::object();
         choice["index"]         = 0;
         choice["finish_reason"] = "tool_calls";
         choice["message"]       = msg;
-        auto choices            = agentxx::util::Json::array();
+        auto choices            = utilxx_base::Json::array();
         choices.push_back(choice);
-        agentxx::util::Json resp;
+        utilxx_base::Json resp;
         resp["id"]      = "chatcmpl-tool";
         resp["object"]  = "chat.completion";
         resp["created"] = 1700000001;
@@ -369,24 +371,24 @@ public:
     // OpenAI Responses API (/responses) response builders
     // ------------------------------------------------------------------
 
-    agentxx::util::Json
+    utilxx_base::Json
         makeResponsesResponse(std::string_view content, int prompt = 10, int completion = 5) const {
-        auto textPart           = agentxx::util::Json::object();
+        auto textPart           = utilxx_base::Json::object();
         textPart["type"]        = "output_text";
         textPart["text"]        = std::string(content);
-        textPart["annotations"] = agentxx::util::Json::array();
-        auto contentArr         = agentxx::util::Json::array();
+        textPart["annotations"] = utilxx_base::Json::array();
+        auto contentArr         = utilxx_base::Json::array();
         contentArr.push_back(textPart);
 
-        auto msgItem       = agentxx::util::Json::object();
+        auto msgItem       = utilxx_base::Json::object();
         msgItem["type"]    = "message";
         msgItem["role"]    = "assistant";
         msgItem["content"] = contentArr;
 
-        auto output = agentxx::util::Json::array();
+        auto output = utilxx_base::Json::array();
         output.push_back(msgItem);
 
-        agentxx::util::Json resp;
+        utilxx_base::Json resp;
         resp["id"]     = "resp_mock";
         resp["object"] = "response";
         resp["status"] = "completed";
@@ -399,8 +401,8 @@ public:
         return resp;
     }
 
-    agentxx::util::Json makeResponsesToolCallResponse() const {
-        auto fcItem         = agentxx::util::Json::object();
+    utilxx_base::Json makeResponsesToolCallResponse() const {
+        auto fcItem         = utilxx_base::Json::object();
         fcItem["type"]      = "function_call";
         fcItem["id"]        = "fc_1";
         fcItem["call_id"]   = "call_abc123";
@@ -408,10 +410,10 @@ public:
         fcItem["arguments"] = R"({"location":"Tokyo"})";
         fcItem["status"]    = "completed";
 
-        auto output = agentxx::util::Json::array();
+        auto output = utilxx_base::Json::array();
         output.push_back(fcItem);
 
-        agentxx::util::Json resp;
+        utilxx_base::Json resp;
         resp["id"]     = "resp_tool";
         resp["object"] = "response";
         resp["status"] = "completed";
@@ -1313,7 +1315,7 @@ asio::awaitable<void> test_non_streaming_completion(MockOpenAIServer& mock, uint
         XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
 
         // Verify the request body contains expected fields
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-4o-mini");
         XX_TEST_EXPECT_TRUE(sent.contains("messages"));
         XX_TEST_EXPECT_EQ(sent["messages"][0]["role"].get<std::string>(), "user");
@@ -1373,26 +1375,26 @@ asio::awaitable<void>
     mock.mode           = MockMode::Normal;
 
     // 构造一个没有 "id" 字段的 tool_call 响应
-    auto tcFunc         = agentxx::util::Json::object();
+    auto tcFunc         = utilxx_base::Json::object();
     tcFunc["name"]      = "get_weather";
     tcFunc["arguments"] = R"({"location":"Beijing"})";
-    auto tc             = agentxx::util::Json::object();
+    auto tc             = utilxx_base::Json::object();
     // 注意: 不设置 tc["id"]
     tc["type"]     = "function";
     tc["function"] = tcFunc;
-    auto tcArr     = agentxx::util::Json::array();
+    auto tcArr     = utilxx_base::Json::array();
     tcArr.push_back(tc);
-    auto msg                = agentxx::util::Json::object();
+    auto msg                = utilxx_base::Json::object();
     msg["role"]             = "assistant";
-    msg["content"]          = agentxx::util::Json(nullptr);
+    msg["content"]          = utilxx_base::Json(nullptr);
     msg["tool_calls"]       = tcArr;
-    auto choice             = agentxx::util::Json::object();
+    auto choice             = utilxx_base::Json::object();
     choice["index"]         = 0;
     choice["finish_reason"] = "tool_calls";
     choice["message"]       = msg;
-    auto choices            = agentxx::util::Json::array();
+    auto choices            = utilxx_base::Json::array();
     choices.push_back(choice);
-    agentxx::util::Json resp;
+    utilxx_base::Json resp;
     resp["id"]      = "chatcmpl-no-id";
     resp["object"]  = "chat.completion";
     resp["created"] = 1700000002;
@@ -1566,7 +1568,7 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer& mock, uint16
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
-    auto extra     = agentxx::util::Json::object();
+    auto extra     = utilxx_base::Json::object();
     extra["top_p"] = 0.9;
     extra["seed"]  = 12345;
 
@@ -1585,7 +1587,7 @@ asio::awaitable<void> test_extra_body_passthrough(MockOpenAIServer& mock, uint16
         XX_TEST_EXPECT_EQ(result.message.role, "assistant");
 
         // Verify request body includes extra_body fields
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("top_p"));
         XX_TEST_EXPECT_EQ(sent["top_p"].get<double>(), 0.9);
         XX_TEST_EXPECT_TRUE(sent.contains("seed"));
@@ -1612,7 +1614,7 @@ asio::awaitable<void> test_per_call_extra_fields(MockOpenAIServer& mock, uint16_
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         // per-call extra_fields should override the provider defaults
         XX_TEST_EXPECT_TRUE(sent.contains("temperature"));
         XX_TEST_EXPECT_EQ(sent["temperature"].get<double>(), 0.2);
@@ -2286,7 +2288,7 @@ asio::awaitable<void>
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_FALSE(sent["messages"][0].contains("reasoning_content"));
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].get<std::string>(), "Previous answer");
     } catch (const std::exception& e) {
@@ -2315,7 +2317,7 @@ asio::awaitable<void>
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["messages"][0].contains("reasoning_content"));
         XX_TEST_EXPECT_EQ(
             sent["messages"][0]["reasoning_content"].get<std::string>(),
@@ -2343,7 +2345,7 @@ asio::awaitable<void>
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         // No reasoning_content at all — sendThinking flag should not inject it
         XX_TEST_EXPECT_FALSE(sent["messages"][0].contains("reasoning_content"));
         XX_TEST_EXPECT_EQ(sent["messages"][0]["content"].get<std::string>(), "Hello");
@@ -2390,7 +2392,7 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
@@ -2407,7 +2409,7 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
@@ -2421,7 +2423,7 @@ private:
 
     void handleConn(asio::ip::tcp::socket& sock) {
         namespace http = boost::beast::http;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;
@@ -2555,7 +2557,7 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
@@ -2572,7 +2574,7 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
@@ -2593,7 +2595,7 @@ private:
         }
 
         namespace http = boost::beast::http;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;
@@ -2773,11 +2775,11 @@ void test_streaming_abort_after_done_ignored() {
 }
 
 void test_send_timeout_calculation() {
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(0).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(1024).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 30).count(), 30);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 31).count(), 31);
-    XX_TEST_EXPECT_EQ(agentxx::util::HttpClient::calcTimeoutBySize(65536 * 500).count(), 500);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(0).count(), 30);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(1024).count(), 30);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(65536 * 30).count(), 30);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(65536 * 31).count(), 31);
+    XX_TEST_EXPECT_EQ(utilxx::HttpClient::calcTimeoutBySize(65536 * 500).count(), 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -3071,7 +3073,7 @@ asio::awaitable<void> test_max_tokens_sent(MockOpenAIServer& mock, uint16_t port
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("max_tokens"));
         XX_TEST_EXPECT_EQ(sent["max_tokens"].get<int>(), 1024);
     } catch (const std::exception& e) {
@@ -3096,7 +3098,7 @@ asio::awaitable<void> test_max_completion_tokens_sent(MockOpenAIServer& mock, ui
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("max_completion_tokens"));
         XX_TEST_EXPECT_EQ(sent["max_completion_tokens"].get<int>(), 512);
         XX_TEST_EXPECT_FALSE(sent.contains("max_tokens"));
@@ -3156,7 +3158,7 @@ asio::awaitable<void> test_custom_api_path(MockOpenAIServer& mock, uint16_t port
     try {
         co_await provider->invoke(params, nullptr);
         // 请求到达 /v1/chat/completions 路由则 lastRequestBody 会被填充
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-4o-mini");
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -3180,7 +3182,7 @@ asio::awaitable<void> test_send_temperature_disabled(MockOpenAIServer& mock, uin
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_FALSE(sent.contains("temperature"));
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -3235,7 +3237,7 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
             XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
 
             // 校验内部控制字段未泄露到 upstream JSON 请求体中
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
@@ -3288,7 +3290,7 @@ asio::awaitable<void> test_session_id_headers_sent(MockOpenAIServer& mock, uint1
             XX_TEST_EXPECT_EQ(mock.lastOpencodeSessionHeader, "test-session-codex-003");
             XX_TEST_EXPECT_EQ(mock.lastSessionIdHeader, mock.lastOpencodeSessionHeader);
 
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_FALSE(sent.contains("session_id"));
         } catch (const std::exception& e) {
             XX_TEST_FAILED++;
@@ -3336,7 +3338,7 @@ asio::awaitable<void> test_multimodal_body_chat_completions(MockOpenAIServer& mo
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["messages"].is_array());
         const auto& content = sent["messages"][0]["content"];
         XX_TEST_EXPECT_TRUE(content.is_array());
@@ -3383,7 +3385,7 @@ asio::awaitable<void> test_multimodal_body_responses(MockOpenAIServer& mock, uin
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent["input"].is_array());
 
         const auto& item = sent["input"][0];
@@ -3445,7 +3447,7 @@ asio::awaitable<void> test_responses_non_streaming(MockOpenAIServer& mock, uint1
         XX_TEST_EXPECT_TRUE(result.usage.total_tokens > 0);
         XX_TEST_EXPECT_EQ(result.stop_reason, "end_turn");
 
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_EQ(sent["model"].get<std::string>(), "gpt-5-codex");
         // codex 默认: store=false; reasoning 不再硬编码, 由 extraConfig/extra_fields 控制
         XX_TEST_EXPECT_TRUE(sent.contains("store"));
@@ -3470,7 +3472,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
     // 1) config 级: extraConfig.reasoning
     {
         auto mc        = makeCodexCfg(baseUrl);
-        mc.extraConfig = agentxx::util::Json::parse(R"({"reasoning":{"effort":"medium"}})");
+        mc.extraConfig = utilxx_base::Json::parse(R"({"reasoning":{"effort":"medium"}})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3479,7 +3481,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
         };
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
             XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "medium");
         } catch (const std::exception& e) {
@@ -3491,7 +3493,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
     // 2) per-call 级: params.extra_fields.reasoning 覆盖 config 级
     {
         auto mc        = makeCodexCfg(baseUrl);
-        mc.extraConfig = agentxx::util::Json::parse(R"({"reasoning":{"effort":"medium"}})");
+        mc.extraConfig = utilxx_base::Json::parse(R"({"reasoning":{"effort":"medium"}})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -3501,7 +3503,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
         params.extra_fields = agentxx::util::parseNeographJson(R"({"reasoning":{"effort":"low"}})");
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
             XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "low");
         } catch (const std::exception& e) {
@@ -3524,7 +3526,7 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
         );
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("reasoning"));
             XX_TEST_EXPECT_EQ(sent["reasoning"]["effort"].get<std::string>(), "high");
             XX_TEST_EXPECT_EQ(sent["reasoning"]["summary"].get<std::string>(), "concise");
@@ -3556,7 +3558,7 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
 
         // 请求 reasoning 摘要 (官方 include 值: reasoning.summary_text)
         XX_TEST_EXPECT_TRUE(sent.contains("include"));
@@ -3596,31 +3598,31 @@ asio::awaitable<void>
 
     // 1) 测试非流式捕获 encrypted_content 与 reasoning_tokens
     {
-        mock.customResponse = agentxx::util::Json{
+        mock.customResponse = utilxx_base::Json{
             {"id", "resp_test_enc"},
             {"object", "response"},
             {"created_at", 1787260000},
             {"status", "completed"},
             {"model", "gemini-3.7-flash-high"},
             {"output",
-             agentxx::util::Json::array(
+             utilxx_base::Json::array(
                  {{{"id", "rs_test_1"},
                    {"type", "reasoning"},
                    {"encrypted_content", kMockEncrypted},
-                   {"summary", agentxx::util::Json::array()}},
+                   {"summary", utilxx_base::Json::array()}},
                   {{"id", "msg_test_1"},
                    {"type", "message"},
                    {"status", "completed"},
                    {"content",
-                    agentxx::util::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
+                    utilxx_base::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
                    {"role", "assistant"}}}
              )},
             {
-             "usage", agentxx::util::Json{
+             "usage", utilxx_base::Json{
                     {"input_tokens", 10},
                     {"output_tokens", 20},
                     {"total_tokens", 30},
-                    {"output_tokens_details", agentxx::util::Json{{"reasoning_tokens", 854}}}
+                    {"output_tokens_details", utilxx_base::Json{{"reasoning_tokens", 854}}}
                 }, }
         };
 
@@ -3662,7 +3664,7 @@ asio::awaitable<void>
             };
 
             co_await provider->invoke(params2, nullptr);
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("input"));
             const auto& input          = sent["input"];
             int         reasoningIndex = -1;
@@ -3758,24 +3760,24 @@ asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
     mock.mode           = MockMode::ResponsesNormal;
 
     // 上游返回的 reasoning item 不带 summary 字段 (muse / ConsoleGo 网关行为)
-    mock.customResponse = agentxx::util::Json{
+    mock.customResponse = utilxx_base::Json{
         {"id", "resp_muse_no_summary"},
         {"object", "response"},
         {"created_at", 1787260000},
         {"status", "completed"},
         {"model", "muse-spark-1.2-contributor"},
         {"output",
-         agentxx::util::Json::array(
+         utilxx_base::Json::array(
              {{{"id", "rs_muse_1"}, {"type", "reasoning"}, {"encrypted_content", "enc_muse_data"}},
               {{"id", "msg_muse_1"},
                {"type", "message"},
                {"status", "completed"},
                {"content",
-                agentxx::util::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
+                utilxx_base::Json::array({{{"type", "output_text"}, {"text", "回答内容"}}})},
                {"role", "assistant"}}}
          )},
         {
-         "usage", agentxx::util::Json{{"input_tokens", 10}, {"output_tokens", 20}, {"total_tokens", 30}},
+         "usage", utilxx_base::Json{{"input_tokens", 10}, {"output_tokens", 20}, {"total_tokens", 30}},
          }
     };
 
@@ -3813,7 +3815,7 @@ asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
         };
 
         co_await provider->invoke(params2, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_TRUE(sent.contains("input"));
         bool foundNormalized = false;
         for (const auto& item : sent["input"]) {
@@ -4001,7 +4003,7 @@ asio::awaitable<void>
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_FALSE(sent.contains("include"));
             const auto& input = sent["input"];
             XX_TEST_EXPECT_TRUE(input.is_array());
@@ -4022,7 +4024,7 @@ asio::awaitable<void>
         auto mc         = makeCodexCfg(baseUrl);
         mc.sendThinking = true;
         mc.extraConfig
-            = agentxx::util::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
+            = utilxx_base::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";
@@ -4032,7 +4034,7 @@ asio::awaitable<void>
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+            auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
             XX_TEST_EXPECT_TRUE(sent.contains("include"));
             XX_TEST_EXPECT_TRUE(sent["include"].is_array());
             XX_TEST_EXPECT_EQ(sent["include"].size(), (size_t)1);
@@ -4060,7 +4062,7 @@ asio::awaitable<void> test_responses_no_send_thinking(MockOpenAIServer& mock, ui
 
     try {
         co_await provider->invoke(params, nullptr);
-        auto sent = agentxx::util::Json::parse(mock.lastRequestBody);
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
         XX_TEST_EXPECT_FALSE(sent.contains("include"));
         const auto& input = sent["input"];
         XX_TEST_EXPECT_TRUE(input.is_array());
@@ -4359,7 +4361,7 @@ asio::awaitable<void> test_error_top_level_message(MockOpenAIServer& mock, uint1
 asio::awaitable<void> test_responses_status_failed(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::ResponsesNormal;
-    mock.customResponse = agentxx::util::Json::parse(
+    mock.customResponse = utilxx_base::Json::parse(
         R"({"id":"resp_failed","object":"response","status":"failed",
             "error":{"message":"content policy violation","code":"content_filter"}})"
     );

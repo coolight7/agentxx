@@ -1,5 +1,5 @@
 # agentxx_execute_command —— 命令执行工具插件 (bash / windows)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util + asio/boost.process
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static + asio/boost.process
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_execute_command)
@@ -36,13 +36,13 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_execmd_plugin.h / execute_command_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView)
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView)
   )
   target_include_directories(${_target} SYSTEM PRIVATE
     "${Boost_INCLUDE_DIRS}"
     "${Boost_INCLUDE_DIRS}/boost/"
   )
-  target_link_libraries(${_target} PRIVATE agentxx_util Boost::process)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static Boost::process)
   # 补链项用 imported target 文件路径而非裸库名 boost_process: 裸名经 -L
   # 解析可能命中动态库 (.so) 引入动态依赖; 生成器表达式取 Boost::process
   # 的静态归档绝对路径 (与独立分支 target_link_libraries(Boost::process)
@@ -78,17 +78,17 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_base_static)
   # 经 libagentxx 嵌套构建 (add_subdirectory ../plugins) 时 util 目标已存在,
   # 此时 install 目录尚未生成 config, 跳过导入直接复用构建树目标;
   # 独立构建本插件时再经安装 config 导入
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_execmd_plugin.h / execute_command_impl.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView)
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_base_static (Json/JsonView)
 )
 
 find_package(Boost CONFIG REQUIRED COMPONENTS process)
@@ -98,13 +98,13 @@ target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
 )
 
 # 裸库名依赖解析目录: hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
+# AGENTXX_INSTALL_DIR/lib 经 cxx_utilxx_base_static PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
 )
 # Boost::process imported target —— 自动携带传递系统库 (ws2_32/bcrypt/
 # advapi32/ntdll/shell32/user32/synchronization) 与 BOOST_ALL_NO_LIB 宏
@@ -114,16 +114,6 @@ if (XX_IS_WIN_D)
   target_link_libraries(${PLUGIN_NAME} PRIVATE Boost::process mswsock)
 else()
   target_link_libraries(${PLUGIN_NAME} PRIVATE Boost::process)
-endif()
-if (AGENTXX_ENABLE_HYPERSCAN)
-  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
-  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # io_uring 同上由总控统一定义; asio 文件/pipe I/O 在 -DASIO_HAS_IO_URING
-  # 下引用其符号
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
 endif()
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

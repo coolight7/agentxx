@@ -1,8 +1,8 @@
 /// 插件宿主运行时；所有类型仅供宿主内部使用，不属于 C ABI。
 #pragma once
 
-#include "agentxx/util/asio_error.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/execution.hpp"
@@ -27,7 +27,7 @@
 
 namespace agentxx::plugin {
 
-using RuntimeErrorCode = util::AsioErrorCode;
+using RuntimeErrorCode = utilxx_base::AsioErrorCode;
 
 struct PluginRuntime;
 
@@ -228,7 +228,7 @@ public:
             return !p || p == waiter;
         });
         if (ec && !waiter->idle) {
-            throw util::AsioSystemError(ec);
+            throw utilxx_base::AsioSystemError(ec);
         }
         co_return waiter->idle || leaseCount() == 0;
     }

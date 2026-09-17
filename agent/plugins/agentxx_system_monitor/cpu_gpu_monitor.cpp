@@ -1,5 +1,5 @@
 #include "cpu_gpu_monitor.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/system.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "system_monitor_plugin.h"
@@ -494,7 +494,7 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 namespace agentxx_system_monitor_plugin {
 
-/// 原 libagentxx util::removeBetweenSpace 的本地拷贝 (插件不链接 libagentxx):
+/// 原 libagentxx utilxx_base::removeBetweenSpace 的本地拷贝 (插件不链接 libagentxx):
 /// 移除字符串首尾空白 (可选移除换行), 供解析 sysfs/proc 内容使用
 [[nodiscard]] inline std::string removeBetweenSpace(
     std::string_view str,
@@ -614,8 +614,8 @@ protected:
     static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
         /// 文件异步 I/O 可用时异步读取, 避免同步读盘阻塞事件循环
-        /// (可用性含运行时 io_uring 探测, 见 agentxx::util::isAsyncFileIoSupported)
-        if (agentxx::util::isAsyncFileIoSupported()) {
+        /// (可用性含运行时 io_uring 探测, 见 utilxx_base::isAsyncFileIoSupported)
+        if (utilxx_base::isAsyncFileIoSupported()) {
             auto                      executor = co_await asio::this_coro::executor;
             asio::stream_file         stream{executor};
             boost::system::error_code errCode;

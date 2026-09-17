@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include <atomic>
@@ -54,7 +54,7 @@ class AgentResourceApplier;
 
 /// 会话绑定的 git worktree (worktree 模式; 由 agentxx_git_worktree 工具维护)
 /// - 绑定后该会话的相对路径基准、权限隔离边界均切换到 worktree
-/// - 底层 git 操作封装见 [worktree.h](/agent/lib/include/agentxx/util/worktree.h),
+/// - 底层 git 操作封装见 [worktree.h](/agent/third_party/cxx_utilxx/include/utilxx/worktree.h),
 ///   工具实现见 [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h)
 struct WorktreeBinding {
     /// worktree 名称 (目录名与自动分支名来源)
@@ -78,7 +78,7 @@ struct SessionStoreHooks {
     std::function<void(const ViewMessage&)> onUpdateViewMessage;
 
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
-    std::function<void(const agentxx::util::Json&)> onSaveLlmMessages;
+    std::function<void(const utilxx_base::Json&)> onSaveLlmMessages;
 };
 
 /// 上下文统计 (供 UI 显示上下文占用)
@@ -137,7 +137,7 @@ public:
 
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
     /// - 仅 ioContext 线程可读写
-    agentxx::util::Json llmMessages = agentxx::util::Json::array();
+    utilxx_base::Json llmMessages = utilxx_base::Json::array();
 
     /// viewMessages 的链式哈希 (用于 client 校验一致性)
     /// - 仅 ioContext 线程可读写 (appendViewMessage 内部更新)
@@ -266,7 +266,7 @@ public:
     ///   (kPersistThrottleMs), 而非整轮
     /// - 节流: 距上次落盘 >= kPersistThrottleMs 时立即保存; 窗口内仅更新内存,
     ///   待下次结算触发或轮末 saveLlmMessages() 统一落盘
-    void appendSettledLlmMessages(const agentxx::util::Json& settledMsgs);
+    void appendSettledLlmMessages(const utilxx_base::Json& settledMsgs);
 
     /// 请求节流保存当前 llmMessages (首次触发立即落盘, 窗口内合并)
     void requestSaveLlmMessages();
@@ -558,7 +558,7 @@ public:
     ThreadSafeInitNotifier initNotifier;
 
     /// 阻塞操作执行线程池 (文件系统遍历、glob、DNS 解析等同步阻塞操作)
-    /// - 通过 agentxx::util::offloadAsync / offloadCancellableAsync 使用
+    /// - 通过 utilxx::offloadAsync / offloadCancellableAsync 使用
     /// - 避免阻塞操作卡住 io_context 事件循环
     std::shared_ptr<asio::thread_pool> threadPool
         = std::make_shared<asio::thread_pool>(std::max(2u, std::thread::hardware_concurrency() / 2)

@@ -1,7 +1,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 
-#include "agentxx/util/env.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/env.h"
+#include "utilxx_base/string_util.h"
 #include <clocale>
 #include <optional>
 #include <string>
@@ -71,7 +71,7 @@ std::optional<TuiLanguage> matchSingleLocale(std::string_view raw) noexcept {
             norm.push_back('-');
         } else {
             norm.push_back(
-                static_cast<char>(agentxx::util::charToLower(static_cast<unsigned char>(c)))
+                static_cast<char>(utilxx_base::charToLower(static_cast<unsigned char>(c)))
             );
         }
     }
@@ -134,7 +134,7 @@ std::string detectSystemLocale() {
     // 优先级参照 POSIX gettext: LC_ALL -> LC_MESSAGES -> LANG -> LANGUAGE
     const char* const envVars[] = {"LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"};
     for (const char* var : envVars) {
-        if (auto val = agentxx::util::getEnv(var); val && !val->empty()) {
+        if (auto val = utilxx_base::getEnv(var); val && !val->empty()) {
             const std::string& s = *val;
             // 过滤无意义的空或纯 C/POSIX 设置
             if (s != "C" && s != "POSIX" && s != "c" && s != "posix") {

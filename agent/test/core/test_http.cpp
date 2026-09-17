@@ -1,6 +1,6 @@
 #include "agentxx-test/core/test_http.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_client.h"
+#include "utilxx/http_server.h"
 #include <asio/awaitable.hpp>
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
@@ -43,7 +43,9 @@ int g_http_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 
 template<typename T>
 void expect_has_value_impl(T&& expr, const char* file, int line) {
@@ -924,7 +926,7 @@ asio::awaitable<void> test_http_client_beast_server() {
     }
 
     {
-        agentxx::util::Json j = {
+        utilxx_base::Json j = {
             {"msg", "hi"}
         };
         auto resp = co_await HttpClient::postAsync(baseUrl + "/echo", j);
@@ -1279,7 +1281,7 @@ asio::awaitable<void> test_http_server_expect_100_continue() {
 
         // 读取最终响应 (Connection: close, 读到 EOF)
         std::string              finalResp = interim;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
         for (;;) {
             size_t n = co_await sock.async_read_some(
                 asio::buffer(buf),
@@ -1360,7 +1362,7 @@ asio::awaitable<void> test_http_server_absolute_form_target() {
 
         std::string              resp;
         char                     buf[2048];
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
         for (;;) {
             size_t n = co_await sock.async_read_some(
                 asio::buffer(buf),
@@ -1421,7 +1423,7 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
@@ -1438,7 +1440,7 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
@@ -1456,7 +1458,7 @@ private:
 
     void handleConn(asio::ip::tcp::socket& sock) {
         namespace http = boost::beast::http;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;
@@ -1811,7 +1813,7 @@ public:
 
         thread = std::thread([this]() {
             while (!stopped.load()) {
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 asio::ip::tcp::socket    sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
@@ -1829,7 +1831,7 @@ public:
     void stop() {
         stopped.store(true);
         if (acceptor) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             asio::ip::tcp::socket    dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
@@ -1843,7 +1845,7 @@ private:
 
     void handleConn(asio::ip::tcp::socket& sock) {
         namespace http = boost::beast::http;
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
 
         boost::beast::flat_buffer        buf;
         http::request<http::string_body> req;

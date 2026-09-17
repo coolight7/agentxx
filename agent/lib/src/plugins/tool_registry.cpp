@@ -1,7 +1,7 @@
 #include "agentxx/plugin/tool_registry.h"
 
-#include "agentxx/util/container_util.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 
 namespace agentxx {
@@ -25,7 +25,7 @@ bool ToolRegistry::registerTool(
         XX_LOGW("ToolRegistry: tool `{}` conflicts with built-in tool", name);
         return false;
     }
-    util::insertHeterogeneous(tools_, std::move(name), std::move(tool));
+    utilxx_base::insertHeterogeneous(tools_, std::move(name), std::move(tool));
     return true;
 }
 

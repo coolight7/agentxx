@@ -1,5 +1,5 @@
 /// agentxx_screen_capture —— 屏幕捕获插件 (Windows)
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "fmt/format.h"
 #include "screen_capture.h"
 #include "screen_capture_plugin.h"
@@ -106,12 +106,12 @@ static std::string buildCapturePath(ScreenCapturePluginCtx& ctx, int screenIndex
     );
 }
 
-static agentxx::util::Json frameToJson(
+static utilxx_base::Json frameToJson(
     ScreenCapturePluginCtx&                           ctx,
     const agentxx_screen_capture_plugin::ScreenFrame& f,
     bool                                              saveImages
 ) {
-    agentxx::util::Json j = agentxx::util::Json::object();
+    utilxx_base::Json j = utilxx_base::Json::object();
     j["width"]            = f.width;
     j["height"]           = f.height;
     j["offset_x"]         = f.offsetX;
@@ -140,11 +140,11 @@ static std::string framesResult(
     if (frames.empty()) {
         return R"({"ok":false,"error":"capture failed"})";
     }
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& f : frames) {
         arr.push_back(frameToJson(ctx, f, saveImages));
     }
-    agentxx::util::Json j = agentxx::util::Json::object();
+    utilxx_base::Json j = utilxx_base::Json::object();
     j["ok"]               = true;
     j["frames"]           = arr;
     return j.dump();
@@ -282,7 +282,7 @@ static void* screenCaptureAgentStart(
     std::string cfgStr = ctx.config();
     if (!cfgStr.empty() && cfgStr != "{}") {
         try {
-            auto        j       = agentxx::util::Json::parse(cfgStr);
+            auto        j       = utilxx_base::Json::parse(cfgStr);
             std::string dataDir = j.value("dataDir", std::string{});
             if (!dataDir.empty()) {
                 namespace fs              = std::filesystem;

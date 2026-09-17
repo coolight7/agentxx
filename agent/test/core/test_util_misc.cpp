@@ -3,12 +3,13 @@
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/wire_protocol.h"
-#include "agentxx/util/container_util.h"
+#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/http_header.h"
-#include "agentxx/util/path_sanitize.h"
-#include "agentxx/util/stream.h"
-#include "agentxx/util/util.h"
+#include "utilxx/http_header.h"
+#include "utilxx_base/path_sanitize.h"
+#include "utilxx_base/stream.h"
+#include "utilxx_base/system.h"
+#include "utilxx/crypto.h"
 #include <atomic>
 #include <chrono>
 #include <set>
@@ -34,7 +35,7 @@ namespace test {
 // ---------------------------------------------------------------------------
 
 void test_header_map_basic() {
-    agentxx::util::HeaderMap hm;
+    utilxx::HeaderMap hm;
 
     XX_TEST_EXPECT_TRUE(hm.empty());
     XX_TEST_EXPECT_FALSE(hm.contains("Content-Type"));
@@ -62,7 +63,7 @@ void test_header_map_basic() {
 }
 
 void test_header_map_get_creates() {
-    agentxx::util::HeaderMap hm;
+    utilxx::HeaderMap hm;
     // get 不存在的 name: 插入空 vector 并返回迭代器
     auto it = hm.get("X-New-Header");
     XX_TEST_EXPECT_TRUE(it->second.empty());
@@ -75,9 +76,9 @@ void test_header_map_get_creates() {
 }
 
 void test_header_map_ctor_with_data() {
-    agentxx::util::IgnoreCaseMap<std::vector<std::string>> data;
+    utilxx_base::IgnoreCaseMap<std::vector<std::string>> data;
     data["Content-Type"] = {"application/json"};
-    agentxx::util::HeaderMap hm{data};
+    utilxx::HeaderMap hm{data};
     XX_TEST_EXPECT_TRUE(hm.contains("content-type"));
     XX_TEST_EXPECT_EQ(hm.getSingle("CONTENT-TYPE"), std::string_view("application/json"));
 }
@@ -135,11 +136,11 @@ void test_catch_error_unknown() {
 
 void test_system_utils() {
     // getSystemName 不应为空
-    auto name = agentxx::util::getSystemName();
+    auto name = utilxx_base::getSystemName();
     XX_TEST_EXPECT_FALSE(name.empty());
 
     // isRunningInWSL 应返回 bool (不崩溃)
-    (void)agentxx::util::isRunningInWSL();
+    (void)utilxx_base::isRunningInWSL();
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +153,9 @@ void test_system_utils() {
 void test_system_utils_concurrent_cache() {
     constexpr int kThreads = 8;
 
-    auto name0 = agentxx::util::getSystemName();
-    auto wsl0  = agentxx::util::isRunningInWSL();
-    auto ps0   = agentxx::util::detectPowerShell().available;
+    auto name0 = utilxx_base::getSystemName();
+    auto wsl0  = utilxx_base::isRunningInWSL();
+    auto ps0   = utilxx_base::detectPowerShell().available;
 
     std::vector<std::thread> threads;
     std::atomic<int>         mismatched{0};
@@ -162,13 +163,13 @@ void test_system_utils_concurrent_cache() {
     for (int i = 0; i < kThreads; ++i) {
         threads.emplace_back([&]() {
             for (int n = 0; n < 64; ++n) {
-                if (agentxx::util::getSystemName() != name0) {
+                if (utilxx_base::getSystemName() != name0) {
                     mismatched.fetch_add(1, std::memory_order_relaxed);
                 }
-                if (agentxx::util::isRunningInWSL() != wsl0) {
+                if (utilxx_base::isRunningInWSL() != wsl0) {
                     mismatched.fetch_add(1, std::memory_order_relaxed);
                 }
-                if (agentxx::util::detectPowerShell().available != ps0) {
+                if (utilxx_base::detectPowerShell().available != ps0) {
                     mismatched.fetch_add(1, std::memory_order_relaxed);
                 }
             }
@@ -179,9 +180,9 @@ void test_system_utils_concurrent_cache() {
     }
     XX_TEST_EXPECT_EQ(mismatched.load(), 0);
     // 并发调用后缓存值不变
-    XX_TEST_EXPECT_EQ(agentxx::util::getSystemName(), name0);
-    XX_TEST_EXPECT_EQ(agentxx::util::isRunningInWSL(), wsl0);
-    XX_TEST_EXPECT_EQ(agentxx::util::detectPowerShell().available, ps0);
+    XX_TEST_EXPECT_EQ(utilxx_base::getSystemName(), name0);
+    XX_TEST_EXPECT_EQ(utilxx_base::isRunningInWSL(), wsl0);
+    XX_TEST_EXPECT_EQ(utilxx_base::detectPowerShell().available, ps0);
 }
 
 // ---------------------------------------------------------------------------
@@ -190,25 +191,25 @@ void test_system_utils_concurrent_cache() {
 
 void test_async_file_io_support() {
     // 自动探测: 结果按进程缓存, 重复调用应一致 (首次调用即触发探测)
-    const bool detected = agentxx::util::isAsyncFileIoSupported();
-    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
-    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+    const bool detected = utilxx_base::isAsyncFileIoSupported();
+    XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), detected);
+    XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), detected);
 
     // 强制关闭: 判断结果直接为 false (测试据此覆盖同步兜底实现)
-    agentxx::util::setAsyncFileIoSupported(false);
-    XX_TEST_EXPECT_FALSE(agentxx::util::isAsyncFileIoSupported());
+    utilxx_base::setAsyncFileIoSupported(false);
+    XX_TEST_EXPECT_FALSE(utilxx_base::isAsyncFileIoSupported());
 
     // 强制开启: 覆盖为 true
-    agentxx::util::setAsyncFileIoSupported(true);
-    XX_TEST_EXPECT_TRUE(agentxx::util::isAsyncFileIoSupported());
+    utilxx_base::setAsyncFileIoSupported(true);
+    XX_TEST_EXPECT_TRUE(utilxx_base::isAsyncFileIoSupported());
 
     // 恢复自动探测: 回到探测值 (与强制开启的结果无必然关系)
-    agentxx::util::resetAsyncFileIoSupported();
-    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+    utilxx_base::resetAsyncFileIoSupported();
+    XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), detected);
 
     // 重复恢复幂等
-    agentxx::util::resetAsyncFileIoSupported();
-    XX_TEST_EXPECT_EQ(agentxx::util::isAsyncFileIoSupported(), detected);
+    utilxx_base::resetAsyncFileIoSupported();
+    XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), detected);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +220,7 @@ void test_stream_throttle_debounce() {
 
     // --- Throttle: 最小放行间隔 ---
     {
-        agentxx::util::Throttle throttle(seconds{1});
+        utilxx_base::Throttle throttle(seconds{1});
         // 首次调用恒放行
         XX_TEST_EXPECT_TRUE(throttle.try_acquire());
         // 间隔内不放行
@@ -234,11 +235,11 @@ void test_stream_throttle_debounce() {
     }
     {
         // force() 计为一次放行: 之后立即 try_acquire 不放行
-        agentxx::util::Throttle throttle(seconds{1});
+        utilxx_base::Throttle throttle(seconds{1});
         throttle.force();
         XX_TEST_EXPECT_FALSE(throttle.try_acquire());
         // 从未放行时 time_until_acquire 为 0
-        agentxx::util::Throttle fresh(seconds{1});
+        utilxx_base::Throttle fresh(seconds{1});
         XX_TEST_EXPECT_TRUE(
             fresh.time_until_acquire() == std::chrono::steady_clock::duration::zero()
         );
@@ -246,7 +247,7 @@ void test_stream_throttle_debounce() {
 
     // --- Debounce: 静默满 wait 后才 ready, 期间触发重置计时 ---
     {
-        agentxx::util::Debounce debounce(milliseconds{200});
+        utilxx_base::Debounce debounce(milliseconds{200});
         // 未触发过: 不 ready
         XX_TEST_EXPECT_FALSE(debounce.ready());
         debounce.trigger();
@@ -273,14 +274,14 @@ void test_container_util_heterogeneous() {
         m["hello"] = 42;
         m["world"] = 100;
 
-        XX_TEST_EXPECT_TRUE(agentxx::util::eraseHeterogeneous(m, std::string_view("hello")));
+        XX_TEST_EXPECT_TRUE(utilxx_base::eraseHeterogeneous(m, std::string_view("hello")));
         XX_TEST_EXPECT_EQ(m.size(), (size_t)1);
-        XX_TEST_EXPECT_FALSE(agentxx::util::eraseHeterogeneous(m, std::string_view("non_exist")));
+        XX_TEST_EXPECT_FALSE(utilxx_base::eraseHeterogeneous(m, std::string_view("non_exist")));
         XX_TEST_EXPECT_EQ(m.size(), (size_t)1);
 
         std::set<std::string, std::less<>> s{"apple", "banana"};
-        XX_TEST_EXPECT_TRUE(agentxx::util::eraseHeterogeneous(s, std::string_view("apple")));
-        XX_TEST_EXPECT_FALSE(agentxx::util::eraseHeterogeneous(s, std::string_view("orange")));
+        XX_TEST_EXPECT_TRUE(utilxx_base::eraseHeterogeneous(s, std::string_view("apple")));
+        XX_TEST_EXPECT_FALSE(utilxx_base::eraseHeterogeneous(s, std::string_view("orange")));
         XX_TEST_EXPECT_EQ(s.size(), (size_t)1);
     }
 
@@ -288,12 +289,12 @@ void test_container_util_heterogeneous() {
     {
         std::map<std::string, std::string, std::less<>> m;
         // string_view 参数
-        auto [it1, ok1] = agentxx::util::insertHeterogeneous(m, "k1", "v1");
+        auto [it1, ok1] = utilxx_base::insertHeterogeneous(m, "k1", "v1");
         XX_TEST_EXPECT_TRUE(ok1);
         XX_TEST_EXPECT_EQ(it1->second, std::string("v1"));
 
         // 重复 key 不覆盖
-        auto [it2, ok2] = agentxx::util::insertHeterogeneous(m, "k1", "v2_ignored");
+        auto [it2, ok2] = utilxx_base::insertHeterogeneous(m, "k1", "v2_ignored");
         XX_TEST_EXPECT_FALSE(ok2);
         XX_TEST_EXPECT_EQ(it2->second, std::string("v1"));
 
@@ -301,15 +302,15 @@ void test_container_util_heterogeneous() {
         std::string moveKey = "k2";
         std::string moveVal = "v2";
         auto [it3, ok3]
-            = agentxx::util::insertHeterogeneous(m, std::move(moveKey), std::move(moveVal));
+            = utilxx_base::insertHeterogeneous(m, std::move(moveKey), std::move(moveVal));
         XX_TEST_EXPECT_TRUE(ok3);
         XX_TEST_EXPECT_EQ(it3->second, std::string("v2"));
 
         // set 测试
         std::set<std::string, std::less<>> s;
-        auto [sit1, sok1] = agentxx::util::insertHeterogeneous(s, "item1");
+        auto [sit1, sok1] = utilxx_base::insertHeterogeneous(s, "item1");
         XX_TEST_EXPECT_TRUE(sok1);
-        auto [sit2, sok2] = agentxx::util::insertHeterogeneous(s, "item1");
+        auto [sit2, sok2] = utilxx_base::insertHeterogeneous(s, "item1");
         XX_TEST_EXPECT_FALSE(sok2);
     }
 
@@ -318,26 +319,26 @@ void test_container_util_heterogeneous() {
         std::map<std::string, int, std::less<>> m;
         // 新建插入
         auto [it1, inserted1]
-            = agentxx::util::insertOrAssignHeterogeneous(m, std::string_view("score"), 100);
+            = utilxx_base::insertOrAssignHeterogeneous(m, std::string_view("score"), 100);
         XX_TEST_EXPECT_TRUE(inserted1);
         XX_TEST_EXPECT_EQ(it1->second, 100);
 
         // 已存在时覆盖
         auto [it2, inserted2]
-            = agentxx::util::insertOrAssignHeterogeneous(m, std::string_view("score"), 200);
+            = utilxx_base::insertOrAssignHeterogeneous(m, std::string_view("score"), 200);
         XX_TEST_EXPECT_FALSE(inserted2);
         XX_TEST_EXPECT_EQ(it2->second, 200);
         XX_TEST_EXPECT_EQ(m["score"], 200);
 
         // overwriteHeterogeneous 别名测试
-        auto [it3, inserted3] = agentxx::util::overwriteHeterogeneous(m, "score", 300);
+        auto [it3, inserted3] = utilxx_base::overwriteHeterogeneous(m, "score", 300);
         XX_TEST_EXPECT_FALSE(inserted3);
         XX_TEST_EXPECT_EQ(it3->second, 300);
         XX_TEST_EXPECT_EQ(m["score"], 300);
 
         // 右值 string 覆盖
         std::string rvalKey   = "rkey";
-        auto [it4, inserted4] = agentxx::util::overwriteHeterogeneous(m, std::move(rvalKey), 400);
+        auto [it4, inserted4] = utilxx_base::overwriteHeterogeneous(m, std::move(rvalKey), 400);
         XX_TEST_EXPECT_TRUE(inserted4);
         XX_TEST_EXPECT_EQ(it4->second, 400);
     }
@@ -346,13 +347,13 @@ void test_container_util_heterogeneous() {
     {
         std::map<std::string, std::vector<int>, std::less<>> m;
         // 不存在则默认构造插入
-        auto& vec = agentxx::util::getOrCreateHeterogeneous(m, std::string_view("numbers"));
+        auto& vec = utilxx_base::getOrCreateHeterogeneous(m, std::string_view("numbers"));
         XX_TEST_EXPECT_TRUE(vec.empty());
         vec.push_back(1);
         vec.push_back(2);
 
         // 再次获取得到相同引用
-        auto& vec2 = agentxx::util::getOrCreateHeterogeneous(m, "numbers");
+        auto& vec2 = utilxx_base::getOrCreateHeterogeneous(m, "numbers");
         XX_TEST_EXPECT_EQ(vec2.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(vec2[0], 1);
         XX_TEST_EXPECT_EQ(vec2[1], 2);
@@ -364,9 +365,9 @@ void test_container_util_heterogeneous() {
 // ---------------------------------------------------------------------------
 
 void test_path_segment_sanitize() {
-    using agentxx::util::sanitizeFsSegment;
-    using agentxx::util::truncateFsSegment;
-    using agentxx::util::truncateFsSegmentWithHash;
+    using utilxx_base::sanitizeFsSegment;
+    using utilxx_base::truncateFsSegment;
+    using utilxx_base::truncateFsSegmentWithHash;
 
     // 非法字符替换为 '_' (长度不变)
     XX_TEST_EXPECT_EQ(
@@ -418,7 +419,7 @@ void test_path_segment_sanitize() {
 }
 
 void test_windows_reserved_name() {
-    using agentxx::util::isWindowsReservedName;
+    using utilxx_base::isWindowsReservedName;
 
     // 保留设备名 (大小写不敏感, 忽略扩展名)
     XX_TEST_EXPECT_TRUE(isWindowsReservedName("CON"));
@@ -439,8 +440,8 @@ void test_windows_reserved_name() {
 }
 
 void test_md5_and_device_id() {
-    using agentxx::util::getDeviceId;
-    using agentxx::util::md5Hex;
+    using utilxx::getDeviceId;
+    using utilxx::md5Hex;
 
     // 标准 MD5 校验向量
     XX_TEST_EXPECT_EQ(md5Hex(""), std::string("d41d8cd98f00b204e9800998ecf8427e"));

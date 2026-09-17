@@ -4,8 +4,8 @@
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/text_layout.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <cmath>
@@ -18,7 +18,7 @@ namespace client {
 
 namespace {
 
-using agentxx::util::Json;
+using utilxx_base::Json;
 
 /// 数值步进后的显示格式 (整数值按 "1.0" 风格, 非整数保留有效精度)
 std::string formatStepDouble(double v) {
@@ -45,7 +45,7 @@ bool jsonBoolValue(const Json& v, bool defaultValue) {
         return v.get<double>() != 0.0;
     }
     if (v.is_string()) {
-        auto s = agentxx::util::toLower(agentxx::util::removeBetweenSpace(v.get<std::string>()));
+        auto s = utilxx_base::toLower(utilxx_base::removeBetweenSpace(v.get<std::string>()));
         if (s == "true" || s == "yes" || s == "y" || s == "1") {
             return true;
         }
@@ -782,7 +782,7 @@ void InterruptView::sendSubmit(int64_t wireId, const InterruptFormSubmit& submit
         return;
     }
     // 结果经通道回传到 client 线程 (线程安全): 一次提交/取消整份表单
-    it->second->async_send(neograph_asio_error_code{}, submit, [](neograph_asio_error_code) {});
+    it->second->async_send(utilxx_base::AsioErrorCode{}, submit, [](utilxx_base::AsioErrorCode) {});
 }
 
 bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
@@ -1099,7 +1099,7 @@ void InterruptView::confirm(size_t msgIndex) {
         const auto ui = resolveUi(src);
         auto& state = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
 
-        agentxx::util::Json values = agentxx::util::Json::object();
+        utilxx_base::Json values = utilxx_base::Json::object();
         for (const auto& block : ui.blocks) {
             if (block.kind != "control") {
                 continue;
@@ -1111,7 +1111,7 @@ void InterruptView::confirm(size_t msgIndex) {
                 initControlState(block, cs);
             }
 
-            agentxx::util::Json value;
+            utilxx_base::Json value;
             if (block.control == "buttons" || block.control == "select") {
                 const int n = static_cast<int>(block.options.size());
                 if (n <= 0) {
@@ -1127,9 +1127,9 @@ void InterruptView::confirm(size_t msgIndex) {
                 // 数值校验: 可解析 + integer 约束 + min/max 范围
                 std::string errTip;
                 double      num     = 0.0;
-                auto        trimmed = agentxx::util::removeBetweenSpace(cs.editText);
+                auto        trimmed = utilxx_base::removeBetweenSpace(cs.editText);
                 if (trimmed.empty()
-                    || agentxx::util::parseNumberFromString(trimmed, num).ec != std::errc{}) {
+                    || utilxx_base::parseNumberFromString(trimmed, num).ec != std::errc{}) {
                     errTip
                         = std::string{tr(block.integer ? "interrupt.tipInt" : "interrupt.tipNum")};
                 } else if (block.integer && num != std::trunc(num)) {
@@ -1146,8 +1146,8 @@ void InterruptView::confirm(size_t msgIndex) {
                 }
                 // 注意: 必须用括号构造 —— 单元素花括号会命中 initializer_list
                 // 构造, 生成单元素数组而非数值
-                value = block.integer ? agentxx::util::Json(static_cast<int64_t>(num))
-                                      : agentxx::util::Json(num);
+                value = block.integer ? utilxx_base::Json(static_cast<int64_t>(num))
+                                      : utilxx_base::Json(num);
             } else if (block.control == "text") {
                 value = cs.editText;
             } else {
@@ -1227,7 +1227,7 @@ void InterruptView::cancel(size_t msgIndex) {
     states_.erase(wireId);
     InterruptFormSubmit submit;
     submit.cancelled = true;
-    submit.values    = agentxx::util::Json::object();
+    submit.values    = utilxx_base::Json::object();
     sendSubmit(wireId, submit);
     activeMsg_ = static_cast<size_t>(-1);
     ctx_.postRedraw();
@@ -1260,9 +1260,9 @@ void InterruptView::step(size_t msgIndex, std::string_view controlId, double del
             initControlState(*block, cs);
         }
         double val     = 0.0;
-        auto   trimmed = agentxx::util::removeBetweenSpace(cs.editText);
+        auto   trimmed = utilxx_base::removeBetweenSpace(cs.editText);
         if (trimmed.empty()
-            || agentxx::util::parseNumberFromString(trimmed, val).ec != std::errc{}) {
+            || utilxx_base::parseNumberFromString(trimmed, val).ec != std::errc{}) {
             return; // 编辑值非法时步进无效
         }
         val += delta;

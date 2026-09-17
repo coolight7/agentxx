@@ -4,6 +4,7 @@
 #include "fmt/format.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <charconv>
 
@@ -123,7 +124,7 @@ Element InputComponent::OnRender() {
         for (size_t i = 0; i < attachments_.size(); ++i) {
             const auto& att     = attachments_[i];
             auto        icon    = agentxx::agent::MediaAttachment::mediaTypeIcon(att.type);
-            auto        sizeStr = agentxx::util::formatSize(att.sizeBytes);
+            auto        sizeStr = utilxx_base::formatSize(att.sizeBytes);
             auto        delBtn  = hits_.add(
                 text("[ ✕ ]") | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor) | bold,
                 fmt::format("{}{}", kAttachDeletePrefix, i)

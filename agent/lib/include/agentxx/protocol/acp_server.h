@@ -11,16 +11,16 @@
 #include <set>
 #include <string>
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 
 #include "agentxx/agent/base_agent.h"
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_server.h"
 #include "agentxx/version.h"
 
 namespace agentxx {
 namespace protocol {
 
-using json = agentxx::util::Json;
+using json = utilxx_base::Json;
 
 // ---------------------------------------------------------------------------
 // ACP 协议处理器 (HTTP 与 stdio 传输共用)
@@ -154,7 +154,7 @@ private:
 
     // -- 出站请求追踪 (agent→client) --
     mutable std::mutex                                                    pendingMu_;
-    std::map<int64_t, std::shared_ptr<std::promise<agentxx::util::Json>>> pending_;
+    std::map<int64_t, std::shared_ptr<std::promise<utilxx_base::Json>>> pending_;
     std::atomic<int64_t>                                                  nextOutboundId_{1};
 };
 
@@ -170,7 +170,7 @@ class HttpAcpServer {
 public:
 
     struct Config {
-        util::HttpServer::Config httpConfig;
+        utilxx::HttpServer::Config httpConfig;
         std::string              acpEndpoint   = "/acp";
         std::string              sseEndpoint   = "/acp/sse";
         std::string              serverName    = "agentxx-acp";
@@ -180,7 +180,7 @@ public:
 
     HttpAcpServer(
         std::shared_ptr<agentxx::agent::BaseAgent> agent,
-        agentxx::util::Json                        agentInfo,
+        utilxx_base::Json                        agentInfo,
         Config                                     config
     );
 
@@ -221,14 +221,14 @@ private:
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
-        handleAcpRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
+        handleAcpRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp);
 
     // -----------------------------------------------------------------------
     // SSE 端点
     // -----------------------------------------------------------------------
 
     asio::awaitable<void>
-        handleSseRequest(util::HttpServer::Request& req, util::HttpServer::Response& resp);
+        handleSseRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp);
 
     void broadcastSSE(std::string_view /*data*/);
     void stopSSE();
@@ -238,13 +238,13 @@ private:
     // -----------------------------------------------------------------------
 
     void writeJsonResponse(
-        util::HttpServer::Response& resp,
+        utilxx::HttpServer::Response& resp,
         boost::beast::http::status  status,
-        const agentxx::util::Json&  body
+        const utilxx_base::Json&  body
     );
 
-    agentxx::util::Json
-        jsonRpcError(const agentxx::util::Json& id, int code, std::string_view message) const;
+    utilxx_base::Json
+        jsonRpcError(const utilxx_base::Json& id, int code, std::string_view message) const;
 
     // -----------------------------------------------------------------------
     // 成员
@@ -253,11 +253,11 @@ private:
     Config                                     config_;
     std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     AcpProtocolHandler                         handler_;
-    std::unique_ptr<util::HttpServer>          httpServer_;
+    std::unique_ptr<utilxx::HttpServer>          httpServer_;
 
     // 挂起的异步响应追踪 (HTTP 传输用)
     std::mutex                                                            pendingMutex_;
-    std::map<int64_t, std::shared_ptr<std::promise<agentxx::util::Json>>> pendingResponses_;
+    std::map<int64_t, std::shared_ptr<std::promise<utilxx_base::Json>>> pendingResponses_;
 };
 
 // ===========================================================================
@@ -269,7 +269,7 @@ private:
 class StdioAcpServer {
 public:
 
-    StdioAcpServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, agentxx::util::Json agentInfo);
+    StdioAcpServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, utilxx_base::Json agentInfo);
 
     StdioAcpServer(const StdioAcpServer&)            = delete;
     StdioAcpServer& operator=(const StdioAcpServer&) = delete;

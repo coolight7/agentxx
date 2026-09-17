@@ -2,6 +2,7 @@
 #include "agentxx_websearch_plugin.h"
 #include "asio/awaitable.hpp"
 #include "websearch_impl.h"
+#include "utilxx_base/json.h"
 #include <string>
 
 using namespace agentxx_websearch_plugin;
@@ -51,7 +52,7 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
             std::string cfgJson(json.data, static_cast<size_t>(json.size));
             PluginString::free(ctx.host, &json);
             try {
-                auto cfg                  = agentxx::util::Json::parse(cfgJson);
+                auto cfg                  = utilxx_base::Json::parse(cfgJson);
                 ctx.convert_html2markdown = cfg.value("websearchConvertHtml2markdown", true);
                 ctx.search_api_url        = cfg.value("websearchApiUrl", std::string{});
                 if (cfg.contains("websearchModel") && cfg["websearchModel"].is_object()) {

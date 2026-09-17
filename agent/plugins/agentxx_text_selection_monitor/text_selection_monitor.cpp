@@ -19,7 +19,7 @@
 #endif
 #include "text_selection_monitor_plugin.h"
 
-#include "agentxx/util/json_view.h"
+#include "utilxx_base/json_view.h"
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
 #include "text_selection_monitor.h"
@@ -29,7 +29,7 @@
 #include <thread>
 #include <type_traits>
 
-#include "agentxx/util/asio_error.h"
+#include "utilxx_base/asio_error.h"
 namespace asio = ::boost::asio;
 
 namespace agentxx_text_selection_monitor_plugin {
@@ -1052,7 +1052,7 @@ private:
 
     static std::optional<std::string> extractCdpResult(std::string_view json) {
         try {
-            auto view = agentxx::util::JsonView::parse(json);
+            auto view = utilxx_base::JsonView::parse(json);
             auto val  = view["result"]["result"]["value"];
             if (!val.is_string()) {
                 return std::nullopt;
@@ -1085,7 +1085,7 @@ private:
             // CDP /json 目标列表: 经 JsonView 零拷贝提取 id/title
             // (历史 simdjson::ondemand 局部解析已统一为新体系)
             try {
-                auto targets = agentxx::util::JsonView::parse(targetsJson);
+                auto targets = utilxx_base::JsonView::parse(targetsJson);
                 if (!targets.is_array()) {
                     return {};
                 }

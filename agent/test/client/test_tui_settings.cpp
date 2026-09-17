@@ -5,8 +5,8 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/agent/io/channel_io_transport.h"
-#include "agentxx/util/env.h"
-#include "agentxx/util/settings_db.h"
+#include "utilxx_base/env.h"
+#include "utilxx/settings_db.h"
 #include "ftxui/component/event.hpp"
 #include <chrono>
 #include <filesystem>
@@ -122,15 +122,15 @@ void test_log_level_set_get() {
 
     // 逐一设置各等级并读回 (名称表与 LogLevel 枚举值一一对应)
     const struct {
-        agentxx::util::LogLevel level;
+        utilxx_base::LogLevel level;
         std::string_view        name;
     } cases[] = {
-        {agentxx::util::LogLevel::Trace, "Trace"},
-        {agentxx::util::LogLevel::Debug, "Debug"},
-        {agentxx::util::LogLevel::Info,  "Info" },
-        {agentxx::util::LogLevel::Warn,  "Warn" },
-        {agentxx::util::LogLevel::Error, "Error"},
-        {agentxx::util::LogLevel::Out,   "Out"  },
+        {utilxx_base::LogLevel::Trace, "Trace"},
+        {utilxx_base::LogLevel::Debug, "Debug"},
+        {utilxx_base::LogLevel::Info,  "Info" },
+        {utilxx_base::LogLevel::Warn,  "Warn" },
+        {utilxx_base::LogLevel::Error, "Error"},
+        {utilxx_base::LogLevel::Out,   "Out"  },
     };
 
     for (const auto& c : cases) {
@@ -244,7 +244,7 @@ void test_match_supported_language() {
 
 void test_auto_language_detection() {
     auto& settings = TUISettings::instance();
-    auto& env      = agentxx::util::ApplicationEnv::instance();
+    auto& env      = utilxx_base::ApplicationEnv::instance();
     auto& i18n     = TuiI18n::instance();
 
     // 设为自动模式
@@ -422,8 +422,8 @@ void test_log_sink_level_filter() {
     auto& settings = TUISettings::instance();
     auto  sink     = std::make_shared<TUILogSink>();
 
-    auto makeEntry = [](agentxx::util::LogLevel level, const char* msg) {
-        return std::make_shared<const agentxx::util::LogEntry>(agentxx::util::LogEntry{
+    auto makeEntry = [](utilxx_base::LogLevel level, const char* msg) {
+        return std::make_shared<const utilxx_base::LogEntry>(utilxx_base::LogEntry{
             level,
             0,
             0,
@@ -432,50 +432,50 @@ void test_log_sink_level_filter() {
     };
 
     // 默认 Info: 仅显示 Info/Warn/Error/Out, 过滤 Trace/Debug
-    settings.setLogLevel(agentxx::util::LogLevel::Info);
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Trace, "t"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Debug, "d"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Info, "i"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Warn, "w"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Error, "e"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Out, "o"));
+    settings.setLogLevel(utilxx_base::LogLevel::Info);
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Trace, "t"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Debug, "d"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Info, "i"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Warn, "w"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Error, "e"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Out, "o"));
     sink->pump();
     {
         auto lines = sink->snapshot();
         XX_TEST_EXPECT_EQ(lines.size(), size_t{4});
         if (lines.size() == 4) {
-            XX_TEST_EXPECT_EQ(lines[0].level, agentxx::util::LogLevel::Info);
-            XX_TEST_EXPECT_EQ(lines[1].level, agentxx::util::LogLevel::Warn);
-            XX_TEST_EXPECT_EQ(lines[2].level, agentxx::util::LogLevel::Error);
-            XX_TEST_EXPECT_EQ(lines[3].level, agentxx::util::LogLevel::Out);
+            XX_TEST_EXPECT_EQ(lines[0].level, utilxx_base::LogLevel::Info);
+            XX_TEST_EXPECT_EQ(lines[1].level, utilxx_base::LogLevel::Warn);
+            XX_TEST_EXPECT_EQ(lines[2].level, utilxx_base::LogLevel::Error);
+            XX_TEST_EXPECT_EQ(lines[3].level, utilxx_base::LogLevel::Out);
         }
     }
 
     // Trace: 显示全部
     sink->clear();
-    settings.setLogLevel(agentxx::util::LogLevel::Trace);
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Trace, "t"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Debug, "d"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Info, "i"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Error, "e"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Out, "o"));
+    settings.setLogLevel(utilxx_base::LogLevel::Trace);
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Trace, "t"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Debug, "d"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Info, "i"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Error, "e"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Out, "o"));
     sink->pump();
     XX_TEST_EXPECT_EQ(sink->snapshot().size(), size_t{5});
 
     // Error: 仅显示 Error/Out
     sink->clear();
-    settings.setLogLevel(agentxx::util::LogLevel::Error);
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Trace, "t"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Info, "i"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Error, "e"));
-    sink->enqueue(makeEntry(agentxx::util::LogLevel::Out, "o"));
+    settings.setLogLevel(utilxx_base::LogLevel::Error);
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Trace, "t"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Info, "i"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Error, "e"));
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Out, "o"));
     sink->pump();
     {
         auto lines = sink->snapshot();
         XX_TEST_EXPECT_EQ(lines.size(), size_t{2});
         if (lines.size() == 2) {
-            XX_TEST_EXPECT_EQ(lines[0].level, agentxx::util::LogLevel::Error);
-            XX_TEST_EXPECT_EQ(lines[1].level, agentxx::util::LogLevel::Out);
+            XX_TEST_EXPECT_EQ(lines[0].level, utilxx_base::LogLevel::Error);
+            XX_TEST_EXPECT_EQ(lines[1].level, utilxx_base::LogLevel::Out);
         }
     }
 
@@ -492,7 +492,7 @@ void test_concurrent_access() {
     std::thread       writer([&] {
         for (int i = 0; i < kIterations && !stop.load(); ++i) {
             settings.setAnimationLevel(static_cast<AnimationLevel>(i % 5));
-            settings.setLogLevel(static_cast<agentxx::util::LogLevel>(i % 6));
+            settings.setLogLevel(static_cast<utilxx_base::LogLevel>(i % 6));
         }
     });
 
@@ -539,12 +539,12 @@ void test_persist_to_db() {
 
     // 预先向数据库写入历史记录 (模拟上次会话已保存的语言和主题)
     {
-        agentxx::util::SettingsDb pre(dbPath);
+        utilxx::SettingsDb pre(dbPath);
         pre.setInt64("tui.lang", static_cast<int64_t>(TuiLanguage::ZhCn));
         pre.setInt64("tui.theme", static_cast<int64_t>(TUISettings::kThemeLight));
     }
 
-    auto db = std::make_shared<agentxx::util::SettingsDb>(dbPath);
+    auto db = std::make_shared<utilxx::SettingsDb>(dbPath);
     settings.attachDb(db);
 
     // 校验 attachDb 成功从数据库恢复已存设置
@@ -554,11 +554,11 @@ void test_persist_to_db() {
     // 写入设置 → 直接读库文件校验持久化 (绕过单例, 模拟重启后的新进程)
     settings.setThemeKind(TUISettings::kThemeLight);
     settings.setAnimationLevel(AnimationLevel::Low);
-    settings.setLogLevel(agentxx::util::LogLevel::Warn);
+    settings.setLogLevel(utilxx_base::LogLevel::Warn);
     settings.setTailThinkingMode(TailThinkingMode::SingleLine);
     settings.setLanguage(TuiLanguage::EnUs);
     {
-        auto fresh = agentxx::util::SettingsDb(dbPath);
+        auto fresh = utilxx::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
@@ -574,11 +574,11 @@ void test_persist_to_db() {
     // 再次变更 → 库文件同步更新
     settings.setThemeKind(TUISettings::kThemeDark);
     settings.setAnimationLevel(AnimationLevel::Ultra);
-    settings.setLogLevel(agentxx::util::LogLevel::Debug);
+    settings.setLogLevel(utilxx_base::LogLevel::Debug);
     settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
     settings.setLanguage(TuiLanguage::ZhCn);
     {
-        auto fresh = agentxx::util::SettingsDb(dbPath);
+        auto fresh = utilxx::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
@@ -592,7 +592,7 @@ void test_persist_to_db() {
     // 变更为 English (EnUs)
     settings.setLanguage(TuiLanguage::EnUs);
     {
-        auto fresh = agentxx::util::SettingsDb(dbPath);
+        auto fresh = utilxx::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(
             fresh.getInt64("tui.lang", -1),
             int64_t{static_cast<int>(TuiLanguage::EnUs)}
@@ -602,7 +602,7 @@ void test_persist_to_db() {
     // 变更为自动 (Auto)
     settings.setLanguage(TuiLanguage::Auto);
     {
-        auto fresh = agentxx::util::SettingsDb(dbPath);
+        auto fresh = utilxx::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(
             fresh.getInt64("tui.lang", -1),
             int64_t{static_cast<int>(TuiLanguage::Auto)}

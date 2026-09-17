@@ -4,6 +4,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/json.h"
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -83,10 +84,10 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(agentxx::util::Json{
+            auto out = co_await tool->execute_async(utilxx_base::Json{
                 {"command", "status"}
             });
-            auto j   = agentxx::util::Json::parse(out);
+            auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), false);
         }
@@ -96,18 +97,18 @@ asio::awaitable<TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         if (tool) {
-            auto out = co_await tool->execute_async(agentxx::util::Json{
+            auto out = co_await tool->execute_async(utilxx_base::Json{
                 {"command",     "start"},
                 {"debounce_ms", 300    },
             });
-            auto j   = agentxx::util::Json::parse(out);
+            auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), true);
 
-            auto out2 = co_await tool->execute_async(agentxx::util::Json{
+            auto out2 = co_await tool->execute_async(utilxx_base::Json{
                 {"command", "stop"}
             });
-            auto j2   = agentxx::util::Json::parse(out2);
+            auto j2   = utilxx_base::Json::parse(out2);
             XX_TEST_EXPECT_EQ(j2["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j2["running"].get<bool>(), false);
         }

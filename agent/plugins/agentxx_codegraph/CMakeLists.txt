@@ -40,9 +40,9 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "${AGENTXX_INSTALL_DIR}/include/Glob-1.0" # glob/glob.h
     "${AGENTXX_INSTALL_DIR}/include/uchardet"
   )
-  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 复用 cxx_utilxx_base_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
 set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -91,13 +91,13 @@ add_library(${PLUGIN_NAME} SHARED
   codegraph_manager.cpp
 )
 # 依赖 (与 lib/CMakeLists.txt 一致; fmt/Glob 经 find_package 提供目标)
-# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# find_package 经 AGENTXX_INSTALL_DIR 的 agentxx_util config 解析,
+# 复用 cxx_utilxx_base_static 工具库 (插件静态链接, 与宿主副本符号互不冲突;
+# find_package 经 AGENTXX_INSTALL_DIR 的 cxx_utilxx_base_static config 解析,
 # 依赖链 fmt/SQLite3/uchardet/Iconv 由 config 内 find_dependency 传递)
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_base_static)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 find_package(fmt REQUIRED)
 find_package(Glob REQUIRED)
@@ -116,7 +116,7 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
 # codegraph_core 为静态库, 需连带其传递依赖 (与 lib/CMakeLists.txt
 # _AGENTXX_CODEGRAPH_LIBS 一致 + sqlite3/simdjson/glob/uchardet/fmt)
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
   codegraph_core
   tree_sitter
   ts_cpp ts_python ts_javascript ts_dart ts_typescript ts_tsx

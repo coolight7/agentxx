@@ -1,5 +1,5 @@
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/util/hash.h"
+#include "utilxx_base/hash.h"
 #include <fmt/format.h>
 
 namespace agentxx {
@@ -7,9 +7,9 @@ namespace agent {
 
 void ChainHash::append(std::string_view serialized) {
     // 用 count_ 判断首次追加, 而非 hash_==0 (合法链哈希也可能算出 0, 会错误重置种子)
-    hash_ = agentxx::util::hash::fnv1a64(
+    hash_ = utilxx_base::hash::fnv1a64(
         serialized,
-        count_ == 0 ? agentxx::util::hash::kFnv1a64OffsetBasis : hash_
+        count_ == 0 ? utilxx_base::hash::kFnv1a64OffsetBasis : hash_
     );
     ++count_;
 }

@@ -2,8 +2,8 @@
 
 #include "agentxx-client/config_loader.h"
 #include "agentxx/agent/config_static.h"
-#include "agentxx/util/env.h"
-#include "agentxx/util/http_client.h"
+#include "utilxx_base/env.h"
+#include "utilxx/http_client.h"
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -97,7 +97,7 @@ public:
 
     SystemEnvGuard(const std::string& key, const std::string& value) :
         key_(key) {
-        auto hadOpt = agentxx::util::ApplicationEnv::instance().getSystem(key_);
+        auto hadOpt = utilxx_base::ApplicationEnv::instance().getSystem(key_);
         existed_    = hadOpt.has_value();
         saved_      = hadOpt ? *hadOpt : std::string{};
         setSystemEnvVarValue(key_, value);
@@ -725,7 +725,7 @@ void test_yaml_to_json_big_integer() {
 
 void test_url_decode() {
     // P3-4: URL 解码功能验证 (支持 + 转空格, %XX 十六进制还原)
-    auto decoded = agentxx::util::HttpClient::urlDecode("hello%20world%2B%2F%3D+test%21");
+    auto decoded = utilxx::HttpClient::urlDecode("hello%20world%2B%2F%3D+test%21");
     XX_TEST_EXPECT_EQ(decoded, std::string("hello world+/= test!"));
 }
 
@@ -917,9 +917,9 @@ void test_builtin_exec_dir_inject() {
 void test_builtin_exec_dir_uninjected_kept() {
     // 未注入且无系统/.env 变量: 保留 ${AGENTXX_EXEC_DIR} 原样 (可执行目录无法惰性推导)
     agentxx::client::setBuiltinEnvVar(agentxx::client::kBuiltinExecDirEnv, "");
-    agentxx::util::ApplicationEnv::instance().remove("AGENTXX_EXEC_DIR");
+    utilxx_base::ApplicationEnv::instance().remove("AGENTXX_EXEC_DIR");
     auto        cfg    = loadYaml("data_dir: ${AGENTXX_EXEC_DIR}/data\n");
-    auto        curOpt = agentxx::util::ApplicationEnv::instance().getSystem("AGENTXX_EXEC_DIR");
+    auto        curOpt = utilxx_base::ApplicationEnv::instance().getSystem("AGENTXX_EXEC_DIR");
     const char* cur    = curOpt ? curOpt->c_str() : nullptr;
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样
@@ -985,9 +985,9 @@ void test_env_order_unresolved_kept() {
     // 注: 部分平台 (Windows _putenv_s) 清除变量时可能置为空串而非删除,
     // 空串同样视为"未定义"(展开为空串); 两种情况分别断言
     const char* key = "AGENTXX_TEST_ENV_MISSING_9F3K2Q";
-    agentxx::util::ApplicationEnv::instance().remove(key);
+    utilxx_base::ApplicationEnv::instance().remove(key);
     auto        cfg    = loadYaml("data_dir: ${AGENTXX_TEST_ENV_MISSING_9F3K2Q}/data\n");
-    auto        curOpt = agentxx::util::ApplicationEnv::instance().getSystem(key);
+    auto        curOpt = utilxx_base::ApplicationEnv::instance().getSystem(key);
     const char* cur    = curOpt ? curOpt->c_str() : nullptr;
     if (cur == nullptr) {
         // 变量被真正删除: 保留 ${VAR} 原样

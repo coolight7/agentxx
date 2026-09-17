@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
-#include "agentxx/util/asio_error.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
 #include "asio/awaitable.hpp"
 #include <cstdint>
 #include <memory>
@@ -85,7 +85,7 @@ struct WireInterruptRequest {
 
 struct WireInterruptResponse {
     int64_t             id = 0;
-    agentxx::util::Json result;
+    utilxx_base::Json result;
 };
 
 /// 服务端通知中断已过期 (超时/会话取消) (Server -> Client)
@@ -163,7 +163,7 @@ struct WireGetContext {
 
 /// 服务端 LLM 上下文消息响应 (Server -> Client)
 struct WireContextMessages {
-    agentxx::util::Json messages;
+    utilxx_base::Json messages;
 };
 
 /// 客户端请求压缩当前会话上下文 (Client -> Server)

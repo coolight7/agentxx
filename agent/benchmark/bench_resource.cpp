@@ -9,10 +9,10 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/ffi_api.h"
-#include "agentxx/util/env.h"
-#include "agentxx/util/http_server.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/env.h"
+#include "utilxx/http_server.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -130,7 +130,7 @@ uint16_t findFreeTcpPort() {
 // ---------------------------------------------------------------------------
 
 struct ResourceLlmSimServer {
-    std::unique_ptr<agentxx::util::HttpServer> svr;
+    std::unique_ptr<utilxx::HttpServer> svr;
     std::thread                                thr;
     uint16_t                                   port  = 0;
     std::shared_ptr<std::atomic<size_t>> turnCounter = std::make_shared<std::atomic<size_t>>(0);
@@ -179,7 +179,7 @@ struct ResourceLlmSimServer {
 ResourceLlmSimServer startResourceLlmSimServer() {
     ResourceLlmSimServer sim;
 
-    agentxx::util::HttpServer::Config cfg;
+    utilxx::HttpServer::Config cfg;
     cfg.address          = "127.0.0.1";
     cfg.port             = 0;
     cfg.ioThreads        = 1;
@@ -187,7 +187,7 @@ ResourceLlmSimServer startResourceLlmSimServer() {
     cfg.maxConnections   = 128;
     cfg.maxRequestBody   = 10 * 1024 * 1024;
 
-    sim.svr           = std::make_unique<agentxx::util::HttpServer>(cfg);
+    sim.svr           = std::make_unique<utilxx::HttpServer>(cfg);
     auto* rawSvr      = sim.svr.get();
     auto  turnCounter = sim.turnCounter;
 
@@ -195,9 +195,9 @@ ResourceLlmSimServer startResourceLlmSimServer() {
     rawSvr->router().add(
         "/health",
         1,
-        std::make_shared<agentxx::util::HttpServer::Handler>(
-            [](agentxx::util::HttpServer::Request&,
-               agentxx::util::HttpServer::Response& resp,
+        std::make_shared<utilxx::HttpServer::Handler>(
+            [](utilxx::HttpServer::Request&,
+               utilxx::HttpServer::Response& resp,
                std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
                 resp.result(http::status::ok);
@@ -209,10 +209,10 @@ ResourceLlmSimServer startResourceLlmSimServer() {
         )
     );
 
-    auto chatHandler = std::make_shared<agentxx::util::HttpServer::Handler>(
+    auto chatHandler = std::make_shared<utilxx::HttpServer::Handler>(
         [turnCounter](
-            agentxx::util::HttpServer::Request&  req,
-            agentxx::util::HttpServer::Response& resp,
+            utilxx::HttpServer::Request&  req,
+            utilxx::HttpServer::Response& resp,
             std::string_view
         ) -> asio::awaitable<void> {
             namespace http = boost::beast::http;

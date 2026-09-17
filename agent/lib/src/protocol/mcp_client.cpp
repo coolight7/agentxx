@@ -1,7 +1,7 @@
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
-#include "agentxx/util/async_offload.h"
+#include "utilxx/async_offload.h"
 #include "agentxx/util/exception.h"
 #include <fmt/format.h>
 #include <thread>
@@ -23,9 +23,9 @@
 #endif
 #endif
 
-#include "agentxx/util/async_mutex.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/async_mutex.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -126,11 +126,11 @@ bool isBase64Sentinel(std::string_view s) {
 /// 典型格式 (阿里云 FC / ModelScope 网关):
 ///   {"RequestId":"...","Code":"SessionExpired","Message":"session xxx is expired"}
 /// 仅针对明确的 session 过期语义, 避免把普通 401 (如鉴权失败) 误判为会话过期
-bool isSessionExpiredResponse(const agentxx::util::HttpResponse& resp) {
+bool isSessionExpiredResponse(const utilxx::HttpResponse& resp) {
     if (resp.status != 401) {
         return false;
     }
-    auto lower = agentxx::util::toLower(resp.body);
+    auto lower = utilxx_base::toLower(resp.body);
     return lower.find("sessionexpired") != std::string::npos
            || lower.find("session_expired") != std::string::npos
            || lower.find("session expired") != std::string::npos
@@ -144,7 +144,7 @@ bool isSessionExpiredResponse(const agentxx::util::HttpResponse& resp) {
 /// -32601/-32602, 此时回退到 legacy initialize 握手是**预期流程**, 日志应降为
 /// 信息级; 而连接失败/超时/TLS/响应截断等传输层错误属于真正异常, 保留 WARN。
 bool isLegacyProbeFailure(std::string_view errmsg) {
-    auto lower = agentxx::util::toLower(errmsg);
+    auto lower = utilxx_base::toLower(errmsg);
     // 明确的协议级特征 (旧版服务器对未知 modern 方法/无 session 请求的典型响应)
     static constexpr std::string_view kLegacyTags[] = {
         "no valid session",
@@ -234,7 +234,7 @@ struct McpClient::StdioTransport {
 
         std::string buffer;
         while (running.load()) {
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             std::size_t              n = co_await asio::async_read_until(
                 *stdoutPipe,
                 asio::dynamic_buffer(buffer, 4096),
@@ -286,7 +286,7 @@ struct McpClient::StdioTransport {
             return;
         }
         running.store(false);
-        neograph_asio_error_code ec;
+        utilxx_base::AsioErrorCode ec;
         if (stdinPipe.has_value()) {
             stdinPipe->close(ec);
         }
@@ -1281,18 +1281,18 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
 
     std::string sseUrl = buildSseUrl(config_.serverUrl);
 
-    auto headers = util::HeaderMap{};
+    auto headers = utilxx::HeaderMap{};
     headers.set("Accept", "text/event-stream");
 
     std::string sseBody;
     try {
-        co_await util::HttpClient::requestSseAsync(
+        co_await utilxx::HttpClient::requestSseAsync(
             "GET",
             sseUrl,
             "",
             "",
             headers,
-            util::HttpClient::RequestConfig{
+            utilxx::HttpClient::RequestConfig{
                 .readChunkTimeout = std::min(config_.initTimeout, std::chrono::milliseconds(800))
             },
             [&](std::string_view chunk) -> bool {
@@ -1313,7 +1313,7 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
     for (const auto& ev : events) {
         if (ev.event == "endpoint") {
             std::string path = ev.data;
-            auto [base, _]   = util::HttpClient::splitUrl(config_.serverUrl);
+            auto [base, _]   = utilxx::HttpClient::splitUrl(config_.serverUrl);
 
             auto qpos = path.find('?');
             if (qpos != std::string::npos) {
@@ -1346,7 +1346,7 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
     co_return;
 }
 
-util::HeaderMap McpClient::buildHttpHeaders() const {
+utilxx::HeaderMap McpClient::buildHttpHeaders() const {
     auto headers = config_.extraHeaders;
     if (config_.protocolVersion == kProtocol2025_11_25) {
         if (!headers.contains("MCP-Protocol-Version")) {
@@ -1375,7 +1375,7 @@ std::string McpClient::encodeMcpHeaderValue(const json& value) {
     }
     // 非安全字符或与 sentinel 模式冲突时使用 Base64 编码
     if (!isPlainAsciiHeaderSafe(s) || isBase64Sentinel(s)) {
-        return fmt::format("=?base64?{}?=", agentxx::util::base64Encode(s));
+        return fmt::format("=?base64?{}?=", utilxx_base::base64Encode(s));
     }
     return s;
 }
@@ -1383,7 +1383,7 @@ std::string McpClient::encodeMcpHeaderValue(const json& value) {
 std::string McpClient::decodeMcpHeaderValue(std::string_view value) {
     if (isBase64Sentinel(value)) {
         auto inner = value.substr(9, value.size() - 11); // 去掉 =?base64? 与 ?=
-        auto dec   = agentxx::util::base64Decode(inner);
+        auto dec   = utilxx_base::base64Decode(inner);
         if (dec.has_value()) {
             return std::move(*dec);
         }
@@ -1484,7 +1484,7 @@ std::optional<McpToolDefinition> McpClient::cachedTool(std::string_view name) co
     return it->second;
 }
 
-util::HeaderMap
+utilxx::HeaderMap
     McpClient::buildModernHttpHeaders(std::string_view method, const json& params) const {
     auto headers = config_.extraHeaders;
     headers.set("MCP-Protocol-Version", effectiveProtocolVersion());
@@ -1537,12 +1537,12 @@ asio::awaitable<std::expected<json, std::string>>
     auto headers = buildModernHttpHeaders(method, params);
 
     auto doPost
-        = [&]() -> asio::awaitable<std::expected<agentxx::util::HttpResponse, std::string>> {
-        co_return co_await util::HttpClient::postAsync(
+        = [&]() -> asio::awaitable<std::expected<utilxx::HttpResponse, std::string>> {
+        co_return co_await utilxx::HttpClient::postAsync(
             config_.serverUrl,
             req,
             headers,
-            util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
+            utilxx::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
         );
     };
 
@@ -1550,7 +1550,7 @@ asio::awaitable<std::expected<json, std::string>>
     if (!resp.has_value()) {
         // 瞬时传输错误 (响应被截断/连接重置/超时) 自动重试, 语义同 sendHttpRequest
         for (int attempt = 0;
-             !resp.has_value() && util::HttpClient::isTransientError(resp.error()) && attempt < 2;
+             !resp.has_value() && utilxx::HttpClient::isTransientError(resp.error()) && attempt < 2;
              ++attempt) {
             XX_LOGW(
                 "[McpClient] transient HTTP error on {} ({}), retrying ({}/2)",
@@ -1643,21 +1643,21 @@ asio::awaitable<std::expected<json, std::string>>
     auto req = makeRequest(id, method, params);
 
     auto doPost
-        = [&]() -> asio::awaitable<std::expected<agentxx::util::HttpResponse, std::string>> {
+        = [&]() -> asio::awaitable<std::expected<utilxx::HttpResponse, std::string>> {
         // headers 每次请求时重建: 反映最新的 mcpSessionId_ (会话重建后复用本 lambda)
         auto hdrs = buildHttpHeaders();
-        co_return co_await util::HttpClient::postAsync(
+        co_return co_await utilxx::HttpClient::postAsync(
             httpMessageUrl_,
             req,
             hdrs,
-            util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
+            utilxx::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
         );
     };
 
     // ---- 传输层瞬时错误 (响应被截断/连接重置/超时): 自动重试, 最多 2 次额外尝试 ----
     auto resp = co_await doPost();
     for (int attempt = 0;
-         !resp.has_value() && util::HttpClient::isTransientError(resp.error()) && attempt < 2;
+         !resp.has_value() && utilxx::HttpClient::isTransientError(resp.error()) && attempt < 2;
          ++attempt) {
         XX_LOGW(
             "[McpClient] transient HTTP error on {} ({}), retrying ({}/2)",
@@ -1681,7 +1681,7 @@ asio::awaitable<std::expected<json, std::string>>
         );
         if (co_await rebuildHttpSession()) {
             resp = co_await doPost();
-            if (!resp.has_value() && util::HttpClient::isTransientError(resp.error())) {
+            if (!resp.has_value() && utilxx::HttpClient::isTransientError(resp.error())) {
                 resp = co_await doPost();
             }
             if (!resp.has_value()) {
@@ -1791,11 +1791,11 @@ asio::awaitable<bool> McpClient::rebuildHttpSession() {
 
     auto req     = makeRequest(nextId_.fetch_add(1), "initialize", std::move(params));
     auto headers = buildHttpHeaders(); // mcpSessionId_ 已清空 → 无 session header
-    auto resp    = co_await util::HttpClient::postAsync(
+    auto resp    = co_await utilxx::HttpClient::postAsync(
         httpMessageUrl_,
         req,
         headers,
-        util::HttpClient::RequestConfig{.readChunkTimeout = config_.initTimeout}
+        utilxx::HttpClient::RequestConfig{.readChunkTimeout = config_.initTimeout}
     );
     if (!resp.has_value()) {
         XX_LOGW("[McpClient] rebuild session failed: {}", resp.error());
@@ -1835,7 +1835,7 @@ asio::awaitable<std::expected<json, std::string>>
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
         auto                     wguard = co_await stdioWriteMutex_->lock();
-        neograph_asio_error_code wec;
+        utilxx_base::AsioErrorCode wec;
         co_await asio::async_write(
             *stdio_->stdinPipe,
             asio::buffer(reqStr),
@@ -2033,13 +2033,13 @@ asio::awaitable<std::expected<void, std::string>> McpClient::listen(
 
     auto result = co_await agentxx::util::catchErrorAsync<std::expected<void, std::string>>(
         [&]() -> asio::awaitable<std::expected<void, std::string>> {
-            co_await util::HttpClient::requestSseAsync(
+            co_await utilxx::HttpClient::requestSseAsync(
                 "POST",
                 config_.serverUrl,
                 req.dump(),
                 "application/json",
                 headers,
-                util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout},
+                utilxx::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout},
                 [&](std::string_view chunk) -> bool {
                     sseBuffer.append(chunk);
                     // 按空行切分完整 SSE 事件
@@ -2079,7 +2079,7 @@ asio::awaitable<std::expected<void, std::string>> McpClient::listen(
 asio::awaitable<bool> McpClient::writeStdioLine(const std::string& line) {
     auto wguard = co_await stdioWriteMutex_->lock();
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    neograph_asio_error_code wec;
+    utilxx_base::AsioErrorCode wec;
     co_await asio::async_write(
         *stdio_->stdinPipe,
         asio::buffer(line),
@@ -2125,11 +2125,11 @@ asio::awaitable<void> McpClient::sendRawNotification(std::string_view method, co
 
     if (config_.isHttp()) {
         auto                  url  = httpMessageUrl_.empty() ? config_.serverUrl : httpMessageUrl_;
-        [[maybe_unused]] auto resp = co_await util::HttpClient::postAsync(
+        [[maybe_unused]] auto resp = co_await utilxx::HttpClient::postAsync(
             url,
             req,
             buildHttpHeaders(),
-            util::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
+            utilxx::HttpClient::RequestConfig{.readChunkTimeout = config_.requestTimeout}
         );
     } else if (config_.isStdio()) {
         auto reqStr = fmt::format("{}\n", req.dump());
@@ -2143,7 +2143,7 @@ bool McpClient::startStdioSubprocess(asio::any_io_executor executor) {
         return false;
     }
 
-    stdioWriteMutex_ = std::make_unique<util::AsyncMutex>(executor);
+    stdioWriteMutex_ = std::make_unique<utilxx_base::AsyncMutex>(executor);
 
     bool ok = agentxx::util::catchError<bool>(
         [&]() -> bool {
@@ -2300,7 +2300,7 @@ neograph::ChatTool McpClientTool::get_definition() const {
     return tool;
 }
 
-asio::awaitable<std::string> McpClientTool::execute_async(const agentxx::util::Json& arguments) {
+asio::awaitable<std::string> McpClientTool::execute_async(const utilxx_base::Json& arguments) {
     // 工具调用整体超时 (配置项 toolCallTimeout, 毫秒; 0 = 不限制):
     // - 覆盖 callTool 的完整流程 (含 HeaderMismatch 重试等), 是总超时兜底
     // - 超时时取消底层请求 (HTTP/stdio), 返回超时错误; 外部取消按原语义传播
@@ -2308,7 +2308,7 @@ asio::awaitable<std::string> McpClientTool::execute_async(const agentxx::util::J
     auto callWithTimeout = [&]() -> asio::awaitable<std::expected<json, std::string>> {
         co_return co_await client_->callTool(def_.name, arguments);
     };
-    auto result = co_await agentxx::util::asyncWithTimeout<std::expected<json, std::string>>(
+    auto result = co_await utilxx::asyncWithTimeout<std::expected<json, std::string>>(
         callWithTimeout,
         client_->config_.toolCallTimeout,
         [this]() -> std::expected<json, std::string> {

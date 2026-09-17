@@ -3,6 +3,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx_math/math_impl.h"
+#include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 #include <cmath>
 #include <filesystem>
@@ -36,7 +37,7 @@ struct MathCalculateTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return agentxx_math_plugin::mathCalculateExecute(args);
     }
 };
@@ -618,7 +619,7 @@ static asio::awaitable<void>
 
             auto tool = ctx->toolRegistry->find(toolName);
             if (tool) {
-                auto out = co_await tool->execute_async(agentxx::util::Json{
+                auto out = co_await tool->execute_async(utilxx_base::Json{
                     {"expression", "sin(pi / 6)"},
                     {"precision",  2            }
                 });

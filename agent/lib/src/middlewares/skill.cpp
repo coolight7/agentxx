@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/skill.h"
 
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include "yaml-cpp/yaml.h"
 #include <algorithm>
@@ -25,7 +25,7 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
             item.second.name,
             item.second.description,
             item.second.compatibility,
-            agentxx::util::stringVectorJoin(item.second.allowed_tools),
+            utilxx_base::stringVectorJoin(item.second.allowed_tools),
             fmt::format("{}/SKILL.md", item.first)
         );
     }
@@ -50,7 +50,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
                 std::istreambuf_iterator<char>(stream),
                 std::istreambuf_iterator<char>()
             };
-            agentxx::util::autoConvertToUtf8(filecontent);
+            utilxx_base::autoConvertToUtf8(filecontent);
             stream.close();
             const auto yamlDelimiter = std::string_view{"---"};
             auto       yamlStart     = filecontent.find(yamlDelimiter);
@@ -86,7 +86,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
                         data.compatibility = metadata["compatibility"].as<std::string>();
                     }
                     if (metadata["allowed-tools"].IsScalar()) {
-                        data.allowed_tools = agentxx::util::strSplitCopied(
+                        data.allowed_tools = utilxx_base::strSplitCopied(
                             metadata["allowed-tools"].as<std::string>(),
                             ' '
                         );

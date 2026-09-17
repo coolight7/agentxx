@@ -8,9 +8,9 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/tools/subagent.h"
-#include "agentxx/util/async_offload.h"
+#include "utilxx/async_offload.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include <algorithm>
 #include <chrono>
@@ -325,12 +325,12 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                         }
                     }
 
-                    agentxx::util::Json args;
+                    utilxx_base::Json args;
                     if (toolcallIndex >= 0) {
                         // 非法 JSON 参数: 跳过该条而非中断整轮压缩
                         agentxx::util::catchError<bool>(
                             [&]() -> bool {
-                                args = agentxx::util::Json::parse(
+                                args = utilxx_base::Json::parse(
                                     messages[lastMsgIndex].tool_calls[toolcallIndex].arguments
                                 );
                                 return true;
@@ -357,11 +357,11 @@ void SummarizationMiddlewareHandle::doSummarizeToolcall(std::vector<neograph::Ch
                     if (itemHandleIt != summarizationToolHandles.end()
                         && itemHandleIt->second.generateDeduplicationKey
                         && itemHandleIt->second.truncateRequest) {
-                        agentxx::util::Json args;
+                        utilxx_base::Json args;
                         // 非法 JSON 参数: 跳过该条而非中断整轮压缩
                         agentxx::util::catchError<bool>(
                             [&]() -> bool {
-                                args = agentxx::util::Json::parse(tc.arguments);
+                                args = utilxx_base::Json::parse(tc.arguments);
                                 return true;
                             },
                             [](std::string) -> bool {
@@ -532,7 +532,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     //   resume 后此调用返回 subagent 输出 (摘要)
     neograph::json neoReqMsgs;
     neograph::to_json(neoReqMsgs, reqMsgs);
-    agentxx::util::Json reqMsgsJson = agentxx::util::fromNeographJson(neoReqMsgs);
+    utilxx_base::Json reqMsgsJson = agentxx::util::fromNeographJson(neoReqMsgs);
 
     if (direct) {
         // 手动压缩直派模式 (agent 空闲触发, 无 AgentRunner 中断循环):
@@ -556,7 +556,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 .subagentName = "subagent_task",
                 .messages     = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
                 .sessionId    = std::string{sessionId},
-                .tools        = agentxx::util::Json::array(), // []: 无工具
+                .tools        = utilxx_base::Json::array(), // []: 无工具
                 .enableSummarization = false,
             });
 
@@ -564,7 +564,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             // 无限等待 (占用 io 线程); 超时放弃等待 (子代理后台完成自回收),
             // 返回空串由调用方走 hardTruncate 兜底
             constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{2}};
-            auto batchResp = co_await agentxx::util::asyncWithTimeout<events::RespSubagentBatch>(
+            auto batchResp = co_await utilxx::asyncWithTimeout<events::RespSubagentBatch>(
                 [&]() -> asio::awaitable<events::RespSubagentBatch> {
                     co_return co_await host->spawnBatch(batchReq, agentCtxPtr);
                 },
@@ -599,7 +599,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 无 host 时 (如单测 mock 环境), 降级走总线请求
     }
 
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"subagent",             "subagent_task"       },
         {"messages",             std::move(reqMsgsJson)},
         {"sessionId",            std::string{sessionId}},
@@ -742,7 +742,7 @@ asio::awaitable<void>
     size_t apiTokenUsage = 0;
     {
         const auto& apiTokenUsageJson
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
             );
@@ -761,7 +761,7 @@ asio::awaitable<void>
         session->contextStats->maxContextTokens = modelContenxtMaxToken;
     }
 
-    agentxx::util::Json newMsgsJson;
+    utilxx_base::Json newMsgsJson;
 
     // ---- 超过 75% 上限时自动压缩 ----
     if (tokenUsage >= modelContenxtMaxToken * 0.75) {
@@ -829,7 +829,7 @@ asio::awaitable<void>
         size_t lastSummarizedMsgCount = 0;
         {
             const auto& countJson
-                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                     sessionId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount
                 );
@@ -840,7 +840,7 @@ asio::awaitable<void>
         size_t currentFailCount = 0;
         {
             const auto& fcJson
-                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                     sessionId,
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
                 );
@@ -1029,7 +1029,7 @@ asio::awaitable<void>
             oldTokens,
             newTokens,
             modelContenxtMaxToken,
-            agentxx::util::formatDurationMilliseconds(durationMs)
+            utilxx_base::formatDurationMilliseconds(durationMs)
         );
         vm.durationMs = durationMs;
         if (session) {
@@ -1246,7 +1246,7 @@ asio::awaitable<bool>
         oldTokens,
         newTokens,
         modelContenxtMaxToken,
-        agentxx::util::formatDurationMilliseconds(durationMs)
+        utilxx_base::formatDurationMilliseconds(durationMs)
     );
     vm.durationMs = durationMs;
     session->updateViewMessage(vm);

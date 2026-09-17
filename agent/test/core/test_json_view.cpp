@@ -1,6 +1,6 @@
 #include "agentxx-test/core/test_json_view.h"
 
-#include "agentxx/util/json_view.h"
+#include "utilxx_base/json_view.h"
 #include <string>
 
 namespace {
@@ -13,7 +13,8 @@ int g_jv_failed = 0;
 #define XX_TEST_PASSED g_jv_passed
 #define XX_TEST_FAILED g_jv_failed
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
 
 namespace {
 

@@ -1,5 +1,5 @@
 # agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView) + Glob
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_static (Json/JsonView) + Glob
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx; Glob 为 libagentxx 既有链接
 set(PLUGIN_NAME agentxx_filesystem)
@@ -38,13 +38,13 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"              # fs_plugin.h / filesystem_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"               # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"           # agentxx_util (Json/JsonView)
+    "${AGENTXX_INSTALL_DIR}/include"           # cxx_utilxx_static (Json/JsonView)
     "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
     ${_BOOST_INCLUDES}                         # asio stream_file (read/write/edit 协程执行体)
   )
-  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 复用 cxx_utilxx_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径/依赖 include: XXRegex/aho_corasick 实现于 util)
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_static)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -73,18 +73,18 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 # ===== 依赖统一查找与链接 =====
-if (NOT TARGET agentxx_util)
+if (NOT TARGET cxx_utilxx_static)
   # 经 libagentxx 嵌套构建 (add_subdirectory ../plugins) 时 util 目标已存在,
   # 此时 install 目录尚未生成 config, 跳过导入直接复用构建树目标;
   # 独立构建本插件时再经安装 config 导入
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx REQUIRED)
 endif()
 find_package(Glob REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"              # fs_plugin.h / filesystem_impl.h
   "${AGENTXX_LIB_INCLUDE_DIR}"               # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"          # agentxx_util (Json/JsonView)
+  "${AGENTXX_INSTALL_DIR}/include/"          # cxx_utilxx_static (Json/JsonView)
   "${AGENTXX_INSTALL_DIR}/include/Glob-1.0"  # glob/glob.h (filesystem_impl.h)
 )
 target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
@@ -92,25 +92,15 @@ target_include_directories(${PLUGIN_NAME} SYSTEM PRIVATE
 )
 
 # 裸库名依赖解析目录: hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
+# AGENTXX_INSTALL_DIR/lib 经 cxx_utilxx_static PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_static
   Glob
 )
-if (AGENTXX_ENABLE_HYPERSCAN)
-  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
-  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # io_uring 同上由总控统一定义 (util 的 asio 重模块在 -DASIO_HAS_IO_URING
-  # 下引用其符号)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
-endif()
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26

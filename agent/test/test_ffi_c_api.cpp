@@ -13,8 +13,8 @@
 #include "agentxx-test/test_ffi_c_api.h"
 
 #include "agentxx/ffi_api.h"
-#include "agentxx/util/http_server.h"
-#include "agentxx/util/json.h"
+#include "utilxx/http_server.h"
+#include "utilxx_base/json.h"
 #include "agentxx/version.h"
 
 #if XX_IS_WIN_D
@@ -141,7 +141,7 @@ struct FfiEventRecorder {
                 continue;
             }
             try {
-                auto j = agentxx::util::Json::parse(payload);
+                auto j = utilxx_base::Json::parse(payload);
                 if (j.value("kind", std::string{}) == kind) {
                     return true;
                 }
@@ -157,7 +157,7 @@ struct FfiEventRecorder {
 // ---------------------------------------------------------------------------
 
 struct FfiMockLLM {
-    std::unique_ptr<agentxx::util::HttpServer> server;
+    std::unique_ptr<utilxx::HttpServer> server;
     std::thread                                thread;
     std::atomic<int>                           requestCount{0};
     /// 首个请求返回工具调用 (模拟需要权限/输入的工具选择)
@@ -172,28 +172,28 @@ struct FfiMockLLM {
     /// 文本流式 SSE chunks (openai chat completion 流式格式)
     static std::string textSse(std::string_view content) {
         const std::string id = "chatcmpl-ffi-mock";
-        return std::string("data: ") + agentxx::util::Json{
+        return std::string("data: ") + utilxx_base::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", agentxx::util::Json::array({
-                agentxx::util::Json{{"index", 0}, {"delta", {{"role", "assistant"}, {"content", ""}}}},
+            {"choices", utilxx_base::Json::array({
+                utilxx_base::Json{{"index", 0}, {"delta", {{"role", "assistant"}, {"content", ""}}}},
             })},
         }.dump() + "\n\n"
-        + "data: " + agentxx::util::Json{
+        + "data: " + utilxx_base::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", agentxx::util::Json::array({
-                agentxx::util::Json{{"index", 0}, {"delta", {{"content", content}}}},
+            {"choices", utilxx_base::Json::array({
+                utilxx_base::Json{{"index", 0}, {"delta", {{"content", content}}}},
             })},
         }.dump() + "\n\n"
-        + "data: " + agentxx::util::Json{
+        + "data: " + utilxx_base::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", agentxx::util::Json::array({
-                agentxx::util::Json{{"index", 0}, {"delta", agentxx::util::Json::object()}, {"finish_reason", "stop"}},
+            {"choices", utilxx_base::Json::array({
+                utilxx_base::Json{{"index", 0}, {"delta", utilxx_base::Json::object()}, {"finish_reason", "stop"}},
             })},
         }.dump() + "\n\n"
         + "data: [DONE]\n\n";
@@ -202,17 +202,17 @@ struct FfiMockLLM {
     /// 工具调用流式 SSE chunks
     static std::string toolCallSse(const char* toolName, std::string_view argsJson) {
         const std::string id = "chatcmpl-ffi-tool";
-        return std::string("data: ") + agentxx::util::Json{
+        return std::string("data: ") + utilxx_base::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", agentxx::util::Json::array({
-                agentxx::util::Json{
+            {"choices", utilxx_base::Json::array({
+                utilxx_base::Json{
                     {"index", 0},
                     {"delta", {
                         {"role", "assistant"},
-                        {"tool_calls", agentxx::util::Json::array({
-                            agentxx::util::Json{
+                        {"tool_calls", utilxx_base::Json::array({
+                            utilxx_base::Json{
                                 {"index", 0},
                                 {"id", "call-ffi-1"},
                                 {"type", "function"},
@@ -223,25 +223,25 @@ struct FfiMockLLM {
                 },
             })},
         }.dump() + "\n\n"
-        + "data: " + agentxx::util::Json{
+        + "data: " + utilxx_base::Json{
             {"id", id},
             {"object", "chat.completion.chunk"},
             {"model", "ffi-mock"},
-            {"choices", agentxx::util::Json::array({
-                agentxx::util::Json{{"index", 0}, {"delta", agentxx::util::Json::object()}, {"finish_reason", "tool_calls"}},
+            {"choices", utilxx_base::Json::array({
+                utilxx_base::Json{{"index", 0}, {"delta", utilxx_base::Json::object()}, {"finish_reason", "tool_calls"}},
             })},
         }.dump() + "\n\n"
         + "data: [DONE]\n\n";
     }
 
     bool start(uint16_t& outPort) {
-        server = std::make_unique<agentxx::util::HttpServer>(
-            agentxx::util::HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1}
+        server = std::make_unique<utilxx::HttpServer>(
+            utilxx::HttpServer::Config{.address = "127.0.0.1", .port = 0, .ioThreads = 1}
         );
-        auto handler = std::make_shared<agentxx::util::HttpServer::Handler>(
+        auto handler = std::make_shared<utilxx::HttpServer::Handler>(
             [this](
-                agentxx::util::HttpServer::Request&,
-                agentxx::util::HttpServer::Response& resp,
+                utilxx::HttpServer::Request&,
+                utilxx::HttpServer::Response& resp,
                 std::string_view
             ) -> asio::awaitable<void> {
                 const int n = requestCount.fetch_add(1);
@@ -294,7 +294,7 @@ struct FfiMockLLM {
     ///   image_input/audio_input/video_input), 用于校验能力经
     ///   EVT_MODEL_INFO / get_model_info 的 capabilities 下发
     std::string modelJson(bool multimodal = false) const {
-        auto j = agentxx::util::Json{
+        auto j = utilxx_base::Json{
             {"name",      "ffi-mock"                                          },
             {"type",      "openai"                                            },
             {"baseUrl",   "http://127.0.0.1:" + std::to_string(server->port())},
@@ -425,8 +425,8 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(mi.data != nullptr && std::strstr(mi.data, "capabilities") != nullptr);
     if (mi.data != nullptr) {
         try {
-            auto j      = agentxx::util::Json::parse(std::string_view(mi.data, mi.size));
-            auto caps   = j.value("capabilities", agentxx::util::Json::array());
+            auto j      = utilxx_base::Json::parse(std::string_view(mi.data, mi.size));
+            auto caps   = j.value("capabilities", utilxx_base::Json::array());
             bool hasCap = false;
             for (const auto& c : caps) {
                 if (c.value("name", std::string{}) != "ffi-mock") {
@@ -455,7 +455,7 @@ void testLifecycleAndConversation() {
     {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
-            auto j = agentxx::util::Json::parse(turn);
+            auto j = utilxx_base::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", true) == false);
         } catch (...) {
             g_ffi_failed++;
@@ -467,9 +467,9 @@ void testLifecycleAndConversation() {
     {
         auto info = rec.first(AGENTXX_FFI_EVT_MODEL_INFO);
         try {
-            auto j = agentxx::util::Json::parse(info);
+            auto j = utilxx_base::Json::parse(info);
             XX_TEST_EXPECT_TRUE(j.contains("capabilities"));
-            auto caps = j.value("capabilities", agentxx::util::Json::array());
+            auto caps = j.value("capabilities", utilxx_base::Json::array());
             XX_TEST_EXPECT_FALSE(caps.empty());
             bool imageInput = false;
             for (const auto& c : caps) {
@@ -490,7 +490,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(ctx.data != nullptr);
     if (ctx.data != nullptr) {
         try {
-            auto j = agentxx::util::Json::parse(std::string_view(ctx.data, ctx.size));
+            auto j = utilxx_base::Json::parse(std::string_view(ctx.data, ctx.size));
             XX_TEST_EXPECT_TRUE(j.contains("messages") && j["messages"].is_array());
             XX_TEST_EXPECT_TRUE(j["messages"].size() > 0);
         } catch (...) {
@@ -506,7 +506,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(sess.data != nullptr);
     if (sess.data != nullptr) {
         try {
-            auto j = agentxx::util::Json::parse(std::string_view(sess.data, sess.size));
+            auto j = utilxx_base::Json::parse(std::string_view(sess.data, sess.size));
             XX_TEST_EXPECT_TRUE(j.contains("sessions") && j["sessions"].is_array());
         } catch (...) {
             g_ffi_failed++;
@@ -521,7 +521,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_TRUE(logs.data != nullptr);
     if (logs.data != nullptr) {
         try {
-            auto j = agentxx::util::Json::parse(std::string_view(logs.data, logs.size));
+            auto j = utilxx_base::Json::parse(std::string_view(logs.data, logs.size));
             XX_TEST_EXPECT_TRUE(j.is_array());
         } catch (...) {
             g_ffi_failed++;
@@ -563,8 +563,8 @@ void testHilInterrupt() {
     std::string configJson = R"({"permissionMode": "all_ask"})";
     if (!pluginDir.empty()) {
         try {
-            auto cfg       = agentxx::util::Json::parse(configJson);
-            cfg["plugins"] = agentxx::util::Json::array({agentxx::util::Json{{"path", pluginDir}}});
+            auto cfg       = utilxx_base::Json::parse(configJson);
+            cfg["plugins"] = utilxx_base::Json::array({utilxx_base::Json{{"path", pluginDir}}});
             configJson     = cfg.dump();
         } catch (...) {
             TEST_FAIL << "inject plugins config failed" << std::endl;
@@ -601,7 +601,7 @@ void testHilInterrupt() {
     {
         auto payload = rec.first(AGENTXX_FFI_EVT_INTERRUPT_REQ);
         try {
-            auto j      = agentxx::util::Json::parse(payload);
+            auto j      = utilxx_base::Json::parse(payload);
             interruptId = j.value("interruptId", int64_t{-1});
             XX_TEST_EXPECT_TRUE(interruptId > 0);
             std::string argJson = j.value("argJson", std::string{});
@@ -634,7 +634,7 @@ void testHilInterrupt() {
     {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
-            auto j = agentxx::util::Json::parse(turn);
+            auto j = utilxx_base::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", true) == false);
         } catch (...) {
             g_ffi_failed++;
@@ -716,7 +716,7 @@ void testCancel() {
     {
         auto turn = rec.first(AGENTXX_FFI_EVT_TURN_END);
         try {
-            auto j = agentxx::util::Json::parse(turn);
+            auto j = utilxx_base::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", false) == true);
             XX_TEST_EXPECT_TRUE(
                 j.value("errorMessage", std::string{}).find("Cancelled") != std::string::npos
@@ -895,9 +895,9 @@ void testLanguageApis() {
         XX_TEST_EXPECT_EQ(agentxx_ffi_get_model_info(a, &mi, &log), AGENTXX_FFI_OK);
         if (mi.data != nullptr) {
             try {
-                auto j = agentxx::util::Json::parse(std::string_view(mi.data, mi.size));
+                auto j = utilxx_base::Json::parse(std::string_view(mi.data, mi.size));
                 XX_TEST_EXPECT_TRUE(j.contains("capabilities"));
-                for (const auto& c : j.value("capabilities", agentxx::util::Json::array())) {
+                for (const auto& c : j.value("capabilities", utilxx_base::Json::array())) {
                     if (c.value("name", std::string{}) != "ffi-mock") {
                         continue;
                     }

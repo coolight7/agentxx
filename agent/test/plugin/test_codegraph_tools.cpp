@@ -3,6 +3,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/tool.h"
+#include "utilxx_base/json.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/steady_timer.hpp>
@@ -177,11 +178,11 @@ asio::awaitable<TestResult>
         // list-init 会优先匹配 json 的 initializer_list 构造 (元素数组),
         // 产出嵌套数组 [[path]]; json{path} 同理得到 1 元素数组而非字符串。
         // 用圆括号构造 json(path) (普通构造函数, 走 string 构造) 再入数组
-        agentxx::util::Json pathsArr = agentxx::util::Json::array();
-        pathsArr.push_back(agentxx::util::Json(tmp_project));
+        utilxx_base::Json pathsArr = utilxx_base::Json::array();
+        pathsArr.push_back(utilxx_base::Json(tmp_project));
         pc.path    = path;
         pc.enabled = true;
-        pc.args    = agentxx::util::Json{
+        pc.args    = utilxx_base::Json{
                {"paths",         std::move(pathsArr)},
                {"load_cwd",      false              },
                {"use_gitignore", true               }
@@ -215,7 +216,7 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_codegraph_search");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(agentxx::util::Json{
+            auto out = co_await tool->execute_async(utilxx_base::Json{
                 {"query", "add"}
             });
             XX_TEST_EXPECT_TRUE(out.find("Symbols (") != std::string::npos);
@@ -233,7 +234,7 @@ asio::awaitable<TestResult>
                 timer.expires_after(std::chrono::milliseconds(500));
                 co_await timer.async_wait(asio::use_awaitable);
                 waitedMs += 500;
-                out       = co_await tool->execute_async(agentxx::util::Json{
+                out       = co_await tool->execute_async(utilxx_base::Json{
                           {"query", "add"}
                 });
             }
@@ -247,7 +248,7 @@ asio::awaitable<TestResult>
             }
             XX_TEST_EXPECT_TRUE(out.find("add") != std::string::npos);
             // 空 query → error
-            auto err = co_await tool->execute_async(agentxx::util::Json{
+            auto err = co_await tool->execute_async(utilxx_base::Json{
                 {"query", ""}
             });
             XX_TEST_EXPECT_TRUE(err.find("error:") != std::string::npos);
@@ -259,7 +260,7 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_codegraph_context");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(agentxx::util::Json{
+            auto out = co_await tool->execute_async(utilxx_base::Json{
                 {"symbol", "add"}
             });
             XX_TEST_EXPECT_TRUE(
@@ -273,7 +274,7 @@ asio::awaitable<TestResult>
         auto callers = ctx->toolRegistry->find("agentxx_codegraph_callers");
         XX_TEST_EXPECT_TRUE(callers != nullptr);
         if (callers) {
-            auto out = co_await callers->execute_async(agentxx::util::Json{
+            auto out = co_await callers->execute_async(utilxx_base::Json{
                 {"symbol", "add"}
             });
             XX_TEST_EXPECT_TRUE(
@@ -284,7 +285,7 @@ asio::awaitable<TestResult>
         auto callees = ctx->toolRegistry->find("agentxx_codegraph_callees");
         XX_TEST_EXPECT_TRUE(callees != nullptr);
         if (callees) {
-            auto out = co_await callees->execute_async(agentxx::util::Json{
+            auto out = co_await callees->execute_async(utilxx_base::Json{
                 {"symbol", "main"}
             });
             XX_TEST_EXPECT_TRUE(
@@ -295,7 +296,7 @@ asio::awaitable<TestResult>
         auto pathTool = ctx->toolRegistry->find("agentxx_codegraph_path");
         XX_TEST_EXPECT_TRUE(pathTool != nullptr);
         if (pathTool) {
-            auto out = co_await pathTool->execute_async(agentxx::util::Json{
+            auto out = co_await pathTool->execute_async(utilxx_base::Json{
                 {"from", "main"    },
                 {"to",   "multiply"},
             });

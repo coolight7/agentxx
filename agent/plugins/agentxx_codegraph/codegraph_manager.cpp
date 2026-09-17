@@ -6,7 +6,7 @@
 #include "codegraph_manager.h"
 #include "codegraph_plugin.h"
 
-#include "agentxx/util/path_sanitize.h"
+#include "utilxx_base/path_sanitize.h"
 
 #define XX_LOGT(...)                            \
     do {                                        \
@@ -105,16 +105,16 @@ static constexpr size_t kCodeGraphMaxSegLen = 48;
 static constexpr size_t kCodeGraphMaxTailSegs = 3;
 
 /// FNV-1a 64 位哈希 (折叠段/超长段短标识, 与 session_store 等共用同一实现)
-using agentxx::util::hash::fnv1a64;
+using utilxx_base::hash::fnv1a64;
 
 /// 路径段清洗 (实现复用 agentxx::util): 非法字符替换为 `_`, 超长段截断
-/// - 非法字符 (Windows 保留字符与 ASCII 控制符) 见 [agentxx::util::sanitizeFsSegment]
+/// - 非法字符 (Windows 保留字符与 ASCII 控制符) 见 [utilxx_base::sanitizeFsSegment]
 /// - 超长段截断保留前部可读信息 + 8 位 hex hash 尾缀防碰撞 (总长受控):
 ///   避免单个目录名超过文件系统限制 (NAME_MAX=255) 及撑爆总路径长度
-/// - Windows 保留设备名判定见 [agentxx::util::isWindowsReservedName]
+/// - Windows 保留设备名判定见 [utilxx_base::isWindowsReservedName]
 static std::string sanitizeSegment(std::string_view seg) {
-    return agentxx::util::truncateFsSegmentWithHash(
-        agentxx::util::sanitizeFsSegment(seg),
+    return utilxx_base::truncateFsSegmentWithHash(
+        utilxx_base::sanitizeFsSegment(seg),
         kCodeGraphMaxSegLen
     );
 }
@@ -165,7 +165,7 @@ static std::vector<std::string> projectRootToSegments(std::string_view project_r
             continue;
         }
 #if XX_IS_WIN_D
-        if (agentxx::util::isWindowsReservedName(seg)) {
+        if (utilxx_base::isWindowsReservedName(seg)) {
             seg = fmt::format("_{}", seg);
         }
 #endif

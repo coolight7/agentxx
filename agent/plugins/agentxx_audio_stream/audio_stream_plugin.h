@@ -5,6 +5,7 @@
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include <string>
 #include <vector>
 
@@ -14,7 +15,7 @@ namespace agentxx_audio_stream_plugin {
 using agentxx::plugin::pluginLog;
 using agentxx::plugin::pluginStrdup;
 
-/// 参数读取统一经 plugin_kit.h 的 ArgReader (agentxx::util::Json 驱动),
+/// 参数读取统一经 plugin_kit.h 的 ArgReader (utilxx_base::Json 驱动),
 /// 不再手写 simdjson::ondemand 局部解析桩 (历史 SimpleJson/jsonGet* 已删除)
 
 } // namespace agentxx_audio_stream_plugin

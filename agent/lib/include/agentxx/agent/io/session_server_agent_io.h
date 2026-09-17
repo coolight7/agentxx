@@ -6,6 +6,8 @@
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "asio/steady_timer.hpp"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -104,7 +106,7 @@ public:
 
     // ----- AgentIOBase: 对端从我这拉取的 (BaseAgent 调用) -----
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<agentxx::util::Json>        handleInterrupt(
+    asio::awaitable<utilxx_base::Json>        handleInterrupt(
                std::string_view sessionId,
                std::string_view interruptNode,
                std::string_view interruptValue,
@@ -190,11 +192,11 @@ protected:
 
 private:
 
-    using ErrorCode = neograph_asio_error_code;
+    using ErrorCode = utilxx_base::AsioErrorCode;
 
     struct PendingInterrupt {
         std::shared_ptr<
-            asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>>
+            asio::experimental::concurrent_channel<void(ErrorCode, utilxx_base::Json)>>
                     ch;
         std::string node;
         std::string value;
@@ -202,7 +204,7 @@ private:
     };
 
     using RespChannel
-        = asio::experimental::concurrent_channel<void(ErrorCode, agentxx::util::Json)>;
+        = asio::experimental::concurrent_channel<void(ErrorCode, utilxx_base::Json)>;
     using WakeChannel = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
     /// 取 seq 之后的 delta; nullopt 表示需全量 sync
@@ -257,7 +259,7 @@ private:
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();
 
-    void resolveInterrupt(int64_t id, agentxx::util::Json result);
+    void resolveInterrupt(int64_t id, utilxx_base::Json result);
     void onCancel();
 
     // ----- 插件事件转发 (仅 ex_ 线程访问) -----

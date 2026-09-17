@@ -14,9 +14,9 @@
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/ws_client.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx/ws_client.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/executor_work_guard.hpp"
@@ -128,7 +128,7 @@ static bool
         return false;
     }
     // 参数: 剩余部分整体放入 {"text": "..."} (语义由插件定义)
-    agentxx::util::Json args = agentxx::util::Json::object();
+    utilxx_base::Json args = utilxx_base::Json::object();
     args["text"] = spacePos == std::string::npos ? std::string{} : input.substr(spacePos + 1);
     mgr->invokeCommand(cmdName, args.dump()); // io 线程同步调用 (快速返回约定)
     return true;
@@ -430,7 +430,7 @@ static asio::awaitable<void> runRemoteCliAsync(
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
     agent::WsAgentIOTransport::Config transportCfg;
-    util::WsClientConfig              wsCfg;
+    utilxx::WsClientConfig              wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{60};
 
     auto transport
@@ -552,7 +552,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         agent::WsAgentIOTransport::Config transportCfg;
         // 有限次尝试后返回失败 (默认 0=无限内部重连, 用户永远等不到失败提示)
         transportCfg.maxReconnectAttempts = 2;
-        util::WsClientConfig wsCfg;
+        utilxx::WsClientConfig wsCfg;
         wsCfg.recvTimeout = std::chrono::seconds{60};
 
         transport

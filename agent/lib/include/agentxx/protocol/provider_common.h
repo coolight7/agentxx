@@ -7,7 +7,7 @@
 ///   仍留在各自 provider 内
 #pragma once
 
-#include "agentxx/util/http_header.h"
+#include "utilxx/http_header.h"
 #include "fmt/format.h"
 #include "neograph/api.h"
 #include "neograph/provider.h"
@@ -86,7 +86,7 @@ inline bool isInternalExtraField(std::string_view key) {
 /// - `args`:
 ///     - [headers] 待填充的请求头映射
 ///     - [sessionId] 本次会话的 sessionId, 为空时不添加
-inline void applySessionHeaders(agentxx::util::HeaderMap& headers, std::string_view sessionId) {
+inline void applySessionHeaders(utilxx::HeaderMap& headers, std::string_view sessionId) {
     if (!sessionId.empty()) {
         headers.set(kHeaderSessionId, sessionId);
         headers.set(kHeaderOpencodeSession, sessionId);
@@ -99,7 +99,7 @@ inline void applySessionHeaders(agentxx::util::HeaderMap& headers, std::string_v
 ///     - [headers] 待填充的请求头映射
 ///     - [params] 补全参数
 inline void applySessionHeaders(
-    agentxx::util::HeaderMap&         headers,
+    utilxx::HeaderMap&         headers,
     const neograph::CompletionParams& params
 ) {
     applySessionHeaders(headers, extractSessionId(params));

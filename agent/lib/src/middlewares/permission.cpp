@@ -2,8 +2,8 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
-#include "agentxx/util/json.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/string_util.h"
 #include <cctype>
 #include <filesystem>
 
@@ -61,15 +61,15 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(
     if (auto ctx = agentContext.lock()) {
         baseDir = ctx->getSessionWorkDir(sessionId);
     }
-    std::string absPath = agentxx::util::toCurrentSystemAbsolutePath(path, baseDir);
-    std::string s       = agentxx::util::toUnixStandardPath(absPath);
+    std::string absPath = utilxx_base::toCurrentSystemAbsolutePath(path, baseDir);
+    std::string s       = utilxx_base::toUnixStandardPath(absPath);
 
     // 判断是否为目录:
     // 1. 在文件系统上实际存在且为目录
     // 2. 或文件系统上不存在, 但原路径末尾显式带有斜杠 (如 "dir/" 或 "dir\\") 表达目录意图
     // 对于普通文件 (或不存在且原路径无尾斜杠的文件路径), 绝不添加尾部 '/', 若有则去除
     std::error_code ec;
-    auto            fsPath = agentxx::util::utf8ToPath(absPath);
+    auto            fsPath = utilxx_base::utf8ToPath(absPath);
     bool            exists = std::filesystem::exists(fsPath, ec);
     bool            isDir  = false;
     if (!ec && exists) {
@@ -89,7 +89,7 @@ std::string PermissionMiddlewareHandle::normalizePermissionPath(
     }
 
 #if XX_IS_WIN_D
-    agentxx::util::toLowerSelf(s);
+    utilxx_base::toLowerSelf(s);
 #endif
     return s;
 }
@@ -200,7 +200,7 @@ const ToolPermissionSpec* PermissionMiddlewareHandle::toolPermission(std::string
 
 asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
     std::string_view     toolName,
-    agentxx::util::Json& args
+    utilxx_base::Json& args
 ) {
     // 未声明权限的工具不参与权限判定 (直接放行): 权限限制随工具来源 (插件) 走,
     // 未加载/未声明的工具与无权限需求一致
@@ -213,7 +213,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
     std::string_view          toolName,
-    agentxx::util::Json&      args,
+    utilxx_base::Json&      args,
     const ToolPermissionSpec& spec
 ) {
     // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
@@ -226,7 +226,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
         // 字符串视为单个目标; 数组为空/参数缺省时该参数不参与判定
         std::vector<std::string> rawTargets;
         if (args.contains(argName) && args[argName].is_array()) {
-            rawTargets = agentxx::util::jsonGetStringArray(args, argName);
+            rawTargets = utilxx_base::jsonGetStringArray(args, argName);
         } else {
             auto raw = args.value(argName, std::string{});
             if (!raw.empty()) {
@@ -264,7 +264,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::checkTargetPermission(
     std::string_view     toolName,
-    agentxx::util::Json& args,
+    utilxx_base::Json& args,
     size_t               index,
     std::string_view     target,
     std::string_view     category
@@ -324,7 +324,7 @@ PathDecision PermissionMiddlewareHandle::decideTarget(
     // worktree 会话隔离边界 (优先于一切已注册规则):
     // - worktree 子树 (allowPath) 内读写照常处理 (不参与下面的主检出写拒绝):
     //   该子树是本会话自己的工作区, 而真实 worktree 位于主检出的
-    //   `.agentxx/agent/worktrees/` 下 (见 util::worktree::worktreesRoot),
+    //   `.agentxx/agent/worktrees/` 下 (见 utilxx::worktree::worktreesRoot),
     //   即 allowPath 本身就在 denyWritePath 子树内 —— 必须先于 denyWritePath
     //   判定, 否则会话对自身工作区的写操作也会被命中, 表现为绑定 worktree 后
     //   无法写任何文件
@@ -401,7 +401,7 @@ std::vector<PathDecision> PermissionMiddlewareHandle::decidePaths(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
     std::string_view     toolName,
-    agentxx::util::Json& args,
+    utilxx_base::Json& args,
     size_t               index,
     std::string          target,
     std::string_view     category
@@ -486,7 +486,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                          .registerServer(
                              [this](const events::ReqToolPermissionCheck& req, size_t)
                                  -> asio::awaitable<events::RespToolPermissionCheck> {
-                                 agentxx::util::Json argsCopy = req.arguments;
+                                 utilxx_base::Json argsCopy = req.arguments;
                                  auto allow = co_await checkToolPermission(req.toolName, argsCopy);
                                  co_return events::RespToolPermissionCheck{.allow = allow};
                              }

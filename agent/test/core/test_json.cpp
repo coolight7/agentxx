@@ -1,6 +1,6 @@
 #include "agentxx-test/core/test_json.h"
 
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -15,7 +15,8 @@ int g_json_failed = 0;
 #define XX_TEST_PASSED g_json_passed
 #define XX_TEST_FAILED g_json_failed
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
 
 namespace {
 

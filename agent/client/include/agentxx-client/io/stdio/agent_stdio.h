@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io.h"
-#include "agentxx/util/json.h"
+#include "utilxx_base/json.h"
 #include "asio/awaitable.hpp"
 #include <iostream>
 #include <optional>
@@ -10,7 +10,7 @@
 
 namespace agentxx::client {
 
-class StderrLogSink : public agentxx::util::ThreadedLogSink {
+class StderrLogSink : public utilxx_base::ThreadedLogSink {
 public:
 
     ~StderrLogSink() override {
@@ -20,7 +20,7 @@ public:
         shutdownThread();
     }
 
-    void onLog(const agentxx::util::LogEntry& entry) override {
+    void onLog(const utilxx_base::LogEntry& entry) override {
         std::cerr << entry.message << std::endl;
     }
 };
@@ -37,7 +37,7 @@ public:
 
     asio::awaitable<std::optional<std::string>> getInput() override;
 
-    asio::awaitable<agentxx::util::Json> handleInterrupt(
+    asio::awaitable<utilxx_base::Json> handleInterrupt(
         std::string_view sessionId,
         std::string_view interruptNode,
         std::string_view interruptValue,

@@ -3,6 +3,7 @@
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
+#include "utilxx_base/asio_error.h"
 #include <atomic>
 #include <memory>
 #include <utility>
@@ -18,7 +19,7 @@ class ChannelAgentIOTransport : public AgentIOTransportBase {
 public:
 
     using Chan
-        = asio::experimental::concurrent_channel<void(neograph_asio_error_code, WireMessage)>;
+        = asio::experimental::concurrent_channel<void(utilxx_base::AsioErrorCode, WireMessage)>;
 
     ChannelAgentIOTransport(std::shared_ptr<Chan> outgoing, std::shared_ptr<Chan> incoming);
 

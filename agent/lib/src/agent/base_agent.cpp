@@ -10,10 +10,10 @@
 #include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/diff_util.h"
+#include "utilxx/async_offload.h"
+#include "utilxx/diff_util.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/use_awaitable.hpp"
@@ -68,7 +68,7 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
 /// - 检查点:
 ///   * enum 必须是数组, 且元素必须是标量 (string/number/boolean/null),
 ///     不能是数组/对象 —— 嵌套容器属于非法 enum schema;
-///     (曾出现 agentxx::util::Json{vector} 列表初始化误选 initializer_list
+///     (曾出现 utilxx_base::Json{vector} 列表初始化误选 initializer_list
 ///     构造函数产生 [["x"]] 嵌套数组的案例, 见
 ///     [subagent.cpp](/agent/lib/src/tools/subagent.cpp))
 ///   * array 类型必须带 items 字段 (Gemini 缺 items 报 "missing field")
@@ -828,9 +828,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     }
 
     auto processedInput = std::string{userInput};
-    agentxx::util::autoConvertToUtf8(processedInput);
+    utilxx_base::autoConvertToUtf8(processedInput);
 
-    auto userMsgJson = agentxx::util::Json{
+    auto userMsgJson = utilxx_base::Json{
         {"role",    "user"        },
         {"content", processedInput},
     };
@@ -873,7 +873,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                 );
                 ifs.close();
                 if (att.mimeType.empty()) {
-                    auto ext = agentxx::util::toLower(
+                    auto ext = utilxx_base::toLower(
                         std::filesystem::path(att.pathOrUrl).extension().string()
                     );
                     att.mimeType = std::string(mimeTypeFromExtension(ext));
@@ -881,7 +881,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                 att.dataUrl = fmt::format(
                     "data:{};base64,{}",
                     att.mimeType,
-                    agentxx::util::base64Encode(fileData)
+                    utilxx_base::base64Encode(fileData)
                 );
                 att.sizeBytes = fileSize;
                 return att;
@@ -892,7 +892,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                 // 无线程池 (测试/嵌入式): 直接同步执行
                 co_return doLoad();
             }
-            co_return co_await agentxx::util::offloadAsync<MediaAttachment>(
+            co_return co_await utilxx::offloadAsync<MediaAttachment>(
                 *pool,
                 [doLoad = std::move(doLoad)]() mutable -> asio::awaitable<MediaAttachment> {
                     co_return doLoad();
@@ -908,9 +908,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             }
         }
 
-        agentxx::util::Json imgUrls   = agentxx::util::Json::array();
-        agentxx::util::Json audioUrls = agentxx::util::Json::array();
-        agentxx::util::Json videoUrls = agentxx::util::Json::array();
+        utilxx_base::Json imgUrls   = utilxx_base::Json::array();
+        utilxx_base::Json audioUrls = utilxx_base::Json::array();
+        utilxx_base::Json videoUrls = utilxx_base::Json::array();
         for (const auto& att : attachments) {
             const auto& url = !att.dataUrl.empty() ? att.dataUrl : att.pathOrUrl;
             if (url.empty()) {
@@ -1012,7 +1012,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                     );
                 r.interrupt_value = agentxx::util::toNeographJson(
                     agentContext->middlewareHandleContext
-                        ->getGraphDataItemValue<agentxx::util::Json>(
+                        ->getGraphDataItemValue<utilxx_base::Json>(
                             sessionId,
                             agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
                         )
@@ -1074,7 +1074,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
         auto& im
-            = agentContext->middlewareHandleContext->getGraphDataItemValue<agentxx::util::Json>(
+            = agentContext->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
             );
@@ -1129,8 +1129,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             return fmt::format(
                 "{} · {} · {}",
                 std::move(modelName),
-                agentxx::util::formatDurationMilliseconds(durationMs),
-                agentxx::util::formatTimestampMilliseconds(startTimeMs + durationMs)
+                utilxx_base::formatDurationMilliseconds(durationMs),
+                utilxx_base::formatTimestampMilliseconds(startTimeMs + durationMs)
             );
         }(),
         ViewMessage::TipLevel::Info,

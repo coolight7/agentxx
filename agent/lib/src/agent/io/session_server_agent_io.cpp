@@ -7,10 +7,10 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/util/async_offload.h"
+#include "utilxx/async_offload.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/util.h"
+#include "utilxx_base/log.h"
+#include "utilxx/crypto.h"
 #include "asio/bind_cancellation_slot.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -240,7 +240,7 @@ asio::awaitable<std::optional<std::string>> SessionServerAgentIO::getInput() {
     co_return std::nullopt;
 }
 
-asio::awaitable<agentxx::util::Json> SessionServerAgentIO::handleInterrupt(
+asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
     std::string_view /*sessionId*/,
     std::string_view interruptNode,
     std::string_view interruptValue,
@@ -265,7 +265,7 @@ asio::awaitable<agentxx::util::Json> SessionServerAgentIO::handleInterrupt(
         .argJson   = std::string{interruptArgJson},
     });
 
-    agentxx::util::Json result      = agentxx::util::Json::array();
+    utilxx_base::Json result      = utilxx_base::Json::array();
     bool                gotResponse = false;
     bool                cancelled   = false;
     // HIL 等待必须可取消: 取当前会话 token 的 fork 子并绑定 slot,
@@ -328,7 +328,7 @@ asio::awaitable<agentxx::util::Json> SessionServerAgentIO::handleInterrupt(
     if (cancelled) {
         // 被取消: 不发过期通知 (客户端的取消已由 WireCancel 驱动本地收尾),
         // 返回取消标记, 调用方不 resume
-        co_return agentxx::util::Json{
+        co_return utilxx_base::Json{
             {"__cancelled__", true}
         };
     }
@@ -494,7 +494,7 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
                 auto                agent = agent_.lock();
                 auto                sess  = session();
-                agentxx::util::Json msgs  = agentxx::util::Json::array();
+                utilxx_base::Json msgs  = utilxx_base::Json::array();
                 if (sess && sess->llmMessages.is_array()) {
                     msgs = sess->llmMessages;
                 }
@@ -508,10 +508,10 @@ void SessionServerAgentIO::onPeerMessage(
                 if (!hasSystem && agent) {
                     std::string sysPrompt = agent->buildSystemPrompt(m.sessionId);
                     if (!sysPrompt.empty()) {
-                        agentxx::util::Json sysMsg  = agentxx::util::Json::object();
+                        utilxx_base::Json sysMsg  = utilxx_base::Json::object();
                         sysMsg["role"]              = "system";
                         sysMsg["content"]           = std::move(sysPrompt);
-                        agentxx::util::Json newMsgs = agentxx::util::Json::array();
+                        utilxx_base::Json newMsgs = utilxx_base::Json::array();
                         newMsgs.push_back(std::move(sysMsg));
                         for (auto item : msgs.items()) {
                             newMsgs.push_back(std::move(item.second));
@@ -557,7 +557,7 @@ void SessionServerAgentIO::onPeerMessage(
                     ) -> asio::awaitable<void> {
                         WireSessionList resp;
                         if (agent->agentContext->threadPool) {
-                            resp = co_await agentxx::util::offloadAsync<WireSessionList>(
+                            resp = co_await utilxx::offloadAsync<WireSessionList>(
                                 *agent->agentContext->threadPool,
                                 [sessionStore, req]() -> asio::awaitable<WireSessionList> {
                                     if (req.limit > 0) {
@@ -671,7 +671,7 @@ void SessionServerAgentIO::onPeerMessage(
                                     dirs.push_back(std::move(de));
                                 } else if (std::filesystem::is_regular_file(status)) {
                                     auto ext
-                                        = agentxx::util::toLower(entry.path().extension().string());
+                                        = utilxx_base::toLower(entry.path().extension().string());
                                     auto mt = agentxx::agent::mediaTypeFromExtension(ext);
                                     if (!mt.has_value()) {
                                         continue;
@@ -707,7 +707,7 @@ void SessionServerAgentIO::onPeerMessage(
 
                         WireListDirResult res;
                         if (agent && agent->agentContext && agent->agentContext->threadPool) {
-                            res = co_await agentxx::util::offloadAsync<WireListDirResult>(
+                            res = co_await utilxx::offloadAsync<WireListDirResult>(
                                 *agent->agentContext->threadPool,
                                 [scanDir]() -> asio::awaitable<WireListDirResult> {
                                     co_return scanDir();
@@ -877,7 +877,7 @@ void SessionServerAgentIO::handleHello(
     helloAck.tailHash  = std::move(tailHash);
     helloAck.models    = std::move(models);
     helloAck.plugins   = std::move(loadedPlugins);
-    helloAck.deviceId  = agentxx::util::getDeviceId();
+    helloAck.deviceId  = utilxx::getDeviceId();
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
         helloAck.workDir = agent->agentContext->getSessionWorkDir(config_.sessionId);
     }
@@ -915,7 +915,7 @@ void SessionServerAgentIO::handleHello(
     // - client_attached: 每次连接握手后重发一次 (重连/同会话新客户端也能
     //   获得状态快照; 与 subscribePluginEvents 处的发布重复无害)
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
-        auto pluginInfos = agentxx::util::Json::array();
+        auto pluginInfos = utilxx_base::Json::array();
         if (agent->agentContext->pluginManager) {
             for (const auto& p : agent->agentContext->pluginManager->list()) {
                 auto interfaces = p.requiredInterfaces;
@@ -932,7 +932,7 @@ void SessionServerAgentIO::handleHello(
         publishHostEvent(
             agent->agentContext->bus,
             kEvtServerPlugins,
-            agentxx::util::Json{
+            utilxx_base::Json{
                 {"plugins", pluginInfos}
         }.dump()
         );
@@ -1017,7 +1017,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     sendContextStats();
 }
 
-void SessionServerAgentIO::resolveInterrupt(int64_t id, agentxx::util::Json result) {
+void SessionServerAgentIO::resolveInterrupt(int64_t id, utilxx_base::Json result) {
     auto it = pending_.find(id);
     if (it != pending_.end()) {
         it->second.ch->try_send(ErrorCode{}, std::move(result));

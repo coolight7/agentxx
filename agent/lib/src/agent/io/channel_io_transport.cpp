@@ -2,6 +2,7 @@
 
 #include "agentxx/util/exception.h"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/asio_error.h"
 
 namespace agentxx {
 namespace agent {
@@ -37,7 +38,7 @@ void ChannelAgentIOTransport::send(WireMessage msg) {
     if (closed_.load(std::memory_order_acquire)) {
         return;
     }
-    outgoing_->try_send(neograph_asio_error_code{}, std::move(msg));
+    outgoing_->try_send(utilxx_base::AsioErrorCode{}, std::move(msg));
 }
 
 asio::awaitable<std::optional<WireMessage>> ChannelAgentIOTransport::recv() {

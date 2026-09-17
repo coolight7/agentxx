@@ -3,7 +3,7 @@
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_websearch 插件 (同名同行为); 测试直测
 // 插件同一实现 (websearch_impl.h), 保证插件行为与测试覆盖一致
-#include "agentxx/util/http_server.h"
+#include "utilxx/http_server.h"
 #include "agentxx_websearch/websearch_impl.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
@@ -75,7 +75,7 @@ struct WebSearchTool {
         return searchDefinition();
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return co_await agentxx_websearch_plugin::webSearchExecuteAsync(
             args,
             searchApiUrl,
@@ -95,7 +95,7 @@ struct WebFetchUrlTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return co_await agentxx_websearch_plugin::webFetchExecuteAsync(args);
     }
 };
@@ -124,7 +124,7 @@ struct ModelWebSearchTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return co_await agentxx_websearch_plugin::modelWebSearchExecuteAsync(args, modelCfg);
     }
 
@@ -144,7 +144,7 @@ struct WebFetchUrlMarkdownTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const agentxx::util::Json& args) const {
+    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
         co_return co_await agentxx_websearch_plugin::webFetchMarkdownExecuteAsync(args);
     }
 };
@@ -174,7 +174,7 @@ asio::awaitable<void>
     test_web_search_empty_query(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool
         = agentxx::tools::WebSearchTool{"https://example.com/search?q={}", false, agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"query", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -236,7 +236,7 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_web_fetch_url_empty_url(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"url", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -288,7 +288,7 @@ asio::awaitable<void>
     test_web_fetch_url_markdown_empty_url(std::weak_ptr<agentxx::agent::AgentContext> agentContext
     ) {
     auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
-    auto args = agentxx::util::Json{
+    auto args = utilxx_base::Json{
         {"url", ""}
     };
     auto result = co_await tool.execute_async(args);
@@ -391,7 +391,7 @@ asio::awaitable<void> test_web_tools_definition_timeout_header(
 /// 本地 HTTP 服务器验证 `header` 参数实际发送到了请求中
 asio::awaitable<void>
     test_web_tools_header_parameter(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    using Server = agentxx::util::HttpServer;
+    using Server = utilxx::HttpServer;
     Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
     // 回显收到的 X-Test-Header 请求头
     server.router().add(
@@ -447,9 +447,9 @@ asio::awaitable<void>
     // WebFetchUrlTool: header 参数 (JSON 对象格式)
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"url",    baseUrl + "/echo-header"                                        },
-            {"header", agentxx::util::Json{{"X-Test-Header", "fetch-url-header-value"}}},
+            {"header", utilxx_base::Json{{"X-Test-Header", "fetch-url-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("fetch-url-header-value") != std::string::npos) {
@@ -463,9 +463,9 @@ asio::awaitable<void>
     // WebFetchUrlMarkdownTool: header 参数
     {
         auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"url",    baseUrl + "/echo-header"                                       },
-            {"header", agentxx::util::Json{{"X-Test-Header", "fetch-md-header-value"}}},
+            {"header", utilxx_base::Json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("fetch-md-header-value") != std::string::npos) {
@@ -481,10 +481,10 @@ asio::awaitable<void>
     {
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", false, agentContext};
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"query",   "test"                                                           },
             {"timeout", 10                                                               },
-            {"header",  agentxx::util::Json{{"X-Test-Header", "search-raw-header-value"}}},
+            {"header",  utilxx_base::Json{{"X-Test-Header", "search-raw-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("search-raw-header-value") != std::string::npos) {
@@ -499,10 +499,10 @@ asio::awaitable<void>
     {
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", true, agentContext};
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"query",   "test"                                                          },
             {"timeout", 10                                                              },
-            {"header",  agentxx::util::Json{{"X-Test-Header", "search-md-header-value"}}},
+            {"header",  utilxx_base::Json{{"X-Test-Header", "search-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("search-md-header-value") != std::string::npos) {
@@ -518,7 +518,7 @@ asio::awaitable<void>
     // timeout 参数被接受 (正常服务器不应报错)
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
-        auto args = agentxx::util::Json{
+        auto args = utilxx_base::Json{
             {"url",     baseUrl + "/hello"},
             {"timeout", 5                 },
         };

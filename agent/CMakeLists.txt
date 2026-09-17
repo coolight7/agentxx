@@ -1168,6 +1168,76 @@ if (AGENTXX_ENABLE_PLUGIN_JS)
 endif()
 
 # 插件编译由 [agentxx_lib_repo] 处理，因为部分插件需要内嵌编译进 lib
+# ===== cxx_utilxx_base / cxx_utilxx / cxx_pluginxx (本项目自研基础库) =====
+# - 与 fmt/simdjson 等同级放在 third_party 下, 但由本项目维护, 因此
+#   BUILD_ALWAYS/INSTALL_ALWAYS 打开: 源码或 CMake 改动后重新构建并安装
+#   (嵌套构建内部仍是增量编译)
+# - Boost 无需新增参数: 顶层已把 BOOST_ROOT / Boost_USE_* 放进公共参数
+ExternalProject_Add(
+  cxx_utilxx_base_repo
+  DEPENDS
+    fmt_repo
+    simdjson_repo
+    libiconv_repo
+    uchardet_repo
+  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_utilxx_base/"
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+  BUILD_ALWAYS TRUE
+  INSTALL_ALWAYS TRUE
+  CMAKE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_ARGS}
+    -DCXX_UTILXX_BASE_ENABLE_CHARSET=ON
+    -DCXX_UTILXX_BASE_USE_BOOST_ASIO=ON
+  CMAKE_CACHE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+  TEST_COMMAND ""
+)
+
+ExternalProject_Add(
+  cxx_utilxx_repo
+  DEPENDS
+    cxx_utilxx_base_repo
+    fmt_repo
+    sqlite3_repo
+    html2md_repo
+  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_utilxx/"
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+  BUILD_ALWAYS TRUE
+  INSTALL_ALWAYS TRUE
+  CMAKE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_ARGS}
+    -DCXX_UTILXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
+    -DCXX_UTILXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
+    -DCXX_UTILXX_LINUX_IO_URING_SUPPORTED=${AGENTXX_LINUX_IO_URING_SUPPORTED}
+  CMAKE_CACHE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
+  TEST_COMMAND ""
+)
+
+ExternalProject_Add(
+  cxx_pluginxx_repo
+  DEPENDS
+    cxx_utilxx_base_repo
+    fmt_repo
+  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_pluginxx/"
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+  BUILD_ALWAYS TRUE
+  INSTALL_ALWAYS TRUE
+  CMAKE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_ARGS}
+  CMAKE_CACHE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+  TEST_COMMAND ""
+)
+
+if (AGENTXX_ENABLE_HYPERSCAN)
+  add_dependencies(cxx_utilxx_repo hyperscan_repo)
+endif ()
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  add_dependencies(cxx_utilxx_repo liburing_repo)
+endif ()
+
 ExternalProject_Add(
   agentxx_lib_repo
   DEPENDS 
@@ -1181,6 +1251,9 @@ ExternalProject_Add(
     html2md_repo
     yaml_cpp_repo
     glob_repo
+    cxx_utilxx_base_repo
+    cxx_utilxx_repo
+    cxx_pluginxx_repo
   SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/"
   INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   BUILD_ALWAYS TRUE

@@ -5,6 +5,7 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -127,7 +128,7 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_get_system_core_info");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(agentxx::util::Json::object());
+            auto out = co_await tool->execute_async(utilxx_base::Json::object());
             TEST_INFO << "get_system_core_info output:\n" << out << std::endl;
             XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
             XX_TEST_EXPECT_TRUE(out.find("Memory:") != std::string::npos);
@@ -169,7 +170,7 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(done); ///< 有界等待: 完成回调未到达即失败, 不悬挂测试
         XX_TEST_EXPECT_EQ(opStatus, AGENTXX_PLUGIN_OPERATOR_OK);
         if (!payload.empty()) {
-            auto j = agentxx::util::Json::parse(payload);
+            auto j = utilxx_base::Json::parse(payload);
             if (j.is_object()) {
                 double cpu = j.value("cpu", -1.0);
                 XX_TEST_EXPECT_TRUE(cpu >= 0.0 && cpu <= 100.0);

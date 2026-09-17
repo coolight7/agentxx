@@ -19,6 +19,7 @@
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "utilxx_base/json.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -80,9 +81,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto readFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json j;
+        utilxx_base::Json j;
         try {
-            j = agentxx::util::Json::parse(args);
+            j = utilxx_base::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -122,7 +123,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Glob (回调; 与真实插件回调同语义: 兼容单字符串/数组)
     // - 提取逻辑镜像 agentxx_fs_plugin::stringListArg (单字符串包装为单元素
     //   列表, 数组逐项提取字符串), 保证夹具摘要与真实渲染一致
-    static auto globFilesOf = [](const agentxx::util::Json& j) -> std::vector<std::string> {
+    static auto globFilesOf = [](const utilxx_base::Json& j) -> std::vector<std::string> {
         std::vector<std::string> out;
         if (!j.is_object() || !j.contains("file_patterns")) {
             return out;
@@ -142,9 +143,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto globFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json j;
+        utilxx_base::Json j;
         try {
-            j = agentxx::util::Json::parse(args);
+            j = utilxx_base::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -175,7 +176,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
 
     // Grep (回调; 与真实插件回调同语义: 兼容单字符串/数组)
     static auto grepListOf
-        = [](const agentxx::util::Json& j, std::string_view key) -> std::vector<std::string> {
+        = [](const utilxx_base::Json& j, std::string_view key) -> std::vector<std::string> {
         std::vector<std::string> out;
         std::string              k{key};
         if (!j.is_object() || !j.contains(k)) {
@@ -196,9 +197,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto grepFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json j;
+        utilxx_base::Json j;
         try {
-            j = agentxx::util::Json::parse(args);
+            j = utilxx_base::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -258,9 +259,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto editFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json j;
+        utilxx_base::Json j;
         try {
-            j = agentxx::util::Json::parse(args);
+            j = utilxx_base::Json::parse(args);
         } catch (...) {
             return -1;
         }
@@ -273,12 +274,12 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         out->displayName   = makeTestString("Edit");
         out->summary       = makeTestString(" · " + path);
         if (!in->is_error) {
-            agentxx::util::Json diffItem;
+            utilxx_base::Json diffItem;
             diffItem["kind"]        = "diff";
             diffItem["path"]        = std::move(path);
             diffItem["old_str"]     = std::move(oldStr);
             diffItem["new_str"]     = std::move(newStr);
-            agentxx::util::Json arr = agentxx::util::Json::array();
+            utilxx_base::Json arr = utilxx_base::Json::array();
             arr.push_back(std::move(diffItem));
             out->items_json = makeTestString(arr.dump());
         }
@@ -346,9 +347,9 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto planningFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
         std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        agentxx::util::Json a;
+        utilxx_base::Json a;
         try {
-            a = args.empty() ? agentxx::util::Json::object() : agentxx::util::Json::parse(args);
+            a = args.empty() ? utilxx_base::Json::object() : utilxx_base::Json::parse(args);
         } catch (...) {
             return -1; // 参数不可解析: 回退通用渲染
         }
@@ -356,15 +357,15 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             return -1;
         }
         // write: 参数即规划内容; read: 结果即保存的规划 JSON
-        agentxx::util::Json plan;
+        utilxx_base::Json plan;
         if (a.value("mode", std::string{}) == "read") {
             const std::string_view result(
                 in->result_text.data ? in->result_text.data : "",
                 in->result_text.size
             );
             try {
-                plan = result.empty() ? agentxx::util::Json::object()
-                                      : agentxx::util::Json::parse(result);
+                plan = result.empty() ? utilxx_base::Json::object()
+                                      : utilxx_base::Json::parse(result);
             } catch (...) {
                 return -1;
             }
@@ -394,16 +395,16 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             }
         }
 
-        agentxx::util::Json items   = agentxx::util::Json::array();
+        utilxx_base::Json items   = utilxx_base::Json::array();
         const auto          roadmap = plan.value("roadmap", std::string{});
         if (!roadmap.empty()) {
-            agentxx::util::Json diagram;
+            utilxx_base::Json diagram;
             diagram["kind"]    = "diagram";
             diagram["mermaid"] = roadmap;
             items.push_back(std::move(diagram));
         }
         if (plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty()) {
-            agentxx::util::Json head;
+            utilxx_base::Json head;
             head["kind"] = "text";
             head["role"] = "normal";
             head["text"] = "|- Todo";
@@ -412,7 +413,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
                 if (!td.is_object() || td.value("content", std::string{}).empty()) {
                     continue;
                 }
-                agentxx::util::Json row;
+                utilxx_base::Json row;
                 row["kind"] = "text";
                 row["role"] = "normal";
                 row["text"] = fmt::format(
@@ -424,7 +425,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             }
         }
         if (plan.contains("notes") && plan["notes"].is_string()) {
-            agentxx::util::Json row;
+            utilxx_base::Json row;
             row["kind"] = "text";
             row["role"] = "hint";
             row["text"] = "|- Note " + plan["notes"].get<std::string>();
@@ -544,7 +545,7 @@ struct ToolHeaderFixture {
             d.toolCallId      = "call_1";
             d.displayName     = "Plan";
             d.summary         = "[~] reproduce issue; [ ] fix root cause; [#] write tests";
-            d.items           = agentxx::util::Json::parse(R"([
+            d.items           = utilxx_base::Json::parse(R"([
                 {"kind":"diagram","mermaid":"stateDiagram-v2\n[*] --> phase1\nphase1 --> [*]"},
                 {"kind":"text","role":"title","text":"Todos:"},
                 {"kind":"text","role":"normal","text":"[~] do task A"},
@@ -568,7 +569,7 @@ struct ToolHeaderFixture {
             d.toolCallId  = "call_1";
             d.displayName = "Plan";
             d.summary     = "[~] reproduce issue";
-            d.items       = agentxx::util::Json::parse(R"([
+            d.items       = utilxx_base::Json::parse(R"([
                 {"kind":"button","label":" Graph ","action_id":"planning.open_graph","args":{},"role":"accent"},
                 {"kind":"text","role":"title","text":"Todos:"},
                 {"kind":"text","role":"normal","text":"[~] do task A"}

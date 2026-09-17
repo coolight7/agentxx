@@ -1,11 +1,12 @@
 #include "agentxx/tools/git_worktree.h"
+#include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/worktree.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx/worktree.h"
 #include <chrono>
 #include <filesystem>
 
@@ -14,12 +15,12 @@ namespace tools {
 
 namespace {
 
-using agentxx::util::worktree::GitResult;
+using utilxx::worktree::GitResult;
 
 /// 读取工具参数中的字符串 (缺失/类型不符回退默认值)
-/// - agentxx::util::Json 的 contains/operator[] 不接受 string_view, 键统一用 std::string
+/// - utilxx_base::Json 的 contains/operator[] 不接受 string_view, 键统一用 std::string
 std::string
-    argString(const agentxx::util::Json& args, const std::string& key, std::string_view def = {}) {
+    argString(const utilxx_base::Json& args, const std::string& key, std::string_view def = {}) {
     if (args.contains(key) && args[key].is_string()) {
         return args[key].get<std::string>();
     }
@@ -28,7 +29,7 @@ std::string
 
 /// 生成自动 worktree 名称: wt-{unix秒}-{自增序号} (同秒冲突时递增序号)
 std::string generateWorktreeName(const std::string& repoRootDir) {
-    namespace fw = agentxx::util::worktree;
+    namespace fw = utilxx::worktree;
     auto now     = std::chrono::duration_cast<std::chrono::seconds>(
                    std::chrono::system_clock::now().time_since_epoch()
     )
@@ -129,14 +130,14 @@ neograph::ChatTool GitWorktreeTool::get_definition() const {
             }
         }
     }
-    agentxx::util::Json params = agentxx::util::Json{
+    utilxx_base::Json params = utilxx_base::Json{
         {"type",       "object"                           },
         {"properties",
          {
              {"opt",
               {
                   {"type", "string"},
-                  {"enum", agentxx::util::Json::array({"create", "info", "status", "remove"})},
+                  {"enum", utilxx_base::Json::array({"create", "info", "status", "remove"})},
                   {"description",
                    R"(Operation to perform:
 `create`: Create an isolated worktree and bind THIS session to it. Use at the start of code-modifying tasks.
@@ -167,12 +168,12 @@ Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamp
                   },
               }},
          }                                                },
-        {"required",   agentxx::util::Json::array({"opt"})},
+        {"required",   utilxx_base::Json::array({"opt"})},
     };
     return {name, depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util::Json& arguments) {
+asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::Json& arguments) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->agentConfig) {
         co_return R"({"error":"agent context unavailable"})";
@@ -207,19 +208,16 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
     // ---- info: 无需写操作, 但列举/状态探测涉及子进程, 卸载线程池执行 ----
     if (opt == "info") {
         auto result
-            = co_await agentxx::
-                util::
-                    offloadCancellableAsync<std::string>(
+            = co_await utilxx::offloadCancellableAsync<std::string>(
                         *ctxPtr->threadPool,
-                        cancelToken,
+                        // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
+                        agentxx::util::adaptCancelToken(cancelToken),
                         [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag) -> asio::
                                                                                             awaitable<
                                                                                                 std::
                                                                                                     string> {
                                                                                                 namespace fw
-                                                                                                    = agentxx::
-                                                                                                        util::
-                                                                                                            worktree;
+                                                                                                    = utilxx::worktree;
                                                                                                 std::string
                                                                                                     root
                                                                                                     = knownRepoRoot;
@@ -248,11 +246,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
                                                                                                     = fw::listWorktrees(
                                                                                                         root
                                                                                                     );
-                                                                                                agentxx::
-                                                                                                    util::Json
+                                                                                                utilxx_base::Json
                                                                                                         arr
-                                                                                                    = agentxx::util::
-                                                                                                        Json::array(
+                                                                                                    = utilxx_base::Json::array(
                                                                                                         );
                                                                                                 std::string
                                                                                                     boundName;
@@ -282,7 +278,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
                                                                                                         = st ? st->dirtyFiles(
                                                                                                                )
                                                                                                              : false;
-                                                                                                    arr.push_back(agentxx::util::Json{
+                                                                                                    arr.push_back(utilxx_base::Json{
                                                                                                         {"path",
                                                                                                          e.path
                                                                                                         },
@@ -317,7 +313,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
                                                                                                     }
                                                                                                     );
                                                                                                 }
-                                                                                                agentxx::util::Json out{
+                                                                                                utilxx_base::Json out{
                                                                                                     {"repoRoot",
                                                                                                      root
                                                                                                     },
@@ -327,7 +323,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
                                                                                                 };
                                                                                                 if (binding
                                                                                                     != nullptr) {
-                                                                                                    out["current"] = agentxx::util::Json{
+                                                                                                    out["current"] = utilxx_base::Json{
                                                                                                         {"name",
                                                                                                          binding
                                                                                                              ->name
@@ -365,7 +361,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
     // ---- create: 创建 + 绑定 + 权限隔离 ----
     if (opt == "create") {
         if (binding != nullptr) {
-            co_return agentxx::util::Json{
+            co_return utilxx_base::Json{
                 {"error",
                  fmt::format(
                      "session already bound to worktree '{}' ({})", binding->name,
@@ -381,9 +377,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         // 名称清洗/生成 (纯函数, io 线程可做); 冲突检查在 offload 内以最终状态为准
         std::string name = userName.empty()
                                ? std::string{}
-                               : agentxx::util::worktree::sanitizeWorktreeName(userName);
+                               : utilxx::worktree::sanitizeWorktreeName(userName);
         if (!userName.empty() && name.empty()) {
-            co_return agentxx::util::Json{
+            co_return utilxx_base::Json{
                 {"error", fmt::format("invalid worktree name '{}'", userName)},
                 {"hint", "allowed chars: letters, digits, '.', '_', '-'"},
             }
@@ -400,12 +396,13 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         };
 
         // 仓库探测 + 创建全部卸载到线程池 (git 子进程调用不可在 io 线程阻塞)
-        auto outcome = co_await agentxx::util::offloadCancellableAsync<CreateOutcome>(
+        auto outcome = co_await utilxx::offloadCancellableAsync<CreateOutcome>(
             *ctxPtr->threadPool,
-            cancelToken,
+            // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
+            agentxx::util::adaptCancelToken(cancelToken),
             [effectiveDir, name, baseRef](std::atomic<bool>& cancelFlag
             ) -> asio::awaitable<CreateOutcome> {
-                namespace fw = agentxx::util::worktree;
+                namespace fw = utilxx::worktree;
                 CreateOutcome out;
                 if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
                     out.error = "not inside a git repository";
@@ -451,12 +448,12 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         );
 
         if (!outcome.ok) {
-            co_return agentxx::util::Json{
+            co_return utilxx_base::Json{
                 {"error", outcome.error}
             }.dump();
         }
         if (sessionId.empty()) {
-            co_return agentxx::util::Json{
+            co_return utilxx_base::Json{
                 {"error", "no session id available, cannot bind"},
                 {"path",  outcome.path                          },
             }
@@ -471,7 +468,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
             outcome.branch,
             outcome.repoRoot
         );
-        co_return agentxx::util::Json{
+        co_return utilxx_base::Json{
             {"ok",       true                                                                        },
             {"op",       "create"                                                                    },
             {"name",     outcome.name                                                                },
@@ -497,12 +494,13 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         } else if (session && !session->getWorktreeBinding().path.empty() && targetName.empty()) {
             targetPath = session->getWorktreeBinding().path;
         }
-        auto result = co_await agentxx::util::offloadCancellableAsync<std::string>(
+        auto result = co_await utilxx::offloadCancellableAsync<std::string>(
             *ctxPtr->threadPool,
-            cancelToken,
+            // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
+            agentxx::util::adaptCancelToken(cancelToken),
             [&, targetName, targetPath, rootForList, effectiveDir](std::atomic<bool>&)
                 -> asio::awaitable<std::string> {
-                namespace fw     = agentxx::util::worktree;
+                namespace fw     = utilxx::worktree;
                 std::string root = rootForList;
                 std::string path = targetPath;
                 if (path.empty()) {
@@ -526,7 +524,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
                                .generic_string();
                 }
                 if (!std::filesystem::exists(path)) {
-                    co_return agentxx::util::Json{
+                    co_return utilxx_base::Json{
                         {"error", fmt::format("worktree directory not found: {}", path)},
                         {"hint", "it may have been removed; use opt=info to list existing worktrees"
                         },
@@ -535,12 +533,12 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
                 }
                 auto st = fw::statusSummary(path);
                 if (!st) {
-                    co_return agentxx::util::Json{
+                    co_return utilxx_base::Json{
                         {"error", "git status failed"},
                         {"path",  path               }
                     }.dump();
                 }
-                agentxx::util::Json out{
+                utilxx_base::Json out{
                     {"path",           path         },
                     {"modified",       st->modified },
                     {"added",          st->added    },
@@ -573,9 +571,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         }
         std::string name = targetName.empty()
                                ? binding->name
-                               : agentxx::util::worktree::sanitizeWorktreeName(targetName);
+                               : utilxx::worktree::sanitizeWorktreeName(targetName);
         if (name.empty()) {
-            co_return agentxx::util::Json{
+            co_return utilxx_base::Json{
                 {"error", "invalid worktree name"}
             }.dump();
         }
@@ -589,11 +587,12 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
             bool        removed = false;
         };
 
-        auto outcome = co_await agentxx::util::offloadCancellableAsync<RemoveOutcome>(
+        auto outcome = co_await utilxx::offloadCancellableAsync<RemoveOutcome>(
             *ctxPtr->threadPool,
-            cancelToken,
+            // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
+            agentxx::util::adaptCancelToken(cancelToken),
             [&, name, force](std::atomic<bool>& cancelFlag) -> asio::awaitable<RemoveOutcome> {
-                namespace fw = agentxx::util::worktree;
+                namespace fw = utilxx::worktree;
                 RemoveOutcome out;
                 std::string   root;
                 {
@@ -664,12 +663,12 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         );
 
         if (!outcome.removed) {
-            agentxx::util::Json out{
+            utilxx_base::Json out{
                 {"error",   outcome.error},
                 {"removed", false        },
             };
             if (!outcome.summary.empty()) {
-                out["pending"] = agentxx::util::Json{
+                out["pending"] = utilxx_base::Json{
                     {"modified",  outcome.modified },
                     {"added",     outcome.added    },
                     {"deleted",   outcome.deleted  },
@@ -686,7 +685,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
         if (removesCurrent && !sessionId.empty()) {
             unbindSession(ctxPtr, sessionId);
         }
-        co_return agentxx::util::Json{
+        co_return utilxx_base::Json{
             {"ok",      true          },
             {"op",      "remove"      },
             {"name",    name          },
@@ -695,7 +694,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const agentxx::util:
             .dump();
     }
 
-    co_return agentxx::util::Json{
+    co_return utilxx_base::Json{
         {"error", fmt::format("unknown opt '{}', expect create|info|status|remove", opt)},
     }
         .dump();

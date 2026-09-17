@@ -7,8 +7,8 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -64,7 +64,7 @@ agentxx::agent::PluginSide pluginSideFromString(const std::string& s) {
 // 日志
 // ---------------------------------------------------------------------------
 
-void FfiAgentRuntime::FfiLogSink::onLog(const util::LogEntry& entry) {
+void FfiAgentRuntime::FfiLogSink::onLog(const utilxx_base::LogEntry& entry) {
     owner_.pushLogItem(LogItem{
         static_cast<int>(entry.level),
         entry.message,
@@ -85,9 +85,9 @@ std::string FfiAgentRuntime::drainLogs() {
         std::lock_guard<std::mutex> lock(logMutex_);
         drained.swap(logRing_);
     }
-    agentxx::util::Json arr = agentxx::util::Json::array();
+    utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& item : drained) {
-        agentxx::util::Json entry;
+        utilxx_base::Json entry;
         entry["level"]   = item.level;
         entry["message"] = item.message;
         arr.push_back(std::move(entry));
@@ -146,11 +146,11 @@ bool FfiAgentRuntime::buildConfigs(
     auto config = std::make_shared<AgentConfig>();
 
     // ---- 顶层配置 (config_json) ----
-    agentxx::util::Json cfgJ;
+    utilxx_base::Json cfgJ;
     auto                cfgSv = toSv(config_json);
     if (!cfgSv.empty()) {
         try {
-            cfgJ = agentxx::util::Json::parse(cfgSv);
+            cfgJ = utilxx_base::Json::parse(cfgSv);
         } catch (const std::exception& e) {
             err = fmt::format("config_json 非法 JSON: {}", e.what());
             return false;
@@ -159,7 +159,7 @@ bool FfiAgentRuntime::buildConfigs(
         // 会话工作目录: 相对路径/`~` 在此按进程 cwd 展开为绝对路径
         // (嵌入多实例场景下各句柄可绑定独立项目目录, 见 AgentConfig::workDir)
         {
-            auto workDir = agentxx::util::expandUserHomePath(cfgJ.value("workDir", ""));
+            auto workDir = utilxx_base::expandUserHomePath(cfgJ.value("workDir", ""));
             if (!workDir.empty()) {
                 std::filesystem::path wp{workDir};
                 config->workDir = wp.is_absolute() ? wp.lexically_normal().generic_string()
@@ -179,11 +179,11 @@ bool FfiAgentRuntime::buildConfigs(
         }
         config->permissionMode = permissionModeFromString(cfgJ.value("permissionMode", "ask"));
         config->permissionAllowPaths
-            = agentxx::util::jsonGetStringArray(cfgJ, "permissionAllowPaths");
+            = utilxx_base::jsonGetStringArray(cfgJ, "permissionAllowPaths");
         config->permissionDenyPaths
-            = agentxx::util::jsonGetStringArray(cfgJ, "permissionDenyPaths");
-        config->skillDirPaths   = agentxx::util::jsonGetStringArray(cfgJ, "skills");
-        config->memoryFilePaths = agentxx::util::jsonGetStringArray(cfgJ, "memoryFiles");
+            = utilxx_base::jsonGetStringArray(cfgJ, "permissionDenyPaths");
+        config->skillDirPaths   = utilxx_base::jsonGetStringArray(cfgJ, "skills");
+        config->memoryFilePaths = utilxx_base::jsonGetStringArray(cfgJ, "memoryFiles");
         config->websearchApiUrl = cfgJ.value("websearchApiUrl", config->websearchApiUrl);
 
         // MCP 服务器: {"ns": {"url": "...", "timeoutSec": 120}}
@@ -226,11 +226,11 @@ bool FfiAgentRuntime::buildConfigs(
     }
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
-    agentxx::util::Json mj;
+    utilxx_base::Json mj;
     auto                modelSv = toSv(model_json);
     if (!modelSv.empty()) {
         try {
-            mj = agentxx::util::Json::parse(modelSv);
+            mj = utilxx_base::Json::parse(modelSv);
         } catch (const std::exception& e) {
             err = fmt::format("model_json 非法 JSON: {}", e.what());
             return false;
@@ -361,14 +361,14 @@ int FfiAgentRuntime::start(std::string& err) {
 
     // 同步应答路由: client io 线程收到 Wire 响应时完成对应 promise
     auto weakSelf          = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
-    clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, agentxx::util::Json j) {
+    clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, utilxx_base::Json j) {
         if (auto sp = weakSelf.lock()) {
             sp->onSyncReplyOnClientThread(kind, std::move(j));
         }
     };
 
     // 接入日志分发器
-    util::LogDispatcher::instance().addSink(logSink_);
+    utilxx_base::LogDispatcher::instance().addSink(logSink_);
 
     // 创建 work guards
     serverWorkGuard_.emplace(asio::make_work_guard(*serverIoCtx_));
@@ -423,7 +423,7 @@ int FfiAgentRuntime::start(std::string& err) {
 
 asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
     // init (含启动组件加载; 失败经 EVT_ERROR 上报并置 Failed 状态)
-    const bool initOk = co_await util::catchErrorAsync<bool>(
+    const bool initOk = co_await agentxx::util::catchErrorAsync<bool>(
         [self = shared_from_this()]() -> asio::awaitable<bool> {
             co_await self->agent_->init();
             co_return true;
@@ -498,7 +498,7 @@ void FfiAgentRuntime::stopInternal() {
     }
 
     // 4) 摘除日志 sink
-    util::LogDispatcher::instance().removeSink(logSink_);
+    utilxx_base::LogDispatcher::instance().removeSink(logSink_);
 
     // 5) 停止并 join Server-IO 线程
     //    插件关闭必须先于此完成: shutdownAsync 在 agent IO 线程上 stop →
@@ -692,7 +692,7 @@ std::string FfiAgentRuntime::getLanguage(std::string& err) {
 
 void FfiAgentRuntime::onSyncReplyOnClientThread(
     FfiClientAgentIO::SyncKind kind,
-    agentxx::util::Json        j
+    utilxx_base::Json        j
 ) {
     std::shared_ptr<SyncWait> waiter;
     {
@@ -797,11 +797,11 @@ int FfiAgentRuntime::interruptRespond(
         err = "状态错误: 未启动或已停止";
         return AGENTXX_FFI_ERR_STATE;
     }
-    agentxx::util::Json val   = agentxx::util::Json::object();
+    utilxx_base::Json val   = utilxx_base::Json::object();
     auto                valSv = toSv(valuesJson);
     if (!valSv.empty()) {
         try {
-            val = agentxx::util::Json::parse(valSv);
+            val = utilxx_base::Json::parse(valSv);
         } catch (const std::exception& e) {
             err = fmt::format("valuesJson 非法 JSON: {}", e.what());
             return AGENTXX_FFI_ERR_JSON;

@@ -1,7 +1,7 @@
 #include "agentxx-test/core/test_network_timeout.h"
-#include "agentxx/util/http_client.h"
-#include "agentxx/util/http_server.h"
-#include "agentxx/util/ws_client.h"
+#include "utilxx/http_client.h"
+#include "utilxx/http_server.h"
+#include "utilxx/ws_client.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
@@ -26,7 +26,9 @@ int g_network_timeout_failed = 0;
 namespace agentxx {
 namespace test {
 
-using namespace agentxx::util;
+// 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
+using namespace utilxx_base;
+using namespace utilxx;
 using namespace std::chrono_literals;
 
 // ---------------------------------------------------------------------------
@@ -65,7 +67,7 @@ static asio::awaitable<void> test_http_read_timeout() {
                 // Never respond — just wait until cancelled
                 asio::steady_timer timer(co_await asio::this_coro::executor);
                 timer.expires_after(std::chrono::seconds{300});
-                neograph_asio_error_code ec;
+                utilxx_base::AsioErrorCode ec;
                 co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 co_return;
             }
@@ -148,7 +150,7 @@ static asio::awaitable<void> test_ws_recv_timeout_keeps_connection() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;
@@ -219,7 +221,7 @@ static asio::awaitable<void> test_ws_ping_uses_config_timeout() {
         boost::beast::flat_buffer buf;
         for (;;) {
             buf.clear();
-            neograph_asio_error_code ec;
+            utilxx_base::AsioErrorCode ec;
             co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
                 co_return;

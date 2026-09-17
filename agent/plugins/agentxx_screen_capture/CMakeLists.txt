@@ -1,7 +1,7 @@
 # agentxx_screen_capture —— 屏幕捕获插件 (Windows)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + agentxx_util (Json/JsonView)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static (Json/JsonView)
 # - 内置模式: 源文件编译为 OBJECT 库合并进
-#   libagentxx; agentxx_util/simdjson 为 libagentxx 既有依赖; DXGI/D3D11/WIC 等平台库
+#   libagentxx; cxx_utilxx_base_static/simdjson 为 libagentxx 既有依赖; DXGI/D3D11/WIC 等平台库
 #   经 AGENTXX_BUILTIN_PLUGIN_LINK_LIBS 补链接 (libagentxx 不再无条件携带
 #   插件专用库)
 # - 提供: agentxx_screen_capture (单帧/全部屏幕/鼠标屏/流式推送)
@@ -37,11 +37,11 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # screen_capture.h / screen_capture_plugin.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # agentxx_util (Json/JsonView) simdjson.h
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView) simdjson.h
   )
-  # 复用 agentxx_util 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
+  # 复用 cxx_utilxx_base_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
   # 传递编译宏/头路径: util 头文件依赖 XX_IS_* 宏与 include 路径)
-  target_link_libraries(${_target} PRIVATE agentxx_util)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
   if (XX_IS_WIN_D)
     # screen_capture: DXGI/D3D11 (桌面捕获) + WIC windowscodecs (PNG 编码)
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
@@ -80,42 +80,32 @@ add_library(${PLUGIN_NAME} SHARED
 # 仿 agent/lib/CMakeLists.txt 四件套模式: find_package 导入依赖 target /
 # target_include_directories 声明头路径 / target_link_directories 提供裸库名
 # 解析目录 / target_link_libraries 以 imported target + 裸库名链接。
-# 复用 agentxx_util 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# agentxx::util::Json 经 agentxx_util)
-if (NOT TARGET agentxx_util)
+# 复用 cxx_utilxx_base_static 工具库 (插件静态链接, 与宿主副本符号互不冲突;
+# utilxx_base::Json 经 cxx_utilxx_base_static)
+if (NOT TARGET cxx_utilxx_base_static)
   # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
   # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
-  find_package(agentxx_util REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
 find_package(fmt REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # screen_capture.h / screen_capture_plugin.h
   "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # agentxx_util (Json/JsonView) simdjson.h
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_base_static (Json/JsonView) simdjson.h
 )
 
 # 裸库名依赖解析目录: hs_runtime 位于
-# AGENTXX_INSTALL_DIR/lib 经 agentxx_util PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
+# AGENTXX_INSTALL_DIR/lib 经 cxx_utilxx_base_static PUBLIC link_directories 传播已可解析 hs_runtime; 此处保留供直连裸库名兜底
 target_link_directories(${PLUGIN_NAME} PRIVATE
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  agentxx_util
+  cxx_utilxx_base_static
   simdjson
   fmt::fmt
 )
-if (AGENTXX_ENABLE_HYPERSCAN)
-  # hyperscan pkg-config 模块由 plugins/CMakeLists.txt 统一定义 (与
-  # lib/client/test 一致); hs_runtime 为裸名经上方 link_directories 解析
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::hyperscan hs_runtime)
-endif()
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # io_uring 同上由总控统一定义 (util 的 asio 重模块在 -DASIO_HAS_IO_URING
-  # 下引用其符号)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::uring)
-endif()
 if (XX_IS_WIN_D)
   # screen_capture: DXGI/D3D11/GDI + WIC (PNG 编码)
   target_link_libraries(${PLUGIN_NAME} PRIVATE

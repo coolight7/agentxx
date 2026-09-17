@@ -2,7 +2,7 @@
 
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/log.h"
+#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/dispatch.hpp"
@@ -21,7 +21,7 @@ WsAgentIOTransport::WsAgentIOTransport(
     std::string           url,
     std::string           token,
     Config                config,
-    util::WsClientConfig  wsConfig
+    utilxx::WsClientConfig  wsConfig
 ) :
     ex_(std::move(ex)),
     config_(std::move(config)),
@@ -36,7 +36,7 @@ WsAgentIOTransport::WsAgentIOTransport(
 
 WsAgentIOTransport::WsAgentIOTransport(
     asio::any_io_executor           ex,
-    std::unique_ptr<util::WsClient> client,
+    std::unique_ptr<utilxx::WsClient> client,
     Config                          config
 ) :
     ex_(std::move(ex)),
@@ -278,11 +278,11 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 break;
             }
             const auto& wsMsg = msgRes.value();
-            if (wsMsg.type == util::WsMessage::Type::Close) {
+            if (wsMsg.type == utilxx::WsMessage::Type::Close) {
                 disconnected = true;
                 break;
             }
-            if (wsMsg.type != util::WsMessage::Type::Text) {
+            if (wsMsg.type != utilxx::WsMessage::Type::Text) {
                 continue;
             }
 
@@ -349,12 +349,12 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 break;
             }
 
-            auto newClient = co_await util::wsConnect(ex_, url_, {}, wsConfig_);
+            auto newClient = co_await utilxx::wsConnect(ex_, url_, {}, wsConfig_);
             if (!newClient) {
                 continue;
             }
 
-            client    = std::shared_ptr<util::WsClient>(std::move(newClient.value()));
+            client    = std::shared_ptr<utilxx::WsClient>(std::move(newClient.value()));
             wsClient_ = client;
 
             // 重建 writeQueue 并重启 writeLoop (旧 writeLoop 因旧 queue 关闭而退出)
@@ -425,7 +425,7 @@ asio::awaitable<bool> WsAgentIOTransport::establishConnection() {
         if (stopped_.load(std::memory_order_acquire)) {
             co_return false;
         }
-        auto client = co_await util::wsConnect(ex_, url_, {}, wsConfig_);
+        auto client = co_await utilxx::wsConnect(ex_, url_, {}, wsConfig_);
         if (!client) {
             if (stopped_.load(std::memory_order_acquire)) {
                 co_return false;
@@ -445,7 +445,7 @@ asio::awaitable<bool> WsAgentIOTransport::establishConnection() {
             co_await reconnectTimer_->async_wait(asio::redirect_error(asio::use_awaitable, ec));
             continue;
         }
-        wsClient_ = std::shared_ptr<util::WsClient>(std::move(client.value()));
+        wsClient_ = std::shared_ptr<utilxx::WsClient>(std::move(client.value()));
         co_return true;
     }
 }

@@ -5,8 +5,8 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
-#include "agentxx/util/async_offload.h"
-#include "agentxx/util/log.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/log.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include "neograph/graph/registry.h"
@@ -39,7 +39,7 @@ PluginTool::PluginTool(
         spec.parameters_json.data ? spec.parameters_json.data : "",
         spec.parameters_json.size
     },
-    parameters_(agentxx::util::Json::object()),
+    parameters_(utilxx_base::Json::object()),
     instance_(instance) {
     spec_      = spec;
     spec_.name = agentxx::plugin::PluginStringView::from(name_.data(), name_.size());
@@ -50,7 +50,7 @@ PluginTool::PluginTool(
 
     if (!parametersJson_.empty()) {
         try {
-            auto params = agentxx::util::Json::parse(parametersJson_);
+            auto params = utilxx_base::Json::parse(parametersJson_);
             if (params.is_object()) {
                 parameters_ = std::move(params);
             }
@@ -68,7 +68,7 @@ neograph::ChatTool PluginTool::get_definition() const {
     return def;
 }
 
-asio::awaitable<std::string> PluginTool::execute_async(const agentxx::util::Json& arguments) {
+asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& arguments) {
     auto inst = instance_.lock();
     if (!inst) {
         throw std::runtime_error("plugin instance released");
@@ -120,7 +120,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const agentxx::util::Json
 
     if (spec_.default_timeout_ms > 0) {
         auto timeout = std::chrono::milliseconds{spec_.default_timeout_ms};
-        co_return co_await agentxx::util::asyncWithTimeout<std::string>(
+        co_return co_await utilxx::asyncWithTimeout<std::string>(
             [a = std::move(awaitArgs)]() mutable -> asio::awaitable<std::string> {
                 co_return co_await plugin::awaitPluginOp(std::move(a));
             },
@@ -163,9 +163,9 @@ void PluginMiddlewareHandle::clearHook(AgentxxPluginHookPoint point) {
     hooks_[static_cast<size_t>(point)] = HookEntry{};
 }
 
-static agentxx::util::Json
+static utilxx_base::Json
     summarizeNodeInput(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in) {
-    agentxx::util::Json j;
+    utilxx_base::Json j;
     j["sessionId"] = in.ctx.thread_id;
     j["point"]     = static_cast<int>(point);
     return j;
@@ -737,7 +737,7 @@ int PluginManager::setGraphJson(PluginInstance* inst, AgentxxPluginStringView gr
         return -1;
     }
     try {
-        auto j = agentxx::util::Json::parse(std::string_view{graph_json.data, graph_json.size});
+        auto j = utilxx_base::Json::parse(std::string_view{graph_json.data, graph_json.size});
         if (!j.is_object()) {
             XX_LOGW("Plugin `{}` set_graph_json: not a JSON object", inst->name);
             return -1;

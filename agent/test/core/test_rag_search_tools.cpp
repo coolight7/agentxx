@@ -1,7 +1,7 @@
 #include "agentxx-test/core/test_rag_search_tools.h"
 // 原 lib 内置工具已迁移至 agentxx_rag_search 插件 (同名同行为); 测试直测
 // 插件同一实现 (rag_search_impl.h), 保证插件行为与测试覆盖一致
-#include "agentxx/util/string_util.h"
+#include "utilxx_base/string_util.h"
 #include "agentxx_rag_search/rag_search_impl.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
@@ -196,7 +196,7 @@ asio::awaitable<void> test_fixed_length_very_long() {
     auto        result         = VectorStore::splitByFixedLength(text, 100);
     bool        allWithinLimit = true;
     for (auto& chunk : result) {
-        if (agentxx::util::utf8GetLength(chunk) > 100) {
+        if (utilxx_base::utf8GetLength(chunk) > 100) {
             allWithinLimit = false;
             break;
         }
@@ -656,7 +656,7 @@ asio::awaitable<void> test_delimiters_recursive_split() {
     auto                     result         = VectorStore::splitByDelimiters(text, 10, delims);
     bool                     allWithinLimit = true;
     for (auto& chunk : result) {
-        if (agentxx::util::utf8GetLength(chunk) > 10) {
+        if (utilxx_base::utf8GetLength(chunk) > 10) {
             allWithinLimit = false;
             break;
         }
@@ -821,7 +821,7 @@ asio::awaitable<void> test_chunks_length_enforcement() {
     auto        result         = VectorStore::splitTextToChunks(longText, config);
     bool        allWithinLimit = true;
     for (auto& chunk : result) {
-        if (agentxx::util::utf8GetLength(chunk) > 5) {
+        if (utilxx_base::utf8GetLength(chunk) > 5) {
             allWithinLimit = false;
             break;
         }
@@ -870,7 +870,7 @@ asio::awaitable<void> test_chunks_fallback_chain() {
     auto        result         = VectorStore::splitTextToChunks(text, config);
     bool        allWithinLimit = true;
     for (auto& chunk : result) {
-        if (agentxx::util::utf8GetLength(chunk) > 10) {
+        if (utilxx_base::utf8GetLength(chunk) > 10) {
             allWithinLimit = false;
             break;
         }
@@ -980,7 +980,7 @@ asio::awaitable<void> test_chunks_very_long_paragraph() {
     auto        result         = VectorStore::splitTextToChunks(text, config);
     bool        allWithinLimit = true;
     for (auto& chunk : result) {
-        if (agentxx::util::utf8GetLength(chunk) > 20) {
+        if (utilxx_base::utf8GetLength(chunk) > 20) {
             allWithinLimit = false;
             break;
         }
@@ -1150,7 +1150,7 @@ asio::awaitable<void> test_fixed_length_overlap_50_percent() {
     auto        result         = VectorStore::splitByFixedLength(text, 10, 50.0);
     bool        allWithinLimit = true;
     for (auto& chunk : result) {
-        if (agentxx::util::utf8GetLength(chunk) > 10) {
+        if (utilxx_base::utf8GetLength(chunk) > 10) {
             allWithinLimit = false;
             break;
         }

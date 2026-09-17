@@ -1,7 +1,7 @@
 #include "agentxx-test/core/test_worktree.h"
 
-#include "agentxx/util/string_util.h"
-#include "agentxx/util/worktree.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx/worktree.h"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -51,7 +51,7 @@ std::filesystem::path makeTempDir(const std::string& tag) {
 
 /// 初始化测试仓库 (init + main 分支 + 首次提交); 返回仓库根, 失败返回空
 std::string initTestRepo(const std::filesystem::path& dir) {
-    namespace fw = agentxx::util::worktree;
+    namespace fw = utilxx::worktree;
     if (!fw::runGit({"init"}, dir.generic_string(), 30).ok()) {
         return {};
     }
@@ -75,7 +75,7 @@ std::string initTestRepo(const std::filesystem::path& dir) {
 } // namespace
 
 asio::awaitable<TestResult> run_worktree_tests() {
-    namespace fw = agentxx::util::worktree;
+    namespace fw = utilxx::worktree;
 
     // ---- 前置: git 可用性 ----
     if (!fw::runGit({"--version"}, {}, 30).ok()) {
