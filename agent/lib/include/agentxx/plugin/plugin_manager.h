@@ -44,7 +44,7 @@ class PermissionMiddlewareHandle;
 namespace plugin {
 
 class PluginManager;
-class CapabilityRegistry;
+// CapabilityRegistry 由 cxx_pluginxx 提供 (见 agentxx/plugin/plugin_framework.h 的 using 引入)
 class PluginMiddlewareHandle;
 class PluginTool;
 class PluginInstance;
@@ -744,35 +744,6 @@ private:
     size_t                                                             runningTurns_ = 0;
     std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
     uint64_t                                                           promptSequence_ = 0;
-};
-
-class CapabilityRegistry {
-public:
-
-    struct Entry {
-        std::string                          provider;
-        AgentxxPluginCapabilityStartFunction start  = nullptr;
-        AgentxxPluginOperatorCancelFunction  cancel = nullptr;
-        void*                                ctx    = nullptr;
-    };
-
-    bool registerCapability(
-        std::string_view                     name,
-        std::string_view                     provider,
-        AgentxxPluginCapabilityStartFunction start  = nullptr,
-        AgentxxPluginOperatorCancelFunction  cancel = nullptr,
-        void*                                ctx    = nullptr
-    );
-
-    bool                     unregisterCapability(std::string_view name, std::string_view provider);
-    bool                     has(std::string_view name) const;
-    const Entry*             get(std::string_view name) const;
-    std::string              providerOf(std::string_view name) const;
-    std::vector<std::string> names() const;
-
-private:
-
-    std::map<std::string, Entry, std::less<>> caps_;
 };
 
 } // namespace plugin

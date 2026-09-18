@@ -54,6 +54,7 @@ find_package(yaml-cpp REQUIRED)
 
 set(_CXX_PLUGINXX_SOURCES
   src/api_abi_check.c
+  src/capability_registry.cpp
   src/loader.cpp
   src/manifest.cpp
   src/version.cpp

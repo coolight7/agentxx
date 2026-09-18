@@ -18,6 +18,7 @@
 #define AGENTXX_PLUGIN_FRAMEWORK_H
 
 #include "pluginxx/host/abi_util.h"
+#include "pluginxx/host/capability_registry.h"
 #include "pluginxx/host/loader.h"
 #include "pluginxx/host/manifest.h"
 #include "pluginxx/runtime/driver.h"
@@ -86,6 +87,9 @@ using pluginxx::findBuiltinManifest;
 using pluginxx::resolvePluginEntryPath;
 using pluginxx::isBuiltinScheme;
 using pluginxx::parseBuiltinName;
+
+// ==================== 能力注册表 (pluginxx/host/capability_registry.h) ====================
+using pluginxx::CapabilityRegistry;
 
 // ==================== C ABI 辅助 (pluginxx/host/abi_util.h) ====================
 using pluginxx::svToSv;

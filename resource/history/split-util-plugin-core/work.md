@@ -2,6 +2,7 @@
 
 > 关联方案: [plan.md](./plan.md)
 > 记录时间: 2026-09-18 (第一次) / 2026-09-18 续 (P3-3b：插件框架内核运行时搬迁)
+> 2026-09-18 第三次更新: P3-3c 主体完成 (SDK 通用/领域分层) + P4-1 部分 (能力注册表下沉)
 
 ## 已完成
 
@@ -126,44 +127,130 @@ config 的 `find_dependency(yaml-cpp)` + superbuild `cxx_pluginxx_repo` DEPENDS 
 
 ## 未完成 (后续实施)
 
-### P3-3c SDK 与通用表实现搬迁 (部分完成)
+### P3-3c SDK 与通用表实现搬迁 (SDK 主体完成)
 
 已搬迁: `plugin_common.cpp` 的通用函数 (名称推导/清单解析/入口路径/拓扑排序/内置清单查找)、
 `NativeLoader`、C ABI 辅助 (`abi_util.h`) —— 见 P3-3b 表。
 
+**本次完成 (SDK 通用/领域分层)**:
+
+| 项 | 结果 |
+|---|---|
+| `pluginxx/kit/kit.h` (新增, 3945 行) | 通用插件 SDK: `PluginStringView` / `PluginString` / `queryInterface`、**新增** 通用表聚合 `PluginIfaceCore` (10 张通用表 + query)、`CancelledException`、`Logger` / `pluginLog` / `pluginStrdup` / `ctxGuardLogger` / `jsonEscape`、协程驱动桥 `detail::{PollOneBridge,BridgeRoot,PolledRoot}`、`CancelRegistry` / `OpCtl`、`ArgReader`、`Task<T>` 与完成协议、锚定原语 awaiter (`sleep` / `yield` / `offload` / `invoke_cap`)、后台任务 `spawn`、能力注册 `capability`、阻塞能力调用 `invoke_capability_blocking`、生命周期守卫 `detail::{callLifecycleEntry,autoStopSpawns}` / `logCreateFailure`、导出宏 `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT` |
+| `pluginxx::PluginBaseT<IfacesT>` | 原 `PluginBase` 的通用部分改为**模板基类**: 持有宿主句柄/接口表聚合/`Logger`/`CancelRegistry`, 提供 config / workDir / argsJson / configPath / language / sessionCancelled / jsonEscape / jsonGetString / 宿主堆字符串 / 协程桥 / 后台任务; 新增 `protected virtual onHostReady()` 领域挂钩 (在 `init()` 末尾调用); `spawn` 改为类内联定义 (不再需要 out-of-class 定义) |
+| `pluginxx/kit/guard.h` (新增) | C ABI 边界异常守卫: `logTo` (agent 侧日志表) / `reportCurrentException` / `guardCall` / `guardCallVoid` |
+| `agentxx/plugin/api/plugin_kit.h` (2497 行) | 改为**领域 + umbrella**: 内含 pluginxx 头, 并以逐条 `using` 把通用名引入 `agentxx::plugin` (插件源码零改动); 保留领域部分: `AgentIfaces` / `ClientIfaces`、`ToolPromptText` / `ToolSchemaBuilder`、`call_tool` / `tool` / `fast_tool` / `blocking_tool` / `polled_tool`、`hook`、图节点、工具权限声明、`call_tool_blocking`、client 渲染适配、`kit::ActionController`、`ClientPluginBase`; **新增** `PluginBase : pluginxx::PluginBaseT<AgentIfaces>` (领域 helper + `onHostReady()` 订阅会话轮次开始事件) |
+| `agentxx/plugin/api/plugin_guard.h` | 改为 umbrella: 含 `pluginxx/kit/guard.h` + 通用名 `using` 引入 + **client 侧** `AgentxxClientLogIface` 的 `logTo` 重载 |
+| `agentxx/plugin/api/client_plugin_api.h` | include 收窄: 不再包含 agent 侧 `plugin_api.h`, 改为直接包含 `pluginxx/api/{abi,tables}.h` + 仅声明 client 领域表 |
+| 命名空间分层细节 | 通用部分命名空间 `pluginxx`; `detail` 中的通用设施 (`PollOneBridge` / `AwaiterState` / `PromiseBase` / `RootRequest` / `CompletionGuard` / `jsonGet` / awaiters / `invokeCap` / `spawnTaskImpl` / `callLifecycleEntry` / `autoStopSpawns` …) 由 agentxx 侧 `namespace detail { using pluginxx::detail::X; }` 引入, 领域 helper 定义仍在 `agentxx::plugin::detail` |
+
+**本次完成 (P4-1 部分 — 能力注册表下沉)**:
+
+- `CapabilityRegistry` (能力名 → 提供者插件 + 启动/取消回调 + 上下文) 从
+  `agentxx/plugin/plugin_manager.h` 迁到 `pluginxx/host/capability_registry.h` +
+  `src/capability_registry.cpp` (纯领域无关: 仅依赖 C ABI 类型 + `utilxx_base`)
+- agentxx 侧经 `agentxx/plugin/plugin_framework.h` 的 `using pluginxx::CapabilityRegistry;`
+  继续以原名使用 (宿主领域实现零改动)
+
 仍待实施:
 
-- **`plugin_kit.h` (6246 行) 通用/领域拆分**: 通用部分 → `pluginxx/kit/kit.h`
-  (`PluginStringView`/`PluginString`/`Logger`/`logTo`/`jsonEscape`/`Task`/协程驱动桥/
-  锚定 awaiter 族/`ArgReader`/`CancelRegistry`/`OpCtl`/导出宏), agentxx 侧保留领域 helper
-  (ToolSchemaBuilder / blocking_tool / fast_tool / polled_tool / hook / capability /
-  graph_node / 权限声明辅助) 并与 `pluginxx/kit/kit.h` 组成 umbrella
-  - **难点**: `PluginBase` 持有的 `AgentxxAgentInterfaces` / `AgentxxClientInterfaces`
-    聚合了领域表, 与通用基座相互纠缠。可行方向: 把聚合体拆为
-    `pluginxx::PluginIfaceCore` (通用表) + agentxx 派生聚合; `PluginBase` 参数化为
-    `template<typename AgentIface, typename ClientIface>` 并用
-    `using PluginBase = pluginxx::PluginBase<AgentxxAgentInterfaces, AgentxxClientInterfaces>`
-    维持插件源码零改动
-- `plugin_guard.h` → `pluginxx/kit/guard.h` (通用 `logTo`/`guardCall`; client 侧
-  `AgentxxClientLogIface` 重载留在 agentxx)
-- `client_plugin_api.h` 的 include 收窄为 pluginxx 头 + client 领域表
-- 通用表**实现** (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/
-  capabilities) → `pluginxx/src/tables_impl.cpp`, 宿主数据经 `DomainHooks` 取数
+- **通用表实现的整体下沉** → `pluginxx/src/tables_impl.cpp`: log/json/events/scheduler/
+  coroutine_runtime/tasks/cancel/capabilities 的 vtable 入口 (当前仍在
+  `agentxx/lib/src/plugins/plugin_manager_vtable.cpp` 中, 每个入口约 15–40 行:
+  `enterHost` → io 投递 → `mgr->方法(...)`) 与 `config`/`plugins` 的取数改经
+  `DomainHooks`。该项与 P4 的 `PluginHostCore` 抽取同源, 见下节建议路径。
 
-### P4 `pluginxx::PluginHostCore` 抽取
+## P4 `pluginxx::PluginHostCore` 抽取 (下一步, 尚未开始)
 
-见 plan.md §5.6 / §7 P4 (装载/启停/租约/inflight/op 记账/事件总线/能力注册表 +
-`PluginManager` / `ClientPluginManager` 改为组合 host core)。
+现状: P3-3b 已把**运行时**下沉 (`PluginRuntime` / `InstanceLifetime` /
+`PluginManagerBase<InstanceT>` / op_driver / loader / manifest / abi_util),
+P4-1 已把**能力注册表**下沉; 仍留在宿主侧的是**管理器语义**:
 
-### P5 清理
+1. `DomainHooks` (plan.md §5.6): 领域表查询路由 / 实例注册摘除 / 领域配置 JSON /
+   接口需求解析;
+2. `PluginHostCore<InstanceT>`: 事件总线 (订阅簿记 + 发布) / 任务托管
+   (`sleep` / `offload` / `registerTask` / `postCallback` 的 op 记账) / 通用表装配
+   (vtable 入口 trampoline + 表结构体静态实例) / 装载启停骨架 (级联依赖);
+3. `PluginManager` / `ClientPluginManager` 改为继承 host core + 实现 `DomainHooks`,
+   领域表实现 (tools/hooks/session/prompt/graph 与 client UI) 原样保留。
 
-- 删除 `agent/build/*/exec` 与安装树中的历史残留 (`libagentxx_util.lib`、`lib/cmake/agentxx_util`);
-  **注意**: 安装树的 `include/agentxx`、`include/pluginxx` 也需要按源码核对, 陈旧头会导致
-  难以理解的类型重定义错误 (见上文实施要点 6)
-- 插件源码注释中残留的 `agentxx_util` 字样; `docs/en/**` 同步更新
-- `design/index.md` 代码结构章节的插件框架部分 (本次只更新了 `design/plugins.md` §5)
+**建议实施顺序 (每步都能单独验收)**:
 
-### P6 下游与发布
+- 步 1 (低风险): 把 `plugin_manager_vtable.cpp` 中 10 张通用表的入口函数改为
+  pluginxx 侧模板 `pluginxx::host::makeGenericTableEntries<InstanceT, ManagerT>()`
+  —— 入口体逐字搬迁, 仅把 `mgr->方法(...)` 换成模板参数调用; agentxx 的
+  `xx_query_interface` 改为返回这些静态实例。此步不改变任何行为, 但确立 host core 形状;
+- 步 2: 把 `PluginManager` 的通用方法 (`subscribe`/`unsubscribe`/`publish`/
+  `registerTask`/`sleep`/`offload`/`postCallback`/`registerCapability*`/
+  `invokeCapabilityAsync`) 与其状态 (事件订阅表 / 任务句柄表 / `CapabilityRegistry`)
+  整体移入 `PluginHostCore`, 经 `DomainHooks` 取领域数据;
+- 步 3: 装载/启停骨架 (`plugin_manager_lifecycle.cpp` 的通用部分) 下沉,
+  agentxx 只保留 `DomainHooks` 实现与领域表 (风险最高, 需跑
+  `plugin_multi_instance` / 卸载重载 / 取消路径回归);
+- 步 4: `ClientPluginManager` 同样处理 (client UI 表留在 agentxx)。
 
-- 三库 README 已落地 (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`),
-  musicxx 接入说明仍待补 (plan.md §11)
+**验收提示 (本次已复现的基线)**: 全量 `agentxx_test` 为
+`passed=21163~21164 / failed=9~10` —— 失败数波动来自已知的时序敏感用例
+(`config_loader` 路径格式断言 / `interrupt_bus` 3 例 / `agent` 4 例, 单模块重跑稳定),
+插件相关模块固定为 `plugins 542 · plugin_runtime 672 · plugin_sdk 75 ·
+plugin_bridge 193 · plugin_resources 83 · plugin_multi_instance 80` 全绿 (合计 1645)。
+
+
+### P5 清理 (本次部分完成)
+
+- 已更新文档: `docs/zh-cn/design/plugins.md` (§5.1 目录结构表 + §6 SDK 分层说明)、
+  `docs/zh-cn/design/index.md` (代码结构章节的插件与三库部分)、根 `AGENTS.md`
+  (cxx_pluginxx 条目)、`cxx_pluginxx/README.md` (目录结构与落地进度)
+- 待办: 删除 `agent/build/*/exec` 与安装树中的历史残留 (`libagentxx_util.lib`、
+  `lib/cmake/agentxx_util`); **注意**: 安装树的 `include/agentxx`、`include/pluginxx`
+  需按源码核对, 陈旧头会导致难以理解的类型重定义错误 (见上文实施要点 6)。
+  本次新增的头 (`pluginxx/kit/{kit,guard}.h`、`pluginxx/host/capability_registry.h`)
+  随构建自动安装, 无需手工清理
+- 待办: 插件源码注释中残留的 `agentxx_util` 字样; `docs/en/**` 同步更新
+
+### P6 下游与发布 (本次部分完成)
+
+- 三库 README 已落地; `cxx_pluginxx/README.md` 本次补齐 kit/guard/capability_registry 说明
+- 待办: musicxx 接入说明 (plan.md §11)
+
+---
+
+## 本次验证记录 (Windows Debug / MSVC / ASan, 全量构建 + 全量测试)
+
+| 项目 | 结果 |
+|---|---|
+| 全量构建 | 通过 (3 库 + libagentxx + 20 插件 + client + test) |
+| 全量测试 | `Total: passed=21163 failed=10` (基线 `21164/9`; 差异来自时序敏感用例, 单模块重跑稳定); 插件相关模块与基线**完全一致**: `plugins 542/0 · plugin_runtime 672/0 · plugin_sdk 75/0 · plugin_bridge 193/0 · plugin_resources 83/0 · plugin_multi_instance 80/0` (合计 1645) |
+| `remote_agent` 单模块重跑 3 次 | 415/0 · 415/0 · 415/0 (全量运行时受资源竞争影响偶发 1 例, 与本次改动无关) |
+| 插件导出面 (`dumpbin /exports` on `libexample_plugin.dll`) | 仅 10 个入口符号: `agentxx_plugin_agent_{get_info,create,start,stop,destroy}` + `agentxx_plugin_client_{...}` |
+| 插件依赖面 (`dumpbin /dependents`) | 仅 `WS2_32`/`KERNEL32`/`MSVCP140D`/`VCRUNTIME140D`/`VCRUNTIME140_1D`/`ucrtbased`/`clang_rt.asan-*` —— 无任何 cxx_* 动态依赖 (静态变体生效) |
+| `check_plugin_exports.sh` / `check_sdk_negative_compile.sh` | 未运行: 二者依赖 Linux 构建产物 (`readelf`/`nm` 与 `compile_commands.json` 的 GCC 风格命令), 本机为 Windows/MSVC; 导出面已用 `dumpbin` 等价核对 |
+| 结构检查 | `cxx_pluginxx` 头/源中无 `agentxx/` 头引用与 `agentxx::` 限定名 (仅注释中指向宿主侧配套头的说明) |
+
+### 本次实施要点 (供后续 P4 参考)
+
+1. **SDK 分层的关键是 umbrella + using**: 插件源码零改动靠
+   `agentxx/plugin/api/{plugin_api.h,client_plugin_api.h,plugin_kit.h,plugin_guard.h}`
+   四个文件路径与文件名不变, 内部改为 "包含 pluginxx 头 + 领域部分 + 逐条 `using`";
+   `using` 声明不产生新类型 (无 ODR 风险), 且同一函数名可跨命名空间共同参与重载决议
+   (client 侧 `logTo` 与通用 `logTo` 即按此共存)
+2. **模板化基类优于参数化整个 SDK**: `PluginBaseT<IfacesT>` 只要求实参提供
+   10 张通用表的成员; `AgentIfaces` 天然是超集, 故 agentxx 侧只需
+   `class PluginBase : pluginxx::PluginBaseT<AgentIfaces>` + 领域 helper +
+   `onHostReady()` 覆写, 无需改动任何调用点
+3. **自由函数改为模板入参**: `sleep`/`yield`/`offload`/`invoke_cap` 的
+   `const PluginBase&` 改成 `template<typename Ctx> ... (const Ctx&)`,
+   既能接受 agentxx 派生类, 也能服务其他宿主
+4. **`detail` 的跨层引用用 using 桥接**: 通用 detail 设施整体留在
+   `pluginxx::detail`, agentxx 侧在 `agentxx::plugin::detail` 中以
+   `using pluginxx::detail::X;` 引入, 领域 helper 继续写 `detail::X` 即可;
+   `AwaiterState` 由通用与领域两条 awaiter 路径共用, 故归 pluginxx
+5. **迁移脚本必须先备份源文件**: 本次拆分用一次性脚本按原始行区间搬运
+   (脚本运行前把源头备份为 `_plugin_kit.orig.h`); 曾因把输出路径写成源文件同一路径,
+   第二次运行读到已拆分的文件导致边界断言失败 —— 脚本已按"输出与输入分离 + 行号断言"
+   修正, 任务结束后随中间备份一并删除 (需要再拆分时从 git HEAD 取原始版本)
+6. **`PluginBase::spawn` 需随基类模板化调整为类内联定义**: 原实现是
+   类外 `void PluginBase::spawn(...)` — 模板基类的类外定义需额外
+   `template<typename IfacesT> template<...>` 前缀, 故把 `detail::spawnTaskImpl`
+   的段落到类之前, `spawn` 改成类内联; `spawnTaskImpl` 里的
+   `PluginBase::SpawnRecord` 改经 `std::remove_reference_t<Ctx>::SpawnRecord` 取得

@@ -1529,17 +1529,22 @@ agent/
 │   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
 │   │   │   │   ├── plugin_api.h      # umbrella: 包含 pluginxx/api/{abi,tables}.h + agent 领域表
 │   │   │   │   │                     #   (tools/permission/hooks/session/model/prompt/resources/graph)
-│   │   │   │   ├── client_plugin_api.h # umbrella: 含 pluginxx 通用头 + client 领域表 (UI 无关语义层)
-│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
-│   │   │   │   └── plugin_guard.h    # 插件 C ABI 边界异常处理 header-only (命名空间 agentxx::plugin)
+│   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 领域表 (UI 无关语义层)
+│   │   │   │   ├── plugin_kit.h      # agentxx 领域 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
+│   │   │   │   │                     #   tool/fast_tool/blocking_tool/polled_tool、ToolSchemaBuilder、hook、
+│   │   │   │   │                     #   图节点、工具权限声明、call_tool_blocking、client 渲染/ClientPluginBase;
+│   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
+│   │   │   │   │                     #   (PluginStringView/PluginString/Task/sleep/offload/spawn/PluginBaseT/...)
+│   │   │   │   └── plugin_guard.h    # 边界异常守卫 (通用部分在 pluginxx/kit/guard.h + client 日志表重载)
 │   │   │   ├── plugin_framework.h # 把框架内核 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
 │   │   │   │                     #   内核实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
-│   │   │   │                     #   (runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
-│   │   │   │                     #    host/{loader,manifest,abi_util}.h)
+│   │   │   │                     #   (kit/{kit,guard}.h; runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
+│   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
-│   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) / CapabilityRegistry
+│   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调)
+│   │   │   │                     #   (能力注册表位于 pluginxx/host/capability_registry.h)
 │   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线)
 │   │   │   ├── plugin_graph_node.h # PluginGraphNode (插件自定义图节点, 统一 Operation 完成协议)
 │   │   │   ├── builtin_tool_renderers.h # 内置工具渲染器 (客户端专用展示)
@@ -1583,7 +1588,9 @@ agent/
 │   │                             #   async_mutex/asio_error + utilxx::CancelToken 与 offload
 │   ├── cxx_utilxx/               # 重依赖工具: http_client/http_server/ws_client/router/
 │   │                             #   sqlite/settings_db/regex/aho_corasick/diff_util/worktree/crypto
-│   ├── cxx_pluginxx/             # 插件框架内核: api/(abi.h,tables.h) + kit/ + runtime/ + host/
+│   ├── cxx_pluginxx/             # 插件框架内核: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
+│   │                             #   runtime/(runtime,driver,instance_base,manager_base,op_driver) +
+│   │                             #   host/(loader,manifest,abi_util,capability_registry)
 │   └── (其余: boost/fmt/simdjson/sqlite3/OpenSSL/neograph/yaml-cpp/...)
 │
 ├── client/                       # agentxx_cli 可执行程序

@@ -1,4 +1,4 @@
-/// client 侧插件系统纯 C ABI 契约
+/// client 侧插件系统纯 C ABI 契约 (client 领域表)
 ///
 /// ════════════════════════════════════════════════════════════════════
 /// 架构: COM 风格接口表查询
@@ -13,6 +13,17 @@
 ///   * 全局 AGENTXX_CLIENT_PLUGIN_API_VERSION 版本限制 (要求 >=
 ///   AGENTXX_CLIENT_PLUGIN_API_VERSION，当前为 1)
 ///   * 全部接口表版本统一重置为 1
+///
+/// ════════════════════════════════════════════════════════════════════
+/// 归属分层 (框架内核已拆分为 cxx_pluginxx 独立工程)
+/// ════════════════════════════════════════════════════════════════════
+/// - 与宿主领域无关的基座与通用表: `pluginxx/api/abi.h` / `pluginxx/api/tables.h`
+///   (本头已包含, client 插件只需包含本头即可拿到通用 ABI 声明)
+/// - **本头只声明 client 领域表**: 播放界面扩展 (agentxx.client.ui)、事件订阅
+///   (agentxx.client.events)、会话与输入 (agentxx.client.session)、通信 (agentxx.client.wire)、
+///   自身元信息 (agentxx.client.self)、JSON (agentxx.client.json)、日志 (agentxx.client.log)
+/// - agent 侧领域表见 `agentxx/plugin/api/plugin_api.h` (本头不再包含它 —— 两份契约
+///   互相独立, 只有同时编写 agent 侧与 client 侧入口的插件才需要都包含)
 #ifndef AGENTXX_CLIENT_PLUGIN_API_H
 #define AGENTXX_CLIENT_PLUGIN_API_H
 
@@ -20,7 +31,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "agentxx/plugin/api/plugin_api.h"
+#include "pluginxx/api/abi.h"
+#include "pluginxx/api/tables.h"
 
 #ifdef __cplusplus
 extern "C" {

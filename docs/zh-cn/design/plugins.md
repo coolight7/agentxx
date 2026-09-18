@@ -119,12 +119,20 @@ auto b64 = utilxx_base::base64Encode(data);
 | 路径 | 命名空间 | 内容 |
 |---|---|---|
 | `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/宿主 vtable/入口符号)、`tables.h` (通用接口表: events/capabilities/scheduler/coroutine_runtime/plugins/config/cancel/json/log/tasks) |
-| `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK 基座 (header-only) |
+| `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 宿主侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 宿主控制块 + C ABI 内存)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
-| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递) |
+| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调) |
 
 - 领域表 (tools/permission/hooks/session/model/prompt/resources/graph 与 client 侧全部表)
   由宿主定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`
+- **SDK 分层**: 通用部分 (`pluginxx/kit/kit.h` / `guard.h`) 在 `cxx_pluginxx`，领域 helper
+  (工具注册 `tool`/`fast_tool`/`blocking_tool`/`polled_tool`、`ToolSchemaBuilder`、`hook`、
+  图节点、工具权限声明、`call_tool_blocking`、client 侧渲染与 `ClientPluginBase`) 在
+  `agentxx/plugin/api/plugin_kit.h` / `plugin_guard.h`；后者是 **umbrella** 头 (包含
+  pluginxx 头 + 领域部分)，并把通用名以逐条 `using` 引入 `agentxx::plugin` —— 因此
+  插件源码的 `#include` 路径与 `agentxx::plugin::Xxx` 写法**零改动**；
+  通用基类 `pluginxx::PluginBaseT<IfacesT>` 以宿主接口表聚合为模板实参，agentxx 侧
+  `PluginBase : PluginBaseT<AgentIfaces>` 只补领域 helper 并覆写 `onHostReady()` 挂钩领域事件
 - agentxx 侧配套头: `agentxx/plugin/plugin_framework.h` (把内核类型以逐条 `using` 引入
   `agentxx::plugin`)、`agentxx/plugin/plugin_interfaces.h` (接口协商/清单目录)、
   `agentxx/util/cancel_adapter.h` (图引擎令牌与统一取消抽象互适配)
@@ -152,6 +160,17 @@ auto b64 = utilxx_base::base64Encode(data);
 最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心。
 其中 `Task<T>` 协程 (以及 `sleep`/`yield`/`offload`/`call_tool`/`invoke_cap` 原语) 的推进
 交由宿主的**协程驱动桥**调度：见 §16 与 §15 的生命周期契约。
+
+该 SDK 由两部分组成 (插件源码只需包含上面的 umbrella 头，写法不变)：
+
+| 部分 | 位置 | 内容 |
+|---|---|---|
+| 通用 (与宿主领域无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、`Task<T>` 与锚定原语 (`sleep`/`yield`/`offload`/`invoke_cap`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
+| agentxx 领域 | `agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | 接口表聚合 `AgentIfaces`/`ClientIfaces`、工具注册族 (`tool`/`fast_tool`/`blocking_tool`/`polled_tool`)、`ToolSchemaBuilder`、`hook`、图节点、工具权限声明、`call_tool`/`call_tool_blocking`、client 侧渲染与 `ClientPluginBase` |
+
+`agentxx::plugin::PluginBase` 即 `pluginxx::PluginBaseT<AgentIfaces>` 的 agentxx 派生类
+(补领域 helper 并在 `onHostReady()` 中挂钩会话轮次开始事件)。插件源码继续写
+`agentxx::plugin::Xxx` 即可 —— umbrella 头已用逐条 `using` 把通用名引入该命名空间。
 
 ```cpp
 #include "agentxx/plugin/api/plugin_kit.h"

@@ -29,16 +29,27 @@ include/pluginxx/
                    内置合并描述) —— 与宿主领域无关
           tables.h 通用接口表 (log/json/config/plugins/events/capabilities/
                    scheduler/coroutine_runtime/tasks/cancel)
-  kit/    插件侧 C++ SDK (PluginBase/Task/导出宏/参数提取/取消注册/边界异常守卫)
-  runtime/宿主侧运行时 (runtime/driver/op_driver/manager_base)
-  host/   宿主侧通用实现 (loader/manifest/registry/tables_impl/host_core)
-src/      对应实现 (当前: version.cpp 版本标识, api_abi_check.c C 兼容与对齐校验)
+  kit/    kit.h    插件侧 C++ SDK 通用部分 (header-only): PluginStringView/PluginString、
+                   通用表聚合 PluginIfaceCore、Logger、Task<T> 锚定协程与锚定原语
+                   (sleep/yield/offload/invoke_cap)、CancelRegistry/OpCtl/ArgReader、
+                   后台任务 spawn、能力注册 capability、实例上下文基类
+                   PluginBaseT<IfacesT>、通用导出宏 AGENTXX_PLUGIN_AGENT_EXPORT
+          guard.h  C ABI 边界异常守卫 (logTo/reportCurrentException/guardCall/guardCallVoid)
+  runtime/宿主侧运行时 (runtime/driver/instance_base/manager_base/op_driver)
+  host/   loader.h (dlopen/LoadLibrary)、manifest.h (plugin.yaml/名称推导/拓扑排序)、
+          abi_util.h (C 串转换/异常兜底/io 线程同步投递)、
+          capability_registry.h (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)
+src/      对应实现 (version.cpp / loader.cpp / manifest.cpp / capability_registry.cpp /
+          api_abi_check.c C 兼容与对齐校验)
 ```
 
-> 已落地: `api/` 两个纯 C 头 (agentxx 侧 `agentxx/plugin/api/plugin_api.h` 与
-> `client_plugin_api.h` 作为 umbrella 引用它们 + 各自的领域表), 以及构建/安装/导出骨架。
-> `kit/` `runtime/` `host/` 的搬迁进度见
-> `resource/history/split-util-plugin-core/done.md`。
+> 已落地: `api/` 两个纯 C 头、`kit/` (插件 SDK 通用部分 + 边界守卫)、
+> `runtime/` (实例状态机/执行 lease/协程驱动/Operation 驱动器/管理器基类)、
+> `host/` (装载/清单/ABI 辅助/能力注册表) —— agentxx 侧的
+> `agentxx/plugin/api/plugin_kit.h` 与 `plugin_guard.h` 作为 umbrella 引用它们 +
+> 各自的领域 helper (工具/钩子/图节点/权限/client UI), 插件源码无需改动。
+> 剩余项 (通用表实现整体下沉 + `PluginHostCore`/`DomainHooks` 抽取) 见
+> `resource/history/split-util-plugin-core/work.md` 的"未完成"节。
 
 领域表归属 (由宿主定义与实现):
 

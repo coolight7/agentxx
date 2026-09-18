@@ -87,7 +87,12 @@ path/to/agentxx_test string_util regex
     - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/SQLite/正则/路由/差异/
       worktree/散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
     - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架内核 (纯 C ABI 基座 pluginxx/api/、
-      SDK kit/、运行时 runtime/、宿主实现 host/), 依赖 cxx_utilxx_base; 产物 `libcxx_pluginxx(.so|_static.a)`
+      插件 SDK kit/{kit.h,guard.h}、运行时 runtime/、宿主实现 host/), 依赖 cxx_utilxx_base +
+      fmt + yaml-cpp (仅 Boost 头); 产物 `libcxx_pluginxx(.so|_static.a)`
+        - SDK 分层: 通用 (跨边界字符串工具/通用表聚合 PluginIfaceCore/Task 锚定协程/锚定原语/
+          CancelRegistry/OpCtl/ArgReader/PluginBaseT<IfacesT>/导出宏) 在内核,
+          宿主领域 helper 在宿主侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含内核头 +
+          逐条 `using` 引入 agentxx::plugin, 插件源码零改动)
     - [boost](agent/third_party/boost/)
         - asio
         - beast
