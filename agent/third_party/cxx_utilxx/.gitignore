@@ -1,0 +1,7 @@
+__pycache__
+.VSCodeCounter
+.dart_tool
+.env
+help-dummy.o
+crash-*.log
+crash-*.dmp
