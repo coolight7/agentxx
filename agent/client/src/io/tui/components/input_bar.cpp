@@ -86,7 +86,7 @@ InputComponent::InputComponent(TUICtx& ctx, Config config) :
 Element InputComponent::OnRender() {
     const auto& theme = *ctx_.theme;
 
-    // 帧首清空命中表: 本帧未渲染的按钮 (隐藏的 [📎︎︎] / 附件删除 / 队列行) 不命中
+    // 帧首清空命中表: 本帧未渲染的按钮 (隐藏的 [@︎] / 附件删除 / 队列行) 不命中
     hits_.beginFrame();
 
     Element indicator;
@@ -101,7 +101,7 @@ Element InputComponent::OnRender() {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
 
-    // 多模态文件选择按钮 [ 📎︎︎ ] (仅当当前模型支持多模态输入时展示并登记命中)
+    // 多模态文件选择按钮 [ @︎ ] (仅当当前模型支持多模态输入时展示并登记命中)
     Element attachButton = text("");
     if (config_.canAttach && config_.canAttach()) {
         attachButton = hbox({
@@ -303,7 +303,7 @@ bool InputComponent::handleClick(const Mouse& mouse) {
     }
     const std::string& id = hit->payload.id;
 
-    // [ 📎︎︎ ] 附件选择按钮
+    // [ @︎ ] 附件选择按钮
     if (id == kAttachHitId) {
         if (config_.onOpenAttachPicker) {
             config_.onOpenAttachPicker();

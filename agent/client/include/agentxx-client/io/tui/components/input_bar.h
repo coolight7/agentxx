@@ -24,7 +24,7 @@ namespace agentxx::client {
 /// - Alt+Enter: 插入换行 (经 Input 组件插入逻辑, 光标随之后移)
 /// - Enter: 发送 (经 onSend 回调, 携带输入文本与待发附件列表)
 /// - Ctrl+L: 清空输入与附件
-/// - 鼠标点击右侧 [ 📎︎︎ ]: 触发打开模态文件选择弹窗 (不绑定键盘热键)
+/// - 鼠标点击右侧 [ @︎ ]: 触发打开模态文件选择弹窗 (不绑定键盘热键)
 /// - 鼠标点击附件 [✕]: 从待发附件托盘移除对应附件
 /// - 鼠标点击待发队列计数 / [立即发送]: 打开待发队列弹窗 / 执行队列下一条
 /// - 括号粘贴 (bracketed paste): 终端启用 \x1B[?2004h 后, 粘贴内容以
@@ -32,7 +32,7 @@ namespace agentxx::client {
 ///   支持多行粘贴 (粘贴的换行不会触发发送)
 ///
 /// 命中检测经 [agentxx::client::UiHitMap] (每帧渲染时登记, 帧首清空):
-/// 未展示的按钮 (如模型不支持多模态时的 [📎︎︎]、无待发队列时的队列行)
+/// 未展示的按钮 (如模型不支持多模态时的 [@︎]、无待发队列时的队列行)
 /// 不会登记, 因此不占用任何点击区域。
 ///
 /// 发送逻辑由外部 (TUIClientAgentIO) 通过 Config 回调实现,
@@ -48,9 +48,9 @@ public:
         std::function<bool()> isAwaitingInterrupt;
         /// 是否正在流式输出 (影响指示器显示)
         std::function<bool()> isStreaming;
-        /// 当前活动模型是否支持多模态输入 (决定是否展示 [ 📎︎︎ ] 按钮)
+        /// 当前活动模型是否支持多模态输入 (决定是否展示 [ @︎ ] 按钮)
         std::function<bool()> canAttach;
-        /// 点击 [ 📎︎︎ ] 按钮触发打开文件选择弹窗
+        /// 点击 [ @︎ ] 按钮触发打开文件选择弹窗
         std::function<void()> onOpenAttachPicker;
         /// 点击待发送队列计数区域触发打开待发送队列弹窗
         std::function<void()> onOpenPendingQueue;
@@ -109,7 +109,7 @@ public:
         return hitBox(kPendingInsertHitId);
     }
 
-    /// 测试辅助: [ 📎︎︎ ] 按钮的命中框 (未渲染时为空区域)
+    /// 测试辅助: [ @︎ ] 按钮的命中框 (未渲染时为空区域)
     ftxui::Box attachButtonBox() const {
         return hitBox(kAttachHitId);
     }

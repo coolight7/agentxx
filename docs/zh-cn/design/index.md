@@ -233,7 +233,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - 新会话历史由 SessionStore 从持久化恢复 (不存在时创建空会话)
 - 会话列表数据源: `{dataDir}/sqlite/sessions/` 目录扫描 + meta 表 (sessionId/title/lastActiveMs)
 - 回推的 WireModelInfo 与客户端接入时的 WireGetModel 响应同构 (含各模型多模态能力
-  `capabilities`): 客户端据此判断输入框右侧 [ 📎︎︎ ] 按钮是否展示; 客户端侧
+  `capabilities`): 客户端据此判断输入框右侧 [ @︎ ] 按钮是否展示; 客户端侧
   模型能力表与会话无关 (来自 agent 配置), 跨 Sync 保留不清空
 
 #### Subagent 执行链路 (NodeInterrupt → 总线派发 → 宿主派生独立 agent)
@@ -358,7 +358,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     (WireUserInput.model) 携带, agent 执行新一轮时自动应用 (远程 --model 参数同路径);
     立即切换仍可经 WireSelectModel
   - 多模态文件输入 (yaml `models[].image_input/audio_input/video_input`):
-    仅当前模型支持任一多模态输入时, 输入框右侧展示 [ 📎︎︎ ] 按钮
+    仅当前模型支持任一多模态输入时, 输入框右侧展示 [ @︎ ] 按钮
     (无键盘快捷键, 鼠标点击经 `modal_->pushModal` 打开 FilePickerOverlay);
     弹窗按模型能力过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp; 音频
     wav/mp3/ogg/m4a/aac/flac; 视频 mp4/mov/webm/mkv; 非媒体不展示,
@@ -599,7 +599,7 @@ model:
       image_input: false              # 是否支持图像输入 (多模态; 默认 false)
       audio_input: false              # 是否支持音频输入 (多模态; 默认 false)
       video_input: false              # 是否支持视频输入 (多模态; 默认 false)
-                                      # 任一为 true 时 TUI 输入框右侧展示 [ 📎︎︎ ] 按钮;
+                                      # 任一为 true 时 TUI 输入框右侧展示 [ @︎ ] 按钮;
                                       # 文件选择弹窗按此过滤可选类型 (图片 png/jpg/jpeg/webp/gif/bmp
                                       # ≤10MB; 音频 wav/mp3/ogg/m4a/aac/flac ≤25MB;
                                       # 视频 mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)。

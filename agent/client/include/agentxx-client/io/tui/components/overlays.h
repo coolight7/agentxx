@@ -626,7 +626,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
     std::function<void()> onClose
 );
 
-/// 多模态文件选择弹窗 (输入框右侧 [ 📎︎ ︎] 按钮触发)
+/// 多模态文件选择弹窗 (输入框右侧 [ @ ︎] 按钮触发)
 ///
 /// - 初始化时接收当前模型的 `ModelCapabilityInfo`, 按支持的媒体类型动态
 ///   过滤目录中的文件 (不支持的类型灰显且不可选, 非媒体文件不展示)
