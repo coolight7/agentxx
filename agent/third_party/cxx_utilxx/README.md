@@ -4,26 +4,26 @@
 
 ## 定位
 
-- **用途**: HTTP 客户端与服务端 (Boost.Beast + OpenSSL)、WebSocket 客户端、SQLite 封装、
-  全局设置库 (KV)、正则 (HyperScan 或 std::regex)、Aho-Corasick、路由、文本差异、
+- **用途**: HTTP 客户端与服务端 (Boost.Beast + OpenSSL)、WebSocket 客户端、
+  正则 (HyperScan 或 std::regex)、Aho-Corasick、路由、文本差异、
   git worktree、MD5/设备标识
 - **依赖**: `cxx_utilxx_base` (基础件与取消抽象)、Boost (beast/process/asio)、OpenSSL、
-  SQLite3、fmt、html2md; 可选 HyperScan (正则加速, 导出接口以库名
+  fmt、html2md; 可选 HyperScan (正则加速, 导出接口以库名
   `PkgConfig::hyperscan` + `hs_runtime` 声明, 具体库由使用方解析)。
   文件异步 I/O 的 io_uring 依赖属 `cxx_utilxx_base` (其 `system.cpp` 使用), 经本库
   的链接接口间接传递
 - **命名空间**: `utilxx` (与 `cxx_utilxx_base` 的 `utilxx/cancel.h`、`utilxx/async_offload.h` 同一命名空间)
 - **禁止**依赖 neograph 与任何宿主头文件
+- 数据库 (SQLite) 封装与全局设置库已迁回宿主 `<宿主>/util/` (宿主专用, 本库不提供)
 
 ## 目录结构
 
 ```
 include/utilxx/
   http_client.h  http_header.h  http_error.h  http_server.h  ws_client.h
-  router.h  sqlite.h  settings_db.h  regex.h  aho_corasick.h
+  router.h  regex.h  aho_corasick.h
   diff_util.h  worktree.h  crypto.h
-src/                    实现 (crypto/http_client/http_header/http_server/regex/
-                             settings_db/sqlite/ws_client)
+src/                    实现 (crypto/http_client/http_header/http_server/regex/ws_client)
 ```
 
 ## 构建与使用

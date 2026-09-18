@@ -1,9 +1,10 @@
-#include "utilxx/sqlite.h"
+#include "agentxx/util/sqlite.h"
 
 #include <sqlite3.h>
 #include <stdexcept>
 
-namespace utilxx {
+namespace agentxx {
+namespace util {
 
 namespace {
 
@@ -211,4 +212,5 @@ bool SqliteDb::Stmt::columnIsNull(int column) const {
     return sqlite3_column_type(stmt_, column) == SQLITE_NULL;
 }
 
-} // namespace utilxx
+} // namespace util
+} // namespace agentxx

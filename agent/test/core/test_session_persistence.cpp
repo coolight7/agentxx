@@ -7,9 +7,9 @@
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/sqlite.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
-#include "utilxx/sqlite.h"
 #include "utilxx_base/string_util.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -1137,7 +1137,7 @@ static void testPersistenceResilience() {
         );
         {
             auto dir = fs::path(root) / SessionStore::sanitizeSessionId("r_dirty");
-            utilxx::SqliteDb db;
+            agentxx::util::SqliteDb db;
             db.open((dir / "session.db").string());
             db.exec("INSERT INTO view_message(json) VALUES ('{not valid json')");
             db.exec("DELETE FROM llm_context");
@@ -1292,7 +1292,7 @@ static TestResult testStoreConnectionLruEviction() {
 // ---------------------------------------------------------------------------
 static TestResult testViewMessageMsgIdMigration() {
     using agentxx::agent::SessionStore;
-    using utilxx::SqliteDb;
+    using agentxx::util::SqliteDb;
     using V = agentxx::agent::ViewMessage;
 
     auto root = makeTempRoot();

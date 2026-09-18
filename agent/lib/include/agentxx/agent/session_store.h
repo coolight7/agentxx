@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/util/sqlite.h"
 #include "utilxx_base/json.h"
-#include "utilxx/sqlite.h"
 #include <map>
 #include <memory>
 #include <mutex>
@@ -133,7 +133,7 @@ public:
 private:
 
     struct SessionDbs {
-        utilxx::SqliteDb sessionDb;
+        agentxx::util::SqliteDb sessionDb;
     };
 
     /// 连接缓存条目 (含最近使用序号, 供 LRU 淘汰)
@@ -162,10 +162,10 @@ private:
     bool sessionDataDirExists(std::string_view sessionId) const;
 
     /// 建表 (幂等, 单库包含 view_message/llm_context/meta/store)
-    static void ensureSchema(utilxx::SqliteDb& sessionDb);
+    static void ensureSchema(agentxx::util::SqliteDb& sessionDb);
 
     /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
-    static void ensureViewMessageMsgIdColumn(utilxx::SqliteDb& sessionDb);
+    static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
 
     std::string rootDir_;
     std::mutex  mutex_;

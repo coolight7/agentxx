@@ -565,23 +565,3 @@ std::string utilxx_base::defaultDataDir() {
     auto            tmp = std::filesystem::temp_directory_path(ec);
     return (tmp / kDefaultDataDirName).string();
 }
-
-std::string utilxx_base::getGlobalSettingsDbPath(std::string_view dataDir) {
-    std::string dir;
-    if (dataDir.empty()) {
-        dir = defaultDataDir();
-    } else {
-        dir = std::string{dataDir};
-        // 相对路径按当前工作目录绝对化并词法规范化 (避免拼接出不稳定的路径)
-        if (!std::filesystem::path(dir).is_absolute()) {
-            std::error_code ec;
-            auto            abs = std::filesystem::absolute(dir, ec);
-            if (!ec) {
-                dir = abs.lexically_normal().generic_string();
-            }
-        } else {
-            dir = std::filesystem::path(dir).lexically_normal().generic_string();
-        }
-    }
-    return (std::filesystem::path(dir) / "sqlite" / "global.db").string();
-}

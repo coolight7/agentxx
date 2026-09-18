@@ -18,7 +18,6 @@ if (@CXX_UTILXX_ENABLE_BOOST_PROCESS@)
   find_dependency(Boost CONFIG COMPONENTS process)
 endif ()
 find_dependency(OpenSSL)
-find_dependency(SQLite3 CONFIG)
 find_dependency(fmt)
 find_dependency(html2md)
 

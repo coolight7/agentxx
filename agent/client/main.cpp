@@ -12,7 +12,7 @@
 #include "utilxx_base/env.h"
 #include "agentxx/util/exception.h"
 #include "utilxx/http_client.h"
-#include "utilxx/settings_db.h"
+#include "agentxx/util/settings_db.h"
 #include "utilxx_base/string_util.h"
 #include "agentxx/version.h"
 #include "asio/co_spawn.hpp"
@@ -631,7 +631,7 @@ Options:
         const std::string globalDbDir = resolvedDataDir.empty()
                                             ? agentxx::agent::AgentConfigStatic::systemDataDir()
                                             : resolvedDataDir;
-        auto              settingsDb  = std::make_shared<utilxx::SettingsDb>(
+        auto              settingsDb  = std::make_shared<agentxx::util::SettingsDb>(
             agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath(globalDbDir)
         );
         TUISettings::instance().attachDb(std::move(settingsDb));

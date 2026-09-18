@@ -87,7 +87,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 ## 5. 工具与框架复用 (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`)
 
 面向项目内置插件，可通过独立静态库复用主程序的全部基础工具 (字符串/编码检测/UTF-8
-转换/路径规范化/Base64/日志/JSON + HTTP/SQLite/正则/差异/worktree 等) 与**插件框架内核**
+转换/路径规范化/Base64/日志/JSON + HTTP/正则/差异/worktree 等) 与**插件框架内核**
 (C ABI 基座 / SDK 基座 / 宿主运行时 / 清单解析)。三者是 `agent/third_party/` 下本项目
 自研的独立 CMake 工程 (与 fmt/simdjson 同级)，经 superbuild 先构建安装，再由 libagentxx /
 各插件 `find_package` 引用其**静态变体**：
@@ -97,7 +97,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 find_package(cxx_utilxx_base REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_base_static)
 
-# 重依赖工具 (依赖基础件): HTTP/WS/SQLite/正则/路由/差异/worktree/散列
+# 重依赖工具 (依赖基础件): HTTP/WS/正则/路由/差异/worktree/散列
 find_package(cxx_utilxx REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
 
@@ -105,6 +105,11 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
 find_package(cxx_pluginxx REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_pluginxx_static)
 ```
+
+> 数据库相关工具不在上述库内: SQLite 封装 (`SqliteDb`) 与全局设置库 (`SettingsDb`) 属
+> **宿主专用**代码 (`agentxx/util/sqlite.h` / `settings_db.h`, 依赖宿主的数据目录约定与
+> `AgentConfigStatic`), 工具库 (含 cxx_utilxx) 不链接 SQLite; 插件需要数据库时自行链接
+> 或经宿主能力表申请数据落盘。
 
 ```cpp
 #include "utilxx_base/string_util.h"
@@ -169,7 +174,7 @@ auto b64 = utilxx_base::base64Encode(data);
   `agentxx/util/cancel_adapter.h` (图引擎令牌与统一取消抽象互适配)
 - 库归属与命名空间：`cxx_utilxx_base` → `utilxx_base` (另含跨库共享契约 `utilxx::CancelToken`
   与 `utilxx::offloadAsync*`, 定义在 `utilxx/cancel.h` / `utilxx/async_offload.h`)；
-  `cxx_utilxx` → `utilxx` (http/ws/sqlite/regex/router/diff/worktree/crypto)
+  `cxx_utilxx` → `utilxx` (http/ws/regex/router/diff/worktree/crypto)
 - 每个库同时产出静态库与动态库，命名规则同 libagentxx
   (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`；Debug 追加 `d`)
 - **独立发布约束**: 三个库按独立工程对外发布, 库内不使用宿主专名 —— 构建变量统一
@@ -178,7 +183,7 @@ auto b64 = utilxx_base::base64Encode(data);
   宿主 superbuild 把同名取值经 `XX_*` 下发给它们 (见 `agent/CMakeLists.txt` 公共参数),
   agentxx 侧的开关名 `AGENTXX_*` 只出现在宿主自己的构建目录里
 - libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；
-  依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头 +
+  依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/html2md/Boost 头 +
   yaml-cpp；`pluginxx` 仅 Boost 头，不链接 Boost 编译库)
 - **条件依赖只声明库名, 由使用方在本机 find (顺序: 先依赖库的依赖, 再依赖库本体)**:
   导出接口里出现的是 `PkgConfig::uring` (io_uring, 属 `cxx_utilxx_base` 的 asio 文件

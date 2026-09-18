@@ -6,7 +6,7 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/agent/io/channel_io_transport.h"
 #include "utilxx_base/env.h"
-#include "utilxx/settings_db.h"
+#include "agentxx/util/settings_db.h"
 #include "ftxui/component/event.hpp"
 #include <chrono>
 #include <filesystem>
@@ -539,12 +539,12 @@ void test_persist_to_db() {
 
     // 预先向数据库写入历史记录 (模拟上次会话已保存的语言和主题)
     {
-        utilxx::SettingsDb pre(dbPath);
+        agentxx::util::SettingsDb pre(dbPath);
         pre.setInt64("tui.lang", static_cast<int64_t>(TuiLanguage::ZhCn));
         pre.setInt64("tui.theme", static_cast<int64_t>(TUISettings::kThemeLight));
     }
 
-    auto db = std::make_shared<utilxx::SettingsDb>(dbPath);
+    auto db = std::make_shared<agentxx::util::SettingsDb>(dbPath);
     settings.attachDb(db);
 
     // 校验 attachDb 成功从数据库恢复已存设置
@@ -558,7 +558,7 @@ void test_persist_to_db() {
     settings.setTailThinkingMode(TailThinkingMode::SingleLine);
     settings.setLanguage(TuiLanguage::EnUs);
     {
-        auto fresh = utilxx::SettingsDb(dbPath);
+        auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
@@ -578,7 +578,7 @@ void test_persist_to_db() {
     settings.setTailThinkingMode(TailThinkingMode::AutoExpand);
     settings.setLanguage(TuiLanguage::ZhCn);
     {
-        auto fresh = utilxx::SettingsDb(dbPath);
+        auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeDark});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{4}); // Ultra
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{1});       // Debug
@@ -592,7 +592,7 @@ void test_persist_to_db() {
     // 变更为 English (EnUs)
     settings.setLanguage(TuiLanguage::EnUs);
     {
-        auto fresh = utilxx::SettingsDb(dbPath);
+        auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(
             fresh.getInt64("tui.lang", -1),
             int64_t{static_cast<int>(TuiLanguage::EnUs)}
@@ -602,7 +602,7 @@ void test_persist_to_db() {
     // 变更为自动 (Auto)
     settings.setLanguage(TuiLanguage::Auto);
     {
-        auto fresh = utilxx::SettingsDb(dbPath);
+        auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(
             fresh.getInt64("tui.lang", -1),
             int64_t{static_cast<int>(TuiLanguage::Auto)}

@@ -7,7 +7,8 @@
 struct sqlite3;
 struct sqlite3_stmt;
 
-namespace utilxx {
+namespace agentxx {
+namespace util {
 
 /// 轻量 RAII sqlite3 封装
 ///
@@ -15,7 +16,7 @@ namespace utilxx {
 /// - 打开时启用 WAL 日志模式 + busy_timeout(5s) + synchronous=NORMAL,
 ///   兼顾读写并发与写性能 (单进程多连接/多线程安全)
 /// - 所有失败 (打开/执行/绑定/步进) 均抛出 std::runtime_error,
-///   调用方可用 utilxx_base::catchError 系列捕获, 消息含 sqlite3 错误文本
+///   调用方可用 agentxx::util::catchError 系列捕获, 消息含 sqlite3 错误文本
 /// - 不持有内部锁: 单连接只允许单线程同时使用; 多线程并发使用请自行加锁
 class SqliteDb {
 public:
@@ -94,4 +95,5 @@ private:
     sqlite3* db_ = nullptr;
 };
 
-} // namespace utilxx
+} // namespace util
+} // namespace agentxx

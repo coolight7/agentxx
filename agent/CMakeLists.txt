@@ -1202,7 +1202,6 @@ ExternalProject_Add(
   DEPENDS
     cxx_utilxx_base_repo
     fmt_repo
-    sqlite3_repo
     html2md_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_utilxx/"
   INSTALL_DIR "${AGENTXX_INSTALL_DIR}"

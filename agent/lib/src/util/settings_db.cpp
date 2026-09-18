@@ -1,13 +1,14 @@
-#include "utilxx/settings_db.h"
+#include "agentxx/util/settings_db.h"
 
-#include "utilxx_base/exception.h"
+#include "agentxx/agent/config_static.h"
+#include "agentxx/util/exception.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
-#include "utilxx_base/system.h"
 #include <filesystem>
 #include <system_error>
 
-namespace utilxx {
+namespace agentxx {
+namespace util {
 
 namespace fs = std::filesystem;
 
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS setting (
 
 SettingsDb::SettingsDb(std::string dbPath) :
     dbPath_(
-        dbPath.empty() ? utilxx_base::getGlobalSettingsDbPath("") : std::move(dbPath)
+        dbPath.empty() ? agentxx::agent::AgentConfigStatic::getGlobalSettingsDbPath("")
+                       : std::move(dbPath)
     ) {}
 
 bool SettingsDb::ensureOpen() {
@@ -40,7 +42,7 @@ bool SettingsDb::ensureOpen() {
         XX_LOGE("SettingsDb: create dir {} failed: {}", dir.string(), ec.message());
         return false;
     }
-    return utilxx_base::catchError<bool>(
+    return agentxx::util::catchError<bool>(
         [&]() -> bool {
             db_.open(dbPath_);
             db_.exec(kSettingsSchema);
@@ -58,7 +60,7 @@ std::optional<std::string> SettingsDb::get(std::string_view key) {
     if (!ensureOpen()) {
         return std::nullopt;
     }
-    return utilxx_base::catchError<std::optional<std::string>>(
+    return agentxx::util::catchError<std::optional<std::string>>(
         [&]() -> std::optional<std::string> {
             auto stmt = db_.prepare("SELECT value FROM setting WHERE key = ?");
             stmt.bindText(1, key);
@@ -79,7 +81,7 @@ bool SettingsDb::set(std::string_view key, std::string_view value) {
     if (!ensureOpen()) {
         return false;
     }
-    return utilxx_base::catchError<bool>(
+    return agentxx::util::catchError<bool>(
         [&]() -> bool {
             // INSERT OR REPLACE 语义 (主键冲突时覆盖)
             auto stmt = db_.prepare("INSERT INTO setting(key, value) VALUES(?, ?) "
@@ -124,4 +126,5 @@ bool SettingsDb::setBool(std::string_view key, bool value) {
     return set(key, value ? "1" : "0");
 }
 
-} // namespace utilxx
+} // namespace util
+} // namespace agentxx

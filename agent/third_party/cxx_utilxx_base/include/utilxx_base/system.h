@@ -3,8 +3,9 @@
 /// 运行环境探测 (操作系统名称 / WSL / PowerShell / 文件异步 I/O / 默认数据目录)
 ///
 /// 由原 `agentxx/util/util.h` 的系统探测部分拆分而来, 不依赖图引擎与宿主:
-/// 路径相关的三个函数 (userHomeDir / defaultDataDir / getGlobalSettingsDbPath)
-/// 说明平台惯例的数据目录布局, 宿主可自行选择其他目录并以显式路径使用。
+/// 路径相关的两个函数 (userHomeDir / defaultDataDir) 说明用户主目录与默认数据
+/// 目录的取法, 宿主可自行选择其他目录并以显式路径使用 (数据库等存储路径约定
+/// 由宿主自行定义, 本库不涉及)。
 
 #include <string>
 #include <string_view>
@@ -76,9 +77,5 @@ void resetAsyncFileIoSupported();
 
 /// 默认数据根目录: ~/.agentxx/ (取不到用户主目录时回退系统临时目录下的同名目录)
 [[nodiscard]] std::string defaultDataDir();
-
-/// 全局设置数据库默认路径: {dataDir}/sqlite/global.db
-/// - dataDir 为空时使用 [defaultDataDir]
-[[nodiscard]] std::string getGlobalSettingsDbPath(std::string_view dataDir = "");
 
 } // namespace utilxx_base

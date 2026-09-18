@@ -1,7 +1,8 @@
-# ===== cxx_utilxx: 重依赖工具库 (HTTP/WS/SQLite/正则/路由/差异/worktree/散列) =====
+# ===== cxx_utilxx: 重依赖工具库 (HTTP/WS/正则/路由/差异/worktree/散列) =====
 #
-# 定位: 基于 cxx_utilxx_base, 提供网络与存储类工具; 依赖 OpenSSL / SQLite / Boost
+# 定位: 基于 cxx_utilxx_base, 提供网络与通用工具; 依赖 OpenSSL / Boost
 # (beast + process) / fmt / html2md, 可选 hyperscan (正则);
+# 注: 数据库 (SQLite) 相关工具已迁回宿主 (agentxx/lib/.../util), 本库不含数据库依赖
 # 文件异步 I/O 的 io_uring 依赖在 cxx_utilxx_base (见该库 CMakeLists)
 # 产物 (命名规则: Release 无后缀, Debug 文件名追加 d):
 #   Release: libcxx_utilxx.so        libcxx_utilxx_static.a
@@ -65,7 +66,6 @@ if (CXX_UTILXX_ENABLE_BOOST_PROCESS)
   find_package(Boost CONFIG REQUIRED COMPONENTS process)
 endif ()
 find_package(OpenSSL REQUIRED)
-find_package(SQLite3 CONFIG REQUIRED)
 find_package(fmt REQUIRED)
 find_package(html2md REQUIRED)
 # 依赖库本体 (config 内含 find_dependency 链, 但条件依赖目标须已由上方查找就绪)
@@ -77,8 +77,6 @@ set(_CXX_UTILXX_SOURCES
   src/http_header.cpp
   src/http_server.cpp
   src/regex.cpp
-  src/settings_db.cpp
-  src/sqlite.cpp
   src/ws_client.cpp
 )
 
@@ -140,7 +138,6 @@ set(_CXX_UTILXX_LINK_LIBS
   fmt::fmt
   OpenSSL::SSL
   OpenSSL::Crypto
-  SQLite::SQLite3
   html2md
 )
 if (CXX_UTILXX_ENABLE_BOOST_PROCESS)

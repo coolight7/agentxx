@@ -25,7 +25,7 @@ include/utilxx/         跨库共享契约 (命名空间 utilxx)
 src/                    实现 (env/json/json_view/log/string_util/system)
 ```
 
-> `utilxx` 命名空间在两处扩展: 本库提供取消与卸载契约, `cxx_utilxx` 提供网络/存储/
+> `utilxx` 命名空间在两处扩展: 本库提供取消与卸载契约, `cxx_utilxx` 提供网络/
 > 正则等工具; 二者 include 目录同名 (`utilxx/`) 合并安装, 文件名不重复。
 
 ## 构建与使用

@@ -1,12 +1,13 @@
 #pragma once
 
-#include "utilxx/sqlite.h"
+#include "agentxx/util/sqlite.h"
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 
-namespace utilxx {
+namespace agentxx {
+namespace util {
 
 /// 全局设置 SQLite 存储 (KV 表)
 ///
@@ -60,4 +61,5 @@ private:
     SqliteDb    db_;
 };
 
-} // namespace utilxx
+} // namespace util
+} // namespace agentxx

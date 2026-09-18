@@ -1,7 +1,7 @@
 #include "agentxx-test/core/test_settings_db.h"
 
 #include "agentxx/agent/config_static.h"
-#include "utilxx/settings_db.h"
+#include "agentxx/util/settings_db.h"
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
@@ -41,7 +41,7 @@ std::string makeTempRoot() {
 // ---------------------------------------------------------------------------
 
 static TestResult testKvRoundtrip() {
-    using utilxx::SettingsDb;
+    using agentxx::util::SettingsDb;
 
     auto root = makeTempRoot();
     auto path = (fs::path(root) / "global.db").string();
@@ -99,7 +99,7 @@ static TestResult testKvRoundtrip() {
 }
 
 static TestResult testTypedAccess() {
-    using utilxx::SettingsDb;
+    using agentxx::util::SettingsDb;
 
     auto root = makeTempRoot();
     auto path = (fs::path(root) / "global.db").string();
@@ -138,7 +138,7 @@ static TestResult testTypedAccess() {
 static TestResult testDefaultPath() {
     // 默认路径: {defaultDataDir}/sqlite/global.db
     using agentxx::agent::AgentConfigStatic;
-    using utilxx::SettingsDb;
+    using agentxx::util::SettingsDb;
 
     auto db   = std::make_shared<SettingsDb>();
     auto path = fs::path(db->dbPath()).lexically_normal().string();

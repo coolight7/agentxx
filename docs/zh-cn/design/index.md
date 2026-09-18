@@ -1578,20 +1578,23 @@ agent/
 │   │   │   ├── provider_common.h # 各 LLM Provider 与模型调用节点共用 helper
 │   │   │   │                     #   (唯一 tool_call id 生成 / 空响应判定)
 │   │   │   └── protocol_base.h   # 协议基类
-│   │   └── util/                 # 工具类 —— 仅保留与宿主/图引擎耦合的少量头
+│   │   └── util/                 # 工具类 —— 图引擎/宿主耦合件 + 宿主专用数据库工具
 │   │       ├── exception.h       # 异常分类与统一捕获 (neograph 取消/中断语义 + utilxx_base::catchError*)
 │   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json 桥接
-│   │       └── cancel_adapter.h  # neograph::graph::CancelToken -> utilxx::CancelToken 适配器
-│   │       (说明: 通用工具已拆为独立工程, 见下方 third_party/ 与"基础库"小节;
-│   │        lib/src/util/ 目录已不存在)
-│   └── src/                      # 实现文件 (与 include 目录结构对应)
+│   │       ├── cancel_adapter.h  # neograph::graph::CancelToken -> utilxx::CancelToken 适配器
+│   │       ├── sqlite.h          # 轻量 RAII sqlite3 封装 (SqliteDb/Stmt, WAL + busy_timeout)
+│   │       └── settings_db.h     # 全局设置 KV 库 ({dataDir}/sqlite/global.db)
+│   │       (说明: 其余通用工具已拆为独立工程, 见下方 third_party/ 与"基础库"小节;
+│   │        sqlite/settings_db 为宿主专用, 不进入通用工具库)
+│   └── src/                      # 实现文件 (与 include 目录结构对应; util/ 下为
+│                                 #   sqlite.cpp / settings_db.cpp)
 │
 ├── third_party/                  # 第三方依赖 (含本项目自研的三个独立库)
 │   ├── cxx_utilxx_base/          # 基础件: log/json/json_view/string_util/env/system/
 │   │                             #   container_util/hash/lru_cache/path_sanitize/stream/
 │   │                             #   async_mutex/asio_error + utilxx::CancelToken 与 offload
 │   ├── cxx_utilxx/               # 重依赖工具: http_client/http_server/ws_client/router/
-│   │                             #   sqlite/settings_db/regex/aho_corasick/diff_util/worktree/crypto
+│   │                             #   regex/aho_corasick/diff_util/worktree/crypto (无数据库依赖)
 │   ├── cxx_pluginxx/             # 插件框架内核: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
 │   │                             #   runtime/(runtime,driver,instance_base,manager_base,op_driver) +
 │   │                             #   host/(loader,manifest,abi_util,capability_registry,

@@ -267,7 +267,7 @@ void SessionStore::evictLruDbs() {
     }
 }
 
-void SessionStore::ensureSchema(utilxx::SqliteDb& sessionDb) {
+void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb) {
     sessionDb.exec(kSessionSchema);
     ensureViewMessageMsgIdColumn(sessionDb);
 }
@@ -276,7 +276,7 @@ void SessionStore::ensureSchema(utilxx::SqliteDb& sessionDb) {
 /// - 新库: CREATE TABLE 已含该列, 此处只补索引
 /// - 老库 (无该列): ALTER 增加列 → 从 json 回填 → 建索引; 已有数据不受影响
 ///   (回填只补 msg_id, 不触碰 json 内容)
-void SessionStore::ensureViewMessageMsgIdColumn(utilxx::SqliteDb& sessionDb) {
+void SessionStore::ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb) {
     bool hasMsgId = false;
     {
         auto stmt = sessionDb.prepare("PRAGMA table_info(view_message)");
@@ -420,7 +420,7 @@ static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
 }
 
 /// 目录最近写入时刻启发式 (unix 毫秒): max(session.db, session.db-wal) 的修改时间。
-/// SQLite 为 WAL 模式 (见 [sqlite.h](/agent/third_party/cxx_utilxx/include/utilxx/sqlite.h)),
+/// SQLite 为 WAL 模式 (见 [sqlite.h](/agent/lib/include/agentxx/util/sqlite.h)),
 /// 最近提交可能仍在 -wal 文件中未合并回主库, 仅 stat 主库会低估活动时间;
 /// 取两者最大值近似最近写入时刻。
 /// - 两个文件都不存在/不可读时返回 0 (排序时自然落在最后)
@@ -445,7 +445,7 @@ static int64_t sessionDirActivityHintMs(const fs::path& dir) {
 static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
     return agentxx::util::catchError<bool>(
         [&]() -> bool {
-            utilxx::SqliteDb db;
+            agentxx::util::SqliteDb db;
             db.open((dir / "session.db").string());
             auto stmt = db.prepare("SELECT key, value FROM meta");
             while (stmt.step()) {

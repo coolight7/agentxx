@@ -47,7 +47,7 @@ int charToLower(int c) {
     - C++ 实现 Agent
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 BaseAgent/CodeAgent、toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
-    - [util](agent/lib/include/agentxx/util/) 只剩与图引擎/宿主耦合的少量头: [exception.h](agent/lib/include/agentxx/util/exception.h) (异常分类 + 统一捕获, 基于 utilxx_base::catchError*)、neograph_json_bridge.h、cancel_adapter.h; 通用工具已拆为独立工程 (见 `agent/third_party/cxx_utilxx*`)
+    - [util](agent/lib/include/agentxx/util/) 与图引擎/宿主耦合的少量头: [exception.h](agent/lib/include/agentxx/util/exception.h) (异常分类 + 统一捕获, 基于 utilxx_base::catchError*)、neograph_json_bridge.h、cancel_adapter.h; 以及宿主专用的数据库工具 [sqlite.h](agent/lib/include/agentxx/util/sqlite.h) (轻量 RAII sqlite3 封装)、[settings_db.h](agent/lib/include/agentxx/util/settings_db.h) (全局设置 KV 库, 实现于 `agent/lib/src/util/`), 其余通用工具已拆为独立工程 (见 `agent/third_party/cxx_utilxx*`)
     - [BaseAgent](agent/lib/include/agentxx/agent/base_agent.h) agent 运行核心基类 (ReAct 循环 + 会话执行)
     - [CodeAgent](agent/lib/include/agentxx/agent/code_agent.h) 继承 BaseAgent, 添加编程工具/中间件
 - `agent/client`: 编译结果 {build}/exec/agentxx_cli
@@ -84,8 +84,9 @@ path/to/agentxx_test string_util regex
     - [cxx_utilxx_base](agent/third_party/cxx_utilxx_base/) 无重依赖基础件 (日志/JSON/字符串/
       容器/环境/系统探测/取消令牌/异步卸载), 命名空间 `utilxx_base` + 跨库契约 `utilxx::CancelToken`;
       产物 `libcxx_utilxx_base(.so|_static.a)` (Debug 加 `d`)
-    - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/SQLite/正则/路由/差异/
+    - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/正则/路由/差异/
       worktree/散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
+      (不含数据库依赖: sqlite 封装与设置库属于宿主, 见 `agentxx/util/`)
     - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架内核 (纯 C ABI 基座 pluginxx/api/、
       插件 SDK kit/{kit.h,guard.h}、运行时 runtime/、宿主实现 host/), 依赖 cxx_utilxx_base +
       fmt + yaml-cpp (仅 Boost 头); 产物 `libcxx_pluginxx(.so|_static.a)`
@@ -176,12 +177,14 @@ path/to/agentxx_test string_util regex
   (拆分自原 `agentxx_util`; 基础件 log/json/json_view/string_util/env/system/
   container_util/hash/lru_cache/path_sanitize/stream/async_mutex/asio_error +
   契约 utilxx/cancel.h、utilxx/async_offload.h; 重依赖 http_client/http_server/
-  ws_client/router/sqlite/settings_db/regex/aho_corasick/diff_util/worktree/crypto);
+  ws_client/router/regex/aho_corasick/diff_util/worktree/crypto ——
+  数据库封装 sqlite 与设置库 settings_db 已随本次调整迁回宿主 `agentxx/util/`,
+  不进入工具库);
   libagentxx 与插件各自静态链接一份 (符号经导出控制隐藏, 互不冲突);
   插件 CMakeLists: `find_package(cxx_utilxx_base|cxx_utilxx)` +
   `target_link_libraries(PRIVATE cxx_utilxx_base_static|cxx_utilxx_static)`
   (cxx_utilxx 依赖 cxx_utilxx_base, 只链后者时经 INTERFACE 自动带上);
-  依赖全部 PUBLIC 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头;
+  依赖全部 PUBLIC 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/html2md/Boost 头;
   条件依赖 hyperscan (cxx_utilxx) / io_uring (cxx_utilxx_base: system.cpp 的 asio 文件
   异步 I/O 探测) 在导出接口里**只声明库名**(`PkgConfig::hyperscan` + `hs_runtime` /
   `PkgConfig::uring`), 不含库文件路径; 静态库不携带依赖二进制, 谁链接谁解析 ——

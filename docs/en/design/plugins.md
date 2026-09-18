@@ -74,7 +74,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 ## 5. Tool Function Reuse (`cxx_utilxx_base` / `cxx_utilxx`)
 
-Built-in plugins can reuse all core utility functions (string manipulation, encoding detection, UTF-8 conversion, path normalization, Base64, logging, JSON, plus HTTP/SQLite/regex/diff/worktree) via two standalone static libraries. They live under `agent/third_party/` as project-maintained independent CMake projects (siblings of fmt/simdjson); the superbuild builds and installs them first, then `libagentxx` and each plugin pull the **static variants** via `find_package`:
+Built-in plugins can reuse all core utility functions (string manipulation, encoding detection, UTF-8 conversion, path normalization, Base64, logging, JSON, plus HTTP/regex/diff/worktree) via two standalone static libraries. They live under `agent/third_party/` as project-maintained independent CMake projects (siblings of fmt/simdjson); the superbuild builds and installs them first, then `libagentxx` and each plugin pull the **static variants** via `find_package`:
 
 ```cmake
 # base utilities (no heavy deps): log/json/string/container/env/system probe/
@@ -82,10 +82,16 @@ Built-in plugins can reuse all core utility functions (string manipulation, enco
 find_package(cxx_utilxx_base REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_base_static)
 
-# heavy utilities (depend on the base): HTTP/WS/SQLite/regex/router/diff/worktree/crypto
+# heavy utilities (depend on the base): HTTP/WS/regex/router/diff/worktree/crypto
 find_package(cxx_utilxx REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
 ```
+
+> Database utilities are **not** part of these libraries: the SQLite wrapper (`SqliteDb`) and
+> the global settings store (`SettingsDb`) live in host-only code (`agentxx/util/sqlite.h` /
+> `settings_db.h`, tied to the host data-directory convention and `AgentConfigStatic`); the
+> utility libraries (including `cxx_utilxx`) do not link SQLite. A plugin needing a database
+> links one itself or requests persistence through a host capability table.
 
 ```cpp
 #include "utilxx_base/string_util.h"
@@ -95,9 +101,9 @@ auto b64 = utilxx_base::base64Encode(data);
 // Business/plugin code uniformly uses utilxx_base::Json/JsonView (simdjson-backed); hot read-only paths route via JsonView::parse first, then to_json() on hit
 ```
 
-- Library/namespace mapping: `cxx_utilxx_base` → `utilxx_base` (plus the cross-library contract `utilxx::CancelToken` and `utilxx::offloadAsync*` in `utilxx/cancel.h` / `utilxx/async_offload.h`); `cxx_utilxx` → `utilxx` (http/ws/sqlite/regex/router/diff/worktree/crypto).
+- Library/namespace mapping: `cxx_utilxx_base` → `utilxx_base` (plus the cross-library contract `utilxx::CancelToken` and `utilxx::offloadAsync*` in `utilxx/cancel.h` / `utilxx/async_offload.h`); `cxx_utilxx` → `utilxx` (http/ws/regex/router/diff/worktree/crypto).
 - Both build a shared and a static variant with libagentxx-style naming (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`; Debug appends `d`).
-- Both `libagentxx` and individual plugins statically link their own copy; symbols are hidden via export visibility control without conflict. Dependencies are transitively propagated as `PUBLIC` (fmt, simdjson, uchardet, iconv + OpenSSL, SQLite, html2md, Boost headers).
+- Both `libagentxx` and individual plugins statically link their own copy; symbols are hidden via export visibility control without conflict. Dependencies are transitively propagated as `PUBLIC` (fmt, simdjson, uchardet, iconv + OpenSSL, html2md, Boost headers).
 - **Conditional dependencies are declared by name only; each consumer locates them on its own machine (dependency libraries first, then the libraries themselves)**: the exported interfaces contain `PkgConfig::uring` (io_uring — used by `cxx_utilxx_base`'s asio async-file-IO probe) and `PkgConfig::hyperscan` plus the bare name `hs_runtime` (HyperScan — used by `cxx_utilxx`'s regex), never a library file path. Static archives do not carry dependency binaries, so whoever links must resolve them: consumers must run `pkg_check_modules` **before** `find_package` for the util libraries / `agentxx_static`, because the exported targets verify that targets referenced by their `INTERFACE` already exist. lib/client/test/benchmark key off the top-level `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` switches (same source as the util libraries' own build switches); one lookup in the plugins directory covers every plugin target (so plugins need no per-plugin configuration), while the two util libraries themselves key off the neutral `XX_LINUX_IO_URING_SUPPORTED` (the superbuild forwards the top-level value through it). A missing lookup fails loudly at configure time, or at `dlopen` time with `undefined symbol: io_uring_queue_init`.
 - **Standalone-release constraint**: the three libraries are published as standalone projects and contain no host-specific names — build variables all use the neutral `XX_*` prefix (`XX_INSTALL_DIR` / `XX_EXEC_INSTALL_PREFIX` / `XX_LINUX_IO_URING_SUPPORTED`, plus the `XX_IS_*_D` platform/toolchain macros) and fall back to defaults when not supplied; the host superbuild forwards its values through those `XX_*` variables (see the common argument list in `agent/CMakeLists.txt`), so `AGENTXX_*` names appear only in the host's own build directories.
 - Intended as a convenience library for built-in plugins (built within the same superbuild with full dependencies). Third-party plugins only need the pure C header `plugin_api.h` / SDK `plugin_kit.h` without linking against host libraries.

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "utilxx_base/log.h"
-#include "utilxx/settings_db.h"
+#include "agentxx/util/settings_db.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -149,7 +149,7 @@ public:
     /// 绑定全局设置数据库并加载已存设置 (启动时调用一次)
     /// - 重复调用以首次为准; db 为空时忽略
     /// - 从库中恢复: 主题 / 动画等级 / 日志等级 / 末尾思考模式 (键: tui.*)
-    inline void attachDb(std::shared_ptr<utilxx::SettingsDb> db) noexcept {
+    inline void attachDb(std::shared_ptr<agentxx::util::SettingsDb> db) noexcept {
         if (db_ || !db) {
             return;
         }
@@ -405,7 +405,7 @@ private:
     /// 自动模式下解析出的生效语言 (始终为已支持的具体语言: ZhCn 或 EnUs)
     std::atomic<int> autoResolvedLanguage_{static_cast<int>(TuiLanguage::ZhCn)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)
-    std::shared_ptr<utilxx::SettingsDb> db_;
+    std::shared_ptr<agentxx::util::SettingsDb> db_;
 };
 
 } // namespace agentxx::client

@@ -11,6 +11,7 @@
 - 读取/编辑 resource\history\split-util-plugin-core\plan.md 乱码
 - system_monitor 增加 cpu 核心数量
 - 破甲插件，通过注入系统提示词、修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
+- 提示不使用黑话词语，注释翻译应当贴近对应语言，而不是直译
 
 - SVG绘制支持
 - 链式 session 任务队列
