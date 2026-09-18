@@ -1,20 +1,22 @@
 # ===== cxx_utilxx_base: 无重依赖基础工具库 =====
 #
 # 定位: 与宿主无关的基础设施 (日志/JSON/字符串/容器/环境/系统探测/取消令牌/
-# 异步卸载), 供 cxx_utilxx / cxx_pluginxx / 各宿主 (agentxx、musicxx 等) 复用。
+# 异步卸载), 供 cxx_utilxx / cxx_pluginxx 与各宿主复用。
 # 依赖: fmt / simdjson / Boost (头) / iconv + uchardet (可选, 字符编码) /
 # liburing (可选, Linux 文件异步 I/O; 导出接口以库名 PkgConfig::uring 声明)
-# 产物: 动态库与静态库同时产出, 命名规则与 libagentxx 一致
+# 产物: 动态库与静态库同时产出 (命名规则: Release 无后缀, Debug 文件名追加 d)
 #       Release: libcxx_utilxx_base.so       libcxx_utilxx_base_static.a
 #       Debug:   libcxx_utilxx_based.so      libcxx_utilxx_base_staticd.a
 #
-# 使用 (处理方):
-#   find_package(cxx_utilxx_base REQUIRED)
-#   # 条件依赖只声明库名, 由使用方在本机 find (是否需要见包 config 的开关):
-#   if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
+# 使用 (处理方; 顺序: 先按开关查找条件依赖, 再 find_package 本库):
+#   if (XX_LINUX_IO_URING_SUPPORTED)   # 与依赖库构建时的开关保持一致
+#     find_package(PkgConfig REQUIRED)
 #     pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
 #   endif ()
+#   find_package(cxx_utilxx_base REQUIRED)
 #   target_link_libraries(<your_target> PRIVATE cxx_utilxx_base_static)  # 或 _shared
+# 理由: 导出接口以目标名 PkgConfig::uring 声明该条件依赖 (不含库文件路径),
+# 目标须在 find_package 之前就绪 (见 cmake/cxx_utilxx_baseConfig.cmake.in)
 
 cmake_minimum_required(VERSION 3.10)
 cmake_policy(SET CMP0074 NEW) # find_package 使用 <PackageName>_ROOT 变量
@@ -22,11 +24,8 @@ cmake_policy(SET CMP0091 NEW) # MSVC 运行时库由抽象层选择
 cmake_policy(SET CMP0144 NEW) # find_package 使用大写的 _ROOT 变量
 cmake_policy(SET CMP0167 OLD) # 不使用 CMake 内置 FindBoost 模块
 
-if (NOT DEFINED AGENTXX_VERSION)
-  set(AGENTXX_VERSION "0.1.0")
-endif ()
-
-project(cxx_utilxx_base VERSION ${AGENTXX_VERSION} LANGUAGES C CXX)
+set(UTILXX_BASE_VERSION "0.1.0")
+project(cxx_utilxx_base VERSION ${UTILXX_BASE_VERSION} LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -47,14 +46,15 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xx_rpath.cmake")
 option(CXX_UTILXX_BASE_ENABLE_CHARSET "Enable iconv/uchardet charset support." ON)
 option(CXX_UTILXX_BASE_USE_BOOST_ASIO "Use Boost.Asio (define UTILXX_USE_BOOST_ASIO)." ON)
 # Linux/Android 文件异步 I/O: asio 的底层实现是 io_uring, system.cpp 的运行时探测
-# 直接调用 io_uring_queue_init/io_uring_queue_exit; 开启后导出接口以**库名**
-# (PkgConfig::uring) 声明该依赖, 具体库由使用方解析 (见下方 io_uring 依赖处理)
+# 直接调用 io_uring_queue_init/io_uring_queue_exit; 开启后本库自身需要 liburing
+# 头与符号, 导出接口则以**目标名** (PkgConfig::uring) 声明该依赖 —— 处理方须先
+# 在本机查找该目标, 再 find_package(cxx_utilxx_base)
 option(CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED "Linux io_uring supported (asio file async IO)." OFF)
 
-# 库产物安装目录: 嵌套构建时由 superbuild 传入 (与 libagentxx 同目录, 便于
+# 库产物安装目录: 嵌套构建时由宿主 superbuild 传入 (与宿主库同目录, 便于
 # 统一管理运行期搜索路径); 独立构建时随标准库目录
-if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
-  set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+if (NOT DEFINED XX_EXEC_INSTALL_PREFIX)
+  set(XX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
 find_package(PkgConfig REQUIRED)
@@ -71,11 +71,11 @@ endif ()
 # ===== 可选依赖: io_uring =====
 # system.cpp 的异步文件 I/O 探测在 -DASIO_HAS_IO_URING 下直接调用
 # io_uring_queue_init/io_uring_queue_exit, 本库自身链接该实现; 导出接口只**声明
-# 依赖名 PkgConfig::uring**, 不写死库文件路径 —— 使用方 (插件/可执行程序/宿主)
-# 直接在自己的 CMakeLists 依赖查找段按开关写 pkg_check_modules(uring REQUIRED
-# IMPORTED_TARGET liburing) (是否需要见包 config 的开关, agentxx 侧用顶层
-# AGENTXX_LINUX_IO_URING_SUPPORTED)。静态变体不携带依赖二进制, 使用方漏链接时
-# 会在运行期 (dlopen) 报 `undefined symbol: io_uring_queue_init`
+# 依赖名 PkgConfig::uring**, 不写死库文件路径 —— 处理方 (宿主库/插件/可执行
+# 程序) 需先在本机查找该目标, 再 find_package(cxx_utilxx_base)
+# (宿主构建按自己的顶层开关判断, 与本处开关同源)。
+# 静态变体不携带依赖二进制, 处理方漏查找时会在运行期 (dlopen) 报
+# `undefined symbol: io_uring_queue_init`
 if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
   pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
 endif ()
@@ -91,7 +91,7 @@ set(_CXX_UTILXX_BASE_SOURCES
 
 # ===== 目标: 静态 + 动态同时产出 =====
 # - GCC/Clang: OBJECT 库只编译一次, 动态/静态复用同一批目标文件
-# - MSVC: 双编译路径 (导出符号等语义差异, 与 libagentxx 保持一致)
+# - MSVC: 双编译路径 (导出符号等语义差异, 与项目其它库保持一致)
 if (XX_IS_MSVC_D)
   add_library(cxx_utilxx_base_shared SHARED ${_CXX_UTILXX_BASE_SOURCES})
   add_library(cxx_utilxx_base_static STATIC ${_CXX_UTILXX_BASE_SOURCES})
@@ -135,9 +135,9 @@ if (CXX_UTILXX_BASE_ENABLE_CHARSET)
   endif ()
 endif ()
 if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
-  # 导出接口只声明依赖名 PkgConfig::uring (不写死库文件路径): 使用方自行
+  # 导出接口只声明依赖名 PkgConfig::uring (不写死库文件路径): 处理方自行
   # pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing) 解析;
-  # 本库自身 (obj/shared 供链接) 也经该目标链接, 静态变体经 INTERFACE 传给使用方
+  # 本库自身 (obj/shared 供链接) 也经该目标链接, 静态变体经 INTERFACE 传给处理方
   list(APPEND _CXX_UTILXX_BASE_LINK_LIBS PkgConfig::uring)
 endif ()
 if (XX_IS_WIN_D)
@@ -148,7 +148,6 @@ endif ()
 foreach (_t ${_CXX_UTILXX_BASE_TARGETS})
   target_compile_definitions(${_t} PUBLIC
     ${XX_PLATFORM_COMPILE_DEFINITIONS}
-    XX_VERSION_STRING="${AGENTXX_VERSION}"
     BOOST_ASIO_STANDALONE=1
     ASIO_STANDALONE=1
     BOOST_PROCESS_USE_STD_FS=1
@@ -185,10 +184,10 @@ cxx_lib_set_own_dir_rpath(cxx_utilxx_base_shared)
 # ===== 安装与导出 =====
 install(TARGETS cxx_utilxx_base_shared cxx_utilxx_base_static
   EXPORT cxx_utilxx_baseTargets
-  DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
-  LIBRARY DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
-  RUNTIME DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
-  ARCHIVE DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
+  DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
+  LIBRARY DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
+  RUNTIME DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
+  ARCHIVE DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
 )
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT cxx_utilxx_baseTargets

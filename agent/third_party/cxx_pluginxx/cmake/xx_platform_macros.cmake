@@ -1,8 +1,8 @@
 # ===== 平台/编译器宏推导 (XX_IS_*_D) =====
 #
 # 本文件被三个自研库 (cxx_utilxx_base / cxx_utilxx / cxx_pluginxx) 共用:
-# - 嵌套构建 (agentxx superbuild) 时, 顶层已把 XX_IS_*_D 变量经
-#   _AGENTXX_COMMON_CMAKE_ARGS 传入, 此处直接沿用, 保证与主工程判定一致;
+# - 嵌套构建 (作为宿主 superbuild 的子项目) 时, 顶层已把 XX_IS_*_D 变量经
+#   公共参数传入, 此处直接沿用, 保证与宿主判定一致;
 # - 独立构建 (第三方/其他宿主直接 add_subdirectory 或 find_package 前构建) 时,
 #   上层未传入, 此处按 CMAKE_SYSTEM_NAME / 编译器 ID 本地推导。
 #

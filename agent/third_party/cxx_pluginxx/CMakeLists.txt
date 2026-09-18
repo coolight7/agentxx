@@ -1,17 +1,21 @@
 # ===== cxx_pluginxx: 插件框架内核 (纯 C ABI 基座 + 通用接口表 + 宿主运行时 + SDK) =====
 #
-# 定位: 与宿主领域无关的插件框架, 供 agentxx / musicxx 等宿主复用:
+# 定位: 与宿主领域无关的插件框架, 供各宿主复用:
 #   - include/pluginxx/api/     纯 C ABI (跨边界契约, 与领域无关的部分)
 #   - include/pluginxx/kit/     插件侧 C++ SDK (header-only)
 #   - include/pluginxx/runtime/ 宿主侧运行时 (header-only)
 #   - include/pluginxx/host/    宿主侧通用实现 (装载/清单/注册簿记/通用表装配)
 # 依赖: cxx_utilxx_base (取消令牌/日志/JSON 等) + fmt + Boost (仅头文件)
 #       **禁止**依赖 neograph / OpenSSL / SQLite 等重依赖与 Boost 编译库
-# 产物 (命名规则同 libagentxx):
+# 产物 (命名规则: Release 无后缀, Debug 文件名追加 d):
 #   Release: libcxx_pluginxx.so        libcxx_pluginxx_static.a
 #   Debug:   libcxx_pluginxxd.so       libcxx_pluginxx_staticd.a
 #
-# 使用 (处理方):
+# 使用 (处理方; 顺序: 先查找条件依赖, 再 find_package 本库):
+#   if (XX_LINUX_IO_URING_SUPPORTED)   # 依赖库 cxx_utilxx_base 声明该依赖 (宿主开关)
+#     find_package(PkgConfig REQUIRED)
+#     pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+#   endif ()
 #   find_package(cxx_pluginxx REQUIRED)
 #   target_link_libraries(<your_target> PRIVATE cxx_pluginxx_static)   # 或 _shared
 
@@ -21,11 +25,8 @@ cmake_policy(SET CMP0091 NEW)
 cmake_policy(SET CMP0144 NEW)
 cmake_policy(SET CMP0167 OLD)
 
-if (NOT DEFINED AGENTXX_VERSION)
-  set(AGENTXX_VERSION "0.1.0")
-endif ()
-
-project(cxx_pluginxx VERSION ${AGENTXX_VERSION} LANGUAGES C CXX)
+set(PLUGINXX_VERSION "0.1.0")
+project(cxx_pluginxx VERSION ${PLUGINXX_VERSION} LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -42,21 +43,22 @@ endif ()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xx_platform_macros.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xx_rpath.cmake")
 
-if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
-  set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+if (NOT DEFINED XX_EXEC_INSTALL_PREFIX)
+  set(XX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-# cxx_utilxx_base 的导出接口以**库名**声明了它自己的条件依赖 (PkgConfig::uring):
-# 依赖内容只有该包自己知道 (由其包 config 的 cxx_utilxx_base_LINUX_IO_URING_SUPPORTED
-# 声明), 故顺序为 find_package(cxx_utilxx_base) → 按开关在其本机 find 出对应库
-if (cxx_utilxx_base_LINUX_IO_URING_SUPPORTED)
-  find_package(PkgConfig REQUIRED)
+# 依赖库的依赖先于依赖库自身查找: cxx_utilxx_base 的导出接口以目标名
+# PkgConfig::uring 声明 io_uring (其构建开关 CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED
+# 与顶层 XX_LINUX_IO_URING_SUPPORTED 同源, superbuild 同时下发给两者)
+find_package(PkgConfig REQUIRED)
+if (XX_LINUX_IO_URING_SUPPORTED)
   pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
 endif ()
 find_package(Boost CONFIG REQUIRED)   # 仅头文件 (dlopen/清单解析等不使用 Boost 编译库)
 find_package(fmt REQUIRED)
 # 插件清单 (plugin.yaml) 解析: yaml-cpp 编译库 (体积小, 非"重依赖"范畴)
 find_package(yaml-cpp REQUIRED)
+# 依赖库本体
 find_package(cxx_utilxx_base REQUIRED)
 
 set(_CXX_PLUGINXX_SOURCES
@@ -115,7 +117,6 @@ endif ()
 foreach (_t ${_CXX_PLUGINXX_TARGETS})
   target_compile_definitions(${_t} PUBLIC
     ${XX_PLATFORM_COMPILE_DEFINITIONS}
-    XX_VERSION_STRING="${AGENTXX_VERSION}"
     BOOST_ASIO_STANDALONE=1
     ASIO_STANDALONE=1
     UTILXX_USE_BOOST_ASIO=1
@@ -149,9 +150,9 @@ cxx_lib_set_own_dir_rpath(cxx_pluginxx_shared)
 # ===== 安装与导出 =====
 install(TARGETS cxx_pluginxx_shared cxx_pluginxx_static
   EXPORT cxx_pluginxxTargets
-  LIBRARY DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
-  RUNTIME DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
-  ARCHIVE DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}"
+  LIBRARY DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
+  RUNTIME DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
+  ARCHIVE DESTINATION "${XX_EXEC_INSTALL_PREFIX}"
 )
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT cxx_pluginxxTargets

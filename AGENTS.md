@@ -185,11 +185,12 @@ path/to/agentxx_test string_util regex
   条件依赖 hyperscan (cxx_utilxx) / io_uring (cxx_utilxx_base: system.cpp 的 asio 文件
   异步 I/O 探测) 在导出接口里**只声明库名**(`PkgConfig::hyperscan` + `hs_runtime` /
   `PkgConfig::uring`), 不含库文件路径; 静态库不携带依赖二进制, 谁链接谁解析 ——
-  各构建目录在自己的 CMakeLists 依赖查找段直接写 `pkg_check_modules` (先查依赖库,
-  再 find_package 工具库/agentxx_static): lib/client/test/benchmark/plugins 按顶层
-  `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` 开关判断,
-  两个工具库自身构建按 cxx_utilxx_base 包 config 导出的开关判断
-  (plugins 目录查找一次即覆盖全部插件目标, 插件侧无需任何配置),
+  使用方须**先按开关 `pkg_check_modules` 出这些目标, 再 `find_package` 工具库 /
+  agentxx_static** (导出目标会校验 INTERFACE 引用的目标是否已存在): lib/client/test/
+  benchmark 按顶层 `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN`
+  开关判断, plugins 目录查找一次即覆盖全部插件目标 (插件侧无需任何配置);
+  两个工具库自身构建按中性开关 `XX_LINUX_IO_URING_SUPPORTED` 判断
+  (superbuild 由顶层 AGENTXX_LINUX_IO_URING_SUPPORTED 下发),
   插件链接后直接可用全部工具 (含 `utilxx_base/json.h`/`json_view.h` 自主 Json/JsonView);
   定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全),
   第三方插件不需要它 (纯 C ABI 头即可, 甚至不用 C++);
@@ -216,13 +217,20 @@ path/to/agentxx_test string_util regex
   - 工具链: `XX_IS_MSVC_D` / `XX_IS_GCC_D` / `XX_IS_CLANG_D` /
     `XX_IS_MINGW_D` (Windows 目标 + 非 MSVC, 取代 `__MINGW32__`; 独立构建
     plugins 目录时由 `plugins/cmake/plugin_platform_support.cmake` 本地推导)
-- 工具库 (cxx_utilxx_base/cxx_utilxx) 的条件依赖 (io_uring/hyperscan) 不在导出接口里
-  写死路径, 只声明库名; 各构建目录在自己的 CMakeLists 依赖查找段直接
-  `pkg_check_modules` (顺序: 先查依赖库, 再 find_package 工具库/agentxx_static):
-  lib/client/test/benchmark/plugins 按顶层 `AGENTXX_LINUX_IO_URING_SUPPORTED` /
-  `AGENTXX_ENABLE_HYPERSCAN` 开关判断 (plugins 目录一次查找覆盖全部插件目标),
-  cxx_utilxx/cxx_pluginxx 自身构建按 cxx_utilxx_base 包 config 导出的
-  `cxx_utilxx_base_LINUX_IO_URING_SUPPORTED` 判断
+- 工具库 (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx) 的条件依赖 (io_uring/hyperscan)
+  不在导出接口里写死路径, 只声明库名 (`PkgConfig::uring` /
+  `PkgConfig::hyperscan` + 裸库名 `hs_runtime`); 各构建目录在自己的 CMakeLists
+  依赖查找段直接 `pkg_check_modules` (顺序: 先查依赖库的依赖, 再 find_package
+  工具库本体 / agentxx_static): lib/client/test/benchmark/plugins 按顶层
+  `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` 开关判断,
+  cxx_utilxx/cxx_pluginxx 自身构建按中性 `XX_LINUX_IO_URING_SUPPORTED` 判断
+  (superbuild 由顶层 AGENTXX_LINUX_IO_URING_SUPPORTED 下发; cxx_utilxx_base 的
+  构建开关 CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED 与之同源, 一并下发)
+- 三个自研工具库 (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx) 按独立发布维护:
+  库内不使用宿主专名, 构建变量统一 `XX_*` 前缀 (`XX_INSTALL_DIR` /
+  `XX_EXEC_INSTALL_PREFIX` / `XX_LINUX_IO_URING_SUPPORTED` + `XX_IS_*_D` 平台宏),
+  未传入时各自回退默认值; superbuild 在公共参数里下发 XX_* 取值
+  (见 agent/CMakeLists.txt 的 _AGENTXX_COMMON_CMAKE_ARGS)
 - Linux:
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
 - Windows:

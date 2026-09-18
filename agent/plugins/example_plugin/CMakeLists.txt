@@ -67,10 +67,12 @@ add_library(${PLUGIN_NAME} SHARED
   example_plugin.cpp
 )
 
+# ===== 依赖查找与链接 (顺序: 先依赖库的依赖, 再依赖库本体) =====
+# 工具库条件依赖 (io_uring / hyperscan) 由 plugins/CMakeLists.txt 统一查找;
+# 本处只导入依赖库本体, 随后按 imported target / 裸库名链接
 if (NOT TARGET cxx_utilxx_base_static)
-  # 经 libagentxx 嵌套构建 (add_subdirectory ../plugins) 时 util 目标已存在,
-  # 此时 install 目录尚未生成 config, 跳过导入直接复用构建树目标;
-  # 独立构建本插件时再经安装 config 导入
+  # 内置合并编译时 util 目标随 libagentxx 已存在 (且 install 目录尚未生成
+  # config), 仅独立构建本插件时经安装 config 导入
   find_package(cxx_utilxx_base REQUIRED)
 endif()
 

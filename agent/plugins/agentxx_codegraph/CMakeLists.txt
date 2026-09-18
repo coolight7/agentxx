@@ -90,13 +90,12 @@ add_library(${PLUGIN_NAME} SHARED
   agentxx_codegraph.cpp
   codegraph_manager.cpp
 )
-# 依赖 (与 lib/CMakeLists.txt 一致; fmt/Glob 经 find_package 提供目标)
-# 复用 cxx_utilxx_base_static 工具库 (插件静态链接, 与宿主副本符号互不冲突;
-# find_package 经 AGENTXX_INSTALL_DIR 的 cxx_utilxx_base_static config 解析,
-# 依赖链 fmt/SQLite3/uchardet/Iconv 由 config 内 find_dependency 传递)
+# ===== 依赖查找与链接 (顺序: 先依赖库的依赖, 再依赖库本体) =====
+# 工具库条件依赖 (io_uring / hyperscan) 由 plugins/CMakeLists.txt 统一查找;
+# 本处只导入依赖库本体, 随后按 imported target / 裸库名链接
 if (NOT TARGET cxx_utilxx_base_static)
-  # 独立构建本插件时经安装 config 导入; 内置合并模式 (经 libagentxx 构建)
-  # 下 util 目标已存在于宿主工程, 跳过导入 (此时 install 目录尚未生成 config)
+  # 内置合并编译时 util 目标随 libagentxx 已存在 (且 install 目录尚未生成
+  # config), 仅独立构建本插件时经安装 config 导入
   find_package(cxx_utilxx_base REQUIRED)
 endif()
 find_package(fmt REQUIRED)
@@ -138,8 +137,10 @@ if (UNIX)
     target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
   endif()
 endif()
+# 裸库名依赖 (hs_runtime / Glob) 的解析目录: 与 cxx_utilxx* 导出接口的 link
+# 目录一致; Glob-1.0 供 glob 库按裸名解析
 target_link_directories(${PLUGIN_NAME} PRIVATE
-  "${AGENTXX_INSTALL_DIR}/lib"
+  "${AGENTXX_INSTALL_DIR}/lib/"
   "${AGENTXX_INSTALL_DIR}/lib/Glob-1.0"
 )
 

@@ -7,9 +7,9 @@
 - **用途**: 与宿主领域无关的插件框架 —— 动态库装载、生命周期 (create/start/stop/destroy)、
   清单与依赖拓扑、接口表查询、协程驱动、取消与卸载 (> 通用接口表实现见下)
 - **宿主领域内容不在此**: agent 侧的工具/权限/钩子/会话/模型/提示词/资源/图,
-  client 侧的 UI/事件/会话/线路/自身信息, 均由宿主 (agentxx、musicxx 等) 自行定义与实现
+  client 侧的 UI/事件/会话/线路/自身信息, 均由宿主自行定义与实现
 - **依赖**: `cxx_utilxx_base` (取消令牌/日志/JSON)、fmt、Boost (仅头文件, 不链接 Boost 编译库)
-  —— **禁止**依赖 neograph / OpenSSL / SQLite / agentxx 头文件
+  —— **禁止**依赖 neograph / OpenSSL / SQLite / 任何宿主头文件
 
 ## 跨边界 C ABI (不可变契约)
 
@@ -103,24 +103,23 @@ protected:
 ## 构建与使用
 
 ```cmake
-# 本库 PUBLIC 依赖 cxx_utilxx_base, 其导出接口只声明条件依赖的**库名** (PkgConfig::uring);
-# 是否需要见 cxx_utilxx_base 包 config 导出的开关
-find_package(cxx_pluginxx REQUIRED)                   # 内部 find_dependency(cxx_utilxx_base)
-if (cxx_utilxx_base_LINUX_IO_URING_SUPPORTED)
+# 顺序: 先查找依赖库的依赖 (cxx_utilxx_base 的条件依赖 io_uring), 再导入本库
+if (XX_LINUX_IO_URING_SUPPORTED)   # 与 cxx_utilxx_base 构建开关同源
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
 endif ()
+find_package(cxx_pluginxx REQUIRED)   # 内部 find_dependency(cxx_utilxx_base) 等依赖链
 target_link_libraries(your_target PRIVATE cxx_pluginxx_static)  # 或 cxx_pluginxx_shared
 ```
 
-- 产物命名 (同 libagentxx): Release `libcxx_pluginxx.so` / `libcxx_pluginxx_static.a`,
+- 产物命名: Release `libcxx_pluginxx.so` / `libcxx_pluginxx_static.a`,
   Debug 追加 `d` → `libcxx_pluginxxd.so` / `libcxx_pluginxx_staticd.a`
 - 同一进程内需要单份框架实现 (宿主与插件共享状态) 时用动态变体
 - **条件依赖只声明库名**: 本库 PUBLIC 依赖 `cxx_utilxx_base`, 其导出接口以库名声明
   条件依赖 (如 `PkgConfig::uring`), 不含库文件路径 —— 具体库由使用方在自己机器上解析:
-  直接在自身 CMakeLists 的依赖查找段, 按 cxx_utilxx_base 包 config 的
-  `cxx_utilxx_base_LINUX_IO_URING_SUPPORTED` 写
-  `pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)` (见上方示例)
+  须**先**按 `cxx_utilxx_base` 构建开关写
+  `pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)`, **再**
+  `find_package(cxx_pluginxx)` (顺序颠倒会报 "target PkgConfig::uring not found")
 
 ## 导出面
 

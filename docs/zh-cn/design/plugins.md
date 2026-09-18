@@ -172,21 +172,25 @@ auto b64 = utilxx_base::base64Encode(data);
   `cxx_utilxx` → `utilxx` (http/ws/sqlite/regex/router/diff/worktree/crypto)
 - 每个库同时产出静态库与动态库，命名规则同 libagentxx
   (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`；Debug 追加 `d`)
+- **独立发布约束**: 三个库按独立工程对外发布, 库内不使用宿主专名 —— 构建变量统一
+  `XX_*` 前缀 (`XX_INSTALL_DIR` / `XX_EXEC_INSTALL_PREFIX` /
+  `XX_LINUX_IO_URING_SUPPORTED`, 平台/编译器宏 `XX_IS_*_D`), 未传入时各自回退默认值;
+  宿主 superbuild 把同名取值经 `XX_*` 下发给它们 (见 `agent/CMakeLists.txt` 公共参数),
+  agentxx 侧的开关名 `AGENTXX_*` 只出现在宿主自己的构建目录里
 - libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；
   依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头 +
   yaml-cpp；`pluginxx` 仅 Boost 头，不链接 Boost 编译库)
-- **条件依赖只声明库名, 由使用方在本机 find**: 导出接口里出现的是
-  `PkgConfig::uring` (io_uring, 属 `cxx_utilxx_base` 的 asio 文件异步 I/O 探测) /
-  `PkgConfig::hyperscan` + 裸库名 `hs_runtime` (HyperScan, 属 `cxx_utilxx` 的正则实现),
-  **不含库文件路径**; 是否需要由工具库包 config 导出的开关声明
-  (`cxx_utilxx_base_LINUX_IO_URING_SUPPORTED` / `cxx_utilxx_ENABLE_HYPERSCAN`)。
-  静态库不携带依赖二进制, 谁链接谁解析 —— 各构建目录直接在自己的 CMakeLists
-  依赖查找段写 `pkg_check_modules` (**先查依赖库, 再 find_package 工具库 /
-  agentxx_static**): lib/client/test/benchmark/plugins 按顶层
-  `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` 开关判断
-  (plugins 目录查找一次即覆盖全部插件目标, 插件自身无需任何配置;
-  两个工具库自身构建则按 cxx_utilxx_base 包 config 导出的开关判断)
-  —— 漏查找会在 configure 期报目标不存在, 或运行期 dlopen 报
+- **条件依赖只声明库名, 由使用方在本机 find (顺序: 先依赖库的依赖, 再依赖库本体)**:
+  导出接口里出现的是 `PkgConfig::uring` (io_uring, 属 `cxx_utilxx_base` 的 asio 文件
+  异步 I/O 探测) / `PkgConfig::hyperscan` + 裸库名 `hs_runtime` (HyperScan, 属 `cxx_utilxx`
+  的正则实现), **不含库文件路径**; 静态库不携带依赖二进制, 谁链接谁解析 —— 使用方须
+  **先** `pkg_check_modules` 出这些目标 (导出目标会校验其 INTERFACE 引用的目标是否已存在),
+  **再** `find_package` 工具库 / `agentxx_static`: lib/client/test/benchmark/plugins 按顶层
+  `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` 开关判断 (与工具库
+  构建开关同源), plugins 目录查找一次即覆盖全部插件目标 (插件自身无需任何配置);
+  两个工具库自身构建按中性开关 `XX_LINUX_IO_URING_SUPPORTED` 判断
+  (superbuild 把顶层 `AGENTXX_LINUX_IO_URING_SUPPORTED` 的取值经该变量下发) ——
+  漏查找会在 configure 期报目标不存在, 或运行期 dlopen 报
   `undefined symbol: io_uring_queue_init`
 - **通用库不得引用宿主符号**: 内置插件表由宿主生成，故 `cxx_pluginxx` 经
   `pluginxx::setBuiltinPluginProvider` 注册点取数 (宿主静态初始化期登记)，内核自身不链接

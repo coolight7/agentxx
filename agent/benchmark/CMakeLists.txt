@@ -59,22 +59,28 @@ if (AGENTXX_BUILD_CLIENT)
   )
 endif()
 
+# ===== 依赖查找 (顺序: 先依赖库的依赖, 再依赖库本体) =====
+# 1) 工具库的条件依赖 (io_uring / HyperScan): 工具库导出接口只声明目标名,
+#    故先在本机查找出这些目标, 再 find_package 工具库 / agentxx_static
+#    (开关与工具库构建时同源, 详见 lib/CMakeLists.txt 同名段落)
 find_package(PkgConfig REQUIRED)
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring: cxx_utilxx_base 的 asio 文件异步 I/O 探测引用其符号
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # HyperScan: cxx_utilxx 的正则实现引用其符号 (hs_runtime 按裸库名随其接口解析)
+  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
+endif ()
 
-# iconv 必须 CONFIG 模式: 仅使用本项目 libiconv-native 安装的
-# iconvConfig.cmake (提供 Iconv::iconv/Iconv::charset, agentxx_shared 的
-# INTERFACE 链接依赖), 避免 CMake 内置 Findiconv.cmake 模块模式命中系统 iconv
+# 2) 第三方库: 一律用本项目自编译/自带的库 (安装于 AGENTXX_INSTALL_DIR 或
+#    BOOST_ROOT, 经 CMAKE_PREFIX_PATH 命中): iconv/SQLite3/CURL/Boost 必须
+#    CONFIG 模式 (避免内置 Find* 模块 fallback 到系统库); OpenSSL 为预构建目录
+#    (无 config) 故用模块模式, 经 OPENSSL_ROOT_DIR 精确指向
 find_package(iconv CONFIG REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
-# SQLite3/CURL/Boost 同样必须 CONFIG 模式: 避免 CMake 内置
-# FindSQLite3/FindCURL/FindBoost 模块 fallback 到系统库
-# (sqlite3-cmake/curl/boost 均安装了自己的 config 文件,
-# 位于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT, 经 CMAKE_PREFIX_PATH 命中)
-# OpenSSL 保持模块模式 (FindOpenSSL): 本项目 OpenSSL 为预构建目录
-# (third_party/OpenSSL-windows-build), 无 OpenSSLConfig.cmake, 模块模式
-# 经 OPENSSL_ROOT_DIR 精确指向项目预构建目录, 不会命中系统 OpenSSL
 find_package(OpenSSL REQUIRED)
 find_package(Boost CONFIG REQUIRED)
 if (AGENTXX_ENABLE_BOOST_PROCESS)
@@ -85,21 +91,16 @@ find_package(CURL CONFIG REQUIRED)
 find_package(SQLite3 CONFIG REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
+if (AGENTXX_BUILD_CLIENT)
+  # 编译 client 源码 (TUI/CLI) 时需其界面库
+  find_package(ftxui REQUIRED)
+  find_package(markdown-ui REQUIRED)
+endif()
 
-# 工具库 (cxx_utilxx*) 的导出接口以**库名**声明条件依赖 (PkgConfig::uring /
-# PkgConfig::hyperscan + 裸库名 hs_runtime), 不含库文件路径 —— 静态库不携带依赖
-# 二进制, 谁链接谁解析: 先查找这些依赖库, 再 find_package(agentxx_static)
-# (其 INTERFACE 传递 cxx_utilxx* 的目标); 缺查找时 configure 报目标不存在,
-# 或运行期 dlopen 报 `undefined symbol: io_uring_queue_init`
-if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # io_uring: cxx_utilxx_base 的 asio 文件异步 I/O 探测引用其符号
-  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
-endif ()
-if (AGENTXX_ENABLE_HYPERSCAN)
-  # HyperScan: cxx_utilxx 的正则实现引用其符号 (hs_runtime 按裸库名随其接口解析)
-  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
-endif ()
-
+# 3) 依赖库本体: 工具库 (config 内含 find_dependency 链) 与 libagentxx
+find_package(cxx_utilxx_base REQUIRED)
+find_package(cxx_utilxx REQUIRED)
+find_package(cxx_pluginxx REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_benchmark PUBLIC
@@ -116,6 +117,8 @@ target_link_libraries(agentxx_benchmark PRIVATE
   yyjson
   agentxx_static
 )
+# 条件依赖显式链接 (目标已在依赖查找段按开关查出; hs_runtime 为 HyperScan
+# 运行期库, 按裸库名经 cxx_utilxx 的 link 目录解析)
 if (AGENTXX_ENABLE_HYPERSCAN)
   target_link_libraries(agentxx_benchmark PRIVATE
     PkgConfig::hyperscan
@@ -129,8 +132,6 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
 endif()
 
 if (AGENTXX_BUILD_CLIENT)
-  find_package(ftxui REQUIRED)
-  find_package(markdown-ui REQUIRED)
   target_link_libraries(agentxx_benchmark PRIVATE ftxui::ftxui markdown::markdown-ui)
   target_compile_definitions(agentxx_benchmark PRIVATE AGENTXX_BUILD_CLIENT=1)
 endif()

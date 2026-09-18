@@ -54,14 +54,15 @@ else()
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
-# 条件依赖 (hyperscan / io_uring) 的查找:
+# 工具库条件依赖 (hyperscan / io_uring) 的查找 (顺序: 先依赖库的依赖, 再依赖库本体):
 # - 工具库 (cxx_utilxx_base / cxx_utilxx) 的导出接口只**声明依赖库名称**
 #   (PkgConfig::uring / PkgConfig::hyperscan + 裸库名 hs_runtime), 不写死库文件路径;
 #   hyperscan 属 cxx_utilxx (正则实现), io_uring 属 cxx_utilxx_base (system.cpp
 #   在 asio io_uring 模式下直接调用 io_uring_queue_init) —— 静态库不携带依赖二进制,
-#   故在本目录先查找这些依赖库 (各插件子目录随后 find_package 工具库时即已就绪);
+#   故先在本目录查找出这些目标, 各插件子目录随后 find_package 工具库时即已就绪;
 #   缺查找时插件 dlopen 会报 `undefined symbol: io_uring_queue_init`
-# - 因此插件侧不再需要逐插件配置, 也不依赖处理方定义 PkgConfig::* 目标
+# - 开关由顶层下发 (AGENTXX_LINUX_IO_URING_SUPPORTED / AGENTXX_ENABLE_HYPERSCAN),
+#   与工具库构建时同源; 因此插件侧不需要逐插件配置, 也不依赖处理方预定义目标
 if (AGENTXX_LINUX_IO_URING_SUPPORTED OR AGENTXX_ENABLE_HYPERSCAN)
   # 独立构建本目录 (不经 lib) 时 pkg_check_modules 尚不可用, 需先找到 pkg-config
   find_package(PkgConfig REQUIRED)
@@ -112,12 +113,6 @@ local: *;
 ")
   add_link_options("-Wl,--version-script=${_AGENTXX_EXPORT_SYMS_FILE}")
   unset(_AGENTXX_EXPORT_SYMS_FILE)
-endif()
-
-if(XX_IS_MSVC_D)
-  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
-else()
-  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
 # libagentxx 头文件搜索路径 (插件不链接 libagentxx, 仅依赖纯 C ABI 头)

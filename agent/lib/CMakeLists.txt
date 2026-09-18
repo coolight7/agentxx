@@ -46,12 +46,16 @@ if (AGENTXX_PLUGIN_UBSAN_PROBE AND NOT XX_IS_MSVC_D)
   unset(_agentxx_plugin_probe_sources)
 endif()
 
-# ===== 工具库条件依赖 (io_uring / HyperScan) 的查找 =====
-# 工具库 (cxx_utilxx_base / cxx_utilxx) 的导出接口只**声明依赖库名称**
-# (PkgConfig::uring / PkgConfig::hyperscan + 裸库名 hs_runtime), 不含库文件路径 ——
-# 静态库不携带依赖二进制, 谁链接谁解析, 故先查找这些依赖库, 再 find_package 工具库。
-# 缺查找时报 "PkgConfig::uring ... target not found", 或插件/dlopen 报
-# `undefined symbol: io_uring_queue_init`
+# ===== 依赖查找 (顺序: 先依赖库的依赖, 再依赖库本体) =====
+# 1) 工具库的条件依赖 (io_uring / HyperScan)
+# - 工具库 (cxx_utilxx_base / cxx_utilxx) 的导出接口只**声明依赖库名称**
+#   (PkgConfig::uring / PkgConfig::hyperscan + 裸库名 hs_runtime), 不含库文件路径;
+#   静态库不携带依赖二进制, 谁链接谁解析, 故先在本机查找出这些目标, 再
+#   find_package 工具库 (导出目标会校验其 INTERFACE 引用的目标是否存在)
+# - 开关与工具库构建时同源 (由 superbuild 下发): io_uring ← 顶层
+#   AGENTXX_LINUX_IO_URING_SUPPORTED; HyperScan ← 顶层 AGENTXX_ENABLE_HYPERSCAN
+# - 缺查找时 configure 报 "PkgConfig::uring ... target not found", 或运行期 dlopen
+#   报 `undefined symbol: io_uring_queue_init`
 find_package(PkgConfig REQUIRED)
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
   # io_uring: cxx_utilxx_base 的 asio 文件异步 I/O 探测引用其符号
@@ -63,14 +67,14 @@ if (AGENTXX_ENABLE_HYPERSCAN)
   pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
 endif ()
 
-# ===== 工具函数库: cxx_utilxx_base / cxx_utilxx (本项目自研基础库) =====
-# - 拆分说明: 原 `agentxx_util` 静态库已拆为两个独立 CMake 工程
+# 2) 工具库本体: cxx_utilxx_base / cxx_utilxx / cxx_pluginxx
+# - 拆分说明: 原 `agentxx_util` 静态库已拆为三个独立 CMake 工程
 #   (`agent/third_party/cxx_utilxx_base` 基础件 + `agent/third_party/cxx_utilxx`
-#   重依赖工具), 由 superbuild 先构建安装, 本处经 find_package 引用其**静态变体**
-#   (libagentxx 与各插件各链接一份, 符号互不冲突; 见 AGENTS.md 插件设计约束)
-# - 依赖解析: 两个包的 config 内含 find_dependency 链 (fmt/simdjson/Boost/
-#   SQLite3/OpenSSL/html2md/iconv/uchardet), 无需在此重复声明;
-#   条件依赖 (io_uring/hyperscan) 由上方按工具库接口声明的**库名**在本机查找
+#   重依赖工具 + `agent/third_party/cxx_pluginxx` 插件框架内核), 由 superbuild
+#   先构建安装, 本处经 find_package 引用其**静态变体** (libagentxx 与各插件各
+#   链接一份, 符号互不冲突; 见 AGENTS.md 插件设计约束)
+# - 依赖 (fmt/simdjson/Boost/SQLite3/OpenSSL/html2md/iconv/uchardet) 由各包 config
+#   的 find_dependency 链解析; 条件依赖目标已由上方按开关查好, 不需要本处重复声明
 # - 包含路径/平台宏 (XX_IS_*_D) 随 INTERFACE 传播, 调用方无需自行配置
 find_package(cxx_utilxx_base REQUIRED)
 find_package(cxx_utilxx REQUIRED)
@@ -181,22 +185,18 @@ unset(_agentxx_target)
 # (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx 为 libagentxx 的 PUBLIC 依赖:
 #  处理方 find_package agentxx_shared/agentxx_static 时经 find_dependency 传递解析)
 set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;cxx_utilxx_base;cxx_utilxx;cxx_pluginxx")
-# 必须显式 CONFIG 模式: CMake >= 3.28 内置 Findiconv.cmake 模块在混合模式下
-# 永远优先于本项目安装的 iconvConfig.cmake (且仅创建 Iconv::Iconv 目标,
-# 无 Iconv::iconv/Iconv::charset, 还可能导致命中系统 iconv);
-# CONFIG 模式强制匹配本项目 libiconv-native 安装的 iconvConfig.cmake
+# ===== 3) 第三方库 (本项目自编译/自带, 均安装于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT,
+# 经 CMAKE_PREFIX_PATH 命中) =====
+# - iconv/ZLIB/SQLite3/CURL/Boost 必须显式 CONFIG 模式: 避免 CMake 内置
+#   Findiconv/FindZLIB/FindSQLite3/FindCURL/FindBoost 模块 fallback 到系统库
+#   (libiconv-native/zlib-ng/sqlite3-cmake/curl/boost 均安装了 config 文件)
+# - OpenSSL 保持模块模式 (FindOpenSSL): 本项目 OpenSSL 为预构建目录, 无
+#   OpenSSLConfig.cmake, 模块模式经 OPENSSL_ROOT_DIR 精确指向项目预构建目录
 find_package(iconv CONFIG REQUIRED)
 find_package(uchardet REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
-# ZLIB/SQLite3/CURL/Boost 同样必须 CONFIG 模式: 避免 CMake 内置
-# FindZLIB/FindSQLite3/FindCURL/FindBoost 模块 fallback 到系统库
-# (zlib-ng/sqlite3-cmake/curl/boost 均安装了自己的 config 文件,
-# 位于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT, 经 CMAKE_PREFIX_PATH 命中)
 find_package(ZLIB CONFIG REQUIRED)
-# OpenSSL 保持模块模式 (FindOpenSSL): 本项目 OpenSSL 为预构建目录
-# (third_party/OpenSSL-windows-build), 无 OpenSSLConfig.cmake, 模块模式
-# 经 OPENSSL_ROOT_DIR 精确指向项目预构建目录, 不会命中系统 OpenSSL
 find_package(OpenSSL REQUIRED)
 find_package(Boost CONFIG REQUIRED)
 find_package(yaml-cpp REQUIRED)
@@ -226,14 +226,14 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
 endforeach()
 unset(_agentxx_target)
 
-# cxx_utilxx_base / cxx_utilxx 的链接依赖: 全部随其 config 的 find_dependency
-# 链解析 (fmt/simdjson/uchardet/iconv/SQLite3/OpenSSL/html2md + Boost 头),
-# include 路径与平台宏经 INTERFACE 传播, 本处只需链接静态变体:
+# 工具库的链接依赖: 全部随各包 config 的 find_dependency 链解析 (fmt/simdjson/
+# uchardet/iconv/SQLite3/OpenSSL/html2md + Boost 头), include 路径与平台宏经
+# INTERFACE 传播, 本处只需链接静态变体:
 # - 静态库 (archive) 按目标文件提取: 只用到的模块对应 .cpp.o 会被并入
 #   libagentxx, 未使用的模块不产生任何依赖 (DT_NEEDED 实测仅系统库)
 # - regex.cpp 的 hyperscan 与 asio 文件 I/O 的 io_uring 依赖由
-#   cxx_utilxx(_base) 的 INTERFACE **以库名声明** (PkgConfig::hyperscan /
-#   PkgConfig::uring / hs_runtime), 具体库已在文件上方按开关在本机 find
+#   cxx_utilxx(_base) 的 INTERFACE **以目标名声明** (PkgConfig::hyperscan /
+#   PkgConfig::uring + 裸库名 hs_runtime), 对应目标已由上方依赖查找段按开关查好
 
 # 统一输出名称 libagentxx
 # - 不指定时，部分系统，如win可能编译输出缺少前缀 lib
@@ -300,8 +300,8 @@ else()
 endif()
 
 # 正则 (hyperscan / std::regex) 实现已随工具库拆分迁往 cxx_utilxx:
-# 其 INTERFACE 以库名 (PkgConfig::hyperscan + hs_runtime) 携带该依赖与
-# UTILXX_ENABLE_HYPERSCAN 宏, 具体库已在文件上方按开关在本机 find;
+# 其 INTERFACE 以目标名 (PkgConfig::hyperscan + 裸库名 hs_runtime) 携带该依赖与
+# UTILXX_ENABLE_HYPERSCAN 宏, 对应目标由该包 config 解析;
 # libagentxx 自身不再直接引用 hs_* 符号, 故此处无需 pkg_check_modules
 set(_AGENTXX_LINK_LIBS
   # === neograph vvv 链接顺序是必要的
@@ -392,9 +392,9 @@ if (XX_IS_WIN_D)
 endif()
 
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  # - libagentxx 自身 (asio 文件异步 I/O) 也引用 io_uring 符号: 用 PRIVATE 链接;
-  #   静态变体的处理方 (插件/可执行程序) 各自在文件上方按开关查找 liburing
-  #   (目标名 PkgConfig::uring 由工具库导出接口声明)
+  # - libagentxx 自身 (asio 文件异步 I/O) 也引用 io_uring 符号, 用 PRIVATE 链接;
+  #   静态变体的处理方 (插件/可执行程序) 由 cxx_utilxx_base 包 config 解析出的
+  #   同名目标 (PkgConfig::uring) 经其 INTERFACE 连带链接
   target_link_libraries(agentxx_shared PRIVATE PkgConfig::uring)
 endif()
 
