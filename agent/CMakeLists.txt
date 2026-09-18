@@ -1188,6 +1188,7 @@ ExternalProject_Add(
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DCXX_UTILXX_BASE_ENABLE_CHARSET=ON
     -DCXX_UTILXX_BASE_USE_BOOST_ASIO=ON
+    -DCXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED=${AGENTXX_LINUX_IO_URING_SUPPORTED}
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
   TEST_COMMAND ""
@@ -1208,7 +1209,6 @@ ExternalProject_Add(
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DCXX_UTILXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
     -DCXX_UTILXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
-    -DCXX_UTILXX_LINUX_IO_URING_SUPPORTED=${AGENTXX_LINUX_IO_URING_SUPPORTED}
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
@@ -1236,7 +1236,9 @@ if (AGENTXX_ENABLE_HYPERSCAN)
   add_dependencies(cxx_utilxx_repo hyperscan_repo)
 endif ()
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  add_dependencies(cxx_utilxx_repo liburing_repo)
+  # io_uring 由 cxx_utilxx_base 使用 (system.cpp 的异步文件 I/O 探测), 故先于该库
+  # 构建安装: 该库 configure 时经 pkg_check_modules 解析 liburing.pc
+  add_dependencies(cxx_utilxx_base_repo liburing_repo)
 endif ()
 
 ExternalProject_Add(

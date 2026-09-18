@@ -103,13 +103,24 @@ protected:
 ## 构建与使用
 
 ```cmake
-find_package(cxx_pluginxx REQUIRED)
+# 本库 PUBLIC 依赖 cxx_utilxx_base, 其导出接口只声明条件依赖的**库名** (PkgConfig::uring);
+# 是否需要见 cxx_utilxx_base 包 config 导出的开关
+find_package(cxx_pluginxx REQUIRED)                   # 内部 find_dependency(cxx_utilxx_base)
+if (cxx_utilxx_base_LINUX_IO_URING_SUPPORTED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
 target_link_libraries(your_target PRIVATE cxx_pluginxx_static)  # 或 cxx_pluginxx_shared
 ```
 
 - 产物命名 (同 libagentxx): Release `libcxx_pluginxx.so` / `libcxx_pluginxx_static.a`,
   Debug 追加 `d` → `libcxx_pluginxxd.so` / `libcxx_pluginxx_staticd.a`
 - 同一进程内需要单份框架实现 (宿主与插件共享状态) 时用动态变体
+- **条件依赖只声明库名**: 本库 PUBLIC 依赖 `cxx_utilxx_base`, 其导出接口以库名声明
+  条件依赖 (如 `PkgConfig::uring`), 不含库文件路径 —— 具体库由使用方在自己机器上解析:
+  直接在自身 CMakeLists 的依赖查找段, 按 cxx_utilxx_base 包 config 的
+  `cxx_utilxx_base_LINUX_IO_URING_SUPPORTED` 写
+  `pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)` (见上方示例)
 
 ## 导出面
 

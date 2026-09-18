@@ -86,6 +86,20 @@ find_package(SQLite3 CONFIG REQUIRED)
 find_package(html2md REQUIRED)
 find_package(Glob REQUIRED)
 
+# 工具库 (cxx_utilxx*) 的导出接口以**库名**声明条件依赖 (PkgConfig::uring /
+# PkgConfig::hyperscan + 裸库名 hs_runtime), 不含库文件路径 —— 静态库不携带依赖
+# 二进制, 谁链接谁解析: 先查找这些依赖库, 再 find_package(agentxx_static)
+# (其 INTERFACE 传递 cxx_utilxx* 的目标); 缺查找时 configure 报目标不存在,
+# 或运行期 dlopen 报 `undefined symbol: io_uring_queue_init`
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring: cxx_utilxx_base 的 asio 文件异步 I/O 探测引用其符号
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # HyperScan: cxx_utilxx 的正则实现引用其符号 (hs_runtime 按裸库名随其接口解析)
+  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
+endif ()
+
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_benchmark PUBLIC
@@ -103,14 +117,12 @@ target_link_libraries(agentxx_benchmark PRIVATE
   agentxx_static
 )
 if (AGENTXX_ENABLE_HYPERSCAN)
-  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
   target_link_libraries(agentxx_benchmark PRIVATE
     PkgConfig::hyperscan
     hs_runtime
   )
 endif()
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
   target_link_libraries(agentxx_benchmark PRIVATE
     PkgConfig::uring
   )

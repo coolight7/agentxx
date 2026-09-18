@@ -46,13 +46,31 @@ if (AGENTXX_PLUGIN_UBSAN_PROBE AND NOT XX_IS_MSVC_D)
   unset(_agentxx_plugin_probe_sources)
 endif()
 
+# ===== 工具库条件依赖 (io_uring / HyperScan) 的查找 =====
+# 工具库 (cxx_utilxx_base / cxx_utilxx) 的导出接口只**声明依赖库名称**
+# (PkgConfig::uring / PkgConfig::hyperscan + 裸库名 hs_runtime), 不含库文件路径 ——
+# 静态库不携带依赖二进制, 谁链接谁解析, 故先查找这些依赖库, 再 find_package 工具库。
+# 缺查找时报 "PkgConfig::uring ... target not found", 或插件/dlopen 报
+# `undefined symbol: io_uring_queue_init`
+find_package(PkgConfig REQUIRED)
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring: cxx_utilxx_base 的 asio 文件异步 I/O 探测引用其符号
+  # (静态优先: 上方已把 .a 排在 CMAKE_FIND_LIBRARY_SUFFIXES 之前)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # HyperScan: cxx_utilxx 的正则实现引用其符号 (hs_runtime 按裸库名随其接口解析)
+  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
+endif ()
+
 # ===== 工具函数库: cxx_utilxx_base / cxx_utilxx (本项目自研基础库) =====
 # - 拆分说明: 原 `agentxx_util` 静态库已拆为两个独立 CMake 工程
 #   (`agent/third_party/cxx_utilxx_base` 基础件 + `agent/third_party/cxx_utilxx`
 #   重依赖工具), 由 superbuild 先构建安装, 本处经 find_package 引用其**静态变体**
 #   (libagentxx 与各插件各链接一份, 符号互不冲突; 见 AGENTS.md 插件设计约束)
 # - 依赖解析: 两个包的 config 内含 find_dependency 链 (fmt/simdjson/Boost/
-#   SQLite3/OpenSSL/html2md/iconv/uchardet), 无需在此重复声明
+#   SQLite3/OpenSSL/html2md/iconv/uchardet), 无需在此重复声明;
+#   条件依赖 (io_uring/hyperscan) 由上方按工具库接口声明的**库名**在本机查找
 # - 包含路径/平台宏 (XX_IS_*_D) 随 INTERFACE 传播, 调用方无需自行配置
 find_package(cxx_utilxx_base REQUIRED)
 find_package(cxx_utilxx REQUIRED)
@@ -159,7 +177,6 @@ foreach(_agentxx_target ${_AGENTXX_USAGE_TARGETS})
 endforeach()
 unset(_agentxx_target)
 
-find_package(PkgConfig REQUIRED)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
 # (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx 为 libagentxx 的 PUBLIC 依赖:
 #  处理方 find_package agentxx_shared/agentxx_static 时经 find_dependency 传递解析)
@@ -214,8 +231,9 @@ unset(_agentxx_target)
 # include 路径与平台宏经 INTERFACE 传播, 本处只需链接静态变体:
 # - 静态库 (archive) 按目标文件提取: 只用到的模块对应 .cpp.o 会被并入
 #   libagentxx, 未使用的模块不产生任何依赖 (DT_NEEDED 实测仅系统库)
-# - regex.cpp 的 hyperscan 与 asio 文件 I/O 的 io_uring 依赖已由
-#   cxx_utilxx 的 INTERFACE 以库文件绝对路径携带, 处理方无需 pkg_check_modules
+# - regex.cpp 的 hyperscan 与 asio 文件 I/O 的 io_uring 依赖由
+#   cxx_utilxx(_base) 的 INTERFACE **以库名声明** (PkgConfig::hyperscan /
+#   PkgConfig::uring / hs_runtime), 具体库已在文件上方按开关在本机 find
 
 # 统一输出名称 libagentxx
 # - 不指定时，部分系统，如win可能编译输出缺少前缀 lib
@@ -282,7 +300,8 @@ else()
 endif()
 
 # 正则 (hyperscan / std::regex) 实现已随工具库拆分迁往 cxx_utilxx:
-# 其 INTERFACE 已携带 hyperscan 库文件绝对路径与 UTILXX_ENABLE_HYPERSCAN 宏,
+# 其 INTERFACE 以库名 (PkgConfig::hyperscan + hs_runtime) 携带该依赖与
+# UTILXX_ENABLE_HYPERSCAN 宏, 具体库已在文件上方按开关在本机 find;
 # libagentxx 自身不再直接引用 hs_* 符号, 故此处无需 pkg_check_modules
 set(_AGENTXX_LINK_LIBS
   # === neograph vvv 链接顺序是必要的
@@ -373,12 +392,10 @@ if (XX_IS_WIN_D)
 endif()
 
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
-  # - pkg-config 找到的库用 PRIVATE，否则 install 时会被写入依赖中，名称却是当前项目自定义的 PkgConfig::uring,
-  # 导致难以被找到，所以这里用 PRIVATE 链接，依赖当前项目的库重新 Find 再链接 liburing.a 即可
+  # - libagentxx 自身 (asio 文件异步 I/O) 也引用 io_uring 符号: 用 PRIVATE 链接;
+  #   静态变体的处理方 (插件/可执行程序) 各自在文件上方按开关查找 liburing
+  #   (目标名 PkgConfig::uring 由工具库导出接口声明)
   target_link_libraries(agentxx_shared PRIVATE PkgConfig::uring)
-  # 工具库中的 asio 文件 I/O 实现在 -DASIO_HAS_IO_URING 下引用 io_uring 符号,
-  # 该依赖已由 cxx_utilxx 的 INTERFACE 携带库文件绝对路径 (处理方无需配置)
 endif()
 
 # ===== 运行期动态库搜索路径: 优先从动态库自身所在目录搜索 =====

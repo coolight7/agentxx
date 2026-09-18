@@ -64,9 +64,6 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
       "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" uiautomationcore oleacc ole32 user32 ws2_32 winhttp PARENT_SCOPE)
-  else()
-    # asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号;
-    # libagentxx 已按 AGENTXX_LINUX_IO_URING_SUPPORTED 条件链接 liburing
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
@@ -130,16 +127,9 @@ if (XX_IS_WIN_D)
     ws2_32
     winhttp
   )
-else()
-  # asio 文件 I/O 在 -DASIO_HAS_IO_URING 下引用 io_uring 符号; 插件为 MODULE
-  # 动态库, 不依赖宿主进程导出 (宿主为静态链接时符号可能不存在), 自链接
-  # NO_DEFAULT_PATH: 只查找本项目 liburing 安装的库 (AGENTXX_INSTALL_DIR/lib),
-  # 避免 fallback 到系统 liburing
-  find_library(AGENTXX_URING_LIB uring PATHS "${AGENTXX_INSTALL_DIR}/lib" NO_DEFAULT_PATH)
-  if (AGENTXX_URING_LIB)
-    target_link_libraries(${PLUGIN_NAME} PRIVATE ${AGENTXX_URING_LIB})
-  endif()
 endif()
+# 注: Linux 分支 (当前平台矩阵未启用) 需要的 io_uring 符号同样由
+# cxx_utilxx_base_static 的导出接口携带, 无需本插件补链
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

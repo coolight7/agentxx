@@ -182,7 +182,14 @@ path/to/agentxx_test string_util regex
   `target_link_libraries(PRIVATE cxx_utilxx_base_static|cxx_utilxx_static)`
   (cxx_utilxx 依赖 cxx_utilxx_base, 只链后者时经 INTERFACE 自动带上);
   依赖全部 PUBLIC 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头;
-  hyperscan/io_uring 以库文件绝对路径写入 INTERFACE, 处理方无需 pkg_check_modules),
+  条件依赖 hyperscan (cxx_utilxx) / io_uring (cxx_utilxx_base: system.cpp 的 asio 文件
+  异步 I/O 探测) 在导出接口里**只声明库名**(`PkgConfig::hyperscan` + `hs_runtime` /
+  `PkgConfig::uring`), 不含库文件路径; 静态库不携带依赖二进制, 谁链接谁解析 ——
+  各构建目录在自己的 CMakeLists 依赖查找段直接写 `pkg_check_modules` (先查依赖库,
+  再 find_package 工具库/agentxx_static): lib/client/test/benchmark/plugins 按顶层
+  `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` 开关判断,
+  两个工具库自身构建按 cxx_utilxx_base 包 config 导出的开关判断
+  (plugins 目录查找一次即覆盖全部插件目标, 插件侧无需任何配置),
   插件链接后直接可用全部工具 (含 `utilxx_base/json.h`/`json_view.h` 自主 Json/JsonView);
   定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全),
   第三方插件不需要它 (纯 C ABI 头即可, 甚至不用 C++);
@@ -209,6 +216,13 @@ path/to/agentxx_test string_util regex
   - 工具链: `XX_IS_MSVC_D` / `XX_IS_GCC_D` / `XX_IS_CLANG_D` /
     `XX_IS_MINGW_D` (Windows 目标 + 非 MSVC, 取代 `__MINGW32__`; 独立构建
     plugins 目录时由 `plugins/cmake/plugin_platform_support.cmake` 本地推导)
+- 工具库 (cxx_utilxx_base/cxx_utilxx) 的条件依赖 (io_uring/hyperscan) 不在导出接口里
+  写死路径, 只声明库名; 各构建目录在自己的 CMakeLists 依赖查找段直接
+  `pkg_check_modules` (顺序: 先查依赖库, 再 find_package 工具库/agentxx_static):
+  lib/client/test/benchmark/plugins 按顶层 `AGENTXX_LINUX_IO_URING_SUPPORTED` /
+  `AGENTXX_ENABLE_HYPERSCAN` 开关判断 (plugins 目录一次查找覆盖全部插件目标),
+  cxx_utilxx/cxx_pluginxx 自身构建按 cxx_utilxx_base 包 config 导出的
+  `cxx_utilxx_base_LINUX_IO_URING_SUPPORTED` 判断
 - Linux:
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
 - Windows:

@@ -2,13 +2,18 @@
 #
 # 定位: 与宿主无关的基础设施 (日志/JSON/字符串/容器/环境/系统探测/取消令牌/
 # 异步卸载), 供 cxx_utilxx / cxx_pluginxx / 各宿主 (agentxx、musicxx 等) 复用。
-# 依赖: fmt / simdjson / Boost (头) / iconv + uchardet (可选, 字符编码)
+# 依赖: fmt / simdjson / Boost (头) / iconv + uchardet (可选, 字符编码) /
+# liburing (可选, Linux 文件异步 I/O; 导出接口以库名 PkgConfig::uring 声明)
 # 产物: 动态库与静态库同时产出, 命名规则与 libagentxx 一致
 #       Release: libcxx_utilxx_base.so       libcxx_utilxx_base_static.a
 #       Debug:   libcxx_utilxx_based.so      libcxx_utilxx_base_staticd.a
 #
 # 使用 (处理方):
 #   find_package(cxx_utilxx_base REQUIRED)
+#   # 条件依赖只声明库名, 由使用方在本机 find (是否需要见包 config 的开关):
+#   if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
+#     pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+#   endif ()
 #   target_link_libraries(<your_target> PRIVATE cxx_utilxx_base_static)  # 或 _shared
 
 cmake_minimum_required(VERSION 3.10)
@@ -41,6 +46,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xx_rpath.cmake")
 
 option(CXX_UTILXX_BASE_ENABLE_CHARSET "Enable iconv/uchardet charset support." ON)
 option(CXX_UTILXX_BASE_USE_BOOST_ASIO "Use Boost.Asio (define UTILXX_USE_BOOST_ASIO)." ON)
+# Linux/Android 文件异步 I/O: asio 的底层实现是 io_uring, system.cpp 的运行时探测
+# 直接调用 io_uring_queue_init/io_uring_queue_exit; 开启后导出接口以**库名**
+# (PkgConfig::uring) 声明该依赖, 具体库由使用方解析 (见下方 io_uring 依赖处理)
+option(CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED "Linux io_uring supported (asio file async IO)." OFF)
 
 # 库产物安装目录: 嵌套构建时由 superbuild 传入 (与 libagentxx 同目录, 便于
 # 统一管理运行期搜索路径); 独立构建时随标准库目录
@@ -48,6 +57,7 @@ if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
   set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
+find_package(PkgConfig REQUIRED)
 find_package(Boost CONFIG REQUIRED)
 find_package(fmt REQUIRED)
 find_package(simdjson REQUIRED)
@@ -56,6 +66,18 @@ if (CXX_UTILXX_BASE_ENABLE_CHARSET)
   # (且只创建 Iconv::Iconv 目标), CONFIG 模式强制匹配本项目安装的 iconvConfig.cmake
   find_package(iconv CONFIG REQUIRED)
   find_package(uchardet REQUIRED)
+endif ()
+
+# ===== 可选依赖: io_uring =====
+# system.cpp 的异步文件 I/O 探测在 -DASIO_HAS_IO_URING 下直接调用
+# io_uring_queue_init/io_uring_queue_exit, 本库自身链接该实现; 导出接口只**声明
+# 依赖名 PkgConfig::uring**, 不写死库文件路径 —— 使用方 (插件/可执行程序/宿主)
+# 直接在自己的 CMakeLists 依赖查找段按开关写 pkg_check_modules(uring REQUIRED
+# IMPORTED_TARGET liburing) (是否需要见包 config 的开关, agentxx 侧用顶层
+# AGENTXX_LINUX_IO_URING_SUPPORTED)。静态变体不携带依赖二进制, 使用方漏链接时
+# 会在运行期 (dlopen) 报 `undefined symbol: io_uring_queue_init`
+if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
 endif ()
 
 set(_CXX_UTILXX_BASE_SOURCES
@@ -112,6 +134,12 @@ if (CXX_UTILXX_BASE_ENABLE_CHARSET)
     list(APPEND _CXX_UTILXX_BASE_LINK_LIBS Iconv::charset)
   endif ()
 endif ()
+if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
+  # 导出接口只声明依赖名 PkgConfig::uring (不写死库文件路径): 使用方自行
+  # pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing) 解析;
+  # 本库自身 (obj/shared 供链接) 也经该目标链接, 静态变体经 INTERFACE 传给使用方
+  list(APPEND _CXX_UTILXX_BASE_LINK_LIBS PkgConfig::uring)
+endif ()
 if (XX_IS_WIN_D)
   # asio 网络栈: ws2_32 (socket) / mswsock (AcceptEx 等, MinGW 需显式链接)
   list(APPEND _CXX_UTILXX_BASE_LINK_LIBS ws2_32 mswsock)
@@ -144,6 +172,10 @@ foreach (_t ${_CXX_UTILXX_BASE_TARGETS})
   )
   # 依赖全部 PUBLIC 传递 (静态库处理者需连带链接)
   target_link_libraries(${_t} PUBLIC ${_CXX_UTILXX_BASE_LINK_LIBS})
+  if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
+    # 本库自身编译 system.cpp 需要 <liburing.h>: 只作本库内部编译用, 不进导出接口
+    target_include_directories(${_t} SYSTEM PRIVATE ${uring_INCLUDE_DIRS})
+  endif ()
 endforeach ()
 unset(_t)
 

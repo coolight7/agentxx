@@ -175,6 +175,19 @@ auto b64 = utilxx_base::base64Encode(data);
 - libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；
   依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头 +
   yaml-cpp；`pluginxx` 仅 Boost 头，不链接 Boost 编译库)
+- **条件依赖只声明库名, 由使用方在本机 find**: 导出接口里出现的是
+  `PkgConfig::uring` (io_uring, 属 `cxx_utilxx_base` 的 asio 文件异步 I/O 探测) /
+  `PkgConfig::hyperscan` + 裸库名 `hs_runtime` (HyperScan, 属 `cxx_utilxx` 的正则实现),
+  **不含库文件路径**; 是否需要由工具库包 config 导出的开关声明
+  (`cxx_utilxx_base_LINUX_IO_URING_SUPPORTED` / `cxx_utilxx_ENABLE_HYPERSCAN`)。
+  静态库不携带依赖二进制, 谁链接谁解析 —— 各构建目录直接在自己的 CMakeLists
+  依赖查找段写 `pkg_check_modules` (**先查依赖库, 再 find_package 工具库 /
+  agentxx_static**): lib/client/test/benchmark/plugins 按顶层
+  `AGENTXX_LINUX_IO_URING_SUPPORTED` / `AGENTXX_ENABLE_HYPERSCAN` 开关判断
+  (plugins 目录查找一次即覆盖全部插件目标, 插件自身无需任何配置;
+  两个工具库自身构建则按 cxx_utilxx_base 包 config 导出的开关判断)
+  —— 漏查找会在 configure 期报目标不存在, 或运行期 dlopen 报
+  `undefined symbol: io_uring_queue_init`
 - **通用库不得引用宿主符号**: 内置插件表由宿主生成，故 `cxx_pluginxx` 经
   `pluginxx::setBuiltinPluginProvider` 注册点取数 (宿主静态初始化期登记)，内核自身不链接
   `agentxx_plugin_get_builtin_*`

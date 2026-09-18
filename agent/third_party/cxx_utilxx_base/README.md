@@ -7,7 +7,9 @@
 - **用途**: 日志 / JSON / 字符串与编码转换 / 容器辅助 / 环境变量 / 系统探测 /
   取消令牌 / 异步卸载 —— 供 `cxx_utilxx`、`cxx_pluginxx` 与各宿主 (agentxx、musicxx 等) 复用
 - **不含**: 网络 / 数据库 / 正则 / 图引擎 / 会话语义; 需要这些请用 `cxx_utilxx`
-- **依赖**: fmt、simdjson、Boost (仅头文件; asio/beast)、iconv + uchardet (可选, 字符编码)
+- **依赖**: fmt、simdjson、Boost (仅头文件; asio/beast)、iconv + uchardet (可选, 字符编码)、
+  liburing (可选, Linux/Android 文件异步 I/O —— `CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED`;
+  导出接口以库名 `PkgConfig::uring` 声明, 具体库由使用方解析)
   —— **禁止**依赖 neograph / OpenSSL / SQLite 等重依赖
 
 ## 目录结构
@@ -30,14 +32,41 @@ src/                    实现 (env/json/json_view/log/string_util/system)
 
 ```cmake
 find_package(cxx_utilxx_base REQUIRED)
+# 条件依赖 (导出接口里只声明库名, 如 PkgConfig::uring) 在本机 find:
+# 先按开关查找依赖库, 再链接目标 (agentxx 侧按顶层 AGENTXX_* 开关判断)
+if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
 target_link_libraries(your_target PRIVATE cxx_utilxx_base_static)  # 或 cxx_utilxx_base_shared
 ```
 
 - 产物命名 (同 libagentxx): Release `libcxx_utilxx_base.so` / `libcxx_utilxx_base_static.a`,
   Debug 追加 `d` → `libcxx_utilxx_based.so` / `libcxx_utilxx_base_staticd.a`
+- 可选特性由 CMake 开关控制: `CXX_UTILXX_BASE_ENABLE_CHARSET` (iconv/uchardet 字符编码)、
+  `CXX_UTILXX_BASE_USE_BOOST_ASIO`、`CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED`
+  (Linux/Android 文件异步 I/O)
+- **条件依赖只声明库名**: 开启 io_uring 后导出接口里出现的是 `PkgConfig::uring`
+  这个**名称**(与 `fmt::fmt`/`OpenSSL::SSL` 同类), 不含任何库文件路径 —— 静态库不携带
+  依赖二进制, 具体库由使用方在自己机器上解析: 导入方直接在自身 CMakeLists 依赖
+  查找段写
+  ```cmake
+  if (CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED)   # 开关见本库包 config
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+  endif ()
+  ```
+  (agentxx 侧写在各构建目录的 CMakeLists, 按顶层 `AGENTXX_LINUX_IO_URING_SUPPORTED`
+  开关判断; plugins 目录查找一次即覆盖全部插件目标);
+  漏查找时要么 configure 报目标不存在, 要么运行期加载报
+  `undefined symbol: io_uring_queue_init`
+- **独立构建提醒**: Boost.Asio 在 Linux 上检测到 `<liburing.h>` 时会自动定义
+  `ASIO_HAS_IO_URING` (system.cpp 随之引用 io_uring), 故独立构建 (非 agentxx
+  superbuild) 时应把 `CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED` 设为 ON
 - **静态 / 动态变体选择**: 同一进程内需要单份实现 (如插件宿主与插件共享状态) 时用动态变体;
   否则用静态变体 (默认, 便于裁剪与分发)
-- 依赖经 `find_dependency` 链自动解析 (fmt/simdjson/Boost, 启用字符集时另有 iconv/uchardet)
+- 依赖经 `find_dependency` 链自动解析 (fmt/simdjson/Boost, 启用字符集时另有 iconv/uchardet;
+  io_uring 为条件依赖, 按上述库名由使用方解析)
 
 ```c++
 #include "utilxx_base/json.h"        // utilxx_base::Json
@@ -63,4 +92,6 @@ auto r = co_await utilxx::offloadCancellableAsync<int>(pool, token, [](std::atom
 ## 平台
 
 Linux / Windows / macOS / Android / iOS 均可编译。文件异步 I/O 支持情况见
-`utilxx_base::isAsyncFileIoSupported()` (Linux 由 io_uring 提供, 需运行时确认可用)。
+`utilxx_base::isAsyncFileIoSupported()` (Linux 由 io_uring 提供, 需运行时确认可用;
+liburing 依赖经 `CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED` 启用, 导出接口以
+`PkgConfig::uring` 名称声明, 使用方自行 find)。

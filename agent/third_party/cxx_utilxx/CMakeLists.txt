@@ -1,7 +1,8 @@
 # ===== cxx_utilxx: 重依赖工具库 (HTTP/WS/SQLite/正则/路由/差异/worktree/散列) =====
 #
 # 定位: 基于 cxx_utilxx_base, 提供网络与存储类工具; 依赖 OpenSSL / SQLite / Boost
-# (beast + process) / fmt / html2md, 可选 hyperscan (正则) 与 io_uring (文件异步 IO)。
+# (beast + process) / fmt / html2md, 可选 hyperscan (正则);
+# 文件异步 I/O 的 io_uring 依赖在 cxx_utilxx_base (见该库 CMakeLists)
 # 产物 (命名规则同 libagentxx):
 #   Release: libcxx_utilxx.so        libcxx_utilxx_static.a
 #   Debug:   libcxx_utilxxd.so       libcxx_utilxx_staticd.a
@@ -39,13 +40,20 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/xx_rpath.cmake")
 
 option(CXX_UTILXX_ENABLE_HYPERSCAN "Use HyperScan for regex (std::regex if off)." OFF)
 option(CXX_UTILXX_ENABLE_BOOST_PROCESS "Use Boost.process for worktree commands." ON)
-option(CXX_UTILXX_LINUX_IO_URING_SUPPORTED "Linux io_uring supported (asio file async IO)." OFF)
+# 注: Linux io_uring 依赖 (asio 文件异步 I/O) 已随实现 (system.cpp 的运行时探测)
+# 移到 cxx_utilxx_base, 由该库的 CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED 开关处理
 
 if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
   set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-find_package(cxx_utilxx_base REQUIRED)
+find_package(PkgConfig REQUIRED)
+# cxx_utilxx_base 的导出接口以**库名**声明了它自己的条件依赖 (PkgConfig::uring):
+# 依赖内容只有该包自己知道 (由其包 config 的 cxx_utilxx_base_LINUX_IO_URING_SUPPORTED
+# 声明), 故顺序为 find_package(cxx_utilxx_base) → 按开关在其本机 find 出对应库
+if (cxx_utilxx_base_LINUX_IO_URING_SUPPORTED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
 find_package(Boost CONFIG REQUIRED)
 if (CXX_UTILXX_ENABLE_BOOST_PROCESS)
   find_package(Boost CONFIG REQUIRED COMPONENTS process)
@@ -54,6 +62,7 @@ find_package(OpenSSL REQUIRED)
 find_package(SQLite3 CONFIG REQUIRED)
 find_package(fmt REQUIRED)
 find_package(html2md REQUIRED)
+find_package(cxx_utilxx_base REQUIRED)
 
 set(_CXX_UTILXX_SOURCES
   src/crypto.cpp
@@ -66,29 +75,24 @@ set(_CXX_UTILXX_SOURCES
   src/ws_client.cpp
 )
 
-# ===== 可选依赖: hyperscan / io_uring =====
-# 解析为库文件绝对路径后写入 INTERFACE: 处理方无需自行 pkg_check_modules
-# (与旧 agentxx_util 的 PkgConfig::hyperscan 传递方式不同, 更易被第三方复用)
+# ===== 可选依赖: hyperscan =====
+# 导出接口只**声明依赖库名称**, 不写死库文件路径 (与 libagentxx 导出接口同为
+# 名称形式: fmt::fmt / OpenSSL::SSL ...), 具体库由使用方在本机 find:
+#   PkgConfig::hyperscan —— 使用方自行 find: 按本库包 config 的
+#                           cxx_utilxx_ENABLE_HYPERSCAN (或构建开关
+#                           CXX_UTILXX_ENABLE_HYPERSCAN) 写
+#                           pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
+#   hs_runtime           —— HyperScan 运行期库 (libhs.pc 未覆盖), 按裸库名声明,
+#                           经下方 target_link_directories 传播的
+#                           ${AGENTXX_INSTALL_DIR}/lib 解析 (该目录只有 .a, 静态链接)
+# io_uring 属 cxx_utilxx_base (其 system.cpp 使用), 依赖经本库 INTERFACE 间接传递
 set(_CXX_UTILXX_EXTRA_LIBS "")
 set(_CXX_UTILXX_EXTRA_DEFS "")
 if (CXX_UTILXX_ENABLE_HYPERSCAN)
-  find_package(PkgConfig REQUIRED)
   pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
-  list(APPEND _CXX_UTILXX_EXTRA_LIBS ${hyperscan_LINK_LIBRARIES})
+  list(APPEND _CXX_UTILXX_EXTRA_LIBS PkgConfig::hyperscan hs_runtime)
   set(_CXX_UTILXX_EXTRA_INCLUDES ${hyperscan_INCLUDE_DIRS})
-  find_library(CXX_UTILXX_HS_RUNTIME_LIB NAMES hs_runtime
-    HINTS "${AGENTXX_INSTALL_DIR}/lib" "${hyperscan_LIBRARY_DIRS}")
-  if (CXX_UTILXX_HS_RUNTIME_LIB)
-    list(APPEND _CXX_UTILXX_EXTRA_LIBS "${CXX_UTILXX_HS_RUNTIME_LIB}")
-  else ()
-    list(APPEND _CXX_UTILXX_EXTRA_LIBS hs_runtime)
-  endif ()
   list(APPEND _CXX_UTILXX_EXTRA_DEFS UTILXX_ENABLE_HYPERSCAN=1)
-endif ()
-if (CXX_UTILXX_LINUX_IO_URING_SUPPORTED)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
-  list(APPEND _CXX_UTILXX_EXTRA_LIBS ${uring_LINK_LIBRARIES})
 endif ()
 
 # ===== 目标: 静态 + 动态同时产出 =====

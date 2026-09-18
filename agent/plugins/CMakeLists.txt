@@ -54,11 +54,26 @@ else()
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
-# 条件依赖 (hyperscan / io_uring) 无需在此配置:
-# - 工具库已拆为 cxx_utilxx_base / cxx_utilxx 两个独立 CMake 工程, 其导出的
-#   静态目标 INTERFACE 直接携带 hyperscan/io_uring 的库文件绝对路径 (与旧的
-#   `$<LINK_ONLY:PkgConfig::hyperscan>` 传递方式不同), 插件链接后即可解析;
-# - 因此插件侧不再需要 pkg_check_modules, 也不依赖处理方定义 PkgConfig::* 目标
+# 条件依赖 (hyperscan / io_uring) 的查找:
+# - 工具库 (cxx_utilxx_base / cxx_utilxx) 的导出接口只**声明依赖库名称**
+#   (PkgConfig::uring / PkgConfig::hyperscan + 裸库名 hs_runtime), 不写死库文件路径;
+#   hyperscan 属 cxx_utilxx (正则实现), io_uring 属 cxx_utilxx_base (system.cpp
+#   在 asio io_uring 模式下直接调用 io_uring_queue_init) —— 静态库不携带依赖二进制,
+#   故在本目录先查找这些依赖库 (各插件子目录随后 find_package 工具库时即已就绪);
+#   缺查找时插件 dlopen 会报 `undefined symbol: io_uring_queue_init`
+# - 因此插件侧不再需要逐插件配置, 也不依赖处理方定义 PkgConfig::* 目标
+if (AGENTXX_LINUX_IO_URING_SUPPORTED OR AGENTXX_ENABLE_HYPERSCAN)
+  # 独立构建本目录 (不经 lib) 时 pkg_check_modules 尚不可用, 需先找到 pkg-config
+  find_package(PkgConfig REQUIRED)
+endif ()
+if (AGENTXX_LINUX_IO_URING_SUPPORTED)
+  # io_uring: cxx_utilxx_base 的 asio 文件异步 I/O 探测引用其符号
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
+if (AGENTXX_ENABLE_HYPERSCAN)
+  # HyperScan: cxx_utilxx 的正则实现引用其符号 (hs_runtime 按裸库名随其接口解析)
+  pkg_check_modules(hyperscan REQUIRED IMPORTED_TARGET libhs)
+endif ()
 
 # ===== 插件动态库导出符号控制 =====
 # - 目标: 严格限制导出面, 仅宿主 dlsym/GetProcAddress 按名查找的入口符号

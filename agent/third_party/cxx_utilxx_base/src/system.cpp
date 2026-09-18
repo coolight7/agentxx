@@ -20,7 +20,8 @@
 #if (XX_IS_LINUX_D || XX_IS_ANDROID_D) && (defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)) \
     && (defined(ASIO_HAS_IO_URING) || defined(BOOST_ASIO_HAS_IO_URING))
 // io_uring 运行时探测 (asio 的 Linux 文件异步 I/O 由 io_uring 提供);
-// 包含路径/链接库由 agentxx_util 的 PkgConfig::uring 传递
+// 头文件路径与链接库由本库的 CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED 提供
+// (见 CMakeLists: pkg-config 解析 liburing 并写入导出接口)
 #include <liburing.h>
 #endif
 

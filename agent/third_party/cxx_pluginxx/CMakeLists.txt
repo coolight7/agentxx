@@ -46,11 +46,18 @@ if (NOT DEFINED AGENTXX_EXEC_INSTALL_PREFIX)
   set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-find_package(cxx_utilxx_base REQUIRED)
+# cxx_utilxx_base 的导出接口以**库名**声明了它自己的条件依赖 (PkgConfig::uring):
+# 依赖内容只有该包自己知道 (由其包 config 的 cxx_utilxx_base_LINUX_IO_URING_SUPPORTED
+# 声明), 故顺序为 find_package(cxx_utilxx_base) → 按开关在其本机 find 出对应库
+if (cxx_utilxx_base_LINUX_IO_URING_SUPPORTED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(uring REQUIRED IMPORTED_TARGET liburing)
+endif ()
 find_package(Boost CONFIG REQUIRED)   # 仅头文件 (dlopen/清单解析等不使用 Boost 编译库)
 find_package(fmt REQUIRED)
 # 插件清单 (plugin.yaml) 解析: yaml-cpp 编译库 (体积小, 非"重依赖"范畴)
 find_package(yaml-cpp REQUIRED)
+find_package(cxx_utilxx_base REQUIRED)
 
 set(_CXX_PLUGINXX_SOURCES
   src/api_abi_check.c
