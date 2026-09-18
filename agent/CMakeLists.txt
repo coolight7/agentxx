@@ -1220,6 +1220,7 @@ ExternalProject_Add(
   DEPENDS
     cxx_utilxx_base_repo
     fmt_repo
+    yaml_cpp_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_pluginxx/"
   INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   BUILD_ALWAYS TRUE

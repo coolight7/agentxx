@@ -2,8 +2,9 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
-#include "agentxx/plugin/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
+#include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/runtime/op_driver.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_future.hpp"
@@ -69,19 +70,22 @@ struct RuntimeFixture {
             inst,
             (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
         );
-        const std::weak_ptr<PluginRuntime> runtime = manager->runtime();
-        inst->lifetime                             = std::make_shared<InstanceLifetime>(
+        const std::weak_ptr<pluginxx::PluginRuntime> runtime = manager->runtime();
+        // 与 PluginManagerBase::makeLifetime 的装配语义一致: 实例登记所属运行时,
+        // Operation 驱动器据此取 io executor 与线程标识
+        inst->runtime = manager->runtime();
+        inst->lifetime                             = std::make_shared<pluginxx::InstanceLifetime>(
             io.get_executor(),
             inst->name,
             generation,
             [runtime](std::function<void()> fn) {
                 if (auto state = runtime.lock()) {
-                    return enqueueRuntimeAction(state, std::move(fn), true);
+                    return pluginxx::enqueueRuntimeAction(state, std::move(fn), true);
                 }
                 return false;
             }
         );
-        inst->lifetime->setState(PluginInstanceState::Ready);
+        inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
         manager->plugins_.emplace(inst->name, inst);
         return inst;
     }
@@ -525,7 +529,7 @@ TestResult testPluginRuntime() {
         auto           op = f.operation();
         op->accept();
         f.provider->lifetime->requestClose();
-        XX_TEST_EXPECT_FALSE(static_cast<bool>(InstanceLease::acquire(f.provider->lifetime)));
+        XX_TEST_EXPECT_FALSE(static_cast<bool>(pluginxx::InstanceLease::acquire(f.provider->lifetime)));
         auto expired = asio::co_spawn(
             f.io,
             f.provider->lifetime->waitIdleUntil(std::chrono::steady_clock::now()),
@@ -535,7 +539,7 @@ TestResult testPluginRuntime() {
         auto expiredValue = f.waitFutureValue(std::move(expired));
         XX_TEST_EXPECT_TRUE(expiredValue.has_value());
         XX_TEST_EXPECT_FALSE(expiredValue.value_or(true));
-        f.provider->lifetime->setState(PluginInstanceState::CloseFailed);
+        f.provider->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
         auto first = asio::co_spawn(
             f.io,
@@ -554,7 +558,7 @@ TestResult testPluginRuntime() {
         f.drain();
         XX_TEST_EXPECT_TRUE(f.waitFutureValue(std::move(first)).value_or(false));
         XX_TEST_EXPECT_TRUE(f.waitFutureValue(std::move(second)).value_or(false));
-        f.provider->lifetime->setState(PluginInstanceState::Closed);
+        f.provider->lifetime->setState(pluginxx::PluginInstanceState::Closed);
         f.manager->plugins_.erase(f.provider->name);
     }
 
@@ -946,7 +950,7 @@ TestResult testPluginRuntime() {
     /// 最后一个 lease 在 executor 停止期间释放时，idle cleanup 也必须在恢复后执行一次。
     {
         RuntimeFixture f;
-        auto           lease = InstanceLease::acquire(f.provider->lifetime);
+        auto           lease = pluginxx::InstanceLease::acquire(f.provider->lifetime);
         XX_TEST_EXPECT_TRUE(static_cast<bool>(lease));
         f.provider->lifetime->requestClose();
         bool cleaned = false;
@@ -1033,13 +1037,13 @@ TestResult testPluginRuntime() {
         gLifecycleStops    = 0;
         gLifecycleDestroys = 0;
         installLifecycleHooks(*f.provider, &gLifecycleDestroys);
-        auto lease = InstanceLease::acquire(f.provider->lifetime);
+        auto lease = pluginxx::InstanceLease::acquire(f.provider->lifetime);
         XX_TEST_EXPECT_TRUE(static_cast<bool>(lease));
 
         f.manager->shutdownAll();
         XX_TEST_EXPECT_EQ(gLifecycleStops, 0);
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") != nullptr);
         XX_TEST_EXPECT_TRUE(f.manager->hasPendingClose());
 
@@ -1067,7 +1071,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(closed.get());
         XX_TEST_EXPECT_EQ(gLifecycleStops, 1);
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 1);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::Closed);
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
         XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());
     }
@@ -1322,7 +1326,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(PluginInstanceState::Disabled)
+            static_cast<int>(pluginxx::PluginInstanceState::Disabled)
         );
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped); // stop 尚未执行
@@ -1341,7 +1345,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(PluginInstanceState::Ready)
+            static_cast<int>(pluginxx::PluginInstanceState::Ready)
         );
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
         XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
@@ -1388,7 +1392,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(PluginInstanceState::Disabled)
+            static_cast<int>(pluginxx::PluginInstanceState::Disabled)
         );
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool")); // 已回滚
         XX_TEST_EXPECT_TRUE(inst->toolNames.empty());
@@ -1401,7 +1405,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(PluginInstanceState::Ready)
+            static_cast<int>(pluginxx::PluginInstanceState::Ready)
         );
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
         XX_TEST_EXPECT_EQ(inst->graphNodeTypes.size(), size_t{1});
@@ -1413,7 +1417,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(PluginInstanceState::Closing)
+            static_cast<int>(pluginxx::PluginInstanceState::Closing)
         );
 
         // ---- 关闭收尾: 欠着的 stop 由卸载路径补齐, 之后才能 destroy ----
@@ -1434,7 +1438,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->pluginDestroyed);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(PluginInstanceState::Closed)
+            static_cast<int>(pluginxx::PluginInstanceState::Closed)
         );
         XX_TEST_EXPECT_TRUE(f.manager->find("lifecycle_plugin") == nullptr);
     }
@@ -1576,7 +1580,7 @@ TestResult testPluginRuntime() {
             firstUnload = rc.value_or(true);
         }
         XX_TEST_EXPECT_FALSE(firstUnload);
-        XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), pluginxx::PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_EQ(callerDestroys, 0);
         XX_TEST_EXPECT_FALSE(f.caller->pluginDestroyed);
         XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{1});
@@ -1602,7 +1606,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(secondUnload);
         XX_TEST_EXPECT_EQ(callerDestroys, 1);
         XX_TEST_EXPECT_TRUE(f.caller->pluginDestroyed);
-        XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_EQ(f.caller->lifetime->state(), pluginxx::PluginInstanceState::Closed);
         XX_TEST_EXPECT_TRUE(f.manager->find("caller") == nullptr);
     }
 
@@ -1682,7 +1686,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(unloaded);
         XX_TEST_EXPECT_EQ(destroys, 1);
         XX_TEST_EXPECT_TRUE(f.provider->pluginDestroyed);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::Closed);
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
     }
 
@@ -1706,7 +1710,7 @@ TestResult testPluginRuntime() {
             first = rc.value_or(true);
         }
         XX_TEST_EXPECT_FALSE(first);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::CloseFailed);
         XX_TEST_EXPECT_EQ(destroys, 0);
         XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
         XX_TEST_EXPECT_EQ(f.manager->runtime()->operations.size(), size_t{1});
@@ -1750,7 +1754,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(third);
         XX_TEST_EXPECT_EQ(destroys, 1);
         XX_TEST_EXPECT_TRUE(f.provider->pluginDestroyed);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), PluginInstanceState::Closed);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::Closed);
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
     }
 
@@ -2050,7 +2054,7 @@ TestResult testPluginRuntime() {
                 = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(closingTicket != nullptr);
             runtime->cancel_driver(closingTicket);
-            f.provider->lifetime->setState(PluginInstanceState::Closed);
+            f.provider->lifetime->setState(pluginxx::PluginInstanceState::Closed);
             AgentxxPluginString err3{nullptr, 0};
             XX_TEST_EXPECT_TRUE(runtime->request_driver(host, driveFn, &probe, &err3) == nullptr);
             XX_TEST_EXPECT_TRUE(err3.data != nullptr);

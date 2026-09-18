@@ -1,7 +1,25 @@
-/// 插件统一 Operation 驱动器（宿主内部，非 ABI）。
-#pragma once
+/// pluginxx 插件统一 Operation 驱动器 (宿主内部, 非 ABI)
+///
+/// 职责: 把"插件启动一个异步操作 → 宿主记账 → 完成/取消 → 唤醒等待者"这条链路
+/// 收敛到一处, 使工具/钩子/能力/图节点/后台任务与生命周期入口共用同一套完成协议。
+///
+/// 完成协议要点 (与 ABI 契约一致):
+/// - 插件必须**恰好回调一次** `notify.done`; 同步返回且不 done 视为拒绝;
+/// - 完成通知可从任意线程发出, 由本驱动器投递回宿主 IO 线程提交终态;
+/// - 取消是协作式的: `cancel()` 只请求取消, 真正的终态仍由插件 done 决定;
+/// - 每个 Operation 持有 provider/caller 实例的执行 lease, 因此卸载的 idle 等待
+///   必然覆盖它, `dlclose` 不会越过仍在执行的插件代码。
+///
+/// 本文件同时定义两个 ABI 不透明句柄 (`AgentxxPluginOperatorHandle` /
+/// `AgentxxPluginOperationCompletionEndpoint`): 它们位于**全局命名空间**, 因为
+/// 其类型名是跨边界契约的一部分 (插件只把它当不透明指针)。
+#ifndef PLUGINXX_RUNTIME_OP_DRIVER_H
+#define PLUGINXX_RUNTIME_OP_DRIVER_H
 
-#include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/api/abi.h"
+#include "pluginxx/runtime/instance_base.h"
+#include "pluginxx/runtime/runtime.h"
+#include "utilxx/cancel.h"
 #include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/bind_cancellation_slot.hpp"
@@ -10,7 +28,6 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
-#include "neograph/graph/cancel.h"
 
 #include <algorithm>
 #include <chrono>
@@ -19,11 +36,53 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
-namespace agentxx::plugin {
+namespace pluginxx {
+struct OpCore;
+} // namespace pluginxx
 
+/// 完成通知端点独立于 OpCore 保存, 避免插件违约在 Operation 回收后再次
+/// 调用 notify.done 时解引用已经释放的 OpCore。端点由句柄 tombstone 保活。
+///
+/// endpoint 在操作完成前强持有 OpCore。这样即使 manager/runtime 先析构,
+/// 插件仍持有 notify.host_ud 时也不会落到已经释放的 OpCore; 第一次完成会
+/// 原子化地取走这份强引用, 随后由完成包继续保活到 IO 提交结束。
+struct AgentxxPluginOperationCompletionEndpoint {
+    std::mutex                                 mutex;
+    std::shared_ptr<pluginxx::OpCore>          operation;
+
+    std::shared_ptr<pluginxx::OpCore> takeOperation() noexcept {
+        std::lock_guard lock(mutex);
+        return std::exchange(operation, {});
+    }
+
+    void releaseOperation() noexcept {
+        std::lock_guard lock(mutex);
+        operation.reset();
+    }
+};
+
+/// 宿主托管的异步操作句柄 (C ABI 不透明类型; 插件只持有裸指针用于取消)
+///
+/// 内存由宿主托管: 调用方 (插件) 不得释放, 也不得在操作终结后继续使用。
+/// 参数校验走进程内表 (见 [pluginxx::cancelPluginOperation]), 伪造/过期指针只被
+/// 安全忽略。
+struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginOperatorHandle> {
+    std::weak_ptr<pluginxx::PluginInstanceBase> caller;
+    /// 取消请求需要投递回 IO 线程执行; executor 暂时停止时由它保留请求,
+    /// 使"已接受但尚未终结"的操作仍能在 executor 恢复后完成取消。
+    std::weak_ptr<pluginxx::PluginRuntime>                    runtime;
+    asio::any_io_executor                                     executor;
+    std::function<void()>                                     cancelFn;
+    std::shared_ptr<AgentxxPluginOperationCompletionEndpoint> completionEndpoint;
+    std::atomic<bool>                                         cancelled{false};
+    std::atomic<bool>                                         completed{false};
+};
+
+namespace pluginxx {
 struct OpDrive {
     std::function<void*(const AgentxxPluginOperatorNotify*, AgentxxPluginString*)> start;
     std::function<void(void*)>                                                     cancel;
@@ -406,7 +465,7 @@ private:
         auto* ud        = std::exchange(callbackUd_, nullptr);
         try {
             if (callback) {
-                auto sv = PluginStringView::from(completion_.payload);
+                auto sv = AgentxxPluginStringView{completion_.payload.data(), static_cast<uint64_t>(completion_.payload.size())};
                 callback(ud, completion_.status, &sv);
             }
         } catch (const std::exception& e) {
@@ -516,23 +575,62 @@ inline void cancelPluginOperation(AgentxxPluginOperatorHandle* handle) noexcept 
     XX_LOGE("Unable to enqueue plugin cancellation");
 }
 
+/// 未终结 Operation 摘要 (见 [PluginRuntime::pendingOperationSummary])。
+/// 完成包在 executor 停止期间保留在待重放队列, Operation 因此仍未终结; 关闭
+/// 超时把它作为可观察线索输出。
+inline std::string PluginRuntime::pendingOperationSummary() const {
+    std::vector<std::string> items;
+    {
+        std::lock_guard lock(operationsMutex);
+        for (const auto& entry : operations) {
+            const auto& operation = entry.second;
+            if (!operation || operation->completed()) {
+                continue;
+            }
+            std::string item  = operation->label();
+            item             += '#';
+            item             += std::to_string(entry.first);
+            // 完成包已产生但尚未在 IO 线程提交 (executor 停止时保留在待重放
+            // 队列): 这是"阻塞关闭"最常见的可诊断形态, 与"插件从未 done"
+            // 区分开, 便于卸载超时取证。
+            if (operation->completionPending()) {
+                item += "(completion-pending)";
+            }
+            items.push_back(std::move(item));
+        }
+    }
+    std::string out;
+    for (const auto& item : items) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += item;
+    }
+    return out;
+}
+
+/// 等待一次插件操作的工具参数
+/// - `inst` 为宿主的插件实例 (须继承 [pluginxx::PluginInstanceBase] 且已装配
+///   [pluginxx::PluginInstanceBase::runtime]);
+/// - `cancelToken` 使用统一取消抽象 [utilxx::CancelTokenPtr]: 宿主的取消源
+///   (如图引擎取消令牌) 经适配器转换后传入。
 struct PluginOpAwaitArgs {
-    std::shared_ptr<PluginInstance>               inst;
-    std::string                                   label;
-    asio::any_io_executor                         ex;
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
-    OpDrive                                       drive;
+    std::shared_ptr<PluginInstanceBase> inst;
+    std::string                         label;
+    asio::any_io_executor               ex;
+    utilxx::CancelTokenPtr              cancelToken;
+    OpDrive                             drive;
 };
 
 inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
-    auto manager = args.inst ? args.inst->manager.lock() : nullptr;
-    if (!manager || !manager->isIoThread()) {
+    auto runtime = args.inst ? args.inst->runtime.lock() : nullptr;
+    if (!runtime || !isRuntimeIoThread(runtime)) {
         throw std::runtime_error("plugin operation requires its IO executor");
     }
     if (!args.inst->enabled || (args.inst->lifetime && !args.inst->lifetime->acceptsOperations())) {
         throw std::runtime_error("plugin is closed or disabled");
     }
-    auto        core = OpCore::create(manager->runtime(), args.inst, nullptr, args.label);
+    auto        core = OpCore::create(runtime, args.inst, nullptr, args.label);
     std::string error;
     if (!core->start(std::move(args.drive), error)) {
         throw std::runtime_error(
@@ -540,16 +638,16 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         );
     }
 
-    std::shared_ptr<neograph::graph::CancelToken> cancel;
+    utilxx::CancelTokenPtr cancel;
     if (args.cancelToken) {
         cancel = args.cancelToken->fork();
-        cancel->bind_executor(args.ex);
+        cancel->bindExecutor(args.ex);
         cancel->slot().assign([weak = std::weak_ptr<OpCore>(core)](asio::cancellation_type) {
             if (auto op = weak.lock()) {
                 op->cancel();
             }
         });
-        if (cancel->is_cancelled()) {
+        if (cancel->isCancelled()) {
             core->cancel();
         }
     }
@@ -568,9 +666,7 @@ inline asio::awaitable<std::string> awaitPluginOp(PluginOpAwaitArgs args) {
         std::rethrow_exception(abort);
     }
     if (core->status() == AGENTXX_PLUGIN_OPERATOR_CANCELLED) {
-        throw neograph::graph::CancelledException(
-            fmt::format("plugin op `{}` cancelled", args.label)
-        );
+        throw utilxx::CancelledException(fmt::format("plugin op `{}` cancelled", args.label));
     }
     if (core->status() != AGENTXX_PLUGIN_OPERATOR_OK) {
         throw std::runtime_error(
@@ -635,4 +731,6 @@ inline asio::awaitable<bool> awaitPluginLifecycle(
     }
 }
 
-} // namespace agentxx::plugin
+} // namespace pluginxx
+
+#endif /* PLUGINXX_RUNTIME_OP_DRIVER_H */

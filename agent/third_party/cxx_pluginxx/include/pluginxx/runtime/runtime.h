@@ -1,4 +1,15 @@
-/// 插件宿主运行时；所有类型仅供宿主内部使用，不属于 C ABI。
+/// pluginxx 宿主运行时 (实例状态机 / 执行 lease / 投递通道)
+///
+/// 定位: 与宿主领域无关的插件框架内核运行时, 供 agentxx / musicxx 等宿主复用。
+/// 所有类型仅供宿主内部使用, 不属于 C ABI。
+///
+/// 内容:
+/// - [PluginRuntime]: 不捕获 manager 裸指针的公共运行时状态 (io executor / 操作表 /
+///   待重放动作队列), 由宿主管理器持有;
+/// - [InstanceLifetime] / [InstanceLease]: 实例状态机与执行 lease (关闭等待覆盖
+///   所有已进入插件代码的执行);
+/// - [enqueueRuntimeAction] / [replayRuntimeActions]: 经 runtime 投递动作, 并在
+///   executor 停止期间保留、恢复后重放。
 #pragma once
 
 #include "utilxx_base/asio_error.h"
@@ -25,7 +36,7 @@
 #include <utility>
 #include <vector>
 
-namespace agentxx::plugin {
+namespace pluginxx {
 
 using RuntimeErrorCode = utilxx_base::AsioErrorCode;
 
@@ -381,7 +392,7 @@ struct PluginRuntime {
     /// 完成包在 executor 停止期间会保留在待重放队列里，此时 Operation 仍是未终结
     /// 状态；这个方法就是它的外部可观察表示。空串表示没有未终结操作。
     ///
-    /// 定义放在 .cpp（OpCore 在此处只有前置声明）。
+    /// 定义见 `pluginxx/runtime/op_driver.h`（此处 OpCore 只有前置声明）。
     std::string pendingOperationSummary() const;
 };
 
@@ -400,6 +411,18 @@ inline bool runtimeExecutorStopped(const asio::any_io_executor& executor) noexce
         return true;
     }
     return false;
+}
+
+/// 当前线程是否为该运行时的 IO 线程 (仅用于断言与诊断)
+/// - executor 缺失或已停止时返回 false (与 [PluginManagerBase::isIoThread] 同口径):
+///   io_context 停止后即使当前线程正是最后绑定 executor 的线程, 也不得视为 io 线程,
+///   否则同步 ABI 调用会在已关闭的 runtime 上继续执行
+inline bool isRuntimeIoThread(const std::shared_ptr<PluginRuntime>& runtime) noexcept {
+    if (!runtime || !runtime->executor || runtimeExecutorStopped(runtime->executor)) {
+        return false;
+    }
+    const auto tid = runtime->ioThreadId.load(std::memory_order_acquire);
+    return tid != std::thread::id{} && tid == std::this_thread::get_id();
 }
 
 inline void runRuntimeAction(
@@ -497,4 +520,4 @@ inline void replayRuntimeActions(const std::shared_ptr<PluginRuntime>& runtime) 
     }
 }
 
-} // namespace agentxx::plugin
+} // namespace pluginxx

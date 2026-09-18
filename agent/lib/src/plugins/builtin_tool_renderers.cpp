@@ -11,8 +11,9 @@
 #include "agentxx/plugin/builtin_tool_renderers.h"
 
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "agentxx/plugin/plugin_common.h"
-#include "agentxx/plugin/plugin_manager_base.h"
+#include "agentxx/plugin/plugin_framework.h"
+#include "agentxx/plugin/plugin_interfaces.h"
+
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
 #include "fmt/format.h"

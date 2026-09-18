@@ -1,7 +1,8 @@
 #include "agentxx/plugin/plugin_graph_node.h"
+#include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
-#include "agentxx/plugin/op_driver.h"
+#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "utilxx_base/log.h"
 #include "fmt/format.h"
@@ -110,10 +111,11 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
         .inst        = std::move(inst),
         .label       = fmt::format("graph node `{}`", name_),
         .ex          = ex,
-        .cancelToken = in.ctx.cancel_token,
+        // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
+        .cancelToken = agentxx::util::adaptCancelToken(in.ctx.cancel_token),
         .drive       = std::move(drive),
     };
-    std::string payload = co_await plugin::awaitPluginOp(std::move(awaitArgs));
+    std::string payload = co_await agentxx::util::awaitHostPluginOp(std::move(awaitArgs));
 
     // 解析插件返回的节点输出 JSON:
     // {"writes": [{"channel","value","mode"}], "command": {...}|null, "sends": [...]}

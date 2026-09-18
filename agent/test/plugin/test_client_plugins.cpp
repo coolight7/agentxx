@@ -2253,12 +2253,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         fake->pluginCreated    = true;
         fake->manager          = syncMgr;
         fake->self             = fake;
-        fake->lifetime         = std::make_shared<agentxx::plugin::InstanceLifetime>(
+        fake->lifetime         = std::make_shared<pluginxx::InstanceLifetime>(
             syncIo.get_executor(),
             fake->name,
             uint64_t{1}
         );
-        fake->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+        fake->lifetime->setState(pluginxx::PluginInstanceState::Ready);
         syncMgr->plugins_.emplace(fake->name, fake);
 
         XX_TEST_EXPECT_TRUE(fake->lifecycleStopPending());
@@ -2266,7 +2266,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(syncMgr->find("fake_pending_stop") != nullptr);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(fake->lifetime->state()),
-            static_cast<int>(agentxx::plugin::PluginInstanceState::CloseFailed)
+            static_cast<int>(pluginxx::PluginInstanceState::CloseFailed)
         );
         XX_TEST_EXPECT_FALSE(fake->pluginDestroyed);
         XX_TEST_EXPECT_TRUE(syncMgr->hasPendingClose());
@@ -2276,12 +2276,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto legacy      = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_legacy");
         legacy->manager  = syncMgr;
         legacy->self     = legacy;
-        legacy->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
+        legacy->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
             syncIo.get_executor(),
             legacy->name,
             uint64_t{2}
         );
-        legacy->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+        legacy->lifetime->setState(pluginxx::PluginInstanceState::Ready);
         legacy->pluginCreated = true;
         syncMgr->plugins_.emplace(legacy->name, legacy);
 
@@ -2302,12 +2302,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto inst  = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
             inst->self = inst;
             inst->manager  = m;
-            inst->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
+            inst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
                 io.get_executor(),
                 inst->name,
                 generation
             );
-            inst->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+            inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
             inst->pluginCreated = true;
             m->plugins_.emplace(inst->name, inst);
             return inst;
@@ -2339,7 +2339,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(agentxx::plugin::PluginInstanceState::Disabled)
+            static_cast<int>(pluginxx::PluginInstanceState::Disabled)
         );
 
         // 启用: start 事务重新声明注册, 成功后回到 Ready
@@ -2351,7 +2351,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
-            static_cast<int>(agentxx::plugin::PluginInstanceState::Ready)
+            static_cast<int>(pluginxx::PluginInstanceState::Ready)
         );
 
         // 关闭流程中拒绝启用状态变化
@@ -2384,12 +2384,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto inst  = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
             inst->self = inst;
             inst->manager  = m;
-            inst->lifetime = std::make_shared<agentxx::plugin::InstanceLifetime>(
+            inst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
                 io.get_executor(),
                 inst->name,
                 generation
             );
-            inst->lifetime->setState(agentxx::plugin::PluginInstanceState::Ready);
+            inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
             m->plugins_.emplace(inst->name, inst);
             return inst;
         };

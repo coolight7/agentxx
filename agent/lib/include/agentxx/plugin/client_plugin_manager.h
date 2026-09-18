@@ -3,8 +3,12 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/client_event_sink.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
-#include "agentxx/plugin/plugin_common.h"
-#include "agentxx/plugin/plugin_manager_base.h"
+// 宿主侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
+// PluginString); 该头后续会拆为 pluginxx/kit/kit.h (通用部分) + 本头的领域 helper
+#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/plugin_framework.h"
+#include "agentxx/plugin/plugin_interfaces.h"
+
 #include "utilxx_base/json.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
@@ -288,7 +292,7 @@ public:
 
     /// 继承 PluginInstanceBase 的公共字段 (name/version/path/configPath/args/depends/
     /// dlHandle/pluginCtx/enabled/inflight 等), 见
-    /// [plugin_manager_base.h](/agent/lib/include/agentxx/plugin/plugin_manager_base.h)
+    /// [instance_base.h](/agent/third_party/cxx_pluginxx/include/pluginxx/runtime/instance_base.h)
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 宿主限制依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
@@ -871,7 +875,7 @@ private:
 ///
 /// 实现方 (TUI/CLI/未来 GUI) 职责:
 /// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
-///   [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
+///   [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
 ///   plugin_interfaces; 宿主据此装配 "client.ui" 接口表、
 ///   子能力限制判定与插件加载限制)
 /// - 各回调在 client io 线程调用, 实现必须快速返回; 涉及 UI 线程独占操作

@@ -16,7 +16,8 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_framework.h"
+#include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "utilxx_base/log.h"
 #include <algorithm>
@@ -226,7 +227,7 @@ interfaces:
             XX_TEST_EXPECT_TRUE(res.mcpServers["mt"].timeoutMs == 7000);
         }
         // ---- 接口声明段解析 (接口协商; 见
-        //      [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)) ----
+        //      [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)) ----
         XX_TEST_EXPECT_TRUE(ifaces.require.size() == 2);
         XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agentxx.agent.core"));
         XX_TEST_EXPECT_TRUE(contains(ifaces.require, "agentxx.client.panel"));

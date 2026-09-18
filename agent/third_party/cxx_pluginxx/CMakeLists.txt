@@ -49,9 +49,13 @@ endif ()
 find_package(cxx_utilxx_base REQUIRED)
 find_package(Boost CONFIG REQUIRED)   # 仅头文件 (dlopen/清单解析等不使用 Boost 编译库)
 find_package(fmt REQUIRED)
+# 插件清单 (plugin.yaml) 解析: yaml-cpp 编译库 (体积小, 非"重依赖"范畴)
+find_package(yaml-cpp REQUIRED)
 
 set(_CXX_PLUGINXX_SOURCES
   src/api_abi_check.c
+  src/loader.cpp
+  src/manifest.cpp
   src/version.cpp
 )
 
@@ -119,7 +123,7 @@ foreach (_t ${_CXX_PLUGINXX_TARGETS})
     "${Boost_INCLUDE_DIRS}"
     "${Boost_INCLUDE_DIRS}/boost/"
   )
-  target_link_libraries(${_t} PUBLIC cxx_utilxx_base_static fmt::fmt)
+  target_link_libraries(${_t} PUBLIC cxx_utilxx_base_static fmt::fmt yaml-cpp::yaml-cpp)
 endforeach ()
 unset(_t)
 

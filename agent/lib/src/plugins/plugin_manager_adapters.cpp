@@ -1,9 +1,10 @@
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/plugin/op_driver.h"
+#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/log.h"
@@ -84,10 +85,12 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
     std::string sessionId  = arguments.value("sessionId", std::string{});
     std::string toolCallId = arguments.value("tool_call_id", std::string{});
 
-    auto                                          agentCtx = agentContext.lock();
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
+    auto agentCtx = agentContext.lock();
+    // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象), 供 pluginxx 运行时使用
+    utilxx::CancelTokenPtr cancelToken;
     if (agentCtx) {
-        cancelToken = agentxx::tools::getSessionCancelToken(agentCtx, arguments);
+        cancelToken
+            = agentxx::util::adaptCancelToken(agentxx::tools::getSessionCancelToken(agentCtx, arguments));
     }
 
     auto       ex       = co_await asio::this_coro::executor;
@@ -122,7 +125,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
         auto timeout = std::chrono::milliseconds{spec_.default_timeout_ms};
         co_return co_await utilxx::asyncWithTimeout<std::string>(
             [a = std::move(awaitArgs)]() mutable -> asio::awaitable<std::string> {
-                co_return co_await plugin::awaitPluginOp(std::move(a));
+                co_return co_await agentxx::util::awaitHostPluginOp(std::move(a));
             },
             timeout,
             []() -> std::string {
@@ -130,7 +133,7 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
             }
         );
     }
-    co_return co_await plugin::awaitPluginOp(std::move(awaitArgs));
+    co_return co_await agentxx::util::awaitHostPluginOp(std::move(awaitArgs));
 }
 
 // =====================================================================
@@ -206,7 +209,7 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
     };
 
     try {
-        co_await plugin::awaitPluginOp(plugin::PluginOpAwaitArgs{
+        co_await agentxx::util::awaitHostPluginOp(plugin::PluginOpAwaitArgs{
             .inst        = inst,
             .label       = fmt::format("hook#{}", static_cast<int>(point)),
             .ex          = ex,

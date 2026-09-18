@@ -2,8 +2,12 @@
 
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/api/plugin_api.h"
-#include "agentxx/plugin/plugin_common.h"
-#include "agentxx/plugin/plugin_manager_base.h"
+// 宿主侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
+// PluginString); 该头后续会拆为 pluginxx/kit/kit.h (通用部分) + 本头的领域 helper
+#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/plugin_framework.h"
+#include "agentxx/plugin/plugin_interfaces.h"
+
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
@@ -45,43 +49,9 @@ class PluginMiddlewareHandle;
 class PluginTool;
 class PluginInstance;
 struct GraphTypeSlot;
-struct OpCore;
 
 } // namespace plugin
 } // namespace agentxx
-
-/// 完成通知端点独立于 OpCore 保存，避免插件违约在 Operation 回收后再次
-/// 调用 notify.done 时解引用已经释放的 OpCore。端点由句柄 tombstone 保活。
-///
-/// endpoint 在操作完成前强持有 OpCore。这样即使 manager/runtime 先析构，
-/// 插件仍持有 notify.host_ud 时也不会落到已经释放的 OpCore；第一次完成会
-/// 原子化地取走这份强引用，随后由完成包继续保活到 IO 提交结束。
-struct AgentxxPluginOperationCompletionEndpoint {
-    std::mutex                               mutex;
-    std::shared_ptr<agentxx::plugin::OpCore> operation;
-
-    std::shared_ptr<agentxx::plugin::OpCore> takeOperation() noexcept {
-        std::lock_guard lock(mutex);
-        return std::exchange(operation, {});
-    }
-
-    void releaseOperation() noexcept {
-        std::lock_guard lock(mutex);
-        operation.reset();
-    }
-};
-
-struct AgentxxPluginOperatorHandle : std::enable_shared_from_this<AgentxxPluginOperatorHandle> {
-    std::weak_ptr<agentxx::plugin::PluginInstanceBase> caller;
-    /// 取消请求需要投递回 IO 线程执行; executor 暂时停止时由它保留请求,
-    /// 使"已接受但尚未终结"的操作仍能在 executor 恢复后完成取消。
-    std::weak_ptr<agentxx::plugin::PluginRuntime>             runtime;
-    asio::any_io_executor                                     executor;
-    std::function<void()>                                     cancelFn;
-    std::shared_ptr<AgentxxPluginOperationCompletionEndpoint> completionEndpoint;
-    std::atomic<bool>                                         cancelled{false};
-    std::atomic<bool>                                         completed{false};
-};
 
 struct AgentxxPluginSubscription {
     std::shared_ptr<agentxx::events::EventBus>     bus;
@@ -102,7 +72,7 @@ public:
 
     /// 继承 PluginInstanceBase 的公共字段 (name/version/path/configPath/args/depends/
     /// dlHandle/pluginCtx/enabled/inflight 等), 见
-    /// [plugin_manager_base.h](/agent/lib/include/agentxx/plugin/plugin_manager_base.h)
+    /// [pluginxx/runtime/instance_base.h](/agent/third_party/cxx_pluginxx/include/pluginxx/runtime/instance_base.h)
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
@@ -774,12 +744,6 @@ private:
     size_t                                                             runningTurns_ = 0;
     std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
     uint64_t                                                           promptSequence_ = 0;
-};
-
-struct NativeLoader {
-    static void* open(const std::string& path, std::string& err);
-    static void* sym(void* handle, const char* name, std::string& err);
-    static void  close(void* handle);
 };
 
 class CapabilityRegistry {

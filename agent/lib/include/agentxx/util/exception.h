@@ -100,12 +100,14 @@ inline ExceptionClassification
     try {
         throw;
     } catch (const utilxx::CancelledException& e) {
-        // 统一取消抽象 (utilxx::CancelToken) 抛出的取消异常, 与图引擎版同语义
+        // 统一取消抽象 (utilxx::CancelToken) 抛出的取消异常: 与图引擎版同语义。
+        // 异常指针统一归一化为图引擎取消异常, 使上层 (toolcall 节点等) 按
+        // neograph::graph::CancelledException 判定取消的逻辑保持有效。
         res.isControlFlow = true;
         res.controlKind   = ControlFlowKind::Cancelled;
         res.errInfo       = e.what();
         utilxx_base::autoConvertToUtf8(res.errInfo);
-        res.exPtr = std::current_exception();
+        res.exPtr = std::make_exception_ptr(neograph::graph::CancelledException(res.errInfo));
     } catch (const neograph::graph::CancelledException& e) {
         res.isControlFlow = true;
         res.controlKind   = ControlFlowKind::Cancelled;

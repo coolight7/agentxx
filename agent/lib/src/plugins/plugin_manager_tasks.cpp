@@ -1,5 +1,7 @@
 /// 后台任务与工具/能力调用共用 Operation 生命周期和 exactly-once 完成协议。
-#include "agentxx/plugin/op_driver.h"
+#include "agentxx/plugin/plugin_manager.h"
+
+#include "pluginxx/runtime/op_driver.h"
 
 namespace agentxx::plugin {
 

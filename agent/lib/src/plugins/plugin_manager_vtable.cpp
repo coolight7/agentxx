@@ -1,11 +1,12 @@
-#include "agentxx/plugin/op_driver.h"
+#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/resource_applier.h"
-#include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_framework.h"
+#include "agentxx/plugin/plugin_interfaces.h"
 #include "utilxx_base/log.h"
 #include "fmt/format.h"
 
@@ -814,7 +815,7 @@ static int32_t AGENTXX_PLUGIN_CALL xx_is_io_thread(const AgentxxPluginHost* host
 
 /// 申请一次驱动请求 (任意线程可调用; 永不内联回调)。
 ///
-/// 具体语义见 plugin_api.h 的接口表声明与 plugin_driver.h 的实现说明:
+/// 具体语义见 plugin_api.h 的接口表声明与 pluginxx/runtime/driver.h 的实现说明:
 /// - admission 采用 `allowClosing=/*true*/` 的 lifecycle lease: 实例进入 Closing
 ///   后仍必须允许驱动, 否则"取消全部 Operation → 插件收束 root"会因为拿不到
 ///   驱动而永远无法跑完;

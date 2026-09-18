@@ -1,4 +1,4 @@
-/// 宿主侧协程驱动请求 (agentxx.agent.coroutine_runtime 接口表的实现载体)
+/// pluginxx 宿主侧协程驱动请求 (agentxx.agent.coroutine_runtime 接口表的实现载体)
 ///
 /// 背景: 插件协程要与宿主协程在同一宿主 IO 执行序列中交错推进, 但插件可以用任意
 /// 协程库/事件循环, 宿主也绝不能把插件私有 reactor 接进自己的执行序列。因此两端
@@ -22,10 +22,10 @@
 /// 与各注册入口把关 (不在这里), 本文件只保证 ticket 的排队/执行/取消语义。
 ///
 /// 命名空间: 请求类型本身位于**全局命名空间** (与 `AgentxxPluginOperatorHandle`
-/// 一致), 因为它是 C ABI 的不透明句柄; 它在内部使用 `agentxx::plugin` 的运行时类型。
+/// 一致), 因为它是 C ABI 的不透明句柄; 它在内部使用 `pluginxx` 的运行时类型。
 #pragma once
 
-#include "agentxx/plugin/plugin_runtime.h"
+#include "pluginxx/runtime/runtime.h"
 #include "utilxx_base/log.h"
 
 #include <atomic>
@@ -60,17 +60,17 @@ struct AgentxxPluginDriver : std::enable_shared_from_this<AgentxxPluginDriver> {
     /// - `drive`: 插件回调 (C ABI 函数指针), `ud` 为其 user_data
     /// - `return`: 失败返回 nullptr (实例已关闭 / 参数缺失)
     static std::shared_ptr<AgentxxPluginDriver> create(
-        std::shared_ptr<agentxx::plugin::PluginRuntime>    runtime,
-        std::shared_ptr<agentxx::plugin::InstanceLifetime> lifetime,
-        AgentxxPluginDriveOnceFn                           drive,
-        void*                                              ud,
-        const std::string&                                 label
+        std::shared_ptr<pluginxx::PluginRuntime>    runtime,
+        std::shared_ptr<pluginxx::InstanceLifetime> lifetime,
+        AgentxxPluginDriveOnceFn                    drive,
+        void*                                       ud,
+        const std::string&                          label
     ) {
         if (!runtime || !lifetime || !drive) {
             return nullptr;
         }
         // lifecycle lease: Closing 期间仍允许驱动 (见文件头说明), Closed 拒绝。
-        auto lease = agentxx::plugin::InstanceLease::acquire(lifetime, /*lifecycle=*/true);
+        auto lease = pluginxx::InstanceLease::acquire(lifetime, /*lifecycle=*/true);
         if (!lease) {
             return nullptr;
         }
@@ -142,7 +142,7 @@ struct AgentxxPluginDriver : std::enable_shared_from_this<AgentxxPluginDriver> {
             return false;
         }
         auto       self   = shared_from_this();
-        const bool queued = agentxx::plugin::enqueueRuntimeAction(
+        const bool queued = pluginxx::enqueueRuntimeAction(
             runtime_,
             [self] {
                 self->runOnIo();
@@ -260,11 +260,11 @@ private:
         }
     }
 
-    std::shared_ptr<agentxx::plugin::PluginRuntime> runtime_;
-    AgentxxPluginDriveOnceFn                        drive_    = nullptr;
-    void*                                           userData_ = nullptr;
-    std::string                                     label_;
-    std::atomic<uint32_t>                           state_{kIdle};
+    std::shared_ptr<pluginxx::PluginRuntime> runtime_;
+    AgentxxPluginDriveOnceFn                 drive_    = nullptr;
+    void*                                    userData_ = nullptr;
+    std::string                              label_;
+    std::atomic<uint32_t>                    state_{kIdle};
     /// 实例执行 lease: 覆盖排队与执行, 关闭等待 (waitInflightZero) 必然包含它。
-    agentxx::plugin::InstanceLease lease_;
+    pluginxx::InstanceLease lease_;
 };

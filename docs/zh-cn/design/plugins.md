@@ -84,21 +84,26 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 ---
 
-## 5. 工具函数复用 (`cxx_utilxx_base` / `cxx_utilxx`)
+## 5. 工具与框架复用 (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`)
 
-面向项目内置插件，可通过两个独立静态库复用主程序的全部基础工具 (字符串/编码检测/UTF-8
-转换/路径规范化/Base64/日志/JSON + HTTP/SQLite/正则/差异/worktree 等)。二者是
-`agent/third_party/` 下本项目自研的独立 CMake 工程 (与 fmt/simdjson 同级)，经 superbuild
-先构建安装，再由 libagentxx / 各插件 `find_package` 引用其**静态变体**：
+面向项目内置插件，可通过独立静态库复用主程序的全部基础工具 (字符串/编码检测/UTF-8
+转换/路径规范化/Base64/日志/JSON + HTTP/SQLite/正则/差异/worktree 等) 与**插件框架内核**
+(C ABI 基座 / SDK 基座 / 宿主运行时 / 清单解析)。三者是 `agent/third_party/` 下本项目
+自研的独立 CMake 工程 (与 fmt/simdjson 同级)，经 superbuild 先构建安装，再由 libagentxx /
+各插件 `find_package` 引用其**静态变体**：
 
 ```cmake
-# 基础件 (无重依赖): 日志/JSON/字符串/容器/环境/系统探测/取消令牌/异步卸载
+# 基础件 (无重依赖): 日志/JSON/字符串/容器/环境/系统探测/取消令牌/异步卸载/异常分类
 find_package(cxx_utilxx_base REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_base_static)
 
 # 重依赖工具 (依赖基础件): HTTP/WS/SQLite/正则/路由/差异/worktree/散列
 find_package(cxx_utilxx REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
+
+# 插件框架内核 (依赖基础件, 仅 Boost 头 + yaml-cpp): 见下表
+find_package(cxx_pluginxx REQUIRED)
+target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_pluginxx_static)
 ```
 
 ```cpp
@@ -109,13 +114,31 @@ auto b64 = utilxx_base::base64Encode(data);
 // 业务/插件统一用 utilxx_base::Json/JsonView (simdjson 驱动); 高频只读先 JsonView::parse 路由, 命中后 to_json() 物化
 ```
 
+### 5.1 三库归属 (`cxx_pluginxx` 目录结构)
+
+| 路径 | 命名空间 | 内容 |
+|---|---|---|
+| `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/宿主 vtable/入口符号)、`tables.h` (通用接口表: events/capabilities/scheduler/coroutine_runtime/plugins/config/cancel/json/log/tasks) |
+| `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK 基座 (header-only) |
+| `pluginxx/runtime/` | `pluginxx` | 宿主侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 宿主控制块 + C ABI 内存)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
+| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递) |
+
+- 领域表 (tools/permission/hooks/session/model/prompt/resources/graph 与 client 侧全部表)
+  由宿主定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`
+- agentxx 侧配套头: `agentxx/plugin/plugin_framework.h` (把内核类型以逐条 `using` 引入
+  `agentxx::plugin`)、`agentxx/plugin/plugin_interfaces.h` (接口协商/清单目录)、
+  `agentxx/util/cancel_adapter.h` (图引擎令牌与统一取消抽象互适配)
 - 库归属与命名空间：`cxx_utilxx_base` → `utilxx_base` (另含跨库共享契约 `utilxx::CancelToken`
   与 `utilxx::offloadAsync*`, 定义在 `utilxx/cancel.h` / `utilxx/async_offload.h`)；
   `cxx_utilxx` → `utilxx` (http/ws/sqlite/regex/router/diff/worktree/crypto)
 - 每个库同时产出静态库与动态库，命名规则同 libagentxx
   (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`；Debug 追加 `d`)
 - libagentxx 与各插件各自静态链接一份副本，符号经导出控制隐藏互不冲突；
-  依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头)
+  依赖全部 `PUBLIC` 传递 (fmt/simdjson/uchardet/iconv + OpenSSL/SQLite/html2md/Boost 头 +
+  yaml-cpp；`pluginxx` 仅 Boost 头，不链接 Boost 编译库)
+- **通用库不得引用宿主符号**: 内置插件表由宿主生成，故 `cxx_pluginxx` 经
+  `pluginxx::setBuiltinPluginProvider` 注册点取数 (宿主静态初始化期登记)，内核自身不链接
+  `agentxx_plugin_get_builtin_*`
 - 定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全)；第三方插件仅需纯 C 头
   `plugin_api.h` / SDK `plugin_kit.h`，无需链接宿主库
 - 未引用模块按目标文件提取自动裁剪 (9 插件 `DT_NEEDED` 仅系统库)

@@ -1,30 +1,49 @@
-/// plugin_common.cpp —— 插件系统公共设施实现 (见 plugin_common.h)
-/// - 原实现分别位于 [plugin_manager.cpp](/agent/lib/src/plugins/plugin_manager.cpp) /
-///   [client_plugin_manager.cpp](/agent/lib/src/plugins/client_plugin_manager.cpp),
-///   提取后两侧共用, 避免行为漂移
-#include "agentxx/plugin/plugin_common.h"
+/// pluginxx 插件清单与名称推导实现 (见 pluginxx/host/manifest.h)
+///
+/// 原实现位于 libagentxx 的 plugin_common.cpp: 因 agent 侧与 client 侧插件宿主
+/// 共用同一套清单解析/名称推导/入口路径解析, 提取到框架内核, 避免两侧行为漂移。
+#include "pluginxx/host/manifest.h"
 
-#include "agentxx/plugin/api/client_plugin_api.h"
-#include "utilxx_base/log.h"
+#include "pluginxx/api/abi.h"
 #include "yaml-cpp/yaml.h"
 
 #include <system_error>
+#include <utility>
 
-namespace agentxx {
-namespace plugin {
+namespace pluginxx {
 
 std::string_view pluginStringView2std(AgentxxPluginStringView str) {
-    return std::string_view{str.data, str.size};
+    return std::string_view{str.data, static_cast<size_t>(str.size)};
+}
+
+namespace {
+/// 提供者登记位 (函数内静态: 与任何静态初始化顺序无关)
+BuiltinPluginProvider& providerSlot() noexcept {
+    static BuiltinPluginProvider provider{};
+    return provider;
+}
+} // namespace
+
+void setBuiltinPluginProvider(BuiltinPluginProvider provider) noexcept {
+    providerSlot() = provider;
+}
+
+BuiltinPluginProvider builtinPluginProvider() noexcept {
+    return providerSlot();
 }
 
 const AgentxxPluginBuiltinInfo* findBuiltinPlugin(std::string_view name) {
+    auto fn = providerSlot().plugins;
+    if (!fn) {
+        return nullptr;
+    }
     size_t      count = 0;
-    const auto* list  = agentxx_plugin_get_builtin_plugins(&count);
+    const auto* list  = fn(&count);
     if (!list) {
         return nullptr;
     }
     for (size_t i = 0; i < count; ++i) {
-        if (agentxx::plugin::pluginStringView2std(list[i].name) == name) {
+        if (pluginStringView2std(list[i].name) == name) {
             return &list[i];
         }
     }
@@ -32,13 +51,17 @@ const AgentxxPluginBuiltinInfo* findBuiltinPlugin(std::string_view name) {
 }
 
 const AgentxxPluginBuiltinManifest* findBuiltinManifest(std::string_view name) {
+    auto fn = providerSlot().manifests;
+    if (!fn) {
+        return nullptr;
+    }
     size_t      count = 0;
-    const auto* list  = agentxx_plugin_get_builtin_manifests(&count);
+    const auto* list  = fn(&count);
     if (!list) {
         return nullptr;
     }
     for (size_t i = 0; i < count; ++i) {
-        if (agentxx::plugin::pluginStringView2std(list[i].name) == name) {
+        if (pluginStringView2std(list[i].name) == name) {
             return &list[i];
         }
     }
@@ -298,12 +321,12 @@ bool parseBuiltinManifest(
     PluginManifestInterfaces* interfaces
 ) {
     auto* m = findBuiltinManifest(pluginName);
-    if (!m || agentxx::plugin::pluginStringView2std(m->yaml).empty()) {
+    if (!m || pluginStringView2std(m->yaml).empty()) {
         return false;
     }
     // 内嵌清单的资源相对路径无需按插件目录解析 (baseDir 为空)
     return parsePluginManifestFromString(
-        std::string{agentxx::plugin::pluginStringView2std(m->yaml)},
+        std::string{pluginStringView2std(m->yaml)},
         std::filesystem::path{},
         name,
         entry,
@@ -343,64 +366,4 @@ std::string resolvePluginEntryPath(const std::filesystem::path& dir, const std::
     return entryPath;
 }
 
-// ==================== 接口协商基础设施 ====================
-
-bool sideCaresAboutInterface(std::string_view name, bool agentSide) {
-    // "agentxx." 为本项目内置接口的保留命名空间; 按子前缀区分归属侧
-    if (name.starts_with("agentxx.agent.")) {
-        return agentSide;
-    }
-    if (name.starts_with("agentxx.client.")) {
-        return !agentSide;
-    }
-    // 无前缀 / <vendor>.* / 其他 agentxx.* 子命名空间: 两侧都检查
-    // (宿主不认识即不支持, 保守安全)
-    return true;
-}
-
-InterfaceCheckResult checkInterfacesForSide(
-    const PluginManifestInterfaces& decl,
-    const InterfaceSet&             hostSupported,
-    bool                            agentSide
-) {
-    InterfaceCheckResult out;
-    auto                 check = [&](const std::vector<std::string>& list, bool required) {
-        for (const auto& n : list) {
-            if (!sideCaresAboutInterface(n, agentSide)) {
-                continue; // 另一侧的声明与本侧无关
-            }
-            if (hostSupported.contains(n)) {
-                continue;
-            }
-            if (required) {
-                out.missingRequired.push_back(n);
-            } else {
-                out.missingOptional.push_back(n);
-            }
-        }
-    };
-    check(decl.require, true);
-    check(decl.optional, false);
-    out.satisfied = out.missingRequired.empty();
-    return out;
-}
-
-RequiredEntrySides requiredEntrySides(const std::vector<std::string>& interfaces) {
-    RequiredEntrySides out;
-    for (const auto& n : interfaces) {
-        if (n.starts_with("agentxx.agent.")) {
-            out.agentEntry = true;
-        } else if (n.starts_with("agentxx.client.")) {
-            out.clientEntry = true;
-        } else {
-            // 无前缀 / vendor 前缀 / 其他 agentxx.* 子命名空间:
-            // 保守视为两侧都可能依赖
-            out.agentEntry  = true;
-            out.clientEntry = true;
-        }
-    }
-    return out;
-}
-
-} // namespace plugin
-} // namespace agentxx
+} // namespace pluginxx

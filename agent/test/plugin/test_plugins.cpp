@@ -952,7 +952,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(engine25b->lifecycleStopped);
         XX_TEST_EXPECT_TRUE(js25b->lifecycleStopped);
         XX_TEST_EXPECT_TRUE(
-            engine25b->lifetime->state() == agentxx::plugin::PluginInstanceState::Disabled
+            engine25b->lifetime->state() == pluginxx::PluginInstanceState::Disabled
         );
         // 停用期间: 能力与脚本工具都不可见, 但实例/上下文保留 (未 destroy)
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
@@ -1026,7 +1026,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") != nullptr);
         XX_TEST_EXPECT_TRUE(
-            engine26->lifetime->state() == agentxx::plugin::PluginInstanceState::CloseFailed
+            engine26->lifetime->state() == pluginxx::PluginInstanceState::CloseFailed
         );
         // 对外注册已摘除 (工具/能力不可见), 但插件上下文与 DSO 仍保留
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));

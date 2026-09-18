@@ -1,4 +1,4 @@
-#include "agentxx/plugin/op_driver.h"
+#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
 
@@ -7,7 +7,8 @@
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/plugin/plugin_common.h"
+#include "agentxx/plugin/plugin_framework.h"
+#include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/util/exception.h"
 #include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
@@ -36,105 +37,8 @@ const void* AGENTXX_PLUGIN_CALL
     xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
 
 // =====================================================================
-// NativeLoader
-// =====================================================================
-
-void* NativeLoader::open(const std::string& path, std::string& err) {
-#if XX_IS_WIN_D
-    std::wstring wpath;
-    {
-        int len = ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-        if (len > 0) {
-            wpath.resize(static_cast<size_t>(len) - 1);
-            ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), len);
-        }
-    }
-    HMODULE h = ::LoadLibraryW(wpath.c_str());
-    if (!h) {
-        err = fmt::format("LoadLibrary failed: error {}", ::GetLastError());
-        return nullptr;
-    }
-    return reinterpret_cast<void*>(h);
-#else
-    ::dlerror();
-    void* h = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (!h) {
-        const char* d = ::dlerror();
-        err           = d ? d : "dlopen failed";
-        return nullptr;
-    }
-    return h;
-#endif
-}
-
-void* NativeLoader::sym(void* handle, const char* name, std::string& err) {
-#if XX_IS_WIN_D
-    FARPROC p = ::GetProcAddress(reinterpret_cast<HMODULE>(handle), name);
-    if (!p) {
-        err = fmt::format("GetProcAddress({}) failed: error {}", name, ::GetLastError());
-        return nullptr;
-    }
-    return reinterpret_cast<void*>(p);
-#else
-    ::dlerror();
-    void*       p = ::dlsym(handle, name);
-    const char* d = ::dlerror();
-    if (d) {
-        err = fmt::format("dlsym({}) failed: {}", name, d);
-        return nullptr;
-    }
-    return p;
-#endif
-}
-
-void NativeLoader::close(void* handle) {
-    if (!handle) {
-        return;
-    }
-#if XX_IS_WIN_D
-    ::FreeLibrary(reinterpret_cast<HMODULE>(handle));
-#else
-    ::dlclose(handle);
-#endif
-}
-
-// =====================================================================
 // PluginInstance
 // =====================================================================
-
-/// 未终结 Operation 摘要（见 [PluginRuntime::pendingOperationSummary]）。
-/// 完成包在 executor 停止期间保留在待重放队列，Operation 因此仍未终结；关闭
-/// 超时把它作为可观察线索输出。
-std::string PluginRuntime::pendingOperationSummary() const {
-    std::vector<std::string> items;
-    {
-        std::lock_guard lock(operationsMutex);
-        for (const auto& entry : operations) {
-            const auto& operation = entry.second;
-            if (!operation || operation->completed()) {
-                continue;
-            }
-            std::string item  = operation->label();
-            item             += '#';
-            item             += std::to_string(entry.first);
-            // 完成包已产生但尚未在 IO 线程提交 (executor 停止时保留在待重放
-            // 队列): 这是"阻塞关闭"最常见的可诊断形态, 与"插件从未 done"
-            // 区分开, 便于卸载超时取证。
-            if (operation->completionPending()) {
-                item += "(completion-pending)";
-            }
-            items.push_back(std::move(item));
-        }
-    }
-    std::string out;
-    for (const auto& item : items) {
-        if (!out.empty()) {
-            out += ", ";
-        }
-        out += item;
-    }
-    return out;
-}
 
 PluginInstance::~PluginInstance() {
     if (lifecycleStopPending()) {
@@ -263,7 +167,7 @@ void deferPluginShutdown(const std::shared_ptr<PluginInstance>& inst) {
                 // stop 事务只能在 IO 线程上协作完成；idle 回调是同步上下文，
                 // 不能在这里 begin/await。保留实例与动态库并保持 CloseFailed，
                 // 交给仍存活的 owner 经 shutdownAsync 收尾。
-                inst->lifetime->setState(PluginInstanceState::CloseFailed);
+                inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
                 XX_LOGE(
                     "Plugin `{}` idle cleanup: lifecycle stop still pending; keeping context and DSO",
                     inst->name
@@ -274,7 +178,7 @@ void deferPluginShutdown(const std::shared_ptr<PluginInstance>& inst) {
                 XX_LOGE("Plugin `{}` idle cleanup still has active leases", inst->name);
                 return;
             }
-            inst->lifetime->setState(PluginInstanceState::Closed);
+            inst->lifetime->setState(pluginxx::PluginInstanceState::Closed);
             // 管理器仍存活时释放同一实例的名称预占，使后续加载可以重试。
             // manager 已析构时 weak_ptr 为空，实例会在 cleanup 返回后自然释放。
             if (auto manager = inst->manager.lock()) {
@@ -318,7 +222,7 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
     // 只能保留实例并标记 CloseFailed，等待 shutdownAsync/unloadAsync 收尾。
     if (inst->lifecycleStopPending()) {
         if (inst->lifetime) {
-            inst->lifetime->setState(PluginInstanceState::CloseFailed);
+            inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
         }
         XX_LOGE(
             "Plugin `{}` shutdown deferred: lifecycle stop pending; call shutdownAsync "
@@ -347,7 +251,7 @@ void PluginManager::shutdownPlugin(const std::shared_ptr<PluginInstance>& inst) 
         return;
     }
     if (inst->lifetime) {
-        inst->lifetime->setState(PluginInstanceState::Closed);
+        inst->lifetime->setState(pluginxx::PluginInstanceState::Closed);
     }
     plugins_.erase(inst->name);
     XX_LOGI("Plugin shutdown: {}", inst->name);
@@ -481,7 +385,7 @@ void PluginManager::disableImpl(std::string_view name, bool userInitiated) {
     }
     inst->enabled = false;
     if (inst->lifetime) {
-        inst->lifetime->setState(PluginInstanceState::Disabled);
+        inst->lifetime->setState(pluginxx::PluginInstanceState::Disabled);
     }
     detachInstanceRegistrations(inst.get());
     XX_LOGI("Plugin `{}` disabled ({})", inst->name, userInitiated ? "user" : "dependency");
@@ -517,7 +421,7 @@ void PluginManager::enableImpl(std::string_view name, bool userInitiated) {
     }
     inst->blockedByDependencies = false;
     if (inst->lifetime) {
-        inst->lifetime->setState(PluginInstanceState::Ready);
+        inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
     }
 
     // 先启用必选依赖: 子插件的 start 需要父插件的能力/工具已经可用。
@@ -639,9 +543,9 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
         co_return;
     }
     // enable 事务可能落后于 unload: 关闭/已关闭的实例不得被重新置为 Ready
-    // (InstanceLifetime::setState 明确禁止 Closed 重新打开)。
+    // (pluginxx::InstanceLifetime::setState 明确禁止 Closed 重新打开)。
     if (!inst->lifetime || inst->lifetime->closeRequested()
-        || inst->lifetime->state() == PluginInstanceState::Closed) {
+        || inst->lifetime->state() == pluginxx::PluginInstanceState::Closed) {
         co_return;
     }
     if (!inst->enabled) {
@@ -660,7 +564,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
                 stopError
             )) {
             if (inst->lifetime) {
-                inst->lifetime->setState(PluginInstanceState::Disabled);
+                inst->lifetime->setState(pluginxx::PluginInstanceState::Disabled);
             }
             XX_LOGE("Plugin `{}` enable aborted, stop failed: {}", inst->name, stopError);
             co_return;
@@ -673,7 +577,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
         co_return;
     }
     if (inst->lifetime->closeRequested()
-        || inst->lifetime->state() == PluginInstanceState::Closed) {
+        || inst->lifetime->state() == pluginxx::PluginInstanceState::Closed) {
         // 等待 stop 期间实例开始关闭: 不再 start。
         co_return;
     }
@@ -692,7 +596,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
         inst->enabled               = false;
         inst->blockedByDependencies = false;
         if (inst->lifetime && !inst->lifetime->closeRequested()) {
-            inst->lifetime->setState(PluginInstanceState::Disabled);
+            inst->lifetime->setState(pluginxx::PluginInstanceState::Disabled);
         }
         detachInstanceRegistrations(inst.get());
         clearPluginOwnedRegistrations(inst.get());
@@ -704,7 +608,7 @@ asio::awaitable<void> PluginManager::startForEnable(std::shared_ptr<PluginInstan
         c->resourceApplier->setOwnerEnabled(inst->name, true);
     }
     if (inst->lifetime && !inst->lifetime->closeRequested()) {
-        inst->lifetime->setState(PluginInstanceState::Ready);
+        inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
     }
     XX_LOGI("Plugin `{}` restarted after enable", inst->name);
     co_return;
@@ -779,7 +683,7 @@ asio::awaitable<bool> PluginManager::unloadAsyncUntil(
                 stopError
             )) {
             if (inst->lifetime) {
-                inst->lifetime->setState(PluginInstanceState::CloseFailed);
+                inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
             }
             inst->unloadRequested = false;
             XX_LOGE("Plugin `{}` stop failed: {}", inst->name, stopError);
@@ -795,10 +699,10 @@ asio::awaitable<bool> PluginManager::unloadAsyncUntil(
     bool       ok        = co_await waitInflightZero(inst, remaining);
     if (!ok) {
         if (inst->lifetime) {
-            inst->lifetime->setState(PluginInstanceState::CloseFailed);
+            inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
         }
         // 关闭已判定失败: 启动"驱动请求最后防线"。插件桥接正常会在自己的 stop
-        // 事务里撤销排队请求 (见 plugin_driver.h 文件头), 这里撤销的是插件没能
+        // 事务里撤销排队请求 (见 pluginxx/runtime/driver.h 文件头), 这里撤销的是插件没能
         // 撤销的部分, 避免实例 lease 被永远占用 (lease 不归零就无法 destroy/dlclose)。
         const auto cancelled = inst->cancelPendingDrivers();
         if (cancelled > 0) {
@@ -826,7 +730,7 @@ asio::awaitable<bool> PluginManager::unloadAsyncUntil(
         co_return false;
     }
     if (inst->lifetime) {
-        inst->lifetime->setState(PluginInstanceState::Closed);
+        inst->lifetime->setState(pluginxx::PluginInstanceState::Closed);
     }
     plugins_.erase(name);
     XX_LOGI("Plugin `{}` unloaded", name);
@@ -950,7 +854,7 @@ std::shared_ptr<PluginInstance> PluginManager::makeInstance(
     const AgentxxPluginStopFn  stopFn
 ) {
     auto inst      = std::make_shared<PluginInstance>(name);
-    inst->lifetime = makeLifetime(name);
+    inst->lifetime = makeLifetime(inst);
     inst->version = info && info->version.data ? std::string(info->version.data, info->version.size)
                                                : "1.0.0";
     inst->description    = info && info->description.data
@@ -979,7 +883,7 @@ void PluginManager::finishLoad(
 ) {
     applyDeclaredResources(*inst, resources);
     inst->resourcesFrozen = true;
-    inst->lifetime->setState(PluginInstanceState::Ready);
+    inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
     releasePluginName(inst->name);
 }
 

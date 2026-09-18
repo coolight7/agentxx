@@ -40,7 +40,7 @@ struct WireHelloAck {
         std::string name;
         std::string version;
         /// 插件清单声明的接口名 (interfaces.require ∪ optional; 见
-        /// [plugin_common.h](/agent/lib/include/agentxx/plugin/plugin_common.h)
+        /// [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
         /// 接口协商节), client 插件据此感知对端能力
         std::vector<std::string> interfaces;
     };

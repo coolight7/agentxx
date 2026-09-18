@@ -7,8 +7,12 @@
  *   避免多插件合并编译时符号冲突
  * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_plugin_get_builtin_plugins()
  *   暴露给 PluginManager (loadBuiltinAsync / loadPluginAsync 回退路径)
+ * - 框架内核 (cxx_pluginxx) 不引用宿主符号: 本文件在静态初始化期把上述两个函数
+ *   注册给 pluginxx::setBuiltinPluginProvider, 使内核侧的 findBuiltinPlugin /
+ *   parseBuiltinManifest 可用 (见 pluginxx/host/manifest.h)
  */
 #include "agentxx/plugin/api/plugin_api.h"
+#include "pluginxx/host/manifest.h"
 
 /* 内置插件入口符号声明 (各插件子目录内置分支生成; 符号为编译期改名后的
  * agentxx_plugin_builtin_*_<插件名>) */
@@ -52,3 +56,21 @@ const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_
     return kEmptyManifests;
 #endif
 }
+
+/* ── 向框架内核登记内置清单提供者 ── */
+namespace {
+/// 静态初始化期登记 (在 main 之前完成), 使 pluginxx::findBuiltinPlugin /
+/// pluginxx::parseBuiltinManifest 可查询本宿主的内置插件表
+struct BuiltinProviderRegistrar {
+    BuiltinProviderRegistrar() {
+        pluginxx::setBuiltinPluginProvider(
+            pluginxx::BuiltinPluginProvider{
+                &agentxx_plugin_get_builtin_plugins,
+                &agentxx_plugin_get_builtin_manifests
+            }
+        );
+    }
+};
+
+const BuiltinProviderRegistrar kBuiltinProviderRegistrar{};
+} // namespace

@@ -1524,19 +1524,25 @@ agent/
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
 │   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 17 张 agent 接口表 + 7 张 client 接口表)
+│   │   │   │                     #   框架内核 (C ABI 基座 / SDK 基座 / 宿主运行时 / 装载 / 清单解析) 已拆为
+│   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留宿主领域实现
 │   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
-│   │   │   │   ├── plugin_api.h      # 纯 C ABI 契约 (唯一跨版本稳定接口, 见 docs/zh-cn/plugins.md) — 核心 vtable 冻结 + COM QueryInterface
-│   │   │   │   ├── client_plugin_api.h # client 侧插件纯 C ABI 契约 (UI 无关语义层)
-│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin; 含原 plugin_iface_helper.h 接口表聚合与同步工具适配器)
+│   │   │   │   ├── plugin_api.h      # umbrella: 包含 pluginxx/api/{abi,tables}.h + agent 领域表
+│   │   │   │   │                     #   (tools/permission/hooks/session/model/prompt/resources/graph)
+│   │   │   │   ├── client_plugin_api.h # umbrella: 含 pluginxx 通用头 + client 领域表 (UI 无关语义层)
+│   │   │   │   ├── plugin_kit.h      # C++ SDK header-only (PluginBase/Task/awaiters/tool/hook/capability/spawn, 命名空间 agentxx::plugin)
 │   │   │   │   └── plugin_guard.h    # 插件 C ABI 边界异常处理 header-only (命名空间 agentxx::plugin)
-│   │   │   ├── op_driver.h       # 异步操作驱动 (AgentxxOpNotify Done 协议)
+│   │   │   ├── plugin_framework.h # 把框架内核 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
+│   │   │   │                     #   内核实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
+│   │   │   │                     #   (runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
+│   │   │   │                     #    host/{loader,manifest,abi_util}.h)
+│   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
 │   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
-│   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) /
-│   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen↔LoadLibraryW)
-│   │   │   ├── plugin_manager_base.h # 插件管理器公共基类 (agent/client 共用: 实例基类/io 投递/等待/内存三件套)
-│   │   │   ├── plugin_common.h   # 插件宿主侧通用工具
+│   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调) / CapabilityRegistry
 │   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线)
+│   │   │   ├── plugin_graph_node.h # PluginGraphNode (插件自定义图节点, 统一 Operation 完成协议)
+│   │   │   ├── builtin_tool_renderers.h # 内置工具渲染器 (客户端专用展示)
 │   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)
 │   │   ├── middlewares/          # 中间件
 │   │   │   ├── middleware.h      # BaseMiddlewareHandle / MiddlewareContext / State 基类

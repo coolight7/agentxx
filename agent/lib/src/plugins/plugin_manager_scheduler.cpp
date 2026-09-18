@@ -1,4 +1,5 @@
-#include "agentxx/plugin/op_driver.h"
+#include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/runtime/op_driver.h"
 
 #include "agentxx/agent/context.h"
 #include "asio/post.hpp"
