@@ -6,6 +6,7 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "utilxx/http_client.h"
+#include "utilxx_base/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -23,6 +24,20 @@ namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_da_passed = 0;
 int g_da_failed = 0;
+
+/// 权限路径期望值 (与 PermissionMiddlewareHandle::normalizePermissionPath 同一口径):
+/// 展开 `~`、按进程工作目录绝对化、Unix 分隔符; Windows 上文件系统大小写不敏感,
+/// 权限路径统一转小写
+/// - Windows 上 `/data/outside.txt` 是根相对路径 (无盘符), 会被解析到当前盘符下
+///   (如 `D:/data/outside.txt`), 故期望值不能直接写 POSIX 形态
+std::string expectPermissionPath(std::string_view path) {
+    std::string s
+        = utilxx_base::toUnixStandardPath(utilxx_base::toCurrentSystemAbsolutePath(path));
+#if XX_IS_WIN_D
+    utilxx_base::toLowerSelf(s);
+#endif
+    return s;
+}
 } // namespace
 
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
@@ -167,7 +182,8 @@ utilxx_base::Json g_da_sim_last_request      = utilxx_base::Json::object();
 /// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
 std::vector<utilxx_base::Json> g_da_sim_requests;
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
-int g_da_sim_request_count = 0;
+/// - 原子量: 服务线程递增前已写入请求记录, 测试线程读到计数增长后才能读到记录
+std::atomic<int> g_da_sim_request_count = 0;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 int g_da_sim_fail_count = 0;
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
@@ -252,10 +268,22 @@ DaSimServer startDaSimServer() {
                std::string_view) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
 
-                g_da_sim_request_count++;
-                if (g_da_sim_fail_count > 0) {
-                    // 模拟 LLM API 持续失败: 直接返回 HTTP 500
+                // 记录请求 (供测试断言模型名/消息前缀; 按到达顺序追加)
+                // - 必须先记录再递增计数: 计数由本服务线程递增、测试线程轮询读取,
+                //   若先递增计数, 测试可能在记录写入前就观察到计数增长, 读到上一轮的
+                //   记录 (表现为随机的"模型名不符"断言失败)
+                auto       j       = utilxx_base::Json::parse(req.body());
+                const bool failing = g_da_sim_fail_count > 0;
+                if (failing) {
+                    // 模拟 LLM API 持续失败: 直接返回 HTTP 500 (失败请求不记录)
                     g_da_sim_fail_count--;
+                } else {
+                    g_da_sim_last_request = j;
+                    g_da_sim_requests.push_back(j);
+                }
+                g_da_sim_request_count++; // 含失败请求
+
+                if (failing) {
                     resp.result(http::status::internal_server_error);
                     resp.set(http::field::content_type, "application/json");
                     resp.body() = R"({"error":{"message":"simulated failure"}})";
@@ -275,7 +303,6 @@ DaSimServer startDaSimServer() {
                     }
                 }
 
-                auto j      = utilxx_base::Json::parse(req.body());
                 bool stream = j.value("stream", false);
                 // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
                 // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
@@ -288,9 +315,6 @@ DaSimServer startDaSimServer() {
                         --g_da_sim_tool_calls_remaining;
                     }
                 }
-                // 记录请求 (供测试断言模型名/消息前缀; 按到达顺序追加)
-                g_da_sim_last_request = j;
-                g_da_sim_requests.push_back(j);
 
                 // provider 层现在把"完全无输出"的成功响应当作生成失败 (抛异常交由
                 // modelcall 重试链路处理), 模拟器遵循同一契约: 未设置内容时使用占位
@@ -530,11 +554,12 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
 
     // 路径集合 (与中间件归一化口径一致: 相对/绝对均基于 cwd 解析)
     // 注: 路由器通配符仅支持整段 "*", 白/黑名单目录按最长前缀回退匹配其子路径
+    // 工作目录外路径的期望值按归一化口径给出 (Windows 上会解析为当前盘符下的小写路径)
     const std::string cwd         = std::filesystem::current_path().generic_string();
     const std::string insidePath  = cwd + "/inside.txt";
     const std::string trustedPath = cwd + "/trusted/trusted.txt";
     const std::string secretPath  = cwd + "/secret/secret.txt";
-    const std::string outsidePath = "/data/outside.txt";
+    const std::string outsidePath = expectPermissionPath("/data/outside.txt");
 
     // 会话总线 + 权限应答 IO (每次构造新 CodeAgent 前重建, 保证计数独立)
 
@@ -711,8 +736,9 @@ asio::awaitable<void> test_permission_normalize_path() {
     const std::string cwd = std::filesystem::current_path().generic_string();
 
     // 1. 普通文件 (不存在或存在) 规范化后绝无尾斜杠
+    //    (Windows 上还会按当前盘符绝对化并转小写, 期望值按同一口径给出)
     auto normFile = perm.normalizePermissionPath("/data/projects/foo.txt");
-    XX_TEST_EXPECT_EQ(normFile, "/data/projects/foo.txt");
+    XX_TEST_EXPECT_EQ(normFile, expectPermissionPath("/data/projects/foo.txt"));
     XX_TEST_EXPECT_TRUE(normFile.back() != '/');
 
     // 2. 相对文件路径
@@ -730,9 +756,10 @@ asio::awaitable<void> test_permission_normalize_path() {
     XX_TEST_EXPECT_FALSE(normExplicitDir.empty());
     XX_TEST_EXPECT_EQ(normExplicitDir.back(), '/');
 
-    // 5. 根目录保持为 "/"
+    // 5. 根目录保持为 "/" (Windows 上为当前盘符根, 如 "d:/")
     auto normRoot = perm.normalizePermissionPath("/");
-    XX_TEST_EXPECT_EQ(normRoot, "/");
+    XX_TEST_EXPECT_EQ(normRoot, expectPermissionPath("/"));
+    XX_TEST_EXPECT_EQ(normRoot.back(), '/');
 
     co_return;
 }
@@ -1219,7 +1246,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
     auto r1 = co_await agent.runTurnAsync("retry_test", "List files", nullptr);
     XX_TEST_EXPECT_FALSE(r1.hasError);
     // 2 次请求: tool_calls 请求 + tools 执行后回 llm 的收尾请求
-    XX_TEST_EXPECT_EQ(g_da_sim_request_count, 2);
+    XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 2);
 
     // ---- 第二轮: llm 持续失败 (重试耗尽后应结束本轮) ----
     g_da_sim_response_content = "fallback text"; // bug 场景下第 4 次请求会成功返回此文本
@@ -1231,7 +1258,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 
     // 重试耗尽后停止会话执行 (重抛 -> base_agent 报告错误): 共 4 次请求
     // (第一轮 2 次 + 本轮 2 次失败), 不再继续请求
-    XX_TEST_EXPECT_EQ(g_da_sim_request_count, 4);
+    XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 4);
     // 重试耗尽 -> 会话以错误结束 (停止执行), 而不是无限循环
     XX_TEST_EXPECT_TRUE(r2.hasError);
 
@@ -1299,7 +1326,7 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     XX_TEST_EXPECT_FALSE(result.hasError);
     XX_TEST_EXPECT_FALSE(result.interrupted);
     // 2 次请求: tool_calls 请求 + 拦截后回 llm 的收尾请求
-    XX_TEST_EXPECT_EQ(g_da_sim_request_count, 2);
+    XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 2);
 
     // 上下文包含 [Start/Exception aborted] 错误消息 + 末尾为最终回答
     auto session = agent.agentContext->sessions->get("intercept_test");

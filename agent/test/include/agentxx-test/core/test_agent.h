@@ -3,6 +3,7 @@
 #include "utilxx/http_server.h"
 #include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
+#include <atomic>
 #include <memory>
 #include <neograph/api.h>
 #include <string>
@@ -32,7 +33,9 @@ extern std::string g_da_sim_reasoning_content;
 /// 响应前延迟 (毫秒), 用于模拟慢速 LLM 以测试取消; 0 表示不延迟
 extern int g_da_sim_delay_ms;
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
-extern int g_da_sim_request_count;
+/// - 由模拟器 HTTP 服务线程递增、测试线程轮询读取, 故为原子量: 读取方观察到计数
+///   增长即保证能看到此前写入的请求记录 (g_da_sim_last_request / g_da_sim_requests)
+extern std::atomic<int> g_da_sim_request_count;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 extern int g_da_sim_fail_count;
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)

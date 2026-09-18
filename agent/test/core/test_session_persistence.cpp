@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -37,7 +38,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/// 创建唯一临时目录 (测试根目录), 返回路径; 由调用方在测试结束 remove_all
+/// 创建唯一临时目录 (测试根目录), 返回路径; 由调用方在测试结束经 [removeTempRoot] 清理
 std::string makeTempRoot() {
     auto dir = fs::temp_directory_path()
                / fmt::format(
@@ -46,6 +47,25 @@ std::string makeTempRoot() {
                );
     fs::create_directories(dir);
     return dir.string();
+}
+
+/// 删除测试临时目录 (目录 + 内容)
+/// - Windows 上 SQLite 文件句柄可能比对象析构晚一点释放, 直接删除会失败并抛出
+///   异常 (整个模块会被判为失败); 这里短暂重试, 仍失败时仅记日志, 不影响用例结论
+void removeTempRoot(const std::string& root) {
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        std::error_code ec;
+        fs::remove_all(utilxx_base::utf8ToPath(root), ec);
+        if (!ec) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    }
+    std::error_code ec;
+    fs::remove_all(utilxx_base::utf8ToPath(root), ec);
+    if (ec) {
+        XX_LOGW("清理测试临时目录失败: {} ({})", root, ec.message());
+    }
 }
 
 /// 构造一条带角色专属字段的测试消息
@@ -189,7 +209,7 @@ static TestResult testViewMessagesRoundtrip() {
         XX_TEST_EXPECT_EQ(l2.viewMessages[0].text, "hello");
     }
     // 清理
-    fs::remove_all(root);
+    removeTempRoot(root);
 
     // ---- 多模态附件: 落库剥离 dataUrl, 元数据保留 ----
     {
@@ -226,7 +246,9 @@ static TestResult testViewMessagesRoundtrip() {
         if (!rt.attachments.empty()) {
             XX_TEST_EXPECT_EQ(rt.attachments[0].dataUrl, "data:image/png;base64,AAAABBBB");
         }
-        fs::remove_all(root2);
+        // 先释放会话库 (Windows 上 SQLite 文件句柄未关闭时目录无法删除)
+        p.reset();
+        removeTempRoot(root2);
     }
     return TestResult{};
 }
@@ -281,7 +303,7 @@ static TestResult testLlmMessagesRoundtrip() {
             );
         }
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -352,7 +374,7 @@ static TestResult testShareStoreRoundtrip() {
         XX_TEST_EXPECT_EQ(loaded2.items.size(), size_t{1});
         XX_TEST_EXPECT_EQ(loaded2.items.at(1), std::string{"other"});
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -420,7 +442,7 @@ static TestResult testUpdateHistoryPersistence() {
         bogus.id = "msg_999999";
         s2->updateViewMessage(bogus);
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -497,7 +519,7 @@ static TestResult testSessionStoreIntegration() {
         XX_TEST_EXPECT_EQ(sOther->viewMessages.size(), size_t{0});
         XX_TEST_EXPECT_EQ(sOther->getHashInfo().count, size_t{0});
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -571,7 +593,7 @@ static TestResult testPersistThrottle() {
             XX_TEST_EXPECT_EQ(loaded.llmMessages.size(), size_t{2});
         }
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -620,7 +642,7 @@ static TestResult testMiddlewareShareStorePersistence() {
         XX_TEST_EXPECT_NULLOPT(ctx3->getShareStoreItemValue("m1", id2));
         XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id3).value_or(""), std::string{"v3"});
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -813,7 +835,7 @@ static TestResult testSessionListPagination() {
             XX_TEST_EXPECT_FALSE(pe.hasMore);
             XX_TEST_EXPECT_EQ(pe.totalCount, uint64_t{0});
         }
-        fs::remove_all(emptyRoot);
+        removeTempRoot(emptyRoot);
 
         // ---- 追加新会话后排最前, 已有游标序列不受影响 ----
         addSession("t0-new", 800);
@@ -825,7 +847,7 @@ static TestResult testSessionListPagination() {
         }
         XX_TEST_EXPECT_TRUE(pn.hasMore);
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -966,7 +988,7 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
 
         sim.stop();
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     co_return;
 }
 
@@ -1064,7 +1086,7 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
 
         sim.stop();
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
     co_return;
 }
 
@@ -1131,7 +1153,7 @@ static void testPersistenceResilience() {
         XX_TEST_EXPECT_TRUE(dirtyLoaded.llmMessages.is_array());
         XX_TEST_EXPECT_TRUE(dirtyLoaded.llmMessages.empty());
     }
-    fs::remove_all(root);
+    removeTempRoot(root);
 }
 
 /// P0-4 回归: Session 析构函数线程安全
@@ -1258,6 +1280,7 @@ static TestResult testStoreConnectionLruEviction() {
         }
     }
 
+    removeTempRoot(root);
     return TestResult{};
 }
 
@@ -1354,6 +1377,7 @@ static TestResult testViewMessageMsgIdMigration() {
         }
     }
 
+    removeTempRoot(root);
     return TestResult{};
 }
 

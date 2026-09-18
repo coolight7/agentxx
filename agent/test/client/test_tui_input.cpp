@@ -343,7 +343,8 @@ void test_input_attach_button_visibility() {
         auto          comp = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
         ftxui::Screen screen(80, 6);
         ftxui::Render(screen, comp->OnRender());
-        XX_TEST_EXPECT_TRUE(screen.ToString().find("@︎") == std::string::npos);
+        // 按钮文本见 i18n key `input.attach` (中英同形)
+        XX_TEST_EXPECT_TRUE(screen.ToString().find("[ @ ]") == std::string::npos);
     }
     // 支持多模态: 按钮展示
     {
@@ -359,8 +360,8 @@ void test_input_attach_button_visibility() {
         ftxui::Screen screen(80, 6);
         ftxui::Render(screen, comp->OnRender());
         const auto out = screen.ToString();
-        // 按钮文本为 "[ @︎ ]"（中英同形，仅图标）
-        XX_TEST_EXPECT_TRUE(out.find("📎") != std::string::npos);
+        // 按钮文本为 "[ @ ]" (i18n key `input.attach`, 中英同形)
+        XX_TEST_EXPECT_TRUE(out.find("[ @ ]") != std::string::npos);
     }
 }
 

@@ -98,6 +98,12 @@ void PermissionMiddlewareHandle::setSessionIsolation(
     std::string_view   sessionId,
     SessionFsIsolation isolation
 ) {
+    // 与 setFilesystemPermission 同一口径: 传入路径先归一化 (绝对化 + Unix 分隔符
+    // + Windows 转小写) 再存储。判定时被检查路径已按同一口径归一化, 若这里保留
+    // 原始大小写 (如盘符 `D:` 与目录名大小写不同), 前缀比较会失配, 表现为隔离
+    // 边界不生效 (主检出内写操作未被拒绝)
+    isolation.allowPath     = normalizePermissionPath(isolation.allowPath, sessionId);
+    isolation.denyWritePath = normalizePermissionPath(isolation.denyWritePath, sessionId);
     sessionIsolations_.insert_or_assign(std::string{sessionId}, std::move(isolation));
 }
 
@@ -501,9 +507,11 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
         = bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)
               .subscribe(
                   [this](const events::EventSetSessionIsolation& evt) -> asio::awaitable<void> {
+                      // 路径归一化由 setSessionIsolation 统一完成 (相对路径基准 =
+                      // 该会话的工作目录, 避免在事件处理器里重复做一遍归一化)
                       SessionFsIsolation iso;
-                      iso.allowPath     = normalizePermissionPath(evt.allowPath);
-                      iso.denyWritePath = normalizePermissionPath(evt.denyWritePath);
+                      iso.allowPath     = evt.allowPath;
+                      iso.denyWritePath = evt.denyWritePath;
                       setSessionIsolation(evt.sessionId, std::move(iso));
                       co_return;
                   }

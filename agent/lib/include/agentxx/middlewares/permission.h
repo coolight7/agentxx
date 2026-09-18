@@ -201,6 +201,8 @@ public:
     ///   与模式默认规则 (与 Claude Code "绑定 worktree 后阻止针对主检出的
     ///   文件编辑" 同语义); 命中 allowPath 的路径是该约束的例外 (worktree
     ///   本身位于主检出内), 按已注册规则照常处理; 读操作与其他路径完全不受影响
+    /// - 两个路径在存储前统一经 [normalizePermissionPath] 归一化 (与注册规则、
+    ///   被检查路径同一口径), 调用方可直接传入原始路径
     void setSessionIsolation(std::string_view sessionId, SessionFsIsolation isolation);
 
     /// 清除指定会话的隔离边界 (解绑/删除 worktree 时)

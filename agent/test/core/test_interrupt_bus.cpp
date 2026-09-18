@@ -1003,6 +1003,9 @@ asio::awaitable<void> test_permission_worktree_isolation_subtree() {
         agentxx::middleware::PermissionMiddlewareHandle::FilesystemPermissionWRITE
     );
     // 会话绑定 worktree: worktree 子树放行, 主检出子树写拒绝
+    // 注意: 这里传入的是未归一化的原始路径 (Windows 下盘符/目录名大小写混排),
+    // 隔离边界由 setSessionIsolation 内部统一归一化 —— 否则前缀比较会因大小写
+    // 不一致而失配, 主检出写拒绝形同失效
     permission->setSessionIsolation(
         "wt_session",
         agentxx::middleware::SessionFsIsolation{

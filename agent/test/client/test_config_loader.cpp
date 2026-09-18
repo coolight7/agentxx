@@ -1624,9 +1624,14 @@ void test_resolve_data_dir_value() {
         agentxx::agent::AgentConfigStatic::systemDataDir()
     );
     // 绝对路径: 词法规范化 + 正斜杠
+    // - Linux: `/data/...` 本身即绝对路径
+    // - Windows: `/data/...` 是根相对路径 (无盘符), 按标准库语义解析为当前盘符下的
+    //   路径 (如 `D:/data/...`)
+    const std::string expectLexical
+        = (fs::current_path().root_path() / "data" / "agentxx" / "sub2").generic_string();
     XX_TEST_EXPECT_EQ(
         agentxx::client::resolveDataDirValue("/data/agentxx/./sub/../sub2"),
-        std::string("/data/agentxx/sub2")
+        expectLexical
     );
     // 相对路径: 按程序工作目录绝对化
     XX_TEST_EXPECT_EQ(
