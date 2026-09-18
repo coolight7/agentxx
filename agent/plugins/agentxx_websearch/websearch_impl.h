@@ -2,7 +2,7 @@
 /// - 从 libagentxx src/tools/web_search 拆分: 同名工具同行为
 ///     agentxx_web_search / agentxx_web_fetch / agentxx_web_fetch_markdown
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-/// - 依赖: agentxx_util (HttpClient / 字符串编码转换)
+/// - 依赖: cxx_utilxx (HttpClient) + cxx_utilxx_base (字符串编码转换 / 日志)
 /// - 统一异步操作模型 (受控轮询): 执行体为协程 (*ExecuteAsync), 由插件入口经
 ///   `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
 ///   local_executor) 上, 由宿主 IO 线程经 driver 请求 `poll_one` 有界步进

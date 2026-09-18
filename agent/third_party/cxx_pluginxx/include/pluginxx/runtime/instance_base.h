@@ -16,12 +16,15 @@
 #pragma once
 
 #include "pluginxx/api/abi.h"
+#include "pluginxx/host/capability_registry.h"
+#include "pluginxx/host/event_bus.h"
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/runtime.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include "asio/any_io_executor.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -35,6 +38,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -105,6 +109,21 @@ struct PluginInstanceBase {
     std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>>              operatorHandles;
     std::vector<std::shared_ptr<::AgentxxPluginOperationCompletionEndpoint>> completionEndpoints;
     std::vector<std::shared_ptr<::AgentxxPluginOperatorHandle>>              outstandingOps;
+
+    /// ==================== 通用表相关登记 (仅宿主 IO 线程读写) ====================
+    ///
+    /// 这些记录由通用表 (事件 / 调度 / 能力) 的实现维护, 与宿主领域无关, 因此直接
+    /// 放在基类: 宿主核心 (见 `pluginxx/host/host_core.h`) 只依赖基类即可完成
+    /// 撤销与清理, 新增宿主无需重复实现同一套登记。
+
+    /// 活跃事件订阅 (句柄本体由 [subscriptionHandles] 保活; 撤销时从此表移除)
+    std::vector<std::shared_ptr<::AgentxxPluginSubscription>> subscriptions;
+    /// 事件订阅句柄保活表: 插件持有的裸指针在实例析构前始终有效
+    std::vector<std::shared_ptr<::AgentxxPluginSubscription>> subscriptionHandles;
+    /// 活跃 sleep 使用 Operation 句柄索引；完成回调开始前移除，取消查询 O(1)。
+    std::unordered_map<void*, std::shared_ptr<::AgentxxPluginOperatorHandle>> sleepTimers;
+    /// 已声明能力 (随工具注销/实例禁用卸载一并撤销)
+    std::vector<PluginCapabilityRegistration> capabilityRegistrations;
 
     /// 驱动请求登记表 (`agentxx.agent.coroutine_runtime` 的 ticket 句柄)。
     ///
@@ -227,6 +246,17 @@ public:
 
     /// 由实例创建路径设置，供只拿到裸指针的宿主回调升级 owner。
     std::weak_ptr<PluginInstanceBase> ownerSelf;
+
+    /// 取实例自有的强引用
+    /// - 供只拿到基类指针的宿主代码 (Operation 驱动器 / 完成回调) 升级为派生类型
+    /// - `return` 空表示实例已析构，或创建路径未设置自引用
+    template<typename InstanceT>
+    std::shared_ptr<InstanceT> sharedSelf() const noexcept {
+        if (auto base = ownerSelf.lock()) {
+            return std::static_pointer_cast<InstanceT>(base);
+        }
+        return nullptr;
+    }
 
     /// 宿主生命周期控制块 (状态机 + 执行 lease)。实例对象本身只保存业务注册信息；
     /// 所有跨线程执行都通过 lease 保证 stop/destroy/dlclose 前已经返回。
@@ -408,6 +438,47 @@ inline void PluginInstanceBase::retireHostControl() noexcept {
         hostControl->retire();
     }
 }
+
+namespace detail {
+
+/// 事件订阅撤销的簿记动作 (见 pluginxx/host/event_bus.h 的声明)
+/// - 调用方已把句柄的 `alive` 置 false, 这里只做后端退订与实例订阅表清理;
+/// - 幂等: `subscriptionId` 置 0 后重复调用是空操作。
+inline void revokeSubscription(AgentxxPluginSubscription* sub) noexcept {
+    if (!sub) {
+        return;
+    }
+    try {
+        if (sub->source && sub->subscriptionId != 0) {
+            sub->source->unsubscribe(sub->topic, sub->subscriptionId);
+            sub->subscriptionId = 0;
+        }
+    } catch (const std::exception& e) {
+        XX_LOGW("Plugin subscription revoke failed: {}", e.what());
+    } catch (...) {
+        XX_LOGW("Plugin subscription revoke failed: unknown exception");
+    }
+    try {
+        if (auto inst = sub->inst.lock()) {
+            auto& subs = inst->subscriptions;
+            subs.erase(
+                std::remove_if(
+                    subs.begin(),
+                    subs.end(),
+                    [sub](const std::shared_ptr<AgentxxPluginSubscription>& entry) {
+                        return entry.get() == sub;
+                    }
+                ),
+                subs.end()
+            );
+        }
+        sub->inst.reset();
+    } catch (...) {
+        XX_LOGW("Plugin subscription bookkeeping failed: unknown exception");
+    }
+}
+
+} // namespace detail
 
 /// 解析插件传入的 host 视图对应的控制块。
 /// - 未注册的令牌（含插件复制的 host 结构被篡改、旧内存被复用后的垃圾值）返回空；

@@ -6,11 +6,11 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
-#include "utilxx_base/json.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
+#include "utilxx_base/json.h"
 #include <functional>
 #include <markdown/state_diagram.hpp>
 #include <set>
@@ -352,8 +352,8 @@ private:
     /// 构建单条消息的折叠头 (含 +/- 标记与单行预览)
     ftxui::Element buildMessageHeader(
         const utilxx_base::Json& m,
-        bool                       expanded,
-        const ftxui::Color&        roleColor
+        bool                     expanded,
+        const ftxui::Color&      roleColor
     );
 
     /// 构建单条消息的展开体: 完整原始 JSON (dump(2) 美化多行)
@@ -585,10 +585,10 @@ class CustomOverlay : public ftxui::ComponentBase {
 public:
 
     explicit CustomOverlay(
-        TUICtx&             ctx,
-        std::string         title,
+        TUICtx&           ctx,
+        std::string       title,
         utilxx_base::Json items,
-        std::string         ownerPlugin
+        std::string       ownerPlugin
     );
 
     void onClose(std::function<void()> fn) {
@@ -600,10 +600,10 @@ public:
 
 private:
 
-    TUICtx&             ctx_;
-    std::string         title_;
+    TUICtx&           ctx_;
+    std::string       title_;
     utilxx_base::Json items_;
-    std::string         ownerPlugin_;
+    std::string       ownerPlugin_;
     /// ownerPlugin_ 在最近一次渲染快照中的实例代次 (点击复查; 见 dispatchAction)
     uint64_t                    ownerGeneration_ = 0;
     std::shared_ptr<Scrollable> scrollable_;
@@ -626,7 +626,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
     std::function<void()> onClose
 );
 
-/// 多模态文件选择弹窗 (输入框右侧 [+ 📎︎︎ 附件] 按钮触发)
+/// 多模态文件选择弹窗 (输入框右侧 [ 📎︎ ︎] 按钮触发)
 ///
 /// - 初始化时接收当前模型的 `ModelCapabilityInfo`, 按支持的媒体类型动态
 ///   过滤目录中的文件 (不支持的类型灰显且不可选, 非媒体文件不展示)

@@ -277,7 +277,7 @@ inline InterpreterInfo
 
 /// 探测运行环境 (python / node, Windows 侧含 PowerShell 与系统名)
 /// - 阻塞式: 每个候选 spawn 一次子进程 (`--version`), 由 [runProbeCommand] 超时看门狗兜底
-/// - PowerShell 探测结果与执行期选择执行器共用 (agentxx_util 按进程缓存同一结果);
+/// - PowerShell 探测结果与执行期选择执行器共用 (utilxx_base::detectPowerShell 按进程缓存同一结果);
 ///   Linux/macOS 不需要 PowerShell, 直接跳过探测, 避免 WSL 下无谓的 interop 调用
 inline ExecEnvInfo detectExecEnv() {
     ExecEnvInfo env;

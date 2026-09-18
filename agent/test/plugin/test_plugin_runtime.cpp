@@ -62,7 +62,10 @@ struct RuntimeFixture {
     std::shared_ptr<PluginInstance> instance(std::string name, uint64_t generation) {
         auto inst     = std::make_shared<PluginInstance>(std::move(name));
         inst->self    = inst;
-        inst->manager = manager;
+        // 基类自引用: 通用表实现 (sleep/offload/postCallback/registerTask/能力调用)
+        // 只依赖 PluginInstanceBase::ownerSelf, 因此夹具必须与 makeInstance 一样设置它
+        inst->ownerSelf = inst;
+        inst->manager   = manager;
         // 宿主控制块：交给插件的 host 视图必须有进程级稳定地址；这里装配真实
         // 宿主 vtable，便于用例直接驱动 C ABI 入口。
         auto vtableSv     = PluginStringView::fromCstr("__vtable");

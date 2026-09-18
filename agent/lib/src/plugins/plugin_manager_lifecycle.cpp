@@ -119,8 +119,10 @@ bool PluginInstance::destroyPlugin() noexcept {
 // =====================================================================
 
 PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext) :
-    agentContext_(std::move(agentContext)),
-    capabilities_(std::make_shared<CapabilityRegistry>()) {
+    agentContext_(std::move(agentContext)) {
+    // 通用表 (events/scheduler/tasks/capabilities 等) 需要宿主数据的入口经本类取数
+    // (见 pluginxx/host/domain_hooks.h): 在任何 vtable 入口被调用之前注入。
+    setDomainHooks(this);
     if (auto ctx = agentContext_.lock()) {
         registry_ = ctx->toolRegistry ? ctx->toolRegistry : std::make_shared<ToolRegistry>();
     } else {
@@ -281,19 +283,10 @@ void PluginManager::detachAll(PluginInstance* inst) {
         }
     }
     inst->permissionToolNames.clear();
-    for (const auto& sub : inst->subscriptions) {
-        if (sub && sub->bus && sub->subscriptionId != 0) {
-            sub->bus->get<std::string>(sub->topic).unsubscribe(sub->subscriptionId);
-            sub->subscriptionId = 0;
-            sub->alive.store(false, std::memory_order_release);
-            sub->inst.reset();
-        }
-    }
-    inst->subscriptions.clear();
-
-    for (const auto& cap : inst->capabilityRegistrations) {
-        capabilities_->unregisterCapability(cap.name, inst->name);
-    }
+    // 事件订阅与能力声明由宿主核心按通用表登记撤销 (内核侧实现: 见
+    // pluginxx::PluginHostCore::revokeInstanceSubscriptions / unregisterInstanceCapabilities)
+    revokeInstanceSubscriptions(inst);
+    unregisterInstanceCapabilities(inst);
 
     for (const auto& graph : inst->graphNodeTypes) {
         if (graph.slot) {

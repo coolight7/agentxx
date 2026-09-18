@@ -101,13 +101,14 @@ Element InputComponent::OnRender() {
         indicator = text(">") | color(theme.accentColor) | bold;
     }
 
-    // 多模态文件选择按钮 [+ 📎︎︎ 附件] (仅当当前模型支持多模态输入时展示并登记命中)
+    // 多模态文件选择按钮 [ 📎︎︎ ] (仅当当前模型支持多模态输入时展示并登记命中)
     Element attachButton = text("");
     if (config_.canAttach && config_.canAttach()) {
         attachButton = hbox({
             text(" "),
             hits_.add(
-                text(std::string(TuiI18n::instance().t("input.attach"))) | color(theme.accentColor)
+                text(std::string(TuiI18n::instance().t("input.attach")))
+                    | color(theme.buttonActiveTextColor) | bgcolor(theme.buttonActiveBgColor)
                     | bold,
                 std::string{kAttachHitId}
             ),

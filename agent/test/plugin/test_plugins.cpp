@@ -2178,6 +2178,7 @@ throw new Error("top-level rollback probe");
         auto fakeInst = std::make_shared<agentxx::plugin::PluginInstance>("fake_rollback_plugin");
         fakeInst->manager     = rollbackCtx->pluginManager;
         fakeInst->self        = fakeInst;
+        fakeInst->ownerSelf   = fakeInst;
         auto vtableSv         = agentxx::plugin::PluginStringView::fromCstr("__vtable");
         fakeInst->hostControl = agentxx::plugin::PluginHostControl::create(
             fakeInst,

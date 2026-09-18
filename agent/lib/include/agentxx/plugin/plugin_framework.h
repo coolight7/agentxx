@@ -19,8 +19,12 @@
 
 #include "pluginxx/host/abi_util.h"
 #include "pluginxx/host/capability_registry.h"
+#include "pluginxx/host/domain_hooks.h"
+#include "pluginxx/host/event_bus.h"
+#include "pluginxx/host/host_core.h"
 #include "pluginxx/host/loader.h"
 #include "pluginxx/host/manifest.h"
+#include "pluginxx/host/tables_impl.h"
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/instance_base.h"
 #include "pluginxx/runtime/manager_base.h"
@@ -90,6 +94,17 @@ using pluginxx::parseBuiltinName;
 
 // ==================== 能力注册表 (pluginxx/host/capability_registry.h) ====================
 using pluginxx::CapabilityRegistry;
+using pluginxx::PluginCapabilityRegistration;
+
+// ==================== 宿主核心与领域钩子 (pluginxx/host/host_core.h) ====================
+using pluginxx::DomainHooks;
+using pluginxx::EventSource;
+using pluginxx::PluginHostCore;
+using pluginxx::unsubscribePluginSubscription;
+
+// ==================== 通用表入口装配 (pluginxx/host/tables_impl.h) ====================
+using pluginxx::GenericTableEntries;
+using pluginxx::queryGenericPluginIface;
 
 // ==================== C ABI 辅助 (pluginxx/host/abi_util.h) ====================
 using pluginxx::svToSv;

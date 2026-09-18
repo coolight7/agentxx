@@ -38,17 +38,39 @@ include/pluginxx/
   runtime/宿主侧运行时 (runtime/driver/instance_base/manager_base/op_driver)
   host/   loader.h (dlopen/LoadLibrary)、manifest.h (plugin.yaml/名称推导/拓扑排序)、
           abi_util.h (C 串转换/异常兜底/io 线程同步投递)、
-          capability_registry.h (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)
+          capability_registry.h (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、
+          event_bus.h (事件后端抽象 EventSource + 订阅句柄 AgentxxPluginSubscription)、
+          domain_hooks.h (领域钩子 DomainHooks: 通用表需要宿主数据的入口)、
+          host_core.h (宿主核心 PluginHostCore<InstanceT>: 通用表状态与方法实现)、
+          tables_impl.h (十张通用表的 vtable 入口 + queryGenericPluginIface<I,M>)
 src/      对应实现 (version.cpp / loader.cpp / manifest.cpp / capability_registry.cpp /
           api_abi_check.c C 兼容与对齐校验)
 ```
 
+## 宿主接入形态
+
+```cpp
+class MyManager : public pluginxx::PluginHostCore<MyInstance>, public pluginxx::DomainHooks {
+public:
+    MyManager(asio::any_io_executor ex) : PluginHostCore<MyInstance>(ex) { setDomainHooks(this); }
+    // DomainHooks: 事件后端 / 工作线程池 / 配置 JSON / 语言 / 会话工作目录 / 取消状态 / 插件清单
+};
+```
+
+- **通用表 (定义与实现都在本库)**: log / json / config / plugins / events / scheduler /
+  coroutine_runtime / tasks / cancel / capabilities —— 宿主经 `DomainHooks` 提供领域数据；
+- **领域表 (宿主自己实现)**: agentxx 的 tools/permission/hooks/session/model/prompt/
+  resources/graph 与 client 侧的 ui/events/session/wire/self 表；
+- `query_interface` 里先调 `pluginxx::queryGenericPluginIface<InstanceT, ManagerT>(iid)`
+  取通用表，未命中再分发宿主的领域表 (agentxx 侧见
+  `agent/lib/src/plugins/plugin_manager_vtable.cpp`)。
+
 > 已落地: `api/` 两个纯 C 头、`kit/` (插件 SDK 通用部分 + 边界守卫)、
 > `runtime/` (实例状态机/执行 lease/协程驱动/Operation 驱动器/管理器基类)、
-> `host/` (装载/清单/ABI 辅助/能力注册表) —— agentxx 侧的
-> `agentxx/plugin/api/plugin_kit.h` 与 `plugin_guard.h` 作为 umbrella 引用它们 +
-> 各自的领域 helper (工具/钩子/图节点/权限/client UI), 插件源码无需改动。
-> 剩余项 (通用表实现整体下沉 + `PluginHostCore`/`DomainHooks` 抽取) 见
+> `host/` (装载/清单/ABI 辅助/能力注册表/事件后端/领域钩子/宿主核心/通用表入口) ——
+> agentxx 侧的 `agentxx/plugin/api/plugin_kit.h` 与 `plugin_guard.h` 作为 umbrella 引用
+> 它们 + 各自的领域 helper (工具/钩子/图节点/权限/client UI), 插件源码无需改动。
+> 剩余项 (装载/启停骨架下沉、`ClientPluginManager` 适配) 见
 > `resource/history/split-util-plugin-core/work.md` 的"未完成"节。
 
 领域表归属 (由宿主定义与实现):

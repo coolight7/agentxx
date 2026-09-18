@@ -1,16 +1,14 @@
+/// 插件工具调用 (agentxx.agent.tools 表的 call_tool_async 实现)
+///
+/// 通用表 (能力/事件/调度/任务/协程驱动/日志/JSON/配置/插件互查/取消) 的实现已
+/// 下沉到 cxx_pluginxx (见 pluginxx/host/host_core.h 与 tables_impl.h); 本文件只保留
+/// 领域部分: 工具调用与工具注册表/实例状态的耦合 (工具表是 agent 领域表)。
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
-#include "asio/as_tuple.hpp"
-#include "asio/bind_cancellation_slot.hpp"
-#include "asio/co_spawn.hpp"
-#include "asio/deferred.hpp"
-#include "asio/detached.hpp"
 #include "asio/post.hpp"
-#include "asio/steady_timer.hpp"
-#include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 
 #include <algorithm>
@@ -19,8 +17,11 @@
 namespace agentxx {
 namespace plugin {
 
-static void
-    setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, const std::string& msg) {
+namespace {
+
+/// 写 C ABI 出参错误串: 优先经实例的宿主视图分配 (与插件侧释放路径一致),
+/// 失败时回退宿主堆内存
+void setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, const std::string& msg) {
     if (!error_out || error_out->data) {
         return;
     }
@@ -36,103 +37,7 @@ static void
     }
 }
 
-// Capability 注册与调用
-// =====================================================================
-
-int PluginManager::registerCapability(PluginInstance* inst, AgentxxPluginStringView capability) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(capability)) {
-        return -1;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW(
-            "Plugin `{}` registerCapability rejected: instance is closing or disabled",
-            inst->name
-        );
-        return -1;
-    }
-    std::string capStr{capability.data, capability.size};
-    if (!capabilities_->registerCapability(capStr, inst->name)) {
-        return -1;
-    }
-    inst->capabilityRegistrations.erase(
-        std::remove_if(
-            inst->capabilityRegistrations.begin(),
-            inst->capabilityRegistrations.end(),
-            [&capStr](const PluginInstance::CapabilityRegistration& c) {
-                return c.name == capStr;
-            }
-        ),
-        inst->capabilityRegistrations.end()
-    );
-    inst->capabilityRegistrations.push_back(
-        PluginInstance::CapabilityRegistration{capStr, nullptr, nullptr, nullptr}
-    );
-    return 0;
-}
-
-int PluginManager::unregisterCapability(PluginInstance* inst, AgentxxPluginStringView capability) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(capability)) {
-        return -1;
-    }
-    std::string capStr{capability.data, capability.size};
-    auto        it = std::find_if(
-        inst->capabilityRegistrations.begin(),
-        inst->capabilityRegistrations.end(),
-        [&capStr](const PluginInstance::CapabilityRegistration& c) {
-            return c.name == capStr;
-        }
-    );
-    if (it == inst->capabilityRegistrations.end()) {
-        return -1;
-    }
-    inst->capabilityRegistrations.erase(it);
-    capabilities_->unregisterCapability(capStr, inst->name);
-    return 0;
-}
-
-int PluginManager::hasCapability(AgentxxPluginStringView capability) const {
-    if (agentxx::plugin::PluginStringView::empty(capability)) {
-        return 0;
-    }
-    return capabilities_->has(std::string_view{capability.data, capability.size}) ? 1 : 0;
-}
-
-int PluginManager::registerCapabilityEx(
-    PluginInstance*                      inst,
-    AgentxxPluginStringView              capability,
-    AgentxxPluginCapabilityStartFunction start,
-    AgentxxPluginOperatorCancelFunction  cancel,
-    void*                                ctx
-) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(capability) || !start) {
-        return -1;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW(
-            "Plugin `{}` registerCapabilityEx rejected: instance is closing or disabled",
-            inst->name
-        );
-        return -1;
-    }
-    std::string capStr{capability.data, capability.size};
-    if (!capabilities_->registerCapability(capStr, inst->name, start, cancel, ctx)) {
-        return -1;
-    }
-    inst->capabilityRegistrations.erase(
-        std::remove_if(
-            inst->capabilityRegistrations.begin(),
-            inst->capabilityRegistrations.end(),
-            [&capStr](const PluginInstance::CapabilityRegistration& c) {
-                return c.name == capStr;
-            }
-        ),
-        inst->capabilityRegistrations.end()
-    );
-    inst->capabilityRegistrations.push_back(
-        PluginInstance::CapabilityRegistration{capStr, start, cancel, ctx}
-    );
-    return 0;
-}
+} // namespace
 
 AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     PluginInstance*               caller,
@@ -165,7 +70,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
     std::shared_ptr<OpCore> core;
     try {
         auto owner = caller ? caller->self.lock() : nullptr;
-        if (!owner || !ioExecutor_) {
+        if (!owner || !ioExecutor()) {
             throw std::runtime_error("call_tool_async: missing caller or IO executor");
         }
         const auto toolName = svToStr(name);
@@ -211,77 +116,6 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         }
         core->setCallback(cb, ud);
         return core->handle(); // 同步 done 也返回受管句柄，callback 恒经 IO 发布。
-    } catch (const std::exception& e) {
-        if (core && !core->submitted()) {
-            core->reject();
-        }
-        setErrOut(caller, error_out, e.what());
-        return nullptr;
-    }
-}
-
-AgentxxPluginOperatorHandle* PluginManager::invokeCapabilityAsync(
-    PluginInstance*               caller,
-    AgentxxPluginStringView       capability,
-    AgentxxPluginStringView       method,
-    AgentxxPluginStringView       args_json,
-    AgentxxPluginOperatorCallback cb,
-    void*                         ud,
-    AgentxxPluginString*          error_out
-) {
-    if (!isIoThread()) {
-        auto self  = shared_from_this();
-        auto owner = caller ? caller->self.lock() : nullptr;
-        /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
-        auto admission = std::make_shared<PluginInstanceBase::InflightGuard>(owner);
-        if (!*admission) {
-            hostMemorySetString(error_out, "plugin caller is closing");
-            return nullptr;
-        }
-        const std::string cap = svToStr(capability), meth = svToStr(method),
-                          args = svToStr(args_json);
-        return ioCallSync<AgentxxPluginOperatorHandle*>(
-            this,
-            [self, owner, admission, cap, meth, args, cb, ud, error_out] {
-                return self->invokeCapabilityAsync(owner.get(), cap, meth, args, cb, ud, error_out);
-            }
-        );
-    }
-    std::shared_ptr<OpCore> core;
-    try {
-        auto owner = caller ? caller->self.lock() : nullptr;
-        if (!owner || !ioExecutor_) {
-            throw std::runtime_error("invoke_capability_async: missing caller or IO executor");
-        }
-        const auto  cap      = svToStr(capability);
-        const auto* entry    = capabilities_->get(cap);
-        auto        provider = entry ? find(entry->provider) : nullptr;
-        if (!entry || !entry->start || !provider || !provider->enabled
-            || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
-            throw std::runtime_error("invoke_capability_async: capability not available: " + cap);
-        }
-        const auto binding = *entry;
-        OpDrive    drive;
-        drive.start = [binding,
-                       owner,
-                       meth = svToStr(method),
-                       args = svToStr(args_json)](const auto* notify, auto* error) -> void* {
-            const auto m = PluginStringView::from(meth), a = PluginStringView::from(args);
-            return binding.start(binding.ctx, owner->hostView(), &m, &a, notify, error);
-        };
-        drive.cancel = [binding](void* op) {
-            if (binding.cancel) {
-                binding.cancel(binding.ctx, op);
-            }
-        };
-        core = OpCore::create(runtime(), provider, owner, cap);
-        std::string error;
-        if (!core->start(std::move(drive), error)) {
-            setErrOut(caller, error_out, error);
-            return nullptr;
-        }
-        core->setCallback(cb, ud);
-        return core->handle();
     } catch (const std::exception& e) {
         if (core && !core->submitted()) {
             core->reject();

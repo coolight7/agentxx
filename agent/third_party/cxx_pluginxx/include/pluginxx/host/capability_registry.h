@@ -22,6 +22,14 @@
 
 namespace pluginxx {
 
+/// 实例侧的能力声明记录 (提供者插件自己的登记表, 卸载/禁用时据此逐条撤销)
+struct PluginCapabilityRegistration {
+    std::string                          name;   ///< 能力名
+    AgentxxPluginCapabilityStartFunction start  = nullptr;
+    AgentxxPluginOperatorCancelFunction  cancel = nullptr;
+    void*                                ctx    = nullptr;
+};
+
 /// 能力注册表: 名称 → (提供者, 启动回调, 取消回调, 上下文)
 class CapabilityRegistry {
 public:

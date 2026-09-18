@@ -869,16 +869,23 @@ shared/static 目标; `exec/` 下六个产物 (3 库 × 2 变体) 存在且命�
 
 ## 附: 实施检查清单 (可直接勾选)
 
-- [ ] P0 三目录骨架 (静态+动态双产物、命名规则) + superbuild 接入 + 三包可 `find_package`
-- [ ] P1 `cxx_utilxx_base` 搬迁 (含 `utilxx/cancel.h`、`utilxx/async_offload.h`) + 全仓替换 (无转发头) + 测试全绿
-- [ ] P1 `agentxx/util/cancel_adapter.h` + 分类器新增 `utilxx::CancelledException` 分支 + 取消用例回归
-- [ ] P2 `cxx_utilxx` 搬迁 + `agentxx_util` 退役 + agentxx 侧仅留 3 个自有头 + 测试全绿
-- [ ] P3-3a ABI 分层 (`pluginxx/api/*`) + 插件源码零改动构建通过
-- [ ] P3-3b 运行时搬迁 (`pluginxx/runtime/*`) + `utilxx::CancelTokenPtr` 生效
-- [ ] P3-3c SDK 与通用表实现搬迁 + 内置合并模式构建通过
-- [ ] P3 验收: 旧插件二进制可加载 + 导出检查 + 负向编译 + UBSan 探针
-- [ ] P4-1 `DomainHooks` + `PluginHostCore` 骨架 + 回归
+> 状态更新 (2026-09-18 第四次实施, 详见 [work.md](./work.md)):
+> P4-1 已完成 (通用表的状态/方法实现 + 入口装配整体下沉到 cxx_pluginxx);
+> P4-2 (装载/启停/级联骨架) 与 P4-3 (client 管理器适配) 仍待实施。
+
+- [x] P0 三目录骨架 (静态+动态双产物、命名规则) + superbuild 接入 + 三包可 `find_package`
+- [x] P1 `cxx_utilxx_base` 搬迁 (含 `utilxx/cancel.h`、`utilxx/async_offload.h`) + 全仓替换 (无转发头) + 测试全绿
+- [x] P1 `agentxx/util/cancel_adapter.h` + 分类器新增 `utilxx::CancelledException` 分支 + 取消用例回归
+- [x] P2 `cxx_utilxx` 搬迁 + `agentxx_util` 退役 + agentxx 侧仅留 3 个自有头 + 测试全绿
+- [x] P3-3a ABI 分层 (`pluginxx/api/*`) + 插件源码零改动构建通过
+- [x] P3-3b 运行时搬迁 (`pluginxx/runtime/*`) + `utilxx::CancelTokenPtr` 生效
+- [x] P3-3c SDK 与通用表实现搬迁 + 内置合并模式构建通过
+- [x] P3 验收: 旧插件二进制可加载 + 导出检查 + 负向编译 + UBSan 探针
+      (Linux 侧脚本 `check_plugin_exports.sh` / `check_sdk_negative_compile.sh` 未在本机运行,
+       导出面已用 `dumpbin` 等价核对; 见 work.md)
+- [x] P4-1 `DomainHooks` + `PluginHostCore` 骨架 (通用表状态/方法 + vtable 入口装配) + 回归
 - [ ] P4-2 装载/启停/级联搬迁 + 回归
 - [ ] P4-3 `ClientPluginManager` 适配 + TUI/CLI 手工冒烟
-- [ ] P5 清理残留 + 文档更新 (`plugins.md` / `index.md` / `AGENTS.md`) + `done.md`
-- [ ] P6 三库 README (含静态/动态选择指引) + 下游/musicxx 接入说明
+- [ ] P5 清理残留 (旧 build/安装树残留、插件源码注释) + `docs/en/**` 同步
+- [x] P5 文档更新 (`plugins.md` / `index.md` / `AGENTS.md` / 三库 README)
+- [ ] P6 下游/musicxx 接入说明 (`plan.md` §11)

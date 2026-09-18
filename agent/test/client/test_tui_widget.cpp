@@ -4,7 +4,7 @@
 // - 命中登记表: 帧首清空 / 渲染时登记 / 未布局项不命中 / 登记顺序优先
 // - 声明式条目列表: 选中项维护 (按 id 跨重建保持)、键盘导航 (跳过不可用项)、
 //   Enter 激活、鼠标点击命中 (置选中并激活)
-// - 隐藏按钮不占点击区域: [📎︎︎] 按钮隐藏后, 其在上一帧的屏幕位置不再可点
+// - 隐藏按钮不占点击区域: [ 📎︎︎ ] 按钮隐藏后, 其在上一帧的屏幕位置不再可点
 #include "agentxx-test/client/test_tui_widget.h"
 
 #include "agentxx-client/io/tui/components/input_bar.h"
@@ -407,7 +407,7 @@ void test_hidden_button_not_clickable() {
     };
     auto comp = std::make_shared<InputComponent>(ctx, std::move(cfg));
 
-    // 1. 支持多模态: [📎︎︎] 按钮渲染并登记命中; 记录其屏幕位置
+    // 1. 支持多模态: [ 📎︎︎ ] 按钮渲染并登记命中; 记录其屏幕位置
     renderOnce(comp);
     const ftxui::Box visibleBox = comp->attachButtonBox();
     XX_TEST_EXPECT_TRUE(!visibleBox.IsEmpty());

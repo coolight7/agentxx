@@ -1,7 +1,8 @@
 /// agentxx_rag_search 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
 /// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-/// - 依赖: agentxx_util (HttpClient / Json / 字符串工具 / 异常捕获) + fmt
+/// - 依赖: cxx_utilxx (HttpClient) + cxx_utilxx_base (Json / 字符串工具 / 日志) +
+///   agentxx/util/exception.h (宿主侧异常分类) + fmt
 /// - 与原实现的差异点:
 ///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在宿主线程池,
 ///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与

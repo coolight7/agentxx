@@ -3,6 +3,8 @@
 > 关联方案: [plan.md](./plan.md)
 > 记录时间: 2026-09-18 (第一次) / 2026-09-18 续 (P3-3b：插件框架内核运行时搬迁)
 > 2026-09-18 第三次更新: P3-3c 主体完成 (SDK 通用/领域分层) + P4-1 部分 (能力注册表下沉)
+> 2026-09-18 第四次更新: P3-3c 收尾 (十张通用表**实现**整体下沉) + P4-1 完成
+> (`PluginHostCore` + `DomainHooks` + 通用表 vtable 入口装配); P4-2/P4-3 待实施
 
 ## 已完成
 
@@ -125,9 +127,70 @@ config 的 `find_dependency(yaml-cpp)` + superbuild `cxx_pluginxx_repo` DEPENDS 
    `PluginManagerBase::makeLifetime` 写入; 测试中手工构造实例的夹具需显式
    `inst->runtime = manager->runtime();`, 否则 `awaitPluginOp` 会以"缺少 IO 执行器"失败
 
+## 第四次实施: P3-3c 收尾 (通用表实现整体下沉) + P4-1 ✅
+
+目标: 把**十张通用表的定义与实现** (log/json/config/plugins/events/scheduler/
+coroutine_runtime/tasks/cancel/capabilities) 整体搬入 `cxx_pluginxx`, 使新宿主只需
+"继承宿主核心 + 实现领域钩子 + 装配 vtable" 即可复用; agentxx 只保留领域表与宿主数据。
+
+### 新增 (agent/third_party/cxx_pluginxx/)
+
+| 文件 | 内容 |
+|---|---|
+| `include/pluginxx/host/event_bus.h` | 事件表后端抽象 `EventSource` (subscribe/unsubscribe/publish)、订阅句柄实现体 `AgentxxPluginSubscription` (原在 agentxx/plugin_manager.h 的全局结构体; 字段改为内核类型: `EventSource` + `weak_ptr<PluginInstanceBase>` + `weak_ptr<PluginRuntime>`)、幂等撤销 `unsubscribePluginSubscription` |
+| `include/pluginxx/host/domain_hooks.h` | `DomainHooks`: 事件后端/主题命名空间补齐/工作线程池/配置 JSON/工具提示词/会话工作目录/语言读写/会话取消状态/插件清单 JSON |
+| `include/pluginxx/host/host_core.h` | `PluginHostCore<InstanceT>`: 通用表状态 (能力注册表) 与方法实现 —— 能力登记/撤销/查询/调用、事件订阅/撤销/发布、`postCallback`/`sleep`/`offload`、`registerTask`、实例级撤销辅助 (`revokeInstanceSubscriptions`/`unregisterInstanceCapabilities`) |
+| `include/pluginxx/host/tables_impl.h` | `GenericTableEntries<InstanceT, ManagerT>`: 十张通用表的 C ABI 入口 (解析宿主控制块 → 投递 IO 线程 → 调用同名方法) + 表结构体 (函数内静态) + `queryGenericPluginIface<I,M>(iid)` |
+| `include/pluginxx/host/capability_registry.h` | 新增实例侧声明记录 `PluginCapabilityRegistration` (名称/启动/取消/上下文) |
+| `include/pluginxx/runtime/instance_base.h` | 新增通用表相关登记 (`subscriptions`/`subscriptionHandles`/`sleepTimers`/`capabilityRegistrations`)、`sharedSelf<InstanceT>()`、`detail::revokeSubscription` 定义 (事件撤销簿记; 定义放此处因本头才完整见到实例类型) |
+
+### agentxx 侧变化
+
+| 文件 | 变化 |
+|---|---|
+| `agentxx/plugin/plugin_manager.h` | `PluginManager` 改继承 `pluginxx::PluginHostCore<PluginInstance>` + 实现 `pluginxx::DomainHooks`; 删除已下沉的方法/字段 (能力/事件/调度/任务/capabilities_); `PluginInstance` 删除已上移的登记字段, `CapabilityRegistration` 改为内核类型别名 |
+| `agentxx/plugin/plugin_manager_domain_hooks.cpp` (新) | `DomainHooks` 全部实现 + 事件后端 `AgentEventBusSource` (包装 `agentxx::events::EventBus`; 订阅为handler 转发, 发布经 co_spawn 异步) + 主题命名规则 (`plugin.`/`client.` 前缀) |
+| `plugin_manager_vtable.cpp` | 删除十张通用表的入口与表结构体 (共 885 行); `query_interface` 先经 `queryGenericPluginIface` 查通用表, 再分发领域表 (tools/permission/hooks/session/model/prompt/resources/graph) |
+| `plugin_manager_capability.cpp` | 仅保留领域部分 (`callToolAsync`); 能力/事件/调度/任务/协程驱动实现全部移除 |
+| `plugin_manager_scheduler.cpp` / `plugin_manager_tasks.cpp` | 删除 (内容整体进 `host_core.h`) |
+| `plugin_manager_adapters.cpp` | 删除 `subscribe`/`unsubscribe`/`publish` 实现 (事件表下沉) |
+| `plugin_manager_lifecycle.cpp` | 构造函数注入领域钩子 (`setDomainHooks(this)`); `detachAll` 改用核心的 `revokeInstanceSubscriptions` / `unregisterInstanceCapabilities` |
+| `agentxx/plugin/plugin_framework.h` | 追加 `using`: `DomainHooks`/`EventSource`/`PluginHostCore`/`PluginCapabilityRegistration`/`unsubscribePluginSubscription`/`GenericTableEntries`/`queryGenericPluginIface` |
+| `agent/test/plugin/test_plugin_runtime.cpp` | 夹具补 `inst->ownerSelf = inst` (通用表实现经 `ownerSelf` 取实例自引用; 生产路径 `makeInstance` 已设置两个引用) |
+| `agent/test/plugin/test_plugins.cpp` | 同上 (伪实例夹具) |
+
+### 关键设计点 (供后续参考)
+
+1. **不新增 `enable_shared_from_this`**: 通用方法需要"管理器自引用"时会与非模板
+   `PluginManager::enable_shared_from_this` 形成多基类歧义 (libstdc++/MSVC 下 `weak_this`
+   两个都不初始化 → `bad_weak_ptr`)。因此**投递职责放在 vtable 入口** (入口已持
+   `shared_ptr<ManagerT>` 与 admission lease), 核心方法统一要求在 IO 线程调用;
+   `invoke_capability_async` 的跨线程投递改由 `ioCallSyncKeep` 完成 (与其它入口一致,
+   排队期间仍持 admission lease, 语义等价)。
+2. **事件撤销的 io 线程投递**: 句柄内保存 `weak_ptr<PluginRuntime>`, 撤销时若不在 IO 线程
+   经 `enqueueRuntimeAction` 投递并同步等待 (运行时不可投递时就地完成); `alive` 先置 false,
+   因此迟到事件立即短路, 不必等簿记完成。
+3. **`PluginInstanceBase` 承载通用登记**: 事件订阅/睡眠句柄/能力声明都上移到基类, 通用表
+   实现因此只依赖基类 —— 新增宿主无需重复实现同一套登记 (ClientPluginInstance 自有同名
+   `subscriptions` 成员, 会隐藏基类同名成员; 客户端不使用宿主核心, 不受影响)。
+4. **表的静态实例**: 表结构体用函数内静态 (首次查询构造, C++11 起线程安全), 支持插件线程
+   并发 `query_interface`。
+5. **offload 失败文案保持** `"plugin offload: no thread pool"` (既有测试断言该子串)。
+
+### P4-1 验收 (Windows Debug / MSVC / ASan, 全量构建 + 全量测试)
+
+| 项目 | 结果 |
+|---|---|
+| 全量构建 | 通过 (3 库 + libagentxx + 20 插件 + client + test) |
+| 全量测试 | `Total: passed=21164 failed=9` —— 与拆分前基线 (`21164/9`) **完全一致** |
+| 插件相关模块 | `plugins 542 · plugin_runtime 672 · plugin_sdk 75 · plugin_bridge 193 · plugin_resources 83 · plugin_multi_instance 80 · client_plugins 531` 全绿 (合计 2176) |
+| 已知失败 | `config_loader` 路径格式 1 例、`interrupt_bus` 3 例、`agent` 4 例、`session_persistence` 环境 1 例 (均为既有平台/时序敏感用例, 与本次改动无关) |
+
+---
+
 ## 未完成 (后续实施)
 
-### P3-3c SDK 与通用表实现搬迁 (SDK 主体完成)
+### P3-3c SDK 与通用表实现搬迁 ✅ (已完成)
 
 已搬迁: `plugin_common.cpp` 的通用函数 (名称推导/清单解析/入口路径/拓扑排序/内置清单查找)、
 `NativeLoader`、C ABI 辅助 (`abi_util.h`) —— 见 P3-3b 表。
@@ -152,19 +215,17 @@ config 的 `find_dependency(yaml-cpp)` + superbuild `cxx_pluginxx_repo` DEPENDS 
 - agentxx 侧经 `agentxx/plugin/plugin_framework.h` 的 `using pluginxx::CapabilityRegistry;`
   继续以原名使用 (宿主领域实现零改动)
 
-仍待实施:
+仍待实施: 无 —— **通用表实现的整体下沉已完成** (见上节"第四次实施"): 十张通用表的
+状态/方法 (`pluginxx/host/host_core.h`) 与 C ABI 入口 (`pluginxx/host/tables_impl.h`) 都在
+`cxx_pluginxx`, 领域数据经 `DomainHooks`; agentxx 侧只保留领域表与宿主数据实现。
 
-- **通用表实现的整体下沉** → `pluginxx/src/tables_impl.cpp`: log/json/events/scheduler/
-  coroutine_runtime/tasks/cancel/capabilities 的 vtable 入口 (当前仍在
-  `agentxx/lib/src/plugins/plugin_manager_vtable.cpp` 中, 每个入口约 15–40 行:
-  `enterHost` → io 投递 → `mgr->方法(...)`) 与 `config`/`plugins` 的取数改经
-  `DomainHooks`。该项与 P4 的 `PluginHostCore` 抽取同源, 见下节建议路径。
-
-## P4 `pluginxx::PluginHostCore` 抽取 (下一步, 尚未开始)
+## P4 `pluginxx::PluginHostCore` 抽取 (P4-1 已完成; P4-2/P4-3 待实施)
 
 现状: P3-3b 已把**运行时**下沉 (`PluginRuntime` / `InstanceLifetime` /
 `PluginManagerBase<InstanceT>` / op_driver / loader / manifest / abi_util),
-P4-1 已把**能力注册表**下沉; 仍留在宿主侧的是**管理器语义**:
+P4-1 已把**能力注册表**下沉; 第四次实施已完成 P4-1/P4-2 (通用表的**状态与方法实现**
+`PluginHostCore<InstanceT>` + 通用表入口 `tables_impl.h` + 领域钩子 `DomainHooks`);
+仍留在宿主侧的是**加载/启停生命周期骨架**与 **client 侧管理器**:
 
 1. `DomainHooks` (plan.md §5.6): 领域表查询路由 / 实例注册摘除 / 领域配置 JSON /
    接口需求解析;
@@ -176,18 +237,19 @@ P4-1 已把**能力注册表**下沉; 仍留在宿主侧的是**管理器语义*
 
 **建议实施顺序 (每步都能单独验收)**:
 
-- 步 1 (低风险): 把 `plugin_manager_vtable.cpp` 中 10 张通用表的入口函数改为
-  pluginxx 侧模板 `pluginxx::host::makeGenericTableEntries<InstanceT, ManagerT>()`
-  —— 入口体逐字搬迁, 仅把 `mgr->方法(...)` 换成模板参数调用; agentxx 的
-  `xx_query_interface` 改为返回这些静态实例。此步不改变任何行为, 但确立 host core 形状;
-- 步 2: 把 `PluginManager` 的通用方法 (`subscribe`/`unsubscribe`/`publish`/
+- 步 1 (低风险) ✅ **已完成** (第四次实施): 十张通用表的入口改为
+  `pluginxx::host::tables_impl.h` 的 `GenericTableEntries<I, M>`; agentxx 的
+  `xx_query_interface` 先调 `pluginxx::queryGenericPluginIface<I, M>(iid)` 再分发领域表;
+- 步 2 ✅ **已完成**: `PluginManager` 的通用方法 (`subscribe`/`unsubscribe`/`publish`/
   `registerTask`/`sleep`/`offload`/`postCallback`/`registerCapability*`/
-  `invokeCapabilityAsync`) 与其状态 (事件订阅表 / 任务句柄表 / `CapabilityRegistry`)
-  整体移入 `PluginHostCore`, 经 `DomainHooks` 取领域数据;
-- 步 3: 装载/启停骨架 (`plugin_manager_lifecycle.cpp` 的通用部分) 下沉,
+  `invokeCapabilityAsync`) 与其状态 (`CapabilityRegistry`、实例侧事件订阅/睡眠/能力登记)
+  整体移入 `PluginHostCore`, 领域数据经 `DomainHooks` 取;
+- 步 3 (待实施): 装载/启停骨架 (`plugin_manager_lifecycle.cpp` 的通用部分) 下沉,
   agentxx 只保留 `DomainHooks` 实现与领域表 (风险最高, 需跑
   `plugin_multi_instance` / 卸载重载 / 取消路径回归);
-- 步 4: `ClientPluginManager` 同样处理 (client UI 表留在 agentxx)。
+- 步 4 (待实施): `ClientPluginManager` 同样处理 (client UI 表留在 agentxx);
+  可复用 `GenericTableEntries<ClientPluginInstance, ClientPluginManager>` 装配
+  client 侧的 log/json 等通用表 (需先让 client 实例满足实例基类契约)。
 
 **验收提示 (本次已复现的基线)**: 全量 `agentxx_test` 为
 `passed=21163~21164 / failed=9~10` —— 失败数波动来自已知的时序敏感用例
@@ -201,16 +263,23 @@ plugin_bridge 193 · plugin_resources 83 · plugin_multi_instance 80` 全绿 (�
 - 已更新文档: `docs/zh-cn/design/plugins.md` (§5.1 目录结构表 + §6 SDK 分层说明)、
   `docs/zh-cn/design/index.md` (代码结构章节的插件与三库部分)、根 `AGENTS.md`
   (cxx_pluginxx 条目)、`cxx_pluginxx/README.md` (目录结构与落地进度)
+- **第四次实施已更新**: 上述四份文档补充宿主核心与通用表实现下沉的说明
+  (`pluginxx/host/{host_core,tables_impl,domain_hooks,event_bus}.h`、
+  `agent/plugin/plugin_manager_domain_hooks.cpp`)
+- **第四次实施已完成**: 插件源码注释中残留的 `agentxx_util` 字样已清理
+  (改为 `cxx_utilxx` / `cxx_utilxx_base` / `utilxx_base::detectPowerShell`)
 - 待办: 删除 `agent/build/*/exec` 与安装树中的历史残留 (`libagentxx_util.lib`、
   `lib/cmake/agentxx_util`); **注意**: 安装树的 `include/agentxx`、`include/pluginxx`
   需按源码核对, 陈旧头会导致难以理解的类型重定义错误 (见上文实施要点 6)。
-  本次新增的头 (`pluginxx/kit/{kit,guard}.h`、`pluginxx/host/capability_registry.h`)
-  随构建自动安装, 无需手工清理
-- 待办: 插件源码注释中残留的 `agentxx_util` 字样; `docs/en/**` 同步更新
+  本次新增的头 (`pluginxx/kit/{kit,guard}.h`、`pluginxx/host/*.h`) 随构建自动安装,
+  无需手工清理
+- 待办: `docs/en/**` 同步更新 (英文设计文档尚未同步三次/四次实施的变更)
 
 ### P6 下游与发布 (本次部分完成)
 
-- 三库 README 已落地; `cxx_pluginxx/README.md` 本次补齐 kit/guard/capability_registry 说明
+- 三库 README 已落地; `cxx_pluginxx/README.md` 本次补齐 kit/guard/capability_registry 说明,
+  并在第四次实施补充 `host_core.h` / `domain_hooks.h` / `tables_impl.h` / `event_bus.h`
+  与"宿主接入形态"示例 (`PluginHostCore` + `DomainHooks` + `queryGenericPluginIface`)
 - 待办: musicxx 接入说明 (plan.md §11)
 
 ---

@@ -120,8 +120,18 @@ auto b64 = utilxx_base::base64Encode(data);
 |---|---|---|
 | `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/宿主 vtable/入口符号)、`tables.h` (通用接口表: events/capabilities/scheduler/coroutine_runtime/plugins/config/cancel/json/log/tasks) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
-| `pluginxx/runtime/` | `pluginxx` | 宿主侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 宿主控制块 + C ABI 内存)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
-| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调) |
+| `pluginxx/runtime/` | `pluginxx` | 宿主侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 宿主控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
+| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `AgentxxPluginSubscription` + 幂等撤销)、`domain_hooks.h` (领域钩子 `DomainHooks`: 通用表需要宿主数据的入口)、`host_core.h` (宿主核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`) |
+
+- **通用表实现整体在 `cxx_pluginxx`**: log/json/config/plugins/events/scheduler/
+  coroutine_runtime/tasks/cancel/capabilities 十张表的**定义与实现**都在内核 ——
+  `PluginHostCore<InstanceT>` 提供方法实现 (能力登记/事件订阅/睡眠/委托/任务托管/取消
+  投递), `tables_impl.h` 提供 C ABI 入口 (解析宿主控制块 → 投递 IO 线程 → 调用同名方法);
+  宿主只需 `class MyManager : public pluginxx::PluginHostCore<MyInstance>` +
+  实现 `pluginxx::DomainHooks` (事件后端、工作线程池、配置/语言/会话工作目录/取消状态/
+  插件清单) + 在 `query_interface` 里先调 `queryGenericPluginIface` 再分发自己的领域表。
+  agentxx 侧对应实现见 `agent/plugin/plugin_manager_domain_hooks.cpp` (事件后端
+  `AgentEventBusSource` 包装 `agentxx::events::EventBus`, 主题命名空间补齐等)
 
 - 领域表 (tools/permission/hooks/session/model/prompt/resources/graph 与 client 侧全部表)
   由宿主定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`

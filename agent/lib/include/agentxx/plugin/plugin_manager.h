@@ -3,13 +3,15 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/api/plugin_api.h"
 // 宿主侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
-// PluginString); 该头后续会拆为 pluginxx/kit/kit.h (通用部分) + 本头的领域 helper
+// PluginString); 该头为 umbrella: 包含 pluginxx 通用部分 (kit.h) + 本仓库领域 helper
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
+#include "pluginxx/host/domain_hooks.h"
+#include "pluginxx/host/host_core.h"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
 #include "utilxx_base/json.h"
@@ -53,16 +55,11 @@ struct GraphTypeSlot;
 } // namespace plugin
 } // namespace agentxx
 
-struct AgentxxPluginSubscription {
-    std::shared_ptr<agentxx::events::EventBus>     bus;
-    std::string                                    topic;
-    size_t                                         subscriptionId = 0;
-    std::weak_ptr<agentxx::plugin::PluginInstance> inst;
-    void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud)
-        = nullptr;
-    void*             ud = nullptr;
-    std::atomic<bool> alive{true};
-};
+// 事件订阅句柄的实现体 (C ABI 不透明句柄 `AgentxxPluginSubscription*`) 由
+// cxx_pluginxx 提供 (事件表是通用表): 见 `pluginxx/host/event_bus.h`。
+// 句柄字段为内核类型 (EventSource / 插件实例基类弱引用), 因此事件表的订阅与撤销
+// 实现整体位于内核; agentxx 只提供事件后端适配 (AgentEventBusSource, 见
+// plugin_manager_adapters.cpp) 与主题命名规则。
 
 namespace agentxx {
 namespace plugin {
@@ -89,12 +86,10 @@ public:
         void* ud;
     };
 
-    struct CapabilityRegistration {
-        std::string                          name;
-        AgentxxPluginCapabilityStartFunction start  = nullptr;
-        AgentxxPluginOperatorCancelFunction  cancel = nullptr;
-        void*                                ctx    = nullptr;
-    };
+    /// 已声明能力记录 (名称 / 启动回调 / 取消回调 / 上下文)
+    /// - 类型本体在 cxx_pluginxx (能力表是通用表), 登记与撤销由宿主核心统一维护
+    ///   (见 [pluginxx::PluginHostCore])
+    using CapabilityRegistration = pluginxx::PluginCapabilityRegistration;
 
     struct GraphNodeTypeRegistration {
         std::string                       type;
@@ -118,15 +113,13 @@ public:
 
     std::vector<std::string> toolNames;
     /// 已声明权限限制的工具名 (随工具注销/实例禁用卸载一并撤销)
-    std::vector<std::string>                                permissionToolNames;
-    std::vector<HookRegistration>                           hookRegistrations;
-    std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptions;
-    std::vector<std::shared_ptr<AgentxxPluginSubscription>> subscriptionHandles;
-    std::vector<CapabilityRegistration>                     capabilityRegistrations;
-    std::vector<GraphNodeTypeRegistration>                  graphNodeTypes;
-    /// 活跃 sleep 使用 Operation 句柄索引；完成回调开始前移除，取消查询 O(1)。
-    std::unordered_map<void*, std::shared_ptr<AgentxxPluginOperatorHandle>> sleepTimers;
-    PromptBackup                                                            promptBackup;
+    std::vector<std::string>               permissionToolNames;
+    std::vector<HookRegistration>          hookRegistrations;
+    std::vector<GraphNodeTypeRegistration> graphNodeTypes;
+    PromptBackup                           promptBackup;
+
+    /// 通用表相关登记 (事件订阅 / 睡眠句柄 / 能力声明) 由基类持有, 见
+    /// [pluginxx::PluginInstanceBase]: 通用表实现只依赖基类, 新增宿主无需重复实现。
 
     std::shared_ptr<PluginMiddlewareHandle>  middleware = nullptr;
     std::vector<std::shared_ptr<PluginTool>> tools;
@@ -223,8 +216,15 @@ private:
     std::array<HookEntry, AGENTXX_PLUGIN_HOOK_COUNT> hooks_{};
 };
 
-class PluginManager : public PluginManagerBase<PluginInstance>,
-                      public std::enable_shared_from_this<PluginManager> {
+/// 插件管理器 (agent 侧宿主)
+///
+/// - 通用部分 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
+///   cancel/capabilities 十张通用表的状态与实现) 继承自
+///   [pluginxx::PluginHostCore], 领域数据经 [pluginxx::DomainHooks] 提供;
+/// - 领域部分 (工具/权限/钩子/会话/模型/提示词/资源/图 与加载卸载生命周期) 在本类。
+class PluginManager : public pluginxx::PluginHostCore<PluginInstance>,
+                      public std::enable_shared_from_this<PluginManager>,
+                      public pluginxx::DomainHooks {
 public:
 
     struct PluginListView {
@@ -409,29 +409,6 @@ public:
         return setGraphJson(inst, strToSv(graph_json));
     }
 
-    AgentxxPluginSubscription* subscribe(
-        PluginInstance*         inst,
-        AgentxxPluginStringView topic,
-        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
-        void* ud
-    );
-
-    AgentxxPluginSubscription* subscribe(
-        PluginInstance*  inst,
-        std::string_view topic,
-        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* event_json, void* ud),
-        void* ud
-    ) {
-        return subscribe(inst, strToSv(topic), handler, ud);
-    }
-
-    void unsubscribe(AgentxxPluginSubscription* sub);
-    int  publish(AgentxxPluginStringView topic, AgentxxPluginStringView event_json);
-
-    int publish(std::string_view topic, std::string_view event_json) {
-        return publish(strToSv(topic), strToSv(event_json));
-    }
-
     AgentxxPluginString
         getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, int64_t id);
 
@@ -467,33 +444,6 @@ public:
         emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
     }
 
-    AgentxxPluginOperatorHandle*
-        postCallback(PluginInstance* inst, void(AGENTXX_PLUGIN_CALL* fn)(void*), void* ud);
-
-    AgentxxPluginOperatorHandle* sleep(
-        PluginInstance*               inst,
-        int64_t                       ms,
-        AgentxxPluginOperatorCallback cb,
-        void*                         ud,
-        AgentxxPluginString*          error_out
-    );
-    AgentxxPluginOperatorHandle* offload(
-        PluginInstance* inst,
-        void*(AGENTXX_PLUGIN_CALL* work)(
-            void*                           ud,
-            const AgentxxPluginCancelToken* token,
-            AgentxxPluginString*            error_out
-        ),
-        void(AGENTXX_PLUGIN_CALL* done)(
-            void*                          ud,
-            int32_t                        status,
-            void*                          result,
-            const AgentxxPluginStringView* error
-        ),
-        void*                ud,
-        AgentxxPluginString* error_out
-    );
-
     AgentxxPluginOperatorHandle* callToolAsync(
         PluginInstance*               caller,
         AgentxxPluginStringView       name,
@@ -524,92 +474,17 @@ public:
         );
     }
 
-    AgentxxPluginOperatorHandle* invokeCapabilityAsync(
-        PluginInstance*               caller,
-        AgentxxPluginStringView       capability,
-        AgentxxPluginStringView       method,
-        AgentxxPluginStringView       args_json,
-        AgentxxPluginOperatorCallback cb,
-        void*                         ud,
-        AgentxxPluginString*          error_out
-    );
-
-    AgentxxPluginOperatorHandle* invokeCapabilityAsync(
-        PluginInstance*               caller,
-        std::string_view              capability,
-        std::string_view              method,
-        std::string_view              args_json,
-        AgentxxPluginOperatorCallback cb,
-        void*                         ud,
-        AgentxxPluginString*          error_out
-    ) {
-        return invokeCapabilityAsync(
-            caller,
-            strToSv(capability),
-            strToSv(method),
-            strToSv(args_json),
-            cb,
-            ud,
-            error_out
-        );
-    }
-
-    /// 注册后台任务 (spawn 宿主托管; agentxx.agent.tasks 接口表)
-    /// - cancel_fn/cancel_ud: 卸载取消时宿主回调 (io 线程, 协作式)
-    /// - notify: 【出参】插件协程结束 (帧销毁后) 经 notify.done 恰好一次上报
-    /// - 返回宿主托管句柄 (失败 NULL + error_out); 句柄仅用于 cancel_task,
-    ///   宿主在任务 done 后自动回收 (与 callToolAsync/invokeCapabilityAsync
-    ///   的同款清理协程模式一致)
-    AgentxxPluginOperatorHandle* registerTask(
-        PluginInstance*                     inst,
-        AgentxxPluginOperatorCancelFunction cancel_fn,
-        void*                               cancel_ud,
-        AgentxxPluginOperatorNotify*        notify,
-        AgentxxPluginString*                error_out
-    );
+    // ==================== 通用表方法 (继承自 pluginxx::PluginHostCore) ====================
+    //
+    // 以下方法由宿主核心提供, 本类不再重复声明 (调用点无需改动):
+    // - capabilities 表: registerCapability / registerCapabilityEx /
+    //   unregisterCapability / hasCapability / invokeCapabilityAsync / capabilities();
+    // - events 表: subscribe / unsubscribe / publish;
+    // - scheduler 表: postCallback / sleep / offload;
+    // - tasks 表: registerTask。
 
     std::shared_ptr<ToolRegistry> registry() const {
         return registry_;
-    }
-
-    std::shared_ptr<CapabilityRegistry> capabilities() const {
-        return capabilities_;
-    }
-
-    int registerCapability(PluginInstance* inst, AgentxxPluginStringView capability);
-
-    int registerCapability(PluginInstance* inst, std::string_view capability) {
-        return registerCapability(inst, strToSv(capability));
-    }
-
-    int registerCapabilityEx(
-        PluginInstance*                      inst,
-        AgentxxPluginStringView              capability,
-        AgentxxPluginCapabilityStartFunction start,
-        AgentxxPluginOperatorCancelFunction  cancel,
-        void*                                ctx
-    );
-
-    int registerCapabilityEx(
-        PluginInstance*                      inst,
-        std::string_view                     capability,
-        AgentxxPluginCapabilityStartFunction start,
-        AgentxxPluginOperatorCancelFunction  cancel,
-        void*                                ctx
-    ) {
-        return registerCapabilityEx(inst, strToSv(capability), start, cancel, ctx);
-    }
-
-    int unregisterCapability(PluginInstance* inst, AgentxxPluginStringView capability);
-
-    int unregisterCapability(PluginInstance* inst, std::string_view capability) {
-        return unregisterCapability(inst, strToSv(capability));
-    }
-
-    int hasCapability(AgentxxPluginStringView capability) const;
-
-    int hasCapability(std::string_view capability) const {
-        return hasCapability(strToSv(capability));
     }
 
     std::string listPluginsJson();
@@ -632,12 +507,34 @@ public:
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
     std::string getLanguage();
-    void        setLanguage(std::string_view lang);
+    /// 指定语言 (pluginxx::DomainHooks 要求; 同时服务 config 表的 set_language)
+    void setLanguage(std::string_view lang) override;
 
     std::string getSessionWorkDir();
     std::string getSessionWorkDir(const std::string& threadId);
     std::string getModelConfigJson();
     bool        isSessionCancelled(const std::string& threadId);
+
+    // ==================== pluginxx::DomainHooks 实现 ====================
+    // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/
+    // capabilities) 的实现位于 cxx_pluginxx, 需要宿主数据的入口经这些方法取数
+    // (见 pluginxx/host/domain_hooks.h)。实现体在 plugin_manager_adapters.cpp。
+
+    /// 事件后端 (包装 agentxx::events::EventBus; 无总线时返回 nullptr)
+    std::shared_ptr<pluginxx::EventSource> eventSource() override;
+    /// 事件主题命名空间补齐 (不以 `plugin.`/`client.` 开头时补 `plugin.`)
+    std::string qualifyEventTopic(std::string_view topic) override;
+    /// 阻塞工作委托到 AgentContext 的工作线程池; 未装配时返回 false (offload 失败)
+    bool postToWorkerThread(std::function<void()> fn) override;
+
+    std::string configJson() override;
+    std::string toolPromptJson(std::string_view toolName) override;
+    std::string sessionWorkDir(std::string_view sessionId) override;
+    std::string language() override;
+    bool        isSessionCancelled(std::string_view sessionId) override;
+
+    std::string pluginsJson() override;
+    std::string pluginJson(std::string_view name) override;
 
     void detachAll(PluginInstance* inst);
 
@@ -739,7 +636,6 @@ private:
 
     std::weak_ptr<agentxx::agent::AgentContext>                        agentContext_;
     std::shared_ptr<ToolRegistry>                                      registry_;
-    std::shared_ptr<CapabilityRegistry>                                capabilities_;
     std::map<std::string, std::shared_ptr<GraphTypeSlot>, std::less<>> graphTypeSlots_;
     size_t                                                             runningTurns_ = 0;
     std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;

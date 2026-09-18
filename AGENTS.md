@@ -93,6 +93,14 @@ path/to/agentxx_test string_util regex
           CancelRegistry/OpCtl/ArgReader/PluginBaseT<IfacesT>/导出宏) 在内核,
           宿主领域 helper 在宿主侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含内核头 +
           逐条 `using` 引入 agentxx::plugin, 插件源码零改动)
+        - 通用表实现 (十张表的**定义与实现**) 也在内核: `host/host_core.h`
+          (`PluginHostCore<InstanceT>`: 能力/事件/调度/任务/取消投递的通用实现) +
+          `host/tables_impl.h` (C ABI 入口 + `queryGenericPluginIface<I,M>`) +
+          `host/domain_hooks.h` (`DomainHooks`: 通用表需要宿主数据的入口) +
+          `host/event_bus.h` (事件后端 `EventSource` 与订阅句柄);
+          agentxx 侧宿主实现见 `agent/lib/src/plugins/plugin_manager_domain_hooks.cpp`
+          (事件后端包装 `agentxx::events::EventBus`) 与 `plugin_manager_vtable.cpp`
+          (领域表 + `query_interface` 先查通用表)
     - [boost](agent/third_party/boost/)
         - asio
         - beast
