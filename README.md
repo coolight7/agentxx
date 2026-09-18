@@ -34,6 +34,17 @@
 - [编译](#编译)
 - [运行&配置文件](#配置文件和运行)
 
+## 下载使用
+- [Releases](https://github.com/coolight7/agentxx/releases) 中下载最新版压缩包, 解压即可开始使用, 详见[启动配置参数](#配置文件和运行)
+
+## 预览图
+
+|-|-|
+|---|---|
+|![主页](/resource/doc-src/image-6-zh-cn.png)|![消息列表](/resource/doc-src/image-1-zh-cn.png)|
+|![Plan状态图绘制](/resource/doc-src/image-3-zh-cn.png)|![特化工具绘制](/resource/doc-src/image-4-zh-cn.png)|
+|![选择附件](/resource/doc-src/image-5-zh-cn.png)|![设置](/resource/doc-src/image-2-zh-cn.png)|
+
 ## 特点
 - **C++协程异步实现**; 程序体积和内存占用少且性能高，协程网络/文件读写支持不阻塞，可选添加 硬件加速Hyperscan 等扩展库
 - **数据安全**; Agentxx 不会上传你的数据，如果使用局域网内的 LLM Api Server，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、MCP、Skill 的数据安全，如果导入需要自行确认
