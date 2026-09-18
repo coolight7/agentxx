@@ -1539,14 +1539,17 @@ agent/
 │   │   │   ├── plugin_framework.h # 把框架内核 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
 │   │   │   │                     #   内核实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
 │   │   │   │                     #   (kit/{kit,guard}.h; runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
-│   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,host_core,tables_impl}.h)
+│   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,
+│   │   │   │                     #          host_core,tables_impl,lifecycle}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
-│   │   │   ├── plugin_manager.h  # PluginManager 生命周期 (load/enable/disable/unload) /
+│   │   │   ├── plugin_manager.h  # PluginManager 领域部分 (工具/权限/钩子/图/提示词/资源) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
 │   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调);
-│   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore
-│   │   │   │                     #   (领域数据经 pluginxx::DomainHooks 提供)
-│   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线)
+│   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore,
+│   │   │   │                     #   装载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
+│   │   │   │                     #   (领域数据经 pluginxx::DomainHooks + 生命周期接缝提供)
+│   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧装载/UI 注册表/命令管线;
+│   │   │   │                     #   卸载与启停继承 pluginxx::PluginHostLifecycle, 装载为 client 特有实现)
 │   │   │   ├── plugin_graph_node.h # PluginGraphNode (插件自定义图节点, 统一 Operation 完成协议)
 │   │   │   ├── builtin_tool_renderers.h # 内置工具渲染器 (客户端专用展示)
 │   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)
@@ -1592,8 +1595,9 @@ agent/
 │   ├── cxx_pluginxx/             # 插件框架内核: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
 │   │                             #   runtime/(runtime,driver,instance_base,manager_base,op_driver) +
 │   │                             #   host/(loader,manifest,abi_util,capability_registry,
-│   │                             #         event_bus,domain_hooks,host_core,tables_impl)
-│   │                             #   —— 十张通用表的定义与实现 (PluginHostCore/入口) 都在此
+│   │                             #         event_bus,domain_hooks,host_core,tables_impl,lifecycle)
+│   │                             #   —— 十张通用表的定义与实现 (PluginHostCore/入口) 以及
+│   │                             #      装载/启停/卸载/级联骨架 (PluginHostLifecycle) 都在此
 │   └── (其余: boost/fmt/simdjson/sqlite3/OpenSSL/neograph/yaml-cpp/...)
 │
 ├── client/                       # agentxx_cli 可执行程序

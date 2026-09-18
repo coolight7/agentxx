@@ -101,6 +101,16 @@ path/to/agentxx_test string_util regex
           agentxx 侧宿主实现见 `agent/lib/src/plugins/plugin_manager_domain_hooks.cpp`
           (事件后端包装 `agentxx::events::EventBus`) 与 `plugin_manager_vtable.cpp`
           (领域表 + `query_interface` 先查通用表)
+        - 生命周期骨架也在内核: `host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`
+          (继承 `PluginHostCore`) 提供装载/启停/禁用启用/卸载/级联依赖/关闭超时重试
+          的唯一实现, 宿主只提供接缝 (纯虚 `selfRef`/`createInstance`/`hostVtable`,
+          可选 `detachDomainRegistrations`/`clearDomainRegistrations`/
+          `applyDeclaredResources`/`releaseInstanceResources`/`onInstanceEnabledChanged`/
+          `onInstanceLoaded`/`onInstanceUnloaded`/`cascadeUnloadEnabledOnly`/`logTag`);
+          agent 侧 `PluginManager` 与 client 侧 `ClientPluginManager` 都已接入
+          (client 侧仅"装载"保留自有实现: dlopen 卸载到内部线程池 + 接口协商 +
+          双端入口探测); 实例侧 `destroyPlugin()` 在 `PluginInstanceBase` 共用,
+          派生类只需给出 `pluginDestroySymbol()`
     - [boost](agent/third_party/boost/)
         - asio
         - beast

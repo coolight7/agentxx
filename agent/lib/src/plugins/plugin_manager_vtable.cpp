@@ -665,6 +665,10 @@ static const AgentxxHostVtable g_hostVtable = {
     /* query_interface */ xx_query_interface,
 };
 
+const AgentxxHostVtable* PluginManager::hostVtable() {
+    return &g_hostVtable;
+}
+
 const void* AGENTXX_PLUGIN_CALL
     xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
     if (!iid || !iid->data) {
@@ -939,6 +943,9 @@ void PluginManager::applyDeclaredResources(
     PluginInstance&                        inst,
     const plugin::PluginManifestResources& resources
 ) {
+    // 初始化收尾即冻结资源声明: 之后固定不可变以防上下文变化
+    // (仅 yaml 声明与初始化阶段追加生效; 见 PluginInstance::resourcesFrozen)
+    inst.resourcesFrozen = true;
     if (resources.skillDirs.empty() && resources.memoryFiles.empty()
         && resources.mcpServers.empty()) {
         return;

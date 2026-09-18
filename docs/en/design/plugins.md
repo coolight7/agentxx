@@ -102,6 +102,26 @@ auto b64 = utilxx_base::base64Encode(data);
 - Unreferenced modules are automatically pruned based on object file extraction (9 built-in plugins have `DT_NEEDED` pointing only to system libraries).
 - Split background and migration record: `resource/history/split-util-plugin-core/plan.md`.
 
+### 5.1 Plugin Framework Kernel (`cxx_pluginxx`)
+
+The plugin framework itself is split into a third standalone project, `agent/third_party/cxx_pluginxx` (namespace `pluginxx`, depends on `cxx_utilxx_base` + fmt + yaml-cpp, Boost headers only; **no** neograph / OpenSSL / SQLite / agentxx headers). Directory layout:
+
+| Path | Contents |
+|---|---|
+| `pluginxx/api/` | Pure C ABI base (`abi.h`: export macros / calling convention / alignment / `StringView` / `String` / info / unified operation primitives / host vtable / entry symbol names) and the 10 generic interface tables (`tables.h`) |
+| `pluginxx/kit/` | Plugin-side C++ SDK (header-only): cross-boundary string helpers, generic table aggregate `PluginIfaceCore`, `Task<T>` anchored coroutines and anchored primitives (`sleep`/`yield`/`offload`/`invoke_cap`), `CancelRegistry`/`OpCtl`/`ArgReader`, background `spawn`, instance context base `PluginBaseT<IfacesT>`, export macros, plus `guard.h` (C ABI exception guard) |
+| `pluginxx/runtime/` | Host-side runtime: instance state machine / execution lease / delivery channel (`runtime.h`), coroutine driver tickets (`driver.h`), instance base + host control block (`instance_base.h`), manager base + vtable entry context (`manager_base.h`), unified operation driver (`op_driver.h`) |
+| `pluginxx/host/` | Generic host facilities: `loader.h` (dlopen/LoadLibrary), `manifest.h` (plugin.yaml / name inference / topological sort), `abi_util.h`, `capability_registry.h`, `event_bus.h`, `domain_hooks.h`, `host_core.h` (`PluginHostCore<InstanceT>`: generic table state and method implementations), `tables_impl.h` (C ABI entries + `queryGenericPluginIface<I,M>`), `lifecycle.h` (`PluginHostLifecycle<InstanceT>`: the lifecycle skeleton) |
+
+- **Generic tables are defined *and* implemented in the kernel** (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/capabilities): a host only implements `pluginxx::DomainHooks` (event back end, worker pool, config/language/session work dir/cancel state/plugin listing) and routes `query_interface` through `queryGenericPluginIface` before dispatching its own domain tables.
+- **The lifecycle skeleton is in the kernel too** (`host/lifecycle.h`): library loading and entry-symbol validation, `create`/`start` transactions, enable/disable cascades, `stop` completion, inflight drain waiting, `destroy` + dlclose, failure rollback and close timeout retry all have exactly one implementation. A host supplies a few seams:
+  - pure virtual: `selfRef()` (manager self reference; the kernel cannot inherit `enable_shared_from_this` itself without creating an ambiguous multi-base lookup with the host manager), `createInstance(name)`, `hostVtable()`;
+  - optional overrides: `detachDomainRegistrations`, `clearDomainRegistrations`, `detachDomainOwnedResources`, `applyDeclaredResources`, `releaseInstanceResources`, `onInstanceEnabledChanged`, `onInstanceLoaded`/`onInstanceUnloaded`, `cascadeUnloadEnabledOnly`, `logTag`.
+  - Both agentxx managers derive from it (`PluginManager` and `ClientPluginManager`). The client keeps its own *loading* path (dlopen offloaded to an internal thread pool, interface negotiation, dual agent/client entry probing) but shares unload/start-stop/cascade/close-wait with the agent side.
+  - `destroyPlugin()` (destroy entry lookup + call + host control block retirement) lives on `pluginxx::PluginInstanceBase`; both instance classes only provide their own `pluginDestroySymbol()`.
+- **SDK layering**: the generic part lives in the kernel, the domain helpers (tool registration / hooks / graph nodes / permission declarations / client rendering and `ClientPluginBase`) live in the host umbrella header `agentxx/plugin/api/plugin_kit.h`, which includes the kernel headers and re-exports the generic names into `agentxx::plugin` — plugin sources stay unchanged.
+- Cross-boundary C names / struct names / IID strings are frozen: plugins compiled before the split still load into the new host unchanged.
+
 ---
 
 ## 6. C++ Plugin Development Workflow (SDK `plugin_kit.h`)

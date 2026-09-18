@@ -323,7 +323,13 @@ public:
     std::vector<ClientToolRenderReg> toolRenderRegs;
     /// 通用动作绑定 (disable 保留, enable 恢复; 以 plugin+targetId 键控)
     std::vector<ClientActionBinding>           actionRegs;
-    std::vector<std::shared_ptr<Subscription>> subscriptions; ///< 已订阅事件 (disable 保留)
+    /// 事件订阅登记 (client 自有事件表 `agentxx.client.events` 的订阅)
+    ///
+    /// 命名与基类的通用订阅登记区分: 基类 `PluginInstanceBase::subscriptions`
+    /// 存的是通用事件表 (`agentxx.agent.events`, 按主题) 的句柄; 本成员存的是
+    /// client 事件表 (按事件枚举) 的订阅记录。两者语义不同, 因此这里用独立名字,
+    /// 避免派生成员隐藏基类成员导致通用表实现读到错误的类型。
+    std::vector<std::shared_ptr<Subscription>> clientSubscriptions; ///< 已订阅事件 (disable 保留)
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落宿主句柄 (enable 期)
@@ -341,9 +347,15 @@ public:
     /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无执行中)
     ~ClientPluginInstance();
 
-    /// 在所有活动 lease 归零后销毁插件上下文；析构时也作为最后一道安全收尾。
-    /// 返回 false 表示仍有活动 lease，调用方不得关闭动态库。
-    bool destroyPlugin() noexcept;
+    /// 本端 destroy 入口符号名 (client 侧)
+    const char* pluginDestroySymbol() const noexcept override {
+        return AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY;
+    }
+
+    /// 日志前缀 (与 agent 侧插件宿主同进程共存时区分来源)
+    std::string_view logTag() const noexcept override {
+        return "[client_plugin] ";
+    }
 };
 
 /// 事件订阅宿主句柄实现 (仅宿主内部; 与
@@ -367,7 +379,7 @@ struct ClientSubscriptionImpl {
 /// - 命令执行: 任意线程可 hasCommand/postCommandInvocation; execute 回调在
 ///   client io 线程同步调用, 返回值动作 JSON 由宿主解析并分发到 UI 适配器
 class ClientPluginManager : public agentxx::agent::ClientEventSink,
-                            public PluginManagerBase<ClientPluginInstance>,
+                            public pluginxx::PluginHostLifecycle<ClientPluginInstance>,
                             public std::enable_shared_from_this<ClientPluginManager> {
 public:
 
@@ -427,21 +439,21 @@ public:
     );
 
     /// 卸载插件 (按名称; 等全部执行中回调完成后才 dlclose)
+    /// - 默认超时较 agent 侧短 (UI 交互路径不希望长时间挂起)
     asio::awaitable<bool> unloadAsync(
         std::string_view          name,
         std::chrono::milliseconds timeout = std::chrono::seconds{10}
-    );
-    /// 在 client IO executor 仍运行时等待所有插件安全关闭。
-    asio::awaitable<bool>
-        shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
+    ) {
+        co_return co_await pluginxx::PluginHostLifecycle<ClientPluginInstance>::unloadAsync(
+            name,
+            timeout
+        );
+    }
 
     /// 禁用插件 (UI 项摘除/命令停用; 立即生效)
     /// - 级联: 必选依赖本插件的插件一同禁用 (依赖者先禁用)
     /// - 被级联禁用的插件不置 userDisabled (用户显式 enable 依赖方时可级联恢复)
-    void disable(std::string_view name);
-
-    /// 启用插件 (重新注册保存的 status item/panel/command/订阅)
-    void enable(std::string_view name);
+    /// - 具体行为由 pluginxx::PluginHostLifecycle 提供 (disable → disableImpl)
 
     /// 加载配置中应于 client 侧生效的插件 (yaml `plugins` 段, 经 sides 过滤):
     /// - sides == Client 或 sides == Auto: 尝试加载 (Auto 下无 client 入口则跳过)
@@ -449,9 +461,6 @@ public:
     /// - 按 manifest depends 拓扑排序加载 (依赖者排在被依赖者之后)
     asio::awaitable<void>
         loadConfiguredClientPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
-
-    /// 同步卸载全部插件 (进程退出路径; 不等执行中回调, 调用方须保证无执行中回调)
-    void shutdownAll();
 
     // ==================== 查询 ====================
 
@@ -772,27 +781,56 @@ public:
         return sendPluginDataToPeer(inst, strToSv(event), strToSv(json));
     }
 
-    /// 宿主 vtable (静态函数表; 供 ClientPluginInstance::host 使用)
-    static const AgentxxHostVtable* hostVtable();
+    /// 宿主 vtable (静态函数表 `g_clientHostVtable`; 覆写 lifecycle 骨架的同名接缝)
+    const AgentxxHostVtable* hostVtable() override;
+
+protected:
+
+    // =====================================================================
+    // pluginxx::PluginHostLifecycle 宿主接缝
+    // =====================================================================
+    //
+    // 装载以外的生命周期骨架 (启停/禁用启用/卸载/级联依赖/关闭等待/destroy)
+    // 与宿主领域无关, 已下沉到 cxx_pluginxx
+    // (见 pluginxx/host/lifecycle.h); 内核不认识 client 侧的 UI 注册表,
+    // 因此这些领域动作经下列覆写注入。
+    //
+    // 注意: 本类**不**复用装载骨架 —— client 侧的装载有独立语义 (dlopen 卸载到
+    // 内部线程池执行、接口协商限制、agent/client 双入口探测), 见
+    // [loadNativeAsync]。
+
+    /// 管理器自引用 (骨架的异步事务与空闲收尾需要在此期间保活管理器)
+    std::shared_ptr<pluginxx::PluginHostLifecycle<ClientPluginInstance>> selfRef() override {
+        return shared_from_this();
+    }
+
+    /// 生成 client 侧实例对象 (领域自引用/管理器弱引用)
+    /// - 元信息/lifecycle 入口/生命周期控制块/宿主控制块由 [attachInstance] 装配
+    std::shared_ptr<ClientPluginInstance> createInstance(std::string name) override;
+
+    /// 日志前缀 (与 agent 侧插件宿主同进程共存时区分来源)
+    std::string_view logTag() const noexcept override {
+        return "[client_plugin] ";
+    }
+
+    /// 摘除实例的领域注册: UI 注册表 (状态栏项/面板/Info 段/命令/装饰/渲染器/
+    /// 动作绑定) + client 事件订阅 + adapter 通知 + 语义渲染缓存失效
+    void detachDomainRegistrations(ClientPluginInstance* inst) override;
+
+    /// 实例加载完成: 登记实例代次 (UI 点击据此复查, 防旧点击转交同名新实例)
+    void onInstanceLoaded(ClientPluginInstance& inst) override;
+
+    /// 实例从插件表摘除: 清除实例代次登记
+    void onInstanceUnloaded(ClientPluginInstance& inst) override;
+
+    /// 卸载级联只统计"启用中"的依赖者 (client 侧既有行为: 已禁用的依赖者保持加载)
+    bool cascadeUnloadEnabledOnly() const noexcept override {
+        return true;
+    }
 
 private:
 
     friend class ClientPluginInstance;
-
-    /// 插件卸载/禁用清理 (io 线程): 摘除 UI 注册与订阅 + adapter 通知 + 失效语义渲染缓存
-    void detachAll(ClientPluginInstance* inst);
-
-    /// 禁用/启用内部实现 (级联递归用; userInitiated=false 表示级联, 不改 userDisabled)
-    void disableImpl(std::string_view name, bool userInitiated);
-    void enableImpl(std::string_view name, bool userInitiated);
-
-    /// 卸载单个插件 (shutdownAll 用; 先递归卸载必选依赖者, 再处理自己)
-    /// - 依赖图级联 (先子后父): 脚本类插件 (depends 引擎) 先卸载, 引擎最后
-    ///   dlclose, 与 agent 侧 shutdownPlugin 语义一致
-    void shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst);
-
-    asio::awaitable<bool>
-        unloadAsyncUntil(std::string name, std::chrono::steady_clock::time_point deadline);
 
     /// 事件分发: 遍历全部插件订阅, 匹配 event → InflightGuard → handler
     /// (io 线程; payload 为宿主构造的 JSON 字符串)
@@ -814,15 +852,6 @@ private:
     /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见
     /// [ClientUiRegistry::instanceGenerations])
     void setRegistryGeneration(std::string_view plugin, uint64_t generation, bool present);
-
-    /// 按需投递禁用/启用事务到 client io executor (同步入口的异步收尾)
-    void requestStopForDisable(const std::shared_ptr<ClientPluginInstance>& inst);
-    void requestStartForEnable(const std::shared_ptr<ClientPluginInstance>& inst);
-
-    /// 禁用/启用事务的异步部分 (仅 client io 线程):
-    /// stop 撤销插件自管资源, start 重新声明 UI 注册; 见 docs/zh-cn/design/plugins.md
-    asio::awaitable<void> stopForDisable(std::shared_ptr<ClientPluginInstance> inst);
-    asio::awaitable<void> startForEnable(std::shared_ptr<ClientPluginInstance> inst);
 
     /// 内部线程池 (dlopen/entry 卸载执行; shutdownAll 时 join)
     std::unique_ptr<asio::thread_pool> pool_;

@@ -73,7 +73,6 @@ public:
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
-    AgentxxPluginDestroyFn   builtinUnload = nullptr;
     /// 资源冻结标志: 插件初始化阶段 (create 内) 允许注册 skill/memory/mcp,
     /// 初始化完成后冻结，后续固定不可变以防上下文变化 (仅 yaml 声明与初始化追加生效)
     bool resourcesFrozen = false;
@@ -132,9 +131,10 @@ public:
 
     ~PluginInstance();
 
-    /// 在所有活动 lease 归零后销毁插件上下文；析构时也作为最后一道安全收尾。
-    /// 返回 false 表示仍有活动 lease，调用方不得关闭动态库。
-    bool destroyPlugin() noexcept;
+    /// 本端 destroy 入口符号名 (agent 侧)
+    const char* pluginDestroySymbol() const noexcept override {
+        return AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY;
+    }
 };
 
 class PluginTool : public agentxx::tools::XXToolBase {
@@ -221,8 +221,15 @@ private:
 /// - 通用部分 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
 ///   cancel/capabilities 十张通用表的状态与实现) 继承自
 ///   [pluginxx::PluginHostCore], 领域数据经 [pluginxx::DomainHooks] 提供;
-/// - 领域部分 (工具/权限/钩子/会话/模型/提示词/资源/图 与加载卸载生命周期) 在本类。
-class PluginManager : public pluginxx::PluginHostCore<PluginInstance>,
+/// - 装载/启停/禁用启用/卸载/级联依赖骨架继承自
+///   [pluginxx::PluginHostLifecycle] (与宿主领域无关, 见 pluginxx/host/lifecycle.h);
+/// - 本类只保留领域部分: 工具/权限/钩子/会话/模型/提示词/资源/图 的注册与实现,
+///   以及上面两层需要宿主数据的接缝 (见下方 protected 段的接缝覆写)。
+///
+/// 因此 `unloadAsync` / `shutdownAsync` / `shutdownAll` / `disable` / `enable` /
+/// `detachAll` / `detachInstanceRegistrations` / `clearPluginOwnedRegistrations` /
+/// `stopForDisable` / `startForEnable` / `hasPendingClose` 都是继承来的, 调用点不变。
+class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public std::enable_shared_from_this<PluginManager>,
                       public pluginxx::DomainHooks {
 public:
@@ -249,6 +256,14 @@ public:
     PluginManager(const PluginManager&)            = delete;
     PluginManager& operator=(const PluginManager&) = delete;
 
+    // =====================================================================
+    // 装载 (旧签名; 内部转成内核的 PluginLoadOptions 后交给宿主生命周期骨架)
+    // =====================================================================
+    //
+    // 注意: 这里声明的是"宿主配置类型 → 内核装载参数"的适配层, 因此与骨架里
+    // 同名但形参类型不同的装载入口是重载关系 (未加 using 引入, 骨架版本只在
+    // 本类内部经限定名调用)。
+
     asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
         std::string                             path,
         const agentxx::agent::PluginConfig*     cfg                 = nullptr,
@@ -267,28 +282,16 @@ public:
         const plugin::PluginManifestInterfaces& interfaces = {}
     );
 
-    asio::awaitable<bool> unloadAsync(
-        std::string_view          name,
-        std::chrono::milliseconds timeout = std::chrono::seconds{30}
-    );
-    /// 在所属 IO executor 仍运行时等待所有实例安全关闭。
-    /// 失败实例保留 context/DSO，可再次调用本方法重试。
-    asio::awaitable<bool>
-         shutdownAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
-    void disable(std::string_view name);
-    void enable(std::string_view name);
-    void flushPendingCleanup();
-
-    asio::awaitable<void>
-        loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
-
     asio::awaitable<std::shared_ptr<PluginInstance>> loadPluginAsync(
         std::string                         path,
         const agentxx::agent::PluginConfig* cfg                 = nullptr,
         bool                                allowClientOnlySkip = false
     );
 
-    void shutdownAll();
+    asio::awaitable<void>
+        loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
+
+    void flushPendingCleanup();
 
     std::vector<PluginListView> list() const;
 
@@ -500,10 +503,6 @@ public:
     }
 
     void restorePromptBackup(PluginInstance* inst);
-    void applyDeclaredResources(
-        PluginInstance&                        inst,
-        const plugin::PluginManifestResources& resources
-    );
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
     std::string getLanguage();
@@ -536,34 +535,6 @@ public:
     std::string pluginsJson() override;
     std::string pluginJson(std::string_view name) override;
 
-    void detachAll(PluginInstance* inst);
-
-    /// 禁用/启用事务的内部实现（级联递归用）：
-    /// - `userInitiated=true` 表示用户显式操作，会更新 `userDisabled`；
-    /// - 级联（false）只维护 `blockedByDependencies`，不覆盖用户显式禁用标记。
-    /// 依赖级联按直接依赖者递归，覆盖三级/菱形依赖。
-    void disableImpl(std::string_view name, bool userInitiated);
-    void enableImpl(std::string_view name, bool userInitiated);
-
-    /// 摘除实例在宿主侧的注册（工具/工具权限/hook/capability/graph/订阅/prompt 贡献），
-    /// 但保留实例内的注册记录；启用时由 start 事务重新声明。
-    void detachInstanceRegistrations(PluginInstance* inst);
-
-    /// 清空"由插件 start 事务重新声明"的注册记录（工具/工具权限/hook/capability/graph）。
-    /// stop 成功后调用，避免下次 start 在旧记录上重复累积。
-    void clearPluginOwnedRegistrations(PluginInstance* inst);
-
-    /// 按需投递禁用/启用事务到本管理器 IO executor（同步入口的异步收尾）。
-    void requestStopForDisable(const std::shared_ptr<PluginInstance>& inst);
-    void requestStartForEnable(const std::shared_ptr<PluginInstance>& inst);
-
-    /// 禁用/启用事务的异步收尾（仅 IO 线程）：
-    /// - `stopForDisable`：调用插件 stop 导出，撤销插件自管资源（订阅/线程/定时器）；
-    ///   失败只记录日志并保持 Disabled（可再次 disable/enable 重试）。
-    /// - `startForEnable`：调用插件 start 导出重新注册；成功后状态回到 Ready。
-    asio::awaitable<void> stopForDisable(std::shared_ptr<PluginInstance> inst);
-    asio::awaitable<void> startForEnable(std::shared_ptr<PluginInstance> inst);
-
     // ==================== prompt 贡献模型 ====================
     //
     // 插件对 prompt 的修改不再用"备份后无条件写回"，而是记录为
@@ -593,6 +564,49 @@ public:
     /// 重新合成单个 prompt 键的有效值（内部使用；见 PromptKeyState 说明）。
     void recomposePromptKey(const std::string& key);
 
+protected:
+
+    // =====================================================================
+    // pluginxx::PluginHostLifecycle 宿主接缝
+    // =====================================================================
+    //
+    // 装载/启停/禁用启用/卸载/级联依赖骨架在 cxx_pluginxx (见
+    // pluginxx/host/lifecycle.h); 内核不认识"工具/权限/钩子/图/提示词/资源"，
+    // 因此这些领域动作经下列覆写注入。实现体在 plugin_manager_lifecycle.cpp 与
+    // plugin_manager_vtable.cpp。
+
+    /// 管理器自引用 (骨架的异步事务与空闲收尾需要在此期间保活管理器)
+    std::shared_ptr<pluginxx::PluginHostLifecycle<PluginInstance>> selfRef() override {
+        return shared_from_this();
+    }
+
+    /// 生成 agent 侧实例对象 (骨架随后补齐元信息/生命周期入口/宿主控制块)
+    std::shared_ptr<PluginInstance> createInstance(std::string name) override;
+
+    /// 交给插件的宿主 vtable (进程内稳定静态表; 定义在 plugin_manager_vtable.cpp)
+    const AgentxxHostVtable* hostVtable() override;
+
+    /// 摘除领域注册: 工具/工具权限/图节点类型/prompt 贡献/中间件停用
+    void detachDomainRegistrations(PluginInstance* inst) override;
+
+    /// 摘除实例专属资源所有权: 中间件句柄 + 资源应用器的启用标记
+    void detachDomainOwnedResources(PluginInstance* inst) override;
+
+    /// 清空由插件 start 事务重新声明的领域记录 (工具/权限/hook/图)
+    void clearDomainRegistrations(PluginInstance* inst) override;
+
+    /// 应用清单声明的资源 (skill/memory/mcp) 并冻结资源声明
+    void applyDeclaredResources(
+        PluginInstance&                        inst,
+        const plugin::PluginManifestResources& resources
+    ) override;
+
+    /// 卸载时释放实例级资源: 工具对象列表 + 清单资源所有权
+    void releaseInstanceResources(PluginInstance& inst) override;
+
+    /// 启用状态变化通知 (资源应用器的启用标记)
+    void onInstanceEnabledChanged(PluginInstance& inst, bool enabled) override;
+
 private:
 
     friend class PluginInstance;
@@ -610,29 +624,6 @@ private:
     };
 
     std::vector<PendingMiddlewareCleanup> pendingCleanups_;
-
-    void shutdownPlugin(const std::shared_ptr<PluginInstance>& inst);
-
-    /// 加载/启动失败时的统一回滚 (摘除注册 → 销毁上下文 → 移出插件表 → 释放名称预占)
-    void rollbackLoad(const std::shared_ptr<PluginInstance>& inst, bool closeHandle);
-
-    /// 装配插件实例 (元信息/生命周期入口/宿主控制块; 两种加载路径共用)
-    std::shared_ptr<PluginInstance> makeInstance(
-        std::string                name,
-        const AgentxxPluginInfo*   info,
-        std::string                path,
-        const AgentxxPluginStartFn startFn,
-        const AgentxxPluginStopFn  stopFn
-    );
-
-    /// create + start 成功后的公共收尾 (应用声明式资源 → 冻结 → Ready)
-    void finishLoad(
-        const std::shared_ptr<PluginInstance>& inst,
-        const plugin::PluginManifestResources& resources
-    );
-
-    asio::awaitable<bool>
-        unloadAsyncUntil(std::string name, std::chrono::steady_clock::time_point deadline);
 
     std::weak_ptr<agentxx::agent::AgentContext>                        agentContext_;
     std::shared_ptr<ToolRegistry>                                      registry_;

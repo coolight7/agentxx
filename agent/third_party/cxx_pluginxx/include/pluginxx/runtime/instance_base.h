@@ -2,7 +2,7 @@
 ///
 /// 内容:
 /// - [PluginInstanceBase]: 实例公共基类 (元信息/依赖/启用标志/宿主句柄/驱动登记表/
-///   执行 lease), agent 侧与 client 侧实例各自继承;
+///   执行 lease/destroy 执行), agent 侧与 client 侧实例各自继承;
 /// - [PluginHostControl]: 交给插件的 `AgentxxPluginHost*` 视图所在的控制块 —— 地址
 ///   永不失效, 实例关闭后只清空实例引用 (tombstone), 因此插件跨卸载持有旧 host 指针
 ///   时各 vtable 入口只会安全失败, 既不访问已释放对象也不误指新实例;
@@ -18,6 +18,7 @@
 #include "pluginxx/api/abi.h"
 #include "pluginxx/host/capability_registry.h"
 #include "pluginxx/host/event_bus.h"
+#include "pluginxx/host/loader.h"
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/runtime.h"
 #include "utilxx_base/json.h"
@@ -78,6 +79,9 @@ struct PluginInstanceBase {
     std::vector<std::string> optionalDepends;     ///< 可选依赖 (未安装仅警告)
     void*                    dlHandle  = nullptr; ///< dlopen/LoadLibrary 句柄
     void*                    pluginCtx = nullptr; ///< entry 输出的插件私有上下文
+    /// 内置插件 (合并编译进宿主二进制) 的 destroy 入口; 动态库插件为 nullptr
+    /// (此时 destroy 由 [destroyPlugin] 经 [pluginDestroySymbol] 向动态库查找)
+    AgentxxPluginDestroyFn builtinUnload = nullptr;
     bool                     enabled   = true; ///< 是否启用 (禁用: 注册摘除/命令停用)
     bool userDisabled          = false; ///< 是否被用户显式禁用 (区别于级联禁用)
     bool blockedByDependencies = false; ///< 是否因必选依赖不可用而级联禁用
@@ -97,6 +101,28 @@ struct PluginInstanceBase {
     bool lifecycleStarted = false;
     /// stop 事务是否已执行完成 (destroy 的前提)。
     bool lifecycleStopped = false;
+
+    /// 本端 destroy 入口符号名 (agent 侧 `agentxx_plugin_agent_destroy` /
+    /// client 侧 `agentxx_plugin_client_destroy`); 由派生实例类实现。
+    /// 两端的入口符号名不同, 因此 [destroyPlugin] 需要它来查找动态库符号。
+    virtual const char* pluginDestroySymbol() const noexcept = 0;
+
+    /// 日志前缀 (借用它的宿主实例类可覆写以区分日志来源; 默认无前缀)
+    virtual std::string_view logTag() const noexcept {
+        return {};
+    }
+
+    /// 在所有活动 lease 归零后销毁插件上下文；析构时也作为最后一道安全收尾。
+    /// 返回 false 表示仍有活动 lease，调用方不得关闭动态库。
+    ///
+    /// 语义 (agent / client 两侧一致):
+    /// - 已有活动 lease: 置 destroyDeferred 并拒绝销毁 (调用方保留 DSO);
+    /// - create 未成功 (pluginCreated=false): 只退休宿主控制块 (或已销毁则直接返回);
+    /// - 否则查找 destroy 入口 (内置插件用 [builtinUnload], 动态库插件按
+    ///   [pluginDestroySymbol] 查符号) 并调用, 随后退休宿主控制块 —— 插件上下文
+    ///   销毁后, 插件持有的旧 host 指针只能安全失败。
+    /// - 幂等: 已销毁时直接返回 true。
+    bool destroyPlugin() noexcept;
 
     /// stop 事务仍未执行: 同步关闭路径无法等待该事务，因此必须保留实例、
     /// 上下文与动态库，交由仍运行的异步 owner (unloadAsync/shutdownAsync) 收尾。
@@ -437,6 +463,54 @@ inline void PluginInstanceBase::retireHostControl() noexcept {
     if (hostControl) {
         hostControl->retire();
     }
+}
+
+inline bool PluginInstanceBase::destroyPlugin() noexcept {
+    if (pluginDestroyed) {
+        return true;
+    }
+    if (lifetime && lifetime->leaseCount() != 0) {
+        destroyDeferred = true;
+        XX_LOGE(
+            "{}`{}` destroy deferred while {} lease(s) are still active",
+            logTag(),
+            name,
+            lifetime->leaseCount()
+        );
+        return false;
+    }
+    if (!pluginCreated) {
+        pluginDestroyed = true;
+        destroyDeferred = false;
+        retireHostControl();
+        return true;
+    }
+
+    AgentxxPluginDestroyFn destroy = builtinUnload;
+    if (dlHandle) {
+        std::string err;
+        destroy = reinterpret_cast<AgentxxPluginDestroyFn>(
+            NativeLoader::sym(dlHandle, pluginDestroySymbol(), err)
+        );
+        if (!destroy && !err.empty()) {
+            XX_LOGW("{}`{}` has no destroy entry: {}", logTag(), name, err);
+        }
+    }
+    if (destroy) {
+        try {
+            destroy(pluginCtx);
+        } catch (const std::exception& e) {
+            XX_LOGW("{}`{}` destroy threw: {}", logTag(), name, e.what());
+        } catch (...) {
+            XX_LOGW("{}`{}` destroy threw unknown exception", logTag(), name);
+        }
+    }
+    pluginCtx       = nullptr;
+    pluginDestroyed = true;
+    destroyDeferred = false;
+    // 插件上下文已销毁：之后插件持有的旧 host 指针只能安全失败。
+    retireHostControl();
+    return true;
 }
 
 namespace detail {

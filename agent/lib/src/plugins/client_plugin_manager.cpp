@@ -133,58 +133,11 @@ ClientPluginInstance::~ClientPluginInstance() {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
     }
-    subscriptions.clear();
+    clientSubscriptions.clear();
     statusItemHandles.clear();
     panelHandles.clear();
     infoSectionHandles.clear();
     subHandles.clear();
-}
-
-bool ClientPluginInstance::destroyPlugin() noexcept {
-    if (pluginDestroyed) {
-        return true;
-    }
-    if (lifetime && lifetime->leaseCount() != 0) {
-        destroyDeferred = true;
-        XX_LOGE(
-            "[client_plugin] `{}` destroy deferred while {} lease(s) are still active",
-            name,
-            lifetime->leaseCount()
-        );
-        return false;
-    }
-    if (!pluginCreated) {
-        pluginDestroyed = true;
-        destroyDeferred = false;
-        retireHostControl();
-        return true;
-    }
-
-    AgentxxClientPluginDestroyFn destroy = nullptr;
-    if (dlHandle) {
-        std::string err;
-        destroy = reinterpret_cast<AgentxxClientPluginDestroyFn>(
-            NativeLoader::sym(dlHandle, AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY, err)
-        );
-        if (!destroy && !err.empty()) {
-            XX_LOGW("[client_plugin] `{}` has no destroy entry: {}", name, err);
-        }
-    }
-    if (destroy) {
-        try {
-            destroy(pluginCtx);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] `{}` destroy threw: {}", name, e.what());
-        } catch (...) {
-            XX_LOGW("[client_plugin] `{}` destroy threw unknown exception", name);
-        }
-    }
-    pluginCtx       = nullptr;
-    pluginDestroyed = true;
-    destroyDeferred = false;
-    // 插件上下文已销毁：之后插件持有的旧 host 指针只能安全失败。
-    retireHostControl();
-    return true;
 }
 
 // =====================================================================
@@ -192,19 +145,40 @@ bool ClientPluginInstance::destroyPlugin() noexcept {
 // =====================================================================
 
 ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
-    PluginManagerBase<ClientPluginInstance>(std::move(ex)),
+    pluginxx::PluginHostLifecycle<ClientPluginInstance>(std::move(ex)),
     pool_(std::make_unique<asio::thread_pool>(1)),
     uiRegistry_(std::make_shared<const ClientUiRegistry>()) {}
 
 ClientPluginManager::~ClientPluginManager() {
     shutdownAll();
-    if (hasPendingClose()) {
-        XX_LOGW("[client_plugin] manager destroyed with pending plugin shutdown; owner should "
-                "await shutdownAsync() before stopping the client IO executor");
-    }
+    warnPendingCloseOnDestroy("client");
     if (pool_) {
         pool_->join();
     }
+}
+
+// ==================== pluginxx::PluginHostLifecycle 宿主接缝 ====================
+
+/// 生成 client 侧实例对象
+/// - 领域自引用 (self) 与所属管理器 (manager 弱引用);
+/// - 其余公共部分 (生命周期入口 / 基类自引用 / 生命周期控制块 / 宿主控制块)
+///   由 [attachInstance] 在装载路径中统一装配。
+std::shared_ptr<ClientPluginInstance> ClientPluginManager::createInstance(std::string name) {
+    auto inst     = std::make_shared<ClientPluginInstance>(std::move(name));
+    inst->manager = weak_from_this();
+    inst->self    = inst;
+    return inst;
+}
+
+/// 实例加载完成: 登记实例代次 (UI 点击携带代次, 派发时复查; 重载同名插件后
+/// 旧代次的点击会被丢弃, 不会转交新实例)
+void ClientPluginManager::onInstanceLoaded(ClientPluginInstance& inst) {
+    setRegistryGeneration(inst.name, inst.lifetime ? inst.lifetime->generation() : 0, true);
+}
+
+/// 实例从插件表摘除: 清除实例代次登记
+void ClientPluginManager::onInstanceUnloaded(ClientPluginInstance& inst) {
+    setRegistryGeneration(inst.name, 0, false);
 }
 
 // ==================== 装配 ====================
@@ -448,8 +422,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         }
     }
 
-    auto inst         = std::make_shared<ClientPluginInstance>(name);
-    inst->lifetime    = makeLifetime(inst);
+    auto inst         = createInstance(name);
     inst->version     = version;
     inst->description = desc;
     inst->path        = path;
@@ -458,18 +431,13 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->args            = cfg ? cfg->args : utilxx_base::Json::object();
     inst->configPath      = cfg ? cfg->configPath : std::string{};
     inst->dlHandle        = handle;
-    inst->lifecycleStart  = lifecycleStart;
-    inst->lifecycleStop   = lifecycleStop;
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
     inst->interfaces      = std::move(interfaces);
-    inst->manager         = weak_from_this();
-    inst->self            = inst;
-    inst->ownerSelf       = inst;
-    // 交给插件的 host 视图放在进程级稳定的控制块里：插件可能保存该指针并在
-    // 卸载后继续调用，控制块 tombstone 保证这类迟到调用安全失败（见
-    // [PluginHostControl]）。
-    inst->hostControl = PluginHostControl::create(inst, hostVtable());
+    // 生命周期入口 + 基类自引用 + 生命周期控制块 + 交给自己插件的宿主控制块
+    // (host 视图放在进程级稳定的控制块里: 插件可能保存该指针并在卸载后继续调用,
+    // 控制块 tombstone 保证这类迟到调用安全失败)
+    attachInstance(inst, lifecycleStart, lifecycleStop);
 
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
     // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
@@ -523,338 +491,22 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
 
     inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
     utilxx_base::insertHeterogeneous(plugins_, std::string{name}, inst);
-    // UI 点击携带实例代次: 登记后旧代次的点击会在派发复查时被丢弃
-    setRegistryGeneration(inst->name, inst->lifetime->generation(), true);
+    // 实例代次登记 (UI 点击携带代次, 派发时复查; 见 onInstanceLoaded)
+    onInstanceLoaded(*inst);
     releasePluginName(name);
     XX_LOGI("[client_plugin] loaded: {} ({})", name, version);
     co_return inst;
 }
 
-asio::awaitable<bool>
-    ClientPluginManager::unloadAsync(std::string_view name, std::chrono::milliseconds timeout) {
-    const auto deadline
-        = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds::zero());
-    co_return co_await unloadAsyncUntil(std::string{name}, deadline);
-}
-
-asio::awaitable<bool> ClientPluginManager::unloadAsyncUntil(
-    std::string                           name,
-    std::chrono::steady_clock::time_point deadline
-) {
-    auto inst = find(name);
-    if (!inst) {
-        XX_LOGW("[client_plugin] unload: not found `{}`", name);
-        co_return false;
-    }
-    if (inst->unloadRequested) {
-        // 允许异步 owner 关闭接管同步 shutdownAll 留下的 Closing 实例。
-        if (!inst->lifetime || !inst->lifetime->closeRequested()) {
-            co_return false;
-        }
-        inst->unloadRequested = false;
-    }
-    inst->unloadRequested = true;
-    if (inst->lifetime) {
-        inst->lifetime->requestClose();
-    }
-
-    // 级联: 必选依赖者先卸载 (先子后父) —— 与 agent 侧 unloadAsync 一致
-    for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
-        XX_LOGI("[client_plugin] unload `{}` cascades unload of dependent `{}`", name, child);
-        if (!co_await unloadAsyncUntil(child, deadline)) {
-            co_return false;
-        }
-    }
-
-    // 摘除注册 (adapter 通知 UI 移除; 彻底清理) —— 先于等待, 插件卸载期间
-    // 不再收到任何回调
-    detachAll(inst.get());
-
-    if (inst->lifecycleStopPending()) {
-        std::string stopError;
-        if (!co_await awaitPluginLifecycle(
-                runtime(),
-                inst,
-                inst->pluginCtx,
-                inst->lifecycleStop,
-                "client plugin stop",
-                stopError
-            )) {
-            inst->unloadRequested = false;
-            if (inst->lifetime) {
-                inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
-            }
-            XX_LOGE("[client_plugin] `{}` stop failed: {}", inst->name, stopError);
-            co_return false;
-        }
-        inst->lifecycleStopped = true;
-    }
-
-    // 等未返回的回调归零 (超时放弃: 保持已 detach 状态, 复位可稍后重试)
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(std::max(
-        deadline - std::chrono::steady_clock::now(),
-        std::chrono::steady_clock::duration::zero()
-    ));
-    if (!co_await waitInflightZero(inst, remaining)) {
-        inst->unloadRequested = false;
-        if (inst->lifetime) {
-            inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
-        }
-        XX_LOGW("[client_plugin] `{}` inflight not zero, unload aborted (retry later)", name);
-        co_return false;
-    }
-
-    inst->destroyPlugin();
-    if (!inst->pluginDestroyed) {
-        inst->unloadRequested = false;
-        if (inst->lifetime) {
-            inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
-        }
-        XX_LOGW("[client_plugin] `{}` unload deferred after destroy attempt", inst->name);
-        co_return false;
-    }
-    if (inst->lifetime) {
-        inst->lifetime->setState(pluginxx::PluginInstanceState::Closed);
-    }
-    // 代次登记随实例移除: 旧 UI 快照的点击找不到代次, 只会被丢弃
-    setRegistryGeneration(name, 0, false);
-    // 从表移除 → 实例析构 → dlclose (~ClientPluginInstance)
-    utilxx_base::eraseHeterogeneous(plugins_, name); // 异构删除免拷贝
-    XX_LOGI("[client_plugin] unloaded: {}", inst->name);
-    co_return true;
-}
-
-asio::awaitable<bool> ClientPluginManager::shutdownAsync(std::chrono::milliseconds timeout) {
-    // 逐个卸载 (快照/超时/残留判定) 由基类公共实现完成
-    co_return co_await this->shutdownAllAsync(
-        timeout,
-        [this](const std::string& name, std::chrono::steady_clock::time_point deadline) {
-            return unloadAsyncUntil(name, deadline);
-        }
-    );
-}
-
-void ClientPluginManager::disableImpl(std::string_view name, bool userInitiated) {
-    auto inst = find(name);
-    if (!inst || !inst->enabled) {
-        return;
-    }
-    if (inst->lifetime && inst->lifetime->closeRequested()) {
-        // 已进入关闭流程: 不再接受启用状态变化, 避免与 stop/destroy 交错
-        return;
-    }
-    if (userInitiated) {
-        inst->userDisabled          = true;
-        inst->blockedByDependencies = false;
-    } else {
-        inst->blockedByDependencies = true;
-    }
-    inst->enabled = false;
-    if (inst->lifetime) {
-        inst->lifetime->setState(pluginxx::PluginInstanceState::Disabled);
-    }
-
-    // 级联禁用依赖者 (先子后父)
-    for (const auto& child : collectReverseRequiredDeps(plugins_, std::string{name}, true)) {
-        disableImpl(child, false);
-    }
-
-    // 摘除 UI 注册 (adapter 通知); 注册信息保留, enable 可恢复
-    detachAll(inst.get());
-    XX_LOGI("[client_plugin] disabled: {}", inst->name);
-
-    // 导出 stop 的插件: 把 stop 事务投递到 client io 线程, 撤销自管线程/定时器
-    requestStopForDisable(inst);
-}
-
-void ClientPluginManager::disable(std::string_view name) {
-    disableImpl(name, true);
-}
-
-void ClientPluginManager::enableImpl(std::string_view name, bool userInitiated) {
-    auto inst = find(name);
-    if (!inst || inst->enabled) {
-        return;
-    }
-    if (!userInitiated && inst->userDisabled) {
-        return; // 被用户显式禁用: 级联不复活
-    }
-    if (inst->lifetime && inst->lifetime->closeRequested()) {
-        return; // 关闭流程中不接受启用状态变化
-    }
-    inst->enabled = true;
-    if (inst->lifetime) {
-        inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
-    }
-    if (userInitiated) {
-        inst->userDisabled = false;
-    }
-    inst->blockedByDependencies = false;
-
-    // 级联启用依赖者 (先父后子)
-    for (const auto& d : inst->depends) {
-        enableImpl(d, false);
-    }
-
-    // UI 注册由插件 start 事务重新声明 (宿主只负责投递与结果处理)
-    requestStartForEnable(inst);
-    XX_LOGI("[client_plugin] enabled: {}", inst->name);
-
-    // 级联恢复被级联禁用的依赖者 (用户显式禁用的不恢复)
-    for (const auto& child :
-         collectReverseRequiredDeps(plugins_, std::string{name}, /*onlyEnabled=*/false)) {
-        enableImpl(child, false);
-    }
-}
-
-void ClientPluginManager::enable(std::string_view name) {
-    enableImpl(name, true);
-}
-
-/// 按需投递禁用事务 (仅导出 stop 且"已 start 未 stop"的实例需要)。
-void ClientPluginManager::requestStopForDisable(const std::shared_ptr<ClientPluginInstance>& inst) {
-    if (!inst || !inst->lifecycleStopPending()) {
-        return;
-    }
-    auto self = shared_from_this();
-    try {
-        asio::co_spawn(
-            ioExecutor(),
-            [self, inst]() -> asio::awaitable<void> {
-                co_await self->stopForDisable(inst);
-            },
-            [inst](std::exception_ptr e) {
-                if (!e) {
-                    return;
-                }
-                try {
-                    std::rethrow_exception(e);
-                } catch (const std::exception& ex) {
-                    XX_LOGE("[client_plugin] `{}` disable stop threw: {}", inst->name, ex.what());
-                } catch (...) {
-                    XX_LOGE("[client_plugin] `{}` disable stop threw unknown", inst->name);
-                }
-            }
-        );
-    } catch (const std::exception& e) {
-        XX_LOGW(
-            "[client_plugin] `{}` disable stop could not be scheduled: {}",
-            inst->name,
-            e.what()
-        );
-    }
-}
-
-/// 按需投递启用事务 (导出 start 的插件)。
-void ClientPluginManager::requestStartForEnable(const std::shared_ptr<ClientPluginInstance>& inst) {
-    if (!inst || !inst->lifecycleStart) {
-        return;
-    }
-    auto self = shared_from_this();
-    try {
-        asio::co_spawn(
-            ioExecutor(),
-            [self, inst]() -> asio::awaitable<void> {
-                co_await self->startForEnable(inst);
-            },
-            [inst](std::exception_ptr e) {
-                if (!e) {
-                    return;
-                }
-                try {
-                    std::rethrow_exception(e);
-                } catch (const std::exception& ex) {
-                    XX_LOGE("[client_plugin] `{}` enable start threw: {}", inst->name, ex.what());
-                } catch (...) {
-                    XX_LOGE("[client_plugin] `{}` enable start threw unknown", inst->name);
-                }
-            }
-        );
-    } catch (const std::exception& e) {
-        XX_LOGW(
-            "[client_plugin] `{}` enable start could not be scheduled: {}",
-            inst->name,
-            e.what()
-        );
-    }
-}
-
-/// 禁用事务的异步部分 (client io 线程): 调用插件 stop 撤销自管资源。
-asio::awaitable<void> ClientPluginManager::stopForDisable(std::shared_ptr<ClientPluginInstance> inst
-) {
-    if (!inst || !inst->lifecycleStopPending() || inst->enabled) {
-        co_return;
-    }
-    std::string error;
-    if (!co_await awaitPluginLifecycle(
-            runtime(),
-            inst,
-            inst->pluginCtx,
-            inst->lifecycleStop,
-            "client plugin stop",
-            error
-        )) {
-        XX_LOGE("[client_plugin] `{}` stop failed while disabling: {}", inst->name, error);
-        co_return;
-    }
-    inst->lifecycleStopped = true;
-    XX_LOGI("[client_plugin] `{}` stopped for disable", inst->name);
-    co_return;
-}
-
-/// 启用事务的异步部分 (client io 线程): 先补齐 stop (若仍欠着), 再执行 start
-/// 重新提交 UI/事件注册; start 失败回到 Disabled 且不留部分注册。
-asio::awaitable<void> ClientPluginManager::startForEnable(std::shared_ptr<ClientPluginInstance> inst
-) {
-    if (!inst || !inst->lifecycleStart || !inst->enabled) {
-        co_return;
-    }
-    if (inst->lifecycleStopPending()) {
-        std::string stopError;
-        if (!co_await awaitPluginLifecycle(
-                runtime(),
-                inst,
-                inst->pluginCtx,
-                inst->lifecycleStop,
-                "client plugin stop",
-                stopError
-            )) {
-            if (inst->lifetime) {
-                inst->lifetime->setState(pluginxx::PluginInstanceState::Disabled);
-            }
-            XX_LOGE("[client_plugin] `{}` enable aborted, stop failed: {}", inst->name, stopError);
-            co_return;
-        }
-        inst->lifecycleStopped = true;
-    }
-    if (!inst->enabled) {
-        co_return; // 等待 stop 期间用户又禁用了该插件
-    }
-    std::string error;
-    if (!co_await awaitPluginLifecycle(
-            runtime(),
-            inst,
-            inst->pluginCtx,
-            inst->lifecycleStart,
-            "client plugin start",
-            error
-        )) {
-        inst->enabled               = false;
-        inst->blockedByDependencies = false;
-        if (inst->lifetime) {
-            inst->lifetime->setState(pluginxx::PluginInstanceState::Disabled);
-        }
-        detachAll(inst.get());
-        XX_LOGE("[client_plugin] `{}` start failed while enabling: {}", inst->name, error);
-        co_return;
-    }
-    inst->lifecycleStopped = false;
-    if (inst->lifetime) {
-        inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
-    }
-    XX_LOGI("[client_plugin] `{}` restarted after enable", inst->name);
-    co_return;
-}
+// ==================== 生命周期 (继承自 pluginxx::PluginHostLifecycle) ====================
+//
+// 卸载 / 关闭等待 / 禁用启用 / 级联依赖 / destroy 与 dlclose 的骨架在 cxx_pluginxx
+// (见 pluginxx/host/lifecycle.h): 这些逻辑与宿主领域无关, client 与 agent 两侧
+// 共用同一份实现 (含失败回滚、关闭超时、停止后重试、级联依赖)。
+// 本类只保留两处 client 特有差异:
+// - unloadAsync 的默认超时较短 (UI 交互路径, 见头文件);
+// - 卸载级联只统计"启用中"的依赖者 (cascadeUnloadEnabledOnly)。
+// 启停事务 (stop/start) 触达插件侧注册时, 领域动作经 detachDomainRegistrations 注入。
 
 asio::awaitable<void>
     ClientPluginManager::loadConfiguredClientPlugins(const std::vector<PluginConfig>& plugins) {
@@ -948,119 +600,6 @@ asio::awaitable<void>
         }
         co_await loadNativeAsync(it.path, it.cfg, it.allowMissingEntry);
     }
-}
-
-void ClientPluginManager::shutdownAll() {
-    // 依赖图级联卸载 (先子后父) —— 与 agent 侧 shutdownAll 一致:
-    // 脚本类插件 (depends 引擎) 先卸载, 引擎最后 dlclose
-    // - 不等未返回的插件回调: 调用方 (进程退出) 须保证没有尚未返回的插件回调
-    std::vector<std::string> names;
-    names.reserve(plugins_.size());
-    for (const auto& [name, inst] : plugins_) {
-        (void)inst;
-        names.push_back(name);
-    }
-    for (const auto& name : names) {
-        auto inst = find(name);
-        if (inst && !inst->unloadRequested) {
-            shutdownClientPlugin(inst);
-        }
-    }
-    // shutdownClientPlugin 对仍有 lease 的实例会保留上下文和动态库；不能无条件
-    // 清空实例表，否则最后一个 lease 释放后将失去可重试的关闭入口。
-}
-
-namespace {
-
-/// Client manager 的同步析构也必须把 DSO 留到所有回调返回之后。
-void deferClientPluginShutdown(const std::shared_ptr<ClientPluginInstance>& inst) {
-    if (!inst || !inst->lifetime) {
-        return;
-    }
-    if (!inst->lifetime->setIdleCleanup([inst] {
-            if (inst->lifecycleStopPending()) {
-                inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
-                XX_LOGE(
-                    "[client_plugin] `{}` idle cleanup: lifecycle stop still pending; "
-                    "keeping context and DSO",
-                    inst->name
-                );
-                return;
-            }
-            if (!inst->destroyPlugin()) {
-                XX_LOGE("[client_plugin] `{}` idle cleanup still has active leases", inst->name);
-                return;
-            }
-            inst->lifetime->setState(pluginxx::PluginInstanceState::Closed);
-            // 只删除仍指向这个 generation 的实例，避免迟到的旧 cleanup
-            // 误删同名重载实例。
-            if (auto manager = inst->manager.lock()) {
-                auto it = manager->plugins_.find(inst->name);
-                if (it != manager->plugins_.end() && it->second == inst) {
-                    manager->plugins_.erase(it);
-                }
-            }
-        })) {
-        XX_LOGW("[client_plugin] `{}` already has an idle cleanup", inst->name);
-    }
-}
-
-} // namespace
-
-void ClientPluginManager::shutdownClientPlugin(const std::shared_ptr<ClientPluginInstance>& inst) {
-    if (!inst || inst->unloadRequested) {
-        return;
-    }
-    inst->unloadRequested = true;
-    if (inst->lifetime) {
-        // 先关闭 admission，再摘除 UI/事件注册。否则同步析构窗口内仍
-        // 可能有新的事件、命令或 renderer 取得 lease，导致 destroy/dlclose
-        // 的等待条件不断被重新打开。
-        inst->lifetime->requestClose();
-    }
-    // 先递归卸载必选依赖本插件的插件 (先子后父)
-    for (const auto& dep : collectReverseRequiredDeps(plugins_, inst->name, false)) {
-        auto depInst = find(dep);
-        if (depInst) {
-            shutdownClientPlugin(depInst);
-        }
-    }
-    detachAll(inst.get());
-    // stop 事务尚未完成时不能 destroy/dlclose：同步路径无法等待该事务，
-    // 只能保留实例并标记 CloseFailed，等待 shutdownAsync/unloadAsync 收尾。
-    if (inst->lifecycleStopPending()) {
-        if (inst->lifetime) {
-            inst->lifetime->setState(pluginxx::PluginInstanceState::CloseFailed);
-        }
-        XX_LOGE(
-            "[client_plugin] `{}` shutdown deferred: lifecycle stop pending; call "
-            "shutdownAsync before destroying the owner",
-            inst->name
-        );
-        return;
-    }
-    // 同步析构路径不能绕过活动 lease。注册已摘除，但插件上下文和 DSO
-    // 必须保留到所有已经接受的回调返回；调用方可稍后通过 unloadAsync 重试。
-    if (inst->lifetime && inst->lifetime->leaseCount() != 0) {
-        XX_LOGW(
-            "[client_plugin] shutdown deferred: `{}` still has {} active lease(s)",
-            inst->name,
-            inst->lifetime->leaseCount()
-        );
-        deferClientPluginShutdown(inst);
-        return;
-    }
-    inst->destroyPlugin();
-    if (!inst->pluginDestroyed) {
-        XX_LOGW("[client_plugin] shutdown deferred after destroy attempt: `{}`", inst->name);
-        return;
-    }
-    if (inst->lifetime) {
-        inst->lifetime->setState(pluginxx::PluginInstanceState::Closed);
-    }
-    // dlclose 由 ~ClientPluginInstance 完成 (实例从表移除后释放)
-    utilxx_base::eraseHeterogeneous(plugins_, inst->name);
-    XX_LOGI("[client_plugin] shutdown: {}", inst->name);
 }
 
 // ==================== 查询 ====================
@@ -1655,7 +1194,7 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
     bool hasSubscriber = false;
     for (const auto& [name, inst] : plugins_) {
         (void)name;
-        for (const auto& sub : inst->subscriptions) {
+        for (const auto& sub : inst->clientSubscriptions) {
             if (sub && sub->alive && sub->event == AGENTXX_CLIENT_EVT_PLUGIN_DATA) {
                 hasSubscriber = true;
                 break;
@@ -1684,14 +1223,15 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
 
 // ==================== 内部 ====================
 
-/// 摘除插件在宿主侧的 UI 注册与订阅 (禁用与卸载共用):
+/// 摘除插件在宿主侧的 UI 注册与订阅 (禁用与卸载共用; pluginxx 生命周期骨架的
+/// 领域接缝 [detachDomainRegistrations]):
 /// - 旧 COW 快照中的自定义 renderer 先失效, UI 线程只能回退通用渲染;
 /// - UI 注册表一次性重建 (COW), adapter 按注册记录逐项通知移除;
 /// - 注册记录与订阅句柄一并清空: 重新启用时由插件 start 事务重新声明。
 ///
 /// 句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles) 不在此释放:
 /// 插件的 stop 回调可能主动反注册, 句柄必须存活到实例析构, 由 ~ClientPluginInstance 统一释放。
-void ClientPluginManager::detachAll(ClientPluginInstance* inst) {
+void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) {
     if (!inst) {
         return;
     }
@@ -1747,7 +1287,7 @@ void ClientPluginManager::detachAll(ClientPluginInstance* inst) {
     inst->toolDecorRegs.clear();
     inst->toolRenderRegs.clear();
     inst->actionRegs.clear();
-    inst->subscriptions.clear();
+    inst->clientSubscriptions.clear();
     inst->subHandles.clear();
 }
 
@@ -1770,7 +1310,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         if (!inst->enabled) {
             continue;
         }
-        for (const auto& s : inst->subscriptions) {
+        for (const auto& s : inst->clientSubscriptions) {
             if (s->alive && s->event == event) {
                 refs.push_back(SubRef{inst, s});
             }
@@ -1813,6 +1353,10 @@ namespace {
 // =====================================================================
 
 using ClientHostCall = PluginHostCall<ClientPluginInstance, ClientPluginManager>;
+
+/// 框架内核通用表入口 (client 侧复用的部分: 协程驱动等与宿主领域无关的入口)
+using ClientGenericEntries
+    = pluginxx::GenericTableEntries<ClientPluginInstance, ClientPluginManager>;
 
 /// 解析宿主控制块，并持有实例/管理器强引用与 admission lease。
 ///
@@ -1992,72 +1536,13 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_escape(
 }
 
 // ---- 协程驱动 (agentxx.agent.coroutine_runtime; 与 agent 侧同 IID/同语义) ----
-
-/// client 侧当前线程是否为插件 IO 线程 (仅诊断用)。
-static int32_t AGENTXX_PLUGIN_CALL xx_cis_io_thread(const AgentxxPluginHost* host) {
-    auto call = enterClientHost(host, /*allowClosing=*/true);
-    auto mgr  = call.manager();
-    return (mgr && mgr->isIoThread()) ? 1 : 0;
-}
-
-/// 申请一次驱动请求 (任意线程可调用; 永不内联回调)。语义与 agent 侧一致,
-/// 见 [xx_request_driver] 与 pluginxx/runtime/driver.h。
-static ::AgentxxPluginDriver* AGENTXX_PLUGIN_CALL xx_crequest_driver(
-    const AgentxxPluginHost*   host,
-    ::AgentxxPluginDriveOnceFn drive_once,
-    void*                      user_data,
-    AgentxxPluginString*       error_out
-) {
-    return agentxx::plugin::guardVtableCall<::AgentxxPluginDriver*>(nullptr, [&]() {
-        if (!drive_once) {
-            hostMemorySetString(error_out, "coroutine runtime: null drive callback");
-            return static_cast<::AgentxxPluginDriver*>(nullptr);
-        }
-        auto call = enterClientHost(host, /*allowClosing=*/true);
-        auto inst = call.instance();
-        auto mgr  = call.manager();
-        if (!mgr || !inst || !inst->lifetime) {
-            hostMemorySetString(
-                error_out,
-                "coroutine runtime: plugin instance is closed or unavailable"
-            );
-            return static_cast<::AgentxxPluginDriver*>(nullptr);
-        }
-        auto driver = AgentxxPluginDriver::create(
-            mgr->runtime(),
-            inst->lifetime,
-            drive_once,
-            user_data,
-            inst->name + " driver"
-        );
-        if (!driver) {
-            hostMemorySetString(
-                error_out,
-                "coroutine runtime: plugin instance is closing or closed"
-            );
-            return static_cast<::AgentxxPluginDriver*>(nullptr);
-        }
-        inst->retainDriverHandle(driver);
-        if (!driver->schedule()) {
-            hostMemorySetString(error_out, "coroutine runtime: host IO executor is unavailable");
-            return static_cast<::AgentxxPluginDriver*>(nullptr);
-        }
-        return driver.get();
-    });
-}
-
-/// 取消尚未开始的请求 (幂等, 非阻塞, 任意线程可调用)。
-/// 句柄校验与 agent 侧一致: 走请求进程级地址注册表, 伪造句柄安全忽略。
-static void AGENTXX_PLUGIN_CALL xx_ccancel_driver(::AgentxxPluginDriver* driver) {
-    if (!driver) {
-        return;
-    }
-    agentxx::plugin::guardVtableCallVoid([&] {
-        if (!AgentxxPluginDriver::cancelByHandle(driver)) {
-            XX_LOGW("[client_plugin] driver cancellation ignored: handle is not an active ticket");
-        }
-    });
-}
+//
+// 驱动请求/取消/线程判定的实现整体复用框架内核的通用表入口
+// ([pluginxx::GenericTableEntries]): 这三项只依赖"宿主控制块 + 实例生命周期 +
+// 宿主 runtime/io 线程判定", 与宿主领域无关, 因此 client / agent 两侧共用同一份
+// 逻辑与语义 (见 pluginxx/host/tables_impl.h 的 requestDriverEntry 等)。
+// 语义要点: 申请恒异步、每张请求至多执行一次、排队期间持有实例 lease、
+// 关闭中仍允许驱动 (取消收束需要驱动继续流动)、已关闭拒绝。
 
 // ---- COM 风格接口表查询 ----
 
@@ -2628,12 +2113,13 @@ const AgentxxClientLogIface g_clientIfaceLog = {
 };
 
 /// 协程驱动接口表 (与 agent 侧同 IID; client 插件用同一套 kit 桥接)
+/// - 三个入口整体复用框架内核的通用表实现 (见文件上方"协程驱动"说明)
 const AgentxxPluginCoroutineRuntimeIface g_clientIfaceCoroutineRuntime = {
     /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
     /* struct_size */ sizeof(AgentxxPluginCoroutineRuntimeIface),
-    /* request_driver */ xx_crequest_driver,
-    /* cancel_driver */ xx_ccancel_driver,
-    /* is_io_thread */ xx_cis_io_thread,
+    /* request_driver */ &ClientGenericEntries::requestDriverEntry,
+    /* cancel_driver */ &ClientGenericEntries::cancelDriverEntry,
+    /* is_io_thread */ &ClientGenericEntries::isIoThreadEntry,
 };
 
 /// 核心 vtable (契约冻结: 仅内存操作 + query_interface)
@@ -3306,7 +2792,7 @@ AgentxxPluginSubscription* ClientPluginManager::subscribe(
     s->handler = handler;
     s->ud      = ud;
     s->alive   = true;
-    inst->subscriptions.push_back(s);
+    inst->clientSubscriptions.push_back(s);
     sub->sub = s; // 强引用: 订阅对象从 vector 摘除后仍被句柄保活 (unload 回调内退订安全)
     inst->subHandles.push_back(sub);
     return reinterpret_cast<AgentxxPluginSubscription*>(sub.get());
@@ -3318,7 +2804,7 @@ void ClientPluginManager::unsubscribe(AgentxxPluginSubscription* sub) {
         return;
     }
     impl->sub->alive = false;
-    auto& subs       = impl->inst->subscriptions;
+    auto& subs       = impl->inst->clientSubscriptions;
     subs.erase(
         std::remove_if(
             subs.begin(),

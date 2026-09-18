@@ -121,7 +121,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/宿主 vtable/入口符号)、`tables.h` (通用接口表: events/capabilities/scheduler/coroutine_runtime/plugins/config/cancel/json/log/tasks) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 宿主侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 宿主控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
-| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `AgentxxPluginSubscription` + 幂等撤销)、`domain_hooks.h` (领域钩子 `DomainHooks`: 通用表需要宿主数据的入口)、`host_core.h` (宿主核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`) |
+| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `AgentxxPluginSubscription` + 幂等撤销)、`domain_hooks.h` (领域钩子 `DomainHooks`: 通用表需要宿主数据的入口)、`host_core.h` (宿主核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (宿主生命周期骨架 `PluginHostLifecycle<InstanceT>`: 装载/启停/禁用启用/卸载/级联依赖) |
 
 - **通用表实现整体在 `cxx_pluginxx`**: log/json/config/plugins/events/scheduler/
   coroutine_runtime/tasks/cancel/capabilities 十张表的**定义与实现**都在内核 ——
@@ -132,6 +132,27 @@ auto b64 = utilxx_base::base64Encode(data);
   插件清单) + 在 `query_interface` 里先调 `queryGenericPluginIface` 再分发自己的领域表。
   agentxx 侧对应实现见 `agent/plugin/plugin_manager_domain_hooks.cpp` (事件后端
   `AgentEventBusSource` 包装 `agentxx::events::EventBus`, 主题命名空间补齐等)
+
+- **生命周期骨架整体在 `cxx_pluginxx`** (`pluginxx/host/lifecycle.h` 的
+  `PluginHostLifecycle<InstanceT>`, 继承 `PluginHostCore`): 动态库装载与入口符号校验、
+  `create`/`start` 事务、启用与禁用级联、`stop` 事务补齐、inflight 归零等待、`destroy`
+  与动态库卸载、失败回滚与关闭超时重试全部只有一份实现 —— agent 侧 `PluginManager`
+  与 client 侧 `ClientPluginManager` 都继承它。宿主只提供少量接缝:
+  - 纯虚: `selfRef()` (管理器自引用, 因内核不能自己继承 `enable_shared_from_this`,
+      否则与宿主管理器的同名基类形成多基类歧义)、`createInstance(name)` (生成领域实例)、
+      `hostVtable()` (交给自己插件的 vtable);
+  - 可选覆写: `detachDomainRegistrations` (摘除领域注册: 工具/权限/钩子/图/提示词 或
+      client 侧 UI 注册表)、`clearDomainRegistrations`、`detachDomainOwnedResources`、
+      `applyDeclaredResources`、`releaseInstanceResources`、`onInstanceEnabledChanged`、
+      `onInstanceLoaded`/`onInstanceUnloaded`、`cascadeUnloadEnabledOnly`、`logTag`。
+
+  > client 侧**不复用**装载骨架: 其装载有独立语义 (dlopen 卸载到内部线程池执行、
+  > 接口协商限制、agent/client 双入口探测), 见 `ClientPluginManager::loadNativeAsync`;
+  > 但卸载/启停/级联/关闭等待与 agent 侧共用同一实现。
+  >
+  > 实例的 `destroyPlugin()` (destroy 入口查找 + 调用 + 宿主控制块退休) 已上移到
+  > `pluginxx::PluginInstanceBase`, agent/client 两侧实例只需给出本端符号名
+  > (`pluginDestroySymbol()`)。
 
 - 领域表 (tools/permission/hooks/session/model/prompt/resources/graph 与 client 侧全部表)
   由宿主定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`

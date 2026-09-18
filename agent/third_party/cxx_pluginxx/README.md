@@ -42,7 +42,9 @@ include/pluginxx/
           event_bus.h (事件后端抽象 EventSource + 订阅句柄 AgentxxPluginSubscription)、
           domain_hooks.h (领域钩子 DomainHooks: 通用表需要宿主数据的入口)、
           host_core.h (宿主核心 PluginHostCore<InstanceT>: 通用表状态与方法实现)、
-          tables_impl.h (十张通用表的 vtable 入口 + queryGenericPluginIface<I,M>)
+          tables_impl.h (十张通用表的 vtable 入口 + queryGenericPluginIface<I,M>)、
+          lifecycle.h (宿主生命周期骨架 PluginHostLifecycle<InstanceT>: 装载/启停/
+                   禁用启用/卸载/级联依赖; 宿主经少量接缝注入领域动作)
 src/      对应实现 (version.cpp / loader.cpp / manifest.cpp / capability_registry.cpp /
           api_abi_check.c C 兼容与对齐校验)
 ```
@@ -50,15 +52,32 @@ src/      对应实现 (version.cpp / loader.cpp / manifest.cpp / capability_reg
 ## 宿主接入形态
 
 ```cpp
-class MyManager : public pluginxx::PluginHostCore<MyInstance>, public pluginxx::DomainHooks {
+class MyInstance : public pluginxx::PluginInstanceBase {
+    const char* pluginDestroySymbol() const noexcept override { return "..._destroy"; }
+};
+
+class MyManager : public pluginxx::PluginHostLifecycle<MyInstance>,   // 含 PluginHostCore
+                  public std::enable_shared_from_this<MyManager>,
+                  public pluginxx::DomainHooks {
 public:
-    MyManager(asio::any_io_executor ex) : PluginHostCore<MyInstance>(ex) { setDomainHooks(this); }
+    MyManager(asio::any_io_executor ex) : PluginHostLifecycle<MyInstance>(ex) { setDomainHooks(this); }
     // DomainHooks: 事件后端 / 工作线程池 / 配置 JSON / 语言 / 会话工作目录 / 取消状态 / 插件清单
+protected:
+    // 生命周期接缝 (纯虚): 管理器自引用 / 生成领域实例 / 交给自己插件的 vtable
+    std::shared_ptr<pluginxx::PluginHostLifecycle<MyInstance>> selfRef() override;
+    std::shared_ptr<MyInstance> createInstance(std::string name) override;
+    const AgentxxHostVtable*    hostVtable() override;
+    // 生命周期接缝 (可选): 领域注册摘除与清空 / 清单资源应用与释放 / 启停状态通知 /
+    // 装载卸载收尾 / 卸载级联口径 / 日志前缀
+    void detachDomainRegistrations(MyInstance* inst) override;
 };
 ```
 
 - **通用表 (定义与实现都在本库)**: log / json / config / plugins / events / scheduler /
   coroutine_runtime / tasks / cancel / capabilities —— 宿主经 `DomainHooks` 提供领域数据；
+- **生命周期骨架 (在本库)**: 动态库装载与入口校验、create/start 事务、启用与禁用级联、
+  stop 事务补齐、inflight 归零等待、destroy 与动态库卸载、失败回滚、关闭超时重试；
+  宿主只提供少量接缝 (见上)，因此新宿主不必重写这套纪律；
 - **领域表 (宿主自己实现)**: agentxx 的 tools/permission/hooks/session/model/prompt/
   resources/graph 与 client 侧的 ui/events/session/wire/self 表；
 - `query_interface` 里先调 `pluginxx::queryGenericPluginIface<InstanceT, ManagerT>(iid)`
@@ -67,11 +86,12 @@ public:
 
 > 已落地: `api/` 两个纯 C 头、`kit/` (插件 SDK 通用部分 + 边界守卫)、
 > `runtime/` (实例状态机/执行 lease/协程驱动/Operation 驱动器/管理器基类)、
-> `host/` (装载/清单/ABI 辅助/能力注册表/事件后端/领域钩子/宿主核心/通用表入口) ——
-> agentxx 侧的 `agentxx/plugin/api/plugin_kit.h` 与 `plugin_guard.h` 作为 umbrella 引用
-> 它们 + 各自的领域 helper (工具/钩子/图节点/权限/client UI), 插件源码无需改动。
-> 剩余项 (装载/启停骨架下沉、`ClientPluginManager` 适配) 见
-> `resource/history/split-util-plugin-core/work.md` 的"未完成"节。
+> `host/` (装载/清单/ABI 辅助/能力注册表/事件后端/领域钩子/宿主核心/通用表入口/
+> 生命周期骨架) —— agentxx 侧的 `agentxx/plugin/api/plugin_kit.h` 与 `plugin_guard.h`
+> 作为 umbrella 引用它们 + 各自的领域 helper (工具/钩子/图节点/权限/client UI)，
+> 插件源码无需改动; agent 侧 `PluginManager` 与 client 侧 `ClientPluginManager`
+> 都已接入 `PluginHostLifecycle` (client 侧仅"装载"保留自己的实现，因为 dlopen 卸载到
+> 内部线程池、接口协商限制与双端入口探测属 client 特有语义)。
 
 领域表归属 (由宿主定义与实现):
 

@@ -869,9 +869,13 @@ shared/static 目标; `exec/` 下六个产物 (3 库 × 2 变体) 存在且命�
 
 ## 附: 实施检查清单 (可直接勾选)
 
-> 状态更新 (2026-09-18 第四次实施, 详见 [work.md](./work.md)):
-> P4-1 已完成 (通用表的状态/方法实现 + 入口装配整体下沉到 cxx_pluginxx);
-> P4-2 (装载/启停/级联骨架) 与 P4-3 (client 管理器适配) 仍待实施。
+> 状态更新 (2026-09-18 第五次实施, 详见 [work.md](./work.md)):
+> **P4-2 与 P4-3 主体已完成** —— 装载/启停/禁用启用/卸载/级联骨架整体下沉到
+> `pluginxx/host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`, agent 侧
+> `PluginManager` 与 client 侧 `ClientPluginManager` 都已接入同一实现
+> (client 仅"装载"保留自有实现); `destroyPlugin()` 上移到 `PluginInstanceBase`;
+> 安装树陈旧头已清理; 文档 (zh-cn + en plugins.md / index.md / AGENTS.md / README) 已同步。
+> 仍待人工确认: TUI/CLI 手工冒烟 (需真实终端)。
 
 - [x] P0 三目录骨架 (静态+动态双产物、命名规则) + superbuild 接入 + 三包可 `find_package`
 - [x] P1 `cxx_utilxx_base` 搬迁 (含 `utilxx/cancel.h`、`utilxx/async_offload.h`) + 全仓替换 (无转发头) + 测试全绿
@@ -884,8 +888,10 @@ shared/static 目标; `exec/` 下六个产物 (3 库 × 2 变体) 存在且命�
       (Linux 侧脚本 `check_plugin_exports.sh` / `check_sdk_negative_compile.sh` 未在本机运行,
        导出面已用 `dumpbin` 等价核对; 见 work.md)
 - [x] P4-1 `DomainHooks` + `PluginHostCore` 骨架 (通用表状态/方法 + vtable 入口装配) + 回归
-- [ ] P4-2 装载/启停/级联搬迁 + 回归
-- [ ] P4-3 `ClientPluginManager` 适配 + TUI/CLI 手工冒烟
-- [ ] P5 清理残留 (旧 build/安装树残留、插件源码注释) + `docs/en/**` 同步
-- [x] P5 文档更新 (`plugins.md` / `index.md` / `AGENTS.md` / 三库 README)
-- [ ] P6 下游/musicxx 接入说明 (`plan.md` §11)
+- [x] P4-2 装载/启停/级联搬迁 (`PluginHostLifecycle<InstanceT>`) + 回归
+- [x] P4-3 `ClientPluginManager` 适配 (卸载/启停/级联共用内核; 装载保留自有实现)
+- [ ] P4-3 验收收尾: TUI/CLI 手工冒烟 (插件加载/禁用/卸载/重载/级联/工具调用/面板状态栏)
+- [x] P5 清理残留 (安装树陈旧头 `agentxx/util/*`、`exec/agentxx_cli.exe.old`、插件源码注释)
+- [x] P5 文档更新 (`plugins.md` / `index.md` / `AGENTS.md` / 三库 README) + `docs/en/design/plugins.md` 补插件框架内核小节
+- [ ] P5 收尾: `docs/en/design/index.md` 代码结构章节仍落后于源码 (英文版未同步三次及以后的结构变更)
+- [x] P6 musicxx 接入说明 (plan.md §11; 见 work.md "musicxx 接入说明")

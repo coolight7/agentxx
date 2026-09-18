@@ -22,6 +22,7 @@
 #include "pluginxx/host/domain_hooks.h"
 #include "pluginxx/host/event_bus.h"
 #include "pluginxx/host/host_core.h"
+#include "pluginxx/host/lifecycle.h"
 #include "pluginxx/host/loader.h"
 #include "pluginxx/host/manifest.h"
 #include "pluginxx/host/tables_impl.h"
@@ -101,6 +102,10 @@ using pluginxx::DomainHooks;
 using pluginxx::EventSource;
 using pluginxx::PluginHostCore;
 using pluginxx::unsubscribePluginSubscription;
+
+// ==================== 宿主生命周期骨架 (pluginxx/host/lifecycle.h) ====================
+using pluginxx::PluginHostLifecycle;
+using pluginxx::PluginLoadOptions;
 
 // ==================== 通用表入口装配 (pluginxx/host/tables_impl.h) ====================
 using pluginxx::GenericTableEntries;
