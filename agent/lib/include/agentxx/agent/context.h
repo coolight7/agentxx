@@ -2,9 +2,9 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
-#include "utilxx_base/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
+#include "utilxx_base/log.h"
 #include <atomic>
 #include <cassert>
 #include <chrono>

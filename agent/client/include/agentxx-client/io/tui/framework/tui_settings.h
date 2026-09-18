@@ -1,7 +1,7 @@
 #pragma once
 
-#include "utilxx_base/log.h"
 #include "agentxx/util/settings_db.h"
+#include "utilxx_base/log.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -119,8 +119,7 @@ public:
         = {"Trace", "Debug", "Info", "Warn", "Error", "Out"};
 
     /// 默认日志等级: Info (TUI 日志侧边栏仅显示 Info 及以上, Out 恒显示)
-    inline static constexpr utilxx_base::LogLevel kDefaultLogLevel
-        = utilxx_base::LogLevel::Info;
+    inline static constexpr utilxx_base::LogLevel kDefaultLogLevel = utilxx_base::LogLevel::Info;
 
     /// 末尾思考模式名称 (供设置弹窗展示)
     inline static constexpr std::array<const char*, 2> kTailThinkingModeNames

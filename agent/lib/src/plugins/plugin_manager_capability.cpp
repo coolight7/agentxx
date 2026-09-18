@@ -5,11 +5,11 @@
 /// 领域部分: 工具调用与工具注册表/实例状态的耦合 (工具表是 agent 领域表)。
 #include "agentxx/plugin/plugin_manager.h"
 
+#include "asio/post.hpp"
+#include "fmt/format.h"
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
-#include "asio/post.hpp"
-#include "fmt/format.h"
 
 #include <algorithm>
 #include <cstring>

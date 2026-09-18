@@ -12,14 +12,14 @@
 #include "agentxx/tools/git_worktree.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/tools/tool_skill_search.h"
-#include "utilxx/async_offload.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/mcp/client.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/log.h"
 #include <chrono>
 #include <filesystem>
 #include <optional>

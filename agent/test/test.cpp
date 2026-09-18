@@ -55,12 +55,12 @@
 #include "agentxx-test/test_toolcall_args.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
-#include "utilxx_base/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/log.h"
 #ifdef AGENTXX_BUILD_CLIENT
 #include "agentxx-test/client/test_config_loader.h"
 #include "agentxx-test/client/test_mermaid_state.h"

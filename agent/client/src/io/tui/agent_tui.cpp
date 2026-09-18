@@ -13,9 +13,6 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
-#include "utilxx/crypto.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -28,6 +25,9 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include "neograph/graph/cancel.h"
+#include "utilxx/crypto.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -552,7 +552,7 @@ void TUIClientAgentIO::start() {
                     std::string argsText
                         = spacePos == std::string::npos ? std::string{} : text.substr(spacePos + 1);
                     utilxx_base::Json args = utilxx_base::Json::object();
-                    args["text"]             = argsText;
+                    args["text"]           = argsText;
                     pluginManager_->postCommandInvocation(cmdName, args.dump());
                     return true;
                 }
@@ -1586,8 +1586,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    st.contextMessages
-                        = std::make_shared<utilxx_base::Json>(std::move(m.messages));
+                    st.contextMessages = std::make_shared<utilxx_base::Json>(std::move(m.messages));
                     st.showContextOverlay = true;
                 }
                 // 打开上下文弹窗: 组件树由 UI 线程独占, 须投递到 UI 线程执行

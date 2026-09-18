@@ -1,11 +1,11 @@
 #include "agentxx-test/core/test_event_stream.h"
 #include "agentxx/event/event_stream.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/log.h"
 #include <atomic>
 #include <chrono>
 #include <iostream>

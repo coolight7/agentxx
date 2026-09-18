@@ -3,9 +3,9 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
-#include "utilxx/http_server.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
+#include "utilxx/http_server.h"
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -33,7 +33,7 @@ public:
         inline static const std::string defaultBasePath = "/agent";
 
         utilxx::HttpServer::Config http;  // address
-        std::string              token; // 空且 autoGenerateToken 时自动生成
+        std::string                token; // 空且 autoGenerateToken 时自动生成
         /// 进程内可信连接可关闭鉴权 (token 留空即不校验)
         bool autoGenerateToken = true;
         /// 中断/权限等待客户端响应的超时; <=0 表示不限制 (无限等待用户响应)
@@ -87,7 +87,7 @@ private:
 
     std::shared_ptr<BaseAgent>           agent_;
     Config                               config_;
-    std::unique_ptr<utilxx::HttpServer>    http_;
+    std::unique_ptr<utilxx::HttpServer>  http_;
     asio::any_io_executor                ex_;
     mutable std::atomic<std::thread::id> ioThreadId_{};
 

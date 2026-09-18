@@ -1,16 +1,17 @@
 /// agent 侧插件宿主 —— 领域部分 (工具/权限/钩子/图/提示词/资源) 与生命周期接缝
 ///
 /// 装载/启停/禁用启用/卸载/级联依赖的骨架在 cxx_pluginxx
-/// (见 [pluginxx/host/lifecycle.h](/agent/third_party/cxx_pluginxx/include/pluginxx/host/lifecycle.h)),
+/// (见
+/// [pluginxx/host/lifecycle.h](/agent/third_party/cxx_pluginxx/include/pluginxx/host/lifecycle.h)),
 /// 本文件只保留:
 /// 1. 实例的析构 (stop 欠账时拒绝 destroy/dlclose 的守卫);
 /// 2. 管理器构造/析构与领域注册表初始化;
 /// 3. 骨架的宿主接缝覆写 —— "把宿主配置类型转成内核装载参数"以及
 ///    "把领域注册(工具/权限/钩子/图/提示词/资源)摘除或清空";
 /// 4. agentxx 自己的查询与配置驱动装载 (list / JSON / loadConfiguredPlugins)。
-#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/runtime/op_driver.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
@@ -20,12 +21,12 @@
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
 
 #include <algorithm>
 #include <chrono>

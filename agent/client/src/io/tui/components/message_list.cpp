@@ -8,9 +8,7 @@
 #include "agentxx-client/io/tui/text_layout.h"
 #include "agentxx-client/io/tui/ui_items_render.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
-#include "utilxx/diff_util.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/string_util.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -18,6 +16,8 @@
 #include "markdown/parser.hpp"
 #include "markdown/state_diagram.hpp"
 #include "markdown/text_utils.hpp"
+#include "utilxx/diff_util.h"
+#include "utilxx_base/string_util.h"
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -1576,7 +1576,7 @@ void MessageListComponent::appendDecorToolBody(
 }
 
 void MessageListComponent::appendDecorItems(
-    const utilxx_base::Json&                          items,
+    const utilxx_base::Json&                            items,
     const std::string&                                  plugin,
     const std::string&                                  ownerId,
     Elements&                                           lines,

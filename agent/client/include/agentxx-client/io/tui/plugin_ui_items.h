@@ -17,9 +17,9 @@
 ///   复用 computeLineDiff + side-by-side/统一双样式, 避免双份实现)
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "ftxui/dom/elements.hpp"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/json.h"
-#include "ftxui/dom/elements.hpp"
 #include <string>
 
 namespace agentxx {
@@ -51,7 +51,7 @@ struct PluginButtonDesc {
 /// - args 缺失/非 object → "{}"; role 非法值 → Normal
 /// - clickable 由 hasPluginBinding(plugin, reg) 决定 (reg 可空 → false)
 bool parsePluginButton(
-    const utilxx_base::Json&               it,
+    const utilxx_base::Json&                 it,
     std::string_view                         plugin,
     const agentxx::plugin::ClientUiRegistry* reg,
     PluginButtonDesc&                        out

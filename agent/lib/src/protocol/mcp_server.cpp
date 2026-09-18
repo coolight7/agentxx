@@ -273,8 +273,11 @@ void McpServer::setupRoutes() {
     using Handler = utilxx::HttpServer::Handler;
 
     auto mcpHandler = std::make_shared<Handler>(Handler(
-        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&  req,
+            utilxx::HttpServer::Response& resp,
+            std::string_view
+        ) -> asio::awaitable<void> {
             co_await handleMcpRequest(req, resp);
         }
     ));
@@ -283,8 +286,10 @@ void McpServer::setupRoutes() {
     // 2026-07-28 subscriptions/listen: POST 长连接 SSE 流 (优先于普通 router handler)
     httpServer_->addSsePostRoute(
         config_.mcpEndpoint,
-        [this](utilxx::HttpServer::Request& req, std::shared_ptr<utilxx::HttpServer::SseWriter> writer)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&                   req,
+            std::shared_ptr<utilxx::HttpServer::SseWriter> writer
+        ) -> asio::awaitable<void> {
             co_await handleMcpPostSse(req, writer);
         }
     );
@@ -292,8 +297,10 @@ void McpServer::setupRoutes() {
     // legacy HTTP+SSE (2024-11-05) GET 流端点
     httpServer_->addSseRoute(
         config_.sseEndpoint,
-        [this](utilxx::HttpServer::Request& req, std::shared_ptr<utilxx::HttpServer::SseWriter> writer)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&                   req,
+            std::shared_ptr<utilxx::HttpServer::SseWriter> writer
+        ) -> asio::awaitable<void> {
             co_await handleSseStream(req, writer);
         }
     );
@@ -575,8 +582,10 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
     return response;
 }
 
-asio::awaitable<void>
-    McpServer::handleMcpRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp) {
+asio::awaitable<void> McpServer::handleMcpRequest(
+    utilxx::HttpServer::Request&  req,
+    utilxx::HttpServer::Response& resp
+) {
     co_await handleMcpPost(req, &resp, nullptr);
 }
 
@@ -802,8 +811,8 @@ bool McpServer::isOriginAllowed(std::string_view origin, std::string_view hostHe
 
 std::optional<std::string> McpServer::validateModernHeaders(
     const utilxx::HttpServer::Request& req,
-    const json&                      requestJson,
-    const RequestContext&            ctx
+    const json&                        requestJson,
+    const RequestContext&              ctx
 ) const {
     std::string method = requestJson.value("method", "");
     json        params = requestJson.contains("params") ? requestJson["params"] : json::object();
@@ -1359,8 +1368,8 @@ std::optional<json> McpServer::handleSubscriptionsListenStdio(const json& id, co
 }
 
 asio::awaitable<void> McpServer::handleSubscriptionsListenSse(
-    const json&                                  id,
-    const json&                                  params,
+    const json&                                    id,
+    const json&                                    params,
     std::shared_ptr<utilxx::HttpServer::SseWriter> writer
 ) {
     if (id.is_null()) {
@@ -1685,8 +1694,8 @@ void McpServer::stopSSE() {
 
 void McpServer::writeJsonResponse(
     utilxx::HttpServer::Response& resp,
-    boost::beast::http::status  status,
-    const json&                 body
+    boost::beast::http::status    status,
+    const json&                   body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");

@@ -3,10 +3,10 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "utilxx_base/json.h"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
 #include "neograph/define.h"
+#include "utilxx_base/json.h"
 #include <deque>
 #include <functional>
 #include <map>

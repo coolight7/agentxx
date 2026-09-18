@@ -1,7 +1,7 @@
 #pragma once
 
-#include "utilxx/router.h"
 #include "bench_util.h"
+#include "utilxx/router.h"
 #include <memory>
 #include <string>
 

@@ -142,9 +142,9 @@ asio::awaitable<void>
     test_regexp_empty_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", ""                                  },
+        {"content", ""                                },
         {"exps",    utilxx_base::Json::array({"test"})},
-        {"opt",     "search"                            },
+        {"opt",     "search"                          },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
@@ -163,9 +163,9 @@ asio::awaitable<void>
     test_regexp_empty_exps(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "some text"                 },
+        {"content", "some text"               },
         {"exps",    utilxx_base::Json::array()},
-        {"opt",     "search"                    },
+        {"opt",     "search"                  },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
@@ -184,9 +184,9 @@ asio::awaitable<void> test_regexp_empty_opt(std::weak_ptr<agentxx::agent::AgentC
 ) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "some text"                         },
+        {"content", "some text"                       },
         {"exps",    utilxx_base::Json::array({"test"})},
-        {"opt",     ""                                  },
+        {"opt",     ""                                },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos) {
@@ -205,9 +205,9 @@ asio::awaitable<void>
     test_regexp_invalid_opt(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "some text"                         },
+        {"content", "some text"                       },
         {"exps",    utilxx_base::Json::array({"test"})},
-        {"opt",     "invalid"                           },
+        {"opt",     "invalid"                         },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("\"error\"") != std::string::npos
@@ -227,9 +227,9 @@ asio::awaitable<void>
     test_regexp_search_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "hello world, hello everyone"        },
+        {"content", "hello world, hello everyone"      },
         {"exps",    utilxx_base::Json::array({"hello"})},
-        {"opt",     "search"                             },
+        {"opt",     "search"                           },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("Match found") != std::string::npos
@@ -247,9 +247,9 @@ asio::awaitable<void>
     test_regexp_search_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "hello world"                                },
+        {"content", "hello world"                              },
         {"exps",    utilxx_base::Json::array({"xyz_not_found"})},
-        {"opt",     "search"                                     },
+        {"opt",     "search"                                   },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("No match found") != std::string::npos) {
@@ -270,10 +270,10 @@ asio::awaitable<void> test_regexp_replace(std::weak_ptr<agentxx::agent::AgentCon
 ) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content",     "hello world"                        },
+        {"content",     "hello world"                      },
         {"exps",        utilxx_base::Json::array({"world"})},
-        {"opt",         "replace"                            },
-        {"replace_str", "universe"                           },
+        {"opt",         "replace"                          },
+        {"replace_str", "universe"                         },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("hello universe") != std::string::npos) {
@@ -290,10 +290,10 @@ asio::awaitable<void>
     test_regexp_replace_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content",     "hello world"                                },
+        {"content",     "hello world"                              },
         {"exps",        utilxx_base::Json::array({"xyz_not_found"})},
-        {"opt",         "replace"                                    },
-        {"replace_str", "universe"                                   },
+        {"opt",         "replace"                                  },
+        {"replace_str", "universe"                                 },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("No match found") != std::string::npos) {
@@ -313,9 +313,9 @@ asio::awaitable<void>
 asio::awaitable<void> test_regexp_remove(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "hello world, hello everyone"         },
+        {"content", "hello world, hello everyone"       },
         {"exps",    utilxx_base::Json::array({"hello "})},
-        {"opt",     "remove"                              },
+        {"opt",     "remove"                            },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("world") != std::string::npos && result.find("hello") == std::string::npos) {
@@ -332,9 +332,9 @@ asio::awaitable<void>
     test_regexp_remove_no_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "hello world"                                },
+        {"content", "hello world"                              },
         {"exps",    utilxx_base::Json::array({"xyz_not_found"})},
-        {"opt",     "remove"                                     },
+        {"opt",     "remove"                                   },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("No match found") != std::string::npos) {
@@ -355,9 +355,9 @@ asio::awaitable<void>
     test_regexp_search_multi_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content", "apple banana cherry"                          },
+        {"content", "apple banana cherry"                        },
         {"exps",    utilxx_base::Json::array({"apple", "cherry"})},
-        {"opt",     "search"                                       },
+        {"opt",     "search"                                     },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("apple") != std::string::npos && result.find("cherry") != std::string::npos) {
@@ -374,10 +374,10 @@ asio::awaitable<void>
     test_regexp_replace_multi_patterns(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
     auto args = utilxx_base::Json{
-        {"content",     "apple banana apple"                 },
+        {"content",     "apple banana apple"               },
         {"exps",        utilxx_base::Json::array({"apple"})},
-        {"opt",         "replace"                            },
-        {"replace_str", "orange"                             },
+        {"opt",         "replace"                          },
+        {"replace_str", "orange"                           },
     };
     auto   result = co_await tool.execute_async(args);
     auto   count  = size_t{0};

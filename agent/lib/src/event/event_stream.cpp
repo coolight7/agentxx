@@ -3,9 +3,9 @@
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
+#include "fmt/format.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
-#include "fmt/format.h"
 
 namespace agentxx {
 namespace events {

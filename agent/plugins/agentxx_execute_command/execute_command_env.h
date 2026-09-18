@@ -20,10 +20,10 @@
 /// `ctx.schema(...)`), 保证注入宿主的提示词与实际注册的 schema 一致。
 #pragma once
 
+#include "fmt/format.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include "utilxx_base/system.h"
-#include "fmt/format.h"
 #include <algorithm>
 #include <chrono>
 #include <map>

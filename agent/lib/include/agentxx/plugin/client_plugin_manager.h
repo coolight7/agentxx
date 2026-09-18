@@ -9,10 +9,10 @@
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 
-#include "utilxx_base/json.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -52,9 +52,9 @@ struct ClientStatusItem {
 
 /// 面板注册记录 (UI 注册表快照条目)
 struct ClientPanel {
-    std::string         plugin;                               ///< 所属插件名
-    std::string         id;                                   ///< 全局唯一 id
-    std::string         title;                                ///< tab 标题
+    std::string       plugin;                             ///< 所属插件名
+    std::string       id;                                 ///< 全局唯一 id
+    std::string       title;                              ///< tab 标题
     utilxx_base::Json items = utilxx_base::Json::array(); ///< {"items":[{...}]} 内容
 };
 
@@ -62,9 +62,9 @@ struct ClientPanel {
 /// - 渲染在侧边栏 Info tab 内 (段落标题 + items, 与面板 items schema 一致),
 ///   供插件把摘要/状态信息注入 Info 栏 (如 codegraph 索引状态、系统资源占用)
 struct ClientInfoSection {
-    std::string         plugin;                               ///< 所属插件名
-    std::string         id;                                   ///< 全局唯一 id
-    std::string         title;                                ///< 段落标题 (空 = 无标题)
+    std::string       plugin;                             ///< 所属插件名
+    std::string       id;                                 ///< 全局唯一 id
+    std::string       title;                              ///< 段落标题 (空 = 无标题)
     utilxx_base::Json items = utilxx_base::Json::array(); ///< {"items":[{...}]} 内容
 };
 
@@ -73,10 +73,10 @@ struct ClientInfoSection {
 ///   + 展开体 items (text/diagram kind); TUI 按通用渲染器展示, 无任何工具特化
 /// - 生命周期: 插件卸载/禁用时自动摘除 (enable 时恢复), 会话切换由插件自行清理
 struct ClientToolDecor {
-    std::string         plugin;      ///< 所属插件名
-    std::string         toolCallId;  ///< 目标工具调用 id
-    std::string         displayName; ///< 折叠头显示名 (空 = 原始 toolName)
-    std::string         summary;     ///< 折叠头一行摘要 (空 = 回退参数预览)
+    std::string       plugin;      ///< 所属插件名
+    std::string       toolCallId;  ///< 目标工具调用 id
+    std::string       displayName; ///< 折叠头显示名 (空 = 原始 toolName)
+    std::string       summary;     ///< 折叠头一行摘要 (空 = 回退参数预览)
     utilxx_base::Json items = utilxx_base::Json::array(); ///< 展开体 items ({"items":[...]})
     /// 内容版本号 (每次更新递增; 计入 TUI 块缓存 key —— 消息指针不变时
     /// 装饰更新仍需触发该消息块重建)
@@ -159,11 +159,11 @@ struct ClientUiRegistry {
 
 /// 工具特化渲染统一结果
 struct ClientToolRenderResult {
-    std::string         displayName;
-    std::string         summary;
+    std::string       displayName;
+    std::string       summary;
     utilxx_base::Json items   = utilxx_base::Json::array();
-    bool                matched = false;
-    bool                isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
+    bool              matched = false;
+    bool              isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
     /// 命中"按 tool_name 注册的自定义 renderer"但语义结果尚未计算出来:
     /// 调用方本次用通用回退渲染, 并按 [ClientToolRenderRequest] 提交一次请求。
     /// 自定义 renderer 不在 UI 线程执行 (只在 client IO 线程)。
@@ -182,13 +182,13 @@ struct ClientToolRenderResult {
 ///   displayName/summary/items 拷成宿主字符串/JSON 后写入
 /// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退通用渲染
 struct ClientToolRenderEntry {
-    std::string         key;            ///< 缓存键 (toolCallId, 空则 "#toolName")
-    std::string         plugin;         ///< 产出该结果的插件名
-    uint64_t            generation = 0; ///< 产出时的实例代次
-    uint64_t            inputHash  = 0; ///< 输入特征 (args/结果/宽度等)
-    bool                matched    = false;
-    std::string         displayName;
-    std::string         summary;
+    std::string       key;            ///< 缓存键 (toolCallId, 空则 "#toolName")
+    std::string       plugin;         ///< 产出该结果的插件名
+    uint64_t          generation = 0; ///< 产出时的实例代次
+    uint64_t          inputHash  = 0; ///< 输入特征 (args/结果/宽度等)
+    bool              matched    = false;
+    std::string       displayName;
+    std::string       summary;
     utilxx_base::Json items = utilxx_base::Json::array();
 };
 
@@ -322,7 +322,7 @@ public:
     /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
     std::vector<ClientToolRenderReg> toolRenderRegs;
     /// 通用动作绑定 (disable 保留, enable 恢复; 以 plugin+targetId 键控)
-    std::vector<ClientActionBinding>           actionRegs;
+    std::vector<ClientActionBinding> actionRegs;
     /// 事件订阅登记 (client 自有事件表 `agentxx.client.events` 的订阅)
     ///
     /// 命名与基类的通用订阅登记区分: 基类 `PluginInstanceBase::subscriptions`
@@ -936,8 +936,7 @@ public:
     virtual void onStatusItemRemoved(const std::string& /*id*/) {}
 
     /// 面板注册/更新/移除 (props: {"title"}; items: {"items":[...]})
-    virtual void
-        onPanelRegistered(const std::string& /*id*/, const utilxx_base::Json& /*props*/) {}
+    virtual void onPanelRegistered(const std::string& /*id*/, const utilxx_base::Json& /*props*/) {}
 
     virtual void onPanelUpdated(const std::string& /*id*/, const utilxx_base::Json& /*items*/) {}
 

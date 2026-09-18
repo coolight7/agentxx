@@ -12,16 +12,16 @@
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "utilxx/async_offload.h"
-#include "utilxx/http_server.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/system.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "neograph/graph/compiler.h"
 #include "neograph/graph/validator.h"
+#include "utilxx/async_offload.h"
+#include "utilxx/http_server.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/system.h"
 #include <algorithm>
 #include <boost/beast/http.hpp>
 #include <chrono>
@@ -2670,7 +2670,7 @@ throw new Error("top-level rollback probe");
                 auto grepContentOut = co_await grepTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
                     {"text_patterns", utilxx_base::Json::array({"needle_"}) },
-                    {"output_mode",   "content"                               },
+                    {"output_mode",   "content"                             },
                 });
                 XX_TEST_EXPECT_TRUE(grepContentOut.find("needle_secret") != std::string::npos);
             }
@@ -2693,7 +2693,7 @@ throw new Error("top-level rollback probe");
                 auto grepOut = co_await grepTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
                     {"text_patterns", utilxx_base::Json::array({"needle_"}) },
-                    {"output_mode",   "content"                               },
+                    {"output_mode",   "content"                             },
                 });
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_keep") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_secret") == std::string::npos);

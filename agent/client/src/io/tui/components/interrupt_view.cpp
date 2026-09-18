@@ -4,9 +4,9 @@
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/text_layout.h"
+#include "fmt/format.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
-#include "fmt/format.h"
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -1261,8 +1261,7 @@ void InterruptView::step(size_t msgIndex, std::string_view controlId, double del
         }
         double val     = 0.0;
         auto   trimmed = utilxx_base::removeBetweenSpace(cs.editText);
-        if (trimmed.empty()
-            || utilxx_base::parseNumberFromString(trimmed, val).ec != std::errc{}) {
+        if (trimmed.empty() || utilxx_base::parseNumberFromString(trimmed, val).ec != std::errc{}) {
             return; // 编辑值非法时步进无效
         }
         val += delta;

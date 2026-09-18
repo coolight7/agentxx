@@ -1,6 +1,6 @@
-#include "utilxx_base/json.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include <cctype>
 #include <chrono>
 #include <map>
@@ -1079,10 +1079,10 @@ std::string uiControlExecute(const utilxx_base::Json& arguments) {
     }
 
     utilxx_base::Json results    = utilxx_base::Json::array();
-    int                 ok_count   = 0;
-    int                 fail_count = 0;
-    size_t              i          = 0;
-    bool                first      = true;
+    int               ok_count   = 0;
+    int               fail_count = 0;
+    size_t            i          = 0;
+    bool              first      = true;
     for (const auto& elem : arr) {
         if (!first && interval_ms > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
@@ -1092,10 +1092,10 @@ std::string uiControlExecute(const utilxx_base::Json& arguments) {
         UiCmdFields f;
         if (!elem.is_object() || !uiControlParseCmd(elem, f) || !f.hasAction || f.action.empty()) {
             utilxx_base::Json item = utilxx_base::Json::object();
-            item["index"]            = static_cast<int64_t>(i);
-            item["action"]           = "";
-            item["ok"]               = false;
-            item["msg"]              = "missing `action` field";
+            item["index"]          = static_cast<int64_t>(i);
+            item["action"]         = "";
+            item["ok"]             = false;
+            item["msg"]            = "missing `action` field";
             results.push_back(std::move(item));
             ++fail_count;
             break;
@@ -1107,10 +1107,10 @@ std::string uiControlExecute(const utilxx_base::Json& arguments) {
             ++fail_count;
         }
         utilxx_base::Json item = utilxx_base::Json::object();
-        item["index"]            = static_cast<int64_t>(i);
-        item["action"]           = f.action;
-        item["ok"]               = r.ok;
-        item["msg"]              = r.msg;
+        item["index"]          = static_cast<int64_t>(i);
+        item["action"]         = f.action;
+        item["ok"]             = r.ok;
+        item["msg"]            = r.msg;
         results.push_back(std::move(item));
         if (!r.ok) {
             break;

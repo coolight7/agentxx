@@ -2,8 +2,8 @@
 
 #include "agentxx-client/config_loader.h"
 #include "agentxx/agent/config_static.h"
-#include "utilxx_base/env.h"
 #include "utilxx/http_client.h"
+#include "utilxx_base/env.h"
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>

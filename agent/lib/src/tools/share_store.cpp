@@ -105,8 +105,8 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string>
-    SessionShareStoreTool::execute_async(const utilxx_base::Json& arguments) {
+asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_base::Json& arguments
+) {
     auto session_id = arguments.value("sessionId", std::string{});
     if (session_id.empty()) {
         co_return R"({"error":"Toolcall inner error, need `sessionId`"})";

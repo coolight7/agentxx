@@ -148,7 +148,7 @@ struct MediaAttachment {
 
     utilxx_base::Json toJson() const {
         utilxx_base::Json j = utilxx_base::Json::object();
-        j["type"]             = std::string(mediaTypeToString(type));
+        j["type"]           = std::string(mediaTypeToString(type));
         if (!displayName.empty()) {
             j["display_name"] = displayName;
         }
@@ -606,7 +606,7 @@ inline utilxx_base::Json ViewMessage::toJson() const {
     }
     if (interrupt) {
         utilxx_base::Json it = utilxx_base::Json::object();
-        it["interrupt_id"]     = interrupt->interruptId;
+        it["interrupt_id"]   = interrupt->interruptId;
         // 中断 UI 描述 (声明式, 服务端生成): 客户端据此通用渲染表单控件
         if (!interrupt->ui.is_null()) {
             it["ui"] = interrupt->ui;

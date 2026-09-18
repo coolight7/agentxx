@@ -1,11 +1,11 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "asio/awaitable.hpp"
+#include "asio/use_awaitable.hpp"
 #include "utilxx/http_client.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
-#include "asio/awaitable.hpp"
-#include "asio/use_awaitable.hpp"
 #include <charconv>
 #include <chrono>
 #include <map>
@@ -146,8 +146,7 @@ private:
 
     /// 填充完整请求头: Authorization + extraHeaders + 会话 Header (X-Session-Id,
     /// X-Opencode-Session)
-    void applyHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params)
-        const;
+    void applyHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params) const;
 
     /// 归一化 finish_reason → stop_reason
     static std::string mapStopReason(std::string_view finishReason);
@@ -167,13 +166,13 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const utilxx_base::Json&         body,
+        const utilxx_base::Json&           body,
         neograph::FormatDataStreamCallback on_chunk
     );
 
     asio::awaitable<neograph::ChatCompletion> doStreamResponses(
         const neograph::CompletionParams&  params,
-        const utilxx_base::Json&         body,
+        const utilxx_base::Json&           body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

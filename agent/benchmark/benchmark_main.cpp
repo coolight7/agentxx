@@ -1,5 +1,3 @@
-#include "utilxx_base/env.h"
-#include "utilxx_base/log.h"
 #include "bench_aho_corasick.h"
 #include "bench_code_agent.h"
 #include "bench_regex.h"
@@ -7,6 +5,8 @@
 #include "bench_router.h"
 #include "bench_string_util.h"
 #include "bench_util.h"
+#include "utilxx_base/env.h"
+#include "utilxx_base/log.h"
 
 #include <algorithm>
 #include <cstdlib>

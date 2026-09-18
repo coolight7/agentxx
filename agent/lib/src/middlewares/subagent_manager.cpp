@@ -1,8 +1,8 @@
 #include "agentxx/middlewares/subagent_manager.h"
 
 #include "agentxx/event/event_stream.h"
-#include "utilxx_base/log.h"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
 #include <memory>
 #include <string>
 #include <utility>

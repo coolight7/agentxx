@@ -7,13 +7,13 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
 #include "asio/use_future.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -147,7 +147,7 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 顶层配置 (config_json) ----
     utilxx_base::Json cfgJ;
-    auto                cfgSv = toSv(config_json);
+    auto              cfgSv = toSv(config_json);
     if (!cfgSv.empty()) {
         try {
             cfgJ = utilxx_base::Json::parse(cfgSv);
@@ -180,11 +180,10 @@ bool FfiAgentRuntime::buildConfigs(
         config->permissionMode = permissionModeFromString(cfgJ.value("permissionMode", "ask"));
         config->permissionAllowPaths
             = utilxx_base::jsonGetStringArray(cfgJ, "permissionAllowPaths");
-        config->permissionDenyPaths
-            = utilxx_base::jsonGetStringArray(cfgJ, "permissionDenyPaths");
-        config->skillDirPaths   = utilxx_base::jsonGetStringArray(cfgJ, "skills");
-        config->memoryFilePaths = utilxx_base::jsonGetStringArray(cfgJ, "memoryFiles");
-        config->websearchApiUrl = cfgJ.value("websearchApiUrl", config->websearchApiUrl);
+        config->permissionDenyPaths = utilxx_base::jsonGetStringArray(cfgJ, "permissionDenyPaths");
+        config->skillDirPaths       = utilxx_base::jsonGetStringArray(cfgJ, "skills");
+        config->memoryFilePaths     = utilxx_base::jsonGetStringArray(cfgJ, "memoryFiles");
+        config->websearchApiUrl     = cfgJ.value("websearchApiUrl", config->websearchApiUrl);
 
         // MCP 服务器: {"ns": {"url": "...", "timeoutSec": 120}}
         if (cfgJ.contains("mcpServers") && cfgJ["mcpServers"].is_object()) {
@@ -227,7 +226,7 @@ bool FfiAgentRuntime::buildConfigs(
 
     // ---- 模型配置 (model_json 优先, 其次 config_json.model) ----
     utilxx_base::Json mj;
-    auto                modelSv = toSv(model_json);
+    auto              modelSv = toSv(model_json);
     if (!modelSv.empty()) {
         try {
             mj = utilxx_base::Json::parse(modelSv);
@@ -692,7 +691,7 @@ std::string FfiAgentRuntime::getLanguage(std::string& err) {
 
 void FfiAgentRuntime::onSyncReplyOnClientThread(
     FfiClientAgentIO::SyncKind kind,
-    utilxx_base::Json        j
+    utilxx_base::Json          j
 ) {
     std::shared_ptr<SyncWait> waiter;
     {
@@ -798,7 +797,7 @@ int FfiAgentRuntime::interruptRespond(
         return AGENTXX_FFI_ERR_STATE;
     }
     utilxx_base::Json val   = utilxx_base::Json::object();
-    auto                valSv = toSv(valuesJson);
+    auto              valSv = toSv(valuesJson);
     if (!valSv.empty()) {
         try {
             val = utilxx_base::Json::parse(valSv);

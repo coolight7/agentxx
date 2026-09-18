@@ -3,12 +3,12 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
+#include "asio/awaitable.hpp"
+#include "asio/use_awaitable.hpp"
 #include "utilxx/http_client.h"
 #include "utilxx_base/json_view.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
-#include "asio/awaitable.hpp"
-#include "asio/use_awaitable.hpp"
 #include <charconv>
 #include <chrono>
 #include <map>
@@ -196,7 +196,7 @@ public:
         // - View 仅做只读导航 (event/usage/delta 标量提取无 DOM 堆分配)
         // - 仅 thinking/redacted 块组装需要 Json DOM (appendThinkingBlock 物化)
         utilxx_base::JsonView jv;
-        bool                    parsed = agentxx::util::catchError<bool>(
+        bool                  parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
                 jv = utilxx_base::JsonView::parse(payload);
                 return true;
@@ -344,8 +344,7 @@ private:
 
     /// 填充请求头: x-api-key + anthropic-version + extraHeaders + 会话 Header (X-Session-Id,
     /// X-Opencode-Session)
-    void applyHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params)
-        const;
+    void applyHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params) const;
 
     utilxx_base::Json buildBody(const neograph::CompletionParams& params) const;
 
@@ -354,7 +353,7 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const utilxx_base::Json&         body,
+        const utilxx_base::Json&           body,
         neograph::FormatDataStreamCallback on_chunk
     );
 

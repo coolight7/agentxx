@@ -24,8 +24,7 @@ struct PluginCtx : public agentxx::plugin::PluginBase {};
 /// - 值不是数组时 (如 LLM 下发的单字符串) 直接按单个字符串渲染
 ///   (如 file_patterns 写成 "agent/test/*.cpp")
 /// - 缺失/其他类型: 返回空列表
-inline std::vector<std::string>
-    stringListArg(const utilxx_base::Json& args, std::string_view key) {
+inline std::vector<std::string> stringListArg(const utilxx_base::Json& args, std::string_view key) {
     std::vector<std::string> out;
     const std::string        k{key};
     if (!args.is_object() || !args.contains(k)) {

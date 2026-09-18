@@ -383,10 +383,10 @@ static int planningSetup(PluginCtx* ctx) {
         j["appendSystemPrompts"]             = utilxx_base::Json::object();
         j["appendSystemPrompts"]["planning"] = std::string{kSystemPlanningPrompt};
 
-        utilxx_base::Json toolPrompt         = utilxx_base::Json::object();
-        utilxx_base::Json planningPrompt     = utilxx_base::Json::object();
+        utilxx_base::Json toolPrompt           = utilxx_base::Json::object();
+        utilxx_base::Json planningPrompt       = utilxx_base::Json::object();
         planningPrompt["depict"]               = std::string{kDepictPlanning};
-        utilxx_base::Json args               = utilxx_base::Json::object();
+        utilxx_base::Json args                 = utilxx_base::Json::object();
         args["mode"]                           = std::string{kArgModeDesc};
         args["roadmap"]                        = std::string{kArgRoadmapDesc};
         args["todos"]                          = std::string{kArgTodosDesc};
@@ -468,7 +468,7 @@ static int planningSetup(PluginCtx* ctx) {
                 std::string notes = arguments.value("notes", std::string{});
 
                 utilxx_base::Json planStore = utilxx_base::Json::object();
-                planStore["roadmap"]          = roadmap;
+                planStore["roadmap"]        = roadmap;
                 if (!todosJson.empty()) {
                     try {
                         planStore["todos"] = utilxx_base::Json::parse(todosJson);
@@ -717,9 +717,9 @@ static std::string buildTodosSummary(const utilxx_base::Json& plan) {
 static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::Json& items) {
     auto textItem = [&](const std::string& text, const std::string& role) {
         utilxx_base::Json item = utilxx_base::Json::object();
-        item["kind"]             = "text";
-        item["role"]             = role;
-        item["text"]             = text;
+        item["kind"]           = "text";
+        item["role"]           = role;
+        item["text"]           = text;
         items.push_back(std::move(item));
     };
 
@@ -772,22 +772,22 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
     if (!roadmap.empty()) {
         if (graphAsButton) {
             utilxx_base::Json prefix = utilxx_base::Json::object();
-            prefix["kind"]             = "text";
-            prefix["role"]             = "normal";
-            prefix["text"]             = "|- ";
+            prefix["kind"]           = "text";
+            prefix["role"]           = "normal";
+            prefix["text"]           = "|- ";
             items.push_back(std::move(prefix));
 
             utilxx_base::Json button = utilxx_base::Json::object();
-            button["kind"]             = "button";
-            button["label"]            = "Graph";
-            button["action_id"]        = kActionOpenGraph;
-            button["args"]             = utilxx_base::Json::object();
-            button["role"]             = "normal";
+            button["kind"]           = "button";
+            button["label"]          = "Graph";
+            button["action_id"]      = kActionOpenGraph;
+            button["args"]           = utilxx_base::Json::object();
+            button["role"]           = "normal";
             items.push_back(std::move(button));
         } else {
             utilxx_base::Json diagram = utilxx_base::Json::object();
-            diagram["kind"]             = "diagram";
-            diagram["mermaid"]          = roadmap;
+            diagram["kind"]           = "diagram";
+            diagram["mermaid"]        = roadmap;
             items.push_back(std::move(diagram));
         }
     }
@@ -802,19 +802,19 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
 /// 装饰按新的输入特征重新计算)
 static utilxx_base::Json makeReadingPlaceholderPlan() {
     utilxx_base::Json plan = utilxx_base::Json::object();
-    plan["items"]            = utilxx_base::Json::array();
+    plan["items"]          = utilxx_base::Json::array();
     utilxx_base::Json hint = utilxx_base::Json::object();
-    hint["kind"]             = "text";
-    hint["role"]             = "hint";
-    hint["text"]             = "Reading saved planning...";
+    hint["kind"]           = "text";
+    hint["role"]           = "hint";
+    hint["text"]           = "Reading saved planning...";
     plan["items"].push_back(std::move(hint));
     return plan;
 }
 
 /// 工具消息渲染三要素 (折叠头显示名/摘要 + 展开体 items)
 struct PlanDecorParts {
-    std::string         displayName = kDisplayName;
-    std::string         summary;
+    std::string       displayName = kDisplayName;
+    std::string       summary;
     utilxx_base::Json items = utilxx_base::Json::array();
 };
 
@@ -832,16 +832,15 @@ static PlanDecorParts buildPlanDecorParts(const utilxx_base::Json& plan) {
 ///   结果未返回时置 `readPlaceholder=true` (调用方使用 [makeReadingPlaceholderPlan])
 /// - return: 参数/结果无法解析为对象时返回 false (调用方按通用渲染降级)
 static bool planFromToolCall(
-    std::string_view     argsJson,
-    std::string_view     resultText,
+    std::string_view   argsJson,
+    std::string_view   resultText,
     utilxx_base::Json& plan,
-    bool&                readPlaceholder
+    bool&              readPlaceholder
 ) {
     readPlaceholder = false;
     utilxx_base::Json args;
     try {
-        args = argsJson.empty() ? utilxx_base::Json::object()
-                                : utilxx_base::Json::parse(argsJson);
+        args = argsJson.empty() ? utilxx_base::Json::object() : utilxx_base::Json::parse(argsJson);
     } catch (...) {
         return false;
     }
@@ -870,7 +869,7 @@ static void
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host || toolCallId.empty()) {
         return;
     }
-    utilxx_base::Json decor   = utilxx_base::Json::object();
+    utilxx_base::Json decor     = utilxx_base::Json::object();
     decor["displayName"]        = parts.displayName;
     decor["summary"]            = parts.summary;
     decor["items"]              = parts.items;
@@ -904,7 +903,7 @@ static void buildPlanningToolRender(
     out.displayName = kDisplayName;
 
     utilxx_base::Json plan;
-    bool                readPlaceholder = false;
+    bool              readPlaceholder = false;
     if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
         return;
     }
@@ -975,9 +974,9 @@ static void refreshPlanSection(ClientCtx& ctx) {
         return; // 内容为空不推送, 避免出现只有标题的空段落
     }
     utilxx_base::Json payload = utilxx_base::Json::object();
-    payload["items"]            = items;
-    const std::string json      = payload.dump();
-    auto              jsonSv    = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+    payload["items"]          = items;
+    const std::string json    = payload.dump();
+    auto              jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
@@ -1069,7 +1068,7 @@ static void AGENTXX_PLUGIN_CALL
             const auto argsStr = d.value("arguments", std::string{});
             // 与类型级渲染器同一解析 (mode=read 时结果未返回 → 占位提示)
             utilxx_base::Json plan;
-            bool                readPlaceholder = false;
+            bool              readPlaceholder = false;
             if (!planFromToolCall(argsStr, std::string_view{}, plan, readPlaceholder)) {
                 return;
             }
@@ -1082,7 +1081,7 @@ static void AGENTXX_PLUGIN_CALL
         auto it = ctx->pending_args.find(callId);
         if (it != ctx->pending_args.end()) {
             utilxx_base::Json plan;
-            bool                readPlaceholder = false;
+            bool              readPlaceholder = false;
             if (planFromToolCall(
                     it->second,
                     d.value("result", std::string{}),

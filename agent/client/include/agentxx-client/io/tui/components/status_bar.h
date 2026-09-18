@@ -2,12 +2,12 @@
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/ui_hit.h"
-#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
+#include "utilxx_base/string_util.h"
 #include <functional>
 #include <string_view>
 

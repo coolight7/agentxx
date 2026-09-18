@@ -90,7 +90,7 @@ InterruptUiBlock buttonControl(
     std::vector<InterruptUiOption> options,
     std::string                    label        = {},
     std::string                    labelKey     = {},
-    utilxx_base::Json            defaultValue = {},
+    utilxx_base::Json              defaultValue = {},
     bool                           commitOnPick = true
 );
 
@@ -130,7 +130,7 @@ InterruptUiBlock selectControl(
     std::vector<InterruptUiOption> options,
     std::string                    label        = {},
     std::string                    labelKey     = {},
-    utilxx_base::Json            defaultValue = {},
+    utilxx_base::Json              defaultValue = {},
     std::string                    help         = {}
 );
 

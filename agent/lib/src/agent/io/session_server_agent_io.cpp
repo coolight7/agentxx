@@ -7,10 +7,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "utilxx/async_offload.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
-#include "utilxx/crypto.h"
 #include "asio/bind_cancellation_slot.hpp"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
@@ -20,6 +17,9 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "neograph/graph/cancel.h"
+#include "utilxx/async_offload.h"
+#include "utilxx/crypto.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <chrono>
 
@@ -266,8 +266,8 @@ asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
     });
 
     utilxx_base::Json result      = utilxx_base::Json::array();
-    bool                gotResponse = false;
-    bool                cancelled   = false;
+    bool              gotResponse = false;
+    bool              cancelled   = false;
     // HIL 等待必须可取消: 取当前会话 token 的 fork 子并绑定 slot,
     // WireCancel 到达 (onCancel 置旗级联) 时打断 async_receive,
     // 返回 {"__cancelled__":true} 使 AgentRunner 不 resume 而抛取消
@@ -492,8 +492,8 @@ void SessionServerAgentIO::onPeerMessage(
                 agent->collectAppendComponentInfo(notifications);
                 sendToClient(sender, WireAppendComponentInfo{std::move(notifications)});
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
-                auto                agent = agent_.lock();
-                auto                sess  = session();
+                auto              agent = agent_.lock();
+                auto              sess  = session();
                 utilxx_base::Json msgs  = utilxx_base::Json::array();
                 if (sess && sess->llmMessages.is_array()) {
                     msgs = sess->llmMessages;
@@ -509,8 +509,8 @@ void SessionServerAgentIO::onPeerMessage(
                     std::string sysPrompt = agent->buildSystemPrompt(m.sessionId);
                     if (!sysPrompt.empty()) {
                         utilxx_base::Json sysMsg  = utilxx_base::Json::object();
-                        sysMsg["role"]              = "system";
-                        sysMsg["content"]           = std::move(sysPrompt);
+                        sysMsg["role"]            = "system";
+                        sysMsg["content"]         = std::move(sysPrompt);
                         utilxx_base::Json newMsgs = utilxx_base::Json::array();
                         newMsgs.push_back(std::move(sysMsg));
                         for (auto item : msgs.items()) {

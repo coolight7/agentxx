@@ -1,14 +1,14 @@
 #include "agentxx/middlewares/memory_file.h"
 
 #include "agentxx/util/exception.h"
-#include "utilxx_base/string_util.h"
-#include "utilxx_base/system.h"
 #include "asio/read.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/stream_file.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -48,7 +48,7 @@ asio::awaitable<void>
                     /// 文件异步 I/O 可用 (含运行时可真正使用 io_uring) 时异步加载,
                     /// 避免同步读盘阻塞 io_context 事件循环
                     if (utilxx_base::isAsyncFileIoSupported()) {
-                        asio::stream_file        stream{currentIoCtx};
+                        asio::stream_file          stream{currentIoCtx};
                         utilxx_base::AsioErrorCode errCode;
                         stream.open(systemCharsetFilePath, asio::stream_file::read_only, errCode);
                         if (false == stream.is_open()) {

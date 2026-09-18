@@ -36,8 +36,7 @@ namespace {
 class AgentEventBusSource : public EventSource {
 public:
 
-    AgentEventBusSource(std::shared_ptr<agentxx::events::EventBus> bus, asio::any_io_executor ex
-    ) :
+    AgentEventBusSource(std::shared_ptr<agentxx::events::EventBus> bus, asio::any_io_executor ex) :
         bus_(std::move(bus)),
         executor_(std::move(ex)) {}
 
@@ -73,9 +72,8 @@ public:
         }
         asio::co_spawn(
             executor_,
-            [bus = bus_,
-             fullTopic = std::string{topic},
-             payload   = std::string{eventJson}]() -> asio::awaitable<void> {
+            [bus = bus_, fullTopic = std::string{topic}, payload = std::string{eventJson}](
+            ) -> asio::awaitable<void> {
                 co_await bus->publish(fullTopic, payload);
             },
             asio::detached
@@ -195,7 +193,7 @@ std::string PluginManager::getToolPromptJson(const std::string& toolName) {
         return {};
     }
     utilxx_base::Json out;
-    out["depict"]            = it->second.depict;
+    out["depict"]          = it->second.depict;
     utilxx_base::Json args = utilxx_base::Json::object();
     for (const auto& [k, v] : it->second.args) {
         args[k] = v;
@@ -237,7 +235,7 @@ std::string PluginManager::getModelConfigJson() {
     if (!c || !c->agentConfig) {
         return {};
     }
-    const auto&         cfg = *c->agentConfig;
+    const auto&       cfg = *c->agentConfig;
     utilxx_base::Json out;
     out["baseUrl"]                       = cfg.model.baseUrl;
     out["apiKey"]                        = cfg.model.apiKey;

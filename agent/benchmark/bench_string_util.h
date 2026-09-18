@@ -1,7 +1,7 @@
 #pragma once
 
-#include "utilxx_base/string_util.h"
 #include "bench_util.h"
+#include "utilxx_base/string_util.h"
 #include <string>
 #include <vector>
 

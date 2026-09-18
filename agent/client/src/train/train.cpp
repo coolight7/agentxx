@@ -3,12 +3,12 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/signal_set.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
 #include <chrono>
 #include <csignal>
 #include <filesystem>

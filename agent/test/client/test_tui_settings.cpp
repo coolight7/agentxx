@@ -5,9 +5,9 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/agent/io/channel_io_transport.h"
-#include "utilxx_base/env.h"
 #include "agentxx/util/settings_db.h"
 #include "ftxui/component/event.hpp"
+#include "utilxx_base/env.h"
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
@@ -123,7 +123,7 @@ void test_log_level_set_get() {
     // 逐一设置各等级并读回 (名称表与 LogLevel 枚举值一一对应)
     const struct {
         utilxx_base::LogLevel level;
-        std::string_view        name;
+        std::string_view      name;
     } cases[] = {
         {utilxx_base::LogLevel::Trace, "Trace"},
         {utilxx_base::LogLevel::Debug, "Debug"},

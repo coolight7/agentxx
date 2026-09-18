@@ -6,9 +6,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/tools/subagent.h"
-#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -16,6 +14,8 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>

@@ -2,12 +2,12 @@
 
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/dispatch.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/log.h"
 
 namespace agentxx {
 namespace agent {
@@ -17,11 +17,11 @@ namespace agent {
 // ---------------------------------------------------------------------------
 
 WsAgentIOTransport::WsAgentIOTransport(
-    asio::any_io_executor ex,
-    std::string           url,
-    std::string           token,
-    Config                config,
-    utilxx::WsClientConfig  wsConfig
+    asio::any_io_executor  ex,
+    std::string            url,
+    std::string            token,
+    Config                 config,
+    utilxx::WsClientConfig wsConfig
 ) :
     ex_(std::move(ex)),
     config_(std::move(config)),
@@ -35,9 +35,9 @@ WsAgentIOTransport::WsAgentIOTransport(
 }
 
 WsAgentIOTransport::WsAgentIOTransport(
-    asio::any_io_executor           ex,
+    asio::any_io_executor             ex,
     std::unique_ptr<utilxx::WsClient> client,
-    Config                          config
+    Config                            config
 ) :
     ex_(std::move(ex)),
     config_(std::move(config)),

@@ -4,14 +4,7 @@
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 #pragma once
 
-#include "utilxx/aho_corasick.h"
-#include "utilxx_base/asio_error.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/json.h"
-#include "utilxx_base/log.h"
-#include "utilxx/regex.h"
-#include "utilxx_base/string_util.h"
-#include "utilxx_base/system.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/error.hpp"
 #include "asio/read.hpp"
@@ -22,6 +15,13 @@
 #include "asio/use_awaitable.hpp"
 #include "asio/write.hpp"
 #include "glob/glob.h"
+#include "utilxx/aho_corasick.h"
+#include "utilxx/regex.h"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -308,9 +308,9 @@ inline std::vector<std::filesystem::path>
 // =====================================================================
 inline std::string fileListExecuteImpl(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr,
-    const PathFilterFn&        pathFilter  = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr,
+    const PathFilterFn&      pathFilter  = nullptr
 ) {
     auto rawPath    = arguments.value("path", std::string{});
     auto targetPath = detail::wsAbs(workDir, rawPath);
@@ -595,7 +595,7 @@ inline std::string fileListExecuteImpl(
 // =====================================================================
 inline std::string fileReadExecuteImpl(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
+    const std::string&       workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -683,7 +683,7 @@ inline std::string fileReadExecuteImpl(
 // =====================================================================
 inline std::string fileWriteExecuteImpl(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
+    const std::string&       workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -736,7 +736,7 @@ inline std::string fileWriteExecuteImpl(
 // =====================================================================
 inline std::string fileEditExecuteImpl(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
+    const std::string&       workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -845,9 +845,9 @@ inline std::string fileEditExecuteImpl(
 // =====================================================================
 inline std::string fileGlobExecuteImpl(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr,
-    const PathFilterFn&        pathFilter  = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr,
+    const PathFilterFn&      pathFilter  = nullptr
 ) {
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
@@ -862,9 +862,9 @@ inline std::string fileGlobExecuteImpl(
 
     // 注: 路径匹配固定为大小写敏感 (移除 case-insensitive 支持)。历史原因见
     // lib filesystem.cpp 同注释 (case_fold 会破坏 max_depth 前缀计算与盘符识别)。
-    auto maxDepth   = arguments.value<int64_t>("max_depth", -1);
-    auto doSort     = arguments.value<bool>("sort", false);
-    auto typeFilter = detail::collectTypeFilter(arguments.value("type", utilxx_base::Json{}));
+    auto maxDepth        = arguments.value<int64_t>("max_depth", -1);
+    auto doSort          = arguments.value<bool>("sort", false);
+    auto typeFilter      = detail::collectTypeFilter(arguments.value("type", utilxx_base::Json{}));
     auto excludePatterns = arguments.value("exclude_patterns", std::vector<std::string>{});
     for (auto& item : excludePatterns) {
         item = detail::wsAbs(workDir, item);
@@ -1031,9 +1031,9 @@ inline std::string fileGlobExecuteImpl(
 // =====================================================================
 inline std::string fileGrepExecuteImpl(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr,
-    const PathFilterFn&        pathFilter  = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr,
+    const PathFilterFn&      pathFilter  = nullptr
 ) {
     // 搜索模式参数 (两者均可省略, 但至少指定其一; 同时指定时结果为两者并集):
     // - text_patterns  : 纯文本字面量匹配 (对齐 grep -F, 不经正则解释)
@@ -1512,9 +1512,9 @@ inline std::string asErrorText(Fn&& fn) {
 
 inline std::string fileListExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr,
-    const PathFilterFn&        pathFilter  = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr,
+    const PathFilterFn&      pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileListExecuteImpl(arguments, workDir, isCancelled, pathFilter);
@@ -1523,8 +1523,8 @@ inline std::string fileListExecute(
 
 inline std::string fileReadExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileReadExecuteImpl(arguments, workDir, isCancelled);
@@ -1533,8 +1533,8 @@ inline std::string fileReadExecute(
 
 inline std::string fileWriteExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileWriteExecuteImpl(arguments, workDir, isCancelled);
@@ -1543,8 +1543,8 @@ inline std::string fileWriteExecute(
 
 inline std::string fileEditExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileEditExecuteImpl(arguments, workDir, isCancelled);
@@ -1553,9 +1553,9 @@ inline std::string fileEditExecute(
 
 inline std::string fileGlobExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr,
-    const PathFilterFn&        pathFilter  = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr,
+    const PathFilterFn&      pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileGlobExecuteImpl(arguments, workDir, isCancelled, pathFilter);
@@ -1564,9 +1564,9 @@ inline std::string fileGlobExecute(
 
 inline std::string fileGrepExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled = nullptr,
-    const PathFilterFn&        pathFilter  = nullptr
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr,
+    const PathFilterFn&      pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
         return fileGrepExecuteImpl(arguments, workDir, isCancelled, pathFilter);
@@ -1604,7 +1604,7 @@ inline asio::awaitable<std::string>
     if (std::filesystem::is_directory(fsPath, fsEc)) {
         throw std::runtime_error{"Path is a directory"};
     }
-    asio::stream_file        stream{executor};
+    asio::stream_file          stream{executor};
     utilxx_base::AsioErrorCode errCode;
     stream.open(utf8FilePath, asio::stream_file::read_only, errCode);
     if (false == stream.is_open()) {
@@ -1655,7 +1655,7 @@ inline asio::awaitable<std::string>
 
     if (text_line_offset >= 0 || text_line_limit > 0) {
         // 读取部分文件: 逐行 async_read_until, 跳过偏移行后收集至结果
-        asio::stream_file        stream{executor};
+        asio::stream_file          stream{executor};
         utilxx_base::AsioErrorCode errCode;
         stream.open(filepath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
@@ -1756,7 +1756,7 @@ inline asio::awaitable<std::string>
 
     auto executor = co_await asio::this_coro::executor;
 
-    asio::stream_file        stream{executor};
+    asio::stream_file          stream{executor};
     utilxx_base::AsioErrorCode errCode;
     stream.open(
         filepath,
@@ -1855,7 +1855,7 @@ inline asio::awaitable<std::string>
     const auto fsTmpPath = utilxx_base::utf8ToPath(tmpPathStr);
 
     {
-        asio::stream_file        stream{executor};
+        asio::stream_file          stream{executor};
         utilxx_base::AsioErrorCode errCode;
         stream.open(
             tmpPathStr,

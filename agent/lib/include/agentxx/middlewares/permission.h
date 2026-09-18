@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agentxx/middlewares/middleware.h"
-#include "utilxx/router.h"
 #include "asio/io_context.hpp"
+#include "utilxx/router.h"
 #include <functional>
 #include <map>
 #include <memory>
@@ -132,7 +132,7 @@ public:
     /// - 声明无目标或目标参数缺省/为空: 退化为工具级判定 (见 [checkTargetPermission])
     asio::awaitable<bool> checkToolPermission(
         std::string_view          toolName,
-        utilxx_base::Json&      args,
+        utilxx_base::Json&        args,
         const ToolPermissionSpec& spec
     );
 
@@ -148,11 +148,11 @@ public:
     ///     - [target]   受约束目标 (已规范化的绝对路径或文本, 与规则匹配口径一致)
     ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> checkTargetPermission(
-        std::string_view     toolName,
+        std::string_view   toolName,
         utilxx_base::Json& args,
-        size_t               scope,
-        std::string_view     target,
-        std::string_view     category = {}
+        size_t             scope,
+        std::string_view   target,
+        std::string_view   category = {}
     );
 
     /// 权限分类文本: 声明未指定 category 时按作用域生成
@@ -236,11 +236,11 @@ public:
     ///     - [target] 受约束目标 (已规范化的绝对路径, 与规则匹配口径一致)
     ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> requestPermission(
-        std::string_view     toolName,
+        std::string_view   toolName,
         utilxx_base::Json& args,
-        size_t               scope,
-        std::string          target,
-        std::string_view     category = {}
+        size_t             scope,
+        std::string        target,
+        std::string_view   category = {}
     );
 
     ~PermissionMiddlewareHandle() override;

@@ -3,16 +3,16 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/mcp_server.h"
-#include "utilxx_base/async_mutex.h"
-#include "utilxx/async_offload.h"
-#include "neograph/graph/cancel.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "neograph/graph/cancel.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/async_mutex.h"
+#include "utilxx_base/log.h"
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -343,13 +343,10 @@ void testAsyncOffload() {
         asio::co_spawn(
             ioc,
             [&]() -> asio::awaitable<void> {
-                auto v = co_await utilxx::offloadAsync<int>(
-                    pool,
-                    [&]() -> asio::awaitable<int> {
-                        ranOnWorker.store(true, std::memory_order_release);
-                        co_return 42;
-                    }
-                );
+                auto v = co_await utilxx::offloadAsync<int>(pool, [&]() -> asio::awaitable<int> {
+                    ranOnWorker.store(true, std::memory_order_release);
+                    co_return 42;
+                });
                 XX_TEST_EXPECT_EQ(v, 42);
             },
             asio::detached

@@ -2,11 +2,11 @@
 
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/text_layout.h"
-#include "utilxx/diff_util.h"
-#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include "ftxui/screen/terminal.hpp"
 #include "markdown/state_diagram.hpp"
+#include "utilxx/diff_util.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 
 using namespace ftxui;

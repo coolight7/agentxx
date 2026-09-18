@@ -2,11 +2,11 @@
 
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/version.h"
+#include "asio/awaitable.hpp"
 #include "utilxx/http_client.h"
 #include "utilxx_base/async_mutex.h"
 #include "utilxx_base/json.h"
-#include "agentxx/version.h"
-#include "asio/awaitable.hpp"
 #include <atomic>
 #include <chrono>
 #include <expected>
@@ -68,7 +68,7 @@ public:
         /// - 0 表示不限制 (无整体超时, 仅受 requestTimeout 等内部超时约束)
         /// - 默认 120 秒; 可在 yaml 中对每个 mcp 单独配置 (单位秒, 0=不限制)
         std::chrono::milliseconds toolCallTimeout{120000};
-        utilxx::HeaderMap           extraHeaders;
+        utilxx::HeaderMap         extraHeaders;
 
         bool isHttp() const {
             return !serverUrl.empty();
@@ -332,10 +332,10 @@ private:
     struct StdioTransport;
     std::unique_ptr<StdioTransport> stdio_;
     /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
-    std::unique_ptr<utilxx_base::AsyncMutex>                            stdioWriteMutex_;
+    std::unique_ptr<utilxx_base::AsyncMutex>                     stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;
     std::unordered_map<int64_t, std::shared_ptr<PendingRequest>> pending_;
-    utilxx_base::AsioErrorCode                                     ignoreEc_;
+    utilxx_base::AsioErrorCode                                   ignoreEc_;
 
     // 工具定义缓存 (x-mcp-header 提取)
     mutable std::mutex                                 toolsCacheMutex_;

@@ -4,8 +4,8 @@
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "utilxx_base/log.h"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
 #include <atomic>
 #include <functional>
 #include <string>

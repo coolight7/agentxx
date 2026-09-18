@@ -31,7 +31,7 @@ utilxx_base::Json AgentPrompt::toJson() const {
         utilxx_base::Json tools = utilxx_base::Json::object();
         for (const auto& kv : toolPrompt) {
             utilxx_base::Json tp;
-            tp["depict"]             = kv.second.depict;
+            tp["depict"]           = kv.second.depict;
             utilxx_base::Json args = utilxx_base::Json::object();
             for (const auto& a : kv.second.args) {
                 args[a.first] = a.second;
@@ -58,7 +58,11 @@ void AgentPrompt::mergeFromJson(const utilxx_base::Json& j) {
             const auto& key = item.first;
             const auto& val = item.second;
             if (val.is_string()) {
-                utilxx_base::insertOrAssignHeterogeneous(appendSystemPrompts, key, val.get<std::string>());
+                utilxx_base::insertOrAssignHeterogeneous(
+                    appendSystemPrompts,
+                    key,
+                    val.get<std::string>()
+                );
             } else if (val.is_null()) {
                 // 异构删除复用 utilxx_base::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
                 utilxx_base::eraseHeterogeneous(appendSystemPrompts, key);
@@ -70,7 +74,8 @@ void AgentPrompt::mergeFromJson(const utilxx_base::Json& j) {
         for (const auto& item : tools.items()) {
             const auto& name = item.first;
             const auto& tp   = item.second;
-            auto& target = utilxx_base::getOrCreateHeterogeneous(toolPrompt, name); // 不存在则默认构造插入
+            auto&       target
+                = utilxx_base::getOrCreateHeterogeneous(toolPrompt, name); // 不存在则默认构造插入
             if (tp.contains("depict") && tp["depict"].is_string()) {
                 target.depict = tp["depict"].get<std::string>();
             }

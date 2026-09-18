@@ -1,8 +1,8 @@
 #include "agentxx/middlewares/interrupt_ui.h"
 
+#include "fmt/format.h"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
-#include "fmt/format.h"
 #include <algorithm>
 #include <cmath>
 #include <utility>

@@ -14,9 +14,6 @@
 #include "utilxx_base/container_util.h"
 
 #include "agentxx/agent/io/wire_protocol.h"
-#include "utilxx/async_offload.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -25,6 +22,9 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -320,7 +320,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     }
 
     // ---- 接口协商限制 (三层协商第 2 层; 见
-    //      [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h) 接口协商节) ----
+    //      [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h) 接口协商节)
+    //      ----
     // require 中本侧相关项未满足 → 跳过加载 (INFO + 记录原因, 非错误:
     // 同一插件目录服务 cli/tui/gui 多宿主, 本宿主缺某接口是预期情况);
     // optional 缺失仅警告 (插件 entry 内应按 ui_caps()/interfaces 自降级)
@@ -444,21 +445,18 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // client io 事件循环 (慢初始化/插件间调用时明显), 且违背契约声明的
     // "entry 运行在宿主线程池";
     // 插件违约抛异常按 rc=-1 处理 (加载失败清理路径)
-    int rc = co_await utilxx::offloadAsync<int>(
-        *pool_,
-        [inst, entryFn]() -> asio::awaitable<int> {
-            try {
-                const auto rc       = entryFn(inst->hostView(), &inst->pluginCtx);
-                inst->pluginCreated = (inst->pluginCtx != nullptr);
-                co_return rc;
-            } catch (const std::exception& e) {
-                XX_LOGE("[client_plugin] `{}` entry threw: {}", inst->name, e.what());
-            } catch (...) {
-                XX_LOGE("[client_plugin] `{}` entry threw unknown exception", inst->name);
-            }
-            co_return -1;
+    int rc = co_await utilxx::offloadAsync<int>(*pool_, [inst, entryFn]() -> asio::awaitable<int> {
+        try {
+            const auto rc       = entryFn(inst->hostView(), &inst->pluginCtx);
+            inst->pluginCreated = (inst->pluginCtx != nullptr);
+            co_return rc;
+        } catch (const std::exception& e) {
+            XX_LOGE("[client_plugin] `{}` entry threw: {}", inst->name, e.what());
+        } catch (...) {
+            XX_LOGE("[client_plugin] `{}` entry threw unknown exception", inst->name);
         }
-    );
+        co_return -1;
+    });
     if (rc != 0) {
         XX_LOGE("[client_plugin] `{}` entry failed (rc={})", name, rc);
         detachAll(inst.get());
@@ -1054,10 +1052,10 @@ void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
 // ==================== 会话上下文 ====================
 
 std::string ClientPluginManager::clientStateJson() const {
-    utilxx_base::Json j = utilxx_base::Json::object();
-    j["sessionId"]        = sessionId_;
-    j["connState"]        = connState_;
-    j["startupProgress"]  = startupProgress_;
+    utilxx_base::Json j  = utilxx_base::Json::object();
+    j["sessionId"]       = sessionId_;
+    j["connState"]       = connState_;
+    j["startupProgress"] = startupProgress_;
     // 宿主支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
     // 功能; 见 [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
     // 接口协商节)。位图 uiCaps 字段已移除 (v4)
@@ -1105,25 +1103,25 @@ void ClientPluginManager::onReady() {
     // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的宿主上降级)
     if (uiAdapter_) {
         utilxx_base::Json up = utilxx_base::Json::object();
-        up["sessionId"]        = sessionId_;
-        up["interfaces"]       = j["interfaces"];
+        up["sessionId"]      = sessionId_;
+        up["interfaces"]     = j["interfaces"];
         uiAdapter_->sendPluginData("agentxx_host", "client_interfaces", up.dump());
     }
 }
 
 void ClientPluginManager::onConnStateChanged(std::string_view state, std::string_view progress) {
-    connState_            = std::string{state};
-    startupProgress_      = std::string{progress};
-    utilxx_base::Json j = utilxx_base::Json::object();
-    j["connState"]        = connState_;
-    j["startupProgress"]  = startupProgress_;
+    connState_           = std::string{state};
+    startupProgress_     = std::string{progress};
+    utilxx_base::Json j  = utilxx_base::Json::object();
+    j["connState"]       = connState_;
+    j["startupProgress"] = startupProgress_;
     dispatchEvent(AGENTXX_CLIENT_EVT_CONN_STATE, j.dump());
 }
 
 void ClientPluginManager::onUserInput(std::string_view sessionId, std::string_view text) {
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["sessionId"]        = std::string{sessionId};
-    j["text"]             = std::string{text};
+    j["sessionId"]      = std::string{sessionId};
+    j["text"]           = std::string{text};
     dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
 }
 
@@ -1133,9 +1131,9 @@ void ClientPluginManager::onDelta(const agentxx::agent::WireDelta& delta) {
 
 void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& result) {
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["sessionId"]        = result.sessionId;
-    j["hasError"]         = result.hasError;
-    j["interrupted"]      = result.interrupted;
+    j["sessionId"]      = result.sessionId;
+    j["hasError"]       = result.hasError;
+    j["interrupted"]    = result.interrupted;
     if (!result.errorMessage.empty()) {
         j["errorMessage"] = result.errorMessage;
     }
@@ -1149,7 +1147,7 @@ void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
     // 会话切换后旧的按 tool_call_id 语义结果不再有效, 整体失效 (UI 回退通用渲染)
     toolRenderCache_->clear();
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["sessionId"]        = sessionId_;
+    j["sessionId"]      = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
 }
 
@@ -1215,9 +1213,9 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
     }
 
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["plugin"]           = data.plugin;
-    j["event"]            = data.event;
-    j["data"]             = data.data;
+    j["plugin"]         = data.plugin;
+    j["event"]          = data.event;
+    j["data"]           = data.data;
     dispatchEvent(AGENTXX_CLIENT_EVT_PLUGIN_DATA, j.dump());
 }
 
@@ -1498,8 +1496,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_get_string(
         return -1;
     }
     try {
-        auto j
-            = utilxx_base::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
+        auto j = utilxx_base::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
         auto v = j.value(std::string_view{key->data, static_cast<size_t>(key->size)}, "");
         if (v.empty() && !j.contains(std::string{key->data, static_cast<size_t>(key->size)})) {
             return -1;
@@ -1527,7 +1524,7 @@ int32_t AGENTXX_PLUGIN_CALL xx_cjson_escape(
     }
     try {
         utilxx_base::Json j       = std::string{s->data, static_cast<size_t>(s->size)};
-        auto                dumpStr = j.dump();
+        auto              dumpStr = j.dump();
         hostMemorySetString(out, dumpStr);
         return 0;
     } catch (...) {
@@ -2176,7 +2173,7 @@ void* ClientPluginManager::registerStatusItem(
         }
     }
     // 解析 initial_json → text
-    std::string         text;
+    std::string       text;
     utilxx_base::Json props;
     try {
         props = utilxx_base::Json::parse(
@@ -2225,7 +2222,7 @@ int ClientPluginManager::updateStatusItem(
         return -1;
     }
     utilxx_base::Json props;
-    std::string         text;
+    std::string       text;
     try {
         props = utilxx_base::Json::parse(
             agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
@@ -2324,7 +2321,7 @@ void* ClientPluginManager::registerPanel(
         }
     }
     utilxx_base::Json props;
-    std::string         title;
+    std::string       title;
     try {
         props = utilxx_base::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
@@ -2398,7 +2395,7 @@ int ClientPluginManager::updatePanel(
         }
     }
     utilxx_base::Json payload = utilxx_base::Json::object();
-    payload["items"]            = items;
+    payload["items"]          = items;
     if (uiAdapter_) {
         uiAdapter_->onPanelUpdated(h->id, payload);
     }
@@ -2472,7 +2469,7 @@ void* ClientPluginManager::registerInfoSection(
         }
     }
     utilxx_base::Json props;
-    std::string         title;
+    std::string       title;
     try {
         props = utilxx_base::Json::parse(
             agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
@@ -2543,7 +2540,7 @@ int ClientPluginManager::updateInfoSection(
         }
     }
     utilxx_base::Json payload = utilxx_base::Json::object();
-    payload["items"]            = items;
+    payload["items"]          = items;
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionUpdated(h->id, payload);
     }
@@ -2824,11 +2821,11 @@ std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {
         return "{}";
     }
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["name"]             = inst->name;
-    j["version"]          = inst->version;
-    j["description"]      = inst->description;
-    j["path"]             = inst->path;
-    j["config"]           = inst->configPath;
+    j["name"]           = inst->name;
+    j["version"]        = inst->version;
+    j["description"]    = inst->description;
+    j["path"]           = inst->path;
+    j["config"]         = inst->configPath;
     return j.dump();
 }
 

@@ -7,8 +7,8 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "utilxx_base/string_util.h"
 #include "agentxx_filesystem/filesystem_impl.h"
+#include "utilxx_base/string_util.h"
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -53,7 +53,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         neograph::ChatTool get_definition() const {                                          \
             return {TOOL_NAME, DEPICT, {}};                                                  \
         }                                                                                    \
-        asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {  \
+        asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {    \
             co_return ::agentxx_fs_plugin::IMPL_FN(args, testResolvedWorkDir(ctx), nullptr); \
         }                                                                                    \
     };
@@ -69,7 +69,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
         neograph::ChatTool get_definition() const {                                                \
             return {TOOL_NAME, DEPICT, {}};                                                        \
         }                                                                                          \
-        asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {        \
+        asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {          \
             co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(args, testResolvedWorkDir(ctx)); \
         }                                                                                          \
     };
@@ -1557,7 +1557,7 @@ asio::awaitable<void> test_grep_text_search(std::weak_ptr<agentxx::agent::AgentC
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"hello"})           },
         {"file_patterns", utilxx_base::Json::array({testDir + "/*.txt"})},
-        {"output_mode",   "files_with_matches"                            },
+        {"output_mode",   "files_with_matches"                          },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test2.txt") != std::string::npos) {
@@ -1577,7 +1577,7 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"regex_patterns", utilxx_base::Json::array({"line[0-9]"})           },
         {"file_patterns",  utilxx_base::Json::array({testDir + "/test1.txt"})},
-        {"output_mode",    "files_with_matches"                                },
+        {"output_mode",    "files_with_matches"                              },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos) {
@@ -1600,7 +1600,7 @@ asio::awaitable<void>
         {"text_patterns",  utilxx_base::Json::array({"hello world"})     },
         {"regex_patterns", utilxx_base::Json::array({"line[0-9]"})       },
         {"file_patterns",  utilxx_base::Json::array({testDir + "/*.txt"})},
-        {"output_mode",    "files_with_matches"                            },
+        {"output_mode",    "files_with_matches"                          },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
@@ -1626,7 +1626,7 @@ asio::awaitable<void>
         {"text_patterns",  utilxx_base::Json::array({"hello"})               },
         {"regex_patterns", utilxx_base::Json::array({"world"})               },
         {"file_patterns",  utilxx_base::Json::array({testDir + "/test2.txt"})},
-        {"output_mode",    "content"                                           },
+        {"output_mode",    "content"                                         },
     };
     auto result = co_await tool.execute_async(args);
     // 文本 "hello" 与正则 "world" 都命中 test2.txt 第 1 行, 应只输出一行且组头一次
@@ -1653,7 +1653,7 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"hello"})               },
         {"file_patterns", utilxx_base::Json::array({testDir + "/test2.txt"})},
-        {"output_mode",   "content"                                           },
+        {"output_mode",   "content"                                         },
     };
     auto result = co_await tool.execute_async(args);
     // content 模式现在返回按文件分组的文本格式: 每文件组头 "{filepath}:" 仅出现一次,
@@ -1683,8 +1683,8 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"regex_patterns",     utilxx_base::Json::array({".*e.*"})           },
         {"file_patterns",      utilxx_base::Json::array({testDir + "/*.txt"})},
-        {"output_mode",        "content"                                       },
-        {"max_count_per_file", 1                                               },
+        {"output_mode",        "content"                                     },
+        {"max_count_per_file", 1                                             },
     };
     auto result = co_await tool.execute_async(args);
 
@@ -1718,8 +1718,8 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns",  utilxx_base::Json::array({"HELLO"})               },
         {"file_patterns",  utilxx_base::Json::array({testDir + "/test2.txt"})},
-        {"output_mode",    "files_with_matches"                                },
-        {"case_sensitive", false                                               },
+        {"output_mode",    "files_with_matches"                              },
+        {"case_sensitive", false                                             },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test2.txt") != std::string::npos) {
@@ -1740,7 +1740,7 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"HELLO"})               },
         {"file_patterns", utilxx_base::Json::array({testDir + "/test2.txt"})},
-        {"output_mode",   "files_with_matches"                                },
+        {"output_mode",   "files_with_matches"                              },
     };
     auto result = co_await tool.execute_async(args);
     // 应该报错 (无匹配), 而不是返回 test2.txt
@@ -1762,8 +1762,8 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns",      utilxx_base::Json::array({"line"})                },
         {"file_patterns",      utilxx_base::Json::array({testDir + "/test1.txt"})},
-        {"output_mode",        "files_with_matches"                                },
-        {"max_count_per_file", 2                                                   },
+        {"output_mode",        "files_with_matches"                              },
+        {"max_count_per_file", 2                                                 },
     };
     auto result = co_await tool.execute_async(args);
     // 应输出 test1.txt:2 (限制为 2)
@@ -1785,8 +1785,8 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"line3"})               },
         {"file_patterns", utilxx_base::Json::array({testDir + "/test1.txt"})},
-        {"output_mode",   "content"                                           },
-        {"context_lines", 1                                                   },
+        {"output_mode",   "content"                                         },
+        {"context_lines", 1                                                 },
     };
     auto result = co_await tool.execute_async(args);
     // 分组格式下组头 "{filepath}:" 仅一次; 匹配行用 `:` 分隔, 上下文行用 `-` 分隔
@@ -1811,7 +1811,7 @@ asio::awaitable<void> test_glob_type_filter(std::weak_ptr<agentxx::agent::AgentC
     // 只匹配目录
     auto args = utilxx_base::Json{
         {"file_patterns", utilxx_base::Json::array({testDir + "/*"})},
-        {"type",          "dir"                                       },
+        {"type",          "dir"                                     },
     };
     auto result = co_await tool.execute_async(args);
     // 应包含 subdir, 不应包含 test1.txt
@@ -1874,7 +1874,7 @@ asio::awaitable<void> test_glob_max_depth(std::weak_ptr<agentxx::agent::AgentCon
     auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
     auto args = utilxx_base::Json{
         {"file_patterns", utilxx_base::Json::array({testDir + "/**/*.txt"})},
-        {"max_depth",     1                                                  },
+        {"max_depth",     1                                                },
     };
     auto result = co_await tool.execute_async(args);
     // 顶层 test1.txt 应保留, subdir/subtest.txt 应被 max_depth 排除
@@ -1918,7 +1918,7 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"never_match_any_text"})     },
         {"file_patterns", utilxx_base::Json::array({testDir + "/no_such_dir/**"})},
-        {"timeout",       60                                                       }, // 修复前会白等 60s
+        {"timeout",       60                                                     }, // 修复前会白等 60s
     };
     auto t0     = std::chrono::steady_clock::now();
     auto result = co_await tool.execute_async(args);
@@ -1946,7 +1946,7 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"hello world"})    },
         {"file_patterns", utilxx_base::Json::array({testDir + "/**/*"})},
-        {"output_mode",   "files_with_matches"                           },
+        {"output_mode",   "files_with_matches"                         },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test2.txt") != std::string::npos
@@ -2013,7 +2013,7 @@ asio::awaitable<void> test_grep_mem_stress(std::weak_ptr<agentxx::agent::AgentCo
     auto args2 = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"token_5", "func3"}) },
         {"file_patterns", utilxx_base::Json::array({stressDir + "/**/*"})},
-        {"output_mode",   "content"                                        },
+        {"output_mode",   "content"                                      },
     };
     for (int i = 0; i < 30; i++) {
         auto r = co_await tool.execute_async(args2);
@@ -2049,7 +2049,7 @@ asio::awaitable<void>
     // 1) 递归 glob: 应能遍历该目录且路径中包含 UTF-8 字符 (不抛异常)
     auto argsRec = utilxx_base::Json{
         {"file_patterns", utilxx_base::Json::array({testDir + "/**/*"})},
-        {"limit",         0                                              },
+        {"limit",         0                                            },
     };
     auto resRec        = co_await tool.execute_async(argsRec);
     bool hasFile       = resRec.find("sample.txt") != std::string::npos;
@@ -2091,7 +2091,7 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"match_token_in_unicode_dir"})},
         {"file_patterns", utilxx_base::Json::array({testDir + "/**/*"})           },
-        {"output_mode",   "files_with_matches"                                      },
+        {"output_mode",   "files_with_matches"                                    },
     };
     auto result   = co_await tool.execute_async(args);
     bool hasMatch = result.find("target.txt") != std::string::npos
@@ -2120,9 +2120,8 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"hello world"})                               },
         {"file_patterns",
-         utilxx_base::Json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})
-        },
-        {"output_mode",   "files_with_matches"                                                      },
+         utilxx_base::Json::array({testDir + "/no_such_sub_dir/**/*.txt", testDir + "/test2.txt"})},
+        {"output_mode",   "files_with_matches"                                                    },
     };
     auto result = co_await tool.execute_async(args);
     // 有效 pattern (test2.txt) 应正常命中并返回, 不应因前一个 pattern 为空或报错而整体失败
@@ -2444,7 +2443,7 @@ asio::awaitable<void>
     auto argsFwm = utilxx_base::Json{
         {"text_patterns", utilxx_base::Json::array({"检索特征码_中文关键字"})},
         {"file_patterns", utilxx_base::Json::array({chineseDir + "/*.txt"})            },
-        {"output_mode",   "files_with_matches"                                           }
+        {"output_mode",   "files_with_matches"                                         }
     };
     auto resFwm = co_await tool.execute_async(argsFwm);
     bool fwmOk  = resFwm.find("检索目标_中文.txt") != std::string::npos
@@ -2454,7 +2453,7 @@ asio::awaitable<void>
     auto argsContent = utilxx_base::Json{
         {"regex_patterns", utilxx_base::Json::array({R"(检索特征码_中文关键字_\d+)"})},
         {"file_patterns",  utilxx_base::Json::array({testDir + "/**/*.txt"})                   },
-        {"output_mode",    "content"                                                             }
+        {"output_mode",    "content"                                                           }
     };
     auto resContent = co_await tool.execute_async(argsContent);
     bool contentOk  = resContent.find("检索目标_中文.txt") != std::string::npos
@@ -2771,7 +2770,7 @@ asio::awaitable<void> test_plugin_real_link() {
             utilxx_base::Json{
                 {"text_patterns", utilxx_base::Json::array({"gamma"})},
                 {"file_patterns", utilxx_base::Json::array({"*.txt"})},
-                {"output_mode",   "files_with_matches"                 }
+                {"output_mode",   "files_with_matches"               }
         }
         );
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
@@ -2822,7 +2821,7 @@ asio::awaitable<void> test_plugin_real_link() {
             utilxx_base::Json{
                 {"text_patterns", utilxx_base::Json::array({"更新版本"})                   },
                 {"file_patterns", utilxx_base::Json::array({"中文目录_真实链路/*.txt"})},
-                {"output_mode",   "files_with_matches"                                           }
+                {"output_mode",   "files_with_matches"                                         }
         }
         );
         XX_TEST_EXPECT_TRUE(outG.find("中文文件.txt") != std::string::npos);
@@ -2890,7 +2889,7 @@ asio::awaitable<void>
     {
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
-            {"max_files",     10                                              },
+            {"max_files",     10                                            },
         };
         auto result     = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         auto pathCount  = countPathLines(result);
@@ -2909,7 +2908,7 @@ asio::awaitable<void>
     {
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
-            {"max_files",     0                                               },
+            {"max_files",     0                                             },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
@@ -2926,7 +2925,7 @@ asio::awaitable<void>
     {
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/*.txt"})},
-            {"max_files",     100                                              },
+            {"max_files",     100                                            },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
@@ -2944,7 +2943,7 @@ asio::awaitable<void>
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"text_patterns", utilxx_base::Json::array({"small_token"})     },
-            {"max_files",     10                                              },
+            {"max_files",     10                                            },
         };
         auto result  = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool hasNote = startsWithNote(result) && result.find("max_files") != std::string::npos;
@@ -2965,7 +2964,7 @@ asio::awaitable<void>
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"text_patterns", utilxx_base::Json::array({"small_token"})     },
-            {"max_files",     100                                             },
+            {"max_files",     100                                           },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         if (result.find("small0.txt") == std::string::npos || startsWithNote(result)) {
@@ -2982,7 +2981,7 @@ asio::awaitable<void>
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"text_patterns", utilxx_base::Json::array({"no_such_token"})   },
-            {"max_files",     10                                              },
+            {"max_files",     10                                            },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool ok     = result.find("[Error]") != std::string::npos
@@ -3003,7 +3002,7 @@ asio::awaitable<void>
         auto args = utilxx_base::Json{
             {"file_patterns",    utilxx_base::Json::array({limitDir + "/**/*"})        },
             {"text_patterns",    utilxx_base::Json::array({"big_token", "small_token"})},
-            {"max_file_size_mb", 0.001                                                   },
+            {"max_file_size_mb", 0.001                                                 },
         };
         auto result       = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool skippedBig   = result.find("big.txt") == std::string::npos;
@@ -3042,14 +3041,14 @@ asio::awaitable<void>
     {
         auto argsUnlimited = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**"})},
-            {"max_files",     0                                             },
+            {"max_files",     0                                           },
         };
         auto full      = ::agentxx_fs_plugin::fileGlobExecute(argsUnlimited, workDir);
         auto fullCount = countPathLines(full); // 目录自身 + 31 个文件
 
         auto argsLimited = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**"})},
-            {"max_files",     10                                            },
+            {"max_files",     10                                          },
         };
         auto limited    = ::agentxx_fs_plugin::fileGlobExecute(argsLimited, workDir);
         auto limitCount = countPathLines(limited);
@@ -3067,9 +3066,8 @@ asio::awaitable<void>
     // ⑩ 多 pattern 共享同一数量上限: 前一个 pattern 到限后不再展开后续 pattern
     {
         auto args = utilxx_base::Json{
-            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})
-            },
-            {"max_files",     10                                                                   },
+            {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})},
+            {"max_files",     10                                                                 },
         };
         auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
@@ -3087,8 +3085,8 @@ asio::awaitable<void>
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"text_patterns", utilxx_base::Json::array({"small_token"})     },
-            {"output_mode",   "content"                                       },
-            {"max_files",     5                                               },
+            {"output_mode",   "content"                                     },
+            {"max_files",     5                                             },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool ok = startsWithNote(result) && result.find("small_token line") != std::string::npos;
@@ -3149,7 +3147,7 @@ asio::awaitable<void>
         auto args = utilxx_base::Json{
             {"file_patterns",    utilxx_base::Json::array({baseDir + "/**/*"})},
             {"exclude_patterns", utilxx_base::Json::array({buildDir + "/**"}) },
-            {"max_files",        1000                                           },
+            {"max_files",        1000                                         },
         };
         auto result = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
         bool ok     = result.find("s0.txt") != std::string::npos
@@ -3171,7 +3169,7 @@ asio::awaitable<void>
             {"file_patterns",    utilxx_base::Json::array({baseDir + "/**/*"})},
             {"text_patterns",    utilxx_base::Json::array({"prune_token"})    },
             {"exclude_patterns", utilxx_base::Json::array({buildDir + "/**"}) },
-            {"max_files",        1000                                           },
+            {"max_files",        1000                                         },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool ok     = result.find("s0.txt") != std::string::npos
@@ -3192,7 +3190,7 @@ asio::awaitable<void>
             {"file_patterns",    utilxx_base::Json::array({baseDir + "/**/*"})},
             {"text_patterns",    utilxx_base::Json::array({"prune_token"})    },
             {"exclude_patterns", utilxx_base::Json::array({buildDir})         },
-            {"max_files",        2000                                           },
+            {"max_files",        2000                                         },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
         bool ok     = result.find("b0.txt") != std::string::npos // 子树仍被遍历

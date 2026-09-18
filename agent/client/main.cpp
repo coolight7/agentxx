@@ -9,15 +9,15 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
-#include "utilxx_base/env.h"
 #include "agentxx/util/exception.h"
-#include "utilxx/http_client.h"
 #include "agentxx/util/settings_db.h"
-#include "utilxx_base/string_util.h"
 #include "agentxx/version.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/signal_set.hpp"
+#include "utilxx/http_client.h"
+#include "utilxx_base/env.h"
+#include "utilxx_base/string_util.h"
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -677,7 +677,7 @@ Options:
         asio::co_spawn(
             *agent->ioCtx,
             [agent, server]() -> asio::awaitable<void> {
-                asio::signal_set         signals(*agent->ioCtx, SIGINT, SIGTERM);
+                asio::signal_set           signals(*agent->ioCtx, SIGINT, SIGTERM);
                 utilxx_base::AsioErrorCode ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 XX_LOGI("[agent_server] signal received, shutting down ({})...", ec.message());

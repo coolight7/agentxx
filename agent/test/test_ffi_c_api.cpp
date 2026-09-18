@@ -13,9 +13,9 @@
 #include "agentxx-test/test_ffi_c_api.h"
 
 #include "agentxx/ffi_api.h"
+#include "agentxx/version.h"
 #include "utilxx/http_server.h"
 #include "utilxx_base/json.h"
-#include "agentxx/version.h"
 
 #if XX_IS_WIN_D
 #ifndef WIN32_LEAN_AND_MEAN
@@ -158,8 +158,8 @@ struct FfiEventRecorder {
 
 struct FfiMockLLM {
     std::unique_ptr<utilxx::HttpServer> server;
-    std::thread                                thread;
-    std::atomic<int>                           requestCount{0};
+    std::thread                         thread;
+    std::atomic<int>                    requestCount{0};
     /// 首个请求返回工具调用 (模拟需要权限/输入的工具选择)
     bool firstIsToolCall = false;
     /// >0 时响应前延迟 (取消测试用)

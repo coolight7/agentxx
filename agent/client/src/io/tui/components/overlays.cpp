@@ -1011,8 +1011,8 @@ size_t ContextOverlay::firstVisibleHeaderMessage() const {
 
 ftxui::Element ContextOverlay::buildMessageHeader(
     const utilxx_base::Json& m,
-    bool                       expanded,
-    const Color&               roleColor
+    bool                     expanded,
+    const Color&             roleColor
 ) {
     const auto& theme     = *ctx_.theme;
     const auto  role      = ctxMsgRole(m);
@@ -1725,10 +1725,10 @@ bool DiffOverlay::OnEvent(Event event) {
 }
 
 CustomOverlay::CustomOverlay(
-    TUICtx&             ctx,
-    std::string         title,
+    TUICtx&           ctx,
+    std::string       title,
     utilxx_base::Json items,
-    std::string         ownerPlugin
+    std::string       ownerPlugin
 ) :
     ctx_(ctx),
     title_(std::move(title)),

@@ -1,7 +1,7 @@
 /// agentxx_computer_use —— 计算机控制插件 (Windows)
-#include "utilxx_base/json.h"
 #include "computer_use_plugin.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include <cstring>
 #include <string>
 
@@ -19,15 +19,15 @@ static const char* kUiControlDefaultDepict
       "Shortcut execution automatically presses modifier keys, presses target key, and releases in reverse order.";
 
 static std::string makeUiControlSchema() {
-    utilxx_base::Json schema                           = utilxx_base::Json::object();
-    schema["type"]                                       = "object";
-    schema["required"]                                   = utilxx_base::Json::array({"actions"});
-    schema["properties"]                                 = utilxx_base::Json::object();
-    schema["properties"]["actions"]                      = utilxx_base::Json::object();
-    schema["properties"]["actions"]["type"]              = "array";
-    schema["properties"]["actions"]["items"]             = utilxx_base::Json::object();
-    schema["properties"]["actions"]["items"]["type"]     = "object";
-    schema["properties"]["actions"]["items"]["required"] = utilxx_base::Json::array({"action"});
+    utilxx_base::Json schema                               = utilxx_base::Json::object();
+    schema["type"]                                         = "object";
+    schema["required"]                                     = utilxx_base::Json::array({"actions"});
+    schema["properties"]                                   = utilxx_base::Json::object();
+    schema["properties"]["actions"]                        = utilxx_base::Json::object();
+    schema["properties"]["actions"]["type"]                = "array";
+    schema["properties"]["actions"]["items"]               = utilxx_base::Json::object();
+    schema["properties"]["actions"]["items"]["type"]       = "object";
+    schema["properties"]["actions"]["items"]["required"]   = utilxx_base::Json::array({"action"});
     schema["properties"]["actions"]["items"]["properties"] = utilxx_base::Json::object();
     schema["properties"]["actions"]["items"]["properties"]["action"]      = utilxx_base::Json({
         {"type", "string"},
@@ -58,7 +58,7 @@ static std::string makeUiControlSchema() {
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["button"]      = utilxx_base::Json({
-        {"type", "string"                                               },
+        {"type", "string"                                             },
         {"enum", utilxx_base::Json::array({"left", "right", "middle"})}
     });
     schema["properties"]["actions"]["items"]["properties"]["clicks"]      = utilxx_base::Json({
@@ -68,7 +68,7 @@ static std::string makeUiControlSchema() {
         {"type", "integer"}
     });
     schema["properties"]["actions"]["items"]["properties"]["direction"]   = utilxx_base::Json({
-        {"type", "string"                                  },
+        {"type", "string"                                },
         {"enum", utilxx_base::Json::array({"up", "down"})}
     });
     schema["properties"]["actions"]["items"]["properties"]["text"]        = utilxx_base::Json({
@@ -78,7 +78,7 @@ static std::string makeUiControlSchema() {
         {"type", "string"}
     });
     schema["properties"]["actions"]["items"]["properties"]["keys"]        = utilxx_base::Json({
-        {"type",  "array"                                  },
+        {"type",  "array"                                },
         {"items", utilxx_base::Json({{"type", "string"}})}
     });
     schema["properties"]["actions"]["items"]["properties"]["delay_ms"]    = utilxx_base::Json({

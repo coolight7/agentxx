@@ -3,8 +3,8 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
-#include "utilxx_base/json.h"
 #include "neograph/graph/cancel.h"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <functional>
 #include <map>
@@ -62,10 +62,10 @@ std::string mutateStringUtf8(std::string_view input, double mutationRate, std::m
 
 /// 评分结果
 struct TrainingScore {
-    double              score = 0.0;
-    std::string         feedback;
-    bool                passed    = false;
-    int                 iteration = 0;
+    double            score = 0.0;
+    std::string       feedback;
+    bool              passed    = false;
+    int               iteration = 0;
     utilxx_base::Json extra;
 };
 
@@ -74,7 +74,7 @@ struct TrainingScore {
 /// - 空 patch 表示无修改
 struct OptimizedPrompts {
     utilxx_base::Json patch;
-    std::string         analysis;
+    std::string       analysis;
 };
 
 /// Prompt 变体：存储完整 AgentPrompt 及其评分
@@ -92,7 +92,7 @@ struct PromptVariant {
     int                           generation = 0;
     std::string                   parentId;
     std::map<std::string, double> perTestCaseScores;
-    utilxx_base::Json           extra;
+    utilxx_base::Json             extra;
 
     double averageScore() const;
 

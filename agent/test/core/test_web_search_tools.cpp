@@ -3,8 +3,8 @@
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_websearch 插件 (同名同行为); 测试直测
 // 插件同一实现 (websearch_impl.h), 保证插件行为与测试覆盖一致
-#include "utilxx/http_server.h"
 #include "agentxx_websearch/websearch_impl.h"
+#include "utilxx/http_server.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/use_awaitable.hpp>
@@ -448,7 +448,7 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
         auto args = utilxx_base::Json{
-            {"url",    baseUrl + "/echo-header"                                        },
+            {"url",    baseUrl + "/echo-header"                                      },
             {"header", utilxx_base::Json{{"X-Test-Header", "fetch-url-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -464,7 +464,7 @@ asio::awaitable<void>
     {
         auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
         auto args = utilxx_base::Json{
-            {"url",    baseUrl + "/echo-header"                                       },
+            {"url",    baseUrl + "/echo-header"                                     },
             {"header", utilxx_base::Json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -482,8 +482,8 @@ asio::awaitable<void>
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", false, agentContext};
         auto args = utilxx_base::Json{
-            {"query",   "test"                                                           },
-            {"timeout", 10                                                               },
+            {"query",   "test"                                                         },
+            {"timeout", 10                                                             },
             {"header",  utilxx_base::Json{{"X-Test-Header", "search-raw-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
@@ -500,8 +500,8 @@ asio::awaitable<void>
         auto tool
             = agentxx::tools::WebSearchTool{baseUrl + "/echo-header?q={}", true, agentContext};
         auto args = utilxx_base::Json{
-            {"query",   "test"                                                          },
-            {"timeout", 10                                                              },
+            {"query",   "test"                                                        },
+            {"timeout", 10                                                            },
             {"header",  utilxx_base::Json{{"X-Test-Header", "search-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);

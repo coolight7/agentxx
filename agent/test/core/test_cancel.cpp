@@ -3,10 +3,8 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/tools/tool.h"
-#include "utilxx/async_offload.h"
 #include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/deferred.hpp"
@@ -16,6 +14,8 @@
 #include "asio/use_awaitable.hpp"
 #include "neograph/graph/cancel.h"
 #include "neograph/tool.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/log.h"
 
 #include "agentxx-test/core/test_cancel.h"
 #include <atomic>
@@ -90,9 +90,10 @@ asio::awaitable<void> test_isCancelAbort() {
         cancelled
     ));
     // 非 operation_aborted 错误码不算取消
-    XX_TEST_EXPECT_FALSE(
-        agentxx::util::isCancelAbort(utilxx_base::AsioSystemError(asio::error::timed_out), cancelled)
-    );
+    XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
+        utilxx_base::AsioSystemError(asio::error::timed_out),
+        cancelled
+    ));
     // 无令牌 / 令牌未取消时按超时处理, 不算取消
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
         utilxx_base::AsioSystemError(asio::error::operation_aborted),
@@ -419,25 +420,25 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     // LLM 返回两个 toolcall: 先慢速 tool, 后标记 tool
     g_da_sim_tool_calls = utilxx_base::Json::array({
         utilxx_base::Json{
-                            {"index", 0},
-                            {"id", "call_slow_1"},
-                            {"type", "function"},
-                            {"function",
+                          {"index", 0},
+                          {"id", "call_slow_1"},
+                          {"type", "function"},
+                          {"function",
              utilxx_base::Json{
                  {"name", "test_slow"},
                  {"arguments", "{}"},
              }},
-                            },
+                          },
         utilxx_base::Json{
-                            {"index", 1},
-                            {"id", "call_marker_1"},
-                            {"type", "function"},
-                            {"function",
+                          {"index", 1},
+                          {"id", "call_marker_1"},
+                          {"type", "function"},
+                          {"function",
              utilxx_base::Json{
                  {"name", "test_marker"},
                  {"arguments", "{}"},
              }},
-                            },
+                          },
     });
 
     CancelTestAgent agent(cfg);
@@ -521,12 +522,12 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     //   走 isCancel 分支保存完整上下文 (wrap_handle 在 rethrow 前写入 tempMessages),
     //   因此这里轮询等待保存完成
     {
-        auto                ex2 = co_await asio::this_coro::executor;
-        asio::steady_timer  poll(ex2);
-        utilxx_base::Json im;
-        bool                slowCanceled   = false;
-        bool                markerCanceled = false;
-        const auto          deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        auto               ex2 = co_await asio::this_coro::executor;
+        asio::steady_timer poll(ex2);
+        utilxx_base::Json  im;
+        bool               slowCanceled   = false;
+        bool               markerCanceled = false;
+        const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可

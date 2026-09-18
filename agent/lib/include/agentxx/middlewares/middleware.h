@@ -2,11 +2,11 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/interrupt_ui.h"
-#include "utilxx_base/container_util.h"
-#include "utilxx_base/log.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "asio/io_context.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/log.h"
 #include <any>
 #include <cstdlib>
 #include <functional>
@@ -381,9 +381,9 @@ public:
 class InterruptHandleArg {
 public:
 
-    std::string         name;
+    std::string       name;
     utilxx_base::Json arg;
-    std::string         resultId;
+    std::string       resultId;
     /// 中断 UI 描述 (声明式; 客户端通用渲染, 见 [interrupt_ui.h])
     ///
     /// - 走客户端 HIL 的中断**必填**: 生产者用 `preset::*` 预设模板生成
@@ -603,8 +603,9 @@ public:
         auto& itemGraphData = utilxx_base::getOrCreateHeterogeneous(graphData, sessionId);
         auto  it            = itemGraphData.find(key);
         if (it == itemGraphData.end()) {
-            auto [insertIt, _] = utilxx_base::insertHeterogeneous(itemGraphData, std::string{key}, T{});
-            it                 = insertIt;
+            auto [insertIt, _]
+                = utilxx_base::insertHeterogeneous(itemGraphData, std::string{key}, T{});
+            it = insertIt;
         } else {
             ensureAnyType<T>(it->second);
         }
@@ -642,7 +643,7 @@ public:
     asio::awaitable<utilxx_base::Json> requestInterrupt(
         std::string_view                           sessionId,
         const std::function<InterruptHandleArg()>& onCreateArg,
-        const utilxx_base::Json&                 msgs
+        const utilxx_base::Json&                   msgs
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel

@@ -592,14 +592,14 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             auto passthroughMsgs      = utilxx_base::Json::array({passthroughMsg});
 
             utilxx_base::Json taskItem{
-                {"subagent",             "researcher"                                       },
-                {"system_prompt",        "be brief"                                         },
-                {"message",              "find foo"                                         },
-                {"messages",             std::move(passthroughMsgs)                         },
-                {"sessionId",            "same-ctx-thread"                                  },
+                {"subagent",             "researcher"                                     },
+                {"system_prompt",        "be brief"                                       },
+                {"message",              "find foo"                                       },
+                {"messages",             std::move(passthroughMsgs)                       },
+                {"sessionId",            "same-ctx-thread"                                },
                 {"tools",                utilxx_base::Json::array({"agentxx_share_store"})},
-                {"enable_summarization", false                                              },
-                {"result_id",            "parse-r1"                                         },
+                {"enable_summarization", false                                            },
+                {"result_id",            "parse-r1"                                       },
             };
 
             agentxx::middleware::InterruptHandleArg handleArg;
@@ -648,18 +648,9 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             handleArg.arg      = utilxx_base::Json{
                      {"tasks",
                       utilxx_base::Json::array(
-                     {utilxx_base::Json{
-                               {"subagent", "a"},
-                               {"message", "m1"},
-                               {"result_id", "x1"}
-                      },
-                           utilxx_base::Json{
-                               {"subagent", "b"},
-                               {"message", "m2"},
-                               {"result_id", "x2"}
-                      },
-                           utilxx_base::Json{{"subagent", "c"}, {"message", "m3"}, {"result_id", "x3"}}
-                     }
+                     {utilxx_base::Json{{"subagent", "a"}, {"message", "m1"}, {"result_id", "x1"}},
+                           utilxx_base::Json{{"subagent", "b"}, {"message", "m2"}, {"result_id", "x2"}},
+                           utilxx_base::Json{{"subagent", "c"}, {"message", "m3"}, {"result_id", "x3"}}}
                  )}
             };
             auto batch

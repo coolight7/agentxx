@@ -1280,7 +1280,7 @@ asio::awaitable<void> test_http_server_expect_100_continue() {
         co_await asio::async_write(sock, asio::buffer("hello-100ca"), asio::use_awaitable);
 
         // 读取最终响应 (Connection: close, 读到 EOF)
-        std::string              finalResp = interim;
+        std::string                finalResp = interim;
         utilxx_base::AsioErrorCode ec;
         for (;;) {
             size_t n = co_await sock.async_read_some(
@@ -1360,8 +1360,8 @@ asio::awaitable<void> test_http_server_absolute_form_target() {
         );
         co_await asio::async_write(sock, asio::buffer(req), asio::use_awaitable);
 
-        std::string              resp;
-        char                     buf[2048];
+        std::string                resp;
+        char                       buf[2048];
         utilxx_base::AsioErrorCode ec;
         for (;;) {
             size_t n = co_await sock.async_read_some(
@@ -1424,7 +1424,7 @@ public:
         thread = std::thread([this]() {
             while (!stopped.load()) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    sock(ioCtx);
+                asio::ip::tcp::socket      sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -1441,7 +1441,7 @@ public:
         stopped.store(true);
         if (acceptor) {
             utilxx_base::AsioErrorCode ec;
-            asio::ip::tcp::socket    dummy(ioCtx);
+            asio::ip::tcp::socket      dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }
@@ -1814,7 +1814,7 @@ public:
         thread = std::thread([this]() {
             while (!stopped.load()) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    sock(ioCtx);
+                asio::ip::tcp::socket      sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -1832,7 +1832,7 @@ public:
         stopped.store(true);
         if (acceptor) {
             utilxx_base::AsioErrorCode ec;
-            asio::ip::tcp::socket    dummy(ioCtx);
+            asio::ip::tcp::socket      dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }

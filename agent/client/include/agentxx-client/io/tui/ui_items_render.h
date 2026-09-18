@@ -15,9 +15,9 @@
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/middlewares/interrupt_ui.h"
-#include "utilxx_base/json.h"
 #include "ftxui/dom/elements.hpp"
 #include "markdown/dom_builder.hpp"
+#include "utilxx_base/json.h"
 #include <memory>
 #include <optional>
 #include <string>

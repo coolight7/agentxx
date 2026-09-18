@@ -13,7 +13,7 @@ namespace tools {
 
 std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtx,
-    const utilxx_base::Json&                           args
+    const utilxx_base::Json&                             args
 ) {
     if (nullptr == agentCtx || nullptr == agentCtx->sessions) {
         return nullptr;

@@ -4,10 +4,10 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <filesystem>
 #include <markdown/state_diagram.hpp>
@@ -56,7 +56,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 /// - text + button 隐式同行合并与 prefix 显式前缀统一在此实现
 /// - diagram 保留静态内联渲染 (历史消息兼容), 不挂点击
 static void appendPluginItems(
-    const utilxx_base::Json&                                     items,
+    const utilxx_base::Json&                                       items,
     std::string_view                                               plugin,
     std::string_view                                               ownerId,
     const agentxx::plugin::ClientUiRegistry*                       reg,

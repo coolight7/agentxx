@@ -5,11 +5,11 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
-#include "utilxx_base/json.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/json.h"
 #include <atomic>
 #include <iostream>
 #include <memory>

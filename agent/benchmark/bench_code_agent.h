@@ -1,12 +1,12 @@
 #pragma once
 
 #include "agentxx/agent/code_agent.h"
-#include "utilxx_base/env.h"
-#include "utilxx/http_server.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "bench_util.h"
+#include "utilxx/http_server.h"
+#include "utilxx_base/env.h"
 #include <chrono>
 #include <iostream>
 #include <memory>
@@ -42,8 +42,8 @@ inline neograph::json g_llm_sim_tool_calls = neograph::json::array();
 
 struct LlmSimServer {
     std::unique_ptr<utilxx::HttpServer> svr;
-    std::thread                                thr;
-    uint16_t                                   port = 0;
+    std::thread                         thr;
+    uint16_t                            port = 0;
 
     LlmSimServer() = default;
 
@@ -408,10 +408,8 @@ inline void benchCodeAgentInit() {
         = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
     config.openAIApiKey
         = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-    config.openAIModelName = utilxx_base::ApplicationEnv::instance().getOr(
-        "AGENTXX_BENCH_LLM_MODEL_NAME",
-        "Agentxx"
-    );
+    config.openAIModelName
+        = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
 
     if (config.openAIBaseUrl.empty()) {
         // init() does not make HTTP calls, a dummy URL suffices
@@ -705,10 +703,8 @@ inline void benchCodeAgentInitWarm() {
         = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_BASE_URL", "");
     config.openAIApiKey
         = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_API_KEY", "EMPTY");
-    config.openAIModelName = utilxx_base::ApplicationEnv::instance().getOr(
-        "AGENTXX_BENCH_LLM_MODEL_NAME",
-        "Agentxx"
-    );
+    config.openAIModelName
+        = utilxx_base::ApplicationEnv::instance().getOr("AGENTXX_BENCH_LLM_MODEL_NAME", "Agentxx");
 
     if (config.openAIBaseUrl.empty()) {
         config.openAIBaseUrl   = "http://127.0.0.1:1";

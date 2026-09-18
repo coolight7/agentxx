@@ -38,60 +38,60 @@ namespace agentxx {
 namespace plugin {
 
 // ==================== 实例与生命周期 (pluginxx/runtime/instance_base.h) ====================
-using pluginxx::PluginInstanceBase;
-using pluginxx::PluginHostControl;
-using pluginxx::resolvePluginHostControl;
-using pluginxx::hostMemoryAlloc;
-using pluginxx::hostMemoryFree;
-using pluginxx::hostMemoryCreateString;
-using pluginxx::hostMemorySetString;
 using pluginxx::getExecutableDirPath;
+using pluginxx::hostMemoryAlloc;
+using pluginxx::hostMemoryCreateString;
+using pluginxx::hostMemoryFree;
+using pluginxx::hostMemorySetString;
+using pluginxx::PluginHostControl;
+using pluginxx::PluginInstanceBase;
+using pluginxx::resolvePluginHostControl;
 
 // ==================== 运行时状态机与执行 lease (pluginxx/runtime/runtime.h) ====================
-using pluginxx::PluginRuntime;
-using pluginxx::InstanceLifetime;
-using pluginxx::InstanceLease;
-using pluginxx::PluginInstanceState;
 using pluginxx::enqueueRuntimeAction;
+using pluginxx::InstanceLease;
+using pluginxx::InstanceLifetime;
+using pluginxx::isRuntimeIoThread;
+using pluginxx::PluginInstanceState;
+using pluginxx::PluginRuntime;
 using pluginxx::replayRuntimeActions;
 using pluginxx::runtimeExecutorStopped;
-using pluginxx::isRuntimeIoThread;
 
 // ==================== 管理器公共基类与 vtable 入口上下文 ====================
 // (pluginxx/runtime/manager_base.h)
-using pluginxx::PluginManagerBase;
-using pluginxx::PluginHostCall;
-using pluginxx::enterPluginHost;
 using pluginxx::collectReverseRequiredDeps;
+using pluginxx::enterPluginHost;
+using pluginxx::PluginHostCall;
+using pluginxx::PluginManagerBase;
 
 // ==================== Operation 驱动器 (pluginxx/runtime/op_driver.h) ====================
+using pluginxx::awaitPluginLifecycle;
+using pluginxx::awaitPluginOp;
+using pluginxx::cancelPluginOperation;
 using pluginxx::OpCore;
 using pluginxx::OpDrive;
 using pluginxx::OpErrorCode;
 using pluginxx::OpGuardPtr;
-using pluginxx::PluginOperationState;
-using pluginxx::cancelPluginOperation;
 using pluginxx::PluginOpAwaitArgs;
-using pluginxx::awaitPluginOp;
-using pluginxx::awaitPluginLifecycle;
+using pluginxx::PluginOperationState;
 
 // ==================== 动态库装载 (pluginxx/host/loader.h) ====================
 using pluginxx::NativeLoader;
 
 // ==================== 清单解析与名称推导 (pluginxx/host/manifest.h) ====================
-using pluginxx::PluginManifestResources;
-using pluginxx::PluginManifestInterfaces;
-using pluginxx::PluginSortItem;
-using pluginxx::topoSortPlugins;
-using pluginxx::pluginNameFromPath;
+using pluginxx::findBuiltinManifest;
+using pluginxx::findBuiltinPlugin;
+using pluginxx::isBuiltinScheme;
+using pluginxx::parseBuiltinManifest;
+using pluginxx::parseBuiltinName;
 using pluginxx::parsePluginManifest;
 using pluginxx::parsePluginManifestFromString;
-using pluginxx::parseBuiltinManifest;
-using pluginxx::findBuiltinPlugin;
-using pluginxx::findBuiltinManifest;
+using pluginxx::PluginManifestInterfaces;
+using pluginxx::PluginManifestResources;
+using pluginxx::pluginNameFromPath;
+using pluginxx::PluginSortItem;
 using pluginxx::resolvePluginEntryPath;
-using pluginxx::isBuiltinScheme;
-using pluginxx::parseBuiltinName;
+using pluginxx::topoSortPlugins;
 
 // ==================== 能力注册表 (pluginxx/host/capability_registry.h) ====================
 using pluginxx::CapabilityRegistry;
@@ -112,16 +112,16 @@ using pluginxx::GenericTableEntries;
 using pluginxx::queryGenericPluginIface;
 
 // ==================== C ABI 辅助 (pluginxx/host/abi_util.h) ====================
-using pluginxx::svToSv;
-using pluginxx::svToStr;
-using pluginxx::strToSv;
-using pluginxx::pluginStringView2std;
 using pluginxx::guardVtableCall;
 using pluginxx::guardVtableCallVoid;
 using pluginxx::ioCallSync;
-using pluginxx::ioCallSyncVoid;
 using pluginxx::ioCallSyncKeep;
+using pluginxx::ioCallSyncVoid;
 using pluginxx::ioCallSyncVoidKeep;
+using pluginxx::pluginStringView2std;
+using pluginxx::strToSv;
+using pluginxx::svToStr;
+using pluginxx::svToSv;
 
 } // namespace plugin
 } // namespace agentxx

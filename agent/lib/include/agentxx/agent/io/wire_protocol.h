@@ -155,8 +155,8 @@ inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) no
 
 inline utilxx_base::Json deltaToJson(const WireDelta& d) {
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["type"]             = std::string(deltaTypeToString(d.type));
-    j["seq"]              = d.seq;
+    j["type"]           = std::string(deltaTypeToString(d.type));
+    j["seq"]            = d.seq;
     if (!d.text.empty()) {
         j["text"] = d.text;
     }
@@ -330,14 +330,14 @@ inline MessageQueueItem messageQueueItemFromJson(const utilxx_base::Json& j) {
 
 inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["fromIndex"]        = p.fromIndex;
-    j["tailHash"]         = p.tailHash;
+    j["fromIndex"]      = p.fromIndex;
+    j["tailHash"]       = p.tailHash;
     // 快照对应的服务端 delta 水位 (0 = 未提供): 客户端据此复位去重水位,
     // 避免服务端 seq 重新计数后客户端旧水位把新增量全部判为重复 (见结构体注释)
     j["deltaSeq"] = p.deltaSeq;
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
-    j["totalMessages"]      = p.totalMessages;
+    j["totalMessages"]    = p.totalMessages;
     utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& vm : p.messages) {
         arr.push_back(vm.toJson());
@@ -524,7 +524,7 @@ inline std::optional<WireDelta> deltaMsgFromJson(const utilxx_base::Json& j) {
 
 inline utilxx_base::Json makeSyncMsg(const WireSyncPayload& p, uint64_t deltaSeq = 0) {
     utilxx_base::Json j = syncToJson(p);
-    j["type"]             = MsgType::SyncMsg;
+    j["type"]           = MsgType::SyncMsg;
     if (deltaSeq > 0) {
         j["deltaSeq"] = deltaSeq;
     }
@@ -655,8 +655,7 @@ inline utilxx_base::Json appendComponentNotificationToJson(const AppendComponent
     };
 }
 
-inline AppendComponentNotification appendComponentNotificationFromJson(const utilxx_base::Json& j
-) {
+inline AppendComponentNotification appendComponentNotificationFromJson(const utilxx_base::Json& j) {
     AppendComponentNotification n;
     n.type         = static_cast<AppendComponentNotification::Type>(j.value("type", 0));
     n.name         = j.value("name", std::string{});
@@ -915,8 +914,7 @@ inline WireClearMessageQueue clearMessageQueueFromJson(const utilxx_base::Json& 
     return q;
 }
 
-inline utilxx_base::Json
-    makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
+inline utilxx_base::Json makeRemoveQueueItem(std::string_view sessionId, std::string_view itemId) {
     return utilxx_base::Json{
         {"type",      MsgType::RemoveQueueItem},
         {"sessionId", sessionId               },
@@ -1146,27 +1144,27 @@ inline std::string msgTypeView(const utilxx_base::JsonView& jv) {
 // ---------------------------------------------------------------------------
 
 utilxx_base::Json toJson(const WireHello& msg);
-WireHello           helloFromJson(const utilxx_base::Json& j);
+WireHello         helloFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireHelloAck& msg);
-WireHelloAck        helloAckFromJson(const utilxx_base::Json& j);
+WireHelloAck      helloAckFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireUserInput& msg);
-WireUserInput       userInputFromJson(const utilxx_base::Json& j);
+WireUserInput     userInputFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireCancel& msg);
-WireCancel          cancelFromJson(const utilxx_base::Json& j);
+WireCancel        cancelFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireSelectModel& msg);
-WireSelectModel     selectModelFromJson(const utilxx_base::Json& j);
+WireSelectModel   selectModelFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json  toJson(const WireInterruptRequest& msg);
+utilxx_base::Json    toJson(const WireInterruptRequest& msg);
 WireInterruptRequest interruptRequestFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json   toJson(const WireInterruptResponse& msg);
+utilxx_base::Json     toJson(const WireInterruptResponse& msg);
 WireInterruptResponse interruptResponseFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json  toJson(const WireInterruptExpired& msg);
+utilxx_base::Json    toJson(const WireInterruptExpired& msg);
 WireInterruptExpired interruptExpiredFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireDelta& msg);
@@ -1174,36 +1172,36 @@ utilxx_base::Json toJson(const WireDelta& msg);
 utilxx_base::Json toJson(const WireSyncPayload& msg);
 
 utilxx_base::Json toJson(const WireTurnResult& msg);
-WireTurnResult      turnResultFromJson(const utilxx_base::Json& j);
+WireTurnResult    turnResultFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireContextStats& msg);
-WireContextStats    contextStatsFromJson(const utilxx_base::Json& j);
+WireContextStats  contextStatsFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireError& msg);
-WireError           errorFromJson(const utilxx_base::Json& j);
+WireError         errorFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireLog& msg);
-WireLog             logFromJson(const utilxx_base::Json& j);
+WireLog           logFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireGetModel& msg);
-WireGetModel        getModelFromJson(const utilxx_base::Json& j);
+WireGetModel      getModelFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireModelInfo& msg);
-WireModelInfo       modelInfoFromJson(const utilxx_base::Json& j);
+WireModelInfo     modelInfoFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json        toJson(const WireGetAppendComponentInfo& msg);
+utilxx_base::Json          toJson(const WireGetAppendComponentInfo& msg);
 WireGetAppendComponentInfo getAppendComponentInfoFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json     toJson(const WireAppendComponentInfo& msg);
+utilxx_base::Json       toJson(const WireAppendComponentInfo& msg);
 WireAppendComponentInfo appendComponentInfoMessageFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireGetContext& msg);
-WireGetContext      getContextFromJson(const utilxx_base::Json& j);
+WireGetContext    getContextFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json toJson(const WireCompactContext& msg);
-WireCompactContext  compactContextFromJson(const utilxx_base::Json& j);
+utilxx_base::Json  toJson(const WireCompactContext& msg);
+WireCompactContext compactContextFromJson(const utilxx_base::Json& j);
 
-utilxx_base::Json toJson(const WireContextMessages& msg);
+utilxx_base::Json   toJson(const WireContextMessages& msg);
 WireContextMessages contextMessagesFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireListSessions& msg);

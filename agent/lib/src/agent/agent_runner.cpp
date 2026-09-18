@@ -3,8 +3,8 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/tools/subagent.h"
-#include "utilxx_base/log.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "utilxx_base/log.h"
 #include <optional>
 
 namespace agentxx {

@@ -10,15 +10,15 @@
 /// 二者经 `agentxx/util/cancel_adapter.h` 的适配器互通。
 #pragma once
 
-#include "utilxx/cancel.h"
-#include "utilxx_base/exception.h"
-#include "utilxx_base/string_util.h"
 #include "asio/awaitable.hpp"
 #include "boost/exception/diagnostic_information.hpp"
 #include "boost/exception/exception.hpp"
 #include "neograph/api.h"
 #include "neograph/graph/cancel.h"
 #include "neograph/graph/types.h"
+#include "utilxx/cancel.h"
+#include "utilxx_base/exception.h"
+#include "utilxx_base/string_util.h"
 #include <concepts>
 #include <exception>
 #include <functional>
@@ -159,13 +159,15 @@ inline ExceptionClassification
 template<typename T = void, typename Func, typename OnError, typename OnRethrow = std::nullptr_t>
     requires(!std::is_same_v<std::decay_t<OnRethrow>, NeographCancelTokenPtr>)
 T catchError(
-    Func&&                func,
-    OnError&&             onError,
-    OnRethrow&&           onRethrow   = nullptr,
+    Func&&                 func,
+    OnError&&              onError,
+    OnRethrow&&            onRethrow   = nullptr,
     NeographCancelTokenPtr cancelToken = nullptr
 ) {
     return utilxx_base::catchErrorImpl<T>(
-        [&cancelToken]() noexcept { return classifyCurrentException(cancelToken); },
+        [&cancelToken]() noexcept {
+            return classifyCurrentException(cancelToken);
+        },
         std::forward<Func>(func),
         std::forward<OnError>(onError),
         std::forward<OnRethrow>(onRethrow)
@@ -192,7 +194,9 @@ asio::awaitable<T> catchErrorAsync(
 ) {
     co_return co_await utilxx_base::catchErrorAsyncImpl<T>(
         // 按值捕获令牌 (shared_ptr 拷贝进协程帧), 避免协程挂起后引用失效
-        [cancelToken]() noexcept { return classifyCurrentException(cancelToken); },
+        [cancelToken]() noexcept {
+            return classifyCurrentException(cancelToken);
+        },
         std::forward<Func>(func),
         std::forward<OnError>(onError),
         std::forward<OnRethrow>(onRethrow)
@@ -211,10 +215,8 @@ asio::awaitable<T>
 }
 
 template<typename T, typename Func>
-asio::awaitable<std::expected<T, std::string>> catchErrorToUnexpectedAsync(
-    Func&&                 func,
-    NeographCancelTokenPtr cancelToken = nullptr
-) {
+asio::awaitable<std::expected<T, std::string>>
+    catchErrorToUnexpectedAsync(Func&& func, NeographCancelTokenPtr cancelToken = nullptr) {
     co_return co_await catchErrorAsync<std::expected<T, std::string>>(
         std::forward<Func>(func),
         [](std::string errmsg) -> asio::awaitable<std::expected<T, std::string>> {
@@ -226,13 +228,13 @@ asio::awaitable<std::expected<T, std::string>> catchErrorToUnexpectedAsync(
 }
 
 template<typename T, typename Func>
-asio::awaitable<std::optional<T>> catchErrorToOptionalAsync(
-    Func&&                 func,
-    NeographCancelTokenPtr cancelToken = nullptr
-) {
+asio::awaitable<std::optional<T>>
+    catchErrorToOptionalAsync(Func&& func, NeographCancelTokenPtr cancelToken = nullptr) {
     co_return co_await catchErrorAsync<std::optional<T>>(
         std::forward<Func>(func),
-        [](std::string /*errmsg*/) -> asio::awaitable<std::optional<T>> { co_return std::nullopt; },
+        [](std::string /*errmsg*/) -> asio::awaitable<std::optional<T>> {
+            co_return std::nullopt;
+        },
         nullptr,
         std::move(cancelToken)
     );

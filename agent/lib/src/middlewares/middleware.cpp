@@ -1,8 +1,8 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
-#include "utilxx_base/container_util.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "utilxx_base/container_util.h"
 #include <algorithm>
 #include <charconv>
 
@@ -378,7 +378,7 @@ void MiddlewareContext::cleanupSession(std::string_view sessionId) {
 }
 
 void MiddlewareContext::throwNodeInterruptBase(
-    std::string_view           sessionId,
+    std::string_view         sessionId,
     const utilxx_base::Json& msgs
 ) {
     // if (msgs.is_array()) {
@@ -392,7 +392,7 @@ void MiddlewareContext::throwNodeInterruptBase(
 asio::awaitable<utilxx_base::Json> MiddlewareContext::requestInterrupt(
     std::string_view                           sessionId,
     const std::function<InterruptHandleArg()>& onCreateArg,
-    const utilxx_base::Json&                 msgs
+    const utilxx_base::Json&                   msgs
 ) {
     auto result = std::move(getGraphDataItemValue<utilxx_base::Json>(
         sessionId,

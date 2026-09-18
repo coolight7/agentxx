@@ -70,9 +70,8 @@ std::optional<TuiLanguage> matchSingleLocale(std::string_view raw) noexcept {
         if (c == '_') {
             norm.push_back('-');
         } else {
-            norm.push_back(
-                static_cast<char>(utilxx_base::charToLower(static_cast<unsigned char>(c)))
-            );
+            norm.push_back(static_cast<char>(utilxx_base::charToLower(static_cast<unsigned char>(c))
+            ));
         }
     }
 

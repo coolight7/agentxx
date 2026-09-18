@@ -126,8 +126,8 @@ static asio::awaitable<bool> wsSendJson(HttpServer::WsStream& ws, const utilxx_b
 }
 
 static asio::awaitable<std::optional<utilxx_base::Json>> wsRecvJson(HttpServer::WsStream& ws) {
-    boost::beast::flat_buffer buf;
-    utilxx_base::AsioErrorCode  ec;
+    boost::beast::flat_buffer  buf;
+    utilxx_base::AsioErrorCode ec;
     co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     if (ec) {
         co_return std::nullopt;

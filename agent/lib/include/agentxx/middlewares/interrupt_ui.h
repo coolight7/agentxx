@@ -20,7 +20,7 @@ struct InterruptUiSegment {
     bool        dim  = false;
 
     static InterruptUiSegment fromJson(const utilxx_base::Json& j);
-    utilxx_base::Json       toJson() const;
+    utilxx_base::Json         toJson() const;
 };
 
 /// 中断头行描述
@@ -32,7 +32,7 @@ struct InterruptUiHeader {
     std::vector<InterruptUiSegment> segments;
 
     static InterruptUiHeader fromJson(const utilxx_base::Json& j);
-    utilxx_base::Json      toJson() const;
+    utilxx_base::Json        toJson() const;
 };
 
 /// 控件候选项 (kind=control 的 buttons / select 控件使用)
@@ -50,7 +50,7 @@ struct InterruptUiOption {
     std::string color;
 
     static InterruptUiOption fromJson(const utilxx_base::Json& j);
-    utilxx_base::Json      toJson() const;
+    utilxx_base::Json        toJson() const;
 };
 
 /// 中断描述块 (客户端按 blocks 顺序渲染; 内容块与控件块可任意混排)
@@ -159,7 +159,7 @@ struct InterruptUiBlock {
     std::string fallback;
 
     static InterruptUiBlock fromJson(const utilxx_base::Json& j);
-    utilxx_base::Json     toJson() const;
+    utilxx_base::Json       toJson() const;
 };
 
 /// 中断 UI 描述 (整份下发; 服务端声明, 客户端通用渲染)
@@ -186,8 +186,8 @@ struct InterruptUi {
         return blocks.empty() && header.segments.empty();
     }
 
-    static InterruptUi  fromJson(const utilxx_base::Json& j);
-    utilxx_base::Json toJson() const;
+    static InterruptUi fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json  toJson() const;
 };
 
 /// 中断结果组装 (客户端提交后回传的 JSON 形态; 与 agent 侧解析口径一致)
@@ -204,23 +204,23 @@ utilxx_base::Json makeInterruptResult(const utilxx_base::Json& values);
 ///   (与 [preset::inputForm] 生成的 bool 控件取值口径一致)
 bool interruptValueBool(
     const utilxx_base::Json& values,
-    std::string_view           id,
-    bool                       defaultValue = false
+    std::string_view         id,
+    bool                     defaultValue = false
 );
 std::string interruptValueString(
     const utilxx_base::Json& values,
-    std::string_view           id,
-    std::string_view           defaultValue = {}
+    std::string_view         id,
+    std::string_view         defaultValue = {}
 );
 int64_t interruptValueInt(
     const utilxx_base::Json& values,
-    std::string_view           id,
-    int64_t                    defaultValue = 0
+    std::string_view         id,
+    int64_t                  defaultValue = 0
 );
 double interruptValueDouble(
     const utilxx_base::Json& values,
-    std::string_view           id,
-    double                     defaultValue = 0.0
+    std::string_view         id,
+    double                   defaultValue = 0.0
 );
 
 /// 描述降级为纯文本 (行式前端/日志/FFI 文本宿主用)

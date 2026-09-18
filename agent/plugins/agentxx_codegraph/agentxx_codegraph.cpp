@@ -962,8 +962,8 @@ struct ClientCtx {
 };
 
 static std::string buildInfoItemsJson(ClientCtx& c) {
-    utilxx_base::Json items = utilxx_base::Json::array();
-    auto pushText             = [&](const std::string& text, const std::string& role = "normal") {
+    utilxx_base::Json items    = utilxx_base::Json::array();
+    auto              pushText = [&](const std::string& text, const std::string& role = "normal") {
         utilxx_base::Json it;
         it["kind"] = "text";
         it["role"] = role;

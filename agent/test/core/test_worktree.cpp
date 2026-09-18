@@ -1,7 +1,7 @@
 #include "agentxx-test/core/test_worktree.h"
 
-#include "utilxx_base/string_util.h"
 #include "utilxx/worktree.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>

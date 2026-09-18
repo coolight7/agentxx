@@ -4,10 +4,10 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
+#include "neograph/graph/registry.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
-#include "neograph/graph/registry.h"
 #include <chrono>
 #include <fmt/format.h>
 #include <fmt/ranges.h>

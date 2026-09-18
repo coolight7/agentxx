@@ -19,10 +19,10 @@
 #endif
 #include "text_selection_monitor_plugin.h"
 
-#include "utilxx_base/json_view.h"
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
 #include "text_selection_monitor.h"
+#include "utilxx_base/json_view.h"
 #include <chrono>
 #include <mutex>
 #include <optional>

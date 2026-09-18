@@ -1,9 +1,9 @@
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/json_view.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
+#include "utilxx_base/json_view.h"
 #include <chrono>
 
 namespace agentxx {
@@ -106,7 +106,7 @@ void OpenAIProvider::applyHeaders(utilxx::HeaderMap& headers) const {
 }
 
 void OpenAIProvider::applyHeaders(
-    utilxx::HeaderMap&         headers,
+    utilxx::HeaderMap&                headers,
     const neograph::CompletionParams& params
 ) const {
     applyHeaders(headers);
@@ -504,7 +504,7 @@ utilxx_base::Json OpenAIProvider::buildBody(const neograph::CompletionParams& pa
     body["messages"] = agentxx::util::fromNeographJson(neograph::messages_to_json(params.messages));
 
     if (!config_.sendThinking) {
-        const auto&         src     = body["messages"];
+        const auto&       src     = body["messages"];
         utilxx_base::Json cleaned = utilxx_base::Json::array();
         for (const auto& val : src) {
             utilxx_base::Json obj = utilxx_base::Json::object();
@@ -638,8 +638,8 @@ utilxx_base::Json OpenAIProvider::buildResponsesBody(const neograph::CompletionP
                 // format 由 data URL 的 media type 推导; HTTP URL 无 mime 信息时省略 format
                 for (const auto& url : msg.video_urls) {
                     utilxx_base::Json video = utilxx_base::Json::object();
-                    video["type"]             = "input_video";
-                    video["video_url"]        = url;
+                    video["type"]           = "input_video";
+                    video["video_url"]      = url;
                     if (auto parsed = neograph::parse_data_url(url)) {
                         video["format"] = neograph::media_format_from_mime(parsed->first);
                     }
@@ -1058,7 +1058,7 @@ asio::awaitable<neograph::ChatCompletion>
 
 asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     const neograph::CompletionParams&  params,
-    const utilxx_base::Json&         body,
+    const utilxx_base::Json&           body,
     neograph::FormatDataStreamCallback on_chunk
 ) {
     XX_LOGT("OpenAIProvider::doStream START");
@@ -1192,7 +1192,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
 
 asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     const neograph::CompletionParams&  params,
-    const utilxx_base::Json&         body,
+    const utilxx_base::Json&           body,
     neograph::FormatDataStreamCallback on_chunk
 ) {
     // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
@@ -1387,7 +1387,7 @@ bool OpenAIProvider::processSseLine(
     // - 仅 usage 统计与数字 id dump 需要物化 (parseUsageView 内部仍走 View; id 经 viewToString)
     // - 畸形 data 行 (非 JSON) 经 catchError 跳过, 与原 Json::parse 路径语义一致
     utilxx_base::JsonView jv;
-    bool                    parsed = agentxx::util::catchError<bool>(
+    bool                  parsed = agentxx::util::catchError<bool>(
         [&]() -> bool {
             jv = utilxx_base::JsonView::parse(payload);
             return true;
@@ -1646,7 +1646,7 @@ bool OpenAIProvider::processResponsesSseLine(
     // - 仅 usage 统计、错误载荷、reasoning item 需要物化 (parseUsageView / viewToString)
     // - 畸形 data 行经 catchError 跳过, 语义与原 Json::parse 路径一致
     utilxx_base::JsonView jv;
-    bool                    parsed = agentxx::util::catchError<bool>(
+    bool                  parsed = agentxx::util::catchError<bool>(
         [&]() -> bool {
             jv = utilxx_base::JsonView::parse(payload);
             return true;
@@ -1994,7 +1994,7 @@ void OpenAIProvider::extractToolCalls(
 
         if (j.contains("name") && j["name"].is_string()) {
             utilxx_base::Json nameVal = j["name"];
-            tc.name                     = nameVal.get<std::string>();
+            tc.name                   = nameVal.get<std::string>();
             if (j.contains("arguments")) {
                 utilxx_base::Json argsVal = j["arguments"];
                 if (argsVal.is_object()) {
@@ -2010,7 +2010,7 @@ void OpenAIProvider::extractToolCalls(
             utilxx_base::Json fn = j["function"];
             if (fn.contains("name") && fn["name"].is_string()) {
                 utilxx_base::Json nameVal = fn["name"];
-                tc.name                     = nameVal.get<std::string>();
+                tc.name                   = nameVal.get<std::string>();
                 if (fn.contains("arguments")) {
                     utilxx_base::Json argsVal = fn["arguments"];
                     if (argsVal.is_object()) {

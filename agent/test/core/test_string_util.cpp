@@ -12,7 +12,7 @@ int g_su_failed = 0;
 #define XX_TEST_FAILED g_su_failed
 
 // 组合断言: compareExtend 双向比较结果应互为相反数
-#define shiftCompareExtend(left, right, sub)                           \
+#define shiftCompareExtend(left, right, sub)                         \
     XX_TEST_EXPECT_EQ(utilxx_base::compareExtend(left, right), sub); \
     XX_TEST_EXPECT_EQ(utilxx_base::compareExtend(right, left), -(sub));
 
@@ -297,23 +297,19 @@ void test_isIgnoreCaseContains() {
     XX_TEST_EXPECT_FALSE(utilxx_base::isIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC"));
 
     XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny(" ", " "));
-    XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("123abcABC", "123abcABC")
-    );
+    XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("123abcABC", "123abcABC"));
     XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny(" dddabc", "AbC"));
     XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("AbC", " dddabc"));
     XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("ABCddd ", "AbC"));
     XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("AbC", "ABCddd "));
-    XX_TEST_EXPECT_TRUE(
-        utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("AbC\n1fdfaf56as", "AbC\n")
+    XX_TEST_EXPECT_TRUE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("AbC\n1fdfaf56as", "AbC\n")
     );
 
     XX_TEST_EXPECT_FALSE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("", ""));
     XX_TEST_EXPECT_FALSE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("   ", ""));
     XX_TEST_EXPECT_FALSE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("", "     "));
-    XX_TEST_EXPECT_FALSE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("你  好abc", "不 好ABC")
-    );
-    XX_TEST_EXPECT_FALSE(
-        utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC")
+    XX_TEST_EXPECT_FALSE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("你  好abc", "不 好ABC"));
+    XX_TEST_EXPECT_FALSE(utilxx_base::isNotEmptyAndIgnoreCaseContainsAny("你 好abc\n\r", "不 好ABC")
     );
 }
 
@@ -501,17 +497,11 @@ void test_utf8Check() {
         utilxx_base::utf8GetLengthCheckAvail(std::string("\xFC\x84\x80\x80\x80\x80", 6)),
         0u
     );
-    XX_TEST_EXPECT_EQ(
-        utilxx_base::utf8GetLengthCheckAvail(std::string("\xF0\x80\x80\x80", 4)),
-        0u
-    );
+    XX_TEST_EXPECT_EQ(utilxx_base::utf8GetLengthCheckAvail(std::string("\xF0\x80\x80\x80", 4)), 0u);
     XX_TEST_EXPECT_EQ(utilxx_base::utf8GetLengthCheckAvail(std::string("\xE0\x80\x80", 3)), 0u);
     XX_TEST_EXPECT_EQ(utilxx_base::utf8GetLengthCheckAvail(std::string("\xEF\xBF\xBD", 3)), 1u);
     // 合法 4 字节 (emoji)
-    XX_TEST_EXPECT_EQ(
-        utilxx_base::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98\x80", 4)),
-        1u
-    );
+    XX_TEST_EXPECT_EQ(utilxx_base::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98\x80", 4)), 1u);
     XX_TEST_EXPECT_TRUE(utilxx_base::utf8IsAvail(std::string("\xF0\x9F\x98\x80", 4)));
     // 截断的 4 字节序列
     XX_TEST_EXPECT_EQ(utilxx_base::utf8GetLengthCheckAvail(std::string("\xF0\x9F\x98", 3)), 0u);
@@ -633,7 +623,7 @@ void test_utf8Repair() {
 
 void test_compareExtend_pinyin() {
     // 中文拼音比较依赖全局 s_pinyinCallback; 设置后测试并恢复
-    auto oldCallback                = utilxx_base::s_pinyinCallback;
+    auto oldCallback              = utilxx_base::s_pinyinCallback;
     utilxx_base::s_pinyinCallback = [](std::string_view str) -> std::string {
         if (str.starts_with("你")) {
             return "ni";

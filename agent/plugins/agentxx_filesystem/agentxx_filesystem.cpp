@@ -9,11 +9,11 @@
 ///   可用性判断统一走 `utilxx_base::isAsyncFileIoSupported()`;
 /// - `list` / `glob` / `grep`: 目录遍历 + 全文件扫描 + 正则/编码转换, 这是 CPU/阻塞
 ///   工作而非异步 IO, 放进受控轮询只会阻塞宿主 IO 线程, 因此保持 `blocking_tool`。
-#include "utilxx_base/system.h"
 #include "agentxx_fs_plugin.h"
 #include "asio/awaitable.hpp"
 #include "filesystem_impl.h"
 #include "fmt/format.h"
+#include "utilxx_base/system.h"
 #include <algorithm>
 #include <string>
 #include <vector>

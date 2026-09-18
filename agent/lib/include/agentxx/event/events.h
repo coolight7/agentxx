@@ -1,8 +1,8 @@
 #pragma once
 
+#include "neograph/graph/cancel.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
-#include "neograph/graph/cancel.h"
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -338,9 +338,9 @@ struct RespSubagentBatch {
 
 /// 工具执行权限检查 (service.permission.check)
 struct ReqToolPermissionCheck {
-    std::string         agentName;
-    std::string         sessionId;
-    std::string         toolName;
+    std::string       agentName;
+    std::string       sessionId;
+    std::string       toolName;
     utilxx_base::Json arguments;
 };
 

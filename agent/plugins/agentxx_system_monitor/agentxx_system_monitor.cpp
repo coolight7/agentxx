@@ -31,10 +31,10 @@ constexpr int kUsageIntervalSec = 5;
 
 std::string usageToJson(const CpuGpuUsage& u) {
     utilxx_base::Json j;
-    j["cpu"]                 = u.cpuUsagePercent;
-    j["mem_total_mb"]        = u.memory.totalPhysicalMB;
-    j["mem_used_mb"]         = u.memory.usedPhysicalMB;
-    j["mem_percent"]         = u.memory.usagePercent;
+    j["cpu"]               = u.cpuUsagePercent;
+    j["mem_total_mb"]      = u.memory.totalPhysicalMB;
+    j["mem_used_mb"]       = u.memory.usedPhysicalMB;
+    j["mem_percent"]       = u.memory.usagePercent;
     utilxx_base::Json gpus = utilxx_base::Json::array();
     for (const auto& g : u.gpus) {
         gpus.push_back({
@@ -318,8 +318,8 @@ static UsageStat parseUsage(const std::string& raw) {
 }
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
-    utilxx_base::Json items = utilxx_base::Json::array();
-    auto pushText             = [&](const std::string& text, const std::string& role = "normal") {
+    utilxx_base::Json items    = utilxx_base::Json::array();
+    auto              pushText = [&](const std::string& text, const std::string& role = "normal") {
         utilxx_base::Json it;
         it["kind"] = "text";
         it["role"] = role;

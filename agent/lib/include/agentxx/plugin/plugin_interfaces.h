@@ -138,8 +138,8 @@ struct InterfaceCheckResult {
 /// agentSide=true 表示以 agent 宿主视角检查, false 为 client 宿主视角)
 InterfaceCheckResult checkInterfacesForSide(
     const pluginxx::PluginManifestInterfaces& decl,
-    const InterfaceSet&             hostSupported,
-    bool                            agentSide
+    const InterfaceSet&                       hostSupported,
+    bool                                      agentSide
 );
 
 /// require 列表隐含的入口符号需求:

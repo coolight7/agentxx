@@ -22,11 +22,11 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/log.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -215,8 +215,7 @@ public:
         lastInfoSectionId_ = id;
     }
 
-    void
-        onInfoSectionUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
+    void onInfoSectionUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++infoSectionUpdated_;
         lastInfoSectionId_ = id;
@@ -2013,7 +2012,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         using namespace agentxx::client;
         agentxx::plugin::ClientUiRegistry reg;
         // 无绑定 → button 不可点
-        PluginButtonDesc    desc;
+        PluginButtonDesc  desc;
         utilxx_base::Json btnJson = utilxx_base::Json::parse(
             R"({"kind":"button","label":"Graph","action_id":"planning.open_graph","args":{},"role":"accent"})"
         );
@@ -2062,7 +2061,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_FALSE(descStatic.clickable);
         // 非 button → false
         utilxx_base::Json textJson = utilxx_base::Json::parse(R"({"kind":"text","text":"hi"})");
-        PluginButtonDesc    descText;
+        PluginButtonDesc  descText;
         XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
         // role 非法值 → Normal; danger 映射
         XX_TEST_EXPECT_TRUE(parseButtonRole("normal") == PluginButtonRole::Normal);

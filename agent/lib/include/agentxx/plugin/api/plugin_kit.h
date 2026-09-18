@@ -13,10 +13,6 @@
 #pragma once
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
-#include "pluginxx/kit/kit.h"
-#include "utilxx_base/container_util.h"
-#include "utilxx_base/json.h"
-#include "utilxx_base/json_view.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -25,6 +21,10 @@
 #include "asio/post.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
+#include "pluginxx/kit/kit.h"
+#include "utilxx_base/container_util.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/json_view.h"
 #include <type_traits>
 
 #include <algorithm>
@@ -68,33 +68,33 @@ namespace plugin {
  * 通用 SDK 只能经 `pluginxx/kit/kit.h` 包含。
  */
 
-using pluginxx::Json;
-using pluginxx::JsonView;
-using pluginxx::PluginStringView;
-using pluginxx::PluginString;
-using pluginxx::queryInterface;
-using pluginxx::validateInterface;
-using pluginxx::PluginIfaceCore;
+using pluginxx::ArgReader;
 using pluginxx::CancelledException;
+using pluginxx::CancelRegistry;
+using pluginxx::capability;
+using pluginxx::ctxGuardLogger;
+using pluginxx::invoke_cap;
+using pluginxx::invoke_capability_blocking;
+using pluginxx::Json;
+using pluginxx::jsonEscape;
+using pluginxx::JsonView;
+using pluginxx::logCreateFailure;
 using pluginxx::Logger;
+using pluginxx::offload;
+using pluginxx::OpCtl;
+using pluginxx::PluginBaseT;
+using pluginxx::PluginIfaceCore;
 using pluginxx::pluginLog;
 using pluginxx::pluginStrdup;
-using pluginxx::ctxGuardLogger;
-using pluginxx::jsonEscape;
-using pluginxx::CancelRegistry;
-using pluginxx::OpCtl;
-using pluginxx::ArgReader;
-using pluginxx::Task;
+using pluginxx::PluginString;
+using pluginxx::PluginStringView;
+using pluginxx::queryInterface;
 using pluginxx::RootRequest;
-using pluginxx::PluginBaseT;
 using pluginxx::sleep;
-using pluginxx::yield;
-using pluginxx::offload;
-using pluginxx::invoke_cap;
 using pluginxx::spawn;
-using pluginxx::capability;
-using pluginxx::invoke_capability_blocking;
-using pluginxx::logCreateFailure;
+using pluginxx::Task;
+using pluginxx::validateInterface;
+using pluginxx::yield;
 
 /* ==================== 接口表聚合 ==================== */
 
@@ -194,6 +194,7 @@ struct ClientIfaces {
         return f;
     }
 };
+
 /* ==================== 提示词描述解析结构 ==================== */
 
 struct ToolPromptText {
@@ -354,9 +355,10 @@ public:
 private:
 
     ToolPromptText           prompt_;
-    utilxx_base::Json      properties_ = utilxx_base::Json::object();
+    utilxx_base::Json        properties_ = utilxx_base::Json::object();
     std::vector<std::string> required_;
 };
+
 /* ==================== 插件实例上下文基类 (agentxx 领域扩展) ==================== */
 
 /// agentxx 插件实例上下文基类
@@ -464,28 +466,29 @@ private:
 
 namespace detail {
 
-using pluginxx::detail::AwaiterState;
-using pluginxx::detail::RootRequest;
-using pluginxx::detail::PromiseBase;
-using pluginxx::detail::PollOneBridge;
-using pluginxx::detail::BridgeRoot;
-using pluginxx::detail::PolledRoot;
-using pluginxx::detail::CompletionGuard;
-using pluginxx::detail::SleepAwaiter;
-using pluginxx::detail::YieldAwaiter;
-using pluginxx::detail::OffloadAwaiter;
-using pluginxx::detail::InvokeCapState;
-using pluginxx::detail::InvokeCapAwaiter;
 using pluginxx::detail::advanceRootOnce;
 using pluginxx::detail::autoStopSpawns;
+using pluginxx::detail::AwaiterState;
+using pluginxx::detail::BridgeRoot;
 using pluginxx::detail::callLifecycleEntry;
+using pluginxx::detail::CompletionGuard;
 using pluginxx::detail::destroyBridgeFrame;
 using pluginxx::detail::finishIfDone;
 using pluginxx::detail::invokeCap;
+using pluginxx::detail::InvokeCapAwaiter;
+using pluginxx::detail::InvokeCapState;
 using pluginxx::detail::jsonGet;
+using pluginxx::detail::OffloadAwaiter;
+using pluginxx::detail::PolledRoot;
+using pluginxx::detail::PollOneBridge;
+using pluginxx::detail::PromiseBase;
 using pluginxx::detail::resumePluginCoroutine;
+using pluginxx::detail::RootRequest;
+using pluginxx::detail::SleepAwaiter;
 using pluginxx::detail::spawnTaskImpl;
 using pluginxx::detail::startBridgedRoot;
+using pluginxx::detail::YieldAwaiter;
+
 struct CallToolState {
     const AgentxxPluginHost*       host  = nullptr;
     const AgentxxPluginToolsIface* tools = nullptr;
@@ -611,6 +614,7 @@ struct CallToolAwaiter {
     }
 };
 } // namespace detail
+
 inline detail::CallToolAwaiter call_tool(
     const PluginBase& ctx,
     std::string_view  name,
@@ -626,6 +630,7 @@ inline detail::CallToolAwaiter call_tool(
         &ctx.bridge()
     };
 }
+
 /// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)
 /// ====================
 
@@ -1386,6 +1391,7 @@ inline void polled_tool(
         ctx.iface.tools->register_tool(ctx.host, &spec);
     }
 }
+
 /* ==================== 钩子业务签名分发 (同步/异步共用) ==================== */
 
 namespace detail {
@@ -1509,6 +1515,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
         ctx.iface.hooks->register_hook(ctx.host, &spec);
     }
 }
+
 namespace detail {
 
 /// 按可调用性选择图节点业务签名：fn(ctx, request, ctl) / fn(ctx, request)。
@@ -1928,6 +1935,7 @@ inline std::vector<uint8_t> filterPathPermissions(
         batchSize
     );
 }
+
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
 
 inline AgentxxPluginString call_tool_blocking(
@@ -2008,6 +2016,7 @@ inline AgentxxPluginString call_tool_blocking(
     auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
     return PluginString::from(host, &paySv);
 }
+
 /* ==================== Client 侧工具特化渲染适配器 ==================== */
 
 struct ToolRenderInput {
@@ -2021,8 +2030,8 @@ struct ToolRenderInput {
 };
 
 struct ToolRenderOutput {
-    std::string         displayName;
-    std::string         summary;
+    std::string       displayName;
+    std::string       summary;
     utilxx_base::Json items = utilxx_base::Json::array();
 };
 
@@ -2119,6 +2128,7 @@ inline int32_t registerToolTemplate(
 
     return ui->register_tool_renderer(host, &spec);
 }
+
 /* ==================== Client 侧通用交互: ActionController (header-only) ====================
  *
  * 插件侧 Lambda 风格的动作绑定设施 (实例内存 map<action_id, handler>):
@@ -2148,10 +2158,10 @@ public:
     /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
     /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
     utilxx_base::Json makeButton(
-        std::string         label,
-        Handler             onClick = nullptr,
-        std::string         prefix  = "",
-        std::string         role    = "normal",
+        std::string       label,
+        Handler           onClick = nullptr,
+        std::string       prefix  = "",
+        std::string       role    = "normal",
         utilxx_base::Json args    = utilxx_base::Json::object()
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
@@ -2159,8 +2169,8 @@ public:
             handlers_[id] = std::move(onClick);
         }
         utilxx_base::Json btn = utilxx_base::Json::object();
-        btn["kind"]             = "button";
-        btn["label"]            = std::move(label);
+        btn["kind"]           = "button";
+        btn["label"]          = std::move(label);
         if (!prefix.empty()) {
             btn["prefix"] = std::move(prefix);
         }
@@ -2361,6 +2371,7 @@ private:
     std::shared_ptr<std::atomic<bool>> lifeToken_ = std::make_shared<std::atomic<bool>>(true);
     std::vector<std::unique_ptr<void, void (*)(void*)>> shims_;
 };
+
 /// client 侧 create 阶段异常上报 (client 日志接口表为独立类型)
 inline void logClientCreateFailure(
     const AgentxxPluginHost* host,
@@ -2380,6 +2391,7 @@ inline void logClientCreateFailure(
     auto        sv   = PluginStringView::from(text.data(), text.size());
     iface->log(host, 4, &sv);
 }
+
 /// Client 侧只导出 start/stop 两个入口 (与
 /// [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 对称)。
 #define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn) \

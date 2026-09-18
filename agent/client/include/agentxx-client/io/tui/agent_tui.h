@@ -12,8 +12,6 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/plugin/client_plugin_manager.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "agentxx/version.h"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -24,6 +22,8 @@
 #include "ftxui/component/screen_interactive.hpp"
 #include "markdown/text_utils.hpp"
 #include "neograph/api.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -43,7 +43,8 @@ namespace agentxx::client {
 // ---------------------------------------------------------------------------
 // TUI 共享工具函数
 // (时长/时间戳格式化已迁移到
-// [string_util.h](/agent/third_party/cxx_utilxx_base/include/utilxx_base/string_util.h), 供 agent 端构造
+// [string_util.h](/agent/third_party/cxx_utilxx_base/include/utilxx_base/string_util.h), 供 agent
+// 端构造
 //  系统提示文本复用, 此处仅保留 UI 专用函数)
 // ---------------------------------------------------------------------------
 
@@ -148,7 +149,7 @@ public:
 
     struct Line {
         utilxx_base::LogLevel level;
-        std::string             text;
+        std::string           text;
     };
 
     std::vector<Line> snapshot() const;
@@ -367,12 +368,12 @@ public:
     void refreshLanguage();
 
     asio::awaitable<std::optional<std::string>> getInput() override;
-    asio::awaitable<utilxx_base::Json>        handleInterrupt(
-               std::string_view sessionId,
-               std::string_view interruptNode,
-               std::string_view interruptValue,
-               std::string_view interruptArgJson
-           ) override;
+    asio::awaitable<utilxx_base::Json>          handleInterrupt(
+                 std::string_view sessionId,
+                 std::string_view interruptNode,
+                 std::string_view interruptValue,
+                 std::string_view interruptArgJson
+             ) override;
     void requestCancel(std::string sessionId) override;
 
     /// 记录待应用模型选择

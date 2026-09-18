@@ -75,7 +75,7 @@ std::pair<std::string, utilxx_base::Json> AnthropicProvider::convertMessages(
     const std::vector<neograph::ChatMessage>& messages,
     bool                                      sendThinking
 ) {
-    std::string         system;
+    std::string       system;
     utilxx_base::Json arr = utilxx_base::Json::array();
 
     // 是否携带从 Anthropic 响应中捕获的带 signature 的 thinking 块
@@ -118,7 +118,7 @@ std::pair<std::string, utilxx_base::Json> AnthropicProvider::convertMessages(
 
         if (msg.role == "tool") {
             utilxx_base::Json j;
-            j["role"]                       = "user";
+            j["role"]                     = "user";
             utilxx_base::Json content_arr = utilxx_base::Json::array();
             utilxx_base::Json tool_result;
             tool_result["type"]        = "tool_result";
@@ -129,7 +129,7 @@ std::pair<std::string, utilxx_base::Json> AnthropicProvider::convertMessages(
             arr.push_back(std::move(j));
         } else if (msg.role == "assistant" && !msg.tool_calls.empty()) {
             utilxx_base::Json j;
-            j["role"]                       = "assistant";
+            j["role"]                     = "assistant";
             utilxx_base::Json content_arr = utilxx_base::Json::array();
             appendThinkingBlocks(content_arr, msg);
             if (!msg.content.empty()) {
@@ -161,7 +161,7 @@ std::pair<std::string, utilxx_base::Json> AnthropicProvider::convertMessages(
         } else if (sendThinking && msg.role == "assistant"
                    && (!msg.reasoning_content.empty() || hasThinkingBlocks(msg))) {
             utilxx_base::Json j;
-            j["role"]                       = "assistant";
+            j["role"]                     = "assistant";
             utilxx_base::Json content_arr = utilxx_base::Json::array();
             appendThinkingBlocks(content_arr, msg);
             if (!msg.content.empty()) {
@@ -179,9 +179,9 @@ std::pair<std::string, utilxx_base::Json> AnthropicProvider::convertMessages(
             //   - 视频: {"type":"video","source":{base64|url}}
             // data URL 解析为 base64 源 (自动推导 media_type); HTTP URL 使用 url 源
             utilxx_base::Json j;
-            j["role"]                       = msg.role;
-            utilxx_base::Json content_arr = utilxx_base::Json::array();
-            auto appendSource               = [&](const std::string& url, const std::string& kind) {
+            j["role"]                      = msg.role;
+            utilxx_base::Json content_arr  = utilxx_base::Json::array();
+            auto              appendSource = [&](const std::string& url, const std::string& kind) {
                 if (auto parsed = neograph::parse_data_url(url)) {
                     content_arr.push_back({
                         {"type",   kind            },
@@ -242,9 +242,9 @@ std::pair<std::string, utilxx_base::Json> AnthropicProvider::convertMessages(
         return m;
     };
     utilxx_base::Json merged     = utilxx_base::Json::array();
-    bool                hasPending = false;
+    bool              hasPending = false;
     utilxx_base::Json pending;
-    auto                flushPending = [&]() {
+    auto              flushPending = [&]() {
         if (hasPending) {
             merged.push_back(std::move(pending));
             hasPending = false;
@@ -282,8 +282,8 @@ utilxx_base::Json AnthropicProvider::convertTools(const std::vector<neograph::Ch
 }
 
 void AnthropicProvider::appendThinkingBlock(
-    neograph::ChatCompletion&  completion,
-    const utilxx_base::Json& block
+    neograph::ChatCompletion& completion,
+    const utilxx_base::Json&  block
 ) {
     // extra 为 neograph::json (图边界类型): 经 bridge 转入
     auto neo = agentxx::util::toNeographJson(block);
@@ -393,7 +393,7 @@ utilxx_base::Json AnthropicProvider::buildBody(const neograph::CompletionParams&
 }
 
 void AnthropicProvider::applyHeaders(
-    utilxx::HeaderMap&         headers,
+    utilxx::HeaderMap&                headers,
     const neograph::CompletionParams& params
 ) const {
     if (!config_.apiKey.empty()) {
@@ -476,7 +476,7 @@ asio::awaitable<neograph::ChatCompletion>
 
 asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     const neograph::CompletionParams&  params,
-    const utilxx_base::Json&         body,
+    const utilxx_base::Json&           body,
     neograph::FormatDataStreamCallback on_chunk
 ) {
     // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx

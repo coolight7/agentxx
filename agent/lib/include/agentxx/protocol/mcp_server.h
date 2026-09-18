@@ -16,8 +16,8 @@
 #include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 
-#include "utilxx/http_server.h"
 #include "agentxx/version.h"
+#include "utilxx/http_server.h"
 
 namespace agentxx {
 namespace protocol {
@@ -160,12 +160,12 @@ public:
 
     struct Config {
         utilxx::HttpServer::Config httpConfig;
-        std::string              mcpEndpoint   = "/mcp";
-        std::string              sseEndpoint   = "/mcp/sse";
-        std::string              serverName    = "agentxx-mcp";
-        std::string              serverVersion = std::string{agentxx::kVersion};
-        std::chrono::seconds     toolTimeout{60};
-        size_t                   maxMessageSize = 4 * 1024 * 1024; // 4 MB
+        std::string                mcpEndpoint   = "/mcp";
+        std::string                sseEndpoint   = "/mcp/sse";
+        std::string                serverName    = "agentxx-mcp";
+        std::string                serverVersion = std::string{agentxx::kVersion};
+        std::chrono::seconds       toolTimeout{60};
+        size_t                     maxMessageSize = 4 * 1024 * 1024; // 4 MB
 
         /// 2026-07-28 Origin 校验: 非空时仅允许列出的 Origin (host[:port] 或完整 URL);
         /// 为空时默认策略: Origin 与请求 Host 同源则放行, 否则 403 (防 DNS rebinding)。
@@ -262,7 +262,7 @@ private:
 
     struct SSEClient {
         std::shared_ptr<utilxx::HttpServer::SseWriter> writer;
-        bool                                         closed = false;
+        bool                                           closed = false;
     };
 
     /// 2026-07-28 subscriptions/listen 活跃订阅
@@ -271,7 +271,7 @@ private:
         json               id;    // 原始 id (回显到通知 _meta)
         SubscriptionFilter filter;
         std::shared_ptr<utilxx::HttpServer::SseWriter> writer; // HTTP: SSE 流; stdio 为空
-        std::atomic<bool>                            closed{false};
+        std::atomic<bool>                              closed{false};
         /// HTTP: SSE 协程完成优雅结束 (排空 pending + close) 后置位,
         /// 供 stop() 等待, 避免 ioCtx 停止取消未完成的终止 result 写入
         std::atomic<bool> done{false};
@@ -307,8 +307,8 @@ private:
     /// Mcp-Param-*); 返回错误描述 (nullopt = 通过)
     std::optional<std::string> validateModernHeaders(
         const utilxx::HttpServer::Request& req,
-        const json&                      requestJson,
-        const RequestContext&            ctx
+        const json&                        requestJson,
+        const RequestContext&              ctx
     ) const;
 
     /// 构造 2026-07-28 服务端能力对象
@@ -387,8 +387,8 @@ private:
 
     /// 2026-07-28 subscriptions/listen — HTTP: 注册订阅并驱动 SSE 流
     asio::awaitable<void> handleSubscriptionsListenSse(
-        const json&                                  id,
-        const json&                                  params,
+        const json&                                    id,
+        const json&                                    params,
         std::shared_ptr<utilxx::HttpServer::SseWriter> writer
     );
 
@@ -432,17 +432,17 @@ private:
 
     void writeJsonResponse(
         utilxx::HttpServer::Response& resp,
-        boost::beast::http::status  status,
-        const json&                 body
+        boost::beast::http::status    status,
+        const json&                   body
     );
 
     // -----------------------------------------------------------------------
     // 成员
     // -----------------------------------------------------------------------
 
-    Config                            config_;
+    Config                              config_;
     std::unique_ptr<utilxx::HttpServer> httpServer_;
-    Capabilities                      capabilities_;
+    Capabilities                        capabilities_;
 
     mutable std::shared_mutex                  toolsMutex_;
     std::unordered_map<std::string, ToolEntry> toolsByName_;

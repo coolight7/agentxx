@@ -10,7 +10,6 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/interrupt_ui.h"
 #include "agentxx/middlewares/middleware.h"
-#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -19,6 +18,7 @@
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "utilxx_base/string_util.h"
 #include <memory>
 #include <optional>
 #include <string>
@@ -108,7 +108,7 @@ struct InterruptFixture {
     /// 追加一条中断表单消息 (原始描述 JSON; 传空 JSON = 无描述, 契约错误用例)
     size_t addInterruptJson(
         std::shared_ptr<InterruptResultChannel> ch,
-        const utilxx_base::Json&              uiJson,
+        const utilxx_base::Json&                uiJson,
         int64_t                                 interruptId = 1
     ) {
         auto m                    = std::make_shared<TUIMessage>();
@@ -207,7 +207,7 @@ struct InterruptFixture {
 
     /// 表单提交结果 (通道读取)
     struct Submit {
-        bool                cancelled = false;
+        bool              cancelled = false;
         utilxx_base::Json values    = utilxx_base::Json::object();
 
         /// 便捷: 指定控件 id 的字符串值 (不存在返回 nullopt)

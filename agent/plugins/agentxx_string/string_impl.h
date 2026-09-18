@@ -6,9 +6,9 @@
 /// - 依赖: html2md (第三方, AGENTXX_INSTALL_DIR 安装) + cxx_utilxx (utilxx::Regex)
 #pragma once
 
+#include "utilxx/regex.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
-#include "utilxx/regex.h"
 #include <html2md/html2md.h>
 #include <string>
 #include <vector>

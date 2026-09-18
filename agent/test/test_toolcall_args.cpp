@@ -1,9 +1,9 @@
 #include "agentxx-test/test_toolcall_args.h"
 
 #include "agentxx/nodes/toolcall.h"
-#include "utilxx_base/json.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -30,7 +30,7 @@ namespace {
 /// - 返回图边界类型 (ChatTool::parameters 为 neograph::json)
 neograph::json makeParams(const std::pair<std::string, utilxx_base::Json>& prop) {
     return agentxx::util::toNeographJson(utilxx_base::Json{
-        {"type",       "object"                                      },
+        {"type",       "object"                                    },
         {"properties", utilxx_base::Json{{prop.first, prop.second}}},
     });
 }
@@ -1125,8 +1125,7 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "perms",
             {{"type", "array"},
-              {"items", {{"type", "string"}, {"enum", utilxx_base::Json::array({"read", "write"})}}
-             }}
+              {"items", {{"type", "string"}, {"enum", utilxx_base::Json::array({"read", "write"})}}}}
         });
         auto args      = utilxx_base::Json{
                  {"perms", "READ"}
@@ -1144,8 +1143,7 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "perms",
             {{"type", "array"},
-              {"items", {{"type", "string"}, {"enum", utilxx_base::Json::array({"read", "write"})}}
-             }}
+              {"items", {{"type", "string"}, {"enum", utilxx_base::Json::array({"read", "write"})}}}}
         });
         auto args      = utilxx_base::Json{
                  {"perms", utilxx_base::Json::array({"WRITE", "read", "other", 7})}
@@ -1164,8 +1162,7 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "perms",
             {{"type", "array"},
-              {"items", {{"type", "string"}, {"enum", utilxx_base::Json::array({"read", "write"})}}
-             }}
+              {"items", {{"type", "string"}, {"enum", utilxx_base::Json::array({"read", "write"})}}}}
         });
         auto args      = utilxx_base::Json{
                  {"perms", utilxx_base::Json::array({"read", "write"})}

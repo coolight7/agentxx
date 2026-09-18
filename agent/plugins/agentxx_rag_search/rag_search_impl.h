@@ -13,12 +13,12 @@
 #pragma once
 
 #include "agentxx/util/exception.h"
-#include "utilxx/http_client.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "utilxx/http_client.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -341,8 +341,7 @@ inline std::vector<std::string> applyChunkOverlap(
             continue;
         }
 
-        size_t overlapStart
-            = utilxx_base::findIndexByUtf8Length(prev, prevUtf8Len - overlapChars);
+        size_t overlapStart = utilxx_base::findIndexByUtf8Length(prev, prevUtf8Len - overlapChars);
         if (overlapStart == 0) {
             result.push_back(chunks[i]);
             continue;
@@ -673,8 +672,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
         );
         io.run();
 
-        if (false == resp.has_value()
-            || false == utilxx::HttpClient::respIsSucc(resp.value())) {
+        if (false == resp.has_value() || false == utilxx::HttpClient::respIsSucc(resp.value())) {
             std::string str;
             if (resp.has_value()) {
                 str = std::to_string(resp.value().status);
@@ -686,7 +684,7 @@ inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
         }
 
         try {
-            auto respBody = utilxx_base::Json::parse(resp.value().body);
+            auto                             respBody = utilxx_base::Json::parse(resp.value().body);
             std::vector<std::vector<double>> embeddings;
 
             for (const auto& item : respBody["data"]) {

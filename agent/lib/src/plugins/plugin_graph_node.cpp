@@ -2,10 +2,10 @@
 #include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
-#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "utilxx_base/log.h"
 #include "fmt/format.h"
+#include "pluginxx/runtime/op_driver.h"
+#include "utilxx_base/log.h"
 #include <neograph/graph/state.h>
 #include <neograph/graph/types.h>
 
@@ -108,9 +108,9 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
         }
     };
     auto awaitArgs = plugin::PluginOpAwaitArgs{
-        .inst        = std::move(inst),
-        .label       = fmt::format("graph node `{}`", name_),
-        .ex          = ex,
+        .inst  = std::move(inst),
+        .label = fmt::format("graph node `{}`", name_),
+        .ex    = ex,
         // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
         .cancelToken = agentxx::util::adaptCancelToken(in.ctx.cancel_token),
         .drive       = std::move(drive),

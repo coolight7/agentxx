@@ -570,9 +570,9 @@ static TestResult testPersistThrottle() {
         // ---- 第二次结算 (窗口内): 内存增长, 未落盘 ----
         s1->appendSettledLlmMessages(utilxx_base::Json::array({
             utilxx_base::Json{
-                                {"role", "assistant"},
-                                {"content", "a1"},
-                                },
+                              {"role", "assistant"},
+                              {"content", "a1"},
+                              },
         }));
         XX_TEST_EXPECT_EQ(s1->llmMessages.size(), size_t{2});
         {
@@ -879,10 +879,10 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
         g_da_sim_response_content = "E2E final answer";
         g_da_sim_tool_calls       = utilxx_base::Json::array({
             utilxx_base::Json{
-                                {"index", 0},
-                                {"id", "call_e2e_1"},
-                                {"type", "function"},
-                                {
+                              {"index", 0},
+                              {"id", "call_e2e_1"},
+                              {"type", "function"},
+                              {
                     "function",
                     utilxx_base::Json{
                               {"name", "agentxx_filesystem_list"},

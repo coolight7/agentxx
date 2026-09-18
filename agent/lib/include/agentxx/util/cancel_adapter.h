@@ -20,12 +20,12 @@
 /// (适配器持有 shared_ptr, 与原令牌共享所有权)。
 #pragma once
 
-#include "utilxx/cancel.h"
-#include "pluginxx/runtime/op_driver.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/cancellation_signal.hpp"
 #include "neograph/graph/cancel.h"
+#include "pluginxx/runtime/op_driver.h"
+#include "utilxx/cancel.h"
 #include <memory>
 #include <string>
 #include <utility>
@@ -80,7 +80,8 @@ private:
 
 /// 把图引擎取消令牌适配为 utilxx::CancelTokenPtr
 /// - token 为空时返回 nullptr (调用方按"无取消"处理, 与拆分前一致)
-inline utilxx::CancelTokenPtr adaptCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
+inline utilxx::CancelTokenPtr adaptCancelToken(std::shared_ptr<neograph::graph::CancelToken> token
+) {
     if (!token) {
         return nullptr;
     }

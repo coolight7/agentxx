@@ -1,9 +1,9 @@
 #include "agentxx-test/core/test_openai_provider.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "utilxx/http_client.h"
 #include "utilxx/http_server.h"
-#include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -187,11 +187,10 @@ void test_fill_missing_tool_call_ids_unique() {
 
 void test_config_defaults() {
     agentxx::agent::ModelConfig mc;
-    mc.name   = "test";
-    mc.apiKey = "sk-defaults-test";
-    mc.extraConfig
-        = utilxx_base::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
-    auto p = server::OpenAIProvider::create(mc);
+    mc.name        = "test";
+    mc.apiKey      = "sk-defaults-test";
+    mc.extraConfig = utilxx_base::Json::parse(R"({"top_p":0.9,"frequency_penalty":0.2,"seed":42})");
+    auto p         = server::OpenAIProvider::create(mc);
     XX_TEST_EXPECT_TRUE(p != nullptr);
 }
 
@@ -2393,7 +2392,7 @@ public:
         thread = std::thread([this]() {
             while (!stopped.load()) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    sock(ioCtx);
+                asio::ip::tcp::socket      sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -2410,7 +2409,7 @@ public:
         stopped.store(true);
         if (acceptor) {
             utilxx_base::AsioErrorCode ec;
-            asio::ip::tcp::socket    dummy(ioCtx);
+            asio::ip::tcp::socket      dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }
@@ -2558,7 +2557,7 @@ public:
         thread = std::thread([this]() {
             while (!stopped.load()) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    sock(ioCtx);
+                asio::ip::tcp::socket      sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -2575,7 +2574,7 @@ public:
         stopped.store(true);
         if (acceptor) {
             utilxx_base::AsioErrorCode ec;
-            asio::ip::tcp::socket    dummy(ioCtx);
+            asio::ip::tcp::socket      dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }
@@ -4023,8 +4022,7 @@ asio::awaitable<void>
     {
         auto mc         = makeCodexCfg(baseUrl);
         mc.sendThinking = true;
-        mc.extraConfig
-            = utilxx_base::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
+        mc.extraConfig = utilxx_base::Json::parse(R"({"include":["reasoning.encrypted_content"]})");
         auto                       provider = server::OpenAIProvider::create(mc);
         neograph::CompletionParams params;
         params.model    = "gpt-5-codex";

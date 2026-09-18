@@ -130,18 +130,18 @@ public:
 
     struct Config {
         utilxx::HttpServer::Config httpConfig;
-        std::string              a2aEndpoint   = "/a2a";
-        std::string              sseEndpoint   = "/a2a/sse";
-        std::string              agentCardPath = "/.well-known/agent-card.json";
-        std::string              serverName    = "agentxx-a2a";
-        std::string              serverVersion = "1.0.0";
-        std::string              description   = "Agentxx A2A Server";
-        std::vector<std::string> inputModes    = {"text/plain"};
-        std::vector<std::string> outputModes   = {"text/plain", "application/json"};
-        std::vector<SkillDef>    skills;
-        bool                     supportStreaming = true;
-        size_t                   maxTasks         = 10000;
-        std::chrono::seconds     taskTimeout{300};
+        std::string                a2aEndpoint   = "/a2a";
+        std::string                sseEndpoint   = "/a2a/sse";
+        std::string                agentCardPath = "/.well-known/agent-card.json";
+        std::string                serverName    = "agentxx-a2a";
+        std::string                serverVersion = "1.0.0";
+        std::string                description   = "Agentxx A2A Server";
+        std::vector<std::string>   inputModes    = {"text/plain"};
+        std::vector<std::string>   outputModes   = {"text/plain", "application/json"};
+        std::vector<SkillDef>      skills;
+        bool                       supportStreaming = true;
+        size_t                     maxTasks         = 10000;
+        std::chrono::seconds       taskTimeout{300};
     };
 
     explicit A2aServer(std::shared_ptr<agentxx::agent::BaseAgent> agent, Config config);
@@ -260,8 +260,8 @@ private:
 
     void writeJsonResponse(
         utilxx::HttpServer::Response& resp,
-        boost::beast::http::status  status,
-        const json&                 body
+        boost::beast::http::status    status,
+        const json&                   body
     );
 
     // -----------------------------------------------------------------------
@@ -270,14 +270,14 @@ private:
 
     Config                                     config_;
     std::shared_ptr<agentxx::agent::BaseAgent> agent_;
-    std::unique_ptr<utilxx::HttpServer>          httpServer_;
+    std::unique_ptr<utilxx::HttpServer>        httpServer_;
 
     mutable std::mutex                                              tasksMutex_;
     std::map<std::string, std::shared_ptr<TaskRecord>, std::less<>> tasks_;
 
     struct SSEClient {
         std::shared_ptr<utilxx::HttpServer::SseWriter> writer;
-        std::atomic<bool>                            closed{false};
+        std::atomic<bool>                              closed{false};
     };
 
     std::mutex                              sseClientsMutex_;

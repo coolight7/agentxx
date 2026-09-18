@@ -1,5 +1,5 @@
-#include "utilxx_base/log.h"
 #include "audio_stream_plugin.h"
+#include "utilxx_base/log.h"
 
 #if XX_IS_WIN_D
 #define INITGUID

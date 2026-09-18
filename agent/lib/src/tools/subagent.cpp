@@ -304,14 +304,14 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
     // 此处按相同规则提取并聚合返回
 
     struct TaskArg {
-        std::string                        subagent;
-        std::string                        systemPrompt;
-        std::string                        message;
+        std::string                      subagent;
+        std::string                      systemPrompt;
+        std::string                      message;
         std::optional<utilxx_base::Json> messages;
-        std::string                        sessionId;
+        std::string                      sessionId;
         std::optional<utilxx_base::Json> tools;
-        std::optional<bool>                enableSummarization;
-        std::string                        resultId;
+        std::optional<bool>              enableSummarization;
+        std::string                      resultId;
     };
 
     auto parseTask = [](const utilxx_base::Json& t) -> TaskArg {

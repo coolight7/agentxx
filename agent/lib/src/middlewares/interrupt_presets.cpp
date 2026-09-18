@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 
-#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <utility>
 
@@ -161,7 +161,7 @@ InterruptUiBlock buttonControl(
     std::vector<InterruptUiOption> options,
     std::string                    label,
     std::string                    labelKey,
-    utilxx_base::Json            defaultValue,
+    utilxx_base::Json              defaultValue,
     bool                           commitOnPick
 ) {
     InterruptUiBlock b;
@@ -241,7 +241,7 @@ InterruptUiBlock selectControl(
     std::vector<InterruptUiOption> options,
     std::string                    label,
     std::string                    labelKey,
-    utilxx_base::Json            defaultValue,
+    utilxx_base::Json              defaultValue,
     std::string                    help
 ) {
     InterruptUiBlock b;

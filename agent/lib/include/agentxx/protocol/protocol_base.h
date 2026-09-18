@@ -43,8 +43,8 @@ inline utilxx_base::Json jsonRpcErrorResponse(utilxx_base::Json id, utilxx_base:
 
 inline void writeJsonResponse(
     utilxx::HttpServer::Response& resp,
-    boost::beast::http::status  status,
-    const utilxx_base::Json&  body
+    boost::beast::http::status    status,
+    const utilxx_base::Json&      body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");

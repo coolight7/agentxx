@@ -7,10 +7,10 @@
 ///   仍留在各自 provider 内
 #pragma once
 
-#include "utilxx/http_header.h"
 #include "fmt/format.h"
 #include "neograph/api.h"
 #include "neograph/provider.h"
+#include "utilxx/http_header.h"
 #include <chrono>
 #include <cstdint>
 #include <random>
@@ -98,10 +98,8 @@ inline void applySessionHeaders(utilxx::HeaderMap& headers, std::string_view ses
 /// - `args`:
 ///     - [headers] 待填充的请求头映射
 ///     - [params] 补全参数
-inline void applySessionHeaders(
-    utilxx::HeaderMap&         headers,
-    const neograph::CompletionParams& params
-) {
+inline void
+    applySessionHeaders(utilxx::HeaderMap& headers, const neograph::CompletionParams& params) {
     applySessionHeaders(headers, extractSessionId(params));
 }
 

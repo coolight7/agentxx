@@ -4,7 +4,6 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "pluginxx/runtime/op_driver.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_future.hpp"
@@ -12,6 +11,7 @@
 #include "neograph/graph/run_context.h"
 #include "neograph/graph/state.h"
 #include "neograph/graph/types.h"
+#include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/asio_error.h"
 
 #include <barrier>
@@ -60,8 +60,8 @@ struct RuntimeFixture {
     }
 
     std::shared_ptr<PluginInstance> instance(std::string name, uint64_t generation) {
-        auto inst     = std::make_shared<PluginInstance>(std::move(name));
-        inst->self    = inst;
+        auto inst  = std::make_shared<PluginInstance>(std::move(name));
+        inst->self = inst;
         // 基类自引用: 通用表实现 (sleep/offload/postCallback/registerTask/能力调用)
         // 只依赖 PluginInstanceBase::ownerSelf, 因此夹具必须与 makeInstance 一样设置它
         inst->ownerSelf = inst;
@@ -76,8 +76,8 @@ struct RuntimeFixture {
         const std::weak_ptr<pluginxx::PluginRuntime> runtime = manager->runtime();
         // 与 PluginManagerBase::makeLifetime 的装配语义一致: 实例登记所属运行时,
         // Operation 驱动器据此取 io executor 与线程标识
-        inst->runtime = manager->runtime();
-        inst->lifetime                             = std::make_shared<pluginxx::InstanceLifetime>(
+        inst->runtime  = manager->runtime();
+        inst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
             io.get_executor(),
             inst->name,
             generation,
@@ -532,7 +532,8 @@ TestResult testPluginRuntime() {
         auto           op = f.operation();
         op->accept();
         f.provider->lifetime->requestClose();
-        XX_TEST_EXPECT_FALSE(static_cast<bool>(pluginxx::InstanceLease::acquire(f.provider->lifetime)));
+        XX_TEST_EXPECT_FALSE(static_cast<bool>(pluginxx::InstanceLease::acquire(f.provider->lifetime
+        )));
         auto expired = asio::co_spawn(
             f.io,
             f.provider->lifetime->waitIdleUntil(std::chrono::steady_clock::now()),
@@ -1046,7 +1047,10 @@ TestResult testPluginRuntime() {
         f.manager->shutdownAll();
         XX_TEST_EXPECT_EQ(gLifecycleStops, 0);
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(
+            f.provider->lifetime->state(),
+            pluginxx::PluginInstanceState::CloseFailed
+        );
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") != nullptr);
         XX_TEST_EXPECT_TRUE(f.manager->hasPendingClose());
 
@@ -1713,7 +1717,10 @@ TestResult testPluginRuntime() {
             first = rc.value_or(true);
         }
         XX_TEST_EXPECT_FALSE(first);
-        XX_TEST_EXPECT_EQ(f.provider->lifetime->state(), pluginxx::PluginInstanceState::CloseFailed);
+        XX_TEST_EXPECT_EQ(
+            f.provider->lifetime->state(),
+            pluginxx::PluginInstanceState::CloseFailed
+        );
         XX_TEST_EXPECT_EQ(destroys, 0);
         XX_TEST_EXPECT_FALSE(f.provider->pluginDestroyed);
         XX_TEST_EXPECT_EQ(f.manager->runtime()->operations.size(), size_t{1});

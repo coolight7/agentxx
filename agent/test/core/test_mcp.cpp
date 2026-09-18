@@ -2,9 +2,9 @@
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/mcp_server.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/exception.h"
 #include "utilxx/http_client.h"
 #include "utilxx_base/json.h"
-#include "agentxx/util/exception.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -3591,7 +3591,7 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
             thread = std::thread([this]() {
                 while (!stopped.load()) {
                     utilxx_base::AsioErrorCode ec;
-                    asio::ip::tcp::socket    sock(*ioCtx);
+                    asio::ip::tcp::socket      sock(*ioCtx);
                     acceptor->accept(sock, ec);
                     if (ec) {
                         break;
@@ -3603,7 +3603,7 @@ asio::awaitable<void> test_mcp_client_truncated_retry() {
 
         void handle(asio::ip::tcp::socket& sock) {
             namespace http = boost::beast::http;
-            utilxx_base::AsioErrorCode         ec;
+            utilxx_base::AsioErrorCode       ec;
             boost::beast::flat_buffer        buf;
             http::request<http::string_body> req;
             http::read(sock, buf, req, ec);
@@ -3736,7 +3736,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
             thread = std::thread([this]() {
                 while (!stopped.load()) {
                     utilxx_base::AsioErrorCode ec;
-                    asio::ip::tcp::socket    sock(*ioCtx);
+                    asio::ip::tcp::socket      sock(*ioCtx);
                     acceptor->accept(sock, ec);
                     if (ec) {
                         break;
@@ -3748,7 +3748,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
 
         void handle(asio::ip::tcp::socket& sock) {
             namespace http = boost::beast::http;
-            utilxx_base::AsioErrorCode         ec;
+            utilxx_base::AsioErrorCode       ec;
             boost::beast::flat_buffer        buf;
             http::request<http::string_body> req;
             http::read(sock, buf, req, ec);
@@ -3877,7 +3877,7 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
             stopped.store(true);
             if (acceptor) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    dummy(*ioCtx);
+                asio::ip::tcp::socket      dummy(*ioCtx);
                 dummy.connect(
                     asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port.load()),
                     ec

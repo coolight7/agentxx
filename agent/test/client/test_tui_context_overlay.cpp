@@ -14,12 +14,12 @@
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
-#include "utilxx_base/json.h"
 #include "agentxx/version.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "utilxx_base/json.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -374,7 +374,7 @@ TestResult testTuiContextOverlay() {
         fx.width  = 100;
         fx.height = 20;
 
-        constexpr size_t    kMsgCount = 30;
+        constexpr size_t  kMsgCount = 30;
         utilxx_base::Json msgs      = utilxx_base::Json::array();
         for (size_t i = 0; i < kMsgCount; ++i) {
             msgs.push_back(utilxx_base::Json{

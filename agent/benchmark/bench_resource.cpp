@@ -9,8 +9,8 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/ffi_api.h"
-#include "utilxx_base/env.h"
 #include "utilxx/http_server.h"
+#include "utilxx_base/env.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
@@ -130,9 +130,9 @@ uint16_t findFreeTcpPort() {
 // ---------------------------------------------------------------------------
 
 struct ResourceLlmSimServer {
-    std::unique_ptr<utilxx::HttpServer> svr;
-    std::thread                                thr;
-    uint16_t                                   port  = 0;
+    std::unique_ptr<utilxx::HttpServer>  svr;
+    std::thread                          thr;
+    uint16_t                             port        = 0;
     std::shared_ptr<std::atomic<size_t>> turnCounter = std::make_shared<std::atomic<size_t>>(0);
 
     ResourceLlmSimServer() = default;
@@ -196,9 +196,8 @@ ResourceLlmSimServer startResourceLlmSimServer() {
         "/health",
         1,
         std::make_shared<utilxx::HttpServer::Handler>(
-            [](utilxx::HttpServer::Request&,
-               utilxx::HttpServer::Response& resp,
-               std::string_view) -> asio::awaitable<void> {
+            [](utilxx::HttpServer::Request&, utilxx::HttpServer::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
                 namespace http = boost::beast::http;
                 resp.result(http::status::ok);
                 resp.set(http::field::content_type, "application/json");

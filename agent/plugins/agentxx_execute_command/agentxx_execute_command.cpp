@@ -64,14 +64,14 @@ static void
         args[name] = desc;
     }
     utilxx_base::Json tool = utilxx_base::Json::object();
-    tool["depict"]           = prompt.depict;
-    tool["args"]             = std::move(args);
+    tool["depict"]         = prompt.depict;
+    tool["args"]           = std::move(args);
 
-    utilxx_base::Json tools    = utilxx_base::Json::object();
+    utilxx_base::Json tools      = utilxx_base::Json::object();
     tools[std::string{toolName}] = std::move(tool);
 
     utilxx_base::Json patch = utilxx_base::Json::object();
-    patch["toolPrompt"]       = std::move(tools);
+    patch["toolPrompt"]     = std::move(tools);
 
     const std::string js   = patch.dump();
     const auto        jsSv = PluginStringView::from(js.data(), js.size());

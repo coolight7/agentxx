@@ -5,8 +5,6 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "utilxx/http_client.h"
-#include "utilxx_base/string_util.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -14,6 +12,8 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx/http_client.h"
+#include "utilxx_base/string_util.h"
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -31,8 +31,7 @@ int g_da_failed = 0;
 /// - Windows 上 `/data/outside.txt` 是根相对路径 (无盘符), 会被解析到当前盘符下
 ///   (如 `D:/data/outside.txt`), 故期望值不能直接写 POSIX 形态
 std::string expectPermissionPath(std::string_view path) {
-    std::string s
-        = utilxx_base::toUnixStandardPath(utilxx_base::toCurrentSystemAbsolutePath(path));
+    std::string s = utilxx_base::toUnixStandardPath(utilxx_base::toCurrentSystemAbsolutePath(path));
 #if XX_IS_WIN_D
     utilxx_base::toLowerSelf(s);
 #endif
@@ -172,12 +171,12 @@ public:
 // ===========================================================================
 // Enhanced LLM Simulator Implementation
 // ===========================================================================
-std::string         g_da_sim_response_content = "Hello! I am a simulated LLM response for testing.";
-int                 g_da_sim_prompt_tokens    = 100;
-int                 g_da_sim_completion_tokens = 50;
+std::string       g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
+int               g_da_sim_prompt_tokens     = 100;
+int               g_da_sim_completion_tokens = 50;
 utilxx_base::Json g_da_sim_tool_calls        = utilxx_base::Json::array();
-std::string         g_da_sim_reasoning_content = "";
-int                 g_da_sim_delay_ms          = 0;
+std::string       g_da_sim_reasoning_content = "";
+int               g_da_sim_delay_ms          = 0;
 utilxx_base::Json g_da_sim_last_request      = utilxx_base::Json::object();
 /// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
 std::vector<utilxx_base::Json> g_da_sim_requests;
@@ -825,15 +824,15 @@ asio::awaitable<void> test_agent_tool_calls() {
     g_da_sim_response_content = "";
     g_da_sim_tool_calls       = utilxx_base::Json::array({
         utilxx_base::Json{
-                            {"index", 0},
-                            {"id", "call_test_1"},
-                            {"type", "function"},
-                            {"function",
+                          {"index", 0},
+                          {"id", "call_test_1"},
+                          {"type", "function"},
+                          {"function",
                    utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                            },
+                          },
     });
 
     agentxx::agent::CodeAgent agent(cfg);
@@ -1112,15 +1111,15 @@ asio::awaitable<void> test_agent_session_activity_toolcall() {
     g_da_sim_response_content = "";
     g_da_sim_tool_calls       = utilxx_base::Json::array({
         utilxx_base::Json{
-                            {"index", 0},
-                            {"id", "call_act_1"},
-                            {"type", "function"},
-                            {"function",
+                          {"index", 0},
+                          {"id", "call_act_1"},
+                          {"type", "function"},
+                          {"function",
                    utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                            },
+                          },
     });
 
     agentxx::agent::CodeAgent agent(cfg);
@@ -1232,15 +1231,15 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
     g_da_sim_response_content = "";
     g_da_sim_tool_calls       = utilxx_base::Json::array({
         utilxx_base::Json{
-                            {"index", 0},
-                            {"id", "call_retry_1"},
-                            {"type", "function"},
-                            {"function",
+                          {"index", 0},
+                          {"id", "call_retry_1"},
+                          {"type", "function"},
+                          {"function",
                    utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                            },
+                          },
     });
 
     auto r1 = co_await agent.runTurnAsync("retry_test", "List files", nullptr);
@@ -1301,15 +1300,15 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     g_da_sim_response_content = "Final answer after tool error.";
     g_da_sim_tool_calls       = utilxx_base::Json::array({
         utilxx_base::Json{
-                            {"index", 0},
-                            {"id", "call_intercept_1"},
-                            {"type", "function"},
-                            {"function",
+                          {"index", 0},
+                          {"id", "call_intercept_1"},
+                          {"type", "function"},
+                          {"function",
                    utilxx_base::Json{
                        {"name", "agentxx_filesystem_list"},
                        {"arguments", "{}"},
              }},
-                            },
+                          },
     });
 
     agentxx::agent::CodeAgent agent(cfg);

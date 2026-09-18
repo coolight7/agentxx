@@ -1,9 +1,9 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
+#include "asio/awaitable.hpp"
 #include "utilxx_base/asio_error.h"
 #include "utilxx_base/json.h"
-#include "asio/awaitable.hpp"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -84,7 +84,7 @@ struct WireInterruptRequest {
 };
 
 struct WireInterruptResponse {
-    int64_t             id = 0;
+    int64_t           id = 0;
     utilxx_base::Json result;
 };
 

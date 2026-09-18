@@ -2,11 +2,11 @@
 
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/protocol/a2a_server.h"
-#include "utilxx_base/log.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/log.h"
 #include <chrono>
 #include <thread>
 
@@ -344,7 +344,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
 
     // --- Version negotiation: unsupported version ---
     {
-        auto            url = baseUrl + "/a2a";
+        auto              url = baseUrl + "/a2a";
         utilxx::HeaderMap headers;
         headers.set("A2A-Version", "99.0");
         json request;
@@ -376,7 +376,7 @@ static asio::awaitable<void> test_a2a_server_integration() {
 
     // --- Version negotiation: valid version 0.3 ---
     {
-        auto            url = baseUrl + "/a2a";
+        auto              url = baseUrl + "/a2a";
         utilxx::HeaderMap headers;
         headers.set("A2A-Version", "0.3");
         json request;

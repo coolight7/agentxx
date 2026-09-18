@@ -6,9 +6,9 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
+#include "fmt/format.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
-#include "fmt/format.h"
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -230,7 +230,7 @@ utilxx_base::IgnoreCaseMap<std::string> makeEnumIgnoreCaseMap(const utilxx_base:
 bool autoFixEnumStringCase(
     const utilxx_base::Json& schema,
     utilxx_base::Json&       value,
-    std::string&               fixInfo
+    std::string&             fixInfo
 ) {
     auto appendFixInfo = [&fixInfo](std::string_view one) {
         if (fixInfo.empty()) {
@@ -596,7 +596,7 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
 
 asio::awaitable<std::string> ToolcallWrapNode::execTool(
     neograph::Tool*                                      tool,
-    utilxx_base::Json&                                 args,
+    utilxx_base::Json&                                   args,
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
     bool                                                 repeatCallTriggered,
     std::string_view                                     repeatCallKey

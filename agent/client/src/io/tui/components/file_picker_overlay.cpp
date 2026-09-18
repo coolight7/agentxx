@@ -1,12 +1,12 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/surface.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <charconv>
 #include <filesystem>
@@ -280,8 +280,7 @@ void FilePickerOverlay::confirmSelection() {
             }
             return;
         }
-        auto ext
-            = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
+        auto ext = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
         if (mime.empty()) {
             if (ctx_.showToast) {
@@ -319,7 +318,7 @@ void FilePickerOverlay::confirmSelection() {
         att.displayName = entry.name;
         att.mimeType    = std::string(mime);
         att.pathOrUrl   = entry.fullPath;
-        att.dataUrl = fmt::format("data:{};base64,{}", mime, utilxx_base::base64Encode(fileData));
+        att.dataUrl   = fmt::format("data:{};base64,{}", mime, utilxx_base::base64Encode(fileData));
         att.sizeBytes = fileSize;
 
         if (onSelectAttachment_) {
@@ -329,8 +328,7 @@ void FilePickerOverlay::confirmSelection() {
         }
     } else {
         // 服务端附件: 直接构造服务端路径附件 (dataUrl 留空, 服务端自主加载并转 Base64)
-        auto ext
-            = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
+        auto ext = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
 
         agentxx::agent::MediaAttachment att;

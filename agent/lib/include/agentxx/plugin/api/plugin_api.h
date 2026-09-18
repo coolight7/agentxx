@@ -36,7 +36,6 @@ extern "C" {
 
 #pragma pack(push, 8)
 
-
 /* ==================== 工具定义 ==================== */
 
 #define AGENTXX_PLUGIN_TOOL_FLAG_NONE         0

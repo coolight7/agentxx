@@ -1,5 +1,5 @@
-#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/runtime/op_driver.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -7,8 +7,8 @@
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
-#include "utilxx_base/log.h"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
 
 #include <cstring>
 
@@ -1087,7 +1087,7 @@ bool samePromptValue(
 /// 部分覆盖语义一致：只覆盖出现的 depict/args 子字段）。
 PluginManager::PromptValue mergeToolPromptValue(
     const std::optional<PluginManager::PromptValue>& current,
-    const utilxx_base::Json&                       spec
+    const utilxx_base::Json&                         spec
 ) {
     PluginManager::PromptValue value;
     value.isTool = true;

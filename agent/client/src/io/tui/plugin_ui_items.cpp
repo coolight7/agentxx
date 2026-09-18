@@ -1,7 +1,7 @@
 #include "agentxx-client/io/tui/plugin_ui_items.h"
-#include "utilxx_base/string_util.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include "utilxx_base/string_util.h"
 
 using namespace ftxui;
 
@@ -54,7 +54,7 @@ bool hasPluginBindingFor(
 }
 
 bool parsePluginButton(
-    const utilxx_base::Json&               it,
+    const utilxx_base::Json&                 it,
     std::string_view                         plugin,
     const agentxx::plugin::ClientUiRegistry* reg,
     PluginButtonDesc&                        out

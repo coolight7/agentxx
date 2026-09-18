@@ -14,9 +14,6 @@
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/json.h"
-#include "utilxx_base/log.h"
-#include "utilxx/ws_client.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/executor_work_guard.hpp"
@@ -24,6 +21,9 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "utilxx/ws_client.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -430,7 +430,7 @@ static asio::awaitable<void> runRemoteCliAsync(
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
     agent::WsAgentIOTransport::Config transportCfg;
-    utilxx::WsClientConfig              wsCfg;
+    utilxx::WsClientConfig            wsCfg;
     wsCfg.recvTimeout = std::chrono::seconds{60};
 
     auto transport

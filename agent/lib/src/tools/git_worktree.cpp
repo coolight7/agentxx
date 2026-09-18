@@ -5,8 +5,8 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "utilxx/async_offload.h"
-#include "utilxx_base/string_util.h"
 #include "utilxx/worktree.h"
+#include "utilxx_base/string_util.h"
 #include <chrono>
 #include <filesystem>
 
@@ -131,7 +131,7 @@ neograph::ChatTool GitWorktreeTool::get_definition() const {
         }
     }
     utilxx_base::Json params = utilxx_base::Json{
-        {"type",       "object"                           },
+        {"type",       "object"                         },
         {"properties",
          {
              {"opt",
@@ -167,7 +167,7 @@ Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamp
                    R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data loss risk; prefer committing first.)"
                   },
               }},
-         }                                                },
+         }                                              },
         {"required",   utilxx_base::Json::array({"opt"})},
     };
     return {name, depict, agentxx::util::toNeographJson(params)};
@@ -207,154 +207,69 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
 
     // ---- info: 无需写操作, 但列举/状态探测涉及子进程, 卸载线程池执行 ----
     if (opt == "info") {
-        auto result
-            = co_await utilxx::offloadCancellableAsync<std::string>(
-                        *ctxPtr->threadPool,
-                        // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
-                        agentxx::util::adaptCancelToken(cancelToken),
-                        [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag) -> asio::
-                                                                                            awaitable<
-                                                                                                std::
-                                                                                                    string> {
-                                                                                                namespace fw
-                                                                                                    = utilxx::worktree;
-                                                                                                std::string
-                                                                                                    root
-                                                                                                    = knownRepoRoot;
-                                                                                                if (root.empty(
-                                                                                                    )) {
-                                                                                                    if (effectiveDir
-                                                                                                            .empty(
-                                                                                                            )
-                                                                                                        || !fw::isInsideWorkTree(
-                                                                                                            effectiveDir
-                                                                                                        )) {
-                                                                                                        co_return R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})";
-                                                                                                    }
-                                                                                                    auto r = fw::
-                                                                                                        repoRoot(
-                                                                                                            effectiveDir
-                                                                                                        );
-                                                                                                    if (!r) {
-                                                                                                        co_return R"({"error":"cannot resolve repository root"})";
-                                                                                                    }
-                                                                                                    root
-                                                                                                        = *r;
-                                                                                                }
-                                                                                                auto
-                                                                                                    entries
-                                                                                                    = fw::listWorktrees(
-                                                                                                        root
-                                                                                                    );
-                                                                                                utilxx_base::Json
-                                                                                                        arr
-                                                                                                    = utilxx_base::Json::array(
-                                                                                                        );
-                                                                                                std::string
-                                                                                                    boundName;
-                                                                                                if (binding
-                                                                                                    != nullptr) {
-                                                                                                    boundName
-                                                                                                        = binding
-                                                                                                              ->name;
-                                                                                                }
-                                                                                                for (const auto&
-                                                                                                         e :
-                                                                                                     entries) {
-                                                                                                    if (cancelFlag
-                                                                                                            .load(
-                                                                                                                std::
-                                                                                                                    memory_order_acquire
-                                                                                                            )) {
-                                                                                                        co_return R"({"error":"cancelled"})";
-                                                                                                    }
-                                                                                                    auto
-                                                                                                        st
-                                                                                                        = fw::statusSummary(
-                                                                                                            e.path
-                                                                                                        );
-                                                                                                    bool
-                                                                                                        dirty
-                                                                                                        = st ? st->dirtyFiles(
-                                                                                                               )
-                                                                                                             : false;
-                                                                                                    arr.push_back(utilxx_base::Json{
-                                                                                                        {"path",
-                                                                                                         e.path
-                                                                                                        },
-                                                                                                        {"branch",
-                                                                                                         e.branch
-                                                                                                        },
-                                                                                                        {"head",
-                                                                                                         e.head
-                                                                                                        },
-                                                                                                        {"bare",
-                                                                                                         e.bare
-                                                                                                        },
-                                                                                                        {"detached",
-                                                                                                         e.detached
-                                                                                                        },
-                                                                                                        {"dirty",
-                                                                                                         dirty
-                                                                                                        },
-                                                                                                        {"current",
-                                                                                                         !boundName
-                                                                                                                 .empty(
-                                                                                                                 )
-                                                                                                             && std::filesystem::
-                                                                                                                        path{e.path
-                                                                                                                        }
-                                                                                                                            .filename(
-                                                                                                                            )
-                                                                                                                            .generic_string(
-                                                                                                                            )
-                                                                                                                    == boundName
-                                                                                                        },
-                                                                                                    }
-                                                                                                    );
-                                                                                                }
-                                                                                                utilxx_base::Json out{
-                                                                                                    {"repoRoot",
-                                                                                                     root
-                                                                                                    },
-                                                                                                    {"worktrees",
-                                                                                                     arr
-                                                                                                    },
-                                                                                                };
-                                                                                                if (binding
-                                                                                                    != nullptr) {
-                                                                                                    out["current"] = utilxx_base::Json{
-                                                                                                        {"name",
-                                                                                                         binding
-                                                                                                             ->name
-                                                                                                        },
-                                                                                                        {"path",
-                                                                                                         binding
-                                                                                                             ->path
-                                                                                                        },
-                                                                                                        {"branch",
-                                                                                                         binding
-                                                                                                             ->branch
-                                                                                                        },
-                                                                                                    };
-                                                                                                } else if (!config
-                                                                                                                ->inheritedWorktreePath
-                                                                                                                .empty(
-                                                                                                                )) {
-                                                                                                    out["inherited"]
-                                                                                                        = config
-                                                                                                              ->inheritedWorktreePath;
-                                                                                                } else {
-                                                                                                    out["current"]
-                                                                                                        = nullptr;
-                                                                                                    out["hint"]
-                                                                                                        = "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
-                                                                                                }
-                                                                                                co_return out
-                                                                                                    .dump(
-                                                                                                    );
-                                                                                            }
-                    );
+        auto result = co_await utilxx::offloadCancellableAsync<std::string>(
+            *ctxPtr->threadPool,
+            // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
+            agentxx::util::adaptCancelToken(cancelToken),
+            [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag
+            ) -> asio::awaitable<std::string> {
+                namespace fw     = utilxx::worktree;
+                std::string root = knownRepoRoot;
+                if (root.empty()) {
+                    if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
+                        co_return R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})";
+                    }
+                    auto r = fw::repoRoot(effectiveDir);
+                    if (!r) {
+                        co_return R"({"error":"cannot resolve repository root"})";
+                    }
+                    root = *r;
+                }
+                auto              entries = fw::listWorktrees(root);
+                utilxx_base::Json arr     = utilxx_base::Json::array();
+                std::string       boundName;
+                if (binding != nullptr) {
+                    boundName = binding->name;
+                }
+                for (const auto& e : entries) {
+                    if (cancelFlag.load(std::memory_order_acquire)) {
+                        co_return R"({"error":"cancelled"})";
+                    }
+                    auto st    = fw::statusSummary(e.path);
+                    bool dirty = st ? st->dirtyFiles() : false;
+                    arr.push_back(utilxx_base::Json{
+                        {"path",     e.path     },
+                        {"branch",   e.branch   },
+                        {"head",     e.head     },
+                        {"bare",     e.bare     },
+                        {"detached", e.detached },
+                        {"dirty",    dirty      },
+                        {"current",
+                         !boundName.empty()
+                             && std::filesystem::path{e.path}.filename().generic_string()
+                                    == boundName},
+                    });
+                }
+                utilxx_base::Json out{
+                    {"repoRoot",  root},
+                    {"worktrees", arr },
+                };
+                if (binding != nullptr) {
+                    out["current"] = utilxx_base::Json{
+                        {"name",   binding->name  },
+                        {"path",   binding->path  },
+                        {"branch", binding->branch},
+                    };
+                } else if (!config->inheritedWorktreePath.empty()) {
+                    out["inherited"] = config->inheritedWorktreePath;
+                } else {
+                    out["current"] = nullptr;
+                    out["hint"]
+                        = "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
+                }
+                co_return out.dump();
+            }
+        );
         co_return result;
     }
 
@@ -375,9 +290,8 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
         auto baseRef  = argString(arguments, "base_ref");
 
         // 名称清洗/生成 (纯函数, io 线程可做); 冲突检查在 offload 内以最终状态为准
-        std::string name = userName.empty()
-                               ? std::string{}
-                               : utilxx::worktree::sanitizeWorktreeName(userName);
+        std::string name
+            = userName.empty() ? std::string{} : utilxx::worktree::sanitizeWorktreeName(userName);
         if (!userName.empty() && name.empty()) {
             co_return utilxx_base::Json{
                 {"error", fmt::format("invalid worktree name '{}'", userName)},
@@ -569,9 +483,8 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
         if (targetName.empty() && binding == nullptr) {
             co_return R"({"error":"no active worktree for this session; pass `name` or bind one first"})";
         }
-        std::string name = targetName.empty()
-                               ? binding->name
-                               : utilxx::worktree::sanitizeWorktreeName(targetName);
+        std::string name = targetName.empty() ? binding->name
+                                              : utilxx::worktree::sanitizeWorktreeName(targetName);
         if (name.empty()) {
             co_return utilxx_base::Json{
                 {"error", "invalid worktree name"}

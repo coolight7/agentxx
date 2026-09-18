@@ -245,9 +245,9 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
             }
             // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult);
             // 非对象形态按"未应答"处理并告警。权限卡片控件: decision + remember + fullAuth
-            bool                allowed  = false;
-            bool                remember = false;
-            bool                fullAuth = false;
+            bool              allowed  = false;
+            bool              remember = false;
+            bool              fullAuth = false;
             utilxx_base::Json values   = utilxx_base::Json::object();
             if (!result.is_object() || !result.contains("values")) {
                 XX_LOGW(

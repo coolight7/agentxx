@@ -1,9 +1,9 @@
 #include "agentxx-client/config_loader.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/util/exception.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/env.h"
-#include "agentxx/util/exception.h"
 #include "utilxx_base/string_util.h"
 #include "yaml-cpp/yaml.h"
 #include <algorithm>

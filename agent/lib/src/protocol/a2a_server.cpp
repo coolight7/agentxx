@@ -1,7 +1,7 @@
 #include "agentxx/protocol/a2a_server.h"
 
-#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
+#include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <fmt/chrono.h>
@@ -129,16 +129,22 @@ void A2aServer::setupRoutes() {
     using Handler = utilxx::HttpServer::Handler;
 
     auto cardHandler = std::make_shared<Handler>(Handler(
-        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&  req,
+            utilxx::HttpServer::Response& resp,
+            std::string_view
+        ) -> asio::awaitable<void> {
             co_await handleAgentCard(req, resp);
         }
     ));
     httpServer_->router().add(config_.agentCardPath, 0, cardHandler);
 
     auto a2aHandler = std::make_shared<Handler>(Handler(
-        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&  req,
+            utilxx::HttpServer::Response& resp,
+            std::string_view
+        ) -> asio::awaitable<void> {
             co_await handleA2aRequest(req, resp);
         }
     ));
@@ -146,8 +152,10 @@ void A2aServer::setupRoutes() {
 
     httpServer_->addSseRoute(
         config_.sseEndpoint,
-        [this](utilxx::HttpServer::Request& req, std::shared_ptr<utilxx::HttpServer::SseWriter> writer)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&                   req,
+            std::shared_ptr<utilxx::HttpServer::SseWriter> writer
+        ) -> asio::awaitable<void> {
             co_await handleSseRequest(req, writer);
         }
     );
@@ -165,8 +173,10 @@ asio::awaitable<void> A2aServer::handleAgentCard(
     co_return;
 }
 
-asio::awaitable<void>
-    A2aServer::handleA2aRequest(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp) {
+asio::awaitable<void> A2aServer::handleA2aRequest(
+    utilxx::HttpServer::Request&  req,
+    utilxx::HttpServer::Response& resp
+) {
     auto versionIt = req.find("A2A-Version");
     if (versionIt != req.end()) {
         auto ver = versionIt->value();
@@ -740,8 +750,8 @@ void A2aServer::pruneOldTasks() {
 
 void A2aServer::writeJsonResponse(
     utilxx::HttpServer::Response& resp,
-    boost::beast::http::status  status,
-    const json&                 body
+    boost::beast::http::status    status,
+    const json&                   body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");

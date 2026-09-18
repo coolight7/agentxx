@@ -4,10 +4,10 @@
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <atomic>
 #include <cctype>
 #include <charconv>
@@ -275,9 +275,9 @@ asio::awaitable<utilxx_base::Json> StdIOClientAgentIO::handleInterrupt(
                   << std::flush;
     }
 
-    namespace mw                      = agentxx::middleware;
+    namespace mw                    = agentxx::middleware;
     utilxx_base::Json values        = utilxx_base::Json::object();
-    bool                haveWaitInput = false;
+    bool              haveWaitInput = false;
     std::cout << "\n  ┏━━━━━━ Input ━━━━━━┓\n" << std::flush;
 
     /// 候选项标签 (label 优先, 空则用原始值文本)

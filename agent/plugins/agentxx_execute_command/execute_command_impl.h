@@ -30,11 +30,6 @@
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "utilxx_base/asio_error.h"
-#include "utilxx_base/json.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
-#include "utilxx_base/system.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -47,6 +42,11 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "utilxx_base/asio_error.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
+#include "utilxx_base/system.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -478,7 +478,7 @@ inline asio::awaitable<std::string> runProcPipeline(
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
 ) {
-    std::string              strout, strerr;
+    std::string                strout, strerr;
     utilxx_base::AsioErrorCode errCodeStdOut, errCodeStdErr;
     // awaitable 为 move-only: 创建后 move 进 && 组合 (不可拷贝)
     auto readStdOutFuture = asio::async_read(
@@ -520,8 +520,7 @@ inline asio::awaitable<std::string> runProcPipeline(
                     if (!strout.empty()) {
                         long long id = -1;
                         if (storeFn
-                            && utilxx_base::utf8GetLength(strout)
-                                   > detail::kMaxStdOutUtf8Length) {
+                            && utilxx_base::utf8GetLength(strout) > detail::kMaxStdOutUtf8Length) {
                             id = storeFn(strout);
                         }
                         strout = detail::truncateStdOut(strout, id);
@@ -539,8 +538,7 @@ inline asio::awaitable<std::string> runProcPipeline(
                     if (!strerr.empty()) {
                         long long id = -1;
                         if (storeFn
-                            && utilxx_base::utf8GetLength(strerr)
-                                   > detail::kMaxStdErrUtf8Length) {
+                            && utilxx_base::utf8GetLength(strerr) > detail::kMaxStdErrUtf8Length) {
                             id = storeFn(strerr);
                         }
                         strerr = detail::truncateStdErr(strerr, id);
@@ -619,11 +617,11 @@ inline asio::awaitable<std::string> runProcPipeline(
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
 inline asio::awaitable<std::string> bashExecuteAsync(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled    = nullptr,
-    const StoreFn&             storeFn        = nullptr,
-    CancelRegistry*            cancelRegistry = nullptr,
-    std::string_view           sessionKey     = {}
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled    = nullptr,
+    const StoreFn&           storeFn        = nullptr,
+    CancelRegistry*          cancelRegistry = nullptr,
+    std::string_view         sessionKey     = {}
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -703,11 +701,11 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 /// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
 inline asio::awaitable<std::string> windowsExecuteAsync(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled    = nullptr,
-    const StoreFn&             storeFn        = nullptr,
-    CancelRegistry*            cancelRegistry = nullptr,
-    std::string_view           sessionKey     = {}
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled    = nullptr,
+    const StoreFn&           storeFn        = nullptr,
+    CancelRegistry*          cancelRegistry = nullptr,
+    std::string_view         sessionKey     = {}
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -818,11 +816,11 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 
 inline std::string bashExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled    = nullptr,
-    const StoreFn&             storeFn        = nullptr,
-    CancelRegistry*            cancelRegistry = nullptr,
-    std::string_view           sessionKey     = {}
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled    = nullptr,
+    const StoreFn&           storeFn        = nullptr,
+    CancelRegistry*          cancelRegistry = nullptr,
+    std::string_view         sessionKey     = {}
 ) {
     (void)workDir;
     std::string effectiveSessionKey{sessionKey};
@@ -872,11 +870,11 @@ inline std::string bashExecute(
 
 inline std::string windowsExecute(
     const utilxx_base::Json& arguments,
-    const std::string&         workDir,
-    const IsCancelledFn&       isCancelled    = nullptr,
-    const StoreFn&             storeFn        = nullptr,
-    CancelRegistry*            cancelRegistry = nullptr,
-    std::string_view           sessionKey     = {}
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled    = nullptr,
+    const StoreFn&           storeFn        = nullptr,
+    CancelRegistry*          cancelRegistry = nullptr,
+    std::string_view         sessionKey     = {}
 ) {
     // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
     return bashExecute(arguments, workDir, isCancelled, storeFn, cancelRegistry, sessionKey);

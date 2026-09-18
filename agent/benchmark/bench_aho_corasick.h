@@ -1,7 +1,7 @@
 #pragma once
 
-#include "utilxx/aho_corasick.h"
 #include "bench_util.h"
+#include "utilxx/aho_corasick.h"
 #include <string>
 #include <vector>
 
@@ -20,16 +20,16 @@ inline void benchAhoCorasick() {
 
         auto r = runBench("AhoCorasick::search [5 patterns, 500KB text]", 100, [&]() {
             utilxx::AhoCorasick<char> ac(patterns);
-            auto                             result = ac.search(text);
+            auto                      result = ac.search(text);
             (void)result;
         });
         printResult(r);
     }
 
     {
-        std::vector<std::string>         patterns = {"hello", "world", "foo", "bar", "baz"};
+        std::vector<std::string>  patterns = {"hello", "world", "foo", "bar", "baz"};
         utilxx::AhoCorasick<char> ac(patterns);
-        std::string                      text;
+        std::string               text;
         for (int i = 0; i < 10000; ++i) {
             text += "hello world foo bar baz this is a test string for benchmarking ";
         }
@@ -53,16 +53,16 @@ inline void benchAhoCorasick() {
 
         auto r = runBench("AhoCorasick::search [100 patterns, 250KB text]", 50, [&]() {
             utilxx::AhoCorasick<char> ac(patterns);
-            auto                             result = ac.search(text);
+            auto                      result = ac.search(text);
             (void)result;
         });
         printResult(r);
     }
 
     {
-        std::vector<std::string>         patterns = {"hello", "world"};
+        std::vector<std::string>  patterns = {"hello", "world"};
         utilxx::AhoCorasick<char> ac(patterns);
-        std::string                      text;
+        std::string               text;
         for (int i = 0; i < 10000; ++i) {
             text += "hello world this is a test ";
         }
@@ -75,9 +75,9 @@ inline void benchAhoCorasick() {
     }
 
     {
-        std::vector<std::string> patterns = {"<script>", "</script>", "<style>", "</style>"};
+        std::vector<std::string>  patterns = {"<script>", "</script>", "<style>", "</style>"};
         utilxx::AhoCorasick<char> ac(patterns);
-        std::string                      text;
+        std::string               text;
         for (int i = 0; i < 5000; ++i) {
             text += "<script>alert('xss')</script><style>body{}</style>normal text ";
         }
@@ -90,9 +90,9 @@ inline void benchAhoCorasick() {
     }
 
     {
-        std::vector<std::string>         patterns = {"hello"};
+        std::vector<std::string>  patterns = {"hello"};
         utilxx::AhoCorasick<char> ac(patterns);
-        std::string                      text;
+        std::string               text;
         for (int i = 0; i < 100000; ++i) {
             text += "no match here just regular text ";
         }

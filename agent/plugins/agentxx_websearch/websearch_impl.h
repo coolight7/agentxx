@@ -18,9 +18,9 @@
 ///   取回 choices[0].message.content 文本)
 #pragma once
 
+#include "asio/awaitable.hpp"
 #include "utilxx/http_client.h"
 #include "utilxx_base/string_util.h"
-#include "asio/awaitable.hpp"
 #include <charconv>
 #include <chrono>
 #include <expected>
@@ -181,8 +181,8 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const utilxx_base::Json
 }
 
 /// agentxx_web_fetch_markdown 执行体 (原 WebFetchUrlMarkdownTool::execute_async)
-inline asio::awaitable<std::string>
-    webFetchMarkdownExecuteAsync(const utilxx_base::Json& arguments) {
+inline asio::awaitable<std::string> webFetchMarkdownExecuteAsync(const utilxx_base::Json& arguments
+) {
     std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
         co_return R"({"error":"Arg `url` is empty"})";
@@ -211,15 +211,14 @@ inline asio::awaitable<std::string>
 /// - searchApiUrl 含 `{}` 占位符 (fmt::runtime), URL 编码后的 query 填入
 inline asio::awaitable<std::string> webSearchExecuteAsync(
     const utilxx_base::Json& arguments,
-    std::string_view           searchApiUrl,
-    bool                       convertHtml2markdown
+    std::string_view         searchApiUrl,
+    bool                     convertHtml2markdown
 ) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
         co_return R"({"error":"Arg `query` is empty"})";
     }
-    auto search_url
-        = fmt::format(fmt::runtime(searchApiUrl), utilxx::HttpClient::urlEncode(query));
+    auto search_url = fmt::format(fmt::runtime(searchApiUrl), utilxx::HttpClient::urlEncode(query));
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
     const auto headers = detail::parseHeaderArg(arguments);
@@ -229,7 +228,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
         // 转换 HTML 结果为 Markdown
-        auto resp = co_await utilxx::HttpClient::fetchMarkdown(search_url, headers, config);
+        auto resp    = co_await utilxx::HttpClient::fetchMarkdown(search_url, headers, config);
         out_resp_err = resp.error_or("unknown");
         if (resp.has_value()) {
             auto& data = resp.value();
@@ -268,7 +267,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
 /// - 经 OpenAI 兼容 chat/completions 非流式请求实现 (见文件头注释)
 inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
     const utilxx_base::Json& arguments,
-    const ModelSearchConfig&   modelCfg
+    const ModelSearchConfig& modelCfg
 ) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
@@ -293,21 +292,21 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
     // 构造 chat/completions 请求体: system+user 两条消息, temperature=0
     // (与原 OpenAIProvider 调用参数一致)
     utilxx_base::Json body = utilxx_base::Json::object();
-    body["model"]            = cfg.modelName;
-    body["temperature"]      = 0.0f;
-    body["messages"]         = utilxx_base::Json::array({
+    body["model"]          = cfg.modelName;
+    body["temperature"]    = 0.0f;
+    body["messages"]       = utilxx_base::Json::array({
         utilxx_base::Json{
-                            {"role", "system"},
-                            {"content",
-                     "You are a web search assistant. Search the internet "
-                             "for the user's query and provide comprehensive, "
-                             "accurate results with sources. Respond in the same "
-                             "language as the query."},
-                            },
+                          {"role", "system"},
+                          {"content",
+                   "You are a web search assistant. Search the internet "
+                         "for the user's query and provide comprehensive, "
+                         "accurate results with sources. Respond in the same "
+                         "language as the query."},
+                          },
         utilxx_base::Json{
-                            {"role", "user"},
-                            {"content", query},
-                            },
+                          {"role", "user"},
+                          {"content", query},
+                          },
     });
 
     auto extraHeaders = utilxx::HeaderMap{};

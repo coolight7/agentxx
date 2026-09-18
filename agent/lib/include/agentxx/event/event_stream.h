@@ -4,8 +4,6 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
-#include "utilxx/async_offload.h"
-#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -19,6 +17,8 @@
 #include "asio/use_awaitable.hpp"
 #include "neograph/graph/types.h"
 #include "neograph/types.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/container_util.h"
 #include <any>
 #include <atomic>
 #include <chrono>

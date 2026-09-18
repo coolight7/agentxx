@@ -368,8 +368,8 @@ static asio::awaitable<void> test_ws_server_close() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-        boost::beast::flat_buffer buf;
-        utilxx_base::AsioErrorCode  ec;
+        boost::beast::flat_buffer  buf;
+        utilxx_base::AsioErrorCode ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
         if (ec) {
             co_return;
@@ -426,8 +426,8 @@ static asio::awaitable<void> test_ws_invalid_path() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-        boost::beast::flat_buffer buf;
-        utilxx_base::AsioErrorCode  ec;
+        boost::beast::flat_buffer  buf;
+        utilxx_base::AsioErrorCode ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     });
 
@@ -555,7 +555,7 @@ static asio::awaitable<void> test_ws_concurrent_clients() {
             TEST_FAIL << "ws concurrent client " << c << ": connect failed: " << result.error()
                       << std::endl;
         }
-        asio::steady_timer       delay(executor, std::chrono::milliseconds(100));
+        asio::steady_timer         delay(executor, std::chrono::milliseconds(100));
         utilxx_base::AsioErrorCode dec;
         co_await delay.async_wait(asio::redirect_error(asio::use_awaitable, dec));
     }
@@ -992,8 +992,8 @@ static asio::awaitable<void> test_ws_send_after_close() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-        boost::beast::flat_buffer buf;
-        utilxx_base::AsioErrorCode  ec;
+        boost::beast::flat_buffer  buf;
+        utilxx_base::AsioErrorCode ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     });
 
@@ -1039,8 +1039,8 @@ static asio::awaitable<void> test_ws_close_code_reason() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-        boost::beast::flat_buffer buf;
-        utilxx_base::AsioErrorCode  ec;
+        boost::beast::flat_buffer  buf;
+        utilxx_base::AsioErrorCode ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
         if (ec) {
             co_return;
@@ -1098,8 +1098,8 @@ static asio::awaitable<void> test_ws_ping_too_large() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
     server.enableWebSocket("/ws", [](HttpServer::WsStream& ws) -> asio::awaitable<void> {
-        boost::beast::flat_buffer buf;
-        utilxx_base::AsioErrorCode  ec;
+        boost::beast::flat_buffer  buf;
+        utilxx_base::AsioErrorCode ec;
         co_await ws.async_read(buf, asio::redirect_error(asio::use_awaitable, ec));
     });
 
@@ -1185,9 +1185,9 @@ static asio::awaitable<void> test_ws_url_edge_cases() {
 static asio::awaitable<void> test_ws_ipv6_url() {
     // 先探测本机 IPv6 loopback 是否可用, 不可用则跳过
     {
-        asio::io_context         probeCtx;
+        asio::io_context           probeCtx;
         utilxx_base::AsioErrorCode ec;
-        asio::ip::tcp::acceptor  probe(probeCtx);
+        asio::ip::tcp::acceptor    probe(probeCtx);
         probe.open(asio::ip::tcp::v6(), ec);
         if (!ec) {
             probe.bind(asio::ip::tcp::endpoint(asio::ip::make_address_v6("::1"), 0), ec);

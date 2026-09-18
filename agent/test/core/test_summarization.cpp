@@ -246,8 +246,7 @@ static size_t maxContextTokensOf(
 /// filesystem 风格: 按 args["path"] 去重, 仅截断旧 response
 static agentxx::middleware::SummarizationToolHandle makeReadFileHandle() {
     agentxx::middleware::SummarizationToolHandle th;
-    th.generateDeduplicationKey
-        = [](const utilxx_base::Json& args) -> std::optional<std::string> {
+    th.generateDeduplicationKey = [](const utilxx_base::Json& args) -> std::optional<std::string> {
         if (!args.is_object()) {
             return std::nullopt;
         }

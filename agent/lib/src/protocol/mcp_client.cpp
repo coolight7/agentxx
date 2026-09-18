@@ -1,8 +1,8 @@
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
-#include "utilxx/async_offload.h"
 #include "agentxx/util/exception.h"
+#include "utilxx/async_offload.h"
 #include <fmt/format.h>
 #include <thread>
 #if AGENTXX_ENABLE_BOOST_PROCESS
@@ -23,9 +23,6 @@
 #endif
 #endif
 
-#include "utilxx_base/async_mutex.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include "asio/cancel_after.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -35,6 +32,9 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "asio/write.hpp"
+#include "utilxx_base/async_mutex.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <cctype>
 #include <iostream>
 #include <sstream>
@@ -235,7 +235,7 @@ struct McpClient::StdioTransport {
         std::string buffer;
         while (running.load()) {
             utilxx_base::AsioErrorCode ec;
-            std::size_t              n = co_await asio::async_read_until(
+            std::size_t                n = co_await asio::async_read_until(
                 *stdoutPipe,
                 asio::dynamic_buffer(buffer, 4096),
                 '\n',
@@ -1536,8 +1536,7 @@ asio::awaitable<std::expected<json, std::string>>
     auto req     = makeRequest(id, method, params);
     auto headers = buildModernHttpHeaders(method, params);
 
-    auto doPost
-        = [&]() -> asio::awaitable<std::expected<utilxx::HttpResponse, std::string>> {
+    auto doPost = [&]() -> asio::awaitable<std::expected<utilxx::HttpResponse, std::string>> {
         co_return co_await utilxx::HttpClient::postAsync(
             config_.serverUrl,
             req,
@@ -1642,8 +1641,7 @@ asio::awaitable<std::expected<json, std::string>>
 
     auto req = makeRequest(id, method, params);
 
-    auto doPost
-        = [&]() -> asio::awaitable<std::expected<utilxx::HttpResponse, std::string>> {
+    auto doPost = [&]() -> asio::awaitable<std::expected<utilxx::HttpResponse, std::string>> {
         // headers 每次请求时重建: 反映最新的 mcpSessionId_ (会话重建后复用本 lambda)
         auto hdrs = buildHttpHeaders();
         co_return co_await utilxx::HttpClient::postAsync(
@@ -1834,7 +1832,7 @@ asio::awaitable<std::expected<json, std::string>>
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     {
-        auto                     wguard = co_await stdioWriteMutex_->lock();
+        auto                       wguard = co_await stdioWriteMutex_->lock();
         utilxx_base::AsioErrorCode wec;
         co_await asio::async_write(
             *stdio_->stdinPipe,

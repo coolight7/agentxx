@@ -1,8 +1,8 @@
 #include "agentxx/agent/session_store.h"
 
 #include "agentxx/agent/config_static.h"
-#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
+#include "utilxx_base/container_util.h"
 #include "utilxx_base/hash.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/path_sanitize.h"
@@ -240,8 +240,9 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     // 打开失败 (权限/磁盘) 抛异常, 由上层 catchError 记录日志
     entry.dbs->sessionDb.open((dir / "session.db").string());
     ensureSchema(entry.dbs->sessionDb);
-    entry.lastUseSeq   = ++dbsUseSeq_;
-    auto [insertIt, _] = utilxx_base::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(entry));
+    entry.lastUseSeq = ++dbsUseSeq_;
+    auto [insertIt, _]
+        = utilxx_base::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(entry));
     // 连接数上限 (LRU 淘汰; 刚插入的条目为最新, 不会被淘汰)
     evictLruDbs();
     return *insertIt->second.dbs;
@@ -701,7 +702,7 @@ void SessionStore::appendViewMessage(
 }
 
 void SessionStore::saveLlmMessages(
-    std::string_view           sessionId,
+    std::string_view         sessionId,
     const utilxx_base::Json& llmMessages
 ) {
     std::lock_guard<std::mutex> lock(mutex_);

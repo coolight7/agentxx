@@ -80,7 +80,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Read (回调)
     static auto readFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
         utilxx_base::Json j;
         try {
             j = utilxx_base::Json::parse(args);
@@ -142,7 +142,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto globFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
         utilxx_base::Json j;
         try {
             j = utilxx_base::Json::parse(args);
@@ -196,7 +196,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto grepFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
         utilxx_base::Json j;
         try {
             j = utilxx_base::Json::parse(args);
@@ -258,7 +258,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Edit (回调)
     static auto editFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
         utilxx_base::Json j;
         try {
             j = utilxx_base::Json::parse(args);
@@ -275,10 +275,10 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         out->summary       = makeTestString(" · " + path);
         if (!in->is_error) {
             utilxx_base::Json diffItem;
-            diffItem["kind"]        = "diff";
-            diffItem["path"]        = std::move(path);
-            diffItem["old_str"]     = std::move(oldStr);
-            diffItem["new_str"]     = std::move(newStr);
+            diffItem["kind"]      = "diff";
+            diffItem["path"]      = std::move(path);
+            diffItem["old_str"]   = std::move(oldStr);
+            diffItem["new_str"]   = std::move(newStr);
             utilxx_base::Json arr = utilxx_base::Json::array();
             arr.push_back(std::move(diffItem));
             out->items_json = makeTestString(arr.dump());
@@ -346,7 +346,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // 没有运行时装饰"的渲染路径 (实时调用的装饰优先级更高, 见 renderClientTool)
     static auto planningFn
         = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view    args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
         utilxx_base::Json a;
         try {
             a = args.empty() ? utilxx_base::Json::object() : utilxx_base::Json::parse(args);
@@ -396,7 +396,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
 
         utilxx_base::Json items   = utilxx_base::Json::array();
-        const auto          roadmap = plan.value("roadmap", std::string{});
+        const auto        roadmap = plan.value("roadmap", std::string{});
         if (!roadmap.empty()) {
             utilxx_base::Json diagram;
             diagram["kind"]    = "diagram";

@@ -10,10 +10,10 @@
 
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
-#include "pluginxx/host/domain_hooks.h"
-#include "pluginxx/host/host_core.h"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
+#include "pluginxx/host/domain_hooks.h"
+#include "pluginxx/host/host_core.h"
 #include "utilxx_base/json.h"
 #include <array>
 #include <atomic>
@@ -164,7 +164,7 @@ private:
     std::string                   description_;
     std::string                   parametersJson_;
     AgentxxPluginToolSpec         spec_;
-    utilxx_base::Json           parameters_;
+    utilxx_base::Json             parameters_;
     std::weak_ptr<PluginInstance> instance_;
 };
 
@@ -502,7 +502,7 @@ public:
         return setPromptJson(inst, strToSv(prompt_json));
     }
 
-    void restorePromptBackup(PluginInstance* inst);
+    void        restorePromptBackup(PluginInstance* inst);
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
     std::string getLanguage();

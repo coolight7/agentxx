@@ -14,9 +14,9 @@
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 
+#include "fmt/format.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
-#include "fmt/format.h"
 #include <optional>
 #include <string>
 #include <string_view>

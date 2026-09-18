@@ -14,8 +14,8 @@
 #include "utilxx_base/json.h"
 
 #include "agentxx/agent/base_agent.h"
-#include "utilxx/http_server.h"
 #include "agentxx/version.h"
+#include "utilxx/http_server.h"
 
 namespace agentxx {
 namespace protocol {
@@ -153,9 +153,9 @@ private:
     std::condition_variable workersCv_;
 
     // -- 出站请求追踪 (agent→client) --
-    mutable std::mutex                                                    pendingMu_;
+    mutable std::mutex                                                  pendingMu_;
     std::map<int64_t, std::shared_ptr<std::promise<utilxx_base::Json>>> pending_;
-    std::atomic<int64_t>                                                  nextOutboundId_{1};
+    std::atomic<int64_t>                                                nextOutboundId_{1};
 };
 
 // ===========================================================================
@@ -171,16 +171,16 @@ public:
 
     struct Config {
         utilxx::HttpServer::Config httpConfig;
-        std::string              acpEndpoint   = "/acp";
-        std::string              sseEndpoint   = "/acp/sse";
-        std::string              serverName    = "agentxx-acp";
-        std::string              serverVersion = std::string{agentxx::kVersion};
-        std::chrono::seconds     asyncTimeout{120};
+        std::string                acpEndpoint   = "/acp";
+        std::string                sseEndpoint   = "/acp/sse";
+        std::string                serverName    = "agentxx-acp";
+        std::string                serverVersion = std::string{agentxx::kVersion};
+        std::chrono::seconds       asyncTimeout{120};
     };
 
     HttpAcpServer(
         std::shared_ptr<agentxx::agent::BaseAgent> agent,
-        utilxx_base::Json                        agentInfo,
+        utilxx_base::Json                          agentInfo,
         Config                                     config
     );
 
@@ -239,8 +239,8 @@ private:
 
     void writeJsonResponse(
         utilxx::HttpServer::Response& resp,
-        boost::beast::http::status  status,
-        const utilxx_base::Json&  body
+        boost::beast::http::status    status,
+        const utilxx_base::Json&      body
     );
 
     utilxx_base::Json
@@ -253,10 +253,10 @@ private:
     Config                                     config_;
     std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     AcpProtocolHandler                         handler_;
-    std::unique_ptr<utilxx::HttpServer>          httpServer_;
+    std::unique_ptr<utilxx::HttpServer>        httpServer_;
 
     // 挂起的异步响应追踪 (HTTP 传输用)
-    std::mutex                                                            pendingMutex_;
+    std::mutex                                                          pendingMutex_;
     std::map<int64_t, std::shared_ptr<std::promise<utilxx_base::Json>>> pendingResponses_;
 };
 

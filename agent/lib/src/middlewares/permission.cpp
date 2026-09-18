@@ -205,7 +205,7 @@ const ToolPermissionSpec* PermissionMiddlewareHandle::toolPermission(std::string
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
-    std::string_view     toolName,
+    std::string_view   toolName,
     utilxx_base::Json& args
 ) {
     // 未声明权限的工具不参与权限判定 (直接放行): 权限限制随工具来源 (插件) 走,
@@ -219,7 +219,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
 
 asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
     std::string_view          toolName,
-    utilxx_base::Json&      args,
+    utilxx_base::Json&        args,
     const ToolPermissionSpec& spec
 ) {
     // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
@@ -269,11 +269,11 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::checkTargetPermission(
-    std::string_view     toolName,
+    std::string_view   toolName,
     utilxx_base::Json& args,
-    size_t               index,
-    std::string_view     target,
-    std::string_view     category
+    size_t             index,
+    std::string_view   target,
+    std::string_view   category
 ) {
     const auto sessionId = args.value("sessionId", std::string{});
     if (target.empty()) {
@@ -406,11 +406,11 @@ std::vector<PathDecision> PermissionMiddlewareHandle::decidePaths(
 }
 
 asio::awaitable<bool> PermissionMiddlewareHandle::requestPermission(
-    std::string_view     toolName,
+    std::string_view   toolName,
     utilxx_base::Json& args,
-    size_t               index,
-    std::string          target,
-    std::string_view     category
+    size_t             index,
+    std::string        target,
+    std::string_view   category
 ) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr) {

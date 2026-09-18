@@ -42,7 +42,7 @@ public:
 
     struct LoadedSession {
         std::vector<ViewMessage> viewMessages;
-        utilxx_base::Json      llmMessages = utilxx_base::Json::array();
+        utilxx_base::Json        llmMessages = utilxx_base::Json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
     };

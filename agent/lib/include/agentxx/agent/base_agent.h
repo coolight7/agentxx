@@ -14,11 +14,11 @@
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/tools/share_store.h"
 #include "agentxx/tools/tool.h"
-#include "utilxx_base/log.h"
 #include "asio/io_context.hpp"
 #include "neograph/graph/engine.h"
 #include "neograph/graph/registry.h"
 #include "neograph/graph/types.h"
+#include "utilxx_base/log.h"
 #include <chrono>
 #include <functional>
 #include <memory>

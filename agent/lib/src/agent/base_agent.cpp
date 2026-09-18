@@ -10,10 +10,7 @@
 #include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "utilxx/async_offload.h"
-#include "utilxx/diff_util.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/string_util.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/use_awaitable.hpp"
@@ -21,6 +18,9 @@
 #include "neograph/graph/compiler.h"
 #include "neograph/graph/validator.h"
 #include "neograph/llm/openai_provider.h"
+#include "utilxx/async_offload.h"
+#include "utilxx/diff_util.h"
+#include "utilxx_base/string_util.h"
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -1011,11 +1011,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                         agentxx::middleware::MiddlewareContext::graphDataKey_interruptNode
                     );
                 r.interrupt_value = agentxx::util::toNeographJson(
-                    agentContext->middlewareHandleContext
-                        ->getGraphDataItemValue<utilxx_base::Json>(
-                            sessionId,
-                            agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
-                        )
+                    agentContext->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
+                        sessionId,
+                        agentxx::middleware::MiddlewareContext::graphDataKey_interruptValue
+                    )
                 );
                 recovered = std::move(r);
             }
@@ -1073,11 +1072,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     if (turnResult.hasError) {
         // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
-        auto& im
-            = agentContext->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
-                sessionId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-            );
+        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
+            sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+        );
         if (im.is_array()) {
             XX_LOGD(
                 "Recover(By exception) LLM-Messages Context: old({}) -> new({})",

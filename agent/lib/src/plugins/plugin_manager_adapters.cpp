@@ -4,13 +4,13 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/permission.h"
-#include "pluginxx/runtime/op_driver.h"
 #include "agentxx/plugin/plugin_graph_node.h"
-#include "utilxx/async_offload.h"
-#include "utilxx_base/log.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include "neograph/graph/registry.h"
+#include "pluginxx/runtime/op_driver.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/log.h"
 
 #include <algorithm>
 
@@ -89,8 +89,9 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
     // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象), 供 pluginxx 运行时使用
     utilxx::CancelTokenPtr cancelToken;
     if (agentCtx) {
-        cancelToken
-            = agentxx::util::adaptCancelToken(agentxx::tools::getSessionCancelToken(agentCtx, arguments));
+        cancelToken = agentxx::util::adaptCancelToken(
+            agentxx::tools::getSessionCancelToken(agentCtx, arguments)
+        );
     }
 
     auto       ex       = co_await asio::this_coro::executor;

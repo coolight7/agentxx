@@ -3,10 +3,10 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/summarization.h"
-#include "utilxx_base/json.h"
-#include "utilxx_base/log.h"
 #include "fmt/format.h"
 #include "neograph/types.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>

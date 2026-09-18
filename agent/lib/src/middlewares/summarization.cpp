@@ -8,10 +8,10 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/tools/subagent.h"
-#include "utilxx/async_offload.h"
 #include "agentxx/util/exception.h"
-#include "utilxx_base/string_util.h"
 #include "fmt/format.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
 #include <limits>

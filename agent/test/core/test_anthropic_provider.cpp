@@ -1,8 +1,8 @@
 #include "agentxx-test/core/test_anthropic_provider.h"
 #include "agentxx/protocol/anthropic_provider.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "utilxx/http_client.h"
 #include "utilxx/http_server.h"
-#include "agentxx/util/neograph_json_bridge.h"
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -410,7 +410,7 @@ public:
     std::string                 lastSessionIdHeader;
     std::string                 lastOpencodeSessionHeader;
 
-    std::vector<std::string>           sseChunks;
+    std::vector<std::string>         sseChunks;
     std::optional<utilxx_base::Json> customResponse;
 
     static std::string sseEvent(std::string_view event, std::string_view data) {
@@ -1499,7 +1499,7 @@ public:
         thread = std::thread([this]() {
             while (!stopped.load()) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    sock(ioCtx);
+                asio::ip::tcp::socket      sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -1516,7 +1516,7 @@ public:
         stopped.store(true);
         if (acceptor) {
             utilxx_base::AsioErrorCode ec;
-            asio::ip::tcp::socket    dummy(ioCtx);
+            asio::ip::tcp::socket      dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }
@@ -1679,7 +1679,7 @@ public:
         thread = std::thread([this]() {
             while (!stopped.load()) {
                 utilxx_base::AsioErrorCode ec;
-                asio::ip::tcp::socket    sock(ioCtx);
+                asio::ip::tcp::socket      sock(ioCtx);
                 acceptor->accept(sock, ec);
                 if (ec) {
                     break;
@@ -1696,7 +1696,7 @@ public:
         stopped.store(true);
         if (acceptor) {
             utilxx_base::AsioErrorCode ec;
-            asio::ip::tcp::socket    dummy(ioCtx);
+            asio::ip::tcp::socket      dummy(ioCtx);
             dummy.connect(ep, ec);
             acceptor->close(ec);
         }

@@ -20,9 +20,9 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/io/tui/tui_theme.h"
-#include "utilxx_base/json.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "utilxx_base/json.h"
 #include <algorithm>
 #include <memory>
 #include <string>

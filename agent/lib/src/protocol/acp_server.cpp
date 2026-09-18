@@ -1,8 +1,8 @@
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/version.h"
 
-#include "utilxx_base/container_util.h"
 #include "agentxx/util/exception.h"
+#include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <fmt/format.h>
@@ -547,7 +547,7 @@ void AcpProtocolHandler::emitAgentMessageChunk(std::string_view sessionId, std::
 
 HttpAcpServer::HttpAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    utilxx_base::Json                        agentInfo,
+    utilxx_base::Json                          agentInfo,
     Config                                     config
 ) :
     config_(std::move(config)),
@@ -592,7 +592,7 @@ void HttpAcpServer::setupHandlerSink() {
     handler_.setNotificationSink([this](const utilxx_base::Json& envelope) {
         if (!envelope.contains("method") && envelope.contains("id") && !envelope["id"].is_null()) {
             utilxx_base::Json id    = envelope["id"];
-            int64_t             idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
+            int64_t           idVal = id.is_number_integer() ? id.get<int64_t>() : -1;
 
             std::unique_lock lock(pendingMutex_);
             auto             it = pendingResponses_.find(idVal);
@@ -630,16 +630,22 @@ void HttpAcpServer::setupRoutes() {
     using Handler = utilxx::HttpServer::Handler;
 
     auto acpHandler = std::make_shared<Handler>(Handler(
-        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&  req,
+            utilxx::HttpServer::Response& resp,
+            std::string_view
+        ) -> asio::awaitable<void> {
             co_await handleAcpRequest(req, resp);
         }
     ));
     httpServer_->router().add(config_.acpEndpoint, 2, acpHandler);
 
     auto sseHandler = std::make_shared<Handler>(Handler(
-        [this](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-            -> asio::awaitable<void> {
+        [this](
+            utilxx::HttpServer::Request&  req,
+            utilxx::HttpServer::Response& resp,
+            std::string_view
+        ) -> asio::awaitable<void> {
             co_await handleSseRequest(req, resp);
         }
     ));
@@ -652,7 +658,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
 ) {
     namespace http = boost::beast::http;
 
-    bool                isError     = false;
+    bool              isError     = false;
     utilxx_base::Json requestJson = agentxx::util::catchError<utilxx_base::Json>(
         [&req]() -> utilxx_base::Json {
             return utilxx_base::Json::parse(req.body());
@@ -714,7 +720,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
             resp,
             http::status::accepted,
             utilxx_base::Json{
-                {"jsonrpc", "2.0"                        },
+                {"jsonrpc", "2.0"                      },
                 {"id",      utilxx_base::Json(nullptr) },
                 {"result",  utilxx_base::Json::object()}
         }
@@ -800,8 +806,8 @@ void HttpAcpServer::stopSSE() {}
 
 void HttpAcpServer::writeJsonResponse(
     utilxx::HttpServer::Response& resp,
-    boost::beast::http::status  status,
-    const utilxx_base::Json&  body
+    boost::beast::http::status    status,
+    const utilxx_base::Json&      body
 ) {
     resp.result(status);
     resp.set(boost::beast::http::field::content_type, "application/json");
@@ -828,7 +834,7 @@ utilxx_base::Json
 
 StdioAcpServer::StdioAcpServer(
     std::shared_ptr<agentxx::agent::BaseAgent> agent,
-    utilxx_base::Json                        agentInfo
+    utilxx_base::Json                          agentInfo
 ) :
     agent_(std::move(agent)),
     handler_(
@@ -880,7 +886,7 @@ void StdioAcpServer::run(std::istream& in, std::ostream& out) {
         }
 
         utilxx_base::Json env;
-        bool                parsed = agentxx::util::catchError<bool>(
+        bool              parsed = agentxx::util::catchError<bool>(
             [&]() -> bool {
                 env = utilxx_base::Json::parse(line);
                 return true;
