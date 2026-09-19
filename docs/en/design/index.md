@@ -66,7 +66,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_string_html_to_markdown` | Converts HTML to Markdown. |
 | | `agentxx_string_regexp` | Regular expression matching, replacement, and extraction. |
 | **System** | `agentxx_get_current_datetime` | Obtains current system date and time. |
-| | `agentxx_get_system_core_info` | Retrieves CPU, memory, and GPU utilization metrics. |
+| | `agentxx_get_system_core_info` | Retrieves CPU (utilization and logical core count), memory, and GPU utilization metrics. |
 | **UI Control** | `agentxx_ui_control_keyboard_mouse` | Mouse and keyboard automation on Windows (Windows only; provided by the `agentxx_computer_use` plugin, depends: screen_capture). |
 | **Screen Capture** | `agentxx_screen_capture` | Screen capture and streaming (Windows only). |
 | **Audio Stream** | `agentxx_audio_stream` | System/application/microphone audio capture (**skipped on all platforms**: WASAPI implementation not enabled, stub only; see platform matrix in plugins.md). |

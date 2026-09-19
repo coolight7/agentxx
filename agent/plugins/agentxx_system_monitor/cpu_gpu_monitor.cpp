@@ -118,6 +118,7 @@ public:
 
     asio::awaitable<CpuGpuUsage> query() {
         CpuGpuUsage result;
+        result.cpuCoreCount = cpuCoreCount_;
 
         queryMemoryInfo(result);
 
@@ -445,8 +446,24 @@ private:
         return true;
     }
 
+    /// 查询 CPU 逻辑核心数 (含超线程; 取不到返回 0)
+    /// - 用 GetActiveProcessorCount(ALL_PROCESSOR_GROUPS): 逻辑核超过 64 时系统会划分
+    ///   多个处理器组, GetSystemInfo 只报告当前组的数量, 这里需要整机总数
+    static uint32_t queryCpuCoreCount() {
+        DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+        if (count == 0) {
+            SYSTEM_INFO sysInfo = {};
+            GetNativeSystemInfo(&sysInfo);
+            count = sysInfo.dwNumberOfProcessors;
+        }
+        return static_cast<uint32_t>(count);
+    }
+
     ULONGLONG prevIdleTime_  = 0;
     ULONGLONG prevTotalTime_ = 0;
+
+    /// CPU 逻辑核心数 (构造时取一次; 展示口径与 GetSystemTimes 的整机利用率一致)
+    uint32_t cpuCoreCount_ = queryCpuCoreCount();
 
     /// GPU 适配器枚举缓存 (每实例一份; 见 [GpuAdapterCache] 说明)
     GpuAdapterCache _adapterCache;
@@ -490,6 +507,8 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace agentxx_system_monitor_plugin {
@@ -568,6 +587,7 @@ public:
 
     asio::awaitable<CpuGpuUsage> query() {
         CpuGpuUsage result;
+        result.cpuCoreCount = cpuCoreCount_;
 
         CpuTimes oldSample = _sample;
         if (_sample.total == 0 || _sample.idle == 0) {
@@ -608,8 +628,21 @@ public:
 protected:
 
     CpuTimes _sample;
+    /// CPU 逻辑核心数 (构造时取一次; 展示口径与 /proc/stat 的整机利用率一致)
+    uint32_t cpuCoreCount_ = queryCpuCoreCount();
     /// GPU 枚举缓存 (每实例一份; 见 [LinuxGpuCache] 的说明)
     LinuxGpuCache _gpuCache;
+
+    /// 查询 CPU 逻辑核心数 (含超线程; 取不到返回 0)
+    /// - 取**在线**核数: 离线核不参与 /proc/stat 的整机时间累计, 显示在线数量才与利用率口径一致
+    static uint32_t queryCpuCoreCount() {
+        long online = ::sysconf(_SC_NPROCESSORS_ONLN);
+        if (online > 0) {
+            return static_cast<uint32_t>(online);
+        }
+        unsigned int hw = std::thread::hardware_concurrency();
+        return hw > 0 ? static_cast<uint32_t>(hw) : 0;
+    }
 
     static asio::awaitable<std::string> readFileContent(std::string_view path) {
 #if ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
@@ -891,6 +924,8 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 
 #else
 
+#include <thread>
+
 namespace agentxx_system_monitor_plugin {
 
 class CpuGpuMonitor::Impl {
@@ -899,7 +934,19 @@ public:
     Impl() {}
 
     asio::awaitable<CpuGpuUsage> query() {
-        co_return CpuGpuUsage{};
+        CpuGpuUsage result;
+        result.cpuCoreCount = cpuCoreCount_;
+        co_return result;
+    }
+
+private:
+
+    /// CPU 逻辑核心数 (构造时取一次; 平台未实现时退回标准库探测, 取不到为 0)
+    uint32_t cpuCoreCount_ = queryCpuCoreCount();
+
+    static uint32_t queryCpuCoreCount() {
+        unsigned int hw = std::thread::hardware_concurrency();
+        return hw > 0 ? static_cast<uint32_t>(hw) : 0;
     }
 };
 

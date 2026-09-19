@@ -131,6 +131,7 @@ asio::awaitable<TestResult>
             auto out = co_await tool->execute_async(utilxx_base::Json::object());
             TEST_INFO << "get_system_core_info output:\n" << out << std::endl;
             XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(out.find("cores") != std::string::npos); ///< CPU 核数随利用率一起给出
             XX_TEST_EXPECT_TRUE(out.find("Memory:") != std::string::npos);
         }
     }
@@ -174,6 +175,9 @@ asio::awaitable<TestResult>
             if (j.is_object()) {
                 double cpu = j.value("cpu", -1.0);
                 XX_TEST_EXPECT_TRUE(cpu >= 0.0 && cpu <= 100.0);
+                /// CPU 逻辑核数: client 侧展示 “CPU Nx · P%” 的数据来源
+                int64_t cores = j.value<int64_t>("cpu_cores", 0);
+                XX_TEST_EXPECT_TRUE(cores > 0);
                 uint64_t total = j.value("mem_total_mb", uint64_t{0});
                 XX_TEST_EXPECT_TRUE(total > 0);
                 XX_TEST_EXPECT_TRUE(j.contains("gpus"));

@@ -1217,20 +1217,29 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
             XX_TEST_EXPECT_TRUE(hasSmSection);
 
-            // usage 事件: 新版 Append 段风格为 “|- CPU 36%” / “|- RAM 52% (8G/16G)” / “|- GPU 42%”
+            // usage 事件: Append 段风格为 “|- CPU 12x · 36%” / “|- RAM 52% · 8G/16G” / “|- GPU 42%”
             agentxx::agent::WirePluginData usage;
             usage.plugin = "agentxx_system_monitor";
             usage.event  = "usage";
             usage.data
-                = R"({"cpu":35.5,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
+                = R"({"cpu":35.5,"cpu_cores":12,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
             mgr->onPluginData(usage);
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_system_monitor.usage") {
                     std::string dump = sec.items.dump();
-                    // CPU 四舍五入到整数 (35.5 -> 36)
+                    // CPU 段首个 item 的完整文案: “|- CPU 12x · 36%”
+                    // (核数 12 -> “12x”, 利用率四舍五入到整数 35.5 -> 36)
+                    XX_TEST_EXPECT_TRUE(sec.items.is_array() && !sec.items.empty());
+                    if (sec.items.is_array() && !sec.items.empty()) {
+                        XX_TEST_EXPECT_EQ(
+                            sec.items[0].value("text", std::string{}),
+                            std::string{"|- CPU 12x · 36%"}
+                        );
+                    }
                     XX_TEST_EXPECT_TRUE(dump.find("CPU") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("12x") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(
                         dump.find("36%") != std::string::npos
                         || dump.find("35.5%") != std::string::npos
@@ -1243,6 +1252,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     // GPU 仅显示峰值百分比, 不含名称及 MB
                     XX_TEST_EXPECT_TRUE(dump.find("GPU") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("42%") != std::string::npos);
+                }
+            }
+
+            // 旧版本 agent 侧未上报 cpu_cores (取值 0): 回退为不带核数的 “|- CPU 71%”
+            usage.data = R"({"cpu":71.2,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384})";
+            mgr->onPluginData(usage);
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_system_monitor.usage") {
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("CPU 71%") != std::string::npos);
                 }
             }
 

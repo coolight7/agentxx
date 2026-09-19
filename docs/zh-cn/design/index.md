@@ -71,7 +71,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
 | | `agentxx_string_regexp` | 正则搜索/替换/移除 |
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
-| | `agentxx_get_system_core_info` | 获取 CPU/内存/GPU 使用率 |
+| | `agentxx_get_system_core_info` | 获取 CPU (使用率/逻辑核数)/内存/GPU 使用率 |
 | **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows, 由 `agentxx_computer_use` 插件提供, depends: screen_capture) |
 | **屏幕捕获** | `agentxx_screen_capture` | 屏幕截图/流式捕获 (仅 Windows) |
 | **音频流** | `agentxx_audio_stream` | 系统/程序/麦克风音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现; 平台矩阵见 plugins.md) |
