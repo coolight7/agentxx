@@ -8,9 +8,9 @@
 
 Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
-- **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `AgentxxPluginStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
+- **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `PluginxxStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
 - **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
-- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free` (核心 vtable 内存管理操作) 管理，接收方用后 `host->free`；字符串复制采用头文件内联助手 `agentxx_plugin_strdup(host, ...)`
+- **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free` (核心 vtable 内存管理操作) 管理，接收方用后 `host->free`；字符串复制采用头文件内联助手 `pluginxx_strdup(host, ...)`
 - **原生协程异步支持**：经 `plugin_kit.h` 的 `Task<T>`，插件协程执行于宿主 IO 线程，挂起让出、完成经 IO 线程回调唤醒，宿主与插件的协程执行可互相交错切换，且运行于同一线程无锁，无轮询、无私有事件循环
 - **单线程会话**：宿主会话可变状态仅在主 IO 线程串行访问；插件注册/状态访问由宿主内部按需 `post` 回 IO 线程，插件无感
 
@@ -27,20 +27,20 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
-插件动态库 (任意编译器) ── AGENTXX_PLUGIN_EXPORT 入口 ── PluginBase 上下文堆 ── SDK 注册族
+插件动态库 (任意编译器) ── PLUGINXX_EXPORT 入口 ── PluginBase 上下文堆 ── SDK 注册族
 ```
 
 - **核心 vtable 冻结**：仅 `alloc/free + query_interface`，永不增删；一切宿主能力按稳定 `IID` 字符串查询独立接口表获取 (`AGENTXX_PLUGIN_QUERY_IFACE` 宏)
 - **严格 ABI 规约**：
   - 8 字节结构体对齐：头文件统一包含 `#pragma pack(push, 8)` / `#pragma pack(pop)`
   - 定长基础数据类型：禁止无修饰 `int/long/size_t`，跨边界统一采用 `int32_t`、`int64_t`、`uint64_t` 等定长类型
-  - 明确调用约定：跨边界导出符号与函数指针一律携带宏 `AGENTXX_PLUGIN_CALL` (Windows 平台定义为 `__stdcall`，x64 Unix 平台为空)
+  - 明确调用约定：跨边界导出符号与函数指针一律携带宏 `PLUGINXX_CALL` (Windows 平台定义为 `__stdcall`，x64 Unix 平台为空)
   - 结构体传参与返回值：跨边界禁止值传递聚合结构体，入参一律为指针 (`const Struct*`)；结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码 (0 表示成功)
-  - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `agentxx_plugin_strdup`
-  - C++ 辅助便捷层：`AgentxxPluginStringView` 与 `AgentxxPluginString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `agentxx_plugin_string_free` 重载
+  - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `pluginxx_strdup`
+  - C++ 辅助便捷层：`PluginxxStringView` 与 `PluginxxString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `pluginxx_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (宿主未实现该子能力，调用前判空)
-- **版本限制**：全局 `AGENTXX_PLUGIN_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时要求 `>=` 宿主版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；操作 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`AgentxxPluginOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
+- **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均重置为 1，加载时要求 `>=` 宿主版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由宿主内部投递同步等待；操作 `start/cancel` 由宿主在 IO 线程驱动 (单次 <~1ms)；`PluginxxOperatorNotify.done` 可任意线程回调；宿主派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 - **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
 
 ---
@@ -63,13 +63,13 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 ## 4. 导出符号控制
 
-插件动态库默认隐藏全部符号，仅导出宿主按名查找的入口符号。入口函数必须以 `AGENTXX_PLUGIN_EXPORT` 标记 (位于 `extern "C"` 内)：
+插件动态库默认隐藏全部符号，仅导出宿主按名查找的入口符号。入口函数必须以 `PLUGINXX_EXPORT` 标记 (位于 `extern "C"` 内)：
 
 ```c
 #include "agentxx/plugin/api/plugin_api.h"
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void);
-extern "C" AGENTXX_PLUGIN_EXPORT int32_t agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx);
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void);
+extern "C" PLUGINXX_EXPORT int32_t agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx);
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
 ```
 
 - **入口符号集**：
@@ -126,7 +126,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/宿主 vtable/入口符号)、`tables.h` (通用接口表: events/capabilities/scheduler/coroutine_runtime/plugins/config/cancel/json/log/tasks) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 宿主侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 宿主控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
-| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `AgentxxPluginSubscription` + 幂等撤销)、`domain_hooks.h` (领域钩子 `DomainHooks`: 通用表需要宿主数据的入口)、`host_core.h` (宿主核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (宿主生命周期骨架 `PluginHostLifecycle<InstanceT>`: 装载/启停/禁用启用/卸载/级联依赖) |
+| `pluginxx/host/` | `pluginxx` | 宿主侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `PluginxxSubscription` + 幂等撤销)、`domain_hooks.h` (领域钩子 `DomainHooks`: 通用表需要宿主数据的入口)、`host_core.h` (宿主核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (宿主生命周期骨架 `PluginHostLifecycle<InstanceT>`: 装载/启停/禁用启用/卸载/级联依赖) |
 
 - **通用表实现整体在 `cxx_pluginxx`**: log/json/config/plugins/events/scheduler/
   coroutine_runtime/tasks/cancel/capabilities 十张表的**定义与实现**都在内核 ——
@@ -304,10 +304,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view args_json,
                std::string_view tid,
                std::string_view workDir,
-               const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
                 ArgReader args(args_json);
                 std::string workDirStr(workDir);
-                if (agentxx_plugin_cancel_is_requested(cancel)) {
+                if (pluginxx_cancel_is_requested(cancel)) {
                     throw CancelledException("cancelled");
                 }
                 // 业务体直接 co_await 现成的 asio 协程实现 (无需局部 io_context + run())
@@ -330,7 +330,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         });
 
         // 7. 能力 (跨插件通用 RPC 通道)
-        capability(ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller,
+        capability(ctx, "my.cap", [](MyPluginCtx& c, const PluginxxHost* caller,
                                      std::string_view method, std::string_view args) {
             return "{}";
         });
@@ -359,7 +359,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - 支持 `registerCallback(key, cb)` 注册基于会话标识的取消回调，支持 RAII `ScopedRegistration` 守卫，提供排他互斥与防悬挂锁保护，避免回调访问已析构的局部资源
    - 适用于长时间运行的外部进程或底层阻塞 IO（如 `agentxx_execute_command`），一旦宿主发起取消即可毫秒级即时终止子进程组，无需等待轮询间隔
 5. **统一异步操作模型 (操作 start/cancel)**：
-   - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `AgentxxPluginOperatorNotify.done(status,payload)` 恰好一次上报
+   - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `PluginxxOperatorNotify.done(status,payload)` 恰好一次上报
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
      等待插件本地 reactor 上的内核就绪事件，由桥按声明式受控轮询推进（§16.5）
@@ -717,7 +717,7 @@ Closing → CloseFailed → Closing (可重试)
 - `done` 可从任意线程调用；payload 仅在本次调用内借用，宿主第一步复制。
 - 一个 Operation 只产生一个终态：`OK` / `CANCELLED` / `FAILED`；终态之后的
   `cancel` 为空操作，不再进入插件代码。
-- 取消通过不透明 `AgentxxPluginCancelToken` 查询（`is_cancelled`），插件不得把
+- 取消通过不透明 `PluginxxCancelToken` 查询（`is_cancelled`），插件不得把
   `volatile` 标志或 ABI 原子地址当作跨线程同步手段。
 - 跨插件互调同时持有 **caller 与 provider 两侧租约**：caller 的完成回调返回前，
   caller 不会被卸载/destroy。
@@ -820,17 +820,17 @@ Closing → CloseFailed → Closing (可重试)
 ### 16.2 C ABI (`agentxx.agent.coroutine_runtime`, version 1)
 
 ```c
-typedef struct AgentxxPluginDriver AgentxxPluginDriver;
-typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDriveOnceFn)(void* user_data);
+typedef struct PluginxxDriver PluginxxDriver;
+typedef void(PLUGINXX_CALL* PluginxxDriveOnceFn)(void* user_data);
 
-typedef struct AgentxxPluginCoroutineRuntimeIface {
+typedef struct PluginxxCoroutineRuntimeIface {
     int32_t  version;      // == 1
     uint32_t struct_size;
-    AgentxxPluginDriver* (AGENTXX_PLUGIN_CALL* request_driver)(
-        const AgentxxPluginHost*, AgentxxPluginDriveOnceFn, void* user_data, AgentxxPluginString* error_out);
-    void   (AGENTXX_PLUGIN_CALL* cancel_driver)(AgentxxPluginDriver*);
-    int32_t(AGENTXX_PLUGIN_CALL* is_io_thread)(const AgentxxPluginHost*);
-} AgentxxPluginCoroutineRuntimeIface;
+    PluginxxDriver* (PLUGINXX_CALL* request_driver)(
+        const PluginxxHost*, PluginxxDriveOnceFn, void* user_data, PluginxxString* error_out);
+    void   (PLUGINXX_CALL* cancel_driver)(PluginxxDriver*);
+    int32_t(PLUGINXX_CALL* is_io_thread)(const PluginxxHost*);
+} PluginxxCoroutineRuntimeIface;
 ```
 
 **契约（宿主与插件共同遵守）**
@@ -972,7 +972,7 @@ polledRoots_ 归零
 ```cpp
 polled_tool(ctx, name, depict, schema,
     [](Ctx& c, std::string_view args, std::string_view tid, std::string_view workDir,
-       const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+       const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
         ArgReader reader(args);
         co_return co_await doSomethingAsync(reader.raw(), c.workDir(tid));
     });

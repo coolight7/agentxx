@@ -27,8 +27,8 @@
 namespace agentxx::plugin {
 /// 宿主 vtable 装配入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
 /// 拿到真实接口表，从而直接驱动 C ABI 入口）。
-const void* AGENTXX_PLUGIN_CALL
-    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+const void* PLUGINXX_CALL
+    xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 } // namespace agentxx::plugin
 
 /// C17 ABI 检查翻译单元（test_plugin_abi_c17.c）导出的对照入口。
@@ -71,7 +71,7 @@ struct RuntimeFixture {
         auto vtableSv     = PluginStringView::fromCstr("__vtable");
         inst->hostControl = PluginHostControl::create(
             inst,
-            (const AgentxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
+            (const PluginxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
         );
         const std::weak_ptr<pluginxx::PluginRuntime> runtime = manager->runtime();
         // 与 PluginManagerBase::makeLifetime 的装配语义一致: 实例登记所属运行时,
@@ -191,8 +191,8 @@ struct CallbackState {
     std::string     payload;
     RuntimeFixture* fixture = nullptr;
 
-    static void AGENTXX_PLUGIN_CALL
-        done(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+    static void PLUGINXX_CALL
+        done(void* ud, int32_t status, const PluginxxStringView* payload) {
         auto& state = *static_cast<CallbackState*>(ud);
         ++state.calls;
         state.status  = status;
@@ -240,7 +240,7 @@ struct ShutdownOrderProbe {
     bool            destroyDuringCallback = false;
     bool            onIo                  = false;
 
-    static void AGENTXX_PLUGIN_CALL record(void* ud, int32_t, const AgentxxPluginStringView*) {
+    static void PLUGINXX_CALL record(void* ud, int32_t, const PluginxxStringView*) {
         auto& probe = *static_cast<ShutdownOrderProbe*>(ud);
         if (probe.order) {
             probe.order->push("callback");
@@ -257,23 +257,23 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
     spec.user_data       = ud;
     if (reject) {
         spec.execute_start = +[](void*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginOperatorNotify*,
-                                 AgentxxPluginString* error) -> void* {
+                                 const PluginxxStringView*,
+                                 const PluginxxStringView*,
+                                 const PluginxxStringView*,
+                                 const PluginxxOperatorNotify*,
+                                 PluginxxString* error) -> void* {
             hostMemorySetString(error, "rejected by fake provider");
             return nullptr;
         };
     } else {
         spec.execute_start = +[](void*                          ud,
-                                 const AgentxxPluginStringView* args,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginOperatorNotify* notify,
-                                 AgentxxPluginString*) -> void* {
+                                 const PluginxxStringView* args,
+                                 const PluginxxStringView*,
+                                 const PluginxxStringView*,
+                                 const PluginxxOperatorNotify* notify,
+                                 PluginxxString*) -> void* {
             *static_cast<bool*>(ud) = true;
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, args);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, args);
             return nullptr;
         };
     }
@@ -284,31 +284,31 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
 int gLifecycleStops    = 0;
 int gLifecycleDestroys = 0;
 
-void* AGENTXX_PLUGIN_CALL
-    fakeStopHook(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    fakeStopHook(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++gLifecycleStops;
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-void AGENTXX_PLUGIN_CALL fakeDestroyHook(void* ud) {
+void PLUGINXX_CALL fakeDestroyHook(void* ud) {
     ++*static_cast<int*>(ud);
 }
 
 /// P1-A 接口表严格协商探针：伪装宿主只返回一次可控接口表，用于验证 SDK 对
 /// version / struct_size / NULL 表的拒绝行为（plugin.md 第 11.1 节）。
 struct FakeIfaceHost {
-    AgentxxPluginHost              host{};
+    PluginxxHost              host{};
     const AgentxxPluginToolsIface* table = nullptr;
 };
 
-const void* AGENTXX_PLUGIN_CALL
-    fakeIfaceQuery(const AgentxxPluginHost* host, const AgentxxPluginStringView*) {
+const void* PLUGINXX_CALL
+    fakeIfaceQuery(const PluginxxHost* host, const PluginxxStringView*) {
     auto* self = static_cast<FakeIfaceHost*>(host ? host->opaque : nullptr);
     return self ? static_cast<const void*>(self->table) : nullptr;
 }
 
-const AgentxxHostVtable g_fakeIfaceVtable = {
+const PluginxxHostVtable g_fakeIfaceVtable = {
     /* alloc */ nullptr,
     /* free */ nullptr,
     /* query_interface */ fakeIfaceQuery,
@@ -325,12 +325,12 @@ void installLifecycleHooks(PluginInstance& inst, int* destroys) {
 
 /// P1-4 生命周期事务探针: 记录 start/stop 实际调用次数，并让 start 可以按需失败。
 /// 探针本身挂在实例的 pluginCtx 上，不使用任何可变全局状态。
-void* AGENTXX_PLUGIN_CALL
-    probeGraphRunStart(void* ud, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeGraphRunStart(void* ud, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     (void)ud;
     if (notify && notify->done) {
-        AgentxxPluginStringView empty{nullptr, 0};
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &empty);
+        PluginxxStringView empty{nullptr, 0};
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &empty);
     }
     return nullptr;
 }
@@ -341,7 +341,7 @@ struct LifecycleProbe {
     bool failStart = false;
     /// start 失败前是否真的登记过工具（证明失败回滚清掉了"部分注册"）。
     bool                           partialRegistration = false;
-    const AgentxxPluginHost*       host                = nullptr;
+    const PluginxxHost*       host                = nullptr;
     const AgentxxPluginToolsIface* tools               = nullptr;
     const AgentxxPluginGraphIface* graph               = nullptr;
     /// start 失败前是否真的登记过图节点类型（证明图注册同样回滚）。
@@ -349,10 +349,10 @@ struct LifecycleProbe {
     AgentxxPluginToolSpec spec{};
 };
 
-void* AGENTXX_PLUGIN_CALL lifecycleStartHook(
+void* PLUGINXX_CALL lifecycleStartHook(
     void*                              ud,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.starts;
@@ -373,18 +373,18 @@ void* AGENTXX_PLUGIN_CALL lifecycleStartHook(
         hostMemorySetString(error, "start refused by probe");
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL
-    lifecycleStopHook(void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    lifecycleStopHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.stops;
     if (probe.tools && probe.host) {
         probe.tools->unregister_tool(probe.host, &probe.spec.name);
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 } // namespace
@@ -398,7 +398,7 @@ TestResult testPluginRuntime() {
         CallbackState  cb{.fixture = &f};
         auto           spec = fakeTool(nullptr, true);
         XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
-        AgentxxPluginString error{};
+        PluginxxString error{};
         auto*               rejected = f.manager->callToolAsync(
             f.caller.get(),
             "runtime_tool",
@@ -472,7 +472,7 @@ TestResult testPluginRuntime() {
         std::thread       worker([notify, expected] {
             auto text = expected;
             auto view = strToSv(text);
-            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &view);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, &view);
             text.assign(text.size(), 'z');
         });
         worker.join();
@@ -483,11 +483,11 @@ TestResult testPluginRuntime() {
         f.provider->lifetime->requestClose();
         op->cancel();
         XX_TEST_EXPECT_EQ(cancels, 0);
-        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, nullptr);
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_FAILED, nullptr);
         f.drain();
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
-        XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(cb.payload, expected);
         XX_TEST_EXPECT_TRUE(cb.protectedDuringCallback);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -505,10 +505,10 @@ TestResult testPluginRuntime() {
         int            cancels = 0, cleanup = 0;
         op->accept([&] {
             ++cancels;
-            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
         });
         op->setCallback(
-            +[](void*, int32_t, const AgentxxPluginStringView*) {
+            +[](void*, int32_t, const PluginxxStringView*) {
                 throw std::runtime_error("fake callback failure");
             },
             nullptr
@@ -558,7 +558,7 @@ TestResult testPluginRuntime() {
         f.drain();
         XX_TEST_EXPECT_TRUE(first.wait_for(0s) != std::future_status::ready);
         auto notify = op->notify();
-        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         f.drain();
         XX_TEST_EXPECT_TRUE(f.waitFutureValue(std::move(first)).value_or(false));
         XX_TEST_EXPECT_TRUE(f.waitFutureValue(std::move(second)).value_or(false));
@@ -576,7 +576,7 @@ TestResult testPluginRuntime() {
         auto               keepIo = asio::make_work_guard(f.io);
         std::promise<bool> returned;
         std::thread        worker([&] {
-            AgentxxPluginString error{};
+            PluginxxString error{};
             auto*               handle = f.manager->callToolAsync(
                 f.caller.get(),
                 "runtime_tool",
@@ -618,7 +618,7 @@ TestResult testPluginRuntime() {
                     auto text   = std::to_string(i) + std::string(128, 'p');
                     auto view   = strToSv(text);
                     auto notify = ops[i]->notify();
-                    notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &view);
+                    notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, &view);
                 }
             });
         }
@@ -630,7 +630,7 @@ TestResult testPluginRuntime() {
         bool correct = true;
         for (size_t i = 0; i < callbacks.size(); ++i) {
             correct = correct && callbacks[i].calls == 1
-                      && callbacks[i].status == AGENTXX_PLUGIN_OPERATOR_OK
+                      && callbacks[i].status == PLUGINXX_OPERATOR_OK
                       && callbacks[i].payload == std::to_string(i) + std::string(128, 'p');
         }
         XX_TEST_EXPECT_TRUE(correct);
@@ -661,7 +661,7 @@ TestResult testPluginRuntime() {
             ready.arrive_and_wait();
             for (const auto& op : ops) {
                 auto notify = op->notify();
-                notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
             keepIo.reset();
         });
@@ -707,7 +707,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
         XX_TEST_EXPECT_FALSE(op->completed());
         auto notify = op->notify();
-        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         f.drain();
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -716,8 +716,8 @@ TestResult testPluginRuntime() {
     /// F14/F05：后台 task 提交 done 后，尚未 commit 就卸载，不调用失效 cancel_ud。
     {
         RuntimeFixture              f;
-        AgentxxPluginOperatorNotify notify{};
-        AgentxxPluginString         error{};
+        PluginxxOperatorNotify notify{};
+        PluginxxString         error{};
         int                         cancels = 0;
         auto*                       handle  = f.manager->registerTask(
             f.provider.get(),
@@ -729,7 +729,7 @@ TestResult testPluginRuntime() {
             &error
         );
         XX_TEST_EXPECT_TRUE(handle != nullptr && error.data == nullptr && notify.done != nullptr);
-        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         f.provider->lifetime->requestClose();
         f.manager->detachAll(f.provider.get());
         XX_TEST_EXPECT_EQ(cancels, 0);
@@ -744,10 +744,10 @@ TestResult testPluginRuntime() {
     {
         RuntimeFixture f;
         int            calls    = 0;
-        auto           callback = +[](void* ud, int32_t, const AgentxxPluginStringView*) {
+        auto           callback = +[](void* ud, int32_t, const PluginxxStringView*) {
             ++*static_cast<int*>(ud);
         };
-        AgentxxPluginString error{};
+        PluginxxString error{};
         bool                allAccepted = true;
         for (int i = 0; i < 1000; ++i) {
             allAccepted
@@ -807,14 +807,14 @@ TestResult testPluginRuntime() {
             std::string error;
         } state;
 
-        AgentxxPluginString error{};
+        PluginxxString error{};
         f.manager->offload(
             f.provider.get(),
-            +[](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
+            +[](void* ud, const PluginxxCancelToken*, PluginxxString*) -> void* {
                 ++static_cast<State*>(ud)->work;
                 return nullptr;
             },
-            +[](void* ud, int32_t, void*, const AgentxxPluginStringView* error) {
+            +[](void* ud, int32_t, void*, const PluginxxStringView* error) {
                 auto& state = *static_cast<State*>(ud);
                 ++state.done;
                 state.error = svToStr(error);
@@ -843,7 +843,7 @@ TestResult testPluginRuntime() {
         std::thread worker([notify] {
             auto payload = std::string{"completion after restart"};
             auto view    = strToSv(payload);
-            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &view);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, &view);
         });
         worker.join();
         XX_TEST_EXPECT_FALSE(op->completed());
@@ -871,7 +871,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_FALSE(op->completionPending());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
-        XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(cb.payload, "completion after restart");
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->pendingOperationSummary().empty());
@@ -896,7 +896,7 @@ TestResult testPluginRuntime() {
             std::barrier start{3};
             std::thread  doneThread([&] {
                 start.arrive_and_wait();
-                notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             });
             std::thread  cancelThread([&] {
                 start.arrive_and_wait();
@@ -909,7 +909,7 @@ TestResult testPluginRuntime() {
 
             XX_TEST_EXPECT_TRUE(op->completed());
             XX_TEST_EXPECT_EQ(cb.calls, 1);
-            XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_OK);
+            XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_OK);
             const int cancelsAtTerminal = cancels.load();
             XX_TEST_EXPECT_TRUE(cancelsAtTerminal == 0 || cancelsAtTerminal == 1);
 
@@ -932,7 +932,7 @@ TestResult testPluginRuntime() {
         int            cancels = 0;
         op->accept([&] {
             ++cancels;
-            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
         });
         op->setCallback(CallbackState::done, &cb);
 
@@ -947,7 +947,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(cancels, 1);
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
-        XX_TEST_EXPECT_EQ(cb.status, AGENTXX_PLUGIN_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_CANCELLED);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
     }
 
@@ -997,7 +997,7 @@ TestResult testPluginRuntime() {
     {
         auto                ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture      f(ctx);
-        AgentxxPluginString error{};
+        PluginxxString error{};
 
         struct State {
             std::promise<void> started, release;
@@ -1007,15 +1007,15 @@ TestResult testPluginRuntime() {
 
         f.manager->offload(
             f.provider.get(),
-            +[](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
+            +[](void* ud, const PluginxxCancelToken*, PluginxxString*) -> void* {
                 auto& state = *static_cast<State*>(ud);
                 state.started.set_value();
                 state.release.get_future().wait();
                 return ud;
             },
-            +[](void* ud, int32_t status, void* value, const AgentxxPluginStringView*) {
+            +[](void* ud, int32_t status, void* value, const PluginxxStringView*) {
                 auto& state = *static_cast<State*>(ud);
-                state.done  = status == AGENTXX_PLUGIN_OPERATOR_OK && value == ud;
+                state.done  = status == PLUGINXX_OPERATOR_OK && value == ud;
                 state.onIo  = state.fixture->manager->isIoThread();
                 state.protectedDuringCallback
                     = state.fixture->provider->lifetime->leaseCount() == 1;
@@ -1124,25 +1124,25 @@ TestResult testPluginRuntime() {
         };
 
         const AbiExpectation expectations[] = {
-            {1, sizeof(AgentxxPluginStringView)},
-            {2, offsetof(AgentxxPluginStringView, size)},
-            {3, sizeof(AgentxxPluginHost)},
-            {4, offsetof(AgentxxPluginHost, opaque)},
-            {5, sizeof(AgentxxHostVtable)},
+            {1, sizeof(PluginxxStringView)},
+            {2, offsetof(PluginxxStringView, size)},
+            {3, sizeof(PluginxxHost)},
+            {4, offsetof(PluginxxHost, opaque)},
+            {5, sizeof(PluginxxHostVtable)},
             {6, sizeof(AgentxxPluginToolSpec)},
             {7, offsetof(AgentxxPluginToolSpec, execute_start)},
             {8, sizeof(AgentxxPluginHookSpec)},
-            {9, sizeof(AgentxxPluginOperatorNotify)},
+            {9, sizeof(PluginxxOperatorNotify)},
             {10, sizeof(AgentxxPluginToolsIface)},
             {11, offsetof(AgentxxPluginToolsIface, struct_size)},
-            {12, sizeof(AgentxxPluginSchedulerIface)},
-            {13, sizeof(AgentxxPluginTasksIface)},
+            {12, sizeof(PluginxxSchedulerIface)},
+            {13, sizeof(PluginxxTasksIface)},
             {14, sizeof(AgentxxClientUiIface)},
-            {15, AGENTXX_PLUGIN_API_VERSION},
+            {15, PLUGINXX_API_VERSION},
             {16, AGENTXX_CLIENT_PLUGIN_API_VERSION},
             {17, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION},
-            {18, sizeof(AgentxxPluginCoroutineRuntimeIface)},
-            {19, offsetof(AgentxxPluginCoroutineRuntimeIface, struct_size)},
+            {18, sizeof(PluginxxCoroutineRuntimeIface)},
+            {19, offsetof(PluginxxCoroutineRuntimeIface, struct_size)},
             {20, AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION},
             {21, sizeof(AgentxxPluginToolPermissionSpec)},
             {22, offsetof(AgentxxPluginToolPermissionSpec, target_arg)},
@@ -1163,7 +1163,7 @@ TestResult testPluginRuntime() {
     /// R3/P1-A: 接口表严格协商 —— 版本不为 1、struct_size 过短、NULL 表都必须被
     /// SDK 拒绝；只有 version == 1 且 struct_size 覆盖完整表才可用。
     {
-        AgentxxPluginStringView toolsIid
+        PluginxxStringView toolsIid
             = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
         const auto* realTools = static_cast<const AgentxxPluginToolsIface*>(
             agentxx::plugin::xx_query_interface(nullptr, &toolsIid)
@@ -1201,7 +1201,7 @@ TestResult testPluginRuntime() {
         const auto ifaces = AgentIfaces::query(host);
         XX_TEST_EXPECT_TRUE(ifaces.config != nullptr);
 
-        AgentxxPluginString out{};
+        PluginxxString out{};
         XX_TEST_EXPECT_EQ(ifaces.config->get_plugin_args(host, &out), 0);
         hostMemoryFree(out.data);
 
@@ -1594,7 +1594,7 @@ TestResult testPluginRuntime() {
 
         // provider 完成: callback 必须在 caller lease 保护下于 IO 线程执行。
         auto notify = op->notify();
-        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         f.drainAll();
         XX_TEST_EXPECT_EQ(cb.calls, 1);
         XX_TEST_EXPECT_TRUE(cb.protectedDuringCallback && cb.onIo);
@@ -1642,7 +1642,7 @@ TestResult testPluginRuntime() {
             cancelFuture.wait();
             order.push("resumed");
             allowDoneFuture.wait();
-            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
             order.push("doneSubmitted");
         });
         op->accept([&] {
@@ -1675,7 +1675,7 @@ TestResult testPluginRuntime() {
             return op->completed();
         }));
         XX_TEST_EXPECT_TRUE(op->completed());
-        XX_TEST_EXPECT_EQ(op->status(), AGENTXX_PLUGIN_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(op->status(), PLUGINXX_OPERATOR_CANCELLED);
         XX_TEST_EXPECT_TRUE(probe.onIo);
         XX_TEST_EXPECT_FALSE(probe.destroyDuringCallback);
         XX_TEST_EXPECT_EQ(order.size(), size_t{5});
@@ -1742,7 +1742,7 @@ TestResult testPluginRuntime() {
         // 插件执行最终退出 (worker 线程提交完成包)。
         auto        notify = op->notify();
         std::thread worker([notify] {
-            notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         });
         worker.join();
         XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
@@ -1781,15 +1781,15 @@ TestResult testPluginRuntime() {
             spec.type      = strToSv(typeName);
             spec.user_data = counter;
             spec.run_start = +[](void* ud,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginStringView*,
-                                 const AgentxxPluginOperatorNotify* notify,
-                                 AgentxxPluginString*) -> void* {
+                                 const PluginxxStringView*,
+                                 const PluginxxStringView*,
+                                 const PluginxxStringView*,
+                                 const PluginxxStringView*,
+                                 const PluginxxOperatorNotify* notify,
+                                 PluginxxString*) -> void* {
                 ++*static_cast<int*>(ud);
                 auto payload = PluginStringView::fromCstr("{}");
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payload);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
                 return nullptr;
             };
             return spec;
@@ -1923,7 +1923,7 @@ TestResult testPluginRuntime() {
         auto* sub = ifaces.events->subscribe(
             host,
             &topicSv,
-            +[](const AgentxxPluginStringView*, void* ud) {
+            +[](const PluginxxStringView*, void* ud) {
                 ++*static_cast<int*>(ud);
             },
             &handlerCalls
@@ -1947,7 +1947,7 @@ TestResult testPluginRuntime() {
         auto* late = ifaces.events->subscribe(
             host,
             &topicSv,
-            +[](const AgentxxPluginStringView*, void* ud) {
+            +[](const PluginxxStringView*, void* ud) {
                 ++*static_cast<int*>(ud);
             },
             &handlerCalls
@@ -1979,17 +1979,17 @@ TestResult testPluginRuntime() {
         auto*          host = f.provider->hostView();
         XX_TEST_EXPECT_TRUE(host != nullptr);
 
-        AgentxxPluginStringView iid
-            = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME);
+        PluginxxStringView iid
+            = PluginStringView::fromCstr(PLUGINXX_IFACE_COROUTINE_RUNTIME);
         const auto* runtime
-            = static_cast<const AgentxxPluginCoroutineRuntimeIface*>(xx_query_interface(host, &iid)
+            = static_cast<const PluginxxCoroutineRuntimeIface*>(xx_query_interface(host, &iid)
             );
         XX_TEST_EXPECT_TRUE(runtime != nullptr);
         if (runtime) {
             XX_TEST_EXPECT_EQ(runtime->version, AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION);
             XX_TEST_EXPECT_EQ(
                 runtime->struct_size,
-                uint32_t{sizeof(AgentxxPluginCoroutineRuntimeIface)}
+                uint32_t{sizeof(PluginxxCoroutineRuntimeIface)}
             );
             XX_TEST_EXPECT_TRUE(runtime->request_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->cancel_driver != nullptr);
@@ -2009,8 +2009,8 @@ TestResult testPluginRuntime() {
             };
 
             // 1) 申请请求恒异步: 申请返回时回调必须尚未执行
-            AgentxxPluginString  err{nullptr, 0};
-            AgentxxPluginDriver* ticket = runtime->request_driver(host, driveFn, &probe, &err);
+            PluginxxString  err{nullptr, 0};
+            PluginxxDriver* ticket = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(ticket != nullptr);
             XX_TEST_EXPECT_EQ(probe.calls, 0);
             // 请求在排队期间持有实例 lease (卸载等待必然覆盖它)
@@ -2029,7 +2029,7 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(probe.calls, 1);
 
             // 4) 取消尚未开始的请求: 不再执行, lease 立刻释放
-            AgentxxPluginDriver* cancelled = runtime->request_driver(host, driveFn, &probe, &err);
+            PluginxxDriver* cancelled = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(cancelled != nullptr);
             XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
             runtime->cancel_driver(cancelled);
@@ -2042,12 +2042,12 @@ TestResult testPluginRuntime() {
 
             // 5) 迟到/无效句柄取消: 按地址查表未命中, 安全忽略 (不解引用)
             XX_TEST_EXPECT_FALSE(
-                f.provider->cancelDriver(reinterpret_cast<const AgentxxPluginDriver*>(&probe))
+                f.provider->cancelDriver(reinterpret_cast<const PluginxxDriver*>(&probe))
             );
-            runtime->cancel_driver(reinterpret_cast<AgentxxPluginDriver*>(&probe));
+            runtime->cancel_driver(reinterpret_cast<PluginxxDriver*>(&probe));
 
             // 6) 参数缺失: 空回调返回 NULL + error_out
-            AgentxxPluginString err2{nullptr, 0};
+            PluginxxString err2{nullptr, 0};
             XX_TEST_EXPECT_TRUE(runtime->request_driver(host, nullptr, nullptr, &err2) == nullptr);
             XX_TEST_EXPECT_TRUE(err2.data != nullptr);
             if (err2.data) {
@@ -2060,12 +2060,12 @@ TestResult testPluginRuntime() {
             // 7) 实例进入 Closing: 仍允许驱动 (关闭要先取消 Operation, 插件的取消
             //    收束需要驱动继续流动), 但 Closed 后拒绝。
             f.provider->lifetime->requestClose();
-            AgentxxPluginDriver* closingTicket
+            PluginxxDriver* closingTicket
                 = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(closingTicket != nullptr);
             runtime->cancel_driver(closingTicket);
             f.provider->lifetime->setState(pluginxx::PluginInstanceState::Closed);
-            AgentxxPluginString err3{nullptr, 0};
+            PluginxxString err3{nullptr, 0};
             XX_TEST_EXPECT_TRUE(runtime->request_driver(host, driveFn, &probe, &err3) == nullptr);
             XX_TEST_EXPECT_TRUE(err3.data != nullptr);
             if (err3.data) {

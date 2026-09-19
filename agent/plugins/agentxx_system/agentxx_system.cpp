@@ -27,8 +27,8 @@ static int32_t sysSetup(SysPluginCtx& ctx) {
 
 static void* sysStart(
     SysPluginCtx&                      ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -50,13 +50,13 @@ static void* sysStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    sysStop(SysPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    sysStop(SysPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

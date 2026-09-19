@@ -35,13 +35,13 @@ struct PluginCtx : public agentxx::plugin::PluginBase {
 };
 
 static HostConfig
-    readHostConfig(const AgentxxPluginHost* host, const agentxx::plugin::AgentIfaces& iface) {
+    readHostConfig(const PluginxxHost* host, const agentxx::plugin::AgentIfaces& iface) {
     HostConfig cfg;
     if (!host || !iface.config) {
         return cfg;
     }
     if (iface.config->get_config) {
-        AgentxxPluginString json{nullptr, 0};
+        PluginxxString json{nullptr, 0};
         iface.config->get_config(host, &json);
         if (json.data) {
             std::string s{json.data, static_cast<size_t>(json.size)};
@@ -52,7 +52,7 @@ static HostConfig
         }
     }
     if (iface.config->get_plugin_args) {
-        AgentxxPluginString json{nullptr, 0};
+        PluginxxString json{nullptr, 0};
         iface.config->get_plugin_args(host, &json);
         if (json.data) {
             std::string s{json.data, static_cast<size_t>(json.size)};
@@ -143,7 +143,7 @@ Workflow: use `search` to resolve the exact symbol name, then `context`/`callers
 )_";
 
 static void injectCodegraphSystemPrompt(
-    const AgentxxPluginHost*            host,
+    const PluginxxHost*            host,
     const agentxx::plugin::AgentIfaces& iface
 ) {
     if (!host || !iface.prompt || !iface.prompt->set_prompt) {
@@ -173,13 +173,13 @@ static void injectCodegraphSystemPrompt(
 }
 
 static void ensureToolPromptsInHost(
-    const AgentxxPluginHost*            host,
+    const PluginxxHost*            host,
     const agentxx::plugin::AgentIfaces& iface
 ) {
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
-    AgentxxPluginString json{nullptr, 0};
+    PluginxxString json{nullptr, 0};
     iface.prompt->get_prompt(host, &json);
     if (!json.data) {
         return;
@@ -633,7 +633,7 @@ static void snapshotQueryDone(
     void*                          ud,
     int32_t                        status,
     void*                          result,
-    const AgentxxPluginStringView* error
+    const PluginxxStringView* error
 ) {
     (void)error;
     auto* ctx   = static_cast<PluginCtx*>(ud);
@@ -643,7 +643,7 @@ static void snapshotQueryDone(
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
         [&] {
-            if (status == AGENTXX_PLUGIN_OPERATOR_OK && ctx && ctx->host && ctx->iface.events
+            if (status == PLUGINXX_OPERATOR_OK && ctx && ctx->host && ctx->iface.events
                 && ctx->iface.events->publish) {
                 codegraph::Json j = codegraph::Json::object();
                 j["loaded"]       = true;
@@ -677,7 +677,7 @@ static void snapshotQueryDone(
     }
 }
 
-static void* snapshotQueryWork(void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) {
+static void* snapshotQueryWork(void* ud, const PluginxxCancelToken*, PluginxxString*) {
     auto* ctx = static_cast<PluginCtx*>(ud);
     return agentxx::plugin::guardCall(
         [ctx](const char* m) noexcept {
@@ -701,7 +701,7 @@ static void* snapshotQueryWork(void* ud, const AgentxxPluginCancelToken*, Agentx
     );
 }
 
-static void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView*, void* ud) {
+static void PLUGINXX_CALL on_client_attached(const PluginxxStringView*, void* ud) {
     auto* ctx = static_cast<PluginCtx*>(ud);
     agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
@@ -721,9 +721,9 @@ static void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView
 
 using namespace agentxx_codegraph_plugin;
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
+    static const PluginxxInfo info{
+        PLUGINXX_API_VERSION,
         0,
         agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph"),
         agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
@@ -734,8 +734,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     PluginCtx* raw    = nullptr;
     auto       logger = [&raw](const char* m) noexcept {
         pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
@@ -858,7 +858,7 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
             co_return;
         }
         const auto startedAt = std::chrono::steady_clock::now();
-        const bool ok = co_await agentxx::plugin::offload(c, [&c](const AgentxxPluginCancelToken*) {
+        const bool ok = co_await agentxx::plugin::offload(c, [&c](const PluginxxCancelToken*) {
             return c.mgr->updateIndex();
         });
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -888,8 +888,8 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
 
 static void* codegraphAgentStart(
     PluginCtx&                         ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -911,21 +911,21 @@ static void* codegraphAgentStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    codegraphAgentStop(PluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 注册记录与后台任务句柄由宿主在 stop 后统一撤销/取消; 索引数据保留在
     // 实例上下文中, 下次 start 直接复用。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(PluginCtx, codegraphAgentStart, codegraphAgentStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {
@@ -946,7 +946,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 
 /// client 侧每实例上下文 (多实例契约: 原进程级 static 状态全部移入)
 struct ClientCtx {
-    const AgentxxPluginHost*      host = nullptr;
+    const PluginxxHost*      host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     const AgentxxClientUiIface*   ui           = nullptr;
     AgentxxInfoSection*           section      = nullptr;
@@ -1024,8 +1024,8 @@ static void refreshSection(ClientCtx& c) {
     c.ui->update_info_section(c.host, c.section, &jsonSv);
 }
 
-static void AGENTXX_PLUGIN_CALL
-    onClientPluginData(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    onClientPluginData(const PluginxxStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
@@ -1079,7 +1079,7 @@ static void AGENTXX_PLUGIN_CALL
     }
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
@@ -1093,8 +1093,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
 }
 
 /// client 侧 create: 只构造上下文 (查询接口表, 不注册任何 UI 项)
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
@@ -1123,8 +1123,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 /// client 侧 start: 注册 Info 段落与跨端数据订阅 (注册事务)
 static void* codegraphClientStart(
     ClientCtx&                         ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               err
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
 ) {
     if (ctx.ui && ctx.ui->register_info_section) {
         auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
@@ -1144,25 +1144,25 @@ static void* codegraphClientStart(
         auto msgSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded");
         ctx.iface.log->log(ctx.host, 2, &msgSv);
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 /// client 侧 stop: 撤销 Info 段落 (可重复调用)
 static void*
-    codegraphClientStop(ClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.section && ctx.ui && ctx.ui->unregister_info_section) {
         ctx.ui->unregister_info_section(ctx.host, ctx.section);
         ctx.section = nullptr;
     }
     ctx.current_file.clear();
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ClientCtx, codegraphClientStart, codegraphClientStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(
         [ctx](const char* m) noexcept {

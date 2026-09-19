@@ -1885,7 +1885,7 @@ EventBus (事件总线)
 
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
-- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `agentxx_plugin_strdup`), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进, 当前全为 1)；加载阶段要求 API 版本 `>=` 宿主版本以保障向前兼容
+- COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (首字段 version 独立演进, 当前全为 1)；加载阶段要求 API 版本 `>=` 宿主版本以保障向前兼容
 - Agent 侧 16 张接口表: tools / hooks / events / capabilities / scheduler / session / plugins / config (含 get/set_language) / model / cancel / prompt / json / log / resources / graph / tasks (tasks 表 `notify` 为出参, 供宿主托管后台任务)
 - Client 侧 7 张接口表: ui (v2, 含工具特化渲染器与实例装饰) / events / session / wire / self / json / log (详见 client_plugin_api.h)
 - 现代 SDK (plugin_kit.h): 
@@ -1896,7 +1896,7 @@ EventBus (事件总线)
   - `PluginBase` 状态基类 + `Task<T>` 锚定协程 + `sleep/yield/offload/call_tool/invoke_cap` awaiter
   - `tool/fast_tool/blocking_tool/hook/capability/spawn` 便捷注册族
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
-- 导出控制: -fvisibility=hidden + version script 白名单 (AGENTXX_PLUGIN_EXPORT), 单端插件兼容 Android lld
+- 导出控制: -fvisibility=hidden + version script 白名单 (PLUGINXX_EXPORT), 单端插件兼容 Android lld
 - 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows 等)
 - 工具复用: 内置插件经 `cxx_utilxx_base` / `cxx_utilxx` 静态库复用全部基础工具
   (各自静态链接, 符号隐藏互不冲突; 见 `docs/zh-cn/design/plugins.md` §5)

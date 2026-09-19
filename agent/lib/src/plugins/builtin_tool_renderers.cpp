@@ -283,7 +283,7 @@ int32_t runRenderer(
 
 } // namespace
 
-int32_t AGENTXX_PLUGIN_CALL builtinRenderShareStore(
+int32_t PLUGINXX_CALL builtinRenderShareStore(
     void*                         userData,
     const AgentxxToolRenderInput* input,
     AgentxxToolRenderOutput*      output
@@ -291,7 +291,7 @@ int32_t AGENTXX_PLUGIN_CALL builtinRenderShareStore(
     return runRenderer(userData, input, output, renderShareStore);
 }
 
-int32_t AGENTXX_PLUGIN_CALL builtinRenderSubagent(
+int32_t PLUGINXX_CALL builtinRenderSubagent(
     void*                         userData,
     const AgentxxToolRenderInput* input,
     AgentxxToolRenderOutput*      output

@@ -6,7 +6,7 @@
 /// - CMake 在编译时注入 `AGENTXX_VERSION_STRING`、`AGENTXX_VERSION_MAJOR` 等宏
 /// - 若未通过 CMake 编译 (如代码静态分析、未生成缓存的 IDE 打开)，使用下方默认 fallback 值
 /// - 区分: 此处为软件发行版本 (Release Version)，不可与插件 ABI 契约版本
-///   (`AGENTXX_PLUGIN_API_VERSION`) 或 FFI 协议版本混淆。
+///   (`PLUGINXX_API_VERSION`) 或 FFI 协议版本混淆。
 
 #ifndef AGENTXX_VERSION_STRING
 #define AGENTXX_VERSION_STRING "0.1.0"

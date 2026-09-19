@@ -357,7 +357,7 @@ interfaces:
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
         // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
-        AgentxxPluginString json{nullptr, 0};
+        PluginxxString json{nullptr, 0};
         if (res3 && res3->get_own_resources) {
             res3->get_own_resources(inst->hostView(), &json);
         }
@@ -388,7 +388,7 @@ interfaces:
         XX_TEST_EXPECT_TRUE(rc != 0);
         co_await sleepMs(150);
         {
-            AgentxxPluginString j2{nullptr, 0};
+            PluginxxString j2{nullptr, 0};
             if (res3 && res3->get_own_resources) {
                 res3->get_own_resources(inst->hostView(), &j2);
             }

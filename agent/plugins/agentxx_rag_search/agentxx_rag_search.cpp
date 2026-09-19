@@ -37,7 +37,7 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
         ));
         return 0;
     }
-    AgentxxPluginString json{nullptr, 0};
+    PluginxxString json{nullptr, 0};
     ctx.iface.model->get_config(ctx.host, &json);
     utilxx_base::Json cfg;
     bool              hasCfg = false;
@@ -111,9 +111,9 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
         kNameSearch,
         kDepictSearch,
         schema,
-        [](RagPluginCtx& c, std::string_view args_json, const AgentxxPluginCancelToken* cancel_token
+        [](RagPluginCtx& c, std::string_view args_json, const PluginxxCancelToken* cancel_token
         ) -> std::string {
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("rag_search cancelled");
             }
             ArgReader args(args_json);
@@ -127,7 +127,7 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
                 return R"({"error":"rag index not initialized"})";
             }
             auto results = c.store->search(query, static_cast<size_t>(top_k));
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("rag_search cancelled");
             }
             if (!results.has_value()) {
@@ -159,8 +159,8 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
 
 static void* ragStart(
     RagPluginCtx&                      ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -182,13 +182,13 @@ static void* ragStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    ragStop(RagPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    ragStop(RagPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

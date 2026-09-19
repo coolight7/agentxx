@@ -35,13 +35,13 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
         kDepictHtml2Md,
         html2mdSchema,
         [](std::string_view                args_json,
-           const AgentxxPluginCancelToken* cancel_token) -> std::string {
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+           const PluginxxCancelToken* cancel_token) -> std::string {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("html2markdown cancelled");
             }
             ArgReader args(args_json);
             auto      out = htmlToMarkdownExecute(args.raw());
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("html2markdown cancelled");
             }
             return out;
@@ -82,13 +82,13 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
         kDepictRegexp,
         regexpSchema,
         [](std::string_view                args_json,
-           const AgentxxPluginCancelToken* cancel_token) -> std::string {
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+           const PluginxxCancelToken* cancel_token) -> std::string {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("regexp cancelled");
             }
             ArgReader args(args_json);
             auto      out = regexpExecute(args.raw());
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("regexp cancelled");
             }
             return out;
@@ -102,8 +102,8 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
 
 static void* stringStart(
     StringPluginCtx&                   ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -125,13 +125,13 @@ static void* stringStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    stringStop(StringPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    stringStop(StringPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

@@ -27,7 +27,7 @@ void usePositive(Ctx& ctx) {
            std::string_view,
            std::string_view,
            std::string_view,
-           const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+           const PluginxxCancelToken*) -> asio::awaitable<std::string> {
             co_return std::string{};
         }
     );

@@ -83,8 +83,8 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
 
     plugin::OpDrive drive;
     drive.start = [spec, instKeep, nodeName, configJson, stateJson, threadId](
-                      const AgentxxPluginOperatorNotify* notify,
-                      AgentxxPluginString*               err
+                      const PluginxxOperatorNotify* notify,
+                      PluginxxString*               err
                   ) -> void* {
         auto nodeNameSv = agentxx::plugin::PluginStringView::from(nodeName.data(), nodeName.size());
         auto configJsonSv

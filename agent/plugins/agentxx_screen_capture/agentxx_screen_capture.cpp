@@ -273,8 +273,8 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
 
 static void* screenCaptureAgentStart(
     ScreenCapturePluginCtx&            ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               err
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
 ) {
     ctx.holder      = std::make_unique<ScreenCaptureHolder>();
     ctx.holder->ctx = &ctx;
@@ -303,14 +303,14 @@ static void* screenCaptureAgentStart(
     }
 
     registerScreenCaptureTool(ctx);
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 /// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
 static void*
-    screenCaptureAgentStop(ScreenCapturePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    screenCaptureAgentStop(ScreenCapturePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

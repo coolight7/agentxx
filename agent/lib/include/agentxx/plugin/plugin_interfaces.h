@@ -85,21 +85,21 @@ inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 /// 清单 interfaces.require 可按插件实际查询的表精确声明)
 inline constexpr std::string_view AgentTools        = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS;
 inline constexpr std::string_view AgentHooks        = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS;
-inline constexpr std::string_view AgentEvents       = AGENTXX_PLUGIN_IFACE_AGENT_EVENTS;
-inline constexpr std::string_view AgentCapabilities = AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES;
-inline constexpr std::string_view AgentScheduler    = AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER;
+inline constexpr std::string_view AgentEvents       = PLUGINXX_IFACE_EVENTS;
+inline constexpr std::string_view AgentCapabilities = PLUGINXX_IFACE_CAPABILITIES;
+inline constexpr std::string_view AgentScheduler    = PLUGINXX_IFACE_SCHEDULER;
 inline constexpr std::string_view AgentSession      = AGENTXX_PLUGIN_IFACE_AGENT_SESSION;
-inline constexpr std::string_view AgentPlugins      = AGENTXX_PLUGIN_IFACE_AGENT_PLUGINS;
-inline constexpr std::string_view AgentConfig       = AGENTXX_PLUGIN_IFACE_AGENT_CONFIG;
+inline constexpr std::string_view AgentPlugins      = PLUGINXX_IFACE_PLUGINS;
+inline constexpr std::string_view AgentConfig       = PLUGINXX_IFACE_CONFIG;
 inline constexpr std::string_view AgentPrompt       = AGENTXX_PLUGIN_IFACE_AGENT_PROMPT;
-inline constexpr std::string_view AgentJson         = AGENTXX_PLUGIN_IFACE_AGENT_JSON;
-inline constexpr std::string_view AgentLog          = AGENTXX_PLUGIN_IFACE_AGENT_LOG;
+inline constexpr std::string_view AgentJson         = PLUGINXX_IFACE_JSON;
+inline constexpr std::string_view AgentLog          = PLUGINXX_IFACE_LOG;
 inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES;
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
-inline constexpr std::string_view AgentCancel       = AGENTXX_PLUGIN_IFACE_AGENT_CANCEL;
-inline constexpr std::string_view AgentTasks        = AGENTXX_PLUGIN_IFACE_AGENT_TASKS;
+inline constexpr std::string_view AgentCancel       = PLUGINXX_IFACE_CANCEL;
+inline constexpr std::string_view AgentTasks        = PLUGINXX_IFACE_TASKS;
 /// 通用协程驱动表 (driver ticket / wake 协议; kit 的 PollOneBridge 依赖它)
-inline constexpr std::string_view AgentCoroutineRuntime = AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME;
+inline constexpr std::string_view AgentCoroutineRuntime = PLUGINXX_IFACE_COROUTINE_RUNTIME;
 
 /// ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ----
 /// 展示扩展表整体: 声明它等价于"需要 ui 表内全部子能力", 只有覆盖全部子能力的

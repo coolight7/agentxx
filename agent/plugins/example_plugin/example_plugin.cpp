@@ -59,13 +59,13 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
 
 /// ---------------- get_info ----------------
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
-        [&]() -> const AgentxxPluginInfo* {
-            static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+        [&]() -> const PluginxxInfo* {
+            static const PluginxxInfo info{
+                PLUGINXX_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("example_plugin"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
@@ -80,7 +80,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 
 /// ---------------- event handlers ----------------
 
-static void AGENTXX_PLUGIN_CALL on_demo_event(const AgentxxPluginStringView*, void* ud) {
+static void PLUGINXX_CALL on_demo_event(const PluginxxStringView*, void* ud) {
     auto* ctxRaw = static_cast<AgentCtx*>(ud);
     agentxx::plugin::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<AgentCtx*>(ud);
@@ -90,7 +90,7 @@ static void AGENTXX_PLUGIN_CALL on_demo_event(const AgentxxPluginStringView*, vo
     });
 }
 
-static void AGENTXX_PLUGIN_CALL on_client_hello(const AgentxxPluginStringView*, void* ud) {
+static void PLUGINXX_CALL on_client_hello(const PluginxxStringView*, void* ud) {
     auto* ctxRaw = static_cast<AgentCtx*>(ud);
     agentxx::plugin::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<AgentCtx*>(ud);
@@ -110,8 +110,8 @@ static void AGENTXX_PLUGIN_CALL on_client_hello(const AgentxxPluginStringView*, 
 /// - `stop`: 在实例停用/关闭时给出完成信号 (本插件没有自管线程/定时器)。
 /// - `destroy`: 只释放本地内存; 不创建异步工作、不调用宿主注册接口。
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     AgentCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
@@ -138,7 +138,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 /// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由宿主回滚已生效的注册。
 static int exampleAgentSetup(AgentCtx& ctx) {
-    const AgentxxPluginHost* host = ctx.host;
+    const PluginxxHost* host = ctx.host;
     // 1.1 echo: 快同步内联工具 (fast_tool)
     agentxx::plugin::fast_tool(
         ctx,
@@ -261,7 +261,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
            std::string_view args,
            std::string_view,
            std::string_view,
-           const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
             int ticks      = 3;
             int intervalMs = 20;
             try {
@@ -294,7 +294,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
                 asio::steady_timer timer(ex);
                 timer.expires_after(std::chrono::milliseconds(intervalMs));
                 co_await timer.async_wait(asio::use_awaitable);
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     throw agentxx::plugin::CancelledException("example_polled_timer cancelled");
                 }
             }
@@ -339,7 +339,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
 
     // 5. 提示词读写
     if (ctx.iface.prompt && ctx.iface.prompt->get_prompt && ctx.iface.prompt->set_prompt) {
-        AgentxxPluginString full{nullptr, 0};
+        PluginxxString full{nullptr, 0};
         ctx.iface.prompt->get_prompt(host, &full);
         if (full.data) {
             std::string prompt(full.data, static_cast<size_t>(full.size));
@@ -358,8 +358,8 @@ static int exampleAgentSetup(AgentCtx& ctx) {
 
 static void* exampleAgentStart(
     AgentCtx&                          ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -382,22 +382,22 @@ static void* exampleAgentStart(
         return nullptr;
     }
     ctx.log.info("example plugin started");
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    exampleAgentStop(AgentCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    exampleAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 本插件没有自管线程/定时器: stop 只给出完成信号。注册记录 (工具/hook/能力/
     // 订阅/prompt 贡献) 由宿主在 stop 后统一撤销, 这里不重复反注册, 避免与宿主
     // 的清理交叉。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(AgentCtx, exampleAgentStart, exampleAgentStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(agentGuardLogger(ctx), [&] {
         if (!ctx) {
@@ -411,7 +411,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_
 /// client 侧入口 (agentxx_client_*)
 /// =====================================================================
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
@@ -437,11 +437,11 @@ static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text)
     return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, text);
 }
 
-static int32_t AGENTXX_PLUGIN_CALL example_cmd_execute(
+static int32_t PLUGINXX_CALL example_cmd_execute(
     void*                          ud,
-    const AgentxxPluginStringView* args_json,
-    AgentxxPluginString*           actionOut,
-    AgentxxPluginString*           errorOut
+    const PluginxxStringView* args_json,
+    PluginxxString*           actionOut,
+    PluginxxString*           errorOut
 ) {
     (void)errorOut;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
@@ -457,7 +457,7 @@ static int32_t AGENTXX_PLUGIN_CALL example_cmd_execute(
                 args_json->size
             );
             auto                keySv = agentxx::plugin::PluginStringView::fromCstr("text");
-            AgentxxPluginString text{nullptr, 0};
+            PluginxxString text{nullptr, 0};
             ctx->iface.json->json_get_string(ctx->host, &argsSv, &keySv, &text);
             if (text.data) {
                 suffix.assign(text.data, static_cast<size_t>(text.size));
@@ -478,11 +478,11 @@ static int32_t AGENTXX_PLUGIN_CALL example_cmd_execute(
     });
 }
 
-static int32_t AGENTXX_PLUGIN_CALL example_toast_execute(
+static int32_t PLUGINXX_CALL example_toast_execute(
     void*                          ud,
-    const AgentxxPluginStringView* args_json,
-    AgentxxPluginString*           actionOut,
-    AgentxxPluginString*           errorOut
+    const PluginxxStringView* args_json,
+    PluginxxString*           actionOut,
+    PluginxxString*           errorOut
 ) {
     (void)errorOut;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
@@ -491,7 +491,7 @@ static int32_t AGENTXX_PLUGIN_CALL example_toast_execute(
         if (!ctx || !ctx->host) {
             return -1;
         }
-        AgentxxPluginString argText{nullptr, 0};
+        PluginxxString argText{nullptr, 0};
         if (ctx->iface.json && ctx->iface.json->json_get_string && args_json) {
             auto argsSv = agentxx::plugin::PluginStringView::from(
                 args_json->data ? args_json->data : "{}",
@@ -518,8 +518,8 @@ static int32_t AGENTXX_PLUGIN_CALL example_toast_execute(
     });
 }
 
-static void AGENTXX_PLUGIN_CALL
-    on_client_ready(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    on_client_ready(const PluginxxStringView* payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
@@ -540,8 +540,8 @@ static void AGENTXX_PLUGIN_CALL
     });
 }
 
-static void AGENTXX_PLUGIN_CALL
-    on_client_turn_end(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    on_client_turn_end(const PluginxxStringView* payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
@@ -569,8 +569,8 @@ static void AGENTXX_PLUGIN_CALL
     });
 }
 
-static void AGENTXX_PLUGIN_CALL
-    on_client_plugin_data(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host || !ctx->panel) {
         return;
@@ -578,9 +578,9 @@ static void AGENTXX_PLUGIN_CALL
     if (!ctx->iface.json || !ctx->iface.json->json_get_string) {
         return;
     }
-    AgentxxPluginString plugin{nullptr, 0};
-    AgentxxPluginString event{nullptr, 0};
-    AgentxxPluginString data{nullptr, 0};
+    PluginxxString plugin{nullptr, 0};
+    PluginxxString event{nullptr, 0};
+    PluginxxString data{nullptr, 0};
     auto                kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
     auto                kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
     auto                kData   = agentxx::plugin::PluginStringView::fromCstr("data");
@@ -621,7 +621,7 @@ static void AGENTXX_PLUGIN_CALL
 /// - stop 撤销上述注册 (句柄置空, 可重复调用);
 /// - destroy 只释放本地内存。
 static int exampleClientSetup(ClientCtx& ctx) {
-    const AgentxxPluginHost* host = ctx.host;
+    const PluginxxHost* host = ctx.host;
     ctx.ui                        = ctx.iface.ui;
     auto sidSv      = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
     auto initSv     = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"turns: 0"})");
@@ -680,8 +680,8 @@ static int exampleClientSetup(ClientCtx& ctx) {
 
 static void* exampleClientStart(
     ClientCtx&                         ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -707,20 +707,20 @@ static void* exampleClientStart(
         auto msgSv = agentxx::plugin::PluginStringView::fromCstr("example client plugin started");
         ctx.iface.log->log(ctx.host, 2, &msgSv);
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    exampleClientStop(ClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    exampleClientStop(ClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册与事件订阅由宿主在本事务后统一撤销 (宿主记录里已保存), 这里只给
     // 完成信号; 插件自身没有线程/定时器需要回收。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
     ClientCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
@@ -748,7 +748,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ClientCtx, exampleClientStart, exampleClientStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
         if (!ctx || !ctx->host) {

@@ -148,7 +148,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
     capability(
         ctx,
         "agentxx.system_usage",
-        [](SysMonCtx& c, const AgentxxPluginHost*, std::string_view, std::string_view
+        [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view
         ) -> std::string {
             auto usage = c.querySync();
             return usageToJson(usage);
@@ -161,7 +161,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
         ctx.iface.events->subscribe(
             ctx.host,
             &t1,
-            [](const AgentxxPluginStringView* event_json, void* ud) {
+            [](const PluginxxStringView* event_json, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
                 if (!c) {
                     return;
@@ -183,7 +183,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
         ctx.iface.events->subscribe(
             ctx.host,
             &t2,
-            [](const AgentxxPluginStringView*, void* ud) {
+            [](const PluginxxStringView*, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
                 if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
                     return;
@@ -193,13 +193,13 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
                 }
                 c->iface.scheduler->offload(
                     c->host,
-                    [](void* ud, const AgentxxPluginCancelToken*, AgentxxPluginString*) -> void* {
+                    [](void* ud, const PluginxxCancelToken*, PluginxxString*) -> void* {
                         auto* c = static_cast<SysMonCtx*>(ud);
                         return new CpuGpuUsage(c->querySync());
                     },
-                    [](void* ud, int32_t status, void* res, const AgentxxPluginStringView*) {
+                    [](void* ud, int32_t status, void* res, const PluginxxStringView*) {
                         auto* c = static_cast<SysMonCtx*>(ud);
-                        if (status == AGENTXX_PLUGIN_OPERATOR_OK && res && c && c->host
+                        if (status == PLUGINXX_OPERATOR_OK && res && c && c->host
                             && c->iface.events && c->iface.events->publish) {
                             auto*       u    = static_cast<CpuGpuUsage*>(res);
                             std::string json = usageToJson(*u);
@@ -224,7 +224,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
     ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> Task<void> {
         while (!ctl.cancelled()) {
             if (c.usageEnabled.load(std::memory_order_relaxed)) {
-                auto usage = co_await offload(c, [&](const AgentxxPluginCancelToken*) {
+                auto usage = co_await offload(c, [&](const PluginxxCancelToken*) {
                     return c.querySync();
                 });
                 if (ctl.cancelled()) {
@@ -247,8 +247,8 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
 
 static void* sysMonStart(
     SysMonCtx&                         ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -262,14 +262,14 @@ static void* sysMonStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    sysMonStop(SysMonCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    sysMonStop(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.stopSpawns();
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
@@ -396,7 +396,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
         ctx.iface.events->subscribe(
             ctx.host,
             AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            [](const AgentxxPluginStringView* payload_json, void* ud) {
+            [](const PluginxxStringView* payload_json, void* ud) {
                 auto* ctx = static_cast<SysMonClientCtx*>(ud);
                 if (!ctx || PluginStringView::empty(payload_json)) {
                     return;
@@ -430,9 +430,9 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
             &nameSv,
             &descSv,
             [](void* ud,
-               const AgentxxPluginStringView*,
-               AgentxxPluginString* actionOut,
-               AgentxxPluginString*) -> int32_t {
+               const PluginxxStringView*,
+               PluginxxString* actionOut,
+               PluginxxString*) -> int32_t {
                 auto* ctx = static_cast<SysMonClientCtx*>(ud);
                 if (!ctx) {
                     return -1;
@@ -487,8 +487,8 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
 
 static void* sysMonClientStart(
     SysMonClientCtx&                   ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -510,14 +510,14 @@ static void* sysMonClientStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    sysMonClientStop(SysMonClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    sysMonClientStop(SysMonClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册与订阅由宿主在 stop 后统一撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

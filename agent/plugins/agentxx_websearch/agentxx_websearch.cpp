@@ -46,7 +46,7 @@ struct WebsearchPluginCtx : public PluginBase {
 /// 一个本地 reactor 与 HTTP keep-alive 连接池。
 static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
-        AgentxxPluginString json{nullptr, 0};
+        PluginxxString json{nullptr, 0};
         ctx.iface.model->get_config(ctx.host, &json);
         if (json.data) {
             std::string cfgJson(json.data, static_cast<size_t>(json.size));
@@ -87,14 +87,14 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
            std::string_view args_json,
            std::string_view,
            std::string_view,
-           const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw CancelledException("web_fetch cancelled");
             }
             ArgReader args(args_json);
             // args 是本协程帧的局部量: 其生命周期覆盖整个 co_await
             auto result = co_await webFetchExecuteAsync(args.raw());
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw CancelledException("web_fetch cancelled");
             }
             co_return result;
@@ -134,13 +134,13 @@ When resolving relative links found in the returned Markdown, combine them with 
            std::string_view args_json,
            std::string_view,
            std::string_view,
-           const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw CancelledException("web_fetch_markdown cancelled");
             }
             ArgReader args(args_json);
             auto      result = co_await webFetchMarkdownExecuteAsync(args.raw());
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw CancelledException("web_fetch_markdown cancelled");
             }
             co_return result;
@@ -174,8 +174,8 @@ When resolving relative links found in the returned Markdown, combine them with 
                std::string_view    args_json,
                std::string_view,
                std::string_view,
-               const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+               const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     throw CancelledException("web_search cancelled");
                 }
                 ArgReader   args(args_json);
@@ -190,7 +190,7 @@ When resolving relative links found in the returned Markdown, combine them with 
                         c.convert_html2markdown
                     );
                 }
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     throw CancelledException("web_search cancelled");
                 }
                 co_return result;
@@ -205,8 +205,8 @@ When resolving relative links found in the returned Markdown, combine them with 
 
 static void* websearchStart(
     WebsearchPluginCtx&                ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -228,13 +228,13 @@ static void* websearchStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    websearchStop(WebsearchPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    websearchStop(WebsearchPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
@@ -251,17 +251,17 @@ struct WebsearchClientCtx : public ClientPluginBase {};
 
 /// client 侧 start: 注册 3 个工具的折叠头模版 (stop 无需撤销, 宿主负责摘除)
 static void*
-    websearchClientStart(WebsearchClientCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    websearchClientStart(WebsearchClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.registerTemplate(kNameSearch, "Search", "query");
     ctx.registerTemplate(kNameFetch, "Fetch", "url");
     ctx.registerTemplate(kNameFetchMd, "FetchMd", "url");
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    websearchClientStop(WebsearchClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    websearchClientStop(WebsearchClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

@@ -39,11 +39,11 @@ using pluginxx::reportCurrentException;
  */
 
 inline void logTo(
-    const AgentxxPluginHost*     host,
+    const PluginxxHost*     host,
     const AgentxxClientLogIface* logIf,
     int32_t                      level,
-    AgentxxPluginStringView      pluginName,
-    AgentxxPluginStringView      msg
+    PluginxxStringView      pluginName,
+    PluginxxStringView      msg
 ) noexcept {
     if (!host || !logIf || !logIf->log || !msg.data) {
         return;
@@ -58,12 +58,12 @@ inline void logTo(
         static_cast<int>(msg.size > 460 ? 460 : msg.size),
         msg.data
     );
-    AgentxxPluginStringView sv = PluginStringView::fromCstr(buf);
+    PluginxxStringView sv = PluginStringView::fromCstr(buf);
     logIf->log(host, level, &sv);
 }
 
 inline void logTo(
-    const AgentxxPluginHost*     host,
+    const PluginxxHost*     host,
     const AgentxxClientLogIface* logIf,
     int32_t                      level,
     std::string_view             pluginName,
@@ -73,7 +73,7 @@ inline void logTo(
 }
 
 inline void logTo(
-    const AgentxxPluginHost*     host,
+    const PluginxxHost*     host,
     const AgentxxClientLogIface* logIf,
     int32_t                      level,
     const char*                  pluginName,

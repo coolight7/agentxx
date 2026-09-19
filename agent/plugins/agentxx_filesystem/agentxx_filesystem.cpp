@@ -121,7 +121,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) {
             ArgReader args(args_json);
             auto      path = args.require<std::string>("path");
             if (!args.ok()) {
@@ -131,7 +131,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                    return pluginxx_cancel_is_requested(cancel) != 0
                            || c.sessionCancelled(tid);
                 },
                 makeReadPathFilter(c, tid)
@@ -170,7 +170,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view args_json,
                std::string_view,
                std::string_view workDir,
-               const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken*) -> asio::awaitable<std::string> {
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
@@ -191,14 +191,14 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view                args_json,
                std::string_view                tid,
                std::string_view                workDir,
-               const AgentxxPluginCancelToken* cancel) {
+               const PluginxxCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
                     return args.errorMessage();
                 }
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
-                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                    return pluginxx_cancel_is_requested(cancel) != 0
                            || c.sessionCancelled(tid);
                 });
             }
@@ -235,7 +235,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view args_json,
                std::string_view,
                std::string_view workDir,
-               const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken*) -> asio::awaitable<std::string> {
                 ArgReader args(args_json);
                 auto      path    = args.require<std::string>("path");
                 auto      content = args.require<std::string>("content");
@@ -256,7 +256,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view                args_json,
                std::string_view                tid,
                std::string_view                workDir,
-               const AgentxxPluginCancelToken* cancel) {
+               const PluginxxCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path    = args.require<std::string>("path");
                 auto      content = args.require<std::string>("content");
@@ -264,7 +264,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                     return args.errorMessage();
                 }
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
-                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                    return pluginxx_cancel_is_requested(cancel) != 0
                            || c.sessionCancelled(tid);
                 });
             }
@@ -304,7 +304,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view args_json,
                std::string_view,
                std::string_view workDir,
-               const AgentxxPluginCancelToken*) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken*) -> asio::awaitable<std::string> {
                 ArgReader args(args_json);
                 auto      path   = args.require<std::string>("path");
                 auto      oldStr = args.require<std::string>("old_str");
@@ -326,7 +326,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view                args_json,
                std::string_view                tid,
                std::string_view                workDir,
-               const AgentxxPluginCancelToken* cancel) {
+               const PluginxxCancelToken* cancel) {
                 ArgReader args(args_json);
                 auto      path   = args.require<std::string>("path");
                 auto      oldStr = args.require<std::string>("old_str");
@@ -335,7 +335,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                     return args.errorMessage();
                 }
                 return fileEditExecute(args.raw(), std::string(workDir), [&] {
-                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                    return pluginxx_cancel_is_requested(cancel) != 0
                            || c.sessionCancelled(tid);
                 });
             }
@@ -394,7 +394,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) {
             ArgReader args(args_json);
             auto      patterns = args.require<std::vector<std::string>>("file_patterns");
             if (!args.ok()) {
@@ -404,7 +404,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                    return pluginxx_cancel_is_requested(cancel) != 0
                            || c.sessionCancelled(tid);
                 },
                 makeReadPathFilter(c, tid)
@@ -493,7 +493,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) {
             ArgReader args(args_json);
             auto      patterns = args.require<std::vector<std::string>>("file_patterns");
             if (!args.ok()) {
@@ -503,7 +503,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return agentxx_plugin_cancel_is_requested(cancel) != 0
+                    return pluginxx_cancel_is_requested(cancel) != 0
                            || c.sessionCancelled(tid);
                 },
                 makeReadPathFilter(c, tid)
@@ -521,8 +521,8 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
 
 static void* fsStart(
     FsPluginCtx&                       ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -536,13 +536,13 @@ static void* fsStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-static void* fsStop(FsPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+static void* fsStop(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
@@ -700,8 +700,8 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
 
 static void* fsClientStart(
     FsClientCtx&                       ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -719,14 +719,14 @@ static void* fsClientStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    fsClientStop(FsClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    fsClientStop(FsClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册记录由宿主在 stop 后统一撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

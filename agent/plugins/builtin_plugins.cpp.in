@@ -19,17 +19,17 @@
 @AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS@
 
 #if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
-static const AgentxxPluginBuiltinInfo kAgentxxBuiltinPlugins[] = {
+static const PluginxxBuiltinInfo kAgentxxBuiltinPlugins[] = {
 @AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES@
 };
 #else
 /* 无内置插件 (全部 AGENTXX_ENABLE_PLUGIN_*=OFF): 空表占位 */
-static const AgentxxPluginBuiltinInfo kAgentxxBuiltinPlugins[] = {
-    {AgentxxPluginStringView{}, nullptr, nullptr, nullptr},
+static const PluginxxBuiltinInfo kAgentxxBuiltinPlugins[] = {
+    {PluginxxStringView{}, nullptr, nullptr, nullptr},
 };
 #endif
 
-const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* count) {
+const PluginxxBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* count) {
     if (count) {
         *count = sizeof(kAgentxxBuiltinPlugins) / sizeof(kAgentxxBuiltinPlugins[0]);
     }
@@ -37,9 +37,9 @@ const AgentxxPluginBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* cou
 }
 
 /* ── 内嵌 plugin.yaml 原文 (与上表一一对应) ── */
-const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_t* count) {
+const PluginxxBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_t* count) {
 #if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
-    static const AgentxxPluginBuiltinManifest kManifests[] = {
+    static const PluginxxBuiltinManifest kManifests[] = {
 @AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY@
     };
     if (count) {
@@ -47,8 +47,8 @@ const AgentxxPluginBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_
     }
     return kManifests;
 #else
-    static const AgentxxPluginBuiltinManifest kEmptyManifests[] = {
-        {AgentxxPluginStringView{}, AgentxxPluginStringView{}},
+    static const PluginxxBuiltinManifest kEmptyManifests[] = {
+        {PluginxxStringView{}, PluginxxStringView{}},
     };
     if (count) {
         *count = 1;

@@ -22,22 +22,22 @@
 
 namespace {
 
-constexpr AgentxxPluginStringView cstrView(const char* text) {
+constexpr PluginxxStringView cstrView(const char* text) {
     uint64_t length = 0;
     while (text[length] != '\0') {
         ++length;
     }
-    return AgentxxPluginStringView{text, length};
+    return PluginxxStringView{text, length};
 }
 
-AgentxxPluginStringView sv(const char* text) {
-    AgentxxPluginStringView view{};
+PluginxxStringView sv(const char* text) {
+    PluginxxStringView view{};
     view.data = text;
     view.size = static_cast<uint64_t>(std::strlen(text));
     return view;
 }
 
-void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const char* text) {
+void setError(const PluginxxHost* host, PluginxxString* out, const char* text) {
     if (!out) {
         return;
     }
@@ -55,17 +55,17 @@ void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const cha
     out->size    = size;
 }
 
-const void* queryIface(const AgentxxPluginHost* host, const char* iid) {
+const void* queryIface(const PluginxxHost* host, const char* iid) {
     const auto view = sv(iid);
     return host->vtable->query_interface(host, &view);
 }
 
-void AGENTXX_PLUGIN_CALL onReadyEvent(const AgentxxPluginStringView*, void*) {
+void PLUGINXX_CALL onReadyEvent(const PluginxxStringView*, void*) {
     // 回滚用例只关心订阅是否被撤销; handler 本身不做任何事。
 }
 
-int32_t AGENTXX_PLUGIN_CALL
-    probeCommandExecute(void*, const AgentxxPluginStringView*, AgentxxPluginString* actionOut, AgentxxPluginString*) {
+int32_t PLUGINXX_CALL
+    probeCommandExecute(void*, const PluginxxStringView*, PluginxxString* actionOut, PluginxxString*) {
     if (actionOut) {
         actionOut->data = nullptr;
         actionOut->size = 0;
@@ -74,12 +74,12 @@ int32_t AGENTXX_PLUGIN_CALL
 }
 
 struct ProbeCtx {
-    const AgentxxPluginHost* host    = nullptr;
+    const PluginxxHost* host    = nullptr;
     bool                     started = false;
 };
 
 /// 注册事务: 每步注册后立即用句柄操作自检, 失败返回 false。
-bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
+bool registerAll(const PluginxxHost* host, ProbeCtx* ctx) {
     const auto* ui
         = static_cast<const AgentxxClientUiIface*>(queryIface(host, AGENTXX_IFACE_CLIENT_UI));
     if (!ui || !ui->register_status_item) {
@@ -148,7 +148,7 @@ bool registerAll(const AgentxxPluginHost* host, ProbeCtx* ctx) {
 
 } // namespace
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
 ) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
@@ -162,8 +162,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_c
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
     if (!host || !host->vtable || !plugin_ctx) {
         return -1;
     }
@@ -177,17 +177,17 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     return 0;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(
     void*                              plugin_ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error_out
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (!ctx || !ctx->host) {
         setError(ctx ? ctx->host : nullptr, error_out, "client start: missing context");
         return nullptr;
     }
-    const AgentxxPluginHost* host = ctx->host;
+    const PluginxxHost* host = ctx->host;
 
     const char* okFlag = std::getenv("AGENTXX_TEST_CLIENT_START_OK");
     if (!registerAll(host, ctx)) {
@@ -197,7 +197,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(
     if (okFlag && okFlag[0] == '1') {
         ctx->started = true;
         if (notify && notify->done) {
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         }
         return ctx;
     }
@@ -206,15 +206,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_client_start(
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void*
-    agentxx_plugin_client_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+extern "C" PLUGINXX_EXPORT void*
+    agentxx_plugin_client_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (ctx && ctx->host) {
         ctx->host->vtable->free(ctx);

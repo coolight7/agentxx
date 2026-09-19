@@ -23,22 +23,22 @@
 
 namespace {
 
-constexpr AgentxxPluginStringView cstrView(const char* text) {
+constexpr PluginxxStringView cstrView(const char* text) {
     uint64_t length = 0;
     while (text[length] != '\0') {
         ++length;
     }
-    return AgentxxPluginStringView{text, length};
+    return PluginxxStringView{text, length};
 }
 
-AgentxxPluginStringView sv(const char* text) {
-    AgentxxPluginStringView view{};
+PluginxxStringView sv(const char* text) {
+    PluginxxStringView view{};
     view.data = text;
     view.size = static_cast<uint64_t>(std::strlen(text));
     return view;
 }
 
-void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const char* text) {
+void setError(const PluginxxHost* host, PluginxxString* out, const char* text) {
     if (!out) {
         return;
     }
@@ -56,15 +56,15 @@ void setError(const AgentxxPluginHost* host, AgentxxPluginString* out, const cha
     out->size    = size;
 }
 
-const void* queryIface(const AgentxxPluginHost* host, const char* iid) {
+const void* queryIface(const PluginxxHost* host, const char* iid) {
     const auto view = sv(iid);
     return host->vtable->query_interface(host, &view);
 }
 
 /// 发布进度事件 (供测试断言每一步都真实执行过)
-void report(const AgentxxPluginHost* host, const char* step, bool ok) {
-    const auto* events = static_cast<const AgentxxPluginEventsIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_EVENTS)
+void report(const PluginxxHost* host, const char* step, bool ok) {
+    const auto* events = static_cast<const PluginxxEventsIface*>(
+        queryIface(host, PLUGINXX_IFACE_EVENTS)
     );
     if (!events || !events->publish) {
         return;
@@ -78,64 +78,64 @@ void report(const AgentxxPluginHost* host, const char* step, bool ok) {
         step,
         ok ? "true" : "false"
     );
-    AgentxxPluginStringView payload{};
+    PluginxxStringView payload{};
     payload.data = buffer;
     payload.size = static_cast<uint64_t>(length > 0 ? length : 0);
     events->publish(host, &topic, &payload);
 }
 
-const char* failStep(const AgentxxPluginHost* host, const char* step) {
+const char* failStep(const PluginxxHost* host, const char* step) {
     report(host, step, false);
     return step;
 }
 
-void* AGENTXX_PLUGIN_CALL
-    probeToolStart(void*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeToolStart(void*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
         const auto payload = sv(R"({"ok":true})");
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payload);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
     }
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL
-    probeNodeRunStart(void*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeNodeRunStart(void*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
         const auto payload = sv("{}");
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &payload);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
     }
     return nullptr;
 }
 
-void AGENTXX_PLUGIN_CALL onProbeEvent(const AgentxxPluginStringView*, void*) {
+void PLUGINXX_CALL onProbeEvent(const PluginxxStringView*, void*) {
     // 回滚用例只需要"订阅存在/被撤销"这一事实；handler 本身不做任何事。
 }
 
-void* AGENTXX_PLUGIN_CALL
-    probeHookStart(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeHookStart(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL
-    probeCapabilityStart(void*, const AgentxxPluginHost*, const AgentxxPluginStringView*, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeCapabilityStart(void*, const PluginxxHost*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
     return nullptr;
 }
 
 struct ProbeCtx {
-    const AgentxxPluginHost* host = nullptr;
+    const PluginxxHost* host = nullptr;
 };
 
 } // namespace
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
-    static const AgentxxPluginInfo info{
-        AGENTXX_PLUGIN_API_VERSION,
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
+    static const PluginxxInfo info{
+        PLUGINXX_API_VERSION,
         0,
         cstrView("test_start_fail_plugin"),
         cstrView("1.0.0"),
@@ -144,8 +144,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
     return &info;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     if (!host || !host->vtable || !plugin_ctx) {
         return -1;
     }
@@ -158,10 +158,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
     return 0;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
     void*                              plugin_ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error_out
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
     (void)notify;
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
@@ -172,7 +172,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
         }
         return nullptr;
     }
-    const AgentxxPluginHost* host = ctx->host;
+    const PluginxxHost* host = ctx->host;
 
     // 1. 工具
     const auto* tools = static_cast<const AgentxxPluginToolsIface*>(
@@ -210,8 +210,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
     }
 
     // 3. 事件订阅
-    const auto* events = static_cast<const AgentxxPluginEventsIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_EVENTS)
+    const auto* events = static_cast<const PluginxxEventsIface*>(
+        queryIface(host, PLUGINXX_IFACE_EVENTS)
     );
     if (!events || !events->subscribe) {
         setError(host, error_out, failStep(host, "events_iface"));
@@ -255,8 +255,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
     }
 
     // 6. 能力注册
-    const auto* capabilities = static_cast<const AgentxxPluginCapabilitiesIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES)
+    const auto* capabilities = static_cast<const PluginxxCapabilitiesIface*>(
+        queryIface(host, PLUGINXX_IFACE_CAPABILITIES)
     );
     if (!capabilities || !capabilities->register_capability_ex) {
         setError(host, error_out, failStep(host, "capabilities_iface"));
@@ -289,15 +289,15 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* agentxx_plugin_agent_start(
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void*
-    agentxx_plugin_agent_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+extern "C" PLUGINXX_EXPORT void*
+    agentxx_plugin_agent_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
     return nullptr;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (ctx && ctx->host) {
         ctx->host->vtable->free(ctx);

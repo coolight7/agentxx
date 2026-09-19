@@ -21,11 +21,11 @@ namespace {
 
 /// 写 C ABI 出参错误串: 优先经实例的宿主视图分配 (与插件侧释放路径一致),
 /// 失败时回退宿主堆内存
-void setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, const std::string& msg) {
+void setErrOut(PluginInstance* caller, PluginxxString* error_out, const std::string& msg) {
     if (!error_out || error_out->data) {
         return;
     }
-    const AgentxxPluginHost* host = caller ? caller->hostView() : nullptr;
+    const PluginxxHost* host = caller ? caller->hostView() : nullptr;
     *error_out                    = agentxx::plugin::PluginString::from(host, strToSv(msg));
     if (!error_out->data) {
         auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
@@ -39,14 +39,14 @@ void setErrOut(PluginInstance* caller, AgentxxPluginString* error_out, const std
 
 } // namespace
 
-AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
+PluginxxOperatorHandle* PluginManager::callToolAsync(
     PluginInstance*               caller,
-    AgentxxPluginStringView       name,
-    AgentxxPluginStringView       args_json,
-    AgentxxPluginStringView       thread_id,
-    AgentxxPluginOperatorCallback cb,
+    PluginxxStringView       name,
+    PluginxxStringView       args_json,
+    PluginxxStringView       thread_id,
+    PluginxxOperatorCallback cb,
     void*                         ud,
-    AgentxxPluginString*          error_out
+    PluginxxString*          error_out
 ) {
     // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。
     if (!isIoThread()) {
@@ -60,7 +60,7 @@ AgentxxPluginOperatorHandle* PluginManager::callToolAsync(
         }
         const std::string toolName = svToStr(name), args = svToStr(args_json),
                           sid = svToStr(thread_id);
-        return ioCallSync<AgentxxPluginOperatorHandle*>(
+        return ioCallSync<PluginxxOperatorHandle*>(
             this,
             [self, owner, admission, toolName, args, sid, cb, ud, error_out] {
                 return self->callToolAsync(owner.get(), toolName, args, sid, cb, ud, error_out);

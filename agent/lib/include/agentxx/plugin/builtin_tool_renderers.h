@@ -25,13 +25,13 @@ void registerBuiltinToolRenderers(ClientPluginManager& mgr);
 ///   ([ClientUiRegistry::builtinToolRenderers]) 使用
 /// - 输出字符串经宿主内存操作分配, 由调用方统一释放
 /// - `return` 0 成功 (至少提供显示名); 非 0 表示本次渲染不可用, 调用方回退通用展示
-int32_t AGENTXX_PLUGIN_CALL builtinRenderShareStore(
+int32_t PLUGINXX_CALL builtinRenderShareStore(
     void*                         userData,
     const AgentxxToolRenderInput* input,
     AgentxxToolRenderOutput*      output
 );
 
-int32_t AGENTXX_PLUGIN_CALL builtinRenderSubagent(
+int32_t PLUGINXX_CALL builtinRenderSubagent(
     void*                         userData,
     const AgentxxToolRenderInput* input,
     AgentxxToolRenderOutput*      output

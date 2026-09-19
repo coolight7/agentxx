@@ -138,8 +138,8 @@ void AudioStreamHolder::stop() {
 
 static void* audioStreamAgentStart(
     AudioStreamPluginCtx&              ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               err
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
 ) {
     ctx.holder      = std::make_unique<AudioStreamHolder>();
     ctx.holder->ctx = &ctx;
@@ -212,20 +212,20 @@ static void* audioStreamAgentStart(
         }
     );
 
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 /// stop: 停止采集并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
 static void*
-    audioStreamAgentStop(AudioStreamPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    audioStreamAgentStop(AudioStreamPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.holder) {
         try {
             ctx.holder->stop();
         } catch (...) {
         }
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

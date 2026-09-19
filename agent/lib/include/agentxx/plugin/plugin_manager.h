@@ -55,7 +55,7 @@ struct GraphTypeSlot;
 } // namespace plugin
 } // namespace agentxx
 
-// 事件订阅句柄的实现体 (C ABI 不透明句柄 `AgentxxPluginSubscription*`) 由
+// 事件订阅句柄的实现体 (C ABI 不透明句柄 `PluginxxSubscription*`) 由
 // cxx_pluginxx 提供 (事件表是通用表): 见 `pluginxx/host/event_bus.h`。
 // 句柄字段为内核类型 (EventSource / 插件实例基类弱引用), 因此事件表的订阅与撤销
 // 实现整体位于内核; agentxx 只提供事件后端适配 (AgentEventBusSource, 见
@@ -79,9 +79,9 @@ public:
 
     struct HookRegistration {
         int32_t point;
-        void*(AGENTXX_PLUGIN_CALL*
-                  start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*);
-        void(AGENTXX_PLUGIN_CALL* cancel)(void*, void*);
+        void*(PLUGINXX_CALL*
+                  start)(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify*, PluginxxString*);
+        void(PLUGINXX_CALL* cancel)(void*, void*);
         void* ud;
     };
 
@@ -201,10 +201,10 @@ public:
 private:
 
     struct HookEntry {
-        void*(AGENTXX_PLUGIN_CALL*
-                  start)(void*, int32_t, const AgentxxPluginStringView*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*)
+        void*(PLUGINXX_CALL*
+                  start)(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify*, PluginxxString*)
             = nullptr;
-        void(AGENTXX_PLUGIN_CALL* cancel)(void*, void*) = nullptr;
+        void(PLUGINXX_CALL* cancel)(void*, void*) = nullptr;
         void* ud                                        = nullptr;
         bool  set                                       = false;
     };
@@ -310,7 +310,7 @@ public:
     }
 
     int registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec);
-    int unregisterTool(PluginInstance* inst, AgentxxPluginStringView name);
+    int unregisterTool(PluginInstance* inst, PluginxxStringView name);
 
     int unregisterTool(PluginInstance* inst, std::string_view name) {
         return unregisterTool(inst, strToSv(name));
@@ -327,7 +327,7 @@ public:
 
     /// 撤销工具权限声明 (按工具名; 工具注销、插件禁用/卸载时由宿主自动撤销)
     /// `return`: 0 成功, 非 0 不存在
-    int unregisterToolPermission(PluginInstance* inst, AgentxxPluginStringView toolName);
+    int unregisterToolPermission(PluginInstance* inst, PluginxxStringView toolName);
 
     int unregisterToolPermission(PluginInstance* inst, std::string_view toolName) {
         return unregisterToolPermission(inst, strToSv(toolName));
@@ -353,37 +353,37 @@ public:
         std::vector<int32_t>&           outDecisions
     );
 
-    int registerSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
+    int registerSkillDir(PluginInstance* inst, PluginxxStringView path);
 
     int registerSkillDir(PluginInstance* inst, std::string_view path) {
         return registerSkillDir(inst, strToSv(path));
     }
 
-    int unregisterSkillDir(PluginInstance* inst, AgentxxPluginStringView path);
+    int unregisterSkillDir(PluginInstance* inst, PluginxxStringView path);
 
     int unregisterSkillDir(PluginInstance* inst, std::string_view path) {
         return unregisterSkillDir(inst, strToSv(path));
     }
 
-    int registerMemoryFile(PluginInstance* inst, AgentxxPluginStringView path);
+    int registerMemoryFile(PluginInstance* inst, PluginxxStringView path);
 
     int registerMemoryFile(PluginInstance* inst, std::string_view path) {
         return registerMemoryFile(inst, strToSv(path));
     }
 
-    int unregisterMemoryFile(PluginInstance* inst, AgentxxPluginStringView path);
+    int unregisterMemoryFile(PluginInstance* inst, PluginxxStringView path);
 
     int unregisterMemoryFile(PluginInstance* inst, std::string_view path) {
         return unregisterMemoryFile(inst, strToSv(path));
     }
 
-    int registerMcpServer(PluginInstance* inst, AgentxxPluginStringView specJson);
+    int registerMcpServer(PluginInstance* inst, PluginxxStringView specJson);
 
     int registerMcpServer(PluginInstance* inst, std::string_view specJson) {
         return registerMcpServer(inst, strToSv(specJson));
     }
 
-    int unregisterMcpServer(PluginInstance* inst, AgentxxPluginStringView nameSpace);
+    int unregisterMcpServer(PluginInstance* inst, PluginxxStringView nameSpace);
 
     int unregisterMcpServer(PluginInstance* inst, std::string_view nameSpace) {
         return unregisterMcpServer(inst, strToSv(nameSpace));
@@ -397,7 +397,7 @@ public:
     /// 注册插件节点类型到 per-agent GraphRegistry (插件 graph 接口表)
     int registerGraphNodeType(PluginInstance* inst, const AgentxxPluginGraphNodeTypeSpec* spec);
     /// 注销插件节点类型 (按类型名; 卸载时宿主自动清理)
-    int unregisterGraphNodeType(PluginInstance* inst, AgentxxPluginStringView type);
+    int unregisterGraphNodeType(PluginInstance* inst, PluginxxStringView type);
 
     int unregisterGraphNodeType(PluginInstance* inst, std::string_view type) {
         return unregisterGraphNodeType(inst, strToSv(type));
@@ -406,24 +406,24 @@ public:
     /// 获取当前执行图 JSON 定义 (host->alloc 语义由 vtable 层处理)
     std::string getGraphJson();
     /// 设置执行图 JSON 定义 (覆盖; 非法 JSON 返回非 0)
-    int setGraphJson(PluginInstance* inst, AgentxxPluginStringView graph_json);
+    int setGraphJson(PluginInstance* inst, PluginxxStringView graph_json);
 
     int setGraphJson(PluginInstance* inst, std::string_view graph_json) {
         return setGraphJson(inst, strToSv(graph_json));
     }
 
-    AgentxxPluginString
-        getShareStore(PluginInstance* inst, AgentxxPluginStringView session_id, int64_t id);
+    PluginxxString
+        getShareStore(PluginInstance* inst, PluginxxStringView session_id, int64_t id);
 
-    AgentxxPluginString
+    PluginxxString
         getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
         return getShareStore(inst, strToSv(session_id), id);
     }
 
     int64_t addShareStore(
         PluginInstance*         inst,
-        AgentxxPluginStringView session_id,
-        AgentxxPluginStringView content
+        PluginxxStringView session_id,
+        PluginxxStringView content
     );
 
     int64_t
@@ -433,8 +433,8 @@ public:
 
     void emitMessageTip(
         PluginInstance*         inst,
-        AgentxxPluginStringView session_id,
-        AgentxxPluginStringView text,
+        PluginxxStringView session_id,
+        PluginxxStringView text,
         int32_t                 level
     );
 
@@ -447,24 +447,24 @@ public:
         emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
     }
 
-    AgentxxPluginOperatorHandle* callToolAsync(
+    PluginxxOperatorHandle* callToolAsync(
         PluginInstance*               caller,
-        AgentxxPluginStringView       name,
-        AgentxxPluginStringView       args_json,
-        AgentxxPluginStringView       session_id,
-        AgentxxPluginOperatorCallback cb,
+        PluginxxStringView       name,
+        PluginxxStringView       args_json,
+        PluginxxStringView       session_id,
+        PluginxxOperatorCallback cb,
         void*                         ud,
-        AgentxxPluginString*          error_out
+        PluginxxString*          error_out
     );
 
-    AgentxxPluginOperatorHandle* callToolAsync(
+    PluginxxOperatorHandle* callToolAsync(
         PluginInstance*               caller,
         std::string_view              name,
         std::string_view              args_json,
         std::string_view              session_id,
-        AgentxxPluginOperatorCallback cb,
+        PluginxxOperatorCallback cb,
         void*                         ud,
-        AgentxxPluginString*          error_out
+        PluginxxString*          error_out
     ) {
         return callToolAsync(
             caller,
@@ -496,7 +496,7 @@ public:
     std::string getConfigJson();
     std::string getToolPromptJson(const std::string& toolName);
     std::string getPromptJson();
-    int         setPromptJson(PluginInstance* inst, AgentxxPluginStringView prompt_json);
+    int         setPromptJson(PluginInstance* inst, PluginxxStringView prompt_json);
 
     int setPromptJson(PluginInstance* inst, std::string_view prompt_json) {
         return setPromptJson(inst, strToSv(prompt_json));
@@ -584,7 +584,20 @@ protected:
     std::shared_ptr<PluginInstance> createInstance(std::string name) override;
 
     /// 交给插件的宿主 vtable (进程内稳定静态表; 定义在 plugin_manager_vtable.cpp)
-    const AgentxxHostVtable* hostVtable() override;
+    const PluginxxHostVtable* hostVtable() override;
+
+    /// agent 侧插件入口符号名 (内核不硬编码宿主专名, 见 pluginxx/api/entry.h)
+    ///
+    /// 与插件侧导出宏 AGENTXX_PLUGIN_AGENT_EXPORT 生成的符号一致; `destroy` 不在此列
+    /// (由 PluginInstance::pluginDestroySymbol 给出)。
+    pluginxx::PluginEntrySymbols entrySymbols() const override {
+        return {
+            AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO,
+            AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE,
+            AGENTXX_PLUGIN_AGENT_SYMBOL_START,
+            AGENTXX_PLUGIN_AGENT_SYMBOL_STOP,
+        };
+    }
 
     /// 摘除领域注册: 工具/工具权限/图节点类型/prompt 贡献/中间件停用
     void detachDomainRegistrations(PluginInstance* inst) override;

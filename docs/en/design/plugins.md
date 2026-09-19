@@ -8,9 +8,9 @@
 
 The Agentxx plugin system is built on a **pure C ABI + COM-style interface table query** architecture:
 
-- **Pure C Boundary**: Only pure C primitive types, function pointers, opaque handles, and `AgentxxPluginStringView` (data + size borrowed read-only view, NUL-termination not required) cross boundaries. Direct transfer of `std::string`, `std::vector`, `std::function`, or C++ exceptions is strictly forbidden.
+- **Pure C Boundary**: Only pure C primitive types, function pointers, opaque handles, and `PluginxxStringView` (data + size borrowed read-only view, NUL-termination not required) cross boundaries. Direct transfer of `std::string`, `std::vector`, `std::function`, or C++ exceptions is strictly forbidden.
 - **Cross-Compiler / Cross-STL / Cross-Language Compatibility**: Host and plugins can be compiled independently using different compilers, different standard C++ libraries (libstdc++, libc++, MSVC STL), or entirely different programming languages, guaranteeing stable runtime binary compatibility.
-- **Memory Ownership**: All cross-boundary heap allocations are strictly managed via `host->alloc/free` (the core vtable memory pair). The receiver is responsible for releasing memory using `host->free`. String cloning uses the header-inlined helper `agentxx_plugin_strdup(host, ...)`.
+- **Memory Ownership**: All cross-boundary heap allocations are strictly managed via `host->alloc/free` (the core vtable memory pair). The receiver is responsible for releasing memory using `host->free`. String cloning uses the header-inlined helper `pluginxx_strdup(host, ...)`.
 - **Native Coroutine Asynchrony**: Using `Task<T>` from `plugin_kit.h`, plugin coroutines execute directly within the host's IO thread. Coroutines yield cooperatively on suspension and wake up via IO thread callbacks. Host and plugin coroutines interleave cooperatively without thread locks, polling, or private event loops.
 - **Single-Threaded Session State**: Mutable host session state is accessed serially only on the primary IO thread. Plugin registration and state queries are automatically posted back to the IO thread by the host when necessary, completely transparent to the plugin.
 
@@ -27,20 +27,20 @@ Host (libagentxx / agentxx_cli)
          │ register/      │ 7 hook points  │ publish/        │ sleep/      capabilities/
          │ call_tool      │                │ subscribe       │ offload     session/plugins/
          └────────────────┘                └─────────────────┘             config/model/cancel/...
-Plugin Shared Library (Any compiler) ── AGENTXX_PLUGIN_EXPORT ── PluginBase context ── SDK registry
+Plugin Shared Library (Any compiler) ── PLUGINXX_EXPORT ── PluginBase context ── SDK registry
 ```
 
 - **Frozen Core vtable**: Contains only `alloc`, `free`, and `query_interface`. Will never be modified. All host capabilities are retrieved by querying dedicated interface tables via stable `IID` string identifiers (`AGENTXX_PLUGIN_QUERY_IFACE` macro).
 - **Strict ABI Specification**:
   - 8-byte struct alignment: Headers uniformly wrap definitions in `#pragma pack(push, 8)` / `#pragma pack(pop)`.
   - Fixed-width primitive types: Naked `int`, `long`, and `size_t` are forbidden across boundaries; `int32_t`, `int64_t`, `uint64_t`, etc., are strictly required.
-  - Explicit calling conventions: Exported symbols and function pointers crossing boundaries must carry the `AGENTXX_PLUGIN_CALL` macro (`__stdcall` on Windows, empty on x64 Unix).
+  - Explicit calling conventions: Exported symbols and function pointers crossing boundaries must carry the `PLUGINXX_CALL` macro (`__stdcall` on Windows, empty on x64 Unix).
   - Passing structs by pointer: Passing aggregate structs by value is prohibited. Input parameters must be passed by pointer (`const Struct*`); struct return values are converted into pointer out-parameters (`Struct* out`), with the function returning an `int32_t` status code (0 for success).
-  - Streamlined core vtable: Removed the previous `strdup` slot in favor of a header-inlined `agentxx_plugin_strdup` based on `alloc`.
-  - C++ helper convenience layer: `AgentxxPluginStringView` and `AgentxxPluginString` provide implicit `operator const T*()` address conversions and `.empty()` helpers, along with value-passing compatibility overloads and `agentxx_plugin_string_free` overloads.
+  - Streamlined core vtable: Removed the previous `strdup` slot in favor of a header-inlined `pluginxx_strdup` based on `alloc`.
+  - C++ helper convenience layer: `PluginxxStringView` and `PluginxxString` provide implicit `operator const T*()` address conversions and `.empty()` helpers, along with value-passing compatibility overloads and `pluginxx_string_free` overloads.
 - **Independent Interface Table Evolution**: The first field of each table is an `int32_t version` indicating its independent version number. Function pointers within tables may be `NULL` (indicating the host has not implemented that specific sub-capability; check before calling).
-- **Version Gatekeeping**: Global `AGENTXX_PLUGIN_API_VERSION` and `AGENTXX_CLIENT_PLUGIN_API_VERSION` are reset to 1. Host requires plugin api_version >= host version upon load; lower versions are rejected. New features introduce new interface tables or append fields with incremented table versions, leaving the global version untouched.
-- **Threading Rules**: `query_interface` and `alloc` can be called from any thread. Registration and IO-constrained operations (session, config, prompt) are dispatched internally by the host with synchronous waiting. The two-piece `start/cancel` operations are driven by the host on the IO thread (< ~1ms). `AgentxxPluginOperatorNotify.done` may be called from any thread. Host completion callbacks dispatched to the plugin (`AgentxxOpCb`, sleep/offload done) are guaranteed to be queued on the IO thread via `post`.
+- **Version Gatekeeping**: Global `PLUGINXX_API_VERSION` and `AGENTXX_CLIENT_PLUGIN_API_VERSION` are reset to 1. Host requires plugin api_version >= host version upon load; lower versions are rejected. New features introduce new interface tables or append fields with incremented table versions, leaving the global version untouched.
+- **Threading Rules**: `query_interface` and `alloc` can be called from any thread. Registration and IO-constrained operations (session, config, prompt) are dispatched internally by the host with synchronous waiting. The two-piece `start/cancel` operations are driven by the host on the IO thread (< ~1ms). `PluginxxOperatorNotify.done` may be called from any thread. Host completion callbacks dispatched to the plugin (`AgentxxOpCb`, sleep/offload done) are guaranteed to be queued on the IO thread via `post`.
 
 ---
 
@@ -56,13 +56,13 @@ A single plugin shared library may be loaded simultaneously by multiple independ
 
 ## 4. Exported Symbol Visibility
 
-Plugin shared libraries hide all symbols by default, exporting only the entry-point symbols looked up by name by the host. Entry functions must be declared with `AGENTXX_PLUGIN_EXPORT` (inside `extern "C"`):
+Plugin shared libraries hide all symbols by default, exporting only the entry-point symbols looked up by name by the host. Entry functions must be declared with `PLUGINXX_EXPORT` (inside `extern "C"`):
 
 ```c
 #include "agentxx/plugin/api/plugin_api.h"
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void);
-extern "C" AGENTXX_PLUGIN_EXPORT int32_t agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx);
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void);
+extern "C" PLUGINXX_EXPORT int32_t agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx);
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
 ```
 
 - **Entry Symbol Sets**:
@@ -218,10 +218,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view args_json,
                std::string_view tid,
                std::string_view workDir,
-               const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
                 ArgReader args(args_json);
                 std::string workDirStr(workDir);
-                if (agentxx_plugin_cancel_is_requested(cancel)) {
+                if (pluginxx_cancel_is_requested(cancel)) {
                     throw CancelledException("cancelled");
                 }
                 // await the existing asio coroutine implementation directly (no local
@@ -245,7 +245,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         });
 
         // 7. Capabilities (generic cross-plugin RPC)
-        capability(ctx, "my.cap", [](MyPluginCtx& c, const AgentxxPluginHost* caller,
+        capability(ctx, "my.cap", [](MyPluginCtx& c, const PluginxxHost* caller,
                                      std::string_view method, std::string_view args) {
             return "{}";
         });
@@ -504,17 +504,17 @@ never receives a host executor.
 ### 15.2 C ABI (`agentxx.agent.coroutine_runtime`, version 1)
 
 ```c
-typedef struct AgentxxPluginDriver AgentxxPluginDriver;
-typedef void(AGENTXX_PLUGIN_CALL* AgentxxPluginDriveOnceFn)(void* user_data);
+typedef struct PluginxxDriver PluginxxDriver;
+typedef void(PLUGINXX_CALL* PluginxxDriveOnceFn)(void* user_data);
 
-typedef struct AgentxxPluginCoroutineRuntimeIface {
+typedef struct PluginxxCoroutineRuntimeIface {
     int32_t  version;      // == 1
     uint32_t struct_size;
-    AgentxxPluginDriver* (AGENTXX_PLUGIN_CALL* request_driver)(
-        const AgentxxPluginHost*, AgentxxPluginDriveOnceFn, void* user_data, AgentxxPluginString* error_out);
-    void   (AGENTXX_PLUGIN_CALL* cancel_driver)(AgentxxPluginDriver*);
-    int32_t(AGENTXX_PLUGIN_CALL* is_io_thread)(const AgentxxPluginHost*);
-} AgentxxPluginCoroutineRuntimeIface;
+    PluginxxDriver* (PLUGINXX_CALL* request_driver)(
+        const PluginxxHost*, PluginxxDriveOnceFn, void* user_data, PluginxxString* error_out);
+    void   (PLUGINXX_CALL* cancel_driver)(PluginxxDriver*);
+    int32_t(PLUGINXX_CALL* is_io_thread)(const PluginxxHost*);
+} PluginxxCoroutineRuntimeIface;
 ```
 
 **Contract (both sides)**
@@ -676,7 +676,7 @@ The business signature matches `blocking_tool` (only the return type becomes
 ```cpp
 polled_tool(ctx, name, depict, schema,
     [](Ctx& c, std::string_view args, std::string_view tid, std::string_view workDir,
-       const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+       const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
         ArgReader reader(args);
         co_return co_await doSomethingAsync(reader.raw(), c.workDir(tid));
     });

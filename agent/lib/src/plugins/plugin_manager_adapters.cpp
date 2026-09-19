@@ -100,8 +100,8 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
 
     plugin::OpDrive drive;
     drive.start = [spec, instKeep, argsJson, sessionId, toolCallId](
-                      const AgentxxPluginOperatorNotify* notify,
-                      AgentxxPluginString*               err
+                      const PluginxxOperatorNotify* notify,
+                      PluginxxString*               err
                   ) -> void* {
         auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
@@ -197,8 +197,8 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
 
     plugin::OpDrive drive;
     drive.start = [hook, instKeep, inputJson, point](
-                      const AgentxxPluginOperatorNotify* notify,
-                      AgentxxPluginString*               err
+                      const PluginxxOperatorNotify* notify,
+                      PluginxxString*               err
                   ) -> void* {
         auto inSv = agentxx::plugin::PluginStringView::from(inputJson.data(), inputJson.size());
         return hook.start(hook.ud, point, &inSv, notify, err);
@@ -294,7 +294,7 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpe
     return 0;
 }
 
-int PluginManager::unregisterTool(PluginInstance* inst, AgentxxPluginStringView name) {
+int PluginManager::unregisterTool(PluginInstance* inst, PluginxxStringView name) {
     if (!inst || agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
@@ -435,7 +435,7 @@ int PluginManager::registerToolPermission(
 
 int PluginManager::unregisterToolPermission(
     PluginInstance*         inst,
-    AgentxxPluginStringView toolName
+    PluginxxStringView toolName
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(toolName)) {
         return -1;
@@ -694,7 +694,7 @@ int PluginManager::registerGraphNodeType(
     return 0;
 }
 
-int PluginManager::unregisterGraphNodeType(PluginInstance* inst, AgentxxPluginStringView type) {
+int PluginManager::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringView type) {
     if (!inst || agentxx::plugin::PluginStringView::empty(type)) {
         return -1;
     }
@@ -732,7 +732,7 @@ std::string PluginManager::getGraphJson() {
     return ctx->graphDefinitionJson.dump();
 }
 
-int PluginManager::setGraphJson(PluginInstance* inst, AgentxxPluginStringView graph_json) {
+int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_json) {
     if (!inst || agentxx::plugin::PluginStringView::empty(graph_json)) {
         return -1;
     }

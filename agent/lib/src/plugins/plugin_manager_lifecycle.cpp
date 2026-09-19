@@ -35,8 +35,8 @@
 namespace agentxx {
 namespace plugin {
 
-const void* AGENTXX_PLUGIN_CALL
-    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+const void* PLUGINXX_CALL
+    xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 
 // =====================================================================
 // PluginInstance

@@ -44,8 +44,8 @@ int g_plugin_failed = 0;
 
 namespace agentxx {
 namespace plugin {
-const void* AGENTXX_PLUGIN_CALL
-    xx_query_interface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid);
+const void* PLUGINXX_CALL
+    xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 }
 
 namespace test {
@@ -131,15 +131,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 2.5 接口表: agentxx.agent.config get_language / set_language ----
     {
-        auto ifaceConfig = agentxx::plugin::queryInterface<AgentxxPluginConfigIface>(
+        auto ifaceConfig = agentxx::plugin::queryInterface<PluginxxConfigIface>(
             inst->hostView(),
-            AGENTXX_PLUGIN_IFACE_AGENT_CONFIG
+            PLUGINXX_IFACE_CONFIG
         );
         XX_TEST_EXPECT_TRUE(ifaceConfig != nullptr);
         if (ifaceConfig) {
             XX_TEST_EXPECT_EQ(ifaceConfig->version, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION);
             // 默认语言为 "en"
-            AgentxxPluginString langOut{};
+            PluginxxString langOut{};
             XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
@@ -148,7 +148,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 切换语言为 "zh-cn"
-            AgentxxPluginStringView zhSv{"zh-cn", 5};
+            PluginxxStringView zhSv{"zh-cn", 5};
             XX_TEST_EXPECT_EQ(ifaceConfig->set_language(inst->hostView(), &zhSv), 0);
 
             XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
@@ -159,7 +159,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 不支持 auto, 传 auto 回退为 en
-            AgentxxPluginStringView autoSv{"auto", 4};
+            PluginxxStringView autoSv{"auto", 4};
             XX_TEST_EXPECT_EQ(ifaceConfig->set_language(inst->hostView(), &autoSv), 0);
 
             XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
@@ -643,7 +643,7 @@ throw new Error("top-level rollback probe");
                 std::string payload;
             } st;
 
-            AgentxxPluginString loadErr{nullptr, 0};
+            PluginxxString loadErr{nullptr, 0};
             auto*               jsInst = ctx->pluginManager->find("example_js").get();
             XX_TEST_EXPECT_TRUE(jsInst != nullptr);
             auto* op = ctx->pluginManager->invokeCapabilityAsync(
@@ -651,7 +651,7 @@ throw new Error("top-level rollback probe");
                 "interpreter.js",
                 "load",
                 args,
-                [](void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+                [](void* ud, int32_t status, const PluginxxStringView* payload) {
                     auto* s   = static_cast<LoadState*>(ud);
                     s->status = status;
                     s->done   = true;
@@ -670,7 +670,7 @@ throw new Error("top-level rollback probe");
                 co_await sleepMs(2);
             }
             XX_TEST_EXPECT_TRUE(st.done);
-            XX_TEST_EXPECT_TRUE(st.status != AGENTXX_PLUGIN_OPERATOR_OK);
+            XX_TEST_EXPECT_TRUE(st.status != PLUGINXX_OPERATOR_OK);
             // 注册事务回滚: 失败脚本注册的工具必须已从宿主注册表撤销
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("rollback_probe_tool"));
             // 引擎与既有脚本不受影响
@@ -1206,7 +1206,7 @@ throw new Error("top-level rollback probe");
 
         // 31.1 call_tool_async 回调语义 (宿主在 io 线程派发 cb; 恰好一次)
         {
-            AgentxxPluginString e        = {nullptr, 0};
+            PluginxxString e        = {nullptr, 0};
             int                 cbStatus = -1;
             std::string         cbPayload;
             bool                cbDone = false;
@@ -1218,7 +1218,7 @@ throw new Error("top-level rollback probe");
                 "example_echo",
                 R"({"k":"v"})",
                 "t31",
-                [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
+                [](void* ud, int32_t st, const PluginxxStringView* pl) {
                     auto* s          = static_cast<StateTuple*>(ud);
                     *std::get<0>(*s) = st;
                     if (pl && pl->data && pl->size > 0) {
@@ -1233,20 +1233,20 @@ throw new Error("top-level rollback probe");
             while (!cbDone) {
                 co_await sleepMs(2);
             }
-            XX_TEST_EXPECT_EQ(cbStatus, AGENTXX_PLUGIN_OPERATOR_OK);
+            XX_TEST_EXPECT_EQ(cbStatus, PLUGINXX_OPERATOR_OK);
             XX_TEST_EXPECT_TRUE(cbPayload.find("k") != std::string::npos);
             if (e.data) {
                 agentxx::plugin::PluginString::free(inst31->hostView(), &e);
             }
 
             // 不存在的工具: 装配失败返回 NULL 并带错误
-            AgentxxPluginString e2  = {nullptr, 0};
+            PluginxxString e2  = {nullptr, 0};
             auto*               op2 = ctx->pluginManager->callToolAsync(
                 inst31.get(),
                 "not_registered_tool",
                 "{}",
                 "t31",
-                [](void*, int32_t, const AgentxxPluginStringView*) {},
+                [](void*, int32_t, const PluginxxStringView*) {},
                 nullptr,
                 &e2
             );
@@ -1265,13 +1265,13 @@ throw new Error("top-level rollback probe");
                 = agentxx::plugin::PluginStringView::fromCstr("async tool for notify test");
             asyncSpec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             asyncSpec.execute_start   = +[](void*,
-                                          const AgentxxPluginStringView*,
-                                          const AgentxxPluginStringView*,
-                                          const AgentxxPluginStringView*,
-                                          const AgentxxPluginOperatorNotify* notify,
-                                          AgentxxPluginString*) -> void* {
+                                          const PluginxxStringView*,
+                                          const PluginxxStringView*,
+                                          const PluginxxStringView*,
+                                          const PluginxxOperatorNotify* notify,
+                                          PluginxxString*) -> void* {
                 auto emptySv = agentxx::plugin::PluginStringView::fromCstr("{}");
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &emptySv);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &emptySv);
                 return nullptr;
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &asyncSpec), 0);
@@ -1290,7 +1290,7 @@ throw new Error("top-level rollback probe");
         //      插件上报 CANCELLED → 工具协程收到 CancelledException
         {
             struct CancelOp {
-                AgentxxPluginOperatorNotify notify;
+                PluginxxOperatorNotify notify;
             };
 
             static bool s_cancelCalled              = false;
@@ -1303,12 +1303,12 @@ throw new Error("top-level rollback probe");
             );
             cSpec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             cSpec.execute_start   = +[](void*,
-                                      const AgentxxPluginStringView*,
-                                      const AgentxxPluginStringView*,
-                                      const AgentxxPluginStringView*,
-                                      const AgentxxPluginOperatorNotify* notify,
-                                      AgentxxPluginString*) -> void* {
-                s_activeOp = new CancelOp{notify ? *notify : AgentxxPluginOperatorNotify{}};
+                                      const PluginxxStringView*,
+                                      const PluginxxStringView*,
+                                      const PluginxxStringView*,
+                                      const PluginxxOperatorNotify* notify,
+                                      PluginxxString*) -> void* {
+                s_activeOp = new CancelOp{notify ? *notify : PluginxxOperatorNotify{}};
                 return s_activeOp;
             };
             cSpec.execute_cancel = +[](void*, void* op) {
@@ -1316,7 +1316,7 @@ throw new Error("top-level rollback probe");
                 auto* o        = static_cast<CancelOp*>(op);
                 if (o && o->notify.done) {
                     auto nullSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-                    o->notify.done(o->notify.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, &nullSv);
+                    o->notify.done(o->notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, &nullSv);
                 }
                 delete o;
                 s_activeOp = nullptr;
@@ -1372,11 +1372,11 @@ throw new Error("top-level rollback probe");
             );
             throwSpec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             throwSpec.execute_start   = +[](void*,
-                                          const AgentxxPluginStringView*,
-                                          const AgentxxPluginStringView*,
-                                          const AgentxxPluginStringView*,
-                                          const AgentxxPluginOperatorNotify*,
-                                          AgentxxPluginString*) -> void* {
+                                          const PluginxxStringView*,
+                                          const PluginxxStringView*,
+                                          const PluginxxStringView*,
+                                          const PluginxxOperatorNotify*,
+                                          PluginxxString*) -> void* {
                 throw std::runtime_error("boom from plugin start");
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &throwSpec), 0);
@@ -1408,11 +1408,11 @@ throw new Error("top-level rollback probe");
             );
             nullSpec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             nullSpec.execute_start   = +[](void*,
-                                         const AgentxxPluginStringView*,
-                                         const AgentxxPluginStringView*,
-                                         const AgentxxPluginStringView*,
-                                         const AgentxxPluginOperatorNotify*,
-                                         AgentxxPluginString*) -> void* {
+                                         const PluginxxStringView*,
+                                         const PluginxxStringView*,
+                                         const PluginxxStringView*,
+                                         const PluginxxOperatorNotify*,
+                                         PluginxxString*) -> void* {
                 return nullptr; ///< 违约: 未 call notify->done 且未设 error_out
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &nullSpec), 0);
@@ -1434,7 +1434,7 @@ throw new Error("top-level rollback probe");
         }
 
         // 31.6 异常守卫: blocking_tool 异常守卫兜底 —— 用户 execute 抛异常时
-        //      适配层转 AGENTXX_PLUGIN_OPERATOR_FAILED, 异常不穿越 C ABI
+        //      适配层转 PLUGINXX_OPERATOR_FAILED, 异常不穿越 C ABI
         {
             struct BoomCtx : public agentxx::plugin::PluginBase {};
 
@@ -1472,7 +1472,7 @@ throw new Error("top-level rollback probe");
             auto* subBad                 = ctx->pluginManager->subscribe(
                 inst31.get(),
                 "guard_throw.topic",
-                +[](const AgentxxPluginStringView*, void*) {
+                +[](const PluginxxStringView*, void*) {
                     throw std::runtime_error("bad handler boom");
                 },
                 nullptr
@@ -1480,7 +1480,7 @@ throw new Error("top-level rollback probe");
             auto* subGood = ctx->pluginManager->subscribe(
                 inst31.get(),
                 "guard_throw.topic",
-                +[](const AgentxxPluginStringView*, void* ud) {
+                +[](const PluginxxStringView*, void* ud) {
                     *static_cast<bool*>(ud) = true;
                 },
                 &s_goodHandlerRan
@@ -1524,14 +1524,14 @@ throw new Error("top-level rollback probe");
             // ---- 32.1 命令真实链路 (无会话令牌): 快速完成且输出正确 ----
             {
                 auto                t0 = std::chrono::steady_clock::now();
-                AgentxxPluginString e  = {nullptr, 0};
+                PluginxxString e  = {nullptr, 0};
                 AsyncRes            ares;
                 auto*               op = ctx->pluginManager->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     R"({"command":"echo repro_check"})",
                     "t_exec_no_token",
-                    [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
+                    [](void* ud, int32_t st, const PluginxxStringView* pl) {
                         auto* r   = static_cast<AsyncRes*>(ud);
                         r->status = st;
                         if (pl && pl->data && pl->size > 0) {
@@ -1552,7 +1552,7 @@ throw new Error("top-level rollback probe");
                               std::chrono::steady_clock::now() - t0
                 )
                               .count();
-                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
+                XX_TEST_EXPECT_EQ(ares.status, PLUGINXX_OPERATOR_OK);
                 XX_TEST_EXPECT_TRUE(ares.payload.find("repro_check") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(ms < 10000);
                 if (e.data) {
@@ -1565,14 +1565,14 @@ throw new Error("top-level rollback probe");
                 auto sess = ctx->sessions->getOrCreate("t_exec_with_token");
                 sess->setCancelToken(std::make_shared<neograph::graph::CancelToken>());
                 auto                t0 = std::chrono::steady_clock::now();
-                AgentxxPluginString e  = {nullptr, 0};
+                PluginxxString e  = {nullptr, 0};
                 AsyncRes            ares;
                 auto*               op = ctx->pluginManager->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     R"({"command":"echo token_case"})",
                     "t_exec_with_token",
-                    [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
+                    [](void* ud, int32_t st, const PluginxxStringView* pl) {
                         auto* r   = static_cast<AsyncRes*>(ud);
                         r->status = st;
                         if (pl && pl->data && pl->size > 0) {
@@ -1593,7 +1593,7 @@ throw new Error("top-level rollback probe");
                               std::chrono::steady_clock::now() - t0
                 )
                               .count();
-                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
+                XX_TEST_EXPECT_EQ(ares.status, PLUGINXX_OPERATOR_OK);
                 XX_TEST_EXPECT_TRUE(ares.payload.find("token_case") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(ms < 10000);
                 if (e.data) {
@@ -1603,7 +1603,7 @@ throw new Error("top-level rollback probe");
 
             // ---- 32.3 超时参数生效: sleep 超过 timeout → 返回超时结果文本 ----
             {
-                AgentxxPluginString e = {nullptr, 0};
+                PluginxxString e = {nullptr, 0};
                 AsyncRes            ares;
 #if XX_IS_WIN_D
                 const char* timeoutCmd = R"({"command":"timeout /t 5 >nul","timeout":1})";
@@ -1615,7 +1615,7 @@ throw new Error("top-level rollback probe");
                     cmdToolName,
                     timeoutCmd,
                     "t_exec_no_token",
-                    [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
+                    [](void* ud, int32_t st, const PluginxxStringView* pl) {
                         auto* r   = static_cast<AsyncRes*>(ud);
                         r->status = st;
                         if (pl && pl->data && pl->size > 0) {
@@ -1632,7 +1632,7 @@ throw new Error("top-level rollback probe");
                     t.expires_after(std::chrono::milliseconds(10));
                     co_await t.async_wait(asio::use_awaitable);
                 }
-                XX_TEST_EXPECT_EQ(ares.status, AGENTXX_PLUGIN_OPERATOR_OK);
+                XX_TEST_EXPECT_EQ(ares.status, PLUGINXX_OPERATOR_OK);
                 XX_TEST_EXPECT_TRUE(
                     ares.payload.find("timed out") != std::string::npos
                     || ares.payload.find("ExitCode") != std::string::npos
@@ -1675,7 +1675,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(instEx != nullptr);
         if (instEx) {
             auto                ex = co_await asio::this_coro::executor;
-            AgentxxPluginString e  = {nullptr, 0};
+            PluginxxString e  = {nullptr, 0};
 
             struct CancelRes {
                 int               status = -1;
@@ -1688,7 +1688,7 @@ throw new Error("top-level rollback probe");
                 "example_sleep",
                 R"({"durationMs":60000})",
                 "t_unload_cancel",
-                [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
+                [](void* ud, int32_t st, const PluginxxStringView* pl) {
                     auto* r   = static_cast<CancelRes*>(ud);
                     r->status = st;
                     if (pl && pl->data && pl->size > 0) {
@@ -2182,7 +2182,7 @@ throw new Error("top-level rollback probe");
         auto vtableSv         = agentxx::plugin::PluginStringView::fromCstr("__vtable");
         fakeInst->hostControl = agentxx::plugin::PluginHostControl::create(
             fakeInst,
-            (const AgentxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv)
+            (const PluginxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv)
         );
 
         struct FakeCtx : public agentxx::plugin::PluginBase {};
@@ -2744,7 +2744,7 @@ throw new Error("top-level rollback probe");
                         (root / "secret" / "hidden.txt").generic_string(),
                         "/data/outside_query.txt",
                     };
-                    std::vector<AgentxxPluginStringView> views;
+                    std::vector<PluginxxStringView> views;
                     views.reserve(paths.size());
                     for (const auto& p : paths) {
                         views.push_back(agentxx::plugin::PluginStringView::from(p));
@@ -2802,7 +2802,7 @@ throw new Error("top-level rollback probe");
                     );
                 if (ifacePermission) {
                     const std::vector<std::string>       paths{(root / "keep" / "ok.txt").string()};
-                    std::vector<AgentxxPluginStringView> views;
+                    std::vector<PluginxxStringView> views;
                     for (const auto& p : paths) {
                         views.push_back(agentxx::plugin::PluginStringView::from(p));
                     }
@@ -2947,7 +2947,7 @@ throw new Error("top-level rollback probe");
 #endif
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(cmdToolName2));
             auto                ex = co_await asio::this_coro::executor;
-            AgentxxPluginString e2{nullptr, 0};
+            PluginxxString e2{nullptr, 0};
 
             struct UnloadRes {
                 int               status = -1;
@@ -2962,7 +2962,7 @@ throw new Error("top-level rollback probe");
                     {"timeout", 20         }
             }.dump(),
                 "t_polled_unload",
-                [](void* ud, int32_t st, const AgentxxPluginStringView*) {
+                [](void* ud, int32_t st, const PluginxxStringView*) {
                     auto* r   = static_cast<UnloadRes*>(ud);
                     r->status = st;
                     r->done.store(true, std::memory_order_release);
@@ -2987,7 +2987,7 @@ throw new Error("top-level rollback probe");
                 co_await sleepMs(5);
             }
             XX_TEST_EXPECT_TRUE(ures.done.load());
-            XX_TEST_EXPECT_TRUE(ures.status != AGENTXX_PLUGIN_OPERATOR_OK);
+            XX_TEST_EXPECT_TRUE(ures.status != PLUGINXX_OPERATOR_OK);
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains(cmdToolName2));
             if (e2.data) {
                 agentxx::plugin::PluginString::free(instExec2->hostView(), &e2);

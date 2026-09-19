@@ -134,14 +134,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
             ArgReader   args(args_json);
             std::string tidStr(tid);
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
             auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
                 return c.cancelRegistry.isCancelled(tidStr);
@@ -175,14 +175,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel_token) -> std::string {
+           const PluginxxCancelToken* cancel_token) -> std::string {
             ArgReader   args(args_json);
             std::string tidStr(tid);
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
             auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
                 return c.cancelRegistry.isCancelled(tidStr);
@@ -237,14 +237,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel_token) -> asio::awaitable<std::string> {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
             ArgReader   args(args_json);
             std::string tidStr(tid);
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
             auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
                 return c.cancelRegistry.isCancelled(tidStr);
@@ -278,14 +278,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
            std::string_view                args_json,
            std::string_view                tid,
            std::string_view                workDir,
-           const AgentxxPluginCancelToken* cancel_token) -> std::string {
+           const PluginxxCancelToken* cancel_token) -> std::string {
             ArgReader   args(args_json);
             std::string tidStr(tid);
-            if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
             auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
-                if (agentxx_plugin_cancel_is_requested(cancel_token)) {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
                 return c.cancelRegistry.isCancelled(tidStr);
@@ -313,8 +313,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 
 static void* execStart(
     ExecPluginCtx&                     ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -332,14 +332,14 @@ static void* execStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    execStop(ExecPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    execStop(ExecPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
@@ -363,8 +363,8 @@ static int32_t setupExecClient(ExecClientCtx& ctx) {
 
 static void* execClientStart(
     ExecClientCtx&                     ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -386,14 +386,14 @@ static void* execClientStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    execClientStop(ExecClientCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册记录由宿主在 stop 后统一撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

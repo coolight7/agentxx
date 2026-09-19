@@ -34,13 +34,13 @@ namespace agentxx::test {
 namespace {
 using namespace agentxx::plugin;
 
-/// 请求句柄: 对插件侧只是不透明指针 (`AgentxxPluginDriver` 为不完整类型),
+/// 请求句柄: 对插件侧只是不透明指针 (`PluginxxDriver` 为不完整类型),
 /// 伪宿主用自建 token 表示它, 并记录回调/取消/执行状态。
 struct Harness;
 struct FakeOp;
 
 struct FakeTicket {
-    AgentxxPluginDriveOnceFn drive     = nullptr;
+    PluginxxDriveOnceFn drive     = nullptr;
     void*                    ud        = nullptr;
     Harness*                 harness   = nullptr;
     bool                     executed  = false;
@@ -52,7 +52,7 @@ struct Harness {
     /// 伪调度器 sleep 的挂起点 (用例手工触发到期, 模拟宿主 timer adapter)。
     struct PendingSleep {
         int64_t                       ms     = 0;
-        AgentxxPluginOperatorCallback cb     = nullptr;
+        PluginxxOperatorCallback cb     = nullptr;
         void*                         ud     = nullptr;
         uintptr_t                     handle = 0;
         /// 已被 op_cancel 请求取消。真宿主会在取消后以 CANCELLED 触发完成回调,
@@ -123,12 +123,12 @@ struct FakeOp {
     uintptr_t handle  = 0;
 };
 
-Harness* harnessOf(const AgentxxPluginHost* host) {
+Harness* harnessOf(const PluginxxHost* host) {
     return host ? static_cast<Harness*>(host->opaque) : nullptr;
 }
 
 /// 伪宿主的错误输出: 测试进程内用 malloc 即可 (真实宿主经 host->vtable->alloc)。
-void setHostError(AgentxxPluginString* out, std::string_view message) {
+void setHostError(PluginxxString* out, std::string_view message) {
     if (!out) {
         return;
     }
@@ -142,11 +142,11 @@ void setHostError(AgentxxPluginString* out, std::string_view message) {
     }
 }
 
-AgentxxPluginDriver* AGENTXX_PLUGIN_CALL fakeRequestDriver(
-    const AgentxxPluginHost* host,
-    AgentxxPluginDriveOnceFn drive,
+PluginxxDriver* PLUGINXX_CALL fakeRequestDriver(
+    const PluginxxHost* host,
+    PluginxxDriveOnceFn drive,
     void*                    ud,
-    AgentxxPluginString*     error
+    PluginxxString*     error
 ) {
     auto* harness = harnessOf(host);
     if (!harness || !drive) {
@@ -163,10 +163,10 @@ AgentxxPluginDriver* AGENTXX_PLUGIN_CALL fakeRequestDriver(
     ticket->harness = harness;
     harness->all.push_back(ticket);
     harness->pending.push_back(ticket);
-    return reinterpret_cast<AgentxxPluginDriver*>(ticket);
+    return reinterpret_cast<PluginxxDriver*>(ticket);
 }
 
-void AGENTXX_PLUGIN_CALL fakeCancelDriver(AgentxxPluginDriver* driver) {
+void PLUGINXX_CALL fakeCancelDriver(PluginxxDriver* driver) {
     auto* ticket = reinterpret_cast<FakeTicket*>(driver);
     if (!ticket) {
         return;
@@ -180,7 +180,7 @@ void AGENTXX_PLUGIN_CALL fakeCancelDriver(AgentxxPluginDriver* driver) {
     }
 }
 
-int32_t AGENTXX_PLUGIN_CALL fakeIsIoThread(const AgentxxPluginHost* host) {
+int32_t PLUGINXX_CALL fakeIsIoThread(const PluginxxHost* host) {
     if (auto* harness = harnessOf(host)) {
         ++harness->isIoThreadCalls;
     }
@@ -188,12 +188,12 @@ int32_t AGENTXX_PLUGIN_CALL fakeIsIoThread(const AgentxxPluginHost* host) {
 }
 
 /// 伪 sleep: 记录回调, 由用例触发到期 (真宿主 timer adapter 的等价物)。
-AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL fakeSleep(
-    const AgentxxPluginHost*      host,
+PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
+    const PluginxxHost*      host,
     int64_t                       ms,
-    AgentxxPluginOperatorCallback cb,
+    PluginxxOperatorCallback cb,
     void*                         ud,
-    AgentxxPluginString*          error
+    PluginxxString*          error
 ) {
     auto* harness = harnessOf(host);
     if (!harness || !cb) {
@@ -211,13 +211,13 @@ AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL fakeSleep(
     record->handle  = entry.handle;
     auto* raw       = record.get();
     harness->ops.push_back(std::move(record));
-    return reinterpret_cast<AgentxxPluginOperatorHandle*>(raw);
+    return reinterpret_cast<PluginxxOperatorHandle*>(raw);
 }
 
 /// 伪 op_cancel: 只标记句柄对应的挂起点为"已取消" (真宿主随后会以 CANCELLED
 /// 触发完成回调; 用例按需手工触发, 以免影响既有用例的手工时序)。
 /// 句柄不含 host 参数, 因此伪宿主把 (harness, handle) 记录在堆对象里。
-void AGENTXX_PLUGIN_CALL fakeOpCancel(AgentxxPluginOperatorHandle* op) {
+void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
     auto* record = reinterpret_cast<FakeOp*>(op);
     if (!record || !record->harness) {
         return;
@@ -232,28 +232,28 @@ void AGENTXX_PLUGIN_CALL fakeOpCancel(AgentxxPluginOperatorHandle* op) {
     }
 }
 
-int32_t AGENTXX_PLUGIN_CALL
-    fakeIsCancelled(const AgentxxPluginHost*, const AgentxxPluginStringView*) {
+int32_t PLUGINXX_CALL
+    fakeIsCancelled(const PluginxxHost*, const PluginxxStringView*) {
     return 0;
 }
 
-int32_t AGENTXX_PLUGIN_CALL fakeOffloadIsCancelled(const AgentxxPluginCancelToken*) {
+int32_t PLUGINXX_CALL fakeOffloadIsCancelled(const PluginxxCancelToken*) {
     return 0;
 }
 
 /// 伪 offload: 用例线程内联执行工作体后触发完成回调。
 /// (真宿主在工作线程池执行; 这里只需验证"降级路径能跑完"的语义, 不引入线程。)
-AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL fakeOffload(
-    const AgentxxPluginHost* host,
-    void*(AGENTXX_PLUGIN_CALL* work)(
+PluginxxOperatorHandle* PLUGINXX_CALL fakeOffload(
+    const PluginxxHost* host,
+    void*(PLUGINXX_CALL* work)(
         void*                           ud,
-        const AgentxxPluginCancelToken* token,
-        AgentxxPluginString*            error_out
+        const PluginxxCancelToken* token,
+        PluginxxString*            error_out
     ),
-    void(AGENTXX_PLUGIN_CALL*
-             done)(void* ud, int32_t status, void* result, const AgentxxPluginStringView* error),
+    void(PLUGINXX_CALL*
+             done)(void* ud, int32_t status, void* result, const PluginxxStringView* error),
     void*                ud,
-    AgentxxPluginString* error
+    PluginxxString* error
 ) {
     auto* harness = harnessOf(host);
     if (!harness || !work || !done) {
@@ -261,42 +261,42 @@ AgentxxPluginOperatorHandle* AGENTXX_PLUGIN_CALL fakeOffload(
         return nullptr;
     }
     ++harness->offloadCalls;
-    AgentxxPluginCancelToken token{&fakeOffloadIsCancelled, nullptr};
-    AgentxxPluginString      workError{nullptr, 0};
+    PluginxxCancelToken token{&fakeOffloadIsCancelled, nullptr};
+    PluginxxString      workError{nullptr, 0};
     void*                    result = work(ud, &token, &workError);
     PluginString::free(host, &workError);
-    AgentxxPluginStringView payload = PluginStringView::from(nullptr, 0);
-    done(ud, AGENTXX_PLUGIN_OPERATOR_OK, result, &payload);
+    PluginxxStringView payload = PluginStringView::from(nullptr, 0);
+    done(ud, PLUGINXX_OPERATOR_OK, result, &payload);
     auto record     = std::make_unique<FakeOp>();
     record->harness = harness;
     record->handle  = harness->nextSleepHandle++;
     auto* raw       = record.get();
     harness->ops.push_back(std::move(record));
-    return reinterpret_cast<AgentxxPluginOperatorHandle*>(raw);
+    return reinterpret_cast<PluginxxOperatorHandle*>(raw);
 }
 
-void AGENTXX_PLUGIN_CALL
-    fakeLog(const AgentxxPluginHost* host, int32_t, const AgentxxPluginStringView* msg) {
+void PLUGINXX_CALL
+    fakeLog(const PluginxxHost* host, int32_t, const PluginxxStringView* msg) {
     auto* harness = harnessOf(host);
     if (harness && msg && msg->data) {
         harness->logs.emplace_back(msg->data, static_cast<size_t>(msg->size));
     }
 }
 
-int32_t AGENTXX_PLUGIN_CALL
-    fakeRegisterTool(const AgentxxPluginHost*, const AgentxxPluginToolSpec* spec);
+int32_t PLUGINXX_CALL
+    fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec);
 
-const AgentxxPluginCoroutineRuntimeIface g_fakeRuntime = {
+const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
     /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginCoroutineRuntimeIface),
+    /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
     /* request_driver */ fakeRequestDriver,
     /* cancel_driver */ fakeCancelDriver,
     /* is_io_thread */ fakeIsIoThread,
 };
 
-const AgentxxPluginSchedulerIface g_fakeScheduler = {
+const PluginxxSchedulerIface g_fakeScheduler = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginSchedulerIface),
+    /* struct_size */ sizeof(PluginxxSchedulerIface),
     /* is_io_thread */ fakeIsIoThread,
     /* post_to_io */ nullptr,
     /* sleep */ fakeSleep,
@@ -304,15 +304,15 @@ const AgentxxPluginSchedulerIface g_fakeScheduler = {
     /* offload */ fakeOffload,
 };
 
-const AgentxxPluginCancelIface g_fakeCancel = {
+const PluginxxCancelIface g_fakeCancel = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginCancelIface),
+    /* struct_size */ sizeof(PluginxxCancelIface),
     /* is_cancelled */ fakeIsCancelled,
 };
 
-const AgentxxPluginLogIface g_fakeLog = {
+const PluginxxLogIface g_fakeLog = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginLogIface),
+    /* struct_size */ sizeof(PluginxxLogIface),
     /* log */ fakeLog,
 };
 
@@ -326,24 +326,24 @@ const AgentxxPluginToolsIface g_fakeTools = {
 };
 
 /// 用例可临时置空来验证"宿主不提供驱动时"的回退路径。
-const AgentxxPluginCoroutineRuntimeIface* g_runtimeForTest = &g_fakeRuntime;
+const PluginxxCoroutineRuntimeIface* g_runtimeForTest = &g_fakeRuntime;
 
-const void* AGENTXX_PLUGIN_CALL
-    fakeQueryInterface(const AgentxxPluginHost*, const AgentxxPluginStringView* iid) {
+const void* PLUGINXX_CALL
+    fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
     if (!iid || !iid->data) {
         return nullptr;
     }
     const std::string_view name{iid->data, static_cast<size_t>(iid->size)};
-    if (name == AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME) {
+    if (name == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
         return g_runtimeForTest;
     }
-    if (name == AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER) {
+    if (name == PLUGINXX_IFACE_SCHEDULER) {
         return &g_fakeScheduler;
     }
-    if (name == AGENTXX_PLUGIN_IFACE_AGENT_CANCEL) {
+    if (name == PLUGINXX_IFACE_CANCEL) {
         return &g_fakeCancel;
     }
-    if (name == AGENTXX_PLUGIN_IFACE_AGENT_LOG) {
+    if (name == PLUGINXX_IFACE_LOG) {
         return &g_fakeLog;
     }
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS) {
@@ -354,15 +354,15 @@ const void* AGENTXX_PLUGIN_CALL
 
 /// 伪宿主内存操作: kit 会用 host->vtable->free 释放 request_driver 的
 /// error_out (缺失该函数会导致测试进程真的泄漏, 不是被测代码的问题)。
-void* AGENTXX_PLUGIN_CALL fakeAlloc(uint64_t size) {
+void* PLUGINXX_CALL fakeAlloc(uint64_t size) {
     return std::malloc(static_cast<size_t>(size));
 }
 
-void AGENTXX_PLUGIN_CALL fakeFree(void* ptr) {
+void PLUGINXX_CALL fakeFree(void* ptr) {
     std::free(ptr);
 }
 
-const AgentxxHostVtable g_fakeVtable = {
+const PluginxxHostVtable g_fakeVtable = {
     /* alloc */ fakeAlloc,
     /* free */ fakeFree,
     /* query_interface */ fakeQueryInterface,
@@ -376,8 +376,8 @@ struct CapturedTool {
 
 CapturedTool g_capturedTool;
 
-int32_t AGENTXX_PLUGIN_CALL
-    fakeRegisterTool(const AgentxxPluginHost*, const AgentxxPluginToolSpec* spec) {
+int32_t PLUGINXX_CALL
+    fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
     if (!spec) {
         return -1;
     }
@@ -392,8 +392,8 @@ struct NotifyProbe {
     int32_t     status = -1;
     std::string payload;
 
-    static void AGENTXX_PLUGIN_CALL
-        done(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+    static void PLUGINXX_CALL
+        done(void* ud, int32_t status, const PluginxxStringView* payload) {
         auto& probe = *static_cast<NotifyProbe*>(ud);
         ++probe.calls;
         probe.status = status;
@@ -402,8 +402,8 @@ struct NotifyProbe {
         }
     }
 
-    AgentxxPluginOperatorNotify notify() {
-        return AgentxxPluginOperatorNotify{&NotifyProbe::done, this};
+    PluginxxOperatorNotify notify() {
+        return PluginxxOperatorNotify{&NotifyProbe::done, this};
     }
 };
 
@@ -459,7 +459,7 @@ void* startTool(
 TestResult testPluginBridge() {
     TestResult              result;
     Harness                 harness;
-    const AgentxxPluginHost host{&g_fakeVtable, &harness};
+    const PluginxxHost host{&g_fakeVtable, &harness};
 
     /// 1. request_driver 永不内联 + 一次请求恰好一次推进 + 空闲不自旋。
     {
@@ -502,7 +502,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_EQ(steps, 1);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"ok"});
         XX_TEST_EXPECT_EQ(bridge->driverSteps(), uint64_t{1});
         XX_TEST_EXPECT_FALSE(bridge->isDriverQueued()); // 请求已消费, 无新工作
@@ -685,7 +685,7 @@ TestResult testPluginBridge() {
 
         const auto ticketsBefore = bridge->ticketsIssued();
         auto&      sleepEntry    = harness.sleeps.front();
-        sleepEntry.cb(sleepEntry.ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_OK, nullptr);
         XX_TEST_EXPECT_FALSE(resumed); // 未在宿主回调栈内重入
         XX_TEST_EXPECT_EQ(probe.calls, 0);
         XX_TEST_EXPECT_EQ(bridge->ticketsIssued(), ticketsBefore + 1);
@@ -729,10 +729,10 @@ TestResult testPluginBridge() {
         harness.runPending();
 
         auto& sleepEntry = harness.sleeps.front();
-        sleepEntry.cb(sleepEntry.ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+        sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
         harness.runPending();
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELLED);
 
         // 终态唯一: 宿主的 OpCore 在 done 提交后短路一切取消 (不会再用 op 句柄回调
         // 插件), 因此这里不再调用 execute_cancel, 只确认没有第二个终态。
@@ -769,7 +769,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_FALSE(bodyRan);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_FALSE(probe.payload.empty());
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
     }
@@ -810,7 +810,7 @@ TestResult testPluginBridge() {
         // 停止: 无排队请求可取消 (首步已执行), 但活跃根被终结为失败
         ctx.stopBridge();
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_TRUE(bridge->isStopping());
 
         // 停止后新的 wake 不再申请请求
@@ -824,7 +824,7 @@ TestResult testPluginBridge() {
 
         // 迟到的宿主完成回调: 根已被放弃, 必须安全跳过 (不恢复协程, 不二次上报)
         auto& sleepEntry = harness.sleeps.front();
-        sleepEntry.cb(sleepEntry.ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_OK, nullptr);
         XX_TEST_EXPECT_EQ(harness.runPending(), 0);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
     }
@@ -857,7 +857,7 @@ TestResult testPluginBridge() {
         ctx.stopBridge();
         XX_TEST_EXPECT_FALSE(bodyRan);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_EQ(harness.cancelCalls, 1);
         XX_TEST_EXPECT_TRUE(harness.pending.front()->cancelled);
         // 宿主按取消语义丢弃请求
@@ -946,7 +946,7 @@ TestResult testPluginBridge() {
                 std::string_view,
                 std::string_view,
                 std::string_view,
-                const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+                const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
                 ++bodyRuns;
                 auto* bridge = &c.bridge();
                 sawPumping   = bridge != nullptr && bridge->isPumping();
@@ -954,7 +954,7 @@ TestResult testPluginBridge() {
                 auto               ex = co_await asio::this_coro::executor;
                 asio::steady_timer timer(ex, std::chrono::milliseconds(15));
                 co_await timer.async_wait(asio::use_awaitable);
-                if (agentxx_plugin_cancel_is_requested(cancel)) {
+                if (pluginxx_cancel_is_requested(cancel)) {
                     throw CancelledException("polled cancelled");
                 }
                 co_return "polled-ok";
@@ -996,7 +996,7 @@ TestResult testPluginBridge() {
                     }
                     auto entry = harness.sleeps.front();
                     harness.sleeps.erase(harness.sleeps.begin());
-                    entry.cb(entry.ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                    entry.cb(entry.ud, PLUGINXX_OPERATOR_OK, nullptr);
                     continue;
                 }
                 harness.runOne();
@@ -1005,7 +1005,7 @@ TestResult testPluginBridge() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         pumpUntilDone(200);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled-ok"});
         XX_TEST_EXPECT_EQ(bodyRuns, 1);
 
@@ -1037,12 +1037,12 @@ TestResult testPluginBridge() {
                std::string_view,
                std::string_view,
                std::string_view,
-               const AgentxxPluginCancelToken* cancel) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
                 auto ex = co_await asio::this_coro::executor;
                 for (int i = 0; i < 200; ++i) {
                     asio::steady_timer t(ex, std::chrono::milliseconds(5));
                     co_await t.async_wait(asio::use_awaitable);
-                    if (agentxx_plugin_cancel_is_requested(cancel)) {
+                    if (pluginxx_cancel_is_requested(cancel)) {
                         throw CancelledException("polled cancel");
                     }
                 }
@@ -1074,7 +1074,7 @@ TestResult testPluginBridge() {
         // 退避回调以 CANCELLED 到达: 仍按"退避结束"处理 -> 立刻续票 (无需等 10ms)
         auto entry = harness.sleeps.front();
         harness.sleeps.erase(harness.sleeps.begin());
-        entry.cb(entry.ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, nullptr);
+        entry.cb(entry.ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
 
         // 继续驱动: 本地 5ms timer 到期后业务体看到取消 -> CANCELLED 终态
@@ -1086,13 +1086,13 @@ TestResult testPluginBridge() {
                 }
                 auto pending = harness.sleeps.front();
                 harness.sleeps.erase(harness.sleeps.begin());
-                pending.cb(pending.ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                pending.cb(pending.ud, PLUGINXX_OPERATOR_OK, nullptr);
                 continue;
             }
             harness.runOne();
         }
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELLED);
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled cancel"});
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         // 终态唯一: 再驱动不产生第二个终态
@@ -1115,7 +1115,7 @@ TestResult testPluginBridge() {
             "polled_stop",
             "depict",
             "{}",
-            [&bodyRuns](BridgeCtx&, std::string_view, std::string_view, std::string_view, const AgentxxPluginCancelToken*)
+            [&bodyRuns](BridgeCtx&, std::string_view, std::string_view, std::string_view, const PluginxxCancelToken*)
                 -> asio::awaitable<std::string> {
                 ++bodyRuns;
                 auto               ex = co_await asio::this_coro::executor;
@@ -1137,7 +1137,7 @@ TestResult testPluginBridge() {
 
         ctx.stopBridge();
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_FAILED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_FALSE(bridge->isPumpWaitScheduled());
         XX_TEST_EXPECT_EQ(harness.opCancelCalls, 1); // 在途退避被取消
@@ -1170,7 +1170,7 @@ TestResult testPluginBridge() {
             "polled_burst",
             "depict",
             "{}",
-            [kSteps](BridgeCtx&, std::string_view, std::string_view, std::string_view, const AgentxxPluginCancelToken*)
+            [kSteps](BridgeCtx&, std::string_view, std::string_view, std::string_view, const PluginxxCancelToken*)
                 -> asio::awaitable<std::string> {
                 auto ex = co_await asio::this_coro::executor;
                 for (int i = 0; i < kSteps; ++i) {
@@ -1197,14 +1197,14 @@ TestResult testPluginBridge() {
                 // 突发让出是 1ms; 若这里是 10ms 说明策略退化成了空闲退避
                 XX_TEST_EXPECT_EQ(entry.ms, int64_t{1});
                 sawBurstYield = true;
-                entry.cb(entry.ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                entry.cb(entry.ud, PLUGINXX_OPERATOR_OK, nullptr);
                 continue;
             }
             harness.runOne();
         }
         XX_TEST_EXPECT_TRUE(sawBurstYield);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.payload, fmt::format("burst-{}", kSteps));
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_GE(bridge->idlePollCount(), uint64_t{1});

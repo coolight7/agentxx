@@ -62,8 +62,8 @@ static int32_t mathSetup(MathPluginCtx& ctx) {
 
 static void* mathStart(
     MathPluginCtx&                     ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -85,14 +85,14 @@ static void* mathStart(
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    mathStop(MathPluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    mathStop(MathPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

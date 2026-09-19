@@ -22,7 +22,7 @@
 namespace {
 
 struct ShellCtx {
-    const AgentxxPluginHost*     host = nullptr;
+    const PluginxxHost*     host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
     std::string                  name;
     std::string                  dir;
@@ -67,28 +67,28 @@ std::string scriptArgsJson(const ShellCtx& ctx) {
 
 /// 脚本加载完成 (异步 start 的收尾): 宿主 io 线程派发, 期间 caller lease
 /// 保证本实例上下文存活。
-void AGENTXX_PLUGIN_CALL
-    onScriptLoadDone(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
-    auto* state = static_cast<std::pair<ShellCtx*, AgentxxPluginOperatorNotify>*>(ud);
+void PLUGINXX_CALL
+    onScriptLoadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    auto* state = static_cast<std::pair<ShellCtx*, PluginxxOperatorNotify>*>(ud);
     if (!state) {
         return;
     }
     ShellCtx*                   ctx    = state->first;
-    AgentxxPluginOperatorNotify notify = state->second;
+    PluginxxOperatorNotify notify = state->second;
     delete state;
 
     std::string text;
     if (payload && payload->data) {
         text.assign(payload->data, static_cast<size_t>(payload->size));
     }
-    if (status == AGENTXX_PLUGIN_OPERATOR_OK) {
+    if (status == PLUGINXX_OPERATOR_OK) {
         if (ctx) {
             ctx->scriptLoaded = true;
             if (!text.empty()) {
                 shellLog(ctx, 2, fmt::format("example_js_execute_command: loaded tools {}", text));
             }
         }
-        notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         return;
     }
     if (ctx) {
@@ -103,14 +103,14 @@ void AGENTXX_PLUGIN_CALL
         );
     }
     auto errSv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
-    notify.done(notify.host_ud, AGENTXX_PLUGIN_OPERATOR_FAILED, &errSv);
+    notify.done(notify.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
 }
 
 /// 脚本卸载完成 (stop 事务的收尾, fire-and-forget: 结果只记录)
-void AGENTXX_PLUGIN_CALL
-    onScriptUnloadDone(void* ud, int32_t status, const AgentxxPluginStringView* payload) {
+void PLUGINXX_CALL
+    onScriptUnloadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
     auto* ctx = static_cast<ShellCtx*>(ud);
-    if (!ctx || status == AGENTXX_PLUGIN_OPERATOR_OK) {
+    if (!ctx || status == PLUGINXX_OPERATOR_OK) {
         return;
     }
     std::string text;
@@ -140,7 +140,7 @@ void dispatchScriptUnload(ShellCtx& ctx) {
     auto                unloadSv = agentxx::plugin::PluginStringView::fromCstr("unload");
     std::string         args     = fmt::format("{{\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
     auto                argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
-    AgentxxPluginString err{nullptr, 0};
+    PluginxxString err{nullptr, 0};
     auto*               h = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
         &capSv,
@@ -164,13 +164,13 @@ void dispatchScriptUnload(ShellCtx& ctx) {
 
 } // namespace
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
-        [&]() -> const AgentxxPluginInfo* {
-            static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+        [&]() -> const PluginxxInfo* {
+            static const PluginxxInfo info{
+                PLUGINXX_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("example_js_execute_command"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
@@ -185,8 +185,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
 
 /// create: 只构造上下文 (查询接口表 + 解析自身名称/脚本路径), 不做运行时注册,
 /// 不启动线程, 不调用能力。
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     ShellCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
@@ -211,14 +211,14 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
                 s_if.log->log(host, 4, &sv);
             };
 
-            AgentxxPluginString info{nullptr, 0};
+            PluginxxString info{nullptr, 0};
             s_if.plugins->get_own_info(host, &info);
             if (!info.data) {
                 logE("example_js_execute_command: get_own_info failed");
                 return -1;
             }
             auto field = [&](const char* key) -> std::string {
-                AgentxxPluginString v{nullptr, 0};
+                PluginxxString v{nullptr, 0};
                 auto                infoSv = agentxx::plugin::PluginStringView::toSv(&info);
                 auto                keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
                 s_if.json->json_get_string(host, &infoSv, &keySv, &v);
@@ -270,8 +270,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 ///   两条路径都由宿主回滚本次加载, 不留注册残留。
 static void* jsShellAgentStart(
     ShellCtx&                          ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     auto setErr = [&](const std::string& msg) -> void* {
         if (error) {
@@ -298,15 +298,15 @@ static void* jsShellAgentStart(
     }
     if (ctx.scriptLoaded) {
         // 重复 start (幂等): 脚本已由本实例加载
-        notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         return nullptr;
     }
 
     std::string         args   = scriptArgsJson(ctx);
     auto                loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
     auto                argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
-    AgentxxPluginString err{nullptr, 0};
-    auto* state = new std::pair<ShellCtx*, AgentxxPluginOperatorNotify>(&ctx, *notify);
+    PluginxxString err{nullptr, 0};
+    auto* state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
     auto* h     = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
         &capSv,
@@ -337,18 +337,18 @@ static void* jsShellAgentStart(
 /// - 卸载 op 自身持有本实例 caller lease, 宿主会等它完成后才 destroy;
 /// - 本函数同步完成 stop 本身 (卸载为 fire-and-forget, 无阻塞等待)。
 static void*
-    jsShellAgentStop(ShellCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    jsShellAgentStop(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (!notify || !notify->done) {
         return nullptr;
     }
     dispatchScriptUnload(ctx);
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ShellCtx, jsShellAgentStart, jsShellAgentStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ShellCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(
         [ctx](const char* msg) noexcept {

@@ -88,11 +88,11 @@ struct ClientCommand {
     std::string plugin; ///< 所属插件名
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
-    int32_t(AGENTXX_PLUGIN_CALL* execute)(
+    int32_t(PLUGINXX_CALL* execute)(
         void*                          ud,
-        const AgentxxPluginStringView* args_json,
-        AgentxxPluginString*           action_out,
-        AgentxxPluginString*           error_out
+        const PluginxxStringView* args_json,
+        PluginxxString*           action_out,
+        PluginxxString*           error_out
     )        = nullptr;
     void* ud = nullptr;
 };
@@ -302,7 +302,7 @@ public:
     ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF
     struct Subscription {
         int32_t event = 0;
-        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView* payload_json, void* ud)
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payload_json, void* ud)
             = nullptr;
         void* ud    = nullptr;
         bool  alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
@@ -538,8 +538,8 @@ public:
     /// 注册状态栏项; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerStatusItem(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView id,
-        AgentxxPluginStringView json,
+        PluginxxStringView id,
+        PluginxxStringView json,
         int                     align,
         int                     order
     );
@@ -555,7 +555,7 @@ public:
     }
 
     /// 更新状态栏项; 返回 0 成功
-    int updateStatusItem(ClientPluginInstance* inst, void* item, AgentxxPluginStringView json);
+    int updateStatusItem(ClientPluginInstance* inst, void* item, PluginxxStringView json);
 
     int updateStatusItem(ClientPluginInstance* inst, void* item, std::string_view json) {
         return updateStatusItem(inst, item, strToSv(json));
@@ -565,8 +565,8 @@ public:
     /// 注册面板; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerPanel(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView id,
-        AgentxxPluginStringView props_json
+        PluginxxStringView id,
+        PluginxxStringView props_json
     );
 
     void* registerPanel(
@@ -578,7 +578,7 @@ public:
     }
 
     /// 更新面板内容; 返回 0 成功
-    int updatePanel(ClientPluginInstance* inst, void* panel, AgentxxPluginStringView items_json);
+    int updatePanel(ClientPluginInstance* inst, void* panel, PluginxxStringView items_json);
 
     int updatePanel(ClientPluginInstance* inst, void* panel, std::string_view items_json) {
         return updatePanel(inst, panel, strToSv(items_json));
@@ -588,8 +588,8 @@ public:
     /// 注册 Info 栏段落; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerInfoSection(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView id,
-        AgentxxPluginStringView props_json
+        PluginxxStringView id,
+        PluginxxStringView props_json
     );
 
     void* registerInfoSection(
@@ -604,7 +604,7 @@ public:
     int updateInfoSection(
         ClientPluginInstance*   inst,
         void*                   section,
-        AgentxxPluginStringView items_json
+        PluginxxStringView items_json
     );
 
     int updateInfoSection(ClientPluginInstance* inst, void* section, std::string_view items_json) {
@@ -616,8 +616,8 @@ public:
     /// - tool_call_id 空 = 操作本插件全部; decor_json 空串 = 删除
     int updateToolDecor(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView tool_call_id,
-        AgentxxPluginStringView decor_json
+        PluginxxStringView tool_call_id,
+        PluginxxStringView decor_json
     );
 
     int updateToolDecor(
@@ -631,7 +631,7 @@ public:
     /// 注册工具特化渲染器 (io 线程); 返回 0 成功
     int registerToolRenderer(ClientPluginInstance* inst, const AgentxxToolRenderSpec* spec);
     /// 注销工具特化渲染器 (io 线程); 返回 0 成功
-    int unregisterToolRenderer(ClientPluginInstance* inst, AgentxxPluginStringView tool_name);
+    int unregisterToolRenderer(ClientPluginInstance* inst, PluginxxStringView tool_name);
 
     int unregisterToolRenderer(ClientPluginInstance* inst, std::string_view tool_name) {
         return unregisterToolRenderer(inst, strToSv(tool_name));
@@ -656,7 +656,7 @@ public:
     /// 返回 0 成功
     int bindActionHandler(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView target_id,
+        PluginxxStringView target_id,
         AgentxxUiActionFn       on_action,
         void*                   user_data
     );
@@ -671,7 +671,7 @@ public:
     }
 
     /// 解绑动作处理器 (不存在忽略, 返回 0)
-    int unbindActionHandler(ClientPluginInstance* inst, AgentxxPluginStringView target_id);
+    int unbindActionHandler(ClientPluginInstance* inst, PluginxxStringView target_id);
 
     int unbindActionHandler(ClientPluginInstance* inst, std::string_view target_id) {
         return unbindActionHandler(inst, strToSv(target_id));
@@ -700,10 +700,10 @@ public:
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView name,
-        AgentxxPluginStringView description,
-        int32_t(AGENTXX_PLUGIN_CALL*
-                    exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
+        PluginxxStringView name,
+        PluginxxStringView description,
+        int32_t(PLUGINXX_CALL*
+                    exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
         void* ud
     );
 
@@ -711,27 +711,27 @@ public:
         ClientPluginInstance* inst,
         std::string_view      name,
         std::string_view      description,
-        int32_t(AGENTXX_PLUGIN_CALL*
-                    exec)(void*, const AgentxxPluginStringView*, AgentxxPluginString*, AgentxxPluginString*),
+        int32_t(PLUGINXX_CALL*
+                    exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
         void* ud
     ) {
         return registerCommand(inst, strToSv(name), strToSv(description), exec, ud);
     }
 
-    int unregisterCommand(ClientPluginInstance* inst, AgentxxPluginStringView name);
+    int unregisterCommand(ClientPluginInstance* inst, PluginxxStringView name);
 
     int unregisterCommand(ClientPluginInstance* inst, std::string_view name) {
         return unregisterCommand(inst, strToSv(name));
     }
 
     /// 事件订阅; 返回句柄 (宿主持有; 卸载自动退订)
-    AgentxxPluginSubscription* subscribe(
+    PluginxxSubscription* subscribe(
         ClientPluginInstance* inst,
         int32_t               event,
-        void(AGENTXX_PLUGIN_CALL* handler)(const AgentxxPluginStringView*, void*),
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
         void* ud
     );
-    void unsubscribe(AgentxxPluginSubscription* sub);
+    void unsubscribe(PluginxxSubscription* sub);
     /// 自描述
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);
@@ -748,8 +748,8 @@ public:
     /// 会话操作 (代理到端点)
     void sendUserInputToPeer(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView sessionId,
-        AgentxxPluginStringView text
+        PluginxxStringView sessionId,
+        PluginxxStringView text
     );
 
     void sendUserInputToPeer(
@@ -760,7 +760,7 @@ public:
         sendUserInputToPeer(inst, strToSv(sessionId), strToSv(text));
     }
 
-    void requestCancelToPeer(ClientPluginInstance* inst, AgentxxPluginStringView sessionId);
+    void requestCancelToPeer(ClientPluginInstance* inst, PluginxxStringView sessionId);
 
     void requestCancelToPeer(ClientPluginInstance* inst, std::string_view sessionId) {
         requestCancelToPeer(inst, strToSv(sessionId));
@@ -769,8 +769,8 @@ public:
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
     int sendPluginDataToPeer(
         ClientPluginInstance*   inst,
-        AgentxxPluginStringView event,
-        AgentxxPluginStringView json
+        PluginxxStringView event,
+        PluginxxStringView json
     );
 
     int sendPluginDataToPeer(
@@ -782,7 +782,7 @@ public:
     }
 
     /// 宿主 vtable (静态函数表 `g_clientHostVtable`; 覆写 lifecycle 骨架的同名接缝)
-    const AgentxxHostVtable* hostVtable() override;
+    const PluginxxHostVtable* hostVtable() override;
 
 protected:
 
@@ -807,6 +807,19 @@ protected:
     /// 生成 client 侧实例对象 (领域自引用/管理器弱引用)
     /// - 元信息/lifecycle 入口/生命周期控制块/宿主控制块由 [attachInstance] 装配
     std::shared_ptr<ClientPluginInstance> createInstance(std::string name) override;
+
+    /// client 侧插件入口符号名 (内核不硬编码宿主专名, 见 pluginxx/api/entry.h)
+    ///
+    /// 本类自带装载实现 (见上方说明), 但仍覆写本接缝: 一来与内核默认保持一处定义,
+    /// 二来 [AGENTXX_PLUGIN_CLIENT_SYMBOL_*] 与插件导出宏共用同一批字符串常量。
+    pluginxx::PluginEntrySymbols entrySymbols() const override {
+        return {
+            AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO,
+            AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE,
+            AGENTXX_PLUGIN_CLIENT_SYMBOL_START,
+            AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP,
+        };
+    }
 
     /// 日志前缀 (与 agent 侧插件宿主同进程共存时区分来源)
     std::string_view logTag() const noexcept override {

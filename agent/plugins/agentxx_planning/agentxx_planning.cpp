@@ -191,7 +191,7 @@ std::string hostDataDir(const PluginCtx& ctx) {
     if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_config) {
         return {};
     }
-    AgentxxPluginString j{nullptr, 0};
+    PluginxxString j{nullptr, 0};
     ctx.iface.config->get_config(ctx.host, &j);
     if (!j.data) {
         return {};
@@ -316,7 +316,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
 /// 宿主约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
 /// (修复 "事件先于客户端订阅而丢失 → UI 永久空白", 见
 /// [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
-void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event_json, void* ud) {
+void PLUGINXX_CALL on_client_attached(const PluginxxStringView* event_json, void* ud) {
     auto* ctxRaw = static_cast<PluginCtx*>(ud);
     // C ABI 回调异常守卫 (agent io 线程派发直调)
     agentxx::plugin::guardCallVoid(
@@ -352,16 +352,16 @@ void AGENTXX_PLUGIN_CALL on_client_attached(const AgentxxPluginStringView* event
 
 /// =====================================================================
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL
     agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
     // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
-        [&]() -> const AgentxxPluginInfo* {
-            static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+        [&]() -> const PluginxxInfo* {
+            static const PluginxxInfo info{
+                PLUGINXX_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("agentxx_planning"),
                 agentxx::plugin::PluginStringView::fromCstr("1.2.0"),
@@ -376,7 +376,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL
 
 /// 注册事务 (start 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
 static int planningSetup(PluginCtx* ctx) {
-    const AgentxxPluginHost* host = ctx->host;
+    const PluginxxHost* host = ctx->host;
     // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts 与 toolPrompt)
     if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
         utilxx_base::Json j;
@@ -513,8 +513,8 @@ static int planningSetup(PluginCtx* ctx) {
     return 0;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: create 只构造上下文与接口查询, 注册事务由 start 执行;
     // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
     PluginCtx* raw = nullptr;
@@ -538,10 +538,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_start(
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_start(
     void*                              plugin_ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error_out
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
@@ -572,28 +572,28 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_
                 );
                 return nullptr;
             }
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             return nullptr;
         }
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL
-    agentxx_plugin_agent_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
+    agentxx_plugin_agent_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         static_cast<void*>(nullptr),
         [&]() -> void* {
             // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
             return nullptr;
         }
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
+extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL
     agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
@@ -621,7 +621,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
 
 /// client 侧每实例上下文 (多实例契约: 状态挂本实例, 回调经 ud 恢复)
 struct ClientCtx {
-    const AgentxxPluginHost*      host = nullptr;
+    const PluginxxHost*      host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     /// "agentxx.client.ui" 展示接口表 (Info 段落/工具装饰/action/overlay;
     /// CLI 等不支持时成员 NULL 降级: planning 仍推送内容, 只是按钮不可点)
@@ -921,8 +921,8 @@ static void clearToolDecors(ClientCtx& ctx) {
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host) {
         return;
     }
-    AgentxxPluginStringView emptyTcid{nullptr, 0};
-    AgentxxPluginStringView emptyDecor{nullptr, 0};
+    PluginxxStringView emptyTcid{nullptr, 0};
+    PluginxxStringView emptyDecor{nullptr, 0};
     ctx.ui->update_tool_decor(ctx.host, &emptyTcid, &emptyDecor);
 }
 
@@ -982,17 +982,17 @@ static void refreshPlanSection(ClientCtx& ctx) {
 
 /// EVT_PLUGIN_DATA: 过滤本插件规划事件 {plugin:"agentxx_planning", event:"planning"}
 /// → 更新 Info 栏段落
-static void AGENTXX_PLUGIN_CALL
-    on_client_plugin_data(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
         if (!ctx || !ctx->host) {
             return;
         }
-        AgentxxPluginString plugin{nullptr, 0};
-        AgentxxPluginString event{nullptr, 0};
-        AgentxxPluginString data{nullptr, 0};
+        PluginxxString plugin{nullptr, 0};
+        PluginxxString event{nullptr, 0};
+        PluginxxString data{nullptr, 0};
         auto                kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
         auto                kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
         auto                kData   = agentxx::plugin::PluginStringView::fromCstr("data");
@@ -1028,8 +1028,8 @@ static void AGENTXX_PLUGIN_CALL
 ///   展开体 状态图/todos/notes); read 推送占位 (结果未返回)
 /// - tool_end: 以缓存的最终参数重建装饰 (覆盖流式期间的不完整内容);
 ///   read 模式此时展示结果摘要
-static void AGENTXX_PLUGIN_CALL
-    on_client_delta(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    on_client_delta(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
@@ -1099,8 +1099,8 @@ static void AGENTXX_PLUGIN_CALL
 }
 
 /// EVT_SESSION_SWITCH: 会话切换 → 清理装饰与段落 (新会话尚未有规划)
-static void AGENTXX_PLUGIN_CALL
-    on_client_session_switch(const AgentxxPluginStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL
+    on_client_session_switch(const PluginxxStringView* payload_json, void* ud) {
     (void)payload_json;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
@@ -1113,7 +1113,7 @@ static void AGENTXX_PLUGIN_CALL
     });
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_CALL
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* PLUGINXX_CALL
     agentxx_plugin_client_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin::guardCall(
@@ -1137,7 +1137,7 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxClientPluginInfo* AGENTXX_PLUGIN_C
 
 /// client 侧注册事务 (start 的实际内容): 动作绑定 + 工具渲染器 + client 事件订阅。
 static int planningClientSetup(ClientCtx* ctx) {
-    const AgentxxPluginHost* host = ctx->host;
+    const PluginxxHost* host = ctx->host;
 
     // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠头与
     // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
@@ -1241,8 +1241,8 @@ static int planningClientSetup(ClientCtx* ctx) {
     return 0;
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
-    agentxx_plugin_client_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
+    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (加载失败); 日志闭包捕获局部裸指针
     ClientCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
@@ -1266,10 +1266,10 @@ extern "C" AGENTXX_PLUGIN_EXPORT int32_t AGENTXX_PLUGIN_CALL
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL agentxx_plugin_client_start(
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_client_start(
     void*                              plugin_ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error_out
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
@@ -1300,28 +1300,28 @@ extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL agentxx_plugin_client
                 );
                 return nullptr;
             }
-            notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             return nullptr;
         }
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void* AGENTXX_PLUGIN_CALL
-    agentxx_plugin_client_stop(void*, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
+    agentxx_plugin_client_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         static_cast<void*>(nullptr),
         [&]() -> void* {
             // UI 注册与订阅由宿主在 stop 后统一撤销。
             if (notify && notify->done) {
-                notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
             return nullptr;
         }
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT void AGENTXX_PLUGIN_CALL
+extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL
     agentxx_plugin_client_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);

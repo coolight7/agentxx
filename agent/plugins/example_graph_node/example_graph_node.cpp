@@ -45,13 +45,13 @@ static auto agentGuardLogger(AgentCtx* ctx) noexcept {
 
 /// ---------------- get_info ----------------
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
-        [&]() -> const AgentxxPluginInfo* {
-            static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+        [&]() -> const PluginxxInfo* {
+            static const PluginxxInfo info{
+                PLUGINXX_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("example_graph_node"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
@@ -280,7 +280,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
         errOut = "graph iface not available";
         return -1;
     }
-    AgentxxPluginString graphJson{nullptr, 0};
+    PluginxxString graphJson{nullptr, 0};
     ctx.iface.graph->get_graph_json(ctx.host, &graphJson);
     if (!graphJson.data) {
         errOut = "get_graph_json returned null";
@@ -407,8 +407,8 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
 ///   (GraphTypeSlot 失效使旧编译节点安全失败), 执行图保持当前定义。
 /// - `destroy`: 只释放本地内存。
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     AgentCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
@@ -466,8 +466,8 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
 
 static void* exampleGraphAgentStart(
     AgentCtx&                          ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -490,20 +490,20 @@ static void* exampleGraphAgentStart(
         return nullptr;
     }
     ctx.log.info("example_graph_node started, graph modified");
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    exampleGraphAgentStop(AgentCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    exampleGraphAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 没有自管线程/定时器; 注册记录由宿主在 stop 后撤销。
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(AgentCtx, exampleGraphAgentStart, exampleGraphAgentStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(agentGuardLogger(ctx), [&] {
         if (!ctx) {

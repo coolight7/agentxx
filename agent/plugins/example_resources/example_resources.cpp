@@ -29,7 +29,7 @@
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
 // ResCtx, create 经 *plugin_ctx 交付宿主 / destroy 释放
 struct ResCtx {
-    const AgentxxPluginHost*     host = nullptr;
+    const PluginxxHost*     host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
 
     auto logger() const noexcept {
@@ -48,7 +48,7 @@ struct ResCtx {
 
 /// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
 static std::string ownInfoString(
-    const AgentxxPluginHost*            host,
+    const PluginxxHost*            host,
     const agentxx::plugin::AgentIfaces& iface,
     const char*                         key
 ) {
@@ -56,13 +56,13 @@ static std::string ownInfoString(
         || !iface.json->json_get_string) {
         return {};
     }
-    AgentxxPluginString info{nullptr, 0};
+    PluginxxString info{nullptr, 0};
     iface.plugins->get_own_info(host, &info);
     if (!info.data) {
         return {};
     }
     std::string         out;
-    AgentxxPluginString val{nullptr, 0};
+    PluginxxString val{nullptr, 0};
     auto                infoSv = agentxx::plugin::PluginStringView::toSv(&info);
     auto                keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
     iface.json->json_get_string(host, &infoSv, &keySv, &val);
@@ -84,14 +84,14 @@ static std::string dirOf(const std::string& path) {
     return path.substr(0, pos);
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_get_info(void) {
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         nullptr,
-        [&]() -> const AgentxxPluginInfo* {
-            static const AgentxxPluginInfo info{
-                AGENTXX_PLUGIN_API_VERSION,
+        [&]() -> const PluginxxInfo* {
+            static const PluginxxInfo info{
+                PLUGINXX_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("example_resources"),
                 agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
@@ -105,8 +105,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT const AgentxxPluginInfo* agentxx_plugin_agent_g
     );
 }
 
-extern "C" AGENTXX_PLUGIN_EXPORT int
-    agentxx_plugin_agent_create(const AgentxxPluginHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
     auto    ctx = std::make_unique<ResCtx>();
     ResCtx* raw = nullptr;
@@ -144,8 +144,8 @@ extern "C" AGENTXX_PLUGIN_EXPORT int
 
 static void* resAgentStart(
     ResCtx&                            ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               error
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
 ) {
     if (!notify) {
         if (error) {
@@ -157,7 +157,7 @@ static void* resAgentStart(
         }
         return nullptr;
     }
-    const AgentxxPluginHost* host = ctx.host;
+    const PluginxxHost* host = ctx.host;
 
     // ---- 运行时注册: 追加 skill 目录 (声明式段见 plugin.yaml) ----
     // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败);
@@ -194,19 +194,19 @@ static void* resAgentStart(
             = agentxx::plugin::PluginStringView::fromCstr("[example_resources] plugin started");
         ctx.iface.log->log(host, 2, &infoSv);
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 static void*
-    resAgentStop(ResCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ResCtx, resAgentStart, resAgentStop)
 
-extern "C" AGENTXX_PLUGIN_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄。
     // 宿主已在 stop 后摘除本插件的全部资源 (skill/memory/mcp), destroy 只释放内存。
     auto* ctx = static_cast<ResCtx*>(plugin_ctx);

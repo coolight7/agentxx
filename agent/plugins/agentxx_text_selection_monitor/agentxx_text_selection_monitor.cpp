@@ -101,8 +101,8 @@ void TextSelectionHolder::stop() {
 
 static void* textSelectionAgentStart(
     TextSelectionPluginCtx&            ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               err
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
 ) {
     ctx.holder.ctx = &ctx;
 
@@ -154,18 +154,18 @@ static void* textSelectionAgentStart(
         }
     );
 
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 /// stop: 停止监听并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
 static void*
-    textSelectionAgentStop(TextSelectionPluginCtx& ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+    textSelectionAgentStop(TextSelectionPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     try {
         ctx.holder.stop();
     } catch (...) {
     }
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

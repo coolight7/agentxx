@@ -191,8 +191,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
 
             auto                        st = std::make_shared<TaskState>();
             auto                        ex = co_await asio::this_coro::executor;
-            AgentxxPluginOperatorNotify ntf{nullptr, nullptr};
-            AgentxxPluginString         err{nullptr, 0};
+            PluginxxOperatorNotify ntf{nullptr, nullptr};
+            PluginxxString         err{nullptr, 0};
             auto*                       h = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
@@ -209,7 +209,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             bool tracked = std::any_of(
                 instC->outstandingOps.begin(),
                 instC->outstandingOps.end(),
-                [h](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                [h](const std::shared_ptr<PluginxxOperatorHandle>& op) {
                     return op.get() == h;
                 }
             );
@@ -218,7 +218,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
 
             // 通知完成 (模拟插件协程结束上报) → inflight-1 + 句柄回收 (异步)
             auto nullSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-            ntf.done(ntf.host_ud, AGENTXX_PLUGIN_OPERATOR_OK, &nullSv);
+            ntf.done(ntf.host_ud, PLUGINXX_OPERATOR_OK, &nullSv);
             XX_TEST_EXPECT_TRUE(
                 st->done.exchange(true) == false
             ); ///< 恰好一次语义由 OpCore CAS 保证
@@ -227,7 +227,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 auto stillTracked = std::any_of(
                     instC->outstandingOps.begin(),
                     instC->outstandingOps.end(),
-                    [h](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                    [h](const std::shared_ptr<PluginxxOperatorHandle>& op) {
                         return op.get() == h;
                     }
                 );
@@ -241,7 +241,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             bool trackedAfter = std::any_of(
                 instC->outstandingOps.begin(),
                 instC->outstandingOps.end(),
-                [h](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                [h](const std::shared_ptr<PluginxxOperatorHandle>& op) {
                     return op.get() == h;
                 }
             );
@@ -253,8 +253,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             }
 
             // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
-            AgentxxPluginOperatorNotify ntf2{nullptr, nullptr};
-            AgentxxPluginString         err2{nullptr, 0};
+            PluginxxOperatorNotify ntf2{nullptr, nullptr};
+            PluginxxString         err2{nullptr, 0};
             auto*                       h2 = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
@@ -278,12 +278,12 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
                 // 取消后仍可上报完成 (宿主幂等; 不 UAF)
                 auto nullSv2 = agentxx::plugin::PluginStringView::from(nullptr, 0);
-                ntf2.done(ntf2.host_ud, AGENTXX_PLUGIN_OPERATOR_CANCELLED, &nullSv2);
+                ntf2.done(ntf2.host_ud, PLUGINXX_OPERATOR_CANCELLED, &nullSv2);
                 for (int i = 0; i < 100; ++i) {
                     auto stillTracked = std::any_of(
                         instC->outstandingOps.begin(),
                         instC->outstandingOps.end(),
-                        [h2](const std::shared_ptr<AgentxxPluginOperatorHandle>& op) {
+                        [h2](const std::shared_ptr<PluginxxOperatorHandle>& op) {
                             return op.get() == h2;
                         }
                     );

@@ -100,8 +100,8 @@ struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 
 static void* computerUseAgentStart(
     ComputerUsePluginCtx&              ctx,
-    const AgentxxPluginOperatorNotify* notify,
-    AgentxxPluginString*               err
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
 ) {
     if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
         agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
@@ -125,14 +125,14 @@ static void* computerUseAgentStart(
         }
     );
 
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
 /// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
 static void*
-    computerUseAgentStop(ComputerUsePluginCtx&, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    computerUseAgentStop(ComputerUsePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 

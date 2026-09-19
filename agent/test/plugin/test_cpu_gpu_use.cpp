@@ -141,7 +141,7 @@ asio::awaitable<TestResult>
     // ---- 4. 能力 agentxx.system_usage (agent 侧周期采集 publish 的数据源) ----
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
-        AgentxxPluginString err{nullptr, 0};
+        PluginxxString err{nullptr, 0};
         int                 opStatus = -1;
         std::string         payload;
         bool                done = false;
@@ -153,7 +153,7 @@ asio::awaitable<TestResult>
             "agentxx.system_usage",
             "query",
             "{}",
-            [](void* ud, int32_t st, const AgentxxPluginStringView* pl) {
+            [](void* ud, int32_t st, const PluginxxStringView* pl) {
                 auto* s          = static_cast<StateTuple*>(ud);
                 *std::get<0>(*s) = st;
                 if (pl && pl->data && pl->size > 0) {
@@ -171,7 +171,7 @@ asio::awaitable<TestResult>
             co_await t.async_wait(asio::use_awaitable);
         }
         XX_TEST_EXPECT_TRUE(done); ///< 有界等待: 完成回调未到达即失败, 不悬挂测试
-        XX_TEST_EXPECT_EQ(opStatus, AGENTXX_PLUGIN_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(opStatus, PLUGINXX_OPERATOR_OK);
         if (!payload.empty()) {
             auto j = utilxx_base::Json::parse(payload);
             if (j.is_object()) {

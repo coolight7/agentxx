@@ -1543,7 +1543,7 @@ EventBus (Event Bus)
 
 ## Appendix B: Plugin System v1 Key Concepts (See plugins.md)
 
-- COM-style interface table query: Frozen core vtable (`alloc`/`free` + `query_interface`; the former `strdup` slot was removed from the vtable in favor of the header-inline `agentxx_plugin_strdup` built on `alloc`), querying dedicated interface tables via string `IID`s (with independent table version fields, all currently 1); loading performs `>=` version compatibility checks.
+- COM-style interface table query: Frozen core vtable (`alloc`/`free` + `query_interface`; the former `strdup` slot was removed from the vtable in favor of the header-inline `pluginxx_strdup` built on `alloc`), querying dedicated interface tables via string `IID`s (with independent table version fields, all currently 1); loading performs `>=` version compatibility checks.
 - Agent side: 16 interface tables (`tools`, `hooks`, `events`, `capabilities`, `scheduler`, `session`, `plugins`, `config` including get/set_language, `model`, `cancel`, `prompt`, `json`, `log`, `resources`, `graph`, `tasks`; the tasks table takes `notify` as an out-param for host-managed background tasks).
 - Client side: 7 interface tables (`ui` v2 with tool renderers + instance decors, `events`, `session`, `wire`, `self`, `json`, `log`; see `client_plugin_api.h`).
 - Modern SDK (`plugin_kit.h`):
@@ -1553,7 +1553,7 @@ EventBus (Event Bus)
   - `CancelRegistry` centralized event-driven cancellation manager with `ScopedRegistration` RAII protection.
   - `PluginBase` state base + `Task<T>` coroutines + awaiters (`sleep`/`yield`/`offload`/`call_tool`/`invoke_cap`) + registration family (`tool`/`fast_tool`/`blocking_tool`/`hook`/`capability`/`spawn`).
 - Three Iron Rules of Multi-Instance Safety: No mutable global statics / State recovered via `user_data` closures / Cache interface tables in instance contexts.
-- Export control: `-fvisibility=hidden` + version script whitelist (`AGENTXX_PLUGIN_EXPORT`).
+- Export control: `-fvisibility=hidden` + version script whitelist (`PLUGINXX_EXPORT`).
 - Platform matrix: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.
 - Utility reuse: Built-in plugins link statically against `agentxx_util` (symbols hidden without conflict).
 

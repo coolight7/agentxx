@@ -43,14 +43,14 @@ using namespace agentxx::client;
 
 namespace {
 
-static AgentxxPluginString makeTestString(std::string_view s) {
+static PluginxxString makeTestString(std::string_view s) {
     if (s.empty()) {
-        return AgentxxPluginString{nullptr, 0};
+        return PluginxxString{nullptr, 0};
     }
     char* buf = static_cast<char*>(std::malloc(s.size() + 1));
     std::memcpy(buf, s.data(), s.size());
     buf[s.size()] = '\0';
-    return AgentxxPluginString{buf, static_cast<uint64_t>(s.size())};
+    return PluginxxString{buf, static_cast<uint64_t>(s.size())};
 }
 
 } // namespace

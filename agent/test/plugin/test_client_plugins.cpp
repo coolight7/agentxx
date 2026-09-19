@@ -51,8 +51,8 @@ static asio::awaitable<void> sleepMs(int ms) {
 }
 
 /// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
-void* AGENTXX_PLUGIN_CALL
-    fakeClientStopHook(void*, const AgentxxPluginOperatorNotify*, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    fakeClientStopHook(void*, const PluginxxOperatorNotify*, PluginxxString*) {
     return nullptr;
 }
 
@@ -62,17 +62,17 @@ struct ClientLifecycleProbe {
     int stops  = 0;
 };
 
-void* AGENTXX_PLUGIN_CALL
-    probeClientStartHook(void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeClientStartHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++static_cast<ClientLifecycleProbe*>(ud)->starts;
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
-void* AGENTXX_PLUGIN_CALL
-    probeClientStopHook(void* ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString*) {
+void* PLUGINXX_CALL
+    probeClientStopHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++static_cast<ClientLifecycleProbe*>(ud)->stops;
-    notify->done(notify->host_ud, AGENTXX_PLUGIN_OPERATOR_OK, nullptr);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
 
@@ -548,7 +548,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (ifaceSelf) {
             XX_TEST_EXPECT_EQ(ifaceSelf->version, AGENTXX_IFACE_CLIENT_SELF_VERSION);
             // 默认语言为 "en"
-            AgentxxPluginString langOut{};
+            PluginxxString langOut{};
             XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
             if (langOut.data) {
@@ -557,7 +557,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 设置语言为 "zh-cn"
-            AgentxxPluginStringView zhSv{"zh-cn", 5};
+            PluginxxStringView zhSv{"zh-cn", 5};
             XX_TEST_EXPECT_EQ(ifaceSelf->set_language(inst->hostView(), &zhSv), 0);
             XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
@@ -567,7 +567,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 不支持 auto, 传 auto 回退为 en
-            AgentxxPluginStringView autoSv{"auto", 4};
+            PluginxxStringView autoSv{"auto", 4};
             XX_TEST_EXPECT_EQ(ifaceSelf->set_language(inst->hostView(), &autoSv), 0);
             XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
             XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
@@ -784,8 +784,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
         std::atomic<int>           hits{0};
-        AgentxxPluginSubscription* subs[4] = {};
-        auto                       subFn   = +[](const AgentxxPluginStringView*, void* ud) {
+        PluginxxSubscription* subs[4] = {};
+        auto                       subFn   = +[](const PluginxxStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
         const auto events8 = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
@@ -813,17 +813,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::ClientPluginInstance* inst   = nullptr;
             const AgentxxClientEventsIface*        events = nullptr;
             std::atomic<int>                       hits{0};
-            AgentxxPluginSubscription*             dynSub        = nullptr;
-            void (*incFn)(const AgentxxPluginStringView*, void*) = nullptr;
+            PluginxxSubscription*             dynSub        = nullptr;
+            void (*incFn)(const PluginxxStringView*, void*) = nullptr;
         };
 
         auto st    = std::make_shared<DynSubState>();
         st->inst   = inst2.get();
         st->events = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
-        st->incFn  = +[](const AgentxxPluginStringView*, void* ud) {
+        st->incFn  = +[](const PluginxxStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
-        auto aFn = +[](const AgentxxPluginStringView*, void* ud) {
+        auto aFn = +[](const PluginxxStringView*, void* ud) {
             auto* s = static_cast<DynSubState*>(ud);
             ++s->hits;
             if (!s->dynSub) {
@@ -835,7 +835,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
         };
-        AgentxxPluginSubscription* a
+        PluginxxSubscription* a
             = st->events
                   ? st->events
                         ->subscribe(inst2->hostView(), AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
@@ -857,17 +857,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 8.4 同轮派发中退订后续 handler: 未开始的回调不得执行 (F18)
         struct UnsubNextState {
             const AgentxxClientEventsIface* events = nullptr;
-            AgentxxPluginSubscription*      next   = nullptr;
+            PluginxxSubscription*      next   = nullptr;
             std::atomic<int>                first{0};
             std::atomic<int>                second{0};
         };
 
         auto us       = std::make_shared<UnsubNextState>();
         us->events    = events8;
-        auto secondFn = +[](const AgentxxPluginStringView*, void* ud) {
+        auto secondFn = +[](const PluginxxStringView*, void* ud) {
             ++static_cast<UnsubNextState*>(ud)->second;
         };
-        auto firstFn = +[](const AgentxxPluginStringView*, void* ud) {
+        auto firstFn = +[](const PluginxxStringView*, void* ud) {
             auto* s = static_cast<UnsubNextState*>(ud);
             ++s->first;
             if (s->next && s->events) {
@@ -936,7 +936,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
             const auto self9 = agentxx::plugin::ClientIfaces::query(instCfg->hostView()).self;
-            AgentxxPluginString json{nullptr, 0};
+            PluginxxString json{nullptr, 0};
             if (self9 && self9->get_plugin_args) {
                 self9->get_plugin_args(instCfg->hostView(), &json);
             }
@@ -1093,7 +1093,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // READY payload 含 interfaces 数组 (经 agentxx.client.events 接口表订阅;
                 // onReady 同步分发到当前 io 线程)
                 std::string readyPayload;
-                auto        readyFn = +[](const AgentxxPluginStringView* payload, void* ud) {
+                auto        readyFn = +[](const PluginxxStringView* payload, void* ud) {
                     if (payload && payload->data) {
                         static_cast<std::string*>(ud)->assign(payload->data, payload->size);
                     }
@@ -2527,7 +2527,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto instA = co_await mgr2->loadNativeAsync(path);
         XX_TEST_EXPECT_TRUE(instA != nullptr);
         if (instA) {
-            const AgentxxPluginHost* oldHost = instA->hostView();
+            const PluginxxHost* oldHost = instA->hostView();
             XX_TEST_EXPECT_TRUE(oldHost != nullptr && oldHost->vtable != nullptr);
             XX_TEST_EXPECT_TRUE(
                 co_await mgr2->unloadAsync("example_plugin", std::chrono::seconds{5})
