@@ -333,7 +333,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
         it["text"] = text;
         items.push_back(std::move(it));
     };
-    pushText(fmt::format("|- CPU {}x · {:.0f}%", st.cpuCores, st.cpu), "normal");
+    pushText(fmt::format("|- CPU {:.0f}% · {}x", st.cpu, st.cpuCores), "normal");
     std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
         const auto mbToBytes = [](int64_t mb) {
@@ -350,7 +350,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
     if (st.gpuCount == 1) {
         pushText(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct), "normal");
     } else if (st.gpuCount > 1) {
-        pushText(fmt::format("|- GPU {}x · {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
+        pushText(fmt::format("|- GPU {:.0f}% · {}x", st.gpuPeakPct, st.gpuCount), "normal");
     }
     utilxx_base::Json out;
     out["items"] = std::move(items);
