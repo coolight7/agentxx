@@ -131,7 +131,9 @@ asio::awaitable<TestResult>
             auto out = co_await tool->execute_async(utilxx_base::Json::object());
             TEST_INFO << "get_system_core_info output:\n" << out << std::endl;
             XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(out.find("cores") != std::string::npos); ///< CPU 核数随利用率一起给出
+            XX_TEST_EXPECT_TRUE(
+                out.find("cores") != std::string::npos
+            ); ///< CPU 核数随利用率一起给出
             XX_TEST_EXPECT_TRUE(out.find("Memory:") != std::string::npos);
         }
     }

@@ -1256,7 +1256,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
 
             // 旧版本 agent 侧未上报 cpu_cores (取值 0): 回退为不带核数的 “|- CPU 71%”
-            usage.data = R"({"cpu":71.2,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384})";
+            usage.data
+                = R"({"cpu":71.2,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384})";
             mgr->onPluginData(usage);
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
@@ -1579,7 +1580,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_TRUE(editCtx.matched);
-            XX_TEST_EXPECT_TRUE(editCtx.summary.find("[+1 -1] /home/user/c.cpp") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                editCtx.summary.find("[+1 -1] /home/user/c.cpp") != std::string::npos
+            );
 
             // 15.3c edit: old_str/new_str 缺失时不加中括号提示 (仅路径)
             auto editNoText = co_await renderToolAsync(
@@ -1608,7 +1611,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_TRUE(editMulti.matched);
-            XX_TEST_EXPECT_TRUE(editMulti.summary.find("[+3 -3] /home/user/e.cpp") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                editMulti.summary.find("[+3 -3] /home/user/e.cpp") != std::string::npos
+            );
 
             // 15.3e edit multi_replace 运行中: 处数未知, 先按单处展示
             auto editMultiRunning = co_await renderToolAsync(

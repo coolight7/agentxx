@@ -7,8 +7,8 @@
 #include "utilxx/diff_util.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
-#include <fmt/format.h>
 #include <cstdint>
+#include <fmt/format.h>
 #include <memory>
 #include <string>
 #include <string_view>

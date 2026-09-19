@@ -1234,8 +1234,8 @@ asio::awaitable<void>
         TEST_PASS << "edit multi_replace hits parsed for renderer summary: 3" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "edit multi_replace hits parse wrong: " << hits << ", result='" << result << "'"
-                  << std::endl;
+        TEST_FAIL << "edit multi_replace hits parse wrong: " << hits << ", result='" << result
+                  << "'" << std::endl;
     }
     co_return;
 }
