@@ -7,6 +7,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx_filesystem/agentxx_fs_plugin.h" // 渲染摘要 helper (parseEditReplaceHits)
 #include "agentxx_filesystem/filesystem_impl.h"
 #include "utilxx_base/string_util.h"
 #include <chrono>
@@ -1222,6 +1223,19 @@ asio::awaitable<void>
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemEditTextFileTool multi_replace failed: " << result << std::endl;
+    }
+
+    // client 折叠头摘要按结果里的命中处数换算总行数
+    // (见 agentxx_fs_plugin::parseEditReplaceHits): 解析口径必须与实际输出的
+    // 结果文本一致, 这里用真实执行结果覆盖, 防止两处格式各自漂移
+    const int64_t hits = agentxx_fs_plugin::parseEditReplaceHits(result);
+    if (hits == 3) {
+        g_fs_passed++;
+        TEST_PASS << "edit multi_replace hits parsed for renderer summary: 3" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit multi_replace hits parse wrong: " << hits << ", result='" << result
+                  << "'" << std::endl;
     }
     co_return;
 }

@@ -1217,20 +1217,29 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
             XX_TEST_EXPECT_TRUE(hasSmSection);
 
-            // usage 事件: 新版 Append 段风格为 “|- CPU 36%” / “|- RAM 52% (8G/16G)” / “|- GPU 42%”
+            // usage 事件: Append 段风格为 “|- CPU 36% · 12x” / “|- RAM 52% · 8G/16G” / “|- GPU 42%”
             agentxx::agent::WirePluginData usage;
             usage.plugin = "agentxx_system_monitor";
             usage.event  = "usage";
             usage.data
-                = R"({"cpu":35.5,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
+                = R"({"cpu":35.5,"cpu_cores":12,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
             mgr->onPluginData(usage);
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_system_monitor.usage") {
                     std::string dump = sec.items.dump();
-                    // CPU 四舍五入到整数 (35.5 -> 36)
+                    // CPU 段首个 item 的完整文案: “|- CPU 36% · 12x”
+                    // (核数 12 -> “12x”, 利用率四舍五入到整数 35.5 -> 36)
+                    XX_TEST_EXPECT_TRUE(sec.items.is_array() && !sec.items.empty());
+                    if (sec.items.is_array() && !sec.items.empty()) {
+                        XX_TEST_EXPECT_EQ(
+                            sec.items[0].value("text", std::string{}),
+                            std::string{"|- CPU 36% · 12x"}
+                        );
+                    }
                     XX_TEST_EXPECT_TRUE(dump.find("CPU") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("12x") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(
                         dump.find("36%") != std::string::npos
                         || dump.find("35.5%") != std::string::npos
@@ -1243,6 +1252,18 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     // GPU 仅显示峰值百分比, 不含名称及 MB
                     XX_TEST_EXPECT_TRUE(dump.find("GPU") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("42%") != std::string::npos);
+                }
+            }
+
+            // 旧版本 agent 侧未上报 cpu_cores (取值 0): 回退为不带核数的 “|- CPU 71%”
+            usage.data
+                = R"({"cpu":71.2,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384})";
+            mgr->onPluginData(usage);
+            reg = mgr->uiRegistrySnapshot();
+            for (const auto& sec : reg->infoSections) {
+                if (sec.id == "agentxx_system_monitor.usage") {
+                    std::string dump = sec.items.dump();
+                    XX_TEST_EXPECT_TRUE(dump.find("CPU 71%") != std::string::npos);
                 }
             }
 
@@ -1520,7 +1541,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(readRes.summary.find("[10, 60]") != std::string::npos);
             XX_TEST_EXPECT_TRUE(readRes.summary.find("/home/user/a.cpp") != std::string::npos);
 
-            // 15.3 edit (回调函数: path 摘要 + diff items)
+            // 15.3 edit (回调函数: "[+行 -行] path" 摘要 + diff items)
             auto editRes = co_await renderToolAsync(
                 mgr,
                 "call_edit_1",
@@ -1533,6 +1554,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(editRes.matched);
             XX_TEST_EXPECT_EQ(editRes.displayName, "Edit");
+            // 折叠头摘要: 类似 git 的增删行数提示 (与展开体 diff 行数同源)
+            XX_TEST_EXPECT_TRUE(editRes.summary.find("[+1 -1]") != std::string::npos);
             XX_TEST_EXPECT_TRUE(editRes.summary.find("/home/user/b.cpp") != std::string::npos);
             XX_TEST_EXPECT_EQ(editRes.items.size(), 1U);
             if (!editRes.items.empty()) {
@@ -1544,6 +1567,69 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("old_str", std::string{}), "foo");
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("new_str", std::string{}), "bar");
             }
+
+            // 15.3b edit: 增删行数按逐行 diff 统计 (未变的上下文行不计入)
+            auto editCtx = co_await renderToolAsync(
+                mgr,
+                "call_edit_2",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/c.cpp","old_str":"int a = 1;\nreturn a;\n}","new_str":"int a = 2;\nreturn a;\n}"})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editCtx.matched);
+            XX_TEST_EXPECT_TRUE(
+                editCtx.summary.find("[+1 -1] /home/user/c.cpp") != std::string::npos
+            );
+
+            // 15.3c edit: old_str/new_str 缺失时不加中括号提示 (仅路径)
+            auto editNoText = co_await renderToolAsync(
+                mgr,
+                "call_edit_3",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/d.cpp"})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editNoText.matched);
+            XX_TEST_EXPECT_TRUE(editNoText.summary.find("[+0 -0]") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(editNoText.summary.find("/home/user/d.cpp") != std::string::npos);
+
+            // 15.3d edit multi_replace: 结果里的命中处数换算总行数 (1 处 +1 -1 × 3 处)
+            auto editMulti = co_await renderToolAsync(
+                mgr,
+                "call_edit_4",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/e.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+                "Success, Replace 3 hits",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editMulti.matched);
+            XX_TEST_EXPECT_TRUE(
+                editMulti.summary.find("[+3 -3] /home/user/e.cpp") != std::string::npos
+            );
+
+            // 15.3e edit multi_replace 运行中: 处数未知, 先按单处展示
+            auto editMultiRunning = co_await renderToolAsync(
+                mgr,
+                "call_edit_5",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/f.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+                "",
+                false,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editMultiRunning.matched);
+            XX_TEST_EXPECT_TRUE(
+                editMultiRunning.summary.find("[+1 -1] /home/user/f.cpp") != std::string::npos
+            );
 
             co_await mgr->unloadAsync("agentxx_filesystem");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);

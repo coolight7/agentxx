@@ -32,6 +32,7 @@ constexpr int kUsageIntervalSec = 5;
 std::string usageToJson(const CpuGpuUsage& u) {
     utilxx_base::Json j;
     j["cpu"]               = u.cpuUsagePercent;
+    j["cpu_cores"]         = u.cpuCoreCount;
     j["mem_total_mb"]      = u.memory.totalPhysicalMB;
     j["mem_used_mb"]       = u.memory.usedPhysicalMB;
     j["mem_percent"]       = u.memory.usagePercent;
@@ -52,7 +53,11 @@ std::string usageToJson(const CpuGpuUsage& u) {
 
 std::string formatUsageText(const CpuGpuUsage& usage) {
     std::stringstream ss;
-    ss << fmt::format("CPU Usage: {:.1f}%\n", usage.cpuUsagePercent);
+    std::string       cpuLine = fmt::format("CPU Usage: {:.1f}%", usage.cpuUsagePercent);
+    if (usage.cpuCoreCount > 0) {
+        cpuLine += fmt::format(" ({} cores)", usage.cpuCoreCount);
+    }
+    ss << cpuLine << "\n";
     const auto mbToBytes = [](uint64_t mb) {
         return mb * 1024 * 1024;
     };
@@ -131,7 +136,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
     blocking_tool(
         ctx,
         "agentxx_get_system_core_info",
-        "Get system resource usage: CPU utilization, memory usage, GPU utilization, and GPU memory usage.",
+        "Get system resource usage: CPU utilization and core count, memory usage, GPU utilization, and GPU memory usage.",
         schema,
         [](SysMonCtx& c, std::string_view) -> std::string {
             auto usage = c.querySync();
@@ -285,6 +290,7 @@ struct SysMonClientCtx : public ClientPluginBase {
 
 struct UsageStat {
     double  cpu        = 0.0;
+    int64_t cpuCores   = 0;
     double  memPct     = 0.0;
     int64_t memUsedMb  = 0;
     int64_t memTotalMb = 0;
@@ -297,6 +303,7 @@ static UsageStat parseUsage(const std::string& raw) {
     try {
         auto j        = utilxx_base::Json::parse(raw);
         st.cpu        = j.value("cpu", 0.0);
+        st.cpuCores   = j.value<int64_t>("cpu_cores", 0);
         st.memPct     = j.value("mem_percent", 0.0);
         st.memUsedMb  = j.value<int64_t>("mem_used_mb", 0);
         st.memTotalMb = j.value<int64_t>("mem_total_mb", 0);
@@ -326,7 +333,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
         it["text"] = text;
         items.push_back(std::move(it));
     };
-    pushText(fmt::format("|- CPU {:.0f}%", st.cpu), "normal");
+    pushText(fmt::format("|- CPU {:.0f}% · {}x", st.cpu, st.cpuCores), "normal");
     std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
         const auto mbToBytes = [](int64_t mb) {
@@ -343,7 +350,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
     if (st.gpuCount == 1) {
         pushText(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct), "normal");
     } else if (st.gpuCount > 1) {
-        pushText(fmt::format("|- GPU {}x · {:.0f}%", st.gpuCount, st.gpuPeakPct), "normal");
+        pushText(fmt::format("|- GPU {:.0f}% · {}x", st.gpuPeakPct, st.gpuCount), "normal");
     }
     utilxx_base::Json out;
     out["items"] = std::move(items);

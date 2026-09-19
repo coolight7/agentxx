@@ -66,7 +66,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_string_html_to_markdown` | Converts HTML to Markdown. |
 | | `agentxx_string_regexp` | Regular expression matching, replacement, and extraction. |
 | **System** | `agentxx_get_current_datetime` | Obtains current system date and time. |
-| | `agentxx_get_system_core_info` | Retrieves CPU, memory, and GPU utilization metrics. |
+| | `agentxx_get_system_core_info` | Retrieves CPU (utilization and logical core count), memory, and GPU utilization metrics. |
 | **UI Control** | `agentxx_ui_control_keyboard_mouse` | Mouse and keyboard automation on Windows (Windows only; provided by the `agentxx_computer_use` plugin, depends: screen_capture). |
 | **Screen Capture** | `agentxx_screen_capture` | Screen capture and streaming (Windows only). |
 | **Audio Stream** | `agentxx_audio_stream` | System/application/microphone audio capture (**skipped on all platforms**: WASAPI implementation not enabled, stub only; see platform matrix in plugins.md). |
@@ -239,8 +239,8 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
 
 - **TUI Mode**: FTXUI-based terminal interface featuring:
   - Message list supporting User, Assistant, Thinking, Tool, System, and Interrupt roles.
-  - Automatic folding/expansion of Thinking and Tool blocks (expanded while executing, folded upon completion).
-  - Interactive click-to-fold/expand: Clicking finalized messages toggles `msg.collapsed`; clicking the tail Thinking block during active streaming toggles in-component override state (`MessageListComponent::streamThinkOverride_`, cycling: unset follows TailThinkingMode / folded / expanded), resetting on stream start and finish. Hit areas are mapped from the previous frame's `visibleBoxes` (`collapsibleBoxes_` + `collapsibleIsStream_`).
+  - Automatic folding/expansion of Thinking and Tool blocks (expanded while executing, folded upon completion; a Thinking stream the user manually expanded stays expanded when committed).
+  - Interactive click-to-fold/expand: Clicking finalized messages toggles `msg.collapsed`; clicking the tail Thinking block during active streaming toggles the shared override state (`TUIRenderState::streamThinkOverride`, cycling: unset follows TailThinkingMode / folded / expanded). The override is scoped to the current stream: a manually expanded thinking stream stays expanded once committed (`pushCurrentTokenLocked` derives `msg.collapsed` from it, so the end of thinking no longer folds it back), and it resets to -1 on commit / new stream start so the next thinking round follows the configured default (it lives in the shared state because the commit happens on the client thread and has to read the UI thread's click). Hit areas are mapped from the previous frame's `visibleBoxes` (`collapsibleBoxes_` + `collapsibleIsStream_`).
   - Real-time streaming token rendering with Copy-on-Write (COW) semantics, preventing O(n²) string accumulation.
   - Declarative interrupt-prompt rendering (generic mechanism; the TUI holds no specialization for any prompt type, including permission): the agent side declares the header segments and an **ordered block list** in `InterruptHandleArg.ui` (schema: [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h)); the client `InterruptView` implements rendering, height estimation, hit areas, interaction and result assembly:
     - **One interrupt request = one message = one form**: the descriptor may contain multiple control blocks and the user submits all values at once; the descriptor is **self-contained** (no other message fields are read by the client).

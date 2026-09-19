@@ -1802,6 +1802,43 @@ TestResult testTuiScroll() {
             XX_TEST_EXPECT_TRUE(nextStreamFrame.find("THK18F_HEAD2") != std::string::npos);
         }
 
+        // 18g: 流式思考在 Ultra 动画等级下走增量多行渲染, 点击展开后不会被
+        // 折回 —— 回归: 折叠期间 syncStream 提前返回 (不记账流身份), 首次展开
+        // 被误判为"新流"并清除用户点击覆盖态, 表现为展开一帧后又折回单行
+        // (需再点一次才正常展开)
+        settings.setTailThinkingMode(TailThinkingMode::SingleLine);
+        settings.setAnimationLevel(AnimationLevel::Ultra);
+        {
+            ScrollFixture f;
+            f.sharedState.mutate([&](TUIRenderState& st) {
+                st.currentTokenRole = TUIMessage::Role::Think;
+            });
+            f.setTokenEpoch(11, "Thinking head line THK18G_HEAD\nThinking tail THK_TAIL_18G");
+            // 两帧建立布局与命中区域
+            f.render();
+            std::string frame = f.render();
+            XX_TEST_EXPECT_TRUE(frame.find("THK18G_HEAD") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(frame.find("THK_TAIL_18G") != std::string::npos);
+
+            // 点击 → 展开 (显示全文头部)
+            XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
+            std::string expanded = f.render();
+            XX_TEST_EXPECT_TRUE(expanded.find("THK18G_HEAD") != std::string::npos);
+
+            // 后续帧保持展开 (修复前第二帧即折回单行预览)
+            std::string next = f.render();
+            XX_TEST_EXPECT_TRUE(next.find("THK18G_HEAD") != std::string::npos);
+
+            // 同一流继续增长 (epoch 不变) 仍保持展开, 新内容可见
+            f.setTokenEpoch(
+                11,
+                "Thinking head line THK18G_HEAD\nThinking tail THK_TAIL_18G\nAddendum THK_18G_ADD"
+            );
+            std::string grown = f.render();
+            XX_TEST_EXPECT_TRUE(grown.find("THK18G_HEAD") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(grown.find("THK_18G_ADD") != std::string::npos);
+        }
+
         // 恢复原始设置
         settings.setTailThinkingMode(origMode);
         settings.setAnimationLevel(origAnim);
