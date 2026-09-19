@@ -36,9 +36,10 @@ file(GLOB_RECURSE agentxx_SOURCES
  "src/*.cpp" "src/*.cc" "src/*.cxx"
 )
 
-# 定向 UBSan 探针 (AGENTXX_PLUGIN_UBSAN_PROBE, 见顶层选项说明): 仅对插件框架
-# 源文件追加 -fsanitize=undefined; 其余源码保持基线 (通常 ASan) 插桩不变。
-if (AGENTXX_PLUGIN_UBSAN_PROBE AND NOT XX_IS_MSVC_D)
+# 插件框架定向探针 (AGENTXX_ENABLE_SANITIZER, 见顶层选项说明): 对插件框架源文件
+# 追加 UBSan 插桩参数 (命中即 abort)。GCC/Clang 下全局已带 UBSan, 此处为定向
+# 复核保留同一开关; MSVC 无 UBSan 实现, 跳过。
+if (AGENTXX_ENABLE_SANITIZER AND NOT XX_IS_MSVC_D)
   file(GLOB _agentxx_plugin_probe_sources CONFIGURE_DEPENDS "src/plugins/*.cpp")
   set_source_files_properties(${_agentxx_plugin_probe_sources} PROPERTIES
     COMPILE_OPTIONS "-fsanitize=undefined;-fno-sanitize-recover=undefined"

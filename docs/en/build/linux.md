@@ -138,15 +138,18 @@ The Debug build script (`script/linux_debug_build.sh`) has the following speedup
 
 ### Faster Optional Configurations
 
-The default Debug build preserves AddressSanitizer and debug symbols (`-g`). If your daily iteration does not require ASAN or breakpoint symbols, you can significantly accelerate compilation and linking via CMake options (artifacts shrink to ~1/3 size):
+The default Debug build enables sanitizer instrumentation (ASan + UBSan + the plugin-framework probe) and debug symbols (`-g`). If your daily iteration does not need instrumentation or breakpoint symbols, you can significantly accelerate compilation and linking via CMake options (artifacts shrink to ~1/3 size):
 
 ```sh
 cmake -B build/linux-debug -S agent \
-    -DAGENTXX_ENABLE_ASAN=OFF \        # Disable AddressSanitizer
+    -DAGENTXX_ENABLE_SANITIZER=OFF \   # Disable ASan + UBSan + plugin probe
     ...other arguments match linux_debug_build.sh
 ```
 
-- `AGENTXX_ENABLE_ASAN=OFF`: Removes `-fsanitize=address`, speeding up both compilation and linking significantly (retains `-fno-omit-frame-pointer` for debugging/profiling).
+- `AGENTXX_ENABLE_SANITIZER=OFF`: Drops `-fsanitize=address` / `-fsanitize=undefined` (including the plugin-framework probe), speeding up both compilation and linking significantly (retains `-fno-omit-frame-pointer` for debugging/profiling). On MSVC the switch only maps to `/fsanitize=address` (no UBSan implementation).
+- `AGENTXX_ENABLE_LTO=OFF`: Disables LTO (`-flto`) in Release builds; linking gets faster and artifacts are easier to debug (default ON).
+- HyperScan's fat runtime (runtime multi-microarchitecture dispatch) is permanently off; a compile-time baseline ISA is used instead (x86_64 → `x86-64-v2`, x86 → `core2`, chosen automatically from the target architecture), so HyperScan joins LTO while staying compatible with a wide range of CPUs.
+- The three base libraries (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`) likewise export only explicitly marked APIs — see the "Symbol exports" section in the [Windows build](windows.md) doc.
 - Recommendation: Keep OFF for daily development, and switch back to ON for full verification before commits or when diagnosing tricky issues.
 
 ## Common Issues

@@ -139,8 +139,55 @@ agent\build\windows-release\exec\agentxx_cli
 - Plugin Shared Libraries (Standalone Dynamic Library Mode): `agent/build/{platform}-{mode}/exec/plugins/<plugin_name>/` (dispatched by directory when containing a `plugin.yaml` manifest)
 - Shared Library (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.dll` (Exports C symbols; see `agent/lib/ffi_symbols.map`)
 
+## LTO (link-time optimization) in Release builds
+- Release builds enable LTO by default: MSVC uses `/GL` (compile) + `/LTCG` (link); GCC/Clang use `-flto`
+- To compare or debug (for example when suspecting cross-module inlining), disable it with `-DAGENTXX_ENABLE_LTO=OFF`
+- **Every** artifact participates in LTO (lib, plugins, client, test, the three base libraries and all dependencies) — no exceptions
+
+### Symbol exports: hidden by default, only explicitly marked APIs are exported
+- The `cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx` shared libraries no longer use CMake's
+  `WINDOWS_EXPORT_ALL_SYMBOLS`; their public headers mark exported symbols with `UTILXX_BASE_API` /
+  `UTILXX_API` / `PLUGINXX_API`, and anything unmarked stays unexported (statically linked
+  third-party symbols and std template instantiations no longer leak):
+  - building the shared library expands the macro to `dllexport`; static consumers get
+    `CXX_UTILXX_BASE_STATIC` etc. from the target interface, so the macro becomes empty
+    (no `dllimport`)
+  - the same annotations serve MSVC and GCC/Clang (the latter expands to
+    `__attribute__((visibility("default")))`)
+  - measured on Windows Release: `libcxx_utilxx_base.dll` 3144 → 208 exports,
+    `libcxx_utilxx.dll` 46163 → 119, `libcxx_pluginxx.dll` 1273 → 27, and a symbol-by-symbol
+    comparison confirms no API declared in the public headers was lost
+- Why this is required: `WINDOWS_EXPORT_ALL_SYMBOLS` parses every `.obj` symbol table to build the
+  `.def`, while `/GL` (LTO) objects hold only compiler intermediate representation with no symbol
+  table (dumpbin reports `File Type: ANONYMOUS OBJECT`) — the two are mutually exclusive. Explicit
+  exports remove that conflict and let the linker trim internal symbols safely
+
+### SIMD baseline for HyperScan
+- User machines may sit at an SSE4.2 baseline (x86-64-v2) or lack AVX2/AVX-512 entirely, so
+  HyperScan's fat runtime (multi-microarchitecture dispatch chosen at load time) is **off by
+  default**; a compile-time baseline is used instead: `AGENTXX_HYPERSCAN_MARCH` (default
+  `x86-64-v2`). The fat runtime renames per-variant symbols via `nm` + `objcopy --redefine-syms`,
+  which cannot work on LTO objects (the two are mutually exclusive); with it off, HyperScan takes
+  part in LTO as well
+- To get runtime dispatch back, pass `-DAGENTXX_HYPERSCAN_FAT_RUNTIME=ON` (Linux only); HyperScan
+  then falls back to a non-LTO build automatically
+
 ## Common Issues
 - [FAQ for more issues](FAQ.md)
+
+### Generation error: MSB3073 / unrecognized file format in 'xxx.obj, 0'
+- Symptom: the `Auto build dll exports` step fails while linking a DLL; `cmake -E __create_def` cannot parse an object file
+- Cause: the target enables both `WINDOWS_EXPORT_ALL_SYMBOLS` and `/GL` (LTO). `/GL` objects hold compiler
+  intermediate representation with no symbol table, so CMake cannot generate the `.def` from them
+- Fix: the two are mutually exclusive; pick one:
+    - turn LTO off: add `-DAGENTXX_ENABLE_LTO=OFF`
+    - switch that library to explicit exports (recommended: mark with `__declspec(dllexport)` and
+      export nothing by default; this is what the three base libraries do via `UTILXX_BASE_API` /
+      `UTILXX_API` / `PLUGINXX_API`)
+    - strip LTO flags for that library's nested build only (see `agentxx_strip_lto_args` in the
+      top-level `agent/CMakeLists.txt`; used only for HyperScan when the fat runtime is enabled)
+    - strip LTO flags for that library's nested build only (what this project does for `cxx_utilxx*`,
+      see `agentxx_strip_lto_args` in `agent/CMakeLists.txt`)
 
 ### Link Error: uchardet.lib(uchardet.obj) : error LNK2038
 - MSVC-compiled libraries on Windows are split into Debug and Release versions, as well as static vs dynamic C++ runtime linking (4 configurations in total).

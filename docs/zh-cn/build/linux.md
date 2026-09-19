@@ -139,15 +139,18 @@ Debug 构建脚本 (`script/linux_debug_build.sh`) 默认已启用以下加速�
 
 ### 更快的可选配置
 
-默认 Debug 构建保留 AddressSanitizer 与调试符号 (`-g`)。若日常迭代不需要 ASAN/断点符号，可通过 cmake 选项显著加快编译与链接 (产物缩小 3 倍左右):
+默认 Debug 构建开启 sanitizer 插桩 (ASan + UBSan + 插件框架定向探针) 与调试符号 (`-g`)。若日常迭代不需要插桩/断点符号，可通过 cmake 选项显著加快编译与链接 (产物缩小 3 倍左右):
 
 ```sh
 cmake -B build/linux-debug -S agent \
-    -DAGENTXX_ENABLE_ASAN=OFF \        # 关闭 AddressSanitizer
+    -DAGENTXX_ENABLE_SANITIZER=OFF \   # 关闭 ASan + UBSan + 插件框架探针
     ...其余参数与 linux_debug_build.sh 一致
 ```
 
-- `AGENTXX_ENABLE_ASAN=OFF`: 去掉 `-fsanitize=address`，编译与链接均显著加快 (仍保留 `-fno-omit-frame-pointer` 便于调试/性能分析)
+- `AGENTXX_ENABLE_SANITIZER=OFF`: 去掉 `-fsanitize=address` / `-fsanitize=undefined` (含插件框架定向探针)，编译与链接均显著加快 (仍保留 `-fno-omit-frame-pointer` 便于调试/性能分析)。MSVC 下该开关只对应 `/fsanitize=address` (UBSan 无实现)
+- `AGENTXX_ENABLE_LTO=OFF`: Release 构建关闭 LTO (`-flto`)，链接更快、产物更易调试 (默认 ON)
+- hyperscan 的 fat runtime (运行期多微架构分发) 固定关闭，改用编译期基线 ISA (x86_64 → `x86-64-v2`，x86 → `core2`，按目标架构自动选择)，从而 hyperscan 一同参与 LTO 并保持对多种 CPU 的兼容
+- 三库 (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`) 动态库同样只导出显式标注的 API，详见 [Windows 编译](windows.md) 的"符号导出"小节
 - 建议日常开发全开 OFF，提交前/定位疑难问题时再开回 ON 全量构建验证一次
 
 ## 常见错误

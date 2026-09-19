@@ -245,6 +245,22 @@ path/to/agentxx_test string_util regex
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
     - cross_android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
+- LTO (Release 默认开启, 开关 `AGENTXX_ENABLE_LTO`): MSVC 用 `/GL`(编译)+`/LTCG`(链接),
+  GCC/Clang 用 `-flto=auto`/`-flto=thin`; **全部产物都参与 LTO** (无例外项):
+  - 三库 (`cxx_utilxx_base`/`cxx_utilxx`/`cxx_pluginxx`) 动态库改为**显式导出**:
+    头文件用 `UTILXX_BASE_API`/`UTILXX_API`/`PLUGINXX_API` 标注 (dllexport /
+    visibility default), 默认不导出任何符号 —— 因为 `WINDOWS_EXPORT_ALL_SYMBOLS`
+    要解析 `.obj` 符号表生成 `.def`, 而 `/GL` 产物无符号表 (dumpbin:
+    `File Type: ANONYMOUS OBJECT`), 二者互斥。
+    实测导出数: base 3144→208, utilxx 46163→119, pluginxx 1273→27 (无公开 API 缺失);
+    静态使用方由目标接口定义 `CXX_*_STATIC` → 宏为空 (非 dllimport)
+  - hyperscan: fat runtime (运行期多微架构分发, 仅 Linux) **固定禁用** (与 LTO 互斥),
+    改用编译期基线 ISA (按目标架构自动选择: x86_64 → `x86-64-v2`, x86 → `core2`),
+    从而 hyperscan 也参与 LTO
+- Debug 插桩: 单一开关 `AGENTXX_ENABLE_SANITIZER` (默认 ON) 同时启用 ASan + UBSan
+  (GCC/Clang: `-fsanitize=address` + `-fsanitize=undefined -fno-sanitize-recover=undefined`)
+  与插件框架定向探针 (`lib/src/plugins/*.cpp`、`test/plugin/*.cpp`); MSVC 只有 ASan
+  (`/fsanitize=address`), UBSan/探针自动忽略; 已移除 TSAN 支持
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题

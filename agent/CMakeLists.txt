@@ -85,38 +85,30 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
   "Which enabled plugins to merge into libagentxx ('all' = all; semicolon/comma list = only listed ones)"
 )
 # ===== Debug 构建加速选项 / Sanitizers =====
-# - GCC/Clang: 在 Debug 配置注入 -fsanitize=* (见下方非 MSVC 分支)
-# - MSVC: 仅支持 AddressSanitizer (/fsanitize=address, Debug 配置);
-#   UBSan/TSan 无 MSVC 实现, 对应选项开启时仅输出警告并忽略 (不阻断配置)
-# - 关闭后 Debug 构建不再启用 AddressSanitizer，编译与链接显著加快
-#   (仍保留 -fno-omit-frame-pointer 便于调试)，默认开启保持原有行为
-option(AGENTXX_ENABLE_ASAN "Enable AddressSanitizer for Debug builds." ON)
-# UBSAN: 检测未定义行为 (有符号溢出/数组越界/对齐错误/无效枚举值/空指针解引用等)
-# - 与 ASAN/TSAN 均可叠加, 运行时开销极低 (~2-5%);
-# - 插桩仅作用于本项目编译的代码: 预编译三方库不插桩, 不构成误报源,
-#   报告即项目自身代码问题;
-# - 附带 -fno-sanitize-recover=undefined: 命中即 abort (测试进程退出码非零),
-#   避免报告被静默吞掉; 若三方头文件触发良性 UB 可临时移除该参数定位
-option(AGENTXX_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Debug builds (GCC/Clang)." OFF)
-# TSAN: 检测数据竞争。适用本项目并发模型 (io_context 多协程交错/offload 线程池/
-# SessionStore 锁/WS 与 TUI 线程)。限制:
-# - 与 ASAN 运行时互斥不可叠加 (同时启用在编译器确定后 FATAL_ERROR, 见下方);
-# - MSVC 无 TSan 实现, 开启时仅警告忽略;
-# - 预编译三方库 (openssl/curl/hyperscan/sqlite 等, 未插桩) 内部同步对 TSAN
-#   不可见, 可能产生误报/漏报; dlopen 的外置插件同理 (内置合并编译模式无此问题);
-# - 性能开销大 (5-15x), 仅建议定向排查并发问题时临时开启
-option(AGENTXX_ENABLE_TSAN "Enable ThreadSanitizer for Debug builds (GCC/Clang; mutually exclusive with ASAN)." OFF)
-# 定向 UBSan 探针 (plugin.md R6): 在常规 Debug 构建 (默认 ASan 基线) 之上, 仅对
-# 插件框架相关源码额外启用 -fsanitize=undefined:
-#   - `lib/src/plugins/*.cpp` (宿主 PluginManager/ClientPluginManager)
-#   - `test/plugin/*.cpp` (插件框架测试 TU; 运行时核心 OpCore/InstanceLifetime
-#     为 header-only, 其 UBSan 覆盖由这些 TU 的插桩获得)
-# 不重编第三方依赖, 也不改变其他模块的插桩状态 (区别于 AGENTXX_ENABLE_UBSAN 的
-# 全量构建); 用于"ASan 基线 + 插件框架 UBSan"的定向回归。MSVC 无 UBSan, 忽略。
-option(AGENTXX_PLUGIN_UBSAN_PROBE "Instrument plugin framework sources/tests with UBSan on top of the ASan baseline." OFF)
+# 单一开关: 启用后 Debug 配置同时带上三种插桩 (默认开启)
+# - ASan (地址检查): GCC/Clang 用 -fsanitize=address; MSVC 用 /fsanitize=address
+# - UBSan (未定义行为: 有符号溢出/数组越界/对齐错误/无效枚举值/空指针解引用等):
+#   GCC/Clang 用 -fsanitize=undefined -fno-sanitize-recover=undefined
+#   (-fno-sanitize-recover 使命中即 abort, 避免报告被静默吞掉; MSVC 无实现, 忽略)
+#   插桩只作用于本项目编译的代码: 预编译三方库不插桩, 不构成误报源
+# - 插件框架定向探针: 仅对 `lib/src/plugins/*.cpp` 与 `test/plugin/*.cpp`
+#   额外插桩 (MSVC 无实现, 忽略)
+# 关闭后 Debug 构建不再插桩, 编译与链接显著加快 (仍保留调试符号便于断点调试与
+# -fno-omit-frame-pointer 便于性能分析)
+option(AGENTXX_ENABLE_SANITIZER "Enable Debug sanitizers: ASan + UBSan + plugin-framework probe (GCC/Clang; MSVC: ASan only)." ON)
 # - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
 #   项目自身头文件不参与 PCH，改动时不会触发全量重编。仅 GCC/Clang 生效
 option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
+# - LTO (链接期优化): Release 配置下启用
+#   - GCC/Clang: -flto=auto (GCC) / -flto=thin (Clang)
+#   - MSVC: /GL (编译) + /LTCG (链接)
+#   关闭后 Release 回到纯 /O2 (-O3) 与常规链接, 便于对照排查 LTO 相关问题
+option(AGENTXX_ENABLE_LTO "Enable Link Time Optimization (LTO) for Release builds." ON)
+# - HyperScan 的 fat runtime (运行期多微架构分发, 仅 Linux 上游默认可开) **固定禁用**:
+#   其实现靠 nm + objcopy --redefine-syms 给各微架构 variant 的 obj 重命名符号,
+#   与 LTO object 无符号表的特性互斥; 而本项目产物要发布给各种 CPU (可能只有
+#   SSE4.2 基线), 因此改用编译期基线 ISA (见 hyperscan_repo 处: 按目标架构自动选
+#   x86_64 → x86-64-v2, x86 → core2), 并让 hyperscan 一同参与 LTO
 # - 链接器选择 (GCC/Clang): auto 自动检测 mold -> gold -> 默认 bfd;
 #   也可直接指定 mold/gold/bfd 等。mold 可大幅减少大体积二进制链接时间
 set(AGENTXX_LINKER "auto" CACHE STRING "Linker for GCC/Clang: auto|mold|gold|bfd|...")
@@ -189,26 +181,11 @@ if (XX_IS_WIN_D AND NOT XX_IS_MSVC_D)
   set(XX_IS_MINGW_D 1)
 endif ()
 
-# Sanitizer 可用性 guard / 提示 (需先确定编译器):
-# - TSAN 与 ASAN 运行时互斥仅对 GCC/Clang 有意义 (两者都有真实实现);
-# - MSVC 下 UBSan/TSan 无实现, 按设计仅警告忽略, 不阻断配置
-if (XX_IS_MSVC_D)
-  if (AGENTXX_ENABLE_UBSAN)
-    message(WARNING
-      "[agentxx] MSVC 无 UndefinedBehaviorSanitizer 实现, AGENTXX_ENABLE_UBSAN 已忽略 "
-      "(可用替代: /analyze 静态分析、/RTC1 运行时检查; 或在 Linux 构建中启用)")
-  endif ()
-  if (AGENTXX_ENABLE_TSAN)
-    message(WARNING
-      "[agentxx] MSVC 无 ThreadSanitizer 实现, AGENTXX_ENABLE_TSAN 已忽略 "
-      "(数据竞争排查请使用 Linux/WSL2 构建: -DAGENTXX_ENABLE_ASAN=OFF -DAGENTXX_ENABLE_TSAN=ON)")
-  endif ()
-else ()
-  if (AGENTXX_ENABLE_TSAN AND AGENTXX_ENABLE_ASAN)
-    message(FATAL_ERROR
-      "AGENTXX_ENABLE_TSAN 与 AGENTXX_ENABLE_ASAN 运行时互斥, 不可同时启用。"
-      "排查数据竞争请使用: -DAGENTXX_ENABLE_ASAN=OFF -DAGENTXX_ENABLE_TSAN=ON")
-  endif ()
+# Sanitizer 可用性提示 (需先确定编译器):
+# - MSVC 只有 ASan 实现; UBSan 与插件框架探针无实现, 开启 AGENTXX_ENABLE_SANITIZER
+#   时仅应用 ASan (提示一次, 不阻断配置)
+if (XX_IS_MSVC_D AND AGENTXX_ENABLE_SANITIZER)
+  message("[agentxx] MSVC: only AddressSanitizer is available; UBSan / plugin probe are ignored")
 endif ()
 
 # MinGW 交叉编译不受支持的特性自动降级:
@@ -329,15 +306,26 @@ if (XX_IS_MSVC_D)
   # 代价: 失去容器内部越界检测 (std::string/vector/optional 容量内 OOB);
   # 堆级检测 (use-after-free/double-free/跨分配越界) 不受影响。
   set(_AGENTXX_MSVC_ASAN_DEFS "")
-  if (AGENTXX_ENABLE_ASAN AND NOT XX_IS_RELEASE_D)
+  if (AGENTXX_ENABLE_SANITIZER AND NOT XX_IS_RELEASE_D)
     set(_AGENTXX_MSVC_ASAN_DEFS " /D_DISABLE_STL_ANNOTATION=1")
   endif ()
   set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_C_FLAGS} /bigobj /utf-8 /wd4200 /D_GNU_SOURCE")
   set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS}${_AGENTXX_MSVC_ASAN_DEFS} ${_AGENTXX_CXX_FLAGS} /bigobj /utf-8 /wd4200 /Zc:__cplusplus")
   unset(_AGENTXX_MSVC_ASAN_DEFS)
 
-  set(CMAKE_C_FLAGS_RELEASE          "${CMAKE_C_FLAGS_RELEASE}          ${_AGENTXX_C_FLAGS}   /Gy")
-  set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE}        ${_AGENTXX_CXX_FLAGS} /Gy")
+  # LTO (对应 GCC/Clang 分支的 -flto): 编译加 /GL, 链接加 /LTCG
+  # - 仅 Release 生效 (Debug 保留 ASan 与快速增量链接, 不做 LTO)
+  # - /LTCG 与 /INCREMENTAL 互斥: Release 链接参数已含 /INCREMENTAL:NO (CMake 默认)
+  # - /GL 与 /ZI (编辑并继续) 互斥: MSVC 统一 /Z7 (见上方 CMP0141 Embedded), 无冲突
+  # - 关闭 AGENTXX_ENABLE_LTO 即完整回退为 /O2 常规构建
+  set(_AGENTXX_LTO_FLAGS "")
+  set(_AGENTXX_LTO_LDFLAGS "")
+  if (AGENTXX_ENABLE_LTO)
+    set(_AGENTXX_LTO_FLAGS "/GL")
+    set(_AGENTXX_LTO_LDFLAGS "/LTCG")
+  endif()
+  set(CMAKE_C_FLAGS_RELEASE          "${CMAKE_C_FLAGS_RELEASE}          ${_AGENTXX_C_FLAGS}   /Gy ${_AGENTXX_LTO_FLAGS}")
+  set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE}        ${_AGENTXX_CXX_FLAGS} /Gy ${_AGENTXX_LTO_FLAGS}")
   set(CMAKE_C_FLAGS_MINSIZEREL       "${CMAKE_C_FLAGS_MINSIZEREL}       ${_AGENTXX_C_FLAGS}")
   set(CMAKE_CXX_FLAGS_MINSIZEREL     "${CMAKE_CXX_FLAGS_MINSIZEREL}     ${_AGENTXX_CXX_FLAGS}")
   set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${CMAKE_C_FLAGS_RELWITHDEBINFO}   ${_AGENTXX_C_FLAGS}")
@@ -352,18 +340,26 @@ if (XX_IS_MSVC_D)
 
   if (XX_IS_RELEASE_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} /OPT:REF /OPT:ICF")
+    # /LTCG 只加到 Release 配置的链接参数变体: 通用链接参数会同时作用于嵌套构建
+    # 的其他配置, 与 Debug 默认的 /INCREMENTAL 冲突 (LNK4075) 且拖慢调试链接
+    if (_AGENTXX_LTO_LDFLAGS)
+      foreach (_ld IN ITEMS CMAKE_EXE_LINKER_FLAGS_RELEASE CMAKE_SHARED_LINKER_FLAGS_RELEASE)
+        string(APPEND ${_ld} " ${_AGENTXX_LTO_LDFLAGS}")
+      endforeach ()
+    endif ()
   else ()
     # ===== MSVC Debug Sanitizers =====
     # AddressSanitizer (/fsanitize=address): MSVC 原生实现 (VS2019 16.9+ 引入,
     # 本项目要求 VS2026/MSVC 14.5x 完全支持)。运行时经 UCRT 堆函数全进程拦截,
     # 未插桩的预编译三方库 (OpenSSL/Boost 静态库) 跨模块堆错误仍可检出, 盲区仅
     # 在库内部。注意与 Linux 差异: MSVC ASan 不包含 LeakSanitizer, 内存泄漏
-    # 检测仍需依赖 Linux 构建。
+    # 检测仍需依赖 Linux 构建; UBSan / 插件框架探针在 MSVC 上无实现, 由
+    # AGENTXX_ENABLE_SANITIZER 统一控制时仅应用 ASan。
     # 历史注释勘误: 早前 "使用 /fsanitize=address 时可能导致链接错误 (uchardet)"
     # 实为三方库自身在 Debug 注入了 GCC 风格 -fsanitize=address 参数 (cl.exe
     # 不识别) 所致, 并非 MSVC ASan 本身不可用 (该块已在 third_party/uchardet
     # 中注释掉, 见 docs/zh-cn/build/windows.md FAQ)。
-    if (AGENTXX_ENABLE_ASAN)
+    if (AGENTXX_ENABLE_SANITIZER)
       # 冲突参数清理:
       # - /RTC*: 与 ASan 插桩互斥 (官方文档明确不兼容; CMake 内置 Debug 默认
       #   参数即 "/Zi /Ob0 /Od /RTC1");
@@ -384,7 +380,10 @@ if (XX_IS_MSVC_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}")
   endif()
 
-  # set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+  # 说明: 不使用 CMAKE_INTERPROCEDURAL_OPTIMIZATION, 而是把 /GL (编译) 与
+  # /LTCG (链接) 直接写进 Release 参数。原因: 该变量只作用于本工程自身目标,
+  # 本项目依赖库全部经 ExternalProject 嵌套构建, 需经 CMAKE_*_FLAGS_RELEASE /
+  # 链接参数显式透传, 二者同时使用会出现重复 /GL (无害但冗余), 故统一走 FLAGS 通道。
 else ()
   # XX_IS_CLANG_D OR XX_IS_GCC_D
   set(_AGENTXX_C_FLAGS   "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_C_FLAGS}   -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -D_GNU_SOURCE")
@@ -396,9 +395,12 @@ else ()
   # 在所有 TU 中于 config.hpp 处理前已定义, 统一推导结果。
   set(_AGENTXX_CXX_FLAGS "${_AGENTXX_COMMON_C_CXX_FLAGS} ${_AGENTXX_CXX_FLAGS} -fvisibility=default -ffunction-sections -fdata-sections -Wall -fPIC -pipe -include cstddef")
   
+  # LTO: 与 MSVC 分支 (/GL + /LTCG) 由同一开关 AGENTXX_ENABLE_LTO 控制
   # 交叉编译到 Windows (MinGW) 时禁用 LTO: 旧版 bfd ld 无 LLVMgold 插件, 无法链接 -flto 产生的 LLVM bitcode
   # - 需 lld 才能处理, 但为简化 hermetic 构建, 直接禁用 LTO
-  if (CMAKE_CROSSCOMPILING AND XX_IS_MINGW_D)
+  if (NOT AGENTXX_ENABLE_LTO)
+    set(_AGENTXX_LTO_FLAGS "")
+  elseif (CMAKE_CROSSCOMPILING AND XX_IS_MINGW_D)
     set(_AGENTXX_LTO_FLAGS "")
   elseif (XX_IS_GCC_D)
     # GCC 下 -flto 会导致 lto-wrapper 默认以单线程串行编译全部 LTRANS 任务
@@ -414,23 +416,20 @@ else ()
   set(CMAKE_CXX_FLAGS_MINSIZEREL     "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_MINSIZEREL}")
   set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${_AGENTXX_C_FLAGS}   ${CMAKE_C_FLAGS_RELWITHDEBINFO}")
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${_AGENTXX_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-  # Debug 编译加速: -g / sanitizers 均可通过选项关闭;
-  # - sanitizer 组合 (见顶部选项说明): TSAN 与 ASAN 运行时互斥, 已由前置
-  #   guard 保证不同时启用; UBSAN 可与任一叠加; 全部关闭时仅保留调试辅助参数
+  # Debug 编译加速: -g / sanitizers 均可通过 AGENTXX_ENABLE_SANITIZER 关闭;
+  # - 开启时同时注入 ASan 与 UBSan (见顶部选项说明), 插件框架的定向探针由
+  #   lib/test 各自的 CMakeLists 施加 (同一开关控制)
   # - 通用: -fno-omit-frame-pointer 保证 sanitizer/性能分析的栈回溯完整
   # - 关闭 DEBUG_INFO 时: 需同时剔除 CMake 为 GCC/Clang 默认追加的 -g
   #   (CMAKE_CXX_FLAGS_DEBUG 默认值即 "-g")，否则产物依旧膨胀
   set(_AGENTXX_DEBUG_EXTRA_FLAGS "")
   string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -g")
-  if (AGENTXX_ENABLE_TSAN)
-    string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=thread")
-  elseif (AGENTXX_ENABLE_ASAN)
+  if (AGENTXX_ENABLE_SANITIZER)
     string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=address -fno-optimize-sibling-calls")
-  endif()
-  string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fno-omit-frame-pointer")
-  if (AGENTXX_ENABLE_UBSAN)
+    # -fno-sanitize-recover=undefined: 命中即 abort, 避免 UB 报告被静默吞掉
     string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fsanitize=undefined -fno-sanitize-recover=undefined")
   endif()
+  string(APPEND _AGENTXX_DEBUG_EXTRA_FLAGS " -fno-omit-frame-pointer")
   if (XX_IS_GCC_D)
     # GCC 16+ 编译 C++26 模板/协程时默认 gc 阈值过小易触发编译器 ICE (gt_ggc_mx_lang_tree_node), 放宽 gc 阈值
     set(_AGENTXX_GCC_GC_FLAGS "--param ggc-min-expand=100 --param ggc-min-heapsize=1048576")
@@ -446,16 +445,10 @@ else ()
   if (XX_IS_RELEASE_D)
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections ${_AGENTXX_LTO_FLAGS}")
   else ()
-    # sanitizer 运行时须经编译驱动链接 (-fsanitize=*) 才能注入正确运行库:
-    # TSAN/ASAN 互斥 (前置 guard), UBSAN 可与任一叠加
+    # sanitizer 运行时须经编译驱动链接 (-fsanitize=*) 才能注入正确运行库
     set(_AGENTXX_SAN_LINK_FLAGS "")
-    if (AGENTXX_ENABLE_TSAN)
-      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=thread")
-    elseif (AGENTXX_ENABLE_ASAN)
-      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=address")
-    endif()
-    if (AGENTXX_ENABLE_UBSAN OR AGENTXX_PLUGIN_UBSAN_PROBE)
-      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=undefined")
+    if (AGENTXX_ENABLE_SANITIZER)
+      string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=address -fsanitize=undefined")
     endif()
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}${_AGENTXX_SAN_LINK_FLAGS}")
     unset(_AGENTXX_SAN_LINK_FLAGS)
@@ -521,6 +514,9 @@ endif()
 unset(_AGENTXX_COMMON_C_CXX_FLAGS)
 unset(_AGENTXX_C_FLAGS)
 unset(_AGENTXX_CXX_FLAGS)
+# LTO 参数已分别写入 CMAKE_*_FLAGS_RELEASE / CMAKE_*_LINKER_FLAGS_RELEASE, 此处清理
+unset(_AGENTXX_LTO_FLAGS)
+unset(_AGENTXX_LTO_LDFLAGS)
 
 # exe install dir
 set(AGENTXX_EXEC_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/exec")
@@ -616,6 +612,10 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     # 默认值 "/debug /INCREMENTAL", 与 ASan 互斥)
     "-DCMAKE_EXE_LINKER_FLAGS_DEBUG=${CMAKE_EXE_LINKER_FLAGS_DEBUG}"
     "-DCMAKE_SHARED_LINKER_FLAGS_DEBUG=${CMAKE_SHARED_LINKER_FLAGS_DEBUG}"
+    # RELEASE 链接参数变体同样显式传递: MSVC LTO 的 /LTCG 只加在 Release 变体上
+    # (见 MSVC 分支), 嵌套工程必须收到, 否则其 Release 链接缺少 /LTCG
+    "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=${CMAKE_EXE_LINKER_FLAGS_RELEASE}"
+    "-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=${CMAKE_SHARED_LINKER_FLAGS_RELEASE}"
     "-DCMAKE_INSTALL_PREFIX=${AGENTXX_INSTALL_DIR}"
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DCMAKE_EXPORT_COMPILE_COMMANDS=${CMAKE_EXPORT_COMPILE_COMMANDS}
@@ -653,10 +653,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}
     -DYAML_CPP_STATIC_DEFINE=ON
 
-    -DAGENTXX_ENABLE_ASAN=${AGENTXX_ENABLE_ASAN}
-    -DAGENTXX_ENABLE_UBSAN=${AGENTXX_ENABLE_UBSAN}
-    -DAGENTXX_PLUGIN_UBSAN_PROBE=${AGENTXX_PLUGIN_UBSAN_PROBE}
-    -DAGENTXX_ENABLE_TSAN=${AGENTXX_ENABLE_TSAN}
+    -DAGENTXX_ENABLE_SANITIZER=${AGENTXX_ENABLE_SANITIZER}
     -DAGENTXX_ENABLE_PCH=${AGENTXX_ENABLE_PCH}
     
     -DXX_IS_DEBUG_D=${XX_IS_DEBUG_D}
@@ -929,39 +926,61 @@ if (AGENTXX_ENABLE_PLUGIN_CODEGRAPH)
   )
 endif()
 if (AGENTXX_ENABLE_HYPERSCAN)
-  # hyperscan fat runtime 经 cmake/build_wrapper.sh 对各微架构 variant 的 .o
-  # 执行 objcopy --redefine-syms 做符号重命名, 与 GCC -flto 互斥
-  # (LTO object 无符号表可重命名: "objcopy: redefining symbols does not work
-  # on LTO-compiled object files")。顶层 Release 默认带 -flto 并经
-  # _AGENTXX_COMMON_CMAKE_ARGS/_AGENTXX_COMMON_CMAKE_CACHE_ARGS 透传给嵌套构建,
-  # 会导致 Release 下 hyperscan (FAT_RUNTIME=ON, 仅 Release) 必现构建失败,
-  # 而 Debug (FAT_RUNTIME=OFF) 不受影响。故 hyperscan 嵌套构建单独剥离 LTO
-  # 参数 (仅损失 hyperscan 自身的 LTO 优化, 不影响主工程)。
-  # 注意: -flto 内嵌在 CMAKE_C/CXX_FLAGS_RELEASE 等字符串中间, 且同时存在于
-  # CMAKE_ARGS 与 CMAKE_CACHE_ARGS 两处, 需逐项过滤而非追加覆盖
-  # (ExternalProject 对重复 -D 的覆盖语义不可靠, 且 CACHE 变量后值不一定覆盖先值)。
-  set(_AGENTXX_HS_CMAKE_ARGS "")
-  foreach(_hs_arg IN LISTS _AGENTXX_COMMON_CMAKE_ARGS)
-    string(REGEX REPLACE "-f[^ ;]*lto[^ ;]*" "" _hs_arg "${_hs_arg}")
-    list(APPEND _AGENTXX_HS_CMAKE_ARGS "${_hs_arg}")
-  endforeach()
-  set(_AGENTXX_HS_CMAKE_CACHE_ARGS "")
-  foreach(_hs_arg IN LISTS _AGENTXX_COMMON_CMAKE_CACHE_ARGS)
-    string(REGEX REPLACE "-f[^ ;]*lto[^ ;]*" "" _hs_arg "${_hs_arg}")
-    list(APPEND _AGENTXX_HS_CMAKE_CACHE_ARGS "${_hs_arg}")
-  endforeach()
+  # fat runtime 固定禁用 (不使用上游 Release 默认的"多微架构运行期分发"):
+  # - 上游 fat runtime 仅 Linux 支持 (需 ifunc + Makefiles/Ninja 生成器), 实现上把
+  #   core2/corei7/avx2/avx512 各微架构的执行引擎分别编译一遍, 再由
+  #   cmake/build_wrapper.sh 用 nm + objcopy --redefine-syms 给各 variant 的 .o
+  #   重命名符号, 载入时经 ifunc 按 CPU 选型;
+  # - objcopy 重命名要求 .o 有符号表, 而 LTO object 只有编译器中间表示
+  #   ("objcopy: redefining symbols does not work on LTO-compiled object files"),
+  #   即 fat runtime 与 LTO 只能择一;
+  # - 本项目产物要发布给各种 CPU (可能只有 SSE4.2 基线, 也可能没有 AVX2/AVX-512),
+  #   故改用编译期基线 ISA (比 -march=native 可移植) 并让 hyperscan 一同参与 LTO。
+  set(_AGENTXX_HS_CMAKE_ARGS "${_AGENTXX_COMMON_CMAKE_ARGS}")
+  set(_AGENTXX_HS_CMAKE_CACHE_ARGS "${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}")
+  set(_AGENTXX_HS_EXTRA_ARGS "")
+  if (XX_IS_LINUX_D)
+    list(APPEND _AGENTXX_HS_EXTRA_ARGS "-DFAT_RUNTIME=OFF")
+  endif()
+
+  # 编译期基线 ISA: 按目标 CPU 架构自动选择 (不额外提供开关)
+  # - x86_64: x86-64-v2 (SSE4.2+POPCNT, 2009 年后的 x86_64 通用基线, 不含 AVX)
+  # - x86(32 位): core2 (SSSE3 起, 即 hyperscan 要求的最低指令集基线)
+  # - 其他架构 (ARM 等): 不追加 -march, 用编译器默认基线
+  set(_AGENTXX_HS_MARCH "")
+  if (NOT XX_IS_MSVC_D)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+      set(_AGENTXX_HS_MARCH "x86-64-v2")
+    elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|X86)$")
+      set(_AGENTXX_HS_MARCH "core2")
+    endif()
+  endif()
+  if (_AGENTXX_HS_MARCH)
+    message("[agentxx] HyperScan: baseline -march=${_AGENTXX_HS_MARCH} (target: ${CMAKE_SYSTEM_PROCESSOR})")
+    set(_AGENTXX_HS_ARGS_PATCHED "")
+    foreach(_hs_arg IN LISTS _AGENTXX_HS_CMAKE_ARGS)
+      if (_hs_arg MATCHES "^-DCMAKE_(C|CXX)_FLAGS=")
+        list(APPEND _AGENTXX_HS_ARGS_PATCHED "${_hs_arg} -march=${_AGENTXX_HS_MARCH}")
+      else()
+        list(APPEND _AGENTXX_HS_ARGS_PATCHED "${_hs_arg}")
+      endif()
+    endforeach()
+    set(_AGENTXX_HS_CMAKE_ARGS "${_AGENTXX_HS_ARGS_PATCHED}")
+    unset(_AGENTXX_HS_ARGS_PATCHED)
+  endif()
+
   ExternalProject_Add(
     hyperscan_repo
     SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/hyperscan/"
     INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
     CMAKE_ARGS
       ${_AGENTXX_HS_CMAKE_ARGS}
+      ${_AGENTXX_HS_EXTRA_ARGS}
       -DBUILD_STATIC_AND_SHARED=OFF
       -DBUILD_EXAMPLES=OFF
       -DBUILD_TOOLS=OFF
       -DBUILD_UNIT=OFF
       -DDEBUG_OUTPUT=OFF
-      # -DFAT_RUNTIME=OFF # auto (Release 下为 ON, 需配合上方去 LTO 才能构建)
       -DBUILD_SHARED_LIBS=OFF
       -DBUILD_STATIC_LIBS=ON
       "-DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.15"
@@ -975,7 +994,7 @@ if (AGENTXX_ENABLE_HYPERSCAN)
   )
   unset(_AGENTXX_HS_CMAKE_ARGS)
   unset(_AGENTXX_HS_CMAKE_CACHE_ARGS)
-  unset(_hs_arg)
+  unset(_AGENTXX_HS_EXTRA_ARGS)
 else()
   message("[agentxx] Disable HyperScan")
 endif()
@@ -1176,6 +1195,10 @@ endif()
 #   BUILD_ALWAYS/INSTALL_ALWAYS 打开: 源码或 CMake 改动后重新构建并安装
 #   (嵌套构建内部仍是增量编译)
 # - Boost 无需新增参数: 顶层已把 BOOST_ROOT / Boost_USE_* 放进公共参数
+# - MSVC + LTO: 三库的动态库改用**显式导出** (头文件中的 UTILXX_*_API 标注,
+#   默认不导出任何符号), 因此不再需要 WINDOWS_EXPORT_ALL_SYMBOLS, 也不会与
+#   /GL (LTO) 冲突 (自动导出要解析 .obj 符号表, 而 /GL 产物无符号表);
+#   三库与主工程一同参与 LTO
 ExternalProject_Add(
   cxx_utilxx_base_repo
   DEPENDS
@@ -1353,7 +1376,7 @@ endif()
 # 经 delay-load thunk 全进程共享同一份实例)。superbuild 在此自动拷贝到 exec
 # 输出目录, 保证测试/client/插件宿主可直接启动; DEPENDS 各 repo 目标确保在
 # 嵌套构建产出 exec 目录之后再拷贝。仅覆盖 x64 构建 (项目 Windows 脚本均为 -A x64)。
-if (XX_IS_WIN_D AND XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D AND AGENTXX_ENABLE_ASAN)
+if (XX_IS_WIN_D AND XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D AND AGENTXX_ENABLE_SANITIZER)
   get_filename_component(_AGENTXX_MSVC_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
   set(_AGENTXX_ASAN_DLL "${_AGENTXX_MSVC_BIN_DIR}/clang_rt.asan_dynamic-x86_64.dll")
   if (EXISTS "${_AGENTXX_ASAN_DLL}")

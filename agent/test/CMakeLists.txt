@@ -67,11 +67,11 @@ file(GLOB test_plugin_C_SOURCES
 	"${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.c"
 )
 
-# ===== 定向 UBSan 探针 (AGENTXX_PLUGIN_UBSAN_PROBE) =====
+# ===== 插件框架定向探针 (AGENTXX_ENABLE_SANITIZER) =====
 # 插件运行时核心 (OpCore/InstanceLifetime/Operation 表) 是 header-only: 其
 # UBSan 覆盖由"用 -fsanitize=undefined 编译插件测试 TU"获得; 宿主 lib 侧插件
-# 源文件另由 lib/CMakeLists.txt 同选项插桩 (见顶层选项说明)。
-if (AGENTXX_PLUGIN_UBSAN_PROBE AND NOT XX_IS_MSVC_D)
+# 源文件另由 lib/CMakeLists.txt 同选项插桩 (见顶层选项说明)。MSVC 无 UBSan, 跳过。
+if (AGENTXX_ENABLE_SANITIZER AND NOT XX_IS_MSVC_D)
 	set(_agentxx_plugin_probe_test_sources
 		"${CMAKE_CURRENT_SOURCE_DIR}/plugin/test_plugin_runtime.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/plugin/test_plugin_sdk.cpp"

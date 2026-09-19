@@ -145,8 +145,50 @@ agent\build\windows-release\exec\agentxx_cli
 - 插件动态库 (独立动态库模式): `agent/build/{platform}-{mode}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
 - 共享库 (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.dll` (导出 C 符号见 `agent/lib/ffi_symbols.map`)
 
+## Release 构建的 LTO (链接期优化)
+- Release 构建默认开启 LTO: MSVC 用 `/GL` (编译) + `/LTCG` (链接), GCC/Clang 用 `-flto`
+- 如需对照排查 (例如怀疑跨模块内联引起行为差异), 可加 `-DAGENTXX_ENABLE_LTO=OFF` 关闭
+- 全部产物 (lib/插件/client/test/三个基础库/依赖库) **都参与 LTO**, 没有例外项
+
+### 符号导出: 默认隐藏, 仅导出显式标注的 API
+- `cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx` 的动态库不再使用 CMake 的
+  `WINDOWS_EXPORT_ALL_SYMBOLS` 自动导出, 改为在公开头文件用 `UTILXX_BASE_API` /
+  `UTILXX_API` / `PLUGINXX_API` 标注导出符号; 未标注的一律不导出 (静态链入的
+  第三方符号、std 模板实例都不再泄漏):
+  - 动态库编译时得到 `dllexport`; 静态链接的使用方由目标接口自动定义
+    `CXX_UTILXX_BASE_STATIC` 等宏 → 宏为空 (避免 dllimport)
+  - MSVC 与 GCC/Clang 同一套标注 (后者展开为 `__attribute__((visibility("default")))`)
+  - 效果 (Windows Release 实测): `libcxx_utilxx_base.dll` 导出 3144 → 208,
+    `libcxx_utilxx.dll` 46163 → 119, `libcxx_pluginxx.dll` 1273 → 27,
+    且逐符号比对确认公开头文件声明的 API 一个不少
+- 为什么必须这样: `WINDOWS_EXPORT_ALL_SYMBOLS` 要解析每个 `.obj` 的符号表来生成
+  `.def`, 而 `/GL` (LTO) 产物只有编译器中间表示、没有符号表 (dumpbin 显示
+  `File Type: ANONYMOUS OBJECT`), 二者天生互斥 —— 显式导出同时解决了这个冲突,
+  并让链接器能安全裁剪内部符号
+
+### HyperScan 的 SIMD 基线
+- 发布给不同用户的机器可能是 SSE4.2 基线 (x86-64-v2), 也可能没有 AVX2/AVX-512,
+  因此 hyperscan 的 fat runtime (运行期按 CPU 自动选型的多微架构分发) **默认关闭**,
+  改为编译期基线 `AGENTXX_HYPERSCAN_MARCH` (默认 `x86-64-v2`)。
+  fat runtime 的实现依赖 `nm` + `objcopy --redefine-syms` 给各 variant 的 obj
+  重命名符号, 与 LTO object 无符号表的特性互斥 (二者只能择一), 关闭后 hyperscan
+  也能参与 LTO
+- 需要运行期分发时可加 `-DAGENTXX_HYPERSCAN_FAT_RUNTIME=ON` (仅 Linux 生效),
+  此时 hyperscan 会自动退化为非 LTO 构建
+
 ## 常见错误
 - [FAQ 更多问题](FAQ.md)
+
+### 生成错误 MSB3073 / unrecognized file format in 'xxx.obj, 0'
+- 现象: 链接动态库时 `Auto build dll exports` 步骤失败, 提示 `cmake -E __create_def` 无法识别 obj 文件
+- 原因: 该目标同时开启了 `WINDOWS_EXPORT_ALL_SYMBOLS` (自动导出全部符号) 与 `/GL` (LTO);
+  `/GL` 产物是编译器中间表示, obj 内没有符号表, CMake 无法据此生成 `.def`
+- 处理: 两者不可同时使用, 任选其一:
+    - 关闭 LTO: cmake 参数加 `-DAGENTXX_ENABLE_LTO=OFF`
+    - 该库改用显式导出 (推荐: `__declspec(dllexport)` 标注 + 默认不导出;
+      本项目三个基础库即如此, 见头文件中的 `UTILXX_BASE_API` / `UTILXX_API` / `PLUGINXX_API`)
+    - 仅对该库的嵌套构建剥离 LTO 参数 (顶层 `agent/CMakeLists.txt` 的 `agentxx_strip_lto_args`,
+      本项目仅用于开启 fat runtime 时的 hyperscan)
 
 ### 链接错误 uchardet.lib(uchardet.obj) : error LNK2038
 - windows上 msvc 编译出来的库分为 debug 和 release 版本，且区分 静态链接c++标准库 和 动态链接c++标准库，因此一共分为 4种 情况

@@ -661,8 +661,8 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 > 下的片段并断言行为（`positive_control.cpp` 必须编译成功；错误签名如 hook 返回 `int`、
 > capability 返回 `int`、tool 返回普通值、跨边界传 STL 参数必须编译失败）。
 >
-> 插件框架定向 UBSan 探针：`-DAGENTXX_PLUGIN_UBSAN_PROBE=ON` 在常规 Debug/ASan 基线
-> 之上，仅对 `lib/src/plugins/*.cpp` 与 `test/plugin/*.cpp` 追加 `-fsanitize=undefined`
+> 插件框架定向探针：`AGENTXX_ENABLE_SANITIZER=ON`（默认开启，与 ASan/UBSan 同一开关）
+> 时，对 `lib/src/plugins/*.cpp` 与 `test/plugin/*.cpp` 追加 `-fsanitize=undefined`
 > （运行库经顶层 sanitizer 链接参数注入），不重编第三方依赖；用于 `PluginManager`/
 > `ClientPluginManager` 与 header-only 的 Operation/InstanceLifetime 运行时的未定义行为验证。
 
