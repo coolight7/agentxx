@@ -1520,7 +1520,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(readRes.summary.find("[10, 60]") != std::string::npos);
             XX_TEST_EXPECT_TRUE(readRes.summary.find("/home/user/a.cpp") != std::string::npos);
 
-            // 15.3 edit (回调函数: path 摘要 + diff items)
+            // 15.3 edit (回调函数: "[+行 -行] path" 摘要 + diff items)
             auto editRes = co_await renderToolAsync(
                 mgr,
                 "call_edit_1",
@@ -1533,6 +1533,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(editRes.matched);
             XX_TEST_EXPECT_EQ(editRes.displayName, "Edit");
+            // 折叠头摘要: 类似 git 的增删行数提示 (与展开体 diff 行数同源)
+            XX_TEST_EXPECT_TRUE(editRes.summary.find("[+1 -1]") != std::string::npos);
             XX_TEST_EXPECT_TRUE(editRes.summary.find("/home/user/b.cpp") != std::string::npos);
             XX_TEST_EXPECT_EQ(editRes.items.size(), 1U);
             if (!editRes.items.empty()) {
@@ -1544,6 +1546,65 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("old_str", std::string{}), "foo");
                 XX_TEST_EXPECT_EQ(editRes.items[0].value("new_str", std::string{}), "bar");
             }
+
+            // 15.3b edit: 增删行数按逐行 diff 统计 (未变的上下文行不计入)
+            auto editCtx = co_await renderToolAsync(
+                mgr,
+                "call_edit_2",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/c.cpp","old_str":"int a = 1;\nreturn a;\n}","new_str":"int a = 2;\nreturn a;\n}"})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editCtx.matched);
+            XX_TEST_EXPECT_TRUE(editCtx.summary.find("[+1 -1] /home/user/c.cpp") != std::string::npos);
+
+            // 15.3c edit: old_str/new_str 缺失时不加中括号提示 (仅路径)
+            auto editNoText = co_await renderToolAsync(
+                mgr,
+                "call_edit_3",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/d.cpp"})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editNoText.matched);
+            XX_TEST_EXPECT_TRUE(editNoText.summary.find("[+0 -0]") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(editNoText.summary.find("/home/user/d.cpp") != std::string::npos);
+
+            // 15.3d edit multi_replace: 结果里的命中处数换算总行数 (1 处 +1 -1 × 3 处)
+            auto editMulti = co_await renderToolAsync(
+                mgr,
+                "call_edit_4",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/e.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+                "Success, Replace 3 hits",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editMulti.matched);
+            XX_TEST_EXPECT_TRUE(editMulti.summary.find("[+3 -3] /home/user/e.cpp") != std::string::npos);
+
+            // 15.3e edit multi_replace 运行中: 处数未知, 先按单处展示
+            auto editMultiRunning = co_await renderToolAsync(
+                mgr,
+                "call_edit_5",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/f.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+                "",
+                false,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editMultiRunning.matched);
+            XX_TEST_EXPECT_TRUE(
+                editMultiRunning.summary.find("[+1 -1] /home/user/f.cpp") != std::string::npos
+            );
 
             co_await mgr->unloadAsync("agentxx_filesystem");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);

@@ -660,13 +660,31 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
     // 6. Edit
     ctx.registerRenderer(kNameEdit, [](const ToolRenderInput& in, ToolRenderOutput& out) {
         ArgReader   args(in.argsJson);
-        std::string path = args.value("path", "");
-        out.displayName  = "Edit";
-        if (!path.empty()) {
-            out.summary = " · " + path;
-        }
+        std::string path   = args.value("path", "");
         std::string oldStr = args.value("old_str", "");
         std::string newStr = args.value("new_str", "");
+        out.displayName    = "Edit";
+        // 折叠头摘要: git 风格的 "+行 -行" 提示在前, 路径在后 (如 " · [+3 -1] /home/user/a.cpp")
+        // - 行数统计见 [diffStatText] (与展开体 diff 的逐行结果同源)
+        // - multi_replace 一处模式会替换多处, 实际处数只有结果里才有
+        //   ("Success, Replace N hits", 见 [parseEditReplaceHits]), 因此完成前按
+        //   单处展示, 完成后换成整个文件的总行数 (单处 × 处数)
+        int64_t repeat = 1;
+        if (args.value("multi_replace", false) && in.isFinished) {
+            const int64_t hits = parseEditReplaceHits(in.resultText);
+            if (hits > 1) {
+                repeat = hits;
+            }
+        }
+        const std::string diffStat = diffStatText(oldStr, newStr, repeat);
+        std::string       summary  = " ·";
+        if (!diffStat.empty()) {
+            summary += " " + diffStat;
+        }
+        if (!path.empty()) {
+            summary += " " + path;
+        }
+        out.summary = std::move(summary);
         if (!path.empty() && (!oldStr.empty() || !newStr.empty())) {
             utilxx_base::Json diffItem;
             diffItem["kind"]    = "diff";

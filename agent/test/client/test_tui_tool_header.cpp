@@ -3,7 +3,7 @@
 // 覆盖已知工具头部渲染为 "动词 · 参数摘要" 的场景, 以及未知工具/参数
 // 解析失败回退显示原始 toolName 的降级路径:
 // - filesystem 系列: list / read_text_file (含 [offset, limit] 区间) /
-//   write_file / edit_text_file / glob / grep
+//   write_file / edit_text_file (含 "[+行 -行] path" diff 提示) / glob / grep
 // - web_search 系列: web_search / web_fetch_url / web_fetch_url_markdown
 // - 降级: 未知工具名 / 非 JSON 参数 -> 头部仍显示原始 toolName
 #include "agentxx-test/client/test_tui_tool_header.h"
@@ -16,6 +16,7 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx-test/test_framework.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
+#include "agentxx_filesystem/agentxx_fs_plugin.h"
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
@@ -268,11 +269,34 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (!j.is_object()) {
             return -1;
         }
-        std::string path   = j.value("path", std::string{});
-        std::string oldStr = j.value("old_str", std::string{});
-        std::string newStr = j.value("new_str", std::string{});
-        out->displayName   = makeTestString("Edit");
-        out->summary       = makeTestString(" · " + path);
+        std::string path         = j.value("path", std::string{});
+        std::string oldStr       = j.value("old_str", std::string{});
+        std::string newStr       = j.value("new_str", std::string{});
+        const bool  multiReplace = j.value("multi_replace", false);
+        out->displayName         = makeTestString("Edit");
+        // 折叠头摘要与真实插件同口径: " · [+行 -行] path"
+        // (增删行数经共享 helper 计算 —— 与插件渲染器、展开体 diff 三者同源,
+        // 见 agentxx_fs_plugin.h 的 diffStatText; multi_replace 完成后按结果里的
+        // 命中处数换算整个文件的总行数, 完成前按单处展示)
+        int64_t repeat = 1;
+        if (multiReplace && in->is_finished != 0) {
+            const int64_t hits = agentxx_fs_plugin::parseEditReplaceHits(std::string_view{
+                in->result_text.data ? in->result_text.data : "",
+                static_cast<size_t>(in->result_text.size)
+            });
+            if (hits > 1) {
+                repeat = hits;
+            }
+        }
+        std::string       summary  = " ·";
+        const std::string diffStat = agentxx_fs_plugin::diffStatText(oldStr, newStr, repeat);
+        if (!diffStat.empty()) {
+            summary += " " + diffStat;
+        }
+        if (!path.empty()) {
+            summary += " " + path;
+        }
+        out->summary = makeTestString(summary);
         if (!in->is_error) {
             utilxx_base::Json diffItem;
             diffItem["kind"]      = "diff";
@@ -653,9 +677,9 @@ void testTuiToolHeaderFilesystem() {
     f.pushTool("agentxx_filesystem_write", R"({"path":"/home/out.txt","overwrite":true})");
     XX_TEST_EXPECT_TRUE(f.render().find("Write · /home/out.txt") != std::string::npos);
 
-    // edit_text_file: 头部摘要含路径 (diff 正文不受影响)
+    // edit_text_file: 头部摘要含 "git 风格 +行 -行" 与路径 (diff 正文不受影响)
     f.pushTool("agentxx_filesystem_edit", R"({"path":"/home/e.cpp","old_str":"a","new_str":"b"})");
-    XX_TEST_EXPECT_TRUE(f.render().find("Edit · /home/e.cpp") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -1] /home/e.cpp") != std::string::npos);
 
     // glob: 单模式 / 多模式折叠为前两项 + "..."
     f.pushTool("agentxx_filesystem_glob", R"({"file_patterns":["agent/lib/**/*.cpp"]})");
@@ -1240,6 +1264,195 @@ void testTuiToolHeaderPlanningRestored() {
     XX_TEST_EXPECT_TRUE(f3.plainRender().find("Plan · [#] hist read task") != std::string::npos);
 }
 
+// filesystem edit 折叠头摘要: 类似 git 的 "+行 -行" 提示 (`[+3 -1] path`)
+//
+// 行数统计口径与展开体 diff 同源 (utilxx::computeLineDiff 的逐行 LCS 结果),
+// 不是 old_str/new_str 的行数差 —— 替换块里未变的上下文行不计入增删。
+void testTuiToolHeaderEditDiffStat() {
+    // 单行替换: 1 增 1 删
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/a.cpp","old_str":"foo","new_str":"bar"})"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -1] /home/a.cpp") != std::string::npos);
+    }
+
+    // 多行替换含未变上下文行: 上下文 (return/}) 不计入, 仍为 1 增 1 删
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/b.cpp","old_str":"int a = 1;\nreturn a;\n}","new_str":"int a = 2;\nreturn a;\n}"})"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -1] /home/b.cpp") != std::string::npos);
+    }
+
+    // 纯插入 / 纯删除: 无增删的一侧显示 0
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/c.cpp","old_str":"a","new_str":"a\nb"})"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -0] /home/c.cpp") != std::string::npos);
+    }
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/d.cpp","old_str":"a\nb","new_str":"a"})"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+0 -1] /home/d.cpp") != std::string::npos);
+    }
+
+    // 两行都替换: 2 增 2 删
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/e.cpp","old_str":"int x = 1;\nint y = 2;","new_str":"int x = 3;\nint y = 4;"})"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+2 -2] /home/e.cpp") != std::string::npos);
+    }
+
+    // CRLF 形态参数: 行尾差异不当作整段重写 (与 edit 执行体同为 LF 归一化后匹配)
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/f.cpp","old_str":"int a;\r\nint b;","new_str":"int a;\r\nint c;"})"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -1] /home/f.cpp") != std::string::npos);
+    }
+
+    // multi_replace: 按结果里的替换处数换算**总**增删行数 (单处 +1 -1 × 3 处)
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/g.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+            true,
+            true,
+            "Success, Replace 3 hits"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+3 -3] /home/g.cpp") != std::string::npos);
+    }
+
+    // multi_replace 多行模式 × 2 处: 单处 +1 -1 → 总 [+2 -2]
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/k.cpp","old_str":"int a = 1;\nreturn a;","new_str":"int a = 2;\nreturn a;","multi_replace":true})",
+            true,
+            true,
+            "Success, Replace 2 hits"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+2 -2] /home/k.cpp") != std::string::npos);
+    }
+
+    // multi_replace 运行中 (结果未到, 处数未知): 先按单处展示, 完成后收敛为总数
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/l.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+            false // 运行中
+        );
+        XX_TEST_EXPECT_TRUE(
+            f.plainRender().find("Edit · [+1 -1] /home/l.cpp") != std::string::npos
+        );
+    }
+
+    // 非 multi_replace: 结果里即便含 "Replace N hits" 形态也不换算 (单次替换只有一处)
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/m.cpp","old_str":"oldCall();","new_str":"newCall();"})",
+            true,
+            true,
+            "Success, Replace 3 hits"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -1] /home/m.cpp") != std::string::npos);
+    }
+
+    // multi_replace 结果形态异常 (解析不到处数): 退化为单处, 不显示总数
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/n.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
+            true,
+            true,
+            "success"
+        );
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+1 -1] /home/n.cpp") != std::string::npos);
+    }
+
+    // 参数缺失 old_str/new_str: 无中括号提示, 仅显示路径 (保持旧观感)
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool("agentxx_filesystem_edit", R"({"path":"/home/h.cpp"})");
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · /home/h.cpp") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(f.render().find("Edit · [+0 -0]") == std::string::npos);
+    }
+
+    // 运行中 (参数已就绪, 尚未完成): 同样给出增删行数提示
+    // (运行态显示名与摘要样式不同, 原文断言需剥离颜色转义, 见 plainRender)
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/i.cpp","old_str":"foo","new_str":"bar"})",
+            false // 运行中
+        );
+        XX_TEST_EXPECT_TRUE(
+            f.plainRender().find("Edit · [+1 -1] /home/i.cpp") != std::string::npos
+        );
+    }
+
+    // 展开态: 头部保持原始工具名, 提示不进入展开头 (信息由展开体 diff 呈现)
+    {
+        ToolHeaderFixture f(120, 16);
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/j.cpp","old_str":"foo","new_str":"bar"})",
+            true,
+            false // 展开
+        );
+        std::string out = f.render();
+        XX_TEST_EXPECT_TRUE(out.find("- [Tool] agentxx_filesystem_edit") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("[+1 -1]") == std::string::npos);
+    }
+}
+
+// edit 结果处数解析边界 (`Success, Replace N hits` 之外的文本一律不识别,
+// 渲染层据此退化为单处展示 —— 不能把普通结果/错误文本误当成处数)
+void testTuiToolHeaderEditHitsParse() {
+    using agentxx_fs_plugin::parseEditReplaceHits;
+    // 正常形态
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 3 hits"), int64_t{3});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 1 hits"), int64_t{1});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 1000000 hits"), int64_t{1000000});
+    // 单次替换结果 / 空文本 / 错误文本 / 异常中止
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("success"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits(""), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("[Error] Arg `old_str` is empty"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("[Exception aborted: timeout]"), int64_t{0});
+    // 前后缀不全 / 数字区非纯数字 / 为 0 / 越界: 均视为不可识别
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace  hits"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace -3 hits"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 3x hits"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 0 hits"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 1000001 hits"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("取代 3 hits"), int64_t{0});
+    XX_TEST_EXPECT_EQ(parseEditReplaceHits("Success, Replace 3 hits\n"), int64_t{0});
+}
+
 TestResult testTuiToolHeader() {
     // 消息列表头部角色标签 ([Tool]/[Think] 等) 随界面语言切换 (见 TuiI18n):
     // 本模块断言英文标签, 固定界面语言为英文, 避免跟随系统语言
@@ -1248,6 +1461,8 @@ TestResult testTuiToolHeader() {
     tuiSettings.setLanguage(TuiLanguage::EnUs);
 
     testTuiToolHeaderFilesystem();
+    testTuiToolHeaderEditDiffStat();
+    testTuiToolHeaderEditHitsParse();
     testTuiToolHeaderWeb();
     testTuiToolHeaderFallback();
     testTuiToolHeaderOverflow();
