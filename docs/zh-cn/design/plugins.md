@@ -662,9 +662,12 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 脚本插件经内置 `agent
 > capability 返回 `int`、tool 返回普通值、跨边界传 STL 参数必须编译失败）。
 >
 > 插件框架定向探针：`AGENTXX_ENABLE_SANITIZER=ON`（默认开启，与 ASan/UBSan 同一开关）
-> 时，对 `lib/src/plugins/*.cpp` 与 `test/plugin/*.cpp` 追加 `-fsanitize=undefined`
-> （运行库经顶层 sanitizer 链接参数注入），不重编第三方依赖；用于 `PluginManager`/
+> 且**非 Release 配置**（`XX_IS_RELEASE_D=0`）时，对 `lib/src/plugins/*.cpp` 与
+> `test/plugin/*.cpp` 追加 `-fsanitize=undefined`
+> （运行库经顶层非 Release 的 sanitizer 链接参数注入），不重编第三方依赖；用于 `PluginManager`/
 > `ClientPluginManager` 与 header-only 的 Operation/InstanceLifetime 运行时的未定义行为验证。
+> Release 配置不含 sanitizer 编译/链接参数，探针一并跳过（否则插桩 TU 会因缺少
+> `__ubsan_handle_*` 运行库符号而链接失败）。
 
 - **平台矩阵**：各插件在自身 `CMakeLists.txt` 开头经 `plugin_platform_support.cmake` 的 `gate` 函数判定，复用顶层 `XX_IS_*_D` 变量；不支持的平台跳过编译 (screen_capture/computer_use/text_selection_monitor 仅 Windows, audio_stream 全平台未实现等)
 - **内置合并编译**：按 `AGENTXX_PLUGIN_BUILTIN_LIST` 合并进 `libagentxx`；此时 `test_ffi_c_api` 与 `client_plugins` 测试按条件跳过动态库路径

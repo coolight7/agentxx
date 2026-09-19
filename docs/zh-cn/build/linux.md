@@ -147,7 +147,7 @@ cmake -B build/linux-debug -S agent \
     ...其余参数与 linux_debug_build.sh 一致
 ```
 
-- `AGENTXX_ENABLE_SANITIZER=OFF`: 去掉 `-fsanitize=address` / `-fsanitize=undefined` (含插件框架定向探针)，编译与链接均显著加快 (仍保留 `-fno-omit-frame-pointer` 便于调试/性能分析)。MSVC 下该开关只对应 `/fsanitize=address` (UBSan 无实现)
+- `AGENTXX_ENABLE_SANITIZER=OFF`: 去掉 `-fsanitize=address` / `-fsanitize=undefined` (含插件框架定向探针)，编译与链接均显著加快 (仍保留 `-fno-omit-frame-pointer` 便于调试/性能分析)。MSVC 下该开关只对应 `/fsanitize=address` (UBSan 无实现)。插桩与定向探针只在非 Release 配置生效，Release 构建不含 sanitizer 参数
 - `AGENTXX_ENABLE_LTO=OFF`: Release 构建关闭 LTO (`-flto`)，链接更快、产物更易调试 (默认 ON)
 - hyperscan 的 fat runtime (运行期多微架构分发) 固定关闭，改用编译期基线 ISA (x86_64 → `x86-64-v2`，x86 → `core2`，按目标架构自动选择)，从而 hyperscan 一同参与 LTO 并保持对多种 CPU 的兼容
 - 三库 (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`) 动态库同样只导出显式标注的 API，详见 [Windows 编译](windows.md) 的"符号导出"小节

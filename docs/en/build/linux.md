@@ -146,7 +146,7 @@ cmake -B build/linux-debug -S agent \
     ...other arguments match linux_debug_build.sh
 ```
 
-- `AGENTXX_ENABLE_SANITIZER=OFF`: Drops `-fsanitize=address` / `-fsanitize=undefined` (including the plugin-framework probe), speeding up both compilation and linking significantly (retains `-fno-omit-frame-pointer` for debugging/profiling). On MSVC the switch only maps to `/fsanitize=address` (no UBSan implementation).
+- `AGENTXX_ENABLE_SANITIZER=OFF`: Drops `-fsanitize=address` / `-fsanitize=undefined` (including the plugin-framework probe), speeding up both compilation and linking significantly (retains `-fno-omit-frame-pointer` for debugging/profiling). On MSVC the switch only maps to `/fsanitize=address` (no UBSan implementation). Instrumentation and the targeted probe apply to non-Release configurations only; Release builds carry no sanitizer flags.
 - `AGENTXX_ENABLE_LTO=OFF`: Disables LTO (`-flto`) in Release builds; linking gets faster and artifacts are easier to debug (default ON).
 - HyperScan's fat runtime (runtime multi-microarchitecture dispatch) is permanently off; a compile-time baseline ISA is used instead (x86_64 → `x86-64-v2`, x86 → `core2`, chosen automatically from the target architecture), so HyperScan joins LTO while staying compatible with a wide range of CPUs.
 - The three base libraries (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`) likewise export only explicitly marked APIs — see the "Symbol exports" section in the [Windows build](windows.md) doc.

@@ -260,7 +260,9 @@ path/to/agentxx_test string_util regex
 - Debug 插桩: 单一开关 `AGENTXX_ENABLE_SANITIZER` (默认 ON) 同时启用 ASan + UBSan
   (GCC/Clang: `-fsanitize=address` + `-fsanitize=undefined -fno-sanitize-recover=undefined`)
   与插件框架定向探针 (`lib/src/plugins/*.cpp`、`test/plugin/*.cpp`); MSVC 只有 ASan
-  (`/fsanitize=address`), UBSan/探针自动忽略; 已移除 TSAN 支持
+  (`/fsanitize=address`), UBSan/探针自动忽略; 已移除 TSAN 支持。
+  插桩与探针**都只在非 Release 配置生效** (`XX_IS_RELEASE_D=0`): Release 无 sanitizer
+  编译/链接参数, 探针若仍插桩会因缺少 `__ubsan_handle_*` 运行库符号而链接失败
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
