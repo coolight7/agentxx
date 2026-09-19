@@ -80,6 +80,23 @@ path/to/agentxx_test string_util regex
 ```
 - `agent/benchmark`: 编译结果 {build}/exec/agentxx_benchmark
     - 性能测试（一般仅 release 启用编译该模块）
+    - 资源基准 (resource_* 模块, 详见 docs/zh-cn/design/benchmark.md):
+      同进程 CLI/TUI、真实两进程 (server/client 子进程)、真实运行的 TUI (FTXUI 界面线程,
+      含帧耗时/渲染字节)、真实 server 单独运行 (空载漂移/WS 轮次/断连回收)、
+      PTY 驱动的真实 TUI 子进程、插件逐项边际内存
+    - 指标: RSS/PSS/私有脏页/匿名/峰值/线程/fd + glibc 堆在用与碎片 + malloc_trim
+      可回收 + smaps 模块级分解 (可执行文件/项目库/各插件/系统库/堆/匿名) +
+      逻辑内存 (会话消息/TUI 状态/工具 schema) + 分阶段增量 + CPU 用户/内核时间
+    - 报告: {exec}/bench/bench_<时间戳>.json (机器对比) 与 .md (人工阅读);
+      `--baseline <bench_*.json>` 输出与上次的 ΔRSS/ΔPSS/Δ堆 及模块级差异
+    - 聚合模块 `resource` 每个场景用独立子进程执行 (避免前序场景内存污染基线);
+      `AGENTXX_BENCH_NO_ISOLATE=1` 退回同进程顺序运行
+    - 真实两进程场景负载缩放: `AGENTXX_BENCH_SCALE` (0.01~1.0, 默认 1.0)
+    - 性能统计 (TUI 帧耗时等) 由 libagentxx 全局标记
+      `agentxx::agent::AgentConfigStatic::enableBenchmark` 控制 (默认关闭):
+      关闭时统计代码不执行 (热路径只多一次无等待原子读), 基准程序启动时打开
+    - 注意: io_context 在 poll() 因"无工作"返回后会被标记 stopped, 导致后续 run()
+      立即返回 (客户端收发全失效); 基准场景在任何 poll() 之前先持有 work_guard
 - `agent/third_party`: 第三方库依赖 (含本项目自研、按独立工程维护的三个库)
     - [cxx_utilxx_base](agent/third_party/cxx_utilxx_base/) 无重依赖基础件 (日志/JSON/字符串/
       容器/环境/系统探测/取消令牌/异步卸载), 命名空间 `utilxx_base` + 跨库契约 `utilxx::CancelToken`;

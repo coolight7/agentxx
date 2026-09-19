@@ -9,6 +9,7 @@
 #include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/util/clipboard.h"
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
@@ -643,9 +644,14 @@ void TUIClientAgentIO::start() {
         // 点击由全局鼠标事件经 handleShellHit 分发 (见下方 CatchEvent)
 
         // 主布局: Stacked 让子组件接收事件, Renderer 组合渲染
-        auto stacked      = Container::Stacked({messageList_, sidebar_, inputBar_, statusBar_});
-        auto mainRenderer = Renderer(stacked, [&]() -> Element {
-            ctx_.frameState = sharedState_.readSnapshot();
+        auto       stacked = Container::Stacked({messageList_, sidebar_, inputBar_, statusBar_});
+        const bool collectFrameStats = agentxx::agent::AgentConfigStatic::benchmarkEnabled();
+        auto       mainRenderer      = Renderer(stacked, [&]() -> Element {
+            // 帧统计只在启用 [AgentConfigStatic::enableBenchmark] 时采集:
+            // 关闭时 (正常使用) 不读时钟、不累加计数, 渲染路径零额外开销
+            const auto frameBegin = collectFrameStats ? std::chrono::steady_clock::now()
+                                                                 : std::chrono::steady_clock::time_point{};
+            ctx_.frameState       = sharedState_.readSnapshot();
             // 本帧终端尺寸: 同帧内所有组件读同一尺寸 (避免帧中途 resize 造成布局错位),
             // 且每帧只查询一次 (Terminal::Size 在 Linux 上是 ioctl)
             ctx_.refreshFrameSize();
@@ -696,7 +702,12 @@ void TUIClientAgentIO::start() {
                     });
                 }
             }
-            return body | bold | bgcolor(theme_.backgroundColor);
+            auto rendered = body | bold | bgcolor(theme_.backgroundColor);
+            // 帧统计: 组件树构建耗时 (不含终端输出), 供性能基准/诊断读取
+            if (collectFrameStats) {
+                recordFrameStats(std::chrono::steady_clock::now() - frameBegin);
+            }
+            return rendered;
         });
 
         // 模态容器: 主布局 + 弹窗层
@@ -896,6 +907,33 @@ void TUIClientAgentIO::start() {
             screen_ = nullptr;
         }
     });
+}
+
+TUIClientAgentIO::FrameStats TUIClientAgentIO::frameStats() const {
+    FrameStats out;
+    out.frames        = frameCount_.load(std::memory_order_relaxed);
+    out.totalRenderMs = static_cast<double>(frameTotalNs_.load(std::memory_order_relaxed)) / 1e6;
+    out.maxRenderMs   = static_cast<double>(frameMaxNs_.load(std::memory_order_relaxed)) / 1e6;
+    return out;
+}
+
+void TUIClientAgentIO::recordFrameStats(std::chrono::steady_clock::duration elapsed) noexcept {
+    const auto ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()
+    );
+    frameCount_.fetch_add(1, std::memory_order_relaxed);
+    frameTotalNs_.fetch_add(ns, std::memory_order_relaxed);
+    // 最大帧耗时: 仅在新值更大时替换 (比较与写入之间可能有其他线程/帧更新,
+    // 失败则带上最新值重试, 避免丢掉真正的最大值)
+    uint64_t prevMax = frameMaxNs_.load(std::memory_order_relaxed);
+    while (ns > prevMax && !frameMaxNs_.compare_exchange_weak(prevMax, ns)) {
+    }
+}
+
+void TUIClientAgentIO::resetFrameStats() {
+    frameCount_.store(0, std::memory_order_relaxed);
+    frameTotalNs_.store(0, std::memory_order_relaxed);
+    frameMaxNs_.store(0, std::memory_order_relaxed);
 }
 
 void TUIClientAgentIO::stop() {

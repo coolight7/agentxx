@@ -230,6 +230,20 @@ public:
         return running_.load(std::memory_order_acquire);
     }
 
+    /// 渲染帧统计 (供性能基准与现场诊断读取; 无额外线程/锁开销)
+    /// - 仅在启用全局标记 [agentxx::agent::AgentConfigStatic::enableBenchmark] 时采集,
+    ///   未启用时计数恒为 0 (正常使用不读时钟、不累加计数)
+    struct FrameStats {
+        uint64_t frames        = 0; ///< 已渲染帧数
+        double   totalRenderMs = 0.0; ///< 渲染耗时累计 (仅组件树构建, 不含终端输出)
+        double   maxRenderMs   = 0.0; ///< 单帧最大渲染耗时
+    };
+
+    /// 读取帧统计 (任意线程可调用)
+    FrameStats frameStats() const;
+    /// 清零帧统计 (基准测试分段统计用; 任意线程可调用)
+    void resetFrameStats();
+
     void setRemoteUrl(std::string url) {
         remoteUrl_ = std::move(url);
     }
@@ -567,6 +581,19 @@ private:
     uint64_t                    logCachePoppedCount_ = 0;
     /// 上次快照的日志行数 (用于判断日志是否新增, 避免每帧全量 snapshot 拷贝)
     size_t logCacheLineCount_ = 0;
+
+    // ---- 渲染帧统计 (基准测试/诊断用; UI 线程写入, 任意线程读取) ----
+    /// 记录一帧的组件树构建耗时 (仅在启用
+    /// [agentxx::agent::AgentConfigStatic::enableBenchmark] 时调用)
+    /// - `elapsed`: 本帧组件树构建耗时
+    void recordFrameStats(std::chrono::steady_clock::duration elapsed) noexcept;
+
+    /// 已渲染帧数
+    std::atomic<uint64_t> frameCount_{0};
+    /// 渲染耗时累计 (纳秒)
+    std::atomic<uint64_t> frameTotalNs_{0};
+    /// 单帧最大渲染耗时 (纳秒)
+    std::atomic<uint64_t> frameMaxNs_{0};
 
     /// 重绘请求合并 (postRedraw 由 client/UI 线程并发调用):
     /// - redrawPosted_: 已投递尚未处理的 Custom 标记, 仅当无待处理事件时才 Post,

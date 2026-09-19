@@ -3,6 +3,7 @@
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include "utilxx_base/env.h"
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
@@ -18,6 +19,28 @@ class AgentConfigStatic {
 public:
 
     AgentConfigStatic(int _);
+
+    /// 基准统计开关 (进程级全局标记, 默认关闭)
+    /// - 关闭时 (正常使用) 全部性能统计代码不执行, 既不读时钟也不累加计数,
+    ///   调用方在热路径上只多一次原子读, 无其他开销
+    /// - 打开后才会采集性能统计数据, 如 TUI 每帧渲染耗时
+    ///   (见 `TUIClientAgentIO::frameStats`)
+    /// - 由基准程序 [agentxx_benchmark] 启动时打开; 现场诊断也可手动
+    ///   [setEnableBenchmark] 打开
+    /// - 线程安全: 原子读写, 可在任意线程开关
+    inline static std::atomic<bool> enableBenchmark{false};
+
+    /// 基准统计是否启用 (热路径高频调用: 仅一次无等待原子读)
+    inline static bool benchmarkEnabled() noexcept {
+        return enableBenchmark.load(std::memory_order_relaxed);
+    }
+
+    /// 设置基准统计开关
+    /// - `enabled`: true = 启用性能统计采集
+    /// - 返回设置前的旧值
+    inline static bool setEnableBenchmark(bool enabled) noexcept {
+        return enableBenchmark.exchange(enabled, std::memory_order_relaxed);
+    }
 
     /// 默认数据根目录名 (置于用户主目录下)
     inline static constexpr std::string_view agentxxDataDirPath = ".agentxx";

@@ -1491,7 +1491,7 @@ agent/
 │   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A 桥接
 │   │   │   ├── agent_runner.h    # AgentRunner 统一 "引擎运行+中断处理+恢复" 循环 (主 agent 与子代理共用)
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
-│   │   │   ├── config_static.h   # 静态路径配置
+│   │   │   ├── config_static.h   # 静态路径配置 + 全局运行开关 (enableBenchmark)
 │   │   │   ├── context.h         # AgentContext / Session / SessionsManager / ContextStats
 │   │   │   │                     #   Session: 线程绑定 (viewMessages/chainHash 单线程读写)
 │   │   │   ├── checkpoint_store.h # 单检查点存储: SingleCheckpointStore 策略基类 +
@@ -1735,7 +1735,15 @@ agent/
 │           ├── test_tui_stream.h              # TUI 流式渲染测试
 │           └── test_tui_tool_header.h         # TUI 工具消息头部渲染测试
 │
-├── benchmark/                    # 性能测试 (一般仅 release 编译)
+├── benchmark/                    # 性能与资源基准 (一般仅 release 编译)
+│   ├── bench_resource*.cpp/h     # 资源基准场景: 同进程 CLI/TUI, 真实两进程, 真实 TUI,
+│   │                             #   server 单独运行, PTY 驱动 TUI 子进程, 插件边际内存
+│   ├── bench_mem_probe.h         # 进程内存细项 (RSS/PSS/峰值/堆/碎片/可回收) 与
+│   │                             #   smaps 模块级分解、分阶段增量追踪
+│   ├── bench_mem_logical.h       # 逻辑内存统计 (会话消息/中间件/TUI 状态/持久化文件)
+│   └── bench_util.h              # 结果结构 + 报告 (JSON/Markdown) + 基线对比
+│                                 # 性能统计 (TUI 帧耗时等) 由全局标记控制: 基准程序启动时
+│                                 #   打开 AgentConfigStatic::enableBenchmark, 正常使用默认关闭
 │
 ├── third_party/                  # 第三方依赖
 │   ├── boost/                    # asio / beast / process / exception
