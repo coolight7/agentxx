@@ -1659,7 +1659,10 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
         msg->text = *st.currentToken;
     }
     if (st.currentTokenRole == TUIMessage::Role::Think) {
-        msg->collapsed = true;
+        // 折叠态跟随用户对流式思考的手动点击: 用户点击展开过则提交后保持展开
+        // (思考结束不自动折回), 未点击/点击折叠时维持默认折叠。
+        // 覆盖态说明见 TUIRenderState::streamThinkOverride
+        msg->collapsed = (st.streamThinkOverride != 1);
         if (st.pendingTokenThink.has_value()) {
             msg->think = *st.pendingTokenThink;
         }
@@ -1675,6 +1678,9 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     st.pendingTokenStartTimeMs = 0;
     st.pendingTokenThink.reset();
     st.currentToken.reset();
+    // 当前流的折叠覆盖态已随本次提交生效并按消息落盘, 就此失效:
+    // 下一次思考 (新流) 回到设置模式 (TailThinkingMode) 的默认展示
+    st.streamThinkOverride = -1;
 }
 
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
@@ -2047,6 +2053,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     st.currentToken = std::make_shared<std::string>();
                     // 新流开始: 递增流身份 (COW 复制不递增, 见 currentTokenEpoch 注释)
                     ++st.currentTokenEpoch;
+                    // 同时清除上一流的思考折叠覆盖态 (流提交落盘时已生效过;
+                    // 此处兜底覆盖未走提交的流结束路径): 新流回到设置模式默认展示
+                    st.streamThinkOverride = -1;
                 } else if (st.currentToken.use_count() > 1) {
                     st.currentToken = std::make_shared<std::string>(*st.currentToken);
                 }

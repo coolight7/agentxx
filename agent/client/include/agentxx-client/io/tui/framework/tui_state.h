@@ -124,6 +124,20 @@ struct TUIRenderState {
     ///   替代每帧对整段累积文本做前缀比较 (O(n²) -> O(n))
     uint64_t currentTokenEpoch = 0;
 
+    /// 流式末尾 Think 折叠态的用户点击覆盖 (tri-state; UI 线程写, client 线程读):
+    /// - -1 = 用户未点击 (跟随 TUISettings::tailThinkingMode 设置)
+    /// - 0  = 用户点击折叠
+    /// - 1  = 用户点击展开
+    ///
+    /// 作用范围 = 当前流 (currentTokenEpoch 标识): 用户点击展开后, 流提交落盘
+    /// (pushCurrentTokenLocked) 时据此把 Think 消息落盘为展开 (collapsed=false),
+    /// 思考结束不会自动折回; 提交与新流开始时重置为 -1, 使下一次思考回到
+    /// 设置模式的默认展示。
+    ///
+    /// 放在共享状态而非 UI 组件内: 提交落盘发生在 client 线程, 需要读到用户
+    /// 在 UI 线程点击的结果 (双方经 sharedState 的 mutex + COW 访问)。
+    int streamThinkOverride = -1;
+
     int64_t                              pendingTokenDurationMs  = 0;
     int64_t                              pendingTokenStartTimeMs = 0;
     std::optional<TUIMessage::ThinkData> pendingTokenThink;

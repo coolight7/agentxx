@@ -339,12 +339,16 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
   - 消息列表 (User/Assistant/Thinking/Tool/System/Interrupt 角色)
-  - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠)
+  - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠; 用户在流式思考上
+    手动点击展开的除外 —— 提交落盘时保持展开)
   - 消息与流式末尾 Thinking 支持点击折叠/展开: 已提交消息点击切换
-    msg.collapsed; 流式输出中的末尾 Think 子项点击切换组件内覆盖态
-    (MessageListComponent::streamThinkOverride_, 三态: 未点击跟随
-    TailThinkingMode 设置 / 点击折叠 / 点击展开), 新流开始与流结束时重置,
-    命中区域由上一帧 visibleBoxes 反推 (collapsibleBoxes_ +
+    msg.collapsed; 流式输出中的末尾 Think 子项点击切换共享状态覆盖态
+    (TUIRenderState::streamThinkOverride, 三态: 未点击跟随 TailThinkingMode
+    设置 / 点击折叠 / 点击展开)。覆盖态的生命周期 = 当前流: 用户手动展开过的
+    思考流在提交落盘时据此保持展开 (pushCurrentTokenLocked 决定 msg.collapsed,
+    思考结束不自动折回), 提交与新流开始时重置为 -1, 使下一次思考回到设置模式
+    的默认展示 (放在共享状态而非组件内: 提交发生在 client 线程, 需读取 UI 线程
+    的点击结果); 命中区域由上一帧 visibleBoxes 反推 (collapsibleBoxes_ +
     collapsibleIsStream_ 区分消息区/流式区)
   - 流式 token 实时渲染 (COW 按需拷贝避免 O(n²) 累积拷贝)
   - 权限询问卡片 + "记住本次选择" (中断 UI 描述驱动; 勾选值经结果 options 回传,

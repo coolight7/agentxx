@@ -1020,6 +1020,75 @@ void testTuiStreamScenario10(asio::io_context& ioCtx) {
     }
 }
 
+// 场景 11: 流式思考的折叠覆盖态 (TUIRenderState::streamThinkOverride) 在提交落盘
+// 时生效 —— 用户手动点击展开过的思考流, 结束后保持展开 (不自动折回);
+// 覆盖态随提交失效, 下一次思考回到默认折叠
+void testTuiStreamScenario11(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    // 第 1 轮思考: 明文思考文本累积 (未点击: 覆盖态为 -1, 未提交入列)
+    {
+        WireDelta d;
+        d.type = WireDelta::Type::ThinkToken;
+        d.text = "思考内容 A";
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
+        XX_TEST_EXPECT_TRUE(snap->currentToken && *snap->currentToken == "思考内容 A");
+        XX_TEST_EXPECT_EQ(snap->streamThinkOverride, -1);
+    }
+
+    // 模拟 UI 线程点击展开 (MessageListComponent::toggleStreamThinkCollapsed)
+    client.sharedState().mutate([](TUIRenderState& st) {
+        st.streamThinkOverride = 1;
+    });
+
+    // 思考结束: 正文开始 (TextToken) 触发思考 token 提交入列
+    {
+        WireDelta d;
+        d.type = WireDelta::Type::TextToken;
+        d.text = "Answer A";
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+        if (snap->messages.size() == 1) {
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+            XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"思考内容 A"});
+            // 用户手动展开 -> 提交后保持展开 (思考结束不折叠)
+            XX_TEST_EXPECT_FALSE(snap->messages[0]->collapsed);
+        }
+        // 覆盖态随提交失效
+        XX_TEST_EXPECT_EQ(snap->streamThinkOverride, -1);
+    }
+
+    // 第 2 轮思考 (未点击): 提交落盘回到默认折叠
+    {
+        WireDelta d;
+        d.type = WireDelta::Type::ThinkToken;
+        d.text = "思考内容 B";
+        client.testOnDelta(d);
+    }
+    {
+        WireDelta d;
+        d.type       = WireDelta::Type::ToolStart;
+        d.toolName   = "some_tool";
+        d.toolCallId = "call_11";
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        // [Think A(展开), Assistant A, Think B(折叠), Tool]
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)4);
+        if (snap->messages.size() == 4) {
+            XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Think);
+            XX_TEST_EXPECT_EQ(snap->messages[2]->text, std::string{"思考内容 B"});
+            XX_TEST_EXPECT_TRUE(snap->messages[2]->collapsed);
+            XX_TEST_EXPECT_TRUE(snap->messages[3]->role == TUIMessage::Role::Tool);
+        }
+    }
+}
+
 } // namespace
 
 TestResult testTuiStream() {
@@ -1036,6 +1105,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario8(ioCtx);
     testTuiStreamScenario9(ioCtx);
     testTuiStreamScenario10(ioCtx);
+    testTuiStreamScenario11(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }
