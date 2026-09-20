@@ -126,9 +126,9 @@ if not defined AGENTXX_VERSION (
 if not defined AGENTXX_VERSION set "AGENTXX_VERSION=0.1.0"
 echo [version] Agentxx version: %AGENTXX_VERSION%
 
-rem 内存分配器 (mimalloc): 可用环境变量覆盖
-rem - AGENTXX_ENABLE_MIMALLOC=OFF   关闭 (默认 ON)
-rem - AGENTXX_MIMALLOC_LINK=SHARED 改为动态链接 mimalloc.dll (默认 STATIC)
+rem mimalloc:
+rem - AGENTXX_ENABLE_MIMALLOC=OFF
+rem - AGENTXX_MIMALLOC_LINK=SHARED
 if not defined AGENTXX_ENABLE_MIMALLOC set "AGENTXX_ENABLE_MIMALLOC=ON"
 if not defined AGENTXX_MIMALLOC_LINK set "AGENTXX_MIMALLOC_LINK=STATIC"
 
