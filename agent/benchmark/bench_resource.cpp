@@ -1,8 +1,4 @@
 #include "bench_resource.h"
-#include "bench_mem_logical.h"
-#include "bench_resource_util.h"
-#include "bench_util.h"
-
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -10,11 +6,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/ffi_api.h"
-#include "utilxx/http_server.h"
-#include "utilxx_base/env.h"
-#include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
-
+#include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -22,8 +14,14 @@
 #include "asio/post.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
+#include "bench_mem_logical.h"
+#include "bench_resource_util.h"
+#include "bench_util.h"
 #include "fmt/format.h"
-
+#include "utilxx/http_server.h"
+#include "utilxx_base/env.h"
+#include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -42,18 +40,6 @@
 #include <thread>
 #include <vector>
 
-#if XX_IS_WIN_D
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
-
-#include "agentxx/plugin/plugin_manager.h"
-
 #ifdef AGENTXX_BUILD_CLIENT
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/io/stdio/cli_plugin_adapter.h"
@@ -63,6 +49,16 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/plugin/client_plugin_manager.h"
+#endif
+
+#if XX_IS_WIN_D
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace agentxx {

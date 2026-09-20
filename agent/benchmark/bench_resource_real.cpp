@@ -7,11 +7,6 @@
 // 目标: 在尽量贴近真实使用的运行形态下采集内存/CPU/渲染性能数据, 并给出
 // 各部分模块的内存归属 (smaps 模块分解 + 逻辑内存统计 + 分阶段增量), 供优化前后对比。
 
-#include "bench_mem_logical.h"
-#include "bench_resource.h"
-#include "bench_resource_util.h"
-#include "bench_util.h"
-
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -23,10 +18,13 @@
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "bench_mem_logical.h"
+#include "bench_resource.h"
+#include "bench_resource_util.h"
+#include "bench_util.h"
 #include "fmt/format.h"
 #include "utilxx_base/env.h"
 #include "utilxx_base/log.h"
-
 #include <atomic>
 #include <chrono>
 #include <cstring>
