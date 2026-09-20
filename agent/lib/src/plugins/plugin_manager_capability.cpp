@@ -26,7 +26,7 @@ void setErrOut(PluginInstance* caller, PluginxxString* error_out, const std::str
         return;
     }
     const PluginxxHost* host = caller ? caller->hostView() : nullptr;
-    *error_out                    = agentxx::plugin::PluginString::from(host, strToSv(msg));
+    *error_out               = agentxx::plugin::PluginString::from(host, strToSv(msg));
     if (!error_out->data) {
         auto* p = static_cast<char*>(hostMemoryAlloc(msg.size() + 1));
         if (p) {
@@ -40,12 +40,12 @@ void setErrOut(PluginInstance* caller, PluginxxString* error_out, const std::str
 } // namespace
 
 PluginxxOperatorHandle* PluginManager::callToolAsync(
-    PluginInstance*               caller,
+    PluginInstance*          caller,
     PluginxxStringView       name,
     PluginxxStringView       args_json,
     PluginxxStringView       thread_id,
     PluginxxOperatorCallback cb,
-    void*                         ud,
+    void*                    ud,
     PluginxxString*          error_out
 ) {
     // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。

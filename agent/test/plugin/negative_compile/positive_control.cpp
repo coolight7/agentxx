@@ -23,11 +23,8 @@ void usePositive(Ctx& ctx) {
         "pos.polled",
         "d",
         "{}",
-        [](Ctx&,
-           std::string_view,
-           std::string_view,
-           std::string_view,
-           const PluginxxCancelToken*) -> asio::awaitable<std::string> {
+        [](Ctx&, std::string_view, std::string_view, std::string_view, const PluginxxCancelToken*)
+            -> asio::awaitable<std::string> {
             co_return std::string{};
         }
     );

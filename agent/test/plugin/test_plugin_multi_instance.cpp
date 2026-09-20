@@ -189,11 +189,11 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 std::atomic<bool> done{false};
             };
 
-            auto                        st = std::make_shared<TaskState>();
-            auto                        ex = co_await asio::this_coro::executor;
+            auto                   st = std::make_shared<TaskState>();
+            auto                   ex = co_await asio::this_coro::executor;
             PluginxxOperatorNotify ntf{nullptr, nullptr};
             PluginxxString         err{nullptr, 0};
-            auto*                       h = ctxA->pluginManager->registerTask(
+            auto*                  h = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
                     auto* s = static_cast<TaskState*>(ud);
@@ -255,7 +255,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
             PluginxxOperatorNotify ntf2{nullptr, nullptr};
             PluginxxString         err2{nullptr, 0};
-            auto*                       h2 = ctxA->pluginManager->registerTask(
+            auto*                  h2 = ctxA->pluginManager->registerTask(
                 instC.get(),
                 [](void* ud, void*) {
                     auto* s = static_cast<TaskState*>(ud);

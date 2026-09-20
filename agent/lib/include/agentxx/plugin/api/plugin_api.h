@@ -60,7 +60,7 @@ typedef struct AgentxxPluginToolSpec {
     /// - 锚定协程/自管异步: 创建/挂起任务 → 返回 op 句柄
     /// - 失败: 返回 NULL 且 *error_out 输出错误 (跨边界堆分配字符串, host->alloc 分配)
     void*(PLUGINXX_CALL* execute_start)(
-        void*                              user_data,
+        void*                         user_data,
         const PluginxxStringView*     args_json,
         const PluginxxStringView*     session_id,
         const PluginxxStringView*     tool_call_id,
@@ -93,8 +93,8 @@ typedef struct AgentxxPluginHookSpec {
     int32_t  point;     ///< AgentxxPluginHookPoint (明确 32 位整型)
     uint32_t _reserved; ///< 8 字节补齐
     void*(PLUGINXX_CALL* hook_start)(
-        void*                              user_data,
-        int32_t                            point,
+        void*                         user_data,
+        int32_t                       point,
         const PluginxxStringView*     node_input_json,
         const PluginxxOperatorNotify* notify,
         PluginxxString*               error_out
@@ -115,7 +115,7 @@ typedef struct AgentxxPluginToolsIface {
     /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 0 成功, 非 0 冲突或失败
     int32_t(PLUGINXX_CALL* register_tool)(
-        const PluginxxHost*     host,
+        const PluginxxHost*          host,
         const AgentxxPluginToolSpec* spec
     );
     /// 注销工具 (按名称)
@@ -132,7 +132,7 @@ typedef struct AgentxxPluginToolsIface {
         const PluginxxStringView* args_json,
         const PluginxxStringView* session_id,
         PluginxxOperatorCallback  cb,
-        void*                          ud,
+        void*                     ud,
         PluginxxString*           error_out
     );
     void(PLUGINXX_CALL* op_cancel)(PluginxxOperatorHandle* op);
@@ -201,7 +201,7 @@ typedef struct AgentxxPluginPermissionIface {
     /// - 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略
     /// `return`: 0 成功, 非 0 不支持或失败
     int32_t(PLUGINXX_CALL* register_tool_permission)(
-        const PluginxxHost*               host,
+        const PluginxxHost*                    host,
         const AgentxxPluginToolPermissionSpec* spec
     );
     /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由宿主自动撤销, 一般无需手动调用)
@@ -226,7 +226,7 @@ typedef struct AgentxxPluginPermissionIface {
     ///
     /// `return`: 0 成功; 非 0 不支持或失败 (失败时调用方应跳过过滤, 按原行为处理)
     int32_t(PLUGINXX_CALL* check_paths)(
-        const PluginxxHost*                host,
+        const PluginxxHost*                     host,
         const AgentxxPluginPermissionPathQuery* query,
         int32_t*                                out_decisions
     );
@@ -242,7 +242,7 @@ typedef struct AgentxxPluginHooksIface {
     uint32_t struct_size;
 
     int32_t(PLUGINXX_CALL* register_hook)(
-        const PluginxxHost*     host,
+        const PluginxxHost*          host,
         const AgentxxPluginHookSpec* spec
     );
     int32_t(PLUGINXX_CALL* unregister_hook)(const PluginxxHost* host, int32_t point);
@@ -261,14 +261,14 @@ typedef struct AgentxxPluginSessionIface {
     int32_t(PLUGINXX_CALL* get_share_store)(
         const PluginxxHost*       host,
         const PluginxxStringView* session_id,
-        int64_t                        id,
+        int64_t                   id,
         PluginxxString*           out
     );
     void(PLUGINXX_CALL* emit_message_tip)(
         const PluginxxHost*       host,
         const PluginxxStringView* session_id,
         const PluginxxStringView* text,
-        int32_t                        level
+        int32_t                   level
     );
     int64_t(PLUGINXX_CALL* add_share_store)(
         const PluginxxHost*       host,
@@ -286,10 +286,7 @@ typedef struct AgentxxPluginModelIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
     uint32_t struct_size;
     /// 宿主主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
-    int32_t(PLUGINXX_CALL* get_config)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_config)(const PluginxxHost* host, PluginxxString* out);
 } AgentxxPluginModelIface;
 
 /* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
@@ -301,10 +298,7 @@ typedef struct AgentxxPluginPromptIface {
     int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
     uint32_t struct_size;
 
-    int32_t(PLUGINXX_CALL* get_prompt)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_prompt)(const PluginxxHost* host, PluginxxString* out);
     int32_t(PLUGINXX_CALL* set_prompt)(
         const PluginxxHost*       host,
         const PluginxxStringView* prompt_json
@@ -344,10 +338,7 @@ typedef struct AgentxxPluginResourcesIface {
         const PluginxxHost*       host,
         const PluginxxStringView* name_space
     );
-    int32_t(PLUGINXX_CALL* get_own_resources)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_own_resources)(const PluginxxHost* host, PluginxxString* out);
 } AgentxxPluginResourcesIface;
 
 /* ==================== 接口表: 执行图 (agentxx.agent.graph) ==================== */
@@ -364,7 +355,7 @@ typedef struct AgentxxPluginResourcesIface {
 /// - 快同步节点: 算完 → done → 返回 NULL; 锚定协程/自管异步: 返回 op 句柄
 /// - 失败: 返回 NULL 且 *error_out 输出错误 (host->alloc 分配)
 typedef void*(PLUGINXX_CALL* AgentxxPluginGraphNodeRunStartFn)(
-    void*                              user_data,
+    void*                         user_data,
     const PluginxxStringView*     node_name,
     const PluginxxStringView*     config_json,
     const PluginxxStringView*     state_json,
@@ -378,7 +369,7 @@ typedef void(PLUGINXX_CALL* AgentxxPluginGraphNodeRunCancelFn)(void* user_data, 
 
 /// 插件节点类型注册规格
 typedef struct AgentxxPluginGraphNodeTypeSpec {
-    PluginxxStringView           type;       ///< 节点类型名 (须全局唯一)
+    PluginxxStringView                type;       ///< 节点类型名 (须全局唯一)
     AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (操作契约)
     AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
     void*                             user_data;  ///< 透传给 run_start/run_cancel
@@ -402,7 +393,7 @@ typedef struct AgentxxPluginGraphIface {
     /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 类型名冲突返回非 0
     int32_t(PLUGINXX_CALL* register_node_type)(
-        const PluginxxHost*              host,
+        const PluginxxHost*                   host,
         const AgentxxPluginGraphNodeTypeSpec* spec
     );
     /// 注销节点类型 (按类型名; 卸载时宿主自动清理)
@@ -412,15 +403,9 @@ typedef struct AgentxxPluginGraphIface {
         const PluginxxStringView* type
     );
     /// 获取当前执行图 JSON 定义 (host->alloc; 插件可基于此判断后 set 修改)
-    int32_t(PLUGINXX_CALL* get_graph_json)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_graph_json)(const PluginxxHost* host, PluginxxString* out);
     /// 获取当前执行图名称 (host->alloc; 默认 "agentxx.default")
-    int32_t(PLUGINXX_CALL* get_graph_name)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_graph_name)(const PluginxxHost* host, PluginxxString* out);
     /// 设置执行图 JSON 定义 (覆盖; 宿主构建 engine 前生效)
     /// `return`: JSON 非法返回非 0 (host 侧解析失败)
     int32_t(PLUGINXX_CALL* set_graph_json)(

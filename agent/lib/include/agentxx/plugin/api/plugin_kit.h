@@ -100,23 +100,23 @@ using pluginxx::yield;
 
 /// agent 侧接口表聚合 (一次查询; 成员为 NULL 表示宿主未实现该接口)
 struct AgentIfaces {
-    const AgentxxPluginToolsIface*        tools        = nullptr; ///< "agentxx.agent.tools"
-    const AgentxxPluginPermissionIface*   permission   = nullptr; ///< "agentxx.agent.permission"
-    const AgentxxPluginHooksIface*        hooks        = nullptr; ///< "agentxx.agent.hooks"
-    const PluginxxEventsIface*       events       = nullptr; ///< "pluginxx.events"
-    const PluginxxCapabilitiesIface* capabilities = nullptr; ///< "pluginxx.capabilities"
-    const PluginxxSchedulerIface*    scheduler    = nullptr; ///< "pluginxx.scheduler"
-    const AgentxxPluginSessionIface*      session      = nullptr; ///< "agentxx.agent.session"
-    const PluginxxPluginsIface*            plugins      = nullptr; ///< "pluginxx.plugins"
-    const PluginxxConfigIface*       config       = nullptr; ///< "pluginxx.config"
-    const AgentxxPluginPromptIface*       prompt       = nullptr; ///< "agentxx.agent.prompt"
-    const PluginxxJsonIface*         json         = nullptr; ///< "pluginxx.json"
-    const PluginxxLogIface*          log          = nullptr; ///< "pluginxx.log"
-    const AgentxxPluginResourcesIface*    resources    = nullptr; ///< "agentxx.agent.resources"
-    const AgentxxPluginModelIface*        model        = nullptr; ///< "agentxx.agent.model"
-    const PluginxxCancelIface*       cancel       = nullptr; ///< "pluginxx.cancel"
-    const AgentxxPluginGraphIface*        graph        = nullptr; ///< "agentxx.agent.graph"
-    const PluginxxTasksIface*        tasks        = nullptr; ///< "pluginxx.tasks"
+    const AgentxxPluginToolsIface*      tools        = nullptr; ///< "agentxx.agent.tools"
+    const AgentxxPluginPermissionIface* permission   = nullptr; ///< "agentxx.agent.permission"
+    const AgentxxPluginHooksIface*      hooks        = nullptr; ///< "agentxx.agent.hooks"
+    const PluginxxEventsIface*          events       = nullptr; ///< "pluginxx.events"
+    const PluginxxCapabilitiesIface*    capabilities = nullptr; ///< "pluginxx.capabilities"
+    const PluginxxSchedulerIface*       scheduler    = nullptr; ///< "pluginxx.scheduler"
+    const AgentxxPluginSessionIface*    session      = nullptr; ///< "agentxx.agent.session"
+    const PluginxxPluginsIface*         plugins      = nullptr; ///< "pluginxx.plugins"
+    const PluginxxConfigIface*          config       = nullptr; ///< "pluginxx.config"
+    const AgentxxPluginPromptIface*     prompt       = nullptr; ///< "agentxx.agent.prompt"
+    const PluginxxJsonIface*            json         = nullptr; ///< "pluginxx.json"
+    const PluginxxLogIface*             log          = nullptr; ///< "pluginxx.log"
+    const AgentxxPluginResourcesIface*  resources    = nullptr; ///< "agentxx.agent.resources"
+    const AgentxxPluginModelIface*      model        = nullptr; ///< "agentxx.agent.model"
+    const PluginxxCancelIface*          cancel       = nullptr; ///< "pluginxx.cancel"
+    const AgentxxPluginGraphIface*      graph        = nullptr; ///< "agentxx.agent.graph"
+    const PluginxxTasksIface*           tasks        = nullptr; ///< "pluginxx.tasks"
     /// "pluginxx.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
 
@@ -131,22 +131,15 @@ struct AgentIfaces {
             host,
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
         );
-        f.hooks = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
-        f.events
-            = queryInterface<PluginxxEventsIface>(host, PLUGINXX_IFACE_EVENTS);
-        f.capabilities = queryInterface<PluginxxCapabilitiesIface>(
-            host,
-            PLUGINXX_IFACE_CAPABILITIES
-        );
-        f.scheduler = queryInterface<PluginxxSchedulerIface>(
-            host,
-            PLUGINXX_IFACE_SCHEDULER
-        );
+        f.hooks  = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
+        f.events = queryInterface<PluginxxEventsIface>(host, PLUGINXX_IFACE_EVENTS);
+        f.capabilities
+            = queryInterface<PluginxxCapabilitiesIface>(host, PLUGINXX_IFACE_CAPABILITIES);
+        f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);
         f.session
             = queryInterface<AgentxxPluginSessionIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SESSION);
         f.plugins = queryInterface<PluginxxPluginsIface>(host, PLUGINXX_IFACE_PLUGINS);
-        f.config
-            = queryInterface<PluginxxConfigIface>(host, PLUGINXX_IFACE_CONFIG);
+        f.config  = queryInterface<PluginxxConfigIface>(host, PLUGINXX_IFACE_CONFIG);
         f.prompt
             = queryInterface<AgentxxPluginPromptIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT);
         f.json      = queryInterface<PluginxxJsonIface>(host, PLUGINXX_IFACE_JSON);
@@ -155,15 +148,12 @@ struct AgentIfaces {
             host,
             AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES
         );
-        f.model = queryInterface<AgentxxPluginModelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MODEL);
-        f.cancel
-            = queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL);
-        f.graph = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
-        f.tasks = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
-        f.coroutineRuntime = queryInterface<PluginxxCoroutineRuntimeIface>(
-            host,
-            PLUGINXX_IFACE_COROUTINE_RUNTIME
-        );
+        f.model  = queryInterface<AgentxxPluginModelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MODEL);
+        f.cancel = queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL);
+        f.graph  = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
+        f.tasks  = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
+        f.coroutineRuntime
+            = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
         return f;
     }
 };
@@ -382,7 +372,7 @@ public:
         if (!host || !iface.config || !iface.config->get_tool_prompt) {
             return res;
         }
-        auto                toolSv = PluginStringView::from(tool.data(), tool.size());
+        auto           toolSv = PluginStringView::from(tool.data(), tool.size());
         PluginxxString s{nullptr, 0};
         iface.config->get_tool_prompt(host, &toolSv, &s);
         if (!s.data) {
@@ -490,26 +480,26 @@ using pluginxx::detail::startBridgedRoot;
 using pluginxx::detail::YieldAwaiter;
 
 struct CallToolState {
-    const PluginxxHost*       host  = nullptr;
+    const PluginxxHost*            host  = nullptr;
     const AgentxxPluginToolsIface* tools = nullptr;
     /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
-    PollOneBridge*               bridge = nullptr;
-    std::string                  name;
-    std::string                  argsJson;
-    std::string                  threadId;
-    PluginxxOperatorHandle* opHandle = nullptr;
-    int32_t                      status   = PLUGINXX_OPERATOR_OK;
-    std::string                  payload;
-    std::string                  startError;
-    std::atomic<AwaiterState>    state{AwaiterState::INIT};
-    void*                        coroAddr = nullptr;
+    PollOneBridge*            bridge = nullptr;
+    std::string               name;
+    std::string               argsJson;
+    std::string               threadId;
+    PluginxxOperatorHandle*   opHandle = nullptr;
+    int32_t                   status   = PLUGINXX_OPERATOR_OK;
+    std::string               payload;
+    std::string               startError;
+    std::atomic<AwaiterState> state{AwaiterState::INIT};
+    void*                     coroAddr = nullptr;
 };
 
 struct CallToolAwaiter {
     std::shared_ptr<CallToolState> st;
 
     CallToolAwaiter(
-        const PluginxxHost*       in_host,
+        const PluginxxHost*            in_host,
         const AgentxxPluginToolsIface* in_tools,
         std::string_view               in_name,
         std::string_view               in_args,
@@ -534,11 +524,11 @@ struct CallToolAwaiter {
         st->coroAddr = h.address();
         st->state.store(AwaiterState::CALLING, std::memory_order_release);
 
-        auto*               holder = new std::shared_ptr<CallToolState>(st);
+        auto*          holder = new std::shared_ptr<CallToolState>(st);
         PluginxxString err{nullptr, 0};
-        auto                nameSv = PluginStringView::from(st->name.data(), st->name.size());
-        auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-        auto tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
+        auto           nameSv = PluginStringView::from(st->name.data(), st->name.size());
+        auto           argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
+        auto           tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
 
         st->opHandle = st->tools->call_tool_async(
             st->host,
@@ -686,7 +676,7 @@ inline void tool(
     spec.flags              = flags;
     spec._reserved          = 0;
 
-    spec.execute_start = [](void*                              user_data,
+    spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
                             const PluginxxStringView*     thread_id,
                             const PluginxxStringView*     tool_call_id,
@@ -805,7 +795,7 @@ inline void fast_tool(
     spec.flags              = flags;
     spec._reserved          = 0;
 
-    spec.execute_start = [](void*                              user_data,
+    spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
                             const PluginxxStringView*     thread_id,
                             const PluginxxStringView*     tool_call_id,
@@ -888,16 +878,16 @@ inline void blocking_tool(
         = ctx.storeShim(std::make_unique<BlockShim>(BlockShim{&ctx, std::forward<BlockFn>(fn)}));
 
     struct Job {
-        BlockShim*                   shim = nullptr;
+        BlockShim*              shim = nullptr;
         PluginxxOperatorNotify  notify{};
-        std::string                  args;
-        std::string                  tid;
-        std::string                  tcid;
-        std::string                  workDir;
-        std::string                  argsJson;
-        std::string                  resultPayload;
-        std::string                  errorPayload;
-        bool                         isCancelled   = false;
+        std::string             args;
+        std::string             tid;
+        std::string             tcid;
+        std::string             workDir;
+        std::string             argsJson;
+        std::string             resultPayload;
+        std::string             errorPayload;
+        bool                    isCancelled   = false;
         PluginxxOperatorHandle* offloadHandle = nullptr;
     };
 
@@ -913,7 +903,7 @@ inline void blocking_tool(
     spec.flags              = flags;
     spec._reserved          = 0;
 
-    spec.execute_start = [](void*                              user_data,
+    spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
                             const PluginxxStringView*     thread_id,
                             const PluginxxStringView*     tool_call_id,
@@ -958,8 +948,7 @@ inline void blocking_tool(
             && shim->ctx->iface.scheduler->offload) {
             job->offloadHandle = shim->ctx->iface.scheduler->offload(
                 shim->ctx->host,
-                [](void* ud, const PluginxxCancelToken* token, PluginxxString* err_out
-                ) -> void* {
+                [](void* ud, const PluginxxCancelToken* token, PluginxxString* err_out) -> void* {
                     (void)err_out;
                     auto* j = static_cast<Job*>(ud);
                     try {
@@ -1021,8 +1010,8 @@ inline void blocking_tool(
                 },
                 [](void* ud, int32_t status, void* res, const PluginxxStringView* err) {
                     (void)res;
-                    auto*                   j       = static_cast<Job*>(ud);
-                    int32_t                 st      = status;
+                    auto*              j       = static_cast<Job*>(ud);
+                    int32_t            st      = status;
                     PluginxxStringView payload = PluginStringView::from(nullptr, 0);
 
                     if (!PluginStringView::empty(err)) {
@@ -1150,8 +1139,7 @@ namespace detail {
 /// 只读 Job 的取消标志与实例 CancelRegistry, 生命周期与该 polled 根相同。
 /// 模板参数是 `polled_tool` 内的局部 Job 类型 (在其完整之后实例化)。
 template<typename Job>
-inline int32_t PLUGINXX_CALL
-    polledJobTokenIsRequestedAbi(const PluginxxCancelToken* token) {
+inline int32_t PLUGINXX_CALL polledJobTokenIsRequestedAbi(const PluginxxCancelToken* token) {
     auto* job = (token && token->host_ud) ? static_cast<const Job*>(token->host_ud) : nullptr;
     return (job && job->cancelled()) ? 1 : 0;
 }
@@ -1259,7 +1247,7 @@ inline void polled_tool(
         PolledShim*                         shim   = nullptr;
         detail::PollOneBridge*              bridge = nullptr;
         std::shared_ptr<detail::PolledRoot> root;
-        PluginxxOperatorNotify         notify{};
+        PluginxxOperatorNotify              notify{};
         detail::RootRequest                 request;
         std::string                         tid;     ///< 会话标识 (= request.sessionId)
         std::string                         args;    ///< 工具参数 JSON
@@ -1299,7 +1287,7 @@ inline void polled_tool(
     spec.flags              = flags;
     spec._reserved          = 0;
 
-    spec.execute_start = [](void*                              user_data,
+    spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
                             const PluginxxStringView*     thread_id,
                             const PluginxxStringView*     tool_call_id,
@@ -1434,8 +1422,8 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     spec._reserved = 0;
     spec.user_data = shim;
 
-    spec.hook_start = [](void*                              user_data,
-                         int32_t                            pt,
+    spec.hook_start = [](void*                         user_data,
+                         int32_t                       pt,
                          const PluginxxStringView*     node_input_json,
                          const PluginxxOperatorNotify* notify,
                          PluginxxString*               error_out) -> void* {
@@ -1569,7 +1557,7 @@ inline int32_t
     spec.config_schema_json = PluginStringView::from(configSchema.data(), configSchema.size());
     spec.user_data          = shim;
 
-    spec.run_start = [](void*                              user_data,
+    spec.run_start = [](void*                         user_data,
                         const PluginxxStringView*     node_name,
                         const PluginxxStringView*     config_json,
                         const PluginxxStringView*     state_json,
@@ -1704,7 +1692,7 @@ struct ToolPermissionSpec {
 
 /// 声明工具权限 (工具注册后调用); 返回 C ABI 状态码 (0 成功)
 inline int32_t registerToolPermission(
-    const PluginxxHost*            host,
+    const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
     const ToolPermissionSpec&           spec
 ) {
@@ -1794,7 +1782,7 @@ enum class PathDecision : int32_t {
 /// - `return` 与 [paths] 等长的判定数组; 宿主不支持或调用失败时返回**空数组**
 ///   (调用方应跳过过滤按原行为处理, 而不是把路径当成拒绝)
 inline std::vector<PathDecision> checkPathDecisions(
-    const PluginxxHost*            host,
+    const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
     PermissionScope                     scope,
     std::string_view                    sessionId,
@@ -1863,7 +1851,7 @@ inline PathDecision checkPathDecision(
 /// - 内部按 [batchSize] 分批调用宿主 (默认 512 项, 避免长占宿主 io 线程),
 ///   并对相同路径去重后查询
 inline std::vector<uint8_t> filterPathPermissions(
-    const PluginxxHost*            host,
+    const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
     PermissionScope                     scope,
     std::string_view                    sessionId,
@@ -1939,13 +1927,13 @@ inline std::vector<uint8_t> filterPathPermissions(
 /* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
 
 inline PluginxxString call_tool_blocking(
-    const PluginxxHost*           host,
-    const AgentxxPluginToolsIface*     tools,
-    const PluginxxSchedulerIface* sched,
-    std::string_view                   name,
-    std::string_view                   args_json,
-    std::string_view                   thread_id,
-    PluginxxString*               error_out
+    const PluginxxHost*            host,
+    const AgentxxPluginToolsIface* tools,
+    const PluginxxSchedulerIface*  sched,
+    std::string_view               name,
+    std::string_view               args_json,
+    std::string_view               thread_id,
+    PluginxxString*                error_out
 ) {
     if (!host || !tools || !tools->call_tool_async) {
         if (error_out) {
@@ -2038,7 +2026,7 @@ struct ToolRenderOutput {
 /// 注册基于回调函数的工具特化渲染器 (<key, 渲染func>)
 template<typename Fn>
 inline int32_t registerToolRenderer(
-    const PluginxxHost*                             host,
+    const PluginxxHost*                                  host,
     const AgentxxClientUiIface*                          ui,
     std::string_view                                     toolName,
     Fn&&                                                 fn,
@@ -2051,7 +2039,7 @@ inline int32_t registerToolRenderer(
 
     struct RenderShim {
         const PluginxxHost* host = nullptr;
-        DecayedFn                fn;
+        DecayedFn           fn;
     };
 
     auto* shim = new RenderShim{host, std::forward<Fn>(fn)};
@@ -2105,7 +2093,7 @@ inline int32_t registerToolRenderer(
 
 /// 注册基于预设模版的工具特化渲染器
 inline int32_t registerToolTemplate(
-    const PluginxxHost*    host,
+    const PluginxxHost*         host,
     const AgentxxClientUiIface* ui,
     std::string_view            toolName,
     std::string_view            displayName,
@@ -2236,10 +2224,10 @@ private:
 class ClientPluginBase {
 public:
 
-    const PluginxxHost* host = nullptr;
-    ClientIfaces             iface{};
-    Logger                   log;
-    kit::ActionController    actions;
+    const PluginxxHost*   host = nullptr;
+    ClientIfaces          iface{};
+    Logger                log;
+    kit::ActionController actions;
 
     ClientPluginBase() = default;
 
@@ -2375,8 +2363,8 @@ private:
 /// client 侧 create 阶段异常上报 (client 日志接口表为独立类型)
 inline void logClientCreateFailure(
     const PluginxxHost* host,
-    std::string_view         plugin,
-    std::string_view         msg
+    std::string_view    plugin,
+    std::string_view    msg
 ) noexcept {
     if (!host || !host->vtable || !host->vtable->query_interface) {
         return;
@@ -2410,10 +2398,10 @@ inline void logClientCreateFailure(
 /// Client 侧只导出 start/stop 两个入口 (与
 /// [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 对称)。
 #define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn) \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(  \
-        void*                              plugin_ctx,                   \
-        const PluginxxOperatorNotify* notify,                       \
-        PluginxxString*               err                           \
+    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(        \
+        void*                         plugin_ctx,                        \
+        const PluginxxOperatorNotify* notify,                            \
+        PluginxxString*               err                                \
     ) {                                                                  \
         auto* ctx = static_cast<CtxType*>(plugin_ctx);                   \
         return agentxx::plugin::detail::callLifecycleEntry(              \
@@ -2427,10 +2415,10 @@ inline void logClientCreateFailure(
             }                                                            \
         );                                                               \
     }                                                                    \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_stop(   \
-        void*                              plugin_ctx,                   \
-        const PluginxxOperatorNotify* notify,                       \
-        PluginxxString*               err                           \
+    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_stop(         \
+        void*                         plugin_ctx,                        \
+        const PluginxxOperatorNotify* notify,                            \
+        PluginxxString*               err                                \
     ) {                                                                  \
         auto* ctx = static_cast<CtxType*>(plugin_ctx);                   \
         return agentxx::plugin::detail::callLifecycleEntry(              \
@@ -2451,74 +2439,74 @@ inline void logClientCreateFailure(
 /// `void*(CtxType&, const PluginxxOperatorNotify*, PluginxxString* error_out)`;
 /// start 里做 UI 项/命令/订阅注册, stop 里撤销插件自管资源 (线程/定时器/订阅)。
 /// 纯 UI 插件 (无 agent 侧入口) 只导出 get_info + 下列四个入口即可。
-#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)             \
-    extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo*                         \
-        agentxx_plugin_client_get_info(void) {                                              \
-        static const AgentxxClientPluginInfo info{                                          \
-            AGENTXX_CLIENT_PLUGIN_API_VERSION,                                              \
-            0,                                                                              \
-            agentxx::plugin::PluginStringView::fromCstr(Name),                              \
-            agentxx::plugin::PluginStringView::fromCstr(Ver),                               \
-            agentxx::plugin::PluginStringView::fromCstr(Desc),                              \
-        };                                                                                  \
-        return &info;                                                                       \
-    }                                                                                       \
-    extern "C" PLUGINXX_EXPORT int32_t                                                \
-        agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {    \
-        if (!host || !plugin_ctx) {                                                         \
-            return -1;                                                                      \
-        }                                                                                   \
-        try {                                                                               \
-            auto ctx = std::make_unique<CtxType>();                                         \
-            ctx->init(host);                                                                \
-            *plugin_ctx = ctx.release();                                                    \
-            return 0;                                                                       \
-        } catch (const std::exception& e) {                                                 \
-            agentxx::plugin::logClientCreateFailure(host, Name, e.what());                  \
-        } catch (...) {                                                                     \
-            agentxx::plugin::logClientCreateFailure(host, Name, "unknown exception");       \
-        }                                                                                   \
-        return -1;                                                                          \
-    }                                                                                       \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(                     \
-        void*                              plugin_ctx,                                      \
-        const PluginxxOperatorNotify* notify,                                          \
-        PluginxxString*               err                                              \
-    ) {                                                                                     \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
-        return agentxx::plugin::detail::callLifecycleEntry(                                 \
-            ctx ? ctx->host : nullptr,                                                      \
-            plugin_ctx,                                                                     \
-            notify,                                                                         \
-            err,                                                                            \
-            "client plugin start",                                                          \
-            [&]() -> void* {                                                                \
-                return (StartFn)(*ctx, notify, err);                                        \
-            }                                                                               \
-        );                                                                                  \
-    }                                                                                       \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_stop(                      \
-        void*                              plugin_ctx,                                      \
-        const PluginxxOperatorNotify* notify,                                          \
-        PluginxxString*               err                                              \
-    ) {                                                                                     \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
-        return agentxx::plugin::detail::callLifecycleEntry(                                 \
-            ctx ? ctx->host : nullptr,                                                      \
-            plugin_ctx,                                                                     \
-            notify,                                                                         \
-            err,                                                                            \
-            "client plugin stop",                                                           \
-            [&]() -> void* {                                                                \
-                return (StopFn)(*ctx, notify, err);                                         \
-            }                                                                               \
-        );                                                                                  \
-    }                                                                                       \
-    extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) { \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                      \
-        if (ctx) {                                                                          \
-            delete ctx;                                                                     \
-        }                                                                                   \
+#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)                   \
+    extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void \
+    ) {                                                                                           \
+        static const AgentxxClientPluginInfo info{                                                \
+            AGENTXX_CLIENT_PLUGIN_API_VERSION,                                                    \
+            0,                                                                                    \
+            agentxx::plugin::PluginStringView::fromCstr(Name),                                    \
+            agentxx::plugin::PluginStringView::fromCstr(Ver),                                     \
+            agentxx::plugin::PluginStringView::fromCstr(Desc),                                    \
+        };                                                                                        \
+        return &info;                                                                             \
+    }                                                                                             \
+    extern "C" PLUGINXX_EXPORT int32_t                                                            \
+        agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {               \
+        if (!host || !plugin_ctx) {                                                               \
+            return -1;                                                                            \
+        }                                                                                         \
+        try {                                                                                     \
+            auto ctx = std::make_unique<CtxType>();                                               \
+            ctx->init(host);                                                                      \
+            *plugin_ctx = ctx.release();                                                          \
+            return 0;                                                                             \
+        } catch (const std::exception& e) {                                                       \
+            agentxx::plugin::logClientCreateFailure(host, Name, e.what());                        \
+        } catch (...) {                                                                           \
+            agentxx::plugin::logClientCreateFailure(host, Name, "unknown exception");             \
+        }                                                                                         \
+        return -1;                                                                                \
+    }                                                                                             \
+    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(                                 \
+        void*                         plugin_ctx,                                                 \
+        const PluginxxOperatorNotify* notify,                                                     \
+        PluginxxString*               err                                                         \
+    ) {                                                                                           \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
+        return agentxx::plugin::detail::callLifecycleEntry(                                       \
+            ctx ? ctx->host : nullptr,                                                            \
+            plugin_ctx,                                                                           \
+            notify,                                                                               \
+            err,                                                                                  \
+            "client plugin start",                                                                \
+            [&]() -> void* {                                                                      \
+                return (StartFn)(*ctx, notify, err);                                              \
+            }                                                                                     \
+        );                                                                                        \
+    }                                                                                             \
+    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_stop(                                  \
+        void*                         plugin_ctx,                                                 \
+        const PluginxxOperatorNotify* notify,                                                     \
+        PluginxxString*               err                                                         \
+    ) {                                                                                           \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
+        return agentxx::plugin::detail::callLifecycleEntry(                                       \
+            ctx ? ctx->host : nullptr,                                                            \
+            plugin_ctx,                                                                           \
+            notify,                                                                               \
+            err,                                                                                  \
+            "client plugin stop",                                                                 \
+            [&]() -> void* {                                                                      \
+                return (StopFn)(*ctx, notify, err);                                               \
+            }                                                                                     \
+        );                                                                                        \
+    }                                                                                             \
+    extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {             \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
+        if (ctx) {                                                                                \
+            delete ctx;                                                                           \
+        }                                                                                         \
     }
 } // namespace plugin
 } // namespace agentxx

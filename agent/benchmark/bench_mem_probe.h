@@ -115,8 +115,8 @@ inline std::string processExecutablePath(uint32_t pid = 0) {
     std::string out;
     HANDLE      h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, actualPid);
     if (h) {
-        char buf[MAX_PATH * 2] = {0};
-        DWORD len              = MAX_PATH;
+        char  buf[MAX_PATH * 2] = {0};
+        DWORD len               = MAX_PATH;
         if (::QueryFullProcessImageNameA(h, 0, buf, &len)) {
             out.assign(buf, len);
             std::replace(out.begin(), out.end(), '\\', '/');
@@ -126,11 +126,8 @@ inline std::string processExecutablePath(uint32_t pid = 0) {
     return out;
 #else
     char    buf[4096] = {0};
-    ssize_t n         = ::readlink(
-        ("/proc/" + std::to_string(actualPid) + "/exe").c_str(),
-        buf,
-        sizeof(buf) - 1
-    );
+    ssize_t n
+        = ::readlink(("/proc/" + std::to_string(actualPid) + "/exe").c_str(), buf, sizeof(buf) - 1);
     if (n <= 0) {
         return {};
     }
@@ -146,7 +143,6 @@ inline std::string processExecutablePath(uint32_t pid = 0) {
 // ---------------------------------------------------------------------------
 // 1. 进程内存细项
 // ---------------------------------------------------------------------------
-
 
 #if XX_IS_WIN_D
 
@@ -208,8 +204,8 @@ inline ProcMemDetail sampleProcMemDetail(uint32_t pid = 0) {
 
     auto parseKb = [](std::string_view value) -> double {
         // 输入形如 "  12345 kB"; 取数字部分
-        double      num = 0.0;
-        std::string tmp(value);
+        double             num = 0.0;
+        std::string        tmp(value);
         std::istringstream iss(tmp);
         iss >> num;
         return num / 1024.0; // kB -> MB
@@ -234,7 +230,7 @@ inline ProcMemDetail sampleProcMemDetail(uint32_t pid = 0) {
         } else if (line.rfind("RssFile:", 0) == 0) {
             out.fileMB = parseKb(line.substr(8));
         } else if (line.rfind("RssShmem:", 0) == 0) {
-            out.shmemMB  = parseKb(line.substr(9));
+            out.shmemMB    = parseKb(line.substr(9));
             out.privateMB += out.shmemMB;
         } else if (line.rfind("Threads:", 0) == 0) {
             std::istringstream vs(line.substr(8));
@@ -332,7 +328,7 @@ inline double trimReclaimableMB() {
 #else
     auto before = sampleProcMemDetailMedian(0, 3, 10).rssMB;
     ::malloc_trim(0);
-    auto  after  = sampleProcMemDetailMedian(0, 3, 10).rssMB;
+    auto   after = sampleProcMemDetailMedian(0, 3, 10).rssMB;
     double delta = before - after;
     return (delta > 0.0) ? delta : 0.0;
 #endif
@@ -354,12 +350,12 @@ struct MemKindSummary {
 inline std::map<MemRegionKind, MemKindSummary> summarizeByKind(const ModuleMemBreakdown& bd) {
     std::map<MemRegionKind, MemKindSummary> out;
     for (const auto& row : bd.rows) {
-        auto& s = out[row.kind];
-        s.rssMB += row.rssMB;
-        s.pssMB += row.pssMB;
+        auto& s           = out[row.kind];
+        s.rssMB          += row.rssMB;
+        s.pssMB          += row.pssMB;
         s.privateDirtyMB += row.privateDirtyMB;
-        s.sizeMB += row.sizeMB;
-        s.regions += row.regions;
+        s.sizeMB         += row.sizeMB;
+        s.regions        += row.regions;
     }
     return out;
 }
@@ -379,7 +375,7 @@ inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 
 
 /// 依据映射路径判断归属类别
 inline void classifyRegion(
-    std::string_view path,
+    std::string_view   path,
     const std::string& exePath,
     MemRegionKind&     kind,
     std::string&       displayName
@@ -400,13 +396,15 @@ inline void classifyRegion(
         displayName = "[stack]";
         return;
     }
-    if (path.rfind("[vdso", 0) == 0 || path.rfind("[vvar", 0) == 0 || path.rfind("[vsyscall", 0) == 0) {
+    if (path.rfind("[vdso", 0) == 0 || path.rfind("[vvar", 0) == 0
+        || path.rfind("[vsyscall", 0) == 0) {
         kind        = MemRegionKind::Vdso;
         displayName = std::string(path);
         return;
     }
     if (path.rfind("/dev/shm/", 0) == 0 || path.rfind("/memfd:", 0) == 0
-        || path.rfind("memfd:", 0) == 0 || path.find("/SYSV", path.size() > 8 ? path.size() - 8 : 0) != std::string::npos) {
+        || path.rfind("memfd:", 0) == 0
+        || path.find("/SYSV", path.size() > 8 ? path.size() - 8 : 0) != std::string::npos) {
         kind        = MemRegionKind::Shm;
         displayName = std::string(path);
         return;
@@ -471,7 +469,7 @@ inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 
     ModuleMemBreakdown bd;
     uint32_t           actualPid = normalizePid(pid);
     // 子进程同样解析 exe 路径: 否则其可执行文件段会被误判为"数据文件"
-    std::string        exePath   = processExecutablePath(actualPid);
+    std::string exePath = processExecutablePath(actualPid);
 
     std::ifstream ifs("/proc/" + std::to_string(actualPid) + "/smaps");
     if (!ifs.is_open()) {
@@ -492,40 +490,39 @@ inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 
             ModuleMemRow copy = *row;
             agg.emplace(key, copy);
         } else {
-            auto& t = it->second;
-            t.sizeMB += row->sizeMB;
-            t.rssMB += row->rssMB;
-            t.pssMB += row->pssMB;
+            auto& t           = it->second;
+            t.sizeMB         += row->sizeMB;
+            t.rssMB          += row->rssMB;
+            t.pssMB          += row->pssMB;
             t.privateDirtyMB += row->privateDirtyMB;
             t.privateCleanMB += row->privateCleanMB;
-            t.sharedMB += row->sharedMB;
-            t.anonMB += row->anonMB;
-            t.regions += row->regions;
+            t.sharedMB       += row->sharedMB;
+            t.anonMB         += row->anonMB;
+            t.regions        += row->regions;
         }
     };
 
-    std::string        line;
-    ModuleMemRow       pendingRow;
+    std::string  line;
+    ModuleMemRow pendingRow;
     while (std::getline(ifs, line)) {
         if (line.empty()) {
             continue;
         }
         // 段头形如 "7f12...-7f13... rw-p 00000000 00:00 0   /path";
         // 属性行形如 "Size:  132 kB" (首个冒号出现在首个空格之前)
-        const auto colonPos = line.find(':');
-        const auto spacePos = line.find(' ');
-        const bool isPropertyLine
-            = (colonPos != std::string::npos)
-              && (spacePos == std::string::npos || colonPos < spacePos);
+        const auto colonPos       = line.find(':');
+        const auto spacePos       = line.find(' ');
+        const bool isPropertyLine = (colonPos != std::string::npos)
+                                    && (spacePos == std::string::npos || colonPos < spacePos);
 
         if (!isPropertyLine) {
             // 段头: "start-end perms offset dev inode  path"
             flushRow(cur);
-            cur = &pendingRow;
+            cur        = &pendingRow;
             pendingRow = ModuleMemRow{};
 
             // 取前 5 个空白分隔字段, 其余为路径
-            size_t pos = 0;
+            size_t pos   = 0;
             int    field = 0;
             while (pos < line.size() && field < 5) {
                 while (pos < line.size() && line[pos] == ' ') {
@@ -546,10 +543,10 @@ inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 
             std::string   displayName;
             MemRegionKind kind = MemRegionKind::Other;
             classifyRegion(path, exePath, kind, displayName);
-            pendingRow.path      = path;
-            pendingRow.name      = displayName;
-            pendingRow.kind      = kind;
-            pendingRow.regions   = 1;
+            pendingRow.path    = path;
+            pendingRow.name    = displayName;
+            pendingRow.kind    = kind;
+            pendingRow.regions = 1;
         } else if (cur != nullptr) {
             // 段属性行: "Key:  value kB"
             std::string_view   key = std::string_view(line).substr(0, colonPos);
@@ -579,7 +576,7 @@ inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 
     flushRow(cur);
 
     for (auto& kv : agg) {
-        auto& row = kv.second;
+        auto& row      = kv.second;
         bd.totalRssMB += row.rssMB;
         bd.totalPssMB += row.pssMB;
         bd.rows.push_back(row);
@@ -592,11 +589,11 @@ inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 
         other.name = fmt::format("[其余 {} 项汇总]", bd.rows.size() - topN);
         other.kind = MemRegionKind::Other;
         for (size_t i = topN; i < bd.rows.size(); ++i) {
-            other.rssMB += bd.rows[i].rssMB;
-            other.pssMB += bd.rows[i].pssMB;
+            other.rssMB          += bd.rows[i].rssMB;
+            other.pssMB          += bd.rows[i].pssMB;
             other.privateDirtyMB += bd.rows[i].privateDirtyMB;
-            other.sizeMB += bd.rows[i].sizeMB;
-            other.regions += bd.rows[i].regions;
+            other.sizeMB         += bd.rows[i].sizeMB;
+            other.regions        += bd.rows[i].regions;
         }
         bd.rows.resize(topN);
         bd.rows.push_back(other);
@@ -704,25 +701,24 @@ public:
 
     /// 记录一个阶段点 (label 建议用英文短标识, 便于报告对比)
     MemPhaseSample& mark(std::string label, std::string note = {}) {
-        auto  now  = std::chrono::steady_clock::now();
-        auto  mem  = sampleProcMemDetailMedian(pid_, 3, 20);
-        double elapsedMs
-            = lastTime_.time_since_epoch().count() == 0
-                  ? 0.0
-                  : std::chrono::duration<double, std::milli>(now - lastTime_).count();
+        auto   now       = std::chrono::steady_clock::now();
+        auto   mem       = sampleProcMemDetailMedian(pid_, 3, 20);
+        double elapsedMs = lastTime_.time_since_epoch().count() == 0
+                               ? 0.0
+                               : std::chrono::duration<double, std::milli>(now - lastTime_).count();
 
         MemPhaseSample s;
-        s.label   = std::move(label);
-        s.note    = std::move(note);
-        s.mem     = mem;
+        s.label     = std::move(label);
+        s.note      = std::move(note);
+        s.mem       = mem;
         s.elapsedMs = elapsedMs;
         if (!samples_.empty()) {
-            const auto& prev    = samples_.back().mem;
-            s.deltaRssMB        = mem.rssMB - prev.rssMB;
-            s.deltaPssMB        = mem.pssMB - prev.pssMB;
-            s.deltaHeapInUseMB  = mem.heapInUseMB - prev.heapInUseMB;
-            s.deltaAnonMB       = mem.anonMB - prev.anonMB;
-            s.deltaPrivateMB    = mem.privateMB - prev.privateMB;
+            const auto& prev   = samples_.back().mem;
+            s.deltaRssMB       = mem.rssMB - prev.rssMB;
+            s.deltaPssMB       = mem.pssMB - prev.pssMB;
+            s.deltaHeapInUseMB = mem.heapInUseMB - prev.heapInUseMB;
+            s.deltaAnonMB      = mem.anonMB - prev.anonMB;
+            s.deltaPrivateMB   = mem.privateMB - prev.privateMB;
         }
         lastTime_ = now;
         samples_.push_back(s);
@@ -738,7 +734,11 @@ public:
         if (samples_.empty()) {
             return;
         }
-        os << fmt::format("  [{}] 分阶段内存 (RSS {:.2f} MB 起)\n", title, samples_.front().mem.rssMB);
+        os << fmt::format(
+            "  [{}] 分阶段内存 (RSS {:.2f} MB 起)\n",
+            title,
+            samples_.front().mem.rssMB
+        );
         os << fmt::format(
             "    {:<24} {:>10} {:>10} {:>10} {:>10} {:>10} {:>8}\n",
             "阶段",
@@ -766,10 +766,10 @@ public:
 
 private:
 
-    uint32_t                                    pid_;
-    std::string                                 side_;
-    std::vector<MemPhaseSample>                 samples_;
-    std::chrono::steady_clock::time_point       lastTime_{};
+    uint32_t                              pid_;
+    std::string                           side_;
+    std::vector<MemPhaseSample>           samples_;
+    std::chrono::steady_clock::time_point lastTime_{};
 };
 
 // ---------------------------------------------------------------------------
@@ -779,7 +779,8 @@ private:
 #if !XX_IS_WIN_D
 
 /// 读取 /proc/<pid>/stat 的 utime/stime (毫秒) 与线程数
-inline bool procCpuTimeMs(uint32_t pid, double& userMs, double& sysMs, uint64_t* threads = nullptr) {
+inline bool
+    procCpuTimeMs(uint32_t pid, double& userMs, double& sysMs, uint64_t* threads = nullptr) {
     std::string content = readWholeFile("/proc/" + std::to_string(normalizePid(pid)) + "/stat");
     if (content.empty()) {
         return false;
@@ -814,11 +815,15 @@ inline bool procCpuTimeMs(uint32_t pid, double& userMs, double& sysMs, uint64_t*
 #endif
 
 /// 采样窗口内的 CPU 细项 (需先调用 [cpuBegin] 获取窗口)
-inline CpuDelta cpuEndDetail(uint32_t pid, uint64_t startUserTicks, uint64_t startSysTicks,
-                             std::chrono::steady_clock::time_point startTime) {
+inline CpuDelta cpuEndDetail(
+    uint32_t                              pid,
+    uint64_t                              startUserTicks,
+    uint64_t                              startSysTicks,
+    std::chrono::steady_clock::time_point startTime
+) {
     CpuDelta d;
-    auto     now  = std::chrono::steady_clock::now();
-    d.wallMs      = std::chrono::duration<double, std::milli>(now - startTime).count();
+    auto     now = std::chrono::steady_clock::now();
+    d.wallMs     = std::chrono::duration<double, std::milli>(now - startTime).count();
 #if XX_IS_WIN_D
     HANDLE h = isSelfPid(pid) ? ::GetCurrentProcess()
                               : ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
@@ -827,7 +832,8 @@ inline CpuDelta cpuEndDetail(uint32_t pid, uint64_t startUserTicks, uint64_t sta
     }
     FILETIME ftCreation{}, ftExit{}, ftKernel{}, ftUser{};
     if (::GetProcessTimes(h, &ftCreation, &ftExit, &ftKernel, &ftUser)) {
-        uint64_t k = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
+        uint64_t k
+            = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
         uint64_t u = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32) | ftUser.dwLowDateTime;
         uint64_t kTicks = k / 10000; // 100ns -> ms
         uint64_t uTicks = u / 10000;
@@ -858,13 +864,13 @@ inline CpuDelta cpuEndDetail(uint32_t pid, uint64_t startUserTicks, uint64_t sta
 
 /// CPU 采样窗口 (与 bench_resource_util.h 的 cpuBegin/cpuEnd 语义一致, 额外携带细分时间)
 struct CpuWindowDetail {
-    uint32_t                              pid {0};
-    uint64_t                              userTicks {0};
-    uint64_t                              sysTicks {0};
-    std::chrono::steady_clock::time_point startTime {};
-    bool                                  valid {false};
+    uint32_t                              pid{0};
+    uint64_t                              userTicks{0};
+    uint64_t                              sysTicks{0};
+    std::chrono::steady_clock::time_point startTime{};
+    bool                                  valid{false};
     /// 最近一次结束采样得到的细分结果 (经非 const 版 cpuEnd 记录, 便于直接挂到报告里)
-    CpuDelta                              result {};
+    CpuDelta result{};
 };
 
 inline CpuWindowDetail cpuBeginDetail(uint32_t pid = 0) {
@@ -872,13 +878,16 @@ inline CpuWindowDetail cpuBeginDetail(uint32_t pid = 0) {
     win.pid       = normalizePid(pid);
     win.startTime = std::chrono::steady_clock::now();
 #if XX_IS_WIN_D
-    HANDLE h = isSelfPid(win.pid) ? ::GetCurrentProcess()
-                                  : ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, win.pid);
+    HANDLE h = isSelfPid(win.pid)
+                   ? ::GetCurrentProcess()
+                   : ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, win.pid);
     if (h) {
         FILETIME ftCreation{}, ftExit{}, ftKernel{}, ftUser{};
         if (::GetProcessTimes(h, &ftCreation, &ftExit, &ftKernel, &ftUser)) {
-            uint64_t k = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
-            uint64_t u = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32) | ftUser.dwLowDateTime;
+            uint64_t k
+                = (static_cast<uint64_t>(ftKernel.dwHighDateTime) << 32) | ftKernel.dwLowDateTime;
+            uint64_t u
+                = (static_cast<uint64_t>(ftUser.dwHighDateTime) << 32) | ftUser.dwLowDateTime;
             win.sysTicks  = k / 10000;
             win.userTicks = u / 10000;
             win.valid     = true;

@@ -29,12 +29,12 @@
 
 #include <atomic>
 #include <chrono>
-#include <sstream>
-#include <ostream>
 #include <cstring>
 #include <functional>
 #include <future>
 #include <memory>
+#include <ostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -79,7 +79,14 @@ public:
 #if XX_IS_WIN_D
         savedFd_ = ::_dup(1);
         int fd   = -1;
-        if (captureToFile && ::_sopen_s(&fd, path_.c_str(), _O_CREAT | _O_TRUNC | _O_WRONLY, _SH_DENYNO, _S_IREAD | _S_IWRITE) == 0) {
+        if (captureToFile
+            && ::_sopen_s(
+                   &fd,
+                   path_.c_str(),
+                   _O_CREAT | _O_TRUNC | _O_WRONLY,
+                   _SH_DENYNO,
+                   _S_IREAD | _S_IWRITE
+               ) == 0) {
             fileFd_ = fd;
         }
         if (fileFd_ < 0) {
@@ -154,8 +161,8 @@ public:
 private:
 
     std::string path_;
-    int         savedFd_ = -1;
-    int         fileFd_  = -1;
+    int         savedFd_  = -1;
+    int         fileFd_   = -1;
     bool        restored_ = false;
 };
 
@@ -176,7 +183,8 @@ struct FrameMeasure {
 /// 连续请求 N 帧并统计渲染耗时 (含本进程 CPU 增量)
 /// - 仅对真实运行的 TUI (start() 后) 有意义
 template<typename TuiT>
-FrameMeasure measureTuiFrames(const std::shared_ptr<TuiT>& tui, int frames, int perFrameWaitMs = 8) {
+FrameMeasure
+    measureTuiFrames(const std::shared_ptr<TuiT>& tui, int frames, int perFrameWaitMs = 8) {
     FrameMeasure out;
     tui->resetFrameStats();
     auto win = cpuBeginDetail(0);
@@ -185,15 +193,15 @@ FrameMeasure measureTuiFrames(const std::shared_ptr<TuiT>& tui, int frames, int 
         tui->requestRedraw();
         std::this_thread::sleep_for(std::chrono::milliseconds(perFrameWaitMs));
     }
-    out.wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
-                     .count();
-    auto stats   = tui->frameStats();
+    out.wallMs
+        = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    auto stats    = tui->frameStats();
     auto cpuDelta = cpuEndDetailByWindow(win);
     out.frames    = stats.frames;
     out.totalMs   = stats.totalRenderMs;
     out.maxMs     = stats.maxRenderMs;
-    out.avgMs     = (stats.frames > 0) ? (stats.totalRenderMs / static_cast<double>(stats.frames))
-                                       : -1.0;
+    out.avgMs
+        = (stats.frames > 0) ? (stats.totalRenderMs / static_cast<double>(stats.frames)) : -1.0;
     out.cpuUserMs = cpuDelta.userMs;
     out.cpuSysMs  = cpuDelta.sysMs;
     return out;
@@ -203,10 +211,14 @@ FrameMeasure measureTuiFrames(const std::shared_ptr<TuiT>& tui, int frames, int 
 /// - 同步/分页到达后, TUI 会在若干帧内把新内容渲染完; 等稳定后再读帧统计才能
 ///   覆盖"新消息首次渲染"(冷缓存) 的开销
 template<typename TuiT>
-void waitTuiFramesSettled(const std::shared_ptr<TuiT>& tui, int stableMs = 250, int timeoutMs = 5000) {
-    auto deadline   = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-    auto lastChange = std::chrono::steady_clock::now();
-    uint64_t last   = tui->frameStats().frames;
+void waitTuiFramesSettled(
+    const std::shared_ptr<TuiT>& tui,
+    int                          stableMs  = 250,
+    int                          timeoutMs = 5000
+) {
+    auto     deadline   = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    auto     lastChange = std::chrono::steady_clock::now();
+    uint64_t last       = tui->frameStats().frames;
     while (std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         uint64_t now = tui->frameStats().frames;
@@ -251,21 +263,20 @@ inline void filterNoisyModules(std::vector<ModuleMemRow>& rows) {
 
 /// bench 进程内的 headless TUI 端点 (不调用 start(), 仅作协议端点): 用于驱动真实 server
 struct HeadlessWsDriver {
-    asio::io_context                                      ctx;
-    std::shared_ptr<agentxx::client::TUIClientAgentIO>    io;
-    std::shared_ptr<agent::WsAgentIOTransport>            transport;
-    std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginMgr;
+    asio::io_context                                                            ctx;
+    std::shared_ptr<agentxx::client::TUIClientAgentIO>                          io;
+    std::shared_ptr<agent::WsAgentIOTransport>                                  transport;
+    std::shared_ptr<agentxx::plugin::ClientPluginManager>                       pluginMgr;
     std::shared_ptr<asio::executor_work_guard<asio::io_context::executor_type>> work;
-    std::shared_ptr<std::atomic<bool>>                    connected
-        = std::make_shared<std::atomic<bool>>(false);
-    std::thread   thread;
-    std::string   sessionId;
+    std::shared_ptr<std::atomic<bool>> connected = std::make_shared<std::atomic<bool>>(false);
+    std::thread                        thread;
+    std::string                        sessionId;
 };
 
 /// 建立 headless WS 客户端 (返回 nullptr 表示连接失败)
 inline std::shared_ptr<HeadlessWsDriver> startHeadlessWsClient(
-    std::string_view            wsUrl,
-    std::string_view            token,
+    std::string_view                        wsUrl,
+    std::string_view                        token,
     const std::vector<agent::PluginConfig>& plugins = {}
 ) {
     auto drv       = std::make_shared<HeadlessWsDriver>();
@@ -277,9 +288,7 @@ inline std::shared_ptr<HeadlessWsDriver> startHeadlessWsClient(
         agentxx::client::TUITheme::darkTheme()
     );
     drv->pluginMgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
-    drv->pluginMgr->setUiAdapter(
-        std::make_shared<agentxx::client::TuiPluginAdapter>(drv->io)
-    );
+    drv->pluginMgr->setUiAdapter(std::make_shared<agentxx::client::TuiPluginAdapter>(drv->io));
     drv->pluginMgr->setSessionId(drv->sessionId);
     drv->io->setPluginManager(drv->pluginMgr);
     drv->io->setEventSink(drv->pluginMgr);
@@ -366,7 +375,7 @@ struct CountingTransport : agent::AgentIOTransportBase {
     std::shared_ptr<agent::AgentIOTransportBase> inner;
     std::shared_ptr<std::atomic<uint64_t>>       sends = std::make_shared<std::atomic<uint64_t>>(0);
     std::shared_ptr<std::atomic<uint64_t>>       recvs = std::make_shared<std::atomic<uint64_t>>(0);
-    std::shared_ptr<std::atomic<uint64_t>> recvCalls = std::make_shared<std::atomic<uint64_t>>(0);
+    std::shared_ptr<std::atomic<uint64_t>> recvCalls   = std::make_shared<std::atomic<uint64_t>>(0);
 
     explicit CountingTransport(std::shared_ptr<agent::AgentIOTransportBase> in) :
         inner(std::move(in)) {}
@@ -418,7 +427,8 @@ void benchResourceRealTui() {
     std::cout << "  [resource][real_tui] skipped: AGENTXX_BUILD_CLIENT not enabled" << std::endl;
     return;
 #else
-    std::cout << "\n=== Resource Benchmark: 真实 TUI (FTXUI 运行中) + 同进程 server ===" << std::endl;
+    std::cout << "\n=== Resource Benchmark: 真实 TUI (FTXUI 运行中) + 同进程 server ==="
+              << std::endl;
 
     auto        sim      = startResourceLlmSimServer();
     auto        tmpDir   = createBenchTempDir("bench_real_tui");
@@ -458,9 +468,9 @@ void benchResourceRealTui() {
     asio::io_context clientCtx;
     // poll() 会因"无工作"把 io_context 标记为 stopped, 之后 run() 立即返回 →
     // 客户端接收循环永不启动, 收发全部失效; 故先持有 work_guard 再进入任何轮询
-    auto             clientWork = asio::make_work_guard(clientCtx);
-    auto             clientEx  = clientCtx.get_executor();
-    std::string      sessionId = generateBenchSessionId();
+    auto        clientWork = asio::make_work_guard(clientCtx);
+    auto        clientEx   = clientCtx.get_executor();
+    std::string sessionId  = generateBenchSessionId();
 
     // 真实 TUI: start() 会创建组件树并在独立线程跑 FTXUI 循环 (真实渲染帧)
     auto tui = std::make_shared<agentxx::client::TUIClientAgentIO>(
@@ -653,8 +663,8 @@ void benchResourceRealTui() {
     printResourceResult(res0, console);
     {
         ModuleMemBreakdown bd;
-        bd.rows      = res0.modules;
-        bd.valid     = true;
+        bd.rows       = res0.modules;
+        bd.valid      = true;
         bd.totalRssMB = res0.rssMB;
         bd.totalPssMB = res0.mem.pssMB;
         printKindSummary(bd, "real_tui startup", console);
@@ -725,14 +735,14 @@ void benchResourceRealTui() {
     double busyCpu1 = cpuEnd(busyWin1);
     phaseTracker.mark("ctx100k_ready", "已注入 ~100K token 历史并完成同步/渲染");
 
-    auto           res1 = res0;
-    res1.point         = "ctx100k";
-    res1.cpuIdlePct    = -1.0;
-    res1.cpuBusyPct    = busyCpu1;
-    res1.cpu           = busyWin1.result;
-    res1.tokens        = counts.actualTokens100;
-    res1.frames        = stats1.frames;
-    res1.frameAvgMs    = (stats1.frames > 0) ? (stats1.totalRenderMs / stats1.frames) : -1.0;
+    auto res1         = res0;
+    res1.point        = "ctx100k";
+    res1.cpuIdlePct   = -1.0;
+    res1.cpuBusyPct   = busyCpu1;
+    res1.cpu          = busyWin1.result;
+    res1.tokens       = counts.actualTokens100;
+    res1.frames       = stats1.frames;
+    res1.frameAvgMs   = (stats1.frames > 0) ? (stats1.totalRenderMs / stats1.frames) : -1.0;
     size_t tuiLoaded1 = 0;
     if (auto snap = tui->sharedState().readSnapshot()) {
         tuiLoaded1 = snap->messages.size();
@@ -819,14 +829,14 @@ void benchResourceRealTui() {
     double busyCpu2 = cpuEnd(busyWin2);
     phaseTracker.mark("ctx200k_ready", "已注入 ~200K token 历史并完成同步/渲染");
 
-    auto           res2 = res0;
-    res2.point         = "ctx200k";
-    res2.cpuIdlePct    = -1.0;
-    res2.cpuBusyPct    = busyCpu2;
-    res2.cpu           = busyWin2.result;
-    res2.tokens        = counts.actualTokens200;
-    res2.frames        = stats2.frames;
-    res2.frameAvgMs    = (stats2.frames > 0) ? (stats2.totalRenderMs / stats2.frames) : -1.0;
+    auto res2         = res0;
+    res2.point        = "ctx200k";
+    res2.cpuIdlePct   = -1.0;
+    res2.cpuBusyPct   = busyCpu2;
+    res2.cpu          = busyWin2.result;
+    res2.tokens       = counts.actualTokens200;
+    res2.frames       = stats2.frames;
+    res2.frameAvgMs   = (stats2.frames > 0) ? (stats2.totalRenderMs / stats2.frames) : -1.0;
     size_t tuiLoaded2 = 0;
     if (auto snap = tui->sharedState().readSnapshot()) {
         tuiLoaded2 = snap->messages.size();
@@ -922,9 +932,9 @@ void benchResourceServerOnly() {
     std::string token      = "bench_server_only_token";
 
     RealRunConfigOptions cfgOpts;
-    cfgOpts.dataDir    = (tmpDir / "data_server").string();
-    cfgOpts.workDir    = tmpDir.string();
-    cfgOpts.llmBaseUrl = fmt::format("http://127.0.0.1:{}/v1", sim.port);
+    cfgOpts.dataDir        = (tmpDir / "data_server").string();
+    cfgOpts.workDir        = tmpDir.string();
+    cfgOpts.llmBaseUrl     = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     std::string serverYaml = (tmpDir / "server.yaml").string();
     {
         std::ofstream ofs(serverYaml);
@@ -972,8 +982,8 @@ void benchResourceServerOnly() {
     printResourceResult(resIdle);
 
     // 空载漂移观测 (15s 内是否有后台自发增长)
-    auto   idleCpuWin = cpuBegin(serverProc.pid);
-    auto   idleRss    = resIdle.rssMB;
+    auto idleCpuWin = cpuBegin(serverProc.pid);
+    auto idleRss    = resIdle.rssMB;
     std::this_thread::sleep_for(std::chrono::seconds(5));
     auto   driftSample = sampleProcMemDetailMedian(serverProc.pid, 3, 30);
     double idleCpu     = cpuEnd(idleCpuWin);
@@ -988,7 +998,7 @@ void benchResourceServerOnly() {
     resDrift.cpuIdlePct   = idleCpu;
     resDrift.cpu          = idleCpuWin.result;
     resDrift.pluginsAgent = 5;
-    resDrift.note         = fmt::format("空载 5s 漂移 ΔRSS {:+.2f} MB", driftSample.rssMB - idleRss);
+    resDrift.note = fmt::format("空载 5s 漂移 ΔRSS {:+.2f} MB", driftSample.rssMB - idleRss);
     fillResourceMemDetail(resDrift, serverProc.pid, true, false);
     reporter.addResource(resDrift);
     printResourceResult(resDrift);
@@ -1146,7 +1156,8 @@ void benchResourceServerOnly() {
 
 void benchResourceRealTuiChild() {
 #if XX_IS_WIN_D
-    std::cout << "  [resource][real_tui_child] skipped: 当前平台无伪终端支持 (Windows)" << std::endl;
+    std::cout << "  [resource][real_tui_child] skipped: 当前平台无伪终端支持 (Windows)"
+              << std::endl;
     return;
 #else
     std::cout << "\n=== Resource Benchmark: 真实 TUI 子进程 (伪终端) + 真实 server 子进程 ==="
@@ -1168,9 +1179,9 @@ void benchResourceRealTuiChild() {
     std::string token      = "bench_tui_child_token";
 
     RealRunConfigOptions serverCfg;
-    serverCfg.dataDir    = (tmpDir / "data_server").string();
-    serverCfg.workDir    = tmpDir.string();
-    serverCfg.llmBaseUrl = fmt::format("http://127.0.0.1:{}/v1", sim.port);
+    serverCfg.dataDir      = (tmpDir / "data_server").string();
+    serverCfg.workDir      = tmpDir.string();
+    serverCfg.llmBaseUrl   = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     std::string serverYaml = (tmpDir / "server.yaml").string();
     {
         std::ofstream ofs(serverYaml);
@@ -1178,9 +1189,9 @@ void benchResourceRealTuiChild() {
     }
 
     RealRunConfigOptions clientCfg;
-    clientCfg.dataDir    = (tmpDir / "data_client").string();
-    clientCfg.workDir    = tmpDir.string();
-    clientCfg.llmBaseUrl = serverCfg.llmBaseUrl;
+    clientCfg.dataDir      = (tmpDir / "data_client").string();
+    clientCfg.workDir      = tmpDir.string();
+    clientCfg.llmBaseUrl   = serverCfg.llmBaseUrl;
     std::string clientYaml = (tmpDir / "client.yaml").string();
     {
         std::ofstream ofs(clientYaml);
@@ -1221,8 +1232,11 @@ void benchResourceRealTuiChild() {
     clientSpawn.usePty     = true;
     clientSpawn.ptyCols    = 200;
     clientSpawn.ptyRows    = 50;
-    clientSpawn.env        = {{"TERM", "xterm-256color"}, {"LANG", "zh_CN.UTF-8"}};
-    auto clientProc        = spawnChildProcess(cliBin, clientArgs, clientSpawn);
+    clientSpawn.env        = {
+        {"TERM", "xterm-256color"},
+        {"LANG", "zh_CN.UTF-8"   }
+    };
+    auto clientProc = spawnChildProcess(cliBin, clientArgs, clientSpawn);
     if (!clientProc.running) {
         std::cout << "  [resource][real_tui_child] failed to spawn tui client" << std::endl;
         stopChildProcess(serverProc);
@@ -1232,7 +1246,10 @@ void benchResourceRealTuiChild() {
     MemPhaseTracker serverTracker(serverProc.pid, "server");
     MemPhaseTracker clientTracker(clientProc.pid, "client");
     serverTracker.mark("ready", "server 已监听端口");
-    clientTracker.mark("spawn", fmt::format("TUI 客户端已启动 (PTY {})", clientProc.isPty ? "on" : "off"));
+    clientTracker.mark(
+        "spawn",
+        fmt::format("TUI 客户端已启动 (PTY {})", clientProc.isPty ? "on" : "off")
+    );
 
     // 等待 TUI 首屏 (排空伪终端输出, 避免子进程阻塞在写操作上)
     {
@@ -1403,7 +1420,7 @@ void benchResourceRealTuiChild() {
     resServer2.tokens       = (done1 + done2) * counts.groupTokens;
     resServer2.llmCount     = (done1 + done2) * 3;
     resServer2.llmBytes     = (done1 + done2) * 3800;
-    resServer2.note         = fmt::format("累计真实轮次 {} (scale={:.2f})", done1 + done2, scale);
+    resServer2.note = fmt::format("累计真实轮次 {} (scale={:.2f})", done1 + done2, scale);
     fillResourceMemDetail(resServer2, serverProc.pid, true, false);
     reporter.addResource(resServer2);
     printResourceResult(resServer2);
@@ -1516,11 +1533,8 @@ void benchResourcePluginAttrib() {
             [&]() -> asio::awaitable<void> {
                 bool ok = false;
                 try {
-                    auto inst = co_await agent->agentContext->pluginManager->loadPluginAsync(
-                        dir,
-                        nullptr,
-                        true
-                    );
+                    auto inst = co_await agent->agentContext->pluginManager
+                                    ->loadPluginAsync(dir, nullptr, true);
                     ok = (inst != nullptr);
                 } catch (const std::exception& e) {
                     XX_LOGW("[plugin_attrib] 加载 {} 失败: {}", name, e.what());

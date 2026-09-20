@@ -367,8 +367,8 @@ private:
     ///   落库结果与逐条拷贝一致 (append 先于其 update 入队)
     struct PendingViewOp {
         bool     isAppend = false;
-        size_t   index    = 0;   ///< viewMessages 下标 (isAppend/isUpdate 均为该条消息)
-        uint64_t counter  = 0;   ///< isAppend 时的 msgIdCounter (与消息同事务提交)
+        size_t   index    = 0; ///< viewMessages 下标 (isAppend/isUpdate 均为该条消息)
+        uint64_t counter  = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
     };
 
     std::vector<PendingViewOp> pendingViewOps_;

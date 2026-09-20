@@ -25,11 +25,8 @@ static int32_t sysSetup(SysPluginCtx& ctx) {
     return 0;
 }
 
-static void* sysStart(
-    SysPluginCtx&                      ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    sysStart(SysPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
@@ -54,8 +51,7 @@ static void* sysStart(
     return nullptr;
 }
 
-static void*
-    sysStop(SysPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* sysStop(SysPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

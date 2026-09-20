@@ -234,9 +234,9 @@ public:
     /// - 仅在启用全局标记 [agentxx::agent::AgentConfigStatic::enableBenchmark] 时采集,
     ///   未启用时计数恒为 0 (正常使用不读时钟、不累加计数)
     struct FrameStats {
-        uint64_t frames        = 0; ///< 已渲染帧数
-        double   totalRenderMs = 0.0; ///< 渲染耗时累计 (仅组件树构建, 不含终端输出)
-        double   maxRenderMs   = 0.0; ///< 单帧最大渲染耗时
+        uint64_t frames      = 0;   ///< 已渲染帧数
+        double totalRenderMs = 0.0; ///< 渲染耗时累计 (仅组件树构建, 不含终端输出)
+        double maxRenderMs   = 0.0; ///< 单帧最大渲染耗时
     };
 
     /// 读取帧统计 (任意线程可调用)

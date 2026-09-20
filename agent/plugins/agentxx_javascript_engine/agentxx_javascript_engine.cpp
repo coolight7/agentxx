@@ -125,12 +125,12 @@ struct JsCallBridge {
 /// - 数据成员仅 JS 线程访问 (deleted/inflight 亦仅 JS 线程, 任务串行)
 /// - JSContext 释放: 析构函数 (全部进行中的任务结束后由最后一个持有者析构)
 struct JsPluginCtx {
-    std::string              name;
-    JSContext*               ctx      = nullptr;
+    std::string         name;
+    JSContext*          ctx      = nullptr;
     const PluginxxHost* host     = nullptr; ///< 脚本插件宿主句柄
-    JsEngine*                engine   = nullptr;
-    bool                     deleted  = false; ///< 已卸载 (入队任务检查后跳过)
-    size_t                   inflight = 0;     ///< 进行中的任务数 (execute/hook/event)
+    JsEngine*           engine   = nullptr;
+    bool                deleted  = false; ///< 已卸载 (入队任务检查后跳过)
+    size_t              inflight = 0;     ///< 进行中的任务数 (execute/hook/event)
     /// 工具表: 普通对象 name -> {execute, name, description}
     JSValue tools = JS_UNDEFINED;
     /// 钩子表: Array(7) 元素为 fn 或 null
@@ -308,11 +308,9 @@ public:
     void setEngineHost(const PluginxxHost* host) {
         engineHost_ = host;
         if (host && host->vtable && host->vtable->query_interface) {
-            auto iidSv
-                = agentxx::plugin::PluginStringView::fromCstr(PLUGINXX_IFACE_LOG);
-            logIface_ = static_cast<const PluginxxLogIface*>(
-                host->vtable->query_interface(host, &iidSv)
-            );
+            auto iidSv = agentxx::plugin::PluginStringView::fromCstr(PLUGINXX_IFACE_LOG);
+            logIface_
+                = static_cast<const PluginxxLogIface*>(host->vtable->query_interface(host, &iidSv));
         }
     }
 
@@ -355,10 +353,10 @@ public:
     /// JS 线程内加载脚本 (公共转发; 供能力方法异步任务在 JS 线程内直调)
     int loadScriptOnJsThread(
         const PluginxxHost* host,
-        const std::string&       name,
-        const std::string&       path,
-        const std::string&       code,
-        std::string&             err
+        const std::string&  name,
+        const std::string&  path,
+        const std::string&  code,
+        std::string&        err
     ) {
         return doLoadScript(host, name, path, code, err);
     }
@@ -460,7 +458,7 @@ public:
             std::string msg = text;
             if (msg.empty()) {
                 msg = status == PLUGINXX_OPERATOR_CANCELLED ? "call_tool cancelled"
-                                                                  : "call_tool failed";
+                                                            : "call_tool failed";
             }
             JSValue err = JS_NewError(ctx);
             JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, msg.c_str()));
@@ -517,7 +515,7 @@ public:
     /// 【宿主 io 线程】调用; 任务入队 JS 线程后立即返回句柄,
     /// 完成结果由 JS 线程经 notifier 上报 (线程安全), io 线程零阻塞
     static void* PLUGINXX_CALL toolExecuteStart(
-        void*                              ud,
+        void*                         ud,
         const PluginxxStringView*     args_json,
         const PluginxxStringView*     thread_id,
         const PluginxxStringView*     tool_call_id,
@@ -529,8 +527,8 @@ public:
     /// 【宿主 io 线程】调用; post 到 JS 线程 (fire-and-forget, 与旧语义一致)
     /// 后立即内联完成通知
     static void* PLUGINXX_CALL hookStart(
-        void*                              ud,
-        int32_t                            point,
+        void*                         ud,
+        int32_t                       point,
         const PluginxxStringView*     node_input_json,
         const PluginxxOperatorNotify* notify,
         PluginxxString*               error_out
@@ -796,10 +794,10 @@ private:
 
     int doLoadScript(
         const PluginxxHost* host,
-        const std::string&       name,
-        const std::string&       path,
-        const std::string&       code,
-        std::string&             err
+        const std::string&  name,
+        const std::string&  path,
+        const std::string&  code,
+        std::string&        err
     ) {
         if (plugins_.find(name) != plugins_.end()) {
             err = fmt::format("plugin already loaded: {}", name);
@@ -967,9 +965,9 @@ private:
     // ==================== 钩子/事件 (JS 线程) ====================
 
     void doHookFire(
-        JsHookBinding*                    binding,
-        int                               point,
-        const std::string&                payload,
+        JsHookBinding*               binding,
+        int                          point,
+        const std::string&           payload,
         const PluginxxOperatorNotify notify
     ) {
         bool        ok = true;
@@ -1325,7 +1323,7 @@ private:
     // ==================== 成员 ====================
 
     JSRuntime*                        rt_         = nullptr;
-    const PluginxxHost*          engineHost_ = nullptr;
+    const PluginxxHost*               engineHost_ = nullptr;
     std::thread                       thread_;
     std::mutex                        mtx_;
     std::condition_variable           cv_;
@@ -1402,7 +1400,7 @@ private:
 ///   (execute_poll 留 NULL, 宿主只等完成通知)
 /// - JS 线程执行完毕后经 notifier 上报结果 (线程安全; payload host->alloc)
 void* JsEngine::toolExecuteStart(
-    void*                              ud,
+    void*                         ud,
     const PluginxxStringView*     args_json,
     const PluginxxStringView*     thread_id,
     const PluginxxStringView*     tool_call_id,
@@ -1434,7 +1432,7 @@ void* JsEngine::toolExecuteStart(
         // op 句柄仅作占位标识 (宿主不解释其内容): 所有权随任务闭包移交 JS 线程,
         // 通知完成后由闭包自身释放 —— 支持同一引擎插件被多实例加载/反复加载
         // (此前成功路径 new 后无人 delete, 每次工具执行泄漏句柄)
-        auto*                       op      = new int(0);
+        auto*                  op      = new int(0);
         PluginxxOperatorNotify ntfCopy = *notify;
         if (!engine->post([engine, binding, req, ntfCopy, op]() {
                 // ---- JS 线程: 执行并上报 (RAII 兜底释放句柄) ----
@@ -1503,8 +1501,8 @@ void* JsEngine::toolExecuteStart(
 }
 
 void* JsEngine::hookStart(
-    void*                              ud,
-    int32_t                            point,
+    void*                         ud,
+    int32_t                       point,
     const PluginxxStringView*     node_input_json,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
@@ -1631,7 +1629,7 @@ JSValue JsEngine::bridgeCall(
         return JS_ThrowInternalError(ctx, "agentxx bridge: plugin context invalid");
     }
     const PluginxxHost* host = pctx->host;
-    const auto&              vt   = *host->vtable; // 核心: alloc/free/strdup
+    const auto&         vt   = *host->vtable; // 核心: alloc/free/strdup
     (void)vt;
     // COM 风格接口表查询 (进程级静态数据; 各能力经稳定 IID 分发)
     const agentxx::plugin::AgentIfaces iface  = agentxx::plugin::AgentIfaces::query(host);
@@ -1798,7 +1796,7 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             PluginxxString err{nullptr, 0};
-            auto*               handle = iface.tools->call_tool_async(
+            auto*          handle = iface.tools->call_tool_async(
                 host,
                 &nameSv,
                 &argsSv,
@@ -1828,7 +1826,7 @@ JSValue JsEngine::bridgeCall(
                 JS_ToInt64(ctx, &id, argv[1]);
             }
             PluginxxString resp{nullptr, 0};
-            auto                sidSv
+            auto           sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             iface.session->get_share_store(host, &sidSv, id, &resp);
             if (!resp.data) {
@@ -2073,7 +2071,7 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
-            std::string         name = jsToCppString(ctx, argv[0]);
+            std::string    name = jsToCppString(ctx, argv[0]);
             PluginxxString json{nullptr, 0};
             auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
             iface.plugins->get_plugin(host, &nameSv, &json);
@@ -2220,7 +2218,7 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(voi
 ///   {"ok": true, "tools": [...]} (JSON, host->alloc)
 /// - "unload" args: {"name": 脚本插件名}; 投递式, 内联完成 {"ok": true}
 static void* PLUGINXX_CALL jsCapStart(
-    void*                              ctx,
+    void*                         ctx,
     const PluginxxHost*           caller_host,
     const PluginxxStringView*     method,
     const PluginxxStringView*     args_json,
@@ -2416,7 +2414,7 @@ extern "C" PLUGINXX_EXPORT int
 ///   失败时先停止刚启动的引擎, 不留线程/运行时残留);
 /// - 重复 start: 引擎已运行时幂等成功, 能力注册在宿主侧按 owner+名称去重。
 static void* PLUGINXX_CALL jsEngineStart(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
@@ -2434,7 +2432,7 @@ static void* PLUGINXX_CALL jsEngineStart(
         if (!engine->start()) {
             return setErr("interpreter.js start: JS runtime init failed");
         }
-        const PluginxxHost*           host  = engine->host();
+        const PluginxxHost*                host  = engine->host();
         const agentxx::plugin::AgentIfaces iface = agentxx::plugin::AgentIfaces::query(host);
         if (!iface.capabilities || !iface.capabilities->register_capability_ex) {
             engine->requestStop(nullptr);
@@ -2489,7 +2487,7 @@ static void* PLUGINXX_CALL jsEngineStart(
 ///   join: JS 线程可能在宿主 vtable 调用中等待 IO 线程), done 在收尾完成后
 ///   从收尾线程上报 (完成通知允许来自任意线程)。
 static void* PLUGINXX_CALL jsEngineStop(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
@@ -2529,7 +2527,7 @@ static void* PLUGINXX_CALL jsEngineStop(
 }
 
 extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
@@ -2538,7 +2536,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
 }
 
 extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_stop(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
@@ -2554,9 +2552,9 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     const PluginxxLogIface* ownLog  = nullptr;
     if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {
         auto iidSv = agentxx::plugin::PluginStringView::fromCstr(PLUGINXX_IFACE_LOG);
-        ownLog     = static_cast<const PluginxxLogIface*>(
-            ownHost->vtable->query_interface(ownHost, &iidSv)
-        );
+        ownLog
+            = static_cast<const PluginxxLogIface*>(ownHost->vtable->query_interface(ownHost, &iidSv)
+            );
     }
     agentxx::plugin::guardCallVoid(
         [ownHost, ownLog](const char* m) noexcept {

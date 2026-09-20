@@ -43,9 +43,9 @@ struct BenchResult {
 
 /// 进程内存细项 (Linux 从 /proc 读取; Windows 取可获取的部分)
 struct ProcMemDetail {
-    double   rssMB          = 0.0; ///< 常驻物理内存 (VmRSS / WorkingSet)
-    double   pssMB          = 0.0; ///< 按共享比例分摊后的常驻 (仅 Linux; 0 = 未取到)
-    double   privateMB      = 0.0; ///< 私有内存 (Linux: RssAnon + RssShmem; Windows: PrivateUsage)
+    double   rssMB     = 0.0; ///< 常驻物理内存 (VmRSS / WorkingSet)
+    double   pssMB     = 0.0; ///< 按共享比例分摊后的常驻 (仅 Linux; 0 = 未取到)
+    double   privateMB = 0.0; ///< 私有内存 (Linux: RssAnon + RssShmem; Windows: PrivateUsage)
     double   privateDirtyMB = 0.0; ///< 私有脏页 (最接近"真实占用"; 仅 Linux)
     double   anonMB         = 0.0; ///< 匿名映射常驻 (仅 Linux)
     double   fileMB         = 0.0; ///< 文件映射常驻 (仅 Linux)
@@ -83,8 +83,8 @@ enum class MemRegionKind {
 
 /// 模块分解中的一行 (同名同类别段已合并)
 struct ModuleMemRow {
-    std::string   name;           ///< 显示名 (插件名 / 库文件名 / "[heap]" 等)
-    std::string   path;           ///< 映射路径 (匿名段为空)
+    std::string   name; ///< 显示名 (插件名 / 库文件名 / "[heap]" 等)
+    std::string   path; ///< 映射路径 (匿名段为空)
     MemRegionKind kind           = MemRegionKind::Other;
     double        sizeMB         = 0.0;
     double        rssMB          = 0.0;
@@ -100,7 +100,7 @@ struct ModuleMemBreakdown {
     std::vector<ModuleMemRow> rows; ///< 按 rss 降序
     double                    totalRssMB = 0.0;
     double                    totalPssMB = 0.0;
-    bool                      valid     = false;
+    bool                      valid      = false;
     std::string               note;
 };
 
@@ -152,16 +152,16 @@ struct ResourceResult {
     std::string note;                 ///< 备注 (headless/允差/降级说明等)
 
     // ---- 扩展指标 (资源基准测试 v2) ----
-    ProcMemDetail              mem;                ///< 完整内存细项 (含 PSS/堆/峰值/线程/fd)
-    CpuDelta                   cpu;                ///< CPU 细分 (用户态/内核态)
-    double                     trimReclaimableMB = -1.0; ///< malloc_trim 可回收 (MB; -1 = 未测)
-    double                     heapFragmentPct   = -1.0; ///< 堆碎片率 (空闲保留 / 堆总量)
-    uint64_t                   frames            = 0;    ///< 渲染帧数 (TUI 场景)
-    double                     frameAvgMs        = -1.0; ///< 平均帧耗时 (TUI 场景)
-    double                     renderBytes       = 0.0;  ///< 渲染输出字节 (TUI 场景)
-    std::vector<ModuleMemRow>  modules;           ///< 模块级内存分解 (可选)
-    std::vector<LogicalMemRow> logical;           ///< 逻辑内存 (可选)
-    std::vector<MemPhaseSample> phases;           ///< 分阶段采样 (可选; 挂在每个 mode+side 的首个点)
+    ProcMemDetail             mem; ///< 完整内存细项 (含 PSS/堆/峰值/线程/fd)
+    CpuDelta                  cpu; ///< CPU 细分 (用户态/内核态)
+    double                    trimReclaimableMB = -1.0; ///< malloc_trim 可回收 (MB; -1 = 未测)
+    double                    heapFragmentPct   = -1.0; ///< 堆碎片率 (空闲保留 / 堆总量)
+    uint64_t                  frames            = 0;    ///< 渲染帧数 (TUI 场景)
+    double                    frameAvgMs        = -1.0; ///< 平均帧耗时 (TUI 场景)
+    double                    renderBytes       = 0.0;  ///< 渲染输出字节 (TUI 场景)
+    std::vector<ModuleMemRow> modules;                  ///< 模块级内存分解 (可选)
+    std::vector<LogicalMemRow> logical;                 ///< 逻辑内存 (可选)
+    std::vector<MemPhaseSample> phases; ///< 分阶段采样 (可选; 挂在每个 mode+side 的首个点)
 };
 
 inline const char* memRegionKindName(MemRegionKind kind) {
@@ -190,7 +190,6 @@ inline const char* memRegionKindName(MemRegionKind kind) {
             return "other";
     }
 }
-
 
 inline std::string fmtNs(double ns) {
     if (ns < 1000.0) {
@@ -298,7 +297,8 @@ inline double jsonNumber(const utilxx_base::Json& j, std::string_view key, doubl
     return def;
 }
 
-inline std::string jsonText(const utilxx_base::Json& j, std::string_view key, std::string def = {}) {
+inline std::string
+    jsonText(const utilxx_base::Json& j, std::string_view key, std::string def = {}) {
     if (!j.is_object() || !j.contains(key)) {
         return def;
     }
@@ -367,19 +367,17 @@ inline MemRegionKind memRegionKindFromName(std::string_view name) {
 /// 从报告 JSON 文本解析资源结果 (JSON 由 BenchReporter 生成)
 /// - 用于: 基线对比 (--baseline) 与聚合运行时合并各场景子进程的结果
 /// - `return` 解析出的采样点数量 (0 表示无 resource 段或格式不匹配)
-inline size_t parseResourceResultsFromJson(
-    std::string_view            jsonText,
-    std::vector<ResourceResult>& out
-) {
+inline size_t
+    parseResourceResultsFromJson(std::string_view jsonText, std::vector<ResourceResult>& out) {
     try {
         auto j = utilxx_base::Json::parse(jsonText);
         if (!j.is_object() || !j.contains("resource") || !j["resource"].is_array()) {
             return 0;
         }
-        const auto& arr = j["resource"];
+        const auto& arr    = j["resource"];
         size_t      before = out.size();
         for (size_t i = 0; i < arr.size(); ++i) {
-            const auto& item = arr[i];
+            const auto&    item = arr[i];
             ResourceResult r;
             r.mode  = detail::jsonText(item, "mode");
             r.side  = detail::jsonText(item, "side");
@@ -438,7 +436,7 @@ inline size_t parseResourceResultsFromJson(
             if (item.contains("modules") && item["modules"].is_array()) {
                 const auto& mods = item["modules"];
                 for (size_t k = 0; k < mods.size(); ++k) {
-                    const auto& m = mods[k];
+                    const auto&  m = mods[k];
                     ModuleMemRow row;
                     row.name           = detail::jsonText(m, "name");
                     row.path           = detail::jsonText(m, "path");
@@ -456,7 +454,7 @@ inline size_t parseResourceResultsFromJson(
             if (item.contains("logical") && item["logical"].is_array()) {
                 const auto& logs = item["logical"];
                 for (size_t k = 0; k < logs.size(); ++k) {
-                    const auto& l = logs[k];
+                    const auto&   l = logs[k];
                     LogicalMemRow row;
                     row.name  = detail::jsonText(l, "name");
                     row.bytes = static_cast<size_t>(detail::jsonNumber(l, "bytes"));
@@ -468,19 +466,19 @@ inline size_t parseResourceResultsFromJson(
             if (item.contains("phases") && item["phases"].is_array()) {
                 const auto& phs = item["phases"];
                 for (size_t k = 0; k < phs.size(); ++k) {
-                    const auto& p = phs[k];
+                    const auto&    p = phs[k];
                     MemPhaseSample s;
-                    s.label             = detail::jsonText(p, "label");
-                    s.note              = detail::jsonText(p, "note");
-                    s.mem.rssMB         = detail::jsonNumber(p, "rssMB");
-                    s.mem.pssMB         = detail::jsonNumber(p, "pssMB");
+                    s.label              = detail::jsonText(p, "label");
+                    s.note               = detail::jsonText(p, "note");
+                    s.mem.rssMB          = detail::jsonNumber(p, "rssMB");
+                    s.mem.pssMB          = detail::jsonNumber(p, "pssMB");
                     s.mem.privateDirtyMB = detail::jsonNumber(p, "privateDirtyMB");
-                    s.mem.heapInUseMB   = detail::jsonNumber(p, "heapInUseMB");
-                    s.mem.anonMB        = detail::jsonNumber(p, "anonMB");
-                    s.deltaRssMB        = detail::jsonNumber(p, "deltaRssMB");
-                    s.deltaPssMB        = detail::jsonNumber(p, "deltaPssMB");
-                    s.deltaHeapInUseMB  = detail::jsonNumber(p, "deltaHeapInUseMB");
-                    s.elapsedMs         = detail::jsonNumber(p, "elapsedMs");
+                    s.mem.heapInUseMB    = detail::jsonNumber(p, "heapInUseMB");
+                    s.mem.anonMB         = detail::jsonNumber(p, "anonMB");
+                    s.deltaRssMB         = detail::jsonNumber(p, "deltaRssMB");
+                    s.deltaPssMB         = detail::jsonNumber(p, "deltaPssMB");
+                    s.deltaHeapInUseMB   = detail::jsonNumber(p, "deltaHeapInUseMB");
+                    s.elapsedMs          = detail::jsonNumber(p, "elapsedMs");
                     r.phases.push_back(std::move(s));
                 }
             }
@@ -494,7 +492,8 @@ inline size_t parseResourceResultsFromJson(
 }
 
 /// 资源结果的身份键 (跨运行对比用): mode|side|point
-inline std::string resourceKey(std::string_view mode, std::string_view side, std::string_view point) {
+inline std::string
+    resourceKey(std::string_view mode, std::string_view side, std::string_view point) {
     return fmt::format("{}|{}|{}", mode, side, point);
 }
 
@@ -502,33 +501,32 @@ inline std::string resourceKey(const ResourceResult& r) {
     return resourceKey(r.mode, r.side, r.point);
 }
 
-
 /// 资源结果的关键指标 (markdown 表 / 对比表共用的列)
 inline std::vector<std::pair<std::string, double>> resourceMetrics(const ResourceResult& r) {
     return {
-        {"rssMB",            r.rssMB                  },
-        {"pssMB",            r.mem.pssMB              },
-        {"privDirtyMB",      r.mem.privateDirtyMB     },
-        {"privateMB",        r.privateMB              },
-        {"anonMB",           r.mem.anonMB             },
-        {"peakRssMB",        r.mem.peakRssMB          },
-        {"heapInUseMB",      r.mem.heapInUseMB        },
-        {"heapFreeMB",       r.mem.heapFreeMB         },
-        {"vmsizeMB",         r.mem.vmsizeMB           },
-        {"threads",          static_cast<double>(r.mem.threads)},
-        {"fds",              static_cast<double>(r.mem.fds)    },
-        {"cpuIdlePct",       r.cpuIdlePct             },
-        {"cpuBusyPct",       r.cpuBusyPct             },
-        {"userMs",           r.cpu.userMs             },
-        {"sysMs",            r.cpu.sysMs              },
-        {"frames",           static_cast<double>(r.frames)},
-        {"frameAvgMs",       r.frameAvgMs             },
-        {"renderBytes",      r.renderBytes            },
-        {"viewCount",        static_cast<double>(r.viewCount)},
-        {"llmCount",         static_cast<double>(r.llmCount) },
-        {"tokens",           static_cast<double>(r.tokens)   },
-        {"trimReclaimMB",    r.trimReclaimableMB      },
-        {"heapFragmentPct",  r.heapFragmentPct        },
+        {"rssMB",           r.rssMB                           },
+        {"pssMB",           r.mem.pssMB                       },
+        {"privDirtyMB",     r.mem.privateDirtyMB              },
+        {"privateMB",       r.privateMB                       },
+        {"anonMB",          r.mem.anonMB                      },
+        {"peakRssMB",       r.mem.peakRssMB                   },
+        {"heapInUseMB",     r.mem.heapInUseMB                 },
+        {"heapFreeMB",      r.mem.heapFreeMB                  },
+        {"vmsizeMB",        r.mem.vmsizeMB                    },
+        {"threads",         static_cast<double>(r.mem.threads)},
+        {"fds",             static_cast<double>(r.mem.fds)    },
+        {"cpuIdlePct",      r.cpuIdlePct                      },
+        {"cpuBusyPct",      r.cpuBusyPct                      },
+        {"userMs",          r.cpu.userMs                      },
+        {"sysMs",           r.cpu.sysMs                       },
+        {"frames",          static_cast<double>(r.frames)     },
+        {"frameAvgMs",      r.frameAvgMs                      },
+        {"renderBytes",     r.renderBytes                     },
+        {"viewCount",       static_cast<double>(r.viewCount)  },
+        {"llmCount",        static_cast<double>(r.llmCount)   },
+        {"tokens",          static_cast<double>(r.tokens)     },
+        {"trimReclaimMB",   r.trimReclaimableMB               },
+        {"heapFragmentPct", r.heapFragmentPct                 },
     };
 }
 
@@ -572,8 +570,8 @@ public:
 
     /// 把阶段采样表挂到该 mode+side 的第一个结果上 (报告中按 mode+side 展示一次)
     void attachPhases(
-        const std::string&                mode,
-        const std::string&                side,
+        const std::string&                 mode,
+        const std::string&                 side,
         const std::vector<MemPhaseSample>& phases
     ) {
         if (phases.empty()) {
@@ -733,7 +731,7 @@ public:
                 continue;
             }
             printedModes.insert(key);
-            anyLogical = true;
+            anyLogical                      = true;
             std::vector<LogicalMemRow> rows = r.logical;
             std::sort(rows.begin(), rows.end(), [](const LogicalMemRow& a, const LogicalMemRow& b) {
                 return a.bytes > b.bytes;
@@ -1009,7 +1007,10 @@ private:
                 ofs << fmt::format("        \"heapFreeMB\": {:.2f},\n", r.mem.heapFreeMB);
                 ofs << fmt::format("        \"heapArenaMB\": {:.2f},\n", r.mem.heapArenaMB);
                 ofs << fmt::format("        \"heapMmapMB\": {:.2f},\n", r.mem.heapMmapMB);
-                ofs << fmt::format("        \"heapValid\": {}\n", r.mem.heapValid ? "true" : "false");
+                ofs << fmt::format(
+                    "        \"heapValid\": {}\n",
+                    r.mem.heapValid ? "true" : "false"
+                );
                 ofs << "      },\n";
 
                 // CPU 细分
@@ -1098,8 +1099,12 @@ private:
         md << "# agentxx 资源基准报告\n\n";
         md << fmt::format("- 时间: `{}`\n", timestamp);
         md << fmt::format("- 版本: `{}`  构建: `{}`\n", host_.version, host_.buildConfig);
-        md << fmt::format("- 系统: `{}`  CPU 核数: {}  物理内存: {:.1f} GB\n",
-                          host_.system, host_.cpuCores, host_.memTotalMB / 1024.0);
+        md << fmt::format(
+            "- 系统: `{}`  CPU 核数: {}  物理内存: {:.1f} GB\n",
+            host_.system,
+            host_.cpuCores,
+            host_.memTotalMB / 1024.0
+        );
         md << fmt::format("- 被测程序: `{}`\n", host_.exePath);
         if (!baselinePath_.empty()) {
             md << fmt::format("- 基线对比: `{}`\n", baselinePath_);
@@ -1238,6 +1243,7 @@ private:
 
             md << "\n### 模块级差异 (|ΔRSS| > 0.3MB)\n\n";
             md << "| 采样点 | 模块 | 基线RSS | 本次RSS | ΔRSS |\n|---|---|---|---|---|\n";
+
             struct ModDiff {
                 double      absDelta;
                 std::string key;
@@ -1245,6 +1251,7 @@ private:
                 double      base = 0.0;
                 double      cur  = 0.0;
             };
+
             std::vector<ModDiff> diffs;
             for (const auto& r : resourceResults_) {
                 auto it = baseline_.find(resourceKey(r));
@@ -1270,9 +1277,7 @@ private:
                     double b = baseMap.count(n) ? baseMap[n] : 0.0;
                     double c = curMap.count(n) ? curMap[n] : 0.0;
                     if (std::abs(c - b) > 0.3) {
-                        diffs.push_back(
-                            ModDiff{std::abs(c - b), resourceKey(r), n, b, c}
-                        );
+                        diffs.push_back(ModDiff{std::abs(c - b), resourceKey(r), n, b, c});
                     }
                 }
             }

@@ -99,7 +99,7 @@ struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 /// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
 
 static void* computerUseAgentStart(
-    ComputerUsePluginCtx&              ctx,
+    ComputerUsePluginCtx&         ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {

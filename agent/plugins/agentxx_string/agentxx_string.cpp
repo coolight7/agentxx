@@ -34,8 +34,7 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
         kNameHtml2Md,
         kDepictHtml2Md,
         html2mdSchema,
-        [](std::string_view                args_json,
-           const PluginxxCancelToken* cancel_token) -> std::string {
+        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("html2markdown cancelled");
             }
@@ -81,8 +80,7 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
         kNameRegexp,
         kDepictRegexp,
         regexpSchema,
-        [](std::string_view                args_json,
-           const PluginxxCancelToken* cancel_token) -> std::string {
+        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("regexp cancelled");
             }
@@ -100,11 +98,8 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
     return 0;
 }
 
-static void* stringStart(
-    StringPluginCtx&                   ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
@@ -129,8 +124,7 @@ static void* stringStart(
     return nullptr;
 }
 
-static void*
-    stringStop(StringPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* stringStop(StringPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

@@ -130,10 +130,10 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
         kNameWindows,
         winPrompt.depict,
         winSchema,
-        [](ExecPluginCtx&                  c,
-           std::string_view                args_json,
-           std::string_view                tid,
-           std::string_view                workDir,
+        [](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
            const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
             ArgReader   args(args_json);
             std::string tidStr(tid);
@@ -171,10 +171,10 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
         kNameWindows,
         winPrompt.depict,
         winSchema,
-        [](ExecPluginCtx&                  c,
-           std::string_view                args_json,
-           std::string_view                tid,
-           std::string_view                workDir,
+        [](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
            const PluginxxCancelToken* cancel_token) -> std::string {
             ArgReader   args(args_json);
             std::string tidStr(tid);
@@ -233,10 +233,10 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
         kNameBash,
         bashPrompt.depict,
         bashSchema,
-        [](ExecPluginCtx&                  c,
-           std::string_view                args_json,
-           std::string_view                tid,
-           std::string_view                workDir,
+        [](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
            const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
             ArgReader   args(args_json);
             std::string tidStr(tid);
@@ -274,10 +274,10 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
         kNameBash,
         bashPrompt.depict,
         bashSchema,
-        [](ExecPluginCtx&                  c,
-           std::string_view                args_json,
-           std::string_view                tid,
-           std::string_view                workDir,
+        [](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
            const PluginxxCancelToken* cancel_token) -> std::string {
             ArgReader   args(args_json);
             std::string tidStr(tid);
@@ -311,11 +311,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     return 0;
 }
 
-static void* execStart(
-    ExecPluginCtx&                     ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    execStart(ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             PluginString::set(ctx.host, error, "agentxx_execute_command start: notify required");
@@ -336,8 +333,7 @@ static void* execStart(
     return nullptr;
 }
 
-static void*
-    execStop(ExecPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* execStop(ExecPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -362,7 +358,7 @@ static int32_t setupExecClient(ExecClientCtx& ctx) {
 }
 
 static void* execClientStart(
-    ExecClientCtx&                     ctx,
+    ExecClientCtx&                ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {
@@ -390,8 +386,7 @@ static void* execClientStart(
     return nullptr;
 }
 
-static void*
-    execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册记录由宿主在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;

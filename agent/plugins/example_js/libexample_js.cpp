@@ -19,7 +19,7 @@
 namespace {
 
 struct ShellCtx {
-    const PluginxxHost*     host = nullptr;
+    const PluginxxHost*          host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
     std::string                  name;
     std::string                  dir;
@@ -64,13 +64,12 @@ std::string scriptArgsJson(const ShellCtx& ctx) {
 
 /// 脚本加载完成 (异步 start 的收尾): 宿主 io 线程派发, 期间 caller lease
 /// 保证本实例上下文存活。
-void PLUGINXX_CALL
-    onScriptLoadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+void PLUGINXX_CALL onScriptLoadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
     auto* state = static_cast<std::pair<ShellCtx*, PluginxxOperatorNotify>*>(ud);
     if (!state) {
         return;
     }
-    ShellCtx*                   ctx    = state->first;
+    ShellCtx*              ctx    = state->first;
     PluginxxOperatorNotify notify = state->second;
     delete state;
 
@@ -100,8 +99,7 @@ void PLUGINXX_CALL
 }
 
 /// 脚本卸载完成 (stop 事务的收尾, fire-and-forget: 结果只记录)
-void PLUGINXX_CALL
-    onScriptUnloadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+void PLUGINXX_CALL onScriptUnloadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
     auto* ctx = static_cast<ShellCtx*>(ud);
     if (!ctx || status == PLUGINXX_OPERATOR_OK) {
         return;
@@ -126,12 +124,12 @@ void dispatchScriptUnload(ShellCtx& ctx) {
     if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability_async) {
         return;
     }
-    auto                capSv    = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-    auto                unloadSv = agentxx::plugin::PluginStringView::fromCstr("unload");
-    std::string         args     = fmt::format("{{\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
-    auto                argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+    auto           capSv    = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
+    auto           unloadSv = agentxx::plugin::PluginStringView::fromCstr("unload");
+    std::string    args     = fmt::format("{{\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
+    auto           argsSv   = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
-    auto*               h = ctx.iface.capabilities->invoke_capability_async(
+    auto*          h = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
         &capSv,
         &unloadSv,
@@ -205,8 +203,8 @@ extern "C" PLUGINXX_EXPORT int
             }
             auto field = [&](const char* key) -> std::string {
                 PluginxxString v{nullptr, 0};
-                auto                infoSv = agentxx::plugin::PluginStringView::toSv(&info);
-                auto                keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
+                auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
+                auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
                 s_if.json->json_get_string(host, &infoSv, &keySv, &v);
                 if (!v.data) {
                     return {};
@@ -246,11 +244,8 @@ extern "C" PLUGINXX_EXPORT int
 ///   因此 start 必须等加载结束才 done (返回宿主托管句柄, 完成回调上报结果);
 /// - 能力不可用或脚本缺失 → 返回 NULL + error (拒绝); 加载失败 → done FAILED;
 ///   两条路径都由宿主回滚本次加载, 不留注册残留。
-static void* jsShellAgentStart(
-    ShellCtx&                          ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    jsShellAgentStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     auto setErr = [&](const std::string& msg) -> void* {
         if (error) {
             agentxx::plugin::PluginString::set(ctx.host, error, msg);
@@ -277,12 +272,12 @@ static void* jsShellAgentStart(
         return nullptr;
     }
 
-    std::string         args   = scriptArgsJson(ctx);
-    auto                loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
-    auto                argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+    std::string    args   = scriptArgsJson(ctx);
+    auto           loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
+    auto           argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
-    auto* state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
-    auto* h     = ctx.iface.capabilities->invoke_capability_async(
+    auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
+    auto*          h     = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
         &capSv,
         &loadSv,

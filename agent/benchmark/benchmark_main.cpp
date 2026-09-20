@@ -1,3 +1,4 @@
+#include "agentxx/agent/config_static.h"
 #include "bench_aho_corasick.h"
 #include "bench_code_agent.h"
 #include "bench_regex.h"
@@ -6,7 +7,6 @@
 #include "bench_router.h"
 #include "bench_string_util.h"
 #include "bench_util.h"
-#include "agentxx/agent/config_static.h"
 #include "utilxx_base/env.h"
 #include "utilxx_base/log.h"
 
@@ -48,7 +48,7 @@ int main(int argn, char** argv) {
     agentxx::agent::AgentConfigStatic::setEnableBenchmark(true);
 
     // 解析参数
-    bool                     failFast    = false;
+    bool                     failFast = false;
     std::string              baselinePath;
     std::vector<std::string> selectedModules;
 
@@ -59,22 +59,23 @@ int main(int argn, char** argv) {
         } else if (arg == "--baseline" && i + 1 < argn) {
             baselinePath = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: agentxx_benchmark [module ...] [options]\n"
-                      << "Options:\n"
-                      << "  --list             List all available benchmark modules\n"
-                      << "  --fail-fast, -f    Abort benchmark immediately on failure/exception\n"
-                      << "  --baseline <json>  Compare with a previous bench_*.json and print deltas\n"
-                      << "  --help, -h         Show this help message\n"
-                      << "\n"
-                      << "资源基准测试 (resource_*) 采集内容:\n"
-                      << "  RSS/PSS/私有脏页/匿名/峰值/线程/fd、glibc 堆在用与碎片、\n"
-                      << "  malloc_trim 可回收量、smaps 模块级分解 (插件/库/堆/匿名)、\n"
-                      << "  逻辑内存 (消息容器/TUI 状态/工具 schema)、分阶段增量、CPU 用户/内核时间;\n"
-                      << "  报告同时输出 JSON (机器对比) 与 Markdown (人工阅读)。\n"
-                      << "环境变量: AGENTXX_BENCH_OUTPUT_DIR (报告目录) / AGENTXX_BENCH_SCALE\n"
-                      << "          (真实两进程场景的负载缩放系数, 默认 1.0)\n"
-                      << "\n"
-                      << "When no module is specified, all benchmarks will be run.\n";
+            std::cout
+                << "Usage: agentxx_benchmark [module ...] [options]\n"
+                << "Options:\n"
+                << "  --list             List all available benchmark modules\n"
+                << "  --fail-fast, -f    Abort benchmark immediately on failure/exception\n"
+                << "  --baseline <json>  Compare with a previous bench_*.json and print deltas\n"
+                << "  --help, -h         Show this help message\n"
+                << "\n"
+                << "资源基准测试 (resource_*) 采集内容:\n"
+                << "  RSS/PSS/私有脏页/匿名/峰值/线程/fd、glibc 堆在用与碎片、\n"
+                << "  malloc_trim 可回收量、smaps 模块级分解 (插件/库/堆/匿名)、\n"
+                << "  逻辑内存 (消息容器/TUI 状态/工具 schema)、分阶段增量、CPU 用户/内核时间;\n"
+                << "  报告同时输出 JSON (机器对比) 与 Markdown (人工阅读)。\n"
+                << "环境变量: AGENTXX_BENCH_OUTPUT_DIR (报告目录) / AGENTXX_BENCH_SCALE\n"
+                << "          (真实两进程场景的负载缩放系数, 默认 1.0)\n"
+                << "\n"
+                << "When no module is specified, all benchmarks will be run.\n";
             return 0;
         } else if (arg[0] != '-') {
             selectedModules.push_back(arg);
@@ -153,16 +154,13 @@ int main(int argn, char** argv) {
          "Benchmark memory and CPU for libagentxx_shared control group", agentxx::bench::benchResourceFfi,
          true},
         {"resource_real_tui",
-         "Real running TUI (FTXUI loop) + in-process server, with frame timing and render bytes",
-         agentxx::bench::benchResourceRealTui,
+         "Real running TUI (FTXUI loop) + in-process server, with frame timing and render bytes", agentxx::bench::benchResourceRealTui,
          true},
         {"resource_server_only",
-         "Real server process alone: idle drift, driven turns, disconnect reclaim",
-         agentxx::bench::benchResourceServerOnly,
+         "Real server process alone: idle drift, driven turns, disconnect reclaim", agentxx::bench::benchResourceServerOnly,
          true},
         {"resource_real_tui_child",
-         "Real TUI child process driven via pty + real server child process",
-         agentxx::bench::benchResourceRealTuiChild,
+         "Real TUI child process driven via pty + real server child process", agentxx::bench::benchResourceRealTuiChild,
          true},
         {"resource_plugin_attrib",
          "Per-plugin marginal memory cost and unload reclaim", agentxx::bench::benchResourcePluginAttrib,
@@ -231,8 +229,8 @@ int main(int argn, char** argv) {
         std::cout << "  agentxx Performance Benchmarks" << std::endl;
         std::cout << "========================================" << std::endl;
     } else {
-        std::cout << "[child] 场景子进程: " << (selectedModules.empty() ? "(全量)" : selectedModules.front())
-                  << std::endl;
+        std::cout << "[child] 场景子进程: "
+                  << (selectedModules.empty() ? "(全量)" : selectedModules.front()) << std::endl;
     }
 
     for (const auto& mod : modules) {

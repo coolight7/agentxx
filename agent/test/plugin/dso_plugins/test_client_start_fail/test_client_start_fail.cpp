@@ -75,7 +75,7 @@ int32_t PLUGINXX_CALL
 
 struct ProbeCtx {
     const PluginxxHost* host    = nullptr;
-    bool                     started = false;
+    bool                started = false;
 };
 
 /// 注册事务: 每步注册后立即用句柄操作自检, 失败返回 false。
@@ -148,8 +148,7 @@ bool registerAll(const PluginxxHost* host, ProbeCtx* ctx) {
 
 } // namespace
 
-extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
-) {
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         0,
@@ -178,7 +177,7 @@ extern "C" PLUGINXX_EXPORT int
 }
 
 extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {

@@ -204,7 +204,7 @@ When resolving relative links found in the returned Markdown, combine them with 
 }
 
 static void* websearchStart(
-    WebsearchPluginCtx&                ctx,
+    WebsearchPluginCtx&           ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {

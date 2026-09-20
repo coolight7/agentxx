@@ -148,8 +148,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
     capability(
         ctx,
         "agentxx.system_usage",
-        [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view
-        ) -> std::string {
+        [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view) -> std::string {
             auto usage = c.querySync();
             return usageToJson(usage);
         }
@@ -199,8 +198,8 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
                     },
                     [](void* ud, int32_t status, void* res, const PluginxxStringView*) {
                         auto* c = static_cast<SysMonCtx*>(ud);
-                        if (status == PLUGINXX_OPERATOR_OK && res && c && c->host
-                            && c->iface.events && c->iface.events->publish) {
+                        if (status == PLUGINXX_OPERATOR_OK && res && c && c->host && c->iface.events
+                            && c->iface.events->publish) {
                             auto*       u    = static_cast<CpuGpuUsage*>(res);
                             std::string json = usageToJson(*u);
                             auto        topicSv
@@ -245,11 +244,8 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
     return 0;
 }
 
-static void* sysMonStart(
-    SysMonCtx&                         ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    sysMonStart(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             PluginString::set(ctx.host, error, "agentxx_system_monitor start: notify required");
@@ -266,8 +262,7 @@ static void* sysMonStart(
     return nullptr;
 }
 
-static void*
-    sysMonStop(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* sysMonStop(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.stopSpawns();
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -429,10 +424,8 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
             ctx.host,
             &nameSv,
             &descSv,
-            [](void* ud,
-               const PluginxxStringView*,
-               PluginxxString* actionOut,
-               PluginxxString*) -> int32_t {
+            [](void* ud, const PluginxxStringView*, PluginxxString* actionOut, PluginxxString*)
+                -> int32_t {
                 auto* ctx = static_cast<SysMonClientCtx*>(ud);
                 if (!ctx) {
                     return -1;
@@ -486,7 +479,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
 }
 
 static void* sysMonClientStart(
-    SysMonClientCtx&                   ctx,
+    SysMonClientCtx&              ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {

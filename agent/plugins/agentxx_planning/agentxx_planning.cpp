@@ -352,8 +352,7 @@ void PLUGINXX_CALL on_client_attached(const PluginxxStringView* event_json, void
 
 /// =====================================================================
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL
-    agentxx_plugin_agent_get_info(void) {
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL agentxx_plugin_agent_get_info(void) {
     // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
     // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin::guardCall(
@@ -539,7 +538,7 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
 }
 
 extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_start(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
@@ -593,8 +592,7 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
     );
 }
 
-extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL
-    agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(ctxGuardLogger(ctx), [&] {
@@ -621,7 +619,7 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL
 
 /// client 侧每实例上下文 (多实例契约: 状态挂本实例, 回调经 ud 恢复)
 struct ClientCtx {
-    const PluginxxHost*      host = nullptr;
+    const PluginxxHost*           host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     /// "agentxx.client.ui" 展示接口表 (Info 段落/工具装饰/action/overlay;
     /// CLI 等不支持时成员 NULL 降级: planning 仍推送内容, 只是按钮不可点)
@@ -982,8 +980,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
 
 /// EVT_PLUGIN_DATA: 过滤本插件规划事件 {plugin:"agentxx_planning", event:"planning"}
 /// → 更新 Info 栏段落
-static void PLUGINXX_CALL
-    on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
@@ -993,9 +990,9 @@ static void PLUGINXX_CALL
         PluginxxString plugin{nullptr, 0};
         PluginxxString event{nullptr, 0};
         PluginxxString data{nullptr, 0};
-        auto                kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
-        auto                kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
-        auto                kData   = agentxx::plugin::PluginStringView::fromCstr("data");
+        auto           kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
+        auto           kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
+        auto           kData   = agentxx::plugin::PluginStringView::fromCstr("data");
         if (ctx->iface.json && ctx->iface.json->json_get_string && payload_json) {
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kPlugin, &plugin);
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
@@ -1028,8 +1025,7 @@ static void PLUGINXX_CALL
 ///   展开体 状态图/todos/notes); read 推送占位 (结果未返回)
 /// - tool_end: 以缓存的最终参数重建装饰 (覆盖流式期间的不完整内容);
 ///   read 模式此时展示结果摘要
-static void PLUGINXX_CALL
-    on_client_delta(const PluginxxStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL on_client_delta(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
@@ -1267,7 +1263,7 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
 }
 
 extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_client_start(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
@@ -1321,8 +1317,7 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
     );
 }
 
-extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL
-    agentxx_plugin_client_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_client_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
     auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {

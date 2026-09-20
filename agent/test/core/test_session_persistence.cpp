@@ -1423,8 +1423,8 @@ static TestResult testPendingViewOpsIndexReplay() {
             return nullptr;
         }();
         XX_TEST_EXPECT_TRUE(m2 != nullptr);
-        auto updated       = m2 ? *m2 : makeMsg(V::Role::Tool, "");
-        updated.text       = "tool-step1";
+        auto updated = m2 ? *m2 : makeMsg(V::Role::Tool, "");
+        updated.text = "tool-step1";
         sess->updateViewMessage(updated);
         updated.text = "tool-done";
         sess->updateViewMessage(updated);
@@ -1452,8 +1452,14 @@ static TestResult testPendingViewOpsIndexReplay() {
         int appendCalls = 0;
         int updateCalls = 0;
         sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
-            .onAppendViewMessage = [&](const V&, uint64_t) { ++appendCalls; },
-            .onUpdateViewMessage = [&](const V&) { ++updateCalls; },
+            .onAppendViewMessage =
+                [&](const V&, uint64_t) {
+                    ++appendCalls;
+                },
+            .onUpdateViewMessage =
+                [&](const V&) {
+                    ++updateCalls;
+                },
         });
 
         sess->appendViewMessage(makeMsg(V::Role::User, "first")); // 立即落库

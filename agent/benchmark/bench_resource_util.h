@@ -10,15 +10,15 @@
 
 #include "agentxx/agent/config.h"
 
+#include "agentxx/agent/conversation_types.h"
+#include "agentxx/middlewares/summarization.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
-#include "utilxx/http_server.h"
-#include "agentxx/agent/conversation_types.h"
-#include "agentxx/middlewares/summarization.h"
 #include "asio/ip/tcp.hpp"
 #include "fmt/format.h"
 #include "neograph/types.h"
+#include "utilxx/http_server.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include <algorithm>
@@ -99,7 +99,7 @@ struct ProcessHandle {
     pid_t pid          = 0;
     int   stdinWriteFd = -1;
     /// 伪终端主端 (usePty 时产物): 既接收子进程输出, 又向其发送按键输入
-    int   ptyMasterFd  = -1;
+    int ptyMasterFd = -1;
 #endif
     bool        running  = false;
     bool        isPty    = false;
@@ -151,7 +151,9 @@ inline ProcessHandle spawnChildProcess(
             if (slaveName != nullptr) {
                 ptySlave = ::open(slaveName, O_RDWR | O_NOCTTY);
             }
-            struct winsize ws{};
+
+            struct winsize ws {};
+
             ws.ws_col = static_cast<unsigned short>(opts.ptyCols > 0 ? opts.ptyCols : 200);
             ws.ws_row = static_cast<unsigned short>(opts.ptyRows > 0 ? opts.ptyRows : 50);
             ::ioctl(ptyMaster, TIOCSWINSZ, &ws);
@@ -208,11 +210,7 @@ inline ProcessHandle spawnChildProcess(
             }
             int outFd = -1;
             if (!opts.outputRedirect.empty()) {
-                outFd = ::open(
-                    opts.outputRedirect.c_str(),
-                    O_WRONLY | O_CREAT | O_TRUNC,
-                    0644
-                );
+                outFd = ::open(opts.outputRedirect.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             }
             if (outFd < 0) {
                 outFd = ::open("/dev/null", O_WRONLY);
@@ -338,9 +336,9 @@ inline ProcessHandle spawnChildProcess(
     appendEnv(std::string{});
 
     STARTUPINFOA si{};
-    si.cb      = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = (hStdinRead != nullptr) ? hStdinRead : ::GetStdHandle(STD_INPUT_HANDLE);
+    si.cb         = sizeof(si);
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = (hStdinRead != nullptr) ? hStdinRead : ::GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = INVALID_HANDLE_VALUE;
     si.hStdError  = INVALID_HANDLE_VALUE;
 
@@ -589,13 +587,10 @@ inline size_t
 inline bool waitForTcpPort(std::string_view host, uint16_t port, int timeoutMs = 15000) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
-        asio::io_context            testCtx;
-        asio::ip::tcp::socket       sock(testCtx);
-        utilxx_base::AsioErrorCode  ec;
-        sock.connect(
-            asio::ip::tcp::endpoint(asio::ip::make_address(std::string{host}), port),
-            ec
-        );
+        asio::io_context           testCtx;
+        asio::ip::tcp::socket      sock(testCtx);
+        utilxx_base::AsioErrorCode ec;
+        sock.connect(asio::ip::tcp::endpoint(asio::ip::make_address(std::string{host}), port), ec);
         if (!ec) {
             sock.close();
             return true;
@@ -607,10 +602,10 @@ inline bool waitForTcpPort(std::string_view host, uint16_t port, int timeoutMs =
 
 /// 申请一个空闲本地 TCP 端口 (bind 0 后立刻释放)
 inline uint16_t findFreeTcpPort() {
-    asio::io_context            ctx;
-    asio::ip::tcp::acceptor     acceptor(ctx);
-    asio::ip::tcp::endpoint     ep(asio::ip::make_address("127.0.0.1"), 0);
-    utilxx_base::AsioErrorCode  ec;
+    asio::io_context           ctx;
+    asio::ip::tcp::acceptor    acceptor(ctx);
+    asio::ip::tcp::endpoint    ep(asio::ip::make_address("127.0.0.1"), 0);
+    utilxx_base::AsioErrorCode ec;
     acceptor.open(ep.protocol(), ec);
     if (ec) {
         return 0;
@@ -705,11 +700,14 @@ inline std::string findSharedLibPath() {
 #else
     const std::vector<std::string> libNames = {"libagentxx.so", "libagentxxd.so"};
 #endif
-    auto                      exeDir = executableDir();
-    auto                      cwd    = fs::current_path(ec);
-    std::vector<fs::path>     dirs   = {exeDir, cwd, cwd / "exec",
-                                       cwd / "agent" / "build" / "linux-release" / "exec",
-                                       cwd / "agent" / "build" / "linux-debug" / "exec"};
+    auto                  exeDir = executableDir();
+    auto                  cwd    = fs::current_path(ec);
+    std::vector<fs::path> dirs
+        = {exeDir,
+           cwd,
+           cwd / "exec",
+           cwd / "agent" / "build" / "linux-release" / "exec",
+           cwd / "agent" / "build" / "linux-debug" / "exec"};
     for (const auto& dir : dirs) {
         for (const auto& name : libNames) {
             candidates.push_back(dir / name);
@@ -733,8 +731,8 @@ inline std::string findAgentxxCliPath() {
 #else
     const std::string exeName = "agentxx_cli";
 #endif
-    auto                  exeDir = executableDir();
-    auto                  cwd    = fs::current_path(ec);
+    auto                  exeDir     = executableDir();
+    auto                  cwd        = fs::current_path(ec);
     std::vector<fs::path> candidates = {
         exeDir / exeName,
         cwd / exeName,
@@ -759,15 +757,16 @@ struct RealRunConfigOptions {
     std::string dataDir;    ///< 数据目录 (sqlite 会话库/全局设置)
     std::string workDir;    ///< 会话工作目录
     std::string llmBaseUrl; ///< mock LLM 地址 (http://127.0.0.1:<port>/v1)
-    std::string modelName          = "bench-sim";
-    size_t      contextMaxToken    = 8 << 20; ///< 极大上限, 避免触发上下文压缩
-    bool        enableSubagent     = false;
-    bool        enableWorktree     = false;
+    std::string modelName       = "bench-sim";
+    size_t      contextMaxToken = 8 << 20; ///< 极大上限, 避免触发上下文压缩
+    bool        enableSubagent  = false;
+    bool        enableWorktree  = false;
     std::vector<std::string> pluginDirs; ///< 空 = 5 常用插件 (目录名)
 };
 
 /// 插件条目的 yaml 路径 (支持内置名/绝对目录/任意路径)
-inline std::string resolvePluginPathForYaml(const std::string& entry, std::string_view pluginsRoot) {
+inline std::string
+    resolvePluginPathForYaml(const std::string& entry, std::string_view pluginsRoot) {
     if (entry.rfind("builtin://", 0) == 0 || entry.rfind("/", 0) == 0
         || entry.find(':') != std::string::npos) {
         return entry; // 已是内置名或绝对路径
@@ -808,10 +807,8 @@ inline std::string
 
 /// 生成 client (tui/cli 模式) 配置文件内容:
 /// - 远程模式只需数据目录/插件 (模型由 server 提供); 仍附带模型段以便本地运行
-inline std::string buildClientYamlConfig(
-    const RealRunConfigOptions& opt,
-    std::string_view            pluginsRootDir = {}
-) {
+inline std::string
+    buildClientYamlConfig(const RealRunConfigOptions& opt, std::string_view pluginsRootDir = {}) {
     std::ostringstream ofs;
     ofs << "# 由 agentxx_benchmark 生成的资源基准测试配置 (client)\n";
     ofs << "data_dir: " << opt.dataDir << "\n";
@@ -877,8 +874,8 @@ inline FixedGroup makeFixedGroup(size_t index) {
         "RES-BENCH user turn {} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
         idxStr
     );
-    std::string callId    = fmt::format("call-{}", idxStr);
-    std::string toolArgs  = "{\"path\":\"README.md\",\"line_offset\":0,\"line_limit\":40}";
+    std::string callId   = fmt::format("call-{}", idxStr);
+    std::string toolArgs = "{\"path\":\"README.md\",\"line_offset\":0,\"line_limit\":40}";
     std::string toolContent
         = fmt::format("RES-BENCH tool result {} | {}", idxStr, getFixedToolResultPayload());
     std::string assistSummary = fmt::format(
@@ -909,11 +906,11 @@ inline FixedGroup makeFixedGroup(size_t index) {
     g.viewTool.role = agent::ViewMessage::Role::Tool;
     g.viewTool.text = toolArgs;
     agent::ViewMessage::ToolData td;
-    td.toolName         = "agentxx_filesystem_read";
-    td.toolCallId       = callId;
-    td.toolResult       = toolContent;
-    td.toolFinished     = true;
-    g.viewTool.tool     = td;
+    td.toolName          = "agentxx_filesystem_read";
+    td.toolCallId        = callId;
+    td.toolResult        = toolContent;
+    td.toolFinished      = true;
+    g.viewTool.tool      = td;
     g.viewTool.collapsed = true;
 
     g.viewAssist = agent::ViewMessage::makeText(agent::ViewMessage::Role::Assistant, assistSummary);
@@ -1005,7 +1002,8 @@ inline const CalibratedCounts& getCalibratedCounts() {
 // 7. 容器字节估算
 // ---------------------------------------------------------------------------
 
-/// 采样并填充 ResourceResult 的内存细项 (rssMB/privateMB 兼容字段同步更新)/// - includeModules: 解析 smaps 生成模块级分解 (开销数毫秒, 建议只在采样点开启)
+/// 采样并填充 ResourceResult 的内存细项 (rssMB/privateMB 兼容字段同步更新)/// - includeModules:
+/// 解析 smaps 生成模块级分解 (开销数毫秒, 建议只在采样点开启)
 /// - includeTrim:    调用 malloc_trim(0) 测可回收量 (仅自身进程有效, 会改变内存状态)
 inline void fillResourceMemDetail(
     ResourceResult& r,
@@ -1018,8 +1016,8 @@ inline void fillResourceMemDetail(
     r.privateMB       = r.mem.privateMB;
     r.heapFragmentPct = heapFragmentPercent(r.mem);
     if (includeModules) {
-        auto bd     = sampleModuleBreakdown(pid, 18);
-        r.modules   = std::move(bd.rows);
+        auto bd   = sampleModuleBreakdown(pid, 18);
+        r.modules = std::move(bd.rows);
     }
     if (includeTrim) {
         r.trimReclaimableMB = trimReclaimableMB();
@@ -1039,7 +1037,6 @@ inline size_t estimateLlmMessagesBytes(const utilxx_base::Json& llmMsgs) {
     }
     return llmMsgs.dump().size();
 }
-
 
 // ---------------------------------------------------------------------------
 // 8. 插件配置 / 主机信息 / 负载缩放
@@ -1061,9 +1058,9 @@ inline std::vector<agent::PluginConfig> bench5PluginConfigs() {
 /// 采集运行环境信息 (写入报告头部, 便于跨机器/跨版本对比)
 inline HostInfo collectHostInfo() {
     HostInfo info;
-    info.system    = utilxx_base::getSystemName();
-    info.exePath   = currentExecutablePath();
-    info.cpuCores  = std::thread::hardware_concurrency();
+    info.system   = utilxx_base::getSystemName();
+    info.exePath  = currentExecutablePath();
+    info.cpuCores = std::thread::hardware_concurrency();
 #ifdef AGENTXX_VERSION_STRING
     info.version = AGENTXX_VERSION_STRING;
 #endif
@@ -1080,7 +1077,7 @@ inline HostInfo collectHostInfo() {
     }
 #else
     {
-        auto meminfo = readWholeFile("/proc/meminfo");
+        auto               meminfo = readWholeFile("/proc/meminfo");
         std::istringstream iss(meminfo);
         std::string        line;
         while (std::getline(iss, line)) {
@@ -1381,7 +1378,6 @@ inline ResourceLlmSimServer startResourceLlmSimServer() {
 
     return sim;
 }
-
 
 } // namespace bench
 } // namespace agentxx

@@ -29,7 +29,7 @@
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
 // ResCtx, create 经 *plugin_ctx 交付宿主 / destroy 释放
 struct ResCtx {
-    const PluginxxHost*     host = nullptr;
+    const PluginxxHost*          host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
 
     auto logger() const noexcept {
@@ -48,7 +48,7 @@ struct ResCtx {
 
 /// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
 static std::string ownInfoString(
-    const PluginxxHost*            host,
+    const PluginxxHost*                 host,
     const agentxx::plugin::AgentIfaces& iface,
     const char*                         key
 ) {
@@ -61,10 +61,10 @@ static std::string ownInfoString(
     if (!info.data) {
         return {};
     }
-    std::string         out;
+    std::string    out;
     PluginxxString val{nullptr, 0};
-    auto                infoSv = agentxx::plugin::PluginStringView::toSv(&info);
-    auto                keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
+    auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
+    auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
     iface.json->json_get_string(host, &infoSv, &keySv, &val);
     if (val.data) {
         out.assign(val.data, static_cast<size_t>(val.size));
@@ -142,11 +142,8 @@ extern "C" PLUGINXX_EXPORT int
 ///   统一摘除 (skills/memory/mcp 的 owner 记录), 这里不重复反注册。
 /// - `destroy`: 只释放本地内存, 不创建异步工作、不调用宿主注册接口。
 
-static void* resAgentStart(
-    ResCtx&                            ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    resAgentStart(ResCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
@@ -198,8 +195,7 @@ static void* resAgentStart(
     return nullptr;
 }
 
-static void*
-    resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

@@ -51,8 +51,7 @@ static asio::awaitable<void> sleepMs(int ms) {
 }
 
 /// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
-void* PLUGINXX_CALL
-    fakeClientStopHook(void*, const PluginxxOperatorNotify*, PluginxxString*) {
+void* PLUGINXX_CALL fakeClientStopHook(void*, const PluginxxOperatorNotify*, PluginxxString*) {
     return nullptr;
 }
 
@@ -783,9 +782,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
 
         // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
-        std::atomic<int>           hits{0};
+        std::atomic<int>      hits{0};
         PluginxxSubscription* subs[4] = {};
-        auto                       subFn   = +[](const PluginxxStringView*, void* ud) {
+        auto                  subFn   = +[](const PluginxxStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
         const auto events8 = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
@@ -813,7 +812,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::ClientPluginInstance* inst   = nullptr;
             const AgentxxClientEventsIface*        events = nullptr;
             std::atomic<int>                       hits{0};
-            PluginxxSubscription*             dynSub        = nullptr;
+            PluginxxSubscription*                  dynSub   = nullptr;
             void (*incFn)(const PluginxxStringView*, void*) = nullptr;
         };
 
@@ -857,7 +856,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 8.4 同轮派发中退订后续 handler: 未开始的回调不得执行 (F18)
         struct UnsubNextState {
             const AgentxxClientEventsIface* events = nullptr;
-            PluginxxSubscription*      next   = nullptr;
+            PluginxxSubscription*           next   = nullptr;
             std::atomic<int>                first{0};
             std::atomic<int>                second{0};
         };
@@ -935,7 +934,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (instCfg) {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
-            const auto self9 = agentxx::plugin::ClientIfaces::query(instCfg->hostView()).self;
+            const auto     self9 = agentxx::plugin::ClientIfaces::query(instCfg->hostView()).self;
             PluginxxString json{nullptr, 0};
             if (self9 && self9->get_plugin_args) {
                 self9->get_plugin_args(instCfg->hostView(), &json);

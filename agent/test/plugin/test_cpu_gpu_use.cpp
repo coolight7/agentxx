@@ -142,10 +142,10 @@ asio::awaitable<TestResult>
     {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("agentxx.system_usage"));
         PluginxxString err{nullptr, 0};
-        int                 opStatus = -1;
-        std::string         payload;
-        bool                done = false;
-        using StateTuple         = std::tuple<int*, std::string*, bool*>;
+        int            opStatus = -1;
+        std::string    payload;
+        bool           done = false;
+        using StateTuple    = std::tuple<int*, std::string*, bool*>;
         StateTuple state{&opStatus, &payload, &done};
 
         auto* op = ctx->pluginManager->invokeCapabilityAsync(

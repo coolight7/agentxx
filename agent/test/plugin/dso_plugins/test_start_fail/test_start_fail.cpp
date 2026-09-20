@@ -63,9 +63,8 @@ const void* queryIface(const PluginxxHost* host, const char* iid) {
 
 /// 发布进度事件 (供测试断言每一步都真实执行过)
 void report(const PluginxxHost* host, const char* step, bool ok) {
-    const auto* events = static_cast<const PluginxxEventsIface*>(
-        queryIface(host, PLUGINXX_IFACE_EVENTS)
-    );
+    const auto* events
+        = static_cast<const PluginxxEventsIface*>(queryIface(host, PLUGINXX_IFACE_EVENTS));
     if (!events || !events->publish) {
         return;
     }
@@ -159,7 +158,7 @@ extern "C" PLUGINXX_EXPORT int
 }
 
 extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
-    void*                              plugin_ctx,
+    void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
@@ -210,9 +209,8 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
     }
 
     // 3. 事件订阅
-    const auto* events = static_cast<const PluginxxEventsIface*>(
-        queryIface(host, PLUGINXX_IFACE_EVENTS)
-    );
+    const auto* events
+        = static_cast<const PluginxxEventsIface*>(queryIface(host, PLUGINXX_IFACE_EVENTS));
     if (!events || !events->subscribe) {
         setError(host, error_out, failStep(host, "events_iface"));
         return nullptr;

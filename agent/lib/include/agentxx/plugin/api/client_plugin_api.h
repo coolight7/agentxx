@@ -46,8 +46,8 @@ extern "C" {
 /* ==================== 插件元信息 ==================== */
 
 typedef struct AgentxxClientPluginInfo {
-    int32_t                 api_version; ///< 必须 >= AGENTXX_CLIENT_PLUGIN_API_VERSION
-    uint32_t                _reserved;   ///< 8 字节补齐
+    int32_t            api_version; ///< 必须 >= AGENTXX_CLIENT_PLUGIN_API_VERSION
+    uint32_t           _reserved;   ///< 8 字节补齐
     PluginxxStringView name;        ///< 唯一标识 (与 agent 侧插件共用命名空间)
     PluginxxStringView version;
     PluginxxStringView description;
@@ -76,23 +76,23 @@ typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段
 /* ==================== 工具特化渲染器 (Tool Renderer / Template) ==================== */
 
 typedef struct AgentxxToolRenderInput {
-    int32_t                 version;      ///< 结构体版本 (必须 == 1)
-    uint32_t                _reserved;    ///< 8 字节对齐
+    int32_t            version;      ///< 结构体版本 (必须 == 1)
+    uint32_t           _reserved;    ///< 8 字节对齐
     PluginxxStringView tool_call_id; ///< 工具调用 ID
     PluginxxStringView tool_name;    ///< 工具名
     PluginxxStringView args_json;    ///< 参数 JSON 字符串
     PluginxxStringView result_text;  ///< 执行结果文本 (未完成时为空)
-    int32_t                 is_finished;  ///< 0=运行中, 1=已完成
-    int32_t                 is_error;     ///< 0=正常, 1=错误
-    int32_t                 max_width;    ///< 渲染内容区可用列宽预算 (<=0 表示不限)
-    uint32_t                _pad;         ///< 8 字节对齐
+    int32_t            is_finished;  ///< 0=运行中, 1=已完成
+    int32_t            is_error;     ///< 0=正常, 1=错误
+    int32_t            max_width;    ///< 渲染内容区可用列宽预算 (<=0 表示不限)
+    uint32_t           _pad;         ///< 8 字节对齐
 } AgentxxToolRenderInput;
 
 typedef struct AgentxxToolRenderOutput {
     PluginxxString displayName; ///< 显示名 (如 "Read", "Edit", "Bash", 空则回退原始 toolName)
     PluginxxString summary; ///< 一行摘要 (如 " · [0, 100] /path/file", 可带或不带前导 " · ")
     PluginxxString items_json; ///< 展开体 items JSON 数组 (可选, 空则走默认 args/result 展示;
-                                    ///< 支持 text/button/diagram/separator/diff)
+                               ///< 支持 text/button/diagram/separator/diff)
 } AgentxxToolRenderOutput;
 
 typedef int32_t(PLUGINXX_CALL* AgentxxToolRenderFn)(
@@ -102,11 +102,11 @@ typedef int32_t(PLUGINXX_CALL* AgentxxToolRenderFn)(
 );
 
 typedef struct AgentxxToolRenderSpec {
-    int32_t                 version;   ///< 结构体版本 (必须 == 1)
-    uint32_t                _reserved; ///< 8 字节对齐
-    PluginxxStringView tool_name; ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
-    AgentxxToolRenderFn     render_fn; ///< 渲染回调 (可为 NULL; 非空时优先调用)
-    void*                   user_data; ///< 回调上下文 (render_fn 非空时有效)
+    int32_t             version;   ///< 结构体版本 (必须 == 1)
+    uint32_t            _reserved; ///< 8 字节对齐
+    PluginxxStringView  tool_name; ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
+    AgentxxToolRenderFn render_fn; ///< 渲染回调 (可为 NULL; 非空时优先调用)
+    void*               user_data; ///< 回调上下文 (render_fn 非空时有效)
     PluginxxStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由宿主解析执行)
 } AgentxxToolRenderSpec;
 
@@ -114,18 +114,15 @@ typedef struct AgentxxToolRenderSpec {
 
 /// 动作派发上下文 (宿主在 client io 线程构造, 仅本次回调有效; 全部只读借用)
 typedef struct AgentxxUiActionContext {
-    int32_t  version;                 ///< == 1
-    uint32_t _reserved;               ///< 8 字节补齐
-    PluginxxStringView owner_id; ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
+    int32_t            version;     ///< == 1
+    uint32_t           _reserved;   ///< 8 字节补齐
+    PluginxxStringView owner_id;    ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
     PluginxxStringView action_id;   ///< 按钮声明的 action_id
     PluginxxStringView action_args; ///< 参数 JSON object dump (空 = 无参)
 } AgentxxUiActionContext;
 
 /// 动作处理器 (client io 线程同步调用; 不得抛异常出边界, 宿主兜底)
-typedef void(PLUGINXX_CALL* AgentxxUiActionFn)(
-    const AgentxxUiActionContext* ctx,
-    void*                         user_data
-);
+typedef void(PLUGINXX_CALL* AgentxxUiActionFn)(const AgentxxUiActionContext* ctx, void* user_data);
 
 /// 通用 overlay 类型 (首版四种, 一次实现)
 typedef enum AgentxxOverlayType {
@@ -137,8 +134,8 @@ typedef enum AgentxxOverlayType {
 
 /// 通用 overlay 参数 (全部只读借用, 宿主拷贝后使用)
 typedef struct AgentxxOverlaySpec {
-    int32_t                 version;    ///< == 1
-    int32_t                 type;       ///< AgentxxOverlayType
+    int32_t            version;    ///< == 1
+    int32_t            type;       ///< AgentxxOverlayType
     PluginxxStringView title;      ///< 标题 (空则宿主回退默认)
     PluginxxStringView payload;    ///< 内容 (语义见 AgentxxOverlayType)
     PluginxxStringView extra_json; ///< 扩展 JSON object (可空; 如 {"width_frac":0.8})
@@ -166,20 +163,17 @@ typedef struct AgentxxClientUiIface {
         const PluginxxHost*       host,
         const PluginxxStringView* id,
         const PluginxxStringView* initialJson,
-        int32_t                        align,
-        int32_t                        order
+        int32_t                   align,
+        int32_t                   order
     );
     /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回非 0
     int32_t(PLUGINXX_CALL* update_status_item)(
         const PluginxxHost*       host,
-        AgentxxStatusItem*             item,
+        AgentxxStatusItem*        item,
         const PluginxxStringView* json
     );
     /// 注销状态栏项 (句柄随后失效)
-    void(PLUGINXX_CALL* unregister_status_item)(
-        const PluginxxHost* host,
-        AgentxxStatusItem*       item
-    );
+    void(PLUGINXX_CALL* unregister_status_item)(const PluginxxHost* host, AgentxxStatusItem* item);
 
     /* ---- 侧边栏面板 ---- */
     /// 注册侧边栏面板; 返回句柄 (宿主持有; 卸载自动清理)
@@ -199,7 +193,7 @@ typedef struct AgentxxClientUiIface {
     ///   register_panel 关联的 on_action (见 entry 注册流程; 经回调参数注入)
     int32_t(PLUGINXX_CALL* update_panel)(
         const PluginxxHost*       host,
-        AgentxxPanel*                  panel,
+        AgentxxPanel*             panel,
         const PluginxxStringView* itemsJson
     );
     void(PLUGINXX_CALL* unregister_panel)(const PluginxxHost* host, AgentxxPanel* panel);
@@ -218,13 +212,13 @@ typedef struct AgentxxClientUiIface {
     ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
     int32_t(PLUGINXX_CALL* update_info_section)(
         const PluginxxHost*       host,
-        AgentxxInfoSection*            section,
+        AgentxxInfoSection*       section,
         const PluginxxStringView* itemsJson
     );
     /// 注销 Info 栏段落 (句柄随后失效)
     void(PLUGINXX_CALL* unregister_info_section)(
         const PluginxxHost* host,
-        AgentxxInfoSection*      section
+        AgentxxInfoSection* section
     );
 
     /* ---- 斜杠命令 ---- */
@@ -238,7 +232,7 @@ typedef struct AgentxxClientUiIface {
         const PluginxxStringView* name,
         const PluginxxStringView* description,
         int32_t(PLUGINXX_CALL* execute)(
-            void*                          ud,
+            void*                     ud,
             const PluginxxStringView* argsJson,
             PluginxxString*           actionOut,
             PluginxxString*           errorOut
@@ -252,11 +246,8 @@ typedef struct AgentxxClientUiIface {
 
     /* ---- toast 提示 ---- */
     /// 显示 toast 提示 (level: 0=info 1=warning 2=error; 实现可忽略级别差异)
-    void(PLUGINXX_CALL* show_toast)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* text,
-        int32_t                        level
-    );
+    void(PLUGINXX_CALL*
+             show_toast)(const PluginxxHost* host, const PluginxxStringView* text, int32_t level);
 
     /* ---- 工具消息装饰 ---- */
     /// 更新/删除本插件对某次工具调用的消息装饰 (io 线程约束):
@@ -293,7 +284,7 @@ typedef struct AgentxxClientUiIface {
     /// - 插件卸载/禁用时宿主自动注销
     /// 返回 0 成功, 非 0 失败
     int32_t(PLUGINXX_CALL* register_tool_renderer)(
-        const PluginxxHost*     host,
+        const PluginxxHost*          host,
         const AgentxxToolRenderSpec* spec
     );
     int32_t(PLUGINXX_CALL* unregister_tool_renderer)(
@@ -310,8 +301,8 @@ typedef struct AgentxxClientUiIface {
     int32_t(PLUGINXX_CALL* bind_action_handler)(
         const PluginxxHost*       host,
         const PluginxxStringView* target_id,
-        AgentxxUiActionFn              on_action,
-        void*                          user_data
+        AgentxxUiActionFn         on_action,
+        void*                     user_data
     );
     /// 解绑动作处理器 (不存在忽略, 返回 0)
     int32_t(PLUGINXX_CALL* unbind_action_handler)(
@@ -323,10 +314,7 @@ typedef struct AgentxxClientUiIface {
     /// - spec->version 必须 == 1; type 越界返回非 0
     /// - 宿主拷贝字符串后 postToUi, 不阻塞插件
     /// - 返回 0 成功
-    int32_t(PLUGINXX_CALL* open_overlay)(
-        const PluginxxHost*  host,
-        const AgentxxOverlaySpec* spec
-    );
+    int32_t(PLUGINXX_CALL* open_overlay)(const PluginxxHost* host, const AgentxxOverlaySpec* spec);
     /// 关闭当前 overlay (任何插件都可关; manager 传插件名仅记日志/鉴权预留)
     void(PLUGINXX_CALL* close_overlay)(const PluginxxHost* host);
 } AgentxxClientUiIface;
@@ -344,7 +332,7 @@ typedef struct AgentxxClientEventsIface {
     /// AgentxxClientEvent 枚举值; 失败返回 NULL
     PluginxxSubscription*(PLUGINXX_CALL* subscribe)(
         const PluginxxHost* host,
-        int32_t                  event, /* AgentxxClientEvent */
+        int32_t             event, /* AgentxxClientEvent */
         void(PLUGINXX_CALL* handler)(const PluginxxStringView* payloadJson, void* ud),
         void* ud
     );
@@ -365,10 +353,7 @@ typedef struct AgentxxClientSessionIface {
     ///  "interfaces":["agentxx.client.panel",...],
     ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
     /// (model/models/agentPlugins 依赖服务端推送; 未收到时为空)
-    int32_t(PLUGINXX_CALL* get_client_state)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_client_state)(const PluginxxHost* host, PluginxxString* out);
     /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)
     /// - 与用户输入同排队语义 (流式中进 pendingInputs), 不绕过 UI 状态机
     /// - 返回 0 成功; 非 0 表示宿主不可用 (未连接等)
@@ -414,30 +399,18 @@ typedef struct AgentxxClientSelfIface {
 
     /// 本插件信息 JSON {"name","version","description","path"}
     /// (加载时常用: 从 path 推导资源目录; host->alloc)
-    int32_t(PLUGINXX_CALL* get_own_info)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_own_info)(const PluginxxHost* host, PluginxxString* out);
     /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程; host->alloc):
     /// 宿主不解析 args 字段语义, 整体原样传递; 未配置时返回 "{}"
-    int32_t(PLUGINXX_CALL* get_plugin_args)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_plugin_args)(const PluginxxHost* host, PluginxxString* out);
     /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
     /// host->alloc; 未指定返回空串)
     /// - 可指向文件或目录 (由插件自行判断类型并加载)
     /// - 宿主已归一化为绝对路径 (正斜杠, lexically_normal)
-    int32_t(PLUGINXX_CALL* get_plugin_config_path)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_plugin_config_path)(const PluginxxHost* host, PluginxxString* out);
     /// 读取当前 client 使用的语言 (client io 线程; 返回 0 成功, out 填入如 "en" / "zh-cn",
     /// host->alloc 分配)
-    int32_t(PLUGINXX_CALL* get_language)(
-        const PluginxxHost* host,
-        PluginxxString*     out
-    );
+    int32_t(PLUGINXX_CALL* get_language)(const PluginxxHost* host, PluginxxString* out);
     /// 指定使用的语言 (client io 线程; 返回 0 成功; 不支持 auto, 为空或 auto 时回退为 "en")
     int32_t(PLUGINXX_CALL* set_language)(
         const PluginxxHost*       host,
@@ -498,7 +471,7 @@ typedef const AgentxxClientPluginInfo*(PLUGINXX_CALL* AgentxxClientPluginGetInfo
 /// - 返回 0 成功; 非 0 创建失败 (宿主走失败清理路径并报告错误)
 typedef int32_t(PLUGINXX_CALL* AgentxxClientPluginCreateFn)(
     const PluginxxHost* host,
-    void**                   plugin_ctx
+    void**              plugin_ctx
 );
 /// 可选: 插件实例销毁 (宿主等全部执行中回调完成后调用; 宿主会在此之前自动
 /// 反注册该实例的一切 status item/panel/command/订阅)。只销毁对应 create

@@ -465,7 +465,7 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
 }
 
 static void* exampleGraphAgentStart(
-    AgentCtx&                          ctx,
+    AgentCtx&                     ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {

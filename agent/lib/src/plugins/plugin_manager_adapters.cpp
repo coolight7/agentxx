@@ -196,10 +196,10 @@ asio::awaitable<void> PluginMiddlewareHandle::dispatch(
     auto instKeep  = inst;
 
     plugin::OpDrive drive;
-    drive.start = [hook, instKeep, inputJson, point](
-                      const PluginxxOperatorNotify* notify,
-                      PluginxxString*               err
-                  ) -> void* {
+    drive.start = [hook,
+                   instKeep,
+                   inputJson,
+                   point](const PluginxxOperatorNotify* notify, PluginxxString* err) -> void* {
         auto inSv = agentxx::plugin::PluginStringView::from(inputJson.data(), inputJson.size());
         return hook.start(hook.ud, point, &inSv, notify, err);
     };
@@ -433,10 +433,7 @@ int PluginManager::registerToolPermission(
     return 0;
 }
 
-int PluginManager::unregisterToolPermission(
-    PluginInstance*         inst,
-    PluginxxStringView toolName
-) {
+int PluginManager::unregisterToolPermission(PluginInstance* inst, PluginxxStringView toolName) {
     if (!inst || agentxx::plugin::PluginStringView::empty(toolName)) {
         return -1;
     }

@@ -137,7 +137,7 @@ void AudioStreamHolder::stop() {
 /// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
 
 static void* audioStreamAgentStart(
-    AudioStreamPluginCtx&              ctx,
+    AudioStreamPluginCtx&         ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {

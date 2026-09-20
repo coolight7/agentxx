@@ -100,7 +100,7 @@ void TextSelectionHolder::stop() {
 /// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
 
 static void* textSelectionAgentStart(
-    TextSelectionPluginCtx&            ctx,
+    TextSelectionPluginCtx&       ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {

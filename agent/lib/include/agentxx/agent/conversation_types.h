@@ -425,8 +425,8 @@ struct WireDelta {
 /// - 用于按内存量控制缓冲规模 (见服务端重放缓冲的字节上限), 不追求精确
 /// - attachments 按元数据字符串计, dataUrl 之外的解码数据不计
 inline size_t estimateViewMessageBytes(const ViewMessage& msg) {
-    size_t bytes = sizeof(ViewMessage);
-    bytes += msg.id.size() + msg.text.size();
+    size_t bytes  = sizeof(ViewMessage);
+    bytes        += msg.id.size() + msg.text.size();
     if (msg.tool) {
         bytes += msg.tool->toolName.size() + msg.tool->toolCallId.size()
                  + msg.tool->toolResult.size() + msg.tool->diff.size();
@@ -446,8 +446,8 @@ inline size_t estimateViewMessageBytes(const ViewMessage& msg) {
 /// - 流式 token 增量很小, 但带完整消息载荷的增量 (InsertMessage/UpdateMessage,
 ///   如工具结果回填) 可能是几十 KB 级, 需要按字节核算
 inline size_t estimateWireDeltaBytes(const WireDelta& delta) {
-    size_t bytes = sizeof(WireDelta);
-    bytes += delta.text.size() + delta.msgId.size() + delta.toolName.size()
+    size_t bytes  = sizeof(WireDelta);
+    bytes        += delta.text.size() + delta.msgId.size() + delta.toolName.size()
              + delta.toolCallId.size() + delta.arguments.size() + delta.result.size()
              + delta.nodeName.size() + delta.tailHash.size();
     for (const auto& a : delta.attachments) {

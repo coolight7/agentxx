@@ -89,7 +89,7 @@ struct ClientCommand {
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
     int32_t(PLUGINXX_CALL* execute)(
-        void*                          ud,
+        void*                     ud,
         const PluginxxStringView* args_json,
         PluginxxString*           action_out,
         PluginxxString*           error_out
@@ -301,10 +301,9 @@ public:
     /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
     ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF
     struct Subscription {
-        int32_t event = 0;
-        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payload_json, void* ud)
-            = nullptr;
-        void* ud    = nullptr;
+        int32_t event                                                                  = 0;
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payload_json, void* ud) = nullptr;
+        void* ud                                                                       = nullptr;
         bool  alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
     };
 
@@ -537,11 +536,11 @@ public:
 
     /// 注册状态栏项; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerStatusItem(
-        ClientPluginInstance*   inst,
-        PluginxxStringView id,
-        PluginxxStringView json,
-        int                     align,
-        int                     order
+        ClientPluginInstance* inst,
+        PluginxxStringView    id,
+        PluginxxStringView    json,
+        int                   align,
+        int                   order
     );
 
     void* registerStatusItem(
@@ -564,9 +563,9 @@ public:
     void unregisterStatusItem(ClientPluginInstance* inst, void* item);
     /// 注册面板; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerPanel(
-        ClientPluginInstance*   inst,
-        PluginxxStringView id,
-        PluginxxStringView props_json
+        ClientPluginInstance* inst,
+        PluginxxStringView    id,
+        PluginxxStringView    props_json
     );
 
     void* registerPanel(
@@ -587,9 +586,9 @@ public:
     void unregisterPanel(ClientPluginInstance* inst, void* panel);
     /// 注册 Info 栏段落; 返回宿主句柄 (nullptr = 宿主不支持或 id 冲突)
     void* registerInfoSection(
-        ClientPluginInstance*   inst,
-        PluginxxStringView id,
-        PluginxxStringView props_json
+        ClientPluginInstance* inst,
+        PluginxxStringView    id,
+        PluginxxStringView    props_json
     );
 
     void* registerInfoSection(
@@ -601,11 +600,7 @@ public:
     }
 
     /// 更新 Info 栏段落内容; 返回 0 成功
-    int updateInfoSection(
-        ClientPluginInstance*   inst,
-        void*                   section,
-        PluginxxStringView items_json
-    );
+    int updateInfoSection(ClientPluginInstance* inst, void* section, PluginxxStringView items_json);
 
     int updateInfoSection(ClientPluginInstance* inst, void* section, std::string_view items_json) {
         return updateInfoSection(inst, section, strToSv(items_json));
@@ -615,9 +610,9 @@ public:
     /// 更新/删除工具消息装饰 (io 线程); 返回 0 成功
     /// - tool_call_id 空 = 操作本插件全部; decor_json 空串 = 删除
     int updateToolDecor(
-        ClientPluginInstance*   inst,
-        PluginxxStringView tool_call_id,
-        PluginxxStringView decor_json
+        ClientPluginInstance* inst,
+        PluginxxStringView    tool_call_id,
+        PluginxxStringView    decor_json
     );
 
     int updateToolDecor(
@@ -655,10 +650,10 @@ public:
     /// - 同步写 uiRegistry_ (COW) + inst->actionRegs (disable/enable 恢复用)
     /// 返回 0 成功
     int bindActionHandler(
-        ClientPluginInstance*   inst,
-        PluginxxStringView target_id,
-        AgentxxUiActionFn       on_action,
-        void*                   user_data
+        ClientPluginInstance* inst,
+        PluginxxStringView    target_id,
+        AgentxxUiActionFn     on_action,
+        void*                 user_data
     );
 
     int bindActionHandler(
@@ -699,9 +694,9 @@ public:
 
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
-        ClientPluginInstance*   inst,
-        PluginxxStringView name,
-        PluginxxStringView description,
+        ClientPluginInstance* inst,
+        PluginxxStringView    name,
+        PluginxxStringView    description,
         int32_t(PLUGINXX_CALL*
                     exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
         void* ud
@@ -747,9 +742,9 @@ public:
 
     /// 会话操作 (代理到端点)
     void sendUserInputToPeer(
-        ClientPluginInstance*   inst,
-        PluginxxStringView sessionId,
-        PluginxxStringView text
+        ClientPluginInstance* inst,
+        PluginxxStringView    sessionId,
+        PluginxxStringView    text
     );
 
     void sendUserInputToPeer(
@@ -768,9 +763,9 @@ public:
 
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
     int sendPluginDataToPeer(
-        ClientPluginInstance*   inst,
-        PluginxxStringView event,
-        PluginxxStringView json
+        ClientPluginInstance* inst,
+        PluginxxStringView    event,
+        PluginxxStringView    json
     );
 
     int sendPluginDataToPeer(

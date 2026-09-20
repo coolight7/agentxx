@@ -143,7 +143,7 @@ Workflow: use `search` to resolve the exact symbol name, then `context`/`callers
 )_";
 
 static void injectCodegraphSystemPrompt(
-    const PluginxxHost*            host,
+    const PluginxxHost*                 host,
     const agentxx::plugin::AgentIfaces& iface
 ) {
     if (!host || !iface.prompt || !iface.prompt->set_prompt) {
@@ -172,10 +172,8 @@ static void injectCodegraphSystemPrompt(
     }
 }
 
-static void ensureToolPromptsInHost(
-    const PluginxxHost*            host,
-    const agentxx::plugin::AgentIfaces& iface
-) {
+static void
+    ensureToolPromptsInHost(const PluginxxHost* host, const agentxx::plugin::AgentIfaces& iface) {
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
@@ -629,12 +627,8 @@ static void registerAllTools(PluginCtx& ctx) {
     }
 }
 
-static void snapshotQueryDone(
-    void*                          ud,
-    int32_t                        status,
-    void*                          result,
-    const PluginxxStringView* error
-) {
+static void
+    snapshotQueryDone(void* ud, int32_t status, void* result, const PluginxxStringView* error) {
     (void)error;
     auto* ctx   = static_cast<PluginCtx*>(ud);
     auto* files = static_cast<int64_t*>(result);
@@ -887,7 +881,7 @@ static int codegraphAgentSetup(PluginCtx& ctx) {
 }
 
 static void* codegraphAgentStart(
-    PluginCtx&                         ctx,
+    PluginCtx&                    ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {
@@ -915,8 +909,7 @@ static void* codegraphAgentStart(
     return nullptr;
 }
 
-static void*
-    codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 注册记录与后台任务句柄由宿主在 stop 后统一撤销/取消; 索引数据保留在
     // 实例上下文中, 下次 start 直接复用。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
@@ -946,7 +939,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
 
 /// client 侧每实例上下文 (多实例契约: 原进程级 static 状态全部移入)
 struct ClientCtx {
-    const PluginxxHost*      host = nullptr;
+    const PluginxxHost*           host = nullptr;
     agentxx::plugin::ClientIfaces iface{};
     const AgentxxClientUiIface*   ui           = nullptr;
     AgentxxInfoSection*           section      = nullptr;
@@ -1024,8 +1017,7 @@ static void refreshSection(ClientCtx& c) {
     c.ui->update_info_section(c.host, c.section, &jsonSv);
 }
 
-static void PLUGINXX_CALL
-    onClientPluginData(const PluginxxStringView* payload_json, void* ud) {
+static void PLUGINXX_CALL onClientPluginData(const PluginxxStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
@@ -1079,8 +1071,7 @@ static void PLUGINXX_CALL
     }
 }
 
-extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void
-) {
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
     static const AgentxxClientPluginInfo info{
         AGENTXX_CLIENT_PLUGIN_API_VERSION,
         0,
@@ -1122,7 +1113,7 @@ extern "C" PLUGINXX_EXPORT int
 
 /// client 侧 start: 注册 Info 段落与跨端数据订阅 (注册事务)
 static void* codegraphClientStart(
-    ClientCtx&                         ctx,
+    ClientCtx&                    ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {

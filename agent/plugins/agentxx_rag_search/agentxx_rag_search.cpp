@@ -157,11 +157,8 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
     return 0;
 }
 
-static void* ragStart(
-    RagPluginCtx&                      ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+static void*
+    ragStart(RagPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
@@ -186,8 +183,7 @@ static void* ragStart(
     return nullptr;
 }
 
-static void*
-    ragStop(RagPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void* ragStop(RagPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

@@ -160,10 +160,10 @@ void benchResourceCli() {
     // 必须在任何 poll() 之前持 work_guard: poll() 一旦因"无工作"返回, io_context
     // 会被标记为 stopped, 后续 run() 立即返回 —— 客户端接收循环不会启动,
     // 发送/接收全部失效 (实测: TUI 侧消息数恒为 0)
-    auto             clientWork = asio::make_work_guard(clientCtx);
-    auto             clientEx  = clientCtx.get_executor();
-    auto             io        = std::make_shared<agentxx::client::StdIOClientAgentIO>();
-    std::string      sessionId = generateBenchSessionId();
+    auto        clientWork = asio::make_work_guard(clientCtx);
+    auto        clientEx   = clientCtx.get_executor();
+    auto        io         = std::make_shared<agentxx::client::StdIOClientAgentIO>();
+    std::string sessionId  = generateBenchSessionId();
     io->setSessionId(sessionId);
 
     // Client 插件管理器
@@ -482,11 +482,7 @@ void benchResourceCli() {
 
     // 分阶段内存表挂到报告 (按 mode+side 展示一次)
     phaseTracker.printTable("cli/tui 分阶段内存");
-    reporter.attachPhases(
-        res0.mode,
-        res0.side,
-        phaseTracker.samples()
-    );
+    reporter.attachPhases(res0.mode, res0.side, phaseTracker.samples());
 
     // 优雅退出
     serverIO->stop();
@@ -555,8 +551,8 @@ void benchResourceTui() {
 
     asio::io_context clientCtx;
     auto             clientWork = asio::make_work_guard(clientCtx); // 先于 poll(), 见 M1 说明
-    auto             clientEx  = clientCtx.get_executor();
-    std::string      sessionId = generateBenchSessionId();
+    auto             clientEx   = clientCtx.get_executor();
+    std::string      sessionId  = generateBenchSessionId();
 
     // 注意: TUIClientAgentIO 绝不调用 start()! 仅作端点和共享堆存储
     auto tui = std::make_shared<agentxx::client::TUIClientAgentIO>(
@@ -692,7 +688,7 @@ void benchResourceTui() {
         });
         p.get_future().wait();
     }
-    auto collectLogicalTui = [&](ResourceResult& target,
+    auto collectLogicalTui = [&](ResourceResult&                                         target,
                                  const std::shared_ptr<agentxx::client::TUIRenderState>& snap) {
         std::promise<void> p;
         asio::post(*agent->ioCtx, [&]() {
@@ -898,11 +894,7 @@ void benchResourceTui() {
 
     // 分阶段内存表挂到报告 (按 mode+side 展示一次)
     phaseTracker.printTable("cli/tui 分阶段内存");
-    reporter.attachPhases(
-        res0.mode,
-        res0.side,
-        phaseTracker.samples()
-    );
+    reporter.attachPhases(res0.mode, res0.side, phaseTracker.samples());
 
     // 优雅退出
     serverIO->stop();
@@ -969,8 +961,10 @@ void benchResourceSplitCli() {
     SpawnOptions serverSpawn;
     serverSpawn.workingDir     = tmpDir.string();
     serverSpawn.outputRedirect = (tmpDir / "server_stdout.log").string();
-    serverSpawn.env            = {{"TERM", "xterm-256color"}};
-    auto serverProc            = spawnChildProcess(cliBin, serverArgs, serverSpawn);
+    serverSpawn.env            = {
+        {"TERM", "xterm-256color"}
+    };
+    auto serverProc = spawnChildProcess(cliBin, serverArgs, serverSpawn);
     if (!serverProc.running) {
         std::cout << "  [resource][split_cli] failed to spawn server process" << std::endl;
         return;
@@ -1002,8 +996,10 @@ void benchResourceSplitCli() {
     SpawnOptions clientSpawn;
     clientSpawn.workingDir     = tmpDir.string();
     clientSpawn.outputRedirect = (tmpDir / "client_stdout.log").string();
-    clientSpawn.env            = {{"TERM", "xterm-256color"}};
-    auto clientProc            = spawnChildProcess(cliBin, clientArgs, clientSpawn);
+    clientSpawn.env            = {
+        {"TERM", "xterm-256color"}
+    };
+    auto clientProc = spawnChildProcess(cliBin, clientArgs, clientSpawn);
     if (!clientProc.running) {
         std::cout << "  [resource][split_cli] failed to spawn client process" << std::endl;
         stopChildProcess(serverProc);
@@ -1262,8 +1258,10 @@ void benchResourceSplitTui() {
     SpawnOptions serverSpawn;
     serverSpawn.workingDir     = tmpDir.string();
     serverSpawn.outputRedirect = (tmpDir / "server_stdout.log").string();
-    serverSpawn.env            = {{"TERM", "xterm-256color"}};
-    auto serverProc            = spawnChildProcess(cliBin, serverArgs, serverSpawn);
+    serverSpawn.env            = {
+        {"TERM", "xterm-256color"}
+    };
+    auto serverProc = spawnChildProcess(cliBin, serverArgs, serverSpawn);
     if (!serverProc.running) {
         std::cout << "  [resource][split_tui] failed to spawn server process" << std::endl;
         return;
@@ -1929,14 +1927,14 @@ void benchResourceAll() {
         return;
     }
 
-    auto        tmpDir = createBenchTempDir("bench_resource_scenes");
+    auto        tmpDir   = createBenchTempDir("bench_resource_scenes");
     auto&       reporter = BenchReporter::instance();
     size_t      okScenes = 0;
     std::string failNotes;
 
     std::cout << "\n[resource] 每个场景在独立子进程中执行 (输出目录: " << tmpDir.string() << ")\n";
     for (const auto& scene : resourceSceneModules()) {
-        auto sceneDir = tmpDir / scene;
+        auto            sceneDir = tmpDir / scene;
         std::error_code ec;
         std::filesystem::create_directories(sceneDir, ec);
 
@@ -1944,10 +1942,10 @@ void benchResourceAll() {
         std::cout.flush();
 
         SpawnOptions opts;
-        opts.workingDir     = std::filesystem::current_path(ec).string();
+        opts.workingDir      = std::filesystem::current_path(ec).string();
         opts.createStdinPipe = false; // 子进程不需要 stdin
-        opts.env            = {
-            {"AGENTXX_BENCH_CHILD",      "1"},
+        opts.env             = {
+            {"AGENTXX_BENCH_CHILD",      "1"              },
             {"AGENTXX_BENCH_OUTPUT_DIR", sceneDir.string()},
         };
         // 透传负载缩放系数 (若有)
@@ -1971,7 +1969,7 @@ void benchResourceAll() {
         }
 
         // 合并该场景写出的报告 (取目录内最新的 bench_*.json)
-        std::string latest;
+        std::string                     latest;
         std::filesystem::file_time_type latestTime{};
         for (auto it = std::filesystem::directory_iterator(sceneDir, ec);
              !ec && it != std::filesystem::directory_iterator();
