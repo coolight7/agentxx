@@ -8,23 +8,38 @@ rem NOTE: keep this batch file pure ASCII, multi-byte chars after chcp 65001 may
 rem trigger cmd.exe batch file-pointer misalignment bug.
 set AgentxxBuildConsoleCP=65001
 
-set "crude_dir=%CD%"
-
+rem ===== resolve absolute paths: script dir / source root / build dir =====
+rem - %~dp0 already carries the drive, so derive every path from it instead of
+rem   from the caller's %CD%
+rem - normalize through pushd + %CD% (NOT a plain `cd`): `cd D:\dir` executed
+rem   while the current drive is C: only changes D:'s current directory and
+rem   leaves %CD% on C:, so the old code stored e.g. C:\Windows\System32 and
+rem   then wrongly reported the Boost/OpenSSL/ragel artifacts as missing and
+rem   lost the directory of prepare_windows_deps.ps1
+rem - a UNC script path (\\server\share\...) is kept verbatim: pushd maps a
+rem   temporary drive letter which popd releases again
+rem - all three dirs are stored WITHOUT a trailing backslash (every use appends
+rem   `\...` explicitly), which also avoids the trailing-backslash/quote pitfall
+rem   described next to the BOOST_ROOT assignment below
 set "script_dir=%~dp0"
-set "src_dir=%script_dir%\..\"
-set "build_dir=%script_dir%\..\build\windows-release"
-
-cd %script_dir%
-set script_dir=%CD%
-
-cd %src_dir%
-set src_dir=%CD%
-
-mkdir %build_dir%
-cd %build_dir%
-set build_dir=%CD%
-
-cd %crude_dir%
+set "script_drive=%~d0"
+if not "%script_drive:~1,1%"==":" goto paths_verbatim
+pushd "%script_dir%"
+set "script_dir=%CD%"
+popd
+pushd "%script_dir%\.."
+set "src_dir=%CD%"
+popd
+goto paths_ready
+:paths_verbatim
+set "script_dir=%script_dir:~0,-1%"
+set "src_dir=%script_dir%\.."
+:paths_ready
+set "script_drive="
+set "build_dir=%src_dir%\build\windows-release"
+if not exist "%build_dir%" mkdir "%build_dir%"
+echo [paths] script=%script_dir%
+echo [paths] src=%src_dir% build=%build_dir%
 
 rem MSVC output english
 set VSLANG=1033
@@ -94,7 +109,7 @@ if errorlevel 1 set "AGENTXX_DEPS_NEEDED=1"
 :deps_skip_ragel
 if not defined AGENTXX_DEPS_NEEDED goto deps_done
 echo [deps] Boost/OpenSSL/ragel windows artifacts missing, self-building/fetching ...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%script_dir%deps\prepare_windows_deps.ps1" -Mode Release -SrcDir "%src_dir%third_party"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%script_dir%\deps\prepare_windows_deps.ps1" -Mode Release -SrcDir "%src_dir%\third_party"
 if %ERRORLEVEL% neq 0 (
     echo [deps] auto deps failed ^(AGENTXX_SKIP_AUTO_DEPS=1 to skip^)
     exit /b 1

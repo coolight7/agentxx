@@ -2,6 +2,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "system_monitor_plugin.h"
+#include "utilxx_base/log.h"
 #include "utilxx_base/system.h"
 #include <fmt/format.h>
 #include <string>
