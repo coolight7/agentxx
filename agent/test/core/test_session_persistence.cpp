@@ -1381,6 +1381,96 @@ static TestResult testViewMessageMsgIdMigration() {
     return TestResult{};
 }
 
+/// 待落盘队列按下标回放 (不持有消息副本):
+/// - 节流窗口内对同一消息的多次更新, 回放时写入"当下内容" (与逐条深拷贝的
+///   最终落库结果一致), 且 append 先于其 update 入队
+/// - Session::restore 整体替换 viewMessages 时丢弃队列 (旧下标失效), 之后
+///   不会再回放陈旧操作
+static TestResult testPendingViewOpsIndexReplay() {
+    using V = agentxx::agent::ViewMessage;
+
+    // Case 1: 窗口内 append + 两次 update 同一消息 → 回放写的都是最新内容
+    {
+        auto sess = std::make_shared<agentxx::agent::Session>();
+        sess->bindIoThread();
+
+        std::vector<std::pair<bool, std::string>> replayed; // (isAppend, text)
+        sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
+            .onAppendViewMessage =
+                [&](const V& m, uint64_t) {
+                    replayed.emplace_back(true, m.text);
+                },
+            .onUpdateViewMessage =
+                [&](const V& m) {
+                    replayed.emplace_back(false, m.text);
+                },
+        });
+
+        // 首次触发立即落库
+        auto id1 = sess->appendViewMessage(makeMsg(V::Role::User, "first"));
+        XX_TEST_EXPECT_EQ(replayed.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(replayed[0].first);
+        XX_TEST_EXPECT_EQ(replayed[0].second, std::string{"first"});
+
+        // 节流窗口内: 追加第二条 + 两次更新 (均进入队列, 不立即落库)
+        auto        id2 = sess->appendViewMessage(makeMsg(V::Role::Tool, "tool-running"));
+        const auto* m2  = [&]() -> const V* {
+            for (const auto& m : sess->viewMessages) {
+                if (m.id == id2) {
+                    return &m;
+                }
+            }
+            return nullptr;
+        }();
+        XX_TEST_EXPECT_TRUE(m2 != nullptr);
+        auto updated       = m2 ? *m2 : makeMsg(V::Role::Tool, "");
+        updated.text       = "tool-step1";
+        sess->updateViewMessage(updated);
+        updated.text = "tool-done";
+        sess->updateViewMessage(updated);
+        XX_TEST_EXPECT_EQ(replayed.size(), size_t{1}); // 仍只有首次那一条
+
+        // 轮末补存: 回放队列 (append + 两次 update), 三条都应是"当下内容"
+        sess->flushViewMessages();
+        XX_TEST_EXPECT_EQ(replayed.size(), size_t{4});
+        if (replayed.size() == 4) {
+            XX_TEST_EXPECT_TRUE(replayed[1].first);
+            XX_TEST_EXPECT_EQ(replayed[1].second, std::string{"tool-done"});
+            XX_TEST_EXPECT_FALSE(replayed[2].first);
+            XX_TEST_EXPECT_EQ(replayed[2].second, std::string{"tool-done"});
+            XX_TEST_EXPECT_FALSE(replayed[3].first);
+            XX_TEST_EXPECT_EQ(replayed[3].second, std::string{"tool-done"});
+        }
+        XX_TEST_EXPECT_EQ(id1.empty(), false);
+    }
+
+    // Case 2: restore 丢弃队列 → 不落库陈旧操作
+    {
+        auto sess = std::make_shared<agentxx::agent::Session>();
+        sess->bindIoThread();
+
+        int appendCalls = 0;
+        int updateCalls = 0;
+        sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
+            .onAppendViewMessage = [&](const V&, uint64_t) { ++appendCalls; },
+            .onUpdateViewMessage = [&](const V&) { ++updateCalls; },
+        });
+
+        sess->appendViewMessage(makeMsg(V::Role::User, "first")); // 立即落库
+        sess->appendViewMessage(makeMsg(V::Role::User, "queued"));
+        XX_TEST_EXPECT_EQ(appendCalls, 1);
+
+        // 还原全量历史 (模拟会话重载): 队列被丢弃
+        sess->restore({makeMsg(V::Role::User, "restored")}, 1);
+        sess->flushViewMessages();
+        XX_TEST_EXPECT_EQ(appendCalls, 1); // 未回放被丢弃的排队操作
+        XX_TEST_EXPECT_EQ(updateCalls, 0);
+        XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{1});
+    }
+
+    return TestResult{};
+}
+
 asio::awaitable<TestResult> run_session_persistence_tests() {
     g_sp_passed = 0;
     g_sp_failed = 0;
@@ -1398,6 +1488,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testPersistenceResilience();
     testStoreConnectionLruEviction();
     testViewMessageMsgIdMigration();
+    testPendingViewOpsIndexReplay();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;

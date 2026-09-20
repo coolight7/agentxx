@@ -360,10 +360,15 @@ private:
     static constexpr int64_t kPersistThrottleMs = 3000;
 
     /// 待落盘的 viewMessages 操作 (保持 append/update 混合顺序, 回放即重放写序列)
+    /// - 只记录 viewMessages 下标 (append-only 容器, 下标稳定), 不持有消息副本:
+    ///   节流窗口内可能有成百上千条消息待落盘, 逐条深拷贝会让消息在内存中存在
+    ///   两份 (实测注入 200K token 历史时多占 1.4 MB)
+    /// - 回放时按当下内容落库: 同一消息在窗口内被多次更新只写最新内容, 最终
+    ///   落库结果与逐条拷贝一致 (append 先于其 update 入队)
     struct PendingViewOp {
-        bool        isAppend = false;
-        ViewMessage msg;
-        uint64_t    counter = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
+        bool     isAppend = false;
+        size_t   index    = 0;   ///< viewMessages 下标 (isAppend/isUpdate 均为该条消息)
+        uint64_t counter  = 0;   ///< isAppend 时的 msgIdCounter (与消息同事务提交)
     };
 
     std::vector<PendingViewOp> pendingViewOps_;

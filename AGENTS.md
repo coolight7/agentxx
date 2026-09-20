@@ -146,6 +146,7 @@ path/to/agentxx_test string_util regex
     - [liburing](agent/third_party/liburing/)
     - [NeoGraph](agent/third_party/neograph/)
     - [Markdown-ui](agent/third_party/markdown-ui/)
+    - [mimalloc](agent/third_party/mimalloc/) 内存分配器 (默认启用, 见"编译"节)
     - [OpenSSL](agent/third_party/openssl-4.0.1/)
     - [simdjson](agent/third_party/simdjson/)
     - [sqlite3] | [sqlite3-cmake](agent/third_party/sqlite3-cmake/)
@@ -274,6 +275,41 @@ path/to/agentxx_test string_util regex
   - hyperscan: fat runtime (运行期多微架构分发, 仅 Linux) **固定禁用** (与 LTO 互斥),
     改用编译期基线 ISA (按目标架构自动选择: x86_64 → `x86-64-v2`, x86 → `core2`),
     从而 hyperscan 也参与 LTO
+- 链接期体积优化 (Release, GCC/Clang, 非交叉, 仅 Linux/Android):
+  - ICF 相同代码合并 `-Wl,--icf=all` (开关 `AGENTXX_ENABLE_ICF`, 默认 ON):
+    仅 mold/gold/lld 支持, 用默认 bfd 时自动跳过。实测体积收益 (已 strip 产物):
+    `agentxx_cli` -3.2%, `libagentxx.so` -2.7% (未 strip 产物因符号表合并看起来更多)
+  - 符号表裁剪仍由发布脚本完成 (`script/*_build.sh` 的 `strip`), 不在链接期做
+    (直接 `cmake --build` 的产物会保留符号表, 属预期)
+- 内存分配器 (mimalloc, 默认启用, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):
+  - 开关在顶层 `agent/CMakeLists.txt`: `AGENTXX_ENABLE_MIMALLOC` (默认 ON) 与
+    `AGENTXX_MIMALLOC_LINK=STATIC|SHARED` (默认 STATIC, 静态并入产物);
+    源码是 `agent/third_party/mimalloc` 子模块, 经 ExternalProject 构建安装
+    (`MI_INSTALL_TOPLEVEL` / `MI_OPT_ARCH=OFF` 通用 CPU 基线 / `MI_ALLOW_THP=OFF`)
+  - 只作用于**最终程序** (`agentxx_cli`/`agentxx_test`/`agentxx_benchmark`), 接入逻辑
+    在 `agent/cmake/agentxx_mimalloc.cmake`: STATIC 用 `-Wl,-u,malloc` 保证从静态库
+    取出定义 malloc/free 的目标文件 (程序自身定义进入动态符号表 → 同进程的
+    libstdc++/dlopen 插件也走 mimalloc, 不会跨模块 free 不匹配); SHARED 用
+    `-u mi_version` 保留 `libmimalloc.so` 依赖, 并把 SONAME 文件装到 exec
+  - 插件 (agent/plugins) 不接入 (内置合并进 libagentxx 的随最终程序用 mimalloc,
+    独立编译的插件动态库跟随宿主进程); `libagentxx.so` 自身也不链接分配器
+  - THP 必须关: 上游 Linux 默认 `MI_ALLOW_THP=FULL` 时按 2 MB 大页保留内存,
+    实测 RSS 翻倍 (19.6 → 37.4 MB); 需要 THP 时运行时用 `MIMALLOC_ALLOW_THP=1`
+  - sanitizer 与 mimalloc 互斥 (ASan 需独占 malloc, 同开会启动崩溃): 非 Release 且
+    `AGENTXX_ENABLE_SANITIZER=ON` 时顶层自动关闭 mimalloc
+  - Windows/MSVC + 动态 CRT (`/MD`) 下静态覆盖不生效 (上游以 `_DLL` 判定), 需真正
+    接管分配器要用 `-DAGENTXX_MIMALLOC_LINK=SHARED`
+  - 实测 (Release, 对比调优后的 glibc): 200K 上下文服务端 RSS +5.5~6.6 MB, 但 user
+    -27% / sys -67% / wall -25%; 数据见 docs/zh-cn/design/benchmark.md 第 9 节
+- 内存占用优化 (与体积无关, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):
+  - `agentxx::util::tuneProcessAllocator()` (BaseAgent 构造时调用; 客户端 main 也调用):
+    glibc 下 `mallopt(M_ARENA_MAX, 1)` —— 线程多时 glibc 默认每个线程建一个 arena
+    (每个预留 64 MB 地址空间), 实测 VmSize 610 MB → 290 MB / 1285 MB → 387 MB;
+    Windows 无对应参数 (空实现)
+  - `releaseFreeHeapPages()` (轮末调用): glibc `malloc_trim(0)` / Windows `_heapmin`,
+    归还堆内空闲页 (实测服务端 RSS -1.7 ~ -2.8 MB)
+  - 未固定 `M_MMAP_THRESHOLD`/`M_TRIM_THRESHOLD`: 固定后 mmap/munmap 系统调用激增
+    (服务端系统态时间 +60%, 场景耗时 +15%), 收益与轮末主动归还重合
 - Debug 插桩: 单一开关 `AGENTXX_ENABLE_SANITIZER` (默认 ON) 同时启用 ASan + UBSan
   (GCC/Clang: `-fsanitize=address` + `-fsanitize=undefined -fno-sanitize-recover=undefined`)
   与插件框架定向探针 (`lib/src/plugins/*.cpp`、`test/plugin/*.cpp`); MSVC 只有 ASan

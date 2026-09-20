@@ -61,3 +61,6 @@
 [submodule "agent/third_party/quickjs"]
 	path = agent/third_party/quickjs
 	url = https://github.com/quickjs-ng/quickjs
+[submodule "agent/third_party/mimalloc"]
+	path = agent/third_party/mimalloc
+	url = https://github.com/microsoft/mimalloc

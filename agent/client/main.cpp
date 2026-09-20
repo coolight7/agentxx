@@ -25,6 +25,12 @@
 #include <stdlib.h>
 #include <string>
 
+#if defined(AGENTXX_ENABLE_MIMALLOC_D)
+// 最终程序接入的内存分配器 (构建时经 cmake/agentxx_mimalloc.cmake 链接, 见
+// agent/CMakeLists.txt 的 AGENTXX_ENABLE_MIMALLOC / AGENTXX_MIMALLOC_LINK)
+#include <mimalloc.h>
+#endif
+
 #if XX_IS_WIN_D
 #include <crtdbg.h>
 #include <windows.h> // GetModuleFileNameW / MAX_PATH
@@ -295,6 +301,22 @@ int main(int argn, char** argv) {
     /// 默认启动 stdio 作为日志输出，对于 tui 等自己拦截日志的可以移除后添加自己的日志拦截器
     auto defaultLogSink = std::make_shared<StderrLogSink>();
     utilxx_base::LogDispatcher::instance().addSink(defaultLogSink);
+
+#if defined(AGENTXX_ENABLE_MIMALLOC_D)
+    // 记录实际接入的内存分配器 (mimalloc 版本号编码: 主版本 + 2 位次版本 + 2 位修订)
+    // - 日志中可直接确认进程用的是 mimalloc 而不是 glibc/CRT
+    // - 该调用同时确保动态链接模式 (libmimalloc.so / mimalloc.dll) 下分配器被真正
+    //   加载, 而非被 --as-needed / 按需导入优化掉 (见 cmake/agentxx_mimalloc.cmake)
+    {
+        const int miVersion = mi_version();
+        XX_LOGI(
+            "[Allocator] mimalloc {}.{}.{}",
+            miVersion / 10000,
+            (miVersion / 100) % 100,
+            miVersion % 100
+        );
+    }
+#endif
 
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)

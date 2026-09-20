@@ -85,7 +85,7 @@ std::string Session::appendViewMessage(ViewMessage msg) {
     if (hooks_.onAppendViewMessage) {
         enqueueViewPersist(PendingViewOp{
             .isAppend = true,
-            .msg      = viewMessages.back(),
+            .index    = viewMessages.size() - 1,
             .counter  = msgIdCounter_,
         });
     }
@@ -124,7 +124,7 @@ void Session::updateViewMessage(ViewMessage msg) {
         if (hooks_.onUpdateViewMessage) {
             enqueueViewPersist(PendingViewOp{
                 .isAppend = false,
-                .msg      = m,
+                .index    = index,
                 .counter  = 0,
             });
         }
@@ -140,6 +140,10 @@ void Session::setStoreHooks(SessionStoreHooks hooks) {
 
 void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter) {
     assertIoThread();
+
+    // 整体替换 viewMessages 前丢弃待落盘队列: 队列按下标引用消息, 替换后
+    // 旧下标不再有效; 恢复发生在会话加载阶段, 此时不应有未落盘增量
+    pendingViewOps_.clear();
 
     // 重建链式哈希: 与 appendViewMessage 一致, 对不含 id 的消息内容哈希
     chainHash.reset();
@@ -213,13 +217,24 @@ void Session::flushPendingViewOps() {
         return;
     }
     for (const auto& op : pendingViewOps_) {
+        // 下标越界防御: restore() 整体替换 viewMessages 时会先清空队列, 正常路径
+        // 不会命中; 此处兜底避免异常路径把错误数据写库
+        if (op.index >= viewMessages.size()) {
+            XX_LOGW(
+                "Session::flushPendingViewOps: stale view index {} (size={})",
+                op.index,
+                viewMessages.size()
+            );
+            continue;
+        }
+        const auto& msg = viewMessages[op.index];
         if (op.isAppend) {
             if (hooks_.onAppendViewMessage) {
-                hooks_.onAppendViewMessage(op.msg, op.counter);
+                hooks_.onAppendViewMessage(msg, op.counter);
             }
         } else {
             if (hooks_.onUpdateViewMessage) {
-                hooks_.onUpdateViewMessage(op.msg);
+                hooks_.onUpdateViewMessage(msg);
             }
         }
     }

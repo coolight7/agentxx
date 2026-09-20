@@ -214,3 +214,107 @@ process_base → agent_constructed → tui_started → agent_init_done
 - `agentxx_test memgrowth` (`agent/test/core/test_memgrowth.cpp`): 内存增长/泄漏回归
   (多轮对话逐轮采样), 用于 CI 式快速验证;
 - `agentxx_benchmark resource_*`: 性能与内存归属分析, 用于优化前后对比与容量评估。
+
+## 8. 一轮内存/体积优化实测 (2026-09)
+
+优化项 (代码位置见 `docs/zh-cn/design/index.md` "内存占用与分配器调整"):
+
+| 项 | 内容 |
+|---|---|
+| 链接期 ICF | `-Wl,--icf=all` (仅 mold/gold/lld; 顶层 `AGENTXX_ENABLE_ICF`, 默认 ON) |
+| 符号裁剪 | 发布脚本 `strip` (与链接期无关, 产物已在 `exec/` 裁剪) |
+| 分配器调整 | glibc `M_ARENA_MAX=1` + 轮末 `malloc_trim(0)`; Windows `_heapmin` |
+| 持久化队列 | `PendingViewOp` 只存消息下标, 不再深拷贝消息 (会话库开启时生效) |
+| 重连重放缓冲 | 条数上限之外增加 4 MB 估算字节上限 (`deltaBufferBytesCap`) |
+
+产物体积 (Release, x86_64, 已 strip):
+
+| 产物 | 优化前 | 优化后 | 变化 |
+|---|---|---|---|
+| `agentxx_cli` | 33.24 MB (未 strip) / 23.17 MB (strip) | 22.42 MB | -32.5% / -3.2% |
+| `libagentxx.so` | 22.18 MB (未 strip) / 16.91 MB (strip) | 16.46 MB | -25.8% / -2.7% |
+| `agentxx_benchmark` | 38.83 MB (未 strip) | 26.88 MB | -30.8% |
+
+> 未 strip 的产物是构建方式差异 (直接 `cmake --build` 后未跑脚本的 strip 步骤), 
+> 正常发布流程产物均已裁剪; ICF 在已 strip 产物上的净收益为 3.2% (cli) / 2.7% (.so)。
+
+资源基准 (聚合 `resource`, 与优化前报告 `/tmp/base_A.json` 同环境对比; Δ 为 RSS):
+
+| 场景 | 采样点 | 优化前 RSS | 优化后 RSS | ΔRSS | ΔVmSize |
+|---|---|---|---|---|---|
+| cli (同进程) | startup | 27.50 | 24.95 | **-2.55** | 611 → 290 MB |
+| cli (同进程) | ctx200k | 32.15 | 29.53 | **-2.62** | 611 → 290 MB |
+| tui (同进程) | ctx200k | 32.49 | 29.63 | **-2.86** | 539 → 282 MB |
+| ffi (动态库调用) | ctx200k | 41.94 | 37.30 | **-4.64** | 1285 → 387 MB |
+| real_tui (真实 TUI) | ctx200k | 33.38 | 30.38 | **-3.00** | 611 → 290 MB |
+| split_cli (真实 server) | ctx200k | 35.49 | 33.79 | **-1.70** | 391 → 133 MB |
+| split_tui (真实 server) | ctx200k | 36.07 | 33.78 | **-2.29** | 391 → 134 MB |
+| split_tui (真实 client) | ctx200k | 19.32 | 17.84 | **-1.48** | 387 → 86 MB |
+| server_only | 235 轮 / 200K | 35.68 | 33.65 | **-2.03** | 390 → 134 MB |
+| real_tui_child (server) | ctxScaled2 | 36.21 | 33.46 | **-2.75** | 391 → 133 MB |
+| plugin_attrib | 未加载任何插件 | 12.12 | 10.50 | **-1.62** | 153 → 89 MB |
+| plugin_attrib | 5 插件全载 | 20.38 | 18.62 | **-1.76** | - |
+
+CPU 与耗时 (同场景 user+sys / wall, 单位秒): 服务端场景 user 时间下降 5%~15%
+(3.70→3.30 / 3.84→3.27 / 3.45→3.23), wall 时间持平或略降 (6.3→6.1 / 6.4→6.0),
+即本轮优化未引入 CPU 代价。VmSize 的大幅下降来自 arena 数量收敛 (未固定
+mmap/trim 阈值, 后者实测会增加 15% 场景耗时)。
+
+优化后复测的稳定性: 同一产物连续两次聚合运行, ΔRSS 均在 ±0.4 MB 内
+(模块级差异表为空), 与第 5 节记录的稳定性一致。
+
+### 后续可优化方向
+
+1. **会话消息双份存储**: `viewMessages` (展示) 与 `llmMessages` (LLM 上下文)
+   各自持有正文, 200K token 历史约 1.9 MB; 若要合并需让 LLM 侧引用展示侧内容
+   (涉及压缩改写语义), 改动面大
+2. **`msgIndex_` 与 `WireDelta` 的 id/文本副本**: 每条消息的 id 在 `viewMessages`
+   与 `msgIndex_` 中各存一份 (长会话约 100 KB 级)
+3. **插件静态依赖**: 每个插件各带一份 fmt/simdjson/正则/curl; 5 个常用插件合计
+   ~8 MB RSS, codegraph 单独 ~6 MB (tree-sitter 语法表 + 后台预索引)
+4. **线程栈**: 默认 8 MB 线程栈使 VmSize 仍有百 MB 级冗余 (RSS 影响很小)
+
+
+## 9. 内存分配器 mimalloc 实测 (2026-09)
+
+构建开关与接入范围见 `docs/zh-cn/design/index.md` "内存占用与分配器调整"
+(`AGENTXX_ENABLE_MIMALLOC`, 默认 ON; `AGENTXX_MIMALLOC_LINK`, 默认 STATIC)。
+对比对象是**调优后的 glibc** (即第 8 节的产物: `M_ARENA_MAX=1` + 轮末
+`malloc_trim(0)`), 因此本节的差值是两个都已针对常驻内存优化过的分配器之间的差值,
+不是 mimalloc 与"未调优 glibc"的差值。
+
+RSS (Release, 同机同场景, 单位 MB):
+
+| 场景 | 采样点 | glibc (基线) | mimalloc (STATIC) | ΔRSS |
+|---|---|---|---|---|
+| cli (同进程) | startup | 24.91 | 30.50 | +5.59 |
+| cli (同进程) | ctx100k | 26.96 | 33.00 | +6.04 |
+| cli (同进程) | ctx200k | 29.41 | 37.25 | +7.84 |
+| split_cli (真实 server) | startup | 24.62 | 25.00 | +0.38 |
+| split_cli (真实 server) | ctx100k | 31.31 | 34.60 | +3.29 |
+| split_cli (真实 server) | ctx200k | 33.66 | 40.23 | +6.57 |
+| split_cli (真实 client) | ctx200k | 18.00 | 18.62 | +0.62 |
+
+CPU 与耗时 (真实 server 进程驱动 705 轮 WebSocket 会话, 200K 上下文):
+
+| 指标 | glibc (基线) | mimalloc (STATIC) | 变化 |
+|---|---|---|---|
+| user | 2280 ms | 1670 ms | -27% |
+| sys | 1120 ms | 370 ms | -67% |
+| wall | 3611 ms | 2700 ms | -25% |
+
+口径说明与结论:
+
+- mimalloc 侧的 `堆在用` / `堆空闲` / `可回收` 恒为 0 / 0 / 0 (这些指标读的是
+  glibc `mallinfo2`), 内存都在 mimalloc 自己的页管理中; 模块分解里表现为
+  `[heap]` 归零、`[anon]` 上升 (mimalloc 的段都是匿名映射)
+- mimalloc 的常驻内存略高: 空闲页保留在各线程堆的页队列里 (清空延迟默认 1s),
+  而 glibc 侧在轮末被 `malloc_trim(0)` 主动归还; 把清空延迟改成 0
+  (`MIMALLOC_PURGE_DELAY=0`) 实测仅回落 ~1 MB, 同时 CPU 略升, 故保持默认
+- 系统态时间的下降主要来自不再有 glibc arena 的 mmap/munmap 与轮末 trim 抖动
+- **THP 必须关闭**: 上游 Linux 默认 `MI_ALLOW_THP=FULL`, 该模式下 mimalloc 以
+  2 MB 大页为单位保留内存、释放小对象后不拆页, 同一场景 RSS 从 ~19.6 MB 涨到
+  ~37.4 MB (匿名页); 本项目构建时固定 `-DMI_ALLOW_THP=OFF`
+- 结论: 用 `AGENTXX_ENABLE_MIMALLOC` 切换两类分配器, 需要常驻内存取 glibc 组合
+  (OFF), 需要 CPU/延迟与长跑抗碎片取 mimalloc (ON, 默认)
+

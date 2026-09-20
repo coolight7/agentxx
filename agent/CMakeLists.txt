@@ -84,6 +84,22 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
   CACHE STRING
   "Which enabled plugins to merge into libagentxx ('all' = all; semicolon/comma list = only listed ones)"
 )
+
+# ===== 内存分配器: mimalloc =====
+# https://github.com/microsoft/mimalloc (源码位于 third_party/mimalloc, 经
+# ExternalProject 构建安装; 接管 malloc/free/new/delete, 替换 glibc / CRT 分配器)
+# - 作用范围: 最终程序 (agentxx_cli / agentxx_test / agentxx_benchmark), 见
+#   cmake/agentxx_mimalloc.cmake
+# - 不受影响的目标: libagentxx.so (动态库跟随宿主的分配器) 与插件动态库
+#   (plugins/ 不改动: 内置合并进 libagentxx 的插件随最终程序使用 mimalloc,
+#    独立编译的插件动态库不链接 mimalloc, 由宿主进程决定实际分配器)
+option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx_cli/test/benchmark)." ON)
+# 链接方式 (外部可指定, 默认静态):
+# - STATIC: 静态库并入产物, 内置分配器 (无额外运行库依赖, 分发单文件即可)
+# - SHARED: 链接 libmimalloc.so / mimalloc.dll (分配器可独立升级/替换)
+set(AGENTXX_MIMALLOC_LINK "STATIC" CACHE STRING "How to link mimalloc: STATIC (built into the program) or SHARED (link the mimalloc shared library).")
+set_property(CACHE AGENTXX_MIMALLOC_LINK PROPERTY STRINGS STATIC SHARED)
+
 # ===== Debug 构建加速选项 / Sanitizers =====
 # 单一开关: 启用后 Debug 配置同时带上三种插桩 (默认开启)
 # - ASan (地址检查): GCC/Clang 用 -fsanitize=address; MSVC 用 /fsanitize=address
@@ -112,6 +128,12 @@ option(AGENTXX_ENABLE_LTO "Enable Link Time Optimization (LTO) for Release build
 # - 链接器选择 (GCC/Clang): auto 自动检测 mold -> gold -> 默认 bfd;
 #   也可直接指定 mold/gold/bfd 等。mold 可大幅减少大体积二进制链接时间
 set(AGENTXX_LINKER "auto" CACHE STRING "Linker for GCC/Clang: auto|mold|gold|bfd|...")
+# - 相同代码合并 (ICF, --icf=all): Release 下把机器码/只读数据完全相同的段
+#   合并为一份, 减小产物体积 (实测已 strip 产物: agentxx_cli -3.2%,
+#   libagentxx.so -2.7%; 未 strip 时因符号表一并合并看起来更多),
+#   对运行行为无影响 (只影响"相同函数/常量是否有不同地址"这种非法用法)。
+#   仅 mold/gold/lld 支持该选项, 使用默认 bfd 链接器时自动跳过
+option(AGENTXX_ENABLE_ICF "Enable Identical Code Folding (--icf=all) for Release builds (mold/gold/lld only)." ON)
 
 # 仅用于指示是否编译用于调试用途，不代表真实编译类型
 # - [XX_IS_DEBUG_D] == 1 时，启用大部分调试日志等信息，因此 profile 之类注重
@@ -196,6 +218,42 @@ if (CMAKE_CROSSCOMPILING AND XX_IS_MINGW_D AND AGENTXX_ENABLE_HYPERSCAN)
   message(WARNING "[agentxx] HyperScan not supported on MinGW cross (Windows+GCC), force AGENTXX_ENABLE_HYPERSCAN=OFF")
   set(AGENTXX_ENABLE_HYPERSCAN OFF CACHE BOOL "Add HyperScan for regex support. Use std::regex if disable." FORCE)
 endif()
+
+# ===== 内存分配器 (mimalloc) 选项校验 =====
+# 链接方式规范化 (只接受 STATIC/SHARED, 其他取值回退默认 STATIC 并告警)
+string(TOUPPER "${AGENTXX_MIMALLOC_LINK}" _agentxx_mimalloc_link)
+if (NOT _agentxx_mimalloc_link STREQUAL "STATIC" AND NOT _agentxx_mimalloc_link STREQUAL "SHARED")
+  message(WARNING "[agentxx] AGENTXX_MIMALLOC_LINK=${AGENTXX_MIMALLOC_LINK} 取值非法 (仅支持 STATIC / SHARED), 已回退 STATIC")
+  set(_agentxx_mimalloc_link "STATIC")
+endif ()
+set(AGENTXX_MIMALLOC_LINK "${_agentxx_mimalloc_link}"
+  CACHE STRING "How to link mimalloc: STATIC (built into the program) or SHARED (link the mimalloc shared library)." FORCE)
+unset(_agentxx_mimalloc_link)
+
+# Sanitizer 与 mimalloc 互斥:
+# - ASan 需要独占 malloc/free (它靠替换分配函数跟踪每一块内存), 与 mimalloc 的
+#   分配器覆盖同时存在时运行即崩溃 (实测: 静态覆盖 + ASan 的可执行程序启动崩溃)
+# - 本项目 Debug 默认开启 AGENTXX_ENABLE_SANITIZER (且插桩只在非 Release 生效),
+#   因此在 Debug/RelWithDebInfo 下按需自动关闭 mimalloc, Release 不受影响
+# - 需要在 Debug 下验证 mimalloc 时, 用 -DAGENTXX_ENABLE_SANITIZER=OFF 重配
+if (AGENTXX_ENABLE_MIMALLOC AND AGENTXX_ENABLE_SANITIZER AND NOT XX_IS_RELEASE_D)
+  message(WARNING
+    "[agentxx] 非 Release 构建启用了 AGENTXX_ENABLE_SANITIZER (ASan 需独占 malloc), "
+    "本次构建自动关闭 mimalloc; 如需在 Debug 下使用 mimalloc 请加 -DAGENTXX_ENABLE_SANITIZER=OFF")
+  set(AGENTXX_ENABLE_MIMALLOC OFF)
+endif ()
+
+# Windows/MSVC 静态链接说明 (不关闭构建, 仅提示):
+# mimalloc 的静态覆盖以 `_DLL` 判定 (_DLL 由 /MD、/MDd 定义), 使用动态 CRT 时
+# 静态库中的 malloc/free 覆盖不生效 (上游刻意如此, 避免与 CRT 的分配器混用),
+# 此时 Windows 上真正接管分配器需要动态链接 (mimalloc.dll + mimalloc-redirect.dll)
+if (AGENTXX_ENABLE_MIMALLOC AND XX_IS_WIN_D AND XX_IS_MSVC_D AND AGENTXX_MIMALLOC_LINK STREQUAL "STATIC")
+  message(WARNING
+    "[agentxx] Windows/MSVC 使用动态 CRT (/MD): mimalloc 静态链接不会覆盖 CRT 分配器, "
+    "如需真正接管请使用 -DAGENTXX_MIMALLOC_LINK=SHARED (随产物部署 mimalloc.dll + mimalloc-redirect.dll)")
+endif ()
+
+message("[agentxx] Memory allocator: mimalloc=${AGENTXX_ENABLE_MIMALLOC} (link: ${AGENTXX_MIMALLOC_LINK})")
 
 message("[agentxx] Test Utf8 Log: 你好！")
 message("[agentxx] Current Configure Type: ${CMAKE_CONFIGURATION_TYPES}")
@@ -503,6 +561,22 @@ if (NOT XX_IS_MSVC_D)
   endif()
   string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LINKER_FLAG}")
   string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LINKER_FLAG}")
+
+  # ===== Release 链接期体积优化 =====
+  # 相同代码合并 (--icf=all): 仅在 mold/gold/lld 下可用, bfd 无该选项
+  # 仅 Linux/Android (ELF): 其他平台链接器对上述选项支持不一
+  # 符号表裁剪由发布脚本完成 (见 script/*_build.sh), 不在链接期处理
+  if (XX_IS_RELEASE_D AND NOT CMAKE_CROSSCOMPILING AND (XX_IS_LINUX_D OR XX_IS_ANDROID_D))
+    if (AGENTXX_ENABLE_ICF)
+      if (_AGENTXX_LINKER_FLAG MATCHES "mold|gold|lld")
+        message("[agentxx] Release: enable ICF (--icf=all) for ${_AGENTXX_LINKER_FLAG}")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS    " -Wl,--icf=all")
+        string(APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,--icf=all")
+      else ()
+        message("[agentxx] Release: ICF skipped (linker does not support --icf)")
+      endif()
+    endif()
+  endif()
   unset(_AGENTXX_LINKER_FLAG)
 endif()
 
@@ -668,6 +742,9 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     "-DAGENTXX_INSTALL_DIR=${AGENTXX_INSTALL_DIR}"
     "-DXX_INSTALL_DIR=${AGENTXX_INSTALL_DIR}"
     -DAGENTXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
+    # 内存分配器 (mimalloc): 最终程序 (client/test/benchmark) 按此把分配器并入产物
+    -DAGENTXX_ENABLE_MIMALLOC=${AGENTXX_ENABLE_MIMALLOC}
+    "-DAGENTXX_MIMALLOC_LINK=${AGENTXX_MIMALLOC_LINK}"
     -DAGENTXX_ENABLE_PLUGIN_CODEGRAPH=${AGENTXX_ENABLE_PLUGIN_CODEGRAPH}
     -DAGENTXX_ENABLE_BOOST_PROCESS=${AGENTXX_ENABLE_BOOST_PROCESS}
     -DAGENTXX_ENABLE_PLUGIN_JS=${AGENTXX_ENABLE_PLUGIN_JS}
@@ -739,6 +816,64 @@ if (AGENTXX_LINUX_IO_URING_SUPPORTED)
     TEST_COMMAND ""
   )
 endif()
+
+# ===== mimalloc (内存分配器) =====
+# - 由 AGENTXX_ENABLE_MIMALLOC 控制: 关闭时不构建, 也不需要源码目录
+# - 只构建与 AGENTXX_MIMALLOC_LINK 对应的一种产物: 静态库 (libmimalloc.a) 与
+#   动态库 (libmimalloc.so) 同名同前缀, 二者同时安装时 find_library 容易链错
+# - MI_INSTALL_TOPLEVEL=ON: 头文件装到 include/、库装到 lib/、cmake config 装到
+#   lib/cmake/mimalloc (与其余依赖一致, 经 CMAKE_PREFIX_PATH 命中)
+# - MI_OPT_ARCH=OFF: 与 hyperscan 基线 ISA 的处理一致, 不把 x64 绑到 haswell/AVX2
+#   (上游 x64 默认即 OFF)、arm64 绑到 armv8.1-a (上游 arm64 默认开启): 本项目
+#   产物要发布到各种设备, 需要保持通用 CPU 基线
+# - MI_OVERRIDE=ON: 库内提供 malloc/free/... 覆盖入口 (分配器是否真正接管由
+#   最终程序的链接方式决定, 见 cmake/agentxx_mimalloc.cmake)
+# - MI_ALLOW_THP=OFF: 关闭透明大页 (上游 Linux 默认 FULL)。THP 让 mimalloc 以 2 MB
+#   为单位向系统申请/保留内存, 释放小对象后所在的整块大页不拆分、常驻不降, 实测
+#   同一场景 RSS 从 ~19.6 MB 涨到 ~37.4 MB (匿名页), 与本项目"优先控制常驻内存"
+#   的目标相反; 需要 THP 换 TLB 性能时可运行时用 MIMALLOC_ALLOW_THP=1 打开
+#   (该选项是运行期选项, 环境变量可覆盖编译期默认值)
+if (AGENTXX_ENABLE_MIMALLOC)
+  set(AGENTXX_MIMALLOC_SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/mimalloc/")
+  if (NOT EXISTS "${AGENTXX_MIMALLOC_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "[agentxx] 未找到 mimalloc 源码: ${AGENTXX_MIMALLOC_SOURCE_DIR}\n"
+      "  请执行: git submodule update --init agent/third_party/mimalloc\n"
+      "  或关闭该功能: -DAGENTXX_ENABLE_MIMALLOC=OFF")
+  endif ()
+
+  set(_AGENTXX_MIMALLOC_BUILD_SHARED OFF)
+  set(_AGENTXX_MIMALLOC_BUILD_STATIC ON)
+  if (AGENTXX_MIMALLOC_LINK STREQUAL "SHARED")
+    set(_AGENTXX_MIMALLOC_BUILD_SHARED ON)
+    set(_AGENTXX_MIMALLOC_BUILD_STATIC OFF)
+  endif ()
+  # 构建目录按链接方式区分: 切换 AGENTXX_MIMALLOC_LINK 时不复用上一种产物
+  string(TOLOWER "${AGENTXX_MIMALLOC_LINK}" _AGENTXX_MIMALLOC_BUILD_SUFFIX)
+
+  ExternalProject_Add(
+    mimalloc_repo
+    SOURCE_DIR "${AGENTXX_MIMALLOC_SOURCE_DIR}"
+    BINARY_DIR "${CMAKE_BINARY_DIR}/mimalloc-build-${_AGENTXX_MIMALLOC_BUILD_SUFFIX}"
+    INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+    CMAKE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_ARGS}
+      -DMI_BUILD_TESTS=OFF
+      -DMI_BUILD_OBJECT=OFF
+      -DMI_BUILD_SHARED=${_AGENTXX_MIMALLOC_BUILD_SHARED}
+      -DMI_BUILD_STATIC=${_AGENTXX_MIMALLOC_BUILD_STATIC}
+      -DMI_OVERRIDE=ON
+      -DMI_INSTALL_TOPLEVEL=ON
+      -DMI_OPT_ARCH=OFF
+      -DMI_ALLOW_THP=OFF
+    CMAKE_CACHE_ARGS
+      ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    TEST_COMMAND ""
+  )
+  unset(_AGENTXX_MIMALLOC_BUILD_SHARED)
+  unset(_AGENTXX_MIMALLOC_BUILD_STATIC)
+  unset(_AGENTXX_MIMALLOC_BUILD_SUFFIX)
+endif ()
 
 # simdjson
 ExternalProject_Add(
@@ -1364,6 +1499,19 @@ if (AGENTXX_BUILD_BENCHMARK)
     add_dependencies(agentxx_benchmark_repo agentxx_client_repo)
   endif()
 endif()
+
+# ===== mimalloc: 最终程序构建前先安装完成 =====
+# client/test/benchmark 的嵌套构建经 find_package(mimalloc) 取用分配器,
+# 需在它们 configure 之前完成安装 (lib/test 之间已有 DEPENDS 顺序,
+# 这里只补 mimalloc 这一条独立依赖)
+if (TARGET mimalloc_repo)
+  foreach (_agentxx_mimalloc_dep agentxx_client_repo agentxx_test_repo agentxx_benchmark_repo)
+    if (TARGET ${_agentxx_mimalloc_dep})
+      add_dependencies(${_agentxx_mimalloc_dep} mimalloc_repo)
+    endif ()
+  endforeach ()
+  unset(_agentxx_mimalloc_dep)
+endif ()
 
 # ===== MSVC ASan 动态运行时部署 =====
 # /MD(d) + /fsanitize=address 编译的可执行程序运行期需要能找到

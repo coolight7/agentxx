@@ -161,4 +161,10 @@ endif ()
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake")
 agentxx_set_own_dir_rpath(agentxx_cli)
 
+# ===== 内存分配器: mimalloc (见 cmake/agentxx_mimalloc.cmake) =====
+# 静态链接 (默认) 时分配器并入 agentxx_cli; 动态链接时额外把分配器动态库
+# 装到 exec 目录 (与产物同目录, 随产物分发)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_mimalloc.cmake")
+agentxx_mimalloc_attach(agentxx_cli)
+
 install(TARGETS agentxx_cli DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")

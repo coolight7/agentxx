@@ -79,13 +79,7 @@ struct LogicalMemReport {
             if (name.size() > 40) {
                 name = name.substr(0, 37) + "...";
             }
-            os << fmt::format(
-                "    {:<40} {:>12} {:>10} {}\n",
-                name,
-                r.bytes,
-                r.count,
-                r.note
-            );
+            os << fmt::format("    {:<40} {:>12} {:>10} {}\n", name, r.bytes, r.count, r.note);
         }
     }
 };
@@ -94,32 +88,10 @@ struct LogicalMemReport {
 // 消息字节估算
 // ---------------------------------------------------------------------------
 
-/// 单条展示消息的字节估算: 各字符串字段长度之和 + 对象自身开销
-/// (不调用 toJson().dump(), 避免统计本身产生大量临时分配而干扰 RSS 采样)
-inline size_t estimateViewMessageBytes(const agentxx::agent::ViewMessage& msg) {
-    size_t bytes = sizeof(agentxx::agent::ViewMessage) + msg.id.size() + msg.text.size();
-    if (msg.tool) {
-        bytes += msg.tool->toolName.size() + msg.tool->toolCallId.size()
-                 + msg.tool->toolResult.size() + msg.tool->diff.size()
-                 + sizeof(agentxx::agent::ViewMessage::ToolData);
-    }
-    if (msg.interrupt) {
-        bytes += msg.interrupt->interruptResult.size()
-                 + sizeof(agentxx::agent::ViewMessage::InterruptData);
-        if (!msg.interrupt->ui.is_null()) {
-            bytes += msg.interrupt->ui.dump().size();
-        }
-    }
-    if (msg.think) {
-        bytes += sizeof(agentxx::agent::ViewMessage::ThinkData);
-    }
-    return bytes;
-}
-
 inline size_t estimateViewMessagesBytes(const std::vector<agentxx::agent::ViewMessage>& msgs) {
     size_t total = 0;
     for (const auto& m : msgs) {
-        total += estimateViewMessageBytes(m);
+        total += agentxx::agent::estimateViewMessageBytes(m);
     }
     return total;
 }
@@ -129,7 +101,7 @@ inline size_t estimateViewMessagesBytes(const std::vector<agentxx::agent::ViewMe
 // ---------------------------------------------------------------------------
 
 struct AgentLogicalOptions {
-    bool        includeToolSchema = true; ///< 统计工具 schema 大小 (需构建临时 ChatTool 列表)
+    bool includeToolSchema = true; ///< 统计工具 schema 大小 (需构建临时 ChatTool 列表)
     /// 需要统计的会话 id 列表;
     /// - 非空: 仅统计这些会话 (SessionsManager 只提供按 id 取用, 无枚举接口)
     /// - 空: 跳过会话级统计, 只统计与全局对象相关的项
@@ -139,7 +111,7 @@ struct AgentLogicalOptions {
 /// 收集 agent 上下文各容器的逻辑内存
 inline std::vector<LogicalMemRow> collectAgentLogicalMem(
     const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
-    const AgentLogicalOptions&                          opt = {}
+    const AgentLogicalOptions&                           opt = {}
 ) {
     std::vector<LogicalMemRow> rows;
     if (!ctx) {
@@ -157,8 +129,8 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
             }
             totalViewBytes += estimateViewMessagesBytes(sess->viewMessages);
             totalViewCount += sess->viewMessages.size();
-            totalLlmBytes += sess->llmMessages.is_null() ? 0 : sess->llmMessages.dump().size();
-            totalLlmCount += sess->llmMessages.is_array() ? sess->llmMessages.size() : 0;
+            totalLlmBytes  += sess->llmMessages.is_null() ? 0 : sess->llmMessages.dump().size();
+            totalLlmCount  += sess->llmMessages.is_array() ? sess->llmMessages.size() : 0;
         }
         rows.push_back(
             {"agent.session.view_messages",
@@ -226,10 +198,7 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
             }
         }
         rows.push_back(
-            {"agent.plugins.registry",
-             pluginBytes,
-             plugins.size(),
-             "插件名/路径/工具名注册信息"}
+            {"agent.plugins.registry", pluginBytes, plugins.size(), "插件名/路径/工具名注册信息"}
         );
         if (ctx->toolRegistry) {
             size_t      schemaBytes = 0;
@@ -274,7 +243,7 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
 
     // ---- 启动加载的组件信息 ----
     {
-        const auto& info = ctx->appendComponentInfo;
+        const auto& info  = ctx->appendComponentInfo;
         size_t      bytes = 0;
         for (const auto& s : info.mcpTools) {
             bytes += s.size() + 32;
@@ -331,11 +300,15 @@ inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st
     size_t                     msgBytes = 0;
     for (const auto& m : st.messages) {
         if (m) {
-            msgBytes += estimateViewMessageBytes(*m) + sizeof(std::shared_ptr<TuiRenderStateT>);
+            msgBytes += agentxx::agent::estimateViewMessageBytes(*m)
+                        + sizeof(std::shared_ptr<TuiRenderStateT>);
         }
     }
     rows.push_back(
-        {"client.tui.messages", msgBytes, st.messages.size(), "客户端已加载的展示消息 (shared_ptr 持有)"}
+        {"client.tui.messages",
+         msgBytes,
+         st.messages.size(),
+         "客户端已加载的展示消息 (shared_ptr 持有)"}
     );
     rows.push_back(
         {"client.tui.stream_token",
@@ -354,10 +327,7 @@ inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st
         sessionListBytes += s.sessionId.size() + s.title.size() + 32;
     }
     rows.push_back(
-        {"client.tui.session_list",
-         sessionListBytes,
-         st.sessionList.size(),
-         "会话选择弹窗数据"}
+        {"client.tui.session_list", sessionListBytes, st.sessionList.size(), "会话选择弹窗数据"}
     );
     size_t componentBytes = 0;
     for (const auto& c : st.appendComponents) {
@@ -374,16 +344,15 @@ inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st
         modelBytes += kv.first.size() + 128;
     }
     modelBytes += st.cachedModelName.size() + st.pendingModel.size() + st.startupProgress.size();
-    rows.push_back({"client.tui.model_info", modelBytes, st.modelCapabilities.size(), "模型列表与能力"});
+    rows.push_back(
+        {"client.tui.model_info", modelBytes, st.modelCapabilities.size(), "模型列表与能力"}
+    );
     size_t pendingBytes = 0;
     for (const auto& p : st.pendingInputs) {
         pendingBytes += p.text.size() + p.model.size() + sizeof(p);
     }
     rows.push_back(
-        {"client.tui.pending_inputs",
-         pendingBytes,
-         st.pendingInputs.size(),
-         "待发送输入队列"}
+        {"client.tui.pending_inputs", pendingBytes, st.pendingInputs.size(), "待发送输入队列"}
     );
 
     LogicalMemReport report;
@@ -397,14 +366,15 @@ inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st
 // ---------------------------------------------------------------------------
 
 inline size_t directorySizeBytes(const std::string& dir, size_t* fileCount = nullptr) {
-    namespace fs = std::filesystem;
-    size_t total = 0;
-    size_t count = 0;
+    namespace fs          = std::filesystem;
+    size_t          total = 0;
+    size_t          count = 0;
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) {
         return 0;
     }
-    for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
+    for (auto it
+         = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator();
          it.increment(ec)) {
         if (!it->is_regular_file(ec)) {
@@ -419,21 +389,19 @@ inline size_t directorySizeBytes(const std::string& dir, size_t* fileCount = nul
     return total;
 }
 
-inline std::vector<LogicalMemRow> collectStoreLogicalMem(
-    const std::string& dataDir,
-    std::string_view   sessionId = {}
-) {
+inline std::vector<LogicalMemRow>
+    collectStoreLogicalMem(const std::string& dataDir, std::string_view sessionId = {}) {
     std::vector<LogicalMemRow> rows;
     if (dataDir.empty()) {
         return rows;
     }
-    namespace fs      = std::filesystem;
-    std::string base  = dataDir;
-    std::string sdir  = base + "/sqlite/sessions";
+    namespace fs     = std::filesystem;
+    std::string base = dataDir;
+    std::string sdir = base + "/sqlite/sessions";
     if (!sessionId.empty()) {
-        auto specific = fs::path(sdir) / std::string(sessionId);
-        size_t files  = 0;
-        auto   bytes  = directorySizeBytes(specific.string(), &files);
+        auto   specific = fs::path(sdir) / std::string(sessionId);
+        size_t files    = 0;
+        auto   bytes    = directorySizeBytes(specific.string(), &files);
         rows.push_back({"__store.session_db", bytes, files, "会话持久化文件 (磁盘, 不计入合计)"});
     } else {
         size_t files = 0;
@@ -451,7 +419,12 @@ inline std::vector<LogicalMemRow> collectStoreLogicalMem(
         std::error_code ec;
         auto            p = fs::path(base) / "sqlite" / "global.db";
         if (fs::exists(p, ec)) {
-            rows.push_back({"__store.global_db", static_cast<size_t>(fs::file_size(p, ec)), 1, "全局设置库 (磁盘)"});
+            rows.push_back(
+                {"__store.global_db",
+                 static_cast<size_t>(fs::file_size(p, ec)),
+                 1,
+                 "全局设置库 (磁盘)"}
+            );
         }
     }
     return rows;

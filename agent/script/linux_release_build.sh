@@ -125,7 +125,9 @@ cmake -B "$build_dir" -S "$src_dir" \
     -DAGENTXX_ENABLE_HYPERSCAN=ON \
     -DAGENTXX_ENABLE_BOOST_PROCESS=ON \
     -DXX_IS_RELEASE_D=1 \
-    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_BUILD_TYPE=Release \
+    -DAGENTXX_ENABLE_MIMALLOC="${AGENTXX_ENABLE_MIMALLOC:-ON}" \
+    -DAGENTXX_MIMALLOC_LINK="${AGENTXX_MIMALLOC_LINK:-STATIC}"
 
 if [[ $? -ne 0 ]]; then
     echo "cmake config failed!"

@@ -194,6 +194,10 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
     一个节流窗口 (<3s), 而非整轮 —— 如果 viewMessages 逐条即时落库、
     llmContext 仅轮末保存, 反复中途被杀的会话会出现"view 完整而 llm 上下文
     滞后/为空"
+    - 队列元素只记录 `viewMessages` 下标 (`PendingViewOp.index`), 不持有消息副本:
+      viewMessages append-only (下标稳定), 回放时按当下内容落库。逐条深拷贝会让
+      窗口内每条消息在内存中存在两份 (实测注入 200K token 历史时多占约 1 MB)
+    - `Session::restore` 整体替换 viewMessages 前先清空队列 (旧下标失效)
   - `EventBridge::handleChannelWrite`: LLM 上下文增量的结算挂点 —— 节点对
     messages channel 的写入事件即该批消息定稿 (assistant 回复完成 / tool 结果
     写回, 非流式 token 粒度), 经 `Session::appendSettledLlmMessages` 追加并触发
@@ -1194,6 +1198,11 @@ AgentIOBase (客户端端点: TUIClientAgentIO / StdIOClientAgentIO)
 AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── sendToPeer()       → 覆写: 新产出的 Delta (seq 单调守卫) 先写入重放缓冲再转发,
     │                          重放 delta (seq <= 缓冲尾) 不重复入缓冲
+    │                          缓冲按"条数 (deltaBufferCap=4096) + 估算字节
+    │                          (deltaBufferBytesCap=4MB)"双重上限裁剪: 带完整消息
+    │                          载荷的增量 (InsertMessage/UpdateMessage) 单条可达
+    │                          几十 KB, 仅按条数限制最坏可保留数百 MB; 超限丢最旧,
+    │                          客户端按 seq 缺口回退全量 sync (deltasSince 返回空)
     ├── onDelta/onSync     → protected 空实现 (server 不会从 client 收到, 满足纯虚契约)
     ├── getInput()         → 从 inputChannel_ 等待客户端输入
     ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应 (超时/过期通知)
@@ -1447,6 +1456,59 @@ Client                              Server
   │←── InterruptExpired ──────────────│ 中断超时/断线宽限期满/会话取消时,
   │                                   │ 客户端将对应中断消息标记为过期并结束等待
 ```
+
+### 内存占用与分配器调整
+
+- **分配器可选 mimalloc** (`agent/CMakeLists.txt` 的 `AGENTXX_ENABLE_MIMALLOC`,
+  默认 ON; `AGENTXX_MIMALLOC_LINK=STATIC|SHARED`, 默认 STATIC):
+  - 作用范围只有**最终程序** (`agentxx_cli` / `agentxx_test` / `agentxx_benchmark`),
+    接入逻辑集中在 `agent/cmake/agentxx_mimalloc.cmake` (分配器为第三方依赖
+    [mimalloc](https://github.com/microsoft/mimalloc), 源码在 `agent/third_party/mimalloc`):
+    静态链接把 mimalloc 的分配器并入产物
+    (程序自身的 `malloc/free` 定义进入动态符号表, 同进程的 `libstdc++`、dlopen 的
+    插件也一起走 mimalloc, 全程只有一个分配器, 不会出现跨模块 free 不匹配);
+    动态链接则让 `libmimalloc.so` / `mimalloc.dll` 排在 libc 之前接管
+  - 不受影响: `libagentxx.so` (FFI/嵌入) 与 `exec/plugins/*.so` 插件动态库自身不
+    链接分配器, 跟随宿主进程的分配器 (库若自行覆盖 `malloc`, 宿主的其他模块仍走
+    各自分配器, 反而容易跨模块 free 不匹配); 内置合并进 libagentxx 的插件随最终
+    程序使用 mimalloc
+  - 关键取舍: **关闭透明大页** (`-DMI_ALLOW_THP=OFF`, 上游 Linux 默认 FULL)。THP 下
+    mimalloc 以 2 MB 为单位保留内存、释放小对象后大页不拆分常驻, 实测同一场景
+    RSS 从 ~19.6 MB 变成 ~37.4 MB; 需要 THP 换 TLB 性能时可用环境变量
+    `MIMALLOC_ALLOW_THP=1` 在运行时打开 (运行期选项, 覆盖编译期默认值)
+  - 与 sanitizer 互斥: ASan 需独占 `malloc` 拦截, 非 Release 构建开启
+    `AGENTXX_ENABLE_SANITIZER` (默认开) 时顶层会自动关闭 mimalloc (实测同时启用
+    即启动崩溃); 需要在 Debug 下验证 mimalloc 时用 `-DAGENTXX_ENABLE_SANITIZER=OFF`
+  - Windows/MSVC 用动态 CRT (`/MD`) 时 mimalloc 的**静态覆盖不生效** (上游以 `_DLL`
+    判定, 避免与 CRT 分配器混用), 需要真正接管请用
+    `-DAGENTXX_MIMALLOC_LINK=SHARED` (随产物部署 `mimalloc.dll` + `mimalloc-redirect.dll`)
+  - 实测 (Release, 同机同场景, 对比调优后的 glibc): 常驻内存略升 (200K 上下文
+    服务端 +5.5~6.6 MB, 启动 +0.4 MB), CPU 明显下降 (真实 server 驱动 705 轮:
+    user 2280→1670 ms, sys 1120→370 ms, wall 3611→2700 ms); 详见
+    [benchmark.md](benchmark.md) 的"内存分配器 mimalloc 实测"
+  - 接入是否真正生效由测试模块 `allocator` 固定 (`agent/test/core/test_allocator.cpp`):
+    校验 `malloc` 与 `operator new` 返回的指针落在 mimalloc 堆内 (覆盖"链接上了但
+    没接管"的静默失效); 未接入 mimalloc 的构建跳过该模块
+- **进程级分配器参数** (`agentxx/util/allocator_tuning.h`, 由 `BaseAgent` 构造时自动调用):
+  - glibc: `M_ARENA_MAX=1` —— 只使用主 arena。glibc 默认按线程竞争各建一个 arena,
+    每个 arena 预留 64 MB 地址空间, 实测进程 VmSize 因此达到 400 MB ~ 1.3 GB;
+    限定单 arena 后降到 ~135 MB, 私有脏页集中到主堆也更容易归还
+  - Windows: CRT 堆 (NT 堆/段堆) 无 arena 参数, 参数调整为**空实现**;
+    归还空闲页用 `_heapmin`
+  - 用户自行设置 `MALLOC_ARENA_MAX` 时不再覆盖该值
+  - 轮末 (`BaseAgent::runTurnAsync` 结束) 调用 `releaseFreeHeapPages()`
+    (glibc `malloc_trim(0)` / Windows `_heapmin`), 把本轮大块临时缓冲
+    (LLM 请求/响应体、工具输出) 释放后留在堆内的页归还系统
+  - 进程以 mimalloc 作为分配器时这两项都没有实际作用 (mimalloc 不使用 glibc 堆,
+    自身按清空延迟归还空闲页, 默认 1s, 可用 `MIMALLOC_PURGE_DELAY` 调整);
+    保留是为了关闭 mimalloc 时 glibc/CRT 依旧有对应的调整手段
+  - 未固定 `M_MMAP_THRESHOLD`/`M_TRIM_THRESHOLD`: 基准对比显示固定这两个阈值会
+    明显增加 mmap/munmap 系统调用 (服务端系统态时间 +60%, 场景耗时 +15%),
+    而内存收益与"轮末主动归还"基本重合
+- **会话消息持久化队列不持有消息副本**: 见上文"持久化节流" (`PendingViewOp.index`)
+- **服务端重连重放缓冲双重上限**: 见"连接与重连机制" (`deltaBufferCap` +
+  `deltaBufferBytesCap`)
+- 优化前后的基准数据 (RSS/VmSize/体积) 见 [benchmark.md](benchmark.md) 第 8 节
 
 ### 依赖注入容器
 

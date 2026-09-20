@@ -32,6 +32,8 @@
 | `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动构建 |
 | `AGENTXX_ENABLE_HYPERSCAN=OFF` | 关闭 hyperscan, 则不需要 ragel |
 | `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (debug 默认 4, release 默认 CPU 核数) |
+| `AGENTXX_ENABLE_MIMALLOC=OFF` | 关闭 mimalloc 内存分配器 (默认 ON, 用系统 glibc 分配器) |
+| `AGENTXX_MIMALLOC_LINK=SHARED` | 动态链接 mimalloc (`libmimalloc.so`), 默认 `STATIC` 静态并入产物 |
 
 ## 手动编译
 
@@ -124,6 +126,25 @@ cd {项目根目录}
   (可执行文件与 `libagentxx.so` 为 `$ORIGIN`, `exec/plugins/<插件名>/*.so` 为
   `$ORIGIN:$ORIGIN/../..` 以回查 exec)
 
+## 内存分配器 (mimalloc)
+
+默认使用 [mimalloc](https://github.com/microsoft/mimalloc) 接管最终程序的
+`malloc/free/new/delete` (源码为 `agent/third_party/mimalloc` 子模块), 可用开关:
+
+| cmake 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `-DAGENTXX_ENABLE_MIMALLOC=OFF` | ON | 关闭后回到系统分配器 (glibc), 同时不再构建 mimalloc |
+| `-DAGENTXX_MIMALLOC_LINK=STATIC` | STATIC | 分配器静态并入 `agentxx_cli`/`agentxx_test`/`agentxx_benchmark` (无额外运行库依赖) |
+| `-DAGENTXX_MIMALLOC_LINK=SHARED` | | 链接 `libmimalloc.so.3`, 由 `install` 一并装到 `exec/` (与产物同目录, 随产物分发) |
+
+- 生效范围只有最终程序; `libagentxx.so` (FFI/嵌入) 与 `exec/plugins/*.so` 插件动态库
+  自身不链接分配器, 跟随宿主进程 (静态链接时插件 `.so` 经符号覆盖同样走 mimalloc)
+- 非 Release 构建默认开启 sanitizer (ASan 需独占 `malloc`), 此时顶层会**自动关闭**
+  mimalloc; 需要在 Debug 下验证 mimalloc 时用 `-DAGENTXX_ENABLE_SANITIZER=OFF`
+- 关闭透明大页 (`-DMI_ALLOW_THP=OFF`, 上游默认 FULL): THP 下 mimalloc 按 2 MB 大页
+  保留内存, 实测同场景 RSS 约翻倍; 需要 THP 换 TLB 性能时用环境变量
+  `MIMALLOC_ALLOW_THP=1` 运行时打开
+- 常驻内存与 CPU 的实测对比见 [benchmark.md 第 9 节](../design/benchmark.md)
 
 ## Debug 构建加速
 
@@ -158,3 +179,7 @@ cmake -B build/linux-debug -S agent \
 
 ### linux 上运行到 网络相关的代码会卡很久?
 - 可能是 asio 版本问题，在某些 Boost 版本(如 1.91)的asio可能在启用 io_uring 后有 bug，可以更换其他 Boost 版本。
+
+### 边运行边重建
+- `exec/` 目录里的可执行文件、动态库、插件、随包携带的 `libstdc++`/`libgcc_s` 都可能正被**运行中的** `agentxx_cli` 映射到内存。
+- 构建时对这些文件做原地覆盖(cp / strip 打开文件后截断写入) 会让映射页在文件变短的瞬间失效, 运行中的进程读到这些页会直接 **SIGBUS 崩溃** (转储里表现为 `BUS_ADRERR`, 出错地址落在被覆盖的动态库上, 调用栈在 `ld.so` 的惰性符号解析路径)

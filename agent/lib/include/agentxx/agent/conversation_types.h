@@ -421,6 +421,45 @@ struct WireDelta {
     std::vector<MediaAttachment> attachments;
 };
 
+/// 估算一条展示消息在内存中大致占用的字节数 (对象本身 + 各字段字符串)
+/// - 用于按内存量控制缓冲规模 (见服务端重放缓冲的字节上限), 不追求精确
+/// - attachments 按元数据字符串计, dataUrl 之外的解码数据不计
+inline size_t estimateViewMessageBytes(const ViewMessage& msg) {
+    size_t bytes = sizeof(ViewMessage);
+    bytes += msg.id.size() + msg.text.size();
+    if (msg.tool) {
+        bytes += msg.tool->toolName.size() + msg.tool->toolCallId.size()
+                 + msg.tool->toolResult.size() + msg.tool->diff.size();
+    }
+    if (msg.interrupt) {
+        // ui 为声明式表单 JSON, 只粗估一个常量, 避免为估算而序列化
+        bytes += msg.interrupt->interruptResult.size() + 256;
+    }
+    for (const auto& a : msg.attachments) {
+        bytes += sizeof(MediaAttachment) + a.displayName.size() + a.mimeType.size()
+                 + a.pathOrUrl.size() + a.dataUrl.size();
+    }
+    return bytes;
+}
+
+/// 估算一条会话增量在内存中大致占用的字节数 (对象本身 + 各字符串 + 携带的消息载荷)
+/// - 流式 token 增量很小, 但带完整消息载荷的增量 (InsertMessage/UpdateMessage,
+///   如工具结果回填) 可能是几十 KB 级, 需要按字节核算
+inline size_t estimateWireDeltaBytes(const WireDelta& delta) {
+    size_t bytes = sizeof(WireDelta);
+    bytes += delta.text.size() + delta.msgId.size() + delta.toolName.size()
+             + delta.toolCallId.size() + delta.arguments.size() + delta.result.size()
+             + delta.nodeName.size() + delta.tailHash.size();
+    for (const auto& a : delta.attachments) {
+        bytes += sizeof(MediaAttachment) + a.displayName.size() + a.mimeType.size()
+                 + a.pathOrUrl.size() + a.dataUrl.size();
+    }
+    if (delta.message) {
+        bytes += estimateViewMessageBytes(*delta.message);
+    }
+    return bytes;
+}
+
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)
 struct MessageQueueItem {
     std::string id;    ///< 条目唯一标识 (如 "q-1")

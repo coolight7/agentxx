@@ -59,6 +59,25 @@ pkg-config --version
 | `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动准备 |
 | `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (默认 4) |
 | `AGENTXX_ENABLE_HYPERSCAN=OFF` | 传给 cmake 关闭 hyperscan, 则不需要 ragel |
+| `AGENTXX_MIMALLOC_LINK=SHARED` | 传给 cmake 改为动态链接 mimalloc (默认 `STATIC`) |
+
+## 内存分配器 (mimalloc)
+
+默认使用 [mimalloc](https://github.com/microsoft/mimalloc) 接管最终程序的
+`malloc/free/new/delete` (源码为 `agent/third_party/mimalloc` 子模块, 只作用于
+`agentxx_cli` / `agentxx_test` / `agentxx_benchmark`; `libagentxx.dll` 与插件动态库
+跟随宿主分配器):
+
+| cmake 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `-DAGENTXX_ENABLE_MIMALLOC=OFF` | ON | 关闭后回到 CRT 分配器 |
+| `-DAGENTXX_MIMALLOC_LINK=SHARED` | STATIC | 链接 `mimalloc.dll` (并把 `mimalloc.dll` + `mimalloc-redirect.dll` 装到 `exec/`) |
+
+- 注意: MSVC 使用动态 CRT (`/MD`) 时, **静态链接的 mimalloc 不会覆盖 CRT 分配器**
+  (上游以 `_DLL` 判定, 避免与 CRT 分配器混用), 此时只是链上而未接管; 要在 Windows 上
+  真正接管分配器请用 `-DAGENTXX_MIMALLOC_LINK=SHARED`, 由 `mimalloc-redirect.dll`
+  在加载期把 CRT 的分配入口改指到 mimalloc
+- 非 Release 构建默认开启 ASan (需独占 `malloc`), 此时顶层会**自动关闭** mimalloc
 
 ## 手动编译
 
