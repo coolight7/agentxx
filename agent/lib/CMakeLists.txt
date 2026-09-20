@@ -88,7 +88,7 @@ find_package(cxx_pluginxx REQUIRED)
 # - add_subdirectory(../plugins) 以内置模式收集启用的插件源文件/依赖库/
 #   入口符号 (见 plugins/CMakeLists.txt 内置分支; 不创建任何插件动态库目标)
 # - 生成的清单 builtin_plugins.cpp (改名后的入口符号静态表) 一并编译进
-#   libagentxx, PluginManager 经 agentxx_plugin_get_builtin_plugins() 查询加载
+#   libagentxx, PluginManager 经 agentxx::plugin::get_builtin_plugins() 查询加载
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins" agentxx_plugins_builtin)
 list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_PLUGIN_MANIFEST_SOURCE})
 

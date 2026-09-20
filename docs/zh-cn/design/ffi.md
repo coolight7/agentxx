@@ -158,7 +158,6 @@ agentxx_ffi_event_queue_free(q);
 | HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (载荷恒为对象形态 `{"values":[...],"options":{...}}`: values 顺序 = 描述声明的控件顺序; options 对应描述声明的勾选项, 非对象形态返回 AGENTXX_FFI_ERR_INVALID) |
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
 | 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | 见 4.2 |
-| 内置插件 | `agentxx_plugin_get_builtin_plugins` | 内置合并编译模式插件清单入口 (PluginManager 使用; 白名单第 27 个符号, 隐藏 17 万 C++ 符号) |
 
 版本策略: 全局 `AGENTXX_FFI_API_VERSION` 重置为 1;
 调用方/宿主绑定加载时应当校验 `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION`，

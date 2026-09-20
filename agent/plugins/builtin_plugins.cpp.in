@@ -5,13 +5,14 @@
  *   改名 (agentxx_plugin_agent_create → agentxx_plugin_agent_builtin_create_<插件名> 等,
  *   见各插件子目录 CMakeLists.txt 的 内置编译分支),
  *   避免多插件合并编译时符号冲突
- * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx_plugin_get_builtin_plugins()
+ * - 本清单汇总全部启用插件的改名入口符号, 经 agentxx::plugin::get_builtin_plugins()
  *   暴露给 PluginManager (loadBuiltinAsync / loadPluginAsync 回退路径)
  * - 框架内核 (cxx_pluginxx) 不引用宿主符号: 本文件在静态初始化期把上述两个函数
  *   注册给 pluginxx::setBuiltinPluginProvider, 使内核侧的 findBuiltinPlugin /
  *   parseBuiltinManifest 可用 (见 pluginxx/host/manifest.h)
  */
 #include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "pluginxx/host/manifest.h"
 
 /* 内置插件入口符号声明 (各插件子目录内置分支生成; 符号为编译期改名后的
@@ -29,7 +30,7 @@ static const PluginxxBuiltinInfo kAgentxxBuiltinPlugins[] = {
 };
 #endif
 
-const PluginxxBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* count) {
+const PluginxxBuiltinInfo* agentxx::plugin::get_builtin_plugins(uint64_t* count) {
     if (count) {
         *count = sizeof(kAgentxxBuiltinPlugins) / sizeof(kAgentxxBuiltinPlugins[0]);
     }
@@ -37,7 +38,7 @@ const PluginxxBuiltinInfo* agentxx_plugin_get_builtin_plugins(uint64_t* count) {
 }
 
 /* ── 内嵌 plugin.yaml 原文 (与上表一一对应) ── */
-const PluginxxBuiltinManifest* agentxx_plugin_get_builtin_manifests(uint64_t* count) {
+const PluginxxBuiltinManifest* agentxx::plugin::get_builtin_manifests(uint64_t* count) {
 #if @AGENTXX_BUILTIN_PLUGIN_COUNT@ > 0
     static const PluginxxBuiltinManifest kManifests[] = {
 @AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY@
@@ -65,8 +66,8 @@ struct BuiltinProviderRegistrar {
     BuiltinProviderRegistrar() {
         pluginxx::setBuiltinPluginProvider(
             pluginxx::BuiltinPluginProvider{
-                &agentxx_plugin_get_builtin_plugins,
-                &agentxx_plugin_get_builtin_manifests
+                &agentxx::plugin::get_builtin_plugins,
+                &agentxx::plugin::get_builtin_manifests
             }
         );
     }

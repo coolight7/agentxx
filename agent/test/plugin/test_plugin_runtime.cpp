@@ -27,8 +27,7 @@
 namespace agentxx::plugin {
 /// 宿主 vtable 装配入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
 /// 拿到真实接口表，从而直接驱动 C ABI 入口）。
-const void* PLUGINXX_CALL
-    xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
+const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 } // namespace agentxx::plugin
 
 /// C17 ABI 检查翻译单元（test_plugin_abi_c17.c）导出的对照入口。
@@ -191,8 +190,7 @@ struct CallbackState {
     std::string     payload;
     RuntimeFixture* fixture = nullptr;
 
-    static void PLUGINXX_CALL
-        done(void* ud, int32_t status, const PluginxxStringView* payload) {
+    static void PLUGINXX_CALL done(void* ud, int32_t status, const PluginxxStringView* payload) {
         auto& state = *static_cast<CallbackState*>(ud);
         ++state.calls;
         state.status  = status;
@@ -266,7 +264,7 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
             return nullptr;
         };
     } else {
-        spec.execute_start = +[](void*                          ud,
+        spec.execute_start = +[](void*                     ud,
                                  const PluginxxStringView* args,
                                  const PluginxxStringView*,
                                  const PluginxxStringView*,
@@ -284,8 +282,7 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
 int gLifecycleStops    = 0;
 int gLifecycleDestroys = 0;
 
-void* PLUGINXX_CALL
-    fakeStopHook(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+void* PLUGINXX_CALL fakeStopHook(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++gLifecycleStops;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -298,12 +295,11 @@ void PLUGINXX_CALL fakeDestroyHook(void* ud) {
 /// P1-A 接口表严格协商探针：伪装宿主只返回一次可控接口表，用于验证 SDK 对
 /// version / struct_size / NULL 表的拒绝行为（plugin.md 第 11.1 节）。
 struct FakeIfaceHost {
-    PluginxxHost              host{};
+    PluginxxHost                   host{};
     const AgentxxPluginToolsIface* table = nullptr;
 };
 
-const void* PLUGINXX_CALL
-    fakeIfaceQuery(const PluginxxHost* host, const PluginxxStringView*) {
+const void* PLUGINXX_CALL fakeIfaceQuery(const PluginxxHost* host, const PluginxxStringView*) {
     auto* self = static_cast<FakeIfaceHost*>(host ? host->opaque : nullptr);
     return self ? static_cast<const void*>(self->table) : nullptr;
 }
@@ -341,7 +337,7 @@ struct LifecycleProbe {
     bool failStart = false;
     /// start 失败前是否真的登记过工具（证明失败回滚清掉了"部分注册"）。
     bool                           partialRegistration = false;
-    const PluginxxHost*       host                = nullptr;
+    const PluginxxHost*            host                = nullptr;
     const AgentxxPluginToolsIface* tools               = nullptr;
     const AgentxxPluginGraphIface* graph               = nullptr;
     /// start 失败前是否真的登记过图节点类型（证明图注册同样回滚）。
@@ -349,11 +345,8 @@ struct LifecycleProbe {
     AgentxxPluginToolSpec spec{};
 };
 
-void* PLUGINXX_CALL lifecycleStartHook(
-    void*                              ud,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
+void* PLUGINXX_CALL
+    lifecycleStartHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.starts;
     if (probe.tools && probe.host) {
@@ -399,7 +392,7 @@ TestResult testPluginRuntime() {
         auto           spec = fakeTool(nullptr, true);
         XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
         PluginxxString error{};
-        auto*               rejected = f.manager->callToolAsync(
+        auto*          rejected = f.manager->callToolAsync(
             f.caller.get(),
             "runtime_tool",
             "{}",
@@ -577,7 +570,7 @@ TestResult testPluginRuntime() {
         std::promise<bool> returned;
         std::thread        worker([&] {
             PluginxxString error{};
-            auto*               handle = f.manager->callToolAsync(
+            auto*          handle = f.manager->callToolAsync(
                 f.caller.get(),
                 "runtime_tool",
                 "{}",
@@ -715,11 +708,11 @@ TestResult testPluginRuntime() {
 
     /// F14/F05：后台 task 提交 done 后，尚未 commit 就卸载，不调用失效 cancel_ud。
     {
-        RuntimeFixture              f;
+        RuntimeFixture         f;
         PluginxxOperatorNotify notify{};
         PluginxxString         error{};
-        int                         cancels = 0;
-        auto*                       handle  = f.manager->registerTask(
+        int                    cancels = 0;
+        auto*                  handle  = f.manager->registerTask(
             f.provider.get(),
             +[](void* ud, void*) {
                 ++*static_cast<int*>(ud);
@@ -748,7 +741,7 @@ TestResult testPluginRuntime() {
             ++*static_cast<int*>(ud);
         };
         PluginxxString error{};
-        bool                allAccepted = true;
+        bool           allAccepted = true;
         for (int i = 0; i < 1000; ++i) {
             allAccepted
                 = (f.manager->sleep(f.provider.get(), 0, callback, &calls, &error) != nullptr)
@@ -995,8 +988,8 @@ TestResult testPluginRuntime() {
 
     /// 真实 worker 由事件释放；Closing 期间不能提前 idle，done 在 IO 调用。
     {
-        auto                ctx = std::make_shared<agentxx::agent::AgentContext>();
-        RuntimeFixture      f(ctx);
+        auto           ctx = std::make_shared<agentxx::agent::AgentContext>();
+        RuntimeFixture f(ctx);
         PluginxxString error{};
 
         struct State {
@@ -1143,7 +1136,7 @@ TestResult testPluginRuntime() {
             {17, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION},
             {18, sizeof(PluginxxCoroutineRuntimeIface)},
             {19, offsetof(PluginxxCoroutineRuntimeIface, struct_size)},
-            {20, AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION},
+            {20, PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION},
             {21, sizeof(AgentxxPluginToolPermissionSpec)},
             {22, offsetof(AgentxxPluginToolPermissionSpec, target_arg)},
             {23, sizeof(AgentxxPluginPermissionIface)},
@@ -1163,9 +1156,8 @@ TestResult testPluginRuntime() {
     /// R3/P1-A: 接口表严格协商 —— 版本不为 1、struct_size 过短、NULL 表都必须被
     /// SDK 拒绝；只有 version == 1 且 struct_size 覆盖完整表才可用。
     {
-        PluginxxStringView toolsIid
-            = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
-        const auto* realTools = static_cast<const AgentxxPluginToolsIface*>(
+        PluginxxStringView toolsIid  = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
+        const auto*        realTools = static_cast<const AgentxxPluginToolsIface*>(
             agentxx::plugin::xx_query_interface(nullptr, &toolsIid)
         );
         XX_TEST_EXPECT_TRUE(realTools != nullptr);
@@ -1979,14 +1971,12 @@ TestResult testPluginRuntime() {
         auto*          host = f.provider->hostView();
         XX_TEST_EXPECT_TRUE(host != nullptr);
 
-        PluginxxStringView iid
-            = PluginStringView::fromCstr(PLUGINXX_IFACE_COROUTINE_RUNTIME);
-        const auto* runtime
-            = static_cast<const PluginxxCoroutineRuntimeIface*>(xx_query_interface(host, &iid)
-            );
+        PluginxxStringView iid = PluginStringView::fromCstr(PLUGINXX_IFACE_COROUTINE_RUNTIME);
+        const auto*        runtime
+            = static_cast<const PluginxxCoroutineRuntimeIface*>(xx_query_interface(host, &iid));
         XX_TEST_EXPECT_TRUE(runtime != nullptr);
         if (runtime) {
-            XX_TEST_EXPECT_EQ(runtime->version, AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION);
+            XX_TEST_EXPECT_EQ(runtime->version, PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION);
             XX_TEST_EXPECT_EQ(
                 runtime->struct_size,
                 uint32_t{sizeof(PluginxxCoroutineRuntimeIface)}
@@ -2060,8 +2050,7 @@ TestResult testPluginRuntime() {
             // 7) 实例进入 Closing: 仍允许驱动 (关闭要先取消 Operation, 插件的取消
             //    收束需要驱动继续流动), 但 Closed 后拒绝。
             f.provider->lifetime->requestClose();
-            PluginxxDriver* closingTicket
-                = runtime->request_driver(host, driveFn, &probe, &err);
+            PluginxxDriver* closingTicket = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(closingTicket != nullptr);
             runtime->cancel_driver(closingTicket);
             f.provider->lifetime->setState(pluginxx::PluginInstanceState::Closed);

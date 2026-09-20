@@ -2,18 +2,16 @@
 
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/api/plugin_api.h"
-// 宿主侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
-// PluginString); 该头为 umbrella: 包含 pluginxx 通用部分 (kit.h) + 本仓库领域 helper
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
-
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
 #include "pluginxx/host/domain_hooks.h"
 #include "pluginxx/host/host_core.h"
+#include "pluginxx/host/manifest.h"
 #include "utilxx_base/json.h"
 #include <array>
 #include <atomic>
@@ -63,6 +61,11 @@ struct GraphTypeSlot;
 
 namespace agentxx {
 namespace plugin {
+
+/* ==================== 内置插件清单 (跨 TU 导出声明, 保持 C 链接) ==================== */
+/// - 由 agent/plugins/builtin_plugins.cpp.in 编译时收集内置插件列表，并添加实现函数
+const PluginxxBuiltinInfo*     get_builtin_plugins(uint64_t* count);
+const PluginxxBuiltinManifest* get_builtin_manifests(uint64_t* count);
 
 class PluginInstance : public PluginInstanceBase {
 public:
@@ -205,8 +208,8 @@ private:
                   start)(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify*, PluginxxString*)
             = nullptr;
         void(PLUGINXX_CALL* cancel)(void*, void*) = nullptr;
-        void* ud                                        = nullptr;
-        bool  set                                       = false;
+        void* ud                                  = nullptr;
+        bool  set                                 = false;
     };
 
     asio::awaitable<void>
@@ -412,16 +415,14 @@ public:
         return setGraphJson(inst, strToSv(graph_json));
     }
 
-    PluginxxString
-        getShareStore(PluginInstance* inst, PluginxxStringView session_id, int64_t id);
+    PluginxxString getShareStore(PluginInstance* inst, PluginxxStringView session_id, int64_t id);
 
-    PluginxxString
-        getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
+    PluginxxString getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
         return getShareStore(inst, strToSv(session_id), id);
     }
 
     int64_t addShareStore(
-        PluginInstance*         inst,
+        PluginInstance*    inst,
         PluginxxStringView session_id,
         PluginxxStringView content
     );
@@ -432,10 +433,10 @@ public:
     }
 
     void emitMessageTip(
-        PluginInstance*         inst,
+        PluginInstance*    inst,
         PluginxxStringView session_id,
         PluginxxStringView text,
-        int32_t                 level
+        int32_t            level
     );
 
     void emitMessageTip(
@@ -448,22 +449,22 @@ public:
     }
 
     PluginxxOperatorHandle* callToolAsync(
-        PluginInstance*               caller,
+        PluginInstance*          caller,
         PluginxxStringView       name,
         PluginxxStringView       args_json,
         PluginxxStringView       session_id,
         PluginxxOperatorCallback cb,
-        void*                         ud,
+        void*                    ud,
         PluginxxString*          error_out
     );
 
     PluginxxOperatorHandle* callToolAsync(
-        PluginInstance*               caller,
-        std::string_view              name,
-        std::string_view              args_json,
-        std::string_view              session_id,
+        PluginInstance*          caller,
+        std::string_view         name,
+        std::string_view         args_json,
+        std::string_view         session_id,
         PluginxxOperatorCallback cb,
-        void*                         ud,
+        void*                    ud,
         PluginxxString*          error_out
     ) {
         return callToolAsync(

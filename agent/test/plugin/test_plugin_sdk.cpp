@@ -28,22 +28,21 @@ using namespace agentxx::plugin;
 
 /// SDK helper 注册出来的 spec 捕获（替代真实宿主的注册表）。
 struct CapturedRegistration {
-    AgentxxPluginToolSpec                tool{};
-    bool                                 hasTool = false;
-    AgentxxPluginHookSpec                hook{};
-    bool                                 hasHook       = false;
+    AgentxxPluginToolSpec           tool{};
+    bool                            hasTool = false;
+    AgentxxPluginHookSpec           hook{};
+    bool                            hasHook       = false;
     PluginxxCapabilityStartFunction capStart      = nullptr;
     PluginxxOperatorCancelFunction  capCancel     = nullptr;
-    void*                                capUd         = nullptr;
-    bool                                 hasCapability = false;
-    AgentxxPluginGraphNodeTypeSpec       graphNode{};
-    bool                                 hasGraphNode = false;
+    void*                           capUd         = nullptr;
+    bool                            hasCapability = false;
+    AgentxxPluginGraphNodeTypeSpec  graphNode{};
+    bool                            hasGraphNode = false;
 };
 
 CapturedRegistration g_captured;
 
-int32_t PLUGINXX_CALL
-    fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
+int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
     if (!spec) {
         return -1;
     }
@@ -52,8 +51,7 @@ int32_t PLUGINXX_CALL
     return 0;
 }
 
-int32_t PLUGINXX_CALL
-    fakeRegisterHook(const PluginxxHost*, const AgentxxPluginHookSpec* spec) {
+int32_t PLUGINXX_CALL fakeRegisterHook(const PluginxxHost*, const AgentxxPluginHookSpec* spec) {
     if (!spec) {
         return -1;
     }
@@ -67,7 +65,7 @@ int32_t PLUGINXX_CALL fakeRegisterCapabilityEx(
     const PluginxxStringView*,
     PluginxxCapabilityStartFunction start,
     PluginxxOperatorCancelFunction  cancel,
-    void*                                ctx
+    void*                           ctx
 ) {
     g_captured.capStart      = start;
     g_captured.capCancel     = cancel;
@@ -76,10 +74,8 @@ int32_t PLUGINXX_CALL fakeRegisterCapabilityEx(
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeRegisterGraphNodeType(
-    const PluginxxHost*,
-    const AgentxxPluginGraphNodeTypeSpec* spec
-) {
+int32_t PLUGINXX_CALL
+    fakeRegisterGraphNodeType(const PluginxxHost*, const AgentxxPluginGraphNodeTypeSpec* spec) {
     if (!spec) {
         return -1;
     }
@@ -105,7 +101,7 @@ const AgentxxPluginHooksIface g_fakeHooks = {
 };
 
 const PluginxxCapabilitiesIface g_fakeCapabilities = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CAPABILITIES_VERSION,
+    /* version */ PLUGINXX_IFACE_CAPABILITIES_VERSION,
     /* struct_size */ sizeof(PluginxxCapabilitiesIface),
     /* register_capability */ nullptr,
     /* register_capability_ex */ fakeRegisterCapabilityEx,
@@ -138,8 +134,8 @@ void PLUGINXX_CALL fakeFree(void* ptr) {
 /// (等价于宿主 IO 线程执行一次 `poll_one`)。
 struct FakeDriverTicket {
     PluginxxDriveOnceFn drive = nullptr;
-    void*                    ud    = nullptr;
-    bool                     done  = false;
+    void*               ud    = nullptr;
+    bool                done  = false;
 };
 
 FakeDriverTicket* g_pendingDriver = nullptr;
@@ -166,7 +162,7 @@ int32_t PLUGINXX_CALL fakeIsIoThread(const PluginxxHost*) {
 }
 
 const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
-    /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
+    /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
     /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
     /* request_driver */ fakeRequestDriver,
     /* cancel_driver */ fakeCancelDriver,
@@ -190,8 +186,7 @@ bool runDriver() {
 }
 
 /// 接口表查询 (定义见下方: 需要先声明伪 runtime 表)
-const void* PLUGINXX_CALL
-    fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid);
+const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid);
 
 const PluginxxHostVtable g_fakeVtable = {
     /* alloc */ fakeAlloc,
@@ -199,8 +194,7 @@ const PluginxxHostVtable g_fakeVtable = {
     /* query_interface */ fakeQueryInterface,
 };
 
-const void* PLUGINXX_CALL
-    fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
+const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
     if (!iid || !iid->data) {
         return nullptr;
     }
@@ -229,8 +223,7 @@ struct NotifyProbe {
     int32_t     status = -1;
     std::string payload;
 
-    static void PLUGINXX_CALL
-        done(void* ud, int32_t status, const PluginxxStringView* payload) {
+    static void PLUGINXX_CALL done(void* ud, int32_t status, const PluginxxStringView* payload) {
         auto& probe = *static_cast<NotifyProbe*>(ud);
         ++probe.calls;
         probe.status = status;
@@ -274,7 +267,7 @@ void finishRoot(std::coroutine_handle<> h) {
 } // namespace
 
 TestResult testPluginSdk() {
-    TestResult              result;
+    TestResult         result;
     const PluginxxHost host{&g_fakeVtable, nullptr};
 
     /// F13：tool 根操作的输入由 Request 拥有 —— 宿主借用缓冲区失效后，协程挂起

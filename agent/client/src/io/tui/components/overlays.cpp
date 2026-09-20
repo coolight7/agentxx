@@ -7,6 +7,7 @@
 #include "agentxx-client/io/tui/text_layout.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -576,7 +577,7 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
     // 1. 内嵌编译的插件列表
     std::vector<std::string> builtinPlugins;
     size_t                   builtinCount = 0;
-    const auto*              builtinList  = agentxx_plugin_get_builtin_plugins(&builtinCount);
+    const auto*              builtinList  = agentxx::plugin::get_builtin_plugins(&builtinCount);
     if (builtinList && builtinCount > 0) {
         for (size_t i = 0; i < builtinCount; ++i) {
             if (builtinList[i].name.data != nullptr && builtinList[i].name.size > 0) {
@@ -674,7 +675,7 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
         )
     );
     addSection("GitHub · MIT", "https://github.com/coolight7/agentxx");
-    addSection(tr("about.develop"), "coolight · 郑泳坤 · 2465045051@qq.com");
+    addSection(tr("about.develop"), "coolight · 2465045051@qq.com");
     addSection(tr("about.execPath"), kExePath);
     addSection(tr("about.serverIoType"), serverIoStr);
     addSection(tr("about.dataDir"), dataDirStr);

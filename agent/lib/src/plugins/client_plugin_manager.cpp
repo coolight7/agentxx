@@ -989,8 +989,8 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
     }
 
     PluginInstanceBase::InflightGuard guard(inst->self.lock());
-    PluginxxString               err{nullptr, 0};
-    PluginxxString               out{nullptr, 0};
+    PluginxxString                    err{nullptr, 0};
+    PluginxxString                    out{nullptr, 0};
     try {
         auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         cmd->execute(cmd->ud, &argsSv, &out, &err);
@@ -1454,8 +1454,7 @@ static void PLUGINXX_CALL xx_cfree(void* ptr) {
 
 // ---- 日志 / JSON ----
 
-void PLUGINXX_CALL
-    xx_clog(const PluginxxHost* host, int32_t level, const PluginxxStringView* msg) {
+void PLUGINXX_CALL xx_clog(const PluginxxHost* host, int32_t level, const PluginxxStringView* msg) {
     (void)host;
     std::string_view s = (msg && msg->data)
                              ? std::string_view{msg->data, static_cast<size_t>(msg->size)}
@@ -1509,11 +1508,8 @@ int32_t PLUGINXX_CALL xx_cjson_get_string(
 }
 
 /// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 线程安全纯函数)
-int32_t PLUGINXX_CALL xx_cjson_escape(
-    const PluginxxHost*       host,
-    const PluginxxStringView* s,
-    PluginxxString*           out
-) {
+int32_t PLUGINXX_CALL
+    xx_cjson_escape(const PluginxxHost* host, const PluginxxStringView* s, PluginxxString* out) {
     if (!out) {
         return -1;
     }
@@ -1582,8 +1578,8 @@ AgentxxStatusItem* PLUGINXX_CALL xx_cregister_status_item(
     const PluginxxHost*       host,
     const PluginxxStringView* id,
     const PluginxxStringView* initial_json,
-    int32_t                        align,
-    int32_t                        order
+    int32_t                   align,
+    int32_t                   order
 ) {
     if (agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
@@ -1604,7 +1600,7 @@ AgentxxStatusItem* PLUGINXX_CALL xx_cregister_status_item(
 
 int32_t PLUGINXX_CALL xx_cupdate_status_item(
     const PluginxxHost*       host,
-    AgentxxStatusItem*             item,
+    AgentxxStatusItem*        item,
     const PluginxxStringView* json
 ) {
     if (!item || !json) {
@@ -1620,8 +1616,7 @@ int32_t PLUGINXX_CALL xx_cupdate_status_item(
     );
 }
 
-void PLUGINXX_CALL
-    xx_cunregister_status_item(const PluginxxHost* host, AgentxxStatusItem* item) {
+void PLUGINXX_CALL xx_cunregister_status_item(const PluginxxHost* host, AgentxxStatusItem* item) {
     if (!item) {
         return;
     }
@@ -1653,7 +1648,7 @@ AgentxxPanel* PLUGINXX_CALL xx_cregister_panel(
 
 int32_t PLUGINXX_CALL xx_cupdate_panel(
     const PluginxxHost*       host,
-    AgentxxPanel*                  panel,
+    AgentxxPanel*             panel,
     const PluginxxStringView* items_json
 ) {
     if (!panel || !items_json) {
@@ -1703,7 +1698,7 @@ AgentxxInfoSection* PLUGINXX_CALL xx_cregister_info_section(
 
 int32_t PLUGINXX_CALL xx_cupdate_info_section(
     const PluginxxHost*       host,
-    AgentxxInfoSection*            section,
+    AgentxxInfoSection*       section,
     const PluginxxStringView* items_json
 ) {
     if (!section || !items_json) {
@@ -1759,10 +1754,8 @@ int32_t PLUGINXX_CALL
     );
 }
 
-int32_t PLUGINXX_CALL xx_cunregister_tool_renderer(
-    const PluginxxHost*       host,
-    const PluginxxStringView* tool_name
-) {
+int32_t PLUGINXX_CALL
+    xx_cunregister_tool_renderer(const PluginxxHost* host, const PluginxxStringView* tool_name) {
     if (!tool_name) {
         return -1;
     }
@@ -1817,11 +1810,8 @@ int32_t PLUGINXX_CALL
 
 // ---- toast ----
 
-void PLUGINXX_CALL xx_cshow_toast(
-    const PluginxxHost*       host,
-    const PluginxxStringView* text,
-    int32_t                        level
-) {
+void PLUGINXX_CALL
+    xx_cshow_toast(const PluginxxHost* host, const PluginxxStringView* text, int32_t level) {
     if (!text || !text->data) {
         return;
     }
@@ -1837,7 +1827,7 @@ void PLUGINXX_CALL xx_cshow_toast(
 
 PluginxxSubscription* PLUGINXX_CALL xx_csubscribe(
     const PluginxxHost* host,
-    int32_t                  event,
+    int32_t             event,
     void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
     void* ud
 ) {
@@ -1850,8 +1840,7 @@ PluginxxSubscription* PLUGINXX_CALL xx_csubscribe(
         [event,
          handler,
          ud](ClientPluginInstance* inst, ClientPluginManager* mgr) -> PluginxxSubscription* {
-            return static_cast<PluginxxSubscription*>(mgr->subscribe(inst, event, handler, ud)
-            );
+            return static_cast<PluginxxSubscription*>(mgr->subscribe(inst, event, handler, ud));
         }
     );
 }
@@ -1876,8 +1865,7 @@ void PLUGINXX_CALL xx_cunsubscribe(PluginxxSubscription* sub) {
 
 // ---- 会话上下文 ----
 
-int32_t PLUGINXX_CALL
-    xx_cget_client_state(const PluginxxHost* host, PluginxxString* out) {
+int32_t PLUGINXX_CALL xx_cget_client_state(const PluginxxHost* host, PluginxxString* out) {
     return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
         return mgr->clientStateJson();
     });
@@ -1936,29 +1924,25 @@ int32_t PLUGINXX_CALL xx_csend_plugin_data(
 
 // ---- 自描述 ----
 
-int32_t PLUGINXX_CALL
-    xx_cget_own_info(const PluginxxHost* host, PluginxxString* out) {
+int32_t PLUGINXX_CALL xx_cget_own_info(const PluginxxHost* host, PluginxxString* out) {
     return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
         return mgr->getOwnInfoJson(inst);
     });
 }
 
-int32_t PLUGINXX_CALL
-    xx_cget_plugin_args(const PluginxxHost* host, PluginxxString* out) {
+int32_t PLUGINXX_CALL xx_cget_plugin_args(const PluginxxHost* host, PluginxxString* out) {
     return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
         return mgr->getPluginArgsJson(inst);
     });
 }
 
-int32_t PLUGINXX_CALL
-    xx_cget_plugin_config_path(const PluginxxHost* host, PluginxxString* out) {
+int32_t PLUGINXX_CALL xx_cget_plugin_config_path(const PluginxxHost* host, PluginxxString* out) {
     return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
         return mgr->getPluginConfigPath(inst);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_cget_language(const PluginxxHost* host, PluginxxString* out) {
+static int32_t PLUGINXX_CALL xx_cget_language(const PluginxxHost* host, PluginxxString* out) {
     return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
         auto lang = mgr->getLanguage();
         return lang.empty() ? std::string{"en"} : lang;
@@ -1981,8 +1965,8 @@ static int32_t PLUGINXX_CALL
 int32_t PLUGINXX_CALL xx_cbind_action_handler(
     const PluginxxHost*       host,
     const PluginxxStringView* target_id,
-    AgentxxUiActionFn              on_action,
-    void*                          user_data
+    AgentxxUiActionFn         on_action,
+    void*                     user_data
 ) {
     if (!on_action) {
         return -1;
@@ -1997,10 +1981,8 @@ int32_t PLUGINXX_CALL xx_cbind_action_handler(
     );
 }
 
-int32_t PLUGINXX_CALL xx_cunbind_action_handler(
-    const PluginxxHost*       host,
-    const PluginxxStringView* target_id
-) {
+int32_t PLUGINXX_CALL
+    xx_cunbind_action_handler(const PluginxxHost* host, const PluginxxStringView* target_id) {
     auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
     return onClientIo<int32_t>(
         host,
@@ -2011,8 +1993,7 @@ int32_t PLUGINXX_CALL xx_cunbind_action_handler(
     );
 }
 
-int32_t PLUGINXX_CALL
-    xx_copen_overlay(const PluginxxHost* host, const AgentxxOverlaySpec* spec) {
+int32_t PLUGINXX_CALL xx_copen_overlay(const PluginxxHost* host, const AgentxxOverlaySpec* spec) {
     if (!spec) {
         return -1;
     }
@@ -2112,7 +2093,7 @@ const AgentxxClientLogIface g_clientIfaceLog = {
 /// 协程驱动接口表 (与 agent 侧同 IID; client 插件用同一套 kit 桥接)
 /// - 三个入口整体复用框架内核的通用表实现 (见文件上方"协程驱动"说明)
 const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime = {
-    /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
+    /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
     /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
     /* request_driver */ &ClientGenericEntries::requestDriverEntry,
     /* cancel_driver */ &ClientGenericEntries::cancelDriverEntry,
@@ -2137,11 +2118,11 @@ const PluginxxHostVtable* ClientPluginManager::hostVtable() {
 // =====================================================================
 
 void* ClientPluginManager::registerStatusItem(
-    ClientPluginInstance*   inst,
-    PluginxxStringView id,
-    PluginxxStringView json,
-    int                     align,
-    int                     order
+    ClientPluginInstance* inst,
+    PluginxxStringView    id,
+    PluginxxStringView    json,
+    int                   align,
+    int                   order
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
@@ -2213,9 +2194,9 @@ void* ClientPluginManager::registerStatusItem(
 }
 
 int ClientPluginManager::updateStatusItem(
-    ClientPluginInstance*   inst,
-    void*                   item,
-    PluginxxStringView json
+    ClientPluginInstance* inst,
+    void*                 item,
+    PluginxxStringView    json
 ) {
     auto h = static_cast<AgentxxStatusItem*>(item);
     if (!inst || !h) {
@@ -2292,9 +2273,9 @@ void ClientPluginManager::unregisterStatusItem(ClientPluginInstance* inst, void*
 }
 
 void* ClientPluginManager::registerPanel(
-    ClientPluginInstance*   inst,
-    PluginxxStringView id,
-    PluginxxStringView props_json
+    ClientPluginInstance* inst,
+    PluginxxStringView    id,
+    PluginxxStringView    props_json
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
@@ -2358,9 +2339,9 @@ void* ClientPluginManager::registerPanel(
 }
 
 int ClientPluginManager::updatePanel(
-    ClientPluginInstance*   inst,
-    void*                   panel,
-    PluginxxStringView items_json
+    ClientPluginInstance* inst,
+    void*                 panel,
+    PluginxxStringView    items_json
 ) {
     auto h = static_cast<AgentxxPanel*>(panel);
     if (!inst || !h) {
@@ -2437,9 +2418,9 @@ void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* pane
 }
 
 void* ClientPluginManager::registerInfoSection(
-    ClientPluginInstance*   inst,
-    PluginxxStringView id,
-    PluginxxStringView props_json
+    ClientPluginInstance* inst,
+    PluginxxStringView    id,
+    PluginxxStringView    props_json
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
         return nullptr;
@@ -2503,9 +2484,9 @@ void* ClientPluginManager::registerInfoSection(
 }
 
 int ClientPluginManager::updateInfoSection(
-    ClientPluginInstance*   inst,
-    void*                   section,
-    PluginxxStringView items_json
+    ClientPluginInstance* inst,
+    void*                 section,
+    PluginxxStringView    items_json
 ) {
     auto h = static_cast<AgentxxInfoSection*>(section);
     if (!inst || !h) {
@@ -2582,9 +2563,9 @@ void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void
 }
 
 int ClientPluginManager::updateToolDecor(
-    ClientPluginInstance*   inst,
-    PluginxxStringView tool_call_id,
-    PluginxxStringView decor_json
+    ClientPluginInstance* inst,
+    PluginxxStringView    tool_call_id,
+    PluginxxStringView    decor_json
 ) {
     if (!inst) {
         return -1;
@@ -2685,9 +2666,9 @@ int ClientPluginManager::updateToolDecor(
 }
 
 int ClientPluginManager::registerCommand(
-    ClientPluginInstance*   inst,
-    PluginxxStringView name,
-    PluginxxStringView description,
+    ClientPluginInstance* inst,
+    PluginxxStringView    name,
+    PluginxxStringView    description,
     int32_t(PLUGINXX_CALL*
                 exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
     void* ud
@@ -2735,10 +2716,7 @@ int ClientPluginManager::registerCommand(
     return 0;
 }
 
-int ClientPluginManager::unregisterCommand(
-    ClientPluginInstance*   inst,
-    PluginxxStringView name
-) {
+int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, PluginxxStringView name) {
     if (!inst || agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
@@ -2844,9 +2822,9 @@ std::string ClientPluginManager::getPluginConfigPath(ClientPluginInstance* inst)
 }
 
 void ClientPluginManager::sendUserInputToPeer(
-    ClientPluginInstance*   inst,
-    PluginxxStringView sessionId,
-    PluginxxStringView text
+    ClientPluginInstance* inst,
+    PluginxxStringView    sessionId,
+    PluginxxStringView    text
 ) {
     (void)sessionId; // 会话以当前绑定为准 (sessionId 不符时由端点兜底)
     if (!inst || !uiAdapter_) {
@@ -2857,8 +2835,8 @@ void ClientPluginManager::sendUserInputToPeer(
 }
 
 void ClientPluginManager::requestCancelToPeer(
-    ClientPluginInstance*   inst,
-    PluginxxStringView sessionId
+    ClientPluginInstance* inst,
+    PluginxxStringView    sessionId
 ) {
     if (!inst || !uiAdapter_) {
         return;
@@ -2867,9 +2845,9 @@ void ClientPluginManager::requestCancelToPeer(
 }
 
 int ClientPluginManager::sendPluginDataToPeer(
-    ClientPluginInstance*   inst,
-    PluginxxStringView event,
-    PluginxxStringView json
+    ClientPluginInstance* inst,
+    PluginxxStringView    event,
+    PluginxxStringView    json
 ) {
     if (!inst || !uiAdapter_) {
         return -1;
@@ -3008,8 +2986,8 @@ int ClientPluginManager::registerToolRenderer(
 }
 
 int ClientPluginManager::unregisterToolRenderer(
-    ClientPluginInstance*   inst,
-    PluginxxStringView tool_name
+    ClientPluginInstance* inst,
+    PluginxxStringView    tool_name
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&tool_name)) {
         return -1;
@@ -3049,10 +3027,10 @@ int ClientPluginManager::unregisterToolRenderer(
 }
 
 int ClientPluginManager::bindActionHandler(
-    ClientPluginInstance*   inst,
-    PluginxxStringView target_id,
-    AgentxxUiActionFn       on_action,
-    void*                   user_data
+    ClientPluginInstance* inst,
+    PluginxxStringView    target_id,
+    AgentxxUiActionFn     on_action,
+    void*                 user_data
 ) {
     if (!inst || !on_action) {
         return -1;
@@ -3105,8 +3083,8 @@ int ClientPluginManager::bindActionHandler(
 }
 
 int ClientPluginManager::unbindActionHandler(
-    ClientPluginInstance*   inst,
-    PluginxxStringView target_id
+    ClientPluginInstance* inst,
+    PluginxxStringView    target_id
 ) {
     if (!inst) {
         return -1;

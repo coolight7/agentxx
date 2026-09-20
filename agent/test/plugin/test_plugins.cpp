@@ -44,8 +44,7 @@ int g_plugin_failed = 0;
 
 namespace agentxx {
 namespace plugin {
-const void* PLUGINXX_CALL
-    xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
+const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 }
 
 namespace test {
@@ -137,7 +136,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         );
         XX_TEST_EXPECT_TRUE(ifaceConfig != nullptr);
         if (ifaceConfig) {
-            XX_TEST_EXPECT_EQ(ifaceConfig->version, AGENTXX_PLUGIN_IFACE_AGENT_CONFIG_VERSION);
+            XX_TEST_EXPECT_EQ(ifaceConfig->version, PLUGINXX_IFACE_CONFIG_VERSION);
             // 默认语言为 "en"
             PluginxxString langOut{};
             XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
@@ -644,7 +643,7 @@ throw new Error("top-level rollback probe");
             } st;
 
             PluginxxString loadErr{nullptr, 0};
-            auto*               jsInst = ctx->pluginManager->find("example_js").get();
+            auto*          jsInst = ctx->pluginManager->find("example_js").get();
             XX_TEST_EXPECT_TRUE(jsInst != nullptr);
             auto* op = ctx->pluginManager->invokeCapabilityAsync(
                 jsInst,
@@ -1207,10 +1206,10 @@ throw new Error("top-level rollback probe");
         // 31.1 call_tool_async 回调语义 (宿主在 io 线程派发 cb; 恰好一次)
         {
             PluginxxString e        = {nullptr, 0};
-            int                 cbStatus = -1;
-            std::string         cbPayload;
-            bool                cbDone = false;
-            using StateTuple           = std::tuple<int*, std::string*, bool*>;
+            int            cbStatus = -1;
+            std::string    cbPayload;
+            bool           cbDone = false;
+            using StateTuple      = std::tuple<int*, std::string*, bool*>;
             StateTuple state{&cbStatus, &cbPayload, &cbDone};
 
             auto* op = ctx->pluginManager->callToolAsync(
@@ -1241,7 +1240,7 @@ throw new Error("top-level rollback probe");
 
             // 不存在的工具: 装配失败返回 NULL 并带错误
             PluginxxString e2  = {nullptr, 0};
-            auto*               op2 = ctx->pluginManager->callToolAsync(
+            auto*          op2 = ctx->pluginManager->callToolAsync(
                 inst31.get(),
                 "not_registered_tool",
                 "{}",
@@ -1523,10 +1522,10 @@ throw new Error("top-level rollback probe");
 
             // ---- 32.1 命令真实链路 (无会话令牌): 快速完成且输出正确 ----
             {
-                auto                t0 = std::chrono::steady_clock::now();
+                auto           t0 = std::chrono::steady_clock::now();
                 PluginxxString e  = {nullptr, 0};
-                AsyncRes            ares;
-                auto*               op = ctx->pluginManager->callToolAsync(
+                AsyncRes       ares;
+                auto*          op = ctx->pluginManager->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     R"({"command":"echo repro_check"})",
@@ -1564,10 +1563,10 @@ throw new Error("top-level rollback probe");
             {
                 auto sess = ctx->sessions->getOrCreate("t_exec_with_token");
                 sess->setCancelToken(std::make_shared<neograph::graph::CancelToken>());
-                auto                t0 = std::chrono::steady_clock::now();
+                auto           t0 = std::chrono::steady_clock::now();
                 PluginxxString e  = {nullptr, 0};
-                AsyncRes            ares;
-                auto*               op = ctx->pluginManager->callToolAsync(
+                AsyncRes       ares;
+                auto*          op = ctx->pluginManager->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     R"({"command":"echo token_case"})",
@@ -1604,7 +1603,7 @@ throw new Error("top-level rollback probe");
             // ---- 32.3 超时参数生效: sleep 超过 timeout → 返回超时结果文本 ----
             {
                 PluginxxString e = {nullptr, 0};
-                AsyncRes            ares;
+                AsyncRes       ares;
 #if XX_IS_WIN_D
                 const char* timeoutCmd = R"({"command":"timeout /t 5 >nul","timeout":1})";
 #else
@@ -1674,7 +1673,7 @@ throw new Error("top-level rollback probe");
         auto instEx = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(instEx != nullptr);
         if (instEx) {
-            auto                ex = co_await asio::this_coro::executor;
+            auto           ex = co_await asio::this_coro::executor;
             PluginxxString e  = {nullptr, 0};
 
             struct CancelRes {
@@ -2801,7 +2800,7 @@ throw new Error("top-level rollback probe");
                         AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
                     );
                 if (ifacePermission) {
-                    const std::vector<std::string>       paths{(root / "keep" / "ok.txt").string()};
+                    const std::vector<std::string>  paths{(root / "keep" / "ok.txt").string()};
                     std::vector<PluginxxStringView> views;
                     for (const auto& p : paths) {
                         views.push_back(agentxx::plugin::PluginStringView::from(p));
@@ -2946,7 +2945,7 @@ throw new Error("top-level rollback probe");
             const char* slowCommand  = "sleep 5";
 #endif
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(cmdToolName2));
-            auto                ex = co_await asio::this_coro::executor;
+            auto           ex = co_await asio::this_coro::executor;
             PluginxxString e2{nullptr, 0};
 
             struct UnloadRes {

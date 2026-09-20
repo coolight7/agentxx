@@ -143,7 +143,6 @@ agentxx_ffi_event_queue_free(q);
 | HITL Response | `agentxx_ffi_interrupt_respond` | Submits the response for `EVT_INTERRUPT_REQ` (payload is always an object `{"values":[...],"options":{...}}`: `values` order follows the descriptor's declared controls, `options` carries declared toggles; non-object payloads return `AGENTXX_FFI_ERR_INVALID`) |
 | Logging | `agentxx_ffi_drain_logs` | Drains pending logs `[{"level","message"},...]` into `AgentxxString* out` (for post-failure diagnostics) |
 | Event Queue | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | See Section 4.2 |
-| Built-in Plugins | `agentxx_plugin_get_builtin_plugins` | Manifest entry for monolithic embedded plugin mode (used by PluginManager; 27th whitelist symbol, hiding 170k C++ symbols) |
 
 Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
 

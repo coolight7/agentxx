@@ -41,20 +41,20 @@ struct FakeOp;
 
 struct FakeTicket {
     PluginxxDriveOnceFn drive     = nullptr;
-    void*                    ud        = nullptr;
-    Harness*                 harness   = nullptr;
-    bool                     executed  = false;
-    bool                     cancelled = false;
+    void*               ud        = nullptr;
+    Harness*            harness   = nullptr;
+    bool                executed  = false;
+    bool                cancelled = false;
 };
 
 /// 伪宿主驱动 + 调度设施。所有调用都发生在用例线程上 (模拟宿主 IO 线程)。
 struct Harness {
     /// 伪调度器 sleep 的挂起点 (用例手工触发到期, 模拟宿主 timer adapter)。
     struct PendingSleep {
-        int64_t                       ms     = 0;
+        int64_t                  ms     = 0;
         PluginxxOperatorCallback cb     = nullptr;
-        void*                         ud     = nullptr;
-        uintptr_t                     handle = 0;
+        void*                    ud     = nullptr;
+        uintptr_t                handle = 0;
         /// 已被 op_cancel 请求取消。真宿主会在取消后以 CANCELLED 触发完成回调,
         /// 伪宿主只做标记, 由用例决定何时触发 (保持对既有用例的兼容)。
         bool cancelled = false;
@@ -145,7 +145,7 @@ void setHostError(PluginxxString* out, std::string_view message) {
 PluginxxDriver* PLUGINXX_CALL fakeRequestDriver(
     const PluginxxHost* host,
     PluginxxDriveOnceFn drive,
-    void*                    ud,
+    void*               ud,
     PluginxxString*     error
 ) {
     auto* harness = harnessOf(host);
@@ -190,9 +190,9 @@ int32_t PLUGINXX_CALL fakeIsIoThread(const PluginxxHost* host) {
 /// 伪 sleep: 记录回调, 由用例触发到期 (真宿主 timer adapter 的等价物)。
 PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
     const PluginxxHost*      host,
-    int64_t                       ms,
+    int64_t                  ms,
     PluginxxOperatorCallback cb,
-    void*                         ud,
+    void*                    ud,
     PluginxxString*          error
 ) {
     auto* harness = harnessOf(host);
@@ -232,8 +232,7 @@ void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
     }
 }
 
-int32_t PLUGINXX_CALL
-    fakeIsCancelled(const PluginxxHost*, const PluginxxStringView*) {
+int32_t PLUGINXX_CALL fakeIsCancelled(const PluginxxHost*, const PluginxxStringView*) {
     return 0;
 }
 
@@ -245,14 +244,11 @@ int32_t PLUGINXX_CALL fakeOffloadIsCancelled(const PluginxxCancelToken*) {
 /// (真宿主在工作线程池执行; 这里只需验证"降级路径能跑完"的语义, 不引入线程。)
 PluginxxOperatorHandle* PLUGINXX_CALL fakeOffload(
     const PluginxxHost* host,
-    void*(PLUGINXX_CALL* work)(
-        void*                           ud,
-        const PluginxxCancelToken* token,
-        PluginxxString*            error_out
-    ),
+    void*(PLUGINXX_CALL*
+              work)(void* ud, const PluginxxCancelToken* token, PluginxxString* error_out),
     void(PLUGINXX_CALL*
              done)(void* ud, int32_t status, void* result, const PluginxxStringView* error),
-    void*                ud,
+    void*           ud,
     PluginxxString* error
 ) {
     auto* harness = harnessOf(host);
@@ -263,7 +259,7 @@ PluginxxOperatorHandle* PLUGINXX_CALL fakeOffload(
     ++harness->offloadCalls;
     PluginxxCancelToken token{&fakeOffloadIsCancelled, nullptr};
     PluginxxString      workError{nullptr, 0};
-    void*                    result = work(ud, &token, &workError);
+    void*               result = work(ud, &token, &workError);
     PluginString::free(host, &workError);
     PluginxxStringView payload = PluginStringView::from(nullptr, 0);
     done(ud, PLUGINXX_OPERATOR_OK, result, &payload);
@@ -275,19 +271,17 @@ PluginxxOperatorHandle* PLUGINXX_CALL fakeOffload(
     return reinterpret_cast<PluginxxOperatorHandle*>(raw);
 }
 
-void PLUGINXX_CALL
-    fakeLog(const PluginxxHost* host, int32_t, const PluginxxStringView* msg) {
+void PLUGINXX_CALL fakeLog(const PluginxxHost* host, int32_t, const PluginxxStringView* msg) {
     auto* harness = harnessOf(host);
     if (harness && msg && msg->data) {
         harness->logs.emplace_back(msg->data, static_cast<size_t>(msg->size));
     }
 }
 
-int32_t PLUGINXX_CALL
-    fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec);
+int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec);
 
 const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
-    /* version */ AGENTXX_PLUGIN_IFACE_COROUTINE_RUNTIME_VERSION,
+    /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
     /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
     /* request_driver */ fakeRequestDriver,
     /* cancel_driver */ fakeCancelDriver,
@@ -295,7 +289,7 @@ const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
 };
 
 const PluginxxSchedulerIface g_fakeScheduler = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SCHEDULER_VERSION,
+    /* version */ PLUGINXX_IFACE_SCHEDULER_VERSION,
     /* struct_size */ sizeof(PluginxxSchedulerIface),
     /* is_io_thread */ fakeIsIoThread,
     /* post_to_io */ nullptr,
@@ -305,13 +299,13 @@ const PluginxxSchedulerIface g_fakeScheduler = {
 };
 
 const PluginxxCancelIface g_fakeCancel = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CANCEL_VERSION,
+    /* version */ PLUGINXX_IFACE_CANCEL_VERSION,
     /* struct_size */ sizeof(PluginxxCancelIface),
     /* is_cancelled */ fakeIsCancelled,
 };
 
 const PluginxxLogIface g_fakeLog = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_LOG_VERSION,
+    /* version */ PLUGINXX_IFACE_LOG_VERSION,
     /* struct_size */ sizeof(PluginxxLogIface),
     /* log */ fakeLog,
 };
@@ -328,8 +322,7 @@ const AgentxxPluginToolsIface g_fakeTools = {
 /// 用例可临时置空来验证"宿主不提供驱动时"的回退路径。
 const PluginxxCoroutineRuntimeIface* g_runtimeForTest = &g_fakeRuntime;
 
-const void* PLUGINXX_CALL
-    fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
+const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
     if (!iid || !iid->data) {
         return nullptr;
     }
@@ -376,8 +369,7 @@ struct CapturedTool {
 
 CapturedTool g_capturedTool;
 
-int32_t PLUGINXX_CALL
-    fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
+int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
     if (!spec) {
         return -1;
     }
@@ -392,8 +384,7 @@ struct NotifyProbe {
     int32_t     status = -1;
     std::string payload;
 
-    static void PLUGINXX_CALL
-        done(void* ud, int32_t status, const PluginxxStringView* payload) {
+    static void PLUGINXX_CALL done(void* ud, int32_t status, const PluginxxStringView* payload) {
         auto& probe = *static_cast<NotifyProbe*>(ud);
         ++probe.calls;
         probe.status = status;
@@ -457,8 +448,8 @@ void* startTool(
 } // namespace
 
 TestResult testPluginBridge() {
-    TestResult              result;
-    Harness                 harness;
+    TestResult         result;
+    Harness            harness;
     const PluginxxHost host{&g_fakeVtable, &harness};
 
     /// 1. request_driver 永不内联 + 一次请求恰好一次推进 + 空闲不自旋。
