@@ -31,9 +31,16 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// 注意: windows.h 必须放在其他 Windows 头文件 (psapi.h / tlhelp32.h) 之前,
+// 这些头文件只包含 winapifamily.h, 依赖 windows.h 提供 BOOL/DWORD/HANDLE 等基础类型;
+// 同时用 WIN32_LEAN_AND_MEAN 阻止 windows.h 引入旧版 winsock.h (asio 要求 winsock2.h)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+// ---
 #include <psapi.h>
 #include <tlhelp32.h>
-#include <windows.h>
 #else
 #include <dirent.h>
 #include <malloc.h>

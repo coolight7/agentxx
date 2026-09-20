@@ -30,8 +30,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <psapi.h>
+// 注意: windows.h 必须在 psapi.h 之前 (psapi.h 只包含 winapifamily.h,
+// 依赖 windows.h 提供 BOOL/DWORD/HANDLE 等基础类型)
 #include <windows.h>
+// ---
+#include <psapi.h>
 #ifdef _MSC_VER
 #include <crtdbg.h>
 #endif

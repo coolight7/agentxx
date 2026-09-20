@@ -10,10 +10,13 @@
 #include <vector>
 
 #if XX_IS_WIN_D
+// 注意: windows.h 必须放在 pdh.h / pdhmsg.h 之前 (pdh.h 只包含 winapifamily.h,
+// 依赖 windows.h 提供 BOOL/DWORD/HANDLE 等基础类型)
+#include <windows.h>
+// ---
 #include <dxgi1_6.h>
 #include <pdh.h>
 #include <pdhmsg.h>
-#include <windows.h>
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "pdh.lib")

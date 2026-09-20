@@ -43,8 +43,15 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <psapi.h>
+// 注意: windows.h 必须在 psapi.h 之前 (psapi.h 只包含 winapifamily.h,
+// 依赖 windows.h 提供 BOOL/DWORD/HANDLE 等基础类型);
+// 同时用 WIN32_LEAN_AND_MEAN 阻止 windows.h 引入旧版 winsock.h (asio 要求 winsock2.h)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+// ---
+#include <psapi.h>
 #else
 #include <dirent.h>
 #include <fcntl.h>
