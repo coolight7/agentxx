@@ -130,6 +130,13 @@ struct ClientActionBinding {
     void*             ud = nullptr;
 };
 
+/// 展示区域尺寸快照条目 (面板/Info 段落的可用宽高; UI 线程写, io 线程读)
+struct ClientRegionSize {
+    std::string id;            ///< 归属 id (面板 id / 段落 id)
+    int         width  = 0;    ///< 可用显示宽度 (列)
+    int         height = 0;    ///< 当前内容行数 (行)
+};
+
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
     std::vector<ClientStatusItem>    statusItems;
@@ -692,6 +699,20 @@ public:
     /// 通用 overlay 关闭 (io 线程; 经 adapter->onOverlayClose)
     void closeOverlay(ClientPluginInstance* inst);
 
+    // ==================== 展示区域尺寸 (任意线程) ====================
+    //
+    // 用途: 面板/Info 段落由宿主布局, 插件拿不到可用宽度; 宿主在每次布局后把各归属的
+    // 可用宽高记入快照, 值变化时向订阅 AGENTXX_CLIENT_EVT_UI_LAYOUT 的插件投递事件,
+    // 并把它放进 get_client_state().regions 供按需查询 (SDK: ClientPluginBase::regionSize)。
+
+    /// 上报某归属的可用尺寸 (UI 线程调用; 值未变化时不做任何事)
+    /// - 首次上报总是会投递一次事件 (当前值从"未知"变为已知)
+    /// - 事件投递到 io 线程执行 (订阅回调的线程约定不变)
+    void reportRegionSize(const std::string& id, int width, int height);
+
+    /// 当前区域尺寸快照 (任意线程; 按 id 升序)
+    std::vector<ClientRegionSize> regionSizes() const;
+
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
         ClientPluginInstance* inst,
@@ -897,14 +918,18 @@ private:
         std::vector<std::string> interfaces; ///< 该插件声明的接口 (require∪optional)
     };
 
-    std::vector<ServerPluginInfo> serverPlugins_;
-    /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
+    std::vector<ServerPluginInfo> serverPlugins_;    /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
     /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
     /// 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏
     std::set<std::string> pluginDataNoSubWarned_;
 
     /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
     std::map<std::string, std::string> skippedPlugins_{};
+
+    /// 展示区域尺寸快照 (UI 线程写, 任意线程读; 见 reportRegionSize)
+    mutable std::mutex                                          regionMutex_;
+    std::map<std::string, ClientRegionSize, std::less<>>        regionSizes_;
+
     std::string                        language_ = "en";
 };
 

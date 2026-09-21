@@ -64,6 +64,11 @@ typedef enum AgentxxClientEvent {
     AGENTXX_CLIENT_EVT_TURN_END,       ///< 轮次结束 {"sessionId","hasError","interrupted",...}
     AGENTXX_CLIENT_EVT_SESSION_SWITCH, ///< 会话切换 {"sessionId"}
     AGENTXX_CLIENT_EVT_PLUGIN_DATA, ///< 插件事件转发 (WirePluginData) {"plugin","event","data"}
+    /// 展示区域尺寸变化 {"regions":[{"id":"<面板/段落 id>","w":60,"h":20}]}
+    /// - 插件按新的可用宽度重新排列自己的组件 (例如换用不同的列宽/省略策略)
+    /// - 仅在数值变化时投递 (同一帧内多次上报会合并为一次);
+    ///   老宿主对新事件值返回订阅失败 (NULL), 插件应据此降级为固定宽度
+    AGENTXX_CLIENT_EVT_UI_LAYOUT,
     AGENTXX_CLIENT_EVT_COUNT
 } AgentxxClientEvent;
 

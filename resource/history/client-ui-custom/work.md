@@ -20,7 +20,7 @@
 | P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ✅ 已完成 |
 | P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
 | P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
-| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ⬜ 待开始 |
+| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成 |
 | P2.5 | 状态栏 segments / sparkline / meter（单行） | ⬜ 待开始 |
 | P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
 
@@ -183,10 +183,23 @@
 
 ---
 
+## 阶段 6：展示区域尺寸感知（已完成）
+
+- 新事件 `AGENTXX_CLIENT_EVT_UI_LAYOUT`（枚举追加值，老宿主对新值订阅失败即降级）：
+  载荷 `{"regions":[{"id","w","h"}]}`，在尺寸变化时向订阅者投递（io 线程）
+- 宿主快照：`ClientPluginManager::reportRegionSize(id, w, h)`（UI 线程，值未变化直接返回）
+  + `regionSizes()`；同时进入 `get_client_state().regions`，SDK 提供
+  `ClientPluginBase::regionSize(regionId)` 查询
+- UI 侧上报点：面板渲染回调与 Info 段落渲染（内容行数 + 可用宽度）
+- 能力名 `agentxx.client.layout`（TUI 适配器声明）
+- 测试：`client_plugins` 覆盖上报/去重/覆盖/非法值忽略与状态快照
+
+---
+
 ## 待完成任务（下一步）
 
 1. P2.3 尺寸感知：布局快照 + `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 +
-   `ClientPluginBase::regionSize()`（插件按可用宽度自行重排）
+   `ClientPluginBase::regionSize()`（插件按可用宽度自行重排） —— **已完成，见阶段 6**
 2. P2.5 状态栏扩展：`{"segments":[...],"sparkline":[...],"meter":{...}}`（单行，复用
    sparkline/meter 实现）
 3. 中断控件布局迁移到共享实现（`InterruptView::layoutControl/layoutSubmit` 改用

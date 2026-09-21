@@ -1079,6 +1079,19 @@ std::string ClientPluginManager::clientStateJson() const {
         }
         return arr;
     }();
+    // 展示区域尺寸快照 [{id,w,h},...]: 面板/Info 段落的可用宽高 (宿主布局后写入;
+    // 插件据此按可用宽度自行重排; 事件 AGENTXX_CLIENT_EVT_UI_LAYOUT 会主动通知变化)
+    j["regions"] = [&] {
+        auto arr = utilxx_base::Json::array();
+        for (const auto& r : regionSizes()) {
+            auto item  = utilxx_base::Json::object();
+            item["id"] = r.id;
+            item["w"]  = r.width;
+            item["h"]  = r.height;
+            arr.push_back(std::move(item));
+        }
+        return arr;
+    }();
     return j.dump();
 }
 
@@ -3255,6 +3268,54 @@ void ClientPluginManager::closeOverlay(ClientPluginInstance* inst) {
         return;
     }
     uiAdapter_->onOverlayClose(inst->name);
+}
+
+void ClientPluginManager::reportRegionSize(const std::string& id, int width, int height) {
+    if (id.empty() || width <= 0) {
+        return;
+    }
+    // 值未变化时直接返回 (布局每帧都会上报, 只有变化才通知插件)
+    {
+        std::lock_guard<std::mutex> lock(regionMutex_);
+        auto&                       entry = regionSizes_[id];
+        entry.id                          = id;
+        if (entry.width == width && entry.height == height) {
+            return;
+        }
+        entry.width  = width;
+        entry.height = height;
+    }
+    // 事件投递到 io 线程 (插件回调的线程约定: 一律在 client io 线程执行)
+    auto executor = ioExecutor();
+    if (!executor) {
+        return;
+    }
+    auto snapshot = regionSizes();
+    auto payload  = utilxx_base::Json::object();
+    auto regions  = utilxx_base::Json::array();
+    for (const auto& r : snapshot) {
+        auto item  = utilxx_base::Json::object();
+        item["id"] = r.id;
+        item["w"]  = r.width;
+        item["h"]  = r.height;
+        regions.push_back(std::move(item));
+    }
+    payload["regions"] = std::move(regions);
+    const std::string text = payload.dump();
+    auto              self = shared_from_this();
+    asio::post(executor, [self, text]() {
+        self->dispatchEvent(AGENTXX_CLIENT_EVT_UI_LAYOUT, text);
+    });
+}
+
+std::vector<ClientRegionSize> ClientPluginManager::regionSizes() const {
+    std::lock_guard<std::mutex> lock(regionMutex_);
+    std::vector<ClientRegionSize> out;
+    out.reserve(regionSizes_.size());
+    for (const auto& entry : regionSizes_) {
+        out.push_back(entry.second);
+    }
+    return out;
 }
 
 ClientToolRenderResult renderClientTool(

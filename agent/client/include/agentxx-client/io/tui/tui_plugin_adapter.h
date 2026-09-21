@@ -52,6 +52,8 @@ public:
             std::string{pi::ClientComponents},
             // 插件表单: 控件状态由宿主维护, 提交结果经动作通道回传
             std::string{pi::ClientForm},
+            // 区域尺寸感知: 布局后把可用宽高告知插件 (事件 + 快照)
+            std::string{pi::ClientLayout},
         };
     }
 

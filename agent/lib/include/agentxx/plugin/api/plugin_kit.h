@@ -2458,6 +2458,40 @@ public:
         }
     }
 
+    /// 展示区域尺寸 (宽/高; 未上报时返回 0)
+    /// - 区域 id 为面板/Info 段落的注册 id (`update_panel` / `update_info_section` 的 id)
+    /// - 宿主在每次布局后更新快照, 值变化时会另发 `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件;
+    ///   老宿主 (未声明 `agentxx.client.layout`) 该接口返回 0, 插件应降级为固定宽度
+    /// - 查询走 `get_client_state()`, 因此仅在 client io 线程可调 (与其它表接口一致)
+    struct RegionSize {
+        int width  = 0;
+        int height = 0;
+    };
+
+    RegionSize regionSize(std::string_view regionId) const {
+        RegionSize out;
+        if (regionId.empty()) {
+            return out;
+        }
+        const auto state = clientStateJson();
+        const auto it    = state.find("regions");
+        if (it == state.end() || !it->is_array()) {
+            return out;
+        }
+        for (const auto& entry : *it) {
+            if (!entry.is_object()) {
+                continue;
+            }
+            if (entry.value("id", std::string{}) != regionId) {
+                continue;
+            }
+            out.width  = entry.value("w", 0);
+            out.height = entry.value("h", 0);
+            break;
+        }
+        return out;
+    }
+
     template<typename Fn>
     void registerRenderer(std::string_view tool, Fn&& fn) {
         registerToolRenderer(host, iface.ui, tool, std::forward<Fn>(fn), shims_);

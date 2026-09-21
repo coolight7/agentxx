@@ -496,8 +496,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   相关功能停用"
 - 展示扩展表另有细粒度能力名用于"组件集合"判断 (与表成员无关, 只作能力协商用):
   `agentxx.client.components` = 宿主能渲染 `agentxx.ui.item` 全量组件 (含表格/树/图表/
-  容器), `agentxx.client.form` = 宿主支持插件表单 (控件 + 提交回传)。插件在
-  `get_client_state().interfaces` 里查这两个名字决定推送"新组件"还是降级为旧 kind;
+  容器), `agentxx.client.form` = 宿主支持插件表单 (控件 + 提交回传),
+  `agentxx.client.layout` = 宿主会上报展示区域尺寸 (事件 + 快照)。插件在
+  `get_client_state().interfaces` 里查这些名字决定推送"新组件"还是降级为旧 kind;
   老宿主不认识这些名字 → 插件降级, 不报错、不静默丢内容。
 
 ### 9.1 客户端 UI 组件描述 schema (`agentxx.ui.item`)
@@ -585,6 +586,21 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - 在 overlay 里可以放控件与提交行 (见 9.2): 点击/键盘由宿主的表单状态处理, 提交经
   动作通道回传 `__submit`, 取消回传 `__cancel` (owner 固定 `__overlay`, 由实例级
   动作绑定接住)。
+
+### 9.4 展示区域尺寸感知
+
+面板与 Info 段落由宿主布局, 插件默认拿不到可用宽度。宿主 (声明能力名
+`agentxx.client.layout`) 提供两件套:
+
+- **事件 `AGENTXX_CLIENT_EVT_UI_LAYOUT`**: 载荷
+  `{"regions":[{"id":"<面板/段落 id>","w":60,"h":20}]}`
+  - 首次布局完成、终端尺寸变化、侧边栏宽度拖拽、面板激活/打开时投递
+  - 仅在数值变化时投递 (每帧上报会自然合并), 投递线程仍是 client io 线程
+- **快照查询**: `get_client_state().regions` 与 SDK
+  `ClientPluginBase::regionSize(regionId)` (返回 `{width, height}`; 未上报为 0)
+
+插件按新宽度重新排列自己的组件并 `update_panel` 即可; 老宿主订阅该事件会失败
+(返回 NULL), 此时按固定宽度排版。
 
 ### 工具特化渲染架构 (Tool Rendering & Decor)
 

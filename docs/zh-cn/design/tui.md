@@ -241,7 +241,10 @@ struct UiActionItem {
 - 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由宿主维护, 提交经
   动作通道回传 `__submit` (参数 `{"values":{控件 id: 值}}`), 取消回传 `__cancel`,
   `commitOnPick` 的候选项点击即提交。插件不接触 UI 线程, 只收结果。
-- 相关 schema 与约束见 [plugins.md](plugins.md) 与
+- 尺寸感知: 宿主布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
+  `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 (载荷 `{"regions":[{id,w,h}]}`), 并可经
+  `get_client_state().regions` 查询; 插件据此按可用宽度重排内容。
+- 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.4 与
   [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
 ---

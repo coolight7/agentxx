@@ -189,6 +189,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 if (secItems.empty()) {
                     continue;
                 }
+                // 上报可用尺寸 (值变化时宿主投递 UI_LAYOUT 事件)
+                if (mgr) {
+                    mgr->reportRegionSize(sec.id, avail, static_cast<int>(secItems.size()));
+                }
                 if (!sec.title.empty()) {
                     pushPlain(text(sec.title) | color(theme_.accentColor));
                 }

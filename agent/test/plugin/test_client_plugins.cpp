@@ -1022,6 +1022,36 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 未置位的能力不得出现 (keybind 预留位未置)
         XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.keybind") != std::string::npos);
 
+        // 11.1b 区域尺寸快照: 上报后进入 client_state.regions, 值未变化不重复记录
+        XX_TEST_EXPECT_TRUE(mgr->regionSizes().empty());
+        mgr->reportRegionSize("agentxx_test.panel", 60, 12);
+        mgr->reportRegionSize("agentxx_test.panel", 60, 12); // 重复上报: 无变化
+        auto sizes = mgr->regionSizes();
+        XX_TEST_EXPECT_EQ(sizes.size(), size_t{1});
+        if (!sizes.empty()) {
+            XX_TEST_EXPECT_EQ(sizes[0].id, std::string{"agentxx_test.panel"});
+            XX_TEST_EXPECT_EQ(sizes[0].width, 60);
+            XX_TEST_EXPECT_EQ(sizes[0].height, 12);
+        }
+        // 尺寸变化后覆盖同一 id (不新增条目)
+        mgr->reportRegionSize("agentxx_test.panel", 80, 20);
+        sizes = mgr->regionSizes();
+        XX_TEST_EXPECT_EQ(sizes.size(), size_t{1});
+        if (!sizes.empty()) {
+            XX_TEST_EXPECT_EQ(sizes[0].width, 80);
+            XX_TEST_EXPECT_EQ(sizes[0].height, 20);
+        }
+        // 非法上报 (空 id / 非正宽度) 被忽略
+        mgr->reportRegionSize("", 10, 10);
+        mgr->reportRegionSize("agentxx_test.panel", 0, 10);
+        XX_TEST_EXPECT_EQ(mgr->regionSizes().size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(
+            mgr->clientStateJson().find("\"regions\"") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            mgr->clientStateJson().find("agentxx_test.panel") != std::string::npos
+        );
+
         // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后限制):
         // 拷贝真实可加载的示例库, manifest 声明本宿主不支持的必选接口
         auto gateDir

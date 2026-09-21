@@ -322,11 +322,17 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     if (!res.builders.empty()) {
         sidebarMdBuilders_.push_back(std::move(res.builders));
     }
+    size_t lines = 0;
     for (auto& row : res.rows) {
+        lines += std::max<size_t>(1, row.lines);
         ScrollItem item;
         item.element = std::move(row.element);
         item.hits    = std::move(row.regions);
         out.push_back(std::move(item));
+    }
+    // 上报可用尺寸: 值变化时宿主会向插件投递 UI_LAYOUT 事件 (插件按宽度重排)
+    if (mgr) {
+        mgr->reportRegionSize(panel->id, avail, static_cast<int>(lines));
     }
     return out;
 }

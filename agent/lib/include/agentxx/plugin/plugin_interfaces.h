@@ -128,6 +128,9 @@ inline constexpr std::string_view ClientComponents = "agentxx.client.components"
 /// 插件表单: 宿主支持控件交互与结果回传 (`__submit`/`__cancel`/`commitOnPick`
 /// 经动作通道回传 `{"values":{控件 id: 值}}`); 未声明时控件只作展示
 inline constexpr std::string_view ClientForm = "agentxx.client.form";
+/// 区域尺寸感知: 宿主在布局后把可用宽高告知插件 (`AGENTXX_CLIENT_EVT_UI_LAYOUT`
+/// 事件 + `get_client_state().regions` 快照); 未声明时插件按固定宽度排版
+inline constexpr std::string_view ClientLayout = "agentxx.client.layout";
 } // namespace plugin_interfaces
 
 /// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)
