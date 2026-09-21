@@ -45,9 +45,14 @@ struct ClientToolRendererLease {
 struct ClientStatusItem {
     std::string plugin;    ///< 所属插件名
     std::string id;        ///< 全局唯一 id
-    std::string text;      ///< 当前文本
+    std::string text;      ///< 当前文本 (纯文本形态; 渲染至少显示它)
     int         align = 0; ///< 0=左侧 1=右侧
     int         order = 0; ///< 组内排序 (小在前)
+    /// 富展示描述 (可选): `{"segments":[{text,color}],"sparkline":{...},"meter":{...}}`
+    ///
+    /// 状态栏只有一行高度, 因此这些片段按"单行组件"渲染 (迷你趋势图高度强制为 1,
+    /// 计量条取一行); `text` 作为无法渲染富内容时的降级文本。空对象 = 只用 `text`。
+    utilxx_base::Json rich = utilxx_base::Json::object();
 };
 
 /// 面板注册记录 (UI 注册表快照条目)

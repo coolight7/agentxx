@@ -503,6 +503,62 @@ void test_status_bar_click_actions() {
     XX_TEST_EXPECT_EQ(sessionClicks, 1);
     XX_TEST_EXPECT_EQ(settingsClicks, 1);
 
+    // ---- 插件状态栏项的富展示片段 (segments / sparkline / meter) ----
+    {
+        auto registry = std::make_shared<agentxx::plugin::ClientUiRegistry>();
+        agentxx::plugin::ClientStatusItem rich;
+        rich.plugin = "test_plugin";
+        rich.id     = "test_plugin.rich";
+        rich.text   = "降级文本";
+        rich.align  = 0;
+        rich.order  = 0;
+        rich.rich   = utilxx_base::Json::parse(
+            R"({"segments":[{"text":"CPU","color":"hint"},{"text":"55%","color":"accent"}],)"
+            R"("sparkline":{"data":[1,3,2,5,4],"color":"accent"},)"
+            R"("meter":{"value":55,"total":100,"width":8,"unit":"%"}})"
+        );
+        registry->statusItems.push_back(rich);
+
+        agentxx::plugin::ClientStatusItem plain;
+        plain.plugin = "test_plugin";
+        plain.id     = "test_plugin.plain";
+        plain.text   = "plain-item";
+        plain.align  = 1;
+        registry->statusItems.push_back(plain);
+
+        auto bound = TUISharedState{};
+        ctx.frameState = bound.readSnapshot();
+        ctx.frameState->pluginRegistry = registry;
+
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(3));
+        ftxui::Render(screen, comp->Render());
+        const std::string text = screenTextIn(screen, ftxui::Box{0, 99, 0, 2});
+        XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("55%") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("plain-item") != std::string::npos);
+        // 富片段渲染成功时不显示降级文本
+        XX_TEST_EXPECT_TRUE(text.find("降级文本") == std::string::npos);
+    }
+    {
+        // 无富片段时仍按纯文本渲染 (原行为不变)
+        auto registry = std::make_shared<agentxx::plugin::ClientUiRegistry>();
+        agentxx::plugin::ClientStatusItem plain;
+        plain.plugin = "test_plugin";
+        plain.id     = "test_plugin.text";
+        plain.text   = "text-only";
+        registry->statusItems.push_back(plain);
+        auto bound = TUISharedState{};
+        ctx.frameState = bound.readSnapshot();
+        ctx.frameState->pluginRegistry = registry;
+
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(3));
+        ftxui::Render(screen, comp->Render());
+        XX_TEST_EXPECT_TRUE(screenTextIn(screen, ftxui::Box{0, 99, 0, 2}).find("text-only")
+                            != std::string::npos);
+    }
+
     // 键盘事件不被状态栏消费 (由外层集中处理 F2/F3/F4)
     XX_TEST_EXPECT_FALSE(comp->OnEvent(ftxui::Event::F2));
     // 未命中任何区域的鼠标事件同样不消费 (交给其它组件)

@@ -21,7 +21,7 @@
 | P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
 | P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
 | P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成 |
-| P2.5 | 状态栏 segments / sparkline / meter（单行） | ⬜ 待开始 |
+| P2.5 | 状态栏 segments / sparkline / meter（单行） | ✅ 已完成 |
 | P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
 
 ---
@@ -196,18 +196,28 @@
 
 ---
 
+## 阶段 7：状态栏富展示片段（已完成）
+
+状态栏项 JSON 除 `text`/`tooltip` 外支持单行富片段（`segments` / `sparkline` / `meter`），
+由共享组件层渲染为一行；只给 `text` 时行为与之前完全一致（含 24 字截断）。实现要点：
+
+- `ClientStatusItem` 增加 `rich`（注册与更新时解析，随 UI 注册表 COW 快照走）
+- `status_bar.cpp` 的 `statusRichElement()` 把片段组装成一个 `row` 组件树交
+  `ui_components` 渲染（sparkline 高度强制 1；单侧宽度预算 = 终端宽度 / 3）
+- 状态栏的注册表来源改为"本帧快照优先，其次管理器快照"（可测性 + 与其它组件一致）
+- 测试：`tui_widget` 覆盖富片段渲染成功与降级文本不出现、纯文本项行为不变
+
+---
+
 ## 待完成任务（下一步）
 
-1. P2.3 尺寸感知：布局快照 + `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 +
-   `ClientPluginBase::regionSize()`（插件按可用宽度自行重排） —— **已完成，见阶段 6**
-2. P2.5 状态栏扩展：`{"segments":[...],"sparkline":[...],"meter":{...}}`（单行，复用
-   sparkline/meter 实现）
-3. 中断控件布局迁移到共享实现（`InterruptView::layoutControl/layoutSubmit` 改用
+1. 中断控件布局迁移到共享实现（`InterruptView::layoutControl/layoutSubmit` 改用
    `ui_components` 的控件渲染 + `UiFormState`，保持结果契约不变；已完成的表单交互
    逻辑与中断的差异只剩"结果去处"）
-4. P3：`agentxx.client.timer` v1（一次性/周期定时器 + 可见性/动画等级门控）、
+2. P3：`agentxx.client.timer` v1（一次性/周期定时器 + 可见性/动画等级门控）、
    `agentxx.client.keybind` v1（全局快捷键注册与派发）及对应 SDK/测试
-5. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
+3. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
+4. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
 
 ---
 

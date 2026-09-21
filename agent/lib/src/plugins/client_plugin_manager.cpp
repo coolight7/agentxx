@@ -2166,7 +2166,7 @@ void* ClientPluginManager::registerStatusItem(
             }
         }
     }
-    // 解析 initial_json → text
+    // 解析 initial_json → text (与富片段)
     std::string       text;
     utilxx_base::Json props;
     try {
@@ -2180,6 +2180,10 @@ void* ClientPluginManager::registerStatusItem(
     if (text.empty()) {
         text = idStr;
     }
+    // 富展示片段 (segments/sparkline/meter): 注册时即可给出, 更新时同 updateStatusItem
+    const bool hasRich = props.is_object()
+                         && (props.contains("segments") || props.contains("sparkline")
+                             || props.contains("meter"));
 
     auto handle    = std::make_shared<AgentxxStatusItem>();
     handle->inst   = inst;
@@ -2190,6 +2194,7 @@ void* ClientPluginManager::registerStatusItem(
     reg.plugin = inst->name;
     reg.id     = handle->id;
     reg.text   = text;
+    reg.rich   = hasRich ? props : utilxx_base::Json::object();
     reg.align  = align;
     reg.order  = order;
     {
@@ -2225,7 +2230,12 @@ int ClientPluginManager::updateStatusItem(
     } catch (...) {
         text.clear();
     }
-    if (text.empty()) {
+    // 富展示片段 (segments/sparkline/meter): 与 text 同为可选, 两者都为空才算非法更新
+    const bool hasRich = props.is_object()
+                         && (props.contains("segments") || props.contains("sparkline")
+                             || props.contains("meter"));
+    // 富片段存在时 text 可省略 (状态栏以富内容为主, 文本仅作降级)
+    if (!hasRich && text.empty()) {
         return -1;
     }
     {
@@ -2234,6 +2244,7 @@ int ClientPluginManager::updateStatusItem(
         for (auto& s : cur->statusItems) {
             if (s.id == h->id) {
                 s.text = text;
+                s.rich = hasRich ? props : utilxx_base::Json::object();
                 break;
             }
         }
@@ -2242,6 +2253,7 @@ int ClientPluginManager::updateStatusItem(
     for (auto& s : inst->statusItemRegs) {
         if (s.id == h->id) {
             s.text = text;
+            s.rich = hasRich ? props : utilxx_base::Json::object();
             break;
         }
     }

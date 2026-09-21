@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/ui_components.h"
 #include "ftxui/dom/elements.hpp"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -20,6 +21,71 @@ const agentxx::client::UiHitMap::Entry*
         }
     }
     return nullptr;
+}
+
+} // namespace
+
+namespace {
+
+/// 状态栏富展示片段 → 单行元素 ([ui_components] 的共享实现渲染)
+///
+/// 输入形态 (与 `update_status_item` 的 JSON 一致):
+/// - `segments`: `[{text,color}]` 文本片段 (状态栏常见的"分色多段"写法)
+/// - `sparkline`: 迷你趋势图参数 (`data` 必需; 高度强制 1 行)
+/// - `meter`: 计量条参数 (`value`/`total`/`width`/`label`/`unit`/`thresholds`)
+///
+/// 三者可任意组合, 按 `segments → sparkline → meter` 顺序以单个空格拼接为一行;
+/// 状态栏高度固定一行, 因此 sparkline 的 `height` 被忽略 (恒为 1)。
+/// 无可用片段时返回 nullptr (调用方回退纯文本)。
+ftxui::Element
+    statusRichElement(const utilxx_base::Json& rich, const TUITheme& theme, int maxWidth) {
+    agentxx::ui::Items cells;
+    bool               any = false;
+    if (const auto segs = rich.find("segments"); segs != rich.end() && segs->is_array()) {
+        for (const auto& seg : *segs) {
+            if (!seg.is_object()) {
+                continue;
+            }
+            const std::string text = seg.value("text", std::string{});
+            if (text.empty()) {
+                continue;
+            }
+            cells.text(text, seg.value("color", std::string{"hint"}));
+            any = true;
+        }
+    }
+    if (const auto sp = rich.find("sparkline"); sp != rich.end() && sp->is_object()) {
+        utilxx_base::Json params = *sp;
+        params["height"]         = 1; // 状态栏只有一行
+        cells.raw(std::move(params));
+        any = true;
+    }
+    if (const auto mt = rich.find("meter"); mt != rich.end() && mt->is_object()) {
+        cells.raw(*mt);
+        any = true;
+    }
+    if (!any || cells.empty()) {
+        return nullptr;
+    }
+
+    // 片段按横排组装 (共享实现负责间距与宽度分配)
+    agentxx::ui::Items row;
+    row.row(cells, {.gap = 1});
+
+    client::UiRenderCtx rc;
+    rc.theme  = &theme;
+    rc.width  = (maxWidth > 0) ? maxWidth : 0;
+    rc.indent = 0;
+    UiRenderResult res;
+    renderItems(agentxx::ui::parseItemList(row.json()), rc, res);
+    if (res.rows.empty()) {
+        return nullptr;
+    }
+    ftxui::Elements els;
+    for (auto& rendered : res.rows) {
+        els.push_back(std::move(rendered.element));
+    }
+    return ftxui::vbox(std::move(els)) | ftxui::xflex_shrink;
 }
 
 } // namespace
@@ -85,8 +151,15 @@ Element StatusBarComponent::OnRender() {
     // 按 order 排序, 文本过长时裁剪 (UTF-8 安全截断)
     std::vector<Element> leftPluginItems;
     std::vector<Element> rightPluginItems;
-    if (auto mgr = ctx_.pluginManager) {
-        auto reg = mgr->uiRegistrySnapshot();
+    {
+        // 注册表来源: 优先用本帧快照 (主渲染器帧首写入), 否则短锁取管理器快照
+        std::shared_ptr<const agentxx::plugin::ClientUiRegistry> reg
+            = ctx_.frameState ? ctx_.frameState->pluginRegistry : nullptr;
+        if (!reg) {
+            if (auto mgr = ctx_.pluginManager) {
+                reg = mgr->uiRegistrySnapshot();
+            }
+        }
         if (reg) {
             // 按 (align, order) 排序: 同侧 order 小在前
             auto items = reg->statusItems;
@@ -97,17 +170,27 @@ Element StatusBarComponent::OnRender() {
                 return a.order < b.order;
             });
             for (const auto& item : items) {
-                std::string textStr = item.text;
-                const auto  nl      = textStr.find('\n');
-                if (nl != std::string::npos) {
-                    textStr.resize(nl);
+                // 富展示片段 (segments/sparkline/meter): 交共享组件层渲染为单行;
+                // 无富片段或渲染为空时回退纯文本 (含 24 字截断)
+                Element el;
+                if (item.rich.is_object() && !item.rich.empty()) {
+                    // 单侧最多占屏幕宽度的 1/3, 避免插件项挤掉状态栏核心信息
+                    const int avail = std::max(12, ctx_.terminalSize().dimx / 3);
+                    el              = statusRichElement(item.rich, theme, avail);
                 }
-                if (auto idx = utilxx_base::findIndexByUtf8Length(textStr, 24);
-                    idx > 0 && idx < textStr.size()) {
-                    textStr.resize(idx);
-                    textStr += "...";
+                if (!el) {
+                    std::string textStr = item.text;
+                    const auto  nl      = textStr.find('\n');
+                    if (nl != std::string::npos) {
+                        textStr.resize(nl);
+                    }
+                    if (auto idx = utilxx_base::findIndexByUtf8Length(textStr, 24);
+                        idx > 0 && idx < textStr.size()) {
+                        textStr.resize(idx);
+                        textStr += "...";
+                    }
+                    el = text(textStr) | color(theme.hintColor) | theme.dim() | xflex_shrink;
                 }
-                auto el = text(textStr) | color(theme.hintColor) | theme.dim() | xflex_shrink;
                 if (item.align == 0) {
                     leftPluginItems.push_back(std::move(el));
                 } else {

@@ -602,6 +602,20 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 插件按新宽度重新排列自己的组件并 `update_panel` 即可; 老宿主订阅该事件会失败
 (返回 NULL), 此时按固定宽度排版。
 
+### 9.5 状态栏项的富展示片段
+
+`register_status_item` / `update_status_item` 的 JSON 除 `text` / `tooltip` 外，还可带
+**单行**富展示片段（状态栏高度固定一行；`text` 作为无法渲染时的降级文本）：
+
+| 键 | 形态 | 说明 |
+|---|---|---|
+| `segments` | `[{text,color}]` | 分色文本片段（按顺序拼接） |
+| `sparkline` | `{data,min,max,color,colors,unit,showLast}` | 迷你趋势图（`height` 固定为 1） |
+| `meter` | `{value,total,width,label,unit,thresholds}` | 条形计量（阈值配色） |
+
+三者按 `segments → sparkline → meter` 顺序以空格拼接为一行，渲染走共享组件层；
+只给 `text` 时行为与之前完全一致（纯文本 + 24 字截断）。
+
 ### 工具特化渲染架构 (Tool Rendering & Decor)
 
 Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层完全解耦，不包含任何具体工具名称的硬编码：
