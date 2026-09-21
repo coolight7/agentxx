@@ -1,6 +1,6 @@
 # 插件框架 Reset-v2：通用协程桥接与 PollOneBridge
 
-- 难度: 高
+- 难度: S
 - 类型: 架构重构
 - 基于commit: 98015b4b
 - 需求:

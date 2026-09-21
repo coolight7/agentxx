@@ -1,5 +1,5 @@
 # 重构json
-- 难度: 很高
+- 难度: SSS
 - 类型: 重构
 - 基于commit: 9ec9e95b38bfa936e5436ea2df3b85e67a51bd27
 - 需求:

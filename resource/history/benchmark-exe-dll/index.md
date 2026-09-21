@@ -1,5 +1,5 @@
 # bench 增加测试 agentxx_cli, libagnetxx 性能
-- 难度: 很高
+- 难度: SSS
 - 类型: 新增功能
 - 基于commit: a6c45638ab4dee66643a35cf8663133b81086967
 - 需求:
