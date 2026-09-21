@@ -232,6 +232,9 @@ Json InterruptUiOption::toJson() const {
 InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
     InterruptUiBlock b;
     b.kind = j.value("kind", "");
+    // 原始 JSON 原样保留: 内容块支持扩展组件 (由前端按 `agentxx.ui.item` schema
+    // 解析) 与自定义字段往返, 不经本结构的字段映射
+    b.raw = j;
 
     b.text    = j.value("text", "");
     b.textKey = j.value("textKey", "");
@@ -299,7 +302,9 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
 }
 
 Json InterruptUiBlock::toJson() const {
-    auto j = Json::object();
+    // 以解析时的原始 JSON 为底: 未知 kind 的扩展字段 (如表格的 columns/rows)
+    // 原样保留, 已知字段再用当前值覆盖
+    auto j = raw.is_object() ? raw : Json::object();
     putIfNotEmpty(j, "kind", kind);
 
     putIfNotEmpty(j, "text", text);

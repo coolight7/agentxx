@@ -9,6 +9,7 @@
 #include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -314,26 +315,30 @@ public:
     /// 通用 overlay 关闭 (UI 线程; 由 TuiPluginAdapter 经 postToUi 投递调用)
     void closeOverlay();
 
-    /// 通用插件按钮命中表项 (sidebar/panel 渲染时登记, 全局点击时命中检测)
+    /// 侧边栏内容区点击处理 (面板 / Info 段落; UI 线程)
     ///
-    /// 命中区域本身由 [agentxx::client::UiHitRegistry] 持有 (它负责 reflect 与
-    /// 每帧重建), 本结构只承载"点了什么"的语义。
-    struct UiHitTarget {
-        std::string plugin;  ///< 来自 registry 条目 plugin 字段
-        std::string ownerId; ///< section_id / panel_id / tool_call_id
-        std::string actionId;
-        std::string argsJson; ///< dump (无参 "{}")
-        /// 渲染时快照中的实例代次 (点击派发时复查; 重载同名插件后旧点击被丢弃)
-        uint64_t generation = 0;
-    };
+    /// 经 [SidebarComponent::contentScrollable] 把屏幕坐标映射到"第几个子项 +
+    /// 子项内局部坐标", 再按子项登记的可命中区域分类处理:
+    /// - 折叠标题: 翻转宿主维护的展开状态并重绘
+    /// - 动作区域: 经 [ClientPluginManager::dispatchAction] 投递到插件回调
+    /// - 表单控件: 交由表单状态处理 (值编辑与提交; 见后续阶段)
+    ///
+    /// 返回 true 表示已处理 (调用方不再继续判定其他命中)
+    bool handleSidebarRegionClick(const ftxui::Mouse& mouse);
 
-    /// 插件按钮命中登记表 (UI 线程独占)
-    /// - 每帧渲染入口 [beginFrame]; 仅本帧真正渲染出来的按钮才会登记
-    ///   (面板未展开/消息不在视口时不会被点中)
-    agentxx::client::UiHitRegistry<UiHitTarget> hitTargets_;
+    /// 面板/Info 段落内折叠分组的展开状态查询 (同时用于初始化与渲染)
+    /// - 键 = 归属 id + ":" + 组件 id; 未记录时写入描述缺省值并返回它
+    bool collapseExpanded(const std::string& ownerId, const std::string& id, bool defaultValue);
 
-    /// 插件按钮命中检测 (UI 线程; 命中时拷贝出 out 并返回 true)
-    bool hitTestPluginButton(const ftxui::Mouse& mouse, UiHitTarget& out) const;
+    /// 折叠分组展开状态表 (UI 线程独占; 键 = 归属 id + ":" + 组件 id)
+    std::map<std::string, bool, std::less<>> collapseStates_;
+
+    /// 侧边栏内容 (插件面板 / Info 段落) 的 markdown 渲染器生命周期
+    ///
+    /// Element 内部的容器/链接 Box 指向 markdown 的 DomBuilder, 必须随元素一同存活;
+    /// 面板与 Info 段落每帧重建元素, 故按"帧"保存: 每帧轮换到新容器并保留上一代
+    /// (上一帧元素可能仍被滚动容器的子项缓存持有)。
+    std::vector<std::vector<std::unique_ptr<markdown::DomBuilder>>> sidebarMdBuilders_;
 
     /// 显示 toast (任意线程可调用; 内部投递到 UI 线程)
     void uiToast(std::string text, int level);

@@ -22,6 +22,10 @@ struct ListViewState {
     int*                           viewportHeight;
     int*                           measuredWidth;
     std::vector<ftxui::Box>*       visibleBoxes;
+    /// 各子项本帧的完整布局区域 (输出; 命中定位换算局部坐标用)
+    std::vector<ftxui::Box>*       itemBoxes;
+    /// 上一帧可见子项下标 (输出: 本帧覆盖; 用于清理离开视口子项的残留布局框)
+    std::vector<size_t>*           prevVisible;
 };
 
 /// 仿 Flutter ListView 的 viewport 布局节点。
@@ -108,6 +112,9 @@ public:
 
         // === Pass 2: 定位并布局可见子项 ===
         st_.visibleBoxes->assign(items.size(), Box{0, -1, 0, -1});
+        if (st_.itemBoxes != nullptr) {
+            st_.itemBoxes->assign(items.size(), Box{0, -1, 0, -1});
+        }
         visibleIndices_.clear();
 
         int cum = 0; // 累计高度 (当前子项的内容顶边, 行)
@@ -140,7 +147,26 @@ public:
             }
 
             (*st_.visibleBoxes)[i] = Box::Intersection(itemBox, box);
+            if (st_.itemBoxes != nullptr) {
+                (*st_.itemBoxes)[i] = itemBox;
+            }
             visibleIndices_.push_back(i);
+        }
+
+        // 上一帧可见、本帧不可见的子项: 清空其布局框
+        // (它们不再参与渲染, 若不清理会保留上一帧/测量期的坐标; 该坐标与屏幕
+        //  重叠时会形成"看不见却点得中"的幽灵命中区)
+        if (st_.prevVisible != nullptr) {
+            std::vector<bool> visibleNow(items.size(), false);
+            for (size_t idx : visibleIndices_) {
+                visibleNow[idx] = true;
+            }
+            for (size_t idx : *st_.prevVisible) {
+                if (idx < items.size() && !visibleNow[idx]) {
+                    items[idx].element->SetBox(Box{0, -1, 0, -1});
+                }
+            }
+            *st_.prevVisible = visibleIndices_;
         }
 
         drawScrollbarInfo_ = hasGutter && (total > vh);
@@ -228,6 +254,7 @@ ftxui::Element Scrollable::OnRender() {
     }
     items_ = std::move(items);
     visibleBoxes_.assign(n, ftxui::Box{0, -1, 0, -1});
+    itemBoxes_.assign(n, ftxui::Box{0, -1, 0, -1});
 
     ListViewState st;
     st.items          = &items_;
@@ -238,8 +265,30 @@ ftxui::Element Scrollable::OnRender() {
     st.viewportHeight = &viewportHeight_;
     st.measuredWidth  = &measuredWidth_;
     st.visibleBoxes   = &visibleBoxes_;
+    st.itemBoxes      = &itemBoxes_;
+    st.prevVisible    = &prevVisibleIndices_;
 
     return std::make_shared<ListView>(st) | ftxui::reflect(box_);
+}
+
+bool Scrollable::hitTestItem(int x, int y, size_t& itemIndex, int& localX, int& localY) const {
+    if (viewportHeight_ <= 0) {
+        return false;
+    }
+    for (size_t i = 0; i < visibleBoxes_.size(); ++i) {
+        const auto& visible = visibleBoxes_[i];
+        if (visible.IsEmpty() || !visible.Contain(x, y)) {
+            continue;
+        }
+        // 局部坐标按子项的完整布局区域换算 (子项可能被视口上边缘裁剪,
+        // 此时可见区域顶边不是子项顶边)
+        const auto& itemBox = (i < itemBoxes_.size()) ? itemBoxes_[i] : visible;
+        itemIndex           = i;
+        localX              = x - itemBox.x_min;
+        localY              = y - itemBox.y_min;
+        return true;
+    }
+    return false;
 }
 
 bool Scrollable::OnEvent(ftxui::Event event) {

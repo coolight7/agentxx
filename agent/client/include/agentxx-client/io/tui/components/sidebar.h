@@ -101,6 +101,16 @@ public:
         scrollable_->resetSelectionHighlight();
     }
 
+    /// 内容区滚动容器 (当前激活 tab 的子项与命中区域由它持有)
+    ///
+    /// 用途: 面板/Info 段落内的可点位置 (按钮、表格单元格、折叠标题、控件) 的命中
+    /// 判定 —— 经 [Scrollable::hitTestItem] 把屏幕坐标映射到"第几个子项 + 子项内
+    /// 局部坐标", 再与子项登记的可命中区域比对。不要用子项元素内的 `reflect`
+    /// 判定 (滚动容器测量子项时会以临时大框布局, 视口外子项的反射框会残留)。
+    Scrollable* contentScrollable() const {
+        return scrollable_.get();
+    }
+
     ftxui::Element OnRender() override;
     bool           OnEvent(ftxui::Event event) override;
 

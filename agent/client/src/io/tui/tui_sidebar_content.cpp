@@ -3,6 +3,7 @@
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
+#include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -10,7 +11,9 @@
 #include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <markdown/state_diagram.hpp>
+#include <memory>
 
 namespace agentxx::client {
 
@@ -50,135 +53,41 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     return paragraph(prefix + line.text) | color(c);
 }
 
-/// 渲染插件段落/面板 items JSON 元素 (通用, 零特化; 共享 helper 收敛点)
-/// - text/progress/badge/separator/button/diagram/diff 全走 plugin_ui_items
-/// - button 有 action_id 且快照有该 plugin 绑定 → 登记到命中表 (反射坐标 + 派发信息)
-/// - text + button 隐式同行合并与 prefix 显式前缀统一在此实现
-/// - diagram 保留静态内联渲染 (历史消息兼容), 不挂点击
+/// 渲染插件段落/面板 items 为一组子项 (通用, 零特化; 共享组件层收敛点)
+/// - 全部组件 kind 走 [ui_components.h] 的唯一实现 (与面板/装饰/overlay/中断一致)
+/// - 含可点区域的子项在 [ScrollItem::hits] 内登记局部坐标区域, 点击经
+///   [Scrollable::hitTestItem] 定位子项后按区域判定 (不使用子项内 reflect)
+/// - markdown 渲染器的生命周期追加到 [mdBuilders] (调用方持有, 与元素同存活)
 static void appendPluginItems(
     const utilxx_base::Json&                                       items,
     std::string_view                                               plugin,
     std::string_view                                               ownerId,
     const agentxx::plugin::ClientUiRegistry*                       reg,
     const TUITheme&                                                theme,
-    ftxui::Elements&                                               out,
-    agentxx::client::UiHitRegistry<TUIClientAgentIO::UiHitTarget>& hits
+    int                                                            avail,
+    const std::function<bool(const std::string&, bool)>&           collapseExpanded,
+    std::vector<ScrollItem>&                                       out,
+    std::vector<std::vector<std::unique_ptr<markdown::DomBuilder>>>& mdBuilders
 ) {
-    if (!items.is_array()) {
-        return;
+    agentxx::client::UiRenderCtx rc;
+    rc.theme            = &theme;
+    rc.width            = avail;
+    rc.indent           = 2;
+    rc.plugin           = std::string{plugin};
+    rc.ownerId          = std::string{ownerId};
+    rc.registry         = reg;
+    rc.collapseExpanded = collapseExpanded;
+
+    agentxx::client::UiRenderResult res;
+    agentxx::client::renderItems(agentxx::ui::parseItemList(items), rc, res);
+    if (!res.builders.empty()) {
+        mdBuilders.push_back(std::move(res.builders));
     }
-    auto push = [&](ftxui::Element el) {
-        out.push_back(std::move(el));
-    };
-    const size_t itemCount = items.size();
-    for (size_t i = 0; i < itemCount; ++i) {
-        const auto& it = items[i];
-        if (!it.is_object()) {
-            continue;
-        }
-        const auto kind = it.value("kind", std::string{"text"});
-        if (kind == "text") {
-            // 若下一个 item 为 button (如 "|- " 后面紧跟按钮), 则合并为单行展示
-            if (i + 1 < itemCount && items[i + 1].is_object()
-                && (items[i + 1].value("kind", std::string{}) == "button"
-                    || items[i + 1].value("kind", std::string{}) == "action")) {
-                agentxx::client::PluginButtonDesc desc;
-                if (agentxx::client::parsePluginButton(items[i + 1], plugin, reg, desc)) {
-                    Element btn = agentxx::client::renderPluginButton(desc, theme);
-                    if (desc.clickable) {
-                        // 命中登记: 坐标由登记表持有 (仅本帧渲染出来的按钮才登记)
-                        btn = hits.add(
-                            std::move(btn),
-                            TUIClientAgentIO::UiHitTarget{
-                                .plugin     = std::string{plugin},
-                                .ownerId    = std::string{ownerId},
-                                .actionId   = desc.actionId,
-                                .argsJson   = desc.argsJson,
-                                .generation = reg ? reg->generationOf(plugin) : 0,
-                            }
-                        );
-                    }
-                    push(hbox({
-                        agentxx::client::renderPluginTextItem(
-                            it.value("text", std::string{}),
-                            it.value("role", std::string{"normal"}),
-                            theme
-                        ),
-                        std::move(btn),
-                    }));
-                    ++i;
-                    continue;
-                }
-            }
-            push(agentxx::client::renderPluginTextItem(
-                it.value("text", std::string{}),
-                it.value("role", std::string{"normal"}),
-                theme
-            ));
-        } else if (kind == "progress") {
-            const double v      = it.value("value", 0.0);
-            const int    w      = 10;
-            const int    filled = static_cast<int>(v * w);
-            std::string  bar;
-            bar.reserve(static_cast<size_t>(w));
-            for (int j = 0; j < w; ++j) {
-                bar += (j < filled) ? '#' : '-';
-            }
-            push(hbox({
-                text("[" + bar + "]") | color(theme.accentColor),
-                text(fmt::format(" {}%", static_cast<int>(v * 100))) | color(theme.hintColor),
-            }));
-        } else if (kind == "badge") {
-            push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
-        } else if (kind == "separator") {
-            push(text("─") | color(theme.hintColor) | theme.dim());
-        } else if (kind == "button" || kind == "action") {
-            agentxx::client::PluginButtonDesc desc;
-            if (!agentxx::client::parsePluginButton(it, plugin, reg, desc)) {
-                continue;
-            }
-            Element btn = agentxx::client::renderPluginButton(desc, theme);
-            if (desc.clickable) {
-                btn = hits.add(
-                    std::move(btn),
-                    TUIClientAgentIO::UiHitTarget{
-                        .plugin     = std::string{plugin},
-                        .ownerId    = std::string{ownerId},
-                        .actionId   = desc.actionId,
-                        .argsJson   = desc.argsJson,
-                        .generation = reg ? reg->generationOf(plugin) : 0,
-                    }
-                );
-            }
-            if (!desc.prefix.empty()) {
-                push(hbox({
-                    text(desc.prefix) | color(theme.normalColor),
-                    std::move(btn),
-                }));
-            } else {
-                push(std::move(btn));
-            }
-        } else if (kind == "diagram") {
-            // 静态内联渲染 (历史消息兼容), 不挂点击
-            const auto mermaid = it.value("mermaid", std::string{});
-            auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
-            if (!diagram.nodes.empty()) {
-                const int diagW = std::max(20, Terminal::Size().dimx - 16);
-                push(markdown::renderMermaidStateDiagram(
-                    diagram,
-                    diagW,
-                    theme.normalColor,
-                    markdown::diagramNodeColor(theme.markdownTheme)
-                ));
-            }
-        } else if (kind == "diff") {
-            push(agentxx::client::renderPluginDiff(
-                it.value("path", std::string{}),
-                it.value("old_str", std::string{}),
-                it.value("new_str", std::string{}),
-                theme
-            ));
-        }
+    for (auto& row : res.rows) {
+        ScrollItem item;
+        item.element = std::move(row.element);
+        item.hits    = std::move(row.regions);
+        out.push_back(std::move(item));
     }
 }
 
@@ -223,7 +132,21 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
 std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     const auto& st = *ctx_.frameState;
 
-    Elements elements;
+    std::vector<ScrollItem> items;
+    auto                    pushPlain = [&items](ftxui::Element el) {
+        items.push_back(ScrollItem{std::move(el), false});
+    };
+
+    // 插件 Info 段落内容区的可用宽度 (已扣除侧边栏内边距与滚动条占位)
+    int avail = 0;
+    if (sidebar_) {
+        if (auto* scroll = sidebar_->contentScrollable(); scroll != nullptr) {
+            avail = scroll->contentWidth();
+        }
+    }
+    if (avail <= 0) {
+        avail = sidebar_ ? sidebar_->width() - 4 : 40;
+    }
 
     // Plan 段落已拆分至 agentxx_planning 插件 client 侧 (经 register_info_section
     // 注入, 见 agent/plugins/agentxx_planning), TUI 不再硬编码渲染
@@ -232,38 +155,44 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // 每帧从 client 插件注册表快照读取, 无需缓存):
     // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)
     // - 若段落无内容项则跳过，避免仅显示孤立标题
-    // - button 走通用 action_id 派发 (owner=section_id, 经 hitTargets_ 挂载)
+    // - 含可点内容的子项登记可命中区域 (owner=段落 id), 点击经
+    //   [handleSidebarRegionClick] 定位后派发 (滚动容器内不用 reflect 判定)
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
         if (reg && !reg->infoSections.empty()) {
             for (const auto& sec : reg->infoSections) {
-                Elements secItems;
+                auto collapseCb = [this, ownerId = sec.id](const std::string& id, bool defaultValue) {
+                    return collapseExpanded(ownerId, id, defaultValue);
+                };
+                std::vector<ScrollItem> secItems;
                 appendPluginItems(
                     sec.items,
                     sec.plugin,
                     sec.id,
                     reg.get(),
                     theme_,
+                    avail,
+                    collapseCb,
                     secItems,
-                    hitTargets_
+                    sidebarMdBuilders_
                 );
                 if (secItems.empty()) {
                     continue;
                 }
-                Elements secEls;
                 if (!sec.title.empty()) {
-                    secEls.push_back(text(sec.title) | color(theme_.accentColor));
+                    pushPlain(text(sec.title) | color(theme_.accentColor));
                 }
-                secEls.insert(
-                    secEls.end(),
+                items.insert(
+                    items.end(),
                     std::make_move_iterator(secItems.begin()),
                     std::make_move_iterator(secItems.end())
                 );
-                elements.push_back(vbox(std::move(secEls)));
-                elements.push_back(text(" "));
+                pushPlain(text(" "));
             }
         }
     }
+
+    Elements elements;
 
     // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
     // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
@@ -334,14 +263,12 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(vbox(std::move(appendEls)));
     }
 
-    if (elements.empty()) {
-        elements.push_back(text(tr("info.empty")) | color(theme_.hintColor));
+    if (elements.empty() && items.empty()) {
+        pushPlain(text(tr("info.empty")) | color(theme_.hintColor));
     }
 
-    std::vector<ScrollItem> items;
-    items.reserve(elements.size());
     for (auto& el : elements) {
-        items.push_back(ScrollItem{std::move(el), false});
+        pushPlain(std::move(el));
     }
     return items;
 }

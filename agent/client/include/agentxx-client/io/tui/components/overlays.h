@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/framework/ui_action_list.h"
 #include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/scrollable.h"
+#include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "ftxui/component/component_base.hpp"
@@ -12,7 +13,10 @@
 #include "ftxui/screen/box.hpp"
 #include "utilxx_base/json.h"
 #include <functional>
+#include <map>
+#include <markdown/dom_builder.hpp>
 #include <markdown/state_diagram.hpp>
+#include <memory>
 #include <set>
 #include <string>
 #include <string_view>
@@ -576,10 +580,10 @@ private:
 
 /// 通用自定义 overlay (open_overlay CUSTOM 驱动; payload={"items":[...]})
 ///
-/// - items schema 同 panel/items (text/progress/badge/separator/button),
+/// - items schema 同 panel/items (共享组件层全部 kind, 见 ui_components.h),
 ///   button 同样走 action_id + 通用派发 (owner 固定 "__overlay", 被 fallback 接住)
-/// - overlay 内局部命中: OnRender 经 UiHitMap 登记按钮框, OnEvent 命中后经
-///   ctx_.pluginManager->dispatchAction(ownerPlugin, "__overlay", actionId, args)
+/// - overlay 内命中: 滚动容器把点击映射到子项 + 局部坐标, 再按子项登记的
+///   可命中区域处理 (动作派发 / 折叠标题切换); 视口外内容不占点击区域
 /// - Scrollable + Esc 关 + overlay.scrollHint 底栏; 宽 3/5、高 4/5 双约束
 class CustomOverlay : public ftxui::ComponentBase {
 public:
@@ -609,10 +613,11 @@ private:
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
 
-    /// overlay 内按钮命中登记 (OnRender 登记, OnEvent 命中检测)
-    /// - payload.id = actionId, payload.arg = argsJson
-    /// - 视口外按钮: 元素被 Scrollable 裁剪 -> 命中框收敛为空 -> 不命中
-    UiHitMap hits_;
+    /// 折叠分组的展开状态 (键 = 组件 id; 宿主维护, 点击标题切换)
+    std::map<std::string, bool, std::less<>> collapseStates_;
+
+    /// markdown 渲染器生命周期 (Element 内部指向它; 随内容重建)
+    std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders_;
 };
 
 /// 创建通用覆盖层弹窗工厂函数 (支持 Mermaid / Text / Diff / Custom 弹窗)

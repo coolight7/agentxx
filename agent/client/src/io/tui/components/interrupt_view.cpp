@@ -375,8 +375,8 @@ void InterruptView::layoutControl(
               tb.bold   = bold;
               tb.wrap   = wrap;
               tb.indent = indent + extraIndent;
-              if (auto item = uiItemFromInterruptBlock(tb)) {
-                  renderUiItem(*item, rc, out);
+              if (auto item = itemFromInterruptBlock(tb)) {
+                  renderItem(*item, rc, out);
               }
           };
     // 标签行: checkbox 的标签即勾选行的行内文本 (不再单独渲染标题行, 避免重复)
@@ -537,19 +537,12 @@ void InterruptView::layoutForm(
     for (size_t bi = 0; bi < ui.blocks.size(); ++bi) {
         const auto& block = ui.blocks[bi];
 
-        // ---- 内容块 (text/markdown/diff/separator/gap): 共享块渲染层 ----
+        // ---- 内容块: 共享组件渲染层 (含表格/树/横排/分组等扩展组件) ----
         if (block.kind == "text") {
             auto resolved = block; // 解析 i18n 键 (textKey 优先, 缺键回退 text)
             resolved.text = resolveLabel(block.textKey, block.text);
-            if (auto item = uiItemFromInterruptBlock(resolved)) {
-                renderUiItem(*item, rc, out);
-            }
-            continue;
-        }
-        if (block.kind == "markdown" || block.kind == "diff" || block.kind == "separator"
-            || block.kind == "gap") {
-            if (auto item = uiItemFromInterruptBlock(block)) {
-                renderUiItem(*item, rc, out);
+            if (auto item = itemFromInterruptBlock(resolved)) {
+                renderItem(*item, rc, out);
             }
             continue;
         }
@@ -580,30 +573,29 @@ void InterruptView::layoutForm(
             continue;
         }
 
-        // ---- 自定义渲染块 (字段预留, 暂未实现) ----
-        if (block.kind == "custom") {
-            // TODO(自定义渲染): 客户端组件渲染器 (component + props) 注册与派发尚未
-            // 实现 —— 当前仅渲染 fallback 文本 (无 fallback 时输出组件名占位诊断行);
-            // 字段已随描述往返保留, 后续接入插件渲染器后在此派发。
-            std::string text = block.fallback;
-            if (text.empty() && !block.component.empty()) {
-                text = fmt::format("[custom component: {}]", block.component);
+        // ---- 其余块: 走共享组件渲染 ----
+        // 覆盖 markdown/diff/separator/gap 与扩展组件 (表格/树/横排/分组/趋势图等,
+        // 按块描述直接使用 `agentxx.ui.item` schema), 以及 custom 块派发;
+        // 未识别的块降级为 fallback 文本 (无 fallback 则跳过, 向前兼容)。
+        if (auto item = itemFromInterruptBlock(block)) {
+            // 控件块已在上方处理; 这里只可能是内容块与扩展组件
+            if (item->kind != "control" && item->kind != "submit") {
+                renderItem(*item, rc, out);
+                continue;
             }
-            if (!text.empty()) {
-                middleware::InterruptUiBlock tb;
-                tb.kind   = "text";
-                tb.text   = std::move(text);
-                tb.color  = "hint";
-                tb.dim    = true;
-                tb.wrap   = true;
-                tb.indent = std::max(0, block.indent);
-                if (auto item = uiItemFromInterruptBlock(tb)) {
-                    renderUiItem(*item, rc, out);
-                }
-            }
-            continue;
         }
-        // 未知 kind: 忽略 (向前兼容)
+        if (!block.fallback.empty()) {
+            middleware::InterruptUiBlock tb;
+            tb.kind   = "text";
+            tb.text   = block.fallback;
+            tb.color  = "hint";
+            tb.dim    = true;
+            tb.wrap   = true;
+            tb.indent = std::max(0, block.indent);
+            if (auto item = itemFromInterruptBlock(tb)) {
+                renderItem(*item, rc, out);
+            }
+        }
     }
 }
 

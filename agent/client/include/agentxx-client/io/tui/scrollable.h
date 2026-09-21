@@ -1,9 +1,11 @@
 #pragma once
 
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "ftxui/component/component_base.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
+#include <cstddef>
 #include <functional>
 #include <vector>
 
@@ -14,6 +16,13 @@ struct ScrollItem {
     ftxui::Element element;
     /// 占据整个视口高度 (空状态居中展示用); 默认 false
     bool fillViewport = false;
+    /// 子项内的可命中区域 (局部坐标: 相对本子项左上角)
+    ///
+    /// 调用方在渲染子项时一并给出可点位置 (按钮 / 表格单元格 / 控件等);
+    /// 点击定位经 [Scrollable::hitTestItem] 映射到"第几个子项 + 子项内局部坐标",
+    /// 再按本字段判定命中具体位置。不要用子项元素内部的 `reflect` 做命中检测
+    /// (滚动容器测量子项时会以临时大框布局, 视口外子项会残留该框 → 幽灵命中)。
+    std::vector<UiHitRegion> hits;
 };
 
 /// 可复用的可滚动容器组件 (仿 Flutter ListView 的 viewport 局部绘制)
@@ -94,6 +103,23 @@ public:
         return visibleBoxes_;
     }
 
+    /// 上一帧渲染的子项 (索引与 render 返回的 items 对应; 可取各子项的 hits)
+    const std::vector<ScrollItem>& items() const {
+        return items_;
+    }
+
+    /// 屏幕坐标 → 子项内位置 (仅可见子项可命中)
+    ///
+    /// - 命中时返回 true, 并给出子项下标与**相对该子项左上角**的局部坐标
+    ///   (即使子项被视口上边缘裁剪, 局部坐标仍按子项实际顶边计算, 与子项内
+    ///   登记的可命中区域 [ScrollItem::hits] 口径一致)
+    /// - 未命中 (坐标在视口外或落在子项之间的空隙) 返回 false
+    /// - `args`:
+    ///     - [x] [y] 屏幕坐标 (与 FTXUI 鼠标事件坐标一致)
+    ///     - [itemIndex] 命中子项下标 (输出)
+    ///     - [localX] [localY] 子项内局部坐标 (输出)
+    bool hitTestItem(int x, int y, size_t& itemIndex, int& localX, int& localY) const;
+
     /// 清除可见子项残留的鼠标选中高亮 (Text::has_selection_)。
     /// 背景与实现同 LazyScrollable::resetSelectionHighlight:
     /// 本组件跳过 FTXUI 每帧 ComputeRequirement, Text 节点的选择状态不会
@@ -127,6 +153,12 @@ private:
     int  measuredWidth_  = -1;   // 上次测量所用内容宽度 (变化时使高度缓存失效)
 
     std::vector<ftxui::Box> visibleBoxes_; // 各子项可见屏幕区域 (输出)
+
+    /// 上一帧可见子项下标 (清理离开视口的子项时用)
+    std::vector<size_t> prevVisibleIndices_;
+
+    /// 各子项本帧的完整布局区域 (未布局项为空 Box; 命中定位时换算局部坐标用)
+    std::vector<ftxui::Box> itemBoxes_;
 
     ftxui::Box box_; // 本组件渲染区域 (reflect 填充, 用于滚轮命中检测)
 };

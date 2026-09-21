@@ -158,6 +158,14 @@ struct InterruptUiBlock {
     /// 客户端无该组件时的降级文本 (行式前端/未知组件时打印)
     std::string fallback;
 
+    /// 解析时的原始 JSON (对象; 非对象输入为空)
+    ///
+    /// 用途: 内容块除本结构映射的字段外, 还可直接使用 `agentxx.ui.item` schema
+    /// 的组件 (表格/树/横排/分组/趋势图等) —— 这些组件的字段不做逐个映射, 而是
+    /// 由前端按原始 JSON 解析。程序化构造块时也可写入本字段来表达扩展组件。
+    /// 序列化 (`toJson`) 以它为基础, 保证扩展字段往返不丢。
+    utilxx_base::Json raw;
+
     static InterruptUiBlock fromJson(const utilxx_base::Json& j);
     utilxx_base::Json       toJson() const;
 };

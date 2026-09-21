@@ -1736,8 +1736,9 @@ CustomOverlay::CustomOverlay(
     items_(std::move(items)),
     ownerPlugin_(std::move(ownerPlugin)) {
     scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
-        // CUSTOM overlay 内容经 Scrollable 全量构建 (按钮盒经 reflect 收集到 hits_):
-        // hits_ 与 items 子项一一对应, 视口外为空 Box (Scrollable.visibleBoxes)
+        // CUSTOM overlay 内容走共享组件层 (与面板/Info/装饰/中断同一实现):
+        // 每个子项携带可命中区域 (局部坐标), 点击经 Scrollable::hitTestItem
+        // 定位子项后按区域派发 (滚动到视口外的子项不占点击区域)
         const auto& theme = *ctx_.theme;
         auto        reg   = ctx_.pluginManager ? ctx_.pluginManager->uiRegistrySnapshot() : nullptr;
         const auto* regPtr = reg.get();
@@ -1745,108 +1746,39 @@ CustomOverlay::CustomOverlay(
         if (regPtr) {
             ownerGeneration_ = regPtr->generationOf(ownerPlugin_);
         }
-        Elements els;
-        // 帧首清空命中表 (Scrollable 的构建闭包每帧执行一次)
-        hits_.beginFrame();
-        if (items_.is_array()) {
-            auto push = [&](Element el) {
-                els.push_back(std::move(el));
-            };
-            const size_t n = items_.size();
-            for (size_t i = 0; i < n; ++i) {
-                const auto& it = items_[i];
-                if (!it.is_object()) {
-                    continue;
-                }
-                const auto kind = it.value("kind", std::string{"text"});
-                if (kind == "text") {
-                    push(agentxx::client::renderPluginTextItem(
-                        it.value("text", std::string{}),
-                        it.value("role", std::string{"normal"}),
-                        theme
-                    ));
-                    continue;
-                }
-                if (kind == "progress") {
-                    const double v      = it.value("value", 0.0);
-                    const int    w      = 10;
-                    const int    filled = static_cast<int>(v * w);
-                    std::string  bar;
-                    bar.reserve(static_cast<size_t>(w));
-                    for (int j = 0; j < w; ++j) {
-                        bar += (j < filled) ? '#' : '-';
-                    }
-                    push(hbox({
-                        text("[" + bar + "]") | color(theme.accentColor),
-                        text(fmt::format(" {}%", static_cast<int>(v * 100)))
-                            | color(theme.hintColor),
-                    }));
-                    continue;
-                }
-                if (kind == "badge") {
-                    push(text("● " + it.value("text", std::string{})) | color(theme.accentColor));
-                    continue;
-                }
-                if (kind == "separator") {
-                    // 面性风格: 分隔不画横线, 改用一条浅色背景区块 (整行)
-                    push(text("") | bgcolor(theme.surfaceFooterColor));
-                    continue;
-                }
-                agentxx::client::PluginButtonDesc desc;
-                const bool                        isButton = (kind == "button" || kind == "action");
-                if (isButton
-                    && agentxx::client::parsePluginButton(it, ownerPlugin_, regPtr, desc)) {
-                    // text + button 隐式同行合并: 前一项为纯 text 且本按钮无
-                    // 显式 prefix 时, 合并为单行 (与 sidebar 行为一致)
-                    Element btn = agentxx::client::renderPluginButton(desc, theme);
-                    if (desc.clickable) {
-                        // 登记命中 (载荷: actionId + 参数); 视口外按钮被 Scrollable
-                        // 裁剪 -> 命中框收敛为空 -> 点击不会被误派发
-                        btn = hits_.add(std::move(btn), desc.actionId, desc.argsJson);
-                    }
-                    if (!desc.prefix.empty()) {
-                        push(hbox({
-                            text(desc.prefix) | color(theme.normalColor),
-                            std::move(btn),
-                        }));
-                    } else {
-                        push(std::move(btn));
-                    }
-                    continue;
-                }
-                if (kind == "diagram") {
-                    const auto mermaid = it.value("mermaid", std::string{});
-                    auto       diagram = markdown::parseMermaidStateDiagram(mermaid);
-                    if (!diagram.nodes.empty()) {
-                        const int diagW = std::max(20, ctx_.terminalSize().dimx - 16);
-                        push(markdown::renderMermaidStateDiagram(
-                            diagram,
-                            diagW,
-                            theme.normalColor,
-                            markdown::diagramNodeColor(theme.markdownTheme)
-                        ));
-                    }
-                    continue;
-                }
-                if (kind == "diff") {
-                    push(agentxx::client::renderPluginDiff(
-                        it.value("path", std::string{}),
-                        it.value("old_str", std::string{}),
-                        it.value("new_str", std::string{}),
-                        theme
-                    ));
-                    continue;
-                }
+
+        UiRenderCtx rc;
+        rc.theme    = &theme;
+        rc.width    = ctx_.terminalSize().dimx - 8;
+        rc.indent   = 2;
+        rc.plugin   = ownerPlugin_;
+        rc.ownerId  = std::string{AGENTXX_CLIENT_OVERLAY_OWNER};
+        rc.registry = regPtr;
+        rc.separatorStyle = agentxx::client::UiSeparatorStyle::Block;
+        rc.collapseExpanded = [this](const std::string& id, bool defaultValue) {
+            auto it = collapseStates_.find(id);
+            if (it != collapseStates_.end()) {
+                return it->second;
             }
+            collapseStates_.emplace(id, defaultValue);
+            return defaultValue;
+        };
+
+        UiRenderResult res;
+        renderItems(agentxx::ui::parseItemList(items_), rc, res);
+        if (!res.builders.empty()) {
+            mdBuilders_ = std::move(res.builders);
         }
-        if (els.empty()) {
-            els.push_back(text(tr("info.empty")) | color(theme.hintColor));
-        }
-        // hits_ 按按钮出现顺序收集; 可见性由 visibleBoxes 在 OnEvent 时判定
         std::vector<ScrollItem> out;
-        out.reserve(els.size());
-        for (auto& el : els) {
-            out.push_back(ScrollItem{std::move(el), false});
+        out.reserve(res.rows.size() + 1);
+        for (auto& row : res.rows) {
+            ScrollItem item;
+            item.element = std::move(row.element);
+            item.hits    = std::move(row.regions);
+            out.push_back(std::move(item));
+        }
+        if (out.empty()) {
+            out.push_back(ScrollItem{text(tr("info.empty")) | color(theme.hintColor), false});
         }
         return out;
     });
@@ -1867,20 +1799,43 @@ bool CustomOverlay::OnEvent(Event event) {
         return true;
     }
     if (event.is_mouse()) {
-        // overlay 局部命中: 命中后走同一 dispatchAction
-        // (owner 固定 "__overlay", 被实例级 fallback 接住)
-        if (const auto* hit = hits_.findClick(event.mouse())) {
-            if (auto mgr = ctx_.pluginManager) {
-                mgr->dispatchAction(
-                    ownerPlugin_,
-                    AGENTXX_CLIENT_OVERLAY_OWNER,
-                    hit->payload.id,
-                    hit->payload.arg,
-                    ownerGeneration_
-                );
+        const auto& mouse = event.mouse();
+        // overlay 局部命中: 先经滚动容器把坐标映射到子项与子项内局部坐标,
+        // 再按子项登记的区域分类处理 (折叠标题切换展开状态; 动作区域派发)
+        // owner 固定 "__overlay", 被实例级动作绑定接住
+        size_t index = 0;
+        int    localX = 0;
+        int    localY = 0;
+        if (scrollable_->hitTestItem(mouse.x, mouse.y, index, localX, localY)) {
+            const auto& rows = scrollable_->items();
+            if (index < rows.size()) {
+                const auto* region = matchUiHitRegion(rows[index].hits, localX, localY);
+                if (region != nullptr && region->kind == UiHitRegionKind::Collapse
+                    && mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+                    bool current = true;
+                    if (auto it = collapseStates_.find(region->id);
+                        it != collapseStates_.end()) {
+                        current = it->second;
+                    }
+                    collapseStates_[region->id] = !current;
+                    ctx_.postRedraw();
+                    return true;
+                }
+                if (region != nullptr && region->kind == UiHitRegionKind::Action
+                    && mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+                    if (auto mgr = ctx_.pluginManager) {
+                        mgr->dispatchAction(
+                            ownerPlugin_,
+                            AGENTXX_CLIENT_OVERLAY_OWNER,
+                            region->id,
+                            region->arg,
+                            ownerGeneration_
+                        );
+                    }
+                    ctx_.postRedraw();
+                    return true;
+                }
             }
-            ctx_.postRedraw();
-            return true;
         }
         if (scrollable_->OnEvent(event)) {
             ctx_.postRedraw();

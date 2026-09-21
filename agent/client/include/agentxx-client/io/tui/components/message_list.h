@@ -63,11 +63,15 @@ public:
     struct DecorHitBox {
         std::string plugin;
         std::string ownerId;
+        /// 整行只有一个可点区域时的动作 id (多区域时按 regions 定位)
         std::string actionId;
+        /// 整行只有一个可点区域时的参数 JSON
         std::string argsJson;
         /// 渲染时快照中的实例代次 (点击派发时复查; 重载同名插件后旧点击被丢弃)
         uint64_t                    generation = 0;
         std::shared_ptr<ftxui::Box> box;
+        /// 行内可命中区域 (局部坐标; 命中后按坐标定位具体区域, 如表格单元格)
+        std::vector<UiHitRegion>    regions;
     };
 
     /// 多模态附件卡片命中检测 (UI 线程独占; 与 decorHits_ 同生命期):

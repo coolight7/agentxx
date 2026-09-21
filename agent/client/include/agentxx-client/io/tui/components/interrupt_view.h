@@ -2,7 +2,7 @@
 
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
-#include "agentxx-client/io/tui/ui_items_render.h"
+#include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx/middlewares/interrupt_ui.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
@@ -26,7 +26,7 @@ namespace client {
 /// 后续新增的询问形态都走同一套渲染与交互实现:
 /// - 描述 = 有序块列表 ([middleware::InterruptUi::blocks]): 内容块
 ///   (text/markdown/diff/separator/gap) 交给共享块渲染层
-///   ([ui_items_render.h], 与插件装饰 items 同一实现), 控件块 (control) 与本
+///   ([ui_components.h], 与插件装饰 items 同一实现), 控件块 (control) 与本
 ///   类的提交行 (submit) 由本类渲染 (需要表单状态)
 /// - **单一布局过程**: [layoutForm] 依描述 + 表单状态逐块生成行模型
 ///   ([UiRow] 序列); 渲染 = 行序列包成 vbox, 高度估算 = 各行行数之和 ——

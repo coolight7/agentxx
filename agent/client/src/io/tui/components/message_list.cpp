@@ -6,7 +6,7 @@
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/text_layout.h"
-#include "agentxx-client/io/tui/ui_items_render.h"
+#include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/exception.h"
 #include "ftxui/component/event.hpp"
@@ -653,17 +653,13 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                     if (finished && isError) {
                         decorLines += estimateLines(msg.tool->toolResult, width);
                     } else if (!renderRes.items.empty()) {
-                        // 装饰 items 行数走共享块渲染层 (与渲染同一套判定; 见
-                        // ui_items_render.h): 内容块/按钮/diff/状态图逐项累加
+                        // 装饰 items 行数走共享组件渲染层 (与渲染同一套判定; 见
+                        // ui_components.h): 各行行数累加, 估算与渲染不会漂移
                         UiRenderCtx rc;
                         rc.theme  = ctx_.theme;
                         rc.width  = width;
                         rc.indent = kDecorItemIndent;
-                        for (const auto& it : renderRes.items) {
-                            if (auto item = uiItemFromPluginJson(it)) {
-                                decorLines += measureUiItem(*item, rc);
-                            }
-                        }
+                        decorLines += measureItems(agentxx::ui::parseItemList(renderRes.items), rc);
                     } else {
                         if (!msg.text.empty()) {
                             decorLines += estimateLines(formatToolArgs(msg.text), width);
@@ -1609,10 +1605,10 @@ void MessageListComponent::appendDecorItems(
                    ? ctx_.frameState->pluginRegistry.get()
                    : nullptr;
 
-    // 插件装饰 items 与中断内容块**共用同一渲染实现** (见 ui_items_render.h):
-    // 逐项归一化 → 行模型 (元素 + 行数 + 命中信息), 再把行元素追加到 lines,
-    // 可点按钮的行转写为 decorHits_ 命中区域。
-    // 高度估算侧 (estimateHeight) 用同一模块的 measureUiItem, 两侧判定同源。
+    // 插件装饰 items 与中断内容块**共用同一渲染实现** (见 ui_components.h):
+    // 逐项解析为组件 → 行模型 (元素 + 行数 + 元素内可命中区域), 再把行元素追加到
+    // lines, 含可点区域的行转写为 decorHits_ 命中项。
+    // 高度估算侧 (estimateHeight) 用同一模块的 measureItems, 两侧判定同源。
     UiRenderCtx rc;
     rc.theme    = ctx_.theme;
     rc.width    = maxWidth;
@@ -1622,25 +1618,26 @@ void MessageListComponent::appendDecorItems(
     rc.registry = reg;
 
     UiRenderResult out;
-    for (const auto& it : items) {
-        if (auto item = uiItemFromPluginJson(it)) {
-            renderUiItem(*item, rc, out);
-        }
-    }
+    renderItems(agentxx::ui::parseItemList(items), rc, out);
     // markdown 渲染器生命周期交回调用方 (随 LazyBuiltItem.attachments 与 Element 同存活)
     for (auto& builder : out.builders) {
         mdBuilders.push_back(std::move(builder));
     }
     for (auto& row : out.rows) {
-        // 可点按钮命中: owner=tool_call_id (以 toolCallId 作 owner_id, fallback 覆盖)
-        if (row.box && !row.hitId.empty()) {
+        // 含可点区域的行: 命中归属 owner=tool_call_id (以 toolCallId 作 owner_id,
+        // 未精确绑定则回落到实例级绑定), 命中后在行内按局部坐标定位具体区域
+        if (row.box && !row.regions.empty()) {
             DecorHitBox hb;
             hb.plugin     = plugin;
-            hb.ownerId    = row.hitOwner.empty() ? ownerId : row.hitOwner;
-            hb.actionId   = std::move(row.hitId);
-            hb.argsJson   = std::move(row.hitArgs);
+            hb.ownerId    = ownerId;
             hb.generation = reg ? reg->generationOf(plugin) : 0;
             hb.box        = std::move(row.box);
+            // 整行只有一个区域时同时保留动作信息 (便于展示/测试读取)
+            if (row.regions.size() == 1) {
+                hb.actionId = row.regions[0].id;
+                hb.argsJson = row.regions[0].arg;
+            }
+            hb.regions = std::move(row.regions);
             decorHits_.push_back(std::move(hb));
         }
         lines.push_back(std::move(row.element));
@@ -1679,8 +1676,21 @@ bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
             || mouse.x > box.x_max) {
             continue;
         }
+        // 行内可命中区域按局部坐标定位 (如表格里某一列的可点单元格)
+        std::string actionId = h.actionId;
+        std::string argsJson = h.argsJson;
+        if (!h.regions.empty()) {
+            const int localX = mouse.x - box.x_min;
+            const int localY = mouse.y - box.y_min;
+            const auto* region = matchUiHitRegion(h.regions, localX, localY);
+            if (region == nullptr) {
+                continue; // 落在行内的非可点位置: 不算命中
+            }
+            actionId = region->id;
+            argsJson = region->arg;
+        }
         if (auto mgr = ctx_.pluginManager) {
-            mgr->dispatchAction(h.plugin, h.ownerId, h.actionId, h.argsJson, h.generation);
+            mgr->dispatchAction(h.plugin, h.ownerId, actionId, argsJson, h.generation);
         }
         return true;
     }

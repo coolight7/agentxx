@@ -262,28 +262,12 @@ void TUIClientAgentIO::removePluginPanelTab(const std::string& id) {
 
 namespace {
 
-/// 组装插件按钮命中表项 (plugin/owner/action/参数/实例代次)
-TUIClientAgentIO::UiHitTarget panelHint(
-    const std::string&                       plugin,
-    const std::string&                       ownerId,
-    const agentxx::client::PluginButtonDesc& desc,
-    const agentxx::plugin::ClientUiRegistry* reg
-) {
-    return TUIClientAgentIO::UiHitTarget{
-        .plugin     = plugin,
-        .ownerId    = ownerId,
-        .actionId   = desc.actionId,
-        .argsJson   = desc.argsJson,
-        .generation = reg != nullptr ? reg->generationOf(plugin) : 0,
-    };
-}
-
 } // namespace
 
 std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& panelId) {
     // UI 线程调用 (侧边栏 tab render 回调); 读取注册表快照 (短锁拷贝 shared_ptr)
-    // 通用 button 渲染: 走 plugin_ui_items 共享 helper + hitTargets_ 命中挂载
-    // (kind=="action" 遗留 schema 兼容为 button + action_id)
+    // 内容渲染统一走共享组件层 (ui_components.h): 面板与 Info 段落/装饰/overlay/
+    // 中断内容块使用同一实现, 新增组件只需改那一处
     std::vector<ScrollItem> out;
     auto                    mgr = pluginManager_;
     if (!mgr) {
@@ -303,97 +287,41 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     if (!panel) {
         return out;
     }
-    const auto& theme = theme_;
-    // 面板内容: items JSON 数组 (kind: text/progress/button/badge/separator;
-    // text 支持 role: title=高亮 / normal=普通(默认) / hint=减淡)
-    if (panel->items.is_array()) {
-        const size_t n = panel->items.size();
-        for (size_t i = 0; i < n; ++i) {
-            const auto& it = panel->items[i];
-            if (!it.is_object()) {
-                continue;
-            }
-            const auto kind = it.value("kind", std::string{"text"});
-            if (kind == "text") {
-                // text + button 隐式同行合并: 下一项为 button 时合并为单行
-                if (i + 1 < n && panel->items[i + 1].is_object()
-                    && (panel->items[i + 1].value("kind", std::string{}) == "button"
-                        || panel->items[i + 1].value("kind", std::string{}) == "action")) {
-                    agentxx::client::PluginButtonDesc desc;
-                    if (agentxx::client::parsePluginButton(
-                            panel->items[i + 1],
-                            panel->plugin,
-                            reg.get(),
-                            desc
-                        )) {
-                        Element btn = agentxx::client::renderPluginButton(desc, theme);
-                        if (desc.clickable) {
-                            // 命中登记: box 由登记表持有并 reflect, 仅本帧渲染出来的
-                            // 按钮才命中 (面板未展开/条目不在视口时不占点击区域)
-                            btn = hitTargets_.add(
-                                std::move(btn),
-                                panelHint(panel->plugin, panel->id, desc, reg.get())
-                            );
-                        }
-                        out.push_back(ScrollItem{hbox({
-                            agentxx::client::renderPluginTextItem(
-                                it.value("text", std::string{}),
-                                it.value("role", std::string{"normal"}),
-                                theme
-                            ),
-                            std::move(btn),
-                        })});
-                        ++i;
-                        continue;
-                    }
-                }
-                out.push_back(ScrollItem{agentxx::client::renderPluginTextItem(
-                    it.value("text", std::string{}),
-                    it.value("role", std::string{"normal"}),
-                    theme
-                )});
-            } else if (kind == "progress") {
-                const double v      = it.value("value", 0.0);
-                const int    w      = 10;
-                const int    filled = static_cast<int>(v * w);
-                std::string  bar;
-                bar.reserve(static_cast<size_t>(w));
-                for (int j = 0; j < w; ++j) {
-                    bar += (j < filled) ? '#' : '-';
-                }
-                out.push_back(ScrollItem{hbox({
-                    text("[" + bar + "]") | color(theme.accentColor),
-                    text(fmt::format(" {}%", static_cast<int>(v * 100))) | color(theme.hintColor),
-                })});
-            } else if (kind == "button" || kind == "action") {
-                agentxx::client::PluginButtonDesc desc;
-                if (!agentxx::client::parsePluginButton(it, panel->plugin, reg.get(), desc)) {
-                    continue;
-                }
-                Element btn = agentxx::client::renderPluginButton(desc, theme);
-                if (desc.clickable) {
-                    // 命中登记 (同上方 text+button 合并分支)
-                    btn = hitTargets_.add(
-                        std::move(btn),
-                        panelHint(panel->plugin, panel->id, desc, reg.get())
-                    );
-                }
-                if (!desc.prefix.empty()) {
-                    out.push_back(ScrollItem{hbox({
-                        text(desc.prefix) | color(theme.normalColor),
-                        std::move(btn),
-                    })});
-                } else {
-                    out.push_back(ScrollItem{std::move(btn)});
-                }
-            } else if (kind == "badge") {
-                out.push_back(ScrollItem{
-                    text("● " + it.value("text", std::string{})) | color(theme.accentColor)
-                });
-            } else if (kind == "separator") {
-                out.push_back(ScrollItem{text("─") | color(theme.hintColor) | theme.dim()});
-            }
+
+    // 可用宽度: 内容区宽度 (已扣除侧边栏内边距与滚动条占位)
+    int avail = 0;
+    if (sidebar_) {
+        if (auto* scroll = sidebar_->contentScrollable(); scroll != nullptr) {
+            avail = scroll->contentWidth();
         }
+    }
+    if (avail <= 0) {
+        avail = sidebar_ ? sidebar_->width() - 4 : 40;
+    }
+
+    agentxx::client::UiRenderCtx rc;
+    rc.theme            = &theme_;
+    rc.width            = avail;
+    rc.indent           = 2;
+    rc.plugin           = panel->plugin;
+    rc.ownerId          = panel->id;
+    rc.registry         = reg.get();
+    rc.collapseExpanded = [this, ownerId = panel->id](const std::string& id, bool defaultValue) {
+        return collapseExpanded(ownerId, id, defaultValue);
+    };
+
+    agentxx::client::UiRenderResult res;
+    agentxx::client::renderItems(agentxx::ui::parseItemList(panel->items), rc, res);
+
+    out.reserve(res.rows.size());
+    if (!res.builders.empty()) {
+        sidebarMdBuilders_.push_back(std::move(res.builders));
+    }
+    for (auto& row : res.rows) {
+        ScrollItem item;
+        item.element = std::move(row.element);
+        item.hits    = std::move(row.regions);
+        out.push_back(std::move(item));
     }
     return out;
 }
@@ -660,8 +588,13 @@ void TUIClientAgentIO::start() {
                 = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
             // 命中表: 每帧重建 (渲染期登记, 仅存本帧真正渲染出来的可点项;
             // 缩放/滚动/伸缩/隐藏导致坐标与可见性每帧变动)
-            hitTargets_.beginFrame();
             shellHits_.beginFrame();
+            // 侧边栏 (面板/Info 段落) 的 markdown 生命周期: 轮换到本帧的新容器,
+            // 保留上一代 (上一帧元素可能仍在滚动容器缓存中)
+            if (sidebarMdBuilders_.size() >= 2) {
+                sidebarMdBuilders_.erase(sidebarMdBuilders_.begin());
+            }
+            sidebarMdBuilders_.emplace_back();
 
             auto mainWidget = vbox({
                 messageList_->Render() | flex,
@@ -781,20 +714,9 @@ void TUIClientAgentIO::start() {
                         handleShellHit(hit->payload.id);
                         return true;
                     }
-                    // 插件按钮 (侧边栏面板 / Info 段落 items): 归属信息随命中项登记,
-                    // 命中后投递到插件回调 (IO 线程二次校验实例代次后派发)
-                    if (pluginManager_) {
-                        UiHitTarget hit;
-                        if (hitTestPluginButton(mouse, hit)) {
-                            pluginManager_->dispatchAction(
-                                hit.plugin,
-                                hit.ownerId,
-                                hit.actionId,
-                                hit.argsJson,
-                                hit.generation
-                            );
-                            return true;
-                        }
+                    // 插件注册的本地渲染器与通用动作派发, 见 [ClientPluginManager]
+                    if (handleSidebarRegionClick(mouse)) {
+                        return true;
                     }
                     // 其余主界面按钮由各组件自身在组件树中处理
                     // (消息列表: 折叠/装饰按钮/中断控件/重试; 输入栏: 附件/待发队列;
@@ -1306,14 +1228,64 @@ void TUIClientAgentIO::openFailedAppendComponents() {
     postRedraw();
 }
 
-bool TUIClientAgentIO::hitTestPluginButton(const ftxui::Mouse& mouse, UiHitTarget& out) const {
-    // 命中表仅含本帧渲染出来的可点按钮 (每帧渲染入口重建)
-    const auto* hit = hitTargets_.find(mouse.x, mouse.y);
-    if (hit == nullptr) {
+bool TUIClientAgentIO::collapseExpanded(
+    const std::string& ownerId,
+    const std::string& id,
+    bool               defaultValue
+) {
+    const std::string key = ownerId + ":" + id;
+    auto              it  = collapseStates_.find(key);
+    if (it != collapseStates_.end()) {
+        return it->second;
+    }
+    // 首次渲染时按描述缺省值登记 (点击切换后以登记值为准)
+    collapseStates_.emplace(key, defaultValue);
+    return defaultValue;
+}
+
+bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
+    if (!sidebar_) {
         return false;
     }
-    out = hit->payload;
-    return true;
+    auto* scroll = sidebar_->contentScrollable();
+    if (scroll == nullptr) {
+        return false;
+    }
+    size_t index = 0;
+    int    localX = 0;
+    int    localY = 0;
+    if (!scroll->hitTestItem(mouse.x, mouse.y, index, localX, localY)) {
+        return false;
+    }
+    const auto& items = scroll->items();
+    if (index >= items.size()) {
+        return false;
+    }
+    const auto* region = matchUiHitRegion(items[index].hits, localX, localY);
+    if (region == nullptr) {
+        return false;
+    }
+    if (region->kind == UiHitRegionKind::Collapse) {
+        // 折叠标题: 翻转宿主维护的展开状态, 下一帧按新状态渲染
+        const std::string key = region->ownerId + ":" + region->id;
+        auto              it  = collapseStates_.find(key);
+        const bool        cur = (it == collapseStates_.end()) ? true : it->second;
+        collapseStates_[key]  = !cur;
+        postRedraw();
+        return true;
+    }
+    if (region->kind == UiHitRegionKind::Action) {
+        if (auto mgr = pluginManager_) {
+            // 实例代次从当前快照复查: 插件重载后旧点击被丢弃
+            auto           reg = mgr->uiRegistrySnapshot();
+            const uint64_t gen = reg ? reg->generationOf(region->plugin) : 0;
+            mgr->dispatchAction(region->plugin, region->ownerId, region->id, region->arg, gen);
+        }
+        return true;
+    }
+    // 表单控件 (Form / FormSubmit) 的编辑与提交由表单状态处理, 见后续阶段
+    // (UiFormState 交互): 本版先不响应, 返回未处理交由其他命中判定
+    return false;
 }
 
 void TUIClientAgentIO::openOverlay(
