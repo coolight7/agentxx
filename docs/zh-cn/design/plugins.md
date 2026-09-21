@@ -471,13 +471,18 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.client.ui` | 2 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)` |
+| `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
 | `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
 | `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → 服务端 `client.{插件}.{event}` |
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
+
+**版本口径**: `agentxx.client.ui` 表自身 `version` 恒为 1 (表结构未变)。新增展示能力一律走
+**数据层** (新组件 kind / 新字段) 或**新增接口表**, 不在表尾追加成员 —— SDK 侧的接口校验是
+`version != 1 || struct_size < sizeof(Iface)` 即整表判为不可用, 表尾追加成员会让新插件在
+老宿主上丢掉整张表 (面板/状态栏/渲染器全部失效)。
 
 清单声明层约定 (`plugin.yaml` 的 `interfaces.require/optional`, 按前缀归属侧):
 
@@ -489,6 +494,78 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   处理 (`optional` 告警 / `require` 跳过加载)。因此只用到工具特化渲染的插件应声明
   `agentxx.client.msg_decor`, 而不是表整体 —— 否则会被误报为"缺少 agentxx.client.ui,
   相关功能停用"
+- 展示扩展表另有细粒度能力名用于"组件集合"判断 (与表成员无关, 只作能力协商用):
+  `agentxx.client.components` = 宿主能渲染 `agentxx.ui.item` 全量组件 (含表格/树/图表/
+  容器), `agentxx.client.form` = 宿主支持插件表单 (控件 + 提交回传)。插件在
+  `get_client_state().interfaces` 里查这两个名字决定推送"新组件"还是降级为旧 kind;
+  老宿主不认识这些名字 → 插件降级, 不报错、不静默丢内容。
+
+### 9.1 客户端 UI 组件描述 schema (`agentxx.ui.item`)
+
+面板 (`update_panel`)、Info 段落 (`update_info_section`)、工具装饰 (`update_tool_decor`)、
+工具渲染器 (`items_json`)、自定义 overlay (`open_overlay(CUSTOM)` 的 payload) 与中断描述的
+内容块都使用同一套组件描述: JSON 数组 (或 `{"items":[...]}`)，每项一个组件。
+
+通用字段 (所有 kind 可用): `kind` / `id` / `indent` / `color`(或旧写法 `role`) / `bold` /
+`dim` / `wrap` / `fallback` / `action` / `args` / `w`(横排内的列宽)。
+
+| kind | 用途 | 关键字段 |
+|------|------|----------|
+| `text` | 文本行 | `text` |
+| `markdown` | markdown 富文本 | `text` |
+| `diff` | 差异对比 (自适应 side-by-side) | `path` / `old_str` / `new_str` |
+| `separator` / `gap` | 分隔线 / 空行 | `lines` |
+| `badge` | 状态点 + 文本 | `text` |
+| `diagram` | 内联 mermaid 状态图 | `mermaid` |
+| `button` (旧名 `action`) | 可点按钮 | `label` / `action` / `args` / `prefix` / `style` |
+| `progress` (旧) / `meter` | 条形计量 (阈值配色) | `value` / `total` / `width` / `label` / `unit` / `thresholds` |
+| `sparkline` | 迷你趋势图 (块字符; 宽度不足自动分桶) | `data` / `height` / `min` / `max` / `colors` / `showLast` |
+| `kv` | 键值对 (两列对齐) | `items:[{k,v,vColor}]` / `sep` / `kw` |
+| `table` | 表格 (表头/列对齐/截断/可点单元格) | `columns:[{title,align,w,color}]` / `rows` / `header` |
+| `tree` | 层级列表 (连接线; 节点可点) | `nodes:[{label,color,action,children}]` |
+| `row` | 横向组合 (列宽权重 + 对齐) | `items` / `gap` / `align` |
+| `box` | 分组框 (标题 + 边框 + 内边距) | `title` / `border`(none/square/round/light) / `pad` |
+| `collapse` | 可折叠分组 (宿主维护展开状态) | `id` / `title` / `expanded` |
+| `control` | 交互控件 (checkbox/select/buttons/number/text) | `id` / `control` / `label` / `options` / `default` / `commitOnPick` / `min` / `max` / `step` / `integer` |
+| `checkbox` / `select` / `buttons` / `number` / `input` | 控件的短写法 (等价 `control` + 对应形态) | 同 `control` |
+| `submit` | 表单提交行 | `label` / `cancelLabel` |
+| `custom` | 派发到内置组件或组件树 | `component`(空或 `"components"` 用 `props.items`) / `props` / `fallback` |
+| `canvas` | **预留**: 完全自绘 (本版只解析与降级) | `fallback` (渲染降级文本) |
+
+约束与降级:
+
+- 解析上限: 嵌套深度 8 / 单层元素 512 / 表格 512 行 16 列 / 树 1024 节点 /
+  趋势图 4096 点 / 单项文本 64 KiB; 越界按"截断或丢弃"处理, 不使整份描述失效
+- 未知 kind: 渲染 `fallback` 文本 (无 `fallback` 则跳过), 老宿主同样按此降级 —— 插件推送
+  新组件时应带 `fallback`, 并按 `get_client_state().interfaces` 判断宿主能力
+- 插件构建组件树不必手写 JSON: `agentxx/ui/build.h` 的 `agentxx::ui::Items` 提供链式构建器
+  (`text/kv/meter/sparkline/table/tree/row/box/collapse/checkbox/select/number/submit/...`),
+  `ClientPluginBase` 提供 `setPanelItems/setInfoSectionItems/showItemsOverlay` 直接提交:
+
+  ```c++
+  agentxx::ui::Items ui;
+  ui.box("System", agentxx::ui::Items{}
+          .kv({{"Model", model}, {"Tokens", tokens}})
+          .meter(cpuPct, 100, {.width = 20, .label = "CPU", .unit = "%"}))
+    .table({.columns = {{"File", "left", 0}, {"Size", "right", 8}}, .rows = rows})
+    .checkbox("detail", "显示细节", detailOn)
+    .submit("应用", "取消");
+  ctx.setPanelItems(ctx.panel, ui);
+  ```
+
+### 9.2 插件表单 (控件与结果回传)
+
+- 面板 / Info 段落 / 自定义 overlay 里都可以放控件 (上表的 `control` / `submit`);
+  **控件状态由宿主维护** (值、勾选、选中项、校验提示、焦点), 插件代码不进入 UI 线程。
+- 结果经既有的动作通道回传 (`bind_action_handler` 绑定的回调):
+  - 提交: `action_id = "__submit"`, `action_args = {"values": {控件 id: 值}}`
+    (checkbox→布尔 / select|buttons→候选项 `value` / number→数值 / text→字符串)
+  - 取消: `action_id = "__cancel"` (无参数)
+  - `commitOnPick: true` 的候选项点击即提交: `action_id = 控件 id`, 参数同上
+- 交互: 点击控件即聚焦 (字符键进入输入框), `Tab`/`Shift+Tab` 在控件间移动,
+  `Esc` 释放焦点, 回车提交; 数值控件提交前校验 `min/max/integer` (失败显示提示且不提交)
+- 中断表单 (`interrupt_ui.h`) 使用同一套控件语义与外观, 只是结果去向不同
+  (回传中断结果 `{"values":{...}}`, 由 agent 侧中间件消费)
 
 ### 工具特化渲染架构 (Tool Rendering & Decor)
 

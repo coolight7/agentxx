@@ -121,6 +121,12 @@
 | 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/待发队列/上下文/mermaid/text/diff/custom/文件选择 |
 | `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
+| `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把 `agentxx.ui.item` 描述渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
+
+`ui_components` 是全部展示描述的唯一渲染实现: 侧边栏面板、Info 段落、工具消息装饰、
+通用 overlay、中断描述内容块都经它渲染 (此前面板/Info/装饰各有一份 switch, 已收敛)。
+新增一种组件只需改两处: `agentxx/ui/item.h` (字段与解析) 与 `ui_components.cpp` (渲染 + 测量);
+行数估算走同一条渲染路径 (`measureItem`), 与真实布局高度一致 (见 3.1)。
 
 弹窗统一用 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h) 的面性风格外框
 (圆角 + 标题栏/内容区/底栏分区, 不画边框与分割线); 文案统一走
@@ -222,11 +228,21 @@ struct UiActionItem {
 
 ### 2.6 插件 UI
 
-- agent 侧插件经 wire 下发 UI 描述 (panel/items/info section/status item/overlay/中断表单),
-  client 侧渲染为普通 Element; 可点 button 的归属 (plugin/owner/action/参数/实例代次)
-  作为命中表载荷登记, 命中后经 `ClientPluginManager::dispatchAction` 投递回 io 线程二次校验后派发。
+- **注册入口只在 client 侧**: 面板/Info 段落/状态栏项/装饰/overlay 都由 client 侧插件
+  经 `agentxx.client.ui` 表注册 (插件在 client 进程内, 描述不经网络); agent 侧插件要把
+  数据交给同名 client 插件时走 `plugin_data` 转发, 自己不产生 UI 描述。唯一由 agent 侧
+  产出、client 侧渲染的 UI 结构是**中断描述** (`interrupt_ui.h`)。
+- 描述形态是 `agentxx.ui.item` schema 的 JSON (组件树, 见 [plugins.md](plugins.md) §9.1);
+  client 侧由 [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)
+  统一渲染为 Element, 并把元素内可点位置登记为可命中区域 (按钮/表格单元格/折叠标题/控件)。
+- 命中与派发: 侧边栏内容经 `Scrollable::hitTestItem` 定位子项 + 局部坐标后判定区域
+  (不用子项内的 `reflect`, 见 3.1); 命中后经 `ClientPluginManager::dispatchAction`
+  投递回 io 线程, 二次校验插件存在/启用/实例代次后调用插件回调。
+- 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由宿主维护, 提交经
+  动作通道回传 `__submit` (参数 `{"values":{控件 id: 值}}`), 取消回传 `__cancel`,
+  `commitOnPick` 的候选项点击即提交。插件不接触 UI 线程, 只收结果。
 - 相关 schema 与约束见 [plugins.md](plugins.md) 与
-  [plugin_ui_items.h](/agent/client/include/agentxx-client/io/tui/plugin_ui_items.h)。
+  [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
 ---
 
@@ -246,16 +262,24 @@ struct UiActionItem {
     "OnRender 帧首清空 -> 同帧重新构建元素", 次序天然满足)。
 - 组件"消失"的判定以**是否渲染**为准, 不要再用 `Box{}` 之类的"清零"表达
   (它等于屏幕左上角, 会造成 (0,0) 处误触)。
-- **滚动容器内的可点击子项用 `visibleBoxes()`, 不要用子项元素内的 `reflect`**:
-  [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h) /
+- **滚动容器内的可点击子项用 `Scrollable::hitTestItem` (或 `visibleBoxes()`), 不要用子项
+  元素内的 `reflect`**: [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h) /
   [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h)
   测量子项高度时会以"测量用临时大框" (局部坐标: x = 0..内容宽, y = 0..很大) 调用 `SetBox`,
   之后只有视口内的子项会被重新定位到真实屏幕坐标, 视口外 (上方/下方) 的子项会残留该大框。
   大框的局部 `x` 与屏幕坐标的左侧区域重叠, 于是按 `reflect` 框命中的点击会命中到
   **看不见的子项** (通常是列表中靠前的那条), 且横向点击位置不同命中结果还不同。
-  正确做法: 记"子项下标 -> 业务下标"映射, 事件里遍历 `visibleBoxes()` (视口外恒为空区域)
-  换算命中 —— 见 [ContextOverlay](/agent/client/src/io/tui/components/overlays.cpp)
-  的 `headerMessageAt` 与 `MessageListComponent` 的可见区域命中登记。
+  正确做法 (侧边栏面板/Info 段落/overlay 已按此实现):
+  - 渲染子项时把可点位置写入 `ScrollItem::hits` (`UiHitRegion`: 相对子项左上角的局部矩形
+    + 类型 + 标识 + 参数; `w <= 0` 表示延伸到子项右边界);
+  - 事件里用 `hitTestItem(x, y, itemIndex, localX, localY)` 定位到**可见**子项并取局部坐标
+    (子项被视口上边缘裁剪时仍按子项顶边换算), 再与 `hits` 比对;
+  - `Scrollable` 会在子项离开视口时清空它的布局框, 避免残留命中区。
+  [ContextOverlay](/agent/client/src/io/tui/components/overlays.cpp) 的 `headerMessageAt`
+  与 `MessageListComponent` 的可见区域命中登记是同一做法的其它形态。
+- **测量与渲染必须同源**: 组件描述的行数由 `ui_components.cpp` 的 `measureItem` 得出
+  (内部渲染一次统计行数), 不要另写一套"估算行数"的判定 —— 两套判定漂移会让滚动位置与
+  高度计算错位。回归保护见 `agentxx_test tui_ui_items` (估算行数 == 元素真实布局高度)。
 
 ### 3.2 事件消费
 

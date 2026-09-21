@@ -48,6 +48,10 @@ public:
             std::string{pi::ClientAction},
             // 通用 overlay (ui 表 v3 open/close)
             std::string{pi::ClientOverlay},
+            // 组件描述能力: 能渲染 agentxx.ui.item 全量组件 (布局/结构化/图表/控件)
+            std::string{pi::ClientComponents},
+            // 插件表单: 控件状态由宿主维护, 提交结果经动作通道回传
+            std::string{pi::ClientForm},
         };
     }
 

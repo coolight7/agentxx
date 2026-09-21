@@ -121,6 +121,13 @@ inline constexpr std::string_view ClientCommand     = "agentxx.client.command";
 inline constexpr std::string_view ClientAction = "agentxx.client.action";
 /// 通用 overlay (ui 表 v3 open/close; TUI 声明, CLI 不声明)
 inline constexpr std::string_view ClientOverlay = "agentxx.client.overlay";
+/// 组件描述能力: 宿主能渲染 `agentxx.ui.item` 全量组件 (横排/分组/折叠/表格/树/键值/
+/// 趋势图/计量条/控件/提交行); 未声明时插件应只推旧 kind (text/button/progress 等)
+/// 或改用 `fallback`。与 ui 表成员无关, 只作能力协商用。
+inline constexpr std::string_view ClientComponents = "agentxx.client.components";
+/// 插件表单: 宿主支持控件交互与结果回传 (`__submit`/`__cancel`/`commitOnPick`
+/// 经动作通道回传 `{"values":{控件 id: 值}}`); 未声明时控件只作展示
+inline constexpr std::string_view ClientForm = "agentxx.client.form";
 } // namespace plugin_interfaces
 
 /// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)

@@ -341,6 +341,23 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 ### 客户端 UI
 
+- **组件描述能力 (`agentxx.ui.item`)**: 插件的面板/Info 段落/工具装饰/overlay 与中断描述的
+  内容块使用同一套组件描述 (JSON 组件树), 由客户端**唯一渲染实现**
+  ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)) 统一渲染
+  (测量与渲染同源, 行数估算与真实布局一致)。能力矩阵:
+  - 文本类: `text` / `markdown` / `diff` (自适应 side-by-side) / `separator` / `gap` / `badge` / `diagram`
+  - 布局类: `row` (列宽权重 + 对齐) / `box` (标题 + 边框 + 内边距) / `collapse` (宿主维护展开态)
+  - 数据类: `kv` / `table` (列对齐/表头/截断/可点单元格) / `tree` (连接线/节点动作)
+  - 图表类: `sparkline` (迷你趋势图, 宽度不足自动分桶) / `meter` (阈值配色的条形计量) / `progress`(旧写法)
+  - 交互类: `control` (checkbox/select/buttons/number/text) / `submit` (表单提交行)
+  - 预留: `canvas` (完全自绘; 当前只解析并降级为 `fallback` 文本)
+  - 降级: 未知 kind 渲染 `fallback`; 行式前端 (CLI/日志) 用 `ui::plainText` 输出纯文本
+  - 插件侧可用 [build.h](/agent/lib/include/agentxx/ui/build.h) 的链式构建器组装,
+    经 `ClientPluginBase::setPanelItems/setInfoSectionItems/showItemsOverlay` 直接提交;
+    能力协商用 `hostSupports("agentxx.client.components" / "agentxx.client.form")`
+- **插件表单**: 面板/Info 段落/overlay 内的控件由**宿主维护状态** (值/勾选/选中/焦点/校验),
+  插件不进入 UI 线程; 结果经动作通道回传 (`__submit` + `{"values":{...}}` / `__cancel`),
+  `commitOnPick` 的候选项点击即提交
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
   - 消息列表 (User/Assistant/Thinking/Tool/System/Interrupt 角色)
   - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠; 用户在流式思考上
