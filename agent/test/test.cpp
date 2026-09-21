@@ -39,6 +39,8 @@
 #include "agentxx-test/core/test_subagent_tool.h"
 #include "agentxx-test/core/test_summarization.h"
 #include "agentxx-test/core/test_training.h"
+#include "agentxx-test/core/test_ui_items.h"
+#include "agentxx-test/core/test_util_misc.h"
 #include "agentxx-test/core/test_worktree.h"
 #include "agentxx-test/plugin/test_client_plugins.h"
 #include "agentxx-test/plugin/test_codegraph_tools.h"
@@ -75,6 +77,7 @@
 #include "agentxx-test/client/test_tui_surface.h"
 #include "agentxx-test/client/test_tui_theme.h"
 #include "agentxx-test/client/test_tui_tool_header.h"
+#include "agentxx-test/client/test_tui_ui_items.h"
 #include "agentxx-test/client/test_tui_widget.h"
 #endif
 #include "agentxx-test/core/test_util_misc.h"
@@ -191,6 +194,7 @@ int main(int argn, char** argv) {
         runSync("settings_db", agentxx::test::testSettingsDb);
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
         runSync("interrupt_ui", agentxx::test::testInterruptUi);
+        runSync("ui_items", agentxx::test::testUiItems);
         runSync("ffi_c_api", agentxx::test::testFfiCApi);
         runSync("plugin_runtime", agentxx::test::testPluginRuntime);
         runSync("plugin_sdk", agentxx::test::testPluginSdk);
@@ -207,6 +211,7 @@ int main(int argn, char** argv) {
         runSync("tui_surface", agentxx::test::testTuiSurface);
         runSync("tui_theme", agentxx::test::testTuiTheme);
         runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
+        runSync("tui_ui_items", agentxx::test::testTuiUiItems);
         runSync("tui_widget", agentxx::test::testTuiWidget);
         runSync("sessionId", agentxx::test::testSessionId);
         runSync("mermaid_state", agentxx::test::testMermaidState);

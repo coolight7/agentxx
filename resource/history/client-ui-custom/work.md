@@ -15,8 +15,8 @@
 | P1.3 | 子区域命中（`UiHitRegion` / `addRegions` / `Scrollable::hitTestItem`） | ✅ 已完成 |
 | P1.4 | 接入点收敛（面板 / Info / 装饰 / overlay / 中断内容块） | ✅ 已完成 |
 | P1.5 | 中断描述扩展（`raw` 透传 + `custom` 派发 + 扩展组件） | ✅ 已完成 |
-| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ⬜ 待开始（build.h 首版已落地，SDK 便捷方法待做） |
-| P1.7 | 测试（`ui_items` / `tui_ui_items`） | ⬜ 待开始（现有 21846 项断言全绿） |
+| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | 🟡 构建器已完成，SDK 便捷方法待做 |
+| P1.7 | 测试（`ui_items` 193 项 + `tui_ui_items` 98 项） | ✅ 已完成 |
 | P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ⬜ 待开始 |
 | P2 | 表单状态与提交派发、尺寸事件、overlay 选项、状态栏扩展 | ⬜ 待开始 |
 | P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
@@ -77,14 +77,44 @@
 ### 验证
 
 - Windows Debug 编译通过（lib / client / test 三个目标）
-- `agentxx_test.exe` 全量：**21846 项断言全部通过**（含全部 TUI 与中断用例）
+- `agentxx_test.exe` 全量：**22137 项断言全部通过**（含全部 TUI 与中断用例）
+
+---
+
+## 阶段 2：组件层测试（已完成）
+
+### 新增测试模块
+
+- `test/core/test_ui_items.cpp`（lib，193 项断言）：schema 解析与归一化、往返序列化、
+  解析上限（深度/元素数/文本长度）、纯文本降级、显示列宽工具、构建器产出形状
+- `test/client/test_tui_ui_items.cpp`（client，98 项断言）：各 kind 的屏幕渲染、
+  估算行数与真实布局高度一致、元素内可命中区域坐标与标识、
+  `Scrollable::hitTestItem` 滚动前后命中映射、面性弹窗分隔线风格
+
+### 测试中发现并修复的问题
+
+1. `renderKeyValue` 在 `std::move(lines)` 之后读 `lines.size()` → 移动后行数变 0
+   （kv 只占 1 行，滚动定位会错）；已在 move 前取行数
+2. `submit` 行在无表单状态时也登记提交区域 → 与控件口径不一致（没有状态就没有值可提交）；
+   改为只有 `ctx.form != nullptr` 时才登记
+3. `Item::interactive()` 未递归树节点子级 → 子节点带动作时漏判
+4. 构建器/序列化里 `Json{x}` 会走 `Json(std::initializer_list<Json>)`，构造出
+   **单元素数组**而不是标量；全部改为 `Json(x)` 或逐字段赋值
+   （`Json::object({{"k", Json{k}}})` 这种写法同样中招）
+
+### 测试辅助经验
+
+- 断言屏幕内容时不要用 `Screen::ToString()`：它会把颜色转义序列一起输出，
+  子串会被转义码打断；应逐格读 `PixelAt(x,y).character` 拼文本
+  （参考 `test/client/test_tui_ui_items.cpp` 的 `renderToText`）
+- 测量一致性断言：`measureItem` 的行数须等于元素真实布局高度
+  （`layoutAndMeasure`），这是"测量与渲染同源"的回归保护
 
 ---
 
 ## 待完成任务（下一步）
 
 1. P1.6 SDK 便捷方法（`plugin_kit.h`：`setPanelItems` / `showOverlay` / `regionSize` 等）
-2. P1.7 新增测试模块 `ui_items`（lib）与 `tui_ui_items`（client 渲染/测量/命中）
 3. P2：
    - `UiFormState` 接入面板/overlay（控件值编辑、`__submit`/`__cancel`/`commitOnPick` 经
      `dispatchAction` 回传），并把 `InterruptView` 的控件布局迁移到共享实现

@@ -117,7 +117,21 @@ bool isKnownKind(std::string_view kind) {
            || kind == "meter" || kind == "badge" || kind == "diagram" || kind == "row"
            || kind == "box" || kind == "collapse" || kind == "table" || kind == "tree"
            || kind == "kv" || kind == "sparkline" || kind == "control" || kind == "submit"
-           || kind == "canvas" || kind == "custom";
+           || kind == "canvas" || kind == "custom"
+           // 交互控件的短写法 (等价于 control + 对应形态)
+           || kind == "checkbox" || kind == "select" || kind == "buttons" || kind == "number"
+           || kind == "input";
+}
+
+/// 控件短写法 → 控件形态 (非短写法返回空)
+std::string_view controlAliasOf(std::string_view kind) {
+    if (kind == "checkbox" || kind == "select" || kind == "buttons" || kind == "number") {
+        return kind;
+    }
+    if (kind == "input") {
+        return "text";
+    }
+    return {};
 }
 
 std::string alignOf(const Json& j, std::initializer_list<std::string_view> keys) {
@@ -184,6 +198,19 @@ std::vector<Item>
     return out;
 }
 
+/// 树节点 (含子树) 是否带动作
+bool nodeTreeInteractive(const TreeNode& node) {
+    if (!node.action.empty()) {
+        return true;
+    }
+    for (const auto& child : node.children) {
+        if (nodeTreeInteractive(child)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -218,7 +245,7 @@ bool Item::interactive() const {
         }
     }
     for (const auto& node : nodes) {
-        if (!node.action.empty()) {
+        if (nodeTreeInteractive(node)) {
             return true;
         }
     }
@@ -241,12 +268,17 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         item.fallback = clampTextImpl(readString(json, "fallback"), limits.maxTextBytes);
         return item;
     }
-    // 旧写法归一化: action 等同 button, progress 等同 meter
+    // 旧写法归一化: action 等同 button, progress 等同 meter,
+    // 控件短写法 (checkbox/select/buttons/number/input) 等同 control + 对应形态
     if (item.kind == "action") {
         item.kind = "button";
     }
     if (item.kind == "progress") {
         item.kind = "meter";
+    }
+    const std::string_view controlAlias = controlAliasOf(item.kind);
+    if (!controlAlias.empty()) {
+        item.kind = "control";
     }
 
     item.id     = clampTextImpl(readString(json, "id"), 256);
@@ -261,6 +293,15 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     }
     // 文本类缺省折行 (与历史渲染语义一致); 结构化组件不折行
     item.wrap = readBool(json, "wrap", item.kind == "text");
+
+    // 列宽声明 (横排容器内使用): 固定列数或占满剩余宽度
+    if (const Json* colWidth = field(json, "w")) {
+        if (colWidth->is_number()) {
+            item.columnWidth = std::max(0, static_cast<int>(colWidth->get<double>()));
+        } else if (colWidth->is_string() && colWidth->get_string_view() == "flex") {
+            item.columnFlex = true;
+        }
+    }
 
     if (item.kind == "text") {
         item.text = clampTextImpl(readStringAny(json, {"text", "content"}), limits.maxTextBytes);
@@ -386,13 +427,6 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     if (item.kind == "row") {
         item.gap   = std::clamp(readInt(json, "gap", 1), 0, 20);
         item.align = alignOf(json, {"align"});
-        if (const Json* colWidth = field(json, "w")) {
-            if (colWidth->is_number()) {
-                item.columnWidth = std::max(0, static_cast<int>(colWidth->get<double>()));
-            } else if (colWidth->is_string() && colWidth->get_string_view() == "flex") {
-                item.columnFlex = true;
-            }
-        }
         if (depth + 1 <= limits.maxDepth) {
             if (const Json* items = field(json, "items")) {
                 item.items = parseItemArray(*items, limits, depth + 1);
@@ -405,13 +439,6 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         item.border     = readString(json, "border", "none");
         item.titleColor = readString(json, "titleColor", "");
         item.pad        = std::clamp(readInt(json, "pad", 0), 0, 8);
-        if (const Json* colWidth = field(json, "w")) {
-            if (colWidth->is_number()) {
-                item.columnWidth = std::max(0, static_cast<int>(colWidth->get<double>()));
-            } else if (colWidth->is_string() && colWidth->get_string_view() == "flex") {
-                item.columnFlex = true;
-            }
-        }
         if (depth + 1 <= limits.maxDepth) {
             if (const Json* items = field(json, "items")) {
                 item.items = parseItemArray(*items, limits, depth + 1);
@@ -525,7 +552,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         return item;
     }
     if (item.kind == "control") {
-        item.control      = readString(json, "control", "text");
+        item.control      = readString(json, "control", controlAlias);
         item.controlLabel = clampTextImpl(readStringAny(json, {"label"}), limits.maxTextBytes);
         item.help         = clampTextImpl(readString(json, "help"), limits.maxTextBytes);
         if (const Json* def = field(json, "default")) {
@@ -693,14 +720,19 @@ Json dumpItem(const Item& item) {
         if (!item.thresholds.empty()) {
             Json th = Json::array();
             for (const auto& t : item.thresholds) {
-                th.push_back(Json::object({{"at", Json{t.at}}, {"color", Json{t.color}}}));
+                // 注意: Json 有 initializer_list 构造, `Json{x}` 会构造出"单元素数组";
+                // 标量值一律用圆括号构造
+                Json entry = Json::object();
+                entry["at"]    = t.at;
+                entry["color"] = t.color;
+                th.push_back(std::move(entry));
             }
             out["thresholds"] = std::move(th);
         }
     } else if (item.kind == "sparkline") {
         Json data = Json::array();
         for (double d : item.data) {
-            data.push_back(Json{d});
+            data.push_back(Json(d));
         }
         out["data"] = std::move(data);
         if (item.height != 1) {
@@ -727,7 +759,7 @@ Json dumpItem(const Item& item) {
         if (!item.colors.empty()) {
             Json colors = Json::array();
             for (const auto& c : item.colors) {
-                colors.push_back(Json{c});
+                colors.push_back(Json(c));
             }
             out["colors"] = std::move(colors);
         }
@@ -892,7 +924,7 @@ Json dumpItem(const Item& item) {
             Json opts = Json::array();
             for (const auto& o : item.options) {
                 Json oj = Json::object();
-                oj["value"] = o.value.is_null() ? Json{o.label} : o.value;
+                oj["value"] = o.value.is_null() ? Json(o.label) : o.value;
                 oj["label"] = o.label;
                 if (!o.color.empty()) {
                     oj["color"] = o.color;

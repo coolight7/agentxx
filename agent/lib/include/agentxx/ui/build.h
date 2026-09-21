@@ -322,10 +322,15 @@ public:
 
     /// 键值对 (两列对齐; 值是已经格式化好的文本)
     Items& kv(std::initializer_list<std::pair<std::string, std::string>> entries) {
-        Json& it  = push("kv");
-        Json arr  = Json::array();
+        Json& it = push("kv");
+        Json  arr = Json::array();
         for (const auto& [k, v] : entries) {
-            arr.push_back(Json::object({{"k", Json{k}}, {"v", Json{v}}}));
+            // 注意: Json 有 initializer_list 构造, `Json{x}` 会构造出"单元素数组";
+            // 标量值一律用圆括号构造
+            Json entry = Json::object();
+            entry["k"] = k;
+            entry["v"] = v;
+            arr.push_back(std::move(entry));
         }
         it["items"] = std::move(arr);
         return *this;
@@ -344,7 +349,7 @@ public:
             if (c.align != "left") {
                 cj["align"] = c.align;
             }
-            cj["w"] = (c.width > 0) ? Json{c.width} : Json{"flex"};
+            cj["w"] = (c.width > 0) ? Json(c.width) : Json(std::string_view{"flex"});
             if (!c.color.empty()) {
                 cj["color"] = c.color;
             }
@@ -380,9 +385,9 @@ public:
     /// 迷你趋势图
     Items& sparkline(const std::vector<double>& data, SparklineOpts opts = {}) {
         Json& it   = push("sparkline");
-        Json arr   = Json::array();
+        Json arr = Json::array();
         for (double d : data) {
-            arr.push_back(Json{d});
+            arr.push_back(Json(d));
         }
         it["data"]   = std::move(arr);
         it["height"] = opts.height;
@@ -401,7 +406,7 @@ public:
         if (!opts.colors.empty()) {
             Json colors = Json::array();
             for (const auto& c : opts.colors) {
-                colors.push_back(Json{c});
+                colors.push_back(Json(c));
             }
             it["colors"] = std::move(colors);
         }
@@ -437,7 +442,11 @@ public:
         if (!opts.thresholds.empty()) {
             Json th = Json::array();
             for (const auto& [at, color] : opts.thresholds) {
-                th.push_back(Json::object({{"at", Json{at}}, {"color", Json{color}}}));
+                // 注意: Json 有 initializer_list 构造, `Json{x}` 会构造出"单元素数组"
+                Json entry = Json::object();
+                entry["at"]    = at;
+                entry["color"] = color;
+                th.push_back(std::move(entry));
             }
             it["thresholds"] = std::move(th);
         }
@@ -568,8 +577,9 @@ public:
 
     /// 合并另一棵树 (内容追加到本树末尾)
     Items& append(const Items& other) {
+        syncParsed();
         for (const auto& sub : other.rawList()) {
-            items_.push_back(sub);
+            rawList_.push_back(sub);
         }
         return *this;
     }
@@ -645,7 +655,7 @@ private:
         Json arr = Json::array();
         for (const auto& o : options) {
             Json oj = Json::object();
-            oj["value"] = o.value.is_null() ? Json{o.label} : o.value;
+            oj["value"] = o.value.is_null() ? Json(o.label) : o.value;
             oj["label"] = o.label;
             if (!o.color.empty()) {
                 oj["color"] = o.color;

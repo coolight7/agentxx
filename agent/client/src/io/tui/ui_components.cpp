@@ -448,8 +448,8 @@ Row renderKeyValue(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
         row.element = text(" ");
         return row;
     }
+    row.lines   = lines.size(); // 注意: 须在 move 之前取行数
     row.element = vbox(std::move(lines));
-    row.lines   = lines.size();
     return row;
 }
 
@@ -1341,7 +1341,11 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         els.push_back(text(" "));
         els.push_back(buttonElement(cancel, "", "solid", theme));
         std::vector<UiHitRegion> regions;
-        addSubmitRegions(regions, ctx, confirmW, confirmW + 1, cancelW);
+        // 只有存在表单状态时才登记提交区域 (没有状态就没有值可提交,
+        // 此时提交行是纯展示, 与控件渲染口径一致)
+        if (ctx.form != nullptr) {
+            addSubmitRegions(regions, ctx, confirmW, confirmW + 1, cancelW);
+        }
         pushPlain(hbox(std::move(els)), 1, std::move(regions));
         return rows;
     }
