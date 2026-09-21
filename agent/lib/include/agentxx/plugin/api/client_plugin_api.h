@@ -138,7 +138,13 @@ typedef struct AgentxxOverlaySpec {
     int32_t            type;       ///< AgentxxOverlayType
     PluginxxStringView title;      ///< 标题 (空则宿主回退默认)
     PluginxxStringView payload;    ///< 内容 (语义见 AgentxxOverlayType)
-    PluginxxStringView extra_json; ///< 扩展 JSON object (可空; 如 {"width_frac":0.8})
+    PluginxxStringView extra_json; ///< 扩展 JSON object (可空)
+    /// - TEXT: `{"markdown":bool}` (缺省按 markdown 渲染)
+    /// - 通用尺寸与外观: `{"size":"auto|compact|normal|large|full",
+    ///   "width_frac":0.8,"height_frac":0.9,"footer":bool,"scroll":bool,"stack":bool}`
+    ///   (`size` 与显式比例同时给出时比例优先; `stack=true` 表示已有 overlay 时保留
+    ///   现有的, 缺省为替换当前 overlay)
+    /// - 未知键被忽略 (老宿主同样忽略), 不影响其余字段生效
 } AgentxxOverlaySpec;
 
 /// CUSTOM overlay 内按钮归属 (owner_id 固定值, 走实例级 fallback 派发)
@@ -310,7 +316,8 @@ typedef struct AgentxxClientUiIface {
         const PluginxxStringView* target_id
     );
     /// 通用 overlay (client io 线程约束; 插件 on_action 内直接调用):
-    /// - 单模态 last-wins: 替换当前 overlay (含核心弹窗), 记录 opener 插件名
+    /// - 已有 overlay/核心弹窗时的策略由 spec->extra_json 的 `stack` 决定:
+    ///   缺省替换当前 overlay (last-wins), `stack=true` 时保留现有 overlay 并丢弃本次
     /// - spec->version 必须 == 1; type 越界返回非 0
     /// - 宿主拷贝字符串后 postToUi, 不阻塞插件
     /// - 返回 0 成功

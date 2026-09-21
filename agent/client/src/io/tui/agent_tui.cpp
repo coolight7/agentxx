@@ -1426,9 +1426,20 @@ void TUIClientAgentIO::openOverlay(
     std::string extraJson,
     std::string ownerPlugin
 ) {
-    // UI 线程调用 (适配器经 postToUi 投递); 单模态 last-wins
-    if (!modal_ || modal_->hasModal()) {
+    // UI 线程调用 (适配器经 postToUi 投递)
+    // 已有 overlay/核心弹窗时的策略由 extra_json 的 `stack` 决定 (见 plan/overlays.h):
+    // - 缺省 (stack=false): 替换当前 overlay (last-wins, 与接口注释一致)
+    // - stack=true: 保留现有 overlay, 丢弃本次请求 (TUI 无排队语义, 记日志)
+    const auto options = agentxx::client::OverlayOptions::fromJson(extraJson);
+    if (!modal_) {
         return;
+    }
+    if (modal_->hasModal()) {
+        if (options.stack) {
+            XX_LOGW("[tui] open_overlay ignored (modal already open, stack=true)");
+            return;
+        }
+        modal_->popModal();
     }
     overlayOwnerPlugin_ = std::move(ownerPlugin);
     auto overlay        = createUniversalOverlay(

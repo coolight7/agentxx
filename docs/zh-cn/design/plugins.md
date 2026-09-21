@@ -567,6 +567,25 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - 中断表单 (`interrupt_ui.h`) 使用同一套控件语义与外观, 只是结果去向不同
   (回传中断结果 `{"values":{...}}`, 由 agent 侧中间件消费)
 
+### 9.3 通用 overlay (`open_overlay`)
+
+- `type`: `MERMAID` (payload = mermaid 源码) / `TEXT` (payload = 原文, `extra.markdown`
+  控制是否按 markdown 渲染) / `DIFF` (payload = `{path,old_str,new_str}`) /
+  `CUSTOM` (payload = `{"items":[...]}` 组件树, 见 9.1)。
+- `extra_json` 支持尺寸与外观选项 (数据层, 老宿主忽略未知键):
+
+  | 键 | 取值 | 说明 |
+  |---|---|---|
+  | `size` | `auto` / `compact` / `normal`(缺省) / `large` / `full` | 预设占屏比例 |
+  | `width_frac` / `height_frac` | 0~1 | 显式比例, 与 `size` 同时给出时以它为准 |
+  | `footer` | 布尔 (缺省 true) | 是否显示底栏提示 |
+  | `scroll` | 布尔 (缺省 true) | `false` 表示内容不需滚动 (隐藏滚动提示) |
+  | `stack` | 布尔 (缺省 false) | 已有 overlay/核心弹窗时: `false` 替换 (last-wins), `true` 保留现有并丢弃本次 |
+
+- 在 overlay 里可以放控件与提交行 (见 9.2): 点击/键盘由宿主的表单状态处理, 提交经
+  动作通道回传 `__submit`, 取消回传 `__cancel` (owner 固定 `__overlay`, 由实例级
+  动作绑定接住)。
+
 ### 工具特化渲染架构 (Tool Rendering & Decor)
 
 Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层完全解耦，不包含任何具体工具名称的硬编码：

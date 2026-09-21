@@ -732,6 +732,53 @@ TestResult testTuiSurface() {
 
     TUISettings::instance().setLanguage(savedLang);
 
+    // ---- 通用 overlay 尺寸与外观选项 (extra_json, 数据层) ----
+    {
+        // 缺省: 常规尺寸, 底栏显示, 不保留已有 overlay
+        auto def = agentxx::client::OverlayOptions::fromJson("");
+        double w = 0, h = 0;
+        def.resolveFractions(w, h);
+        XX_TEST_EXPECT_EQ(w, 0.6);
+        XX_TEST_EXPECT_EQ(h, 0.8);
+        XX_TEST_EXPECT_TRUE(def.footer);
+        XX_TEST_EXPECT_FALSE(def.stack);
+
+        // size 预设
+        auto compact = agentxx::client::OverlayOptions::fromJson(R"({"size":"compact"})");
+        compact.resolveFractions(w, h);
+        XX_TEST_EXPECT_EQ(w, 0.4);
+        XX_TEST_EXPECT_EQ(h, 0.5);
+
+        auto full = agentxx::client::OverlayOptions::fromJson(R"({"size":"full"})");
+        full.resolveFractions(w, h);
+        XX_TEST_EXPECT_EQ(w, 1.0);
+        XX_TEST_EXPECT_EQ(h, 1.0);
+
+        // 显式比例优先于 size
+        auto frac = agentxx::client::OverlayOptions::fromJson(
+            R"({"size":"full","width_frac":0.5,"height_frac":0.25})"
+        );
+        frac.resolveFractions(w, h);
+        XX_TEST_EXPECT_EQ(w, 0.5);
+        XX_TEST_EXPECT_EQ(h, 0.25);
+
+        // footer / scroll / stack
+        auto opts = agentxx::client::OverlayOptions::fromJson(
+            R"({"footer":false,"stack":true,"scroll":true})"
+        );
+        XX_TEST_EXPECT_FALSE(opts.footer);
+        XX_TEST_EXPECT_TRUE(opts.stack);
+        // scroll=false 视为内容不需滚动: 隐藏底栏提示
+        auto noScroll = agentxx::client::OverlayOptions::fromJson(R"({"scroll":false})");
+        XX_TEST_EXPECT_FALSE(noScroll.footer);
+
+        // 非法输入回退缺省 (不抛异常)
+        auto bad = agentxx::client::OverlayOptions::fromJson("{ not json");
+        XX_TEST_EXPECT_TRUE(bad.footer);
+        bad.resolveFractions(w, h);
+        XX_TEST_EXPECT_EQ(w, 0.6);
+    }
+
     return {g_tui_surface_passed, g_tui_surface_failed};
 }
 

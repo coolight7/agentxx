@@ -1464,18 +1464,16 @@ namespace {
 /// GREATER_THAN 下限)
 void overlayPopupSize(
     const TUICtx& ctx,
-    int           widthFracNum,
-    int           widthFracDen,
-    int           heightFracNum,
-    int           heightFracDen,
+    double        widthFrac,
+    double        heightFrac,
     int&          popupW,
     int&          popupH
 ) {
     const auto termSize = ctx.terminalSize();
     const int  termW    = termSize.dimx;
     const int  termH    = termSize.dimy;
-    const int  wantW    = std::max(40, termW * widthFracNum / widthFracDen);
-    const int  wantH    = std::max(10, termH * heightFracNum / heightFracDen);
+    const int  wantW    = std::max(40, static_cast<int>(static_cast<double>(termW) * widthFrac));
+    const int  wantH    = std::max(10, static_cast<int>(static_cast<double>(termH) * heightFrac));
     const int  availW   = std::max(1, termW - 4);
     const int  availH   = std::max(1, termH - 4);
     popupW              = std::min(wantW, availW);
@@ -1502,22 +1500,68 @@ bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollab
 }
 
 Element overlayFrame(
-    TUICtx&            ctx,
-    const TUITheme&    theme,
-    const std::string& title,
-    Scrollable&        scrollable,
-    int                widthFracNum,
-    int                widthFracDen
+    TUICtx&             ctx,
+    const TUITheme&     theme,
+    const std::string&  title,
+    Scrollable&         scrollable,
+    const OverlayOptions& options = {}
 ) {
+    double    wFrac = 0.6, hFrac = 0.8;
+    options.resolveFractions(wFrac, hFrac);
     int popupW = 0, popupH = 0;
-    overlayPopupSize(ctx, widthFracNum, widthFracDen, 4, 5, popupW, popupH);
+    overlayPopupSize(ctx, wFrac, hFrac, popupW, popupH);
     const auto style = TuiSurfaceStyle::fromTheme(theme);
-    return tuiSurfacePopup(style, title, scrollable.Render() | flex, tr("overlay.scrollHint"))
+    // 底栏: 选项关闭时不显示提示 (面性风格下底栏是独立分区, 无提示则不渲染)
+    const std::string footer = options.footer ? std::string{tr("overlay.scrollHint")} : std::string{};
+    return tuiSurfacePopup(style, title, scrollable.Render() | flex, footer)
            | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
            | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
 
 } // namespace
+
+OverlayOptions OverlayOptions::fromJson(std::string_view extraJson) {
+    OverlayOptions out;
+    if (extraJson.empty() || extraJson == "{}") {
+        return out;
+    }
+    try {
+        auto j = utilxx_base::Json::parse(extraJson);
+        if (!j.is_object()) {
+            return out;
+        }
+        out.size       = j.value("size", out.size);
+        out.widthFrac  = j.value("width_frac", out.widthFrac);
+        out.heightFrac = j.value("height_frac", out.heightFrac);
+        out.footer     = j.value("footer", out.footer);
+        out.stack      = j.value("stack", out.stack);
+        // scroll=false 视为"内容不需要滚动": 隐藏滚动提示 (与 footer=false 等效)
+        if (j.contains("scroll") && j["scroll"].is_boolean() && !j["scroll"].get<bool>()) {
+            out.footer = false;
+        }
+    } catch (...) {
+        return OverlayOptions{};
+    }
+    return out;
+}
+
+void OverlayOptions::resolveFractions(double& wFrac, double& hFrac) const {
+    // 预设比例: 紧凑 / 常规 / 大 / 全屏 (auto 与常规一致, 宽度由内容自适应)
+    double presetW = 0.6;
+    double presetH = 0.8;
+    if (size == "compact") {
+        presetW = 0.4;
+        presetH = 0.5;
+    } else if (size == "large") {
+        presetW = 0.8;
+        presetH = 0.8;
+    } else if (size == "full") {
+        presetW = 1.0;
+        presetH = 1.0;
+    }
+    wFrac = (widthFrac > 0.0 && widthFrac <= 1.0) ? widthFrac : presetW;
+    hFrac = (heightFrac > 0.0 && heightFrac <= 1.0) ? heightFrac : presetH;
+}
 
 TextOverlay::TextOverlay(TUICtx& ctx, std::string title, std::string content, bool markdown) :
     ctx_(ctx),
@@ -1561,7 +1605,7 @@ std::vector<ScrollItem> TextOverlay::buildItems() {
 }
 
 Element TextOverlay::OnRender() {
-    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, 3, 5);
+    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, options_);
 }
 
 bool TextOverlay::OnEvent(Event event) {
@@ -1594,6 +1638,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
     std::string_view      ownerPlugin,
     std::function<void()> onClose
 ) {
+    const OverlayOptions options = OverlayOptions::fromJson(extraJson);
     switch (type) {
         case AGENTXX_OVERLAY_MERMAID: {
             if (payload.empty()) {
@@ -1625,6 +1670,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
                 std::string(payload),
                 markdown
             );
+            m->setOptions(options);
             m->onClose(std::move(onClose));
             return m;
         }
@@ -1645,6 +1691,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
                 std::move(oldStr),
                 std::move(newStr)
             );
+            m->setOptions(options);
             m->onClose(std::move(onClose));
             return m;
         }
@@ -1666,6 +1713,7 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
                 std::move(items),
                 std::string(ownerPlugin)
             );
+            m->setOptions(options);
             m->onClose(std::move(onClose));
             return m;
         }
@@ -1701,7 +1749,7 @@ std::vector<ScrollItem> DiffOverlay::buildItems() {
 }
 
 Element DiffOverlay::OnRender() {
-    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, 4, 5);
+    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, options_);
 }
 
 bool DiffOverlay::OnEvent(Event event) {
@@ -1791,7 +1839,7 @@ CustomOverlay::CustomOverlay(
 }
 
 Element CustomOverlay::OnRender() {
-    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, 3, 5);
+    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, options_);
 }
 
 bool CustomOverlay::OnEvent(Event event) {

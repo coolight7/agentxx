@@ -17,9 +17,11 @@
 | P1.5 | 中断描述扩展（`raw` 透传 + `custom` 派发 + 扩展组件） | ✅ 已完成 |
 | P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ✅ 已完成 |
 | P1.7 | 测试（`ui_items` 199 项 + `tui_ui_items` 149 项） | ✅ 已完成 |
-| P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ⬜ 待开始 |
+| P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ✅ 已完成 |
 | P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
-| P2 其余 | 尺寸事件、overlay 尺寸选项、状态栏扩展 | ⬜ 待开始 |
+| P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
+| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ⬜ 待开始 |
+| P2.5 | 状态栏 segments / sparkline / meter（单行） | ⬜ 待开始 |
 | P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
 
 ---
@@ -162,6 +164,37 @@
 4. P3：`agentxx.client.timer` v1、`agentxx.client.keybind` v1 及对应 SDK/测试
 5. 文档：`plugins.md` §9 扩展 + 新增组件 schema 小节；`tui.md` §2.2/§2.6/§3；
    `index.md` 客户端 UI 节；`AGENTS.md` 记忆行
+
+---
+
+## 阶段 5：通用 overlay 尺寸与外观选项（已完成）
+
+`open_overlay` 的 `extra_json` 从"只消费 TEXT 的 markdown"扩展为完整选项
+（数据层，零 ABI 变更；老宿主忽略未知键）：
+
+- `size`: auto / compact / normal（缺省）/ large / full
+- `width_frac` / `height_frac`: 显式比例（与 `size` 同时给出时比例优先）
+- `footer`: 是否显示底栏提示；`scroll: false` 视为内容不需滚动（隐藏提示）
+- `stack`: 已有 overlay/核心弹窗时的策略 —— 缺省**替换**（last-wins，修正此前
+  "已有模态直接 return" 与接口注释不一致的漂移），`stack: true` 保留现有并丢弃本次
+
+实现：`OverlayOptions`（`components/overlays.h` 的 `fromJson` / `resolveFractions`）+
+`overlayFrame` 接受选项 + `createUniversalOverlay` 统一设置；测试见 `tui_surface`。
+
+---
+
+## 待完成任务（下一步）
+
+1. P2.3 尺寸感知：布局快照 + `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 +
+   `ClientPluginBase::regionSize()`（插件按可用宽度自行重排）
+2. P2.5 状态栏扩展：`{"segments":[...],"sparkline":[...],"meter":{...}}`（单行，复用
+   sparkline/meter 实现）
+3. 中断控件布局迁移到共享实现（`InterruptView::layoutControl/layoutSubmit` 改用
+   `ui_components` 的控件渲染 + `UiFormState`，保持结果契约不变；已完成的表单交互
+   逻辑与中断的差异只剩"结果去处"）
+4. P3：`agentxx.client.timer` v1（一次性/周期定时器 + 可见性/动画等级门控）、
+   `agentxx.client.keybind` v1（全局快捷键注册与派发）及对应 SDK/测试
+5. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
 
 ---
 

@@ -505,6 +505,29 @@ private:
     std::function<void()> onClearLogs_;
 };
 
+/// 通用 overlay 的尺寸与外观选项 (`AgentxxOverlaySpec.extra_json`, 数据层扩展)
+///
+/// 示例: `{"size":"large","height_frac":0.6,"footer":false,"stack":true}`
+/// - `size`: auto / compact / normal (缺省) / large / full
+/// - `width_frac` / `height_frac`: 显式比例 (0~1; 与 `size` 同时给出时以它为准)
+/// - `footer`: 是否显示底栏提示 (缺省显示)
+/// - `scroll`: 内容是否需要滚动; `false` 时隐藏滚动提示 (与 `footer:false` 等效)
+/// - `stack`: 已有 overlay 打开时是否保留现有 overlay (缺省替换, 见 openOverlay)
+/// - 未知键忽略 (老宿主同样忽略), 非法值回退缺省
+struct OverlayOptions {
+    std::string size       = "normal";
+    double      widthFrac  = 0.0; ///< 0 = 用 `size` 预设
+    double      heightFrac = 0.0; ///< 0 = 用 `size` 预设
+    bool        footer     = true;
+    bool        stack      = false;
+
+    /// 解析 `extra_json` (空/非法输入返回缺省选项)
+    static OverlayOptions fromJson(std::string_view extraJson);
+
+    /// 合成宽高比例 (0~1), 供外框按终端尺寸换算像素宽高
+    void resolveFractions(double& wFrac, double& hFrac) const;
+};
+
 /// 通用文本 overlay (open_overlay TEXT 驱动; payload=原文, extra={"markdown":bool})
 ///
 /// - markdown=true (缺省): 按 markdown 主题渲染 (mermaid 围栏渲染为状态图)
@@ -517,6 +540,11 @@ public:
 
     void onClose(std::function<void()> fn) {
         onClose_ = std::move(fn);
+    }
+
+    /// 设置尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
+    void setOptions(const OverlayOptions& options) {
+        options_ = options;
     }
 
     bool           OnEvent(ftxui::Event event) override;
@@ -532,6 +560,8 @@ private:
     bool                        markdown_;
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
+    /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
+    OverlayOptions options_;
 
     /// markdown 渲染缓存 (DomBuilder 生命周期与 Element 绑定, 见 attachments)
     std::vector<std::shared_ptr<void>> cachedAttachments_;
@@ -562,6 +592,11 @@ public:
         onClose_ = std::move(fn);
     }
 
+    /// 设置尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
+    void setOptions(const OverlayOptions& options) {
+        options_ = options;
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -576,6 +611,9 @@ private:
     std::string                 newStr_;
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
+
+    /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
+    OverlayOptions options_;
 };
 
 /// 通用自定义 overlay (open_overlay CUSTOM 驱动; payload={"items":[...]})
@@ -599,6 +637,11 @@ public:
         onClose_ = std::move(fn);
     }
 
+    /// 设置尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
+    void setOptions(const OverlayOptions& options) {
+        options_ = options;
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -615,6 +658,9 @@ private:
 
     /// 折叠分组的展开状态 (键 = 组件 id; 宿主维护, 点击标题切换)
     std::map<std::string, bool, std::less<>> collapseStates_;
+
+    /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
+    OverlayOptions options_;
 
     /// 表单状态与当前组件树 (控件值/勾选/选中/焦点; 由宿主维护, 见 ui_components.h)
     agentxx::client::UiFormState   form_;
