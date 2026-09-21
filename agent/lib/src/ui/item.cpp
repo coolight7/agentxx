@@ -276,7 +276,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     if (item.kind == "progress") {
         item.kind = "meter";
     }
-    const std::string_view controlAlias = controlAliasOf(item.kind);
+    const std::string controlAlias{controlAliasOf(item.kind)};
     if (!controlAlias.empty()) {
         item.kind = "control";
     }
@@ -552,8 +552,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         return item;
     }
     if (item.kind == "control") {
-        item.control      = readString(json, "control", controlAlias);
-        item.controlLabel = clampTextImpl(readStringAny(json, {"label"}), limits.maxTextBytes);
+        item.control      = readString(json, "control", controlAlias);        item.controlLabel = clampTextImpl(readStringAny(json, {"label"}), limits.maxTextBytes);
         item.help         = clampTextImpl(readString(json, "help"), limits.maxTextBytes);
         if (const Json* def = field(json, "default")) {
             item.defaultValue = *def;

@@ -22,8 +22,10 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/middlewares/interrupt_ui.h"
 #include "agentxx/ui/item.h"
+#include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "markdown/dom_builder.hpp"
+#include "utilxx_base/json.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -157,6 +159,51 @@ size_t measureItems(const std::vector<agentxx::ui::Item>& items, const UiRenderC
 
 /// 取组件项使用的语义色 (与 [uiRoleColor] 同一映射)
 ftxui::Color itemColor(std::string_view color, const TUITheme& theme);
+
+// ---------------------------------------------------------------------------
+// 表单交互 (面板/Info 段落/overlay 的表单共用; 中断表单沿用自身状态结构)
+// ---------------------------------------------------------------------------
+
+/// 表单交互结果
+enum class UiFormAction : uint8_t {
+    None    = 0, ///< 未产生变化
+    Changed = 1, ///< 状态已变化 (调用方应重绘)
+    Submit  = 2, ///< 请求提交 (调用方组装值并经动作通道回传)
+    Cancel  = 3, ///< 请求取消
+};
+
+/// 处理控件区域命中 (更新表单状态)
+/// - checkbox: 翻转勾选态; buttons/select: 选中 `sub` 指定的候选项;
+///   number: sub 0/1 为减/加, sub 2 为聚焦输入框; text: 聚焦输入框
+/// - `commitOnPick` 的候选项点击后返回 `Submit`
+/// - 未命中 (控件不存在 / sub 越界) 返回 `None`
+UiFormAction handleFormControlHit(
+    const std::vector<agentxx::ui::Item>& items,
+    UiFormState&                          form,
+    std::string_view                      controlId,
+    int                                   sub
+);
+
+/// 处理提交行命中 (id 为 `__submit` / `__cancel`)
+UiFormAction handleFormSubmitHit(std::string_view actionId);
+
+/// 键盘输入作用于当前焦点控件 (返回 true 表示已消费该事件)
+/// - 可打印字符追加到输入框; Backspace 删除一个字符; Delete 清空;
+///   Tab / Shift+Tab 在控件间移动焦点; Escape 释放焦点
+/// - 回车与提交由调用方处理 (本方法不消费回车)
+bool handleFormKeyInput(
+    const std::vector<agentxx::ui::Item>& items,
+    UiFormState&                          form,
+    const ftxui::Event&                   event
+);
+
+/// 校验全部控件 (number 的范围/步进; 失败时写各控件 `tip` 并返回 false)
+bool validateForm(const std::vector<agentxx::ui::Item>& items, UiFormState& form);
+
+/// 组装提交值: `{"values": {控件 id: 值}}`
+/// - checkbox → 布尔; buttons/select → 候选项 value; number → 数值; text → 字符串
+/// - 未初始化的控件按描述缺省值取值
+utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiFormState& form);
 
 /// 按组件描述初始化表单状态 (缺省值/选中项/勾选态/编辑文本)
 /// - 已初始化的控件不会被覆盖 (保留用户输入); 递归处理容器内的控件

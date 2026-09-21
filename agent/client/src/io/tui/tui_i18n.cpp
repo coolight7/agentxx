@@ -196,6 +196,9 @@ constexpr Entry kTable[] = {
     {"ui.submit",                 "Submit",                                               "提交"                                                                                       },
     {"ui.cancel",                 "Cancel",                                               "取消"                                                                                       },
     {"ui.none",                   "(none)",                                               "(无)"                                                                                       },
+    {"ui.invalidNumber",          "( Invalid number, please input again. )",              "( 无效数字, 请重新输入。 )"                                                                 },
+    {"ui.invalidInteger",         "( Invalid integer, please input again. )",             "( 无效整数, 请重新输入。 )"                                                                 },
+    {"ui.outOfRange",             "( Out of range (limit: {}), please input again. )",    "( 超出范围 (限制: {}), 请重新输入。 )"                                                      },
     {"interrupt.tipNoOptions",
      "( This control has no selectable option. )",                                       "( 该控件没有可选候选项。 )"                                                            },
 

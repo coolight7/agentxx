@@ -1747,7 +1747,7 @@ CustomOverlay::CustomOverlay(
             ownerGeneration_ = regPtr->generationOf(ownerPlugin_);
         }
 
-        UiRenderCtx rc;
+        agentxx::client::UiRenderCtx rc;
         rc.theme    = &theme;
         rc.width    = ctx_.terminalSize().dimx - 8;
         rc.indent   = 2;
@@ -1763,9 +1763,13 @@ CustomOverlay::CustomOverlay(
             collapseStates_.emplace(id, defaultValue);
             return defaultValue;
         };
+        // 表单状态: 按最新描述初始化 (保留用户已编辑的值), 控件交互由本组件处理
+        formItems_ = agentxx::ui::parseItemList(items_);
+        agentxx::client::initFormState(form_, formItems_);
+        rc.form = &form_;
 
         UiRenderResult res;
-        renderItems(agentxx::ui::parseItemList(items_), rc, res);
+        agentxx::client::renderItems(formItems_, rc, res);
         if (!res.builders.empty()) {
             mdBuilders_ = std::move(res.builders);
         }
@@ -1810,8 +1814,9 @@ bool CustomOverlay::OnEvent(Event event) {
             const auto& rows = scrollable_->items();
             if (index < rows.size()) {
                 const auto* region = matchUiHitRegion(rows[index].hits, localX, localY);
-                if (region != nullptr && region->kind == UiHitRegionKind::Collapse
-                    && mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+                const bool  clicked = (mouse.button == Mouse::Left
+                                      && mouse.motion == Mouse::Released);
+                if (region != nullptr && region->kind == UiHitRegionKind::Collapse && clicked) {
                     bool current = true;
                     if (auto it = collapseStates_.find(region->id);
                         it != collapseStates_.end()) {
@@ -1821,8 +1826,40 @@ bool CustomOverlay::OnEvent(Event event) {
                     ctx_.postRedraw();
                     return true;
                 }
-                if (region != nullptr && region->kind == UiHitRegionKind::Action
-                    && mouse.button == Mouse::Left && mouse.motion == Mouse::Released) {
+                if (region != nullptr && region->kind == UiHitRegionKind::Form && clicked) {
+                    const auto action = agentxx::client::handleFormControlHit(
+                        formItems_,
+                        form_,
+                        region->id,
+                        region->sub
+                    );
+                    if (action != agentxx::client::UiFormAction::None) {
+                        if (action == agentxx::client::UiFormAction::Submit) {
+                            submitForm();
+                        }
+                        ctx_.postRedraw();
+                        return true;
+                    }
+                }
+                if (region != nullptr && region->kind == UiHitRegionKind::FormSubmit && clicked) {
+                    const auto action = agentxx::client::handleFormSubmitHit(region->id);
+                    if (action == agentxx::client::UiFormAction::Submit) {
+                        submitForm();
+                    } else if (action == agentxx::client::UiFormAction::Cancel) {
+                        if (auto mgr = ctx_.pluginManager) {
+                            mgr->dispatchAction(
+                                ownerPlugin_,
+                                AGENTXX_CLIENT_OVERLAY_OWNER,
+                                std::string{agentxx::client::kFormCancelActionId},
+                                "{}",
+                                ownerGeneration_
+                            );
+                        }
+                    }
+                    ctx_.postRedraw();
+                    return true;
+                }
+                if (region != nullptr && region->kind == UiHitRegionKind::Action && clicked) {
                     if (auto mgr = ctx_.pluginManager) {
                         mgr->dispatchAction(
                             ownerPlugin_,
@@ -1843,10 +1880,39 @@ bool CustomOverlay::OnEvent(Event event) {
         }
         return true;
     }
+    // 表单键盘输入 (有焦点时字符键进入控件)
+    if (!form_.focusedId.empty()) {
+        if (event == Event::Return) {
+            submitForm();
+            ctx_.postRedraw();
+            return true;
+        }
+        if (agentxx::client::handleFormKeyInput(formItems_, form_, event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+    }
     if (overlayScrollByKey(ctx_, scrollable_, event)) {
         return true;
     }
     return true;
+}
+
+void CustomOverlay::submitForm() {
+    if (!agentxx::client::validateForm(formItems_, form_)) {
+        return;
+    }
+    if (auto mgr = ctx_.pluginManager) {
+        const std::string values
+            = agentxx::client::formValues(formItems_, form_).dump();
+        mgr->dispatchAction(
+            ownerPlugin_,
+            AGENTXX_CLIENT_OVERLAY_OWNER,
+            std::string{agentxx::client::kFormSubmitActionId},
+            values,
+            ownerGeneration_
+        );
+    }
 }
 
 } // namespace agentxx::client

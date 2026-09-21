@@ -15,10 +15,11 @@
 | P1.3 | 子区域命中（`UiHitRegion` / `addRegions` / `Scrollable::hitTestItem`） | ✅ 已完成 |
 | P1.4 | 接入点收敛（面板 / Info / 装饰 / overlay / 中断内容块） | ✅ 已完成 |
 | P1.5 | 中断描述扩展（`raw` 透传 + `custom` 派发 + 扩展组件） | ✅ 已完成 |
-| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | 🟡 构建器已完成，SDK 便捷方法待做 |
-| P1.7 | 测试（`ui_items` 193 项 + `tui_ui_items` 98 项） | ✅ 已完成 |
+| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ✅ 已完成 |
+| P1.7 | 测试（`ui_items` 199 项 + `tui_ui_items` 149 项） | ✅ 已完成 |
 | P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ⬜ 待开始 |
-| P2 | 表单状态与提交派发、尺寸事件、overlay 选项、状态栏扩展 | ⬜ 待开始 |
+| P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
+| P2 其余 | 尺寸事件、overlay 尺寸选项、状态栏扩展 | ⬜ 待开始 |
 | P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
 
 ---
@@ -112,7 +113,43 @@
 
 ---
 
-## 待完成任务（下一步）
+## 阶段 3：SDK 便捷方法（已完成）
+
+`agent/lib/include/agentxx/plugin/api/plugin_kit.h` 的 `ClientPluginBase` 新增：
+
+- `setPanelItems(panel, ui)` / `setPanelJson(panel, json)`：面板内容直接提交组件树
+- `setInfoSectionItems(section, ui)` / `setStatusText(item, text)` / `setStatusJson(item, json)`
+- `showItemsOverlay(title, ui, extraJson)` / `showOverlay(type, title, payload, extraJson)`
+- `hostSupports(capability)` / `clientStateJson()`：能力协商查询（解析客户端状态里的 `interfaces`）
+
+---
+
+## 阶段 4：表单交互（已完成）
+
+控件（checkbox / select / buttons / number / text）与提交行在**面板、Info 段落、通用 overlay**
+里都可交互，状态由宿主维护、结果经既有动作通道回传：
+
+- 共享交互实现：`ui_components.h` 的 `handleFormControlHit` / `handleFormSubmitHit` /
+  `handleFormKeyInput` / `validateForm` / `formValues` / `initFormState`
+- 归属状态：`TUIClientAgentIO::pluginForms_`（键 = 面板 id / 段落 id）；
+  `CustomOverlay` 内另有独立表单状态（键 = `__overlay`）
+- 结果契约：提交 → 动作 id `__submit`、参数 `{"values":{控件 id: 值}}`；
+  取消 → `__cancel`；`commitOnPick` 的候选项点击即提交（`actionId = 控件 id`）
+- 键盘：点击控件即聚焦（`formFocusedOwner_`），字符键/退格/Delete 编辑，Tab 在控件间移动，
+  Esc 释放焦点，回车提交；数值框过滤非数字字符，提交前校验范围（失败写提示不提交）
+- 面板/段落内容更新时按描述补齐并清理控件状态（描述里已删除的控件不残留）
+
+### 测试
+
+- `tui_ui_items` 新增 51 项断言：初始化、点击命中（勾选/选中/步进/越界/未知控件）、
+  键盘输入（替换缺省值/退格/Tab/数值过滤/Esc）、校验与取值、容器内控件
+
+### 踩坑
+
+- `controlAliasOf(item.kind)` 返回的是 `string_view`，指向 `item.kind` 的缓冲区；
+  先取 view 再改写 `item.kind` 会让它悬空（短字符串共用同一缓冲区）→ 必须先拷贝成 `std::string`
+- `formValues` 递归合并时不要把内层 `{"values":{...}}` 整包并进外层（会多一层嵌套），
+  应把控件值收集到同一层对象
 
 1. P1.6 SDK 便捷方法（`plugin_kit.h`：`setPanelItems` / `showOverlay` / `regionSize` 等）
 3. P2：

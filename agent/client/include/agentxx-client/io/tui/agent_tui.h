@@ -340,6 +340,39 @@ public:
     /// (上一帧元素可能仍被滚动容器的子项缓存持有)。
     std::vector<std::vector<std::unique_ptr<markdown::DomBuilder>>> sidebarMdBuilders_;
 
+    /// 插件表单 (面板 / Info 段落 / overlay 的控件): 归属 id → 状态 + 最近一次描述
+    ///
+    /// 控件值、勾选态、选中项与校验提示都由宿主维护 (UI 线程独占), 插件只收到
+    /// 提交结果 (`{"values":{控件 id: 值}}` 经动作通道回传), 不进入 UI 线程。
+    struct PluginFormData {
+        /// 归属插件名 (动作派发需要)
+        std::string                    plugin;
+        agentxx::client::UiFormState   state;
+        std::vector<agentxx::ui::Item> items;
+    };
+
+    /// 归属 id → 表单数据 (键 = 面板 id / Info 段落 id)
+    std::map<std::string, PluginFormData, std::less<>> pluginForms_;
+
+    /// 当前拥有键盘焦点的表单归属 id (空 = 无焦点; 有焦点时字符键进入该表单)
+    std::string formFocusedOwner_;
+
+    /// 取/刷新某归属的表单数据 (按最新描述初始化控件, 保留用户已编辑的值)
+    /// - 返回映射内引用 (调用方直接修改状态; 键不存在时创建)
+    /// - 控件状态变化后调用方应 [`postRedraw`] 触发重绘
+    PluginFormData&
+        formFor(const std::string& ownerId, const std::string& plugin, std::vector<agentxx::ui::Item> items);
+
+    /// 侧边栏表单键盘输入 (UI 线程; 有焦点且已消费返回 true)
+    bool handleSidebarFormKey(const ftxui::Event& event);
+
+    /// 提交表单 (校验 → 组装 `{"values":{...}}` → 动作通道回传 __submit)
+    /// - 校验失败时写各控件提示并重绘 (不提交)
+    bool submitSidebarForm(const std::string& ownerId, const std::string& plugin);
+
+    /// 取消表单 (动作通道回传 __cancel)
+    bool cancelSidebarForm(const std::string& ownerId, const std::string& plugin);
+
     /// 显示 toast (任意线程可调用; 内部投递到 UI 线程)
     void uiToast(std::string text, int level);
 

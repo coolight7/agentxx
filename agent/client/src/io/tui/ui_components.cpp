@@ -1428,6 +1428,335 @@ std::vector<std::string> collectControlIds(const std::vector<agentxx::ui::Item>&
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// 表单交互
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 在组件树内按 id 找控件 (含容器内; 找不到返回 nullptr)
+const agentxx::ui::Item* findControl(
+    const std::vector<agentxx::ui::Item>& items,
+    std::string_view                      id
+) {
+    for (const auto& item : items) {
+        if (item.kind == "control" && item.id == id) {
+            return &item;
+        }
+        if (!item.items.empty()) {
+            if (const auto* hit = findControl(item.items, id); hit != nullptr) {
+                return hit;
+            }
+        }
+    }
+    return nullptr;
+}
+
+/// 按描述取缺省编辑文本
+std::string defaultEditText(const agentxx::ui::Item& item) {
+    return controlEditText(item, nullptr);
+}
+
+/// 数值文本 → 数值 (解析失败返回缺省值)
+double parseNumber(const std::string& text, bool integer, double fallback) {
+    if (text.empty()) {
+        return fallback;
+    }
+    char*  end = nullptr;
+    double v   = std::strtod(text.c_str(), &end);
+    if (end == nullptr || *end != '\0') {
+        return fallback;
+    }
+    return integer ? std::round(v) : v;
+}
+
+/// 删除一个 UTF-8 码点 (末尾可能为多字节字符)
+void popCodePoint(std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+    size_t i = text.size();
+    while (i > 0 && (static_cast<unsigned char>(text[i - 1]) & 0xC0) == 0x80) {
+        --i;
+    }
+    if (i > 0) {
+        --i;
+    }
+    text.erase(i);
+}
+
+/// 校验单个数值控件 (写 tip; 返回是否通过)
+bool validateNumber(const agentxx::ui::Item& item, UiFormControlState& state) {
+    const std::string text = state.edited ? state.editText : defaultEditText(item);
+    if (text.empty()) {
+        state.tip = tr("ui.invalidNumber");
+        return false;
+    }
+    char*  end = nullptr;
+    double v   = std::strtod(text.c_str(), &end);
+    if (end == nullptr || *end != '\0') {
+        state.tip = item.integer ? std::string{tr("ui.invalidInteger")}
+                                 : std::string{tr("ui.invalidNumber")};
+        return false;
+    }
+    if (item.integer && std::fabs(v - std::round(v)) > 1e-9) {
+        state.tip = std::string{tr("ui.invalidInteger")};
+        return false;
+    }
+    if (item.hasNumMin && v < item.numMin) {
+        state.tip = trf("ui.outOfRange", numText(item.numMin));
+        return false;
+    }
+    if (item.hasNumMax && v > item.numMax) {
+        state.tip = trf("ui.outOfRange", numText(item.numMax));
+        return false;
+    }
+    state.tip.clear();
+    return true;
+}
+
+} // namespace
+
+UiFormAction handleFormControlHit(
+    const std::vector<agentxx::ui::Item>& items,
+    UiFormState&                          form,
+    std::string_view                      controlId,
+    int                                   sub
+) {
+    const agentxx::ui::Item* item = findControl(items, controlId);
+    if (item == nullptr || item->id.empty()) {
+        return UiFormAction::None;
+    }
+    auto& state = form.ensure(item->id);
+    if (!state.initialized) {
+        UiFormState tmp;
+        initFormState(tmp, items);
+        if (const auto* init = tmp.find(item->id); init != nullptr) {
+            state = *init;
+        } else {
+            state.initialized = true;
+        }
+    }
+    form.focusedId = item->id;
+    state.tip.clear();
+
+    if (item->control == "checkbox") {
+        state.checked = !state.checked;
+        ++form.version;
+        return UiFormAction::Changed;
+    }
+    if (item->control == "buttons" || item->control == "select") {
+        if (sub < 0 || sub >= static_cast<int>(item->options.size())) {
+            return UiFormAction::None;
+        }
+        state.selected = sub;
+        ++form.version;
+        return item->commitOnPick ? UiFormAction::Submit : UiFormAction::Changed;
+    }
+    if (item->control == "number") {
+        if (sub == 2) {
+            // 聚焦输入框 (首次聚焦时把缺省值填入编辑文本)
+            if (!state.edited) {
+                state.editText = defaultEditText(*item);
+            }
+            ++form.version;
+            return UiFormAction::Changed;
+        }
+        const double step  = (item->step > 0) ? item->step : 1.0;
+        const double base  = parseNumber(
+            state.edited ? state.editText : defaultEditText(*item),
+            item->integer,
+            0.0
+        );
+        double v = base + ((sub == 1) ? step : -step);
+        if (item->hasNumMin) {
+            v = std::max(v, item->numMin);
+        }
+        if (item->hasNumMax) {
+            v = std::min(v, item->numMax);
+        }
+        state.editText = numText(v);
+        state.edited   = true;
+        ++form.version;
+        return UiFormAction::Changed;
+    }
+    if (item->control == "text") {
+        if (!state.edited) {
+            state.editText = defaultEditText(*item);
+        }
+        ++form.version;
+        return UiFormAction::Changed;
+    }
+    return UiFormAction::None;
+}
+
+UiFormAction handleFormSubmitHit(std::string_view actionId) {
+    if (actionId == kFormSubmitActionId) {
+        return UiFormAction::Submit;
+    }
+    if (actionId == kFormCancelActionId) {
+        return UiFormAction::Cancel;
+    }
+    return UiFormAction::None;
+}
+
+bool handleFormKeyInput(
+    const std::vector<agentxx::ui::Item>& items,
+    UiFormState&                          form,
+    const ftxui::Event&                   event
+) {
+    const auto ids = collectControlIds(items);
+    if (ids.empty()) {
+        return false;
+    }
+    // Escape: 释放焦点
+    if (event == ftxui::Event::Escape) {
+        if (form.focusedId.empty()) {
+            return false;
+        }
+        form.focusedId.clear();
+        ++form.version;
+        return true;
+    }
+    // Tab / Shift+Tab: 在控件间移动焦点
+    if (event == ftxui::Event::Tab || event == ftxui::Event::TabReverse) {
+        const bool forward = (event == ftxui::Event::Tab);
+        int        current = -1;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            if (ids[i] == form.focusedId) {
+                current = static_cast<int>(i);
+                break;
+            }
+        }
+        const int n   = static_cast<int>(ids.size());
+        int       next = forward ? (current + 1) % n : ((current <= 0 ? n : current) - 1);
+        form.focusedId = ids[static_cast<size_t>(std::max(0, next))];
+        if (auto& state = form.ensure(form.focusedId); !state.initialized) {
+            UiFormState tmp;
+            initFormState(tmp, items);
+            if (const auto* init = tmp.find(form.focusedId); init != nullptr) {
+                state = *init;
+            }
+        }
+        ++form.version;
+        return true;
+    }
+    if (form.focusedId.empty()) {
+        return false;
+    }
+    const agentxx::ui::Item* item = findControl(items, form.focusedId);
+    if (item == nullptr) {
+        return false;
+    }
+    // 只有输入类控件接受字符编辑
+    const bool editable = (item->control == "text" || item->control == "number");
+    if (!editable) {
+        return false;
+    }
+    auto& state = form.ensure(item->id);
+    if (!state.initialized) {
+        state.initialized = true;
+        state.editText    = defaultEditText(*item);
+    }
+    if (!state.edited) {
+        // 首次输入: 替换缺省值 (与输入框激活语义一致)
+        state.editText = defaultEditText(*item);
+        state.edited   = true;
+    }
+    if (event.is_character()) {
+        const std::string ch = event.character();
+        if (item->control == "number") {
+            // 数值框只接受数字与一个小数点/负号
+            for (char c : ch) {
+                const bool ok = std::isdigit(static_cast<unsigned char>(c)) != 0
+                                || c == '.' || c == '-' || c == '+';
+                if (!ok) {
+                    return true; // 消费但忽略
+                }
+            }
+        }
+        state.editText += ch;
+        state.tip.clear();
+        ++form.version;
+        return true;
+    }
+    if (event == ftxui::Event::Backspace) {
+        popCodePoint(state.editText);
+        state.tip.clear();
+        ++form.version;
+        return true;
+    }
+    if (event == ftxui::Event::Delete) {
+        state.editText.clear();
+        state.tip.clear();
+        ++form.version;
+        return true;
+    }
+    return false;
+}
+
+bool validateForm(const std::vector<agentxx::ui::Item>& items, UiFormState& form) {
+    bool ok = true;
+    for (const auto& item : items) {
+        if (item.kind == "control" && !item.id.empty() && item.control == "number") {
+            auto& state = form.ensure(item.id);
+            if (!state.initialized) {
+                state.initialized = true;
+                state.editText    = defaultEditText(item);
+            }
+            if (!validateNumber(item, state)) {
+                ok = false;
+            }
+        }
+        if (!item.items.empty() && !validateForm(item.items, form)) {
+            ok = false;
+        }
+    }
+    ++form.version;
+    return ok;
+}
+
+utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiFormState& form) {
+    utilxx_base::Json values = utilxx_base::Json::object();
+    /// 递归收集控件值到同一层对象 (容器内的控件与顶层控件平级)
+    std::function<void(const std::vector<agentxx::ui::Item>&)> collect
+        = [&](const std::vector<agentxx::ui::Item>& list) {
+              for (const auto& item : list) {
+                  if (item.kind == "control" && !item.id.empty()) {
+                      auto& state = form.ensure(item.id);
+                      if (!state.initialized) {
+                          initFormState(form, {item});
+                      }
+                      if (item.control == "checkbox") {
+                          values[item.id] = state.checked;
+                      } else if (item.control == "buttons" || item.control == "select") {
+                          const int idx = std::clamp(
+                              state.selected,
+                              0,
+                              std::max(0, static_cast<int>(item.options.size()) - 1)
+                          );
+                          if (!item.options.empty()) {
+                              values[item.id] = item.options[static_cast<size_t>(idx)].value;
+                          }
+                      } else if (item.control == "number") {
+                          const std::string text
+                              = state.edited ? state.editText : defaultEditText(item);
+                          values[item.id] = parseNumber(text, item.integer, 0.0);
+                      } else {
+                          values[item.id] = state.edited ? state.editText : defaultEditText(item);
+                      }
+                  }
+                  if (!item.items.empty()) {
+                      collect(item.items);
+                  }
+              }
+          };
+    collect(items);
+    utilxx_base::Json out = utilxx_base::Json::object();
+    out["values"]         = std::move(values);
+    return out;
+}
+
 std::optional<agentxx::ui::Item>
     itemFromInterruptBlock(const middleware::InterruptUiBlock& block) {
     agentxx::ui::Item item;

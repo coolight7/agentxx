@@ -13,6 +13,7 @@
 #pragma once
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/ui/build.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -2338,6 +2339,123 @@ public:
 
     void registerTemplate(std::string_view tool, std::string_view display, std::string_view key) {
         registerToolTemplate(host, iface.ui, tool, display, key);
+    }
+
+    // ==================== 展示扩展便捷方法 ====================
+    //
+    // 这些方法是展示注册接口的薄封装: 把 `agentxx::ui::Items` 构建器 (见
+    // [build.h](/agent/lib/include/agentxx/ui/build.h)) 直接提交给面板/Info 段落/
+    // overlay, 避免各处手写 JSON 拼装。宿主不支持对应子能力时返回非 0, 插件应
+    // 按返回值降级 (通常是改用更简单的组件或纯文本)。
+
+    /// 更新面板内容 (组件树直接提交)
+    int32_t setPanelItems(AgentxxPanel* panel, const agentxx::ui::Items& ui) const {
+        if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
+            return -1;
+        }
+        const std::string json = ui.dump();
+        auto              sv   = PluginStringView::from(json.data(), json.size());
+        return iface.ui->update_panel(host, panel, &sv);
+    }
+
+    /// 更新面板内容 (原始 items JSON, 形态同 `{"items":[...]}` 或裸数组)
+    int32_t setPanelJson(AgentxxPanel* panel, std::string_view itemsJson) const {
+        if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
+            return -1;
+        }
+        auto sv = PluginStringView::from(itemsJson.data(), itemsJson.size());
+        return iface.ui->update_panel(host, panel, &sv);
+    }
+
+    /// 更新 Info 栏段落内容 (组件树直接提交)
+    int32_t setInfoSectionItems(AgentxxInfoSection* section, const agentxx::ui::Items& ui) const {
+        if (!host || !iface.ui || !iface.ui->update_info_section || section == nullptr) {
+            return -1;
+        }
+        const std::string json = ui.dump();
+        auto              sv   = PluginStringView::from(json.data(), json.size());
+        return iface.ui->update_info_section(host, section, &sv);
+    }
+
+    /// 更新状态栏项文本 (参数为 `{"text":"...","tooltip":"..."}` 形态的 JSON)
+    int32_t setStatusJson(AgentxxStatusItem* item, std::string_view json) const {
+        if (!host || !iface.ui || !iface.ui->update_status_item || item == nullptr) {
+            return -1;
+        }
+        auto sv = PluginStringView::from(json.data(), json.size());
+        return iface.ui->update_status_item(host, item, &sv);
+    }
+
+    /// 更新状态栏项文本 (仅文本, 由本方法组装 JSON)
+    int32_t setStatusText(AgentxxStatusItem* item, std::string_view text) const {
+        utilxx_base::Json json = utilxx_base::Json::object();
+        json["text"]           = text;
+        return setStatusJson(item, json.dump());
+    }
+
+    /// 打开自定义 overlay (组件树作为内容)
+    /// - `extraJson` 为扩展 JSON (如 `{"size":"large"}`), 可空
+    int32_t showItemsOverlay(
+        std::string_view        title,
+        const agentxx::ui::Items& ui,
+        std::string_view        extraJson = {}
+    ) const {
+        return showOverlay(AGENTXX_OVERLAY_CUSTOM, title, ui.dump(), extraJson);
+    }
+
+    /// 打开通用 overlay (type 见 AgentxxOverlayType; payload 语义随类型)
+    int32_t showOverlay(
+        int              type,
+        std::string_view title,
+        std::string_view payload,
+        std::string_view extraJson = {}
+    ) const {
+        if (!host || !iface.ui || !iface.ui->open_overlay) {
+            return -1;
+        }
+        AgentxxOverlaySpec spec{};
+        spec.version    = 1;
+        spec.type       = type;
+        spec.title      = PluginStringView::from(title.data(), title.size());
+        spec.payload    = PluginStringView::from(payload.data(), payload.size());
+        spec.extra_json = PluginStringView::from(extraJson.data(), extraJson.size());
+        return iface.ui->open_overlay(host, &spec);
+    }
+
+    // ==================== 能力协商查询 ====================
+
+    /// 宿主是否声明了某个能力名 (查 `get_client_state().interfaces`)
+    /// - 能力名常量见 `agentxx/plugin/plugin_interfaces.h` 的 plugin_interfaces 命名空间
+    ///   (如 "agentxx.client.components" / "agentxx.client.form")
+    /// - 老宿主未提供该能力时返回 false, 插件据此降级 (不报错、不静默丢内容)
+    bool hostSupports(std::string_view capability) const {
+        if (capability.empty()) {
+            return false;
+        }
+        const auto state = clientStateJson();
+        const auto it    = state.find("interfaces");
+        if (it == state.end() || !it->is_array()) {
+            return false;
+        }
+        for (const auto& entry : *it) {
+            if (entry.is_string() && entry.get_string_view() == capability) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// 当前 client 状态解析结果 (解析失败返回空对象)
+    utilxx_base::Json clientStateJson() const {
+        const std::string text = clientState();
+        if (text.empty() || text == "{}") {
+            return utilxx_base::Json::object();
+        }
+        try {
+            return utilxx_base::Json::parse(text);
+        } catch (...) {
+            return utilxx_base::Json::object();
+        }
     }
 
     template<typename Fn>

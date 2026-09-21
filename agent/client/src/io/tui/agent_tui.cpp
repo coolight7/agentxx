@@ -299,6 +299,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
         avail = sidebar_ ? sidebar_->width() - 4 : 40;
     }
 
+    // 表单状态: 按最新描述初始化并保留用户已编辑的值 (含控件状态清理)
+    auto  parsed = agentxx::ui::parseItemList(panel->items);
+    auto& form   = formFor(panel->id, panel->plugin, std::move(parsed));
+
     agentxx::client::UiRenderCtx rc;
     rc.theme            = &theme_;
     rc.width            = avail;
@@ -306,12 +310,13 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     rc.plugin           = panel->plugin;
     rc.ownerId          = panel->id;
     rc.registry         = reg.get();
+    rc.form             = &form.state;
     rc.collapseExpanded = [this, ownerId = panel->id](const std::string& id, bool defaultValue) {
         return collapseExpanded(ownerId, id, defaultValue);
     };
 
     agentxx::client::UiRenderResult res;
-    agentxx::client::renderItems(agentxx::ui::parseItemList(panel->items), rc, res);
+    renderItems(form.items, rc, res);
 
     out.reserve(res.rows.size());
     if (!res.builders.empty()) {
@@ -727,6 +732,11 @@ void TUIClientAgentIO::start() {
             // 模态弹窗打开时: 键盘优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
             if (modal_->hasModal()) {
                 return false;
+            }
+            // 侧边栏表单焦点 (面板/Info 段落内的控件): 有焦点时输入先进入表单,
+            // 避免字符被输入栏抢走; 未消费再走全局快捷键与输入栏
+            if (formFocusedOwner_.size() > 0 && handleSidebarFormKey(event)) {
+                return true;
             }
             if (event == Event::F2) {
                 openModelSelector();
@@ -1243,6 +1253,98 @@ bool TUIClientAgentIO::collapseExpanded(
     return defaultValue;
 }
 
+TUIClientAgentIO::PluginFormData& TUIClientAgentIO::formFor(
+    const std::string&             ownerId,
+    const std::string&             plugin,
+    std::vector<agentxx::ui::Item> items
+) {
+    auto& data  = pluginForms_[ownerId];
+    data.plugin = plugin;
+    data.items  = std::move(items);
+    // 按描述补齐控件状态 (已初始化的控件保留用户输入)
+    agentxx::client::initFormState(data.state, data.items);
+    // 清理描述中已不存在的控件状态 (内容更新后不残留)
+    const auto ids = agentxx::client::collectControlIds(data.items);
+    for (auto it = data.state.controls.begin(); it != data.state.controls.end();) {
+        const bool exists = std::find(ids.begin(), ids.end(), it->first) != ids.end();
+        it                = exists ? std::next(it) : data.state.controls.erase(it);
+    }
+    if (!data.state.focusedId.empty()
+        && std::find(ids.begin(), ids.end(), data.state.focusedId) == ids.end()) {
+        data.state.focusedId.clear();
+    }
+    return data;
+}
+
+bool TUIClientAgentIO::submitSidebarForm(const std::string& ownerId, const std::string& plugin) {
+    auto it = pluginForms_.find(ownerId);
+    if (it == pluginForms_.end()) {
+        return false;
+    }
+    auto& form = it->second;
+    if (!agentxx::client::validateForm(form.items, form.state)) {
+        postRedraw();
+        return true;
+    }
+    const std::string values = agentxx::client::formValues(form.items, form.state).dump();
+    if (auto mgr = pluginManager_) {
+        auto           reg = mgr->uiRegistrySnapshot();
+        const uint64_t gen = reg ? reg->generationOf(plugin) : 0;
+        mgr->dispatchAction(
+            plugin,
+            ownerId,
+            std::string{agentxx::client::kFormSubmitActionId},
+            values,
+            gen
+        );
+    }
+    return true;
+}
+
+bool TUIClientAgentIO::cancelSidebarForm(const std::string& ownerId, const std::string& plugin) {
+    if (auto mgr = pluginManager_) {
+        auto           reg = mgr->uiRegistrySnapshot();
+        const uint64_t gen = reg ? reg->generationOf(plugin) : 0;
+        mgr->dispatchAction(
+            plugin,
+            ownerId,
+            std::string{agentxx::client::kFormCancelActionId},
+            "{}",
+            gen
+        );
+    }
+    return true;
+}
+
+bool TUIClientAgentIO::handleSidebarFormKey(const ftxui::Event& event) {
+    if (formFocusedOwner_.empty()) {
+        return false;
+    }
+    auto it = pluginForms_.find(formFocusedOwner_);
+    if (it == pluginForms_.end() || it->second.state.focusedId.empty()) {
+        formFocusedOwner_.clear();
+        return false;
+    }
+    auto& form = it->second;
+    // 回车: 焦点在控件上时视为提交整份表单
+    if (event == Event::Return) {
+        const std::string owner  = formFocusedOwner_;
+        const std::string plugin = form.plugin;
+        formFocusedOwner_.clear();
+        submitSidebarForm(owner, plugin);
+        postRedraw();
+        return true;
+    }
+    if (agentxx::client::handleFormKeyInput(form.items, form.state, event)) {
+        if (form.state.focusedId.empty()) {
+            formFocusedOwner_.clear();
+        }
+        postRedraw();
+        return true;
+    }
+    return false;
+}
+
 bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
     if (!sidebar_) {
         return false;
@@ -1283,8 +1385,37 @@ bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
         }
         return true;
     }
-    // 表单控件 (Form / FormSubmit) 的编辑与提交由表单状态处理, 见后续阶段
-    // (UiFormState 交互): 本版先不响应, 返回未处理交由其他命中判定
+    // 表单控件与提交行: 状态由宿主维护, 结果经动作通道回传
+    auto formIt = pluginForms_.find(region->ownerId);
+    if (formIt == pluginForms_.end()) {
+        return false;
+    }
+    auto& form = formIt->second;
+    if (region->kind == UiHitRegionKind::Form) {
+        const auto action
+            = agentxx::client::handleFormControlHit(form.items, form.state, region->id, region->sub);
+        if (action == agentxx::client::UiFormAction::None) {
+            return false;
+        }
+        formFocusedOwner_ = region->ownerId;
+        if (action == agentxx::client::UiFormAction::Submit) {
+            // 点击即提交 (commitOnPick): 先校验再回传
+            submitSidebarForm(region->ownerId, region->plugin);
+        }
+        postRedraw();
+        return true;
+    }
+    if (region->kind == UiHitRegionKind::FormSubmit) {
+        const auto action = agentxx::client::handleFormSubmitHit(region->id);
+        formFocusedOwner_.clear();
+        if (action == agentxx::client::UiFormAction::Submit) {
+            submitSidebarForm(region->ownerId, region->plugin);
+        } else if (action == agentxx::client::UiFormAction::Cancel) {
+            cancelSidebarForm(region->ownerId, region->plugin);
+        }
+        postRedraw();
+        return true;
+    }
     return false;
 }
 

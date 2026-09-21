@@ -57,15 +57,17 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 /// - 全部组件 kind 走 [ui_components.h] 的唯一实现 (与面板/装饰/overlay/中断一致)
 /// - 含可点区域的子项在 [ScrollItem::hits] 内登记局部坐标区域, 点击经
 ///   [Scrollable::hitTestItem] 定位子项后按区域判定 (不使用子项内 reflect)
+/// - `form` 为宿主维护的表单状态 (控件值/勾选/选中/焦点); 为空时控件只做展示
 /// - markdown 渲染器的生命周期追加到 [mdBuilders] (调用方持有, 与元素同存活)
 static void appendPluginItems(
-    const utilxx_base::Json&                                       items,
+    const std::vector<agentxx::ui::Item>&                          items,
     std::string_view                                               plugin,
     std::string_view                                               ownerId,
     const agentxx::plugin::ClientUiRegistry*                       reg,
     const TUITheme&                                                theme,
     int                                                            avail,
     const std::function<bool(const std::string&, bool)>&           collapseExpanded,
+    const agentxx::client::UiFormState*                            form,
     std::vector<ScrollItem>&                                       out,
     std::vector<std::vector<std::unique_ptr<markdown::DomBuilder>>>& mdBuilders
 ) {
@@ -76,10 +78,11 @@ static void appendPluginItems(
     rc.plugin           = std::string{plugin};
     rc.ownerId          = std::string{ownerId};
     rc.registry         = reg;
+    rc.form             = form;
     rc.collapseExpanded = collapseExpanded;
 
     agentxx::client::UiRenderResult res;
-    agentxx::client::renderItems(agentxx::ui::parseItemList(items), rc, res);
+    agentxx::client::renderItems(items, rc, res);
     if (!res.builders.empty()) {
         mdBuilders.push_back(std::move(res.builders));
     }
@@ -164,15 +167,22 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 auto collapseCb = [this, ownerId = sec.id](const std::string& id, bool defaultValue) {
                     return collapseExpanded(ownerId, id, defaultValue);
                 };
+                // 表单状态: 按最新描述初始化并保留用户已编辑的值
+                auto& form = formFor(
+                    sec.id,
+                    sec.plugin,
+                    agentxx::ui::parseItemList(sec.items)
+                );
                 std::vector<ScrollItem> secItems;
                 appendPluginItems(
-                    sec.items,
+                    form.items,
                     sec.plugin,
                     sec.id,
                     reg.get(),
                     theme_,
                     avail,
                     collapseCb,
+                    &form.state,
                     secItems,
                     sidebarMdBuilders_
                 );

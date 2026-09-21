@@ -328,9 +328,30 @@ TestResult testUiItems() {
     {
         // 候选项为纯字符串时, 值与标签都取该字符串
         auto item = parseOne(R"({"kind":"select","id":"s","options":["a","b"]})");
+        XX_TEST_EXPECT_EQ(item.kind, std::string{"control"});
+        XX_TEST_EXPECT_EQ(item.control, std::string{"select"});
         XX_TEST_EXPECT_EQ(item.options.size(), size_t{2});
         XX_TEST_EXPECT_EQ(item.options[1].label, std::string{"b"});
         XX_TEST_EXPECT_EQ(item.options[1].value.get<std::string>(), std::string{"b"});
+    }
+    {
+        // 控件短写法归一化: 形态取自写法本身
+        XX_TEST_EXPECT_EQ(
+            parseOne(R"({"kind":"checkbox","id":"c"})").control,
+            std::string{"checkbox"}
+        );
+        XX_TEST_EXPECT_EQ(
+            parseOne(R"({"kind":"buttons","id":"b"})").control,
+            std::string{"buttons"}
+        );
+        XX_TEST_EXPECT_EQ(
+            parseOne(R"({"kind":"number","id":"n"})").control,
+            std::string{"number"}
+        );
+        XX_TEST_EXPECT_EQ(
+            parseOne(R"({"kind":"input","id":"i"})").control,
+            std::string{"text"}
+        );
     }
     {
         auto item = parseOne(R"({"kind":"control","id":"n","control":"number","default":3,

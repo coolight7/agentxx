@@ -543,6 +543,201 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_TRUE(scroll->hitTestItem(1, 0, index, localX, localY));
     }
 
+    // ---------------- 表单交互 ----------------
+    {
+        // 初始化: 缺省值写入状态 (checkbox 勾选 / select 选中项 / text 编辑文本)
+        auto items = agentxx::ui::parseItems(Json::parse(R"([
+            {"kind":"checkbox","id":"opt","label":"Opt","default":true},
+            {"kind":"select","id":"mode","options":[{"value":"fast","label":"Fast"},
+                                                    {"value":"safe","label":"Safe"}],
+             "default":"safe"},
+            {"kind":"input","id":"name","label":"Name","default":"abc"},
+            {"kind":"number","id":"num","label":"Num","default":5,"min":1,"max":9,"integer":true}
+        ])"));
+
+        agentxx::client::UiFormState form;
+        agentxx::client::initFormState(form, items);
+        XX_TEST_EXPECT_EQ(form.controls.size(), size_t{4});
+        XX_TEST_EXPECT_TRUE(form.ensure("opt").checked);
+        XX_TEST_EXPECT_EQ(form.ensure("mode").selected, 1); // default=safe → 下标 1
+        XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"abc"});
+        XX_TEST_EXPECT_FALSE(form.ensure("name").edited);
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"5"});
+
+        // 勾选项: 点击翻转
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(items, form, "opt", 0),
+            agentxx::client::UiFormAction::Changed
+        );
+        XX_TEST_EXPECT_FALSE(form.ensure("opt").checked);
+
+        // 单选: 点击选中指定候选项 (无 commitOnPick → 仅变更)
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(items, form, "mode", 0),
+            agentxx::client::UiFormAction::Changed
+        );
+        XX_TEST_EXPECT_EQ(form.ensure("mode").selected, 0);
+        XX_TEST_EXPECT_EQ(form.focusedId, std::string{"mode"});
+        // 越界子序号: 不处理
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(items, form, "mode", 9),
+            agentxx::client::UiFormAction::None
+        );
+        // 未知控件: 不处理
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(items, form, "nope", 0),
+            agentxx::client::UiFormAction::None
+        );
+
+        // 数值控件: 加减步进 (受上下界约束)
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(items, form, "num", 1),
+            agentxx::client::UiFormAction::Changed
+        );
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"6"});
+        for (int i = 0; i < 10; ++i) {
+            agentxx::client::handleFormControlHit(items, form, "num", 1);
+        }
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"9"}); // 上界 9
+        for (int i = 0; i < 20; ++i) {
+            agentxx::client::handleFormControlHit(items, form, "num", 0);
+        }
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"1"}); // 下界 1
+
+        // commitOnPick: 点击候选项即请求提交
+        auto commitItems = agentxx::ui::parseItems(Json::parse(
+            R"([{"kind":"buttons","id":"act","commitOnPick":true,
+                 "options":[{"value":"yes","label":"是"},{"value":"no","label":"否"}]}])"
+        ));
+        agentxx::client::UiFormState commitForm;
+        agentxx::client::initFormState(commitForm, commitItems);
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(commitItems, commitForm, "act", 1),
+            agentxx::client::UiFormAction::Submit
+        );
+        XX_TEST_EXPECT_EQ(commitForm.ensure("act").selected, 1);
+    }
+    {
+        // 键盘输入: 字符追加 / 退格 / 焦点在控件间移动 / 数值框过滤非法字符
+        auto items = agentxx::ui::parseItems(Json::parse(R"([
+            {"kind":"input","id":"name","label":"Name","default":"ab"},
+            {"kind":"number","id":"num","label":"Num","default":1,"integer":true}
+        ])"));
+        agentxx::client::UiFormState form;
+        agentxx::client::initFormState(form, items);
+        form.focusedId = "name";
+
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Character("x")
+        ));
+        // 首次输入替换缺省值后再追加
+        XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"abx"});
+        XX_TEST_EXPECT_TRUE(form.ensure("name").edited);
+
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Backspace
+        ));
+        XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"ab"});
+
+        // Tab 移动焦点到下一个控件
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Tab
+        ));
+        XX_TEST_EXPECT_EQ(form.focusedId, std::string{"num"});
+        // 数值框过滤字母
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Character("a")
+        ));
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"1"});
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Character("7")
+        ));
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"17"});
+
+        // Escape 释放焦点
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Escape
+        ));
+        XX_TEST_EXPECT_TRUE(form.focusedId.empty());
+    }
+    {
+        // 校验与取值: 越界写提示且拒绝提交; 通过后按控件形态组装值
+        auto items = agentxx::ui::parseItems(Json::parse(R"([
+            {"kind":"checkbox","id":"opt","label":"Opt","default":true},
+            {"kind":"select","id":"mode","options":[{"value":"fast","label":"Fast"},
+                                                    {"value":"safe","label":"Safe"}],
+             "default":"safe"},
+            {"kind":"number","id":"num","label":"Num","default":5,"min":1,"max":9,"integer":true},
+            {"kind":"input","id":"name","label":"Name","default":"abc"}
+        ])"));
+        agentxx::client::UiFormState form;
+        agentxx::client::initFormState(form, items);
+        XX_TEST_EXPECT_TRUE(agentxx::client::validateForm(items, form));
+
+        form.ensure("num").editText = "99";
+        form.ensure("num").edited   = true;
+        XX_TEST_EXPECT_FALSE(agentxx::client::validateForm(items, form));
+        XX_TEST_EXPECT_FALSE(form.ensure("num").tip.empty());
+
+        form.ensure("num").editText = "abc";
+        XX_TEST_EXPECT_FALSE(agentxx::client::validateForm(items, form));
+
+        form.ensure("num").editText = "7";
+        XX_TEST_EXPECT_TRUE(agentxx::client::validateForm(items, form));
+        XX_TEST_EXPECT_TRUE(form.ensure("num").tip.empty());
+
+        auto values = agentxx::client::formValues(items, form);
+        XX_TEST_EXPECT_TRUE(values.contains("values"));
+        const auto& v = values["values"];
+        XX_TEST_EXPECT_TRUE(v.contains("opt"));
+        XX_TEST_EXPECT_EQ(v["opt"].get<bool>(), true);
+        XX_TEST_EXPECT_EQ(v["mode"].get<std::string>(), std::string{"safe"});
+        XX_TEST_EXPECT_EQ(v["name"].get<std::string>(), std::string{"abc"});
+        XX_TEST_EXPECT_EQ(v["num"].get<double>(), 7.0);
+
+        // 提交行命中: 动作 id → 语义
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormSubmitHit(agentxx::client::kFormSubmitActionId),
+            agentxx::client::UiFormAction::Submit
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormSubmitHit(agentxx::client::kFormCancelActionId),
+            agentxx::client::UiFormAction::Cancel
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormSubmitHit("other"),
+            agentxx::client::UiFormAction::None
+        );
+    }
+    {
+        // 容器内的控件也能收集与初始化 (row/box 内的控件)
+        auto items = agentxx::ui::parseItems(Json::parse(R"([
+            {"kind":"box","title":"F","items":[
+                {"kind":"row","items":[{"kind":"checkbox","id":"inner","label":"I","default":false}]}
+            ]}
+        ])"));
+        auto ids = agentxx::client::collectControlIds(items);
+        XX_TEST_EXPECT_EQ(ids.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(ids[0], std::string{"inner"});
+        agentxx::client::UiFormState form;
+        agentxx::client::initFormState(form, items);
+        XX_TEST_EXPECT_EQ(form.controls.size(), size_t{1});
+        auto values = agentxx::client::formValues(items, form);
+        XX_TEST_EXPECT_TRUE(values["values"].contains("inner"));
+    }
+
     // ---------------- 面积型分隔线 (面性弹窗) ----------------
     {
         auto ctx = ctxFor(20);

@@ -616,6 +616,13 @@ private:
     /// 折叠分组的展开状态 (键 = 组件 id; 宿主维护, 点击标题切换)
     std::map<std::string, bool, std::less<>> collapseStates_;
 
+    /// 表单状态与当前组件树 (控件值/勾选/选中/焦点; 由宿主维护, 见 ui_components.h)
+    agentxx::client::UiFormState   form_;
+    std::vector<agentxx::ui::Item> formItems_;
+
+    /// 提交表单 (校验 → 组装 `{"values":{...}}` → 动作通道回传 __submit)
+    void submitForm();
+
     /// markdown 渲染器生命周期 (Element 内部指向它; 随内容重建)
     std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders_;
 };
