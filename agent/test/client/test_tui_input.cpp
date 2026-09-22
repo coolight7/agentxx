@@ -4,7 +4,9 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
+#include "agentxx-client/io/tui/tui_keybind.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include "ftxui/component/animation.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/screen.hpp"
@@ -695,6 +697,52 @@ void test_file_picker_navigation_without_filter() {
     fs::remove_all(root, ec);
 }
 
+/// 快捷键事件映射 (agentxx/client/io/tui/tui_keybind.h): 界面按键 → 宿主快捷键口径
+/// - 与宿主 normalizeKeybindSpec 必须一致, 否则插件注册的快捷键永远匹配不上
+void test_keybind_event_mapping() {
+    using agentxx::client::keybindOfEvent;
+
+    // 字母组合: ctrl / alt / ctrl+alt (FTXUI 用控制码与 ESC 前缀编码)
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::CtrlA), std::string{"ctrl+a"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::CtrlK), std::string{"ctrl+k"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::AltA), std::string{"alt+a"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::CtrlAltK), std::string{"ctrl+alt+k"});
+    // 功能键与导航键 (无修饰键也可作快捷键)
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::F9), std::string{"f9"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::ArrowUp), std::string{"up"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::ArrowUpCtrl), std::string{"ctrl+up"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::PageDown), std::string{"pagedown"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::Escape), std::string{"esc"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::Return), std::string{"enter"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::Tab), std::string{"tab"});
+    XX_TEST_EXPECT_EQ(keybindOfEvent(ftxui::Event::Delete), std::string{"delete"});
+    // 无修饰键的可打印字符不作快捷键 (避免与输入框抢字符); 鼠标事件同样不参与
+    XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Character("a")).empty());
+    XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Character(" ")).empty());
+    XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Character("1")).empty());
+    {
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = 1;
+        m.y      = 1;
+        XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Mouse("", m)).empty());
+    }
+
+    // 与宿主规范化口径对齐: 界面产物必须能被宿主原样接受 (往返一致)
+    const ftxui::Event samples[] = {
+        ftxui::Event::CtrlAltK,
+        ftxui::Event::AltA,
+        ftxui::Event::F9,
+        ftxui::Event::ArrowUpCtrl,
+    };
+    for (const auto& ev : samples) {
+        const std::string keys = keybindOfEvent(ev);
+        XX_TEST_EXPECT_FALSE(keys.empty());
+        XX_TEST_EXPECT_EQ(agentxx::plugin::normalizeKeybindSpec(keys), keys);
+    }
+}
+
 TestResult testTuiInput() {
     g_tui_input_passed = 0;
     g_tui_input_failed = 0;
@@ -719,6 +767,7 @@ TestResult testTuiInput() {
     test_input_pending_queue_visibility();
     test_input_pending_queue_above_attachments();
     test_file_picker_navigation_without_filter();
+    test_keybind_event_mapping();
 
     return TestResult{g_tui_input_passed, g_tui_input_failed};
 }

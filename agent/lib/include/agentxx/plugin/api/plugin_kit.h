@@ -168,6 +168,8 @@ struct ClientIfaces {
     const AgentxxClientSelfIface*    self    = nullptr; ///< "agentxx.client.self"
     const AgentxxClientJsonIface*    json    = nullptr; ///< "agentxx.client.json"
     const AgentxxClientLogIface*     log     = nullptr; ///< "agentxx.client.log"
+    const AgentxxClientTimerIface*   timer   = nullptr; ///< "agentxx.client.timer"
+    const AgentxxClientKeybindIface* keybind = nullptr; ///< "agentxx.client.keybind"
 
     /// 从宿主查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
     static ClientIfaces query(const PluginxxHost* host) {
@@ -182,6 +184,8 @@ struct ClientIfaces {
         f.self    = queryInterface<AgentxxClientSelfIface>(host, AGENTXX_IFACE_CLIENT_SELF);
         f.json    = queryInterface<AgentxxClientJsonIface>(host, AGENTXX_IFACE_CLIENT_JSON);
         f.log     = queryInterface<AgentxxClientLogIface>(host, AGENTXX_IFACE_CLIENT_LOG);
+        f.timer   = queryInterface<AgentxxClientTimerIface>(host, AGENTXX_IFACE_CLIENT_TIMER);
+        f.keybind = queryInterface<AgentxxClientKeybindIface>(host, AGENTXX_IFACE_CLIENT_KEYBIND);
         return f;
     }
 };
@@ -2495,6 +2499,199 @@ public:
     template<typename Fn>
     void registerRenderer(std::string_view tool, Fn&& fn) {
         registerToolRenderer(host, iface.ui, tool, std::forward<Fn>(fn), shims_);
+    }
+
+    // ==================== 定时器 (`agentxx.client.timer`) ====================
+
+    /// 定时器参数
+    struct TimerOptions {
+        /// 0 = 一次性; > 0 = 周期触发次数上限 (<=0 视为一次性)
+        int  repeat          = 0;
+        /// 关联的展示区域 id (面板/Info 段落 id; 空 = 不关联)
+        std::string ownerId;
+        /// 关联区域不可见时跳过回调 (高频刷新面板时建议开启)
+        bool pauseWhenHidden = true;
+    };
+
+    /// 定时器句柄: 持有宿主句柄与 std::function; 析构时自动取消
+    /// - 插件只需把 shared_ptr 保存在自己的实例上下文里 (实例销毁即取消)
+    class TimerHandle {
+    public:
+
+        TimerHandle() = default;
+
+        TimerHandle(const PluginxxHost* h, AgentxxTimer* t, std::shared_ptr<std::function<void()>> fn)
+            : host_(h),
+              timer_(t),
+              fn_(std::move(fn)) {}
+
+        TimerHandle(const TimerHandle&)            = delete;
+        TimerHandle& operator=(const TimerHandle&) = delete;
+
+        ~TimerHandle() {
+            reset();
+        }
+
+        void reset() {
+            if (host_ && timer_ && host_->vtable && host_->vtable->query_interface) {
+                PluginxxStringView iid = PluginStringView::from(AGENTXX_IFACE_CLIENT_TIMER);
+                if (auto* table = static_cast<const AgentxxClientTimerIface*>(
+                        host_->vtable->query_interface(host_, &iid)
+                    );
+                    table && table->cancel_timer) {
+                    table->cancel_timer(host_, timer_);
+                }
+            }
+            timer_ = nullptr;
+            fn_.reset();
+        }
+
+        bool valid() const {
+            return timer_ != nullptr;
+        }
+
+        AgentxxTimer* raw() const {
+            return timer_;
+        }
+
+    private:
+
+        const PluginxxHost*                    host_  = nullptr;
+        AgentxxTimer*                          timer_ = nullptr;
+        std::shared_ptr<std::function<void()>> fn_;
+    };
+
+    /// 注册定时器 (client io 线程; 返回句柄, 失败返回 nullptr)
+    /// - 失败: spec 非法 / 宿主动画等级 Disabled / 单实例定时器超上限;
+    ///   插件应据返回值降级 (不注册即静态展示)
+    /// - 回调在 client io 线程执行; 回调内可更新面板/Info/overlay 描述
+    std::shared_ptr<TimerHandle> registerTimer(
+        int              intervalMs,
+        std::function<void()> fn,
+        TimerOptions     opts = {}
+    ) {
+        if (!host || !iface.timer || !iface.timer->set_timer || !fn) {
+            return nullptr;
+        }
+        auto holder = std::make_shared<std::function<void()>>(std::move(fn));
+        AgentxxTimerSpec spec{};
+        spec.version           = 1;
+        spec.interval_ms       = intervalMs;
+        spec.repeat            = (opts.repeat > 0) ? opts.repeat : 0;
+        spec.pause_when_hidden = opts.pauseWhenHidden ? 1 : 0;
+        spec.owner_id
+            = PluginStringView::from(opts.ownerId.data(), opts.ownerId.size());
+        spec.on_timer  = [](void* ud) {
+            auto* f = static_cast<std::function<void()>*>(ud);
+            if (f && *f) {
+                (*f)();
+            }
+        };
+        spec.user_data = holder.get();
+        auto* timer    = iface.timer->set_timer(host, &spec);
+        if (!timer) {
+            return nullptr;
+        }
+        return std::make_shared<TimerHandle>(host, timer, std::move(holder));
+    }
+
+    /// 关联展示区域当前是否可见 (client io 线程; 老宿主无该表返回 false)
+    bool isRegionVisible(std::string_view regionId) const {
+        if (!host || !iface.timer || !iface.timer->is_visible || regionId.empty()) {
+            return false;
+        }
+        auto id = PluginStringView::from(regionId.data(), regionId.size());
+        return iface.timer->is_visible(host, &id) != 0;
+    }
+
+    // ==================== 全局快捷键 (`agentxx.client.keybind`) ====================
+
+    /// 快捷键句柄: 持有宿主句柄与 std::function; 析构时自动注销
+    class KeybindHandle {
+    public:
+
+        KeybindHandle() = default;
+
+        KeybindHandle(const PluginxxHost* h, AgentxxKeybind* b, std::shared_ptr<std::function<void()>> fn)
+            : host_(h),
+              bind_(b),
+              fn_(std::move(fn)) {}
+
+        KeybindHandle(const KeybindHandle&)            = delete;
+        KeybindHandle& operator=(const KeybindHandle&) = delete;
+
+        ~KeybindHandle() {
+            reset();
+        }
+
+        void reset() {
+            if (host_ && bind_ && host_->vtable && host_->vtable->query_interface) {
+                PluginxxStringView iid = PluginStringView::from(AGENTXX_IFACE_CLIENT_KEYBIND);
+                if (auto* table = static_cast<const AgentxxClientKeybindIface*>(
+                        host_->vtable->query_interface(host_, &iid)
+                    );
+                    table && table->unregister_keybind) {
+                    table->unregister_keybind(host_, bind_);
+                }
+            }
+            bind_ = nullptr;
+            fn_.reset();
+        }
+
+        bool valid() const {
+            return bind_ != nullptr;
+        }
+
+    private:
+
+        const PluginxxHost*                    host_ = nullptr;
+        AgentxxKeybind*                        bind_ = nullptr;
+        std::shared_ptr<std::function<void()>> fn_;
+    };
+
+    /// 注册全局快捷键 (client io 线程; 返回句柄, 失败返回 nullptr)
+    /// - keys 格式见 [AgentxxKeybindSpec]: `"ctrl+alt+k"` / `"f9"` 等;
+    ///   无修饰键的可打印字符不参与匹配 (注册失败)
+    /// - 冲突 (同键位已被占用) 时返回 nullptr, 插件应降级或改用其它键位
+    std::shared_ptr<KeybindHandle> registerKeybind(
+        std::string_view      keys,
+        std::string_view      description,
+        std::function<void()> fn
+    ) {
+        if (!host || !iface.keybind || !iface.keybind->register_keybind || !fn) {
+            return nullptr;
+        }
+        auto holder = std::make_shared<std::function<void()>>(std::move(fn));
+        AgentxxKeybindSpec spec{};
+        spec.version     = 1;
+        spec.keys        = PluginStringView::from(keys.data(), keys.size());
+        spec.description = PluginStringView::from(description.data(), description.size());
+        spec.on_keybind  = [](void* ud) {
+            auto* f = static_cast<std::function<void()>*>(ud);
+            if (f && *f) {
+                (*f)();
+            }
+        };
+        spec.user_data = holder.get();
+        auto* bind     = iface.keybind->register_keybind(host, &spec);
+        if (!bind) {
+            return nullptr;
+        }
+        return std::make_shared<KeybindHandle>(host, bind, std::move(holder));
+    }
+
+    /// 当前已注册的快捷键列表 JSON (文本; 老宿主返回 "[]")
+    std::string keybindListJson() const {
+        if (!host || !iface.keybind || !iface.keybind->list_keybinds) {
+            return "[]";
+        }
+        PluginxxString s{nullptr, 0};
+        if (iface.keybind->list_keybinds(host, &s) != 0 || !s.data) {
+            return "[]";
+        }
+        std::string res(s.data, static_cast<size_t>(s.size));
+        PluginString::free(host, &s);
+        return res;
     }
 
     template<typename T>

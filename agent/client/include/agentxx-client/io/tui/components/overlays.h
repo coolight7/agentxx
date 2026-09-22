@@ -171,6 +171,12 @@ public:
         onLogLevelChange_ = std::move(fn);
     }
 
+    /// 动画等级变化回调 (供外部同步"是否允许动态效果"的门控: 插件定时器在
+    /// Disabled 等级下不注册; 插件据此降级为静态展示)
+    void onAnimationLevelChange(std::function<void()> fn) {
+        onAnimationLevelChange_ = std::move(fn);
+    }
+
     /// 界面语言变化回调 (供外部刷新静态文本/缓存: 侧边栏标签、输入框
     /// 占位符、消息列表缓存等; 语言立即生效并持久化)
     void onLanguageChange(std::function<void()> fn) {
@@ -198,7 +204,8 @@ private:
     /// 循环切换主题: Dark -> Light -> Dark (需要访问 ctx_.theme, 非静态)
     void cycleTheme();
     /// 循环切换动画等级: Disabled -> Low -> Medium -> High -> Ultra -> Disabled
-    static void cycleAnimationLevel();
+    /// (需要触发 onAnimationLevelChange_, 非静态)
+    void cycleAnimationLevel();
     /// 循环切换日志等级: Trace -> Debug -> Info -> Warn -> Error -> Out -> Trace
     /// (需要访问 onLogLevelChange_, 非静态)
     void cycleLogLevel();
@@ -215,6 +222,7 @@ private:
     std::function<void()> onClose_;
     std::function<void()> onThemeChange_;
     std::function<void()> onLogLevelChange_;
+    std::function<void()> onAnimationLevelChange_;
     std::function<void()> onLanguageChange_;
     std::function<void()> onAbout_;
 };

@@ -54,6 +54,11 @@ public:
             std::string{pi::ClientForm},
             // 区域尺寸感知: 布局后把可用宽高告知插件 (事件 + 快照)
             std::string{pi::ClientLayout},
+            // 定时器: 宿主驱动 (asio steady_timer, 回调在 client io 线程);
+            // 面板/Info 不可见时可暂停, 动画等级 Disabled 时拒绝注册
+            std::string{pi::ClientTimer},
+            // 全局快捷键: 注册/注销/列表; 按键派发在 client io 线程执行插件回调
+            std::string{pi::ClientKeybind},
         };
     }
 

@@ -231,7 +231,7 @@ path/to/agentxx_test string_util regex
   被拒或未获批准的路径 —— 声明目标只决定"是否询问一次", 逐路径复核才保证子目录
   拒绝规则不被 `**` 模式绕过; 详见 `docs/zh-cn/design/plugins.md` §8 节
 
-客户端 UI 组件层 (2026-09): 仪表盘/Info/装饰/overlay/中断内容块共用同一套组件描述
+客户端 UI 组件层 (2026-09): 仪表盘/Info/装饰/overlay/中断描述共用同一套组件描述
 (`agentxx.ui.item`, 数据层, 零 ABI 变更) 与同一份渲染实现:
 - 描述层 `agent/lib/{include/agentxx/ui,src/ui}`: `item.h`/`item.cpp` 解析与纯文本降级
   (`plainText`)、`text_width.h` 终端列宽、`build.h` 链式构建器 (`agentxx::ui::Items`)
@@ -241,10 +241,19 @@ path/to/agentxx_test string_util regex
   与降级。测量走 `measureItem` (内部渲染一次), 与真实布局高度一致
 - 命中: 元素内子区域 `UiHitRegion` (局部坐标) + 滚动容器 `Scrollable::hitTestItem`
   (面板/Info/overlay/装饰不再用子项 `reflect`, 避免视口外子项残留命中区)
-- 表单: 控件状态由宿主维护, 提交经动作通道回传 `__submit` + `{"values":{...}}` /
-  `__cancel`; 插件侧便捷方法见 `plugin_kit.h` 的 `setPanelItems`/`showItemsOverlay` 等
-- 能力名 `agentxx.client.components` / `agentxx.client.form` (能力协商, 老宿主缺失即降级);
-  详见 `docs/zh-cn/design/plugins.md` §9.1/§9.2 与 `docs/zh-cn/design/tui.md` §2.2/§2.6
+- 表单: 控件状态由宿主维护 (`UiFormState`; 点击/键盘/校验/取值只有一份实现),
+  提交经动作通道回传 `__submit` + `{"values":{...}}` / `__cancel`;
+  中断描述 (`InterruptView`) 也走同一套渲染与交互, 仅结果去处不同
+  (结果通道回传 `{"values":{...}}`); 插件侧便捷方法见 `plugin_kit.h` 的
+  `setPanelItems`/`showItemsOverlay`/`registerTimer`/`registerKeybind` 等
+- 能力名 `agentxx.client.components` / `agentxx.client.form` / `agentxx.client.layout`
+  (能力协商, 老宿主缺失即降级); 详见 `docs/zh-cn/design/plugins.md` §9.1~§9.6
+  与 `docs/zh-cn/design/tui.md` §2.2/§2.6
+- 定时器/快捷键新表 (2026-09): `agentxx.client.timer` (一次性/周期定时器,
+  `pause_when_hidden` 区域不可见时顺延, 动画等级 Disabled 时拒绝注册, 禁用/卸载自动取消)
+  与 `agentxx.client.keybind` (键位规范化 `normalizeKeybindSpec`, 界面侧
+  `tui_keybind.h::keybindOfEvent`, 冲突先注册者优先, 无修饰键可打印字符不参与匹配);
+  可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`)
 
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`

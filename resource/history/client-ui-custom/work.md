@@ -23,7 +23,10 @@
 | P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成 |
 | P2.5 | 状态栏 segments / sparkline / meter（单行） | ✅ 已完成 |
 | P2.1 | 中断控件布局迁移到共享实现（`UiFormState` + 共享渲染/交互/校验） | ✅ 已完成 |
-| P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
+| P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表（宿主 + SDK + 适配器 + 测试） | ✅ 已完成 |
+
+---
+
 
 ---
 
@@ -271,12 +274,70 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ---
 
+## 阶段 9：定时器与全局快捷键（P3，已完成）
+
+两张新接口表（老宿主 `query_interface` 返回 NULL → 插件降级；能力名同名）：
+`agentxx.client.timer` 与 `agentxx.client.keybind`（表 version 均为 1）。
+
+### 定时器 `agentxx.client.timer`
+
+- 表成员：`set_timer(host, spec)` / `cancel_timer(host, timer)` / `is_visible(host, owner_id)`
+- `AgentxxTimerSpec`：`interval_ms`（宿主下限 50，更小按 50 收敛）/ `repeat`（0 = 一次性，
+  > 0 = 周期触发次数上限）/ `pause_when_hidden` / `owner_id` / `on_timer` + `user_data`
+- 宿主实现（`ClientPluginManager`）：asio `steady_timer` 挂在 client io 执行器上，
+  回调在 io 线程经 `InflightGuard` 调用；单实例上限 8 个（只统计存活定时器）
+- 门控：动画等级 `Disabled` 时拒绝注册（`setAnimationEnabled`，TUI 启动与设置弹窗
+  切换动画等级时同步）；`pause_when_hidden` 且关联区域不可见时**顺延**（不消耗触发次数，
+  可见后下一次到时触发）；能力名未声明时拒绝注册（与其它 register_* 一致）
+- 生命周期：`detachDomainRegistrations`（禁用/卸载共用）取消全部定时器；
+  句柄保持地址稳定（已结束/已取消的 impl 保留到实例销毁），重复 `cancel_timer` 安全
+- 可见性：UI 每帧 `reportSidebarRegionVisibility()` 上报（面板 = 当前激活 tab，
+  Info 段落 = Info tab 激活），管理器按值变化去重；`is_visible` 与
+  `get_client_state().regions` 各自独立快照
+
+### 全局快捷键 `agentxx.client.keybind`
+
+- 表成员：`register_keybind(host, spec)` / `unregister_keybind(host, bind)` /
+  `list_keybinds(host, out)`
+- 键位口径：`normalizeKeybindSpec`（小写 + 修饰键固定顺序 ctrl/alt/shift/super，
+  别名归一 `control→ctrl`、`cmd/win/meta→super`、`return→enter`）；主键支持单字符与
+  `f1~f24`/`esc`/`enter`/`tab`/`space`/`backspace`/`delete`/`insert`/方向键/`home`/
+  `end`/`pageup`/`pagedown`；**无修饰键的可打印字符不参与匹配**（注册失败，避免抢输入）
+- 界面侧：`tui_keybind.h::keybindOfEvent(ftxui::Event)` 把按键转成同口径字符串
+  （Ctrl/Alt 字母组合、F 键、方向键及其 Ctrl 变体）
+- 派发：TUI 主事件处理器中先查 `hasKeybind(keys)`（短锁）→ 命中即拦截并
+  `postKeybindInvocation(keys)` → io 线程复查插件存在/启用 → `InflightGuard` → 回调；
+  优先级 = 全局快捷键 > 表单控件焦点 > 普通按键，模态弹窗打开时不触发
+- 冲突：同键位只允许一个注册者（先注册者优先，后来者 NULL）；单实例上限 16；
+  注销/禁用/卸载时从 UI 注册表摘除（句柄保活到实例析构）
+
+### SDK（`plugin_kit.h`）
+
+- `ClientIfaces` 增加 `timer` / `keybind` 两表查询
+- `registerTimer(intervalMs, fn, TimerOptions)` → `std::shared_ptr<TimerHandle>`
+  （析构自动 `cancel_timer`）；`isRegionVisible(regionId)`
+- `registerKeybind(keys, description, fn)` → `std::shared_ptr<KeybindHandle>`
+  （析构自动注销）；`keybindListJson()`
+
+### 测试与文档
+
+- `client_plugins` 新增两段（+67 项断言）：键位规范化（别名/顺序/非法）、注册/冲突/
+  派发/注销/卸载清理；一次性与周期定时器触发次数、间隔收敛、可见性顺延、取消幂等、
+  动画等级门控、单实例上限、卸载后不再回调
+- `tui_input` 新增 `test_keybind_event_mapping`：界面按键 → 宿主口径（含鼠标与可打印
+  字符返回空、界面产物能被 `normalizeKeybindSpec` 原样接受）
+- `plugins.md` 新增 §9.5（定时器）/§9.6（快捷键）；`tui.md` §2.6 补充派发与可见性；
+  `AGENTS.md` 记忆行补充新表
+- 全量测试：**22343 项断言全部通过**
+
+---
+
 ## 待完成任务（下一步）
 
-1. P3：`agentxx.client.timer` v1（一次性/周期定时器 + 可见性/动画等级门控）、
-   `agentxx.client.keybind` v1（全局快捷键注册与派发）及对应 SDK/测试
-2. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
-3. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
+1. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
+2. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
+3. 可选增强：overlay 区域可见性上报（当前只上报面板/Info 段落）、快捷键列表展示
+   （`list_keybinds` 已有接口，设置/帮助弹窗尚未消费）
 
 ---
 
@@ -322,8 +383,28 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 - 结果 JSON 的类型要按描述保持：整数控件必须写整数（`{"count": 42}` 而非 `42.0`），
   否则中断结果消费方（`interruptValueInteger` 等）与历史契约不一致
 - 未知控件形态（`control: "future_widget"`）不参与结果：`formValues` 里别用 `else` 兜底，
-  只对已知形态（checkbox/buttons/select/number/text）写值
+  只对已知形态（checkbox/buttons/select/number/text）写结果
 - 中断的提交行缺省文案是 `确认` / `✕`（`interrupt.confirm` / `interrupt.cancel`），
   与插件表单的 `提交` / `取消`（`ui.submit` / `ui.cancel`）不同 —— 转换块时要补默认值
 - 数值框会过滤非数字字符，所以"输入非法值再校验"的用例要改用可键入但无法解析的内容
   （如 `1.2.3`），而不是 `abc`
+
+### 定时器/快捷键（阶段 9）踩过的坑
+
+- **句柄不能在注销时立即释放**：`unregisterKeybind` 若把 `shared_ptr` 从实例表摘除，
+  插件重复注销（幂等调用）就会解引用已释放对象（ASan 报 heap-use-after-free）。
+  沿用面板/状态栏项规则：句柄保活到实例析构，注销只把 `inst` 置空作为失效标记
+- 定时器句柄同理：取消/到期后 impl **保留在实例表内**（不 erase，地址保持稳定，
+  避免"旧句柄命中被复用地址的新定时器"）；数量上限只统计 `alive == true` 的定时器
+- `pause_when_hidden` 的语义是"顺延"而不是"消耗"：跳过回调时**不减触发次数**，
+  否则一次性定时器在面板不可见时会被静默吃掉
+- 能力门控要与其他 `register_*` 一致：`set_timer`/`register_keybind` 都要先查
+  `hostSupportedInterfaces()`（Mock 适配器与 TUI 适配器都得声明这两个能力，
+  否则插件注册失败且测试的宿主接口清单断言会失效）
+- `plugin_kit.h` 里不能写 `&临时对象`（`&PluginStringView::from(...)` 是 C2102 取地址需要左值），
+  先落到局部变量再取地址
+- 静态成员函数（如 `SettingsOverlay::cycleAnimationLevel`）不能访问成员回调；
+  需要"切换后通知外部"的动作要改成非静态（与 `cycleLanguage` 同规则）
+- 跨边界向量的类型安全：`ClientPluginInstance::timers` 用
+  `vector<shared_ptr<ClientTimerImpl>>`（而不是 `vector<shared_ptr<void>>`），
+  利于按指针身份查找与类型安全清理

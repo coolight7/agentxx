@@ -160,7 +160,9 @@ public:
                 std::string{pi::ClientCommand},
                 std::string{pi::ClientMsgDecor},
                 std::string{pi::ClientAction},
-                std::string{pi::ClientOverlay}
+                std::string{pi::ClientOverlay},
+                std::string{pi::ClientTimer},
+                std::string{pi::ClientKeybind}
         };
     }
 
@@ -488,7 +490,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     auto inst = co_await mgr->loadNativeAsync(path);
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
-        co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
+    co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
     }
     XX_TEST_EXPECT_EQ(inst->name, "example_plugin");
 
@@ -1019,8 +1021,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.panel") != std::string::npos);
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.command") != std::string::npos);
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.status_item") != std::string::npos);
-        // 未置位的能力不得出现 (keybind 预留位未置)
-        XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.keybind") != std::string::npos);
+        // 未置位的能力不得出现 (prompt_modal 仍未实现, 预留位不置)
+        XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.prompt_modal") != std::string::npos);
+        // 本次实现的能力 (定时器/快捷键) 由 Mock 适配器声明, 应出现在清单里
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.timer") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.keybind") != std::string::npos);
 
         // 11.1b 区域尺寸快照: 上报后进入 client_state.regions, 值未变化不重复记录
         XX_TEST_EXPECT_TRUE(mgr->regionSizes().empty());
@@ -3087,6 +3092,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             pi::ClientMsgDecor,
             pi::ClientAction,
             pi::ClientOverlay,
+            pi::ClientComponents,
+            pi::ClientForm,
+            pi::ClientLayout,
+            pi::ClientTimer,
+            pi::ClientKeybind,
         };
         for (auto ifaceName : tuiUiInterfaces) {
             XX_TEST_EXPECT_TRUE(tuiIfaces.contains(std::string{ifaceName}));
@@ -3143,6 +3153,280 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(checkedPlugins > 0);
         }
     }
+    // ---- 30. 定时器表 (agentxx.client.timer): 注册/触发/门控/取消/生命周期 ----
+    {
+        auto mgrT = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        mgrT->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+        auto instT = co_await mgrT->loadNativeAsync(findExamplePluginPath());
+        XX_TEST_EXPECT_TRUE(instT != nullptr);
+        auto ifaceTimer = agentxx::plugin::queryInterface<AgentxxClientTimerIface>(
+            instT->hostView(),
+            AGENTXX_IFACE_CLIENT_TIMER
+        );
+        XX_TEST_EXPECT_TRUE(ifaceTimer != nullptr);
+        if (instT && ifaceTimer) {
+            XX_TEST_EXPECT_EQ(ifaceTimer->version, AGENTXX_IFACE_CLIENT_TIMER_VERSION);
+            XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer != nullptr);
+            XX_TEST_EXPECT_TRUE(ifaceTimer->cancel_timer != nullptr);
+
+            struct Counter {
+                int ticks = 0;
+            } counter;
+            auto makeSpec = [&](int intervalMs, int repeat, bool pauseHidden) {
+                AgentxxTimerSpec spec{};
+                spec.version           = 1;
+                spec.interval_ms       = intervalMs;
+                spec.repeat            = repeat;
+                spec.pause_when_hidden = pauseHidden ? 1 : 0;
+                spec.owner_id          = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
+                spec.on_timer          = [](void* ud) {
+                    ++static_cast<Counter*>(ud)->ticks;
+                };
+                spec.user_data = &counter;
+                return spec;
+            };
+
+            // 30.1 基本校验: 版本/回调缺失 → 拒绝
+            {
+                auto bad = makeSpec(60, 0, false);
+                bad.version = 2;
+                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &bad) == nullptr);
+                bad.version = 1;
+                bad.on_timer = nullptr;
+                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &bad) == nullptr);
+            }
+
+            // 30.2 一次性定时器: 触发恰好一次 (间隔低于下限时按 50ms 收敛)
+            {
+                counter.ticks     = 0;
+                auto spec         = makeSpec(10, 0, false);
+                auto* oneShot     = ifaceTimer->set_timer(instT->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(oneShot != nullptr);
+                co_await sleepMs(200);
+                XX_TEST_EXPECT_EQ(counter.ticks, 1);
+                co_await sleepMs(120);
+                XX_TEST_EXPECT_EQ(counter.ticks, 1); // 不再触发
+                ifaceTimer->cancel_timer(instT->hostView(), oneShot); // 已结束: 幂等
+            }
+
+            // 30.3 周期定时器: repeat 次数上限到达后自动停止
+            {
+                counter.ticks = 0;
+                auto spec     = makeSpec(50, 3, false);
+                auto* periodic = ifaceTimer->set_timer(instT->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(periodic != nullptr);
+                co_await sleepMs(400);
+                XX_TEST_EXPECT_EQ(counter.ticks, 3);
+                co_await sleepMs(150);
+                XX_TEST_EXPECT_EQ(counter.ticks, 3);
+            }
+
+            // 30.4 区域可见性门控 (is_visible + pause_when_hidden)
+            {
+                PluginxxStringView owner = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
+                XX_TEST_EXPECT_EQ(ifaceTimer->is_visible(instT->hostView(), &owner), 0);
+                counter.ticks = 0;
+                auto spec     = makeSpec(50, 0, true); // 不可见 → 跳过回调 (计时继续)
+                auto* hidden  = ifaceTimer->set_timer(instT->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(hidden != nullptr);
+                co_await sleepMs(160);
+                XX_TEST_EXPECT_EQ(counter.ticks, 0);
+
+                mgrT->reportRegionVisible("example_plugin.panel", true);
+                XX_TEST_EXPECT_EQ(ifaceTimer->is_visible(instT->hostView(), &owner), 1);
+                XX_TEST_EXPECT_TRUE(mgrT->isRegionVisible("example_plugin.panel"));
+                // 可见性变化不影响已在计时的一次性定时器: 它会在下一次到期时回调
+                counter.ticks = 0;
+                co_await sleepMs(200);
+                XX_TEST_EXPECT_EQ(counter.ticks, 1);
+                // 再次上报相同值: 不做任何事 (值变化才更新)
+                mgrT->reportRegionVisible("example_plugin.panel", true);
+                XX_TEST_EXPECT_TRUE(mgrT->regionVisibility().at("example_plugin.panel"));
+                // 不可见时取消 (cancel_timer 任何时候都有效)
+                counter.ticks = 0;
+                auto spec2    = makeSpec(50, 5, false);
+                auto* cancelMe = ifaceTimer->set_timer(instT->hostView(), &spec2);
+                XX_TEST_EXPECT_TRUE(cancelMe != nullptr);
+                ifaceTimer->cancel_timer(instT->hostView(), cancelMe);
+                ifaceTimer->cancel_timer(instT->hostView(), cancelMe); // 重复取消幂等
+                co_await sleepMs(200);
+                XX_TEST_EXPECT_EQ(counter.ticks, 0);
+            }
+
+            // 30.5 动画等级门控: Disabled 时拒绝注册 (插件据返回值降级)
+            {
+                mgrT->setAnimationEnabled(false);
+                XX_TEST_EXPECT_FALSE(mgrT->animationEnabled());
+                auto spec  = makeSpec(50, 0, false);
+                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &spec) == nullptr);
+                mgrT->setAnimationEnabled(true);
+                auto ok    = ifaceTimer->set_timer(instT->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(ok != nullptr);
+                ifaceTimer->cancel_timer(instT->hostView(), ok);
+            }
+
+            // 30.6 单实例数量上限 (超出返回 NULL, 插件自行降级)
+            {
+                std::vector<AgentxxTimer*> timers;
+                for (size_t i = 0; i < 8; ++i) {
+                    auto spec = makeSpec(1000, 0, false);
+                    auto* t   = ifaceTimer->set_timer(instT->hostView(), &spec);
+                    if (t) {
+                        timers.push_back(t);
+                    }
+                }
+                XX_TEST_EXPECT_EQ(timers.size(), size_t{8});
+                auto spec = makeSpec(1000, 0, false);
+                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &spec) == nullptr);
+                for (auto* t : timers) {
+                    ifaceTimer->cancel_timer(instT->hostView(), t);
+                }
+            }
+
+            // 30.7 生命周期: 卸载后定时器全部取消 (卸载等待在途回调结束)
+            {
+                counter.ticks = 0;
+                auto spec     = makeSpec(50, 100, false);
+                auto* live    = ifaceTimer->set_timer(instT->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(live != nullptr);
+                XX_TEST_EXPECT_TRUE(co_await mgrT->unloadAsync("example_plugin"));
+                XX_TEST_EXPECT_EQ(instT->timers.size(), size_t{0});
+                const int afterUnload = counter.ticks;
+                co_await sleepMs(200);
+                XX_TEST_EXPECT_EQ(counter.ticks, afterUnload); // 不再有回调
+            }
+        }
+    }
+
+    // ---- 31. 快捷键表 (agentxx.client.keybind): 注册/冲突/派发/注销/生命周期 ----
+    {
+        auto mgrK = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        mgrK->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+        auto instK = co_await mgrK->loadNativeAsync(findExamplePluginPath());
+        XX_TEST_EXPECT_TRUE(instK != nullptr);
+        auto ifaceKey = agentxx::plugin::queryInterface<AgentxxClientKeybindIface>(
+            instK->hostView(),
+            AGENTXX_IFACE_CLIENT_KEYBIND
+        );
+        XX_TEST_EXPECT_TRUE(ifaceKey != nullptr);
+        if (instK && ifaceKey) {
+            XX_TEST_EXPECT_EQ(ifaceKey->version, AGENTXX_IFACE_CLIENT_KEYBIND_VERSION);
+
+            struct KeyCounter {
+                int hits = 0;
+            } keyCounter;
+            auto makeSpec = [&](std::string_view keys, std::string_view desc) {
+                AgentxxKeybindSpec spec{};
+                spec.version     = 1;
+                spec.keys        = agentxx::plugin::PluginStringView::from(keys.data(), keys.size());
+                spec.description = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
+                spec.on_keybind  = [](void* ud) {
+                    ++static_cast<KeyCounter*>(ud)->hits;
+                };
+                spec.user_data = &keyCounter;
+                return spec;
+            };
+
+            // 31.1 键位规范化: 别名/顺序/大小写归一; 非法键位拒绝
+            {
+                XX_TEST_EXPECT_EQ(
+                    agentxx::plugin::normalizeKeybindSpec("  Control + Alt + K "),
+                    std::string{"ctrl+alt+k"}
+                );
+                XX_TEST_EXPECT_EQ(
+                    agentxx::plugin::normalizeKeybindSpec("shift+ctrl+F9"),
+                    std::string{"ctrl+shift+f9"}
+                );
+                XX_TEST_EXPECT_EQ(
+                    agentxx::plugin::normalizeKeybindSpec("cmd+space"),
+                    std::string{"super+space"}
+                );
+                XX_TEST_EXPECT_EQ(
+                    agentxx::plugin::normalizeKeybindSpec("return"),
+                    std::string{"enter"}
+                );
+                // 无修饰键的可打印字符不参与匹配; 未知修饰键/主键/空段非法
+                XX_TEST_EXPECT_TRUE(agentxx::plugin::normalizeKeybindSpec("k").empty());
+                XX_TEST_EXPECT_TRUE(agentxx::plugin::normalizeKeybindSpec("ctrl+").empty());
+                XX_TEST_EXPECT_TRUE(agentxx::plugin::normalizeKeybindSpec("ctrl++k").empty());
+                XX_TEST_EXPECT_TRUE(agentxx::plugin::normalizeKeybindSpec("hyper+k").empty());
+                XX_TEST_EXPECT_TRUE(agentxx::plugin::normalizeKeybindSpec("ctrl+f99").empty());
+                XX_TEST_EXPECT_TRUE(agentxx::plugin::normalizeKeybindSpec("ctrl").empty());
+            }
+
+            // 31.2 注册/查询/派发/注销
+            {
+                auto spec   = makeSpec("ctrl+alt+k", "test keybind");
+                auto* bind  = ifaceKey->register_keybind(instK->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(bind != nullptr);
+                XX_TEST_EXPECT_TRUE(mgrK->hasKeybind("ctrl+alt+k"));
+                XX_TEST_EXPECT_FALSE(mgrK->hasKeybind("ctrl+alt+j"));
+                {
+                    auto list = mgrK->keybinds();
+                    XX_TEST_EXPECT_EQ(list.size(), size_t{1});
+                    if (!list.empty()) {
+                        XX_TEST_EXPECT_EQ(list[0].keys, std::string{"ctrl+alt+k"});
+                        XX_TEST_EXPECT_EQ(list[0].plugin, std::string{"example_plugin"});
+                        XX_TEST_EXPECT_EQ(list[0].description, std::string{"test keybind"});
+                    }
+                }
+                // list_keybinds 表接口 (JSON)
+                {
+                    PluginxxString out{};
+                    XX_TEST_EXPECT_EQ(ifaceKey->list_keybinds(instK->hostView(), &out), 0);
+                    if (out.data) {
+                        const std::string json(out.data, out.size);
+                        XX_TEST_EXPECT_TRUE(json.find("ctrl+alt+k") != std::string::npos);
+                        XX_TEST_EXPECT_TRUE(json.find("example_plugin") != std::string::npos);
+                        agentxx::plugin::PluginString::free(instK->hostView(), &out);
+                    }
+                }
+                // 冲突: 同键位重复注册 (同实例或跨实例) 一律拒绝
+                auto dup = makeSpec("ctrl+alt+k", "dup");
+                XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &dup) == nullptr);
+
+                keyCounter.hits = 0;
+                mgrK->postKeybindInvocation("ctrl+alt+k");
+                co_await sleepMs(50);
+                XX_TEST_EXPECT_EQ(keyCounter.hits, 1);
+                // 未注册的键位不会派发
+                mgrK->postKeybindInvocation("ctrl+alt+j");
+                co_await sleepMs(50);
+                XX_TEST_EXPECT_EQ(keyCounter.hits, 1);
+
+                ifaceKey->unregister_keybind(instK->hostView(), bind);
+                XX_TEST_EXPECT_FALSE(mgrK->hasKeybind("ctrl+alt+k"));
+                XX_TEST_EXPECT_EQ(mgrK->keybinds().size(), size_t{0});
+                mgrK->postKeybindInvocation("ctrl+alt+k");
+                co_await sleepMs(50);
+                XX_TEST_EXPECT_EQ(keyCounter.hits, 1); // 已注销: 不再回调
+                ifaceKey->unregister_keybind(instK->hostView(), bind); // 重复注销幂等
+            }
+
+            // 31.3 非法键位注册被拒绝
+            {
+                auto bad = makeSpec("q", "no modifier");
+                XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &bad) == nullptr);
+                auto bad2 = makeSpec("ctrl+nosuchkey", "bad key");
+                XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &bad2) == nullptr);
+            }
+
+            // 31.4 卸载: 注册表摘除 (按键不再派发)
+            {
+                auto spec  = makeSpec("ctrl+shift+p", "unload case");
+                auto* bind = ifaceKey->register_keybind(instK->hostView(), &spec);
+                XX_TEST_EXPECT_TRUE(bind != nullptr);
+                XX_TEST_EXPECT_TRUE(mgrK->hasKeybind("ctrl+shift+p"));
+                keyCounter.hits = 0;
+                XX_TEST_EXPECT_TRUE(co_await mgrK->unloadAsync("example_plugin"));
+                XX_TEST_EXPECT_FALSE(mgrK->hasKeybind("ctrl+shift+p"));
+                mgrK->postKeybindInvocation("ctrl+shift+p");
+                co_await sleepMs(50);
+                XX_TEST_EXPECT_EQ(keyCounter.hits, 0);
+            }
+        }
+    }
+
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }

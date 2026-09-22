@@ -5,8 +5,10 @@
 #include "agentxx-client/io/tui/components/sidebar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/surface.h"
+#include "agentxx-client/io/tui/tui_keybind.h"
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/util/clipboard.h"
 #include "agentxx/agent/config_static.h"
@@ -238,6 +240,26 @@ void TUIClientAgentIO::notifyUserInputSent(const std::string& sessionId, const s
             sink.onUserInput(tid, t);
         });
     });
+}
+
+void TUIClientAgentIO::reportSidebarRegionVisibility() {
+    auto mgr = pluginManager_;
+    if (!mgr || !sidebar_) {
+        return;
+    }
+    auto reg = mgr->uiRegistrySnapshot();
+    if (!reg) {
+        return;
+    }
+    // 面板: 只有当前激活 tab 的内容被渲染 (其余"不可见" → 关联定时器暂停)
+    for (const auto& p : reg->panels) {
+        mgr->reportRegionVisible(p.id, sidebar_->isTabActive(p.id));
+    }
+    // Info 段落: 侧边栏 Info tab 激活时整体可见
+    const bool infoVisible = sidebar_->isTabActive(kInfoTabId);
+    for (const auto& s : reg->infoSections) {
+        mgr->reportRegionVisible(s.id, infoVisible);
+    }
 }
 
 void TUIClientAgentIO::addPluginPanelTab(const std::string& id, const std::string& title) {
@@ -597,6 +619,9 @@ void TUIClientAgentIO::start() {
             // client 插件 UI 注册表快照 (工具消息装饰等; 每帧刷新, 渲染期无锁读)
             ctx_.frameState->pluginRegistry
                 = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
+            // 插件展示区域可见性上报 (面板/Info 段落: 供 is_visible 与"不可见时
+            // 暂停的定时器"门控; 管理器按值变化去重, 无变化时零开销)
+            reportSidebarRegionVisibility();
             // 命中表: 每帧重建 (渲染期登记, 仅存本帧真正渲染出来的可点项;
             // 缩放/滚动/伸缩/隐藏导致坐标与可见性每帧变动)
             shellHits_.beginFrame();
@@ -738,6 +763,16 @@ void TUIClientAgentIO::start() {
             // 模态弹窗打开时: 键盘优先让弹窗处理 (Escape 关闭弹窗等), 不拦截
             if (modal_->hasModal()) {
                 return false;
+            }
+            // 插件全局快捷键 (agentxx.client.keybind): 全局优先级最高, 有注册时
+            // 拦截按键并投递到 client io 线程执行插件回调。无修饰键的可打印字符
+            // 不参与匹配 (见 tui_keybind.h), 因此不影响输入框打字。
+            if (pluginManager_) {
+                const std::string keys = agentxx::client::keybindOfEvent(event);
+                if (!keys.empty() && pluginManager_->hasKeybind(keys)) {
+                    pluginManager_->postKeybindInvocation(keys);
+                    return true;
+                }
             }
             // 侧边栏表单焦点 (面板/Info 段落内的控件): 有焦点时输入先进入表单,
             // 避免字符被输入栏抢走; 未消费再走全局快捷键与输入栏
@@ -1060,6 +1095,14 @@ void TUIClientAgentIO::openSettings() {
     overlay->onLogLevelChange([this] {
         if (logSink_) {
             logSink_->clear();
+        }
+    });
+    // 动画等级变化: 同步插件定时器门控 (Disabled 时新的定时器不再注册)
+    overlay->onAnimationLevelChange([this] {
+        if (pluginManager_) {
+            pluginManager_->setAnimationEnabled(
+                TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)
+            );
         }
     });
     // 界面语言变化: 刷新随语言缓存的静态文本/缓存 (消息列表 banner 缓存、

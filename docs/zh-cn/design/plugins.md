@@ -607,6 +607,71 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 - **快照查询**: `get_client_state().regions` 与 SDK
   `ClientPluginBase::regionSize(regionId)` (返回 `{width, height}`; 未上报为 0)
 
+### 9.5 定时器 (`agentxx.client.timer`)
+
+插件不能自己起线程/定时器 (`agentxx.agent.scheduler` 的 sleep 只在 agent 侧);
+client 侧需要"每隔一段时间刷新面板"的能力时用本表 (能力名
+`agentxx.client.timer`, 表 IID 同名):
+
+```c
+typedef struct AgentxxClientTimerIface {
+    int32_t  version; uint32_t struct_size;
+    AgentxxTimer*(*set_timer)(const PluginxxHost*, const AgentxxTimerSpec*);
+    void        (*cancel_timer)(const PluginxxHost*, AgentxxTimer*);
+    int32_t     (*is_visible)(const PluginxxHost*, const PluginxxStringView* owner_id);
+} AgentxxClientTimerIface;
+```
+
+- `AgentxxTimerSpec`: `interval_ms` (下限 50, 更小按 50 收敛) / `repeat`
+  (0 = 一次性, > 0 = 周期触发次数上限) / `pause_when_hidden` /
+  `owner_id` (关联的面板/Info 段落 id) / `on_timer` + `user_data`
+- **回调线程**: client io 线程 (与其它插件回调一致, 插件代码永不进 UI 线程);
+  回调内可直接更新面板/Info/overlay 描述 (注册入口自身会投递到 io 线程)
+- **门控**:
+  - 宿主动画等级为 `Disabled` 时**拒绝注册** (返回 NULL, 插件降级为静态展示)
+  - `pause_when_hidden != 0` 且 `owner_id` 当前不可见时跳过本次回调并**顺延**
+    (计时继续, 顺延期间不消耗触发次数 —— 一次性定时器会在区域可见后的下一次
+    到时触发) —— 高频刷新 (< 200ms) 的面板应打开它, 避免用户切走后白耗 CPU
+  - `is_visible` 查询当前可见性 (宿主未上报过 → 0 = 不可见)
+- **上限与清理**: 单实例 ≤ 8 个定时器; 插件禁用/卸载时宿主全部取消
+  (禁用后重新启用需由插件 `start` 事务重新注册)
+- SDK: `ClientPluginBase::registerTimer(intervalMs, fn, opts)` 返回
+  `std::shared_ptr<TimerHandle>` (析构自动 `cancel_timer`) —— 插件把它存进自己的
+  实例上下文即可, 无需在 `stop` 里逐个取消
+
+### 9.6 全局快捷键 (`agentxx.client.keybind`)
+
+插件要响应按键 (打开自己的 overlay/触发刷新等) 时用本表 (能力名
+`agentxx.client.keybind`, 表 IID 同名):
+
+```c
+typedef struct AgentxxClientKeybindIface {
+    int32_t  version; uint32_t struct_size;
+    AgentxxKeybind*(*register_keybind)(const PluginxxHost*, const AgentxxKeybindSpec*);
+    void           (*unregister_keybind)(const PluginxxHost*, AgentxxKeybind*);
+    int32_t        (*list_keybinds)(const PluginxxHost*, PluginxxString* out);
+} AgentxxClientKeybindIface;
+```
+
+- 键位描述: 修饰键 + 主键, `+` 连接, 不区分大小写;
+  修饰键 `ctrl`/`alt`/`shift`/`super` (别名 `control`/`cmd`/`win`/`meta`);
+  主键单字符或 `f1`~`f24` / `esc` / `enter` / `tab` / `space` / `backspace` /
+  `delete` / `insert` / 方向键 / `home` / `end` / `pageup` / `pagedown`
+  (例: `"ctrl+alt+k"` / `"f9"` / `"ctrl+shift+space"`)
+- **规范化**: 宿主按"小写 + 修饰键固定顺序 (ctrl/alt/shift/super)"存储;
+  界面侧把按键事件转成同一格式后比较 (TUI 见 `tui_keybind.h`,
+  `keybindOfEvent`), 两侧规则一致
+- **限制**: 无修饰键的可打印字符**不能**作为全局快捷键 (注册失败, 避免与输入框
+  抢字符); 同键位只允许一个注册者 (先注册者优先, 后来者拿到 NULL);
+  单实例 ≤ 16 个
+- **优先级**: 全局快捷键 > 表单控件焦点 > 普通按键 (有控件焦点时快捷键仍生效);
+  模态弹窗打开时快捷键不触发 (弹窗优先)
+- **回调线程**: client io 线程; 派发路径为"UI 线程查表 → 投递 io 线程 → 复查
+  插件存在/启用 → 回调"
+- SDK: `ClientPluginBase::registerKeybind(keys, description, fn)` 返回
+  `std::shared_ptr<KeybindHandle>` (析构自动注销);
+  `keybindListJson()` 取当前已注册列表 (排查冲突用)
+
 插件按新宽度重新排列自己的组件并 `update_panel` 即可; 老宿主订阅该事件会失败
 (返回 NULL), 此时按固定宽度排版。
 

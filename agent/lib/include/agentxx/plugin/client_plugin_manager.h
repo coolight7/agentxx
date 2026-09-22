@@ -142,12 +142,32 @@ struct ClientRegionSize {
     int         height = 0;    ///< 当前内容行数 (行)
 };
 
+/// 全局快捷键注册记录 (UI 注册表快照条目)
+/// - 派发: UI 线程按"当前按键的规范化描述"查到本项后投递到 client io 线程执行回调
+///   (UI 线程不进入插件代码); 同一键位只允许一个注册者 (先注册者优先)
+struct ClientKeybind {
+    std::string plugin;              ///< 所属插件名
+    std::string keys;                ///< 规范化后的键位描述 (见 [normalizeKeybindSpec])
+    std::string description;         ///< 说明文本 (帮助/列表展示)
+    void(PLUGINXX_CALL* handler)(void* ud) = nullptr;
+    void* ud = nullptr;
+};
+
+/// 快捷键描述规范化: 小写化 + 修饰键固定顺序 (ctrl/alt/shift/super) + 别名归一
+/// (`control`→`ctrl` / `cmd`/`win`/`meta`→`super` / `return`→`enter`);
+/// 非法描述 (空 / 未知修饰键 / 缺少主键 / 多个主键 / 无修饰键的可打印单字符) 返回空串。
+///
+/// 宿主与界面侧必须用同一口径: 界面把按键事件转成同格式描述后按字符串比较
+/// (见 TUI 侧 `keybindOfEvent`)。
+std::string normalizeKeybindSpec(std::string_view keys);
+
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
     std::vector<ClientStatusItem>    statusItems;
     std::vector<ClientPanel>         panels;
     std::vector<ClientInfoSection>   infoSections;
     std::vector<ClientCommand>       commands;
+    std::vector<ClientKeybind>       keybinds;
     std::vector<ClientToolDecor>     toolDecors;
     std::vector<ClientToolRenderReg> toolRenderers;
     /// 宿主内置工具特化渲染器 (lib 内置工具无插件归属, 由宿主自身注册;
@@ -294,6 +314,30 @@ ClientToolRenderResult renderClientTool(
     int                          maxWidth
 );
 
+/// 定时器宿主句柄实现 (仅宿主内部; 与
+/// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
+/// 的 `AgentxxTimer` 不透明类型对应)
+///
+/// - 计时器挂在 client io 执行器上 (asio::steady_timer), 回调在 io 线程执行
+/// - `alive` 为取消标记: 取消后即使有在途等待也不会再回调插件
+/// - `repeat` 为剩余触发次数 (0 = 一次性), 周期定时器每次触发后递减
+struct ClientTimerImpl {
+    asio::steady_timer    timer;
+    /// 归属实例 (弱引用: 回调前升级, 实例已卸载则丢弃本次触发)
+    std::weak_ptr<ClientPluginInstance> inst{};
+    std::string                         ownerId;         ///< 关联展示区域 id (可空)
+    int32_t                             intervalMs  = 50; ///< 触发间隔 (已按宿主下限收敛)
+    int32_t                             repeat      = 0;  ///< 剩余触发次数 (0 = 一次性)
+    bool                                repeatMode  = false; ///< true = 周期 (按 repeat 计数)
+    bool                                pauseHidden = false; ///< 关联区域不可见时跳过回调
+    void(PLUGINXX_CALL* cb)(void*) = nullptr;
+    void*       ud    = nullptr;
+    bool        alive = true;
+
+    explicit ClientTimerImpl(asio::any_io_executor ex) :
+        timer(std::move(ex)) {}
+};
+
 /// client 插件实例 (宿主侧状态)
 /// - 与 agent 侧 PluginInstance 对称: 同一动态库可被 agent 与 client 两个
 ///   管理器各自 dlopen (引用计数), 实例状态彼此独立, 互通一律走 wire
@@ -328,6 +372,8 @@ public:
     std::vector<ClientPanel>       panelRegs;       ///< 面板注册信息 (disable 保留)
     std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
+    /// 全局快捷键注册信息 (同命令: disable 时随 UI 注册表摘除, enable 由 start 重声明)
+    std::vector<ClientKeybind>     keybindRegs;
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
     std::vector<ClientToolDecor> toolDecorRegs;
     /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
@@ -341,6 +387,13 @@ public:
     /// client 事件表 (按事件枚举) 的订阅记录。两者语义不同, 因此这里用独立名字,
     /// 避免派生成员隐藏基类成员导致通用表实现读到错误的类型。
     std::vector<std::shared_ptr<Subscription>> clientSubscriptions; ///< 已订阅事件 (disable 保留)
+    /// 定时器 (client 自有 `agentxx.client.timer` 表): 实例级运行时资源
+    /// - 与注册信息不同, 定时器**不跨 disable 保留**: 禁用/卸载时全部取消
+    ///   (见 [ClientPluginManager::detachDomainRegistrations]), enable 后由插件
+    ///   start 事务重新注册
+    std::vector<std::shared_ptr<ClientTimerImpl>> timers;
+    /// 全局快捷键句柄 (disable 期随注册表摘除, 句柄保活到实例析构)
+    std::vector<std::shared_ptr<AgentxxKeybind>> keybindHandles;
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板宿主句柄 (enable 期)
     std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落宿主句柄 (enable 期)
@@ -753,6 +806,53 @@ public:
         void* ud
     );
     void unsubscribe(PluginxxSubscription* sub);
+
+    // ==================== 定时器 (`agentxx.client.timer`, io 线程) ====================
+    //
+    // 插件侧定时器只能经宿主驱动: 定时器挂在 client io 执行器上, 回调在 io 线程
+    // 执行 (插件代码不在 UI 线程运行这一约束因此不变)。门控: 宿主动画等级为
+    // Disabled 时拒绝注册; 关联区域不可见的定时器可声明 pause_when_hidden 跳过回调。
+
+    /// 注册定时器 (io 线程); 返回宿主句柄 (nullptr = 校验失败/动画关闭/超上限)
+    AgentxxTimer* setTimer(ClientPluginInstance* inst, const AgentxxTimerSpec* spec);
+    /// 取消定时器 (io 线程; 空句柄/已取消忽略)
+    void cancelTimer(ClientPluginInstance* inst, AgentxxTimer* timer);
+    /// 关联区域当前是否可见 (io 线程; 未知区域返回 0)
+    bool isRegionVisible(std::string_view ownerId) const;
+
+    /// 上报展示区域可见性 (UI 线程; 值未变化时不做任何事)
+    /// - 面板: 该面板是否为当前激活 tab; Info 段落: 侧边栏是否显示 Info tab;
+    ///   overlay: 是否正在显示
+    /// - 供 `pause_when_hidden` 门控与 `is_visible` 查询使用 (未知区域按不可见处理)
+    void reportRegionVisible(const std::string& id, bool visible);
+
+    /// 区域可见性快照 (任意线程; 按 id 升序; 仅包含显式上报过的区域)
+    std::map<std::string, bool, std::less<>> regionVisibility() const;
+
+    /// 动画等级门控 (装配方在启动与设置变化时调用; 默认 true = 允许定时器)
+    /// - false: 新的 `set_timer` 一律失败 (插件据返回值降级为静态展示)
+    void setAnimationEnabled(bool enabled) {
+        animationEnabled_.store(enabled, std::memory_order_relaxed);
+    }
+
+    bool animationEnabled() const {
+        return animationEnabled_.load(std::memory_order_relaxed);
+    }
+
+    // ==================== 全局快捷键 (`agentxx.client.keybind`) ====================
+
+    /// 注册快捷键 (io 线程); 返回宿主句柄 (nullptr = 键位非法/已被占用/超上限)
+    AgentxxKeybind* registerKeybind(ClientPluginInstance* inst, const AgentxxKeybindSpec* spec);
+    /// 注销快捷键 (io 线程; 空句柄/已注销忽略)
+    void unregisterKeybind(ClientPluginInstance* inst, AgentxxKeybind* bind);
+    /// 快捷键是否已注册 (UI 线程判断是否拦截按键; 短锁)
+    bool hasKeybind(std::string_view keys) const;
+    /// 当前快捷键列表 (任意线程; 按键位升序)
+    std::vector<ClientKeybind> keybinds() const;
+    /// 投递快捷键触发到 client io 线程执行 (任意线程; 未注册/插件禁用时忽略)
+    /// - keys 须为 [normalizeKeybindSpec] 口径 (界面把按键事件转成该口径)
+    void postKeybindInvocation(std::string keys);
+
     /// 自描述
     std::string getOwnInfoJson(ClientPluginInstance* inst);
     std::string getPluginArgsJson(ClientPluginInstance* inst);
@@ -934,6 +1034,13 @@ private:
     /// 展示区域尺寸快照 (UI 线程写, 任意线程读; 见 reportRegionSize)
     mutable std::mutex                                          regionMutex_;
     std::map<std::string, ClientRegionSize, std::less<>>        regionSizes_;
+
+    /// 展示区域可见性快照 (UI 线程写, 任意线程读; 见 reportRegionVisible)
+    /// - 供 `pause_when_hidden` 定时器门控与 `agentxx.client.timer` 的 is_visible 使用
+    std::map<std::string, bool, std::less<>>                    regionVisibility_;
+
+    /// 动画等级门控 (装配方经 setAnimationEnabled 更新; 默认允许定时器)
+    std::atomic<bool> animationEnabled_{true};
 
     std::string                        language_ = "en";
 };

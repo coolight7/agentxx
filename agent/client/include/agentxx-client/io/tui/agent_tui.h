@@ -264,6 +264,11 @@ public:
         pluginManager_ = std::move(mgr);
         if (pluginManager_) {
             pluginManager_->setSessionId(currentSessionId());
+            // 动画等级门控: Disabled 时插件定时器不注册 (插件降级为静态展示);
+            // 之后由设置弹窗的动画等级切换回调保持同步
+            pluginManager_->setAnimationEnabled(
+                TUISettings::instance().isAnimationEnabled(AnimationLevel::Low)
+            );
         }
     }
 
@@ -300,6 +305,12 @@ public:
 
     /// 渲染插件侧边栏面板内容 (UI 线程; 从 pluginManager UI 注册表快照读取)
     std::vector<ScrollItem> renderPluginPanel(const std::string& panelId);
+
+    /// 上报插件展示区域可见性 (UI 线程; 每帧渲染前调用一次)
+    /// - 面板 = 是否为当前激活 tab; Info 段落 = Info tab 是否激活
+    /// - 命中 `agentxx.client.timer` 的 `is_visible` 与 `pause_when_hidden` 门控
+    ///   (管理器按值变化去重)
+    void reportSidebarRegionVisibility();
 
     /// 通用 overlay 打开 (open_overlay 驱动; UI 线程; 单模态 last-wins):
     /// - type: AgentxxOverlayType (0=MERMAID 1=TEXT 2=DIFF 3=CUSTOM)

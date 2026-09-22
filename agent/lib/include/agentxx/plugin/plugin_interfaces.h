@@ -110,8 +110,13 @@ inline constexpr std::string_view ClientUi          = AGENTXX_IFACE_CLIENT_UI;
 inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";
 inline constexpr std::string_view ClientToast       = "agentxx.client.toast";
-inline constexpr std::string_view ClientKeybind     = "agentxx.client.keybind";      // 预留
+/// 全局快捷键: 宿主提供 `agentxx.client.keybind` 表 (注册/注销/列表),
+/// 快捷键在表单控件有焦点时同样生效 (见该表说明)
+inline constexpr std::string_view ClientKeybind     = AGENTXX_IFACE_CLIENT_KEYBIND;
 inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal"; // 预留
+/// 定时器: 宿主提供 `agentxx.client.timer` 表 (一次性/周期定时器 + 区域可见性查询);
+/// 宿主动画等级为 Disabled 时拒绝注册 (插件据此降级为静态展示)
+inline constexpr std::string_view ClientTimer       = AGENTXX_IFACE_CLIENT_TIMER;
 /// 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor / register_tool_renderer;
 /// TUI 声明, CLI 无消息渲染面不声明)
 inline constexpr std::string_view ClientMsgDecor    = "agentxx.client.msg_decor";

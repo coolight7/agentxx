@@ -69,10 +69,182 @@ struct AgentxxInfoSection {
     std::string                            plugin;
 };
 
+/// 全局快捷键宿主句柄实现
+struct AgentxxKeybind {
+    agentxx::plugin::ClientPluginInstance* inst = nullptr;
+    std::string                            keys; ///< 规范化后的键位描述
+};
+
 namespace agentxx {
 namespace plugin {
 
 using agentxx::agent::PluginConfig;
+
+namespace {
+
+// ==================== 快捷键描述解析 ====================
+
+/// 两端去空白 (含 tab/换行)
+std::string_view trimAscii(std::string_view s) {
+    size_t begin = 0;
+    size_t end   = s.size();
+    auto   space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+    };
+    while (begin < end && space(s[begin])) {
+        ++begin;
+    }
+    while (end > begin && space(s[end - 1])) {
+        --end;
+    }
+    return s.substr(begin, end - begin);
+}
+
+/// 修饰键别名归一 (非修饰键返回空串)
+std::string_view modifierOf(std::string_view token) {
+    if (token == "ctrl" || token == "control") {
+        return "ctrl";
+    }
+    if (token == "alt" || token == "option") {
+        return "alt";
+    }
+    if (token == "shift") {
+        return "shift";
+    }
+    if (token == "super" || token == "cmd" || token == "win" || token == "meta") {
+        return "super";
+    }
+    return {};
+}
+
+/// 主键别名归一; 非法主键返回空串 (允许的主键见 client_plugin_api.h 的说明)
+std::string keyOf(std::string_view token) {
+    if (token.empty()) {
+        return {};
+    }
+    if (token.size() == 1) {
+        return std::string{token}; // 可打印单字符 (a-z/0-9/符号)
+    }
+    static const char* kNames[] = {
+        "esc",    "enter", "tab",     "space",   "backspace", "delete",   "insert",
+        "up",     "down",  "left",    "right",   "home",      "end",      "pageup",
+        "pagedown",
+    };
+    for (const char* name : kNames) {
+        if (token == name) {
+            return std::string{token};
+        }
+    }
+    // 别名
+    if (token == "escape") {
+        return "esc";
+    }
+    if (token == "return") {
+        return "enter";
+    }
+    if (token == "spacebar") {
+        return "space";
+    }
+    if (token == "del") {
+        return "delete";
+    }
+    if (token == "ins") {
+        return "insert";
+    }
+    if (token == "pgup" || token == "page_up") {
+        return "pageup";
+    }
+    if (token == "pgdn" || token == "pagedn" || token == "page_down") {
+        return "pagedown";
+    }
+    // F1~F24
+    if (token.size() >= 2 && token[0] == 'f') {
+        int         num  = 0;
+        bool        ok   = true;
+        for (size_t i = 1; i < token.size(); ++i) {
+            const char c = token[i];
+            if (c < '0' || c > '9') {
+                ok = false;
+                break;
+            }
+            num = num * 10 + (c - '0');
+        }
+        if (ok && num >= 1 && num <= 24) {
+            return std::string{token};
+        }
+    }
+    return {};
+}
+
+} // namespace
+
+std::string normalizeKeybindSpec(std::string_view keys) {
+    std::string lower = utilxx_base::toLower(std::string{trimAscii(keys)});
+    if (lower.empty()) {
+        return {};
+    }
+    bool hasCtrl  = false;
+    bool hasAlt   = false;
+    bool hasShift = false;
+    bool hasSuper = false;
+    bool hasMod   = false;
+    std::string mainKey;
+    size_t      begin = 0;
+    while (begin <= lower.size()) {
+        const size_t pos   = lower.find('+', begin);
+        const size_t end   = (pos == std::string::npos) ? lower.size() : pos;
+        auto         token = trimAscii(std::string_view{lower}.substr(begin, end - begin));
+        if (token.empty()) {
+            return {}; // 空段 ("ctrl++k" / 首尾多余 '+') 视为非法
+        }
+        if (!mainKey.empty()) {
+            return {}; // 主键之后不允许再出现段 (主键必须在最后)
+        }
+        if (auto mod = modifierOf(token); !mod.empty()) {
+            hasMod = true;
+            if (mod == "ctrl") {
+                hasCtrl = true;
+            } else if (mod == "alt") {
+                hasAlt = true;
+            } else if (mod == "shift") {
+                hasShift = true;
+            } else {
+                hasSuper = true;
+            }
+        } else {
+            mainKey = keyOf(token);
+            if (mainKey.empty()) {
+                return {}; // 未知主键
+            }
+        }
+        if (pos == std::string::npos) {
+            break;
+        }
+        begin = pos + 1;
+    }
+    if (mainKey.empty()) {
+        return {}; // 只有修饰键
+    }
+    // 无修饰键的可打印单字符不参与匹配 (会与输入框抢字符)
+    if (!hasMod && mainKey.size() == 1) {
+        return {};
+    }
+    std::string out;
+    if (hasCtrl) {
+        out += "ctrl+";
+    }
+    if (hasAlt) {
+        out += "alt+";
+    }
+    if (hasShift) {
+        out += "shift+";
+    }
+    if (hasSuper) {
+        out += "super+";
+    }
+    out += mainKey;
+    return out;
+}
 
 namespace {
 
@@ -1251,6 +1423,14 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
             renderer.lease->alive.store(false, std::memory_order_release);
         }
     }
+    // 定时器全部取消 (运行时资源; enable 后由插件 start 事务重新注册)
+    for (auto& timer : inst->timers) {
+        if (timer) {
+            timer->alive = false;
+            timer->timer.cancel();
+        }
+    }
+    inst->timers.clear();
     // 语义渲染缓存同步失效: 禁用/卸载后 UI 只读缓存, 未重算即回退通用渲染
     toolRenderCache_->invalidatePlugin(inst->name);
 
@@ -1269,6 +1449,7 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
         drop(reg->toolRenderers);
         drop(reg->actionBindings);
         drop(reg->commands);
+        drop(reg->keybinds);
         uiRegistry_ = std::move(reg);
     }
 
@@ -1295,11 +1476,14 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
     inst->panelRegs.clear();
     inst->infoSectionRegs.clear();
     inst->commandRegs.clear();
+    inst->keybindRegs.clear();
     inst->toolDecorRegs.clear();
     inst->toolRenderRegs.clear();
     inst->actionRegs.clear();
     inst->clientSubscriptions.clear();
     inst->subHandles.clear();
+    // 快捷键句柄与 panel/status 句柄同规则: 不在此释放 (插件的 stop 回调可能仍在
+    // 注销它们), 由 ~ClientPluginInstance 统一回收
 }
 
 /// 反向必选依赖收集 → 公共 collectReverseRequiredDeps
@@ -1452,6 +1636,9 @@ extern const AgentxxClientWireIface    g_clientIfaceWire;
 extern const AgentxxClientSelfIface    g_clientIfaceSelf;
 extern const AgentxxClientJsonIface    g_clientIfaceJson;
 extern const AgentxxClientLogIface     g_clientIfaceLog;
+/// 定时器 / 全局快捷键接口表 (agentxx.client.timer / agentxx.client.keybind)
+extern const AgentxxClientTimerIface   g_clientIfaceTimer;
+extern const AgentxxClientKeybindIface g_clientIfaceKeybind;
 /// 协程驱动接口表 (agentxx.agent.coroutine_runtime; 与 agent 侧同 IID)
 extern const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime;
 
@@ -1578,6 +1765,12 @@ const void* PLUGINXX_CALL
     }
     if (n == AGENTXX_IFACE_CLIENT_LOG) {
         return &g_clientIfaceLog;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_TIMER) {
+        return &g_clientIfaceTimer;
+    }
+    if (n == AGENTXX_IFACE_CLIENT_KEYBIND) {
+        return &g_clientIfaceKeybind;
     }
     if (n == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
         return &g_clientIfaceCoroutineRuntime;
@@ -2025,6 +2218,80 @@ void PLUGINXX_CALL xx_cclose_overlay(const PluginxxHost* host) {
     });
 }
 
+// ---- 定时器 (agentxx.client.timer) ----
+
+AgentxxTimer* PLUGINXX_CALL
+    xx_cset_timer(const PluginxxHost* host, const AgentxxTimerSpec* spec) {
+    if (!spec) {
+        return nullptr;
+    }
+    return onClientIo<AgentxxTimer*>(
+        host,
+        nullptr,
+        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+            return mgr->setTimer(inst, spec);
+        }
+    );
+}
+
+void PLUGINXX_CALL xx_ccancel_timer(const PluginxxHost* host, AgentxxTimer* timer) {
+    onClientIoVoid(host, [timer](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->cancelTimer(inst, timer);
+    });
+}
+
+int32_t PLUGINXX_CALL
+    xx_cis_visible(const PluginxxHost* host, const PluginxxStringView* owner_id) {
+    if (!owner_id || !owner_id->data) {
+        return 0;
+    }
+    std::string_view owner{owner_id->data, static_cast<size_t>(owner_id->size)};
+    // 只读查询 (允许关闭中查询), 与其它 get_* 入口同一形态
+    auto call = enterClientHost(host, /*allowClosing=*/true);
+    if (!call.ok()) {
+        return 0;
+    }
+    auto mgr = call.manager();
+    return (mgr && mgr->isRegionVisible(owner)) ? 1 : 0;
+}
+
+// ---- 全局快捷键 (agentxx.client.keybind) ----
+
+AgentxxKeybind* PLUGINXX_CALL
+    xx_cregister_keybind(const PluginxxHost* host, const AgentxxKeybindSpec* spec) {
+    if (!spec) {
+        return nullptr;
+    }
+    return onClientIo<AgentxxKeybind*>(
+        host,
+        nullptr,
+        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+            return mgr->registerKeybind(inst, spec);
+        }
+    );
+}
+
+void PLUGINXX_CALL xx_cunregister_keybind(const PluginxxHost* host, AgentxxKeybind* bind) {
+    onClientIoVoid(host, [bind](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+        mgr->unregisterKeybind(inst, bind);
+    });
+}
+
+int32_t PLUGINXX_CALL xx_clist_keybinds(const PluginxxHost* host, PluginxxString* out) {
+    return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
+        auto binds = mgr->keybinds();
+        auto arr   = utilxx_base::Json::array();
+        for (const auto& b : binds) {
+            auto item        = utilxx_base::Json::object();
+            item["keys"]     = b.keys;
+            item["plugin"]   = b.plugin;
+            item["description"] = b.description;
+            arr.push_back(std::move(item));
+        }
+        return arr.dump();
+    });
+}
+
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 限制决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
@@ -2101,6 +2368,22 @@ const AgentxxClientLogIface g_clientIfaceLog = {
     /* version */ AGENTXX_IFACE_CLIENT_LOG_VERSION,
     /* struct_size */ sizeof(AgentxxClientLogIface),
     /* log */ xx_clog,
+};
+
+const AgentxxClientTimerIface g_clientIfaceTimer = {
+    /* version */ AGENTXX_IFACE_CLIENT_TIMER_VERSION,
+    /* struct_size */ sizeof(AgentxxClientTimerIface),
+    /* set_timer */ xx_cset_timer,
+    /* cancel_timer */ xx_ccancel_timer,
+    /* is_visible */ xx_cis_visible,
+};
+
+const AgentxxClientKeybindIface g_clientIfaceKeybind = {
+    /* version */ AGENTXX_IFACE_CLIENT_KEYBIND_VERSION,
+    /* struct_size */ sizeof(AgentxxClientKeybindIface),
+    /* register_keybind */ xx_cregister_keybind,
+    /* unregister_keybind */ xx_cunregister_keybind,
+    /* list_keybinds */ xx_clist_keybinds,
 };
 
 /// 协程驱动接口表 (与 agent 侧同 IID; client 插件用同一套 kit 桥接)
@@ -2770,6 +3053,342 @@ int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, PluginxxS
         regs.end()
     );
     return 0;
+}
+
+// ==================== 定时器 (agentxx.client.timer) ====================
+
+namespace {
+
+/// 定时器间隔下限 (更小值按此收敛, 避免插件把 io 线程打满)
+constexpr int32_t kTimerMinIntervalMs = 50;
+/// 单实例定时器数量上限
+constexpr size_t kTimerMaxPerInstance = 8;
+/// 单实例快捷键数量上限
+constexpr size_t kKeybindMaxPerInstance = 16;
+
+/// 等待一次到期 → 触发 (fireTimerTick) → 周期定时器续期
+///
+/// 说明: 定时器生命周期由 [ClientTimerImpl::alive] 控制; 取消后即使有在途等待
+/// 也会在回调里立即返回 (asio 的 cancel 只是让等待以 operation_aborted 提前结束)。
+void armTimer(
+    const std::weak_ptr<ClientPluginManager>& mgr,
+    const std::shared_ptr<ClientTimerImpl>&   timer
+);
+
+/// 触发一次定时器 (仅 io 线程)
+void fireTimerTick(
+    const std::shared_ptr<ClientPluginManager>& mgr,
+    const std::shared_ptr<ClientTimerImpl>&     timer
+) {
+    if (!timer->alive || !timer->cb) {
+        return;
+    }
+    auto inst = timer->inst.lock();
+    if (!inst) {
+        timer->alive = false;
+        return;
+    }
+    // 门控: 关联区域不可见时跳过本次回调并顺延 (计时继续; 可见后自然恢复)
+    // - 一次性定时器在暂停期间不消耗 (区域可见后的下一次到时触发)
+    // - 周期定时器在暂停期间不减计数 (触发次数上限只统计真正回调的次数)
+    const bool hidden = timer->pauseHidden && !timer->ownerId.empty()
+                        && !mgr->isRegionVisible(timer->ownerId);
+    const bool usable = inst->enabled && inst->lifetime && inst->lifetime->acceptsOperations();
+    if (usable && !hidden) {
+        // 回调期间实例由 guard 保活 (禁止卸载 dlclose)
+        PluginInstanceBase::InflightGuard guard(inst);
+        if (guard) {
+            try {
+                timer->cb(timer->ud);
+            } catch (const std::exception& e) {
+                XX_LOGW("[client_plugin] timer callback threw: {}", e.what());
+            } catch (...) {
+                XX_LOGW("[client_plugin] timer callback threw unknown exception");
+            }
+        }
+        // 次数递减: 一次性定时器触发后结束, 周期定时器按 repeat 上限收敛
+        if (timer->repeatMode) {
+            if (timer->repeat > 0) {
+                --timer->repeat;
+            }
+            if (timer->repeat <= 0) {
+                timer->alive = false;
+            }
+        } else {
+            timer->alive = false;
+        }
+    }
+    if (!timer->alive) {
+        // 已结束的定时器保留在实例表内 (不释放): 句柄地址稳定, 插件重复 cancel
+        // 或持有旧句柄都不会命中"被复用地址的新定时器"; 实例禁用/卸载时统一清理
+        return;
+    }
+    armTimer(mgr, timer);
+}
+
+void armTimer(
+    const std::weak_ptr<ClientPluginManager>& mgr,
+    const std::shared_ptr<ClientTimerImpl>&   timer
+) {
+    if (!timer || !timer->alive) {
+        return;
+    }
+    timer->timer.expires_after(std::chrono::milliseconds{std::max<int32_t>(1, timer->intervalMs)});
+    timer->timer.async_wait([mgr, timer](const utilxx_base::AsioErrorCode& ec) {
+        if (ec || !timer->alive) {
+            return; // 已取消 (operation_aborted) 或实例关闭: 静默结束
+        }
+        auto manager = mgr.lock();
+        if (!manager) {
+            return;
+        }
+        fireTimerTick(manager, timer);
+    });
+}
+
+} // namespace
+
+AgentxxTimer* ClientPluginManager::setTimer(ClientPluginInstance* inst, const AgentxxTimerSpec* spec) {
+    if (!inst || !spec || !spec->on_timer || spec->version != 1) {
+        return nullptr;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` set_timer rejected: closing or disabled", inst->name);
+        return nullptr;
+    }
+    if (!animationEnabled_.load(std::memory_order_relaxed)) {
+        // 动画等级 Disabled: 拒绝注册 (插件据此降级为静态展示)
+        XX_LOGD("[client_plugin] `{}` set_timer rejected: animation disabled", inst->name);
+        return nullptr;
+    }
+    // 能力门控: 与其它 register_* 入口一致 (宿主未声明定时器能力时拒绝)
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientTimer})) {
+        XX_LOGW("[client_plugin] `{}` set_timer rejected: interface agentxx.client.timer unsupported", inst->name);
+        return nullptr;
+    }
+    // 上限只统计"仍存活"的定时器 (已结束/已取消的保留在表内但不计数)
+    const size_t liveTimers = std::count_if(
+        inst->timers.begin(),
+        inst->timers.end(),
+        [](const std::shared_ptr<ClientTimerImpl>& h) {
+            return h && h->alive;
+        }
+    );
+    if (liveTimers >= kTimerMaxPerInstance) {
+        XX_LOGW(
+            "[client_plugin] `{}` set_timer rejected: too many timers ({})",
+            inst->name,
+            liveTimers
+        );
+        return nullptr;
+    }
+    const auto& executor = ioExecutor();
+    if (!executor) {
+        return nullptr;
+    }
+    auto impl          = std::make_shared<ClientTimerImpl>(executor);
+    impl->inst         = inst->self;
+    impl->ownerId      = svToStr(spec->owner_id);
+    impl->intervalMs   = std::max<int32_t>(kTimerMinIntervalMs, spec->interval_ms);
+    impl->repeatMode   = spec->repeat > 0;
+    impl->repeat       = spec->repeat;
+    impl->pauseHidden  = spec->pause_when_hidden != 0;
+    impl->cb           = spec->on_timer;
+    impl->ud           = spec->user_data;
+    inst->timers.push_back(impl);
+    armTimer(weak_from_this(), impl);
+    return reinterpret_cast<AgentxxTimer*>(impl.get());
+}
+
+void ClientPluginManager::cancelTimer(ClientPluginInstance* inst, AgentxxTimer* timer) {
+    if (!inst || !timer) {
+        return;
+    }
+    auto* impl = reinterpret_cast<ClientTimerImpl*>(timer);
+    // 只接受仍在本实例表内的句柄 (重复取消/跨实例句柄忽略);
+    // 已结束的定时器仍留在表内, 因此旧句柄可安全命中并直接标记
+    auto  it   = std::find_if(inst->timers.begin(), inst->timers.end(), [&](const auto& h) {
+        return h.get() == impl;
+    });
+    if (it == inst->timers.end()) {
+        return;
+    }
+    impl->alive = false;
+    impl->timer.cancel();
+    // 不在此释放: 句柄地址需保持稳定 (见 fireTimerTick 说明)
+}
+
+bool ClientPluginManager::isRegionVisible(std::string_view ownerId) const {
+    if (ownerId.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(regionMutex_);
+    auto                        it = regionVisibility_.find(ownerId);
+    return (it == regionVisibility_.end()) ? false : it->second;
+}
+
+void ClientPluginManager::reportRegionVisible(const std::string& id, bool visible) {
+    if (id.empty()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(regionMutex_);
+        auto [it, inserted] = regionVisibility_.try_emplace(id, visible);
+        if (!inserted && it->second == visible) {
+            return; // 值未变化: 不产生任何开销
+        }
+        it->second = visible;
+    }
+}
+
+std::map<std::string, bool, std::less<>> ClientPluginManager::regionVisibility() const {
+    std::lock_guard<std::mutex> lock(regionMutex_);
+    return regionVisibility_;
+}
+
+// ==================== 全局快捷键 (agentxx.client.keybind) ====================
+
+AgentxxKeybind*
+    ClientPluginManager::registerKeybind(ClientPluginInstance* inst, const AgentxxKeybindSpec* spec) {
+    if (!inst || !spec || !spec->on_keybind || spec->version != 1) {
+        return nullptr;
+    }
+    if (!acceptsRegistration(inst)) {
+        XX_LOGW("[client_plugin] `{}` register_keybind rejected: closing or disabled", inst->name);
+        return nullptr;
+    }
+    const std::string rawKeys = svToStr(spec->keys);
+    const std::string keys    = normalizeKeybindSpec(rawKeys);
+    if (keys.empty()) {
+        XX_LOGW("[client_plugin] `{}` register_keybind rejected: invalid keys `{}`", inst->name, rawKeys);
+        return nullptr;
+    }
+    // 能力门控: 与其它 register_* 入口一致 (宿主未声明快捷键能力时拒绝)
+    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientKeybind})) {
+        XX_LOGW(
+            "[client_plugin] `{}` register_keybind rejected: interface agentxx.client.keybind unsupported",
+            inst->name
+        );
+        return nullptr;
+    }
+    if (inst->keybindRegs.size() >= kKeybindMaxPerInstance) {
+        XX_LOGW("[client_plugin] `{}` register_keybind rejected: too many keybinds", inst->name);
+        return nullptr;
+    }
+    ClientKeybind reg;
+    reg.plugin      = inst->name;
+    reg.keys        = keys;
+    reg.description = svToStr(spec->description);
+    reg.handler     = spec->on_keybind;
+    reg.ud          = spec->user_data;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        for (const auto& k : uiRegistry_->keybinds) {
+            if (k.keys == keys) {
+                XX_LOGW(
+                    "[client_plugin] keybind `{}` rejected: occupied by `{}`",
+                    keys,
+                    k.plugin
+                );
+                return nullptr;
+            }
+        }
+        auto cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        cur->keybinds.push_back(reg);
+        uiRegistry_ = std::move(cur);
+    }
+    inst->keybindRegs.push_back(std::move(reg));
+
+    auto handle    = std::make_shared<AgentxxKeybind>();
+    handle->inst   = inst;
+    handle->keys   = keys;
+    inst->keybindHandles.push_back(handle);
+    return handle.get();
+}
+
+void ClientPluginManager::unregisterKeybind(ClientPluginInstance* inst, AgentxxKeybind* bind) {
+    if (!inst || !bind) {
+        return;
+    }
+    auto* handle = static_cast<AgentxxKeybind*>(bind);
+    if (handle->inst != inst) {
+        // 跨实例句柄或已注销的句柄 (unregisterPanel 同规则: 句柄保活到实例析构,
+        // 注销只把 inst 置空; 句柄释放时机由 ~ClientPluginInstance 决定)
+        return;
+    }
+    const std::string keys = handle->keys;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        std::erase_if(cur->keybinds, [&](const ClientKeybind& k) {
+            return k.plugin == inst->name && k.keys == keys;
+        });
+        uiRegistry_ = std::move(cur);
+    }
+    std::erase_if(inst->keybindRegs, [&](const ClientKeybind& k) {
+        return k.plugin == inst->name && k.keys == keys;
+    });
+    handle->inst = nullptr; // 标记失效 (句柄本身保活到实例析构, 重复注销安全)
+}
+
+bool ClientPluginManager::hasKeybind(std::string_view keys) const {
+    if (keys.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(uiMutex_);
+    for (const auto& k : uiRegistry_->keybinds) {
+        if (k.keys == keys) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<ClientKeybind> ClientPluginManager::keybinds() const {
+    std::lock_guard<std::mutex> lock(uiMutex_);
+    auto                        out = uiRegistry_->keybinds;
+    std::sort(out.begin(), out.end(), [](const ClientKeybind& a, const ClientKeybind& b) {
+        if (a.keys != b.keys) {
+            return a.keys < b.keys;
+        }
+        return a.plugin < b.plugin;
+    });
+    return out;
+}
+
+void ClientPluginManager::postKeybindInvocation(std::string keys) {
+    auto self = shared_from_this();
+    postToIo([self, keys = std::move(keys)]() mutable {
+        ClientKeybind   hit;
+        bool            found = false;
+        std::shared_ptr<ClientPluginInstance> inst;
+        {
+            std::lock_guard<std::mutex> lock(self->uiMutex_);
+            for (const auto& k : self->uiRegistry_->keybinds) {
+                if (k.keys == keys) {
+                    hit   = k;
+                    inst  = self->find(k.plugin);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found || !hit.handler || !inst || !inst->enabled) {
+            XX_LOGD("[client_plugin] keybind `{}` not dispatched (unregistered or disabled)", keys);
+            return;
+        }
+        PluginInstanceBase::InflightGuard guard(inst);
+        if (!guard) {
+            return;
+        }
+        try {
+            hit.handler(hit.ud);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] keybind `{}` handler threw: {}", keys, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] keybind `{}` handler threw unknown exception", keys);
+        }
+    });
 }
 
 PluginxxSubscription* ClientPluginManager::subscribe(

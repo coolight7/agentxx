@@ -246,10 +246,21 @@ struct UiActionItem {
   `UiFormState` + 点击/键盘/校验/取值函数), 差别只有结果去处 (中断经结果通道回传
   `{"values":{...}}`)。中断侧的命中区域记录 "行元素框 + 行内区域" (控件所在行由
   `ui_components` 登记区域, `InterruptView` 按块归因), 与其它接入点的两级判定一致。
+- **定时器与快捷键**: 插件不能自己起线程/定时器, 需要"按时间刷新"或"响应按键"时经
+  `agentxx.client.timer` / `agentxx.client.keybind` 两张表注册 (回调都在 client io
+  线程执行, 插件代码永不进 UI 线程):
+  - 定时器: `pause_when_hidden` 关联的面板/Info 段落不可见时顺延不触发; 宿主动画等级
+    `Disabled` 时拒绝注册; 插件禁用/卸载时宿主全部取消
+  - 快捷键: UI 线程按 `keybindOfEvent(event)` 得到的规范化键位查表
+    (`ClientPluginManager::hasKeybind`) 命中后拦截事件, 经 `postKeybindInvocation`
+    投递回 io 线程执行插件回调; 优先级为"全局快捷键 > 表单控件焦点 > 普通按键",
+    模态弹窗打开时不触发; 无修饰键的可打印字符不参与匹配 (不影响输入框打字)
+  - 可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`: 面板 = 当前激活 tab,
+    Info 段落 = Info tab 激活), 经 `is_visible` 查询
 - 尺寸感知: 宿主布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
   `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 (载荷 `{"regions":[{id,w,h}]}`), 并可经
   `get_client_state().regions` 查询; 插件据此按可用宽度重排内容。
-- 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.4 与
+- 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
   [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
 ---

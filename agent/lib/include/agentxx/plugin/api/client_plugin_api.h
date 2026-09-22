@@ -468,6 +468,106 @@ typedef struct AgentxxClientLogIface {
              log)(const PluginxxHost* host, int32_t level, const PluginxxStringView* msg);
 } AgentxxClientLogIface;
 
+/* ==================== 接口表: 定时器 (agentxx.client.timer) ==================== */
+
+#define AGENTXX_IFACE_CLIENT_TIMER         "agentxx.client.timer"
+#define AGENTXX_IFACE_CLIENT_TIMER_VERSION 1
+
+/// 定时器句柄 (宿主拥有; 取消或实例卸载后失效)
+typedef struct AgentxxTimer AgentxxTimer;
+
+/// 定时器参数 (全部只读借用, 宿主拷贝后使用)
+typedef struct AgentxxTimerSpec {
+    int32_t  version;   ///< 必须 == 1
+    uint32_t _reserved; ///< 8 字节对齐
+    /// 触发间隔毫秒; 宿主持有下限 (当前 50, 更小按 50 处理)
+    int32_t interval_ms;
+    /// 0 = 仅触发一次; > 0 = 周期触发 (回调次数上限, 到达后自动取消)
+    int32_t repeat;
+    /// 非 0: 关联区域 ([owner_id]) 不可见时跳过本次回调并顺延 (计时继续)
+    /// - 顺延期间不消耗触发次数: 一次性定时器在区域可见后的下一次到时触发,
+    ///   周期定时器只统计真正回调的次数
+    /// - 高频 (< 200ms) 刷新面板/overlay 的插件应置 1, 避免不可见时白耗 CPU
+    int32_t pause_when_hidden;
+    /// 关联的展示区域 id (面板/Info 段落 id; 空 = 无关联, [is_visible] 恒为 0)
+    PluginxxStringView owner_id;
+    /// 超时回调 (client io 线程同步调用; 不得抛异常出边界, 宿主兜底)
+    void(PLUGINXX_CALL* on_timer)(void* user_data);
+    /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
+    void* user_data;
+} AgentxxTimerSpec;
+
+typedef struct AgentxxClientTimerIface {
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_TIMER_VERSION
+    uint32_t struct_size;
+
+    /// 注册定时器 (client io 线程; 返回句柄, 失败返回 NULL)
+    /// - 失败原因: spec 非法 (版本/回调为空) / 宿主动画等级为 Disabled /
+    ///   单实例定时器数量超上限 (当前 8)
+    /// - 句柄由宿主持有, 实例禁用/卸载时自动取消 (插件无需在 stop 里逐个取消,
+    ///   但主动取消更及时)
+    AgentxxTimer*(PLUGINXX_CALL* set_timer)(
+        const PluginxxHost*       host,
+        const AgentxxTimerSpec*   spec
+    );
+    /// 取消定时器 (io 线程; 句柄随后失效, 重复取消/空句柄忽略)
+    void(PLUGINXX_CALL* cancel_timer)(const PluginxxHost* host, AgentxxTimer* timer);
+    /// 关联区域当前是否可见 (1/0; owner_id 为空或宿主未上报过返回 0)
+    int32_t(PLUGINXX_CALL* is_visible)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* owner_id
+    );
+} AgentxxClientTimerIface;
+
+/* ==================== 接口表: 全局快捷键 (agentxx.client.keybind) ==================== */
+
+#define AGENTXX_IFACE_CLIENT_KEYBIND         "agentxx.client.keybind"
+#define AGENTXX_IFACE_CLIENT_KEYBIND_VERSION 1
+
+/// 快捷键句柄 (宿主拥有; 注销或实例卸载后失效)
+typedef struct AgentxxKeybind AgentxxKeybind;
+
+/// 快捷键参数 (全部只读借用, 宿主拷贝后使用)
+typedef struct AgentxxKeybindSpec {
+    int32_t  version;   ///< 必须 == 1
+    uint32_t _reserved; ///< 8 字节对齐
+    /// 键位描述: 修饰键 + 主键, 用 `+` 连接, 不区分大小写与前后空格
+    /// - 修饰键: `ctrl` (或 `control`) / `alt` / `shift` / `super` (或 `cmd`/`win`)
+    /// - 主键: 单个可打印字符 (a-z / 0-9 / 符号) 或
+    ///   `f1`~`f24` / `esc` / `enter` / `tab` / `space` / `backspace` / `delete` /
+    ///   `up` / `down` / `left` / `right` / `home` / `end` / `pageup` / `pagedown` /
+    ///   `insert`
+    /// - 例: `"ctrl+alt+k"` / `"f9"` / `"ctrl+shift+space"`
+    /// - 无修饰键的可打印字符**不参与匹配** (避免与输入框抢字符), 注册会失败
+    PluginxxStringView keys;
+    /// 说明文本 (界面/帮助展示; 可空)
+    PluginxxStringView description;
+    /// 触发回调 (client io 线程同步调用; 不得抛异常出边界, 宿主兜底)
+    void(PLUGINXX_CALL* on_keybind)(void* user_data);
+    /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
+    void* user_data;
+} AgentxxKeybindSpec;
+
+typedef struct AgentxxClientKeybindIface {
+    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_KEYBIND_VERSION
+    uint32_t struct_size;
+
+    /// 注册全局快捷键 (client io 线程; 返回句柄, 失败返回 NULL)
+    /// - 失败原因: 键位无法解析 / 无修饰键的可打印字符 / 已被其它实例占用
+    ///   (先注册者优先) / 单实例数量超上限 (当前 16)
+    /// - 快捷键在表单控件有焦点时同样生效 (全局优先级最高); 输入框内输入字符
+    ///   不受影响 (可打印字符本身不参与匹配)
+    AgentxxKeybind*(PLUGINXX_CALL* register_keybind)(
+        const PluginxxHost*        host,
+        const AgentxxKeybindSpec*  spec
+    );
+    /// 注销快捷键 (io 线程; 句柄随后失效, 重复注销/空句柄忽略)
+    void(PLUGINXX_CALL* unregister_keybind)(const PluginxxHost* host, AgentxxKeybind* bind);
+    /// 当前已注册的快捷键列表 (io 线程; JSON 数组, 元素
+    /// `{"keys","description","plugin"}`; 结果 host->alloc, 空列表返回 `[]`)
+    int32_t(PLUGINXX_CALL* list_keybinds)(const PluginxxHost* host, PluginxxString* out);
+} AgentxxClientKeybindIface;
+
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
 /// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过;

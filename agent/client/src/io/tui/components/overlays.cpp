@@ -314,7 +314,7 @@ void SettingsOverlay::buildItems() {
          .label = std::string{tr("settings.animLabel")},
          .value = trf("settings.animValue", TUISettings::instance().animationLevelName()),
          .onActivate =
-             [] {
+             [this] {
                  cycleAnimationLevel();
              }},
         // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
@@ -497,6 +497,10 @@ void SettingsOverlay::cycleAnimationLevel() {
     const int next     = (static_cast<int>(settings.animationLevel()) + 1)
                      % static_cast<int>(TUISettings::kAnimationLevelNames.size());
     settings.setAnimationLevel(static_cast<AnimationLevel>(next));
+    // 通知外部同步动画门控 (插件定时器在 Disabled 等级下不注册)
+    if (onAnimationLevelChange_) {
+        onAnimationLevelChange_();
+    }
 }
 
 void SettingsOverlay::cycleLogLevel() {
