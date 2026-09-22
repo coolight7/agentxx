@@ -10,6 +10,7 @@
 #include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/io/tui/tui_keybind.h"
 #include "agentxx-client/mode_runners.h"
+#include "agentxx-client/update_check.h"
 #include "agentxx-client/util/clipboard.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/model_registry.h"
@@ -892,6 +893,11 @@ void TUIClientAgentIO::start() {
             screen_ = nullptr;
         }
     });
+
+    // 启动更新检查 (设置项 `启动时检查更新` 关闭时不发起):
+    // - 在 client io 线程的协程中延迟若干秒后发一次请求, 不阻塞 UI 线程
+    // - 结果经 applyUpdateCheckResult 记录到共享状态并在 Info 侧边栏底部提示
+    startUpdateCheck();
 }
 
 TUIClientAgentIO::FrameStats TUIClientAgentIO::frameStats() const {
@@ -1214,6 +1220,21 @@ void TUIClientAgentIO::handleShellHit(std::string_view id) {
     }
     if (id == kAuthToggleHitId) {
         toggleFullAuth();
+        return;
+    }
+    if (id == kUpdateNoticeHitId) {
+        // 点击"发现新版本"提示行: 复制发布页链接 (TUI 不便直接打开浏览器)
+        const std::string url
+            = (ctx_.frameState != nullptr) ? ctx_.frameState->availableUpdateUrl : std::string{};
+        if (url.empty()) {
+            return;
+        }
+        if (agentxx::client::copyTextToSystemClipboard(url)) {
+            showToast(trf("toast.copied", url));
+        } else {
+            showToast(std::string(tr("toast.copyFailed")));
+        }
+        postRedraw();
         return;
     }
 }
@@ -2125,6 +2146,72 @@ void TUIClientAgentIO::toggleFullAuth() {
         next ? std::string{tr("toast.fullAuthOn")} : std::string{tr("toast.fullAuthOff")},
         0
     );
+    postRedraw();
+}
+
+// ---------------------------------------------------------------------------
+// 启动更新检查 (GitHub Release)
+// ---------------------------------------------------------------------------
+
+namespace {
+/// 启动后到发起更新请求的等待时长: 不与首屏渲染/agent 初始化争抢网络与 CPU
+/// (检查只为附加提示, 晚几秒到达无影响)
+constexpr auto kUpdateCheckDelay = std::chrono::seconds{3};
+} // namespace
+
+void TUIClientAgentIO::startUpdateCheck() {
+    if (!TUISettings::instance().checkUpdateOnStartup()) {
+        XX_LOGD("[tui] update check disabled by settings (启动时检查更新: 关)");
+        return;
+    }
+    auto weak = weak_from_this();
+    asio::co_spawn(
+        ex_,
+        [weak]() -> asio::awaitable<void> {
+            auto self = weak.lock();
+            if (!self) {
+                co_return;
+            }
+            asio::steady_timer timer(co_await asio::this_coro::executor);
+            timer.expires_after(kUpdateCheckDelay);
+            co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
+
+            auto result = co_await agentxx::client::checkLatestReleaseForCurrentVersion();
+
+            // 结果应用 (须在 UI 线程): 期间 TUI 可能已退出, 退出后不再改动界面
+            auto keepAlive = weak.lock();
+            if (!keepAlive || !keepAlive->running()) {
+                co_return;
+            }
+            keepAlive->applyUpdateCheckResult(std::move(result));
+            co_return;
+        },
+        asio::detached
+    );
+}
+
+void TUIClientAgentIO::applyUpdateCheckResult(agentxx::client::UpdateCheckResult result) {
+    if (!result.ok) {
+        // 附加提示: 检查失败 (无网络/超时/端点变更) 只记日志, 不打扰用户
+        XX_LOGD("[tui] update check failed: {}", result.error);
+        return;
+    }
+    XX_LOGI(
+        "[tui] update check: current={} latest={} hasUpdate={}",
+        kAgentxxVersion,
+        result.latestTag,
+        result.hasUpdate
+    );
+    if (!result.hasUpdate) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st       = sharedState_.mutableState();
+        st.availableUpdateTag                = result.latestTag;
+        st.availableUpdateUrl                = result.url;
+    }
+    uiToast(trf("toast.updateAvailable", result.latestTag, std::string{kAgentxxVersion}), 0);
     postRedraw();
 }
 

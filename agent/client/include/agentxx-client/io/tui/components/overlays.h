@@ -222,6 +222,8 @@ private:
     static void cycleTailThinkingMode();
     /// 循环切换界面语言: 简体中文 <-> English (需要访问 onLanguageChange_, 非静态)
     void cycleLanguage();
+    /// 切换"启动时检查更新"开关: 开 <-> 关 (持久化; 仅影响下次启动)
+    static void cycleCheckUpdateOnStartup();
 
     TUICtx&       ctx_;
     UiActionList  list_;

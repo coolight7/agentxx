@@ -55,6 +55,8 @@ constexpr Entry kTable[] = {
      "Full authorization enabled: permission requests will no longer be asked",          "已切换为完全授权: 后续不再询问权限"                                                  },
     {"toast.fullAuthOff",
      "Authorization prompt restored: permission requests will be asked again",           "已恢复询问授权: 权限请求将再次询问"                                                  },
+    {"toast.updateAvailable",
+     "New version {} available (current {}); click the notice in the Info sidebar to copy the link", "发现新版本 {} (当前 {}); 点击 Info 侧边栏提示可复制链接"    },
 
  // ---- 待发送消息队列 (顶栏 + 弹窗) ----
     {"queue.barTitle",            "  • Message Queue: {}",                             "  • 待发送消息队列: {}"                                                                  },
@@ -129,6 +131,10 @@ constexpr Entry kTable[] = {
     {"settings.aboutValue",       "About",                                               "关于"                                                                                           },
     {"settings.keybindLabel",     "Shortcuts",                                           "快捷键"                                                                                         },
     {"settings.keybindValue",     "Plugin Keybinds: {}",                                 "插件快捷键: {}"                                                                                 },
+    {"settings.updateLabel",      "Check Updates",                                       "启动时检查更新"                                                                               },
+    {"settings.updateValue",      "Check for Updates on Startup: {}",                    "启动时检查更新: {}"                                                                           },
+    {"settings.switchOn",         "On",                                                  "开"                                                                                             },
+    {"settings.switchOff",        "Off",                                                 "关"                                                                                             },
     {"settings.hint",
      " [Up/Down] Move [Enter] Toggle [Esc] Close ",                                      " [方向键] 移动 [Enter] 切换 [Esc] 关闭 "                                                 },
 
@@ -259,6 +265,9 @@ constexpr Entry kTable[] = {
     // 授权状态按钮 (Info 侧边栏底部工作目录行): 显示当前状态, 点击切换
     {"info.authFull",             "[ Full Permission ]",                                 "[ 完全授权 ]"                                                                                 },
     {"info.authAsk",              "[ Ask Permission ]",                                  "[ 询问授权 ]"                                                                                 },
+    // 更新提示行 (启动检查发现新版本时; 点击复制发布页链接)
+    {"info.updateNotice",         "[ New Version {} ]",                                  "[ 新版本 {} ]"                                                                               },
+    {"info.updateHint",           "click to copy the release link",                      "点击复制发布链接"                                                                         },
     {"info.idle",                 "idle",                                                "空闲"                                                                                           },
     {"footer.menu",               "[ Menu ]",                                            "[ 菜单 ]"                                                                                       },
 };

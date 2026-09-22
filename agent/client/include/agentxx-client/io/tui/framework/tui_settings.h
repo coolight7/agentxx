@@ -136,6 +136,9 @@ public:
     /// 默认界面语言: 自动 (根据系统语言环境在已支持语言列表中自动选择)
     inline static constexpr TuiLanguage kDefaultLanguage = TuiLanguage::Auto;
 
+    /// 默认是否在启动时检查更新: 是 (检查失败/无网络时静默忽略, 不影响使用)
+    inline static constexpr bool kDefaultCheckUpdateOnStartup = true;
+
     /// 主题枚举 (与 tui.theme 库中存储的整数值对应)
     enum ThemeKind : int {
         kThemeDark  = 0, ///< Dark (默认)
@@ -176,6 +179,10 @@ public:
             if (lang == static_cast<int>(TuiLanguage::Auto)) {
                 refreshAutoLanguage();
             }
+        }
+        auto checkUpdate = db_->getInt64("tui.checkUpdateOnStartup", -1);
+        if (checkUpdate >= 0) {
+            checkUpdateOnStartup_.store(checkUpdate != 0, std::memory_order_release);
         }
     }
 
@@ -349,6 +356,21 @@ public:
         );
     }
 
+    /// 是否在启动时检查更新 (GitHub Release; 见 update_check.h)
+    bool checkUpdateOnStartup() const noexcept {
+        return checkUpdateOnStartup_.load(std::memory_order_acquire);
+    }
+
+    /// 设置启动时检查更新开关
+    /// - 变更同步持久化到全局设置数据库 (失败仅记日志, 不影响本次设置)
+    /// - 仅影响下次启动: 本次启动是否已发起检查不再撤销
+    inline void setCheckUpdateOnStartup(bool enabled) noexcept {
+        checkUpdateOnStartup_.store(enabled, std::memory_order_release);
+        if (db_) {
+            db_->setInt64("tui.checkUpdateOnStartup", enabled ? 1 : 0);
+        }
+    }
+
     /// 语言显示名称 (当前设置值)
     std::string_view languageName() const noexcept {
         const int idx = static_cast<int>(language());
@@ -401,6 +423,8 @@ private:
     std::atomic<int> tailThinkingMode_{static_cast<int>(kDefaultTailThinkingMode)};
     /// 界面语言设置 (存储为 int 以便原子读写; 0=Auto, 1=ZhCn, 2=EnUs)
     std::atomic<int> language_{static_cast<int>(kDefaultLanguage)};
+    /// 启动时检查更新开关 (GitHub Release; 默认开启, 设置弹窗可关)
+    std::atomic<bool> checkUpdateOnStartup_{kDefaultCheckUpdateOnStartup};
     /// 自动模式下解析出的生效语言 (始终为已支持的具体语言: ZhCn 或 EnUs)
     std::atomic<int> autoResolvedLanguage_{static_cast<int>(TuiLanguage::ZhCn)};
     /// 全局设置数据库 (空 = 未持久化, 设置仅存内存)

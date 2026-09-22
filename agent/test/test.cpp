@@ -80,6 +80,7 @@
 #include "agentxx-test/client/test_tui_tool_header.h"
 #include "agentxx-test/client/test_tui_ui_items.h"
 #include "agentxx-test/client/test_tui_widget.h"
+#include "agentxx-test/client/test_update_check.h"
 #endif
 #include "agentxx-test/core/test_util_misc.h"
 #include "agentxx-test/core/test_web_search_tools.h"
@@ -220,6 +221,7 @@ int main(int argn, char** argv) {
 #ifdef AGENTXX_BUILD_CLIENT
         runSync("config_loader", agentxx::test::testConfigLoader);
         runSync("tui_settings", agentxx::test::testTuiSettings);
+        runSync("update_check", agentxx::test::testUpdateCheck);
         runSync("tui_input", agentxx::test::testTuiInput);
         runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
         runSync("tui_scroll", agentxx::test::testTuiScroll);

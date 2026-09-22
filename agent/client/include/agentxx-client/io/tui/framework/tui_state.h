@@ -110,6 +110,13 @@ struct TUIRenderState {
     /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
     bool fullAuthorized = false;
 
+    /// 启动更新检查发现的新版本标签 (空 = 未发现更新/未开启检查/检查失败)
+    /// - 由 TUIClientAgentIO::applyUpdateCheckResult 写入 (client io 线程 → UI 快照)
+    /// - Info 侧边栏底部据此显示"发现新版本"提示行 (见 kUpdateNoticeHitId)
+    std::string availableUpdateTag;
+    /// 新版本发布页 URL (availableUpdateTag 非空时有效; 点击提示行复制该链接)
+    std::string availableUpdateUrl;
+
     std::shared_ptr<std::string> currentToken;
     TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
     bool                         isStreaming      = false;

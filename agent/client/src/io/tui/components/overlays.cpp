@@ -356,6 +356,20 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLanguage();
              }},
+        // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
+        {.id    = "check-update",
+         .label = std::string{tr("settings.updateLabel")},
+         .value = trf(
+             "settings.updateValue",
+             std::string{tr(
+                 TUISettings::instance().checkUpdateOnStartup() ? "settings.switchOn"
+                                                                : "settings.switchOff"
+             )}
+         ),
+         .onActivate =
+             [] {
+                 cycleCheckUpdateOnStartup();
+             }},
         // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
         {.id    = "keybinds",
          .label = std::string{tr("settings.keybindLabel")},
@@ -563,6 +577,11 @@ void SettingsOverlay::cycleLanguage() {
     if (onLanguageChange_) {
         onLanguageChange_();
     }
+}
+
+void SettingsOverlay::cycleCheckUpdateOnStartup() {
+    auto& settings = TUISettings::instance();
+    settings.setCheckUpdateOnStartup(!settings.checkUpdateOnStartup());
 }
 
 size_t SettingsOverlay::keybindCount() const {

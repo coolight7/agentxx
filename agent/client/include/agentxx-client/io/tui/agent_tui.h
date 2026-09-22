@@ -10,6 +10,7 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx-client/io/tui/ui_components.h"
+#include "agentxx-client/update_check.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -326,6 +327,21 @@ public:
     ///   WireSetFullAuth; 服务端应用后经 WirePermissionState 广播回真实状态
     /// - 状态本身由 agent 侧权限中间件持有, 客户端只展示与请求切换
     void toggleFullAuth();
+
+    /// 发起启动更新检查 (GitHub Release; client io 线程调用, 由 [start] 触发)
+    ///
+    /// - 设置项 `启动时检查更新` (TUISettings::checkUpdateOnStartup) 关闭时不发起;
+    ///   变更仅影响下次启动
+    /// - 检查在 client io 线程的协程中执行 (启动后延迟若干秒再发请求, 不与首屏
+    ///   渲染/agent 初始化争抢), 不阻塞 UI 线程
+    /// - 失败 (无网络/超时/解析失败) 只记日志, 不打扰用户; 有更新时记录到共享状态
+    ///   并在 Info 侧边栏底部显示提示行 (点击复制发布页链接)
+    void startUpdateCheck();
+
+    /// 应用更新检查结果 (UI 线程): 记录可用新版本"tag/url"并提示 (toast + 重绘)
+    /// - `ok=false` (检查失败) 时只记日志
+    /// - 无更新时不改动界面状态
+    void applyUpdateCheckResult(agentxx::client::UpdateCheckResult result);
 
     /// 刷新组件共享上下文的帧快照 (UI 线程; 帧循环每帧调用一次)
     ///
@@ -738,6 +754,8 @@ private:
     static constexpr std::string_view kLogsMenuHitId   = "shell/logs-menu";
     /// Info 侧边栏底部"完全授权 / 询问授权"切换按钮 (点击切换授权模式)
     static constexpr std::string_view kAuthToggleHitId = "shell/info-auth-toggle";
+    /// Info 侧边栏底部"发现新版本"提示行 (点击复制发布页链接)
+    static constexpr std::string_view kUpdateNoticeHitId = "shell/info-update-notice";
 
     /// 处理 shell 级按钮命中 (UI 线程; 由全局鼠标事件经 shellHits_ 分发)
     void handleShellHit(std::string_view id);

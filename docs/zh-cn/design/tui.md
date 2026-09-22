@@ -295,6 +295,30 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 路径一律以 **UTF-8** 显示 (`utilxx_base::pathToUtf8Generic`): Windows 下
   `std::filesystem::path::string()` 返回本地代码页, 中文目录会显示为乱码。
 
+### 2.8 启动更新检查 (GitHub Release)
+
+启动时可选地查询项目最新发布版本, 有更新才提示 (纯附加提示, 失败静默):
+
+- 实现在 [update_check.h](/agent/client/include/agentxx-client/update_check.h) /
+  `update_check.cpp`: 对 `https://github.com/coolight7/agentxx/releases/latest` 发一次
+  GET, **不跟随重定向**并读 302 的 `Location` (即 `.../releases/tag/<tag>`) 取出最新
+  版本标签与发布页链接; 对端直接返回 JSON (GitHub API 形态) 时回退读 `tag_name` /
+  `html_url`。连接与读块超时各 8 秒; 任何失败都返回 `ok=false` + `error`, 不抛异常。
+- 版本比较只按三段数字 (`major.minor.patch`), 忽略 `-rc1` 之类后缀; 仅当最新版本
+  **大于**当前编译版本 (`agentxx::kVersion`) 才算"有更新" (两侧任一解析失败都按无更新
+  处理, 宁可漏报不误报)。
+- 触发点: `TUIClientAgentIO::start()` → `startUpdateCheck()` (client io 线程协程,
+  启动后延迟 3 秒再请求, 不阻塞 UI 线程); 结果经 `applyUpdateCheckResult` 写入共享
+  状态 `availableUpdateTag/Url` 并 toast 提示。
+- 展示: Info 侧边栏底部多一行 `[ 新版本 {tag} ]` + 点击提示 (`info.updateNotice` /
+  `info.updateHint`), 点击复制发布页链接 (经 shell 级命中表 `kUpdateNoticeHitId`);
+  无更新时不渲染该行。
+- 开关: 设置弹窗"启动时检查更新"条目 (`settings.updateLabel`, 开/关), 持久化键
+  `tui.checkUpdateOnStartup` (global.db), 默认开; 变更只影响下次启动。
+- 测试: 版本解析/比较与失败路径 `agentxx_test update_check`; 本地 HTTP 服务端到端
+  (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 界面提示与设置条目在
+  `agentxx_test tui_settings`。
+
 ---
 
 ## 3. 必须遵守的约束

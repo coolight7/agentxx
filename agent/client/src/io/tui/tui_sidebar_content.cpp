@@ -339,6 +339,22 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
         | xflex | color(theme_.hintColor)
     );
 
+    // 发现新版本时的提示行 (启动更新检查结果; 点击复制发布页链接):
+    // 未发现更新时不渲染, 因此不占用任何点击区域
+    if (ctx_.frameState != nullptr && !ctx_.frameState->availableUpdateTag.empty()) {
+        elements.push_back(
+            hbox({
+                shellHits_.add(
+                    text(trf("info.updateNotice", ctx_.frameState->availableUpdateTag))
+                        | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
+                    std::string{kUpdateNoticeHitId}
+                ),
+                filler(),
+                text(tr("info.updateHint")) | theme_.dim() | xflex_shrink,
+            })
+        );
+    }
+
     return vbox(std::move(elements));
 }
 

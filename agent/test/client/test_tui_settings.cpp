@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
+#include "agentxx-client/update_check.h"
 #include "agentxx/agent/io/channel_io_transport.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/settings_db.h"
@@ -545,6 +546,8 @@ void test_persist_to_db() {
         agentxx::util::SettingsDb pre(dbPath);
         pre.setInt64("tui.lang", static_cast<int64_t>(TuiLanguage::ZhCn));
         pre.setInt64("tui.theme", static_cast<int64_t>(TUISettings::kThemeLight));
+        // 启动时检查更新: 上次会话已关闭 (0)
+        pre.setInt64("tui.checkUpdateOnStartup", 0);
     }
 
     auto db = std::make_shared<agentxx::util::SettingsDb>(dbPath);
@@ -553,6 +556,7 @@ void test_persist_to_db() {
     // 校验 attachDb 成功从数据库恢复已存设置
     XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::ZhCn);
     XX_TEST_EXPECT_TRUE(settings.themeKind() == TUISettings::kThemeLight);
+    XX_TEST_EXPECT_FALSE(settings.checkUpdateOnStartup());
 
     // 写入设置 → 直接读库文件校验持久化 (绕过单例, 模拟重启后的新进程)
     settings.setThemeKind(TUISettings::kThemeLight);
@@ -560,12 +564,14 @@ void test_persist_to_db() {
     settings.setLogLevel(utilxx_base::LogLevel::Warn);
     settings.setTailThinkingMode(TailThinkingMode::SingleLine);
     settings.setLanguage(TuiLanguage::EnUs);
+    settings.setCheckUpdateOnStartup(true);
     {
         auto fresh = agentxx::util::SettingsDb(dbPath);
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.theme", -1), int64_t{TUISettings::kThemeLight});
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.animationLevel", -1), int64_t{1}); // Low
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.logLevel", -1), int64_t{3});       // Warn
         XX_TEST_EXPECT_EQ(fresh.getInt64("tui.tailThinking", -1), int64_t{1});   // SingleLine
+        XX_TEST_EXPECT_EQ(fresh.getInt64("tui.checkUpdateOnStartup", -1), int64_t{1});
         XX_TEST_EXPECT_EQ(
             fresh.getInt64("tui.lang", -1),
             int64_t{static_cast<int>(TuiLanguage::EnUs)}
@@ -980,6 +986,77 @@ void test_tui_info_footer_auth_button() {
     TUISettings::instance().setLanguage(originalLang);
 }
 
+/// Info 侧边栏底部: 启动更新检查发现新版本时显示提示行 (点击复制发布链接);
+/// 无更新 / 检查失败时不显示 (不影响界面)
+void test_tui_info_footer_update_notice() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    const auto originalLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+
+    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    auto renderFooterText = [&]() -> std::string {
+        auto element = tui->renderInfoSidebarFooter();
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(70), ftxui::Dimension::Fixed(8));
+        ftxui::Render(screen, element);
+        return screen.ToString();
+    };
+
+    // 1. 未检查/无更新: 不出现提示行
+    tui->refreshRenderContext();
+    XX_TEST_EXPECT_TRUE(renderFooterText().find("新版本") == std::string::npos);
+
+    // 2. 检查失败: 同样不出现提示行 (只记日志)
+    {
+        agentxx::client::UpdateCheckResult failed;
+        failed.ok    = false;
+        failed.error = "network unreachable";
+        tui->applyUpdateCheckResult(failed);
+        tui->refreshRenderContext();
+        XX_TEST_EXPECT_TRUE(renderFooterText().find("新版本") == std::string::npos);
+    }
+
+    // 3. 无更新 (最新版本不高于当前): 不出现提示行
+    {
+        agentxx::client::UpdateCheckResult noUpdate;
+        noUpdate.ok        = true;
+        noUpdate.hasUpdate = false;
+        noUpdate.latestTag = "v0.0.1";
+        noUpdate.url       = "https://github.com/coolight7/agentxx/releases/tag/v0.0.1";
+        tui->applyUpdateCheckResult(noUpdate);
+        tui->refreshRenderContext();
+        XX_TEST_EXPECT_TRUE(renderFooterText().find("新版本") == std::string::npos);
+    }
+
+    // 4. 发现新版本: 提示行显示标签与点击提示 (中文文案)
+    {
+        agentxx::client::UpdateCheckResult hasUpdate;
+        hasUpdate.ok        = true;
+        hasUpdate.hasUpdate = true;
+        hasUpdate.latestTag = "v9.9.9";
+        hasUpdate.url       = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9";
+        tui->applyUpdateCheckResult(hasUpdate);
+        tui->refreshRenderContext();
+        const auto text = renderFooterText();
+        XX_TEST_EXPECT_TRUE(text.find("[ 新版本 v9.9.9 ]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("点击复制发布链接") != std::string::npos);
+    }
+
+    // 5. 英文: 同一状态使用英文文案
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+    tui->refreshRenderContext();
+    const auto enText = renderFooterText();
+    XX_TEST_EXPECT_TRUE(enText.find("[ New Version v9.9.9 ]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(enText.find("click to copy the release link") != std::string::npos);
+
+    TUISettings::instance().setLanguage(originalLang);
+}
+
 // ---------------------------------------------------------------------------
 // 插件全局快捷键列表 (设置弹窗条目 + 只读列表弹窗)
 // ---------------------------------------------------------------------------
@@ -1180,6 +1257,44 @@ void test_settings_overlay_keybind_entry() {
     XX_TEST_EXPECT_EQ(opened, 1);
 }
 
+/// 设置弹窗: "启动时检查更新"条目 (默认开 -> 点击切换为关, 持久化开关同步)
+void test_settings_overlay_check_update_entry() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+    auto&          settings = TUISettings::instance();
+    const bool     original = settings.checkUpdateOnStartup();
+    settings.setCheckUpdateOnStartup(true);
+
+    auto       ctx  = keybindTestCtx(nullptr, 34);
+    auto       comp = std::make_shared<SettingsOverlay>(ctx);
+    const auto text = screenText(renderOnce(comp, 100, 34));
+    XX_TEST_EXPECT_TRUE(text.find("启动时检查更新: 开") != std::string::npos);
+
+    // 点击条目 (整行可点: 点击标签行即激活) -> 切换为关
+    int x = 0;
+    int y = 0;
+    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 34), "启动时检查更新", x, y));
+    ftxui::Mouse click;
+    click.button = ftxui::Mouse::Left;
+    click.motion = ftxui::Mouse::Released;
+    click.x      = x;
+    click.y      = y;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_FALSE(settings.checkUpdateOnStartup());
+    XX_TEST_EXPECT_TRUE(
+        screenText(renderOnce(comp, 100, 34)).find("启动时检查更新: 关") != std::string::npos
+    );
+
+    // 再点一次: 回到开
+    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 34), "启动时检查更新", x, y));
+    click.x = x;
+    click.y = y;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_TRUE(settings.checkUpdateOnStartup());
+
+    // 复位 (共用单例)
+    settings.setCheckUpdateOnStartup(original);
+}
+
 /// 设置弹窗: 终端过矮时压缩条目间距 (全部条目与底部提示仍可见, 不被裁掉)
 void test_settings_overlay_short_terminal() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
@@ -1318,7 +1433,9 @@ TestResult testTuiSettings() {
     test_tui_multimodal_capability_survives_session_sync();
     test_tui_permission_state_sync_and_toggle();
     test_tui_info_footer_auth_button();
+    test_tui_info_footer_update_notice();
     test_settings_overlay_keybind_entry();
+    test_settings_overlay_check_update_entry();
     test_settings_overlay_short_terminal();
     test_keybind_list_overlay_empty();
     test_keybind_list_overlay_entries();

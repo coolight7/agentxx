@@ -1,6 +1,10 @@
 #include "agentxx-test/core/test_http.h"
 #include "utilxx/http_client.h"
 #include "utilxx/http_server.h"
+#if AGENTXX_BUILD_CLIENT
+// 启动更新检查 (客户端实现; 仅在编译 client 时可用, 见 CMakeLists 的 GLOB)
+#include "agentxx-client/update_check.h"
+#endif
 #include <asio/awaitable.hpp>
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
@@ -2069,6 +2073,164 @@ asio::awaitable<void> test_http_client_connection_pool() {
     serverThread.join();
 }
 
+// ---------------------------------------------------------------------------
+// 启动更新检查 (agentxx-client/update_check.h): 本地服务端到端
+//  1) 302 + Location (GitHub /releases/latest 的真实行为) -> 取标签与发布页 URL,
+//     并与当前版本比较得出 hasUpdate
+//  2) 直接返回 JSON (GitHub API) -> 取 tag_name / html_url
+//  3) 404 -> ok=false 且带原因 (不抛异常)
+// ---------------------------------------------------------------------------
+#if AGENTXX_BUILD_CLIENT
+asio::awaitable<void> test_update_check_with_local_server() {
+    using Server = HttpServer;
+    using namespace boost::beast::http;
+
+    Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+
+    // 1) /releases/latest: 302 -> 绝对 Location (与 GitHub 一致)
+    server.router().add(
+        "/releases/latest",
+        0,
+        std::make_shared<Server::Handler>(
+            [](Server::Request&, Server::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
+                resp.result(status::found);
+                resp.set(
+                    field::location,
+                    "https://github.com/coolight7/agentxx/releases/tag/v9.9.9"
+                );
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
+    // 2) /api/releases/latest: 200 JSON (GitHub API 形态)
+    server.router().add(
+        "/api/releases/latest",
+        0,
+        std::make_shared<Server::Handler>(
+            [](Server::Request&, Server::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
+                resp.result(status::ok);
+                resp.set(field::content_type, "application/json");
+                resp.body() = R"({"tag_name":"v8.0.0",)"
+                              R"("html_url":"https://github.com/coolight7/agentxx/releases/tag/v8.0.0"})";
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
+    // 3) /releases/older: 302 -> 低于当前版本的标签 (不提示更新)
+    server.router().add(
+        "/releases/older",
+        0,
+        std::make_shared<Server::Handler>(
+            [](Server::Request&, Server::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
+                resp.result(status::found);
+                resp.set(
+                    field::location,
+                    "https://github.com/coolight7/agentxx/releases/tag/v0.0.0"
+                );
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
+    // 4) 404
+    server.router().add(
+        "/missing",
+        0,
+        std::make_shared<Server::Handler>(
+            [](Server::Request&, Server::Response& resp, std::string_view
+            ) -> asio::awaitable<void> {
+                resp.result(status::not_found);
+                resp.body() = "not found";
+                resp.prepare_payload();
+                co_return;
+            }
+        )
+    );
+
+    // 服务端在独立线程运行 (start() 阻塞直到 stop()):
+    // - 本测试是协程, 不能阻塞在 start(); 端口绑定是异步的, 轮询等待
+    // - 路由必须在服务启动前注册完 (router 只在服务线程读会与外层写竞争)
+    // - 服务对象必须在所有连接协程结束后才析构: stop() + join 保证这一点
+    //   (直接在协程栈上 startAsync 会让连接协程活过本协程, 触发 use-after-free)
+    std::thread serverThread([&server] {
+        server.start();
+    });
+    uint16_t port = 0;
+    for (int i = 0; i < 200 && port == 0; ++i) {
+        port = server.port();
+        if (port == 0) {
+            asio::steady_timer timer(co_await asio::this_coro::executor);
+            timer.expires_after(std::chrono::milliseconds{10});
+            co_await timer.async_wait(asio::use_awaitable);
+        }
+    }
+    if (port == 0) {
+        TEST_FAIL << "update check test server failed to start" << std::endl;
+        g_http_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+    const auto baseUrl = fmt::format("http://127.0.0.1:{}", port);
+
+    // 1) 302 -> 标签与发布页 URL (不跟随重定向, 从 Location 取) + 与当前版本比较
+    {
+        auto res = co_await agentxx::client::checkLatestRelease(baseUrl + "/releases/latest");
+        XX_TEST_EXPECT_TRUE(res.ok);
+        XX_TEST_EXPECT_EQ(res.latestTag, std::string("v9.9.9"));
+        XX_TEST_EXPECT_EQ(
+            res.url,
+            std::string("https://github.com/coolight7/agentxx/releases/tag/v9.9.9")
+        );
+        XX_TEST_EXPECT_TRUE(res.latestVersion.has_value());
+        if (res.latestVersion.has_value()) {
+            XX_TEST_EXPECT_EQ((*res.latestVersion)[0], 9);
+            XX_TEST_EXPECT_EQ((*res.latestVersion)[1], 9);
+            XX_TEST_EXPECT_EQ((*res.latestVersion)[2], 9);
+        }
+        // 9.9.9 远高于当前版本 (agentxx::kVersion): 判定为有更新
+        XX_TEST_EXPECT_TRUE(res.hasUpdate);
+    }
+
+    // 2) JSON 形态 (GitHub API): tag_name / html_url
+    {
+        auto res = co_await agentxx::client::checkLatestRelease(baseUrl + "/api/releases/latest");
+        XX_TEST_EXPECT_TRUE(res.ok);
+        XX_TEST_EXPECT_EQ(res.latestTag, std::string("v8.0.0"));
+        XX_TEST_EXPECT_EQ(
+            res.url,
+            std::string("https://github.com/coolight7/agentxx/releases/tag/v8.0.0")
+        );
+        XX_TEST_EXPECT_TRUE(res.hasUpdate);
+    }
+
+    // 3) 低于当前版本: 不提示更新
+    {
+        auto res = co_await agentxx::client::checkLatestRelease(baseUrl + "/releases/older");
+        XX_TEST_EXPECT_TRUE(res.ok);
+        XX_TEST_EXPECT_EQ(res.latestTag, std::string("v0.0.0"));
+        XX_TEST_EXPECT_FALSE(res.hasUpdate);
+    }
+
+    // 4) 404: 失败结果 (ok=false + 原因), 不抛异常
+    {
+        auto res = co_await agentxx::client::checkLatestRelease(baseUrl + "/missing");
+        XX_TEST_EXPECT_FALSE(res.ok);
+        XX_TEST_EXPECT_FALSE(res.hasUpdate);
+        XX_TEST_EXPECT_TRUE(res.error.find("404") != std::string::npos);
+    }
+
+    server.stop();
+    serverThread.join();
+    co_return;
+}
+#endif // AGENTXX_BUILD_CLIENT
+
 asio::awaitable<TestResult> run_http_client_tests() {
     test_http_client_unit();
     test_http_server_unit();
@@ -2079,6 +2241,9 @@ asio::awaitable<TestResult> run_http_client_tests() {
     co_await test_http_client_sse_interruption();
     co_await test_http_client_connection_pool();
     co_await test_http_client_dns_timeout();
+#if AGENTXX_BUILD_CLIENT
+    co_await test_update_check_with_local_server();
+#endif
     co_return TestResult{g_http_passed, g_http_failed};
 }
 
