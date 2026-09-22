@@ -839,11 +839,14 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         // 服务端直接读取并转为 Base64 Data URL, 免除客户端二次下载上传中转
         // - 读文件与 base64 都是阻塞/CPU 操作 (单附件可达数 MB): 经线程池卸载,
         //   避免在 io 线程上执行导致同一时刻所有会话的 LLM 流/工具执行停摆
+        // - 路径字符串来自客户端 (UTF-8; Windows 客户端的中文路径即在此列),
+        //   访问文件系统前经 [utf8ToPath] 转换
         auto loadServerAttachmentAsync
             = [&](MediaAttachment att) -> asio::awaitable<MediaAttachment> {
             auto doLoad = [att = std::move(att)]() mutable -> MediaAttachment {
                 std::error_code ec;
-                auto            fileSize = std::filesystem::file_size(att.pathOrUrl, ec);
+                auto            filePath = utilxx_base::utf8ToPath(att.pathOrUrl);
+                auto            fileSize = std::filesystem::file_size(filePath, ec);
                 if (ec) {
                     XX_LOGW(
                         "[base_agent] cannot get file size for server attachment: {}, err: {}",
@@ -862,7 +865,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                     );
                     return att;
                 }
-                std::ifstream ifs(att.pathOrUrl, std::ios::binary);
+                std::ifstream ifs(filePath, std::ios::binary);
                 if (!ifs) {
                     XX_LOGW("[base_agent] cannot open server attachment: {}", att.pathOrUrl);
                     return att;
@@ -874,7 +877,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                 ifs.close();
                 if (att.mimeType.empty()) {
                     auto ext = utilxx_base::toLower(
-                        std::filesystem::path(att.pathOrUrl).extension().string()
+                        utilxx_base::pathToUtf8Generic(filePath.extension())
                     );
                     att.mimeType = std::string(mimeTypeFromExtension(ext));
                 }

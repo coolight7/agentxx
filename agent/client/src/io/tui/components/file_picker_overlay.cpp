@@ -45,11 +45,13 @@ FilePickerOverlay::FilePickerOverlay(
     }
 
     // 本地初始目录
+    // - 路径字符串一律以 UTF-8 保存 (Windows 下 path::string() 返回本地代码页,
+    //   中文路径会在界面上显示为乱码), 见 [utilxx_base::pathToUtf8Generic]
     if (initialDir.empty()) {
         std::error_code ec;
         auto            cwd = std::filesystem::current_path(ec);
         if (!ec) {
-            initialDir = cwd.string();
+            initialDir = utilxx_base::pathToUtf8Generic(cwd);
         } else {
             initialDir = "/";
         }
@@ -69,19 +71,21 @@ void FilePickerOverlay::navigateToLocal(std::string dirPath) {
     localTab_.selectedIndex = 0;
     localTab_.entries.clear();
 
+    // 界面与线上传递的路径均为 UTF-8: 与文件系统交互前经 [utf8ToPath] 转换
+    // (Windows 下 std::filesystem 的窄字符串构造按本地代码页解释, 中文路径会失败)
     std::error_code ec;
-    auto            canonical = std::filesystem::canonical(dirPath, ec);
+    auto            canonical = std::filesystem::canonical(utilxx_base::utf8ToPath(dirPath), ec);
     if (ec) {
         XX_LOGW("[FilePicker] cannot canonical {}: {}", dirPath, ec.message());
         return;
     }
-    localTab_.currentDir = canonical.string();
+    localTab_.currentDir = utilxx_base::pathToUtf8Generic(canonical);
 
     // 上级目录
     if (canonical.has_parent_path() && canonical.parent_path() != canonical) {
         DirEntry parentEntry;
         parentEntry.name     = std::string(TuiI18n::instance().t("picker.parent"));
-        parentEntry.fullPath = canonical.parent_path().string();
+        parentEntry.fullPath = utilxx_base::pathToUtf8Generic(canonical.parent_path());
         parentEntry.isDir    = true;
         localTab_.entries.push_back(std::move(parentEntry));
     }
@@ -102,8 +106,8 @@ void FilePickerOverlay::navigateToLocal(std::string dirPath) {
             continue;
         }
         DirEntry de;
-        de.name     = entry.path().filename().string();
-        de.fullPath = entry.path().string();
+        de.name     = utilxx_base::pathToUtf8Generic(entry.path().filename());
+        de.fullPath = utilxx_base::pathToUtf8Generic(entry.path());
 
         if (std::filesystem::is_directory(status)) {
             // 跳过 . 开头的隐藏目录
@@ -114,8 +118,9 @@ void FilePickerOverlay::navigateToLocal(std::string dirPath) {
             de.supported = true;
             dirs.push_back(std::move(de));
         } else if (std::filesystem::is_regular_file(status)) {
-            auto ext = utilxx_base::toLower(entry.path().extension().string());
-            auto mt  = agentxx::agent::mediaTypeFromExtension(ext);
+            auto ext
+                = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(entry.path().extension()));
+            auto mt = agentxx::agent::mediaTypeFromExtension(ext);
             if (!mt.has_value()) {
                 continue; // 非媒体文件不显示
             }
@@ -272,15 +277,17 @@ void FilePickerOverlay::confirmSelection() {
     // 选中支持的媒体文件
     if (activeTab_ == PickerTab::Local) {
         // 本地附件: 预检大小、读取并 Base64 编码为 Data URL
+        // (路径字符串为 UTF-8, 访问文件系统前经 [utf8ToPath] 转换)
         std::error_code ec;
-        auto            fileSize = std::filesystem::file_size(entry.fullPath, ec);
+        auto            filePath = utilxx_base::utf8ToPath(entry.fullPath);
+        auto            fileSize = std::filesystem::file_size(filePath, ec);
         if (ec) {
             if (ctx_.showToast) {
                 ctx_.showToast(trf("toast.attachReadFail", ec.message()));
             }
             return;
         }
-        auto ext = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
+        auto ext  = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(filePath.extension()));
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
         if (mime.empty()) {
             if (ctx_.showToast) {
@@ -300,7 +307,7 @@ void FilePickerOverlay::confirmSelection() {
             return;
         }
 
-        std::ifstream ifs(entry.fullPath, std::ios::binary);
+        std::ifstream ifs(filePath, std::ios::binary);
         if (!ifs) {
             if (ctx_.showToast) {
                 ctx_.showToast(std::string(TuiI18n::instance().t("toast.attachOpenFail")));
@@ -328,7 +335,9 @@ void FilePickerOverlay::confirmSelection() {
         }
     } else {
         // 服务端附件: 直接构造服务端路径附件 (dataUrl 留空, 服务端自主加载并转 Base64)
-        auto ext = utilxx_base::toLower(std::filesystem::path(entry.fullPath).extension().string());
+        auto ext = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(
+            utilxx_base::utf8ToPath(entry.fullPath).extension()
+        ));
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
 
         agentxx::agent::MediaAttachment att;

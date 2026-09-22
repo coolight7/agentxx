@@ -1762,7 +1762,9 @@ std::string attachmentSizeText(uint64_t bytes);
 
 std::string resolveAttachmentLocalPath(const agentxx::agent::MediaAttachment& att) {
     std::error_code ec;
-    if (!att.pathOrUrl.empty() && std::filesystem::is_regular_file(att.pathOrUrl, ec) && !ec) {
+    // 路径字符串为 UTF-8 (与界面/线上一致); 访问文件系统前经 [utf8ToPath] 转换
+    if (!att.pathOrUrl.empty()
+        && std::filesystem::is_regular_file(utilxx_base::utf8ToPath(att.pathOrUrl), ec) && !ec) {
         return att.pathOrUrl;
     }
     if (!att.dataUrl.empty() && att.dataUrl.rfind("data:", 0) == 0) {
@@ -1781,7 +1783,7 @@ std::string resolveAttachmentLocalPath(const agentxx::agent::MediaAttachment& at
         std::filesystem::create_directories(dir, ec);
         // 防目录穿越: 仅取文件名部分
         std::string name = att.displayName.empty() ? "attachment.bin" : att.displayName;
-        name             = std::filesystem::path(name).filename().string();
+        name             = utilxx_base::pathToUtf8Generic(utilxx_base::utf8ToPath(name).filename());
         if (name.empty()) {
             name = "attachment.bin";
         }
@@ -1794,7 +1796,7 @@ std::string resolveAttachmentLocalPath(const agentxx::agent::MediaAttachment& at
         if (!ofs) {
             return "";
         }
-        return dst.string();
+        return utilxx_base::pathToUtf8Generic(dst);
     }
     return att.pathOrUrl;
 }
@@ -1813,9 +1815,12 @@ void revealPathInFileManager(std::string path) {
     std::thread([p = std::move(path)] {
     // 命令参数中的路径加双引号包裹, 防空格/特殊字符截断
     // (路径本身含双引号属极端情况, 此处不做转义处理)
+    // 路径字符串为 UTF-8: Windows 下必须改用宽字符命令 (_wsystem) —— 窄字符
+    // 命令按本地代码页解释, 中文/非 ASCII 路径会定位失败
 #if XX_IS_WIN_D
-        std::string cmd = "explorer /select,\"" + p + "\"";
-        (void)std::system(cmd.c_str());
+        auto         wpath = utilxx_base::utf8ToPath(p).wstring();
+        std::wstring cmd   = L"explorer /select,\"" + wpath + L"\"";
+        (void)_wsystem(cmd.c_str());
 #elif XX_IS_MACOS_D
         std::string cmd = "open -R \"" + p + "\" >/dev/null 2>&1 &";
         (void)std::system(cmd.c_str());
@@ -1824,11 +1829,11 @@ void revealPathInFileManager(std::string path) {
         // 统一用文件所在目录调起文件管理器保证可显示对应位置;
         // 目录不存在 (如临时落盘失败的远端残留路径) 时回退直接打开原路径
         std::error_code       ec;
-        std::filesystem::path fp(p);
+        std::filesystem::path fp    = utilxx_base::utf8ToPath(p);
         std::filesystem::path dir   = fp.parent_path();
-        const bool         hasDir   = !dir.empty() && std::filesystem::is_directory(dir, ec) && !ec;
-        const std::string& showPath = hasDir ? dir.string() : p;
-        std::string        cmd      = "xdg-open \"" + showPath + "\" >/dev/null 2>&1 &";
+        const bool            hasDir = !dir.empty() && std::filesystem::is_directory(dir, ec) && !ec;
+        const std::string showPath = hasDir ? utilxx_base::pathToUtf8Generic(dir) : p;
+        std::string       cmd      = "xdg-open \"" + showPath + "\" >/dev/null 2>&1 &";
         (void)std::system(cmd.c_str());
 #endif
     }).detach();

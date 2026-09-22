@@ -300,7 +300,8 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     // 避免 Info tab 常驻时每帧执行 current_path() 系统调用
     static const std::string kCwd = agentxx::util::catchError<std::string>(
         []() -> std::string {
-            return std::filesystem::current_path().string();
+            // UTF-8 路径 (Windows 下 path::string() 为本地代码页, 中文目录会乱码)
+            return utilxx_base::pathToUtf8Generic(std::filesystem::current_path());
         },
         [](std::string) -> std::string {
             return std::string(tr("info.workDirUnknown"));

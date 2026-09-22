@@ -20,6 +20,7 @@
 #include "utilxx/async_offload.h"
 #include "utilxx/crypto.h"
 #include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
 
@@ -610,6 +611,9 @@ void SessionServerAgentIO::onPeerMessage(
                             WireListDirResult result;
                             result.reqId = req.reqId;
 
+                            // 路径字符串在客户端/服务端之间一律以 UTF-8 传递
+                            // (Windows 下 path::string() 为本地代码页): 访问文件
+                            // 系统前经 [utf8ToPath] 转换
                             std::string targetDir = req.path;
                             if (targetDir.empty()) {
                                 if (agent && agent->agentContext) {
@@ -619,21 +623,26 @@ void SessionServerAgentIO::onPeerMessage(
                                 }
                                 if (targetDir.empty()) {
                                     std::error_code ec;
-                                    targetDir = std::filesystem::current_path(ec).string();
+                                    targetDir
+                                        = utilxx_base::pathToUtf8Generic(
+                                            std::filesystem::current_path(ec)
+                                        );
                                 }
                             }
 
                             std::error_code ec;
-                            auto            canonical = std::filesystem::canonical(targetDir, ec);
+                            auto            canonical
+                                = std::filesystem::canonical(utilxx_base::utf8ToPath(targetDir), ec);
                             if (ec) {
                                 result.ok    = false;
                                 result.error = ec.message();
                                 return result;
                             }
-                            result.currentDir = canonical.string();
+                            result.currentDir = utilxx_base::pathToUtf8Generic(canonical);
                             if (canonical.has_parent_path()
                                 && canonical.parent_path() != canonical) {
-                                result.parentDir = canonical.parent_path().string();
+                                result.parentDir
+                                    = utilxx_base::pathToUtf8Generic(canonical.parent_path());
                             }
 
                             std::set<std::string> allowedSet(
@@ -657,29 +666,31 @@ void SessionServerAgentIO::onPeerMessage(
                                 if (ec2) {
                                     continue;
                                 }
-                                std::string filename = entry.path().filename().string();
+                                std::string filename
+                                    = utilxx_base::pathToUtf8Generic(entry.path().filename());
                                 if (!filename.empty() && filename[0] == '.') {
                                     continue;
                                 }
 
                                 if (std::filesystem::is_directory(status)) {
                                     WireDirEntry de;
-                                    de.name      = filename;
-                                    de.fullPath  = entry.path().string();
-                                    de.isDir     = true;
+                                    de.name     = filename;
+                                    de.fullPath = utilxx_base::pathToUtf8Generic(entry.path());
+                                    de.isDir    = true;
                                     de.supported = true;
                                     dirs.push_back(std::move(de));
                                 } else if (std::filesystem::is_regular_file(status)) {
-                                    auto ext
-                                        = utilxx_base::toLower(entry.path().extension().string());
+                                    auto ext = utilxx_base::toLower(
+                                        utilxx_base::pathToUtf8Generic(entry.path().extension())
+                                    );
                                     auto mt = agentxx::agent::mediaTypeFromExtension(ext);
                                     if (!mt.has_value()) {
                                         continue;
                                     }
                                     WireDirEntry de;
-                                    de.name      = filename;
-                                    de.fullPath  = entry.path().string();
-                                    de.isDir     = false;
+                                    de.name     = filename;
+                                    de.fullPath = utilxx_base::pathToUtf8Generic(entry.path());
+                                    de.isDir    = false;
                                     de.sizeBytes = std::filesystem::file_size(entry.path(), ec2);
                                     de.mediaType = *mt;
                                     de.supported
