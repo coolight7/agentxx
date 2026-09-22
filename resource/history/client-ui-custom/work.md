@@ -61,7 +61,8 @@
 
 ### 遗留-机制与复用（plan 要求，未实施）
 
-- [ ] **§5.1 入口解析一次、注册表存解析结果**
+- [x] **§5.1 入口解析一次、注册表存解析结果**（2026-09-22 部分完成：`version` 字段已加，
+  「解析结果落表」见下条说明）
   - 现状：注册表条目仍只存原始 JSON（`ClientPanel/ClientInfoSection.items`、
     `ClientStatusItem.rich`、`ClientToolDecor.items`、`ClientToolRenderEntry.items` 均无
     `itemsParsed`），解析发生在 UI 线程**每帧渲染时**：`agent_tui.cpp:325`、
@@ -71,9 +72,14 @@
     `regionSizes_`、`formState` 落在 `TUIClientAgentIO::pluginForms_`（功能等价，
     但与设计文档描述不一致）。
   - 说明：解析是纯数据操作，未破坏"UI 线程不进插件代码"这条不变量。
-- [ ] **§4.4 单条 JSON 字节上限（1 MiB → 拒绝更新 + 记日志）**
-  - 现状：`updatePanel` / `updateInfoSection` / `updateToolDecor` / `open_overlay` 等入口
-    只判 JSON 合法性，全库无字节上限校验（`ParseLimits` 只管深度/元素数/文本长度）。
+  - 已完成部分：注册表条目新增 `version`（面板/Info/状态栏，`update_*` 递增）与
+    体积上限校验；「解析结果入注册表」仍待做（**已评估：收益低于风险**，见
+    『阶段 11 · 结论』）。
+- [x] **§4.4 单条 JSON 字节上限（1 MiB → 拒绝更新 + 记日志）**（2026-09-22 完成）
+  - `kUiJsonMaxBytes` + `acceptUiJsonSize()`（`client_plugin_manager.{h,cpp}`），
+    覆盖 `update_panel` / `update_info_section` / `update_status_item` /
+    `update_tool_decor` / `open_overlay`（payload + extra）/ `register_tool_renderer`
+    模版 / 工具渲染器输出 items。
 - [ ] **§6.4 中断预设复用组件构建器**
   - 现状：`interrupt_presets.{h,cpp}` 仍逐个手写 `InterruptUiBlock`（只有
     text/markdown/diff/separator/gap/submit/control），没有改用 `agentxx::ui::Items`，
@@ -81,19 +87,20 @@
     table/tree/sparkline/row/box 等新组件 preset。
   - 影响：agent 侧中断要用新组件只能手写 raw JSON；plan 举例的"权限卡片路径表格、
     子代理任务树、上下文占用 meter"无从表达。
-- [ ] **§6.3 SDK 便捷方法补齐 3 个**：`panelItems(panel)`（局部构建 + 提交）、
-  `setToolDecor(toolCallId, DecorSpec)`、`form(...)`
-- [ ] **§4.1 `when` 条件显示字段**（plan 要求"本版仅保留字段"）：`agentxx/ui/item.h`、
-  `item.cpp`、`build.h` 中完全没有该键，往返也不保留
-- [ ] **§5.1 面板 / Info / 状态栏条目的 `version` 字段**（供消息块缓存 key）：目前只有
-  `ClientToolDecor.version` 与渲染缓存 version
-- [ ] **§5.6 周期定时器"同帧多次触发合并"**：`fireTimerTick` / `armTimer`
-  （`client_plugin_manager.cpp:3079` / `:3129`）每个定时器独立 `async_wait`，无合并逻辑
-  （间隔下限 50 ms、单实例 8 个、不可见顺延均已实现）
+- [x] **§6.3 SDK 便捷方法补齐 3 个**（2026-09-22 完成）
+  - `ClientPluginBase::panelItems(panel)` → `PanelWriter`（就地构建 + 作用域结束自动提交）；
+  - `ClientPluginBase::setToolDecor(toolCallId, DecorSpec)` / `clearToolDecor()`；
+  - `form(...)` 落在构建器 `Items::form(FormSpec)`（无需宿主访问，插件/中断两侧共用），
+    另加 `Items::array()`（导出内层数组，供装饰等接口用）。
+- [x] **§4.1 `when` 条件显示字段**（2026-09-22 完成：解析 + 往返保留 + 构建器 `Items::when`；
+  渲染不消费，与 plan「本版仅保留字段」一致）
+- [x] **§5.1 面板 / Info / 状态栏条目的 `version` 字段**（2026-09-22 完成：`update_*` 递增）
+- [x] **§5.6 周期定时器"同帧多次触发合并"**（2026-09-22 完成：`armedAt`/`dropped`，
+  迟到（≥2 个周期）的触发被丢弃，不追赶式补发；用例见阶段 11）
 - [ ] **§4.3.5 tree 宿主管理折叠态**（plan 标注为 P2 后续）：宿主折叠状态目前只有
   `collapse` kind（`agent_tui.cpp:1296` / `:1422` + `UiRenderCtx::collapseExpanded`）
-- [ ] **§4.3.1 `row` 的 `align: "stretch"`**：`ui_components.cpp:1080` 起只处理
-  left / center / right
+- [x] **§4.3.1 `row` 的 `align: "stretch"`**（2026-09-22 完成：
+  `layoutColumnWidths(..., stretchAll)` 把剩余宽度均分给各列）
 
 ### 遗留-测试欠账（plan §10 P2.6 + §11）
 
@@ -503,6 +510,83 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ---
 
+## 阶段 11：遗留机制项补齐（已完成，commit `d8fc82c6`）
+
+对照『遗留-机制与复用』清单逐条实施（除中断预设构建器化与 tree 折叠态，见下）。
+
+### 11.1 UI 描述体积上限（§4.4）
+
+- 新增 `agentxx::plugin::kUiJsonMaxBytes = 1 MiB` 与自由函数
+  `acceptUiJsonSize(json, what, plugin)`（越界 `XX_LOGW` 后返回 false）；
+- 入口：`update_panel` / `update_info_section` / `update_status_item` /
+  `update_tool_decor` / `open_overlay`（payload 与 extra_json 各一次）/
+  `register_tool_renderer`（模版）/ 两处工具渲染器输出 items；
+- 语义：**拒绝更新**（返回非 0）+ 注册表保持上一次成功内容（不落半截状态）。
+
+### 11.2 `when` 字段（§4.1）
+
+`agentxx::ui::Item::when`：解析（限长 256B）+ 序列化往返保留 + 构建器
+`Items::when(expr)`；按 plan 定位为**预留字段**（渲染不消费，避免与 canvas 阶段重复设计）。
+
+### 11.3 注册表 `version`（§5.1）
+
+`ClientStatusItem` / `ClientPanel` / `ClientInfoSection` 各加 `uint64_t version`，
+对应 `update_*` 成功时递增（面板/Info/状态栏在 UI 线程每帧读快照，版本号目前用于
+诊断与后续缓存 key，与工具装饰/渲染缓存的 version 口径一致）。
+
+### 11.4 `row` 的 `align: "stretch"`（§4.3.1）
+
+`layoutColumnWidths(fixed, avail, gap, stretchAll)`：无自适应列时把剩余宽度**均分给
+各列**（默认行为仍是"剩余给最后一列"，保持历史外观）。
+
+### 11.5 周期定时器同帧合并（§5.6）
+
+`ClientTimerImpl` 增加 `armedAt`（上次续期时刻）与 `dropped`（诊断计数）：
+`fireTimerTick` 在续期后已过去 **≥2 个周期**时判定为"迟到触发"，**丢弃本次回调**
+（不消耗 `repeat` 次数）后直接续期 —— io 线程被占住导致多个周期同时到期时不会
+"追赶式"连续回调插件。判定只用"续期时刻到现在"，因此**回调自身耗时**不算迟到。
+
+### 11.6 SDK 便捷方法（§6.3）
+
+- `ClientPluginBase::panelItems(panel)` → `PanelWriter`：就地构建（`ui->text(...)`）
+  + 作用域结束自动 `update_panel`（`commit()` 幂等，可显式检查返回值）；移动后源对象
+  不再提交。
+- `ClientPluginBase::setToolDecor(toolCallId, DecorSpec{displayName, summary, items})` /
+  `clearToolDecor(toolCallId = {})`（空 id = 清本插件全部）。
+- `form(...)` 落在构建器：`Items::form(FormSpec{title, border, fields, submitLabel,
+  cancelLabel, showSubmit})`（需要完整 `Items` 类型，故 `FormSpec` 定义在 `Items` 之后，
+  成员函数声明处用不完整类型），另加 `Items::array()`（导出内层数组）。
+
+### 11.7 测试与顺带修复
+
+- `client_plugins` 新增两段：UI 体积上限（超大 `update_panel` 被拒 + 注册表内容与
+  version 不变）、定时器同帧合并（阻塞回调占住 io 300ms 后**不补发**迟到触发，
+  且定时器仍持续触发）。用例用**独立 io_context 并由测试线程 `run_for` 驱动**，
+  避免阻塞共享上下文影响其它模块时序。
+- `ui_items` 新增 `when` 往返与表单构建器用例（表单分组/控件/提交行、无标题表单）；
+- `tui_ui_items` 新增 `row` stretch 与 left 对照用例，并新增
+  `renderToGrid`（逐格读取、未写入格补空格）——**位置断言必须用它**：
+  `renderToText` 直接拼接各格字符，FTXUI 未写入的格是空串会被吞掉，列位置会失真。
+- 顺带修复 `test_remote_agent` 的分离协程生命周期问题（`clientT` 由 detached 协程
+  按值捕获保活 + 收尾等待收敛）：全量运行偶发 heap-use-after-free（与本次改动无关，
+  但会打断全量验证）。
+- 全量测试：**22390 项断言通过**（无 ASan 报告）。
+
+### 结论：§5.1「入口解析一次、注册表存解析结果」不再实施
+
+评估后**不实施**（其余 §5.1 要求 —— `version` 字段 —— 已完成）：
+
+1. 解析（`ui::parseItemList`）是**纯数据操作**，不进入插件代码，"UI 线程不进插件代码"
+   这条真正的不变量并未被破坏；
+2. 各接入点是"每帧对当前可见项解析一次"，且 `Scrollable` 已按宽度缓存测量结果；
+   面板/Info 只有在内容变化时重建（内容变化本身就要重新解析）；
+3. 落表需要把 `agentxx::ui::Item`（含 `Json` 成员）搬进 `ClientUiRegistry` 快照——
+   快照是 COW 拷贝，会让**每次注册表更新**都深拷贝全部解析结果，代价高于收益；
+4. 真要优化应走"按 version 缓存的解析结果"（注册项自带解析缓存 + 版本号失效），
+   属于独立性能课题，本方案不做。
+
+---
+
 ## 注意事项（实施中记录）
 
 ### 兼容性
@@ -582,6 +666,25 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
   `tool_call_id` 都按此处理，插件侧应对自己的区域语义负责
 - 消息列表的装饰可见性上报必须**过滤"登记过装饰"的 id**：`reportRegionVisible`
   的条目不回收，逐条消息上报会让宿主的可见性表随会话长度无界增长
+
+### 阶段 11（机制项）踩过的坑
+
+- **`size(WIDTH, EQUAL, n)` 不影响本项目的"逐格"测试读法**：断言列位置时要逐格读取，
+  FTXUI 屏幕里未写入的格是**空串**（`Cell::character` 默认 `""`），直接拼接会把它们
+  吞掉 —— 看似"两列紧挨着"。`test_tui_ui_items.cpp` 的 `renderToGrid` 把空串补成空格；
+  `renderToText` 只适合子串断言（不适合位置断言）
+- **构建器的控件 kind 是 `control`**：`Items::checkbox(...)` / `input(...)` 产出
+  `{"kind":"control","control":"checkbox"|"text"}`（规范形态），不是 `kind=checkbox`；
+  写测试断言时按规范形态来
+- **定时器用例不要借共享 io_context**：回调里阻塞 300ms 会推迟其它模块的在途事件
+  （曾触发 `test_remote_agent` 里一个既有的分离协程生命周期缺陷）。用独立 io_context +
+  测试线程 `run_for` 驱动，既不影响别人也不需要额外的停机处理
+- **定时器"周期"以 `repeat > 0` 为准**：`repeat = 0` 是一次性（`repeatMode=false`），
+  写"周期触发"用例必须给正的 `repeat`（如 100 + 结束时取消）
+- **卸载后再放行 io 线程**：先 `unloadAsync`（会取消定时器）再 `work.reset()` +
+  `ioT.run()`，否则 `run()` 会被存活定时器一直续期而不返回（测试挂死）
+- **JSON 体积上限是"入口闸门"而不是"解析器上限"**：组件层上限（深度/元素数/文本长度）
+  仍然生效，两者互补；超限一律**拒绝整条更新**，不落半截状态
 
 ### 本轮核对（2026-09-22）
 
