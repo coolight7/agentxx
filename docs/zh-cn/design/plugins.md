@@ -684,6 +684,10 @@ typedef struct AgentxxClientKeybindIface {
 - SDK: `ClientPluginBase::registerKeybind(keys, description, fn)` 返回
   `std::shared_ptr<KeybindHandle>` (析构自动注销);
   `keybindListJson()` 取当前已注册列表 (排查冲突用)
+- **界面查看**: TUI 设置弹窗的「快捷键」条目显示插件已注册的快捷键条数, 激活后打开
+  只读列表弹窗 (键位 + 说明 + 归属插件); 抢不到键位的尝试以"键位冲突"段列出
+  (申请方 · 占用方), 便于用户排查"插件文档里的快捷键为什么没生效"。冲突记录随
+  占用方注销/禁用/卸载 (键位空出) 或请求方禁用/卸载自动清除
 
 插件按新宽度重新排列自己的组件并 `update_panel` 即可; 老宿主订阅该事件会失败
 (返回 NULL), 此时按固定宽度排版。

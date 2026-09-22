@@ -3428,6 +3428,87 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
+    // ---- 31.5 快捷键冲突记录 (注册受阻于已占用键位: 记录 + 生命周期清理) ----
+    {
+        /// 暴露 createInstance / detachDomainRegistrations 的测试管理器
+        /// (伪实例只需要实例名与"禁用/卸载"生命周期入口)
+        struct ConflictTestManager : agentxx::plugin::ClientPluginManager {
+            using ClientPluginManager::ClientPluginManager;
+            using ClientPluginManager::createInstance;
+            using ClientPluginManager::detachDomainRegistrations;
+        };
+
+        auto mgrC = std::make_shared<ConflictTestManager>(ex);
+        mgrC->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+        auto owner = mgrC->createInstance("conflict_owner");
+        auto other = mgrC->createInstance("conflict_other");
+
+        auto makeBind = [](std::string_view keys, std::string_view desc) {
+            AgentxxKeybindSpec spec{};
+            spec.version     = 1;
+            spec.keys        = agentxx::plugin::PluginStringView::from(keys.data(), keys.size());
+            spec.description = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
+            spec.on_keybind  = [](void*) {};
+            return spec;
+        };
+
+        // 占用方注册成功: 无冲突
+        auto  specOwner = makeBind("ctrl+alt+k", "owner bind");
+        auto* bindOwner = mgrC->registerKeybind(owner.get(), &specOwner);
+        XX_TEST_EXPECT_TRUE(bindOwner != nullptr);
+        XX_TEST_EXPECT_TRUE(mgrC->uiRegistrySnapshot()->keybindConflicts.empty());
+
+        // 同插件重复注册同一键位: 拒绝但不记冲突 (不是跨插件冲突)
+        auto specSelfDup = makeBind("ctrl+alt+k", "self dup");
+        XX_TEST_EXPECT_TRUE(mgrC->registerKeybind(owner.get(), &specSelfDup) == nullptr);
+        XX_TEST_EXPECT_TRUE(mgrC->uiRegistrySnapshot()->keybindConflicts.empty());
+
+        // 跨插件占用: 记一条冲突 (请求方 / 占用方)
+        auto specOther = makeBind("ctrl+alt+k", "other bind");
+        XX_TEST_EXPECT_TRUE(mgrC->registerKeybind(other.get(), &specOther) == nullptr);
+        {
+            auto snap = mgrC->uiRegistrySnapshot();
+            XX_TEST_EXPECT_EQ(snap->keybindConflicts.size(), size_t{1});
+            if (snap->keybindConflicts.size() == 1) {
+                XX_TEST_EXPECT_EQ(snap->keybindConflicts[0].keys, std::string{"ctrl+alt+k"});
+                XX_TEST_EXPECT_EQ(snap->keybindConflicts[0].plugin, std::string{"conflict_other"});
+                XX_TEST_EXPECT_EQ(snap->keybindConflicts[0].owner, std::string{"conflict_owner"});
+            }
+        }
+        // 同一 (键位, 请求方) 重复尝试只保留一条
+        auto specOtherAgain = makeBind("ctrl+alt+k", "other bind again");
+        XX_TEST_EXPECT_TRUE(mgrC->registerKeybind(other.get(), &specOtherAgain) == nullptr);
+        XX_TEST_EXPECT_EQ(mgrC->uiRegistrySnapshot()->keybindConflicts.size(), size_t{1});
+
+        // 占用方注销键位: 键位空出, 冲突记录随之消失, 请求方此时可以注册成功
+        mgrC->unregisterKeybind(owner.get(), bindOwner);
+        XX_TEST_EXPECT_TRUE(mgrC->uiRegistrySnapshot()->keybindConflicts.empty());
+        auto  specOtherTake = makeBind("ctrl+alt+k", "other take over");
+        auto* bindOther     = mgrC->registerKeybind(other.get(), &specOtherTake);
+        XX_TEST_EXPECT_TRUE(bindOther != nullptr);
+        XX_TEST_EXPECT_EQ(mgrC->uiRegistrySnapshot()->keybindConflicts.size(), size_t{0});
+
+        // 反向占用: 前占用方此时成为请求方
+        auto specOwnerLose = makeBind("ctrl+alt+k", "owner lose");
+        XX_TEST_EXPECT_TRUE(mgrC->registerKeybind(owner.get(), &specOwnerLose) == nullptr);
+        XX_TEST_EXPECT_EQ(mgrC->uiRegistrySnapshot()->keybindConflicts.size(), size_t{1});
+
+        // 占用方被摘除 (插件禁用/卸载): 键位空出 + 冲突记录清空
+        mgrC->detachDomainRegistrations(other.get());
+        XX_TEST_EXPECT_TRUE(mgrC->uiRegistrySnapshot()->keybindConflicts.empty());
+        XX_TEST_EXPECT_EQ(mgrC->uiRegistrySnapshot()->keybinds.size(), size_t{0});
+
+        // 请求方被摘除: 记录作废 (重新启用后由插件 start 事务重新尝试)
+        auto specOtherBack = makeBind("ctrl+alt+k", "other back");
+        XX_TEST_EXPECT_TRUE(mgrC->registerKeybind(other.get(), &specOtherBack) != nullptr);
+        auto specOwnerAgain = makeBind("ctrl+alt+k", "owner again");
+        XX_TEST_EXPECT_TRUE(mgrC->registerKeybind(owner.get(), &specOwnerAgain) == nullptr);
+        XX_TEST_EXPECT_EQ(mgrC->uiRegistrySnapshot()->keybindConflicts.size(), size_t{1});
+        mgrC->detachDomainRegistrations(owner.get()); // 只摘除请求方
+        XX_TEST_EXPECT_TRUE(mgrC->uiRegistrySnapshot()->keybindConflicts.empty());
+        XX_TEST_EXPECT_EQ(mgrC->uiRegistrySnapshot()->keybinds.size(), size_t{1}); // 占用方键位仍在
+    }
+
     // ---- 32. UI 描述体积上限 (1 MiB: 入口拒绝 + 注册表不变) ----
     {
         auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);

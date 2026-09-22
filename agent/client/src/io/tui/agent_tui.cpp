@@ -1125,12 +1125,24 @@ void TUIClientAgentIO::openSettings() {
     overlay->onAbout([this] {
         openAbout();
     });
+    overlay->onKeybindList([this] {
+        openKeybindList();
+    });
     modal_->pushModal(overlay);
     postRedraw();
 }
 
 void TUIClientAgentIO::openAbout() {
     auto overlay = std::make_shared<AboutOverlay>(ctx_);
+    overlay->onClose([this] {
+        modal_->popModal();
+    });
+    modal_->pushModal(overlay);
+    postRedraw();
+}
+
+void TUIClientAgentIO::openKeybindList() {
+    auto overlay = std::make_shared<KeybindListOverlay>(ctx_);
     overlay->onClose([this] {
         modal_->popModal();
     });

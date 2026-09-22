@@ -8,6 +8,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/ui/text_width.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -296,6 +297,17 @@ void SessionSelectorOverlay::flushActivation() {
 // SettingsOverlay
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/// 设置条目版式常量 (按它们估算弹窗高度: 终端过矮时压缩项间距)
+/// - 单个条目 = 标签行 + 值行; 常规版式项间距 1 行
+/// - 外框行数: 上下内边距 2 + 标题栏 1 + 内容与区域之间 2 + 底部提示 1
+constexpr int kSettingsItemRows    = 2;
+constexpr int kSettingsRowGap      = 1;
+constexpr int kSettingsSurfaceRows = 6;
+
+} // namespace
+
 SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
     ctx_(ctx) {}
 
@@ -341,6 +353,16 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLanguage();
              }},
+        // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
+        {.id    = "keybinds",
+         .label = std::string{tr("settings.keybindLabel")},
+         .value = trf("settings.keybindValue", keybindCount()),
+         .onActivate =
+             [this] {
+                 if (onKeybindList_) {
+                     onKeybindList_();
+                 }
+             }},
         // Info (点击/Enter 打开关于弹窗)
         {.id    = "about",
          .label = std::string{tr("settings.infoLabel")},
@@ -359,6 +381,15 @@ Element SettingsOverlay::OnRender() {
 
     hits_.beginFrame();
     buildItems();
+
+    // 终端过矮时压缩条目间距 (优先保证"全部条目 + 底部提示"可见):
+    // 常规版式高度 = 条目数 × 2 行 + 项间距 + 外框行数 (见 [kSettingsItemRows] 等)
+    const int termH = std::max(1, ctx_.terminalSize().dimy);
+    const int count = static_cast<int>(list_.size());
+    const int normalRows = count * kSettingsItemRows
+                           + (count > 0 ? (count - 1) * kSettingsRowGap : 0)
+                           + kSettingsSurfaceRows;
+    list_.setRowGap(normalRows > termH ? 0 : kSettingsRowGap);
 
     // 条目版式: 标签行 (弱化文字) + 值行 (整行色带, 即命中区域); 条目之间留一空行
     // - 选中态: 高亮背景覆盖值行整行 (与模型/会话列表弹窗的整行高亮一致)
@@ -380,7 +411,6 @@ Element SettingsOverlay::OnRender() {
             std::move(row),
         });
     };
-    list_.setRowGap(1);
 
     const auto surface = TuiSurfaceStyle::fromTheme(theme);
     return tuiSurfacePopup(
@@ -530,6 +560,201 @@ void SettingsOverlay::cycleLanguage() {
     if (onLanguageChange_) {
         onLanguageChange_();
     }
+}
+
+size_t SettingsOverlay::keybindCount() const {
+    if (!ctx_.pluginManager) {
+        return 0;
+    }
+    auto snapshot = ctx_.pluginManager->uiRegistrySnapshot();
+    return snapshot ? snapshot->keybinds.size() : 0;
+}
+
+// ---------------------------------------------------------------------------
+// KeybindListOverlay
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 键位列宽度上限 (键位描述通常很短; 超长时按显示列宽截断, 避免挤掉说明)
+constexpr int kKeybindKeyColumnMax = 18;
+
+/// 键位列宽度 (取最长键位, 受上限约束)
+int keybindKeyColumnWidth(const std::vector<agentxx::plugin::ClientKeybind>& binds) {
+    int width = 0;
+    for (const auto& b : binds) {
+        width = std::max(width, agentxx::ui::displayWidth(b.keys));
+    }
+    return std::min(width, kKeybindKeyColumnMax);
+}
+
+} // namespace
+
+KeybindListOverlay::KeybindListOverlay(TUICtx& ctx) :
+    ctx_(ctx) {
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        return buildItems();
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+}
+
+std::vector<ScrollItem> KeybindListOverlay::buildItems() {
+    const auto& theme = *ctx_.theme;
+
+    // 快照读取 (UI 线程短锁; 未装配插件管理器时按"无注册"处理)
+    std::vector<agentxx::plugin::ClientKeybind>         binds;
+    std::vector<agentxx::plugin::ClientKeybindConflict> conflicts;
+    if (ctx_.pluginManager) {
+        auto snapshot = ctx_.pluginManager->uiRegistrySnapshot();
+        if (snapshot) {
+            binds     = snapshot->keybinds;
+            conflicts = snapshot->keybindConflicts;
+        }
+    }
+    // 按键位排序展示 (注册顺序随插件加载顺序变化, 排序后更稳定)
+    std::sort(binds.begin(), binds.end(), [](const auto& a, const auto& b) {
+        return a.keys < b.keys;
+    });
+    std::sort(conflicts.begin(), conflicts.end(), [](const auto& a, const auto& b) {
+        if (a.keys != b.keys) {
+            return a.keys < b.keys;
+        }
+        return a.plugin < b.plugin;
+    });
+    keybindCount_ = binds.size();
+
+    std::vector<ScrollItem> items;
+    if (binds.empty()) {
+        items.push_back(ScrollItem{text(std::string{tr("keybind.empty")}) | theme.dim(), false});
+        items.push_back(ScrollItem{text(""), false});
+    }
+
+    const int keyWidth = keybindKeyColumnWidth(binds);
+    for (const auto& bind : binds) {
+        // 键位列: 按显示列宽截断后补齐, 让后续列对齐 (宽字符安全)
+        const std::string keyText = agentxx::ui::padRightToWidth(
+            agentxx::ui::truncateToWidth(bind.keys, keyWidth),
+            keyWidth
+        );
+        const std::string desc = bind.description.empty() ? std::string{tr("keybind.noDesc")}
+                                                          : bind.description;
+        items.push_back(ScrollItem{
+            hbox({
+                text(keyText) | bold | color(theme.accentColor),
+                text("  "),
+                text(desc) | color(theme.normalColor),
+                filler(),
+                text(bind.plugin) | color(theme.hintColor),
+            }),
+            false,
+        });
+    }
+
+    // 冲突段: 键位被占用导致注册失败 (跨插件); 帮用户解释"快捷键没生效"
+    if (!conflicts.empty()) {
+        items.push_back(ScrollItem{text(""), false});
+        items.push_back(ScrollItem{
+            text(trf("keybind.conflictTitle", conflicts.size())) | bold | color(theme.errorColor),
+            false,
+        });
+        for (const auto& conflict : conflicts) {
+            const std::string keyText = agentxx::ui::padRightToWidth(
+                agentxx::ui::truncateToWidth(conflict.keys, keyWidth),
+                keyWidth
+            );
+            items.push_back(ScrollItem{
+                hbox({
+                    text(keyText) | bold | color(theme.errorColor),
+                    text("  "),
+                    text(trf("keybind.conflictLine", conflict.plugin, conflict.owner))
+                        | color(theme.hintColor),
+                    filler(),
+                }),
+                false,
+            });
+        }
+    }
+
+    return items;
+}
+
+Element KeybindListOverlay::OnRender() {
+    const auto& theme    = *ctx_.theme;
+    const auto  termSize = ctx_.terminalSize();
+    const int   margin   = 2;
+    const int   termW    = std::max(1, termSize.dimx);
+    const int   termH    = std::max(1, termSize.dimy);
+    const int   wantW    = std::max(44, std::min(78, termW * 4 / 5));
+    const int   wantH    = std::max(10, std::min(24, termH * 4 / 5));
+    const int   popupW   = std::min(wantW, std::max(1, termW - margin * 2));
+    const int   popupH   = std::min(wantH, std::max(1, termH - margin * 2));
+    const auto  style    = TuiSurfaceStyle::fromTheme(theme);
+    return tuiSurfacePopup(style, tr("keybind.title"), scrollable_->Render() | flex, tr("keybind.hint"))
+           | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
+}
+
+bool KeybindListOverlay::OnEvent(Event event) {
+    if (event == Event::Escape || event == Event::Return) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    if (event.is_mouse()) {
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    if (event == Event::ArrowUp) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - 1);
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::ArrowDown) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + 1);
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::PageUp) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() - scrollable_->viewportHeight());
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::PageDown) {
+        scrollable_->setScrollOffset(scrollable_->scrollOffset() + scrollable_->viewportHeight());
+        if (scrollable_->totalHeight() - scrollable_->viewportHeight()
+            <= scrollable_->scrollOffset()) {
+            scrollable_->setStickToBottom(true);
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::Home) {
+        scrollable_->setScrollOffset(0);
+        scrollable_->setStickToBottom(false);
+        ctx_.postRedraw();
+        return true;
+    }
+    if (event == Event::End) {
+        // 偏移越界由滚动容器在下次布局时收敛到"内容底部"
+        scrollable_->setScrollOffset(scrollable_->totalHeight());
+        scrollable_->setStickToBottom(true);
+        ctx_.postRedraw();
+        return true;
+    }
+    // 只读弹窗: 其余按键吞掉 (模态, 不得落到被遮挡的主界面)
+    return true;
 }
 
 // ---------------------------------------------------------------------------

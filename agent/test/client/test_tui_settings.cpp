@@ -5,10 +5,13 @@
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx/agent/io/channel_io_transport.h"
+#include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/settings_db.h"
 #include "ftxui/component/event.hpp"
+#include "ftxui/screen/screen.hpp"
 #include "utilxx_base/env.h"
 #include <chrono>
+#include <cctype>
 #include <filesystem>
 #include <fmt/format.h>
 #include <memory>
@@ -856,6 +859,318 @@ void test_tui_multimodal_capability_survives_session_sync() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 插件全局快捷键列表 (设置弹窗条目 + 只读列表弹窗)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 本模块快捷键用例的共享主题 (与其它 TUI 用例一致: 不依赖物理终端)
+TUITheme& keybindTheme() {
+    static TUITheme theme = TUITheme::darkTheme();
+    return theme;
+}
+
+/// 声明快捷键能力的测试适配器 (宿主未声明 `agentxx.client.keybind` 时
+/// registerKeybind 会被能力门控拒绝)
+class KeybindTestUiAdapter : public agentxx::plugin::PluginUiAdapter {
+public:
+
+    agentxx::plugin::InterfaceSet supportedInterfaces() const override {
+        namespace pi = agentxx::plugin::plugin_interfaces;
+        return {std::string{pi::ClientUi}, std::string{pi::ClientKeybind}};
+    }
+};
+
+/// 测试用管理器: 暴露 createInstance 以构造"伪实例"
+/// (快捷键归属只按实例名; 生产路径的实例由 dlopen + lifecycle 创建)
+class KeybindTestManager : public agentxx::plugin::ClientPluginManager {
+public:
+
+    using ClientPluginManager::ClientPluginManager;
+    using ClientPluginManager::createInstance;
+};
+
+/// 经管理器入口注册一条快捷键 (与插件走同一个 registerKeybind)
+AgentxxKeybind* registerProbeKeybind(
+    agentxx::plugin::ClientPluginManager& mgr,
+    agentxx::plugin::ClientPluginInstance* inst,
+    std::string_view                      keys,
+    std::string_view                      description = std::string_view{}
+) {
+    AgentxxKeybindSpec spec{};
+    spec.version     = 1;
+    spec.keys        = agentxx::plugin::PluginStringView::from(keys.data(), keys.size());
+    spec.description = agentxx::plugin::PluginStringView::from(
+        description.data() != nullptr ? description.data() : "",
+        description.size()
+    );
+    spec.on_keybind = [](void*) {};
+    spec.user_data  = nullptr;
+    return mgr.registerKeybind(inst, &spec);
+}
+
+/// 固定视口下的最小 TUICtx (快捷键弹窗只读主题与插件管理器)
+TUICtx keybindTestCtx(const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr, int height = 34) {
+    TUICtx ctx;
+    ctx.theme          = &keybindTheme();
+    ctx.postRedraw     = [] {};
+    ctx.viewportWidth  = 100;
+    ctx.viewportHeight = height;
+    ctx.pluginManager  = mgr;
+    return ctx;
+}
+
+/// 剥离 ANSI CSI 转义序列, 仅保留可见字符 (与 test_tui_surface / test_tui_context_overlay 同款)
+std::string stripAnsiSequences(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (size_t i = 0; i < raw.size();) {
+        if (raw[i] == '\x1B') {
+            size_t j = i + 1;
+            if (j < raw.size() && raw[j] == '[') {
+                ++j;
+                while (j < raw.size() && !std::isalpha(static_cast<unsigned char>(raw[j]))) {
+                    ++j;
+                }
+                if (j < raw.size()) {
+                    ++j;
+                }
+            } else if (j < raw.size()) {
+                ++j;
+            }
+            i = j;
+            continue;
+        }
+        out += raw[i++];
+    }
+    return out;
+}
+
+/// 屏幕全部文本 (剥离颜色序列; 宽字符按一个字符出现一次, 与看到的界面一致)
+///
+/// 说明: 不要逐格拼接 `PixelAt(x,y).character` —— 宽字符占两格, 第二格为空串,
+/// 逐格拼接会把 "快捷键" 变成 "快 捷 键" (子串断言因此永远匹配不上)。
+std::string screenText(const ftxui::Screen& screen) {
+    return stripAnsiSequences(screen.ToString());
+}
+
+/// 在屏幕各行中查找文本 (宽字符按一个字符计), 返回该行 y 与该行首个非空白列 x
+///
+/// 供"模拟点击某一行"用: x 取行首可见列的屏幕坐标 (单元格下标即显示列),
+/// 点击该坐标必然落在该行的命中区域左边界内。
+bool findRowWithText(const ftxui::Screen& screen, std::string_view needle, int& outX, int& outY) {
+    if (needle.empty()) {
+        return false;
+    }
+    for (int y = 0; y < screen.dimy(); ++y) {
+        std::string line;
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const std::string& ch = screen.PixelAt(x, y).character;
+            if (ch.empty()) {
+                continue; // 宽字符的右半格 / 未绘制格
+            }
+            line += ch;
+        }
+        if (line.find(needle) == std::string::npos) {
+            continue;
+        }
+        outX = 0;
+        outY = y;
+        for (int x = 0; x < screen.dimx(); ++x) {
+            if (!screen.PixelAt(x, y).character.empty()) {
+                outX = x;
+                break;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+/// 渲染一帧 (固定视口, 不随物理终端尺寸漂移)
+ftxui::Screen renderOnce(const ftxui::Component& comp, int width, int height) {
+    auto screen = ftxui::Screen::Create(
+        ftxui::Dimension::Fixed(width),
+        ftxui::Dimension::Fixed(height)
+    );
+    ftxui::Render(screen, comp->Render());
+    return screen;
+}
+
+/// 语言临时切换 (断言中文字面量; 作用域结束恢复原设置)
+struct ScopedLanguage {
+    TuiLanguage saved = TUISettings::instance().language();
+
+    explicit ScopedLanguage(TuiLanguage lang) {
+        TUISettings::instance().setLanguage(lang);
+    }
+
+    ~ScopedLanguage() {
+        TUISettings::instance().setLanguage(saved);
+    }
+};
+
+} // namespace
+
+/// 设置弹窗: "快捷键" 条目显示插件已注册的条数, 点击条目打开快捷键列表
+void test_settings_overlay_keybind_entry() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    // 未装配插件管理器: 条数按 0 显示 (不崩)
+    {
+        auto         ctx    = keybindTestCtx(nullptr);
+        auto         comp   = std::make_shared<SettingsOverlay>(ctx);
+        const auto   screen = renderOnce(comp, 100, 34);
+        const auto   text   = screenText(screen);
+        XX_TEST_EXPECT_TRUE(text.find("插件快捷键: 0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("快捷键") != std::string::npos);
+    }
+
+    // 已注册 2 条: 条数反映在条目值上
+    asio::io_context io;
+    auto             mgr = std::make_shared<KeybindTestManager>(io.get_executor());
+    mgr->setUiAdapter(std::make_shared<KeybindTestUiAdapter>());
+    auto instA = mgr->createInstance("probe_a");
+    auto instB = mgr->createInstance("probe_b");
+    XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, instA.get(), "ctrl+alt+k", "toggle") != nullptr);
+    XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, instB.get(), "f9", "refresh") != nullptr);
+
+    auto ctx      = keybindTestCtx(mgr);
+    auto comp     = std::make_shared<SettingsOverlay>(ctx);
+    int  opened   = 0;
+    comp->onKeybindList([&] {
+        ++opened;
+    });
+
+    const auto screen = renderOnce(comp, 100, 34);
+    XX_TEST_EXPECT_TRUE(screenText(screen).find("插件快捷键: 2") != std::string::npos);
+
+    // 点击"快捷键"条目 (条目整行可点: 点击标签行即激活)
+    int x = 0;
+    int y = 0;
+    XX_TEST_EXPECT_TRUE(findRowWithText(screen, "快捷键", x, y));
+    ftxui::Mouse click;
+    click.button = ftxui::Mouse::Left;
+    click.motion = ftxui::Mouse::Released;
+    click.x      = x;
+    click.y      = y;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(opened, 1);
+}
+
+/// 设置弹窗: 终端过矮时压缩条目间距 (全部条目与底部提示仍可见, 不被裁掉)
+void test_settings_overlay_short_terminal() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    // 80x24 (经典默认终端): 常规版式 (7 条目 × 2 行 + 6 行间距 + 外框 6 行 = 26 行)
+    // 装不下 -> 压缩项间距, 保证条目与底部提示都可见
+    auto ctx = keybindTestCtx(nullptr, 24);
+    ctx.viewportWidth = 80;
+    auto       comp   = std::make_shared<SettingsOverlay>(ctx);
+    const auto text   = screenText(renderOnce(comp, 80, 24));
+    XX_TEST_EXPECT_TRUE(text.find("主题") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("插件快捷键: 0") != std::string::npos); // 倒数第二项
+    XX_TEST_EXPECT_TRUE(text.find("关于") != std::string::npos);         // 最后一项
+    XX_TEST_EXPECT_TRUE(text.find("[Esc]") != std::string::npos);        // 底部提示
+}
+
+/// 快捷键列表弹窗: 无注册时显示空状态; Esc 关闭
+void test_keybind_list_overlay_empty() {    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    auto         ctx    = keybindTestCtx(nullptr);
+    auto         comp   = std::make_shared<KeybindListOverlay>(ctx);
+    bool         closed = false;
+    comp->onClose([&] {
+        closed = true;
+    });
+
+    const auto text = screenText(renderOnce(comp, 100, 34));
+    XX_TEST_EXPECT_TRUE(text.find("插件快捷键") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("暂无插件注册的全局快捷键") != std::string::npos);
+    XX_TEST_EXPECT_EQ(comp->keybindCount(), size_t{0});
+
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Escape));
+    XX_TEST_EXPECT_TRUE(closed);
+}
+
+/// 快捷键列表弹窗: 键位 + 说明 + 归属插件; 冲突段 (申请方 / 占用方); 注销后刷新
+void test_keybind_list_overlay_entries() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    asio::io_context io;
+    auto             mgr = std::make_shared<KeybindTestManager>(io.get_executor());
+    mgr->setUiAdapter(std::make_shared<KeybindTestUiAdapter>());
+    auto  owner = mgr->createInstance("probe_owner");
+    auto  other = mgr->createInstance("probe_other");
+    auto* bindK = registerProbeKeybind(*mgr, owner.get(), "ctrl+alt+k", "toggle panel");
+    XX_TEST_EXPECT_TRUE(bindK != nullptr);
+    XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, owner.get(), "f9") != nullptr); // 无说明
+    // 跨插件抢同一键位被拒: 记录进注册表快照 (列表的冲突段)
+    XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, other.get(), "ctrl+alt+k", "dup") == nullptr);
+
+    auto       ctx    = keybindTestCtx(mgr);
+    auto       comp   = std::make_shared<KeybindListOverlay>(ctx);
+    const auto text   = screenText(renderOnce(comp, 100, 34));
+    XX_TEST_EXPECT_EQ(comp->keybindCount(), size_t{2});
+    XX_TEST_EXPECT_TRUE(text.find("ctrl+alt+k") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("toggle panel") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("probe_owner") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("( 无说明 )") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("键位冲突 (1)") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("申请方 probe_other") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("占用方 probe_owner") != std::string::npos);
+
+    // 键位空出 (占用方注销): 冲突段消失, 列表内容每帧随快照刷新
+    mgr->unregisterKeybind(owner.get(), bindK);
+    const auto refreshed = screenText(renderOnce(comp, 100, 34));
+    XX_TEST_EXPECT_EQ(comp->keybindCount(), size_t{1});
+    XX_TEST_EXPECT_TRUE(refreshed.find("键位冲突") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(refreshed.find("ctrl+alt+k") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(refreshed.find("f9") != std::string::npos);
+}
+
+/// 快捷键列表弹窗: 条目多于弹窗高度时可滚动 (方向键)
+void test_keybind_list_overlay_scroll() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    asio::io_context io;
+    auto             mgr    = std::make_shared<KeybindTestManager>(io.get_executor());
+    mgr->setUiAdapter(std::make_shared<KeybindTestUiAdapter>());
+    auto             instA  = mgr->createInstance("scroll_a");
+    auto             instB  = mgr->createInstance("scroll_b");
+    constexpr int    kTotal = 24; // 16 (单实例上限) + 8
+    for (int i = 0; i < kTotal; ++i) {
+        const std::string keys = fmt::format("ctrl+alt+{}", static_cast<char>('a' + i));
+        auto&             host = (i < 16) ? instA : instB;
+        XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, host.get(), keys, "many") != nullptr);
+    }
+
+    // 视口压低 (弹窗高度 = 视口 4/5): 24 条远多于可见行数
+    auto       ctx         = keybindTestCtx(mgr, 16);
+    auto       comp        = std::make_shared<KeybindListOverlay>(ctx);
+    const auto firstScreen = screenText(renderOnce(comp, 100, 16));
+    XX_TEST_EXPECT_EQ(comp->keybindCount(), size_t{kTotal});
+    XX_TEST_EXPECT_TRUE(firstScreen.find("ctrl+alt+a") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(firstScreen.find("ctrl+alt+x") == std::string::npos); // 末条在视口外
+
+    // 方向键滚动到底: 末条可见, 首条滚出
+    for (int i = 0; i < 30; ++i) {
+        XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::ArrowDown));
+    }
+    const auto scrolled = screenText(renderOnce(comp, 100, 16));
+    XX_TEST_EXPECT_TRUE(scrolled.find("ctrl+alt+x") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(scrolled.find("ctrl+alt+a") == std::string::npos);
+
+    // Home / End: 跳到列表首尾
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Home));
+    const auto home = screenText(renderOnce(comp, 100, 16));
+    XX_TEST_EXPECT_TRUE(home.find("ctrl+alt+a") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::End));
+    const auto end = screenText(renderOnce(comp, 100, 16));
+    XX_TEST_EXPECT_TRUE(end.find("ctrl+alt+x") != std::string::npos);
+}
+
 TestResult testTuiSettings() {
     g_tui_settings_passed = 0;
     g_tui_settings_failed = 0;
@@ -880,6 +1195,11 @@ TestResult testTuiSettings() {
     test_model_selector_overlay_esc_and_confirm();
     test_tui_model_retention_on_wire_model_info_and_switch_session();
     test_tui_multimodal_capability_survives_session_sync();
+    test_settings_overlay_keybind_entry();
+    test_settings_overlay_short_terminal();
+    test_keybind_list_overlay_empty();
+    test_keybind_list_overlay_entries();
+    test_keybind_list_overlay_scroll();
 
     return TestResult{g_tui_settings_passed, g_tui_settings_failed};
 }

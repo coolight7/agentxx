@@ -253,7 +253,10 @@ path/to/agentxx_test string_util regex
   `pause_when_hidden` 区域不可见时顺延, 动画等级 Disabled 时拒绝注册, 禁用/卸载自动取消)
   与 `agentxx.client.keybind` (键位规范化 `normalizeKeybindSpec`, 界面侧
   `tui_keybind.h::keybindOfEvent`, 冲突先注册者优先, 无修饰键可打印字符不参与匹配);
-  可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`)
+  可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`);
+  设置弹窗的「快捷键」条目显示已注册条数并可打开只读列表弹窗
+  (`KeybindListOverlay`: 键位 + 说明 + 归属插件; 抢不到键位的尝试以
+  `ClientKeybindConflict` 记录列在"键位冲突"段)
 - 补充约定 (2026-09-22): 单条 UI 描述 **1 MiB 上限** (`kUiJsonMaxBytes`; 入口拒绝整条更新
   并记日志, 注册表保持上次成功内容)、注册表条目带内容 `version`、通用字段 `when` 仅解析
   与往返保留 (渲染不消费)、树节点在有 `collapseExpanded` 时按"节点路径"键支持宿主管理

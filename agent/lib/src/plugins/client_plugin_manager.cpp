@@ -1459,6 +1459,10 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
         drop(reg->actionBindings);
         drop(reg->commands);
         drop(reg->keybinds);
+        // 快捷键冲突记录: 占用方被摘除 (键位空出) 或请求方被摘除 (记录作废) 都清掉
+        std::erase_if(reg->keybindConflicts, [inst](const ClientKeybindConflict& c) {
+            return c.plugin == inst->name || c.owner == inst->name;
+        });
         uiRegistry_ = std::move(reg);
     }
 
@@ -3349,6 +3353,24 @@ AgentxxKeybind*
                     keys,
                     k.plugin
                 );
+                // 记录冲突 (供设置弹窗展示"为什么这个快捷键没生效"): 只针对跨插件
+                // 占用, 同插件重复注册同一键位属插件自身行为, 不入表
+                if (k.plugin != inst->name) {
+                    const bool recorded = std::any_of(
+                        uiRegistry_->keybindConflicts.begin(),
+                        uiRegistry_->keybindConflicts.end(),
+                        [&](const ClientKeybindConflict& c) {
+                            return c.keys == keys && c.plugin == inst->name;
+                        }
+                    );
+                    if (!recorded) {
+                        auto cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+                        cur->keybindConflicts.push_back(
+                            ClientKeybindConflict{keys, inst->name, k.plugin}
+                        );
+                        uiRegistry_ = std::move(cur);
+                    }
+                }
                 return nullptr;
             }
         }
@@ -3381,6 +3403,11 @@ void ClientPluginManager::unregisterKeybind(ClientPluginInstance* inst, AgentxxK
         auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
         std::erase_if(cur->keybinds, [&](const ClientKeybind& k) {
             return k.plugin == inst->name && k.keys == keys;
+        });
+        // 键位空出后相关冲突不再成立 (请求方下次注册可以成功);
+        // 请求方自己注销时其记录一并作废
+        std::erase_if(cur->keybindConflicts, [&](const ClientKeybindConflict& c) {
+            return c.keys == keys || c.plugin == inst->name;
         });
         uiRegistry_ = std::move(cur);
     }

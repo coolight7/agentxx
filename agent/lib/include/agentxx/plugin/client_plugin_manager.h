@@ -159,6 +159,20 @@ struct ClientKeybind {
     void* ud = nullptr;
 };
 
+/// 快捷键注册被拒记录 (键位已被占用; 供设置弹窗展示冲突情况)
+///
+/// - 记录时机: `register_keybind` 因"键位已被别的插件占用"返回 NULL。
+///   同插件重复注册同一键位不记录 —— 那不是冲突, 是插件自身行为。
+/// - 清理时机: 占用方注销/禁用/卸载该键位 (键位空出), 或请求方禁用/卸载
+///   (记录作废)。同一 (键位, 请求方) 只保留一条, 重新启用后重试不累积。
+/// - 用途: 用户在快捷键列表里看到"某个键位被谁占用、哪个插件没抢到",
+///   从而解释插件文档里的快捷键为什么没生效。
+struct ClientKeybindConflict {
+    std::string keys;   ///< 键位描述 (已规范化, 见 [normalizeKeybindSpec])
+    std::string plugin; ///< 尝试注册但被拒的插件
+    std::string owner;  ///< 当前占用该键位的插件
+};
+
 /// 快捷键描述规范化: 小写化 + 修饰键固定顺序 (ctrl/alt/shift/super) + 别名归一
 /// (`control`→`ctrl` / `cmd`/`win`/`meta`→`super` / `return`→`enter`);
 /// 非法描述 (空 / 未知修饰键 / 缺少主键 / 多个主键 / 无修饰键的可打印单字符) 返回空串。
@@ -174,6 +188,9 @@ struct ClientUiRegistry {
     std::vector<ClientInfoSection>   infoSections;
     std::vector<ClientCommand>       commands;
     std::vector<ClientKeybind>       keybinds;
+    /// 快捷键冲突记录 (注册受阻于已占用的键位; 见 [ClientKeybindConflict])
+    /// - 与 [keybinds] 同一 COW 快照: UI 线程一次快照读到"已注册"与"未抢到"两侧信息
+    std::vector<ClientKeybindConflict> keybindConflicts;
     std::vector<ClientToolDecor>     toolDecors;
     std::vector<ClientToolRenderReg> toolRenderers;
     /// 宿主内置工具特化渲染器 (lib 内置工具无插件归属, 由宿主自身注册;

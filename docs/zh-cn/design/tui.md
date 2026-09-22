@@ -262,6 +262,11 @@ struct UiActionItem {
     (`ClientPluginManager::hasKeybind`) 命中后拦截事件, 经 `postKeybindInvocation`
     投递回 io 线程执行插件回调; 优先级为"全局快捷键 > 表单控件焦点 > 普通按键",
     模态弹窗打开时不触发; 无修饰键的可打印字符不参与匹配 (不影响输入框打字)
+  - 快捷键列表 (只读): 设置弹窗的「快捷键」条目显示插件已注册的条数, 激活后打开
+    `KeybindListOverlay` (键位 + 说明 + 归属插件; 抢不到键位的尝试列在"键位冲突"段,
+    见 `ClientKeybindConflict`)。数据来自 UI 注册表快照 (`keybinds` /
+    `keybindConflicts`), UI 线程读取, 不触发任何插件回调; 插件禁用/卸载后条目与
+    冲突记录一起从快照消失
   - 可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`: 面板 = 当前激活 tab,
     Info 段落 = Info tab 激活), 经 `is_visible` 查询
 - 尺寸感知: 宿主布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递

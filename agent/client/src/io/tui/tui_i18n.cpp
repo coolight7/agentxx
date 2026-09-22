@@ -123,8 +123,20 @@ constexpr Entry kTable[] = {
     {"settings.langValue",        "Language: {}",                                        "语言: {}"                                                                                       },
     {"settings.infoLabel",        "Info",                                                "信息"                                                                                           },
     {"settings.aboutValue",       "About",                                               "关于"                                                                                           },
+    {"settings.keybindLabel",     "Shortcuts",                                           "快捷键"                                                                                         },
+    {"settings.keybindValue",     "Plugin Keybinds: {}",                                 "插件快捷键: {}"                                                                                 },
     {"settings.hint",
      " [Up/Down] Move [Enter] Toggle [Esc] Close ",                                      " [方向键] 移动 [Enter] 切换 [Esc] 关闭 "                                                 },
+
+ // ---- 插件快捷键列表弹窗 (只读) ----
+    {"keybind.title",             "Plugin Keybinds",                                     "插件快捷键"                                                                                     },
+    {"keybind.hint",
+     " [Up/Down] Scroll [Esc] Close ",                                                   " [方向键] 滚动 [Esc] 关闭 "                                                                     },
+    {"keybind.empty",
+     "No global shortcuts registered by plugins",                                        "暂无插件注册的全局快捷键"                                                               },
+    {"keybind.noDesc",            "( no description )",                                  "( 无说明 )"                                                                                     },
+    {"keybind.conflictTitle",     "Key Conflicts ({})",                                  "键位冲突 ({})"                                                                                  },
+    {"keybind.conflictLine",      "requested by {} · held by {}",                        "申请方 {} · 占用方 {}"                                                                  },
 
  // ---- Logs 侧边栏 Menu 弹窗 ----
     {"menu.title",                "Menu",                                                "菜单"                                                                                           },

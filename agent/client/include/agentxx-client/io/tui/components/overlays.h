@@ -146,6 +146,7 @@ private:
 /// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
 /// - 末尾思考展示模式 (Auto Expand / Single Line)
 /// - 界面语言 (简体中文 zh-cn / English en-us; 见 TuiI18n 翻译表)
+/// - 快捷键 (显示插件已注册的全局快捷键条数; 打开 [KeybindListOverlay] 查看完整列表)
 /// - About (打开关于弹窗; 显示版本/路径/插件等信息)
 ///
 /// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击。
@@ -188,6 +189,11 @@ public:
         onAbout_ = std::move(fn);
     }
 
+    /// 快捷键列表弹窗回调 (供外部打开 [KeybindListOverlay])
+    void onKeybindList(std::function<void()> fn) {
+        onKeybindList_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -200,6 +206,9 @@ private:
 
     /// 重建条目表 (每帧刷新各设置项的当前值文本)
     void buildItems();
+
+    /// 已注册的插件全局快捷键条数 (读 UI 注册表快照; 未装配插件管理器时为 0)
+    size_t keybindCount() const;
 
     /// 循环切换主题: Dark -> Light -> Dark (需要访问 ctx_.theme, 非静态)
     void cycleTheme();
@@ -225,6 +234,47 @@ private:
     std::function<void()> onAnimationLevelChange_;
     std::function<void()> onLanguageChange_;
     std::function<void()> onAbout_;
+    std::function<void()> onKeybindList_;
+};
+
+/// 插件全局快捷键列表弹窗 (只读; 由设置弹窗的"快捷键"条目打开)
+///
+/// 数据来源: [TUICtx::pluginManager] 的 UI 注册表快照 (UI 线程短锁读, 渲染期间
+/// 不进入插件代码, 与其它接入点同一模型):
+/// - 已注册快捷键 (`agentxx.client.keybind` 表): 键位 + 说明 + 归属插件
+/// - 被占用键位的注册失败记录: 请求方 + 占用方 (见 `ClientKeybindConflict`)
+///
+/// 让用户在界面上确认"哪个插件占了哪个键位、哪个插件的快捷键没抢到",
+/// 插件禁用/卸载时注册与记录一并从快照消失, 列表随之刷新。
+///
+/// 内容区可滚动 (条目数不受弹窗高度限制);
+/// 交互: Up/Down/PageUp/PageDown/Home/End/滚轮 滚动, Esc 关闭 (只读, 没有编辑操作)。
+class KeybindListOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit KeybindListOverlay(TUICtx& ctx);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+    /// 测试辅助: 最近一次渲染的键位条目数 (不含冲突段; 0 表示当前无注册)
+    size_t keybindCount() const {
+        return keybindCount_;
+    }
+
+private:
+
+    std::vector<ScrollItem> buildItems();
+
+    TUICtx&                     ctx_;
+    std::shared_ptr<Scrollable> scrollable_;
+    std::function<void()>       onClose_;
+    /// 最近一次渲染的键位条目数 (诊断/测试)
+    size_t keybindCount_ = 0;
 };
 
 /// 关于弹窗组件 (About)

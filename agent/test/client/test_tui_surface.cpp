@@ -508,6 +508,18 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(r.text.find("版本") != std::string::npos);
     }
 
+    // ---- 插件快捷键列表弹窗 (只读; 无插件管理器时为空状态) ----
+    {
+        SurfaceFixture fx;
+        auto           comp = std::make_shared<KeybindListOverlay>(fx.ctx);
+        auto           r    = fx.probe(comp);
+
+        checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
+        checkNoFrameGlyphs(r, __LINE__);
+        XX_TEST_EXPECT_TRUE(r.text.find("插件快捷键") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(r.text.find("暂无插件注册的全局快捷键") != std::string::npos);
+    }
+
     // ---- 通用 Text 弹窗 (open_overlay TEXT) ----
     {
         SurfaceFixture fx;
