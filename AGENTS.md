@@ -254,6 +254,15 @@ path/to/agentxx_test string_util regex
   与 `agentxx.client.keybind` (键位规范化 `normalizeKeybindSpec`, 界面侧
   `tui_keybind.h::keybindOfEvent`, 冲突先注册者优先, 无修饰键可打印字符不参与匹配);
   可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`)
+- 补充约定 (2026-09-22): 单条 UI 描述 **1 MiB 上限** (`kUiJsonMaxBytes`; 入口拒绝整条更新
+  并记日志, 注册表保持上次成功内容)、注册表条目带内容 `version`、通用字段 `when` 仅解析
+  与往返保留 (渲染不消费)、树节点在有 `collapseExpanded` 时按"节点路径"键支持宿主管理
+  折叠; 行元素内的 `reflect` 框由元素自有节点 (`OwnedReflect`) 持有 —— 接入点只搬元素也
+  不会悬空; 中断 ↔ 组件层唯一映射 `middleware::itemOf/blockOf` + `preset::blocksOf`;
+  SDK 便捷方法另有 `panelItems`(就地构建自动提交)/`setToolDecor`/`Items::form`
+- 测试: 组件层解析/渲染/命中 `ui_items` + `tui_ui_items`; 表单 `tui_form`;
+  接入点 (面板/Info/overlay) `tui_widget`·`tui_form`, 装饰 `tui_tool_header`; 插件端到端
+  (含老宿主降级) `plugin_sdk`·`client_plugins`
 
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`
