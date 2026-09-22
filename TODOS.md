@@ -12,6 +12,8 @@
 - 提示不使用黑话词语，注释翻译应当贴近对应语言，而不是直译
 - client 连接 server 时插入 tool、加载插件
 - UI完全授权状态提示
+- tui 启动时检测 github 更新
+- agentxx_share_store 执行错误判断
 
 - SVG绘制支持
 - 链式 session 任务队列

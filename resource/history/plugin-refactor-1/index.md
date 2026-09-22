@@ -2,6 +2,7 @@
 - 难度: S
 - 类型: 重构
 - 基于commit: 8cec3f65101f438b87120bd5d61d6e4cd3405bfa
+- 时间: 2026-09-07 20:08
 - 需求:
 ```md
 请先通读当前项目的插件框架架构设计和代码 agent\lib\include\agentxx\plugin、已有的插件代码实现

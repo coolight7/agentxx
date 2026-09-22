@@ -3,6 +3,7 @@
 - 难度: S
 - 类型: 架构重构
 - 基于commit: 98015b4b
+- 时间: 2026-09-11 19:48
 - 需求:
 ```md
 请完整通读 插件框架架构重构方案文档 resource/history/plugin-refactor-3/plan.md，仔细思考分析后实现
