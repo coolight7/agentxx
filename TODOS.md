@@ -9,11 +9,12 @@
 - wiki 记忆、项目结构
 - tui 按 user msg 快捷跳转、top、bottom
 - 破甲插件，通过注入系统提示词、修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
-- 提示不使用黑话词语，注释翻译应当贴近对应语言，而不是直译
 - client 连接 server 时插入 tool、加载插件
-- UI完全授权状态提示
-- tui 启动时检测 github 更新
-- agentxx_share_store 执行错误判断
+- 提示不使用黑话词语，注释翻译应当贴近对应语言，而不是直译; 冒烟
+- 完全授权状态在 tui 提示
+- tui 启动时检测 github release 更新
+- tui 图片选择弹窗中中文路径乱码
+- tool 参数检测错误改为抛异常而不是返回 json
 
 - SVG绘制支持
 - 链式 session 任务队列

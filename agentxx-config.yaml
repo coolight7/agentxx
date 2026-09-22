@@ -283,8 +283,11 @@ model:
       model_name: "Agentxx"
       model_context_max_token: 128000
       send_thinking: true
+      image_input: true
+      audio_input: false
+      video_input: true
       extra_api_config:
-        reasoning_effort: "max"
+        reasoning_effort: "xhigh"
         preserve_thinking: true 
 
   # 指定各模式下使用的模型名称（对应上面 model.list 中的 name）
