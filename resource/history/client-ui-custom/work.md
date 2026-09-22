@@ -42,21 +42,22 @@
 
 ### 遗留-真实缺陷（建议优先处理）
 
-- [ ] **CLI 行式前端静默丢弃新组件中断块**
+- [x] **CLI 行式前端静默丢弃新组件中断块**（2026-09-22 修复）
   - 现象：中断描述里含 `table` / `tree` / `sparkline` / `meter` / `row` / `box` / `kv` /
     `collapse` 的内容块，在 CLI（`agent_stdio.cpp:268`）上完全看不到内容（不是走 `fallback`，
     而是被忽略）。
   - 原因：`interruptUiPlainText`（`middlewares/interrupt_ui.cpp:532`）是独立实现，只认
     text/markdown/gap/separator/diff/control/custom，其余走"未知 kind: 忽略"；
     plan §6.5 要求"`interruptUiPlainText` 内部改为调用 `agentxx::ui::plainText`"未做。
-  - 修法：对 `InterruptUiBlock::raw` 走 `agentxx::ui::plainText`（保留老格式分支以维持
-    现有输出兼容），并补一条降级用例；同时清理无用/重复的纯文本代码路径。
-- [ ] **overlay / 消息 owner 的 `pause_when_hidden` 定时器永不触发**
+  - 修法：对扩展块走 `agentxx::ui::plainText`（老格式分支保留，输出兼容），未知 kind
+    输出 `fallback`（都没有才跳过）；见本文档『阶段 10』。
+- [x] **overlay / 消息 owner 的 `pause_when_hidden` 定时器永不触发**（2026-09-22 修复）
   - 现象：插件用 overlay owner（`__overlay`）或消息 owner 注册 `pause_when_hidden` 定时器时，
     回调永远不触发（一直"不可见 → 顺延"）。
   - 原因：可见性只上报面板与 Info 段落（`agent_tui.cpp:357`、`tui_sidebar_content.cpp:194`）；
     `isRegionVisible` 对未登记 id 一律返回 false（`client_plugin_manager.cpp:3221`）。
-  - 修法：overlay 打开/关闭与消息列表可见性一并上报（与『遗留-可选增强』第 1 条同一改动）。
+  - 修法：overlay 打开/关闭与消息列表可见性一并上报（与『遗留-可选增强』第 1 条同一改动）；
+    见本文档『阶段 10』。
 
 ### 遗留-机制与复用（plan 要求，未实施）
 
@@ -117,19 +118,18 @@
 
 ### 遗留-可选增强
 
-- [ ] overlay 区域可见性 / 尺寸上报（当前只上报面板与 Info 段落；与『遗留-真实缺陷』
-  第 2 条为同一改动）
+- [x] overlay 区域可见性 / 尺寸上报（2026-09-22 修复；与『遗留-真实缺陷』第 2 条同一改动）
 - [ ] 快捷键列表展示（`list_keybinds` 已备，设置 / 帮助弹窗尚未消费）
 
 ### 遗留-文档与注释残留（plan §15 / §16）
 
 - [ ] `plugins.md` 章节号重复：`### 9.5 定时器`(610) 与 `### 9.5 状态栏项的富展示片段`(678)
   同号 → 后者应为 9.7，并顺带调整小节顺序
-- [ ] `client_plugin_api.h:306` 注释仍写「通用交互（v3 新增；老宿主按版本截断视角…）」，
+- [x] `client_plugin_api.h:306` 注释仍写「通用交互（v3 新增；老宿主按版本截断视角…）」，
   与 plan §15#3「表 version 保持 1、新能力用新表 / 新能力名」的统一表述不符
-  （表 version 宏本身为 1，属注释表述问题）
-- [ ] `interrupt_ui.h:66` 与 `interrupt_ui.cpp:292` 注释仍写 `custom`「字段预留, 暂未实现」
-  （实际已派发共享组件渲染，仅解析 / 序列化以 `raw` 保留）
+  （2026-09-22 改为说明"本段为首版表成员 + 子能力名降级 + 不追加表尾成员"）
+- [x] `interrupt_ui.h:66` 与 `interrupt_ui.cpp:292` 注释仍写 `custom`「字段预留, 暂未实现」
+  （2026-09-22 改为已派发共享组件渲染的说明）
 
 ---
 
@@ -461,6 +461,48 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ---
 
+## 阶段 10：遗留缺陷修复（已完成，commit `2bc6190d`）
+
+对照『遗留-真实缺陷』两条 + 两条文档注释残留。
+
+### 10.1 行式前端不再丢弃扩展组件中断块
+
+- `interrupt_ui.cpp` 新增 `extendedBlockPlainText(block, width)`：
+  - 块的 kind 未被本结构映射成具名字段时，按 `agentxx.ui.item` **同一份 schema**
+    解析 `InterruptUiBlock::raw`，交给 `agentxx::ui::plainText` 输出（缩进/折行由组件层
+    按 `item.indent` / `width` 处理，与 TUI 渲染口径一致）；
+  - 组件层未识别的 kind → 输出 `fallback`；无 `fallback` → 跳过（向前兼容）；
+  - 无 `raw` 的程序化构造块 → 只能输出 `fallback`。
+- `interruptUiPlainText` 的 `else` 分支（原先"未知 kind: 忽略"）改为走上面这条；
+  老分支（text/markdown/gap/separator/diff/control/custom）保持不变，输出兼容。
+- 头文件同步：`interruptUiPlainText` 说明补"其余 kind 走组件层降级"；`custom` 块说明
+  从"字段预留, 暂未实现"改为"按 component + props 派发到共享组件渲染层"。
+
+### 10.2 overlay / 消息 owner 的可见性（`pause_when_hidden` 门控）
+
+此前只有面板与 Info 段落上报可见性，插件用 `__overlay` 或 `tool_call_id` 作区域 id 时
+定时器永远顺延（永不回调）。现补齐两条上报链路：
+
+- **overlay**：`TUIClientAgentIO::reportOverlayVisible(bool)`（区域 id 固定
+  `AGENTXX_CLIENT_OVERLAY_OWNER`）在 `openOverlay` 成功入栈后上报可见、`closeOverlay`
+  与弹窗自身 Esc/底栏关闭回调里上报不可见；尺寸由 `CustomOverlay::OnRender` 上报
+  （`contentWidth` / `totalHeight`）。
+- **工具消息装饰**：`MessageListComponent::reportDecorVisibility(vboxes)` 每帧（OnRender，
+  用上一帧 `visibleBoxes()`）把"视角内工具消息且已登记装饰"的 `tool_call_id` 上报为可见，
+  离开视角的 id 上报为不可见；只处理登记过装饰的 id —— 否则宿主的可见性表会被每个
+  `tool_call_id` 撑大（`reportRegionVisible` 的条目不回收）。
+- `client_plugin_api.h`：`AgentxxTimerSpec::owner_id` 说明补上可取值
+  （面板 id / Info 段落 id / `"__overlay"` / 工具装饰的 `tool_call_id`）；
+  「通用交互」段落注释改为"首版表成员 + 子能力名降级 + 不追加表尾成员"的统一表述。
+
+### 10.3 测试
+
+`test/core/test_interrupt_ui.cpp` 新增 `test_plain_text_extended_blocks`（13 项断言）：
+表格 / 键值 / 树 / 计量条 / 趋势图 / 横排的纯文本内容、未知 kind 走 `fallback`、
+未知 kind 无 `fallback` 时输出为空、缩进 + 折行口径。全量测试 **22355 项断言通过**。
+
+---
+
 ## 注意事项（实施中记录）
 
 ### 兼容性
@@ -528,6 +570,18 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 - 跨边界向量的类型安全：`ClientPluginInstance::timers` 用
   `vector<shared_ptr<ClientTimerImpl>>`（而不是 `vector<shared_ptr<void>>`），
   利于按指针身份查找与类型安全清理
+
+### 阶段 10（遗留缺陷）踩过的坑
+
+- 纯文本降级的**口径不止一套**：中断自己的 `wrapToWidth` 按"UTF-8 字符数"切，组件层
+  `ui::plainText` 按**显示列宽**切（宽字符 2 列）。扩展块走组件层后，同一份描述在
+  TUI 与 CLI 的折行位置才一致；老分支保持原口径不动（避免无谓回归）
+- 计量条的填充格数按 `int(ratio * width + 0.5)` 计算：`value=72, total=100, width=4`
+  得到 `[###-]`（3 格）而不是 4 格 —— 写断言时不要凭直觉估
+- 上报可见性的区域 id 是**全局**的（只有 id 没有插件维度）：`__overlay` 与
+  `tool_call_id` 都按此处理，插件侧应对自己的区域语义负责
+- 消息列表的装饰可见性上报必须**过滤"登记过装饰"的 id**：`reportRegionVisible`
+  的条目不回收，逐条消息上报会让宿主的可见性表随会话长度无界增长
 
 ### 本轮核对（2026-09-22）
 
