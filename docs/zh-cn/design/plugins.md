@@ -508,7 +508,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 内容块都使用同一套组件描述: JSON 数组 (或 `{"items":[...]}`)，每项一个组件。
 
 通用字段 (所有 kind 可用): `kind` / `id` / `indent` / `color`(或旧写法 `role`) / `bold` /
-`dim` / `wrap` / `fallback` / `action` / `args` / `w`(横排内的列宽)。
+`dim` / `wrap` / `fallback` / `action` / `args` / `w`(横排内的列宽) / `when`(预留: 条件
+显示表达式, 当前只做解析与往返保留)。
 
 | kind | 用途 | 关键字段 |
 |------|------|----------|
@@ -523,8 +524,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `sparkline` | 迷你趋势图 (块字符; 宽度不足自动分桶) | `data` / `height` / `min` / `max` / `colors` / `showLast` |
 | `kv` | 键值对 (两列对齐) | `items:[{k,v,vColor}]` / `sep` / `kw` |
 | `table` | 表格 (表头/列对齐/截断/可点单元格) | `columns:[{title,align,w,color}]` / `rows` / `header` |
-| `tree` | 层级列表 (连接线; 节点可点) | `nodes:[{label,color,action,children}]` |
-| `row` | 横向组合 (列宽权重 + 对齐) | `items` / `gap` / `align` |
+| `tree` | 层级列表 (连接线; 节点可点; 有子节点的行在宿主提供折叠状态时可点击展开) | `nodes:[{label,color,action,children}]` / `connector` |
+| `row` | 横向组合 (列宽权重 + 对齐; `align:"stretch"` 铺满可用宽度) | `items` / `gap` / `align` |
 | `box` | 分组框 (标题 + 边框 + 内边距) | `title` / `border`(none/square/round/light) / `pad` |
 | `collapse` | 可折叠分组 (宿主维护展开状态) | `id` / `title` / `expanded` |
 | `control` | 交互控件 (checkbox/select/buttons/number/text) | `id` / `control` / `label` / `options` / `default` / `commitOnPick` / `min` / `max` / `step` / `integer` |
@@ -537,11 +538,22 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 - 解析上限: 嵌套深度 8 / 单层元素 512 / 表格 512 行 16 列 / 树 1024 节点 /
   趋势图 4096 点 / 单项文本 64 KiB; 越界按"截断或丢弃"处理, 不使整份描述失效
+- **单条描述体积上限 1 MiB** (`agentxx::plugin::kUiJsonMaxBytes`): 面板/Info/状态栏/
+  装饰/overlay/工具渲染结果的入口在越界时**拒绝整条更新** (返回非 0) 并记日志 ——
+  注册表保持上一次成功内容, 不会留下半截状态
+- 注册表条目带内容 `version` (面板/Info/状态栏每次成功更新递增; 工具装饰与工具渲染
+  缓存同理), 供缓存 key 与诊断使用
 - 未知 kind: 渲染 `fallback` 文本 (无 `fallback` 则跳过), 老宿主同样按此降级 —— 插件推送
   新组件时应带 `fallback`, 并按 `get_client_state().interfaces` 判断宿主能力
+- 行式前端 (CLI / 日志 / FFI 文本宿主) 走 `agentxx::ui::plainText`: 表格转列对齐文本、
+  树转连接线前缀、趋势图转块字符 + 末值、计量条转 `[####----] 72%`, 控件转
+  "标签: 候选项/默认值 (形态)"; 中断描述里的扩展组件块同样经该路径输出
+- 中断描述与组件层之间只有一份映射: `agentxx::middleware::itemOf(block)` /
+  `blockOf(item)`(+ `preset::blocksOf(ui)` 用构建器拼中断块), 新增组件不必改中断层
 - 插件构建组件树不必手写 JSON: `agentxx/ui/build.h` 的 `agentxx::ui::Items` 提供链式构建器
   (`text/kv/meter/sparkline/table/tree/row/box/collapse/checkbox/select/number/submit/...`),
-  `ClientPluginBase` 提供 `setPanelItems/setInfoSectionItems/showItemsOverlay` 直接提交:
+  `ClientPluginBase` 提供 `setPanelItems/setInfoSectionItems/showItemsOverlay/panelItems/`
+  `setToolDecor/form` 直接提交:
 
   ```c++
   agentxx::ui::Items ui;
@@ -553,6 +565,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     .submit("应用", "取消");
   ctx.setPanelItems(ctx.panel, ui);
   ```
+
 
 ### 9.2 插件表单 (控件与结果回传)
 
@@ -675,7 +688,7 @@ typedef struct AgentxxClientKeybindIface {
 插件按新宽度重新排列自己的组件并 `update_panel` 即可; 老宿主订阅该事件会失败
 (返回 NULL), 此时按固定宽度排版。
 
-### 9.5 状态栏项的富展示片段
+### 9.7 状态栏项的富展示片段
 
 `register_status_item` / `update_status_item` 的 JSON 除 `text` / `tooltip` 外，还可带
 **单行**富展示片段（状态栏高度固定一行；`text` 作为无法渲染时的降级文本）：

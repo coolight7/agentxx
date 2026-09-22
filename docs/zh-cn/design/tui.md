@@ -129,6 +129,13 @@
 新增一种组件只需改两处: `agentxx/ui/item.h` (字段与解析) 与 `ui_components.cpp` (渲染 + 测量);
 行数估算走同一条渲染路径 (`measureItem`), 与真实布局高度一致 (见 3.1)。
 
+- 行元素内的 `reflect` 反射框由元素的**自有节点** `OwnedReflect` 持有: 元素被搬进
+  滚动容器/消息块缓存 (可能跨帧存活) 时 Box 不会随局部渲染结果析构而悬空;
+  命中判定仍读同一个 Box (两级判定 = 行元素框 + 行内区域)。
+- `tree` 的折叠态: 上下文提供 `collapseExpanded` (TUI 侧就是宿主维护的展开表) 时,
+  有子节点的行可点击展开/收起, 状态键为"从根到该节点的路径"(如 `src/io/`);
+  未提供时按全展开渲染 (行式前端行为不变)。
+
 弹窗统一用 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h) 的面性风格外框
 (圆角 + 标题栏/内容区/底栏分区, 不画边框与分割线); 文案统一走
 [tui_i18n.h](/agent/client/include/agentxx-client/io/tui/framework/tui_i18n.h) 的 `tr()/trf()`。
