@@ -2426,6 +2426,110 @@ public:
         return iface.ui->open_overlay(host, &spec);
     }
 
+    // ==================== 组件树就地构建 ====================
+
+    /// 面板内容就地构建器 (作用域结束时自动提交)
+    ///
+    /// 用途: 插件刷新面板的常见写法是"重新构造整棵组件树并提交", 用本句柄可省掉
+    /// 临时变量与显式提交调用:
+    /// ```c++
+    /// auto ui = panelItems(panel);
+    /// ui->box("System", agentxx::ui::Items{}.meter(cpu, 100, {.label = "CPU"}));
+    /// // 离开作用域时自动 update_panel (需要检查返回值时显式调用 commit())
+    /// ```
+    class PanelWriter {
+    public:
+
+        PanelWriter(const ClientPluginBase* base, AgentxxPanel* panel) :
+            base_(base),
+            panel_(panel) {}
+
+        ~PanelWriter() {
+            commit();
+        }
+
+        PanelWriter(const PanelWriter&)            = delete;
+        PanelWriter& operator=(const PanelWriter&) = delete;
+
+        PanelWriter(PanelWriter&& other) noexcept :
+            base_(other.base_),
+            panel_(other.panel_),
+            ui_(std::move(other.ui_)),
+            committed_(other.committed_) {
+            other.committed_ = true; // 源对象不再提交 (树已移走)
+        }
+
+        /// 组件树 (链式调用同 agentxx::ui::Items)
+        agentxx::ui::Items* operator->() {
+            return &ui_;
+        }
+
+        agentxx::ui::Items& items() {
+            return ui_;
+        }
+
+        /// 提交 (幂等; 返回宿主状态码, 0 = 成功)
+        int32_t commit() {
+            if (committed_) {
+                return 0;
+            }
+            committed_ = true;
+            if (base_ == nullptr) {
+                return -1;
+            }
+            return base_->setPanelItems(panel_, ui_);
+        }
+
+    private:
+
+        const ClientPluginBase* base_      = nullptr;
+        AgentxxPanel*           panel_     = nullptr;
+        agentxx::ui::Items      ui_{};
+        bool                    committed_ = false;
+    };
+
+    /// 面板内容就地构建 (见 [PanelWriter])
+    PanelWriter panelItems(AgentxxPanel* panel) const {
+        return PanelWriter(this, panel);
+    }
+
+    /// 工具消息装饰参数 (折叠头显示名/摘要 + 展开体组件树)
+    struct DecorSpec {
+        std::string        displayName; ///< 折叠头显示名 (空 = 原始工具名)
+        std::string        summary;     ///< 折叠头一行摘要 (空 = 参数预览)
+        agentxx::ui::Items items;       ///< 展开体组件树
+    };
+
+    /// 更新某次工具调用的消息装饰 (见 [DecorSpec])
+    /// - 空 `toolCallId` 或宿主不支持消息装饰时返回非 0 (插件应降级为不装饰)
+    int32_t setToolDecor(std::string_view toolCallId, const DecorSpec& decor) const {
+        if (!host || !iface.ui || !iface.ui->update_tool_decor || toolCallId.empty()) {
+            return -1;
+        }
+        utilxx_base::Json j = utilxx_base::Json::object();
+        if (!decor.displayName.empty()) {
+            j["displayName"] = decor.displayName;
+        }
+        if (!decor.summary.empty()) {
+            j["summary"] = decor.summary;
+        }
+        j["items"] = decor.items.array();
+        const std::string json = j.dump();
+        auto              sv   = PluginStringView::from(json.data(), json.size());
+        auto              tid  = PluginStringView::from(toolCallId.data(), toolCallId.size());
+        return iface.ui->update_tool_decor(host, &tid, &sv);
+    }
+
+    /// 清除某次工具调用的消息装饰 (空 `toolCallId` = 清除本插件全部装饰)
+    int32_t clearToolDecor(std::string_view toolCallId = {}) const {
+        if (!host || !iface.ui || !iface.ui->update_tool_decor) {
+            return -1;
+        }
+        auto tid = PluginStringView::from(toolCallId.data(), toolCallId.size());
+        auto sv  = PluginStringView::from("", 0);
+        return iface.ui->update_tool_decor(host, &tid, &sv);
+    }
+
     // ==================== 能力协商查询 ====================
 
     /// 宿主是否声明了某个能力名 (查 `get_client_state().interfaces`)

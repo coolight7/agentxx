@@ -294,6 +294,9 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     // 文本类缺省折行 (与历史渲染语义一致); 结构化组件不折行
     item.wrap = readBool(json, "wrap", item.kind == "text");
 
+    // 条件显示 (预留): 解析与往返保留, 渲染不消费 (见 item.h 说明)
+    item.when = clampTextImpl(readString(json, "when"), 256);
+
     // 列宽声明 (横排容器内使用): 固定列数或占满剩余宽度
     if (const Json* colWidth = field(json, "w")) {
         if (colWidth->is_number()) {
@@ -673,6 +676,9 @@ Json dumpItem(const Item& item) {
     }
     if (item.wrap) {
         out["wrap"] = true;
+    }
+    if (!item.when.empty()) {
+        out["when"] = item.when;
     }
     if (!item.fallback.empty()) {
         out["fallback"] = item.fallback;

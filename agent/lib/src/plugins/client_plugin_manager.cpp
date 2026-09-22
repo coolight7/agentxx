@@ -1072,12 +1072,21 @@ void ClientPluginManager::performToolRender(
                 entry.summary.assign(output.summary.data, static_cast<size_t>(output.summary.size));
             }
             if (output.items_json.data) {
-                try {
-                    entry.items = utilxx_base::Json::parse(std::string_view{
-                        output.items_json.data,
-                        static_cast<size_t>(output.items_json.size)
-                    });
-                } catch (...) {
+                if (acceptUiJsonSize(
+                        std::string_view{
+                            output.items_json.data,
+                            static_cast<size_t>(output.items_json.size)
+                        },
+                        "tool_renderer output",
+                        hit->plugin
+                    )) {
+                    try {
+                        entry.items = utilxx_base::Json::parse(std::string_view{
+                            output.items_json.data,
+                            static_cast<size_t>(output.items_json.size)
+                        });
+                    } catch (...) {
+                    }
                 }
             }
         }
@@ -2503,6 +2512,9 @@ int ClientPluginManager::updateStatusItem(
     if (!inst || !h) {
         return -1;
     }
+    if (!acceptUiJsonSize(svToSv(json), "update_status_item", inst->name)) {
+        return -1;
+    }
     utilxx_base::Json props;
     std::string       text;
     try {
@@ -2528,6 +2540,7 @@ int ClientPluginManager::updateStatusItem(
             if (s.id == h->id) {
                 s.text = text;
                 s.rich = hasRich ? props : utilxx_base::Json::object();
+                ++s.version;
                 break;
             }
         }
@@ -2537,6 +2550,7 @@ int ClientPluginManager::updateStatusItem(
         if (s.id == h->id) {
             s.text = text;
             s.rich = hasRich ? props : utilxx_base::Json::object();
+            ++s.version;
             break;
         }
     }
@@ -2655,6 +2669,9 @@ int ClientPluginManager::updatePanel(
     if (!inst || !h) {
         return -1;
     }
+    if (!acceptUiJsonSize(svToSv(items_json), "update_panel", inst->name)) {
+        return -1;
+    }
     utilxx_base::Json items = utilxx_base::Json::array();
     try {
         auto j = utilxx_base::Json::parse(
@@ -2672,6 +2689,7 @@ int ClientPluginManager::updatePanel(
         for (auto& p : cur->panels) {
             if (p.id == h->id) {
                 p.items = items;
+                ++p.version;
                 break;
             }
         }
@@ -2680,6 +2698,7 @@ int ClientPluginManager::updatePanel(
     for (auto& p : inst->panelRegs) {
         if (p.id == h->id) {
             p.items = items;
+            ++p.version;
             break;
         }
     }
@@ -2800,6 +2819,9 @@ int ClientPluginManager::updateInfoSection(
     if (!inst || !h) {
         return -1;
     }
+    if (!acceptUiJsonSize(svToSv(items_json), "update_info_section", inst->name)) {
+        return -1;
+    }
     utilxx_base::Json items = utilxx_base::Json::array();
     try {
         auto j = utilxx_base::Json::parse(
@@ -2817,6 +2839,7 @@ int ClientPluginManager::updateInfoSection(
         for (auto& s : cur->infoSections) {
             if (s.id == h->id) {
                 s.items = items;
+                ++s.version;
                 break;
             }
         }
@@ -2825,6 +2848,7 @@ int ClientPluginManager::updateInfoSection(
     for (auto& s : inst->infoSectionRegs) {
         if (s.id == h->id) {
             s.items = items;
+            ++s.version;
             break;
         }
     }
@@ -2880,6 +2904,9 @@ int ClientPluginManager::updateToolDecor(
     }
     const std::string tid  = svToStr(tool_call_id);
     const std::string json = svToStr(decor_json);
+    if (!acceptUiJsonSize(json, "update_tool_decor", inst->name)) {
+        return -1;
+    }
 
     // 删除语义: decor_json 空串 (tid 空 = 本插件全部)
     if (json.empty()) {
@@ -3093,8 +3120,21 @@ void fireTimerTick(
     // - 周期定时器在暂停期间不减计数 (触发次数上限只统计真正回调的次数)
     const bool hidden = timer->pauseHidden && !timer->ownerId.empty()
                         && !mgr->isRegionVisible(timer->ownerId);
+    // 同帧合并: 续期后已过去两个及以上周期说明 io 线程被占住 (回调积压), 本次
+    // 到期与后续到期落在同一批事件里 —— 只回调一次, 丢弃已错过的周期, 避免插件
+    // 被"追赶式"连续回调打满 (周期定时器才有意义; 一次性定时器照常触发)
+    // 注意: 只用"续期时刻到现在"判定, 回调自身耗时导致的下一次到期不算迟到
+    const bool stale = timer->repeatMode && timer->armedAt.time_since_epoch().count() != 0
+                       && std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - timer->armedAt
+                          )
+                              .count()
+                              >= 2 * static_cast<int64_t>(timer->intervalMs);
     const bool usable = inst->enabled && inst->lifetime && inst->lifetime->acceptsOperations();
-    if (usable && !hidden) {
+    if (stale) {
+        ++timer->dropped;
+    }
+    if (usable && !hidden && !stale) {
         // 回调期间实例由 guard 保活 (禁止卸载 dlclose)
         PluginInstanceBase::InflightGuard guard(inst);
         if (guard) {
@@ -3133,6 +3173,7 @@ void armTimer(
     if (!timer || !timer->alive) {
         return;
     }
+    timer->armedAt = std::chrono::steady_clock::now();
     timer->timer.expires_after(std::chrono::milliseconds{std::max<int32_t>(1, timer->intervalMs)});
     timer->timer.async_wait([mgr, timer](const utilxx_base::AsioErrorCode& ec) {
         if (ec || !timer->alive) {
@@ -3216,6 +3257,24 @@ void ClientPluginManager::cancelTimer(ClientPluginInstance* inst, AgentxxTimer* 
     impl->alive = false;
     impl->timer.cancel();
     // 不在此释放: 句柄地址需保持稳定 (见 fireTimerTick 说明)
+}
+
+bool acceptUiJsonSize(
+    std::string_view json,
+    std::string_view what,
+    std::string_view plugin
+) {
+    if (json.size() <= kUiJsonMaxBytes) {
+        return true;
+    }
+    XX_LOGW(
+        "[client_plugin] `{}` {} rejected: UI json too large ({} bytes > {} bytes)",
+        plugin,
+        what,
+        json.size(),
+        kUiJsonMaxBytes
+    );
+    return false;
 }
 
 bool ClientPluginManager::isRegionVisible(std::string_view ownerId) const {
@@ -3580,6 +3639,9 @@ int ClientPluginManager::registerToolRenderer(
 
     if (!spec->render_fn && !agentxx::plugin::PluginStringView::empty(&spec->template_json)) {
         reg.templateJson = svToStr(spec->template_json);
+        if (!acceptUiJsonSize(reg.templateJson, "register_tool_renderer template", inst->name)) {
+            return -1;
+        }
         try {
             auto j = utilxx_base::Json::parse(reg.templateJson);
             if (j.is_object()) {
@@ -3889,6 +3951,10 @@ int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOv
     const std::string extra   = agentxx::plugin::PluginStringView::empty(&spec->extra_json)
                                     ? "{}"
                                     : svToStr(spec->extra_json);
+    if (!acceptUiJsonSize(payload, "open_overlay payload", inst->name)
+        || !acceptUiJsonSize(extra, "open_overlay extra_json", inst->name)) {
+        return -1;
+    }
     // 拷贝字符串后直调 adapter (TUI 实现内部 postToUi, 不阻塞插件)
     uiAdapter_->onOverlayOpen(inst->name, spec->type, title, payload, extra);
     return 0;
@@ -4058,12 +4124,19 @@ ClientToolRenderResult renderClientTool(
                                 );
                             }
                             if (output.items_json.data) {
-                                try {
-                                    res.items = utilxx_base::Json::parse(std::string_view{
-                                        output.items_json.data,
-                                        static_cast<size_t>(output.items_json.size)
-                                    });
-                                } catch (...) {
+                                const std::string_view itemsJson{
+                                    output.items_json.data,
+                                    static_cast<size_t>(output.items_json.size)
+                                };
+                                if (acceptUiJsonSize(
+                                        itemsJson,
+                                        "tool_renderer output",
+                                        r.plugin
+                                    )) {
+                                    try {
+                                        res.items = utilxx_base::Json::parse(itemsJson);
+                                    } catch (...) {
+                                    }
                                 }
                             }
                         }

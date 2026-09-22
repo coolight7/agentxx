@@ -394,6 +394,51 @@ TestResult testUiItems() {
         XX_TEST_EXPECT_TRUE(item.canvas.contains("rows"));
     }
 
+    // ---------------- when (条件显示; 预留字段) ----------------
+    {
+        auto item = parseOne(R"({"kind":"text","text":"x","when":"expanded"})");
+        XX_TEST_EXPECT_EQ(item.when, std::string{"expanded"});
+        // 往返保留 (宿主当前不消费该字段, 但不得丢内容)
+        const std::string dumped = agentxx::ui::dumpItem(item).dump();
+        auto              back   = parseOne(dumped.c_str());
+        XX_TEST_EXPECT_EQ(back.when, std::string{"expanded"});
+    }
+
+    // ---------------- 构建器: 表单 / 数组导出 ----------------
+    {
+        agentxx::ui::Items ui;
+        ui.form({
+            .title       = "Options",
+            .fields      = {agentxx::ui::Items{}.checkbox("detail", "显示细节", true),
+                            agentxx::ui::Items{}.number("level", "层级", 3)},
+            .submitLabel = "应用",
+            .cancelLabel = "取消",
+        });
+        const auto json = ui.json();
+        XX_TEST_EXPECT_EQ(json.value("items", Json::array()).size(), size_t{1});
+        const auto& boxItem = json["items"][0];
+        XX_TEST_EXPECT_EQ(boxItem.value("kind", std::string{}), std::string{"box"});
+        XX_TEST_EXPECT_EQ(boxItem.value("title", std::string{}), std::string{"Options"});
+        // 分组内: 两个控件 + 提交行
+        const auto& inner = boxItem["items"];
+        XX_TEST_EXPECT_EQ(inner.size(), size_t{3});
+        XX_TEST_EXPECT_EQ(inner[0].value("kind", std::string{}), std::string{"control"});
+        XX_TEST_EXPECT_EQ(inner[0].value("control", std::string{}), std::string{"checkbox"});
+        XX_TEST_EXPECT_EQ(inner[2].value("kind", std::string{}), std::string{"submit"});
+        XX_TEST_EXPECT_EQ(inner[2].value("label", std::string{}), std::string{"应用"});
+        // array() 与 json()["items"] 同源
+        XX_TEST_EXPECT_EQ(ui.array().size(), json["items"].size());
+    }
+    {
+        // 无标题表单: 控件直接追加到当前树 (不多一层 box)
+        agentxx::ui::Items ui;
+        ui.form({.fields = {agentxx::ui::Items{}.input("name", "名称", "x")}, .showSubmit = false});
+        const auto json = ui.json();
+        XX_TEST_EXPECT_EQ(json["items"].size(), size_t{1});
+        XX_TEST_EXPECT_EQ(json["items"][0].value("kind", std::string{}), std::string{"control"});
+        XX_TEST_EXPECT_EQ(json["items"][0].value("control", std::string{}), std::string{"text"});
+    }
+
     // ---------------- 序列化往返 ----------------
     {
         auto items = parseMany(R"([

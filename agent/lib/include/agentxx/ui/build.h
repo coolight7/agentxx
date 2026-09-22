@@ -79,6 +79,9 @@ struct BoxOpts {
     std::string titleColor;
 };
 
+/// 表单描述 (控件 + 提交行; 定义在 [Items] 之后 —— 需要完整的 Items 类型)
+struct FormSpec;
+
 /// 表格列声明
 struct TableColumnSpec {
     std::string title;
@@ -555,6 +558,33 @@ public:
 
     // ---------------- 其他 ----------------
 
+    /// 表单 (控件 + 提交行)
+    ///
+    /// 例:
+    /// ```c++
+    /// ui.form({
+    ///     .title  = "Options",
+    ///     .fields = {agentxx::ui::Items{}.checkbox("detail", "显示细节", on),
+    ///                agentxx::ui::Items{}.number("level", "层级", 3)},
+    /// });
+    /// ```
+    /// 提交/取消经动作通道回传: `__submit` + `{"values":{控件 id: 值}}` / `__cancel`
+    /// (定义见 [FormSpec]; 在类外以实现"声明处允许不完整类型")
+    Items& form(FormSpec spec);
+
+    /// 给最近一项设置条件显示表达式 (预留字段: 当前仅写入描述, 渲染不消费)
+    /// - 例: `ui.text("详情").when("expanded")`
+    Items& when(std::string_view expr) {
+        syncParsed();
+        if (!rawList_.empty()) {
+            Json& last = rawList_.back();
+            if (last.is_object()) {
+                last["when"] = std::string{expr};
+            }
+        }
+        return *this;
+    }
+
     /// 完全自绘组件 (本版只保留数据, 渲染降级为 `fallback`)
     Items& canvas(Json canvasJson, std::string_view fallback = {}) {
         Json it = std::move(canvasJson);
@@ -602,14 +632,19 @@ public:
         return rawList_;
     }
 
+    /// 内部数组的 JSON 副本 (即 `{"items":[...]}` 的内层数组)
+    Json array() const {
+        syncParsed();
+        Json out = Json::array();
+        for (const auto& it : rawList_) {
+            out.push_back(it);
+        }
+        return out;
+    }
+
     /// 产出 `{"items":[...]}` (插件接口接受的形态)
     Json json() const {
-        syncParsed();
-        Json arr = Json::array();
-        for (const auto& it : rawList_) {
-            arr.push_back(it);
-        }
-        return Json::object({{"items", std::move(arr)}});
+        return Json::object({{"items", array()}});
     }
 
     /// 产出紧凑 JSON 文本 (供 C 接口的 PluginxxStringView 参数使用)
@@ -703,6 +738,42 @@ private:
     mutable std::vector<Item> parsed_;
     mutable bool              hasParsed_ = false;
 };
+
+/// 表单描述 (控件 + 提交行)
+///
+/// 表单的控件语义与中断描述完全一致 (控件形态即语义, 值经宿主的表单状态维护),
+/// 差别只在结果去处: 插件表单经动作通道回传 (`__submit` / `__cancel` /
+/// `commitOnPick` 的控件 id), 中断描述经中断结果通道回传。
+struct FormSpec {
+    /// 分组标题 (空 = 不加分组框, 控件直接追加到当前树)
+    std::string        title;
+    /// 分组边框风格 (取值同 [BoxOpts::border]; 仅 title 非空时生效)
+    std::string        border = "round";
+    /// 控件列表 (checkbox / input / number / select / buttons 等)
+    std::vector<Items> fields;
+    /// 提交按钮文案 (空 = 前端按语言取默认文案)
+    std::string        submitLabel;
+    /// 取消按钮文案 (空 = 前端按语言取默认文案)
+    std::string        cancelLabel;
+    /// 是否追加提交行 (缺省追加; 纯展示型表单可置 false)
+    bool               showSubmit = true;
+};
+
+inline Items& Items::form(FormSpec spec) {
+    Items body;
+    for (const auto& field : spec.fields) {
+        body.append(field);
+    }
+    if (spec.showSubmit) {
+        body.submit(spec.submitLabel, spec.cancelLabel);
+    }
+    if (!spec.title.empty()) {
+        BoxOpts opts;
+        opts.border = spec.border.empty() ? std::string{"round"} : spec.border;
+        return box(spec.title, body, opts);
+    }
+    return append(body);
+}
 
 } // namespace ui
 } // namespace agentxx

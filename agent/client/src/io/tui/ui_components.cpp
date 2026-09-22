@@ -218,7 +218,14 @@ Element buttonElement(
 /// 声明固定宽度的列按声明值, 其余列平分剩余宽度
 /// - 总和超出可用宽度时先收缩固定列 (下限 4 列), 空间仍不足则全部等分
 /// - `avail <= 0` 时按缺省宽度铺开 (不限宽场景)
-std::vector<int> layoutColumnWidths(const std::vector<int>& fixed, int avail, int gap) {
+/// - 无自适应列时, 剩余宽度默认给最后一列; `stretchAll = true` 时改为均分给
+///   各列 (row 的 `align: "stretch"`: 横向铺满可用宽度)
+std::vector<int> layoutColumnWidths(
+    const std::vector<int>& fixed,
+    int                     avail,
+    int                     gap,
+    bool                    stretchAll = false
+) {
     constexpr int kMinColumn = 4;
     const size_t  n          = fixed.size();
     std::vector<int> widths(n, kMinColumn);
@@ -284,6 +291,17 @@ std::vector<int> layoutColumnWidths(const std::vector<int>& fixed, int avail, in
                 if (fixed[i] > 0) {
                     continue;
                 }
+                widths[i] += each;
+                if (rest > 0) {
+                    widths[i] += 1;
+                    --rest;
+                }
+            }
+        } else if (stretchAll) {
+            // 横向铺满: 剩余宽度均分给所有列 (含声明了固定宽度的列)
+            const int each = leftover / static_cast<int>(n);
+            int       rest = leftover - each * static_cast<int>(n);
+            for (size_t i = 0; i < n; ++i) {
                 widths[i] += each;
                 if (rest > 0) {
                     widths[i] += 1;
@@ -1087,7 +1105,7 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         for (int i = 0; i < n; ++i) {
             fixed[static_cast<size_t>(i)] = item.items[static_cast<size_t>(i)].columnWidth;
         }
-        const auto widths = layoutColumnWidths(fixed, avail, item.gap);
+        const auto widths = layoutColumnWidths(fixed, avail, item.gap, item.align == "stretch");
 
         Elements columnEls;
         Rows     columns;

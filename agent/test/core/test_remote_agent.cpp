@@ -2324,6 +2324,10 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     clientT->close();
     sc->stop();
     sim.stop();
+    // 让分离协程 (clientLoop 的挂起 recv / 传输循环) 在函数返回前收敛:
+    // 它们按值捕获了传输对象, 但 turnResults/mu 仍按引用捕获, 提前返回会让
+    // "晚到的唤醒"访问已析构的栈上对象
+    co_await testSleep(ex, std::chrono::milliseconds{50});
     co_return;
 }
 
@@ -3159,13 +3163,18 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
 
     auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     std::vector<agentxx::agent::WireTurnResult> turnResults;
     std::mutex                                  mu;
 
-    auto clientLoop = [&]() -> asio::awaitable<void> {
+    // 传输对象用 shared_ptr 并被下方**分离协程按值捕获**保活: clientLoop 是 detached
+    // 的, 其挂起的 recv 有可能在测试函数返回之后才被唤醒 —— 若按引用捕获, 唤醒时
+    // 传输对象已析构 (ASan: heap-use-after-free, 与用例本身无关的时序问题)。
+    std::shared_ptr<agentxx::agent::ChannelAgentIOTransport> clientT = std::move(clientOwn);
+
+    auto clientLoop = [&, clientT]() -> asio::awaitable<void> {
         while (clientT->alive()) {
             auto msg = co_await clientT->recv();
             if (!msg) {

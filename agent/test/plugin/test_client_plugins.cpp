@@ -24,6 +24,7 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/executor_work_guard.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
 #include "utilxx_base/log.h"
@@ -3427,6 +3428,177 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
+    // ---- 32. UI 描述体积上限 (1 MiB: 入口拒绝 + 注册表不变) ----
+    {
+        auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        mgr->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+        auto inst = co_await mgr->loadNativeAsync(findExamplePluginPath());
+        XX_TEST_EXPECT_TRUE(inst != nullptr);
+        auto* ifaceUi
+            = agentxx::plugin::queryInterface<AgentxxClientUiIface>(inst->hostView(), AGENTXX_IFACE_CLIENT_UI);
+        XX_TEST_EXPECT_TRUE(ifaceUi != nullptr);
+        if (inst && ifaceUi) {
+            // 超大描述: 单条 JSON 超过 1 MiB (宿主在入口处直接拒绝, 不解析不落表)
+            const std::string huge = std::string{"{\"items\":[{\"kind\":\"text\",\"text\":\""}
+                                     + std::string(1024 * 1024 + 64, 'x') + "\"}]}";
+            XX_TEST_EXPECT_TRUE(huge.size() > agentxx::plugin::kUiJsonMaxBytes);
+
+            PluginxxStringView idSv   = agentxx::plugin::PluginStringView::from(std::string_view{"example_plugin.big"});
+            PluginxxStringView propSv = agentxx::plugin::PluginStringView::from(std::string_view{"{\"title\":\"Big\"}"});
+            auto* panel = ifaceUi->register_panel(inst->hostView(), &idSv, &propSv);
+            XX_TEST_EXPECT_TRUE(panel != nullptr);
+            if (panel) {
+                // 正常大小先写一次: 后续"拒绝"要与这次的内容对比
+                const std::string small{"{\"items\":[{\"kind\":\"text\",\"text\":\"ok\"}]}"};
+                auto smallSv = agentxx::plugin::PluginStringView::from(small.data(), small.size());
+                XX_TEST_EXPECT_EQ(ifaceUi->update_panel(inst->hostView(), panel, &smallSv), 0);
+
+                auto hugeSv = agentxx::plugin::PluginStringView::from(huge.data(), huge.size());
+                XX_TEST_EXPECT_TRUE(ifaceUi->update_panel(inst->hostView(), panel, &hugeSv) != 0);
+
+                // 注册表内容保持为上一次成功写入 (拒绝不留半截状态)
+                {
+                    auto reg = mgr->uiRegistrySnapshot();
+                    const agentxx::plugin::ClientPanel* found = nullptr;
+                    for (const auto& p : reg->panels) {
+                        if (p.id == "example_plugin.big") {
+                            found = &p;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(found != nullptr);
+                    if (found) {
+                        XX_TEST_EXPECT_EQ(found->items.size(), size_t{1});
+                        XX_TEST_EXPECT_EQ(
+                            found->items[0].value("text", std::string{}),
+                            std::string{"ok"}
+                        );
+                        XX_TEST_EXPECT_EQ(found->version, uint64_t{1}); // 只有第一次成功更新
+                    }
+                }
+            }
+        }
+        // 收尾: 卸载实例 (管理器析构时不留待关闭的实例)
+        XX_TEST_EXPECT_TRUE(co_await mgr->unloadAsync("example_plugin"));
+    }
+
+    // ---- 33. 定时器同帧合并: io 线程被占住后不补发迟到的那次触发 ----
+    //
+    // 用**独立 io_context 并由本线程驱动**: 回调里会阻塞 300ms, 若借用测试共享的
+    // io 上下文会推迟其它模块的在途事件 (影响与本用例无关的时序); 用额外线程则
+    // 需要处理停机, 这里直接在主线程 run_for 驱动 (阻塞也只影响本用例)。
+    {
+        using clk = std::chrono::steady_clock;
+        struct Probe {
+            std::atomic<int>     ticks{0};
+            std::atomic<bool>    blocked{false};
+            /// 阻塞回调结束时刻 (steady_clock 毫秒; 0 = 未结束)
+            std::atomic<int64_t> blockEndMs{0};
+            /// 阻塞结束后首次回调与 blockEnd 的间隔 (ms; -1 = 尚未回调)
+            std::atomic<int64_t> firstGapAfterBlockMs{-1};
+        } probe;
+
+        asio::io_context ioT;
+        auto             work = asio::make_work_guard(ioT);
+
+        auto mgrC = std::make_shared<agentxx::plugin::ClientPluginManager>(ioT.get_executor());
+        mgrC->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+
+        std::atomic<bool> loaded{false};
+        asio::co_spawn(
+            ioT,
+            [&]() -> asio::awaitable<void> {
+                auto instC = co_await mgrC->loadNativeAsync(findExamplePluginPath());
+                if (!instC) {
+                    co_return;
+                }
+                auto* ifaceTimerC = agentxx::plugin::queryInterface<AgentxxClientTimerIface>(
+                    instC->hostView(),
+                    AGENTXX_IFACE_CLIENT_TIMER
+                );
+                if (ifaceTimerC == nullptr) {
+                    co_return;
+                }
+                // 阻塞回调 (一次性): 占住 io 线程 300ms —— 期间 interval=50ms 的
+                // 周期定时器会积压到期
+                AgentxxTimerSpec blocker{};
+                blocker.version     = 1;
+                blocker.interval_ms = 50;
+                blocker.repeat      = 0;
+                blocker.on_timer    = [](void* ud) {
+                    auto* p = static_cast<Probe*>(ud);
+                    std::this_thread::sleep_for(std::chrono::milliseconds{300});
+                    p->blockEndMs.store(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            clk::now().time_since_epoch()
+                        )
+                            .count()
+                    );
+                    p->blocked.store(true);
+                };
+                blocker.user_data = &probe;
+                // 先注册阻塞定时器: 两个定时器同一时刻到期, 阻塞回调先执行
+                (void)ifaceTimerC->set_timer(instC->hostView(), &blocker);
+
+                AgentxxTimerSpec periodic{};
+                periodic.version     = 1;
+                periodic.interval_ms = 50;
+                periodic.repeat      = 100; // 周期 (上限远大于本用例观测窗口)
+                periodic.on_timer    = [](void* ud) {
+                    auto* p = static_cast<Probe*>(ud);
+                    p->ticks.fetch_add(1);
+                    if (p->blocked.load()) {
+                        int64_t expected = -1;
+                        const int64_t gap
+                            = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  clk::now().time_since_epoch()
+                              )
+                                  .count()
+                              - p->blockEndMs.load();
+                        p->firstGapAfterBlockMs.compare_exchange_strong(expected, gap);
+                    }
+                };
+                periodic.user_data = &probe;
+                (void)ifaceTimerC->set_timer(instC->hostView(), &periodic);
+                loaded.store(true);
+            },
+            asio::detached
+        );
+
+        // 主线程驱动 io 事件: 700ms 内让定时器按各自节奏触发 (阻塞回调也在此发生)
+        {
+            const auto deadline = clk::now() + std::chrono::milliseconds{700};
+            while (clk::now() < deadline) {
+                ioT.run_for(std::chrono::milliseconds{20});
+            }
+        }
+        XX_TEST_EXPECT_TRUE(loaded.load());
+        XX_TEST_EXPECT_TRUE(probe.blocked.load());
+        // 合并生效: 阻塞结束后的首次回调不会"立刻补一次", 而是等到下一个周期
+        // (未合并时该次回调会在 blockEnd 后立即执行 → 间隔约 0ms)
+        XX_TEST_EXPECT_TRUE(probe.firstGapAfterBlockMs.load() >= 20);
+        // 定时器仍然活着并持续触发 (合并不等于停摆)
+        XX_TEST_EXPECT_TRUE(probe.ticks.load() >= 4);
+
+        // 收尾: 卸载实例 (等待在途回调结束), 之后不再有待处理事件
+        std::atomic<bool> unloaded{false};
+        asio::co_spawn(
+            ioT,
+            [&]() -> asio::awaitable<void> {
+                unloaded.store(co_await mgrC->unloadAsync("example_plugin"));
+            },
+            asio::detached
+        );
+        {
+            const auto deadline = clk::now() + std::chrono::milliseconds{2000};
+            while (clk::now() < deadline && !unloaded.load()) {
+                ioT.run_for(std::chrono::milliseconds{20});
+            }
+        }
+        XX_TEST_EXPECT_TRUE(unloaded.load());
+        work.reset();
+        ioT.run(); // 释放剩余事件 (无待处理事件时立即返回)
+        mgrC.reset();
+    }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }

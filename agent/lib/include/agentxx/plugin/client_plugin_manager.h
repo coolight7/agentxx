@@ -53,6 +53,8 @@ struct ClientStatusItem {
     /// 状态栏只有一行高度, 因此这些片段按"单行组件"渲染 (迷你趋势图高度强制为 1,
     /// 计量条取一行); `text` 作为无法渲染富内容时的降级文本。空对象 = 只用 `text`。
     utilxx_base::Json rich = utilxx_base::Json::object();
+    /// 内容版本号 (每次 `update_status_item` 递增; 供缓存 key/诊断使用)
+    uint64_t version = 0;
 };
 
 /// 面板注册记录 (UI 注册表快照条目)
@@ -61,6 +63,8 @@ struct ClientPanel {
     std::string       id;                                 ///< 全局唯一 id
     std::string       title;                              ///< tab 标题
     utilxx_base::Json items = utilxx_base::Json::array(); ///< {"items":[{...}]} 内容
+    /// 内容版本号 (每次 `update_panel` 递增; 供缓存 key/诊断使用)
+    uint64_t version = 0;
 };
 
 /// Info 栏段落注册记录 (UI 注册表快照条目)
@@ -71,6 +75,8 @@ struct ClientInfoSection {
     std::string       id;                                 ///< 全局唯一 id
     std::string       title;                              ///< 段落标题 (空 = 无标题)
     utilxx_base::Json items = utilxx_base::Json::array(); ///< {"items":[{...}]} 内容
+    /// 内容版本号 (每次 `update_info_section` 递增; 供缓存 key/诊断使用)
+    uint64_t version = 0;
 };
 
 /// 工具消息装饰注册记录 (UI 注册表快照条目; update_tool_decor 写入)
@@ -188,6 +194,22 @@ struct ClientUiRegistry {
         return it == instanceGenerations.end() ? 0 : it->second;
     }
 };
+
+/// 插件单条 UI 描述 JSON 的字节上限 (1 MiB)
+inline constexpr size_t kUiJsonMaxBytes = 1024 * 1024;
+
+/// UI 描述 JSON 体积校验 (越界记日志并返回 false; 调用方按"拒绝更新"处理)
+///
+/// 插件推送的面板/段落/状态栏/装饰/overlay 描述以及工具渲染结果都会进入 UI
+/// 注册表快照或渲染缓存, 超大描述同时撑大内存与每帧解析耗时, 因此在入口处
+/// 直接拒绝; 组件层自身的上限 (嵌套深度/元素数/文本长度) 见
+/// [agentxx::ui::ParseLimits]。
+///
+/// - `args`:
+///     - [json] 待校验的 JSON 文本 (空串视为通过)
+///     - [what] 描述用途 (日志用, 如 "update_panel")
+///     - [plugin] 插件名 (日志用)
+bool acceptUiJsonSize(std::string_view json, std::string_view what, std::string_view plugin);
 
 /// 工具特化渲染统一结果
 struct ClientToolRenderResult {
@@ -321,6 +343,8 @@ ClientToolRenderResult renderClientTool(
 /// - 计时器挂在 client io 执行器上 (asio::steady_timer), 回调在 io 线程执行
 /// - `alive` 为取消标记: 取消后即使有在途等待也不会再回调插件
 /// - `repeat` 为剩余触发次数 (0 = 一次性), 周期定时器每次触发后递减
+/// - `armedAt` 用于**同帧合并**: io 线程繁忙/事件积压导致多个周期同时到期时,
+///   只回调一次并丢弃已错过的周期 (不追赶式连续回调)
 struct ClientTimerImpl {
     asio::steady_timer    timer;
     /// 归属实例 (弱引用: 回调前升级, 实例已卸载则丢弃本次触发)
@@ -330,6 +354,10 @@ struct ClientTimerImpl {
     int32_t                             repeat      = 0;  ///< 剩余触发次数 (0 = 一次性)
     bool                                repeatMode  = false; ///< true = 周期 (按 repeat 计数)
     bool                                pauseHidden = false; ///< 关联区域不可见时跳过回调
+    /// 上次续期时刻 (判定"迟到"用; 见 [armTimer])
+    std::chrono::steady_clock::time_point armedAt{};
+    /// 因同帧合并被丢弃的触发次数 (诊断用)
+    uint64_t                            dropped = 0;
     void(PLUGINXX_CALL* cb)(void*) = nullptr;
     void*       ud    = nullptr;
     bool        alive = true;

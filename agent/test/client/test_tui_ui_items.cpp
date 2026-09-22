@@ -87,9 +87,31 @@ std::string renderToText(const UiRenderResult& res, int w = 60, int h = 20) {
     return out;
 }
 
-/// 行模型元素真实布局后的高度 (行)
-int layoutLines(UiRenderResult& res, int w) {
+/// 与 renderToText 相同的渲染, 但**每个屏幕格都占一个字符** (未写入的格补空格)
+///
+/// 用途: 需要断言"内容出现在第几列"时用本函数。renderToText 直接拼接各格字符,
+/// 而未写入的格子在 FTXUI 里是空串 (会被拼接吞掉), 导致列位置失真 (看似相邻)。
+std::string renderToGrid(const UiRenderResult& res, int w = 60, int h = 20) {
     ftxui::Elements els;
+    for (const auto& row : res.rows) {
+        els.push_back(row.element);
+    }
+    auto el     = ftxui::vbox(std::move(els));
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
+    ftxui::Render(screen, el);
+    std::string out;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::string& ch = screen.PixelAt(x, y).character;
+            out += ch.empty() ? std::string{" "} : ch;
+        }
+        out += '\n';
+    }
+    return out;
+}
+
+/// 行模型元素真实布局后的高度 (行)
+int layoutLines(UiRenderResult& res, int w) {    ftxui::Elements els;
     for (const auto& row : res.rows) {
         els.push_back(row.element);
     }
@@ -323,6 +345,32 @@ TestResult testTuiUiItems() {
         auto text = renderToText(res, 120);
         XX_TEST_EXPECT_TRUE(screenHas(text, "left"));
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
+    }
+    {
+        // align: "stretch" 横向铺满: 无自适应列时剩余宽度均分给各列
+        // 两列各声明 4 列宽 + 中间 1 列 = 9 列, 可用 21 列 → 剩余 12 列均分 (每列 +6)
+        auto res = renderJson(R"([{"kind":"row","gap":1,"align":"stretch","items":[
+            {"kind":"text","text":"AA","w":4},
+            {"kind":"text","text":"BB","w":4}
+        ]}])", ctxFor(21));
+        auto text = renderToGrid(res, 21);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "AA"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "BB"));
+        // 第一列占 10 列 → "BB" 从第 11 列 (0 基下标 11) 开始;
+        // 未铺满时第二列起点是 5 (前 4 列 + 1 列间距)
+        const auto firstLine = text.substr(0, text.find('\n'));
+        XX_TEST_EXPECT_EQ(firstLine.find("BB"), size_t{11});
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
+    }
+    {
+        // 对照: 默认 align (left) 时剩余宽度归最后一列, 第二列仍从固定宽度处开始
+        auto res = renderJson(R"([{"kind":"row","gap":1,"items":[
+            {"kind":"text","text":"AA","w":4},
+            {"kind":"text","text":"BB","w":4}
+        ]}])", ctxFor(21));
+        auto text = renderToGrid(res, 21);
+        const auto firstLine = text.substr(0, text.find('\n'));
+        XX_TEST_EXPECT_EQ(firstLine.find("BB"), size_t{5});
     }
 
     // ---------------- 图表 ----------------
