@@ -2,13 +2,9 @@
 
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/markdown_block.h"
-#include "agentxx-client/io/tui/plugin_ui_items.h"
-#include "agentxx-client/io/tui/text_layout.h"
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
-#include "utilxx_base/string_util.h"
 #include <algorithm>
-#include <cmath>
 #include <utility>
 
 using namespace ftxui;
@@ -19,53 +15,6 @@ namespace client {
 namespace {
 
 using utilxx_base::Json;
-
-/// 数值步进后的显示格式 (整数值按 "1.0" 风格, 非整数保留有效精度)
-std::string formatStepDouble(double v) {
-    if (v == std::floor(v) && std::abs(v) < 1e15) {
-        return fmt::format("{:.1f}", v);
-    }
-    return fmt::format("{:.10g}", v);
-}
-
-/// 数值 → 显示文本 (integer 用整数写法, 浮点按上款)
-std::string formatNumber(double v, bool integer) {
-    if (integer) {
-        return fmt::format("{}", static_cast<int64_t>(v));
-    }
-    return formatStepDouble(v);
-}
-
-/// JSON → 布尔 (布尔直取; 字符串 "true"/"yes"/"y"/"1" 为 true, "false"/"no"/"n"/"0" 为 false)
-bool jsonBoolValue(const Json& v, bool defaultValue) {
-    if (v.is_boolean()) {
-        return v.get<bool>();
-    }
-    if (v.is_number()) {
-        return v.get<double>() != 0.0;
-    }
-    if (v.is_string()) {
-        auto s = utilxx_base::toLower(utilxx_base::removeBetweenSpace(v.get<std::string>()));
-        if (s == "true" || s == "yes" || s == "y" || s == "1") {
-            return true;
-        }
-        if (s == "false" || s == "no" || s == "n" || s == "0") {
-            return false;
-        }
-    }
-    return defaultValue;
-}
-
-/// 数值控件的初始编辑文本 (数值/字符串默认值均支持; 缺失按 "0"/"0.0")
-std::string numberText(const Json& v, bool integer) {
-    if (v.is_number()) {
-        return formatNumber(v.get<double>(), integer);
-    }
-    if (v.is_string() && !v.get<std::string>().empty()) {
-        return v.get<std::string>();
-    }
-    return integer ? "0" : "0.0";
-}
 
 /// 值 → 展示文本 (状态行 "标签: 值" 使用)
 std::string valueText(const Json& v) {
@@ -81,58 +30,7 @@ std::string valueText(const Json& v) {
     return v.dump();
 }
 
-/// 候选项选中下标 (缺失/未命中返回 0)
-///
-/// 比较口径为**归一化文本**: 布尔 true 与字符串 "true"、数值 1 与字符串 "1"
-/// 视为同一候选项 (生产者写默认值时不必与候选项 value 严格同型)
-int optionIndex(const std::vector<middleware::InterruptUiOption>& options, const Json& value) {
-    if (options.empty() || value.is_null()) {
-        return 0;
-    }
-    const auto want = valueText(value);
-    for (size_t i = 0; i < options.size(); ++i) {
-        if (valueText(options[i].value) == want) {
-            return static_cast<int>(i);
-        }
-    }
-    return 0;
-}
-
-const InterruptView::ControlState& emptyControlState() {
-    static const InterruptView::ControlState empty{};
-    return empty;
-}
-
-/// 行追加 helper: 统一控件块的缩进口径 (块 indent + 额外缩进)
-struct RowPusher {
-    UiRenderResult& out;
-    int             indent = 0;
-
-    /// 追加单行元素 (缩进非空时前置空格)
-    void push(Element el, size_t lines = 1) const {
-        UiRow row;
-        row.lines = std::max<size_t>(1, lines);
-        if (indent > 0) {
-            row.element = hbox({
-                text(std::string(static_cast<size_t>(indent), ' ')),
-                std::move(el),
-            });
-        } else {
-            row.element = std::move(el);
-        }
-        out.rows.push_back(std::move(row));
-    }
-};
-
 } // namespace
-
-const InterruptView::ControlState& InterruptView::FormState::control(std::string_view id) const {
-    if (id.empty()) {
-        return emptyControlState();
-    }
-    auto it = controls.find(id);
-    return (it == controls.end()) ? emptyControlState() : it->second;
-}
 
 InterruptView::InterruptView(TUICtx& ctx) :
     ctx_(ctx) {}
@@ -197,24 +95,60 @@ std::string InterruptView::controlIdOf(const middleware::InterruptUiBlock& block
     return block.id.empty() ? std::string{"value"} : block.id;
 }
 
-void InterruptView::initControlState(
-    const middleware::InterruptUiBlock& block,
-    ControlState&                       state
-) {
-    if (block.control == "buttons" || block.control == "select") {
-        state.selected = optionIndex(block.options, block.defaultValue);
-    } else if (block.control == "checkbox") {
-        state.checked = jsonBoolValue(block.defaultValue, false);
-    } else if (block.control == "number") {
-        state.editText = numberText(block.defaultValue, block.integer);
-    } else {
-        // text / 未知形态: 默认值为字符串 (其他类型按展示文本取值)
-        if (block.defaultValue.is_string()) {
-            state.editText = block.defaultValue.get<std::string>();
-        } else if (!block.defaultValue.is_null()) {
-            state.editText = valueText(block.defaultValue);
+std::vector<InterruptView::FormItem> InterruptView::formItems(const middleware::InterruptUi& ui) const {
+    std::vector<FormItem> out;
+    for (size_t bi = 0; bi < ui.blocks.size(); ++bi) {
+        const auto& block = ui.blocks[bi];
+        if (block.kind == "control") {
+            // 标签/说明的 i18n 键在此解析 (共享渲染层只认字面文本)
+            auto resolved  = block;
+            resolved.id    = controlIdOf(block);
+            resolved.label = resolveLabel(block.labelKey, block.label);
+            resolved.help  = resolveLabel(block.helpKey, block.help);
+            for (auto& opt : resolved.options) {
+                opt.label = resolveLabel(opt.labelKey, opt.label);
+            }
+            if (auto item = itemFromInterruptBlock(resolved)) {
+                out.push_back(FormItem{bi, std::move(*item)});
+            }
+            continue;
+        }
+        if (block.kind == "submit") {
+            auto item = itemFromInterruptBlock(block);
+            if (!item) {
+                continue;
+            }
+            // 中断提交行的缺省文案与插件表单不同 (确认 / ✕)
+            if (item->label.empty()) {
+                item->label = std::string{tr("interrupt.confirm")};
+            }
+            if (item->cancelLabel.empty()) {
+                item->cancelLabel = std::string{tr("interrupt.cancel")};
+            }
+            out.push_back(FormItem{bi, std::move(*item)});
+            continue;
         }
     }
+    return out;
+}
+
+std::vector<agentxx::ui::Item>
+    InterruptView::plainItems(const std::vector<FormItem>& items) {
+    std::vector<agentxx::ui::Item> out;
+    out.reserve(items.size());
+    for (const auto& item : items) {
+        out.push_back(item.item);
+    }
+    return out;
+}
+
+std::string InterruptView::firstControlId(const std::vector<agentxx::ui::Item>& items) {
+    for (const auto& item : items) {
+        if (item.kind == "control" && !item.id.empty()) {
+            return item.id;
+        }
+    }
+    return {};
 }
 
 InterruptView::FormState& InterruptView::uiStateFor(const TUIMessage& msg) {
@@ -228,21 +162,11 @@ InterruptView::FormState& InterruptView::uiStateFor(const TUIMessage& msg) {
     if (!inserted) {
         return it->second;
     }
-    // 惰性初始化: 每个 control 块一份状态 (key = 控件 id) + 首个控件为键盘焦点
+    // 惰性初始化: 按描述填充各控件状态 (key = 控件 id), 首个控件为键盘焦点
     auto&      state = it->second;
-    const auto ui    = resolveUi(msg);
-    for (const auto& block : ui.blocks) {
-        if (block.kind != "control") {
-            continue;
-        }
-        auto         id = controlIdOf(block);
-        ControlState cs;
-        initControlState(block, cs);
-        auto [cit, cinserted] = state.controls.emplace(id, std::move(cs));
-        if (cinserted && state.focusedId.empty()) {
-            state.focusedId = std::move(id);
-        }
-    }
+    const auto items = plainItems(formItems(resolveUi(msg)));
+    initFormState(state, items);
+    state.focusedId = firstControlId(items);
     return state;
 }
 
@@ -308,211 +232,35 @@ std::string InterruptView::resolveLabel(std::string_view labelKey, std::string_v
 // 单一布局过程 (渲染与高度估算同源)
 // ---------------------------------------------------------------------------
 
-void InterruptView::layoutSubmit(
-    size_t                              msgIndex,
-    size_t                              blockIndex,
-    const middleware::InterruptUiBlock& block,
-    bool                                registerHits,
-    UiRenderResult&                     out
+void InterruptView::registerBlockHits(
+    size_t                msgIndex,
+    size_t                blockIndex,
+    const UiRenderResult& out,
+    size_t                firstRow
 ) const {
-    const auto& theme = *ctx_.theme;
-    // 提交行: 确认按钮 (描述可覆盖标签) + 取消按钮
-    auto confirmLabel = resolveLabel(block.labelKey, block.label);
-    if (confirmLabel.empty()) {
-        confirmLabel = std::string{tr("interrupt.confirm")};
-    }
-    auto cancelLabel = resolveLabel(block.cancelLabelKey, block.cancelLabel);
-    if (cancelLabel.empty()) {
-        cancelLabel = std::string{tr("interrupt.cancel")};
-    }
-
-    auto    confirmBox = registerHits ? std::make_shared<Box>() : nullptr;
-    auto    cancelBox  = registerHits ? std::make_shared<Box>() : nullptr;
-    Element confirmEl
-        = text(confirmLabel) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-    Element cancelEl = text(cancelLabel) | color(theme.errorColor);
-    if (confirmBox) {
-        confirmEl = confirmEl | reflect(*confirmBox);
-        hit(msgIndex, blockIndex, std::string{kItemIdSubmit}, kSubSubmitConfirm, confirmBox);
-    }
-    if (cancelBox) {
-        cancelEl = cancelEl | reflect(*cancelBox);
-        hit(msgIndex, blockIndex, std::string{kItemIdSubmit}, kSubSubmitCancel, cancelBox);
-    }
-    RowPusher rows{out, std::max(0, block.indent)};
-    rows.push(hbox({std::move(confirmEl), text("  "), std::move(cancelEl)}));
-}
-
-void InterruptView::layoutControl(
-    size_t                              msgIndex,
-    size_t                              blockIndex,
-    const middleware::InterruptUiBlock& block,
-    const ControlState&                 state,
-    int                                 width,
-    bool                                registerHits,
-    UiRenderResult&                     out
-) const {
-    const auto& theme  = *ctx_.theme;
-    const auto  id     = controlIdOf(block);
-    const int   indent = std::max(0, block.indent);
-
-    // 渲染上下文: 内容块与控件行同一口径 (基础缩进 0, 缩进由块自身 indent 表达)
-    UiRenderCtx rc;
-    rc.theme  = ctx_.theme;
-    rc.width  = width;
-    rc.indent = 0;
-
-    // 控件标签与说明复用内容块的文本渲染 (与描述内其他文本同款样式)
-    auto pushText
-        = [&](std::string text, const char* color, bool bold, bool wrap, int extraIndent) {
-              if (text.empty()) {
-                  return;
-              }
-              middleware::InterruptUiBlock tb;
-              tb.kind   = "text";
-              tb.text   = std::move(text);
-              tb.color  = color;
-              tb.bold   = bold;
-              tb.wrap   = wrap;
-              tb.indent = indent + extraIndent;
-              if (auto item = itemFromInterruptBlock(tb)) {
-                  renderItem(*item, rc, out);
-              }
-          };
-    // 标签行: checkbox 的标签即勾选行的行内文本 (不再单独渲染标题行, 避免重复)
-    if (block.control != "checkbox") {
-        pushText(resolveLabel(block.labelKey, block.label), "accent", true, false, 0);
-    }
-    pushText(resolveLabel(block.helpKey, block.help), "hint", false, true, 0);
-
-    RowPusher rows{out, indent};
-
-    if (block.control == "buttons") {
-        // 横排按钮: 点击选中 (commitOnPick 时点击即提交整份表单)
-        Elements els;
-        for (size_t i = 0; i < block.options.size(); ++i) {
-            auto    box = registerHits ? std::make_shared<Box>() : nullptr;
-            Element btn
-                = renderValueButton(block.options[i], state.selected == static_cast<int>(i));
-            if (box) {
-                btn = btn | reflect(*box);
-                hit(msgIndex, blockIndex, id, static_cast<int>(i), box);
-            }
-            if (i > 0) {
-                els.push_back(text(" "));
-            }
-            els.push_back(std::move(btn));
+    for (size_t r = firstRow; r < out.rows.size(); ++r) {
+        const auto& row = out.rows[r];
+        if (!row.box || row.regions.empty()) {
+            continue;
         }
-        if (els.empty()) {
-            rows.push(
-                text(fmt::format("[control `{}` has no options]", id)) | color(theme.errorColor)
-                | theme.dim()
+        for (const auto& region : row.regions) {
+            // 只登记控件区域与提交行区域: 描述里的普通动作区域 (扩展组件内的按钮)
+            // 在中断里没有结果去处, 不参与命中
+            if (region.kind != UiHitRegionKind::Form
+                && region.kind != UiHitRegionKind::FormSubmit) {
+                continue;
+            }
+            const bool isSubmit = (region.kind == UiHitRegionKind::FormSubmit);
+            const bool cancel   = isSubmit && (std::string_view{region.id} == kFormCancelActionId);
+            hit(
+                msgIndex,
+                blockIndex,
+                isSubmit ? std::string{kItemIdSubmit} : region.id,
+                isSubmit ? (cancel ? kSubSubmitCancel : kSubSubmitConfirm) : region.sub,
+                row.box,
+                region
             );
-        } else {
-            rows.push(hbox(std::move(els)));
         }
-    } else if (block.control == "select") {
-        // 竖排单选列表: 逐项一行 (超宽由右缘裁剪)
-        if (block.options.empty()) {
-            rows.push(
-                text(fmt::format("[control `{}` has no options]", id)) | color(theme.errorColor)
-                | theme.dim()
-            );
-        } else {
-            for (size_t i = 0; i < block.options.size(); ++i) {
-                const bool active = state.selected == static_cast<int>(i);
-                auto       label  = resolveLabel(block.options[i].labelKey, block.options[i].label);
-                if (label.empty()) {
-                    label = valueText(block.options[i].value);
-                }
-                Element entry = text(fmt::format(" {} {}", active ? "▸" : " ", label));
-                if (active) {
-                    entry = entry | bgcolor(theme.buttonActiveBgColor)
-                            | color(theme.buttonActiveTextColor) | bold;
-                } else {
-                    entry = entry | color(theme.buttonTextColor);
-                }
-                auto box = registerHits ? std::make_shared<Box>() : nullptr;
-                if (box) {
-                    entry = entry | reflect(*box);
-                    hit(msgIndex, blockIndex, id, static_cast<int>(i), box);
-                }
-                rows.push(std::move(entry) | xflex_shrink);
-            }
-        }
-    } else if (block.control == "checkbox") {
-        // 勾选项: 整行可点 (左指示器 + 标签)
-        auto       box       = registerHits ? std::make_shared<Box>() : nullptr;
-        const auto indicator = state.checked ? text("[ ✓ ] ") | color(theme.accentColor) | bold
-                                             : text("[   ] ") | color(theme.hintColor);
-        auto       label     = resolveLabel(block.labelKey, block.label);
-        if (label.empty()) {
-            label = id;
-        }
-        // 标签用普通内容色: 按钮文字色在深色主题下为纯黑, 无背景时会不可见
-        Element row = hbox({std::move(indicator), text(label) | color(theme.normalColor)});
-        if (box) {
-            row = row | reflect(*box);
-            hit(msgIndex, blockIndex, id, 0, box);
-        }
-        rows.push(std::move(row));
-    } else if (block.control == "number") {
-        // 数值控件: [ - ] 输入 [ + ] (三个命中: 减/输入框/加)
-        auto minusBox = registerHits ? std::make_shared<Box>() : nullptr;
-        auto plusBox  = registerHits ? std::make_shared<Box>() : nullptr;
-        auto editBox  = registerHits ? std::make_shared<Box>() : nullptr;
-        if (registerHits) {
-            hit(msgIndex, blockIndex, id, kSubNumMinus, minusBox);
-            hit(msgIndex, blockIndex, id, kSubNumPlus, plusBox);
-            hit(msgIndex, blockIndex, id, kSubNumEdit, editBox);
-        }
-        auto btnStyle = [&theme](std::string_view label) {
-            return text(label) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
-        };
-        Element minusEl = btnStyle("[ - ]");
-        Element plusEl  = btnStyle("[ + ]");
-        Element editEl  = text(" " + state.editText + " ") | bgcolor(theme.inputBgColor)
-                         | color(theme.inputTextColor) | xflex_shrink;
-        if (minusBox) {
-            minusEl = minusEl | reflect(*minusBox);
-        }
-        if (plusBox) {
-            plusEl = plusEl | reflect(*plusBox);
-        }
-        if (editBox) {
-            editEl = editEl | reflect(*editBox);
-        }
-        rows.push(hbox({
-            std::move(minusEl),
-            text(" "),
-            std::move(editEl),
-            text(" "),
-            std::move(plusEl),
-        }));
-    } else if (block.control == "text") {
-        // 文本输入框 (multiline 预留: 当前按单行渲染)
-        auto    box  = registerHits ? std::make_shared<Box>() : nullptr;
-        Element edit = text(" " + state.editText + " ") | bgcolor(theme.inputBgColor)
-                       | color(theme.inputTextColor) | xflex_shrink;
-        if (box) {
-            edit = edit | reflect(*box);
-            hit(msgIndex, blockIndex, id, 0, box);
-        }
-        rows.push(hbox({std::move(edit)}));
-    } else {
-        // 未知控件形态: 诊断行 (不可交互; 不使整份描述失效)
-        rows.push(
-            text(fmt::format("[unsupported control: {}]", block.control)) | color(theme.errorColor)
-            | theme.dim()
-        );
-    }
-
-    // 校验提示行 (紧贴控件下方; 独立一行, 不与控件行/提交行合并)
-    if (!state.tip.empty()) {
-        rows.push(hbox({
-            text("  "),
-            text(state.tip) | color(theme.errorColor) | xflex_shrink,
-        }));
     }
 }
 
@@ -529,47 +277,43 @@ void InterruptView::layoutForm(
         return;
     }
 
+    // 控件块与提交行 → 共享组件项 (标签/说明的 i18n 键在此解析)
+    const auto items = formItems(ui);
+
     UiRenderCtx rc;
     rc.theme  = ctx_.theme;
     rc.width  = width;
     rc.indent = 0;
+    rc.form   = state; // 估算路径 (state == nullptr) 按描述缺省值渲染静态形态
 
+    auto renderBlockItem = [&](const FormItem& formItem) {
+        const size_t firstRow = out.rows.size();
+        renderItem(formItem.item, rc, out);
+        if (registerHits) {
+            registerBlockHits(msgIndex, formItem.blockIndex, out, firstRow);
+        }
+    };
+
+    size_t nextItem = 0;
     for (size_t bi = 0; bi < ui.blocks.size(); ++bi) {
         const auto& block = ui.blocks[bi];
 
-        // ---- 内容块: 共享组件渲染层 (含表格/树/横排/分组等扩展组件) ----
+        // ---- 控件块与提交行: 共享组件渲染 (控件行/标签/校验提示与插件表单同实现) ----
+        if (block.kind == "control" || block.kind == "submit") {
+            if (nextItem < items.size() && items[nextItem].blockIndex == bi) {
+                renderBlockItem(items[nextItem]);
+                ++nextItem;
+            }
+            continue;
+        }
+
+        // ---- 文本块: 解析 i18n 键后走共享组件渲染 ----
         if (block.kind == "text") {
-            auto resolved = block; // 解析 i18n 键 (textKey 优先, 缺键回退 text)
+            auto resolved = block; // (textKey 优先, 缺键回退 text)
             resolved.text = resolveLabel(block.textKey, block.text);
             if (auto item = itemFromInterruptBlock(resolved)) {
                 renderItem(*item, rc, out);
             }
-            continue;
-        }
-
-        // ---- 控件块 ----
-        if (block.kind == "control") {
-            const auto id = controlIdOf(block);
-            // 估算路径 (state* == nullptr) 使用描述默认值构造的临时状态
-            ControlState        fallback;
-            const ControlState* control = nullptr;
-            if (state) {
-                auto it = state->controls.find(id);
-                if (it != state->controls.end()) {
-                    control = &it->second;
-                }
-            }
-            if (!control) {
-                initControlState(block, fallback);
-                control = &fallback;
-            }
-            layoutControl(msgIndex, bi, block, *control, width, registerHits, out);
-            continue;
-        }
-
-        // ---- 提交行 ----
-        if (block.kind == "submit") {
-            layoutSubmit(msgIndex, bi, block, registerHits, out);
             continue;
         }
 
@@ -578,7 +322,6 @@ void InterruptView::layoutForm(
         // 按块描述直接使用 `agentxx.ui.item` schema), 以及 custom 块派发;
         // 未识别的块降级为 fallback 文本 (无 fallback 则跳过, 向前兼容)。
         if (auto item = itemFromInterruptBlock(block)) {
-            // 控件块已在上方处理; 这里只可能是内容块与扩展组件
             if (item->kind != "control" && item->kind != "submit") {
                 renderItem(*item, rc, out);
                 continue;
@@ -602,27 +345,6 @@ void InterruptView::layoutForm(
 // ---------------------------------------------------------------------------
 // 渲染
 // ---------------------------------------------------------------------------
-
-Element
-    InterruptView::renderValueButton(const middleware::InterruptUiOption& opt, bool active) const {
-    const auto& theme = *ctx_.theme;
-    auto        label = resolveLabel(opt.labelKey, opt.label);
-    if (label.empty()) {
-        label = valueText(opt.value);
-    }
-
-    PluginButtonDesc desc;
-    desc.label = std::move(label);
-    // 选中项高亮 (强调样式); 未选中按描述色 (error = 高危操作, 其余普通按钮)
-    if (active) {
-        desc.role = PluginButtonRole::Accent;
-    } else if (opt.color == "error" || opt.color == "danger") {
-        desc.role = PluginButtonRole::Danger;
-    } else {
-        desc.role = PluginButtonRole::Normal;
-    }
-    return renderPluginButton(desc, theme);
-}
 
 Element InterruptView::buildHeader(const middleware::InterruptUi& ui) const {
     const auto& theme = *ctx_.theme;
@@ -689,7 +411,8 @@ void InterruptView::hit(
     size_t                             blockIndex,
     std::string                        controlId,
     int                                sub,
-    const std::shared_ptr<ftxui::Box>& box
+    const std::shared_ptr<ftxui::Box>& box,
+    const UiHitRegion&                 region
 ) const {
     HitBox h;
     h.msgIndex   = msgIndex;
@@ -697,6 +420,7 @@ void InterruptView::hit(
     h.controlId  = std::move(controlId);
     h.sub        = sub;
     h.box        = box;
+    h.region     = region;
     hits_.push_back(std::move(h));
 }
 
@@ -788,31 +512,28 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
         return false;
     }
 
-    // 命中检测 (命中区域为上一帧布局结果)
+    // 命中检测 (命中区域为上一帧布局结果): 行元素框 + 行内区域两级判定
     for (const auto& h : hits_) {
-        if (!h.box) {
+        if (!h.box || h.box->IsEmpty()) {
             continue;
         }
-        const auto& box = *h.box;
-        if (mouse.y < box.y_min || mouse.y > box.y_max || mouse.x < box.x_min
-            || mouse.x > box.x_max) {
+        if (!h.box->Contain(mouse.x, mouse.y)) {
+            continue;
+        }
+        if (!h.region.contains(mouse.x - h.box->x_min, mouse.y - h.box->y_min)) {
             continue;
         }
 
-        // 命中后的动作在锁外执行 (confirm/step 内部再次加锁, 避免同锁重入)
+        // 命中后的动作在锁外执行 (confirm/cancel 内部再次加锁, 避免同锁重入)
         enum class Act : uint8_t {
             None,
             Confirm,
             Cancel,
-            StepUp,
-            StepDown,
             StateChanged,
         };
         const size_t mi      = h.msgIndex;
         const size_t blockIx = h.blockIndex;
         Act          act     = Act::None;
-        std::string  stepId;
-        double       stepAmount = 1.0;
 
         ctx_.state->mutate([&](TUIRenderState& st) {
             if (mi >= st.messages.size()) {
@@ -827,63 +548,25 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
                 return;
             }
             const auto& block = ui.blocks[blockIx];
+            if (block.kind != "control" && block.kind != "submit") {
+                return; // 内容块不可交互
+            }
 
-            // 提交行 (按块下标定位)
+            // 提交行 (按块下标定位): 确认 / 取消
             if (block.kind == "submit") {
                 act = (h.sub == kSubSubmitCancel) ? Act::Cancel : Act::Confirm;
                 return;
             }
-            if (block.kind != "control") {
-                return; // 内容块不可交互
-            }
 
-            const auto id        = controlIdOf(block);
-            auto&      state     = mutateUiState(msg);
-            state.focusedId      = id;
-            auto [cit, inserted] = state.controls.try_emplace(id);
-            auto& cs             = cit->second;
-            if (inserted) {
-                initControlState(block, cs);
-            }
-
-            if (block.control == "buttons") {
-                const int n = static_cast<int>(block.options.size());
-                if (n <= 0) {
-                    return;
-                }
-                // 值按钮: 选中 (commitOnPick 时立即提交整份表单, 一问一答形态)
-                cs.selected = std::clamp(h.sub, 0, n - 1);
-                cs.tip.clear();
-                act = block.commitOnPick ? Act::Confirm : Act::StateChanged;
+            // 控件命中: 语义 (选中/翻转/步进/聚焦) 由共享表单层处理
+            auto&             state  = uiStateFor(msg);
+            const auto        items  = plainItems(formItems(ui));
+            const UiFormAction action = handleFormControlHit(items, state, h.controlId, h.sub);
+            if (action == UiFormAction::None) {
                 return;
             }
-            if (block.control == "select") {
-                cs.selected
-                    = std::clamp(h.sub, 0, std::max(0, static_cast<int>(block.options.size()) - 1));
-                cs.tip.clear();
-                act = Act::StateChanged;
-                return;
-            }
-            if (block.control == "checkbox") {
-                cs.checked = !cs.checked;
-                cs.tip.clear();
-                act = Act::StateChanged;
-                return;
-            }
-            if (block.control == "number") {
-                stepId     = id;
-                stepAmount = (block.step > 0) ? block.step : 1.0;
-                if (h.sub == kSubNumMinus) {
-                    act = Act::StepDown;
-                } else if (h.sub == kSubNumPlus) {
-                    act = Act::StepUp;
-                } else {
-                    act = Act::StateChanged; // 输入框: 仅激活
-                }
-                return;
-            }
-            // text: 仅激活 (键盘输入作用于聚焦控件)
-            act = Act::StateChanged;
+            ++state.version; // 状态变化 → 消息列表缓存失效与高度重估
+            act = (action == UiFormAction::Submit) ? Act::Confirm : Act::StateChanged;
         });
 
         if (act == Act::None) {
@@ -897,13 +580,6 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
             case Act::Cancel:
                 cancel(mi);
                 break;
-            case Act::StepUp:
-            case Act::StepDown: {
-                // 步进量按描述声明 (默认 1; 上面命中分支已解析)
-                const double delta = stepAmount * ((act == Act::StepUp) ? 1.0 : -1.0);
-                step(mi, stepId, delta);
-                break;
-            }
             case Act::StateChanged:
             default:
                 ctx_.postRedraw();
@@ -923,17 +599,13 @@ bool InterruptView::handleKey(Event event) {
     enum class Act : uint8_t {
         None,
         Confirm,
-        StepUp,
-        StepDown,
         Escape,
         Handled,
     };
-    Act         act        = Act::None;
-    bool        stillValid = false;
-    std::string stepId;
-    double      stepAmount = 1.0;
+    Act  act        = Act::None;
+    bool stillValid = false;
 
-    // 校验激活消息仍可交互, 按键作用于当前聚焦控件 (状态修改在锁内完成)
+    // 校验激活消息仍可交互; 按键作用于当前聚焦控件 (状态修改在锁内完成)
     ctx_.state->mutate([&](TUIRenderState& st) {
         if (mi >= st.messages.size()) {
             return;
@@ -944,6 +616,7 @@ bool InterruptView::handleKey(Event event) {
         }
         stillValid = true;
 
+        // 回车提交整份表单; Esc 释放激活状态 (中断表单的"失焦"语义)
         if (event == Event::Escape) {
             act = Act::Escape;
             return;
@@ -953,94 +626,26 @@ bool InterruptView::handleKey(Event event) {
             return;
         }
 
-        const auto ui = resolveUi(msg);
-        // 表单状态 (惰性初始化) + 聚焦控件定位
-        auto&                               state = mutateUiState(msg);
-        const middleware::InterruptUiBlock* block = nullptr;
-        if (!state.focusedId.empty()) {
-            for (const auto& b : ui.blocks) {
-                if (b.kind == "control" && controlIdOf(b) == state.focusedId) {
-                    block = &b;
-                    break;
-                }
-            }
+        const auto items = plainItems(formItems(resolveUi(msg)));
+        if (items.empty()) {
+            return; // 无控件: 键盘不参与 (回车/Esc 已在上方处理)
         }
-        if (!block) {
-            // 聚焦控件缺失 (空表单/描述变化): 回退到第一个控件并更新焦点
-            for (const auto& b : ui.blocks) {
-                if (b.kind == "control") {
-                    block           = &b;
-                    state.focusedId = controlIdOf(b);
-                    break;
-                }
-            }
+        auto& state = uiStateFor(msg);
+        // 描述变化时补齐新声明的控件 (已初始化的控件保留用户编辑的值)
+        initFormState(state, items);
+        // 无焦点或焦点已失效 (控件被描述移除): 回到首个控件
+        // (中断表单始终有一个焦点控件, 键盘输入总有去处)
+        const bool focusValid
+            = !state.focusedId.empty()
+              && std::any_of(items.begin(), items.end(), [&](const agentxx::ui::Item& it) {
+                     return it.kind == "control" && it.id == state.focusedId;
+                 });
+        if (!focusValid) {
+            state.focusedId = firstControlId(items);
         }
-        if (!block) {
-            return;
-        }
-
-        const auto id        = controlIdOf(*block);
-        state.focusedId      = id;
-        auto [cit, inserted] = state.controls.try_emplace(id);
-        auto& cs             = cit->second;
-        if (inserted) {
-            initControlState(*block, cs);
-        }
-
-        if (block->control == "buttons") {
-            // 左右切换选中项 (提交由 Enter/点击完成)
-            if (event == Event::ArrowLeft || event == Event::ArrowRight) {
-                const int n = static_cast<int>(block->options.size());
-                if (n > 0) {
-                    const int dir = (event == Event::ArrowRight) ? 1 : n - 1;
-                    cs.selected   = (cs.selected + dir) % n;
-                }
-                act = Act::Handled;
-            }
-            return;
-        }
-        if (block->control == "select") {
-            const int delta = (event == Event::ArrowUp) ? -1 : (event == Event::ArrowDown) ? 1 : 0;
-            if (delta != 0) {
-                const int n = static_cast<int>(block->options.size());
-                cs.selected = std::clamp(cs.selected + delta, 0, std::max(0, n - 1));
-                cs.tip.clear();
-                act = Act::Handled;
-            }
-            return;
-        }
-        if (block->control == "checkbox") {
-            if (event.is_character() && event.character() == " ") {
-                cs.checked = !cs.checked;
-                act        = Act::Handled;
-            }
-            return;
-        }
-        if (block->control == "number" && (event == Event::ArrowUp || event == Event::ArrowDown)) {
-            stepId     = id;
-            stepAmount = (block->step > 0) ? block->step : 1.0;
-            act        = (event == Event::ArrowUp) ? Act::StepUp : Act::StepDown;
-            return;
-        }
-        // text / number: 字符编辑
-        if (event.is_character() || event == Event::Backspace || event == Event::Delete) {
-            if (event.is_character()) {
-                if (!cs.edited) {
-                    // 首次输入替换默认值 (与输入框激活时保留默认值的语义一致)
-                    cs.editText.clear();
-                    cs.edited = true;
-                }
-                cs.editText += event.character();
-            } else if (!cs.editText.empty()) {
-                cs.editText.pop_back();
-                cs.edited = true;
-            }
-            cs.tip.clear();
-            act = Act::Handled;
-            return;
-        }
-        // 左右方向键: 单行输入无光标定位, 标记已处理避免落到其他组件
-        if (event == Event::ArrowLeft || event == Event::ArrowRight) {
+        // 控件语义 (选中/翻转/步进/文本编辑/焦点移动) 由共享表单层处理
+        if (handleFormKeyInput(items, state, event)) {
+            ++state.version; // 状态变化 → 消息列表缓存失效与高度重估
             act = Act::Handled;
         }
     });
@@ -1053,13 +658,6 @@ bool InterruptView::handleKey(Event event) {
         case Act::Confirm:
             confirm(mi);
             return true;
-        case Act::StepUp:
-        case Act::StepDown: {
-            const double delta = stepAmount * ((act == Act::StepUp) ? 1.0 : -1.0);
-            const auto   state = formState(mi);
-            step(mi, state.focusedId.empty() ? stepId : state.focusedId, delta);
-            return true;
-        }
         case Act::Escape:
             clearActive();
             ctx_.postRedraw();
@@ -1088,68 +686,20 @@ void InterruptView::confirm(size_t msgIndex) {
         if (!isWaiting(src)) {
             return;
         }
-        const auto ui = resolveUi(src);
-        auto& state = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
+        const auto        ui    = resolveUi(src);
+        const auto        items = plainItems(formItems(ui));
+        auto&             state = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
 
-        utilxx_base::Json values = utilxx_base::Json::object();
-        for (const auto& block : ui.blocks) {
-            if (block.kind != "control") {
-                continue;
-            }
-            const auto id        = controlIdOf(block);
-            auto [cit, inserted] = state.controls.try_emplace(id);
-            auto& cs             = cit->second;
-            if (inserted) {
-                initControlState(block, cs);
-            }
-
-            utilxx_base::Json value;
-            if (block.control == "buttons" || block.control == "select") {
-                const int n = static_cast<int>(block.options.size());
-                if (n <= 0) {
-                    cs.tip     = std::string{tr("interrupt.tipNoOptions")};
-                    needRedraw = true;
-                    return; // 校验失败: 不提交
-                }
-                cs.selected = std::clamp(cs.selected, 0, n - 1);
-                value       = block.options[static_cast<size_t>(cs.selected)].value;
-            } else if (block.control == "checkbox") {
-                value = cs.checked;
-            } else if (block.control == "number") {
-                // 数值校验: 可解析 + integer 约束 + min/max 范围
-                std::string errTip;
-                double      num     = 0.0;
-                auto        trimmed = utilxx_base::removeBetweenSpace(cs.editText);
-                if (trimmed.empty()
-                    || utilxx_base::parseNumberFromString(trimmed, num).ec != std::errc{}) {
-                    errTip
-                        = std::string{tr(block.integer ? "interrupt.tipInt" : "interrupt.tipNum")};
-                } else if (block.integer && num != std::trunc(num)) {
-                    errTip = std::string{tr("interrupt.tipInt")};
-                } else if (block.hasMin && num < block.minValue) {
-                    errTip = trf("interrupt.tipRange", formatNumber(block.minValue, block.integer));
-                } else if (block.hasMax && num > block.maxValue) {
-                    errTip = trf("interrupt.tipRange", formatNumber(block.maxValue, block.integer));
-                }
-                if (!errTip.empty()) {
-                    cs.tip     = std::move(errTip);
-                    needRedraw = true;
-                    return; // 校验失败: 提示保留在该控件下方
-                }
-                // 注意: 必须用括号构造 —— 单元素花括号会命中 initializer_list
-                // 构造, 生成单元素数组而非数值
-                value = block.integer ? utilxx_base::Json(static_cast<int64_t>(num))
-                                      : utilxx_base::Json(num);
-            } else if (block.control == "text") {
-                value = cs.editText;
-            } else {
-                // 未知控件形态: 不参与结果 (诊断行已提示)
-                continue;
-            }
-
-            cs.tip     = {};
-            values[id] = std::move(value);
+        // 校验 (数值范围/整数约束/候选项缺失) 与取值都走共享表单层
+        if (!validateForm(items, state)) {
+            needRedraw = true;
+            return; // 校验失败: 提示保留在各控件下方, 不提交
         }
+        auto formState = formValues(items, state);
+        utilxx_base::Json values
+            = (formState.is_object() && formState.contains("values") && formState["values"].is_object())
+                  ? formState["values"]
+                  : utilxx_base::Json::object();
 
         // 提交结果展示文本 (状态行): 各控件结果值拼接 (标签: 值)
         for (const auto& block : ui.blocks) {
@@ -1158,7 +708,7 @@ void InterruptView::confirm(size_t msgIndex) {
             }
             const auto id = controlIdOf(block);
             if (!values.contains(id)) {
-                continue;
+                continue; // 未知控件形态不参与结果 (诊断行已提示)
             }
             auto label = resolveLabel(block.labelKey, block.label);
             if (label.empty()) {
@@ -1222,46 +772,6 @@ void InterruptView::cancel(size_t msgIndex) {
     submit.values    = utilxx_base::Json::object();
     sendSubmit(wireId, submit);
     activeMsg_ = static_cast<size_t>(-1);
-    ctx_.postRedraw();
-}
-
-void InterruptView::step(size_t msgIndex, std::string_view controlId, double delta) {
-    ctx_.state->mutate([&](TUIRenderState& st) {
-        if (msgIndex >= st.messages.size()) {
-            return;
-        }
-        const auto& src = *st.messages[msgIndex];
-        if (!isWaiting(src)) {
-            return;
-        }
-        const auto                          ui    = resolveUi(src);
-        const middleware::InterruptUiBlock* block = nullptr;
-        for (const auto& b : ui.blocks) {
-            if (b.kind == "control" && controlIdOf(b) == controlId) {
-                block = &b;
-                break;
-            }
-        }
-        if (!block || block->control != "number") {
-            return;
-        }
-        auto& state          = mutateUiState(src);
-        auto [cit, inserted] = state.controls.try_emplace(std::string{controlId});
-        auto& cs             = cit->second;
-        if (inserted) {
-            initControlState(*block, cs);
-        }
-        double val     = 0.0;
-        auto   trimmed = utilxx_base::removeBetweenSpace(cs.editText);
-        if (trimmed.empty() || utilxx_base::parseNumberFromString(trimmed, val).ec != std::errc{}) {
-            return; // 编辑值非法时步进无效
-        }
-        val += delta;
-        // 整数控件按整数步进; 浮点控件保留有效精度
-        cs.editText = formatNumber(val, block->integer);
-        cs.edited   = true;
-        cs.tip.clear();
-    });
     ctx_.postRedraw();
 }
 

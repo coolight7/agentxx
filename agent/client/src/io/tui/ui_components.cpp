@@ -715,6 +715,30 @@ bool controlChecked(const agentxx::ui::Item& item, const UiFormState* form) {
     return item.defaultValue.is_boolean() && item.defaultValue.get<bool>();
 }
 
+/// 输入框显示宽度 (" " + 值 + 右侧补齐 + " "; 最小 4 列, 与命中区域宽度一致)
+int inputFieldWidth(std::string_view value) {
+    return std::max(4, agentxx::ui::displayWidth(value) + 2);
+}
+
+/// 输入框元素 (背景填充表示可编辑; 获得键盘焦点时加粗下划线)
+Element inputField(std::string value, const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
+    const auto& theme = *ctx.theme;
+    const int   width = inputFieldWidth(value);
+    const int   pad   = std::max(0, width - 2 - agentxx::ui::displayWidth(value));
+    Element     el    = text(" " + value + std::string(static_cast<size_t>(pad), ' ') + " ")
+                    | bgcolor(theme.inputBgColor)
+                    | color(value.empty() ? theme.hintColor : theme.inputTextColor);
+    if (ctx.form != nullptr && ctx.form->focusedId == item.id) {
+        el = el | bold | underlined;
+    }
+    return el | xflex_shrink;
+}
+
+/// 数值控件的步进按钮 ("[ - ]" / "[ + ]")
+Element inputStepButton(std::string_view label, const TUITheme& theme) {
+    return text(label) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
+}
+
 /// 追加控件区域
 void addControlRegion(
     std::vector<UiHitRegion>& regions,
@@ -1208,43 +1232,34 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         const std::string caption = item.controlLabel.empty() ? item.id : item.controlLabel;
         if (item.control == "checkbox") {
             const bool checked = controlChecked(item, ctx.form);
-            Element    el      = hbox({
-                text(checked ? "[x] " : "[ ] ")
-                    | color(checked ? theme.accentColor : theme.hintColor),
-                text(caption) | color(theme.normalColor),
-            });
+            Element mark = text(checked ? "[ ✓ ] " : "[   ] ")
+                           | color(checked ? theme.accentColor : theme.hintColor);
+            if (checked) {
+                mark = mark | bold;
+            }
+            Element el = hbox({std::move(mark), text(caption) | color(theme.normalColor)});
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
                 addControlRegion(regions, ctx, item, 0, 0, 0, 0);
             }
             pushPlain(std::move(el), 1, std::move(regions));
         } else if (item.control == "text") {
-            const std::string value   = controlEditText(item, ctx.form);
-            const bool        focused = ctx.form != nullptr && ctx.form->focusedId == item.id;
-            Element           el      = hbox({
-                text("[ ") | color(theme.hintColor),
-                text(value.empty() ? spaces(1) : value)
-                    | color(value.empty() ? theme.hintColor : theme.normalColor),
-                text(" ]") | color(theme.hintColor),
-            });
-            if (focused) {
-                el = el | bgcolor(theme.inputBgColor);
-            }
+            Element el = inputField(controlEditText(item, ctx.form), item, ctx);
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
                 addControlRegion(regions, ctx, item, 0, 0, 0, 0);
             }
-            pushPlain(std::move(el), 1, std::move(regions));
+            pushPlain(hbox({std::move(el)}), 1, std::move(regions));
         } else if (item.control == "number") {
-            const std::string value  = controlEditText(item, ctx.form);
+            const std::string value   = controlEditText(item, ctx.form);
             constexpr int     kMinusW = 5; // "[ - ]"
-            const int         valueW = std::max(4, agentxx::ui::displayWidth(value) + 2);
-            Element           el     = hbox({
-                text("[ - ]") | color(theme.hintColor),
+            const int         valueW  = inputFieldWidth(value);
+            Element           el      = hbox({
+                inputStepButton("[ - ]", theme),
                 text(" "),
-                text(value) | color(theme.normalColor),
+                inputField(value, item, ctx),
                 text(" "),
-                text("[ + ]") | color(theme.hintColor),
+                inputStepButton("[ + ]", theme),
             });
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
@@ -1297,11 +1312,15 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
                 const auto&       opt      = item.options[i];
                 const std::string optLabel = opt.label.empty() ? caption : opt.label;
                 const bool        active   = (static_cast<int>(i) == selected);
-                els.push_back(hbox({
-                    text(active ? "● " : "○ ")
-                        | color(active ? theme.accentColor : theme.hintColor),
-                    text(optLabel) | color(active ? theme.accentColor : theme.normalColor),
-                }));
+                // 选中项: 指示符 + 反色底 (整行); 未选中: 同宽占位 + 普通色
+                Element entry = hbox({
+                    text(active ? "▸ " : "  "),
+                    text(optLabel),
+                });
+                entry = active ? entry | bgcolor(theme.buttonActiveBgColor)
+                                     | color(theme.buttonActiveTextColor) | bold
+                               : entry | color(theme.normalColor);
+                els.push_back(std::move(entry));
                 if (interactive && !item.id.empty()) {
                     addControlRegion(regions, ctx, item, 0, y, 0, static_cast<int>(i));
                 }
@@ -1648,20 +1667,75 @@ bool handleFormKeyInput(
     if (item == nullptr) {
         return false;
     }
-    // 只有输入类控件接受字符编辑
-    const bool editable = (item->control == "text" || item->control == "number");
-    if (!editable) {
-        return false;
-    }
     auto& state = form.ensure(item->id);
     if (!state.initialized) {
         state.initialized = true;
         state.editText    = defaultEditText(*item);
     }
-    if (!state.edited) {
-        // 首次输入: 替换缺省值 (与输入框激活语义一致)
-        state.editText = defaultEditText(*item);
+
+    // 非输入类控件: 方向键/空格改变选中状态 (与中断表单同一套键盘语义)
+    if (item->control == "buttons") {
+        if (event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight) {
+            const int n = static_cast<int>(item->options.size());
+            if (n > 0) {
+                const int dir = (event == ftxui::Event::ArrowRight) ? 1 : n - 1;
+                state.selected = (state.selected + dir) % n;
+            }
+            state.tip.clear();
+            ++form.version;
+            return true;
+        }
+        return false;
+    }
+    if (item->control == "select") {
+        if (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown) {
+            const int n     = static_cast<int>(item->options.size());
+            const int delta = (event == ftxui::Event::ArrowUp) ? -1 : 1;
+            state.selected
+                = std::clamp(state.selected + delta, 0, std::max(0, n - 1));
+            state.tip.clear();
+            ++form.version;
+            return true;
+        }
+        return false;
+    }
+    if (item->control == "checkbox") {
+        if (event.is_character() && event.character() == " ") {
+            state.checked = !state.checked;
+            state.tip.clear();
+            ++form.version;
+            return true;
+        }
+        return false;
+    }
+    // 输入类控件 (text / number)
+    if (item->control != "text" && item->control != "number") {
+        return false;
+    }
+    if (item->control == "number"
+        && (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown)) {
+        const double step = (item->step > 0) ? item->step : 1.0;
+        const double base = parseNumber(
+            state.edited ? state.editText : defaultEditText(*item),
+            item->integer,
+            0.0
+        );
+        double v = base + ((event == ftxui::Event::ArrowUp) ? step : -step);
+        if (item->hasNumMin) {
+            v = std::max(v, item->numMin);
+        }
+        if (item->hasNumMax) {
+            v = std::min(v, item->numMax);
+        }
+        state.editText = numText(v);
         state.edited   = true;
+        state.tip.clear();
+        ++form.version;
+        return true;
+    }
+    // 单行输入框无光标定位: 左右方向键消费掉, 避免落到其他组件 (如滚动)
+    if (event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight) {
+        return true;
     }
     if (event.is_character()) {
         const std::string ch = event.character();
@@ -1675,12 +1749,18 @@ bool handleFormKeyInput(
                 }
             }
         }
+        if (!state.edited) {
+            // 首次输入: 替换缺省值 (与"点击输入框后直接输入"的语义一致)
+            state.editText.clear();
+            state.edited = true;
+        }
         state.editText += ch;
         state.tip.clear();
         ++form.version;
         return true;
     }
     if (event == ftxui::Event::Backspace) {
+        state.edited = true;
         popCodePoint(state.editText);
         state.tip.clear();
         ++form.version;
@@ -1688,6 +1768,7 @@ bool handleFormKeyInput(
     }
     if (event == ftxui::Event::Delete) {
         state.editText.clear();
+        state.edited = true;
         state.tip.clear();
         ++form.version;
         return true;
@@ -1698,14 +1779,24 @@ bool handleFormKeyInput(
 bool validateForm(const std::vector<agentxx::ui::Item>& items, UiFormState& form) {
     bool ok = true;
     for (const auto& item : items) {
-        if (item.kind == "control" && !item.id.empty() && item.control == "number") {
+        if (item.kind == "control" && !item.id.empty()) {
             auto& state = form.ensure(item.id);
             if (!state.initialized) {
                 state.initialized = true;
                 state.editText    = defaultEditText(item);
+                state.selected    = optionIndex(item.options, item.defaultValue);
+                state.checked
+                    = item.defaultValue.is_boolean() && item.defaultValue.get<bool>();
             }
-            if (!validateNumber(item, state)) {
-                ok = false;
+            if (item.control == "number") {
+                if (!validateNumber(item, state)) {
+                    ok = false;
+                }
+            } else if ((item.control == "buttons" || item.control == "select")
+                       && item.options.empty()) {
+                // 无候选项: 该控件的值无法确定, 拒绝提交并提示 (与渲染诊断行一致)
+                state.tip = std::string{tr("ui.noOptions")};
+                ok        = false;
             }
         }
         if (!item.items.empty() && !validateForm(item.items, form)) {
@@ -1741,10 +1832,16 @@ utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiForm
                       } else if (item.control == "number") {
                           const std::string text
                               = state.edited ? state.editText : defaultEditText(item);
-                          values[item.id] = parseNumber(text, item.integer, 0.0);
-                      } else {
-                          values[item.id] = state.edited ? state.editText : defaultEditText(item);
+                          const double v = parseNumber(text, item.integer, 0.0);
+                          // 整数控件写整数 (与描述声明的取值类型一致), 浮点控件保留小数
+                          if (item.integer) {
+                              values[item.id] = utilxx_base::Json(static_cast<int64_t>(v));
+                          } else {
+                              values[item.id] = utilxx_base::Json(v);
+                          }
+                      } else if (item.control == "text") {                          values[item.id] = state.edited ? state.editText : defaultEditText(item);
                       }
+                      // 未知控件形态不参与结果 (渲染为不可交互的诊断行)
                   }
                   if (!item.items.empty()) {
                       collect(item.items);

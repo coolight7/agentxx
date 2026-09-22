@@ -119,12 +119,13 @@
 | `StatusBarComponent` | [components/status_bar.h](/agent/client/include/agentxx-client/io/tui/components/status_bar.h) | 状态栏 (模型/上下文/插件项/会话/设置) |
 | `SidebarComponent` | [components/sidebar.h](/agent/client/include/agentxx-client/io/tui/components/sidebar.h) | 侧边栏 (内容区 + tabs 列表 + 宽度拖拽) |
 | 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/待发队列/上下文/mermaid/text/diff/custom/文件选择 |
-| `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定) |
+| `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定; 控件与提交行复用 `ui_components`) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
 | `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把 `agentxx.ui.item` 描述渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
 
 `ui_components` 是全部展示描述的唯一渲染实现: 侧边栏面板、Info 段落、工具消息装饰、
-通用 overlay、中断描述内容块都经它渲染 (此前面板/Info/装饰各有一份 switch, 已收敛)。
+通用 overlay、中断描述**全部块** (内容块 + 扩展组件 + 控件块 + 提交行) 都经它渲染
+(此前面板/Info/装饰各有一份 switch, 中断另有自己的控件布局, 均已收敛)。
 新增一种组件只需改两处: `agentxx/ui/item.h` (字段与解析) 与 `ui_components.cpp` (渲染 + 测量);
 行数估算走同一条渲染路径 (`measureItem`), 与真实布局高度一致 (见 3.1)。
 
@@ -241,6 +242,10 @@ struct UiActionItem {
 - 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由宿主维护, 提交经
   动作通道回传 `__submit` (参数 `{"values":{控件 id: 值}}`), 取消回传 `__cancel`,
   `commitOnPick` 的候选项点击即提交。插件不接触 UI 线程, 只收结果。
+- 中断表单 (`InterruptView`) 与插件表单共用同一实现 (`ui_components` 的控件渲染 +
+  `UiFormState` + 点击/键盘/校验/取值函数), 差别只有结果去处 (中断经结果通道回传
+  `{"values":{...}}`)。中断侧的命中区域记录 "行元素框 + 行内区域" (控件所在行由
+  `ui_components` 登记区域, `InterruptView` 按块归因), 与其它接入点的两级判定一致。
 - 尺寸感知: 宿主布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
   `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 (载荷 `{"regions":[{id,w,h}]}`), 并可经
   `get_client_state().regions` 查询; 插件据此按可用宽度重排内容。

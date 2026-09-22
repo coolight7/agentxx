@@ -22,6 +22,7 @@
 | P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
 | P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成 |
 | P2.5 | 状态栏 segments / sparkline / meter（单行） | ✅ 已完成 |
+| P2.1 | 中断控件布局迁移到共享实现（`UiFormState` + 共享渲染/交互/校验） | ✅ 已完成 |
 | P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表 | ⬜ 待开始 |
 
 ---
@@ -209,15 +210,73 @@
 
 ---
 
+## 阶段 8：中断表单迁移到共享实现（已完成）
+
+P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享组件层。
+
+### 共享层扩展（`ui_components.cpp`）
+
+- 控件外观统一到一套样式（中断与插件表单同款）：勾选项 `[ ✓ ] / [   ]`（勾选时强调色加粗）、
+  单选列表选中项 `▸ ` + 反色底（未选中同宽占位）、输入框为背景填充的字段（聚焦时加粗下划线）、
+  数值控件 `[ - ] value [ + ]`（步进按钮用按钮底色）
+- `handleFormKeyInput` 补齐非输入类控件的键盘语义（此前只有字符/退格/Tab/Esc）：
+  `buttons` 左右切换选中项、`select` 上下切换、`number` 上下步进（受 min/max 约束）、
+  `checkbox` 空格翻转；输入框的左右方向键被消费（单行无光标定位，不落到滚动）
+- 输入框首次输入**替换缺省值**（原先共享实现是"在缺省值后追加"，与中断不一致，已统一为替换）
+- `validateForm` 增加"候选项缺失"校验（`buttons`/`select` 无 options → 写提示并拒绝提交）；
+  `formValues` 对未知控件形态不再产出值，数值控件按 `integer` 写整数（保持中断结果契约）
+- 新增 i18n 文案 `ui.noOptions`
+
+### `InterruptView` 改动
+
+- 状态结构改为共享层类型：`using ControlState = UiFormControlState`、`using FormState = UiFormState`
+  （`FormState::control()` 访问器删除，改用 `find()`）
+- 删除 `layoutControl` / `layoutSubmit` / `initControlState` / `step` / `renderValueButton`
+  及配套的数值/选项私有 helper（净减 ~570 行）
+- 新增 `formItems()`（描述 → 控件/提交行组件项，标签与说明的 i18n 键在此解析；提交行缺省文案
+  沿用中断词表 `确认`/`✕`）、`plainItems()`、`firstControlId()`、`registerBlockHits()`
+- `layoutForm`：控件块与提交行交给 `renderItem`（`rc.form` 传表单状态），内容块/扩展组件不变；
+  命中区域由行模型的 `UiHitRegion` 归因到"块下标 + 控件 id + 子序号"（只登记控件与提交行区域，
+  扩展组件内的普通动作区域在中断里没有去处，不参与命中）
+- `handleClick`：命中判定改为"行元素框 + 行内区域"两级；控件语义交给
+  `handleFormControlHit`（含 commitOnPick → 提交），提交行按 `__submit`/`__cancel` 映射确认/取消
+- `handleKey`：回车提交、Esc 释放激活状态；其余按键交给 `handleFormKeyInput`
+  （焦点缺失时回落到首个控件；`Tab` 现在也能在控件间移动焦点）
+- `confirm`：校验与取值改为 `validateForm` + `formValues`，结果展示文本仍按块顺序拼"标签: 值"
+
+### 测试
+
+- `test_tui_interrupt.cpp`：点击辅助改为按"行元素框 + 区域内点"点击（`clickHit`），
+  控件状态读取改用 `find()`；数值非法输入用例改为输入 `1.2.3`（数值框现在过滤字母）；
+  未知控件诊断行断言改为共享层的 `[control: xxx]`
+- `test_tui_ui_items.cpp`：单选列表断言改为 `▸ B` / `  A`；输入框首次输入断言改为替换语义；
+  新增非输入类控件键盘用例（buttons 左右/select 上下/checkbox 空格）与数值方向键步进
+- Windows Debug 全量测试：**22245 项断言全部通过**（含 `tui_interrupt` 218 项、`tui_ui_items` 169 项）
+
+### 文档
+
+- `plugins.md` §9.2：补齐键盘语义（方向键/空格/首次输入替换）与"中断表单复用同一实现"的说明
+- `tui.md` §2.2/§2.6：说明中断全部块都经 `ui_components` 渲染、命中为两级判定
+- `interrupt_ui.h`：`custom` 块的"未实现"TODO 更新为已派发共享组件的说明
+
+### 现在只在一处实现的清单
+
+| 能力 | 唯一实现 |
+|---|---|
+| 组件解析/校验/上限/纯文本降级 | `agentxx/ui/item.cpp` |
+| 组件渲染 + 测量 | `ui_components.cpp` |
+| 控件状态/点击/键盘/校验/取值 | `ui_components.cpp` 表单函数 |
+| 命中区域 | `UiHitRegion`（行模型）+ `Scrollable::hitTestItem` |
+| 结果回传 | 插件表单 = 动作通道；中断 = 结果通道（同一份控件语义） |
+
+---
+
 ## 待完成任务（下一步）
 
-1. 中断控件布局迁移到共享实现（`InterruptView::layoutControl/layoutSubmit` 改用
-   `ui_components` 的控件渲染 + `UiFormState`，保持结果契约不变；已完成的表单交互
-   逻辑与中断的差异只剩"结果去处"）
-2. P3：`agentxx.client.timer` v1（一次性/周期定时器 + 可见性/动画等级门控）、
+1. P3：`agentxx.client.timer` v1（一次性/周期定时器 + 可见性/动画等级门控）、
    `agentxx.client.keybind` v1（全局快捷键注册与派发）及对应 SDK/测试
-3. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
-4. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
+2. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
+3. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
 
 ---
 
@@ -250,3 +309,21 @@
 - 新增组件只需改三处：`agentxx/ui/item.h`（字段与解析）、`ui_components.cpp`（渲染 + 测量）、
   对应测试；插件接口表不动
 - 测量一律走 `measureItem`（内部渲染一次统计行数），禁止另写一套估算
+- 控件（`control`/`submit`）的渲染、点击、键盘、校验、取值只有 `ui_components.cpp` 一份实现：
+  新接入点一律传 `UiRenderCtx::form`（`UiFormState`），不要再写控件分支
+- 中断/插件表单的差异只允许出现在"结果去处"：中断 → 结果通道（`InterruptSend`），
+  插件 → 动作通道（`__submit`/`__cancel`/`commitOnPick` 经 `dispatchAction`）
+
+### 中断迁移（阶段 8）踩过的坑
+
+- 命中必须"行元素框 + 行内区域"两级判定：共享层只给出"元素 + 元素内区域"，
+  中断需要把区域归因到（块下标、控件 id、子序号），且区域矩形要一起存下来
+  （整行区域 `w <= 0` 时取区域左端点击，`w > 0` 取区域中点）
+- 结果 JSON 的类型要按描述保持：整数控件必须写整数（`{"count": 42}` 而非 `42.0`），
+  否则中断结果消费方（`interruptValueInteger` 等）与历史契约不一致
+- 未知控件形态（`control: "future_widget"`）不参与结果：`formValues` 里别用 `else` 兜底，
+  只对已知形态（checkbox/buttons/select/number/text）写值
+- 中断的提交行缺省文案是 `确认` / `✕`（`interrupt.confirm` / `interrupt.cancel`），
+  与插件表单的 `提交` / `取消`（`ui.submit` / `ui.cancel`）不同 —— 转换块时要补默认值
+- 数值框会过滤非数字字符，所以"输入非法值再校验"的用例要改用可键入但无法解析的内容
+  （如 `1.2.3`），而不是 `abc`

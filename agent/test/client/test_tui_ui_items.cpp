@@ -447,8 +447,9 @@ TestResult testTuiUiItems() {
         agentxx::client::UiRenderResult res;
         agentxx::client::renderItems(items, ctx, res);
         auto text = renderToText(res, 40);
-        XX_TEST_EXPECT_TRUE(screenHas(text, "● B"));
-        XX_TEST_EXPECT_TRUE(screenHas(text, "○ A"));
+        // 选项列表: 选中项带指示符 ▸ (反色底), 未选中项同宽占位
+        XX_TEST_EXPECT_TRUE(screenHas(text, "▸ B"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "  A"));
     }
 
     // ---------------- 文本 + 按钮合并行 ----------------
@@ -632,14 +633,25 @@ TestResult testTuiUiItems() {
             form,
             ftxui::Event::Character("x")
         ));
-        // 首次输入替换缺省值后再追加
-        XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"abx"});
+        // 首次输入替换缺省值 (与点击输入框后直接输入的语义一致)
+        XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"x"});
         XX_TEST_EXPECT_TRUE(form.ensure("name").edited);
 
         XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
             items,
             form,
             ftxui::Event::Backspace
+        ));
+        XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{});
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Character("a")
+        ));
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::Character("b")
         ));
         XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"ab"});
 
@@ -650,19 +662,87 @@ TestResult testTuiUiItems() {
             ftxui::Event::Tab
         ));
         XX_TEST_EXPECT_EQ(form.focusedId, std::string{"num"});
-        // 数值框过滤字母
+        // 数值框过滤字母 (消费事件但不改动内容)
         XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
             items,
             form,
             ftxui::Event::Character("a")
         ));
         XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"1"});
+        // 首次输入替换缺省值
         XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
             items,
             form,
             ftxui::Event::Character("7")
         ));
-        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"17"});
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"7"});
+
+        // 方向键 (数值控件): 上/下步进 (受 min/max 约束)
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::ArrowUp
+        ));
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"8"});
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+            items,
+            form,
+            ftxui::Event::ArrowDown
+        ));
+        XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"7"});
+        // 键盘移动 (buttons/select/checkbox) 见下方用例
+        {
+            // 非输入类控件的键盘操作: buttons 左右切换 / select 上下切换 / checkbox 空格翻转
+            auto pickItems = agentxx::ui::parseItems(Json::parse(R"([
+                {"kind":"buttons","id":"dec","options":[{"value":"y","label":"Y"},{"value":"n","label":"N"}]},
+                {"kind":"select","id":"mode","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},
+                {"kind":"checkbox","id":"box","label":"Box","default":false}
+            ])"));
+            agentxx::client::UiFormState pick;
+            agentxx::client::initFormState(pick, pickItems);
+
+            pick.focusedId = "dec";
+            XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+                pickItems,
+                pick,
+                ftxui::Event::ArrowRight
+            ));
+            XX_TEST_EXPECT_EQ(pick.ensure("dec").selected, 1);
+            XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+                pickItems,
+                pick,
+                ftxui::Event::ArrowRight
+            ));
+            XX_TEST_EXPECT_EQ(pick.ensure("dec").selected, 0); // 环回首项
+
+            pick.focusedId = "mode";
+            XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+                pickItems,
+                pick,
+                ftxui::Event::ArrowDown
+            ));
+            XX_TEST_EXPECT_EQ(pick.ensure("mode").selected, 1);
+            XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+                pickItems,
+                pick,
+                ftxui::Event::ArrowUp
+            ));
+            XX_TEST_EXPECT_EQ(pick.ensure("mode").selected, 0);
+            XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+                pickItems,
+                pick,
+                ftxui::Event::ArrowUp
+            ));
+            XX_TEST_EXPECT_EQ(pick.ensure("mode").selected, 0); // 到顶后不再越界
+
+            pick.focusedId = "box";
+            XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(
+                pickItems,
+                pick,
+                ftxui::Event::Character(" ")
+            ));
+            XX_TEST_EXPECT_TRUE(pick.ensure("box").checked);
+        }
 
         // Escape 释放焦点
         XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(

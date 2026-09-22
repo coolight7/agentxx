@@ -146,12 +146,13 @@ struct InterruptUiBlock {
     /// 取消标签的 i18n 键 (优先)
     std::string cancelLabelKey;
 
-    // ---- custom (预留字段, 暂未实现) ----
-    /// 自定义渲染组件名 (客户端注册的渲染器键)
+    // ---- custom (派发到共享组件) ----
+    /// 自定义渲染组件名 (空或 `"components"` 时用 `props.items` 渲染组件树)
     ///
-    /// TODO(自定义渲染): 客户端侧组件渲染器注册与派发尚未实现 —— 当前客户端
-    /// 对 `custom` 块只渲染 `fallback` 文本 (无 fallback 时输出诊断行);
-    /// 后续接入客户端插件渲染器后, 按组件名 + props 渲染, fallback 作为降级。
+    /// 客户端按组件名 + `props` 派发到共享组件渲染层 (`ui_components`): 组件名
+    /// 指向内置 kind (如 `"table"`) 时以 `props` 作为该组件的参数; 为空或
+    /// `"components"` 时按 `props.items` 渲染组件树; 两者都没有则渲染 `fallback`
+    /// 文本 (无 `fallback` 时输出组件名占位, 不静默丢内容)。
     std::string component;
     /// 组件属性 (原样透传给客户端渲染器)
     utilxx_base::Json props;

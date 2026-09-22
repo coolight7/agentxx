@@ -19,6 +19,7 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
 #include "utilxx_base/string_util.h"
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -162,6 +163,23 @@ struct InterruptFixture {
         return (first < 0) ? 0 : static_cast<size_t>(last - first + 1);
     }
 
+    /// 点击命中区域内部的一点 (行元素框 + 行内区域坐标; 命中区域为两级判定)
+    bool clickHit(const agentxx::client::InterruptView::HitBox& h) {
+        if (!h.box) {
+            return false;
+        }
+        const auto& box    = *h.box;
+        const int   localX = h.region.x + ((h.region.w > 0) ? (h.region.w / 2) : 0);
+        const int   localY = h.region.y + ((h.region.h > 1) ? (h.region.h / 2) : 0);
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = std::min(box.x_max, box.x_min + localX);
+        m.y      = std::min(box.y_max, box.y_min + localY);
+        comp->OnEvent(ftxui::Event::Mouse("", m));
+        return true;
+    }
+
     /// 在指定消息的控件上模拟鼠标点击 (按控件 id + 子序号; 先渲染刷新命中区域)
     bool click(size_t msgIndex, const std::string& controlId, int sub = 0) {
         render();
@@ -169,13 +187,7 @@ struct InterruptFixture {
             if (h.msgIndex != msgIndex || h.controlId != controlId || h.sub != sub || !h.box) {
                 continue;
             }
-            ftxui::Mouse m;
-            m.button = ftxui::Mouse::Left;
-            m.motion = ftxui::Mouse::Released;
-            m.x      = (h.box->x_min + h.box->x_max) / 2;
-            m.y      = (h.box->y_min + h.box->y_max) / 2;
-            comp->OnEvent(ftxui::Event::Mouse("", m));
-            return true;
+            return clickHit(h);
         }
         return false;
     }
@@ -187,13 +199,7 @@ struct InterruptFixture {
             if (h.msgIndex != msgIndex || h.blockIndex != blockIndex || h.sub != sub || !h.box) {
                 continue;
             }
-            ftxui::Mouse m;
-            m.button = ftxui::Mouse::Left;
-            m.motion = ftxui::Mouse::Released;
-            m.x      = (h.box->x_min + h.box->x_max) / 2;
-            m.y      = (h.box->y_min + h.box->y_max) / 2;
-            comp->OnEvent(ftxui::Event::Mouse("", m));
-            return true;
+            return clickHit(h);
         }
         return false;
     }
@@ -241,11 +247,14 @@ struct InterruptFixture {
         return (mi < snap->messages.size()) ? *snap->messages[mi] : TUIMessage{};
     }
 
-    /// 指定消息指定控件的状态副本 (测试便捷访问; 空 id 返回默认值)
+    /// 指定消息指定控件的状态副本 (测试便捷访问; 空/未知 id 返回默认值)
     agentxx::client::InterruptView::ControlState
         controlState(size_t mi, const std::string& controlId) {
         auto state = comp->interruptUiState(mi);
-        return state.control(controlId);
+        if (const auto* found = state.find(controlId); found != nullptr) {
+            return *found;
+        }
+        return {};
     }
 
     /// 权限询问描述 (agent 侧预设模板构造; 客户端仅按数据渲染)
@@ -618,9 +627,10 @@ void test_number_validation_tip_and_recover() {
     ui.blocks.push_back(preset::submitBlock());
     auto mi = f.addInterrupt(ch, ui);
 
-    // 非法整数: 提交被拒, 提示行出现在该控件下方, 状态仍为 Waiting
+    // 非法数值: 输入可键入但无法解析的内容 (数值框过滤字母, 句点可输入)
+    // → 提交被拒, 提示行出现在该控件下方, 状态仍为 Waiting
     XX_TEST_EXPECT_TRUE(f.click(mi, "count", 2));
-    f.type("abc");
+    f.type("1.2.3");
     f.comp->OnEvent(ftxui::Event::Return);
     InterruptFixture::Submit s;
     XX_TEST_EXPECT_FALSE(f.recvForm(ch, s));
@@ -636,10 +646,9 @@ void test_number_validation_tip_and_recover() {
     }
     // 提示行存在时估算与实测仍一致
     XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), f.renderedRows());
-    // 修正后提交成功
-    for (int i = 0; i < 3; ++i) {
-        f.comp->OnEvent(ftxui::Event::Backspace);
-    }
+    // 修正后提交成功 (Delete 清空输入框)
+    f.comp->OnEvent(ftxui::Event::Delete);
+    XX_TEST_EXPECT_EQ(f.controlState(mi, "count").editText, std::string{});
     f.type("7");
     XX_TEST_EXPECT_TRUE(f.controlState(mi, "count").tip.empty());
     f.comp->OnEvent(ftxui::Event::Return);
@@ -991,7 +1000,7 @@ void test_unknown_control_diagnostic_and_others_usable() {
     auto mi = f.addInterruptJson(ch, ui.toJson());
 
     const std::string text = f.render();
-    XX_TEST_EXPECT_TRUE(text.find("unsupported control") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[control: future_widget]") != std::string::npos);
     // 其余控件仍可用
     XX_TEST_EXPECT_TRUE(f.click(mi, "path", 0));
     f.type("q");

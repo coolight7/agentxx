@@ -188,8 +188,10 @@ UiFormAction handleFormControlHit(
 UiFormAction handleFormSubmitHit(std::string_view actionId);
 
 /// 键盘输入作用于当前焦点控件 (返回 true 表示已消费该事件)
-/// - 可打印字符追加到输入框; Backspace 删除一个字符; Delete 清空;
-///   Tab / Shift+Tab 在控件间移动焦点; Escape 释放焦点
+/// - 可打印字符追加到输入框 (首次输入替换缺省值); Backspace 删除一个字符;
+///   Delete 清空输入框; Tab / Shift+Tab 在控件间移动焦点; Escape 释放焦点
+/// - checkbox 空格翻转; buttons 左右切换选中项; select 上下切换; number 上下步进
+///   (受 min/max 约束); text / number 的左右方向键被消费 (单行输入无光标定位)
 /// - 回车与提交由调用方处理 (本方法不消费回车)
 bool handleFormKeyInput(
     const std::vector<agentxx::ui::Item>& items,
@@ -197,7 +199,8 @@ bool handleFormKeyInput(
     const ftxui::Event&                   event
 );
 
-/// 校验全部控件 (number 的范围/步进; 失败时写各控件 `tip` 并返回 false)
+/// 校验全部控件 (number 的范围/步进; buttons/select 无候选项; 失败时写各控件
+/// `tip` 并返回 false)
 bool validateForm(const std::vector<agentxx::ui::Item>& items, UiFormState& form);
 
 /// 组装提交值: `{"values": {控件 id: 值}}`
