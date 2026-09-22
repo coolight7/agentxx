@@ -215,11 +215,10 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               .string("content", "Content to write into the file.", /*required=*/true)
               .boolean(
                   "overwrite",
-                  R"(Default `false`. Controls write behavior:
+                  R"(Controls write behavior:
 `true`: Create the file if it doesn't exist; overwrite if it does.
 `false`: Create a new file only; returns an error if the file already exists.)",
-                  false,
-                  false
+                  true
               )
               .build();
 

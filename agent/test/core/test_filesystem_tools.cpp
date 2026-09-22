@@ -2705,8 +2705,9 @@ asio::awaitable<void> test_plugin_real_link() {
         auto out = co_await callTool(
             "agentxx_filesystem_write",
             utilxx_base::Json{
-                {"path",    "link_smoke.txt"},
-                {"content", "alpha\nbeta\n" }
+                {"path",      "link_smoke.txt"},
+                {"content",   "alpha\nbeta\n" },
+                {"overwrite", false           },
         }
         );
         XX_TEST_EXPECT_EQ(out, std::string{"success"});
@@ -2795,8 +2796,9 @@ asio::awaitable<void> test_plugin_real_link() {
         auto outW = co_await callTool(
             "agentxx_filesystem_write",
             utilxx_base::Json{
-                {"path",    "中文目录_真实链路/中文文件.txt"},
-                {"content", "中文链路数据_初始版本\n"         }
+                {"path",      "中文目录_真实链路/中文文件.txt"},
+                {"content",   "中文链路数据_初始版本\n"         },
+                {"overwrite", false                                       },
         }
         );
         XX_TEST_EXPECT_EQ(outW, std::string{"success"});
