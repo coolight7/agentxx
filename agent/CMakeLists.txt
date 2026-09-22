@@ -93,7 +93,10 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
 # - 不受影响的目标: libagentxx.so (动态库跟随宿主的分配器) 与插件动态库
 #   (plugins/ 不改动: 内置合并进 libagentxx 的插件随最终程序使用 mimalloc,
 #    独立编译的插件动态库不链接 mimalloc, 由宿主进程决定实际分配器)
-option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx_cli/test/benchmark)." ON)
+# - macOS/iOS 上 **不可用**: Mach-O 使用两层次命名空间, libc++/系统框架对
+#   malloc/free 的引用在链接期已绑定到 libSystem, 最终程序静态覆盖的分配器
+#   无法对其生效 (也不导出 _malloc), 跨模块 free 必然崩溃。故 macOS/iOS 自动关闭
+option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx_cli/test/benchmark). Disabled automatically on macOS/iOS." ON)
 # 链接方式 (外部可指定, 默认静态):
 # - STATIC: 静态库并入产物, 内置分配器 (无额外运行库依赖, 分发单文件即可)
 # - SHARED: 链接 libmimalloc.so / mimalloc.dll (分配器可独立升级/替换)
@@ -251,6 +254,23 @@ if (AGENTXX_ENABLE_MIMALLOC AND XX_IS_WIN_D AND XX_IS_MSVC_D AND AGENTXX_MIMALLO
   message(WARNING
     "[agentxx] Windows/MSVC 使用动态 CRT (/MD): mimalloc 静态链接不会覆盖 CRT 分配器, "
     "如需真正接管请使用 -DAGENTXX_MIMALLOC_LINK=SHARED (随产物部署 mimalloc.dll + mimalloc-redirect.dll)")
+endif ()
+
+# macOS/iOS 无可用覆盖机制 (自动关闭构建):
+# - Mach-O 采用**两层次命名空间**: libc++.dylib 及系统框架对 _malloc/_free 的
+#   未定义引用在链接期即绑定到 libSystem (ordinal 固定), 运行期 dyld 不会再去
+#   主可执行文件解析; 主可执行文件静态覆盖的分配器只作用于自身 (且 _malloc
+#   不在导出符号表中)。于是出现"程序侧 mimalloc / 框架侧系统分配器"并用,
+#   任何跨模块传递并释放的指针都会在 mi_free 崩溃 (实测 agentxx_cli 启动即崩)。
+# - 这与 ELF 不同: GNU ld 会把可执行文件定义且被共享库引用的 malloc 放进
+#   .dynsym, 运行期符号插入 (interposition) 使全进程统一走 mimalloc。
+# - 如需在 macOS 强制接管分配器, 只能采用 DYLD_INSERT_LIBRARIES 预加载
+#   mimalloc 动态库 (进程外注入, 非本项目自包含分发方式), 故此处直接关闭。
+if (AGENTXX_ENABLE_MIMALLOC AND (XX_IS_MACOS_D OR XX_IS_IOS_D))
+  message(WARNING
+    "[agentxx] macOS/iOS (Mach-O 两层次命名空间): 最终程序的 malloc/free 静态覆盖 "
+    "不会被 libc++/系统框架采用, 跨模块释放会崩溃, 本次构建自动关闭 mimalloc")
+  set(AGENTXX_ENABLE_MIMALLOC OFF)
 endif ()
 
 message("[agentxx] Memory allocator: mimalloc=${AGENTXX_ENABLE_MIMALLOC} (link: ${AGENTXX_MIMALLOC_LINK})")
@@ -496,12 +516,25 @@ else ()
   unset(_AGENTXX_DEBUG_EXTRA_FLAGS)
 
   if (XX_IS_RELEASE_D)
-    set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections ${_AGENTXX_LTO_FLAGS}")
+    # 死代码/未引用段裁剪:
+    # - ELF (Linux/Android): -Wl,--gc-sections (GNU ld/gold/mold/lld 通用)
+    # - Mach-O (macOS/iOS): 对应选项为 -Wl,-dead_strip (ld64 不认 --gc-sections)
+    if (XX_IS_MACOS_D OR XX_IS_IOS_D)
+      set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,-dead_strip ${_AGENTXX_LTO_FLAGS}")
+    else ()
+      set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS} -Wl,--gc-sections ${_AGENTXX_LTO_FLAGS}")
+    endif ()
   else ()
     # sanitizer 运行时须经编译驱动链接 (-fsanitize=*) 才能注入正确运行库
     set(_AGENTXX_SAN_LINK_FLAGS "")
     if (AGENTXX_ENABLE_SANITIZER)
       string(APPEND _AGENTXX_SAN_LINK_FLAGS " -fsanitize=address -fsanitize=undefined")
+      # ASan 运行库自身导出强符号 __asan_default_options; ld64 在链接可执行文件时
+      # 会丢弃本地未被其它代码引用的同名定义, 使程序内定义的 __asan_default_options
+      # 失效 (选项不生效)。用 -u 强制保留本地定义 (Mach-O 符号带前导下划线)。
+      if (XX_IS_MACOS_D OR XX_IS_IOS_D)
+        string(APPEND _AGENTXX_SAN_LINK_FLAGS " -Wl,-u,___asan_default_options")
+      endif()
     endif()
     set(_AGENTXX_LDFLAGS "${LDFLAGS} ${_AGENTXX_LDFLAGS}${_AGENTXX_SAN_LINK_FLAGS}")
     unset(_AGENTXX_SAN_LINK_FLAGS)
@@ -931,6 +964,15 @@ ExternalProject_Add(
 # sqlite
 # https://sqlite.org/download.html
 # 复制版本和链接 sqlite-amalgamation-xxx.zip 
+# strerror_r 变体探测: sqlite3-cmake 用 `strerror_r(0,(char*)0,0)==(char*)0` 判断 GNU 变体,
+# 但 macOS/iOS 的 strerror_r 为 POSIX 语义 (返回 int), 且 size=0 时返回非 0 (ERANGE),
+# 比较结果无法区分 (int 与指针比较), 会误判为 GNU 并定义 STRERROR_R_CHAR_P, 导致
+# sqlite3.c 把 int 返回值赋给 char* 编译失败。故 macOS/iOS 直接跳过探测并置为非 GNU。
+if (XX_IS_MACOS_D OR XX_IS_IOS_D)
+  set(_AGENTXX_SQLITE_STRERROR_R_ARGS "-DHAVE_GNU_STRERROR_R:BOOL=OFF")
+else()
+  set(_AGENTXX_SQLITE_STRERROR_R_ARGS "-DHAVE_GNU_STRERROR_R_EXITCODE:STRING=0")
+endif()
 ExternalProject_Add(
   sqlite3_repo
   SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/sqlite3-cmake/"
@@ -954,7 +996,7 @@ ExternalProject_Add(
     -DBUILD_STATIC_LIBS=ON
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-    -DHAVE_GNU_STRERROR_R_EXITCODE:STRING=0
+    ${_AGENTXX_SQLITE_STRERROR_R_ARGS}
   TEST_COMMAND ""
 )
 
@@ -996,6 +1038,26 @@ ExternalProject_Add(
 )
 
 # curl
+# macOS/iOS: <string.h> 仅在定义 __STDC_WANT_LIB_EXT1__ 时声明 memset_s,
+# 而 curl 以 -std=c17 编译 (隐式声明即报错); 其 CMake 探测因符号可链接而误判为存在。
+# 这里直接关闭 memset_s/memset_explicit 探测, 回退到 curl 自带的 curlx_memzero 实现
+# (volatile 函数指针调用 memset, 同样保证不清除优化且跨平台可用)。
+if (XX_IS_MACOS_D OR XX_IS_IOS_D)
+  set(_AGENTXX_CURL_MEMZERO_ARGS
+    "-DHAVE_MEMSET_S:BOOL=OFF"
+    "-DHAVE_MEMSET_EXPLICIT:BOOL=OFF")
+  # macOS: 系统/Homebrew 若提供 zstd, curl 的 AUTO 探测会启用并把裸库名
+  # "zstd" 写进导出的 CURL::libcurl 链接接口; 而 macOS SDK 不含 libzstd
+  # (Homebrew 路径不在本项目链接搜索范围内), 链接 libagentxx 时报
+  # "ld: library 'zstd' not found"。为保持依赖自包含, macOS/iOS 显式关闭
+  # zstd (deflate 仍由 zlib 承担, 不依赖任何外部 zstd)
+  set(_AGENTXX_CURL_EXTRA_ARGS
+    "-DCURL_ZSTD=OFF"
+    "-DCURL_BROTLI=OFF")
+else()
+  set(_AGENTXX_CURL_MEMZERO_ARGS)
+  set(_AGENTXX_CURL_EXTRA_ARGS)
+endif()
 ExternalProject_Add(
   curl_repo
   # 先构建 zlib: curl configure 时 find_package(ZLIB) 才能命中本项目
@@ -1033,8 +1095,11 @@ ExternalProject_Add(
     -DBUILD_EXAMPLES=OFF
     -DBUILD_SHARED_LIBS=OFF
     -DBUILD_STATIC_LIBS=ON
+    # macOS/iOS: 关闭系统 zstd/brotli 探测 (避免导出裸库名, 保持依赖自包含)
+    ${_AGENTXX_CURL_EXTRA_ARGS}
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    ${_AGENTXX_CURL_MEMZERO_ARGS}
     "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
   TEST_COMMAND ""
 )
@@ -1191,6 +1256,15 @@ if (XX_IS_WIN_D)
     # msvc 还没有 26
     set(_YAML_CPP_CXX_STD 23)
   endif()
+elseif (XX_IS_MACOS_D OR XX_IS_IOS_D)
+  # macOS/iOS: 该平台的 CMake 编译器模块 (AppleClang-CXX.cmake) 目前最高只识别到
+  # CXX23, 未定义 CXX26; 而 yaml-cpp 对自身目标强制 CXX_STANDARD_REQUIRED ON,
+  # 传 CMAKE_CXX_STANDARD=26 会在其 generate 阶段直接报错
+  # ("requires the language dialect CXX26 ... does not support")。
+  # 退到 CMake 能表达的 CXX23: 标准差异对 libc++ 无 ABI 影响 (libc++ 内联命名空间
+  # 不随 C++ 标准版本变化), 主工程仍以手动 -std=c++26 编译, LTO 链接不会出现
+  # libstdc++ 那样的 ODR 违规。
+  set(_YAML_CPP_CXX_STD 23)
 else()
   # 必须与主工程 C++ 标准一致 (C++26), 避免 std::runtime_error 等基础异常类型
   # 在 C++23 与 C++26 间的虚析构函数/内联规范差异导致 LTO 报 ODR 违规 (-Wodr)

@@ -383,6 +383,7 @@ npm install --legacy-peer-deps
     - [Linux/WSL 可执行程序 / 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/linux.md)
     - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
+    - [macOS 可执行程序 / 动态库编译 .dylib / 静态库 .a](/docs/zh-cn/build/macos.md)
 - 生成库链接方式:
     - 动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
     - 静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖

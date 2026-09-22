@@ -26,6 +26,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+#include <mach-o/dyld.h> // _NSGetExecutablePath
+#include <vector>
 #endif
 
 namespace agentxx::client {
@@ -549,6 +552,19 @@ std::string getExecutablePath() noexcept {
         buf.resize(buf.size() * 2);
     }
     return std::filesystem::path(buf).generic_string();
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    uint32_t size = 0;
+    (void)::_NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buf(size + 1, '\0');
+    if (::_NSGetExecutablePath(buf.data(), &size) != 0) {
+        return "( Unknown )";
+    }
+    std::error_code ec;
+    auto            exe = std::filesystem::weakly_canonical(std::filesystem::path(buf.data()), ec);
+    if (ec) {
+        return std::filesystem::path(buf.data()).generic_string();
+    }
+    return exe.generic_string();
 #else
     std::error_code ec;
     auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);
@@ -576,7 +592,10 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
 
     // 1. 内嵌编译的插件列表
     std::vector<std::string> builtinPlugins;
-    size_t                   builtinCount = 0;
+    // get_builtin_plugins 以 uint64_t 计数 (纯 C ABI 定长类型); 此处不可用 size_t:
+    // Linux x86_64 上二者同为 unsigned long, 但 macOS/Windows 上 uint64_t 为
+    // unsigned long long, 与 size_t (unsigned long) 不同, 传 &size_t 会编译失败
+    uint64_t                 builtinCount = 0;
     const auto*              builtinList  = agentxx::plugin::get_builtin_plugins(&builtinCount);
     if (builtinList && builtinCount > 0) {
         for (size_t i = 0; i < builtinCount; ++i) {

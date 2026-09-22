@@ -2610,8 +2610,8 @@ asio::awaitable<void> test_plugin_real_link() {
     // 定位插件库目录 (与 test_plugins 同模式: exe 同目录优先, cwd 回退)
     std::error_code       ec;
     std::vector<fs::path> candidates;
-    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / "agentxx_filesystem");
+    if (auto exeDir = executableDir()) {
+        candidates.push_back(*exeDir / "plugins" / "agentxx_filesystem");
     }
     candidates.push_back(fs::current_path(ec) / "plugins" / "agentxx_filesystem");
     auto hasLibFile = [](const fs::path& dir) {

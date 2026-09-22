@@ -1482,6 +1482,13 @@ Client                              Server
   - Windows/MSVC 用动态 CRT (`/MD`) 时 mimalloc 的**静态覆盖不生效** (上游以 `_DLL`
     判定, 避免与 CRT 分配器混用), 需要真正接管请用
     `-DAGENTXX_MIMALLOC_LINK=SHARED` (随产物部署 `mimalloc.dll` + `mimalloc-redirect.dll`)
+  - macOS/iOS 上**不可用, 顶层自动关闭** (`XX_IS_MACOS_D`/`XX_IS_IOS_D` 时强制
+    `AGENTXX_ENABLE_MIMALLOC=OFF`): Mach-O 采用两层次命名空间, `libc++` 与系统
+    框架对 `malloc/free` 的引用在链接期已绑定 `libSystem`, 主可执行文件的静态覆盖
+    只作用于自身 (且 `_malloc` 不在导出符号表中), 跨模块释放会在 `mi_free` 崩溃
+    (实测 Release `agentxx_cli` 启动即崩)。ELF 不同: GNU ld 会把被共享库引用的
+    `malloc` 放进 `.dynsym`, 由运行期符号插入使全进程统一走 mimalloc。强制接管
+    只能用 `DYLD_INSERT_LIBRARIES` 预加载 mimalloc 动态库 (非自包含分发)
   - 实测 (Release, 同机同场景, 对比调优后的 glibc): 常驻内存略升 (200K 上下文
     服务端 +5.5~6.6 MB, 启动 +0.4 MB), CPU 明显下降 (真实 server 驱动 705 轮:
     user 2280→1670 ms, sys 1120→370 ms, wall 3611→2700 ms); 详见

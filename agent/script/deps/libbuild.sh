@@ -179,11 +179,12 @@ agxxdeps_ensure_boost() {
     return 0
 }
 
-# ===== OpenSSL (宿主 Linux 构建) =====
-# 用法: agxxdeps_ensure_openssl <install_dir> <tag>
+# ===== OpenSSL (宿主 Linux/macOS 构建) =====
+# 用法: agxxdeps_ensure_openssl <install_dir> <tag> [host]
+#   host: linux (默认) | macos, 决定 Configure 目标与 rpath 写法
 # 依赖: 源码目录 {agxxdeps_src_dir}/openssl-4.0.1 (或 openssl*, 自动探测)
 agxxdeps_ensure_openssl() {
-    local install_dir="$1" tag="$2"
+    local install_dir="$1" tag="$2" host="${3:-linux}"
     local ossl_src=""
     # 兼容目录名: openssl-4.0.1 / openssl* / OpenSSL*
     for cand in "$agxxdeps_src_dir/openssl-4.0.1" "$agxxdeps_src_dir"/openssl* "$agxxdeps_src_dir"/OpenSSL*; do
@@ -228,7 +229,7 @@ agxxdeps_ensure_openssl() {
         ossl_src="$agxxdeps_src_dir/openssl-4.0.1"
     fi
     agxxdeps_info "=============================================="
-    agxxdeps_info "开始自编译 OpenSSL (Linux)"
+    agxxdeps_info "开始自编译 OpenSSL (${host})"
     agxxdeps_info "  源码: $ossl_src"
     agxxdeps_info "  安装: $install_dir"
     agxxdeps_info "=============================================="
@@ -237,18 +238,28 @@ agxxdeps_ensure_openssl() {
     # OpenSSL 仅支持源码内构建; 清掉可能的上次构建残留
     # (Configure 本身不接受 -j 并行参数, 并行在 make 阶段生效)
     (cd "$ossl_src" && make distclean >/dev/null 2>&1 || true)
-    (cd "$ossl_src" && ./Configure no-shared --pic --prefix="$install_dir" \
-        --openssldir="$install_dir" '-Wl,-rpath,$(LIBRPATH)' \
-        && make -j"$agxxdeps_parallel" && make install) || {
-            agxxdeps_error "OpenSSL 构建失败, 源码目录: $ossl_src"
-            return 1
-        }
+    if [[ "$host" == "macos" ]]; then
+        # macOS: 静态库 (no-shared); 不加 ELF 专用的 '-Wl,-rpath' 写法
+        (cd "$ossl_src" && ./Configure no-shared --prefix="$install_dir" \
+            --openssldir="$install_dir" \
+            && make -j"$agxxdeps_parallel" && make install) || {
+                agxxdeps_error "OpenSSL 构建失败, 源码目录: $ossl_src"
+                return 1
+            }
+    else
+        (cd "$ossl_src" && ./Configure no-shared --pic --prefix="$install_dir" \
+            --openssldir="$install_dir" '-Wl,-rpath,$(LIBRPATH)' \
+            && make -j"$agxxdeps_parallel" && make install) || {
+                agxxdeps_error "OpenSSL 构建失败, 源码目录: $ossl_src"
+                return 1
+            }
+    fi
     if [[ ! -f "$install_dir/include/openssl/opensslv.h" || \
           ( ! -f "$install_dir/lib/libssl.a" && ! -f "$install_dir/lib64/libssl.a" ) ]]; then
         agxxdeps_error "OpenSSL 安装产物缺失, 安装目录: $install_dir"
         return 1
     fi
-    echo "linux $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(agxxdeps_mark "$tag")"
+    echo "$host $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(agxxdeps_mark "$tag")"
     agxxdeps_info "OpenSSL 完成: $install_dir"
     return 0
 }

@@ -146,7 +146,7 @@ path/to/agentxx_test string_util regex
     - [liburing](agent/third_party/liburing/)
     - [NeoGraph](agent/third_party/neograph/)
     - [Markdown-ui](agent/third_party/markdown-ui/)
-    - [mimalloc](agent/third_party/mimalloc/) 内存分配器 (默认启用, 见"编译"节)
+    - [mimalloc](agent/third_party/mimalloc/) 内存分配器 (Linux/Windows 默认启用; macOS/iOS 无覆盖机制, 自动关闭, 见"编译"节)
     - [OpenSSL](agent/third_party/openssl-4.0.1/)
     - [simdjson](agent/third_party/simdjson/)
     - [sqlite3] | [sqlite3-cmake](agent/third_party/sqlite3-cmake/)
@@ -256,11 +256,15 @@ path/to/agentxx_test string_util regex
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
 - Windows:
     - 使用 bat 脚本编译: [windows_debug_build.bat](agent/script/windows_debug_build.bat) 或 [windows_release_build.bat](agent/script/windows_release_build.bat)
+- macOS:
+    - 使用 shell 脚本编译: [macos_debug_build.sh](agent/script/macos_debug_build.sh) 或 [macos_release_build.sh](agent/script/macos_release_build.sh)
+      (依赖自构建 Boost/OpenSSL; arm64 默认关闭 hyperscan; release strip 后自动
+      ad-hoc 重签名; mimalloc 在 macOS 自动关闭, 见上)
 - Android:
     - 在 Linux 上使用 shell 脚本交叉编译: [cross_android_release_build.sh](agent/script/cross_android_release_build.sh)
 - 编译脚本创建的 build 目录一般为:
-    - debug_build: `agent/build/linux-debug/` 或 `agent/build/windows-debug/`
-    - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/`
+    - debug_build: `agent/build/linux-debug/` 或 `agent/build/windows-debug/` 或 `agent/build/macos-debug/`
+    - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/` 或 `agent/build/macos-release/`
     - cross_android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
 - LTO (Release 默认开启, 开关 `AGENTXX_ENABLE_LTO`): MSVC 用 `/GL`(编译)+`/LTCG`(链接),
@@ -299,6 +303,13 @@ path/to/agentxx_test string_util regex
     `AGENTXX_ENABLE_SANITIZER=ON` 时顶层自动关闭 mimalloc
   - Windows/MSVC + 动态 CRT (`/MD`) 下静态覆盖不生效 (上游以 `_DLL` 判定), 需真正
     接管分配器要用 `-DAGENTXX_MIMALLOC_LINK=SHARED`
+  - macOS/iOS 无可用覆盖机制, 顶层**自动关闭** (`XX_IS_MACOS_D`/`XX_IS_IOS_D`
+    时强制 `AGENTXX_ENABLE_MIMALLOC=OFF`): Mach-O 采用两层次命名空间, libc++/
+    系统框架对 `malloc/free` 的引用在链接期已绑定 libSystem, 主可执行文件的静态
+    覆盖只作用于自身 (且 `_malloc` 不在导出符号表中), 跨模块释放会在 `mi_free`
+    崩溃 (实测 Release `agentxx_cli` 启动即崩); 这与 ELF 不同 (GNU ld 把被共享库
+    引用的 `malloc` 放入 `.dynsym` 从而全进程插入)。强制接管只能用
+    `DYLD_INSERT_LIBRARIES` 预加载 mimalloc 动态库 (非自包含分发)
   - 实测 (Release, 对比调优后的 glibc): 200K 上下文服务端 RSS +5.5~6.6 MB, 但 user
     -27% / sys -67% / wall -25%; 数据见 docs/zh-cn/design/benchmark.md 第 9 节
 - 内存占用优化 (与体积无关, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):

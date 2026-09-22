@@ -39,16 +39,9 @@ static std::string findPluginDirMI(std::string_view pluginName) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if XX_IS_WIN_D
-    wchar_t buf[MAX_PATH];
-    if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
-        candidates.push_back(fs::path(buf).parent_path() / "plugins" / pluginName);
+    if (auto exeDir = executableDir()) {
+        candidates.push_back(*exeDir / "plugins" / pluginName);
     }
-#else
-    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / pluginName);
-    }
-#endif
     candidates.push_back(fs::current_path(ec) / "plugins" / pluginName);
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
@@ -300,6 +293,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     }
 
     // ---- 6. agentxx_system_monitor 双实例: 后台采样任务按实例隔离, 卸载互不影响 ----
+    // 插件平台矩阵: 仅 windows/linux/android 有真实实现 (macOS/iOS 无产物), 跳过
+#if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D
     {
         auto dir = findPluginDirMI("agentxx_system_monitor");
         XX_TEST_EXPECT_TRUE(!dir.empty());
@@ -347,6 +342,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             }
         }
     }
+#endif // XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D
 
     // ---- 7. JS 引擎 + 脚本插件双实例: 引擎线程/脚本上下文按实例隔离 ----
     // - 同一 DSO 在每个 AgentContext 各建一个 JsEngine (各自 JS 线程与 runtime);

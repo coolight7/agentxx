@@ -43,7 +43,14 @@
 #include <tlhelp32.h>
 #else
 #include <dirent.h>
+// malloc.h (mallinfo2) 仅 glibc 提供; macOS/iOS 用 malloc/malloc.h 且无 mallinfo2
+// (下方堆统计已用 __GLIBC__ 守卫), 故这些平台不引入
+#if !XX_IS_MACOS_D && !XX_IS_IOS_D
 #include <malloc.h>
+#endif
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+#include <mach-o/dyld.h> // _NSGetExecutablePath: macOS 无 /proc/self/exe
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -102,6 +109,23 @@ inline std::string currentExecutablePath() {
     std::string out(buf.begin(), buf.end());
     std::replace(out.begin(), out.end(), '\\', '/');
     return out;
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    // macOS/iOS 无 /proc, 用 dyld 提供的自身可执行路径 (_NSGetExecutablePath)
+    uint32_t size = 0;
+    ::_NSGetExecutablePath(nullptr, &size);
+    if (size == 0) {
+        return {};
+    }
+    std::string raw(size, '\0');
+    if (::_NSGetExecutablePath(raw.data(), &size) != 0) {
+        return {};
+    }
+    // 解析符号链接/相对路径, 得到绝对路径 (失败则退回原值)
+    char resolved[4096] = {0};
+    if (::realpath(raw.c_str(), resolved) != nullptr) {
+        return std::string(resolved);
+    }
+    return raw;
 #else
     char    buf[4096] = {0};
     ssize_t n         = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);

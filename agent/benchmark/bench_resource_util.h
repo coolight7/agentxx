@@ -652,8 +652,9 @@ inline std::filesystem::path executableDir() {
         return fs::path(buf).parent_path();
     }
 #else
-    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        return p.parent_path();
+    // 跨平台自身可执行路径 (Linux /proc/self/exe; macOS _NSGetExecutablePath)
+    if (auto exe = currentExecutablePath(); !exe.empty()) {
+        return fs::path(exe).parent_path();
     }
 #endif
     return fs::current_path(ec);
@@ -704,6 +705,9 @@ inline std::string findSharedLibPath() {
 
 #if XX_IS_WIN_D
     const std::vector<std::string> libNames = {"libagentxx.dll", "agentxx.dll"};
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    // Mach-O 共享库后缀为 .dylib; Debug 带 d 后缀
+    const std::vector<std::string> libNames = {"libagentxx.dylib", "libagentxxd.dylib"};
 #else
     const std::vector<std::string> libNames = {"libagentxx.so", "libagentxxd.so"};
 #endif
@@ -714,7 +718,9 @@ inline std::string findSharedLibPath() {
            cwd,
            cwd / "exec",
            cwd / "agent" / "build" / "linux-release" / "exec",
-           cwd / "agent" / "build" / "linux-debug" / "exec"};
+           cwd / "agent" / "build" / "linux-debug" / "exec",
+           cwd / "agent" / "build" / "macos-release" / "exec",
+           cwd / "agent" / "build" / "macos-debug" / "exec"};
     for (const auto& dir : dirs) {
         for (const auto& name : libNames) {
             candidates.push_back(dir / name);

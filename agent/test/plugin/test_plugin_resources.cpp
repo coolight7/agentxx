@@ -47,16 +47,9 @@ static std::string findExamplePluginDir() {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if XX_IS_WIN_D
-    wchar_t buf[MAX_PATH];
-    if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
-        candidates.push_back(fs::path(buf).parent_path() / "plugins" / "example_plugin");
+    if (auto exeDir = executableDir()) {
+        candidates.push_back(*exeDir / "plugins" / "example_plugin");
     }
-#else
-    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / "example_plugin");
-    }
-#endif
     candidates.push_back(fs::current_path(ec) / "plugins" / "example_plugin");
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
@@ -167,11 +160,14 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
     ctx->resourceApplier = applier;
 
     // 临时工作目录 (进程内唯一; 结束时清理)
+    // 注: 先 weakly_canonical 解析软链 (macOS /var -> /private/var),
+    //     否则与资源应用器 (内部 canonical) 记录的所有权路径不一致
     auto tmpRoot
         = fs::temp_directory_path()
           / ("agentxx_res_test_"
              + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code ec;
+    tmpRoot = fs::weakly_canonical(tmpRoot, ec);
     fs::remove_all(tmpRoot, ec);
     fs::create_directories(tmpRoot, ec);
 

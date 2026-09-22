@@ -109,16 +109,9 @@ static std::string findPluginPath(const std::string& name) {
     namespace fs = std::filesystem;
     std::error_code       ec;
     std::vector<fs::path> candidates;
-#if XX_IS_WIN_D
-    wchar_t buf[MAX_PATH];
-    if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) > 0) {
-        candidates.push_back(fs::path(buf).parent_path() / "plugins" / name);
+    if (auto exeDir = executableDir()) {
+        candidates.push_back(*exeDir / "plugins" / name);
     }
-#else
-    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
-        candidates.push_back(p.parent_path() / "plugins" / name);
-    }
-#endif
     candidates.push_back(fs::current_path(ec) / "plugins" / name);
     auto hasLibFile = [](const fs::path& dir) {
         std::error_code                     ec2;
@@ -1201,6 +1194,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
 
     // ---- 13. agentxx_system_monitor client 插件: CPU/内存/GPU 资源监控渲染 ----
+    // 插件平台矩阵: 仅 windows/linux/android 有真实实现 (macOS/iOS 无产物), 跳过
+#if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D
     {
         auto smPath = findPluginPath("agentxx_system_monitor");
         auto smInst = co_await mgr->loadNativeAsync(smPath);
@@ -1279,6 +1274,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_system_monitor") == nullptr);
         }
     }
+#endif
 
     // ---- 14. agentxx_planning client 插件: 工具消息装饰与侧边栏概览 ----
     {

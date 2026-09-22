@@ -37,7 +37,17 @@ using namespace agentxx::plugin;
 /// 请求句柄: 对插件侧只是不透明指针 (`PluginxxDriver` 为不完整类型),
 /// 伪宿主用自建 token 表示它, 并记录回调/取消/执行状态。
 struct Harness;
-struct FakeOp;
+
+/// 伪调度器句柄记录 (sleep/offload 返回的不透明句柄):
+/// 句柄本身没有 host 参数, 因此记录里带上所属 harness 以便 op_cancel 找到挂起点。
+/// 注意: 必须定义在 Harness 之前 —— Harness 持有
+/// `std::vector<std::unique_ptr<FakeOp>>`, 其 clear() 需要完整类型; libc++ 在类内
+/// 实例化析构早于 libstdc++, 前置声明会让 libc++ 报
+/// "invalid application of sizeof to incomplete type"。
+struct FakeOp {
+    Harness*  harness = nullptr;
+    uintptr_t handle  = 0;
+};
 
 struct FakeTicket {
     PluginxxDriveOnceFn drive     = nullptr;
@@ -114,13 +124,6 @@ struct Harness {
         offloadCalls    = 0;
         nextSleepHandle = 1;
     }
-};
-
-/// 伪调度器句柄记录 (sleep/offload 返回的不透明句柄):
-/// 句柄本身没有 host 参数, 因此记录里带上所属 harness 以便 op_cancel 找到挂起点。
-struct FakeOp {
-    Harness*  harness = nullptr;
-    uintptr_t handle  = 0;
 };
 
 Harness* harnessOf(const PluginxxHost* host) {

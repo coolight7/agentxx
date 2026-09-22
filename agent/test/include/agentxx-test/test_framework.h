@@ -1,11 +1,68 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <vector>
+
+#if XX_IS_WIN_D
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+#  include <mach-o/dyld.h>
+#endif
 
 namespace agentxx {
 namespace test {
+
+/// 定位当前可执行文件所在目录 (跨平台)
+/// - 用于从任意 cwd 运行测试时, 仍能定位 exe 同目录的 plugins/ 构建产物
+/// - Linux/Android: 解析 `/proc/self/exe` 符号链接
+/// - macOS/iOS: `_NSGetExecutablePath` (Mach-O 无稳定 procfs 路径)
+/// - Windows: `GetModuleFileNameW` (宽字符, 兼容非 ASCII 路径)
+///
+/// - `return` 成功返回可执行文件所在目录 (已消解 `..`/符号链接, 失败时退回原始父目录);
+///   平台查询失败返回 `std::nullopt`
+inline std::optional<std::filesystem::path> executableDir() {
+    namespace fs = std::filesystem;
+#if XX_IS_WIN_D
+    wchar_t buf[MAX_PATH];
+    DWORD   n = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        return fs::path(buf).parent_path();
+    }
+    return std::nullopt;
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    uint32_t size = 1024;
+    std::vector<char> buf(size);
+    if (::_NSGetExecutablePath(buf.data(), &size) != 0) {
+        // 缓冲区不足: size 已被更新为所需大小, 重试一次
+        buf.resize(size);
+        if (::_NSGetExecutablePath(buf.data(), &size) != 0) {
+            return std::nullopt;
+        }
+    }
+    std::error_code ec;
+    fs::path        p{buf.data()};
+    if (auto canon = fs::weakly_canonical(p, ec); !ec) {
+        return canon.parent_path();
+    }
+    return p.parent_path();
+#else
+    std::error_code ec;
+    if (auto p = fs::read_symlink("/proc/self/exe", ec); !ec) {
+        return p.parent_path();
+    }
+    return std::nullopt;
+#endif
+}
 
 struct TestResult {
     int passed = 0;
