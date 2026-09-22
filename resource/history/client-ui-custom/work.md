@@ -2,13 +2,68 @@
 
 - 方案文档: [plan.md](plan.md)
 - 基于 commit: `ecc97b94`（设计文档提交）
-- 最后核对: 2026-09-22（对照 plan.md 逐条核对代码，结论见『状态总览』与『遗留任务清单』；
-  核对时代码版本 `38e874f4`）
+- 最后核对: **2026-09-22（审计版）** —— 对照 plan.md 逐章核对代码 + 审计遗留项，
+  结论见『对照 plan.md 的逐章核对』『状态总览』『遗留任务清单』
 - 记录规则: 每完成一个阶段更新本文件并 git 提交
+
+## 本文件怎么读
+
+| 章节 | 用途 |
+|---|---|
+| 『对照 plan.md 的逐章核对』 | plan §1~§16 每一章的落实位置与偏差（**审计结论**） |
+| 『状态总览』 | plan 的 P1/P2/P3/P4 阶段与后续阶段的完成情况 |
+| 『遗留任务清单』 | 逐条遗留项的状态（已修复 / 已补齐 / 评估后不做 / 部分完成）+ 证据 |
+| 『关闭项』 | 本方案明确不再实施的部分（`canvas`） |
+| 『阶段 10~16』 | 每个阶段的改动明细、测试结果、踩坑 |
+| 『注意事项』 | 跨阶段的约定与坑（含定时器/快捷键、表单、命中、渲染等） |
 
 ---
 
-## 状态总览（2026-09-22 核对）
+## 对照 plan.md 的逐章核对（2026-09-22 审计）
+
+> 方法: 逐章读 plan.md → 在代码中定位实现 → 记结论。**偏差**指与 plan 字面不同的实现，
+> 都在下方给出理由；**缺口**指 plan 要求但未实现，均已在『遗留任务清单』收口。
+
+| plan 章节 | 结论 | 落实位置 / 说明 |
+|---|---|---|
+| §1.1 缺口 G1~G7 | ✅ 全部解决 | G1 布局 `row/box/collapse`；G2 绘制 `sparkline/meter/table/kv/box` 边框；G3 尺寸 `EVT_UI_LAYOUT` + `regionSize`；G4 输入 控件共享 + `UiFormState`；G5 时间 `agentxx.client.timer`；G6 视图 overlay 选项 + `custom` 派发；G7 组合 单一实现 `ui_components` |
+| §1.2 明确不做 | ✅ 遵守 | `canvas` 仅解析+降级；插件代码不进 UI 线程；无绝对定位 API；wire 协议未改（`WirePluginData` 路径不变）；`agentxx.client.ui` 表未动 |
+| §1.3 设计原则 | ✅ | 机制在宿主/组件库在 SDK；单一实现；复用 `UiHitRegistry`/`dispatchAction`/COW 快照；优先数据层（仅 timer/keybind 新表）；三级降级；纯函数式渲染可测 |
+| §2 现状勘察 | ✅ 已收敛 | 面板/Info 各自 switch 已删除；`ui_items_render` → `ui_components`（唯一实现）；命中改 `Scrollable::hitTestItem` |
+| §3.1~3.3 三层结构 | ✅ | 描述层 `agentxx/ui/{item,build}.h` + `src/ui`；机制层 `ui_components` + `ui_hit` + 管理器；组件库 SDK（插件/中断共用） |
+| §4.1 通用字段 | ✅（`when` 为预留） | `kind/id/indent/color|role/bold/dim/wrap/fallback/action/args` 全支持；`when` 解析+往返保留+构建器 `Items::when`，渲染不消费（plan 即定位"仅保留字段"） |
+| §4.2 kind 全表 | ✅ | 15+ kind 全实现；`progress` 归一化为 `meter`；`canvas` 只解析/往返/降级 |
+| §4.3.1~4.3.10 各组件详规 | ✅ | `row`（含 `align:stretch`）、`box`（4 种边框）、`collapse`（宿主态）、`table`（列对齐/截断/可点单元格）、`tree`（连接线 + **宿主管理折叠**，阶段 15）、`kv`、`sparkline`（分桶 + `height` 多行）、`meter`（阈值降序匹配）、`control`/`submit`（从中断提升，共用实现）、`canvas`（降级） |
+| §4.4 校验与上限 | ✅ | 解析器: 深度 8 / 元素 512 / 表格 512×16 / 树 1024 / 趋势图 4096 / 文本 64 KiB；**入口: 单条 JSON 1 MiB → 拒绝整条更新 + 记日志**（阶段 11） |
+| §4.5 三级降级 | ✅ | 组件级 `fallback`；能力级 `get_client_state().interfaces`；前端级 `ui::plainText`（表格/树/图表/控件全部有纯文本形态） |
+| §5.1 解析与缓存 | ✅（2 处偏差） | 已加注册表 `version`；**偏差 1**: 不把解析结果落注册表（评估见『遗留-机制与复用』§5.1 条）；**偏差 2**: `size`/`formState` 落在管理器 `regionSizes_` 与 `TUIClientAppIO::pluginForms_`（语义等价） |
+| §5.2 行模型与测量 | ✅（1 处偏差） | `UiRow{lines,regions,box,element}`；`measureItem` 与渲染同源；`layoutColumnWidths` 为列宽纯函数；**偏差**: plan 提的 `UiRow.formId` 改由 `UiRenderCtx::form` 承担（表单状态是"接入点级"而非"行级"，避免每行复制） |
+| §5.3 渲染 | ✅ | 唯一实现 + 复用 `markdown`/`diff`/`mermaid`/按钮；宽字符走 `agentxx::ui::displayWidth`；主题走 `uiRoleColor` |
+| §5.4 命中与交互 | ✅ | `UiHitRegion` + `addRegions`/`matchUiHitRegion`；滚动容器 `hitTestItem`；`UiFormState` 共享（中断与插件表单同源）；结果经 `dispatchAction`（`__submit`/`__cancel`/`commitOnPick`）；焦点: 点击聚焦、`Tab`/`Shift+Tab` 移动、`Esc` 释放 |
+| §5.5 尺寸感知 | ✅（阶段 16 补齐最后一条） | 快照 + `AGENTXX_CLIENT_EVT_UI_LAYOUT` + `regionSize()`；触发时机: 首次布局/尺寸变化（面板、Info、overlay、**装饰**）、面板激活、overlay 打开 |
+| §5.6 时间 | ✅ | `agentxx.client.timer` v1；间隔下限 50 ms；单实例 ≤8；`pause_when_hidden` 顺延；动画 Disabled 拒注册；卸载/禁用全清；**同帧合并**（阶段 11） |
+| §5.7 视图级 | ✅（`resizable` 属 plan 预留） | overlay `size/width_frac/height_frac/footer/scroll/stack`；`custom` 按 `component`+`props` 派发；状态栏 `segments/sparkline/meter`；全屏自绘 → `canvas`（关闭） |
+| §5.8 安全与一致性 | ✅ | 异常守卫 + `InflightGuard`；渲染路径无 IO/加锁；文案 `tr()/trf()`；每个新组件都有测量/渲染/命中/纯文本降级/单测 |
+| §6.1~6.2 组件库位置与构建器 | ✅ | `item.h`（无 FTXUI 依赖）+ `build.h`（header-only，插件/中断/宿主共用）；构建器覆盖全部组件 + `form/array/when/indent/bold/dim/wrap` |
+| §6.3 SDK 便捷方法 | ✅ | `panelItems`（就地构建自动提交）、`setPanelItems/setInfoSectionItems/setStatusText/setStatusJson`、`setToolDecor/clearToolDecor`、`showItemsOverlay/showOverlay`、`form`（构建器级）、`registerTimer/registerKeybind`、`hostSupports/clientStateJson/regionSize` |
+| §6.4 中断预设复用构建器 | ✅（阶段 12） | `middleware::itemOf/blockOf` 唯一映射；`preset::blocksOf/contentBlock/tableBlock/treeBlock/meterBlock`；无 i18n 键的块 helper 改走构建器，带键的保持直接构造（组件层无"文案键"概念） |
+| §6.5 纯文本降级 | ✅ | `ui::plainText` 全 kind；`interruptUiPlainText` 对扩展块转发组件层（阶段 10），老格式分支保留保证输出兼容 |
+| §7 接入点收敛 | ✅ | 5 个接入点全部走 `ui_components`；CLI/FFI 走 `plainText`；状态栏富片段单行渲染；**每个接入点都有新组件上屏用例**（阶段 12~14） |
+| §8 ABI 与协商 | ✅ | `agentxx.client.ui` 表 version 保持 1 未动；能力名 `components/form/layout`；新表 `timer/keybind`；新事件 `EVT_UI_LAYOUT`；`client_plugin_api.h` 表述已统一（阶段 10） |
+| §9 线程/生命周期/性能 | ✅（1 处偏差） | 注册/派发/定时器/快捷键全在 io 线程；UI 线程只读快照；**偏差**: plan 说"禁用时定时器暂停"，实现为"禁用/卸载即取消"（插件 enable 后由 start 事务重新注册，语义更简单且不残留计时状态）；性能预算已按上限与合并约束（无基准数字，见『遗留-基准』） |
+| §10 P1/P2/P3 计划 | ✅ 全部完成 | 见『状态总览』；P4 关闭 |
+| §11 测试计划 | ✅（2 条评估不做） | lib `ui_items`、`tui_ui_items`、`tui_interrupt`、`tui_widget`、`tui_form`、`tui_tool_header`、`plugin_sdk`、`client_plugins` 全覆盖；DSO 夹具与 benchmark 场景评估不做（理由见清单） |
+| §12 风险与回退 | ✅ | "测量=渲染同源 + 单一实现 + 每 kind 必测"、上限、语义色优先、焦点优先级（全局 > 表单 > 普通）、`fallback` + 能力名降级、尺寸事件值变化去重、定时器门控与上限 —— 均已落地；风险表中的"基准"一列缺数字（见基准评估） |
+| §13 待确认决策点 | ✅ 已结论 | ① 组件清单按 plan 实施，未加 `bars/gauge/log`（无需求方）；② 表单允许面板/overlay 承载（宿主表单态 + 焦点模型已实现）；③ 尺寸感知采用"事件 + 快照查询"两件套；④ `plainText` 不做固定列宽上限（调用方传 `width`）；⑤ 分阶段合入（P1→P2→P3 各自提交）；⑥ canvas 预留程度 = 仅解析+往返+降级（`hits` 不实现） |
+| §15 附录 B 漂移修正 | ✅ 7/7 | 面板/Info switch 收敛；`ui_items_render` 更名与注释；`client_plugin_api.h` 表述统一；`open_overlay` stack 语义修正；overlay `extra_json` 尺寸选项；`tui.md` §2.6 澄清"注册入口只在 client 侧"；`interrupt_ui.h` `custom` TODO 清理 |
+| §16 文档清单 | ✅ | `plugins.md`（§9 能力名/新表/overlay 选项 + 新增 §9.1 schema 节 + 工具渲染说明 + 章节号修正）、`tui.md`（§2.2 组件清单/§2.6 插件 UI/§3 约束）、`index.md`（客户端 UI 能力矩阵）、`AGENTS.md`（记忆行） |
+
+**审计结论**: plan 的机制/组件/接入点/接口/测试/文档要求均已落实；未实施项 3 条（均为评估后不做，
+理由成文），部分完成 1 条（拖拽宽度 → 尺寸事件的端到端用例），其余全部完成。
+
+---
+
+## 状态总览（2026-09-22 审计）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -34,20 +89,34 @@
 | 阶段 13 | `tui_form` 模块 + 面板/Info 接入点用例 + 行反射框生命周期修复 | ✅ 已完成 |
 | 阶段 14 | `plugin_sdk` 端到端 + 装饰接入点用例 + 老宿主降级 | ✅ 已完成 |
 | 阶段 15 | tree 宿主管理折叠态（§4.3.5）+ 文档补齐与章节号修正 | ✅ 已完成 |
-| 基准 | benchmark「组件密集面板」场景（plan §9 性能预算） | ❌ 未做（见『遗留-基准』的评估结论） |
+| 阶段 16 | 审计：装饰区域尺寸上报（§5.5 最后一条触发时机）+ 逐章核对整理 | ✅ 已完成 |
+| 基准 | benchmark「组件密集面板」场景（plan §9 性能预算） | ❌ 未做（评估后不做，见『遗留-基准』） |
 
-小结（阶段 15 结束时）：plan 的 P1 / P2 / P3 全部落地；遗留清单中的真实缺陷、机制与复用、
-测试欠账、可选增强、文档残留**全部完成**，仅"基准场景"一条经评估不做；`canvas`（P4）按
-既定决定关闭。全量测试 **22543 项断言通过**（无 ASan 报告）。
+小结（阶段 16 结束时）：plan 的 P1 / P2 / P3 全部落地；遗留清单中的真实缺陷、机制与复用、
+测试欠账、可选增强、文档残留**全部完成**；未实施 3 条（解析结果落表 / DSO 测试夹具 /
+基准场景）与部分完成 1 条（拖拽宽度→尺寸事件用例）均有成文结论。全量测试
+**22547 项断言通过**（无 ASan 报告）。
 
 ---
 
 ## 遗留任务清单
 
-> 2026-09-22 对照 plan.md 逐条核对代码后整理（证据位置见文末『注意事项 · 本轮核对』）。
-> 勾选框用于后续实施时标记进度；未特别说明的项均为「plan 要求、代码中不存在」。
+> 2026-09-22（审计版）整理。勾选框标记状态；每条给出结论与证据位置。
+> **当前状态: 待实施任务 = 0**（3 条评估后不做、1 条部分完成，均在下方标明理由）。
 
-### 遗留-真实缺陷（建议优先处理）
+**分类汇总**
+
+| 分类 | 条数 | 结论 |
+|---|---|---|
+| 真实缺陷 | 2 | ✅ 全部修复（阶段 10） |
+| 机制与复用 | 9 | ✅ 8 条完成 + 1 条部分（§5.1 只保留 version，解析结果落表评估后不做） |
+| 测试欠账 | 7 | ✅ 6 条完成 + 1 条部分（拖拽宽度 → 尺寸事件的端到端用例） |
+| 可选增强 | 2 | ✅ 1 条完成（overlay 可见性/尺寸）+ 1 条未做（快捷键列表展示，属纯 UI 增强） |
+| 文档与注释残留 | 3 | ✅ 3 条完成 |
+| 基准 | 1 | ⏳ 评估后不做（缺 Release 基线；性能约束已落地，见该条理由） |
+| 审计新增（阶段 16） | 1 | ✅ 装饰区域尺寸上报（plan §5.5 "消息列表宽度变化"触发时机） |
+
+### 遗留-真实缺陷（建议优先处理）【2/2 完成】
 
 - [x] **CLI 行式前端静默丢弃新组件中断块**（2026-09-22 修复）
   - 现象：中断描述里含 `table` / `tree` / `sparkline` / `meter` / `row` / `box` / `kv` /
@@ -66,7 +135,7 @@
   - 修法：overlay 打开/关闭与消息列表可见性一并上报（与『遗留-可选增强』第 1 条同一改动）；
     见本文档『阶段 10』。
 
-### 遗留-机制与复用（plan 要求，未实施）
+### 遗留-机制与复用（plan 要求）【8/9 完成；1 条部分】
 
 - [x] **§5.1 入口解析一次、注册表存解析结果**（2026-09-22 部分完成：`version` 字段已加，
   「解析结果落表」见下条说明）
@@ -105,12 +174,14 @@
 - [x] **§5.1 面板 / Info / 状态栏条目的 `version` 字段**（2026-09-22 完成：`update_*` 递增）
 - [x] **§5.6 周期定时器"同帧多次触发合并"**（2026-09-22 完成：`armedAt`/`dropped`，
   迟到（≥2 个周期）的触发被丢弃，不追赶式补发；用例见阶段 11）
-- [ ] **§4.3.5 tree 宿主管理折叠态**（plan 标注为 P2 后续）：宿主折叠状态目前只有
-  `collapse` kind（`agent_tui.cpp:1296` / `:1422` + `UiRenderCtx::collapseExpanded`）
+- [x] **§4.3.5 tree 宿主管理折叠态**（2026-09-22 完成，见『阶段 15』）
+  - 状态键 = 从根到该节点的路径（如 `src/io/`），复用 `UiRenderCtx::collapseExpanded`
+    回调（与 `collapse` 同一套宿主状态），有子节点的行可点击展开/收起（行首 `▾`/`▸`），
+    收起后子树不渲染也不占点击区域；未提供折叠查询时按全展开渲染（行式前端行为不变）
 - [x] **§4.3.1 `row` 的 `align: "stretch"`**（2026-09-22 完成：
   `layoutColumnWidths(..., stretchAll)` 把剩余宽度均分给各列）
 
-### 遗留-测试欠账（plan §10 P2.6 + §11）
+### 遗留-测试欠账（plan §10 P2.6 + §11）【6/7 完成；1 条部分】
 
 - [x] `tui_form` 专项测试模块（2026-09-22 完成：新建模块，控件状态机 + overlay 表单
   提交端到端；原 `tui_ui_items` 的表单用例迁出）
@@ -136,7 +207,7 @@
   - 装饰（工具消息）接入点：`tui_tool_header`（阶段 14）
 - [x] 中断新组件块的纯文本降级用例（阶段 10 随『遗留-真实缺陷』第 1 条一并完成）
 
-### 遗留-基准（plan §9 性能预算）
+### 遗留-基准（plan §9 性能预算）【0/1；评估后不做】
 
 - [ ] benchmark「组件密集面板」场景：用 `agentxx::ui::Items` 造 20 行表格 + 趋势图 + kv +
   行容器 + 表单控件描述，测每帧 `renderItems`（含 `measureItem`）耗时与行模型内存增量；
@@ -155,12 +226,17 @@
     - 若后续需要该基线: 在 Release 下按上述描述补场景即可, 组件层无需改动（构建器 +
       `renderItems`/`measureItem` 已可直接调用）。
 
-### 遗留-可选增强
+### 遗留-可选增强【1/2 完成；1 条未做】
 
 - [x] overlay 区域可见性 / 尺寸上报（2026-09-22 修复；与『遗留-真实缺陷』第 2 条同一改动）
-- [ ] 快捷键列表展示（`list_keybinds` 已备，设置 / 帮助弹窗尚未消费）
+- [ ] **快捷键列表展示**（唯一未做的可选增强）：`ClientPluginManager::keybinds()` 与
+  SDK 的 `keybindListJson()` 已备，但设置 / 帮助弹窗**尚未消费**（用户看不到已注册的
+  全局快捷键及其冲突情况）。
+  - 实施要点（后续可选）：在设置弹窗（`components/settings_overlay` 一类）里加只读列表
+    段（键位 + 说明 + 归属插件），文案走 `TuiI18n`，并注意弹窗导航/高度布局与既有
+    `tui_settings` 用例；不涉及接口表与协议，属纯 UI 增强。
 
-### 遗留-文档与注释残留（plan §15 / §16）
+### 遗留-文档与注释残留（plan §15 / §16）【3/3 完成】
 
 - [x] `plugins.md` 章节号重复：`### 9.5 定时器`(610) 与 `### 9.5 状态栏项的富展示片段`(678)
   同号 → 后者已改为 9.7（阶段 15）；顺带补齐 §9.1 的 `when`/体积上限/版本号/树折叠/
@@ -170,6 +246,31 @@
   （2026-09-22 改为说明"本段为首版表成员 + 子能力名降级 + 不追加表尾成员"）
 - [x] `interrupt_ui.h:66` 与 `interrupt_ui.cpp:292` 注释仍写 `custom`「字段预留, 暂未实现」
   （2026-09-22 改为已派发共享组件渲染的说明）
+
+## 待完成任务（下一步）
+
+**唯一待实施任务**（其余均已闭环）：
+
+- [ ] **快捷键列表展示**（可选增强）：设置/帮助弹窗消费 `ClientPluginManager::keybinds()`
+  （或 SDK 的 `keybindListJson()`），展示已注册的全局快捷键（键位 + 说明 + 归属插件）。
+  实施要点见『遗留-可选增强』该条 —— 属纯 UI 增强，不涉及接口表与协议。
+
+**评估后不做**（结论与理由已成文；有新需求可重新评估）：
+
+- benchmark「组件密集面板」场景 —— 见『遗留-基准』（缺 Release 基线；性能约束机制已落地）
+- `§5.1 解析结果落表` —— 见『遗留-机制与复用』（应走版本号缓存，属独立性能课题）
+- DSO 测试插件 `test_ui_components` —— 见『遗留-测试欠账』（同级覆盖已由真实 DSO +
+  伪实例的真实注册路径提供）
+
+**部分完成**：
+
+- 拖拽侧边栏宽度 → 尺寸事件的端到端用例：尺寸上报的"值变化去重"已由 `client_plugins`
+  覆盖，面板/Info/overlay/装饰都按当前宽度上报；缺的是"拖拽事件驱动"这一条路径。
+
+**后续演进方向**（不属于本方案）：
+
+1. 按 `version` 缓存的解析结果（注册项自带 `itemsParsed` + 版本号失效），避免每帧重复解析；
+2. 把 `items` / `form` / `timer` / `keybind` 的用法沉淀到插件开发文档。
 
 ---
 
@@ -490,25 +591,6 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ---
 
-## 待完成任务（下一步）
-
-**本方案的待办已清空**（2026-09-22，阶段 15 结束时）：
-
-- 真实缺陷 2 条、机制与复用 9 条、测试欠账 7 条、可选增强 2 条、文档与注释残留 3 条
-  —— 全部完成（其中 3 条以"评估后不实施"收口，理由见各自条目：『§5.1 解析结果落表』、
-  『DSO 测试插件』、『基准场景』；『拖拽宽度 → 尺寸事件』为部分完成，见『遗留-测试欠账』）。
-- `canvas` 完全自绘（P4）按既定决定关闭，见『关闭项』。
-
-后续若要继续演进（不属于本方案，供参考）：
-
-1. `§5.1 解析结果落表`的性能优化：按 `version` 缓存的解析结果（注册项自带 `itemsParsed`
-   + 版本号失效），避免每帧重复解析；
-2. `拖拽侧边栏宽度 → 尺寸事件`的端到端用例（需要真实 `SidebarComponent` + 拖拽事件）；
-3. 若需要基准基线：在 Release 下补「组件密集面板」场景（构建器与渲染函数已可直接调用）；
-4. 插件生态侧：把 `items` / `form` / `timer` / `keybind` 的用法沉淀到插件开发文档。
-
----
-
 ## 阶段 10：遗留缺陷修复（已完成，commit `2bc6190d`）
 
 对照『遗留-真实缺陷』两条 + 两条文档注释残留。
@@ -790,6 +872,19 @@ overlay / 中断）都有新组件用例。
 
 ---
 
+## 阶段 16：审计与收尾（已完成，commit `206a87bd`）
+
+对照 plan.md 逐章审计（结论见文首『对照 plan.md 的逐章核对』），补上 1 处缺口：
+
+- **§5.5 尺寸事件的最后一条触发时机**（"消息列表宽度变化"）：`appendDecorItems` 现在以
+  `tool_call_id` 为区域 id 上报装饰的可用宽度与内容行数；消息块在宽度变化时由
+  `LazyScrollable::clearCache` 重建，上报值随之刷新。
+  测试：`tui_tool_header` 新增装饰区域尺寸上报用例（含同 key 的可见性上报）。
+- 文档与记录：本轮把 `work.md` 重组为"逐章核对 → 状态总览 → 遗留清单 → 待办 → 关闭项 →
+  阶段日志 → 注意事项"，并把审计中发现的偏差（`§5.1`/`§5.2`/`§9`）逐条写入『逐章核对』。
+
+---
+
 ## 注意事项（实施中记录）
 
 ### 兼容性
@@ -900,14 +995,28 @@ overlay / 中断）都有新组件用例。
   "节点路径"（`src/io/`）作 id，因此 TUI 侧不需要为树新增任何状态或点击分支
 - `UiRow::box` 与元素的关系见阶段 13：凡是"元素落表"的改动都要确认 Box 所有权跟着走
 
-### 本轮核对（2026-09-22）
+### 观察到的偶发失败（2026-09-22）
+
+- **`plugins` 模块 JS 插件用例偶发失败**（与本方案改动无关）：全量运行中出现 3 条断言失败,
+  日志显示 `example_js` 因 `agentxx_javascript_engine` 依赖未加载而启动失败
+  (`interpreter.js capability not available`); 单独运行 `plugins` 模块通过 (542 项),
+  紧随其后的下一次全量运行也全部通过。
+  - 结论: 属**顺序/时序相关**的既有偶发问题（JS 引擎插件的加载顺序依赖），非本次改动引入。
+  - 处理建议: 若再复现, 在 `plugins` 模块的 JS 用例前显式加载 `agentxx_javascript_engine`
+    或把该用例标记为"依赖存在才执行"。
+- 全量测试计数在阶段间变化是正常的 (新增用例), 最新一次全量为 **22547 项断言通过**。
+
+### 历史核对（2026-09-22 早期，基于 `38e874f4`）
+
+> 下面是**第一轮**核对方法的记录（那时还未开始实施遗留项）；当前结论请看文首
+> 『对照 plan.md 的逐章核对（2026-09-22 审计）』。
 
 核对方法：逐条读 plan.md（§4~§16）→ 在代码中定位对应实现 → 记下"未实施项 + 证据位置"。
-核对时代码版本 `38e874f4`（本轮只更新本文档，未改代码）。
+核对时代码版本 `38e874f4`（那一轮只更新本文档，未改代码）。
 
-关键证据位置（供后续快速复核，结论对应『遗留任务清单』）：
+关键证据位置（供后续快速复核；**这些证据描述的是"实施前"的状态**，逐条结论见『遗留任务清单』：）
 
-| 结论 | 证据 |
+| 结论（实施前状态） | 证据 |
 |---|---|
 | 注册表只存原始 JSON，解析在 UI 线程每帧发生 | 条目字段：`ClientPanel/ClientInfoSection.items`、`ClientStatusItem.rich`、`ClientToolDecor.items`、`ClientToolRenderEntry.items`；解析点：`agent_tui.cpp:325`、`tui_sidebar_content.cpp:174`、`message_list.cpp:662`/`:1621`、`status_bar.cpp:80`、`overlays.cpp:1819` |
 | 无 JSON 字节上限 | `client_plugin_manager.cpp` 的 `updatePanel` / `updateInfoSection` / `updateToolDecor` 等入口只判 JSON 合法性，无 size 校验 |
