@@ -293,8 +293,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     }
 
     // ---- 6. agentxx_system_monitor 双实例: 后台采样任务按实例隔离, 卸载互不影响 ----
-    // 插件平台矩阵: 仅 windows/linux/android 有真实实现 (macOS/iOS 无产物), 跳过
-#if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D
+    // 插件平台矩阵: windows/linux/android/macos 有真实实现 (iOS 无产物), 其余跳过
+#if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D || XX_IS_MACOS_D
     {
         auto dir = findPluginDirMI("agentxx_system_monitor");
         XX_TEST_EXPECT_TRUE(!dir.empty());
@@ -342,7 +342,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             }
         }
     }
-#endif // XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D
+#endif // XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D || XX_IS_MACOS_D
 
     // ---- 7. JS 引擎 + 脚本插件双实例: 引擎线程/脚本上下文按实例隔离 ----
     // - 同一 DSO 在每个 AgentContext 各建一个 JsEngine (各自 JS 线程与 runtime);

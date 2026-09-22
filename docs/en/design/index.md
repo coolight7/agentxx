@@ -325,7 +325,7 @@ The following capabilities have been decoupled from the core library into standa
 | **ScreenCapture** | Screen capture and streaming (multi-monitor support; plugin `agentxx_screen_capture`, Windows only). |
 | **AudioStream** | System audio, microphone, and application audio stream capture (plugin `agentxx_audio_stream`, skipped on all platforms: implementation not enabled). |
 | **TextSelectionMonitor** | System-wide text selection event listener (plugin `agentxx_text_selection_monitor`, Windows UI Automation only). |
-| **CpuGpuMonitor** | CPU, RAM, and GPU utilization inspection (plugin `agentxx_system_monitor`; tool + periodic sampling + client rendering). |
+| **CpuGpuMonitor** | CPU, RAM, and GPU utilization inspection (plugin `agentxx_system_monitor`: PDH/DXGI on Windows, `/proc` + sysfs on Linux/Android, mach `host_statistics` + IOKit `IOAccelerator` on macOS; tool + periodic sampling + client rendering). |
 | **CodeGraphManager** | Code indexing and symbol analysis based on `codegraph-cpp` (plugin `agentxx_codegraph`): Indexing scope configured via plugin args in YAML `plugins` (`paths` directory list, defaulting to current working directory if empty; `ignore_paths` with wildcard support; `use_gitignore` respecting `.gitignore` rules, `.gitmodules`, and `.git`). Traversal prunes ignored subtrees immediately, and filesystem watchers apply identical filters. SQLite indices reside at `{dataDir}/sqlite/codegraph/<hashed_path>/index.db`; skipped if `dataDir` is unconfigured. |
 
 ### Dependency Injection

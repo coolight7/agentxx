@@ -190,7 +190,10 @@ path/to/agentxx_test string_util regex
   `agent/plugins/cmake/plugin_platform_support.cmake` 的 gate 函数判定,
   复用顶层传入的 XX_IS_*_D 变量), screen_capture/computer_use/
   text_selection_monitor 仅 Windows, audio_stream 全平台未实现,
-  system_monitor 无 macOS; 跨平台插件默认放行; 见 docs/zh-cn/design/plugins.md §14
+  system_monitor 覆盖 windows/linux/android/macos (macOS 经 mach
+  host_statistics + IOKit IOAccelerator 读取 CPU/内存/GPU/显存,
+  Apple Silicon 为统一内存: 无独立显存, 用共享内存口径);
+  跨平台插件默认放行; 见 docs/zh-cn/design/plugins.md §14
 - 工具函数复用: 插件复用 `cxx_utilxx_base` / `cxx_utilxx` 两个独立静态库
   (拆分自原 `agentxx_util`; 基础件 log/json/json_view/string_util/env/system/
   container_util/hash/lru_cache/path_sanitize/stream/async_mutex/asio_error +

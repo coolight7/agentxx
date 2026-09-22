@@ -1,6 +1,6 @@
 name: agentxx_system_monitor
-version: 1.0.0
-description: "System resource monitor: CPU/memory/GPU usage (tool agentxx_get_system_core_info, capability agentxx.system_usage)"
+version: 1.1.0
+description: "System resource monitor: CPU/memory/GPU usage on Windows/Linux/Android/macOS (tool agentxx_get_system_core_info, capability agentxx.system_usage)"
 entry: libagentxx_system_monitor.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----

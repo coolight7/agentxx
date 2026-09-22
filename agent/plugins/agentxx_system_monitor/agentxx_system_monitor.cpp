@@ -69,24 +69,25 @@ std::string formatUsageText(const CpuGpuUsage& usage) {
     );
     for (size_t i = 0; i < usage.gpus.size(); ++i) {
         const auto& gpu = usage.gpus[i];
+        /// 显存口径: 优先独立显存; 统一内存 GPU (如 Apple Silicon) 没有独立显存,
+        /// 退回与系统内存同源的共享显存, 否则该行会显示成 0MB/0MB
+        const bool        useSharedVram = gpu.dedicatedVramMB == 0 && gpu.sharedVramMB > 0;
+        const uint64_t    vramTotalMB   = useSharedVram ? gpu.sharedVramMB : gpu.dedicatedVramMB;
+        const uint64_t    vramUsedMB
+            = useSharedVram ? gpu.sharedVramUsedMB : gpu.dedicatedVramUsedMB;
+        const std::string vramLabel = useSharedVram ? "VRAM (shared)" : "VRAM";
+        std::string       title     = fmt::format("GPU {}", i);
         if (!gpu.name.empty()) {
-            ss << fmt::format(
-                "GPU {} [{}]: GPU Usage: {:.1f}%, VRAM: {}MB Used / {}MB Total",
-                i,
-                gpu.name,
-                gpu.usagePercent,
-                gpu.dedicatedVramUsedMB,
-                gpu.dedicatedVramMB
-            );
-        } else {
-            ss << fmt::format(
-                "GPU {}: GPU Usage: {:.1f}%, VRAM: {}MB Used / {}MB Total",
-                i,
-                gpu.usagePercent,
-                gpu.dedicatedVramUsedMB,
-                gpu.dedicatedVramMB
-            );
+            title += fmt::format(" [{}]", gpu.name);
         }
+        ss << fmt::format(
+            "{}: GPU Usage: {:.1f}%, {}: {}MB Used / {}MB Total",
+            title,
+            gpu.usagePercent,
+            vramLabel,
+            vramUsedMB,
+            vramTotalMB
+        );
         if (i + 1 < usage.gpus.size()) {
             ss << "\n";
         }
@@ -271,7 +272,7 @@ static void* sysMonStop(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, Pl
 AGENTXX_PLUGIN_AGENT_EXPORT(
     SysMonCtx,
     "agentxx_system_monitor",
-    "1.0.0",
+    "1.1.0",
     "System resource monitor: CPU/memory/GPU usage tool",
     sysMonStart,
     sysMonStop
@@ -517,7 +518,7 @@ static void*
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     SysMonClientCtx,
     "agentxx_system_monitor",
-    "1.0.0",
+    "1.1.0",
     "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle",
     sysMonClientStart,
     sysMonClientStop

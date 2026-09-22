@@ -66,7 +66,7 @@
 | ✅ | Windows 10+ | Win MSVC编译/Linux 交叉编译 |
 | ✅ | Linux | 在WSL运行时额外支持直接执行 windows 程序和命令 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
-| ⬜ | Macos | 待测试兼容 |
+| ✅ | Macos | 已支持 arm64/x64 macos clang 编译 |
 | ⬜ | IOS | 待测试兼容 |
 
 ### 编译后的体积和依赖库
@@ -81,6 +81,8 @@
 | **Win/TUI** | 3.3M | - | - | 不加载插件 |
 | **Linux/TUI** | 3.2M | 9.2M | 15.1M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
 | **Linux/TUI** | 2M | - | - | 不加载插件 |
+| **Macos/TUI** | 5.2M | 21.1M | 31.5M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
+| **Macos/TUI** | 3.8M | - | - | 不加载插件 |
 
 - **可执行文件/动态库文件体积**:
 
@@ -275,7 +277,7 @@
     - 保存分析结果到 sqlite
     - 可配置加载路径/忽略路径
     - 默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (可配置关闭 use_gitignore)
-- ✅`agentxx_system_monitor`支持读取 windows/linux 的 CPU占用、内存占用、GPU占用、显存占用
+- ✅`agentxx_system_monitor`支持读取 windows/linux/macos 的 CPU占用、内存占用、GPU占用、显存占用
     - tool/get_system_core_info 获取系统信息
 - ✅`agentxx_screen_capture`支持 DXGI/DGI 捕获屏幕帧
 - ⬜`agentxx_audio_stream`支持捕获系统输出音频、指定程序输出音频、麦克风

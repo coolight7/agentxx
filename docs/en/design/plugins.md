@@ -440,7 +440,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_rag_search` | Vector semantic search. |
 | `agentxx_string` | String tools (html_to_markdown, regexp). |
 | `agentxx_system` | System clock tool (`get_current_datetime`). |
-| `agentxx_system_monitor` | System resource monitor (tool + background periodic sampling + client Info/Status bar rendering). |
+| `agentxx_system_monitor` | System resource monitor (Windows/Linux/Android/macOS; tool + background periodic sampling + client Info/Status bar rendering). |
 | `agentxx_planning` | Task planning tool + client-side Plan rendering (type-level tool renderer for both live and replayed history + runtime decoration + Info section). |
 | `agentxx_math` | Math computation tool (`agentxx_math_calculate`; supports arithmetic, powers, factorials, bitwise, logic, trig, hyperbolic, log, combinations/permutations, implicit multiplication). |
 | `agentxx_codegraph` | Code index & navigation (5 tools: search/context/callers/callees/path + client Info panel). |
@@ -466,8 +466,8 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 
 ## 14. Build System & Platform Support
 
-- **Platform Matrix**: Each plugin determines platform compatibility at the start of its `CMakeLists.txt` via the `gate` function in `plugin_platform_support.cmake`, leveraging top-level `XX_IS_*_D` flags. Unsupported platforms are skipped during compilation (`screen_capture`, `computer_use`, and `text_selection_monitor` are Windows only; `audio_stream` is skipped on all platforms since its WASAPI implementation is not enabled, etc.). An empty platform list means "skip everywhere".
-- **Verified platforms (current implementation)**: Windows (MSVC 14.51 / VS18, Debug + ASan: full plugin build, plugin-focused 1765/0, extended regression 2251/0) and Linux (GCC, Debug + ASan/LSan, targeted UBSan/TSan). Android is not verified.
+- **Platform Matrix**: Each plugin determines platform compatibility at the start of its `CMakeLists.txt` via the `gate` function in `plugin_platform_support.cmake`, leveraging top-level `XX_IS_*_D` flags. Unsupported platforms are skipped during compilation (`screen_capture`, `computer_use`, and `text_selection_monitor` are Windows only; `audio_stream` is skipped on all platforms since its WASAPI implementation is not enabled, etc.). An empty platform list means "skip everywhere". `agentxx_system_monitor` covers windows/linux/android/macos: Windows uses PDH + DXGI, Linux/Android parse `/proc` + sysfs, and macOS uses mach `host_statistics`/`host_statistics64` plus IOKit `IOAccelerator` (`PerformanceStatistics`).
+- **Verified platforms (current implementation)**: Windows (MSVC 14.51 / VS18, Debug + ASan: full plugin build, plugin-focused 1765/0, extended regression 2251/0), Linux (GCC, Debug + ASan/LSan, targeted UBSan/TSan) and macOS (Apple M1 / Apple clang, Debug + ASan: `agentxx_system_monitor` platform-matrix regression cpu_gpu 32/0, plugin_multi_instance 80/0, client_plugins 537/0). Android is not verified.
 - **Running the test binary on Windows**: the working directory must be the executable's directory (`exec/`), because plugin paths are derived from `GetModuleFileNameW` (Linux uses `/proc/self/exe`).
 - **Monolithic Built-in Compilation**: Plugins specified in `AGENTXX_PLUGIN_BUILTIN_LIST` are merged into `libagentxx`. In this mode, `test_ffi_c_api` and `client_plugins` tests conditionally bypass dynamic library path checks.
 - **Artifact Layout**: Standalone shared libraries output to `{build}/exec/plugins/<plugin_name>/` (organized into subdirectories when accompanied by a `plugin.yaml` manifest).
