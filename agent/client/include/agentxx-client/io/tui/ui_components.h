@@ -216,12 +216,10 @@ void initFormState(UiFormState& form, const std::vector<agentxx::ui::Item>& item
 /// 收集组件树中的全部控件 id (含容器内; 供表单状态清理使用)
 std::vector<std::string> collectControlIds(const std::vector<agentxx::ui::Item>& items);
 
-/// 中断描述块 → 组件项
-/// - 内容块 (text/markdown/diff/separator/gap) 按字段映射
-/// - `control` / `submit` / `custom` 按共享控件语义映射 (字段一一对应)
-/// - 其他 kind 视为扩展组件: 按块的原始 JSON (`InterruptUiBlock::raw`) 解析
-///   (例如表格/树/横排/分组等, schema 同 `agentxx.ui.item`)
-/// - 无法识别时返回 nullopt (调用方按 fallback 文本降级)
+/// 中断描述块 → 组件项 (转发 lib 的 [agentxx::middleware::itemOf])
+///
+/// 映射的唯一实现在 lib: TUI 渲染、纯文本降级与"用组件构建器拼中断描述"共用
+/// 同一份转换, 各接入点不再各写一份。语义见该函数的说明。
 std::optional<agentxx::ui::Item> itemFromInterruptBlock(const middleware::InterruptUiBlock& block);
 
 } // namespace client

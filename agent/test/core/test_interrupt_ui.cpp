@@ -618,6 +618,99 @@ void test_interrupt_handle_arg_serialization() {
     XX_TEST_EXPECT_EQ(InterruptHandleArg::listToJson(list).size(), size_t{2});
 }
 
+/// 组件桥接: 构建器 → 中断块 → (TUI/纯文本共用) 组件项
+///
+/// 保护"中断描述可直接用表格/树/图表等新组件"这条能力: 也保护 itemOf/blockOf
+/// 之间的往返不丢内容 (渲染层与纯文本降级都按 raw 走组件层)。
+void test_component_bridge() {
+    using namespace agentxx::middleware;
+
+    // 1) 构建器 → 块数组
+    agentxx::ui::Items ui;
+    ui.text("标题", "accent").bold(true).indent(2);
+    ui.table({
+        .columns = {{"Path", "left", 0}, {"Scope", "right", 6}},
+        .rows    = {{"a.txt", "write"}},
+    });
+    ui.meter(72, 100, {.width = 4, .label = "CPU"});
+
+    auto blocks = preset::blocksOf(ui);
+    XX_TEST_EXPECT_EQ(blocks.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"text"});
+    XX_TEST_EXPECT_EQ(blocks[0].text, std::string{"标题"});
+    XX_TEST_EXPECT_EQ(blocks[0].indent, 2);
+    XX_TEST_EXPECT_TRUE(blocks[0].bold);
+    XX_TEST_EXPECT_EQ(blocks[1].kind, std::string{"table"});
+    XX_TEST_EXPECT_EQ(blocks[2].kind, std::string{"meter"});
+
+    // 2) 块 → 组件项 (唯一映射): 扩展组件按 raw 解析
+    const auto tableItem = itemOf(blocks[1]);
+    XX_TEST_EXPECT_TRUE(tableItem.has_value());
+    if (tableItem) {
+        XX_TEST_EXPECT_EQ(tableItem->kind, std::string{"table"});
+        XX_TEST_EXPECT_EQ(tableItem->columns.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(tableItem->columns[1].align, std::string{"right"});
+        XX_TEST_EXPECT_EQ(tableItem->rows.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(tableItem->rows[0][0].text, std::string{"a.txt"});
+    }
+
+    // 3) 端到端: 含新组件的中断描述在行式前端 (CLI/日志) 上也有内容
+    InterruptUi desc;
+    desc.blocks = blocks;
+    const auto text = interruptUiPlainText(desc, 80);
+    XX_TEST_EXPECT_TRUE(text.find("标题") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[###-] 72%") != std::string::npos);
+
+    // 4) 块 → 组件项 → 块: 控件语义与内容字段保持
+    const auto numberBlock = preset::numberControl("n", "N", {}, 3.0, true, 2.0);
+    const auto numberItem  = itemOf(numberBlock);
+    XX_TEST_EXPECT_TRUE(numberItem.has_value());
+    if (numberItem) {
+        XX_TEST_EXPECT_EQ(numberItem->kind, std::string{"control"});
+        XX_TEST_EXPECT_EQ(numberItem->control, std::string{"number"});
+        XX_TEST_EXPECT_EQ(numberItem->controlLabel, std::string{"N"});
+        XX_TEST_EXPECT_EQ(numberItem->step, 2.0);
+        XX_TEST_EXPECT_TRUE(numberItem->integer);
+        const auto back = blockOf(*numberItem);
+        XX_TEST_EXPECT_EQ(back.kind, std::string{"control"});
+        XX_TEST_EXPECT_EQ(back.control, std::string{"number"});
+        XX_TEST_EXPECT_EQ(back.label, std::string{"N"});
+        XX_TEST_EXPECT_EQ(back.step, 2.0);
+        XX_TEST_EXPECT_TRUE(back.integer);
+        XX_TEST_EXPECT_TRUE(back.hasMin == false && back.hasMax == false);
+    }
+
+    // 5) 预设里的新组件 helper
+    const auto tree = preset::treeBlock({
+        {"src",      "accent", {}, {}, {{"main.cpp"}}},
+        {"README.md", {},      {}, {}, {}           },
+    });
+    XX_TEST_EXPECT_EQ(tree.kind, std::string{"tree"});
+    const auto treeItem = itemOf(tree);
+    XX_TEST_EXPECT_TRUE(treeItem.has_value());
+    if (treeItem) {
+        XX_TEST_EXPECT_EQ(treeItem->nodes.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(treeItem->nodes[0].children.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(treeItem->nodes[0].children[0].label, std::string{"main.cpp"});
+    }
+
+    const auto table = preset::tableBlock({{"File", "left", 0}}, {{"x.cpp"}});
+    XX_TEST_EXPECT_EQ(table.kind, std::string{"table"});
+    const auto meter = preset::meterBlock("ctx", 42, 100, {{80, "error"}});
+    XX_TEST_EXPECT_EQ(meter.kind, std::string{"meter"});
+
+    // 6) 未知组件不使整份描述失效: 块仍产出 (渲染走 fallback)
+    agentxx::ui::Items weird;
+    weird.raw(utilxx_base::Json{{"kind", "future_widget"}, {"fallback", "unsupported"}});
+    const auto weirdBlocks = preset::blocksOf(weird);
+    XX_TEST_EXPECT_EQ(weirdBlocks.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(weirdBlocks[0].kind, std::string{"future_widget"});
+    const auto weirdItem = itemOf(weirdBlocks[0]);
+    XX_TEST_EXPECT_FALSE(weirdItem.has_value()); // 未知 kind → 由调用方降级
+}
+
 TestResult testInterruptUi() {
     g_interrupt_ui_passed = 0;
     g_interrupt_ui_failed = 0;
@@ -629,6 +722,7 @@ TestResult testInterruptUi() {
     test_result_contract_helpers();
     test_plain_text_degrade();
     test_plain_text_extended_blocks();
+    test_component_bridge();
     test_interrupt_handle_arg_serialization();
 
     return TestResult{g_interrupt_ui_passed, g_interrupt_ui_failed};

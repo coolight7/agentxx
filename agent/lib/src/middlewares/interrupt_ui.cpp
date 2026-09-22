@@ -588,6 +588,141 @@ double interruptValueDouble(const Json& values, std::string_view id, double defa
 }
 
 // ---------------------------------------------------------------------------
+// 组件桥接 (中断块 ↔ 组件项)
+// ---------------------------------------------------------------------------
+
+std::optional<agentxx::ui::Item> itemOf(const InterruptUiBlock& block) {
+    agentxx::ui::Item item;
+    item.indent = std::max(0, block.indent);
+    item.color  = block.color;
+    item.bold   = block.bold;
+    item.dim    = block.dim;
+    item.wrap   = block.wrap;
+
+    if (block.kind == "text") {
+        item.kind = "text";
+        item.text = block.text;
+        return item;
+    }
+    if (block.kind == "markdown") {
+        item.kind = "markdown";
+        item.text = block.text;
+        return item;
+    }
+    if (block.kind == "diff") {
+        item.kind   = "diff";
+        item.path   = block.path;
+        item.oldStr = block.oldStr;
+        item.newStr = block.newStr;
+        return item;
+    }
+    if (block.kind == "separator") {
+        item.kind = "separator";
+        return item;
+    }
+    if (block.kind == "gap") {
+        item.kind  = "gap";
+        item.lines = std::max(0, block.lines);
+        return item;
+    }
+    if (block.kind == "control") {
+        item.kind         = "control";
+        item.id           = block.id;
+        item.control      = block.control;
+        item.controlLabel = block.label;
+        item.help         = block.help;
+        item.defaultValue = block.defaultValue;
+        item.commitOnPick = block.commitOnPick;
+        item.integer      = block.integer;
+        item.hasNumMin    = block.hasMin;
+        item.numMin       = block.minValue;
+        item.hasNumMax    = block.hasMax;
+        item.numMax       = block.maxValue;
+        item.step         = block.step;
+        item.multiline    = block.multiline;
+        for (const auto& opt : block.options) {
+            agentxx::ui::ControlOption out;
+            out.value = opt.value;
+            out.label = opt.label.empty() ? jsonValueText(opt.value) : opt.label;
+            out.color = opt.color;
+            item.options.push_back(std::move(out));
+        }
+        return item;
+    }
+    if (block.kind == "submit") {
+        item.kind        = "submit";
+        item.label       = block.label;
+        item.cancelLabel = block.cancelLabel;
+        return item;
+    }
+    if (block.kind == "custom") {
+        item.kind      = "custom";
+        item.component = block.component;
+        item.props     = block.props;
+        item.fallback  = block.fallback;
+        if (block.props.is_object() && block.props.contains("items")) {
+            item.items = agentxx::ui::parseItemList(block.props);
+        }
+        return item;
+    }
+    // 扩展组件 (表格/树/横排/分组/趋势图等): 块描述即组件描述, 按原始 JSON 解析
+    if (block.raw.is_object() && block.raw.contains("kind")) {
+        auto parsed = agentxx::ui::parseItem(block.raw);
+        if (parsed.known) {
+            return parsed;
+        }
+    }
+    return std::nullopt;
+}
+
+InterruptUiBlock blockOf(const agentxx::ui::Item& item) {
+    InterruptUiBlock b;
+    b.kind        = item.kind.empty() ? std::string{"text"} : item.kind;
+    b.indent      = std::max(0, item.indent);
+    b.color       = item.color;
+    b.bold        = item.bold;
+    b.dim         = item.dim;
+    b.wrap        = item.wrap;
+    b.text        = item.text;
+    b.lines       = item.lines;
+    b.path        = item.path;
+    b.oldStr      = item.oldStr;
+    b.newStr      = item.newStr;
+    b.id          = item.id;
+    b.control     = item.control;
+    // 控件标签: 组件层把控件标签放在 `controlLabel` (JSON 字段名同为 "label"),
+    // 而 `label` 属于按钮/提交行 —— 按 kind 取对应字段
+    b.label = (item.kind == "control") ? item.controlLabel : item.label;
+    b.help        = item.help;
+    // 候选项: 组件层的候选项只有 value/label/color (无 i18n 键) —— 需要
+    // labelKey 的文案请直接构造 [InterruptUiBlock]
+    for (const auto& o : item.options) {
+        InterruptUiOption out;
+        out.value = o.value;
+        out.label = o.label;
+        out.color = o.color;
+        b.options.push_back(std::move(out));
+    }
+    b.defaultValue = item.defaultValue;
+    b.commitOnPick = item.commitOnPick;
+    b.integer      = item.integer;
+    b.hasMin       = item.hasNumMin;
+    b.minValue     = item.numMin;
+    b.hasMax       = item.hasNumMax;
+    b.maxValue     = item.numMax;
+    b.step         = item.step;
+    b.multiline    = item.multiline;
+    b.cancelLabel  = item.cancelLabel;
+    b.component    = item.component;
+    b.props        = item.props;
+    b.fallback     = item.fallback;
+    // 以组件描述作原始 JSON: 扩展组件 (表格/树/趋势图/横排/分组等) 的字段不在
+    // 本结构里逐个映射, 渲染与纯文本降级按 raw 走组件层
+    b.raw = agentxx::ui::dumpItem(item);
+    return b;
+}
+
+// ---------------------------------------------------------------------------
 // 纯文本降级
 // ---------------------------------------------------------------------------
 

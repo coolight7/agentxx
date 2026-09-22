@@ -1874,89 +1874,9 @@ utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiForm
 
 std::optional<agentxx::ui::Item>
     itemFromInterruptBlock(const middleware::InterruptUiBlock& block) {
-    agentxx::ui::Item item;
-    item.indent = std::max(0, block.indent);
-    item.color  = block.color;
-    item.bold   = block.bold;
-    item.dim    = block.dim;
-    item.wrap   = block.wrap;
-
-    if (block.kind == "text") {
-        item.kind = "text";
-        item.text = block.text;
-        return item;
-    }
-    if (block.kind == "markdown") {
-        item.kind = "markdown";
-        item.text = block.text;
-        return item;
-    }
-    if (block.kind == "diff") {
-        item.kind = "diff";
-        item.path = block.path;
-        item.oldStr = block.oldStr;
-        item.newStr = block.newStr;
-        return item;
-    }
-    if (block.kind == "separator") {
-        item.kind = "separator";
-        return item;
-    }
-    if (block.kind == "gap") {
-        item.kind  = "gap";
-        item.lines = std::max(0, block.lines);
-        return item;
-    }
-    if (block.kind == "control") {
-        item.kind         = "control";
-        item.id           = block.id;
-        item.control      = block.control;
-        item.controlLabel = block.label;
-        item.help         = block.help;
-        item.defaultValue = block.defaultValue;
-        item.commitOnPick = block.commitOnPick;
-        item.integer      = block.integer;
-        item.hasNumMin    = block.hasMin;
-        item.numMin       = block.minValue;
-        item.hasNumMax    = block.hasMax;
-        item.numMax       = block.maxValue;
-        item.step         = block.step;
-        item.multiline    = block.multiline;
-        for (const auto& opt : block.options) {
-            agentxx::ui::ControlOption out;
-            out.value = opt.value;
-            out.label = opt.label.empty() ? jsonText(opt.value) : opt.label;
-            out.color = opt.color;
-            item.options.push_back(std::move(out));
-        }
-        return item;
-    }
-    if (block.kind == "submit") {
-        item.kind        = "submit";
-        item.label       = block.label;
-        item.cancelLabel = block.cancelLabel;
-        return item;
-    }
-    if (block.kind == "custom") {
-        item.kind      = "custom";
-        item.component = block.component;
-        item.props     = block.props;
-        item.fallback  = block.fallback;
-        if (block.props.is_object()) {
-            if (block.props.contains("items")) {
-                item.items = agentxx::ui::parseItemList(block.props);
-            }
-        }
-        return item;
-    }
-    // 扩展组件 (表格/树/横排/分组/趋势图等): 按原始 JSON 解析
-    if (block.raw.is_object() && block.raw.contains("kind")) {
-        auto parsed = agentxx::ui::parseItem(block.raw);
-        if (parsed.known) {
-            return parsed;
-        }
-    }
-    return std::nullopt;
+    // 唯一实现在 lib (`agentxx::middleware::itemOf`): 中断描述 → 组件项的映射
+    // 由 TUI 渲染、纯文本降级与"构建器拼中断"共用, 避免各接入点各写一份
+    return middleware::itemOf(block);
 }
 
 void renderItems(

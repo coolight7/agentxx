@@ -320,8 +320,54 @@ void test_text_block_render_and_estimate() {
     XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), f.renderedRows());
 }
 
-void test_text_block_wrap_counts_lines() {
+/// 扩展组件块: 用组件构建器拼的中断描述 (表格/树/横排/计量条) 在消息里正常渲染
+///
+/// 保护"中断描述与插件 UI 共用同一套组件"这条能力 (plan §6.4): 描述里的
+/// 表格/树/图表块既不是诊断行, 也不会被忽略。
+void test_extended_component_blocks() {
     InterruptFixture f;
+    auto             ch = f.makeChannel();
+
+    agentxx::ui::Items ui;
+    ui.table({
+        .columns = {{"Path", "left", 0}, {"Scope", "right", 6}},
+        .rows    = {{"a.txt", "write"}, {"b.txt", "read"}},
+    });
+    ui.tree(agentxx::ui::TreeSpec{
+        .nodes = {{"src", {}, {}, {}, {{"main.cpp"}, {"io/"}}}},
+    });
+    ui.row({agentxx::ui::Items{}.text("CPU"), agentxx::ui::Items{}.sparkline({1, 5, 9})});
+
+    agentxx::middleware::InterruptUi desc;
+    desc.blocks = agentxx::middleware::preset::blocksOf(ui);
+    desc.blocks.push_back(agentxx::middleware::preset::checkboxControl("remember", "记住"));
+    desc.blocks.push_back(agentxx::middleware::preset::submitBlock());
+
+    XX_TEST_EXPECT_EQ(desc.blocks.size(), size_t{5});
+    const auto mi       = f.addInterrupt(ch, desc);
+    const auto rendered = f.render(80);
+    // 表格内容与列对齐
+    XX_TEST_EXPECT_TRUE(rendered.find("Path") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(rendered.find("a.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(rendered.find("write") != std::string::npos);
+    // 树节点 (连接线 + 子节点)
+    XX_TEST_EXPECT_TRUE(rendered.find("main.cpp") != std::string::npos);
+    // 横排内容同行
+    XX_TEST_EXPECT_TRUE(rendered.find("CPU") != std::string::npos);
+    // 控件与提交行仍可交互 (扩展组件与控件混排)
+    XX_TEST_EXPECT_TRUE(rendered.find("记住") != std::string::npos);
+    // 估算 == 实测 (含扩展组件的行数与真实布局一致)
+    XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 80), f.renderedRows(80));
+
+    // 描述 JSON 往返: 扩展块按 raw 保留 (表格列/行不丢)
+    const auto round = agentxx::middleware::InterruptUi::fromJson(desc.toJson());
+    XX_TEST_EXPECT_EQ(round.blocks.size(), size_t{5});
+    XX_TEST_EXPECT_EQ(round.blocks[0].kind, std::string{"table"});
+    XX_TEST_EXPECT_TRUE(round.blocks[0].raw.contains("columns"));
+    XX_TEST_EXPECT_TRUE(round.blocks[1].raw.contains("nodes"));
+}
+
+void test_text_block_wrap_counts_lines() {    InterruptFixture f;
     auto             ch = f.makeChannel();
 
     // 无空格长路径: wrap=true 时按宽度硬折行 (多行), wrap=false 时单行
@@ -1156,6 +1202,7 @@ TestResult testTuiInterrupt() {
     test_header_default_and_custom();
     // 内容块
     test_text_block_render_and_estimate();
+    test_extended_component_blocks();
     test_text_block_wrap_counts_lines();
     test_markdown_block_render();
     test_diff_block_render();

@@ -66,6 +66,84 @@ std::pair<std::string, std::string> pickOptionLabel(
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// 组件桥接 (用组件构建器拼中断块)
+// ---------------------------------------------------------------------------
+
+std::vector<InterruptUiBlock> blocksOf(const agentxx::ui::Items& ui) {
+    std::vector<InterruptUiBlock> out;
+    const std::vector<utilxx_base::Json>& raw = ui.rawList();
+    out.reserve(raw.size());
+    for (const auto& element : raw) {
+        auto item = agentxx::ui::parseItem(element);
+        if (!item.known) {
+            // 未知组件: 交给组件层判"known", 这里仍生成块 (渲染走 fallback)
+            // —— 不静默丢内容
+        }
+        out.push_back(blockOf(item));
+    }
+    return out;
+}
+
+InterruptUiBlock contentBlock(agentxx::ui::Items ui) {
+    const auto blocks = blocksOf(ui);
+    if (!blocks.empty()) {
+        return blocks.front();
+    }
+    InterruptUiBlock b;
+    b.kind = "gap";
+    b.lines = 0;
+    return b;
+}
+
+InterruptUiBlock tableBlock(
+    const std::vector<std::tuple<std::string, std::string, int>>& columns,
+    const std::vector<std::vector<std::string>>&                  rows
+) {
+    agentxx::ui::TableSpec spec;
+    spec.header = true;
+    for (const auto& [title, align, width] : columns) {
+        agentxx::ui::TableColumnSpec col;
+        col.title = title;
+        col.align = align.empty() ? std::string{"left"} : align;
+        col.width = width;
+        spec.columns.push_back(std::move(col));
+    }
+    for (const auto& row : rows) {
+        std::vector<utilxx_base::Json> cells;
+        cells.reserve(row.size());
+        for (const auto& cell : row) {
+            cells.push_back(utilxx_base::Json(cell));
+        }
+        spec.rows.push_back(std::move(cells));
+    }
+    return contentBlock(agentxx::ui::Items{}.table(std::move(spec)));
+}
+
+InterruptUiBlock treeBlock(const std::vector<agentxx::ui::TreeNodeSpec>& nodes) {
+    agentxx::ui::Items ui;
+    ui.tree(agentxx::ui::TreeSpec{nodes});
+    return contentBlock(std::move(ui));
+}
+
+InterruptUiBlock meterBlock(
+    std::string                                 label,
+    double                                      value,
+    double                                      total,
+    std::vector<std::pair<double, std::string>> thresholds
+) {
+    agentxx::ui::MeterOpts opts;
+    opts.label = std::move(label);
+    for (auto& [at, color] : thresholds) {
+        opts.thresholds.emplace_back(at, std::move(color));
+    }
+    return contentBlock(agentxx::ui::Items{}.meter(value, total, opts));
+}
+
+// ---------------------------------------------------------------------------
+// 块构造 helper
+// ---------------------------------------------------------------------------
+
 InterruptUiOption
     option(std::string value, std::string label, std::string labelKey, std::string color) {
     InterruptUiOption o;
@@ -78,15 +156,16 @@ InterruptUiOption
 
 InterruptUiBlock
     textBlock(std::string text, std::string color, int indent, bool wrap, bool bold, bool dim) {
-    InterruptUiBlock b;
-    b.kind   = "text";
-    b.text   = std::move(text);
-    b.color  = std::move(color);
-    b.indent = indent;
-    b.wrap   = wrap;
-    b.bold   = bold;
-    b.dim    = dim;
-    return b;
+    // 内容块统一经组件构建器产出 (与插件 UI 同一套 schema): color/bold/dim/wrap/
+    // indent 在组件层都有对应字段, 转换不丢信息
+    return contentBlock(
+        agentxx::ui::Items{}
+            .text(text, color.empty() ? "normal" : color)
+            .indent(indent)
+            .wrap(wrap)
+            .bold(bold)
+            .dim(dim)
+    );
 }
 
 InterruptUiBlock textBlockKey(
@@ -98,6 +177,7 @@ InterruptUiBlock textBlockKey(
     bool        bold,
     bool        dim
 ) {
+    // 带 i18n 键的块直接构造: 组件层没有"文案键"概念 (键由客户端在转换前解析)
     InterruptUiBlock b;
     b.kind    = "text";
     b.textKey = std::move(textKey);
@@ -111,34 +191,19 @@ InterruptUiBlock textBlockKey(
 }
 
 InterruptUiBlock markdownBlock(std::string markdown, int indent) {
-    InterruptUiBlock b;
-    b.kind   = "markdown";
-    b.text   = std::move(markdown);
-    b.indent = indent;
-    return b;
+    return contentBlock(agentxx::ui::Items{}.markdown(markdown).indent(indent));
 }
 
 InterruptUiBlock diffBlock(std::string path, std::string oldStr, std::string newStr) {
-    InterruptUiBlock b;
-    b.kind   = "diff";
-    b.path   = std::move(path);
-    b.oldStr = std::move(oldStr);
-    b.newStr = std::move(newStr);
-    return b;
+    return contentBlock(agentxx::ui::Items{}.diff(path, oldStr, newStr));
 }
 
 InterruptUiBlock separatorBlock(int indent) {
-    InterruptUiBlock b;
-    b.kind   = "separator";
-    b.indent = indent;
-    return b;
+    return contentBlock(agentxx::ui::Items{}.separator().indent(indent));
 }
 
 InterruptUiBlock gapBlock(int lines) {
-    InterruptUiBlock b;
-    b.kind  = "gap";
-    b.lines = std::max(0, lines);
-    return b;
+    return contentBlock(agentxx::ui::Items{}.gap(lines));
 }
 
 InterruptUiBlock submitBlock(

@@ -1,6 +1,8 @@
 #pragma once
 
+#include "agentxx/ui/item.h"
 #include "utilxx_base/json.h"
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -234,8 +236,27 @@ double interruptValueDouble(
     double                   defaultValue = 0.0
 );
 
-/// 描述降级为纯文本 (行式前端/日志/FFI 文本宿主用)
+/// 中断块 → 组件项 (`agentxx.ui.item` schema; 两个描述层之间的**唯一映射**)
 ///
+/// 用途: TUI 渲染、纯文本降级与"用组件构建器拼中断描述"都走这一条路径 ——
+/// 内容块与扩展组件 (表格/树/横排/分组/趋势图/计量条等) 只有一份转换实现。
+///
+/// - `text` / `markdown` / `diff` / `separator` / `gap` / `control` / `submit` /
+///   `custom` 由本结构的具名字段映射 (i18n 键由调用方在此之前解析 —— 组件层
+///   不含"文案键"概念, 见 [InterruptUiBlock])
+/// - 其余 kind 按块 `raw` (即组件描述本身) 解析
+/// - 无法映射 (未知 kind / 解析失败) 返回 `std::nullopt`, 调用方按 `fallback`
+///   文本降级 (无 `fallback` 则跳过, 向前兼容)
+std::optional<agentxx::ui::Item> itemOf(const InterruptUiBlock& block);
+
+/// 组件项 → 中断块 (反向映射)
+///
+/// 用途: 用 `agentxx::ui::Items` 构建器拼装中断描述 (`blocksOf` 的单项版本)。
+/// 转换后的块以**组件原始 JSON** 作 `raw`, 因此表格/树/趋势图等扩展组件往返不丢
+/// 内容; 需要控件/文案键等中断层字段时请直接构造 [InterruptUiBlock]。
+InterruptUiBlock blockOf(const agentxx::ui::Item& item);
+
+/// 描述降级为纯文本 (行式前端/日志/FFI 文本宿主用)///
 /// - text/markdown: 原文 (markdown 不解析, 保留源码)
 /// - diff: 统一 diff 文本 (路径行 + 上下文/增删行)
 /// - separator: "---"; gap: 空行

@@ -25,6 +25,7 @@
 #include "agentxx/ui/item.h"
 #include "agentxx/ui/text_width.h"
 #include "utilxx_base/json.h"
+#include <algorithm>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -575,14 +576,27 @@ public:
     /// 给最近一项设置条件显示表达式 (预留字段: 当前仅写入描述, 渲染不消费)
     /// - 例: `ui.text("详情").when("expanded")`
     Items& when(std::string_view expr) {
-        syncParsed();
-        if (!rawList_.empty()) {
-            Json& last = rawList_.back();
-            if (last.is_object()) {
-                last["when"] = std::string{expr};
-            }
-        }
-        return *this;
+        return setLast("when", Json(std::string{expr}));
+    }
+
+    /// 给最近一项设置缩进列数 (与渲染上下文的基础缩进叠加)
+    Items& indent(int cols) {
+        return setLast("indent", Json(std::max(0, cols)));
+    }
+
+    /// 给最近一项设置加粗
+    Items& bold(bool on = true) {
+        return setLast("bold", Json(on));
+    }
+
+    /// 给最近一项设置减淡 (走主题的 dim 分流)
+    Items& dim(bool on = true) {
+        return setLast("dim", Json(on));
+    }
+
+    /// 给最近一项设置按可用宽度折行 (文本类缺省已为 true, 此处用于显式声明)
+    Items& wrap(bool on = true) {
+        return setLast("wrap", Json(on));
     }
 
     /// 完全自绘组件 (本版只保留数据, 渲染降级为 `fallback`)
@@ -653,6 +667,18 @@ public:
     }
 
 private:
+
+    /// 给最近一项写入一个字段 (对空树/非对象项无操作)
+    Items& setLast(std::string_view key, Json value) {
+        syncParsed();
+        if (!rawList_.empty()) {
+            Json& last = rawList_.back();
+            if (last.is_object()) {
+                last[std::string{key}] = std::move(value);
+            }
+        }
+        return *this;
+    }
 
     /// 追加一项并返回其引用 (便于逐字段填写)
     Json& push(std::string_view kind) {
