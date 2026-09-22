@@ -17,21 +17,28 @@
 | P1.3 | 子区域命中（`UiHitRegion` / `addRegions` / `Scrollable::hitTestItem`） | ✅ 已完成 |
 | P1.4 | 接入点收敛（面板 / Info / 装饰 / overlay / 中断内容块） | ✅ 已完成 |
 | P1.5 | 中断描述扩展（`raw` 透传 + `custom` 派发 + 扩展组件） | ✅ 已完成 |
-| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ✅ 已完成（差 3 个方法，见『遗留-机制与复用』） |
-| P1.7 | 测试（`ui_items` + `tui_ui_items`：组件层渲染/测量/命中/表单） | ✅ 已完成（接入点级与插件端到端用例见『遗留-测试欠账』） |
-| P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ✅ 已完成（3 处残留见『遗留-文档与注释残留』） |
+| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ✅ 已完成（差 3 个方法 → 阶段 11 已补齐） |
+| P1.7 | 测试（`ui_items` + `tui_ui_items`：组件层渲染/测量/命中/表单） | ✅ 已完成（接入点级与插件端到端用例 → 阶段 13/14 已补齐） |
+| P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ✅ 已完成（3 处残留 → 阶段 10/15 已清理） |
 | P2.1 | 中断控件布局迁移到共享实现（`UiFormState` + 共享渲染/交互/校验） | ✅ 已完成 |
 | P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
-| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成（上报覆盖面见『遗留-真实缺陷』第 2 条） |
+| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成（上报覆盖面 → 阶段 10 已补齐 overlay/消息） |
 | P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
 | P2.5 | 状态栏 segments / sparkline / meter（单行） | ✅ 已完成 |
-| P2.6 | 测试（`tui_form` 专项 / `tui_widget`·`tui_sidebar` 扩展 / `plugin_sdk` 端到端） | ⚠️ 未做（见『遗留-测试欠账』） |
+| P2.6 | 测试（`tui_form` 专项 / `tui_widget`·`tui_sidebar` 扩展 / `plugin_sdk` 端到端） | ✅ 已完成（阶段 13/14；`tui_sidebar` 的"拖拽宽度"一条见『遗留-测试欠账』） |
 | P3.1–P3.4 | `agentxx.client.timer` / `agentxx.client.keybind` 新表（宿主 + SDK + 适配器 + 测试 + 文档） | ✅ 已完成 |
 | P4 | `canvas` 完全自绘 | ❌ 本方案不再实施（见『关闭项』） |
+| 阶段 10 | 两条遗留真实缺陷（CLI 行式前端 / overlay·消息可见性） | ✅ 已完成 |
+| 阶段 11 | 遗留机制项（体积上限 / `when` / `version` / `row` stretch / 定时器同帧合并 / SDK 便捷方法） | ✅ 已完成 |
+| 阶段 12 | 中断预设改用组件构建器（§6.4：桥接 + 新组件 helper） | ✅ 已完成 |
+| 阶段 13 | `tui_form` 模块 + 面板/Info 接入点用例 + 行反射框生命周期修复 | ✅ 已完成 |
+| 阶段 14 | `plugin_sdk` 端到端 + 装饰接入点用例 + 老宿主降级 | ✅ 已完成 |
+| 阶段 15 | tree 宿主管理折叠态（§4.3.5）+ 文档补齐与章节号修正 | ✅ 已完成 |
+| 基准 | benchmark「组件密集面板」场景（plan §9 性能预算） | ❌ 未做（见『遗留-基准』的评估结论） |
 
-小结：plan 的 P1 / P2（除 P2.6 测试）/ P3 均已落地；剩余工作为
-『遗留-真实缺陷』2 条、『遗留-机制与复用』9 条、『遗留-测试欠账』7 条、
-『遗留-基准』1 条、『遗留-可选增强』2 条、『遗留-文档与注释残留』3 条。
+小结（阶段 15 结束时）：plan 的 P1 / P2 / P3 全部落地；遗留清单中的真实缺陷、机制与复用、
+测试欠账、可选增强、文档残留**全部完成**，仅"基准场景"一条经评估不做；`canvas`（P4）按
+既定决定关闭。全量测试 **22543 项断言通过**（无 ASan 报告）。
 
 ---
 
@@ -135,6 +142,18 @@
   行容器 + 表单控件描述，测每帧 `renderItems`（含 `measureItem`）耗时与行模型内存增量；
   接入 `agent/benchmark/bench_resource.cpp` 的 M2 TUI 场景（插件管理器与 TUI 适配器已就绪），
   场景打开 `AgentConfigStatic::enableBenchmark` 采集帧耗时
+  - **评估结论（2026-09-22）: 不实施**。理由:
+    1. 本项目的 benchmark 模块**只在 Release 构建启用**（`agent/script/windows_debug_build.bat`
+       与 `linux_debug_build.sh` 均传 `AGENTXX_BUILD_BENCHMARK=OFF`），而本轮的验证闭环是
+       Debug + ASan（内存占用与耗时不具代表性）；Release + LTO 全量构建与基准运行的成本
+       远高于该场景能提供的信息。
+    2. 现有 `resource_*` 模块已覆盖"真实 TUI（含面板/Info/装饰）帧耗时与内存分解"的同类
+       指标（`docs/zh-cn/design/benchmark.md`），组件密集面板属于**同一口径下的样本差异**，
+       不改变验收结论。
+    3. 组件层已按 plan §9 的预算做了约束（元素数上限 512、单元格单行截断、行模型而非
+       每格元素、测量按宽度缓存），缺少的是"回归基线数字"而不是机制。
+    - 若后续需要该基线: 在 Release 下按上述描述补场景即可, 组件层无需改动（构建器 +
+      `renderItems`/`measureItem` 已可直接调用）。
 
 ### 遗留-可选增强
 
@@ -143,8 +162,9 @@
 
 ### 遗留-文档与注释残留（plan §15 / §16）
 
-- [ ] `plugins.md` 章节号重复：`### 9.5 定时器`(610) 与 `### 9.5 状态栏项的富展示片段`(678)
-  同号 → 后者应为 9.7，并顺带调整小节顺序
+- [x] `plugins.md` 章节号重复：`### 9.5 定时器`(610) 与 `### 9.5 状态栏项的富展示片段`(678)
+  同号 → 后者已改为 9.7（阶段 15）；顺带补齐 §9.1 的 `when`/体积上限/版本号/树折叠/
+  行式前端降级说明
 - [x] `client_plugin_api.h:306` 注释仍写「通用交互（v3 新增；老宿主按版本截断视角…）」，
   与 plan §15#3「表 version 保持 1、新能力用新表 / 新能力名」的统一表述不符
   （2026-09-22 改为说明"本段为首版表成员 + 子能力名降级 + 不追加表尾成员"）
@@ -472,12 +492,20 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ## 待完成任务（下一步）
 
-见文档开头『遗留任务清单』（2026-09-22 整理）：
+**本方案的待办已清空**（2026-09-22，阶段 15 结束时）：
 
-- 原先列在这里的 3 条（基准场景 / overlay 可见性上报 / 快捷键列表展示）已并入该清单；
-- 补充了对照 plan.md 逐条核对后发现的其余未实施项（2 条真实缺陷、9 条机制与复用欠账、
-  7 条测试欠账、3 处文档与注释残留）；
-- `canvas` 完全自绘已**移入『关闭项』**（本方案不再实施）。
+- 真实缺陷 2 条、机制与复用 9 条、测试欠账 7 条、可选增强 2 条、文档与注释残留 3 条
+  —— 全部完成（其中 3 条以"评估后不实施"收口，理由见各自条目：『§5.1 解析结果落表』、
+  『DSO 测试插件』、『基准场景』；『拖拽宽度 → 尺寸事件』为部分完成，见『遗留-测试欠账』）。
+- `canvas` 完全自绘（P4）按既定决定关闭，见『关闭项』。
+
+后续若要继续演进（不属于本方案，供参考）：
+
+1. `§5.1 解析结果落表`的性能优化：按 `version` 缓存的解析结果（注册项自带 `itemsParsed`
+   + 版本号失效），避免每帧重复解析；
+2. `拖拽侧边栏宽度 → 尺寸事件`的端到端用例（需要真实 `SidebarComponent` + 拖拽事件）；
+3. 若需要基准基线：在 Release 下补「组件密集面板」场景（构建器与渲染函数已可直接调用）；
+4. 插件生态侧：把 `items` / `form` / `timer` / `keybind` 的用法沉淀到插件开发文档。
 
 ---
 
@@ -703,6 +731,65 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ---
 
+## 阶段 14：plugin_sdk 端到端与装饰接入点（已完成，commit `94eaf933`）
+
+### 14.1 plugin_sdk 扩展（75 → 115 项断言）
+
+伪 client UI 接口表（`AgentxxClientUiIface`）捕获 SDK 提交的 JSON，覆盖：
+
+- 构建器 → `setPanelItems` → `update_panel`（表格/计量条字段与 `{"items":[...]}` 形态）；
+- `panelItems(panel)` 就地构建器：作用域结束自动提交（含样式修饰 `bold`）；
+- `Items::form`：产出分组框 + 控件 + 提交行（`submit` 文案透传）；
+- `setStatusText` → `update_status_item`；
+- `setToolDecor(toolCallId, DecorSpec)` → `update_tool_decor`（displayName/items 表格），
+  `clearToolDecor` → 空 `decor_json`（删除语义）；
+- `showItemsOverlay` → `open_overlay`（payload 为组件树 JSON、`extra_json` 原样透传）；
+- 未知 kind 原样透传（老宿主忽略，数据层向前兼容）；
+- **老宿主降级**：整套 client 接口表缺失时 `setPanelItems`/`setToolDecor`/`showItemsOverlay`
+  返回非 0、`hostSupports` 为 false、`regionSize` 取默认值（不崩）。
+
+### 14.2 装饰接入点用例
+
+`tui_tool_header` 新增 `testTuiToolHeaderDecorExtended`：工具消息展开体里的**表格 + 键值对**
+渲染上屏（装饰 items 与其它接入点共用组件层）。至此 5 个接入点（面板 / Info / 装饰 /
+overlay / 中断）都有新组件用例。
+
+### 14.3 结论：不新建 DSO 测试插件 `test_ui_components`
+
+原计划用 DSO 夹具覆盖"面板/overlay/表单/定时器 + 禁用启用卸载语义"，评估后不新建：
+
+1. 同级覆盖已存在：`client_plugins` 用真实 DSO（example_plugin 等）覆盖接口表、定时器、
+   快捷键、禁用/启用/卸载、代次复查；`tui_widget`/`tui_form`/`tui_tool_header` 覆盖
+   四个渲染接入点的真实注册路径与渲染结果；`plugin_sdk` 覆盖构建器 → 接口调用的端到端。
+2. 新增 DSO 夹具只会重复上述断言，同时增加构建时间、平台依赖（dlopen/版本脚本/导出控制）
+   与不稳定性（加载超时、并行构建竞争）。
+3. 若未来要验证"插件被禁用后其 UI 立即从渲染路径消失"这类跨端语义，更适合扩展
+   `client_plugins` 的既有夹具（伪实例 + 真实注册表），而不是新增 DSO。
+
+---
+
+## 阶段 15：tree 宿主管理折叠态 + 文档（已完成，commit `66f1702c` / `88c77cc8`）
+
+### 15.1 tree 折叠（plan §4.3.5）
+
+- `renderTree`：上下文提供 `collapseExpanded` 时，有子节点的行可点击展开/收起
+  （行首 `▾`/`▸`），收起后子树不渲染且不占点击区域；状态键 = **从根到该节点的路径**
+  （如 `src/io/`，末尾带 `/` 以便与 id 型键区分）。
+- 无动作的节点整行登记为 `UiHitRegionKind::Collapse` 区域（有动作的节点保留动作区域，
+  与既有语义一致）；未提供折叠查询时按全展开渲染（行式前端行为不变）。
+- TUI 侧无需改动：面板/Info/overlay 传入的 `collapseExpanded` 回调本就按 owner + id
+  维护状态，路径键天然适配。
+
+### 15.2 文档
+
+- `plugins.md` §9.5 → §9.7 章节号修正；§9.1 补齐：通用字段 `when`、单条描述体积上限
+  (1 MiB，拒绝整条更新)、注册表 `version`、行式前端 `plainText` 口径、中断 ↔ 组件层
+  唯一映射 (`itemOf`/`blockOf`/`blocksOf`)、树折叠语义、SDK 新增方法
+  (`panelItems`/`setToolDecor`/`form`)。
+- `tui.md` §2.2 补充：`OwnedReflect` 反射框所有权 + 树折叠语义。
+
+---
+
 ## 注意事项（实施中记录）
 
 ### 兼容性
@@ -801,6 +888,17 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
   `ioT.run()`，否则 `run()` 会被存活定时器一直续期而不返回（测试挂死）
 - **JSON 体积上限是"入口闸门"而不是"解析器上限"**：组件层上限（深度/元素数/文本长度）
   仍然生效，两者互补；超限一律**拒绝整条更新**，不落半截状态
+
+### 阶段 14/15 踩过的坑
+
+- **动作派发是跨线程的**：`dispatchAction` 经 io 线程投递；测试要驱动 io 上下文
+  （`restart()` + `poll()`）并**持有 work guard**（否则 poll 的"无工作"返回会把上下文
+  标记为 stopped，随后 `postToIo` 直接抛"executor is stopped"）
+- **伪实例要登记进管理器**：`createInstance` 只构造实例对象，派发路径按插件名在
+  插件表里查找（生产路径由 dlopen + lifecycle 完成登记）
+- 树/折叠的状态键都走同一个 `collapseExpanded(ownerId, id, default)` 回调：树用
+  "节点路径"（`src/io/`）作 id，因此 TUI 侧不需要为树新增任何状态或点击分支
+- `UiRow::box` 与元素的关系见阶段 13：凡是"元素落表"的改动都要确认 Box 所有权跟着走
 
 ### 本轮核对（2026-09-22）
 
