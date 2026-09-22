@@ -24,6 +24,7 @@
 #include <iostream>
 #include <stdlib.h>
 #include <string>
+#include <vector>
 
 #if defined(AGENTXX_ENABLE_MIMALLOC_D)
 // 最终程序接入的内存分配器 (构建时经 cmake/agentxx_mimalloc.cmake 链接, 见
@@ -34,6 +35,8 @@
 #if XX_IS_WIN_D
 #include <crtdbg.h>
 #include <windows.h> // GetModuleFileNameW / MAX_PATH
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+#include <mach-o/dyld.h> // _NSGetExecutablePath
 #endif
 
 using namespace agentxx::client;
@@ -52,8 +55,17 @@ using namespace agentxx::client;
 //   (恢复终端会退出备用屏, 屏上报告随之消失, 故必须落盘才能看完整报告)。
 //   崩溃后用 `less agentxx_asan.*` 查看。
 // 注: 环境变量 ASAN_OPTIONS 会整体覆盖此默认值。
+//
+// macOS/iOS 附加: 本项目每个插件动态库静态链接一份 cxx_utilxx(_base), 使
+// simdjson 等全局符号在 libagentxx 与插件 dylib 间重复; Apple 平台 ASan 的
+// 跨镜像全局处理会误报 (odr-violation 中止 / 全局红区误判越界) 导致插件加载
+// 崩溃。故在 Apple 平台关闭 ODR 检查与全局变量登记 (堆/栈/越界检查不受影响)。
 extern "C" const char* __asan_default_options() {
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+    return "abort_on_error=1:log_path=agentxx_asan:detect_odr_violation=0:report_globals=0";
+#else
     return "abort_on_error=1:log_path=agentxx_asan";
+#endif
 }
 
 /// 获取当前可执行程序 (agentxx_cli) 所在目录
@@ -78,6 +90,22 @@ static std::string getExecutableDir() noexcept {
         buf.resize(buf.size() * 2);
     }
     return std::filesystem::path(buf).parent_path().generic_string();
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    // macOS/iOS: _NSGetExecutablePath 返回的路径可能含符号链接/相对段,
+    // 经 weakly_canonical 归一化为绝对路径后取目录
+    uint32_t size = 0;
+    (void)::_NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buf(size + 1, '\0');
+    if (::_NSGetExecutablePath(buf.data(), &size) != 0) {
+        XX_LOGW("_NSGetExecutablePath failed");
+        return "";
+    }
+    std::error_code ec;
+    auto            exe = std::filesystem::weakly_canonical(std::filesystem::path(buf.data()), ec);
+    if (ec) {
+        return std::filesystem::path(buf.data()).parent_path().generic_string();
+    }
+    return exe.parent_path().generic_string();
 #else
     std::error_code ec;
     auto            exe = std::filesystem::read_symlink("/proc/self/exe", ec);

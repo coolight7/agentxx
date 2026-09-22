@@ -77,6 +77,10 @@
 #include <windows.h>
 #endif
 
+#if !XX_IS_WIN_D
+#include <unistd.h> // setpgid (macOS/iOS 无 setsid, 见 NewProcessGroup)
+#endif
+
 namespace agentxx_execmd_plugin {
 
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
@@ -201,6 +205,23 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 }
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+/// macOS/iOS 无 setsid(1) (Linux util-linux 专有): 在子进程 exec 前调用
+/// `setpgid(0, 0)`, 使其成为新进程组 leader (pgid == pid)。这样超时/取消时
+/// `kill(-pid)` 仍能整组清理 (含 bash 派生的子孙进程), 语义与 Linux 经 setsid
+/// 启动一致。作为 boost.process v2 的 initializer 传入 (on_exec_setup 子进程内执行)。
+struct NewProcessGroup {
+    template<typename Launcher>
+    std::error_code
+        on_exec_setup(Launcher&, const std::filesystem::path&, const char* const*&) const {
+        if (::setpgid(0, 0) != 0) {
+            return {errno, std::system_category()};
+        }
+        return {};
+    }
+};
+#endif
 
 /// 子进程初始工作目录: workDir (会话工作目录) 优先; 为空时回退进程 cwd。
 /// 始终返回非空串 (兜底 "." 等价于继承当前目录), 使 process_start_dir 可无条件传入
@@ -665,6 +686,11 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 #if XX_IS_WIN_D
     auto procExe  = boost::process::environment::find_executable("bash");
     auto procArgs = std::vector<std::string>{"-c", command};
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    // macOS/iOS 无 setsid(1): 直接以 bash 启动, 经 NewProcessGroup initializer
+    // 在子进程内 setpgid(0,0) 建立独立进程组 (超时/取消 kill(-pid) 整组清理)
+    auto procExe  = boost::process::environment::find_executable("bash");
+    auto procArgs = std::vector<std::string>{"-c", command};
 #else
     // setsid 使子进程成为新会话/进程组 leader (pgid == pid),
     // 超时时可经 killpg 整组清理 bash 派生的子孙进程, 避免孤儿进程持有管道
@@ -681,6 +707,9 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
         // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+        detail::NewProcessGroup{},
+#endif
     };
 
     // 会话取消监听: 与主工作并行运行 (见 detail::runProcPipeline 说明)

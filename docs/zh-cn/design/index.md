@@ -71,7 +71,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
 | | `agentxx_string_regexp` | 正则搜索/替换/移除 |
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
-| | `agentxx_get_system_core_info` | 获取 CPU (使用率/逻辑核数)/内存/GPU 使用率 |
+| | `agentxx_get_system_core_info` | 获取 CPU (使用率/逻辑核数)/内存/GPU 使用率 (Windows/Linux/Android/macOS) |
 | **UI 控制** | `agentxx_ui_control_keyboard_mouse` | Windows 键鼠控制 (仅 Windows, 由 `agentxx_computer_use` 插件提供, depends: screen_capture) |
 | **屏幕捕获** | `agentxx_screen_capture` | 屏幕截图/流式捕获 (仅 Windows) |
 | **音频流** | `agentxx_audio_stream` | 系统/程序/麦克风音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现; 平台矩阵见 plugins.md) |
@@ -525,7 +525,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 | **ScreenCapture** | 屏幕截图与流式捕获 (多屏支持; 插件 `agentxx_screen_capture`, 仅 Windows) |
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 全平台跳过构建: 实现未启用) |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (插件 `agentxx_text_selection_monitor`, 仅 Windows UI Automation) |
-| **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`; 工具 + 周期采集 + client 侧渲染) |
+| **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`, Windows 经 PDH/DXGI、Linux/Android 解析 `/proc`+sysfs、macOS 经 mach `host_statistics` + IOKit `IOAccelerator`; 工具 + 周期采集 + client 侧渲染) |
 | **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugin.list` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
 
 ### 依赖注入
@@ -1499,6 +1499,13 @@ Client                              Server
   - Windows/MSVC 用动态 CRT (`/MD`) 时 mimalloc 的**静态覆盖不生效** (上游以 `_DLL`
     判定, 避免与 CRT 分配器混用), 需要真正接管请用
     `-DAGENTXX_MIMALLOC_LINK=SHARED` (随产物部署 `mimalloc.dll` + `mimalloc-redirect.dll`)
+  - macOS/iOS 上**不可用, 顶层自动关闭** (`XX_IS_MACOS_D`/`XX_IS_IOS_D` 时强制
+    `AGENTXX_ENABLE_MIMALLOC=OFF`): Mach-O 采用两层次命名空间, `libc++` 与系统
+    框架对 `malloc/free` 的引用在链接期已绑定 `libSystem`, 主可执行文件的静态覆盖
+    只作用于自身 (且 `_malloc` 不在导出符号表中), 跨模块释放会在 `mi_free` 崩溃
+    (实测 Release `agentxx_cli` 启动即崩)。ELF 不同: GNU ld 会把被共享库引用的
+    `malloc` 放进 `.dynsym`, 由运行期符号插入使全进程统一走 mimalloc。强制接管
+    只能用 `DYLD_INSERT_LIBRARIES` 预加载 mimalloc 动态库 (非自包含分发)
   - 实测 (Release, 同机同场景, 对比调优后的 glibc): 常驻内存略升 (200K 上下文
     服务端 +5.5~6.6 MB, 启动 +0.4 MB), CPU 明显下降 (真实 server 驱动 705 轮:
     user 2280→1670 ms, sys 1120→370 ms, wall 3611→2700 ms); 详见
@@ -1984,7 +1991,7 @@ EventBus (事件总线)
   - `tool/fast_tool/blocking_tool/hook/capability/spawn` 便捷注册族
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
 - 导出控制: -fvisibility=hidden + version script 白名单 (PLUGINXX_EXPORT), 单端插件兼容 Android lld
-- 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows 等)
+- 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows, system_monitor 覆盖 Windows/Linux/Android/macOS 等)
 - 工具复用: 内置插件经 `cxx_utilxx_base` / `cxx_utilxx` 静态库复用全部基础工具
   (各自静态链接, 符号隐藏互不冲突; 见 `docs/zh-cn/design/plugins.md` §5)
 

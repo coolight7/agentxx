@@ -39,6 +39,19 @@
 #include <utility>
 #include <vector>
 
+#if XX_IS_WIN_D
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <process.h>
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 class JsEngine;
 
 namespace {
@@ -47,12 +60,125 @@ namespace {
 // C ABI 边界异常守卫 (由守卫函数调用处显式传入; entry 装配缓存)
 // =====================================================================
 
+/// JS 专用线程栈大小: 显式 8MB (与 Linux 默认一致)
+///
+/// - macOS/iOS 的 pthread 默认线程栈仅 **512KB**, Windows 1MB; 而 quickjs
+///   解析/执行使用纯 C 递归 (`js_parse_expr_binary` 等), 其自身栈检查
+///   (见 [kStackLimit]) 只在部分入口生效 —— 真实线程栈不足时会在检查触发前
+///   先耗尽导致栈溢出崩溃 (实测 Apple Silicon + ASan 下解析稍复杂脚本即触发)。
+/// - 统一显式指定 8MB, 使 quickjs 的栈检查成为唯一的深度上限, 跨平台一致。
+constexpr size_t kWorkerStackBytes = 8 * 1024 * 1024;
+
+/// 专用 JS 线程的所有权包装 (自定义栈大小; 仅负责句柄, 不改变 join/detach 语义)
+class JsWorkerThread {
+public:
+    JsWorkerThread() = default;
+    JsWorkerThread(const JsWorkerThread&)            = delete;
+    JsWorkerThread& operator=(const JsWorkerThread&) = delete;
+    ~JsWorkerThread() {
+        if (joinable()) {
+            detach();
+        }
+    }
+
+    /// 启动线程 (entry(arg), 兼容 pthread 的 void* 返回); 失败返回 false
+    bool start(void* (*entry)(void*), void* arg) {
+#if XX_IS_WIN_D
+        entry_ = entry;
+        arg_   = arg;
+        const uintptr_t h = _beginthreadex(
+            nullptr,
+            static_cast<unsigned>(kWorkerStackBytes),
+            [](void* self) -> unsigned {
+                auto* t = static_cast<JsWorkerThread*>(self);
+                t->entry_(t->arg_);
+                return 0;
+            },
+            this,
+            0,
+            nullptr
+        );
+        if (h == 0) {
+            return false;
+        }
+        handle_ = reinterpret_cast<HANDLE>(h);
+        return true;
+#else
+        pthread_attr_t attr;
+        if (pthread_attr_init(&attr) != 0) {
+            return false;
+        }
+        if (pthread_attr_setstacksize(&attr, kWorkerStackBytes) != 0) {
+            pthread_attr_destroy(&attr);
+            return false;
+        }
+        const int rc = pthread_create(&handle_, &attr, entry, arg);
+        pthread_attr_destroy(&attr);
+        if (rc != 0) {
+            return false;
+        }
+        joinable_ = true;
+        return true;
+#endif
+    }
+
+    bool joinable() const {
+#if XX_IS_WIN_D
+        return handle_ != nullptr;
+#else
+        return joinable_;
+#endif
+    }
+
+    void join() {
+#if XX_IS_WIN_D
+        if (handle_) {
+            ::WaitForSingleObject(handle_, INFINITE);
+            ::CloseHandle(handle_);
+            handle_ = nullptr;
+        }
+#else
+        if (joinable_) {
+            pthread_join(handle_, nullptr);
+            joinable_ = false;
+        }
+#endif
+    }
+
+    void detach() {
+#if XX_IS_WIN_D
+        if (handle_) {
+            ::CloseHandle(handle_);
+            handle_ = nullptr;
+        }
+#else
+        if (joinable_) {
+            pthread_detach(handle_);
+            joinable_ = false;
+        }
+#endif
+    }
+
+private:
+#if XX_IS_WIN_D
+    HANDLE             handle_ = nullptr;
+    void* (*entry_)(void*)     = nullptr;
+    void*              arg_    = nullptr;
+#else
+    pthread_t handle_{};
+    bool      joinable_ = false;
+#endif
+};
+
 } // namespace
 
 namespace {
 
 constexpr size_t  kMemoryLimit        = 64 * 1024 * 1024; ///< JS 内存上限 64MB
-constexpr size_t  kStackLimit         = 512 * 1024;       ///< JS 栈上限 512KB
+/// JS 栈上限 (quickjs 自身检查; 必须小于 [kWorkerStackBytes])
+/// - 取 4MB 而非更小值: quickjs 解析/执行使用 C 递归, 插桩构建 (ASan) 下栈帧
+///   显著放大, 512KB 会在合法脚本上误报 "Maximum call stack size exceeded"。
+constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
 constexpr size_t  kTaskTimeoutMs      = 60000;            ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
@@ -219,8 +345,17 @@ public:
             busy_ = false;  ///< 上一次线程退出时已复位, 这里防御性归零
             stop_.store(false, std::memory_order_release);
         }
-        state_  = State::Running;
-        thread_ = std::thread(&JsEngine::jsThreadMain, this);
+        if (!thread_.start(
+                [](void* self) -> void* {
+                    static_cast<JsEngine*>(self)->jsThreadMain();
+                    return nullptr;
+                },
+                this
+            )) {
+            state_ = State::Stopped;
+            return false;
+        }
+        state_ = State::Running;
         return true;
     }
 
@@ -1324,7 +1459,7 @@ private:
 
     JSRuntime*                        rt_         = nullptr;
     const PluginxxHost*               engineHost_ = nullptr;
-    std::thread                       thread_;
+    JsWorkerThread                    thread_;
     std::mutex                        mtx_;
     std::condition_variable           cv_;
     std::deque<std::function<void()>> queue_;

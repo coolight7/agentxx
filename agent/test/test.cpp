@@ -114,6 +114,23 @@ public:
 
 asio::io_context ioCtx;
 
+// ASan 默认选项 (仅链接了 AddressSanitizer 时生效)。
+//
+// macOS/iOS 的 ASan 运行库默认开启 ODR 检查与全局变量红区。本项目架构下每个
+// 插件动态库都会**静态**链接一份 cxx_utilxx(_base) (见 AGENTS.md 插件设计),
+// 于是 simdjson 等库的全局符号会在 libagentxx 与各插件 dylib 中重复出现;
+// Apple 平台 ASan 对跨镜像重复全局的处理会误报 (odr-violation 中止 /
+// 全局红区误判为全局越界), 导致插件相关测试无法运行。
+// 这里在 Apple 平台关闭 ODR 检查与全局变量登记 (堆/栈/越界检查不受影响),
+// 其它平台保持 ASan 默认行为。
+extern "C" const char* __asan_default_options() {
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+    return "detect_odr_violation=0:report_globals=0";
+#else
+    return nullptr;
+#endif
+}
+
 int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);

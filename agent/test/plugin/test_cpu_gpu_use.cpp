@@ -26,7 +26,7 @@ int g_cpu_failed = 0;
 namespace agentxx {
 namespace test {
 
-#if XX_IS_WIN_D || XX_IS_LINUX_D
+#if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_MACOS_D
 
 namespace {
 
@@ -67,6 +67,11 @@ static std::string findSystemMonitorPluginPath() {
             );
         }
     }
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
+    // macOS/iOS: Mach-O 无 /proc, 经 _NSGetExecutablePath 定位可执行文件目录
+    if (auto dir = executableDir(); dir.has_value()) {
+        candidates.push_back(*dir / "plugins" / "agentxx_system_monitor");
+    }
 #else
     // Linux: 回退可执行文件同目录 (兼容从其他 cwd 运行, 与 test_codegraph_tools 一致)
     if (auto p = std::filesystem::read_symlink("/proc/self/exe", ec); !ec) {
@@ -96,14 +101,14 @@ static std::string findSystemMonitorPluginPath() {
 
 } // namespace
 
-#endif // XX_IS_WIN_D || XX_IS_LINUX_D
+#endif // XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_MACOS_D
 
 asio::awaitable<TestResult>
     run_cpu_gpu_use_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     g_cpu_passed = 0;
     g_cpu_failed = 0;
 
-#if XX_IS_WIN_D || XX_IS_LINUX_D
+#if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_MACOS_D
     // ---- 1. 构造 AgentContext ----
     auto ctx                     = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
@@ -183,6 +188,45 @@ asio::awaitable<TestResult>
                 uint64_t total = j.value("mem_total_mb", uint64_t{0});
                 XX_TEST_EXPECT_TRUE(total > 0);
                 XX_TEST_EXPECT_TRUE(j.contains("gpus"));
+                /// 内存已用量必须落在 [0, 总量] 内 (macOS 分支按
+                /// "物理内存 - 可回收页" 计算, 防止页统计口径写反)
+                uint64_t used = j.value("mem_used_mb", uint64_t{0});
+                XX_TEST_EXPECT_TRUE(used <= total);
+                /// GPU 条目字段自检 (各平台逐卡读取; 无 GPU 的机器上数组为空,
+                /// 不因此失败): 名称 + 显存总量 + 利用率取值范围
+                if (j["gpus"].is_array()) {
+                    for (const auto& gpu : j["gpus"]) {
+                        if (!gpu.is_object()) {
+                            g_cpu_failed++;
+                            TEST_FAIL << "gpu entry is not an object" << std::endl;
+                            continue;
+                        }
+                        TEST_INFO << "gpu entry: " << gpu.dump() << std::endl;
+                        XX_TEST_EXPECT_TRUE(gpu.value("name", std::string{}).size() > 0);
+                        const uint64_t vramTotal = gpu.value("dedicated_vram_mb", uint64_t{0})
+                                                   + gpu.value("shared_vram_mb", uint64_t{0});
+                        const uint64_t vramUsed = gpu.value("dedicated_vram_used_mb", uint64_t{0})
+                                                  + gpu.value("shared_vram_used_mb", uint64_t{0});
+#if XX_IS_MACOS_D || XX_IS_WIN_D
+                        /// 显存总量必须读到: macOS (IOKit PerformanceStatistics) 与
+                        /// Windows (DXGI) 都能给出总量; Linux 上 Intel/virtio 等无
+                        /// 显存字段的驱动只报名称与利用率, 故该平台不在此断言
+                        XX_TEST_EXPECT_TRUE(vramTotal > 0);
+#endif
+                        if (vramTotal > 0) {
+                            XX_TEST_EXPECT_TRUE(vramUsed <= vramTotal);
+                        }
+                        double gpuUsage = gpu.value("usage_percent", -1.0);
+                        XX_TEST_EXPECT_TRUE(gpuUsage >= 0.0 && gpuUsage <= 100.0);
+                    }
+#if XX_IS_MACOS_D
+                    if (j["gpus"].empty()) {
+                        /// 无 GPU 属于环境差异 (无头虚拟机/纯远程会话):
+                        /// 没有可读对象, 打印提示而不是判失败
+                        TEST_WARN << "no IOAccelerator GPU found on this machine" << std::endl;
+                    }
+#endif
+                }
             } else {
                 g_cpu_failed++;
                 TEST_FAIL << "system_usage capability returned non-object json" << std::endl;
@@ -289,7 +333,8 @@ asio::awaitable<TestResult>
         XX_TEST_EXPECT_TRUE(loopOk);
     }
 #else
-    TEST_SKIP << "agentxx_system_monitor (system monitor) 仅支持 Windows/Linux 平台" << std::endl;
+    TEST_SKIP << "agentxx_system_monitor (system monitor) 仅支持 Windows/Linux/macOS 平台"
+              << std::endl;
 #endif
 
     (void)agentContext;

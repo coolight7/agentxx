@@ -257,7 +257,7 @@
     - Saves analysis indices to SQLite.
     - Configurable inclusion/exclusion directories.
     - Automatically respects `.gitignore` rules and `.gitmodules` submodules by default (`use_gitignore` configurable).
-- ✅ `agentxx_system_monitor`: Reads CPU, RAM, GPU, and VRAM utilization on Windows and Linux.
+- ✅ `agentxx_system_monitor`: Reads CPU, RAM, GPU, and VRAM utilization on Windows, Linux, and macOS (PDH/DXGI, `/proc` + sysfs, and mach `host_statistics` + IOKit `IOAccelerator` respectively; on Apple Silicon unified memory the VRAM figures use the shared-memory view).
     - Tool: `get_system_core_info`.
 - ✅ `agentxx_screen_capture`: Screen frame capture using DXGI / GDI.
 - ⬜ `agentxx_audio_stream`: Captures system audio output, target process audio, and microphone input.

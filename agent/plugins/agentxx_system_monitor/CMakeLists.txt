@@ -1,7 +1,10 @@
 # agentxx_system_monitor —— 系统资源监控插件 (CPU/内存/GPU)
+# - 平台: Windows (PDH/DXGI) / Linux 与 Android (/proc + sysfs) / macOS
+#   (mach host_statistics + IOKit IOAccelerator); 其余平台跳过编译
 # - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static (Json/JsonView) + asio (boost 头文件)
 # - 内置模式: 源文件编译为 OBJECT 库合并进
-#   libagentxx; cxx_utilxx_base_static/asio 为既有依赖, 仅补链接平台库 (pdh)
+#   libagentxx; cxx_utilxx_base_static/asio 为既有依赖, 仅补链接平台库
+#   (Windows: pdh/dxgi; macOS: IOKit/CoreFoundation framework)
 # - 从 libagentxx src/expand/get_cpu_gpu_use 拆分独立:
 #   - 工具 agentxx_get_system_core_info (原内置工具迁移, 同名同行为)
 #   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示链路
@@ -9,13 +12,13 @@
 set(PLUGIN_NAME agentxx_system_monitor)
 
 # ===== 平台支持判定 =====
-# Windows (PDH 性能计数器 + DXGI GPU 枚举) 与 Linux (/proc + sysfs 解析) 有
-# 真实实现; Android 复用 Linux 分支 (插件共享头将非 _WIN32/非 __APPLE__ 推导为
-# XX_IS_LINUX_D=1, /proc/stat、/proc/meminfo 在 Android 可读, GPU 经 sysfs/drm
-# 枚举缺失时 readFileContent 返回空串优雅降级); macOS/iOS 为空桩, 跳过编译
-# (平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1)
+# Windows (PDH 性能计数器 + DXGI GPU 枚举)、Linux (/proc + sysfs 解析) 与
+# macOS (mach host_statistics + IOKit IOAccelerator) 有真实实现;
+# Android 复用 Linux 分支 (/proc/stat、/proc/meminfo 在 Android 可读, GPU 经
+# sysfs/drm 枚举缺失时 readFileContent 返回空串优雅降级); iOS 为空桩, 跳过编译
+# (平台矩阵说明见 docs/zh-cn/design/plugins.md §14)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
-agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux android)
+agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux macos android)
 if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()
@@ -60,6 +63,12 @@ set_target_properties(${_target} PROPERTIES
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
       "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" pdh dxgi PARENT_SCOPE)
+  elseif (XX_IS_MACOS_D)
+    # cpu_gpu_monitor macOS 分支: IOKit (IOAccelerator 枚举 + PerformanceStatistics
+    # 属性读取) + CoreFoundation (CFString/CFDictionary/CFNumber 解析)
+    set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}"
+      "-framework IOKit" "-framework CoreFoundation" PARENT_SCOPE)
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
@@ -118,6 +127,14 @@ if (XX_IS_WIN_D)
   target_link_libraries(${PLUGIN_NAME} PRIVATE
     pdh
     dxgi
+  )
+elseif (XX_IS_MACOS_D)
+  # cpu_gpu_monitor macOS 分支: IOKit + CoreFoundation
+  # (asio 在 macOS 无文件异步 I/O, 该分支的数据来源为 mach 系统调用与 IOKit
+  #  属性读取, 无其他额外依赖)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE
+    "-framework IOKit"
+    "-framework CoreFoundation"
   )
 endif()
 # 注: Linux 下 asio 文件 I/O (-DASIO_HAS_IO_URING) 需要的 io_uring 符号,

@@ -58,13 +58,16 @@ set_target_properties(${_target} PROPERTIES
     ts_kotlin ts_php ts_swift ts_objc ts_csharp ts_sql ts_lua
     ts_yaml ts_json ts_xml ts_html ts_css ts_zig ts_ruby ts_glsl
   )
-  if (UNIX)
+  if (XX_IS_LINUX_D OR XX_IS_ANDROID_D)
     # Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
     if (XX_IS_ANDROID_D)
       list(APPEND _codegraph_libs dl m)
     else()
       list(APPEND _codegraph_libs pthread dl m)
     endif()
+  elseif (XX_IS_MACOS_D OR XX_IS_IOS_D)
+    # macOS/iOS: FSEvents 位于 CoreServices 框架 (见 codegraph file_watcher.cpp)
+    list(APPEND _codegraph_libs "-framework CoreServices")
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
     "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" ${_codegraph_libs} PARENT_SCOPE)
@@ -130,12 +133,19 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 )
 # pthread/dl/m 为 Linux 系统库; Windows/MSVC 无对应导入库 (std::thread 原生), 条件链接
 # Android bionic 将 pthread 并入 libc, 无独立 libpthread 库, 仅链接 dl/m
-if (UNIX)
+# macOS/iOS 同样无独立 libpthread/libdl 导入库 (系统调用并入 libSystem), 跳过
+if (XX_IS_LINUX_D OR XX_IS_ANDROID_D)
   if (XX_IS_ANDROID_D)
     target_link_libraries(${PLUGIN_NAME} PRIVATE dl m)
   else()
     target_link_libraries(${PLUGIN_NAME} PRIVATE pthread dl m)
   endif()
+elseif (XX_IS_MACOS_D OR XX_IS_IOS_D)
+  # macOS/iOS: 无独立 libpthread/libdl 导入库 (并入 libSystem), 无需链接;
+  # 但 codegraph 的 FSEvents 文件监视 (MacFileWatcher) 引用 CoreServices 框架
+  # (CoreFoundation + FSEvents APIs)。codegraph_core 在此按裸库名 (-lcodegraph_core)
+  # 链接, 无法传递其构建期的框架依赖, 故在插件链接期显式补上
+  target_link_libraries(${PLUGIN_NAME} PRIVATE "-framework CoreServices")
 endif()
 # 裸库名依赖 (hs_runtime / Glob) 的解析目录: 与 cxx_utilxx* 导出接口的 link
 # 目录一致; Glob-1.0 供 glob 库按裸名解析

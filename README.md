@@ -66,7 +66,7 @@
 | ✅ | Windows 10+ | Win MSVC编译/Linux 交叉编译 |
 | ✅ | Linux | 在WSL运行时额外支持直接执行 windows 程序和命令 |
 | ✅ | Android 5.0+ | Linux 交叉编译 |
-| ⬜ | Macos | 待测试兼容 |
+| ✅ | Macos | 已支持 arm64/x64 macos clang 编译 |
 | ⬜ | IOS | 待测试兼容 |
 
 ### 编译后的体积和依赖库
@@ -81,6 +81,8 @@
 | **Win/TUI** | 3.3M | - | - | 不加载插件 |
 | **Linux/TUI** | 3.2M | 9.2M | 15.1M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
 | **Linux/TUI** | 2M | - | - | 不加载插件 |
+| **Macos/TUI** | 5.2M | 21.1M | 31.5M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
+| **Macos/TUI** | 3.8M | - | - | 不加载插件 |
 
 - **可执行文件/动态库文件体积**:
 
@@ -275,7 +277,7 @@
     - 保存分析结果到 sqlite
     - 可配置加载路径/忽略路径
     - 默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (可配置关闭 use_gitignore)
-- ✅`agentxx_system_monitor`支持读取 windows/linux 的 CPU占用、内存占用、GPU占用、显存占用
+- ✅`agentxx_system_monitor`支持读取 windows/linux/macos 的 CPU占用、内存占用、GPU占用、显存占用
     - tool/get_system_core_info 获取系统信息
 - ✅`agentxx_screen_capture`支持 DXGI/DGI 捕获屏幕帧
 - ⬜`agentxx_audio_stream`支持捕获系统输出音频、指定程序输出音频、麦克风
@@ -383,6 +385,7 @@ npm install --legacy-peer-deps
     - [Linux/WSL 可执行程序 / 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/linux.md)
     - [Android 动态库编译 .so / 静态库 .a](/docs/zh-cn/build/android.md)
     - [Windows 可执行程序 .exe / 动态库编译 .dll / 静态库 .lib](/docs/zh-cn/build/windows.md)
+    - [macOS 可执行程序 / 动态库编译 .dylib / 静态库 .a](/docs/zh-cn/build/macos.md)
 - 生成库链接方式:
     - 动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
     - 静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖

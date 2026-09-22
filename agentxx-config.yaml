@@ -400,21 +400,21 @@ plugin:
     #     load_cwd:       未配置 paths 时是否默认加载当前工作目录 (默认 true)
     #     use_gitignore:  是否默认忽略 .gitignore 规则与 .gitmodules 子模块目录 (默认 true)
     # - 索引数据库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-    - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
-      enabled: true
-      args:
-        # paths:
-        #   - "/path/to/project_a"
-        #   - "relative/path/to/project_b"
-        ignore_paths:
-          - "**/build/**"
-          - "**/node_modules/**"
-        load_cwd: true
-        use_gitignore: true
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_codegraph/
+    #   enabled: true
+    #   args:
+    #     # paths:
+    #     #   - "/path/to/project_a"
+    #     #   - "relative/path/to/project_b"
+    #     ignore_paths:
+    #       - "**/build/**"
+    #       - "**/node_modules/**"
+    #     load_cwd: true
+    #     use_gitignore: true
 
-    # === 系统资源监控
-    - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
-      enabled: true
+    # # === 系统资源监控
+    # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
+    #   enabled: true
 
     # === 数学计算工具 ===
     # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/

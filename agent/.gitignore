@@ -3,6 +3,8 @@
 /third_party/boost*
 /third_party/OpenSSL*
 /third_party/openssl*
+# 依赖自构建完成标记 (script/deps/libbuild.sh 写入, 属构建状态)
+/third_party/.deps-*
 /third_party/sqlite/
 /third_party/paddle_inference/
 /third_party/paddle_inference_model/
