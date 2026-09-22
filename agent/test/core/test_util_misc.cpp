@@ -534,6 +534,68 @@ void test_wire_list_dir_protocol() {
     }
 }
 
+void test_wire_permission_state_protocol() {
+    using namespace agentxx::agent;
+    using namespace agentxx::agent::io;
+
+    // 1. 查询请求 (无载荷): 序列化只带 type, 反序列化回到同一类型
+    {
+        auto reqJson = toJson(WireGetPermissionState{});
+        XX_TEST_EXPECT_EQ(
+            reqJson["type"].get<std::string>(),
+            std::string(MsgType::GetPermissionState)
+        );
+        WireMessage wireMsg = WireGetPermissionState{};
+        auto        deser   = deserialize(serialize(wireMsg));
+        XX_TEST_EXPECT_TRUE(deser.has_value());
+        XX_TEST_EXPECT_TRUE(std::holds_alternative<WireGetPermissionState>(deser.value()));
+    }
+
+    // 2. 切换请求 (含 fullAuth) 往返
+    {
+        WireSetFullAuth setMsg;
+        setMsg.fullAuth = true;
+        auto setJson    = toJson(setMsg);
+        XX_TEST_EXPECT_EQ(setJson["type"].get<std::string>(), std::string(MsgType::SetFullAuth));
+        XX_TEST_EXPECT_TRUE(setJson["fullAuth"].get<bool>());
+
+        WireMessage wireMsg = setMsg;
+        auto        deser   = deserialize(serialize(wireMsg));
+        XX_TEST_EXPECT_TRUE(deser.has_value());
+        auto* p = std::get_if<WireSetFullAuth>(&deser.value());
+        XX_TEST_EXPECT_TRUE(p != nullptr);
+        if (p) {
+            XX_TEST_EXPECT_TRUE(p->fullAuth);
+        }
+        // 字段缺失时按"授权"处理 (与结构体默认值一致)
+        auto missing = setFullAuthFromJson(utilxx_base::Json::parse(R"({"type":"set_full_auth"})"));
+        XX_TEST_EXPECT_TRUE(missing.fullAuth);
+    }
+
+    // 3. 状态响应 (含 fullAuth) 往返
+    {
+        auto stateJson = toJson(WirePermissionState{true});
+        XX_TEST_EXPECT_EQ(
+            stateJson["type"].get<std::string>(),
+            std::string(MsgType::PermissionState)
+        );
+        XX_TEST_EXPECT_TRUE(stateJson["fullAuth"].get<bool>());
+
+        WireMessage wireMsg = WirePermissionState{false};
+        auto        deser   = deserialize(serialize(wireMsg));
+        XX_TEST_EXPECT_TRUE(deser.has_value());
+        auto* p = std::get_if<WirePermissionState>(&deser.value());
+        XX_TEST_EXPECT_TRUE(p != nullptr);
+        if (p) {
+            XX_TEST_EXPECT_FALSE(p->fullAuth);
+        }
+        // 缺省值: 未携带 fullAuth 时按"未完全授权"处理 (安全兜底)
+        auto missing
+            = permissionStateFromJson(utilxx_base::Json::parse(R"({"type":"permission_state"})"));
+        XX_TEST_EXPECT_FALSE(missing.fullAuth);
+    }
+}
+
 void test_cross_device_determination() {
     agentxx::client::TUICtx ctx;
 
@@ -581,6 +643,7 @@ TestResult testUtilMisc() {
     test_windows_reserved_name();
     test_md5_and_device_id();
     test_wire_list_dir_protocol();
+    test_wire_permission_state_protocol();
     test_cross_device_determination();
 
     return TestResult{g_um_passed, g_um_failed};

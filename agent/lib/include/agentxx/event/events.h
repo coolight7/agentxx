@@ -75,6 +75,9 @@ struct Topic {
         "service.permission.clear_isolation"
     };
 
+    /// "完全授权所有权限"状态变更 (单向事件): EventPermissionFullAuthChanged
+    inline static constexpr std::string_view PermissionFullAuth{"service.permission.full_auth"};
+
     /// subagent 工具执行 (请求-响应): ReqSubagentExecute / RespSubagentExecute
     inline static constexpr std::string_view SubagentExecute{"service.subagent.execute"};
 
@@ -359,6 +362,16 @@ struct EventSetSessionIsolation {
 /// 会话文件系统隔离清除 (service.permission.clear_isolation)
 struct EventClearSessionIsolation {
     std::string sessionId;
+};
+
+/// "完全授权所有权限"状态变更 (service.permission.full_auth; 单向事件)
+///
+/// 发布方: [PermissionMiddlewareHandle] (切换状态时; 来源可能是权限询问卡片的
+/// 勾选, 也可能是客户端 (TUI Info 侧边栏) 经 WireSetFullAuth 的切换请求)。
+/// 订阅方: 会话服务端点 (SessionServerAgentIO) —— 转发为 WirePermissionState
+/// 广播给所有已连接客户端, 使多端界面同时更新。
+struct EventPermissionFullAuthChanged {
+    bool fullAuth = false;
 };
 
 /// ===== subagent 工具执行 =====

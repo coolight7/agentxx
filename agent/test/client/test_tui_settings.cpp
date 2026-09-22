@@ -860,6 +860,127 @@ void test_tui_multimodal_capability_survives_session_sync() {
 }
 
 // ---------------------------------------------------------------------------
+// 权限状态 (Info 侧边栏授权按钮): wire 同步 + 点击切换
+// ---------------------------------------------------------------------------
+
+/// 服务端权限状态消息应写入帧状态 (按钮显示依据); 点击切换按钮应发送
+/// WireSetFullAuth 并立即在本地反映新状态 (乐观更新)
+void test_tui_permission_state_sync_and_toggle() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    auto tui       = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    // 1. 初始未完全授权
+    XX_TEST_EXPECT_FALSE(tui->sharedState().readSnapshot()->fullAuthorized);
+
+    // 2. 收到服务端状态 (完全授权): 界面状态同步
+    tui->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WirePermissionState{true}});
+    XX_TEST_EXPECT_TRUE(tui->sharedState().readSnapshot()->fullAuthorized);
+
+    // 3. 收到状态 (恢复询问): 同步回落
+    tui->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WirePermissionState{false}});
+    XX_TEST_EXPECT_FALSE(tui->sharedState().readSnapshot()->fullAuthorized);
+
+    // 4. 点击切换: 本地状态立即切换, 且发送 WireSetFullAuth(true)
+    transport->sentMessages.clear();
+    tui->refreshRenderContext();
+    tui->toggleFullAuth();
+    XX_TEST_EXPECT_TRUE(tui->sharedState().readSnapshot()->fullAuthorized);
+    bool sawSetFullAuth = false;
+    for (const auto& msg : transport->sentMessages) {
+        if (auto* set = std::get_if<agentxx::agent::WireSetFullAuth>(&msg)) {
+            sawSetFullAuth = true;
+            XX_TEST_EXPECT_TRUE(set->fullAuth);
+        }
+    }
+    XX_TEST_EXPECT_TRUE(sawSetFullAuth);
+
+    // 5. 再次点击: 切回询问态并发送 WireSetFullAuth(false)
+    transport->sentMessages.clear();
+    tui->refreshRenderContext();
+    tui->toggleFullAuth();
+    XX_TEST_EXPECT_FALSE(tui->sharedState().readSnapshot()->fullAuthorized);
+    sawSetFullAuth = false;
+    for (const auto& msg : transport->sentMessages) {
+        if (auto* set = std::get_if<agentxx::agent::WireSetFullAuth>(&msg)) {
+            sawSetFullAuth = true;
+            XX_TEST_EXPECT_FALSE(set->fullAuth);
+        }
+    }
+    XX_TEST_EXPECT_TRUE(sawSetFullAuth);
+
+    // 6. 握手完成 (hello ack) 后主动查询一次权限状态
+    transport->sentMessages.clear();
+    agentxx::agent::WireHelloAck ack;
+    ack.ok        = true;
+    ack.sessionId = "session-1";
+    tui->onPeerMessage(agentxx::agent::WireMessage{std::move(ack)});
+    bool sawGetPermissionState = false;
+    for (const auto& msg : transport->sentMessages) {
+        if (std::holds_alternative<agentxx::agent::WireGetPermissionState>(msg)) {
+            sawGetPermissionState = true;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(sawGetPermissionState);
+}
+
+/// Info 侧边栏底部工作目录行渲染授权按钮: 非完全授权显示 "[ 询问授权 ]",
+/// 完全授权显示 "[ 完全授权 ]" (文案随语言表, 两种语言各验证一次)
+void test_tui_info_footer_auth_button() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    const auto originalLang = TUISettings::instance().language();
+    auto       renderFooterText
+        = [&](const std::shared_ptr<TUIClientAgentIO>& tui) -> std::string {
+        auto element = tui->renderInfoSidebarFooter();
+        auto screen  = ftxui::Screen::Create(ftxui::Dimension::Fixed(60), ftxui::Dimension::Fixed(6));
+        ftxui::Render(screen, element);
+        return screen.ToString();
+    };
+
+    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    // 简体中文: 询问授权 -> 完全授权
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+    tui->refreshRenderContext();
+    auto zhAsk = renderFooterText(tui);
+    XX_TEST_EXPECT_TRUE(zhAsk.find(std::string(TuiI18n::instance().t("info.authAsk"))) != std::string::npos);
+    XX_TEST_EXPECT_TRUE(zhAsk.find(std::string(TuiI18n::instance().t("info.authFull"))) == std::string::npos);
+
+    tui->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WirePermissionState{true}});
+    tui->refreshRenderContext();
+    auto zhFull = renderFooterText(tui);
+    XX_TEST_EXPECT_TRUE(
+        zhFull.find(std::string(TuiI18n::instance().t("info.authFull"))) != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        zhFull.find(std::string(TuiI18n::instance().t("info.authAsk"))) == std::string::npos
+    );
+
+    // 英文: 同一状态使用英文文案 (翻译表生效)
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+    tui->refreshRenderContext();
+    auto enFull = renderFooterText(tui);
+    XX_TEST_EXPECT_TRUE(enFull.find("[ Full Permission ]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(enFull.find("完全授权") == std::string::npos);
+
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+    tui->refreshRenderContext();
+    XX_TEST_EXPECT_TRUE(
+        renderFooterText(tui).find("[ 完全授权 ]") != std::string::npos
+    );
+
+    // 语言设置复位 (本模块其他用例依赖默认语言表)
+    TUISettings::instance().setLanguage(originalLang);
+}
+
+// ---------------------------------------------------------------------------
 // 插件全局快捷键列表 (设置弹窗条目 + 只读列表弹窗)
 // ---------------------------------------------------------------------------
 
@@ -1195,6 +1316,8 @@ TestResult testTuiSettings() {
     test_model_selector_overlay_esc_and_confirm();
     test_tui_model_retention_on_wire_model_info_and_switch_session();
     test_tui_multimodal_capability_survives_session_sync();
+    test_tui_permission_state_sync_and_toggle();
+    test_tui_info_footer_auth_button();
     test_settings_overlay_keybind_entry();
     test_settings_overlay_short_terminal();
     test_keybind_list_overlay_empty();

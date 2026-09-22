@@ -307,9 +307,20 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
             return std::string(tr("info.workDirUnknown"));
         }
     );
+    // 授权按钮: 非完全授权显示 "[ 询问授权 ]" (点击切换为完全授权),
+    // 完全授权显示 "[ 完全授权 ]" (点击恢复询问);
+    // 命中登记到 shell 级命中表, 点击经 handleShellHit → toggleFullAuth 处理
+    // (状态本身由 agent 侧权限中间件持有, 客户端只负责展示与请求切换)
+    const bool fullAuth = (ctx_.frameState != nullptr) && ctx_.frameState->fullAuthorized;
     elements.push_back(
         hbox({
             text(fmt::format("{} ", utilxx_base::getFileName(kCwd))),
+            shellHits_.add(
+                text(
+                    fullAuth ? std::string(tr("info.authFull")) : std::string(tr("info.authAsk"))
+                ) | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
+                std::string{kAuthToggleHitId}
+            ),
             filler(),
             text(kCwd) | xflex_shrink,
         })

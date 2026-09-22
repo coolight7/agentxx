@@ -51,6 +51,10 @@ constexpr Entry kTable[] = {
     {"toast.attachTooLarge",      "File too large ({}, limit {})",                       "文件过大 ({}, 限制 {})"                                                                     },
     {"toast.attachOpenFail",      "Cannot open file",                                    "无法打开文件"                                                                               },
     {"toast.attachBadType",       "Unsupported file type",                               "不支持的文件类型"                                                                         },
+    {"toast.fullAuthOn",
+     "Full authorization enabled: permission requests will no longer be asked",          "已切换为完全授权: 后续不再询问权限"                                                  },
+    {"toast.fullAuthOff",
+     "Authorization prompt restored: permission requests will be asked again",           "已恢复询问授权: 权限请求将再次询问"                                                  },
 
  // ---- 待发送消息队列 (顶栏 + 弹窗) ----
     {"queue.barTitle",            "  • Message Queue: {}",                             "  • 待发送消息队列: {}"                                                                  },
@@ -252,6 +256,9 @@ constexpr Entry kTable[] = {
     {"info.viewFailed",           "[ View ]",                                            "[ 查看 ]"                                                                                       },
     {"info.innerServer",          "Inner Server",                                        "内置服务"                                                                                     },
     {"info.workDirUnknown",       "( Unknown Work Dir )",                                "( 未知工作目录 )"                                                                           },
+    // 授权状态按钮 (Info 侧边栏底部工作目录行): 显示当前状态, 点击切换
+    {"info.authFull",             "[ Full Permission ]",                                 "[ 完全授权 ]"                                                                                 },
+    {"info.authAsk",              "[ Ask Permission ]",                                  "[ 询问授权 ]"                                                                                 },
     {"info.idle",                 "idle",                                                "空闲"                                                                                           },
     {"footer.menu",               "[ Menu ]",                                            "[ 菜单 ]"                                                                                       },
 };

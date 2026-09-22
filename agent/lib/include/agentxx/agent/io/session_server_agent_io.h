@@ -22,6 +22,15 @@ class CancelToken;
 }
 
 namespace agentxx {
+
+namespace events {
+class EventBus;
+}
+
+namespace middleware {
+class PermissionMiddlewareHandle;
+}
+
 namespace agent {
 
 class BaseAgent;
@@ -269,7 +278,26 @@ private:
     /// - 注册成功后向总线发布宿主约定事件 `agentxx_host.client_attached`
     ///   (见 kHostPluginName 注释), 双端插件可据此重发当前状态快照
     ///   (修复"一次性 status 事件先于订阅发布而丢失"的滞留显示问题)
+    /// - 同时订阅权限状态变更事件 (service.permission.full_auth): 状态变化时
+    ///   向所有客户端广播 WirePermissionState (见 [subscribePermissionEvents])
     void subscribePluginEvents();
+
+    /// 订阅"完全授权所有权限"状态变更事件 (run 开始时调用一次, 与插件事件订阅同处)
+    /// - 权限状态由 agent 侧权限中间件持有, 客户端 (TUI Info 侧边栏按钮) 只能
+    ///   经服务端读写; 状态变化 (询问卡片勾选 / 任一客户端切换) 经本订阅广播
+    ///   给所有已连接客户端, 多端界面保持一致
+    void subscribePermissionEvents(const std::shared_ptr<agentxx::events::EventBus>& bus);
+
+    /// 查询 agent 侧权限中间件 (未装配时返回 nullptr)
+    agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware() const;
+
+    /// 当前是否已"完全授权所有权限" (无权限中间件时按 false)
+    bool fullAuthorized() const;
+
+    /// 设置"完全授权所有权限"状态 (无权限中间件时忽略并返回 false; 状态变化由
+    /// 中间件发布事件, 再经 [subscribePermissionEvents] 广播回各客户端)
+    /// - `return` 是否已应用到权限中间件
+    bool setFullAuthorized(bool authorized);
 
     asio::any_io_executor    ex_;
     std::weak_ptr<BaseAgent> agent_;
@@ -303,6 +331,8 @@ private:
     bool pluginSubscribed_ = false;
     /// 事件总线前缀订阅 id (0 = 未订阅)
     size_t pluginSubId_ = 0;
+    /// 权限状态变更事件订阅 id (0 = 未订阅)
+    size_t fullAuthSubId_ = 0;
     /// 上行 WirePluginDataUp 对端缺失警告冷却表 (仅 ex_ 线程访问):
     /// client 插件上行数据但 agent 侧未加载同名插件时, 每插件名最多每
     /// kUplinkWarnCooldown 一次 XX_LOGW, 防御高频上行刷屏

@@ -105,6 +105,11 @@ struct TUIRenderState {
         return historyWindowStart > 0;
     }
 
+    /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
+    /// - 由 agent 侧权限中间件持有 (权限询问卡片勾选 fullAuth 或客户端切换按钮)
+    /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
+    bool fullAuthorized = false;
+
     std::shared_ptr<std::string> currentToken;
     TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
     bool                         isStreaming      = false;

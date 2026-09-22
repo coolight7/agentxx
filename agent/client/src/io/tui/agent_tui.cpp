@@ -1212,6 +1212,10 @@ void TUIClientAgentIO::handleShellHit(std::string_view id) {
         openLogsMenu();
         return;
     }
+    if (id == kAuthToggleHitId) {
+        toggleFullAuth();
+        return;
+    }
 }
 
 void TUIClientAgentIO::ensureInfoSidebarTab() {
@@ -1856,6 +1860,15 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                         cb(resp);
                     });
                 }
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WirePermissionState>) {
+                // 权限状态: 查询响应 / 切换后广播 / 服务端侧状态变更广播
+                // (用户在权限询问卡片勾选"完全授权所有权限"时也会收到)
+                std::lock_guard<std::mutex> lock(sharedState_.mutex());
+                auto&                       st = sharedState_.mutableState();
+                if (st.fullAuthorized != m.fullAuth) {
+                    st.fullAuthorized = m.fullAuth;
+                    postRedraw();
+                }
             }
         },
         std::move(msg)
@@ -2091,6 +2104,28 @@ void TUIClientAgentIO::onHelloAck(const agentxx::agent::WireHelloAck& ack) {
         serverDeviceId_,
         ctx_.isServerDifferentDevice()
     );
+    // 权限状态: 握手后主动查询一次 (Info 侧边栏授权按钮初值; 服务端多数也会
+    // 随握手主动下发, 重复无害 —— 状态消息幂等)
+    sendToPeer(agentxx::agent::WireGetPermissionState{});
+}
+
+void TUIClientAgentIO::toggleFullAuth() {
+    const bool next = !(ctx_.frameState && ctx_.frameState->fullAuthorized);
+    // 乐观更新本地界面: 按钮即刻切换 (服务端应用后经 WirePermissionState
+    // 广播真实状态, 二者一致)
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.fullAuthorized              = next;
+    }
+    if (transport_) {
+        sendToPeer(agentxx::agent::WireSetFullAuth{.fullAuth = next});
+    }
+    uiToast(
+        next ? std::string{tr("toast.fullAuthOn")} : std::string{tr("toast.fullAuthOff")},
+        0
+    );
+    postRedraw();
 }
 
 void TUIClientAgentIO::requestServerListDir(

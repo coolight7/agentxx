@@ -313,6 +313,20 @@ public:
     ///   ([refreshRenderContext]), 测试/诊断可手动调用
     std::vector<ScrollItem> renderInfoSidebar();
 
+    /// 渲染 Info 栏底部区域 (工作目录行 + 授权按钮 + 版本/连接信息; UI 线程)
+    ///
+    /// - 侧边栏 Info tab 的 footer 回调即本方法
+    /// - 授权按钮 (见 [toggleFullAuth]) 的可点区域登记到 shell 级命中表,
+    ///   因此未渲染时不会占用点击区域
+    /// - 同 [renderInfoSidebar]: 调用前需保证帧快照有效
+    ftxui::Element renderInfoSidebarFooter();
+
+    /// 切换"完全授权所有权限"状态 (UI 线程; 点击 Info 侧边栏授权按钮时调用)
+    /// - 立即在本地界面反映 (乐观更新, 按钮即刻切换), 同时向服务端发送
+    ///   WireSetFullAuth; 服务端应用后经 WirePermissionState 广播回真实状态
+    /// - 状态本身由 agent 侧权限中间件持有, 客户端只展示与请求切换
+    void toggleFullAuth();
+
     /// 刷新组件共享上下文的帧快照 (UI 线程; 帧循环每帧调用一次)
     ///
     /// - 取本帧状态快照并挂上 client 插件 UI 注册表快照
@@ -602,9 +616,8 @@ private:
     /// 刷新界面语言后更新侧边栏常驻/已建 tab 标题 (UI 线程)
     void refreshSidebarTabTitles();
 
-    /// 侧边栏渲染辅助
+    /// 侧边栏渲染辅助 (renderInfoSidebarFooter/toggleFullAuth 为公开接口, 见类头部)
     std::vector<ScrollItem> renderLogWindow();
-    ftxui::Element          renderInfoSidebarFooter();
     ftxui::Element          renderLogSidebarFooter();
 
     // -----------------------------------------------------------------------
@@ -723,6 +736,8 @@ private:
     /// 命中 id (shell 级按钮)
     static constexpr std::string_view kFailedViewHitId = "shell/info-failed-view";
     static constexpr std::string_view kLogsMenuHitId   = "shell/logs-menu";
+    /// Info 侧边栏底部"完全授权 / 询问授权"切换按钮 (点击切换授权模式)
+    static constexpr std::string_view kAuthToggleHitId = "shell/info-auth-toggle";
 
     /// 处理 shell 级按钮命中 (UI 线程; 由全局鼠标事件经 shellHits_ 分发)
     void handleShellHit(std::string_view id);

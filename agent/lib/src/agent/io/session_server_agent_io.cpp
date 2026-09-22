@@ -735,6 +735,19 @@ void SessionServerAgentIO::onPeerMessage(
                     },
                     asio::detached
                 );
+            } else if constexpr (std::is_same_v<T, WireGetPermissionState>) {
+                // 客户端查询权限状态 (TUI Info 侧边栏的授权按钮初值/刷新)
+                WirePermissionState state;
+                state.fullAuth = fullAuthorized();
+                sendToClient(sender, std::move(state));
+            } else if constexpr (std::is_same_v<T, WireSetFullAuth>) {
+                // 客户端切换"完全授权所有权限":
+                // - 立即向本端点客户端广播新状态 (界面即时生效; 幂等)
+                // - 权限中间件同时发布状态变更事件 (见 subscribePermissionEvents),
+                //   供其他会话端点/其他客户端同步; 询问卡片勾选路径只走该事件
+                if (setFullAuthorized(m.fullAuth)) {
+                    sendToPeer(WirePermissionState{m.fullAuth});
+                }
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
                 // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
                 // 先在线程池中异步预热加载目标会话历史, 避免在 io 线程产生阻塞 SQLite 读
@@ -914,6 +927,17 @@ void SessionServerAgentIO::handleHello(
         sendContextStats(sender);
     } else {
         sendContextStats();
+    }
+
+    // 权限状态随握手下发: 客户端接入即知道当前是否已完全授权 (Info 侧边栏
+    // 授权按钮的初值; 后续变更由权限状态事件广播保持同步)
+    // - 仅在 agent 装配了权限中间件时下发: 该状态本就由权限中间件持有, 未装配
+    //   (如无 agent 的纯协议端点) 时下发一个恒 false 的状态没有意义, 且会让
+    //   "握手后按序读消息" 的对端多收一条
+    if (permissionMiddleware() != nullptr) {
+        WirePermissionState permState;
+        permState.fullAuth = fullAuthorized();
+        doSend(std::move(permState));
     }
 
     for (auto& req : pendingInterrupts) {
@@ -1100,6 +1124,8 @@ void SessionServerAgentIO::subscribePluginEvents() {
         }
     );
     pluginSubscribed_ = true;
+    // 权限状态变更订阅 (完全授权切换广播)
+    subscribePermissionEvents(bus);
     // 发布宿主约定事件 client_attached: 双端插件据此重发当前状态快照,
     // 修复"status 等一次性事件先于本订阅发布而丢失 → 客户端滞留初始占位"
     // 的问题 (晚创建的控制器/晚接入的客户端由此获得快照)
@@ -1108,6 +1134,65 @@ void SessionServerAgentIO::subscribePluginEvents() {
         kEvtClientAttached,
         fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId)
     );
+}
+
+void SessionServerAgentIO::subscribePermissionEvents(
+    const std::shared_ptr<agentxx::events::EventBus>& bus
+) {
+    if (!bus) {
+        return;
+    }
+    auto self = shared_from_this();
+    fullAuthSubId_
+        = bus->get<events::EventPermissionFullAuthChanged>(events::Topic::PermissionFullAuth)
+              .subscribe(
+                  [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](
+                      const events::EventPermissionFullAuthChanged& evt
+                  ) -> asio::awaitable<void> {
+                      auto sp = weakSelf.lock();
+                      if (!sp) {
+                          co_return;
+                      }
+                      // 回调运行在 bus executor; post 到 ex_ 统一串行化端点状态
+                      // 访问 (与插件事件转发同一处理方式)
+                      asio::post(sp->ex_, [sp, fullAuth = evt.fullAuth] {
+                          sp->sendToPeer(WirePermissionState{fullAuth});
+                      });
+                      co_return;
+                  }
+              );
+}
+
+agentxx::middleware::PermissionMiddlewareHandle* SessionServerAgentIO::permissionMiddleware() const {
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->middlewareHandleContext) {
+        return nullptr;
+    }
+    for (auto& handle : agent->agentContext->middlewareHandleContext->handles) {
+        if (auto* permission
+            = dynamic_cast<agentxx::middleware::PermissionMiddlewareHandle*>(handle.get())) {
+            return permission;
+        }
+    }
+    return nullptr;
+}
+
+bool SessionServerAgentIO::fullAuthorized() const {
+    auto* permission = permissionMiddleware();
+    return permission != nullptr && permission->isFullAuthorized();
+}
+
+bool SessionServerAgentIO::setFullAuthorized(bool authorized) {
+    auto* permission = permissionMiddleware();
+    if (permission == nullptr) {
+        XX_LOGW("[session_ctrl] set full-auth ignored: permission middleware not assembled");
+        return false;
+    }
+    // 权限中间件为 agent 级 (跨会话共享): 状态变更会发布事件, 由本端点
+    // (以及其他会话端点) 的订阅广播给各自客户端
+    permission->setFullAuthorized(authorized);
+    XX_LOGI("[session_ctrl] full authorization set to {}", authorized ? "true" : "false");
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,6 +1355,15 @@ void SessionServerAgentIO::stopImpl() {
             agent->agentContext->bus->unlistenPrefix(pluginSubId_);
         }
         pluginSubId_ = 0;
+    }
+    // 退订权限状态变更事件 (同上)
+    if (fullAuthSubId_ != 0) {
+        if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->bus) {
+            agent->agentContext->bus
+                ->get<events::EventPermissionFullAuthChanged>(events::Topic::PermissionFullAuth)
+                .unsubscribe(fullAuthSubId_);
+        }
+        fullAuthSubId_ = 0;
     }
     for (auto& t : clients_) {
         if (t) {

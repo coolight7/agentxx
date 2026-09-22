@@ -184,15 +184,15 @@ public:
     /// 查询指定路径是否命中配置文件显式拒绝的规则 (最长前缀匹配, 支持 * 通配符)
     bool isConfigDenied(std::string_view path, size_t index) const;
 
-    /// 是否已完全授权所有权限 (用户在权限询问中勾选并确认 "完全授权所有权限")
+    /// 是否已完全授权所有权限 (用户在权限询问中勾选并确认 "完全授权所有权限",
+    /// 或客户端 (TUI) 经 WireSetFullAuth 切换)
     bool isFullAuthorized() const noexcept {
         return fullAuthorized_;
     }
 
-    /// 设置完全授权状态
-    void setFullAuthorized(bool authorized = true) noexcept {
-        fullAuthorized_ = authorized;
-    }
+    /// 设置完全授权状态 (状态变化时经总线发布 EventPermissionFullAuthChanged,
+    /// 由会话服务端点广播给所有客户端, 使多端界面保持一致)
+    void setFullAuthorized(bool authorized = true) noexcept;
 
     // ---------------- worktree 会话隔离边界 (仅 io 线程调用) ----------------
 

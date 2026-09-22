@@ -1407,6 +1407,93 @@ asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
 }
 
 // ---------------------------------------------------------------------------
+// 权限状态 wire 接口 (Info 侧边栏授权按钮的服务端侧)
+//  1) WireGetPermissionState -> WirePermissionState (反映权限中间件当前状态)
+//  2) WireSetFullAuth(..) -> 权限中间件状态切换 + 向客户端广播新状态
+//     (客户端据此刷新 "[ 完全授权 ] / [ 询问授权 ]" 按钮)
+// ---------------------------------------------------------------------------
+asio::awaitable<void> test_agent_permission_state_wire() {
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:1234";
+    cfg->model.modelName = "test-sim";
+
+    auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+    co_await agent->init();
+
+    auto* permission = findPermissionMiddleware(*agent);
+    XX_TEST_EXPECT_TRUE(permission != nullptr);
+    if (permission == nullptr) {
+        co_return;
+    }
+    XX_TEST_EXPECT_FALSE(permission->isFullAuthorized());
+
+    auto                                         ex = co_await asio::this_coro::executor;
+    agentxx::agent::SessionServerAgentIO::Config ioCfg;
+    ioCfg.sessionId = "perm_state_session";
+    auto serverIo   = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, ioCfg);
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+    serverIo->setTransport(std::move(serverT));
+
+    // 1) 查询: 未完全授权
+    serverIo->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireGetPermissionState{}});
+    auto resp = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(resp.has_value());
+    if (resp.has_value()) {
+        auto* st = std::get_if<agentxx::agent::WirePermissionState>(&resp.value());
+        XX_TEST_EXPECT_TRUE(st != nullptr);
+        if (st != nullptr) {
+            XX_TEST_EXPECT_FALSE(st->fullAuth);
+        }
+    }
+
+    // 2) 切换为完全授权: 中间件状态置位, 客户端收到广播的新状态
+    serverIo->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSetFullAuth{true}});
+    XX_TEST_EXPECT_TRUE(permission->isFullAuthorized());
+    auto resp2 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(resp2.has_value());
+    if (resp2.has_value()) {
+        auto* st = std::get_if<agentxx::agent::WirePermissionState>(&resp2.value());
+        XX_TEST_EXPECT_TRUE(st != nullptr);
+        if (st != nullptr) {
+            XX_TEST_EXPECT_TRUE(st->fullAuth);
+        }
+    }
+
+    // 3) 恢复询问态: 状态回落, 客户端同样收到广播
+    serverIo->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSetFullAuth{false}});
+    XX_TEST_EXPECT_FALSE(permission->isFullAuthorized());
+    auto resp3 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(resp3.has_value());
+    if (resp3.has_value()) {
+        auto* st = std::get_if<agentxx::agent::WirePermissionState>(&resp3.value());
+        XX_TEST_EXPECT_TRUE(st != nullptr);
+        if (st != nullptr) {
+            XX_TEST_EXPECT_FALSE(st->fullAuth);
+        }
+    }
+
+    // 4) 再次查询与当前状态一致 (切换后查询不返回陈旧值)
+    serverIo->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireGetPermissionState{}});
+    auto resp4 = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(resp4.has_value());
+    if (resp4.has_value()) {
+        auto* st = std::get_if<agentxx::agent::WirePermissionState>(&resp4.value());
+        XX_TEST_EXPECT_TRUE(st != nullptr);
+        if (st != nullptr) {
+            XX_TEST_EXPECT_FALSE(st->fullAuth);
+        }
+    }
+
+    clientT->close();
+    serverIo->stop();
+
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 图构建回退: 插件把执行图改坏 (结构非法, 编译/校验期抛异常) 时,
 // BaseAgent 必须回退默认图且**保持可用**
 // - 回归点: 回退后仍能正常跑完一轮
@@ -1513,6 +1600,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_llm_retry_exhaust();
         co_await test_agent_toolcall_intercept_exception();
         co_await test_agent_build_system_prompt_and_wire_get_context();
+        co_await test_agent_permission_state_wire();
         co_await test_agent_graph_build_fallback();
     } catch (const std::exception& e) {
         TEST_FAIL << "agent suite exception: " << e.what() << std::endl;

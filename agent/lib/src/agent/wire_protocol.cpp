@@ -169,6 +169,18 @@ utilxx_base::Json toJson(const WireListDirResult& msg) {
     );
 }
 
+utilxx_base::Json toJson(const WireGetPermissionState& /*msg*/) {
+    return makeGetPermissionState();
+}
+
+utilxx_base::Json toJson(const WireSetFullAuth& msg) {
+    return makeSetFullAuth(msg.fullAuth);
+}
+
+utilxx_base::Json toJson(const WirePermissionState& msg) {
+    return makePermissionState(msg.fullAuth);
+}
+
 // ---------------------------------------------------------------------------
 // 对称 fromJson 实现
 // ---------------------------------------------------------------------------
@@ -516,6 +528,18 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::ListDirResult,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return listDirResultFromJson(j);
+         }},
+        {MsgType::GetPermissionState,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return getPermissionStateFromJson(j);
+         }},
+        {MsgType::SetFullAuth,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return setFullAuthFromJson(j);
+         }},
+        {MsgType::PermissionState,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return permissionStateFromJson(j);
          }},
     };
     return s_map;

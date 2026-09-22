@@ -43,6 +43,10 @@ struct MsgType {
     inline static constexpr std::string_view GetViewMessages = "get_view_messages";
     /// 客户端请求列举服务端目录 (用于跨设备附件选择)
     inline static constexpr std::string_view ListDir = "list_dir";
+    /// 客户端查询当前权限状态 (完全授权 / 询问) —— 界面提示用
+    inline static constexpr std::string_view GetPermissionState = "get_permission_state";
+    /// 客户端切换"完全授权所有权限"状态
+    inline static constexpr std::string_view SetFullAuth = "set_full_auth";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -73,6 +77,8 @@ struct MsgType {
     inline static constexpr std::string_view ViewMessagesPage = "view_messages_page";
     /// 服务端列举目录响应
     inline static constexpr std::string_view ListDirResult = "list_dir_result";
+    /// 服务端权限状态 (查询响应 / 切换后广播)
+    inline static constexpr std::string_view PermissionState = "permission_state";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -1123,6 +1129,46 @@ inline WireListDirResult listDirResultFromJson(const utilxx_base::Json& j) {
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// 权限状态 (完全授权切换)
+// ---------------------------------------------------------------------------
+
+inline utilxx_base::Json makeGetPermissionState() {
+    return utilxx_base::Json{
+        {"type", MsgType::GetPermissionState}
+    };
+}
+
+inline WireGetPermissionState getPermissionStateFromJson(const utilxx_base::Json& /*j*/) {
+    return WireGetPermissionState{};
+}
+
+inline utilxx_base::Json makeSetFullAuth(bool fullAuth) {
+    return utilxx_base::Json{
+        {"type",     MsgType::SetFullAuth},
+        {"fullAuth", fullAuth            },
+    };
+}
+
+inline WireSetFullAuth setFullAuthFromJson(const utilxx_base::Json& j) {
+    WireSetFullAuth m;
+    m.fullAuth = j.value("fullAuth", true);
+    return m;
+}
+
+inline utilxx_base::Json makePermissionState(bool fullAuth) {
+    return utilxx_base::Json{
+        {"type",     MsgType::PermissionState},
+        {"fullAuth", fullAuth                },
+    };
+}
+
+inline WirePermissionState permissionStateFromJson(const utilxx_base::Json& j) {
+    WirePermissionState m;
+    m.fullAuth = j.value("fullAuth", false);
+    return m;
+}
+
 /// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
 inline std::string msgTypeView(const utilxx_base::JsonView& jv) {
     if (!jv.is_object()) {
@@ -1229,6 +1275,12 @@ utilxx_base::Json toJson(const WireViewMessagesPage& msg);
 utilxx_base::Json toJson(const WireListDir& msg);
 
 utilxx_base::Json toJson(const WireListDirResult& msg);
+
+utilxx_base::Json toJson(const WireGetPermissionState& msg);
+
+utilxx_base::Json toJson(const WireSetFullAuth& msg);
+
+utilxx_base::Json toJson(const WirePermissionState& msg);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

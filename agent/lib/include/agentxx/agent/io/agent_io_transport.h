@@ -308,6 +308,29 @@ struct WireListDirResult {
     std::string               error;
 };
 
+/// 客户端查询当前权限状态 (Client -> Server; 无载荷)
+///
+/// 界面 (TUI Info 侧边栏) 需要展示"完全授权"状态并允许用户切换, 而该状态
+/// 由 agent 侧权限中间件持有, 因此客户端经本消息主动查询一次
+/// (接入握手后 + 用户点击切换后), 服务端以 [WirePermissionState] 回应。
+struct WireGetPermissionState {};
+
+/// 客户端设置"完全授权"状态 (Client -> Server)
+struct WireSetFullAuth {
+    /// true = 完全授权 (后续不再询问权限), false = 恢复询问
+    bool fullAuth = true;
+};
+
+/// 服务端权限状态 (Server -> Client)
+///
+/// 三种来源共用同一消息: 查询响应 / 切换后的广播 / 状态变更广播
+/// (用户在权限询问卡片勾选"完全授权所有权限"后, agent 侧中间件发布事件,
+/// 服务端据此广播给所有已连接客户端, 多端界面保持一致)。
+struct WirePermissionState {
+    /// 是否已完全授权 (对应 PermissionMiddlewareHandle::isFullAuthorized)
+    bool fullAuth = false;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -343,7 +366,10 @@ using WireMessage = std::variant<
     WireGetViewMessages,
     WireViewMessagesPage,
     WireListDir,
-    WireListDirResult>;
+    WireListDirResult,
+    WireGetPermissionState,
+    WireSetFullAuth,
+    WirePermissionState>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

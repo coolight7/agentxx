@@ -2,6 +2,8 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
 #include <cctype>
@@ -9,6 +11,31 @@
 
 namespace agentxx {
 namespace middleware {
+
+void PermissionMiddlewareHandle::setFullAuthorized(bool authorized) noexcept {
+    if (fullAuthorized_ == authorized) {
+        return;
+    }
+    fullAuthorized_ = authorized;
+    // 状态变更广播: 会话服务端点 (SessionServerAgentIO) 订阅本事件后向所有
+    // 已连接客户端广播 WirePermissionState, 使多端界面的授权按钮保持一致
+    // - 来源两条: 权限询问卡片勾选"完全授权所有权限", 客户端 (TUI) 切换请求
+    auto bus = registeredBus_.lock();
+    if (!bus) {
+        return;
+    }
+    asio::co_spawn(
+        bus->executor(),
+        [bus, authorized]() -> asio::awaitable<void> {
+            co_await bus->publish<events::EventPermissionFullAuthChanged>(
+                events::Topic::PermissionFullAuth,
+                events::EventPermissionFullAuthChanged{.fullAuth = authorized}
+            );
+            co_return;
+        },
+        asio::detached
+    );
+}
 
 namespace {
 

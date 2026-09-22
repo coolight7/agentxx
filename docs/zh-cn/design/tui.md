@@ -275,6 +275,26 @@ struct UiActionItem {
 - 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
   [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
+### 2.7 Info 侧边栏底部 (工作目录 / 授权按钮 / 版本信息)
+
+[agent_tui.cpp](/agent/client/src/io/tui/agent_tui.cpp) 的 `renderInfoSidebarFooter()` 渲染
+Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行, 以及 (发现新版本时) 更新提示行。
+
+工作目录行的形态为 `{目录名}  [ 授权按钮 ]  {绝对路径}`:
+
+- 授权按钮显示**当前**授权状态并支持点击切换 (文案随语言表):
+  - 非完全授权: `[ 询问授权 ]` (`info.authAsk`) —— 点击切换为完全授权;
+  - 完全授权: `[ 完全授权 ]` (`info.authFull`) —— 点击恢复询问。
+- 状态本身属于 **agent 侧**权限中间件 (`PermissionMiddlewareHandle::isFullAuthorized`),
+  客户端只持有镜像: 握手 (`WireHelloAck`) 与握手后主动查询 (`WireGetPermissionState`)
+  取初值, 服务端状态变更经 `WirePermissionState` 广播 (含用户在权限询问卡片勾选
+  "完全授权所有权限"), 点击切换经 `WireSetFullAuth` 请求 (本地先乐观更新, 服务端
+  广播回来校准)。
+- 按钮的可点区域登记到 shell 级命中表 (`shellHits_`), 点击经 `handleShellHit` →
+  `toggleFullAuth()` 处理; 未渲染该行 (Info tab 未激活) 时不会占用点击区域 (见 §2.3)。
+- 路径一律以 **UTF-8** 显示 (`utilxx_base::pathToUtf8Generic`): Windows 下
+  `std::filesystem::path::string()` 返回本地代码页, 中文目录会显示为乱码。
+
 ---
 
 ## 3. 必须遵守的约束
