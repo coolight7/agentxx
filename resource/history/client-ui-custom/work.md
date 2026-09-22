@@ -335,6 +335,11 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 ## 待完成任务（下一步）
 
 1. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
+   （接入点：`agent/benchmark/bench_resource.cpp` 的 M2 TUI 场景 —— 现有 harness 已
+   加载插件并驱动 `TUIClientAgentIO`；可再加一个"组件密集面板"场景：用
+   `agentxx::ui::Items` 造 20 行表格 + 趋势图 + kv + 行容器 + 表单控件描述，
+   统计每帧 `renderItems`(含 `measureItem`) 耗时与行模型内存增量；
+   场景打开 `AgentConfigStatic::enableBenchmark` 以采集帧耗时统计）
 2. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
 3. 可选增强：overlay 区域可见性上报（当前只上报面板/Info 段落）、快捷键列表展示
    （`list_keybinds` 已有接口，设置/帮助弹窗尚未消费）
