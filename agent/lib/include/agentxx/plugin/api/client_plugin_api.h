@@ -303,7 +303,14 @@ typedef struct AgentxxClientUiIface {
         const PluginxxStringView* tool_name
     );
 
-    /* ---- 通用交互 (v3 新增; 老宿主按版本截断视角, 本段成员为 NULL 即不支持) ---- */
+    /* ---- 通用交互 (动作回调与 overlay)
+     *
+     * 表 version 恒为 1 (见 AGENTXX_IFACE_CLIENT_UI_VERSION): 本段成员属于首版
+     * 表结构, 老宿主同位置为空指针 → 插件按"该子能力不支持"降级 (能力名协商:
+     * `agentxx.client.action` / `agentxx.client.overlay`)。
+     * 新增能力一律走"新接口表或新能力名", 不在此表尾追加成员 (表结构变大会让
+     * 老宿主的整表校验失败, 见 docs/zh-cn/design/plugins.md §9)。
+     */
     /// 绑定动作处理器 (client io 线程约束):
     /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
     ///   兜底 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
@@ -489,7 +496,9 @@ typedef struct AgentxxTimerSpec {
     ///   周期定时器只统计真正回调的次数
     /// - 高频 (< 200ms) 刷新面板/overlay 的插件应置 1, 避免不可见时白耗 CPU
     int32_t pause_when_hidden;
-    /// 关联的展示区域 id (面板/Info 段落 id; 空 = 无关联, [is_visible] 恒为 0)
+    /// 关联的展示区域 id (空 = 无关联, [is_visible] 恒为 0)
+    /// - 可取值: 面板 id / Info 段落 id / 通用 overlay (`"__overlay"`) /
+    ///   工具消息装饰的 `tool_call_id` (宿主按该消息是否在消息列表视角内判定)
     PluginxxStringView owner_id;
     /// 超时回调 (client io 线程同步调用; 不得抛异常出边界, 宿主兜底)
     void(PLUGINXX_CALL* on_timer)(void* user_data);

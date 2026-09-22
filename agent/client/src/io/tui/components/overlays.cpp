@@ -1843,7 +1843,17 @@ CustomOverlay::CustomOverlay(
 }
 
 Element CustomOverlay::OnRender() {
-    return overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, options_);
+    auto el = overlayFrame(ctx_, *ctx_.theme, title_, *scrollable_, options_);
+    // 上报 overlay 区域尺寸 (区域 id 固定 `__overlay`): 插件按可用宽高重排内容,
+    // 也作为 `pause_when_hidden` 定时器的门控依据 (可见性由打开/关闭时上报)
+    if (auto mgr = ctx_.pluginManager) {
+        mgr->reportRegionSize(
+            std::string{AGENTXX_CLIENT_OVERLAY_OWNER},
+            scrollable_->contentWidth(),
+            scrollable_->totalHeight()
+        );
+    }
+    return el;
 }
 
 bool CustomOverlay::OnEvent(Event event) {

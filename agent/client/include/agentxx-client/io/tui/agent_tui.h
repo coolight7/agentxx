@@ -312,6 +312,13 @@ public:
     ///   (管理器按值变化去重)
     void reportSidebarRegionVisibility();
 
+    /// 上报通用 overlay 区域的可见性 (UI 线程; 打开/关闭时调用)
+    ///
+    /// 区域 id 固定为 `__overlay` ([AGENTXX_CLIENT_OVERLAY_OWNER]): 插件用该 id
+    /// 注册 `pause_when_hidden` 定时器时可据此在弹窗关闭后暂停回调;
+    /// 尺寸由弹窗自身在渲染时上报 (见 CustomOverlay::OnRender)。
+    void reportOverlayVisible(bool visible);
+
     /// 通用 overlay 打开 (open_overlay 驱动; UI 线程; 单模态 last-wins):
     /// - type: AgentxxOverlayType (0=MERMAID 1=TEXT 2=DIFF 3=CUSTOM)
     /// - ownerPlugin: 发起插件 (CUSTOM 内按钮与 close 归因用)

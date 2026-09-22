@@ -262,6 +262,14 @@ void TUIClientAgentIO::reportSidebarRegionVisibility() {
     }
 }
 
+void TUIClientAgentIO::reportOverlayVisible(bool visible) {
+    auto mgr = pluginManager_;
+    if (!mgr) {
+        return;
+    }
+    mgr->reportRegionVisible(std::string{AGENTXX_CLIENT_OVERLAY_OWNER}, visible);
+}
+
 void TUIClientAgentIO::addPluginPanelTab(const std::string& id, const std::string& title) {
     // UI 线程调用 (适配器经 postToUi 投递); sidebar_ 为 UI 线程独占组件
     if (!sidebar_ || sidebar_->hasTab(id)) {
@@ -1500,10 +1508,15 @@ void TUIClientAgentIO::openOverlay(
         overlayOwnerPlugin_,
         [this] {
             modal_->popModal();
+            // Esc/底栏关闭同样要撤销 overlay 区域的可见性 (插件定时器据此恢复暂停)
+            overlayOwnerPlugin_.clear();
+            reportOverlayVisible(false);
         }
     );
     if (overlay) {
         modal_->pushModal(std::move(overlay));
+        // overlay 已上屏: 关联区域视为可见 (插件可据 `is_visible` 决定是否刷新内容)
+        reportOverlayVisible(true);
     }
     postRedraw();
 }
@@ -1514,6 +1527,7 @@ void TUIClientAgentIO::closeOverlay() {
         modal_->popModal();
     }
     overlayOwnerPlugin_.clear();
+    reportOverlayVisible(false);
     postRedraw();
 }
 

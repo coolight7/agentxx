@@ -1,5 +1,6 @@
 #include "agentxx/middlewares/interrupt_ui.h"
 
+#include "agentxx/ui/item.h"
 #include "fmt/format.h"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
@@ -123,8 +124,7 @@ std::string jsonValueText(const Json& v) {
 }
 
 /// 控件 → 纯文本说明行 ("标签: 候选/默认 (控件形态)")
-std::string controlPlainText(const InterruptUiBlock& b) {
-    std::string line;
+std::string controlPlainText(const InterruptUiBlock& b) {    std::string line;
     if (!b.label.empty()) {
         line  = b.label;
         line += ": ";
@@ -153,6 +153,68 @@ std::string controlPlainText(const InterruptUiBlock& b) {
         line += " - " + b.help;
     }
     return line;
+}
+
+/// 按缩进 + 折行宽度输出一段纯文本 (与文本块同一排版口径)
+void appendIndented(
+    std::vector<std::string>& out,
+    std::string_view          text,
+    int                       indent,
+    int                       width
+) {
+    const std::string pad(static_cast<size_t>(std::max(0, indent)), ' ');
+    const int         avail = (width > 0) ? std::max(1, width - std::max(0, indent)) : 0;
+    for (const auto& line : wrapToWidth(text, avail)) {
+        out.push_back(pad + line);
+    }
+}
+
+/// 按 '\n' 拆分纯文本 (空串返回空列表)
+std::vector<std::string> splitLines(std::string_view text) {
+    std::vector<std::string> out;
+    size_t                   begin = 0;
+    while (begin < text.size()) {
+        const auto eol = text.find('\n', begin);
+        out.emplace_back(text.substr(
+            begin,
+            (eol == std::string_view::npos) ? std::string_view::npos : (eol - begin)
+        ));
+        if (eol == std::string_view::npos) {
+            break;
+        }
+        begin = eol + 1;
+    }
+    return out;
+}
+
+/// 扩展组件块的纯文本降级 (表格/树/横排/分组/键值/趋势图/计量条等)
+///
+/// 块的 kind 未被本结构映射成具名字段时, 按 `agentxx.ui.item` **同一份 schema**
+/// 解析块的原始 JSON, 并复用宿主统一的纯文本降级实现 [agentxx::ui::plainText]
+/// (与 TUI 渲染同一套组件语义); 组件层未识别的 kind 走 `fallback` 文本,
+/// 两者都没有才跳过 (向前兼容)。
+///
+/// 为什么必须走组件层: 行式前端 (CLI/FFI/日志) 原先只认本结构映射的几种 kind,
+/// 中断描述里的表格/树/图表块会被静默丢弃 —— 用户看不到描述内容。
+std::vector<std::string> extendedBlockPlainText(const InterruptUiBlock& b, int width) {
+    if (!b.raw.is_object() || !b.raw.contains("kind")) {
+        // 无原始 JSON (程序化构造的块): 只能输出 fallback
+        std::vector<std::string> out;
+        if (!b.fallback.empty()) {
+            appendIndented(out, b.fallback, b.indent, width);
+        }
+        return out;
+    }
+    auto item = agentxx::ui::parseItem(b.raw);
+    if (!item.known) {
+        std::vector<std::string> out;
+        if (!item.fallback.empty()) {
+            appendIndented(out, item.fallback, std::max(b.indent, item.indent), width);
+        }
+        return out;
+    }
+    // 缩进与折行由组件层按 item.indent / width 处理 (与 TUI 渲染口径一致)
+    return splitLines(agentxx::ui::plainText(std::vector<agentxx::ui::Item>{std::move(item)}, width));
 }
 
 } // namespace
@@ -289,7 +351,7 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
     b.cancelLabel    = j.value("cancelLabel", "");
     b.cancelLabelKey = j.value("cancelLabelKey", "");
 
-    // custom (预留字段: 解析/序列化往返保留, 渲染暂未实现)
+    // custom: 组件名 + 属性 (客户端派发到共享组件渲染层; 无内容时输出 fallback)
     b.component = j.value("component", "");
     b.fallback  = j.value("fallback", "");
     if (j.is_object()) {
@@ -570,16 +632,21 @@ std::string interruptUiPlainText(const InterruptUi& ui, int width) {
         } else if (b.kind == "control") {
             appendWrapped(controlPlainText(b), b.indent);
         } else if (b.kind == "custom") {
-            // 预留块: 无 fallback 时输出组件名占位 (便于行式前端提示缺失)
+            // 自定义块: 无 fallback 时输出组件名占位 (便于行式前端提示缺失)
             const auto text
                 = !b.fallback.empty()
                       ? b.fallback
                       : (b.component.empty() ? std::string{"[unsupported block]"}
                                              : fmt::format("[custom component: {}]", b.component));
             appendWrapped(text, b.indent);
+        } else {
+            // 扩展组件块 (表格/树/横排/分组/键值/趋势图/计量条等):
+            // 复用组件层的纯文本降级 (与 TUI 渲染同一套 schema 与语义)
+            for (auto& line : extendedBlockPlainText(b, width)) {
+                lines.push_back(std::move(line));
+            }
         }
         // submit: 仅交互语义, 纯文本不输出
-        // 未知 kind: 忽略
     }
     return utilxx_base::stringJoin(lines, "\n");
 }

@@ -507,6 +507,77 @@ void test_plain_text_degrade() {
     XX_TEST_EXPECT_TRUE(wrapped.find("89") != std::string::npos);
 }
 
+/// 扩展组件块 (表格/树/横排/键值/趋势图/计量条等) 的纯文本降级
+///
+/// 行式前端 (CLI/FFI/日志) 只走 interruptUiPlainText, 若这些块被忽略, 用户会
+/// 完全看不到中断描述的内容 —— 本用例保护"按同一 schema 解析并输出"的行为。
+void test_plain_text_extended_blocks() {
+    using namespace agentxx::middleware;
+
+    InterruptUi ui;
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "table"},
+        {"header", true},
+        {"columns", Json::array({Json{{"title", "Path"}, {"w", "flex"}}, Json{{"title", "Scope"}}})},
+        {"rows", Json::array({Json::array({"a.txt", "write"}), Json::array({"b.txt", "read"})})},
+    }));
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "kv"},
+        {"items", Json::array({Json{{"k", "Model"}, {"v", "gpt-x"}}})},
+    }));
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "tree"},
+        {"nodes", Json::array({Json{{"label", "src"}, {"children", Json::array({Json{{"label", "main.cpp"}}})}}})},
+    }));
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "meter"},
+        {"value", 72},
+        {"total", 100},
+        {"width", 4},
+        {"label", "CPU"},
+    }));
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "sparkline"},
+        {"data", Json::array({1, 5, 3})},
+    }));
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "row"},
+        {"items", Json::array({Json{{"kind", "text"}, {"text", "L"}}, Json{{"kind", "text"}, {"text", "R"}}})},
+    }));
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "future_widget"},
+        {"fallback", "unsupported widget"},
+    }));
+
+    const auto text = interruptUiPlainText(ui, 80);
+    XX_TEST_EXPECT_TRUE(text.find("Path") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("Model : gpt-x") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("main.cpp") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[###-] 72%") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("▁") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("L | R") != std::string::npos);
+    // 未知 kind: 输出 fallback (不静默丢内容)
+    XX_TEST_EXPECT_TRUE(text.find("unsupported widget") != std::string::npos);
+
+    // 未知 kind 且无 fallback: 跳过 (向前兼容)
+    InterruptUi unknown;
+    unknown.blocks.push_back(InterruptUiBlock::fromJson(Json{{"kind", "future_widget"}}));
+    XX_TEST_EXPECT_EQ(interruptUiPlainText(unknown, 0), std::string{});
+
+    // 缩进与折行 (宽度按显示列宽口径, 与文本块一致)
+    InterruptUi indented;
+    indented.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "text"},
+        {"text", "abcdefgh"},
+        {"indent", 2},
+    }));
+    const auto wrappedText = interruptUiPlainText(indented, 6);
+    XX_TEST_EXPECT_TRUE(wrappedText.find("  abcd") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(wrappedText.find("  efgh") != std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // InterruptHandleArg 序列化 (ui 唯一描述来源; inputs[] 已删除)
 // ---------------------------------------------------------------------------
@@ -557,6 +628,7 @@ TestResult testInterruptUi() {
     test_preset_permission_and_confirm_card();
     test_result_contract_helpers();
     test_plain_text_degrade();
+    test_plain_text_extended_blocks();
     test_interrupt_handle_arg_serialization();
 
     return TestResult{g_interrupt_ui_passed, g_interrupt_ui_failed};

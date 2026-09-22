@@ -244,8 +244,7 @@ Element MessageListComponent::OnRender() {
     if (ctx_.frameState) {
         const auto& vboxes = scrollable_->visibleBoxes();
         const auto& msgs   = ctx_.frameState->messages;
-        for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
-            const auto& msg = *msgs[i];
+        for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {            const auto& msg = *msgs[i];
             // 可折叠消息: Think / Tool / System (点击 header 折叠/展开)
             const bool collapsible
                 = (msg.role == TUIMessage::Role::Think || msg.role == TUIMessage::Role::Tool
@@ -274,6 +273,12 @@ Element MessageListComponent::OnRender() {
         }
     }
 
+    // 插件定时器的可见性门控: 上报视角内工具消息装饰区域的可见性
+    // (区域 id = tool_call_id; 仅对登记过装饰的 id 上报, 见函数说明)
+    if (ctx_.frameState) {
+        reportDecorVisibility(scrollable_->visibleBoxes());
+    }
+
     // 连接失败 banner 的 [重试] 按钮命中: banner (空状态) 不在本帧列表中时清空 ——
     // 按钮消失后不再占用那块区域。
     // 注意: 不能每帧无条件清空 —— banner 元素跨帧缓存时不重建, 若每帧清空则会
@@ -300,6 +305,45 @@ Element MessageListComponent::OnRender() {
                text("   "),
            })
            | reflect(areaBox_);
+}
+
+/// 上报视角内工具消息装饰区域的可见性 (见头文件说明)
+void MessageListComponent::reportDecorVisibility(const std::vector<Box>& vboxes) {
+    auto mgr = ctx_.pluginManager;
+    if (!mgr || !ctx_.frameState) {
+        return;
+    }
+    const auto&           st = *ctx_.frameState;
+    std::set<std::string> visible;
+    const auto&           msgs = st.messages;
+    for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
+        if (vboxes[i].IsEmpty()) {
+            continue; // 子项不在视口内
+        }
+        const auto& msg = *msgs[i];
+        if (msg.role != TUIMessage::Role::Tool || !msg.tool || msg.tool->toolCallId.empty()) {
+            continue;
+        }
+        // 只上报"确实登记过装饰"的 id: 否则宿主的可见性表会被每个 tool_call_id 撑大
+        if (!findToolDecor(st, msg.tool->toolCallId)) {
+            continue;
+        }
+        visible.insert(msg.tool->toolCallId);
+    }
+    if (visible == decorVisibleOwners_) {
+        return; // 值未变化: 不上报 (管理器侧亦按值去重, 这里再省一次锁与查找)
+    }
+    for (const auto& id : visible) {
+        if (!decorVisibleOwners_.contains(id)) {
+            mgr->reportRegionVisible(id, true);
+        }
+    }
+    for (const auto& id : decorVisibleOwners_) {
+        if (!visible.contains(id)) {
+            mgr->reportRegionVisible(id, false);
+        }
+    }
+    decorVisibleOwners_ = std::move(visible);
 }
 
 bool MessageListComponent::OnEvent(Event event) {

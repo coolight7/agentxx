@@ -63,7 +63,9 @@ struct InterruptUiOption {
 /// - `gap`       空行 (`lines` 行)
 /// - `control`   交互控件 (值进入结果 `values[id]`, 见下)
 /// - `submit`    确认/取消行 (`label`/`labelKey` = 确认, `cancelLabel`/`cancelLabelKey` = 取消)
-/// - `custom`    自定义渲染块 (**字段预留, 暂未实现**)
+/// - `custom`    自定义渲染块 (按 `component` + `props` 派发到共享组件渲染层;
+///               `component` 为空或 `"components"` 时用 `props.items` 渲染组件树,
+///               两者都没有则输出 `fallback`)
 ///
 /// control (控件形态; 形态即语义, **没有** "参数类型" 概念):
 /// - `buttons`  横排按钮 (`options`; `commitOnPick` = 点击即选中并提交整份表单)
@@ -240,6 +242,9 @@ double interruptValueDouble(
 /// - control: "标签: 候选项/默认值 (控件形态)" 说明行
 /// - submit: 不输出 (仅交互语义)
 /// - custom: fallback 文本
+/// - 其余 kind (表格/树/横排/分组/键值/趋势图/计量条等扩展组件): 按
+///   `agentxx.ui.item` 同一份 schema 解析块描述, 复用 [agentxx::ui::plainText]
+///   输出 (未知 kind 走 `fallback`, 不静默丢内容)
 ///
 /// - `args`:
 ///     - [width] 折行宽度 (<=0 不折行)
