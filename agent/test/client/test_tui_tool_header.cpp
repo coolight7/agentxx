@@ -609,6 +609,30 @@ struct ToolHeaderFixture {
         });
     }
 
+    /// 注入含新组件 (表格/键值/计量条) 的工具消息装饰
+    ///
+    /// 装饰 items 与面板/Info/overlay/中断共用同一套组件 schema 与渲染实现,
+    /// 该用例保护"装饰接入点同样能上屏新组件"。
+    void pushDecorExtended() {
+        sharedState.mutate([&](TUIRenderState& st) {
+            auto  reg    = st.pluginRegistry
+                               ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                               : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto& d      = reg->toolDecors.emplace_back();
+            d.plugin     = "agentxx_codegraph";
+            d.toolCallId = "call_1";
+            d.displayName = "Index";
+            d.summary     = "indexed 2 files";
+            d.items       = utilxx_base::Json::parse(R"([
+                {"kind":"table","header":true,
+                 "columns":[{"title":"Path","w":"flex"},{"title":"Lines","align":"right","w":6}],
+                 "rows":[["main.cpp","120"],["io.cpp","42"]]},
+                {"kind":"kv","items":[{"k":"Nodes","v":"171"}]}
+            ])");
+            st.pluginRegistry = std::move(reg);
+        });
+    }
+
     /// 剥离 ANSI 转义序列, 获取纯文本表示
     static std::string stripAnsi(std::string_view str) {
         std::string out;
@@ -784,9 +808,25 @@ void testTuiToolHeaderOverflow() {
     XX_TEST_EXPECT_TRUE(out2.find("+ [Think] ") != std::string::npos);
 }
 
+/// 装饰接入点: 新组件 (表格/键值) 在工具消息展开体里渲染上屏
+void testTuiToolHeaderDecorExtended() {
+    ToolHeaderFixture f(80, 14);
+    f.pushTool("agentxx_codegraph_index", R"({"path":"."})", true, false);
+    f.pushDecorExtended();
+
+    const std::string out = f.plainRender();
+    // 折叠头: 装饰声明的显示名 (展开态头部只显示显示名, 摘要用于折叠态)
+    XX_TEST_EXPECT_TRUE(out.find("Index") != std::string::npos);
+    // 展开体: 表格表头/单元格 + 键值对
+    XX_TEST_EXPECT_TRUE(out.find("Path") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("main.cpp") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("io.cpp") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("Nodes") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(out.find("171") != std::string::npos);
+}
+
 // 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数 toolName 高亮)
-void testTuiToolHeaderRunning() {
-    ToolHeaderFixture f;
+void testTuiToolHeaderRunning() {    ToolHeaderFixture f;
 
     // 已知工具在 running 状态下折叠展示 "Read · /path"
     f.pushTool("agentxx_filesystem_read", R"({"path":"/home/running.cpp"})", false);
@@ -1468,6 +1508,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
     testTuiToolHeaderDecor();
+    testTuiToolHeaderDecorExtended();
     testTuiToolHeaderDecorButtonMultiFrame();
     testTuiToolHeaderFailed();
     testTuiToolHeaderDuration();

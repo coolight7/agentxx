@@ -169,6 +169,106 @@ const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
     /* is_io_thread */ fakeIsIoThread,
 };
 
+/// 伪 client UI 接口表: 捕获 SDK 便捷方法提交的 JSON (替代真实宿主注册表)
+struct ClientUiCapture {
+    int         panelUpdates = 0;
+    std::string panelItems;
+    int         statusUpdates = 0;
+    std::string statusJson;
+    int         decorUpdates = 0;
+    std::string decorJson;
+    std::string decorToolCallId;
+    int         overlays = 0;
+    std::string overlayPayload;
+    std::string overlayExtra;
+};
+
+ClientUiCapture g_clientUiCapture;
+
+int32_t PLUGINXX_CALL
+    fakeUpdatePanel(const PluginxxHost*, AgentxxPanel*, const PluginxxStringView* items) {
+    ++g_clientUiCapture.panelUpdates;
+    g_clientUiCapture.panelItems
+        = (items && items->data) ? std::string{items->data, static_cast<size_t>(items->size)} : "";
+    return 0;
+}
+
+int32_t PLUGINXX_CALL fakeUpdateStatusItem(
+    const PluginxxHost*,
+    AgentxxStatusItem*,
+    const PluginxxStringView* json
+) {
+    ++g_clientUiCapture.statusUpdates;
+    g_clientUiCapture.statusJson
+        = (json && json->data) ? std::string{json->data, static_cast<size_t>(json->size)} : "";
+    return 0;
+}
+
+int32_t PLUGINXX_CALL fakeUpdateToolDecor(
+    const PluginxxHost*,
+    const PluginxxStringView* toolCallId,
+    const PluginxxStringView* json
+) {
+    ++g_clientUiCapture.decorUpdates;
+    g_clientUiCapture.decorToolCallId = (toolCallId && toolCallId->data)
+                                            ? std::string{
+                                                  toolCallId->data,
+                                                  static_cast<size_t>(toolCallId->size)
+    }
+                                            : "";
+    g_clientUiCapture.decorJson
+        = (json && json->data) ? std::string{json->data, static_cast<size_t>(json->size)} : "";
+    return 0;
+}
+
+int32_t PLUGINXX_CALL fakeOpenOverlay(
+    const PluginxxHost*,
+    const AgentxxOverlaySpec* spec
+) {
+    if (!spec) {
+        return -1;
+    }
+    ++g_clientUiCapture.overlays;
+    g_clientUiCapture.overlayPayload = (spec->payload.data)
+                                           ? std::string{
+                                                 spec->payload.data,
+                                                 static_cast<size_t>(spec->payload.size)
+    }
+                                           : "";
+    g_clientUiCapture.overlayExtra = (spec->extra_json.data)
+                                         ? std::string{
+                                               spec->extra_json.data,
+                                               static_cast<size_t>(spec->extra_json.size)
+    }
+                                         : "";
+    return 0;
+}
+
+/// 伪 client UI 表 (只填本模块用到的成员; 其余为 NULL = 该子能力不支持)
+const AgentxxClientUiIface g_fakeClientUi = {
+    /* version */ AGENTXX_IFACE_CLIENT_UI_VERSION,
+    /* struct_size */ sizeof(AgentxxClientUiIface),
+    /* register_status_item */ nullptr,
+    /* update_status_item */ fakeUpdateStatusItem,
+    /* unregister_status_item */ nullptr,
+    /* register_panel */ nullptr,
+    /* update_panel */ fakeUpdatePanel,
+    /* unregister_panel */ nullptr,
+    /* register_info_section */ nullptr,
+    /* update_info_section */ nullptr,
+    /* unregister_info_section */ nullptr,
+    /* register_command */ nullptr,
+    /* unregister_command */ nullptr,
+    /* show_toast */ nullptr,
+    /* update_tool_decor */ fakeUpdateToolDecor,
+    /* register_tool_renderer */ nullptr,
+    /* unregister_tool_renderer */ nullptr,
+    /* bind_action_handler */ nullptr,
+    /* unbind_action_handler */ nullptr,
+    /* open_overlay */ fakeOpenOverlay,
+    /* close_overlay */ nullptr,
+};
+
 /// 执行一次待处理的驱动请求 (推进桥的本地执行器一个有限步骤);
 /// 反复调用直到 `false` 表示当前没有可推进的工作。
 bool runDriver() {
@@ -214,8 +314,36 @@ const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const Pluginxx
     if (name == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
         return &g_fakeRuntime;
     }
+    if (name == AGENTXX_IFACE_CLIENT_UI) {
+        return &g_fakeClientUi;
+    }
     return nullptr;
 }
+
+/// 老宿主模拟: client 侧接口表一律不提供 (query_interface 返回 NULL)
+///
+/// 用途: 验证 SDK 便捷方法在"宿主不支持"时返回非 0 且不崩 (插件据此降级)
+const void* PLUGINXX_CALL
+    fakeQueryInterfaceLegacy(const PluginxxHost* host, const PluginxxStringView* iid) {
+    if (!iid || !iid->data) {
+        return nullptr;
+    }
+    const std::string_view name{iid->data, static_cast<size_t>(iid->size)};
+    if (name == AGENTXX_IFACE_CLIENT_UI || name == AGENTXX_IFACE_CLIENT_EVENTS
+        || name == AGENTXX_IFACE_CLIENT_SESSION || name == AGENTXX_IFACE_CLIENT_WIRE
+        || name == AGENTXX_IFACE_CLIENT_SELF || name == AGENTXX_IFACE_CLIENT_JSON
+        || name == AGENTXX_IFACE_CLIENT_LOG || name == AGENTXX_IFACE_CLIENT_TIMER
+        || name == AGENTXX_IFACE_CLIENT_KEYBIND) {
+        return nullptr;
+    }
+    return fakeQueryInterface(host, iid);
+}
+
+const PluginxxHostVtable g_legacyVtable = {
+    /* alloc */ fakeAlloc,
+    /* free */ fakeFree,
+    /* query_interface */ fakeQueryInterfaceLegacy,
+};
 
 /// 完成通知探针：记录回调次数、状态与载荷。
 struct NotifyProbe {
@@ -637,6 +765,132 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_TRUE(probe.payload.find("n2") != std::string::npos);
         XX_TEST_EXPECT_EQ(seenState, std::string{R"({"channels":{}})"});
     }
+    // ---- client 侧 SDK 便捷方法: 组件构建器 → 面板/装饰/overlay 提交 ----
+    //
+    // 用伪 client UI 表捕获提交的 JSON: 覆盖"构建器 → JSON → 接口调用"这条
+    // 端到端路径 (含老宿主缺失该表时的降级)。
+    {
+        ClientPluginBase client;
+        client.host  = &host;
+        client.iface = ClientIfaces::query(&host);
+        XX_TEST_EXPECT_TRUE(client.iface.ui == &g_fakeClientUi);
+
+        // 伪句柄: 伪 update_* 忽略句柄, 只要求非空
+        AgentxxPanel*      panel  = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
+        AgentxxStatusItem* status = reinterpret_cast<AgentxxStatusItem*>(uintptr_t{1});
+
+        // 1) 构建器 → setPanelItems
+        g_clientUiCapture = ClientUiCapture{};
+        {
+            agentxx::ui::Items ui;
+            ui.table({
+                .columns = {{"Path", "left", 0}, {"Scope", "right", 6}},
+                .rows    = {{"a.txt", "write"}},
+            });
+            ui.meter(72, 100, {.width = 4, .label = "CPU"});
+            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
+        }
+        XX_TEST_EXPECT_EQ(g_clientUiCapture.panelUpdates, 1);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"table\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("a.txt") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"meter\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"items\"") != std::string::npos);
+
+        // 2) panelItems 就地构建器: 作用域结束自动提交
+        {
+            auto writer = client.panelItems(panel);
+            writer->text("from-writer").bold(true);
+            writer->checkbox("opt", "Opt", true);
+        }
+        XX_TEST_EXPECT_EQ(g_clientUiCapture.panelUpdates, 2);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("from-writer") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"bold\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("checkbox") != std::string::npos);
+
+        // 3) form(...) → 分组框 + 控件 + 提交行
+        {
+            agentxx::ui::Items ui;
+            ui.form({
+                .title       = "Options",
+                .fields      = {agentxx::ui::Items{}.checkbox("detail", "Detail", false)},
+                .submitLabel = "APPLY",
+            });
+            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
+        }
+        XX_TEST_EXPECT_EQ(g_clientUiCapture.panelUpdates, 3);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"box\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"submit\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("APPLY") != std::string::npos);
+
+        // 4) 状态栏 JSON
+        XX_TEST_EXPECT_EQ(client.setStatusText(status, "turns: 3"), 0);
+        XX_TEST_EXPECT_EQ(g_clientUiCapture.statusUpdates, 1);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.statusJson.find("turns: 3") != std::string::npos);
+
+        // 5) 工具消息装饰: DecorSpec → update_tool_decor; 清除 = 空 JSON
+        {
+            ClientPluginBase::DecorSpec spec;
+            spec.displayName = "Plan";
+            spec.summary     = "[~] a; [ ] b";
+            spec.items.table({
+                .columns = {{"Step", "left", 0}},
+                .rows    = {{"a"}, {"b"}},
+            });
+            XX_TEST_EXPECT_EQ(client.setToolDecor("call_1", spec), 0);
+            XX_TEST_EXPECT_EQ(g_clientUiCapture.decorUpdates, 1);
+            XX_TEST_EXPECT_EQ(g_clientUiCapture.decorToolCallId, std::string{"call_1"});
+            XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.find("\"displayName\":\"Plan\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.find("\"table\"") != std::string::npos);
+
+            XX_TEST_EXPECT_EQ(client.clearToolDecor("call_1"), 0);
+            XX_TEST_EXPECT_EQ(g_clientUiCapture.decorUpdates, 2);
+            XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.empty());
+        }
+
+        // 6) overlay: 组件树作为 payload + 尺寸选项透传
+        {
+            g_clientUiCapture = ClientUiCapture{};
+            agentxx::ui::Items ui;
+            ui.table({.columns = {{"P", "left", 0}}, .rows = {{"x"}}});
+            XX_TEST_EXPECT_EQ(
+                client.showItemsOverlay("Files", ui, "{\"size\":\"large\"}"),
+                0
+            );
+            XX_TEST_EXPECT_EQ(g_clientUiCapture.overlays, 1);
+            XX_TEST_EXPECT_TRUE(g_clientUiCapture.overlayPayload.find("\"items\"") != std::string::npos);
+            XX_TEST_EXPECT_EQ(g_clientUiCapture.overlayExtra, std::string{"{\"size\":\"large\"}"});
+        }
+
+        // 7) 未知 kind 原样透传 (老宿主忽略, 数据层向前兼容)
+        {
+            agentxx::ui::Items ui;
+            ui.raw(utilxx_base::Json{{"kind", "future_widget"}, {"fallback", "n/a"}});
+            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
+            XX_TEST_EXPECT_TRUE(
+                g_clientUiCapture.panelItems.find("future_widget") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("n/a") != std::string::npos);
+        }
+    }
+
+    // ---- 老宿主降级: client UI 表缺失 → 便捷方法返回非 0, 不崩 ----
+    {
+        const PluginxxHost legacyHost{&g_legacyVtable, nullptr};
+        ClientPluginBase   client;
+        client.host  = &legacyHost;
+        client.iface = ClientIfaces::query(&legacyHost);
+        XX_TEST_EXPECT_TRUE(client.iface.ui == nullptr);
+
+        AgentxxPanel* panel = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
+        agentxx::ui::Items ui;
+        ui.text("x");
+        XX_TEST_EXPECT_TRUE(client.setPanelItems(panel, ui) != 0);
+        XX_TEST_EXPECT_TRUE(client.setToolDecor("call_1", {}) != 0);
+        XX_TEST_EXPECT_TRUE(client.showItemsOverlay("t", ui) != 0);
+        XX_TEST_EXPECT_FALSE(client.hostSupports("agentxx.client.components"));
+        XX_TEST_EXPECT_TRUE(client.regionSize("p").width == 0);
+    }
+
     return result;
 }
 } // namespace agentxx::test
