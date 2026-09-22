@@ -80,13 +80,14 @@
     覆盖 `update_panel` / `update_info_section` / `update_status_item` /
     `update_tool_decor` / `open_overlay`（payload + extra）/ `register_tool_renderer`
     模版 / 工具渲染器输出 items。
-- [ ] **§6.4 中断预设复用组件构建器**
-  - 现状：`interrupt_presets.{h,cpp}` 仍逐个手写 `InterruptUiBlock`（只有
-    text/markdown/diff/separator/gap/submit/control），没有改用 `agentxx::ui::Items`，
-    也没有 `Item ↔ InterruptUiBlock` 的 `toItem/fromItem` 映射，更没有
-    table/tree/sparkline/row/box 等新组件 preset。
-  - 影响：agent 侧中断要用新组件只能手写 raw JSON；plan 举例的"权限卡片路径表格、
-    子代理任务树、上下文占用 meter"无从表达。
+- [x] **§6.4 中断预设复用组件构建器**（2026-09-22 完成，见『阶段 12』）
+  - 已提供中断层 ↔ 组件层的唯一映射（`middleware::itemOf` / `blockOf`，客户端
+    `itemFromInterruptBlock` 改为转发）、用构建器拼中断描述的入口
+    （`preset::blocksOf(Items)` / `contentBlock(Items)`）与新组件 helper
+    （`tableBlock` / `treeBlock` / `meterBlock`）；
+  - 无 i18n 键的内容块 helper 已改为经组件构建器产出；带文案键的 helper
+    （`textBlockKey` / 控件 / 提交行）保持直接构造 —— 组件层没有"文案键"概念
+    （键由客户端在转换前解析，见 `InterruptUiBlock` 说明），这是**有意为之的分工**。
 - [x] **§6.3 SDK 便捷方法补齐 3 个**（2026-09-22 完成）
   - `ClientPluginBase::panelItems(panel)` → `PanelWriter`（就地构建 + 作用域结束自动提交）；
   - `ClientPluginBase::setToolDecor(toolCallId, DecorSpec)` / `clearToolDecor()`；
@@ -112,9 +113,11 @@
 - [ ] DSO 测试插件 `test/plugin/dso_plugins/test_ui_components`（面板 / overlay / 表单 /
   定时器 + 禁用启用卸载语义、缓存失效、代次复查）
 - [ ] `plugin_bridge` / `plugin_runtime` 扩展：老宿主缺新能力下的降级、未知 kind 忽略
-- [ ] 5 个接入点各 1 个新组件用例（当前新组件只在 `ui_components` 渲染 harness 与 lib
+- [~] 5 个接入点各 1 个新组件用例（当前新组件只在 `ui_components` 渲染 harness 与 lib
   解析层验证，没有"面板/Info/装饰/overlay/中断真的把 table 渲染上屏"的用例）
-- [ ] 中断新组件块的纯文本降级用例（与『遗留-真实缺陷』第 1 条配对）
+  - 中断接入点已完成（阶段 12：`tui_interrupt` 扩展组件块用例）；面板 / Info / 装饰 /
+    overlay 仍待做
+- [x] 中断新组件块的纯文本降级用例（阶段 10 随『遗留-真实缺陷』第 1 条一并完成）
 
 ### 遗留-基准（plan §9 性能预算）
 
@@ -584,6 +587,50 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
    快照是 COW 拷贝，会让**每次注册表更新**都深拷贝全部解析结果，代价高于收益；
 4. 真要优化应走"按 version 缓存的解析结果"（注册项自带解析缓存 + 版本号失效），
    属于独立性能课题，本方案不做。
+
+---
+
+## 阶段 12：中断预设改用组件构建器（已完成，commit `c53aba3c`）
+
+对应 plan §6.4（『遗留-机制与复用』最后一条与测试相关的欠账）。
+
+### 12.1 中断层 ↔ 组件层唯一映射（lib）
+
+- `agentxx::middleware::itemOf(const InterruptUiBlock&)`：块 → 组件项。
+  `text`/`markdown`/`diff`/`separator`/`gap`/`control`/`submit`/`custom` 按具名字段
+  映射；其余 kind 按块 `raw`（组件描述本身）解析；无法映射返回 `nullopt`。
+- `agentxx::middleware::blockOf(const agentxx::ui::Item&)`：组件项 → 块，
+  `raw` = 组件 JSON（扩展组件字段因此往返不丢）。
+- 客户端 `itemFromInterruptBlock` 改为转发 `itemOf`（删除重复实现，TUI / 纯文本降级 /
+  构建器三条路径共用一份转换）。
+
+### 12.2 用构建器拼中断描述
+
+- `preset::blocksOf(const agentxx::ui::Items&)` → `vector<InterruptUiBlock>`；
+  `preset::contentBlock(Items)` 单项版本。
+- 新组件 helper：`tableBlock(columns, rows)`（路径清单等）、`treeBlock(nodes)`
+  （子代理任务/目录层级）、`meterBlock(label, value, total, thresholds)`（上下文占用）。
+- 无 i18n 键的内容块 helper（`textBlock`/`markdownBlock`/`diffBlock`/`separatorBlock`/
+  `gapBlock`）改为经组件构建器产出；带文案键的 helper 保持直接构造（组件层没有
+  "文案键"概念 —— 键由客户端在转换为组件项之前解析）。
+- 构建器补充样式修饰：`Items::indent/bold/dim/wrap`（作用于最近一项，与 `when` 同规则，
+  内部走统一的 `setLast`）。
+
+### 12.3 测试
+
+- `interrupt_ui`（lib，+39 项）：构建器 → 块 → 组件项 → 纯文本端到端；表格/树字段映射；
+  控件往返（label/step/integer/min-max）；未知组件不使整份描述失效；
+  预设 helper 的 kind 正确。
+- `tui_interrupt`（client，+12 项）：扩展组件块（表格/树/横排）真的渲染上屏、
+  `interruptEstimate == renderedRows`、描述 JSON 往返保留 `columns`/`nodes`。
+- 全量测试：**22441 项断言通过**（无 ASan 报告）。
+
+### 踩过的坑（阶段 12）
+
+- 控件标签在两层里字段名不同：中断层是 `label`，组件层是 `controlLabel`（JSON 字段名
+  仍为 `"label"`）—— 双向映射必须按 kind 取对应字段，否则标签静默丢失
+- `Items::tree(TreeSpec)` 接受的是 `TreeSpec`（含 `nodes`），不能直接传初始化列表
+- `blockOf` 不做 i18n 键映射：组件 schema 里没有键的位置，需要键的块直接构造
 
 ---
 
