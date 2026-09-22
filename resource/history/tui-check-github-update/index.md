@@ -1,7 +1,7 @@
 # tui 启动时检测 github release 更新
 - 难度: A
 - 类型: 新增功能
-- 基于commit: e7e5ebe6253211e2f119e00efc8d8d3aedf24b7c
+- 基于commit: 40342b18192fa1dd61dceb7341459c600c237530
 - 时间: 2026-09-23 02:37
 - 需求:
 ```md
