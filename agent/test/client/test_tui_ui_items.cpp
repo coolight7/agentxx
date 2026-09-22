@@ -267,6 +267,54 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_EQ(layoutLines(res, 40), 3);
         XX_TEST_EXPECT_TRUE(findRegion(res, "open:main") != nullptr);
     }
+    {
+        // 树: 宿主管理折叠 (提供折叠状态查询时, 有子节点的行可点击展开/收起)
+        auto ctx = ctxFor(40);
+        ctx.collapseExpanded = [](const std::string& id, bool defaultValue) {
+            // 路径键: 从根到该节点的路径 (如 "src/io/")
+            XX_TEST_EXPECT_TRUE(id == "src/" || id == "src/io/");
+            return id != "src/"; // 收起 src, 展开其余
+        };
+        auto res  = renderJson(R"([{"kind":"tree","nodes":[
+            {"label":"src","children":[{"label":"main.cpp"},{"label":"io","children":[
+                {"label":"a.cpp"}]}]}
+        ]}])", ctx);
+        auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "▸ src"));     // 收起标记
+        XX_TEST_EXPECT_FALSE(screenHas(text, "main.cpp")); // 子树不渲染
+        XX_TEST_EXPECT_FALSE(screenHas(text, "a.cpp"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
+
+        // 整行登记折叠区域 (键 = 节点路径; 点击切换展开状态)
+        const auto* region = findRegion(res, "src/");
+        XX_TEST_EXPECT_TRUE(region != nullptr);
+        if (region != nullptr) {
+            XX_TEST_EXPECT_EQ(region->kind, UiHitRegionKind::Collapse);
+        }
+
+        // 展开态: 子节点可见, 嵌套节点登记自己的路径键
+        auto ctx2 = ctxFor(40);
+        ctx2.collapseExpanded = [](const std::string&, bool) {
+            return true;
+        };
+        auto res2  = renderJson(R"([{"kind":"tree","nodes":[
+            {"label":"src","children":[{"label":"main.cpp"},{"label":"io","children":[
+                {"label":"a.cpp"}]}]}
+        ]}])", ctx2);
+        auto text2 = renderToText(res2, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text2, "▾ src"));
+        XX_TEST_EXPECT_TRUE(screenHas(text2, "main.cpp"));
+        XX_TEST_EXPECT_TRUE(screenHas(text2, "a.cpp"));
+        XX_TEST_EXPECT_EQ(measuredLines(res2), size_t{4});
+        XX_TEST_EXPECT_TRUE(findRegion(res2, "src/io/") != nullptr);
+
+        // 无折叠状态查询时保持全展开 (行式前端/不关心折叠的调用方行为不变)
+        auto res3 = renderJson(R"([{"kind":"tree","nodes":[
+            {"label":"src","children":[{"label":"main.cpp"}]}
+        ]}])", ctxFor(40));
+        XX_TEST_EXPECT_TRUE(screenHas(renderToText(res3, 40), "main.cpp"));
+        XX_TEST_EXPECT_FALSE(screenHas(renderToText(res3, 40), "▾"));
+    }
 
     // ---------------- 分组框 / 折叠 / 横排 ----------------
     {

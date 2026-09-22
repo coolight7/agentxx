@@ -509,20 +509,36 @@ Row renderKeyValue(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
 }
 
 /// 层级列表 (连接线 + 缩进; 节点可点则登记整行区域)
+///
+/// 折叠态由**宿主**维护 (键 = 从根到该节点的路径, 如 `src/io/`): 提供
+/// [UiRenderCtx::collapseExpanded] 时, 有子节点的行可点击展开/收起 (行首标记
+/// `▾`/`▸`), 收起后子树不渲染且不占点击区域; 未提供时按全展开渲染 (行式前端与
+/// 不关心折叠的调用方行为不变)。
 Row renderTree(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
     const auto&              theme = *ctx.theme;
     Elements                 lines;
     std::vector<UiHitRegion> regions;
     int                      y = 0;
 
-    std::function<void(const std::vector<agentxx::ui::TreeNode>&, const std::string&)> emit =
-        [&](const std::vector<agentxx::ui::TreeNode>& nodes, const std::string& prefix) {
+    std::function<void(const std::vector<agentxx::ui::TreeNode>&, const std::string&, const std::string&)>
+        emit = [&](
+                   const std::vector<agentxx::ui::TreeNode>& nodes,
+                   const std::string&                        prefix,
+                   const std::string&                        path
+               ) {
             for (size_t i = 0; i < nodes.size(); ++i) {
-                const auto&       node = nodes[i];
-                const bool        last = (i + 1 == nodes.size());
-                const std::string line = item.connector
-                                             ? prefix + (last ? "└─ " : "├─ ") + node.label
-                                             : prefix + node.label;
+                const auto& node = nodes[i];
+                const bool  last = (i + 1 == nodes.size());
+                // 节点路径 (折叠状态键; 结尾带 '/' 便于与 id 型键区分)
+                const std::string nodePath = path + node.label + "/";
+                const bool        foldable = !node.children.empty() && ctx.collapseExpanded != nullptr;
+                const bool expanded = !foldable || ctx.collapseExpanded(nodePath, true);
+
+                std::string line = item.connector ? prefix + (last ? "└─ " : "├─ ") : prefix;
+                if (foldable) {
+                    line += expanded ? "▾ " : "▸ ";
+                }
+                line += node.label;
                 lines.push_back(text(line) | color(itemColor(node.color, theme)));
                 if (!node.action.empty()) {
                     UiHitRegion region;
@@ -535,14 +551,30 @@ Row renderTree(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
                     region.plugin  = ctx.plugin;
                     region.ownerId = ctx.ownerId;
                     regions.push_back(std::move(region));
+                } else if (foldable) {
+                    // 无动作节点: 整行登记为折叠区域 (点击切换展开状态)
+                    UiHitRegion region;
+                    region.kind    = UiHitRegionKind::Collapse;
+                    region.x       = 0;
+                    region.y       = y;
+                    region.w       = 0; // 整行可点
+                    region.h       = 1;
+                    region.id      = nodePath;
+                    region.plugin  = ctx.plugin;
+                    region.ownerId = ctx.ownerId;
+                    regions.push_back(std::move(region));
                 }
                 ++y;
-                if (!node.children.empty()) {
-                    emit(node.children, item.connector ? prefix + (last ? "   " : "│  ") : prefix);
+                if (expanded && !node.children.empty()) {
+                    emit(
+                        node.children,
+                        item.connector ? prefix + (last ? "   " : "│  ") : prefix,
+                        nodePath
+                    );
                 }
             }
         };
-    emit(item.nodes, "");
+    emit(item.nodes, "", "");
 
     Row row;
     if (lines.empty()) {
