@@ -105,18 +105,28 @@
 
 ### 遗留-测试欠账（plan §10 P2.6 + §11）
 
-- [ ] `tui_form` 专项测试模块（当前表单用例并入 `tui_ui_items`）
-- [ ] `tui_widget` / `tui_sidebar` 扩展：面板收敛后的 kind 支持与命中、拖拽宽度变化触发
-  尺寸事件（现状：client 测试里没有 `registerPanel/updatePanel` 用例，只直接造
-  `ClientUiRegistry` 快照且仅 statusItems）
-- [ ] `plugin_sdk` 扩展：构建器 → JSON → 面板更新端到端、表单提交动作派发端到端
-- [ ] DSO 测试插件 `test/plugin/dso_plugins/test_ui_components`（面板 / overlay / 表单 /
-  定时器 + 禁用启用卸载语义、缓存失效、代次复查）
-- [ ] `plugin_bridge` / `plugin_runtime` 扩展：老宿主缺新能力下的降级、未知 kind 忽略
-- [~] 5 个接入点各 1 个新组件用例（当前新组件只在 `ui_components` 渲染 harness 与 lib
-  解析层验证，没有"面板/Info/装饰/overlay/中断真的把 table 渲染上屏"的用例）
-  - 中断接入点已完成（阶段 12：`tui_interrupt` 扩展组件块用例）；面板 / Info / 装饰 /
-    overlay 仍待做
+- [x] `tui_form` 专项测试模块（2026-09-22 完成：新建模块，控件状态机 + overlay 表单
+  提交端到端；原 `tui_ui_items` 的表单用例迁出）
+- [~] `tui_widget` / `tui_sidebar` 扩展（2026-09-22 部分完成）
+  - 已完成：面板 / Info 接入点的真实注册路径用例（`registerPanel`/`updatePanel`、
+    `registerInfoSection`/`updateInfoSection` → 表格/计量条/横排/分组框上屏 +
+    命中区域归属 + 可用尺寸上报）；Info 段落的高度上报口径修正为"内容行数"
+  - 未做：拖拽侧边栏宽度 → 尺寸事件（`regionSize` 的"值变化才上报"已在
+    `client_plugins` 覆盖；面板/Info 每次渲染都会上报当前可用宽度，但"拖拽触发"
+    这一路径没有端到端用例 —— 需要真实 `SidebarComponent` + 拖拽事件驱动）
+- [x] `plugin_sdk` 扩展（2026-09-22 完成：构建器 → 面板更新端到端、`Items::form` →
+  表单提交经动作通道派发；见『阶段 14』）
+- [~] DSO 测试插件 `test/plugin/dso_plugins/test_ui_components`（**已评估：不新建 DSO
+  夹具**，见『阶段 14 · 结论』：同等覆盖用"伪实例 + 真实注册/渲染路径"更省且更稳定）
+- [x] `plugin_bridge` / `plugin_runtime` 扩展：老宿主缺新能力下的降级、未知 kind 忽略
+  （2026-09-22 完成：`plugin_sdk` 覆盖"宿主未声明 components/form 能力"与未知 kind 的
+  忽略/降级；见『阶段 14』）
+- [~] 5 个接入点各 1 个新组件用例（**接入点已全覆盖**：面板 / Info / overlay / 中断
+  已就绪，装饰接入点见『阶段 14』；见下方勾选）
+  - 中断接入点：`tui_interrupt`（阶段 12）
+  - 面板 / Info 接入点：`tui_widget`（阶段 13）
+  - overlay 接入点：`tui_form`（阶段 13，含表格 + 表单 + 提交派发）
+  - 装饰（工具消息）接入点：`tui_tool_header`（阶段 14）
 - [x] 中断新组件块的纯文本降级用例（阶段 10 随『遗留-真实缺陷』第 1 条一并完成）
 
 ### 遗留-基准（plan §9 性能预算）
@@ -631,6 +641,65 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
   仍为 `"label"`）—— 双向映射必须按 kind 取对应字段，否则标签静默丢失
 - `Items::tree(TreeSpec)` 接受的是 `TreeSpec`（含 `nodes`），不能直接传初始化列表
 - `blockOf` 不做 i18n 键映射：组件 schema 里没有键的位置，需要键的块直接构造
+
+---
+
+## 阶段 13：tui_form 模块与接入点用例（已完成，commit `b112823a`）
+
+### 13.1 修复（新用例暴露的真实缺陷）
+
+**行模型反射框生命周期**：行元素内的 `ftxui::reflect` 只保存 `Box&`，Box 由
+`UiRow::box`（shared_ptr）持有；面板 / Info / overlay 等接入点只把 `element` 搬进
+滚动容器，Box 随局部渲染结果析构 —— 元素随后被布局时写已释放内存
+（ASan 栈顶 `Reflect::SetBox`，`freed by ~UiRow`）。
+
+修法：`ui_components` 新增内部节点 `OwnedReflect`（把 Box 的所有权绑在元素上，
+`SetBox`/`Render` 语义与 FTXUI 的 `Reflect` 一致），`renderItem` 用它包裹行元素 ——
+移动/缓存元素即带走 Box，所有接入点自动受益（命中判定仍读同一个 Box）。
+
+### 13.2 新增模块 `tui_form`（86 项断言）
+
+- 控件状态机：初始化/点击（勾选/单选/步进/未知 id）/键盘（首次输入替换、退格、
+  Tab、方向键消费、非输入类控件语义、Esc 释放）/校验（越界、非数字、候选项缺失）/
+  取值（类型与描述一致）/容器内控件收集。
+- **overlay 接入点端到端**：真实 `createUniversalOverlay` + 固定视口 → 渲染 →
+  按屏幕坐标点击提交行（逐格扫描定位文本）→ 断言动作通道收到 `__submit` +
+  `{"values":{...}}`；取消行同理收到 `__cancel`。
+- 面板接入点：表单描述渲染后控件行/提交行登记可命中区域（owner = 面板 id、
+  plugin = 插件名）。
+
+### 13.3 接入点用例补齐（面板 / Info）
+
+`tui_widget` 新增两个用例（用真实 `registerPanel`/`updatePanel`、
+`registerInfoSection`/`updateInfoSection` 路径）：
+
+- 面板：表格（含列对齐）+ 计量条 + 横排 + 趋势图渲染上屏；`regionSizes()` 上报
+  可用宽度与内容行数；内容更新后下一次渲染立即反映新描述。
+- Info：段落标题 + kv + 分组框渲染上屏；尺寸上报。
+- 顺带修正 Info 段落的尺寸上报口径：原来上报"子项数"，改为"内容行数"
+  （与面板一致，插件据此判断是否需要折叠/分页）。
+
+### 13.4 支撑改动
+
+- `TUIClientAgentIO::refreshRenderContext()`：帧首快照 + 插件 UI 注册表快照的唯一
+  实现（帧循环两处调用点与测试/诊断共用）。
+- `TUIClientAgentIO::renderInfoSidebar()` 提升为公开接口（UI 线程渲染入口，供
+  SidebarComponent 与测试/诊断调用）。
+
+### 踩过的坑（阶段 13）
+
+- **`reflect` 的引用语义**：只要把行元素搬出 `UiResult`，就必须保证 Box 的所有权
+  跟着走（本次用 `OwnedReflect` 解决）；写"元素落表 + 局部结果析构"的代码时要格外
+  小心这类隐性悬空
+- 控件/提交行的命中区域是"行元素框 + 行内区域"两级；测试里点提交行时直接点标签文本
+  位置即可（提交行整行可点）
+- **动作派发是异步的**：`dispatchAction` 经 io 线程投递，测试必须驱动 io 上下文
+  （`restart()` + `poll()`），且要先持有 `work_guard` —— 否则 `poll()` 因无工作返回
+  会把 io_context 标记为 stopped，之后 `postToIo` 直接抛"executor is stopped"
+- 计量条在 TUI 里是**带背景色的块字符**（不是 `[####]` 文本），断言要用数值文本；
+  `[###-] 72%` 那种形式只出现在纯文本降级里
+- 尺寸上报的口径是"内容行数"而不是"子项数"：表格一个子项可能占 4 行；`box` 的
+  `border` 缺省是 `none`（要画边框需显式写 `"border":"round"`）
 
 ---
 
