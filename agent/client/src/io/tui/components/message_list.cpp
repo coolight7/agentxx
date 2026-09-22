@@ -1667,6 +1667,16 @@ void MessageListComponent::appendDecorItems(
     for (auto& builder : out.builders) {
         mdBuilders.push_back(std::move(builder));
     }
+    // 区域尺寸上报 (owner = tool_call_id): 装饰可用宽度与内容行数 —— 插件据此查询
+    // `regionSize(owner)` 或接收 UI_LAYOUT 事件。消息块在宽度变化时会重建
+    // (LazyScrollable 的 clearCache), 因此上报值随消息列表宽度变化自动刷新。
+    if (auto mgr = ctx_.pluginManager; mgr && !ownerId.empty() && maxWidth > 0) {
+        size_t linesTotal = 0;
+        for (const auto& row : out.rows) {
+            linesTotal += std::max<size_t>(1, row.lines);
+        }
+        mgr->reportRegionSize(ownerId, maxWidth, static_cast<int>(linesTotal));
+    }
     for (auto& row : out.rows) {
         // 含可点区域的行: 命中归属 owner=tool_call_id (以 toolCallId 作 owner_id,
         // 未精确绑定则回落到实例级绑定), 命中后在行内按局部坐标定位具体区域

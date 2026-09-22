@@ -825,8 +825,35 @@ void testTuiToolHeaderDecorExtended() {
     XX_TEST_EXPECT_TRUE(out.find("171") != std::string::npos);
 }
 
+/// 装饰区域尺寸上报: owner = tool_call_id (插件据此查询 regionSize / 收 UI_LAYOUT)
+void testTuiToolHeaderDecorRegionSize() {
+    asio::io_context io;
+    auto             mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
+
+    ToolHeaderFixture f(80, 14);
+    f.ctx.pluginManager = mgr; // 夹具持有 TUICtx 引用: 构造后注入同样生效
+    f.pushTool("agentxx_codegraph_index", R"({"path":"."})", true, false);
+    f.pushDecorExtended();
+    f.render();
+    // 第二帧: 可见性上报用上一帧的可见区域 (1 帧延迟), 故再渲染一帧
+    f.render();
+
+    bool found = false;
+    for (const auto& r : mgr->regionSizes()) {
+        if (r.id == "call_1") { // 装饰 owner = tool_call_id
+            found = true;
+            XX_TEST_EXPECT_TRUE(r.width > 0);
+            XX_TEST_EXPECT_TRUE(r.height >= 2); // 表格 3 行 + 键值 1 行
+        }
+    }
+    XX_TEST_EXPECT_TRUE(found);
+    // 可见性上报同样以 tool_call_id 为键 (pause_when_hidden 门控)
+    XX_TEST_EXPECT_TRUE(mgr->isRegionVisible("call_1"));
+}
+
 // 运行中工具消息折叠展示 (默认不自动展开, 头部展示参数 toolName 高亮)
-void testTuiToolHeaderRunning() {    ToolHeaderFixture f;
+void testTuiToolHeaderRunning() {
+    ToolHeaderFixture f;
 
     // 已知工具在 running 状态下折叠展示 "Read · /path"
     f.pushTool("agentxx_filesystem_read", R"({"path":"/home/running.cpp"})", false);
@@ -1509,6 +1536,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderRunning();
     testTuiToolHeaderDecor();
     testTuiToolHeaderDecorExtended();
+    testTuiToolHeaderDecorRegionSize();
     testTuiToolHeaderDecorButtonMultiFrame();
     testTuiToolHeaderFailed();
     testTuiToolHeaderDuration();
