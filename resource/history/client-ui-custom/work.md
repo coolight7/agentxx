@@ -2,11 +2,13 @@
 
 - 方案文档: [plan.md](plan.md)
 - 基于 commit: `ecc97b94`（设计文档提交）
+- 最后核对: 2026-09-22（对照 plan.md 逐条核对代码，结论见『状态总览』与『遗留任务清单』；
+  核对时代码版本 `38e874f4`）
 - 记录规则: 每完成一个阶段更新本文件并 git 提交
 
 ---
 
-## 当前状态
+## 状态总览（2026-09-22 核对）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -15,18 +17,146 @@
 | P1.3 | 子区域命中（`UiHitRegion` / `addRegions` / `Scrollable::hitTestItem`） | ✅ 已完成 |
 | P1.4 | 接入点收敛（面板 / Info / 装饰 / overlay / 中断内容块） | ✅ 已完成 |
 | P1.5 | 中断描述扩展（`raw` 透传 + `custom` 派发 + 扩展组件） | ✅ 已完成 |
-| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ✅ 已完成 |
-| P1.7 | 测试（`ui_items` 199 项 + `tui_ui_items` 149 项） | ✅ 已完成 |
-| P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ✅ 已完成 |
-| P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
-| P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
-| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成 |
-| P2.5 | 状态栏 segments / sparkline / meter（单行） | ✅ 已完成 |
+| P1.6 | SDK 构建器 `agentxx::ui::Items` + `ClientPluginBase` 便捷方法 | ✅ 已完成（差 3 个方法，见『遗留-机制与复用』） |
+| P1.7 | 测试（`ui_items` + `tui_ui_items`：组件层渲染/测量/命中/表单） | ✅ 已完成（接入点级与插件端到端用例见『遗留-测试欠账』） |
+| P1.8 | 文档（plugins.md / tui.md / index.md / AGENTS.md） | ✅ 已完成（3 处残留见『遗留-文档与注释残留』） |
 | P2.1 | 中断控件布局迁移到共享实现（`UiFormState` + 共享渲染/交互/校验） | ✅ 已完成 |
-| P3 | `agentxx.client.timer` / `agentxx.client.keybind` 新表（宿主 + SDK + 适配器 + 测试） | ✅ 已完成 |
+| P2.2 | 表单交互（控件编辑 + `__submit`/`__cancel`/`commitOnPick` 经动作通道回传） | ✅ 已完成 |
+| P2.3 | 尺寸感知（布局快照 + `EVT_UI_LAYOUT` + `regionSize()`） | ✅ 已完成（上报覆盖面见『遗留-真实缺陷』第 2 条） |
+| P2.4 | overlay 尺寸与外观选项（`size`/frac/`footer`/`scroll`/`stack`） | ✅ 已完成 |
+| P2.5 | 状态栏 segments / sparkline / meter（单行） | ✅ 已完成 |
+| P2.6 | 测试（`tui_form` 专项 / `tui_widget`·`tui_sidebar` 扩展 / `plugin_sdk` 端到端） | ⚠️ 未做（见『遗留-测试欠账』） |
+| P3.1–P3.4 | `agentxx.client.timer` / `agentxx.client.keybind` 新表（宿主 + SDK + 适配器 + 测试 + 文档） | ✅ 已完成 |
+| P4 | `canvas` 完全自绘 | ❌ 本方案不再实施（见『关闭项』） |
+
+小结：plan 的 P1 / P2（除 P2.6 测试）/ P3 均已落地；剩余工作为
+『遗留-真实缺陷』2 条、『遗留-机制与复用』9 条、『遗留-测试欠账』7 条、
+『遗留-基准』1 条、『遗留-可选增强』2 条、『遗留-文档与注释残留』3 条。
 
 ---
 
+## 遗留任务清单
+
+> 2026-09-22 对照 plan.md 逐条核对代码后整理（证据位置见文末『注意事项 · 本轮核对』）。
+> 勾选框用于后续实施时标记进度；未特别说明的项均为「plan 要求、代码中不存在」。
+
+### 遗留-真实缺陷（建议优先处理）
+
+- [ ] **CLI 行式前端静默丢弃新组件中断块**
+  - 现象：中断描述里含 `table` / `tree` / `sparkline` / `meter` / `row` / `box` / `kv` /
+    `collapse` 的内容块，在 CLI（`agent_stdio.cpp:268`）上完全看不到内容（不是走 `fallback`，
+    而是被忽略）。
+  - 原因：`interruptUiPlainText`（`middlewares/interrupt_ui.cpp:532`）是独立实现，只认
+    text/markdown/gap/separator/diff/control/custom，其余走"未知 kind: 忽略"；
+    plan §6.5 要求"`interruptUiPlainText` 内部改为调用 `agentxx::ui::plainText`"未做。
+  - 修法：对 `InterruptUiBlock::raw` 走 `agentxx::ui::plainText`（保留老格式分支以维持
+    现有输出兼容），并补一条降级用例；同时清理无用/重复的纯文本代码路径。
+- [ ] **overlay / 消息 owner 的 `pause_when_hidden` 定时器永不触发**
+  - 现象：插件用 overlay owner（`__overlay`）或消息 owner 注册 `pause_when_hidden` 定时器时，
+    回调永远不触发（一直"不可见 → 顺延"）。
+  - 原因：可见性只上报面板与 Info 段落（`agent_tui.cpp:357`、`tui_sidebar_content.cpp:194`）；
+    `isRegionVisible` 对未登记 id 一律返回 false（`client_plugin_manager.cpp:3221`）。
+  - 修法：overlay 打开/关闭与消息列表可见性一并上报（与『遗留-可选增强』第 1 条同一改动）。
+
+### 遗留-机制与复用（plan 要求，未实施）
+
+- [ ] **§5.1 入口解析一次、注册表存解析结果**
+  - 现状：注册表条目仍只存原始 JSON（`ClientPanel/ClientInfoSection.items`、
+    `ClientStatusItem.rich`、`ClientToolDecor.items`、`ClientToolRenderEntry.items` 均无
+    `itemsParsed`），解析发生在 UI 线程**每帧渲染时**：`agent_tui.cpp:325`、
+    `tui_sidebar_content.cpp:174`、`message_list.cpp:662`（测量）+ `:1621`（渲染）、
+    `status_bar.cpp:80`。
+  - 影响：每帧重复 JSON 解析（上限 512 项时开销不可忽略）；`size` 落在管理器
+    `regionSizes_`、`formState` 落在 `TUIClientAgentIO::pluginForms_`（功能等价，
+    但与设计文档描述不一致）。
+  - 说明：解析是纯数据操作，未破坏"UI 线程不进插件代码"这条不变量。
+- [ ] **§4.4 单条 JSON 字节上限（1 MiB → 拒绝更新 + 记日志）**
+  - 现状：`updatePanel` / `updateInfoSection` / `updateToolDecor` / `open_overlay` 等入口
+    只判 JSON 合法性，全库无字节上限校验（`ParseLimits` 只管深度/元素数/文本长度）。
+- [ ] **§6.4 中断预设复用组件构建器**
+  - 现状：`interrupt_presets.{h,cpp}` 仍逐个手写 `InterruptUiBlock`（只有
+    text/markdown/diff/separator/gap/submit/control），没有改用 `agentxx::ui::Items`，
+    也没有 `Item ↔ InterruptUiBlock` 的 `toItem/fromItem` 映射，更没有
+    table/tree/sparkline/row/box 等新组件 preset。
+  - 影响：agent 侧中断要用新组件只能手写 raw JSON；plan 举例的"权限卡片路径表格、
+    子代理任务树、上下文占用 meter"无从表达。
+- [ ] **§6.3 SDK 便捷方法补齐 3 个**：`panelItems(panel)`（局部构建 + 提交）、
+  `setToolDecor(toolCallId, DecorSpec)`、`form(...)`
+- [ ] **§4.1 `when` 条件显示字段**（plan 要求"本版仅保留字段"）：`agentxx/ui/item.h`、
+  `item.cpp`、`build.h` 中完全没有该键，往返也不保留
+- [ ] **§5.1 面板 / Info / 状态栏条目的 `version` 字段**（供消息块缓存 key）：目前只有
+  `ClientToolDecor.version` 与渲染缓存 version
+- [ ] **§5.6 周期定时器"同帧多次触发合并"**：`fireTimerTick` / `armTimer`
+  （`client_plugin_manager.cpp:3079` / `:3129`）每个定时器独立 `async_wait`，无合并逻辑
+  （间隔下限 50 ms、单实例 8 个、不可见顺延均已实现）
+- [ ] **§4.3.5 tree 宿主管理折叠态**（plan 标注为 P2 后续）：宿主折叠状态目前只有
+  `collapse` kind（`agent_tui.cpp:1296` / `:1422` + `UiRenderCtx::collapseExpanded`）
+- [ ] **§4.3.1 `row` 的 `align: "stretch"`**：`ui_components.cpp:1080` 起只处理
+  left / center / right
+
+### 遗留-测试欠账（plan §10 P2.6 + §11）
+
+- [ ] `tui_form` 专项测试模块（当前表单用例并入 `tui_ui_items`）
+- [ ] `tui_widget` / `tui_sidebar` 扩展：面板收敛后的 kind 支持与命中、拖拽宽度变化触发
+  尺寸事件（现状：client 测试里没有 `registerPanel/updatePanel` 用例，只直接造
+  `ClientUiRegistry` 快照且仅 statusItems）
+- [ ] `plugin_sdk` 扩展：构建器 → JSON → 面板更新端到端、表单提交动作派发端到端
+- [ ] DSO 测试插件 `test/plugin/dso_plugins/test_ui_components`（面板 / overlay / 表单 /
+  定时器 + 禁用启用卸载语义、缓存失效、代次复查）
+- [ ] `plugin_bridge` / `plugin_runtime` 扩展：老宿主缺新能力下的降级、未知 kind 忽略
+- [ ] 5 个接入点各 1 个新组件用例（当前新组件只在 `ui_components` 渲染 harness 与 lib
+  解析层验证，没有"面板/Info/装饰/overlay/中断真的把 table 渲染上屏"的用例）
+- [ ] 中断新组件块的纯文本降级用例（与『遗留-真实缺陷』第 1 条配对）
+
+### 遗留-基准（plan §9 性能预算）
+
+- [ ] benchmark「组件密集面板」场景：用 `agentxx::ui::Items` 造 20 行表格 + 趋势图 + kv +
+  行容器 + 表单控件描述，测每帧 `renderItems`（含 `measureItem`）耗时与行模型内存增量；
+  接入 `agent/benchmark/bench_resource.cpp` 的 M2 TUI 场景（插件管理器与 TUI 适配器已就绪），
+  场景打开 `AgentConfigStatic::enableBenchmark` 采集帧耗时
+
+### 遗留-可选增强
+
+- [ ] overlay 区域可见性 / 尺寸上报（当前只上报面板与 Info 段落；与『遗留-真实缺陷』
+  第 2 条为同一改动）
+- [ ] 快捷键列表展示（`list_keybinds` 已备，设置 / 帮助弹窗尚未消费）
+
+### 遗留-文档与注释残留（plan §15 / §16）
+
+- [ ] `plugins.md` 章节号重复：`### 9.5 定时器`(610) 与 `### 9.5 状态栏项的富展示片段`(678)
+  同号 → 后者应为 9.7，并顺带调整小节顺序
+- [ ] `client_plugin_api.h:306` 注释仍写「通用交互（v3 新增；老宿主按版本截断视角…）」，
+  与 plan §15#3「表 version 保持 1、新能力用新表 / 新能力名」的统一表述不符
+  （表 version 宏本身为 1，属注释表述问题）
+- [ ] `interrupt_ui.h:66` 与 `interrupt_ui.cpp:292` 注释仍写 `custom`「字段预留, 暂未实现」
+  （实际已派发共享组件渲染，仅解析 / 序列化以 `raw` 保留）
+
+---
+
+## 关闭项（本方案不再实施）
+
+### P4 `canvas` 完全自绘 —— 关闭
+
+- 决定时间：2026-09-22
+- 决定：**本方案的 canvas 范围到此为止**，只保留"类型预留 + 降级"：
+  - 保留：`canvas` kind 的解析与往返保留（`Item::canvas`）、渲染降级（`fallback` 文本，
+    无 fallback 时输出诊断占位）、不声明 `canvas` 能力名（宿主不宣告，插件自行判断降级）；
+  - 关闭：plan §10 的 P4 阶段（单元格绘制 Node、区域输入事件表 `agentxx.client.region`、
+    焦点与键盘路由、动画与帧预算、自绘安全上限）以及 §13 决策点 6（是否顺带实现 `hits`
+    子区域命中）—— 一并**不再作为本方案的待办**。
+- 关闭理由：
+  1. 本方案的目标是"补齐现有展示路径的布局 / 绘制 / 尺寸 / 输入 / 时间能力"；canvas 属于
+     全新的自绘体系，与本方案的机制边界（宿主渲染控件、插件只收结果、UI 线程不进插件代码）
+     不是同一类工作，硬塞进来会让范围与验收标准都失焦。
+  2. 现有组件层（`row/box/collapse/table/tree/kv/sparkline/meter` + 控件 + 定时器 +
+     尺寸事件 + 快捷键）已覆盖插件的常规展示需求，canvas 当前的收益 / 成本比不成立。
+  3. 预留部分已足够支撑未来接入：`canvas` 往返不丢、`fallback` 降级、`UiHitRegion` 子区域
+     命中机制、`Scrollable::hitTestItem` 滚动映射、`timer` / `keybind` 两表。未来若要做自绘，
+     另立方案文档（可用新增 overlay type 或 `size:"full"` + canvas 组件）即可，不需要本方案
+     再开阶段。
+- 影响：`plan.md` 中 canvas 相关条目（§4.2 表、§4.3.10、§10 P4、§13#6）保持其
+  "预留 / 不做"的原始描述，不再推进；本文档不再列 canvas 待办。
+  另：plan §5.7.1 的 overlay `resizable` 选项本就标注"预留"，同样不列为待办。
 
 ---
 
@@ -156,18 +286,6 @@
   先取 view 再改写 `item.kind` 会让它悬空（短字符串共用同一缓冲区）→ 必须先拷贝成 `std::string`
 - `formValues` 递归合并时不要把内层 `{"values":{...}}` 整包并进外层（会多一层嵌套），
   应把控件值收集到同一层对象
-
-1. P1.6 SDK 便捷方法（`plugin_kit.h`：`setPanelItems` / `showOverlay` / `regionSize` 等）
-3. P2：
-   - `UiFormState` 接入面板/overlay（控件值编辑、`__submit`/`__cancel`/`commitOnPick` 经
-     `dispatchAction` 回传），并把 `InterruptView` 的控件布局迁移到共享实现
-   - 尺寸感知：布局快照 + `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 + `regionSize()`
-   - overlay 尺寸选项（`size` / `width_frac` / `height_frac` / `scroll` / `footer` /
-     `stack`）与"已有模态时的替换策略"修正
-   - 状态栏 segments / sparkline / meter（单行）
-4. P3：`agentxx.client.timer` v1、`agentxx.client.keybind` v1 及对应 SDK/测试
-5. 文档：`plugins.md` §9 扩展 + 新增组件 schema 小节；`tui.md` §2.2/§2.6/§3；
-   `index.md` 客户端 UI 节；`AGENTS.md` 记忆行
 
 ---
 
@@ -334,15 +452,12 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 
 ## 待完成任务（下一步）
 
-1. 基准：`benchmark` 增加"含面板（表格 + sparkline + 表单）的 TUI"帧耗时与内存采样
-   （接入点：`agent/benchmark/bench_resource.cpp` 的 M2 TUI 场景 —— 现有 harness 已
-   加载插件并驱动 `TUIClientAgentIO`；可再加一个"组件密集面板"场景：用
-   `agentxx::ui::Items` 造 20 行表格 + 趋势图 + kv + 行容器 + 表单控件描述，
-   统计每帧 `renderItems`(含 `measureItem`) 耗时与行模型内存增量；
-   场景打开 `AgentConfigStatic::enableBenchmark` 以采集帧耗时统计）
-2. `canvas` 完全自绘（本版只做类型预留与降级；渲染/命中/输入留待后续单独设计）
-3. 可选增强：overlay 区域可见性上报（当前只上报面板/Info 段落）、快捷键列表展示
-   （`list_keybinds` 已有接口，设置/帮助弹窗尚未消费）
+见文档开头『遗留任务清单』（2026-09-22 整理）：
+
+- 原先列在这里的 3 条（基准场景 / overlay 可见性上报 / 快捷键列表展示）已并入该清单；
+- 补充了对照 plan.md 逐条核对后发现的其余未实施项（2 条真实缺陷、9 条机制与复用欠账、
+  7 条测试欠账、3 处文档与注释残留）；
+- `canvas` 完全自绘已**移入『关闭项』**（本方案不再实施）。
 
 ---
 
@@ -413,3 +528,22 @@ P1.4/P2.1 的收尾：`InterruptView` 不再自己渲染控件，全部走共享
 - 跨边界向量的类型安全：`ClientPluginInstance::timers` 用
   `vector<shared_ptr<ClientTimerImpl>>`（而不是 `vector<shared_ptr<void>>`），
   利于按指针身份查找与类型安全清理
+
+### 本轮核对（2026-09-22）
+
+核对方法：逐条读 plan.md（§4~§16）→ 在代码中定位对应实现 → 记下"未实施项 + 证据位置"。
+核对时代码版本 `38e874f4`（本轮只更新本文档，未改代码）。
+
+关键证据位置（供后续快速复核，结论对应『遗留任务清单』）：
+
+| 结论 | 证据 |
+|---|---|
+| 注册表只存原始 JSON，解析在 UI 线程每帧发生 | 条目字段：`ClientPanel/ClientInfoSection.items`、`ClientStatusItem.rich`、`ClientToolDecor.items`、`ClientToolRenderEntry.items`；解析点：`agent_tui.cpp:325`、`tui_sidebar_content.cpp:174`、`message_list.cpp:662`/`:1621`、`status_bar.cpp:80`、`overlays.cpp:1819` |
+| 无 JSON 字节上限 | `client_plugin_manager.cpp` 的 `updatePanel` / `updateInfoSection` / `updateToolDecor` 等入口只判 JSON 合法性，无 size 校验 |
+| `when` 字段不存在 | `agentxx/ui/item.h`、`item.cpp`、`build.h` 中无该键 |
+| 中断预设未构建器化 | `interrupt_presets.{h,cpp}` 逐个 `b.kind = "text"/"control"/...` 手写结构，无 `ui::Items` / `toItem` |
+| `interruptUiPlainText` 仍是独立实现 | `interrupt_ui.cpp:532`（只认 text/markdown/gap/separator/diff/control/custom，其余"未知 kind: 忽略"）；CLI 调用点 `agent_stdio.cpp:268` |
+| 可见性只覆盖面板 / Info | 上报点 `agent_tui.cpp:357`、`tui_sidebar_content.cpp:194`；`isRegionVisible` 对未登记 id 返回 false（`client_plugin_manager.cpp:3221`） |
+| 定时器无同帧合并 | `fireTimerTick` / `armTimer`（`client_plugin_manager.cpp:3079` / `:3129`）每定时器独立 `async_wait` |
+| 测试缺口 | client 测试无 `registerPanel/updatePanel` 用例（只直接造 `ClientUiRegistry` 快照）；`test_plugin_sdk.cpp` 无 `ui::Items` / `setPanelItems` / `__submit`；`test/plugin/dso_plugins/` 仅有 2 个回滚夹具 |
+| 文档残留 | `plugins.md:610` 与 `:678` 同为 `### 9.5`；`client_plugin_api.h:306`「v3 新增」；`interrupt_ui.h:66`、`interrupt_ui.cpp:292`「暂未实现」 |
