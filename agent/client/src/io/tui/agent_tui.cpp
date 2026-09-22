@@ -262,6 +262,16 @@ void TUIClientAgentIO::reportSidebarRegionVisibility() {
     }
 }
 
+void TUIClientAgentIO::refreshRenderContext() {
+    ctx_.state      = &sharedState_;
+    ctx_.frameState = sharedState_.readSnapshot();
+    if (ctx_.frameState) {
+        // client 插件 UI 注册表快照 (面板/Info/状态栏/工具消息装饰; 渲染期无锁读)
+        ctx_.frameState->pluginRegistry
+            = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
+    }
+}
+
 void TUIClientAgentIO::reportOverlayVisible(bool visible) {
     auto mgr = pluginManager_;
     if (!mgr) {
@@ -620,13 +630,11 @@ void TUIClientAgentIO::start() {
             // 关闭时 (正常使用) 不读时钟、不累加计数, 渲染路径零额外开销
             const auto frameBegin = collectFrameStats ? std::chrono::steady_clock::now()
                                                                  : std::chrono::steady_clock::time_point{};
-            ctx_.frameState       = sharedState_.readSnapshot();
+            // 本帧状态快照 + client 插件 UI 注册表快照 (渲染期无锁读)
+            refreshRenderContext();
             // 本帧终端尺寸: 同帧内所有组件读同一尺寸 (避免帧中途 resize 造成布局错位),
             // 且每帧只查询一次 (Terminal::Size 在 Linux 上是 ioctl)
             ctx_.refreshFrameSize();
-            // client 插件 UI 注册表快照 (工具消息装饰等; 每帧刷新, 渲染期无锁读)
-            ctx_.frameState->pluginRegistry
-                = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
             // 插件展示区域可见性上报 (面板/Info 段落: 供 is_visible 与"不可见时
             // 暂停的定时器"门控; 管理器按值变化去重, 无变化时零开销)
             reportSidebarRegionVisibility();
@@ -830,12 +838,8 @@ void TUIClientAgentIO::start() {
                 // 之后才记录, 帧开头到记录点之间到达的请求会丢失。
                 const uint64_t frameBaseline = redrawSeq_.load(std::memory_order_acquire);
                 // 每帧开头获取状态快照: 事件处理 (CatchEvent/组件 OnEvent) 与渲染
-                // 期间 frameState 始终有效
-                ctx_.frameState = sharedState_.readSnapshot();
-                // client 插件 UI 注册表快照 (同 mainRenderer 帧首; 供事件处理
-                // 路径读取装饰等插件注册数据)
-                ctx_.frameState->pluginRegistry
-                    = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
+                // 期间 frameState 始终有效 (含 client 插件 UI 注册表快照)
+                refreshRenderContext();
                 // 处理 client 线程投递的 UI 动作 (弹窗开关/消息列表吸附等):
                 // 必须在渲染之前执行, 使本帧渲染反映其效果;
                 // 动作仅访问 UI 线程独占组件 (modal_/messageList_), 不依赖本帧快照

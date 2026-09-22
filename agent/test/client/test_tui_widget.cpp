@@ -7,6 +7,7 @@
 // - 隐藏按钮不占点击区域: [ @︎ ] 按钮隐藏后, 其在上一帧的屏幕位置不再可点
 #include "agentxx-test/client/test_tui_widget.h"
 
+#include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/input_bar.h"
 #include "agentxx-client/io/tui/components/status_bar.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
@@ -565,6 +566,160 @@ void test_status_bar_click_actions() {
     XX_TEST_EXPECT_FALSE(comp->OnEvent(leftClickAt(0, 0)));
 }
 
+// ---------------------------------------------------------------------------
+// 接入点: 插件面板 / Info 段落 (真实注册路径 → 共享组件层渲染)
+// ---------------------------------------------------------------------------
+
+/// 测试用 UI 适配器 (只声明必要能力)
+class WidgetTestUiAdapter : public agentxx::plugin::PluginUiAdapter {
+public:
+
+    agentxx::plugin::InterfaceSet supportedInterfaces() const override {
+        namespace pi = agentxx::plugin::plugin_interfaces;
+        return {
+            std::string{pi::ClientUi},
+            std::string{pi::ClientPanel},
+            std::string{pi::ClientInfoSection},
+            std::string{pi::ClientComponents},
+            std::string{pi::ClientLayout},
+        };
+    }
+};
+
+/// 测试用管理器 (暴露 createInstance 构造伪实例)
+class WidgetTestManager : public agentxx::plugin::ClientPluginManager {
+public:
+
+    using ClientPluginManager::ClientPluginManager;
+    using ClientPluginManager::createInstance;
+};
+
+/// 把滚动子项渲染到屏幕并逐格读取 (未写入的格补空格, 保证列位置可比对)
+std::string renderScrollItems(const std::vector<ScrollItem>& rows, int w, int h) {
+    ftxui::Elements els;
+    for (const auto& row : rows) {
+        if (row.element) {
+            els.push_back(row.element);
+        }
+    }
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
+    ftxui::Render(screen, ftxui::vbox(std::move(els)));
+    std::string out;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::string& ch = screen.PixelAt(x, y).character;
+            out += ch.empty() ? std::string{" "} : ch;
+        }
+        out += '\n';
+    }
+    return out;
+}
+
+/// 面板接入点: 新组件 (表格/计量条/横排/趋势图) 与控件经真实注册路径上屏,
+/// 并上报可用尺寸 (插件据此重排; 见 reportRegionSize)
+void test_panel_access_point_extended_components() {
+    asio::io_context io;
+    auto             mgr = std::make_shared<WidgetTestManager>(io.get_executor());
+    mgr->setUiAdapter(std::make_shared<WidgetTestUiAdapter>());
+    auto inst = mgr->createInstance("widget_probe");
+    mgr->plugins_.emplace(inst->name, inst);
+
+    auto* panel = static_cast<AgentxxPanel*>(mgr->registerPanel(
+        inst.get(),
+        std::string_view{"widget_probe.panel"},
+        std::string_view{R"({"title":"Probe"})"}
+    ));
+    XX_TEST_EXPECT_TRUE(panel != nullptr);
+
+    const std::string items = R"({"items":[
+        {"kind":"table","header":true,
+         "columns":[{"title":"Path","w":"flex"},{"title":"Scope","w":6}],
+         "rows":[["a.txt","write"],["b.txt","read"]]},
+        {"kind":"meter","value":72,"total":100,"width":4,"label":"CPU"},
+        {"kind":"row","gap":1,"items":[{"kind":"text","text":"L"},
+                                       {"kind":"sparkline","data":[1,5,9]}]}
+    ]})";
+    XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{items}), 0);
+
+    auto tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
+    tui->setPluginManager(mgr);
+    tui->refreshRenderContext();
+
+    const auto rows = tui->renderPluginPanel("widget_probe.panel");
+    XX_TEST_EXPECT_EQ(rows.size(), size_t{3}); // 表格 1 行 + 计量条 + 横排
+    const auto text = renderScrollItems(rows, 40, 6);
+    XX_TEST_EXPECT_TRUE(text.find("Path") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("write") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("72%") != std::string::npos); // 计量条数值文本
+    XX_TEST_EXPECT_TRUE(text.find("L") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("▁") != std::string::npos);
+
+    // 可用尺寸上报 (无侧边栏时按缺省宽度 40; 高度 = 内容行数)
+    bool found = false;
+    for (const auto& r : mgr->regionSizes()) {
+        if (r.id == "widget_probe.panel") {
+            found = true;
+            XX_TEST_EXPECT_EQ(r.width, 40);
+            XX_TEST_EXPECT_EQ(r.height, 6); // 内容行数 (表格 4 行 + 计量条 + 横排)
+        }
+    }
+    XX_TEST_EXPECT_TRUE(found);
+
+    // 内容更新: 新的描述立即反映到下一次渲染 (版本号递增, 供缓存 key 使用)
+    const std::string updated = R"({"items":[{"kind":"text","text":"second"}]})";
+    XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{updated}), 0);
+    const auto rows2 = tui->renderPluginPanel("widget_probe.panel");
+    const auto text2 = renderScrollItems(rows2, 40, 3);
+    XX_TEST_EXPECT_TRUE(text2.find("second") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text2.find("a.txt") == std::string::npos);
+}
+
+/// Info 接入点: 插件 Info 段落里的新组件同样上屏 (与面板共用渲染实现)
+void test_info_access_point_extended_components() {
+    asio::io_context io;
+    auto             mgr = std::make_shared<WidgetTestManager>(io.get_executor());
+    mgr->setUiAdapter(std::make_shared<WidgetTestUiAdapter>());
+    auto inst = mgr->createInstance("info_probe");
+    mgr->plugins_.emplace(inst->name, inst);
+
+    auto* section = static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(
+        inst.get(),
+        std::string_view{"info_probe.section"},
+        std::string_view{R"({"title":"Probe Info"})"}
+    ));
+    XX_TEST_EXPECT_TRUE(section != nullptr);
+    const std::string items = R"({"items":[
+        {"kind":"kv","items":[{"k":"Model","v":"gpt-x"}]},
+        {"kind":"box","title":"Limits","border":"round","items":[{"kind":"text","text":"inside box"}]}
+    ]})";
+    XX_TEST_EXPECT_EQ(mgr->updateInfoSection(inst.get(), section, std::string_view{items}), 0);
+
+    auto tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
+    tui->setPluginManager(mgr);
+    tui->refreshRenderContext();
+
+    const auto rows = tui->renderInfoSidebar();
+    XX_TEST_EXPECT_TRUE(!rows.empty());
+    const auto text = renderScrollItems(rows, 40, static_cast<int>(rows.size()) + 2);
+    XX_TEST_EXPECT_TRUE(text.find("Probe Info") != std::string::npos); // 段落标题
+    XX_TEST_EXPECT_TRUE(text.find("Model") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("gpt-x") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("inside box") != std::string::npos);
+
+    // 段落可用尺寸上报 (与面板同机制)
+    bool found = false;
+    for (const auto& r : mgr->regionSizes()) {
+        if (r.id == "info_probe.section") {
+            found = true;
+            XX_TEST_EXPECT_EQ(r.width, 40);
+            XX_TEST_EXPECT_EQ(r.height, 4); // 内容行数 (kv 1 行 + 分组框 3 行)
+        }
+    }
+    XX_TEST_EXPECT_TRUE(found);
+}
+
 TestResult testTuiWidget() {
     g_tui_widget_passed = 0;
     g_tui_widget_failed = 0;
@@ -581,6 +736,8 @@ TestResult testTuiWidget() {
     test_action_list_selection_changed_callback();
     test_hidden_button_not_clickable();
     test_status_bar_click_actions();
+    test_panel_access_point_extended_components();
+    test_info_access_point_extended_components();
 
     return TestResult{g_tui_widget_passed, g_tui_widget_failed};
 }

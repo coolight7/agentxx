@@ -59,7 +59,9 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 ///   [Scrollable::hitTestItem] 定位子项后按区域判定 (不使用子项内 reflect)
 /// - `form` 为宿主维护的表单状态 (控件值/勾选/选中/焦点); 为空时控件只做展示
 /// - markdown 渲染器的生命周期追加到 [mdBuilders] (调用方持有, 与元素同存活)
-static void appendPluginItems(
+///
+/// - `return` 内容行数 (各行行数之和; 供可用尺寸上报, 与面板口径一致)
+static size_t appendPluginItems(
     const std::vector<agentxx::ui::Item>&                          items,
     std::string_view                                               plugin,
     std::string_view                                               ownerId,
@@ -86,12 +88,15 @@ static void appendPluginItems(
     if (!res.builders.empty()) {
         mdBuilders.push_back(std::move(res.builders));
     }
+    size_t lines = 0;
     for (auto& row : res.rows) {
+        lines += std::max<size_t>(1, row.lines);
         ScrollItem item;
         item.element = std::move(row.element);
         item.hits    = std::move(row.regions);
         out.push_back(std::move(item));
     }
+    return lines;
 }
 
 } // namespace
@@ -174,7 +179,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                     agentxx::ui::parseItemList(sec.items)
                 );
                 std::vector<ScrollItem> secItems;
-                appendPluginItems(
+                const size_t            secLines = appendPluginItems(
                     form.items,
                     sec.plugin,
                     sec.id,
@@ -189,9 +194,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 if (secItems.empty()) {
                     continue;
                 }
-                // 上报可用尺寸 (值变化时宿主投递 UI_LAYOUT 事件)
+                // 上报可用尺寸 (值变化时宿主投递 UI_LAYOUT 事件; 高度按内容行数,
+                // 与面板口径一致 —— 插件据此决定是否折叠/分页)
                 if (mgr) {
-                    mgr->reportRegionSize(sec.id, avail, static_cast<int>(secItems.size()));
+                    mgr->reportRegionSize(sec.id, avail, static_cast<int>(secLines));
                 }
                 if (!sec.title.empty()) {
                     pushPlain(text(sec.title) | color(theme_.accentColor));

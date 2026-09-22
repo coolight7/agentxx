@@ -306,6 +306,20 @@ public:
     /// 渲染插件侧边栏面板内容 (UI 线程; 从 pluginManager UI 注册表快照读取)
     std::vector<ScrollItem> renderPluginPanel(const std::string& panelId);
 
+    /// 渲染 Info 栏内容 (UI 线程; 内置段落 + 插件 Info 段落)
+    ///
+    /// - 与侧边栏实际渲染同一实现 (侧边栏 Info tab 的 render 回调即本方法)
+    /// - 调用前需保证组件共享上下文的帧快照有效: 生产路径由帧循环刷新
+    ///   ([refreshRenderContext]), 测试/诊断可手动调用
+    std::vector<ScrollItem> renderInfoSidebar();
+
+    /// 刷新组件共享上下文的帧快照 (UI 线程; 帧循环每帧调用一次)
+    ///
+    /// - 取本帧状态快照并挂上 client 插件 UI 注册表快照
+    /// - 抽成方法是因为组件渲染 (侧边栏/面板/Info) 都要求上下文里有有效快照;
+    ///   测试与渲染诊断因此可以不经完整帧循环直接渲染
+    void refreshRenderContext();
+
     /// 上报插件展示区域可见性 (UI 线程; 每帧渲染前调用一次)
     /// - 面板 = 是否为当前激活 tab; Info 段落 = Info tab 是否激活
     /// - 命中 `agentxx.client.timer` 的 `is_visible` 与 `pause_when_hidden` 门控
@@ -588,7 +602,6 @@ private:
 
     /// 侧边栏渲染辅助
     std::vector<ScrollItem> renderLogWindow();
-    std::vector<ScrollItem> renderInfoSidebar();
     ftxui::Element          renderInfoSidebarFooter();
     ftxui::Element          renderLogSidebarFooter();
 

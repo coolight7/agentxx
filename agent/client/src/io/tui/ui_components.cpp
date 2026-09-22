@@ -27,6 +27,43 @@ using utilxx_base::Json;
 // 基础 helper
 // ---------------------------------------------------------------------------
 
+/// 绑定自有反射框的行元素节点 (元素自己持有 `reflect` 用的 Box)
+///
+/// 背景: FTXUI 的 `reflect(Box&)` 只保存**引用**, Box 必须比元素活得久。行模型的
+/// 元素会被各接入点搬进滚动容器/消息块缓存 (可能跨帧存活), 而生成它的 `UiRow::box`
+/// 常常随局部结果析构 —— 一旦只搬元素, 元素随后被布局时就会写已释放内存
+/// (ASan: heap-use-after-free, 栈顶为 `Reflect::SetBox`)。
+///
+/// 本节点把 Box 的所有权绑在元素上: 移动/缓存元素即等于带走 Box, 接入点无需
+/// 额外保存。命中判定仍按 [UiRow::box] 指向的同一个 Box 读取坐标。
+class OwnedReflect : public ftxui::Node {
+public:
+
+    OwnedReflect(ftxui::Element child, std::shared_ptr<ftxui::Box> box) :
+        Node({std::move(child)}),
+        box_(std::move(box)) {}
+
+    void ComputeRequirement() override {
+        Node::ComputeRequirement();
+        requirement_ = children_[0]->requirement();
+    }
+
+    void SetBox(ftxui::Box box) override {
+        *box_ = box;
+        Node::SetBox(box);
+        children_[0]->SetBox(box);
+    }
+
+    void Render(ftxui::Screen& screen) override {
+        *box_ = ftxui::Box::Intersection(screen.stencil, *box_);
+        Node::Render(screen);
+    }
+
+private:
+
+    std::shared_ptr<ftxui::Box> box_;
+};
+
 /// 缩进空格串
 std::string spaces(int cols) {
     return (cols > 0) ? std::string(static_cast<size_t>(cols), ' ') : std::string{};
@@ -1905,9 +1942,11 @@ void renderItem(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRenderR
         outRow.lines = std::max<size_t>(1, row.lines);
         if (!row.regions.empty()) {
             // 顶层行附加反射框: 命中时先定位到行, 再按局部坐标判定具体区域
+            // - 用 [OwnedReflect] 让元素自己持有 Box (元素可能被搬进滚动容器/
+            //   消息块缓存并跨帧存活, 只存引用会悬空; 见该类说明)
             auto box       = std::make_shared<ftxui::Box>(kNoBox);
             outRow.box     = box;
-            outRow.element = std::move(row.element) | reflect(*box);
+            outRow.element = std::make_shared<OwnedReflect>(std::move(row.element), std::move(box));
             outRow.regions = std::move(row.regions);
         } else {
             outRow.element = std::move(row.element);
