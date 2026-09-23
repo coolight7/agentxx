@@ -285,7 +285,9 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     item.indent = std::clamp(readInt(json, "indent", 0), 0, 200);
     item.color  = readString(json, "color", readString(json, "role", "normal"));
     item.bold   = readBool(json, "bold", item.color == "title");
-    item.dim    = readBool(json, "dim", item.color == "hint");
+    // 弱化与颜色相互独立: `hint` 只决定取色 (其本身就是弱化灰), 不自动叠加弱化;
+    // 需要弱化的项显式写 `"dim": true` (与中断块映射 item.dim = block.dim 一致)
+    item.dim = readBool(json, "dim", false);
     item.fallback = clampTextImpl(readString(json, "fallback"), limits.maxTextBytes);
     item.action   = clampTextImpl(readStringAny(json, {"action"}), 256);
     if (const Json* args = field(json, "args")) {

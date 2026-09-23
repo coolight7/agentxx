@@ -62,15 +62,15 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 ///
 /// - `return` 内容行数 (各行行数之和; 供可用尺寸上报, 与面板口径一致)
 static size_t appendPluginItems(
-    const std::vector<agentxx::ui::Item>&                          items,
-    std::string_view                                               plugin,
-    std::string_view                                               ownerId,
-    const agentxx::plugin::ClientUiRegistry*                       reg,
-    const TUITheme&                                                theme,
-    int                                                            avail,
-    const std::function<bool(const std::string&, bool)>&           collapseExpanded,
-    const agentxx::client::UiFormState*                            form,
-    std::vector<ScrollItem>&                                       out,
+    const std::vector<agentxx::ui::Item>&                            items,
+    std::string_view                                                 plugin,
+    std::string_view                                                 ownerId,
+    const agentxx::plugin::ClientUiRegistry*                         reg,
+    const TUITheme&                                                  theme,
+    int                                                              avail,
+    const std::function<bool(const std::string&, bool)>&             collapseExpanded,
+    const agentxx::client::UiFormState*                              form,
+    std::vector<ScrollItem>&                                         out,
     std::vector<std::vector<std::unique_ptr<markdown::DomBuilder>>>& mdBuilders
 ) {
     agentxx::client::UiRenderCtx rc;
@@ -169,15 +169,12 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         auto reg = mgr->uiRegistrySnapshot();
         if (reg && !reg->infoSections.empty()) {
             for (const auto& sec : reg->infoSections) {
-                auto collapseCb = [this, ownerId = sec.id](const std::string& id, bool defaultValue) {
-                    return collapseExpanded(ownerId, id, defaultValue);
-                };
+                auto collapseCb
+                    = [this, ownerId = sec.id](const std::string& id, bool defaultValue) {
+                          return collapseExpanded(ownerId, id, defaultValue);
+                      };
                 // 表单状态: 按最新描述初始化并保留用户已编辑的值
-                auto& form = formFor(
-                    sec.id,
-                    sec.plugin,
-                    agentxx::ui::parseItemList(sec.items)
-                );
+                auto& form = formFor(sec.id, sec.plugin, agentxx::ui::parseItemList(sec.items));
                 std::vector<ScrollItem> secItems;
                 const size_t            secLines = appendPluginItems(
                     form.items,
@@ -234,11 +231,9 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(fmt::format(
-                                     "|  {}·{}",
-                                     utilxx_base::getFileName(notif.name),
-                                     notif.name
-                                 ))})
+                    (splitName ? hbox({text(
+                         fmt::format("|  {}·{}", utilxx_base::getFileName(notif.name), notif.name)
+                     )})
                                : hbox({text("|  "), text(notif.name) | xflex_shrink}))
                     | color(theme_.hintColor)
                 );
@@ -316,11 +311,11 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
         hbox({
             text(fmt::format("{} ", utilxx_base::getFileName(kCwd))),
             shellHits_.add(
-                text(
-                    fullAuth ? std::string(tr("info.authFull")) : std::string(tr("info.authAsk"))
-                ) | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
+                text(fullAuth ? std::string(tr("info.authFull")) : std::string(tr("info.authAsk")))
+                    | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
                 std::string{kAuthToggleHitId}
             ),
+            text(" "),
             filler(),
             text(kCwd) | xflex_shrink,
         })
@@ -342,17 +337,15 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
     // 发现新版本时的提示行 (启动更新检查结果; 点击复制发布页链接):
     // 未发现更新时不渲染, 因此不占用任何点击区域
     if (ctx_.frameState != nullptr && !ctx_.frameState->availableUpdateTag.empty()) {
-        elements.push_back(
-            hbox({
-                shellHits_.add(
-                    text(trf("info.updateNotice", ctx_.frameState->availableUpdateTag))
-                        | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
-                    std::string{kUpdateNoticeHitId}
-                ),
-                filler(),
-                text(tr("info.updateHint")) | theme_.dim() | xflex_shrink,
-            })
-        );
+        elements.push_back(hbox({
+            shellHits_.add(
+                text(trf("info.updateNotice", ctx_.frameState->availableUpdateTag))
+                    | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
+                std::string{kUpdateNoticeHitId}
+            ),
+            filler(),
+            text(tr("info.updateHint")) | theme_.dim() | xflex_shrink,
+        }));
     }
 
     return vbox(std::move(elements));

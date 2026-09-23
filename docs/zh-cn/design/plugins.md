@@ -534,6 +534,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 通用字段 (所有 kind 可用): `kind` / `id` / `indent` / `color`(或旧写法 `role`) / `bold` /
 `dim` / `wrap` / `fallback` / `action` / `args` / `w`(横排内的列宽) / `when`(预留: 条件
 显示表达式, 当前只做解析与往返保留)。
+`color`/`role` 取语义色名 (`normal`/`hint`/`accent`/`error`/`tool`/`thinking`/...);
+`hint` 只表示取色 (本身就是弱化灰), 不隐含弱化, 需要弱化的项显式写 `"dim": true`;
+`title` 隐含加粗, 不需要时显式写 `"bold": false`。
 
 | kind | 用途 | 关键字段 |
 |------|------|----------|
