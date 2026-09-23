@@ -2612,7 +2612,7 @@ public:
         /// 0 = 一次性; > 0 = 周期触发次数上限 (<=0 视为一次性)
         int  repeat          = 0;
         /// 关联的展示区域 id (面板/Info 段落 id; 空 = 不关联)
-        std::string ownerId;
+        std::string ownerId = "";
         /// 关联区域不可见时跳过回调 (高频刷新面板时建议开启)
         bool pauseWhenHidden = true;
     };
@@ -2672,7 +2672,7 @@ public:
     std::shared_ptr<TimerHandle> registerTimer(
         int              intervalMs,
         std::function<void()> fn,
-        TimerOptions     opts = {}
+        TimerOptions     opts
     ) {
         if (!host || !iface.timer || !iface.timer->set_timer || !fn) {
             return nullptr;

@@ -89,8 +89,6 @@ static T catchError(std::function<T()> func, std::function<T(std::string)> onErr
 
 namespace fs = std::filesystem;
 
-/// CodeGraph sqlite 数据库存放目录名: {dataDir}/sqlite/
-static constexpr std::string_view kCodeGraphSqliteDirName = "sqlite";
 /// CodeGraph 索引数据库子目录: {dataDir}/sqlite/codegraph/
 static constexpr std::string_view kCodeGraphSqliteSubDirName = "codegraph";
 /// 单个项目索引数据库文件名

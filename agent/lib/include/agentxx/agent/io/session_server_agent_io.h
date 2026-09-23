@@ -344,7 +344,6 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};
     std::atomic<bool> stopped_{false};
-    bool              firstTurn_ = true;
 };
 
 } // namespace agent

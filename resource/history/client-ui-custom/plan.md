@@ -523,8 +523,8 @@ ItemsBuilder panelItems(AgentxxPanel* panel);                    // 局部构建
 int32_t      setPanelItems(AgentxxPanel*, const ui::Items&);
 int32_t      setInfoSectionItems(AgentxxInfoSection*, const ui::Items&);
 int32_t      setToolDecor(std::string_view toolCallId, DecorSpec);
-int32_t      showOverlay(int type, std::string_view title, const ui::Items&, OverlayOpts = {});
-int32_t      registerTimer(int intervalMs, bool repeat, std::function<void()> fn, TimerOpts = {});
+int32_t      showOverlay(int type, std::string_view title, const ui::Items&, OverlayOpts);
+int32_t      registerTimer(int intervalMs, bool repeat, std::function<void()> fn, TimerOpts);
 int32_t      registerKeybind(std::string_view keySpec, std::string_view desc, std::function<void()> fn);
 bool         hostSupports(std::string_view capability);           // 查 interfaces
 RegionSize   regionSize(std::string_view ownerId);                // 布局快照
