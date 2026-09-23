@@ -491,7 +491,7 @@ struct CallToolState {
     PollOneBridge*            bridge = nullptr;
     std::string               name;
     std::string               argsJson;
-    std::string               threadId;
+    std::string               sessionId;
     PluginxxOperatorHandle*   opHandle = nullptr;
     int32_t                   status   = PLUGINXX_OPERATOR_OK;
     std::string               payload;
@@ -512,12 +512,12 @@ struct CallToolAwaiter {
         PollOneBridge*                 in_bridge = nullptr
     ) :
         st(std::make_shared<CallToolState>()) {
-        st->host     = in_host;
-        st->tools    = in_tools;
-        st->name     = std::string(in_name);
-        st->argsJson = std::string(in_args);
-        st->threadId = std::string(in_tid);
-        st->bridge   = in_bridge;
+        st->host      = in_host;
+        st->tools     = in_tools;
+        st->name      = std::string(in_name);
+        st->argsJson  = std::string(in_args);
+        st->sessionId = std::string(in_tid);
+        st->bridge    = in_bridge;
     }
 
     bool await_ready() const noexcept {
@@ -533,7 +533,7 @@ struct CallToolAwaiter {
         PluginxxString err{nullptr, 0};
         auto           nameSv = PluginStringView::from(st->name.data(), st->name.size());
         auto           argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-        auto           tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
+        auto           tidSv  = PluginStringView::from(st->sessionId.data(), st->sessionId.size());
 
         st->opHandle = st->tools->call_tool_async(
             st->host,
@@ -614,14 +614,14 @@ inline detail::CallToolAwaiter call_tool(
     const PluginBase& ctx,
     std::string_view  name,
     std::string_view  argsJson,
-    std::string_view  threadId = {}
+    std::string_view  sessionId = {}
 ) {
     return detail::CallToolAwaiter{
         ctx.host,
         ctx.iface.tools,
         name,
         argsJson,
-        threadId,
+        sessionId,
         &ctx.bridge()
     };
 }
@@ -2400,9 +2400,9 @@ public:
     /// 打开自定义 overlay (组件树作为内容)
     /// - `extraJson` 为扩展 JSON (如 `{"size":"large"}`), 可空
     int32_t showItemsOverlay(
-        std::string_view        title,
+        std::string_view          title,
         const agentxx::ui::Items& ui,
-        std::string_view        extraJson = {}
+        std::string_view          extraJson = {}
     ) const {
         return showOverlay(AGENTXX_OVERLAY_CUSTOM, title, ui.dump(), extraJson);
     }
@@ -2482,8 +2482,8 @@ public:
 
     private:
 
-        const ClientPluginBase* base_      = nullptr;
-        AgentxxPanel*           panel_     = nullptr;
+        const ClientPluginBase* base_  = nullptr;
+        AgentxxPanel*           panel_ = nullptr;
         agentxx::ui::Items      ui_{};
         bool                    committed_ = false;
     };
@@ -2513,7 +2513,7 @@ public:
         if (!decor.summary.empty()) {
             j["summary"] = decor.summary;
         }
-        j["items"] = decor.items.array();
+        j["items"]             = decor.items.array();
         const std::string json = j.dump();
         auto              sv   = PluginStringView::from(json.data(), json.size());
         auto              tid  = PluginStringView::from(toolCallId.data(), toolCallId.size());
@@ -2610,7 +2610,7 @@ public:
     /// 定时器参数
     struct TimerOptions {
         /// 0 = 一次性; > 0 = 周期触发次数上限 (<=0 视为一次性)
-        int  repeat          = 0;
+        int repeat = 0;
         /// 关联的展示区域 id (面板/Info 段落 id; 空 = 不关联)
         std::string ownerId = "";
         /// 关联区域不可见时跳过回调 (高频刷新面板时建议开启)
@@ -2624,10 +2624,14 @@ public:
 
         TimerHandle() = default;
 
-        TimerHandle(const PluginxxHost* h, AgentxxTimer* t, std::shared_ptr<std::function<void()>> fn)
-            : host_(h),
-              timer_(t),
-              fn_(std::move(fn)) {}
+        TimerHandle(
+            const PluginxxHost*                    h,
+            AgentxxTimer*                          t,
+            std::shared_ptr<std::function<void()>> fn
+        ) :
+            host_(h),
+            timer_(t),
+            fn_(std::move(fn)) {}
 
         TimerHandle(const TimerHandle&)            = delete;
         TimerHandle& operator=(const TimerHandle&) = delete;
@@ -2669,23 +2673,19 @@ public:
     /// - 失败: spec 非法 / 宿主动画等级 Disabled / 单实例定时器超上限;
     ///   插件应据返回值降级 (不注册即静态展示)
     /// - 回调在 client io 线程执行; 回调内可更新面板/Info/overlay 描述
-    std::shared_ptr<TimerHandle> registerTimer(
-        int              intervalMs,
-        std::function<void()> fn,
-        TimerOptions     opts
-    ) {
+    std::shared_ptr<TimerHandle>
+        registerTimer(int intervalMs, std::function<void()> fn, TimerOptions opts) {
         if (!host || !iface.timer || !iface.timer->set_timer || !fn) {
             return nullptr;
         }
-        auto holder = std::make_shared<std::function<void()>>(std::move(fn));
+        auto             holder = std::make_shared<std::function<void()>>(std::move(fn));
         AgentxxTimerSpec spec{};
         spec.version           = 1;
         spec.interval_ms       = intervalMs;
         spec.repeat            = (opts.repeat > 0) ? opts.repeat : 0;
         spec.pause_when_hidden = opts.pauseWhenHidden ? 1 : 0;
-        spec.owner_id
-            = PluginStringView::from(opts.ownerId.data(), opts.ownerId.size());
-        spec.on_timer  = [](void* ud) {
+        spec.owner_id          = PluginStringView::from(opts.ownerId.data(), opts.ownerId.size());
+        spec.on_timer          = [](void* ud) {
             auto* f = static_cast<std::function<void()>*>(ud);
             if (f && *f) {
                 (*f)();
@@ -2716,10 +2716,14 @@ public:
 
         KeybindHandle() = default;
 
-        KeybindHandle(const PluginxxHost* h, AgentxxKeybind* b, std::shared_ptr<std::function<void()>> fn)
-            : host_(h),
-              bind_(b),
-              fn_(std::move(fn)) {}
+        KeybindHandle(
+            const PluginxxHost*                    h,
+            AgentxxKeybind*                        b,
+            std::shared_ptr<std::function<void()>> fn
+        ) :
+            host_(h),
+            bind_(b),
+            fn_(std::move(fn)) {}
 
         KeybindHandle(const KeybindHandle&)            = delete;
         KeybindHandle& operator=(const KeybindHandle&) = delete;
@@ -2765,7 +2769,7 @@ public:
         if (!host || !iface.keybind || !iface.keybind->register_keybind || !fn) {
             return nullptr;
         }
-        auto holder = std::make_shared<std::function<void()>>(std::move(fn));
+        auto               holder = std::make_shared<std::function<void()>>(std::move(fn));
         AgentxxKeybindSpec spec{};
         spec.version     = 1;
         spec.keys        = PluginStringView::from(keys.data(), keys.size());

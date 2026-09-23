@@ -426,14 +426,14 @@ Useful for passing large content between tool calls without repeating it in mess
 `get`: Retrieve stored text by its unique ID.
 `insert`: Store new text; returns a unique ID.
 `set`: Update existing text by its unique ID.
-`delete`: Remove stored text by its unique ID.
 )"},
                       {"text", "The text content to store. Required for `insert` and `set`."},
                       {"line_offset",
                        R"(Optional for `insert`/`set`. Line offset for partial operations. Default `0` (no offset). Returns an error if offset exceeds the stored text's line count.)"},
                       {"line_limit",
                        R"(Optional for `insert`/`set`. Maximum lines to read. Range: [1, ∞]. Default `null` (no limit). Values exceeding line count are allowed without error.)"},
-                      {"id", "The unique ID of the stored text. Required for `get`, `set`, and `delete`."},
+                      {"id",
+                       "The unique ID of stored text. Required for `get` and `set`. It must be an ID returned by `insert`; a larger (never allocated) ID is rejected as an invalid argument."},
                   },
           },
       },

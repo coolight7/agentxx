@@ -17,7 +17,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -318,10 +320,8 @@ static TestResult testShareStoreRoundtrip() {
     {
         auto p = std::make_shared<SessionStore>(root);
 
-        // 空存储
-        auto empty = p->loadShareStore("s1");
-        XX_TEST_EXPECT_TRUE(empty.items.empty());
-        XX_TEST_EXPECT_EQ(empty.nextId, size_t{1});
+        // 空存储: 自增 id 为 0, 无条目
+        XX_TEST_EXPECT_EQ(p->shareStoreLastId("s1"), size_t{0});
         XX_TEST_EXPECT_NULLOPT(p->getShareStoreItem("s1", 1));
 
         // add: id 从 1 递增
@@ -329,50 +329,46 @@ static TestResult testShareStoreRoundtrip() {
         auto id2 = p->addShareStoreItem("s1", "second");
         XX_TEST_EXPECT_EQ(id1, size_t{1});
         XX_TEST_EXPECT_EQ(id2, size_t{2});
+        XX_TEST_EXPECT_EQ(p->shareStoreLastId("s1"), size_t{2});
         auto v1 = p->getShareStoreItem("s1", id1);
         XX_TEST_EXPECT_HAS_VALUE(v1);
         if (v1) {
             XX_TEST_EXPECT_EQ(*v1, std::string{"first"});
         }
 
-        // set 覆盖 + 显式新 id
+        // set 覆盖已有 id
         p->setShareStoreItem("s1", id1, "first-updated");
-        p->setShareStoreItem("s1", 100, "far-id");
         auto v1b = p->getShareStoreItem("s1", id1);
         XX_TEST_EXPECT_HAS_VALUE(v1b);
         if (v1b) {
             XX_TEST_EXPECT_EQ(*v1b, std::string{"first-updated"});
         }
-        auto v100 = p->getShareStoreItem("s1", 100);
-        XX_TEST_EXPECT_HAS_VALUE(v100);
-        if (v100) {
-            XX_TEST_EXPECT_EQ(*v100, std::string{"far-id"});
-        }
-        // set 显式 id 不影响自增: 下一个 id 取现有最大 id + 1 (101),
-        // 避免与显式 set 的高位 id 冲突 (内存版计数器语义的稳健化)
+
+        // 库层不禁止显式写高位 id (工具/中间件层已按自增 id 拦截, 见
+        // testMiddlewareShareStorePersistence); 此处保证自增 id 分配不会与该高位
+        // id 冲突: 下一个 id 取现有最大 id + 1
+        p->setShareStoreItem("s1", 100, "far-id");
+        XX_TEST_EXPECT_EQ(p->shareStoreLastId("s1"), size_t{100});
+        XX_TEST_EXPECT_EQ(p->getShareStoreItem("s1", 100).value_or(""), std::string{"far-id"});
         auto id3 = p->addShareStoreItem("s1", "third");
         XX_TEST_EXPECT_EQ(id3, size_t{101});
+        XX_TEST_EXPECT_EQ(p->shareStoreLastId("s1"), size_t{101});
 
-        // delete
-        p->removeShareStoreItem("s1", id2);
-        XX_TEST_EXPECT_NULLOPT(p->getShareStoreItem("s1", id2));
-        p->removeShareStoreItem("s1", 9999); // 删除不存在: 无副作用
-        XX_TEST_EXPECT_NULLOPT(p->getShareStoreItem("s1", 9999));
+        // 合法范围内但库中没有的 id (空洞): 返回空, 不报错
+        XX_TEST_EXPECT_NULLOPT(p->getShareStoreItem("s1", 50));
 
-        // 模拟重启: 数据与 id 计数器延续 (剩余条目: id1/id3(101)/id100)
-        auto p2     = std::make_shared<SessionStore>(root);
-        auto loaded = p2->loadShareStore("s1");
-        XX_TEST_EXPECT_EQ(loaded.items.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(loaded.nextId, size_t{102}); // max(1,100,101)+1
+        // 模拟重启: 条目与自增 id 延续
+        auto p2 = std::make_shared<SessionStore>(root);
+        XX_TEST_EXPECT_EQ(p2->shareStoreLastId("s1"), size_t{101});
         XX_TEST_EXPECT_EQ(p2->getShareStoreItem("s1", 100).value_or(""), std::string{"far-id"});
         auto id4 = p2->addShareStoreItem("s1", "fourth");
         XX_TEST_EXPECT_EQ(id4, size_t{102});
 
-        // 多 thread 隔离
+        // 多 thread 隔离 (各自独立的自增 id)
         p->addShareStoreItem("s2", "other");
-        auto loaded2 = p2->loadShareStore("s2");
-        XX_TEST_EXPECT_EQ(loaded2.items.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(loaded2.items.at(1), std::string{"other"});
+        XX_TEST_EXPECT_EQ(p2->shareStoreLastId("s1"), size_t{102});
+        XX_TEST_EXPECT_EQ(p2->shareStoreLastId("s2"), size_t{1});
+        XX_TEST_EXPECT_EQ(p2->getShareStoreItem("s2", 1).value_or(""), std::string{"other"});
     }
     removeTempRoot(root);
     return TestResult{};
@@ -629,18 +625,78 @@ static TestResult testMiddlewareShareStorePersistence() {
             std::string{"v1-updated"}
         );
         XX_TEST_EXPECT_EQ(ctx2->getShareStoreItemValue("m1", id2).value_or(""), std::string{"v2"});
-        // 空 thread 返回 nullopt (不误报)
-        XX_TEST_EXPECT_NULLOPT(ctx2->getShareStoreItemValue("m1", 999));
-        // id 延续
+
+        // 未分配的 id (大于自增 id) → 抛异常
+        bool threwUnused = false;
+        try {
+            (void)ctx2->getShareStoreItemValue("m1", 999);
+        } catch (const std::invalid_argument& e) {
+            threwUnused = true;
+            XX_TEST_EXPECT_TRUE(
+                std::string_view{e.what()}.find("out of range") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_TRUE(threwUnused);
+
+        // 未用过的 thread: 自增 id 为 0, 任何 id 都未分配 → 抛异常
+        bool threwEmptyThread = false;
+        try {
+            (void)ctx2->getShareStoreItemValue("m-new", 1);
+        } catch (const std::invalid_argument&) {
+            threwEmptyThread = true;
+        }
+        XX_TEST_EXPECT_TRUE(threwEmptyThread);
+
+        // set 同样要求 id 已分配 (不能凭空写入新 id)
+        bool threwSetUnused = false;
+        try {
+            ctx2->setShareStoreItemValue("m1", 999, "x");
+        } catch (const std::invalid_argument&) {
+            threwSetUnused = true;
+        }
+        XX_TEST_EXPECT_TRUE(threwSetUnused);
+
+        // 合法范围内但库中无此行的 id (旧数据空洞) → nullopt, 不抛异常
+        sessionStore->setShareStoreItem("m-sparse", 5, "only5");
+        XX_TEST_EXPECT_NULLOPT(ctx2->getShareStoreItemValue("m-sparse", 2));
+        XX_TEST_EXPECT_EQ(
+            ctx2->getShareStoreItemValue("m-sparse", 5).value_or(""),
+            std::string{"only5"}
+        );
+
+        // id 延续 (以库中最大 id 为准)
         auto id3 = ctx2->addShareStoreItemValue("m1", "v3");
         XX_TEST_EXPECT_EQ(id3, size_t{3});
-        // 删除
-        ctx2->removeShareStoreItemValue("m1", id2);
-        XX_TEST_EXPECT_NULLOPT(ctx2->getShareStoreItemValue("m1", id2));
-        // 重启后删除生效
+
+        // 重启后仍可读取 (内容以库为准, 与内存缓存无关)
         auto ctx3 = std::make_shared<MiddlewareContext>(sessionStore);
-        XX_TEST_EXPECT_NULLOPT(ctx3->getShareStoreItemValue("m1", id2));
         XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id3).value_or(""), std::string{"v3"});
+        XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id1).value_or(""), std::string{"v1-updated"});
+        XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id2).value_or(""), std::string{"v2"});
+
+        // ---- 内存缓存容量: 只保留最近使用的 3 条, 其余条目回库读取 ----
+        // 连续写入 6 条, 缓存始终不超过容量 (内存占用与条目数量无关)
+        auto ctx4 = std::make_shared<MiddlewareContext>(sessionStore);
+        size_t lastId = 0;
+        for (int i = 0; i < 6; ++i) {
+            lastId = ctx4->addShareStoreItemValue("m2", fmt::format("item{}", i + 1));
+        }
+        XX_TEST_EXPECT_EQ(lastId, size_t{6});
+        auto cacheIt = ctx4->shareStore.find("m2");
+        XX_TEST_EXPECT_TRUE(ctx4->shareStore.end() != cacheIt);
+        if (ctx4->shareStore.end() != cacheIt) {
+            XX_TEST_EXPECT_EQ(cacheIt->second.cache.capacity(), size_t{3});
+            XX_TEST_EXPECT_TRUE(cacheIt->second.cache.size() <= size_t{3});
+            XX_TEST_EXPECT_EQ(cacheIt->second.lastId, size_t{6});
+        }
+        // 早已被淘汰的第 1 条: 缓存未命中, 回库读取仍能取到原值
+        XX_TEST_EXPECT_EQ(ctx4->getShareStoreItemValue("m2", 1).value_or(""), std::string{"item1"});
+        XX_TEST_EXPECT_EQ(ctx4->getShareStoreItemValue("m2", 3).value_or(""), std::string{"item3"});
+        XX_TEST_EXPECT_EQ(ctx4->getShareStoreItemValue("m2", 6).value_or(""), std::string{"item6"});
+        // 回读后仍不超过容量
+        if (ctx4->shareStore.end() != cacheIt) {
+            XX_TEST_EXPECT_TRUE(cacheIt->second.cache.size() <= size_t{3});
+        }
     }
     removeTempRoot(root);
     return TestResult{};

@@ -67,7 +67,6 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                              "get",
                              "insert",
                              "set",
-                             "delete",
                          })},
                         {"description", prompt.getArg("opt")},
                     },
@@ -205,12 +204,6 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
             throw std::invalid_argument{"Arg `id` is empty"};
         }
         mctx->setShareStoreItemValue(session_id, text_id, sliceByLine(std::move(text)));
-        co_return "success";
-    } else if (text_opt == std::string_view{"delete"}) {
-        if (text_id <= 0) {
-            throw std::invalid_argument{"Arg `id` is empty"};
-        }
-        mctx->removeShareStoreItemValue(session_id, text_id);
         co_return "success";
     } else {
         throw std::invalid_argument{fmt::format("Arg `opt` is invalid: {}", text_opt)};

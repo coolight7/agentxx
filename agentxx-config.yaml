@@ -49,7 +49,7 @@
 #   见上方"分层配置"); 留空时 base 查找回退到当前系统数据目录
 # - 配置后数据子路径:
 #   - {data_dir}/sqlite/global.db                     全局设置 (TUI 动画等级/日志等级等)
-#   - {data_dir}/sqlite/sessions/{threadId}/          会话数据 (session.db / share_store.db)
+#   - {data_dir}/sqlite/sessions/{sessionId}/          会话数据 (session.db)
 #   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
 # data_dir: ~/.agentxx
 data_dir: default

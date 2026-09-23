@@ -36,6 +36,9 @@ asio::awaitable<TestResult> run_share_store_tests() {
     auto ctx  = makeShareStoreCtx();
     auto tool = agentxx::tools::SessionShareStoreTool{ctx};
 
+    // 会话 `t1` 已分配 id 的最大值 (各用例 insert 后累积, 用于非法 id 校验)
+    size_t maxId = 0;
+
     auto insertAndGet = [&](const utilxx_base::Json& insertArgs) -> asio::awaitable<std::string> {
         auto result = co_await tool.execute_async(insertArgs);
         auto id     = utilxx_base::Json::parse(result).value<size_t>("id", 0);
@@ -93,7 +96,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         XX_TEST_EXPECT_EQ(get, "x\ny\n");
     }
 
-    // set / delete 生命周期
+    // set 生命周期: insert → get → set → get
     {
         auto ins = co_await tool.execute_async(utilxx_base::Json{
             {"sessionId", "t1"    },
@@ -122,26 +125,78 @@ asio::awaitable<TestResult> run_share_store_tests() {
         });
         XX_TEST_EXPECT_EQ(get2, "world");
 
-        co_await tool.execute_async(utilxx_base::Json{
-            {"sessionId", "t1"    },
-            {"opt",       "delete"},
-            {"id",        id      },
-        });
-        // 删除后按 id 读取: 目标不存在 → 参数错误抛出
-        bool threwNotFound = false;
+        // 该会话已分配的 id 最大值 (后续用于非法 id 校验)
+        maxId = id;
+    }
+
+    // 非法 id: 大于自增 id (从未分配过) 的 id 按参数错误抛出
+    {
+        // 未用过的会话: 自增 id 为 0, 任何 id 都非法
+        bool threwEmpty = false;
         try {
             (void)co_await tool.execute_async(utilxx_base::Json{
-                {"sessionId", "t1" },
-                {"opt",       "get"},
-                {"id",        id   }
+                {"sessionId", "t-new"},
+                {"opt",       "get"  },
+                {"id",        1      }
             });
-        } catch (const std::exception& e) {
-            threwNotFound = true;
+        } catch (const std::invalid_argument& e) {
+            threwEmpty = true;
             XX_TEST_EXPECT_TRUE(
-                std::string_view{e.what()}.find("not found") != std::string::npos
+                std::string_view{e.what()}.find("out of range") != std::string::npos
             );
         }
-        XX_TEST_EXPECT_TRUE(threwNotFound);
+        XX_TEST_EXPECT_TRUE(threwEmpty);
+
+        // get: 已分配 id 之后的下一个 id 未分配 → 抛异常
+        bool threwGet = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1"      },
+                {"opt",       "get"     },
+                {"id",        maxId + 1 }
+            });
+        } catch (const std::invalid_argument& e) {
+            threwGet = true;
+            XX_TEST_EXPECT_TRUE(
+                std::string_view{e.what()}.find("out of range") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_TRUE(threwGet);
+
+        // set: 同样拒绝未分配的 id (不能凭空写入新 id)
+        bool threwSet = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1"      },
+                {"opt",       "set"     },
+                {"id",        maxId + 1 },
+                {"text",      "new"     },
+            });
+        } catch (const std::invalid_argument& e) {
+            threwSet = true;
+            XX_TEST_EXPECT_TRUE(
+                std::string_view{e.what()}.find("out of range") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_TRUE(threwSet);
+    }
+
+    // `delete` 已移除: 按非法 opt 抛出
+    {
+        bool threwDelete = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1"    },
+                {"opt",       "delete"},
+                {"id",        maxId   },
+            });
+        } catch (const std::invalid_argument& e) {
+            threwDelete = true;
+            XX_TEST_EXPECT_TRUE(
+                std::string_view{e.what()}.find("`opt` is invalid") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_TRUE(threwDelete);
     }
 
     // 参数检查失败一律抛异常 (不再返回编码后的错误 JSON):

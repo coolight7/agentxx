@@ -7,10 +7,13 @@
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
+#include "agentxx/util/exception.h"
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
 
 #include <cstring>
+#include <optional>
+#include <stdexcept>
 
 namespace agentxx {
 namespace plugin {
@@ -1245,7 +1248,20 @@ PluginxxString
         return PluginxxString{nullptr, 0};
     }
     std::string sid = svToStr(session_id);
-    auto val = ctx->middlewareHandleContext->getShareStoreItemValue(sid, static_cast<size_t>(id));
+    // id 未分配 (大于自增 id) 时中间件按参数错误抛异常: 插件跨边界不抛异常,
+    // 统一按"无此条目"返回空 (与条目不存在同一处理)
+    auto val = agentxx::util::catchError<std::optional<std::string>>(
+        [&]() -> std::optional<std::string> {
+            return ctx->middlewareHandleContext->getShareStoreItemValue(
+                sid,
+                static_cast<size_t>(id)
+            );
+        },
+        [&](std::string errmsg) -> std::optional<std::string> {
+            XX_LOGD("PluginManager::getShareStore({}, {}) failed: {}", sid, id, errmsg);
+            return std::nullopt;
+        }
+    );
     if (!val.has_value()) {
         return PluginxxString{nullptr, 0};
     }

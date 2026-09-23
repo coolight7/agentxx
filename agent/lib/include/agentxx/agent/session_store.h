@@ -21,6 +21,7 @@ namespace agent {
 ///                   llm_context 表  LLM 上下文消息 (单行整体替换, 每轮结束保存)
 ///                   meta 表          msgIdCounter / session 元数据
 ///                   store 表         agentxx_share_store KV 存储 id(自增) -> value
+///                                   (内存只保留少量最近使用的条目, 其余按需读取)
 ///
 /// 默认 root: {dataDir}/sqlite/sessions/ (dataDir 为空时 ~/.agentxx/,
 /// 取不到用户主目录时回退系统临时目录), 数据目录统一由 client 经
@@ -100,15 +101,6 @@ public:
 
     // ---- share store (session.db store 表) ----
 
-    struct LoadedShareStore {
-        std::map<size_t, std::string> items; ///< id -> value
-        /// 下一个可分配 id (恢复自现有条目最大 id + 1; 空存储为 1)
-        size_t nextId = 1;
-    };
-
-    /// 加载指定 session 的 share store 全部条目; 打开失败时返回空结构 (仅记日志)
-    LoadedShareStore loadShareStore(std::string_view sessionId);
-
     /// 读取条目; 不存在/打开失败返回 nullopt
     std::optional<std::string> getShareStoreItem(std::string_view sessionId, size_t id);
 
@@ -119,7 +111,10 @@ public:
     /// 与显式 set 的高位 id 不冲突); 失败返回 0
     size_t addShareStoreItem(std::string_view sessionId, std::string_view value);
 
-    void removeShareStoreItem(std::string_view sessionId, size_t id);
+    /// 已分配 id 的最大值 (空存储/目录不存在/读取失败返回 0)
+    /// - 只查 max(id) 不读内容: 供 share store 恢复内存中的自增 id 计数,
+    ///   避免把全部条目内容读进内存 (内容在取值时按 id 单独读取)
+    size_t shareStoreLastId(std::string_view sessionId);
 
     /// 当前根目录 (测试可校验路径)
     const std::string& rootDir() const noexcept {

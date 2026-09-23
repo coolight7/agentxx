@@ -163,7 +163,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
         [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
             std::string resp
-                = co_await agentxx::plugin::call_tool(c, "example_echo", args, ctl.threadId);
+                = co_await agentxx::plugin::call_tool(c, "example_echo", args, ctl.sessionId);
             co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
         }
     );
@@ -230,7 +230,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
                 c,
                 "example_echo",
                 R"({"from":"example_bridge"})",
-                ctl.threadId
+                ctl.sessionId
             );
             co_return fmt::format(
                 R"({{"driverAvailable": {},"onHostIoThread": {},"ticks": {},"calls": {}}})",

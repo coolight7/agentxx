@@ -2864,6 +2864,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_EQ(setRes.summary, " · set #3 2 lines");
 
+            // `delete` 操作已移除: 与其它未识别的 opt 一样原样展示 (不带 id 摘要)
             auto delRes = co_await renderToolAsync(
                 mgr2,
                 "call_bs_delete",
@@ -2874,7 +2875,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(delRes.summary, " · delete #3");
+            XX_TEST_EXPECT_EQ(delRes.summary, " · delete");
         }
 
         // 28.6 参数未就绪 (空串 / 半截 JSON): 只提供显示名, 摘要为空 (不报错)

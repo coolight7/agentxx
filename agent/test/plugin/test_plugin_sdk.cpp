@@ -193,11 +193,8 @@ int32_t PLUGINXX_CALL
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeUpdateStatusItem(
-    const PluginxxHost*,
-    AgentxxStatusItem*,
-    const PluginxxStringView* json
-) {
+int32_t PLUGINXX_CALL
+    fakeUpdateStatusItem(const PluginxxHost*, AgentxxStatusItem*, const PluginxxStringView* json) {
     ++g_clientUiCapture.statusUpdates;
     g_clientUiCapture.statusJson
         = (json && json->data) ? std::string{json->data, static_cast<size_t>(json->size)} : "";
@@ -210,37 +207,28 @@ int32_t PLUGINXX_CALL fakeUpdateToolDecor(
     const PluginxxStringView* json
 ) {
     ++g_clientUiCapture.decorUpdates;
-    g_clientUiCapture.decorToolCallId = (toolCallId && toolCallId->data)
-                                            ? std::string{
-                                                  toolCallId->data,
-                                                  static_cast<size_t>(toolCallId->size)
-    }
-                                            : "";
+    g_clientUiCapture.decorToolCallId
+        = (toolCallId && toolCallId->data)
+              ? std::string{toolCallId->data, static_cast<size_t>(toolCallId->size)}
+              : "";
     g_clientUiCapture.decorJson
         = (json && json->data) ? std::string{json->data, static_cast<size_t>(json->size)} : "";
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeOpenOverlay(
-    const PluginxxHost*,
-    const AgentxxOverlaySpec* spec
-) {
+int32_t PLUGINXX_CALL fakeOpenOverlay(const PluginxxHost*, const AgentxxOverlaySpec* spec) {
     if (!spec) {
         return -1;
     }
     ++g_clientUiCapture.overlays;
-    g_clientUiCapture.overlayPayload = (spec->payload.data)
-                                           ? std::string{
-                                                 spec->payload.data,
-                                                 static_cast<size_t>(spec->payload.size)
-    }
-                                           : "";
-    g_clientUiCapture.overlayExtra = (spec->extra_json.data)
-                                         ? std::string{
-                                               spec->extra_json.data,
-                                               static_cast<size_t>(spec->extra_json.size)
-    }
-                                         : "";
+    g_clientUiCapture.overlayPayload
+        = (spec->payload.data)
+              ? std::string{spec->payload.data, static_cast<size_t>(spec->payload.size)}
+              : "";
+    g_clientUiCapture.overlayExtra
+        = (spec->extra_json.data)
+              ? std::string{spec->extra_json.data, static_cast<size_t>(spec->extra_json.size)}
+              : "";
     return 0;
 }
 
@@ -428,7 +416,7 @@ TestResult testPluginSdk() {
                 auto argsView = args;
                 co_await Gate{box.released, box.handle};
                 box.seen->assign(argsView.data(), argsView.size());
-                box.session->assign(ctl.threadId.data(), ctl.threadId.size());
+                box.session->assign(ctl.sessionId.data(), ctl.sessionId.size());
                 co_return *box.seen;
             }
         );
@@ -839,7 +827,9 @@ TestResult testPluginSdk() {
             XX_TEST_EXPECT_EQ(client.setToolDecor("call_1", spec), 0);
             XX_TEST_EXPECT_EQ(g_clientUiCapture.decorUpdates, 1);
             XX_TEST_EXPECT_EQ(g_clientUiCapture.decorToolCallId, std::string{"call_1"});
-            XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.find("\"displayName\":\"Plan\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                g_clientUiCapture.decorJson.find("\"displayName\":\"Plan\"") != std::string::npos
+            );
             XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.find("\"table\"") != std::string::npos);
 
             XX_TEST_EXPECT_EQ(client.clearToolDecor("call_1"), 0);
@@ -852,19 +842,21 @@ TestResult testPluginSdk() {
             g_clientUiCapture = ClientUiCapture{};
             agentxx::ui::Items ui;
             ui.table({.columns = {{"P", "left", 0}}, .rows = {{"x"}}});
-            XX_TEST_EXPECT_EQ(
-                client.showItemsOverlay("Files", ui, "{\"size\":\"large\"}"),
-                0
-            );
+            XX_TEST_EXPECT_EQ(client.showItemsOverlay("Files", ui, "{\"size\":\"large\"}"), 0);
             XX_TEST_EXPECT_EQ(g_clientUiCapture.overlays, 1);
-            XX_TEST_EXPECT_TRUE(g_clientUiCapture.overlayPayload.find("\"items\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                g_clientUiCapture.overlayPayload.find("\"items\"") != std::string::npos
+            );
             XX_TEST_EXPECT_EQ(g_clientUiCapture.overlayExtra, std::string{"{\"size\":\"large\"}"});
         }
 
         // 7) 未知 kind 原样透传 (老宿主忽略, 数据层向前兼容)
         {
             agentxx::ui::Items ui;
-            ui.raw(utilxx_base::Json{{"kind", "future_widget"}, {"fallback", "n/a"}});
+            ui.raw(utilxx_base::Json{
+                {"kind",     "future_widget"},
+                {"fallback", "n/a"          }
+            });
             XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
             XX_TEST_EXPECT_TRUE(
                 g_clientUiCapture.panelItems.find("future_widget") != std::string::npos
@@ -881,7 +873,7 @@ TestResult testPluginSdk() {
         client.iface = ClientIfaces::query(&legacyHost);
         XX_TEST_EXPECT_TRUE(client.iface.ui == nullptr);
 
-        AgentxxPanel* panel = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
+        AgentxxPanel*      panel = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
         agentxx::ui::Items ui;
         ui.text("x");
         XX_TEST_EXPECT_TRUE(client.setPanelItems(panel, ui) != 0);

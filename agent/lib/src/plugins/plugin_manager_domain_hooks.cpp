@@ -214,12 +214,12 @@ std::string PluginManager::getSessionWorkDir() {
     return c->agentConfig->resolvedWorkDir();
 }
 
-std::string PluginManager::getSessionWorkDir(const std::string& threadId) {
+std::string PluginManager::getSessionWorkDir(std::string_view sessionId) {
     auto c = agentContext_.lock();
     if (!c) {
         return {};
     }
-    auto session = c->getSession(threadId);
+    auto session = c->getSession(sessionId);
     if (session && !session->getWorktreeBinding().path.empty()) {
         return session->getWorktreeBinding().path;
     }
@@ -227,7 +227,7 @@ std::string PluginManager::getSessionWorkDir(const std::string& threadId) {
 }
 
 std::string PluginManager::sessionWorkDir(std::string_view sessionId) {
-    return getSessionWorkDir(std::string{sessionId});
+    return getSessionWorkDir(sessionId);
 }
 
 std::string PluginManager::getModelConfigJson() {
@@ -260,12 +260,12 @@ std::string PluginManager::getModelConfigJson() {
 // cancel 表
 // =====================================================================
 
-bool PluginManager::isSessionCancelled(const std::string& threadId) {
+bool PluginManager::isSessionCancelled(std::string_view sessionId) {
     auto c = agentContext_.lock();
-    if (!c || threadId.empty()) {
+    if (!c || sessionId.empty()) {
         return false;
     }
-    auto session = c->getSession(threadId);
+    auto session = c->getSession(sessionId);
     if (!session || !session->getCancelToken()) {
         return false;
     }

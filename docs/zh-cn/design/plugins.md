@@ -286,7 +286,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
                 co_await sleep(c, 100);
                 ctl.throw_if_cancelled();
-                // 跨插件互调: co_await call_tool(c, "other_tool", "{}", ctl.threadId());
+                // 跨插件互调: co_await call_tool(c, "other_tool", "{}", ctl.sessionId());
                 co_return R"({"status":"ok"})";
             }
         );
@@ -417,7 +417,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
 | `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (get_session_work_dir session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言) |
 | `agentxx.agent.model` | 1 | `get_config` (主模型及关联配置 JSON) |
-| `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (advisory, 权威通知为 cancel 回调) |
+| `agentxx.agent.cancel` | 1 | `is_cancelled(sessionId)` (advisory, 权威通知为 cancel 回调) |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (宿主提示词读写) |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |

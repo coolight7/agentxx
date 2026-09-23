@@ -258,6 +258,8 @@ typedef struct AgentxxPluginSessionIface {
     uint32_t struct_size;
 
     /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
+    /// - 条目不存在或 id 未分配 (大于自增 id, 见 add_share_store) 时返回 -1
+    ///   (out 不分配内存, 宿主不抛异常)
     int32_t(PLUGINXX_CALL* get_share_store)(
         const PluginxxHost*       host,
         const PluginxxStringView* session_id,

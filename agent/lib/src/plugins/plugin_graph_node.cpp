@@ -76,13 +76,13 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
     const std::string stateJson  = in.state.serialize().dump();
     const std::string configJson = configJson_;
 
-    auto       ex       = co_await asio::this_coro::executor;
-    auto       instKeep = inst;
-    const auto nodeName = name_;
-    const auto threadId = in.ctx.thread_id;
+    auto       ex        = co_await asio::this_coro::executor;
+    auto       instKeep  = inst;
+    const auto nodeName  = name_;
+    const auto sessionId = in.ctx.thread_id;
 
     plugin::OpDrive drive;
-    drive.start = [spec, instKeep, nodeName, configJson, stateJson, threadId](
+    drive.start = [spec, instKeep, nodeName, configJson, stateJson, sessionId](
                       const PluginxxOperatorNotify* notify,
                       PluginxxString*               err
                   ) -> void* {
@@ -91,7 +91,8 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
             = agentxx::plugin::PluginStringView::from(configJson.data(), configJson.size());
         auto stateJsonSv
             = agentxx::plugin::PluginStringView::from(stateJson.data(), stateJson.size());
-        auto threadIdSv = agentxx::plugin::PluginStringView::from(threadId.data(), threadId.size());
+        auto threadIdSv
+            = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
         return spec.run_start(
             spec.user_data,
             &nodeNameSv,

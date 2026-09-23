@@ -511,9 +511,9 @@ public:
     void setLanguage(std::string_view lang) override;
 
     std::string getSessionWorkDir();
-    std::string getSessionWorkDir(const std::string& threadId);
+    std::string getSessionWorkDir(std::string_view sessionId);
     std::string getModelConfigJson();
-    bool        isSessionCancelled(const std::string& threadId);
+    bool        isSessionCancelled(const std::string& sessionId);
 
     // ==================== pluginxx::DomainHooks 实现 ====================
     // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/

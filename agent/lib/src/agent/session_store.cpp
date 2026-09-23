@@ -746,26 +746,26 @@ void SessionStore::saveLlmMessages(
 // share store (session.db store 表)
 // ---------------------------------------------------------------------------
 
-SessionStore::LoadedShareStore SessionStore::loadShareStore(std::string_view sessionId) {
+size_t SessionStore::shareStoreLastId(std::string_view sessionId) {
     std::lock_guard<std::mutex> lock(mutex_);
-    LoadedShareStore            out;
-    // 目录不存在 = 从未写入过, 直接返回空
+    size_t                      out = 0;
+    // 目录不存在 = 从未写入过, 直接返回 0
     if (!sessionDataDirExists(sessionId)) {
         return out;
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).sessionDb;
-            auto  stmt = db.prepare("SELECT id, value FROM store ORDER BY id");
-            while (stmt.step()) {
-                out.items[static_cast<size_t>(stmt.columnInt64(0))] = stmt.columnText(1);
+            auto& db = dbs(sessionId).sessionDb;
+            // 只取 id 的最大值, 不读取内容 (内容在取值时按 id 单独读取)
+            auto stmt = db.prepare("SELECT COALESCE(MAX(id), 0) FROM store");
+            if (stmt.step()) {
+                const auto maxId = stmt.columnInt64(0);
+                out              = (maxId > 0) ? static_cast<size_t>(maxId) : size_t{0};
             }
-            out.nextId = out.items.empty() ? 1 : (out.items.rbegin()->first + 1);
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionStore: loadShareStore({}) failed: {}", sessionId, errmsg);
-            out = LoadedShareStore{};
+            XX_LOGE("SessionStore: shareStoreLastId({}) failed: {}", sessionId, errmsg);
             return false;
         }
     );
@@ -826,8 +826,8 @@ size_t SessionStore::addShareStoreItem(std::string_view sessionId, std::string_v
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             auto& db = dbs(sessionId).sessionDb;
-            // 自增 id: 取现有最大 id + 1, 重启后延续; 与内存版
-            // (SessionShareStore::storeId 递增) 语义一致且更稳健
+            // 自增 id: 取现有最大 id + 1, 重启后延续 (与内存中记录的最大 id
+            // 一致, 见 MiddlewareContext::SessionShareStore::lastId)
             auto stmt = db.prepare("INSERT INTO store(id, value) "
                                    "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM store), ?)");
             stmt.bindText(1, value);
@@ -841,23 +841,6 @@ size_t SessionStore::addShareStoreItem(std::string_view sessionId, std::string_v
         }
     );
     return out;
-}
-
-void SessionStore::removeShareStoreItem(std::string_view sessionId, size_t id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            auto& db   = dbs(sessionId).sessionDb;
-            auto  stmt = db.prepare("DELETE FROM store WHERE id = ?");
-            stmt.bindInt64(1, static_cast<int64_t>(id));
-            stmt.step();
-            return true;
-        },
-        [&](std::string errmsg) -> bool {
-            XX_LOGE("SessionStore: removeShareStoreItem({}, {}) failed: {}", sessionId, id, errmsg);
-            return false;
-        }
-    );
 }
 
 } // namespace agent

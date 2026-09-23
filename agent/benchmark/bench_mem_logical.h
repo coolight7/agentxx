@@ -163,16 +163,16 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
                 continue;
             }
             shareBytes += kv.first.size() + 64; // 会话键 + map 节点开销
-            for (const auto& item : kv.second.store) {
-                shareBytes += item.second.size() + 48;
-                ++shareCount;
-            }
+            // 内容本体在会话 SQLite 的 store 表中, 内存只有 LRU 缓存 (有条数上限)
+            // 或未注入持久化时的全量 map; 两者都按条目节点开销估算
+            shareCount += kv.second.cache.size() + kv.second.items.size();
+            shareBytes += (kv.second.cache.size() + kv.second.items.size()) * 48;
         }
         rows.push_back(
             {"agent.middleware.share_store",
              shareBytes,
              shareCount,
-             "share_store 内容 + 键/节点开销"}
+             "share_store 内存条目 (内容存会话库, 内存仅 LRU 缓存) + 键/节点开销"}
         );
         size_t graphSessionCount = ctx->middlewareHandleContext->graphData.size();
         rows.push_back(

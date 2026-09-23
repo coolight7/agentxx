@@ -107,7 +107,7 @@ bool await_suspend(std::coroutine_handle<Promise> h) {
     AgentxxPluginString err{nullptr, 0};
     auto nameSv = PluginStringView::from(st->name.data(), st->name.size());
     auto argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-    auto tidSv  = PluginStringView::from(st->threadId.data(), st->threadId.size());
+    auto tidSv  = PluginStringView::from(st->sessionId.data(), st->sessionId.size());
 
     st->opHandle = st->tools->call_tool_async(
         st->host, &nameSv, &argsSv, &tidSv,

@@ -7,6 +7,7 @@
 #include "fmt/format.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
+#include "utilxx_base/lru_cache.h"
 #include <any>
 #include <cstdlib>
 #include <functional>
@@ -16,9 +17,9 @@
 #include <neograph/neograph.h>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 namespace asio = ::boost::asio;
@@ -410,16 +411,27 @@ public:
 class MiddlewareContext {
 public:
 
+    /// share store 会话内存状态
+    /// - 内容只在 SQLite (session.db 的 store 表) 中保存一份, 内存仅保留
+    ///   最近使用的少数条目 ([cache]), 取值未命中时按 id 回库读取
+    ///   (内存占用与会话的条目数量无关)
+    /// - 未注入持久化时没有可回读的库, 内存就是唯一副本, 此时条目不能淘汰,
+    ///   全部保存在 [items] 中
     class SessionShareStore {
     public:
 
-        std::map<size_t, std::string> store{};
-        size_t                        storeId = 1;
+        /// 最近使用条目的条数上限 (内存缓存的容量)
+        static constexpr size_t kCacheCapacity = 3;
 
-        size_t getNextId() {
-            storeId++;
-            return storeId;
-        }
+        /// 最近使用的条目: id -> value (仅在注入了持久化时使用)
+        utilxx_base::LruCache<size_t, std::string> cache{kCacheCapacity};
+
+        /// 全部条目: id -> value (仅在未注入持久化时使用)
+        std::map<size_t, std::string> items{};
+
+        /// 已分配 id 的最大值 (自增 id): id 超过它表示该 id 从未分配过, 属于非法参数
+        /// - 首次访问会话时从库中取 max(id) 恢复, 之后每分配一个 id 就更新
+        size_t lastId = 0;
     };
 
     inline static const std::string interruptHandleName_default = "default";
@@ -459,11 +471,12 @@ public:
     inline static const std::string graphDataKey_interruptToolcallCache{"xx_interruptToolcallCache"
     };
 
-    /// <sessionId, <id, value>>
+    /// <sessionId, SessionShareStore>
     /// - 存储变量内容，留出 id 到 上下文中，llm 需要时可以通过
     /// toolcall/agentxx_share_store 读取
     /// - 如: 压缩上下文时会将部分长文本存入这里替换为 id
-    /// - 内存副本作为读缓存, 写操作同步落库 (持久化注入时)
+    /// - 内容本体持久化在会话 SQLite 的 store 表中, 内存只保留每个会话最近使用的
+    ///   [SessionShareStore::kCacheCapacity] 条; 未注入持久化时内存里是全部数据
     std::map<std::string, SessionShareStore, std::less<>> shareStore{};
 
     /// <sessionId, itemData>
@@ -581,14 +594,20 @@ public:
         }
     }
 
+    /// 读取 share store 条目 (id 必须已被分配, 见下)
+    /// - `id > SessionShareStore::lastId` (从未分配过的 id) 抛 std::invalid_argument;
+    ///   条目不存在 (如曾被显式 set 高 id 的旧数据) 返回 nullopt
+    /// - 注入持久化时先查内存缓存, 未命中时回库读取并填入缓存
     std::optional<std::string> getShareStoreItemValue(std::string_view sessionId, const size_t id);
 
+    /// 覆盖已有 id 的内容 (id 必须已被分配, 否则抛 std::invalid_argument)
+    /// - 写操作同步落库 (注入持久化时), 并更新内存副本
     void
         setShareStoreItemValue(std::string_view sessionId, const size_t id, std::string_view value);
 
+    /// 追加新条目, 返回分配的新 id (从 1 开始递增)
+    /// - 同步落库 (注入持久化时) 并写入内存副本; 落库失败或无持久化时按内存计数递增
     size_t addShareStoreItemValue(std::string_view sessionId, std::string_view value);
-
-    void removeShareStoreItemValue(std::string_view sessionId, const size_t id);
 
     void removeGraphDataItem(std::string_view sessionId, std::string_view key);
 
@@ -657,14 +676,27 @@ public:
 
 private:
 
-    /// 确保 share store 内存缓存已加载 (首次访问某 thread 时从 SQLite 恢复;
-    /// 未注入持久化时 no-op)
-    void ensureShareStoreLoaded(std::string_view sessionId);
+    /// 取 (必要时创建) 指定会话的 share store 内存状态
+    /// - 首次访问该会话时只从库中取回自增 id 计数 (max(id)), 不读内容
+    SessionShareStore& shareStoreState(std::string_view sessionId);
+
+    /// 校验 id: 0 或大于 [SessionShareStore::lastId] 表示该 id 从未分配过,
+    /// 抛 std::invalid_argument (调用方工具按工具错误上报)
+    static void checkShareStoreId(
+        const SessionShareStore& state,
+        std::string_view         sessionId,
+        const size_t             id
+    );
+
+    /// 缓存未命中时按 id 回库读取并填入缓存 (缓存已有/未注入持久化/条目不存在时不动)
+    void ensureShareStoreItemCached(
+        SessionShareStore& state,
+        std::string_view   sessionId,
+        const size_t       id
+    );
 
     /// 会话 SQLite 持久化 (为空时 share store 仅内存存储)
     std::shared_ptr<agentxx::agent::SessionStore> persistence_ = nullptr;
-    /// 已从持久化加载过 share store 的 thread (避免空存储反复加载) - O(1)
-    std::unordered_set<std::string> shareStoreLoaded_{};
 };
 
 } // namespace middleware

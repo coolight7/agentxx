@@ -198,7 +198,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
                 co_await sleep(c, 100);
                 ctl.throw_if_cancelled();
-                // Cross-plugin call: co_await call_tool(c, "other_tool", "{}", ctl.threadId());
+                // Cross-plugin call: co_await call_tool(c, "other_tool", "{}", ctl.sessionId());
                 co_return R"({"status":"ok"})";
             }
         );
@@ -321,7 +321,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON). |
 | `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (`get_session_work_dir` returns default workdir when session ID is empty; `get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory; `get_language/set_language` queries/overrides runtime language). |
 | `agentxx.agent.model` | 1 | `get_config` (Active model and associated config JSON). |
-| `agentxx.agent.cancel` | 1 | `is_cancelled(threadId)` (Advisory polling; authoritative notification comes via cancel callback). |
+| `agentxx.agent.cancel` | 1 | `is_cancelled(sessionId)` (Advisory polling; authoritative notification comes via cancel callback). |
 | `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (Host prompt read/write access). |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0: trace .. 4: error). |

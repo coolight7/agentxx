@@ -177,7 +177,8 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
   - `llm_context` 表: llmMessages (单行整体替换)
   - `meta` 表: msgIdCounter/title/lastActiveMs
   - `store` 表: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
-    重启后延续) —— 与消息历史同一生命周期 (随 session 创建/删除),
+    重启后延续; 内存只缓存最近使用的少数条目, 其余按 id 读取) ——
+    与消息历史同一生命周期 (随 session 创建/删除),
     同一 io 线程写入, 互斥锁串行保护
 - 接入点:
   - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages,
@@ -205,8 +206,14 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
     不产生该事件, 不会重复追加; 与引擎状态的短暂漂移由轮末权威同步收敛
   - `BaseAgent::runTurnAsync`: 轮末回调保存 llmMessages (整表替换, 权威终态) +
     flushViewMessages (补存节流窗口内未落盘的 view 操作)
-  - `MiddlewareContext` share store 四方法: 内存 map 作读缓存 (首次访问某 session
-    时从 DB 恢复全部条目与 id 计数器), 写操作同步写穿 DB
+  - `MiddlewareContext` share store 三方法 (get/set/add):
+    内容以会话库 `store` 表为唯一数据源, 内存仅保留每个会话最近使用的
+    `SessionShareStore::kCacheCapacity` (3) 条 LRU 缓存 —— 首次访问某 session
+    时只取回自增 id 计数 `max(id)`, 不加载全部内容 (内存占用与会话条目数量无关);
+    取值未命中缓存时按 id 回库读取并填入缓存, 写操作同步写穿 DB 并更新缓存;
+    传入 id 大于自增 id (从未分配过) 时按参数错误抛异常 (不再支持删除条目);
+    未注入持久化 (`persistence_` 为空) 时没有可回读的库, 内存就是唯一副本,
+    此时条目全部保留 (不淘汰), 与旧行为一致
 - 容错: 所有落库失败仅记录错误日志, 不影响内存状态与对话主流程 (尽力而为持久化);
   读取路径在目录不存在时直接返回空, 不创建目录/空文件 (避免 subagent 等
   只读访问产生垃圾目录)

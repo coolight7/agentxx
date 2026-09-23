@@ -125,7 +125,9 @@ ContainerSnapshot snapshotContainers(
     }
     auto it = ctx->middlewareHandleContext->shareStore.find(std::string{sessionId});
     if (it != ctx->middlewareHandleContext->shareStore.end()) {
-        out.shareStoreItems = it->second.store.size();
+        // 内存中的条目数: 注入持久化时内容落在会话 SQLite, 内存只有最近使用的
+        // 少量缓存 (cache); 未注入持久化时内存里是全部条目 (items)
+        out.shareStoreItems = it->second.cache.size() + it->second.items.size();
     }
     return out;
 }

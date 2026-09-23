@@ -1246,7 +1246,7 @@ void testTuiToolHeaderBuiltin() {
     );
     XX_TEST_EXPECT_TRUE(f.render().find("Store · get #12 [0, 100]") != std::string::npos);
 
-    // share_store set / delete
+    // share_store set
     f.pushTool(
         "agentxx_share_store",
         R"({"opt":"set","id":3,"text":"x\ny"})",
@@ -1255,8 +1255,9 @@ void testTuiToolHeaderBuiltin() {
         "success"
     );
     XX_TEST_EXPECT_TRUE(f.render().find("Store · set #3 2 lines") != std::string::npos);
+    // 已移除的 `delete` 与其它未识别的 opt 一样原样展示 (不带 id/行区间摘要)
     f.pushTool("agentxx_share_store", R"({"opt":"delete","id":3})", true, true, "success");
-    XX_TEST_EXPECT_TRUE(f.render().find("Store · delete #3") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · delete") != std::string::npos);
 
     // subagent 单发: 子代理名 + 任务首行
     f.pushTool(
