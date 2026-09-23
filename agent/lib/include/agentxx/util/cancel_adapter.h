@@ -4,7 +4,7 @@
 /// `utilxx::CancelToken` 抽象 (不依赖图引擎), 而 agentxx 的会话取消令牌是
 /// `neograph::graph::CancelToken`。本头提供两个方向的衔接:
 /// - **令牌适配**: [adaptCancelToken] 把图引擎令牌包装成 `utilxx::CancelToken`,
-///   使同一份取消意图在两条链路上表现一致 (轮询标志 / asio 信号 / 执行器绑定 /
+///   使同一份取消意图在两条路径上表现一致 (轮询标志 / asio 信号 / 执行器绑定 /
 ///   fork 级联);
 /// - **异常适配**: [awaitHostPluginOp] 把内核抛出的 `utilxx::CancelledException`
 ///   转换为宿主的 `neograph::graph::CancelledException`, 保持宿主侧 (tool / 图节点 /

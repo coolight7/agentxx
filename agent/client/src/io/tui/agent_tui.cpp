@@ -2632,7 +2632,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             }
 
             // 历史消息与 server viewMessages 同型 (ViewMessage), 直接拷贝;
-            // 原 json→TUIMessage 拆解逻辑已下沉到 server (event_stream 展开)
+            // 原 json→TUIMessage 解析逻辑已下沉到 server (event_stream 展开)
             // - 空 content 消息 (正文为空/全空白) 不入列表 (TUI 忽略其渲染);
             //   历史分页的窗口下标/总数仍按服务端 viewMessages 计数,
             //   与本地列表条数解耦 (见 historyWindowStart/historyTotal)

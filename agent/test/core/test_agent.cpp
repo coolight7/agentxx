@@ -316,7 +316,7 @@ DaSimServer startDaSimServer() {
                 }
 
                 // provider 层现在把"完全无输出"的成功响应当作生成失败 (抛异常交由
-                // modelcall 重试链路处理), 模拟器遵循同一契约: 未设置内容时使用占位
+                // modelcall 重试流程处理), 模拟器遵循同一契约: 未设置内容时使用占位
                 // 文本, 不再产生真正的空响应 (历史用例将 content 设为 "" 仅表示最小
                 // 回复, 并非在测试空响应语义)
                 const std::string respContent = g_da_sim_response_content.empty()
@@ -504,7 +504,7 @@ asio::awaitable<void> test_agent_init() {
     co_return;
 }
 
-/// 取 agent 装配的权限中间件 (工具权限声明落地点; 未装配返回 nullptr)
+/// 取 agent 装配的权限中间件 (工具权限声明实际生效处; 未装配返回 nullptr)
 agentxx::middleware::PermissionMiddlewareHandle*
     findPermissionMiddleware(agentxx::agent::CodeAgent& agent) {
     auto ctx = agent.agentContext;

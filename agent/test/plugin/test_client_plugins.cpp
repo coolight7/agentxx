@@ -1230,7 +1230,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
 
     // ---- 13. agentxx_system_monitor client 插件: CPU/内存/GPU 资源监控渲染 ----
-    // 插件平台矩阵: windows/linux/android/macos 有真实实现 (iOS 无产物), 其余跳过
+    // 插件平台支持情况: windows/linux/android/macos 有真实实现 (iOS 无产物), 其余跳过
 #if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D || XX_IS_MACOS_D
     {
         auto smPath = findPluginPath("agentxx_system_monitor");
@@ -3280,7 +3280,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
 
-            // 30.7 生命周期: 卸载后定时器全部取消 (卸载等待在途回调结束)
+            // 30.7 生命周期: 卸载后定时器全部取消 (卸载会等待尚未返回的回调结束)
             {
                 counter.ticks = 0;
                 auto spec     = makeSpec(50, 100, false);
@@ -3561,7 +3561,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 33. 定时器同帧合并: io 线程被占住后不补发迟到的那次触发 ----
     //
     // 用**独立 io_context 并由本线程驱动**: 回调里会阻塞 300ms, 若借用测试共享的
-    // io 上下文会推迟其它模块的在途事件 (影响与本用例无关的时序); 用额外线程则
+    // io 上下文会推迟其它模块尚未处理的事件 (影响与本用例无关的时序); 用额外线程则
     // 需要处理停机, 这里直接在主线程 run_for 驱动 (阻塞也只影响本用例)。
     {
         using clk = std::chrono::steady_clock;
@@ -3641,7 +3641,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             asio::detached
         );
 
-        // 主线程驱动 io 事件: 700ms 内让定时器按各自节奏触发 (阻塞回调也在此发生)
+        // 主线程驱动 io 事件: 700ms 内让定时器按各自周期触发 (阻塞回调也在此发生)
         {
             const auto deadline = clk::now() + std::chrono::milliseconds{700};
             while (clk::now() < deadline) {
@@ -3656,7 +3656,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 定时器仍然活着并持续触发 (合并不等于停摆)
         XX_TEST_EXPECT_TRUE(probe.ticks.load() >= 4);
 
-        // 收尾: 卸载实例 (等待在途回调结束), 之后不再有待处理事件
+        // 收尾: 卸载实例 (等待尚未返回的回调结束), 之后不再有待处理事件
         std::atomic<bool> unloaded{false};
         asio::co_spawn(
             ioT,

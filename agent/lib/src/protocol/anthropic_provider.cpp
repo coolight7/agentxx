@@ -460,7 +460,7 @@ asio::awaitable<neograph::ChatCompletion>
     auto respJson   = utilxx_base::Json::parse(r.body);
     auto completion = parseResponse(respJson);
 
-    // 空响应视为生成失败, 抛异常交由 modelcall 重试链路处理 (与流式路径行为一致)
+    // 空响应视为生成失败, 抛异常交由 modelcall 重试流程处理 (与流式路径行为一致)
     if (isEmptyResponse(completion)) {
         throw std::runtime_error(fmt::format(
             "LLM response is empty | model={} usage={}/{}/{}",
@@ -594,7 +594,7 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     }
 
     // 流正常结束但无任何有效输出 (content/明文思考/加密思考块/tool_calls 全空):
-    // 视为本次生成失败, 抛异常交由 modelcall 重试链路处理 (UI 警告提示 + 自动重试),
+    // 视为本次生成失败, 抛异常交由 modelcall 重试流程处理 (UI 警告提示 + 自动重试),
     // 避免空 assistant 消息静默结束本轮会话
     if (isEmptyResponse(completion)) {
         throw std::runtime_error(fmt::format(

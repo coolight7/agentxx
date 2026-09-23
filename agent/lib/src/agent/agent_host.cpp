@@ -366,7 +366,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
     // ---- worktree 绑定继承 (worktree 模式) ----
     // - 父会话已绑定 worktree 时, 子代理的工作目录预置为同一 worktree:
-    //   resolvedWorkDir()/permission Ask 默认放行规则/子进程 cwd 全链路跟随,
+    //   resolvedWorkDir()/permission Ask 默认放行规则/子进程 cwd 一并跟随,
     //   无需子代理再感知绑定机制; inheritedWorktreePath 供提示词中间件注入
     //   "继承隔离" 提醒 (避免子代理再创建嵌套 worktree 或改写主检出)
     if (parentAgentCtx) {
@@ -900,7 +900,7 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
         };
     }
 
-    // 2) 轮询 GetTask 至终态 (500ms 间隔; 总超时 60s; 取消令牌联动)
+    // 2) 轮询 GetTask 至终态 (500ms 间隔; 总超时 60s; 取消令牌同步生效)
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (std::chrono::steady_clock::now() < deadline) {
         if (req.cancelToken && req.cancelToken->is_cancelled()) {

@@ -676,7 +676,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
 // 本类只保留两处 client 特有差异:
 // - unloadAsync 的默认超时较短 (UI 交互路径, 见头文件);
 // - 卸载级联只统计"启用中"的依赖者 (cascadeUnloadEnabledOnly)。
-// 启停事务 (stop/start) 触达插件侧注册时, 领域动作经 detachDomainRegistrations 注入。
+// 启停事务 (stop/start) 到达插件侧注册流程时, 领域动作经 detachDomainRegistrations 注入。
 
 asio::awaitable<void>
     ClientPluginManager::loadConfiguredClientPlugins(const std::vector<PluginConfig>& plugins) {
@@ -996,7 +996,7 @@ void ClientPluginManager::performToolRender(
     std::string             key,
     uint64_t                inputHash
 ) {
-    // 无论成功/失败/提前返回都要清掉在途标记, 否则该键再也不会重新渲染
+    // 无论成功/失败/提前返回都要清掉"进行中"标记, 否则该键再也不会重新渲染
     struct PendingGuard {
         ClientToolRenderCache* cache;
         std::string            key;
@@ -1748,7 +1748,7 @@ int32_t PLUGINXX_CALL
 // 宿主 runtime/io 线程判定", 与宿主领域无关, 因此 client / agent 两侧共用同一份
 // 逻辑与语义 (见 pluginxx/host/tables_impl.h 的 requestDriverEntry 等)。
 // 语义要点: 申请恒异步、每张请求至多执行一次、排队期间持有实例 lease、
-// 关闭中仍允许驱动 (取消收束需要驱动继续流动)、已关闭拒绝。
+// 关闭中仍允许驱动 (取消收尾需要驱动继续流动)、已关闭拒绝。
 
 // ---- COM 风格接口表查询 ----
 
@@ -2986,7 +2986,7 @@ int ClientPluginManager::updateToolDecor(
         uiRegistry_ = std::move(cur);
     }
     // 实例注册信息同步 (disable/enable 恢复用); 无 adapter 信号 —— 装饰随
-    // 正常帧节奏渲染 (工具消息本身的变化已驱动重绘)
+    // 按正常帧率渲染 (工具消息本身的变化已驱动重绘)
     auto& regs = inst->toolDecorRegs;
     for (auto& d : regs) {
         if (d.toolCallId == tid) {
@@ -3099,7 +3099,7 @@ constexpr size_t kKeybindMaxPerInstance = 16;
 
 /// 等待一次到期 → 触发 (fireTimerTick) → 周期定时器续期
 ///
-/// 说明: 定时器生命周期由 [ClientTimerImpl::alive] 控制; 取消后即使有在途等待
+/// 说明: 定时器生命周期由 [ClientTimerImpl::alive] 控制; 取消后即使有尚未返回的等待
 /// 也会在回调里立即返回 (asio 的 cancel 只是让等待以 operation_aborted 提前结束)。
 void armTimer(
     const std::weak_ptr<ClientPluginManager>& mgr,

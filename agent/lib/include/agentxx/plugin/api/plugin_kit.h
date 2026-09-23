@@ -1112,11 +1112,11 @@ inline void blocking_tool(
  *
  * 为什么需要它: 这类等待没有"宿主可见唤醒源" —— driver 里的 `poll_one` 只会执行
  * 已经就绪的 handler, 不会让私有 reactor 的等待对象到期。因此插件在注册时就
- * **声明**"该工具需要受控轮询驱动", 桥据此在有在途操作时继续申请请求:
+ * **声明**"该工具需要受控轮询驱动", 桥据此在有未完成的操作时继续申请请求:
  * - 有进展 (本轮 `poll_one` 执行到了 handler) → 立即续下一次请求;
  * - 无进展 → 退避 `PollOneBridge::kPollIntervalMs` (宿主计时器) 后再驱动;
  * - 连续有进展超过 `PollOneBridge::kPollBurstMax` 步 → 强制让出一次, 交给宿主;
- * - **没有在途 polled 操作时不申请请求、不建定时器** (空闲零开销)。
+ * - **没有未完成的 polled 操作时不申请请求、不建定时器** (空闲零开销)。
  *
  * 业务签名与 [blocking_tool] 完全一致 (只把返回值换成 `asio::awaitable<std::string>`),
  * 因此迁移通常只是换一个注册函数名:
@@ -1372,8 +1372,8 @@ inline void polled_tool(
             if (!job->tid.empty()) {
                 job->shim->ctx->cancelRegistry.cancel(job->tid);
             }
-            // 取消在途退避定时器, 让插件立刻得到一次驱动 (不必等满一个退避量子),
-            // 从而尽快在阶段边界看到取消并收束根。
+            // 取消尚未触发的退避定时器, 让插件立刻得到一次驱动 (不必等满一个退避间隔),
+            // 从而尽快在阶段边界看到取消并结束根。
             if (job->bridge) {
                 job->bridge->kickPumpWait();
             }
@@ -1456,7 +1456,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
             }
             return nullptr;
         } else {
-            /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后收束完成
+            /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
             /// 通知，返回 Job 作为宿主可取消的 provider 句柄（F19）。
             auto* job = new HookJob{
                 shim,
@@ -1611,7 +1611,7 @@ inline int32_t
             }
             return nullptr;
         } else {
-            /// Task<T> 节点：由 promise 在协程结束后收束完成通知，
+            /// Task<T> 节点：由 promise 在协程结束后完成通知，
             /// 返回 Job 作为宿主可取消的 provider 句柄。
             auto* job = new NodeJob{shim, std::move(cancelFlag), nullptr, std::move(request)};
             auto task = detail::invokeGraphNode(shim->fn, *shim->ctx, job->request, std::move(ctl));

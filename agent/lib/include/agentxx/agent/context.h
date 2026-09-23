@@ -495,7 +495,7 @@ public:
     ///   插件修改非法时回退默认图并记日志
     neograph::json graphDefinitionJson = neograph::json::object();
 
-    /// 会话资源应用器 (插件向宿主贡献 Skill/Memory/MCP 的落地接口)
+    /// 会话资源应用器 (插件向宿主贡献 Skill/Memory/MCP 的实现接口)
     /// - 由 CodeAgent::initMiddleware 构造注入 (单一具体实现,
     ///   见 [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h));
     ///   BaseAgent 场景无中间件 → 保持 nullptr,

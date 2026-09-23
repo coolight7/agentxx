@@ -54,7 +54,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
         } else {
             session->llmMessages = agentxx::util::fromNeographJson(result.channel_raw("messages"));
             // 图已完整结束: 清理中断/异常期间遗留的 tempMessages 快照。
-            // - 本轮为 resume 完成时快照已被权威结果取代, 留存会误导后续
+            // - 本轮为 resume 完成时快照已被权威结果取代, 保留下来会误导后续
             //   错误路径的上下文回退源 (过期回卷)
             // - getGraphDataItemValue 对缺失键会自动创建空条目, 无论存在与否
             //   统一移除保持干净

@@ -538,7 +538,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 手动压缩直派模式 (agent 空闲触发, 无 AgentRunner 中断循环):
         // 不再走 SubagentExecute RR → requestInterrupt 抛 NodeInterrupt 的
         // 中断委派路径 —— 该路径的中断只能由 AgentRunner 处理, 空闲时
-        // 会穿透所有 catchErrorAsync 逃逸到 EventBus publish 的 detached
+        // 会穿过所有 catchErrorAsync 逃逸到 EventBus publish 的 detached
         // 协程被 asio 静默丢弃, 表现为压缩永久卡在 "Summarizing..."。
         // 改为直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待完成,
         // 与中断路径复用同一 spawnOneTask (同上下文模式语义一致: 相同
@@ -823,9 +823,9 @@ asio::awaitable<void>
         doSummarizeToolcall(messages);
         cleanNoiseMessages(messages);
 
-        // 冷却检查: 若上次压缩后消息增长不足 (<= 2 条) 且当前仍处于 >= 75% 高水位，
-        // 说明普通的 LLM 摘要无法压下水位，为避免每轮 modelcall 都反复派生 subagent 无效压缩，
-        // 直接降级硬截断以彻底释放空间
+        // 冷却检查: 若上次压缩后消息增长不足 (<= 2 条) 且当前消息数仍 >= 75% 上限，
+        // 说明普通的 LLM 摘要无法把消息数降下来，为避免每轮 modelcall 都反复派生 subagent
+        // 做无效压缩, 直接降级硬截断以彻底释放空间
         size_t lastSummarizedMsgCount = 0;
         {
             const auto& countJson

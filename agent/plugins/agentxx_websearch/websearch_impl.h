@@ -6,7 +6,7 @@
 /// - 统一异步操作模型 (受控轮询): 执行体为协程 (*ExecuteAsync), 由插件入口经
 ///   `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
 ///   local_executor) 上, 由宿主 IO 线程经 driver 请求 `poll_one` 有界步进
-///   (有进展立即续, 无进展退避, 无在途操作时不驱动), 见 plugin_kit.h 与
+///   (有进展立即续, 无进展退避, 无未完成操作时不驱动), 见 plugin_kit.h 与
 ///   docs/zh-cn/design/plugins.md §16; HttpClient 为协程接口直接 co_await,
 ///   不再经局部 io_context + io.run() 同步驱动
 /// - 取消语义: 协程内阶段边界轮询 cancel_flag (多请求路径的请求间生效);

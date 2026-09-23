@@ -69,7 +69,7 @@ public:
     /// 是否返回错误 (true 时返回 error json, 模拟 subagent 执行失败)
     bool failWithError = false;
     /// 是否抛出异常 (true 时 execute_async 抛 std::runtime_error,
-    /// 模拟 subagent 执行链路异常, 经 catchErrorAsync 捕获降级)
+    /// 模拟 subagent 执行流程异常, 经 catchErrorAsync 捕获降级)
     bool throwException = false;
 
     FakeSubAgentManagerTool(
@@ -1343,7 +1343,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
     //      assistant(压缩总结), 紧接着是未压缩的最近消息 (保留原角色与顺序)
     //   4. thinking 保留 (不剥离, 由 LLM 决定取舍)
 
-    // --- T11. 完整链路: 确定性压缩先行, LLM 同上下文压缩成一段总结;
+    // --- T11. 完整流程: 确定性压缩先行, LLM 同上下文压缩成一段总结;
     //            system 不能动; 角色顺序 = system | user(自动提示) | assistant(总结) | 最近消息;
     //            thinking 保留并传给压缩请求 ---
     {
@@ -1589,7 +1589,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_FALSE(hasOld);
     }
 
-    // --- T16. 探索折叠在 onModelcallRunFunc 链路生效 (>= 75% 分支) ---
+    // --- T16. 探索折叠在 onModelcallRunFunc 调用中生效 (>= 75% 分支) ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000
@@ -1709,7 +1709,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(r, std::string{"real-tool summary"});
     }
 
-    // --- T18. subagent 执行链路异常 → catchErrorAsync 捕获降级为空串,
+    // --- T18. subagent 执行流程异常 → catchErrorAsync 捕获降级为空串,
     //           走失败计数路径 (保留原消息), 不向上传播崩溃 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
@@ -1853,7 +1853,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
     // ==================== 新增: 无工具压缩 + 压缩后仍超限兜底 ====================
 
-    // --- T22. 完整链路: 压缩 subagent 不传入任何工具 (无 tools 字段),
+    // --- T22. 完整流程: 压缩 subagent 不传入任何工具 (无 tools 字段),
     //           仅对当前上下文原样压缩; 压缩指令不含 share_store 提示 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();

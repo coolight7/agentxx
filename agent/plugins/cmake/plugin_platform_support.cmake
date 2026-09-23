@@ -1,8 +1,8 @@
 # ===== 插件平台支持公共辅助 =====
 # 各插件在自身 CMakeLists.txt 开头声明支持的平台并调用
 # agentxx_plugin_platform_gate() 判定; 无实现的平台直接 return() 跳过编译
-# (内置合并/独立动态库两模式均在子目录入口处拦截), 判定依据与平台矩阵说明
-# 见 docs/zh-cn/plugins.md 9.3.1
+# (内置合并/独立动态库两模式均在子目录入口处拦截), 判定依据与平台支持情况说明
+# 见 docs/zh-cn/design/plugins.md §14
 
 # 判定当前目标平台是否在声明列表内
 # 用法: agentxx_plugin_platform_gate(<插件名> <结果变量> [windows|linux|macos|android|ios ...])

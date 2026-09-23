@@ -406,7 +406,7 @@ asio::awaitable<void> test_permission_relative_path() {
     co_return;
 }
 
-/// 路径权限批量查询 (插件接口 check_paths 的落地): 三态判定且**不发起询问**
+/// 路径权限批量查询 (插件接口 check_paths 的实现): 三态判定且**不发起询问**
 /// - 供模式/前缀参数工具 (glob/grep) 在枚举出实际路径后逐项过滤使用
 /// - 三态: Allow(已明确允许) / Deny(已明确拒绝) / Ask(未获批准, 不询问)
 asio::awaitable<void> test_permission_path_query_decisions() {

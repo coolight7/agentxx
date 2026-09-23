@@ -345,8 +345,8 @@ PathDecision PermissionMiddlewareHandle::decideTarget(
     size_t           index,
     std::string_view sessionId
 ) const {
-    // TODO(符号链接穿透): 本判定基于词法规范化路径, 不解析符号链接 —— 允许范围
-    // 内的链接 (如 <root>/link -> <root>/deny) 被读取/写入时会穿透到被拒目录,
+    // TODO(符号链接跟随): 本判定基于词法规范化路径, 不解析符号链接 —— 允许范围
+    // 内的链接 (如 <root>/link -> <root>/deny) 被读取/写入时会跟随链接进入被拒目录,
     // 逐路径过滤接口也看不到链接目标 (枚举出的只是链接自身路径)。彻底处理需对
     // 已存在路径取 std::filesystem::weakly_canonical 后再判定一次 (影响所有工具
     // 与查询接口, 需评估性能与 Windows 语义), 暂不处理。

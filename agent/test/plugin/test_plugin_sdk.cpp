@@ -460,7 +460,7 @@ TestResult testPluginSdk() {
         handle.resume();
         XX_TEST_EXPECT_EQ(seen, std::string{R"({"n":42})"});
         XX_TEST_EXPECT_EQ(seenSession, std::string{"sess-42"});
-        // 协程已到 final_suspend，按 SDK 根完成流程收束
+        // 协程已到 final_suspend，按 SDK 根完成流程收尾
         finishRoot<Task<std::string>::promise_type>(handle);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);

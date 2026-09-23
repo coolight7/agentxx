@@ -865,7 +865,7 @@ asio::awaitable<neograph::ChatCompletion>
     // 非流式 tool_calls 缺失 id 时同样回填 call_N (与流式路径一致)
     fillMissingToolCallIds(completion);
 
-    // 空响应视为生成失败, 抛异常交由 modelcall 重试链路处理 (与流式路径行为一致)
+    // 空响应视为生成失败, 抛异常交由 modelcall 重试流程处理 (与流式路径行为一致)
     if (isEmptyResponse(completion)) {
         throw std::runtime_error(fmt::format(
             "LLM response is empty | model={} usage={}/{}/{}",
@@ -1042,7 +1042,7 @@ asio::awaitable<neograph::ChatCompletion>
 
     completion.stop_reason = hasToolCall ? "tool_use" : "end_turn";
 
-    // 空响应视为生成失败, 抛异常交由 modelcall 重试链路处理 (与流式路径行为一致)
+    // 空响应视为生成失败, 抛异常交由 modelcall 重试流程处理 (与流式路径行为一致)
     if (isEmptyResponse(completion)) {
         throw std::runtime_error(fmt::format(
             "LLM response is empty | model={} usage={}/{}/{}",
@@ -1175,7 +1175,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     }
 
     // 流正常结束但无任何有效输出: 视为本次生成失败, 抛异常交由 modelcall
-    // 重试链路处理 (UI 警告提示 + 自动重试), 避免空 assistant 消息静默结束本轮会话
+    // 重试流程处理 (UI 警告提示 + 自动重试), 避免空 assistant 消息静默结束本轮会话
     if (isEmptyResponse(completion)) {
         throw std::runtime_error(fmt::format(
             "LLM stream completed with empty response | model={} usage={}/{}/{}",
@@ -1313,7 +1313,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     completion.stop_reason = tcMap.empty() ? "end_turn" : "tool_use";
 
     // 流正常结束但无任何有效输出: 视为本次生成失败, 抛异常交由 modelcall
-    // 重试链路处理 (UI 警告提示 + 自动重试), 避免空 assistant 消息静默结束本轮会话
+    // 重试流程处理 (UI 警告提示 + 自动重试), 避免空 assistant 消息静默结束本轮会话
     if (isEmptyResponse(completion)) {
         throw std::runtime_error(fmt::format(
             "LLM stream completed with empty response | model={} usage={}/{}/{}",

@@ -1390,9 +1390,9 @@ std::optional<std::vector<WireDelta>> SessionServerAgentIO::deltasSince(uint64_t
     if (seq + 1 < oldest) {
         return std::nullopt;
     }
-    // 客户端水位超过服务端当前 seq: 服务端进程重启/会话重建后 seq 从 0 重新
+    // 客户端记录的序号超过服务端当前 seq: 服务端进程重启/会话重建后 seq 从 0 重新
     // 计数, 按增量续传只能得到空列表 (客户端将永远收不到新增量, 界面不再刷新),
-    // 故回退全量 sync (客户端据 sync 的 deltaSeq 复位水位)
+    // 故回退全量 sync (客户端据 sync 的 deltaSeq 重置序号)
     if (seq > newest) {
         XX_LOGI(
             "[session_ctrl] delta seq regressed (client={}, server={}), fallback to full sync "
@@ -1420,7 +1420,7 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
         p.messages      = sess->getFullViewMessagesCopy();
         p.tailHash      = sess->getHashInfo().tailHex;
         p.totalMessages = p.messages.size();
-        // 快照水位: 客户端据此复位去重水位 (服务端 seq 可能已重新计数)
+        // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
         p.deltaSeq = sess->deltaSeq;
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
@@ -1444,7 +1444,7 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     p.totalMessages    = total;
     p.messages         = sess->getViewMessagesRange(start, total);
     p.tailHash         = sess->getHashInfo().tailHex;
-    // 快照水位: 客户端据此复位去重水位 (服务端 seq 可能已重新计数)
+    // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
     p.deltaSeq     = sess->deltaSeq;
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     return p;

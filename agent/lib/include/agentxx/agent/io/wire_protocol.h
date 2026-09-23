@@ -338,8 +338,8 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     utilxx_base::Json j = utilxx_base::Json::object();
     j["fromIndex"]      = p.fromIndex;
     j["tailHash"]       = p.tailHash;
-    // 快照对应的服务端 delta 水位 (0 = 未提供): 客户端据此复位去重水位,
-    // 避免服务端 seq 重新计数后客户端旧水位把新增量全部判为重复 (见结构体注释)
+    // 快照对应的服务端增量序号 (0 = 未提供): 客户端据此重置去重用的序号,
+    // 避免服务端 seq 重新计数后客户端旧序号把新增量全部判为重复 (见结构体注释)
     j["deltaSeq"] = p.deltaSeq;
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)

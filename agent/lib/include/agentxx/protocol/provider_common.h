@@ -126,7 +126,7 @@ inline std::string makeUniqueToolCallId(size_t index = 0) {
 /// - 加密思考载体存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
 ///   (summary/content 均空) 时唯一的有效载体; 数组非空即视为有载体
 /// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
-///   由调用方抛出异常, 经 modelcall 重试链路自动重试并提示 UI
+///   由调用方抛出异常, 经 modelcall 重试流程自动重试并提示 UI
 ///
 /// - `args`:
 ///     - [completion] 待判定的补全结果

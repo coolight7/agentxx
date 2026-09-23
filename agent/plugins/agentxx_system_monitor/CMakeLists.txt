@@ -7,7 +7,7 @@
 #   (Windows: pdh/dxgi; macOS: IOKit/CoreFoundation framework)
 # - 从 libagentxx src/expand/get_cpu_gpu_use 拆分独立:
 #   - 工具 agentxx_get_system_core_info (原内置工具迁移, 同名同行为)
-#   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示链路
+#   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示路径
 #     (WireGetSystemUsage) 经能力调用获取使用率 JSON
 set(PLUGIN_NAME agentxx_system_monitor)
 
@@ -16,7 +16,7 @@ set(PLUGIN_NAME agentxx_system_monitor)
 # macOS (mach host_statistics + IOKit IOAccelerator) 有真实实现;
 # Android 复用 Linux 分支 (/proc/stat、/proc/meminfo 在 Android 可读, GPU 经
 # sysfs/drm 枚举缺失时 readFileContent 返回空串优雅降级); iOS 为空桩, 跳过编译
-# (平台矩阵说明见 docs/zh-cn/design/plugins.md §14)
+# (平台支持情况说明见 docs/zh-cn/design/plugins.md §14)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux macos android)
 if (NOT _AGENTXX_PLATFORM_OK)

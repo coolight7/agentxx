@@ -10,7 +10,7 @@
 ///     `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
 ///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由宿主 IO
 ///     线程经 driver 请求 `poll_one` 有界步进 (有进展立即续, 无进展退避,
-///     无在途操作时不驱动); 并发多条命令共享同一条驱动序列与同一个 reactor,
+///     无未完成操作时不驱动); 并发多条命令共享同一条驱动序列与同一个 reactor,
 ///     不再每条命令占死一个宿主阻塞线程至超时
 ///     (见 plugin_kit.h 与 docs/zh-cn/design/plugins.md §16)
 ///   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
@@ -394,7 +394,7 @@ inline void killProcGroup(boost::process::process& proc, void* winJob) {
 
 /// 终止子进程后主动关闭 stdout/stderr 管道本端读句柄:
 /// - 目的: 即使进程树未杀净 (例如 Windows 下 Job assign 失败回退
-///   TerminateProcess, 孙进程仍持有管道写端), 在途 async_read(transfer_all)
+///   TerminateProcess, 孙进程仍持有管道写端), 尚未完成的 async_read(transfer_all)
 ///   也会立即以错误结束, 使 runProcPipeline 主工作能返回, 不会永久挂起
 /// - 仅在 kill 之后调用 (正常结束路径由子进程自然关闭写端, 无需关闭)
 /// - Linux 整组 SIGKILL 后子进程写端必然关闭, 此调用幂等无害
@@ -591,7 +591,7 @@ inline asio::awaitable<std::string> runProcPipeline(
                 detail::killProcGroup(proc, winJob);
                 // 终止后主动关闭本端管道读句柄: 若进程树未杀净 (Windows 下
                 // Job 不可用/assign 失败回退 TerminateProcess 时, 漏网孙进程
-                // 仍持有写端), 在途 async_read 立即以错误完成, 主工作不会
+                // 仍持有写端), 尚未完成的 async_read 立即以错误完成, 主工作不会
                 // 永久等待 EOF —— 保证工具调用到点必返回
                 detail::closePipesAfterKill(outpip, errpip);
             }

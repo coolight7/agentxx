@@ -15,7 +15,7 @@ set(PLUGIN_NAME agentxx_audio_stream)
 #   桩实现; 宿主不把未实现能力伪装为已支持 → 在真实实现完成并通过验证前
 #   不进入构建产物。
 # - 恢复方式: 实现可用后在下面的 gate 调用中声明平台 (如 windows) 并同步更新
-#   docs/zh-cn/design/plugins.md 平台矩阵。
+#   docs/zh-cn/design/plugins.md §14 (平台支持情况)。
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK)
 if (NOT _AGENTXX_PLATFORM_OK)

@@ -2048,7 +2048,7 @@ TestResult testPluginRuntime() {
             }
 
             // 7) 实例进入 Closing: 仍允许驱动 (关闭要先取消 Operation, 插件的取消
-            //    收束需要驱动继续流动), 但 Closed 后拒绝。
+            //    收尾需要驱动继续流动), 但 Closed 后拒绝。
             f.provider->lifetime->requestClose();
             PluginxxDriver* closingTicket = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(closingTicket != nullptr);

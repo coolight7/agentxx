@@ -2597,8 +2597,8 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
     co_return;
 }
 
-/// 插件真实链路冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
-/// op_driver 全链路执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
+/// 插件真实调用冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
+/// op_driver 完整流程执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
 ///     →done 上报; asio stream_file 异步文件 I/O 在寄生 loop 上推进)
 ///   - list/grep: offload线程池适配异步接口
@@ -2687,8 +2687,8 @@ asio::awaitable<void> test_plugin_real_link() {
         std::string{"true"}
     );
 
-    // 经 ToolRegistry 全链路执行 (op_driver 驱动插件三件套); sessionId 注入
-    // thread_id → 会话工作目录解析链路
+    // 经 ToolRegistry 完整流程执行 (op_driver 驱动插件三件套); sessionId 注入
+    // thread_id → 会话工作目录解析流程
     auto callTool
         = [&](const char* name, const utilxx_base::Json& args) -> asio::awaitable<std::string> {
         auto tool = linkCtx->toolRegistry->find(name);
@@ -2791,7 +2791,7 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(out.find("link_smoke.txt") != std::string::npos);
     }
 
-    // 中文路径链路测试 (write -> read -> edit -> list -> grep)
+    // 中文路径完整流程测试 (write -> read -> edit -> list -> grep)
     {
         auto outW = co_await callTool(
             "agentxx_filesystem_write",
@@ -3337,7 +3337,7 @@ asio::awaitable<TestResult>
     // 同步兜底路径 (强制关闭文件异步 I/O 后 read/write/edit 走同步实现)
     co_await run(test_sync_fallback_without_async_file_io);
 
-    // 插件真实链路冒烟 (dlopen + 宿主 op_driver 全链路; 插件未构建时跳过)
+    // 插件真实调用冒烟 (dlopen + 宿主 op_driver 完整流程; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)
     try {
         co_await test_plugin_real_link();

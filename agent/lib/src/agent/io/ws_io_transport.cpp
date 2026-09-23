@@ -305,13 +305,13 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 }
             } else if (auto* sync = std::get_if<WireSyncPayload>(&wireMsg.value())) {
                 lastTailHash_ = sync->tailHash;
-                // 快照水位: 全量/尾窗 Sync 已包含 seq <= deltaSeq 的全部增量,
-                // 据此**覆盖**去重水位 (而非取较大值)。
-                // - 服务端进程重启/会话重建后 seq 从 0 重新计数, 客户端旧水位
+                // 快照序号: 全量/尾窗 Sync 已包含 seq <= deltaSeq 的全部增量,
+                // 据此**覆盖**去重用的序号 (而非取较大值)。
+                // - 服务端进程重启/会话重建后 seq 从 0 重新计数, 客户端保留的旧序号
                 //   (可能上千) 会把新 delta 全部判为重复而丢弃 —— 表现为重连
                 //   成功、历史快照也拿到了, 但界面再也不刷新
                 // - 缓冲溢出回退全量 sync 时同样需要: 该快照已含全部增量, 旧
-                //   水位会让快照后的重放序列被误判为重复
+                //   序号会让快照后的重放序列被误判为重复
                 // - deltaSeq == 0 (旧服务端未提供/无会话): 复位为 0, 放行后续增量
                 lastDeltaSeq_.store(sync->deltaSeq, std::memory_order_release);
             } else if (auto* ack = std::get_if<WireHelloAck>(&wireMsg.value())) {

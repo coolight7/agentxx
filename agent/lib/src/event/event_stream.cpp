@@ -244,9 +244,9 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             hasLLMOutput = true;
             // 展开: reasoning_content 非空 / 加密思考 → Think (折叠); content 非空 →
             // Assistant 消息; 每条 tool_call → Tool 消息 (未完成, 历史默认折叠)。
-            // 顺序与渲染端拆解一致: Think 在前, Assistant 在中, Tool 在后。
+            // 顺序与渲染端解析一致: Think 在前, Assistant 在中, Tool 在后。
             // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
-            // client 端无需再按 json 拆解
+            // client 端无需再按 json 解析
             auto reasoning       = jm.value("reasoning_content", std::string{});
             int  reasoningTokens = 0;
             bool isEncrypted     = false;

@@ -321,7 +321,7 @@ public:
 
     /// 声明工具权限限制 (插件在注册工具后调用)
     /// - 声明内容: 权限作用域 (读/写)、目标参数名、目标类型 (路径/文本/无)
-    /// - 落地点为 agent 装配的权限中间件 ([PermissionMiddlewareHandle]):
+    /// - 声明最终交给 agent 装配的权限中间件 ([PermissionMiddlewareHandle]):
     ///   工具调用时的判定 (白/黑名单、permission.mode 默认、记住的选择、
     ///   工作区隔离、完全授权) 全部由该中间件执行, 插件只声明"哪些参数受约束"
     /// - 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略
@@ -627,7 +627,7 @@ private:
 
     void eraseMiddleware(PluginMiddlewareHandle* mw);
 
-    /// agent 装配的权限中间件 (插件工具权限声明的落地处; 未装配返回 nullptr)
+    /// agent 装配的权限中间件 (插件工具权限声明实际生效处; 未装配返回 nullptr)
     /// - 在中间件链中查找; 权限中间件由 BaseAgent::initMiddleware 装配, 插件
     ///   加载 (create/start 事务) 在其后执行, 正常运行期可查到
     agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware();

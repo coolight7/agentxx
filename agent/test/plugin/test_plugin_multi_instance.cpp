@@ -293,7 +293,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     }
 
     // ---- 6. agentxx_system_monitor 双实例: 后台采样任务按实例隔离, 卸载互不影响 ----
-    // 插件平台矩阵: windows/linux/android/macos 有真实实现 (iOS 无产物), 其余跳过
+    // 插件平台支持情况: windows/linux/android/macos 有真实实现 (iOS 无产物), 其余跳过
 #if XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D || XX_IS_MACOS_D
     {
         auto dir = findPluginDirMI("agentxx_system_monitor");

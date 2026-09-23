@@ -10,7 +10,6 @@
 - tui 按 user msg 快捷跳转、top、bottom
 - 破甲插件，通过注入系统提示词、修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
 - client 连接 server 时插入 tool、加载插件
-- 提示不使用黑话词语，注释翻译应当贴近对应语言，而不是直译; 冒烟
 - share_store 转存 sql
 - 提示词插入 temp 路径
 

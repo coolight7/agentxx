@@ -446,7 +446,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         // 插件事件转发: WirePluginData 序列化往返 (载荷为插件定义 schema 的
-        // JSON 字符串, 宿主只透传; 系统资源占用链路 (agentxx_system_monitor
+        // JSON 字符串, 宿主只透传; 系统资源占用数据通道 (agentxx_system_monitor
         // 周期采集) 与 codegraph 索引状态均走本通道)
         agentxx::agent::WirePluginData pd;
         pd.plugin = "agentxx_system_monitor";
@@ -877,11 +877,11 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 }
 
 // ---------------------------------------------------------------------------
-// SessionServerAgentIO: 客户端水位超过服务端当前 seq -> 回退全量 sync
-//   - 服务端进程重启/会话重建后 seq 从 0 重新计数, 而客户端仍带旧水位 (如 100)
-//   - 如果只判 "缓冲最旧序号 > 水位" 才回退: 水位高于缓冲尾时返回**空增量**,
+// SessionServerAgentIO: 客户端记录的序号超过服务端当前 seq -> 回退全量 sync
+//   - 服务端进程重启/会话重建后 seq 从 0 重新计数, 而客户端仍带旧序号 (如 100)
+//   - 如果只判 "缓冲最旧序号 > 客户端序号" 才回退: 客户端序号高于缓冲尾时返回**空增量**,
 //     客户端既收不到 sync 也收不到 delta → 重连成功后界面永不刷新
-//   - 当前设计: 水位超过缓冲尾 -> 回退全量 sync (客户端据 sync.deltaSeq 复位水位)
+//   - 当前设计: 客户端序号超过缓冲尾 -> 回退全量 sync (客户端据 sync.deltaSeq 重置序号)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_seq_regression_fallback() {
@@ -909,7 +909,7 @@ static asio::awaitable<void> test_session_controller_seq_regression_fallback() {
         sc->sendToPeer(d);
     }
 
-    // 客户端携带旧水位 100 (来自重启前的服务端实例)
+    // 客户端携带旧序号 100 (来自重启前的服务端实例)
     agentxx::agent::WireHello hello{"session", "", 100, ""};
     sc->handleHello(hello);
 
@@ -1781,12 +1781,12 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
 }
 
 // ---------------------------------------------------------------------------
-// 16b. 服务端重启后重连: 客户端去重水位按 sync 复位, 增量不再被误判为重复
-//   - 服务端进程重启/会话重建后 delta seq 从 0 重新计数, 而客户端水位仍停留在
+// 16b. 服务端重启后重连: 客户端去重用的序号按 sync 重置, 增量不再被误判为重复
+//   - 服务端进程重启/会话重建后 delta seq 从 0 重新计数, 而客户端记录的序号仍停留在
 //     旧值 (如 100): 之后 seq=1,2,... 的增量会被全部判为重复丢弃, 表现为
 //     "重连成功、历史快照也拿到了, 但界面再也不刷新"
-//   - 修复: 客户端收到 Sync 时按快照携带的 deltaSeq 覆盖去重水位
-//     (快照已含 seq <= deltaSeq 的全部增量, 据此复位既不丢也不重复)
+//   - 修复: 客户端收到 Sync 时按快照携带的 deltaSeq 覆盖去重用的序号
+//     (快照已含 seq <= deltaSeq 的全部增量, 据此重置既不丢也不重复)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
@@ -1804,7 +1804,7 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
             io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
         );
         if (myConn == 1) {
-            // 旧会话: 客户端在连接 1 上收到的最后一个 delta 序号 = 100 (旧水位)
+            // 旧会话: 客户端在连接 1 上收到的最后一个 delta 序号 = 100 (旧序号)
             agentxx::agent::WireDelta d;
             d.type = agentxx::agent::WireDelta::Type::TextToken;
             d.seq  = 100;
@@ -1814,7 +1814,7 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
             co_return;
         }
         // 服务端重启后: 会话重建, delta seq 从 0 重新计数
-        // 1) 全量 sync (快照水位 = 0) 之后的新增量必须被投递
+        // 1) 全量 sync (快照序号 = 0) 之后的新增量必须被投递
         {
             agentxx::agent::WireSyncPayload sp;
             sp.deltaSeq = 0;
@@ -1827,8 +1827,8 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
             d.text = "new-session-delta-1";
             co_await wsSendJson(ws, io::makeDeltaMsg(d));
         }
-        // 2) 快照水位 = 5: 已包含在快照内 (seq=3) 的增量去重丢弃,
-        //    水位之后的增量 (seq=6) 正常投递
+        // 2) 快照序号 = 5: 已包含在快照内 (seq=3) 的增量去重丢弃,
+        //    序号之后的增量 (seq=6) 正常投递
         {
             agentxx::agent::WireSyncPayload sp;
             sp.deltaSeq = 5;
@@ -1906,11 +1906,11 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
     auto hasText = [&](std::string_view t) {
         return std::find(texts.begin(), texts.end(), t) != texts.end();
     };
-    // 旧会话增量 + 重启后水位复位放行的增量均被投递
+    // 旧会话增量 + 重启后序号重置放行的增量均被投递
     XX_TEST_EXPECT_TRUE(hasText("old-session-delta"));
     XX_TEST_EXPECT_TRUE(hasText("new-session-delta-1"));
     XX_TEST_EXPECT_TRUE(hasText("new-session-delta-6"));
-    // 快照水位内 (seq=3 <= deltaSeq=5) 的增量去重丢弃, 避免重复渲染
+    // 快照序号范围内 (seq=3 <= deltaSeq=5) 的增量去重丢弃, 避免重复渲染
     XX_TEST_EXPECT_FALSE(hasText("stale-included-delta"));
 
     transport->close();

@@ -18,7 +18,7 @@ namespace tools {
 /// - `remove`: 删除指定 (或当前绑定的) worktree; 存在未提交工作且未显式
 ///   force 时拒绝并给出摘要 —— 默认保留, 仅用户明确要求时删除
 ///
-/// 平台约束联动:
+/// 与权限约束的配合:
 /// - 绑定时向 PermissionMiddleware 注册会话隔离边界: 主检出子树写 DENY,
 ///   worktree 子树放行 (读主检出不受限), 隔离优先于白名单/模式默认规则
 class GitWorktreeTool : public XXToolBase {

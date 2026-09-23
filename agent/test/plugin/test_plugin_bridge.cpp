@@ -921,7 +921,7 @@ TestResult testPluginBridge() {
     ///     - 首步不内联 (start 返回时业务体未运行, 只有桥的一次请求);
     ///     - 有进展 (本轮 poll_one 执行到 handler) 立即续票, 不等退避;
     ///     - 无进展时恰好安排一次 10ms 退避 (期间不新增请求);
-    ///     - 根结束 -> 停止轮询 (取消在途退避), 之后请求数不再增长。
+    ///     - 根结束 -> 停止轮询 (取消尚未触发的退避), 之后请求数不再增长。
     {
         harness.clear();
         NotifyProbe probe;
@@ -1003,7 +1003,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled-ok"});
         XX_TEST_EXPECT_EQ(bodyRuns, 1);
 
-        // 根结束 -> 停止轮询: 计数归零、在途退避取消、请求不再增长
+        // 根结束 -> 停止轮询: 计数归零、尚未触发的退避被取消、请求不再增长
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_FALSE(bridge->isPumpWaitScheduled());
         XX_TEST_EXPECT_FALSE(bridge->isPumping());
@@ -1013,8 +1013,8 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
     }
 
-    /// 12. 受控轮询取消: execute_cancel 置取消标志 + 取消在途退避 (插件不必等满
-    ///     一个退避量子), 根在下一个阶段边界收束, 只产生一个 CANCELLED 终态。
+    /// 12. 受控轮询取消: execute_cancel 置取消标志 + 取消尚未触发的退避 (插件不必等满
+    ///     一个退避间隔), 根在下一个阶段边界结束, 只产生一个 CANCELLED 终态。
     {
         harness.clear();
         NotifyProbe probe;
@@ -1049,14 +1049,14 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(op != nullptr);
         auto* bridge = &ctx.bridge();
 
-        // 驱动到"退避在途"状态 (本地 timer 未到期, 本轮无进展)
+        // 驱动到"已安排退避"状态 (本地 timer 未到期, 本轮无进展)
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_TRUE(bridge->isPumpWaitScheduled());
         XX_TEST_EXPECT_EQ(bridge->idlePollCount(), uint64_t{1});
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
 
-        // 取消: 在途退避被 op_cancel 取消 (真宿主随后会以 CANCELLED 触发完成回调)
+        // 取消: 尚未触发的退避被 op_cancel 取消 (真宿主随后会以 CANCELLED 触发完成回调)
         XX_TEST_EXPECT_TRUE(spec.execute_cancel != nullptr);
         spec.execute_cancel(spec.user_data, op);
         XX_TEST_EXPECT_EQ(harness.opCancelCalls, 1);
@@ -1094,7 +1094,8 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.calls, 1);
     }
 
-    /// 13. stop/关闭: 在途 polled 根按 FAILED 终结一次, pump 停止 (在途退避取消),
+    /// 13. stop/关闭: 未完成的 polled 根按 FAILED 终结一次, pump 停止 (尚未触发的退避
+    ///     被取消),
     ///     被放弃的 Job 由清理回调回收 (泄漏由 LSan 覆盖), 迟到请求不跑插件代码。
     {
         harness.clear();
@@ -1125,7 +1126,7 @@ TestResult testPluginBridge() {
         auto* bridge = &ctx.bridge();
         XX_TEST_EXPECT_TRUE(harness.runOne()); // 业务体挂到 30s timer 上
         XX_TEST_EXPECT_EQ(bodyRuns, 1);
-        XX_TEST_EXPECT_TRUE(harness.runOne()); // 无进展 -> 退避在途
+        XX_TEST_EXPECT_TRUE(harness.runOne()); // 无进展 -> 已安排退避
         XX_TEST_EXPECT_TRUE(bridge->isPumpWaitScheduled());
         XX_TEST_EXPECT_EQ(probe.calls, 0);
 
@@ -1134,7 +1135,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_FALSE(bridge->isPumpWaitScheduled());
-        XX_TEST_EXPECT_EQ(harness.opCancelCalls, 1); // 在途退避被取消
+        XX_TEST_EXPECT_EQ(harness.opCancelCalls, 1); // 尚未触发的退避被取消
         XX_TEST_EXPECT_TRUE(bridge->isStopping());
 
         // 二次 stop 幂等 (不再重复上报)

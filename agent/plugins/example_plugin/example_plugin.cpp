@@ -246,7 +246,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     //
     // 业务体是 asio 协程, 等待的是**插件本地 reactor** 上的 `steady_timer`:
     // 这类等待没有"宿主可见唤醒源", 因此由桥以受控轮询推进 ——
-    // - 有在途 polled 操作时才申请驱动请求 (空闲零开销);
+    // - 有未完成的 polled 操作时才申请驱动请求 (空闲零开销);
     // - 有进展立刻续下一次请求, 无进展退避 10ms, 突发 256 步后强制让出;
     // - 宿主不提供 `coroutine_runtime`/`scheduler.sleep` 时自动降级为
     //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。

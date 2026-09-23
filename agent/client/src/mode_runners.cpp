@@ -142,7 +142,7 @@ static TUITheme resolveTuiTheme() {
 }
 
 /// agent 侧插件关闭必须先于 agent io_context 停止: 派发到 agent IO executor
-/// 等待 stop → lease 归零 → destroy/dlclose 全链路完成。失败只记录日志 ——
+/// 等待 stop → lease 归零 → destroy/dlclose 全部完成。失败只记录日志 ——
 /// 未完成的实例会保持 CloseFailed 并保留上下文/动态库，越权 dlclose 更危险。
 static asio::awaitable<void> shutdownAgentPlugins(std::shared_ptr<agent::CodeAgent> agent) {
     if (!agent || !agent->ioCtx) {

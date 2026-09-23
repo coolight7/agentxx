@@ -329,7 +329,7 @@ private:
     std::unordered_map<std::string, uint64_t>                                     versions_;
     /// 条目写入顺序 (仅记录当前在 entries_ 中的键, 每键一条)
     std::deque<std::string> order_;
-    /// 键 → 在途请求的输入特征
+    /// 键 → 尚未完成的请求的输入特征
     std::unordered_map<std::string, uint64_t> pending_;
 };
 
@@ -358,7 +358,7 @@ ClientToolRenderResult renderClientTool(
 /// 的 `AgentxxTimer` 不透明类型对应)
 ///
 /// - 计时器挂在 client io 执行器上 (asio::steady_timer), 回调在 io 线程执行
-/// - `alive` 为取消标记: 取消后即使有在途等待也不会再回调插件
+/// - `alive` 为取消标记: 取消后即使有尚未返回的等待也不会再回调插件
 /// - `repeat` 为剩余触发次数 (0 = 一次性), 周期定时器每次触发后递减
 /// - `armedAt` 用于**同帧合并**: io 线程繁忙/事件积压导致多个周期同时到期时,
 ///   只回调一次并丢弃已错过的周期 (不追赶式连续回调)

@@ -11,7 +11,7 @@ set(PLUGIN_NAME agentxx_text_selection_monitor)
 # ===== 平台支持判定 =====
 # 仅 Windows 有真实实现 (UIAutomation/IAccessible 文本选择 + CDP WebSocket);
 # 其余平台源码为 "not supported on this platform" 空桩, 跳过编译
-# (平台矩阵说明见 docs/zh-cn/plugins.md 9.3.1)
+# (平台支持情况说明见 docs/zh-cn/design/plugins.md §14)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows)
 if (NOT _AGENTXX_PLATFORM_OK)
@@ -128,7 +128,7 @@ if (XX_IS_WIN_D)
     winhttp
   )
 endif()
-# 注: Linux 分支 (当前平台矩阵未启用) 需要的 io_uring 符号同样由
+# 注: Linux 分支 (当前平台支持情况中未启用) 需要的 io_uring 符号同样由
 # cxx_utilxx_base_static 的导出接口携带, 无需本插件补链
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES

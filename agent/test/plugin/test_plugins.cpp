@@ -1191,7 +1191,7 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 31. 统一异步操作模型: HostOp 句柄 / poll 推进 / 会话取消联动 ----
+    // ---- 31. 统一异步操作模型: HostOp 句柄 / poll 推进 / 会话取消传递 ----
     {
         auto inst31 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst31 != nullptr);
@@ -1278,7 +1278,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginManager->unregisterTool(inst31.get(), "async_notify_tool");
         }
 
-        // 31.3 会话取消联动: CancelToken 取消 → execute_cancel 被调用 →
+        // 31.3 会话取消传递: CancelToken 取消 → execute_cancel 被调用 →
         //      插件上报 CANCELLED → 工具协程收到 CancelledException
         {
             struct CancelOp {
@@ -1490,7 +1490,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ok31);
     }
 
-    // ---- 32. exec_command 插件真实链路 (完成回调形驱动) ----
+    // ---- 32. exec_command 插件真实调用 (完成回调形驱动) ----
     {
         namespace fs2        = std::filesystem;
         auto        basePath = findExamplePluginPath();
@@ -1513,7 +1513,7 @@ throw new Error("top-level rollback probe");
                 std::atomic<bool> done = false;
             };
 
-            // ---- 32.1 命令真实链路 (无会话令牌): 快速完成且输出正确 ----
+            // ---- 32.1 命令真实调用 (无会话令牌): 快速完成且输出正确 ----
             {
                 auto           t0 = std::chrono::steady_clock::now();
                 PluginxxString e  = {nullptr, 0};
@@ -2320,7 +2320,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_EQ(j["onHostIoThread"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["pumpOnStart"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["ticks"].get<int>(), 3);
-            // asio 原生 timer 在 pump 下真正到期 (退避量子 10ms, 因此放宽下界)
+            // asio 原生 timer 在 pump 下真正到期 (退避间隔 10ms, 因此放宽下界)
             XX_TEST_EXPECT_GE(j["elapsedMs"].get<int64_t>(), int64_t{40});
             XX_TEST_EXPECT_TRUE(wallMs < 3000);
             // 插件等待期间宿主任务持续推进 => 两者在同一 IO 序列中交错
@@ -2462,7 +2462,7 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 38d-3. 工具权限声明: 插件在注册工具后声明自身工具的权限限制
-    //             (agentxx.agent.permission 接口表), 声明落地于权限中间件并由
+    //             (agentxx.agent.permission 接口表), 声明交给权限中间件并由
     //             宿主统一判定; 插件禁用/卸载时声明随工具一并撤销 ----
     {
         // 装配权限中间件 (真实运行中由 BaseAgent::initMiddleware 装配)
@@ -2915,7 +2915,7 @@ throw new Error("top-level rollback probe");
                 // 插件等待网络期间宿主任务仍在推进
                 XX_TEST_EXPECT_GE(hostTicks.load(), 2);
             }
-            // 卸载: 无在途操作 -> pump 已停止, 无残留
+            // 卸载: 无未完成操作 -> pump 已停止, 无残留
             XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_websearch"));
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_web_fetch"));
         }
@@ -2923,7 +2923,7 @@ throw new Error("top-level rollback probe");
         serverThread.join();
     }
 
-    // ---- 38f. 受控轮询的在途卸载: 命令挂起时卸载, pump 停止且不泄漏 ----
+    // ---- 38f. 受控轮询未完成时卸载: 命令挂起时卸载, pump 停止且不泄漏 ----
     {
         auto instExec2
             = co_await ctx->pluginManager->loadPluginAsync(findPluginDir("agentxx_execute_command")
@@ -2967,7 +2967,7 @@ throw new Error("top-level rollback probe");
             co_await sleepMs(150);
             XX_TEST_EXPECT_FALSE(ures.done.load());
             auto t0 = std::chrono::steady_clock::now();
-            // 卸载: 宿主取消操作 -> 插件收束 (kill 进程组) -> pump 停止 -> inflight 归零
+            // 卸载: 宿主取消操作 -> 插件结束 (kill 进程组) -> pump 停止 -> inflight 归零
             XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_execute_command")
             );
             auto unloadMs = std::chrono::duration_cast<std::chrono::milliseconds>(

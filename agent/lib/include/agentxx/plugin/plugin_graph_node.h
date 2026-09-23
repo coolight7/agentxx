@@ -148,7 +148,7 @@ private:
 /// 设计: 遵循插件系统"统一异步操作模型" (操作 start/cancel + 锚定协程):
 /// - 引擎调用 run(NodeInput) → 序列化 GraphState → 调插件 run_start 回调
 /// - 插件完成时经 notify->done 上报节点输出 JSON (writes/command/sends)
-/// - 宿主解析 JSON 构造 NodeOutput; 取消经 run_cancel 联动
+/// - 宿主解析 JSON 构造 NodeOutput; 取消经 run_cancel 传递
 ///
 /// 节点规范 (neograph 约定): 节点实例被引擎共享于并发 run, 必须无状态或自
 /// 同步 —— 本类只保存构造期快照 (name/config/type/spec), 每次 run 从 state
