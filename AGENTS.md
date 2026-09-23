@@ -263,8 +263,11 @@ path/to/agentxx_test string_util regex
 - 补充约定 (2026-09-22): 单条 UI 描述 **1 MiB 上限** (`kUiJsonMaxBytes`; 入口拒绝整条更新
   并记日志, 注册表保持上次成功内容)、注册表条目带内容 `version`、通用字段 `when` 仅解析
   与往返保留 (渲染不消费)、树节点在有 `collapseExpanded` 时按"节点路径"键支持宿主管理
-  折叠; 行元素内的 `reflect` 框由元素自有节点 (`OwnedReflect`) 持有 —— 接入点只搬元素也
-  不会悬空; 中断 ↔ 组件层唯一映射 `middleware::itemOf/blockOf` + `preset::blocksOf`;
+  折叠; 行元素内的 `reflect` 框由元素自有节点 (`OwnedReflect`, 见
+  `agent/client/include/agentxx-client/io/tui/framework/owned_reflect.h`) 持有 —— 接入点只搬
+  元素也不会悬空 (行渲染 `renderItem`/`mergeTextButton` 与命中登记
+  `UiHitRegistry::add/addRegions` 都必须经它绑定 Box); 中断 ↔ 组件层唯一映射
+  `middleware::itemOf/blockOf` + `preset::blocksOf`;
   SDK 便捷方法另有 `panelItems`(就地构建自动提交)/`setToolDecor`/`Items::form`
 - 测试: 组件层解析/渲染/命中 `ui_items` + `tui_ui_items`; 表单 `tui_form`;
   接入点 (面板/Info/overlay) `tui_widget`·`tui_form`, 装饰 `tui_tool_header`; 插件端到端

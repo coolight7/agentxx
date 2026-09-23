@@ -15,6 +15,8 @@
 - tui 启动时检测 github release 更新
 - tui 图片选择弹窗中中文路径乱码
 - tool 参数检测错误改为抛异常而不是返回 json
+- share_store 转存 sql
+- 提示词插入 temp 路径
 
 - SVG绘制支持
 - 链式 session 任务队列

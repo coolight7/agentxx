@@ -65,6 +65,18 @@
   - 元素**未渲染**(条件分支跳过)时 Box 保留上一帧的值, 于是"已经不显示的按钮"仍在原位置命中;
   - 默认构造的 `ftxui::Box{}` 四个分量都是 0, `Contain(0, 0)` 为真, 它是**屏幕左上角**而不是"空区域"。
 - `screen.CellAt(x, y)` 可读取单元格 (字符/前景/背景), 离屏测试用它断言配色与布局。
+- **Box 生命周期**: `reflect(Box&)` 只保存引用 (`reflect.cpp`: `Box& reflected_box_`), Box
+  必须比元素活得久。行模型与命中登记的元素常被搬进滚动容器/缓存跨帧存活, 而生成它的
+  `UiRow::box` / 登记项往往随局部结果析构 —— 只搬元素时元素后续布局就会写已释放内存
+  (ASan: heap-use-after-free, 栈顶 `ftxui::Reflect::SetBox`)。这类"元素 + 命中框"的绑定
+  一律用 [OwnedReflect](/agent/client/include/agentxx-client/io/tui/framework/owned_reflect.h)
+  (元素自持 Box, 语义与 `reflect` 相同, 命中仍读同一个 Box):
+  - 行渲染 [ui_components.cpp](/agent/client/src/io/tui/ui_components.cpp) 的 `renderItem`
+    与 `mergeTextButton` (后者直接产出 `UiRow`, 不走 `renderItem`)
+  - 命中登记 [ui_hit.h](/agent/client/include/agentxx-client/io/tui/framework/ui_hit.h) 的
+    `UiHitRegistry::add/addRegions` (登记表每帧清空, 元素可能被缓存到下一帧)
+  消息列表的 decor/中断/附件命中框另走 `LazyBuiltItem::attachments`
+  (`shared_ptr<void>`, 随缓存元素一起释放), 见 [message_list.cpp]。
 
 ### 1.4 动画与帧
 

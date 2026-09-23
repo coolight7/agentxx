@@ -579,6 +579,82 @@ TestResult testTuiUiItems() {
         }
     }
 
+    // ---------------- 合并行元素的生命周期 (反射框归属) ----------------
+    {
+        // 合并行由 mergeTextButton 直接产出 UiRow (不过 renderItem), 接入点通常只搬走
+        // Element (滚动容器子项/面板缓存), UiRow::box 随局部 UiRenderResult 析构。
+        // 元素必须自持反射框: 否则滚动容器布局子项时写已释放的 Box —— 实测崩溃
+        // (ASan heap-use-after-free, 16 字节写, 栈顶 ftxui::Reflect::SetBox ←
+        //  layoutAndMeasure ← ListView::SetBox; Box 由 make_shared<ftxui::Box> 分配)。
+        auto        items = std::make_shared<std::vector<ScrollItem>>();
+        ftxui::Box* probe = nullptr;
+        {
+            UiRenderCtx ctx = ctxFor(40);
+            auto        res = renderJson(
+                R"([{"kind":"text","text":"|- "},{"kind":"button","label":"Rebuild","action":"rebuild"}])",
+                ctx
+            );
+            XX_TEST_EXPECT_EQ(res.rows.size(), size_t{1});
+            if (!res.rows.empty() && res.rows[0].box) {
+                // 探针只记裸地址 (不持 shared_ptr, 否则 Box 不会释放, 复现不出问题)
+                probe = res.rows[0].box.get();
+            }
+            ScrollItem si;
+            si.element = std::move(res.rows[0].element); // 只搬元素: res 析构即释放 Box
+            si.hits    = std::move(res.rows[0].regions);
+            items->push_back(std::move(si));
+        }
+        XX_TEST_EXPECT_TRUE(probe != nullptr);
+
+        // 滚动容器布局 (SetBox) + 绘制: 会写子项的反射框
+        auto scroll = std::make_shared<Scrollable>([items]() {
+            return *items;
+        });
+        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(4));
+        ftxui::Render(screen, scroll->Render());
+        std::string text;
+        for (int y = 0; y < 4; ++y) {
+            for (int x = 0; x < 40; ++x) {
+                text += screen.PixelAt(x, y).character;
+            }
+            text += '\n';
+        }
+        XX_TEST_EXPECT_TRUE(screenHas(text, "Rebuild"));
+        // Box 由元素自持: 生成它的 UiRenderResult 已析构, 仍能读到布局后的实际区域
+        // (未被布局时保持 kNoBox 空区域)
+        XX_TEST_EXPECT_FALSE(probe->IsEmpty());
+        XX_TEST_EXPECT_EQ(probe->x_min, 0);
+
+        // 子项命中映射不受影响 (标识来自合并行搬走的区域)
+        size_t index  = 0;
+        int    localX = 0;
+        int    localY = 0;
+        XX_TEST_EXPECT_TRUE(scroll->hitTestItem(0, 0, index, localX, localY));
+        XX_TEST_EXPECT_EQ(index, size_t{0});
+    }
+
+    // ---------------- 命中登记项的 Box 生命周期 ----------------
+    {
+        // 登记表每帧开头清空 (未重新登记的项不再参与命中), 但元素可能被缓存到下一帧
+        // (消息列表的 banner 就是如此) —— 元素自持 Box, 清空后再次布局不写已释放内存
+        agentxx::client::UiHitMap hits;
+        auto element = hits.add(ftxui::text("Retry"), std::string{"retry"});
+        element->ComputeRequirement();
+        element->SetBox(ftxui::Box{0, 10, 0, 0});
+        const ftxui::Box* probe = nullptr;
+        if (const auto hit = hits.findRegion(0, 0); hit.entry != nullptr) {
+            // 探针只记裸地址 (不持 shared_ptr): 登记清空后 Box 仅由元素持有
+            probe = hit.entry->box.get();
+        }
+        XX_TEST_EXPECT_TRUE(probe != nullptr);
+
+        hits.beginFrame(); // 清空登记 (Box 若只由表持有, 此处即释放)
+        XX_TEST_EXPECT_TRUE(hits.find(0, 0) == nullptr);
+        element->SetBox(ftxui::Box{0, 20, 1, 1}); // 再次布局: 写反射框
+        XX_TEST_EXPECT_EQ(probe->y_min, 1);
+        XX_TEST_EXPECT_EQ(probe->x_max, 20);
+    }
+
     // ---------------- 滚动容器命中映射 ----------------
     {
         // 20 个单行子项, 每项一个可命中区域 (标识 = item-N)

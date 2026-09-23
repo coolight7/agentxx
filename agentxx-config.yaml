@@ -322,6 +322,7 @@ skill:
   list:
     # - "/absolute/path/to/skills"
     # - "relative/path/to/skills"
+    - "isolation/skills/"
 
 # 上下文文件路径列表 (memory.list; 支持 overwrite 策略: mode: merge/replace, remove 按路径剔除)
 # - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
