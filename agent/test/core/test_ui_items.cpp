@@ -81,6 +81,22 @@ TestResult testUiItems() {
         XX_TEST_EXPECT_EQ(item.text, std::string{"no kind"});
     }
     {
+        // hint 只决定取色 (其本身就是弱化灰), 不隐含弱化
+        auto item = parseOne(R"({"kind":"text","text":"pending","role":"hint"})");
+        XX_TEST_EXPECT_EQ(item.color, std::string{"hint"});
+        XX_TEST_EXPECT_FALSE(item.dim);
+        XX_TEST_EXPECT_FALSE(item.bold);
+        // 需要弱化的项显式声明 (与中断块映射 item.dim = block.dim 一致)
+        auto dimmed = parseOne(R"({"kind":"text","text":"more","color":"hint","dim":true})");
+        XX_TEST_EXPECT_TRUE(dimmed.dim);
+        // 非 hint 色同样可显式弱化
+        auto normalDim = parseOne(R"({"kind":"text","text":"x","dim":true})");
+        XX_TEST_EXPECT_TRUE(normalDim.dim);
+        // 显式 false 与缺省一致
+        auto off = parseOne(R"({"kind":"text","text":"x","role":"hint","dim":false})");
+        XX_TEST_EXPECT_FALSE(off.dim);
+    }
+    {
         auto item = parseOne(R"({"kind":"gap","lines":3})");
         XX_TEST_EXPECT_EQ(item.lines, 3);
         // 上限: 空行数被限制在 50 以内
