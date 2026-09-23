@@ -16,7 +16,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 
@@ -170,19 +172,26 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_linux_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    // 参数检查失败抛异常 (不再返回编码后的错误 JSON)
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = utilxx_base::Json{
         {"command", ""}
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`command` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteBashCommandTool returns error for empty command" << std::endl;
+        TEST_PASS << "ExecuteBashCommandTool throws for empty command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteBashCommandTool should return error for empty "
-                     "command, got: "
-                  << result << std::endl;
+        TEST_FAIL << "ExecuteBashCommandTool should throw for empty command" << std::endl;
     }
     co_return;
 }
@@ -271,18 +280,26 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_windows_command_empty_command(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    // 参数检查失败抛异常 (不再返回编码后的错误 JSON)
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
     auto args = utilxx_base::Json{
         {"command", ""}
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`command` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_cmd_passed++;
-        TEST_PASS << "ExecuteWindowsCommandTool returns error for empty command" << std::endl;
+        TEST_PASS << "ExecuteWindowsCommandTool throws for empty command" << std::endl;
     } else {
         g_cmd_failed++;
-        TEST_FAIL << "ExecuteWindowsCommandTool should return error for empty command, got: "
-                  << result << std::endl;
+        TEST_FAIL << "ExecuteWindowsCommandTool should throw for empty command" << std::endl;
     }
     co_return;
 }

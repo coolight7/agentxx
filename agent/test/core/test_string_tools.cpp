@@ -3,11 +3,14 @@
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_string 插件 (同名同行为); 测试直测插件
 // 同一实现 (string_impl.h), 保证插件行为与测试覆盖一致
+// - 参数检查失败抛异常 (std::invalid_argument), 不再返回编码后的错误 JSON
 #include "agentxx_string/string_impl.h"
 #include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -70,19 +73,26 @@ asio::awaitable<void>
 
 asio::awaitable<void>
     test_html_to_markdown_empty_content(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    // 参数检查失败抛异常 (不再返回编码后的错误 JSON)
     auto tool = agentxx::tools::StringHtml2MarkdownTool{agentContext};
     auto args = utilxx_base::Json{
         {"content", ""}
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`content` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected arg error message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_st_passed++;
-        TEST_PASS << "StringHtml2MarkdownTool returns error for empty content" << std::endl;
+        TEST_PASS << "StringHtml2MarkdownTool throws for empty content" << std::endl;
     } else {
         g_st_failed++;
-        TEST_FAIL << "StringHtml2MarkdownTool should return error for empty "
-                     "content, got: "
-                  << result << std::endl;
+        TEST_FAIL << "StringHtml2MarkdownTool should throw for empty content" << std::endl;
     }
     co_return;
 }
@@ -146,15 +156,21 @@ asio::awaitable<void>
         {"exps",    utilxx_base::Json::array({"test"})},
         {"opt",     "search"                          },
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`content` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected arg error message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_st_passed++;
-        TEST_PASS << "StringRegexpTool returns error for empty content" << std::endl;
+        TEST_PASS << "StringRegexpTool throws for empty content" << std::endl;
     } else {
         g_st_failed++;
-        TEST_FAIL << "StringRegexpTool should return error for empty "
-                     "content, got: "
-                  << result << std::endl;
+        TEST_FAIL << "StringRegexpTool should throw for empty content" << std::endl;
     }
     co_return;
 }
@@ -167,15 +183,21 @@ asio::awaitable<void>
         {"exps",    utilxx_base::Json::array()},
         {"opt",     "search"                  },
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`exps` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected arg error message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_st_passed++;
-        TEST_PASS << "StringRegexpTool returns error for empty exps" << std::endl;
+        TEST_PASS << "StringRegexpTool throws for empty exps" << std::endl;
     } else {
         g_st_failed++;
-        TEST_FAIL << "StringRegexpTool should return error for empty exps, "
-                     "got: "
-                  << result << std::endl;
+        TEST_FAIL << "StringRegexpTool should throw for empty exps" << std::endl;
     }
     co_return;
 }
@@ -188,15 +210,21 @@ asio::awaitable<void> test_regexp_empty_opt(std::weak_ptr<agentxx::agent::AgentC
         {"exps",    utilxx_base::Json::array({"test"})},
         {"opt",     ""                                },
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`opt` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected arg error message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_st_passed++;
-        TEST_PASS << "StringRegexpTool returns error for empty opt" << std::endl;
+        TEST_PASS << "StringRegexpTool throws for empty opt" << std::endl;
     } else {
         g_st_failed++;
-        TEST_FAIL << "StringRegexpTool should return error for empty opt, "
-                     "got: "
-                  << result << std::endl;
+        TEST_FAIL << "StringRegexpTool should throw for empty opt" << std::endl;
     }
     co_return;
 }
@@ -209,16 +237,21 @@ asio::awaitable<void>
         {"exps",    utilxx_base::Json::array({"test"})},
         {"opt",     "invalid"                         },
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos
-        && result.find("invalid") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`opt` is invalid") == std::string::npos) {
+            TEST_FAIL << "unexpected arg error message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_st_passed++;
-        TEST_PASS << "StringRegexpTool returns error for invalid opt" << std::endl;
+        TEST_PASS << "StringRegexpTool throws for invalid opt" << std::endl;
     } else {
         g_st_failed++;
-        TEST_FAIL << "StringRegexpTool should return error for invalid opt, "
-                     "got: "
-                  << result << std::endl;
+        TEST_FAIL << "StringRegexpTool should throw for invalid opt" << std::endl;
     }
     co_return;
 }
@@ -396,6 +429,27 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 无匹配属正常结果 (非参数错误): 返回纯文本提示而非异常或错误 JSON
+/// (参数检查失败抛异常由 test_html_to_markdown_empty_content /
+///  test_regexp_empty_content / test_regexp_empty_exps / test_regexp_empty_opt /
+///  test_regexp_invalid_opt 覆盖)
+asio::awaitable<void>
+    test_regexp_no_match_is_result(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto tool = agentxx::tools::StringRegexpTool{agentContext};
+    auto r = co_await tool.execute_async(utilxx_base::Json{
+        {"content", "hello"},
+        {"exps",    utilxx_base::Json::array({"zzz"})},
+        {"opt",     "search"},
+    });
+    if (r == std::string{"No match found"}) {
+        g_st_passed++;
+        TEST_PASS << "no-match returns plain text result" << std::endl;
+    } else {
+        g_st_failed++;
+        TEST_FAIL << "no-match should return 'No match found', got: " << r << std::endl;
+    }
+    co_return;
+}
 asio::awaitable<TestResult>
     run_string_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {
@@ -424,6 +478,7 @@ asio::awaitable<TestResult>
     co_await run(test_regexp_remove_no_match);
     co_await run(test_regexp_search_multi_patterns);
     co_await run(test_regexp_replace_multi_patterns);
+    co_await run(test_regexp_no_match_is_result);
     co_return TestResult{g_st_passed, g_st_failed};
 }
 

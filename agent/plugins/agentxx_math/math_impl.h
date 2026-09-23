@@ -1457,10 +1457,11 @@ inline double evaluateExpression(std::string_view expr, AngleUnit angle_unit = A
 ///   - `expression` (string, required): 要计算的数学表达式
 ///   - `precision` (int, optional): 保留小数位数
 ///   - `angle_unit` (string, optional): 角度单位 ("rad" 或 "deg", 默认为 "rad")
+/// - 参数检查失败抛 std::invalid_argument (宿主统一按工具错误结果回给模型)
 inline std::string mathCalculateExecute(const utilxx_base::Json& arguments) {
     auto expr = arguments.value("expression", std::string{});
     if (expr.empty()) {
-        return R"({"error":"Arg `expression` is empty"})";
+        throw std::invalid_argument{"Arg `expression` is empty"};
     }
 
     std::optional<int> precision;

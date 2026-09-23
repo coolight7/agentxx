@@ -10,7 +10,9 @@
 #include <asio/use_awaitable.hpp>
 #include <boost/beast/http.hpp>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 /// web 工具通用参数集 (与插件入口 schema 一致): url/query + timeout/header
@@ -177,14 +179,21 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"query", ""}
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`query` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_ws_passed++;
-        TEST_PASS << "WebSearchTool returns error for empty query" << std::endl;
+        TEST_PASS << "WebSearchTool throws for empty query" << std::endl;
     } else {
         g_ws_failed++;
-        TEST_FAIL << "WebSearchTool should return error for empty query, got: " << result
-                  << std::endl;
+        TEST_FAIL << "WebSearchTool should throw for empty query" << std::endl;
     }
     co_return;
 }
@@ -239,14 +248,21 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"url", ""}
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`url` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_ws_passed++;
-        TEST_PASS << "WebFetchUrlTool returns error for empty url" << std::endl;
+        TEST_PASS << "WebFetchUrlTool throws for empty url" << std::endl;
     } else {
         g_ws_failed++;
-        TEST_FAIL << "WebFetchUrlTool should return error for empty url, got: " << result
-                  << std::endl;
+        TEST_FAIL << "WebFetchUrlTool should throw for empty url" << std::endl;
     }
     co_return;
 }
@@ -291,15 +307,21 @@ asio::awaitable<void>
     auto args = utilxx_base::Json{
         {"url", ""}
     };
-    auto result = co_await tool.execute_async(args);
-    if (result.find("\"error\"") != std::string::npos) {
+    bool threw = false;
+    try {
+        (void)co_await tool.execute_async(args);
+    } catch (const std::invalid_argument& e) {
+        threw = true;
+        if (std::string_view{e.what()}.find("`url` is empty") == std::string::npos) {
+            TEST_FAIL << "unexpected message: " << e.what() << std::endl;
+        }
+    }
+    if (threw) {
         g_ws_passed++;
-        TEST_PASS << "WebFetchUrlMarkdownTool returns error for empty url" << std::endl;
+        TEST_PASS << "WebFetchUrlMarkdownTool throws for empty url" << std::endl;
     } else {
         g_ws_failed++;
-        TEST_FAIL << "WebFetchUrlMarkdownTool should return error for empty "
-                     "url, got: "
-                  << result << std::endl;
+        TEST_FAIL << "WebFetchUrlMarkdownTool should throw for empty url" << std::endl;
     }
     co_return;
 }

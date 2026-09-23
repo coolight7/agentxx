@@ -5,7 +5,9 @@
 #include "agentxx/tools/share_store.h"
 #include "utilxx_base/json.h"
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -125,25 +127,75 @@ asio::awaitable<TestResult> run_share_store_tests() {
             {"opt",       "delete"},
             {"id",        id      },
         });
-        auto get3 = co_await tool.execute_async(utilxx_base::Json{
-            {"sessionId", "t1" },
-            {"opt",       "get"},
-            {"id",        id   }
-        });
-        XX_TEST_EXPECT_TRUE(get3.find("\"error\"") != std::string::npos);
+        // 删除后按 id 读取: 目标不存在 → 参数错误抛出
+        bool threwNotFound = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1" },
+                {"opt",       "get"},
+                {"id",        id   }
+            });
+        } catch (const std::exception& e) {
+            threwNotFound = true;
+            XX_TEST_EXPECT_TRUE(
+                std::string_view{e.what()}.find("not found") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_TRUE(threwNotFound);
     }
 
-    // 缺少 session_id / opt 的错误处理
+    // 参数检查失败一律抛异常 (不再返回编码后的错误 JSON):
+    // 缺少 sessionId / 缺少 opt / 空 id / 非法 opt
     {
-        auto r1 = co_await tool.execute_async(utilxx_base::Json{
-            {"opt", "get"},
-            {"id",  1    }
-        });
-        XX_TEST_EXPECT_TRUE(r1.find("\"error\"") != std::string::npos);
-        auto r2 = co_await tool.execute_async(utilxx_base::Json{
-            {"sessionId", "t1"}
-        });
-        XX_TEST_EXPECT_TRUE(r2.find("\"error\"") != std::string::npos);
+        bool threwNoSession = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"opt", "get"},
+                {"id",  1    }
+            });
+        } catch (const std::invalid_argument& e) {
+            threwNoSession = true;
+            XX_TEST_EXPECT_TRUE(std::string_view{e.what()}.find("sessionId") != std::string::npos);
+        }
+        XX_TEST_EXPECT_TRUE(threwNoSession);
+
+        bool threwNoOpt = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1"}
+            });
+        } catch (const std::invalid_argument& e) {
+            threwNoOpt = true;
+            XX_TEST_EXPECT_TRUE(std::string_view{e.what()}.find("`opt` is empty") != std::string::npos);
+        }
+        XX_TEST_EXPECT_TRUE(threwNoOpt);
+
+        bool threwNoId = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1" },
+                {"opt",       "get"}
+            });
+        } catch (const std::invalid_argument& e) {
+            threwNoId = true;
+            XX_TEST_EXPECT_TRUE(std::string_view{e.what()}.find("`id` is empty") != std::string::npos);
+        }
+        XX_TEST_EXPECT_TRUE(threwNoId);
+
+        bool threwBadOpt = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1"    },
+                {"opt",       "nope"  },
+                {"id",        1       }
+            });
+        } catch (const std::invalid_argument& e) {
+            threwBadOpt = true;
+            XX_TEST_EXPECT_TRUE(
+                std::string_view{e.what()}.find("`opt` is invalid") != std::string::npos
+            );
+        }
+        XX_TEST_EXPECT_TRUE(threwBadOpt);
     }
 
     co_return TestResult{g_ss_passed, g_ss_failed};

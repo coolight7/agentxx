@@ -505,11 +505,28 @@ static asio::awaitable<void>
 static asio::awaitable<void> test_error_handling(std::weak_ptr<agentxx::agent::AgentContext> ctx) {
     auto tool = agentxx::tools::MathCalculateTool{ctx};
 
-    // 表达式为空
-    auto r1 = co_await tool.execute_async({
-        {"expression", ""}
-    });
-    checkContains(r1, "empty", "empty expression");
+    // 表达式为空 → 参数检查失败抛异常 (不再返回错误 JSON)
+    {
+        bool threw = false;
+        try {
+            (void)co_await tool.execute_async({
+                {"expression", ""}
+            });
+        } catch (const std::invalid_argument& e) {
+            threw       = true;
+            std::string msg{e.what()};
+            if (msg.find("`expression` is empty") == std::string::npos) {
+                TEST_FAIL << "unexpected message for empty expression: " << msg << std::endl;
+            }
+        }
+        if (threw) {
+            g_math_passed++;
+            TEST_PASS << "MathCalculateTool throws for empty expression" << std::endl;
+        } else {
+            g_math_failed++;
+            TEST_FAIL << "MathCalculateTool should throw for empty expression" << std::endl;
+        }
+    }
 
     // 除以零
     auto r2 = co_await tool.execute_async({

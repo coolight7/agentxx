@@ -465,6 +465,30 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   `filterPathPermissions` (分批 + 同路径去重, 返回等长允许标记) /
   `checkPathDecisions` (原始三态) / `checkPathDecision` (单路径)
 
+### 工具错误与参数检查约定 (抛异常)
+
+工具的参数检查失败与其它错误**统一走异常**, 不再返回编码后的错误 JSON:
+
+- **参数检查失败抛 `std::invalid_argument`** (消息写清是哪个参数、什么原因, 例如
+  ``Arg `path` is empty``); 运行期/内部错误 (环境缺失、命令执行失败、上下文不可用)
+  抛 `std::runtime_error`。取消路径抛取消异常 (`neograph::graph::CancelledException`;
+  插件侧抛 `pluginxx::CancelledException`, 由 SDK 边界转换为 CANCELLED)。
+- **宿主统一格式化**: 工具抛出的普通异常由 `ToolcallWrapNode` (`lib/src/nodes/toolcall.cpp`)
+  捕获, 工具结果文本写为 `[Exception aborted: <what>]`; 取消/中断异常按控制流处理
+  (取消轮次而不是记成工具错误)。因此工具不需要自己拼错误结构, 模型也能稳定识别
+  错误结果。
+- **插件侧写法**: 在工具回调里直接 `throw` 即可 —— SDK 的 `fast_tool` /
+  `blocking_tool` / `polled_tool` 边界会捕获异常并上报 FAILED (取消异常上报
+  CANCELLED), 宿主 `awaitPluginOp` 再以 `std::runtime_error(<原消息>)` 抛出, 最终落到
+  同一格式。**不要**返回 `{"error":"..."}` 这类字符串: 错误与正常结果会混在同一形态里,
+  调用方 (含模型) 无法可靠区分。
+- **例外 (属正常结果, 保持为结果文本)**: 无匹配、空结果、查询目标不存在之类"调用成功但
+  没有内容"的情况按普通结果返回 (如 `No match found`, 不带 error JSON 包裹); 权限
+  拒绝由框架提前返回 `[Permission denied]`, 工具无需处理。
+- 内置工具 (`lib/src/tools`) 与内置插件 (`agent/plugins/*`) 已按该约定改造 (2026-09);
+  `agentxx_filesystem` 在异步/受控轮询包装层把异常统一转回 `[Error] <msg>` 文本
+  (保持该插件历史结果形态与渲染约定), 但工具实现内部同样以抛异常方式报告参数错误。
+
 ---
 
 ## 9. Client 侧接口表一览

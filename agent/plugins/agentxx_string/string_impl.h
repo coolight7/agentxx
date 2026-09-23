@@ -10,17 +10,22 @@
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include <html2md/html2md.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace agentxx_string_plugin {
 
+/// 参数检查失败时抛出的异常 (由插件 SDK 边界捕获, 宿主统一按工具错误结果回给模型)
+/// - 参数错误不返回编码后的 JSON: 错误与正常结果不混在同一形态里
+using ArgError = std::invalid_argument;
+
 /// agentxx_string_html_to_markdown 执行体 (原 StringHtml2MarkdownTool::execute_async)
-/// - content 为空返回错误 JSON; 其余异常由调用方 (C ABI 边界) 捕获
+/// - content 为空时抛 [ArgError]; 其余异常由调用方 (C ABI 边界) 捕获
 inline std::string htmlToMarkdownExecute(const utilxx_base::Json& arguments) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
-        return R"({"error":"Arg `content` is empty"})";
+        throw ArgError{"Arg `content` is empty"};
     }
 
     auto options = html2md::Options{
@@ -34,15 +39,15 @@ inline std::string htmlToMarkdownExecute(const utilxx_base::Json& arguments) {
 inline std::string regexpExecute(const utilxx_base::Json& arguments) {
     auto content = arguments.value("content", std::string{});
     if (content.empty()) {
-        return R"({"error":"Arg `content` is empty"})";
+        throw ArgError{"Arg `content` is empty"};
     }
     auto match_exps = arguments.value("exps", std::vector<std::string>{});
     if (match_exps.empty()) {
-        return R"({"error":"Arg `exps` is empty"})";
+        throw ArgError{"Arg `exps` is empty"};
     }
     auto match_opt = arguments.value("opt", std::string{});
     if (match_opt.empty()) {
-        return R"({"error":"Arg `opt` is empty"})";
+        throw ArgError{"Arg `opt` is empty"};
     }
 
     auto regex = utilxx::XXRegex::createRegex(match_exps);
@@ -77,9 +82,10 @@ inline std::string regexpExecute(const utilxx_base::Json& arguments) {
             return restr;
         }
     } else {
-        return R"({"error":"Arg `opt` is invalid"})";
+        throw ArgError{fmt::format("Arg `opt` is invalid: {}", match_opt)};
     }
-    return R"({"error":"No match found"})";
+    // 无匹配属正常结果 (非参数错误): 返回纯文本提示
+    return "No match found";
 }
 
 } // namespace agentxx_string_plugin

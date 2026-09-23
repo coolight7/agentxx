@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -355,26 +356,27 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
             isFirst = false;
         }
         for (const auto& task : tasks) {
+            // 参数检查失败一律抛异常 (由 ToolcallWrapNode 统一转成工具错误结果),
+            // 不再返回编码后的错误 JSON
             if (task.subagent.empty()) {
-                co_return R"({"error":"Arg `subagent` is empty"})";
+                throw std::invalid_argument{"Arg `subagent` is empty"};
             }
             if (task.message.empty() && !task.messages.has_value()) {
-                // 注意: raw string 内容不能含 `)"` 序列, 故括号提示移到引号外
-                co_return R"({"error":"Arg `message` is empty"})";
+                throw std::invalid_argument{"Arg `message` is empty (need `message` or `messages`)"};
             }
             auto subIt = subAgentList.find(task.subagent);
             if (subIt == subAgentList.end() || nullptr == subIt->second) {
-                co_return fmt::format(
-                    R"({{"error":"Arg `subagent` is not one of [{}]"}})",
+                throw std::invalid_argument{fmt::format(
+                    "Arg `subagent` is not one of [{}]",
                     subagentNames.str()
-                );
+                )};
             }
         }
     }
 
     auto agentCtxPtr = agentContext.lock();
     if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
-        co_return R"({"error":"AgentContext not available"})";
+        throw std::runtime_error{"AgentContext not available"};
     }
     // sessionId 由 toolcall 节点在执行前注入 arguments (见
     // [toolcall.cpp](/agent/lib/src/nodes/toolcall.cpp))

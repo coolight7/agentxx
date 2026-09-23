@@ -26,6 +26,7 @@
 #include <expected>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 
 namespace agentxx_websearch_plugin {
@@ -147,7 +148,7 @@ inline utilxx::HttpClient::RequestConfig
 inline asio::awaitable<std::string> webFetchExecuteAsync(const utilxx_base::Json& arguments) {
     auto url = arguments.value("url", std::string{});
     if (url.empty()) {
-        co_return R"({"error":"Arg `url` is empty"})";
+        throw std::invalid_argument{"Arg `url` is empty"};
     }
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
@@ -185,7 +186,7 @@ inline asio::awaitable<std::string> webFetchMarkdownExecuteAsync(const utilxx_ba
 ) {
     std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
-        co_return R"({"error":"Arg `url` is empty"})";
+        throw std::invalid_argument{"Arg `url` is empty"};
     }
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
@@ -216,7 +217,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
 ) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
-        co_return R"({"error":"Arg `query` is empty"})";
+        throw std::invalid_argument{"Arg `query` is empty"};
     }
     auto search_url = fmt::format(fmt::runtime(searchApiUrl), utilxx::HttpClient::urlEncode(query));
 
@@ -271,7 +272,7 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
 ) {
     std::string query = arguments.value("query", std::string{});
     if (query.empty()) {
-        co_return R"({"error":"Arg `query` is empty"})";
+        throw std::invalid_argument{"Arg `query` is empty"};
     }
 
     // 统一的 timeout / header 参数: 复制一份模型配置并应用覆盖 (超时 + 自定义请求头)

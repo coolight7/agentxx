@@ -14,7 +14,9 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -240,11 +242,20 @@ asio::awaitable<TestResult>
                 );
             }
             XX_TEST_EXPECT_TRUE(out.find("add") != std::string::npos);
-            // 空 query → error
-            auto err = co_await tool->execute_async(utilxx_base::Json{
-                {"query", ""}
-            });
-            XX_TEST_EXPECT_TRUE(err.find("error:") != std::string::npos);
+            // 空 query → 参数检查失败抛异常 (插件侧抛 std::invalid_argument,
+            // 经插件边界由宿主重新抛出为 std::runtime_error; 消息保留)
+            bool threw = false;
+            try {
+                (void)co_await tool->execute_async(utilxx_base::Json{
+                    {"query", ""}
+                });
+            } catch (const std::exception& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("`query` is empty") != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
         }
     }
 

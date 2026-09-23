@@ -36,6 +36,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace agentxx_fs_plugin {
@@ -315,7 +316,7 @@ inline std::string fileListExecuteImpl(
     auto rawPath    = arguments.value("path", std::string{});
     auto targetPath = detail::wsAbs(workDir, rawPath);
     if (targetPath.empty()) {
-        return R"([Error] Arg `path` is empty)";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto recursive = arguments.value("recursive", false);
     auto limit     = arguments.value<int64_t>("limit", 100);
@@ -600,7 +601,7 @@ inline std::string fileReadExecuteImpl(
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        return R"([Error] Arg `path` is empty)";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto            fsPath = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
@@ -688,7 +689,7 @@ inline std::string fileWriteExecuteImpl(
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        return R"([Error] Arg `path` is empty)";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto content   = arguments.value<std::string>("content", std::string{});
     auto overwrite = arguments.value<bool>("overwrite", false);
@@ -741,17 +742,17 @@ inline std::string fileEditExecuteImpl(
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        return "[Error] Arg `path` is empty";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto old_str = arguments.value<std::string>("old_str", std::string{});
     if (old_str.empty()) {
-        return "[Error] Arg `old_str` is empty";
+        throw std::invalid_argument{"Arg `old_str` is empty"};
     }
     auto new_str       = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
 
     if (new_str == old_str) {
-        return "[Error] Arg `old_str` and `new_str` are equal and unchanged.";
+        throw std::invalid_argument{"Arg `old_str` and `new_str` are equal and unchanged."};
     }
 
     // 统一到 \n 换行符
@@ -851,7 +852,7 @@ inline std::string fileGlobExecuteImpl(
 ) {
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
-        return R"([Error] Arg `file_patterns` is empty)";
+        throw std::invalid_argument{"Arg `file_patterns` is empty"};
     }
     auto timeout  = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
     auto deadline = Deadline::after(timeout);
@@ -1041,11 +1042,11 @@ inline std::string fileGrepExecuteImpl(
     auto text_patterns  = arguments.value("text_patterns", std::vector<std::string>{});
     auto regex_patterns = arguments.value("regex_patterns", std::vector<std::string>{});
     if (text_patterns.empty() && regex_patterns.empty()) {
-        return R"([Error] Arg `text_patterns` and `regex_patterns` are both empty (specify at least one of them))";
+        throw std::invalid_argument{"Arg `text_patterns` and `regex_patterns` are both empty (specify at least one of them)"};
     }
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
-        return R"([Error] Arg `file_patterns` is empty)";
+        throw std::invalid_argument{"Arg `file_patterns` is empty"};
     }
     for (auto& item : file_patterns) {
         item = detail::wsAbs(workDir, item);
@@ -1058,7 +1059,7 @@ inline std::string fileGrepExecuteImpl(
     }
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
     if (output_mode.empty()) {
-        return R"([Error] Arg `output_mode` is empty)";
+        throw std::invalid_argument{"Arg `output_mode` is empty"};
     }
     auto timeout  = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
     auto deadline = Deadline::after(timeout);
@@ -1634,7 +1635,7 @@ inline asio::awaitable<std::string>
     fileReadExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return R"([Error] Arg `path` is empty)";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto            fsPath = utilxx_base::utf8ToPath(filepath);
     std::error_code fsEc;
@@ -1735,7 +1736,7 @@ inline asio::awaitable<std::string>
     fileWriteExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return R"([Error] Arg `path` is empty)";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto content   = arguments.value<std::string>("content", std::string{});
     auto overwrite = arguments.value<bool>("overwrite", false);
@@ -1790,17 +1791,17 @@ inline asio::awaitable<std::string>
     fileEditExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
-        co_return "[Error] Arg `path` is empty";
+        throw std::invalid_argument{"Arg `path` is empty"};
     }
     auto old_str = arguments.value<std::string>("old_str", std::string{});
     if (old_str.empty()) {
-        co_return "[Error] Arg `old_str` is empty";
+        throw std::invalid_argument{"Arg `old_str` is empty"};
     }
     auto new_str       = arguments.value<std::string>("new_str", std::string{});
     auto multi_replace = arguments.value<bool>("multi_replace", false);
 
     if (new_str == old_str) {
-        co_return "[Error] Arg `old_str` and `new_str` are equal and unchanged.";
+        throw std::invalid_argument{"Arg `old_str` and `new_str` are equal and unchanged."};
     }
 
     // 统一到 \n 换行符

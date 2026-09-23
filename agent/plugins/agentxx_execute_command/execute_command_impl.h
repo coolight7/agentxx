@@ -646,7 +646,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
-        co_return R"({"error":"Arg `command` is empty"})";
+        throw std::invalid_argument{"Arg `command` is empty"};
     }
     // [all_output] 为false时，仅执行失败才返回 stdout和stderr
     auto all_output = arguments.value("all_output", true);
@@ -738,7 +738,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 ) {
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
-        co_return R"({"error":"Arg `command` is empty"})";
+        throw std::invalid_argument{"Arg `command` is empty"};
     }
     auto all_output = arguments.value("all_output", true);
     auto timeout    = arguments.value("timeout", 60);
@@ -864,7 +864,7 @@ inline std::string bashExecute(
     }
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
-        return R"({"error":"Arg `command` is empty"})";
+        throw std::invalid_argument{"Arg `command` is empty"};
     }
 #if XX_IS_WIN_D
     auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(command.c_str(), "r"), _pclose};

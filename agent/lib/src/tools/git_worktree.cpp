@@ -9,6 +9,7 @@
 #include "utilxx_base/string_util.h"
 #include <chrono>
 #include <filesystem>
+#include <stdexcept>
 
 namespace agentxx {
 namespace tools {
@@ -173,10 +174,15 @@ Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamp
     return {name, depict, agentxx::util::toNeographJson(params)};
 }
 
+// ---------------------------------------------------------------------------
+// 参数检查错误一律抛异常 (由 ToolcallWrapNode 统一转成工具错误结果),
+// 不再返回编码后的错误 JSON
+// ---------------------------------------------------------------------------
+
 asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::Json& arguments) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->agentConfig) {
-        co_return R"({"error":"agent context unavailable"})";
+        throw std::runtime_error{"agent context unavailable"};
     }
     auto config    = ctxPtr->agentConfig;
     auto sessionId = arguments.value("sessionId", std::string{});
@@ -293,11 +299,10 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
         std::string name
             = userName.empty() ? std::string{} : utilxx::worktree::sanitizeWorktreeName(userName);
         if (!userName.empty() && name.empty()) {
-            co_return utilxx_base::Json{
-                {"error", fmt::format("invalid worktree name '{}'", userName)},
-                {"hint", "allowed chars: letters, digits, '.', '_', '-'"},
-            }
-                .dump();
+            throw std::invalid_argument{fmt::format(
+                "invalid worktree name '{}' (allowed chars: letters, digits, '.', '_', '-')",
+                userName
+            )};
         }
 
         struct CreateOutcome {
@@ -367,11 +372,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             }.dump();
         }
         if (sessionId.empty()) {
-            co_return utilxx_base::Json{
-                {"error", "no session id available, cannot bind"},
-                {"path",  outcome.path                          },
-            }
-                .dump();
+            throw std::invalid_argument{
+                "no session id available, cannot bind worktree: " + outcome.path
+            };
         }
         // 绑定 + 权限隔离 (io 线程)
         bindSession(
@@ -432,7 +435,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                     auto cleanName
                         = targetName.empty() ? std::string{} : fw::sanitizeWorktreeName(targetName);
                     if (cleanName.empty()) {
-                        co_return R"({"error":"no active worktree for this session; pass `name` or create one first"})";
+                        throw std::invalid_argument{
+                            "no active worktree for this session; pass `name` or create one first"
+                        };
                     }
                     path = (std::filesystem::path{fw::worktreesRoot(root)} / cleanName)
                                .generic_string();
@@ -481,14 +486,14 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
         auto targetName = argString(arguments, "name");
         bool force      = arguments.value("force", false);
         if (targetName.empty() && binding == nullptr) {
-            co_return R"({"error":"no active worktree for this session; pass `name` or bind one first"})";
+            throw std::invalid_argument{
+                "no active worktree for this session; pass `name` or bind one first"
+            };
         }
         std::string name = targetName.empty() ? binding->name
                                               : utilxx::worktree::sanitizeWorktreeName(targetName);
         if (name.empty()) {
-            co_return utilxx_base::Json{
-                {"error", "invalid worktree name"}
-            }.dump();
+            throw std::invalid_argument{fmt::format("invalid worktree name '{}'", targetName)};
         }
         bool removesCurrent = (binding != nullptr && binding->name == name);
 
@@ -607,10 +612,10 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             .dump();
     }
 
-    co_return utilxx_base::Json{
-        {"error", fmt::format("unknown opt '{}', expect create|info|status|remove", opt)},
-    }
-        .dump();
+    throw std::invalid_argument{fmt::format(
+        "unknown opt '{}', expect create|info|status|remove",
+        opt
+    )};
 }
 
 } // namespace tools

@@ -6,6 +6,7 @@
 #include "utilxx_base/json.h"
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -107,9 +108,11 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
 
 asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_base::Json& arguments
 ) {
+    // 参数检查失败一律抛异常 (由 ToolcallWrapNode 统一转成工具错误结果),
+    // 不再返回编码后的错误 JSON: 错误与正常结果不会混在同一形态里
     auto session_id = arguments.value("sessionId", std::string{});
     if (session_id.empty()) {
-        co_return R"({"error":"Toolcall inner error, need `sessionId`"})";
+        throw std::invalid_argument{"Toolcall inner error, need `sessionId`"};
     }
     size_t text_id          = arguments.value<size_t>("id", 0);
     auto   text_line_offset = arguments.value<int64_t>("line_offset", -1);
@@ -117,7 +120,7 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
     auto   text             = arguments.value("text", std::string{});
     auto   text_opt         = arguments.value("opt", std::string{});
     if (text_opt.empty()) {
-        co_return R"({"error":"Arg `opt` is empty"})";
+        throw std::invalid_argument{"Arg `opt` is empty"};
     }
 
     // 分页切片: 对 `get` 取回的存储内容 / `set`·`insert` 的入参文本统一应用
@@ -170,7 +173,7 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
 
     auto agentContextPtr = agentContext.lock();
     if (!agentContextPtr || !agentContextPtr->middlewareHandleContext) {
-        co_return R"({"error":"AgentContext not available"})";
+        throw std::runtime_error{"AgentContext not available"};
     }
     // share store 桥接: 配置了 sharedShareStoreContext (同上下文子代理) 时,
     // 读写父会话的 store, 保证 id 空间一致 (如压缩子代理写入的长内容,
@@ -188,28 +191,29 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
             .dump();
     } else if (text_opt == std::string_view{"get"}) {
         if (text_id <= 0) {
-            co_return R"({"error":"Arg `id` is empty"})";
+            throw std::invalid_argument{"Arg `id` is empty"};
         }
         auto result = mctx->getShareStoreItemValue(session_id, text_id);
         if (false == result.has_value()) {
-            co_return R"({"error":"Not found"})";
+            // id 不存在 (参数指向的内容缺失): 与参数检查同样按错误抛出
+            throw std::invalid_argument{fmt::format("Share store item not found: id={}", text_id)};
         }
         // 分页: 对存储的完整内容按行切片返回
         co_return sliceByLine(std::move(result.value()));
     } else if (text_opt == std::string_view{"set"}) {
         if (text_id <= 0) {
-            co_return R"({"error":"Arg `id` is empty"})";
+            throw std::invalid_argument{"Arg `id` is empty"};
         }
         mctx->setShareStoreItemValue(session_id, text_id, sliceByLine(std::move(text)));
         co_return "success";
     } else if (text_opt == std::string_view{"delete"}) {
         if (text_id <= 0) {
-            co_return R"({"error":"Arg `id` is empty"})";
+            throw std::invalid_argument{"Arg `id` is empty"};
         }
         mctx->removeShareStoreItemValue(session_id, text_id);
         co_return "success";
     } else {
-        co_return R"({"error":"Arg `opt` is invalid"})";
+        throw std::invalid_argument{fmt::format("Arg `opt` is invalid: {}", text_opt)};
     }
 }
 

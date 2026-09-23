@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fmt/ranges.h>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -435,7 +436,12 @@ static int planningSetup(PluginCtx* ctx) {
 
                 const auto mode = arguments.value("mode", std::string{});
                 if (mode != "write" && mode != "read") {
-                    return R"({"error":"Arg `mode` must be \"write\" or \"read\""})";
+                    // 参数检查失败抛异常 (宿主统一按工具错误结果回给模型),
+                    // 不再返回编码后的错误 JSON
+                    throw std::invalid_argument{fmt::format(
+                        "Arg `mode` must be \"write\" or \"read\", got \"{}\"",
+                        mode
+                    )};
                 }
 
                 if (mode == "read") {
@@ -445,19 +451,26 @@ static int planningSetup(PluginCtx* ctx) {
                     };
                     auto saved = loadPlanningFile(c, tid);
                     if (saved.empty()) {
-                        return R"({"error":"No saved planning in this session. Call with mode=\"write\" first."})";
+                        throw std::runtime_error{
+                            "No saved planning in this session. Call with mode=\"write\" first."
+                        };
                     }
                     try {
                         auto v = utilxx_base::Json::parse(saved);
                         return v.dump(2);
                     } catch (...) {
-                        return R"({"error":"Saved planning is corrupted. Rewrite it with mode=\"write\"."})";
+                        throw std::runtime_error{
+                            "Saved planning is corrupted. Rewrite it with mode=\"write\"."
+                        };
                     }
                 }
 
                 auto roadmap = arguments.value("roadmap", std::string{});
                 if (roadmap.empty()) {
-                    return R"({"error":"Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string in write mode"})";
+                    throw std::invalid_argument{
+                        "Arg `roadmap` is empty, must provide a stateDiagram-v2 planning string "
+                        "in write mode"
+                    };
                 }
 
                 std::string todosJson;
@@ -472,7 +485,7 @@ static int planningSetup(PluginCtx* ctx) {
                     try {
                         planStore["todos"] = utilxx_base::Json::parse(todosJson);
                     } catch (...) {
-                        return R"({"error":"Arg `todos` is not valid JSON"})";
+                        throw std::invalid_argument{"Arg `todos` is not valid JSON"};
                     }
                 }
                 if (!notes.empty()) {

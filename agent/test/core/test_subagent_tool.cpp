@@ -5,8 +5,9 @@
 //   独立 agent 完成 (中断委派), 本模块聚焦工具层行为:
 //   1) 可用性: 工具名/定义 schema (enum 列表随注册表更新, required 字段,
 //      tasks 数组结构)
-//   2) 参数校验错误兼容: 空 subagent / 空 message+messages / 未知 subagent
-//      名 / AgentContext 失效 → 均返回 {"error": ...} 而非崩溃或抛异常
+//   2) 参数校验错误: 空 subagent / 空 message+messages / 未知 subagent
+//      名 / AgentContext 失效 → 均抛异常 (std::invalid_argument /
+//      std::runtime_error), 而非返回编码后的错误 JSON 或崩溃
 //   3) 中断流程: 合法请求首次调用抛 NodeInterrupt 并存储中断参数
 //      (interruptArgs: name="subagent", tasks 数组字段完整映射, resultId)
 //   4) resume 结果提取: 预置 interruptResult 后按 makeSubagentResumeKey 规则
@@ -192,7 +193,9 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         }
     }
 
-    // ==================== S2. 参数校验错误兼容 ====================
+    // ==================== S2. 参数校验错误 ====================
+    // 参数检查失败一律抛异常 (由 ToolcallWrapNode 统一转成工具错误结果),
+    // 不再返回编码后的错误 JSON
 
     {
         auto env = std::make_shared<SubagentToolEnv>();
@@ -200,18 +203,34 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
 
         // --- A. 空 subagent 名 ---
         {
-            auto r = co_await env->tool->execute_async(utilxx_base::Json{
-                {"message", "m"}
-            });
-            XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"Arg `subagent` is empty"})"});
+            bool threw = false;
+            try {
+                (void)co_await env->tool->execute_async(utilxx_base::Json{
+                    {"message", "m"}
+                });
+            } catch (const std::invalid_argument& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("`subagent` is empty") != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
         }
 
         // --- B. 空 message 且无 messages (两者至少其一) ---
         {
-            auto r = co_await env->tool->execute_async(utilxx_base::Json{
-                {"subagent", "alpha"}
-            });
-            XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"Arg `message` is empty"})"});
+            bool threw = false;
+            try {
+                (void)co_await env->tool->execute_async(utilxx_base::Json{
+                    {"subagent", "alpha"}
+                });
+            } catch (const std::invalid_argument& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("`message` is empty") != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
             // message 非法时不得触发中断 (未产生 interruptArgs)
             XX_TEST_EXPECT_TRUE(env->interruptArgs().empty());
         }
@@ -242,33 +261,45 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         {
             env->resetInterruptState();
             env->registerTask("beta", "B");
-            auto r = co_await env->tool->execute_async(utilxx_base::Json{
-                {"subagent", "nope"},
-                {"message",  "m"   },
-            });
-            XX_TEST_EXPECT_EQ(
-                r,
-                std::string{R"({"error":"Arg `subagent` is not one of [alpha,beta]"})"}
-            );
+            bool threw = false;
+            try {
+                (void)co_await env->tool->execute_async(utilxx_base::Json{
+                    {"subagent", "nope"},
+                    {"message",  "m"   },
+                });
+            } catch (const std::invalid_argument& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("not one of [alpha,beta]") != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
         }
 
         // --- E. 批量任务中第二个非法 → 整体拒绝, 不派发任何任务 ---
         {
             env->resetInterruptState();
-            auto r = co_await env->tool->execute_async(utilxx_base::Json{
-                {"tasks",
-                 utilxx_base::Json::array(
-                     {utilxx_base::Json{{"subagent", "alpha"}, {"message", "ok"}},
-                      utilxx_base::Json{{"subagent", "ghost"}, {"message", "bad"}}}
-                 )},
-            });
-            XX_TEST_EXPECT_TRUE(r.find("\"error\"") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(r.find("not one of") != std::string::npos);
+            bool threw = false;
+            try {
+                (void)co_await env->tool->execute_async(utilxx_base::Json{
+                    {"tasks",
+                     utilxx_base::Json::array(
+                         {utilxx_base::Json{{"subagent", "alpha"}, {"message", "ok"}},
+                          utilxx_base::Json{{"subagent", "ghost"}, {"message", "bad"}}}
+                     )},
+                });
+            } catch (const std::invalid_argument& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("not one of") != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
             // 校验失败不产生中断参数
             XX_TEST_EXPECT_TRUE(env->interruptArgs().empty());
         }
 
-        // --- F. AgentContext 失效 (weak_ptr 过期) → 返回错误而非崩溃 ---
+        // --- F. AgentContext 失效 (weak_ptr 过期) → 抛错而非崩溃 ---
         {
             auto orphanTool = std::make_shared<agentxx::tools::SubAgentManagerTool>(
                 "orphan",
@@ -278,23 +309,41 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 "alpha",
                 std::make_shared<agentxx::tools::SubAgentNormalTask>("alpha", "A")
             ));
-            auto r = co_await orphanTool->execute_async(utilxx_base::Json{
-                {"subagent", "alpha"},
-                {"message",  "m"    },
-            });
-            XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"AgentContext not available"})"});
+            bool threw = false;
+            try {
+                (void)co_await orphanTool->execute_async(utilxx_base::Json{
+                    {"subagent", "alpha"},
+                    {"message",  "m"    },
+                });
+            } catch (const std::runtime_error& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("AgentContext not available")
+                    != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
         }
 
-        // --- G. middlewareHandleContext 缺失 → 同样返回错误 ---
+        // --- G. middlewareHandleContext 缺失 → 同样抛错 ---
         {
             auto envNoMctx = std::make_shared<SubagentToolEnv>();
             envNoMctx->ctx->middlewareHandleContext.reset();
             envNoMctx->registerTask("alpha", "A");
-            auto r = co_await envNoMctx->tool->execute_async(utilxx_base::Json{
-                {"subagent", "alpha"},
-                {"message",  "m"    },
-            });
-            XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"AgentContext not available"})"});
+            bool threw = false;
+            try {
+                (void)co_await envNoMctx->tool->execute_async(utilxx_base::Json{
+                    {"subagent", "alpha"},
+                    {"message",  "m"    },
+                });
+            } catch (const std::runtime_error& e) {
+                threw = true;
+                XX_TEST_EXPECT_TRUE(
+                    std::string_view{e.what()}.find("AgentContext not available")
+                    != std::string::npos
+                );
+            }
+            XX_TEST_EXPECT_TRUE(threw);
         }
     }
 

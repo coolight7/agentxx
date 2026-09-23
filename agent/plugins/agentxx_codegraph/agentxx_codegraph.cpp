@@ -414,7 +414,7 @@ static void registerAllTools(PluginCtx& ctx) {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string                query = args.value<std::string>("query", std::string{});
                 if (query.empty()) {
-                    return "error: Arg `query` is empty";
+                    throw std::invalid_argument{"Arg `query` is empty"};
                 }
                 int64_t limit64 = args.value<int64_t>("limit", 20);
                 auto    r       = c.mgr->searchSymbols(query, static_cast<int>(limit64));
@@ -477,7 +477,7 @@ static void registerAllTools(PluginCtx& ctx) {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
-                    return "error: Arg `symbol` is empty";
+                    throw std::invalid_argument{"Arg `symbol` is empty"};
                 }
                 int64_t limit64 = args.value<int64_t>("limit", 10);
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
@@ -517,7 +517,7 @@ static void registerAllTools(PluginCtx& ctx) {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
-                    return "error: Arg `symbol` is empty";
+                    throw std::invalid_argument{"Arg `symbol` is empty"};
                 }
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto    r       = c.mgr->getCallers(symbol, static_cast<int>(depth64));
@@ -552,7 +552,7 @@ static void registerAllTools(PluginCtx& ctx) {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
-                    return "error: Arg `symbol` is empty";
+                    throw std::invalid_argument{"Arg `symbol` is empty"};
                 }
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto    r       = c.mgr->getCallees(symbol, static_cast<int>(depth64));
