@@ -272,10 +272,6 @@ bool PluginManager::isSessionCancelled(std::string_view sessionId) {
     return session->getCancelToken()->is_cancelled();
 }
 
-bool PluginManager::isSessionCancelled(std::string_view sessionId) {
-    return isSessionCancelled(std::string{sessionId});
-}
-
 // =====================================================================
 // plugins 表
 // =====================================================================

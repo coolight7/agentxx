@@ -513,7 +513,7 @@ public:
     std::string getSessionWorkDir();
     std::string getSessionWorkDir(std::string_view sessionId);
     std::string getModelConfigJson();
-    bool        isSessionCancelled(const std::string& sessionId);
+    bool        isSessionCancelled(std::string_view sessionId);
 
     // ==================== pluginxx::DomainHooks 实现 ====================
     // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/
@@ -531,7 +531,6 @@ public:
     std::string toolPromptJson(std::string_view toolName) override;
     std::string sessionWorkDir(std::string_view sessionId) override;
     std::string language() override;
-    bool        isSessionCancelled(std::string_view sessionId) override;
 
     std::string pluginsJson() override;
     std::string pluginJson(std::string_view name) override;
