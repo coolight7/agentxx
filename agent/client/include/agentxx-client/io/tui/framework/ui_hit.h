@@ -36,6 +36,7 @@
 /// - 渲染风格 helper 见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
 /// - 声明式条目列表 (菜单/设置项) 见
 ///   [ui_action_list.h](/agent/client/include/agentxx-client/io/tui/framework/ui_action_list.h)
+#include "agentxx-client/io/tui/framework/owned_reflect.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -170,6 +171,11 @@ public:
     }
 
     /// 登记可命中元素: 返回的元素已附加 reflect, 布局后写入该元素的屏幕区域
+    ///
+    /// 返回的元素同时**自持**该 Box ([OwnedReflect]): 元素被搬进滚动容器/缓存跨帧
+    /// 存活时, 即使登记表已在本帧开头清空 (Box 从表中移除), 元素后续布局也不会写
+    /// 已释放内存; 命中检测仍读同一个 Box (见 [find] / [findRegion])。
+    ///
     /// - `args...` 用于构造 Payload (聚合初始化)
     template<class... Args>
     ftxui::Element add(ftxui::Element element, Args&&... args) {
@@ -178,18 +184,19 @@ public:
             std::make_shared<ftxui::Box>(kNoBox),
             {},
         });
-        return std::move(element) | ftxui::reflect(*entries_.back().box);
+        return std::make_shared<OwnedReflect>(std::move(element), entries_.back().box);
     }
 
     /// 登记"元素 + 元素内若干可命中子区域": 返回的元素已附加 reflect
     /// - 子区域坐标相对该元素左上角 (见 [UiHitRegion]); 命中时返回 (payload, 区域, 局部坐标)
+    /// - Box 归属说明同 [add]
     ftxui::Element addRegions(ftxui::Element element, Payload payload, std::vector<UiHitRegion> regions) {
         entries_.push_back(Entry{
             std::move(payload),
             std::make_shared<ftxui::Box>(kNoBox),
             std::move(regions),
         });
-        return std::move(element) | ftxui::reflect(*entries_.back().box);
+        return std::make_shared<OwnedReflect>(std::move(element), entries_.back().box);
     }
 
     /// 坐标命中查询 (未布局或已被裁剪的项返回空 Box, 自然不命中)

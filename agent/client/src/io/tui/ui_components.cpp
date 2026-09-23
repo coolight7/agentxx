@@ -1,5 +1,6 @@
 #include "agentxx-client/io/tui/ui_components.h"
 
+#include "agentxx-client/io/tui/framework/owned_reflect.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "agentxx-client/io/tui/text_layout.h"
@@ -26,43 +27,6 @@ using utilxx_base::Json;
 // ---------------------------------------------------------------------------
 // 基础 helper
 // ---------------------------------------------------------------------------
-
-/// 绑定自有反射框的行元素节点 (元素自己持有 `reflect` 用的 Box)
-///
-/// 背景: FTXUI 的 `reflect(Box&)` 只保存**引用**, Box 必须比元素活得久。行模型的
-/// 元素会被各接入点搬进滚动容器/消息块缓存 (可能跨帧存活), 而生成它的 `UiRow::box`
-/// 常常随局部结果析构 —— 一旦只搬元素, 元素随后被布局时就会写已释放内存
-/// (ASan: heap-use-after-free, 栈顶为 `Reflect::SetBox`)。
-///
-/// 本节点把 Box 的所有权绑在元素上: 移动/缓存元素即等于带走 Box, 接入点无需
-/// 额外保存。命中判定仍按 [UiRow::box] 指向的同一个 Box 读取坐标。
-class OwnedReflect : public ftxui::Node {
-public:
-
-    OwnedReflect(ftxui::Element child, std::shared_ptr<ftxui::Box> box) :
-        Node({std::move(child)}),
-        box_(std::move(box)) {}
-
-    void ComputeRequirement() override {
-        Node::ComputeRequirement();
-        requirement_ = children_[0]->requirement();
-    }
-
-    void SetBox(ftxui::Box box) override {
-        *box_ = box;
-        Node::SetBox(box);
-        children_[0]->SetBox(box);
-    }
-
-    void Render(ftxui::Screen& screen) override {
-        *box_ = ftxui::Box::Intersection(screen.stencil, *box_);
-        Node::Render(screen);
-    }
-
-private:
-
-    std::shared_ptr<ftxui::Box> box_;
-};
 
 /// 缩进空格串
 std::string spaces(int cols) {
@@ -974,9 +938,13 @@ bool mergeTextButton(
         out.builders.push_back(std::move(builder));
     }
     if (!row.regions.empty()) {
+        // 反射框必须由元素自持: 本函数直接把 UiRow 交给调用方, 调用方通常只搬走
+        // Element (ScrollItem/面板缓存) —— UiRow::box 随局部 UiRenderResult 析构,
+        // 用 FTXUI 的 reflect(Box&) (只存引用) 时元素后续布局会写已释放内存
+        // (见 [OwnedReflect]; 该路径不过 renderItem, 需在此自行包装)
         auto box    = std::make_shared<ftxui::Box>(kNoBox);
         row.box     = box;
-        row.element = std::move(row.element) | reflect(*box);
+        row.element = std::make_shared<OwnedReflect>(std::move(row.element), std::move(box));
     }
     out.rows.push_back(std::move(row));
     return true;
