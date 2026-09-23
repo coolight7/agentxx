@@ -90,26 +90,27 @@
 |---|---|---|---|---|
 | **Windows** | 17.2M | 13M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 22M | 16.1M | GCC 16.1.0 · x86_64 · -O3 · --strip-unneeded | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
+| **Macos** | 28.6M | 17.2M | Clang 21.0.0 · arm64 · -O3 · --strip-unneeded | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android** | - | 14.5M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-unneeded | 打包建议带上 libc++_shared.so |
 
 - **插件动态库文件体积** (横线 - 表示该插件不支持此系统):
 
-| Plugin | Windows/.dll | Linux/.so | Androi/.so | TIP |
-|---|---|---|---|---|
-| agentxx_codegraph | 37.2M | 43.6M | 37.7M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
-| agentxx_computer_use | 527K | - | - | 提供 tool 支持控制鼠标、键盘 |
-| agentxx_execute_command | 5.7M | 2M | 6.2M | Bash/powershell 命令行执行 |
-| agentxx_filesystem | 9.5M | 14M | 6.4M | 文件读写 List/Read/Write/Edit/Glob/Grep |
-| agentxx_javascript_engine | 1.2M | 1.4M | 1.2M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
-| agentxx_math | 531K | 503K | 301K | 数学计算工具 |
-| agentxx_planning | 560K | 490K | 301K | 目标规划 + 渐进任务细节 两层任务规划 + 备忘录 |
-| agentxx_rag_search | 6.9M | 8.7M | 7.5M | RAG 检索 |
-| agentxx_screen_capture | 544K | - | - | 获取屏幕图像帧 |
-| agentxx_string | 9M | 13.7M | 1.6M | 字符串处理、HTML-Markdown转换 |
-| agentxx_system | 616K | 572K | 328K | 系统工具 读取本地时间 |
-| agentxx_system_monitor | 646K | 735K | 448K | 读取系统CPU、内存、GPU占用 |
-| agentxx_text_selection_monitor | 550K | - | - | 接收系统的文本选择事件流 |
-| agentxx_websearch | 6.9M | 8.8M | 7.7M | 网络搜索、下载、网页转Markdown |
+| Plugin | Windows/.dll | Linux/.so | Macos/.dylib | Androi/.so | TIP |
+|---|---|---|---|---|---|
+| agentxx_codegraph | 37.2M | 43.6M | 39.9M | 37.7M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
+| agentxx_computer_use | 527K | - | - | - | 提供 tool 支持控制鼠标、键盘 |
+| agentxx_execute_command | 5.7M | 2M | 2.1M | 6.2M | Bash/powershell 命令行执行 |
+| agentxx_filesystem | 9.5M | 14M | 2.3M | 6.4M | 文件读写 List/Read/Write/Edit/Glob/Grep |
+| agentxx_javascript_engine | 1.2M | 1.4M | 1.3M | 1.2M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
+| agentxx_math | 531K | 503K | 339K | 301K | 数学计算工具 |
+| agentxx_planning | 560K | 490K | 403K | 301K | 目标规划 + 渐进任务细节 两层任务规划 + 备忘录 |
+| agentxx_rag_search | 6.9M | 8.7M | 7.3M | 7.5M | RAG 检索 |
+| agentxx_screen_capture | 544K | - | - | - | 获取屏幕图像帧 |
+| agentxx_string | 9M | 13.7M | 1.8M | 1.6M | 字符串处理、HTML-Markdown转换 |
+| agentxx_system | 616K | 572K | 382K | 328K | 系统工具 读取本地时间 |
+| agentxx_system_monitor | 646K | 735K | 544K | 448K | 读取系统CPU、内存、GPU占用 |
+| agentxx_text_selection_monitor | 550K | - | - | - | 接收系统的文本选择事件流 |
+| agentxx_websearch | 6.9M | 8.8M | 7.5M | 7.7M | 网络搜索、下载、网页转Markdown |
 
 ## 计划实现
 ### 基础模块
