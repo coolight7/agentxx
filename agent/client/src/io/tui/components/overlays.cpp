@@ -316,7 +316,7 @@ SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
 
 void SettingsOverlay::buildItems() {
     list_.setItems({
-        // 主题 (点击/Enter 循环切换 Dark <-> Light)
+  // 主题 (点击/Enter 循环切换 Dark <-> Light)
         {.id    = "theme",
          .label = std::string{tr("settings.themeLabel")},
          .value = trf("settings.themeValue", ctx_.theme->name),
@@ -324,7 +324,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleTheme();
              }},
-        // 动画等级 (点击/Enter 循环切换)
+ // 动画等级 (点击/Enter 循环切换)
         {.id    = "animation",
          .label = std::string{tr("settings.animLabel")},
          .value = trf("settings.animValue", TUISettings::instance().animationLevelName()),
@@ -332,7 +332,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleAnimationLevel();
              }},
-        // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+ // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
         {.id    = "log-level",
          .label = std::string{tr("settings.logLabel")},
          .value = trf("settings.logValue", TUISettings::instance().logLevelName()),
@@ -340,7 +340,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLogLevel();
              }},
-        // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
+ // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
         {.id    = "tail-thinking",
          .label = std::string{tr("settings.thinkLabel")},
          .value = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
@@ -348,7 +348,7 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleTailThinkingMode();
              }},
-        // 界面语言 (点击/Enter 循环切换)
+ // 界面语言 (点击/Enter 循环切换)
         {.id    = "language",
          .label = std::string{tr("settings.langLabel")},
          .value = trf("settings.langValue", TUISettings::instance().languageName()),
@@ -356,21 +356,19 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLanguage();
              }},
-        // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
+ // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
         {.id    = "check-update",
          .label = std::string{tr("settings.updateLabel")},
          .value = trf(
-             "settings.updateValue",
-             std::string{tr(
-                 TUISettings::instance().checkUpdateOnStartup() ? "settings.switchOn"
-                                                                : "settings.switchOff"
-             )}
-         ),
-         .onActivate =
+             "settings.updateValue", std::string{
+                 tr(TUISettings::instance().checkUpdateOnStartup() ? "settings.switchOn"
+                                                                   : "settings.switchOff")
+             }
+         ), .onActivate =
              [] {
                  cycleCheckUpdateOnStartup();
              }},
-        // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
+ // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
         {.id    = "keybinds",
          .label = std::string{tr("settings.keybindLabel")},
          .value = trf("settings.keybindValue", keybindCount()),
@@ -380,7 +378,7 @@ void SettingsOverlay::buildItems() {
                      onKeybindList_();
                  }
              }},
-        // Info (点击/Enter 打开关于弹窗)
+ // Info (点击/Enter 打开关于弹窗)
         {.id    = "about",
          .label = std::string{tr("settings.infoLabel")},
          .value = std::string{tr("settings.aboutValue")},
@@ -401,11 +399,10 @@ Element SettingsOverlay::OnRender() {
 
     // 终端过矮时压缩条目间距 (优先保证"全部条目 + 底部提示"可见):
     // 常规版式高度 = 条目数 × 2 行 + 项间距 + 外框行数 (见 [kSettingsItemRows] 等)
-    const int termH = std::max(1, ctx_.terminalSize().dimy);
-    const int count = static_cast<int>(list_.size());
+    const int termH      = std::max(1, ctx_.terminalSize().dimy);
+    const int count      = static_cast<int>(list_.size());
     const int normalRows = count * kSettingsItemRows
-                           + (count > 0 ? (count - 1) * kSettingsRowGap : 0)
-                           + kSettingsSurfaceRows;
+                           + (count > 0 ? (count - 1) * kSettingsRowGap : 0) + kSettingsSurfaceRows;
     list_.setRowGap(normalRows > termH ? 0 : kSettingsRowGap);
 
     // 条目版式: 标签行 (弱化文字) + 值行 (整行色带, 即命中区域); 条目之间留一空行
@@ -659,8 +656,8 @@ std::vector<ScrollItem> KeybindListOverlay::buildItems() {
             agentxx::ui::truncateToWidth(bind.keys, keyWidth),
             keyWidth
         );
-        const std::string desc = bind.description.empty() ? std::string{tr("keybind.noDesc")}
-                                                          : bind.description;
+        const std::string desc
+            = bind.description.empty() ? std::string{tr("keybind.noDesc")} : bind.description;
         items.push_back(ScrollItem{
             hbox({
                 text(keyText) | bold | color(theme.accentColor),
@@ -712,7 +709,12 @@ Element KeybindListOverlay::OnRender() {
     const int   popupW   = std::min(wantW, std::max(1, termW - margin * 2));
     const int   popupH   = std::min(wantH, std::max(1, termH - margin * 2));
     const auto  style    = TuiSurfaceStyle::fromTheme(theme);
-    return tuiSurfacePopup(style, tr("keybind.title"), scrollable_->Render() | flex, tr("keybind.hint"))
+    return tuiSurfacePopup(
+               style,
+               tr("keybind.title"),
+               scrollable_->Render() | flex,
+               tr("keybind.hint")
+           )
            | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
            | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
@@ -843,8 +845,8 @@ std::vector<ScrollItem> AboutOverlay::buildItems() {
     // get_builtin_plugins 以 uint64_t 计数 (纯 C ABI 定长类型); 此处不可用 size_t:
     // Linux x86_64 上二者同为 unsigned long, 但 macOS/Windows 上 uint64_t 为
     // unsigned long long, 与 size_t (unsigned long) 不同, 传 &size_t 会编译失败
-    uint64_t                 builtinCount = 0;
-    const auto*              builtinList  = agentxx::plugin::get_builtin_plugins(&builtinCount);
+    uint64_t    builtinCount = 0;
+    const auto* builtinList  = agentxx::plugin::get_builtin_plugins(&builtinCount);
     if (builtinList && builtinCount > 0) {
         for (size_t i = 0; i < builtinCount; ++i) {
             if (builtinList[i].name.data != nullptr && builtinList[i].name.size > 0) {
@@ -1053,15 +1055,15 @@ Element PendingInputsOverlay::OnRender() {
             });
         }
         Element row = pi.expanded ? hbox({
-                                        text("- ") | color(theme.hintColor),
-                                        std::move(body),
-                                        std::move(delBtn),
-                                    })
+                          text("- ") | color(theme.hintColor),
+                          std::move(body),
+                          std::move(delBtn),
+                      })
                                   : hbox({
-                                        text("+ ") | color(theme.userColor),
-                                        std::move(body),
-                                        std::move(delBtn),
-                                    });
+                                      text("+ ") | color(theme.userColor),
+                                      std::move(body),
+                                      std::move(delBtn),
+                                  });
         items.push_back(hits_.add(std::move(row), HitInfo{HitInfo::Kind::Item, pi.id}));
     }
 
@@ -1767,19 +1769,20 @@ bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollab
 }
 
 Element overlayFrame(
-    TUICtx&             ctx,
-    const TUITheme&     theme,
-    const std::string&  title,
-    Scrollable&         scrollable,
+    TUICtx&               ctx,
+    const TUITheme&       theme,
+    const std::string&    title,
+    Scrollable&           scrollable,
     const OverlayOptions& options = {}
 ) {
-    double    wFrac = 0.6, hFrac = 0.8;
+    double wFrac = 0.6, hFrac = 0.8;
     options.resolveFractions(wFrac, hFrac);
     int popupW = 0, popupH = 0;
     overlayPopupSize(ctx, wFrac, hFrac, popupW, popupH);
     const auto style = TuiSurfaceStyle::fromTheme(theme);
     // 底栏: 选项关闭时不显示提示 (面性风格下底栏是独立分区, 无提示则不渲染)
-    const std::string footer = options.footer ? std::string{tr("overlay.scrollHint")} : std::string{};
+    const std::string footer
+        = options.footer ? std::string{tr("overlay.scrollHint")} : std::string{};
     return tuiSurfacePopup(style, title, scrollable.Render() | flex, footer)
            | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
            | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
@@ -2063,13 +2066,13 @@ CustomOverlay::CustomOverlay(
         }
 
         agentxx::client::UiRenderCtx rc;
-        rc.theme    = &theme;
-        rc.width    = ctx_.terminalSize().dimx - 8;
-        rc.indent   = 2;
-        rc.plugin   = ownerPlugin_;
-        rc.ownerId  = std::string{AGENTXX_CLIENT_OVERLAY_OWNER};
-        rc.registry = regPtr;
-        rc.separatorStyle = agentxx::client::UiSeparatorStyle::Block;
+        rc.theme            = &theme;
+        rc.width            = ctx_.terminalSize().dimx - 8;
+        rc.indent           = 0;
+        rc.plugin           = ownerPlugin_;
+        rc.ownerId          = std::string{AGENTXX_CLIENT_OVERLAY_OWNER};
+        rc.registry         = regPtr;
+        rc.separatorStyle   = agentxx::client::UiSeparatorStyle::Block;
         rc.collapseExpanded = [this](const std::string& id, bool defaultValue) {
             auto it = collapseStates_.find(id);
             if (it != collapseStates_.end()) {
@@ -2132,19 +2135,18 @@ bool CustomOverlay::OnEvent(Event event) {
         // overlay 局部命中: 先经滚动容器把坐标映射到子项与子项内局部坐标,
         // 再按子项登记的区域分类处理 (折叠标题切换展开状态; 动作区域派发)
         // owner 固定 "__overlay", 被实例级动作绑定接住
-        size_t index = 0;
+        size_t index  = 0;
         int    localX = 0;
         int    localY = 0;
         if (scrollable_->hitTestItem(mouse.x, mouse.y, index, localX, localY)) {
             const auto& rows = scrollable_->items();
             if (index < rows.size()) {
                 const auto* region = matchUiHitRegion(rows[index].hits, localX, localY);
-                const bool  clicked = (mouse.button == Mouse::Left
-                                      && mouse.motion == Mouse::Released);
+                const bool  clicked
+                    = (mouse.button == Mouse::Left && mouse.motion == Mouse::Released);
                 if (region != nullptr && region->kind == UiHitRegionKind::Collapse && clicked) {
                     bool current = true;
-                    if (auto it = collapseStates_.find(region->id);
-                        it != collapseStates_.end()) {
+                    if (auto it = collapseStates_.find(region->id); it != collapseStates_.end()) {
                         current = it->second;
                     }
                     collapseStates_[region->id] = !current;
@@ -2228,8 +2230,7 @@ void CustomOverlay::submitForm() {
         return;
     }
     if (auto mgr = ctx_.pluginManager) {
-        const std::string values
-            = agentxx::client::formValues(formItems_, form_).dump();
+        const std::string values = agentxx::client::formValues(formItems_, form_).dump();
         mgr->dispatchAction(
             ownerPlugin_,
             AGENTXX_CLIENT_OVERLAY_OWNER,

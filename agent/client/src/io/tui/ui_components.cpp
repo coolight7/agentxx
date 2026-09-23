@@ -157,8 +157,8 @@ std::pair<Element, size_t> buildDiagram(const agentxx::ui::Item& item, const UiR
         }
     }
     // 图形宽度预算: 可用宽度扣除缩进与边界余量, 下限保底可读
-    const int   avail = (ctx.width > 0) ? std::max(20, ctx.width - ctx.indent - item.indent - 6) : 0;
-    const auto& theme = *ctx.theme;
+    const int avail = (ctx.width > 0) ? std::max(20, ctx.width - ctx.indent - item.indent - 6) : 0;
+    const auto& theme  = *ctx.theme;
     auto        diagEl = markdown::renderMermaidStateDiagram(
         diagram,
         avail,
@@ -221,14 +221,10 @@ Element buttonElement(
 /// - `avail <= 0` 时按缺省宽度铺开 (不限宽场景)
 /// - 无自适应列时, 剩余宽度默认给最后一列; `stretchAll = true` 时改为均分给
 ///   各列 (row 的 `align: "stretch"`: 横向铺满可用宽度)
-std::vector<int> layoutColumnWidths(
-    const std::vector<int>& fixed,
-    int                     avail,
-    int                     gap,
-    bool                    stretchAll = false
-) {
-    constexpr int kMinColumn = 4;
-    const size_t  n          = fixed.size();
+std::vector<int>
+    layoutColumnWidths(const std::vector<int>& fixed, int avail, int gap, bool stretchAll = false) {
+    constexpr int    kMinColumn = 4;
+    const size_t     n          = fixed.size();
     std::vector<int> widths(n, kMinColumn);
     if (n == 0) {
         return widths;
@@ -269,9 +265,9 @@ std::vector<int> layoutColumnWidths(
             if (fixed[i] <= 0) {
                 continue;
             }
-            const int delta = std::min(over, widths[i] - kMinColumn);
-            widths[i] -= delta;
-            over -= delta;
+            const int delta  = std::min(over, widths[i] - kMinColumn);
+            widths[i]       -= delta;
+            over            -= delta;
         }
     } else {
         for (size_t i = 0; i < n; ++i) {
@@ -346,9 +342,9 @@ std::string cellPadded(std::string_view content, int width, std::string_view ali
 
 /// 渲染表格为多行元素 (表头 + 分隔线 + 数据行; 单元格可点则登记区域)
 Row renderTable(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
-    constexpr int kGap  = 2;
-    const auto&   theme = *ctx.theme;
-    const int     avail = std::max(1, contentWidth(ctx, item.indent));
+    constexpr int kGap   = 2;
+    const auto&   theme  = *ctx.theme;
+    const int     avail  = std::max(1, contentWidth(ctx, item.indent));
     const auto    widths = layoutColumnWidths(tableFixedWidths(item.columns), avail, kGap);
 
     Elements                 lines;
@@ -394,12 +390,7 @@ Row renderTable(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
             cells.push_back(cellPadded(item.columns[c].title, widths[c], item.columns[c].align));
             colors.push_back(theme.accentColor);
         }
-        emit(
-            cells,
-            colors,
-            std::vector<std::string>(columnCount),
-            std::vector<Json>(columnCount)
-        );
+        emit(cells, colors, std::vector<std::string>(columnCount), std::vector<Json>(columnCount));
         std::string sepLine;
         for (size_t c = 0; c < columnCount; ++c) {
             if (c > 0) {
@@ -423,8 +414,9 @@ Row renderTable(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
             const std::string colorName
                 = (cell != nullptr && !cell->color.empty()) ? cell->color : item.columns[c].color;
             colors.push_back(itemColor(colorName, theme));
-            actions.push_back((cell != nullptr && !cell->action.empty()) ? cell->action
-                                                                        : std::string{});
+            actions.push_back(
+                (cell != nullptr && !cell->action.empty()) ? cell->action : std::string{}
+            );
             args.push_back((cell != nullptr) ? cell->args : Json{});
         }
         emit(cells, colors, actions, args);
@@ -476,7 +468,7 @@ Row renderKeyValue(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
 ///
 /// 折叠态由**宿主**维护 (键 = 从根到该节点的路径, 如 `src/io/`): 提供
 /// [UiRenderCtx::collapseExpanded] 时, 有子节点的行可点击展开/收起 (行首标记
-/// `▾`/`▸`), 收起后子树不渲染且不占点击区域; 未提供时按全展开渲染 (行式前端与
+/// `-`/`+`), 收起后子树不渲染且不占点击区域; 未提供时按全展开渲染 (行式前端与
 /// 不关心折叠的调用方行为不变)。
 Row renderTree(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
     const auto&              theme = *ctx.theme;
@@ -484,23 +476,22 @@ Row renderTree(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
     std::vector<UiHitRegion> regions;
     int                      y = 0;
 
-    std::function<void(const std::vector<agentxx::ui::TreeNode>&, const std::string&, const std::string&)>
-        emit = [&](
-                   const std::vector<agentxx::ui::TreeNode>& nodes,
+    std::function<
+        void(const std::vector<agentxx::ui::TreeNode>&, const std::string&, const std::string&)>
+        emit = [&](const std::vector<agentxx::ui::TreeNode>& nodes,
                    const std::string&                        prefix,
-                   const std::string&                        path
-               ) {
+                   const std::string&                        path) {
             for (size_t i = 0; i < nodes.size(); ++i) {
                 const auto& node = nodes[i];
                 const bool  last = (i + 1 == nodes.size());
                 // 节点路径 (折叠状态键; 结尾带 '/' 便于与 id 型键区分)
                 const std::string nodePath = path + node.label + "/";
-                const bool        foldable = !node.children.empty() && ctx.collapseExpanded != nullptr;
+                const bool foldable = !node.children.empty() && ctx.collapseExpanded != nullptr;
                 const bool expanded = !foldable || ctx.collapseExpanded(nodePath, true);
 
                 std::string line = item.connector ? prefix + (last ? "└─ " : "├─ ") : prefix;
                 if (foldable) {
-                    line += expanded ? "▾ " : "▸ ";
+                    line += expanded ? "- " : "+ ";
                 }
                 line += node.label;
                 lines.push_back(text(line) | color(itemColor(node.color, theme)));
@@ -572,7 +563,7 @@ std::vector<double> bucketize(const std::vector<double>& data, int buckets) {
         if (to <= from) {
             to = from + 1;
         }
-        to = std::min(to, data.size());
+        to         = std::min(to, data.size());
         double sum = 0.0;
         for (size_t i = from; i < to; ++i) {
             sum += data[i];
@@ -601,18 +592,16 @@ Row renderSparkline(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
     }
 
     const bool hasSuffix = item.showLast || !item.unit.empty();
-    const int  suffixW   = hasSuffix
-                               ? (agentxx::ui::displayWidth(numText(item.data.back()) + item.unit)
-                                  + 1)
-                               : 0;
-    const int  plotW     = std::max(4, avail - labelW - suffixW);
-    const auto data      = bucketize(item.data, plotW);
-    const auto minIt     = std::min_element(data.begin(), data.end());
-    const auto maxIt     = std::max_element(data.begin(), data.end());
-    const double lo      = item.hasMin ? item.minValue : *minIt;
-    const double hi      = item.hasMax ? item.maxValue : *maxIt;
-    const double span    = (hi > lo) ? (hi - lo) : 0.0;
-    const double last    = item.data.back();
+    const int  suffixW
+        = hasSuffix ? (agentxx::ui::displayWidth(numText(item.data.back()) + item.unit) + 1) : 0;
+    const int    plotW = std::max(4, avail - labelW - suffixW);
+    const auto   data  = bucketize(item.data, plotW);
+    const auto   minIt = std::min_element(data.begin(), data.end());
+    const auto   maxIt = std::max_element(data.begin(), data.end());
+    const double lo    = item.hasMin ? item.minValue : *minIt;
+    const double hi    = item.hasMax ? item.maxValue : *maxIt;
+    const double span  = (hi > lo) ? (hi - lo) : 0.0;
+    const double last  = item.data.back();
 
     auto colorAt = [&](size_t i) -> Color {
         const double r = (span > 0) ? ((data[i] - lo) / span) : 0.5;
@@ -642,17 +631,14 @@ Row renderSparkline(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
             chunks.push_back(text(spaces(labelW)));
         }
         for (size_t i = 0; i < data.size(); ++i) {
-            const double r = (span > 0) ? std::clamp((data[i] - lo) / span, 0.0, 1.0) : 0.5;
+            const double r     = (span > 0) ? std::clamp((data[i] - lo) / span, 0.0, 1.0) : 0.5;
             const int    level = std::clamp(
                 static_cast<int>(r * static_cast<double>(totalLevels - 1) + 0.5),
                 0,
                 totalLevels - 1
             );
-            const int inRow = std::clamp(
-                level - (height - 1 - rowIdx) * kLevelsPerRow + 1,
-                0,
-                kLevelsPerRow
-            );
+            const int inRow
+                = std::clamp(level - (height - 1 - rowIdx) * kLevelsPerRow + 1, 0, kLevelsPerRow);
             if (inRow <= 0) {
                 chunks.push_back(text(" "));
                 continue;
@@ -674,11 +660,10 @@ Row renderSparkline(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
 
 /// 条形计量 (填充块 + 背景块 + 数值文本; 阈值配色)
 Row renderMeter(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
-    const auto&  theme  = *ctx.theme;
-    const int    avail  = std::max(1, contentWidth(ctx, item.indent));
-    const int    labelW = item.label.empty() ? 0 : agentxx::ui::displayWidth(item.label) + 1;
-    const int    barW   = (item.width > 0) ? item.width
-                                           : std::max(6, std::min(24, avail - labelW - 8));
+    const auto& theme  = *ctx.theme;
+    const int   avail  = std::max(1, contentWidth(ctx, item.indent));
+    const int   labelW = item.label.empty() ? 0 : agentxx::ui::displayWidth(item.label) + 1;
+    const int barW = (item.width > 0) ? item.width : std::max(6, std::min(24, avail - labelW - 8));
     const double total  = (item.total > 0) ? item.total : 100.0;
     const double ratio  = std::clamp(item.value / total, 0.0, 1.0);
     const int    filled = static_cast<int>(ratio * static_cast<double>(barW) + 0.5);
@@ -706,15 +691,15 @@ Row renderMeter(const agentxx::ui::Item& item, const UiRenderCtx& ctx) {
     }
     if (filled < barW) {
         barChunks.push_back(
-            text(std::string(static_cast<size_t>(barW - filled), ' '))
-            | bgcolor(theme.blockColor) | theme.dim()
+            text(std::string(static_cast<size_t>(barW - filled), ' ')) | bgcolor(theme.blockColor)
+            | theme.dim()
         );
     }
     barChunks.push_back(text("▏") | color(theme.hintColor));
     els.push_back(hbox(std::move(barChunks)));
     if (item.showValue) {
-        std::string valueText = numText(ratio * 100.0);
-        valueText += item.unit.empty() ? "%" : item.unit;
+        std::string valueText  = numText(ratio * 100.0);
+        valueText             += item.unit.empty() ? "%" : item.unit;
         els.push_back(text(" " + valueText) | color(theme.normalColor));
     }
     Row row;
@@ -777,8 +762,8 @@ Element inputField(std::string value, const agentxx::ui::Item& item, const UiRen
     const int   width = inputFieldWidth(value);
     const int   pad   = std::max(0, width - 2 - agentxx::ui::displayWidth(value));
     Element     el    = text(" " + value + std::string(static_cast<size_t>(pad), ' ') + " ")
-                    | bgcolor(theme.inputBgColor)
-                    | color(value.empty() ? theme.hintColor : theme.inputTextColor);
+                 | bgcolor(theme.inputBgColor)
+                 | color(value.empty() ? theme.hintColor : theme.inputTextColor);
     if (ctx.form != nullptr && ctx.form->focusedId == item.id) {
         el = el | bold | underlined;
     }
@@ -922,8 +907,8 @@ bool mergeTextButton(
     }
 
     // 合并后各区域仍用合并行的局部坐标: 按钮侧区域按文本宽度右移
-    const int prefixCols = ctx.indent + std::max(0, textItem.indent)
-                           + agentxx::ui::displayWidth(textItem.text);
+    const int prefixCols
+        = ctx.indent + std::max(0, textItem.indent) + agentxx::ui::displayWidth(textItem.text);
     UiRow row;
     row.lines   = 1;
     row.element = hbox({std::move(left.rows[0].element), std::move(right.rows[0].element)});
@@ -1150,11 +1135,8 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         for (int i = 0; i < n; ++i) {
             const int w = std::max(1, widths[static_cast<size_t>(i)]);
             // 列内子项按列宽渲染 (缩进为 0: 本行的基础缩进由 pushPlain 叠加)
-            auto subRows = renderItemRows(
-                item.items[static_cast<size_t>(i)],
-                childCtx(ctx, w, 0),
-                out
-            );
+            auto subRows
+                = renderItemRows(item.items[static_cast<size_t>(i)], childCtx(ctx, w, 0), out);
             Row     columnRow = stackRows(subRows);
             Element el        = std::move(columnRow.element);
             if (item.align == "right") {
@@ -1184,7 +1166,7 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
 
     // ---------------- box (分组框) ----------------
     if (item.kind == "box") {
-        const bool border      = item.border != "none";
+        const bool border       = item.border != "none";
         const int  innerPadCols = item.pad * 2;
         const int  innerW
             = std::max(1, contentWidth(ctx, item.indent) - (border ? 2 : 0) - innerPadCols);
@@ -1223,8 +1205,7 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         }
         const int    dx    = (border ? 1 : 0) + innerPadCols;
         const int    dy    = (border ? 1 : 0) + item.pad;
-        const size_t lines = inner.lines + static_cast<size_t>(item.pad * 2)
-                             + (border ? 2u : 0u);
+        const size_t lines = inner.lines + static_cast<size_t>(item.pad * 2) + (border ? 2u : 0u);
         std::vector<UiHitRegion> regions;
         for (const auto& region : inner.regions) {
             regions.push_back(region.offsetBy(dx, dy));
@@ -1239,8 +1220,8 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         if (ctx.collapseExpanded) {
             expanded = ctx.collapseExpanded(item.id, item.expanded);
         }
-        Element header = hbox({
-            text(expanded ? "▾ " : "▸ ") | color(theme.accentColor),
+        Element                  header = hbox({
+            text(expanded ? "- " : "+ ") | color(theme.accentColor),
             text(item.title) | color(theme.accentColor) | bold,
         });
         std::vector<UiHitRegion> regions;
@@ -1287,7 +1268,7 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         const std::string caption = item.controlLabel.empty() ? item.id : item.controlLabel;
         if (item.control == "checkbox") {
             const bool checked = controlChecked(item, ctx.form);
-            Element mark = text(checked ? "[ ✓ ] " : "[   ] ")
+            Element    mark    = text(checked ? "[ ✓ ] " : "[   ] ")
                            | color(checked ? theme.accentColor : theme.hintColor);
             if (checked) {
                 mark = mark | bold;
@@ -1299,17 +1280,17 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
             }
             pushPlain(std::move(el), 1, std::move(regions));
         } else if (item.control == "text") {
-            Element el = inputField(controlEditText(item, ctx.form), item, ctx);
+            Element                  el = inputField(controlEditText(item, ctx.form), item, ctx);
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
                 addControlRegion(regions, ctx, item, 0, 0, 0, 0);
             }
             pushPlain(hbox({std::move(el)}), 1, std::move(regions));
         } else if (item.control == "number") {
-            const std::string value   = controlEditText(item, ctx.form);
-            constexpr int     kMinusW = 5; // "[ - ]"
-            const int         valueW  = inputFieldWidth(value);
-            Element           el      = hbox({
+            const std::string        value   = controlEditText(item, ctx.form);
+            constexpr int            kMinusW = 5; // "[ - ]"
+            const int                valueW  = inputFieldWidth(value);
+            Element                  el      = hbox({
                 inputStepButton("[ - ]", theme),
                 text(" "),
                 inputField(value, item, ctx),
@@ -1369,12 +1350,12 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
                 const bool        active   = (static_cast<int>(i) == selected);
                 // 选中项: 指示符 + 反色底 (整行); 未选中: 同宽占位 + 普通色
                 Element entry = hbox({
-                    text(active ? "▸ " : "  "),
+                    text(active ? "+ " : "  "),
                     text(optLabel),
                 });
-                entry = active ? entry | bgcolor(theme.buttonActiveBgColor)
+                entry         = active ? entry | bgcolor(theme.buttonActiveBgColor)
                                      | color(theme.buttonActiveTextColor) | bold
-                               : entry | color(theme.normalColor);
+                                       : entry | color(theme.normalColor);
                 els.push_back(std::move(entry));
                 if (interactive && !item.id.empty()) {
                     addControlRegion(regions, ctx, item, 0, y, 0, static_cast<int>(i));
@@ -1390,10 +1371,7 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
                 std::move(regions)
             );
         } else {
-            pushPlain(
-                text(fmt::format("[control: {}]", item.control)) | color(theme.hintColor),
-                1
-            );
+            pushPlain(text(fmt::format("[control: {}]", item.control)) | color(theme.hintColor), 1);
         }
         if (ctx.form != nullptr) {
             if (const auto* state = ctx.form->find(item.id);
@@ -1427,7 +1405,7 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
     // ---------------- custom (派发到内置组件) ----------------
     if (item.kind == "custom") {
         if (!item.component.empty() && item.component != "components") {
-            Json params = item.props.is_object() ? item.props : Json::object();
+            Json params    = item.props.is_object() ? item.props : Json::object();
             params["kind"] = item.component;
             auto sub       = agentxx::ui::parseItem(params);
             if (sub.known) {
@@ -1443,8 +1421,8 @@ Rows renderItemRows(const agentxx::ui::Item& item, const UiRenderCtx& ctx, UiRen
         }
         if (!item.component.empty()) {
             pushPlain(
-                text(fmt::format("[custom component: {}]", item.component))
-                    | color(theme.hintColor) | theme.dim(),
+                text(fmt::format("[custom component: {}]", item.component)) | color(theme.hintColor)
+                    | theme.dim(),
                 1
             );
         }
@@ -1477,9 +1455,9 @@ void initFormState(UiFormState& form, const std::vector<agentxx::ui::Item>& item
             if (!state.initialized) {
                 state.initialized = true;
                 state.selected    = optionIndex(item.options, item.defaultValue);
-                state.checked = item.defaultValue.is_boolean() && item.defaultValue.get<bool>();
-                state.editText = controlEditText(item, nullptr);
-                state.edited   = false;
+                state.checked     = item.defaultValue.is_boolean() && item.defaultValue.get<bool>();
+                state.editText    = controlEditText(item, nullptr);
+                state.edited      = false;
             }
         }
         if (!item.items.empty()) {
@@ -1509,10 +1487,8 @@ std::vector<std::string> collectControlIds(const std::vector<agentxx::ui::Item>&
 namespace {
 
 /// 在组件树内按 id 找控件 (含容器内; 找不到返回 nullptr)
-const agentxx::ui::Item* findControl(
-    const std::vector<agentxx::ui::Item>& items,
-    std::string_view                      id
-) {
+const agentxx::ui::Item*
+    findControl(const std::vector<agentxx::ui::Item>& items, std::string_view id) {
     for (const auto& item : items) {
         if (item.kind == "control" && item.id == id) {
             return &item;
@@ -1636,8 +1612,8 @@ UiFormAction handleFormControlHit(
             ++form.version;
             return UiFormAction::Changed;
         }
-        const double step  = (item->step > 0) ? item->step : 1.0;
-        const double base  = parseNumber(
+        const double step = (item->step > 0) ? item->step : 1.0;
+        const double base = parseNumber(
             state.edited ? state.editText : defaultEditText(*item),
             item->integer,
             0.0
@@ -1702,7 +1678,7 @@ bool handleFormKeyInput(
                 break;
             }
         }
-        const int n   = static_cast<int>(ids.size());
+        const int n    = static_cast<int>(ids.size());
         int       next = forward ? (current + 1) % n : ((current <= 0 ? n : current) - 1);
         form.focusedId = ids[static_cast<size_t>(std::max(0, next))];
         if (auto& state = form.ensure(form.focusedId); !state.initialized) {
@@ -1733,7 +1709,7 @@ bool handleFormKeyInput(
         if (event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight) {
             const int n = static_cast<int>(item->options.size());
             if (n > 0) {
-                const int dir = (event == ftxui::Event::ArrowRight) ? 1 : n - 1;
+                const int dir  = (event == ftxui::Event::ArrowRight) ? 1 : n - 1;
                 state.selected = (state.selected + dir) % n;
             }
             state.tip.clear();
@@ -1746,8 +1722,7 @@ bool handleFormKeyInput(
         if (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown) {
             const int n     = static_cast<int>(item->options.size());
             const int delta = (event == ftxui::Event::ArrowUp) ? -1 : 1;
-            state.selected
-                = std::clamp(state.selected + delta, 0, std::max(0, n - 1));
+            state.selected  = std::clamp(state.selected + delta, 0, std::max(0, n - 1));
             state.tip.clear();
             ++form.version;
             return true;
@@ -1797,8 +1772,8 @@ bool handleFormKeyInput(
         if (item->control == "number") {
             // 数值框只接受数字与一个小数点/负号
             for (char c : ch) {
-                const bool ok = std::isdigit(static_cast<unsigned char>(c)) != 0
-                                || c == '.' || c == '-' || c == '+';
+                const bool ok = std::isdigit(static_cast<unsigned char>(c)) != 0 || c == '.'
+                                || c == '-' || c == '+';
                 if (!ok) {
                     return true; // 消费但忽略
                 }
@@ -1840,15 +1815,13 @@ bool validateForm(const std::vector<agentxx::ui::Item>& items, UiFormState& form
                 state.initialized = true;
                 state.editText    = defaultEditText(item);
                 state.selected    = optionIndex(item.options, item.defaultValue);
-                state.checked
-                    = item.defaultValue.is_boolean() && item.defaultValue.get<bool>();
+                state.checked     = item.defaultValue.is_boolean() && item.defaultValue.get<bool>();
             }
             if (item.control == "number") {
                 if (!validateNumber(item, state)) {
                     ok = false;
                 }
-            } else if ((item.control == "buttons" || item.control == "select")
-                       && item.options.empty()) {
+            } else if ((item.control == "buttons" || item.control == "select") && item.options.empty()) {
                 // 无候选项: 该控件的值无法确定, 拒绝提交并提示 (与渲染诊断行一致)
                 state.tip = std::string{tr("ui.noOptions")};
                 ok        = false;
@@ -1894,7 +1867,8 @@ utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiForm
                           } else {
                               values[item.id] = utilxx_base::Json(v);
                           }
-                      } else if (item.control == "text") {                          values[item.id] = state.edited ? state.editText : defaultEditText(item);
+                      } else if (item.control == "text") {
+                          values[item.id] = state.edited ? state.editText : defaultEditText(item);
                       }
                       // 未知控件形态不参与结果 (渲染为不可交互的诊断行)
                   }
@@ -1909,8 +1883,7 @@ utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiForm
     return out;
 }
 
-std::optional<agentxx::ui::Item>
-    itemFromInterruptBlock(const middleware::InterruptUiBlock& block) {
+std::optional<agentxx::ui::Item> itemFromInterruptBlock(const middleware::InterruptUiBlock& block) {
     // 唯一实现在 lib (`agentxx::middleware::itemOf`): 中断描述 → 组件项的映射
     // 由 TUI 渲染、纯文本降级与"构建器拼中断"共用, 避免各接入点各写一份
     return middleware::itemOf(block);

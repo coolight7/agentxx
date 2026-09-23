@@ -76,7 +76,7 @@ static size_t appendPluginItems(
     agentxx::client::UiRenderCtx rc;
     rc.theme            = &theme;
     rc.width            = avail;
-    rc.indent           = 2;
+    rc.indent           = 0;
     rc.plugin           = std::string{plugin};
     rc.ownerId          = std::string{ownerId};
     rc.registry         = reg;

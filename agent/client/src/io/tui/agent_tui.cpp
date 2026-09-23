@@ -301,9 +301,7 @@ void TUIClientAgentIO::removePluginPanelTab(const std::string& id) {
     postRedraw();
 }
 
-namespace {
-
-} // namespace
+namespace {} // namespace
 
 std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& panelId) {
     // UI 线程调用 (侧边栏 tab render 回调); 读取注册表快照 (短锁拷贝 shared_ptr)
@@ -347,7 +345,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     agentxx::client::UiRenderCtx rc;
     rc.theme            = &theme_;
     rc.width            = avail;
-    rc.indent           = 2;
+    rc.indent           = 0;
     rc.plugin           = panel->plugin;
     rc.ownerId          = panel->id;
     rc.registry         = reg.get();
@@ -1451,7 +1449,7 @@ bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
     if (scroll == nullptr) {
         return false;
     }
-    size_t index = 0;
+    size_t index  = 0;
     int    localX = 0;
     int    localY = 0;
     if (!scroll->hitTestItem(mouse.x, mouse.y, index, localX, localY)) {
@@ -1490,8 +1488,12 @@ bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
     }
     auto& form = formIt->second;
     if (region->kind == UiHitRegionKind::Form) {
-        const auto action
-            = agentxx::client::handleFormControlHit(form.items, form.state, region->id, region->sub);
+        const auto action = agentxx::client::handleFormControlHit(
+            form.items,
+            form.state,
+            region->id,
+            region->sub
+        );
         if (action == agentxx::client::UiFormAction::None) {
             return false;
         }
@@ -2142,10 +2144,7 @@ void TUIClientAgentIO::toggleFullAuth() {
     if (transport_) {
         sendToPeer(agentxx::agent::WireSetFullAuth{.fullAuth = next});
     }
-    uiToast(
-        next ? std::string{tr("toast.fullAuthOn")} : std::string{tr("toast.fullAuthOff")},
-        0
-    );
+    uiToast(next ? std::string{tr("toast.fullAuthOn")} : std::string{tr("toast.fullAuthOff")}, 0);
     postRedraw();
 }
 
@@ -2207,9 +2206,9 @@ void TUIClientAgentIO::applyUpdateCheckResult(agentxx::client::UpdateCheckResult
     }
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto&                       st       = sharedState_.mutableState();
-        st.availableUpdateTag                = result.latestTag;
-        st.availableUpdateUrl                = result.url;
+        auto&                       st = sharedState_.mutableState();
+        st.availableUpdateTag          = result.latestTag;
+        st.availableUpdateUrl          = result.url;
     }
     uiToast(trf("toast.updateAvailable", result.latestTag, std::string{kAgentxxVersion}), 0);
     postRedraw();
@@ -2430,11 +2429,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 m->startTimeMs        = delta.startTimeMs > 0
                                             ? delta.startTimeMs
                                             : static_cast<int64_t>(
-                                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now().time_since_epoch()
-                                           )
-                                               .count()
-                                       );
+                                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch()
+                                         )
+                                             .count()
+                                     );
                 st.messages.push_back(std::move(m));
                 st.isStreaming = true;
             } break;
@@ -2495,8 +2494,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (!st.messages.empty()
-                           && st.messages.back()->role != TUIMessage::Role::Think) {
+                } else if (!st.messages.empty() && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;

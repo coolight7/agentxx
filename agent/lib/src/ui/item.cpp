@@ -45,9 +45,9 @@ std::string readString(const Json& j, std::string_view key, std::string_view def
 
 /// 依次尝试多个键 (新写法在前, 旧写法在后)
 std::string readStringAny(
-    const Json&                    j,
+    const Json&                             j,
     std::initializer_list<std::string_view> keys,
-    std::string_view               def = {}
+    std::string_view                        def = {}
 ) {
     for (auto key : keys) {
         const Json* v = field(j, key);
@@ -117,7 +117,8 @@ bool isKnownKind(std::string_view kind) {
            || kind == "meter" || kind == "badge" || kind == "diagram" || kind == "row"
            || kind == "box" || kind == "collapse" || kind == "table" || kind == "tree"
            || kind == "kv" || kind == "sparkline" || kind == "control" || kind == "submit"
-           || kind == "canvas" || kind == "custom"
+           || kind == "canvas"
+           || kind == "custom"
            // 交互控件的短写法 (等价于 control + 对应形态)
            || kind == "checkbox" || kind == "select" || kind == "buttons" || kind == "number"
            || kind == "input";
@@ -143,13 +144,19 @@ std::string alignOf(const Json& j, std::initializer_list<std::string_view> keys)
 // 子结构解析
 // ---------------------------------------------------------------------------
 
-void parseTreeNode(const Json& j, TreeNode& node, const ParseLimits& limits, int depth, size_t& budget) {
+void parseTreeNode(
+    const Json&        j,
+    TreeNode&          node,
+    const ParseLimits& limits,
+    int                depth,
+    size_t&            budget
+) {
     if (!j.is_object() || budget == 0) {
         return;
     }
     --budget;
-    node.label = clampTextImpl(readStringAny(j, {"label", "text"}), limits.maxTextBytes);
-    node.color = readString(j, "color", "normal");
+    node.label  = clampTextImpl(readStringAny(j, {"label", "text"}), limits.maxTextBytes);
+    node.color  = readString(j, "color", "normal");
     node.action = readStringAny(j, {"action"});
     if (const Json* args = field(j, "args")) {
         node.args = *args;
@@ -184,8 +191,7 @@ TableCell parseTableCell(const Json& j, const ParseLimits& limits) {
     return cell;
 }
 
-std::vector<Item>
-    parseItemArray(const Json& arr, const ParseLimits& limits, int depth) {
+std::vector<Item> parseItemArray(const Json& arr, const ParseLimits& limits, int depth) {
     std::vector<Item> out;
     if (!arr.is_array()) {
         return out;
@@ -287,7 +293,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     item.bold   = readBool(json, "bold", item.color == "title");
     // 弱化与颜色相互独立: `hint` 只决定取色 (其本身就是弱化灰), 不自动叠加弱化;
     // 需要弱化的项显式写 `"dim": true` (与中断块映射 item.dim = block.dim 一致)
-    item.dim = readBool(json, "dim", false);
+    item.dim      = readBool(json, "dim", false);
     item.fallback = clampTextImpl(readString(json, "fallback"), limits.maxTextBytes);
     item.action   = clampTextImpl(readStringAny(json, {"action"}), 256);
     if (const Json* args = field(json, "args")) {
@@ -317,15 +323,11 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         return item;
     }
     if (item.kind == "diff") {
-        item.path   = readString(json, "path");
-        item.oldStr = clampTextImpl(
-            readStringAny(json, {"old_str", "oldStr", "old"}),
-            limits.maxTextBytes
-        );
-        item.newStr = clampTextImpl(
-            readStringAny(json, {"new_str", "newStr", "new"}),
-            limits.maxTextBytes
-        );
+        item.path = readString(json, "path");
+        item.oldStr
+            = clampTextImpl(readStringAny(json, {"old_str", "oldStr", "old"}), limits.maxTextBytes);
+        item.newStr
+            = clampTextImpl(readStringAny(json, {"new_str", "newStr", "new"}), limits.maxTextBytes);
         return item;
     }
     if (item.kind == "separator") {
@@ -337,10 +339,8 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     }
     if (item.kind == "button") {
         // 旧写法: kind=button 用 action_id; kind=action 用 id; 新写法统一用 action
-        item.label = clampTextImpl(
-            readStringAny(json, {"label", "text"}, "Button"),
-            limits.maxTextBytes
-        );
+        item.label
+            = clampTextImpl(readStringAny(json, {"label", "text"}, "Button"), limits.maxTextBytes);
         if (item.label.empty()) {
             item.label = "Button";
         }
@@ -361,8 +361,8 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
     }
     if (item.kind == "meter") {
         const bool legacyProgress = readString(json, "kind", "text") == "progress";
-        item.value     = readDouble(json, "value", 0.0);
-        item.total     = readDouble(json, "total", legacyProgress ? 1.0 : 100.0);
+        item.value                = readDouble(json, "value", 0.0);
+        item.total                = readDouble(json, "total", legacyProgress ? 1.0 : 100.0);
         if (legacyProgress) {
             // 旧进度条 value 为 0..1 的比例: 归一化到 meter 的绝对值口径
             item.value = item.value * 100.0;
@@ -419,8 +419,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         item.showLast = readBool(json, "showLast", false);
         item.label    = readStringAny(json, {"label"});
         item.unit     = readString(json, "unit", "");
-        if (const Json* colors = field(json, "colors");
-            colors != nullptr && colors->is_array()) {
+        if (const Json* colors = field(json, "colors"); colors != nullptr && colors->is_array()) {
             for (const auto& c : *colors) {
                 if (c.is_string()) {
                     item.colors.emplace_back(c.get_string_view());
@@ -471,7 +470,8 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
                 if (cj.is_string()) {
                     col.title = clampTextImpl(cj.get_string_view(), limits.maxTextBytes);
                 } else {
-                    col.title = clampTextImpl(readStringAny(cj, {"title", "text"}), limits.maxTextBytes);
+                    col.title
+                        = clampTextImpl(readStringAny(cj, {"title", "text"}), limits.maxTextBytes);
                     col.align = alignOf(cj, {"align"});
                     col.color = readString(cj, "color", "");
                     if (const Json* w = field(cj, "w")) {
@@ -489,10 +489,11 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
             const size_t n = std::min(rows->size(), limits.maxTableRows);
             item.rows.reserve(n);
             for (size_t i = 0; i < n; ++i) {
-                const Json& rj = (*rows)[i];
+                const Json&            rj = (*rows)[i];
                 std::vector<TableCell> row;
                 if (rj.is_array()) {
-                    const size_t m = std::min(rj.size(), static_cast<size_t>(limits.maxTableColumns));
+                    const size_t m
+                        = std::min(rj.size(), static_cast<size_t>(limits.maxTableColumns));
                     row.reserve(m);
                     for (size_t k = 0; k < m; ++k) {
                         row.push_back(parseTableCell(rj[k], limits));
@@ -557,7 +558,8 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         return item;
     }
     if (item.kind == "control") {
-        item.control      = readString(json, "control", controlAlias);        item.controlLabel = clampTextImpl(readStringAny(json, {"label"}), limits.maxTextBytes);
+        item.control      = readString(json, "control", controlAlias);
+        item.controlLabel = clampTextImpl(readStringAny(json, {"label"}), limits.maxTextBytes);
         item.help         = clampTextImpl(readString(json, "help"), limits.maxTextBytes);
         if (const Json* def = field(json, "default")) {
             item.defaultValue = *def;
@@ -577,7 +579,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         if (const Json* opts = field(json, "options"); opts != nullptr && opts->is_array()) {
             const size_t n = std::min(opts->size(), limits.maxItems);
             for (size_t i = 0; i < n; ++i) {
-                const Json& oj = (*opts)[i];
+                const Json&   oj = (*opts)[i];
                 ControlOption opt;
                 if (oj.is_string()) {
                     opt.value = oj;
@@ -586,10 +588,8 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
                     if (const Json* v = field(oj, "value")) {
                         opt.value = *v;
                     }
-                    opt.label = clampTextImpl(
-                        readStringAny(oj, {"label", "text"}),
-                        limits.maxTextBytes
-                    );
+                    opt.label
+                        = clampTextImpl(readStringAny(oj, {"label", "text"}), limits.maxTextBytes);
                     if (opt.label.empty() && opt.value.is_string()) {
                         opt.label = std::string{opt.value.get_string_view()};
                     }
@@ -619,8 +619,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
         // props.items 是组件树写法; 顺带把 items 暴露出来便于调用方统一处理
         if (item.props.is_object()) {
             if (const Json* propsItems = field(item.props, "items");
-                propsItems != nullptr && propsItems->is_array()
-                && depth + 1 <= limits.maxDepth) {
+                propsItems != nullptr && propsItems->is_array() && depth + 1 <= limits.maxDepth) {
                 item.items = parseItemArray(*propsItems, limits, depth + 1);
             }
         }
@@ -634,6 +633,7 @@ Item parseItem(const Json& json, const ParseLimits& limits, int depth) {
 Item parseItem(const Json& json) {
     return parseItem(json, kDefaultParseLimits, 0);
 }
+
 std::vector<Item> parseItems(const Json& json, const ParseLimits& limits) {
     return parseItemArray(json, limits, 0);
 }
@@ -659,7 +659,7 @@ std::string clampText(std::string_view text, size_t maxBytes) {
 // ---------------------------------------------------------------------------
 
 Json dumpItem(const Item& item) {
-    Json out = Json::object();
+    Json out    = Json::object();
     out["kind"] = item.kind;
     if (!item.id.empty()) {
         out["id"] = item.id;
@@ -729,7 +729,7 @@ Json dumpItem(const Item& item) {
             for (const auto& t : item.thresholds) {
                 // 注意: Json 有 initializer_list 构造, `Json{x}` 会构造出"单元素数组";
                 // 标量值一律用圆括号构造
-                Json entry = Json::object();
+                Json entry     = Json::object();
                 entry["at"]    = t.at;
                 entry["color"] = t.color;
                 th.push_back(std::move(entry));
@@ -830,7 +830,7 @@ Json dumpItem(const Item& item) {
         for (const auto& row : item.rows) {
             Json rj = Json::array();
             for (const auto& cell : row) {
-                Json cj = Json::object();
+                Json cj    = Json::object();
                 cj["text"] = cell.text;
                 if (!cell.color.empty()) {
                     cj["color"] = cell.color;
@@ -852,7 +852,7 @@ Json dumpItem(const Item& item) {
         }
         // 树节点序列化
         std::function<Json(const TreeNode&)> dumpNode = [&](const TreeNode& node) {
-            Json nj = Json::object();
+            Json nj     = Json::object();
             nj["label"] = node.label;
             if (!node.color.empty() && node.color != "normal") {
                 nj["color"] = node.color;
@@ -930,7 +930,7 @@ Json dumpItem(const Item& item) {
         if (!item.options.empty()) {
             Json opts = Json::array();
             for (const auto& o : item.options) {
-                Json oj = Json::object();
+                Json oj     = Json::object();
                 oj["value"] = o.value.is_null() ? Json(o.label) : o.value;
                 oj["label"] = o.label;
                 if (!o.color.empty()) {
@@ -1012,8 +1012,8 @@ std::vector<std::string> wrapLines(std::string_view text, int width) {
     }
     size_t lineStart = 0;
     while (lineStart <= text.size()) {
-        const size_t nl  = text.find('\n', lineStart);
-        const size_t end = (nl == std::string_view::npos) ? text.size() : nl;
+        const size_t     nl   = text.find('\n', lineStart);
+        const size_t     end  = (nl == std::string_view::npos) ? text.size() : nl;
         std::string_view line = text.substr(lineStart, end - lineStart);
         while (!line.empty()) {
             int              used = 0;
@@ -1060,9 +1060,9 @@ std::string cellText(const TableCell& cell) {
 void plainTextItem(const Item& item, int indent, int width, std::vector<std::string>& out);
 
 void plainTextItems(
-    const std::vector<Item>& items,
-    int                      indent,
-    int                      width,
+    const std::vector<Item>&  items,
+    int                       indent,
+    int                       width,
     std::vector<std::string>& out
 ) {
     for (const auto& item : items) {
@@ -1135,9 +1135,9 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
         return;
     }
     if (item.kind == "meter") {
-        const double total = (item.total > 0) ? item.total : 100.0;
-        const double ratio = std::clamp(item.value / total, 0.0, 1.0);
-        const int    w     = (item.width > 0) ? item.width : 10;
+        const double total  = (item.total > 0) ? item.total : 100.0;
+        const double ratio  = std::clamp(item.value / total, 0.0, 1.0);
+        const int    w      = (item.width > 0) ? item.width : 10;
         const int    filled = static_cast<int>(ratio * w + 0.5);
         std::string  bar;
         bar.reserve(static_cast<size_t>(w));
@@ -1159,12 +1159,12 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
         }
         if (!item.data.empty()) {
             const auto [minIt, maxIt] = std::minmax_element(item.data.begin(), item.data.end());
-            const double lo = item.hasMin ? item.minValue : *minIt;
-            const double hi = item.hasMax ? item.maxValue : *maxIt;
-            const double span = (hi > lo) ? (hi - lo) : 0.0;
+            const double lo           = item.hasMin ? item.minValue : *minIt;
+            const double hi           = item.hasMax ? item.maxValue : *maxIt;
+            const double span         = (hi > lo) ? (hi - lo) : 0.0;
             for (double v : item.data) {
-                const double r = (span > 0) ? ((v - lo) / span) : 0.5;
-                line += sparkBlock(r);
+                const double r  = (span > 0) ? ((v - lo) / span) : 0.5;
+                line           += sparkBlock(r);
             }
             if (item.showLast || item.unit.empty()) {
                 line += " " + numText(item.data.back()) + item.unit;
@@ -1181,7 +1181,12 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
             keyW = std::max(keyW, static_cast<size_t>(displayWidth(p.key)));
         }
         for (const auto& p : item.pairs) {
-            appendText(out, padRightToWidth(p.key, static_cast<int>(keyW)) + item.sep + p.value, ind, width);
+            appendText(
+                out,
+                padRightToWidth(p.key, static_cast<int>(keyW)) + item.sep + p.value,
+                ind,
+                width
+            );
         }
         return;
     }
@@ -1211,7 +1216,7 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
     if (item.kind == "box" || item.kind == "collapse") {
         const bool collapsed = (item.kind == "collapse") && !item.expanded;
         if (!item.title.empty()) {
-            appendText(out, collapsed ? ("▸ " + item.title) : item.title, ind, width);
+            appendText(out, collapsed ? ("+ " + item.title) : item.title, ind, width);
         }
         if (!collapsed) {
             plainTextItems(item.items, ind + 2, width, out);
@@ -1228,7 +1233,8 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
         }
         for (const auto& row : item.rows) {
             for (size_t c = 0; c < row.size() && c < widths.size(); ++c) {
-                widths[c] = std::max(widths[c], static_cast<size_t>(displayWidth(cellText(row[c]))));
+                widths[c]
+                    = std::max(widths[c], static_cast<size_t>(displayWidth(cellText(row[c]))));
             }
         }
         auto emitRow = [&](const std::vector<std::string>& cells) {
@@ -1239,10 +1245,10 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
                 }
                 std::string cell = cells[c];
                 if (item.columns[c].align == "right") {
-                    const size_t pad = (widths[c] > displayWidth(cell))
-                                           ? (widths[c] - static_cast<size_t>(displayWidth(cell)))
-                                           : 0;
-                    line += std::string(pad, ' ') + cell;
+                    const size_t pad  = (widths[c] > displayWidth(cell))
+                                            ? (widths[c] - static_cast<size_t>(displayWidth(cell)))
+                                            : 0;
+                    line             += std::string(pad, ' ') + cell;
                 } else {
                     line += padRightToWidth(cell, static_cast<int>(widths[c]));
                 }
@@ -1276,29 +1282,32 @@ void plainTextItem(const Item& item, int indent, int width, std::vector<std::str
         return;
     }
     if (item.kind == "tree") {
-        std::function<void(const std::vector<TreeNode>&, const std::string&)> emit =
-            [&](const std::vector<TreeNode>& nodes, const std::string& prefix) {
-                for (size_t i = 0; i < nodes.size(); ++i) {
-                    const auto& node = nodes[i];
-                    const bool  last = (i + 1 == nodes.size());
-                    std::string line = item.connector
-                                           ? prefix + (last ? "└─ " : "├─ ") + node.label
-                                           : prefix + node.label;
-                    appendText(out, line, ind, width);
-                    if (!node.children.empty()) {
-                        emit(node.children, item.connector ? prefix + (last ? "   " : "│  ") : prefix);
-                    }
-                }
-            };
+        std::function<void(const std::vector<TreeNode>&, const std::string&)> emit
+            = [&](const std::vector<TreeNode>& nodes, const std::string& prefix) {
+                  for (size_t i = 0; i < nodes.size(); ++i) {
+                      const auto& node = nodes[i];
+                      const bool  last = (i + 1 == nodes.size());
+                      std::string line = item.connector
+                                             ? prefix + (last ? "└─ " : "├─ ") + node.label
+                                             : prefix + node.label;
+                      appendText(out, line, ind, width);
+                      if (!node.children.empty()) {
+                          emit(
+                              node.children,
+                              item.connector ? prefix + (last ? "   " : "│  ") : prefix
+                          );
+                      }
+                  }
+              };
         emit(item.nodes, "");
         return;
     }
     if (item.kind == "control") {
-        std::string line = item.controlLabel.empty() ? std::string{"控件"} : item.controlLabel;
-        line += ": ";
+        std::string line  = item.controlLabel.empty() ? std::string{"控件"} : item.controlLabel;
+        line             += ": ";
         if (item.control == "checkbox") {
-            const bool checked = item.defaultValue.is_bool() && item.defaultValue.get<bool>();
-            line += checked ? "[x]" : "[ ]";
+            const bool checked  = item.defaultValue.is_bool() && item.defaultValue.get<bool>();
+            line               += checked ? "[x]" : "[ ]";
         } else if (item.control == "buttons" || item.control == "select") {
             for (size_t i = 0; i < item.options.size(); ++i) {
                 if (i > 0) {

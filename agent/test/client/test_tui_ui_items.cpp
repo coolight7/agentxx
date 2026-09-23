@@ -33,8 +33,8 @@ int g_tui_ui_items_failed = 0;
 namespace agentxx {
 namespace test {
 
-using agentxx::client::ScrollItem;
 using agentxx::client::Scrollable;
+using agentxx::client::ScrollItem;
 using agentxx::client::TUITheme;
 using agentxx::client::UiHitRegion;
 using agentxx::client::UiHitRegionKind;
@@ -102,8 +102,8 @@ std::string renderToGrid(const UiRenderResult& res, int w = 60, int h = 20) {
     std::string out;
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
-            const std::string& ch = screen.PixelAt(x, y).character;
-            out += ch.empty() ? std::string{" "} : ch;
+            const std::string& ch  = screen.PixelAt(x, y).character;
+            out                   += ch.empty() ? std::string{" "} : ch;
         }
         out += '\n';
     }
@@ -111,12 +111,16 @@ std::string renderToGrid(const UiRenderResult& res, int w = 60, int h = 20) {
 }
 
 /// 行模型元素真实布局后的高度 (行)
-int layoutLines(UiRenderResult& res, int w) {    ftxui::Elements els;
+int layoutLines(UiRenderResult& res, int w) {
+    ftxui::Elements els;
     for (const auto& row : res.rows) {
         els.push_back(row.element);
     }
     auto el = ftxui::vbox(std::move(els));
-    return agentxx::client::layoutAndMeasure(el, ftxui::Box{0, w - 1, 0, agentxx::client::kTallHeight});
+    return agentxx::client::layoutAndMeasure(
+        el,
+        ftxui::Box{0, w - 1, 0, agentxx::client::kTallHeight}
+    );
 }
 
 /// 估算的行数 (与布局高度一致才说明测量与渲染同源)
@@ -177,8 +181,11 @@ void renderOnce(const ftxui::Component& comp, int w = 60, int h = 12) {
 TestResult testTuiUiItems() {
     // ---------------- 文本与样式 ----------------
     {
-        auto res  = renderJson(R"([{"kind":"text","text":"hello"},{"kind":"gap","lines":2},
-                                   {"kind":"separator"}])", ctxFor(20));
+        auto res = renderJson(
+            R"([{"kind":"text","text":"hello"},{"kind":"gap","lines":2},
+                                   {"kind":"separator"}])",
+            ctxFor(20)
+        );
         auto text = renderToText(res);
         XX_TEST_EXPECT_TRUE(screenHas(text, "hello"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "─"));
@@ -194,7 +201,7 @@ TestResult testTuiUiItems() {
 
     // ---------------- 未知 kind 与 canvas 降级 ----------------
     {
-        auto res  = renderJson(
+        auto res = renderJson(
             R"([{"kind":"unknown-x","fallback":"降级文本"},{"kind":"canvas","fallback":"[图]"},{"kind":"custom","component":"no-such"}])",
             ctxFor(40)
         );
@@ -206,11 +213,14 @@ TestResult testTuiUiItems() {
 
     // ---------------- 表格 ----------------
     {
-        auto res = renderJson(R"([
+        auto res = renderJson(
+            R"([
             {"kind":"table","header":true,
              "columns":[{"title":"File","w":10},{"title":"Size","align":"right","w":6}],
              "rows":[["main.cpp","12.4K"],["a-very-long-file-name.cpp","1K"]]}
-        ])", ctxFor(40));
+        ])",
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_TRUE(screenHas(text, "File"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "Size"));
@@ -225,11 +235,14 @@ TestResult testTuiUiItems() {
     }
     {
         // 单元格可点: 登记区域 (标识 = 动作 id, 参数原样带回)
-        auto res = renderJson(R"([
+        auto res = renderJson(
+            R"([
             {"kind":"table","header":false,
              "columns":[{"title":"A","w":6},{"title":"B","w":6}],
              "rows":[["x",{"text":"open","action":"open:file","args":{"line":12}}]]}
-        ])", ctxFor(40));
+        ])",
+            ctxFor(40)
+        );
         const auto* region = findRegion(res, "open:file");
         XX_TEST_EXPECT_TRUE(region != nullptr);
         if (region != nullptr) {
@@ -244,8 +257,11 @@ TestResult testTuiUiItems() {
 
     // ---------------- 键值对与层级列表 ----------------
     {
-        auto res  = renderJson(R"([{"kind":"kv","items":[{"k":"Model","v":"gpt-x"},
-                                                          {"k":"LongKey","v":"1"}]}])", ctxFor(40));
+        auto res = renderJson(
+            R"([{"kind":"kv","items":[{"k":"Model","v":"gpt-x"},
+                                                          {"k":"LongKey","v":"1"}]}])",
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_TRUE(screenHas(text, "Model"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "gpt-x"));
@@ -255,10 +271,13 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_EQ(layoutLines(res, 40), 2);
     }
     {
-        auto res = renderJson(R"([{"kind":"tree","nodes":[
+        auto res = renderJson(
+            R"([{"kind":"tree","nodes":[
             {"label":"src","children":[{"label":"main.cpp","action":"open:main"},
                                        {"label":"io"}]}
-        ]}])", ctxFor(40));
+        ]}])",
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_TRUE(screenHas(text, "src"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "├─ main.cpp"));
@@ -269,18 +288,21 @@ TestResult testTuiUiItems() {
     }
     {
         // 树: 宿主管理折叠 (提供折叠状态查询时, 有子节点的行可点击展开/收起)
-        auto ctx = ctxFor(40);
+        auto ctx             = ctxFor(40);
         ctx.collapseExpanded = [](const std::string& id, bool defaultValue) {
             // 路径键: 从根到该节点的路径 (如 "src/io/")
             XX_TEST_EXPECT_TRUE(id == "src/" || id == "src/io/");
             return id != "src/"; // 收起 src, 展开其余
         };
-        auto res  = renderJson(R"([{"kind":"tree","nodes":[
+        auto res = renderJson(
+            R"([{"kind":"tree","nodes":[
             {"label":"src","children":[{"label":"main.cpp"},{"label":"io","children":[
                 {"label":"a.cpp"}]}]}
-        ]}])", ctx);
+        ]}])",
+            ctx
+        );
         auto text = renderToText(res, 40);
-        XX_TEST_EXPECT_TRUE(screenHas(text, "▸ src"));     // 收起标记
+        XX_TEST_EXPECT_TRUE(screenHas(text, "+ src"));     // 收起标记
         XX_TEST_EXPECT_FALSE(screenHas(text, "main.cpp")); // 子树不渲染
         XX_TEST_EXPECT_FALSE(screenHas(text, "a.cpp"));
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
@@ -293,33 +315,42 @@ TestResult testTuiUiItems() {
         }
 
         // 展开态: 子节点可见, 嵌套节点登记自己的路径键
-        auto ctx2 = ctxFor(40);
+        auto ctx2             = ctxFor(40);
         ctx2.collapseExpanded = [](const std::string&, bool) {
             return true;
         };
-        auto res2  = renderJson(R"([{"kind":"tree","nodes":[
+        auto res2 = renderJson(
+            R"([{"kind":"tree","nodes":[
             {"label":"src","children":[{"label":"main.cpp"},{"label":"io","children":[
                 {"label":"a.cpp"}]}]}
-        ]}])", ctx2);
+        ]}])",
+            ctx2
+        );
         auto text2 = renderToText(res2, 40);
-        XX_TEST_EXPECT_TRUE(screenHas(text2, "▾ src"));
+        XX_TEST_EXPECT_TRUE(screenHas(text2, "- src"));
         XX_TEST_EXPECT_TRUE(screenHas(text2, "main.cpp"));
         XX_TEST_EXPECT_TRUE(screenHas(text2, "a.cpp"));
         XX_TEST_EXPECT_EQ(measuredLines(res2), size_t{4});
         XX_TEST_EXPECT_TRUE(findRegion(res2, "src/io/") != nullptr);
 
         // 无折叠状态查询时保持全展开 (行式前端/不关心折叠的调用方行为不变)
-        auto res3 = renderJson(R"([{"kind":"tree","nodes":[
+        auto res3 = renderJson(
+            R"([{"kind":"tree","nodes":[
             {"label":"src","children":[{"label":"main.cpp"}]}
-        ]}])", ctxFor(40));
+        ]}])",
+            ctxFor(40)
+        );
         XX_TEST_EXPECT_TRUE(screenHas(renderToText(res3, 40), "main.cpp"));
-        XX_TEST_EXPECT_FALSE(screenHas(renderToText(res3, 40), "▾"));
+        XX_TEST_EXPECT_FALSE(screenHas(renderToText(res3, 40), "-"));
     }
 
     // ---------------- 分组框 / 折叠 / 横排 ----------------
     {
-        auto res = renderJson(R"([{"kind":"box","title":"Index","border":"round",
-                                   "items":[{"kind":"text","text":"inner"}]}])", ctxFor(30));
+        auto res = renderJson(
+            R"([{"kind":"box","title":"Index","border":"round",
+                                   "items":[{"kind":"text","text":"inner"}]}])",
+            ctxFor(30)
+        );
         auto text = renderToText(res, 30);
         XX_TEST_EXPECT_TRUE(screenHas(text, "Index"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "inner"));
@@ -327,19 +358,25 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_EQ(layoutLines(res, 30), 3);
     }
     {
-        // 折叠: 展开时提示符为 ▾ 且含子项; 折叠时 ▸ 且不含子项
-        auto expanded = renderJson(R"([{"kind":"collapse","id":"c1","title":"Stack","expanded":true,
-                                        "items":[{"kind":"text","text":"detail"}]}])", ctxFor(30));
+        // 折叠: 展开时提示符为 - 且含子项; 折叠时 + 且不含子项
+        auto expanded = renderJson(
+            R"([{"kind":"collapse","id":"c1","title":"Stack","expanded":true,
+                                        "items":[{"kind":"text","text":"detail"}]}])",
+            ctxFor(30)
+        );
         auto expandedText = renderToText(expanded, 30);
-        XX_TEST_EXPECT_TRUE(screenHas(expandedText, "▾ Stack"));
+        XX_TEST_EXPECT_TRUE(screenHas(expandedText, "- Stack"));
         XX_TEST_EXPECT_TRUE(screenHas(expandedText, "detail"));
         XX_TEST_EXPECT_EQ(measuredLines(expanded), size_t{2});
         XX_TEST_EXPECT_EQ(layoutLines(expanded, 30), 2);
 
-        auto collapsed = renderJson(R"([{"kind":"collapse","id":"c1","title":"Stack","expanded":false,
-                                        "items":[{"kind":"text","text":"detail"}]}])", ctxFor(30));
+        auto collapsed = renderJson(
+            R"([{"kind":"collapse","id":"c1","title":"Stack","expanded":false,
+                                        "items":[{"kind":"text","text":"detail"}]}])",
+            ctxFor(30)
+        );
         auto collapsedText = renderToText(collapsed, 30);
-        XX_TEST_EXPECT_TRUE(screenHas(collapsedText, "▸ Stack"));
+        XX_TEST_EXPECT_TRUE(screenHas(collapsedText, "+ Stack"));
         XX_TEST_EXPECT_FALSE(screenHas(collapsedText, "detail"));
 
         // 标题行登记折叠区域 (宿主据此切换展开状态)
@@ -351,22 +388,28 @@ TestResult testTuiUiItems() {
     }
     {
         // 折叠状态由宿主的回调决定 (描述里 expanded=true, 宿主返回 false)
-        auto ctx = ctxFor(30);
+        auto ctx             = ctxFor(30);
         ctx.collapseExpanded = [](const std::string&, bool) {
             return false;
         };
-        auto res  = renderJson(R"([{"kind":"collapse","id":"c1","title":"Stack","expanded":true,
-                                    "items":[{"kind":"text","text":"detail"}]}])", ctx);
+        auto res = renderJson(
+            R"([{"kind":"collapse","id":"c1","title":"Stack","expanded":true,
+                                    "items":[{"kind":"text","text":"detail"}]}])",
+            ctx
+        );
         auto text = renderToText(res, 30);
-        XX_TEST_EXPECT_TRUE(screenHas(text, "▸ Stack"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "+ Stack"));
         XX_TEST_EXPECT_FALSE(screenHas(text, "detail"));
     }
     {
         // 横排: 固定宽度列 + 自适应列, 同一行渲染
-        auto res = renderJson(R"([{"kind":"row","gap":1,"items":[
+        auto res = renderJson(
+            R"([{"kind":"row","gap":1,"items":[
             {"kind":"text","text":"CPU","w":4},
             {"kind":"text","text":"55%"}
-        ]}])", ctxFor(20));
+        ]}])",
+            ctxFor(20)
+        );
         auto text = renderToText(res, 20);
         XX_TEST_EXPECT_TRUE(screenHas(text, "CPU"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "55%"));
@@ -378,18 +421,24 @@ TestResult testTuiUiItems() {
     }
     {
         // 极窄宽度: 列宽收缩但不崩 (仍渲染出内容)
-        auto res = renderJson(R"([{"kind":"row","gap":1,"items":[
+        auto res = renderJson(
+            R"([{"kind":"row","gap":1,"items":[
             {"kind":"text","text":"abcdefghij"},{"kind":"text","text":"klmnopqrst"}
-        ]}])", ctxFor(6));
+        ]}])",
+            ctxFor(6)
+        );
         auto text = renderToText(res, 6);
         XX_TEST_EXPECT_TRUE(text.size() > 0);
         XX_TEST_EXPECT_GE(layoutLines(res, 6), 1);
     }
     {
         // 极宽宽度: 自适应列吃掉剩余宽度 (内容仍在)
-        auto res = renderJson(R"([{"kind":"row","items":[
+        auto res = renderJson(
+            R"([{"kind":"row","items":[
             {"kind":"text","text":"left"},{"kind":"sparkline","data":[1,2,3]}
-        ]}])", ctxFor(120));
+        ]}])",
+            ctxFor(120)
+        );
         auto text = renderToText(res, 120);
         XX_TEST_EXPECT_TRUE(screenHas(text, "left"));
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
@@ -397,10 +446,13 @@ TestResult testTuiUiItems() {
     {
         // align: "stretch" 横向铺满: 无自适应列时剩余宽度均分给各列
         // 两列各声明 4 列宽 + 中间 1 列 = 9 列, 可用 21 列 → 剩余 12 列均分 (每列 +6)
-        auto res = renderJson(R"([{"kind":"row","gap":1,"align":"stretch","items":[
+        auto res = renderJson(
+            R"([{"kind":"row","gap":1,"align":"stretch","items":[
             {"kind":"text","text":"AA","w":4},
             {"kind":"text","text":"BB","w":4}
-        ]}])", ctxFor(21));
+        ]}])",
+            ctxFor(21)
+        );
         auto text = renderToGrid(res, 21);
         XX_TEST_EXPECT_TRUE(screenHas(text, "AA"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "BB"));
@@ -412,19 +464,24 @@ TestResult testTuiUiItems() {
     }
     {
         // 对照: 默认 align (left) 时剩余宽度归最后一列, 第二列仍从固定宽度处开始
-        auto res = renderJson(R"([{"kind":"row","gap":1,"items":[
+        auto res = renderJson(
+            R"([{"kind":"row","gap":1,"items":[
             {"kind":"text","text":"AA","w":4},
             {"kind":"text","text":"BB","w":4}
-        ]}])", ctxFor(21));
-        auto text = renderToGrid(res, 21);
+        ]}])",
+            ctxFor(21)
+        );
+        auto       text      = renderToGrid(res, 21);
         const auto firstLine = text.substr(0, text.find('\n'));
         XX_TEST_EXPECT_EQ(firstLine.find("BB"), size_t{5});
     }
 
     // ---------------- 图表 ----------------
     {
-        auto res = renderJson(R"([{"kind":"sparkline","data":[0,1,2,3,4],"color":"accent"}])",
-                               ctxFor(40));
+        auto res = renderJson(
+            R"([{"kind":"sparkline","data":[0,1,2,3,4],"color":"accent"}])",
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_TRUE(screenHas(text, "▁") || screenHas(text, "▂"));
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
@@ -439,9 +496,9 @@ TestResult testTuiUiItems() {
             }
             json += std::to_string(i % 10);
         }
-        json += R"(]}])";
-        auto res  = renderJson(json.c_str(), ctxFor(30));
-        auto text = renderToText(res, 30);
+        json      += R"(]}])";
+        auto res   = renderJson(json.c_str(), ctxFor(30));
+        auto text  = renderToText(res, 30);
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
         XX_TEST_EXPECT_EQ(layoutLines(res, 30), 1);
         XX_TEST_EXPECT_TRUE(text.size() > 0);
@@ -454,8 +511,11 @@ TestResult testTuiUiItems() {
     }
     {
         // 计量条: 标签 + 数值
-        auto res = renderJson(R"([{"kind":"meter","value":55,"total":100,"width":10,
-                                   "label":"CPU","unit":"%" }])", ctxFor(40));
+        auto res = renderJson(
+            R"([{"kind":"meter","value":55,"total":100,"width":10,
+                                   "label":"CPU","unit":"%" }])",
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_TRUE(screenHas(text, "CPU"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "55%"));
@@ -465,10 +525,12 @@ TestResult testTuiUiItems() {
 
     // ---------------- 控件与提交行 ----------------
     {
-        auto res  = renderJson(R"([{"kind":"control","id":"mode","control":"buttons",
+        auto res = renderJson(
+            R"([{"kind":"control","id":"mode","control":"buttons",
                                     "label":"模式","options":[{"value":"fast","label":"Fast "},
                                                               {"value":"safe","label":"Safe"}]}])",
-                                 ctxFor(40));
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_TRUE(screenHas(text, "模式"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "Fast"));
@@ -478,11 +540,11 @@ TestResult testTuiUiItems() {
     }
     {
         // 提供表单状态 → 登记控件区域 (子序号 = 候选值下标)
-        auto ctx      = ctxFor(40);
-        auto form     = std::make_shared<agentxx::client::UiFormState>();
-        ctx.form      = form.get();
+        auto ctx  = ctxFor(40);
+        auto form = std::make_shared<agentxx::client::UiFormState>();
+        ctx.form  = form.get();
         agentxx::client::UiRenderResult res;
-        auto items = agentxx::ui::parseItemList(Json::parse(
+        auto                            items = agentxx::ui::parseItemList(Json::parse(
             R"({"items":[{"kind":"control","id":"mode","control":"buttons",
                "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}]}]})"
         ));
@@ -515,7 +577,7 @@ TestResult testTuiUiItems() {
         auto ctx  = ctxFor(40);
         auto form = std::make_shared<agentxx::client::UiFormState>();
         ctx.form  = form.get();
-        auto res  = renderJson(R"([{"kind":"submit","label":"应用","cancelLabel":"取消"}])", ctx);
+        auto res = renderJson(R"([{"kind":"submit","label":"应用","cancelLabel":"取消"}])", ctx);
         const auto* submit = findRegion(res, "__submit");
         const auto* cancel = findRegion(res, "__cancel");
         XX_TEST_EXPECT_TRUE(submit != nullptr);
@@ -530,9 +592,9 @@ TestResult testTuiUiItems() {
     }
     {
         // 表单状态初始化后按状态渲染 (勾选态/选中项来自状态表)
-        auto ctx  = ctxFor(40);
-        auto form = std::make_shared<agentxx::client::UiFormState>();
-        ctx.form  = form.get();
+        auto ctx   = ctxFor(40);
+        auto form  = std::make_shared<agentxx::client::UiFormState>();
+        ctx.form   = form.get();
         auto items = agentxx::ui::parseItemList(Json::parse(
             R"({"items":[{"kind":"control","id":"opt","control":"select",
                "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]})"
@@ -543,15 +605,17 @@ TestResult testTuiUiItems() {
         agentxx::client::UiRenderResult res;
         agentxx::client::renderItems(items, ctx, res);
         auto text = renderToText(res, 40);
-        // 选项列表: 选中项带指示符 ▸ (反色底), 未选中项同宽占位
-        XX_TEST_EXPECT_TRUE(screenHas(text, "▸ B"));
+        // 选项列表: 选中项带指示符 + (反色底), 未选中项同宽占位
+        XX_TEST_EXPECT_TRUE(screenHas(text, "+ B"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "  A"));
     }
 
     // ---------------- 文本 + 按钮合并行 ----------------
     {
-        auto res  = renderJson(R"([{"kind":"text","text":"|- "},{"kind":"button","label":"Rebuild"}])",
-                               ctxFor(40));
+        auto res = renderJson(
+            R"([{"kind":"text","text":"|- "},{"kind":"button","label":"Rebuild"}])",
+            ctxFor(40)
+        );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
         XX_TEST_EXPECT_TRUE(screenHas(text, "|- "));
@@ -560,9 +624,9 @@ TestResult testTuiUiItems() {
     {
         // 无绑定时按钮不可点 (registry 为空 → 视为可点; 有 registry 且无绑定时不可点)
         agentxx::plugin::ClientUiRegistry reg;
-        auto                            ctx = ctxFor(40);
-        ctx.registry                        = &reg;
-        ctx.plugin                          = "test_plugin";
+        auto                              ctx = ctxFor(40);
+        ctx.registry                          = &reg;
+        ctx.plugin                            = "test_plugin";
         auto res = renderJson(R"([{"kind":"button","label":"Go","action":"run"}])", ctx);
         XX_TEST_EXPECT_EQ(allRegions(res).size(), size_t{0});
 
@@ -571,7 +635,7 @@ TestResult testTuiUiItems() {
         binding.plugin   = "test_plugin";
         binding.cb       = [](const AgentxxUiActionContext*, void*) {};
         reg.actionBindings.push_back(binding);
-        auto bound = renderJson(R"([{"kind":"button","label":"Go","action":"run"}])", ctx);
+        auto        bound  = renderJson(R"([{"kind":"button","label":"Go","action":"run"}])", ctx);
         const auto* region = findRegion(bound, "run");
         XX_TEST_EXPECT_TRUE(region != nullptr);
         if (region != nullptr) {
@@ -610,7 +674,8 @@ TestResult testTuiUiItems() {
         auto scroll = std::make_shared<Scrollable>([items]() {
             return *items;
         });
-        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(4));
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(40), ftxui::Dimension::Fixed(4));
         ftxui::Render(screen, scroll->Render());
         std::string text;
         for (int y = 0; y < 4; ++y) {
@@ -638,7 +703,7 @@ TestResult testTuiUiItems() {
         // 登记表每帧开头清空 (未重新登记的项不再参与命中), 但元素可能被缓存到下一帧
         // (消息列表的 banner 就是如此) —— 元素自持 Box, 清空后再次布局不写已释放内存
         agentxx::client::UiHitMap hits;
-        auto element = hits.add(ftxui::text("Retry"), std::string{"retry"});
+        auto                      element = hits.add(ftxui::text("Retry"), std::string{"retry"});
         element->ComputeRequirement();
         element->SetBox(ftxui::Box{0, 10, 0, 0});
         const ftxui::Box* probe = nullptr;
@@ -661,9 +726,9 @@ TestResult testTuiUiItems() {
         auto items = std::make_shared<std::vector<ScrollItem>>();
         for (int i = 0; i < 20; ++i) {
             agentxx::ui::Item item;
-            item.kind = "text";
-            item.text = "row-" + std::to_string(i);
-            UiRenderCtx ctx = ctxFor(20);
+            item.kind          = "text";
+            item.text          = "row-" + std::to_string(i);
+            UiRenderCtx    ctx = ctxFor(20);
             UiRenderResult res;
             agentxx::client::renderItem(item, ctx, res);
 
@@ -718,10 +783,10 @@ TestResult testTuiUiItems() {
 
     // ---------------- 面积型分隔线 (面性弹窗) ----------------
     {
-        auto ctx = ctxFor(20);
+        auto ctx           = ctxFor(20);
         ctx.separatorStyle = agentxx::client::UiSeparatorStyle::Block;
-        auto res  = renderJson(R"([{"kind":"separator"}])", ctx);
-        auto text = renderToText(res, 20);
+        auto res           = renderJson(R"([{"kind":"separator"}])", ctx);
+        auto text          = renderToText(res, 20);
         XX_TEST_EXPECT_FALSE(screenHas(text, "─")); // 面性风格不画横线
     }
 
