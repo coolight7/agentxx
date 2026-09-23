@@ -343,6 +343,41 @@ public:
     /// - 无更新时不改动界面状态
     void applyUpdateCheckResult(agentxx::client::UpdateCheckResult result);
 
+    // ---- 即时更新检查 (设置弹窗"检查更新"条目) ----
+
+    /// 发起一次即时更新检查 (UI 线程; 设置弹窗"检查更新"条目激活时调用)
+    ///
+    /// - 与启动检查共用 [agentxx::client::checkLatestReleaseForCurrentVersion]
+    ///   (client io 线程协程, 不阻塞 UI), 不受 `启动时检查更新` 开关影响
+    /// - 立即 toast "正在检查更新" 作为点击反馈; 已有检查在跑时不重复发请求
+    /// - 结果经 [applyManualUpdateCheckResult] 投递到 UI 线程分支处理:
+    ///   有新版本 -> 打开 [UpdateNoticeOverlay]; 无更新/失败 -> toast 说明
+    void requestUpdateCheckNow();
+
+    /// 处理即时检查结果 (client io 线程): 复位进行中标志, 有新版本时同步写入
+    /// 共享状态 (Info 侧边栏提示行), 再把结果投递到 UI 线程 (弹窗/toast 只能在
+    /// UI 线程操作)
+    void applyManualUpdateCheckResult(agentxx::client::UpdateCheckResult result);
+
+    /// 展示即时检查结果 (UI 线程)
+    /// - 有新版本: 打开更新提示弹窗 (见 [openUpdateNotice])
+    /// - 无更新: toast "已经是最新版本"
+    /// - 检查失败: toast 失败原因 (手动触发的动作必须有反馈, 不像启动检查那样静默)
+    void showUpdateCheckResult(const agentxx::client::UpdateCheckResult& result);
+
+    /// 打开更新提示弹窗 (UI 线程; 替换当前模态, 与"关于"弹窗一致)
+    ///
+    /// 弹窗显示 "新版本 {当前} -> {新}" + 发布页链接 + [ 前往下载 ] 按钮;
+    /// 按钮经 [agentxx::client::openUrlInBrowser] 交给系统默认程序打开浏览器
+    /// (成功则关闭弹窗, 失败保留弹窗并提示 —— 链接可直接拖选复制)
+    void openUpdateNotice(std::string latestTag, std::string url);
+
+    /// 测试辅助: 当前 toast 提示文本 (空 = 无提示)
+    /// - toastText_ 为 UI 线程独占状态, 仅供单线程测试读取
+    std::string_view toastText() const {
+        return toastText_;
+    }
+
     /// 刷新组件共享上下文的帧快照 (UI 线程; 帧循环每帧调用一次)
     ///
     /// - 取本帧状态快照并挂上 client 插件 UI 注册表快照
@@ -636,6 +671,15 @@ private:
     std::vector<ScrollItem> renderLogWindow();
     ftxui::Element          renderLogSidebarFooter();
 
+    /// 在整棵界面树 (主界面或弹窗模态) 之上叠加 toast 提示 (UI 线程; 每帧渲染调用)
+    ///
+    /// - 提示画在模态层之上: 弹窗打开时主界面整棵树不参与渲染 (见 ModalContainer),
+    ///   提示若只画在主界面里会被弹窗盖住 (例如在设置弹窗里点"检查更新"的进行中
+    ///   与结果提示)
+    /// - 渲染时检查超时: 超过 kToastDuration 清除提示
+    ///   (toastText_/toastShownAt_ 为 UI 线程独占, 仅在本帧渲染中读写)
+    ftxui::Element applyToastOverlay(ftxui::Element content);
+
     // -----------------------------------------------------------------------
     // 状态
     // -----------------------------------------------------------------------
@@ -714,6 +758,11 @@ private:
     std::shared_ptr<asio::steady_timer> toastTimer_;
     /// toast 显示时长
     static constexpr std::chrono::seconds kToastDuration{3};
+
+    // ---- 即时更新检查 (设置弹窗"检查更新"; 跨线程原子标志) ----
+    /// 是否已有即时检查在跑 (UI 线程置位, client io 线程的协程收尾时复位):
+    /// 用户连点"检查更新"时不重复发起请求
+    std::atomic<bool> updateChecking_{false};
 
     // ---- 鼠标拖选跟踪 (UI 线程独占, 用于"松开即复制") ----
     /// 左键是否处于按下状态 (Left Pressed 置位, Released 复位)

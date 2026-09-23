@@ -5,11 +5,13 @@
 // - 版本比较: 三段数字逐段比较
 // - 设置项"启动时检查更新": 默认开、切换持久化 (TUI 侧开关)
 // - 请求失败路径: 不可达端点返回 ok=false 且带原因 (不抛异常)
+// - "前往下载"链接校验 (open_url.h): 只放行 http/https 且字符安全
 // - 本地 HTTP 服务端到端 (302 Location / JSON / 404) 见 `agentxx_test http`
 #include "agentxx-test/client/test_update_check.h"
 
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/update_check.h"
+#include "agentxx-client/util/open_url.h"
 #include "agentxx/util/settings_db.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -187,6 +189,39 @@ void test_check_failure_returns_error() {
     }
 }
 
+/// "前往下载"用的链接校验 (open_url.h): 只放行 http/https, 且不含能破坏
+/// shell 命令串的字符 (校验不通过时不会发起任何打开动作)
+void test_openable_url_validation() {
+    // 正常发布页链接 (含 tag 与常见分隔符)
+    XX_TEST_EXPECT_TRUE(
+        isOpenableUrl("https://github.com/coolight7/agentxx/releases/tag/v9.9.9")
+    );
+    XX_TEST_EXPECT_TRUE(isOpenableUrl("http://127.0.0.1:8080/releases?tag=v1.0.0&page=2"));
+    XX_TEST_EXPECT_TRUE(isOpenableUrl("https://github.com/x/y#/tree/main?q=a%20b"));
+    // 非 ASCII (UTF-8) 字节按原样交给系统
+    XX_TEST_EXPECT_TRUE(isOpenableUrl("https://github.com/x/发布/v1.0.0"));
+
+    // 协议: 只允许 http/https
+    XX_TEST_EXPECT_FALSE(isOpenableUrl(""));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("file:///etc/passwd"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("javascript:alert(1)"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("ftp://example.com/x"));
+    // 协议后没有内容
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("http://"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://"));
+
+    // 可破坏命令串的字符: 引号/反引号/反斜杠/空白/控制字符/竖线/重定向等
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b\" ; rm -rf /"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b' ; rm -rf /"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b`whoami`"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b\\n"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b c"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b\nls"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b|c"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/b>c"));
+    XX_TEST_EXPECT_FALSE(isOpenableUrl("https://a/{b}"));
+}
+
 } // namespace
 
 TestResult testUpdateCheck() {
@@ -198,6 +233,7 @@ TestResult testUpdateCheck() {
     test_settings_check_update_toggle();
     test_check_update_storage_key();
     test_check_failure_returns_error();
+    test_openable_url_validation();
 
     return TestResult{g_update_check_passed, g_update_check_failed};
 }

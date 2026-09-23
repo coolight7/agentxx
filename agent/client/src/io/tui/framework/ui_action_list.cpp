@@ -15,23 +15,20 @@ UiActionStyle UiActionStyle::fromTheme(const TUITheme& theme) {
         .normalBg   = Color::Default,
         .selectedFg = theme.buttonActiveTextColor,
         .selectedBg = theme.buttonActiveBgColor,
-        .valueFg    = theme.accentColor,
         .disabledFg = theme.hintColor,
+        .groupFg    = theme.hintColor,
     };
 }
 
 Element UiActionStyle::row(const UiActionItem& item, bool selected) const {
     Elements children;
-    children.push_back(text(item.label));
+    children.push_back(text(item.label) | color(selected ? selectedFg : normalFg));
     if (!item.hint.empty()) {
         children.push_back(text("  "));
         children.push_back(text(item.hint));
     }
     // filler 撑满整行: 选中项背景色条覆盖整行 (左右留白由外框统一提供)
     children.push_back(filler());
-    if (!item.value.empty()) {
-        children.push_back(text(item.value) | color(selected ? selectedFg : valueFg));
-    }
 
     Element row = hbox(std::move(children));
     if (!item.enabled) {
@@ -48,6 +45,10 @@ Element UiActionStyle::row(const UiActionItem& item, bool selected) const {
         row = row | bgcolor(normalBg);
     }
     return row;
+}
+
+Element UiActionStyle::groupRow(std::string_view title) const {
+    return text(std::string(title)) | bold | color(groupFg);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +211,12 @@ Element
         }
         const auto& item     = items_[i];
         const bool  selected = (static_cast<int>(i) == selectedIndex_);
-        Element     row = rowBuilder ? rowBuilder(item, selected, i) : style.row(item, selected);
+        // 分组标题: 与上一项的分组不同时先插一行标题 (不登记命中 -> 点不到)
+        if (!item.group.empty() && (i == 0 || items_[i - 1].group != item.group)) {
+            rows.push_back(text(""));
+            rows.push_back(style.groupRow(item.group));
+        }
+        Element row = rowBuilder ? rowBuilder(item, selected, i) : style.row(item, selected);
         // 命中登记: 只有渲染出来的条目才会命中 (列表为空/条目被裁剪即无命中)
         rows.push_back(hits.add(std::move(row), item.id, std::string{}));
     }

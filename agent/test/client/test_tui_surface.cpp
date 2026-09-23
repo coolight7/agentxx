@@ -418,13 +418,15 @@ TestResult testTuiSurface() {
 
         // 选中项 (第 0 项) 的"值行"整行高亮: 值文字起点 / 行中 / 行末 (右内边距之内)
         // 皆为高亮背景色 —— 高亮色带铺满整行, 而不是只覆盖值文字
+        // (内容区右侧留 1 列给滚动条: 条目右边界 = 弹窗右内边距再往左 1 列)
+        const int rowRightEdge = r.bounds.x_max - 3;
         int        sx = -1, sy = -1;
         const bool selFound = r.findText("主题: ", sx, sy);
         XX_TEST_EXPECT_TRUE(selFound);
         if (selFound) {
             XX_TEST_EXPECT_EQ(r.bgAt(sx, sy), fx.theme.buttonActiveBgColor);
             XX_TEST_EXPECT_EQ(r.bgAt(r.midX(), sy), fx.theme.buttonActiveBgColor);
-            XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - 2, sy), fx.theme.buttonActiveBgColor);
+            XX_TEST_EXPECT_EQ(r.bgAt(rowRightEdge, sy), fx.theme.buttonActiveBgColor);
         }
 
         // 非选中项 (第 1 项) 的值行: 同样为整行宽的浅色值色带 (值色为半透明按钮底色,
@@ -434,7 +436,7 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(unselFound);
         if (unselFound) {
             XX_TEST_EXPECT_TRUE(r.bgAt(ux, uy) != fx.theme.surfaceColor); // 值色带底色
-            XX_TEST_EXPECT_EQ(r.bgAt(r.bounds.x_max - 2, uy), r.bgAt(ux, uy));
+            XX_TEST_EXPECT_EQ(r.bgAt(rowRightEdge, uy), r.bgAt(ux, uy));
         }
     }
 

@@ -3,7 +3,7 @@
 // 覆盖场景:
 // - 命中登记表: 帧首清空 / 渲染时登记 / 未布局项不命中 / 登记顺序优先
 // - 声明式条目列表: 选中项维护 (按 id 跨重建保持)、键盘导航 (跳过不可用项)、
-//   Enter 激活、鼠标点击命中 (置选中并激活)
+//   Enter 激活、鼠标点击命中 (置选中并激活)、分组标题行 (不可点击, 不占下标)
 // - 隐藏按钮不占点击区域: [ @︎ ] 按钮隐藏后, 其在上一帧的屏幕位置不再可点
 #include "agentxx-test/client/test_tui_widget.h"
 
@@ -380,6 +380,55 @@ void test_action_list_selection_changed_callback() {
     XX_TEST_EXPECT_EQ(changes[1], 0);
 }
 
+/// 条目分组: 分组标题独占一行 (不占条目下标), 不可点击, 组间留白
+void test_action_list_group_headers() {
+    UiActionList             list;
+    UiHitMap                 hits;
+    std::vector<std::string> activated;
+
+    auto record = [&activated](const char* id) -> std::function<void()> {
+        return [&activated, id] {
+            activated.push_back(id);
+        };
+    };
+    list.setItems({
+        UiActionItem{.id = "a", .label = "A", .group = "G1", .onActivate = record("a")},
+        UiActionItem{.id = "b", .label = "B", .group = "G1", .onActivate = record("b")},
+        UiActionItem{.id = "c", .label = "C", .group = "G2", .onActivate = record("c")},
+        UiActionItem{.id = "d", .label = "D", .onActivate = record("d")},
+    });
+
+    const std::string screen = renderActionList(list, hits, testStyle(), 30, 10);
+    // 每个分组标题只出现一次 (同组的多行条目共用一行标题)
+    XX_TEST_EXPECT_TRUE(screen.find("G1") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(screen.find("G2") != std::string::npos);
+    const size_t first = screen.find("G1");
+    XX_TEST_EXPECT_EQ(screen.find("G1", first + 1), std::string::npos);
+
+    // 标题行不登记命中: 点标题行不激活任何条目, 选中项也不变
+    const ftxui::Box boxA = boxOf(hits, "a");
+    XX_TEST_EXPECT_FALSE(boxA.IsEmpty());
+    if (!boxA.IsEmpty()) {
+        const int titleX = boxA.x_min;     // 标题行与条目同行起点
+        const int titleY = boxA.y_min - 1; // 条目上一行即标题行
+        XX_TEST_EXPECT_TRUE(hits.findClick(leftClickMouse(titleX, titleY)) == nullptr);
+        XX_TEST_EXPECT_FALSE(list.onMouseEvent(leftClickMouse(titleX, titleY), hits)); // 未消费
+        XX_TEST_EXPECT_EQ(list.selectedIndex(), 0);
+        XX_TEST_EXPECT_TRUE(activated.empty());
+    }
+
+    // 键盘导航仍在条目之间移动: 标题行不占下标 (0 -> 1 -> 2 -> 3)
+    XX_TEST_EXPECT_TRUE(list.onKeyEvent(ftxui::Event::ArrowDown));
+    XX_TEST_EXPECT_EQ(list.selectedIndex(), 1);
+    XX_TEST_EXPECT_TRUE(list.onKeyEvent(ftxui::Event::ArrowDown));
+    XX_TEST_EXPECT_EQ(list.selectedIndex(), 2);
+    XX_TEST_EXPECT_TRUE(list.onKeyEvent(ftxui::Event::ArrowDown));
+    XX_TEST_EXPECT_EQ(list.selectedIndex(), 3);
+    XX_TEST_EXPECT_TRUE(list.onKeyEvent(ftxui::Event::Return));
+    XX_TEST_EXPECT_EQ(activated.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(activated[0], std::string("d"));
+}
+
 // ---------------------------------------------------------------------------
 // 组件级: 隐藏的按钮不再占点击区域
 // ---------------------------------------------------------------------------
@@ -734,6 +783,7 @@ TestResult testTuiWidget() {
     test_action_list_keyboard_activate();
     test_action_list_mouse_click();
     test_action_list_selection_changed_callback();
+    test_action_list_group_headers();
     test_hidden_button_not_clickable();
     test_status_bar_click_actions();
     test_panel_access_point_extended_components();

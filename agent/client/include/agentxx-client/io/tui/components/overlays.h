@@ -141,17 +141,21 @@ private:
 };
 
 /// 设置弹窗组件
-/// - 主题切换 (Dark/Light, 单行显示当前值, 点击/Enter 循环切换)
-/// - 动画等级 (Disabled/Low/Medium/High/Ultra; 见 TUISettings)
-/// - 日志等级 (Trace/Debug/Info/Warn/Error/Out; 见 TUISettings)
-/// - 末尾思考展示模式 (Auto Expand / Single Line)
-/// - 界面语言 (简体中文 zh-cn / English en-us; 见 TuiI18n 翻译表)
-/// - 快捷键 (显示插件已注册的全局快捷键条数; 打开 [KeybindListOverlay] 查看完整列表)
-/// - About (打开关于弹窗; 显示版本/路径/插件等信息)
 ///
-/// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击。
+/// 条目按分组显示 (分组标题行不可选中/点击, 见 [UiActionItem::group]):
+/// - 界面: 主题切换 (Dark/Light) / 动画等级 (Disabled/Low/Medium/High/Ultra) /
+///   界面语言 (简体中文 zh-cn / English en-us; 见 TuiI18n 翻译表)
+/// - 显示: 日志等级 (Trace/Debug/Info/Warn/Error/Out) / 末尾思考展示模式
+///   (Auto Expand / Single Line); 均见 TUISettings
+/// - 更新: 启动时检查更新开关 + "检查更新"条目 (发起一次即时检查, 有新版本时
+///   由外部打开 [UpdateNoticeOverlay])
+/// - 其他: 快捷键 (显示插件已注册的全局快捷键条数; 打开 [KeybindListOverlay]
+///   查看完整列表) / 信息 (打开关于弹窗; 显示版本/路径/插件等信息)
+///
+/// 交互: Up/Down 选择条目, Enter 应用/切换 (循环切换); 也支持鼠标点击;
+/// 内容超出终端可用高度时内容区可滚动 (选中项自动滚入视口, 滚轮 = 上/下移动选中项)。
 /// 所有条目切换后均保持弹窗打开, 便于连续调整; 由 [Esc] 关闭。
-/// 条目 (标签/当前值/切换动作) 由 [buildItems] 一处声明, 交互与高亮由
+/// 条目 (分组/标签/当前值/切换动作) 由 [buildItems] 一处声明, 交互与高亮由
 /// [UiActionList] 统一实现 (新增设置项只需往条目表加一行)。
 class SettingsOverlay : public ftxui::ComponentBase {
 public:
@@ -194,6 +198,11 @@ public:
         onKeybindList_ = std::move(fn);
     }
 
+    /// "检查更新"回调 (供外部发起一次更新检查)
+    void onCheckUpdate(std::function<void()> fn) {
+        onCheckUpdate_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -205,6 +214,9 @@ public:
 private:
 
     /// 重建条目表 (每帧刷新各设置项的当前值文本)
+    ///
+    /// 条目顺序即弹窗显示顺序; `group` 字段相同的连续条目属同一分组,
+    /// 分组标题变化处自动插一行标题 (见 [UiActionList::render])。
     void buildItems();
 
     /// 已注册的插件全局快捷键条数 (读 UI 注册表快照; 未装配插件管理器时为 0)
@@ -225,9 +237,11 @@ private:
     /// 切换"启动时检查更新"开关: 开 <-> 关 (持久化; 仅影响下次启动)
     static void cycleCheckUpdateOnStartup();
 
-    TUICtx&       ctx_;
-    UiActionList  list_;
-    UiHitMap      hits_;
+    TUICtx&      ctx_;
+    UiActionList list_;
+    /// 条目命中表 (每帧重登记; 只有本帧渲染出来的条目可点击)
+    UiHitMap     hits_;
+    /// 条目配色 (每帧按当前主题刷新: 分组标题色与切换主题都取自这里)
     UiActionStyle style_;
 
     std::function<void()> onClose_;
@@ -237,6 +251,61 @@ private:
     std::function<void()> onLanguageChange_;
     std::function<void()> onAbout_;
     std::function<void()> onKeybindList_;
+    std::function<void()> onCheckUpdate_;
+};
+
+/// 更新提示弹窗 (设置弹窗"检查更新"条目发现新版本时打开)
+///
+/// 内容为一小段固定版式 (内容短, 不需要滚动容器):
+/// ```text
+/// 新版本 {当前版本} -> {新版本}
+/// · {发布页链接}
+/// [ 前往下载 ]
+/// ```
+/// 版本行取编译期版本 `agentxx::kVersion` 与检查到的最新发布标签;
+/// 链接行是 GitHub Release 发布页 (可直接拖选复制)。
+///
+/// 交互: 点击 [ 前往下载 ] / Enter 触发 [onDownload] (由外部用系统默认程序
+/// 打开浏览器, 并决定是否关闭弹窗); Esc 关闭; 其余鼠标事件被吞掉 (模态)。
+class UpdateNoticeOverlay : public ftxui::ComponentBase {
+public:
+
+    UpdateNoticeOverlay(
+        TUICtx&     ctx,
+        std::string currentVersion,
+        std::string latestTag,
+        std::string url
+    );
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    /// [ 前往下载 ] 触发回调 (打开浏览器由外部实现, 便于测试替换)
+    void onDownload(std::function<void()> fn) {
+        onDownload_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+    /// 测试辅助: 上一帧 [ 前往下载 ] 按钮的屏幕区域 (未渲染时为空区域)
+    ftxui::Box downloadButtonBox() const;
+
+private:
+
+    /// 触发"前往下载" (记下事件已消费; 打开动作由外部回调执行)
+    void activateDownload();
+
+    TUICtx&               ctx_;
+    std::string           currentVersion_;
+    std::string           latestTag_;
+    std::string           url_;
+    UiHitMap              hits_;
+    std::function<void()> onClose_;
+    std::function<void()> onDownload_;
+    /// 按钮命中 id (单按钮弹窗; 命中后统一走 [activateDownload])
+    static constexpr std::string_view kDownloadHitId = "download";
 };
 
 /// 插件全局快捷键列表弹窗 (只读; 由设置弹窗的"快捷键"条目打开)

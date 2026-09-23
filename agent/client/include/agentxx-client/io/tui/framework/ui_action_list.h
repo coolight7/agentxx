@@ -15,6 +15,8 @@
 /// - 鼠标左键释放命中条目时先置选中再激活 (键盘与鼠标路径行为一致)
 /// - 命中区域经 [UiHitMap] 登记: 每帧重建, 未渲染的条目不会命中
 /// - 渲染默认整行高亮 (文本 + 右对齐值), 需要多行/自定义版式时传 rowBuilder
+/// - 条目可声明分组标题 ([UiActionItem::group]): 分组首项前插一行标题, 标题
+///   不参与选中与点击, 只用来分组显示 (如设置弹窗的 界面/显示/更新/其他)
 ///
 /// 用法:
 /// ```c++
@@ -59,10 +61,13 @@ struct UiActionItem {
     std::string id;
     /// 主文本
     std::string label;
-    /// 右侧当前值 (空 = 不显示)
-    std::string value;
     /// 次级说明 (弱化色, 显示在主文本后; 空 = 不显示)
     std::string hint;
+    /// 所属分组标题 (空 = 不分组)
+    ///
+    /// 渲染时在该分组首项之前插入一行标题 (标题行不参与选中与点击); 与上一项
+    /// 标题不同即视为新分组, 标题相同的连续条目属同一组。
+    std::string group;
     /// 是否可激活 (false: 弱化显示, 键盘跳过, 点击无效)
     bool enabled = true;
     /// 激活动作 (Enter 或鼠标点击命中); 为空时仅把该项置为选中
@@ -79,16 +84,19 @@ struct UiActionStyle {
     ftxui::Color selectedFg;
     /// 选中项背景
     ftxui::Color selectedBg;
-    /// 右侧 "值" 文字色 (未选中时)
-    ftxui::Color valueFg;
     /// 不可用项文字色
     ftxui::Color disabledFg;
+    /// 分组标题文字色 (见 [UiActionItem::group])
+    ftxui::Color groupFg = ftxui::Color::Default;
 
     /// 取主题按钮配色 (弹窗内列表项的默认样式)
     static UiActionStyle fromTheme(const TUITheme& theme);
 
     /// 单行行元素: 主文本 + (可选次级说明) + 右对齐值; 整行铺满便于高亮
     ftxui::Element row(const UiActionItem& item, bool selected) const;
+
+    /// 分组标题行 (整行; 不参与命中, 不可点击)
+    ftxui::Element groupRow(std::string_view title) const;
 };
 
 /// 声明式动作列表 (状态 + 交互 + 渲染; 由持有它的组件在 OnRender/OnEvent 中驱动)
@@ -103,6 +111,7 @@ public:
     /// 重建条目表 (每帧或数据变化时调用)
     /// - 选中项按 id 保持 (条目顺序变化/增删后仍指向同一项)
     /// - 原选中项消失时按原下标收敛到有效范围
+    /// - 分组标题行只是版式: 不占条目下标, 键盘导航仍在条目之间移动
     void setItems(std::vector<UiActionItem> items);
 
     /// 条目之间的空行数 (默认 0; 与 rowBuilder 一起决定整体版式)

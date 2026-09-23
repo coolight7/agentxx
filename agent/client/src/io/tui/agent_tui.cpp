@@ -12,6 +12,7 @@
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/update_check.h"
 #include "agentxx-client/util/clipboard.h"
+#include "agentxx-client/util/open_url.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
@@ -107,6 +108,36 @@ TUIClientAgentIO::~TUIClientAgentIO() {
 // ---------------------------------------------------------------------------
 // postRedraw / enqueueUiAction
 // ---------------------------------------------------------------------------
+
+Element TUIClientAgentIO::applyToastOverlay(Element content) {
+    // 无提示: 原样返回 (不产生任何额外元素, 不影响布局)
+    if (toastText_.empty()) {
+        return content;
+    }
+    // 渲染时检查超时: 超过 kToastDuration 清除提示
+    // (toastText_/toastShownAt_ 为 UI 线程独占, 仅在本帧渲染中读写, 无跨线程竞争)
+    if (std::chrono::steady_clock::now() - toastShownAt_ >= kToastDuration) {
+        toastText_.clear();
+        return content;
+    }
+    const auto surfaceStyle = TuiSurfaceStyle::fromTheme(theme_);
+    // 仿照弹窗背景面性风格: 上下左右各 1 格内边距, 四角为 '+' 角标,
+    // 以弹窗内容区背景色 (theme_.surfaceColor) 承载提示文字;
+    // 显示期间以 dbox 叠加在整棵树之上, 水平居中、垂直靠顶
+    // (vbox 顶部 + filler 撑满), 与主界面一致加粗
+    return dbox({
+        std::move(content),
+        vbox({
+            text(" "),
+            hbox({
+                filler(),
+                tuiSurfaceToast(surfaceStyle, toastText_),
+                filler(),
+            }),
+            filler(),
+        }) | bold,
+    });
+}
 
 void TUIClientAgentIO::enqueueUiAction(std::function<void()> fn) {
     if (!fn) {
@@ -660,32 +691,8 @@ void TUIClientAgentIO::start() {
                 mainWidget | flex,
                 sidebar_->Render(),
             });
-            // 屏幕上方 toast 提示 (如会话切换警告): 渲染时检查超时, 超过
-            // kToastDuration 自动清除 (toastText_/toastShownAt_ 为 UI 线程独占,
-            // 仅在本帧渲染中读写, 无跨线程竞争); 显示期间以 dbox 叠加在
-            // 主界面之上, 水平居中、垂直靠顶 (vbox 顶部 + filler 撑满)
-            if (!toastText_.empty()) {
-                const auto elapsed = std::chrono::steady_clock::now() - toastShownAt_;
-                if (elapsed >= kToastDuration) {
-                    toastText_.clear();
-                } else {
-                    const auto surfaceStyle = TuiSurfaceStyle::fromTheme(theme_);
-                    body                    = dbox({
-                        body,
-                        vbox({
-                            text(" "),
-                            hbox({
-                                filler(),
-                                // 仿照弹窗背景面性风格: 上下左右各 1 格内边距, 四角为 '+' 角标,
-                                // 以弹窗内容区背景色 (theme_.surfaceColor) 承载提示文字
-                                tuiSurfaceToast(surfaceStyle, toastText_),
-                                filler(),
-                            }),
-                            filler(),
-                        }),
-                    });
-                }
-            }
+            // toast 提示不在此叠加: 它在模态层之上 (见 applyToastOverlay) ——
+            // 弹窗打开时主界面整棵树不参与渲染, 画在这里会被弹窗盖住
             auto rendered = body | bold | bgcolor(theme_.backgroundColor);
             // 帧统计: 组件树构建耗时 (不含终端输出), 供性能基准/诊断读取
             if (collectFrameStats) {
@@ -699,8 +706,16 @@ void TUIClientAgentIO::start() {
         modal_ = ModalContainer::Create(mainRenderer);
         modal_->setBgColor(theme_.surfaceScrimColor);
 
+        // 根组件: 模态层之上再叠一层 toast 提示
+        // 提示不能画在主界面里 —— 弹窗打开时主界面整棵树不参与渲染 (见
+        // ModalContainer), 提示会被弹窗盖住 (如设置弹窗里点"检查更新"的进行中
+        // 与结果提示); 叠在模态层之上后任何界面状态下提示都可见
+        auto root = Renderer(modal_, [this]() -> Element {
+            return applyToastOverlay(modal_->Render());
+        });
+
         // 全局快捷键 + 鼠标 (F2/F3/F4/F12/Escape/点击): 组件未处理的事件到此处理
-        auto handler = CatchEvent(modal_, [&](Event event) -> bool {
+        auto handler = CatchEvent(root, [&](Event event) -> bool {
             // 全局退出快捷键: 优先处理, 弹窗打开时也放行 (否则模态期间 Ctrl+C 被
             // 弹窗 OnEvent 无条件处理, 无法退出程序)
             if (event == Event::CtrlC) {
@@ -1131,6 +1146,10 @@ void TUIClientAgentIO::openSettings() {
     });
     overlay->onKeybindList([this] {
         openKeybindList();
+    });
+    // "检查更新"条目: 立即检查一次 (client io 线程协程; 结果回 UI 线程弹窗/toast)
+    overlay->onCheckUpdate([this] {
+        requestUpdateCheckNow();
     });
     modal_->pushModal(overlay);
     postRedraw();
@@ -2211,6 +2230,124 @@ void TUIClientAgentIO::applyUpdateCheckResult(agentxx::client::UpdateCheckResult
         st.availableUpdateUrl          = result.url;
     }
     uiToast(trf("toast.updateAvailable", result.latestTag, std::string{kAgentxxVersion}), 0);
+    postRedraw();
+}
+
+// ---------------------------------------------------------------------------
+// 即时更新检查 (设置弹窗"检查更新"条目)
+//
+// 与启动检查共用同一个探测实现, 差别在触发方式与结果呈现:
+// - 启动检查是附加提示 (失败静默, 只在界面角落留一行提示);
+// - 即时检查是用户明确要求的动作, 无论成功/无更新/失败都必须有反馈:
+//   有新版本直接弹窗 (含发布页链接与"前往下载"按钮), 无更新/失败用 toast 说明。
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::requestUpdateCheckNow() {
+    // 点击反馈: 探测最长可能耗到连接/读块超时 (各 8 秒), 期间必须有提示
+    showToast(std::string{tr("toast.updateChecking")});
+    if (updateChecking_.exchange(true, std::memory_order_acq_rel)) {
+        // 已有检查在跑: 不重复发请求 (结果仍在路上, 到达时照常提示)
+        XX_LOGD("[tui] update check already in flight, skip duplicate request");
+        return;
+    }
+    auto weak = weak_from_this();
+    asio::co_spawn(
+        ex_,
+        [weak]() -> asio::awaitable<void> {
+            auto self = weak.lock();
+            if (!self) {
+                co_return;
+            }
+            auto result = co_await agentxx::client::checkLatestReleaseForCurrentVersion();
+
+            // 结果处理留在 client io 线程 (弹窗/toast 由 applyManualUpdateCheckResult
+            // 投递到 UI 线程); 期间 TUI 可能已退出, 退出后只复位标志
+            auto keepAlive = weak.lock();
+            if (!keepAlive) {
+                co_return;
+            }
+            keepAlive->applyManualUpdateCheckResult(std::move(result));
+            co_return;
+        },
+        asio::detached
+    );
+}
+
+void TUIClientAgentIO::applyManualUpdateCheckResult(agentxx::client::UpdateCheckResult result) {
+    // 先复位进行中标志: 用户可在结果提示后立即再点一次"检查更新"
+    updateChecking_.store(false, std::memory_order_release);
+
+    if (result.ok && result.hasUpdate) {
+        // 与启动检查共用同一状态: Info 侧边栏底部的"发现新版本"提示行
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        st.availableUpdateTag          = result.latestTag;
+        st.availableUpdateUrl          = result.url;
+    }
+    XX_LOGI(
+        "[tui] manual update check: ok={} current={} latest={} hasUpdate={} error={}",
+        result.ok,
+        kAgentxxVersion,
+        result.latestTag,
+        result.hasUpdate,
+        result.error
+    );
+
+    // 结果呈现 (弹窗/toast) 与组件树一样属于 UI 线程独占操作
+    enqueueUiAction([this, result = std::move(result)]() {
+        showUpdateCheckResult(result);
+    });
+}
+
+void TUIClientAgentIO::showUpdateCheckResult(const agentxx::client::UpdateCheckResult& result) {
+    if (!result.ok) {
+        showToast(trf("toast.updateCheckFailed", result.error));
+        return;
+    }
+    if (!result.hasUpdate) {
+        showToast(std::string{tr("toast.updateLatest")});
+        return;
+    }
+    XX_LOGI("[tui] update available: {} -> {}", kAgentxxVersion, result.latestTag);
+    openUpdateNotice(result.latestTag, result.url);
+}
+
+void TUIClientAgentIO::openUpdateNotice(std::string latestTag, std::string url) {
+    if (!modal_) {
+        // 无模态容器 (TUI 未启动或已退出): 结果已写入共享状态与日志, 不再弹窗
+        XX_LOGW("[tui] skip update notice overlay: modal container unavailable");
+        return;
+    }
+    // 打开浏览器用的链接副本: 弹窗持有的是形参 move 后的值, 动作闭包存在弹窗内,
+    // 因此按值捕获即可 (生命周期随弹窗)
+    const std::string target = url;
+    auto              overlay = std::make_shared<UpdateNoticeOverlay>(
+        ctx_,
+        std::string{kAgentxxVersion},
+        std::move(latestTag),
+        std::move(url)
+    );
+    overlay->onClose([this] {
+        modal_->popModal();
+    });
+    // 打开动作由宿主实现 (弹窗只负责展示与命中)
+    overlay->onDownload([this, target] {
+        if (!agentxx::client::openUrlInBrowser(target)) {
+            // 链接未通过校验 (不会发起任何命令): 保留弹窗 (链接可拖选复制) 并提示
+            showToast(std::string{tr("toast.updateOpenFail")});
+            return;
+        }
+        // 已交给系统默认程序打开: 关闭弹窗。关闭经 UI 动作队列延后到本次事件
+        // 处理返回之后执行 —— 在弹窗自己的事件处理中 popModal() 会析构正在执行
+        // 的弹窗对象 (见 ModalContainer::OnEvent 的说明)
+        enqueueUiAction([this] {
+            if (modal_) {
+                modal_->popModal();
+            }
+            postRedraw();
+        });
+    });
+    modal_->pushModal(overlay);
     postRedraw();
 }
 

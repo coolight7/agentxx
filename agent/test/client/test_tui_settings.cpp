@@ -1057,6 +1057,110 @@ void test_tui_info_footer_update_notice() {
     TUISettings::instance().setLanguage(originalLang);
 }
 
+/// 即时更新检查结果处理: 有新版本时写入共享状态 (Info 侧边栏提示行, 与启动检查
+/// 共用); 无更新/失败时不改动界面状态 (仅在 UI 线程 toast 说明)
+void test_tui_manual_update_check_state() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    const auto originalLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+
+    auto tui       = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    auto footerText = [&]() -> std::string {
+        tui->refreshRenderContext();
+        auto element = tui->renderInfoSidebarFooter();
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(70), ftxui::Dimension::Fixed(8));
+        ftxui::Render(screen, element);
+        return screen.ToString();
+    };
+
+    // 1. 无更新: 不写入状态 (提示行不出现)
+    agentxx::client::UpdateCheckResult noUpdate;
+    noUpdate.ok        = true;
+    noUpdate.hasUpdate = false;
+    noUpdate.latestTag = "v0.0.1";
+    tui->applyManualUpdateCheckResult(noUpdate);
+    XX_TEST_EXPECT_TRUE(tui->sharedState().readSnapshot()->availableUpdateTag.empty());
+    XX_TEST_EXPECT_TRUE(footerText().find("新版本") == std::string::npos);
+
+    // 2. 检查失败: 不写入状态
+    agentxx::client::UpdateCheckResult failed;
+    failed.ok    = false;
+    failed.error = "network unreachable";
+    tui->applyManualUpdateCheckResult(failed);
+    XX_TEST_EXPECT_TRUE(tui->sharedState().readSnapshot()->availableUpdateTag.empty());
+    XX_TEST_EXPECT_TRUE(footerText().find("新版本") == std::string::npos);
+
+    // 3. 有新版本: 写入 tag/url, Info 侧边栏底部出现提示行 (点击复制链接)
+    agentxx::client::UpdateCheckResult hasUpdate;
+    hasUpdate.ok        = true;
+    hasUpdate.hasUpdate = true;
+    hasUpdate.latestTag = "v9.9.9";
+    hasUpdate.url       = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9";
+    tui->applyManualUpdateCheckResult(hasUpdate);
+    auto snap = tui->sharedState().readSnapshot();
+    XX_TEST_EXPECT_EQ(snap->availableUpdateTag, std::string("v9.9.9"));
+    XX_TEST_EXPECT_EQ(
+        snap->availableUpdateUrl,
+        std::string("https://github.com/coolight7/agentxx/releases/tag/v9.9.9")
+    );
+    XX_TEST_EXPECT_TRUE(footerText().find("[ 新版本 v9.9.9 ]") != std::string::npos);
+
+    TUISettings::instance().setLanguage(originalLang);
+}
+
+/// 即时更新检查: 结果提示文案 —— 无更新 toast "已经是最新版本"; 失败 toast 失败原因;
+/// 有更新时不走 toast (打开更新提示弹窗, 由 UpdateNoticeOverlay 用例覆盖)
+void test_tui_manual_update_check_toast() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    const auto originalLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
+
+    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+
+    // 1. 无更新: "已经是最新版本"
+    agentxx::client::UpdateCheckResult noUpdate;
+    noUpdate.ok        = true;
+    noUpdate.hasUpdate = false;
+    noUpdate.latestTag = "v0.0.1";
+    tui->showUpdateCheckResult(noUpdate);
+    XX_TEST_EXPECT_EQ(tui->toastText(), std::string(TuiI18n::instance().t("toast.updateLatest")));
+
+    // 2. 检查失败: 提示带失败原因
+    agentxx::client::UpdateCheckResult failed;
+    failed.ok    = false;
+    failed.error = "network unreachable";
+    tui->showUpdateCheckResult(failed);
+    XX_TEST_EXPECT_TRUE(tui->toastText().find("network unreachable") != std::string::npos);
+
+    // 3. 有更新 (无模态容器: 未启动 UI 线程): 不崩且不改动 toast; 状态已写入共享状态
+    const auto before = std::string{tui->toastText()};
+    agentxx::client::UpdateCheckResult hasUpdate;
+    hasUpdate.ok        = true;
+    hasUpdate.hasUpdate = true;
+    hasUpdate.latestTag = "v9.9.9";
+    hasUpdate.url       = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9";
+    tui->showUpdateCheckResult(hasUpdate);
+    XX_TEST_EXPECT_EQ(tui->toastText(), before);
+
+    // 4. 英文文案
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+    tui->showUpdateCheckResult(noUpdate);
+    XX_TEST_EXPECT_EQ(
+        tui->toastText(),
+        std::string(TuiI18n::instance().t("toast.updateLatest"))
+    );
+
+    TUISettings::instance().setLanguage(originalLang);
+}
+
 // ---------------------------------------------------------------------------
 // 插件全局快捷键列表 (设置弹窗条目 + 只读列表弹窗)
 // ---------------------------------------------------------------------------
@@ -1186,6 +1290,45 @@ bool findRowWithText(const ftxui::Screen& screen, std::string_view needle, int& 
     return false;
 }
 
+/// 屏幕某一行的可见文字 (去掉行首尾空白; 宽字符按一个字符计)
+///
+/// 弹窗左右内边距与值色带右侧的填充都是空格, 比较整行文字时先去掉。
+std::string rowText(const ftxui::Screen& screen, int y) {
+    if (y < 0 || y >= screen.dimy()) {
+        return {};
+    }
+    std::string line;
+    for (int x = 0; x < screen.dimx(); ++x) {
+        const std::string& ch = screen.PixelAt(x, y).character;
+        if (ch.empty()) {
+            continue;
+        }
+        line += ch;
+    }
+    const size_t begin = line.find_first_not_of(' ');
+    if (begin == std::string::npos) {
+        return {};
+    }
+    const size_t end = line.find_last_not_of(' ');
+    return line.substr(begin, end - begin + 1);
+}
+
+/// 整行文字恰为 needle 的行号 (不存在返回 -1; 供"分组标题独占一行"等断言用)
+int rowOfExact(const ftxui::Screen& screen, std::string_view needle) {
+    for (int y = 0; y < screen.dimy(); ++y) {
+        if (rowText(screen, y) == needle) {
+            return y;
+        }
+    }
+    return -1;
+}
+
+/// 屏幕文本里是否含滚动条滑块字符 (┃ 整格 / ╹ ╻ 半格; 见 ftxui vscroll_indicator)
+bool hasScrollbarThumb(const std::string& text) {
+    return text.find("┃") != std::string::npos || text.find("╹") != std::string::npos
+           || text.find("╻") != std::string::npos;
+}
+
 /// 渲染一帧 (固定视口, 不随物理终端尺寸漂移)
 ftxui::Screen renderOnce(const ftxui::Component& comp, int width, int height) {
     auto screen = ftxui::Screen::Create(
@@ -1217,9 +1360,9 @@ void test_settings_overlay_keybind_entry() {
 
     // 未装配插件管理器: 条数按 0 显示 (不崩)
     {
-        auto         ctx    = keybindTestCtx(nullptr);
+        auto         ctx    = keybindTestCtx(nullptr, 40);
         auto         comp   = std::make_shared<SettingsOverlay>(ctx);
-        const auto   screen = renderOnce(comp, 100, 34);
+        const auto   screen = renderOnce(comp, 100, 40);
         const auto   text   = screenText(screen);
         XX_TEST_EXPECT_TRUE(text.find("插件快捷键: 0") != std::string::npos);
         XX_TEST_EXPECT_TRUE(text.find("快捷键") != std::string::npos);
@@ -1234,14 +1377,14 @@ void test_settings_overlay_keybind_entry() {
     XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, instA.get(), "ctrl+alt+k", "toggle") != nullptr);
     XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, instB.get(), "f9", "refresh") != nullptr);
 
-    auto ctx      = keybindTestCtx(mgr);
+    auto ctx      = keybindTestCtx(mgr, 40);
     auto comp     = std::make_shared<SettingsOverlay>(ctx);
     int  opened   = 0;
     comp->onKeybindList([&] {
         ++opened;
     });
 
-    const auto screen = renderOnce(comp, 100, 34);
+    const auto screen = renderOnce(comp, 100, 40);
     XX_TEST_EXPECT_TRUE(screenText(screen).find("插件快捷键: 2") != std::string::npos);
 
     // 点击"快捷键"条目 (条目整行可点: 点击标签行即激活)
@@ -1257,22 +1400,22 @@ void test_settings_overlay_keybind_entry() {
     XX_TEST_EXPECT_EQ(opened, 1);
 }
 
-/// 设置弹窗: "启动时检查更新"条目 (默认开 -> 点击切换为关, 持久化开关同步)
+/// 设置弹窗: "更新"组的"启动时检查更新"条目 (默认开 -> 点击切换为关, 持久化开关同步)
 void test_settings_overlay_check_update_entry() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
     auto&          settings = TUISettings::instance();
     const bool     original = settings.checkUpdateOnStartup();
     settings.setCheckUpdateOnStartup(true);
 
-    auto       ctx  = keybindTestCtx(nullptr, 34);
+    auto       ctx  = keybindTestCtx(nullptr, 40);
     auto       comp = std::make_shared<SettingsOverlay>(ctx);
-    const auto text = screenText(renderOnce(comp, 100, 34));
+    const auto text = screenText(renderOnce(comp, 100, 40));
     XX_TEST_EXPECT_TRUE(text.find("启动时检查更新: 开") != std::string::npos);
 
     // 点击条目 (整行可点: 点击标签行即激活) -> 切换为关
     int x = 0;
     int y = 0;
-    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 34), "启动时检查更新", x, y));
+    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 40), "启动时检查更新", x, y));
     ftxui::Mouse click;
     click.button = ftxui::Mouse::Left;
     click.motion = ftxui::Mouse::Released;
@@ -1281,11 +1424,11 @@ void test_settings_overlay_check_update_entry() {
     XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
     XX_TEST_EXPECT_FALSE(settings.checkUpdateOnStartup());
     XX_TEST_EXPECT_TRUE(
-        screenText(renderOnce(comp, 100, 34)).find("启动时检查更新: 关") != std::string::npos
+        screenText(renderOnce(comp, 100, 40)).find("启动时检查更新: 关") != std::string::npos
     );
 
     // 再点一次: 回到开
-    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 34), "启动时检查更新", x, y));
+    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 40), "启动时检查更新", x, y));
     click.x = x;
     click.y = y;
     XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
@@ -1295,20 +1438,319 @@ void test_settings_overlay_check_update_entry() {
     settings.setCheckUpdateOnStartup(original);
 }
 
-/// 设置弹窗: 终端过矮时压缩条目间距 (全部条目与底部提示仍可见, 不被裁掉)
-void test_settings_overlay_short_terminal() {
+/// 设置弹窗: "更新"组内的"检查更新"条目 (点击即发起一次即时检查)
+///
+/// - 条目文案随语言表 (标签"检查更新" + 值"立即检查")
+/// - 点击触发 onCheckUpdate 回调, 弹窗保持打开 (可连续检查)
+/// - 只发起检查, 不改变"启动时检查更新"开关
+void test_settings_overlay_check_update_now_entry() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+    auto&          settings = TUISettings::instance();
+    const bool     original = settings.checkUpdateOnStartup();
+    settings.setCheckUpdateOnStartup(true);
+
+    auto       ctx  = keybindTestCtx(nullptr, 40);
+    auto       comp = std::make_shared<SettingsOverlay>(ctx);
+    int        checks = 0;
+    comp->onCheckUpdate([&] {
+        ++checks;
+    });
+
+    const auto text = screenText(renderOnce(comp, 100, 40));
+    XX_TEST_EXPECT_TRUE(text.find("检查更新") != std::string::npos);   // 条目标签
+    XX_TEST_EXPECT_TRUE(text.find("立即检查") != std::string::npos);   // 条目值
+    XX_TEST_EXPECT_EQ(checks, 0);
+
+    // 点击条目 (整行可点: 点击值行即可) -> 触发一次检查, 启动开关不变
+    int x = 0;
+    int y = 0;
+    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 40), "立即检查", x, y));
+    ftxui::Mouse click;
+    click.button = ftxui::Mouse::Left;
+    click.motion = ftxui::Mouse::Released;
+    click.x      = x;
+    click.y      = y;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(checks, 1);
+    XX_TEST_EXPECT_TRUE(settings.checkUpdateOnStartup());
+
+    // 再点一次: 再次触发 (弹窗未关闭, 由外部按"进行中"去重)
+    XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 40), "立即检查", x, y));
+    click.x = x;
+    click.y = y;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
+    XX_TEST_EXPECT_EQ(checks, 2);
+
+    // 英文文案 (同一状态换语言后重新渲染)
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+    const auto enText = screenText(renderOnce(comp, 100, 40));
+    XX_TEST_EXPECT_TRUE(enText.find("Check for Updates Now") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(enText.find("Check Now") != std::string::npos);
+
+    // 复位 (共用单例)
+    settings.setCheckUpdateOnStartup(original);
+}
+
+/// 更新提示弹窗: 版式 (版本行/链接行/下载按钮) 与交互 (点击/Enter 下载, Esc 关闭)
+void test_update_notice_overlay_render_and_download() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    // 80x24 (经典默认终端): 常规版式 (7 条目 × 2 行 + 6 行间距 + 外框 6 行 = 26 行)
-    // 装不下 -> 压缩项间距, 保证条目与底部提示都可见
+    const std::string url = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9";
+    auto              ctx = keybindTestCtx(nullptr, 20);
+    auto              comp
+        = std::make_shared<UpdateNoticeOverlay>(ctx, "0.1.0", "v9.9.9", url);
+    int  downloads = 0;
+    bool closed    = false;
+    comp->onDownload([&] {
+        ++downloads;
+    });
+    comp->onClose([&] {
+        closed = true;
+    });
+
+    // 未渲染: 按钮没有命中区域, 任意位置的点击都不触发下载
+    XX_TEST_EXPECT_TRUE(comp->downloadButtonBox().IsEmpty());
+    ftxui::Mouse mouse;
+    mouse.button = ftxui::Mouse::Left;
+    mouse.motion = ftxui::Mouse::Released;
+    mouse.x      = 0;
+    mouse.y      = 0;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", mouse)));
+    XX_TEST_EXPECT_EQ(downloads, 0);
+
+    // 内容版式: 标题 + "新版本 0.1.0 -> v9.9.9" + "· 链接" + "[ 前往下载 ]"
+    const auto screen = renderOnce(comp, 100, 20);
+    const auto text   = screenText(screen);
+    XX_TEST_EXPECT_TRUE(text.find("发现新版本") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("新版本 0.1.0 -> v9.9.9") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("· " + url) != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[ 前往下载 ]") != std::string::npos);
+
+    // 点击版本行 (按钮之外): 不触发下载
+    int x = 0;
+    int y = 0;
+    XX_TEST_EXPECT_TRUE(findRowWithText(screen, "-> v9.9.9", x, y));
+    mouse.x = x;
+    mouse.y = y;
+    comp->OnEvent(ftxui::Event::Mouse("", mouse));
+    XX_TEST_EXPECT_EQ(downloads, 0);
+    XX_TEST_EXPECT_FALSE(closed);
+
+    // 点击按钮: 触发一次下载 (是否关闭弹窗由外部回调决定)
+    const auto btn = comp->downloadButtonBox();
+    XX_TEST_EXPECT_FALSE(btn.IsEmpty());
+    mouse.x = btn.x_min + 1;
+    mouse.y = btn.y_min;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", mouse)));
+    XX_TEST_EXPECT_EQ(downloads, 1);
+
+    // Enter 等价点击按钮
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Return));
+    XX_TEST_EXPECT_EQ(downloads, 2);
+
+    // Esc 关闭
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Escape));
+    XX_TEST_EXPECT_TRUE(closed);
+
+    // 英文文案
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+    const auto enText = screenText(renderOnce(comp, 100, 20));
+    XX_TEST_EXPECT_TRUE(enText.find("Update Available") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(enText.find("New version 0.1.0 -> v9.9.9") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(enText.find("[ Download ]") != std::string::npos);
+}
+
+/// 更新提示弹窗: 窄终端下长链接按可用宽度换行 (内容不越界, 按钮仍可命中)
+void test_update_notice_overlay_narrow_terminal() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    const std::string url
+        = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9-with-a-very-long-tag-name";
+    auto ctx           = keybindTestCtx(nullptr, 16);
+    ctx.viewportWidth  = 40;
+    ctx.viewportHeight = 16;
+    auto comp = std::make_shared<UpdateNoticeOverlay>(ctx, "0.1.0", "v9.9.9", url);
+    int  downloads = 0;
+    comp->onDownload([&] {
+        ++downloads;
+    });
+
+    const auto screen = renderOnce(comp, 40, 16);
+    const auto text   = screenText(screen);
+    // 版本行与按钮仍在 (链接行换行不会挤掉其它内容)
+    XX_TEST_EXPECT_TRUE(text.find("新版本 0.1.0 -> v9.9.9") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[ 前往下载 ]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("github.com") != std::string::npos); // 链接分段换行后仍有内容
+
+    // 按钮命中区域落在屏幕内 (长链接换行后仍可点击下载)
+    const auto btn = comp->downloadButtonBox();
+    XX_TEST_EXPECT_FALSE(btn.IsEmpty());
+    XX_TEST_EXPECT_TRUE(btn.x_min >= 0);
+    XX_TEST_EXPECT_TRUE(btn.x_max < 40);
+    XX_TEST_EXPECT_TRUE(btn.y_min >= 0);
+    XX_TEST_EXPECT_TRUE(btn.y_max < 16);
+
+    ftxui::Mouse mouse;
+    mouse.button = ftxui::Mouse::Left;
+    mouse.motion = ftxui::Mouse::Released;
+    mouse.x      = btn.x_min + 1;
+    mouse.y      = btn.y_min;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", mouse)));
+    XX_TEST_EXPECT_EQ(downloads, 1);
+}
+
+/// 设置弹窗: 条目按分组显示 (分组标题行不可选中/点击; "检查更新"在"更新"组内)
+void test_settings_overlay_groups() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+    auto&          settings = TUISettings::instance();
+    const bool     original = settings.checkUpdateOnStartup();
+    settings.setCheckUpdateOnStartup(true);
+
+    // 视口足够高: 全部内容一次显示 (不滚动)
+    auto       ctx    = keybindTestCtx(nullptr, 40);
+    auto       comp   = std::make_shared<SettingsOverlay>(ctx);
+    const auto screen = renderOnce(comp, 100, 40);
+
+    // 四个分组标题各占一整行, 按 界面 -> 显示 -> 更新 -> 其他 排列
+    const int yInterface = rowOfExact(screen, "界面");
+    const int yDisplay   = rowOfExact(screen, "显示");
+    const int yUpdate    = rowOfExact(screen, "更新");
+    const int yOther     = rowOfExact(screen, "其他");
+    XX_TEST_EXPECT_TRUE(yInterface >= 0);
+    XX_TEST_EXPECT_TRUE(yDisplay > yInterface);
+    XX_TEST_EXPECT_TRUE(yUpdate > yDisplay);
+    XX_TEST_EXPECT_TRUE(yOther > yUpdate);
+
+    // "更新"组内两条: 启动时检查更新 (标签 + 值) / 检查更新 (标签 + 值)
+    if (yUpdate >= 0) {
+        XX_TEST_EXPECT_EQ(rowOfExact(screen, "启动时检查更新"), yUpdate + 1);
+        XX_TEST_EXPECT_EQ(rowOfExact(screen, "启动时检查更新: 开"), yUpdate + 2);
+        XX_TEST_EXPECT_EQ(rowText(screen, yUpdate + 3), std::string("")); // 条目之间空行
+        XX_TEST_EXPECT_EQ(rowOfExact(screen, "检查更新"), yUpdate + 4);
+        XX_TEST_EXPECT_EQ(rowOfExact(screen, "立即检查"), yUpdate + 5);
+
+        // 点击分组标题行: 只有标题, 不命中任何条目 (选中项不变, 开关不被切换)
+        int x = 0;
+        int y = 0;
+        XX_TEST_EXPECT_TRUE(findRowWithText(screen, "更新", x, y));
+        XX_TEST_EXPECT_EQ(y, yUpdate);
+        ftxui::Mouse click;
+        click.button = ftxui::Mouse::Left;
+        click.motion = ftxui::Mouse::Released;
+        click.x      = x;
+        click.y      = y;
+        XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", click)));
+        XX_TEST_EXPECT_EQ(comp->selectedIndex(), 0);
+        XX_TEST_EXPECT_TRUE(settings.checkUpdateOnStartup());
+    }
+
+    // 英文分组标题 (同一状态换语言后重新渲染)
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+    const auto enScreen = renderOnce(comp, 100, 40);
+    XX_TEST_EXPECT_TRUE(rowOfExact(enScreen, "Interface") >= 0);
+    XX_TEST_EXPECT_TRUE(rowOfExact(enScreen, "Display") >= 0);
+    XX_TEST_EXPECT_TRUE(rowOfExact(enScreen, "Update") >= 0);
+    XX_TEST_EXPECT_TRUE(rowOfExact(enScreen, "Other") >= 0);
+
+    // 复位 (共用单例)
+    settings.setCheckUpdateOnStartup(original);
+}
+
+/// 设置弹窗: 终端过矮时内容可滚动 (条目不再压缩间距, 内容不缺失)
+void test_settings_overlay_short_terminal_scroll() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    // 80x24 (经典默认终端): 内容 30 行 (9 条目 × 2 + 4 分组标题 + 8 间距) 装不下,
+    // 内容区按可用高度限高 (24 - 外框 6 = 18 行), 弹窗本身不超出终端
     auto ctx = keybindTestCtx(nullptr, 24);
     ctx.viewportWidth = 80;
     auto       comp   = std::make_shared<SettingsOverlay>(ctx);
     const auto text   = screenText(renderOnce(comp, 80, 24));
-    XX_TEST_EXPECT_TRUE(text.find("主题") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("插件快捷键: 0") != std::string::npos); // 倒数第二项
-    XX_TEST_EXPECT_TRUE(text.find("关于") != std::string::npos);         // 最后一项
-    XX_TEST_EXPECT_TRUE(text.find("[Esc]") != std::string::npos);        // 底部提示
+    XX_TEST_EXPECT_TRUE(text.find("界面") != std::string::npos);  // 首个分组标题
+    XX_TEST_EXPECT_TRUE(text.find("主题") != std::string::npos);  // 首项
+    XX_TEST_EXPECT_TRUE(text.find("[Esc]") != std::string::npos); // 底部提示 (弹窗未被裁掉)
+    XX_TEST_EXPECT_TRUE(text.find("关于") == std::string::npos);  // 末尾条目在视口外
+
+    // End: 选中项跳到末项, 内容区跟着滚动 (末项进来, 首项出去)
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::End));
+    const auto scrolled = screenText(renderOnce(comp, 80, 24));
+    XX_TEST_EXPECT_TRUE(scrolled.find("关于") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(scrolled.find("其他") != std::string::npos); // 末个分组标题
+    XX_TEST_EXPECT_TRUE(scrolled.find("主题") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(scrolled.find("[Esc]") != std::string::npos);
+
+    // Home: 回到顶部
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Home));
+    const auto home = screenText(renderOnce(comp, 80, 24));
+    XX_TEST_EXPECT_TRUE(home.find("主题") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(home.find("关于") == std::string::npos);
+}
+
+/// 设置弹窗: 内容超出可用高度时显示滚动条, 装得下时不显示
+void test_settings_overlay_scroll_indicator() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    // 100x24: 内容 (30 行) 多于可见高度 (18 行) -> 内容区右侧出现滚动条
+    {
+        auto ctx = keybindTestCtx(nullptr, 24);
+        ctx.viewportWidth = 100;
+        auto       comp   = std::make_shared<SettingsOverlay>(ctx);
+        const auto text   = screenText(renderOnce(comp, 100, 24));
+        XX_TEST_EXPECT_TRUE(hasScrollbarThumb(text));
+    }
+    // 100x40: 内容全部显示 -> 没有滚动条
+    {
+        auto ctx = keybindTestCtx(nullptr, 40);
+        ctx.viewportWidth = 100;
+        auto       comp   = std::make_shared<SettingsOverlay>(ctx);
+        const auto text   = screenText(renderOnce(comp, 100, 40));
+        XX_TEST_EXPECT_FALSE(hasScrollbarThumb(text));
+    }
+}
+
+/// 设置弹窗: 滚轮上/下 = 移动选中项 (与文件选择弹窗一致; 内容区随选中项滚动)
+void test_settings_overlay_mouse_wheel() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    auto       ctx  = keybindTestCtx(nullptr, 24);
+    auto       comp = std::make_shared<SettingsOverlay>(ctx);
+    renderOnce(comp, 100, 24);
+    XX_TEST_EXPECT_EQ(comp->selectedIndex(), 0);
+
+    ftxui::Mouse wheel;
+    // 真实滚轮事件的 motion 为 Pressed/Released (见 ftxui 输入解析): 处理只看 button
+    wheel.motion = ftxui::Mouse::Pressed;
+    wheel.x      = 20;
+    wheel.y      = 10;
+
+    // 已在首项: 上滚不动
+    wheel.button = ftxui::Mouse::WheelUp;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", wheel)));
+    XX_TEST_EXPECT_EQ(comp->selectedIndex(), 0);
+
+    // 下滚: 选中项下移一项 (条目多时无需键盘也能看到后面的内容)
+    wheel.button = ftxui::Mouse::WheelDown;
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", wheel)));
+    XX_TEST_EXPECT_EQ(comp->selectedIndex(), 1);
+    XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::Mouse("", wheel)));
+    XX_TEST_EXPECT_EQ(comp->selectedIndex(), 2);
+
+    // 滚到末尾: 内容区随之滚动, 末项可见
+    for (int i = 0; i < 12; ++i) {
+        comp->OnEvent(ftxui::Event::Mouse("", wheel));
+    }
+    XX_TEST_EXPECT_EQ(comp->selectedIndex(), 8); // 最后一项 (共 9 项)
+    const auto text = screenText(renderOnce(comp, 100, 24));
+    XX_TEST_EXPECT_TRUE(text.find("关于") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("[Esc]") != std::string::npos); // 弹窗仍未被裁掉
+
+    // 上滚: 回到首项
+    wheel.button = ftxui::Mouse::WheelUp;
+    for (int i = 0; i < 12; ++i) {
+        comp->OnEvent(ftxui::Event::Mouse("", wheel));
+    }
+    XX_TEST_EXPECT_EQ(comp->selectedIndex(), 0);
+    XX_TEST_EXPECT_TRUE(screenText(renderOnce(comp, 100, 24)).find("主题") != std::string::npos);
 }
 
 /// 快捷键列表弹窗: 无注册时显示空状态; Esc 关闭
@@ -1436,7 +1878,15 @@ TestResult testTuiSettings() {
     test_tui_info_footer_update_notice();
     test_settings_overlay_keybind_entry();
     test_settings_overlay_check_update_entry();
-    test_settings_overlay_short_terminal();
+    test_settings_overlay_check_update_now_entry();
+    test_settings_overlay_groups();
+    test_settings_overlay_short_terminal_scroll();
+    test_settings_overlay_scroll_indicator();
+    test_settings_overlay_mouse_wheel();
+    test_update_notice_overlay_render_and_download();
+    test_update_notice_overlay_narrow_terminal();
+    test_tui_manual_update_check_state();
+    test_tui_manual_update_check_toast();
     test_keybind_list_overlay_empty();
     test_keybind_list_overlay_entries();
     test_keybind_list_overlay_scroll();

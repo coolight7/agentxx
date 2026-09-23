@@ -302,76 +302,98 @@ void SessionSelectorOverlay::flushActivation() {
 
 namespace {
 
-/// 设置条目版式常量 (按它们估算弹窗高度: 终端过矮时压缩项间距)
-/// - 单个条目 = 标签行 + 值行; 常规版式项间距 1 行
+/// 设置条目版式常量
+/// - 单个条目 = 标签行 + 值行; 条目之间 1 行间距, 分组标题 1 行
 /// - 外框行数: 上下内边距 2 + 标题栏 1 + 内容与区域之间 2 + 底部提示 1
-constexpr int kSettingsItemRows    = 2;
-constexpr int kSettingsRowGap      = 1;
+/// - 内容超出可用高度时不再压缩间距: 内容区限高并可滚动 (选中项自动滚入视口)
 constexpr int kSettingsSurfaceRows = 6;
 
 } // namespace
 
 SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
-    ctx_(ctx) {}
+    ctx_(ctx) {
+    list_.setRowGap(0);
+}
 
 void SettingsOverlay::buildItems() {
+    // 分组标题 (同一分组的条目填同一个标题; 见 [UiActionItem::group])
+    const std::string groupInterface = std::string{tr("settings.groupInterface")};
+    const std::string groupDisplay   = std::string{tr("settings.groupDisplay")};
+    const std::string groupUpdate    = std::string{tr("settings.groupUpdate")};
+    const std::string groupOther     = std::string{tr("settings.groupOther")};
+
     list_.setItems({
+  // ---- 界面: 主题 / 动画 / 语言 ----
   // 主题 (点击/Enter 循环切换 Dark <-> Light)
         {.id    = "theme",
-         .label = std::string{tr("settings.themeLabel")},
-         .value = trf("settings.themeValue", ctx_.theme->name),
+         .label = trf("settings.themeValue", ctx_.theme->name),
+         .group = groupInterface,
          .onActivate =
              [this] {
                  cycleTheme();
              }},
  // 动画等级 (点击/Enter 循环切换)
         {.id    = "animation",
-         .label = std::string{tr("settings.animLabel")},
-         .value = trf("settings.animValue", TUISettings::instance().animationLevelName()),
+         .label = trf("settings.animValue", TUISettings::instance().animationLevelName()),
+         .group = groupInterface,
          .onActivate =
              [this] {
                  cycleAnimationLevel();
              }},
- // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+ // 界面语言 (点击/Enter 循环切换)
+        {.id    = "language",
+         .label = trf("settings.langValue", TUISettings::instance().languageName()),
+         .group = groupInterface,
+         .onActivate =
+             [this] {
+                 cycleLanguage();
+             }},
+
+ // ---- 显示: 日志 / 末尾思考 ----
+  // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
         {.id    = "log-level",
-         .label = std::string{tr("settings.logLabel")},
-         .value = trf("settings.logValue", TUISettings::instance().logLevelName()),
+         .label = trf("settings.logValue", TUISettings::instance().logLevelName()),
+         .group = groupDisplay,
          .onActivate =
              [this] {
                  cycleLogLevel();
              }},
  // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
         {.id    = "tail-thinking",
-         .label = std::string{tr("settings.thinkLabel")},
-         .value = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
+         .label = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
+         .group = groupDisplay,
          .onActivate =
              [] {
                  cycleTailThinkingMode();
              }},
- // 界面语言 (点击/Enter 循环切换)
-        {.id    = "language",
-         .label = std::string{tr("settings.langLabel")},
-         .value = trf("settings.langValue", TUISettings::instance().languageName()),
-         .onActivate =
-             [this] {
-                 cycleLanguage();
-             }},
- // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
+ // ---- 更新: 启动时检查开关 + 立即检查 ----
+  // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
         {.id    = "check-update",
-         .label = std::string{tr("settings.updateLabel")},
-         .value = trf(
+         .label = trf(
              "settings.updateValue", std::string{
                  tr(TUISettings::instance().checkUpdateOnStartup() ? "settings.switchOn"
                                                                    : "settings.switchOff")
              }
-         ), .onActivate =
+         ), .group = groupUpdate,
+         .onActivate =
              [] {
                  cycleCheckUpdateOnStartup();
              }},
- // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
+ // 检查更新 (点击/Enter 立即检查一次; 有新版本时外部打开更新提示弹窗)
+        {.id    = "check-update-now",
+         .label = std::string{tr("settings.checkUpdateValue")},
+         .group = groupUpdate,
+         .onActivate =
+             [this] {
+                 if (onCheckUpdate_) {
+                     onCheckUpdate_();
+                 }
+             }},
+ // ---- 其他: 快捷键 / 信息 ----
+  // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
         {.id    = "keybinds",
-         .label = std::string{tr("settings.keybindLabel")},
-         .value = trf("settings.keybindValue", keybindCount()),
+         .label = trf("settings.keybindValue", keybindCount()),
+         .group = groupOther,
          .onActivate =
              [this] {
                  if (onKeybindList_) {
@@ -380,8 +402,8 @@ void SettingsOverlay::buildItems() {
              }},
  // Info (点击/Enter 打开关于弹窗)
         {.id    = "about",
-         .label = std::string{tr("settings.infoLabel")},
-         .value = std::string{tr("settings.aboutValue")},
+         .label = std::string{tr("settings.aboutValue")},
+         .group = groupOther,
          .onActivate =
              [this] {
                  if (onAbout_) {
@@ -396,14 +418,13 @@ Element SettingsOverlay::OnRender() {
 
     hits_.beginFrame();
     buildItems();
+    // 主题可能被本弹窗切换: 每帧按当前主题刷新配色 (分组标题色也来自这里)
+    style_ = UiActionStyle::fromTheme(theme);
 
-    // 终端过矮时压缩条目间距 (优先保证"全部条目 + 底部提示"可见):
-    // 常规版式高度 = 条目数 × 2 行 + 项间距 + 外框行数 (见 [kSettingsItemRows] 等)
-    const int termH      = std::max(1, ctx_.terminalSize().dimy);
-    const int count      = static_cast<int>(list_.size());
-    const int normalRows = count * kSettingsItemRows
-                           + (count > 0 ? (count - 1) * kSettingsRowGap : 0) + kSettingsSurfaceRows;
-    list_.setRowGap(normalRows > termH ? 0 : kSettingsRowGap);
+    // 内容区限高: 外框固定占 [kSettingsSurfaceRows] 行 (上下内边距/标题栏/间距/底部提示),
+    // 内容更高时弹窗不超出终端, 由滚动区显示其余条目 (选中项自动滚入视口)
+    const int termH          = std::max(1, ctx_.terminalSize().dimy);
+    const int maxContentRows = std::max(1, termH - kSettingsSurfaceRows);
 
     // 条目版式: 标签行 (弱化文字) + 值行 (整行色带, 即命中区域); 条目之间留一空行
     // - 选中态: 高亮背景覆盖值行整行 (与模型/会话列表弹窗的整行高亮一致)
@@ -411,7 +432,7 @@ Element SettingsOverlay::OnRender() {
     // - 面性风格: 不使用边框/下划线; 左右留白由外框统一提供
     auto rowBuilder = [&](const UiActionItem& item, bool selected, size_t) -> Element {
         Element row = hbox({
-            text(item.value),
+            text(item.label),
             filler(),
         });
         if (selected) {
@@ -420,17 +441,18 @@ Element SettingsOverlay::OnRender() {
         } else {
             row = row | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor);
         }
-        return vbox({
-            text(item.label) | color(theme.hintColor),
-            std::move(row),
-        });
+        // 选中项带 focus: 交给 yframe 把选中项滚入视口 (条目多/终端过矮时)
+        return selected ? (std::move(row) | focus) : std::move(row);
     };
 
+    // 内容区: 条目 + 分组标题 + 间距; 超出限高时右侧显示滚动条 (vscroll_indicator 要在
+    // yframe 内侧: 它按"内容高度 vs 可见高度"决定是否画滚动条)
     const auto surface = TuiSurfaceStyle::fromTheme(theme);
     return tuiSurfacePopup(
                surface,
                tr("settings.title"),
-               list_.render(hits_, style_, rowBuilder),
+               list_.render(hits_, style_, rowBuilder) | vscroll_indicator | yframe
+                   | size(HEIGHT, LESS_THAN, maxContentRows),
                tr("settings.hint")
            )
            | size(WIDTH, LESS_THAN, 80);
@@ -443,6 +465,15 @@ bool SettingsOverlay::OnEvent(Event event) {
             onClose_();
         }
         return true;
+    }
+    if (event.is_mouse()) {
+        // 滚轮 = 移动选中项 (与文件选择弹窗一致); 滚动区随选中项自动滚动
+        const auto& mouse = event.mouse();
+        if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown) {
+            list_.onKeyEvent(mouse.button == Mouse::WheelUp ? Event::ArrowUp : Event::ArrowDown);
+            ctx_.postRedraw();
+            return true;
+        }
     }
     // 上下键选择条目, Enter/鼠标点击命中激活 (切换设置项; 弹窗保持打开便于连续调整)
     const bool handled
@@ -587,6 +618,94 @@ size_t SettingsOverlay::keybindCount() const {
     }
     auto snapshot = ctx_.pluginManager->uiRegistrySnapshot();
     return snapshot ? snapshot->keybinds.size() : 0;
+}
+
+// ---------------------------------------------------------------------------
+// UpdateNoticeOverlay
+// ---------------------------------------------------------------------------
+
+UpdateNoticeOverlay::UpdateNoticeOverlay(
+    TUICtx&     ctx,
+    std::string currentVersion,
+    std::string latestTag,
+    std::string url
+) :
+    ctx_(ctx),
+    currentVersion_(std::move(currentVersion)),
+    latestTag_(std::move(latestTag)),
+    url_(std::move(url)) {}
+
+Element UpdateNoticeOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+
+    // 帧首清空命中表: 未渲染出来的按钮不参与命中 (见 ui_hit.h)
+    hits_.beginFrame();
+
+    const auto surface = TuiSurfaceStyle::fromTheme(theme);
+
+    // 版本行: "新版本 {当前版本} -> {新版本}" (新版本标签用强调色突出)
+    Element versionLine = text(trf("update.versionLine", currentVersion_, latestTag_)) | bold
+                          | color(theme.accentColor);
+    // 链接行: "· {发布页链接}"; 链接可能很长, 用 paragraph 按可用宽度换行 (不截断,
+    // 用户可用鼠标拖选复制)
+    Element linkLine = paragraph(fmt::format("· {}", url_)) | color(theme.normalColor);
+    // 下载按钮 (面性风格色块, 与其它弹窗按钮一致): 点击/Enter 打开浏览器
+    Element button = hits_.add(
+        text(tr("update.download")) | bgcolor(theme.buttonBgColor) | color(theme.buttonTextColor)
+            | bold,
+        std::string{kDownloadHitId}
+    );
+
+    Element content = vbox({
+        std::move(versionLine),
+        std::move(linkLine),
+        text(""),
+        hbox({filler(), std::move(button), filler()}),
+    });
+    return tuiSurfacePopup(surface, tr("update.title"), std::move(content), tr("update.hint"))
+           | size(WIDTH, LESS_THAN, 74);
+}
+
+bool UpdateNoticeOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        if (onClose_) {
+            onClose_();
+        }
+        return true;
+    }
+    // Enter 等价点击 [ 前往下载 ]
+    if (event == Event::Return) {
+        activateDownload();
+        return true;
+    }
+    if (event.is_mouse()) {
+        if (hits_.findClick(event.mouse()) != nullptr) {
+            activateDownload();
+            return true;
+        }
+        // 模态: 其余鼠标事件被吞掉 (不下发给被遮挡的主界面)
+        return true;
+    }
+    return true;
+}
+
+void UpdateNoticeOverlay::activateDownload() {
+    ctx_.postRedraw();
+    if (onDownload_) {
+        // 打开浏览器与"是否关闭弹窗"由外部决定: 关闭动作在外部延后到本次事件
+        // 处理返回后执行 (在自身事件处理里关闭弹窗会析构正在执行的弹窗对象)
+        onDownload_();
+    }
+}
+
+ftxui::Box UpdateNoticeOverlay::downloadButtonBox() const {
+    for (const auto& entry : hits_.entries()) {
+        if (std::string_view{entry.payload.id} == kDownloadHitId) {
+            return *entry.box;
+        }
+    }
+    return agentxx::client::kNoBox;
 }
 
 // ---------------------------------------------------------------------------

@@ -57,6 +57,10 @@ constexpr Entry kTable[] = {
      "Authorization prompt restored: permission requests will be asked again",                       "已恢复询问授权: 权限请求将再次询问"                                               },
     {"toast.updateAvailable",
      "New version {} available (current {}); click the notice in the Info sidebar to copy the link", "发现新版本 {} (当前 {}); 点击 Info 侧边栏提示可复制链接"                       },
+    {"toast.updateChecking",      "Checking for updates...",                                         "正在检查更新..."                                                                              },
+    {"toast.updateLatest",        "Already on the latest version",                                   "已经是最新版本"                                                                               },
+    {"toast.updateCheckFailed",   "Update check failed: {}",                                         "检查更新失败: {}"                                                                             },
+    {"toast.updateOpenFail",      "Cannot open the browser (select the link to copy it)",            "无法打开浏览器 (可拖选链接复制)"                                                          },
 
  // ---- 待发送消息队列 (顶栏 + 弹窗) ----
     {"queue.barTitle",            "  • Message Queue: {}",                                         "  • 待发送消息队列: {}"                                                                  },
@@ -117,6 +121,10 @@ constexpr Entry kTable[] = {
 
  // ---- 设置弹窗 ----
     {"settings.title",            "Settings",                                                        "设置"                                                                                           },
+    {"settings.groupInterface",   "Interface",                                                       "界面"                                                                                           },
+    {"settings.groupDisplay",     "Display",                                                         "显示"                                                                                           },
+    {"settings.groupUpdate",      "Update",                                                          "更新"                                                                                           },
+    {"settings.groupOther",       "Other",                                                           "其他"                                                                                           },
     {"settings.themeLabel",       "Theme",                                                           "主题"                                                                                           },
     {"settings.themeValue",       "Theme: {}",                                                       "主题: {}"                                                                                       },
     {"settings.animLabel",        "Animation",                                                       "动画"                                                                                           },
@@ -131,12 +139,21 @@ constexpr Entry kTable[] = {
     {"settings.aboutValue",       "About",                                                           "关于"                                                                                           },
     {"settings.keybindLabel",     "Shortcuts",                                                       "快捷键"                                                                                        },
     {"settings.keybindValue",     "Plugin Keybinds: {}",                                             "插件快捷键: {}"                                                                              },
-    {"settings.updateLabel",      "Check Updates",                                                   "更新"                                                                                           },
+    {"settings.updateToggleLabel", "Check for Updates on Startup",                                   "启动时检查更新"                                                                             },
     {"settings.updateValue",      "Check for Updates on Startup: {}",                                "启动时检查更新: {}"                                                                        },
+    {"settings.checkUpdateLabel", "Check for Updates Now",                                           "检查更新"                                                                                     },
+    {"settings.checkUpdateValue", "Check Now",                                                       "立即检查"                                                                                     },
     {"settings.switchOn",         "On",                                                              "开"                                                                                              },
     {"settings.switchOff",        "Off",                                                             "关"                                                                                              },
     {"settings.hint",
      " [Up/Down] Move [Enter] Toggle [Esc] Close ",                                                  " [方向键] 移动 [Enter] 切换 [Esc] 关闭 "                                                 },
+
+ // ---- 更新提示弹窗 (设置弹窗"检查更新"发现新版本时) ----
+    {"update.title",              "Update Available",                                                "发现新版本"                                                                                  },
+    {"update.versionLine",        "New version {} -> {}",                                            "新版本 {} -> {}"                                                                              },
+    {"update.download",           "[ Download ]",                                                    "[ 前往下载 ]"                                                                                 },
+    {"update.hint",
+     " [Enter] Download [Esc] Close ",                                                              " [Enter] 前往下载 [Esc] 关闭 "                                                             },
 
  // ---- 插件快捷键列表弹窗 (只读) ----
     {"keybind.title",             "Plugin Keybinds",                                                 "插件快捷键"                                                                                  },

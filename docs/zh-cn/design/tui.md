@@ -130,7 +130,7 @@
 | `InputComponent` | [components/input_bar.h](/agent/client/include/agentxx-client/io/tui/components/input_bar.h) | 输入框 + 附件托盘 + 待发队列行 |
 | `StatusBarComponent` | [components/status_bar.h](/agent/client/include/agentxx-client/io/tui/components/status_bar.h) | 状态栏 (模型/上下文/插件项/会话/设置) |
 | `SidebarComponent` | [components/sidebar.h](/agent/client/include/agentxx-client/io/tui/components/sidebar.h) | 侧边栏 (内容区 + tabs 列表 + 宽度拖拽) |
-| 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/待发队列/上下文/mermaid/text/diff/custom/文件选择 |
+| 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 |
 | `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定; 控件与提交行复用 `ui_components`) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
 | `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把 `agentxx.ui.item` 描述渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
@@ -221,6 +221,7 @@ struct UiActionItem {
     std::string           label;       // 主文本
     std::string           value;       // 右侧当前值 (可选)
     std::string           hint;        // 次级说明 (弱化色, 可选)
+    std::string           group;       // 所属分组标题 (可选, 变化处插一行标题)
     bool                  enabled;     // 不可用时弱化且不可激活
     std::function<void()> onActivate;  // Enter / 点击命中时执行的动作
 };
@@ -229,6 +230,10 @@ struct UiActionItem {
 `UiActionList` 负责: 选中项维护 (`setItems` 后按 id 保持)、键盘导航 (Up/Down/Home/End,
 跳过 disabled)、Enter 激活、鼠标点击命中后"先置选中再激活"、渲染时逐项登记命中、整行高亮;
 需要多行版式时传 `rowBuilder` (设置弹窗的两行条目、会话弹窗的两行条目都是这样实现的)。
+
+分组标题 ([UiActionItem::group]): 相邻条目分组标题相同时视为同一组, 变化处插入一行
+标题 (标题行不登记命中, 不可点击, 也不占条目下标), 标题色取 [UiActionStyle::groupFg]。
+设置弹窗用它把条目分成 界面 / 显示 / 更新 / 其他 四组 (见 §2.5)。
 
 用法见 `SettingsOverlay` / `LogMenuOverlay` / `ModelSelectorOverlay` /
 `SessionSelectorOverlay` 的实现: 新增一个设置项只需往条目表里加一行,
@@ -244,7 +249,23 @@ struct UiActionItem {
   - 全局快捷键由外层 `CatchEvent` 在弹窗之前处理 (Ctrl+C 退出等), 不受影响。
 - 弹窗内的按钮同样走命中登记表; 弹窗 `onClose` 由组件回调触发 (关闭会销毁弹窗对象,
   因此**不要在条目激活动作内直接关闭** —— 记录"待关闭"标志, 待条目列表事件处理返回后再关闭,
-  见 `ModelSelectorOverlay::flushActivation` / `SessionSelectorOverlay::flushActivation`)。
+  见 `ModelSelectorOverlay::flushActivation` / `SessionSelectorOverlay::flushActivation`;
+  需要"动作成功后才关闭"时用 `enqueueUiAction` 延后到下一帧, 见
+  `TUIClientAgentIO::openUpdateNotice` 的"前往下载")。
+- **toast 提示叠在模态层之上**: 提示由根的 `Renderer(modal_, ...)` 经
+  `TUIClientAgentIO::applyToastOverlay` 叠加, 不在主界面树里 —— 弹窗打开时主界面整棵树
+  不参与渲染, 提示画在主界面里会被弹窗盖住 (例如在设置弹窗里点"检查更新"的进行中提示
+  与结果提示)。提示超过 `kToastDuration` (3 秒) 后由渲染帧清除。
+- **设置弹窗** ([SettingsOverlay](/agent/client/include/agentxx-client/io/tui/components/overlays.h))
+  的条目按分组显示 (界面 / 显示 / 更新 / 其他, 见 §2.4), 交互与高亮仍由 `UiActionList`
+  统一实现; 内容超出终端可用高度时**内容区限高并可滚动**, 弹窗本身不会超出终端
+  (条目被裁掉就再也看不到、点不到):
+  - 条目版式为两行 (标签行 + 值行色带), 内容区 = `vscroll_indicator | yframe |
+    size(HEIGHT, LESS_THAN, 终端高度 - 外框 6 行)`;
+  - 选中项带 `focus`, 由 `yframe` 自动滚入视口 (与模型选择弹窗同机制), 因此
+    Up/Down/Home/End 选的条目一定可见;
+  - 滚轮 = 上/下移动选中项 (与文件选择弹窗一致), 内容区随之滚动;
+  - 装不下时内容区右侧画滚动条, 装得下时不画。
 
 ### 2.6 插件 UI
 
@@ -307,9 +328,9 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 路径一律以 **UTF-8** 显示 (`utilxx_base::pathToUtf8Generic`): Windows 下
   `std::filesystem::path::string()` 返回本地代码页, 中文目录会显示为乱码。
 
-### 2.8 启动更新检查 (GitHub Release)
+### 2.8 更新检查 (GitHub Release)
 
-启动时可选地查询项目最新发布版本, 有更新才提示 (纯附加提示, 失败静默):
+可选地查询项目最新发布版本, 有更新才提示:
 
 - 实现在 [update_check.h](/agent/client/include/agentxx-client/update_check.h) /
   `update_check.cpp`: 对 `https://github.com/coolight7/agentxx/releases/latest` 发一次
@@ -319,17 +340,43 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 版本比较只按三段数字 (`major.minor.patch`), 忽略 `-rc1` 之类后缀; 仅当最新版本
   **大于**当前编译版本 (`agentxx::kVersion`) 才算"有更新" (两侧任一解析失败都按无更新
   处理, 宁可漏报不误报)。
-- 触发点: `TUIClientAgentIO::start()` → `startUpdateCheck()` (client io 线程协程,
-  启动后延迟 3 秒再请求, 不阻塞 UI 线程); 结果经 `applyUpdateCheckResult` 写入共享
-  状态 `availableUpdateTag/Url` 并 toast 提示。
-- 展示: Info 侧边栏底部多一行 `[ 新版本 {tag} ]` + 点击提示 (`info.updateNotice` /
-  `info.updateHint`), 点击复制发布页链接 (经 shell 级命中表 `kUpdateNoticeHitId`);
-  无更新时不渲染该行。
-- 开关: 设置弹窗"启动时检查更新"条目 (`settings.updateLabel`, 开/关), 持久化键
-  `tui.checkUpdateOnStartup` (global.db), 默认开; 变更只影响下次启动。
-- 测试: 版本解析/比较与失败路径 `agentxx_test update_check`; 本地 HTTP 服务端到端
-  (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 界面提示与设置条目在
-  `agentxx_test tui_settings`。
+- 触发方式两种, 共用上面的探测实现:
+  1. **启动检查**: `TUIClientAgentIO::start()` → `startUpdateCheck()` (client io 线程
+     协程, 启动后延迟 3 秒再请求, 不阻塞 UI 线程); 受设置弹窗"更新"组的
+     `启动时检查更新` 开关 (`settings.updateToggleLabel` + `settings.updateValue`,
+     持久化键 `tui.checkUpdateOnStartup`, default 开) 控制,
+     关闭时不发起; 属**附加提示**, 失败只记日志 (不打扰用户); 结果经
+     `applyUpdateCheckResult` 写入共享状态 `availableUpdateTag/Url` 并 toast。
+  2. **即时检查**: 设置弹窗"更新"组内的"检查更新"条目 (`settings.checkUpdateLabel`,
+     值 `settings.checkUpdateValue`; 同组还有上面的启动检查开关, 两者各占一条条目) →
+     `TUIClientAgentIO::requestUpdateCheckNow()`
+     (UI 线程): 先 toast "正在检查更新" 作为点击反馈, 再在 client io 线程
+     `co_spawn` 一次探测 (不受启动开关影响; 已有检查在跑时按 `updateChecking_`
+     原子标志去重, 不重复发请求)。结果是**用户要求的动作**, 因此必须有反馈:
+     `applyManualUpdateCheckResult` (io 线程, 顺带写共享状态) →
+     `enqueueUiAction` → `showUpdateCheckResult` (UI 线程):
+        - 有新版本 -> 打开更新提示弹窗 `UpdateNoticeOverlay`;
+        - 无更新 -> toast "已经是最新版本" (`toast.updateLatest`);
+        - 检查失败 -> toast 失败原因 (`toast.updateCheckFailed`)。
+- 展示 (启动检查): Info 侧边栏底部多一行 `[ 新版本 {tag} ]` + 点击提示
+  (`info.updateNotice` / `info.updateHint`), 点击复制发布页链接 (经 shell 级命中表
+  `kUpdateNoticeHitId`); 无更新时不渲染该行。即时检查发现新版本时同样写入该状态,
+  因此两个触发方式在 Info 栏共用同一提示行。
+- 更新提示弹窗 (`UpdateNoticeOverlay`, 内容短, 不需要滚动容器): 版式为
+  `新版本 {当前} -> {新版本}` / `· {发布页链接}` / `[ 前往下载 ]` (链接行用
+  `paragraph` 按可用宽度换行, 长链接不截断, 可拖选复制); 内容行的文案键为
+  `update.title` / `update.versionLine` / `update.download` / `update.hint`。
+  点击按钮或 Enter 触发宿主的 `onDownload`: 经
+  [open_url.h](/agent/client/include/agentxx-client/util/open_url.h) 的
+  `openUrlInBrowser` 交给系统默认程序打开浏览器 (Windows `ShellExecuteW` /
+  macOS `open` / Android `termux-open-url` 回退 `xdg-open` / 其它 `xdg-open`,
+  后台线程执行不阻塞 UI); 打开成功则弹窗关闭
+  (关闭经 UI 动作队列延后到事件处理返回后, 避免在弹窗自己的事件处理里析构弹窗),
+  链接未通过校验 (非 http/https 或含可注入 shell 的字符) 时保留弹窗并 toast。
+  与"关于"弹窗一样是**替换**当前模态 (打开时设置弹窗关闭, 关闭后回到主界面)。
+- 测试: 版本解析/比较、失败路径与链接校验 `agentxx_test update_check`; 本地 HTTP
+  服务端到端 (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 设置条目、更新提示
+  弹窗 (版式/点击/Enter/Esc/窄终端换行) 与结果状态在 `agentxx_test tui_settings`。
 
 ---
 
@@ -405,3 +452,4 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 | 侧边栏 tab 列表维护"可见下标 -> tab 下标"映射表 | `SidebarComponent` | 命中载荷直接携带条目归属 |
 | 状态栏/输入栏/消息列表的按钮点击散落在全局事件处理里 | `agent_tui.cpp` | 各组件自行处理自身区域内点击 (回调在装配时注入) |
 | 上下文弹窗点击消息, 展开/折叠的是"别的消息" (消息多、滚动后尤其明显) | `ContextOverlay` 折叠头命中框 (子项元素内的 `reflect`: 视口外子项残留测量大框) | 改为按 `Scrollable::visibleBoxes()` + 子项->消息下标映射命中 (回归测试见 `agentxx_test tui_context_overlay`) |
+| 设置条目变多或终端过矮时, 末尾条目被裁掉 (看不到也点不到); 之前靠压缩条目间距回避 | `SettingsOverlay` | 条目改为分组显示 (标题只占一行), 内容区限高 + `vscroll_indicator \| yframe` 滚动 (选中项带 `focus` 自动滚入视口, 滚轮 = 上/下移动选中项); 回归测试见 `agentxx_test tui_settings` |
