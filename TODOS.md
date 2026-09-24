@@ -10,8 +10,7 @@
 - tui 按 user msg 快捷跳转、top、bottom
 - 破甲插件，通过注入系统提示词、修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
 - client 连接 server 时插入 tool、加载插件
-- codegraph 结果排序，优先展示代码内，将 json、md 内容排后
-- 事件通知触发 agent
+- 事件驱动触发 agent
 - 主动记忆 插件tool
 
 - SVG绘制支持

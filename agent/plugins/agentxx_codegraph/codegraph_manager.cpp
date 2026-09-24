@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -666,6 +667,141 @@ static int score_target(const codegraph::Node& source, const codegraph::Node& ca
         }
     }
     return score;
+}
+
+// ---------------------------------------------------------------------------
+// 结果排序: 代码文件优先
+// - 索引会把数据/文档类文件 (json/markdown/yaml/xml/html/css) 也抽成节点, 查询
+//   结果里这些文件的符号与代码符号混排 (底层按节点类型排, 同类型按入库顺序),
+//   想看代码时容易被它们占满名额; 因此统一做一次稳定重排: 代码文件的节点在前,
+//   数据/文档文件的节点在后, 同组内保持原有顺序 (相关度/遍历顺序不变)
+// - 判定依据: 节点记录的语言名 (索引时由 codegraph::detect_language 得出);
+//   上下文结果 (ContextBuilder::node_to_json) 只有文件路径, 按扩展名判断
+// ---------------------------------------------------------------------------
+
+/// 搜索结果候选倍数 (见 [CodeGraphManager::Impl::searchSymbols]):
+/// 底层先按节点类型排序再截断到 limit, 数据/文档文件的符号会占满名额;
+/// 多取候选后重排, 再截断回 limit, 保证代码符号能进入最终结果
+static constexpr int kSearchCandidateFactor = 3;
+
+/// 数据/文档类文件的扩展名与语言名 (两套写法合在一张表内:
+/// 语言名如 "markdown" 由提取器给出, 扩展名如 "md"/"json" 用于只有路径的结果)
+static constexpr std::string_view kDocOrDataTypes[] = {
+    "json", "md", "mdx", "markdown", "yaml", "yml", "xml", "html", "htm", "css",
+};
+
+/// 扩展名/语言名是否属于数据/文档类 (大小写不敏感: 扩展名可能是 .MD / .Json)
+static bool isDocOrDataType(std::string_view token) {
+    for (auto type : kDocOrDataTypes) {
+        if (token.size() != type.size()) {
+            continue;
+        }
+        bool same = true;
+        for (size_t i = 0; i < type.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(token[i])) != type[i]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 结果分组: 0 = 代码文件 (优先展示), 1 = 数据/文档文件 (排后)
+/// - [language] 为节点记录的语言名, 为空时按 [file_path] 的扩展名判断
+/// - 两者都无法判定时按代码文件处理 (保持原有顺序, 不额外下沉)
+static int resultSortGroup(std::string_view file_path, std::string_view language) {
+    if (!language.empty()) {
+        return isDocOrDataType(language) ? 1 : 0;
+    }
+    auto dot   = file_path.rfind('.');
+    auto slash = file_path.find_last_of("/\\");
+    // 目录名里的点不算扩展名 (分隔符之后才取)
+    if (dot != std::string_view::npos && (slash == std::string_view::npos || dot > slash)) {
+        return isDocOrDataType(file_path.substr(dot + 1)) ? 1 : 0;
+    }
+    return 0;
+}
+
+/// 节点列表重排: 代码文件在前 (std::stable_sort, 同组内顺序不变)
+static void sortNodesCodeFirst(std::vector<codegraph::Node>& nodes) {
+    if (nodes.size() < 2) {
+        return;
+    }
+    std::stable_sort(
+        nodes.begin(),
+        nodes.end(),
+        [](const codegraph::Node& a, const codegraph::Node& b) {
+            return resultSortGroup(a.file_path, a.language)
+                   < resultSortGroup(b.file_path, b.language);
+        }
+    );
+}
+
+/// 取精简 JSON 节点 (ContextBuilder::node_to_json 产物) 的排序分组
+/// - 缺少 file 字段时按代码文件处理 (保持它原有的靠前位置)
+static int jsonNodeSortGroup(const codegraph::Json& node) {
+    if (!node.is_object() || !node.contains("file")) {
+        return 0;
+    }
+    const auto& file = node["file"];
+    if (!file.is_string()) {
+        return 0;
+    }
+    return resultSortGroup(file.get<std::string>(), std::string_view{});
+}
+
+/// 精简 JSON 节点数组重排: 代码文件在前 (字段见 ContextBuilder::node_to_json:
+/// kind/name/file/line[/signature])
+static void sortJsonNodesCodeFirst(codegraph::Json& arr) {
+    if (!arr.is_array() || arr.size() < 2) {
+        return;
+    }
+    std::vector<codegraph::Json> items;
+    items.reserve(arr.size());
+    for (size_t i = 0; i < arr.size(); ++i) {
+        items.push_back(arr[i]);
+    }
+    std::stable_sort(
+        items.begin(),
+        items.end(),
+        [](const codegraph::Json& a, const codegraph::Json& b) {
+            return jsonNodeSortGroup(a) < jsonNodeSortGroup(b);
+        }
+    );
+    codegraph::Json sorted = codegraph::Json::array();
+    for (auto& item : items) {
+        sorted.push_back(std::move(item));
+    }
+    arr = std::move(sorted);
+}
+
+/// 若 [obj] 里存在 [key] 且为节点数组, 则重排 (代码文件在前)
+static void sortJsonSectionCodeFirst(codegraph::Json& obj, std::string_view key) {
+    if (obj.is_object() && obj.contains(std::string{key})) {
+        sortJsonNodesCodeFirst(obj[std::string{key}]);
+    }
+}
+
+/// 调用关系/影响分析结果重排: 其中的 nodes 数组代码文件优先
+/// - 结果形态: {"nodes": [...], "edges": [...]}, 见 ContextBuilder::get_callers 等
+static void sortImpactNodesCodeFirst(codegraph::Json& impact) {
+    sortJsonSectionCodeFirst(impact, "nodes");
+}
+
+/// 搜索候选数: 请求数量的 kSearchCandidateFactor 倍 (limit <= 0 表示不限, 原样返回)
+static int searchFetchLimit(int limit) {
+    if (limit <= 0) {
+        return limit;
+    }
+    constexpr int kMax = std::numeric_limits<int>::max();
+    if (limit > kMax / kSearchCandidateFactor) {
+        return kMax;
+    }
+    return limit * kSearchCandidateFactor;
 }
 
 class CodeGraphManager::Impl {
@@ -1491,7 +1627,13 @@ public:
             // 查询异常转为 result.error, 不向外抛出
             catchError<bool>(
                 [&]() -> bool {
-                    result.nodes   = fts_search_->search(std::string{query}, limit);
+                    // 多取候选 (底层先按节点类型排序再截断到 limit, 数据/文档
+                    // 文件的符号会占满名额), 重排后截断回 limit
+                    result.nodes = fts_search_->search(std::string{query}, searchFetchLimit(limit));
+                    sortNodesCodeFirst(result.nodes);
+                    if (limit > 0 && result.nodes.size() > static_cast<size_t>(limit)) {
+                        result.nodes.resize(static_cast<size_t>(limit));
+                    }
                     result.success = true;
                     return true;
                 },
@@ -1532,6 +1674,11 @@ public:
                         result.error   = result.context["error"].get<std::string>();
                         result.success = false;
                     } else {
+                        // 各分节的节点数组重排: 代码文件在前 (methods 不截断,
+                        // callers/callees 已由构造器按 limit 截断)
+                        sortJsonSectionCodeFirst(result.context, "callers");
+                        sortJsonSectionCodeFirst(result.context, "callees");
+                        sortJsonSectionCodeFirst(result.context, "methods");
                         result.success = true;
                     }
                     return true;
@@ -1571,6 +1718,7 @@ public:
                         result.error   = result.impact["error"].get<std::string>();
                         result.success = false;
                     } else {
+                        sortImpactNodesCodeFirst(result.impact);
                         result.success = true;
                     }
                     return true;
@@ -1610,6 +1758,7 @@ public:
                         result.error   = result.impact["error"].get<std::string>();
                         result.success = false;
                     } else {
+                        sortImpactNodesCodeFirst(result.impact);
                         result.success = true;
                     }
                     return true;
@@ -1649,6 +1798,7 @@ public:
                         result.error   = result.impact["error"].get<std::string>();
                         result.success = false;
                     } else {
+                        sortImpactNodesCodeFirst(result.impact);
                         result.success = true;
                     }
                     return true;
@@ -1689,6 +1839,7 @@ public:
                         result.error = "Symbol not found";
                         return true;
                     }
+                    // 节点按调用链顺序返回, 不做"代码文件优先"重排 (顺序即路径语义)
                     auto path_ids
                         = traverser_->find_path(from_nodes[0].id, to_nodes[0].id, max_depth);
                     if (path_ids.empty()) {

@@ -9,6 +9,7 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -73,10 +75,18 @@ static std::string create_temp_project() {
     if (fs::exists(tmp_dir)) {
         fs::remove_all(tmp_dir);
     }
-    fs::create_directories(tmp_dir);
+    // 目录划分: code/ 代码文件, docs/ 数据/文档文件。
+    // 测试按 [docs, code] 的顺序传入索引路径, 文档节点先入库 (id 更小),
+    // 底层"先按节点类型, 同类型按 id"的排序会把文档条目排到代码条目前面,
+    // 这样"代码文件优先"的重排才会被真正校验 (与此无关的遍历顺序、
+    // 文件名都不影响断言结果)
+    auto code_dir = tmp_dir / "code";
+    auto docs_dir = tmp_dir / "docs";
+    fs::create_directories(code_dir);
+    fs::create_directories(docs_dir);
 
     {
-        std::ofstream f(tmp_dir / "main.cpp");
+        std::ofstream f(code_dir / "main.cpp");
         f << R"(#include "utils.h"
 
 int add(int a, int b) {
@@ -92,7 +102,7 @@ int main() {
     }
 
     {
-        std::ofstream f(tmp_dir / "utils.h");
+        std::ofstream f(code_dir / "utils.h");
         f << R"(#pragma once
 
 int multiply(int x, int y);
@@ -102,7 +112,7 @@ void print_result(int value);
     }
 
     {
-        std::ofstream f(tmp_dir / "utils.cpp");
+        std::ofstream f(code_dir / "utils.cpp");
         f << R"(#include "utils.h"
 #include <iostream>
 
@@ -124,6 +134,24 @@ void print_result(int value) {
 )";
     }
 
+    // 数据/文档类文件: 抽出与代码符号同名的节点 (markdown 标题 → function,
+    // json 键 → variable), 用于校验搜索结果里代码文件排在前面
+    {
+        std::ofstream f(docs_dir / "notes.md");
+        f << R"(# add
+
+add 是示例符号 (文档文件, 搜索结果里应排在代码文件之后)。
+)";
+    }
+
+    {
+        std::ofstream f(docs_dir / "config.json");
+        f << R"({
+    "add": 1,
+    "addMode": 2
+})";
+    }
+
     return tmp_dir.generic_string();
 }
 
@@ -132,6 +160,61 @@ static void cleanup_temp_project(const std::string& path) {
         fs::remove_all(path);
     } catch (...) {
     }
+}
+
+/// 从搜索结果文本里取出各条目的文件路径 (每条形如 "    file: <path>:<line>")
+static std::vector<std::string> parseResultFiles(const std::string& out) {
+    static const std::string kPrefix = "    file: ";
+    std::vector<std::string> files;
+    size_t                   pos = 0;
+    while ((pos = out.find(kPrefix, pos)) != std::string::npos) {
+        size_t      begin = pos + kPrefix.size();
+        size_t      end   = out.find('\n', begin);
+        std::string entry
+            = out.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+        // 去掉结尾的行号 ":<line>" (Windows 盘符里的冒号不受影响: 取最后一个)
+        auto colon = entry.find_last_of(':');
+        files.push_back(colon == std::string::npos ? entry : entry.substr(0, colon));
+        pos = end == std::string::npos ? out.size() : end;
+    }
+    return files;
+}
+
+/// 文件是否属于数据/文档类 (按扩展名判断, 口径与插件内一致)
+static bool isDocOrDataFile(const std::string& path) {
+    static const char* kExts[] = {
+        "json", "md", "mdx", "markdown", "yaml", "yml", "xml", "html", "htm", "css",
+    };
+    auto dot = path.find_last_of('.');
+    if (dot == std::string::npos) {
+        return false;
+    }
+    std::string ext = path.substr(dot + 1);
+    for (char& c : ext) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    for (const char* e : kExts) {
+        if (ext == e) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 搜索结果顺序是否符合"代码文件优先": 数据/文档文件条目之后不应再出现代码文件条目
+/// - [sawDocOrData] 输出是否出现过数据/文档条目 (未出现时顺序断言不具意义)
+static bool codeFilesComeFirst(const std::string& out, bool& sawDocOrData) {
+    sawDocOrData = false;
+    for (const auto& file : parseResultFiles(out)) {
+        if (isDocOrDataFile(file)) {
+            sawDocOrData = true;
+            continue;
+        }
+        if (sawDocOrData) {
+            return false;
+        }
+    }
+    return true;
 }
 
 asio::awaitable<TestResult>
@@ -173,8 +256,17 @@ asio::awaitable<TestResult>
         // list-init 会优先匹配 json 的 initializer_list 构造 (元素数组),
         // 产出嵌套数组 [[path]]; json{path} 同理得到 1 元素数组而非字符串。
         // 用圆括号构造 json(path) (普通构造函数, 走 string 构造) 再入数组
+        //
+        // 索引顺序: [docs, code] —— 文档/数据文件先索引 (节点 id 更小), 保证
+        // 搜索排序断言检验的是插件的"代码文件优先"重排, 而不是入库先后
+        std::vector<std::string> paths{
+            (fs::path(tmp_project) / "docs").generic_string(),
+            (fs::path(tmp_project) / "code").generic_string(),
+        };
         utilxx_base::Json pathsArr = utilxx_base::Json::array();
-        pathsArr.push_back(utilxx_base::Json(tmp_project));
+        for (const auto& p : paths) {
+            pathsArr.push_back(utilxx_base::Json(p));
+        }
         pc.path    = path;
         pc.enabled = true;
         pc.args    = utilxx_base::Json{
@@ -219,13 +311,20 @@ asio::awaitable<TestResult>
             // 加载完成立即查询只会得到空结果 ("Symbols (0):")。
             // 轮询等待索引落库后再断言命中符号 (搜索缓存 30s TTL, 但索引
             // 完成后 CodeGraphManager 会 invalidate 使缓存失效, 下次查询
-            // 即按新数据重算; 临时项目仅 3 个小文件, 索引 <1s, 轮询间隔
+            // 即按新数据重算; 临时项目仅 5 个小文件, 索引 <1s, 轮询间隔
             // 500ms, 20s 超时兜底)。
+            // 三个夹具文件 (main.cpp/notes.md/config.json) 都要已入库: 排序
+            // 断言需要代码与数据/文档条目同时出现
+            auto hasAllFixtures = [](const std::string& text) {
+                return text.find("main.cpp") != std::string::npos
+                       && text.find("notes.md") != std::string::npos
+                       && text.find("config.json") != std::string::npos;
+            };
             auto               exec = co_await asio::this_coro::executor;
             asio::steady_timer timer(exec);
             int                waitedMs       = 0;
             const int          kWaitTimeoutMs = 20000;
-            while (out.find("add") == std::string::npos && waitedMs < kWaitTimeoutMs) {
+            while (!hasAllFixtures(out) && waitedMs < kWaitTimeoutMs) {
                 timer.expires_after(std::chrono::milliseconds(500));
                 co_await timer.async_wait(asio::use_awaitable);
                 waitedMs += 500;
@@ -233,15 +332,20 @@ asio::awaitable<TestResult>
                           {"query", "add"}
                 });
             }
-            if (out.find("add") == std::string::npos) {
+            if (!hasAllFixtures(out)) {
                 fprintf(
                     stderr,
-                    "[codegraph] search 'add' timeout after %dms, last out: %.200s\n",
+                    "[codegraph] search 'add' timeout after %dms, last out: %.400s\n",
                     waitedMs,
                     out.c_str()
                 );
             }
             XX_TEST_EXPECT_TRUE(out.find("add") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(hasAllFixtures(out));
+            // 结果排序: 代码文件条目在前, 数据/文档 (md/json) 条目在后
+            bool sawDocOrData = false;
+            XX_TEST_EXPECT_TRUE(codeFilesComeFirst(out, sawDocOrData));
+            XX_TEST_EXPECT_TRUE(sawDocOrData);
             // 空 query → 参数检查失败抛异常 (插件侧抛 std::invalid_argument,
             // 经插件边界由宿主重新抛出为 std::runtime_error; 消息保留)
             bool threw = false;
