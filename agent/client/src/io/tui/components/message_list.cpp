@@ -1227,7 +1227,9 @@ Element MessageListComponent::buildMessageBlock(
             }
             userElements.push_back(hbox({
                 text("> ") | color(theme.userColor),
-                paragraph(msg.text) | color(theme.userColor) | xflex_shrink,
+                // 正文按纯文本折行渲染 (不解析 markdown): 单节点承载整段文本,
+                // 折行结果按宽度缓存 (见 markdown::FlowText)
+                renderPlainText(msg.text, theme.userColor),
             }));
             return vbox(std::move(userElements));
         }

@@ -67,6 +67,7 @@
 #include "agentxx-test/client/test_config_loader.h"
 #include "agentxx-test/client/test_ftxui_text.h"
 #include "agentxx-test/client/test_markdown_block.h"
+#include "agentxx-test/client/test_markdown_flow.h"
 #include "agentxx-test/client/test_mermaid_state.h"
 #include "agentxx-test/client/test_thread_id.h"
 #include "agentxx-test/client/test_tui_context_overlay.h"
@@ -240,6 +241,7 @@ int main(int argn, char** argv) {
         runSync("mermaid_state", agentxx::test::testMermaidState);
         runSync("markdown_block", agentxx::test::testMarkdownBlock);
         runSync("ftxui_text", agentxx::test::testFtxuiText);
+        runSync("markdown_flow", agentxx::test::testMarkdownFlow);
 #endif
     } catch (const FailFastException&) {
         // fail-fast: 同步模块失败, 已标记 failFastTriggered 并跳过后续测试

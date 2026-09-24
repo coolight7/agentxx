@@ -37,6 +37,14 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
 
 /// 折叠消息头部单行预览的可用列数预算 (自适应宽度核心):
 
+/// 把纯文本渲染为单节点折行文本 (不解析 markdown; 见头文件说明)
+Element renderPlainText(std::string_view content, Color color) {
+    if (content.empty()) {
+        return text("");
+    }
+    return markdown::FlowText::plain(content) | ftxui::color(color);
+}
+
 /// 估算 markdown 渲染高度 (行), 与 renderMarkdown (cmark-gfm + DomBuilder)
 /// 的渲染语义对齐 (仅用于未进入视口的消息; 进入视口后实测修正)。
 ///
