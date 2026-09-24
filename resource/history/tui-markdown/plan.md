@@ -1,13 +1,10 @@
 # TUI 消息列表渲染重构实施方案 (内存 / 性能)
 
-> **实施状态: 未开始** —— 本文件是实施方案, 代码改动尚未落地 (实施将在新会话进行)。
-> 新会话从第 6 节"实施顺序与提交计划"开始: 提交 1/7 已完成 (本文件), 下一步是第 2 项 (B1 紧凑文本节点)。
-> 实施前先读第 0 节结论与第 3 节设计, 第 1 节是必须保持不变才可对比的基线数据。
-
 > 范围: 阶段 A (宿主侧每帧成本) + 阶段 B (markdown/ftxui 渲染基元) + 阶段 C (锚点式视口模型),
 > 外加 "User 消息按纯文本渲染" 与 "渲染性能测试模块"。
 > 相关代码: `agent/client/src/io/tui/{lazy_scrollable,components/message_list,markdown_block}.cpp`,
 > `agent/third_party/markdown_ftxui/`, `agent/third_party/ftxui/`。
+> 实施前先读第 0 节结论与第 3 节设计, 第 1 节是必须保持不变才可对比的基线数据。
 
 ---
 
