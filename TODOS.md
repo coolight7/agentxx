@@ -10,7 +10,7 @@
 - tui 按 user msg 快捷跳转、top、bottom
 - 破甲插件，通过注入系统提示词、修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
 - client 连接 server 时插入 tool、加载插件
-- 提示词插入 temp 路径
+- codegraph 结果排序，优先展示代码内，将 json、md 内容排后
 
 - SVG绘制支持
 - 链式 session 任务队列
@@ -18,7 +18,6 @@
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md
 - 自动建议生成、修改、总结一些经验到 AGENTS.md
-- 提示生成临时文件的目录
 - 自动生成设计文档、c++风格提取头文件声明
 - 建议当需要通读一个大项目时，可以先由 subagent 总结出大致的 wiki，然后分析划分模块化，再分享 wiki 给多个 subagent 各自负责模块解决问题
 - 使用 agentxx_filesystem_grep/agentxx_filesystem_glob 时尽量缩小扫描范围，避开 .gitignore 内定义的目录、third_party、build、node_modules 等文件夹

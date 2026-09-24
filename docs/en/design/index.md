@@ -1228,7 +1228,9 @@ agent/
 │   │   │   ├── session_store.h   # Session SQLite persistence: single database session.db
 │   │   │   │                     #   (view_message/llm_context/meta/store four tables, including share store KV),
 │   │   │   │                     #   partitioned by sessionId directory, read paths never create empty directories
-│   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt prompt management
+│   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt declarations (prompt text lives in
+│   │   │   │                     #   src/agent/prompt.cpp, with session placeholders
+│   │   │   │                     #   ${work_dir}/${temp_dir}/${session_id})
 │   │   │   ├── training.h        # EvolutionTrainingAgent evolutionary training (mutate/evaluate/optimize/convergence checks)
 │   │   │   └── io/               # Remote Communication
 │   │   │       ├── agent_server.h    # AgentServer (WS server with token authentication; serveTransport for in-process reuse)
@@ -1637,3 +1639,34 @@ Fallback precedence (highest to lowest):
 3. `AgentConfig::resolvedWorkDir()` (YAML `work_dir` / process cwd).
 - Callers uniformly retrieve paths via `getSessionWorkDir(sessionId)` rather than querying process `cwd` or `workDir` directly.
 - Returns an empty string on invalidation, prompting caller-defined fallback (e.g. Permission Ask mode registers no default allow rules if workDir is empty).
+
+`AgentContext::getSessionBaseWorkDir(sessionId)` returns the same fallback chain without item 1
+(worktree binding), i.e. the session's "real" directory (session override > agent config /
+process cwd), for display purposes: the worktree binding is a temporary state toggled at runtime
+by the `agentxx_git_worktree` tool (whose result already tells the model that relative paths
+resolve there), so the system prompt's working-directory placeholder uses the base value —
+entering or leaving a worktree never changes the system prompt.
+
+### Session Temp Directory and Prompt Placeholders
+
+- Session temp directory: `AgentContext::sessionTempDir(sessionId)` = `{system temp dir}/agentxx/{session id}/`
+  (`std::filesystem::temp_directory_path` plus a path segment sanitized by
+  `SessionStore::sanitizeSessionId` — same rules as session data directories: invalid
+  characters replaced, over-long names truncated with a hash suffix, empty id becomes `default`)
+  - Path assembly only, no directory creation (the write tool creates parent directories);
+    returns an empty string when the system temp directory is unavailable
+- System prompt placeholders (written in the prompt text, substituted by
+  `AgentPrompt::renderVars`; see the substitution at the end of `AgentContext::buildSystemPrompt`):
+  | token | value |
+  |-------|-------|
+  | `${work_dir}` | session working directory base value (no worktree binding, see above) |
+  | `${temp_dir}` | session temp directory (previous item) |
+  | `${session_id}` | session id (empty session id becomes `default`) |
+  - Plain token replacement, no fmt template parsing: `{` `}` in a custom prompt (JSON
+    fragments, paths) never triggers a parse error; a value that cannot be resolved becomes `unknown`
+  - Substitution runs once after assembly, so a custom `systemPrompt` and every appended
+    section (`appendSystemPrompts`) are covered
+- All prompt text lives in `agent/lib/src/agent/prompt.cpp` (initialized in the constructor):
+  `prompt.h` only declares members and the substitution API, so editing prompt text no longer
+  rebuilds every translation unit that includes the header
+

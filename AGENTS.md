@@ -41,6 +41,7 @@ int charToLower(int c) {
 - 需要捕获异常时，建议优先考虑 [agentxx::util::catchError 系列](D:\0Acoolight\Program\cpp\agentxx\agent\lib\include\agentxx\util\exception.h)，尤其是协程异常，不应 try {} catch(...) 捕获全部异常，应当使用 `agentxx::util::catchErrorAsync` 放行 取消和中断
 - 如果需要编译或运行测试，一般跑 debug 即可
 - 修改代码后无需自动执行 `clang-format` 等格式化处理
+- `resource/history/` 内是一些功能实现、修复历史记录，在修正文档、批量修改命名等操作时不要修改这个文件夹内的文件
 
 ## 代码结构
 - `agent`: 

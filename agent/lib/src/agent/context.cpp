@@ -9,6 +9,7 @@
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
 #include <chrono>
+#include <filesystem>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
@@ -392,17 +393,8 @@ void AgentContext::clearSessionWorkDir(std::string_view sessionId) {
     utilxx_base::eraseHeterogeneous(sessionWorkDirs_, sessionId);
 }
 
-std::string AgentContext::getSessionWorkDir(std::string_view sessionId) {
-    // worktree 绑定优先 (worktree 模式; Session 可变状态仅 io 线程读写,
-    // 本方法约定在 io 线程调用 —— 插件宿主侧经 ioCallSync 投递)
-    auto session = sessions->get(sessionId);
-    if (session) {
-        const auto& wb = session->getWorktreeBinding();
-        if (!wb.path.empty()) {
-            return wb.path;
-        }
-    }
-    // 会话工作目录覆写次之 (各会话独立, 如 ACP 客户端注入的 cwd;
+std::string AgentContext::getSessionBaseWorkDir(std::string_view sessionId) const {
+    // 会话工作目录覆写 (各会话独立, 如 ACP 客户端注入的 cwd;
     // mutex 保护, 任意线程可读)
     {
         std::lock_guard lk(sessionWorkDirMu_);
@@ -418,6 +410,32 @@ std::string AgentContext::getSessionWorkDir(std::string_view sessionId) {
         }
     }
     return {};
+}
+
+std::string AgentContext::getSessionWorkDir(std::string_view sessionId) const {
+    // worktree 绑定优先 (worktree 模式; Session 可变状态仅 io 线程读写,
+    // 本方法约定在 io 线程调用 —— 插件宿主侧经 ioCallSync 投递)
+    auto session = sessions->get(sessionId);
+    if (session) {
+        const auto& wb = session->getWorktreeBinding();
+        if (!wb.path.empty()) {
+            return wb.path;
+        }
+    }
+    return getSessionBaseWorkDir(sessionId);
+}
+
+std::string AgentContext::sessionTempDir(std::string_view sessionId) {
+    std::error_code ec;
+    auto            tempRoot = std::filesystem::temp_directory_path(ec);
+    if (ec) {
+        XX_LOGW("AgentContext::sessionTempDir: temp dir unavailable: {}", ec.message());
+        return {};
+    }
+    // 目录段与会话数据目录同一套清洗规则: 空 ID 记为 "default", 非法字符替换,
+    // 超长截断, 避免不同会话落到同一目录或路径穿越
+    auto dir = tempRoot / "agentxx" / SessionStore::sanitizeSessionId(sessionId);
+    return dir.generic_string();
 }
 
 std::string AgentContext::getSessionCurrentModelName(std::string_view sessionId) const {
@@ -489,7 +507,17 @@ std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
             appendIfNonEmpty(appendJoined);
         }
     }
-    return combined;
+
+    // 会话级占位符替换 (工作目录 / 临时目录 / 会话 ID)
+    // - 拼装完成后统一替换, 自定义 systemPrompt 与各附加段都生效
+    // - 工作目录取基准值 (不含 worktree 绑定): 进出 worktree 由工具在会话内切换,
+    //   模型从工具结果得知, 系统提示词不跟着变化
+    // - 会话 ID 为空时按 "default" 参与替换, 与 sessionTempDir 的目录名一致
+    PromptSessionVars vars;
+    vars.sessionId = sessionId.empty() ? std::string{"default"} : std::string{sessionId};
+    vars.workDir   = getSessionBaseWorkDir(sessionId);
+    vars.tempDir   = sessionTempDir(sessionId);
+    return AgentPrompt::renderVars(combined, vars);
 }
 
 } // namespace agent

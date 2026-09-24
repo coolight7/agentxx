@@ -153,7 +153,7 @@ TUITheme TUITheme::darkTheme() {
         .blockColor            = ftxui::Color::RGB(25, 30, 35),    // #121212
         .inputBgColor          = ftxui::Color::RGB(25, 30, 35),    //
         .inputTextColor        = ftxui::Color::RGB(220, 220, 220), // #fff
-        .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 128),    // #66ccff
+        .buttonBgColor         = ftxui::Color::RGBA(102, 204, 255, 100),    // #66ccff
         .buttonTextColor       = ftxui::Color::RGB(0, 0, 0),       // #fff
         .buttonActiveBgColor   = ftxui::Color::RGB(102, 204, 255), // #66ccff
         .buttonActiveTextColor = ftxui::Color::RGB(0, 0, 0),       // #000

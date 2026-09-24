@@ -49,7 +49,7 @@
 - **体积小/内存占用少/高性能**; C++协程异步实现，程序体积和内存占用少且性能高，协程网络/文件读写支持不阻塞，可选添加 硬件加速Hyperscan 等扩展库
 - **插件支持**; 已内置实现 C++插件 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能；也可以自定义实现插件加载，通过 C++ Quickjs 插件可以加载实现 js 插件
 - **FFI支持**; 通过 FFI 可以让 App、程序加载 libagentxx 动态库后直接构建 Agent 功能，让 agentxx 嵌入 App、程序 中
-- **跨系统支持**; 优化 windows 兼容，可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径; 计划支持 Windows/Macos/Linux/Android/IOS
+- **跨系统支持**; 计划支持 Windows/Macos/Linux/Android/IOS, 目前已实现4个系统支持，仅ios待测试兼容; 针对 windows 优化兼容，对字符编码转换、pwsh、cmd 等做了许多处理适配，且可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - **丰富的 tool**; 内置 文件读写、命令行执行、任务规划 等，编译时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
 - **UI与Agent可分离**; 内置支持 TUI、cli、接入GUI、Websocket API、FFI调用、动态库/静态库嵌入App; 支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
 - **多模态支持**; TUI支持选择图片、音视频文件附件

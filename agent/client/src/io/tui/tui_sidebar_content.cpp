@@ -311,8 +311,11 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
         hbox({
             text(fmt::format("{} ", utilxx_base::getFileName(kCwd))),
             shellHits_.add(
-                text(fullAuth ? std::string(tr("info.authFull")) : std::string(tr("info.authAsk")))
-                    | bgcolor(theme_.buttonBgColor) | color(theme_.buttonTextColor),
+                fullAuth
+                    ? (text(std::string(tr("info.authFull"))) | bgcolor(theme_.buttonActiveBgColor)
+                       | color(theme_.buttonActiveTextColor))
+                    : (text(std::string(tr("info.authAsk"))) | bgcolor(theme_.buttonBgColor)
+                       | color(theme_.buttonTextColor)),
                 std::string{kAuthToggleHitId}
             ),
             text(" "),

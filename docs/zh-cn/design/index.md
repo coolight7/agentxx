@@ -1647,7 +1647,8 @@ agent/
 │   │   │   ├── session_store.h   # 会话 SQLite 持久化: 单库 session.db
 │   │   │   │                     #   (view_message/llm_context/meta/store 四表, 含 share store KV),
 │   │   │   │                     #   按 sessionId 分目录, 读取路径不创建目录
-│   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 提示词管理
+│   │   │   ├── prompt.h          # AgentPrompt / ToolPrompt 声明 (提示词文本在 src/agent/prompt.cpp,
+│   │   │   │                     #   含会话级占位符 ${work_dir}/${temp_dir}/${session_id})
 │   │   │   ├── training.h        # EvolutionTrainingAgent 进化训练 (变异/评估/优化/收敛检测)
 │   │   │   └── io/               # 远程通信
 │   │   │       ├── agent_server.h    # AgentServer (WS 服务, token 鉴权; serveTransport 供进程内复用)
@@ -2096,4 +2097,28 @@ EventBus (事件总线)
 3. AgentConfig::resolvedWorkDir() (yaml work_dir / 进程 cwd)
 - 调用方统一经 getSessionWorkDir(sessionId) 取值, 不直接读进程 cwd / workDir
 - 失效时返回空串由调用方兜底 (如 Permission Ask 模式无 workDir 时不注册默认放行规则)
+
+`AgentContext::getSessionBaseWorkDir(sessionId)` 取同一回退链去掉第 1 项 (不含 worktree 绑定) 的
+结果, 即会话"真实所在目录" (会话覆写 > agent 配置 / 进程 cwd), 供展示类用途取值:
+worktree 绑定是运行期经 `agentxx_git_worktree` 工具切换的临时状态 (工具结果里已说明相对路径
+基准切换), 因此系统提示词的工作目录占位符取基准值 —— 进出 worktree 不会改变系统提示词。
+
+### 会话临时目录与提示词占位符
+
+- 会话临时目录: `AgentContext::sessionTempDir(sessionId)` = `{系统临时目录}/agentxx/{会话 ID}/`
+  (`std::filesystem::temp_directory_path` + 目录段经 `SessionStore::sanitizeSessionId` 清洗,
+  与会话数据目录同一套规则: 非法字符替换/超长截断加哈希/空 ID 记为 `default`)
+  - 只做路径拼装, 不创建目录 (写文件时由工具创建父目录); 取不到系统临时目录时返回空串
+- 系统提示词占位符 (写在提示词文本里, 由 `AgentPrompt::renderVars` 替换, 见
+  `AgentContext::buildSystemPrompt` 的末尾统一替换):
+  | token | 取值 |
+  |-------|------|
+  | `${work_dir}` | 会话工作目录基准值 (不含 worktree 绑定, 见上) |
+  | `${temp_dir}` | 会话临时目录 (上一条) |
+  | `${session_id}` | 会话 ID (空会话 ID 记为 `default`) |
+  - 只做固定 token 的纯文本替换, 不按 fmt 模板解析: 自定义提示词里的 `{` `}` (JSON 片段/路径)
+    不会触发解析异常; 取值取不到时替换为 `unknown`
+  - 替换在拼装完成后统一执行, 自定义 `systemPrompt` 与各附加段 (`appendSystemPrompts`) 都生效
+- 提示词文本统一放在 `agent/lib/src/agent/prompt.cpp` (构造函数里初始化):
+  `prompt.h` 只声明成员与取值方式, 改提示词文本不会牵连所有包含该头文件的编译单元
 

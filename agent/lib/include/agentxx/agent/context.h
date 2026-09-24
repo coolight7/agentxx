@@ -575,17 +575,34 @@ public:
     /// 便捷方法：异步获取或创建指定 sessionId 的会话 (自动利用 threadPool 卸载 SQLite 阻塞 IO)
     asio::awaitable<std::shared_ptr<Session>> getSessionAsync(std::string_view sessionId);
 
-    /// 统一的会话工作目录取值入口 (getSessionWorkDir; 全部使用方经此取值,
+    /// 会话工作目录取值入口 (工具与权限判定的相对路径基准; 全部使用方经此取值,
     /// 不直接读进程 cwd / AgentConfig::workDir):
     /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式)
-    /// - 否则返回会话工作目录覆写 (setSessionWorkDir 注入, 如 ACP session/new
-    ///   携带的客户端 cwd) —— 各会话可绑定不同项目目录, 彼此独立
-    /// - 均未设置时回退 AgentConfig::resolvedWorkDir() (yaml work_dir / 进程
-    ///   cwd); 兜底语义: 未做任何配置时与旧版行为完全一致
+    /// - 否则同 [getSessionBaseWorkDir] (会话覆写 > agent 配置 / 进程 cwd)
     /// - 均不可用时返回空串 (调用方自行兜底)
     /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件宿主侧
     ///   经 ioCallSync 投递); 覆写表经 mutex 保护, 任意线程可读写
-    std::string getSessionWorkDir(std::string_view sessionId);
+    /// - const: 只读取状态 (覆写表/互斥量按 mutable 处理), 供只读场景使用
+    std::string getSessionWorkDir(std::string_view sessionId) const;
+
+    /// 会话工作目录的基准值 (不含 worktree 绑定):
+    /// - 会话工作目录覆写 (setSessionWorkDir 注入, 如 ACP session/new 携带的
+    ///   客户端 cwd) —— 各会话可绑定不同项目目录, 彼此独立
+    /// - 未设置时回退 AgentConfig::resolvedWorkDir() (yaml work_dir / 进程
+    ///   cwd); 兜底语义: 未做任何配置时与旧版行为完全一致
+    /// - 均不可用时返回空串 (调用方自行兜底)
+    /// - 用途: 展示会话"真实所在目录"的位置 —— 系统提示词的工作目录占位符
+    ///   (${work_dir}) 取此值: worktree 绑定是运行期经工具切换的临时状态,
+    ///   进出 worktree 时该值不变, 系统提示词也就不会跟着反复变化
+    /// - 线程安全: 覆写表经 mutex 保护, 任意线程可读
+    std::string getSessionBaseWorkDir(std::string_view sessionId) const;
+
+    /// 会话临时目录: {系统临时目录}/agentxx/{会话 ID}/
+    /// - 系统提示词里的 Temp 目录 (让模型把临时文件写在这里, 不污染工作目录)
+    /// - 目录段复用 [SessionStore::sanitizeSessionId] 的清洗规则, 与会话数据目录
+    ///   命名保持一致 (空 ID 记为 "default"); 取不到系统临时目录时返回空串
+    /// - 只做路径拼装, 不创建目录 (需要时由写入方创建父目录)
+    static std::string sessionTempDir(std::string_view sessionId);
 
     /// 设置会话工作目录覆写 (会话级独立工作目录):
     /// - absWorkDir 应为绝对路径 (相对路径/`~` 由调用方按需归一, 如 ACP 侧
@@ -636,6 +653,10 @@ public:
 
     /// 拼装指定会话的完整系统提示词 (systemPrompt + appendSystemPrompts + 动态 appendSystemMessage)
     /// - 供 modelcall 节点及上下文查看 (WireGetContext / TUI LLMContext) 使用
+    /// - 最后统一替换会话级占位符 (`${work_dir}` / `${temp_dir}` / `${session_id}`,
+    ///   见 AgentPrompt::renderVars), 覆盖自定义 systemPrompt 与各附加段
+    /// - `${work_dir}` 取 [getSessionBaseWorkDir] (不含 worktree 绑定), 使进出
+    ///   worktree 不改变系统提示词
     std::string buildSystemPrompt(std::string_view sessionId = "") const;
 
 private:
@@ -644,8 +665,9 @@ private:
     /// - 与 Session 可变状态的 io 线程约束解耦: 端点线程 (如 ACP HTTP handler)
     ///   在会话运行前注入, mutex 保护跨线程访问; 不随 Session 销毁自动清理
     ///   (与 sessions_ 的常驻语义一致, 量级为活跃会话数)
-    std::mutex                                      sessionWorkDirMu_;
-    std::map<std::string, std::string, std::less<>> sessionWorkDirs_;
+    /// - mutable: 只读入口 (getSessionWorkDir) 为 const, 仍需加锁读该表
+    mutable std::mutex                                      sessionWorkDirMu_;
+    mutable std::map<std::string, std::string, std::less<>> sessionWorkDirs_;
 };
 
 } // namespace agent

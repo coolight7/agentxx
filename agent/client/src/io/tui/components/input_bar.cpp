@@ -108,8 +108,7 @@ Element InputComponent::OnRender() {
             text(" "),
             hits_.add(
                 text(std::string(TuiI18n::instance().t("input.attach")))
-                    | color(theme.buttonActiveTextColor) | bgcolor(theme.buttonActiveBgColor)
-                    | bold,
+                    | color(theme.buttonTextColor) | bgcolor(theme.buttonBgColor) | bold,
                 std::string{kAttachHitId}
             ),
         });

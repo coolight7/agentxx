@@ -1,7 +1,10 @@
 #include "agentxx-test/core/test_agent.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/context.h"
 #include "agentxx/agent/io/channel_io_transport.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/prompt.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -1407,6 +1410,112 @@ asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {
 }
 
 // ---------------------------------------------------------------------------
+// 系统提示词的会话级取值 (工作目录 / Temp 目录):
+//  1) AgentPrompt::renderVars 替换 `${work_dir}` / `${temp_dir}` / `${session_id}`;
+//     取不到时写成 unknown, 其余 `{}` 内容原样保留 (不按 fmt 模板解析)
+//  2) AgentContext::sessionTempDir 为 {系统临时目录}/agentxx/{会话 ID}
+//  3) 默认系统提示词拼装后含工作目录与临时目录, 且不留 token
+//  4) 工作目录取会话真实所在目录 (不含 worktree 绑定): worktree 绑定只影响
+//     工具/权限的相对路径基准, 提示词里的工作目录保持不变
+// ---------------------------------------------------------------------------
+asio::awaitable<void> test_agent_system_prompt_session_dirs() {
+    // 1) 占位符替换
+    {
+        agentxx::agent::PromptSessionVars vars;
+        vars.workDir   = "/work/dir";
+        vars.tempDir   = "/tmp/agentxx/s1";
+        vars.sessionId = "s1";
+        const auto text = agentxx::agent::AgentPrompt::renderVars(
+            R"_(dir=${work_dir} temp=${temp_dir} sid=${session_id} json={"a":1} brace={)_",
+            vars
+        );
+        XX_TEST_EXPECT_TRUE(text.find("dir=/work/dir") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("temp=/tmp/agentxx/s1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("sid=s1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find(R"_(json={"a":1} brace={)_") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("${") == std::string::npos);
+    }
+    // 取不到时写成 unknown (不留 token, 也不留空目录名)
+    {
+        const auto text = agentxx::agent::AgentPrompt::renderVars(
+            "w=${work_dir} t=${temp_dir}",
+            agentxx::agent::PromptSessionVars{}
+        );
+        XX_TEST_EXPECT_EQ(text, std::string{"w=unknown t=unknown"});
+    }
+
+    // 2) 临时目录: {系统临时目录}/agentxx/{清洗后的会话 ID} (空 ID 记为 default)
+    {
+        std::error_code ec;
+        const auto      tmpRoot = std::filesystem::temp_directory_path(ec).generic_string();
+        XX_TEST_EXPECT_FALSE(ec);
+
+        const std::string sessionId = "会话/1";
+        const auto        dir       = agentxx::agent::AgentContext::sessionTempDir(sessionId);
+        XX_TEST_EXPECT_EQ(
+            dir,
+            (std::filesystem::path(tmpRoot) / "agentxx"
+             / agentxx::agent::SessionStore::sanitizeSessionId(sessionId))
+                .generic_string()
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::agent::AgentContext::sessionTempDir(""),
+            (std::filesystem::path(tmpRoot) / "agentxx" / "default").generic_string()
+        );
+    }
+
+    // 3) 默认系统提示词 (未覆写 cfg->prompt) 的拼装结果
+    {
+        auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.baseUrl   = "http://127.0.0.1:1234";
+        cfg->model.modelName = "test-sim";
+
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await agent->init();
+
+        const std::string sessionId = "prompt_dirs_session";
+        const auto        prompt    = agent->buildSystemPrompt(sessionId);
+        XX_TEST_EXPECT_TRUE(prompt.find("## Working Directory") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(prompt.find("${") == std::string::npos);
+        // 临时目录取值为 {系统临时目录}/agentxx/{会话 ID}/
+        XX_TEST_EXPECT_TRUE(
+            prompt.find(agentxx::agent::AgentContext::sessionTempDir(sessionId))
+            != std::string::npos
+        );
+        // 会话工作目录覆写后提示词跟随 (未覆写时为 agent 配置目录 / 进程 cwd)
+        agent->getContext()->setSessionWorkDir(sessionId, "/custom/work/dir");
+        XX_TEST_EXPECT_TRUE(prompt.find("/custom/work/dir") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            agent->buildSystemPrompt(sessionId).find("/custom/work/dir") != std::string::npos
+        );
+
+        // worktree 绑定只影响工具/权限的相对路径基准 (getSessionWorkDir),
+        // 不改变提示词里的工作目录 (进出 worktree 经工具调用, 模型从工具结果得知)
+        auto session = agent->getContext()->getSession(sessionId);
+        XX_TEST_EXPECT_TRUE(session != nullptr);
+        if (session) {
+            session->setWorktreeBinding(
+                agentxx::agent::WorktreeBinding{
+                    .name     = "prompt_dirs_wt",
+                    .path     = "/wt/prompt_dirs_wt",
+                    .branch   = "agentxx/wt-prompt_dirs_wt",
+                    .repoRoot = "/repo",
+                }
+            );
+            XX_TEST_EXPECT_EQ(
+                agent->getContext()->getSessionWorkDir(sessionId),
+                std::string{"/wt/prompt_dirs_wt"}
+            );
+            const auto wtPrompt = agent->buildSystemPrompt(sessionId);
+            XX_TEST_EXPECT_TRUE(wtPrompt.find("/custom/work/dir") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(wtPrompt.find("/wt/prompt_dirs_wt") == std::string::npos);
+        }
+    }
+
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 权限状态 wire 接口 (Info 侧边栏授权按钮的服务端侧)
 //  1) WireGetPermissionState -> WirePermissionState (反映权限中间件当前状态)
 //  2) WireSetFullAuth(..) -> 权限中间件状态切换 + 向客户端广播新状态
@@ -1600,6 +1709,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_llm_retry_exhaust();
         co_await test_agent_toolcall_intercept_exception();
         co_await test_agent_build_system_prompt_and_wire_get_context();
+        co_await test_agent_system_prompt_session_dirs();
         co_await test_agent_permission_state_wire();
         co_await test_agent_graph_build_fallback();
     } catch (const std::exception& e) {
