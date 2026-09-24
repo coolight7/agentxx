@@ -589,7 +589,7 @@ private:
 
     /// 服务端页响应处理 (client 线程): 校验会话/连续性后前插到已加载窗口
     /// 上方, 更新窗口元数据; 组件锚定经 UI 动作队列投递 (LazyScrollable
-    /// ::notifyPrepended 保持视口内容稳定)
+    /// ::notifyPrepended 把锚点随索引平移, 视口内容零跳变)
     void onViewMessagesPage(const agentxx::agent::WireViewMessagesPage& page);
     /// 请求更早历史 (ctx_.requestMoreHistory 入口; UI 线程触发):
     /// - 已有请求未返回时直接忽略 (historyLoading 去重); hasMoreHistory 边界判断

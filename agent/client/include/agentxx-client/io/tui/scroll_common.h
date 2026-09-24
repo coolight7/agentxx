@@ -1,11 +1,13 @@
-/// Scrollable / LazyScrollable 共用的滚动容器逻辑
+/// Scrollable / LazyScrollable 共用的布局测量逻辑
 ///
 /// - 两个组件都实现"仅布局/绘制与视口相交的子项"的列表容器, 差异只在子项构建方式
-///   (全量构建 vs 懒构建); 元素测量与滚轮处理完全一致, 收敛到这里避免两份拷贝漂移
+///   (全量构建 vs 懒构建) 与滚动状态模型 (偏移从顶部计 vs 锚点即主状态),
+///   元素测量口径一致, 收敛到这里避免两份拷贝漂移
+/// - 滚轮处理**不再共用**: Scrollable 用偏移 (行, 从顶部计), LazyScrollable 用
+///   锚点 (条目索引 + 条目内行偏移) 并在跨条目时实测目标条目高度, 两者语义不同
 /// - 相关: [Scrollable] / [LazyScrollable]
 #pragma once
 
-#include "ftxui/component/event.hpp"
 #include "ftxui/dom/node.hpp"
 #include "ftxui/dom/requirement.hpp"
 #include "ftxui/screen/box.hpp"
@@ -46,53 +48,6 @@ inline int layoutAndMeasure(const ftxui::Element& el, ftxui::Box box) {
         el->SetBox(box);
     }
     return std::max(1, el->requirement().min_y);
-}
-
-/// 处理鼠标滚轮事件 (固定每次滚动 1 行高度)
-///
-/// - 命中判定: 事件为鼠标事件且坐标落在 [box] 内, 否则不消费
-/// - 向上滚动: 取消"吸附底部"并上移 1 行 (顶部处保持不变)
-/// - 向下滚动: 下移 1 行 (不越过最大偏移); 滚到底部后恢复"吸附底部"
-///
-/// - `args`:
-///     - [event] 待处理的 FTXUI 事件 (须为左值: FTXUI 只提供非 const 的 `mouse()` 访问)
-///     - [box] 组件本帧渲染区域 (命中检测)
-///     - [scrollOffset] 当前滚动偏移 (行, 从顶部计), 就地更新
-///     - [stickToBottom] 是否吸附底部, 就地更新
-///     - [totalHeight] 内容总高度 (行)
-///     - [viewportHeight] 视口高度 (行)
-///
-/// - `return` true 表示事件已被消费 (调用方应返回 true)
-inline bool handleWheelScroll(
-    ftxui::Event&     event,
-    const ftxui::Box& box,
-    int&              scrollOffset,
-    bool&             stickToBottom,
-    int               totalHeight,
-    int               viewportHeight
-) {
-    if (!event.is_mouse()) {
-        return false;
-    }
-    const auto& mouse = event.mouse();
-    if (!box.Contain(mouse.x, mouse.y)) {
-        return false;
-    }
-    // 固定每次滚动 1 行高度
-    if (mouse.button == ftxui::Mouse::WheelUp) {
-        stickToBottom = false;
-        scrollOffset  = std::max(0, scrollOffset - 1);
-        return true;
-    }
-    if (mouse.button == ftxui::Mouse::WheelDown) {
-        const int maxOffset = std::max(0, totalHeight - viewportHeight);
-        scrollOffset        = std::min(maxOffset, scrollOffset + 1);
-        if (scrollOffset >= maxOffset) {
-            stickToBottom = true; // 滚到底部 -> 恢复吸附
-        }
-        return true;
-    }
-    return false;
 }
 
 } // namespace agentxx::client

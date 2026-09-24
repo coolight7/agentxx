@@ -18,6 +18,7 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,6 +49,13 @@ struct ViewFixture {
     size_t   itemHeight = 1;              // 每条实测高度 (行)
     size_t   quickRows  = 1;              // 粗略估算高度 (行)
     uint64_t keySalt    = 0;              // 影响所有 key (模拟内容变化)
+    /// 按条目身份 id 给出粗略高度 (未设置时用 quickRows);
+    /// 用于构造"估算与实测严重不符"的场景 (估算只应影响滚动条长度)
+    std::function<size_t(size_t id)> quickOf;
+
+    /// 视口尺寸 (渲染一帧时使用; 变更即模拟终端 resize)
+    int width  = 60;
+    int height = 20;
 
     std::vector<size_t> ids;      // 条目身份 (与内容绑定; 前插时同步头插)
     size_t              nextId = 0;
@@ -76,9 +84,10 @@ struct ViewFixture {
                 ++keyCalls;
                 return 0x1000ULL + i + keySalt;
             },
-            [this](size_t, int) {
+            [this](size_t i, int) {
                 ++quickCalls;
-                return quickRows;
+                const size_t id = (i < ids.size()) ? ids[i] : 0;
+                return quickOf ? quickOf(id) : quickRows;
             },
             [this](size_t i) {
                 ++buildCalls;
@@ -88,8 +97,11 @@ struct ViewFixture {
                 const std::string label = (i < ids.size()) ? std::to_string(ids[i]) : "?";
                 ftxui::Elements    rows;
                 for (size_t r = 0; r < std::max<size_t>(1, itemHeight); ++r) {
+                    // 逐行带行号: 视口顶行/底行能被解析成 (条目 id, 条目内行号),
+                    // 用于断言"定位只用实测高度"
                     rows.push_back(ftxui::text(
-                        r == 0 ? ("item " + label + " mark=" + label) : std::string{}
+                        r == 0 ? ("item " + label + " mark=" + label)
+                               : ("item " + label + " mark=" + label + " row " + std::to_string(r))
                     ));
                 }
                 LazyBuiltItem out;
@@ -124,8 +136,10 @@ struct ViewFixture {
     /// 渲染一帧并返回屏幕文本
     std::string render() {
         auto el = scrollable->Render() | ftxui::flex;
-        auto screen
-            = ftxui::Screen::Create(ftxui::Dimension::Fixed(kWidth), ftxui::Dimension::Fixed(kHeight));
+        auto screen = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(width),
+            ftxui::Dimension::Fixed(height)
+        );
         ftxui::Render(screen, el);
         return screen.ToString();
     }
@@ -182,6 +196,55 @@ struct ViewFixture {
         return contentOf(render());
     }
 
+    /// 屏幕上一行的 (条目 id, 条目内行号)
+    struct Pos {
+        size_t id  = static_cast<size_t>(-1);
+        int    row = -1;
+    };
+
+    /// 解析夹具渲染行 ("item <id> mark=<id>[ row <r>]"); 非夹具行返回 {npos, -1}
+    static Pos parseLine(const std::string& line) {
+        const size_t p = line.find("item ");
+        if (p == std::string::npos) {
+            return Pos{};
+        }
+        const size_t b  = p + 5;
+        const size_t e  = line.find(' ', b);
+        if (e == std::string::npos) {
+            return Pos{};
+        }
+        Pos pos;
+        pos.id         = static_cast<size_t>(std::stoul(line.substr(b, e - b)));
+        const size_t r = line.find(" row ", e);
+        pos.row        = (r == std::string::npos) ? 0 : std::stoi(line.substr(r + 5));
+        return pos;
+    }
+
+    /// 视口首行 (顶行) 的 (条目 id, 行号)
+    Pos topPos() {
+        return parseLine(firstLineOf(lastFrame()));
+    }
+
+    /// 视口末行 (底行) 的 (条目 id, 行号)
+    Pos bottomPos() {
+        return parseLine(lastLineOf(lastFrame()));
+    }
+
+    /// 取多行文本的首行 (去掉末尾换行)
+    static std::string firstLineOf(const std::string& s) {
+        const size_t nl = s.find('\n');
+        return (nl == std::string::npos) ? s : s.substr(0, nl);
+    }
+
+    /// 取多行文本的末行 (去掉末尾换行; 空行时返回空前一行)
+    static std::string lastLineOf(const std::string& s) {
+        std::string t = s;
+        while (!t.empty() && t.back() == '\n') {
+            t.pop_back();
+        }
+        const size_t nl = t.rfind('\n');
+        return (nl == std::string::npos) ? t : t.substr(nl + 1);
+    }
 };
 
 } // namespace
@@ -317,6 +380,15 @@ TestResult testTuiLazyView() {
         const std::string gframe = g.render();
         XX_TEST_EXPECT_TRUE(gframe.find("mark=59") != std::string::npos);
         XX_TEST_EXPECT_TRUE(gframe.find("mark=55") != std::string::npos);
+
+        // 估算只影响滚动条: 同一内容在两种离谱估算下 (少报 1/多报 100), 视口画面
+        // 逐行一致, 而总高度 (滚动条长度) 明显不同
+        ViewFixture a(60, 4, 1);
+        ViewFixture b(60, 4, 100);
+        a.render();
+        b.render();
+        XX_TEST_EXPECT_EQ(a.lastFrame(), b.lastFrame());
+        XX_TEST_EXPECT_TRUE(a.scrollable->totalHeight() != b.scrollable->totalHeight());
     }
 
     // ---------------- key 变化触发重建 (窗口内) ----------------
@@ -328,6 +400,184 @@ TestResult testTuiLazyView() {
         f.render();
         XX_TEST_EXPECT_TRUE(f.buildCalls > buildsBefore); // 窗口内条目已重建
         XX_TEST_EXPECT_TRUE(f.lastFrame().find("mark=29") != std::string::npos);
+    }
+
+    // ==================== 锚点即主状态 (方案 §3.4) ====================
+    //
+    // 三个不变量:
+    // ① 视口内位置只由锚点 (条目索引 + 行偏移) 与实测高度决定;
+    //    视口上方未实测条目的粗略估算只影响 scrollOffset()/滚动条长度
+    // ② 测量即渲染: 条目高度来自它自己的布局结果 (本夹具为固定 itemHeight 行)
+    // ③ 每帧成本与列表长度无关: 只处理锚点到视口底部这一段
+
+    // ---- 顶行严格由锚点决定 (逐行滚动不跳行/不重复) ----
+    {
+        ViewFixture f(200, 4, 4); // 每条 4 行, 估算==实测
+        f.width  = 60;
+        f.height = 20;
+        f.render();
+        const int bottom = std::max(0, f.scrollable->totalHeight() - f.scrollable->viewportHeight());
+        // 吸附底部: 派生偏移 = 底部边界, 且视口末行就是最后一条的最后一行
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), bottom);
+        XX_TEST_EXPECT_EQ(f.bottomPos().id, f.count - 1);
+        XX_TEST_EXPECT_EQ(f.bottomPos().row, static_cast<int>(f.itemHeight) - 1);
+
+        // 上滚 6 行 (跨条目): 顶行严格上移 6 行, 派生偏移同步减 6
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-6);
+        f.render();
+        const int s1 = bottom - 6;
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), s1);
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), static_cast<size_t>(s1 / 4));
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), s1 % 4);
+        XX_TEST_EXPECT_EQ(f.topPos().id, static_cast<size_t>(s1 / 4));
+        XX_TEST_EXPECT_EQ(f.topPos().row, s1 % 4);
+
+        // 回到顶部后逐行下滚: 每一帧顶行都必须严格等于"初始行 + 滚动行数"
+        f.wheelRows(-1000);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), 0);
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{0});
+        XX_TEST_EXPECT_EQ(f.topPos().row, 0);
+
+        int expect = 0;
+        for (int step = 0; step < 1000; ++step) {
+            f.render();
+            const auto p = f.topPos();
+            XX_TEST_EXPECT_EQ(p.id, static_cast<size_t>(expect / 4));
+            XX_TEST_EXPECT_EQ(p.row, expect % 4);
+            XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), expect);
+            if (f.scrollable->scrollOffset() + f.scrollable->viewportHeight()
+                >= f.scrollable->totalHeight()) {
+                break; // 已到底 (再下滚只会恢复吸附)
+            }
+            f.wheelRows(1);
+            ++expect;
+        }
+        XX_TEST_EXPECT_EQ(
+            expect,
+            std::max(0, f.scrollable->totalHeight() - f.scrollable->viewportHeight())
+        );
+    }
+
+    // ---- 定位只用实测高度: 估算与实测差 4 倍时位置仍严格正确 ----
+    {
+        // 每条实测 4 行, 粗略估算全部报 1 行 (少报 4 倍): 视口内的位置不得受估算影响
+        ViewFixture f(120, 4, 1);
+        f.render();
+        // 尾部窗口 (20 行): 实测 5 条 -> 条目 115..119, 顶行 = 115 的第 0 行
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{115});
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), 0);
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{115});
+        XX_TEST_EXPECT_EQ(f.topPos().row, 0);
+        XX_TEST_EXPECT_EQ(f.bottomPos().id, size_t{119});
+        XX_TEST_EXPECT_EQ(f.bottomPos().row, 3);
+        // 总高度仍按估算 (115 条 x 1 + 实测 5 条 x 4 = 135) —— 只影响滚动条
+        XX_TEST_EXPECT_EQ(f.scrollable->totalHeight(), 115 * 1 + 5 * 4);
+
+        // 上滚 10 行: 顶行 = 全局行 460 - 10 = 450 -> 条目 112 的第 2 行
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-10);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{112});
+        XX_TEST_EXPECT_EQ(f.topPos().row, 2);
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{112});
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), 2);
+        // 视口末行 = 450 + 19 = 469 -> 条目 117 的第 1 行
+        XX_TEST_EXPECT_EQ(f.bottomPos().id, size_t{117});
+        XX_TEST_EXPECT_EQ(f.bottomPos().row, 1);
+    }
+
+    // ---- 每帧成本与列表长度/视口上方条数无关 ----
+    {
+        ViewFixture f(5000, 1, 1);
+        f.buildCalls = 0;
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.buildCalls <= static_cast<int>(f.height) + 8);
+
+        // 一次落实 100 行的上滚: 只构建 100 条 (与 5000 条列表长度无关)
+        f.scrollable->setStickToBottom(false);
+        f.buildCalls = 0;
+        f.keyCalls   = 0;
+        f.wheelRows(-100);
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.buildCalls <= 105);
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), 5000 - 20 - 100);
+
+        // 稳态帧 (无滚动): 不构建、不估算; key 校验只覆盖窗口 ± 预取带
+        const int builds = f.buildCalls;
+        f.quickCalls     = 0;
+        f.keyCalls       = 0;
+        f.render();
+        XX_TEST_EXPECT_EQ(f.buildCalls, builds);
+        XX_TEST_EXPECT_EQ(f.quickCalls, 0); // 视口上方条目本帧零成本 (不估算/不构建)
+        XX_TEST_EXPECT_TRUE(f.keyCalls <= static_cast<int>(f.height) + 32);
+
+        // 上滚 1 行: 只新增跨入视口上方那一条的构建
+        f.buildCalls = 0;
+        f.wheelRows(-1);
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.buildCalls <= 1);
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), 5000 - 20 - 101);
+    }
+
+    // ---- 前插零校正: 新增区估算严重偏离实测时画面仍逐行不变 ----
+    {
+        ViewFixture f(50, 3, 3);
+        // 前插区 (id >= 50) 估算 40 行, 实测 3 行: 估算只影响滚动条长度
+        f.quickOf = [](size_t id) {
+            return id < 50 ? 3 : 40;
+        };
+        f.render(); // 首帧: 吸附底部 (锚点 = 尾部窗口起点)
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-11);
+        f.render();
+        const std::string before       = f.lastFrame();
+        const int         offsetBefore = f.scrollable->scrollOffset();
+        const size_t      anchorBefore = f.scrollable->anchorIndex();
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{39});
+        XX_TEST_EXPECT_EQ(f.topPos().row, 2);
+        XX_TEST_EXPECT_EQ(anchorBefore, size_t{39});
+
+        // 头部前插 10 条 (ids 50..59): 锚点索引平移 10, 顶行内容不变
+        f.prepend(10);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), anchorBefore + 10);
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{39});
+        XX_TEST_EXPECT_EQ(f.topPos().row, 2);
+        // 视口逐行画面完全不变 (前插发生在锚点上方, 且没有任何偏移校正)
+        XX_TEST_EXPECT_EQ(before, f.lastFrame());
+        // 派生偏移只按新增区估算总行数增加 (滚动条), 与实测无关
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset() - offsetBefore, static_cast<int>(10 * 40));
+        // 继续上滚 3 行: 跨入上一条目 (id 38 的最后一行), 位置仍严格
+        f.wheelRows(-3);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{38});
+        XX_TEST_EXPECT_EQ(f.topPos().row, 2);
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{48});
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), 2);
+    }
+
+    // ---- 终端宽度变化: 锚点条目不变 (行偏移按新高度夹取) ----
+    {
+        ViewFixture f(100, 3, 3);
+        f.render();
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-30);
+        f.render();
+        const size_t idxBefore = f.scrollable->anchorIndex();
+        const int    rowBefore = f.scrollable->anchorRow();
+        const auto   posBefore = f.topPos();
+        XX_TEST_EXPECT_EQ(posBefore.id, idxBefore);
+        XX_TEST_EXPECT_EQ(posBefore.row, rowBefore);
+
+        // 宽度变化: 高度全部回到粗略估算 (实测失效), 但锚点条目保持不变
+        f.width      = 40;
+        f.quickCalls = 0;
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), idxBefore);
+        XX_TEST_EXPECT_EQ(f.topPos().id, idxBefore);
+        XX_TEST_EXPECT_TRUE(f.quickCalls >= static_cast<int>(f.count)); // 整体重估
     }
 
     return TestResult{g_tui_lazy_view_passed, g_tui_lazy_view_failed};
