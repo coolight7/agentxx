@@ -123,6 +123,16 @@ inline size_t renderFrame(const std::shared_ptr<LazyScrollable>& list) {
     return screen.ToString().size();
 }
 
+/// 在组件内按一次滚轮 (固定 1 行; 行数在下一帧布局时落实到锚点)
+inline void wheelOnce(const std::shared_ptr<LazyScrollable>& list, ftxui::Mouse::Button button) {
+    ftxui::Mouse m;
+    m.button = button;
+    m.motion = ftxui::Mouse::Pressed;
+    m.x      = 2;
+    m.y      = 2;
+    (void)list->OnEvent(ftxui::Event::Mouse("", m));
+}
+
 } // namespace bench_render_detail
 
 inline void benchRender() {
@@ -257,17 +267,28 @@ inline void benchRender() {
             20,
             [&] {
                 for (int i = 0; i < kScreenH; ++i) {
-                    ftxui::Mouse m;
-                    m.button = ftxui::Mouse::WheelUp;
-                    m.motion = ftxui::Mouse::Pressed;
-                    m.x      = 2;
-                    m.y      = 2;
-                    (void)list->OnEvent(ftxui::Event::Mouse("", m));
+                    wheelOnce(list, ftxui::Mouse::WheelUp);
                     (void)renderFrame(list);
                 }
             }
         );
         printResult(r2);
+
+        // 视口停在列表中部 (非吸附, 上方仍有大量条目): 每帧只处理"锚点到视口
+        // 底部"这一段 -> 帧耗时与"视口上方条数"无关 (锚点模型的直接结论)
+        list->setStickToBottom(false);
+        for (int i = 0; i < 200; ++i) {
+            wheelOnce(list, ftxui::Mouse::WheelUp);
+            (void)renderFrame(list);
+        }
+        auto r3 = runBench(
+            "render: lazy list frame [" + std::to_string(count) + " items, viewport in middle]",
+            200,
+            [&] {
+                (void)renderFrame(list);
+            }
+        );
+        printResult(r3);
     }
 }
 
