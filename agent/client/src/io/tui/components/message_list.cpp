@@ -661,11 +661,12 @@ uint64_t MessageListComponent::itemKey(size_t index) {
 
 size_t MessageListComponent::quickHeight(size_t index, int width) {
     const auto& st = *ctx_.frameState;
-    // 未进入视口的条目高度**粗略**估算: 只服务总高度 (滚动条长度) 与估算容错
-    // 判定, **不做任何渲染**: 不查插件语义渲染 (queryToolRender 会加锁查缓存、
-    // 必要时投递渲染请求)、不 measureItems (真渲染装饰), 也不做中断表单的
-    // layoutForm —— 这些成本只应发生在条目真正进入视口被构建时 (布局即测量,
-    // 实测值随 key 缓存)。偏差由 LazyScrollable 的估算容错带自愈。
+    // 未进入视口的条目高度**粗略**估算: 只服务总高度 (滚动条长度) 与吸附底部
+    // 以外的定位需求, **不做任何渲染**: 不查插件语义渲染 (queryToolRender 会加锁
+    // 查缓存、必要时投递渲染请求)、不 measureItems (真渲染装饰), 也不做中断表单
+    // 的 layoutForm —— 这些成本只应发生在条目真正进入视口被构建时 (布局即测量,
+    // 实测值随 key 缓存)。视口内的定位只由锚点与实测高度决定, 估算偏差不影响
+    // 视口内容 (只让滚动条长度暂时偏旧)。
     if (st.messages.empty() && !hasStreamingToken(st)) {
         return 1; // banner 为 fillViewport, 高度由 LazyScrollable 置为视口高度
     }

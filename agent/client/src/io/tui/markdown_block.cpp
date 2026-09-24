@@ -72,8 +72,9 @@ Element renderPlainText(std::string_view content, Color color) {
 ///   普通代码块估算 (每行 1 行), 严重低估 (7 -> 8), 视口外消息总高度偏低,
 ///   滚动偏移偏小, 底部内容被推出视口且该 mermaid 消息被 continue 跳过
 ///   永不实测 -> 视口内显示空白 (用户报告"某些消息显示为空白, 滑动到
-///   某些位置又正常")。故按 源行数 × 3 + 3 估算, 残余偏差由
-///   LazyScrollable 的可见性容错 (kEstimateSlack) 提前实测自愈
+///   某些位置又正常")。故按 源行数 × 3 + 3 估算; 该偏差只影响滚动条长度与
+///   未实测区域的总高度估计, 进入视口时会实测修正 (锚点模型: 视口内位置
+///   只用实测高度, 估算不参与定位)
 /// - 块级元素间空行: 与 build_document 的 vbox({text(""), ...}) 一致,
 ///   第 2 个块起每块前 +1 行
 size_t estimateMarkdownLines(std::string_view s, int width) {

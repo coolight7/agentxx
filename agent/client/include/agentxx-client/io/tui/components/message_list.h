@@ -98,19 +98,18 @@ public:
     }
 
     /// 历史分页前插通知 (client 线程经 UI 动作队列调用, 帧间执行):
-    /// - 转发给 LazyScrollable::notifyPrepended 做滚动锚定 (并行数组头插 +
-    ///   按新增区估算行数下移偏移), 保证前插后视口内容稳定不跳动
-    /// - anchor 为 false 时仅同步条数语义 (首屏填充场景无需锚定)
+    /// - 转发给 LazyScrollable::notifyPrepended: 并行数组头插 + 锚点索引同步平移,
+    ///   视口顶行仍指向同一条内容 —— 前插对视口零影响 (不需要任何偏移校正)
+    /// - 新增区高度下一次布局时按新快照口径补齐 (只影响滚动条长度)
     void onHistoryPrepended(size_t count) {
         if (count > 0) {
             scrollable_->notifyPrepended(count);
         }
     }
 
-    /// 重置历史分页锚定状态 (消息列表整体替换/会话切换时调用:
-    /// 窗口已重建, 对旧窗口的偏移校正不再有意义)
+    /// 复位滚动锚点 (消息列表整体替换/会话切换时调用: 内容已换, 旧锚点不再有意义)
     void resetHistoryPagination() {
-        scrollable_->clearPrependAnchor();
+        scrollable_->resetAnchorState();
     }
 
     int contentWidth() const {
