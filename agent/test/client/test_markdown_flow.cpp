@@ -20,6 +20,7 @@
 #include "ftxui/dom/selection.hpp"
 #include "ftxui/screen/screen.hpp"
 #include "markdown/flow.hpp"
+#include "markdown/incremental.hpp"
 #include <memory>
 #include <string>
 #include <string_view>
@@ -363,6 +364,33 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(layoutHeight(wideEl, 6), 3);
         auto wideRows = renderRows(wideEl, 6, 3);
         XX_TEST_EXPECT_EQ(wideRows[1], std::string{" 汉字"});
+    }
+
+    // ---------------- 流式稳定块预算 (已构建块 LRU 释放) ----------------
+    {
+        markdown::IncrementalRenderer renderer;
+        renderer.setElementBudget(3, 1024 * 1024);
+        std::string text;
+        size_t      fed = 0;
+        for (int i = 0; i < 10; ++i) {
+            text += "paragraph number " + std::to_string(i) + " with some words\n\n";
+            renderer.append(std::string_view(text).substr(fed));
+            fed = text.size();
+        }
+        XX_TEST_EXPECT_GE(renderer.stableBlockCount(), size_t{8});
+
+        // 逐个访问 (等价于每块进入视口上屏): 已构建 (常驻) 块数不超过预算
+        for (size_t i = 0; i < renderer.stableBlockCount(); ++i) {
+            auto el = renderer.stableBlockElement(i, markdown::theme_default(), 60);
+            XX_TEST_EXPECT_TRUE(static_cast<bool>(el));
+            XX_TEST_EXPECT_TRUE(renderer.builtBlockCount() <= 3);
+        }
+        // 被 LRU 释放的块可再次访问 (按块重新解析重建)
+        auto first = renderer.stableBlockElement(0, markdown::theme_default(), 60);
+        XX_TEST_EXPECT_TRUE(static_cast<bool>(first));
+        XX_TEST_EXPECT_TRUE(renderer.builtBlockCount() <= 3);
+        // 源码文本始终保留 (释放的只是渲染结果)
+        XX_TEST_EXPECT_EQ(renderer.text().size(), text.size());
     }
 
     return TestResult{g_markdown_flow_passed, g_markdown_flow_failed};

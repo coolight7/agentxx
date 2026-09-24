@@ -80,6 +80,20 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
     if (!res.pendingRender || !ctx.pluginManager) {
         return res;
     }
+    // 投递前零拷贝判断: 同键同输入特征已有请求在执行时, 本帧直接用通用回退,
+    // 不为投递拷贝 args/result 大文本 (未命中期间 UI 每帧都会走到这里)
+    const std::string key = plugin::ClientToolRenderRequest::keyFor(toolCallId, toolName);
+    const uint64_t    inputHash = plugin::ClientToolRenderRequest::hashInputs(
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (ctx.pluginManager->toolRenderInFlight(key, inputHash)) {
+        return res;
+    }
     plugin::ClientToolRenderRequest req;
     req.toolCallId = std::string{toolCallId};
     req.toolName   = std::string{toolName};
@@ -149,13 +163,15 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 实测 100K/200K
     // 上下文时消息列表渲染树缓存即占 10+ MB。
     budget.maxItems = 64;              // 条数预算: 可见 ~30 条 + 少量滚动余量
-    budget.maxBytes = 4 * 1024 * 1024; // 渲染树估算字节预算: 4MiB
-    // 字节预算豁免: sourceBytes ≤64KB (即源 ≤1KB 的短消息) 不计入字节预算,
-    // 只受 maxItems 条数约束 (64 条 × ~64KB ≈ 4MB 封顶) —— 短消息渲染树
+    // 渲染树估算字节预算: 2MiB。sourceBytes 已按实测标定 (固定 2KB + 源×24),
+    // 典型消息 5~30KB, 64 条 × ~30KB ≈ 2MB —— 预算与真实驻留一致 (见
+    // buildMessageItem 的 sourceBytes 注释)
+    budget.maxBytes = 2 * 1024 * 1024;
+    // 字节预算豁免: sourceBytes ≤32KB (即源 ≤1KB 的短消息) 不计入字节预算,
+    // 只受 maxItems 条数约束 (64 条 × ~32KB ≈ 2MB 封顶) —— 短消息渲染树
     // 重建成本低, 无需挤占长消息的字节预算; 若连条数预算都不设, 短消息会
-    // 无限堆叠 (旧 byteExemptThreshold=1024 按源字节计, 配合旧 sourceBytes
-    // 语义, 短消息不计预算但依然缓存, 最多 256 条 × 64KB ≈ 16MB 常驻)
-    budget.byteExemptThreshold = 64 * 1024;
+    // 无限堆叠
+    budget.byteExemptThreshold = 32 * 1024;
     scrollable_                = std::make_shared<LazyScrollable>(
         [this] {
             return itemCount();
@@ -885,11 +901,13 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     out.element           = vbox({std::move(block), text("")});
     const size_t srcBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
                             + (msg.tool ? msg.tool->toolName.size() : 0);
-    // 渲染树内存估算: FTXUI 渲染树为源文本 ~30-70 倍 (text() 按 glyph 拆
-    // std::string, paragraph() 按词拆元素), 按 64 系数折算上报, 使
-    // LazyScrollable 的字节预算 (maxBytes) 约束真实驻留内存而非源文本字节
-    // (见构造函数预算注释; 系数取实测范围上沿, 宁紧勿松)
-    out.sourceBytes = srcBytes * 64;
+    // 渲染树内存估算: 由实测标定 (见 test_ftxui_text 的 "markdown render tree"
+    // 用例: 929B 源 -> 32KB 存活, 约 ×35; 纯文本消息接近 ×1.4) ——
+    // 紧凑文本节点 (存原文) + 自绘折行节点 (一行一个片段) 之后, 渲染树 = 每块
+    // 固定开销 (节点/容器/折行结构, 约 2KB) + 源字节 × 约 24 (折行片段/样式/
+    // 链接区段等)。旧实现按 ×64 折算 (与旧的逐字素/逐词渲染树相符), 现在明显
+    // 偏高, 会把预算耗在虚高的估算上 (见构造函数预算注释)
+    out.sourceBytes = srcBytes * 24 + 2048;
     // 中断消息不缓存: 每帧重建以刷新控件 reflect 命中区域 (InterruptView),
     // 否则缓存命中时控件 Box 丢失, 点击无法命中; 中断消息数量少, 成本可忽略
     // 带有可点击 decor 按钮的工具消息同样不缓存: 每帧重建以刷新 decorHits_,
@@ -1049,9 +1067,8 @@ LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& s
             streamRenderer_->stableBlockElement(bi, theme.markdownTheme, maxWidth) | color(c),
             text(""), // 块间空行分隔 (与整篇解析一致)
         });
-        // 渲染树估算 (×64, 同 buildMessageItem): 稳定块 Element 同样按 glyph
-        // 拆 std::string, 内存放大 ~30-70 倍
-        out.sourceBytes = streamRenderer_->stableBlockSource(bi).size() * 64;
+        // 渲染树估算: 同 buildMessageItem (实测标定的"固定 + 线性"模型)
+        out.sourceBytes = streamRenderer_->stableBlockSource(bi).size() * 24 + 2048;
     } else {
         out.element = text("");
     }

@@ -278,6 +278,18 @@ struct ClientToolRenderRequest {
 
     /// 输入特征: 任一输入变化都必须重新渲染 (含宽度, 渲染器按宽度换行)
     uint64_t inputHash() const;
+
+    /// 输入特征 (直接吃 string_view, 不做任何拷贝) —— 供"先算特征查缓存,
+    /// 确认需要投递时才拷贝请求"的路径使用 (见 renderClientTool / queryToolRender):
+    /// 大 args/result 文本的拷贝只在真的提交渲染请求时发生
+    static uint64_t hashInputs(
+        std::string_view toolName,
+        std::string_view argsJson,
+        std::string_view resultText,
+        bool             isFinished,
+        bool             isError,
+        int              maxWidth
+    );
 };
 
 /// 工具语义渲染缓存 (client io 线程写, UI 线程读; 内部短锁)
@@ -313,6 +325,10 @@ public:
     /// UI 每帧都会重新查询, 没有这个去重会让未命中期间每帧重复投递请求。
     bool beginRequest(const std::string& key, uint64_t inputHash);
     void endRequest(const std::string& key, uint64_t inputHash);
+
+    /// 该键的这次输入特征是否已有请求在执行 (零拷贝查询, 供调用方在构造
+    /// 请求对象前判断"是否值得拷贝输入并投递")
+    bool inFlight(const std::string& key, uint64_t inputHash) const;
 
     /// 条目数 (测试/诊断)
     size_t size() const;
@@ -605,6 +621,11 @@ public:
     ///   通知 UI 重建该消息块
     std::shared_ptr<const ClientToolRenderEntry>
         requestToolRender(const ClientToolRenderRequest& req);
+
+    /// 该键的这次输入特征是否已有渲染请求在执行 (UI 线程; 零拷贝)。
+    /// UI 侧查询工具渲染时先问一次: 在途则本帧用通用回退, 不必为投递
+    /// 拷贝 args/result 大文本 (见 message_list 的 queryToolRender)
+    bool toolRenderInFlight(std::string_view key, uint64_t inputHash) const;
 
     /// 命令是否存在 (UI 线程判断是否拦截 "/" 输入; 短锁)
     bool hasCommand(std::string_view name) const;

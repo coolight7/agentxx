@@ -16,9 +16,13 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/dom/selection.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "markdown/dom_builder.hpp"
+#include "markdown/parser.hpp"
+#include "markdown/theme.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <memory>
 #include <new>
 #include <string>
 #include <string_view>
@@ -29,9 +33,12 @@ namespace {
 int g_ftxui_text_passed = 0;
 int g_ftxui_text_failed = 0;
 
-/// 累计的 operator new 申请字节数 (仅 g_countAllocations 打开时累加)
-std::atomic<size_t> g_allocatedBytes{0};
+/// 打开的计数窗口内**当前存活**的堆字节数 (分配累加, 释放按记录的大小扣减)
+std::atomic<size_t> g_liveBytes{0};
 bool                g_countAllocations = false;
+
+/// 每个分配块前多留 16 字节存放申请大小 (释放时据此扣减存活字节)
+constexpr size_t kAllocHeader = 16;
 } // namespace
 
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
@@ -40,11 +47,38 @@ bool                g_countAllocations = false;
 
 // 计量分配: 转发到 malloc, 语义与默认实现一致; 只在本模块的内存断言期间
 // 打开计数 (g_countAllocations), 不影响其他测试
-void* operator new(std::size_t size) {
-    if (g_countAllocations) {
-        g_allocatedBytes.fetch_add(size, std::memory_order_relaxed);
+namespace {
+/// 申请一块带头部的内存 (头部记录大小), 返回可用的数据区
+void* allocateWithHeader(std::size_t size) {
+    const std::size_t bytes = (size == 0 ? 1 : size) + kAllocHeader;
+    void*             base  = std::malloc(bytes);
+    if (base == nullptr) {
+        return nullptr;
     }
-    void* p = std::malloc(size == 0 ? 1 : size);
+    *static_cast<std::size_t*>(base) = size;
+    if (g_countAllocations) {
+        g_liveBytes.fetch_add(size, std::memory_order_relaxed);
+    }
+    return static_cast<char*>(base) + kAllocHeader;
+}
+
+/// 释放带头部的内存 (按头部大小扣减存活字节)
+void freeWithHeader(void* p) noexcept {
+    if (p == nullptr) {
+        return;
+    }
+    char*             base = static_cast<char*>(p) - kAllocHeader;
+    const std::size_t size = *reinterpret_cast<std::size_t*>(base);
+    if (g_countAllocations) {
+        g_liveBytes.fetch_sub(std::min(size, g_liveBytes.load(std::memory_order_relaxed)),
+                              std::memory_order_relaxed);
+    }
+    std::free(base);
+}
+} // namespace
+
+void* operator new(std::size_t size) {
+    void* p = allocateWithHeader(size);
     if (p == nullptr) {
         throw std::bad_alloc();
     }
@@ -56,10 +90,7 @@ void* operator new[](std::size_t size) {
 }
 
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-    if (g_countAllocations) {
-        g_allocatedBytes.fetch_add(size, std::memory_order_relaxed);
-    }
-    return std::malloc(size == 0 ? 1 : size);
+    return allocateWithHeader(size);
 }
 
 void* operator new[](std::size_t size, const std::nothrow_t& tag) noexcept {
@@ -67,27 +98,27 @@ void* operator new[](std::size_t size, const std::nothrow_t& tag) noexcept {
 }
 
 void operator delete(void* p) noexcept {
-    std::free(p);
+    freeWithHeader(p);
 }
 
 void operator delete[](void* p) noexcept {
-    std::free(p);
+    freeWithHeader(p);
 }
 
 void operator delete(void* p, std::size_t) noexcept {
-    std::free(p);
+    freeWithHeader(p);
 }
 
 void operator delete[](void* p, std::size_t) noexcept {
-    std::free(p);
+    freeWithHeader(p);
 }
 
 void operator delete(void* p, const std::nothrow_t&) noexcept {
-    std::free(p);
+    freeWithHeader(p);
 }
 
 void operator delete[](void* p, const std::nothrow_t&) noexcept {
-    std::free(p);
+    freeWithHeader(p);
 }
 
 namespace agentxx {
@@ -247,18 +278,57 @@ TestResult testFtxuiText() {
         }
 
         std::vector<Element> elements;
-        g_allocatedBytes.store(0);
+        g_liveBytes.store(0);
         g_countAllocations = true;
         for (const auto& t : texts) {
             elements.push_back(text(t));
         }
         g_countAllocations = false;
-        const size_t allocated = g_allocatedBytes.load();
+        const size_t allocated = g_liveBytes.load();
 
         TEST_INFO << "text nodes: " << kCount << " x " << kSize << "B -> " << allocated
                   << " bytes allocated" << std::endl;
         XX_TEST_EXPECT_GE(allocated, static_cast<size_t>(kCount * kSize)); // 至少等于源文本
         XX_TEST_EXPECT_TRUE(allocated < static_cast<size_t>(kCount * kSize * 2));
+    }
+
+    // ---------------- markdown 渲染树内存放大 (sourceBytes 标定依据) ----------------
+    {
+        // 与方案基线同量级的文档 (1.4KB 富 markdown): 基线微基准里旧实现的
+        // 渲染树为源文本的 ×112 (每词一个元素 + 每字素一个 std::string)
+        std::string md
+            = "# Heading\n\n"
+              "A paragraph with **bold**, *italic*, `code` and a [link](https://example.com) "
+              "that wraps over a couple of lines when the available width is limited.\n\n"
+              "- item one\n"
+              "- item two\n\n"
+              "```cpp\nint main() { return 0; }\n```\n\n";
+        {
+            const std::string para
+                = "Another paragraph of ordinary prose used to grow the document to the size "
+                  "of a typical message body so the measurement is comparable with the "
+                  "baseline micro benchmark numbers.\n\n";
+            for (int i = 0; i < 4; ++i) {
+                md += para;
+            }
+        }
+        auto parser  = markdown::make_cmark_parser();
+        auto ast     = parser->parse(md);
+        auto builder = std::make_unique<markdown::DomBuilder>();
+        builder->set_max_width(97);
+
+        g_liveBytes.store(0);
+        g_countAllocations = true;
+        auto element       = builder->build(ast, -1, markdown::theme_default());
+        g_countAllocations = false;
+        const size_t allocated = g_liveBytes.load();
+        const double ratio = static_cast<double>(allocated) / static_cast<double>(md.size());
+        TEST_INFO << "markdown render tree: " << md.size() << "B source -> " << allocated
+                  << " bytes (x" << ratio << ")" << std::endl;
+        // 自绘折行节点 + 紧凑文本节点后应明显低于基线 (×112); 这里按 ×40 把关,
+        // 同时保证绝对量级合理 (sourceBytes 标定依据, 见 buildMessageItem)
+        XX_TEST_EXPECT_TRUE(allocated < md.size() * 40);
+        XX_TEST_EXPECT_TRUE(static_cast<bool>(element));
     }
 
     return TestResult{g_ftxui_text_passed, g_ftxui_text_failed};

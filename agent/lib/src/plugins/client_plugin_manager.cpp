@@ -841,6 +841,17 @@ std::string
 }
 
 uint64_t ClientToolRenderRequest::inputHash() const {
+    return hashInputs(toolName, argsJson, resultText, isFinished, isError, maxWidth);
+}
+
+uint64_t ClientToolRenderRequest::hashInputs(
+    std::string_view toolName,
+    std::string_view argsJson,
+    std::string_view resultText,
+    bool             isFinished,
+    bool             isError,
+    int              maxWidth
+) {
     uint64_t h = 1469598103934665603ULL;
     hashBytes(h, toolName);
     hashBytes(h, argsJson);
@@ -930,6 +941,12 @@ bool ClientToolRenderCache::beginRequest(const std::string& key, uint64_t inputH
     return true;
 }
 
+bool ClientToolRenderCache::inFlight(const std::string& key, uint64_t inputHash) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = pending_.find(key);
+    return it != pending_.end() && it->second == inputHash;
+}
+
 void ClientToolRenderCache::endRequest(const std::string& key, uint64_t inputHash) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto                        it = pending_.find(key);
@@ -956,6 +973,10 @@ void ClientPluginManager::setRegistryGeneration(
         reg->instanceGenerations.erase(std::string{plugin});
     }
     uiRegistry_ = std::move(reg);
+}
+
+bool ClientPluginManager::toolRenderInFlight(std::string_view key, uint64_t inputHash) const {
+    return toolRenderCache_ && toolRenderCache_->inFlight(std::string{key}, inputHash);
 }
 
 std::shared_ptr<const ClientToolRenderEntry>
@@ -4082,17 +4103,20 @@ ClientToolRenderResult renderClientTool(
                 if (r.toolName == toolName) {
                     if (r.renderFn) {
                         if (cache) {
-                            ClientToolRenderRequest req;
-                            req.toolCallId = std::string{toolCallId};
-                            req.toolName   = std::string{toolName};
-                            req.argsJson   = std::string{argsJson};
-                            req.resultText = std::string{resultText};
-                            req.isFinished = isFinished;
-                            req.isError    = isError;
-                            req.maxWidth   = maxWidth;
+                            // 零拷贝查缓存: 先用 string_view 算输入特征 + 查缓存,
+                            // 命中即返回 (不拷贝 args/result 大文本); UI 侧只在
+                            // pendingRender 时构造 ClientToolRenderRequest
                             const std::string key
                                 = ClientToolRenderRequest::keyFor(toolCallId, toolName);
-                            auto cached = cache->lookup(key, req.inputHash());
+                            const uint64_t inputHash = ClientToolRenderRequest::hashInputs(
+                                toolName,
+                                argsJson,
+                                resultText,
+                                isFinished,
+                                isError,
+                                maxWidth
+                            );
+                            auto cached = cache->lookup(key, inputHash);
                             if (!cached || cached->plugin != r.plugin) {
                                 res.matched       = false;
                                 res.pendingRender = true;
