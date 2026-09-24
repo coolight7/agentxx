@@ -297,9 +297,14 @@ path/to/agentxx_test string_util regex
 - 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
   由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: <msg>]` 结果文本; 插件侧在 SDK 边界捕获并上报
   FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态
+- markdown 代码块折行: FTXUI 对超出盒宽的元素是裁剪而非折行, 故 ``` 围栏内容在构建期
+  按显示宽度折行 (`markdown::wrap_line_by_width`, 见 markdown_ftxui 的 `build_code_block`):
+  折行宽度 = 可用宽度 - 左右各 1 列内边距 - 外层缩进 (块引用每层 2 列 / 列表项前缀,
+  构建期经 `tl_indent` + `IndentScope` 累加); `estimateMarkdownLines` 用同一函数统计
+  行数, 两侧口径必须保持一致 (改动折行规则时两处同步)
 - 接口表数量: agent 侧 18 张 (10 张通用表 `pluginxx.*` + 8 张领域表 `agentxx.agent.*`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
-- 测试模块: client 侧 17 个 (含 `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
+- 测试模块: client 侧 18 个 (含 `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
 
 ## 编译

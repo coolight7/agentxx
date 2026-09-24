@@ -55,8 +55,10 @@ std::pair<Element, std::unique_ptr<markdown::DomBuilder>> renderMarkdown(
 /// - 行首标记行 (标题 # / 引用 > / 列表 - * + 数字. / 表格 |): 每源行渲染
 ///   1+ 行, 按去除标记后内容宽度折行估算 (build_list_item/blockquote 等
 ///   均为每源行一行, 内容处再按段落折行)
-/// - ``` / ~~~ 围栏代码块: 开始围栏 1 行 + 内容每行 1 行 (含围栏内空行) +
-///   结束围栏 1 行 (build_code_block 逐行渲染)
+/// - ``` / ~~~ 围栏代码块: 开始围栏 1 行 + 内容行 + 结束围栏 1 行; 其中
+///   超出可用宽度的代码行会被折成多行, 行数用与渲染侧同一个函数
+///   [markdown::wrap_line_by_width] 按同一可用宽度算出 (build_code_block
+///   折行语义), 否则长行代码块的高度会被低估
 /// - ```mermaid 围栏: 渲染为状态图 (节点框 + 箭头), 图形高度与源行数无关,
 ///   实测约为源行数 × 3 + 3 (4 节点 5 边 TB 图: 7 源行 -> 24 行)。若按
 ///   普通代码块估算 (每行 1 行), 严重低估 (7 -> 8), 视口外消息总高度偏低,
@@ -71,11 +73,14 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
         return 1;
     }
     const size_t useWidth       = (width <= 0) ? 80 : static_cast<size_t>(width);
+    // 代码行折行可用列数: 与 build_code_block 一致 (总宽度 - 左右各 1 列内边距,
+    // <= 0 表示不折行); 外层缩进 (块引用/列表) 未计入, 该情形下估算略低
+    const int    codeAvail      = static_cast<int>(useWidth) - 2;
     size_t       total          = 0;
     size_t       blocks         = 0; // 渲染块计数 (块间空行 +1, build_document 语义)
     bool         inFence        = false;
     bool         fenceIsMermaid = false; // 当前围栏是否为 ```mermaid (图形估算)
-    size_t       fenceLines     = 0;     // 当前围栏源行数 (含开始/结束围栏)
+    size_t       fenceLines     = 0;     // 当前 mermaid 围栏源行数 (含开始/结束围栏)
 
     std::string para; // 普通段落累积 (softbreak -> 空格合并)
     auto        flushParagraph = [&]() {
@@ -104,15 +109,18 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
     while (i < n) {
         const size_t     eol     = s.find('\n', i);
         const size_t     lineEnd = (eol == std::string_view::npos) ? n : eol;
-        std::string_view line    = s.substr(i, lineEnd - i);
-        const size_t     b       = line.find_first_not_of(" \t");
-        const size_t     e       = line.find_last_not_of(" \t");
+        const std::string_view rawLine = s.substr(i, lineEnd - i); // 未去空白 (折行按原文算)
+        std::string_view       line    = rawLine;
+        const size_t           b       = line.find_first_not_of(" \t");
+        const size_t           e       = line.find_last_not_of(" \t");
         line = (b == std::string_view::npos) ? std::string_view{} : line.substr(b, e - b + 1);
         if (line.empty()) {
             // 空行: 段落终止 (围栏内空行属于代码内容, 渲染 1 行)
             if (inFence) {
                 ++total;
-                ++fenceLines;
+                if (fenceIsMermaid) {
+                    ++fenceLines;
+                }
             } else {
                 flushParagraph();
             }
@@ -120,8 +128,14 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
             continue;
         }
         if (inFence) {
-            ++total;
-            ++fenceLines;
+            if (fenceIsMermaid) {
+                // 图形高度与源行数无关 (见上方说明), 先按源行计数再统一补足
+                ++total;
+                ++fenceLines;
+            } else {
+                // 代码行: 超宽时按可用列数折行 (与渲染侧同一折行函数)
+                total += markdown::wrap_line_by_width(rawLine, codeAvail).size();
+            }
             if (line.size() >= 3 && (line.substr(0, 3) == "```" || line.substr(0, 3) == "~~~")) {
                 inFence = false; // 结束围栏 (已计 1 行)
                 if (fenceIsMermaid) {

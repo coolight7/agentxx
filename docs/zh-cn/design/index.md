@@ -451,6 +451,12 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
       内容块渲染与插件工具装饰 items 复用同一实现
       ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h))
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
+  - 代码块长行折行显示: FTXUI 对超出盒宽的元素是**裁剪**而不是折行, 故 ``` 围栏内的
+    代码在构建期按显示宽度折行 (`markdown::wrap_line_by_width`, 见
+    markdown_ftxui 的 `build_code_block`): 折行宽度 = 可用宽度 - 左右各 1 列内边距 -
+    外层缩进 (块引用前缀每层 2 列、列表项前缀), 多字节/双宽字符不拆开;
+    消息高度估算 (`agentxx::client::estimateMarkdownLines`) 用同一折行实现计数,
+    避免折行后消息高度被低估 (低估会让滚动偏移偏小, 底部内容被推出视口)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
   - 弱化文字 (dim) 按主题分流, 不使用 `ftxui::dim`: 该属性由终端按"前景色亮度减半"
