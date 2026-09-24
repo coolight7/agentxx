@@ -23,7 +23,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...17 张 agent + 7 张 client
+         │ tools       │ hooks       │ events       │ scheduler   │  ...18 张 agent + 9 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -502,6 +502,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
+| `agentxx.client.timer` | 1 | 一次性/周期定时器与区域可见性查询 (暂停策略见 §9.5) |
+| `agentxx.client.keybind` | 1 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
 
 **版本口径**: `agentxx.client.ui` 表自身 `version` 恒为 1 (表结构未变)。新增展示能力一律走
 **数据层** (新组件 kind / 新字段) 或**新增接口表**, 不在表尾追加成员 —— SDK 侧的接口校验是
@@ -791,7 +793,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - **静态块同一实现**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
      的内容块 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`) 在 TUI 侧
      复用同一套块渲染实现
-     ([ui_items_render.h](/agent/client/include/agentxx-client/io/tui/ui_items_render.h),
+     ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h),
      渲染产出"行模型", 渲染与高度估算同源); 颜色 role 映射 / 按钮配色 / diff 渲染
      仍来自
      [plugin_ui_items.h](/agent/client/include/agentxx-client/io/tui/plugin_ui_items.h)。

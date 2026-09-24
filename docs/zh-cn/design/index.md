@@ -1,5 +1,5 @@
 # Agentxx 整体设计文档
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构)
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [benchmark.md](benchmark.md) (资源与性能基准)
 
 ## 目录
 
@@ -28,9 +28,9 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 ### 核心对话能力
 
 - **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
-- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为完整 ViewMessage 经 InsertMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
+- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为完整 ViewMessage 经 InsertMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
 - **多模型支持**: 运行时按会话 (sessionId) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
-- **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩完成后**立即**回写会话 `llmMessages` 并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示)
+- **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩完成后**立即**回写会话 `llmMessages` 并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示); 失败与冷却处理: 压缩失败按轮内计数累积 (`graphDataKey_summarizationFailCount`), 连续失败 >= 2 次或 token 占用 >= 95% 上限时降级**硬截断** (按 token 预算丢弃最旧消息) 兜底; "上次压缩后消息增长不足 2 条" 视为冷却期 (`graphDataKey_summarizationLastMsgCount`), 跳过重复的 LLM 压缩 (避免每轮派生无效的压缩子代理); 手动压缩等待上限 2 分钟 (子代理卡住时不无限占用 io 线程, 超时走硬截断)
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
 - **节点级事件**: NodeStart/NodeEnd 事件标记 Graph 节点执行生命周期，便于 UI 展示进度
 
@@ -86,7 +86,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - **去重机制**: 文件读写等工具支持 SummarizationToolHandle，重复调用时截断旧结果
 - **上下文修复优化**: `ModelCallWrapNode::repairMessages` 在调用 LLM 前自动检查和修复上下文结构（合并连续同角色消息、规范化 tool_call 与 tool_result 配对），采用按需验证与最小拷贝优化，显著降低深轮次对话的开销
 - **事件驱动取消**: 命令执行等重型工具接入插件开发框架通用设施 `CancelRegistry`，支持跨线程排他防悬挂锁与即时回调通知，在 Windows 与 Linux/POSIX 下毫秒级即时终止子进程组与管道，而非单纯依赖休眠轮询
-- **MCP 扩展与容错**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输, 命名空间前缀隔离, 默认 120s 初始化与调用超时)；初始化失败的组件统一记录于 `appendComponentInfo.failedComponents`，供 UI 集中查看和统计
+- **MCP 扩展与容错**: 通过 MCP Client 连接外部 MCP Server，动态注册远程工具 (支持 HTTP SSE 和 stdio 传输, 命名空间前缀隔离, 工具调用整体超时默认 120s — 可由 yaml `mcp.list[].timeout` 配置; 内部固定超时: 单请求 60s / 初始化 10s)；初始化失败的组件统一记录于 `appendComponentInfo.failedComponents`，供 UI 集中查看和统计
 
 ### Git Worktree 模式 (yaml `worktree.enable`, 默认关闭)
 
@@ -314,11 +314,16 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp);
+- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/CompactContext/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp/ListDir/ListDirResult/GetPermissionState/SetFullAuth/PermissionState);
   排队消息管理: 执行中排队由服务端按会话维护并经 MessageQueueUpdate 同步,
   客户端可删除单条 (RemoveQueueItem) / 清空队列 (ClearMessageQueue) /
   打断当前轮次立即执行队列首条 (InterruptAndRunNext); 插件事件经
-  PluginData (agent→client 下行) / PluginDataUp (client→agent 上行) 原样转发
+  PluginData (agent→client 下行) / PluginDataUp (client→agent 上行) 原样转发;
+  两处"服务端状态查询"类消息:
+  - ListDir / ListDirResult: 列举服务端目录 (跨设备附件选择的数据源;
+    目录扫描卸载到线程池, 路径一律以 UTF-8 在两端传递)
+  - GetPermissionState / SetFullAuth / PermissionState: 查询与切换"完全授权所有权限"
+    (状态源在服务端权限中间件, 客户端只持镜像; 切换后服务端向全部接入端点广播新状态)
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync;
   客户端水位高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退全量 Sync,
   SyncPayload.deltaSeq 携带快照水位 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此复位去重水位
@@ -342,7 +347,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 |------|------|------|
 | **OpenAI API** | Client | 兼容 OpenAI Chat Completions API (流式/非流式)，支持 thinking/reasoning_content |
 | **Anthropic API** | Client | Anthropic Messages API，支持 extended thinking、tool_use |
-| **MCP** | Client + Server | Model Context Protocol，支持 2024-11-05 至 2025-11-25 多版本协商，HTTP SSE + stdio 传输 |
+| **MCP** | Client + Server | Model Context Protocol，支持 2024-11-05 至 2026-07-28 多版本协商，HTTP SSE + stdio 传输 |
 | **A2A** | Client + Server | Agent-to-Agent 协议 v1.0，任务管理 (SendMessage/GetTask/CancelTask/ListTasks) |
 | **ACP** | Server | Agent Communication Protocol，stdio 服务模式 |
 
@@ -396,14 +401,23 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     wav/mp3/ogg/m4a/aac/flac; 视频 mp4/mov/webm/mkv; 非媒体不展示,
     不支持类型灰显不可选), 目录导航 (↑/↓ + Enter + Esc + 鼠标; 弹窗为
     纯导航列表, 不含文件名过滤输入框);
-    选中后客户端读取并 Base64 编码为 RFC 2397 Data URL, 经大小预检
-    (图像 ≤10MB / 音频 ≤25MB / 视频 ≤50MB / 单次 ≤5, 超限 toast 拒绝)
-    挂载到输入框上方附件托盘 (✕ 可移除, Enter 随文本打包经
-    WireUserInput.attachments 发送); 服务端排队保留附件并组装为
-    ChatMessage image/audio/video_urls 送入 Provider; 消息列表以卡片展示
-    附件元信息 (点击调系统查看器打开, 远端 dataUrl 先落盘临时目录);
-    SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件降级为
-    [用户附带了图片/音频/视频] 纯文本标签
+    - **同一设备**: 选中后客户端读取并 Base64 编码为 RFC 2397 Data URL, 经大小预检
+      (图像 ≤10MB / 音频 ≤25MB / 视频 ≤50MB / 单次 ≤5, 超限 toast 拒绝)
+      挂载到输入框上方附件托盘 (✕ 可移除, Enter 随文本打包经
+      WireUserInput.attachments 发送); 服务端排队保留附件并组装为
+      ChatMessage image/audio/video_urls 送入 Provider; 消息列表以卡片展示
+      附件元信息 (点击调系统查看器打开, 远端 dataUrl 先落盘临时目录);
+      SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件降级为
+      [用户附带了图片/音频/视频] 纯文本标签
+    - **跨设备 (远程模式且 client 与 server 设备不同)**: 弹窗顶部多出
+      「本地 / 服务端」两个标签页 (Tab 键或点击切换; 同设备时不渲染标签页,
+      不占用点击区域), 服务端页经 WireListDir/WireListDirResult 列举
+      **服务端**目录 (路径在两端一律 UTF-8; 扫描在服务端线程池执行,
+      不阻塞 agent io 线程; 初始目录为服务端会话工作目录, 由 HelloAck 携带);
+      选中服务端文件时附件**只带 pathOrUrl 不带 base64**, 不经客户端搬运,
+      由服务端读取并编码后送入 Provider (附件大小上限同样在服务端校验);
+      设备判定: 内置直连模式必然同设备, 远程模式比对 HelloAck 的
+      serverDeviceId (32 位 MD5) 与客户端自身 deviceId
   - 文件编辑 diff 对比渲染
   - 中断询问的**声明式 UI 描述**渲染 (通用机制, TUI 不含任何具体询问类型
     ——含权限询问——的特化分支): agent 侧在 `InterruptHandleArg.ui`
@@ -435,7 +449,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
       过程 (行模型) 同时产出渲染元素与行数, 避免布局与估算两处漂移
       (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h));
       内容块渲染与插件工具装饰 items 复用同一实现
-      ([ui_items_render.h](/agent/client/include/agentxx-client/io/tui/ui_items_render.h))
+      ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h))
   - Mermaid stateDiagram-v2 状态图渲染 (消息中 ```mermaid 代码块 / Plan 弹窗显示 roadmap 状态图)
   - 上下文 token 占用状态栏
   - 主题切换 (持久化到 {dataDir}/sqlite/global.db)
@@ -456,7 +470,20 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     外框见 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
     (`TuiSurfaceStyle` + `tuiSurfacePopup`/`tuiSurfaceFrame`),
     配色定义见 [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h)
-  - 会话选择弹窗 (F3): 列出持久化会话 (WireListSessions), 确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
+  - 会话选择弹窗 (F3): 列出持久化会话 (WireListSessions, keyset 游标分页按最近活动降序),
+    确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
+  - 设置弹窗: 条目按 界面/显示/更新/其他 分组 (条目表驱动, 见
+    [tui.md](tui.md) §2.4), 内容超出终端可用高度时内容区限高并可滚动
+    (选中项自动滚入视口, 滚轮 = 上/下移动选中项); "更新"组含「启动时检查更新」开关与
+    「检查更新」条目, "其他"组含「快捷键」条目 (显示已注册条数, 激活后打开只读列表弹窗)
+  - Info 侧边栏底部三行: 工作目录行 (`{目录名} [ 授权按钮 ] {绝对路径}`, 授权按钮显示
+    当前"完全授权 / 询问授权"状态并可点击切换; 状态属 agent 侧权限中间件, 客户端只持镜像,
+    握手/查询取初值、服务端变更广播校准)、`Agentxx <版本> · 连接方式` 行、发现新版本时的
+    更新提示行 (点击复制发布页链接)
+  - 更新检查 (可选): 启动时延迟 3 秒查询 GitHub Release (`/releases/latest` 的 302 Location
+    或 JSON `tag_name`, 超时各 8 秒, 失败只记日志), 仅当最新版本大于当前编译版本才提示;
+    受设置项 `tui.checkUpdateOnStartup` 控制; 即时检查经设置条目触发, 结果以弹窗
+    (有新版本)/toast (已最新或失败) 反馈; 详见 [tui.md](tui.md) §2.8
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
     向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
     前插后滚动锚定保持视口稳定; 到达会话开头 (historyWindowStart=0) 后不再请求
@@ -584,7 +611,8 @@ path/to/agentxx_test string_util regex agent
 ```
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `ffi_c_api` (及 client 侧 `AGENTXX_BUILD_CLIENT`: `config_loader` `tui_settings` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_stream` `tui_tool_header` `sessionId` `mermaid_state`)
+- 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+- 同步模块 (client 侧, 仅 `AGENTXX_BUILD_CLIENT`): `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`
 - 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 透出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
 
@@ -636,6 +664,9 @@ model:
                                       # ≤10MB; 音频 wav/mp3/ogg/m4a/aac/flac ≤25MB;
                                       # 视频 mp4/mov/webm/mkv ≤50MB; 单次消息附件 ≤5)。
                                       # 客户端读取并 Base64 编码为 RFC 2397 Data URL 传输;
+                                      # 跨设备 (远程且 client/server 设备不同) 时弹窗多出
+                                      # 「本地/服务端」标签页, 选服务端文件只传路径, 由服务端
+                                      # 自行读取编码 (见"客户端 UI / 多模态文件输入");
                                       # SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件
                                       # 降级为 [用户附带了图片/音频/视频] 纯文本标签
       model_context_max_token: 128000
@@ -660,6 +691,8 @@ mcp:
   list:
     - namespace: "my_mcp"
       url: "http://localhost:3000/mcp"
+      timeout: 120                     # 工具调用整体超时 (秒, 0=不限制; 默认 120)
+                                       # 内部固定超时: 单请求 60s / 初始化 10s
 
 # 统一数据根目录 (留空/不配置 = 不持久化: 设置/会话/codegraph 仅存内存,
 # 重启后无法恢复; 支持 ~ 与 ${VAR} 展开, 相对路径按工作目录解析)
@@ -713,6 +746,8 @@ plugin:
     - path: "./plugins/agentxx_codegraph"  # 插件动态库路径 或 插件目录 (含 plugin.yaml 时按清单分派)
       enabled: true                        # 默认 true
       sides: auto                          # auto|agent|client (双端插件用; 默认 auto 按导出符号自动决定)
+      config: ""                           # 插件配置文件路径或目录 (可选; 支持 ~ 与 ${VAR}, 相对路径按工作目录解析;
+                                           # 宿主归一化为绝对路径后经 get_plugin_config_path 透传给插件)
       args:                                # 插件参数 (宿主原样保存并整体传递, 字段语义由插件定义)
         # ---- agentxx_codegraph 参数 ----
         paths:                             # 加载(索引)路径列表 (可选, 可多个目录)
@@ -901,10 +936,11 @@ agentxx_cli [mode] [options]
 | 选项 | 说明 |
 |------|------|
 | `-h, --help` | 显示帮助 |
+| `-v, --version` | 显示版本信息 (`Agentxx v<版本>`, 版本常量见 `agentxx/version.h`) |
 | `--config <path>` | 配置文件路径 (默认: agentxx-config.yaml) |
 | `--env <path>` | 覆盖式环境变量文件路径 |
 | `--agent <url>` | 远程 agent server 地址 (ws://host:port/agent) |
-| `--token <token>` | 认证 token |
+| `--token <token>` | 认证 token (也可由 url 查询串携带: `ws://host:port/agent?token=xxx`) |
 | `--model <model>` | 远程模型名称 |
 | `--host <host>` | 服务监听地址 (默认: 127.0.0.1) |
 | `--port <port>` | 服务监听端口 (默认: 7007) |
@@ -1233,7 +1269,8 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── onPeerMessage()    → 覆写: 处理 Hello/UserInput/Cancel/SelectModel/InterruptResponse/
     │                          GetModel/GetAppendComponentInfo/GetContext/ListSessions/
     │                          SwitchSession/GetViewMessages/ClearMessageQueue/
-    │                          RemoveQueueItem/InterruptAndRunNext/PluginDataUp 等
+    │                          RemoveQueueItem/InterruptAndRunNext/ListDir/
+    │                          GetPermissionState/SetFullAuth/PluginDataUp 等
     ├── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
     ├── stop()             → 停止驱动循环 (关闭输入 channel/取消轮次/fail pending)
     ├── onDisconnect()     → 传输断开时启动 grace 定时器 (宽限期满且无连接则取消轮次)
@@ -1476,6 +1513,17 @@ Client                              Server
   │←── ViewMessagesPage ──────────────│ (startIndex/totalCount/messages);
   │                                   │ 客户端前插 + 滚动锚定, 视口内容稳定
   │                                    │
+  │ (可选) 跨设备附件选择 (client 与 server 不同设备时, 文件选择弹窗多出"服务端"标签页)
+  │──── ListDir (path, 允许扩展名) ──→│ 服务端目录扫描 (线程池执行, UTF-8 路径);
+  │←── ListDirResult ─────────────────│ 只回目录与媒体文件, 条目带 supported (当前模型是否支持)
+  │                                   │ 选中服务端文件时附件只带 pathOrUrl (不含 base64),
+  │                                   │ 由服务端自行读取并编码 (不经客户端搬运)
+  │                                    │
+  │ (可选) 完全授权状态 (Info 侧边栏授权按钮)
+  │──── GetPermissionState ──────────→│ 查询当前状态 (握手 HelloAck 也带初值)
+  │←── PermissionState {fullAuth} ────│
+  │──── SetFullAuth {fullAuth} ──────→│ 切换并广播新状态 (其它接入端点随之更新)
+  │                                    │
   │ (可选) 中断过期通知
   │←── InterruptExpired ──────────────│ 中断超时/断线宽限期满/会话取消时,
   │                                   │ 客户端将对应中断消息标记为过期并结束等待
@@ -1577,12 +1625,14 @@ agent/
 │   ├── include/agentxx/
 │   │   ├── agentxx.h             # 库总入口头文件
 │   │   ├── ffi_api.h             # FFI 纯 C ABI 导出契约 (唯一跨语言稳定接口, 见 ffi.md)
+│   │   ├── version.h             # 版本常量 (agentxx::kVersion; `--version` 与 TUI 更新检查使用)
 │   │   ├── agent/                # Agent 核心
 │   │   │   ├── base_agent.h      # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
 │   │   │   ├── code_agent.h      # CodeAgent (继承 BaseAgent, 编程工具/中间件)
 │   │   │   ├── agent_host.h      # AgentHost 进程级宿主 (主 agent 与子代理平等注册/派生/回收)
 │   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A 桥接
 │   │   │   ├── agent_runner.h    # AgentRunner 统一 "引擎运行+中断处理+恢复" 循环 (主 agent 与子代理共用)
+│   │   │   ├── resource_applier.h # 插件会话资源 (Skill/Memory/MCP) 声明应用与冻结
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置 + 全局运行开关 (enableBenchmark)
 │   │   │   ├── context.h         # AgentContext / Session / SessionsManager / ContextStats
@@ -1620,7 +1670,7 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 17 张 agent 接口表 + 7 张 client 接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 18 张 agent 接口表 + 9 张 client 接口表)
 │   │   │   │                     #   框架内核 (C ABI 基座 / SDK 基座 / 宿主运行时 / 装载 / 清单解析) 已拆为
 │   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留宿主领域实现
 │   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
@@ -1675,6 +1725,10 @@ agent/
 │   │   │   ├── provider_common.h # 各 LLM Provider 与模型调用节点共用 helper
 │   │   │   │                     #   (唯一 tool_call id 生成 / 空响应判定)
 │   │   │   └── protocol_base.h   # 协议基类
+│   │   ├── ui/                  # 客户端 UI 组件描述数据层 (与渲染实现分离, 零 ABI 变更)
+│   │   │   ├── item.h           # agentxx.ui.item schema 解析/校验/纯文本降级 (ui::plainText)
+│   │   │   ├── build.h          # 组件链式构建器 (agentxx::ui::Items, 插件侧组装描述用)
+│   │   │   └── text_width.h     # 终端显示列宽计算 (宽字符/CJK/组合字符)
 │   │   └── util/                 # 工具类 —— 图引擎/宿主耦合件 + 宿主专用数据库工具
 │   │       ├── exception.h       # 异常分类与统一捕获 (neograph 取消/中断语义 + utilxx_base::catchError*)
 │   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json 桥接
@@ -1684,7 +1738,7 @@ agent/
 │   │       (说明: 其余通用工具已拆为独立工程, 见下方 third_party/ 与"基础库"小节;
 │   │        sqlite/settings_db 为宿主专用, 不进入通用工具库)
 │   └── src/                      # 实现文件 (与 include 目录结构对应; util/ 下为
-│                                 #   sqlite.cpp / settings_db.cpp)
+│                                 #   sqlite.cpp / settings_db.cpp, ui/ 下为 item.cpp / text_width.cpp)
 │
 ├── third_party/                  # 第三方依赖 (含本项目自研的三个独立库)
 │   ├── cxx_utilxx_base/          # 基础件: log/json/json_view/string_util/env/system/
@@ -1705,6 +1759,7 @@ agent/
 │   ├── include/agentxx-client/
 │   │   ├── config_loader.h       # YAML 配置加载 / .env 解析 / 环境变量替换
 │   │   ├── mode_runners.h        # 运行模式入口 (local/remote × tui/cli, 统一调用)
+│   │   ├── update_check.h        # GitHub Release 更新检查 (302 Location / JSON 双路径, 版本比较)
 │   │   ├── io/
 │   │   │   ├── stdio/
 │   │   │   │   ├── agent_stdio.h # StdIOClientAgentIO (stdin/stdout 交互)
@@ -1716,43 +1771,57 @@ agent/
 │   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── scroll_common.h # 两个滚动容器共用逻辑 (元素布局测量/滚轮事件)
+│   │   │       ├── markdown_block.h # Markdown 块渲染缓存 (按块缓存, 配合 LazyScrollable)
+│   │   │       ├── plugin_ui_items.h # 插件 UI 描述注册表快照 (面板/Info/状态栏/装饰/overlay)
+│   │   │       ├── ui_components.h   # 组件描述 agentxx.ui.item 的**唯一渲染实现** (渲染 + 测量 + 行内命中区域)
+│   │   │       ├── tui_keybind.h  # 键位规范化与 FTXUI 事件 → 键位串 (插件快捷键匹配)
 │   │   │       ├── tui_theme.h   # TUI 主题配色 (含弹窗 surface* 面性风格配色)
 │   │   │       ├── surface.h     # 弹窗面性风格外框 (+ 角标 + 内外留白 + 三区域组装)
 │   │   │       ├── framework/    # TUI 框架层
 │   │   │       │   ├── tui_state.h       # TUI 状态聚合 (消息/侧边栏/排队输入等)
-│   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸)
-│   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/动画/日志等级)
-│   │   │       │   ├── modal_container.h # 弹窗容器 (权限/中断弹窗)
+│   │   │       │   ├── tui_context.h     # TUI 渲染上下文 (theme/state/尺寸/服务端信息)
+│   │   │       │   ├── tui_settings.h    # TUI 全局设置单例 (主题/动画/日志等级/更新检查开关)
+│   │   │       │   ├── modal_container.h # 弹窗容器 (模态阻塞事件与渲染)
+│   │   │       │   ├── ui_hit.h          # 命中登记表 UiHitRegistry (帧首清空 + 渲染时登记 + 坐标查询)
+│   │   │       │   ├── ui_action_list.h  # 声明式条目列表 (键盘/鼠标/选中/分组标题统一实现)
+│   │   │       │   ├── owned_reflect.h   # 元素自持的反射框 (元素跨帧缓存时 Box 不悬空)
 │   │   │       │   └── tui_i18n.h       # 界面翻译表 (en/zh 两列, 缺键回退)
 │   │   │       ├── text_layout.h # 文本布局辅助 (行数估算/硬折行; 消息列表与中断视图共用)
 │   │   │       └── components/   # TUI 渲染组件
 │   │   │           ├── message_list.h # 消息列表渲染
 │   │   │           ├── interrupt_view.h # 中断输入项通用视图 (渲染/估算/交互; 形态由 UI 描述数据决定)
 │   │   │           ├── sidebar.h      # 右侧边栏 (日志/信息/Planning)
-│   │   │           ├── overlays.h     # 弹窗 (权限/中断/模型选择)
+│   │   │           ├── overlays.h     # 弹窗 (模型/会话/设置/关于/更新提示/待发队列/上下文/
+│   │   │           │                  #   mermaid/text/diff/custom/文件选择等; 文件选择实现见
+│   │   │           │                  #   src/io/tui/components/file_picker_overlay.cpp)
 │   │   │           ├── input_bar.h    # 输入栏
-│   │   │           ├── status_bar.h   # 状态栏 (上下文占用/活动状态)
+│   │   │           ├── status_bar.h   # 状态栏 (上下文占用/活动状态/插件状态项)
 │   │   │           └── spinner.h      # 加载动画
 │   │   ├── train/                # 训练模式 (train.h: EvolutionTrainingAgent 装配/用例加载/进化循环入口)
-│   │   └── util/                 # 客户端工具 (util.h: 通用小工具)
+│   │   └── util/                 # 客户端工具 (util.h 通用小工具 / clipboard.h 剪贴板 / open_url.h 打开浏览器)
 │   └── src/                      # 实现文件
 │       ├── main.cpp
 │       ├── config_loader.cpp
 │       ├── mode_runners.cpp
+│       ├── update_check.cpp     # 更新检查实现
 │       ├── io/
 │       │   ├── stdio/agent_stdio.cpp, stdin_reader.cpp
 │       │   └── tui/
 │       │       ├── agent_tui.cpp
-│       │       ├── tui_theme.cpp
+│       │       ├── markdown_block.cpp, plugin_ui_items.cpp
+│       │       ├── tui_theme.cpp, tui_settings.cpp, tui_i18n.cpp
 │       │       ├── scrollable.cpp
 │       │       ├── lazy_scrollable.cpp  # LazyScrollable 懒构建渲染实现
+│       │       ├── text_layout.cpp      # 文本布局 (折行/行数估算)
+│       │       ├── ui_components.cpp    # 组件描述唯一渲染实现 (渲染/测量/行内命中)
 │       │       ├── tui_sidebar_content.cpp # 侧边栏内容 (日志/信息/Planning)
 │       │       ├── tui_log_sink.cpp        # TUI 日志接收器
-│       │       ├── framework/              # TUI 框架层实现 (tui_state/modal_container/...)
-│       │       └── components/             # 渲染组件实现: message_list / sidebar /
-│       │                                   #   overlays / input_bar / status_bar / spinner
+│       │       ├── framework/              # TUI 框架层实现 (ui_action_list/tui_settings/...)
+│       │       └── components/             # 渲染组件实现: message_list / sidebar / overlays /
+│       │                                   #   file_picker_overlay / input_bar / status_bar /
+│       │                                   #   interrupt_view / spinner
 │       ├── train/train.cpp        # 训练实现
-│       └── util/util.cpp          # 客户端工具实现
+│       └── util/                  # util.cpp / clipboard.cpp / open_url.cpp
 │
 ├── test/                         # agentxx_test 测试程序
 │   ├── test.cpp                  # 测试入口: 模块注册与调度 (同步/异步模块分组)
@@ -1771,6 +1840,11 @@ agent/
 │       │   ├── test_training.h                # 进化训练测试 (变异/评估/优化/收敛/持久化)
 │       │   ├── test_events.h                  # 事件类型测试
 │       │   ├── test_event_stream.h            # EventBus / EventStream / RequestResponseStream 测试
+│       │   ├── test_json.h                    # 自主 Json 解析/序列化测试
+│       │   ├── test_json_view.h               # JsonView 只读视图测试
+│       │   ├── test_json_reflection.h         # JSON 反射 (结构体 <-> Json) 测试
+│       │   ├── test_interrupt_ui.h            # 中断描述 schema (块/控件/结果契约) 测试
+│       │   ├── test_ui_items.h                # 组件描述解析/校验/纯文本降级测试
 │       │   ├── test_event_bridge.h            # EventBridge 事件翻译测试
 │       │   ├── test_interrupt_bus.h           # 中断总线 HIL 测试
 │       │   ├── test_subagent_bus.h            # 子代理总线测试 (含批量委派/跨 agent 路由)
@@ -1809,6 +1883,9 @@ agent/
 │       │   └── test_datetime_tool.h           # 日期时间工具测试 (直测插件同一实现)
 │       ├── plugin/                            # 插件测试头 (与 plugin/*.cpp 同名模块)
 │       │   ├── test_plugins.h                 # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
+│       │   ├── test_plugin_runtime.h          # 插件运行时测试 (生命周期/重试/取消/多实例句柄)
+│       │   ├── test_plugin_sdk.h              # 插件 SDK 测试 (kit 工具/表单/组件/键位定时器 + 老宿主降级)
+│       │   ├── test_plugin_bridge.h           # 插件桥接测试 (协程驱动桥/受控轮询/跨插件互调)
 │       │   ├── test_plugin_resources.h        # 插件会话资源扩展测试 (Skill/Memory/MCP 声明式+运行时)
 │       │   ├── test_plugin_multi_instance.h   # 插件多实例隔离测试 (三铁律)
 │       │   ├── test_client_plugins.h          # client 侧插件测试 (内置合并编译时跳过)
@@ -1820,12 +1897,19 @@ agent/
 │           ├── test_config_loader.h           # YAML 配置加载测试
 │           ├── test_mermaid_state.h           # Mermaid 状态图解析测试
 │           ├── test_thread_id.h               # sessionId 生成唯一性测试 (模块名 `sessionId`)
+│           ├── test_update_check.h            # GitHub Release 版本解析/比较与失败路径测试
 │           ├── test_tui_input.h               # TUI 输入测试
 │           ├── test_tui_interrupt.h           # TUI 中断交互测试
 │           ├── test_tui_scroll.h              # TUI 滚动测试
-│           ├── test_tui_settings.h            # TUI 设置持久化测试
+│           ├── test_tui_settings.h            # TUI 设置持久化/更新检查条目/提示弹窗测试
 │           ├── test_tui_sidebar.h             # TUI 侧边栏内容与段落测试
+│           ├── test_tui_context_overlay.h     # 上下文弹窗命中测试
+│           ├── test_tui_form.h                # 插件/中断表单交互测试
 │           ├── test_tui_stream.h              # TUI 流式渲染测试
+│           ├── test_tui_surface.h             # 弹窗面性外框/留白/角标测试
+│           ├── test_tui_theme.h               # 主题配色与 dim 分流测试
+│           ├── test_tui_ui_items.h            # 组件描述渲染/测量/命中区域测试
+│           ├── test_tui_widget.h              # 弹窗/状态栏/输入栏命中与事件消费测试
 │           └── test_tui_tool_header.h         # TUI 工具消息头部渲染测试
 │
 ├── benchmark/                    # 性能与资源基准 (一般仅 release 编译)

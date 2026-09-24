@@ -10,6 +10,8 @@
 - 交互框架: [framework/ui_hit.h](/agent/client/include/agentxx-client/io/tui/framework/ui_hit.h),
   [framework/ui_action_list.h](/agent/client/include/agentxx-client/io/tui/framework/ui_action_list.h)
 - 组件: [components/](/agent/client/include/agentxx-client/io/tui/components/), 面性外框 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
+- 组件描述渲染 (面板/Info/装饰/overlay/中断共用): [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)
+- 更新检查: [update_check.h](/agent/client/include/agentxx-client/update_check.h); 打开链接 [util/open_url.h](/agent/client/include/agentxx-client/util/open_url.h)
 
 ---
 
@@ -130,7 +132,7 @@
 | `InputComponent` | [components/input_bar.h](/agent/client/include/agentxx-client/io/tui/components/input_bar.h) | 输入框 + 附件托盘 + 待发队列行 |
 | `StatusBarComponent` | [components/status_bar.h](/agent/client/include/agentxx-client/io/tui/components/status_bar.h) | 状态栏 (模型/上下文/插件项/会话/设置) |
 | `SidebarComponent` | [components/sidebar.h](/agent/client/include/agentxx-client/io/tui/components/sidebar.h) | 侧边栏 (内容区 + tabs 列表 + 宽度拖拽) |
-| 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 |
+| 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 (含跨设备标签页, 见 §2.9) |
 | `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定; 控件与提交行复用 `ui_components`) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
 | `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把 `agentxx.ui.item` 描述渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
@@ -377,6 +379,28 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 测试: 版本解析/比较、失败路径与链接校验 `agentxx_test update_check`; 本地 HTTP
   服务端到端 (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 设置条目、更新提示
   弹窗 (版式/点击/Enter/Esc/窄终端换行) 与结果状态在 `agentxx_test tui_settings`。
+
+### 2.9 文件选择弹窗 (跨设备附件)
+
+[FilePickerOverlay](/agent/client/include/agentxx-client/io/tui/components/overlays.h) (类声明在
+`overlays.h`, 实现单独在
+[file_picker_overlay.cpp](/agent/client/src/io/tui/components/file_picker_overlay.cpp))
+由输入栏右侧 [ @︎ ] 按钮打开 (仅当前模型支持任一多模态输入时渲染该按钮), 按模型能力过滤
+可选类型 (非媒体文件不展示, 当前模型不支持的类型灰显不可选)。
+
+- **同一设备** (内置直连模式, 或远程但两端 deviceId 相同): 只有一份目录列表 (客户端本地),
+  选中的文件由客户端读取、按大小预检并 Base64 编码为 Data URL 挂到附件托盘。
+- **跨设备** (远程模式且 `ctx_.isServerDifferentDevice()` 为真): 顶部多出「本地 / 服务端」
+  两个标签页 (Tab 键或点击切换), 两个标签页各自持有目录、选中项、加载中与错误状态;
+  服务端页经 `ctx_.requestServerListDir` 请求列举 (WireListDir → 服务端线程池扫描目录 →
+  WireListDirResult), 初始目录为服务端会话工作目录 (由 HelloAck 携带)。选中服务端文件时
+  只构造 `pathOrUrl` 附件 (`dataUrl` 留空), 由服务端自行读取并编码, 大文件不经客户端中转。
+- 命中登记仍走 `UiHitMap`: 标签页按钮只在跨设备时渲染并登记 (同设备下不会被误点);
+  条目命中 id 带标签页归属 (`item/local/<i>` / `item/server/<i>`), 两个标签页的同名条目
+  互不干扰。
+- 路径字符串在界面、wire 与文件系统访问之间一律 UTF-8 (`utilxx_base::pathToUtf8Generic` /
+  `utilxx_base::utf8ToPath`), Windows 下中文目录不会显示为乱码。
+- 模态行为与其它弹窗一致: 未命中的鼠标事件同样吞掉 (滚轮不会滚动被遮挡的消息列表)。
 
 ---
 

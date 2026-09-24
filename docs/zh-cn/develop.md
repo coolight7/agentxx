@@ -1,6 +1,6 @@
 # 开发指南
 
-> 关联: [design](/docs/zh-cn/index.md) (架构) · [plugins.md](/docs/zh-cn/plugins.md) (插件) · [ffi.md](/docs/zh-cn/ffi.md) (FFI)
+> 关联: [design](design/index.md) (架构) · [plugins.md](design/plugins.md) (插件) · [ffi.md](design/ffi.md) (FFI) · [tui.md](design/tui.md) (TUI)
 
 ## 1. 测试
 
@@ -17,7 +17,8 @@
 ./agent/build/linux-debug/exec/agentxx_test string_util regex agent plugins
 ```
 
-测试模块名见 `agent/test/test.cpp` 顶部注册表；`AGENTXX_BUILD_CLIENT` 条件下额外编译 `config_loader/tui_settings/tui_input/tui_interrupt/tui_scroll/tui_sidebar/tui_context_overlay/tui_stream/tui_tool_header/sessionId/mermaid_state` 共 11 个 client 侧模块。
+测试模块名见 `agent/test/test.cpp` 注册表；`AGENTXX_BUILD_CLIENT` 条件下额外编译 17 个 client 侧模块: `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`。
+同步模块另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge` (见 `test.cpp` 同步段)。
 
 ### 新增测试模块约定
 
@@ -33,9 +34,13 @@
 
 ## 2. 新增工具 / 中间件
 
-- **内置工具**：已全部迁移至插件 (`agent/plugins/agentxx_*`)，新增工具优先以插件形式实现 (经 `plugin_kit.h` 的 `tool/fast_tool/blocking_tool` 注册)，同名同行为，测试直测同一 `*_impl.h` 实现
-- **中间件**：继承 `MiddlewareHandleBase`，在 `CodeAgent::initMiddleware` 中按栈顺序注册；`onHandleStart/End` 可挂载到 `agent_start/modelcall/toolcall` 三节点
-- **权限**：文件系统权限经 `PermissionMiddleware` 的最长前缀匹配 (`XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义 `category` 并走 `service.permission` 询问。插件工具的工具权限限制由插件自己在注册工具后声明（`agentxx.agent.permission` 接口表，含作用域与目标参数）；未声明的工具不参与权限判定
+- **内置工具**：已全部迁移至插件 (`agent/plugins/agentxx_*`)，新增工具优先以插件形式实现 (经 `plugin_kit.h` 的 `tool/fast_tool/blocking_tool/polled_tool` 注册)，同名同行为，测试直测同一 `*_impl.h` 实现
+- **中间件**：继承 `MiddlewareWrapHandle<TState>` 并用 `MiddlewareHooks` 指定要挂载的钩子
+  (`onAgentcallStart/End`、`onModelcallStart/Run/End`、`onToolcallStart/End`; 未指定的阶段天然不执行),
+  在 `BaseAgent::initMiddleware` / `CodeAgent::initMiddleware` 中按栈顺序注册; 中间件的 toolcalls 由
+  `initMiddlewareTools` 自动收集进工具列表
+- **权限**：文件系统权限经 `PermissionMiddlewareHandle` 的最长前缀匹配 (`utilxx::XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义询问分类并走 `service.permission` 主题。插件工具的工具权限限制由插件自己在注册工具后声明（`agentxx.agent.permission` 接口表，含作用域与目标参数）；未声明的工具不参与权限判定
+- **工具错误**: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`, 由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: ...]` 结果文本; 不要返回 `{"error": ...}` 形态 (详见 [plugins.md](design/plugins.md) §8)
 
 ## 3. 插件开发
 

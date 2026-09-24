@@ -145,7 +145,7 @@ agentxx_ffi_event_queue_free(q);
 - 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
 - 实现: `agent/lib/src/ffi/event_queue.cpp`
 
-### 4.3 导出符号清单 (27 个 = 26 个 FFI C API + 1 个内置插件清单入口, 白名单见 `agent/lib/ffi_symbols.map`)
+### 4.3 导出符号清单 (26 个 FFI C API, 白名单见 `agent/lib/ffi_symbols.map`)
 
 | 分组 | 符号 | 说明 |
 |------|------|------|

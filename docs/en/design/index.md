@@ -1,5 +1,6 @@
 # Agentxx Comprehensive Architecture Design Document
 > Related docs: [design](index.md) (Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm) · [ffi.md](ffi.md) (FFI Interface Design)
+> (TUI and benchmark design docs are currently maintained in Chinese only: `docs/zh-cn/design/tui.md`, `docs/zh-cn/design/benchmark.md`.)
 
 ## Table of Contents
 
@@ -28,9 +29,9 @@ Agentxx is an AI Agent framework implemented in C++23, compiled with C++26/C17 s
 ### Core Conversational Capabilities
 
 - **Multi-Turn Conversations**: Comprehensive multi-turn conversation management, maintaining dual message sets: `viewMessages` (append-only complete historical log) and `llmMessages` (compressible LLM context).
-- **Streaming Output**: LLM responses are streamed as incremental Delta events (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage), with each Delta bearing a monotonically increasing `seq` for replay and synchronization. Turn statistics, errors, cancellation notifications, and interrupt headers are constructed by the agent thread as complete ViewMessages and inserted into session history via InsertMessage (carrying `msgId`), guaranteeing that `viewMessages` stay perfectly synchronized with the UI.
+- **Streaming Output**: LLM responses are streamed as incremental Delta events (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage), with each Delta bearing a monotonically increasing `seq` for replay and synchronization. Turn statistics, errors, cancellation notifications, and interrupt headers are constructed by the agent thread as complete ViewMessages and inserted into session history via InsertMessage (carrying `msgId`), guaranteeing that `viewMessages` stay perfectly synchronized with the UI.
 - **Multi-Model Support**: Dynamic per-session (`sessionId`) model switching at runtime, supporting OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses (Codex) provider protocols.
-- **Context Compaction**: `SummarizationMiddleware` automatically compresses historical messages when context approaches the model token limit, supporting tool call deduplication and truncation.
+- **Context Compaction**: `SummarizationMiddleware` automatically compresses historical messages when context approaches the model token limit, supporting tool call deduplication and truncation. The compaction result is written back to the session `llmMessages` immediately (and persisted during the next throttled flush), so a killed process does not lose it and does not re-compact in a loop after restart; compaction is mutually exclusive per session (manual vs. in-turn); the "Summarizing…" tip message is reused by its pending id, so an interrupt/resume does not append duplicates. Failure and cooldown handling: consecutive LLM failures are counted per turn (`graphDataKey_summarizationFailCount`) and fall back to a **hard truncation** (dropping the oldest messages by token budget) after 2 failures or at >= 95% token usage; "less than 2 new messages since the last compaction" is treated as a cooldown (`graphDataKey_summarizationLastMsgCount`) that skips redundant LLM compaction (avoiding a useless compaction subagent every turn); a manual compaction waits at most 2 minutes (so a stuck subagent cannot occupy the io thread forever — the timeout falls back to hard truncation).
 - **Chain-of-Thought (CoT) Display**: Streams and renders LLM reasoning/thinking content in real time.
 - **Node-Level Events**: `NodeStart`/`NodeEnd` events delineate execution lifecycles of Graph nodes, making progress tracking intuitive on the UI.
 
@@ -66,7 +67,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | | `agentxx_string_html_to_markdown` | Converts HTML to Markdown. |
 | | `agentxx_string_regexp` | Regular expression matching, replacement, and extraction. |
 | **System** | `agentxx_get_current_datetime` | Obtains current system date and time. |
-| | `agentxx_get_system_core_info` | Retrieves CPU (utilization and logical core count), memory, and GPU utilization metrics. |
+| | `agentxx_get_system_core_info` | Retrieves CPU (utilization and logical core count), memory, and GPU utilization metrics (Windows / Linux / Android / macOS). |
 | **UI Control** | `agentxx_ui_control_keyboard_mouse` | Mouse and keyboard automation on Windows (Windows only; provided by the `agentxx_computer_use` plugin, depends: screen_capture). |
 | **Screen Capture** | `agentxx_screen_capture` | Screen capture and streaming (Windows only). |
 | **Audio Stream** | `agentxx_audio_stream` | System/application/microphone audio capture (**skipped on all platforms**: WASAPI implementation not enabled, stub only; see platform matrix in plugins.md). |
@@ -81,7 +82,7 @@ Tool Characteristics:
 - **Deduplication**: Filesystem tools integrate with `SummarizationToolHandle`, pruning older duplicate call results.
 - **Context Repair Optimization**: `ModelCallWrapNode::repairMessages` automatically validates and fixes message structure (coalescing consecutive same-role messages, normalizing tool_call/tool_result pairing) with minimal copying overhead.
 - **Event-Driven Cancellation**: Subprocess tools (e.g. `agentxx_execute_command`) integrate with the framework's centralized `CancelRegistry`, delivering millisecond-level instant termination of process groups and IO pipes rather than relying solely on polling loops.
-- **MCP Extensibility & Resilience**: Connects to external MCP Servers via MCP Client, dynamically registering remote tools over HTTP SSE and stdio transports (namespace-prefix isolation, 120s initialization/invocation timeout); failed components are uniformly recorded in `appendComponentInfo.failedComponents` for client UI diagnostics.
+- **MCP Extensibility & Resilience**: Connects to external MCP Servers via MCP Client, dynamically registering remote tools over HTTP SSE and stdio transports (namespace-prefix isolation; whole tool-call timeout defaults to 120s and can be set through yaml `mcp.list[].timeout`, while internal fixed timeouts are 60s per request and 10s for initialization); failed components are uniformly recorded in `appendComponentInfo.failedComponents` for client UI diagnostics.
 
 ### Git Worktree Mode (YAML `worktree.enable`, Disabled by Default)
 
@@ -216,9 +217,10 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
 ### Remote Communication
 
 - **WebSocket Service**: `AgentServer` provides WebSocket services with token authentication.
-- **Wire Protocol**: Bidirectional JSON message protocol (Hello, HelloAck, UserInput, Cancel, SelectModel, GetModel, Delta, Sync, InterruptRequest, InterruptResponse, InterruptExpired, TurnResult, ContextStats, Error, Log, ModelInfo, GetAppendComponentInfo, AppendComponentInfo, GetContext, ContextMessages, Ping, Pong, ListSessions, SessionList, SwitchSession, GetViewMessages, ViewMessagesPage, ClearMessageQueue, RemoveQueueItem, InterruptAndRunNext, MessageQueueUpdate, PluginData, PluginDataUp).
+- **Wire Protocol**: Bidirectional JSON message protocol (Hello, HelloAck, UserInput, Cancel, SelectModel, GetModel, Delta, Sync, InterruptRequest, InterruptResponse, InterruptExpired, TurnResult, ContextStats, Error, Log, ModelInfo, GetAppendComponentInfo, AppendComponentInfo, GetContext, ContextMessages, Ping, Pong, CompactContext, ListSessions, SessionList, SwitchSession, GetViewMessages, ViewMessagesPage, ClearMessageQueue, RemoveQueueItem, InterruptAndRunNext, MessageQueueUpdate, PluginData, PluginDataUp, ListDir, ListDirResult, GetPermissionState, SetFullAuth, PermissionState).
   - Queued message management: Active turn queues are maintained per session by the server and synchronized via `MessageQueueUpdate`. Clients can remove individual items (`RemoveQueueItem`), clear the queue (`ClearMessageQueue`), or interrupt the active turn to immediately run the front queue item (`InterruptAndRunNext`).
   - Plugin events are forwarded transparently via `PluginData` (agent→client downlink) and `PluginDataUp` (client→agent uplink).
+  - Two server-state query groups: `ListDir` / `ListDirResult` list a server-side directory (data source for cross-device attachment selection; the scan runs on the server thread pool and paths are UTF-8 on both sides) and `GetPermissionState` / `SetFullAuth` / `PermissionState` query and toggle "fully authorize all permissions" (the permission middleware on the server owns the state, clients only mirror it; after a toggle the server broadcasts the new state to every attached endpoint).
 - **Automatic Reconnection**: Clients reconnect automatically with `lastSeq` for incremental Delta replay; reverts to full `Sync` if `seq` continuity is broken.
 - **History Pagination (viewMessages Tail-Window Sync)**: On long session recovery, the server initially syncs only a trailing window (`SessionServerAgentIO::Config::initialSyncTailCount`, local TUI mode = 100, remote configured via `AgentServer::Config`, 0 = full). `SyncPayload.fromIndex` specifies the window's starting absolute index, and `totalMessages` reports total session message count. When the client (TUI) scrolls near the top of the loaded window, it sends `GetViewMessages(beforeIndex, count)` to paginate older history, which the server returns via `ViewMessagesPage(startIndex, totalCount, messages)`. Since `viewMessages` is append-only, absolute indices are immutable and race-free. On the TUI side, prepended items invoke `LazyScrollable::notifyPrepended` for scroll anchoring (existing item layout caches/heights shift seamlessly, compensating view offsets by the prepended height so the visible viewport remains completely stable).
 - **Grace Period**: Keeps sessions executing during disconnections, preventing accidental cancellations of active turns.
@@ -231,7 +233,7 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
 |---|---|---|
 | **OpenAI API** | Client | Compatible with OpenAI Chat Completions API (streaming / non-streaming), supporting thinking / reasoning_content. |
 | **Anthropic API** | Client | Anthropic Messages API, supporting extended thinking and tool_use. |
-| **MCP** | Client + Server | Model Context Protocol, supporting multi-version negotiation (2024-11-05 to 2025-11-25) over HTTP SSE + stdio transports. |
+| **MCP** | Client + Server | Model Context Protocol, supporting multi-version negotiation (2024-11-05 to 2026-07-28) over HTTP SSE + stdio transports. |
 | **A2A** | Client + Server | Agent-to-Agent protocol v1.0, managing tasks (SendMessage, GetTask, CancelTask, ListTasks). |
 | **ACP** | Server | Agent Communication Protocol in stdio service mode. |
 
@@ -248,7 +250,7 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
     - **Control blocks declare their interaction form** (`control`): `buttons` (option buttons; `commitOnPick` submits on click) / `select` (vertical single-choice list) / `checkbox` / `text` / `number` (`integer`/`min`/`max`/`step`). Validation failures show a tip under that control and block submission; the keyboard acts on the most recently clicked control. **There is no "parameter type" (bool/int/enum…) concept in the protocol** — producers that want a "typed inputs + confirm" form generate the descriptor with the preset templates ([interrupt_presets.h](/agent/lib/include/agentxx/middlewares/interrupt_presets.h): `preset::inputForm` / `permissionCard` / `confirmCard`).
     - The result is **always an object** `{"values": {"<control id>": value}}` (checkbox=bool / number=number / buttons & select=raw option value / text=string); an empty object means "not answered"/cancelled. Permission's "remember this choice" is a checkbox control (id `remember`); the **rule is registered agent-side** (the permission handler consumes `values.remember`), the client holds no permission semantics.
     - The descriptor is **required** for client HIL interrupts (producers build it with presets or hand-assembled blocks); interrupts handled by the host through the bus and never rendered by a client (e.g. subagent delegation) may keep it empty. A missing/invalid descriptor is a contract error (diagnostic line, non-interactive); unknown block kinds are ignored/degraded (forward compatible); **no backward compatibility is retained**.
-    - Hit areas are keyed by **block index** + control id + sub index; rendering and estimation are single-sourced: one layout pass (row model) yields both the elements and the row count, avoiding layout/estimate drift (see [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h)); content blocks share one implementation with the plugin tool-decor items ([ui_items_render.h](/agent/client/include/agentxx-client/io/tui/ui_items_render.h)).
+    - Hit areas are keyed by **block index** + control id + sub index; rendering and estimation are single-sourced: one layout pass (row model) yields both the elements and the row count, avoiding layout/estimate drift (see [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h)); content blocks share one implementation with the plugin tool-decor items ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)).
   - Permission card with "Remember this choice" (declarative interrupt UI descriptor; the checkbox value is returned as `values.remember` and the rule is registered agent-side).
   - Runtime model selector dialog.
   - Right-hand sidebar (Log console, Information panels, Planning visualization).
@@ -261,15 +263,25 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
     wav/mp3/ogg/m4a/aac/flac; video mp4/mov/webm/mkv; non-media hidden,
     unsupported types dimmed and unselectable) with directory navigation
     (Up/Down + Enter + Esc + mouse; the picker is a pure navigation list without
-    a filename filter input); the client reads the file and Base64-encodes
-    it as an RFC 2397 Data URL, mounts it to the attachment tray after size pre-check
-    (image <=10MB / audio <=25MB / video <=50MB / <=5 per message, oversize rejected
-    via toast), and sends it with text via `WireUserInput.attachments`; the server queues
-    attachments and assembles them into ChatMessage image/audio/video_urls for providers;
-    the message list renders attachment cards (click opens via system viewer,
-    remote dataUrl is spooled to a temp dir first); SQLite persistence strips dataUrl
-    keeping only metadata; context compaction downgrades old attachments to
-    plain-text tags.
+    a filename filter input).
+    - **Same device**: the client reads the file and Base64-encodes it as an RFC 2397 Data URL,
+      mounts it to the attachment tray after size pre-check (image <=10MB / audio <=25MB /
+      video <=50MB / <=5 per message, oversize rejected via toast), and sends it with text via
+      `WireUserInput.attachments`; the server queues attachments and assembles them into
+      ChatMessage image/audio/video_urls for providers; the message list renders attachment
+      cards (click opens via system viewer, remote dataUrl is spooled to a temp dir first);
+      SQLite persistence strips dataUrl keeping only metadata; context compaction downgrades
+      old attachments to plain-text tags.
+    - **Cross device** (remote mode and client/server run on different devices): the picker adds
+      "local / server" tabs on top (Tab key or click; the tabs are not rendered on the same
+      device, so they cannot be hit there). The server tab lists **server-side** directories via
+      `WireListDir` / `WireListDirResult` (paths are UTF-8 on both sides; the scan runs on the
+      server thread pool and never blocks the agent io thread; the initial directory is the
+      server session work dir carried by HelloAck). Picking a server file builds an attachment
+      with `pathOrUrl` only (no base64), so large files are not relayed through the client:
+      the server reads and encodes the file itself before calling the provider. Device identity
+      comes from HelloAck's `serverDeviceId` (32-char MD5) compared with the client's own id;
+      the in-process direct mode is always "same device".
   - File edit diff comparison rendering.
   - Mermaid stateDiagram-v2 state machine rendering (renders ```mermaid blocks in messages, and Plan dialog roadmap state diagrams).
   - Context token utilization status bar.
@@ -290,7 +302,19 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
     [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h)
     (`TuiSurfaceStyle` + `tuiSurfacePopup`/`tuiSurfaceFrame`), palette tokens in
     [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h).
-  - Session selector modal (F3): Lists persisted sessions (`WireListSessions`), switching via `WireSwitchSession`, with server pushing new session Sync (tail-window paginated), model info, and context statistics.
+  - Session selector modal (F3): Lists persisted sessions (`WireListSessions`, keyset cursor pagination ordered by most recent activity), switching via `WireSwitchSession`, with server pushing new session Sync (tail-window paginated), model info, and context statistics.
+  - Settings modal: Items are grouped (Interface / Display / Update / Other) and the content area is height-capped and scrollable
+    when the terminal is too short (the selected item scrolls into view automatically; the wheel moves the selection).
+    The "Update" group holds the "check on startup" switch and a "check now" item; the "Other" group holds a "keybinds"
+    item showing the number of registered keybinds and opening a read-only list modal.
+  - Info sidebar footer (three lines): work directory line (`{dir} [ authorization button ] {abs path}` — the button shows and
+    toggles the current "fully authorized / ask" state; the state belongs to the agent-side permission middleware and the
+    client only mirrors it: initial value from the handshake/query, corrected by server broadcasts), an
+    `Agentxx <version> · connection` line, and (when a newer release exists) an update notice line that copies the release URL.
+  - Update check (optional): queries the GitHub Release three seconds after startup (`/releases/latest`, reading the 302
+    `Location` or JSON `tag_name`, 8-second timeouts, failures only logged) and only reports when the latest version is
+    greater than the compiled version; controlled by the `tui.checkUpdateOnStartup` setting. A manual check from the settings
+    item reports through a modal (new version) or a toast (already latest / failed).
   - Paginated history loading: Restoring long sessions initially renders only the server's trailing window (100 items locally). Scrolling upward automatically paginates older history via `WireGetViewMessages`, anchoring scroll position stably until reaching session beginning (`historyWindowStart=0`).
   - Connection status banner: Displays server-io connection states (Connecting / Failed with clickable [Retry] button / Connected). Local mode is set ready prior to `SessionServerAgentIO` driver loop; remote mode is driven via `mode_runners` connection coroutines (`TUIRenderState::connState`).
   - Step-by-step startup progress banner: Initialization phases in `server-io init()` (model registry, middlewares, loading MCP/RAG/plugins — plugin loading includes runtime environment probing for python/node and PowerShell) report via `AgentContext::initNotifier` → `AgentIOBase::onServerProgress`. The banner dynamically reflects the active startup task, switching to keyboard shortcuts once ready.
@@ -377,7 +401,8 @@ path/to/agentxx_test string_util regex agent
 ```
 
 Available test modules (matching the registry list in `agent/test/test.cpp`):
-- Synchronous modules: `string_util`, `regex`, `diff_util`, `events`, `concurrency`, `misc_fixes`, `aho_corasick`, `util_misc`, `training`, `settings_db`, `toolcall_args`, `ffi_c_api` (and client-side under `AGENTXX_BUILD_CLIENT`: `config_loader`, `tui_settings`, `tui_input`, `tui_interrupt`, `tui_scroll`, `tui_sidebar`, `tui_context_overlay`, `tui_stream`, `tui_tool_header`, `sessionId`, `mermaid_state`).
+- Synchronous modules: `string_util`, `regex`, `json`, `json_view`, `json_reflection`, `diff_util`, `events`, `concurrency`, `misc_fixes`, `aho_corasick`, `util_misc`, `training`, `settings_db`, `toolcall_args`, `interrupt_ui`, `ui_items`, `ffi_c_api`, `plugin_runtime`, `plugin_sdk`, `plugin_bridge`.
+- Synchronous modules (client side, only with `AGENTXX_BUILD_CLIENT`): `config_loader`, `tui_settings`, `update_check`, `tui_input`, `tui_interrupt`, `tui_scroll`, `tui_sidebar`, `tui_context_overlay`, `tui_form`, `tui_stream`, `tui_surface`, `tui_theme`, `tui_tool_header`, `tui_ui_items`, `tui_widget`, `sessionId`, `mermaid_state`.
 - Asynchronous modules: `event_stream`, `event_bridge`, `interrupt_bus`, `subagent_bus`, `subagent_tool`, `agent_host`, `string_tools`, `math_tools`, `share_store`, `session_persistence`, `rag_search`, `datetime`, `filesystem`, `command`, `worktree`, `web_search`, `codegraph`, `screen_capture`, `cpu_gpu`, `text_selection`, `http`, `network_timeout`, `websocket`, `remote_agent`, `mcp`, `acp`, `a2a`, `openai_provider`, `anthropic_provider`, `plugins`, `plugin_resources`, `plugin_multi_instance`, `client_plugins`, `cancel`, `message_supplement`, `summarization`, `checkpoint_store`, `agent`, `memgrowth`.
 - Platform modules: `screen_capture`, `text_selection`.
 
@@ -417,6 +442,9 @@ model:
                                       # <=10MB; audio wav/mp3/ogg/m4a/aac/flac <=25MB;
                                       # video mp4/mov/webm/mkv <=50MB; <=5 attachments per message).
                                       # The client reads files and transmits them as RFC 2397 Data URL (Base64);
+                                      # on cross-device setups (remote client+server on different devices) the picker
+                                      # additionally offers a "server" tab; picking a server file sends only its path,
+                                      # the server reads and encodes it itself (see "Client UI / multimodal file input");
                                       # SQLite persistence strips dataUrl keeping only metadata; during context
                                       # compaction old attachments downgrade to plain-text tags
       model_context_max_token: 128000
@@ -440,6 +468,8 @@ mcp:
   list:
     - namespace: "my_mcp"
       url: "http://localhost:3000/mcp"
+      timeout: 120                     # Whole tool-call timeout in seconds (0=unlimited, default 120);
+                                       # internal fixed timeouts: single request 60s / initialization 10s
 
   # Unified data root directory (leave empty/unconfigured = no persistence: settings/sessions/codegraph
   # remain strictly in memory and will not survive restarts; supports ~ and ${VAR} expansion, relative
@@ -493,6 +523,9 @@ plugin:
     - path: "./plugins/agentxx_codegraph"  # Path to plugin shared library or directory (with plugin.yaml)
       enabled: true                        # Default true
       sides: auto                          # auto|agent|client (for dual-sided plugins; auto detects via exports)
+      config: ""                           # Optional plugin configuration file or directory (supports ~ and ${VAR};
+                                           # resolved to an absolute path and passed to the plugin via
+                                           # get_plugin_config_path)
       args:                                # Plugin arguments (passed verbatim to plugin, schema defined by plugin)
         # ---- agentxx_codegraph args ----
         paths:                             # Indexing paths list (optional, multiple directories)
@@ -605,6 +638,7 @@ agentxx_cli [mode] [options]
 | Option | Description |
 |---|---|
 | `-h, --help` | Displays help message. |
+| `-v, --version` | Prints the version (`Agentxx v<version>`; constant in `agentxx/version.h`). |
 | `--config <path>` | Configuration file path (default: `agentxx-config.yaml`). |
 | `--env <path>` | Path to override environment variables file. |
 | `--agent <url>` | Remote agent server address (`ws://host:port/agent`). |
@@ -906,7 +940,8 @@ AgentIOBase (Server Endpoint: SessionServerAgentIO)
     ├── onPeerMessage()    → Overridden: processes Hello / UserInput / Cancel / SelectModel /
     │                          InterruptResponse / GetModel / GetAppendComponentInfo / GetContext /
     │                          ListSessions / SwitchSession / GetViewMessages /
-    │                          ClearMessageQueue / RemoveQueueItem / InterruptAndRunNext / PluginDataUp
+    │                          ClearMessageQueue / RemoveQueueItem / InterruptAndRunNext /
+    │                          ListDir / GetPermissionState / SetFullAuth / PluginDataUp
     ├── run()              → Driver loop: fetch input → execute turn → push result
     ├── stop()             → Halts driver loop (closes channel / cancels turn / fails pending)
     ├── onDisconnect()     → Triggers grace period timer on disconnect (cancels turn if grace expires)
@@ -1131,6 +1166,21 @@ Client                              Server
   │←── ViewMessagesPage ──────────────│ (startIndex/totalCount/messages);
   │                                   │ Client prepends with scroll anchoring
   │                                    │
+  │ (Optional) Cross-Device Attachment Picking
+  │            (only when client and server run on different devices: the file picker
+  │             then shows a "server" tab in addition to the local one)
+  │──── ListDir (path, allowed exts) ─→│ Server scans the directory on its thread pool
+  │←── ListDirResult ─────────────────│ (UTF-8 paths); returns directories and media files,
+  │                                   │ each entry flagged `supported` for the active model.
+  │                                   │ Picking a server-side file sends only pathOrUrl
+  │                                   │ (no base64), the server reads and encodes it itself
+  │                                    │
+  │ (Optional) Full Authorization State (Info sidebar button)
+  │──── GetPermissionState ──────────→│ Query current state (initial value also in HelloAck)
+  │←── PermissionState {fullAuth} ────│
+  │──── SetFullAuth {fullAuth} ──────→│ Toggle and broadcast the new state (other
+  │                                   │ attached endpoints follow)
+  │                                    │
   │ (Optional) Interrupt Expiration    │
   │←── InterruptExpired ──────────────│ On timeout, grace expiry, or cancel, client
   │                                   │ marks prompt as expired and ends waiting state
@@ -1157,12 +1207,14 @@ agent/
 │   ├── include/agentxx/
 │   │   ├── agentxx.h             # Umbrella library header
 │   │   ├── ffi_api.h             # FFI pure C ABI export contract (sole cross-language stable interface; see ffi.md)
+│   │   ├── version.h             # Version constant (agentxx::kVersion; used by --version and the TUI update check)
 │   │   ├── agent/                # Agent Core
 │   │   │   ├── base_agent.h      # BaseAgent base class (core infrastructure + ReAct loop + session execution)
 │   │   │   ├── code_agent.h      # CodeAgent (inherits BaseAgent, programming tools/middlewares)
 │   │   │   ├── agent_host.h      # AgentHost process-level host (primary agent & subagents register/derive/reclaim peer-to-peer)
 │   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A bridging
 │   │   │   ├── agent_runner.h    # AgentRunner unified "engine run + interrupt handle + resume" loop (shared by primary & subagents)
+│   │   │   ├── resource_applier.h # Applies and freezes plugin session resources (Skill/Memory/MCP)
 │   │   │   ├── config.h          # AgentConfig / ModelConfig configuration
 │   │   │   ├── config_static.h   # Static paths configuration
 │   │   │   ├── context.h         # AgentContext / Session / SessionsManager / ContextStats
@@ -1199,7 +1251,7 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM invocation, dynamic model switching)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (tool dispatch, automatic output compaction)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (session lifecycle hooks)
-│   │   ├── plugin/               # Plugin System (hot-swappable native C++ plugins, pure C ABI, API v1 — frozen core vtable + 16 agent tables + 7 client tables)
+│   │   ├── plugin/               # Plugin System (hot-swappable native C++ plugins, pure C ABI, API v1 — frozen core vtable + 18 agent tables + 9 client tables)
 │   │   │   ├── api/              # Plugin API headers (shared C ABI contract + plugin SDK; host references use api/ prefix)
 │   │   │   │   ├── plugin_api.h      # Pure C ABI contract (sole cross-version stable interface; see plugins.md) — frozen core vtable + COM QueryInterface
 │   │   │   │   ├── client_plugin_api.h # Client-side plugin pure C ABI contract (UI-agnostic semantic layer)
@@ -1239,39 +1291,27 @@ agent/
 │   │   │   ├── provider_common.h # Shared helpers for LLM providers / model-call node
 │   │   │   │                     #   (unique tool_call id, empty-response check)
 │   │   │   └── protocol_base.h   # Protocol base class
-│   │   └── util/                 # Utilities
-│   │       ├── log.h             # Logging system (XX_LOG macro, LogDispatcher, LogSink)
-│   │       ├── string_util.h     # String utilities (encoding conversion, path normalization, base64, natural sort, IgnoreCaseMap, etc.)
-│   │       ├── path_sanitize.h   # Path-segment sanitizing (invalid char replacement, over-long
-│   │       │                     #   truncation with hash suffix, Windows reserved-name check)
-│   │       ├── http_client.h     # HTTP Client (Boost.Beast based)
-│   │       │                     #   Connection pool: keep-alive idle connection reuse + per-endpoint concurrency cap
-│   │       │                     #   (maxConcurrentConnections, default 5); auto-retries on stale connection failure;
-│   │       │                     #   Idle connections bucketed by io_context (cross-context socket reuse is UB);
-│   │       │                     #   HttpPoolContextGuard service releases idle connections when io_context destructs,
-│   │       │                     #   preventing dangling reactor use-after-free bugs
-│   │       ├── http_server.h     # HTTP Server (routing / WS / SSE / SSL)
-│   │       ├── http_header.h     # HeaderMap (case-insensitive HTTP header container)
-│   │       ├── ws_client.h       # WebSocket Client
-│   │       ├── exception.h       # Exception handling utilities
-│   │       ├── lru_cache.h       # LRU Cache
-│   │       ├── diff_util.h       # Line-level diff (unified diff format)
-│   │       ├── regex.h           # Regular expression engine (Hyperscan)
-│   │       ├── aho_corasick.h    # Aho-Corasick multi-pattern search
-│   │       ├── router.h          # HTTP Router
-│   │       ├── sqlite.h          # Lightweight RAII SQLite wrapper (SqliteDb/Stmt, WAL + busy_timeout)
-│   │       ├── async_mutex.h     # Coroutine-aware async mutex (based on concurrent_channel)
-│   │       ├── async_offload.h   # Thread-pool blocking offload (offloadAsync /
-│   │       │                     #   offloadCancellableAsync / asyncWithTimeout)
-│   │       ├── worktree.h        # Git worktree encapsulation (direct argv invocation / process group timeout termination)
-│   │       └── util.h            # General utilities (system detection, etc.)
-│   └── src/                      # Source files (mirrors include directory structure)
+│   │   ├── ui/                  # Client UI component descriptor data layer (rendering lives in the client; zero ABI change)
+│   │   │   ├── item.h           # agentxx.ui.item schema parsing/validation and plain-text fallback (ui::plainText)
+│   │   │   ├── build.h          # Fluent component builder (agentxx::ui::Items, used by plugins to assemble descriptors)
+│   │   │   └── text_width.h     # Terminal display-width computation (wide chars / CJK / combining marks)
+│   │   └── util/                 # Utilities — graph-engine/host coupled headers + host-only database helpers
+│   │       ├── exception.h       # Exception classification & unified catching (neograph cancel/interrupt semantics + utilxx_base::catchError*)
+│   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json bridge
+│   │       ├── cancel_adapter.h  # neograph::graph::CancelToken -> utilxx::CancelToken adapter
+│   │       ├── sqlite.h          # Lightweight RAII sqlite3 wrapper (SqliteDb/Stmt, WAL + busy_timeout)
+│   │       └── settings_db.h     # Global settings KV store ({dataDir}/sqlite/global.db)
+│   │       (note: all other general utilities were split into the standalone projects under
+│   │        third_party/cxx_utilxx*; sqlite/settings_db stay host-side)
+│   └── src/                      # Source files (mirrors include directory structure;
+│                                 #   util/ holds sqlite.cpp / settings_db.cpp, ui/ holds item.cpp / text_width.cpp)
 │
 ├── client/                       # agentxx_cli executable
 │   ├── main.cpp                  # Entry point: argument parsing -> config loading -> mode dispatch
 │   ├── include/agentxx-client/
 │   │   ├── config_loader.h       # YAML configuration loading / .env parsing / environment variable expansion
 │   │   ├── mode_runners.h        # Execution mode runners (local/remote × tui/cli unified invocation)
+│   │   ├── update_check.h        # GitHub Release update check (302 Location / JSON paths, version comparison)
 │   │   ├── io/
 │   │   │   ├── stdio/
 │   │   │   │   ├── agent_stdio.h # StdIOClientAgentIO (stdin/stdout interaction)
@@ -1283,21 +1323,32 @@ agent/
 │   │   │       ├── scrollable.h  # Scrollable (fully-constructed scrollable container for short lists such as sidebars)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (lazy construction + bounded LRU cache + viewport partial rendering)
 │   │   │       ├── scroll_common.h # Logic shared by both scroll containers (measure / wheel events)
+│   │   │       ├── markdown_block.h # Markdown block render cache (per-block caching for LazyScrollable)
+│   │   │       ├── plugin_ui_items.h # Client plugin UI descriptor registry snapshot (panels/Info/status items/decors/overlays)
+│   │   │       ├── ui_components.h   # The single renderer of agentxx.ui.item descriptors (render + measure + intra-element hit regions)
+│   │   │       ├── tui_keybind.h  # Key normalization and FTXUI event -> key string (plugin keybind matching)
 │   │   │       ├── tui_theme.h   # TUI theme styling and palettes
 │   │   │       ├── framework/    # TUI Framework Layer
 │   │   │       │   ├── tui_state.h       # Aggregated TUI state (messages, sidebar, pending input queue, etc.)
-│   │   │       │   ├── tui_context.h     # TUI rendering context (theme / state / terminal dimensions)
-│   │   │       │   ├── tui_settings.h    # Global TUI settings singleton (theme / animation / log level)
-│   │   │       │   └── modal_container.h # Modal dialog container (permission / interrupt popups)
+│   │   │       │   ├── tui_context.h     # TUI rendering context (theme / state / terminal dimensions / server info)
+│   │   │       │   ├── tui_settings.h    # Global TUI settings singleton (theme / animation / log level / update-check switch)
+│   │   │       │   ├── modal_container.h # Modal container (blocks events and rendering for the covered UI)
+│   │   │       │   ├── ui_hit.h          # Hit registry UiHitRegistry (cleared per frame + registered while rendering + coordinate lookup)
+│   │   │       │   ├── ui_action_list.h  # Declarative item list (keyboard/mouse/selection/group headers in one place)
+│   │   │       │   ├── owned_reflect.h   # Element-owned reflect box (keeps Box alive when elements are cached across frames)
+│   │   │       │   └── tui_i18n.h       # UI translation table (en/zh columns, fallback for missing keys)
 │   │   │       └── components/   # TUI Render Components
 │   │   │           ├── message_list.h # Message list rendering
+│   │   │           ├── interrupt_view.h # Generic interrupt form view (render/measure/interaction driven by descriptor data)
 │   │   │           ├── sidebar.h      # Right-hand sidebar (Log / Info / Planning tabs)
-│   │   │           ├── overlays.h     # Overlays (Permissions / Interrupts / Model Selector)
+│   │   │           ├── overlays.h     # Overlays (model/session/settings/about/update notice/queue/context/
+│   │   │           │                  #   mermaid/text/diff/custom/file picker; the file picker implementation lives in
+│   │   │           │                  #   src/io/tui/components/file_picker_overlay.cpp)
 │   │   │           ├── input_bar.h    # Input entry bar
-│   │   │           ├── status_bar.h   # Status bar (token context utilization / activity status)
+│   │   │           ├── status_bar.h   # Status bar (token context utilization / activity status / plugin status items)
 │   │   │           └── spinner.h      # Loading spinner animations
 │   │   ├── train/                # Training mode (train.h: EvolutionTrainingAgent wiring / test case loading / evolutionary loop entry)
-│   │   └── util/                 # Client utilities (util.h: general client helpers)
+│   │   └── util/                 # Client utilities (util.h helpers / clipboard.h clipboard / open_url.h open-in-browser)
 │   └── src/                      # Source files
 │       ├── main.cpp
 │       ├── config_loader.cpp
@@ -1309,13 +1360,17 @@ agent/
 │       │       ├── tui_theme.cpp
 │       │       ├── scrollable.cpp
 │       │       ├── lazy_scrollable.cpp  # LazyScrollable virtual rendering implementation
+│       │       ├── markdown_block.cpp, plugin_ui_items.cpp
+│       │       ├── tui_theme.cpp, tui_settings.cpp, tui_i18n.cpp
+│       │       ├── text_layout.cpp          # Text layout (wrapping / line estimation)
+│       │       ├── ui_components.cpp        # Single renderer of component descriptors (render/measure/hit regions)
 │       │       ├── tui_sidebar_content.cpp # Sidebar content (Log / Info / Planning)
 │       │       ├── tui_log_sink.cpp        # TUI log sink
-│       │       ├── framework/              # TUI framework implementation (tui_state/modal_container/...)
-│       │       └── components/             # Render components implementation: message_list / sidebar /
-│       │                                   #   overlays / input_bar / status_bar / spinner
+│       │       ├── framework/              # TUI framework implementation (ui_action_list/tui_settings/...)
+│       │       └── components/             # Render components implementation: message_list / sidebar / overlays /
+│       │                                   #   file_picker_overlay / input_bar / status_bar / interrupt_view / spinner
 │       ├── train/train.cpp        # Training implementation
-│       └── util/util.cpp          # Client utility implementation
+│       └── util/                  # util.cpp / clipboard.cpp / open_url.cpp
 │
 ├── test/                         # agentxx_test test executable
 │   ├── test.cpp                  # Test entry point: module registration and scheduling (synchronous/asynchronous grouping)
@@ -1334,6 +1389,11 @@ agent/
 │       │   ├── test_training.h                # Evolutionary training tests (mutation / evaluation / optimization / convergence / persistence)
 │       │   ├── test_events.h                  # Event type tests
 │       │   ├── test_event_stream.h            # EventBus / EventStream / RequestResponseStream tests
+│       │   ├── test_json.h                    # In-house Json parsing/serialization tests
+│       │   ├── test_json_view.h               # JsonView read-only view tests
+│       │   ├── test_json_reflection.h         # JSON reflection (struct <-> Json) tests
+│       │   ├── test_interrupt_ui.h            # Interrupt descriptor schema (blocks/controls/result contract) tests
+│       │   ├── test_ui_items.h                # Component descriptor parsing/validation/plain-text fallback tests
 │       │   ├── test_event_bridge.h            # EventBridge event translation tests
 │       │   ├── test_interrupt_bus.h           # Interrupt bus HITL tests
 │       │   ├── test_subagent_bus.h            # Subagent bus tests (including batch delegation / cross-agent routing)
@@ -1372,6 +1432,9 @@ agent/
 │       │   └── test_datetime_tool.h           # Datetime tool tests (directly testing shared implementation)
 │       ├── plugin/                            # Plugin test headers (module names match plugin/*.cpp)
 │       │   ├── test_plugins.h                 # Plugin system tests (loading / tools / hooks / events / hot-reloading; module name `plugins`)
+│       │   ├── test_plugin_runtime.h          # Plugin runtime tests (lifecycle / retry / cancellation / multi-instance handles)
+│       │   ├── test_plugin_sdk.h              # Plugin SDK tests (kit tools / forms / components / timers & keybinds + legacy-host degradation)
+│       │   ├── test_plugin_bridge.h           # Plugin bridge tests (coroutine driver bridge / controlled polling / cross-plugin calls)
 │       │   ├── test_plugin_resources.h        # Plugin session resource extension tests (Skills / Memory / MCP declarative + runtime)
 │       │   ├── test_plugin_multi_instance.h   # Plugin multi-instance isolation tests (The Three Iron Rules)
 │       │   ├── test_client_plugins.h          # Client-side plugin tests (skipped during monolithic built-in compilation)
@@ -1383,12 +1446,19 @@ agent/
 │           ├── test_config_loader.h           # YAML configuration loading tests
 │           ├── test_mermaid_state.h           # Mermaid state machine parser tests
 │           ├── test_thread_id.h               # sessionId uniqueness tests (module name `sessionId`)
+│           ├── test_update_check.h            # GitHub Release version parse/compare and failure paths
 │           ├── test_tui_input.h               # TUI input handling tests
 │           ├── test_tui_interrupt.h           # TUI interrupt interaction tests
 │           ├── test_tui_scroll.h              # TUI scrolling tests
-│           ├── test_tui_settings.h            # TUI settings persistence tests
+│           ├── test_tui_settings.h            # TUI settings persistence / update entries / notice dialog tests
 │           ├── test_tui_sidebar.h             # TUI sidebar content and section tests
+│           ├── test_tui_context_overlay.h     # Context overlay hit-testing tests
+│           ├── test_tui_form.h                # Plugin/interrupt form interaction tests
 │           ├── test_tui_stream.h              # TUI token streaming tests
+│           ├── test_tui_surface.h             # Popup surface frame / padding / corner marker tests
+│           ├── test_tui_theme.h               # Theme palette and dim-routing tests
+│           ├── test_tui_ui_items.h            # Component descriptor render/measure/hit-region tests
+│           ├── test_tui_widget.h              # Overlay/status bar/input bar hit-testing and event consumption tests
 │           └── test_tui_tool_header.h         # TUI tool header rendering tests
 │
 ├── benchmark/                    # Benchmark tests (typically compiled only in Release mode)
@@ -1555,7 +1625,7 @@ EventBus (Event Bus)
 - Three Iron Rules of Multi-Instance Safety: No mutable global statics / State recovered via `user_data` closures / Cache interface tables in instance contexts.
 - Export control: `-fvisibility=hidden` + version script whitelist (`PLUGINXX_EXPORT`).
 - Platform matrix: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.
-- Utility reuse: Built-in plugins link statically against `agentxx_util` (symbols hidden without conflict).
+- Utility reuse: Built-in plugins link statically against `cxx_utilxx_base` / `cxx_utilxx` (symbols hidden without conflict); the host-only `sqlite` / `settings_db` helpers stayed in `agentxx/util/`.
 
 ---
 

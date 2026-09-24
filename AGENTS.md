@@ -273,6 +273,34 @@ path/to/agentxx_test string_util regex
   接入点 (面板/Info/overlay) `tui_widget`·`tui_form`, 装饰 `tui_tool_header`; 插件端到端
   (含老宿主降级) `plugin_sdk`·`client_plugins`
 
+客户端 UI 与远程交互补充 (2026-09):
+- 跨设备附件选择: 远程模式下 client 与 server 不同设备时 (deviceId 比对; HelloAck 携带服务端设备 id
+  与会话工作目录), 文件选择弹窗多出「本地 / 服务端」标签页 (同设备不渲染该行); 服务端页经
+  `ListDir` / `ListDirResult` 列举 (服务端线程池扫描, 路径全程 UTF-8), 选中服务端文件只发送
+  `pathOrUrl` (不含 base64), 由服务端自行读取编码 (BaseAgent 收到 dataUrl 为空且 pathOrUrl 为本地
+  路径的附件时按路径加载, 卸载到线程池); 实现见 `io/tui/components/file_picker_overlay.cpp` 与
+  `session_server_agent_io.cpp` 的 WireListDir 分支; 中文路径一律经
+  `utilxx_base::pathToUtf8Generic` / `utf8ToPath` 转换 (Windows 本地代码页会导致乱码)
+- 完全授权状态: `GetPermissionState` / `SetFullAuth` / `PermissionState` 三消息
+  (状态源在权限中间件 `PermissionMiddlewareHandle::isFullAuthorized`, 客户端只持镜像; 点击先乐观更新,
+  服务端广播回来校准); TUI Info 侧边栏底部工作目录行显示/切换该状态 (见 tui.md §2.7)
+- 更新检查: `agentxx-client/update_check.{h,cpp}` 请求 GitHub `/releases/latest` (读 302 `Location`,
+  对端直接回 JSON 时读 `tag_name`; 超时各 8s; 仅比较三段版本号; 失败只记日志不打扰); 启动延迟 3 秒检查,
+  受设置项 `tui.checkUpdateOnStartup` 控制; 设置条目可即时检查 (有新版本开弹窗 / 已最新或失败给 toast),
+  打开下载页经 `util/open_url.h` 校验 http/https 后交系统浏览器
+- 设置弹窗: 条目按 界面/显示/更新/其他 分组, 内容超出终端高度时内容区限高可滚动
+  (`vscroll_indicator | yframe`, 选中项带 focus 自动滚入视口, 滚轮 = 上/下移动选中项)
+- share store 内存策略: 会话库 `store` 表为唯一数据源, 内存仅保留
+  `SessionShareStore::kCacheCapacity` (3) 条 LRU 缓存; 首次访问某会话只取回 `max(id)` 作自增计数
+  (内存占用与条目数无关); id 大于 lastId (从未分配) 按参数错误抛异常; 已不支持删除条目
+- 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
+  由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: <msg>]` 结果文本; 插件侧在 SDK 边界捕获并上报
+  FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态
+- 接口表数量: agent 侧 18 张 (10 张通用表 `pluginxx.*` + 8 张领域表 `agentxx.agent.*`),
+  client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
+- 测试模块: client 侧 17 个 (含 `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
+  同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`
   传入嵌套构建, 代码中一律使用 `XX_IS_*_D` (勿使用编译器内置平台宏):

@@ -130,7 +130,7 @@ agentxx_ffi_event_queue_free(q);
 - Bounded Queue (capacity 16,384): Drops oldest events when host stops polling, injecting an `EVT_ERROR` warning event.
 - Implementation: `agent/lib/src/ffi/event_queue.cpp`.
 
-### 4.3 Exported Symbol Inventory (27 entries = 26 FFI C API + 1 built-in plugin manifest entry, see whitelist in `agent/lib/ffi_symbols.map`)
+### 4.3 Exported Symbol Inventory (26 FFI C API symbols, see whitelist in `agent/lib/ffi_symbols.map`)
 
 | Category | Symbols | Description |
 |---|---|---|

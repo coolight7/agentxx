@@ -17,7 +17,8 @@
 ./agent/build/linux-debug/exec/agentxx_test string_util regex agent plugins
 ```
 
-Test module names are listed in the registry table at the top of `agent/test/test.cpp`. Under `AGENTXX_BUILD_CLIENT`, 11 additional client-side modules are also compiled: `config_loader/tui_settings/tui_input/tui_interrupt/tui_scroll/tui_sidebar/tui_context_overlay/tui_stream/tui_tool_header/sessionId/mermaid_state`.
+Test module names are listed in the registry table at the top of `agent/test/test.cpp`. Under `AGENTXX_BUILD_CLIENT`, 17 additional client-side modules are also compiled: `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`.
+The synchronous group also contains `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge` (see the synchronous section of `test.cpp`).
 
 ### Conventions for Adding New Test Modules
 
@@ -34,8 +35,9 @@ Test module names are listed in the registry table at the top of `agent/test/tes
 ## 2. Adding Tools and Middlewares
 
 - **Built-in Tools**: All have been migrated to plugins (`agent/plugins/agentxx_*`). New tools should preferably be implemented as plugins (registered via `tool/fast_tool/blocking_tool` in `plugin_kit.h`), keeping identical names and behavior; unit tests directly test the same `*_impl.h` implementation.
-- **Middlewares**: Inherit from `MiddlewareHandleBase` and register in stack order in `CodeAgent::initMiddleware`. `onHandleStart/End` can be hooked into the three nodes: `agent_start/modelcall/toolcall`.
-- **Permissions**: Filesystem permissions use longest prefix matching (`XXRouter`) + wildcards `*` via `PermissionMiddleware`. The default rule is determined by `permission.mode`. When introducing new protected resources, define a `category` and query through `service.permission`.
+- **Middlewares**: Inherit from `MiddlewareWrapHandle<TState>` and select the hooks to mount via `MiddlewareHooks` (`onAgentcallStart/End`, `onModelcallStart/Run/End`, `onToolcallStart/End`; unmounted stages never run). Register them in stack order in `BaseAgent::initMiddleware` / `CodeAgent::initMiddleware`; middlewares' own toolcalls are collected automatically by `initMiddlewareTools`.
+- **Permissions**: Filesystem permissions use longest-prefix matching (`utilxx::XXRouter`) + wildcards `*` in `PermissionMiddlewareHandle`. The default rule comes from `permission.mode`. Plugins declare the permission restrictions of their own tools through the `agentxx.agent.permission` interface table after registering them; tools without a declaration are not checked at all.
+- **Tool errors**: Throw `std::invalid_argument` for argument-check failures and `std::runtime_error` for runtime errors — `ToolcallWrapNode` formats them uniformly into `[Exception aborted: ...]` result text. Do not return `{"error": ...}` payloads (see [plugins.md](/docs/en/design/plugins.md) §8).
 
 ## 3. Plugin Development
 

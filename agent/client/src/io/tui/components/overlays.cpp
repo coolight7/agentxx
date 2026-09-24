@@ -312,7 +312,7 @@ constexpr int kSettingsSurfaceRows = 6;
 
 SettingsOverlay::SettingsOverlay(TUICtx& ctx) :
     ctx_(ctx) {
-    list_.setRowGap(0);
+    list_.setRowGap(1);
 }
 
 void SettingsOverlay::buildItems() {
