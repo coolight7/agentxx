@@ -74,6 +74,7 @@
 #include "agentxx-test/client/test_tui_form.h"
 #include "agentxx-test/client/test_tui_input.h"
 #include "agentxx-test/client/test_tui_interrupt.h"
+#include "agentxx-test/client/test_tui_lazy_view.h"
 #include "agentxx-test/client/test_tui_scroll.h"
 #include "agentxx-test/client/test_tui_settings.h"
 #include "agentxx-test/client/test_tui_sidebar.h"
@@ -228,6 +229,7 @@ int main(int argn, char** argv) {
         runSync("tui_input", agentxx::test::testTuiInput);
         runSync("tui_interrupt", agentxx::test::testTuiInterrupt);
         runSync("tui_scroll", agentxx::test::testTuiScroll);
+        runSync("tui_lazy_view", agentxx::test::testTuiLazyView);
         runSync("tui_sidebar", agentxx::test::testTuiSidebar);
         runSync("tui_context_overlay", agentxx::test::testTuiContextOverlay);
         runSync("tui_form", agentxx::test::testTuiForm);

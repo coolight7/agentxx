@@ -164,7 +164,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
             return itemKey(index);
         },
         [this](size_t index, int width) {
-            return estimateHeight(index, width);
+            return quickHeight(index, width);
         },
         [this](size_t index) {
             return buildItem(index);
@@ -643,11 +643,21 @@ uint64_t MessageListComponent::itemKey(size_t index) {
     return h;
 }
 
-size_t MessageListComponent::estimateHeight(size_t index, int width) {
+size_t MessageListComponent::quickHeight(size_t index, int width) {
     const auto& st = *ctx_.frameState;
+    // 未进入视口的条目高度**粗略**估算: 只服务总高度 (滚动条长度) 与估算容错
+    // 判定, **不做任何渲染**: 不查插件语义渲染 (queryToolRender 会加锁查缓存、
+    // 必要时投递渲染请求)、不 measureItems (真渲染装饰), 也不做中断表单的
+    // layoutForm —— 这些成本只应发生在条目真正进入视口被构建时 (布局即测量,
+    // 实测值随 key 缓存)。偏差由 LazyScrollable 的估算容错带自愈。
     if (st.messages.empty() && !hasStreamingToken(st)) {
         return 1; // banner 为 fillViewport, 高度由 LazyScrollable 置为视口高度
     }
+    // 按字节折算行数 (含中文时略有高估, 属可接受偏差; 低估更安全, 见上)
+    const auto roughRows = [width](size_t bytes) {
+        const auto cols = static_cast<size_t>(std::max(8, width));
+        return bytes / cols + 1;
+    };
     if (index < st.messages.size()) {
         const auto& msg = *st.messages[index];
         // 注意: 所有消息分支的估算高度 = buildMessageBlock 内容行数 + 1 (尾部空行)。
@@ -658,12 +668,14 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
         // corrected 重算, 浪费且无法收敛到精确总高度。
         switch (msg.role) {
             case TUIMessage::Role::User:
+                // 纯文本折行 (不解析 markdown): 按行计数即可 (段内换行就是硬换行)
                 return estimateLines(msg.text, width) + msg.attachments.size() + 1;
             case TUIMessage::Role::Assistant:
                 // Assistant 走 renderMarkdown (cmark-gfm + DomBuilder): 段内
                 // 单换行 (softbreak) 合并为空格, 按此语义估算 (estimateLines
                 // 按 \n 硬换行计数, 对"多行单换行"文本严重高估 -> 顶部消息
-                // 被推出视口空白, 见 estimateMarkdownLines 注释)
+                // 被推出视口空白, 见 estimateMarkdownLines 注释)。该函数是
+                // 纯文本扫描 (不渲染), 保留其精度
                 return estimateMarkdownLines(msg.text, width) + 1;
             case TUIMessage::Role::System:
                 // 折叠: 仅 header 行 + 空行; 展开: header + 内容 + 空行
@@ -679,54 +691,18 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
                 if (msg.collapsed) {
                     return 1 + 1; // header 行 + 空行
                 }
-                const bool finished  = msg.tool && msg.tool->toolFinished;
-                const bool isError   = finished && isToolResultError(msg.tool->toolResult);
-                auto       renderRes = queryToolRender(
-                    ctx_,
-                    st,
-                    msg.tool ? msg.tool->toolCallId : "",
-                    msg.tool ? msg.tool->toolName : "",
-                    msg.text,
-                    msg.tool ? msg.tool->toolResult : "",
-                    finished,
-                    isError,
-                    width
-                );
-                if (renderRes.matched) {
-                    size_t decorLines = 1; // header 行
-                    if (finished && isError) {
-                        decorLines += estimateLines(msg.tool->toolResult, width);
-                    } else if (!renderRes.items.empty()) {
-                        // 装饰 items 行数走共享组件渲染层 (与渲染同一套判定; 见
-                        // ui_components.h): 各行行数累加, 估算与渲染不会漂移
-                        UiRenderCtx rc;
-                        rc.theme  = ctx_.theme;
-                        rc.width  = width;
-                        rc.indent = kDecorItemIndent;
-                        decorLines += measureItems(agentxx::ui::parseItemList(renderRes.items), rc);
-                    } else {
-                        if (!msg.text.empty()) {
-                            decorLines += estimateLines(formatToolArgs(msg.text), width);
-                        }
-                        if (finished) {
-                            decorLines += estimateLines(msg.tool->toolResult, width);
-                        }
-                    }
-                    return static_cast<int>(decorLines) + 1; // +1: 尾部空行
-                }
-                size_t lines = 1; // header
-                if (!msg.text.empty()) {
-                    // 与渲染一致: 参数按 JSON 缩进格式化后的行数估算
-                    lines += estimateLines(formatToolArgs(msg.text), width);
-                }
-                lines += finished ? estimateLines(msg.tool->toolResult, width) : 1;
+                // 展开: header + 参数 + 结果 (粗略折算; 不做插件渲染查询/装饰实测,
+                // 也不做参数 JSON 缩进格式化 —— 那些都留给进入视口的真实构建)
+                const bool finished = msg.tool && msg.tool->toolFinished;
+                size_t     lines    = 1; // header
+                lines += roughRows(msg.text.size());
+                lines += finished ? roughRows(msg.tool->toolResult.size()) : 1;
                 return lines + 1; // +1: 尾部空行
             }
             case TUIMessage::Role::Interrupt:
-                // 中断消息: 形态由消息携带的 UI 描述决定 (InterruptView 通用
-                // 实现), 估算与渲染同一套项判定 —— 本处不再按询问类型分支。
-                // 注意 enter 视口后仍会实测修正, 估算偏差不影响正确性
-                return static_cast<int>(interruptView_.estimate(msg, width)) + 1; // +1: 尾部空行
+                // 中断消息: 形态由消息携带的 UI 描述决定 (InterruptView 通用实现),
+                // 这里只给一个"头行 + 描述若干行"的量级估计 (不 layoutForm 实测)
+                return roughRows(msg.text.size()) + 5 + 1; // +1: 尾部空行
         }
         return 2; // 未知角色兜底: 内容 1 行 + 空行
     }
@@ -759,7 +735,6 @@ size_t MessageListComponent::estimateHeight(size_t index, int width) {
     }
     return 1;
 }
-
 bool MessageListComponent::fillViewport(size_t index) {
     const auto& st = *ctx_.frameState;
     return index == 0 && st.messages.empty() && !hasStreamingToken(st);
@@ -1654,7 +1629,8 @@ void MessageListComponent::appendDecorItems(
     // 插件装饰 items 与中断内容块**共用同一渲染实现** (见 ui_components.h):
     // 逐项解析为组件 → 行模型 (元素 + 行数 + 元素内可命中区域), 再把行元素追加到
     // lines, 含可点区域的行转写为 decorHits_ 命中项。
-    // 高度估算侧 (estimateHeight) 用同一模块的 measureItems, 两侧判定同源。
+    // 高度估算侧 (quickHeight) 不做插件渲染查询/装饰实测 —— 展开的工具消息按
+    // 参数/结果字节粗略折算行数 (进入视口后由本条渲染实测修正)
     UiRenderCtx rc;
     rc.theme    = ctx_.theme;
     rc.width    = maxWidth;
@@ -1888,7 +1864,7 @@ bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
 // ---------------------------------------------------------------------------
 // 中断输入消息 (渲染/交互由 InterruptView 通用实现, 见 interrupt_view.{h,cpp}):
 // 本组件仅转发通道注入与命中区域/状态查询, 并以 interruptView_ 作为
-// buildMessageBlock / estimateHeight / itemKey / OnEvent 的实现
+// buildMessageBlock / quickHeight / itemKey / OnEvent 的实现
 // ---------------------------------------------------------------------------
 
 void MessageListComponent::attachInterruptChannel(

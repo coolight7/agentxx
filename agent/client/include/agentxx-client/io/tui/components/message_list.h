@@ -30,7 +30,7 @@ namespace agentxx::client {
 
 /// 消息列表组件 (Flutter ListView.builder 风格)
 ///
-/// 渲染架构: 封装 LazyScrollable, 经 itemCount/itemKey/estimateHeight/buildItem
+/// 渲染架构: 封装 LazyScrollable, 经 itemCount/itemKey/quickHeight/buildItem
 /// 四个回调描述列表, 仅按需懒构建子项:
 /// - 有界 LRU 缓存 (条数 + 源字节双预算): 窗口外旧消息的渲染缓存被淘汰释放,
 ///   内存占用与对话长度解耦
@@ -238,14 +238,17 @@ private:
     // ---- LazyScrollable 回调 ----
     size_t        itemCount();
     uint64_t      itemKey(size_t index);
-    size_t        estimateHeight(size_t index, int width);
+    /// 未进入视口条目的**粗略**高度估算 (行; O(1) 或轻量线性扫描, 不做渲染):
+    /// 只服务总高度/滚动条长度, 进入视口后由布局实测修正。
+    /// 不查插件语义渲染 (queryToolRender)、不 measureItems、不做中断表单 layoutForm
+    size_t        quickHeight(size_t index, int width);
     LazyBuiltItem buildItem(size_t index);
     bool          fillViewport(size_t index);
 
     /// 流式末尾正在输出的 Think 当前生效的折叠状态 (UI 线程独占):
     /// 用户点击覆盖态 (TUIRenderState::streamThinkOverride) 优先, 未点击时按
     /// TailThinkingMode 设置。
-    /// 供 syncStream/itemKey/estimateHeight/buildStreamingItem 统一判定渲染形态
+    /// 供 syncStream/itemKey/quickHeight/buildStreamingItem 统一判定渲染形态
     /// (折叠=单行预览子项, 展开=多行/增量子项)
     ///
     /// - `args`:

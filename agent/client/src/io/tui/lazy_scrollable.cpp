@@ -10,6 +10,22 @@ namespace agentxx::client {
 
 using namespace ftxui;
 
+namespace {
+
+/// 无效命中盒 (未布局的子项)
+constexpr Box kInvalidBox{0, -1, 0, -1};
+
+/// 可见性判定的估算容错行数: 未实测子项按粗略估算定位, 与实测存在偏差
+/// (长段落/表格/状态图等)。把"实测范围"向视口外扩这么多行, 使估算偏差
+/// 范围内的子项提前实测修正; 定位/渲染仍按精确可见区间。
+constexpr int kEstimateSlack = 6;
+
+/// 视口下方预取条数: 顺带校验这些条目的 key (只比较, 不构建),
+/// 使内容变化的重建提前一帧发生, 滚动进入视口时不会先显示旧内容
+constexpr size_t kPrefetchItems = 4;
+
+} // namespace
+
 /// 视口布局节点: SetBox/Render 委托给 LazyScrollable 组件。
 ///
 /// 与 ftxui 内置 yframe+focusPositionRelative 方案 (需全量布局整列表) 不同:
@@ -64,16 +80,16 @@ private:
 };
 
 LazyScrollable::LazyScrollable(
-    ItemCountFunc      itemCount,
-    ItemKeyFunc        itemKey,
-    EstimateHeightFunc estimateHeight,
-    BuildFunc          buildItem,
-    CacheBudget        budget,
-    FillViewportFunc   fillViewport
+    ItemCountFunc    itemCount,
+    ItemKeyFunc      itemKey,
+    QuickHeightFunc  quickHeight,
+    BuildFunc        buildItem,
+    CacheBudget      budget,
+    FillViewportFunc fillViewport
 ) :
     itemCount_(std::move(itemCount)),
     itemKey_(std::move(itemKey)),
-    estimateHeight_(std::move(estimateHeight)),
+    quickHeight_(std::move(quickHeight)),
     buildItem_(std::move(buildItem)),
     fillViewport_(std::move(fillViewport)),
     budget_(budget) {}
@@ -95,7 +111,7 @@ void LazyScrollable::clearCache() {
     // (宽度变化路径同样调用 clearCache, 但其 heights_/measured_ 已全失效,
     //  全部走 fresh 分支布局, 不依赖 lastBoxes_, 无副作用)
     for (auto& b : lastBoxes_) {
-        b = ftxui::Box{0, -1, 0, -1};
+        b = kInvalidBox;
     }
 }
 
@@ -127,10 +143,137 @@ void LazyScrollable::resetSelectionHighlight() {
     }
 }
 
-size_t LazyScrollable::estimateHeightFor(size_t index) const {
-    // measuredWidth_ 首帧布局前为 -1; 由 estimateHeight 回调自行兜底默认宽度
-    const size_t h = estimateHeight_ ? estimateHeight_(index, measuredWidth_) : 1;
+size_t LazyScrollable::quickHeightFor(size_t index) {
+    // 粗略估算必须 O(1) (不解析文本/不渲染); measuredWidth_ 首帧布局前为 -1,
+    // 由回调自行兜底默认宽度
+    const size_t h = quickHeight_ ? quickHeight_(index, measuredWidth_) : 1;
     return std::max(static_cast<size_t>(1), h);
+}
+
+void LazyScrollable::setItemHeight(size_t index, int height) {
+    if (index >= heights_.size()) {
+        return;
+    }
+    const int oldValue = std::max(0, heights_[index]);
+    const int newValue = std::max(1, height);
+    heights_[index]    = newValue;
+    totalHeight_ += newValue - oldValue;
+    if (index < scanStartIndex_) {
+        rowsAboveScanStart_ += newValue - oldValue;
+    }
+}
+
+void LazyScrollable::refreshKey(size_t index) {
+    if (index >= keys_.size() || keyFrames_[index] == prepareSeq_) {
+        return; // 本帧已校验过 (或索引越界)
+    }
+    keyFrames_[index]  = prepareSeq_;
+    const uint64_t key = itemKey_ ? itemKey_(index) : 0;
+    if (key == keys_[index]) {
+        return; // 内容未变: 零成本 (不读内容、不重建)
+    }
+    keys_[index]     = key;
+    measured_[index] = false;
+    removeCacheAt(index);
+    // 内容变化 -> 已知高度作废, 回到粗略估算 (等实测修正)
+    setItemHeight(index, static_cast<int>(quickHeightFor(index)));
+}
+
+void LazyScrollable::markEnsured(size_t index) {
+    if (index < protectedIndices_.size() && !protectedIndices_[index]) {
+        protectedIndices_[index] = true;
+        ensuredIndices_.push_back(index);
+    }
+}
+
+void LazyScrollable::moveScanStartTo(size_t index) {
+    while (scanStartIndex_ < index && scanStartIndex_ < heights_.size()) {
+        rowsAboveScanStart_ += std::max(1, std::max(0, heights_[scanStartIndex_]));
+        ++scanStartIndex_;
+    }
+    while (scanStartIndex_ > index) {
+        --scanStartIndex_;
+        rowsAboveScanStart_ -= std::max(1, std::max(0, heights_[scanStartIndex_]));
+    }
+}
+
+int LazyScrollable::measureItem(size_t index, int contentWidth) {
+    refreshKey(index); // 惰性 key 校验: 变化则失效缓存并回到粗略高度
+    if (index >= heights_.size()) {
+        return 1;
+    }
+    // 先确保元素存在: 占据整个视口的特殊项 (空状态 banner) 同样要构建 ——
+    // 它的高度虽直接取视口高度, 但内容 (含可点区域) 仍需渲染
+    ensureElement(index);
+    if (fillViewport_ && fillViewport_(index)) {
+        setItemHeight(index, viewportHeight_);
+        measured_[index] = true;
+        return std::max(1, viewportHeight_);
+    }
+    if (!measured_[index]) {
+        const Box measureBox{0, contentWidth - 1, 0, kTallHeight};
+        setItemHeight(index, layoutAndMeasure(elementAt(index), measureBox));
+        measured_[index] = true;
+    }
+    return std::max(1, std::max(0, heights_[index]));
+}
+
+void LazyScrollable::syncItemArrays(size_t count) {
+    const size_t oldSize = heights_.size();
+
+    // 尾部收缩 (列表变短, 如清空会话): 移除被裁掉子项的缓存并减去高度
+    if (count < oldSize) {
+        for (size_t i = count; i < oldSize; ++i) {
+            removeCacheAt(i);
+            totalHeight_ -= std::max(0, heights_[i]);
+        }
+        if (scanStartIndex_ >= count) {
+            // 扫描起点被裁掉: 回到头部重扫一次 (列表刚变短, 成本可忽略)
+            scanStartIndex_     = 0;
+            rowsAboveScanStart_ = 0;
+        }
+    }
+
+    heights_.resize(count, -1);
+    measured_.resize(count, false);
+    keys_.resize(count, 0);
+    keyFrames_.resize(count, 0);
+    hasCache_.resize(count, false);
+    itemCache_.resize(count);
+    lastBoxes_.resize(count, kInvalidBox);
+    protectedIndices_.resize(count, false);
+    visibleBoxes_.resize(count, kInvalidBox);
+
+    // 新增项 (尾部追加): 按粗略高度初始化并校验一次 key
+    for (size_t i = oldSize; i < count; ++i) {
+        const int h  = static_cast<int>(quickHeightFor(i));
+        heights_[i]  = h;
+        totalHeight_ += h;
+        keys_[i]      = itemKey_ ? itemKey_(i) : 0;
+        keyFrames_[i] = prepareSeq_;
+    }
+
+    // 未知高度 (notifyPrepended 头插区: 那时状态快照尚未刷新, 不能估算)
+    // 在此补齐 —— 只在存在未知项时全量扫一遍
+    bool hasUnknown = false;
+    for (int h : heights_) {
+        if (h < 0) {
+            hasUnknown = true;
+            break;
+        }
+    }
+    if (hasUnknown) {
+        for (size_t i = 0; i < count; ++i) {
+            if (heights_[i] < 0) {
+                const int h = static_cast<int>(quickHeightFor(i));
+                heights_[i] = h;
+                totalHeight_ += h;
+                if (i < scanStartIndex_) {
+                    rowsAboveScanStart_ += h;
+                }
+            }
+        }
+    }
 }
 
 ftxui::Element& LazyScrollable::elementAt(size_t index) {
@@ -152,9 +295,7 @@ void LazyScrollable::ensureElement(size_t index) {
         // 缓存命中: LRU 提前 (最近使用)
         lruList_.splice(lruList_.begin(), lruList_, itemCache_[index]);
         // 标记为本帧已确保: evictIfNeeded 不得淘汰本条 (本帧仍要渲染)
-        if (index < protectedIndices_.size()) {
-            protectedIndices_[index] = true;
-        }
+        markEnsured(index);
         return;
     }
     // 不可缓存项按帧复用: 同一帧内多次布局迭代 (layoutAndMeasure 收敛循环)
@@ -187,9 +328,7 @@ void LazyScrollable::ensureElement(size_t index) {
     }
     // 标记为本帧已确保: 本帧阶段 1/2 处理过的条目禁止被 evictIfNeeded 淘汰
     // (淘汰由本条插入触发的 evictIfNeeded 即时执行, 先标记后淘汰才有效)
-    if (index < protectedIndices_.size()) {
-        protectedIndices_[index] = true;
-    }
+    markEnsured(index);
     // 新构建的元素没有上帧布局状态: 清空其 lastBoxes_, 使阶段 2 的
     // "缓存命中且 box 相同则跳过布局" 判定失效, 强制重新布局 (SetBox)。
     // 否则: key 变化 (单条替换 / onSync 整体重建) 但内容与高度不变的项,
@@ -199,7 +338,7 @@ void LazyScrollable::ensureElement(size_t index) {
     // 注意: 缓存命中路径 (本函数开头 return) 不清 lastBoxes_, sameBox 判定
     // 正常生效 —— 内容未变 + box 未变时跳过布局是安全的。
     if (index < lastBoxes_.size()) {
-        lastBoxes_[index] = ftxui::Box{0, -1, 0, -1};
+        lastBoxes_[index] = kInvalidBox;
     }
     if (lruList_.front().bytesCounted) {
         cachedBytes_ += lruList_.front().sourceBytes;
@@ -211,38 +350,44 @@ void LazyScrollable::notifyPrepended(size_t count) {
     if (count == 0) {
         return;
     }
-    // 尚未布局过 (首屏填充场景): 无既有视口内容需要稳定, 仅记录条数
-    // (prepareLayout 首次布局时新增区按估算高度参与总高, 无偏移校正必要)
-    if (heights_.empty() && measuredWidth_ < 0) {
-        pendingPrepend_ = PendingPrepend{true, count, 0};
-        return;
-    }
 
-    const size_t oldSize = heights_.size();
+    // 上一帧的可见/已确保记录先复位 (索引即将整体平移)
+    for (size_t i : visibleIndices_) {
+        if (i < visibleBoxes_.size()) {
+            visibleBoxes_[i] = kInvalidBox;
+        }
+    }
+    visibleIndices_.clear();
+    for (size_t i : ensuredIndices_) {
+        if (i < protectedIndices_.size()) {
+            protectedIndices_[i] = false;
+        }
+    }
+    ensuredIndices_.clear();
+
     // 并行数组头部插入 k 个新条目; 既有数据整体后移 —— key 与条目同步平移,
     // 旧条目 key 校验依然匹配 (缓存 Element/实测高度全保留), 仅新增区为初始值
     heights_.insert(heights_.begin(), count, -1);
     measured_.insert(measured_.begin(), count, false);
     keys_.insert(keys_.begin(), count, 0);
+    keyFrames_.insert(keyFrames_.begin(), count, 0);
     hasCache_.insert(hasCache_.begin(), count, false);
+    visibleBoxes_.insert(visibleBoxes_.begin(), count, kInvalidBox);
     using ListIt = std::list<Entry>::iterator;
     itemCache_.insert(itemCache_.begin(), count, ListIt{});
-    lastBoxes_.insert(lastBoxes_.begin(), count, ftxui::Box{});
+    lastBoxes_.insert(lastBoxes_.begin(), count, kInvalidBox);
     protectedIndices_.insert(protectedIndices_.begin(), count, false);
-    (void)oldSize;
 
     // LRU 缓存条目索引平移 (list 迭代器稳定, 直接改 index 字段即可;
     // itemCache_ 中迭代器的存储位置已随 vector 头插对齐到新索引)
     for (auto& entry : lruList_) {
         entry.index += count;
     }
-    // transientItems_ 属于上一帧 (帧边界清理), 索引陈旧无影响
 
-    // 注意: 此处不做估算也不调整滚动偏移 —— 调用方在状态前插后、本帧快照
-    // 刷新前调用 (UI 动作队列语义), 此时经回调估算读到的是旧快照内容,
-    // 口径必然错误。偏移补偿统一下放到下一帧 prepareLayout 内的
-    // applyPrependAnchorCorrection: 该处以新快照口径计算新增区高度,
-    // 相对 appliedRows=0 全额下移偏移, 后续实测修正继续增量收敛
+    // 新增区高度暂为未知 (-1): 调用方在状态前插后、本帧快照刷新前调用
+    // (UI 动作队列语义), 此时经回调估算读到的是旧快照内容, 口径必然错误。
+    // 下一帧 prepareLayout 的 syncItemArrays 以新快照口径补齐粗略高度。
+    scanStartIndex_ += count; // 既有条目的索引整体后移
     pendingPrepend_ = PendingPrepend{true, count, 0};
 }
 
@@ -259,15 +404,14 @@ void LazyScrollable::applyPrependAnchorCorrection() {
         pendingPrepend_ = PendingPrepend{};
         return;
     }
-    // 新增区当前已知总高度: 实测优先, 未测子项沿用估算 (滚动接近时再收敛)
+    // 新增区当前已知总高度: 实测优先, 未测子项沿用粗略估算
     long long actualRows  = 0;
     bool      allMeasured = true;
     for (size_t i = 0; i < n; ++i) {
         if (!measured_[i]) {
             allMeasured = false;
         }
-        actualRows += (heights_[i] >= 0) ? static_cast<long long>(std::max(1, heights_[i]))
-                                         : static_cast<long long>(estimateHeightFor(i));
+        actualRows += std::max(1, std::max(0, heights_[i]));
     }
     // 增量补偿: 只应用与已应用值的差值, 多帧多次调用天然幂等收敛
     const long long delta = actualRows - pendingPrepend_.appliedRows;
@@ -325,8 +469,21 @@ void LazyScrollable::evictIfNeeded() {
 
 void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     box_ = box;
+    ++prepareSeq_;
+
+    // 上一帧的可见/已确保记录复位: 只处理上一帧记录过的条目, 不做 O(n) 全量填充
+    for (size_t i : visibleIndices_) {
+        if (i < visibleBoxes_.size()) {
+            visibleBoxes_[i] = kInvalidBox;
+        }
+    }
     visibleIndices_.clear();
-    visibleBoxes_.clear();
+    for (size_t i : ensuredIndices_) {
+        if (i < protectedIndices_.size()) {
+            protectedIndices_[i] = false;
+        }
+    }
+    ensuredIndices_.clear();
 
     // 帧边界: 清空上一帧的不可缓存项 (如流式增量 Element), 及时释放内存。
     // (不能等下一次 transient 构建才清理 —— 流式结束后最后一帧的大体积
@@ -349,73 +506,60 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     const int contentWidth = hasGutter_ ? vw - 1 : vw;
     contentXMax_           = hasGutter_ ? box.x_max - 1 : box.x_max;
 
-    const size_t count = itemCount_();
-    visibleBoxes_.assign(count, ftxui::Box{0, -1, 0, -1});
-
-    // 内容宽度变化 -> 换行结果失效: 清空缓存, 高度全部重算
+    // 内容宽度变化 -> 换行结果失效: 清空缓存, 高度全部回到粗略估算
+    // (每条 O(1): 不解析文本、不渲染、不加锁), 扫描起点回到头部重扫一次
     if (contentWidth != measuredWidth_) {
         clearCache();
-        for (auto& h : heights_) {
-            h = -1;
-        }
-        for (auto&& m : measured_) {
-            m = false;
-        }
         measuredWidth_ = contentWidth;
-    }
-
-    // 尾部收缩 (列表变短, 如清空会话): 移除被裁掉子项的缓存, 及时释放内存
-    if (count < heights_.size()) {
-        for (size_t i = count; i < heights_.size(); ++i) {
-            removeCacheAt(i);
-        }
-    }
-    heights_.resize(count, -1);
-    measured_.resize(count, false);
-    keys_.resize(count, 0);
-    hasCache_.resize(count, false);
-    itemCache_.resize(count);
-    lastBoxes_.resize(count);
-    // 本布局遍清空"已确保"保护标记 (本遍 ensureElement 重新标记):
-    // prepareLayout 在 FTXUI 布局迭代中可能同帧重入多次, 每遍都从零
-    // 重新标记可见集; 两遍之间无缓存淘汰发生 (淘汰仅在 ensureElement 内)
-    protectedIndices_.assign(count, false);
-
-    // key 变化 -> 内容变化: 使该子项缓存失效并重算估算高度。
-    // key 未变的子项零成本 (不读内容、不重建)
-    for (size_t i = 0; i < count; ++i) {
-        const uint64_t k = itemKey_(i);
-        if (k != keys_[i]) {
-            keys_[i] = k;
-            removeCacheAt(i);
-            heights_[i]  = -1;
+        int total      = 0;
+        for (size_t i = 0; i < heights_.size(); ++i) {
+            const int h  = static_cast<int>(quickHeightFor(i));
+            heights_[i]  = h;
             measured_[i] = false;
+            total += h;
         }
-        if (fillViewport_ && fillViewport_(i)) {
-            // 占据整个视口的特殊项 (空状态居中展示): 高度恒为视口高度
-            heights_[i]  = vh;
-            measured_[i] = true;
-        } else if (heights_[i] < 0) {
-            heights_[i] = static_cast<int>(estimateHeightFor(i));
-        }
+        totalHeight_        = total;
+        scanStartIndex_     = 0;
+        rowsAboveScanStart_ = 0;
     }
 
-    // === 总高度 + 滚动偏移 (stickToBottom / clamp) ===
-    // 未测量子项使用估算高度, 可见后实测修正
-    int total = 0;
-    for (size_t i = 0; i < count; ++i) {
-        total += std::max(1, heights_[i]);
+    const size_t count = itemCount_();
+    syncItemArrays(count);
+    if (count == 0) {
+        totalHeight_  = 0;
+        scrollOffset_ = 0;
+        return;
     }
-    totalHeight_ = total;
 
-    const int maxOffset = std::max(0, total - vh);
+    // === 窗口发现 ===
+    // 吸附底部 (默认): 从尾部往前走, 一边走一边实测, 直到累计高度够一屏 ——
+    // 视口定位只依赖"尾部一屏内条目"的实测高度 + 视口上方条目的高度和
+    // (rowsAboveScanStart_), 与"视口上方未实测条目的估算"无关: 估算再离谱
+    // (10 倍高估/低估) 也不会把最新内容推出视口或让视口空白。
+    // 非吸附 (用户上滚后): 以 scrollOffset_ 为准, 扫描起点对齐到
+    // 视口顶 - 估算容错带 (逐条回退, 正常滚动回退距离 <= 容错带行数)。
+    size_t scannedEnd = scanStartIndex_;
     if (stickToBottom_) {
-        scrollOffset_ = maxOffset;
+        size_t    first = count;
+        long long rows  = 0;
+        while (first > 0 && rows < viewportHeight_) {
+            --first;
+            rows += measureItem(first, contentWidth);
+        }
+        moveScanStartTo(first);
+        scrollOffset_ = std::max(
+            0,
+            rowsAboveScanStart_ + static_cast<int>(rows) - viewportHeight_
+        );
+    } else {
+        const int target = std::max(0, scrollOffset_ - kEstimateSlack);
+        while (scanStartIndex_ > 0 && rowsAboveScanStart_ > target) {
+            --scanStartIndex_;
+            rowsAboveScanStart_ -= std::max(1, std::max(0, heights_[scanStartIndex_]));
+        }
     }
-    scrollOffset_    = std::clamp(scrollOffset_, 0, maxOffset);
-    int scrollOffset = scrollOffset_;
 
-    // === 阶段 1: 构建并测量可见子项 (视口局部, 按估算高度定位) ===
+    // === 阶段 1: 构建并测量可见子项 (从扫描起点向后, 视口局部) ===
     // 只做 ensureElement + 实测 (修正估算高度), 不在此阶段定位:
     // 子项定位必须等总高度/滚动偏移按实测修正后进行, 否则当前帧子项位置
     // 基于估算滚动偏移, 与最终偏移不一致 —— 流式输出时流式项每帧 key 变化
@@ -425,110 +569,102 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     //
     // 可见性判定带估算容错 (kEstimateSlack): 估算高度与实际渲染存在偏差
     // (markdown 段落折行/mermaid 图形/表格换行等), 若按估算位置严格判定,
-    // 估算偏低的子项会被误判为"完全在可见区上方" (continue 跳过) 而永不
-    // 实测修正 —— 其实际内容占据视口却未渲染, 表现为消息空白; 且其低估
-    // 的高度使总高度偏低, stickToBottom 偏移偏小, 底部内容被推出视口。
-    // 将"实测范围"向视口外扩 kEstimateSlack 行, 估算偏差在该范围内的子项
-    // 提前实测修正, 后续定位即准确 (滑动到该位置时已自愈, 不再空白)。
-    // 注意: 仅扩大"实测范围"; 阶段 2 的定位/渲染仍按精确可见区间。
-    constexpr int kEstimateSlack = 6;
-    int           cum            = 0;     // 累计高度 (当前子项的内容顶边, 行)
-    bool          corrected      = false; // 是否有估算高度被实测修正
-    for (size_t i = 0; i < count; ++i) {
-        const int h   = std::max(1, heights_[i]);
-        const int top = cum;
-        if (top >= scrollOffset + vh + kEstimateSlack) {
-            break; // 完全在可见区下方 (后续更靠下, 提前结束)
-        }
-        cum += h;
-        if (cum <= scrollOffset - kEstimateSlack) {
-            continue; // 完全在可见区上方 (含容错范围外)
-        }
-
-        // 与 (含容错的) 可见区相交 -> 构建 (缓存命中或 buildItem) 并测量
-        ensureElement(i);
-        if (!measured_[i]) {
-            // 首次布局: 完整迭代布局并测量自然高度, 修正估算值
-            const Box measureBox{0, contentWidth - 1, 0, kTallHeight};
-            const int realH = layoutAndMeasure(elementAt(i), measureBox);
-            heights_[i]     = std::max(1, realH);
-            measured_[i]    = true;
-            if (heights_[i] != h) {
-                corrected = true;
+    // 估算偏低的子项会被误判为"完全在可见区上方"而永不实测修正 —— 其实际
+    // 内容占据视口却未渲染, 表现为消息空白; 且其低估的高度使总高度偏低,
+    // stickToBottom 偏移偏小, 底部内容被推出视口。
+    {
+        int cum = rowsAboveScanStart_;
+        for (size_t i = scanStartIndex_; i < count; ++i) {
+            const int h   = std::max(1, std::max(0, heights_[i]));
+            const int top = cum;
+            if (top >= scrollOffset_ + viewportHeight_ + kEstimateSlack) {
+                break; // 完全在可见区下方 (后续更靠下, 提前结束)
             }
-            cum = top + heights_[i];
+            cum += h;
+            scannedEnd = i + 1;
+            if (cum <= scrollOffset_ - kEstimateSlack) {
+                // 完全在可见区上方 (含容错范围外): 前移扫描起点, 下次不再重扫
+                scanStartIndex_     = i + 1;
+                rowsAboveScanStart_ = cum;
+                continue;
+            }
+            // 与 (含容错的) 可见区相交 -> 构建 (缓存命中或 buildItem) 并测量
+            cum = top + measureItem(i, contentWidth);
         }
     }
 
-    // 估算被修正 -> 以实测高度刷新总高度与滚动偏移 (供阶段 2 定位)
-    if (corrected) {
-        int t = 0;
-        for (size_t i = 0; i < count; ++i) {
-            t += std::max(1, heights_[i]);
-        }
-        totalHeight_           = t;
-        const int newMaxOffset = std::max(0, t - vh);
-        if (stickToBottom_) {
-            scrollOffset_ = newMaxOffset;
-        } else {
-            scrollOffset_ = std::clamp(scrollOffset_, 0, newMaxOffset);
-        }
+    // === 预取带: 视口下方若干条目的 key 校验 (只比较, 不构建) ===
+    // 使内容变化的重建提前一帧发生, 滚动进入视口时直接是新内容
+    for (size_t i = scannedEnd; i < std::min(count, scannedEnd + kPrefetchItems); ++i) {
+        refreshKey(i);
     }
+
+    // === 总高度/滚动偏移 (高度和由 setItemHeight 增量维护) ===
+    const int maxOffset = std::max(0, totalHeight_ - vh);
+    if (stickToBottom_) {
+        scrollOffset_ = maxOffset;
+    }
+    scrollOffset_ = std::clamp(scrollOffset_, 0, maxOffset);
 
     // === 头部插入锚定校正 (历史分页前插) ===
     // 新增区子项被实测后与初始估算的偏差在此增量补偿到滚动偏移 (多帧收敛),
     // 保证视口内容在分页插入后保持稳定; 补偿后重新夹取防止越界
     applyPrependAnchorCorrection();
+    scrollOffset_ = std::clamp(scrollOffset_, 0, std::max(0, totalHeight_ - vh));
+
+    // 偏移可能已变化 -> 重新对齐扫描起点 (只回退; 前进由阶段 1 的推进逻辑完成)
     {
-        const int maxOff = std::max(0, totalHeight_ - vh);
-        scrollOffset_    = std::clamp(scrollOffset_, 0, maxOff);
+        const int target = std::max(0, scrollOffset_ - kEstimateSlack);
+        while (scanStartIndex_ > 0 && rowsAboveScanStart_ > target) {
+            --scanStartIndex_;
+            rowsAboveScanStart_ -= std::max(1, std::max(0, heights_[scanStartIndex_]));
+        }
     }
-    scrollOffset = scrollOffset_;
 
     // === 阶段 2: 以最终滚动偏移定位并布局可见子项 ===
-    // 阶段 1 未扫到的可见子项 (估算偏差改变可见区间) 在此补建/补测
-    cum = 0;
-    for (size_t i = 0; i < count; ++i) {
-        const int h   = std::max(1, heights_[i]);
-        const int top = cum;
-        if (top >= scrollOffset + vh) {
-            break; // 完全在可见区下方 (后续更靠下, 提前结束)
-        }
-        cum += h;
-        if (cum <= scrollOffset) {
-            continue; // 完全在可见区上方
-        }
+    // 阶段 1 未扫到的可见子项 (偏移/高度修正改变可见区间) 在此补建/补测
+    {
+        int cum = rowsAboveScanStart_;
+        for (size_t i = scanStartIndex_; i < count; ++i) {
+            const int h   = std::max(1, std::max(0, heights_[i]));
+            const int top = cum;
+            if (top >= scrollOffset_ + vh) {
+                break; // 完全在可见区下方 (后续更靠下, 提前结束)
+            }
+            cum += h;
+            if (cum <= scrollOffset_) {
+                // 完全在可见区上方: 前移扫描起点
+                scanStartIndex_     = i + 1;
+                rowsAboveScanStart_ = cum;
+                continue;
+            }
 
-        ensureElement(i);
-        int itemH = h;
-        bool fresh = false; // 本阶段刚完成测量 (同宽度布局已收敛, 仅 SetBox 即可)
-        if (!measured_[i]) {
-            // 阶段 1 未覆盖 (估算偏差改变可见区间): 补测
-            const Box measureBox{0, contentWidth - 1, 0, kTallHeight};
-            itemH        = std::max(1, layoutAndMeasure(elementAt(i), measureBox));
-            heights_[i]  = itemH;
-            measured_[i] = true;
-            fresh        = true;
-            cum          = top + itemH;
-        }
-        const int screenY = box.y_min + (top - scrollOffset);
-        Box       itemBox{box.x_min, contentXMax_, screenY, screenY + itemH - 1};
-        if (fresh) {
-            // 测量时同宽度布局已收敛, 仅 SetBox 重定位
-            elementAt(i)->SetBox(itemBox);
-        } else {
-            // 跳过布局优化: 缓存命中 (key 未变 -> 内容未变) 且 box 与上帧一致时,
-            // 子项内部布局状态与上帧完全相同, 无需重跑 ComputeRequirement/SetBox
-            // 迭代; 其 reflect 命中框 (点击检测读取) 也保持上帧值 (box 相同)
-            const bool cached  = i < hasCache_.size() && hasCache_[i];
-            const bool sameBox = lastBoxes_[i] == itemBox;
-            if (!(cached && sameBox)) {
-                layoutAndMeasure(elementAt(i), itemBox);
+            const bool wasMeasured = measured_[i];
+            const int  itemH       = measureItem(i, contentWidth);
+            if (!wasMeasured) {
+                cum = top + itemH;
+            }
+            const int screenY = box.y_min + (top - scrollOffset_);
+            Box       itemBox{box.x_min, contentXMax_, screenY, screenY + itemH - 1};
+            if (!wasMeasured) {
+                // 测量时同宽度布局已收敛, 仅 SetBox 重定位
+                elementAt(i)->SetBox(itemBox);
+            } else {
+                // 跳过布局优化: 缓存命中 (key 未变 -> 内容未变) 且 box 与上帧一致时,
+                // 子项内部布局状态与上帧完全相同, 无需重跑 ComputeRequirement/SetBox
+                // 迭代; 其 reflect 命中框 (点击检测读取) 也保持上帧值 (box 相同)
+                const bool cached  = i < hasCache_.size() && hasCache_[i];
+                const bool sameBox = i < lastBoxes_.size() && lastBoxes_[i] == itemBox;
+                if (!(cached && sameBox)) {
+                    layoutAndMeasure(elementAt(i), itemBox);
+                }
+            }
+            lastBoxes_[i] = itemBox;
+            visibleIndices_.push_back(i);
+            if (i < visibleBoxes_.size()) {
+                visibleBoxes_[i] = Box::Intersection(itemBox, box);
             }
         }
-        lastBoxes_[i] = itemBox;
-        visibleIndices_.push_back(i);
-        visibleBoxes_[i] = Box::Intersection(itemBox, box);
     }
 }
 

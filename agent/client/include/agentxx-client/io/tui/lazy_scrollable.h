@@ -34,7 +34,7 @@ struct LazyBuiltItem {
 ///
 /// 与全量构建的 Scrollable 不同, 本组件采用惰性构建 + 局部缓存:
 ///
-/// - [懒构建] 通过 itemCount()/itemKey()/estimateHeight()/buildItem() 回调描述列表,
+/// - [懒构建] 通过 itemCount()/itemKey()/quickHeight()/buildItem() 回调描述列表,
 ///   仅按需构建子项 Element; 每帧只对与视口相交的可见子项调用 buildItem
 /// - [视口局部布局/绘制] 布局阶段仅对可见子项执行测量与布局, 渲染阶段仅绘制
 ///   可见子项 (超出部分经 screen stencil 裁剪); 不可见子项零成本
@@ -42,7 +42,11 @@ struct LazyBuiltItem {
 ///   窗口外的旧子项被淘汰释放 —— 内存占用与列表长度解耦 (消息列表不再随
 ///   对话持续无限增长)
 /// - [高度缓存与估算] 子项高度按 (itemKey, 视口宽度) 缓存; 未测量过的子项使用
-///   estimateHeight 提供的估算值, 首次进入视口时测量修正
+///   quickHeight 提供的**粗略估算** (O(1), 不解析文本/不渲染), 仅在滚动条长度
+///   与未实测区域的上界估计里参与; 首次进入视口时测量修正
+/// - [每帧成本与历史长度无关] 每帧只遍历"上一帧扫描起点到视口底部"的条目:
+///   高度和 (totalHeight_) 增量维护, 条目 key 按帧标记惰性比较
+///   (窗口外的条目在重新进入窗口时才校验), 上一帧的可见/已确保记录按列表复位
 /// - [滚动] 滚轮固定每次 1 行; 吸附底部模式 (stickToBottom) 下内容增长自动跟随到底
 ///
 /// 线程模型: 本组件仅供 UI 线程使用 (FTXUI Loop 内)
@@ -51,7 +55,9 @@ public:
 
     using ItemCountFunc      = std::function<size_t()>;
     using ItemKeyFunc        = std::function<uint64_t(size_t index)>;
-    using EstimateHeightFunc = std::function<size_t(size_t index, int width)>;
+    /// 粗略高度回调 (**必须 O(1)**: 只用于未实测条目的总高度估计,
+    /// 不解析文本/不渲染/不加锁; 返回值会被缓存, 同一宽度下每条仅调用一次)
+    using QuickHeightFunc    = std::function<size_t(size_t index, int width)>;
     using BuildFunc          = std::function<LazyBuiltItem(size_t index)>;
     /// 判断子项是否占据整个视口高度 (空状态居中展示用); 返回 false 则正常布局
     using FillViewportFunc = std::function<bool(size_t index)>;
@@ -69,12 +75,12 @@ public:
     };
 
     explicit LazyScrollable(
-        ItemCountFunc      itemCount,
-        ItemKeyFunc        itemKey,
-        EstimateHeightFunc estimateHeight,
-        BuildFunc          buildItem,
-        CacheBudget        budget,
-        FillViewportFunc   fillViewport = nullptr
+        ItemCountFunc    itemCount,
+        ItemKeyFunc      itemKey,
+        QuickHeightFunc  quickHeight,
+        BuildFunc        buildItem,
+        CacheBudget      budget,
+        FillViewportFunc fillViewport = nullptr
     );
 
     // === 状态访问 ===
@@ -182,8 +188,20 @@ private:
     void removeCacheAt(size_t index);
     /// 按条数/字节预算从 LRU 尾部淘汰
     void evictIfNeeded();
-    /// 估算未测量子项的高度 (行), 兜底 >= 1
-    size_t estimateHeightFor(size_t index) const;
+    /// 未实测子项的粗略高度 (行; 调 quickHeight 回调并缓存, 兜底 >= 1)
+    size_t quickHeightFor(size_t index);
+    /// 设置子项高度 (行), 增量维护 totalHeight_ 与 rowsAboveScanStart_
+    void setItemHeight(size_t index, int height);
+    /// 同步逐条目数组长度 (新增项按粗略高度初始化并校验一次 key, 移除项减去高度)
+    void syncItemArrays(size_t count);
+    /// 校验子项 key (本帧未校验过时比较; 变化则失效缓存并回到粗略高度)
+    void refreshKey(size_t index);
+    /// 标记子项为本帧已确保 (evictIfNeeded 不得淘汰)
+    void markEnsured(size_t index);
+    /// 移动扫描起点 (增量维护 rowsAboveScanStart_; 距离与移动量同阶)
+    void moveScanStartTo(size_t index);
+    /// 确保子项高度已实测 (未实测则构建并测量), 返回其高度 (行)
+    int measureItem(size_t index, int contentWidth);
 
     /// 头部插入锚定校正 (prepareLayout 内调用): 新增区子项的已知总高度
     /// (实测优先, 未测用估算) 与已应用行数的差值增量补偿到 scrollOffset_;
@@ -192,19 +210,23 @@ private:
     void applyPrependAnchorCorrection();
 
     // ---- 回调 ----
-    ItemCountFunc      itemCount_;
-    ItemKeyFunc        itemKey_;
-    EstimateHeightFunc estimateHeight_;
-    BuildFunc          buildItem_;
-    FillViewportFunc   fillViewport_;
-    CacheBudget        budget_;
+    ItemCountFunc    itemCount_;
+    ItemKeyFunc      itemKey_;
+    QuickHeightFunc  quickHeight_;
+    BuildFunc        buildItem_;
+    FillViewportFunc fillViewport_;
+    CacheBudget      budget_;
 
-    // ---- 逐帧布局状态 ----
-    std::vector<int>      heights_;        // 各子项高度 (-1 = 未测量)
+    // ---- 逐条目状态 ----
+    std::vector<int>      heights_;        // 各子项有效高度 (行; -1 = 未填)
     std::vector<bool>     measured_;       // 高度是否已实测
-    std::vector<uint64_t> keys_;           // 各子项上次布局时的 key
+    std::vector<uint64_t> keys_;           // 各子项上次校验时的 key
     std::vector<bool>     hasCache_;       // 各子项是否有缓存 Element
     std::vector<size_t>   visibleIndices_; // 本帧可见子项索引
+    /// 本帧已确保 (构建/测量过, 待渲染) 的子项索引 (用于复位保护标记)
+    std::vector<size_t>   ensuredIndices_;
+    /// 各子项 key 的校验帧号 (惰性比较: 只在与视口相关的条目上校验, 见 prepareLayout)
+    std::vector<uint64_t> keyFrames_;
 
     /// 不可缓存项 (cacheable=false) 的 Element (每帧重建一次, 跨布局迭代复用)
     struct TransientEntry {
@@ -218,7 +240,13 @@ private:
 
     int  scrollOffset_   = 0;
     bool stickToBottom_  = true;
-    int  totalHeight_    = 0;
+    int  totalHeight_    = 0; // 全部子项有效高度和 (增量维护, 不再每帧全量求和)
+    /// 窗口扫描起点: 上一帧第一个与视口 (含估算容错带) 相交的子项。
+    /// 每帧从它开始向后扫描, 跳过"完全在视口上方"的子项时把它前移 ——
+    /// 每帧成本因此与列表长度无关 (滚动到历史深处时不再从头部重扫)
+    size_t scanStartIndex_    = 0;
+    int    rowsAboveScanStart_ = 0; // scanStartIndex_ 之前子项的高度和
+    uint64_t prepareSeq_      = 0;  // prepareLayout 次数 (key 校验帧标记)
     int  viewportHeight_ = 0;
     int  measuredWidth_  = -1;    // 上次布局所用内容宽度 (变化时缓存整体失效)
     bool hasGutter_      = false; // 是否预留滚动条列 (影响滚动条绘制判断)
