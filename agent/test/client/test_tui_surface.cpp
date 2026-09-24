@@ -416,8 +416,8 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(r.text.find("主题") != std::string::npos);
         XX_TEST_EXPECT_TRUE(r.text.find("动画等级") != std::string::npos);
 
-        // 选中项 (第 0 项) 的"值行"整行高亮: 值文字起点 / 行中 / 行末 (右内边距之内)
-        // 皆为高亮背景色 —— 高亮色带铺满整行, 而不是只覆盖值文字
+        // 选中项 (第 0 项) 整行高亮: 文字起点 / 行中 / 行末 (右内边距之内) 皆为
+        // 高亮背景色 —— 高亮色带铺满整行, 而不是只覆盖文字本身
         // (内容区右侧留 1 列给滚动条: 条目右边界 = 弹窗右内边距再往左 1 列)
         const int rowRightEdge = r.bounds.x_max - 3;
         int        sx = -1, sy = -1;
@@ -429,8 +429,8 @@ TestResult testTuiSurface() {
             XX_TEST_EXPECT_EQ(r.bgAt(rowRightEdge, sy), fx.theme.buttonActiveBgColor);
         }
 
-        // 非选中项 (第 1 项) 的值行: 同样为整行宽的浅色值色带 (值色为半透明按钮底色,
-        // 与内容区背景混合后成色); 行首与行末同色, 不再只覆盖值文字本身
+        // 非选中项 (第 1 项): 同样为整行宽的浅色色带 (底色为半透明按钮底色,
+        // 与内容区背景混合后成色); 行首与行末同色, 不再只覆盖文字本身
         int        ux = -1, uy = -1;
         const bool unselFound = r.findText("动画等级: ", ux, uy);
         XX_TEST_EXPECT_TRUE(unselFound);

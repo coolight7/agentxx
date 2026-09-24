@@ -303,7 +303,7 @@ void SessionSelectorOverlay::flushActivation() {
 namespace {
 
 /// 设置条目版式常量
-/// - 单个条目 = 标签行 + 值行; 条目之间 1 行间距, 分组标题 1 行
+/// - 单个条目占 1 行; 条目之间 1 行间距, 分组标题 1 行 (标题前另有一空行)
 /// - 外框行数: 上下内边距 2 + 标题栏 1 + 内容与区域之间 2 + 底部提示 1
 /// - 内容超出可用高度时不再压缩间距: 内容区限高并可滚动 (选中项自动滚入视口)
 constexpr int kSettingsSurfaceRows = 6;
@@ -322,6 +322,8 @@ void SettingsOverlay::buildItems() {
     const std::string groupUpdate    = std::string{tr("settings.groupUpdate")};
     const std::string groupOther     = std::string{tr("settings.groupOther")};
 
+    // 条目文字: 一个条目占一行, 文字取 `settings.*Value` (条目名称 + 当前值 / 动作
+    // 文案已含在整句里), 不再另起一行重复显示条目名称
     list_.setItems({
   // ---- 界面: 主题 / 动画 / 语言 ----
   // 主题 (点击/Enter 循环切换 Dark <-> Light)
@@ -426,9 +428,9 @@ Element SettingsOverlay::OnRender() {
     const int termH          = std::max(1, ctx_.terminalSize().dimy);
     const int maxContentRows = std::max(1, termH - kSettingsSurfaceRows);
 
-    // 条目版式: 标签行 (弱化文字) + 值行 (整行色带, 即命中区域); 条目之间留一空行
-    // - 选中态: 高亮背景覆盖值行整行 (与模型/会话列表弹窗的整行高亮一致)
-    // - 非选中态: 浅色值色带同样覆盖整行 (仅配色不同, 行宽与选中态一致)
+    // 条目版式: 一个条目一行 (整行色带, 即命中区域); 条目之间留一空行
+    // - 选中态: 高亮背景覆盖整行 (与模型/会话列表弹窗的整行高亮一致)
+    // - 非选中态: 浅色色带同样覆盖整行 (仅配色不同, 行宽与选中态一致)
     // - 面性风格: 不使用边框/下划线; 左右留白由外框统一提供
     auto rowBuilder = [&](const UiActionItem& item, bool selected, size_t) -> Element {
         Element row = hbox({

@@ -9,12 +9,12 @@
 /// 改 4 处 (成员/渲染分支/键盘分支/鼠标分支), 漏改就出现"点击无反应"或
 /// "点错了项"的问题。
 ///
-/// 本类把这些收敛为一张**数据表**: 条目 = (id, 文本, 当前值, 激活动作), 交互与
-/// 渲染只有一份实现:
+/// 本类把这些收敛为一张**数据表**: 条目 = (id, 文本, 次级说明, 分组, 激活动作),
+/// 交互与渲染只有一份实现:
 /// - 上下/Home/End 移动选中项 (跳过 disabled 项), Enter 激活
 /// - 鼠标左键释放命中条目时先置选中再激活 (键盘与鼠标路径行为一致)
 /// - 命中区域经 [UiHitMap] 登记: 每帧重建, 未渲染的条目不会命中
-/// - 渲染默认整行高亮 (文本 + 右对齐值), 需要多行/自定义版式时传 rowBuilder
+/// - 渲染默认整行高亮 (主文本 + 可选次级说明), 需要多行/自定义版式时传 rowBuilder
 /// - 条目可声明分组标题 ([UiActionItem::group]): 分组首项前插一行标题, 标题
 ///   不参与选中与点击, 只用来分组显示 (如设置弹窗的 界面/显示/更新/其他)
 ///
@@ -22,10 +22,10 @@
 /// ```c++
 /// // 构造时声明一次, 或每帧按状态重建 (选中项按 id 保持)
 /// list_.setItems({
-///     {.id = "theme", .label = tr("settings.themeLabel"),
-///      .value = currentThemeName(), .onActivate = [this] { cycleTheme(); }},
-///     {.id = "about", .label = tr("settings.infoLabel"),
-///      .value = std::string(tr("settings.aboutValue")), .onActivate = [this] { openAbout(); }},
+///     {.id = "theme", .label = trf("settings.themeValue", currentThemeName()),
+///      .onActivate = [this] { cycleTheme(); }},
+///     {.id = "about", .label = std::string{tr("settings.aboutValue")},
+///      .onActivate = [this] { openAbout(); }},
 /// });
 ///
 /// ftxui::Element OnRender() override {
@@ -61,7 +61,10 @@ struct UiActionItem {
     std::string id;
     /// 主文本
     std::string label;
-    /// 次级说明 (弱化色, 显示在主文本后; 空 = 不显示)
+    /// 次级说明 / 当前值 (空 = 不显示)
+    ///
+    /// 默认版式显示在主文本之后 (弱化色); 传 rowBuilder 时可由各弹窗自行排版
+    /// (会话弹窗把它显示在名称行下方)
     std::string hint;
     /// 所属分组标题 (空 = 不分组)
     ///
@@ -92,7 +95,7 @@ struct UiActionStyle {
     /// 取主题按钮配色 (弹窗内列表项的默认样式)
     static UiActionStyle fromTheme(const TUITheme& theme);
 
-    /// 单行行元素: 主文本 + (可选次级说明) + 右对齐值; 整行铺满便于高亮
+    /// 单行行元素: 主文本 + (可选次级说明); 整行铺满便于高亮
     ftxui::Element row(const UiActionItem& item, bool selected) const;
 
     /// 分组标题行 (整行; 不参与命中, 不可点击)

@@ -221,8 +221,7 @@ bool XxxComponent::OnEvent(ftxui::Event event) {
 struct UiActionItem {
     std::string           id;          // 命中标识 (唯一, 选中项按它保持)
     std::string           label;       // 主文本
-    std::string           value;       // 右侧当前值 (可选)
-    std::string           hint;        // 次级说明 (弱化色, 可选)
+    std::string           hint;        // 次级说明 / 当前值 (可选, 见下)
     std::string           group;       // 所属分组标题 (可选, 变化处插一行标题)
     bool                  enabled;     // 不可用时弱化且不可激活
     std::function<void()> onActivate;  // Enter / 点击命中时执行的动作
@@ -231,7 +230,8 @@ struct UiActionItem {
 
 `UiActionList` 负责: 选中项维护 (`setItems` 后按 id 保持)、键盘导航 (Up/Down/Home/End,
 跳过 disabled)、Enter 激活、鼠标点击命中后"先置选中再激活"、渲染时逐项登记命中、整行高亮;
-需要多行版式时传 `rowBuilder` (设置弹窗的两行条目、会话弹窗的两行条目都是这样实现的)。
+默认版式把 `hint` 显示在主文本之后, 需要多行版式时传 `rowBuilder`
+(会话弹窗的名称行 + 时间行就是这样实现的: `label` 占一行, `hint` 占另一行)。
 
 分组标题 ([UiActionItem::group]): 相邻条目分组标题相同时视为同一组, 变化处插入一行
 标题 (标题行不登记命中, 不可点击, 也不占条目下标), 标题色取 [UiActionStyle::groupFg]。
@@ -262,8 +262,11 @@ struct UiActionItem {
   的条目按分组显示 (界面 / 显示 / 更新 / 其他, 见 §2.4), 交互与高亮仍由 `UiActionList`
   统一实现; 内容超出终端可用高度时**内容区限高并可滚动**, 弹窗本身不会超出终端
   (条目被裁掉就再也看不到、点不到):
-  - 条目版式为两行 (标签行 + 值行色带), 内容区 = `vscroll_indicator | yframe |
-    size(HEIGHT, LESS_THAN, 终端高度 - 外框 6 行)`;
+  - 条目版式为一行 (整行色带, 即命中区域), 条目之间留一空行, 内容区 = `vscroll_indicator |
+    yframe | size(HEIGHT, LESS_THAN, 终端高度 - 外框 6 行)`;
+  - 条目文字取 `settings.*Value` (条目名称 + 当前值 / 动作文案已含在整句里, 如
+    `主题: Dark` / `立即检查`), 不再另起一行重复显示条目名称;
+  - 分组标题行不登记命中 (点了不生效), 只用来分组;
   - 选中项带 `focus`, 由 `yframe` 自动滚入视口 (与模型选择弹窗同机制), 因此
     Up/Down/Home/End 选的条目一定可见;
   - 滚轮 = 上/下移动选中项 (与文件选择弹窗一致), 内容区随之滚动;
@@ -345,12 +348,12 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 触发方式两种, 共用上面的探测实现:
   1. **启动检查**: `TUIClientAgentIO::start()` → `startUpdateCheck()` (client io 线程
      协程, 启动后延迟 3 秒再请求, 不阻塞 UI 线程); 受设置弹窗"更新"组的
-     `启动时检查更新` 开关 (`settings.updateToggleLabel` + `settings.updateValue`,
+     `启动时检查更新` 开关条目 (`settings.updateValue`, 文案为 `启动时检查更新: 开/关`,
      持久化键 `tui.checkUpdateOnStartup`, default 开) 控制,
      关闭时不发起; 属**附加提示**, 失败只记日志 (不打扰用户); 结果经
      `applyUpdateCheckResult` 写入共享状态 `availableUpdateTag/Url` 并 toast。
-  2. **即时检查**: 设置弹窗"更新"组内的"检查更新"条目 (`settings.checkUpdateLabel`,
-     值 `settings.checkUpdateValue`; 同组还有上面的启动检查开关, 两者各占一条条目) →
+  2. **即时检查**: 设置弹窗"更新"组内的"立即检查"条目 (`settings.checkUpdateValue`;
+     同组还有上面的启动检查开关, 两者各占一条条目) →
      `TUIClientAgentIO::requestUpdateCheckNow()`
      (UI 线程): 先 toast "正在检查更新" 作为点击反馈, 再在 client io 线程
      `co_spawn` 一次探测 (不受启动开关影响; 已有检查在跑时按 `updateChecking_`

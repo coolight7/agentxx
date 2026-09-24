@@ -1387,7 +1387,7 @@ void test_settings_overlay_keybind_entry() {
     const auto screen = renderOnce(comp, 100, 40);
     XX_TEST_EXPECT_TRUE(screenText(screen).find("插件快捷键: 2") != std::string::npos);
 
-    // 点击"快捷键"条目 (条目整行可点: 点击标签行即激活)
+    // 点击"快捷键"条目 (条目占一行, 整行可点)
     int x = 0;
     int y = 0;
     XX_TEST_EXPECT_TRUE(findRowWithText(screen, "快捷键", x, y));
@@ -1412,7 +1412,7 @@ void test_settings_overlay_check_update_entry() {
     const auto text = screenText(renderOnce(comp, 100, 40));
     XX_TEST_EXPECT_TRUE(text.find("启动时检查更新: 开") != std::string::npos);
 
-    // 点击条目 (整行可点: 点击标签行即激活) -> 切换为关
+    // 点击条目 (条目占一行, 整行可点) -> 切换为关
     int x = 0;
     int y = 0;
     XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 40), "启动时检查更新", x, y));
@@ -1440,7 +1440,7 @@ void test_settings_overlay_check_update_entry() {
 
 /// 设置弹窗: "更新"组内的"检查更新"条目 (点击即发起一次即时检查)
 ///
-/// - 条目文案随语言表 (标签"检查更新" + 值"立即检查")
+/// - 条目占一行, 文字取语言表 `settings.checkUpdateValue` ("立即检查" / "Check Now")
 /// - 点击触发 onCheckUpdate 回调, 弹窗保持打开 (可连续检查)
 /// - 只发起检查, 不改变"启动时检查更新"开关
 void test_settings_overlay_check_update_now_entry() {
@@ -1457,11 +1457,11 @@ void test_settings_overlay_check_update_now_entry() {
     });
 
     const auto text = screenText(renderOnce(comp, 100, 40));
-    XX_TEST_EXPECT_TRUE(text.find("检查更新") != std::string::npos);   // 条目标签
-    XX_TEST_EXPECT_TRUE(text.find("立即检查") != std::string::npos);   // 条目值
+    XX_TEST_EXPECT_TRUE(text.find("更新") != std::string::npos);      // 条目所在分组标题
+    XX_TEST_EXPECT_TRUE(text.find("立即检查") != std::string::npos);   // 条目文字
     XX_TEST_EXPECT_EQ(checks, 0);
 
-    // 点击条目 (整行可点: 点击值行即可) -> 触发一次检查, 启动开关不变
+    // 点击条目 (条目占一行, 整行可点) -> 触发一次检查, 启动开关不变
     int x = 0;
     int y = 0;
     XX_TEST_EXPECT_TRUE(findRowWithText(renderOnce(comp, 100, 40), "立即检查", x, y));
@@ -1484,8 +1484,8 @@ void test_settings_overlay_check_update_now_entry() {
     // 英文文案 (同一状态换语言后重新渲染)
     TUISettings::instance().setLanguage(TuiLanguage::EnUs);
     const auto enText = screenText(renderOnce(comp, 100, 40));
-    XX_TEST_EXPECT_TRUE(enText.find("Check for Updates Now") != std::string::npos);
     XX_TEST_EXPECT_TRUE(enText.find("Check Now") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(enText.find("Update") != std::string::npos); // 分组标题
 
     // 复位 (共用单例)
     settings.setCheckUpdateOnStartup(original);
@@ -1621,13 +1621,12 @@ void test_settings_overlay_groups() {
     XX_TEST_EXPECT_TRUE(yUpdate > yDisplay);
     XX_TEST_EXPECT_TRUE(yOther > yUpdate);
 
-    // "更新"组内两条: 启动时检查更新 (标签 + 值) / 检查更新 (标签 + 值)
+    // "更新"组内两条 (一条一行, 文字含条目名称): 启动时检查更新开关 / 立即检查
+    // - 组内第 1 行 = 开关条目, 第 3 行 = 即时检查条目, 中间 1 行是条目间距
     if (yUpdate >= 0) {
-        XX_TEST_EXPECT_EQ(rowOfExact(screen, "启动时检查更新"), yUpdate + 1);
-        XX_TEST_EXPECT_EQ(rowOfExact(screen, "启动时检查更新: 开"), yUpdate + 2);
-        XX_TEST_EXPECT_EQ(rowText(screen, yUpdate + 3), std::string("")); // 条目之间空行
-        XX_TEST_EXPECT_EQ(rowOfExact(screen, "检查更新"), yUpdate + 4);
-        XX_TEST_EXPECT_EQ(rowOfExact(screen, "立即检查"), yUpdate + 5);
+        XX_TEST_EXPECT_EQ(rowOfExact(screen, "启动时检查更新: 开"), yUpdate + 1);
+        XX_TEST_EXPECT_EQ(rowText(screen, yUpdate + 2), std::string("")); // 条目之间空行
+        XX_TEST_EXPECT_EQ(rowOfExact(screen, "立即检查"), yUpdate + 3);
 
         // 点击分组标题行: 只有标题, 不命中任何条目 (选中项不变, 开关不被切换)
         int x = 0;
@@ -1660,8 +1659,8 @@ void test_settings_overlay_groups() {
 void test_settings_overlay_short_terminal_scroll() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    // 80x24 (经典默认终端): 内容 30 行 (9 条目 × 2 + 4 分组标题 + 8 间距) 装不下,
-    // 内容区按可用高度限高 (24 - 外框 6 = 18 行), 弹窗本身不超出终端
+    // 80x24 (经典默认终端): 内容 25 行 (9 条目 + 4 分组标题 + 8 条目间距 + 4 分组前空行)
+    // 装不下, 内容区按可用高度限高 (24 - 外框 6 = 18 行), 弹窗本身不超出终端
     auto ctx = keybindTestCtx(nullptr, 24);
     ctx.viewportWidth = 80;
     auto       comp   = std::make_shared<SettingsOverlay>(ctx);
@@ -1690,7 +1689,7 @@ void test_settings_overlay_short_terminal_scroll() {
 void test_settings_overlay_scroll_indicator() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    // 100x24: 内容 (30 行) 多于可见高度 (18 行) -> 内容区右侧出现滚动条
+    // 100x24: 内容 (25 行) 多于可见高度 (18 行) -> 内容区右侧出现滚动条
     {
         auto ctx = keybindTestCtx(nullptr, 24);
         ctx.viewportWidth = 100;
