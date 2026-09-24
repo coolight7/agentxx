@@ -95,7 +95,8 @@
 - 滚动容器为项目自实现 (FTXUI 的 `frame` 是"焦点跟随"式滚动, 不适用于会话记录):
   - [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h): 全量构建子项 + 视口局部布局/绘制
   - [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h): 懒构建 + LRU 缓存 (消息列表用),
-    支持字节预算淘汰、头部插入锚定、`stickToBottom` 吸附
+    支持字节预算淘汰、头部插入锚定、`stickToBottom` 吸附; 每帧成本与列表长度
+    无关 (尾部窗口发现 + 扫描起点 + 增量高度和 + key 惰性校验, 见 3.3.2)
 
 ---
 
@@ -441,6 +442,10 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - **测量与渲染必须同源**: 组件描述的行数由 `ui_components.cpp` 的 `measureItem` 得出
   (内部渲染一次统计行数), 不要另写一套"估算行数"的判定 —— 两套判定漂移会让滚动位置与
   高度计算错位。回归保护见 `agentxx_test tui_ui_items` (估算行数 == 元素真实布局高度)。
+- 滚动定位一律以**实测高度**为准 (`layoutAndMeasure`): 未进入视口的条目用
+  `MessageListComponent::quickHeight` 的粗略值 (O(1) 或轻量文本扫描, 不做任何渲染/
+  插件查询), 进入视口后由布局实测修正; 因此估算偏差只影响滚动条长度, 不影响
+  视口内内容 (见 3.3.2)。
 
 ### 3.2 事件消费
 
@@ -450,9 +455,60 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 
 ### 3.3 渲染性能
 
+#### 3.3.1 渲染基元 (消息正文)
+
+- **紧凑文本节点** (`ftxui::text`): FTXUI 的 `Text` 节点保存**原文 + 各行起始字节
+  偏移**, 渲染时按行解码直写单元格 (全角占两格且第二格为占位空串, 组合字符并入
+  前一格, 控制字符不占列)。旧实现为每个字素保存一个 `std::string`, 渲染树是所
+  显示文本的 30~60 倍; 现在纯文本节点约 ×1.4 (实测: 100 条 1KB 文本节点 137KB)。
+- **自绘折行节点** [markdown::FlowText](/agent/third_party/markdown_ftxui/markdown/include/markdown/flow.hpp):
+  markdown 段落/行内内容不再"每词一个元素", 而是**一个节点承载整段文本**:
+  - 折行规则: 空格为词边界 (行首空格丢弃), 超宽单词按列硬拆 (不丢字符), `'\n'`
+    为硬换行; 词间空格与该词合并写入同一片段, 通常一行只剩 1 个片段
+  - **折行结果按宽度缓存**: 宽度不变时 `SetBox` 只更新盒位置 (流式输出/滚动时
+    盒位置每帧都在动, 但宽度不变 -> 重排成本接近 0)
+  - 行内样式 (`CellStyle`) 逐单元格应用, 未设置的通道保留外层装饰器颜色
+  - 实现 `Select` (拖选复制) 与链接点击区段登记 (`linkBoxes()`)
+  - 迭代布局与 `ftxui::flexbox` 同口径 (`asked_` + `need_iteration`), 上报高度
+    即该盒宽下的实测高度
+- **自绘代码块** (`markdown::FlowCodeBlock`): 语言标签行 + 上下内边距 + 按盒宽
+  折行的代码行 (一个节点); 背景/文字色仍由外层 `theme.code_block` 装饰器铺满。
+- 行内样式来自主题的**逐格样式字段** (`Theme::link_style` / `link_focus_style` /
+  `code_inline_style`), 与装饰器字段并存: 装饰器只能整块套用, 一条折行文本内
+  需要按片段区分样式 (两处应保持一致, 见 `TUITheme::markdownTheme`)。
+- 内存标定: 渲染树存活字节 ≈ 每条消息固定 2KB + 源字节 × 24 (实测用例见
+  `agentxx_test ftxui_text` 的 "markdown render tree": 929B 源 -> 32KB, ×35;
+  基线旧实现 ×112), `LazyScrollable` 的缓存预算按此折算
+  (`MessageListComponent::buildMessageItem`)。
+
+#### 3.3.2 懒构建列表 (`LazyScrollable`) 的每帧成本
+
+- **窗口发现**: 吸附底部时从尾部向前累计到一屏 (边走边实测); 内容不足一屏时顶部
+  对齐。视口定位只依赖"尾部一屏内条目的实测高度 + 视口上方高度和", 与视口上方
+  未实测条目的估算无关 (估算高估/低估 10 倍也不会把最新内容推出视口)。
+- **扫描起点**: 记录"第一个与视口相交的条目"及其上方高度和 (增量维护), 每帧
+  从它开始向后扫描并随滚动推进 —— 不再每帧从头部重扫, 每帧成本与历史长度无关。
+- **高度和增量维护**: `totalHeight_` / 扫描起点上方高度和由 `setItemHeight` 增量
+  更新, 不做每帧全量求和; 宽度变化时按 O(1) 粗略值全部重算 (不触发渲染)。
+- **key 惰性校验**: 条目内容变化经 `itemKey` 体现; 每帧只校验窗口 + 下方预取带内
+  的条目 (按帧标记), 视口外条目的失效延迟到它重新进入窗口时 —— 避免每帧对全列表
+  计算 key (含插件缓存加锁查字符串)。
+- **高度估算 (`quickHeight`) 必须廉价**: 不得解析 markdown 之外的内容、不得查
+  插件语义渲染 (`queryToolRender`)、不得 `measureItems`/`layoutForm` 真渲染 ——
+  这些成本只发生在条目真正进入视口被构建时 (布局即测量)。估算值只服务滚动条
+  长度与未实测区域的定位, 进入视口后一律以实测高度为准。
+- 回归保护: `agentxx_test tui_lazy_view` (每帧构建/校验次数有界且与条数无关、
+  前插零跳变、实测高度精确、滚动边界、估算偏差不影响视口内容) 与 `tui_scroll`
+  (历史回归场景 1~17)。
+
+#### 3.3.3 其它
+
 - 只渲染需要渲染的内容: 主界面在弹窗打开时不渲染 (ModalContainer 已处理);
   侧边栏 tab 未激活时不渲染其内容; 日志 tab 未激活时日志更新不触发重绘。
 - 大列表使用 `LazyScrollable`, 让不可见项零成本, 并把"渲染结果的内存估算"用于缓存预算。
+- 流式增量渲染 (`markdown::IncrementalRenderer`) 的稳定块元素按预算 LRU 保留
+  (`setElementBudget`, 默认 16 块 / 256KB 源字节): 超预算按最久未上屏释放
+  element+builder (源码文本保留, 需要时按块重建), 渲染树内存与流长解耦。
 - 每帧只查一次终端尺寸 (`ctx_.terminalSize()`), 不直接调用 `ftxui::Terminal::Size()`
   (Linux 上是 `ioctl` 系统调用), 同时保证同帧内布局口径一致。
 

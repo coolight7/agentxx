@@ -2,6 +2,7 @@
 #include "bench_aho_corasick.h"
 #include "bench_code_agent.h"
 #include "bench_regex.h"
+#include "bench_render.h"
 #include "bench_resource.h"
 #include "bench_resource_util.h"
 #include "bench_router.h"
@@ -111,6 +112,9 @@ int main(int argn, char** argv) {
         {"aho_corasick",
          "Benchmark Aho-Corasick multi-pattern search", agentxx::bench::benchAhoCorasick},
         {"regex", "Benchmark regex matching and pattern substitution", agentxx::bench::benchRegex},
+        {"render",
+         "Benchmark TUI render path (markdown build/layout/frame cost, lazy list per-frame cost)",
+         agentxx::bench::benchRender},
         {"router", "Benchmark URL routing and dispatching", agentxx::bench::benchRouter},
         {"code_agent_init",
          "Benchmark CodeAgent cold initialization", agentxx::bench::benchCodeAgentInit},
