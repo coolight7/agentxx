@@ -120,6 +120,20 @@ int renderHeight(std::string_view content, int wrapWidth, int boxWidth) {
     return layoutAndMeasure(el, ftxui::Box{0, boxWidth - 1, 0, kTallHeight});
 }
 
+/// 渲染 markdown 并保留屏幕与 DomBuilder (用于逐格样式与链接区段断言)
+struct MdRender {
+    ftxui::Element                        element;
+    std::unique_ptr<markdown::DomBuilder> builder;
+    ftxui::Screen                         screen;
+};
+
+MdRender renderMd(std::string_view content, int wrapWidth, int w, int h) {
+    auto [el, builder] = renderMarkdown(content, ftxui::Color::White, mdTheme(), wrapWidth);
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
+    ftxui::Render(screen, el);
+    return MdRender{std::move(el), std::move(builder), std::move(screen)};
+}
+
 bool contains(const std::string& text, std::string_view needle) {
     return text.find(needle) != std::string::npos;
 }
@@ -257,6 +271,82 @@ TestResult testMarkdownBlock() {
             XX_TEST_EXPECT_EQ(sliceCols(row, W - 1, W), std::string{"\u2510"});
             XX_TEST_EXPECT_EQ(sliceCols(row, 0, 1), std::string{"\u2502"});
             XX_TEST_EXPECT_TRUE(contains(row, "\u252C")); // ┬ 列分隔符仍在
+        }
+    }
+
+    // ---------------- 行内样式与链接 (自绘折行节点) ----------------
+    {
+        constexpr int W = 30;
+        // 粗体 / 斜体 / 行内代码: 同一行内按片段区分样式
+        auto md = renderMd("**bold** *it* `code`", W, W, 2);
+        auto rows = renderRows("**bold** *it* `code`", W, W, 2);
+        XX_TEST_EXPECT_EQ(rtrim(rows[0]), std::string{"bold it code"});
+        for (int x = 0; x < 4; ++x) {
+            XX_TEST_EXPECT_TRUE(md.screen.PixelAt(x, 0).bold);
+        }
+        XX_TEST_EXPECT_FALSE(md.screen.PixelAt(0, 0).italic);
+        for (int x = 5; x < 7; ++x) {
+            XX_TEST_EXPECT_TRUE(md.screen.PixelAt(x, 0).italic);
+        }
+        // 行内代码: 主题给的文字色 (深色主题为黄色), 不加粗
+        for (int x = 8; x < 12; ++x) {
+            XX_TEST_EXPECT_TRUE(
+                md.screen.PixelAt(x, 0).foreground_color == mdTheme().code_inline_style.fg
+            );
+            XX_TEST_EXPECT_FALSE(md.screen.PixelAt(x, 0).bold);
+        }
+
+        // 链接: 下划线 + 链接色, 并在 DomBuilder 里登记点击区段
+        auto linkMd   = renderMd("[site](https://example.com)", W, W, 2);
+        auto linkRows = renderRows("[site](https://example.com)", W, W, 2);
+        XX_TEST_EXPECT_EQ(rtrim(linkRows[0]), std::string{"site"});
+        for (int x = 0; x < 4; ++x) {
+            XX_TEST_EXPECT_TRUE(linkMd.screen.PixelAt(x, 0).underlined);
+            XX_TEST_EXPECT_TRUE(
+                linkMd.screen.PixelAt(x, 0).foreground_color == mdTheme().link_style.fg
+            );
+        }
+        XX_TEST_EXPECT_TRUE(linkMd.builder != nullptr);
+        if (linkMd.builder) {
+            const auto& targets = linkMd.builder->link_targets();
+            XX_TEST_EXPECT_EQ(targets.size(), size_t{1});
+            XX_TEST_EXPECT_EQ(targets[0].url, std::string{"https://example.com"});
+            const auto boxes = linkMd.builder->flat_link_boxes();
+            XX_TEST_EXPECT_EQ(boxes.size(), size_t{1});
+            if (!boxes.empty()) {
+                XX_TEST_EXPECT_EQ(boxes[0].link_index, 0);
+                XX_TEST_EXPECT_EQ(boxes[0].box.x_min, 0);
+                XX_TEST_EXPECT_EQ(boxes[0].box.x_max, 3);
+                XX_TEST_EXPECT_EQ(boxes[0].box.y_min, 0);
+            }
+        }
+
+        // 标题 / 列表 / 引用 / 图片: 块级结构保持原样, 内容由折行节点承载
+        {
+            auto rows2 = renderRows("# Title", W, W, 3);
+            XX_TEST_EXPECT_EQ(rtrim(rows2[0]), std::string{"Title"});
+            auto md2 = renderMd("# Title", W, W, 3);
+            XX_TEST_EXPECT_TRUE(md2.screen.PixelAt(0, 0).bold);
+            XX_TEST_EXPECT_TRUE(md2.screen.PixelAt(0, 0).underlined);
+
+            auto listRows = renderRows("- one\n- two", W, W, 4);
+            XX_TEST_EXPECT_TRUE(contains(listRows[0], "one"));
+            XX_TEST_EXPECT_TRUE(contains(listRows[1], "two"));
+            XX_TEST_EXPECT_TRUE(contains(listRows[0], "\u2022 one"));
+
+            auto quoteRows = renderRows("> quoted", W, W, 3);
+            XX_TEST_EXPECT_TRUE(contains(quoteRows[0], "quoted"));
+            XX_TEST_EXPECT_EQ(sliceCols(quoteRows[0], 0, 2), std::string{"\u2502 "});
+
+            auto imageRows = renderRows("before ![alt](x.png) after", W, W, 3);
+            XX_TEST_EXPECT_TRUE(contains(imageRows[0], "[IMG: alt]"));
+        }
+
+        // 硬换行 (行尾两个空格) 仍拆成两行
+        {
+            auto rows2 = renderRows("line1  \nline2", W, W, 3);
+            XX_TEST_EXPECT_EQ(rtrim(rows2[0]), std::string{"line1"});
+            XX_TEST_EXPECT_EQ(rtrim(rows2[1]), std::string{"line2"});
         }
     }
 

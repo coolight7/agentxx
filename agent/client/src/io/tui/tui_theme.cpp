@@ -128,6 +128,11 @@ TUITheme TUITheme::lightTheme() {
             .blockquote  = ftxui::color(ftxui::Color::RGB(120, 122, 125)),  // 引用
             .table_header = ftxui::color(ftxui::Color::RGB(50, 50, 50)) | ftxui::bold, // 表格
             .table_border = ftxui::color(ftxui::Color::RGB(50, 50, 50)),
+            // 自绘折行文本节点用的逐格样式 (与上面的装饰器保持一致):
+            // 链接带下划线 + 链接色, 焦点链接反色, 行内代码用棕色
+            .link_style        = {.fg = ftxui::Color::Blue3, .underline = true},
+            .link_focus_style  = {.underline = true, .inverted = true},
+            .code_inline_style = {.fg = ftxui::Color::RGB(150, 80, 0)},
             .diagram_pending  = ftxui::Color::RGB(120, 122, 125), // hintColor
             .diagram_running  = ftxui::Color::Yellow4,            // thinkingColor
             .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor
@@ -181,6 +186,11 @@ TUITheme TUITheme::darkTheme() {
             .blockquote  = ftxui::color(ftxui::Color::RGB(140, 140, 140)),
             .table_header = ftxui::color(ftxui::Color::RGB(220, 220, 220)) | ftxui::bold,
             .table_border = ftxui::color(ftxui::Color::RGB(220, 220, 220)),
+            // 自绘折行文本节点用的逐格样式 (与上面的装饰器保持一致):
+            // 链接带下划线 + 链接色, 焦点链接反色, 行内代码用黄色
+            .link_style        = {.fg = ftxui::Color::RGB(102, 204, 255), .underline = true},
+            .link_focus_style  = {.underline = true, .inverted = true},
+            .code_inline_style = {.fg = ftxui::Color::RGB(245, 245, 52)},
             .diagram_pending  = ftxui::Color::RGB(140, 140, 140), // hintColor
             .diagram_running  = ftxui::Color::RGB(245, 245, 52),  // thinkingColor
             .diagram_done     = ftxui::Color::RGB(102, 204, 255), // accentColor

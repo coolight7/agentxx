@@ -248,23 +248,29 @@ TestResult testMarkdownFlow() {
         spans[1].link = 0;
         spans[2].text = " tail";
         auto flow     = std::make_shared<markdown::FlowText>(std::move(spans));
-        // 预留容量与实际链接词数一致 (DomBuilder 侧同样按词数预留)
-        std::vector<ftxui::Box> boxes(32);
-        flow->setLinkBoxes({markdown::LinkBoxTarget{boxes.data(), boxes.size(), 0}});
-
         const auto el = std::static_pointer_cast<ftxui::Node>(flow);
+
         el->ComputeRequirement();
         el->SetBox(ftxui::Box{0, 12, 0, 0});
-        // "go here now" 占 0..10 列 (链接 0 覆盖 0..10), " tail" 从第 11 列起
-        XX_TEST_EXPECT_EQ(boxes[0].x_min, 0);
-        XX_TEST_EXPECT_EQ(boxes[0].x_max, 10);
-        XX_TEST_EXPECT_EQ(boxes[0].y_min, 0);
-        XX_TEST_EXPECT_EQ(boxes[0].y_max, 0);
+        // "go here now" 占 0..10 列 (链接 0 覆盖 0..10, 相邻片段合并为一个盒子),
+        // " tail" 从第 11 列起且不属于链接
+        {
+            const auto& boxes = flow->linkBoxes();
+            XX_TEST_EXPECT_EQ(boxes.size(), size_t{1});
+            XX_TEST_EXPECT_EQ(boxes[0].first, 0);
+            XX_TEST_EXPECT_EQ(boxes[0].second.x_min, 0);
+            XX_TEST_EXPECT_EQ(boxes[0].second.x_max, 10);
+            XX_TEST_EXPECT_EQ(boxes[0].second.y_min, 0);
+            XX_TEST_EXPECT_EQ(boxes[0].second.y_max, 0);
+        }
         // 盒子按到屏幕坐标的偏移写入 (盒起点不在 0 时同样成立)
         el->SetBox(ftxui::Box{3, 15, 4, 4});
-        XX_TEST_EXPECT_EQ(boxes[0].x_min, 3);
-        XX_TEST_EXPECT_EQ(boxes[0].x_max, 13);
-        XX_TEST_EXPECT_EQ(boxes[0].y_min, 4);
+        {
+            const auto& boxes = flow->linkBoxes();
+            XX_TEST_EXPECT_EQ(boxes[0].second.x_min, 3);
+            XX_TEST_EXPECT_EQ(boxes[0].second.x_max, 13);
+            XX_TEST_EXPECT_EQ(boxes[0].second.y_min, 4);
+        }
 
         // 链接跨行时按行各登记一个盒子
         auto wrapped = std::make_shared<markdown::FlowText>(
@@ -275,15 +281,88 @@ TestResult testMarkdownFlow() {
                 return s;
             }()
         );
-        std::vector<ftxui::Box> wrappedBoxes(8);
-        wrapped->setLinkBoxes({markdown::LinkBoxTarget{wrappedBoxes.data(), wrappedBoxes.size(), 0}});
         const auto wrappedEl = std::static_pointer_cast<ftxui::Node>(wrapped);
         wrappedEl->ComputeRequirement();
         wrappedEl->SetBox(ftxui::Box{0, 3, 0, 2});
         XX_TEST_EXPECT_EQ(wrapped->lineCount(), size_t{2});
-        XX_TEST_EXPECT_EQ(wrappedBoxes[0].y_min, 0);
-        XX_TEST_EXPECT_EQ(wrappedBoxes[1].y_min, 1);
-        XX_TEST_EXPECT_EQ(wrappedBoxes[1].x_max, 3);
+        {
+            const auto& boxes = wrapped->linkBoxes();
+            XX_TEST_EXPECT_EQ(boxes.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(boxes[0].second.y_min, 0);
+            XX_TEST_EXPECT_EQ(boxes[0].second.x_max, 3);
+            XX_TEST_EXPECT_EQ(boxes[1].second.y_min, 1);
+            XX_TEST_EXPECT_EQ(boxes[1].second.x_max, 3);
+        }
+
+        // 键盘焦点: 焦点链接的首个区段作为 requirement_.focused 上报
+        flow->setFocusedLink(0);
+        el->SetBox(ftxui::Box{0, 12, 0, 0});
+        XX_TEST_EXPECT_TRUE(el->requirement().focused.enabled);
+        XX_TEST_EXPECT_EQ(el->requirement().focused.box.x_max, 10);
+        flow->setFocusedLink(-1);
+        el->SetBox(ftxui::Box{0, 12, 0, 0});
+        XX_TEST_EXPECT_FALSE(el->requirement().focused.enabled);
+    }
+
+    // ---------------- 代码块排版 (FlowCodeBlock) ----------------
+    {
+        using markdown::CellStyle;
+        using markdown::FlowCodeBlock;
+
+        // 无语言标签: 上内边距 + 代码行 + 下内边距; 代码文字从第 1 列起
+        auto block = std::make_shared<FlowCodeBlock>("a\nbb", "", CellStyle{});
+        const auto el = std::static_pointer_cast<ftxui::Node>(block);
+        XX_TEST_EXPECT_EQ(layoutHeight(el, 10), 4);
+        auto rows = renderRows(el, 10, 4);
+        XX_TEST_EXPECT_EQ(rows[0], std::string{});
+        XX_TEST_EXPECT_EQ(rows[1], std::string{" a"});
+        XX_TEST_EXPECT_EQ(rows[2], std::string{" bb"});
+        XX_TEST_EXPECT_EQ(rows[3], std::string{});
+
+        // 进度标签行在最上方 (左右各 1 空格), 并带暗色样式
+        auto labeled = std::make_shared<FlowCodeBlock>("x", "cpp", CellStyle{.dim = true});
+        const auto labeledEl = std::static_pointer_cast<ftxui::Node>(labeled);
+        XX_TEST_EXPECT_EQ(layoutHeight(labeledEl, 10), 4); // 标签 + 上边距 + 1 行 + 下边距
+        {
+            auto screen = ftxui::Screen::Create(
+                ftxui::Dimension::Fixed(10),
+                ftxui::Dimension::Fixed(4)
+            );
+            ftxui::Render(screen, labeledEl);
+            XX_TEST_EXPECT_EQ(screen.PixelAt(0, 0).character, std::string{" "});
+            XX_TEST_EXPECT_EQ(screen.PixelAt(1, 0).character, std::string{"c"});
+            XX_TEST_EXPECT_EQ(screen.PixelAt(4, 0).character, std::string{" "});
+            XX_TEST_EXPECT_TRUE(screen.PixelAt(1, 0).dim);
+            XX_TEST_EXPECT_EQ(screen.PixelAt(1, 2).character, std::string{"x"});
+        }
+
+        // 超宽代码行按可用宽度 (盒宽 - 2 列内边距) 硬拆
+        auto longLine = std::make_shared<FlowCodeBlock>("abcdefghij", "", CellStyle{});
+        const auto longEl = std::static_pointer_cast<ftxui::Node>(longLine);
+        XX_TEST_EXPECT_EQ(layoutHeight(longEl, 6), 5); // 4 + 4 + 2 列 -> 3 行 + 2 边距
+        auto longRows = renderRows(longEl, 6, 5);
+        XX_TEST_EXPECT_EQ(longRows[1], std::string{" abcd"});
+        XX_TEST_EXPECT_EQ(longRows[2], std::string{" efgh"});
+        XX_TEST_EXPECT_EQ(longRows[3], std::string{" ij"});
+
+        // 空代码块: 1 行空内容 + 上下内边距
+        auto empty = std::make_shared<FlowCodeBlock>("", "", CellStyle{});
+        XX_TEST_EXPECT_EQ(
+            layoutHeight(std::static_pointer_cast<ftxui::Node>(empty), 10),
+            3
+        );
+
+        // 末尾换行不算内容行; 宽字符占两列
+        auto trailing = std::make_shared<FlowCodeBlock>("line\n", "", CellStyle{});
+        XX_TEST_EXPECT_EQ(
+            layoutHeight(std::static_pointer_cast<ftxui::Node>(trailing), 10),
+            3
+        );
+        auto wide = std::make_shared<FlowCodeBlock>("汉字", "", CellStyle{});
+        const auto wideEl = std::static_pointer_cast<ftxui::Node>(wide);
+        XX_TEST_EXPECT_EQ(layoutHeight(wideEl, 6), 3);
+        auto wideRows = renderRows(wideEl, 6, 3);
+        XX_TEST_EXPECT_EQ(wideRows[1], std::string{" 汉字"});
     }
 
     return TestResult{g_markdown_flow_passed, g_markdown_flow_failed};
