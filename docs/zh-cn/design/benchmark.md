@@ -421,7 +421,8 @@ wall 6288 → 4737 ms)。
 - 负载: `agentxx_cli cli` + 本地 mock LLM (SSE 立即返回, 无 toolcall); 50 条 8KB
   用户消息 ≈ 100K token 上下文, 100 条 ≈ 200K token; 另加"5 条 × 80KB"作为
   "同样上下文、更少轮次"的对照
-- 每轮都要把整段上下文 (含历史) 重新序列化并发给 LLM, 是该负载内存与 CPU 的主要来源
+- 每轮都要把整段上下文 (含历史) 重新序列化并发给 LLM, 是该负载 CPU 与临时缓冲的主要
+  来源之一 (分配次数的分档归因与 2026-09-26 的更正见第 11 节)
 
 ### 10.1 启动与空闲 (无插件, 2026-09-26 / 88fee6e0 重测)
 
@@ -569,14 +570,35 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 | 6.0 KiB | 47.7 MiB | 8.1K | ≈162 | |
 | 128 B / 32 B | 19.8 / 7.2 MiB | 162.8K / 237.7K | ≈3.3K / ≈4.8K | |
 
-归因 (代码位置): 重写后的一次运行里图状态被反复整段序列化 ——
-`neograph/src/core/graph_engine.cpp:1370 / 1404 / 1460 / 1505 / 1541 / 1627 / 1637`
-(`state.serialize()`), 以及 `graph_executor.cpp:222`
-(`hash_state_for_cache(state.serialize())` —— 只为算一个缓存键就整段序列化) 与
-`graph_executor.cpp:772` (`state_snapshot`); 这些序列化都包含完整的 messages 通道,
-与实测的 `huge` + 128/257 KiB 三档块对应。旧基线里占大头的 8 KiB 档
-(当时推断"每条消息文本被拷贝约 13 次/轮") 现在只有 2.8 MiB / 365 块。
-`10 KiB` 与 `384 B` 两档的来源尚未定位 (协议帧/日志缓冲/流式渲染缓冲待确认)。
+归因 (代码位置, 2026-09-26 复核后更正): 图状态确实每步都在整段序列化, 但**位置与占比与初版归因不同**
+agentxx 路径上真正每步执行的是 `neograph/src/core/graph_engine.cpp:1503-1505`
+(VALUES 事件 `state.serialize()`, 而 agentxx 侧 `EventBridge::handleChannelWrite`
+不消费 `__state__`, 载荷作废) 与 coordinator 的 checkpoint
+(`graph_coordinator.cpp:258 / 290`, 由 `graph_engine.cpp:1615` 每 super-step 调用);
+`graph_executor.cpp:222` (`hash_state_for_cache`) 与 `graph_executor.cpp:772`
+(`state_snapshot`) 在 agentxx 上**不会执行** (节点缓存未启用, 图里没有 Send)。
+
+关键更正: **`huge` 与上下文大小无关** —— 50 × 100 B (5 KB 上下文) 与 50 × 8 KB
+(400 KB 上下文) 的 `huge` 都是 1.1 GiB / 553~570 块 (每轮固定 ≈11 块 × ≈2 MB),
+所以它不是"整段状态序列化"的产物: 去掉会话持久化 (`data_dir`)、把
+`model_context_max_token` 从 1M 改成 10K、把 mock 改成每响应 100 个 SSE chunk,
+三者都不改变它; 该档目前仍未定位 (采样方法与已排除项见
+[memory-1/plan.md §6](../../../resource/history/memory-1/plan.md))。
+
+真正随上下文增长的是:
+
+- `10 KiB` 档 = **逐条消息正文拷贝** (8 KB 正文 + 1 字节结尾落到该档): 50 × 8 KB 组
+  858 块/轮 ≈ 8.6 次/条消息; 把消息改成 1 KB 后该档降到 332 块, 而 1.2 KiB 档升到
+  716 块/轮 (≈7.2 次/条) ⇒ 旧基线"每条消息文本被拷贝约 13 次/轮"的现象**依然存在**,
+  只是换了档位 (旧基线的 8 KiB 档现在只剩 2.8 MiB / 365 块);
+- `384 B` / `128 B` / `32 B` 三档与消息**条数**成正比 (50 × 100 B 与 50 × 8 KB 三档
+  块数逐位相同, 5 × 80 KB 只有约 1/3) ⇒ typed 层逐条 `from_json` / `to_json` 的小对象。
+
+> 口径说明 (2026-09-26 复核补充): 上表"每轮块数" = 累计 ÷ 轮数, 含**启动成本**
+> (单进程启动自身就有 `malloc req~` 35.9 MiB / `huge` 14 块), 也把"每轮固定量"与
+> "随轮次累积量"混在一起; 改用 N 轮与 N+1 轮相减的差分口径后, 每轮增量为
+> ≈11 块 `huge` (≈22 MB), 详见
+> [memory-1/plan.md §0.4](../../../resource/history/memory-1/plan.md)。
 
 常驻内存对照 (系统分配器口径, 专用工作集 / WS / 提交, MB):
 
@@ -602,10 +624,14 @@ Linux 侧同批重测 (完整表见第 5 节; 与上一轮对照 RSS, MB):
 
 结论:
 
-1. **每轮分配次数上升约 2~4 倍**: 小上下文组的固定开销从 5.8 MB/轮 涨到 26 MB/轮,
-   说明增加的主要是"每轮固定要做的事"(状态序列化/协议/持久化), 不是随上下文增长的部分;
+1. **每轮分配次数上升约 2~4 倍**: 小上下文组的固定开销从 5.8 MB/轮 涨到 26 MB/轮;
+   差分口径下这 26 MB/轮 里 ≈22 MB 是**尚未定位的 `huge`** (≥512 KiB × ≈11 块/轮),
+   其余 ≈4 MB 才是协议/持久化/序列化等每轮固定项 (见 plan.md §0.4);
 2. **长会话与真实 server 侧常驻增长最明显**: `server_only` 235 轮 +5.0 MB,
    `real_tui_child` 客户端 +2.9 MB, 而同进程短场景基本持平 (cli startup 反而略降);
-3. **方向上先动"整段状态序列化"**: 它同时是分配次数 (huge 1.1 GiB) 与每轮固定开销的
-   主要来源, 收敛它比继续抠请求体链路的收益更大 (详见 plan.md 的 P0)。
+3. **方向上先动"每步整段序列化"与"逐条消息正文拷贝"**: ①去掉 `StreamMode::VALUES`
+   (`base_agent.cpp:986`, agentxx 侧不消费 `__state__`, 属零风险项) 与 checkpoint
+   序列化指纹化; ②收敛逐条消息正文拷贝 (10 KiB 档 ≈8.6 次/条) 与 32/128/384 B 小对象档;
+   `huge` 已证实与上下文无关, 需单独定位, 不能再算作序列化的产物
+   (详见 plan.md 的 §0.4 / §3 P0 / §6 问题 3)。
 

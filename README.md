@@ -345,24 +345,15 @@
 - `agent/test`: agentxx_test
     - 测试
 - `agent/third_party`:
-    - `neograph`: 图执行核心
+    - `neograph`: Agent-Graph 图构建、执行核心
         - [原项目](https://github.com/fox1245/NeoGraph)
         - [Fork 修改](https://github.com/coolight7/NeoGraph)
-            - Toolcall
-                - 调整 Tool 默认为异步执行
-                - 支持并发启动多个 Tool 同时开始执行
-                - toolcall 增加参数 thread_id
-                - McpTool 增加异步操作
-            - NodeInput 允许修改 state，以便支持修改 messages 消息上下文
-            - ChatMessage 支持记录修改历史，以实现记录模型重新生成消息、修改用户消息
-            - LLMCallNode 当 messages 中存在 system message 时不再额外添加
-            - GraphState 增加 overwrite 函数以支持强制覆盖变量
     - `codegraph-cpp`: 分析代码/md文件关系. 
         - [原项目](https://github.com/plutoaac/codegraph-cpp)
         - [Fork 修改](https://github.com/coolight7/codegraph-cpp):
             - 从仅支持 c++/python 解析，扩展到支持 js/ts/dart/rust/go/java/kotlin/bash/markdown 等 20+ 种编程语言和文件格式结构
-            - 扩展 Windows 编译运行支持
-    - `正则表达式库支持`: 可根据编译选项自定义选择支持
+            - 扩展 Windows、android 编译运行支持
+    - `正则表达式`: 可根据编译选项自定义选择支持
         - Hyperscan: 兼容 x86 Windows/Linux
         - std::regex: 兜底
 
