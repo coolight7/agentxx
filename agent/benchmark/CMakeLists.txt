@@ -158,9 +158,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake"
 agentxx_set_own_dir_rpath(agentxx_benchmark)
 
 # ===== 内存分配器: mimalloc (见 cmake/agentxx_mimalloc.cmake) =====
-# 内存基准要测量分配器行为 (RSS/归还), 故基准程序同样使用 mimalloc;
-# 静态链接 (默认) 时分配器并入 agentxx_benchmark, 动态链接时把分配器动态库
-# 装到 exec 目录 (与产物同目录, 随产物分发)
+# 内存基准要测量分配器行为 (RSS/归还), 基准程序与最终程序用同一个开关:
+# AGENTXX_ENABLE_MIMALLOC 关闭时 (默认) 基准测的是系统分配器, 打开时测 mimalloc
+# (静态链接时分配器并入 agentxx_benchmark, 动态链接时把分配器动态库装到 exec 目录)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_mimalloc.cmake")
 agentxx_mimalloc_attach(agentxx_benchmark)
 

@@ -141,10 +141,11 @@ if not defined AGENTXX_VERSION (
 if not defined AGENTXX_VERSION set "AGENTXX_VERSION=0.1.0"
 echo [version] Agentxx version: %AGENTXX_VERSION%
 
-rem mimalloc:
-rem - AGENTXX_ENABLE_MIMALLOC=OFF
-rem - AGENTXX_MIMALLOC_LINK=SHARED
-if not defined AGENTXX_ENABLE_MIMALLOC set "AGENTXX_ENABLE_MIMALLOC=ON"
+rem mimalloc (OFF by default; set AGENTXX_ENABLE_MIMALLOC=ON to enable):
+rem - AGENTXX_ENABLE_MIMALLOC=ON      enable mimalloc (long-context runs cost
+rem   clearly more resident memory, see docs/zh-cn/design/benchmark.md section 10)
+rem - AGENTXX_MIMALLOC_LINK=SHARED    link mimalloc.dll instead of the static lib
+if not defined AGENTXX_ENABLE_MIMALLOC set "AGENTXX_ENABLE_MIMALLOC=OFF"
 if not defined AGENTXX_MIMALLOC_LINK set "AGENTXX_MIMALLOC_LINK=SHARED"
 
 cmake -DAGENTXX_VERSION="%AGENTXX_VERSION%" ^

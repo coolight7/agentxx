@@ -131,9 +131,8 @@ if not defined OPENSSL_ROOT_DIR (
     )
 )
 
-rem mimalloc:
-rem - AGENTXX_ENABLE_MIMALLOC=OFF
-rem - AGENTXX_MIMALLOC_LINK=SHARED
+rem mimalloc (OFF by default; set AGENTXX_ENABLE_MIMALLOC=ON to enable):
+rem - AGENTXX_MIMALLOC_LINK=SHARED    link mimalloc.dll instead of the static lib
 if not defined AGENTXX_ENABLE_MIMALLOC set "AGENTXX_ENABLE_MIMALLOC=OFF"
 if not defined AGENTXX_MIMALLOC_LINK set "AGENTXX_MIMALLOC_LINK=SHARED"
 

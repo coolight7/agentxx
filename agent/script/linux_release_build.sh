@@ -114,6 +114,8 @@ if [[ -f "$_ver_file" ]]; then
 fi
 echo "[version] Agentxx version: ${AGENTXX_VERSION:-0.1.0}"
 
+# 内存分配器: mimalloc 默认关闭 (实测长上下文负载下常驻内存明显更高, 见
+# docs/zh-cn/design/benchmark.md 第 10 节); 需要时 AGENTXX_ENABLE_MIMALLOC=ON
 cmake -B "$build_dir" -S "$src_dir" \
     -DAGENTXX_VERSION="${AGENTXX_VERSION}" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
@@ -126,7 +128,7 @@ cmake -B "$build_dir" -S "$src_dir" \
     -DAGENTXX_ENABLE_BOOST_PROCESS=ON \
     -DXX_IS_RELEASE_D=1 \
     -DCMAKE_BUILD_TYPE=Release \
-    -DAGENTXX_ENABLE_MIMALLOC="${AGENTXX_ENABLE_MIMALLOC:-ON}" \
+    -DAGENTXX_ENABLE_MIMALLOC="${AGENTXX_ENABLE_MIMALLOC:-OFF}" \
     -DAGENTXX_MIMALLOC_LINK="${AGENTXX_MIMALLOC_LINK:-STATIC}"
 
 if [[ $? -ne 0 ]]; then

@@ -361,9 +361,13 @@ path/to/agentxx_test string_util regex
     `agentxx_cli` -3.2%, `libagentxx.so` -2.7% (未 strip 产物因符号表合并看起来更多)
   - 符号表裁剪仍由发布脚本完成 (`script/*_build.sh` 的 `strip`), 不在链接期做
     (直接 `cmake --build` 的产物会保留符号表, 属预期)
-- 内存分配器 (mimalloc, 默认启用, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):
-  - 开关在顶层 `agent/CMakeLists.txt`: `AGENTXX_ENABLE_MIMALLOC` (默认 ON) 与
+- 内存分配器 (mimalloc, **默认关闭**, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):
+  - 开关在顶层 `agent/CMakeLists.txt`: `AGENTXX_ENABLE_MIMALLOC` (默认 OFF) 与
     `AGENTXX_MIMALLOC_LINK=STATIC|SHARED` (默认 STATIC, 静态并入产物);
+    各构建脚本默认也不打开 (需要时设 `AGENTXX_ENABLE_MIMALLOC=ON`);
+    默认关闭的原因: 长上下文运行 (每轮都把整段上下文序列化/渲染) 下它保留已释放的
+    大块内存、常驻是系统分配器的 2~3.7 倍, 而 CPU 只省约 10%
+    (Windows release 实测见 docs/zh-cn/design/benchmark.md 第 10 节)
     源码是 `agent/third_party/mimalloc` 子模块, 经 ExternalProject 构建安装
     (`MI_INSTALL_TOPLEVEL` / `MI_OPT_ARCH=OFF` 通用 CPU 基线 / `MI_ALLOW_THP=OFF`)
   - 只作用于**最终程序** (`agentxx_cli`/`agentxx_test`/`agentxx_benchmark`), 接入逻辑
@@ -387,7 +391,9 @@ path/to/agentxx_test string_util regex
     引用的 `malloc` 放入 `.dynsym` 从而全进程插入)。强制接管只能用
     `DYLD_INSERT_LIBRARIES` 预加载 mimalloc 动态库 (非自包含分发)
   - 实测 (Release, 对比调优后的 glibc): 200K 上下文服务端 RSS +5.5~6.6 MB, 但 user
-    -27% / sys -67% / wall -25%; 数据见 docs/zh-cn/design/benchmark.md 第 9 节
+    -27% / sys -67% / wall -25%; 数据见 docs/zh-cn/design/benchmark.md 第 9 节;
+    更贴近日常的"长上下文 + 每轮大缓冲"负载在 Windows 上实测 (第 10 节): 专用工作集
+    2~3.7 倍, 总 CPU 只省 ~10% —— 这是默认改为关闭的依据
 - 内存占用优化 (与体积无关, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):
   - `agentxx::util::tuneProcessAllocator()` (BaseAgent 构造时调用; 客户端 main 也调用):
     glibc 下 `mallopt(M_ARENA_MAX, 1)` —— 线程多时 glibc 默认每个线程建一个 arena

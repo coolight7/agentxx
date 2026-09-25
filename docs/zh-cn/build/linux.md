@@ -32,7 +32,7 @@
 | `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动构建 |
 | `AGENTXX_ENABLE_HYPERSCAN=OFF` | 关闭 hyperscan, 则不需要 ragel |
 | `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (debug 默认 4, release 默认 CPU 核数) |
-| `AGENTXX_ENABLE_MIMALLOC=OFF` | 关闭 mimalloc 内存分配器 (默认 ON, 用系统 glibc 分配器) |
+| `AGENTXX_ENABLE_MIMALLOC=ON` | 打开 mimalloc 内存分配器 (**默认 OFF**, 用系统 glibc 分配器; 长上下文常驻内存代价见 benchmark.md 第 10 节) |
 | `AGENTXX_MIMALLOC_LINK=SHARED` | 动态链接 mimalloc (`libmimalloc.so`), 默认 `STATIC` 静态并入产物 |
 
 ## 手动编译
@@ -128,12 +128,12 @@ cd {项目根目录}
 
 ## 内存分配器 (mimalloc)
 
-默认使用 [mimalloc](https://github.com/microsoft/mimalloc) 接管最终程序的
-`malloc/free/new/delete` (源码为 `agent/third_party/mimalloc` 子模块), 可用开关:
+默认使用系统分配器 (glibc), 可选 [mimalloc](https://github.com/microsoft/mimalloc) 接管
+最终程序的 `malloc/free/new/delete` (源码为 `agent/third_party/mimalloc` 子模块), 可用开关:
 
 | cmake 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `-DAGENTXX_ENABLE_MIMALLOC=OFF` | ON | 关闭后回到系统分配器 (glibc), 同时不再构建 mimalloc |
+| `-DAGENTXX_ENABLE_MIMALLOC=ON` | OFF | 打开后由 mimalloc 接管, 同时构建 mimalloc 库; **默认保持关闭**, 原因是长上下文负载下常驻内存明显更高 (见 benchmark.md 第 10 节) |
 | `-DAGENTXX_MIMALLOC_LINK=STATIC` | STATIC | 分配器静态并入 `agentxx_cli`/`agentxx_test`/`agentxx_benchmark` (无额外运行库依赖) |
 | `-DAGENTXX_MIMALLOC_LINK=SHARED` | | 链接 `libmimalloc.so.3`, 由 `install` 一并装到 `exec/` (与产物同目录, 随产物分发) |
 

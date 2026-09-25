@@ -59,18 +59,19 @@ pkg-config --version
 | `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已安装路径, 优先于自动准备 |
 | `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (默认 4) |
 | `AGENTXX_ENABLE_HYPERSCAN=OFF` | 传给 cmake 关闭 hyperscan, 则不需要 ragel |
-| `AGENTXX_MIMALLOC_LINK=SHARED` | 传给 cmake 改为动态链接 mimalloc (默认 `STATIC`) |
+| `AGENTXX_ENABLE_MIMALLOC=ON` | 打开 mimalloc 内存分配器 (**默认 OFF**, 用 CRT 分配器; 长上下文常驻内存代价见 benchmark.md 第 10 节) |
+| `AGENTXX_MIMALLOC_LINK=SHARED` | 仅 mimalloc 打开时生效: 传给 cmake 改为动态链接 mimalloc (默认 `STATIC`) |
 
 ## 内存分配器 (mimalloc)
 
-默认使用 [mimalloc](https://github.com/microsoft/mimalloc) 接管最终程序的
+默认使用系统分配器 (CRT), 可选 [mimalloc](https://github.com/microsoft/mimalloc) 接管最终程序的
 `malloc/free/new/delete` (源码为 `agent/third_party/mimalloc` 子模块, 只作用于
 `agentxx_cli` / `agentxx_test` / `agentxx_benchmark`; `libagentxx.dll` 与插件动态库
 跟随宿主分配器):
 
 | cmake 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| `-DAGENTXX_ENABLE_MIMALLOC=OFF` | ON | 关闭后回到 CRT 分配器 |
+| `-DAGENTXX_ENABLE_MIMALLOC=ON` | OFF | 打开后由 mimalloc 接管, 同时构建 mimalloc 库; **默认保持关闭**, 原因是长上下文负载下常驻内存明显更高 (见 benchmark.md 第 10 节) |
 | `-DAGENTXX_MIMALLOC_LINK=SHARED` | STATIC | 链接 `mimalloc.dll` (并把 `mimalloc.dll` + `mimalloc-redirect.dll` 装到 `exec/`) |
 
 - 注意: MSVC 使用动态 CRT (`/MD`) 时, **静态链接的 mimalloc 不会覆盖 CRT 分配器**

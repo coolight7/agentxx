@@ -73,7 +73,9 @@
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少; 编译优化 控制导出符号，裁剪无用符号
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan 等可选库、采用 -Os/-Oz 体积编译优化
 - 以下是`Release倾向性能优化编译`,`添加了Hyperscan等所有可选依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/09/17, commit: 737e79106acf2bdb67668ae2456eafd41bb1a03c`
-- **内存占用** (外置加载5个常用插件 agentxx_filesystem, agentxx_execute_command, agentxx_system, agentxx_websearch, agentxx_planning):
+- **内存占用** :
+    -   插件加载: 外置加载5个常用插件 agentxx_filesystem, agentxx_execute_command, agentxx_system, agentxx_websearch, agentxx_planning
+    -   如果编译时启用 mimalloc，内存分配性能会提升 (windows ~ 10%, linux ~ 33%), 但内存占用近乎翻3倍
 
 | agentxx_cli Target | 初始化 RAM | 100K 上下文 | 200K上下文 | TIP |
 |---|---|---|---|---|

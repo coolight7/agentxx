@@ -278,7 +278,8 @@ mmap/trim 阈值, 后者实测会增加 15% 场景耗时)。
 ## 9. 内存分配器 mimalloc 实测 (2026-09)
 
 构建开关与接入范围见 `docs/zh-cn/design/index.md` "内存占用与分配器调整"
-(`AGENTXX_ENABLE_MIMALLOC`, 默认 ON; `AGENTXX_MIMALLOC_LINK`, 默认 STATIC)。
+(`AGENTXX_ENABLE_MIMALLOC` —— **默认关闭**, 依据是第 10 节 Windows 侧的
+长上下文实测; `AGENTXX_MIMALLOC_LINK`, 默认 STATIC)。
 对比对象是**调优后的 glibc** (即第 8 节的产物: `M_ARENA_MAX=1` + 轮末
 `malloc_trim(0)`), 因此本节的差值是两个都已针对常驻内存优化过的分配器之间的差值,
 不是 mimalloc 与"未调优 glibc"的差值。
@@ -316,5 +317,112 @@ CPU 与耗时 (真实 server 进程驱动 705 轮 WebSocket 会话, 200K 上下�
   2 MB 大页为单位保留内存、释放小对象后不拆页, 同一场景 RSS 从 ~19.6 MB 涨到
   ~37.4 MB (匿名页); 本项目构建时固定 `-DMI_ALLOW_THP=OFF`
 - 结论: 用 `AGENTXX_ENABLE_MIMALLOC` 切换两类分配器, 需要常驻内存取 glibc 组合
-  (OFF), 需要 CPU/延迟与长跑抗碎片取 mimalloc (ON, 默认)
+  (OFF), 需要 CPU/延迟与长跑抗碎片取 mimalloc (ON)。本节场景的差值是 MB 量级, 换成
+  "长上下文 + 每轮大缓冲"的运行形态后差距放大到 2~3.7 倍且 CPU 收益只剩约 10%,
+  故默认值改为关闭 (实测见第 10 节)
+
+## 10. 长上下文内存: mimalloc 开关对照 (Windows release, 2026-09)
+
+第 9 节量级在几 MB, 只覆盖 Linux 侧的短/中上下文场景。本节针对更贴近日常使用的
+"长上下文 + 每轮大量临时缓冲"形态 (每轮都要把整段上下文序列化给 LLM、渲染一遍、
+写入会话库): **同一份源码、同一个构建目录, 只切换 `AGENTXX_ENABLE_MIMALLOC`**,
+配置 (无插件 + 单个 mock 模型) 与驱动脚本完全相同, 因此差值是分配器本身的差异。
+
+四组对照:
+
+| 组 | 说明 |
+|---|---|
+| 旧版 9/17 | `agent/build/output/agentxx-0.3.0-windows-x64.zip` 内的 `agentxx_cli.exe` (系统分配器 + 旧代码), 作为"上一个版本"基准 |
+| mimalloc 默认 | 当前代码 + `AGENTXX_ENABLE_MIMALLOC=ON` (当时 Windows release 脚本默认 `MIMALLOC_LINK=SHARED`) |
+| mimalloc 调参 | 当前代码 + mimalloc + 运行期 `MIMALLOC_PURGE_DELAY=0` + `MIMALLOC_PAGE_COMMIT_ON_DEMAND=1` |
+| no-mimalloc | 当前代码 + `-DAGENTXX_ENABLE_MIMALLOC=OFF` (系统分配器; 与"mimalloc 默认"只差这一个开关) |
+
+口径与负载:
+
+- 专用工作集 = 任务管理器"内存"列 (`Working Set - Private`); WS = 工作集;
+  提交 = 私有字节; 单位 MB
+- 负载: `agentxx_cli cli` + 本地 mock LLM (SSE 立即返回, 无 toolcall); 50 条 8KB
+  用户消息 ≈ 100K token 上下文, 100 条 ≈ 200K token; 另加"5 条 × 80KB"作为
+  "同样上下文、更少轮次"的对照
+- 每轮都要把整段上下文 (含历史) 重新序列化并发给 LLM, 是该负载内存与 CPU 的主要来源
+
+### 10.1 启动与空闲 (无插件)
+
+| 场景 | 旧版 9/17 | mimalloc 默认 | no-mimalloc (同代码) |
+|---|---|---|---|
+| `--version` 峰值提交 / 峰值虚拟内存 | 2.17~2.36 / 4210 | 5.36~5.76 / 5238 | **2.18 / 4211** |
+| server 空闲: WS / 专用 / 提交 | 11.13 / 1.65 / 2.93 | 12.21 / 2.71 / 13.73 | **10.90 / 1.65 / 2.99** |
+| TUI 空闲: WS / 专用 / 提交 | 14.52 / 2.71 / 4.22 | 16.94 / 5.07 / 41.85 | **14.41 / 2.82 / 5.05** |
+
+关掉 mimalloc 后启动/空闲数据与旧版一致 (server 专用工作集同为 1.65 MB): 第 9 节
+记录的"启动 +5.6 MB"在 Windows 上同样存在, 且全部来自分配器 —— 1.0 GiB 的 arena 预留
+只占虚拟内存 (不影响任务管理器"内存"列), 提交量来自它按 64 KiB 片整块提交页、释放后
+至少 1 s 才归还 (且归还只在下一次分配时被触发)。
+
+### 10.2 长上下文 (专用工作集 / WS / 提交)
+
+| 场景 | 旧版 9/17 | mimalloc 默认 | mimalloc 调参 | no-mimalloc (同代码) |
+|---|---|---|---|---|
+| ≈100K token (50 × 8KB) | 10.57 / 24.78 / 13.41 | 20.14 / 34.39 / 69.91 | 15.07 / 29.32 / 20.36 | **7.95 / 21.95 / 10.36** |
+| ≈100K token (5 × 80KB) | 5.97 / 20.18 | 17.94 / 32.18 | 12.61 / 26.86 | **6.09 / 20.09** |
+| ≈200K token (100 × 8KB) | – | 51.36 / 66.16 / 95.09 | – | **13.75 / 28.29 / 17.79** |
+
+同一轮量级下 mimalloc 自己报的账 (50 × 8KB, 退出时 `MIMALLOC_SHOW_STATS=1`):
+`malloc req~ 1.3 GiB` (累计分配)、`binned current 582.8 KiB` (真正存活)、
+`arenas committed peak 67.5 MiB / current 12.3 MiB`、`purged 79.7 MiB` —— "分配-释放-保留"
+的量级远大于存活数据, 而系统分配器对大块释放会直接交还系统。
+
+### 10.3 CPU (100 轮 × 8KB, 子进程 CPU 时间)
+
+| | 总 CPU | user | kernel |
+|---|---|---|---|
+| mimalloc | 1.625 s | 0.672 s | 0.953 s |
+| no-mimalloc | 1.797 s | 0.906 s | 0.891 s |
+
+用户态 −26%、内核态 +7%、总 CPU 只低约 10% (第 9 节 Linux 侧 −27%/−67% 出自 705 轮
+WebSocket 长跑, 且 glibc arena 的 mmap/munmap 抖动比 Windows CRT 明显)。
+
+### 10.4 结论
+
+1. **长上下文内存差距全部来自 mimalloc, 当前代码本身更省**: 同代码关掉它后
+   100K 上下文专用工作集 7.95 MB, 比旧版 9/17 (10.57 MB) 还低约 25%; 打开它变成
+   20.14 MB (200K 上下文: 13.75 → 51.36 MB, 3.7 倍)
+2. **额外占用随上下文超线性增长**: 50 条消息时比 no-mimalloc 多 12.2 MB, 100 条时
+   多 37.6 MB (上下文翻倍 → 额外占用翻 3 倍)。原因是每轮的临时大缓冲随上下文线性
+   变大, 而 mimalloc 把释放的页留在自己的队列里: 进程空闲时没有分配动作, 惰性 purge
+   不会触发, 常驻就被"上一轮峰值"钉住
+3. **调参只能缓解**: `PURGE_DELAY=0` + `PAGE_COMMIT_ON_DEMAND=1` 把 100K 从 20.1 降到
+   15.1 MB (提交 69.9 → 20.4 MB), 仍高于系统分配器。想保留 mimalloc 又要压住提交量,
+   可在构建 mimalloc 时固化
+   `-DMI_EXTRA_CPPDEFS="page_commit_on_demand=1;purge_delay=0"`, 并在轮末 (或上下文
+   超过阈值时) 调用 `mi_collect(true)`, 等价于系统分配器路径的 `malloc_trim(0)`
+4. **收益与代价不匹配**: 总 CPU 只省约 10%, 换来 2~3.7 倍的常驻内存
+5. 因此 2026-09 起**默认关闭**: 顶层 cmake option 默认 `OFF`, 各构建脚本
+   (`windows_{debug,release}_build.bat`、`linux_{debug,release}_build.sh`、
+   `macos_{debug,release}_build.sh` 以及 Android/交叉编译脚本) 默认也不打开;
+   需要时用 `AGENTXX_ENABLE_MIMALLOC=ON` 显式打开 (Windows 上要真正接管分配器还需
+   `AGENTXX_MIMALLOC_LINK=SHARED`)
+
+### 10.5 复现方式
+
+- 两个变体都在**同一个构建目录**里产出 (只差一个开关, 其余参数/依赖完全一致):
+
+```bash
+# no-mimalloc
+cmake -B agent/build/windows-release -S agent -DAGENTXX_ENABLE_MIMALLOC=OFF
+cmake --build agent/build/windows-release --config Release --parallel 6
+
+# mimalloc (对照)
+cmake -B agent/build/windows-release -S agent -DAGENTXX_ENABLE_MIMALLOC=ON
+cmake --build agent/build/windows-release --config Release --parallel 6
+```
+
+- 负载侧: 起一个本地 OpenAI 兼容 mock 服务 (只回 SSE), 配置里写
+  `base_url: http://127.0.0.1:<port>/v1` 且 `plugin.list: []`, 然后用
+  `agentxx_cli cli --config <cfg>` 逐条送入固定大小的用户消息 (每条一轮),
+  其间按固定间隔采样专用工作集/工作集/提交
+- Windows 专用工作集口径: `Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate`
+  (任务管理器"内存"列); WS / 提交取 `WorkingSet64` / `PrivateMemorySize64`
+- 若要把该场景纳入常驻基准, 可参考 `resource_cli` 的 mock LLM 与上下文模板, 新增一个
+  "逐轮长上下文" 场景 (现有 `resource_cli` 是注入上下文, 序列化次数比真实逐轮对话少)
 

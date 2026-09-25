@@ -1538,7 +1538,10 @@ Client                              Server
 ### 内存占用与分配器调整
 
 - **分配器可选 mimalloc** (`agent/CMakeLists.txt` 的 `AGENTXX_ENABLE_MIMALLOC`,
-  默认 ON; `AGENTXX_MIMALLOC_LINK=STATIC|SHARED`, 默认 STATIC):
+  **默认 OFF**; `AGENTXX_MIMALLOC_LINK=STATIC|SHARED`, 默认 STATIC):
+  - 默认关闭的原因: 它把释放的内存留在自己的页队列里 (惰性归还), 在"每轮都要
+    序列化/渲染整段上下文"的长上下文形态下, 常驻内存是系统分配器的 2~3.7 倍
+    (Windows release 实测见 [benchmark.md](benchmark.md) 第 10 节)
   - 作用范围只有**最终程序** (`agentxx_cli` / `agentxx_test` / `agentxx_benchmark`),
     接入逻辑集中在 `agent/cmake/agentxx_mimalloc.cmake` (分配器为第三方依赖
     [mimalloc](https://github.com/microsoft/mimalloc), 源码在 `agent/third_party/mimalloc`):
@@ -1570,10 +1573,11 @@ Client                              Server
   - 实测 (Release, 同机同场景, 对比调优后的 glibc): 常驻内存略升 (200K 上下文
     服务端 +5.5~6.6 MB, 启动 +0.4 MB), CPU 明显下降 (真实 server 驱动 705 轮:
     user 2280→1670 ms, sys 1120→370 ms, wall 3611→2700 ms); 详见
-    [benchmark.md](benchmark.md) 的"内存分配器 mimalloc 实测"
-  - 接入是否真正生效由测试模块 `allocator` 固定 (`agent/test/core/test_allocator.cpp`):
-    校验 `malloc` 与 `operator new` 返回的指针落在 mimalloc 堆内 (覆盖"链接上了但
-    没接管"的静默失效); 未接入 mimalloc 的构建跳过该模块
+    [benchmark.md](benchmark.md) 的"内存分配器 mimalloc 实测" (第 9 节 Linux,
+    第 10 节 Windows 长上下文 —— 后者是默认改为关闭的依据)
+  - 接入是否真正生效可这样确认: 启动日志会打印 `[Allocator] mimalloc <主.次.修订>`
+    (见 `agent/client/main.cpp`, 只在启用时输出), 运行期可用 `MIMALLOC_SHOW_STATS=1`
+    看分配器自己的页/arena 统计; 目前没有专门的测试模块覆盖"链接上了但没接管"
 - **进程级分配器参数** (`agentxx/util/allocator_tuning.h`, 由 `BaseAgent` 构造时自动调用):
   - glibc: `M_ARENA_MAX=1` —— 只使用主 arena。glibc 默认按线程竞争各建一个 arena,
     每个 arena 预留 64 MB 地址空间, 实测进程 VmSize 因此达到 400 MB ~ 1.3 GB;

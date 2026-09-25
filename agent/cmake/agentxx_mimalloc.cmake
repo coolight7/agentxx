@@ -20,8 +20,9 @@
 #   agentxx_mimalloc_attach(<target>)
 #
 # 开关 (顶层 agent/CMakeLists.txt 定义, 经嵌套构建下发):
-# - AGENTXX_ENABLE_MIMALLOC: 是否启用 (Debug + sanitizer 场景顶层会自动关闭:
-#   ASan 需要独占 malloc, 与分配器覆盖互斥)
+# - AGENTXX_ENABLE_MIMALLOC: 是否启用 (**默认 OFF**; 实测长上下文负载下常驻内存是
+#   系统分配器的 2~3.7 倍, 见 docs/zh-cn/design/benchmark.md 第 10 节; Debug +
+#   sanitizer 场景顶层也会自动关闭: ASan 需要独占 malloc, 与分配器覆盖互斥)
 # - AGENTXX_MIMALLOC_LINK: STATIC (默认, 分配器并入产物) / SHARED (链接
 #   libmimalloc.so / mimalloc.dll)
 #

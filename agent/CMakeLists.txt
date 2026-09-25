@@ -96,7 +96,10 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
 # - macOS/iOS 上 **不可用**: Mach-O 使用两层次命名空间, libc++/系统框架对
 #   malloc/free 的引用在链接期已绑定到 libSystem, 最终程序静态覆盖的分配器
 #   无法对其生效 (也不导出 _malloc), 跨模块 free 必然崩溃。故 macOS/iOS 自动关闭
-option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx_cli/test/benchmark). Disabled automatically on macOS/iOS." ON)
+# - 默认关闭 (OFF): 实测在"每轮都要序列化/渲染整段上下文"的运行形态下, 它的常驻
+#   内存是 glibc/CRT 的 2~3.7 倍 (Windows release 实测数据见
+#   docs/zh-cn/design/benchmark.md 第 10 节); 需要换分配性能/抗碎片时显式打开
+option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx_cli/test/benchmark). OFF by default: long-context runs cost 2~3.7x resident memory (docs/zh-cn/design/benchmark.md section 10). Disabled automatically on macOS/iOS." OFF)
 # 链接方式 (外部可指定, 默认静态):
 # - STATIC: 静态库并入产物, 内置分配器 (无额外运行库依赖, 分发单文件即可)
 # - SHARED: 链接 libmimalloc.so / mimalloc.dll (分配器可独立升级/替换)
