@@ -120,8 +120,8 @@ ContainerSnapshot snapshotContainers(
     if (session) {
         out.fullHistoryCount = session->viewMessages.size();
         out.fullHistoryBytes = estimateHistoryBytes(session->viewMessages);
-        out.llmMsgCount      = session->llmMessages.size();
-        out.llmMsgBytes      = estimateJsonBytes(session->llmMessages);
+        out.llmMsgCount      = session->llmMessagesJson().size();
+        out.llmMsgBytes      = estimateJsonBytes(session->llmMessagesJson());
     }
     auto it = ctx->middlewareHandleContext->shareStore.find(std::string{sessionId});
     if (it != ctx->middlewareHandleContext->shareStore.end()) {

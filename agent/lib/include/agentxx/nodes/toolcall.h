@@ -108,7 +108,13 @@ public:
         neograph::graph::NodeOutput&                                                      out
     ) override;
 
-    static void defStdoutLogOnToolcallStart(neograph::graph::NodeInput& in, size_t limitOutput = 0);
+    /// 打印本次 toolcall 的调用参数 (调试日志; 上下文取自会话, 需要调用方传入
+    /// agent 上下文; 未传时仅打印空参数列表)
+    static void defStdoutLogOnToolcallStart(
+        neograph::graph::NodeInput&                          in,
+        size_t                                               limitOutput = 0,
+        const std::shared_ptr<agentxx::agent::AgentContext>& ctx         = nullptr
+    );
 
     static void defStdoutLogOnToolcallEnd(
         const neograph::graph::NodeInput& in,

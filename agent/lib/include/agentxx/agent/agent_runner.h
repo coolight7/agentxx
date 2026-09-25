@@ -41,12 +41,12 @@ public:
         std::function<void(std::string_view node, std::string_view value, std::string_view handle)>
             onInterruptTip;
 
-        /// 中断处理完成、resume 前的回调 (根: 将 session llmMessages 写回
-        /// engine state; 子代理: 空)
+        /// 中断处理完成、resume 前的回调 (根: 请求一次上下文节流落盘;
+        /// 子代理: 空)
         std::function<asio::awaitable<void>(std::string_view sessionId)> onBeforeResume;
 
-        /// 每次 run/resume 返回后的回调 (根: 从中断保存的 tempMessages 恢复
-        /// session llmMessages; 子代理: 空)
+        /// 每次 run/resume 返回后的回调 (根: 转发运行结果供调用方观察;
+        /// 上下文由会话自行维护, 无需回写; 子代理: 空)
         std::function<void(neograph::graph::RunResult& result, std::string_view sessionId)>
             onRunResult;
     };

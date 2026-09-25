@@ -286,9 +286,11 @@ static agentxx::middleware::SummarizationToolHandle makeBothTruncateHandle() {
 }
 
 // ---------------------------------------------------------------------------
-// 运行 onModelcallRunFunc 的辅助: 构造 GraphState + RunContext + NodeInput
+// 运行 onModelcallRunFunc 的辅助: 构造会话上下文 + GraphState + RunContext + NodeInput
 // ---------------------------------------------------------------------------
 
+/// 运行前把消息写入会话 (会话是 LLM 上下文的唯一权威, 图状态不再承载 messages 通道),
+/// 运行后从会话读回中间件处理过的上下文
 static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
     const std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle>& handle,
     const std::shared_ptr<agentxx::agent::AgentContext>&                       ctx,
@@ -296,16 +298,8 @@ static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
     std::vector<neograph::ChatMessage>                                         messages,
     std::optional<size_t> apiTokenUsage = std::nullopt
 ) {
-    neograph::graph::GraphState state;
-    state.init_channel(
-        "messages",
-        neograph::graph::ReducerType::OVERWRITE,
-        nullptr,
-        neograph::json::array()
-    );
-    neograph::json msgsJson;
-    neograph::to_json(msgsJson, messages);
-    state.overwrite("messages", std::move(msgsJson));
+    auto session = ctx->getSession(sessionId);
+    session->replaceMessages(std::move(messages));
 
     // 注入/清除 api token usage (模拟上一次 LLM 调用返回的 usage)
     if (apiTokenUsage.has_value()) {
@@ -321,11 +315,12 @@ static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
         );
     }
 
+    neograph::graph::GraphState state;
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = std::string{sessionId};
     neograph::graph::NodeInput in{state, runCtx, nullptr};
     co_await handle->onModelcallRunFunc(in);
-    co_return in.state.get_messages();
+    co_return session->messages();
 }
 
 } // namespace
@@ -1841,11 +1836,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
         };
         neograph::json neoMsgsJson;
         neograph::to_json(neoMsgsJson, msgs);
-        env->session()->llmMessages = agentxx::util::fromNeographJson(neoMsgsJson);
+        env->session()->replaceMessagesFromJson(agentxx::util::fromNeographJson(neoMsgsJson));
 
         bool ok = co_await env->handle->compactSessionContext(env->sessionId);
         XX_TEST_EXPECT_TRUE(ok);
-        XX_TEST_EXPECT_TRUE(env->session()->llmMessages.is_array());
+        XX_TEST_EXPECT_TRUE(env->session()->llmMessagesJson().is_array());
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         const auto& vm = env->session()->viewMessages.back();
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context "));
@@ -2019,14 +2014,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
         };
         neograph::json neoMsgsJson;
         neograph::to_json(neoMsgsJson, msgs);
-        env->session()->llmMessages = agentxx::util::fromNeographJson(neoMsgsJson);
+        env->session()->replaceMessagesFromJson(agentxx::util::fromNeographJson(neoMsgsJson));
 
         bool ok = co_await env->handle->compactSessionContext(env->sessionId);
         XX_TEST_EXPECT_TRUE(ok);
         // 摘要超长 → Compact 结果超限 → 降级硬截断:
         // system + note + recent (30% 预算收全部 8 条) = 10 条
         std::vector<neograph::ChatMessage> res;
-        for (const auto& item : env->session()->llmMessages) {
+        for (const auto& item : env->session()->llmMessagesJson()) {
             neograph::ChatMessage msg;
             neograph::from_json(agentxx::util::toNeographJson(item), msg);
             res.push_back(std::move(msg));
@@ -2071,8 +2066,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
             // 压缩结果同步回会话上下文 (崩溃后重启不丢压缩结果, 也不会立即重复压缩)
             auto& session = *env->session();
-            XX_TEST_EXPECT_TRUE(session.llmMessages.is_array());
-            XX_TEST_EXPECT_EQ(session.llmMessages.size(), res.size());
+            XX_TEST_EXPECT_TRUE(session.llmMessagesJson().is_array());
+            XX_TEST_EXPECT_EQ(session.llmMessagesJson().size(), res.size());
         }
 
         // 提示消息: 每轮各一条且均已更新为结果文本; 无停留在 "Summarizing..." 的残留
@@ -2098,7 +2093,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         );
         // 压缩结果中保留摘要消息 (最近一次成功压缩的产物仍在上下文中)
         bool hasSummaryNote = false;
-        for (const auto& item : env->session()->llmMessages) {
+        for (const auto& item : env->session()->llmMessagesJson()) {
             if (item.value("content", std::string{}).starts_with("[Previous conversation summary]")
                     == true
                 || item.value("content", std::string{})
@@ -2204,10 +2199,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
                 .empty()
         );
         // 压缩结果写回会话上下文 (崩溃后重启不丢)
-        XX_TEST_EXPECT_TRUE(session->llmMessages.is_array());
-        XX_TEST_EXPECT_EQ(session->llmMessages.size(), res.size());
+        XX_TEST_EXPECT_TRUE(session->llmMessagesJson().is_array());
+        XX_TEST_EXPECT_EQ(session->llmMessagesJson().size(), res.size());
         bool hasSummaryNote = false;
-        for (const auto& item : session->llmMessages) {
+        for (const auto& item : session->llmMessagesJson()) {
             if (item.value("content", std::string{})
                     .starts_with("[Previous conversation summary]: \nresume summary")) {
                 hasSummaryNote = true;

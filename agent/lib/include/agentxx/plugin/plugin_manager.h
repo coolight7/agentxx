@@ -439,6 +439,24 @@ public:
         int32_t            level
     );
 
+    /// 会话 LLM 上下文 (Json 数组文本; 宿主 alloc, 失败返回空串)
+    /// - 上下文由会话持有 (图状态不含 messages 通道), 插件经 agentxx.agent.context 表查询
+    /// - 仅 io 线程调用 (vtable 经 ioCallSync 投递)
+    PluginxxString getSessionMessages(PluginxxStringView session_id);
+
+    /// 会话 LLM 上下文条数 (会话不存在返回 -1)
+    int64_t sessionMessagesCount(PluginxxStringView session_id);
+
+    /// 写会话 LLM 上下文 (插件图节点对 `messages` 通道的写入转发; 仅 io 线程)
+    /// - overwrite=false 追加, true 整体替换; 空的 overwrite 视为误写被忽略
+    ///   (按旧契约读不到消息的插件可能以为上下文为空, 直接覆盖会清空上下文)
+    /// - 返回本次写入的消息条数 (0 表示未写入)
+    size_t writeSessionMessages(
+        std::string_view         session_id,
+        const utilxx_base::Json& messages,
+        bool                     overwrite
+    );
+
     void emitMessageTip(
         PluginInstance*  inst,
         std::string_view session_id,

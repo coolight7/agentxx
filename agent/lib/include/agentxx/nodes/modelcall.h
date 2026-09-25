@@ -19,11 +19,21 @@ public:
     /// - 仅主 agent 的 llm 节点启用; subagent 使用自身固定的 provider
     inline static const auto defUseModelRegistryKey = std::string{"xx_useModelRegistry"};
 
+    /// NodeContext.extra_config 中标记是否由本节点自动给出循环路由的 key (默认 true)
+    /// - true (默认图): 本节点按"是否有 tool_calls"返回 Command (tools / agent_end),
+    ///   图定义只需给出静态默认边 (llm -> agent_end), 不再依赖读上下文的条件边
+    /// - false: 不返回 Command, 完全交给图定义的边/条件边决定
+    ///   (插件重写图定义并把 llm 接到自定义路由节点时使用)
+    inline static const auto defAutoRouteKey = std::string{"xx_autoRoute"};
+
 protected:
 
     /// 是否启用运行时动态模型切换 (经 agentContext->modelRegistry 解析)
     /// - false 时使用节点构造时 NodeContext 提供的固定 provider_/model_
     bool useDynamicModel_ = false;
+
+    /// 是否由本节点给出循环路由 (见 [defAutoRouteKey]; 默认 true)
+    bool autoRoute_ = true;
 
 public:
 
@@ -46,8 +56,7 @@ public:
         neograph::graph::NodeInput& input
     ) override;
 
-    neograph::CompletionParams
-        build_params(const neograph::graph::GraphState& state, std::string_view sessionId) const;
+    neograph::CompletionParams build_params(std::string_view sessionId) const;
 
     asio::awaitable<neograph::graph::NodeOutput> callLLM(neograph::graph::NodeInput& in);
 

@@ -495,9 +495,10 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
                 auto              agent = agent_.lock();
                 auto              sess  = session();
+                // 上下文取自会话 (唯一权威); llmMessagesJson() 为惰性生成的 Json 形态
                 utilxx_base::Json msgs  = utilxx_base::Json::array();
-                if (sess && sess->llmMessages.is_array()) {
-                    msgs = sess->llmMessages;
+                if (sess) {
+                    msgs = sess->llmMessagesJson();
                 }
                 // 确保包含 systemPrompt:
                 // 若上下文首条不是 system 消息, 补充当前会话拼装的 systemPrompt

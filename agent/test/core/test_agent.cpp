@@ -1267,7 +1267,7 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
     // 末尾消息为 assistant 且包含失败提示
     auto session = agent.agentContext->sessions->get("retry_test");
     XX_TEST_EXPECT_TRUE(session != nullptr);
-    auto msgs = session->llmMessages;
+    auto msgs = session->llmMessagesJson();
     XX_TEST_EXPECT_TRUE(msgs.is_array());
     const auto& last = msgs.back();
     XX_TEST_EXPECT_TRUE(last["role"] == "assistant");
@@ -1333,7 +1333,7 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     // 上下文包含 [Start/Exception aborted] 错误消息 + 末尾为最终回答
     auto session = agent.agentContext->sessions->get("intercept_test");
     XX_TEST_EXPECT_TRUE(session != nullptr);
-    auto msgs = session->llmMessages;
+    auto msgs = session->llmMessagesJson();
     XX_TEST_EXPECT_TRUE(msgs.is_array());
     bool hasErrorMsg = false;
     for (const auto& m : msgs) {
@@ -1663,7 +1663,7 @@ asio::awaitable<void> test_agent_graph_build_fallback() {
         // 默认图的 system prompt (instructions) 必须已注入:
         // 回退分支复用 moved-from NodeContext 时 instructions 为空
         bool hasSystem = false;
-        for (const auto& m : session->llmMessages) {
+        for (const auto& m : session->llmMessagesJson()) {
             const auto role = m.value("role", std::string{});
             if (role == "assistant") {
                 hasAssistant = true;

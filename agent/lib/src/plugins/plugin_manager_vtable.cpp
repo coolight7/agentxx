@@ -335,8 +335,7 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
     });
 }
 
-static int64_t PLUGINXX_CALL xx_add_share_store(
-    const PluginxxHost*       host,
+static int64_t PLUGINXX_CALL xx_add_share_store(    const PluginxxHost*       host,
     const PluginxxStringView* session_id,
     const PluginxxStringView* content
 ) {
@@ -361,8 +360,61 @@ static int64_t PLUGINXX_CALL xx_add_share_store(
     });
 }
 
-static void PLUGINXX_CALL xx_emit_message_tip(
+// =====================================================================
+// 接口表: 会话上下文查询 (agentxx.agent.context)
+// =====================================================================
+
+static int32_t PLUGINXX_CALL xx_context_get_messages(
     const PluginxxHost*       host,
+    const PluginxxStringView* session_id,
+    PluginxxString*           out
+) {
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        if (!out) {
+            return -1;
+        }
+        auto call = enterHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
+            return -1;
+        }
+        auto mgrPtr = mgr;
+        auto sid    = *session_id;
+        *out        = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid]() -> PluginxxString {
+            return mgrPtr->getSessionMessages(sid);
+        });
+        return (out->data != nullptr) ? 0 : -1;
+    });
+}
+
+static int64_t PLUGINXX_CALL xx_context_messages_count(
+    const PluginxxHost*       host,
+    const PluginxxStringView* session_id
+) {
+    return agentxx::plugin::guardVtableCall<int64_t>(-1, [&]() -> int64_t {
+        auto call = enterHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
+            return -1;
+        }
+        auto mgrPtr = mgr;
+        auto sid    = *session_id;
+        return ioCallSyncKeep<int64_t>(call, mgrPtr, [mgrPtr, sid]() -> int64_t {
+            return mgrPtr->sessionMessagesCount(sid);
+        });
+    });
+}
+
+static const AgentxxPluginContextIface g_ifaceContext = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginContextIface),
+    /* get_messages */ xx_context_get_messages,
+    /* messages_count */ xx_context_messages_count,
+};
+
+static void PLUGINXX_CALL xx_emit_message_tip(    const PluginxxHost*       host,
     const PluginxxStringView* session_id,
     const PluginxxStringView* text,
     int32_t                   level
@@ -682,6 +734,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT) {
+        return &g_ifaceContext;
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT) {
         return &g_ifacePrompt;
@@ -1312,6 +1367,80 @@ void PluginManager::emitMessageTip(
                                              : agentxx::agent::WireDelta::TipType::Info);
     delta.seq     = session->nextDeltaSeq();
     session->io->sendToPeer(delta);
+}
+
+PluginxxString PluginManager::getSessionMessages(PluginxxStringView session_id) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->sessions || agentxx::plugin::PluginStringView::empty(&session_id)) {
+        return PluginxxString{nullptr, 0};
+    }
+    auto session = ctx->sessions->get(svToStr(session_id));
+    if (!session) {
+        return PluginxxString{nullptr, 0};
+    }
+    // 会话是上下文的唯一权威: 取 Json 形态 (惰性生成) 后按宿主 alloc 约定复制出去
+    auto jsonText = session->llmMessagesJson().dump();
+    return agentxx::plugin::hostMemoryCreateString(jsonText);
+}
+
+int64_t PluginManager::sessionMessagesCount(PluginxxStringView session_id) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->sessions || agentxx::plugin::PluginStringView::empty(&session_id)) {
+        return -1;
+    }
+    auto session = ctx->sessions->get(svToStr(session_id));
+    if (!session) {
+        return -1;
+    }
+    return static_cast<int64_t>(session->messagesCount());
+}
+
+size_t PluginManager::writeSessionMessages(
+    std::string_view          session_id,
+    const utilxx_base::Json&  messages,
+    bool                      overwrite
+) {
+    auto ctx = agentContext_.lock();
+    if (!ctx || !ctx->sessions || session_id.empty()) {
+        return 0;
+    }
+    auto session = ctx->sessions->getOrCreate(session_id);
+    if (!session) {
+        return 0;
+    }
+
+    std::vector<neograph::ChatMessage> msgs;
+    if (messages.is_array()) {
+        msgs.reserve(messages.size());
+        for (const auto& item : messages) {
+            neograph::ChatMessage msg;
+            neograph::json        neoItem = agentxx::util::toNeographJson(item);
+            neograph::from_json(neoItem, msg);
+            msgs.push_back(std::move(msg));
+        }
+    }
+
+    if (overwrite) {
+        // 空列表覆盖视为误写: 按旧契约读不到消息的插件可能以为上下文为空,
+        // 直接覆盖会把整段上下文清空, 这里忽略并记日志
+        if (msgs.empty() && session->messagesCount() > 0) {
+            XX_LOGW(
+                "PluginManager: overwrite session `{}` with an empty message list ignored "
+                "(current count={})",
+                session_id,
+                session->messagesCount()
+            );
+            return 0;
+        }
+        session->replaceMessages(std::move(msgs));
+        return session->messagesCount();
+    }
+    if (msgs.empty()) {
+        return 0;
+    }
+    const size_t appended = msgs.size();
+    session->appendMessages(std::move(msgs));
+    return appended;
 }
 
 } // namespace plugin

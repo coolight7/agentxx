@@ -4,6 +4,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/interrupt_presets.h"
+#include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "fmt/format.h"
@@ -522,16 +523,34 @@ void insertAbortedToolResults(
     std::string_view             phasePrefix,
     std::string_view             exceptionStr,
     neograph::graph::NodeInput&  in,
+    const std::shared_ptr<agentxx::agent::AgentContext>& agentCtxPtr,
     neograph::graph::NodeOutput& result
 ) noexcept {
-    auto  messages = in.state.get_messages();
-    auto* assistantMsg
-        = agentxx::middleware::BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
-            messages
-        );
-    if (assistantMsg && !assistantMsg->tool_calls.empty()) {
-        auto appendToolResult = utilxx_base::Json::array();
-        for (const auto& tool : assistantMsg->tool_calls) {
+    // 追加到会话上下文 (图状态不再持有 messages 通道): 通过节点事件通道
+    // 通知 UI 与节流持久化, 与旧实现向 result.writes 挂 messages 通道写等价
+    try {
+        auto session = (agentCtxPtr && agentCtxPtr->sessions)
+                           ? agentCtxPtr->sessions->get(in.ctx.thread_id)
+                           : nullptr;
+        if (!session) {
+            return;
+        }
+        const auto& messages = session->messages();
+        const neograph::ChatMessage* assistantMsg = nullptr;
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->role == "assistant" && !it->tool_calls.empty()) {
+                assistantMsg = &(*it);
+                break;
+            }
+        }
+        if (!assistantMsg || assistantMsg->tool_calls.empty()) {
+            return;
+        }
+        // 声明内容先拷出: 追加会修改会话上下文 (引用失效)
+        const auto toolCalls = assistantMsg->tool_calls;
+        auto       aborted   = std::vector<neograph::ChatMessage>{};
+        aborted.reserve(toolCalls.size());
+        for (const auto& tool : toolCalls) {
             auto msg = neograph::ChatMessage{
                 .role    = "tool",
                 .content = fmt::format("[{}/Exception aborted: {}]", phasePrefix, exceptionStr),
@@ -539,14 +558,12 @@ void insertAbortedToolResults(
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
             };
-            neograph::json msgJson;
-            neograph::to_json(msgJson, msg);
-            appendToolResult.push_back(agentxx::util::fromNeographJson(msgJson));
+            aborted.push_back(std::move(msg));
         }
-        result.writes.push_back(neograph::graph::ChannelWrite{
-            "messages",
-            agentxx::util::toNeographJson(appendToolResult),
-        });
+        agentxx::nodes::appendSessionMessages(agentCtxPtr, in, std::move(aborted));
+    } catch (const std::exception& e) {
+        // 异常路径插入失败不应掩盖原始异常
+        XX_LOGE("Toolcall insertAbortedToolResults failed: {}", e.what());
     }
 }
 
@@ -562,7 +579,7 @@ void ToolcallWrapNode::onHandleStartError(
 ) noexcept {
     // START 出错，不运行 execTool，直接替换插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
-        insertAbortedToolResults("Start", exceptionStr, in, result);
+        insertAbortedToolResults("Start", exceptionStr, in, agentContext.lock(), result);
     }
 }
 
@@ -575,7 +592,7 @@ void ToolcallWrapNode::onHandleBaseRunError(
 ) noexcept {
     // 插入消息，保证消息顺序正确
     if (false == errorRethrow && isCurrentError) {
-        insertAbortedToolResults("BaseRun", exceptionStr, in, result);
+        insertAbortedToolResults("BaseRun", exceptionStr, in, agentContext.lock(), result);
     }
 }
 
@@ -843,11 +860,15 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         }
     }
 
-    auto messages = in.state.get_messages();
-    if (messages.empty()) {
+    auto session = (agentCtxPtr && agentCtxPtr->sessions)
+                       ? agentCtxPtr->sessions->getOrCreate(in.ctx.thread_id)
+                       : nullptr;
+    if (!session || session->messages().empty()) {
         out = neograph::graph::NodeOutput{};
         co_return;
     }
+    // 上下文以会话为唯一权威; 本节点只读 (工具结果在成功路径统一追加)
+    const auto& messages = session->messages();
 
     // Find the last assistant message with tool_calls
     const neograph::ChatMessage* assistantMsg      = nullptr;
@@ -864,6 +885,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         out = neograph::graph::NodeOutput{};
         co_return;
     }
+    // 声明内容先拷出: 后备插入 (取消/异常) 会追加会话上下文, 使原引用失效
+    const std::vector<neograph::ToolCall> declaredToolCalls = assistantMsg->tool_calls;
 
 // debug 检查警告: 若该 assistant 声明的 tool_calls 在其之后已全部有 tool 结果消息,
 // 说明这些工具已执行过, 本节点被重复调度
@@ -899,6 +922,9 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     bool isCancel      = false;
     auto interruptArgs = std::map<std::string, utilxx_base::Json>{};
     auto results       = utilxx_base::Json::array();
+    // 本轮工具结果的 typed 形态 (追加进会话上下文用); results 为 Json 形态,
+    // 供中断缓存 (graphDataKey_interruptToolcallCache) 与日志使用
+    std::vector<neograph::ChatMessage> typedResults{};
     // 已执行完成的 tool_call_id (取消时用于区分已完成/未完成, 未完成的补 [User canceled])
     std::set<std::string> completedToolcallIds{};
     std::exception_ptr    cancelErrorPtr;
@@ -1068,7 +1094,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 
     /// 执行 toolcall
     std::vector<asio::awaitable<neograph::ChatMessage>> toolcallResults{};
-    for (const auto& tc : assistantMsg->tool_calls) {
+    for (const auto& tc : declaredToolCalls) {
         toolcallResults.emplace_back(onExecTool(tc));
     }
     for (auto& item : toolcallResults) {
@@ -1078,7 +1104,8 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             neograph::json neoJson;
             neograph::to_json(neoJson, msg);
             results.push_back(agentxx::util::fromNeographJson(neoJson));
-            completedToolcallIds.insert(msg.tool_call_id);
+            typedResults.push_back(std::move(msg));
+            completedToolcallIds.insert(typedResults.back().tool_call_id);
         } catch (const neograph::graph::CancelledException&) {
             // - 取消: 停止执行后续 tool, 由下方补齐未完成 tool 的取消提示消息
             // - 中断 (NodeInterrupt) 已在 onExecTool 内部捕获处理, 不会抛到这里
@@ -1090,12 +1117,11 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 
     if (isCancel) {
         // - 取消后重新从图开始节点执行 (与中断不同, 中断会 resume 到本节点恢复,
-        //   取消不会), 因此需要将本轮的 toolcall 结果直接写入 state,
-        //   wrap_handle 会在 rethrow 前保存到 [graphDataKey_tempMessages],
-        //   避免已完成的 tool 结果因 state 回滚而丢失
+        //   取消不会), 因此本轮的 toolcall 结果直接追加到会话上下文 —— 会话是
+        //   唯一权威, 不受图状态回滚影响, 已完成的 tool 结果不会丢失
         // - 未完成的 tool 插入 [User canceled] 提示, 保证每条 assistant tool_call
         //   都有对应的 tool 结果消息, 上下文角色顺序和内容完整
-        for (const auto& tc : assistantMsg->tool_calls) {
+        for (const auto& tc : declaredToolCalls) {
             if (completedToolcallIds.count(tc.id)) {
                 continue;
             }
@@ -1105,12 +1131,15 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             tool_msg.tool_name    = tc.name;
             tool_msg.content      = "[User canceled]";
             tool_msg.flags        = neograph::MessageFlag::AutoInserted;
-            neograph::json neoJson;
-            neograph::to_json(neoJson, tool_msg);
-            results.push_back(agentxx::util::fromNeographJson(neoJson));
+            typedResults.push_back(std::move(tool_msg));
         }
-        in.state.write("messages", agentxx::util::toNeographJson(results));
-        // 往外抛 cancel 异常，由 WrapNode 处理上下文临时保存
+        agentxx::nodes::appendSessionMessages(
+            agentCtxPtr,
+            in,
+            std::move(typedResults),
+            nodeName
+        );
+        // 往外抛 cancel 异常, 由 WrapNode 统一按控制流处理
         std::rethrow_exception(cancelErrorPtr);
     }
 
@@ -1121,27 +1150,37 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache,
             results
         );
-        // 保存当前 messages，供 handler 恢复 (图 state 为 neograph::json 方言，转业务 Json)
-        auto messages = agentxx::util::fromNeographJson(in.state.get("messages"));
+        // 保存当前上下文，供 handler 恢复 (会话为权威, 取 Json 形态)
+        auto messages = session->llmMessagesJson();
         // 重新抛出异常
         agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(in.ctx.thread_id, messages);
     }
 
-    out.writes.push_back(
-        neograph::graph::ChannelWrite{"messages", agentxx::util::toNeographJson(results)}
-    );
+    // 工具结果定稿: 追加到会话上下文并发出与旧 messages 通道写入同形的事件
+    agentxx::nodes::appendSessionMessages(agentCtxPtr, in, std::move(typedResults), nodeName);
     co_return;
 }
 
 void ToolcallWrapNode::defStdoutLogOnToolcallStart(
-    neograph::graph::NodeInput& in,
-    size_t                      limitOutput
+    neograph::graph::NodeInput&                          in,
+    size_t                                               limitOutput,
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx
 ) {
-    auto messages = in.state.get_messages();
-    auto assistantMsg
-        = agentxx::middleware::BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
-            messages
-        );
+    // 上下文以会话为唯一权威; 本方法是静态方法 (无节点成员), agent 上下文由调用方传入
+    auto session = (ctx && ctx->sessions) ? ctx->sessions->getOrCreate(in.ctx.thread_id) : nullptr;
+    if (!session) {
+        return;
+    }
+    const neograph::ChatMessage* assistantMsg = nullptr;
+    {
+        const auto& messages = session->messages();
+        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+            if (it->role == "assistant" && !it->tool_calls.empty()) {
+                assistantMsg = &(*it);
+                break;
+            }
+        }
+    }
 
     std::ostringstream out{};
     if (assistantMsg) {
@@ -1157,7 +1196,6 @@ void ToolcallWrapNode::defStdoutLogOnToolcallStart(
     } else {
         out << "┣━ Empty Argument List\n";
     }
-
     XX_LOGD(
         R"(
 ┏━━━━━━ Toolcall ━━━━━━┓

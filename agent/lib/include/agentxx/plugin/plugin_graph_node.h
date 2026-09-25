@@ -173,6 +173,19 @@ public:
 
 private:
 
+    /// 插件对 `messages` 通道的写入转成会话上下文写入
+    /// - 上下文由会话持有 (会话是唯一权威), 图状态不再包含 messages 通道;
+    ///   按旧契约编写的插件仍会写该通道, 这里改写而非报"写入未知通道"
+    /// - overwrite 模式: 整份替换会话上下文 (空列表视为误写, 忽略并记日志,
+    ///   避免按旧契约读到空消息的插件把上下文清空)
+    /// - 写入后发出与宿主节点同形的事件 ({"channel":"messages","value":[...]}),
+    ///   由 EventBridge 转成 UI 消息增量并请求节流持久化
+    void applyMessagesWrite(
+        neograph::graph::NodeInput& in,
+        const utilxx_base::Json&    value,
+        bool                        overwrite
+    );
+
     std::string                     name_;
     std::string                     configJson_;
     std::string                     type_;

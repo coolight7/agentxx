@@ -8,6 +8,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/deferred.hpp"
@@ -113,20 +114,18 @@ public:
                              && neograph::hasFlag(flags, neograph::MessageFlag::Interrupt);
         }
 
-        // 2) 中断时刻上下文 (wrap_handle 保存的 tempMessages):
+        // 2) 中断时刻上下文 (会话为唯一权威, 不再有图状态快照):
         //    角色顺序应为 system -> user -> assistant(tool_calls)
-        //    (modelcall 节点会在 state 头部补充 system 消息)
-        auto temp = graphData->getGraphDataItemValue<utilxx_base::Json>(
-            sessionId,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-        );
-        if (temp.is_array() && temp.size() == 3) {
+        //    (modelcall 节点会在会话上下文头部补充 system 消息)
+        // - 未定稿的 tool 结果不进上下文 (只在 interruptToolcallCache 里),
+        //   resume 后重新执行该节点再写入
+        auto sess = ctx->sessions ? ctx->sessions->get(sessionId) : nullptr;
+        if (sess && sess->isIoThread() && sess->messagesCount() == 3) {
+            const auto& msgs = sess->messages();
             interruptTempOrderOk
-                = temp[0].value("role", std::string{}) == "system"
-                  && temp[1].value("role", std::string{}) == "user"
-                  && temp[2].value("role", std::string{}) == "assistant"
-                  && temp[2]["tool_calls"].is_array() && temp[2]["tool_calls"].size() == 1
-                  && temp[2]["tool_calls"][0].value("id", std::string{}) == "call_it_1";
+                = msgs[0].role == "system" && msgs[1].role == "user"
+                  && msgs[2].role == "assistant" && msgs[2].tool_calls.size() == 1
+                  && msgs[2].tool_calls[0].id == "call_it_1";
         }
 
         co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
@@ -322,7 +321,7 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
     auto session = agent.agentContext->sessions->get("interrupt_msg_test");
     XX_TEST_EXPECT_TRUE(session != nullptr);
     if (session) {
-        const auto& msgs = session->llmMessages;
+        const auto& msgs = session->llmMessagesJson();
         XX_TEST_EXPECT_TRUE(msgs.is_array() && msgs.size() == 5);
         if (msgs.is_array() && msgs.size() == 5) {
             XX_TEST_EXPECT_EQ(msgs[0].value("role", std::string{}), std::string{"system"});
@@ -545,7 +544,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
             auto sess = agent.agentContext->sessions->get("cancel_msg_test");
-            im        = sess ? sess->llmMessages : utilxx_base::Json{};
+            im        = sess ? sess->llmMessagesJson() : utilxx_base::Json{};
             if (checkCanceledMessageSequence(im)) {
                 ok = true;
                 break;
@@ -641,23 +640,19 @@ static void runRepairDanglingScenario(
         });
     }
 
+    // ---- 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道) ----
     neograph::graph::GraphState state;
-    state.init_channel(
-        "messages",
-        neograph::graph::ReducerType::APPEND,
-        neograph::graph::ReducerRegistry::instance().get("append"),
-        msgs
-    );
-
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = "repair_dangling_test";
+    ctx->getSession(runCtx.thread_id)
+        ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
     neograph::graph::NodeInput in{state, runCtx, nullptr};
 
     // ---- 调用 repairMessages ----
     node.repairMessages(in);
 
     // ---- 断言清理结果 ----
-    const auto resultMsgs = in.state.get_messages();
+    const auto& resultMsgs = ctx->getSession(runCtx.thread_id)->messages();
     size_t     idx        = 0;
     // system + user 保留
     XX_TEST_EXPECT_TRUE(resultMsgs.size() >= 2);
@@ -807,20 +802,17 @@ asio::awaitable<void> test_repair_multiple_complete_groups_kept() {
     });
 
     neograph::graph::GraphState state;
-    state.init_channel(
-        "messages",
-        neograph::graph::ReducerType::APPEND,
-        neograph::graph::ReducerRegistry::instance().get("append"),
-        msgs
-    );
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = "repair_dangling_test";
+    // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+    ctx->getSession(runCtx.thread_id)
+        ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
     neograph::graph::NodeInput in{state, runCtx, nullptr};
 
     node.repairMessages(in);
 
     // ---- 断言: 全部保留 ----
-    const auto resultMsgs = in.state.get_messages();
+    const auto& resultMsgs = ctx->getSession(runCtx.thread_id)->messages();
     XX_TEST_EXPECT_EQ(resultMsgs.size(), size_t{6});
     if (resultMsgs.size() == 6) {
         // [system, user, assistant(call_a), tool(call_a), assistant(call_b), tool(call_b)]
@@ -911,21 +903,18 @@ asio::awaitable<void> test_repair_middle_dangling_group_fixed() {
     });
 
     neograph::graph::GraphState state;
-    state.init_channel(
-        "messages",
-        neograph::graph::ReducerType::APPEND,
-        neograph::graph::ReducerRegistry::instance().get("append"),
-        msgs
-    );
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = "repair_dangling_test";
+    // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+    ctx->getSession(runCtx.thread_id)
+        ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
     neograph::graph::NodeInput in{state, runCtx, nullptr};
 
     node.repairMessages(in);
 
     // ---- 断言 ----
     // 期望: [system, user, assistant(无 tool_calls), assistant(call_c), tool(call_c)]
-    const auto resultMsgs = in.state.get_messages();
+    const auto& resultMsgs = ctx->getSession(runCtx.thread_id)->messages();
     XX_TEST_EXPECT_EQ(resultMsgs.size(), size_t{5});
     if (resultMsgs.size() == 5) {
         XX_TEST_EXPECT_EQ(resultMsgs[0].role, std::string{"system"});
@@ -978,14 +967,11 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         });
 
         neograph::graph::GraphState state;
-        state.init_channel(
-            "messages",
-            neograph::graph::ReducerType::APPEND,
-            neograph::graph::ReducerRegistry::instance().get("append"),
-            msgs
-        );
         neograph::graph::RunContext runCtx;
         runCtx.thread_id = "test_sys_hash_session";
+        // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+        ctx->getSession(runCtx.thread_id)
+            ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
         neograph::graph::NodeInput in{state, runCtx, nullptr};
 
         node.repairMessages(in);
@@ -1012,14 +998,11 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         });
 
         neograph::graph::GraphState state;
-        state.init_channel(
-            "messages",
-            neograph::graph::ReducerType::APPEND,
-            neograph::graph::ReducerRegistry::instance().get("append"),
-            msgs
-        );
         neograph::graph::RunContext runCtx;
         runCtx.thread_id = "test_sys_hash_session";
+        // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+        ctx->getSession(runCtx.thread_id)
+            ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
         neograph::graph::NodeInput in{state, runCtx, nullptr};
 
         node.repairMessages(in);
@@ -1044,14 +1027,11 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         });
 
         neograph::graph::GraphState state;
-        state.init_channel(
-            "messages",
-            neograph::graph::ReducerType::APPEND,
-            neograph::graph::ReducerRegistry::instance().get("append"),
-            msgs
-        );
         neograph::graph::RunContext runCtx;
         runCtx.thread_id = "test_sys_hash_session";
+        // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+        ctx->getSession(runCtx.thread_id)
+            ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
         neograph::graph::NodeInput in{state, runCtx, nullptr};
 
         node.repairMessages(in);
@@ -1212,7 +1192,7 @@ asio::awaitable<void> test_repeat_call_check_allow() {
     if (session) {
         // 上下文中不应出现拒绝提示 (修复前必然出现)
         bool denied = false;
-        for (const auto& m : session->llmMessages) {
+        for (const auto& m : session->llmMessagesJson()) {
             if (m.contains("content") && m["content"].is_string()
                 && m["content"].get<std::string>().find("[Repeated call denied by user:")
                        != std::string::npos) {

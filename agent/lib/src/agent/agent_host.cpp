@@ -588,21 +588,32 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
             // 初始消息: messages 结构化透传优先 (可含 system, 原样透传);
             // 否则回退 systemPrompt + message 文本 (默认独立行为)
-            neograph::json inputMessages;
+            // - 上下文以会话为唯一权威: 直接写入子会话的上下文, 不再经
+            //   RunConfig.input 播种 (图状态不再持有 messages 通道)
+            std::vector<neograph::ChatMessage> inputMessages;
             if (task.messages.has_value()) {
-                // task.messages 为 utilxx_base::Json (事件层类型):
-                // 经文本中转回 neograph::json (子代理派生低频路径)
-                inputMessages = neograph::json::parse(task.messages->dump());
+                // task.messages 为 utilxx_base::Json (事件层类型): 逐条转 typed
+                if (task.messages->is_array()) {
+                    inputMessages.reserve(task.messages->size());
+                    for (const auto& item : *task.messages) {
+                        neograph::ChatMessage msg;
+                        auto                  neoItem = agentxx::util::toNeographJson(item);
+                        neograph::from_json(neoItem, msg);
+                        inputMessages.push_back(std::move(msg));
+                    }
+                }
             } else {
-                inputMessages = neograph::json::array({
-                    {{"role", "system"}, {"content", sysPrompt}                },
-                    {{"role", "user"},   {"content", std::string{task.message}}},
-                });
+                inputMessages.push_back(
+                    neograph::ChatMessage{.role = "system", .content = sysPrompt}
+                );
+                inputMessages.push_back(
+                    neograph::ChatMessage{.role = "user", .content = std::string{task.message}}
+                );
             }
+            subSession->replaceMessages(std::move(inputMessages), false);
 
             neograph::graph::RunConfig cfg{
                 .thread_id        = subagentSessionId,
-                .input            = {{"messages", std::move(inputMessages)}},
                 .cancel_token     = cancelToken,
                 .resume_if_exists = false,
             };

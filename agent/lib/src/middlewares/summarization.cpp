@@ -1,4 +1,5 @@
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/nodes/session_context.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/agent_host.h"
@@ -718,10 +719,12 @@ asio::awaitable<void>
     if (nullptr == agentCtxPtr) {
         co_return;
     }
-    auto messages = in.state.get_messages();
-    if (messages.empty()) {
+    auto session = agentCtxPtr->sessions->getOrCreate(in.ctx.thread_id);
+    if (session->messages().empty()) {
         co_return;
     }
+    // 上下文以会话为唯一权威: 压缩过程需要就地改写, 取一份拷贝
+    auto messages = session->messages();
 
     const auto& sessionId = in.ctx.thread_id;
 
@@ -753,15 +756,12 @@ asio::awaitable<void>
 
     const auto countTokenUsage = countTokens({}, messages, enableCountThinking);
     const auto tokenUsage      = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
-    auto       session         = agentCtxPtr->sessions->get(sessionId);
     // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
-    if (session && session->contextStats) {
+    if (session->contextStats) {
         // UI显示优先使用 apiTokenUsage 即可
         session->contextStats->contextTokens    = tokenUsage;
         session->contextStats->maxContextTokens = modelContenxtMaxToken;
     }
-
-    utilxx_base::Json newMsgsJson;
 
     // ---- 超过 75% 上限时自动压缩 ----
     if (tokenUsage >= modelContenxtMaxToken * 0.75) {
@@ -983,29 +983,21 @@ asio::awaitable<void>
             compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
         }
 
-        neograph::json neoNewMsgs;
-        neograph::to_json(neoNewMsgs, compressedMessages);
-        in.state.overwrite("messages", neoNewMsgs);
-
-        // ---- 压缩结果同步回会话上下文 (崩溃安全 + 避免重复压缩) ----
-        // 压缩只改写图 state 的 messages channel, 会话的 llmMessages 原本仅在轮末
-        // (AgentRunner 由图最终状态) 回写。若进程在压缩后到轮末之间退出 (崩溃/被
-        // 强制结束), 落库的仍是压缩前的历史: 重启后上下文重新超限, 下一轮立即再次
-        // 触发压缩 (表现为"反复压缩"), 本次压缩的子代理开销全部白费。
-        // 故压缩完成即回写会话上下文, 并请求一次节流落盘 (落库失败仅记日志)。
-        // - 安全性: 压缩结果由图 state 生成, 与本轮已结算的消息一致 (含本轮
-        //   已追加的 assistant/tool 消息), 轮末权威写回会再次覆盖收敛
-        if (session) {
-            session->llmMessages = agentxx::util::fromNeographJson(neoNewMsgs);
-            session->requestSaveLlmMessages();
-        }
+        // ---- 压缩结果写回会话上下文 (唯一权威) ----
+        // 压缩结果直接替换会话上下文: 图状态不再持有上下文, 无需再写通道;
+        // 同时请求一次节流落盘 —— 进程在压缩后到轮末之间退出 (崩溃/被强制结束) 时,
+        // 落库的已是压缩后的上下文, 重启后不会因上下文重新超限而反复压缩
+        const size_t compressedCount = compressedMessages.size();
+        const auto   newTokens       = countTokens({}, compressedMessages, enableCountThinking);
+        session->replaceMessages(std::move(compressedMessages));
+        agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
 
         if (compacted) {
             // 成功压缩: 记录本次压缩后的消息条数, 供后续轮次做冷却判断
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
                 sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount,
-                compressedMessages.size()
+                compressedCount
             );
         } else {
             // 未做 LLM 压缩或失败/硬截断: 复位冷却基准
@@ -1016,9 +1008,8 @@ asio::awaitable<void>
             );
         }
 
-        // 计算新 token 量与耗时，更新刚刚的 viewMessage 为
+        // 更新刚刚的 viewMessage 为
         //     "压缩上下文 {旧}->{新}/{最大} · {耗时}"
-        const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
         const auto durationMs
             = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                        std::chrono::steady_clock::now() - startTime
@@ -1053,45 +1044,21 @@ asio::awaitable<void>
         }
     }
 
-    if (newMsgsJson.is_array() && false == newMsgsJson.empty()) {
-        auto msgSize = newMsgsJson.size();
-        in.state.overwrite("messages", agentxx::util::toNeographJson(newMsgsJson));
-        if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-            XX_LOGD(
-                R"_(
+    if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
+        XX_LOGD(
+            R"_(
 ┏━━━━━━ Summary ━━━━━━┓
 ┣━ Messages Length: {}
 ┣━ Api Token Usage: {}
 ┣━ Count Messages Token: {}
 ┣━ Token Limit: {}/{}
-┣━ Summary To: {}
 ┗━━━━━━ Summary ━━━━━━┛)_",
-                msgSize,
-                apiTokenUsage,
-                countTokenUsage,
-                tokenUsage,
-                modelContenxtMaxToken,
-                countTokens({}, in.state.get_messages(), enableCountThinking)
-            );
-        }
-    } else {
-        if (agentCtxPtr->agentConfig->logPrintSummarizationResultTokenCount) {
-            XX_LOGD(
-                R"_(
-┏━━━━━━ Summary ━━━━━━┓
-┣━ Messages Length: {}
-┣━ Api Token Usage: {}
-┣━ Count Messages Token: {}
-┣━ Token Limit: {}/{}
-┣━ Not Need Summary
-┗━━━━━━ Summary ━━━━━━┛)_",
-                messages.size(),
-                apiTokenUsage,
-                countTokenUsage,
-                tokenUsage,
-                modelContenxtMaxToken
-            );
-        }
+            session->messagesCount(),
+            apiTokenUsage,
+            countTokenUsage,
+            tokenUsage,
+            modelContenxtMaxToken
+        );
     }
 
     co_return;
@@ -1108,16 +1075,8 @@ asio::awaitable<bool>
         co_return false;
     }
 
-    std::vector<neograph::ChatMessage> messages;
-    if (session->llmMessages.is_array()) {
-        messages.reserve(session->llmMessages.size());
-        for (const auto& item : session->llmMessages) {
-            neograph::ChatMessage msg;
-            auto                  neoItem = agentxx::util::toNeographJson(item);
-            neograph::from_json(neoItem, msg);
-            messages.push_back(std::move(msg));
-        }
-    }
+    // 手动压缩: 上下文取自会话 (唯一权威)
+    auto messages = session->messages();
     if (messages.empty()) {
         co_return false;
     }
@@ -1229,13 +1188,10 @@ asio::awaitable<bool>
         compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
     }
 
-    neograph::json neoNewMsgs;
-    neograph::to_json(neoNewMsgs, compressedMessages);
-    session->llmMessages = agentxx::util::fromNeographJson(neoNewMsgs);
-    session->saveLlmMessages();
-
-    // 4. 更新统计与 viewMessage 为 "Summarized LLM Context {旧}->{新}/{最大} · {耗时}"
     const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
+    session->replaceMessages(std::move(compressedMessages));
+    // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存兜底)
+    session->saveLlmMessages();
     const auto durationMs
         = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - startTime

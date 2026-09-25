@@ -257,22 +257,14 @@ public:
                 co_await onNodeEnd(in, out);
                 co_return out;
             }
-            // 保存此时的上下文，如果直接抛异常到 neograph::engine，会丢失本轮 session 增加的上下文
-            auto session = agentCtxPtr->getSession(in.ctx.thread_id);
-            auto data    = agentxx::util::fromNeographJson(in.state.get("messages"));
-            XX_LOGD("Store(By WrapHandleBaseNode/rethrow) LLM-Messages Context: {}", data.size());
-            agentCtxPtr->middlewareHandleContext->setGraphDataItemValue(
-                in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages,
-                std::move(data)
-            );
-
             // 取消/中断 或 未配置拦截的节点 (如 ModelCall): 统一重抛, 不静默吞掉
             // - 静默吞掉会让节点"假装成功"返回空输出, 图继续调度, 可能造成
-            //   [has_tool_calls] 等条件误路由 (如 llm 重试耗尽后末尾仍为
-            //   assistant(tool_calls) 时被误路由回 tools 节点, 导致工具重复
-            //   执行与消息无限堆积)
+            //   悬挂 tool_calls 被重复执行、消息无限堆积
             // - 业务层错误 (如工具执行失败) 由节点内部捕获消息化, 不会抛到这里
+            //
+            // 上下文安全: 消息以会话为唯一权威, 不随图状态回滚 —— 节点在抛出前
+            // 已写入会话的消息 (如部分完成的 tool 结果/兜底提示) 依然保留,
+            // 因此不再需要"重抛前快照整份上下文、轮末再恢复"的对账逻辑
             std::rethrow_exception(errorPtr);
         }
 

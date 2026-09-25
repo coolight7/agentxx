@@ -1,6 +1,7 @@
 #include "agentxx/nodes/modelcall.h"
 
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/protocol/provider_common.h"
@@ -52,6 +53,9 @@ ModelCallWrapNode::ModelCallWrapNode(
     WrapHandleBaseNode<neograph::graph::LLMCallNode>(name, in_agentContext, ctx) {
     if (ctx.extra_config.is_object() && ctx.extra_config.contains(defUseModelRegistryKey)) {
         useDynamicModel_ = ctx.extra_config.at(defUseModelRegistryKey).get<bool>();
+    }
+    if (ctx.extra_config.is_object() && ctx.extra_config.contains(defAutoRouteKey)) {
+        autoRoute_ = ctx.extra_config.at(defAutoRouteKey).get<bool>();
     }
 }
 
@@ -146,11 +150,15 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     co_return completion.message;
 }
 
-neograph::CompletionParams ModelCallWrapNode::build_params(
-    const neograph::graph::GraphState& state,
-    std::string_view                   sessionId
-) const {
-    auto messages = state.get_messages();
+neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sessionId) const {
+    // 上下文以会话为唯一权威 (图状态不再持有 messages 通道): 直接取会话的 typed
+    // 上下文, 由 provider 侧做一次 typed -> 请求体 JSON 转换, 不经图状态中转
+    auto ctxPtr = agentContext.lock();
+    auto messages = std::vector<neograph::ChatMessage>{};
+    if (ctxPtr) {
+        const auto& sessionMsgs = agentxx::nodes::sessionMessages(ctxPtr, sessionId);
+        messages.assign(sessionMsgs.begin(), sessionMsgs.end());
+    }
 
     // Ensure exactly one system message, carrying `instructions_` (issue #93).
     //
@@ -206,7 +214,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(
 asio::awaitable<neograph::graph::NodeOutput>
     ModelCallWrapNode::callLLM(neograph::graph::NodeInput& in) {
     XX_LOGT("ModelCallWrapNode::callLLM START");
-    auto params         = build_params(in.state, in.ctx.thread_id);
+    auto params         = build_params(in.ctx.thread_id);
     params.cancel_token = in.ctx.cancel_token;
 
     auto completion = co_await onReceiveToken(params, in);
@@ -222,13 +230,26 @@ asio::awaitable<neograph::graph::NodeOutput>
         }
     }
 
-    neograph::json msg_json;
-    neograph::to_json(msg_json, completion.message);
-
-    neograph::graph::NodeOutput out;
-    out.writes.push_back(
-        neograph::graph::ChannelWrite{"messages", neograph::json::array({msg_json})}
+    // assistant 回复定稿: 直接写入会话上下文 (唯一权威) 并发出与旧 messages
+    // 通道写入同形的事件 (UI 展开 view 消息 + 请求节流持久化)
+    const bool hasToolCalls = !completion.message.tool_calls.empty();
+    agentxx::nodes::appendSessionMessages(
+        agentContext.lock(),
+        in,
+        std::vector<neograph::ChatMessage>{std::move(completion.message)},
+        nodeName
     );
+
+    // ReAct 循环路由: 由本节点直接给出下一节点, 不再依赖
+    // "读末尾消息判断 has_tool_calls" 的条件边 (上下文已不在图状态里)
+    // - 有 tool_calls → tools; 无 → agent_end (本轮结束)
+    // - 图定义显式关闭自动路由 (xx_autoRoute=false) 时不给出 Command, 由图的边决定
+    neograph::graph::NodeOutput out;
+    if (autoRoute_) {
+        out.command = neograph::graph::Command{
+            .goto_node = hasToolCalls ? std::string{"tools"} : std::string{"agent_end"},
+        };
+    }
     XX_LOGT("ModelCallWrapNode::callLLM END");
     co_return out;
 }
@@ -249,10 +270,18 @@ asio::awaitable<void> ModelCallWrapNode::onHandleEnd(
 }
 
 void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
+    auto agentCtxPtr = agentContext.lock();
+    auto session     = (agentCtxPtr && agentCtxPtr->sessions)
+                           ? agentCtxPtr->sessions->getOrCreate(in.ctx.thread_id)
+                           : nullptr;
+    if (!session) {
+        return;
+    }
+
     // 最后一条消息应当是 system/user/tool
-    auto lastMsg = agentxx::middleware::BaseMiddlewareHandleInterface::getLastMessage(in);
-    if (lastMsg.has_value()) {
-        const auto& role = lastMsg.value().role;
+    const auto& curMsgs = session->messages();
+    if (!curMsgs.empty()) {
+        const auto& role = curMsgs.back().role;
         if ("system" == role || "user" == role || "tool" == role) {
             // 无需修复
         } else {
@@ -262,19 +291,16 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 .content = std::string{defaultContinueTip},
                 .flags   = neograph::MessageFlag::AutoInserted,
             };
-            neograph::json userMsgJson;
-            neograph::to_json(userMsgJson, userMsg);
-            in.state.write("messages", neograph::json::array({userMsgJson}));
-            // 无需通知 [CHANNEL_WRITE]，避免在 UI 层插入该消息
+            // 与旧实现一致: 直接写入上下文但不产生通道事件 (不在 UI 层插入该消息),
+            // 因此这里只追加 (不请求节流落盘; 紧随其后的轮末权威保存会落盘)
+            session->appendMessages({std::move(userMsg)}, false);
         }
     }
 
-    auto agentCtxPtr = agentContext.lock();
     if (agentCtxPtr->agentConfig->repairMessages) {
         // - 最终兜底处理，一般生成 message 的代码应该自己处理异常、补充消息
         // - 这里作为最终的预防处理
-        // - TODO: 优化仅对末尾消息进行修正
-        auto msgs = in.state.get_messages();
+        auto msgs = session->messages(); // 拷贝一份: 修复过程需要就地改写
 
         bool haveChange = false;
         // 清理悬挂的 assistant tool_calls:
@@ -627,10 +653,10 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         );
 
         if (haveChange) {
-            // 覆盖回 state (图 state 为 neograph::json 方言)
-            neograph::json msglist = neograph::json::array();
-            neograph::to_json(msglist, msgs);
-            in.state.overwrite("messages", std::move(msglist));
+            // 修复后的上下文整体覆盖回会话 (唯一权威); 修复属"纠错"不产生
+            // UI 消息增量, 与旧实现 (state.overwrite 不发通道事件) 语义一致
+            session->replaceMessages(std::move(msgs));
+            agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
         }
     }
 }
@@ -641,40 +667,32 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     neograph::graph::NodeOutput&                                                      result
 ) {
     auto agentCtxPtr = agentContext.lock();
+    auto session     = agentCtxPtr->sessions->getOrCreate(in.ctx.thread_id);
 
     {
-        // 添加 system Msg (图 state 为 neograph::json 方言)
-        neograph::json msglist       = in.state.get("messages");
-        bool           haveSystemMsg = false;
-        auto           newSystemMsg  = neograph::ChatMessage{.role = "system"};
-        if (msglist.is_array() && false == msglist.empty()) {
-            auto systemMsg = neograph::ChatMessage{};
-            neograph::from_json(msglist.front(), systemMsg);
-            if (systemMsg.role == "system") {
-                haveSystemMsg = true;
-                newSystemMsg  = std::move(systemMsg);
-            }
+        // 添加/更新 system Msg (上下文以会话为唯一权威)
+        // - 首条已是 system 消息: 保留其余字段, 就地更新内容 (每轮重建的系统提示词)
+        // - 否则在开头插入一条
+        std::vector<neograph::ChatMessage> msgs = session->messages(); // 拷贝一份后改写
+        bool                               haveSystemMsg = false;
+        if (!msgs.empty() && msgs.front().role == "system") {
+            haveSystemMsg = true;
         }
-
+        neograph::ChatMessage newSystemMsg{.role = "system"};
+        if (haveSystemMsg) {
+            newSystemMsg = msgs.front();
+        }
         if (agentCtxPtr) {
             newSystemMsg.content = agentCtxPtr->buildSystemPrompt(in.ctx.thread_id);
         }
-
-        neograph::json sysMsgJson;
-        neograph::to_json(sysMsgJson, newSystemMsg);
         if (haveSystemMsg) {
-            // 替换 system msg
-            msglist[0] = std::move(sysMsgJson);
+            msgs.front() = std::move(newSystemMsg);
         } else {
-            // 缺少 system msg，在开头插入
-            neograph::json newlist = neograph::json::array();
-            newlist.push_back(std::move(sysMsgJson));
-            for (auto item : msglist.items()) {
-                newlist.push_back(std::move(item.second));
-            }
-            msglist = std::move(newlist);
+            msgs.insert(msgs.begin(), std::move(newSystemMsg));
         }
-        in.state.overwrite("messages", std::move(msglist));
+        // 不请求节流落盘: 系统提示词属每轮重建的派生内容, 由轮末权威保存落库
+        session->replaceMessages(std::move(msgs), false);
+        agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
     }
 
     auto ctxPtr = agentContext.lock()->middlewareHandleContext;
@@ -685,8 +703,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
     // 插入 assistant 兜底消息 (保留部分输出, 或插入异常/取消提示):
     // - 保证消息上下文完整, 用户能看到本次 LLM 调用失败
-    // - 保证末尾消息角色为 assistant 且无 tool_calls, 使 [has_tool_calls] 条件
-    //   路由到 agent_end 结束本轮, 而不是把悬挂的 tool_calls 误路由回 tools
+    // - 保证末尾消息角色为 assistant 且无 tool_calls, 使重试耗尽/取消路径
+    //   直接以 agent_end 结束本轮, 而不是把悬挂的 tool_calls 误路由回 tools
     //   节点重复执行
     auto appendAbortMessage = [&](const std::string& content, const std::string& thinking) {
         auto msg = neograph::ChatMessage{
@@ -695,17 +713,12 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             .reasoning_content = thinking,
             .flags             = neograph::MessageFlag::AutoInserted,
         };
-        neograph::json msgJson;
-        neograph::to_json(msgJson, msg);
-        neograph::json appendMsgJsons = neograph::json::array({msgJson});
-        in.state.write("messages", appendMsgJsons);
-        if (nullptr != in.stream_cb) {
-            (*in.stream_cb)(neograph::graph::GraphEvent{
-                neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
-                nodeName,
-                std::move(appendMsgJsons),
-            });
-        }
+        agentxx::nodes::appendSessionMessages(
+            agentContext.lock(),
+            in,
+            std::vector<neograph::ChatMessage>{std::move(msg)},
+            nodeName
+        );
     };
 
     do {
@@ -775,11 +788,12 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             // 仍带 tool_calls (悬挂), 插入兜底提示消息
             // - 覆盖 无输出/短输出 失败的情况 (上轮未插入过)
             // - 已有 ≥512 部分输出时, 上轮已插入 assistant 保留消息, 无需重复插入
-            // - 保证 [has_tool_calls] 条件路由到 agent_end, 不会把悬挂的
-            //   tool_calls 误路由回 tools 节点重复执行
-            auto lastMsg = agentxx::middleware::BaseMiddlewareHandleInterface::getLastMessage(in);
-            const bool lastIsAssistant  = lastMsg.has_value() && lastMsg->role == "assistant";
-            const bool lastHasToolCalls = lastMsg.has_value() && !lastMsg->tool_calls.empty();
+            // - 保证本轮以错误结束而不是把悬挂的 tool_calls 误路由回 tools 节点
+            const auto& curMsgs        = session->messages();
+            const bool  hasLastMsg     = !curMsgs.empty();
+            const bool  lastIsAssistant = hasLastMsg && curMsgs.back().role == "assistant";
+            const bool  lastHasToolCalls
+                = hasLastMsg && !curMsgs.back().tool_calls.empty();
             if (false == lastIsAssistant || lastHasToolCalls) {
                 appendAbortMessage(
                     fmt::format(

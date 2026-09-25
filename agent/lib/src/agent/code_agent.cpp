@@ -6,6 +6,8 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/nodes/session_context.h"
+#include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/mcp_client.h"
 #include "agentxx/protocol/openai_provider.h"
@@ -134,11 +136,12 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             agentContext,
             agentxx::middleware::MiddlewareHooks{
                 .onModelcallRun
-                = [config = agentContext->agentConfig](neograph::graph::NodeInput& in
+                = [config = agentContext->agentConfig,
+                   ctxPtr = std::weak_ptr<AgentContext>(agentContext)](neograph::graph::NodeInput& in
                   ) -> asio::awaitable<void> {
                     if (config->logPrintMessagesBeforeLLM) {
                         agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
-                            in.state.get_messages(),
+                            agentxx::nodes::sessionMessages(ctxPtr.lock(), in.ctx.thread_id),
                             config->logPrintMessagesBeforeLLMWithSystemMsg
                         );
                     }
@@ -149,7 +152,11 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
                    config = agentContext->agentConfig](neograph::graph::NodeInput& in
                   ) -> asio::awaitable<void> {
                     if (config->logPrintToolcall) {
-                        agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(in);
+                        agentxx::nodes::ToolcallWrapNode::defStdoutLogOnToolcallStart(
+                            in,
+                            0,
+                            ctx.lock()
+                        );
                     }
                     if (auto ctxPtr = ctx.lock()) {
                         auto session = ctxPtr->sessions->get(in.ctx.thread_id);

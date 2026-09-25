@@ -72,7 +72,8 @@ public:
     void setLanguage(std::string_view language, std::string_view sessionId = "");
 
     /// 执行一轮对话
-    /// - 消息由 Session 内部管理 (viewMessages + llmMessages 双消息集)
+    /// - 消息由 Session 内部管理 (viewMessages 展示历史 + 会话 LLM 上下文两个数据集;
+    ///   上下文是唯一权威, 图状态不持有消息)
     /// - 增量事件经 io->sendToPeer(WireDelta) 推送 (io 端点须已设置 transport);
     ///   io 传 nullptr 时为 headless 模式, 不产出事件
     asio::awaitable<TurnResult> runTurnAsync(

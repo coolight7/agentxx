@@ -457,15 +457,13 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             });
         }
     }
-    // ---- 结算 LLM 上下文消息 (增量持久化的核心挂点) ----
-    // 节点对 messages channel 的写入即该批消息定稿: assistant 回复完成 /
-    // tool 结果写回 (每节点一批, 非流式 token 粒度)。追加进会话 llm 上下文
-    // 副本并触发节流落盘, 使进程在轮次中途被杀/崩溃时, 已结算的上下文最多
-    // 丢失一个节流窗口 (Session::kPersistThrottleMs), 而非整轮。
-    // - input 注入 / 节点内 overwrite (system 注入、压缩) / cancel 直写不产生
-    //   本事件, 不会重复追加; 与引擎最终状态可能存在的短暂漂移由轮末
-    //   BaseAgent 以 result.channel_raw("messages") 整体覆盖收敛 (权威同步)
-    session_->appendSettledLlmMessages(value);
+    // ---- 请求落盘已结算的上下文 (增量持久化的核心挂点) ----
+    // 节点对该批消息 (assistant 回复 / tool 结果) 定稿时发出本事件, 此时消息
+    // 已写入会话上下文 (会话为唯一权威)。这里只需按节流窗口请求一次落盘,
+    // 使进程在轮次中途被杀/崩溃时已结算的上下文最多丢一个节流窗口
+    // (Session::kPersistThrottleMs), 而非整轮。
+    // - 上下文写入 (含系统提示词更新 / 压缩回写) 不产生本事件, 因此不会重复落盘
+    session_->requestSaveLlmMessages();
 
     // llm node 执行完成，推送上下文统计更新
     if (hasLLMOutput && io_ && session_->contextStats) {

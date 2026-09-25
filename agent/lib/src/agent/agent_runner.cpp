@@ -27,9 +27,9 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
     const auto resumeMaxSteps   = cfg.max_steps;
 
     auto fOnBeforeResume = [&]() -> asio::awaitable<void> {
-        engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
-            state.overwrite("messages", agentxx::util::toNeographJson(session->llmMessages));
-        });
+        // 上下文以会话为唯一权威: resume 前无需把会话上下文重新塞回图状态
+        // (图状态不再持有 messages 通道), 只需保证会话内容已按节流窗口落盘
+        session->requestSaveLlmMessages();
         if (hooks.onBeforeResume) {
             co_await hooks.onBeforeResume(sessionId);
         }
@@ -37,32 +37,11 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
     };
 
     auto fOnRunResult = [&](neograph::graph::RunResult& result) {
-        if (result.interrupted) {
-            // 中断时 [result] 内的 messages 是被 neograph::engine
-            // 回滚的，本轮 session 的上下文已经被丢弃；应该取中断时
-            // 保存的 messages
-            auto imCopy = ctx->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
-                sessionId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-            );
-            if (imCopy.is_array()) {
-                session->llmMessages = std::move(imCopy);
-            }
-            // 注意: 此处不可清理 tempMessages —— 随后的 HIL 处理阶段
-            // (handleInterrupt/权限询问) 仍会读取该快照校验中断时刻上下文;
-            // 清理时机收敛到图完整结束 (下方 else 分支)
-        } else {
-            session->llmMessages = agentxx::util::fromNeographJson(result.channel_raw("messages"));
-            // 图已完整结束: 清理中断/异常期间遗留的 tempMessages 快照。
-            // - 本轮为 resume 完成时快照已被权威结果取代, 保留下来会误导后续
-            //   错误路径的上下文回退源 (过期回卷)
-            // - getGraphDataItemValue 对缺失键会自动创建空条目, 无论存在与否
-            //   统一移除保持干净
-            ctx->middlewareHandleContext->removeGraphDataItem(
-                sessionId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-            );
-        }
+        // 上下文由会话自身持有并随节点执行实时更新, 运行结果不再回写上下文
+        // - 中断: 中断点之前已定稿的消息 (assistant / 已完成的 tool 结果) 保留在
+        //   会话中; 未定稿的部分 (如中断的 toolcall 结果) 只在 graphData 缓存,
+        //   resume 后重新执行该节点再定稿
+        // - 正常结束: 会话即权威结果, 无需从 result.channel_raw("messages") 往返
         if (hooks.onRunResult) {
             hooks.onRunResult(result, sessionId);
         }

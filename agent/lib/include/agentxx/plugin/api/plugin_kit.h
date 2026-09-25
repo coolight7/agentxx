@@ -107,7 +107,10 @@ struct AgentIfaces {
     const PluginxxEventsIface*          events       = nullptr; ///< "pluginxx.events"
     const PluginxxCapabilitiesIface*    capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*       scheduler    = nullptr; ///< "pluginxx.scheduler"
+    /// "agentxx.agent.session": 会话共享存储与提示
     const AgentxxPluginSessionIface*    session      = nullptr; ///< "agentxx.agent.session"
+    /// "agentxx.agent.context": 会话 LLM 上下文查询 (图状态不含上下文内容)
+    const AgentxxPluginContextIface*    context      = nullptr; ///< "agentxx.agent.context"
     const PluginxxPluginsIface*         plugins      = nullptr; ///< "pluginxx.plugins"
     const PluginxxConfigIface*          config       = nullptr; ///< "pluginxx.config"
     const AgentxxPluginPromptIface*     prompt       = nullptr; ///< "agentxx.agent.prompt"
@@ -139,6 +142,8 @@ struct AgentIfaces {
         f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);
         f.session
             = queryInterface<AgentxxPluginSessionIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SESSION);
+        f.context
+            = queryInterface<AgentxxPluginContextIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT);
         f.plugins = queryInterface<PluginxxPluginsIface>(host, PLUGINXX_IFACE_PLUGINS);
         f.config  = queryInterface<PluginxxConfigIface>(host, PLUGINXX_IFACE_CONFIG);
         f.prompt
@@ -413,6 +418,32 @@ public:
 
     int64_t addShareStore(std::string_view tid, std::string_view content) const {
         return addShareStore(PluginStringView::from(tid.data(), tid.size()), content);
+    }
+
+    /// 读取会话 LLM 上下文 (经宿主 agentxx.agent.context 接口表)
+    /// - 上下文不在图状态里 (会话为唯一权威), 需要内容时经此查询
+    /// - 返回 JSON 数组文本; 宿主未实现该能力或查询失败时返回空串
+    std::string getSessionMessages(std::string_view tid) const {
+        if (!host || !iface.context || !iface.context->get_messages) {
+            return {};
+        }
+        auto     tidSv = PluginStringView::from(tid.data(), tid.size());
+        PluginxxString out{nullptr, 0};
+        if (iface.context->get_messages(host, &tidSv, &out) != 0 || !out.data) {
+            return {};
+        }
+        std::string text{out.data, static_cast<size_t>(out.size)};
+        PluginString::free(host, &out);
+        return text;
+    }
+
+    /// 会话 LLM 上下文条数 (宿主未实现该能力时返回 -1)
+    int64_t sessionMessagesCount(std::string_view tid) const {
+        if (!host || !iface.context || !iface.context->messages_count) {
+            return -1;
+        }
+        auto tidSv = PluginStringView::from(tid.data(), tid.size());
+        return iface.context->messages_count(host, &tidSv);
     }
 
 protected:

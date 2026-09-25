@@ -279,6 +279,36 @@ typedef struct AgentxxPluginSessionIface {
     );
 } AgentxxPluginSessionIface;
 
+/* ==================== 接口表: 会话上下文查询 (agentxx.agent.context) ==================== */
+
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT         "agentxx.agent.context"
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION 1
+
+/// 会话 LLM 上下文查询
+///
+/// 背景: LLM 上下文由会话持有 (唯一权威), 图状态不再包含 `messages` 通道;
+/// 插件需要上下文内容时经本表查询, 图状态里的 `xx_messagesMeta` 通道只给
+/// 条数/版本/末尾消息摘要等轻量信息 (与上下文大小无关)。
+typedef struct AgentxxPluginContextIface {
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION
+    uint32_t struct_size;
+
+    /// 读取会话 LLM 上下文 (JSON 数组文本; 宿主 alloc, 需 host->vtable->free 释放)
+    /// - 返回 0 成功 (out 为 ChatMessage JSON 数组文本), -1 失败/会话不存在
+    int32_t(PLUGINXX_CALL* get_messages)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* session_id,
+        PluginxxString*           out
+    );
+
+    /// 会话 LLM 上下文条数 (会话不存在返回 -1)
+    /// - 仅取数量时用它, 避免为读一个数字拉取整段上下文
+    int64_t(PLUGINXX_CALL* messages_count)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* session_id
+    );
+} AgentxxPluginContextIface;
+
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL         "agentxx.agent.model"

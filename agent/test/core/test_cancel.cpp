@@ -532,7 +532,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
             // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
             auto sess      = agent.agentContext->sessions->get("cancel_tool_test");
-            im             = sess ? sess->llmMessages : utilxx_base::Json{};
+            im             = sess ? sess->llmMessagesJson() : utilxx_base::Json{};
             slowCanceled   = false;
             markerCanceled = false;
             if (im.is_array()) {

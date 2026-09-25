@@ -1803,13 +1803,28 @@ throw new Error("top-level rollback probe");
                 gctx->graphRegistry->register_type(
                     std::string{"xx_ModelCallWrap"},
                     [agCtx](
-                        const std::string& name,
-                        const neograph::json&,
+                        const std::string&                  name,
+                        const neograph::json&               nodeConfig,
                         const neograph::graph::NodeContext& nc
                     ) {
+                        // 与 BaseAgent::initRegisterNodes 一致: 节点级配置合并进
+                        // NodeContext.extra_config (插件图用 xx_autoRoute=false
+                        // 关闭宿主的自动路由)
+                        auto merged = nc;
+                        if (nodeConfig.is_object()) {
+                            if (!merged.extra_config.is_object()) {
+                                merged.extra_config = neograph::json::object();
+                            }
+                            for (const auto& [key, value] : nodeConfig.items()) {
+                                if (key == "type") {
+                                    continue;
+                                }
+                                merged.extra_config[key] = value;
+                            }
+                        }
                         return std::make_unique<agentxx::nodes::ModelCallWrapNode>(
                             name,
-                            nc,
+                            merged,
                             agCtx.lock()
                         );
                     }
@@ -1905,31 +1920,29 @@ throw new Error("top-level rollback probe");
                 XX_TEST_EXPECT_TRUE(engine != nullptr);
                 if (engine) {
                     // 运行 datetime 意图: 应走到 datetime_node 输出时间并结束
+                    // - 上下文以会话为唯一权威 (图状态不再有 messages 通道),
+                    //   因此初始上下文写入会话而非 RunConfig.input
+                    {
+                        auto sess = gctx->getSession("graph-test-datetime");
+                        sess->replaceMessages(
+                            {neograph::ChatMessage{.role = "user", .content = "现在几点"}}
+                        );
+                    }
                     neograph::graph::RunConfig runCfg;
                     runCfg.thread_id = "graph-test-datetime";
-                    runCfg.input     = neograph::json{
-                            {"messages",
-                             neograph::json::array({
-                             neograph::json{{"role", "user"}, {"content", "现在几点"}},
-                         })},
-                    };
                     /// 插件完成包必须经当前 IO executor 提交；同步 run 会创建嵌套
                     /// io_context 并阻塞当前循环，不能在宿主协程内使用。
                     auto result = co_await engine->run_async(runCfg);
                     XX_TEST_EXPECT_TRUE(false == result.interrupted);
-                    // 输出 messages 含时间
+                    // 会话上下文含时间 (datetime_node 写 messages 通道由宿主
+                    // 转成会话上下文写入)
                     bool hasTime = false;
                     try {
-                        auto msgs = result.channel_raw("messages");
-                        if (msgs.is_array()) {
-                            for (const auto& m : msgs) {
-                                if (m.is_object() && m.contains("content")
-                                    && m["content"].is_string()) {
-                                    if (m["content"].get<std::string>().find("当前系统日期时间")
-                                        != std::string::npos) {
-                                        hasTime = true;
-                                    }
-                                }
+                        auto sess = gctx->getSession("graph-test-datetime");
+                        for (const auto& m : sess->messages()) {
+                            if (m.role == "assistant"
+                                && m.content.find("当前系统日期时间") != std::string::npos) {
+                                hasTime = true;
                             }
                         }
                     } catch (...) {
@@ -1938,37 +1951,31 @@ throw new Error("top-level rollback probe");
 
                     // 运行 normal 意图: 应进入 agent loop (llm 输出 normal 后
                     // intent_router 移除意图消息 → llm 重答 → 无 tool_calls → end)
+                    {
+                        auto sess = gctx->getSession("graph-test-normal");
+                        sess->replaceMessages(
+                            {neograph::ChatMessage{.role = "user", .content = "你好"}}
+                        );
+                    }
                     neograph::graph::RunConfig runCfg2;
                     runCfg2.thread_id = "graph-test-normal";
-                    runCfg2.input     = neograph::json{
-                            {"messages",
-                             neograph::json::array({
-                             neograph::json{{"role", "user"}, {"content", "你好"}},
-                         })},
-                    };
-                    auto result2 = co_await engine->run_async(runCfg2);
+                    auto result2      = co_await engine->run_async(runCfg2);
                     XX_TEST_EXPECT_TRUE(false == result2.interrupted);
                     try {
-                        auto msgs2 = result2.channel_raw("messages");
-                        // 应包含用户消息与 llm 最终回答
-                        XX_TEST_EXPECT_TRUE(msgs2.is_array());
-                        if (msgs2.is_array()) {
-                            bool hasUser = false, hasAssistant = false;
-                            for (const auto& m : msgs2) {
-                                if (!m.is_object()) {
-                                    continue;
-                                }
-                                auto role = m.value("role", std::string{});
-                                if (role == "user") {
-                                    hasUser = true;
-                                }
-                                if (role == "assistant") {
-                                    hasAssistant = true;
-                                }
+                        auto sess      = gctx->getSession("graph-test-normal");
+                        bool hasUser   = false;
+                        bool hasAssistant = false;
+                        for (const auto& m : sess->messages()) {
+                            if (m.role == "user") {
+                                hasUser = true;
                             }
-                            XX_TEST_EXPECT_TRUE(hasUser);
-                            XX_TEST_EXPECT_TRUE(hasAssistant);
+                            if (m.role == "assistant") {
+                                hasAssistant = true;
+                            }
                         }
+                        // 应包含用户消息与 llm 最终回答
+                        XX_TEST_EXPECT_TRUE(hasUser);
+                        XX_TEST_EXPECT_TRUE(hasAssistant);
                     } catch (...) {
                         XX_TEST_EXPECT_TRUE(false);
                     }

@@ -422,11 +422,26 @@ void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
     registry.register_type(
         std::string{agentxx::nodes::ModelCallWrapNode::defNodeType},
         [ctx](
-            const std::string& name,
-            const neograph::json&,
-            const neograph::graph::NodeContext& nodeCtx
+            const std::string&                   name,
+            const neograph::json&                nodeConfig,
+            const neograph::graph::NodeContext&  nodeCtx
         ) {
-            return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, nodeCtx, ctx.lock());
+            // 节点级配置合并: 图定义里该节点的额外键 (type 之外的键) 覆盖引擎级
+            // extra_config, 使节点可通过图定义单独配置 (如关闭自动路由 xx_autoRoute,
+            // 由自定义路由节点接管)
+            auto merged = nodeCtx;
+            if (nodeConfig.is_object()) {
+                if (!merged.extra_config.is_object()) {
+                    merged.extra_config = neograph::json::object();
+                }
+                for (const auto& [key, value] : nodeConfig.items()) {
+                    if (key == "type") {
+                        continue;
+                    }
+                    merged.extra_config[key] = value;
+                }
+            }
+            return std::make_unique<agentxx::nodes::ModelCallWrapNode>(name, merged, ctx.lock());
         }
     );
     registry.register_type(
@@ -452,15 +467,26 @@ neograph::json BaseAgent::initGraphDefinition() {
     //                               |
     //                               v
     //                            __end__
+    //
+    // 注意: 循环分支由 llm 节点返回的 Command.goto_node 给出 (有 tool_calls →
+    // tools, 否则 → agent_end), 不再依赖 "读末尾消息判断 has_tool_calls" 的条件边 ——
+    // LLM 上下文由会话持有 (见 context.h Session::messages), 图状态通道不再承载
+    // 上下文, 因此也没有可供条件边读取的 messages 通道。
 
     // clang-format off
     return neograph::json{
         {"name", std::string{kDefaultGraphName}},
         {
             "channels", {
-                {"messages", {{"reducer", "append"}}},
                 {
                     agentxx::middleware::MiddlewareContext::channel_savedGraphData,
+                    {{"reducer", "overwrite"}},
+                },
+                {
+                    // 上下文影子信息 (只读): 条数 / 版本 / 末尾消息角色与 tool_calls
+                    // 摘要。上下文本身不在图状态里 (会话为唯一权威), 这里只提供
+                    // 插件图节点可观察的轻量元信息, 载荷与上下文大小无关
+                    agentxx::middleware::MiddlewareContext::channel_messagesMeta,
                     {{"reducer", "overwrite"}},
                 },
             }, 
@@ -501,12 +527,9 @@ neograph::json BaseAgent::initGraphDefinition() {
             "edges", neograph::json::array({
                 {{"from", "__start__"}, {"to", "agent_start"}},
                 {{"from", "agent_start"}, {"to", "llm"}},
-                {
-                    {"from", "llm"},
-                    {"type", "conditional"},
-                    {"condition", "has_tool_calls"},
-                    {"routes", {{"true", "tools"}, {"false", "agent_end"}}},
-                },
+                // 静态默认边 (llm 无 Command 时结束本轮); 正常路径由 llm 节点的
+                // Command 给出 tools / agent_end
+                {{"from", "llm"}, {"to", "agent_end"}},
                 {{"from", "tools"}, {"to", "llm"}},
                 {{"from", "agent_end"}, {"to", "__end__"}},
             }),
@@ -949,7 +972,14 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     auto userViewMsg = ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs);
     userViewMsg.attachments = attachments;
     const auto userMsgId    = session->appendViewMessage(std::move(userViewMsg));
-    session->llmMessages.push_back(std::move(userMsgJson));
+    {
+        // 用户消息写入会话上下文 (唯一权威): 图状态不再持有 messages 通道,
+        // 引擎运行期间节点直接从会话读取上下文
+        neograph::ChatMessage userMsg;
+        auto                  neoJson = agentxx::util::toNeographJson(userMsgJson);
+        neograph::from_json(neoJson, userMsg);
+        session->appendMessages({std::move(userMsg)}, false);
+    }
 
     // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
     eventBridge->handleTurnStart();
@@ -979,20 +1009,25 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // llm callback: 由 EventBridge 统一处理 GraphEvent -> 会话增量 WireDelta/历史/总线发布
     auto eventCallback = eventBridge->makeCallback();
     auto cfg           = neograph::graph::RunConfig{
-                  .thread_id   = std::string{sessionId},
-                  .input       = {{"messages", agentxx::util::toNeographJson(session->llmMessages)}},
-                  .max_steps   = 1 << 30,
-                  .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
-                       | neograph::graph::StreamMode::VALUES | neograph::graph::StreamMode::UPDATES,
+                  .thread_id = std::string{sessionId},
+        // 上下文不再经图状态播种: 节点直接读会话 (会话为唯一权威)
+                  .input     = neograph::json::object(),
+                  .max_steps = 1 << 30,
+        // StreamMode 说明:
+        // - VALUES (每 super-step `__state__` 全量状态事件) 无人消费: EventBridge
+        //   只处理 message_tip / messages, 而上下文已不在图状态里, 去掉后每步
+        //   少一次整段状态序列化
+                  .stream_mode
+                  = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
+                    | neograph::graph::StreamMode::UPDATES,
                   .cancel_token = cancelToken,
         // 固定 false, 不随 isFirstMsg 变化:
         // - 引擎 checkpoint 仅进程内存活 (InMemorySingleCheckpointStore),
         //   真重启后无 checkpoint, 该标志无效
         // - 同进程内端点重建 (客户端重连/切换回会话) 时引擎仍有该线程
-        //   checkpoint, 若为 true 会先 restore 再按 append reducer
-        //   应用全量 input (input 每轮携带完整历史), 导致上下文翻倍
-        // - 中断恢复走 AgentRunner 的 initialResult/resume_async 路径,
-        //   不依赖本标志; input 全量历史在 fresh state 上应用即正确
+        //   checkpoint, 若为 true 会先 restore (旧 checkpoint 里的控制通道)
+        //   再继续执行, 与当前会话控制数据不一致
+        // - 中断恢复走 AgentRunner 的 initialResult/resume_async 路径, 不依赖本标志
                   .resume_if_exists = false,
     };
 
@@ -1074,27 +1109,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     );
 
     if (turnResult.hasError) {
-        // - 出现异常时 state.messages 已经被回滚，提取临时保存的上下文，并写回 state
-        auto& im = agentContext->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
-            sessionId,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
-        );
-        if (im.is_array()) {
-            XX_LOGD(
-                "Recover(By exception) LLM-Messages Context: old({}) -> new({})",
-                session->llmMessages.size(),
-                im.size()
-            );
-            session->llmMessages = std::move(im);
-            engine->update_state(std::string{sessionId}, [&](neograph::graph::GraphState& state) {
-                state.overwrite("messages", agentxx::util::toNeographJson(session->llmMessages));
-            });
-        }
-        // 处理后即清理 (含 getGraphDataItemValue 对缺失键自动创建的空条目):
-        // 防止过期快照残留, 在后续无关错误中被误用作上下文回退源
-        agentContext->middlewareHandleContext->removeGraphDataItem(
-            sessionId,
-            agentxx::middleware::MiddlewareContext::graphDataKey_tempMessages
+        // 出现异常/取消时: 上下文以会话为唯一权威, 不随图状态回滚 —— 节点在抛出前
+        // 已写入会话的消息 (部分完成的 tool 结果 / 兜底提示) 依然保留, 这里只需
+        // 把当前上下文落盘 (轮末权威保存), 不再需要从快照回灌的恢复逻辑
+        XX_LOGD(
+            "Turn ended with error; keep session LLM context ({}) as authoritative",
+            session->messagesCount()
         );
     }
 
@@ -1141,7 +1161,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     // 持久化 LLM 上下文消息 (每轮结束时整表替换, 供重启恢复会话)
     // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
-    // - 轮内已由 EventBridge 按消息结算节流落盘 (appendSettledLlmMessages),
+    // - 轮内已由 EventBridge 按消息结算节流落盘 (requestSaveLlmMessages),
     //   此处为权威终态同步; 进程中途被杀最多丢一个节流窗口 (<3s) 的增量
     session->saveLlmMessages();
     // 补存节流窗口内尚未落库的 view 消息操作, 保证正常结束的轮次其展示历史
@@ -1213,15 +1233,13 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
     bool                                 cleanupAfter
 ) {
     selectModel(sessionId, modelName);
-    neograph::json inputMessages = neograph::json::array();
-    for (auto& msg : messages) {
-        neograph::json j;
-        neograph::to_json(j, msg);
-        inputMessages.push_back(std::move(j));
+    // 上下文播种: 直接写入会话 (唯一权威), 图状态不再承载 messages 通道
+    {
+        auto session = agentContext->getSession(sessionId);
+        session->replaceMessages(std::move(messages), false);
     }
     neograph::graph::RunConfig cfg{
         .thread_id        = std::string{sessionId},
-        .input            = {{"messages", std::move(inputMessages)}},
         .resume_if_exists = false,
     };
     std::string oss;

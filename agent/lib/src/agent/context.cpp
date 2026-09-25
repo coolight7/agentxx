@@ -4,6 +4,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "neograph/graph/registry.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/container_util.h"
@@ -24,6 +25,22 @@ int64_t steadyNowMs() {
                std::chrono::steady_clock::now().time_since_epoch()
     )
         .count();
+}
+
+/// Json 边界形态 -> typed 上下文 (逐条 ChatMessage JSON 反序列化)
+std::vector<neograph::ChatMessage> messagesFromJson(const utilxx_base::Json& msgs) {
+    std::vector<neograph::ChatMessage> typed;
+    if (!msgs.is_array()) {
+        return typed;
+    }
+    typed.reserve(msgs.size());
+    for (const auto& item : msgs) {
+        neograph::ChatMessage msg;
+        auto                  neoItem = agentxx::util::toNeographJson(item);
+        neograph::from_json(neoItem, msg);
+        typed.push_back(std::move(msg));
+    }
+    return typed;
 }
 
 } // namespace
@@ -168,21 +185,79 @@ void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter) 
 void Session::saveLlmMessages() {
     assertIoThread();
     if (hooks_.onSaveLlmMessages) {
-        hooks_.onSaveLlmMessages(llmMessages);
+        hooks_.onSaveLlmMessages(llmMessagesJson());
         // 记录落盘时刻供节流判定 (轮末权威保存同样刷新窗口)
         llmLastSaveMs_ = steadyNowMs();
     }
 }
 
-void Session::appendSettledLlmMessages(const utilxx_base::Json& settledMsgs) {
+void Session::markMessagesChanged() {
+    ++messagesVersion_;
+    llmMessagesJsonDirty_ = true;
+}
+
+void Session::appendMessages(std::vector<neograph::ChatMessage> msgs, bool persistThrottled) {
     assertIoThread();
-    if (!settledMsgs.is_array() || settledMsgs.empty()) {
+    if (msgs.empty()) {
         return;
     }
-    for (const auto& m : settledMsgs) {
-        llmMessages.push_back(m);
+    messages_.insert(
+        messages_.end(),
+        std::make_move_iterator(msgs.begin()),
+        std::make_move_iterator(msgs.end())
+    );
+    markMessagesChanged();
+    if (persistThrottled) {
+        requestSaveLlmMessages();
     }
-    requestSaveLlmMessages();
+}
+
+void Session::replaceMessages(std::vector<neograph::ChatMessage> msgs, bool persistThrottled) {
+    assertIoThread();
+    messages_ = std::move(msgs);
+    markMessagesChanged();
+    if (persistThrottled) {
+        requestSaveLlmMessages();
+    }
+}
+
+void Session::replaceMessagesFromJson(const utilxx_base::Json& msgs) {
+    assertIoThread();
+    replaceMessages(messagesFromJson(msgs), false);
+}
+
+void Session::appendSettledLlmMessages(const utilxx_base::Json& settledMsgs) {
+    assertIoThread();
+    appendMessages(messagesFromJson(settledMsgs));
+}
+
+void Session::truncateMessages(size_t count, bool persistThrottled) {
+    assertIoThread();
+    if (count >= messages_.size()) {
+        return;
+    }
+    messages_.resize(count);
+    markMessagesChanged();
+    if (persistThrottled) {
+        requestSaveLlmMessages();
+    }
+}
+
+const utilxx_base::Json& Session::llmMessagesJson() const {
+    assertIoThread();
+    if (llmMessagesJsonDirty_) {
+        // 逐条转图边界 JSON 再转业务 JSON: 复用 neograph 的 ChatMessage 序列化,
+        // 保证与落库/传输的历史形态完全一致
+        neograph::json arr = neograph::json::array();
+        for (const auto& m : messages_) {
+            neograph::json one;
+            neograph::to_json(one, m);
+            arr.push_back(std::move(one));
+        }
+        llmMessagesJsonCache_ = agentxx::util::fromNeographJson(arr);
+        llmMessagesJsonDirty_ = false;
+    }
+    return llmMessagesJsonCache_;
 }
 
 void Session::requestSaveLlmMessages() {
@@ -275,7 +350,7 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
         // 从 SQLite 恢复该 session 的历史消息/LLM 上下文, 并绑定持久化回调
         auto loaded = sessionStore->loadSession(sessionId);
         session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter);
-        session->llmMessages = std::move(loaded.llmMessages);
+        session->replaceMessagesFromJson(loaded.llmMessages);
         // 捕获 sessionId 副本, 回调生命周期随 session, 无悬垂风险
         auto tid = std::string{sessionId};
         session->setStoreHooks(SessionStoreHooks{
@@ -328,7 +403,7 @@ asio::awaitable<std::shared_ptr<Session>>
     auto session = std::make_shared<Session>();
     if (sessionStore) {
         session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter);
-        session->llmMessages = std::move(loaded.llmMessages);
+        session->replaceMessagesFromJson(loaded.llmMessages);
         auto tid             = std::string{sessionId};
         session->setStoreHooks(SessionStoreHooks{
             .onAppendViewMessage =

@@ -45,6 +45,41 @@ std::string PluginGraphNode::get_name() const {
     return name_;
 }
 
+void PluginGraphNode::applyMessagesWrite(
+    neograph::graph::NodeInput& in,
+    const utilxx_base::Json&    value,
+    bool                        overwrite
+) {
+    auto inst = instance_;
+    auto mgr  = inst ? inst->manager.lock() : nullptr;
+    if (!mgr) {
+        XX_LOGW(
+            "Graph node `{}` (type {}) writes messages but the plugin manager is gone; write dropped",
+            name_,
+            type_
+        );
+        return;
+    }
+
+    const size_t written
+        = mgr->writeSessionMessages(in.ctx.thread_id, value, overwrite);
+    if (written == 0) {
+        return;
+    }
+
+    // 事件载荷: 本次写入的消息批 (与宿主节点写入同形), 供 UI 增量与节流持久化
+    if (in.stream_cb != nullptr && value.is_array()) {
+        (*in.stream_cb)(neograph::graph::GraphEvent{
+            neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+            name_,
+            neograph::json{
+                {"channel", "messages"},
+                {"value",   agentxx::util::toNeographJson(value)},
+            },
+        });
+    }
+}
+
 asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::graph::NodeInput in) {
     auto inst = instance_;
     if (!inst) {
@@ -132,11 +167,21 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                     || !w.contains("value")) {
                     continue;
                 }
+                const auto channel = w["channel"].get<std::string>();
+                const bool overwrite
+                    = w.contains("mode") && w["mode"].is_string()
+                      && w["mode"].get<std::string>() == "overwrite";
+                if (channel == "messages") {
+                    // 兼容改写: 上下文由会话持有 (图状态不再有 messages 通道),
+                    // 插件对 messages 通道的写入 (常见于按旧契约编写的插件) 在此
+                    // 转成会话上下文写入, 而非抛"写入未知通道"或污染图状态
+                    applyMessagesWrite(in, w["value"], overwrite);
+                    continue;
+                }
                 neograph::graph::ChannelWrite cw;
-                cw.channel = w["channel"].get<std::string>();
+                cw.channel = channel;
                 cw.value   = agentxx::util::toNeographJson(w["value"]);
-                if (w.contains("mode") && w["mode"].is_string()
-                    && w["mode"].get<std::string>() == "overwrite") {
+                if (overwrite) {
                     cw.mode = neograph::graph::ChannelWrite::Mode::Overwrite;
                 }
                 out.writes.push_back(std::move(cw));

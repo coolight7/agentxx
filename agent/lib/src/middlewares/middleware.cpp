@@ -39,6 +39,15 @@ std::optional<neograph::ChatMessage>
     return result;
 }
 
+std::optional<neograph::ChatMessage>
+    BaseMiddlewareHandleInterface::getLastMessage(const std::vector<neograph::ChatMessage>& messages
+    ) {
+    if (messages.empty()) {
+        return std::nullopt;
+    }
+    return messages.back();
+}
+
 const neograph::ChatMessage* BaseMiddlewareHandleInterface::getLastAssistantToolcallMessage(
     std::vector<neograph::ChatMessage>& messages
 ) {
@@ -376,11 +385,10 @@ void MiddlewareContext::throwNodeInterruptBase(
     std::string_view         sessionId,
     const utilxx_base::Json& msgs
 ) {
-    // if (msgs.is_array()) {
-    // 直接抛异常到 neograph::engine 的话会丢失本轮 session 上下文，因此需要临时保存，这里改为交由
-    // wrap_handle 保存此时的 上下文 setGraphDataItemValue(sessionId,
-    // MiddlewareContext::graphDataKey_tempMessages, msgs);
-    // }
+    // 上下文无需在此保存: LLM 上下文由会话持有 (唯一权威), 不随图状态回滚,
+    // 节点在抛出前已写入会话的消息依然保留 (见 Session::messages 系列接口)
+    (void)sessionId;
+    (void)msgs;
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 

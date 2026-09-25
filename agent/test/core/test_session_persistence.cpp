@@ -462,15 +462,16 @@ static TestResult testSessionStoreIntegration() {
         s1->appendViewMessage(ViewMessage::makeText(V::Role::User, "u1"));
         s1->appendViewMessage(ViewMessage::makeText(V::Role::Assistant, "a1"));
         s1->appendViewMessage(makeMsg(V::Role::Tool, R"({"tool":"x"})"));
-        s1->llmMessages = utilxx_base::Json::array();
-        s1->llmMessages.push_back(utilxx_base::Json{
-            {"role",    "system"},
-            {"content", "sys"   }
-        });
-        s1->llmMessages.push_back(utilxx_base::Json{
-            {"role",    "user"},
-            {"content", "u1"  }
-        });
+        s1->replaceMessagesFromJson(utilxx_base::Json::array({
+            utilxx_base::Json{
+                {"role",    "system"},
+                {"content", "sys"   }
+            },
+            utilxx_base::Json{
+                {"role",    "user"},
+                {"content", "u1"  }
+            },
+        }));
         s1->saveLlmMessages();
         // 模拟轮末统一补存 (节流窗口内的 append 落库)
         s1->flushViewMessages();
@@ -492,8 +493,8 @@ static TestResult testSessionStoreIntegration() {
         XX_TEST_EXPECT_EQ(hash2.count, hash1.count);
         XX_TEST_EXPECT_EQ(hash2.tailHex, hash1.tailHex);
         // LLM 上下文恢复
-        XX_TEST_EXPECT_TRUE(s2->llmMessages.is_array());
-        XX_TEST_EXPECT_EQ(s2->llmMessages.size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(s2->llmMessagesJson().is_array());
+        XX_TEST_EXPECT_EQ(s2->llmMessagesJson().size(), size_t{2});
         // msg id 延续: 新消息不冲突
         auto newId = s2->appendViewMessage(ViewMessage::makeText(V::Role::Assistant, "a2"));
         XX_TEST_EXPECT_EQ(newId, std::string{"msg_000004"});
@@ -557,7 +558,7 @@ static TestResult testPersistThrottle() {
             {"role",    "user"},
             {"content", "u1"  },
         });
-        s1->llmMessages = std::move(ctx);
+        s1->replaceMessagesFromJson(ctx);
         s1->requestSaveLlmMessages();
         {
             SessionStore probe(root);
@@ -570,7 +571,7 @@ static TestResult testPersistThrottle() {
                               {"content", "a1"},
                               },
         }));
-        XX_TEST_EXPECT_EQ(s1->llmMessages.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(s1->llmMessagesJson().size(), size_t{2});
         {
             SessionStore probe(root);
             XX_TEST_EXPECT_EQ(probe.loadSession("throttle").llmMessages.size(), size_t{1});
@@ -1016,8 +1017,8 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             );
             XX_TEST_EXPECT_EQ(sess->viewMessages[3].text, std::string{"E2E final answer"});
             // LLM 上下文恢复 (system + user + assistant(tool_calls) + tool + assistant)
-            XX_TEST_EXPECT_TRUE(sess->llmMessages.is_array());
-            XX_TEST_EXPECT_TRUE(sess->llmMessages.size() >= size_t{2});
+            XX_TEST_EXPECT_TRUE(sess->llmMessagesJson().is_array());
+            XX_TEST_EXPECT_TRUE(sess->llmMessagesJson().size() >= size_t{2});
             // msg id 延续
             auto newId = sess->appendViewMessage(agentxx::agent::ViewMessage::makeText(
                 agentxx::agent::ViewMessage::Role::Assistant,

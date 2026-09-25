@@ -2,20 +2,24 @@
 ///
 /// 演示能力 (经 graph 接口表 agentxx.agent.graph):
 /// 1. 注册自定义节点类型:
-///    - example_intent_router (意图识别): 读取上一个 llm 节点输出的意图,
+///    - example_intent_router (意图识别): 读取会话上下文里最后一条 assistant
+///      消息 (经 agentxx.agent.context 接口表, 上下文由会话持有, 不在图状态里),
 ///      按 config 中定义的意图枚举 (intents) 匹配, 写 __route__ channel,
 ///      由图的 conditional edge (route_channel) 决定路由; 非枚举值取
 ///      fallback (默认 "normal"); 已检查过的轮次退化为 has_tool_calls 路由
 ///    - example_datetime (时间输出): 将当前系统日期时间作为 assistant
-///      消息写入 messages channel (EventBridge 同步到 viewMessages/
-///      llmMessages)
+///      消息写入 messages channel —— 宿主把该通道的写入转成会话上下文写入
+///      (并同步 viewMessages / llmMessages)
 /// 2. 修改执行图 JSON: 将默认图 (agentxx.default) 改为
 ///    用户输入 → llm (识别意图) → intent_router (路由) → datetime 直接结束
 ///    轮次 / normal 进入原 agent loop (llm→tool→llm→...→end)
+///    llm 节点置 xx_autoRoute=false: 由本图的 intent_router 决定路由,
+///    不使用宿主默认的"按 tool_calls 直接跳转"行为
 ///
 /// 节点实现遵循"统一异步操作模型" (操作 run_start/run_cancel):
 /// - run_start 在宿主 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
 /// - state_json 为 GraphState::serialize() 结果, 只读; 修改经返回 writes
+///   (其中 messages 通道的写入由宿主转成会话上下文写入)
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -87,12 +91,22 @@ std::string normalizeIntent(std::string_view s) {
     return out;
 }
 
-/// 从 GraphState::serialize() 结果读取 messages channel 值 (json 数组)
-utilxx_base::Json stateMessages(const utilxx_base::Json& state) {
-    if (state.is_object() && state.contains("channels") && state["channels"].is_object()
-        && state["channels"].contains("messages") && state["channels"]["messages"].is_object()
-        && state["channels"]["messages"].contains("value")) {
-        return state["channels"]["messages"]["value"];
+/// 从宿主查询会话 LLM 上下文 (json 数组; 图状态不再包含 messages 通道)
+///
+/// - 上下文由会话持有 (唯一权威), 经 agentxx.agent.context 接口表查询;
+///   接口不可用/查询失败时返回空数组 (老宿主降级: 路由退化为 fallback)
+utilxx_base::Json sessionMessages(const AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
+    const auto text = ctx.getSessionMessages(req.session());
+    if (text.empty()) {
+        return utilxx_base::Json::array();
+    }
+    try {
+        auto msgs = utilxx_base::Json::parse(text);
+        if (msgs.is_array()) {
+            return msgs;
+        }
+    } catch (...) {
+        // 解析失败按空上下文处理
     }
     return utilxx_base::Json::array();
 }
@@ -142,10 +156,9 @@ bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
 std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
-    (void)ctx;
     const std::string_view config_json = req.config();
     auto                   state       = utilxx_base::Json::parse(req.state());
-    auto                   messages    = stateMessages(state);
+    auto                   messages    = sessionMessages(ctx, req);
 
     // 解析 config: intents 枚举 + fallback
     std::vector<std::string> intents;
@@ -188,8 +201,10 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
             }
         }
         // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
+        // - 对 messages 通道的 overwrite 写由宿主转成会话上下文替换
+        //   (图状态不再持有上下文), 语义与旧版一致
         if (route != fallback && messages.is_array() && !messages.empty()) {
-            auto origin          = stateMessages(state);
+            const auto origin    = sessionMessages(ctx, req);
             messages             = utilxx_base::Json::array();
             const size_t n       = origin.size();
             bool         removed = false;
@@ -230,8 +245,9 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 }
 
 /// 时间输出节点执行 (快同步): 写当前系统日期时间到 messages channel
-/// - EventBridge 收到 messages CHANNEL_WRITE 后同步 viewMessages (assistant
-///   角色消息) 与 llmMessages, 满足"添加到 viewMessages、llmMessages"
+/// - 宿主把 messages 通道写入转成会话上下文写入 (assistant 角色消息),
+///   并发出与宿主节点同形的通道写事件 → EventBridge 同步 viewMessages 与
+///   节流持久化, 满足"添加到 viewMessages、llmMessages"
 /// - 图配置为执行后直接路由 __end__ 结束轮次
 std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
     (void)ctx;
@@ -335,6 +351,11 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     utilxx_base::Json nodes = utilxx_base::Json::object();
     if (def.contains("nodes") && def["nodes"].is_object()) {
         nodes = def["nodes"];
+    }
+    // llm 节点关闭"自动路由" (宿主默认按 tool_calls 直接返回 Command):
+    // 本图把 llm 接到 intent_router, 由路由节点按 __route__ 条件边决定后续
+    if (nodes.contains("llm") && nodes["llm"].is_object()) {
+        nodes["llm"]["xx_autoRoute"] = false;
     }
     nodes["intent_router"] = utilxx_base::Json{
         {"type",     "example_intent_router"                                                   },

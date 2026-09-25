@@ -114,6 +114,10 @@ public:
     static std::optional<neograph::ChatMessage> getLastMessage(const neograph::graph::NodeInput& in
     );
 
+    /// 取消息列表中最后一条 (未使用图状态; 上下文以会话为权威后供节点使用)
+    static std::optional<neograph::ChatMessage>
+        getLastMessage(const std::vector<neograph::ChatMessage>& messages);
+
     static const neograph::ChatMessage*
         getLastAssistantToolcallMessage(std::vector<neograph::ChatMessage>& messages);
 
@@ -438,14 +442,19 @@ public:
     /// graphData 需要跨 checkpoint 存储时使用该 state channel key
     inline static const std::string channel_savedGraphData{"xx_savedGraphData"};
 
+    /// 上下文影子信息 channel (只读): 条数 / 版本 / 末尾消息角色与 tool_calls 摘要
+    /// - LLM 上下文由会话持有 (会话为唯一权威), 图状态不再承载消息内容;
+    ///   该通道只提供与上下文大小无关的轻量元信息, 供插件图节点观察
+    /// - 载荷: {"count": N, "version": V, "last_role": "...", "last_tool_calls": N,
+    ///   "last_tool_call_ids": ["..."], "role_counts": {"user": N, ...}}
+    inline static const std::string channel_messagesMeta{"xx_messagesMeta"};
+
     inline static const std::string graphDataKey_appendSystemMessage{"xx_appendSystemMessage"};
     inline static const std::string graphDataKey_messageCheckInfo{"xx_messageCheckInfo"};
     inline static const std::string graphDataKey_tempLLMThinking{"xx_ModelCallWrap_tempLLMThinking"
     };
     inline static const std::string graphDataKey_tempLLMContent{"xx_ModelCallWrap_tempLLMContent"};
     inline static const std::string graphDataKey_LLMTokenUsage{"xx_ModelCallWrap_LLMTokenUsage"};
-    /// 存储 中断、异常、取消 时的 messages
-    inline static const std::string graphDataKey_tempMessages{"xx_tempMessages"};
     /// LLM 压缩 (summarization) 连续失败计数
     /// - 每次 agent 轮执行清理; 同一轮内重试/多轮 modelcall 累积,
     ///   达到上限 (或超限严重) 时触发硬截断兜底
