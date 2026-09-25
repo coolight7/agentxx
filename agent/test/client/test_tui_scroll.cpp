@@ -629,9 +629,9 @@ TestResult testTuiScroll() {
 
     {
         // 场景 7: 主题切换 (invalidateCache) 后同内容渲染必须与切换前一致
-        // 回归: clearCache 后阶段 1 用新主题重建了 Element, 但阶段 2 的
-        // "缓存命中且 box 相同则跳过布局" 误判 (lastBoxes_ 未清, 新元素
-        // 从未 SetBox) -> 新元素以未初始化 box_ 渲染, 消息列表消失;
+        // 回归: clearCache 后新主题重建了 Element, 但"缓存命中且 box 相同则
+        // 跳过布局"的判定误判 (lastBoxes_ 未清, 新元素从未 SetBox) ->
+        // 新元素以未初始化 box_ 渲染, 消息列表消失;
         // 且此后每帧 box 恒同持续跳过, 直到内容变化才恢复
         ScrollFixture f;
         f.addHistory();
@@ -699,11 +699,9 @@ TestResult testTuiScroll() {
 
     {
         // 场景 8c: onSync 重建 + 估算==实测的短消息 (无折行) -> 跳过布局回归
-        // 触发条件: 消息短/单行, estimateLines == 实测高度, corrected=false,
-        // 滚动偏移不变 -> 阶段 2 sameBox=true 误判跳过布局 -> 新元素 box_ 未
-        // 初始化 {0,0,0,0} -> Text 只画首字符到 (0,0) (用户报告"少开头两
-        // 个字/整行不显示但有滚动高度"); 长文本场景因估算偏差触发 corrected
-        // 重算偏移恰好避开此路径, 故此前测试未复现
+        // 触发条件: 消息短/单行, estimateLines == 实测高度, 滚动偏移不变 ->
+        // sameBox=true 误判跳过布局 -> 新元素 box_ 未初始化 {0,0,0,0} ->
+        // Text 只画首字符到 (0,0) (用户报告"少开头两个字/整行不显示但有滚动高度")
         ScrollFixture f;
         // 短消息 (单行, 无折行): 估算 == 实测
         f.sharedState.mutate([&](TUIRenderState& st) {
@@ -1512,7 +1510,7 @@ TestResult testTuiScroll() {
         // 超过 maxBytes (长代码 / JSON / 工具结果 / diff) —— 或可见条数
         // 超过 maxItems (高终端) —— 时, ensureElement 插入新子项触发的
         // evictIfNeeded 会持续从 LRU 尾部淘汰直至预算达标。尾部先消耗
-        // 视口外的旧缓存, 耗尽后即命中"本帧阶段 1/2 已处理过、仍待渲染"
+        // 视口外的旧缓存, 耗尽后即命中"本帧定位阶段已处理过、仍待渲染"
         // 的可见子项: hasCache_ 被置 false 但索引仍在 visibleIndices_
         // (visibleBoxes_ 有盒 -> 点击折叠/展开仍有效), 渲染时 elementAt
         // 回退空 text -> 连续多条消息显示为空白; 预算由可见集自身超限,

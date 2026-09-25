@@ -556,6 +556,54 @@ TestResult testTuiLazyView() {
         XX_TEST_EXPECT_EQ(f.topPos().row, 2);
         XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{48});
         XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), 2);
+
+        // 帧间连续两次前插 (分页连发, 中间不渲染): 两次的新增区都要补齐粗略高度
+        // (否则后一次前插的高度一直是未知值, 总高/滚动条偏小)
+        const int totalBefore = f.scrollable->totalHeight();
+        f.prepend(4);
+        f.prepend(2);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->totalHeight() - totalBefore, static_cast<int>(6 * 40));
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{54});
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{38}); // 视口内容仍不变
+        XX_TEST_EXPECT_EQ(f.topPos().row, 2);
+    }
+
+    // ---- 下滚"到底"由实测布局判定: 估算低估不会把视口提前吸到底部 ----
+    {
+        // 每条实测 4 行, 估算低估为 1 行 (总高估算 120, 实测 480):
+        // 从顶部逐行下滚必须严格连续 —— 若用"估算总和"判定到底, 会在中途
+        // (估算总和已不足一屏时) 误判到底并瞬间跳到内容末尾
+        ViewFixture f(120, 4, 1);
+        f.render(); // 首帧吸附底部 (建立实测高度)
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-1000); // 回到顶部
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), 0);
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{0});
+
+        const int realTotal = static_cast<int>(4 * f.count);
+        int       expect    = 0;
+        for (int step = 0; step < 2000; ++step) {
+            f.render();
+            XX_TEST_EXPECT_FALSE(f.scrollable->isStickToBottom()); // 中途不得吸附
+            const auto p = f.topPos();
+            XX_TEST_EXPECT_EQ(p.id, static_cast<size_t>(expect / 4));
+            XX_TEST_EXPECT_EQ(p.row, expect % 4);
+            if (expect + f.scrollable->viewportHeight() >= realTotal) {
+                break; // 内容末尾已进入视口 (剩余行数 == 视口高)
+            }
+            f.wheelRows(1);
+            ++expect;
+        }
+        XX_TEST_EXPECT_EQ(expect, realTotal - f.scrollable->viewportHeight());
+
+        // 再下滚一行: 恢复吸附底部, 视口贴底 (末条最后一行在最底行)
+        f.wheelRows(1);
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.scrollable->isStickToBottom());
+        XX_TEST_EXPECT_EQ(f.bottomPos().id, f.count - 1);
+        XX_TEST_EXPECT_EQ(f.bottomPos().row, static_cast<int>(f.itemHeight) - 1);
     }
 
     // ---- 终端宽度变化: 锚点条目不变 (行偏移按新高度夹取) ----

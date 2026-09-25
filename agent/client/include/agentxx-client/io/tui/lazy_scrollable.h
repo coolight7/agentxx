@@ -70,8 +70,9 @@ struct LazyBuiltItem {
 ///
 /// 上滚 = 视口顶行上移 1 行: 行偏移先减, 减到 0 就跨入上一条目 (先实测取真实
 /// 高度, 顶行落在它的最后一行); 已到首条且行偏移为 0 时停住。上滚即解除吸附。
-/// 下滚 = 视口顶行下移 1 行; 内容底部已进入视口时恢复吸附底部 (与"滚到底自动
-/// 跟随新增内容"的语义一致)。
+/// 下滚 = 视口顶行下移 1 行; "是否已到底"由上一帧定位阶段的**精确**结论判定
+/// (布局是否走到末尾条目且行数未满视口, 不含估算), 确认到底即恢复吸附底部
+/// (与"滚到底自动跟随新增内容"的语义一致)。
 /// 滚轮事件只累积行数 (pendingScrollRows_), 在下一帧布局时落实 —— 布局前
 /// 不构建子项 Element, 避免 OnEvent 期构建的元素其命中登记被下一帧
 /// OnRender 的清理动作丢掉 (详见 prepareLayout 注释)。
@@ -257,9 +258,9 @@ private:
     int measureItem(size_t index, int contentWidth);
 
     /// 落实滚轮累积的行数 (负=上滚, 正=下滚): 逐行移动视口顶行, 跨条目时先实测
-    /// 目标子项高度 (它即将进入视口), 已是内容底部时恢复吸附底部
+    /// 目标子项高度 (它即将进入视口), 内容末尾已在视口内时恢复吸附底部
     void applyPendingScrollRows(int contentWidth, size_t count);
-    /// 锚点行 (含) 到内容末尾的行数是否已不超过视口高度 (再往下滚只能吸附底部)
+    /// 内容末尾是否已在视口内 (取上一帧定位阶段的结论; 已到底时下滚转为吸附底部)
     bool atContentBottom() const;
 
     // ---- 回调 ----
@@ -304,6 +305,9 @@ private:
     /// 待落实的滚轮行数 (负=上滚; 由 OnEvent 累积, prepareLayout 开头落实)
     int    pendingScrollRows_ = 0;
     bool   stickToBottom_     = true;
+    /// 上一帧定位阶段的精确结论: 内容末尾是否落在视口内 (= 已到底, 无法再下滚)。
+    /// 只由实测高度与视口高度得出, 不含任何估算 —— 下滚时据此恢复吸附底部
+    bool   contentEndsInViewport_ = false;
 
     int  totalHeight_   = 0; // 全部子项有效高度和 (增量维护, 不再每帧全量求和)
     int  viewportHeight_ = 0;

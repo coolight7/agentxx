@@ -424,8 +424,9 @@ void LazyScrollable::notifyPrepended(size_t count) {
     // 新增区高度暂记未知 (-1): 调用方在状态前插后、本帧快照刷新前调用
     // (UI 动作队列语义), 此时经回调估算读到的是旧快照内容, 口径必然错误。
     // 下一帧 prepareLayout 的 syncItemArrays 以新快照口径补齐粗略高度 ——
-    // 新增区位于锚点上方, 只影响滚动条长度, 不影响视口内容
-    unknownPrefix_ = std::max(unknownPrefix_, count);
+    // 新增区位于锚点上方, 只影响滚动条长度, 不影响视口内容。
+    // 帧间连续多次前插 (分页连发) 时未知区在前缀累加, 故用 += 而非取最大值
+    unknownPrefix_ += count;
 }
 
 void LazyScrollable::resetAnchorState() {
@@ -436,10 +437,10 @@ void LazyScrollable::resetAnchorState() {
 }
 
 bool LazyScrollable::atContentBottom() const {
-    // 锚点行 (含) 到内容末尾的行数 (= 总高 - 锚点以上高度和 - 锚点行偏移;
-    // 与锚点上方未实测项的估算无关) 不超过视口高度 -> 内容底部已在视口内
-    const long long rowsBelow = static_cast<long long>(totalHeight_) - rowsAboveAnchor_ - anchorRow_;
-    return rowsBelow <= viewportHeight_;
+    // 上一帧定位阶段的精确结论 (内容末尾是否落在视口内, 见 prepareLayout 末尾):
+    // 只由实测高度与视口高度得出, 与视口上方/下方未实测条目的估算无关 ——
+    // 不能用估算总和判断, 否则低估会让下滚提前判成"到底"并跳到底部
+    return contentEndsInViewport_;
 }
 
 void LazyScrollable::applyPendingScrollRows(int contentWidth, size_t count) {
@@ -470,7 +471,7 @@ void LazyScrollable::applyPendingScrollRows(int contentWidth, size_t count) {
         ++rows;
     }
 
-    // 下滚 (正): 内容底部已在视口内时恢复吸附底部 (与"滚到底自动跟随新增内容"
+    // 下滚 (正): 内容末尾已落在视口内时恢复吸附底部 (与"滚到底自动跟随新增内容"
     // 语义一致); 否则行偏移加 1, 到底就进入下一条目首行
     while (rows > 0) {
         if (atContentBottom()) {
@@ -484,7 +485,8 @@ void LazyScrollable::applyPendingScrollRows(int contentWidth, size_t count) {
             continue;
         }
         if (anchorIndex_ + 1 >= count) {
-            // 安全兜底 (atContentBottom 已覆盖末条情形): 无处可去即吸附底部
+            // 一次性落实多行下滚 (事件突发) 时可能跨过"到底"的那一行:
+            // 锚点已到末尾条目行尾即视为到底, 同样恢复吸附底部
             stickToBottom_ = true;
             break;
         }
@@ -585,11 +587,12 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     const size_t count = itemCount_();
     syncItemArrays(count);
     if (count == 0) {
-        totalHeight_       = 0;
-        rowsAboveAnchor_   = 0;
-        anchorIndex_       = 0;
-        anchorRow_         = 0;
-        pendingScrollRows_ = 0;
+        totalHeight_           = 0;
+        rowsAboveAnchor_       = 0;
+        anchorIndex_           = 0;
+        anchorRow_             = 0;
+        pendingScrollRows_     = 0;
+        contentEndsInViewport_ = true; // 空列表: 无可滚动内容
         return;
     }
     if (anchorIndex_ >= count) {
@@ -630,6 +633,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     // 定位只用实测高度: 每个条目先测量 (key 变化则重建重测) 再落到屏幕坐标,
     // 不存在"先按估算定位、下一帧再修正"的抖动窗口 (方案 §3.4 不变量)
     size_t nextIndex = count;
+    int    laidRows  = 0;
     {
         int cum = -anchorRow_; // 相对视口顶的行号 (锚点条目的 anchorRow_ 行落在 0)
         for (size_t i = anchorIndex_; i < count; ++i) {
@@ -661,7 +665,13 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
             }
             cum += itemH;
         }
+        laidRows = cum;
     }
+
+    // 内容末尾是否落在视口内: 布局已走到最后一个条目, 且从锚点行起的累计行数
+    // 不超过视口高度 -> 已经不可能再向下滚动。这是**精确**结论 (只由实测高度与
+    // 视口高度得出, 不含任何估算), 供下一帧落实滚轮下滚时判定"是否已到底"
+    contentEndsInViewport_ = (nextIndex == count && laidRows <= vh);
 
     // === 预取带: 视口下方若干条目的 key 校验 (只比较, 不构建) ===
     // 使内容变化的重建提前一帧发生, 滚动进入视口时直接是新内容
