@@ -8,6 +8,8 @@
   §2 行号全部一致 (补正见 §2 表后说明), §0.2 的两条结论有误并已更正 (§0.4),
   §6 待确认问题收敛为"未定位项 + 采样方法"
 - 相关文档: [benchmark.md 第 10 / 11 节](../../../docs/zh-cn/design/benchmark.md) (mimalloc 开关对照与重测记录)
+- 相关方案: [messages-1/plan.md](../messages-1/plan.md) —— 把 LLM 上下文从图状态迁出 (会话唯一权威);
+  采纳后本方案的 P2 降级为过渡方案, 见该文 §8
 - 原始数据: [resource/benchmark/](../../benchmark/) (`2026-09-26_88fee6e0_windows-longctx/` 采样与分配统计、
   `2026-09-26_88fee6e0_linux-resource/` 基准报告、`harness/` 驱动脚本)
 
@@ -311,6 +313,10 @@ mimalloc 打开时 (`AGENTXX_ENABLE_MIMALLOC=ON`, 同一构建目录):
 - 收益: 省 2 份整段 (含 P1-2 合计每轮省 3~4 份上下文拷贝)
 
 ### P2. 图状态零拷贝访问 + 就地 append (neograph 侧)
+
+> 定位提示 (2026-09-26): 若采纳 [messages-1 方案](../messages-1/plan.md) (把上下文迁出图状态),
+> 本节降级为**过渡方案** —— 届时 `messages` 通道不再持有上下文, 回调式读取与就地 append 失去对象;
+> 未采纳前本节仍按原计划推进, 且与 P1/P3 不冲突。
 
 注: 重写后的 neograph 已经有 `ChannelWrite::Mode::Overwrite`
 (`graph_state.cpp:129` `apply_writes`)、`GraphState::overwrite(json&&)`
