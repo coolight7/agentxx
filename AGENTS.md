@@ -302,8 +302,24 @@ path/to/agentxx_test string_util regex
   折行宽度 = 可用宽度 - 左右各 1 列内边距 - 外层缩进 (块引用每层 2 列 / 列表项前缀,
   构建期经 `tl_indent` + `IndentScope` 累加); `estimateMarkdownLines` 用同一函数统计
   行数, 两侧口径必须保持一致 (改动折行规则时两处同步)
-- 接口表数量: agent 侧 18 张 (10 张通用表 `pluginxx.*` + 8 张领域表 `agentxx.agent.*`),
+- 接口表数量: agent 侧 19 张 (10 张通用表 `pluginxx.*` + 9 张领域表 `agentxx.agent.*`,
+  新增 `agentxx.agent.context`: 会话 LLM 上下文查询 `get_messages`/`messages_count`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
+- LLM 上下文归属 (2026-09): **会话是上下文唯一权威**, 图状态里没有 `messages` 通道
+  (`state.serialize()` / checkpoint / 插件 stateJson 与上下文大小无关):
+  - `Session` 存 typed 上下文 (`std::vector<neograph::ChatMessage>` + `messagesVersion`),
+    Json 形态 (`Session::llmMessagesJson()`) 只在落库 / `WireGetContext` / 插件查询时惰性生成;
+    写入口只有 `appendMessages`/`replaceMessages`/`replaceMessagesFromJson`/`truncateMessages`
+  - 节点/中间件经 `agent/lib/include/agentxx/nodes/session_context.h` 读写
+    (`sessionMessages` 只读借用不得跨 co_await; `appendSessionMessages` 追加 + 发同名通道写事件;
+    `updateMessagesMeta` 刷新图状态里的只读影子通道 `xx_messagesMeta`)
+  - 事件: 消息写入方先写会话再发 `{"channel":"messages","value":[...]}` CHANNEL_WRITE,
+    EventBridge 只做 UI 展开 + 请求节流落盘 (不再追加消息); 图定义默认不再声明 `messages` 通道,
+    插件写该通道的 writes 由 `PluginGraphNode` 改写成会话写入 (空 overwrite 忽略)
+  - 路由: `llm` 节点按本轮是否有 tool_calls 返回 `Command.goto_node` (tools/agent_end),
+    默认图只用静态边; 节点级 `xx_autoRoute=false` (图定义里该节点的额外键会合并进
+    `NodeContext.extra_config`) 可交回图定义路由
+  - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 18 个 (含 `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
 

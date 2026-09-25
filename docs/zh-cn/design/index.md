@@ -27,10 +27,14 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 ### 核心对话能力
 
-- **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和 `llmMessages` (可压缩的 LLM 上下文) 双消息集
+- **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和会话 LLM 上下文 (可压缩的调用上下文) 双消息集
+  - **会话是 LLM 上下文的唯一权威**: 上下文以 typed 形式 (`std::vector<neograph::ChatMessage>`) 存在会话里, 带单调递增版本号 `messagesVersion`; Json 形态 (`Session::llmMessagesJson()`) 只在持久化 / `WireGetContext` / 插件查询等边界按需惰性生成
+  - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容的插件经接口表 `agentxx.agent.context` 查询, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
+  - 上下文变更只经 `Session::appendMessages` / `replaceMessages` / `truncateMessages` 单一入口 (节点与中间件经 `agentxx/nodes/session_context.h` 的入口调用), 不再有"图状态写通道 + 轮末整体覆盖对账"的双份拷贝
+  - ReAct 循环路由由 `llm` 节点按"本轮是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end) 给出, 不再依赖读上下文的条件边; 节点级 `xx_autoRoute=false` 可关闭, 交由图定义/自定义路由节点接管
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为完整 ViewMessage 经 InsertMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
 - **多模型支持**: 运行时按会话 (sessionId) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
-- **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩完成后**立即**回写会话 `llmMessages` 并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示); 失败与冷却处理: 压缩失败按轮内计数累积 (`graphDataKey_summarizationFailCount`), 连续失败 >= 2 次或 token 占用 >= 95% 上限时降级**硬截断** (按 token 预算丢弃最旧消息) 兜底; "上次压缩后消息增长不足 2 条" 视为冷却期 (`graphDataKey_summarizationLastMsgCount`), 跳过重复的 LLM 压缩 (避免每轮派生无效的压缩子代理); 手动压缩等待上限 2 分钟 (子代理卡住时不无限占用 io 线程, 超时走硬截断)
+- **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩完成后**立即**把压缩结果写回会话上下文并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示); 失败与冷却处理: 压缩失败按轮内计数累积 (`graphDataKey_summarizationFailCount`), 连续失败 >= 2 次或 token 占用 >= 95% 上限时降级**硬截断** (按 token 预算丢弃最旧消息) 兜底; "上次压缩后消息增长不足 2 条" 视为冷却期 (`graphDataKey_summarizationLastMsgCount`), 跳过重复的 LLM 压缩 (避免每轮派生无效的压缩子代理); 手动压缩等待上限 2 分钟 (子代理卡住时不无限占用 io 线程, 超时走硬截断)
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
 - **节点级事件**: NodeStart/NodeEnd 事件标记 Graph 节点执行生命周期，便于 UI 展示进度
 
@@ -156,7 +160,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
   (注: 目前仅 ExecutingTool/Idle 被 LogPrint 中间件实际写入, Streaming/WaitingInput
   为预留; UI 活动感知实际经 Delta 事件流完成)
 - **链式哈希**: viewMessages 使用 FNV-1a 链式哈希校验一致性
-- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (viewMessages/llmMessages/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
+- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (viewMessages/上下文消息/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 - **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
@@ -174,14 +178,14 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
   设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告)
 - 分库设计 (单库 `session.db`, 四表, 启用 WAL + busy_timeout):
   - `view_message` 表: viewMessages (append-only, 每消息一行 JSON)
-  - `llm_context` 表: llmMessages (单行整体替换)
+  - `llm_context` 表: 会话 LLM 上下文 (单行整体替换; Json 形态由 typed 上下文按需生成)
   - `meta` 表: msgIdCounter/title/lastActiveMs
   - `store` 表: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
     重启后延续; 内存只缓存最近使用的少数条目, 其余按 id 读取) ——
     与消息历史同一生命周期 (随 session 创建/删除),
     同一 io 线程写入, 互斥锁串行保护
 - 接入点:
-  - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages/llmMessages,
+  - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages 与 LLM 上下文 (Json → typed 转换一次),
     重建链式哈希 (对不含 id 的消息内容, 与 appendViewMessage 语义一致),
     恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionStoreHooks`
     (std::function 回调, context.h 不依赖 sqlite 头)
@@ -199,13 +203,14 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
       viewMessages append-only (下标稳定), 回放时按当下内容落库。逐条深拷贝会让
       窗口内每条消息在内存中存在两份 (实测注入 200K token 历史时多占约 1 MB)
     - `Session::restore` 整体替换 viewMessages 前先清空队列 (旧下标失效)
-  - `EventBridge::handleChannelWrite`: LLM 上下文增量的结算挂点 —— 节点对
-    messages channel 的写入事件即该批消息定稿 (assistant 回复完成 / tool 结果
-    写回, 非流式 token 粒度), 经 `Session::appendSettledLlmMessages` 追加并触发
-    节流保存。input 注入 / 节点内 overwrite (system 注入、压缩) / cancel 直写
-    不产生该事件, 不会重复追加; 与引擎状态的短暂漂移由轮末权威同步收敛
-  - `BaseAgent::runTurnAsync`: 轮末回调保存 llmMessages (整表替换, 权威终态) +
-    flushViewMessages (补存节流窗口内未落盘的 view 操作)
+  - `EventBridge::handleChannelWrite`: LLM 上下文增量的结算挂点 —— 节点把
+    assistant 回复 / tool 结果写入会话上下文后, 发出与旧 messages 通道写入同形的
+    事件 (`{"channel":"messages","value":[...]}`), EventBridge 据此展开 view 消息
+    (UI 增量) 并请求一次节流落盘 (`Session::requestSaveLlmMessages`)。事件本身
+    不再携带"追加"语义 (消息已由写入方写进会话), 因此不会重复追加;
+    system 注入 / 压缩回写等不产生该事件
+  - `BaseAgent::runTurnAsync`: 轮末调用 `Session::saveLlmMessages` (整表替换,
+    权威终态) + flushViewMessages (补存节流窗口内未落盘的 view 操作)
   - `MiddlewareContext` share store 三方法 (get/set/add):
     内容以会话库 `store` 表为唯一数据源, 内存仅保留每个会话最近使用的
     `SessionShareStore::kCacheCapacity` (3) 条 LRU 缓存 —— 首次访问某 session
@@ -1425,7 +1430,7 @@ AgentContext
                └── ...
 
 线程安全策略:
-  - io 线程: 读写 viewMessages/llmMessages/chainHash/deltaSeq (assertIoThread 强制校验)
+  - io 线程: 读写 viewMessages/上下文消息/chainHash/deltaSeq (assertIoThread 强制校验)
   - client/UI: 不直接读取, 由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
   - SessionsManager: 仅在 agent io_context 线程访问, 无需锁
@@ -1495,7 +1500,7 @@ Client                              Server
   │──── GetAppendComponentInfo ──────→│ 查询 Plugin/MCP/Skill/Memory 组件加载信息
   │←── AppendComponentInfo ───────────│
   │                                    │
-  │──── GetContext ──────────────────→│ 查询当前 llmMessages
+  │──── GetContext ──────────────────→│ 查询当前会话上下文 (llmMessagesJson)
   │←── ContextMessages ───────────────│
   │                                    │
   │ (可选) 日志转发
@@ -2008,7 +2013,7 @@ BaseAgent (基类)
   ├── AgentContext
   │     ├── sessions (SessionsManager) → Session (per sessionId)
   │     │     ├── viewMessages + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
-  │     │     ├── llmMessages (io 线程读写)
+  │     │     ├── 会话 LLM 上下文 (typed 权威, io 线程读写; Json 形态按需生成)
   │     │     ├── cancelToken / modelName (io 线程读写)
   │     │     ├── activity / contextStats (atomic, 跨线程安全)
   │     │     ├── deltaSeq (普通 uint64_t, 仅 io 线程递增)
