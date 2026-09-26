@@ -100,6 +100,8 @@
 | CPU user / system | 0.296~0.343 s / 0.468~0.546 s | 0.203~0.218 s / 0.546~0.671 s | 仅参考 (单轮时长毫秒级, 噪声大) |
 
 - 两次运行的关键数字**逐位相同** (binned / S 37 / huge), 即改造后结果可复现。
+- 原始采样数据 (4 份 `summary.json` + 说明) 已入库:
+  `resource/benchmark/2026-09-26_f59814d6_windows-longctx-request-chain/`。
 - 验收信号与方案 §4 一致: 消息正文档位 (`bin S 37`) 与 M/L 档块数下降;
   `huge` 不作为本轮指标 (方案 §0.4 更正 2 已说明它需单独定位)。
 
@@ -145,10 +147,17 @@
 - release 构建**不产 PDB**, `/MAP` 生成的符号表在 LTO/ICF 下与真实函数边界不符
   (按它解析出来的"分配点"落在 `std::string` 代码里, 与 `huge` 分配点无关),
   所以拿不到可信调用栈;
-- 下一步建议用**关闭 sanitizer 的 debug 构建 + cdb 条件断点**
-  (`bp mimalloc!mi_theap_malloc ".if (@rdx > 0x80000) { kb 24; g } .else { gc }"`,
-  debug 有 PDB 可符号化; 注意 plan §6 问题 3 记录的 cdb 坑), 或
-  在 Linux 侧用 heaptrack/massif 直接拿调用栈。
+- 本轮试过在 **debug (ASan) 构建 + cdb** 上做条件断点: 该 exe 的 `malloc` 确实来自
+  `clang_rt.asan_dynamic-x86_64.dll` (可断), 但 (a) 该 DLL 加载后的模块名是
+  `clang_rt_asan_dynamic_x86_64`, 未加模块限定的 `bp malloc` 解析不了
+  (`Bp expression 'malloc ' could not be resolved`); (b) ASan 在调试器下会先抛
+  自己的 first-chance 异常 (Unknown exception `e0736170` + access violation),
+  `-o` 批处理脚本会在这里结束, 拿不到后续断点输出 —— 该路线不可行, 需要换 release;
+- 下一步建议: **release 额外带符号** (`/DEBUG` 重链 `agentxx_cli` 以及被动态链接的
+  `libagentxx.dll`, 生成 PDB) + cdb 条件断点
+  (`bp mimalloc!mi_malloc ".if (@rcx > 0x80000) { kb 24; g } .else { gc }"`,
+  注意 plan §6 问题 3 记录的 cdb 坑: bp 命令串里 `||`/`&&` 会被当命令分隔符),
+  或在 Linux 侧用 heaptrack / valgrind-massif 直接拿调用栈 (那边有完整符号)。
 
 ### 3.2 其它已识别、未处理项
 
