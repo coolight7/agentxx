@@ -129,8 +129,8 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
             }
             totalViewBytes += estimateViewMessagesBytes(sess->viewMessages);
             totalViewCount += sess->viewMessages.size();
-            totalLlmBytes  += sess->llmMessages.is_null() ? 0 : sess->llmMessages.dump().size();
-            totalLlmCount  += sess->llmMessages.is_array() ? sess->llmMessages.size() : 0;
+            totalLlmBytes  += sess->llmMessagesJson().is_null() ? 0 : sess->llmMessagesJson().dump().size();
+            totalLlmCount  += sess->llmMessagesJson().is_array() ? sess->llmMessagesJson().size() : 0;
         }
         rows.push_back(
             {"agent.session.view_messages",

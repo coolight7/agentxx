@@ -295,8 +295,8 @@ void benchResourceCli() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res0.viewCount = sess->viewMessages.size();
                 res0.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res0.llmCount  = sess->llmMessages.size();
-                res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res0.llmCount  = sess->llmMessagesJson().size();
+                res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
                 res0.tokens    = 150; // 预热痕量
             }
             p.set_value();
@@ -331,26 +331,28 @@ void benchResourceCli() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({
-                    {"role",    "user"           },
-                    {"content", g.userMsg.content}
-                });
-                sess->llmMessages.push_back({
-                    {"role",       "assistant"                                 },
-                    {"content",    nullptr                                     },
-                    {"tool_calls",
-                     {{{"id", g.assistMsg.tool_calls[0].id},
-                       {"type", "function"},
-                       {"function",
-                        {{"name", g.assistMsg.tool_calls[0].name},
-                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
-                });
-                sess->llmMessages.push_back({
-                    {"role",         "tool"                },
-                    {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name",         g.toolMsg.tool_name   },
-                    {"content",      g.toolMsg.content     }
-                });
+                sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{
+                        {"role",    "user"           },
+                        {"content", g.userMsg.content}
+                    },
+                    utilxx_base::Json{
+                        {"role",       "assistant"                                 },
+                        {"content",    nullptr                                     },
+                        {"tool_calls",
+                         {{{"id", g.assistMsg.tool_calls[0].id},
+                           {"type", "function"},
+                           {"function",
+                            {{"name", g.assistMsg.tool_calls[0].name},
+                             {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                    },
+                    utilxx_base::Json{
+                        {"role",         "tool"                },
+                        {"tool_call_id", g.toolMsg.tool_call_id},
+                        {"name",         g.toolMsg.tool_name   },
+                        {"content",      g.toolMsg.content     }
+                    },
+                }));
             }
         }
         p1Injected.store(true);
@@ -386,8 +388,8 @@ void benchResourceCli() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res1.viewCount = sess->viewMessages.size();
                 res1.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res1.llmCount  = sess->llmMessages.size();
-                res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res1.llmCount  = sess->llmMessagesJson().size();
+                res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }
             p.set_value();
         });
@@ -409,26 +411,28 @@ void benchResourceCli() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({
-                    {"role",    "user"           },
-                    {"content", g.userMsg.content}
-                });
-                sess->llmMessages.push_back({
-                    {"role",       "assistant"                                 },
-                    {"content",    nullptr                                     },
-                    {"tool_calls",
-                     {{{"id", g.assistMsg.tool_calls[0].id},
-                       {"type", "function"},
-                       {"function",
-                        {{"name", g.assistMsg.tool_calls[0].name},
-                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
-                });
-                sess->llmMessages.push_back({
-                    {"role",         "tool"                },
-                    {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name",         g.toolMsg.tool_name   },
-                    {"content",      g.toolMsg.content     }
-                });
+                sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{
+                        {"role",    "user"           },
+                        {"content", g.userMsg.content}
+                    },
+                    utilxx_base::Json{
+                        {"role",       "assistant"                                 },
+                        {"content",    nullptr                                     },
+                        {"tool_calls",
+                         {{{"id", g.assistMsg.tool_calls[0].id},
+                           {"type", "function"},
+                           {"function",
+                            {{"name", g.assistMsg.tool_calls[0].name},
+                             {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                    },
+                    utilxx_base::Json{
+                        {"role",         "tool"                },
+                        {"tool_call_id", g.toolMsg.tool_call_id},
+                        {"name",         g.toolMsg.tool_name   },
+                        {"content",      g.toolMsg.content     }
+                    },
+                }));
             }
         }
         p2Injected.store(true);
@@ -464,8 +468,8 @@ void benchResourceCli() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res2.viewCount = sess->viewMessages.size();
                 res2.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res2.llmCount  = sess->llmMessages.size();
-                res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res2.llmCount  = sess->llmMessagesJson().size();
+                res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }
             p.set_value();
         });
@@ -676,8 +680,8 @@ void benchResourceTui() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res0.viewCount = sess->viewMessages.size();
                 res0.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res0.llmCount  = sess->llmMessages.size();
-                res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res0.llmCount  = sess->llmMessagesJson().size();
+                res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
                 res0.tokens    = 150;
             }
             p.set_value();
@@ -716,26 +720,28 @@ void benchResourceTui() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({
-                    {"role",    "user"           },
-                    {"content", g.userMsg.content}
-                });
-                sess->llmMessages.push_back({
-                    {"role",       "assistant"                                 },
-                    {"content",    nullptr                                     },
-                    {"tool_calls",
-                     {{{"id", g.assistMsg.tool_calls[0].id},
-                       {"type", "function"},
-                       {"function",
-                        {{"name", g.assistMsg.tool_calls[0].name},
-                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
-                });
-                sess->llmMessages.push_back({
-                    {"role",         "tool"                },
-                    {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name",         g.toolMsg.tool_name   },
-                    {"content",      g.toolMsg.content     }
-                });
+                sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{
+                        {"role",    "user"           },
+                        {"content", g.userMsg.content}
+                    },
+                    utilxx_base::Json{
+                        {"role",       "assistant"                                 },
+                        {"content",    nullptr                                     },
+                        {"tool_calls",
+                         {{{"id", g.assistMsg.tool_calls[0].id},
+                           {"type", "function"},
+                           {"function",
+                            {{"name", g.assistMsg.tool_calls[0].name},
+                             {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                    },
+                    utilxx_base::Json{
+                        {"role",         "tool"                },
+                        {"tool_call_id", g.toolMsg.tool_call_id},
+                        {"name",         g.toolMsg.tool_name   },
+                        {"content",      g.toolMsg.content     }
+                    },
+                }));
             }
         }
         p1Injected.store(true);
@@ -786,8 +792,8 @@ void benchResourceTui() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res1.viewCount = sess->viewMessages.size();
                 res1.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res1.llmCount  = sess->llmMessages.size();
-                res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res1.llmCount  = sess->llmMessagesJson().size();
+                res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }
             p.set_value();
         });
@@ -809,26 +815,28 @@ void benchResourceTui() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
 
-                sess->llmMessages.push_back({
-                    {"role",    "user"           },
-                    {"content", g.userMsg.content}
-                });
-                sess->llmMessages.push_back({
-                    {"role",       "assistant"                                 },
-                    {"content",    nullptr                                     },
-                    {"tool_calls",
-                     {{{"id", g.assistMsg.tool_calls[0].id},
-                       {"type", "function"},
-                       {"function",
-                        {{"name", g.assistMsg.tool_calls[0].name},
-                         {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
-                });
-                sess->llmMessages.push_back({
-                    {"role",         "tool"                },
-                    {"tool_call_id", g.toolMsg.tool_call_id},
-                    {"name",         g.toolMsg.tool_name   },
-                    {"content",      g.toolMsg.content     }
-                });
+                sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{
+                        {"role",    "user"           },
+                        {"content", g.userMsg.content}
+                    },
+                    utilxx_base::Json{
+                        {"role",       "assistant"                                 },
+                        {"content",    nullptr                                     },
+                        {"tool_calls",
+                         {{{"id", g.assistMsg.tool_calls[0].id},
+                           {"type", "function"},
+                           {"function",
+                            {{"name", g.assistMsg.tool_calls[0].name},
+                             {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
+                    },
+                    utilxx_base::Json{
+                        {"role",         "tool"                },
+                        {"tool_call_id", g.toolMsg.tool_call_id},
+                        {"name",         g.toolMsg.tool_name   },
+                        {"content",      g.toolMsg.content     }
+                    },
+                }));
             }
         }
         p2Injected.store(true);
@@ -876,8 +884,8 @@ void benchResourceTui() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
                 res2.viewCount = sess->viewMessages.size();
                 res2.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
-                res2.llmCount  = sess->llmMessages.size();
-                res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessages);
+                res2.llmCount  = sess->llmMessagesJson().size();
+                res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }
             p.set_value();
         });
