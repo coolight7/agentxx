@@ -500,26 +500,15 @@ void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion
 
 utilxx_base::Json OpenAIProvider::buildBody(const neograph::CompletionParams& params) const {
     utilxx_base::Json body;
-    body["model"]    = params.model.empty() ? config_.modelName : params.model;
-    body["messages"] = agentxx::util::fromNeographJson(neograph::messages_to_json(params.messages));
-
-    if (!config_.sendThinking) {
-        const auto&       src     = body["messages"];
-        utilxx_base::Json cleaned = utilxx_base::Json::array();
-        for (const auto& val : src) {
-            utilxx_base::Json obj = utilxx_base::Json::object();
-            for (const auto& [k, v] : val.items()) {
-                if (k != "reasoning_content") {
-                    obj[k] = v;
-                }
-            }
-            cleaned.push_back(obj);
-        }
-        body["messages"] = cleaned;
-    }
+    body["model"] = params.model.empty() ? config_.modelName : params.model;
+    // 直接由 typed 上下文构造 messages / tools: 省掉
+    // "typed -> neograph json -> utilxx Json" 的一次整段 DOM 拷贝
+    // (加密思考载体与明文思考的取舍也在这里一次完成, 不再构造后逐条删键)
+    body["messages"]
+        = agentxx::protocol::chatMessagesToOpenAIJson(params.messages, config_.sendThinking);
 
     if (!params.tools.empty()) {
-        body["tools"] = agentxx::util::fromNeographJson(neograph::tools_to_json(params.tools));
+        body["tools"] = agentxx::protocol::chatToolsToOpenAIJson(params.tools);
         body["tool_choice"] = "auto";
     }
 
@@ -1066,6 +1055,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     using namespace utilxx_base;
     using namespace utilxx;
 
+    // 请求体组装完成后直接移动进 HTTP 层 (用完即弃, 省一份整段拷贝)
     auto bodyStr = body.dump();
 
     HeaderMap headers;
@@ -1085,7 +1075,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
             co_await HttpClient::requestSseAsync(
                 "POST",
                 apiUrl(),
-                bodyStr,
+                std::move(bodyStr),
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
@@ -1199,6 +1189,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     using namespace utilxx_base;
     using namespace utilxx;
 
+    // 请求体组装完成后直接移动进 HTTP 层 (用完即弃, 省一份整段拷贝)
     auto bodyStr = body.dump();
 
     HeaderMap headers;
@@ -1219,7 +1210,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
             co_await HttpClient::requestSseAsync(
                 "POST",
                 apiUrl(),
-                bodyStr,
+                std::move(bodyStr),
                 "application/json",
                 headers,
                 HttpClient::RequestConfig{
@@ -1336,18 +1327,39 @@ bool OpenAIProvider::processSseBuffer(
     neograph::FormatDataStreamCallback on_chunk,
     bool                               finalFlush
 ) {
-    bool   done = false;
-    size_t pos;
-    while ((pos = buf.find('\n')) != std::string::npos) {
-        std::string line = buf.substr(0, pos);
-        buf.erase(0, pos + 1);
-        done |= processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
+    bool done = false;
+    // 扫过已处理的整行, 只在末尾搬移一次剩余的不完整行
+    // (旧实现每解析一行就 erase(0, n) 搬移剩余缓冲, 长行/高事件密度时是纯浪费)
+    size_t pos = 0;
+    for (;;) {
+        const size_t nl = buf.find('\n', pos);
+        if (nl == std::string::npos) {
+            break;
+        }
+        done |= processSseLine(
+            std::string_view{buf}.substr(pos, nl - pos),
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            on_chunk
+        );
+        pos = nl + 1;
     }
-    if (finalFlush && !buf.empty()) {
+    if (finalFlush && pos < buf.size()) {
         // 连接 abrupt 关闭时, 最后一行可能没有 trailing "\n", 此处补解析
-        std::string line = std::move(buf);
-        buf.clear();
-        done |= processSseLine(line, completion, fullContent, fullThinking, tcMap, on_chunk);
+        done |= processSseLine(
+            std::string_view{buf}.substr(pos),
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            on_chunk
+        );
+        pos = buf.size();
+    }
+    if (pos > 0) {
+        buf.erase(0, pos);
     }
     return done;
 }
@@ -1360,26 +1372,30 @@ bool OpenAIProvider::processSseLine(
     std::map<int, neograph::ToolCall>& tcMap,
     neograph::FormatDataStreamCallback on_chunk
 ) {
-    std::string line{line_in};
+    // 就地裁剪行与负载 (旧实现在这里各拷一份 std::string, 每个事件多两次堆分配)
+    std::string_view line = line_in;
     if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
+        line.remove_suffix(1);
     }
 
     // SSE 规范: "data:" 后的单个前导空格可选
-    if (line.rfind("data:", 0) != 0) {
+    if (line.size() < 5 || line.compare(0, 5, "data:") != 0) {
         return false;
     }
-    std::string payload = line.substr(5);
+    std::string_view payload = line.substr(5);
     if (!payload.empty() && payload.front() == ' ') {
-        payload.erase(0, 1);
+        payload.remove_prefix(1);
     }
 
     // 部分网关会在行尾附加空白, 容忍后再判断结束标记
     while (!payload.empty() && (payload.back() == ' ' || payload.back() == '\t')) {
-        payload.pop_back();
+        payload.remove_suffix(1);
     }
     if (payload == "[DONE]") {
         return true;
+    }
+    if (payload.empty()) {
+        return false;
     }
 
     // 高频路径: JsonView 零拷贝路由 (§4.3) + 命中后按需物化
@@ -1576,13 +1592,16 @@ bool OpenAIProvider::processResponsesSseBuffer(
     bool                               finalFlush,
     std::string*                       errOut
 ) {
-    bool   done = false;
-    size_t pos;
-    while ((pos = buf.find('\n')) != std::string::npos) {
-        std::string line = buf.substr(0, pos);
-        buf.erase(0, pos + 1);
+    bool done = false;
+    // 扫过已处理的整行, 只在末尾搬移一次剩余的不完整行 (同 [processSseBuffer])
+    size_t pos = 0;
+    for (;;) {
+        const size_t nl = buf.find('\n', pos);
+        if (nl == std::string::npos) {
+            break;
+        }
         done |= processResponsesSseLine(
-            line,
+            std::string_view{buf}.substr(pos, nl - pos),
             completion,
             fullContent,
             fullThinking,
@@ -1590,16 +1609,15 @@ bool OpenAIProvider::processResponsesSseBuffer(
             on_chunk,
             errOut
         );
+        pos = nl + 1;
         // 收到错误事件后停止解析后续行
         if (errOut && !errOut->empty()) {
             break;
         }
     }
-    if (finalFlush && !buf.empty()) {
-        std::string line = std::move(buf);
-        buf.clear();
+    if (finalFlush && pos < buf.size()) {
         done |= processResponsesSseLine(
-            line,
+            std::string_view{buf}.substr(pos),
             completion,
             fullContent,
             fullThinking,
@@ -1607,6 +1625,10 @@ bool OpenAIProvider::processResponsesSseBuffer(
             on_chunk,
             errOut
         );
+        pos = buf.size();
+    }
+    if (pos > 0) {
+        buf.erase(0, pos);
     }
     return done;
 }
@@ -1620,25 +1642,29 @@ bool OpenAIProvider::processResponsesSseLine(
     neograph::FormatDataStreamCallback on_chunk,
     std::string*                       errOut
 ) {
-    std::string line{line_in};
+    // 就地裁剪行与负载 (旧实现在这里各拷一份 std::string, 每个事件多两次堆分配)
+    std::string_view line = line_in;
     if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
+        line.remove_suffix(1);
     }
 
     // 只关心 data: 行 (event: 行会被跳过)
-    if (line.rfind("data:", 0) != 0) {
+    if (line.size() < 5 || line.compare(0, 5, "data:") != 0) {
         return false;
     }
-    std::string payload = line.substr(5);
+    std::string_view payload = line.substr(5);
     if (!payload.empty() && payload.front() == ' ') {
-        payload.erase(0, 1);
+        payload.remove_prefix(1);
     }
     while (!payload.empty() && (payload.back() == ' ' || payload.back() == '\t')) {
-        payload.pop_back();
+        payload.remove_suffix(1);
     }
     // 部分兼容服务仍使用 [DONE] 作为结束标记
     if (payload == "[DONE]") {
         return true;
+    }
+    if (payload.empty()) {
+        return false;
     }
 
     // 高频路径: JsonView 零拷贝路由 (§4.3) + 命中后按需物化

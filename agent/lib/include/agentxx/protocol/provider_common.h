@@ -7,6 +7,7 @@
 ///   仍留在各自 provider 内
 #pragma once
 
+#include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
 #include "neograph/api.h"
 #include "neograph/provider.h"
@@ -14,8 +15,11 @@
 #include <chrono>
 #include <cstdint>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace agentxx {
 namespace protocol {
@@ -120,6 +124,137 @@ inline std::string makeUniqueToolCallId(size_t index = 0) {
     )
                         .count();
     return fmt::format("call_{}_{}_{:08x}", ts, index, static_cast<uint32_t>(rng()));
+}
+
+/// 把 typed 上下文直接组装为 OpenAI Chat Completions 请求体的 `messages` 数组
+///
+/// - 与 [neograph::messages_to_json] 的输出逐字段一致: 角色 / 正文 / tool_calls /
+///   tool 应答 / 多模态分片顺序均相同, 只是直接产出 `utilxx_base::Json`,
+///   省掉 "typed -> neograph json -> utilxx Json" 里的一次整段 DOM 拷贝
+///   (每轮请求都会发生, 长上下文时是主要的内存与分配量来源之一)
+/// - 二者必须保持一致: `/test` 的 `openai_provider` 模块有逐字节对照用例
+///
+/// - `args`:
+///     - [messages] 会话上下文 (typed)
+///     - [sendThinking] 是否回传明文思考 (`reasoning_content`);
+///       关闭时不写入该字段, 等价于旧实现的"构造后逐条删除该键"
+///
+/// - `return` OpenAI messages 数组
+inline utilxx_base::Json chatMessagesToOpenAIJson(
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      sendThinking
+) {
+    auto arr = utilxx_base::Json::array();
+    for (const auto& msg : messages) {
+        utilxx_base::Json j;
+        j["role"] = msg.role;
+
+        if (msg.role == "tool") {
+            j["content"]       = msg.content;
+            j["tool_call_id"]  = msg.tool_call_id;
+        } else if (!msg.tool_calls.empty()) {
+            // 带工具调用的助手消息: 无正文时 content 为 null (与 neograph 一致)
+            j["content"] = msg.content.empty() ? utilxx_base::Json{} : utilxx_base::Json(msg.content);
+            auto tcArr   = utilxx_base::Json::array();
+            for (const auto& tc : msg.tool_calls) {
+                tcArr.push_back(utilxx_base::Json{
+                    {"id", utilxx_base::Json(tc.id)},
+                    {"type", utilxx_base::Json("function")},
+                    {"function",
+                     utilxx_base::Json{
+                         {"name", utilxx_base::Json(tc.name)},
+                         {"arguments", utilxx_base::Json(tc.arguments)},
+                     }},
+                });
+            }
+            j["tool_calls"] = std::move(tcArr);
+        } else if (!msg.image_urls.empty() || !msg.audio_urls.empty() || !msg.video_urls.empty()) {
+            // 多模态: 文本 + 图片/音频/视频 (OpenAI 分片格式)
+            auto parts = utilxx_base::Json::array();
+            if (!msg.content.empty()) {
+                parts.push_back(utilxx_base::Json{
+                    {"type", utilxx_base::Json("text")},
+                    {"text", utilxx_base::Json(msg.content)},
+                });
+            }
+            for (const auto& url : msg.image_urls) {
+                parts.push_back(utilxx_base::Json{
+                    {"type", utilxx_base::Json("image_url")},
+                    {"image_url", utilxx_base::Json{{"url", utilxx_base::Json(url)}}},
+                });
+            }
+            for (const auto& url : msg.audio_urls) {
+                if (auto parsed = neograph::parse_data_url(url)) {
+                    // data URL 可拆成 base64 数据 + 格式; HTTP URL 拆不出, 走 url 字段
+                    parts.push_back(utilxx_base::Json{
+                        {"type", utilxx_base::Json("input_audio")},
+                        {"input_audio",
+                         utilxx_base::Json{
+                             {"data", utilxx_base::Json(parsed->second)},
+                             {"format",
+                              utilxx_base::Json(neograph::media_format_from_mime(parsed->first))},
+                         }},
+                    });
+                } else {
+                    parts.push_back(utilxx_base::Json{
+                        {"type", utilxx_base::Json("input_audio")},
+                        {"input_audio", utilxx_base::Json{{"url", utilxx_base::Json(url)}}},
+                    });
+                }
+            }
+            for (const auto& url : msg.video_urls) {
+                parts.push_back(utilxx_base::Json{
+                    {"type", utilxx_base::Json("video_url")},
+                    {"video_url", utilxx_base::Json{{"url", utilxx_base::Json(url)}}},
+                });
+            }
+            j["content"] = std::move(parts);
+        } else {
+            j["content"] = msg.content;
+        }
+
+        if (msg.role == "assistant") {
+            if (!msg.reasoning_details.empty()) {
+                if (!msg.reasoning_details.is_array()) {
+                    throw std::invalid_argument("ChatMessage reasoning_details must be an array");
+                }
+                j["reasoning_details"] = agentxx::util::fromNeographJson(msg.reasoning_details);
+            } else if (sendThinking && !msg.reasoning_content.empty()) {
+                j["reasoning_content"] = msg.reasoning_content;
+            }
+        }
+
+        arr.push_back(std::move(j));
+    }
+    return arr;
+}
+
+/// 把 typed 工具定义直接组装为 OpenAI Chat Completions 请求体的 `tools` 数组
+///
+/// - 与 [neograph::tools_to_json] 的输出逐字段一致, 同样省掉一次整段 DOM 拷贝
+/// - 无参数 schema 的工具回退为空对象 schema (严格校验的网关会拒绝
+///   `"parameters": null`)
+///
+/// - `args`:
+///     - [tools] 工具定义列表
+///
+/// - `return` OpenAI tools 数组
+inline utilxx_base::Json chatToolsToOpenAIJson(const std::vector<neograph::ChatTool>& tools) {
+    auto arr = utilxx_base::Json::array();
+    for (const auto& tool : tools) {
+        const neograph::json& params
+            = tool.parameters.is_object() ? tool.parameters : neograph::json::object();
+        arr.push_back(utilxx_base::Json{
+            {"type", utilxx_base::Json("function")},
+            {"function",
+             utilxx_base::Json{
+                 {"name", utilxx_base::Json(tool.name)},
+                 {"description", utilxx_base::Json(tool.description)},
+                 {"parameters", agentxx::util::fromNeographJson(params)},
+             }},
+        });
+    }
+    return arr;
 }
 
 /// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考载体

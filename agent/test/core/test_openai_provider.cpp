@@ -1,6 +1,7 @@
 #include "agentxx-test/core/test_openai_provider.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "utilxx/http_client.h"
 #include "utilxx/http_server.h"
@@ -930,6 +931,130 @@ void test_messages_to_json_multimodal() {
     );
     XX_TEST_EXPECT_EQ(parts[5]["type"].get<std::string>(), "video_url");
     XX_TEST_EXPECT_EQ(parts[5]["video_url"]["url"].get<std::string>(), "https://example.com/a.mp4");
+}
+
+/// 请求体里的 messages / tools 数组由 typed 上下文直接构造 (省掉
+/// "typed -> neograph json -> utilxx Json" 的一次整段 DOM 拷贝),
+/// 输出必须与旧路径 (neograph::messages_to_json/tools_to_json + fromNeographJson)
+/// 逐字节一致 —— 否则请求体会变, 属于静默行为变化
+void test_request_body_messages_json_matches_legacy_path() {
+    std::vector<neograph::ChatMessage> msgs;
+
+    // system / user (含转义字符 / 多字节) / assistant 纯文本
+    {
+        neograph::ChatMessage m;
+        m.role    = "system";
+        m.content = "you are \"agent\" \\ helper\nline2\ttab";
+        msgs.push_back(m);
+    }
+    {
+        neograph::ChatMessage m;
+        m.role    = "user";
+        m.content = "中文 + emoji 🙂 + 控制字符 \x01 结束";
+        msgs.push_back(m);
+    }
+    {
+        neograph::ChatMessage m;
+        m.role    = "assistant";
+        m.content = "好的";
+        msgs.push_back(m);
+    }
+    // assistant + tool_calls (含空正文: content 必须写成 null)
+    {
+        neograph::ChatMessage m;
+        m.role    = "assistant";
+        m.content = "";
+        m.tool_calls.push_back(neograph::ToolCall{"call_1", "read_file", R"({"path":"a b.json"})"});
+        m.tool_calls.push_back(neograph::ToolCall{"", "glob", "{}"});
+        msgs.push_back(m);
+    }
+    // tool 应答
+    {
+        neograph::ChatMessage m;
+        m.role          = "tool";
+        m.content       = "[Error] 未找到\n路径";
+        m.tool_call_id  = "call_1";
+        m.tool_name     = "read_file";
+        msgs.push_back(m);
+    }
+    // assistant + 明文思考 (sendThinking 关闭时应被丢弃)
+    {
+        neograph::ChatMessage m;
+        m.role              = "assistant";
+        m.content           = "答案";
+        m.reasoning_content = "思考过程";
+        msgs.push_back(m);
+    }
+    // assistant + reasoning_details (数组优先于 reasoning_content)
+    {
+        neograph::ChatMessage m;
+        m.role              = "assistant";
+        m.content           = "";
+        m.reasoning_content = "不应出现";
+        m.reasoning_details = neograph::json::parse(R"([{"type":"reasoning","id":"r1"}])");
+        msgs.push_back(m);
+    }
+    // 多模态: 文本 + 图片 + 音频 (data URL / HTTP URL) + 视频
+    {
+        neograph::ChatMessage m;
+        m.role       = "user";
+        m.content    = "看图";
+        m.image_urls = {"https://example.com/a.png"};
+        m.audio_urls = {"data:audio/wav;base64,UklGRg==", "https://example.com/a.wav"};
+        m.video_urls = {"data:video/mp4;base64,AAAA"};
+        msgs.push_back(m);
+    }
+    // 纯附件 (无正文)
+    {
+        neograph::ChatMessage m;
+        m.role       = "user";
+        m.audio_urls = {"data:audio/mpeg;base64,SUQzBAAAAA=="};
+        msgs.push_back(m);
+    }
+
+    for (bool sendThinking : {true, false}) {
+        auto direct = agentxx::protocol::chatMessagesToOpenAIJson(msgs, sendThinking);
+
+        // 旧路径: neograph 形态 -> utilxx Json; 关闭思考时逐条删除 reasoning_content
+        auto legacy = agentxx::util::fromNeographJson(neograph::messages_to_json(msgs));
+        if (!sendThinking) {
+            for (auto& item : legacy) {
+                item.erase("reasoning_content");
+            }
+        }
+        XX_TEST_EXPECT_EQ(direct.dump(), legacy.dump());
+    }
+
+    // 空上下文
+    XX_TEST_EXPECT_EQ(
+        agentxx::protocol::chatMessagesToOpenAIJson({}, true).dump(),
+        agentxx::util::fromNeographJson(neograph::messages_to_json({})).dump()
+    );
+}
+
+/// tools 数组同样逐字节一致 (含无参数 schema 的工具回退为空对象)
+void test_request_body_tools_json_matches_legacy_path() {
+    std::vector<neograph::ChatTool> tools;
+    {
+        neograph::ChatTool t;
+        t.name        = "read_file";
+        t.description = "读取文件\n支持 offset/limit";
+        t.parameters  = neograph::json::parse(
+            R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})"
+        );
+        tools.push_back(t);
+    }
+    {
+        neograph::ChatTool t;
+        t.name        = "no_schema";
+        t.description = "";
+        // parameters 保持 null -> 必须回退为空对象 schema
+        tools.push_back(t);
+    }
+
+    auto direct = agentxx::protocol::chatToolsToOpenAIJson(tools);
+    auto legacy = agentxx::util::fromNeographJson(neograph::tools_to_json(tools));
+    XX_TEST_EXPECT_EQ(direct.dump(), legacy.dump());
 }
 
 void test_messages_to_json_multimodal_empty_content() {
@@ -4532,6 +4657,10 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_messages_to_json_multimodal();
     test_messages_to_json_multimodal_empty_content();
     test_messages_to_json_multimodal_roundtrip();
+
+    // 请求体 messages / tools 数组: 直接构造与旧路径逐字节一致
+    test_request_body_messages_json_matches_legacy_path();
+    test_request_body_tools_json_matches_legacy_path();
 
     // Unit tests for <think> tag extraction (no server needed)
     test_extract_think_tags_basic();
