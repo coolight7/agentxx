@@ -6,7 +6,7 @@
 ///      消息 (经 agentxx.agent.context 接口表, 上下文由会话持有, 不在图状态里),
 ///      按 config 中定义的意图枚举 (intents) 匹配, 写 __route__ channel,
 ///      由图的 conditional edge (route_channel) 决定路由; 非枚举值取
-///      fallback (默认 "normal"); 已检查过的轮次退化为 has_tool_calls 路由
+///      fallback (默认 "normal"); 已检查过的轮次退化为 xx_has_tool_calls 语义路由
 ///    - example_datetime (时间输出): 将当前系统日期时间作为 assistant
 ///      消息写入 messages channel —— 宿主把该通道的写入转成会话上下文写入
 ///      (并同步 viewMessages / llmMessages)
@@ -152,7 +152,7 @@ bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
 /// 意图识别节点执行 (快同步):
 /// - 第一次经过: 读最后 assistant 消息内容, 匹配 config intents 枚举 →
 ///   写 __route__ (命中) / fallback (未命中); 同时标记 __intent_checked=true
-/// - 后续轮次: 按 has_tool_calls 语义写 __route__ (tools/end), 保持原
+/// - 后续轮次: 按 "最后一条 assistant 是否带 tool_calls" 写 __route__ (tools/end), 保持原
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
 std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
@@ -235,7 +235,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
         return payload;
     }
 
-    // 后续轮次: 等价 has_tool_calls 条件
+    // 后续轮次: 等价图条件 xx_has_tool_calls (插件自己从会话上下文判断)
     route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
     const std::string payload = fmt::format(
         R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",

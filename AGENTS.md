@@ -319,6 +319,12 @@ path/to/agentxx_test string_util regex
   - 路由: `llm` 节点按本轮是否有 tool_calls 返回 `Command.goto_node` (tools/agent_end),
     默认图只用静态边; 节点级 `xx_autoRoute=false` (图定义里该节点的额外键会合并进
     `NodeContext.extra_config`) 可交回图定义路由
+  - 图条件 `xx_has_tool_calls` (agentxx 注册, 见 `agentxx/nodes/graph_conditions.h`):
+    自定义图/插件重写图时用它替代内置 `has_tool_calls` (后者读图状态的 `messages`
+    通道, 新架构下恒为 false); 语义 = 最后一条 assistant 是否带 tool_calls,
+    读 `xx_messagesMeta.last_assistant_tool_calls`, 无该通道时回退扫描 `messages` 通道;
+    `BaseAgent::initRegisterNodes` 同时注册到 per-agent 与进程级全局条件表
+    (自建 GraphRegistry 的宿主需自行调用 `registerAgentGraphConditions`)
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 18 个 (含 `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`

@@ -241,7 +241,7 @@ asio::awaitable<neograph::graph::NodeOutput>
     );
 
     // ReAct 循环路由: 由本节点直接给出下一节点, 不再依赖
-    // "读末尾消息判断 has_tool_calls" 的条件边 (上下文已不在图状态里)
+    // "读末尾消息判断 xx_has_tool_calls" 的条件边 (上下文已不在图状态里)
     // - 有 tool_calls → tools; 无 → agent_end (本轮结束)
     // - 图定义显式关闭自动路由 (xx_autoRoute=false) 时不给出 Command, 由图的边决定
     neograph::graph::NodeOutput out;

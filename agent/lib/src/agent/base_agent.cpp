@@ -9,6 +9,7 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/exception.h"
 #include "asio/co_spawn.hpp"
@@ -400,6 +401,11 @@ void BaseAgent::initEventBus() {
 }
 
 void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
+    // agentxx 图条件 (如 xx_has_tool_calls): 注册到本 agent 的 registry,
+    // 并登记到进程级全局表 (自建 registry / 直接 GraphEngine::compile 的场景也能解析)
+    agentxx::nodes::registerAgentGraphConditions(registry);
+    agentxx::nodes::registerAgentGraphConditionsGlobal();
+
     // 注意: 必须以 weak_ptr 捕获 agentContext, 防止循环引用
     // (AgentContext → graphRegistry → 节点工厂 lambda → AgentContext):
     // - 自插件 graph 接口表支持后, graphRegistry 同时被 AgentContext 持有
@@ -463,13 +469,13 @@ neograph::json BaseAgent::initGraphDefinition() {
     //                 |<---------------------------|
     //                 |                            |
     //                 v                            |
-    //  __start__  -> llm ->  has_tool_calls  ->  tools
+    //  __start__  -> llm ->  xx_has_tool_calls  ->  tools
     //                               |
     //                               v
     //                            __end__
     //
     // 注意: 循环分支由 llm 节点返回的 Command.goto_node 给出 (有 tool_calls →
-    // tools, 否则 → agent_end), 不再依赖 "读末尾消息判断 has_tool_calls" 的条件边 ——
+    // tools, 否则 → agent_end), 不再依赖 "读末尾消息判断 xx_has_tool_calls" 的条件边 ——
     // LLM 上下文由会话持有 (见 context.h Session::messages), 图状态通道不再承载
     // 上下文, 因此也没有可供条件边读取的 messages 通道。
 

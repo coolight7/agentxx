@@ -8,6 +8,7 @@
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/skill.h"
 #include "agentxx/nodes/agentcall.h"
+#include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/nodes/modelcall.h"
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -1721,6 +1722,9 @@ throw new Error("top-level rollback probe");
         gctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(gctx);
         gctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
         gctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
+        // agentxx 图条件 (与 BaseAgent::initRegisterNodes 一致; 自建 registry 需显式注册,
+        // 否则图定义引用的 xx_has_tool_calls 编译报"Unknown condition")
+        agentxx::nodes::registerAgentGraphConditions(*gctx->graphRegistry);
 
         // 默认图 (与 BaseAgent::initGraphDefinition 同构): 名称 agentxx.default
         gctx->graphDefinitionJson = neograph::json{
@@ -1743,7 +1747,9 @@ throw new Error("top-level rollback probe");
                     {
                         {"from", "llm"},
                         {"type", "conditional"},
-                        {"condition", "has_tool_calls"},
+                        // agentxx 条件 (会话持有上下文; 内置 has_tool_calls 读图状态
+                        // 的 messages 通道, 在新架构下恒为 false)
+                        {"condition", "xx_has_tool_calls"},
                         {"routes", {{"true", "tools"}, {"false", "agent_end"}}},
                     },
                     {{"from", "tools"}, {"to", "llm"}},

@@ -891,7 +891,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
 // debug 检查警告: 若该 assistant 声明的 tool_calls 在其之后已全部有 tool 结果消息,
 // 说明这些工具已执行过, 本节点被重复调度
 // - 正常流程不会发生 (工具执行后 llm 重新调用, 末尾变为新的 assistant 消息)
-// - 出现时说明存在异常路径 (如异常被吞掉后 [has_tool_calls] 误路由), 记录
+// - 出现时说明存在异常路径 (如异常被吞掉后 [xx_has_tool_calls] 误路由), 记录
 //   警告日志供排查; 不跳过执行, 避免掩盖真正的问题
 #if XX_IS_DEBUG_D
     {

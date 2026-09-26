@@ -31,6 +31,18 @@ neograph::json buildMessagesMeta(const std::shared_ptr<agentxx::agent::Session>&
     }
     meta["role_counts"] = std::move(roleCounts);
 
+    // 最后一条 assistant 消息的 tool_calls 条数: 循环路由条件
+    // `xx_has_tool_calls` 的取值来源 (语义与 neograph 内置 has_tool_calls 一致:
+    // 从末尾回溯第一条 assistant 消息)
+    size_t lastAssistantToolCalls = 0;
+    for (auto it = msgs.rbegin(); it != msgs.rend(); ++it) {
+        if (it->role == "assistant") {
+            lastAssistantToolCalls = it->tool_calls.size();
+            break;
+        }
+    }
+    meta["last_assistant_tool_calls"] = lastAssistantToolCalls;
+
     if (!msgs.empty()) {
         const auto& last        = msgs.back();
         meta["last_role"]       = last.role;

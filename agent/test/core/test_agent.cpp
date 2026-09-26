@@ -7,6 +7,7 @@
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
@@ -845,6 +846,207 @@ asio::awaitable<void> test_agent_tool_calls() {
 
     XX_TEST_EXPECT_FALSE(result.hasError);
 
+    // 图条件 xx_has_tool_calls 在真实运行产生的图状态上生效:
+    // 本轮最后一条 assistant 带 tool_calls, 影子通道应记录该条数 (条件返回 true),
+    // 说明宿主在上下文变更时确实刷新了 xx_messagesMeta
+    {
+        auto* engine = agent.getEngine();
+        XX_TEST_EXPECT_TRUE(engine != nullptr);
+        if (engine != nullptr) {
+            auto state = engine->get_state("tool_test");
+            XX_TEST_EXPECT_TRUE(state.has_value());
+            if (state.has_value()) {
+                // get_state 返回序列化快照: 声明通道后 restore 还原成 GraphState,
+                // 再用条件函数求值 (restore 只填充已声明的通道)
+                neograph::graph::GraphState gs;
+                gs.init_channel(
+                    agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+                    neograph::graph::ReducerType::OVERWRITE,
+                    nullptr,
+                    neograph::json::object()
+                );
+                gs.restore(*state);
+                XX_TEST_EXPECT_TRUE(
+                    gs.has_channel(agentxx::middleware::MiddlewareContext::channel_messagesMeta)
+                );
+                const auto meta = gs.get(
+                    agentxx::middleware::MiddlewareContext::channel_messagesMeta
+                );
+                XX_TEST_EXPECT_TRUE(meta.is_object());
+
+                auto session = agent.agentContext->sessions->get("tool_test");
+                XX_TEST_EXPECT_TRUE(session != nullptr);
+                if (session && meta.is_object()) {
+                    // 元信息由真实运行维护: 条数与会话上下文一致
+                    XX_TEST_EXPECT_EQ(
+                        meta.value("count", static_cast<int64_t>(0)),
+                        static_cast<int64_t>(session->messagesCount())
+                    );
+                    // 本轮确实出现过带 tool_calls 的 assistant (工具轮发生过)
+                    bool sawToolCallingAssistant = false;
+                    for (const auto& m : session->messages()) {
+                        if (m.role == "assistant" && !m.tool_calls.empty()) {
+                            sawToolCallingAssistant = true;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(sawToolCallingAssistant);
+                    // 轮末最后一条 assistant 是最终回答 (无 tool_calls) → 条件为 false
+                    // (工具轮进行中该值为 1, 由单元用例覆盖该映射)
+                    XX_TEST_EXPECT_EQ(
+                        meta.value("last_assistant_tool_calls", static_cast<int64_t>(0)),
+                        static_cast<int64_t>(0)
+                    );
+                }
+                XX_TEST_EXPECT_EQ(agentxx::nodes::evalHasToolCallsCondition(gs), std::string{"false"});
+            }
+        }
+    }
+
+    co_return;
+}
+
+/// 验收: agentxx 图条件 `xx_has_tool_calls` (替代内置 has_tool_calls)
+/// - 新架构: 读上下文影子通道 xx_messagesMeta 的 last_assistant_tool_calls
+/// - 兼容: 图状态里存在 messages 通道时按内置语义扫描 (从末尾回溯第一条 assistant)
+/// - 两者都缺失: "false" (安全默认: 结束本轮)
+/// - 同时验证注册到 registry 后可用 (BaseAgent::initRegisterNodes 的同款调用)
+asio::awaitable<void> test_agent_has_tool_calls_condition() {
+    using agentxx::nodes::evalHasToolCallsCondition;
+
+    // (1) 空状态: 没有上下文 -> false
+    {
+        neograph::graph::GraphState state;
+        state.init_channel(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::graph::ReducerType::OVERWRITE,
+            nullptr,
+            neograph::json::object()
+        );
+        state.overwrite(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::json{
+                {"count",                     3},
+                {"last_assistant_tool_calls", 2},
+        }
+        );
+        XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state), std::string{"true"});
+    }
+    // (2) 影子通道: last_assistant_tool_calls == 0 -> false
+    {
+        neograph::graph::GraphState state;
+        state.init_channel(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::graph::ReducerType::OVERWRITE,
+            nullptr,
+            neograph::json::object()
+        );
+        state.overwrite(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::json{
+                {"count",                     5},
+                {"last_assistant_tool_calls", 0},
+        }
+        );
+        XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state), std::string{"false"});
+    }
+    // (3) 影子通道存在但缺字段 (老版本写入的元信息) -> false
+    {
+        neograph::graph::GraphState state;
+        state.init_channel(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::graph::ReducerType::OVERWRITE,
+            nullptr,
+            neograph::json::object()
+        );
+        state.overwrite(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::json{{"count", 5}}
+        );
+        XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state), std::string{"false"});
+    }
+    // (4) 兼容路径: 图状态自带 messages 通道 (自定义图)
+    {
+        neograph::graph::GraphState state;
+        neograph::json             msgs = neograph::json::array();
+        msgs.push_back(neograph::json{{"role", "user"}, {"content", "hi"}});
+        msgs.push_back(
+            neograph::json{
+                {"role",       "assistant"          },
+                {"content",    "calling"            },
+                {"tool_calls", neograph::json::array({neograph::json{{"id", "call_1"}}})},
+            }
+        );
+        // 工具结果在 assistant 之后: 仍应回溯到该 assistant 并返回 true (与内置同语义)
+        msgs.push_back(
+            neograph::json{
+                {"role",         "tool"    },
+                {"content",      "result"  },
+                {"tool_call_id", "call_1"  },
+            }
+        );
+        state.init_channel(
+            "messages",
+            neograph::graph::ReducerType::APPEND,
+            neograph::graph::ReducerRegistry::instance().get("append"),
+            msgs
+        );
+        XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state), std::string{"true"});
+
+        // 末尾 assistant 无 tool_calls -> false
+        neograph::graph::GraphState state2;
+        state2.init_channel(
+            "messages",
+            neograph::graph::ReducerType::APPEND,
+            neograph::graph::ReducerRegistry::instance().get("append"),
+            neograph::json::array({
+                neograph::json{{"role", "user"}, {"content", "hi"}},
+                neograph::json{{"role", "assistant"}, {"content", "plain answer"}},
+            })
+        );
+        XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state2), std::string{"false"});
+    }
+    // (5) 注册到 GraphRegistry 后可按名字解析 (BaseAgent::initRegisterNodes 同款调用)
+    {
+        neograph::graph::GraphRegistry registry;
+        agentxx::nodes::registerAgentGraphConditions(registry);
+
+        neograph::graph::GraphState state;
+        state.init_channel(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::graph::ReducerType::OVERWRITE,
+            nullptr,
+            neograph::json::object()
+        );
+        state.overwrite(
+            agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+            neograph::json{{"last_assistant_tool_calls", 1}}
+        );
+
+        auto cond = registry.condition(std::string{agentxx::nodes::kConditionHasToolCalls});
+        XX_TEST_EXPECT_TRUE(static_cast<bool>(cond));
+        if (cond) {
+            XX_TEST_EXPECT_EQ(cond(state), std::string{"true"});
+        }
+        // 条件声明为闭合取值集合 {false, true} (校验器据此检查 routes 覆盖)
+        auto spec = registry.condition_spec(std::string{agentxx::nodes::kConditionHasToolCalls});
+        XX_TEST_EXPECT_TRUE(spec.has_value());
+        if (spec.has_value()) {
+            XX_TEST_EXPECT_FALSE(spec->open);
+            XX_TEST_EXPECT_EQ(spec->labels.size(), size_t{2});
+        }
+    }
+    // (6) 进程级全局注册后, 自建 GraphRegistry 也能解析该条件名
+    {
+        agentxx::nodes::registerAgentGraphConditionsGlobal();
+        neograph::graph::GraphRegistry registry;
+        auto cond = registry.condition(std::string{agentxx::nodes::kConditionHasToolCalls});
+        XX_TEST_EXPECT_TRUE(static_cast<bool>(cond));
+        if (cond) {
+            neograph::graph::GraphState emptyState;
+            XX_TEST_EXPECT_EQ(cond(emptyState), std::string{"false"});
+        }
+    }
+
     co_return;
 }
 
@@ -898,6 +1100,17 @@ asio::awaitable<void> test_agent_context_not_in_graph_state() {
             const std::string dump = state->dump();
             XX_TEST_EXPECT_TRUE(dump.find(marker) == std::string::npos);
             XX_TEST_EXPECT_TRUE(dump.size() < 8192);
+            // 上下文影子通道由真实运行维护: 本轮无 tool_calls → 条件为 false
+            // (restore 只填充已声明的通道, 先声明再还原)
+            neograph::graph::GraphState gs;
+            gs.init_channel(
+                agentxx::middleware::MiddlewareContext::channel_messagesMeta,
+                neograph::graph::ReducerType::OVERWRITE,
+                nullptr,
+                neograph::json::object()
+            );
+            gs.restore(*state);
+            XX_TEST_EXPECT_EQ(agentxx::nodes::evalHasToolCallsCondition(gs), std::string{"false"});
         }
     }
 
@@ -1265,7 +1478,7 @@ asio::awaitable<void> test_agent_reuse_session_bus() {
 }
 
 /// LLM API 持续失败时, ModelCall 重试耗尽后应重抛异常停止本轮执行,
-/// 而不是: 吞掉异常 -> 节点假装成功返回空输出 -> [has_tool_calls] 误路由 ->
+/// 而不是: 吞掉异常 -> 节点假装成功返回空输出 -> [xx_has_tool_calls] 误路由 ->
 /// 重复执行最后一次 toolcall 并插入重复结果 -> llm<->tools 无限循环 (消息无限堆积)
 asio::awaitable<void> test_agent_llm_retry_exhaust() {
     auto sim     = startDaSimServer();
@@ -1751,6 +1964,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_conversation_turn();
         co_await test_agent_tool_calls();
         co_await test_agent_multi_turn();
+    co_await test_agent_has_tool_calls_condition();
     co_await test_agent_context_not_in_graph_state();
         co_await test_agent_large_history();
         co_await test_agent_nonstream();

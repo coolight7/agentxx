@@ -162,7 +162,7 @@ protected:
 
     /// 构建图定义 JSON
     /// - 默认实现返回标准 ReAct 循环:
-    ///   __start__ → agent_start → llm → [has_tool_calls?] → tools/agent_end → __end__
+    ///   __start__ → agent_start → llm → [条件边: xx_has_tool_calls?] → tools/agent_end → __end__
     /// - 图名称固定为 "agentxx.default" (插件可经 graph 接口表查看/修改)
     virtual neograph::json initGraphDefinition();
 

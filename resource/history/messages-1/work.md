@@ -88,6 +88,25 @@
       注入假上下文改用 `appendSettledLlmMessages`), 以
       `AGENTXX_BUILD_BENCHMARK=ON` 在 debug 构建目录编译通过。
 
+### 阶段 5: 图条件 `xx_has_tool_calls` (供插件/自定义图替代内置 `has_tool_calls`)
+
+- [x] 新增 `agentxx/nodes/graph_conditions.h/.cpp`: 条件名
+      `xx_has_tool_calls` (`kConditionHasToolCalls`), 语义与内置 `has_tool_calls`
+      相同 (最后一条 assistant 是否带 tool_calls), 取值来源:
+      ① 影子通道 `xx_messagesMeta.last_assistant_tool_calls` (新架构默认);
+      ② 图状态存在 `messages` 通道时按内置语义回溯扫描 (自定义图/插件自带上下文);
+      ③ 都没有 → "false" (安全默认: 结束本轮)。
+- [x] 影子通道新增字段 `last_assistant_tool_calls` (由宿主在上下文变更时刷新)。
+- [x] 注册: `BaseAgent::initRegisterNodes` 调 `registerAgentGraphConditions`
+      (per-agent registry) + `registerAgentGraphConditionsGlobal` (进程级全局,
+      `std::once_flag`); 自建 `GraphRegistry` 的宿主需自行调用前者。
+- [x] 测试: `test_agent_has_tool_calls_condition` (影子通道 / 缺字段 / 兼容
+      messages 通道 / registry 解析与条件声明); 真实运行侧在两处断言影子通道元信息
+      与会话上下文一致 (`agent` 模块 170 → 192 条断言)。
+- [x] 代码/文档中的 `has_tool_calls` 提法统一改为 `xx_has_tool_calls`
+      (注释、插件示例、`test_plugins` 图定义改用新条件并注册、plugins.md / index.md /
+      AGENTS.md 说明)。
+
 ## 1.1 每条消息每轮的拷贝次数 (分析, 未做分配统计实测)
 
 迁移前 (memory-1 §0.4 实测 7~9 次/条) 与迁移后的逐项对照:
@@ -124,8 +143,9 @@
 - [ ] 双轨开关 (`AgentConfig::context_owner`) 未实现 —— 见"注意事项"第 3 条。
 - [ ] `docs/en/design/index.md` (英文版) 仍是旧口径: 只更新了中文设计文档与
       `AGENTS.md`; 英文文档的 `llmMessages` / 双消息集表述待同步。
-- [ ] `neograph` 侧 `has_tool_calls` 条件与 `GraphState::get_messages()` 内部读点
-      已无默认路径使用者, 是否清理 (或标注为"自定义图可用") 待定。
+- [ ] `neograph` 侧内置 `has_tool_calls` 条件与 `GraphState::get_messages()` 内部读点
+      保留 (neograph 自身的 chat 图契约 + `xx_has_tool_calls` 的兼容回退路径使用);
+      agentxx 默认路径已不再使用内置条件。
 
 ## 3. 注意事项
 
@@ -135,8 +155,11 @@
   的载荷与上下文大小无关。
 - checkpoint 只保存控制数据; **上下文不在 checkpoint 里**, 恢复依赖会话
   (sqlite + 节流窗口), fork / 时间旅行语义不再覆盖对话内容。
-- `has_tool_calls` 条件边不再被默认图使用 (条件注册表本身保留, 自定义图仍可用);
-  默认图的循环路由由 `llm` 节点的 `Command.goto_node` 给出。
+- `has_tool_calls` (neograph 内置) 不再被默认图或 agentxx 代码使用 (它读图状态的
+  `messages` 通道, 新架构下恒为 false); 自定义图/插件请用 `xx_has_tool_calls`
+  (`agentxx/nodes/graph_conditions.h`), 后者读 `xx_messagesMeta.last_assistant_tool_calls`,
+  无该通道时回退扫描 `messages` 通道, 两者都没有时返回 "false"。
+- 默认图的循环路由由 `llm` 节点的 `Command.goto_node` 给出。
 - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前
   已写入的消息保留; 未定稿的结果 (如中断的 toolcall) 仍只在 graphData 缓存,
   resume 后重新执行节点再写入。
@@ -168,7 +191,8 @@
   建议用 git 回滚本次提交而不是运行期开关。
 - 未新增"逐轮长上下文"基准场景 (方案 §6 提到), 分配次数复测需要先补该场景。
 - `has_tool_calls` 条件函数与 `neograph` 侧 `get_messages()` 内部读点保留
-  (自定义图/引擎内置节点仍可能使用), 只是 agentxx 默认路径不再依赖。
+  (neograph 自身 chat 图契约, 且 `xx_has_tool_calls` 的兼容回退路径会用到),
+  只是 agentxx 默认路径不再依赖。
 
 ## 4. 提交记录 (按阶段)
 

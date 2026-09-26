@@ -1159,13 +1159,19 @@ User Input → TUIClientAgentIO/StdIOClientAgentIO
 BaseAgent 的核心执行引擎基于 NeoGraph 图引擎，构建 ReAct (Reasoning + Acting) 循环：
 
 ```
-__start__ → agent_start → llm → [conditional: has_tool_calls?]
+__start__ → agent_start → llm → [conditional: xx_has_tool_calls?]
                                   ├─ yes → tools → llm (循环)
                                   └─ no  → agent_end → __end__
 ```
 
 - **agent_start**: 初始化会话状态、注入 system prompt、刷新临时数据
 - **llm (ModelCallWrapNode)**: 调用 LLM API，支持动态模型切换、消息修复、重试
+  - 本轮循环路由由节点按"是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end)
+    给出（默认图只用静态默认边，不声明条件边）；`xx_autoRoute=false` 可关闭该行为，
+    交给图定义的条件边接管
+  - 图定义用条件边时请使用 `xx_has_tool_calls`（读会话上下文影子通道
+    `xx_messagesMeta.last_assistant_tool_calls`），**不要**用内置 `has_tool_calls`
+    （它读图状态的 `messages` 通道，而 agentxx 的上下文由会话持有，恒为 false）
 - **tools (ToolcallWrapNode)**: 分发执行工具调用，支持自动压缩输出
 - **agent_end**: 清理临时数据、保存状态
 - **Node events**: 每个节点执行时发出 NodeStart/NodeEnd 事件，传递节点名称

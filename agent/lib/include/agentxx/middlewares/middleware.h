@@ -444,9 +444,11 @@ public:
 
     /// 上下文影子信息 channel (只读): 条数 / 版本 / 末尾消息角色与 tool_calls 摘要
     /// - LLM 上下文由会话持有 (会话为唯一权威), 图状态不再承载消息内容;
-    ///   该通道只提供与上下文大小无关的轻量元信息, 供插件图节点观察
-    /// - 载荷: {"count": N, "version": V, "last_role": "...", "last_tool_calls": N,
-    ///   "last_tool_call_ids": ["..."], "role_counts": {"user": N, ...}}
+    ///   该通道只提供与上下文大小无关的轻量元信息, 供插件图节点观察,
+    ///   也是图条件 `xx_has_tool_calls` 的取值来源
+    /// - 载荷: {"count": N, "version": V, "role_counts": {"user": N, ...},
+    ///   "last_assistant_tool_calls": N (最后一条 assistant 的 tool_calls 条数),
+    ///   "last_role": "...", "last_tool_calls": N, "last_tool_call_ids": ["..."]}
     inline static const std::string channel_messagesMeta{"xx_messagesMeta"};
 
     inline static const std::string graphDataKey_appendSystemMessage{"xx_appendSystemMessage"};
