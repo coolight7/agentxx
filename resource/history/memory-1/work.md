@@ -100,8 +100,9 @@
 | CPU user / system | 0.296~0.343 s / 0.468~0.546 s | 0.203~0.218 s / 0.546~0.671 s | 仅参考 (单轮时长毫秒级, 噪声大) |
 
 - 两次运行的关键数字**逐位相同** (binned / S 37 / huge), 即改造后结果可复现。
-- 原始采样数据 (4 份 `summary.json` + 说明) 已入库:
-  `resource/benchmark/2026-09-26_f59814d6_windows-longctx-request-chain/`。
+- 原始采样数据放在本地台账目录
+  `resource/benchmark/2026-09-26_f59814d6_windows-longctx-request-chain/`
+  (4 份 `summary.json` + 说明; 与既有台账同放, 按 `.gitignore` 约定不入库)。
 - 验收信号与方案 §4 一致: 消息正文档位 (`bin S 37`) 与 M/L 档块数下降;
   `huge` 不作为本轮指标 (方案 §0.4 更正 2 已说明它需单独定位)。
 
