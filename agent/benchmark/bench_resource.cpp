@@ -116,7 +116,17 @@ void benchResourceCli() {
     MemPhaseTracker phaseTracker(0, "self");
     phaseTracker.mark("process_base", "仅 mock LLM 服务; agent/client 未构建");
 
-    auto        sim      = startResourceLlmSimServer();
+    // 环境变量旋钮 (用于按需加强/减弱负载; 详细说明见 docs/zh-cn/design/benchmark.md):
+    // - AGENTXX_BENCH_STREAM_CHUNKS: mock LLM 每个响应的 SSE 事件数 (0 = 默认单事件),
+    //   用来测量逐事件 SSE 解析路径的开销 (memory-1 方案 §P3 的验收条件)
+    // - AGENTXX_BENCH_ROUNDS / AGENTXX_BENCH_ROUND_BYTES: P3 逐轮往返的轮数与每轮消息字节数
+    auto envSize = [](std::string_view name, size_t def) -> size_t {
+        if (auto v = utilxx_base::ApplicationEnv::instance().get(name)) {
+            return static_cast<size_t>(std::strtoull(v->c_str(), nullptr, 10));
+        }
+        return def;
+    };
+    auto        sim      = startResourceLlmSimServer(envSize("AGENTXX_BENCH_STREAM_CHUNKS", 0));
     auto        tmpDir   = createBenchTempDir("bench_m1_cli");
     auto&       reporter = BenchReporter::instance();
     const auto& counts   = getCalibratedCounts();
@@ -479,6 +489,94 @@ void benchResourceCli() {
     fillResourceMemDetail(res2, 0, true, true);
     reporter.addResource(res2);
     printResourceResult(res2);
+
+    // ---------------- P3: 真实逐轮往返 (长上下文下的每轮开销) ----------------
+    // 与 P1/P2 的"注入历史"不同: 这里每轮都走完整链路 —— 用户输入 → LLM 请求
+    // (SSE) → 工具调用与结果回写 → 消息落库 → 事件回传, 与真实对话一致。
+    // 用于观察长上下文下的每轮固定开销、稳态漂移与单轮耗时; 轮数与消息字节数
+    // 由 AGENTXX_BENCH_ROUNDS / AGENTXX_BENCH_ROUND_BYTES 控制 (默认 20 轮 × 8 KB)。
+    {
+        const size_t roundCount = envSize("AGENTXX_BENCH_ROUNDS", 20);
+        const size_t roundBytes = envSize("AGENTXX_BENCH_ROUND_BYTES", 8192);
+
+        // 会话是否已回到空闲 (与预热轮相同的轮询方式)
+        auto sessionIdle = [&]() {
+            bool idle = false;
+            asio::post(*agent->ioCtx, [&]() {
+                if (auto sess = agent->agentContext->getSession(sessionId)) {
+                    idle = (sess->activity == agent::SessionActivity::Idle);
+                }
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            return idle;
+        };
+
+        auto   roundsWin = cpuBegin(0);
+        double sumMs     = 0.0;
+        double maxMs     = 0.0;
+        size_t served    = 0;
+        // 每轮结束 (assistant 汇总) 时 mock 的 turnCounter 前进 1
+        const size_t turnsBefore = sim.turnCounter->load();
+        for (size_t r = 0; r < roundCount; ++r) {
+            std::string msg = fmt::format("ROUND-{:04d}-", static_cast<unsigned>(r + 1));
+            if (roundBytes > msg.size()) {
+                msg.append(roundBytes - msg.size(), 'x');
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            io->sendToPeer(agent::WireUserInput{sessionId, msg});
+            const size_t wantTurns = turnsBefore + r + 1;
+            for (int i = 0; i < 4000; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                if (sim.turnCounter->load() >= wantTurns && sessionIdle()) {
+                    break;
+                }
+            }
+            const double ms
+                = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                      .count();
+            sumMs += ms;
+            maxMs  = std::max(maxMs, ms);
+            ++served;
+        }
+        const double roundsCpu = cpuEnd(roundsWin);
+        phaseTracker.mark("rounds_done", "真实逐轮往返完成");
+        auto mem3 = sampleMemoryMedian(0);
+
+        ResourceResult res3;
+        res3.mode          = "cli";
+        res3.side          = "self";
+        res3.point         = fmt::format("rounds{}x{}", roundCount, roundBytes);
+        res3.rssMB         = mem3.rssMB;
+        res3.privateMB     = mem3.privateMB;
+        res3.cpuIdlePct    = -1.0;
+        res3.cpuBusyPct    = roundsCpu;
+        res3.cpu           = roundsWin.result;
+        res3.pluginsAgent  = res0.pluginsAgent;
+        res3.pluginsClient = res0.pluginsClient;
+        res3.note          = fmt::format(
+            "real per-round turns (no injected history); {} rounds, avg {:.1f} ms/round, max {:.1f} ms",
+            served,
+            served != 0 ? sumMs / static_cast<double>(served) : 0.0,
+            maxMs
+        );
+        {
+            std::promise<void> p;
+            asio::post(*agent->ioCtx, [&]() {
+                if (auto sess = agent->agentContext->getSession(sessionId)) {
+                    res3.viewCount = sess->viewMessages.size();
+                    res3.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
+                    res3.llmCount  = sess->llmMessagesJson().size();
+                    res3.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
+                }
+                p.set_value();
+            });
+            p.get_future().wait();
+        }
+        collectLogical(res3);
+        fillResourceMemDetail(res3, 0, true, false);
+        reporter.addResource(res3);
+        printResourceResult(res3);
+    }
 
     // 分阶段内存表挂到报告 (按 mode+side 展示一次)
     phaseTracker.printTable("cli/tui 分阶段内存");

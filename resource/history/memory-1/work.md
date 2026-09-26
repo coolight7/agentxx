@@ -4,8 +4,9 @@
 - 类型: 性能与内存优化 (不改协议/checkpoint 语义)
 - 时间: 2026-09-26 (承接 [messages-1](../messages-1/work.md) 的上下文迁出改造)
 - 状态: 计划中仍适用的项 (P1-1 / P1-2 / P3) 已实施、编译与测试通过、并完成
-  release 台账复测; P0 / P2 经逐项复核**已由 messages-1 达成或失效** (见 §1.4);
-  P1-3 只达成一半 (见 §1.3); `huge` 定位有明确进展但**未定位到调用点** (见 §3.1)
+  release 台账复测; P0 / P2 经逐项复核**已由 messages-1 达成或失效** (见 §1.5);
+  P1-3 只达成一半 (见 §1.3); `huge` **已定位**: 是 asio 协程帧 (每轮 11 帧
+  ≈22 MB), MSVC 构建给这些帧预留的尺寸远超实际用量, GCC 构建上不存在 (见 §3.1)
 
 ## 1. 已完成任务
 
@@ -55,7 +56,24 @@
   JSON 文本等情形, 出错的后果是"静默丢内容", 风险明显大于收益; (c) 本机台账的
   mock 每个响应只发 4 个 SSE 事件, 量不出差别 (方案 §P3 验收提示已指出)。
 
-### 1.4 P0 / P2 复核: 已由 messages-1 达成或失效
+### 1.4 逐轮长上下文基准场景 + 真流式 mock (方案 §6 问题 4)
+
+- `agentxx_benchmark` 的 `resource_cli` 场景末尾新增**真实逐轮往返**段 (采样点
+  `rounds<N>x<bytes>`): 每轮都走完整链路 (用户输入 → LLM 请求/SSE → 工具调用与
+  结果回写 → 消息落库 → 事件回传), 与真实对话一致; 此前的 P1/P2 采样点是直接
+  注入历史, 序列化与事件次数都少于真实逐轮。
+  - 轮数/消息大小: `AGENTXX_BENCH_ROUNDS` (默认 20) / `AGENTXX_BENCH_ROUND_BYTES`
+    (默认 8192); 报告 note 记录轮数与平均/最大单轮耗时。
+  - 实测 (本机, 200K 上下文后 2 轮 × 1KB): RSS 38.75 → 53.12 MB (+14.6 MB),
+    单轮约 43 ms —— 说明真实逐轮的开销明显高于注入历史的负载 (正是本节要补的量)。
+- mock LLM 现在支持"回复切成 N 个 SSE 事件": 基准侧 `AGENTXX_BENCH_STREAM_CHUNKS`,
+  台账脚本侧 `mock_llm.py --chunks N` (默认 1 = 单事件), 用于量出 P3 逐事件解析
+  路径的收益 (方案 §P3 的验收提示: 原来的 mock 每响应只发 4 个事件, 量不出差别)。
+- 文档: `docs/zh-cn/design/benchmark.md` 第 1 节补上新场景与环境变量说明,
+  第 10.5 / 11 节把"逐轮长上下文场景未补"和"`huge` 未定位"的旧结论更新为现状。
+
+
+### 1.5 P0 / P2 复核: 已由 messages-1 达成或失效
 
 | 计划项 | 复核结论 |
 |---|---|
@@ -66,7 +84,7 @@
 | P2-2 `reducer_append` 就地追加 | **失效**: 同上 (reducer append 不再承载消息) |
 | P2-3 调用点收敛 (`state.get_messages()` 10+ 次/轮) | **失效**: 调用点已随 messages-1 改为会话 typed 读取 |
 
-### 1.5 P1-3 复核: 达成一半
+### 1.6 P1-3 复核: 达成一半
 
 - 方案的原始描述是 "`build_params` 不再做 typed ↔ JSON 往返": 迁移后 `modelcall`
   已直接取会话 typed 上下文 (不再 JSON→typed), 本轮又去掉了 provider 侧的
@@ -110,7 +128,7 @@
 
 | 项 | messages-1 后 | 本轮后 |
 |---|---|---|
-| `build_params` 取会话上下文 (`messages.assign`) | 1 | 1 (§1.5, 未改) |
+| `build_params` 取会话上下文 (`messages.assign`) | 1 | 1 (§1.6, 未改) |
 | provider: typed -> neograph json (`messages_to_json`) | 1 | 0 |
 | provider: neograph json -> utilxx Json (`fromNeographJson`) | 1 | 0 (直接构造 utilxx Json) |
 | 请求体 `dump()` | 1 | 1 |
@@ -122,55 +140,110 @@
 
 ## 3. 待完成任务
 
-### 3.1 `huge` (≥512 KiB) 分配定位: 有进展, 仍未定位到调用点
+### 3.1 `huge` (≥512 KiB) 分配定位: 已定位 = asio 协程帧 (MSVC 侧超大预留)
 
-本轮用临时插桩的 mimalloc (`mi_huge_page_alloc` 里打印请求大小 + 调用栈所属模块)
-测出的确定结论:
+**结论**: 每轮的 11 次 ≥512 KiB 分配全部是 **asio awaitable 协程帧**
+(`awaitable_frame_base<Executor>::operator new` 分配的协程帧内存), 一次协程调用
+一次, 与上下文大小无关 (帧尺寸是编译期常量)。同样的协程在 Linux/GCC 构建上帧
+尺寸很小 (同一负载下 ≥512 KiB 的分配为 **0**), 所以这份开销是
+**Windows/MSVC 构建特有**的。
 
-- 每轮固定 **11 次**: 8 次 ~2.5 MiB + 3 次 ~824 KiB; 另有 3 次 2.5 MiB 在**启动**阶段。
-- **与上下文完全无关**: 50 轮 × 100 B 与 50 轮 × 8 KB 的尺寸集合**逐位相同**
-  (2506463 / 2508511 / 2509279 / 2509535 / 2520687 / 2521615 / 2523311 /
-  2523567 / 2527263 / 2549599 / 2550447 与 823615 / 825535 / 827119)。
-- 与**会话持久化无关**: 把 `data_dir` 指到不存在的盘符 (持久化全部失败) 后,
-  每轮次数与尺寸集合完全不变。
-- 尺寸全部 ≡ 15 (mod 16) ⇒ 请求量 = `16k - 1`, 是 MSVC `std::string`
-  "为容量申请 `capacity + 1` 字节"的形态; 出现时机在**轮次开始 (`agent_start`
-  之前)**, 与 LLM 请求/SSE 无关。
-- 这些尺寸在可执行文件里**不是编译期常量** (按 4 字节小端搜索 14 个尺寸的
-  立即数, 命中 0 次) ⇒ 不是协程帧 (帧大小必然编译期确定), 只能是运行期算出的
-  数据长度。
-- 归因尝试与排除: 会话 SQLite / `model_context_max_token` / SSE 事件数 /
-  plugins 目录 DLL 文件大小 / `LogPrint` 日志缓冲 / agentxx 运行期 regex
-  (仅 `modelocall.cpp` 的静态 `AhoCorasick`, 构造一次) 均对不上。
+定位过程与证据 (Windows release, VS18/MSVC + LTO; 同一台机器、同一 mock 负载):
 
-未定位的原因与下一步建议:
+1. 插桩点选在 `mimalloc/src/page.c:_mi_malloc_generic` (所有大块分配的必经点),
+   记录"尺寸 + 各栈帧的 模块+RVA"; 为拿到符号, 用
+   `cmake -DCMAKE_EXE_LINKER_FLAGS_RELEASE="/DEBUG:FULL /MAP:..."` 重新链接
+   `agentxx_cli` (不改代码), 得到 PDB + MAP, 再用 cdb 的 `ln` / `u` 解析地址。
+2. 命中统计 (3 轮 × 8 KB): 共 36 次 = **每轮 11 次** + 启动 3 次 (与 §0.4 一致)。
+   尺寸与调用点的对应 (每轮各 1 次; "帧尺寸" = 反汇编里 `mov ecx, imm32` 的立即数,
+   即协程帧的编译期尺寸):
 
-- release 构建**不产 PDB**, `/MAP` 生成的符号表在 LTO/ICF 下与真实函数边界不符
-  (按它解析出来的"分配点"落在 `std::string` 代码里, 与 `huge` 分配点无关),
-  所以拿不到可信调用栈;
-- 本轮试过在 **debug (ASan) 构建 + cdb** 上做条件断点: 该 exe 的 `malloc` 确实来自
-  `clang_rt.asan_dynamic-x86_64.dll` (可断), 但 (a) 该 DLL 加载后的模块名是
-  `clang_rt_asan_dynamic_x86_64`, 未加模块限定的 `bp malloc` 解析不了
-  (`Bp expression 'malloc ' could not be resolved`); (b) ASan 在调试器下会先抛
-  自己的 first-chance 异常 (Unknown exception `e0736170` + access violation),
-  `-o` 批处理脚本会在这里结束, 拿不到后续断点输出 —— 该路线不可行, 需要换 release;
-- 下一步建议: **release 额外带符号** (`/DEBUG` 重链 `agentxx_cli` 以及被动态链接的
-  `libagentxx.dll`, 生成 PDB) + cdb 条件断点
-  (`bp mimalloc!mi_malloc ".if (@rcx > 0x80000) { kb 24; g } .else { gc }"`,
-  注意 plan §6 问题 3 记录的 cdb 坑: bp 命令串里 `||`/`&&` 会被当命令分隔符),
-  或在 Linux 侧用 heaptrack / valgrind-massif 直接拿调用栈 (那边有完整符号)。
+   | mimalloc 请求 | 帧尺寸 | 发起协程 (该帧所属的协程) |
+   |---|---|---|
+   | 2506463 | 2506432 | `BaseAgent::runTurnAsync` 内 lambda_3 的协程 |
+   | 2508511 | 2508480 | `agentxx::util::catchErrorAsync<bool, ...>` (runTurnAsync 处) |
+   | 2509279 | 2509248 | `utilxx_base::catchErrorAsyncImpl<...>` (runTurnAsync 处) |
+   | 2509535 | 2509504 | `BaseAgent::runTurnAsync` 自身 |
+   | 2520687 | 2520656 | `SessionServerAgentIO::run` 内 lambda_2 的协程 |
+   | 2521615 | 2521584 | `agentxx::util::catchErrorAsync<bool, ...>` (SessionServerAgentIO::run 处) |
+   | 2523311 | 2523280 | `utilxx_base::catchErrorAsyncImpl<...>` (SessionServerAgentIO::run 处) |
+   | 2523567 | 2523536 | `SessionServerAgentIO::run` 自身 |
+   | 823615 | 823584 | `GraphEngine::run_stream_async` 的协程 (由 `AgentRunner::run` 发起) |
+   | 825535 | 825504 | `GraphEngine::run_async_with_runtime` 的协程 |
+   | 827119 | 827088 | `AgentRunner::run` 自身 |
+   | (启动) 2527263 / 2549599 / 2550447 | — | `setupLocalUnifiedDirect` 的三次 `co_spawn` |
+
+   反汇编样例 (`GraphEngine::run_stream_async` 的 resume 函数内):
+
+   ```asm
+   call RunConfig::RunConfig
+    mov  rbx, rax
+    mov  qword ptr [rdi+6F0h], rax
+    mov  ecx, 0C9120h                 ; 823584 = 本次协程帧尺寸
+    call awaitable_frame_base<...>::operator new
+    lea  rax,[GraphEngine::run_async_with_runtime$_DestroyCoro$2]
+    lea  rax,[GraphEngine::run_async_with_runtime$_ResumeCoro$1]
+   ```
+
+3. **帧是"预留很大、实际几乎没写到"**: 在 `mi_free` 侧插桩扫描被释放块的非零字节
+   分布 (临时插桩, 已回退), 典型结果:
+
+   ```
+   FREE used=2508470 size=2621440
+     nz first=8 segs: 122 0 0 ... 0 12     ; 每项一段 64 KiB, 数字为该段非零字节数
+   FREE used=823558 size=851968
+     nz first=8 segs: 355 0 0 0 0 6
+   ```
+
+   即帧开头几百字节有数据 (promise + 形参 + 局部), 之后整段为零, 帧尾只有 asio
+   帧回收器写的 1 字节块计数 (`thread_info_base::allocate` 的 `mem[size] = chunks`)
+   —— **2.5 MB 中真正用到的只有几百字节**; 用 PDB 反查协程帧类型
+   (`dt -v ...::__coro_frame_type`) 也显示该帧类型只有 ~0x1f4 (500 字节量级),
+   与 2.5 MB 的分配量差约 5000 倍。
+4. 因此这不是"某个数据结构太大", 而是 **MSVC 给这些协程帧预留了远超所需的
+   空间** (帧尺寸是编译期常量, 与运行期数据无关 —— 这也解释了此前"与上下文
+   大小/模型配置/SSE 事件数都无关"的观察结果)。
+5. Linux 侧对照 (同一负载、同一源码, GCC release): 把插桩阈值降到 16 KiB 后,
+   整个运行只有 28 次命中, 最大 87 KiB, **没有** 任何 ≥512 KiB 分配。
+
+**为什么每轮都重新分配** (没有复用 asio 的帧缓存): asio 的协程帧走
+`thread_info_base::allocate(awaitable_frame_tag, ...)`, 而**回收只对小块生效** ——
+`deallocate` 里判断 `size <= chunk_size * UCHAR_MAX` (x64 上 `chunk_size=4`,
+即 **≤ 1020 字节**) 才把块放进线程缓存, 更大的块直接 `aligned_delete`。我们的帧
+是 2.5 MB / 824 KB, 全部走"每次重新 malloc"这条路; 每个 tag 的缓存槽位
+(`BOOST_ASIO_RECYCLING_ALLOCATOR_CACHE_SIZE`, 默认 2) 与它们无关。
+⇒ **调大该缓存不解决问题**, 唯一的办法是让帧本身变小 (编译器侧)。
+
+可选的后续动作 (本轮未实施, 需要时单独立项):
+
+- 让"帧尺寸"变小: 需要继续定位 MSVC 为何给这些协程预留 2.5 MB (最小复现尚未
+  构造出来: 同一份代码 GCC 帧很小, 且帧内几乎没被写, 已排除"帧里放了大对象");
+  可先按"逐个协程注释掉局部/内联点看帧尺寸变化"的方式二分。
+- 若帧尺寸无法减小, 可考虑**减少每轮新建的协程数** (例如把 `catchErrorAsync`
+  这类薄包装改为不产生新协程的写法), 但收益只有 11 帧中的一部分, 需要先量化。
+- 验收指标 (定位后新增): 用 **mimalloc 退出统计的 `huge` 块数/每轮** 作为本项
+  指标 —— 当前 Windows release 为 11 块/轮 (≈22 MB/轮), 目标设为"每轮 ≤ 3 块"
+  (启动阶段 3 块不可消除); Linux/Android 上该项本来就为 0, 不设指标。
+
+
+**定位用的临时改动 (已全部回退, 不入库)**: `mimalloc` 的 `page.c` / `free.c` 插桩
+(按环境变量 `AGENTXX_HUGE_LOG` / `AGENTXX_HUGE_MIN` 生效), 以及
+`agentxx_client_repo-build` 里临时加的 `/DEBUG:FULL /MAP` 链接参数。
+
 
 ### 3.2 其它已识别、未处理项
 
-- `build_params` 的 1 份 typed 拷贝 (§1.5): 需要会话侧不可变快照才能真正去掉。
+- `build_params` 的 1 份 typed 拷贝 (§1.6): 需要会话侧不可变快照才能真正去掉。
 - 会话持久化每轮整份 dump: `base_agent.cpp` 轮末 `saveLlmMessages` 会把整份
   `llmMessages` 序列化后写 `llm_context` 表 (方案 §P4 已判定"属持久化语义的
   一部分, 本轮不改")。注意 messages-1 之后它是"typed -> Json -> 落库",
   比改造前多一次 typed->Json; 若要降, 建议在会话侧维护惰性 Json 快照并做
   "脏才写"判断。
 - P3 的 content 快速路径 (§1.3 说明为何暂不做)。
-- 方案 §6 问题 4 的"逐轮长上下文"基准场景仍未补: 现有台账 mock 每响应只发
-  4 个 SSE 事件, P3 的收益量不出来。
+- ~~方案 §6 问题 4 的"逐轮长上下文"基准场景仍未补~~ → **本轮已补** (见 §1.4):
+  `resource_cli` 增加真实逐轮往返段 (采样点 `rounds<N>x<bytes>`),
+  mock LLM 支持把回复切成 N 个 SSE 事件 (`AGENTXX_BENCH_STREAM_CHUNKS`;
+  台账 mock 侧对应 `--chunks`), P3 的收益现在可以量出来。
 
 ## 4. 注意事项
 

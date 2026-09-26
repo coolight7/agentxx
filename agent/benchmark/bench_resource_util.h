@@ -1212,7 +1212,7 @@ struct ResourceLlmSimServer {
     }
 };
 
-inline ResourceLlmSimServer startResourceLlmSimServer() {
+inline ResourceLlmSimServer startResourceLlmSimServer(size_t streamChunks = 0) {
     ResourceLlmSimServer sim;
 
     utilxx::HttpServer::Config cfg;
@@ -1245,7 +1245,7 @@ inline ResourceLlmSimServer startResourceLlmSimServer() {
     );
 
     auto chatHandler = std::make_shared<utilxx::HttpServer::Handler>(
-        [turnCounter](
+        [turnCounter, streamChunks](
             utilxx::HttpServer::Request&  req,
             utilxx::HttpServer::Response& resp,
             std::string_view
@@ -1325,6 +1325,23 @@ inline ResourceLlmSimServer startResourceLlmSimServer() {
                     dTc["tool_calls"] = toolCalls;
                     append(dTc, "");
                     append(neograph::json::object(), "tool_calls");
+                } else if (streamChunks > 1 && !replyContent.empty()) {
+                    // 把回复切成 streamChunks 个 SSE 事件 (默认 0/1 = 单事件):
+                    // 用于测量逐事件 SSE 解析路径的开销随事件数的变化 (P3)
+                    neograph::json dRole;
+                    dRole["role"] = "assistant";
+                    append(dRole, "");
+                    const size_t step = replyContent.size() / streamChunks;
+                    size_t       pos  = 0;
+                    for (size_t i = 0; i < streamChunks; ++i) {
+                        const size_t len
+                            = (i + 1 == streamChunks) ? (replyContent.size() - pos) : step;
+                        neograph::json dc;
+                        dc["content"] = replyContent.substr(pos, len);
+                        pos += len;
+                        append(dc, "");
+                    }
+                    append(neograph::json::object(), "stop");
                 } else {
                     d["content"] = replyContent;
                     append(d, "");

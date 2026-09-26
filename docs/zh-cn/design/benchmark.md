@@ -50,7 +50,7 @@
 
 | 模块名 | 形态 | 说明 |
 |---|---|---|
-| `resource_cli` | 同进程 CLI + Channel | 进程内 stdio 客户端 + agent, 真实轮次 + 100K/200K 上下文注入 |
+| `resource_cli` | 同进程 CLI + Channel | 进程内 stdio 客户端 + agent, 真实轮次 + 100K/200K 上下文注入 + **真实逐轮往返** (每轮走完整链路, 无注入历史) |
 | `resource_tui` | 同进程(无界面) TUI + Channel | TUI 端点仅作协议端点 (不启动 FTXUI), 测同步/分页/消息窗口 |
 | `resource_split_cli` | 真实两进程 | `agentxx_cli server` + `agentxx_cli cli --agent ws://...`, 分别采样 |
 | `resource_split_tui` | 真实 server + 连接客户端 | server 子进程 + bench 进程内 headless TUI 端点 (WS) |
@@ -68,6 +68,17 @@
 
 真实两进程场景的轮次负载可用 `AGENTXX_BENCH_SCALE` (0.01~1.0, 默认 1.0) 缩放,
 报告 note 会标注实际使用的系数与目标 token 数。
+
+`resource_cli` 末段是**真实逐轮往返** (采样点 `rounds<N>x<bytes>`): 每轮都走完整链路
+(用户输入 → LLM 请求/SSE → 工具调用与结果回写 → 消息落库 → 事件回传), 与真实对话
+一致, 用于观察长上下文下的每轮固定开销与稳态漂移 (此前的 P1/P2 是直接注入历史,
+序列化/事件次数少于真实逐轮)。相关环境变量:
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `AGENTXX_BENCH_ROUNDS` | 20 | 逐轮往返的轮数 |
+| `AGENTXX_BENCH_ROUND_BYTES` | 8192 | 每轮用户消息字节数 (轮次内容 `ROUND-<n>-...`) |
+| `AGENTXX_BENCH_STREAM_CHUNKS` | 0 | mock LLM 每个响应的 SSE 事件数 (0/1 = 单事件; 值 >1 时把回复切成 N 个 `delta.content` 事件), 用于测量逐事件 SSE 解析开销 |
 
 ## 2. 采集指标
 
@@ -525,8 +536,10 @@ cmake --build agent/build/windows-release --config Release --parallel 6
   空转 4 秒再读稳态值; 采样项 (WS/专用工作集/提交/峰值提交/CPU 用户态与内核态)
   与复现步骤见 `resource/history/memory-1/plan.md` 第 4 节; 脚本与用法见
   `resource/benchmark/harness/README.md`
-- 若要把该场景纳入常驻基准, 可参考 `resource_cli` 的 mock LLM 与上下文模板, 新增一个
-  "逐轮长上下文" 场景 (现有 `resource_cli` 是注入上下文, 序列化次数比真实逐轮对话少)
+- 若要把该场景纳入常驻基准: `resource_cli` 已加入**真实逐轮往返**段
+  (采样点 `rounds<N>x<bytes>`, 见第 1 节的环境变量; 每轮走完整链路而不是注入历史),
+  另外 mock LLM 支持 `AGENTXX_BENCH_STREAM_CHUNKS` 把回复切成 N 个 SSE 事件,
+  用于测量逐事件解析开销 (memory-1 方案 §P3)
 
 ## 11. 依赖重写后的重新实测与分配次数归因 (2026-09-26 / 88fee6e0)
 
@@ -582,8 +595,13 @@ agentxx 路径上真正每步执行的是 `neograph/src/core/graph_engine.cpp:15
 (400 KB 上下文) 的 `huge` 都是 1.1 GiB / 553~570 块 (每轮固定 ≈11 块 × ≈2 MB),
 所以它不是"整段状态序列化"的产物: 去掉会话持久化 (`data_dir`)、把
 `model_context_max_token` 从 1M 改成 10K、把 mock 改成每响应 100 个 SSE chunk,
-三者都不改变它; 该档目前仍未定位 (采样方法与已排除项见
-[memory-1/plan.md §6](../../../resource/history/memory-1/plan.md))。
+三者都不改变它。**2026-09-26 已定位** (见
+[memory-1/work.md §3.1](../../../resource/history/memory-1/work.md)): 这 11 块是
+**asio awaitable 协程帧** (`awaitable_frame_base<Executor>::operator new`, 每轮
+每个协程调用一次, 帧尺寸是编译期常量), Windows/MSVC 构建给这些帧预留的空间
+远超实际用量 (2.5 MB 的帧里只有几百字节被写到, 帧类型本身仅 ~0.5 KB),
+Linux/GCC 构建上同样的协程帧很小 (同负载下 ≥512 KiB 分配为 0);
+asio 的帧回收缓存只缓存 ≤1020 字节的块, 所以这些大帧每轮重新 malloc/free。
 
 真正随上下文增长的是:
 
@@ -625,13 +643,15 @@ Linux 侧同批重测 (完整表见第 5 节; 与上一轮对照 RSS, MB):
 结论:
 
 1. **每轮分配次数上升约 2~4 倍**: 小上下文组的固定开销从 5.8 MB/轮 涨到 26 MB/轮;
-   差分口径下这 26 MB/轮 里 ≈22 MB 是**尚未定位的 `huge`** (≥512 KiB × ≈11 块/轮),
+   差分口径下这 26 MB/轮 里 ≈22 MB 是 **asio 协程帧** (Windows/MSVC 构建特有:
+   ≈11 块/轮, 帧尺寸远超实际用量, 见本节前文与
+   [memory-1/work.md §3.1](../../../resource/history/memory-1/work.md)),
    其余 ≈4 MB 才是协议/持久化/序列化等每轮固定项 (见 plan.md §0.4);
 2. **长会话与真实 server 侧常驻增长最明显**: `server_only` 235 轮 +5.0 MB,
    `real_tui_child` 客户端 +2.9 MB, 而同进程短场景基本持平 (cli startup 反而略降);
 3. **方向上先动"每步整段序列化"与"逐条消息正文拷贝"**: ①去掉 `StreamMode::VALUES`
    (`base_agent.cpp:986`, agentxx 侧不消费 `__state__`, 属零风险项) 与 checkpoint
    序列化指纹化; ②收敛逐条消息正文拷贝 (10 KiB 档 ≈8.6 次/条) 与 32/128/384 B 小对象档;
-   `huge` 已证实与上下文无关, 需单独定位, 不能再算作序列化的产物
-   (详见 plan.md 的 §0.4 / §3 P0 / §6 问题 3)。
+   `huge` 已定位为 Windows/MSVC 的 asio 协程帧开销 (与上下文无关, Linux 上不存在),
+   见本节前文
 

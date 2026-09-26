@@ -5,7 +5,9 @@
 - 时间: 2026-09-25 (2026-09-26 / 88fee6e0 按更新后的 neograph 重新实测基线并核对调用点)
 - 状态: P1-1 / P1-2 / P3 已实施并复测 (见 [work.md](work.md));
   P0 / P2 经复核已由 messages-1 达成或失效; P1-3 达成一半;
-  `huge` (≥512 KiB) 定位有进展但未定位到调用点 (见 work.md §3.1)
+  `huge` (≥512 KiB) **已定位**: 是 asio 协程帧 (每轮 11 帧 ≈22 MB),
+  MSVC 构建给这些帧预留的尺寸远超实际用量 (~5000 倍), GCC/Linux 构建上不存在
+  (见 work.md §3.1)
 - 核对: 2026-09-26 逐点复核代码与台账脚本 (neograph `1522761` / 主仓 `88fee6e0`):
   §2 行号全部一致 (补正见 §2 表后说明), §0.2 的两条结论有误并已更正 (§0.4),
   §6 待确认问题收敛为"未定位项 + 采样方法"
@@ -166,8 +168,18 @@ mimalloc 打开时 (`AGENTXX_ENABLE_MIMALLOC=ON`, 同一构建目录):
 - `model_context_max_token` (10K 与 1M 完全相同);
 - SSE 事件数 (mock 改成每响应 100 个 chunk 后仍是 25 块 / 2 轮)。
 
-也就是说它既不是上下文序列化, 也不是流式事件或持久化的产物。定位之前,
-本方案 P0 的 `huge` 验收指标 (≤100 块 / ≤200 MiB) 不能成立。
+也就是说它既不是上下文序列化, 也不是流式事件或持久化的产物。
+
+**2026-09-26 后续定位 (见 work.md §3.1)**: `huge` 已确认是 **asio awaitable 协程帧**
+(`awaitable_frame_base<Executor>::operator new`), 每轮 11 次 (8 × ~2.5 MB 帧 +
+3 × ~824 KB 帧), 启动阶段另有 3 次; 帧尺寸是**编译期常量**, 与运行期数据无关,
+所以与上下文大小、模型配置、SSE 事件数都无关。帧内实际只写了几百字节
+(promise + 形参 + 局部), 其余整段为零 —— 即 MSVC 给这些协程预留了远超所需的
+帧空间 (帧类型本身只有 ~500 字节); 同一份代码在 Linux/GCC 构建上帧尺寸很小
+(同负载下 ≥512 KiB 分配为 0)。asio 的帧回收缓存只缓存 ≤1020 字节的块
+(`chunk_size * UCHAR_MAX`), 因此这些大帧每轮都重新 malloc/free。
+本方案 P0 的 `huge` 验收指标 (≤100 块 / ≤200 MiB) 仍然不适用, 改为按
+"每轮 huge 块数 ≤ 3" 或 "≥512 KiB 分配 0 次/轮" 度量 (仅 Windows)。
 
 **小块档 (32 B / 128 B / 384 B) 随消息条数, 不随内容大小**: 50 轮 × 100 B 与
 50 轮 × 8 KB 的三档块数逐位相同 (237.7K / 162.8K / 162.3K), 5 轮 × 80 KB
@@ -442,7 +454,7 @@ static json reducer_append(const json& current, const json& incoming) {
 | 1 | P0-1 去掉 `StreamMode::VALUES` (`base_agent.cpp:986`) + P0-2 checkpoint 序列化指纹化 | M/L 档 (16 KiB~449 KiB) 块数下降 (单轮差分口径); **不设 `huge` 指标** |
 | 2 | P1-1 body move | `malloc req~` 再降 ~20 MiB (50 轮); 无行为差异 |
 | 3 | P1-2 去掉 `fromNeographJson` | 再降 ~20~40 MiB; 请求体与改造前逐字节一致 (mock 记录 body 做 diff) |
-| 4 | P3 SSE 行解析 | 事件数不变; 每轮小分配明显减少; 边界用例全过 (**需先换真流式 mock**, 见 P3 验收提示) |
+| 4 | P3 SSE 行解析 | 事件数不变; 每轮小分配明显减少; 边界用例全过 (**需先换真流式 mock**, 见 P3 验收提示 —— 2026-09-26 已补: 基准侧 `AGENTXX_BENCH_STREAM_CHUNKS`, 台账 mock 侧 `--chunks`) |
 | 5 | P2-1 零拷贝读取 API + 调用点收敛 | 整段读取次数 ≤3 次/轮; 对应档位块数下降 |
 | 6 | P2-2 就地 append | 消息正文档位 (8 KB 消息 → 10 KiB 档) 与 32/128/384 B 档块数下降; checkpoint 恢复测试通过 |
 
@@ -519,19 +531,19 @@ static json reducer_append(const json& current, const json& incoming) {
     - `bin S 18` (384 B) / `bin S 12` (128 B) / `bin S 4` (32 B) = typed 层逐条
       `from_json` / `to_json` 的小对象, 与消息**条数**成正比 (50×100B 与 50×8KB
       逐位相同, 5×80KB 只有约 1/3);
-    - **仍待定位的是 `huge`** (≥512 KiB, 每轮 ≈11 块 × ≈2 MB): 已排除会话持久化
-      (去掉 `data_dir` 后不变)、`model_context_max_token` (10K 与 1M 相同)、
-      SSE 事件数 (每响应 100 chunk 时不变)。采样建议
-      `cdb` 断点: `bp mimalloc!mi_theap_malloc ".if (@rdx > 0x80000) { .printf ...; kb 16; g } .else { gc }"`
-      (同法加 `mi_malloc_aligned` / `mi_theap_malloc_aligned`); 坑: bp 命令串里
-      `||` / `&&` 会被 cdb 当命令分隔符 (改用嵌套 `.if`), `-p PID` 附加过早会让
-      进程退出, 有断点时 kill cdb 会连带杀掉目标 (拿不到 `MIMALLOC_SHOW_STATS`,
-      也无法确认该轮是否跑完) —— 建议从启动就 `cdb -cf script.txt <exe> <args>`
-      并把 stdin 指向文件。附加调试器期间只在 `mi_malloc` 观察到 <90 KB 的分配,
-      所以采样前要先确认"被调试状态下这 11 块 `huge` 仍出现";
+    - **`huge` 已定位 (2026-09-26, 见 work.md §3.1)**: 是 asio 协程帧 —— 每轮
+      11 次 (8 × ~2.5 MB + 3 × ~824 KB), 启动另有 3 次, 帧尺寸为编译期常量,
+      与上下文/配置/事件数无关; 帧内实际只写几百字节 (MSVC 预留远超所需),
+      Linux/GCC 上帧很小 (≥512 KiB 分配为 0), 且 asio 帧回收缓存只缓存
+      ≤1020 字节的块 ⇒ 这些帧每轮重新 malloc/free, 属 Windows 构建特有开销。
+      原"cdb 条件断点采样"路线的问题记录保留在 work.md §3.1 的历史说明里;
+
 4. **是否新增"逐轮长上下文"基准场景 —— 需要, 且现有负载量不到 P3**:
    `resource_cli` 是注入上下文 (`bench_resource.cpp:375 / 453`
    "injected fixed groups"), 序列化次数少于真实逐轮对话; 另外
    `harness/mock_llm.py` 每个响应只发 4 个 SSE 事件, 与 P3 假设的
    "每轮约 2000 个事件"不符, P3 验收前需让 mock 真流式 (每响应数百 chunk)
    或改用真实模型。
+   → **2026-09-26 已实施** (见 work.md §1.4): `resource_cli` 末尾新增真实逐轮
+   往返段 (采样点 `rounds<N>x<bytes>`, 每轮走完整链路), mock 支持按
+   `AGENTXX_BENCH_STREAM_CHUNKS` / `--chunks` 把回复切成 N 个 SSE 事件。
