@@ -3,7 +3,8 @@
 - 方案: [plan.md](plan.md)
 - 类型: 架构调整 (会话成为 LLM 上下文唯一权威)
 - 时间: 2026-09-26
-- 状态: 主体已实施并通过测试, 文档与收尾见下方"待完成任务"
+- 状态: 阶段 0~4 已实施, 编译与测试全绿; 剩余待办见 §2 ("≤3 次/条/轮" 需配合
+  memory-1 的 P1 请求体链改造)
 
 ## 1. 已完成任务
 
@@ -183,3 +184,7 @@
 | remote_agent / ffi_c_api / acp / a2a / mcp / openai_provider / anthropic_provider | 全通过 |
 | interrupt_ui / training / tui_* / 同步组工具模块 | 全通过 (未受本次改动影响) |
 | memgrowth | **未完成**: 进程被 `SogouPY.ime` 触发的 ASan 报错打断 (环境问题) |
+
+最终回归 (最后一次代码变更后重跑): agent(170) + message_supplement(95) +
+summarization(445) + plugins(541) + session_persistence(621) + event_bridge(109)
+= 1981 断言, 0 失败; `agentxx_benchmark` 目标另行编译通过 (未运行)。

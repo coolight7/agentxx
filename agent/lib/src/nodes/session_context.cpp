@@ -69,6 +69,8 @@ void updateMessagesMeta(
     if (!state.has_channel(agentxx::middleware::MiddlewareContext::channel_messagesMeta)) {
         return;
     }
+    // 统计只扫描角色字符串 (不拷贝正文), 产物是固定几个字段的对象;
+    // 因此图状态载荷与上下文大小无关, 每次上下文变更的代价也只是一次轻量遍历
     state.overwrite(
         agentxx::middleware::MiddlewareContext::channel_messagesMeta,
         buildMessagesMeta(ctx->sessions->get(sessionId))
