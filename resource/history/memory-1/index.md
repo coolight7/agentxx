@@ -5,5 +5,5 @@
 - 时间: 2026-09-25 23:43
 - 需求:
 ```md
-请完整通读 [内存优化方案](resource\history\memory-1\plan.md) ，然后仔细思考分析后修复问题
+请完整通读 [内存优化方案](resource\history\memory-1\plan.md) ，然后仔细思考分析后继续实施
 ```

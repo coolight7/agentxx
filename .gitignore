@@ -11,3 +11,4 @@ help-dummy.o
 crash-*.log
 crash-*.dmp
 agentxx_asan.*
+/resource/benchmark/

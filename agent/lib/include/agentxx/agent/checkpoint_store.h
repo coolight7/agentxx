@@ -23,10 +23,10 @@
 namespace agentxx {
 namespace agent {
 
-/// 仅保留每个 thread 最新一个 checkpoint 的 CheckpointStore 策略基类
+/// 仅保留每个 session 最新一个 checkpoint 的 CheckpointStore 策略基类
 ///
 /// 以模板方法实现保留策略: save() 为 final, 先调用 saveImpl() 持久化最新
-/// checkpoint, 再调用 evictImpl() 淘汰该 thread 的历史数据。
+/// checkpoint, 再调用 evictImpl() 淘汰该 session 的历史数据。
 ///
 /// 安全性依据 (见 neograph graph_coordinator.cpp):
 /// - engine 恢复执行时只读取 load_latest 的最新 checkpoint, 以及挂载在
@@ -60,7 +60,7 @@ protected:
 
 /// SingleCheckpointStore 的内存实现
 ///
-/// 每个 thread 仅存储最新一个 checkpoint; pending writes 按
+/// 每个 session 仅存储最新一个 checkpoint; pending writes 按
 /// (session_id, parent_checkpoint_id) 组织, save 时随历史 checkpoint 一并淘汰。
 /// 线程安全: 单个操作内部以 mutex 保护 (与 neograph::InMemoryCheckpointStore
 /// 相同的每调用原子性约定)。
@@ -71,7 +71,7 @@ public:
 
     std::optional<neograph::graph::Checkpoint> load_latest(const std::string& session_id) override;
 
-    /// 仅可能命中某个 thread 的最新 checkpoint; 历史 id 已被淘汰, 返回 nullopt
+    /// 仅可能命中某个 session 的最新 checkpoint; 历史 id 已被淘汰, 返回 nullopt
     std::optional<neograph::graph::Checkpoint> load_by_id(const std::string& id) override;
 
     /// 最多返回最新一条 (limit <= 0 时返回空, 与 neograph 语义一致)
@@ -113,7 +113,7 @@ protected:
 private:
 
     mutable std::mutex mutex_;
-    /// 每个 thread 仅保留最新 checkpoint
+    /// 每个 session 仅保留最新 checkpoint
     std::map<std::string, neograph::graph::Checkpoint> latest_;
     /// pending writes: (session_id, parent_checkpoint_id) → 按插入顺序的列表
     std::map<std::pair<std::string, std::string>, std::vector<neograph::graph::PendingWrite>>
