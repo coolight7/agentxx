@@ -74,20 +74,31 @@
 - [x] `plugins/example_graph_node`: 意图识别改为经宿主接口表读会话上下文,
       图定义给 llm 节点设 `xx_autoRoute=false` 由自定义路由节点接管。
 
+### 阶段 4: 文档与验收测试
+
+- [x] 文档: `docs/zh-cn/design/plugins.md` (接口表 18 → 19, 新增
+      `agentxx.agent.context` 行, graph 表行补充图状态/通道写入改写说明)、
+      `docs/zh-cn/design/index.md` (会话权威 / 图状态不含上下文 / EventBridge 挂点 /
+      持久化接入点)、`AGENTS.md` (新增 "LLM 上下文归属" 要点)。
+- [x] 新增验收测试 `test_agent_context_not_in_graph_state`
+      (`agent/test/core/test_agent.cpp`): 8 KB 用户正文 + 唯一标记,
+      断言会话上下文含该正文、图状态序列化载荷不含正文且 < 8 KiB。
+
 ## 2. 待完成任务
 
-- [ ] 文档更新:
-  - [ ] `docs/zh-cn/design/plugins.md`: 图状态/图节点可见字段、`messages` 通道
-        写入兼容改写、`agentxx.agent.context` 表、接口表数量 (agent 侧 18 → 19)。
-  - [ ] `docs/zh-cn/design/index.md`: EventBridge 段 (通道写事件 → 消息结算/落盘)
-        与"图状态不含上下文"的说明。
-  - [ ] `docs/zh-cn/design/session.md`(若有) 等提及 `llmMessages` 的段落。
-- [ ] `AGENTS.md` 的架构要点补充 (会话为上下文唯一权威 / 新增接口表)。
-- [ ] 方案 §6 验收指标的量化复测 (每轮消息正文档位块数 ÷ 消息条数 ≤3;
-      state 序列化载荷与上下文无关), 需要 mock 负载 + 分配统计台账。
-- [ ] 内存增长模块 (`memgrowth`) 复跑: 本机被输入法 DLL (SogouPY.ime) 的
-      ASan 报错干扰, 未能完成该模块复测。
+- [ ] 方案 §6 验收指标的量化复测 (每轮"消息正文档位块数 ÷ 消息条数" ≤ 3;
+      state 序列化载荷与上下文无关) —— 需要 mock 负载 + 分配统计台账
+      (memory-1 的 harness), 本机未跑。**结构性验收已由测试覆盖**:
+      `test_agent_context_not_in_graph_state` (会话含用户正文、图状态载荷既不含
+      正文也 < 8 KiB)。
+- [ ] 内存增长模块 (`memgrowth`) 复跑: 本机被输入法 DLL (`SogouPY.ime`) 注入进程
+      触发的 AddressSanitizer heap-use-after-free 打断 (调用栈全在 `SogouPY.ime` /
+      `MSCTF.dll` / `USER32.dll`, 与本项目代码无关), 该模块未完成复测。
 - [ ] 双轨开关 (`AgentConfig::context_owner`) 未实现 —— 见"注意事项"第 3 条。
+- [ ] `docs/en/design/index.md` (英文版) 仍是旧口径: 只更新了中文设计文档与
+      `AGENTS.md`; 英文文档的 `llmMessages` / 双消息集表述待同步。
+- [ ] `neograph` 侧 `has_tool_calls` 条件与 `GraphState::get_messages()` 内部读点
+      已无默认路径使用者, 是否清理 (或标注为"自定义图可用") 待定。
 
 ## 3. 注意事项
 
@@ -135,3 +146,14 @@
 ## 4. 提交记录 (按阶段)
 
 见本文件所在目录的 git 提交历史 (`git log --oneline -- resource/history/messages-1/`)。
+
+### 测试结论 (2026-09-26, Windows debug, ASan+UBSan)
+
+| 模块 | 结果 |
+|---|---|
+| agent / cancel / message_supplement / summarization / checkpoint_store | 全通过 |
+| event_stream / event_bridge / interrupt_bus / subagent_bus / subagent_tool / agent_host | 全通过 |
+| session_persistence / share_store / plugins / plugin_sdk / plugin_bridge / plugin_multi_instance / client_plugins | 全通过 |
+| remote_agent / ffi_c_api / acp / a2a / mcp / openai_provider / anthropic_provider | 全通过 |
+| interrupt_ui / training / tui_* / 同步组工具模块 | 全通过 (未受本次改动影响) |
+| memgrowth | **未完成**: 进程被 `SogouPY.ime` 触发的 ASan 报错打断 (环境问题) |

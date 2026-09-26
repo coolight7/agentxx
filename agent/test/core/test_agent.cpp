@@ -848,8 +848,63 @@ asio::awaitable<void> test_agent_tool_calls() {
     co_return;
 }
 
-asio::awaitable<void> test_agent_multi_turn() {
+/// 验收: LLM 上下文不在图状态里 (会话为唯一权威)
+/// - 会话上下文里能查到本轮用户正文 (权威面)
+/// - 图状态序列化载荷既不含该正文, 也远小于上下文本身 (只含控制通道)
+asio::awaitable<void> test_agent_context_not_in_graph_state() {
     auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
+    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+
+    g_da_sim_response_content = "ok";
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
+
+    agentxx::agent::CodeAgent agent(cfg);
+    co_await agent.init();
+
+    // 用户输入带唯一标记 + 8 KB 正文, 便于在图状态载荷里查找
+    const std::string marker = "MARKER_CTX_OUT_OF_GRAPH_STATE";
+    std::string       bigInput = marker + std::string(8000, 'x');
+
+    auto result = co_await agent.runTurnAsync("state_ctx_test", bigInput, nullptr);
+    XX_TEST_EXPECT_FALSE(result.hasError);
+
+    // 会话上下文是权威面: 含用户消息与 assistant 回复
+    auto session = agent.agentContext->sessions->get("state_ctx_test");
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    if (session) {
+        XX_TEST_EXPECT_TRUE(session->messagesCount() >= 2);
+        bool hasMarker = false;
+        for (const auto& m : session->messages()) {
+            if (m.content.find(marker) != std::string::npos) {
+                hasMarker = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasMarker);
+    }
+
+    // 图状态只保存控制数据: 不含用户正文, 规模与上下文大小无关
+    auto* engine = agent.getEngine();
+    XX_TEST_EXPECT_TRUE(engine != nullptr);
+    if (engine != nullptr) {
+        auto state = engine->get_state("state_ctx_test");
+        XX_TEST_EXPECT_TRUE(state.has_value());
+        if (state.has_value()) {
+            const std::string dump = state->dump();
+            XX_TEST_EXPECT_TRUE(dump.find(marker) == std::string::npos);
+            XX_TEST_EXPECT_TRUE(dump.size() < 8192);
+        }
+    }
+
+    co_return;
+}
+
+asio::awaitable<void> test_agent_multi_turn() {    auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
     auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
@@ -1696,6 +1751,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_conversation_turn();
         co_await test_agent_tool_calls();
         co_await test_agent_multi_turn();
+    co_await test_agent_context_not_in_graph_state();
         co_await test_agent_large_history();
         co_await test_agent_nonstream();
         co_await test_agent_persistence_datadir_gate();
