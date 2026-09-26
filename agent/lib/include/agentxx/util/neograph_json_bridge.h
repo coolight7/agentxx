@@ -1,7 +1,12 @@
 /// utilxx_base::Json <-> neograph::json 桥接 (窄边界专用)
 ///
-/// - 唯一合法包含点: `agent/lib/src/nodes/*` 与 BaseAgent 图边界
-///   (StateGraph channel 写入 / ChatMessage::extra / ChatTool::parameters)
+/// - 合法包含点 (只有这些地方需要跨这两个 JSON 形态):
+///     - `agent/lib/src/nodes/*` (节点读写图状态/会话上下文)
+///     - BaseAgent 图边界 (StateGraph channel 写入 / ChatMessage::extra /
+///       ChatTool::parameters)
+///     - provider 请求体组装 (`agent/lib/include/agentxx/protocol/provider_common.h`,
+///       typed 上下文 -> 请求体数组; 见 `chatMessagesToOpenAIJson`)
+///     - `lib/src/protocol/*` (解析响应里的 neograph 扩展字段)
 /// - 严禁泄漏到业务层、工具层、插件层: 业务代码一律使用 utilxx_base::Json
 ///   (别名见 utilxx_base/json.h)
 #pragma once
