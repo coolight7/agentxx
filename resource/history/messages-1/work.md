@@ -83,14 +83,40 @@
 - [x] 新增验收测试 `test_agent_context_not_in_graph_state`
       (`agent/test/core/test_agent.cpp`): 8 KB 用户正文 + 唯一标记,
       断言会话上下文含该正文、图状态序列化载荷不含正文且 < 8 KiB。
+- [x] `agent/benchmark` 适配新 API (`llmMessages` 字段 → `llmMessagesJson()`;
+      注入假上下文改用 `appendSettledLlmMessages`), 以
+      `AGENTXX_BUILD_BENCHMARK=ON` 在 debug 构建目录编译通过。
+
+## 1.1 每条消息每轮的拷贝次数 (分析, 未做分配统计实测)
+
+迁移前 (memory-1 §0.4 实测 7~9 次/条) 与迁移后的逐项对照:
+
+| 项 | 迁移前 | 迁移后 |
+|---|---|---|
+| 图状态播种 (`toNeographJson` + `apply_input` + reducer append) | 2~3 | 0 (上下文不经图状态) |
+| 每 super-step checkpoint / VALUES 事件 / 插件 stateJson | 每步 O(上下文) | 0 (状态无上下文) |
+| `state.get_messages()` (整数组拷贝 + 逐条反序列化) | 1 (+逐条) | 0 |
+| `build_params` 取会话上下文 (`messages.assign`) | – | 1 |
+| provider: typed → neograph json (`messages_to_json`) | 1 | 1 |
+| provider: neograph json → utilxx Json (`fromNeographJson`) | 1 | 1 |
+| 请求体 `dump()` / HTTP `req.body()` | 2 | 2 |
+| 事件/落盘路径 (`fromNeographJson(value)` + `appendSettledLlmMessages`) | 1~2 | 0 (只请求节流落盘) |
+| 运行结束 (`channel_raw` + `fromNeographJson`) | 1 (+逐条) | 0 |
+
+合计约 **7~9 → 5 次/条/轮**。要达到方案 §1 的 "≤3 次", 还差 provider 请求体链的两步
+(均属 [memory-1 方案](../memory-1/plan.md) 的 P1, 与本方案独立):
+- P1-1: HTTP 层支持移动 body (`req.body() = std::move(body)`), 省请求体那一份;
+- P1-2: body 直接用 neograph json 承载并 dump, 去掉 `fromNeographJson` 这份整段
+  中转 (省 1 次)。
+两项都做后为 3 次/条/轮, 与方案目标一致。
+
 
 ## 2. 待完成任务
 
-- [ ] 方案 §6 验收指标的量化复测 (每轮"消息正文档位块数 ÷ 消息条数" ≤ 3;
-      state 序列化载荷与上下文无关) —— 需要 mock 负载 + 分配统计台账
-      (memory-1 的 harness), 本机未跑。**结构性验收已由测试覆盖**:
-      `test_agent_context_not_in_graph_state` (会话含用户正文、图状态载荷既不含
-      正文也 < 8 KiB)。
+- [ ] 量化复测与"≤3 次/条/轮": 结构目标 (图状态与上下文无关) 已由
+      `test_agent_context_not_in_graph_state` 覆盖; "≤3 次/条/轮" 需先做
+      memory-1 的 P1-1/P1-2 (见 §1.1 表), 之后用 memory-1 的 harness +
+      分配统计台账复测 (本机未跑)。
 - [ ] 内存增长模块 (`memgrowth`) 复跑: 本机被输入法 DLL (`SogouPY.ime`) 注入进程
       触发的 AddressSanitizer heap-use-after-free 打断 (调用栈全在 `SogouPY.ime` /
       `MSCTF.dll` / `USER32.dll`, 与本项目代码无关), 该模块未完成复测。
