@@ -616,13 +616,18 @@ asio 的帧回收缓存只缓存 ≤1020 字节的块, 所以这些大帧每轮�
 > **帧尺寸为什么会算这么大** (2026-09-27 定位, 见
 > [memory-2/work.md §1](../../../resource/history/memory-2/work.md)): 只与
 > "链接期有多少代码被内联进这个协程"有关。同一份 release 参数下: 去掉 `/GL` 单 TU
-> 编译的帧 ≤ 11.7 KiB; 该 TU 单独 `/LTCG` 链接仍无巨帧; 全程序 `/GL` 的
+> 编译的帧 ≤ 11.7 KiB; 该 TU 用 `/GL` 单独 `/LTCG` 链接也只有 ≤12.6 KiB 的帧
+> (单 TU 可内联面小); 全程序 `/GL` 的
 > `agentxx_cli.exe` 里 ≥384 KiB 的帧有 **94 个 / 合计 164.6 MiB (最大 6.45 MiB)**,
 > 同一份代码的 debug 构建 (无 LTO) 里没有任何 ≥64 KiB 的帧。只把
 > `base_agent.cpp` 改成不加 `/GL`、其余完全不变再重链, 上一轮记录的四个 2.5 MB 帧
 > (`0x263EC0/0x2646C0/0x2649C0/0x264AC0`) 与 6.7 MB 组全部消失, ≥384 KiB 的帧
 > 94 → 51 个、最大 6.45 → 4.76 MiB —— 即**帧尺寸由 LTO 内联面决定**,
 > 生成代码只写到帧的头部几百字节 (帧类型/源码里都没有 MB 级对象)。
+> **2026-09-27 更新 VS (cl 19.51.36260) 后复测**: 真实产物数字与更新前逐位相同
+> (94 个 / 164.6 MiB / 最大 6.45 MiB), 上述缓解手段仍然有效; 小工程探针
+> (`resource/benchmark/harness/min_coro_frame/`) 在 LTO / 非 LTO 下都只有 ~2 KiB 的帧,
+> 复现不出来 —— 巨帧需要"全程序 LTO 的大内联面"。
 > 静态口径可用 [`resource/benchmark/harness/scan_coro_frames.py`](../../../resource/benchmark/harness/scan_coro_frames.py)
 > 复核 (当前 release 基线: 94 个 ≥384 KiB / 最大 6.45 MiB)。
 
