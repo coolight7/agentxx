@@ -283,6 +283,18 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/agentxx_runtime_search_path.cmake")
 agentxx_set_own_dir_rpath_defaults("../..")
 
+# ===== 插件界面描述层 (cxx_pluginxx_ui) =====
+# 插件不手写组件 JSON: 用描述层的构建器 / kit 组装组件项 (见 agentxx/plugin/api/
+# plugin_kit.h), 客户端按能力适配后自行渲染。
+# - 内置合并模式下目标由 libagentxx 的 find_package 引入, 经 add_subdirectory 可见;
+#   单独构建本目录 (独立动态库插件) 时在此按安装目录查找
+# - 目录级链接 (对本目录及子目录"之后创建"的目标生效, 故须在各插件
+#   add_subdirectory 之前调用): 插件因此也可用 pluginxx::ui 的解析与纯文本降级
+if (NOT TARGET cxx_pluginxx_ui_static)
+  find_package(cxx_pluginxx_ui REQUIRED)
+endif ()
+link_libraries(cxx_pluginxx_ui_static)
+
 # ===== 各插件装载 (启用开关判定 + 内置/动态库双模式) =====
 # - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
 #   (见 cmake/plugin_platform_support.cmake 与各插件声明处); 内置清单登记

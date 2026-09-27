@@ -40,6 +40,7 @@
 #include "agentxx-test/core/test_summarization.h"
 #include "agentxx-test/core/test_training.h"
 #include "agentxx-test/core/test_ui_items.h"
+#include "agentxx-test/core/test_ui_kit.h"
 #include "agentxx-test/core/test_util_misc.h"
 #include "agentxx-test/core/test_worktree.h"
 #include "agentxx-test/plugin/test_client_plugins.h"
@@ -218,6 +219,7 @@ int main(int argn, char** argv) {
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
         runSync("interrupt_ui", agentxx::test::testInterruptUi);
         runSync("ui_items", agentxx::test::testUiItems);
+        runSync("ui_kit", agentxx::test::testUiKit);
         runSync("ffi_c_api", agentxx::test::testFfiCApi);
         runSync("plugin_runtime", agentxx::test::testPluginRuntime);
         runSync("plugin_sdk", agentxx::test::testPluginSdk);

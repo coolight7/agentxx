@@ -478,6 +478,158 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_EQ(firstLine.find("BB"), size_t{5});
     }
 
+    // ---------------- 尺寸形态 / 对齐 / 自动列宽 ----------------
+    {
+        // percent 宽度: 基准是直接父容器本轮可分配的宽度 (40 列的一半 = 20 列)
+        auto res = renderJson(
+            R"([{"kind":"Row","gap":0,"children":[
+            {"kind":"SizedBox","width":{"percent":50},"children":[{"kind":"Text","text":"A"}]},
+            {"kind":"Text","text":"B"}
+        ]}])",
+            ctxFor(40)
+        );
+        const std::string grid = renderToGrid(res, 40);
+        const auto        line = grid.substr(0, grid.find('\n'));
+        XX_TEST_EXPECT_EQ(line.find("A"), size_t{0});
+        XX_TEST_EXPECT_EQ(line.find("B"), size_t{20});
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
+        XX_TEST_EXPECT_EQ(layoutLines(res, 40), 1);
+    }
+    {
+        // aspect: 终端按字符格比例近似 (rows = ceil(列数 × 格宽 / (比例 × 格高)))
+        // 40u → 5 列; 比例 1 (正方形) → ceil(5×8 / (1×20)) = 2 行 (内容 1 行, 余下补空行)
+        auto res = renderJson(
+            R"([{"kind":"SizedBox","width":40,"aspect":1,
+                                   "children":[{"kind":"Text","text":"x"}]}])",
+            ctxFor(20)
+        );
+        XX_TEST_EXPECT_TRUE(screenHas(renderToText(res, 20), "x"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{2});
+        XX_TEST_EXPECT_EQ(layoutLines(res, 20), 2);
+    }
+    {
+        // Align: 没有命中区域时交给布局靠右 (文本落在最后一列)
+        auto res = renderJson(
+            R"([{"kind":"Align","align":"end","children":[{"kind":"Text","text":"END"}]}])",
+            ctxFor(20)
+        );
+        const std::string grid = renderToGrid(res, 20);
+        const auto        line = grid.substr(0, grid.find('\n'));
+        XX_TEST_EXPECT_EQ(line.find("END"), size_t{17});
+    }
+    {
+        // Row.main = spaceBetween: 末列内容靠右 (两端对齐)
+        auto res = renderJson(
+            R"([{"kind":"Row","main":"spaceBetween","children":[
+            {"kind":"Text","text":"L"},{"kind":"Text","text":"R"}
+        ]}])",
+            ctxFor(20)
+        );
+        const std::string grid = renderToGrid(res, 20);
+        const auto        line = grid.substr(0, grid.find('\n'));
+        XX_TEST_EXPECT_EQ(line.find("L"), size_t{0});
+        XX_TEST_EXPECT_EQ(line.find("R"), size_t{19});
+    }
+    {
+        // Spacer: 纯占位 (按 flex 分剩余空间); 20 列时三列基础各 4 列,
+        // 剩余 8 列按权重 1:1:1 分 → 6 / 6 / 8, 末列内容左对齐
+        auto res = renderJson(
+            R"([{"kind":"Row","gap":0,"children":[
+            {"kind":"Text","text":"L"},
+            {"kind":"Spacer","flex":1},
+            {"kind":"Text","text":"R"}
+        ]}])",
+            ctxFor(20)
+        );
+        const std::string grid = renderToGrid(res, 20);
+        const auto        line = grid.substr(0, grid.find('\n'));
+        XX_TEST_EXPECT_EQ(line.find("L"), size_t{0});
+        XX_TEST_EXPECT_EQ(line.find("R"), size_t{12});
+    }
+    {
+        // 折叠嵌套: 内层收起只留标题; 折叠状态按各自的 id 查 (外层收起时内层不渲染)
+        auto ctx             = ctxFor(30);
+        ctx.collapseExpanded = [](const std::string& id, bool defaultValue) {
+            (void)defaultValue;
+            XX_TEST_EXPECT_TRUE(id == "outer" || id == "inner");
+            return id == "outer"; // 外层展开、内层收起
+        };
+        auto res = renderJson(
+            R"([{"kind":"Collapse","id":"outer","title":"外层","expanded":true,
+                 "children":[
+                     {"kind":"Text","text":"外层内容"},
+                     {"kind":"Collapse","id":"inner","title":"内层","expanded":true,
+                      "children":[{"kind":"Text","text":"内层内容"}]}
+                 ]}])",
+            ctx
+        );
+        auto text = renderToText(res, 30);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "- 外层"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "外层内容"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "+ 内层"));
+        XX_TEST_EXPECT_FALSE(screenHas(text, "内层内容"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{3});
+        XX_TEST_EXPECT_EQ(layoutLines(res, 30), 3);
+        // 两层各自登记自己的折叠区域 (标识 = 各自的 id)
+        XX_TEST_EXPECT_TRUE(findRegion(res, "outer") != nullptr);
+        XX_TEST_EXPECT_TRUE(findRegion(res, "inner") != nullptr);
+
+        // 外层收起: 内层随内容一起不渲染
+        auto ctx2             = ctxFor(30);
+        ctx2.collapseExpanded = [](const std::string&, bool) {
+            return false;
+        };
+        auto res2 = renderJson(
+            R"([{"kind":"Collapse","id":"outer","title":"外层","expanded":true,
+                 "children":[
+                     {"kind":"Text","text":"外层内容"},
+                     {"kind":"Collapse","id":"inner","title":"内层","expanded":true,
+                      "children":[{"kind":"Text","text":"内层内容"}]}
+                 ]}])",
+            ctx2
+        );
+        auto text2 = renderToText(res2, 30);
+        XX_TEST_EXPECT_TRUE(screenHas(text2, "+ 外层"));
+        XX_TEST_EXPECT_FALSE(screenHas(text2, "内层"));
+        XX_TEST_EXPECT_EQ(measuredLines(res2), size_t{1});
+        XX_TEST_EXPECT_TRUE(findRegion(res2, "outer") != nullptr);
+        XX_TEST_EXPECT_TRUE(findRegion(res2, "inner") == nullptr);
+    }
+    {
+        // 自动列宽: 按内容比例分剩余空间 (内容长的列分得多), 末列吃掉剩余宽度
+        auto res = renderJson(
+            R"([{"kind":"Table","header":false,
+                 "columns":[{},{}],
+                 "rows":[[{"text":"A","action":"pick:a"},
+                          {"text":"BBBBBBBBBB","action":"pick:b"}]]}])",
+            ctxFor(40)
+        );
+        const auto* a = findRegion(res, "pick:a");
+        const auto* b = findRegion(res, "pick:b");
+        XX_TEST_EXPECT_TRUE(a != nullptr);
+        XX_TEST_EXPECT_TRUE(b != nullptr);
+        if (a != nullptr && b != nullptr) {
+            XX_TEST_EXPECT_EQ(a->x, 0);
+            XX_TEST_EXPECT_TRUE(b->w > a->w);       // 内容长的列更宽
+            XX_TEST_EXPECT_EQ(a->w + b->w + 2, 40); // 两列 + 1 个列间距铺满可用宽度
+        }
+    }
+    {
+        // 固定宽度列 + 自动列: 固定列按声明宽度 (48u → 6 列), 自动列吃掉剩余宽度
+        auto res = renderJson(
+            R"([{"kind":"Table","header":false,
+                 "columns":[{"title":"A","width":48},{"title":"B"}],
+                 "rows":[["x",{"text":"y","action":"pick:auto"}]]}])",
+            ctxFor(40)
+        );
+        const auto* region = findRegion(res, "pick:auto");
+        XX_TEST_EXPECT_TRUE(region != nullptr);
+        if (region != nullptr) {
+            XX_TEST_EXPECT_EQ(region->x, 8);  // 6 列固定宽 + 2 列间距
+            XX_TEST_EXPECT_EQ(region->w, 32); // 剩余宽度归自动列
+        }
+    }
+
     // ---------------- 图表 ----------------
     {
         auto res = renderJson(

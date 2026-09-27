@@ -9,8 +9,10 @@
 /// - **本头只提供 agent 领域 helper**: 接口表聚合 (AgentIfaces / ClientIfaces)、
 ///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool / fast_tool / blocking_tool /
 ///   polled_tool)、钩子 (hook)、图节点 (graph node)、工具权限声明、阻塞便捷调用
-///   (call_tool_blocking)、client 侧特化渲染与实例上下文 (ClientPluginBase)。
+///   (call_tool_blocking)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
+///   界面组件装配 (描述层 `pluginxx::ui` 与扩展 kit `agentxx::ui::kit`)。
 #pragma once
+#include "agentxx/plugin/api/agentxx_ui_kit.g.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "pluginxx/ui.h"
@@ -2163,8 +2165,8 @@ inline int32_t registerToolTemplate(
 ///
 /// 按钮是**界面描述层**的组件项 (`pluginxx::ui::Item`, 见 [makeButton]): 动作以
 /// dispatch 形式写进 `item.action`, 客户端按动作通道派发回本控制器的 handler。
-/// 所有 kit 组件都在 `agentxx::ui::kit` 命名空间下(见文件末尾的命名空间别名与
-/// 扩展 kit 头 `agentxx/plugin/api/agentxx_ui_kit.g.h`)。
+/// 组件装配走 kit: 基础 kit 在 `pluginxx::ui::kit`, 本客户端的常用组合在
+/// `agentxx::ui::kit`(生成的 `agentxx/plugin/api/agentxx_ui_kit.g.h`, 自包含)。
  */
 
 namespace kit {
@@ -2207,11 +2209,13 @@ public:
         if (args.is_object() && !args.empty()) {
             action.argsJson = args.dump();
         }
-        pluginxx::ui::Item btn = pluginxx::ui::build::button(
-            std::move(label),
-            std::move(action),
-            variant.empty() ? std::string_view{"secondary"} : std::string_view{variant}
-        );
+        // 经 agentxx 扩展 kit 组装 (kit 只装配, 语义与手写一致; 生成物见
+        // agentxx/plugin/api/agentxx_ui_kit.g.h)
+        pluginxx::ui::Json params;
+        params["label"]   = std::move(label);
+        params["variant"] = variant.empty() ? std::string{"secondary"} : std::move(variant);
+        params["action"]  = pluginxx::ui::dumpAction(action);
+        pluginxx::ui::Item btn = agentxx::ui::kit::button(params);
         if (!tone.empty()) {
             btn.tone = std::move(tone);
         }
@@ -2397,7 +2401,7 @@ public:
     // overlay, 避免各处手写 JSON 拼装。宿主不支持对应子能力时返回非 0, 插件应
     // 按返回值降级 (通常是改用更简单的组件或纯文本)。
     //
-    // 插件可用 `agentxx::ui` 这个别名指代描述层 (见文件末尾的命名空间别名)。
+    // 插件可用 `agentxx::ui` 指代描述层与扩展 kit (`agentxx::ui::kit`)。
 
     /// 组件树 → 提交给宿主的 JSON 形态 (`{"items":[…]}`)
     static std::string itemsJson(const std::vector<pluginxx::ui::Item>& items) {
@@ -2653,6 +2657,17 @@ public:
     /// 客户端是否支持某个组件 (按能力段判断; 未上报时按支持处理)
     bool supportsBlock(std::string_view name) const {
         return uiCapabilities().supportsBlock(name);
+    }
+
+    /// kit 的环境参数 (客户端能力摘要)
+    ///
+    /// 传给 kit 组件时, kit 会按目标挑选更合适的变体 (例如目标不支持 `Image` 时
+    /// 用文字行); 不传时产出中立描述, 由客户端渲染前的 `adapt` 收口。
+    /// ```c++
+    /// items.push_back(agentxx::ui::kit::listRow({{"title", "切歌次数"}}, kitEnv()));
+    /// ```
+    const pluginxx::ui::Capabilities* kitEnv() const {
+        return &uiCapabilities();
     }
 
     /// 当前 client 状态解析结果 (解析失败返回空对象)
@@ -3073,8 +3088,17 @@ inline void logClientCreateFailure(
 } // namespace plugin
 } // namespace agentxx
 
-/// 插件侧命名空间别名: 插件源码可以书写 `agentxx::ui::...` 访问界面描述层
-/// (与 `pluginxx::ui` 是同一个命名空间; 库内名字只有一份, 别名不产生新类型)
+/// 插件侧的界面命名空间: 插件源码可以书写 `agentxx::ui::...` 拿到界面描述层
+/// (`Item` / `build` / `parse` / `adapt` … 名字与 `pluginxx::ui` 是同一份),
+/// 以及本客户端的扩展 kit `agentxx::ui::kit`(见生成的 `agentxx_ui_kit.g.h`;
+/// 它自包含基础 kit 的全部组件, 并把终端留白口径改成本客户端习惯)。
+///
+/// 注意: `agentxx::ui::kit` 是**扩展 kit**(直接声明), 基础 kit 仍在
+/// `pluginxx::ui::kit`; 扩展 kit 里同名组件的语义与基础 kit 一致, 只是留白更紧。
 namespace agentxx {
-namespace ui = ::pluginxx::ui;
+namespace ui {
+
+using namespace ::pluginxx::ui;
+
+} // namespace ui
 } // namespace agentxx

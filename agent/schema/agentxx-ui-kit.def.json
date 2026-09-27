@@ -1,0 +1,360 @@
+{
+  "schemaVersion": 1,
+  "kitVersion": 1,
+  "doc": "agentxx 扩展 kit：终端留白口径 + 工具行 / 思考块 / 统计表 / 路径差异 / 状态图 / 确认行等本客户端常用组合（只装配，不含逻辑）",
+  "components": [
+    {
+      "name": "card",
+      "doc": "内容块（覆盖基础 kit：终端卡片的留白更紧）",
+      "params": [
+        { "name": "title", "type": "text" },
+        { "name": "variant", "type": "string", "default": "card" },
+        { "name": "padding", "type": "edges", "default": { "horizontal": 8, "vertical": 4 } },
+        { "name": "margin", "type": "edges" },
+        { "name": "children", "type": "items" }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Block",
+            "title": "$title",
+            "variant": "$variant",
+            "padding": "$padding",
+            "margin": "$margin",
+            "children": "$children"
+          }
+        }
+      ]
+    },
+    {
+      "name": "listRow",
+      "doc": "卡片里的一行（覆盖基础 kit：终端行更紧，右侧文字用说明色调）",
+      "params": [
+        { "name": "title", "type": "text", "required": true },
+        { "name": "subtitle", "type": "text" },
+        { "name": "trailing", "type": "text" },
+        { "name": "action", "type": "action" }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "action": "$action",
+            "children": [
+              {
+                "kind": "Row",
+                "gap": 8,
+                "cross": "center",
+                "children": [
+                  {
+                    "kind": "Expanded",
+                    "children": [
+                      {
+                        "kind": "Column",
+                        "gap": 4,
+                        "children": [
+                          { "kind": "Text", "text": "$title" },
+                          {
+                            "$require": "subtitle",
+                            "kind": "Text",
+                            "text": "$subtitle",
+                            "type": "caption",
+                            "tone": "hint"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  { "$require": "trailing", "kind": "Text", "text": "$trailing", "tone": "hint" }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "progressRow",
+      "doc": "一行进度（覆盖基础 kit：agentxx 默认按百分比显示数值）",
+      "params": [
+        { "name": "label", "type": "text" },
+        { "name": "value", "type": "float", "required": true },
+        { "name": "total", "type": "float", "default": 100 },
+        { "name": "unit", "type": "string", "default": "%" }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Row",
+            "gap": 8,
+            "cross": "center",
+            "children": [
+              { "$require": "label", "kind": "Text", "text": "$label" },
+              {
+                "kind": "Expanded",
+                "children": [{ "kind": "Progress", "value": "$value", "total": "$total", "unit": "$unit" }]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "toolCallRow",
+      "doc": "工具调用行：工具名 + 一行摘要 + 可选状态标签",
+      "params": [
+        { "name": "name", "type": "text", "required": true },
+        { "name": "depict", "type": "text" },
+        { "name": "status", "type": "text" },
+        { "name": "statusTone", "type": "tone", "default": "hint" },
+        { "name": "action", "type": "action" }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "action": "$action",
+            "children": [
+              {
+                "kind": "Row",
+                "gap": 8,
+                "cross": "center",
+                "children": [
+                  {
+                    "kind": "Expanded",
+                    "children": [
+                      {
+                        "kind": "Column",
+                        "gap": 4,
+                        "children": [
+                          { "kind": "Text", "text": "$name" },
+                          {
+                            "$require": "depict",
+                            "kind": "Text",
+                            "text": "$depict",
+                            "type": "caption",
+                            "tone": "hint"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "$require": "status",
+                    "kind": "Badge",
+                    "text": "$status",
+                    "tone": "$statusTone"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "thinkingBlock",
+      "doc": "思考 / 说明段落：可选小标题 + 次要色调的正文",
+      "params": [
+        { "name": "content", "type": "text", "required": true },
+        { "name": "label", "type": "text" }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "children": [
+              {
+                "kind": "Column",
+                "gap": 4,
+                "children": [
+                  {
+                    "$require": "label",
+                    "kind": "Text",
+                    "text": "$label",
+                    "type": "caption",
+                    "tone": "hint"
+                  },
+                  { "kind": "Text", "text": "$content", "tone": "thinking" }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "sessionStats",
+      "doc": "统计表：可选标题 + 表格（列宽由客户端自动分配）",
+      "params": [
+        { "name": "title", "type": "text" },
+        { "name": "columns", "type": "columns", "required": true },
+        { "name": "rows", "type": "rows", "required": true }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "children": [
+              {
+                "kind": "Column",
+                "gap": 4,
+                "children": [
+                  { "$require": "title", "kind": "Text", "text": "$title", "type": "title" },
+                  { "kind": "Table", "header": true, "columns": "$columns", "rows": "$rows" }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pathDiffRow",
+      "doc": "路径差异：可选标题 + 差异对比（目标不支持 Diff 时退化成等宽文本）",
+      "params": [
+        { "name": "path", "type": "string", "required": true },
+        { "name": "oldStr", "type": "string", "required": true },
+        { "name": "newStr", "type": "string", "required": true },
+        { "name": "title", "type": "text" }
+      ],
+      "variants": [
+        {
+          "requires": ["Diff"],
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "children": [
+              {
+                "kind": "Column",
+                "gap": 4,
+                "children": [
+                  {
+                    "$require": "title",
+                    "kind": "Text",
+                    "text": "$title",
+                    "type": "caption",
+                    "tone": "hint",
+                    "mono": true
+                  },
+                  { "kind": "Diff", "path": "$path", "oldStr": "$oldStr", "newStr": "$newStr" }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "children": [
+              {
+                "kind": "Column",
+                "gap": 4,
+                "children": [
+                  { "kind": "Text", "text": "$path", "type": "caption", "tone": "hint", "mono": true },
+                  { "kind": "Text", "text": "${oldStr}\n${newStr}", "mono": true }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "diagramBlock",
+      "doc": "状态图：可选标题 + mermaid 描述（目标不支持 Diagram 时退化成等宽源码）",
+      "params": [
+        { "name": "mermaid", "type": "string", "required": true },
+        { "name": "title", "type": "text" }
+      ],
+      "variants": [
+        {
+          "requires": ["Diagram"],
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "children": [
+              {
+                "kind": "Column",
+                "gap": 4,
+                "children": [
+                  {
+                    "$require": "title",
+                    "kind": "Text",
+                    "text": "$title",
+                    "type": "caption",
+                    "tone": "hint"
+                  },
+                  { "kind": "Diagram", "mermaid": "$mermaid" }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "template": {
+            "kind": "Block",
+            "variant": "inset",
+            "padding": { "horizontal": 8, "vertical": 4 },
+            "children": [{ "kind": "Text", "text": "$mermaid", "mono": true, "tone": "hint" }]
+          }
+        }
+      ]
+    },
+    {
+      "name": "interruptRow",
+      "doc": "确认 / 取消行（动作名缺省用中断域内约定：__submit / __cancel）",
+      "params": [
+        { "name": "confirmLabel", "type": "text", "required": true },
+        { "name": "cancelLabel", "type": "text", "required": true },
+        { "name": "confirmAction", "type": "action", "default": "__submit" },
+        { "name": "cancelAction", "type": "action", "default": "__cancel" }
+      ],
+      "variants": [
+        {
+          "template": {
+            "kind": "Row",
+            "gap": 8,
+            "main": "end",
+            "children": [
+              {
+                "kind": "Expanded",
+                "children": [
+                  {
+                    "kind": "Button",
+                    "label": "$confirmLabel",
+                    "variant": "primary",
+                    "action": "$confirmAction"
+                  }
+                ]
+              },
+              {
+                "kind": "Expanded",
+                "children": [
+                  {
+                    "kind": "Button",
+                    "label": "$cancelLabel",
+                    "variant": "ghost",
+                    "action": "$cancelAction"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
