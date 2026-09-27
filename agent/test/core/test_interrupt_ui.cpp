@@ -138,7 +138,7 @@ void test_ui_unknown_and_custom_fields() {
         "unknownTop": 123,
         "blocks": [
             {"kind": "future_kind", "text": "x", "extra": true},
-            {"kind": "custom", "component": "comp", "props": {"a": 1}, "fallback": "fb"}
+            {"kind": "custom", "props": {"items": [{"kind": "Text", "text": "a"}]}, "fallback": "fb"}
         ]
     })");
     const auto ui   = InterruptUi::fromJson(json);
@@ -146,10 +146,9 @@ void test_ui_unknown_and_custom_fields() {
     XX_TEST_EXPECT_EQ(ui.blocks[0].kind, std::string("future_kind"));
     XX_TEST_EXPECT_EQ(ui.blocks[0].text, std::string("x"));
     XX_TEST_EXPECT_EQ(ui.blocks[1].kind, std::string("custom"));
-    XX_TEST_EXPECT_EQ(ui.blocks[1].component, std::string("comp"));
     XX_TEST_EXPECT_EQ(ui.blocks[1].fallback, std::string("fb"));
     XX_TEST_EXPECT_TRUE(ui.blocks[1].props.is_object());
-    XX_TEST_EXPECT_EQ(ui.blocks[1].props.value("a", 0), 1);
+    XX_TEST_EXPECT_TRUE(ui.blocks[1].props.contains("items"));
 
     // 空描述 / 非对象输入
     XX_TEST_EXPECT_TRUE(InterruptUi::fromJson(Json{}).empty());
@@ -479,9 +478,8 @@ void test_plain_text_degrade() {
     ));
     ui.blocks.push_back(preset::submitBlock());
     InterruptUiBlock custom;
-    custom.kind      = "custom";
-    custom.component = "comp";
-    custom.fallback  = "fallback text";
+    custom.kind     = "custom";
+    custom.fallback = "fallback text";
     ui.blocks.push_back(custom);
 
     const auto text = interruptUiPlainText(ui, 0);

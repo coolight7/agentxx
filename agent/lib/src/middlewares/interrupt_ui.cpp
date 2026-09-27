@@ -227,9 +227,8 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
     b.cancelLabel    = j.value("cancelLabel", "");
     b.cancelLabelKey = j.value("cancelLabelKey", "");
 
-    // custom: 组件名 + 属性 (客户端派发到共享组件渲染层; 无内容时输出 fallback)
-    b.component = j.value("component", "");
-    b.fallback  = j.value("fallback", "");
+    // custom: 组件项数组 + 降级文本 (无内容时输出 fallback)
+    b.fallback = j.value("fallback", "");
     if (j.is_object()) {
         auto it = j.find("props");
         if (it != j.end()) {
@@ -295,7 +294,6 @@ Json InterruptUiBlock::toJson() const {
     putIfNotEmpty(j, "cancelLabel", cancelLabel);
     putIfNotEmpty(j, "cancelLabelKey", cancelLabelKey);
 
-    putIfNotEmpty(j, "component", component);
     if (!props.is_null()) {
         j["props"] = props;
     }

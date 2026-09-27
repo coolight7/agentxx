@@ -1574,45 +1574,9 @@ Element MessageListComponent::buildMessageBlock(
 // ---------------------------------------------------------------------------
 // 差异对比渲染 (diff)
 // ---------------------------------------------------------------------------
-
-void MessageListComponent::appendEditToolBody(const TUIMessage& msg, Elements& lines) {
-    const auto& theme = *ctx_.theme;
-    // 操作失败: 渲染错误信息, 不渲染基于请求参数的 diff (避免误导: 文件实际未被修改)
-    if (msg.tool && msg.tool->toolFinished && isToolResultError(msg.tool->toolResult)) {
-        lines.push_back(hbox({
-            text(tr("tool.result")) | color(theme.toolColor),
-            paragraph(msg.tool->toolResult) | color(theme.errorColor) | xflex_shrink,
-        }));
-        return;
-    }
-    std::string path, oldStr, newStr;
-    agentxx::util::catchError<bool>(
-        [&]() -> bool {
-            auto args = utilxx_base::Json::parse(msg.text);
-            path      = args.value("path", std::string{});
-            oldStr    = args.value("old_str", std::string{});
-            newStr    = args.value("new_str", std::string{});
-            return true;
-        },
-        [](std::string) -> bool {
-            return false;
-        }
-    );
-    if (!path.empty()) {
-        lines.push_back(hbox({
-            text(tr("tool.file")) | color(theme.hintColor),
-            text(path) | color(theme.toolColor) | xflex_shrink,
-        }));
-    }
-    lines.push_back(renderEditToolDiff(oldStr, newStr));
-}
-
-Element MessageListComponent::renderEditToolDiff(std::string_view oldStr, std::string_view newStr) {
-    // 历史遗留入口: 转调共享 helper (与 DiffOverlay/decor diff 同实现),
-    // 保留供旧调用点兼容; 新代码直接用 renderPluginDiff
-    const auto& theme = *ctx_.theme;
-    return agentxx::client::renderPluginDiff({}, oldStr, newStr, theme);
-}
+// 说明: 曾经有过"宿主为 edit 工具专门渲染展开体"的入口 (appendEditToolBody /
+// renderEditToolDiff), 现在工具特化渲染统一由插件提供 (消息装饰 / 工具渲染器),
+// 该入口已删除; 需要 diff 外观时用 [renderPluginDiff]。
 
 // ---------------------------------------------------------------------------
 // 插件工具消息装饰渲染 (通用机制, 无任何具体工具特化):

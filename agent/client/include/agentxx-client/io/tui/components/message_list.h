@@ -298,9 +298,7 @@ private:
     /// 用户连续上滑时页面在到达顶部前已就位 (标准聊天应用体验)
     static constexpr int kHistoryPrefetchRows = 8;
 
-    void           appendEditToolBody(const TUIMessage& msg, ftxui::Elements& lines);
-    ftxui::Element renderEditToolDiff(std::string_view oldStr, std::string_view newStr);
-    /// 插件装饰工具体通用渲染 (items: text/button/diagram/separator/diff; 内容由插件定义)
+    /// 插件装饰工具体通用渲染 (items: 组件项; 内容由插件定义)
     /// - button 走通用 action_id 派发: owner=tool_call_id (decor 按钮以 toolCallId
     ///   作 owner_id, 插件 bind 一次永久生效, 见方案 A fallback)
     /// - decor 按钮命中挂载到 decorHits_ (与 InterruptView 的控件命中区域/

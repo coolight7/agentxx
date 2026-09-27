@@ -73,9 +73,8 @@ struct InterruptUiOption {
 /// - `gap`       空行 (`lines` 行)
 /// - `control`   交互控件 (值进入结果 `values[id]`, 见下)
 /// - `submit`    确认/取消行 (`label`/`labelKey` = 确认, `cancelLabel`/`cancelLabelKey` = 取消)
-/// - `custom`    自定义渲染块 (按 `component` + `props` 派发到共享组件渲染层;
-///               `component` 为空或 `"components"` 时用 `props.items` 渲染组件树,
-///               两者都没有则输出 `fallback`)
+/// - `custom`    扩展块 (`props.items` 为组件项数组, 直接展开成内容;
+///               无 `props.items` 时输出 `fallback` 文本)
 ///
 /// control (控件形态; 形态即语义, **没有** "参数类型" 概念):
 /// - `buttons`  横排按钮 (`options`; `commitOnPick` = 点击即选中并提交整份表单)
@@ -158,17 +157,10 @@ struct InterruptUiBlock {
     /// 取消标签的 i18n 键 (优先)
     std::string cancelLabelKey;
 
-    // ---- custom (派发到共享组件) ----
-    /// 自定义渲染组件名 (空或 `"components"` 时用 `props.items` 渲染组件树)
-    ///
-    /// 客户端按组件名 + `props` 派发到共享组件渲染层 (`ui_components`): 组件名
-    /// 指向内置 kind (如 `"table"`) 时以 `props` 作为该组件的参数; 为空或
-    /// `"components"` 时按 `props.items` 渲染组件树; 两者都没有则渲染 `fallback`
-    /// 文本 (无 `fallback` 时输出组件名占位, 不静默丢内容)。
-    std::string component;
-    /// 组件属性 (原样透传给客户端渲染器)
+    // ---- custom (扩展块: 组件项数组 + 降级文本) ----
+    /// 组件项数组 (原样展开; 空/非法时用 `fallback`)
     utilxx_base::Json props;
-    /// 客户端无该组件时的降级文本 (行式前端/未知组件时打印)
+    /// 内容为空时的降级文本 (行式前端/未知内容时打印)
     std::string fallback;
 
     /// 解析时的原始 JSON (对象; 非对象输入为空)

@@ -528,41 +528,33 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   `get_client_state().interfaces` 里查这些名字决定推送"新组件"还是降级为旧 kind;
   老宿主不认识这些名字 → 插件降级, 不报错、不静默丢内容。
 
-### 9.1 客户端 UI 组件描述 schema (`agentxx.ui.item`)
+### 9.1 客户端 UI 组件描述（界面描述层 `cxx_pluginxx_ui`）
 
 面板 (`update_panel`)、Info 段落 (`update_info_section`)、工具装饰 (`update_tool_decor`)、
 工具渲染器 (`items_json`)、自定义 overlay (`open_overlay(CUSTOM)` 的 payload) 与中断描述的
-内容块都使用同一套组件描述: JSON 数组 (或 `{"items":[...]}`)，每项一个组件。
+内容块都使用同一套组件描述：**界面描述层 `cxx_pluginxx_ui`**（命名空间 `pluginxx::ui`，
+本项目里也可写 `agentxx::ui`）。数据形态是 JSON 数组（或 `{"items":[…]}` / `{"blocks":[…]}`），
+每项一个组件。
 
-通用字段 (所有 kind 可用): `kind` / `id` / `indent` / `color`(或旧写法 `role`) / `bold` /
-`dim` / `wrap` / `fallback` / `action` / `args` / `w`(横排内的列宽) / `when`(预留: 条件
-显示表达式, 当前只做解析与往返保留)。
-`color`/`role` 取语义色名 (`normal`/`hint`/`accent`/`error`/`tool`/`thinking`/...);
-`hint` 只表示取色 (本身就是弱化灰), 不隐含弱化, 需要弱化的项显式写 `"dim": true`;
-`title` 隐含加粗, 不需要时显式写 `"bold": false`。
+- 组件全集、字段、枚举与适配规则：库生成的 `docs/ui-schema.md`；
+- 本项目的分层、能力段、kit 与 **GUI 接入指引**：[ui-layer.md](ui-layer.md)。
 
-| kind | 用途 | 关键字段 |
-|------|------|----------|
-| `text` | 文本行 | `text` |
-| `markdown` | markdown 富文本 | `text` |
-| `diff` | 差异对比 (自适应 side-by-side) | `path` / `old_str` / `new_str` |
-| `separator` / `gap` | 分隔线 / 空行 | `lines` |
-| `badge` | 状态点 + 文本 | `text` |
-| `diagram` | 内联 mermaid 状态图 | `mermaid` |
-| `button` (旧名 `action`) | 可点按钮 | `label` / `action` / `args` / `prefix` / `style` |
-| `progress` (旧) / `meter` | 条形计量 (阈值配色) | `value` / `total` / `width` / `label` / `unit` / `thresholds` |
-| `sparkline` | 迷你趋势图 (块字符; 宽度不足自动分桶) | `data` / `height` / `min` / `max` / `colors` / `showLast` |
-| `kv` | 键值对 (两列对齐) | `items:[{k,v,vColor}]` / `sep` / `kw` |
-| `table` | 表格 (表头/列对齐/截断/可点单元格) | `columns:[{title,align,w,color}]` / `rows` / `header` |
-| `tree` | 层级列表 (连接线; 节点可点; 有子节点的行在宿主提供折叠状态时可点击展开) | `nodes:[{label,color,action,children}]` / `connector` |
-| `row` | 横向组合 (列宽权重 + 对齐; `align:"stretch"` 铺满可用宽度) | `items` / `gap` / `align` |
-| `box` | 分组框 (标题 + 边框 + 内边距) | `title` / `border`(none/square/round/light) / `pad` |
-| `collapse` | 可折叠分组 (宿主维护展开状态) | `id` / `title` / `expanded` |
-| `control` | 交互控件 (checkbox/select/buttons/number/text) | `id` / `control` / `label` / `options` / `default` / `commitOnPick` / `min` / `max` / `step` / `integer` |
-| `checkbox` / `select` / `buttons` / `number` / `input` | 控件的短写法 (等价 `control` + 对应形态) | 同 `control` |
-| `submit` | 表单提交行 | `label` / `cancelLabel` |
-| `custom` | 派发到内置组件或组件树 | `component`(空或 `"components"` 用 `props.items`) / `props` / `fallback` |
-| `canvas` | **预留**: 完全自绘 (本版只解析与降级) | `fallback` (渲染降级文本) |
+本项目 (TUI) 实际支持的组件（`ui_components.cpp` 的 `kTuiBlockNames`）:
+`Text` / `Divider` / `Gap` / `Button` / `Block` / `Row` / `Column` / `Expanded` / `Spacer` /
+`SizedBox` / `Padding` / `Align` / `Collapse` / `KV` / `Table` / `Tree` / `Progress` / `Badge` /
+`Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram`。
+本端没实现的可选块（`Stack` / `Image` / `musicxx.Shader`）**不列进去**，由适配自动降级
+（`Stack` → 最后一个子节点、`Image` → `alt` 文本、专属块 → 跳过）。
+
+写法要点（完整字段见库文档）:
+
+- 文本：`text`（`TextValue`：字符串或 `{key, fallback, args}`）/ `type`（`body`/`caption`/`title`）/
+  `tone`（语义色）/ `bold` / `dim` / `mono` / `wrap` / `maxLines` / `align` / `action`；
+- 尺寸：**一个数值单位 u**（GUI 1u = 1 逻辑像素；终端按能力段的 `cell` 换算成列/行）、
+  `{"percent": n}`、`"auto"`；`padding` / `margin` 用 `Edges`（数值 / `{horizontal,vertical}` /
+  单边对象），不允许负值；
+- 布局：`Row` / `Column` 的 `main`（含 `spaceBetween`）与 `cross`、`Expanded` / `Spacer` 的 `flex`；
+- 动作：字符串短写 = `dispatch`；对象形式 `{"kind":"dispatch"|"route"|"command"|"none", …}`。
 
 约束与降级:
 
@@ -573,51 +565,62 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   注册表保持上一次成功内容, 不会留下半截状态
 - 注册表条目带内容 `version` (面板/Info/状态栏每次成功更新递增; 工具装饰与工具渲染
   缓存同理), 供缓存 key 与诊断使用
-- 未知 kind: 渲染 `fallback` 文本 (无 `fallback` 则跳过), 老宿主同样按此降级 —— 插件推送
-  新组件时应带 `fallback`, 并按 `get_client_state().interfaces` 判断宿主能力
-- 行式前端 (CLI / 日志 / FFI 文本宿主) 走 `agentxx::ui::plainText`: 表格转列对齐文本、
-  树转连接线前缀、趋势图转块字符 + 末值、计量条转 `[####----] 72%`, 控件转
-  "标签: 候选项/默认值 (形态)"; 中断描述里的扩展组件块同样经该路径输出
+- 未知 kind: 渲染 `fallback` 文本 (无 `fallback` 则跳过)；插件推送新组件时应带 `fallback`,
+  并按 `get_client_state().ui` 的能力段判断宿主支持哪些组件
+- **适配**: 客户端在渲染前统一调用库的 `adapt(caps)`（`ui_components.cpp` 的 `adaptItems`），
+  结果只含本客户端声明支持的组件，最多降到 `Text`；渲染层不写"我不支持谁"的判断
+- 行式前端 (CLI / 日志 / FFI 文本宿主) 走库的 `plainText`: 表格转列对齐文本、
+  树转连接线前缀、趋势图转块字符 + 末值、`Progress` 转 `[####----] 72%`, 控件转
+  "标签: 候选项/值 (形态)"；`Gap` 与 `Padding` 的左留白都保留（缩进折算成列）；
+  中断描述里的扩展组件块同样经该路径输出
 - 中断描述与组件层之间只有一份映射: `agentxx::middleware::itemOf(block)` /
-  `blockOf(item)`(+ `preset::blocksOf(ui)` 用构建器拼中断块), 新增组件不必改中断层
-- 插件构建组件树不必手写 JSON: `agentxx/ui/build.h` 的 `agentxx::ui::Items` 提供链式构建器
-  (`text/kv/meter/sparkline/table/tree/row/box/collapse/checkbox/select/number/submit/...`),
+  `blockOf(item)`(+ `preset::blocksOf(ui)` 用构建器拼中断块), 中断的域内词汇
+  (`text`/`markdown`/`diff`/`separator`/`gap`/`control`/`submit`) 与描述层词汇
+  (`Text`/`Diff`/…) 的转换都在这两个函数里，新增组件不必改中断层
+- 插件构建组件树不必手写 JSON: 描述层的构建器 (`pluginxx::ui::build`) 与 kit
+  (基础 `pluginxx::ui::kit` + 本项目扩展 kit `agentxx::ui::kit`) 只装配不给逻辑，
   `ClientPluginBase` 提供 `setPanelItems/setInfoSectionItems/showItemsOverlay/panelItems/`
-  `setToolDecor/form` 直接提交:
+  `setToolDecor` 直接提交:
 
   ```c++
-  agentxx::ui::Items ui;
-  ui.box("System", agentxx::ui::Items{}
-          .kv({{"Model", model}, {"Tokens", tokens}})
-          .meter(cpuPct, 100, {.width = 20, .label = "CPU", .unit = "%"}))
-    .table({.columns = {{"File", "left", 0}, {"Size", "right", 8}}, .rows = rows})
-    .checkbox("detail", "显示细节", detailOn)
-    .submit("应用", "取消");
-  ctx.setPanelItems(ctx.panel, ui);
+  using namespace pluginxx::ui;
+  std::vector<Item> items;
+  items.push_back(build::title("System"));
+  items.push_back(agentxx::ui::kit::sessionStats({{"columns", columns}, {"rows", rows}}));
+  items.push_back(agentxx::ui::kit::toolCallRow({{"name", "grep"},
+                                                 {"depict", "在 src 下搜索 TODO"},
+                                                 {"status", "完成"},
+                                                 {"statusTone", "success"}},
+                                                ctx.kitEnv()));
+  ctx.setPanelItems(ctx.panel, items);   // 或 auto ui = ctx.panelItems(ctx.panel); ui.add(...)
   ```
 
 
-### 9.2 插件表单 (控件与结果回传)
+### 9.2 控件与结果回传（本项目的域内约定）
 
-- 面板 / Info 段落 / 自定义 overlay 里都可以放控件 (上表的 `control` / `submit`);
-  **控件状态由宿主维护** (值、勾选、选中项、校验提示、焦点), 插件代码不进入 UI 线程。
-- 结果经既有的动作通道回传 (`bind_action_handler` 绑定的回调):
-  - 提交: `action_id = "__submit"`, `action_args = {"values": {控件 id: 值}}`
-    (checkbox→布尔 / select|buttons→候选项 `value` / number→数值 / text→字符串)
-  - 取消: `action_id = "__cancel"` (无参数)
-  - `commitOnPick: true` 的候选项点击即提交: `action_id = 控件 id`, 参数同上
-- 交互: 点击控件即聚焦 (字符键进入输入框), `Tab`/`Shift+Tab` 在控件间移动,
-  `Esc` 释放焦点, 回车提交; 数值控件提交前校验 `min/max/integer` (失败显示提示且不提交)
-- 键盘 (焦点控件上的按键, 面板/Info/overlay 与中断表单完全一致):
-  - `buttons`: `←`/`→` 循环切换选中项; `select`: `↑`/`↓` 移动选中项;
-    `number`: `↑`/`↓` 按 `step` 步进 (受 `min`/`max` 约束); `checkbox`: 空格翻转
-  - 输入框 (`text`/`number`): 首次输入替换缺省值, `Backspace` 删除一个字符,
-    `Delete` 清空; 数值框只接受数字与小数点/正负号 (其余按键消费但不改动)
-- 中断表单 (`interrupt_ui.h`) 使用同一套控件语义与外观, 只是结果去向不同
-  (回传中断结果 `{"values":{...}}`, 由 agent 侧中间件消费): 描述里的控件与提交行
-  由 `ui_components` 渲染 (标签/说明的 i18n 键在转换时解析), 点击/键盘/校验/取值
-  全部复用同一实现; 命中为"行元素框 + 行内区域"两级判定
-  (提交行缺省文案沿用中断词表 `确认` / `✕`, 与插件表单的 `提交` / `取消` 区分)
+- 控件是描述层的 `Control`（形态 `buttons`/`select`/`checkbox`/`switch`/`text`/`number`），
+  面板 / Info 段落 / 自定义 overlay / 工具装饰里都能放；
+  **控件状态由宿主维护**（值、勾选、选中项、校验提示、焦点），插件代码不进入 UI 线程。
+- **值变化即派发**：勾选、输入完成、候选项点击都会派发控件自己的 `action`，
+  客户端把 `{id, value}` 合并进参数（插件写的 `args` 保留）；需要"一组值一起提交"时，
+  用下面的域内约定（描述层不提供表单提交语义）。
+- 结果经既有的动作通道回传（`bind_action_handler` 绑定的回调）：
+  - 提交：`action_id = "__submit"`，`action_args = {"values": {控件 id: 值}}`
+    (checkbox/switch→布尔 / select|buttons→候选项 `value` / number→数值 / text→字符串)
+  - 取消：`action_id = "__cancel"`（无参数）
+  - 点击候选项即提交（`UiRenderCtx::commitOnPick`，域内上下文提供）：`action_id = 控件 id`，参数同上
+- 交互：点击控件即聚焦（字符键进入输入框），`Tab`/`Shift+Tab` 在控件间移动，
+  `Esc` 释放焦点，回车提交；数值控件提交前校验 `min/max/integer`（失败显示提示且不提交）
+- 键盘（焦点控件上的按键，面板/Info/overlay 与中断表单完全一致）：
+  - `buttons`：`←`/`→` 循环切换选中项；`select`：`↑`/`↓` 移动选中项；
+    `number`：`↑`/`↓` 按 `step` 步进（受 `min`/`max` 约束）；`checkbox`：空格翻转
+  - 输入框（`text`/`number`）：首次输入替换缺省值，`Backspace` 删除一个字符，
+    `Delete` 清空；数值框只接受数字与小数点/正负号（其余按键消费但不改动）
+- 中断表单（`interrupt_ui.h`）使用同一套控件语义与外观，只是结果去向不同
+  （回传中断结果 `{"values":{...}}`，由 agent 侧中间件消费）：描述里的控件与提交行
+  由 `ui_components` 渲染（标签/说明的 i18n 键在转换时解析），点击/键盘/校验/取值
+  全部复用同一实现；命中为"行元素框 + 行内区域"两级判定
+  （提交行缺省文案沿用中断词表 `确认` / `✕`，与插件表单的 `提交` / `取消` 区分）
 
 ### 9.3 通用 overlay (`open_overlay`)
 
@@ -791,25 +794,26 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 插件卸载/禁用时宿主自动摘除注册并还原兜底展示，启用时无损恢复 (宿主内置渲染器不受影响)。
 
 5. **items 渲染与中断内容的复用边界 (重构后)**：
-   - **静态块同一实现**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
-     的内容块 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`) 在 TUI 侧
-     复用同一套块渲染实现
-     ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h),
-     渲染产出"行模型", 渲染与高度估算同源); 颜色 role 映射 / 按钮配色 / diff 渲染
-     仍来自
-     [plugin_ui_items.h](/agent/client/include/agentxx-client/io/tui/plugin_ui_items.h)。
-     两套数据结构**不共用同一 schema**。
+   - **同一份描述层**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
+     的内容块 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`) 都是
+     `cxx_pluginxx_ui` 的组件项（`pluginxx::ui::Item`），在 TUI 侧共用同一套渲染实现
+     ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)，
+     渲染产出"行模型"，渲染与高度估算同源）；`tone` 取色 / 按钮配色 / `Diff` 渲染
+     在客户端自己的映射表里（[plugin_ui_items.h](/agent/client/include/agentxx-client/io/tui/plugin_ui_items.h)）。
+     两者区别只在**谁定义动作去处**：插件的 `dispatch` 回到 `bind_action_handler`，
+     中断的 `__submit`/`__cancel` 是域内约定（见 9.2）。
    - **中断描述由生产者用预设模板生成** (权限卡片 `preset::permissionCard` /
      类型化输入表单 `preset::inputForm` / 确认卡片 `preset::confirmCard`,
      见 [interrupt_presets.h](/agent/lib/include/agentxx/middlewares/interrupt_presets.h));
-     **插件自带中断 UI 的能力暂未开放**。描述块类型: 内容块 `text`/`markdown`/
-     `diff`/`separator`/`gap`, 控件块 `control` (`buttons`/`select`/`text`/
-     `number`/`checkbox`), 提交行 `submit`, 预留 `custom` (组件名 + 属性; 客户端
-     组件渲染器未实现前渲染 `fallback` 文本)。
+     `itemOf` / `blockOf` 负责中断的域内词汇 (`text`/`markdown`/`diff`/`separator`/`gap`/
+     `control`/`submit`) 与描述层组件 (PascalCase) 的互转。
+     **插件自带中断 UI 的能力暂未开放**。
    - **协议内没有"参数类型"概念** (bool/int/enum 等已删除): 需要类型化输入时由
      生产者调用预设模板生成描述 (类型→控件的映射只存在于预设内)。
-   - **仅插件 items 有此 kind**：`button`(`action_id` 派发到 `bind_action_handler`) /
-     `progress` / `diagram`。
+   - **已丢弃的旧写法**（不留解析分支）：`indent`（用 `Padding`）/ `color`↔`role` 双名
+     （统一 `tone`）/ `box`（`Block`）/ `separator`（`Divider`）/ `meter`（`Progress`）/
+     `custom` / `canvas` / `when` / 单边 margin·padding（统一 `Edges`）/ 动作旧 kind
+     （`capability`/`action`）。详见库文档与 [ui-layer.md](ui-layer.md)。
    - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
 6. **语义渲染缓存**：

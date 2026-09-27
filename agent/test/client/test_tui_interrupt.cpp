@@ -475,17 +475,17 @@ void test_gap_unknown_and_custom_blocks() {
     unknown.text = "SHOULD_NOT_RENDER";
     ui.blocks.push_back(unknown);
 
-    // 自定义渲染块 (字段预留, 暂未实现): 渲染 fallback 文本
+    // 扩展块 (custom): 有 props.items 时展开成内容, 否则渲染 fallback 文本
     agentxx::middleware::InterruptUiBlock custom;
-    custom.kind      = "custom";
-    custom.component = "my_component";
-    custom.fallback  = "custom fallback text";
+    custom.kind       = "custom";
+    custom.props["items"]
+        = utilxx_base::Json::parse(R"([{"kind":"Text","text":"custom items text"}])");
+    custom.fallback = "custom fallback text";
     ui.blocks.push_back(custom);
 
     // 无 fallback 且无内容: 跳过 (不输出占位/占位名; 向前兼容)
     agentxx::middleware::InterruptUiBlock custom2;
-    custom2.kind      = "custom";
-    custom2.component = "another_component";
+    custom2.kind = "custom";
     ui.blocks.push_back(custom2);
 
     auto mi       = f.addInterruptJson(ch, ui.toJson());
@@ -493,8 +493,8 @@ void test_gap_unknown_and_custom_blocks() {
     XX_TEST_EXPECT_TRUE(rendered.find("first") != std::string::npos);
     XX_TEST_EXPECT_TRUE(rendered.find("second") != std::string::npos);
     XX_TEST_EXPECT_TRUE(rendered.find("SHOULD_NOT_RENDER") == std::string::npos);
-    XX_TEST_EXPECT_TRUE(rendered.find("custom fallback text") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(rendered.find("another_component") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(rendered.find("custom items text") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(rendered.find("custom fallback text") == std::string::npos);
     XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), f.renderedRows());
 }
 
