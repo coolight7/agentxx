@@ -40,7 +40,8 @@ try {
     Push-Location $libRoot
     try {
         & dart run tools/gen_ui.dart --ext-kit $defPath --prefix agentxx `
-            --namespace 'agentxx::ui::kit' --targets cpp,js --out $tmp
+            --namespace 'agentxx::ui::kit' --targets cpp,js --out $tmp `
+            --source-note 'agent/schema/agentxx-ui-kit.def.json'
         if ($LASTEXITCODE -ne 0) { throw "生成器退出码 $LASTEXITCODE" }
     } finally {
         Pop-Location

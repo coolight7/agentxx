@@ -1,5 +1,5 @@
 // 本文件由 tools/gen_ui.dart 生成，请勿手工修改。
-// 定义来源：schema/ui.def.json / schema/kit.def.json
+// 定义来源：schema/ui.def.json / schema/kit.def.json；扩展 kit 定义：agent/schema/agentxx-ui-kit.def.json
 #pragma once
 
 // kit：共享便捷组件。只装配、不含逻辑，也不引用客户端专属块。

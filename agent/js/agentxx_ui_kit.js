@@ -1,5 +1,5 @@
 // 本文件由 tools/gen_ui.dart 生成，请勿手工修改。
-// 定义来源：schema/ui.def.json / schema/kit.def.json
+// 定义来源：schema/ui.def.json / schema/kit.def.json；扩展 kit 定义：agent/schema/agentxx-ui-kit.def.json
 // kit（JS 插件用）：随插件目录分发，脚本里直接用全局 pluginxx.ui.kit。
 //   const kit = pluginxx.ui.kit;
 //   const row = kit.listRow({ title: '切歌次数', trailing: '3' }, env);
