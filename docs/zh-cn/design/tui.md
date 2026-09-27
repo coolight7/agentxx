@@ -137,13 +137,16 @@
 | 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 (含跨设备标签页, 见 §2.9) |
 | `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定; 控件与提交行复用 `ui_components`) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
-| `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把 `agentxx.ui.item` 描述渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
+| `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把界面描述层 (`cxx_pluginxx_ui`) 的组件项渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
 
 `ui_components` 是全部展示描述的唯一渲染实现: 侧边栏面板、Info 段落、工具消息装饰、
 通用 overlay、中断描述**全部块** (内容块 + 扩展组件 + 控件块 + 提交行) 都经它渲染
 (此前面板/Info/装饰各有一份 switch, 中断另有自己的控件布局, 均已收敛)。
-新增一种组件只需改两处: `agentxx/ui/item.h` (字段与解析) 与 `ui_components.cpp` (渲染 + 测量);
+渲染前先按客户端能力适配 (`adaptItems`, 能力见 `tuiUiCapabilities`), 因此渲染层只处理
+本端声明支持的组件; 新增一种组件要改三处: 描述层库的 `schema/ui.def.json`
+(字段与适配规则) → 本端 `ui_components.cpp` (渲染 + 测量) → 能力表 `kTuiBlockNames`;
 行数估算走同一条渲染路径 (`measureItem`), 与真实布局高度一致 (见 3.1)。
+详见 [ui-layer.md](ui-layer.md)。
 
 - 行元素内的 `reflect` 反射框由元素的**自有节点** `OwnedReflect` 持有: 元素被搬进
   滚动容器/消息块缓存 (可能跨帧存活) 时 Box 不会随局部渲染结果析构而悬空;
@@ -280,9 +283,10 @@ struct UiActionItem {
   经 `agentxx.client.ui` 表注册 (插件在 client 进程内, 描述不经网络); agent 侧插件要把
   数据交给同名 client 插件时走 `plugin_data` 转发, 自己不产生 UI 描述。唯一由 agent 侧
   产出、client 侧渲染的 UI 结构是**中断描述** (`interrupt_ui.h`)。
-- 描述形态是 `agentxx.ui.item` schema 的 JSON (组件树, 见 [plugins.md](plugins.md) §9.1);
-  client 侧由 [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)
-  统一渲染为 Element, 并把元素内可点位置登记为可命中区域 (按钮/表格单元格/折叠标题/控件)。
+- 描述形态是**界面描述层 `cxx_pluginxx_ui`** 的组件项 JSON (组件树, 见 [plugins.md](plugins.md) §9.1
+  与 [ui-layer.md](ui-layer.md)); client 侧由
+  [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)
+  按本端能力适配后统一渲染为 Element, 并把元素内可点位置登记为可命中区域 (按钮/表格单元格/折叠标题/控件)。
 - 命中与派发: 侧边栏内容经 `Scrollable::hitTestItem` 定位子项 + 局部坐标后判定区域
   (不用子项内的 `reflect`, 见 3.1); 命中后经 `ClientPluginManager::dispatchAction`
   投递回 io 线程, 二次校验插件存在/启用/实例代次后调用插件回调。
@@ -532,7 +536,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 
 ### 3.4 文案与样式
 
-- 界面文案一律经 `tr()/trf()` 取; 技术字段 (role/args 等) 不翻译。
+- 界面文案一律经 `tr()/trf()` 取; 技术字段 (tone/args 等) 不翻译。
 - 弹窗一律用 `tuiSurfacePopup/tuiSurfaceFrame/tuiSurfaceToast` 组装; 不要自行拼边框。
 - `bgcolor(ftxui::Color::Default)` 会把单元格背景重置为终端默认色 (抹掉父级背景),
   需要"不着色"时用 `UiActionStyle` 的默认值语义 (框架内部已跳过 Default)。

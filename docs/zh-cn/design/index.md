@@ -362,16 +362,20 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   内容块使用同一套组件描述 (JSON 组件树), 由客户端**唯一渲染实现**
   ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)) 统一渲染
   (测量与渲染同源, 行数估算与真实布局一致)。能力矩阵:
-  - 文本类: `text` / `markdown` / `diff` (自适应 side-by-side) / `separator` / `gap` / `badge` / `diagram`
-  - 布局类: `row` (列宽权重 + 对齐) / `box` (标题 + 边框 + 内边距) / `collapse` (宿主维护展开态)
-  - 数据类: `kv` / `table` (列对齐/表头/截断/可点单元格) / `tree` (连接线/节点动作)
-  - 图表类: `sparkline` (迷你趋势图, 宽度不足自动分桶) / `meter` (阈值配色的条形计量) / `progress`(旧写法)
-  - 交互类: `control` (checkbox/select/buttons/number/text) / `submit` (表单提交行)
-  - 预留: `canvas` (完全自绘; 当前只解析并降级为 `fallback` 文本)
-  - 降级: 未知 kind 渲染 `fallback`; 行式前端 (CLI/日志) 用 `ui::plainText` 输出纯文本
-  - 插件侧可用 [build.h](/agent/lib/include/agentxx/ui/build.h) 的链式构建器组装,
-    经 `ClientPluginBase::setPanelItems/setInfoSectionItems/showItemsOverlay` 直接提交;
-    能力协商用 `hostSupports("agentxx.client.components" / "agentxx.client.form")`
+  - 组件描述由**独立库 `cxx_pluginxx_ui`**（界面描述层，`agent/third_party/` 子模块）定义，
+    与渲染器无关: 同一份 JSON 经 `parse` → `adapt(caps)` 后既能画在终端也能画在 GUI
+    （详见 [ui-layer.md](ui-layer.md)）；组件全集见库生成的 `docs/ui-schema.md`
+  - 本项目 TUI 支持的组件: `Text` / `Divider` / `Gap` / `Button` / `Block` / `Row` / `Column` /
+    `Expanded` / `Spacer` / `SizedBox` / `Padding` / `Align` / `Collapse` / `KV` / `Table` /
+    `Tree` / `Progress` / `Badge` / `Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` /
+    `Diagram`；未实现的可选块（`Stack` / `Image` / `musicxx.Shader`）由适配降级
+  - 尺寸只有一个单位 u（GUI 1u = 1 逻辑像素；终端按能力段的 `cell` 换算成列/行），
+    另有 `{"percent": n}` 与 `"auto"`；文本可带 i18n（`TextValue{key,fallback,args}`）
+  - 降级: 未知 kind 渲染 `fallback`；行式前端 (CLI/日志) 用描述层的 `plainText` 输出纯文本
+  - 插件侧用描述层构建器与 kit 组装（`agentxx::ui::build` / `agentxx::ui::kit::…`，
+    扩展 kit 在产品 [agentxx_ui_kit.g.h](/agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h) 里），
+    经 `ClientPluginBase::setPanelItems/setInfoSectionItems/showItemsOverlay/setToolDecor` 直接提交;
+    能力协商用客户端状态快照的 `ui` 段（`uiCapabilities()` / `supportsBlock()`）
 - **插件表单**: 面板/Info 段落/overlay 内的控件由**宿主维护状态** (值/勾选/选中/焦点/校验),
   插件不进入 UI 线程; 结果经动作通道回传 (`__submit` + `{"values":{...}}` / `__cancel`),
   `commitOnPick` 的候选项点击即提交
@@ -529,7 +533,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     WirePluginData 通道回传 client 插件渲染), TUI 不发起资源请求、不解析/
     不渲染插件载荷
   - 插件 Info 栏段落扩展: client 插件可经 register_info_section 向侧边栏
-    Info tab 注入段落 (标题 + items, items schema 与面板一致), 渲染在
+    Info tab 注入段落 (标题 + 组件项, 与面板同一套描述层), 渲染在
     Append 组件列表之后; TUI 每帧从 client 插件注册表快照读取, 无需缓存
 - **TUI 渲染模块化**: 将消息列表、侧边栏、弹窗、编辑工具渲染拆分到独立文件
 - **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
@@ -622,7 +626,7 @@ path/to/agentxx_test string_util regex agent
 ```
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+- 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ui_kit` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
 - 同步模块 (client 侧, 仅 `AGENTXX_BUILD_CLIENT`): `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`
 - 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 透出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
@@ -1704,7 +1708,9 @@ agent/
 │   │   │   │   │                     #   图节点、工具权限声明、call_tool_blocking、client 渲染/ClientPluginBase;
 │   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
 │   │   │   │   │                     #   (PluginStringView/PluginString/Task/sleep/offload/spawn/PluginBaseT/...)
-│   │   │   │   └── plugin_guard.h    # 边界异常守卫 (通用部分在 pluginxx/kit/guard.h + client 日志表重载)
+│   │   │   │   ├── plugin_guard.h    # 边界异常守卫 (通用部分在 pluginxx/kit/guard.h + client 日志表重载)
+│   │   │   │   └── agentxx_ui_kit.g.h # agentxx 扩展 kit (生成物; 命名空间 agentxx::ui::kit,
+│   │   │   │   │                     #   自包含基础 kit; 定义见 agent/schema/agentxx-ui-kit.def.json)
 │   │   │   ├── plugin_framework.h # 把框架内核 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
 │   │   │   │                     #   内核实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
 │   │   │   │                     #   (kit/{kit,guard}.h; runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
@@ -1747,11 +1753,7 @@ agent/
 │   │   │   ├── provider_common.h # 各 LLM Provider 与模型调用节点共用 helper
 │   │   │   │                     #   (唯一 tool_call id 生成 / 空响应判定)
 │   │   │   └── protocol_base.h   # 协议基类
-│   │   ├── ui/                  # 客户端 UI 组件描述数据层 (与渲染实现分离, 零 ABI 变更)
-│   │   │   ├── item.h           # agentxx.ui.item schema 解析/校验/纯文本降级 (ui::plainText)
-│   │   │   ├── build.h          # 组件链式构建器 (agentxx::ui::Items, 插件侧组装描述用)
-│   │   │   └── text_width.h     # 终端显示列宽计算 (宽字符/CJK/组合字符)
-│   │   └── util/                 # 工具类 —— 图引擎/宿主耦合件 + 宿主专用数据库工具
+│   │   ├── util/                 # 工具类 —— 图引擎/宿主耦合件 + 宿主专用数据库工具
 │   │       ├── exception.h       # 异常分类与统一捕获 (neograph 取消/中断语义 + utilxx_base::catchError*)
 │   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json 桥接
 │   │       ├── cancel_adapter.h  # neograph::graph::CancelToken -> utilxx::CancelToken 适配器
@@ -1997,7 +1999,16 @@ agent/
 │   ├── agentxx_audio_stream/     # 音频流捕获插件 (全平台跳过构建: 实现未启用)
 │   └── agentxx_text_selection_monitor/ # 文本选择监听插件 (仅 Windows UIAutomation)
 │
+├── schema/                       # 客户端界面扩展 kit 的定义文件 (由描述层库的生成器产出
+│                                 #   agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h
+│                                 #   与 agent/js/agentxx_ui_kit.js; 见 gen_ui_kit.ps1)
+│
+├── js/                           # 给 JS 插件随目录分发的脚本
+│   ├── agentxx_ui_kit.js         # agentxx 扩展 kit 的 JS 产物 (全局 pluginxx.ui.kit)
+│   └── README.md                 # 用法与现状 (JS 桥暂无界面注册入口)
+│
 └── script/                       # 编译/测试脚本
+    ├── gen_ui_kit.ps1            # 重新生成界面扩展 kit (改 schema/ 后跑)
     ├── linux_debug_build.sh
     ├── linux_release_build.sh
     ├── windows_debug_build.bat

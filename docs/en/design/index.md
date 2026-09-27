@@ -401,7 +401,7 @@ path/to/agentxx_test string_util regex agent
 ```
 
 Available test modules (matching the registry list in `agent/test/test.cpp`):
-- Synchronous modules: `string_util`, `regex`, `json`, `json_view`, `json_reflection`, `diff_util`, `events`, `concurrency`, `misc_fixes`, `aho_corasick`, `util_misc`, `training`, `settings_db`, `toolcall_args`, `interrupt_ui`, `ui_items`, `ffi_c_api`, `plugin_runtime`, `plugin_sdk`, `plugin_bridge`.
+- Synchronous modules: `string_util`, `regex`, `json`, `json_view`, `json_reflection`, `diff_util`, `events`, `concurrency`, `misc_fixes`, `aho_corasick`, `util_misc`, `training`, `settings_db`, `toolcall_args`, `interrupt_ui`, `ui_items`, `ui_kit`, `ffi_c_api`, `plugin_runtime`, `plugin_sdk`, `plugin_bridge`.
 - Synchronous modules (client side, only with `AGENTXX_BUILD_CLIENT`): `config_loader`, `tui_settings`, `update_check`, `tui_input`, `tui_interrupt`, `tui_scroll`, `tui_sidebar`, `tui_context_overlay`, `tui_form`, `tui_stream`, `tui_surface`, `tui_theme`, `tui_tool_header`, `tui_ui_items`, `tui_widget`, `sessionId`, `mermaid_state`.
 - Asynchronous modules: `event_stream`, `event_bridge`, `interrupt_bus`, `subagent_bus`, `subagent_tool`, `agent_host`, `string_tools`, `math_tools`, `share_store`, `session_persistence`, `rag_search`, `datetime`, `filesystem`, `command`, `worktree`, `web_search`, `codegraph`, `screen_capture`, `cpu_gpu`, `text_selection`, `http`, `network_timeout`, `websocket`, `remote_agent`, `mcp`, `acp`, `a2a`, `openai_provider`, `anthropic_provider`, `plugins`, `plugin_resources`, `plugin_multi_instance`, `client_plugins`, `cancel`, `message_supplement`, `summarization`, `checkpoint_store`, `agent`, `memgrowth`.
 - Platform modules: `screen_capture`, `text_selection`.
@@ -1293,10 +1293,9 @@ agent/
 │   │   │   ├── provider_common.h # Shared helpers for LLM providers / model-call node
 │   │   │   │                     #   (unique tool_call id, empty-response check)
 │   │   │   └── protocol_base.h   # Protocol base class
-│   │   ├── ui/                  # Client UI component descriptor data layer (rendering lives in the client; zero ABI change)
-│   │   │   ├── item.h           # agentxx.ui.item schema parsing/validation and plain-text fallback (ui::plainText)
-│   │   │   ├── build.h          # Fluent component builder (agentxx::ui::Items, used by plugins to assemble descriptors)
-│   │   │   └── text_width.h     # Terminal display-width computation (wide chars / CJK / combining marks)
+│   │   ├── ui/                  # (removed) the descriptor layer moved into the standalone
+│   │   │   │                     #   cxx_pluginxx_ui library (agent/third_party/, namespace pluginxx::ui;
+│   │   │   │                     #   see docs/zh-cn/design/ui-layer.md for integration and the GUI guide)
 │   │   └── util/                 # Utilities — graph-engine/host coupled headers + host-only database helpers
 │   │       ├── exception.h       # Exception classification & unified catching (neograph cancel/interrupt semantics + utilxx_base::catchError*)
 │   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json bridge

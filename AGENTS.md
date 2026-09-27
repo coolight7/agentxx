@@ -9,7 +9,7 @@
     - Android 5.0+
 
 ## 设计 & 建议
-- 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，当大幅修改代码时，请参考并更新
+- 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
     - client (tui/cli) 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话、调用 llm api、运行 toolcall 等
@@ -154,6 +154,28 @@ path/to/agentxx_test string_util regex
     - [uchardet](agent/third_party/uchardet/)
     - [yaml-cpp](agent/third_party/yaml-cpp/)
     - [zlib] | [zlib-ng](agent/third_party/zlib-ng/)
+
+## 客户端界面层（描述层 / 适配 / kit）
+- 插件不写界面代码: 只交一份 JSON 组件声明, 由**独立库 `cxx_pluginxx_ui`**（`agent/third_party/`,
+  命名空间 `pluginxx::ui`）定义; 客户端 `parse` → `adapt(caps)` → 渲染（详见
+  [ui-layer.md](docs/zh-cn/design/ui-layer.md) 与 [plugins.md](docs/zh-cn/design/plugins.md) §9）
+- **改界面相关内容先看三处**:
+  - 组件字段/枚举/适配规则 → 库的 `schema/ui.def.json`（改完在库仓库跑 `dart run tools/gen_ui.dart`
+    并提交生成物, `--check` 是门禁）；
+  - 本端渲染与能力表 → `agent/client/src/io/tui/ui_components.cpp`（渲染 + 测量）与
+    `tuiUiCapabilities()` / `kTuiBlockNames`（如实上报, 少声明只会降级, 多声明会画不出来）；
+  - 插件侧组装 → `agentxx::ui::build` / `agentxx::ui::kit`（扩展 kit 生成物在
+    `agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h`, 定义在 `agent/schema/`）
+- **尺寸只有一个单位 u**（GUI 1u = 1 逻辑像素; 终端按能力段的 `cell` 换算成列/行, 四舍五入,
+  留白可为 0, 固定尺寸至少 1 格）；另有 `{"percent": n}`（基准 = 直接父容器）与 `"auto"`；不允许负值
+- **不要在渲染层写"我不支持谁"**: 由库的 `adapt(caps)` 统一降级（最多降到 `Text`）；未知 kind 走
+  `fallback` 或跳过；超上限截断
+- 控件**值变化即派发**（客户端把 `{id, value}` 合并进参数）；"一组值一起提交"是本项目域内约定
+  (`__submit` / `__cancel`), 库不提供表单提交层
+- 相关测试模块: `ui_kit`（扩展 kit + 能力矩阵适配）、`ui_items`（中断桥接/纯文本）、
+  `tui_ui_items`（渲染/测量/命中）
+- 将来的 GUI 客户端只需实现渲染 + 上报能力, 复用描述层/适配/kit; 清单见
+  [ui-layer.md](docs/zh-cn/design/ui-layer.md) §11
 
 ## C++插件开发
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
