@@ -83,6 +83,8 @@ endif ()
 find_package(cxx_utilxx_base REQUIRED)
 find_package(cxx_utilxx REQUIRED)
 find_package(cxx_pluginxx REQUIRED)
+# 插件界面描述层 (TUI/GUI 共用的组件模型 + 解析 + 降级适配 + 纯文本降级)
+find_package(cxx_pluginxx_ui REQUIRED)
 
 # ===== 内置插件合并编译 =====
 # - add_subdirectory(../plugins) 以内置模式收集启用的插件源文件/依赖库/
@@ -186,9 +188,9 @@ endforeach()
 unset(_agentxx_target)
 
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
-# (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx 为 libagentxx 的 PUBLIC 依赖:
+# (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx/cxx_pluginxx_ui 为 libagentxx 的 PUBLIC 依赖:
 #  处理方 find_package agentxx_shared/agentxx_static 时经 find_dependency 传递解析)
-set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;cxx_utilxx_base;cxx_utilxx;cxx_pluginxx")
+set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;cxx_utilxx_base;cxx_utilxx;cxx_pluginxx;cxx_pluginxx_ui")
 # ===== 3) 第三方库 (本项目自编译/自带, 均安装于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT,
 # 经 CMAKE_PREFIX_PATH 命中) =====
 # - iconv/ZLIB/SQLite3/CURL/Boost 必须显式 CONFIG 模式: 避免 CMake 内置
@@ -361,11 +363,12 @@ set(_AGENTXX_LINK_LIBS
 # - agentxx_obj PRIVATE: 仅编译期 usage requirements (头路径/宏)
 # - agentxx_shared/static PUBLIC: 目标文件并入共享库; 静态库处理者连带链接
 # - cxx_pluginxx_static 加入后 (插件框架内核), 插件宿主实现经其获得通用运行时
+# - cxx_pluginxx_ui_static (界面描述层) 提供解析/降级适配/纯文本降级
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
-  target_link_libraries(${_agentxx_target} PRIVATE cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static)
+  target_link_libraries(${_agentxx_target} PRIVATE cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static cxx_pluginxx_ui_static)
 endforeach()
-target_link_libraries(agentxx_shared PUBLIC cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static)
-target_link_libraries(agentxx_static PUBLIC cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static)
+target_link_libraries(agentxx_shared PUBLIC cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static cxx_pluginxx_ui_static)
+target_link_libraries(agentxx_static PUBLIC cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static cxx_pluginxx_ui_static)
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
   target_link_libraries(${_agentxx_target} PRIVATE ${_AGENTXX_LINK_LIBS})
 endforeach()

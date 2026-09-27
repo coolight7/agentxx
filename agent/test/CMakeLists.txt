@@ -213,6 +213,8 @@ endif()
 find_package(cxx_utilxx_base REQUIRED)
 find_package(cxx_utilxx REQUIRED)
 find_package(cxx_pluginxx REQUIRED)
+# 插件界面描述层 (组件层解析/容器渲染用例)
+find_package(cxx_pluginxx_ui REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_test PUBLIC
@@ -231,6 +233,8 @@ target_link_libraries(agentxx_test PRIVATE
   yyjson
   # 工具库静态变体: 测试直测其实现 (如 regex/aho_corasick/diff 等模块)
   cxx_utilxx_static
+  # 界面描述层静态变体: 组件层解析/降级适配用例直测其实现
+  cxx_pluginxx_ui_static
 	agentxx_static
 )
 # 条件依赖显式链接 (目标已在依赖查找段按开关查出; hs_runtime 为 HyperScan

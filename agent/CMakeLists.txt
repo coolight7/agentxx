@@ -1464,6 +1464,26 @@ ExternalProject_Add(
   TEST_COMMAND ""
 )
 
+# 插件界面描述层 (组件模型/解析/降级适配/纯文本降级/构建器/kit), 与渲染器无关:
+# TUI 与将来的 GUI 客户端共用同一份描述, 客户端各自只实现渲染
+# - 依赖 cxx_utilxx_base + fmt; 本库自带单测默认打开, 宿主构建时关闭 (单测在库仓库跑)
+ExternalProject_Add(
+  cxx_pluginxx_ui_repo
+  DEPENDS
+    cxx_utilxx_base_repo
+    fmt_repo
+  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_pluginxx_ui/"
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+  BUILD_ALWAYS TRUE
+  INSTALL_ALWAYS TRUE
+  CMAKE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_ARGS}
+    -DCXX_PLUGINXX_UI_BUILD_TESTS=OFF
+  CMAKE_CACHE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+  TEST_COMMAND ""
+)
+
 if (AGENTXX_ENABLE_HYPERSCAN)
   add_dependencies(cxx_utilxx_repo hyperscan_repo)
 endif ()
@@ -1489,6 +1509,7 @@ ExternalProject_Add(
     cxx_utilxx_base_repo
     cxx_utilxx_repo
     cxx_pluginxx_repo
+    cxx_pluginxx_ui_repo
   SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/"
   INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
   BUILD_ALWAYS TRUE

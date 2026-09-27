@@ -110,6 +110,8 @@ find_package(markdown-ui REQUIRED)
 find_package(cxx_utilxx_base REQUIRED)
 find_package(cxx_utilxx REQUIRED)
 find_package(cxx_pluginxx REQUIRED)
+# 插件界面描述层 (TUI 渲染层消费其模型 + 降级适配)
+find_package(cxx_pluginxx_ui REQUIRED)
 find_package(agentxx_static REQUIRED)
 
 target_link_directories(agentxx_cli PUBLIC
@@ -127,6 +129,8 @@ target_link_libraries(agentxx_cli PUBLIC
   # === neograph ^^^
   yyjson
 	agentxx_static
+  # 界面描述层静态变体: TUI 渲染层直用其解析/适配/文本降级
+  cxx_pluginxx_ui_static
   ftxui::ftxui
   markdown::markdown-ui
 )
