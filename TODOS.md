@@ -12,6 +12,11 @@
 - client 连接 server 时插入 tool、加载插件
 - 事件驱动触发 agent
 - 主动记忆 插件tool
+- 用户发送消息、轮次完成时 立即写入 sql
+- 鼠标拖拽没有选中颜色变化
+- 消息展开后折叠底部滚动跳动
+- 排查 llm api 输出 toolcall 时间隔较久
+- 将 llm api toolcall 刚开始就通知 tui 显示 `creating toolcall...`
 
 - SVG绘制支持
 - 链式 session 任务队列
