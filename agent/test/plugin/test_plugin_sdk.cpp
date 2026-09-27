@@ -767,47 +767,79 @@ TestResult testPluginSdk() {
         AgentxxPanel*      panel  = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
         AgentxxStatusItem* status = reinterpret_cast<AgentxxStatusItem*>(uintptr_t{1});
 
-        // 1) 构建器 → setPanelItems
+        // 1) 组件项 → setPanelItems
         g_clientUiCapture = ClientUiCapture{};
         {
-            agentxx::ui::Items ui;
-            ui.table({
-                .columns = {{"Path", "left", 0}, {"Scope", "right", 6}},
-                .rows    = {{"a.txt", "write"}},
+            std::vector<pluginxx::ui::Item> items;
+            pluginxx::ui::Item              table = pluginxx::ui::build::node("Table");
+            table.header                          = true;
+            table.columns.push_back(pluginxx::ui::TableColumn{
+                pluginxx::ui::TextValue::of("Path"),
+                "start",
+                pluginxx::ui::SizeValue::autoValue(),
+                {},
             });
-            ui.meter(72, 100, {.width = 4, .label = "CPU"});
-            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
+            table.columns.push_back(pluginxx::ui::TableColumn{
+                pluginxx::ui::TextValue::of("Scope"),
+                "end",
+                pluginxx::ui::SizeValue::of(6),
+                {},
+            });
+            table.rows.push_back({
+                pluginxx::ui::TableCell{pluginxx::ui::TextValue::of("a.txt"), {}, {}},
+                pluginxx::ui::TableCell{pluginxx::ui::TextValue::of("write"), {}, {}},
+            });
+            items.push_back(std::move(table));
+            items.push_back(pluginxx::ui::build::progress(72, 100, "%"));
+            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, items), 0);
         }
         XX_TEST_EXPECT_EQ(g_clientUiCapture.panelUpdates, 1);
-        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"table\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"Table\"") != std::string::npos);
         XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("a.txt") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"meter\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"Progress\"") != std::string::npos);
         XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"items\"") != std::string::npos);
 
         // 2) panelItems 就地构建器: 作用域结束自动提交
         {
-            auto writer = client.panelItems(panel);
-            writer->text("from-writer").bold(true);
-            writer->checkbox("opt", "Opt", true);
+            auto              writer = client.panelItems(panel);
+            pluginxx::ui::Item title  = pluginxx::ui::build::text("from-writer");
+            title.bold                = true;
+            writer.add(std::move(title));
+            writer.add(pluginxx::ui::build::control(
+                "checkbox",
+                "opt",
+                pluginxx::ui::TextValue::of("Opt"),
+                {},
+                "true"
+            ));
         }
         XX_TEST_EXPECT_EQ(g_clientUiCapture.panelUpdates, 2);
         XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("from-writer") != std::string::npos);
         XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"bold\"") != std::string::npos);
         XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("checkbox") != std::string::npos);
 
-        // 3) form(...) → 分组框 + 控件 + 提交行
+        // 3) 内容块 + 控件 + 提交按钮 (描述层没有 form() 组合器: 由插件自己组合)
         {
-            agentxx::ui::Items ui;
-            ui.form({
-                .title       = "Options",
-                .fields      = {agentxx::ui::Items{}.checkbox("detail", "Detail", false)},
-                .submitLabel = "APPLY",
-            });
-            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
+            pluginxx::ui::Item block = pluginxx::ui::build::card(
+                pluginxx::ui::build::control(
+                    "checkbox",
+                    "detail",
+                    pluginxx::ui::TextValue::of("Detail"),
+                    {},
+                    "false"
+                ),
+                "Options"
+            );
+            pluginxx::ui::Item apply = pluginxx::ui::build::button(
+                "APPLY",
+                pluginxx::ui::build::dispatch("apply"),
+                "primary"
+            );
+            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, {block, apply}), 0);
         }
         XX_TEST_EXPECT_EQ(g_clientUiCapture.panelUpdates, 3);
-        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"box\"") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"submit\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"Block\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("\"Button\"") != std::string::npos);
         XX_TEST_EXPECT_TRUE(g_clientUiCapture.panelItems.find("APPLY") != std::string::npos);
 
         // 4) 状态栏 JSON
@@ -820,17 +852,27 @@ TestResult testPluginSdk() {
             ClientPluginBase::DecorSpec spec;
             spec.displayName = "Plan";
             spec.summary     = "[~] a; [ ] b";
-            spec.items.table({
-                .columns = {{"Step", "left", 0}},
-                .rows    = {{"a"}, {"b"}},
+            pluginxx::ui::Item stepTable = pluginxx::ui::build::node("Table");
+            stepTable.header             = true;
+            stepTable.columns.push_back(pluginxx::ui::TableColumn{
+                pluginxx::ui::TextValue::of("Step"),
+                "start",
+                pluginxx::ui::SizeValue::autoValue(),
+                {},
             });
+            for (const auto& step : {"a", "b"}) {
+                stepTable.rows.push_back(
+                    {pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(step), {}, {}}}
+                );
+            }
+            spec.items.push_back(std::move(stepTable));
             XX_TEST_EXPECT_EQ(client.setToolDecor("call_1", spec), 0);
             XX_TEST_EXPECT_EQ(g_clientUiCapture.decorUpdates, 1);
             XX_TEST_EXPECT_EQ(g_clientUiCapture.decorToolCallId, std::string{"call_1"});
             XX_TEST_EXPECT_TRUE(
                 g_clientUiCapture.decorJson.find("\"displayName\":\"Plan\"") != std::string::npos
             );
-            XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.find("\"table\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.find("\"Table\"") != std::string::npos);
 
             XX_TEST_EXPECT_EQ(client.clearToolDecor("call_1"), 0);
             XX_TEST_EXPECT_EQ(g_clientUiCapture.decorUpdates, 2);
@@ -840,9 +882,21 @@ TestResult testPluginSdk() {
         // 6) overlay: 组件树作为 payload + 尺寸选项透传
         {
             g_clientUiCapture = ClientUiCapture{};
-            agentxx::ui::Items ui;
-            ui.table({.columns = {{"P", "left", 0}}, .rows = {{"x"}}});
-            XX_TEST_EXPECT_EQ(client.showItemsOverlay("Files", ui, "{\"size\":\"large\"}"), 0);
+            pluginxx::ui::Item overlayTable = pluginxx::ui::build::node("Table");
+            overlayTable.header             = true;
+            overlayTable.columns.push_back(pluginxx::ui::TableColumn{
+                pluginxx::ui::TextValue::of("P"),
+                "start",
+                pluginxx::ui::SizeValue::autoValue(),
+                {},
+            });
+            overlayTable.rows.push_back(
+                {pluginxx::ui::TableCell{pluginxx::ui::TextValue::of("x"), {}, {}}}
+            );
+            XX_TEST_EXPECT_EQ(
+                client.showItemsOverlay("Files", {std::move(overlayTable)}, "{\"size\":\"large\"}"),
+                0
+            );
             XX_TEST_EXPECT_EQ(g_clientUiCapture.overlays, 1);
             XX_TEST_EXPECT_TRUE(
                 g_clientUiCapture.overlayPayload.find("\"items\"") != std::string::npos
@@ -852,12 +906,9 @@ TestResult testPluginSdk() {
 
         // 7) 未知 kind 原样透传 (老宿主忽略, 数据层向前兼容)
         {
-            agentxx::ui::Items ui;
-            ui.raw(utilxx_base::Json{
-                {"kind",     "future_widget"},
-                {"fallback", "n/a"          }
-            });
-            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, ui), 0);
+            pluginxx::ui::Item future = pluginxx::ui::build::node("future_widget");
+            future.fallback           = "n/a";
+            XX_TEST_EXPECT_EQ(client.setPanelItems(panel, {std::move(future)}), 0);
             XX_TEST_EXPECT_TRUE(
                 g_clientUiCapture.panelItems.find("future_widget") != std::string::npos
             );
@@ -873,12 +924,11 @@ TestResult testPluginSdk() {
         client.iface = ClientIfaces::query(&legacyHost);
         XX_TEST_EXPECT_TRUE(client.iface.ui == nullptr);
 
-        AgentxxPanel*      panel = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
-        agentxx::ui::Items ui;
-        ui.text("x");
-        XX_TEST_EXPECT_TRUE(client.setPanelItems(panel, ui) != 0);
+        AgentxxPanel*                   panel = reinterpret_cast<AgentxxPanel*>(uintptr_t{1});
+        std::vector<pluginxx::ui::Item> items{pluginxx::ui::build::text("x")};
+        XX_TEST_EXPECT_TRUE(client.setPanelItems(panel, items) != 0);
         XX_TEST_EXPECT_TRUE(client.setToolDecor("call_1", {}) != 0);
-        XX_TEST_EXPECT_TRUE(client.showItemsOverlay("t", ui) != 0);
+        XX_TEST_EXPECT_TRUE(client.showItemsOverlay("t", items) != 0);
         XX_TEST_EXPECT_FALSE(client.hostSupports("agentxx.client.components"));
         XX_TEST_EXPECT_TRUE(client.regionSize("p").width == 0);
     }

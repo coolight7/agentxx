@@ -114,27 +114,20 @@ std::vector<InterruptView::FormItem> InterruptView::formItems(const middleware::
             continue;
         }
         if (block.kind == "submit") {
-            auto item = itemFromInterruptBlock(block);
-            if (!item) {
-                continue;
+            // 提交行: 描述层把它映射成"确认 / 取消"两个按钮 (动作 id 是域内提交/取消
+            // 约定 __submit / __cancel), 文案键由客户端词表解析, 提交动作由中断表单执行
+            if (auto item = itemFromInterruptBlock(block)) {
+                out.push_back(FormItem{bi, std::move(*item)});
             }
-            // 中断提交行的缺省文案与插件表单不同 (确认 / ✕)
-            if (item->label.empty()) {
-                item->label = std::string{tr("interrupt.confirm")};
-            }
-            if (item->cancelLabel.empty()) {
-                item->cancelLabel = std::string{tr("interrupt.cancel")};
-            }
-            out.push_back(FormItem{bi, std::move(*item)});
             continue;
         }
     }
     return out;
 }
 
-std::vector<agentxx::ui::Item>
+std::vector<pluginxx::ui::Item>
     InterruptView::plainItems(const std::vector<FormItem>& items) {
-    std::vector<agentxx::ui::Item> out;
+    std::vector<pluginxx::ui::Item> out;
     out.reserve(items.size());
     for (const auto& item : items) {
         out.push_back(item.item);
@@ -142,7 +135,7 @@ std::vector<agentxx::ui::Item>
     return out;
 }
 
-std::string InterruptView::firstControlId(const std::vector<agentxx::ui::Item>& items) {
+std::string InterruptView::firstControlId(const std::vector<pluginxx::ui::Item>& items) {
     for (const auto& item : items) {
         if (item.kind == "control" && !item.id.empty()) {
             return item.id;
@@ -637,7 +630,7 @@ bool InterruptView::handleKey(Event event) {
         // (中断表单始终有一个焦点控件, 键盘输入总有去处)
         const bool focusValid
             = !state.focusedId.empty()
-              && std::any_of(items.begin(), items.end(), [&](const agentxx::ui::Item& it) {
+              && std::any_of(items.begin(), items.end(), [&](const pluginxx::ui::Item& it) {
                      return it.kind == "control" && it.id == state.focusedId;
                  });
         if (!focusValid) {

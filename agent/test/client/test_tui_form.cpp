@@ -52,8 +52,8 @@ TUITheme& theme() {
 }
 
 /// 解析组件描述 (表单用例统一入口)
-std::vector<agentxx::ui::Item> formItems(const char* json) {
-    return agentxx::ui::parseItems(Json::parse(json));
+std::vector<pluginxx::ui::Item> formItems(const char* json) {
+    return pluginxx::ui::parseBlocks(Json::parse(json));
 }
 
 // ---------------------------------------------------------------------------

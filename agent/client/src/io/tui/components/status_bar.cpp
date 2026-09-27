@@ -29,18 +29,20 @@ namespace {
 
 /// 状态栏富展示片段 → 单行元素 ([ui_components] 的共享实现渲染)
 ///
-/// 输入形态 (与 `update_status_item` 的 JSON 一致):
-/// - `segments`: `[{text,color}]` 文本片段 (状态栏常见的"分色多段"写法)
-/// - `sparkline`: 迷你趋势图参数 (`data` 必需; 高度强制 1 行)
-/// - `meter`: 计量条参数 (`value`/`total`/`width`/`label`/`unit`/`thresholds`)
+/// 输入形态 (与 `update_status_item` 的 JSON 一致): 每个片段都是界面描述层的组件项
+/// (字段名同描述层, 见 `pluginxx/ui.h`):
+/// - `segments`: `[{text,tone}]` 文本片段 (状态栏常见的"分色多段"写法)
+/// - `sparkline`: 迷你趋势图参数 (`data` 必需; 高度强制 1 行, 即 `glyphHeight: 1`)
+/// - `meter`: 进度/计量条参数 (`value`/`total`/`width`/`label`/`unit`/`thresholds`/`tone`)
 ///
 /// 三者可任意组合, 按 `segments → sparkline → meter` 顺序以单个空格拼接为一行;
-/// 状态栏高度固定一行, 因此 sparkline 的 `height` 被忽略 (恒为 1)。
+/// 状态栏高度固定一行, 因此 sparkline 的图形高度恒为 1。
 /// 无可用片段时返回 nullptr (调用方回退纯文本)。
 ftxui::Element
     statusRichElement(const utilxx_base::Json& rich, const TUITheme& theme, int maxWidth) {
-    agentxx::ui::Items cells;
-    bool               any = false;
+    using pluginxx::ui::Item;
+
+    std::vector<Item> cells;
     if (const auto segs = rich.find("segments"); segs != rich.end() && segs->is_array()) {
         for (const auto& seg : *segs) {
             if (!seg.is_object()) {
@@ -50,34 +52,36 @@ ftxui::Element
             if (text.empty()) {
                 continue;
             }
-            cells.text(text, seg.value("color", std::string{"hint"}));
-            any = true;
+            Item cell = pluginxx::ui::build::text(text);
+            cell.tone = seg.value("tone", std::string{"hint"});
+            cells.push_back(std::move(cell));
         }
     }
     if (const auto sp = rich.find("sparkline"); sp != rich.end() && sp->is_object()) {
-        utilxx_base::Json params = *sp;
-        params["height"]         = 1; // 状态栏只有一行
-        cells.raw(std::move(params));
-        any = true;
+        // 状态栏只有一行: 图形高度恒为 1
+        Item item = pluginxx::ui::parseBlock(utilxx_base::Json{{"kind", "Sparkline"}, *sp});
+        item.glyphHeight = 1;
+        cells.push_back(std::move(item));
     }
     if (const auto mt = rich.find("meter"); mt != rich.end() && mt->is_object()) {
-        cells.raw(*mt);
-        any = true;
+        cells.push_back(pluginxx::ui::parseBlock(utilxx_base::Json{{"kind", "Progress"}, *mt}));
     }
-    if (!any || cells.empty()) {
+    if (cells.empty()) {
         return nullptr;
     }
 
-    // 片段按横排组装 (共享实现负责间距与宽度分配)
-    agentxx::ui::Items row;
-    row.row(cells, {.gap = 1});
+    // 片段按横排组装 (共享实现负责间距与宽度分配; 间距 1 列 ≈ 8u)
+    Item row   = pluginxx::ui::build::row({});
+    row.children = std::move(cells);
+    row.hasGap   = true;
+    row.gap      = pluginxx::ui::SizeValue::of(pluginxx::ui::gen::kDefaultCellWidth);
 
     client::UiRenderCtx rc;
     rc.theme  = &theme;
     rc.width  = (maxWidth > 0) ? maxWidth : 0;
     rc.indent = 0;
     UiRenderResult res;
-    renderItems(agentxx::ui::parseItemList(row.json()), rc, res);
+    renderItem(row, rc, res);
     if (res.rows.empty()) {
         return nullptr;
     }

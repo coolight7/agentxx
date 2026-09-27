@@ -445,7 +445,7 @@ public:
         /// 归属插件名 (动作派发需要)
         std::string                    plugin;
         agentxx::client::UiFormState   state;
-        std::vector<agentxx::ui::Item> items;
+        std::vector<pluginxx::ui::Item> items;
     };
 
     /// 归属 id → 表单数据 (键 = 面板 id / Info 段落 id)
@@ -458,7 +458,7 @@ public:
     /// - 返回映射内引用 (调用方直接修改状态; 键不存在时创建)
     /// - 控件状态变化后调用方应 [`postRedraw`] 触发重绘
     PluginFormData&
-        formFor(const std::string& ownerId, const std::string& plugin, std::vector<agentxx::ui::Item> items);
+        formFor(const std::string& ownerId, const std::string& plugin, std::vector<pluginxx::ui::Item> items);
 
     /// 侧边栏表单键盘输入 (UI 线程; 有焦点且已消费返回 true)
     bool handleSidebarFormKey(const ftxui::Event& event);

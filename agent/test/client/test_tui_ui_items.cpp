@@ -12,7 +12,7 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx-client/io/tui/ui_components.h"
-#include "agentxx/ui/item.h"
+#include "pluginxx/ui.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
@@ -61,7 +61,7 @@ UiRenderCtx ctxFor(int width = 60, int indent = 0) {
 /// 渲染 JSON 描述为行模型
 UiRenderResult renderJson(const char* json, const UiRenderCtx& ctx) {
     UiRenderResult out;
-    agentxx::client::renderItems(agentxx::ui::parseItems(Json::parse(json)), ctx, out);
+    agentxx::client::renderItems(pluginxx::ui::parseBlocks(Json::parse(json)), ctx, out);
     return out;
 }
 
@@ -544,7 +544,7 @@ TestResult testTuiUiItems() {
         auto form = std::make_shared<agentxx::client::UiFormState>();
         ctx.form  = form.get();
         agentxx::client::UiRenderResult res;
-        auto                            items = agentxx::ui::parseItemList(Json::parse(
+        auto                            items = pluginxx::ui::parseBlocks(Json::parse(
             R"({"items":[{"kind":"control","id":"mode","control":"buttons",
                "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}]}]})"
         ));
@@ -595,7 +595,7 @@ TestResult testTuiUiItems() {
         auto ctx   = ctxFor(40);
         auto form  = std::make_shared<agentxx::client::UiFormState>();
         ctx.form   = form.get();
-        auto items = agentxx::ui::parseItemList(Json::parse(
+        auto items = pluginxx::ui::parseBlocks(Json::parse(
             R"({"items":[{"kind":"control","id":"opt","control":"select",
                "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]})"
         ));
@@ -725,9 +725,9 @@ TestResult testTuiUiItems() {
         // 20 个单行子项, 每项一个可命中区域 (标识 = item-N)
         auto items = std::make_shared<std::vector<ScrollItem>>();
         for (int i = 0; i < 20; ++i) {
-            agentxx::ui::Item item;
-            item.kind          = "text";
-            item.text          = "row-" + std::to_string(i);
+            pluginxx::ui::Item item;
+            item.kind = "Text";
+            item.text = pluginxx::ui::TextValue::of("row-" + std::to_string(i));
             UiRenderCtx    ctx = ctxFor(20);
             UiRenderResult res;
             agentxx::client::renderItem(item, ctx, res);

@@ -64,66 +64,84 @@ std::pair<std::string, std::string> pickOptionLabel(
     return {std::string{}, std::string{defaultKey}};
 }
 
+/// 缩进 (终端列数) 包装: 描述层没有"缩进"字段, 用 Padding (长度 u) 表达
+pluginxx::ui::Item withIndent(pluginxx::ui::Item item, int indentCols) {
+    if (indentCols <= 0) {
+        return item;
+    }
+    pluginxx::ui::Item padding = pluginxx::ui::build::node("Padding");
+    padding.padding            = pluginxx::ui::Edges{
+        static_cast<double>(indentCols) * pluginxx::ui::gen::kDefaultCellWidth,
+        0.0,
+        0.0,
+        0.0,
+    };
+    padding.hasPadding = true;
+    padding.children.push_back(std::move(item));
+    return padding;
+}
+
 } // namespace
+
 
 // ---------------------------------------------------------------------------
 // 组件桥接 (用组件构建器拼中断块)
 // ---------------------------------------------------------------------------
 
-std::vector<InterruptUiBlock> blocksOf(const agentxx::ui::Items& ui) {
+std::vector<InterruptUiBlock> blocksOf(const std::vector<pluginxx::ui::Item>& items) {
     std::vector<InterruptUiBlock> out;
-    const std::vector<utilxx_base::Json>& raw = ui.rawList();
-    out.reserve(raw.size());
-    for (const auto& element : raw) {
-        auto item = agentxx::ui::parseItem(element);
-        if (!item.known) {
-            // 未知组件: 交给组件层判"known", 这里仍生成块 (渲染走 fallback)
-            // —— 不静默丢内容
-        }
+    out.reserve(items.size());
+    for (const auto& item : items) {
+        // 组件项 → 中断块 (blockOf 以组件原始 JSON 作 `raw`, 扩展组件字段不丢)
         out.push_back(blockOf(item));
     }
     return out;
 }
 
-InterruptUiBlock contentBlock(agentxx::ui::Items ui) {
-    const auto blocks = blocksOf(ui);
-    if (!blocks.empty()) {
-        return blocks.front();
-    }
-    InterruptUiBlock b;
-    b.kind = "gap";
-    b.lines = 0;
-    return b;
+InterruptUiBlock contentBlock(pluginxx::ui::Item item) {
+    return blockOf(item);
 }
 
 InterruptUiBlock tableBlock(
     const std::vector<std::tuple<std::string, std::string, int>>& columns,
     const std::vector<std::vector<std::string>>&                  rows
 ) {
-    agentxx::ui::TableSpec spec;
-    spec.header = true;
+    using pluginxx::ui::SizeValue;
+    using pluginxx::ui::TableCell;
+    using pluginxx::ui::TableColumn;
+    using pluginxx::ui::TextValue;
+
+    pluginxx::ui::Item table = pluginxx::ui::build::node("Table");
+    table.header             = true;
     for (const auto& [title, align, width] : columns) {
-        agentxx::ui::TableColumnSpec col;
-        col.title = title;
-        col.align = align.empty() ? std::string{"left"} : align;
-        col.width = width;
-        spec.columns.push_back(std::move(col));
+        TableColumn col;
+        col.title = TextValue::of(title);
+        // 对齐口径: 描述层用 start/center/end (旧写法 left/right 在此转换)
+        col.align = align.empty() || align == "left" ? std::string{"start"}
+                  : align == "right"                 ? std::string{"end"}
+                                                     : align;
+        if (width > 0) {
+            col.width = SizeValue::of(static_cast<double>(width));
+        }
+        table.columns.push_back(std::move(col));
     }
     for (const auto& row : rows) {
-        std::vector<utilxx_base::Json> cells;
+        std::vector<TableCell> cells;
         cells.reserve(row.size());
         for (const auto& cell : row) {
-            cells.push_back(utilxx_base::Json(cell));
+            TableCell c;
+            c.text = TextValue::of(cell);
+            cells.push_back(std::move(c));
         }
-        spec.rows.push_back(std::move(cells));
+        table.rows.push_back(std::move(cells));
     }
-    return contentBlock(agentxx::ui::Items{}.table(std::move(spec)));
+    return contentBlock(std::move(table));
 }
 
-InterruptUiBlock treeBlock(const std::vector<agentxx::ui::TreeNodeSpec>& nodes) {
-    agentxx::ui::Items ui;
-    ui.tree(agentxx::ui::TreeSpec{nodes});
-    return contentBlock(std::move(ui));
+InterruptUiBlock treeBlock(std::vector<pluginxx::ui::TreeNode> nodes) {
+    pluginxx::ui::Item tree = pluginxx::ui::build::node("Tree");
+    tree.nodes              = std::move(nodes);
+    return contentBlock(std::move(tree));
 }
 
 InterruptUiBlock meterBlock(
@@ -132,12 +150,12 @@ InterruptUiBlock meterBlock(
     double                                      total,
     std::vector<std::pair<double, std::string>> thresholds
 ) {
-    agentxx::ui::MeterOpts opts;
-    opts.label = std::move(label);
-    for (auto& [at, color] : thresholds) {
-        opts.thresholds.emplace_back(at, std::move(color));
+    pluginxx::ui::Item progress = pluginxx::ui::build::progress(value, total, "%");
+    progress.label              = pluginxx::ui::TextValue::of(label);
+    for (auto& [at, tone] : thresholds) {
+        progress.thresholds.push_back(pluginxx::ui::Threshold{at, std::move(tone)});
     }
-    return contentBlock(agentxx::ui::Items{}.meter(value, total, opts));
+    return contentBlock(std::move(progress));
 }
 
 // ---------------------------------------------------------------------------
@@ -156,16 +174,14 @@ InterruptUiOption
 
 InterruptUiBlock
     textBlock(std::string text, std::string color, int indent, bool wrap, bool bold, bool dim) {
-    // 内容块统一经组件构建器产出 (与插件 UI 同一套 schema): color/bold/dim/wrap/
-    // indent 在组件层都有对应字段, 转换不丢信息
-    return contentBlock(
-        agentxx::ui::Items{}
-            .text(text, color.empty() ? "normal" : color)
-            .indent(indent)
-            .wrap(wrap)
-            .bold(bold)
-            .dim(dim)
-    );
+    // 内容块统一经组件项产出 (与插件 UI 同一套 schema): tone/bold/dim/wrap/indent
+    // 在描述层都有对应字段, 转换不丢信息
+    pluginxx::ui::Item item = pluginxx::ui::build::text(text);
+    item.tone               = color.empty() ? std::string{"normal"} : std::move(color);
+    item.wrap               = wrap;
+    item.bold               = bold;
+    item.dim                = dim;
+    return contentBlock(withIndent(std::move(item), indent));
 }
 
 InterruptUiBlock textBlockKey(
@@ -191,19 +207,29 @@ InterruptUiBlock textBlockKey(
 }
 
 InterruptUiBlock markdownBlock(std::string markdown, int indent) {
-    return contentBlock(agentxx::ui::Items{}.markdown(markdown).indent(indent));
+    pluginxx::ui::Item item = pluginxx::ui::build::markdown(markdown);
+    return contentBlock(withIndent(std::move(item), indent));
 }
 
 InterruptUiBlock diffBlock(std::string path, std::string oldStr, std::string newStr) {
-    return contentBlock(agentxx::ui::Items{}.diff(path, oldStr, newStr));
+    pluginxx::ui::Item item = pluginxx::ui::build::node("Diff");
+    item.path               = std::move(path);
+    item.oldStr             = std::move(oldStr);
+    item.newStr             = std::move(newStr);
+    return contentBlock(std::move(item));
 }
 
 InterruptUiBlock separatorBlock(int indent) {
-    return contentBlock(agentxx::ui::Items{}.separator().indent(indent));
+    pluginxx::ui::Item item = pluginxx::ui::build::divider();
+    return contentBlock(withIndent(std::move(item), indent));
 }
 
 InterruptUiBlock gapBlock(int lines) {
-    return contentBlock(agentxx::ui::Items{}.gap(lines));
+    // 中断描述的空行数是终端口径, 换算成描述层的长度 u (一行 ≈ 格高)
+    pluginxx::ui::Item item = pluginxx::ui::build::gap(
+        static_cast<double>(std::max(0, lines)) * pluginxx::ui::gen::kDefaultCellHeight
+    );
+    return contentBlock(std::move(item));
 }
 
 InterruptUiBlock submitBlock(

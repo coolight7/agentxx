@@ -62,7 +62,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 ///
 /// - `return` 内容行数 (各行行数之和; 供可用尺寸上报, 与面板口径一致)
 static size_t appendPluginItems(
-    const std::vector<agentxx::ui::Item>&                            items,
+    const std::vector<pluginxx::ui::Item>&                            items,
     std::string_view                                                 plugin,
     std::string_view                                                 ownerId,
     const agentxx::plugin::ClientUiRegistry*                         reg,
@@ -174,7 +174,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                           return collapseExpanded(ownerId, id, defaultValue);
                       };
                 // 表单状态: 按最新描述初始化并保留用户已编辑的值
-                auto& form = formFor(sec.id, sec.plugin, agentxx::ui::parseItemList(sec.items));
+                auto& form = formFor(sec.id, sec.plugin, pluginxx::ui::parseBlocks(sec.items));
                 std::vector<ScrollItem> secItems;
                 const size_t            secLines = appendPluginItems(
                     form.items,

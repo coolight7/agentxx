@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agentxx/ui/item.h"
+#include "pluginxx/ui.h"
 #include "utilxx_base/json.h"
 #include <optional>
 #include <string>
@@ -9,6 +9,14 @@
 
 namespace agentxx {
 namespace middleware {
+
+/// 中断表单的提交/取消动作 id (**域内约定**, 不是描述层字段)
+///
+/// 描述层没有"表单 + 提交"这一层 (控件值变化即派发, 见 plan §3.4); 中断的
+/// "一次提交整份表单"由客户端域内实现: 提交行由 [itemOf] 映射成两个按钮, 点击后
+/// 经动作通道回传本 id, 由中断表单收集各控件当前值后提交。
+inline constexpr std::string_view kInterruptSubmitActionId = "__submit";
+inline constexpr std::string_view kInterruptCancelActionId = "__cancel";
 
 /// 中断 UI 分段 (头行的分段文本, 例如 "! [Permission] " + 工具名 + 权限分类)
 struct InterruptUiSegment {
@@ -247,14 +255,14 @@ double interruptValueDouble(
 /// - 其余 kind 按块 `raw` (即组件描述本身) 解析
 /// - 无法映射 (未知 kind / 解析失败) 返回 `std::nullopt`, 调用方按 `fallback`
 ///   文本降级 (无 `fallback` 则跳过, 向前兼容)
-std::optional<agentxx::ui::Item> itemOf(const InterruptUiBlock& block);
+std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block);
 
 /// 组件项 → 中断块 (反向映射)
 ///
-/// 用途: 用 `agentxx::ui::Items` 构建器拼装中断描述 (`blocksOf` 的单项版本)。
+/// 用途: 用 `pluginxx::ui::Items` 构建器拼装中断描述 (`blocksOf` 的单项版本)。
 /// 转换后的块以**组件原始 JSON** 作 `raw`, 因此表格/树/趋势图等扩展组件往返不丢
 /// 内容; 需要控件/文案键等中断层字段时请直接构造 [InterruptUiBlock]。
-InterruptUiBlock blockOf(const agentxx::ui::Item& item);
+InterruptUiBlock blockOf(const pluginxx::ui::Item& item);
 
 /// 描述降级为纯文本 (行式前端/日志/FFI 文本宿主用)///
 /// - text/markdown: 原文 (markdown 不解析, 保留源码)
@@ -264,7 +272,7 @@ InterruptUiBlock blockOf(const agentxx::ui::Item& item);
 /// - submit: 不输出 (仅交互语义)
 /// - custom: fallback 文本
 /// - 其余 kind (表格/树/横排/分组/键值/趋势图/计量条等扩展组件): 按
-///   `agentxx.ui.item` 同一份 schema 解析块描述, 复用 [agentxx::ui::plainText]
+///   `agentxx.ui.item` 同一份 schema 解析块描述, 复用 [pluginxx::ui::plainText]
 ///   输出 (未知 kind 走 `fallback`, 不静默丢内容)
 ///
 /// - `args`:

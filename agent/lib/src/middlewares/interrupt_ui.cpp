@@ -1,6 +1,6 @@
 #include "agentxx/middlewares/interrupt_ui.h"
 
-#include "agentxx/ui/item.h"
+#include "pluginxx/ui.h"
 #include "fmt/format.h"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
@@ -59,54 +59,24 @@ std::vector<InterruptUiOption> jsonOptions(const Json& j, std::string_view key) 
     return out;
 }
 
-/// 按显示宽度硬折行 (按 UTF-8 字符数计; width <= 0 不折行), 保留原换行
-std::vector<std::string> wrapToWidth(std::string_view text, int width) {
-    std::vector<std::string> out;
-    if (text.empty()) {
-        out.emplace_back();
-        return out;
+/// 缩进 (终端口径的列数) → 描述层的 Padding (长度 u)
+///
+/// 描述层没有"缩进"字段 (终端专有概念, 见 plan §3.5): 缩进由容器表达,
+/// 客户端渲染时按能力段把 u 换算成列/行。
+pluginxx::ui::Item withIndentColumns(pluginxx::ui::Item item, int indentCols) {
+    if (indentCols <= 0) {
+        return item;
     }
-    if (width <= 0) {
-        out.emplace_back(text);
-        return out;
-    }
-    size_t begin = 0;
-    while (begin <= text.size()) {
-        const auto eol  = text.find('\n', begin);
-        const auto line = text.substr(
-            begin,
-            eol == std::string_view::npos ? std::string_view::npos : eol - begin
-        );
-        // 单行内按字符数切分 (行式前端对超长单行的处理: 直接按宽度切开)
-        if (line.empty()) {
-            out.emplace_back();
-        } else {
-            size_t offset = 0;
-            while (offset < line.size()) {
-                const auto remain = line.substr(offset);
-                const auto count  = utilxx_base::utf8GetLength(remain);
-                if (count <= static_cast<size_t>(width)) {
-                    out.emplace_back(remain);
-                    break;
-                }
-                auto cut = utilxx_base::findIndexByUtf8Length(remain, static_cast<size_t>(width));
-                if (cut == 0 || cut > remain.size()) {
-                    cut = remain.size();
-                }
-                out.emplace_back(remain.substr(0, cut));
-                offset += cut;
-            }
-        }
-        if (eol == std::string_view::npos) {
-            break;
-        }
-        begin = eol + 1;
-        if (begin == text.size()) {
-            out.emplace_back();
-            break;
-        }
-    }
-    return out;
+    pluginxx::ui::Item padding = pluginxx::ui::build::node("Padding");
+    padding.padding            = pluginxx::ui::Edges{
+        static_cast<double>(indentCols) * pluginxx::ui::gen::kDefaultCellWidth,
+        0.0,
+        0.0,
+        0.0,
+    };
+    padding.hasPadding = true;
+    padding.children.push_back(std::move(item));
+    return padding;
 }
 
 /// 控件候选项/默认值的纯文本摘要 (值 → 字符串)
@@ -121,100 +91,6 @@ std::string jsonValueText(const Json& v) {
         return v.get<bool>() ? "true" : "false";
     }
     return v.dump();
-}
-
-/// 控件 → 纯文本说明行 ("标签: 候选/默认 (控件形态)")
-std::string controlPlainText(const InterruptUiBlock& b) {    std::string line;
-    if (!b.label.empty()) {
-        line  = b.label;
-        line += ": ";
-    } else {
-        line  = b.id.empty() ? std::string{"-"} : b.id;
-        line += ": ";
-    }
-    if (!b.options.empty()) {
-        std::string options;
-        for (size_t i = 0; i < b.options.size(); ++i) {
-            if (i > 0) {
-                options += " / ";
-            }
-            options += jsonValueText(b.options[i].value);
-        }
-        line += options;
-    } else if (b.control == "checkbox") {
-        line += b.defaultValue.is_boolean() && b.defaultValue.get<bool>() ? "[x]" : "[ ]";
-    } else if (!b.defaultValue.is_null()) {
-        line += jsonValueText(b.defaultValue);
-    } else {
-        line += "(empty)";
-    }
-    line += fmt::format(" ({})", b.control.empty() ? "unknown" : b.control);
-    if (!b.help.empty()) {
-        line += " - " + b.help;
-    }
-    return line;
-}
-
-/// 按缩进 + 折行宽度输出一段纯文本 (与文本块同一排版口径)
-void appendIndented(
-    std::vector<std::string>& out,
-    std::string_view          text,
-    int                       indent,
-    int                       width
-) {
-    const std::string pad(static_cast<size_t>(std::max(0, indent)), ' ');
-    const int         avail = (width > 0) ? std::max(1, width - std::max(0, indent)) : 0;
-    for (const auto& line : wrapToWidth(text, avail)) {
-        out.push_back(pad + line);
-    }
-}
-
-/// 按 '\n' 拆分纯文本 (空串返回空列表)
-std::vector<std::string> splitLines(std::string_view text) {
-    std::vector<std::string> out;
-    size_t                   begin = 0;
-    while (begin < text.size()) {
-        const auto eol = text.find('\n', begin);
-        out.emplace_back(text.substr(
-            begin,
-            (eol == std::string_view::npos) ? std::string_view::npos : (eol - begin)
-        ));
-        if (eol == std::string_view::npos) {
-            break;
-        }
-        begin = eol + 1;
-    }
-    return out;
-}
-
-/// 扩展组件块的纯文本降级 (表格/树/横排/分组/键值/趋势图/计量条等)
-///
-/// 块的 kind 未被本结构映射成具名字段时, 按 `agentxx.ui.item` **同一份 schema**
-/// 解析块的原始 JSON, 并复用宿主统一的纯文本降级实现 [agentxx::ui::plainText]
-/// (与 TUI 渲染同一套组件语义); 组件层未识别的 kind 走 `fallback` 文本,
-/// 两者都没有才跳过 (向前兼容)。
-///
-/// 为什么必须走组件层: 行式前端 (CLI/FFI/日志) 原先只认本结构映射的几种 kind,
-/// 中断描述里的表格/树/图表块会被静默丢弃 —— 用户看不到描述内容。
-std::vector<std::string> extendedBlockPlainText(const InterruptUiBlock& b, int width) {
-    if (!b.raw.is_object() || !b.raw.contains("kind")) {
-        // 无原始 JSON (程序化构造的块): 只能输出 fallback
-        std::vector<std::string> out;
-        if (!b.fallback.empty()) {
-            appendIndented(out, b.fallback, b.indent, width);
-        }
-        return out;
-    }
-    auto item = agentxx::ui::parseItem(b.raw);
-    if (!item.known) {
-        std::vector<std::string> out;
-        if (!item.fallback.empty()) {
-            appendIndented(out, item.fallback, std::max(b.indent, item.indent), width);
-        }
-        return out;
-    }
-    // 缩进与折行由组件层按 item.indent / width 处理 (与 TUI 渲染口径一致)
-    return splitLines(agentxx::ui::plainText(std::vector<agentxx::ui::Item>{std::move(item)}, width));
 }
 
 } // namespace
@@ -591,83 +467,140 @@ double interruptValueDouble(const Json& values, std::string_view id, double defa
 // 组件桥接 (中断块 ↔ 组件项)
 // ---------------------------------------------------------------------------
 
-std::optional<agentxx::ui::Item> itemOf(const InterruptUiBlock& block) {
-    agentxx::ui::Item item;
-    item.indent = std::max(0, block.indent);
-    item.color  = block.color;
+std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
+    using pluginxx::ui::Item;
+    using pluginxx::ui::TextValue;
+
+    // 文案: i18n 键优先, 字面文本作回退 (描述层统一用 TextValue 表达)
+    const auto textOf = [](const std::string& key, const std::string& text) {
+        TextValue value;
+        value.key      = key;
+        value.fallback = text;
+        return value;
+    };
+    // 空行数 (中断描述里的终端口径) → 长度 u: 一行 ≈ 能力段默认格高
+    const auto gapSizeOf = [](int lines) {
+        return pluginxx::ui::SizeValue::of(
+            static_cast<double>(std::max(0, lines)) * pluginxx::ui::gen::kDefaultCellHeight
+        );
+    };
+
+    const int indentCols = std::max(0, block.indent);
+    const auto withIndent = [indentCols](Item item) {
+        return withIndentColumns(std::move(item), indentCols);
+    };
+
+    Item item;
+    item.tone = block.color;
     item.bold   = block.bold;
     item.dim    = block.dim;
     item.wrap   = block.wrap;
 
     if (block.kind == "text") {
-        item.kind = "text";
-        item.text = block.text;
-        return item;
+        item.kind = "Text";
+        item.text = textOf(block.textKey, block.text);
+        return withIndent(std::move(item));
     }
     if (block.kind == "markdown") {
-        item.kind = "markdown";
-        item.text = block.text;
-        return item;
+        item.kind     = "Markdown";
+        item.markdown = block.text;
+        return withIndent(std::move(item));
     }
     if (block.kind == "diff") {
-        item.kind   = "diff";
+        item.kind   = "Diff";
         item.path   = block.path;
         item.oldStr = block.oldStr;
         item.newStr = block.newStr;
-        return item;
+        return withIndent(std::move(item));
     }
     if (block.kind == "separator") {
-        item.kind = "separator";
-        return item;
+        item.kind = "Divider";
+        return withIndent(std::move(item));
     }
     if (block.kind == "gap") {
-        item.kind  = "gap";
-        item.lines = std::max(0, block.lines);
-        return item;
+        item.kind = "Gap";
+        item.size = gapSizeOf(block.lines);
+        return withIndent(std::move(item));
     }
     if (block.kind == "control") {
-        item.kind         = "control";
-        item.id           = block.id;
-        item.control      = block.control;
-        item.controlLabel = block.label;
-        item.help         = block.help;
-        item.defaultValue = block.defaultValue;
-        item.commitOnPick = block.commitOnPick;
-        item.integer      = block.integer;
-        item.hasNumMin    = block.hasMin;
-        item.numMin       = block.minValue;
-        item.hasNumMax    = block.hasMax;
-        item.numMax       = block.maxValue;
-        item.step         = block.step;
-        item.multiline    = block.multiline;
+        item.kind      = "Control";
+        item.id        = block.id;
+        item.control   = block.control;
+        item.label     = textOf(block.labelKey, block.label);
+        item.help      = textOf(block.helpKey, block.help);
+        item.valueJson = block.defaultValue.is_null() ? std::string{} : block.defaultValue.dump();
+        item.integer   = block.integer;
+        item.multiline = block.multiline;
+        item.hasMin    = block.hasMin;
+        item.minValue  = block.minValue;
+        item.hasMax    = block.hasMax;
+        item.maxValue  = block.maxValue;
+        item.hasStep   = block.step > 0.0;
+        item.step      = block.step;
         for (const auto& opt : block.options) {
-            agentxx::ui::ControlOption out;
-            out.value = opt.value;
-            out.label = opt.label.empty() ? jsonValueText(opt.value) : opt.label;
-            out.color = opt.color;
+            pluginxx::ui::ControlOption out;
+            out.valueJson = opt.value.is_null() ? std::string{} : opt.value.dump();
+            out.label = textOf(
+                opt.labelKey,
+                opt.label.empty() ? jsonValueText(opt.value) : opt.label
+            );
+            out.tone = opt.color;
             item.options.push_back(std::move(out));
         }
-        return item;
+        // 注: `commitOnPick` 不进描述层 —— 它是"点击候选项即提交整份表单"的
+        // **域内约定** (中断表单提交整份表单; 描述层只表达"值变化即派发")
+        return withIndent(std::move(item));
     }
     if (block.kind == "submit") {
-        item.kind        = "submit";
-        item.label       = block.label;
-        item.cancelLabel = block.cancelLabel;
-        return item;
+        // 确认/取消行: 域内用两个按钮表达 —— 描述层没有"表单提交"这一层
+        // (见 plan §3.4), 点击后经动作通道回传 __submit / __cancel, 由中断表单处理
+        const auto makeButton
+            = [](pluginxx::ui::TextValue label, std::string_view actionId, std::string_view variant) {
+                  Item out = pluginxx::ui::build::button(
+                      std::string_view{},
+                      pluginxx::ui::build::dispatch(std::string{actionId}),
+                      variant
+                  );
+                  out.label = std::move(label);
+                  return out;
+              };
+        Item confirm = makeButton(
+            textOf(block.labelKey.empty() ? std::string{"interrupt.confirm"} : block.labelKey,
+                   block.label),
+            kInterruptSubmitActionId,
+            "primary"
+        );
+        Item cancel = makeButton(
+            textOf(block.cancelLabelKey.empty() ? std::string{"interrupt.cancel"}
+                                                : block.cancelLabelKey,
+                   block.cancelLabel),
+            kInterruptCancelActionId,
+            "secondary"
+        );
+        Item row   = pluginxx::ui::build::row({std::move(confirm), std::move(cancel)});
+        row.hasGap = true;
+        row.gap    = pluginxx::ui::SizeValue::of(pluginxx::ui::gen::kDefaultCellWidth * 2.0);
+        row.main   = "start";
+        return withIndent(std::move(row));
     }
     if (block.kind == "custom") {
-        item.kind      = "custom";
-        item.component = block.component;
-        item.props     = block.props;
-        item.fallback  = block.fallback;
+        // 自定义块已并入描述层: `props.items` 作为组件树展开, 其余按 fallback 文本
         if (block.props.is_object() && block.props.contains("items")) {
-            item.items = agentxx::ui::parseItemList(block.props);
+            auto parsed = pluginxx::ui::parseBlocks(block.props);
+            if (!parsed.empty()) {
+                Item row     = pluginxx::ui::build::column({});
+                row.children = std::move(parsed);
+                return withIndent(std::move(row));
+            }
         }
-        return item;
+        if (!block.fallback.empty()) {
+            return withIndent(pluginxx::ui::build::caption(block.fallback));
+        }
+        return std::nullopt;
     }
     // 扩展组件 (表格/树/横排/分组/趋势图等): 块描述即组件描述, 按原始 JSON 解析
     if (block.raw.is_object() && block.raw.contains("kind")) {
-        auto parsed = agentxx::ui::parseItem(block.raw);
+        auto parsed = pluginxx::ui::parseBlock(block.raw);
         if (parsed.known) {
             return parsed;
         }
@@ -675,50 +608,69 @@ std::optional<agentxx::ui::Item> itemOf(const InterruptUiBlock& block) {
     return std::nullopt;
 }
 
-InterruptUiBlock blockOf(const agentxx::ui::Item& item) {
+InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
+    using pluginxx::ui::TextValue;
+
+    // TextValue → (i18n 键, 字面文本)
+    const auto splitText = [](const TextValue& value, std::string& key, std::string& text) {
+        key  = value.key;
+        text = value.fallback;
+    };
+
     InterruptUiBlock b;
-    b.kind        = item.kind.empty() ? std::string{"text"} : item.kind;
-    b.indent      = std::max(0, item.indent);
-    b.color       = item.color;
-    b.bold        = item.bold;
-    b.dim         = item.dim;
-    b.wrap        = item.wrap;
-    b.text        = item.text;
-    b.lines       = item.lines;
-    b.path        = item.path;
-    b.oldStr      = item.oldStr;
-    b.newStr      = item.newStr;
-    b.id          = item.id;
-    b.control     = item.control;
-    // 控件标签: 组件层把控件标签放在 `controlLabel` (JSON 字段名同为 "label"),
-    // 而 `label` 属于按钮/提交行 —— 按 kind 取对应字段
-    b.label = (item.kind == "control") ? item.controlLabel : item.label;
-    b.help        = item.help;
-    // 候选项: 组件层的候选项只有 value/label/color (无 i18n 键) —— 需要
-    // labelKey 的文案请直接构造 [InterruptUiBlock]
-    for (const auto& o : item.options) {
-        InterruptUiOption out;
-        out.value = o.value;
-        out.label = o.label;
-        out.color = o.color;
-        b.options.push_back(std::move(out));
+    b.kind  = item.kind.empty() ? std::string{"text"} : item.kind;
+    b.color = item.tone;
+    b.bold   = item.bold;
+    b.dim    = item.dim;
+    b.wrap   = item.wrap;
+
+    if (item.kind == "Text" || item.kind.empty()) {
+        b.kind = "text";
+        splitText(item.text, b.textKey, b.text);
+    } else if (item.kind == "Markdown") {
+        b.kind = "markdown";
+        b.text = item.markdown;
+    } else if (item.kind == "Diff") {
+        b.kind   = "diff";
+        b.path   = item.path;
+        b.oldStr = item.oldStr;
+        b.newStr = item.newStr;
+    } else if (item.kind == "Divider") {
+        b.kind = "separator";
+    } else if (item.kind == "Gap") {
+        b.kind  = "gap";
+        b.lines = std::max(
+            0,
+            static_cast<int>(
+                std::lround(item.size.value / pluginxx::ui::gen::kDefaultCellHeight)
+            )
+        );
+    } else if (item.kind == "Control") {
+        b.kind   = "control";
+        b.id     = item.id;
+        b.control = item.control;
+        splitText(item.label, b.labelKey, b.label);
+        splitText(item.help, b.helpKey, b.help);
+        b.defaultValue = item.valueJson.empty() ? Json{} : Json::parse(item.valueJson);
+        b.integer      = item.integer;
+        b.multiline    = item.multiline;
+        b.hasMin       = item.hasMin;
+        b.minValue     = item.minValue;
+        b.hasMax       = item.hasMax;
+        b.maxValue     = item.maxValue;
+        b.step         = (item.hasStep && item.step > 0.0) ? item.step : 1.0;
+        b.commitOnPick = false; // 域内约定, 不写入描述
+        for (const auto& opt : item.options) {
+            InterruptUiOption out;
+            out.value = opt.valueJson.empty() ? Json{} : Json::parse(opt.valueJson);
+            splitText(opt.label, out.labelKey, out.label);
+            out.color = opt.tone;
+            b.options.push_back(std::move(out));
+        }
+    } else {
+        // 扩展组件: 整项按描述层的 JSON 形态原样带走 (渲染/纯文本按 raw 解释)
+        b.raw = pluginxx::ui::dumpItem(item);
     }
-    b.defaultValue = item.defaultValue;
-    b.commitOnPick = item.commitOnPick;
-    b.integer      = item.integer;
-    b.hasMin       = item.hasNumMin;
-    b.minValue     = item.numMin;
-    b.hasMax       = item.hasNumMax;
-    b.maxValue     = item.numMax;
-    b.step         = item.step;
-    b.multiline    = item.multiline;
-    b.cancelLabel  = item.cancelLabel;
-    b.component    = item.component;
-    b.props        = item.props;
-    b.fallback     = item.fallback;
-    // 以组件描述作原始 JSON: 扩展组件 (表格/树/趋势图/横排/分组等) 的字段不在
-    // 本结构里逐个映射, 渲染与纯文本降级按 raw 走组件层
-    b.raw = agentxx::ui::dumpItem(item);
     return b;
 }
 
@@ -727,63 +679,25 @@ InterruptUiBlock blockOf(const agentxx::ui::Item& item) {
 // ---------------------------------------------------------------------------
 
 std::string interruptUiPlainText(const InterruptUi& ui, int width) {
-    std::vector<std::string> lines;
-
-    auto appendWrapped = [&](std::string_view text, int indent) {
-        const std::string pad(static_cast<size_t>(std::max(0, indent)), ' ');
-        const int         avail = (width > 0) ? std::max(1, width - std::max(0, indent)) : 0;
-        for (const auto& line : wrapToWidth(text, avail)) {
-            lines.push_back(pad + line);
+    // 统一走描述层的纯文本降级: 与 TUI 渲染同一套组件语义 (表格/树/图表不再被丢弃)
+    std::vector<pluginxx::ui::Item> items;
+    items.reserve(ui.blocks.size());
+    for (const auto& block : ui.blocks) {
+        if (block.kind == "submit") {
+            continue; // 提交行只有交互语义, 纯文本不输出
         }
-    };
-
-    for (const auto& b : ui.blocks) {
-        if (b.kind == "text" || b.kind == "markdown") {
-            appendWrapped(b.text, b.indent);
-        } else if (b.kind == "gap") {
-            for (int i = 0; i < b.lines; ++i) {
-                lines.emplace_back();
-            }
-        } else if (b.kind == "separator") {
-            lines.push_back(std::string(static_cast<size_t>(std::max(0, b.indent)), ' ') + "---");
-        } else if (b.kind == "diff") {
-            if (!b.path.empty()) {
-                lines.push_back(fmt::format(
-                    "{}file: {}",
-                    std::string(static_cast<size_t>(b.indent), ' '),
-                    b.path
-                ));
-            }
-            const auto diff = utilxx::computeLineDiff(b.oldStr, b.newStr);
-            for (const auto& l : diff) {
-                char prefix = ' ';
-                if (l.type == utilxx::DiffLineType::Add) {
-                    prefix = '+';
-                } else if (l.type == utilxx::DiffLineType::Delete) {
-                    prefix = '-';
-                }
-                appendWrapped(fmt::format("{}{}", prefix, l.text), b.indent);
-            }
-        } else if (b.kind == "control") {
-            appendWrapped(controlPlainText(b), b.indent);
-        } else if (b.kind == "custom") {
-            // 自定义块: 无 fallback 时输出组件名占位 (便于行式前端提示缺失)
-            const auto text
-                = !b.fallback.empty()
-                      ? b.fallback
-                      : (b.component.empty() ? std::string{"[unsupported block]"}
-                                             : fmt::format("[custom component: {}]", b.component));
-            appendWrapped(text, b.indent);
-        } else {
-            // 扩展组件块 (表格/树/横排/分组/键值/趋势图/计量条等):
-            // 复用组件层的纯文本降级 (与 TUI 渲染同一套 schema 与语义)
-            for (auto& line : extendedBlockPlainText(b, width)) {
-                lines.push_back(std::move(line));
-            }
+        if (auto item = itemOf(block)) {
+            items.push_back(std::move(*item));
+            continue;
         }
-        // submit: 仅交互语义, 纯文本不输出
+        if (!block.fallback.empty()) {
+            items.push_back(withIndentColumns(
+                pluginxx::ui::build::caption(block.fallback),
+                std::max(0, block.indent)
+            ));
+        }
     }
-    return utilxx_base::stringJoin(lines, "\n");
+    return pluginxx::ui::plainText(items, width);
 }
 
 } // namespace middleware

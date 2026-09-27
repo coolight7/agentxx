@@ -220,7 +220,7 @@ inline constexpr size_t kUiJsonMaxBytes = 1024 * 1024;
 /// 插件推送的面板/段落/状态栏/装饰/overlay 描述以及工具渲染结果都会进入 UI
 /// 注册表快照或渲染缓存, 超大描述同时撑大内存与每帧解析耗时, 因此在入口处
 /// 直接拒绝; 组件层自身的上限 (嵌套深度/元素数/文本长度) 见
-/// [agentxx::ui::ParseLimits]。
+/// [pluginxx::ui::ParseLimits]。
 ///
 /// - `args`:
 ///     - [json] 待校验的 JSON 文本 (空串视为通过)

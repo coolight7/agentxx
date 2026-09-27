@@ -793,7 +793,7 @@ private:
 
     /// 表单状态与当前组件树 (控件值/勾选/选中/焦点; 由宿主维护, 见 ui_components.h)
     agentxx::client::UiFormState   form_;
-    std::vector<agentxx::ui::Item> formItems_;
+    std::vector<pluginxx::ui::Item> formItems_;
 
     /// 提交表单 (校验 → 组装 `{"values":{...}}` → 动作通道回传 __submit)
     void submitForm();

@@ -624,53 +624,68 @@ void test_interrupt_handle_arg_serialization() {
 /// 之间的往返不丢内容 (渲染层与纯文本降级都按 raw 走组件层)。
 void test_component_bridge() {
     using namespace agentxx::middleware;
+    using pluginxx::ui::Item;
+    using pluginxx::ui::SizeValue;
+    using pluginxx::ui::TableCell;
+    using pluginxx::ui::TableColumn;
+    using pluginxx::ui::TextValue;
 
-    // 1) 构建器 → 块数组
-    agentxx::ui::Items ui;
-    ui.text("标题", "accent").bold(true).indent(2);
-    ui.table({
-        .columns = {{"Path", "left", 0}, {"Scope", "right", 6}},
-        .rows    = {{"a.txt", "write"}},
-    });
-    ui.meter(72, 100, {.width = 4, .label = "CPU"});
+    // 1) 组件项 → 中断块 (块只保留描述层的 JSON 原文, 内容不丢)
+    Item table    = pluginxx::ui::build::node("Table");
+    table.header  = true;
+    table.columns.push_back(TableColumn{TextValue::of("Path"), "start", SizeValue::autoValue(), {}});
+    table.columns.push_back(TableColumn{TextValue::of("Scope"), "end", SizeValue::of(6), {}});
+    table.rows.push_back({TableCell{TextValue::of("a.txt"), {}, {}}});
 
-    auto blocks = preset::blocksOf(ui);
+    Item progress  = pluginxx::ui::build::progress(72, 100, "%");
+    progress.label = TextValue::of("CPU");
+
+    auto blocks = preset::blocksOf({pluginxx::ui::build::title("标题"), table, progress});
     XX_TEST_EXPECT_EQ(blocks.size(), size_t{3});
-    XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"text"});
-    XX_TEST_EXPECT_EQ(blocks[0].text, std::string{"标题"});
-    XX_TEST_EXPECT_EQ(blocks[0].indent, 2);
-    XX_TEST_EXPECT_TRUE(blocks[0].bold);
-    XX_TEST_EXPECT_EQ(blocks[1].kind, std::string{"table"});
-    XX_TEST_EXPECT_EQ(blocks[2].kind, std::string{"meter"});
+    XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"Text"});
+    XX_TEST_EXPECT_EQ(blocks[1].kind, std::string{"Table"});
+    XX_TEST_EXPECT_EQ(blocks[2].kind, std::string{"Progress"});
 
     // 2) 块 → 组件项 (唯一映射): 扩展组件按 raw 解析
     const auto tableItem = itemOf(blocks[1]);
     XX_TEST_EXPECT_TRUE(tableItem.has_value());
     if (tableItem) {
-        XX_TEST_EXPECT_EQ(tableItem->kind, std::string{"table"});
+        XX_TEST_EXPECT_EQ(tableItem->kind, std::string{"Table"});
         XX_TEST_EXPECT_EQ(tableItem->columns.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(tableItem->columns[1].align, std::string{"right"});
+        XX_TEST_EXPECT_EQ(tableItem->columns[1].align, std::string{"end"});
         XX_TEST_EXPECT_EQ(tableItem->rows.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(tableItem->rows[0][0].text, std::string{"a.txt"});
+        XX_TEST_EXPECT_EQ(tableItem->rows[0][0].text.fallback, std::string{"a.txt"});
     }
 
-    // 3) 端到端: 含新组件的中断描述在行式前端 (CLI/日志) 上也有内容
+    // 3) 端到端: 含扩展组件的中断描述在行式前端 (CLI/日志) 上也有内容
     InterruptUi desc;
     desc.blocks = blocks;
     const auto text = interruptUiPlainText(desc, 80);
     XX_TEST_EXPECT_TRUE(text.find("标题") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("[###-] 72%") != std::string::npos);
 
-    // 4) 块 → 组件项 → 块: 控件语义与内容字段保持
+    // 4) 文本块缩进: 描述层没有"缩进"字段, 用 Padding 容器表达
+    const auto indented = preset::textBlock("缩进行", "accent", 2, false, true);
+    XX_TEST_EXPECT_EQ(indented.kind, std::string{"Padding"});
+    const auto indentedItem = itemOf(indented);
+    XX_TEST_EXPECT_TRUE(indentedItem.has_value());
+    if (indentedItem) {
+        XX_TEST_EXPECT_EQ(indentedItem->kind, std::string{"Padding"});
+        XX_TEST_EXPECT_EQ(indentedItem->children.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(indentedItem->children[0].kind, std::string{"Text"});
+        XX_TEST_EXPECT_EQ(indentedItem->children[0].text.fallback, std::string{"缩进行"});
+        XX_TEST_EXPECT_TRUE(indentedItem->padding.left > 0.0);
+    }
+
+    // 5) 控件: 块 ↔ 组件项往返 (id/形态/标签/步进/整数/缺省值)
     const auto numberBlock = preset::numberControl("n", "N", {}, 3.0, true, 2.0);
     const auto numberItem  = itemOf(numberBlock);
     XX_TEST_EXPECT_TRUE(numberItem.has_value());
     if (numberItem) {
-        XX_TEST_EXPECT_EQ(numberItem->kind, std::string{"control"});
+        XX_TEST_EXPECT_EQ(numberItem->kind, std::string{"Control"});
         XX_TEST_EXPECT_EQ(numberItem->control, std::string{"number"});
-        XX_TEST_EXPECT_EQ(numberItem->controlLabel, std::string{"N"});
+        XX_TEST_EXPECT_EQ(numberItem->label.fallback, std::string{"N"});
         XX_TEST_EXPECT_EQ(numberItem->step, 2.0);
         XX_TEST_EXPECT_TRUE(numberItem->integer);
         const auto back = blockOf(*numberItem);
@@ -682,35 +697,47 @@ void test_component_bridge() {
         XX_TEST_EXPECT_TRUE(back.hasMin == false && back.hasMax == false);
     }
 
-    // 5) 预设里的新组件 helper
-    const auto tree = preset::treeBlock({
-        {"src",      "accent", {}, {}, {{"main.cpp"}}},
-        {"README.md", {},      {}, {}, {}           },
-    });
-    XX_TEST_EXPECT_EQ(tree.kind, std::string{"tree"});
+    // 6) 提交行: 域内映射成"确认 / 取消"两个按钮 (描述层没有表单提交这一层)
+    const auto submitRow = itemOf(preset::submitBlock("APPLY", {}, {}, {}));
+    XX_TEST_EXPECT_TRUE(submitRow.has_value());
+    if (submitRow) {
+        XX_TEST_EXPECT_EQ(submitRow->kind, std::string{"Row"});
+        XX_TEST_EXPECT_EQ(submitRow->children.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(submitRow->children[0].kind, std::string{"Button"});
+        XX_TEST_EXPECT_EQ(submitRow->children[1].kind, std::string{"Button"});
+        XX_TEST_EXPECT_TRUE(
+            submitRow->children[0].action.kind == pluginxx::ui::Action::Kind::Dispatch
+        );
+        XX_TEST_EXPECT_EQ(submitRow->children[0].action.name, std::string{kInterruptSubmitActionId});
+        XX_TEST_EXPECT_EQ(submitRow->children[1].action.name, std::string{kInterruptCancelActionId});
+        XX_TEST_EXPECT_EQ(submitRow->children[0].label.fallback, std::string{"APPLY"});
+    }
+
+    // 7) 预设 helper: 树 / 表格块
+    pluginxx::ui::TreeNode root;
+    root.label = TextValue::of("src");
+    root.children.push_back(
+        pluginxx::ui::TreeNode{TextValue::of("main.cpp"), {}, pluginxx::ui::Action{}, {}}
+    );
+    const auto tree = preset::treeBlock({root});
+    XX_TEST_EXPECT_EQ(tree.kind, std::string{"Tree"});
     const auto treeItem = itemOf(tree);
     XX_TEST_EXPECT_TRUE(treeItem.has_value());
     if (treeItem) {
-        XX_TEST_EXPECT_EQ(treeItem->nodes.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(treeItem->nodes.size(), size_t{1});
         XX_TEST_EXPECT_EQ(treeItem->nodes[0].children.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(treeItem->nodes[0].children[0].label, std::string{"main.cpp"});
+        XX_TEST_EXPECT_EQ(treeItem->nodes[0].children[0].label.fallback, std::string{"main.cpp"});
     }
 
-    const auto table = preset::tableBlock({{"File", "left", 0}}, {{"x.cpp"}});
-    XX_TEST_EXPECT_EQ(table.kind, std::string{"table"});
-    const auto meter = preset::meterBlock("ctx", 42, 100, {{80, "error"}});
-    XX_TEST_EXPECT_EQ(meter.kind, std::string{"meter"});
-
-    // 6) 未知组件不使整份描述失效: 块仍产出 (渲染走 fallback)
-    agentxx::ui::Items weird;
-    weird.raw(utilxx_base::Json{{"kind", "future_widget"}, {"fallback", "unsupported"}});
-    const auto weirdBlocks = preset::blocksOf(weird);
-    XX_TEST_EXPECT_EQ(weirdBlocks.size(), size_t{1});
-    XX_TEST_EXPECT_EQ(weirdBlocks[0].kind, std::string{"future_widget"});
-    const auto weirdItem = itemOf(weirdBlocks[0]);
-    XX_TEST_EXPECT_FALSE(weirdItem.has_value()); // 未知 kind → 由调用方降级
+    const auto tableBlock = preset::tableBlock({{"File", "left", 0}}, {{"x.cpp"}});
+    XX_TEST_EXPECT_EQ(tableBlock.kind, std::string{"Table"});
+    const auto tableBlockItem = itemOf(tableBlock);
+    XX_TEST_EXPECT_TRUE(tableBlockItem.has_value());
+    if (tableBlockItem) {
+        XX_TEST_EXPECT_EQ(tableBlockItem->columns[0].align, std::string{"start"});
+        XX_TEST_EXPECT_EQ(tableBlockItem->rows[0][0].text.fallback, std::string{"x.cpp"});
+    }
 }
-
 TestResult testInterruptUi() {
     g_interrupt_ui_passed = 0;
     g_interrupt_ui_failed = 0;

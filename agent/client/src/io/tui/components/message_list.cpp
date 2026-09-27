@@ -1658,7 +1658,7 @@ void MessageListComponent::appendDecorItems(
     rc.registry = reg;
 
     UiRenderResult out;
-    renderItems(agentxx::ui::parseItemList(items), rc, out);
+    renderItems(pluginxx::ui::parseBlocks(items), rc, out);
     // markdown 渲染器生命周期交回调用方 (随 LazyBuiltItem.attachments 与 Element 同存活)
     for (auto& builder : out.builders) {
         mdBuilders.push_back(std::move(builder));

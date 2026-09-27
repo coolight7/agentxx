@@ -1,17 +1,19 @@
-// 客户端 UI 组件描述 schema 测试 (解析/校验/序列化/纯文本降级/列宽)
+// 中断描述 ↔ 组件项 桥接测试 (界面描述层的 agentxx 侧用法)
 //
-// 覆盖场景:
-// - 解析: 各 kind 字段归一化、旧写法兼容、未知 kind 与非法输入
-// - 往返: dump → parse 后关键字段不变 (含 canvas 原样保留)
-// - 上限: 嵌套深度、单层元素数、表格行列、文本长度
-// - 纯文本降级: 表格列对齐、树连接线、键值、趋势图、计量条、控件说明、容器
-// - 列宽: 宽字符/组合字符计数、按列宽截断与补齐
+// 描述层本身 (解析/上限/序列化/纯文本/适配) 的用例在库仓库 (cxx_pluginxx_ui) 的
+// 单测里; 本模块覆盖 agentxx 这一侧的用法:
+// - 中断块 → 组件项 (itemOf): 具名块、扩展组件 (按 raw 解析)、控件、提交行、未知块
+// - 组件项 → 中断块 (blockOf) 与 blocksOf 的往返 (内容字段不丢)
+// - 预设模板生成的结构 (输入表单 / 确认卡片 / 权限卡片: 控件 id、候选项值、块种类)
+// - 纯文本降级: 行式前端 (CLI/日志/FFI) 上内容与空行都不丢
+// - 显示列宽辅助 (终端渲染与文本降级共用同一口径)
 #include "agentxx-test/core/test_ui_items.h"
 
-#include "agentxx/ui/build.h"
-#include "agentxx/ui/item.h"
-#include "agentxx/ui/text_width.h"
+#include "agentxx/middlewares/interrupt_presets.h"
+#include "agentxx/middlewares/interrupt_ui.h"
+#include "pluginxx/ui.h"
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -28,650 +30,411 @@ namespace agentxx {
 namespace test {
 
 using utilxx_base::Json;
-using agentxx::ui::Item;
+using pluginxx::ui::Item;
+using pluginxx::ui::SizeValue;
+using pluginxx::ui::TableCell;
+using pluginxx::ui::TableColumn;
+using pluginxx::ui::TextValue;
 
 namespace {
-
-/// 解析单条 JSON (解析失败返回 known=false 的项)
-Item parseOne(const char* json) {
-    return agentxx::ui::parseItem(Json::parse(json));
-}
-
-/// 解析 JSON 数组 (解析失败时记录问题输入并返回空列表)
-std::vector<Item> parseMany(const char* json) {
-    try {
-        return agentxx::ui::parseItems(Json::parse(json));
-    } catch (const std::exception& e) {
-        std::string shown;
-        for (char c : std::string_view{json}) {
-            if (c == '\n') {
-                shown += "\\n";
-            } else {
-                shown.push_back(c);
-            }
-        }
-        TEST_FAIL << "parseMany failed: " << e.what() << " | len=" << shown.size()
-                  << " input=" << shown << std::endl;
-        return {};
-    }
-}
 
 /// 子串存在性 (纯文本降级断言用)
 bool has(std::string_view haystack, std::string_view needle) {
     return haystack.find(needle) != std::string_view::npos;
 }
 
+/// 一个两列一行的表格组件项
+Item sampleTable() {
+    Item table   = pluginxx::ui::build::node("Table");
+    table.header = true;
+    table.columns.push_back(TableColumn{TextValue::of("Path"), "start", SizeValue::autoValue(), {}});
+    table.columns.push_back(TableColumn{TextValue::of("Scope"), "end", SizeValue::of(6), {}});
+    table.rows.push_back({
+        TableCell{TextValue::of("a.txt"), {}, {}},
+        TableCell{TextValue::of("write"), {}, {}},
+    });
+    return table;
+}
+
 } // namespace
 
 TestResult testUiItems() {
-    // ---------------- 文本类 ----------------
+    using namespace agentxx::middleware;
+
+    // ---------------- 块 → 组件项 (itemOf) ----------------
     {
-        auto item = parseOne(R"({"kind":"text","text":"hello","role":"title"})");
-        XX_TEST_EXPECT_TRUE(item.known);
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"text"});
-        XX_TEST_EXPECT_EQ(item.text, std::string{"hello"});
-        XX_TEST_EXPECT_EQ(item.color, std::string{"title"});
-        XX_TEST_EXPECT_TRUE(item.bold); // title 隐含加粗 (与历史渲染语义一致)
-        XX_TEST_EXPECT_TRUE(item.wrap); // 文本缺省折行
+        InterruptUiBlock b;
+        b.kind = "text";
+        b.text = "hello";
+        b.color = "accent";
+        b.bold  = true;
+        b.wrap  = true;
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Text"});
+            XX_TEST_EXPECT_EQ(item->text.fallback, std::string{"hello"});
+            XX_TEST_EXPECT_EQ(item->tone, std::string{"accent"});
+            XX_TEST_EXPECT_TRUE(item->bold);
+            XX_TEST_EXPECT_TRUE(item->wrap);
+        }
     }
     {
-        // 缺省 kind = text
-        auto item = parseOne(R"({"text":"no kind"})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"text"});
-        XX_TEST_EXPECT_EQ(item.text, std::string{"no kind"});
+        // i18n 键: 文本块带 textKey 时用 TextValue 的 key 承载 (客户端词表解析)
+        InterruptUiBlock b;
+        b.kind    = "text";
+        b.textKey = "interrupt.header";
+        b.text    = "Header";
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->text.key, std::string{"interrupt.header"});
+            XX_TEST_EXPECT_EQ(item->text.fallback, std::string{"Header"});
+        }
     }
     {
-        // hint 只决定取色 (其本身就是弱化灰), 不隐含弱化
-        auto item = parseOne(R"({"kind":"text","text":"pending","role":"hint"})");
-        XX_TEST_EXPECT_EQ(item.color, std::string{"hint"});
-        XX_TEST_EXPECT_FALSE(item.dim);
-        XX_TEST_EXPECT_FALSE(item.bold);
-        // 需要弱化的项显式声明 (与中断块映射 item.dim = block.dim 一致)
-        auto dimmed = parseOne(R"({"kind":"text","text":"more","color":"hint","dim":true})");
-        XX_TEST_EXPECT_TRUE(dimmed.dim);
-        // 非 hint 色同样可显式弱化
-        auto normalDim = parseOne(R"({"kind":"text","text":"x","dim":true})");
-        XX_TEST_EXPECT_TRUE(normalDim.dim);
-        // 显式 false 与缺省一致
-        auto off = parseOne(R"({"kind":"text","text":"x","role":"hint","dim":false})");
-        XX_TEST_EXPECT_FALSE(off.dim);
+        // 缩进: 描述层没有 indent 字段, 用 Padding 容器表达 (u 由客户端换算)
+        InterruptUiBlock b;
+        b.kind   = "text";
+        b.text   = "indented";
+        b.indent = 2;
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Padding"});
+            XX_TEST_EXPECT_EQ(item->children.size(), size_t{1});
+            XX_TEST_EXPECT_TRUE(item->padding.left > 0.0);
+        }
     }
     {
-        auto item = parseOne(R"({"kind":"gap","lines":3})");
-        XX_TEST_EXPECT_EQ(item.lines, 3);
-        // 上限: 空行数被限制在 50 以内
-        auto big = parseOne(R"({"kind":"gap","lines":9999})");
-        XX_TEST_EXPECT_EQ(big.lines, 50);
+        InterruptUiBlock b;
+        b.kind   = "gap";
+        b.lines  = 2;
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Gap"});
+            // 两行 → 两个格高 (默认 20u)
+            XX_TEST_EXPECT_TRUE(item->size.value >= 2.0 * pluginxx::ui::gen::kDefaultCellHeight);
+        }
     }
     {
-        auto item = parseOne(R"({"kind":"markdown","text":"# title"})");
-        XX_TEST_EXPECT_EQ(item.text, std::string{"# title"});
-        XX_TEST_EXPECT_FALSE(item.wrap); // 结构化/富文本不折行, 由渲染库自行处理
+        InterruptUiBlock b;
+        b.kind = "separator";
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value() && item->kind == "Divider");
     }
     {
-        auto item = parseOne(R"({"kind":"diff","path":"a.cpp","old_str":"x","new_str":"y"})");
-        XX_TEST_EXPECT_EQ(item.path, std::string{"a.cpp"});
-        XX_TEST_EXPECT_EQ(item.oldStr, std::string{"x"});
-        XX_TEST_EXPECT_EQ(item.newStr, std::string{"y"});
+        InterruptUiBlock b;
+        b.kind   = "diff";
+        b.path   = "a.cpp";
+        b.oldStr = "x";
+        b.newStr = "y";
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Diff"});
+            XX_TEST_EXPECT_EQ(item->path, std::string{"a.cpp"});
+            XX_TEST_EXPECT_EQ(item->oldStr, std::string{"x"});
+            XX_TEST_EXPECT_EQ(item->newStr, std::string{"y"});
+        }
     }
     {
-        // 旧写法: oldStr/newStr 驼峰
-        auto item = parseOne(R"({"kind":"diff","path":"p","oldStr":"a","newStr":"b"})");
-        XX_TEST_EXPECT_EQ(item.oldStr, std::string{"a"});
-        XX_TEST_EXPECT_EQ(item.newStr, std::string{"b"});
+        // markdown 块
+        InterruptUiBlock b;
+        b.kind = "markdown";
+        b.text = "# title";
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Markdown"});
+            XX_TEST_EXPECT_EQ(item->markdown, std::string{"# title"});
+        }
+    }
+    {
+        // 控件: 形态/标签/说明/候选项原值/缺省值/数值范围都进描述层
+        InterruptUiBlock b;
+        b.kind       = "control";
+        b.id         = "level";
+        b.control    = "number";
+        b.label      = "Level";
+        b.help       = "1..5";
+        b.defaultValue = 3;
+        b.integer    = true;
+        b.hasMin     = true;
+        b.minValue   = 1.0;
+        b.hasMax     = true;
+        b.maxValue   = 5.0;
+        b.step       = 2.0;
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Control"});
+            XX_TEST_EXPECT_EQ(item->id, std::string{"level"});
+            XX_TEST_EXPECT_EQ(item->control, std::string{"number"});
+            XX_TEST_EXPECT_EQ(item->label.fallback, std::string{"Level"});
+            XX_TEST_EXPECT_EQ(item->help.fallback, std::string{"1..5"});
+            XX_TEST_EXPECT_EQ(item->valueJson, std::string{"3"});
+            XX_TEST_EXPECT_TRUE(item->integer);
+            XX_TEST_EXPECT_TRUE(item->hasMin && item->hasMax);
+            XX_TEST_EXPECT_EQ(item->minValue, 1.0);
+            XX_TEST_EXPECT_EQ(item->maxValue, 5.0);
+            XX_TEST_EXPECT_EQ(item->step, 2.0);
+        }
+    }
+    {
+        // 候选项: 原值 (任意 JSON) 与标签 (i18n 键优先) 分别承载
+        InterruptUiBlock b;
+        b.kind    = "control";
+        b.control = "buttons";
+        b.id      = "pick";
+        b.options.push_back(InterruptUiOption{Json("true"), {}, "interrupt.yes", {}});
+        b.options.push_back(InterruptUiOption{Json(false), "No", {}, "error"});
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->options.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(item->options[0].valueJson, std::string{"true"});
+            XX_TEST_EXPECT_EQ(item->options[0].label.key, std::string{"interrupt.yes"});
+            XX_TEST_EXPECT_EQ(item->options[1].valueJson, std::string{"false"});
+            XX_TEST_EXPECT_EQ(item->options[1].label.fallback, std::string{"No"});
+            XX_TEST_EXPECT_EQ(item->options[1].tone, std::string{"error"});
+        }
+    }
+    {
+        // 提交行: 确认/取消是域内两个按钮 (动作 id 为域内提交约定)
+        InterruptUiBlock b;
+        b.kind = "submit";
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Row"});
+            XX_TEST_EXPECT_EQ(item->children.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(
+                item->children[0].action.name,
+                std::string{kInterruptSubmitActionId}
+            );
+            XX_TEST_EXPECT_EQ(
+                item->children[1].action.name,
+                std::string{kInterruptCancelActionId}
+            );
+            // 文案只给键 (字面文本由客户端词表提供)
+            XX_TEST_EXPECT_EQ(item->children[0].label.key, std::string{"interrupt.confirm"});
+        }
+    }
+    {
+        // 扩展组件: 块描述即组件描述 (按 raw 解析)
+        InterruptUiBlock b;
+        b.kind = "Table";
+        b.raw  = pluginxx::ui::dumpItem(sampleTable());
+        const auto item = itemOf(b);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->kind, std::string{"Table"});
+            XX_TEST_EXPECT_EQ(item->columns.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(item->rows.size(), size_t{1});
+        }
+    }
+    {
+        // 未知块: 无内容可映射 → 空 (调用方按 fallback 处理)
+        InterruptUiBlock b;
+        b.kind = "unknown_kind";
+        XX_TEST_EXPECT_TRUE(!itemOf(b).has_value());
     }
 
-    // ---------------- 未知 kind 与非法输入 ----------------
+    // ---------------- 组件项 ↔ 块 (blocksOf / blockOf) ----------------
     {
-        auto item = parseOne(R"({"kind":"totally-unknown","fallback":"降级文本"})");
-        XX_TEST_EXPECT_FALSE(item.known);
-        XX_TEST_EXPECT_EQ(item.fallback, std::string{"降级文本"});
-    }
-    {
-        auto item = agentxx::ui::parseItem(Json::array()); // 非对象
-        XX_TEST_EXPECT_FALSE(item.known);
-    }
+        auto blocks = preset::blocksOf({pluginxx::ui::build::title("标题"), sampleTable()});
+        XX_TEST_EXPECT_EQ(blocks.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"Text"});
+        XX_TEST_EXPECT_EQ(blocks[0].text, std::string{"标题"});
+        XX_TEST_EXPECT_EQ(blocks[1].kind, std::string{"Table"});
 
-    // ---------------- 按钮 (三种历史写法) ----------------
-    {
-        auto item = parseOne(R"({"kind":"button","label":"Go","action":"run"})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"button"});
-        XX_TEST_EXPECT_EQ(item.label, std::string{"Go"});
-        XX_TEST_EXPECT_EQ(item.action, std::string{"run"});
-    }
-    {
-        // 旧写法: kind=button + action_id
-        auto item = parseOne(R"({"kind":"button","label":"Go","action_id":"run2"})");
-        XX_TEST_EXPECT_EQ(item.action, std::string{"run2"});
-    }
-    {
-        // 遗留写法: kind=action + id 作为动作
-        auto item = parseOne(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"button"});
-        XX_TEST_EXPECT_EQ(item.action, std::string{"rebuild"});
-        XX_TEST_EXPECT_EQ(item.label, std::string{"Rebuild"});
-    }
-    {
-        // label 缺失时回退默认 (避免渲染空按钮)
-        auto item = parseOne(R"({"kind":"button"})");
-        XX_TEST_EXPECT_EQ(item.label, std::string{"Button"});
-    }
-
-    // ---------------- 进度条归一化为计量条 ----------------
-    {
-        auto item = parseOne(R"({"kind":"progress","value":0.5})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"meter"});
-        XX_TEST_EXPECT_EQ(item.value, 0.5 * 100.0);
-        XX_TEST_EXPECT_EQ(item.total, 100.0);
-        XX_TEST_EXPECT_EQ(item.unit, std::string{"%"});
-    }
-    {
-        auto item
-            = parseOne(R"({"kind":"meter","value":72,"total":100,"width":24,"unit":"%",
-                           "thresholds":[{"at":60,"color":"thinking"},{"at":80,"color":"error"}]})");
-        XX_TEST_EXPECT_EQ(item.value, 72.0);
-        XX_TEST_EXPECT_EQ(item.width, 24);
-        XX_TEST_EXPECT_EQ(item.thresholds.size(), size_t{2});
-        // 阈值按由高到低排序 (匹配首个满足项)
-        XX_TEST_EXPECT_EQ(item.thresholds[0].at, 80.0);
-        XX_TEST_EXPECT_EQ(item.thresholds[0].color, std::string{"error"});
-    }
-
-    // ---------------- 迷你趋势图 ----------------
-    {
-        auto item = parseOne(R"({"kind":"sparkline","data":[1,2,3],"height":2,"min":0,"max":10,
-                                 "showLast":true,"colors":["normal","error"]})");
-        XX_TEST_EXPECT_EQ(item.data.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(item.height, 2);
-        XX_TEST_EXPECT_TRUE(item.hasMin);
-        XX_TEST_EXPECT_TRUE(item.hasMax);
-        XX_TEST_EXPECT_EQ(item.minValue, 0.0);
-        XX_TEST_EXPECT_EQ(item.maxValue, 10.0);
-        XX_TEST_EXPECT_TRUE(item.showLast);
-        XX_TEST_EXPECT_EQ(item.colors.size(), size_t{2});
-    }
-    {
-        // 数据点超上限时截断
-        std::string json = R"({"kind":"sparkline","data":[)";
-        for (int i = 0; i < 5000; ++i) {
-            if (i > 0) {
-                json += ",";
+        // 往返: 块 → 项 → 块, 内容字段保持
+        const auto item = itemOf(blocks[1]);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            const auto back = blockOf(*item);
+            XX_TEST_EXPECT_EQ(back.kind, std::string{"Table"});
+            const auto again = itemOf(back);
+            XX_TEST_EXPECT_TRUE(again.has_value());
+            if (again) {
+                XX_TEST_EXPECT_EQ(again->rows.size(), size_t{1});
+                XX_TEST_EXPECT_EQ(again->rows[0][0].text.fallback, std::string{"a.txt"});
+                XX_TEST_EXPECT_EQ(again->columns[1].align, std::string{"end"});
             }
-            json += "1";
         }
-        json += "]}";
-        auto item = agentxx::ui::parseItem(Json::parse(json));
-        XX_TEST_EXPECT_EQ(item.data.size(), size_t{4096});
+    }
+    {
+        // 单块内容 (contentBlock) 与空输入
+        const auto block = preset::contentBlock(pluginxx::ui::build::badge("3", "accent"));
+        XX_TEST_EXPECT_EQ(block.kind, std::string{"Badge"});
+        const auto item = itemOf(block);
+        XX_TEST_EXPECT_TRUE(item.has_value());
+        if (item) {
+            XX_TEST_EXPECT_EQ(item->text.fallback, std::string{"3"});
+            XX_TEST_EXPECT_EQ(item->tone, std::string{"accent"});
+        }
     }
 
-    // ---------------- 表格 ----------------
+    // ---------------- 预设模板结构 ----------------
     {
-        auto item = parseOne(R"({
-            "kind":"table","header":true,
-            "columns":[{"title":"File","w":"flex"},{"title":"Size","align":"right","w":8}],
-            "rows":[["main.cpp","12.4 KB"],
-                    ["gfx.cpp",{"text":"warn","color":"error","action":"open:gfx.cpp"}]]
-        })");
-        XX_TEST_EXPECT_EQ(item.columns.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(item.columns[0].flex, true);
-        XX_TEST_EXPECT_EQ(item.columns[1].width, 8);
-        XX_TEST_EXPECT_EQ(item.columns[1].align, std::string{"right"});
-        XX_TEST_EXPECT_EQ(item.rows.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(item.rows[0][0].text, std::string{"main.cpp"});
-        XX_TEST_EXPECT_EQ(item.rows[1][1].text, std::string{"warn"});
-        XX_TEST_EXPECT_EQ(item.rows[1][1].action, std::string{"open:gfx.cpp"});
-        XX_TEST_EXPECT_EQ(item.rows[1][1].color, std::string{"error"});
-        XX_TEST_EXPECT_TRUE(item.interactive()); // 单元格带动作
-    }
-    {
-        // 只有 rows 的简写: 按首行列数补列
-        auto item = parseOne(R"({"kind":"table","rows":[["a","b"]]})");
-        XX_TEST_EXPECT_EQ(item.columns.size(), size_t{2});
-    }
-    {
-        // 单元格是可点结构 → interactive
-        auto plain = parseOne(R"({"kind":"table","rows":[["a","b"]]})");
-        XX_TEST_EXPECT_FALSE(plain.interactive());
-    }
-
-    // ---------------- 树 ----------------
-    {
-        auto item = parseOne(R"({"kind":"tree","nodes":[
-            {"label":"src","children":[{"label":"main.cpp","action":"open:main.cpp"}]}
-        ]})");
-        XX_TEST_EXPECT_EQ(item.nodes.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(item.nodes[0].label, std::string{"src"});
-        XX_TEST_EXPECT_EQ(item.nodes[0].children.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(item.nodes[0].children[0].action, std::string{"open:main.cpp"});
-        XX_TEST_EXPECT_EQ(item.nodes[0].count(), size_t{2});
-        XX_TEST_EXPECT_TRUE(item.interactive());
-    }
-
-    // ---------------- 键值对 ----------------
-    {
-        auto item = parseOne(R"({"kind":"kv","items":[{"k":"Model","v":"gpt-x"},
-                                                       {"k":"Tokens","v":"12.3K","vColor":"accent"}]})");
-        XX_TEST_EXPECT_EQ(item.pairs.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(item.pairs[0].key, std::string{"Model"});
-        XX_TEST_EXPECT_EQ(item.pairs[0].value, std::string{"gpt-x"});
-        XX_TEST_EXPECT_EQ(item.pairs[1].valueColor, std::string{"accent"});
-    }
-    {
-        // 值为数值/布尔时转文本
-        auto item = parseOne(R"({"kind":"kv","items":[{"k":"n","v":12},{"k":"b","v":true}]})");
-        XX_TEST_EXPECT_EQ(item.pairs[0].value, std::string{"12"});
-        XX_TEST_EXPECT_EQ(item.pairs[1].value, std::string{"true"});
-    }
-
-    // ---------------- 容器 (row / box / collapse) ----------------
-    {
-        auto items = parseMany(R"([
-            {"kind":"row","gap":2,"align":"center","items":[
-                {"kind":"text","text":"a","w":6},
-                {"kind":"text","text":"b","w":"flex"}]},
-            {"kind":"box","title":"Index","border":"round","pad":1,
-             "items":[{"kind":"text","text":"inner"}]},
-            {"kind":"collapse","id":"stack","title":"Stack","expanded":false,
-             "items":[{"kind":"k v","text":"x"}]}
-        ])");
-        XX_TEST_EXPECT_EQ(items.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(items[0].items.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(items[0].gap, 2);
-        XX_TEST_EXPECT_EQ(items[0].align, std::string{"center"});
-        XX_TEST_EXPECT_EQ(items[0].items[0].columnWidth, 6);
-        XX_TEST_EXPECT_TRUE(items[0].items[1].columnFlex);
-        XX_TEST_EXPECT_EQ(items[1].title, std::string{"Index"});
-        XX_TEST_EXPECT_EQ(items[1].border, std::string{"round"});
-        XX_TEST_EXPECT_EQ(items[1].pad, 1);
-        XX_TEST_EXPECT_EQ(items[2].id, std::string{"stack"});
-        XX_TEST_EXPECT_FALSE(items[2].expanded);
-        // 子项的未知 kind 不影响父项 (父项仍可用)
-        XX_TEST_EXPECT_TRUE(items[2].known);
-        XX_TEST_EXPECT_FALSE(items[2].items[0].known);
-    }
-    {
-        // 嵌套深度上限: 超过深度上限的子树被丢弃
-        std::string json = R"({"kind":"box","items":[)";
-        const int   depth = 12;
-        for (int i = 0; i < depth; ++i) {
-            json += R"({"kind":"box","items":[)";
-        }
-        json += R"({"kind":"text","text":"deep"})";
-        for (int i = 0; i < depth; ++i) {
-            json += "]}";
-        }
-        json += "]}";
-        auto items = agentxx::ui::parseItems(Json::array({Json::parse(json)}));
-        XX_TEST_EXPECT_EQ(items.size(), size_t{1});
-        // 逐层下钻: 到第 8 层后子项被丢弃 (不再有 items)
-        int  levels = 0;
-        const Item* cur = &items[0];
-        while (!cur->items.empty() && levels < 40) {
-            cur = &cur->items[0];
-            ++levels;
-        }
-        XX_TEST_EXPECT_TRUE(levels <= 8);
-    }
-    {
-        // 单层元素数上限 512
-        std::string json = "[";
-        for (int i = 0; i < 600; ++i) {
-            if (i > 0) {
-                json += ",";
+        // 单输入项: 控件 id = "value"; bool 类型是"点击即提交"的一问一答
+        const auto ui = preset::inputForm({preset::InputSpec{.label = "继续?", .type = "bool"}});
+        XX_TEST_EXPECT_TRUE(!ui.blocks.empty());
+        const auto* control = [&]() -> const InterruptUiBlock* {
+            for (const auto& b : ui.blocks) {
+                if (b.kind == "control") {
+                    return &b;
+                }
             }
-            json += R"({"kind":"gap"})";
+            return nullptr;
+        }();
+        XX_TEST_EXPECT_TRUE(control != nullptr);
+        if (control) {
+            XX_TEST_EXPECT_EQ(control->id, std::string{"value"});
+            XX_TEST_EXPECT_EQ(control->control, std::string{"buttons"});
+            XX_TEST_EXPECT_TRUE(control->commitOnPick);
+            XX_TEST_EXPECT_EQ(control->options.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(control->options[0].value, Json("true"));
         }
-        json += "]";
-        auto items = agentxx::ui::parseItems(Json::parse(json));
-        XX_TEST_EXPECT_EQ(items.size(), size_t{512});
-    }
-
-    // ---------------- 控件与提交行 ----------------
-    {
-        auto item = parseOne(R"({"kind":"control","id":"mode","control":"buttons",
-                                 "label":"模式","commitOnPick":true,
-                                 "options":[{"value":"fast","label":"Fast"},
-                                            {"value":"safe","label":"Safe"}],
-                                 "default":"safe"})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"control"});
-        XX_TEST_EXPECT_EQ(item.id, std::string{"mode"});
-        XX_TEST_EXPECT_EQ(item.controlLabel, std::string{"模式"});
-        XX_TEST_EXPECT_TRUE(item.commitOnPick);
-        XX_TEST_EXPECT_EQ(item.options.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(item.options[0].label, std::string{"Fast"});
-        XX_TEST_EXPECT_TRUE(item.interactive());
     }
     {
-        // 候选项为纯字符串时, 值与标签都取该字符串
-        auto item = parseOne(R"({"kind":"select","id":"s","options":["a","b"]})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"control"});
-        XX_TEST_EXPECT_EQ(item.control, std::string{"select"});
-        XX_TEST_EXPECT_EQ(item.options.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(item.options[1].label, std::string{"b"});
-        XX_TEST_EXPECT_EQ(item.options[1].value.get<std::string>(), std::string{"b"});
-    }
-    {
-        // 控件短写法归一化: 形态取自写法本身
-        XX_TEST_EXPECT_EQ(
-            parseOne(R"({"kind":"checkbox","id":"c"})").control,
-            std::string{"checkbox"}
-        );
-        XX_TEST_EXPECT_EQ(
-            parseOne(R"({"kind":"buttons","id":"b"})").control,
-            std::string{"buttons"}
-        );
-        XX_TEST_EXPECT_EQ(
-            parseOne(R"({"kind":"number","id":"n"})").control,
-            std::string{"number"}
-        );
-        XX_TEST_EXPECT_EQ(
-            parseOne(R"({"kind":"input","id":"i"})").control,
-            std::string{"text"}
-        );
-    }
-    {
-        auto item = parseOne(R"({"kind":"control","id":"n","control":"number","default":3,
-                                 "integer":true,"min":1,"max":9,"step":2})");
-        XX_TEST_EXPECT_TRUE(item.integer);
-        XX_TEST_EXPECT_TRUE(item.hasNumMin);
-        XX_TEST_EXPECT_EQ(item.numMin, 1.0);
-        XX_TEST_EXPECT_TRUE(item.hasNumMax);
-        XX_TEST_EXPECT_EQ(item.numMax, 9.0);
-        XX_TEST_EXPECT_EQ(item.step, 2.0);
-    }
-    {
-        auto item = parseOne(R"({"kind":"submit","label":"应用","cancelLabel":"取消"})");
-        XX_TEST_EXPECT_EQ(item.label, std::string{"应用"});
-        XX_TEST_EXPECT_EQ(item.cancelLabel, std::string{"取消"});
-    }
-
-    // ---------------- custom / canvas ----------------
-    {
-        auto item = parseOne(R"({"kind":"custom","component":"components",
-                                 "props":{"items":[{"kind":"text","text":"inside"}]}})");
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"custom"});
-        XX_TEST_EXPECT_EQ(item.component, std::string{"components"});
-        XX_TEST_EXPECT_EQ(item.items.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(item.items[0].text, std::string{"inside"});
-    }
-    {
-        auto item = parseOne(R"({"kind":"custom","component":"table",
-                                 "props":{"rows":[["a","b"]]}})");
-        XX_TEST_EXPECT_EQ(item.component, std::string{"table"});
-        XX_TEST_EXPECT_TRUE(item.props.is_object());
-    }
-    {
-        auto item = parseOne(R"({"kind":"canvas","w":0,"h":6,"fallback":"[chart]",
-                                 "rows":[[0,"abc"]]})");
-        XX_TEST_EXPECT_TRUE(item.known);
-        XX_TEST_EXPECT_EQ(item.kind, std::string{"canvas"});
-        XX_TEST_EXPECT_EQ(item.fallback, std::string{"[chart]"});
-        XX_TEST_EXPECT_TRUE(item.canvas.is_object()); // 原始描述原样保留
-        XX_TEST_EXPECT_TRUE(item.canvas.contains("rows"));
-    }
-
-    // ---------------- when (条件显示; 预留字段) ----------------
-    {
-        auto item = parseOne(R"({"kind":"text","text":"x","when":"expanded"})");
-        XX_TEST_EXPECT_EQ(item.when, std::string{"expanded"});
-        // 往返保留 (宿主当前不消费该字段, 但不得丢内容)
-        const std::string dumped = agentxx::ui::dumpItem(item).dump();
-        auto              back   = parseOne(dumped.c_str());
-        XX_TEST_EXPECT_EQ(back.when, std::string{"expanded"});
-    }
-
-    // ---------------- 构建器: 表单 / 数组导出 ----------------
-    {
-        agentxx::ui::Items ui;
-        ui.form({
-            .title       = "Options",
-            .fields      = {agentxx::ui::Items{}.checkbox("detail", "显示细节", true),
-                            agentxx::ui::Items{}.number("level", "层级", 3)},
-            .submitLabel = "应用",
-            .cancelLabel = "取消",
+        // 多输入项: 控件 id 追加序号; enum → select; int → number; string → text
+        const auto ui = preset::inputForm({
+            preset::InputSpec{.type = "enum", .enumValues = {"a", "b"}},
+            preset::InputSpec{.type = "int", .defaultValue = "7"},
+            preset::InputSpec{.type = "string", .defaultValue = "x"},
         });
-        const auto json = ui.json();
-        XX_TEST_EXPECT_EQ(json.value("items", Json::array()).size(), size_t{1});
-        const auto& boxItem = json["items"][0];
-        XX_TEST_EXPECT_EQ(boxItem.value("kind", std::string{}), std::string{"box"});
-        XX_TEST_EXPECT_EQ(boxItem.value("title", std::string{}), std::string{"Options"});
-        // 分组内: 两个控件 + 提交行
-        const auto& inner = boxItem["items"];
-        XX_TEST_EXPECT_EQ(inner.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(inner[0].value("kind", std::string{}), std::string{"control"});
-        XX_TEST_EXPECT_EQ(inner[0].value("control", std::string{}), std::string{"checkbox"});
-        XX_TEST_EXPECT_EQ(inner[2].value("kind", std::string{}), std::string{"submit"});
-        XX_TEST_EXPECT_EQ(inner[2].value("label", std::string{}), std::string{"应用"});
-        // array() 与 json()["items"] 同源
-        XX_TEST_EXPECT_EQ(ui.array().size(), json["items"].size());
+        std::vector<const InterruptUiBlock*> controls;
+        for (const auto& b : ui.blocks) {
+            if (b.kind == "control") {
+                controls.push_back(&b);
+            }
+        }
+        XX_TEST_EXPECT_EQ(controls.size(), size_t{3});
+        if (controls.size() == 3) {
+            XX_TEST_EXPECT_EQ(controls[0]->id, std::string{"value1"});
+            XX_TEST_EXPECT_EQ(controls[0]->control, std::string{"select"});
+            XX_TEST_EXPECT_EQ(controls[0]->defaultValue, Json("a"));
+            XX_TEST_EXPECT_EQ(controls[1]->id, std::string{"value2"});
+            XX_TEST_EXPECT_EQ(controls[1]->control, std::string{"number"});
+            XX_TEST_EXPECT_TRUE(controls[1]->integer);
+            XX_TEST_EXPECT_EQ(controls[2]->id, std::string{"value3"});
+            XX_TEST_EXPECT_EQ(controls[2]->control, std::string{"text"});
+        }
     }
     {
-        // 无标题表单: 控件直接追加到当前树 (不多一层 box)
-        agentxx::ui::Items ui;
-        ui.form({.fields = {agentxx::ui::Items{}.input("name", "名称", "x")}, .showSubmit = false});
-        const auto json = ui.json();
-        XX_TEST_EXPECT_EQ(json["items"].size(), size_t{1});
-        XX_TEST_EXPECT_EQ(json["items"][0].value("kind", std::string{}), std::string{"control"});
-        XX_TEST_EXPECT_EQ(json["items"][0].value("control", std::string{}), std::string{"text"});
+        // 确认卡片: 控件 id 可指定, 默认选中"否"(安全语义), 记住项可选
+        preset::ConfirmCardOptions opts;
+        opts.title       = "继续?";
+        opts.text        = "**说明**";
+        opts.controlId   = "allow";
+        opts.remember    = true;
+        opts.defaultValue = false;
+        const auto ui = preset::confirmCard(opts);
+        bool hasRemember = false;
+        bool hasAllow    = false;
+        for (const auto& b : ui.blocks) {
+            if (b.kind != "control") {
+                continue;
+            }
+            if (b.id == "remember") {
+                hasRemember = true;
+            }
+            if (b.id == "allow") {
+                hasAllow = true;
+                XX_TEST_EXPECT_TRUE(b.commitOnPick);
+                XX_TEST_EXPECT_EQ(b.defaultValue, Json("false"));
+                XX_TEST_EXPECT_EQ(b.options.size(), size_t{2});
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasRemember);
+        XX_TEST_EXPECT_TRUE(hasAllow);
+    }
+    {
+        // 权限卡片: 头行分段 (文案只给键) + 目录目标提示 + 两个勾选项 + 一键取值
+        const auto ui = preset::permissionCard("write_file", "write", "D:/dir/");
+        XX_TEST_EXPECT_EQ(ui.header.segments.size(), size_t{3});
+        XX_TEST_EXPECT_EQ(ui.header.segments[0].labelKey, std::string{"interrupt.permissionBadge"});
+        bool hasRemember = false;
+        bool hasFullAuth = false;
+        bool hasDecision = false;
+        bool hasDirTip   = false;
+        for (const auto& b : ui.blocks) {
+            if (b.kind == "control") {
+                hasRemember = hasRemember || b.id == "remember";
+                hasFullAuth = hasFullAuth || b.id == "fullAuth";
+                if (b.id == "decision") {
+                    hasDecision = true;
+                    XX_TEST_EXPECT_EQ(b.control, std::string{"buttons"});
+                    XX_TEST_EXPECT_EQ(b.defaultValue, Json("false"));
+                }
+            }
+            if (b.textKey == "interrupt.rememberDir") {
+                hasDirTip = true;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(hasRemember);
+        XX_TEST_EXPECT_TRUE(hasFullAuth);
+        XX_TEST_EXPECT_TRUE(hasDecision);
+        XX_TEST_EXPECT_TRUE(hasDirTip);
     }
 
-    // ---------------- 序列化往返 ----------------
+    // ---------------- 纯文本降级 (行式前端: CLI / 日志 / FFI) ----------------
     {
-        auto items = parseMany(R"([
-            {"kind":"table","header":true,
-             "columns":[{"title":"A","w":"flex"},{"title":"B","align":"right","w":6}],
-             "rows":[["1","2"]]},
-            {"kind":"meter","value":30,"total":100,"width":10,
-             "thresholds":[{"at":80,"color":"error"}]},
-            {"kind":"canvas","h":4,"fallback":"x"}
-        ])");
-        auto dumped  = agentxx::ui::dumpItems(items);
-        auto round   = agentxx::ui::parseItems(dumped);
-        XX_TEST_EXPECT_EQ(round.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(round[0].columns.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(round[0].columns[1].width, 6);
-        XX_TEST_EXPECT_EQ(round[0].columns[1].align, std::string{"right"});
-        XX_TEST_EXPECT_EQ(round[0].rows.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(round[0].rows[0][0].text, std::string{"1"});
-        XX_TEST_EXPECT_EQ(round[1].value, 30.0);
-        XX_TEST_EXPECT_EQ(round[1].thresholds.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(round[1].thresholds[0].color, std::string{"error"});
-        // canvas 往返不丢内容
-        XX_TEST_EXPECT_EQ(round[2].kind, std::string{"canvas"});
-        XX_TEST_EXPECT_EQ(round[2].fallback, std::string{"x"});
-        XX_TEST_EXPECT_TRUE(round[2].canvas.contains("h"));
+        InterruptUi desc;
+        desc.blocks.push_back(preset::textBlock("第一行"));
+        desc.blocks.push_back(preset::gapBlock(1));
+        desc.blocks.push_back(preset::textBlock("第二行"));
+        const auto text = interruptUiPlainText(desc, 0);
+        // 空行 (Gap) 也占一行, 不能按"空内容"跳过
+        XX_TEST_EXPECT_EQ(text, std::string{"第一行\n\n第二行"});
     }
     {
-        // 文本长度上限: 超长文本按上限截断 (且不切断 UTF-8 码点)
-        std::string longText(70000, 'x');
-        std::string json = R"({"kind":"text","text":")" + longText + R"("})";
-        auto        item = agentxx::ui::parseItem(Json::parse(json));
-        XX_TEST_EXPECT_EQ(item.text.size(), size_t{64 * 1024});
-    }
-
-    // ---------------- plainText ----------------
-    {
-        auto items = parseMany(R"([
-            {"kind":"text","text":"标题"},
-            {"kind":"kv","items":[{"k":"Model","v":"gpt-x"}]},
-            {"kind":"meter","value":50,"total":100,"width":10}
-        ])");
-        auto text = agentxx::ui::plainText(items);
-        XX_TEST_EXPECT_TRUE(has(text, "标题"));
-        XX_TEST_EXPECT_TRUE(has(text, "Model"));
-        XX_TEST_EXPECT_TRUE(has(text, "gpt-x"));
-        XX_TEST_EXPECT_TRUE(has(text, "50%"));
-        XX_TEST_EXPECT_TRUE(has(text, "#####-----")); // 条宽 10, 填充 5
-    }
-    {
-        // 表格: 表头 + 分隔线 + 右对齐数值列
-        auto items = parseMany(R"([
-            {"kind":"table","header":true,
-             "columns":[{"title":"Name","w":6},{"title":"Size","align":"right","w":6}],
-             "rows":[["a.txt","12"]]}
-        ])");
-        auto text = agentxx::ui::plainText(items);
-        XX_TEST_EXPECT_TRUE(has(text, "Name"));
-        // 分隔线按列宽逐列生成 (列宽 = max(表头, 各单元格))
-        XX_TEST_EXPECT_TRUE(has(text, "-----  ----"));
+        InterruptUi desc;
+        desc.blocks.push_back(preset::contentBlock(sampleTable()));
+        desc.blocks.push_back(preset::meterBlock("CPU", 72, 100, {{90, "error"}}));
+        desc.blocks.push_back(preset::submitBlock());
+        const auto text = interruptUiPlainText(desc, 40);
+        XX_TEST_EXPECT_TRUE(has(text, "Path"));
         XX_TEST_EXPECT_TRUE(has(text, "a.txt"));
-        XX_TEST_EXPECT_TRUE(has(text, "    12")); // 列间距 + 右对齐补白
+        XX_TEST_EXPECT_TRUE(has(text, "CPU"));
+        // 提交行只有交互语义: 纯文本里不出现确认/取消按钮
+        XX_TEST_EXPECT_TRUE(!has(text, "__submit"));
     }
     {
-        // 树: 连接线
-        auto items = parseMany(R"([
-            {"kind":"tree","nodes":[{"label":"src","children":[{"label":"main.cpp"}]}]}
-        ])");
-        auto text = agentxx::ui::plainText(items);
-        XX_TEST_EXPECT_TRUE(has(text, "└─ src"));
-        XX_TEST_EXPECT_TRUE(has(text, "└─ main.cpp"));
-    }
-    {
-        // 折叠: 折叠时不输出内容; 展开时输出
-        auto collapsed = parseMany(R"([
-            {"kind":"collapse","title":"Stack","expanded":false,
-             "items":[{"kind":"text","text":"hidden"}]}
-        ])");
-        auto ctext = agentxx::ui::plainText(collapsed);
-        XX_TEST_EXPECT_TRUE(has(ctext, "Stack"));
-        XX_TEST_EXPECT_FALSE(has(ctext, "hidden"));
-
-        auto expanded = parseMany(R"([
-            {"kind":"collapse","title":"Stack","expanded":true,
-             "items":[{"kind":"text","text":"visible"}]}
-        ])");
-        XX_TEST_EXPECT_TRUE(has(agentxx::ui::plainText(expanded), "visible"));
-    }
-    {
-        // 容器: box 标题 + 内容; row 以 " | " 连接
-        auto items = parseMany(R"([
-            {"kind":"box","title":"System","items":[{"kind":"text","text":"inner"}]},
-            {"kind":"row","items":[{"kind":"text","text":"CPU"},{"kind":"text","text":"55%"}]}
-        ])");
-        auto text = agentxx::ui::plainText(items);
-        XX_TEST_EXPECT_TRUE(has(text, "System"));
-        XX_TEST_EXPECT_TRUE(has(text, "inner"));
-        XX_TEST_EXPECT_TRUE(has(text, "CPU | 55%"));
-    }
-    {
-        // 控件: 标签 + 候选项 + 形态说明; 提交行不输出
-        auto items = parseMany(R"([
-            {"kind":"control","id":"mode","control":"select","label":"模式",
-             "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}]},
-            {"kind":"submit","label":"Go"}
-        ])");
-        auto text = agentxx::ui::plainText(items);
-        XX_TEST_EXPECT_TRUE(has(text, "模式"));
-        XX_TEST_EXPECT_TRUE(has(text, "Fast / Safe"));
-        XX_TEST_EXPECT_TRUE(has(text, "(select)"));
-        XX_TEST_EXPECT_FALSE(has(text, "Go"));
-    }
-    {
-        // 未知 kind → fallback; canvas → fallback; custom 无内容 → 组件名占位
-        auto items = parseMany(R"([
-            {"kind":"unknown-x","fallback":"降级"},
-            {"kind":"canvas","fallback":"[canvas fallback]"},
-            {"kind":"custom","component":"my-widget"}
-        ])");
-        auto text = agentxx::ui::plainText(items);
-        XX_TEST_EXPECT_TRUE(has(text, "降级"));
-        XX_TEST_EXPECT_TRUE(has(text, "[canvas fallback]"));
-        XX_TEST_EXPECT_TRUE(has(text, "my-widget"));
-    }
-    {
-        // 折行宽度: 传入宽度后长文本被切成多行
-        auto items = parseMany(R"([{"kind":"text","text":"0123456789abcdef"}])");
-        auto text  = agentxx::ui::plainText(items, 8);
-        XX_TEST_EXPECT_EQ(text, std::string{"01234567\n89abcdef"});
-    }
-    {
-        // plainText(Json) 便捷入口: {"items":[...]} 与裸数组都接受
-        auto a = agentxx::ui::plainText(Json::parse(R"({"items":[{"kind":"text","text":"x"}]})"));
-        auto b = agentxx::ui::plainText(Json::parse(R"([{"kind":"text","text":"x"}])"));
-        XX_TEST_EXPECT_EQ(a, std::string{"x"});
-        XX_TEST_EXPECT_EQ(b, std::string{"x"});
+        // 未知块有 fallback 时按文本输出 (不静默丢内容)
+        InterruptUi desc;
+        InterruptUiBlock b;
+        b.kind     = "future_block";
+        b.fallback = "n/a";
+        desc.blocks.push_back(b);
+        XX_TEST_EXPECT_EQ(interruptUiPlainText(desc, 0), std::string{"n/a"});
     }
 
-    // ---------------- 构建器 (build.h) ----------------
+    // ---------------- 显示列宽 (终端渲染与文本降级同一口径) ----------------
     {
-        agentxx::ui::Items ui;
-        ui.box("System",
-               agentxx::ui::Items{}
-                   .kv({{"Model", "gpt-x"}, {"Tokens", "12.3K"}})
-                   .meter(55, 100, {.width = 20, .label = "CPU", .unit = "%"}),
-               {.border = "round", .pad = 1})
-            .table({.columns = {{"File", "left", 0, {}}, {"Size", "right", 8, {}}},
-                    .rows    = {{Json("main.cpp"), Json("12.4 KB")}}})
-            .checkbox("verbose", "Verbose", false)
-            .submit("应用", "取消");
-
-        auto items = agentxx::ui::parseItemList(ui.json());
-        XX_TEST_EXPECT_EQ(items.size(), size_t{4});
-        XX_TEST_EXPECT_EQ(items[0].kind, std::string{"box"});
-        XX_TEST_EXPECT_EQ(items[0].title, std::string{"System"});
-        XX_TEST_EXPECT_EQ(items[0].pad, 1);
-        XX_TEST_EXPECT_EQ(items[0].items.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(items[0].items[0].kind, std::string{"kv"});
-        XX_TEST_EXPECT_EQ(items[0].items[0].pairs.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(items[0].items[1].kind, std::string{"meter"});
-        XX_TEST_EXPECT_EQ(items[0].items[1].width, 20);
-        XX_TEST_EXPECT_EQ(items[1].kind, std::string{"table"});
-        XX_TEST_EXPECT_EQ(items[1].columns.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(items[1].rows.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(items[2].kind, std::string{"control"});
-        XX_TEST_EXPECT_EQ(items[2].control, std::string{"checkbox"});
-        XX_TEST_EXPECT_EQ(items[3].kind, std::string{"submit"});
-        XX_TEST_EXPECT_EQ(items[3].label, std::string{"应用"});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::displayWidth("abc"), 3);
+        XX_TEST_EXPECT_EQ(pluginxx::ui::displayWidth("中文"), 4);
+        XX_TEST_EXPECT_EQ(pluginxx::ui::displayWidth(""), 0);
     }
     {
-        // 构建器: 嵌套 Items 合并 (row 的多个列)
-        agentxx::ui::Items row;
-        row.row(std::vector<agentxx::ui::Items>{
-            agentxx::ui::Items{}.text("CPU"),
-            agentxx::ui::Items{}.sparkline({1, 2, 3}, {.color = "accent", .showLast = true}),
-        });
-        auto items = agentxx::ui::parseItemList(row.json());
-        XX_TEST_EXPECT_EQ(items.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(items[0].items.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(items[0].items[1].kind, std::string{"sparkline"});
-        XX_TEST_EXPECT_EQ(items[0].items[1].data.size(), size_t{3});
-        XX_TEST_EXPECT_TRUE(items[0].items[1].showLast);
+        // 截断: 宽字符不会被切成半格; 省略号自身占宽
+        XX_TEST_EXPECT_EQ(pluginxx::ui::truncateToWidth("abcdef", 4), std::string{"abc…"});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::truncateToWidth("中文中", 4), std::string{"中…"});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::truncateToWidth("abc", 5), std::string{"abc"});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::truncateToWidth("abc", 0), std::string{});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::truncateToWidth("abcdef", 3, ".."), std::string{"a.."});
     }
     {
-        // 构建器: 空树产出空 items 数组
-        agentxx::ui::Items empty;
-        XX_TEST_EXPECT_TRUE(empty.empty());
-        auto parsed = agentxx::ui::parseItemList(empty.json());
-        XX_TEST_EXPECT_EQ(parsed.size(), size_t{0});
-    }
-
-    // ---------------- 显示列宽 ----------------
-    {
-        XX_TEST_EXPECT_EQ(agentxx::ui::displayWidth("abc"), 3);
-        XX_TEST_EXPECT_EQ(agentxx::ui::displayWidth("中文"), 4);
-        XX_TEST_EXPECT_EQ(agentxx::ui::displayWidth("a中"), 3);
-        XX_TEST_EXPECT_EQ(agentxx::ui::displayWidth("e\u0301"), 1); // 组合字符 0 列
-        XX_TEST_EXPECT_EQ(agentxx::ui::displayWidth(""), 0);
-    }
-    {
-        // 截断: 宽字符安全 + 省略号
-        XX_TEST_EXPECT_EQ(agentxx::ui::truncateToWidth("abcdef", 4), std::string{"abc…"});
-        XX_TEST_EXPECT_EQ(agentxx::ui::truncateToWidth("中文名", 4), std::string{"中…"});
-        XX_TEST_EXPECT_EQ(agentxx::ui::truncateToWidth("abc", 5), std::string{"abc"});
-        XX_TEST_EXPECT_EQ(agentxx::ui::truncateToWidth("abc", 0), std::string{});
-        XX_TEST_EXPECT_EQ(
-            agentxx::ui::truncateToWidth("abcdef", 3, ".."),
-            std::string{"a.."}
-        );
-    }
-    {
-        XX_TEST_EXPECT_EQ(agentxx::ui::padRightToWidth("ab", 4), std::string{"ab  "});
-        XX_TEST_EXPECT_EQ(agentxx::ui::padRightToWidth("abcd", 2), std::string{"abcd"});
-        XX_TEST_EXPECT_EQ(agentxx::ui::padRightToWidth("中", 4), std::string{"中  "});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::padRightToWidth("ab", 4), std::string{"ab  "});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::padRightToWidth("abcd", 2), std::string{"abcd"});
+        XX_TEST_EXPECT_EQ(pluginxx::ui::padRightToWidth("中", 4), std::string{"中  "});
     }
     {
         int              used = 0;
-        std::string_view head = agentxx::ui::prefixByWidth("中abc", 3, used);
+        std::string_view head = pluginxx::ui::prefixByWidth("中abc", 3, used);
         XX_TEST_EXPECT_EQ(used, 3);
         XX_TEST_EXPECT_EQ(std::string{head}, std::string{"中a"});
     }

@@ -13,7 +13,7 @@
 #pragma once
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
-#include "agentxx/ui/build.h"
+#include "pluginxx/ui.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -2378,17 +2378,27 @@ public:
 
     // ==================== 展示扩展便捷方法 ====================
     //
-    // 这些方法是展示注册接口的薄封装: 把 `agentxx::ui::Items` 构建器 (见
-    // [build.h](/agent/lib/include/agentxx/ui/build.h)) 直接提交给面板/Info 段落/
+    // 这些方法是展示注册接口的薄封装: 用界面描述层 (cxx_pluginxx_ui, `pluginxx::ui`)
+    // 的构建器 (`pluginxx::ui::build` / kit) 或直接构造组件项后提交给面板/Info 段落/
     // overlay, 避免各处手写 JSON 拼装。宿主不支持对应子能力时返回非 0, 插件应
     // 按返回值降级 (通常是改用更简单的组件或纯文本)。
+    //
+    // 插件可用 `agentxx::ui` 这个别名指代描述层 (见文件末尾的命名空间别名)。
+
+    /// 组件树 → 提交给宿主的 JSON 形态 (`{"items":[…]}`)
+    static std::string itemsJson(const std::vector<pluginxx::ui::Item>& items) {
+        utilxx_base::Json j = utilxx_base::Json::object();
+        j["items"]          = pluginxx::ui::dumpBlocks(items);
+        return j.dump();
+    }
 
     /// 更新面板内容 (组件树直接提交)
-    int32_t setPanelItems(AgentxxPanel* panel, const agentxx::ui::Items& ui) const {
+    int32_t
+        setPanelItems(AgentxxPanel* panel, const std::vector<pluginxx::ui::Item>& items) const {
         if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
             return -1;
         }
-        const std::string json = ui.dump();
+        const std::string json = itemsJson(items);
         auto              sv   = PluginStringView::from(json.data(), json.size());
         return iface.ui->update_panel(host, panel, &sv);
     }
@@ -2403,11 +2413,14 @@ public:
     }
 
     /// 更新 Info 栏段落内容 (组件树直接提交)
-    int32_t setInfoSectionItems(AgentxxInfoSection* section, const agentxx::ui::Items& ui) const {
+    int32_t setInfoSectionItems(
+        AgentxxInfoSection*                   section,
+        const std::vector<pluginxx::ui::Item>& items
+    ) const {
         if (!host || !iface.ui || !iface.ui->update_info_section || section == nullptr) {
             return -1;
         }
-        const std::string json = ui.dump();
+        const std::string json = itemsJson(items);
         auto              sv   = PluginStringView::from(json.data(), json.size());
         return iface.ui->update_info_section(host, section, &sv);
     }
@@ -2431,11 +2444,11 @@ public:
     /// 打开自定义 overlay (组件树作为内容)
     /// - `extraJson` 为扩展 JSON (如 `{"size":"large"}`), 可空
     int32_t showItemsOverlay(
-        std::string_view          title,
-        const agentxx::ui::Items& ui,
-        std::string_view          extraJson = {}
+        std::string_view                       title,
+        const std::vector<pluginxx::ui::Item>& items,
+        std::string_view                       extraJson = {}
     ) const {
-        return showOverlay(AGENTXX_OVERLAY_CUSTOM, title, ui.dump(), extraJson);
+        return showOverlay(AGENTXX_OVERLAY_CUSTOM, title, itemsJson(items), extraJson);
     }
 
     /// 打开通用 overlay (type 见 AgentxxOverlayType; payload 语义随类型)
@@ -2465,7 +2478,8 @@ public:
     /// 临时变量与显式提交调用:
     /// ```c++
     /// auto ui = panelItems(panel);
-    /// ui->box("System", agentxx::ui::Items{}.meter(cpu, 100, {.label = "CPU"}));
+    /// ui.add(pluginxx::ui::build::title("System"));
+    /// ui.add(pluginxx::ui::build::progress(cpu, 100, "%"));
     /// // 离开作用域时自动 update_panel (需要检查返回值时显式调用 commit())
     /// ```
     class PanelWriter {
@@ -2485,18 +2499,32 @@ public:
         PanelWriter(PanelWriter&& other) noexcept :
             base_(other.base_),
             panel_(other.panel_),
-            ui_(std::move(other.ui_)),
+            items_(std::move(other.items_)),
             committed_(other.committed_) {
             other.committed_ = true; // 源对象不再提交 (树已移走)
         }
 
-        /// 组件树 (链式调用同 agentxx::ui::Items)
-        agentxx::ui::Items* operator->() {
-            return &ui_;
+        /// 组件树 (用 `pluginxx::ui::build` / kit 构造组件后追加)
+        std::vector<pluginxx::ui::Item>& items() {
+            return items_;
         }
 
-        agentxx::ui::Items& items() {
-            return ui_;
+        std::vector<pluginxx::ui::Item>& operator*() {
+            return items_;
+        }
+
+        /// 追加一个组件项
+        PanelWriter& add(pluginxx::ui::Item item) {
+            items_.push_back(std::move(item));
+            return *this;
+        }
+
+        /// 追加一组组件项
+        PanelWriter& add(std::vector<pluginxx::ui::Item> items) {
+            for (auto& item : items) {
+                items_.push_back(std::move(item));
+            }
+            return *this;
         }
 
         /// 提交 (幂等; 返回宿主状态码, 0 = 成功)
@@ -2508,15 +2536,15 @@ public:
             if (base_ == nullptr) {
                 return -1;
             }
-            return base_->setPanelItems(panel_, ui_);
+            return base_->setPanelItems(panel_, items_);
         }
 
     private:
 
-        const ClientPluginBase* base_  = nullptr;
-        AgentxxPanel*           panel_ = nullptr;
-        agentxx::ui::Items      ui_{};
-        bool                    committed_ = false;
+        const ClientPluginBase*         base_  = nullptr;
+        AgentxxPanel*                   panel_ = nullptr;
+        std::vector<pluginxx::ui::Item> items_{};
+        bool                            committed_ = false;
     };
 
     /// 面板内容就地构建 (见 [PanelWriter])
@@ -2526,9 +2554,9 @@ public:
 
     /// 工具消息装饰参数 (折叠头显示名/摘要 + 展开体组件树)
     struct DecorSpec {
-        std::string        displayName; ///< 折叠头显示名 (空 = 原始工具名)
-        std::string        summary;     ///< 折叠头一行摘要 (空 = 参数预览)
-        agentxx::ui::Items items;       ///< 展开体组件树
+        std::string                     displayName; ///< 折叠头显示名 (空 = 原始工具名)
+        std::string                     summary;     ///< 折叠头一行摘要 (空 = 参数预览)
+        std::vector<pluginxx::ui::Item> items;       ///< 展开体组件树
     };
 
     /// 更新某次工具调用的消息装饰 (见 [DecorSpec])
@@ -2544,7 +2572,7 @@ public:
         if (!decor.summary.empty()) {
             j["summary"] = decor.summary;
         }
-        j["items"]             = decor.items.array();
+        j["items"]             = pluginxx::ui::dumpBlocks(decor.items);
         const std::string json = j.dump();
         auto              sv   = PluginStringView::from(json.data(), json.size());
         auto              tid  = PluginStringView::from(toolCallId.data(), toolCallId.size());
@@ -2582,6 +2610,29 @@ public:
             }
         }
         return false;
+    }
+
+    /// 客户端界面能力段 (客户端状态快照的 `ui` 段)
+    ///
+    /// 客户端如实上报自己能画什么: 支持的组件/控件、每个字符格相当于多少 u、默认
+    /// 行距。插件据此选择组件, 例如终端不推图片/着色器:
+    /// ```c++
+    /// if (kit.supportsBlock("Table")) { ... } else { ... }
+    /// ```
+    /// 老宿主没有该段时按"描述层全支持"处理 —— 内容仍由客户端按自身能力降级
+    /// (见描述层的 `adapt`), 不会画错。
+    pluginxx::ui::Capabilities uiCapabilities() const {
+        const auto state = clientStateJson();
+        const auto it    = state.find("ui");
+        if (!state.is_object() || it == state.end() || !it->is_object()) {
+            return pluginxx::ui::fullCapabilities();
+        }
+        return pluginxx::ui::capabilitiesFromJson(*it);
+    }
+
+    /// 客户端是否支持某个组件 (按能力段判断; 未上报时按支持处理)
+    bool supportsBlock(std::string_view name) const {
+        return uiCapabilities().supportsBlock(name);
     }
 
     /// 当前 client 状态解析结果 (解析失败返回空对象)
@@ -2997,4 +3048,10 @@ inline void logClientCreateFailure(
         }                                                                                         \
     }
 } // namespace plugin
+} // namespace agentxx
+
+/// 插件侧命名空间别名: 插件源码可以书写 `agentxx::ui::...` 访问界面描述层
+/// (与 `pluginxx::ui` 是同一个命名空间; 库内名字只有一份, 别名不产生新类型)
+namespace agentxx {
+namespace ui = ::pluginxx::ui;
 } // namespace agentxx

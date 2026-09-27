@@ -370,7 +370,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     }
 
     // 表单状态: 按最新描述初始化并保留用户已编辑的值 (含控件状态清理)
-    auto  parsed = agentxx::ui::parseItemList(panel->items);
+    auto  parsed = pluginxx::ui::parseBlocks(panel->items);
     auto& form   = formFor(panel->id, panel->plugin, std::move(parsed));
 
     agentxx::client::UiRenderCtx rc;
@@ -1371,7 +1371,7 @@ bool TUIClientAgentIO::collapseExpanded(
 TUIClientAgentIO::PluginFormData& TUIClientAgentIO::formFor(
     const std::string&             ownerId,
     const std::string&             plugin,
-    std::vector<agentxx::ui::Item> items
+    std::vector<pluginxx::ui::Item> items
 ) {
     auto& data  = pluginForms_[ownerId];
     data.plugin = plugin;

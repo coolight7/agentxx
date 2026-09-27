@@ -152,7 +152,7 @@ private:
         /// 来源块下标 (ui.blocks 的下标)
         size_t blockIndex = 0;
         /// 组件项 (控件 = control; 提交行 = submit)
-        agentxx::ui::Item item;
+        pluginxx::ui::Item item;
     };
 
     /// 取消息对应的 UI 描述 (描述必填; 缺失/非法返回空描述, 由 build 输出诊断行)
@@ -169,9 +169,9 @@ private:
     std::vector<FormItem> formItems(const middleware::InterruptUi& ui) const;
 
     /// 组件项列表 (去掉块下标; 共享表单层接口用)
-    static std::vector<agentxx::ui::Item> plainItems(const std::vector<FormItem>& items);
+    static std::vector<pluginxx::ui::Item> plainItems(const std::vector<FormItem>& items);
     /// 首个控件 id (无控件返回空串)
-    static std::string firstControlId(const std::vector<agentxx::ui::Item>& items);
+    static std::string firstControlId(const std::vector<pluginxx::ui::Item>& items);
 
     /// 表单状态 (惰性创建并按描述初始化; 首个控件为键盘焦点)
     FormState& uiStateFor(const TUIMessage& msg);

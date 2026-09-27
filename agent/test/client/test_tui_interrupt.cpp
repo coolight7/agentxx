@@ -328,18 +328,39 @@ void test_extended_component_blocks() {
     InterruptFixture f;
     auto             ch = f.makeChannel();
 
-    agentxx::ui::Items ui;
-    ui.table({
-        .columns = {{"Path", "left", 0}, {"Scope", "right", 6}},
-        .rows    = {{"a.txt", "write"}, {"b.txt", "read"}},
+    // 表格 / 树 / 横排 + 趋势图 (描述层的组件项, 用构建器拼装)
+    pluginxx::ui::Item table = pluginxx::ui::build::node("Table");
+    table.header            = true;
+    table.columns.push_back(pluginxx::ui::TableColumn{
+        pluginxx::ui::TextValue::of("Path"), "start", pluginxx::ui::SizeValue::autoValue(), {},
     });
-    ui.tree(agentxx::ui::TreeSpec{
-        .nodes = {{"src", {}, {}, {}, {{"main.cpp"}, {"io/"}}}},
+    table.columns.push_back(pluginxx::ui::TableColumn{
+        pluginxx::ui::TextValue::of("Scope"), "end", pluginxx::ui::SizeValue::autoValue(), {},
     });
-    ui.row({agentxx::ui::Items{}.text("CPU"), agentxx::ui::Items{}.sparkline({1, 5, 9})});
+    for (const auto& cells : {std::pair{"a.txt", "write"}, std::pair{"b.txt", "read"}}) {
+        table.rows.push_back({
+            pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(cells.first), {}, {}},
+            pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(cells.second), {}, {}},
+        });
+    }
+
+    pluginxx::ui::Item tree = pluginxx::ui::build::node("Tree");
+    pluginxx::ui::TreeNode root;
+    root.label = pluginxx::ui::TextValue::of("src");
+    for (const auto& child : {"main.cpp", "io/"}) {
+        pluginxx::ui::TreeNode node;
+        node.label = pluginxx::ui::TextValue::of(child);
+        root.children.push_back(std::move(node));
+    }
+    tree.nodes.push_back(std::move(root));
+
+    pluginxx::ui::Item spark = pluginxx::ui::build::node("Sparkline");
+    spark.data               = {1, 5, 9};
+
+    pluginxx::ui::Item ui = pluginxx::ui::build::row({pluginxx::ui::build::text("CPU"), spark});
 
     agentxx::middleware::InterruptUi desc;
-    desc.blocks = agentxx::middleware::preset::blocksOf(ui);
+    desc.blocks = agentxx::middleware::preset::blocksOf({std::move(ui)});
     desc.blocks.push_back(agentxx::middleware::preset::checkboxControl("remember", "记住"));
     desc.blocks.push_back(agentxx::middleware::preset::submitBlock());
 

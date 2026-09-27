@@ -3,12 +3,18 @@
 /// 通用 UI 组件渲染 (唯一实现: 插件面板 / Info 段落 / 工具消息装饰 / 通用 overlay /
 /// 中断描述内容块全部经此渲染)
 ///
-/// 背景: 这些接入点此前各写一份 items 解析与渲染, 新增一种组件要改多处, 且高度
-/// 估算与渲染容易漂移 (同一项两处判定不一致会造成滚动位置错乱)。本模块是
-/// `agentxx.ui.item` schema 在终端里的**唯一渲染实现**:
-/// - 解析一次 (`agentxx::ui::parseItem*`, 见 [item.h](/agent/lib/include/agentxx/ui/item.h))
+/// 组件描述由**界面描述层** [pluginxx::ui] 定义 (模型/解析/降级适配/纯文本降级,
+/// 独立库 cxx_pluginxx_ui, 见 `pluginxx/ui.h`), 与渲染器无关: TUI 与将来的 GUI
+/// 客户端共用同一份描述, 各自只实现渲染。本模块是它在本终端的**唯一渲染实现**:
+/// - 解析: `pluginxx::ui::parseBlocks` (未知块不使整份描述失效)
+/// - 适配: `adaptItems` 按本客户端能力 (`tuiUiCapabilities`) 降级, 保证渲染层
+///   只会收到本客户端声明支持的组件 (渲染层不再写"我不支持谁"的分支)
 /// - 渲染产出"行模型" ([UiRow]): 元素 + 行数 + 元素内可命中区域
 /// - 高度估算 = 各行行数之和; 由 [measureItem] 走同一条渲染路径得出, 不存在两套判定
+///
+/// 尺寸口径: 描述里的长度一律是 u (GUI 1u = 1 逻辑像素), 终端按能力段的
+/// `cell` (每个字符格相当于多少 u) 换算成列/行 (见 [tuiUiCapabilities]), 换算只
+/// 发生在渲染时; 留白换算成 0 时该留白消失, 固定尺寸给正数时至少占 1 格。
 ///
 /// 命中口径:
 /// - 行模型里的 [UiHitRegion] 使用**行元素局部坐标**; 顶层组件行在
@@ -21,10 +27,10 @@
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/middlewares/interrupt_ui.h"
-#include "agentxx/ui/item.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "markdown/dom_builder.hpp"
+#include "pluginxx/ui.h"
 #include "utilxx_base/json.h"
 #include <cstddef>
 #include <cstdint>
@@ -39,12 +45,32 @@
 namespace agentxx {
 namespace client {
 
-/// 表单提交动作 id (插件面板/overlay 表单经动作通道回传)
+/// 表单提交动作 id (插件面板/overlay 表单经动作通道回传; **域内约定**, 不是描述层字段)
 /// - 提交: `actionId = "__submit"`, 参数 `{"values":{控件id:值}}`
 /// - 取消: `actionId = "__cancel"`
-/// - `commitOnPick` 控件点击即回传: `actionId = 控件 id`, 参数同上
-inline constexpr std::string_view kFormSubmitActionId = "__submit";
-inline constexpr std::string_view kFormCancelActionId = "__cancel";
+/// - "点击即提交"的控件 (中断一问一答) 点击后回传: `actionId = 控件 id`, 参数同上
+///
+/// 取值与中断表单的域内约定同源 (见 `middleware::kInterruptSubmitActionId`)
+inline constexpr std::string_view kFormSubmitActionId = middleware::kInterruptSubmitActionId;
+inline constexpr std::string_view kFormCancelActionId = middleware::kInterruptCancelActionId;
+
+/// 本客户端 (TUI) 的界面能力段
+///
+/// 内容即"如实上报": 实际支持的组件/控件、每个字符格相当于多少 u、默认行距。
+/// 插件经宿主能力通道读到同一份内容 (`agentxx.client.ui`), 据此选择用什么组件;
+/// `adaptItems` 也按它做降级。
+/// - 不支持的组件: `Stack` (叠放, 降级为最后一个子节点)、`Image` (图片, 降级为
+///   `alt` 文本)、`musicxx.Shader` (其他客户端专属块, 跳过)
+/// - 支持的控件形态: buttons / select / checkbox / switch / text / number
+const pluginxx::ui::Capabilities& tuiUiCapabilities();
+
+/// 按本客户端能力适配组件 (渲染前调用; 结果只含本客户端支持的组件)
+///
+/// 不适配也能渲染 (渲染层对不认识的组件走 `fallback`), 但"降级成什么"只应由描述层
+/// 的规则决定 —— 所以除了 [renderItemJson] 这类直接吃 JSON 的入口, 宿主自己构造的
+/// 组件树也应当先经这里 (或 [adaptItem]) 再渲染。
+std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>& items);
+pluginxx::ui::Item              adaptItem(const pluginxx::ui::Item& item);
 
 /// 单个控件的表单状态 (UI 线程独占; 非界面描述的一部分)
 struct UiFormControlState {
@@ -56,7 +82,7 @@ struct UiFormControlState {
     bool edited = false;
     /// buttons/select 的选中下标
     int selected = 0;
-    /// checkbox 的勾选状态
+    /// checkbox / switch 的勾选状态
     bool checked = false;
     /// 校验失败提示 (显示在控件下方; 下次编辑时清除)
     std::string tip;
@@ -77,7 +103,7 @@ struct UiFormState {
         return (it == controls.end()) ? nullptr : &it->second;
     }
 
-    /// 取控件状态 (不存在则按 defaultValue 创建)
+    /// 取控件状态 (不存在则创建)
     UiFormControlState& ensure(std::string_view id) {
         return controls[std::string{id}];
     }
@@ -105,8 +131,15 @@ struct UiRenderCtx {
     std::string ownerId;
     /// 客户端插件 UI 注册表快照 (判断按钮是否有绑定回调; 可为空)
     const agentxx::plugin::ClientUiRegistry* registry = nullptr;
-    /// 折叠状态查询: 键 = 组件 id, 返回是否展开; 为空时用描述里的 `expanded` 字段
+    /// 折叠状态查询: 键 = 组件 id (或树节点路径), 返回是否展开; 为空时用描述里的
+    /// `expanded` 字段
     std::function<bool(const std::string& id, bool defaultValue)> collapseExpanded;
+    /// 文案键查询 (返回空串 = 缺键, 用描述里的 fallback); 为空时用本客户端语言表
+    /// ([tr], 缺键同样回退 fallback)
+    std::function<std::string(std::string_view key)> translate;
+    /// 控件"点击即提交"查询 (中断的一问一答形态: 点击候选项即提交整份表单)
+    /// 描述层不表达提交语义 (控件值变化即派发), 该行为属中断表单的域内约定
+    std::function<bool(const std::string& id)> commitOnPick;
     /// 表单状态 (控件渲染; 为空时按描述缺省值渲染静态形态, 不可交互)
     const UiFormState* form = nullptr;
     /// 分隔线风格 (面性弹窗传 Block)
@@ -135,30 +168,30 @@ struct UiRenderResult {
 
 /// 渲染一组组件项 (每一项可能产出多行; 含可点内容的行附加 reflect 命中框)
 void renderItems(
-    const std::vector<agentxx::ui::Item>& items,
-    const UiRenderCtx&                    ctx,
-    UiRenderResult&                       out
+    const std::vector<pluginxx::ui::Item>& items,
+    const UiRenderCtx&                     ctx,
+    UiRenderResult&                        out
 );
 
 /// 渲染单个组件项 (追加到 out.rows)
-void renderItem(
-    const agentxx::ui::Item& item,
-    const UiRenderCtx&       ctx,
-    UiRenderResult&          out
-);
+void renderItem(const pluginxx::ui::Item& item, const UiRenderCtx& ctx, UiRenderResult& out);
 
-/// 渲染 items JSON (`{"items":[...]}` 或裸数组)
+/// 渲染描述 JSON (块数组 / `{"blocks":[…]}` / `{"items":[…]}` / `{title,subtitle,blocks}`)
+/// - 内部完成解析 + 按本客户端能力适配 (宿主不必自己适配)
 void renderItemJson(const utilxx_base::Json& json, const UiRenderCtx& ctx, UiRenderResult& out);
 
 /// 单个组件项的行数 (与 [renderItem] 同一实现: 内部渲染一次后取行数之和)
 /// - 供高度估算使用 (不可见子项的高度), 不会少算或多算容器类组件
-size_t measureItem(const agentxx::ui::Item& item, const UiRenderCtx& ctx);
+size_t measureItem(const pluginxx::ui::Item& item, const UiRenderCtx& ctx);
 
 /// 一组组件项的行数
-size_t measureItems(const std::vector<agentxx::ui::Item>& items, const UiRenderCtx& ctx);
+size_t measureItems(const std::vector<pluginxx::ui::Item>& items, const UiRenderCtx& ctx);
 
 /// 取组件项使用的语义色 (与 [uiRoleColor] 同一映射)
-ftxui::Color itemColor(std::string_view color, const TUITheme& theme);
+ftxui::Color itemColor(std::string_view tone, const TUITheme& theme);
+
+/// 组件描述文案 → 显示文本 (TextValue: 先按键查语言表, 缺键用 fallback, 最后按 `args`)
+std::string resolveText(const pluginxx::ui::TextValue& text, const UiRenderCtx& ctx);
 
 // ---------------------------------------------------------------------------
 // 表单交互 (面板/Info 段落/overlay 的表单共用; 中断表单沿用自身状态结构)
@@ -173,15 +206,16 @@ enum class UiFormAction : uint8_t {
 };
 
 /// 处理控件区域命中 (更新表单状态)
-/// - checkbox: 翻转勾选态; buttons/select: 选中 `sub` 指定的候选项;
+/// - checkbox/switch: 翻转勾选态; buttons/select: 选中 `sub` 指定的候选项;
 ///   number: sub 0/1 为减/加, sub 2 为聚焦输入框; text: 聚焦输入框
-/// - `commitOnPick` 的候选项点击后返回 `Submit`
+/// - "点击即提交"的控件 (上下文提供 `commitOnPick`) 点击候选项后返回 `Submit`
 /// - 未命中 (控件不存在 / sub 越界) 返回 `None`
 UiFormAction handleFormControlHit(
-    const std::vector<agentxx::ui::Item>& items,
-    UiFormState&                          form,
-    std::string_view                      controlId,
-    int                                   sub
+    const std::vector<pluginxx::ui::Item>& items,
+    UiFormState&                           form,
+    std::string_view                       controlId,
+    int                                    sub,
+    const UiRenderCtx&                     ctx = {}
 );
 
 /// 处理提交行命中 (id 为 `__submit` / `__cancel`)
@@ -190,37 +224,37 @@ UiFormAction handleFormSubmitHit(std::string_view actionId);
 /// 键盘输入作用于当前焦点控件 (返回 true 表示已消费该事件)
 /// - 可打印字符追加到输入框 (首次输入替换缺省值); Backspace 删除一个字符;
 ///   Delete 清空输入框; Tab / Shift+Tab 在控件间移动焦点; Escape 释放焦点
-/// - checkbox 空格翻转; buttons 左右切换选中项; select 上下切换; number 上下步进
+/// - checkbox/switch 空格翻转; buttons 左右切换选中项; select 上下切换; number 上下步进
 ///   (受 min/max 约束); text / number 的左右方向键被消费 (单行输入无光标定位)
 /// - 回车与提交由调用方处理 (本方法不消费回车)
 bool handleFormKeyInput(
-    const std::vector<agentxx::ui::Item>& items,
-    UiFormState&                          form,
-    const ftxui::Event&                   event
+    const std::vector<pluginxx::ui::Item>& items,
+    UiFormState&                           form,
+    const ftxui::Event&                    event
 );
 
 /// 校验全部控件 (number 的范围/步进; buttons/select 无候选项; 失败时写各控件
 /// `tip` 并返回 false)
-bool validateForm(const std::vector<agentxx::ui::Item>& items, UiFormState& form);
+bool validateForm(const std::vector<pluginxx::ui::Item>& items, UiFormState& form);
 
 /// 组装提交值: `{"values": {控件 id: 值}}`
-/// - checkbox → 布尔; buttons/select → 候选项 value; number → 数值; text → 字符串
+/// - checkbox/switch → 布尔; buttons/select → 候选项原值; number → 数值; text → 字符串
 /// - 未初始化的控件按描述缺省值取值
-utilxx_base::Json formValues(const std::vector<agentxx::ui::Item>& items, UiFormState& form);
+utilxx_base::Json formValues(const std::vector<pluginxx::ui::Item>& items, UiFormState& form);
 
 /// 按组件描述初始化表单状态 (缺省值/选中项/勾选态/编辑文本)
 /// - 已初始化的控件不会被覆盖 (保留用户输入); 递归处理容器内的控件
 /// - 宿主在创建或刷新一份表单时调用一次 (之后用户交互只改状态表)
-void initFormState(UiFormState& form, const std::vector<agentxx::ui::Item>& items);
+void initFormState(UiFormState& form, const std::vector<pluginxx::ui::Item>& items);
 
 /// 收集组件树中的全部控件 id (含容器内; 供表单状态清理使用)
-std::vector<std::string> collectControlIds(const std::vector<agentxx::ui::Item>& items);
+std::vector<std::string> collectControlIds(const std::vector<pluginxx::ui::Item>& items);
 
 /// 中断描述块 → 组件项 (转发 lib 的 [agentxx::middleware::itemOf])
 ///
 /// 映射的唯一实现在 lib: TUI 渲染、纯文本降级与"用组件构建器拼中断描述"共用
 /// 同一份转换, 各接入点不再各写一份。语义见该函数的说明。
-std::optional<agentxx::ui::Item> itemFromInterruptBlock(const middleware::InterruptUiBlock& block);
+std::optional<pluginxx::ui::Item> itemFromInterruptBlock(const middleware::InterruptUiBlock& block);
 
 } // namespace client
 } // namespace agentxx

@@ -8,7 +8,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx/ui/text_width.h"
+#include "pluginxx/ui.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -723,7 +723,7 @@ constexpr int kKeybindKeyColumnMax = 18;
 int keybindKeyColumnWidth(const std::vector<agentxx::plugin::ClientKeybind>& binds) {
     int width = 0;
     for (const auto& b : binds) {
-        width = std::max(width, agentxx::ui::displayWidth(b.keys));
+        width = std::max(width, pluginxx::ui::displayWidth(b.keys));
     }
     return std::min(width, kKeybindKeyColumnMax);
 }
@@ -773,8 +773,8 @@ std::vector<ScrollItem> KeybindListOverlay::buildItems() {
     const int keyWidth = keybindKeyColumnWidth(binds);
     for (const auto& bind : binds) {
         // 键位列: 按显示列宽截断后补齐, 让后续列对齐 (宽字符安全)
-        const std::string keyText = agentxx::ui::padRightToWidth(
-            agentxx::ui::truncateToWidth(bind.keys, keyWidth),
+        const std::string keyText = pluginxx::ui::padRightToWidth(
+            pluginxx::ui::truncateToWidth(bind.keys, keyWidth),
             keyWidth
         );
         const std::string desc
@@ -799,8 +799,8 @@ std::vector<ScrollItem> KeybindListOverlay::buildItems() {
             false,
         });
         for (const auto& conflict : conflicts) {
-            const std::string keyText = agentxx::ui::padRightToWidth(
-                agentxx::ui::truncateToWidth(conflict.keys, keyWidth),
+            const std::string keyText = pluginxx::ui::padRightToWidth(
+                pluginxx::ui::truncateToWidth(conflict.keys, keyWidth),
                 keyWidth
             );
             items.push_back(ScrollItem{
@@ -2203,7 +2203,7 @@ CustomOverlay::CustomOverlay(
             return defaultValue;
         };
         // 表单状态: 按最新描述初始化 (保留用户已编辑的值), 控件交互由本组件处理
-        formItems_ = agentxx::ui::parseItemList(items_);
+        formItems_ = pluginxx::ui::parseBlocks(items_);
         agentxx::client::initFormState(form_, formItems_);
         rc.form = &form_;
 

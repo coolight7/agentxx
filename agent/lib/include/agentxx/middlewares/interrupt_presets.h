@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agentxx/middlewares/interrupt_ui.h"
-#include "agentxx/ui/build.h"
+#include "pluginxx/ui.h"
 #include "utilxx_base/json.h"
 #include <string>
 #include <string_view>
@@ -48,20 +48,20 @@ InterruptUiOption
 
 /// 组件树 → 中断块数组 (每个组件一项, 顺序保持)
 ///
-/// 用途: 直接用组件构建器 (`agentxx::ui::Items`) 拼装中断描述 —— 表格/树/横排/
-/// 分组/键值/趋势图/计量条等新组件因此同样能用在中断里 (无需手写 JSON), 且与
-/// 插件 UI 共享同一套渲染与测试。
+/// 用途: 直接用描述层构建器 (`pluginxx::ui::build` / kit, 或程序化构造组件项)
+/// 拼装中断描述 —— 表格/树/横排/分组/键值/趋势图/进度等组件因此同样能用在中断里
+/// (无需手写 JSON), 且与插件 UI 共享同一套渲染与测试。
 ///
-/// - 结果块的 `raw` 为组件原始 JSON, 渲染/纯文本降级按组件层解释
+/// - 结果块的 `raw` 为组件原始 JSON, 渲染/纯文本降级按描述层解释
 /// - 需要控件 (带 i18n 键) 或中断层专有字段时, 直接构造 [InterruptUiBlock] 与本
 ///   函数产出的块混排即可
-std::vector<InterruptUiBlock> blocksOf(const agentxx::ui::Items& ui);
+std::vector<InterruptUiBlock> blocksOf(const std::vector<pluginxx::ui::Item>& items);
 
-/// 内容块 (任意组件描述; 与 [blocksOf] 的单项等价)
-InterruptUiBlock contentBlock(agentxx::ui::Items ui);
+/// 内容块 (任意组件项; 与 [blocksOf] 的单项等价)
+InterruptUiBlock contentBlock(pluginxx::ui::Item item);
 
 /// 表格块 (中断里的路径/候选项清单等; 表头为字面文本)
-/// - `columns`: {标题, 对齐(left|center|right), 固定列宽(0 = 自适应)}
+/// - `columns`: {标题, 对齐(left|center|right), 固定列宽(0 = 自动分配)}
 /// - `rows`: 每行若干单元格字符串 (列数与 columns 一致)
 InterruptUiBlock tableBlock(
     const std::vector<std::tuple<std::string, std::string, int>>& columns,
@@ -70,7 +70,7 @@ InterruptUiBlock tableBlock(
 
 /// 树块 (子代理任务/目录结构等层级数据; 节点 label 为字面文本)
 /// - `nodes`: 顶层节点列表, 层级由 `children` 嵌套表达
-InterruptUiBlock treeBlock(const std::vector<agentxx::ui::TreeNodeSpec>& nodes);
+InterruptUiBlock treeBlock(std::vector<pluginxx::ui::TreeNode> nodes);
 
 /// 计量条块 (上下文占用/额度等; label/unit 为字面文本)
 InterruptUiBlock meterBlock(
