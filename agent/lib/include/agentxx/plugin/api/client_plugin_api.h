@@ -97,7 +97,7 @@ typedef struct AgentxxToolRenderOutput {
     PluginxxString displayName; ///< 显示名 (如 "Read", "Edit", "Bash", 空则回退原始 toolName)
     PluginxxString summary; ///< 一行摘要 (如 " · [0, 100] /path/file", 可带或不带前导 " · ")
     PluginxxString items_json; ///< 展开体 items JSON 数组 (可选, 空则走默认 args/result 展示;
-                               ///< 支持 text/button/diagram/separator/diff)
+                               ///< 界面描述层 schema, 如 Text/Button/Diagram/Divider/Diff)
 } AgentxxToolRenderOutput;
 
 typedef int32_t(PLUGINXX_CALL* AgentxxToolRenderFn)(
@@ -195,13 +195,19 @@ typedef struct AgentxxClientUiIface {
         const PluginxxStringView* id,
         const PluginxxStringView* propsJson
     );
-    /// 更新面板内容: itemsJson = {"items":[{"kind":"text","role":"normal","text":"..."},
-    ///   {"kind":"progress","label":"...","value":0.5},
-    ///   {"kind":"action","id":"rebuild","label":"Rebuild"}, ...]}
-    /// - text.role 指定文本样式: "title"=高亮强调 / "normal"=普通文本(默认) /
-    ///   "hint"=减淡提示 (缺省按 normal 渲染; 其余 role 值等同 normal)
-    /// - action 项被用户点击时: 宿主 post 到 client io 线程回调面板注册时经
-    ///   register_panel 关联的 on_action (见 entry 注册流程; 经回调参数注入)
+    /// 更新面板内容: itemsJson = {"items":[ …组件项… ]}
+    /// - 组件来自**界面描述层** (`pluginxx::ui`, 独立库 cxx_pluginxx_ui): 规范写法是
+    ///   组件名 PascalCase、字段 camelCase, 例:
+    ///   {"kind":"Text","text":"CPU","type":"body","tone":"normal"},
+    ///   {"kind":"Progress","label":"cpu","value":0.5},
+    ///   {"kind":"Button","label":"Rebuild","action":{"kind":"dispatch","name":"rebuild"}}
+    /// - 文本样式用 `tone` (normal/hint/accent/title/error/…) 与 `type`
+    ///   (body/caption/title); 插件用 SDK 的构建器 (`pluginxx::ui::build`) 或 kit
+    ///   拼装即可, 不必手写 JSON
+    /// - 未知组件与本客户端不支持的组件由宿主按自身能力降级 (最多降到文本),
+    ///   不会因此清空面板; 客户端支持哪些组件见 `get_client_state().ui`
+    /// - button 项被用户点击时: 宿主 post 到 client io 线程按动作派发
+    ///   (dispatch 走能力/动作绑定, 见 `bind_action_handler`)
     int32_t(PLUGINXX_CALL* update_panel)(
         const PluginxxHost*       host,
         AgentxxPanel*             panel,
@@ -219,7 +225,7 @@ typedef struct AgentxxClientUiIface {
         const PluginxxStringView* propsJson
     );
     /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
-    ///   ({"items":[{"kind":"text","role":"title|normal|hint","text":"..."}, ...]});
+    ///   (如 {"kind":"Text","text":"index: 42","tone":"hint"});
     ///   列表项由宿主按侧边栏 Append 段样式以 "|  xxx" 前缀展示
     int32_t(PLUGINXX_CALL* update_info_section)(
         const PluginxxHost*       host,
@@ -262,14 +268,18 @@ typedef struct AgentxxClientUiIface {
 
     /* ---- 工具消息装饰 ---- */
     /// 更新/删除本插件对某次工具调用的消息装饰 (io 线程约束):
-    /// - 装饰内容为宿主定义 schema 的语义 JSON (非组件), UI 按通用渲染器
-    ///   展示: 折叠头 displayName/summary + 展开体 items
+    /// - 装饰内容为语义 JSON, UI 按通用渲染器展示: 折叠头 displayName/summary +
+    ///   展开体 items (界面描述层 schema, 同 update_panel)
     ///   {"displayName": "Plan",              // 可选; 折叠头显示名 (缺省原始 toolName)
     ///    "summary": "[~] a; [ ] b",          // 可选; 折叠头一行摘要 (缺省回退参数预览)
-    ///    "items": [                          // 可选; 展开体内容 (schema 同面板 items,
-    ///                                        //   另有 diagram kind)
-    ///      {"kind":"text","role":"title|normal|hint","text":"..."},
-    ///      {"kind":"diagram","mermaid":"stateDiagram-v2..."} ]}
+    ///    "items": [                          // 可选; 展开体内容
+    ///      {"kind":"Text","text":"Todos:","type":"title"},
+    ///      {"kind":"Text","text":"[~] do task A","tone":"hint"},
+    ///      {"kind":"Diagram","mermaid":"stateDiagram-v2..."} ]}
+    /// - 按钮 (可点): {"kind":"Button","label":"Graph",
+    ///   "action":{"kind":"dispatch","name":"planning.open_graph"}}
+    /// - 不使用构建器时按上面的规范写法手写即可 (组件名 PascalCase, 字段 camelCase);
+    ///   本客户端不支持的组件由宿主按能力降级, 不会丢内容
     /// - tool_call_id: 目标工具调用 id (取自 DELTA/tool_start 的 tool_call_id);
     ///   空视图 = 操作本插件的全部装饰
     /// - decor_json: 空串 = 删除 (tool_call_id 为空时删除本插件全部);
@@ -291,7 +301,7 @@ typedef struct AgentxxClientUiIface {
     ///   displayName/summary/items_json
     ///   2. 预设模版: spec->render_fn == NULL 且 template_json 非空,
     ///      宿主按模版自动提取参数字段并格式化 (如 {"displayName":"Search","summaryKey":"query"})
-    /// - 展开体 items_json 支持新增的 {"kind":"diff","path":"...","old_str":"...","new_str":"..."}
+    /// - 展开体 items_json 支持 {"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}
     /// - 插件卸载/禁用时宿主自动注销
     /// 返回 0 成功, 非 0 失败
     int32_t(PLUGINXX_CALL* register_tool_renderer)(
@@ -370,7 +380,15 @@ typedef struct AgentxxClientSessionIface {
     /// 当前 client 状态 JSON 快照 (host->alloc):
     /// {"sessionId","connState","model","models":[],"isStreaming",
     ///  "interfaces":["agentxx.client.panel",...],
+    ///  "ui":{"apiVersion","kind","blocks":[],"controls":[],"cell":{},"gap":12,
+    ///        "icons":[],"percent":true,"aspect":true,"limits":{}},
+    ///  "regions":[{"id","w","h"},...],
     ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
+    /// - interfaces: 宿主支持的接口名 / 能力名清单 (插件据此决定启用哪些功能)
+    /// - ui: 客户端界面能力段 (界面描述层) —— 客户端能画哪些组件/控件、每个字符格
+    ///   相当于多少 u、默认行距; 老宿主 / 未发布的客户端没有该字段, 插件应按
+    ///   "描述层全支持"处理 (内容仍由客户端按自身能力降级)
+    /// - regions: 展示区域尺寸快照 (面板/Info 段落可用宽高)
     /// (model/models/agentPlugins 依赖服务端推送; 未收到时为空)
     int32_t(PLUGINXX_CALL* get_client_state)(const PluginxxHost* host, PluginxxString* out);
     /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)

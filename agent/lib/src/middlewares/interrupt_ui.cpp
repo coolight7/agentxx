@@ -611,6 +611,22 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
 InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
     using pluginxx::ui::TextValue;
 
+    // 缩进在描述层没有字段, 用 Padding 容器表达 (itemOf 的 indent → Padding 是反向):
+    // 这里解包还原成域的 `indent` 列数, 否则本函数会把带缩进的块当成"未知组件"
+    // 原样放进 raw, 域的 text/color 等字段全部丢失 (往返与纯文本降级都会受影响)
+    // - 只解包"纯左缩进"的容器 (withIndent 的产物); 其余边有留白时按普通容器保留
+    if (item.kind == "Padding" && item.children.size() == 1) {
+        constexpr double kCellWidth = pluginxx::ui::gen::kDefaultCellWidth;
+        const double     left       = item.hasPadding ? item.padding.left : 0.0;
+        const bool       pureIndent = left > 0.0 && item.padding.top <= 0.0
+                                && item.padding.right <= 0.0 && item.padding.bottom <= 0.0;
+        if (pureIndent && kCellWidth > 0.0) {
+            InterruptUiBlock out = blockOf(item.children.front());
+            out.indent += static_cast<int>(std::lround(left / kCellWidth));
+            return out;
+        }
+    }
+
     // TextValue → (i18n 键, 字面文本)
     const auto splitText = [](const TextValue& value, std::string& key, std::string& text) {
         key  = value.key;

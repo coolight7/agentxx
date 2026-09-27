@@ -194,7 +194,8 @@ TestResult testUiItems() {
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
             XX_TEST_EXPECT_EQ(item->options.size(), size_t{2});
-            XX_TEST_EXPECT_EQ(item->options[0].valueJson, std::string{"true"});
+            // 候选项原值是"紧凑 JSON 文本": 存字符串就带引号, 存布尔就不带
+            XX_TEST_EXPECT_EQ(item->options[0].valueJson, std::string{R"("true")"});
             XX_TEST_EXPECT_EQ(item->options[0].label.key, std::string{"interrupt.yes"});
             XX_TEST_EXPECT_EQ(item->options[1].valueJson, std::string{"false"});
             XX_TEST_EXPECT_EQ(item->options[1].label.fallback, std::string{"No"});
@@ -246,8 +247,10 @@ TestResult testUiItems() {
     {
         auto blocks = preset::blocksOf({pluginxx::ui::build::title("标题"), sampleTable()});
         XX_TEST_EXPECT_EQ(blocks.size(), size_t{2});
-        XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"Text"});
+        // 中断层有自己的块词汇 (text/markdown/diff/separator/gap/control; 见 blockOf)
+        XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"text"});
         XX_TEST_EXPECT_EQ(blocks[0].text, std::string{"标题"});
+        // 描述层的扩展组件按原始 JSON 带走 (kind 保持组件名)
         XX_TEST_EXPECT_EQ(blocks[1].kind, std::string{"Table"});
 
         // 往返: 块 → 项 → 块, 内容字段保持

@@ -147,12 +147,13 @@ bool findTextPos(const ftxui::Screen& screen, std::string_view needle, int& outX
 /// 初始化: 按描述填默认值 (勾选态/选中下标/编辑文本), 已初始化项不被覆盖
 void test_form_init_and_click() {
     auto items = formItems(R"([
-        {"kind":"checkbox","id":"opt","label":"Opt","default":true},
-        {"kind":"select","id":"mode","options":[{"value":"fast","label":"Fast"},
-                                                {"value":"safe","label":"Safe"}],
-         "default":"safe"},
-        {"kind":"number","id":"num","label":"Num","default":5,"min":1,"max":9,"integer":true},
-        {"kind":"input","id":"name","label":"Name","default":"abc"}
+        {"kind":"Control","control":"checkbox","id":"opt","label":"Opt","value":true},
+        {"kind":"Control","control":"select","id":"mode",
+         "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}],
+         "value":"safe"},
+        {"kind":"Control","control":"number","id":"num","label":"Num","value":5,
+         "min":1,"max":9,"integer":true},
+        {"kind":"Control","control":"text","id":"name","label":"Name","value":"abc"}
     ])");
 
     agentxx::client::UiFormState form;
@@ -203,8 +204,8 @@ void test_form_init_and_click() {
 /// 键盘: 输入 (首次输入替换缺省值)、退格、Tab 移动、Esc 释放、数值过滤
 void test_form_keyboard() {
     auto items = formItems(R"([
-        {"kind":"input","id":"name","label":"Name","default":"abc"},
-        {"kind":"number","id":"num","label":"Num","default":5,"integer":true}
+        {"kind":"Control","control":"text","id":"name","label":"Name","value":"abc"},
+        {"kind":"Control","control":"number","id":"num","label":"Num","value":5,"integer":true}
     ])");
 
     agentxx::client::UiFormState form;
@@ -239,9 +240,11 @@ void test_form_keyboard() {
 
     // 非输入类控件的键盘语义: checkbox 空格翻转; buttons 左右切换; select 上下切换
     auto others = formItems(R"([
-        {"kind":"checkbox","id":"opt","label":"Opt","default":false},
-        {"kind":"buttons","id":"pick","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},
-        {"kind":"select","id":"mode","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}
+        {"kind":"Control","control":"checkbox","id":"opt","label":"Opt","value":false},
+        {"kind":"Control","control":"buttons","id":"pick",
+         "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},
+        {"kind":"Control","control":"select","id":"mode",
+         "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}
     ])");
     agentxx::client::UiFormState f2;
     agentxx::client::initFormState(f2, others);
@@ -263,12 +266,13 @@ void test_form_keyboard() {
 /// 校验与取值: 越界写提示且拒绝提交; 通过后按控件形态组装值
 void test_form_validate_and_values() {
     auto items = formItems(R"([
-        {"kind":"checkbox","id":"opt","label":"Opt","default":true},
-        {"kind":"select","id":"mode","options":[{"value":"fast","label":"Fast"},
-                                                {"value":"safe","label":"Safe"}],
-         "default":"safe"},
-        {"kind":"number","id":"num","label":"Num","default":5,"min":1,"max":9,"integer":true},
-        {"kind":"input","id":"name","label":"Name","default":"abc"}
+        {"kind":"Control","control":"checkbox","id":"opt","label":"Opt","value":true},
+        {"kind":"Control","control":"select","id":"mode",
+         "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}],
+         "value":"safe"},
+        {"kind":"Control","control":"number","id":"num","label":"Num","value":5,
+         "min":1,"max":9,"integer":true},
+        {"kind":"Control","control":"text","id":"name","label":"Name","value":"abc"}
     ])");
     agentxx::client::UiFormState form;
     agentxx::client::initFormState(form, items);
@@ -313,8 +317,8 @@ void test_form_validate_and_values() {
 /// 候选项缺失: 校验失败并写提示 (避免"提交了空值")
 void test_form_validate_missing_options() {
     auto items = formItems(R"([
-        {"kind":"select","id":"mode","options":[]},
-        {"kind":"buttons","id":"pick","options":[]}
+        {"kind":"Control","control":"select","id":"mode","options":[]},
+        {"kind":"Control","control":"buttons","id":"pick","options":[]}
     ])");
     agentxx::client::UiFormState form;
     agentxx::client::initFormState(form, items);
@@ -325,8 +329,9 @@ void test_form_validate_missing_options() {
 /// 容器内的控件也能收集与初始化 (row/box 内的控件)
 void test_form_nested_controls() {
     auto items = formItems(R"([
-        {"kind":"box","title":"F","items":[
-            {"kind":"row","items":[{"kind":"checkbox","id":"inner","label":"I","default":false}]}
+        {"kind":"Block","title":"F","children":[
+            {"kind":"Row","children":[{"kind":"Control","control":"checkbox","id":"inner",
+                                       "label":"I","value":false}]}
         ]}
     ])");
     auto ids = agentxx::client::collectControlIds(items);
@@ -376,11 +381,13 @@ void test_overlay_form_submit_through_action_channel() {
     ctx.refreshFrameSize();
 
     const std::string payload = R"({"items":[
-        {"kind":"table","header":true,"columns":[{"title":"Path","w":"flex"},
+        {"kind":"Table","header":true,"columns":[{"title":"Path"},
                                                 {"title":"Scope","w":6}],
          "rows":[["a.txt","write"]]},
-        {"kind":"checkbox","id":"remember","label":"Remember","default":false},
-        {"kind":"submit","label":"APPLY","cancelLabel":"DROP"}
+        {"kind":"Control","control":"checkbox","id":"remember","label":"Remember","value":false},
+        {"kind":"Row","gap":8,"children":[
+            {"kind":"Button","label":"APPLY","variant":"primary","action":"__submit"},
+            {"kind":"Button","label":"DROP","action":"__cancel"}]}
     ]})";
     auto overlay = agentxx::client::createUniversalOverlay(
         ctx,
@@ -406,6 +413,9 @@ void test_overlay_form_submit_through_action_channel() {
         return screen;
     };
     auto screen = renderFrame();
+    // 再渲染一帧: 内容宽度按滚动容器"上一帧测量值"确定 (首帧尚未测量, 按终端宽度估算),
+    // 第二帧起画面与命中区域一致 —— 用例按稳定后的那一帧点击
+    screen = renderFrame();
     int  sx     = 0;
     int  sy     = 0;
     XX_TEST_EXPECT_TRUE(findTextPos(screen, "a.txt", sx, sy));
@@ -462,8 +472,9 @@ void test_panel_form_registers_hit_regions() {
     ));
     XX_TEST_EXPECT_TRUE(panel != nullptr);
     const std::string items = R"({"items":[
-        {"kind":"checkbox","id":"verbose","label":"Verbose","default":false},
-        {"kind":"submit","label":"SAVE"}
+        {"kind":"Control","control":"checkbox","id":"verbose","label":"Verbose","value":false},
+        {"kind":"Row","gap":8,"children":[
+            {"kind":"Button","label":"SAVE","variant":"primary","action":"__submit"}]}
     ]})";
     XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{items}), 0);
 

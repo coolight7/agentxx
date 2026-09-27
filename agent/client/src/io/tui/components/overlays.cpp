@@ -2188,7 +2188,14 @@ CustomOverlay::CustomOverlay(
 
         agentxx::client::UiRenderCtx rc;
         rc.theme            = &theme;
-        rc.width            = ctx_.terminalSize().dimx - 8;
+        // 内容宽度取滚动容器的实际可用宽度 (上一帧测量值; 首帧为 -1):
+        // 弹窗边框/内边距/滚动条都要占列, 只用终端宽度估算会让"按可用宽度分配列宽"
+        // 的组件 (Row 的等分列、Table 的自动列宽) 算出比实际更大的宽度 —— 元素被收缩
+        // 后画面与命中区域就会错位 (点击落到空处)
+        {
+            const int measured = scrollable_ ? scrollable_->contentWidth() : -1;
+            rc.width = measured > 0 ? measured : (ctx_.terminalSize().dimx - 8);
+        }
         rc.indent           = 0;
         rc.plugin           = ownerPlugin_;
         rc.ownerId          = std::string{AGENTXX_CLIENT_OVERLAY_OWNER};

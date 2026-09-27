@@ -1224,6 +1224,25 @@ TestResult testTuiScroll() {
             }
             argsJson += "\"}";
             et->text  = std::move(argsJson);
+            // diff 内容由**插件自己的工具渲染器**提供 (宿主不再按工具名特化):
+            // 这里模拟插件推送的装饰 (Diff 组件项), 覆盖"大 diff 消息"的滚动场景
+            {
+                auto reg = st.pluginRegistry
+                               ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                               : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+                auto& decor       = reg->toolDecors.emplace_back();
+                decor.plugin      = "agentxx_filesystem";
+                decor.toolCallId  = "call_edit_scroll_1";
+                decor.displayName = "Edit";
+                utilxx_base::Json diffItem = utilxx_base::Json::object();
+                diffItem["kind"]           = "Diff";
+                diffItem["path"]           = "/a/b.txt";
+                diffItem["oldStr"]         = oldStr;
+                diffItem["newStr"]         = newStr;
+                decor.items                = utilxx_base::Json::array({std::move(diffItem)});
+                st.pluginRegistry          = std::move(reg);
+                et->tool->toolCallId       = "call_edit_scroll_1";
+            }
             st.messages.push_back(std::move(et));
             // 后面 5 条历史 + last
             for (int i = 0; i < 5; ++i) {

@@ -681,12 +681,12 @@ void test_panel_access_point_extended_components() {
     XX_TEST_EXPECT_TRUE(panel != nullptr);
 
     const std::string items = R"({"items":[
-        {"kind":"table","header":true,
-         "columns":[{"title":"Path","w":"flex"},{"title":"Scope","w":6}],
+        {"kind":"Table","header":true,
+         "columns":[{"title":"Path"},{"title":"Scope","width":48}],
          "rows":[["a.txt","write"],["b.txt","read"]]},
-        {"kind":"meter","value":72,"total":100,"width":4,"label":"CPU"},
-        {"kind":"row","gap":1,"items":[{"kind":"text","text":"L"},
-                                       {"kind":"sparkline","data":[1,5,9]}]}
+        {"kind":"Progress","value":72,"total":100,"label":"CPU"},
+        {"kind":"Row","gap":8,"children":[{"kind":"Text","text":"L"},
+                                          {"kind":"Sparkline","data":[1,5,9]}]}
     ]})";
     XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{items}), 0);
 
@@ -717,7 +717,7 @@ void test_panel_access_point_extended_components() {
     XX_TEST_EXPECT_TRUE(found);
 
     // 内容更新: 新的描述立即反映到下一次渲染 (版本号递增, 供缓存 key 使用)
-    const std::string updated = R"({"items":[{"kind":"text","text":"second"}]})";
+    const std::string updated = R"({"items":[{"kind":"Text","text":"second"}]})";
     XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{updated}), 0);
     const auto rows2 = tui->renderPluginPanel("widget_probe.panel");
     const auto text2 = renderScrollItems(rows2, 40, 3);
@@ -740,8 +740,8 @@ void test_info_access_point_extended_components() {
     ));
     XX_TEST_EXPECT_TRUE(section != nullptr);
     const std::string items = R"({"items":[
-        {"kind":"kv","items":[{"k":"Model","v":"gpt-x"}]},
-        {"kind":"box","title":"Limits","border":"round","items":[{"kind":"text","text":"inside box"}]}
+        {"kind":"KV","pairs":[{"k":"Model","v":"gpt-x"}]},
+        {"kind":"Block","title":"Limits","variant":"card","children":[{"kind":"Text","text":"inside box"}]}
     ]})";
     XX_TEST_EXPECT_EQ(mgr->updateInfoSection(inst.get(), section, std::string_view{items}), 0);
 

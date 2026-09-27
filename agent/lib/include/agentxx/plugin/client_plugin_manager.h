@@ -644,7 +644,10 @@ public:
 
     /// 当前 client 状态 JSON (get_client_state 数据源):
     /// {"sessionId","connState","startupProgress","interfaces":[...],
+    ///  "ui":{...},"regions":[{"id","w","h"},...],
     ///  "agentPlugins":[{"name","version","interfaces":[...]},...]}
+    /// - ui: 界面能力段 (描述层; 适配器未发布时无该字段, 见
+    ///   [PluginUiAdapter::uiCapabilitiesJson])
     /// - agentPlugins: 服务端已加载的 agent 侧插件结构化列表 (来自宿主约定
     ///   事件 server_plugins / WireHelloAck.plugins); 空数组 = 未知 (服务端
     ///   未提供), 插件不得据此断言"对端未加载"
@@ -1058,6 +1061,11 @@ private:
 
     std::shared_ptr<PluginUiAdapter> uiAdapter_; ///< 注入后不可变 (io 线程读写)
 
+    /// 客户端界面能力段 (装配时从适配器读取一次; 见
+    /// [PluginUiAdapter::uiCapabilitiesJson]) —— `get_client_state()` 的 `ui` 段,
+    /// 空对象 = 该客户端不发布 (插件按描述层全支持处理)
+    utilxx_base::Json uiCapabilitiesJson_ = utilxx_base::Json::object();
+
     /// 工具消息装饰版本号序列 (io 线程递增; 计入 ClientToolDecor.version,
     /// 供 TUI 块缓存 key 感知装饰更新)
     uint64_t toolDecorVersionSeq_ = 1;
@@ -1130,6 +1138,20 @@ public:
     /// 声明支持的接口名集合 (plugin_interfaces 常量; 决定 agentxx.client.ui 接口表
     /// 内哪些成员非 NULL 与加载限制判定)
     virtual InterfaceSet supportedInterfaces() const = 0;
+
+    /// 客户端界面能力段 (`get_client_state()` 的 `ui` 段)
+    ///
+    /// 客户端**如实上报**自己能画什么 (支持的组件/控件、每个字符格相当于多少 u、
+    /// 默认行距)。插件据此选择组件 (SDK 见 `plugin_kit.h` 的
+    /// `ClientPluginBase::uiCapabilities()` / `supportsBlock()`); 内容仍由客户端按
+    /// 自身能力降级 (描述层的 adapt), 因此老插件不会画错。
+    ///
+    /// - 取值来源: `pluginxx::ui::capabilitiesToJson(<本客户端的能力>)`
+    /// - 返回空串 = 不发布该段 (插件按"描述层全支持"处理); 非对象 JSON 会被忽略
+    /// - 装配后不可变 (与 supportedInterfaces 同一约定), 启动时读取一次
+    virtual std::string uiCapabilitiesJson() const {
+        return {};
+    }
 
     /// ---- 信号回调 (client io 线程; 快速返回) ----
 

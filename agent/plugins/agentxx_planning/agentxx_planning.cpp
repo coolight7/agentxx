@@ -681,13 +681,14 @@ std::string_view todoIcon(std::string_view state) {
     return "[ ]";
 }
 
-/// todo 状态 → items role (title=强调/completed, normal=进行中, hint=其余)
-std::string_view todoRole(std::string_view state) {
+/// todo 状态 → 文本 tone (title=已完成的强调色 / 空=进行中普通色 / hint=其余减淡)
+/// - tone 取值见界面描述层 schema (`pluginxx::ui`): normal/hint/accent/title/…
+std::string_view todoTone(std::string_view state) {
     if (state == "completed") {
         return "title";
     }
     if (state == "in_progress") {
-        return "normal";
+        return "";
     }
     return "hint";
 }
@@ -725,12 +726,16 @@ static std::string buildTodosSummary(const utilxx_base::Json& plan) {
 
 /// 追加 Todo 列表与 Note 备忘 items (消息装饰/类型级渲染器/Info 段落共用,
 /// 避免多处渲染漂移; 调用方见 [buildPlanItems])
+/// - 组件写法是界面描述层的规范形式 (组件名 PascalCase, 字段 camelCase):
+///   文本行 {"kind":"Text","text":…,"tone":…} —— tone 空 = 普通文本色
 static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::Json& items) {
-    auto textItem = [&](const std::string& text, const std::string& role) {
+    auto textItem = [&](const std::string& text, const std::string& tone) {
         utilxx_base::Json item = utilxx_base::Json::object();
-        item["kind"]           = "text";
-        item["role"]           = role;
+        item["kind"]           = "Text";
         item["text"]           = text;
+        if (!tone.empty()) {
+            item["tone"] = tone;
+        }
         items.push_back(std::move(item));
     };
 
@@ -738,7 +743,7 @@ static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::J
     const bool hasTodos
         = plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty();
     if (hasTodos) {
-        textItem("|- Todo", "normal");
+        textItem("|- Todo", "");
         for (const auto& td : plan["todos"]) {
             if (td.is_object()) {
                 const auto state   = td.value("state", std::string{});
@@ -746,7 +751,7 @@ static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::J
                 if (!content.empty()) {
                     textItem(
                         fmt::format("{} {}", todoIcon(state), content),
-                        std::string{todoRole(state)}
+                        std::string{todoTone(state)}
                     );
                 }
             } else if (td.is_string()) {
@@ -759,7 +764,7 @@ static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::J
     if (plan.contains("notes")) {
         const auto& nv = plan["notes"];
         if (nv.is_string()) {
-            textItem("|- Note", "normal");
+            textItem("|- Note", "");
             textItem(nv.get<std::string>(), "hint");
         }
     }
@@ -767,10 +772,11 @@ static void appendTodoAndNoteItems(const utilxx_base::Json& plan, utilxx_base::J
 
 /// 规划 JSON → 展开体 items 数组 (Graph / Todo / Note 三段式, 参考剥离前的
 /// TUI appendPlanToolBody + Info 侧边栏 Plan 渲染; 见 [plugins.md] §9 items schema)
-/// - `graphAsButton` false: 内联状态图 ({"kind":"diagram","mermaid":...};
+/// - 写法是界面描述层的规范形式 (组件名 PascalCase, 字段 camelCase, 动作是对象)
+/// - `graphAsButton` false: 内联状态图 ({"kind":"Diagram","mermaid":...};
 ///   工具消息展开体, 状态图随消息一起渲染)
 /// - `graphAsButton` true:  "|- " 前缀 + 可点 Graph 按钮 (Info 段落, 点击经
-///   action_id="planning.open_graph" 弹窗; owner_id 由宿主组装)
+///   dispatch 动作 planning.open_graph 弹窗; owner_id 由宿主组装)
 /// - plan 显式带 items 数组时直接透传 (read 模式占位提示等自定义内容)
 static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool graphAsButton) {
     if (plan.contains("items") && plan["items"].is_array()) {
@@ -782,22 +788,29 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
     const auto roadmap = plan.value("roadmap", std::string{});
     if (!roadmap.empty()) {
         if (graphAsButton) {
+            utilxx_base::Json row = utilxx_base::Json::object();
+            row["kind"]            = "Row";
+            row["gap"]             = 8;
+            row["cross"]           = "center";
+            row["children"]        = utilxx_base::Json::array();
+
             utilxx_base::Json prefix = utilxx_base::Json::object();
-            prefix["kind"]           = "text";
-            prefix["role"]           = "normal";
+            prefix["kind"]           = "Text";
             prefix["text"]           = "|- ";
-            items.push_back(std::move(prefix));
+            row["children"].push_back(std::move(prefix));
 
             utilxx_base::Json button = utilxx_base::Json::object();
-            button["kind"]           = "button";
+            button["kind"]           = "Button";
             button["label"]          = "Graph";
-            button["action_id"]      = kActionOpenGraph;
-            button["args"]           = utilxx_base::Json::object();
-            button["role"]           = "normal";
-            items.push_back(std::move(button));
+            button["action"]         = utilxx_base::Json{
+                {"kind", "dispatch"},
+                {"name", std::string{kActionOpenGraph}}
+            };
+            row["children"].push_back(std::move(button));
+            items.push_back(std::move(row));
         } else {
             utilxx_base::Json diagram = utilxx_base::Json::object();
-            diagram["kind"]           = "diagram";
+            diagram["kind"]           = "Diagram";
             diagram["mermaid"]        = roadmap;
             items.push_back(std::move(diagram));
         }
@@ -815,9 +828,9 @@ static utilxx_base::Json makeReadingPlaceholderPlan() {
     utilxx_base::Json plan = utilxx_base::Json::object();
     plan["items"]          = utilxx_base::Json::array();
     utilxx_base::Json hint = utilxx_base::Json::object();
-    hint["kind"]           = "text";
-    hint["role"]           = "hint";
+    hint["kind"]           = "Text";
     hint["text"]           = "Reading saved planning...";
+    hint["tone"]           = "hint";
     plan["items"].push_back(std::move(hint));
     return plan;
 }

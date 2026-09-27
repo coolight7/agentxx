@@ -614,7 +614,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 if (s.id == "example_plugin.info" && s.items.is_array() && !s.items.empty()) {
                     infoFound        = true;
                     const auto first = s.items[0];
-                    XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "text");
+                    XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "Text");
                     XX_TEST_EXPECT_EQ(first.value("text", std::string{}), "Turns: 1");
                 }
             }
@@ -1204,7 +1204,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     );
                     // 文件名仅保留 basename "main.cpp"
                     XX_TEST_EXPECT_TRUE(dump.find("main.cpp") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("progress") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Progress") != std::string::npos);
                 }
             }
 
@@ -1337,20 +1337,29 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
-                    // 验证 items 中的 |- 前缀与 Graph 按钮布局契约
-                    // (双发: 新 action_id + 老 mermaid 兼容字段)
+                    // 验证 "|- " 前缀 + Graph 按钮的布局契约: 一行 (Row) 内一个文本
+                    // 一个按钮, 动作是 dispatch (描述层规范写法)
                     XX_TEST_EXPECT_TRUE(sec.items.is_array());
                     XX_TEST_EXPECT_TRUE(sec.items.size() >= 2);
-                    XX_TEST_EXPECT_EQ(sec.items[0].value("kind", ""), std::string{"text"});
-                    XX_TEST_EXPECT_EQ(sec.items[0].value("text", ""), std::string{"|- "});
-                    XX_TEST_EXPECT_EQ(sec.items[1].value("kind", ""), std::string{"button"});
-                    XX_TEST_EXPECT_EQ(sec.items[1].value("label", ""), std::string{"Graph"});
+                    const auto& graphRow = sec.items[0];
+                    XX_TEST_EXPECT_EQ(graphRow.value("kind", ""), std::string{"Row"});
+                    XX_TEST_EXPECT_TRUE(graphRow.contains("children"));
+                    const auto& graphCells = graphRow["children"];
+                    XX_TEST_EXPECT_TRUE(graphCells.is_array());
+                    XX_TEST_EXPECT_TRUE(graphCells.size() >= 2);
+                    XX_TEST_EXPECT_EQ(graphCells[0].value("kind", ""), std::string{"Text"});
+                    XX_TEST_EXPECT_EQ(graphCells[0].value("text", ""), std::string{"|- "});
+                    XX_TEST_EXPECT_EQ(graphCells[1].value("kind", ""), std::string{"Button"});
+                    XX_TEST_EXPECT_EQ(graphCells[1].value("label", ""), std::string{"Graph"});
                     XX_TEST_EXPECT_EQ(
-                        sec.items[1].value("action_id", ""),
+                        graphCells[1]["action"].value("kind", ""),
+                        std::string{"dispatch"}
+                    );
+                    XX_TEST_EXPECT_EQ(
+                        graphCells[1]["action"].value("name", ""),
                         std::string{"planning.open_graph"}
                     );
-                    // 状态图源码经 action_id 派发时由插件自持, 不再随按钮双发
-                    // (旧宿主兼容字段 mermaid 已移除)
+                    // 状态图源码经 dispatch 动作派发时由插件自持 (不随按钮双发)
                 }
             }
             XX_TEST_EXPECT_TRUE(hasPlanSection);
@@ -1373,7 +1382,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(d.displayName, std::string{"Plan"});
                     XX_TEST_EXPECT_TRUE(d.summary.find("[~] write task") != std::string::npos);
                     std::string dump = d.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("diagram") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Diagram") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("write task") != std::string::npos);
                 }
             }
@@ -1447,7 +1456,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(planWrite.displayName, "Plan");
                 XX_TEST_EXPECT_TRUE(planWrite.summary.find("[~] hist task") != std::string::npos);
                 std::string writeItems = planWrite.items.dump();
-                XX_TEST_EXPECT_TRUE(writeItems.find("diagram") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(writeItems.find("Diagram") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(writeItems.find("[~] hist task") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(writeItems.find("hist note") != std::string::npos);
 
@@ -1590,13 +1599,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(editRes.summary.find("/home/user/b.cpp") != std::string::npos);
             XX_TEST_EXPECT_EQ(editRes.items.size(), 1U);
             if (!editRes.items.empty()) {
-                XX_TEST_EXPECT_EQ(editRes.items[0].value("kind", std::string{}), "diff");
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("kind", std::string{}), "Diff");
                 XX_TEST_EXPECT_EQ(
                     editRes.items[0].value("path", std::string{}),
                     "/home/user/b.cpp"
                 );
-                XX_TEST_EXPECT_EQ(editRes.items[0].value("old_str", std::string{}), "foo");
-                XX_TEST_EXPECT_EQ(editRes.items[0].value("new_str", std::string{}), "bar");
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("oldStr", std::string{}), "foo");
+                XX_TEST_EXPECT_EQ(editRes.items[0].value("newStr", std::string{}), "bar");
             }
 
             // 15.3b edit: 增删行数按逐行 diff 统计 (未变的上下文行不计入)
@@ -2073,24 +2082,26 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         ctl.on("a.open", [&](const utilxx_base::Json&) {
             ++hitsA;
         });
+        // 生成按钮组件 (界面描述层): 动作以 dispatch 形式写在 item.action 上,
+        // 函数指针留在插件侧 map (见 ActionController 说明)
         auto btn = ctl.makeButton(
             "Go",
             [&](const utilxx_base::Json& args) {
                 ++hitsB;
                 XX_TEST_EXPECT_EQ(args.value("k", 0), 1);
-        },
-            "|- ",
+            },
             "accent",
             utilxx_base::Json{{"k", 1}}
         );
         XX_TEST_EXPECT_TRUE(!ctl.empty());
         XX_TEST_EXPECT_EQ(ctl.size(), 2U);
-        XX_TEST_EXPECT_EQ(btn.value("kind", ""), "button");
-        XX_TEST_EXPECT_EQ(btn.value("label", ""), "Go");
-        XX_TEST_EXPECT_EQ(btn.value("prefix", ""), "|- ");
-        XX_TEST_EXPECT_EQ(btn.value("role", ""), "accent");
-        XX_TEST_EXPECT_TRUE(btn.contains("action_id"));
-        XX_TEST_EXPECT_TRUE(btn.contains("args"));
+        XX_TEST_EXPECT_EQ(btn.kind, std::string{"Button"});
+        XX_TEST_EXPECT_EQ(btn.label.fallback, std::string{"Go"});
+        XX_TEST_EXPECT_EQ(btn.tone, std::string{"accent"});
+        XX_TEST_EXPECT_EQ(btn.variant, std::string{"secondary"});
+        XX_TEST_EXPECT_TRUE(btn.action.kind == pluginxx::ui::Action::Kind::Dispatch);
+        XX_TEST_EXPECT_TRUE(btn.action.name.rfind("act_", 0) == 0);
+        XX_TEST_EXPECT_EQ(btn.action.argsJson, std::string{R"({"k":1})"});
         // dispatch 固定 id
         AgentxxUiActionContext ctxA{};
         ctxA.version     = 1;
@@ -2103,8 +2114,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // dispatch 自增 id (args 透传)
         AgentxxUiActionContext ctxB{};
         ctxB.version         = 1;
-        std::string bIdStr   = btn.value("action_id", "");
-        std::string bArgsStr = btn["args"].dump();
+        std::string bIdStr   = btn.action.name;
+        std::string bArgsStr = btn.action.argsJson;
         auto        bIdSv = agentxx::plugin::PluginStringView::from(bIdStr.data(), bIdStr.size());
         auto bArgsSv   = agentxx::plugin::PluginStringView::from(bArgsStr.data(), bArgsStr.size());
         ctxB.action_id = bIdSv;
@@ -2124,21 +2135,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_EQ(hitsB, 1);
     }
 
-    // ---- 22. plugin_ui_items 共享 helper 单测 (headless, 无 FTXUI 布局) ----
+    // ---- 22. 按钮绑定判定与渲染 helper (headless, 无 FTXUI 布局) ----
     {
         using namespace agentxx::client;
         agentxx::plugin::ClientUiRegistry reg;
-        // 无绑定 → button 不可点
-        PluginButtonDesc  desc;
-        utilxx_base::Json btnJson = utilxx_base::Json::parse(
-            R"({"kind":"button","label":"Graph","action_id":"planning.open_graph","args":{},"role":"accent"})"
-        );
-        XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc));
-        XX_TEST_EXPECT_EQ(desc.label, "Graph");
-        XX_TEST_EXPECT_EQ(desc.actionId, "planning.open_graph");
-        XX_TEST_EXPECT_EQ(desc.argsJson, "{}");
-        XX_TEST_EXPECT_TRUE(desc.role == PluginButtonRole::Accent);
-        XX_TEST_EXPECT_FALSE(desc.clickable);
+        // 无绑定 → 不可点
+        XX_TEST_EXPECT_FALSE(hasPluginBinding("agentxx_planning", &reg));
         // 绑定后 → 可点 (fallback "" 覆盖)
         agentxx::plugin::ClientActionBinding b;
         b.plugin   = "agentxx_planning";
@@ -2149,9 +2151,6 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(hasPluginBindingFor("agentxx_planning", "call_x", &reg));
         XX_TEST_EXPECT_FALSE(hasPluginBindingFor("agentxx_planning", "call_x", nullptr));
         XX_TEST_EXPECT_FALSE(hasPluginBinding("other_plugin", &reg));
-        PluginButtonDesc desc2;
-        XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "agentxx_planning", &reg, desc2));
-        XX_TEST_EXPECT_TRUE(desc2.clickable);
         // 精确绑定同样可点; 他插件不可点
         reg.actionBindings.clear();
         b.targetId = "call_x";
@@ -2159,39 +2158,24 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(hasPluginBindingFor("agentxx_planning", "call_x", &reg));
         // owner=other 时精确未命中且无 "" 兜底 → false
         XX_TEST_EXPECT_FALSE(hasPluginBindingFor("agentxx_planning", "other_owner", &reg));
-        PluginButtonDesc desc3;
-        XX_TEST_EXPECT_TRUE(parsePluginButton(btnJson, "other_plugin", &reg, desc3));
-        XX_TEST_EXPECT_FALSE(desc3.clickable);
-        // 旧 action kind 兼容: action_id=id, role=accent
-        utilxx_base::Json actJson
-            = utilxx_base::Json::parse(R"({"kind":"action","id":"rebuild","label":"Rebuild"})");
-        PluginButtonDesc descAct;
-        XX_TEST_EXPECT_TRUE(parsePluginButton(actJson, "agentxx_planning", &reg, descAct));
-        XX_TEST_EXPECT_EQ(descAct.actionId, "rebuild");
-        XX_TEST_EXPECT_TRUE(descAct.role == PluginButtonRole::Accent);
-        // 无 action_id → 静态 (不可点, 但解析成功)
-        utilxx_base::Json staticJson
-            = utilxx_base::Json::parse(R"({"kind":"button","label":"Static"})");
-        PluginButtonDesc descStatic;
-        XX_TEST_EXPECT_TRUE(parsePluginButton(staticJson, "agentxx_planning", &reg, descStatic));
-        XX_TEST_EXPECT_TRUE(descStatic.actionId.empty());
-        XX_TEST_EXPECT_FALSE(descStatic.clickable);
-        // 非 button → false
-        utilxx_base::Json textJson = utilxx_base::Json::parse(R"({"kind":"text","text":"hi"})");
-        PluginButtonDesc  descText;
-        XX_TEST_EXPECT_FALSE(parsePluginButton(textJson, "agentxx_planning", &reg, descText));
-        // role 非法值 → Normal; danger 映射
-        XX_TEST_EXPECT_TRUE(parseButtonRole("normal") == PluginButtonRole::Normal);
-        XX_TEST_EXPECT_TRUE(parseButtonRole("accent") == PluginButtonRole::Accent);
-        XX_TEST_EXPECT_TRUE(parseButtonRole("danger") == PluginButtonRole::Danger);
-        XX_TEST_EXPECT_TRUE(parseButtonRole("weird") == PluginButtonRole::Normal);
+        XX_TEST_EXPECT_FALSE(hasPluginBinding("other_plugin", &reg));
+        // tone → 主题色映射 (组件层与中断项共用)
+        const auto theme = TUITheme::darkTheme();
+        XX_TEST_EXPECT_TRUE(uiRoleColor("hint", theme) == theme.hintColor);
+        XX_TEST_EXPECT_TRUE(uiRoleColor("title", theme) == theme.accentColor);
+        XX_TEST_EXPECT_TRUE(uiRoleColor("error", theme) == theme.errorColor);
+        XX_TEST_EXPECT_TRUE(uiRoleColor("weird", theme) == theme.normalColor);
         // render 不崩溃 (headless 仅构造 Element, 不布局)
         {
-            auto el1 = renderPluginButton(desc2, TUITheme::darkTheme());
+            PluginButtonDesc desc;
+            desc.label     = "Graph";
+            desc.actionId  = "planning.open_graph";
+            desc.argsJson  = "{}";
+            desc.role      = PluginButtonRole::Accent;
+            desc.clickable = true;
+            auto el1       = renderPluginButton(desc, theme);
             XX_TEST_EXPECT_TRUE(static_cast<bool>(el1));
-            auto el2 = renderPluginTextItem("hi", "title", TUITheme::darkTheme());
-            XX_TEST_EXPECT_TRUE(static_cast<bool>(el2));
-            auto el3 = renderPluginDiff("p", "a\n", "b\n", TUITheme::darkTheme(), 120);
+            auto el3 = renderPluginDiff("p", "a\n", "b\n", theme, 120);
             XX_TEST_EXPECT_TRUE(static_cast<bool>(el3));
         }
     }

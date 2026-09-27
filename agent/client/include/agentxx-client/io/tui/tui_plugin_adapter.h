@@ -62,6 +62,14 @@ public:
         };
     }
 
+    /// 客户端界面能力段 (`get_client_state()` 的 `ui` 段): 终端如实上报自己能画的
+    /// 组件/控件、每格相当于多少 u 与默认行距。内容由界面描述层的
+    /// `capabilitiesToJson` 生成, 与渲染前 `adaptItems` 使用的是同一份
+    /// [tuiUiCapabilities] —— 插件读到的能力与本端实际能力不会分叉。
+    std::string uiCapabilitiesJson() const override {
+        return pluginxx::ui::capabilitiesToJson(tuiUiCapabilities()).dump();
+    }
+
     // ---- 状态栏项 ----
     void onStatusItemRegistered(
         const std::string& id,

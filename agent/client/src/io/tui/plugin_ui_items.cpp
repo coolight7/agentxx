@@ -8,16 +8,6 @@ using namespace ftxui;
 namespace agentxx {
 namespace client {
 
-PluginButtonRole parseButtonRole(std::string_view role) {
-    if (role == "accent") {
-        return PluginButtonRole::Accent;
-    }
-    if (role == "danger") {
-        return PluginButtonRole::Danger;
-    }
-    return PluginButtonRole::Normal;
-}
-
 bool hasPluginBinding(std::string_view plugin, const agentxx::plugin::ClientUiRegistry* reg) {
     if (!reg || plugin.empty()) {
         return false;
@@ -51,53 +41,6 @@ bool hasPluginBindingFor(
         }
     }
     return false;
-}
-
-bool parsePluginButton(
-    const utilxx_base::Json&                 it,
-    std::string_view                         plugin,
-    const agentxx::plugin::ClientUiRegistry* reg,
-    PluginButtonDesc&                        out
-) {
-    out = PluginButtonDesc{};
-    if (!it.is_object()) {
-        return false;
-    }
-    const auto  kind = it.value("kind", std::string{"text"});
-    std::string label, prefix, actionId, roleStr = "normal";
-    std::string argsJson = "{}";
-    if (kind == "button") {
-        label    = it.value("label", it.value("text", std::string{"Button"}));
-        prefix   = it.value("prefix", std::string{});
-        actionId = it.value("action_id", std::string{});
-        roleStr  = it.value("role", std::string{"normal"});
-        if (it.contains("args") && it["args"].is_object()) {
-            try {
-                argsJson = it["args"].dump();
-            } catch (...) {
-                argsJson = "{}";
-            }
-        }
-    } else if (kind == "action") {
-        // 遗留死 schema: Panel 旧 {"kind":"action","id":...,"label":...}
-        // 统一到 button + action_id (action_id = id)
-        label    = it.value("label", std::string{"(action)"});
-        actionId = it.value("id", std::string{});
-        roleStr  = "accent";
-    } else {
-        return false;
-    }
-    // label 为空时回退默认 (避免渲染空按钮)
-    if (label.empty()) {
-        label = "Button";
-    }
-    out.label     = std::move(label);
-    out.prefix    = std::move(prefix);
-    out.actionId  = std::move(actionId);
-    out.argsJson  = std::move(argsJson);
-    out.role      = parseButtonRole(roleStr);
-    out.clickable = !out.actionId.empty() && hasPluginBinding(plugin, reg);
-    return true;
 }
 
 Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& theme) {
@@ -146,19 +89,6 @@ ftxui::Color uiRoleColor(std::string_view role, const TUITheme& theme) {
         return theme.assistantColor;
     }
     return theme.normalColor;
-}
-
-Element renderPluginTextItem(
-    const std::string& textStr,
-    const std::string& role,
-    const TUITheme&    theme
-) {
-    Element el = paragraph(textStr);
-    el         = el | color(uiRoleColor(role, theme));
-    if (role == "title") {
-        el = el | bold;
-    }
-    return el;
 }
 
 Element renderPluginDiff(

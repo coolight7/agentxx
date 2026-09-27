@@ -677,10 +677,10 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
         out.summary = std::move(summary);
         if (!path.empty() && (!oldStr.empty() || !newStr.empty())) {
             utilxx_base::Json diffItem;
-            diffItem["kind"]    = "diff";
-            diffItem["path"]    = path;
-            diffItem["old_str"] = std::move(oldStr);
-            diffItem["new_str"] = std::move(newStr);
+            diffItem["kind"]   = "Diff";
+            diffItem["path"]   = path;
+            diffItem["oldStr"] = std::move(oldStr);
+            diffItem["newStr"] = std::move(newStr);
             out.items.push_back(std::move(diffItem));
         }
     });

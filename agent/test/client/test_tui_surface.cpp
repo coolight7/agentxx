@@ -538,9 +538,9 @@ TestResult testTuiSurface() {
     {
         SurfaceFixture fx;
         auto           items = utilxx_base::Json::parse(R"([
-            {"kind": "text", "text": "第一项", "role": "normal"},
-            {"kind": "separator"},
-            {"kind": "badge", "text": "状态"}
+            {"kind": "Text", "text": "第一项"},
+            {"kind": "Divider"},
+            {"kind": "Badge", "text": "状态"}
         ])");
         auto comp = std::make_shared<CustomOverlay>(fx.ctx, "插件弹窗", std::move(items), "test");
         auto r = fx.probe(comp);

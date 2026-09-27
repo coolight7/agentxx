@@ -594,11 +594,12 @@ struct ToolHeaderFixture {
             d.displayName = "Plan";
             d.summary     = "[~] reproduce issue";
             d.items       = utilxx_base::Json::parse(R"([
-                {"kind":"button","label":" Graph ","action_id":"planning.open_graph","args":{},"role":"accent"},
-                {"kind":"text","role":"title","text":"Todos:"},
-                {"kind":"text","role":"normal","text":"[~] do task A"}
+                {"kind":"Button","label":" Graph ","tone":"accent",
+                 "action":{"kind":"dispatch","name":"planning.open_graph"}},
+                {"kind":"Text","type":"title","text":"Todos:"},
+                {"kind":"Text","text":"[~] do task A"}
             ])");
-            // 模拟插件注册的 action 绑定 (使 parsePluginButton 判定为 clickable)
+            // 模拟插件注册的 action 绑定 (按钮因此可点)
             agentxx::plugin::ClientActionBinding binding;
             binding.targetId = "";
             binding.plugin   = "agentxx_planning";
@@ -624,10 +625,10 @@ struct ToolHeaderFixture {
             d.displayName = "Index";
             d.summary     = "indexed 2 files";
             d.items       = utilxx_base::Json::parse(R"([
-                {"kind":"table","header":true,
-                 "columns":[{"title":"Path","w":"flex"},{"title":"Lines","align":"right","w":6}],
+                {"kind":"Table","header":true,
+                 "columns":[{"title":"Path"},{"title":"Lines","align":"end","width":48}],
                  "rows":[["main.cpp","120"],["io.cpp","42"]]},
-                {"kind":"kv","items":[{"k":"Nodes","v":"171"}]}
+                {"kind":"KV","pairs":[{"k":"Nodes","v":"171"}]}
             ])");
             st.pluginRegistry = std::move(reg);
         });

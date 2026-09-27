@@ -553,7 +553,7 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
         }
         if (ctx->info_section && ctx->ui && ctx->ui->update_info_section) {
             const std::string json = fmt::format(
-                R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"text","role":"hint","text":"Example Info section is live"}}]}})",
+                R"({{"items":[{{"kind":"Text","text":{}}},{{"kind":"Text","tone":"hint","text":"Example Info section is live"}}]}})",
                 clientJsonEscape(*ctx, fmt::format("Turns: {}", ctx->turn_count))
             );
             auto jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
@@ -588,7 +588,7 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
             line = fmt::format("{}: {}", line, data.data);
         }
         const std::string json = fmt::format(
-            R"({{"items":[{{"kind":"text","text":{}}},{{"kind":"badge","text":"updated"}}]}})",
+            R"({{"items":[{{"kind":"Text","text":{}}},{{"kind":"Badge","text":"updated"}}]}})",
             clientJsonEscape(*ctx, line)
         );
         if (ctx->ui && ctx->ui->update_panel) {

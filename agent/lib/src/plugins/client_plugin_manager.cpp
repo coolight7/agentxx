@@ -357,6 +357,25 @@ void ClientPluginManager::onInstanceUnloaded(ClientPluginInstance& inst) {
 
 void ClientPluginManager::setUiAdapter(std::shared_ptr<PluginUiAdapter> adapter) {
     uiAdapter_ = std::move(adapter);
+    // 界面能力段在装配时读取一次 (适配器装配后不可变, 见
+    // [PluginUiAdapter::uiCapabilitiesJson]) —— get_client_state 是插件高频调用,
+    // 每次重新解析 JSON 没有必要; 非法内容只记一条日志并按"未发布"处理
+    uiCapabilitiesJson_ = utilxx_base::Json::object();
+    if (uiAdapter_) {
+        const std::string text = uiAdapter_->uiCapabilitiesJson();
+        if (!text.empty()) {
+            try {
+                auto parsed = utilxx_base::Json::parse(text);
+                if (parsed.is_object()) {
+                    uiCapabilitiesJson_ = std::move(parsed);
+                } else {
+                    XX_LOGW("[client_plugin] ui capabilities is not a JSON object; ignored");
+                }
+            } catch (const std::exception& e) {
+                XX_LOGW("[client_plugin] invalid ui capabilities JSON: {}", e.what());
+            }
+        }
+    }
 }
 
 void ClientPluginManager::setSessionId(std::string sessionId) {
@@ -1268,6 +1287,13 @@ std::string ClientPluginManager::clientStateJson() const {
         }
         return arr;
     }();
+    // 客户端界面能力段 (界面描述层, 见
+    // [PluginUiAdapter::uiCapabilitiesJson]): 内容由描述层库生成, 客户端如实上报
+    // "能画哪些组件"。未发布的客户端不出现该字段, 插件按"描述层全支持"处理
+    // (内容仍由客户端 adapt 降级)。
+    if (uiCapabilitiesJson_.is_object() && !uiCapabilitiesJson_.empty()) {
+        j["ui"] = uiCapabilitiesJson_;
+    }
     // 服务端已加载的 agent 侧插件结构化列表 [{name,version,interfaces},...]
     // (空数组 = 未知, 见成员注释)
     j["agentPlugins"] = [&] {

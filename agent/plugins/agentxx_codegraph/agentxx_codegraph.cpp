@@ -956,11 +956,14 @@ struct ClientCtx {
 
 static std::string buildInfoItemsJson(ClientCtx& c) {
     utilxx_base::Json items    = utilxx_base::Json::array();
-    auto              pushText = [&](const std::string& text, const std::string& role = "normal") {
+    // 文本行的规范写法: 组件名 PascalCase + 文本色用 tone (hint = 减淡)
+    auto              pushText = [&](const std::string& text, const std::string& tone = "") {
         utilxx_base::Json it;
-        it["kind"] = "text";
-        it["role"] = role;
+        it["kind"] = "Text";
         it["text"] = text;
+        if (!tone.empty()) {
+            it["tone"] = tone;
+        }
         items.push_back(std::move(it));
     };
     if (!c.loaded) {
@@ -971,15 +974,14 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
             if (c.total > 0) {
                 const double pct = static_cast<double>(c.processed) / static_cast<double>(c.total);
                 pushText(
-                    fmt::format("|- indexing {:.0f}% ({}/{})", pct * 100.0, c.processed, c.total),
-                    "normal"
+                    fmt::format("|- indexing {:.0f}% ({}/{})", pct * 100.0, c.processed, c.total)
                 );
                 utilxx_base::Json prog;
-                prog["kind"]  = "progress";
+                prog["kind"]  = "Progress";
                 prog["value"] = pct;
                 items.push_back(std::move(prog));
             } else {
-                pushText(fmt::format("|- Indexing {} files", c.processed), "normal");
+                pushText(fmt::format("|- Indexing {} files", c.processed));
             }
             if (!c.current_file.empty()) {
                 std::string fname = c.current_file;
@@ -990,7 +992,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
                 pushText(fmt::format("|  {}", fname), "hint");
             }
         } else if (c.has_progress && c.total > 0) {
-            pushText(fmt::format("|- available \u00b7 {}", c.total), "normal");
+            pushText(fmt::format("|- available \u00b7 {}", c.total));
         } else {
             pushText("|- wait for index", "hint");
         }

@@ -322,14 +322,17 @@ static UsageStat parseUsage(const std::string& raw) {
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
     utilxx_base::Json items    = utilxx_base::Json::array();
-    auto              pushText = [&](const std::string& text, const std::string& role = "normal") {
+    // 文本行的规范写法: 组件名 PascalCase + 文本色用 tone (空 = 普通文本色)
+    auto              pushText = [&](const std::string& text, const std::string& tone = "") {
         utilxx_base::Json it;
-        it["kind"] = "text";
-        it["role"] = role;
+        it["kind"] = "Text";
         it["text"] = text;
+        if (!tone.empty()) {
+            it["tone"] = tone;
+        }
         items.push_back(std::move(it));
     };
-    pushText(fmt::format("|- CPU {:.0f}% · {}x", st.cpu, st.cpuCores), "normal");
+    pushText(fmt::format("|- CPU {:.0f}% · {}x", st.cpu, st.cpuCores));
     std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
     if (st.memTotalMb > 0) {
         const auto mbToBytes = [](int64_t mb) {
@@ -342,11 +345,11 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
             utilxx_base::formatSize(mbToBytes(st.memTotalMb), 1024, false)
         );
     }
-    pushText(ram, "normal");
+    pushText(ram);
     if (st.gpuCount == 1) {
-        pushText(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct), "normal");
+        pushText(fmt::format("|- GPU {:.0f}%", st.gpuPeakPct));
     } else if (st.gpuCount > 1) {
-        pushText(fmt::format("|- GPU {:.0f}% · {}x", st.gpuPeakPct, st.gpuCount), "normal");
+        pushText(fmt::format("|- GPU {:.0f}% · {}x", st.gpuPeakPct, st.gpuCount));
     }
     utilxx_base::Json out;
     out["items"] = std::move(items);

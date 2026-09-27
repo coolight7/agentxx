@@ -136,8 +136,10 @@ std::vector<pluginxx::ui::Item>
 }
 
 std::string InterruptView::firstControlId(const std::vector<pluginxx::ui::Item>& items) {
+    // 注意: 这里比的是**组件项**的 kind ("Control"), 域内块词汇的 "control" 只用于
+    // InterruptUiBlock (见 formItems)
     for (const auto& item : items) {
-        if (item.kind == "control" && !item.id.empty()) {
+        if (item.kind == "Control" && !item.id.empty()) {
             return item.id;
         }
     }
@@ -315,7 +317,7 @@ void InterruptView::layoutForm(
         // 按块描述直接使用 `agentxx.ui.item` schema), 以及 custom 块派发;
         // 未识别的块降级为 fallback 文本 (无 fallback 则跳过, 向前兼容)。
         if (auto item = itemFromInterruptBlock(block)) {
-            if (item->kind != "control" && item->kind != "submit") {
+            if (item->kind != "Control") {
                 renderItem(*item, rc, out);
                 continue;
             }
@@ -552,9 +554,21 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
             }
 
             // 控件命中: 语义 (选中/翻转/步进/聚焦) 由共享表单层处理
-            auto&             state  = uiStateFor(msg);
-            const auto        items  = plainItems(formItems(ui));
-            const UiFormAction action = handleFormControlHit(items, state, h.controlId, h.sub);
+            auto&      state = uiStateFor(msg);
+            const auto items = plainItems(formItems(ui));
+            // "点击候选项即提交整份表单"属中断层的域内约定 (描述层只表达"值变化即派发"):
+            // 共享表单层按上下文回调询问该控件是否点击即提交
+            UiRenderCtx pickCtx;
+            pickCtx.commitOnPick = [&ui](const std::string& id) {
+                for (const auto& b : ui.blocks) {
+                    if (b.kind == "control" && controlIdOf(b) == id) {
+                        return b.commitOnPick;
+                    }
+                }
+                return false;
+            };
+            const UiFormAction action
+                = handleFormControlHit(items, state, h.controlId, h.sub, pickCtx);
             if (action == UiFormAction::None) {
                 return;
             }
@@ -631,7 +645,7 @@ bool InterruptView::handleKey(Event event) {
         const bool focusValid
             = !state.focusedId.empty()
               && std::any_of(items.begin(), items.end(), [&](const pluginxx::ui::Item& it) {
-                     return it.kind == "control" && it.id == state.focusedId;
+                     return it.kind == "Control" && it.id == state.focusedId;
                  });
         if (!focusValid) {
             state.focusedId = firstControlId(items);

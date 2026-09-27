@@ -2,17 +2,15 @@
 
 /// 插件 UI items 共享渲染 helper (TUI 零特化的收敛点)
 ///
-/// 背景: sidebar / panel / message decor 三处曾各写一份 button 解析与样式,
-/// 导致 planning 语义 (mermaid 即弹窗) 三处漂移。本文件是唯一的 button
-/// 解析/渲染实现, 三处强制复用, 禁止各自独立实现。
+/// 背景: sidebar / panel / message decor 三处曾各写一份 button 样式,
+/// 导致一处改动别处漂移。本文件是唯一的按钮样式实现, 三处强制复用,
+/// 禁止各自独立实现。
 ///
-/// 内容:
-/// - PluginButtonDesc: button 项解析结果 (label/prefix/action_id/args/role)
-/// - parsePluginButton: 从 items 数组元素解析 button (兼容旧 action kind)
+/// 组件**描述**的解析与渲染在 [ui_components.h] (界面描述层 `pluginxx::ui`) ——
+/// 本文件只保留渲染样式与绑定判定这类共享小件:
+/// - PluginButtonDesc: 按钮样式参数 (label/动作/样式/配色)
 /// - renderPluginButton: 按 role 配色渲染按钮 Element
-/// - renderPluginTextItem: text 项按 role 配色渲染 (title/normal/hint)
 /// - hasPluginBinding: 快照中是否存在该 plugin 的绑定 (精确或 "" 兜底)
-/// - estimatePluginButtonLines: 高度估算 (button 恒 1 行)
 /// - renderPluginDiff: diff 内容渲染 (message decor 与 DiffOverlay 共用;
 ///   复用 computeLineDiff + side-by-side/统一双样式, 避免双份实现)
 #include "agentxx-client/io/tui/tui_theme.h"
@@ -35,10 +33,9 @@ enum class PluginButtonRole : uint8_t {
     Danger = 2,
 };
 
-/// button 项解析结果
+/// 按钮渲染参数 (由组件项 `Button` 的 action/variant/tone 字段换算而来)
 struct PluginButtonDesc {
     std::string      label;    ///< 按钮文字 (已 strip; 渲染时自动左右补空格)
-    std::string      prefix;   ///< 同行前导 (如 "|- "; 空 = 无前缀)
     std::string      actionId; ///< 可点动作 id (空 = 纯静态)
     std::string      argsJson; ///< 点击透传参数 dump (无参 = "{}")
     PluginButtonRole role = PluginButtonRole::Normal;
@@ -46,28 +43,13 @@ struct PluginButtonDesc {
     bool clickable = false;
 };
 
-/// 从 items 元素解析 button (it 须为 object; 非 button 返回 false)
-/// - 兼容旧 Panel `{"kind":"action","id":...,"label":...}`: 视为 action_id=id
-/// - args 缺失/非 object → "{}"; role 非法值 → Normal
-/// - clickable 由 hasPluginBinding(plugin, reg) 决定 (reg 可空 → false)
-bool parsePluginButton(
-    const utilxx_base::Json&                 it,
-    std::string_view                         plugin,
-    const agentxx::plugin::ClientUiRegistry* reg,
-    PluginButtonDesc&                        out
-);
-
 /// 按 role 配色渲染按钮 (label 自动左右各补一空格)
 ftxui::Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& theme);
 
-/// text 项按 role 配色渲染 (title=高亮强调/normal=普通/hint=减淡)
-ftxui::Element
-    renderPluginTextItem(const std::string& text, const std::string& role, const TUITheme& theme);
-
-/// UI 项文本颜色 (role → 主题色; 插件 items 与中断 items 共用同一映射)
+/// UI 项文本颜色 (tone → 主题色; 插件 items 与中断 items 共用同一映射)
 /// - title/accent → accentColor; hint → hintColor; error → errorColor;
 ///   thinking → thinkingColor; tool → toolColor; normal/未知 → normalColor
-ftxui::Color uiRoleColor(std::string_view role, const TUITheme& theme);
+ftxui::Color uiRoleColor(std::string_view tone, const TUITheme& theme);
 
 /// diff 内容渲染 (message decor 与 DiffOverlay 共用)
 /// - path 非空时首行展示 "  file: {path}"
@@ -89,9 +71,6 @@ bool hasPluginBindingFor(
     std::string_view                         ownerId,
     const agentxx::plugin::ClientUiRegistry* reg
 );
-
-/// role 字符串 → 枚举 (非法值 → Normal)
-PluginButtonRole parseButtonRole(std::string_view role);
 
 } // namespace client
 } // namespace agentxx

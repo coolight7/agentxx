@@ -487,12 +487,14 @@ void test_plain_text_degrade() {
     const auto text = interruptUiPlainText(ui, 0);
     XX_TEST_EXPECT_TRUE(text.find("first line") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("# Title") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("file: a.txt") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("-old") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("+new") != std::string::npos);
+    // diff: 路径行 + "- "/"+ " 前缀的增删行 (格式由描述层的纯文本降级决定)
+    XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("- old") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("+ new") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("---") != std::string::npos);
-    // 控件: 标签 + 候选 + 形态
-    XX_TEST_EXPECT_TRUE(text.find("Mode: fast / slow (select)") != std::string::npos);
+    // 控件: 标签 + 当前取值 (候选项清单不在纯文本里展开)
+    XX_TEST_EXPECT_TRUE(text.find("Mode") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("fast") != std::string::npos);
     // 自定义块: 打印 fallback
     XX_TEST_EXPECT_TRUE(text.find("fallback text") != std::string::npos);
     // submit 行不输出
@@ -515,34 +517,35 @@ void test_plain_text_extended_blocks() {
     using namespace agentxx::middleware;
 
     InterruptUi ui;
+    // 扩展组件块 = 描述层的组件描述 (规范写法: 组件名 PascalCase、字段 camelCase)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "table"},
+        {"kind", "Table"},
         {"header", true},
-        {"columns", Json::array({Json{{"title", "Path"}, {"w", "flex"}}, Json{{"title", "Scope"}}})},
+        {"columns", Json::array({Json{{"title", "Path"}}, Json{{"title", "Scope"}, {"align", "end"}}})},
         {"rows", Json::array({Json::array({"a.txt", "write"}), Json::array({"b.txt", "read"})})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "kv"},
-        {"items", Json::array({Json{{"k", "Model"}, {"v", "gpt-x"}}})},
+        {"kind", "KV"},
+        {"pairs", Json::array({Json{{"k", "Model"}, {"v", "gpt-x"}}})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "tree"},
+        {"kind", "Tree"},
         {"nodes", Json::array({Json{{"label", "src"}, {"children", Json::array({Json{{"label", "main.cpp"}}})}}})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "meter"},
+        {"kind", "Progress"},
         {"value", 72},
         {"total", 100},
-        {"width", 4},
         {"label", "CPU"},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "sparkline"},
+        {"kind", "Sparkline"},
         {"data", Json::array({1, 5, 3})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "row"},
-        {"items", Json::array({Json{{"kind", "text"}, {"text", "L"}}, Json{{"kind", "text"}, {"text", "R"}}})},
+        {"kind", "Row"},
+        {"children", Json::array({Json{{"kind", "Text"}, {"text", "L"}},
+                                  Json{{"kind", "Text"}, {"text", "R"}}})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
         {"kind", "future_widget"},
@@ -552,10 +555,13 @@ void test_plain_text_extended_blocks() {
     const auto text = interruptUiPlainText(ui, 80);
     XX_TEST_EXPECT_TRUE(text.find("Path") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("Model : gpt-x") != std::string::npos);
+    // 键值: 键列按最长键补齐, 分隔符默认 " : " (格式由描述层的纯文本降级决定)
+    XX_TEST_EXPECT_TRUE(text.find("Model") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("gpt-x") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("main.cpp") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("[###-] 72%") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("72%") != std::string::npos);
+    // 趋势图用方块字符表示高低
     XX_TEST_EXPECT_TRUE(text.find("▁") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("L | R") != std::string::npos);
     // 未知 kind: 输出 fallback (不静默丢内容)
@@ -642,7 +648,9 @@ void test_component_bridge() {
 
     auto blocks = preset::blocksOf({pluginxx::ui::build::title("标题"), table, progress});
     XX_TEST_EXPECT_EQ(blocks.size(), size_t{3});
-    XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"Text"});
+    // 域的块词汇: 文本块是 "text" (见 blockOf); 其余组件按原始 JSON 带走
+    XX_TEST_EXPECT_EQ(blocks[0].kind, std::string{"text"});
+    XX_TEST_EXPECT_EQ(blocks[0].text, std::string{"标题"});
     XX_TEST_EXPECT_EQ(blocks[1].kind, std::string{"Table"});
     XX_TEST_EXPECT_EQ(blocks[2].kind, std::string{"Progress"});
 
@@ -666,8 +674,14 @@ void test_component_bridge() {
     XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
 
     // 4) 文本块缩进: 描述层没有"缩进"字段, 用 Padding 容器表达
+    //    - blockOf 会把"纯左缩进"的 Padding 解包回域的 indent (域字段不丢)
+    //    - itemOf 再把 indent 还原成 Padding
     const auto indented = preset::textBlock("缩进行", "accent", 2, false, true);
-    XX_TEST_EXPECT_EQ(indented.kind, std::string{"Padding"});
+    XX_TEST_EXPECT_EQ(indented.kind, std::string{"text"});
+    XX_TEST_EXPECT_EQ(indented.text, std::string{"缩进行"});
+    XX_TEST_EXPECT_EQ(indented.color, std::string{"accent"});
+    XX_TEST_EXPECT_EQ(indented.indent, 2);
+    XX_TEST_EXPECT_TRUE(indented.bold);
     const auto indentedItem = itemOf(indented);
     XX_TEST_EXPECT_TRUE(indentedItem.has_value());
     if (indentedItem) {
@@ -675,6 +689,7 @@ void test_component_bridge() {
         XX_TEST_EXPECT_EQ(indentedItem->children.size(), size_t{1});
         XX_TEST_EXPECT_EQ(indentedItem->children[0].kind, std::string{"Text"});
         XX_TEST_EXPECT_EQ(indentedItem->children[0].text.fallback, std::string{"缩进行"});
+        XX_TEST_EXPECT_EQ(indentedItem->children[0].tone, std::string{"accent"});
         XX_TEST_EXPECT_TRUE(indentedItem->padding.left > 0.0);
     }
 

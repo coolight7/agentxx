@@ -1278,13 +1278,16 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         Element           el    = buttonElement(label, item.tone, item.variant, theme, item.disabled);
         const std::string actionId = actionIdOf(item.action);
         std::vector<UiHitRegion> regions;
-        const bool actionable
-            = !actionId.empty() && !item.disabled
-              && (ctx.registry == nullptr || hasPluginBinding(ctx.plugin, ctx.registry));
+        // 域内的表单提交/取消动作由宿主处理 (插件不需要绑定动作处理器), 其余动作要求
+        // 快照里存在该插件的绑定; 未提供表单状态时提交行只是展示, 不登记命中区域
+        const bool formSubmit = isFormSubmitAction(actionId);
+        const bool actionable = !actionId.empty() && !item.disabled
+                                && (formSubmit ? (ctx.form != nullptr)
+                                               : (ctx.registry == nullptr
+                                                  || hasPluginBinding(ctx.plugin, ctx.registry)));
         if (actionable) {
             UiHitRegion region;
-            region.kind    = isFormSubmitAction(actionId) ? UiHitRegionKind::FormSubmit
-                                                          : UiHitRegionKind::Action;
+            region.kind    = formSubmit ? UiHitRegionKind::FormSubmit : UiHitRegionKind::Action;
             region.x       = 0;
             region.y       = 0;
             region.w       = buttonWidth(label.empty() ? std::string_view{"Button"} : label);

@@ -360,7 +360,7 @@ void test_extended_component_blocks() {
     pluginxx::ui::Item ui = pluginxx::ui::build::row({pluginxx::ui::build::text("CPU"), spark});
 
     agentxx::middleware::InterruptUi desc;
-    desc.blocks = agentxx::middleware::preset::blocksOf({std::move(ui)});
+    desc.blocks = agentxx::middleware::preset::blocksOf({table, tree, std::move(ui)});
     desc.blocks.push_back(agentxx::middleware::preset::checkboxControl("remember", "记住"));
     desc.blocks.push_back(agentxx::middleware::preset::submitBlock());
 
@@ -383,7 +383,7 @@ void test_extended_component_blocks() {
     // 描述 JSON 往返: 扩展块按 raw 保留 (表格列/行不丢)
     const auto round = agentxx::middleware::InterruptUi::fromJson(desc.toJson());
     XX_TEST_EXPECT_EQ(round.blocks.size(), size_t{5});
-    XX_TEST_EXPECT_EQ(round.blocks[0].kind, std::string{"table"});
+    XX_TEST_EXPECT_EQ(round.blocks[0].kind, std::string{"Table"});
     XX_TEST_EXPECT_TRUE(round.blocks[0].raw.contains("columns"));
     XX_TEST_EXPECT_TRUE(round.blocks[1].raw.contains("nodes"));
 }
@@ -482,7 +482,7 @@ void test_gap_unknown_and_custom_blocks() {
     custom.fallback  = "custom fallback text";
     ui.blocks.push_back(custom);
 
-    // 无 fallback: 输出组件名占位
+    // 无 fallback 且无内容: 跳过 (不输出占位/占位名; 向前兼容)
     agentxx::middleware::InterruptUiBlock custom2;
     custom2.kind      = "custom";
     custom2.component = "another_component";
@@ -494,7 +494,7 @@ void test_gap_unknown_and_custom_blocks() {
     XX_TEST_EXPECT_TRUE(rendered.find("second") != std::string::npos);
     XX_TEST_EXPECT_TRUE(rendered.find("SHOULD_NOT_RENDER") == std::string::npos);
     XX_TEST_EXPECT_TRUE(rendered.find("custom fallback text") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(rendered.find("another_component") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(rendered.find("another_component") == std::string::npos);
     XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), f.renderedRows());
 }
 

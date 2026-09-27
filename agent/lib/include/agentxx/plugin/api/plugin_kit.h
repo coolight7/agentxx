@@ -2155,11 +2155,16 @@ inline int32_t registerToolTemplate(
 
 /* ==================== Client 侧通用交互: ActionController (header-only) ====================
  *
- * 插件侧 Lambda 风格的动作绑定设施 (实例内存 map<action_id, handler>):
- * - JSON 只传 action_id 字符串 (函数指针不可序列化, 见三铁律), 映射留在插件侧内存
- * - 只在 IO 线程 on/dispatch (与事件 handler 同约定), 无需锁
- * - dispatch 为 C 回调 (填入 bind_action_handler), 空指针守卫 + 参数解析失败给 {}
- *   + handler 异常吞掉记日志, 不外泄 C 边界
+/// 插件侧 Lambda 风格的动作绑定设施 (实例内存 map<动作 id, handler>):
+/// - 描述里只传动作名 (函数指针不可序列化, 见三铁律), 映射留在插件侧内存
+/// - 只在 IO 线程 on/dispatch (与事件 handler 同约定), 无需锁
+/// - dispatch 为 C 回调 (填入 bind_action_handler), 空指针守卫 + 参数解析失败给 {}
+///   + handler 异常吞掉记日志, 不外泄 C 边界
+///
+/// 按钮是**界面描述层**的组件项 (`pluginxx::ui::Item`, 见 [makeButton]): 动作以
+/// dispatch 形式写进 `item.action`, 客户端按动作通道派发回本控制器的 handler。
+/// 所有 kit 组件都在 `agentxx::ui::kit` 命名空间下(见文件末尾的命名空间别名与
+/// 扩展 kit 头 `agentxx/plugin/api/agentxx_ui_kit.g.h`)。
  */
 
 namespace kit {
@@ -2179,28 +2184,37 @@ public:
         handlers_.erase(actionId);
     }
 
-    /// 生成 button JSON (action_id 自增 act_N; args 缺省 {}; role 缺省 normal)
-    /// - onClick 为空时仍生成可点按钮 (固定 id 由调用方另行 on() 绑定, 如 planning 常量)
-    utilxx_base::Json makeButton(
-        std::string       label,
-        Handler           onClick = nullptr,
-        std::string       prefix  = "",
-        std::string       role    = "normal",
-        utilxx_base::Json args    = utilxx_base::Json::object()
+    /// 生成按钮组件 (动作 id 自增 act_N; 处理函数留在插件侧 map, 见类头说明)
+    /// - `onClick` 为空时仍生成可点按钮 (固定动作名由调用方另行 on() 绑定, 例如
+    ///   planning 的常量动作名)
+    /// - `tone`: 语义色 (空 = 按钮默认色; "accent" / "error" / "hint" 等)
+    /// - `variant`: 按钮样式 ("primary" / "secondary" / "ghost" / "link"; 空 = secondary)
+    /// - `args`: 派发时回传给 handler 的参数 (客户端在动作参数里原样带上)
+    pluginxx::ui::Item makeButton(
+        std::string              label,
+        Handler                  onClick = nullptr,
+        std::string              tone    = {},
+        utilxx_base::Json        args    = utilxx_base::Json::object(),
+        std::string              variant = {}
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
         if (onClick) {
             handlers_[id] = std::move(onClick);
         }
-        utilxx_base::Json btn = utilxx_base::Json::object();
-        btn["kind"]           = "button";
-        btn["label"]          = std::move(label);
-        if (!prefix.empty()) {
-            btn["prefix"] = std::move(prefix);
+        pluginxx::ui::Action action;
+        action.kind = pluginxx::ui::Action::Kind::Dispatch;
+        action.name = id;
+        if (args.is_object() && !args.empty()) {
+            action.argsJson = args.dump();
         }
-        btn["action_id"] = id;
-        btn["args"]      = std::move(args);
-        btn["role"]      = std::move(role);
+        pluginxx::ui::Item btn = pluginxx::ui::build::button(
+            std::move(label),
+            std::move(action),
+            variant.empty() ? std::string_view{"secondary"} : std::string_view{variant}
+        );
+        if (!tone.empty()) {
+            btn.tone = std::move(tone);
+        }
         return btn;
     }
 
@@ -2621,13 +2635,19 @@ public:
     /// ```
     /// 老宿主没有该段时按"描述层全支持"处理 —— 内容仍由客户端按自身能力降级
     /// (见描述层的 `adapt`), 不会画错。
-    pluginxx::ui::Capabilities uiCapabilities() const {
-        const auto state = clientStateJson();
-        const auto it    = state.find("ui");
-        if (!state.is_object() || it == state.end() || !it->is_object()) {
-            return pluginxx::ui::fullCapabilities();
+    ///
+    /// 解析结果按实例缓存 (客户端能力在生命周期内不变), 因此在渲染/拼装路径里反复
+    /// 调用不会有 JSON 解析开销。**仅 client io 线程可调** (读 `get_client_state`)。
+    const pluginxx::ui::Capabilities& uiCapabilities() const {
+        if (!uiCapsCached_) {
+            uiCapsCached_      = true;
+            const auto state   = clientStateJson();
+            const auto it      = state.find("ui");
+            uiCapsCache_       = (state.is_object() && it != state.end() && it->is_object())
+                                   ? pluginxx::ui::capabilitiesFromJson(*it)
+                                   : pluginxx::ui::fullCapabilities();
         }
-        return pluginxx::ui::capabilitiesFromJson(*it);
+        return uiCapsCache_;
     }
 
     /// 客户端是否支持某个组件 (按能力段判断; 未上报时按支持处理)
@@ -2897,6 +2917,9 @@ private:
 
     std::shared_ptr<std::atomic<bool>> lifeToken_ = std::make_shared<std::atomic<bool>>(true);
     std::vector<std::unique_ptr<void, void (*)(void*)>> shims_;
+    /// 界面能力段解析结果 (能力在客户端生命周期内不变; 见 [uiCapabilities])
+    mutable bool                       uiCapsCached_ = false;
+    mutable pluginxx::ui::Capabilities uiCapsCache_{};
 };
 
 /// client 侧 create 阶段异常上报 (client 日志接口表为独立类型)
