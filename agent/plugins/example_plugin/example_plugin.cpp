@@ -552,11 +552,16 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
             ctx->ui->update_status_item(ctx->host, ctx->status_item, &jsonSv);
         }
         if (ctx->info_section && ctx->ui && ctx->ui->update_info_section) {
-            const std::string json = fmt::format(
-                R"({{"items":[{{"kind":"Text","text":{}}},{{"kind":"Text","tone":"hint","text":"Example Info section is live"}}]}})",
-                clientJsonEscape(*ctx, fmt::format("Turns: {}", ctx->turn_count))
-            );
-            auto jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
+            // 组件项用描述层与 kit 组装 (不必手写 JSON 字符串与转义)
+            std::vector<pluginxx::ui::Item> items;
+            utilxx_base::Json               turnsText;
+            turnsText["text"] = fmt::format("Turns: {}", ctx->turn_count);
+            items.push_back(agentxx::ui::kit::text(turnsText));
+            items.push_back(agentxx::ui::kit::hint({{"text", "Example Info section is live"}}));
+            utilxx_base::Json payload;
+            payload["items"]        = pluginxx::ui::dumpBlocks(items);
+            const std::string json  = payload.dump();
+            auto              jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
             ctx->ui->update_info_section(ctx->host, ctx->info_section, &jsonSv);
         }
     });
@@ -587,12 +592,17 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
         if (data.data && data.size > 0) {
             line = fmt::format("{}: {}", line, data.data);
         }
-        const std::string json = fmt::format(
-            R"({{"items":[{{"kind":"Text","text":{}}},{{"kind":"Badge","text":"updated"}}]}})",
-            clientJsonEscape(*ctx, line)
-        );
+        // 组件项用描述层与 kit 组装 (不必手写 JSON 字符串与转义)
+        std::vector<pluginxx::ui::Item> items;
+        utilxx_base::Json               lineText;
+        lineText["text"] = line;
+        items.push_back(agentxx::ui::kit::text(lineText));
+        items.push_back(agentxx::ui::kit::badge({{"text", "updated"}}));
         if (ctx->ui && ctx->ui->update_panel) {
-            auto jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
+            utilxx_base::Json payload;
+            payload["items"]         = pluginxx::ui::dumpBlocks(items);
+            const std::string json   = payload.dump();
+            auto              jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
             ctx->ui->update_panel(ctx->host, ctx->panel, &jsonSv);
         }
     });

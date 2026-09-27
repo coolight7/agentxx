@@ -955,16 +955,15 @@ struct ClientCtx {
 };
 
 static std::string buildInfoItemsJson(ClientCtx& c) {
-    utilxx_base::Json items    = utilxx_base::Json::array();
-    // 文本行的规范写法: 组件名 PascalCase + 文本色用 tone (hint = 减淡)
-    auto              pushText = [&](const std::string& text, const std::string& tone = "") {
-        utilxx_base::Json it;
-        it["kind"] = "Text";
-        it["text"] = text;
+    // 组件项经描述层与扩展 kit 组装 (文本行用 kit::text, 进度用构建器)
+    std::vector<pluginxx::ui::Item> items;
+    auto pushText = [&](const std::string& text, std::string tone = {}) {
+        utilxx_base::Json params;
+        params["text"] = text;
         if (!tone.empty()) {
-            it["tone"] = tone;
+            params["tone"] = std::move(tone);
         }
-        items.push_back(std::move(it));
+        items.push_back(agentxx::ui::kit::text(params));
     };
     if (!c.loaded) {
         pushText("|- wait for load", "hint");
@@ -976,10 +975,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
                 pushText(
                     fmt::format("|- indexing {:.0f}% ({}/{})", pct * 100.0, c.processed, c.total)
                 );
-                utilxx_base::Json prog;
-                prog["kind"]  = "Progress";
-                prog["value"] = pct;
-                items.push_back(std::move(prog));
+                items.push_back(pluginxx::ui::build::progress(pct * 100.0, 100.0));
             } else {
                 pushText(fmt::format("|- Indexing {} files", c.processed));
             }
@@ -998,7 +994,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
         }
     }
     utilxx_base::Json out;
-    out["items"] = std::move(items);
+    out["items"] = pluginxx::ui::dumpBlocks(items);
     return out.dump();
 }
 

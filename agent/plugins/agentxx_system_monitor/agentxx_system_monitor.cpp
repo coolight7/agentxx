@@ -321,16 +321,16 @@ static UsageStat parseUsage(const std::string& raw) {
 }
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
-    utilxx_base::Json items    = utilxx_base::Json::array();
-    // 文本行的规范写法: 组件名 PascalCase + 文本色用 tone (空 = 普通文本色)
-    auto              pushText = [&](const std::string& text, const std::string& tone = "") {
-        utilxx_base::Json it;
-        it["kind"] = "Text";
-        it["text"] = text;
+    // 组件项经描述层与扩展 kit 组装 (同一份描述, 终端与将来的 GUI 客户端共用;
+    // 每行是一个 Text, 语义色用 tone)
+    std::vector<pluginxx::ui::Item> items;
+    auto pushText = [&](const std::string& text, std::string tone = {}) {
+        utilxx_base::Json params;
+        params["text"] = text;
         if (!tone.empty()) {
-            it["tone"] = tone;
+            params["tone"] = std::move(tone);
         }
-        items.push_back(std::move(it));
+        items.push_back(agentxx::ui::kit::text(params));
     };
     pushText(fmt::format("|- CPU {:.0f}% · {}x", st.cpu, st.cpuCores));
     std::string ram = fmt::format("|- RAM {:.0f}%", st.memPct);
@@ -352,7 +352,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
         pushText(fmt::format("|- GPU {:.0f}% · {}x", st.gpuPeakPct, st.gpuCount));
     }
     utilxx_base::Json out;
-    out["items"] = std::move(items);
+    out["items"] = pluginxx::ui::dumpBlocks(items);
     return out.dump();
 }
 

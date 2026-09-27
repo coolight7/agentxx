@@ -1351,14 +1351,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(graphCells[0].value("text", ""), std::string{"|- "});
                     XX_TEST_EXPECT_EQ(graphCells[1].value("kind", ""), std::string{"Button"});
                     XX_TEST_EXPECT_EQ(graphCells[1].value("label", ""), std::string{"Graph"});
+                    // 动作按描述层解析: 短写字符串与对象写法等价 (dispatch + 名字)
+                    const auto graphAction
+                        = pluginxx::ui::parseAction(graphCells[1]["action"]);
                     XX_TEST_EXPECT_EQ(
-                        graphCells[1]["action"].value("kind", ""),
-                        std::string{"dispatch"}
+                        graphAction.kind,
+                        pluginxx::ui::Action::Kind::Dispatch
                     );
-                    XX_TEST_EXPECT_EQ(
-                        graphCells[1]["action"].value("name", ""),
-                        std::string{"planning.open_graph"}
-                    );
+                    XX_TEST_EXPECT_EQ(graphAction.name, std::string{"planning.open_graph"});
                     // 状态图源码经 dispatch 动作派发时由插件自持 (不随按钮双发)
                 }
             }
