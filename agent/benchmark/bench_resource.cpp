@@ -1645,17 +1645,19 @@ void benchResourceFfi() {
 #define RESOLVE_SYM(name) (name = reinterpret_cast<decltype(name)>(dlsym(hLib, #name)))
 #endif
 
-    // 函数指针定义
-    AgentxxFFIAgent* (*agentxx_ffi_create)(const AgentxxStringView*, const AgentxxStringView*, const AgentxxFFICallbacks*, AgentxxString*)
-        = nullptr;
-    int32_t (*agentxx_ffi_start)(AgentxxFFIAgent*, AgentxxString*) = nullptr;
-    int32_t (*agentxx_ffi_stop)(AgentxxFFIAgent*)                  = nullptr;
-    void (*agentxx_ffi_destroy)(AgentxxFFIAgent*)                  = nullptr;
-    int32_t (*agentxx_ffi_send_input)(AgentxxFFIAgent*, const AgentxxStringView*, const AgentxxStringView*, AgentxxString*)
-        = nullptr;
-    int32_t (*agentxx_ffi_get_context_messages)(AgentxxFFIAgent*, AgentxxString*, AgentxxString*)
-        = nullptr;
-    void (*agentxx_ffi_string_free)(AgentxxString*) = nullptr;
+    // 函数指针定义: 类型取自 ffi_api.h 的声明 (decltype(&::...)), 不手写签名 ——
+    // 手写容易与头文件漂移 (曾把 stop/destroy 的 log 出参漏掉: 声明成一参后调用
+    // 依然编译通过, 但被调函数仍会写这个出参, 于是写到寄存器里的野指针上,
+    // Windows 上表现为访问违例); 同时保留头文件里的调用约定 (Win32 上是 __stdcall)
+    decltype(&::agentxx_ffi_create) agentxx_ffi_create = nullptr;
+    decltype(&::agentxx_ffi_start) agentxx_ffi_start   = nullptr;
+    decltype(&::agentxx_ffi_stop) agentxx_ffi_stop     = nullptr;
+    decltype(&::agentxx_ffi_destroy) agentxx_ffi_destroy = nullptr;
+    decltype(&::agentxx_ffi_send_input) agentxx_ffi_send_input = nullptr;
+    decltype(&::agentxx_ffi_get_context_messages) agentxx_ffi_get_context_messages = nullptr;
+    // string_free 在头文件里有重载 (指针版 + AgentxxString& 便捷版), decltype(&...) 取不到
+    // 唯一类型, 这里显式写出类型 (与头文件的指针版一致, 保留调用约定)
+    void(AGENTXX_FFI_CALL* agentxx_ffi_string_free)(AgentxxString*) = nullptr;
 
     bool symsOk = RESOLVE_SYM(agentxx_ffi_create) && RESOLVE_SYM(agentxx_ffi_start)
                   && RESOLVE_SYM(agentxx_ffi_stop) && RESOLVE_SYM(agentxx_ffi_destroy)
@@ -1758,7 +1760,11 @@ void benchResourceFfi() {
     }
     if (startCode != 0) {
         std::cout << "  [resource][ffi] agentxx_ffi_start failed, code: " << startCode << std::endl;
-        agentxx_ffi_destroy(ffiAgent);
+        AgentxxString failLog{nullptr, 0};
+        agentxx_ffi_destroy(ffiAgent, &failLog);
+        if (failLog.data) {
+            agentxx_ffi_string_free(&failLog);
+        }
 #if XX_IS_WIN_D
         ::FreeLibrary(hLib);
 #else
@@ -1779,7 +1785,7 @@ void benchResourceFfi() {
     std::string       warmupInput = "hello";
     AgentxxStringView wInputSv{warmupInput.data(), static_cast<uint64_t>(warmupInput.size())};
     tracker.turnDone = false;
-    agentxx_ffi_send_input(ffiAgent, &wInputSv, nullptr, &logOut);
+    agentxx_ffi_send_input(ffiAgent, &wInputSv, &logOut);
     if (logOut.data) {
         agentxx_ffi_string_free(&logOut);
     }
@@ -1834,7 +1840,7 @@ void benchResourceFfi() {
             i + 1
         );
         AgentxxStringView inputSv{userText.data(), static_cast<uint64_t>(userText.size())};
-        agentxx_ffi_send_input(ffiAgent, &inputSv, nullptr, &logOut);
+        agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
         if (logOut.data) {
             agentxx_ffi_string_free(&logOut);
         }
@@ -1894,7 +1900,7 @@ void benchResourceFfi() {
             i + 1
         );
         AgentxxStringView inputSv{userText.data(), static_cast<uint64_t>(userText.size())};
-        agentxx_ffi_send_input(ffiAgent, &inputSv, nullptr, &logOut);
+        agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
         if (logOut.data) {
             agentxx_ffi_string_free(&logOut);
         }
@@ -1948,9 +1954,19 @@ void benchResourceFfi() {
     phaseTracker.printTable("ffi 分阶段内存");
     reporter.attachPhases("ffi", "self", phaseTracker.samples());
 
-    // 销毁
-    agentxx_ffi_stop(ffiAgent);
-    agentxx_ffi_destroy(ffiAgent);
+    // 销毁 (stop/destroy 都需要 log 出参; 传 NULL 语义上安全, 但这里顺带回传并打印详情)
+    AgentxxString stopLog{nullptr, 0};
+    agentxx_ffi_stop(ffiAgent, &stopLog);
+    if (stopLog.data) {
+        XX_LOGW("[resource][ffi] stop 返回详情: {}", std::string_view{stopLog.data, stopLog.size});
+        agentxx_ffi_string_free(&stopLog);
+    }
+    AgentxxString destroyLog{nullptr, 0};
+    agentxx_ffi_destroy(ffiAgent, &destroyLog);
+    if (destroyLog.data) {
+        XX_LOGW("[resource][ffi] destroy 返回详情: {}", std::string_view{destroyLog.data, destroyLog.size});
+        agentxx_ffi_string_free(&destroyLog);
+    }
 
 #if XX_IS_WIN_D
     ::FreeLibrary(hLib);
