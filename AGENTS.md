@@ -410,8 +410,9 @@ path/to/agentxx_test string_util regex
     `AGENTXX_MIMALLOC_LINK=STATIC|SHARED` (默认 STATIC, 静态并入产物);
     各构建脚本默认也不打开 (需要时设 `AGENTXX_ENABLE_MIMALLOC=ON`);
     默认关闭的原因: 长上下文运行 (每轮都把整段上下文序列化/渲染) 下它保留已释放的
-    大块内存、常驻是系统分配器的 2~3.7 倍, 而 CPU 只省约 10%
-    (Windows release 实测见 docs/zh-cn/design/benchmark.md 第 10 节)
+    大块内存、常驻是系统分配器的 2~4 倍 (提交量 5~6 倍), 而 CPU 收益有限
+    (2026-09-28 重测: 200K 组总 CPU −18%, 100K 组与系统分配器接近;
+    Windows release 实测见 docs/zh-cn/design/benchmark.md 第 10、12 节)
     源码是 `agent/third_party/mimalloc` 子模块, 经 ExternalProject 构建安装
     (`MI_INSTALL_TOPLEVEL` / `MI_OPT_ARCH=OFF` 通用 CPU 基线 / `MI_ALLOW_THP=OFF`)
   - 只作用于**最终程序** (`agentxx_cli`/`agentxx_test`/`agentxx_benchmark`), 接入逻辑

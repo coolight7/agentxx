@@ -17,6 +17,7 @@
 - 消息展开后折叠底部滚动跳动
 - 排查 llm api 输出 toolcall 时间隔较久
 - 将 llm api toolcall 刚开始就通知 tui 显示 `creating toolcall...`
+- tui 弹窗标题居中
 
 - SVG绘制支持
 - 链式 session 任务队列

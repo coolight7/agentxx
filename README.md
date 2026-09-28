@@ -22,7 +22,7 @@
 - [特点](#特点)
 - [兼容性](#兼容性)
     - [跨系统支持](#跨系统支持)
-    - [编译后的体积和依赖库](#编译后的体积和依赖库)
+    - [实测性能](#实测性能)
 - [计划实现](#计划实现)
     - [基础模块](#基础模块)
     - [提示词训练](#提示词训练)
@@ -47,18 +47,19 @@
 
 ## 特点
 - **体积小/内存占用少/高性能**; C++协程异步实现，程序体积和内存占用少且性能高，协程网络/文件读写支持不阻塞，可选添加 硬件加速Hyperscan 等扩展库
-- **插件支持**; 已内置实现 C++插件 codegraph、系统CPU/GPU/RAM等信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能；也可以自定义实现插件加载，通过 C++ Quickjs 插件可以加载实现 js 插件
-- **FFI支持**; 通过 FFI 可以让 App、程序加载 libagentxx 动态库后直接构建 Agent 功能，让 agentxx 嵌入 App、程序 中
-- **跨系统支持**; 计划支持 Windows/Macos/Linux/Android/IOS, 目前已实现4个系统支持，仅ios待测试兼容; 针对 windows 优化兼容，对字符编码转换、pwsh、cmd 等做了许多处理适配，且可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
-- **丰富的 tool**; 内置 文件读写、命令行执行、任务规划 等，编译时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
+- **插件支持**; 高兼容性的异步 C ABI 插件接口，可通过 C/C++/Rust 等语言开发`动态库插件`. 通过 C++ Quickjs 插件可以开发和加载 `JS插件`.
+    - 已内置实现 C++插件 文件读写、命令执行、codegraph、系统CPU/GPU/RAM信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能
+- **FFI支持**; 通过 FFI 可以在你的项目加载 libagentxx 动态库后高性能扩展 Agent 功能，同时仍然支持加载现有的插件
+- **跨系统支持**; 计划支持 Windows/Macos/Linux/Android/IOS, 已实现支持4个系统，仅ios待测试兼容; 针对 windows 优化兼容，对字符编码转换、pwsh、cmd 等做了许多处理适配，且可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
+- **丰富的 tool**; 内置 文件读写、命令行执行、任务规划、codegraph 代码语法解析 等，编译、运行时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
 - **UI与Agent可分离**; 内置支持 TUI、cli、接入GUI、Websocket API、FFI调用、动态库/静态库嵌入App; 支持单进程、多进程分别启动 UI 和 Agent Websocket Server服务
-- **多模态支持**; TUI支持选择图片、音视频文件附件
+- **多模态支持**; TUI支持选择图片、音视频文件附件，且 TUI 跟 Agent 在不同设备时，支持选择两个设备上的文件
 - **中断、错误自动处理**; 长时间稳定运行、网络重试、动态超时限制、消息上下文角色顺序检查和修正、自动检查和修正字符编码、空响应自动重试、Tool连续重复调用检查
-- **数据安全**; Agentxx 不会上传你的数据，也不会附加水印、扫盘。我们还内置了一些提示词让 AI 尽量使用通俗易懂的词语、开发人员注释常用的专业名词编写规范的描述和注释，减少使用广为诟病的 `产品黑话` (如 沉淀、在途、触达 以及一些莫名其妙的词语)。如果使用本地 LLM，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、中转站、外部插件、MCP 等外部接口的行为和数据安全，导入使用时需要自行了解
+- **数据安全**; Agentxx 完全开源，且不会上传你的数据，也不会附加水印、扫盘。我们还内置了一些提示词让 AI 尽量使用通俗易懂的词语、开发人员注释常用的专业名词编写规范的描述和注释，减少使用广为诟病的 `产品黑话` (如 沉淀、在途、触达 以及一些莫名其妙的词语)。如果使用本地 LLM，完全可以实现全程断网运行; Agentxx 无法确认 LLM Api、中转站、外部插件、MCP 等外部接口的行为和数据安全，导入使用时需要自行了解
 
 ## 兼容性
 ### 跨系统支持
-- 可编译为独立可执行程序/动态库，摆脱额外的动态库依赖，仅依赖基本的系统库
+- 可编译为独立可执行程序/动态库，摆脱第三方动态库依赖，仅依赖系统库
 - 系统支持:
 
 | Status | System | TIP |
@@ -69,7 +70,7 @@
 | ✅ | Macos | 已支持 arm64/x64 macos clang 编译 |
 | ⬜ | IOS | 待测试兼容 |
 
-### 编译后的体积和依赖库
+### 实测性能
 - Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少; 编译优化 控制导出符号，裁剪无用符号
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan 等可选库、采用 -Os/-Oz 体积编译优化
 - 以下是`Release倾向性能优化编译`,`添加了Hyperscan等所有可选依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/09/17, commit: 737e79106acf2bdb67668ae2456eafd41bb1a03c`
@@ -90,7 +91,7 @@
 
 | System | agentxx_cli | libagentxx | compiler | TIP |
 |---|---|---|---|---|
-| **Windows** | 17.2M | 13M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
+| **Windows** | 17.9M | 13.5M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 22M | 16.1M | GCC 16.1.0 · x86_64 · -O3 · --strip-unneeded | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Macos** | 28.6M | 17.2M | Clang 21.0.0 · arm64 · -O3 · --strip-unneeded | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
 | **Android** | - | 14.5M | NDK-r29 · Clang 21.0.0 · android-21-arm64-v8a · -O3 · --strip-unneeded | 打包建议带上 libc++_shared.so |
@@ -99,20 +100,20 @@
 
 | Plugin | Windows/.dll | Linux/.so | Macos/.dylib | Androi/.so | TIP |
 |---|---|---|---|---|---|
-| agentxx_codegraph | 37.2M | 43.6M | 39.9M | 37.7M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
-| agentxx_computer_use | 527K | - | - | - | 提供 tool 支持控制鼠标、键盘 |
-| agentxx_execute_command | 5.7M | 2M | 2.1M | 6.2M | Bash/powershell 命令行执行 |
-| agentxx_filesystem | 9.5M | 14M | 2.3M | 6.4M | 文件读写 List/Read/Write/Edit/Glob/Grep |
+| agentxx_codegraph | 37.3M | 43.6M | 39.9M | 37.7M | 代码分析定位，方便LLM快速查找代码中的函数、变量等符号的定义和引用 |
+| agentxx_computer_use | 532K | - | - | - | 提供 tool 支持控制鼠标、键盘 |
+| agentxx_execute_command | 2M | 2M | 2.1M | 6.2M | Bash/powershell 命令行执行 |
+| agentxx_filesystem | 9.2M | 14M | 2.3M | 6.4M | 文件读写 List/Read/Write/Edit/Glob/Grep |
 | agentxx_javascript_engine | 1.2M | 1.4M | 1.3M | 1.2M | Javascript代码执行引擎，可以依赖该插件实现JS插件 |
-| agentxx_math | 531K | 503K | 339K | 301K | 数学计算工具 |
-| agentxx_planning | 560K | 490K | 403K | 301K | 目标规划 + 渐进任务细节 两层任务规划 + 备忘录 |
+| agentxx_math | 535K | 503K | 339K | 301K | 数学计算工具 |
+| agentxx_planning | 707K | 490K | 403K | 301K | 目标规划 + 渐进任务细节 两层任务规划 + 备忘录 |
 | agentxx_rag_search | 6.9M | 8.7M | 7.3M | 7.5M | RAG 检索 |
-| agentxx_screen_capture | 544K | - | - | - | 获取屏幕图像帧 |
-| agentxx_string | 9M | 13.7M | 1.8M | 1.6M | 字符串处理、HTML-Markdown转换 |
-| agentxx_system | 616K | 572K | 382K | 328K | 系统工具 读取本地时间 |
-| agentxx_system_monitor | 646K | 735K | 544K | 448K | 读取系统CPU、内存、GPU占用 |
-| agentxx_text_selection_monitor | 550K | - | - | - | 接收系统的文本选择事件流 |
-| agentxx_websearch | 6.9M | 8.8M | 7.5M | 7.7M | 网络搜索、下载、网页转Markdown |
+| agentxx_screen_capture | 546K | - | - | - | 获取屏幕图像帧 |
+| agentxx_string | 8.8M | 13.7M | 1.8M | 1.6M | 字符串处理、HTML-Markdown转换 |
+| agentxx_system | 624K | 572K | 382K | 328K | 系统工具 读取本地时间 |
+| agentxx_system_monitor | 763K | 735K | 544K | 448K | 读取系统CPU、内存、GPU占用 |
+| agentxx_text_selection_monitor | 546K | - | - | - | 接收系统的文本选择事件流 |
+| agentxx_websearch | 7M | 8.8M | 7.5M | 7.7M | 网络搜索、下载、网页转Markdown |
 
 ## 计划实现
 ### 基础模块

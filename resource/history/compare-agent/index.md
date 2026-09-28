@@ -17,10 +17,10 @@ resource\history\compare-agent\compare-pi.md，并在最后整理一下整个 co
 - 对比当前项目 agentxx 和 dsh D:\0Acoolight\Program\js\deepseek-harness 的架构设计，仔细思考分析两者的一些设计上的对比优缺点，以及有哪些设计适合迁移到 agentxx 实现的；应当分模块仔细通读对比两个项目源码、结合测试和文档，了解整体的架构设计，分模块逐步更新写入到文档
 resource\history\compare-agent\compare-dsh.md，并在最后整理一下整个 compare-dsh.md 文档
 
-- 对比当前项目 agentxx 和 openclaw D:\0Acoolight\Program\js\deepseek-harness 的架构设计，仔细思考分析两者的一些设计上的对比优缺点，以及有哪些设计适合迁移到 agentxx 实现的；应当分模块仔细通读对比两个项目源码、结合测试和文档，了解整体的架构设计，分模块逐步更新写入到文档
+- 对比当前项目 agentxx 和 openclaw D:\0Acoolight\Program\js\openclaw 的架构设计，仔细思考分析两者的一些设计上的对比优缺点，以及有哪些设计适合迁移到 agentxx 实现的；应当分模块仔细通读对比两个项目源码、结合测试和文档，了解整体的架构设计，分模块逐步更新写入到文档
 resource\history\compare-agent\compare-openclaw.md，并在最后整理一下整个 compare-openclaw.md 文档
 
-- 对比当前项目 agentxx 和 harness D:\0Acoolight\Program\js\deepseek-harness 的架构设计，仔细思考分析两者的一些设计上的对比优缺点，以及有哪些设计适合迁移到 agentxx 实现的；应当分模块仔细通读对比两个项目源码、结合测试和文档，了解整体的架构设计，分模块逐步更新写入到文档
+- 对比当前项目 agentxx 和 harness D:\0Acoolight\Program\js\harness 的架构设计，仔细思考分析两者的一些设计上的对比优缺点，以及有哪些设计适合迁移到 agentxx 实现的；应当分模块仔细通读对比两个项目源码、结合测试和文档，了解整体的架构设计，分模块逐步更新写入到文档
 resource\history\compare-agent\compare-harness.md，并在最后整理一下整个 compare-harness.md 文档
 
 - 结合 compare-*.md，最终整理出每个模块中较好的、适合迁移到 agentxx 实现的设计

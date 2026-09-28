@@ -133,7 +133,7 @@ for abi in "${abi_list[@]}"; do
         -DBOOST_ROOT="${target_boost_root}" \
         -DOPENSSL_ROOT_DIR="${target_openssl_root_dir}" \
         -DXX_IS_RELEASE_D=1 \
-        -DAGENTXX_BUILD_CLIENT=OFF \
+        -DAGENTXX_BUILD_CLIENT=ON \
         -DAGENTXX_BUILD_TEST=OFF \
         -DAGENTXX_ENABLE_HYPERSCAN=OFF \
         -DAGENTXX_ENABLE_BOOST_PROCESS=ON \

@@ -1555,8 +1555,9 @@ Client                              Server
 - **分配器可选 mimalloc** (`agent/CMakeLists.txt` 的 `AGENTXX_ENABLE_MIMALLOC`,
   **默认 OFF**; `AGENTXX_MIMALLOC_LINK=STATIC|SHARED`, 默认 STATIC):
   - 默认关闭的原因: 它把释放的内存留在自己的页队列里 (惰性归还), 在"每轮都要
-    序列化/渲染整段上下文"的长上下文形态下, 常驻内存是系统分配器的 2~3.7 倍
-    (Windows release 实测见 [benchmark.md](benchmark.md) 第 10 节)
+    序列化/渲染整段上下文"的长上下文形态下, 常驻内存是系统分配器的 2~4 倍
+    (提交量 5~6 倍; Windows release 实测见 [benchmark.md](benchmark.md)
+    第 10、12 节)
   - 作用范围只有**最终程序** (`agentxx_cli` / `agentxx_test` / `agentxx_benchmark`),
     接入逻辑集中在 `agent/cmake/agentxx_mimalloc.cmake` (分配器为第三方依赖
     [mimalloc](https://github.com/microsoft/mimalloc), 源码在 `agent/third_party/mimalloc`):
