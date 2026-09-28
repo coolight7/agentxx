@@ -536,6 +536,62 @@ void LazyScrollable::evictIfNeeded() {
     }
 }
 
+void LazyScrollable::anchorToTailWindow(int contentWidth, size_t count) {
+    // 从尾部向前实测累计到够一屏 -> 锚点 = 尾部窗口起点, 行偏移 = 窗口内被
+    // 视口遮住的行数。定位只依赖"尾部一屏内条目"的实测高度, 与视口上方未实测
+    // 条目的估算无关 (估算再离谱也不会把最新内容推出视口)。
+    size_t    first = count;
+    long long rows  = 0;
+    while (first > 0 && rows < viewportHeight_) {
+        --first;
+        rows += measureItem(first, contentWidth);
+    }
+    anchorIndex_ = first;
+    // 反推锚点以上高度和 (含上方估算): 派生偏移因此严格等于
+    // totalHeight_ - viewportHeight_ (滚动条贴底)。注意: 上面 while 里
+    // setItemHeight 对 rowsAboveAnchor_ 的增量修正会被本行整体覆盖
+    rowsAboveAnchor_ = std::max(0, totalHeight_ - static_cast<int>(rows));
+    anchorRow_       = rows > viewportHeight_ ? static_cast<int>(rows - viewportHeight_) : 0;
+}
+
+size_t LazyScrollable::layoutViewportFromAnchor(int contentWidth, size_t count, int& laidRows) {
+    // 定位只用实测高度: 每个条目先测量 (key 变化则重建重测) 再落到屏幕坐标,
+    // 不存在"先按估算定位、下一帧再修正"的抖动窗口 (方案 §3.4 不变量)
+    size_t nextIndex = count;
+    int    cum       = -anchorRow_; // 相对视口顶的行号 (锚点条目的 anchorRow_ 行落在 0)
+    for (size_t i = anchorIndex_; i < count; ++i) {
+        if (cum >= viewportHeight_) {
+            nextIndex = i;
+            break; // 视口已填满 (后续更靠下, 提前结束)
+        }
+        const bool fresh   = !measured_[i];
+        const int  itemH   = measureItem(i, contentWidth);
+        const int  screenY = box_.y_min + cum;
+        Box        itemBox{box_.x_min, contentXMax_, screenY, screenY + itemH - 1};
+        if (fresh) {
+            // 测量时同宽度布局已收敛, 仅 SetBox 重定位
+            elementAt(i)->SetBox(itemBox);
+        } else {
+            // 跳过布局优化: 缓存命中 (key 未变 -> 内容未变) 且 box 与上帧一致时,
+            // 子项内部布局状态与上帧完全相同, 无需重跑 ComputeRequirement/SetBox
+            // 迭代; 其 reflect 命中框 (点击检测读取) 也保持上帧值 (box 相同)
+            const bool cached  = i < hasCache_.size() && hasCache_[i];
+            const bool sameBox = i < lastBoxes_.size() && lastBoxes_[i] == itemBox;
+            if (!(cached && sameBox)) {
+                layoutAndMeasure(elementAt(i), itemBox);
+            }
+        }
+        lastBoxes_[i] = itemBox;
+        visibleIndices_.push_back(i);
+        if (i < visibleBoxes_.size()) {
+            visibleBoxes_[i] = Box::Intersection(itemBox, box_);
+        }
+        cum += itemH;
+    }
+    laidRows = cum;
+    return nextIndex;
+}
+
 void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     box_ = box;
     ++prepareSeq_;
@@ -603,22 +659,8 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     }
 
     // === 窗口发现 (吸附底部) ===
-    // 从尾部往前实测累计到够一屏 -> 锚点 = 尾部窗口起点, 行偏移 = 窗口内被视口
-    // 遮住的行数。定位只依赖"尾部一屏内条目"的实测高度, 与视口上方未实测条目的
-    // 估算无关 (估算再离谱也不会把最新内容推出视口)。
     if (stickToBottom_) {
-        size_t    first = count;
-        long long rows  = 0;
-        while (first > 0 && rows < viewportHeight_) {
-            --first;
-            rows += measureItem(first, contentWidth);
-        }
-        anchorIndex_ = first;
-        // 反推锚点以上高度和 (含上方估算): 派生偏移因此严格等于
-        // totalHeight_ - viewportHeight_ (滚动条贴底)。注意: 上面 while 里
-        // setItemHeight 对 rowsAboveAnchor_ 的增量修正会被本行整体覆盖
-        rowsAboveAnchor_ = std::max(0, totalHeight_ - static_cast<int>(rows));
-        anchorRow_       = rows > viewportHeight_ ? static_cast<int>(rows - viewportHeight_) : 0;
+        anchorToTailWindow(contentWidth, count);
     } else {
         // 非吸附: 锚点就是视口顶行, 只把它夹进自身高度内 —— 锚点以上条目本帧
         // 完全不参与计算 (不构建/不测量/不读高度)
@@ -630,42 +672,29 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     applyPendingScrollRows(contentWidth, count);
 
     // === 定位并布局视口内条目 (从锚点向后, 锚点以上零成本) ===
-    // 定位只用实测高度: 每个条目先测量 (key 变化则重建重测) 再落到屏幕坐标,
-    // 不存在"先按估算定位、下一帧再修正"的抖动窗口 (方案 §3.4 不变量)
-    size_t nextIndex = count;
     int    laidRows  = 0;
-    {
-        int cum = -anchorRow_; // 相对视口顶的行号 (锚点条目的 anchorRow_ 行落在 0)
-        for (size_t i = anchorIndex_; i < count; ++i) {
-            if (cum >= vh) {
-                nextIndex = i;
-                break; // 视口已填满 (后续更靠下, 提前结束)
-            }
-            const bool fresh   = !measured_[i];
-            const int  itemH   = measureItem(i, contentWidth);
-            const int  screenY = box.y_min + cum;
-            Box        itemBox{box.x_min, contentXMax_, screenY, screenY + itemH - 1};
-            if (fresh) {
-                // 测量时同宽度布局已收敛, 仅 SetBox 重定位
-                elementAt(i)->SetBox(itemBox);
-            } else {
-                // 跳过布局优化: 缓存命中 (key 未变 -> 内容未变) 且 box 与上帧一致时,
-                // 子项内部布局状态与上帧完全相同, 无需重跑 ComputeRequirement/SetBox
-                // 迭代; 其 reflect 命中框 (点击检测读取) 也保持上帧值 (box 相同)
-                const bool cached  = i < hasCache_.size() && hasCache_[i];
-                const bool sameBox = i < lastBoxes_.size() && lastBoxes_[i] == itemBox;
-                if (!(cached && sameBox)) {
-                    layoutAndMeasure(elementAt(i), itemBox);
+    size_t nextIndex = layoutViewportFromAnchor(contentWidth, count, laidRows);
+
+    // === 内容不足一屏时回夹到底部窗口 ===
+    // 典型场景: 展开的长消息 (Think/Tool) 在用户上滚后又被折叠, 锚点条目高度
+    // 骤减 -> 从视口顶行到内容末尾不足一屏, 若不回夹屏幕下半全是空白。
+    // 回夹 = 按尾部窗口重取锚点 (等价于把滚动位置夹到 totalHeight - viewportHeight)。
+    // 锚点已在内容开头时尾部窗口必然是同一点, 无需重算 (短内容每帧零成本)。
+    if (nextIndex == count && laidRows < vh && (anchorIndex_ > 0 || anchorRow_ > 0)) {
+        const size_t anchorIndexBefore = anchorIndex_;
+        const int    anchorRowBefore   = anchorRow_;
+        anchorToTailWindow(contentWidth, count);
+        if (anchorIndex_ != anchorIndexBefore || anchorRow_ != anchorRowBefore) {
+            // 可见集整体上移: 第一遍登记过的命中盒先清空, 第二遍重新登记
+            // (尾部窗口起点不会晚于原锚点, 第二遍覆盖的条目是第一遍的超集)
+            for (size_t i : visibleIndices_) {
+                if (i < visibleBoxes_.size()) {
+                    visibleBoxes_[i] = kInvalidBox;
                 }
             }
-            lastBoxes_[i] = itemBox;
-            visibleIndices_.push_back(i);
-            if (i < visibleBoxes_.size()) {
-                visibleBoxes_[i] = Box::Intersection(itemBox, box);
-            }
-            cum += itemH;
+            visibleIndices_.clear();
+            nextIndex = layoutViewportFromAnchor(contentWidth, count, laidRows);
         }
-        laidRows = cum;
     }
 
     // 内容末尾是否落在视口内: 布局已走到最后一个条目, 且从锚点行起的累计行数

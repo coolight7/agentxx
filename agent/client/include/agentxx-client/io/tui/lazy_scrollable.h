@@ -77,6 +77,14 @@ struct LazyBuiltItem {
 /// 不构建子项 Element, 避免 OnEvent 期构建的元素其命中登记被下一帧
 /// OnRender 的清理动作丢掉 (详见 prepareLayout 注释)。
 ///
+/// ### 内容收缩后的回夹 (底部不留白)
+///
+/// 内容变短 (如展开的长消息被折叠) 后视口可能停在"从锚点到内容末尾不足一屏"
+/// 的位置 —— 屏幕下半全是空白。定位阶段发现该情形时改按尾部窗口取锚点
+/// (等价于把滚动位置夹到 `totalHeight - viewportHeight`), 保持视口被内容填满。
+/// 回夹不改动吸附开关: 用户上滚的意图保留 (内容随后继续增长时不自动跟随底部),
+/// 但下一次下滚会因"内容末尾已在视口内"而恢复吸附。
+///
 /// ### 头部插入 (历史分页前插)
 ///
 /// `notifyPrepended()` 后并行数组整体平移、锚点随索引平移 —— 视口内容零跳变,
@@ -226,6 +234,14 @@ private:
     /// 同步条数/key, 落实滚轮行数, 发现窗口 (吸附底部时尾部向前, 否则锚点向后),
     /// 构建/复用并定位窗口内子项, 执行 LRU 淘汰
     void prepareLayout(const ftxui::Box& box);
+    /// 尾部窗口发现: 从末尾向前实测累计到够一屏, 锚点 = 该窗口起点, 行偏移 =
+    /// 窗口内被视口遮住的行数 (吸附底部与"内容不足一屏时回夹"共用)
+    void anchorToTailWindow(int contentWidth, size_t count);
+    /// 从锚点向后布局视口内条目 (测量即定位; 锚点以上条目本帧不参与)
+    /// - `return` 视口下方第一个条目索引 (== count 表示已布局到列表末尾)
+    /// - `args`:
+    ///     - [laidRows] 从锚点条目顶行起的累计行数 (输出)
+    size_t layoutViewportFromAnchor(int contentWidth, size_t count, int& laidRows);
     /// 渲染阶段: 仅绘制可见子项 + 滚动条
     void renderVisible(ftxui::Screen& screen);
     /// 绘制滚动条

@@ -52,6 +52,12 @@ struct ViewFixture {
     /// 按条目身份 id 给出粗略高度 (未设置时用 quickRows);
     /// 用于构造"估算与实测严重不符"的场景 (估算只应影响滚动条长度)
     std::function<size_t(size_t id)> quickOf;
+    /// 按条目身份 id 给出实测高度 (未设置时用 itemHeight);
+    /// 用于构造"单条内容高度变化"的场景 (如展开的长消息被折叠)
+    std::function<size_t(size_t id)> heightOf;
+    /// 按条目身份 id 给出 key 增量 (未设置时为 0);
+    /// 高度变化必然伴随内容变化, 需要让该条 key 同时改变才会触发重测
+    std::function<uint64_t(size_t id)> keyOf;
 
     /// 视口尺寸 (渲染一帧时使用; 变更即模拟终端 resize)
     int width  = 60;
@@ -82,7 +88,8 @@ struct ViewFixture {
             },
             [this](size_t i) {
                 ++keyCalls;
-                return 0x1000ULL + i + keySalt;
+                const size_t id = (i < ids.size()) ? ids[i] : 0;
+                return 0x1000ULL + i + keySalt + (keyOf ? keyOf(id) : 0);
             },
             [this](size_t i, int) {
                 ++quickCalls;
@@ -95,8 +102,10 @@ struct ViewFixture {
                 // 内容由**身份 id** 决定 (与索引无关): 前插时 id 随条目一起后移,
                 // 因此"视口画面不变"可以直接逐行比较 (与真实消息按内容对齐一致)
                 const std::string label = (i < ids.size()) ? std::to_string(ids[i]) : "?";
+                const size_t      rowsOf = heightOf ? heightOf((i < ids.size()) ? ids[i] : 0)
+                                                    : itemHeight;
                 ftxui::Elements    rows;
-                for (size_t r = 0; r < std::max<size_t>(1, itemHeight); ++r) {
+                for (size_t r = 0; r < std::max<size_t>(1, rowsOf); ++r) {
                     // 逐行带行号: 视口顶行/底行能被解析成 (条目 id, 条目内行号),
                     // 用于断言"定位只用实测高度"
                     rows.push_back(ftxui::text(
@@ -224,7 +233,6 @@ struct ViewFixture {
     Pos topPos() {
         return parseLine(firstLineOf(lastFrame()));
     }
-
     /// 视口末行 (底行) 的 (条目 id, 行号)
     Pos bottomPos() {
         return parseLine(lastLineOf(lastFrame()));
@@ -244,6 +252,24 @@ struct ViewFixture {
         }
         const size_t nl = t.rfind('\n');
         return (nl == std::string::npos) ? t : t.substr(nl + 1);
+    }
+
+    /// 统计一帧里有内容的行数 (夹具行; 空白行不计) —— 用于断言"视口不留白"
+    static int contentRowCount(const std::string& frameText) {
+        int    count = 0;
+        size_t start = 0;
+        while (start < frameText.size()) {
+            const size_t end = frameText.find('\n', start);
+            const size_t stop = (end == std::string::npos) ? frameText.size() : end;
+            if (parseLine(frameText.substr(start, stop - start)).id != static_cast<size_t>(-1)) {
+                ++count;
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+        return count;
     }
 };
 
@@ -626,6 +652,78 @@ TestResult testTuiLazyView() {
         XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), idxBefore);
         XX_TEST_EXPECT_EQ(f.topPos().id, idxBefore);
         XX_TEST_EXPECT_TRUE(f.quickCalls >= static_cast<int>(f.count)); // 整体重估
+    }
+
+    // ---- 内容收缩后回夹: 折叠展开的长消息, 视口底部不留白 ----
+    {
+        // 末条 (id 19) 为展开的长消息 (300 行), 其余各 1 行
+        ViewFixture f(20, 1);
+        const size_t longRows = 300;
+        f.heightOf            = [longRows](size_t id) {
+            return id == 19 ? longRows : size_t{1};
+        };
+        f.render(); // 首帧吸附底部: 末条超过一屏, 锚点即末条
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{19});
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), static_cast<int>(longRows) - kHeight);
+
+        // 上滑一行离开底部 (吸附解除)
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-1);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorRow(), static_cast<int>(longRows) - kHeight - 1);
+        XX_TEST_EXPECT_FALSE(f.scrollable->isStickToBottom());
+
+        // 折叠该条: 高度骤减到 2 行 (key 同步变化, 与真实 itemKey 计入 collapsed 一致)
+        f.heightOf = [longRows](size_t id) {
+            return id == 19 ? size_t{2} : size_t{1};
+        };
+        f.keyOf = [](size_t id) {
+            return id == 19 ? 0xAA00ULL : 0ULL;
+        };
+        f.render();
+
+        // 视口回夹到底部窗口: 逐行都是内容, 不再留白
+        XX_TEST_EXPECT_EQ(ViewFixture::contentRowCount(f.lastFrame()), kHeight);
+        // 末行 = 折叠后条目的最后一行 (高度 2 -> 行号 1)
+        XX_TEST_EXPECT_EQ(f.bottomPos().id, size_t{19});
+        XX_TEST_EXPECT_EQ(f.bottomPos().row, 1);
+        // 派生偏移 = 内容底部边界 (滚动条贴底), 总高度按实测: 19 x 1 + 2
+        XX_TEST_EXPECT_EQ(f.scrollable->totalHeight(), 19 * 1 + 2);
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), 19 * 1 + 2 - kHeight);
+        // 回夹后"内容末尾已在视口内": 再下滚一行恢复吸附 (不改变用户上滚意图)
+        f.wheelRows(1);
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.scrollable->isStickToBottom());
+        XX_TEST_EXPECT_EQ(ViewFixture::contentRowCount(f.lastFrame()), kHeight);
+
+        // 对照: 收缩发生在锚点上方且锚点下方内容仍够一屏 -> 不回夹, 视口逐行不动
+        ViewFixture g(30, 1);
+        g.heightOf = [](size_t id) {
+            return id == 5 ? size_t{100} : size_t{1};
+        };
+        g.render(); // 吸附底部: 尾部一屏 (20 行) 全由短条目填满, 锚点落在 id 10
+        XX_TEST_EXPECT_EQ(g.scrollable->anchorIndex(), size_t{10});
+        // 先上滚到顶 (沿途把 id 5 的长条目实测出来), 再下滚到长条目之下
+        g.scrollable->setStickToBottom(false);
+        g.wheelRows(-1000);
+        g.render();
+        g.wheelRows(106); // 顶行落到 id 7 (id 5 的 100 行整体位于视口上方)
+        g.render();
+        const std::string before    = g.lastFrame();
+        const auto        topBefore = g.topPos();
+        XX_TEST_EXPECT_EQ(topBefore.id, size_t{7});
+        // 折叠视口上方那条长消息 (100 行 -> 1 行, key 同步变化)
+        g.heightOf = [](size_t) {
+            return size_t{1};
+        };
+        g.keyOf = [](size_t id) {
+            return id == 5 ? 0xBB00ULL : 0ULL;
+        };
+        g.render();
+        XX_TEST_EXPECT_EQ(g.topPos().id, topBefore.id);
+        XX_TEST_EXPECT_EQ(g.topPos().row, topBefore.row);
+        XX_TEST_EXPECT_EQ(ViewFixture::contentRowCount(g.lastFrame()), kHeight);
+        XX_TEST_EXPECT_EQ(before, g.lastFrame()); // 视口逐行不变 (只滚动条变短)
     }
 
     return TestResult{g_tui_lazy_view_passed, g_tui_lazy_view_failed};

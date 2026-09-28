@@ -240,6 +240,77 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(selectText(combining, 2, 1, 1, 0, 1, 0), std::string{"x"});
     }
 
+    // ---------------- 选中高亮 (与 ftxui::Text 一致: 选中单元格执行 Screen 的选中样式) ----------------
+    {
+        // 逐帧顺序与 App 相同: ComputeRequirement -> SetBox -> Select -> Render
+        // (Render 内部按 Selection 绘制, 选中单元格反色)
+        auto flow = plainNode("hello world");
+        auto node = std::static_pointer_cast<ftxui::Node>(flow);
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(11), ftxui::Dimension::Fixed(1));
+        ftxui::Selection selection(6, 0, 10, 0); // 选中 "world"
+        ftxui::Render(screen, node.get(), selection);
+        for (int x = 0; x < 6; ++x) {
+            XX_TEST_EXPECT_FALSE(screen.PixelAt(x, 0).inverted);
+        }
+        for (int x = 6; x <= 10; ++x) {
+            XX_TEST_EXPECT_TRUE(screen.PixelAt(x, 0).inverted);
+        }
+        XX_TEST_EXPECT_EQ(selection.GetParts(), std::string{"world"}); // 高亮区间与复制文本一致
+
+        // 选择清空: ComputeRequirement 复位高亮状态 (无选择时框架不再调用 Select),
+        // 复位后重绘无高亮 (跳过每帧 ComputeRequirement 的宿主经
+        // LazyScrollable::resetSelectionHighlight 走同一条复位路径)
+        auto clean
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(11), ftxui::Dimension::Fixed(1));
+        node->ComputeRequirement();
+        node->SetBox(ftxui::Box{0, 10, 0, 0});
+        node->Render(clean);
+        for (int x = 0; x <= 10; ++x) {
+            XX_TEST_EXPECT_FALSE(clean.PixelAt(x, 0).inverted);
+        }
+
+        // 宽字符: 字符格与其保留格都在选区内时高亮; 选区外的字符不高亮
+        auto wide     = plainNode("汉字 abc");
+        auto wideNode = std::static_pointer_cast<ftxui::Node>(wide);
+        auto wideScreen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(8), ftxui::Dimension::Fixed(2));
+        ftxui::Selection wideSel(0, 0, 6, 0); // 单行 "汉字 abc", 选中 "汉字 ab"
+        ftxui::Render(wideScreen, wideNode.get(), wideSel);
+        for (int x = 0; x <= 6; ++x) {
+            XX_TEST_EXPECT_TRUE(wideScreen.PixelAt(x, 0).inverted);
+        }
+        XX_TEST_EXPECT_EQ(wideScreen.PixelAt(1, 0).character, std::string{}); // 宽字符保留格
+        XX_TEST_EXPECT_FALSE(wideScreen.PixelAt(7, 0).inverted);             // 'c' 未选中
+
+        // 折行文本: 跨行选区逐行高亮
+        auto wrapped     = plainNode("aaa bbb");
+        auto wrappedNode = std::static_pointer_cast<ftxui::Node>(wrapped);
+        auto wrapScreen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(3), ftxui::Dimension::Fixed(2));
+        ftxui::Selection wrapSel(0, 0, 2, 1); // 两行都选中
+        ftxui::Render(wrapScreen, wrappedNode.get(), wrapSel);
+        for (int y = 0; y < 2; ++y) {
+            for (int x = 0; x <= 2; ++x) {
+                XX_TEST_EXPECT_TRUE(wrapScreen.PixelAt(x, y).inverted);
+            }
+        }
+        XX_TEST_EXPECT_EQ(wrapSel.GetParts(), std::string{"aaa\nbbb"});
+
+        // 代码块 (自绘节点) 同样按选中列高亮: 只有被绘制的字符格高亮
+        using markdown::CellStyle;
+        auto block      = std::make_shared<markdown::FlowCodeBlock>("ab\ncd", "", CellStyle{});
+        auto blockNode  = std::static_pointer_cast<ftxui::Node>(block);
+        auto blockScreen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(6), ftxui::Dimension::Fixed(4));
+        ftxui::Selection blockSel(0, 1, 3, 1); // 上内边距之下第一行代码
+        ftxui::Render(blockScreen, blockNode.get(), blockSel);
+        XX_TEST_EXPECT_TRUE(blockScreen.PixelAt(1, 1).inverted);  // 'a'
+        XX_TEST_EXPECT_TRUE(blockScreen.PixelAt(2, 1).inverted);  // 'b'
+        XX_TEST_EXPECT_FALSE(blockScreen.PixelAt(1, 2).inverted); // 第二行代码未选中
+        XX_TEST_EXPECT_EQ(blockSel.GetParts(), std::string{"ab"});
+    }
+
     // ---------------- 链接可见区段登记 ----------------
     {
         std::vector<markdown::Span> spans(3);
