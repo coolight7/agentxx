@@ -16,6 +16,7 @@
 #include "utilxx_base/json.h"
 #include <asio/awaitable.hpp>
 
+#include "agentxx/protocol/protocol_base.h"
 #include "agentxx/version.h"
 #include "utilxx/http_server.h"
 
@@ -24,42 +25,9 @@ namespace protocol {
 
 using json = utilxx_base::Json;
 
-// ---------------------------------------------------------------------------
-// JSON-RPC 工具函数
-// ---------------------------------------------------------------------------
-
-inline json jsonRpcError(int code, std::string_view message, std::optional<json> data = {}) {
-    json err;
-    err["code"]    = code;
-    err["message"] = std::string(message);
-    if (data.has_value()) {
-        err["data"] = std::move(*data);
-    }
-    return err;
-}
-
-inline json jsonRpcResponse(json id, json result) {
-    json resp;
-    resp["jsonrpc"] = "2.0";
-    resp["id"]      = std::move(id);
-    resp["result"]  = std::move(result);
-    return resp;
-}
-
-inline json jsonRpcErrorResponse(json id, json error) {
-    json resp;
-    resp["jsonrpc"] = "2.0";
-    resp["id"]      = std::move(id);
-    resp["error"]   = std::move(error);
-    return resp;
-}
-
-// 标准 JSON-RPC 错误码
-inline constexpr int kJsonRpcParseError     = -32700;
-inline constexpr int kJsonRpcInvalidRequest = -32600;
-inline constexpr int kJsonRpcMethodNotFound = -32601;
-inline constexpr int kJsonRpcInvalidParams  = -32602;
-inline constexpr int kJsonRpcInternalError  = -32603;
+// JSON-RPC 工具函数 (jsonRpcError / jsonRpcResponse / jsonRpcErrorResponse) 与标准
+// 错误码 (kJsonRpc*) 由 protocol_base.h 提供, 本头不再重复定义 —— 否则同一个编译单元
+// 同时包含 protocol_base.h (含经 mcp_client.h 间接带出) 时会出现重定义
 
 // MCP 自定义错误码
 // -32000..-32019: 实现自定义 (legacy, 兼容既有 SDK 用法)

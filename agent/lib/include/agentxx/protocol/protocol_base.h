@@ -3,6 +3,10 @@
 #include "utilxx/http_server.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace agentxx {
 namespace protocol {

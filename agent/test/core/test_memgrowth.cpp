@@ -132,6 +132,40 @@ ContainerSnapshot snapshotContainers(
     return out;
 }
 
+/// 在 agent 线程上取一次容器快照
+/// - 会话的 viewMessages / LLM 上下文与 shareStore 都只允许在会话绑定的 agent io
+///   线程访问 (Session::assertIoThread 在 Debug 下会直接断言失败), 因此 agent 跑在
+///   后台线程时, 采样必须投递到该线程执行, 不能在测试协程所在线程直接读
+/// - `runAgentCtx=false` (轮次就在测试协程所在线程执行) 时直接采样
+asio::awaitable<ContainerSnapshot> snapshotContainersOnAgentThread(
+    const std::shared_ptr<agentxx::agent::CodeAgent>& agent,
+    const std::string&                                sessionId,
+    bool                                              runAgentCtx
+) {
+    if (!runAgentCtx) {
+        co_return snapshotContainers(agent->agentContext, sessionId);
+    }
+    using SnapCh
+        = asio::experimental::channel<void(utilxx_base::AsioErrorCode, ContainerSnapshot)>;
+    auto ch  = std::make_shared<SnapCh>(agent->ioCtx->get_executor(), 1);
+    auto ctx = agent->agentContext;
+    asio::co_spawn(
+        *agent->ioCtx,
+        [ctx, sessionId, ch]() -> asio::awaitable<void> {
+            co_await ch->async_send(
+                utilxx_base::AsioErrorCode{},
+                snapshotContainers(ctx, sessionId),
+                asio::use_awaitable
+            );
+            co_return;
+        },
+        asio::detached
+    );
+    auto [ec, snap] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+    (void)ec;
+    co_return snap;
+}
+
 asio::awaitable<int> runScenario(
     size_t      turns,
     size_t      responseKB,
@@ -297,7 +331,7 @@ asio::awaitable<int> runScenario(
             continue;
         }
         auto mem  = sampleProcessMemory();
-        auto snap = snapshotContainers(agent->agentContext, sessionId);
+        auto snap = co_await snapshotContainersOnAgentThread(agent, sessionId, runAgentCtx);
         std::printf(
             "%-6zu %10.1f %10.1f | %10zu %10.2f | %8zu %8.2f | %8zu",
             turn + 1,
@@ -331,9 +365,9 @@ asio::awaitable<int> runScenario(
         std::fflush(stdout);
     }
 
-    // 最终快照
+    // 最终快照 (同样在 agent 线程取样)
     auto mem  = sampleProcessMemory();
-    auto snap = snapshotContainers(agent->agentContext, sessionId);
+    auto snap = co_await snapshotContainersOnAgentThread(agent, sessionId, runAgentCtx);
     std::printf(
         "FINAL turn=%zu RSS=%.1fMB Priv=%.1fMB histCnt=%zu histMB=%.2f llmCnt=%zu llmMB=%.2f "
         "shareN=%zu",
