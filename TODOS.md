@@ -13,11 +13,12 @@
 - 事件驱动触发 agent
 - 主动记忆 插件tool
 - 用户发送消息、轮次完成时 立即写入 sql
-- 鼠标拖拽没有选中颜色变化
-- 消息展开后折叠底部滚动跳动
 - 排查 llm api 输出 toolcall 时间隔较久
 - 将 llm api toolcall 刚开始就通知 tui 显示 `creating toolcall...`
 - tui 弹窗标题居中
+- 修复 tui plan graph 按钮样式
+- tui 提示消息 dim
+- tui 实现添加 模型
 
 - SVG绘制支持
 - 链式 session 任务队列

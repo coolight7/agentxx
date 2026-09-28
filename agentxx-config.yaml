@@ -196,7 +196,7 @@ model:
       base_url: "https://api.bblabu.ai/v1"
       api_key: "${BBLABU_API_KEI}"
       send_thinking: false
-      model_name: "gpt-6-astra"
+      model_name: "gpt-6-sol"
       model_context_max_token: 700000
       include: ["reasoning.encrypted_content"]
       extra_api_config:
