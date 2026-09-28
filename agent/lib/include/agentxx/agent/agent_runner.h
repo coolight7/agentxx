@@ -11,6 +11,18 @@
 #include <optional>
 #include <string>
 
+/// 抑制内联: MSVC + 全程序 LTO 下, 外层协程帧会把**每个被 co_await 的内层协程帧
+/// 尺寸再加一遍** (内层帧本身照常单独分配), 于是 MB 级帧沿调用链翻倍; 在"重"协程
+/// 的边界上打这个标记, 可以让它的帧只装自己那点状态, 不再被复制进每个调用者。
+/// 定位过程与实测效果见 docs/zh-cn/design/benchmark.md 第 13 节
+#ifndef AGENTXX_NOINLINE
+#if defined(_MSC_VER)
+#define AGENTXX_NOINLINE __declspec(noinline)
+#else
+#define AGENTXX_NOINLINE __attribute__((noinline))
+#endif
+#endif
+
 namespace agentxx {
 namespace agent {
 
@@ -74,7 +86,7 @@ public:
     /// - [hooks]     调用方差异
     /// - [initialResult] 非空时跳过首跑直接进入中断处理循环
     ///   (程序重启恢复中断路径, 由调用方从 checkpoint 重建中断信息)
-    asio::awaitable<Outcome>
+    AGENTXX_NOINLINE asio::awaitable<Outcome>
         run(std::shared_ptr<AgentContext>                 ctx,
             neograph::graph::GraphEngine*                 engine,
             std::string_view                              sessionId,

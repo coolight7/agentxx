@@ -1364,7 +1364,11 @@ static asio::awaitable<void> test_channel_client_integration() {
                     d.text = "chan-reply";
                     st->send(agentxx::agent::WireMessage{d});
                     st->send(agentxx::agent::WireMessage{
-                        agentxx::agent::WireTurnResult{ui->sessionId, false, "", false}
+                        agentxx::agent::WireTurnResult{
+                            .sessionId   = ui->sessionId,
+                            .hasError    = false,
+                            .interrupted = false,
+                        }
                     });
                 }
             }

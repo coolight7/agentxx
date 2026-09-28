@@ -565,7 +565,12 @@ TestResult testTuiSurface() {
         fx.sharedState.mutate([](TUIRenderState& st) {
             using Notif = agentxx::agent::AppendComponentNotification;
             st.appendComponents.push_back(
-                Notif{Notif::Type::Plugin, "bad_plugin", false, "加载失败原因"}
+                Notif{
+                    .name         = "bad_plugin",
+                    .errorMessage = "加载失败原因",
+                    .type         = Notif::Type::Plugin,
+                    .success      = false,
+                }
             );
         });
         auto comp = std::make_shared<FailedComponentsOverlay>(fx.ctx);

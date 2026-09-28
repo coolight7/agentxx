@@ -270,9 +270,9 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
             const bool rememberRule = remember && confirmedValues(values);
             const bool fullAuthRule = fullAuth && allowed && confirmedValues(values);
             co_return events::RespPermission{
+                .reason   = allowed ? "" : "user denied",
                 .decision = allowed ? events::RespPermission::Decision::Allow
                                     : events::RespPermission::Decision::Deny,
-                .reason   = allowed ? "" : "user denied",
                 .remember = rememberRule,
                 .fullAuth = fullAuthRule,
             };

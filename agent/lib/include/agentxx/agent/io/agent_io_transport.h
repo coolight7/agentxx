@@ -96,12 +96,13 @@ struct WireInterruptExpired {
 };
 
 struct WireTurnResult {
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     std::string sessionId;
-    bool        hasError = false;
     std::string errorMessage;
-    bool        interrupted = false;
     int64_t     startTimeMs = 0; // 轮次开始时间戳 (毫秒)
     int64_t     durationMs  = 0; // 运行时长 (毫秒)
+    bool        hasError = false;
+    bool        interrupted = false;
 };
 
 struct WireContextStats {
@@ -285,9 +286,9 @@ struct WireViewMessagesPage {
 struct WireDirEntry {
     std::string name;     ///< 文件名或目录名 (纯名称, 不含图标)
     std::string fullPath; ///< 服务端绝对路径
+    uint64_t    sizeBytes = 0;
     bool        isDir     = false;
     bool        supported = true; ///< 当前模型是否支持该文件类型
-    uint64_t    sizeBytes = 0;
     MediaType   mediaType = MediaType::Image;
 };
 

@@ -720,30 +720,30 @@ void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotificati
     // MCP 工具
     for (const auto& mcp : agentContext->appendComponentInfo.mcpTools) {
         notifications.push_back(AppendComponentNotification{
-            .type         = AppendComponentNotification::Type::Mcp,
             .name         = mcp,
-            .success      = true,
             .errorMessage = "",
+            .type         = AppendComponentNotification::Type::Mcp,
+            .success      = true,
         });
     }
 
     // Skill
     for (const auto& skill : agentContext->appendComponentInfo.skills) {
         notifications.push_back(AppendComponentNotification{
-            .type         = AppendComponentNotification::Type::Skill,
             .name         = skill,
-            .success      = true,
             .errorMessage = "",
+            .type         = AppendComponentNotification::Type::Skill,
+            .success      = true,
         });
     }
 
     // Memory 文件
     for (const auto& memory : agentContext->appendComponentInfo.memoryFiles) {
         notifications.push_back(AppendComponentNotification{
-            .type         = AppendComponentNotification::Type::Memory,
             .name         = memory,
-            .success      = true,
             .errorMessage = "",
+            .type         = AppendComponentNotification::Type::Memory,
+            .success      = true,
         });
     }
 
@@ -751,10 +751,10 @@ void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotificati
     if (agentContext->pluginManager) {
         for (const auto& plugin : agentContext->pluginManager->list()) {
             notifications.push_back(AppendComponentNotification{
-                .type         = AppendComponentNotification::Type::Plugin,
                 .name         = plugin.name,
-                .success      = plugin.enabled,
                 .errorMessage = plugin.enabled ? "" : "disabled",
+                .type         = AppendComponentNotification::Type::Plugin,
+                .success      = plugin.enabled,
             });
         }
     }
@@ -833,8 +833,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             vm.collapsed     = true;
             vm.id            = session->appendViewMessage(vm);
             eventBridge->emitDelta(WireDelta{
-                .type    = WireDelta::Type::InsertMessage,
                 .message = std::make_shared<ViewMessage>(std::move(vm)),
+                .type    = WireDelta::Type::InsertMessage,
             });
         };
 
@@ -994,10 +994,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 客户端据此在 user 消息首屏即渲染附件卡片；dataUrl 经后续 Sync 补齐
     // （Sync/SessionStore 保留 dataUrl 元数据以外的全量由服务端权威持有）
     WireDelta turnStartDelta{
-        .type        = WireDelta::Type::TurnStart,
         .text        = processedInput,
         .msgId       = userMsgId,
         .startTimeMs = startTimeMs,
+        .type        = WireDelta::Type::TurnStart,
     };
     for (const auto& a : attachments) {
         MediaAttachment meta = a;
@@ -1175,12 +1175,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     session->flushViewMessages();
 
     eventBridge->emitDelta(WireDelta{
-        .type         = WireDelta::Type::TurnEnd,
-        .historyCount = session->chainHash.count(),
         .tailHash     = session->chainHash.tailHex(),
+        .historyCount = session->chainHash.count(),
         .startTimeMs  = startTimeMs,
         .durationMs   = durationMs,
         .tps          = turnTps,
+        .type         = WireDelta::Type::TurnEnd,
     });
 
     // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰

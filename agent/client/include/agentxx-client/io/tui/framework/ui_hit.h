@@ -86,22 +86,23 @@ enum class UiHitRegionKind : uint8_t {
 /// 坐标口径: `x/y` 相对所属元素左上角; `w <= 0` 表示"从 x 起直到元素右边界"
 /// (适合整行可点的场景, 不必预先知道元素宽度)。
 struct UiHitRegion {
-    int             x = 0;
-    int             y = 0;
-    int             w = 0;
-    int             h = 1;
-    /// 区域类型 (决定命中后的处理方式)
-    UiHitRegionKind kind = UiHitRegionKind::Action;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     /// 区域标识 (动作 id / 控件 id / 单元格键)
     std::string     id;
     /// 附加参数 (JSON 文本等, 原样回传)
     std::string     arg;
-    /// 子序号 (控件内部下标: 候选值下标 / 加减按钮等; 非控件场景为 0)
-    int sub = 0;
     /// 归属插件名 (面板/段落/overlay 渲染时填入; 空 = 由调用方按上下文补齐)
     std::string plugin;
     /// 归属 id (面板 id / 段落 id / tool_call_id / "__overlay")
     std::string ownerId;
+    int             x = 0;
+    int             y = 0;
+    int             w = 0;
+    int             h = 1;
+    /// 子序号 (控件内部下标: 候选值下标 / 加减按钮等; 非控件场景为 0)
+    int sub = 0;
+    /// 区域类型 (决定命中后的处理方式)
+    UiHitRegionKind kind = UiHitRegionKind::Action;
 
     /// 局部坐标是否落在本区域 (w <= 0 视为延伸到右边界)
     bool contains(int localX, int localY) const {

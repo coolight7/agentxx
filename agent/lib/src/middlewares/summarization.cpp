@@ -800,9 +800,9 @@ asio::awaitable<void>
                 );
                 if (session->io) {
                     session->io->sendToPeer(agentxx::agent::WireDelta{
-                        .type    = agentxx::agent::WireDelta::Type::InsertMessage,
                         .seq     = session->nextDeltaSeq(),
                         .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                        .type    = agentxx::agent::WireDelta::Type::InsertMessage,
                     });
                 }
             } else {
@@ -811,9 +811,9 @@ asio::awaitable<void>
                 session->updateViewMessage(vm);
                 if (session->io) {
                     session->io->sendToPeer(agentxx::agent::WireDelta{
-                        .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
                         .seq     = session->nextDeltaSeq(),
                         .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                        .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
                     });
                 }
             }
@@ -1027,9 +1027,9 @@ asio::awaitable<void>
             session->updateViewMessage(vm);
             if (session->io) {
                 session->io->sendToPeer(agentxx::agent::WireDelta{
-                    .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
                     .seq     = session->nextDeltaSeq(),
                     .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+                    .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
                 });
             }
             if (session->contextStats) {
@@ -1110,9 +1110,9 @@ asio::awaitable<bool>
     vm.id            = session->appendViewMessage(vm);
     if (session->io) {
         session->io->sendToPeer(agentxx::agent::WireDelta{
-            .type    = agentxx::agent::WireDelta::Type::InsertMessage,
             .seq     = session->nextDeltaSeq(),
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+            .type    = agentxx::agent::WireDelta::Type::InsertMessage,
         });
     }
 
@@ -1208,9 +1208,9 @@ asio::awaitable<bool>
     session->updateViewMessage(vm);
     if (session->io) {
         session->io->sendToPeer(agentxx::agent::WireDelta{
-            .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
             .seq     = session->nextDeltaSeq(),
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
+            .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
         });
         session->io->sendToPeer(agentxx::agent::WireContextStats{newTokens, modelContenxtMaxToken});
     }

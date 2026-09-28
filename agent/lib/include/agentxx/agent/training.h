@@ -123,52 +123,17 @@ struct EvolutionTrainingConfig {
 
     /// 默认变异器 system prompt
     static std::string defaultMutationPrompt();
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
 
-    /// 测试用例列表
-    std::vector<TrainingTestCase> testCases;
+    /// 自定义评分回调
+    TrainingScoringFunc scoringFunc;
+
+    /// 每轮迭代观察回调
+    TrainingIterationCallback onIteration;
 
     /// 保存/加载 prompt 变体的文件路径
     std::string saveFilePath
         = agentxx::agent::AgentConfigStatic::getResultPath("/train/training_prompts.json");
-
-    /// 保留的 top N 个 prompt 变体
-    int topK = 100;
-
-    /// 每轮从 top 中选取多少个进行变异生成新变体
-    int mutateCount = 10;
-
-    /// 每个选中的变体生成几个子代
-    int childrenPerParent = 3;
-
-    /// 最大迭代代数（0 表示不限制，仅靠收敛检测停止）
-    int maxGenerations = 50;
-
-    /// 是否使用 LLM 进行语义变异；false 则使用字符级随机变异
-    bool useLLMMutation = true;
-
-    /// 每代最多尝试多少次 prompt 优化（针对低分变体）
-    int maxOptimizationsPerGen = 5;
-
-    /// 早终：已测试用例数达到 [earlyTerminationCheckAfter] 后，
-    /// 若平均分低于 [earlyTerminationScore] 则跳过剩余用例（剩余记 0 分）
-    int    earlyTerminationCheckAfter = 2;
-    double earlyTerminationScore      = 0.2;
-
-    /// 每代对排序后前 N 个精英复评一次并做 EMA 平滑，降低 LLM 评分噪声
-    /// 对排序与收敛判定的干扰；0 表示关闭精英复评
-    int eliteReevaluatePerGen = 2;
-
-    /// 评估前随机打乱用例顺序：早终检查基于前 k 例均分，
-    /// 固定顺序会让排在后面的用例系统性影响早终判断（排序偏置）
-    bool shuffleTestCases = true;
-
-    /// 取消令牌：在代/用例边界轮询，取消后保存当前 population 并优雅退出。
-    /// 为空则不支持取消。注意: 训练循环严格串行执行（变体写入共享 config），
-    /// 不要在多个线程同时运行同一 trainer 的循环
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
-
-    /// 保存文件时保留的历史备份数（0 表示不备份）
-    int saveFileBackupCount = 3;
 
     /// 评分 subagent 的 system prompt
     std::string scoringPrompt = defaultScoringPrompt();
@@ -197,20 +162,56 @@ struct EvolutionTrainingConfig {
     /// LLM 变异 prompt：用于生成多样化的 prompt 变体（探索而非改进）
     std::string mutationPrompt = defaultMutationPrompt();
 
+    /// 测试用例列表
+    std::vector<TrainingTestCase> testCases;
+
+    /// 取消令牌：在代/用例边界轮询，取消后保存当前 population 并优雅退出。
+    /// 为空则不支持取消。注意: 训练循环严格串行执行（变体写入共享 config），
+    /// 不要在多个线程同时运行同一 trainer 的循环
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken;
+    double earlyTerminationScore      = 0.2;
+
     /// 收敛阈值（评分达到此值视为通过）
     double convergenceThreshold = 0.8;
-
-    /// 连续 N 代最佳分数无提升则停止训练（0 表示不自动停止）
-    int maxGenerationsWithoutImprovement = 5;
 
     /// 字符级变异率（仅当 useLLMMutation=false 时生效）
     double mutationRate = 0.01;
 
-    /// 自定义评分回调
-    TrainingScoringFunc scoringFunc;
+    /// 保留的 top N 个 prompt 变体
+    int topK = 100;
 
-    /// 每轮迭代观察回调
-    TrainingIterationCallback onIteration;
+    /// 每轮从 top 中选取多少个进行变异生成新变体
+    int mutateCount = 10;
+
+    /// 每个选中的变体生成几个子代
+    int childrenPerParent = 3;
+
+    /// 最大迭代代数（0 表示不限制，仅靠收敛检测停止）
+    int maxGenerations = 50;
+
+    /// 每代最多尝试多少次 prompt 优化（针对低分变体）
+    int maxOptimizationsPerGen = 5;
+
+    /// 早终：已测试用例数达到 [earlyTerminationCheckAfter] 后，
+    /// 若平均分低于 [earlyTerminationScore] 则跳过剩余用例（剩余记 0 分）
+    int    earlyTerminationCheckAfter = 2;
+
+    /// 每代对排序后前 N 个精英复评一次并做 EMA 平滑，降低 LLM 评分噪声
+    /// 对排序与收敛判定的干扰；0 表示关闭精英复评
+    int eliteReevaluatePerGen = 2;
+
+    /// 保存文件时保留的历史备份数（0 表示不备份）
+    int saveFileBackupCount = 3;
+
+    /// 连续 N 代最佳分数无提升则停止训练（0 表示不自动停止）
+    int maxGenerationsWithoutImprovement = 5;
+
+    /// 是否使用 LLM 进行语义变异；false 则使用字符级随机变异
+    bool useLLMMutation = true;
+
+    /// 评估前随机打乱用例顺序：早终检查基于前 k 例均分，
+    /// 固定顺序会让排在后面的用例系统性影响早终判断（排序偏置）
+    bool shuffleTestCases = true;
 
     /// 是否启用详细日志
     bool verbose = true;

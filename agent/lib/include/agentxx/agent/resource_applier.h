@@ -121,15 +121,16 @@ private:
 
     /// 动态 MCP 条目 (io 线程独占访问)
     struct McpEntry {
-        std::string                          owner;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
         McpServerConfig                      cfg;
-        std::shared_ptr<protocol::McpClient> client; ///< add 时即创建 (连接身份标识);
+        std::string                          owner;
+        std::vector<std::string> toolNames; ///< 已注册进 ToolRegistry 的工具名
                                                      ///< 注销后旧协程经指针比对识别 stale
         enum class Status {
             Connecting,
             Ready
         } status{Status::Connecting};
-        std::vector<std::string> toolNames; ///< 已注册进 ToolRegistry 的工具名
+        std::shared_ptr<protocol::McpClient> client; ///< add 时即创建 (连接身份标识);
         bool abortRequested = false; ///< 连接期间被注销 → 协程各阶段检查后自行退出
     };
 

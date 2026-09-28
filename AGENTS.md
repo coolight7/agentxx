@@ -34,6 +34,13 @@ int charToLower(int c) {
 }
 ```
 - 合适的情况下，尽量使用`std::string_view`替代`const std::string&`
+- **协程帧**: MSVC + 全程序 LTO 下, 外层协程帧会**把每个被 `co_await` 的内层协程
+  帧尺寸再加一遍** (内层帧本身仍单独分配), 于是 MB 级帧沿调用链翻倍 —— 实测
+  `AgentRunner::run` 的 2.5 MB 帧 ≈ 内层引擎两个协程帧 (825 KB + 1.66 MB) + 自身,
+  而帧里只有前 64 KB 是密集使用的 (见 benchmark.md 第 13 节与其 13.4 的扫描脚本)。
+  写"重"协程时按需打断内联: 自己有源码就用 `AGENTXX_NOINLINE` (`__declspec(noinline)`,
+  定义在 agent_runner.h); 对方不能改 (第三方库) 就用**非协程的 noinline 转发函数**
+  包住调用 (包装自身没有帧, 见 agent_runner.cpp 的 `engineRunStreamAsync` 等)
 - 应当使用 [XX_LOG](agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
 - 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
 - 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效

@@ -899,12 +899,12 @@ TestResult testTuiUiItems() {
             ScrollItem si;
             si.element = std::move(res.rows[0].element);
             si.hits.push_back(UiHitRegion{
+                .id   = "item-" + std::to_string(i),
                 .x    = 0,
                 .y    = 0,
                 .w    = 0,
                 .h    = 1,
                 .kind = UiHitRegionKind::Action,
-                .id   = "item-" + std::to_string(i),
             });
             items->push_back(std::move(si));
         }

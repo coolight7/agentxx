@@ -86,6 +86,21 @@ struct InterruptUiOption {
 /// 未知 kind / 未知 control: 客户端渲染 fallback 文本或诊断行, 不使整份描述失效
 /// (向前兼容, 且不静默丢内容)。
 struct InterruptUiBlock {
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+    /// 缺省值 (checkbox = 布尔; number = 数值; 其余 = 候选项值/文本)
+    utilxx_base::Json defaultValue;
+
+    // ---- custom (扩展块: 组件项数组 + 降级文本) ----
+    /// 组件项数组 (原样展开; 空/非法时用 `fallback`)
+    utilxx_base::Json props;
+
+    /// 解析时的原始 JSON (对象; 非对象输入为空)
+    ///
+    /// 用途: 内容块除本结构映射的字段外, 还可直接使用 `agentxx.ui.item` schema
+    /// 的组件 (表格/树/横排/分组/趋势图等) —— 这些组件的字段不做逐个映射, 而是
+    /// 由前端按原始 JSON 解析。程序化构造块时也可写入本字段来表达扩展组件。
+    /// 序列化 (`toJson`) 以它为基础, 保证扩展字段往返不丢。
+    utilxx_base::Json raw;
     /// 块类型 (见上)
     std::string kind;
 
@@ -98,15 +113,6 @@ struct InterruptUiBlock {
     // ---- text 样式 ----
     /// 主题色名 (error/accent/hint/normal/thinking/tool; 空 = normal)
     std::string color;
-    bool        bold = false;
-    bool        dim  = false;
-    /// 按可用宽度硬折行 (false = 单行, 超宽右缘裁剪)
-    bool wrap = false;
-    /// 左侧缩进空格数
-    int indent = 0;
-
-    // ---- gap ----
-    int lines = 1;
 
     // ---- diff ----
     std::string path;
@@ -127,11 +133,30 @@ struct InterruptUiBlock {
     /// 控件说明的 i18n 键 (优先)
     std::string helpKey;
 
+    // ---- submit ----
+    /// 取消标签 (空 = 客户端 i18n 默认 "取消")
+    std::string cancelLabel;
+    /// 取消标签的 i18n 键 (优先)
+    std::string cancelLabelKey;
+    /// 内容为空时的降级文本 (行式前端/未知内容时打印)
+    std::string fallback;
+
     // ---- control: 取值 ----
     /// 候选项 (buttons/select)
     std::vector<InterruptUiOption> options;
-    /// 缺省值 (checkbox = 布尔; number = 数值; 其余 = 候选项值/文本)
-    utilxx_base::Json defaultValue;
+    double minValue = 0.0;
+    double maxValue = 0.0;
+    /// 步进量 (<=0 按 1)
+    double step = 1.0;
+    /// 左侧缩进空格数
+    int indent = 0;
+
+    // ---- gap ----
+    int lines = 1;
+    bool        bold = false;
+    bool        dim  = false;
+    /// 按可用宽度硬折行 (false = 单行, 超宽右缘裁剪)
+    bool wrap = false;
     /// buttons: 点击即选中并提交整份表单 (一问一答形态)
     bool commitOnPick = false;
 
@@ -140,36 +165,12 @@ struct InterruptUiBlock {
     bool integer = false;
     /// 下界 (hasMin = false 表示不限)
     bool   hasMin   = false;
-    double minValue = 0.0;
     /// 上界 (hasMax = false 表示不限)
     bool   hasMax   = false;
-    double maxValue = 0.0;
-    /// 步进量 (<=0 按 1)
-    double step = 1.0;
 
     // ---- control: text ----
     /// 多行输入框 (**预留字段, 当前按单行渲染**)
     bool multiline = false;
-
-    // ---- submit ----
-    /// 取消标签 (空 = 客户端 i18n 默认 "取消")
-    std::string cancelLabel;
-    /// 取消标签的 i18n 键 (优先)
-    std::string cancelLabelKey;
-
-    // ---- custom (扩展块: 组件项数组 + 降级文本) ----
-    /// 组件项数组 (原样展开; 空/非法时用 `fallback`)
-    utilxx_base::Json props;
-    /// 内容为空时的降级文本 (行式前端/未知内容时打印)
-    std::string fallback;
-
-    /// 解析时的原始 JSON (对象; 非对象输入为空)
-    ///
-    /// 用途: 内容块除本结构映射的字段外, 还可直接使用 `agentxx.ui.item` schema
-    /// 的组件 (表格/树/横排/分组/趋势图等) —— 这些组件的字段不做逐个映射, 而是
-    /// 由前端按原始 JSON 解析。程序化构造块时也可写入本字段来表达扩展组件。
-    /// 序列化 (`toJson`) 以它为基础, 保证扩展字段往返不丢。
-    utilxx_base::Json raw;
 
     static InterruptUiBlock fromJson(const utilxx_base::Json& j);
     utilxx_base::Json       toJson() const;

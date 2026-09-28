@@ -84,31 +84,9 @@ enum class ConnState : uint8_t {
 ///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 全量拷贝内,
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
-    /// client 插件 UI 注册表快照 (工具消息装饰等; 每帧开头由主渲染器从
-    /// ClientPluginManager 拉取, 渲染/事件期间无锁读取; 无插件管理器时为空)
-    /// - 测试可直接经 mutate 注入假注册表, 驱动装饰渲染路径
-    std::shared_ptr<const agentxx::plugin::ClientUiRegistry> pluginRegistry;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
 
-    std::vector<std::shared_ptr<TUIMessage>> messages;
-
-    // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
-    /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
-    /// - 全量同步时为 0 (与旧行为一致); 尾窗同步时 > 0 表示上方还有更早历史
-    uint64_t historyWindowStart = 0;
-    /// 服务端会话总消息数 (Sync.totalMessages / Page.totalCount; 0 = 未知)
-    uint64_t historyTotal = 0;
-    /// 是否有未返回的历史分页请求 (滚动触发去重)
-    bool historyLoading = false;
-
-    /// 是否还有未加载的更早历史 (historyWindowStart > 0 即窗口上方非空)
-    bool hasMoreHistory() const noexcept {
-        return historyWindowStart > 0;
-    }
-
-    /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
-    /// - 由 agent 侧权限中间件持有 (权限询问卡片勾选 fullAuth 或客户端切换按钮)
-    /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
-    bool fullAuthorized = false;
+    std::deque<TUIPendingInput> pendingInputs;
 
     /// 启动更新检查发现的新版本标签 (空 = 未发现更新/未开启检查/检查失败)
     /// - 由 TUIClientAgentIO::applyUpdateCheckResult 写入 (client io 线程 → UI 快照)
@@ -117,24 +95,84 @@ struct TUIRenderState {
     /// 新版本发布页 URL (availableUpdateTag 非空时有效; 点击提示行复制该链接)
     std::string availableUpdateUrl;
 
-    std::shared_ptr<std::string> currentToken;
-    TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
-    bool                         isStreaming      = false;
-
-    /// agent-io 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
-    /// banner 显示"启动中"; 连接建立后由 mode_runners 置 Connected)
-    ConnState connState = ConnState::Connecting;
-
     /// 当前进行中的 agent 启动步骤 (如 "加载 MCP server: xxx"); 由
     /// onServerProgress (agent 线程 → sharedState) 更新, Connecting 期间
     /// banner 逐步展示; 启动完成 (onServerReady) 后清空
     std::string startupProgress;
+
+    std::string currentNodeName;
+
+    /// 是否还有未加载的更早历史 (historyWindowStart > 0 即窗口上方非空)
+    bool hasMoreHistory() const noexcept {
+        return historyWindowStart > 0;
+    }
+    std::string              cachedModelName;
+
+    /// 待应用模型选择:
+    /// 模型选择弹窗确认后写入, 随下一次发送的用户消息 (WireUserInput.model)
+    /// 携带; BaseAgent 执行新一轮会话时自动切换。发送时取走并清空,
+    /// 仅对"选择之后发送的下一条消息"生效 (重复选择以最后一次为准)
+    std::string pendingModel;
+
+    std::vector<std::shared_ptr<TUIMessage>> messages;
+
+    std::vector<std::string> modelNames;
+
+    /// 持久化会话列表 (会话选择弹窗数据源, WireSessionList 响应填充)
+    /// - 分页加载: 打开弹窗时先请求最新一页 (keyset 游标), 用户浏览到末尾时
+    ///   以上一条为游标续取; sessionList 始终保持按最近活动时间降序的已加载区间
+    /// - sessionListLoaded: false = 列表请求已发出但首页响应未到达 (弹窗显示
+    ///   loading); true = 已收到响应 (列表为空则确实无持久化会话)
+    std::vector<agentxx::agent::SessionInfo> sessionList;
+
+    std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
+    /// client 插件 UI 注册表快照 (工具消息装饰等; 每帧开头由主渲染器从
+    /// ClientPluginManager 拉取, 渲染/事件期间无锁读取; 无插件管理器时为空)
+    /// - 测试可直接经 mutate 注入假注册表, 驱动装饰渲染路径
+    std::shared_ptr<const agentxx::plugin::ClientUiRegistry> pluginRegistry;
+
+    std::shared_ptr<std::string> currentToken;
+
+    /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
+    std::shared_ptr<utilxx_base::Json> contextMessages;
+
+    /// 各模型多模态能力 (WireModelInfo 填充)
+    std::map<std::string, agentxx::agent::ModelCapabilityInfo> modelCapabilities;
+
+    // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
+    /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
+    /// - 全量同步时为 0 (与旧行为一致); 尾窗同步时 > 0 表示上方还有更早历史
+    uint64_t historyWindowStart = 0;
+    /// 服务端会话总消息数 (Sync.totalMessages / Page.totalCount; 0 = 未知)
+    uint64_t historyTotal = 0;
     /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
     /// - 语义 = 流身份: 同一流内 currentToken 只会被原地 append (或 COW 复制,
     ///   内容仍是同一流的延续), epoch 不变
     /// - UI 线程 (MessageListComponent::syncStream) 据此 O(1) 判断"新流/延续流",
     ///   替代每帧对整段累积文本做前缀比较 (O(n²) -> O(n))
     uint64_t currentTokenEpoch = 0;
+
+    /// 判断当前是否有待提交的流式 token 内容 (文本或加密思考/token统计)
+    bool hasPendingToken() const noexcept {
+        if (currentToken && !currentToken->empty()) {
+            return true;
+        }
+        return (currentTokenRole == TUIMessage::Role::Think) && pendingTokenThink.has_value()
+               && (pendingTokenThink->isEncrypted || pendingTokenThink->reasoningTokens > 0);
+    }
+
+    int64_t                              pendingTokenDurationMs  = 0;
+    int64_t                              pendingTokenStartTimeMs = 0;
+    /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
+    uint64_t sessionListTotalCount = 0;
+
+    /// 上下文统计 (WireContextStats 响应填充; 状态栏显示用)
+    /// - TUI 不持有 server-io 的 Session, 统计经 Wire 消息获取后存于此
+    /// - 0/0 表示尚未收到服务端推送
+    size_t contextTokens    = 0;
+    size_t maxContextTokens = 0;
+    double tps              = 0.0;
+    std::optional<TUIMessage::ThinkData> pendingTokenThink;
 
     /// 流式末尾 Think 折叠态的用户点击覆盖 (tri-state; UI 线程写, client 线程读):
     /// - -1 = 用户未点击 (跟随 TUISettings::tailThinkingMode 设置)
@@ -149,68 +187,31 @@ struct TUIRenderState {
     /// 放在共享状态而非 UI 组件内: 提交落盘发生在 client 线程, 需要读到用户
     /// 在 UI 线程点击的结果 (双方经 sharedState 的 mutex + COW 访问)。
     int streamThinkOverride = -1;
+    /// 是否有未返回的历史分页请求 (滚动触发去重)
+    bool historyLoading = false;
 
-    int64_t                              pendingTokenDurationMs  = 0;
-    int64_t                              pendingTokenStartTimeMs = 0;
-    std::optional<TUIMessage::ThinkData> pendingTokenThink;
+    /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
+    /// - 由 agent 侧权限中间件持有 (权限询问卡片勾选 fullAuth 或客户端切换按钮)
+    /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
+    bool fullAuthorized = false;
+    TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
+    bool                         isStreaming      = false;
 
-    /// 判断当前是否有待提交的流式 token 内容 (文本或加密思考/token统计)
-    bool hasPendingToken() const noexcept {
-        if (currentToken && !currentToken->empty()) {
-            return true;
-        }
-        return (currentTokenRole == TUIMessage::Role::Think) && pendingTokenThink.has_value()
-               && (pendingTokenThink->isEncrypted || pendingTokenThink->reasoningTokens > 0);
-    }
-
-    std::string currentNodeName;
-
-    std::vector<std::string> modelNames;
-    std::string              cachedModelName;
+    /// agent-io 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
+    /// banner 显示"启动中"; 连接建立后由 mode_runners 置 Connected)
+    ConnState connState = ConnState::Connecting;
     /// 是否已收到服务端模型信息响应 (WireModelInfo):
     /// - false: 模型列表数据尚未加载 (弹窗应显示 loading)
     /// - true:  已收到响应 (若列表仍为空则说明确实无可用模型)
     bool modelInfoLoaded = false;
 
-    /// 待应用模型选择:
-    /// 模型选择弹窗确认后写入, 随下一次发送的用户消息 (WireUserInput.model)
-    /// 携带; BaseAgent 执行新一轮会话时自动切换。发送时取走并清空,
-    /// 仅对"选择之后发送的下一条消息"生效 (重复选择以最后一次为准)
-    std::string pendingModel;
-
-    std::deque<TUIPendingInput> pendingInputs;
-
-    /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
-    std::shared_ptr<utilxx_base::Json> contextMessages;
-
     bool showContextOverlay = false;
-
-    /// 持久化会话列表 (会话选择弹窗数据源, WireSessionList 响应填充)
-    /// - 分页加载: 打开弹窗时先请求最新一页 (keyset 游标), 用户浏览到末尾时
-    ///   以上一条为游标续取; sessionList 始终保持按最近活动时间降序的已加载区间
-    /// - sessionListLoaded: false = 列表请求已发出但首页响应未到达 (弹窗显示
-    ///   loading); true = 已收到响应 (列表为空则确实无持久化会话)
-    std::vector<agentxx::agent::SessionInfo> sessionList;
     bool                                     sessionListLoaded = false;
     /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端全量响应
     /// 时恒为 false); 末尾空页防御: 收到空页即置 false 终止续取
     bool sessionListHasMore = false;
     /// 是否有未返回的会话列表分页请求 (预取去重, 防止滚动事件高频重复请求)
     bool sessionListLoadingMore = false;
-    /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
-    uint64_t sessionListTotalCount = 0;
-
-    std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
-
-    /// 上下文统计 (WireContextStats 响应填充; 状态栏显示用)
-    /// - TUI 不持有 server-io 的 Session, 统计经 Wire 消息获取后存于此
-    /// - 0/0 表示尚未收到服务端推送
-    size_t contextTokens    = 0;
-    size_t maxContextTokens = 0;
-    double tps              = 0.0;
-
-    /// 各模型多模态能力 (WireModelInfo 填充)
-    std::map<std::string, agentxx::agent::ModelCapabilityInfo> modelCapabilities;
 
     /// 获取当前活动模型的能力描述
     agentxx::agent::ModelCapabilityInfo currentModelCapability() const {

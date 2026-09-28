@@ -262,6 +262,7 @@ private:
     void applyPendingScrollRows(int contentWidth, size_t count);
     /// 内容末尾是否已在视口内 (取上一帧定位阶段的结论; 已到底时下滚转为吸附底部)
     bool atContentBottom() const;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
 
     // ---- 回调 ----
     ItemCountFunc    itemCount_;
@@ -269,65 +270,8 @@ private:
     QuickHeightFunc  quickHeight_;
     BuildFunc        buildItem_;
     FillViewportFunc fillViewport_;
-    CacheBudget      budget_;
-
-    // ---- 逐条目状态 ----
-    std::vector<int>      heights_;        // 各子项有效高度 (行; -1 = 未填)
     std::vector<bool>     measured_;       // 高度是否已实测
-    std::vector<uint64_t> keys_;           // 各子项上次校验时的 key
     std::vector<bool>     hasCache_;       // 各子项是否有缓存 Element
-    std::vector<size_t>   visibleIndices_; // 本帧可见子项索引
-    /// 本帧已确保 (构建/测量过, 待渲染) 的子项索引 (用于复位保护标记)
-    std::vector<size_t>   ensuredIndices_;
-    /// 各子项 key 的校验帧号 (惰性比较: 只在与视口相关的条目上校验, 见 prepareLayout)
-    std::vector<uint64_t> keyFrames_;
-    /// 头部前插区待补高度的前缀长度 (notifyPrepended 设置: 该区间高度为 -1,
-    /// 下一次 syncItemArrays 以新快照口径补齐后归零)
-    size_t                unknownPrefix_ = 0;
-
-    /// 不可缓存项 (cacheable=false) 的 Element (每帧重建一次, 跨布局迭代复用)
-    struct TransientEntry {
-        size_t        index;
-        LazyBuiltItem item;
-    };
-
-    std::vector<TransientEntry> transientItems_;
-    uint64_t                    frameSeq_          = 0;     // OnRender 递增 (帧边界)
-    uint64_t                    lastPreparedFrame_ = ~0ULL; // transientItems_ 所属帧
-
-    // ---- 滚动状态 (锚点即主状态) ----
-    /// 视口顶行所在子项索引
-    size_t anchorIndex_ = 0;
-    /// 视口顶行在该子项内的行号 (0 <= 值 < 高度(anchor))
-    int    anchorRow_   = 0;
-    /// 锚点以上子项的高度和 (未实测项按粗略估算; 派生出 scrollOffset)
-    int    rowsAboveAnchor_ = 0;
-    /// 待落实的滚轮行数 (负=上滚; 由 OnEvent 累积, prepareLayout 开头落实)
-    int    pendingScrollRows_ = 0;
-    bool   stickToBottom_     = true;
-    /// 上一帧定位阶段的精确结论: 内容末尾是否落在视口内 (= 已到底, 无法再下滚)。
-    /// 只由实测高度与视口高度得出, 不含任何估算 —— 下滚时据此恢复吸附底部
-    bool   contentEndsInViewport_ = false;
-
-    int  totalHeight_   = 0; // 全部子项有效高度和 (增量维护, 不再每帧全量求和)
-    int  viewportHeight_ = 0;
-    int  measuredWidth_  = -1;    // 上次布局所用内容宽度 (变化时缓存整体失效)
-    bool hasGutter_      = false; // 是否预留滚动条列 (影响滚动条绘制判断)
-    int  contentXMax_    = 0;     // 内容区右边界 (已扣除 gutter)
-    uint64_t prepareSeq_ = 0;     // prepareLayout 次数 (key 校验帧标记)
-
-    // ---- LRU 缓存 (头部为最近使用) ----
-    std::list<Entry>                                 lruList_;
-    std::vector<typename std::list<Entry>::iterator> itemCache_;
-    size_t                                           cachedBytes_ = 0;
-
-    // ---- 命中检测输出 ----
-    std::vector<ftxui::Box> visibleBoxes_;
-    /// 各子项上一帧的布局 Box (与 items 按 index 对应; 未布局过的项为无效 Box)。
-    /// 缓存命中且 box 与上帧一致时, 子项内部布局状态与上帧完全相同,
-    /// 可跳过整棵子树的 ComputeRequirement/SetBox 迭代 (见 prepareLayout 定位阶段)
-    std::vector<ftxui::Box> lastBoxes_;
-    ftxui::Box              box_;
 
     /// 本帧已确保 (prepareLayout 定位阶段处理过, 待渲染) 的子项索引标记:
     /// evictIfNeeded 禁止淘汰这些条目。
@@ -341,6 +285,63 @@ private:
     /// 标记后淘汰在遇到首个帧内已确保条目时停止 (LRU 序 = 最近使用在前,
     /// 本帧条目全部位于前部, 尾部未确保条目先被淘汰完), 保证渲染优先于压预算。
     std::vector<bool> protectedIndices_;
+    CacheBudget      budget_;
+
+    // ---- 逐条目状态 ----
+    std::vector<int>      heights_;        // 各子项有效高度 (行; -1 = 未填)
+    std::vector<uint64_t> keys_;           // 各子项上次校验时的 key
+    std::vector<size_t>   visibleIndices_; // 本帧可见子项索引
+    /// 本帧已确保 (构建/测量过, 待渲染) 的子项索引 (用于复位保护标记)
+    std::vector<size_t>   ensuredIndices_;
+    /// 各子项 key 的校验帧号 (惰性比较: 只在与视口相关的条目上校验, 见 prepareLayout)
+    std::vector<uint64_t> keyFrames_;
+
+    /// 不可缓存项 (cacheable=false) 的 Element (每帧重建一次, 跨布局迭代复用)
+    struct TransientEntry {
+        size_t        index;
+        LazyBuiltItem item;
+    };
+
+    std::vector<TransientEntry> transientItems_;
+    std::vector<typename std::list<Entry>::iterator> itemCache_;
+
+    // ---- 命中检测输出 ----
+    std::vector<ftxui::Box> visibleBoxes_;
+    /// 各子项上一帧的布局 Box (与 items 按 index 对应; 未布局过的项为无效 Box)。
+    /// 缓存命中且 box 与上帧一致时, 子项内部布局状态与上帧完全相同,
+    /// 可跳过整棵子树的 ComputeRequirement/SetBox 迭代 (见 prepareLayout 定位阶段)
+    std::vector<ftxui::Box> lastBoxes_;
+
+    // ---- LRU 缓存 (头部为最近使用) ----
+    std::list<Entry>                                 lruList_;
+    ftxui::Box              box_;
+    /// 头部前插区待补高度的前缀长度 (notifyPrepended 设置: 该区间高度为 -1,
+    /// 下一次 syncItemArrays 以新快照口径补齐后归零)
+    size_t                unknownPrefix_ = 0;
+    uint64_t                    frameSeq_          = 0;     // OnRender 递增 (帧边界)
+    uint64_t                    lastPreparedFrame_ = ~0ULL; // transientItems_ 所属帧
+
+    // ---- 滚动状态 (锚点即主状态) ----
+    /// 视口顶行所在子项索引
+    size_t anchorIndex_ = 0;
+    uint64_t prepareSeq_ = 0;     // prepareLayout 次数 (key 校验帧标记)
+    size_t                                           cachedBytes_ = 0;
+    /// 视口顶行在该子项内的行号 (0 <= 值 < 高度(anchor))
+    int    anchorRow_   = 0;
+    /// 锚点以上子项的高度和 (未实测项按粗略估算; 派生出 scrollOffset)
+    int    rowsAboveAnchor_ = 0;
+    /// 待落实的滚轮行数 (负=上滚; 由 OnEvent 累积, prepareLayout 开头落实)
+    int    pendingScrollRows_ = 0;
+
+    int  totalHeight_   = 0; // 全部子项有效高度和 (增量维护, 不再每帧全量求和)
+    int  viewportHeight_ = 0;
+    int  measuredWidth_  = -1;    // 上次布局所用内容宽度 (变化时缓存整体失效)
+    int  contentXMax_    = 0;     // 内容区右边界 (已扣除 gutter)
+    bool   stickToBottom_     = true;
+    /// 上一帧定位阶段的精确结论: 内容末尾是否落在视口内 (= 已到底, 无法再下滚)。
+    /// 只由实测高度与视口高度得出, 不含任何估算 —— 下滚时据此恢复吸附底部
+    bool   contentEndsInViewport_ = false;
+    bool hasGutter_      = false; // 是否预留滚动条列 (影响滚动条绘制判断)
 };
 
 } // namespace agentxx::client

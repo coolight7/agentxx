@@ -16,14 +16,15 @@ enum class AudioDataSource {
 };
 
 struct AudioData {
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+    std::string                           processName;
     std::vector<uint8_t>                  data;
+    std::chrono::steady_clock::time_point timestamp;
     uint32_t                              sampleRate    = 0;
+    AudioDataSource                       source        = AudioDataSource::SystemOutput;
+    uint32_t                              processId = 0;
     uint16_t                              channels      = 0;
     uint16_t                              bitsPerSample = 0;
-    AudioDataSource                       source        = AudioDataSource::SystemOutput;
-    std::chrono::steady_clock::time_point timestamp;
-    uint32_t                              processId = 0;
-    std::string                           processName;
 };
 
 using AudioStreamListener = std::function<void(const AudioData& data)>;

@@ -1366,11 +1366,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 14.2 工具调用 WireDelta: tool_start (write 模式) -> 工具装饰推送
             agentxx::agent::WireDelta deltaWriteStart{
-                .type       = agentxx::agent::WireDelta::Type::ToolStart,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_write_1",
                 .arguments
                 = R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> p1\np1 --> [*]","todos":[{"state":"in_progress","content":"write task"}]})",
+                .type       = agentxx::agent::WireDelta::Type::ToolStart,
             };
             mgr->onDelta(deltaWriteStart);
 
@@ -1390,10 +1390,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 14.3 工具调用 WireDelta: tool_start (read 模式) -> 占位装饰
             agentxx::agent::WireDelta deltaReadStart{
-                .type       = agentxx::agent::WireDelta::Type::ToolStart,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_read_1",
                 .arguments  = R"({"mode":"read"})",
+                .type       = agentxx::agent::WireDelta::Type::ToolStart,
             };
             mgr->onDelta(deltaReadStart);
 
@@ -1409,11 +1409,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // tool_end (read 模式) -> 结果装饰刷新
             agentxx::agent::WireDelta deltaReadEnd{
-                .type       = agentxx::agent::WireDelta::Type::ToolEnd,
                 .toolName   = "agentxx_planning",
                 .toolCallId = "call_plan_read_1",
                 .result
                 = R"({"roadmap":"stateDiagram-v2\n[*] --> p2\np2 --> [*]","todos":[{"state":"completed","content":"read task done"}]})",
+                .type       = agentxx::agent::WireDelta::Type::ToolEnd,
             };
             mgr->onDelta(deltaReadEnd);
 

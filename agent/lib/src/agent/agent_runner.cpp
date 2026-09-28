@@ -10,6 +10,34 @@
 namespace agentxx {
 namespace agent {
 
+namespace {
+
+/// 非协程转发包装 (noinline): 把"内层重型协程"的调用挡在调用者的协程帧之外。
+/// 背景: MSVC + 全程序 LTO 会把被内联进来的内层协程状态算进外层协程帧
+/// (实测外层帧里出现 `mov ecx, <内层帧大小>; call 帧分配器` 后把内层帧指针
+/// 写在外层帧的 1.6 MB 偏移处), 于是每层 `co_await` 都在外层帧里再放一份内层
+/// 状态, MB 级帧会沿调用链翻倍。这里用**非协程**函数转发: 包装自身没有帧,
+/// 内层协程的帧在包装内单独分配, 只有一个小小的 awaitable 句柄进入调用者。
+/// 详见 docs/zh-cn/design/benchmark.md 第 11 节 (定位) 与第 13 节 (处置)。
+AGENTXX_NOINLINE asio::awaitable<neograph::graph::RunResult> engineRunStreamAsync(
+    neograph::graph::GraphEngine*         engine,
+    neograph::graph::RunConfig            cfg,
+    neograph::graph::GraphStreamCallback  callback
+) {
+    return engine->run_stream_async(std::move(cfg), callback);
+}
+
+AGENTXX_NOINLINE asio::awaitable<neograph::graph::RunResult> engineResumeAsync(
+    neograph::graph::GraphEngine*         engine,
+    neograph::graph::RunConfig            cfg,
+    neograph::json                        input,
+    neograph::graph::GraphStreamCallback  callback
+) {
+    return engine->resume_async(std::move(cfg), std::move(input), callback);
+}
+
+} // namespace
+
 asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
     std::shared_ptr<AgentContext>                 ctx,
     neograph::graph::GraphEngine*                 engine,
@@ -68,7 +96,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
         // 程序重启恢复中断: 跳过首跑, 直接进入中断处理循环
         result = std::move(initialResult);
     } else {
-        result = co_await engine->run_stream_async(std::move(cfg), hooks.eventCallback);
+        result = co_await engineRunStreamAsync(engine, std::move(cfg), hooks.eventCallback);
     }
 
     fOnRunResult(*result);
@@ -243,7 +271,8 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             resumeCfg.cancel_token = cancelToken;
             resumeCfg.stream_mode  = resumeStreamMode;
             resumeCfg.max_steps    = resumeMaxSteps;
-            result                 = co_await engine->resume_async(
+            result                 = co_await engineResumeAsync(
+                engine,
                 std::move(resumeCfg),
                 neograph::json{},
                 hooks.eventCallback

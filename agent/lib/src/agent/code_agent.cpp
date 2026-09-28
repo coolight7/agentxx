@@ -69,12 +69,12 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             } else {
                 agentContext->appendComponentInfo.failedComponents.push_back(
                     AppendComponentNotification{
-                        .type    = AppendComponentNotification::Type::Skill,
                         .name    = dirPath,
-                        .success = false,
                         .errorMessage
                         = ec ? fmt::format("directory not accessible: {}", ec.message())
                              : "directory not found",
+                        .type    = AppendComponentNotification::Type::Skill,
+                        .success = false,
                     }
                 );
             }
@@ -100,11 +100,11 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             } else {
                 agentContext->appendComponentInfo.failedComponents.push_back(
                     AppendComponentNotification{
-                        .type         = AppendComponentNotification::Type::Memory,
                         .name         = memPath,
-                        .success      = false,
                         .errorMessage = ec ? fmt::format("file not accessible: {}", ec.message())
                                            : "file not found",
+                        .type         = AppendComponentNotification::Type::Memory,
+                        .success      = false,
                     }
                 );
             }
@@ -252,14 +252,14 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                             // 记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
                             agentContext->appendComponentInfo.failedComponents.push_back(
                                 AppendComponentNotification{
-                                    .type         = AppendComponentNotification::Type::Mcp,
                                     .name         = ns,
-                                    .success      = false,
                                     .errorMessage = fmt::format(
                                         "list tools failed: {} ({})",
                                         mcpTools.error(),
                                         mcpCfg.url
                                     ),
+                                    .type         = AppendComponentNotification::Type::Mcp,
+                                    .success      = false,
                                 }
                             );
                         }
@@ -273,14 +273,14 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                         // 记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
                         agentContext->appendComponentInfo.failedComponents.push_back(
                             AppendComponentNotification{
-                                .type         = AppendComponentNotification::Type::Mcp,
                                 .name         = ns,
-                                .success      = false,
                                 .errorMessage = fmt::format(
                                     "initialize failed: {} ({})",
                                     result.error(),
                                     mcpCfg.url
                                 ),
+                                .type         = AppendComponentNotification::Type::Mcp,
+                                .success      = false,
                             }
                         );
                     }
@@ -296,10 +296,10 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                     // 异常路径同样记录加载失败组件 (供客户端 "Failed" 组统计与弹窗查看)
                     agentContext->appendComponentInfo.failedComponents.push_back(
                         AppendComponentNotification{
-                            .type         = AppendComponentNotification::Type::Mcp,
                             .name         = ns,
-                            .success      = false,
                             .errorMessage = fmt::format("{} ({})", errmsg, mcpCfg.url),
+                            .type         = AppendComponentNotification::Type::Mcp,
+                            .success      = false,
                         }
                     );
                     co_return true;

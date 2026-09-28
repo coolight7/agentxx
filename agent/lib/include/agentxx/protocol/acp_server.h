@@ -127,35 +127,36 @@ public:
     void emitAgentMessageChunk(std::string_view sessionId, std::string_view text);
 
 private:
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+
+    // -- 会话表 --
+    mutable std::mutex                              sessionsMu_;
+
+    // -- 进行中 prompt 追踪 --
+    mutable std::mutex                 inflightMu_;
+
+    std::mutex              workersMu_;
+
+    // -- 出站请求追踪 (agent→client) --
+    mutable std::mutex                                                  pendingMu_;
 
     // -----------------------------------------------------------------------
     // 成员
     // -----------------------------------------------------------------------
 
     Config                                     config_;
-    std::shared_ptr<agentxx::agent::BaseAgent> agent_;
-    json                                       agentInfo_;
-    std::atomic<bool>                          initialized_{false};
-    std::atomic<bool>                          stopFlag_{false};
+    std::condition_variable workersCv_;
     NotificationSink                           sink_;
-
-    // -- 会话表 --
-    mutable std::mutex                              sessionsMu_;
+    json                                       agentInfo_;
+    std::shared_ptr<agentxx::agent::BaseAgent> agent_;
     std::map<std::string, std::string, std::less<>> sessions_; // sessionId → 工作目录
     std::map<std::string, std::shared_ptr<std::atomic<bool>>, std::less<>> cancelFlags_;
-
-    // -- 进行中 prompt 追踪 --
-    mutable std::mutex                 inflightMu_;
     std::set<std::string, std::less<>> inflightSessions_;
-    std::atomic<int>                   inflightCount_{0};
-
-    std::mutex              workersMu_;
-    std::condition_variable workersCv_;
-
-    // -- 出站请求追踪 (agent→client) --
-    mutable std::mutex                                                  pendingMu_;
     std::map<int64_t, std::shared_ptr<std::promise<utilxx_base::Json>>> pending_;
     std::atomic<int64_t>                                                nextOutboundId_{1};
+    std::atomic<int>                   inflightCount_{0};
+    std::atomic<bool>                          initialized_{false};
+    std::atomic<bool>                          stopFlag_{false};
 };
 
 // ===========================================================================

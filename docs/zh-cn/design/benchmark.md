@@ -553,7 +553,8 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 [resource/history/memory-1/plan.md](../../../resource/history/memory-1/plan.md)。
 **2026-09-28 重测 (第 12 节)**: 同一负载的 `malloc req~` 已降到 1.5 GiB (50 × 8KB) /
 3.7 GiB (100 × 8KB), 16~257 KiB 的整段缓冲档几乎清零; 但本节定位的 `huge`
-(asio 协程帧) 档逐项未变 (1.1 GiB / 570 块), 巨帧问题仍未解决。
+(asio 协程帧) 档当时逐项未变 (1.1 GiB / 570 块) —— 该问题随后在同批工作中定位到
+机制并处置 (第 13 节: 外层帧把内层协程帧又算了一遍)。
 
 标注: 重测数据 = 2026-09-26, 主仓 `88fee6e0`, neograph `1522761`;
 "上一轮" = 2026-09-25 的实测, **commit 未记录** (当时 neograph 为 `11764c5`,
@@ -784,7 +785,7 @@ server 空闲三者一致 (专用 1.6 MB / 提交 2.9 MB)。
    最大 6.45 MiB, 上一批 94 个 / 164.6 MiB / 最大 6.45 MiB) —— 即第 11 节定位的
    "MSVC + 全程序 LTO 下的巨帧"问题**与本次重构无关, 仍未解决**;
    mimalloc 变体的提交量减半是 binned 峰值下降 (113.1 → 25.8 MiB) 的结果,
-   巨帧那一份保留 (每轮 ≈22 MB) 依旧存在。
+   巨帧那一份保留 (每轮 ≈22 MB) 当时依旧存在 (已由第 13 节处置消除)。
 
 ### 12.3 Windows `agentxx_benchmark resource` 全场景对照 (新增数据)
 
@@ -812,11 +813,20 @@ Windows 上只有 RSS (工作集) / 峰值 / 线程 / 句柄可用, PSS/私脏/�
 
 - 方向与 harness 一致: mimalloc 的差值在"上下文越大 / 真实逐轮越多"的场景越明显
   (真实逐轮 20 轮 +27.5 MB、真实 server 200K +14.6 MB), 空载与客户端侧只有 +1 MB 级;
-- 本机 Windows 上 `resource_ffi` 崩溃无报告 (退出码 `0xC0000005`, `libagentxx.dll`
-  加载之后; 两个变体都一样, `agentxx_ffi_*` 导出齐全, 与分配器开关无关),
-  `resource_real_tui_child` 因需要 PTY 无数据 —— 这两项待后续单独排查;
+- 本机 Windows 上 `resource_ffi` 曾崩溃无报告 (退出码 `0xC0000005`, `libagentxx.dll`
+  加载之后; 两个变体都一样), **已在 2026-09-28 修复**: 基准侧手写的函数指针签名与
+  `ffi_api.h` 不一致 (`agentxx_ffi_stop` / `agentxx_ffi_destroy` 少写了 `log` 出参,
+  `agentxx_ffi_send_input` 多写了一个不存在的 `opts` 参数), 被调函数仍会写那个出参,
+  于是写到寄存器里的野指针上; 现已改成取自头文件的类型 (`decltype(&::...)`)。
+  `resource_real_tui_child` 因需要 PTY 无数据 —— 该场景仍按设计跳过;
 - 帧耗时 (真实 TUI, 组件树构建耗时) 两次运行落在 0.069~0.124 ms/帧, 与分配器无关
   (每档只有 4~21 帧, 只作参考)。
+
+### 12.5 巨帧的机制与处置
+
+第 12.2 节记录的 `huge` 档 (每轮 ≈11 块 × ≈2 MB) 在本轮又前进了一步:
+根因量化到"**外层协程帧把内层协程的帧尺寸又算了一遍**", 处置与效果见第 13 节
+(生产路径的 MB 级帧已消除, 长上下文 mimalloc 场景的提交量再降 40%)。
 
 ### 12.4 结论
 
@@ -827,10 +837,111 @@ Windows 上只有 RSS (工作集) / 峰值 / 线程 / 句柄可用, PSS/私脏/�
    5.8 倍提交, 总 CPU 只省 18% (100K 组甚至略高), 故 `AGENTXX_ENABLE_MIMALLOC`
    保持默认 `OFF` (第 10.4 节的判断依据本轮数据依然成立, 只是绝对差距减半);
 3. **巨帧问题独立于本轮重构**: `huge` 档 (asio 协程帧) 与静态扫描数字逐项一致,
-   仍是 Windows/MSVC + 全程序 LTO 下的待解项 (第 11 节);
+   即第 11 节定位的 "MSVC + 全程序 LTO 下的巨帧" 与本次重构无关; 该问题已在同批
+   后续工作中定位到机制并处置 (第 13 节: 生产路径的 MB 级帧消除)。
 4. **下一步的收益点**: ①继续收敛 10 KiB 档 (逐条消息正文, 现 ≈430 块/轮) 与
    32/128/384 B 小对象档 (现约 1/3); ②`huge` 巨帧 (≈22 MB/轮, 只在链接 mimalloc
    时变成内存账, 但也会抬高 CPU 侧的分配/清零成本); ③插件静态依赖与线程栈
-   (第 8 节"后续可优化方向")。
+   (第 8 节"后续可优化方向")。其中 ② 已在本批后续工作中解决, 见第 13 节。
+
+## 13. 巨帧根因与处置: 嵌套协程帧在外层帧里重复 (2026-09-28 / c957b504)
+
+第 11 节把 `huge` 档 (每轮 ≈11 块 × ≈2 MB) 定位为 "asio awaitable 协程帧",
+并归因到 "MSVC + 全程序 LTO 的内联面"; 本节给出**机制**、**处置**与**实测**。
+
+### 13.1 机制: 外层帧把每个被 `co_await` 的内层协程帧又算了一遍
+
+反汇编 `AgentRunner::run` 的恢复函数 (release `/LTCG`, 方法见 13.4) 可以看到:
+
+```
+mov     ecx,0C9EF0h                   ; 825,584 B = 内层 GraphEngine::run_stream_async 的帧大小
+call    awaitable_frame_base<...>::operator new
+mov     qword ptr [rbx+19A000h],rax   ; 把新帧指针写进**本函数自己的帧**的 1.6 MB 偏移处
+lea     rcx,[GraphEngine::run_stream_async$_DestroyCoro$2]
+mov     qword ptr [rax+8],rcx
+lea     rcx,[GraphEngine::run_stream_async$_ResumeCoro$1]
+mov     qword ptr [rax],rcx
+```
+
+统计该恢复函数对自身帧的全部 1017 个内存操作数:
+
+| 帧偏移区间 | 操作数个数 |
+|---|---|
+| 0 ~ 4 KiB | 634 |
+| 4 ~ 64 KiB | 365 |
+| 64 KiB ~ 1 MiB | 0 |
+| 1 MiB ~ 1.6 MiB | 18 |
+
+即帧的 2.5 MB 里只有前 64 KiB 是密集使用的, 后半段是**给被 `co_await` 的内层协程留的状态区**。
+尺寸也逐位对得上:
+
+```
+AgentRunner::run 帧            2,506,528 B
+ ≈ GraphEngine::run_stream_async 帧   825,584 B
+ + GraphEngine::resume_async    帧 1,661,232 B
+ + 自身状态                           ≈19,712 B
+```
+
+结论: **`co_await` 一个会被内联的协程时, 外层帧把内层协程的帧尺寸再加一遍**
+(内层帧本身照常单独分配), 于是 MB 级帧沿调用链"翻倍":
+第 11 节记的"只有 `co_return co_await X()` 的薄包装也拿到 2.5 MB"、
+训练链上 11 个同级帧 (6.77 → 6.69 MB) 都是这个机制的产物。这也解释了为什么
+"帧尺寸随链接期内联面变化"、"帧里除头部几百字节外基本是零"——前半句对, 后半句
+是只看开头那段代码得出的结论 (深处那 18 个操作数就是内层帧指针与内层状态)。
+
+### 13.2 处置: 在"重"边界上打断内联 (不改编译选项)
+
+| 做法 | 适用 | 本项目落地 |
+|---|---|---|
+| `__declspec(noinline)` 标在**重协程**的声明上 | 自己有源码的协程 | `AgentRunner::run` (agent_runner.h) |
+| **非协程转发函数** (noinline) 包住调用 | 第三方/不能改的协程 | `agent_runner.cpp` 的 `engineRunStreamAsync` / `engineResumeAsync` (转发 neograph 的两个引擎调用) |
+
+第二种是关键: 包装是**普通函数** (不是协程), 自身没有帧; 内层协程的帧在包装里
+单独分配, 调用者只拿到一个小小的 awaitable 句柄, 于是调用者的帧不再为它留空间。
+宏 `AGENTXX_NOINLINE` 定义在 `agent/lib/include/agentxx/agent/agent_runner.h`。
+
+### 13.3 效果 (同一构建目录, 只加上述标记 + 两个转发包装)
+
+静态口径 (release `agentxx_cli.exe`, `scan_coro_frames.py`):
+
+| 指标 | 处置前 | 处置后 |
+|---|---|---|
+| ≥384 KiB 的帧 | 96 个 / 165.6 MiB | **66 个 / 92.9 MiB** |
+| 1 ~ 4 MiB 的帧 | 41 | **11** |
+| 生产路径 (agent 轮次) 最大帧 | 2.5 MB (`AgentRunner::run` 链) | **< 384 KiB** |
+
+运行时口径 (Windows release, `AGENTXX_ENABLE_MIMALLOC=ON` + `MIMALLOC_LINK=SHARED`,
+`agentxx_cli cli` + mock LLM, 8 KB/轮):
+
+| 指标 (50×8KB / 100×8KB) | 处置前 | 处置后 |
+|---|---|---|
+| `huge` (≥512 KiB) 累计 / 块数 | 1.1 GiB / 570、2.3 GiB / 1.3K | **131 MiB / 167、433 MiB / 577** |
+| `huge` 峰值 | 28.0 / 29.4 MiB | **3.0 / 4.4 MiB** |
+| `malloc req~` 累计 | 1.5 / 3.7 GiB | 599 MiB / 1.8 GiB |
+| 进程峰值提交 (分配器口径) | 114.5 / 149.5 MiB | **80.6 / 89.1 MiB** |
+| 稳态提交 | 112.6 / 148.8 MB | **80.6 / 89.1 MB** |
+| 稳态专用工作集 | 36.0 (31.2~47.6) / 59.8 MB | **31.2~32.7 / 42.0 MB** |
+| CPU 合计 (user+kernel) | 0.875 / 1.641 s | 0.78~0.86 / 1.48 s |
+
+即: 100×8KB (200K token) 组提交量 **−40%**、专用工作集 **−30%**、`huge` 字节 **−81%**;
+50×8KB 组 `huge` 字节 **−88%**。系统分配器路径本来就不把这些帧计入常驻
+(未触碰页不提交), 收益主要体现在分配器放置策略与系统调用次数上。
+
+### 13.4 复现与回归卡口
+
+```powershell
+# 静态口径: ≥384 KiB 的帧数与最大帧 (无需运行)
+python resource/benchmark/harness/scan_coro_frames.py <agentxx_cli.exe>
+# 归属到函数 (定位"帧尺寸来自哪个函数", 也就是需要打断内联的位置)
+python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
+#   /MAP 需要一次等价重链 (/DEBUG:FULL /MAP, ≈150 s), 做法见 memory-2/work.md §2.1
+# 运行时口径: MIMALLOC_SHOW_STATS=1 看 huge 档累计量/块数 (块数 ÷ 轮数 = 每轮巨帧次数)
+```
+
+未处置的巨帧 (与生产路径无关, 需要时按 13.2 处理):
+
+- 训练模式: `runTrainingMode` 链 6.77 MB、`runEvolutionLoop` 1.67 MB (仅 `agentxx_cli train`);
+- neograph 子图: `SubgraphNode::run` 4.98 MB、`run_subgraph_async` 1.66 MB
+  (仅图里含子图时才会走到; 默认 agent 图不含)。
 
 

@@ -1260,8 +1260,8 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             // 重放缓冲依赖 seq 单调性, 未分配 seq (=0) 的 WireDelta 不会入缓冲,
             // 断线重连增量重放时该消息会丢失, 导致客户端历史与服务端不一致
             auto d = WireDelta{
-                .type    = WireDelta::Type::InsertMessage,
                 .message = std::make_shared<ViewMessage>(std::move(vm)),
+                .type    = WireDelta::Type::InsertMessage,
             };
             d.seq = sess->nextDeltaSeq();
             sendToPeer(std::move(d));
@@ -1281,8 +1281,8 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                 );
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
-                    .hasError     = turnResult.hasError,
                     .errorMessage = turnResult.errorMessage,
+                    .hasError     = turnResult.hasError,
                     .interrupted  = turnResult.interrupted,
                 });
                 sendContextStats();
@@ -1296,8 +1296,8 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                 turnResult.interrupted  = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
-                    .hasError     = true,
                     .errorMessage = std::move(errmsg),
+                    .hasError     = true,
                     .interrupted  = false,
                 });
                 co_return false;
@@ -1310,8 +1310,8 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                 turnResult.interrupted  = false;
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,
-                    .hasError     = true,
                     .errorMessage = std::move(errmsg),
+                    .hasError     = true,
                     .interrupted  = false,
                 });
                 return false;

@@ -42,12 +42,7 @@ inline constexpr std::string_view permissionModeDepict(agent::PermissionMode mod
 }
 
 struct YamlAppConfig {
-    std::map<std::string, agent::ModelConfig> models;
-    /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
-    /// - timeout 字段按秒配置, 0 = 不限制, 未配置默认 120 秒
-    std::map<std::string, agent::McpServerConfig> mcpServers;
-    std::vector<std::string>                      skillDirPaths;
-    std::vector<std::string>                      memoryFilePaths;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     std::string                                   useModelDefault;
     std::string                                   useModelSubagent;
     std::string                                   useModelWebSearch;
@@ -70,15 +65,8 @@ struct YamlAppConfig {
     ///   作为 permission Ask 默认放行范围、filesystem 工具与权限校验的相对路径
     ///   解析基准、命令执行子进程初始目录、插件 projectRoot (codegraph 默认索引根)
     std::string workDir;
-
-    /// 权限询问处理模式 (yaml `permission.mode`: ask/all_ask/pass/deny, 默认 ask)
-    /// - ask:     当前工作目录内允许读写, 其他路径询问用户
-    /// - all_ask: 所有路径读写均询问用户
-    /// - pass:    全部放行, 不询问
-    /// - deny:    全部拒绝, 不询问
-    /// 服务端 CodeAgent 按模式注册文件系统读写规则; 客户端仅对仍到达的
-    /// 权限 INTERRUPT 作兜底 (pass 放行 / deny 拒绝 / ask、all_ask 询问)
-    agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
+    std::vector<std::string>                      skillDirPaths;
+    std::vector<std::string>                      memoryFilePaths;
     /// 权限白名单: 始终放行的路径列表 (yaml `permission.whitelist`)
     /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析
     /// - 优先级高于模式默认规则 (如 deny 模式下白名单路径仍可访问)
@@ -93,6 +81,19 @@ struct YamlAppConfig {
     ///   args: 自定义参数 (预留, 存留供查询);
     ///   config: 插件配置文件所在目录或文件路径 (可指向文件/目录)
     std::vector<agent::PluginConfig> plugins;
+    std::map<std::string, agent::ModelConfig> models;
+    /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
+    /// - timeout 字段按秒配置, 0 = 不限制, 未配置默认 120 秒
+    std::map<std::string, agent::McpServerConfig> mcpServers;
+
+    /// 权限询问处理模式 (yaml `permission.mode`: ask/all_ask/pass/deny, 默认 ask)
+    /// - ask:     当前工作目录内允许读写, 其他路径询问用户
+    /// - all_ask: 所有路径读写均询问用户
+    /// - pass:    全部放行, 不询问
+    /// - deny:    全部拒绝, 不询问
+    /// 服务端 CodeAgent 按模式注册文件系统读写规则; 客户端仅对仍到达的
+    /// 权限 INTERRUPT 作兜底 (pass 放行 / deny 拒绝 / ask、all_ask 询问)
+    agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;
     /// git worktree 模式开关 (yaml `worktree.enable`, 默认 false)

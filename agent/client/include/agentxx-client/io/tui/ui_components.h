@@ -74,18 +74,19 @@ pluginxx::ui::Item              adaptItem(const pluginxx::ui::Item& item);
 
 /// 单个控件的表单状态 (UI 线程独占; 非界面描述的一部分)
 struct UiFormControlState {
-    /// 是否已按描述初始化 (未初始化时渲染按描述缺省值, 忽略下面的字段)
-    bool initialized = false;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     /// 文本/数值输入框当前文本 (初始为描述声明的默认值)
     std::string editText;
-    /// 输入框是否已被编辑 (首次输入替换默认值)
-    bool edited = false;
-    /// buttons/select 的选中下标
-    int selected = 0;
-    /// checkbox / switch 的勾选状态
-    bool checked = false;
     /// 校验失败提示 (显示在控件下方; 下次编辑时清除)
     std::string tip;
+    /// buttons/select 的选中下标
+    int selected = 0;
+    /// 是否已按描述初始化 (未初始化时渲染按描述缺省值, 忽略下面的字段)
+    bool initialized = false;
+    /// 输入框是否已被编辑 (首次输入替换默认值)
+    bool edited = false;
+    /// checkbox / switch 的勾选状态
+    bool checked = false;
 };
 
 /// 一份表单的状态 (按控件 id 索引; 中断表单与插件表单共用同一结构与渲染)

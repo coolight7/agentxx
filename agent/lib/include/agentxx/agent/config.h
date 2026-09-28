@@ -52,6 +52,10 @@ class ModelConfig {
 public:
 
     static const ModelConfig defaultModelConfig;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+
+    /// 扩展 LLM Api 请求参数，合并到请求 body
+    utilxx_base::Json extraConfig;
 
     /// 模型标识名称（来自配置文件 key）
     std::string name;
@@ -68,11 +72,37 @@ public:
     /// 发送请求时的 model 字段值
     std::string modelName = "Agentxx";
 
+    /// Anthropic API version（仅 Anthropic 使用）
+    std::string anthropicVersion = "2023-06-01";
+
+    /// 自定义 API 路径（如 "/v1/chat/completions"）
+    /// - 为空时使用 provider 默认路径: openai 为 "/chat/completions", codex/responses 为
+    /// "/responses"
+    /// - 用于适配各种 OpenAI 兼容服务 (DeepSeek/Moonshot/Ollama/Azure 等) 的不同端点路径
+    std::string apiPath;
+
+    /// 额外 HTTP 请求头 (如自定义鉴权头/网关透传头)
+    std::map<std::string, std::string> extraHeaders;
+
+    /// LLM API 连接池: 该模型端点 (baseUrl) 的最大并发连接数 (yaml `max_concurrent_connections`)
+    /// - 默认 5; 0 = 不限制 (仍复用空闲连接)
+    /// - LLM 请求启用 HTTP keep-alive 连接池, 复用空闲连接并限制并发建连数,
+    ///   超过上限的并发请求排队等待空闲连接 (见 HttpClient::RequestConfig)
+    size_t maxConcurrentConnections = 5;
+
+    /// 模型支持的最大上下文 token 数
+    /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
+    ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]
+    size_t modelContenxtMaxToken = 0;
+
     /// 建立Http连接的超时时间
     int connectTimeoutSeconds = 16;
 
     /// 接收Api响应数据分段时，分段间隔的超时时间
     int readChunkTimeoutSeconds = 60;
+
+    /// 当 api 为 HTTPS 连接时，是否验证 SSL 证书
+    std::optional<bool> sslVerify = std::nullopt;
 
     /// 是否在发送 LLM 请求时携带 thinking 内容
     bool sendThinking = false;
@@ -87,35 +117,6 @@ public:
     ///   (模型仍可正常对话, 只是不展示思考过程)
     /// - 也可通过 extra_api_config 显式指定 `include` 数组覆盖 (优先于本开关)
     bool requestReasoningSummary = true;
-
-    /// 当 api 为 HTTPS 连接时，是否验证 SSL 证书
-    std::optional<bool> sslVerify = std::nullopt;
-
-    /// LLM API 连接池: 该模型端点 (baseUrl) 的最大并发连接数 (yaml `max_concurrent_connections`)
-    /// - 默认 5; 0 = 不限制 (仍复用空闲连接)
-    /// - LLM 请求启用 HTTP keep-alive 连接池, 复用空闲连接并限制并发建连数,
-    ///   超过上限的并发请求排队等待空闲连接 (见 HttpClient::RequestConfig)
-    size_t maxConcurrentConnections = 5;
-
-    /// Anthropic API version（仅 Anthropic 使用）
-    std::string anthropicVersion = "2023-06-01";
-
-    /// 自定义 API 路径（如 "/v1/chat/completions"）
-    /// - 为空时使用 provider 默认路径: openai 为 "/chat/completions", codex/responses 为
-    /// "/responses"
-    /// - 用于适配各种 OpenAI 兼容服务 (DeepSeek/Moonshot/Ollama/Azure 等) 的不同端点路径
-    std::string apiPath;
-
-    /// 额外 HTTP 请求头 (如自定义鉴权头/网关透传头)
-    std::map<std::string, std::string> extraHeaders;
-
-    /// 模型支持的最大上下文 token 数
-    /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
-    ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]
-    size_t modelContenxtMaxToken = 0;
-
-    /// 扩展 LLM Api 请求参数，合并到请求 body
-    utilxx_base::Json extraConfig;
 
     /// 是否支持图像输入 (多模态)
     bool imageInput = false;
@@ -186,12 +187,100 @@ struct PluginConfig {
 
 class AgentConfig {
 public:
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+
+    /// subagent 模型配置
+    /// - 未指定时默认使用主模型 [model]
+    std::optional<ModelConfig> subagentModel;
+    /// 使用模型进行网络搜索的配置
+    /// - 指定后将使用模型搜索替代传统 websearchApiUrl 方式
+    /// - 未指定时按 websearchApiUrl 判断是否启用传统搜索
+    std::optional<ModelConfig> websearchModel;
+
+    /// 主模型配置
+    ModelConfig model;
+
+    agentxx::agent::AgentPrompt prompt;
 
     std::string agentName     = "Agentxx";
     std::string agentNameView = "Agentxx";
 
     /// 会话使用的语言 (yaml `language`, 默认 "en", 不支持 auto)
     std::string language = "en";
+
+    /// 子代理继承的父会话 worktree 路径 (非配置项, 由 AgentHost 派生时填充)
+    /// - 仅作提示词展示与权限规则注册依据; 实际路径解析基准经 workDir 字段
+    ///   预置为同一值, 使子代理全部工具链自动落入 worktree
+    std::string inheritedWorktreePath;
+
+    /// 当前选中的模型显示名称
+    /// - 应为 [availableModels] 的 key; 为空时使用 [model]
+    std::string currentModelName;
+
+    std::string currentSystemName;
+
+    /// 统一数据根目录 (全局设置/会话/codegraph 索引等数据的存放根)
+    /// - 为空表示不持久化: 全局设置/会话/codegraph 等数据仅存内存,
+    ///   不写入磁盘 (BaseAgent 初始化时输出警告); 此时会话持久化与
+    ///   codegraph 索引自动禁用 (除非显式指定了 sessionStoreDirectory)
+    /// - 非空时数据子路径:
+    ///   - {dataDir}/sqlite/global.db                     全局设置 (TUI 设置等)
+    ///   - {dataDir}/sqlite/sessions/{sessionId}/          会话数据
+    ///   - {dataDir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
+    /// - 相对路径按程序工作目录解析为绝对路径 (由 client 启动时解析)
+    std::string dataDir;
+
+    /// 会话工作目录 (yaml `work_dir`; FFI config_json "workDir")
+    /// - 为空 (默认) 时回退进程当前工作目录, 完全保持旧行为 (见 resolvedWorkDir)
+    /// - 非空时应为绝对路径 (client/FFI 装配侧负责把相对路径按进程 cwd 解析),
+    ///   作为本 agent 的逻辑工作目录, 摆脱对进程全局 cwd 的隐式依赖:
+    ///   - permission Ask 模式默认放行规则 (code_agent initMiddleware)
+    ///   - filesystem 工具与权限校验的相对路径解析基准 (toCurrentSystemAbsolutePath)
+    ///   - 命令执行子进程的初始工作目录 (execute_command 工具)
+    ///   - 插件宿主信息 get_config 的 projectRoot (如 codegraph 默认索引根)
+    /// - 用途: 单进程多 agent 实例 (App 嵌入 libagentxx / FFI 多句柄) 各自绑定
+    ///   独立项目目录; 也使 server 部署不再要求以项目目录作为启动目录
+    std::string workDir;
+
+    /// 会话持久化根目录 (enableSessionStore 开启时生效)
+    /// - 为空时使用 {dataDir}/sqlite/sessions/ (要求 dataDir 非空;
+    ///   dataDir 为空且 root 未指定时, 会话持久化自动禁用, 不落盘)
+    /// - 数据目录结构: {root}/{sessionId}/session.db (单库, 含 store 表)
+    std::string sessionStoreDirectory;
+
+    /// - [duckduckgo] `https://duckduckgo.com/html/?q={}` 国内连接不稳定
+    std::string websearchApiUrl               = "";
+
+    /// 获取 subagent 实际使用的模型配置
+    /// - 如果指定了 subagentModel 则返回它，否则返回主模型
+    const ModelConfig& getSubagentModel() const;
+
+    /// 工具白名单 (enableToolFiltering 时生效): 仅保留名称在列表中的工具;
+    /// 列表中的名称在子代理中不存在时自然跳过 (不报错)
+    std::vector<std::string> toolWhitelist;
+    std::vector<std::string>    skillDirPaths{};
+    /// 上下文文件路径列表
+    /// - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
+    /// - 文件内容会在每次模型调用时注入系统提示词
+    std::vector<std::string> memoryFilePaths{};
+    std::vector<std::string>               ragDocsPaths{};
+
+    /// 权限白名单: 始终放行 (ALLOW) 的路径列表 (yaml `permission.whitelist`)
+    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
+    /// - 优先级高于模式默认规则 (如 Deny 模式下白名单路径仍可访问)
+    std::vector<std::string> permissionAllowPaths;
+
+    /// 权限黑名单: 始终拒绝 (DENY) 的路径列表 (yaml `permission.blacklist`)
+    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
+    /// - 与白名单同路径时黑名单优先 (后注册覆盖)
+    std::vector<std::string> permissionDenyPaths;
+
+    /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
+    /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
+    ///   由插件自行读取, 如 codegraph 插件的 loadPaths/ignorePaths/loadCwd/useGitignore)
+    /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
+    ///   codegraph 等依赖数据目录的插件自动跳过
+    std::vector<PluginConfig> plugins{};
 
     /// share store 桥接 (运行时注入, 非配置项):
     /// - 非空时, 本 agent 的 `agentxx_share_store` 工具读写该 MiddlewareContext
@@ -200,13 +289,39 @@ public:
     ///   share store, 摘要中的 id 父会话可直接读取
     std::shared_ptr<agentxx::middleware::MiddlewareContext> sharedShareStoreContext;
 
+    /// 可用模型列表 (供运行时切换)
+    /// - key: 模型显示名称, value: 模型配置
+    /// - 由客户端从配置文件加载填充
+    std::map<std::string, ModelConfig> availableModels;
+    /// MCP 服务器配置
+    /// - key: MCP 命名空间 (每个 MCP 的命名空间应当唯一，作为该服务所有 tool 的名称前缀)
+    std::map<std::string, McpServerConfig> mcpServerUrls{};
+
+    /// LLM 节点最大重试次数
+    /// - 最多执行 1 + 5(retry) = 6 次
+    size_t llmMaxRetry = 5;
+    /// - 当 toolcall 启用了 [agentxx::tools::XXToolBase::autoSummaryOutput]
+    /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时进行压缩
+    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
+    size_t toolcallSummaryLimitOutputLength = 2 * 1024;
+
+    /// 连续相同调用重复检查阈值 (默认 5 次)
+    /// - 当 tool 启用了 [agentxx::tools::XXToolBase::repeatCallCheck] 且同一
+    ///   llm <-> tool 交替链内 (无用户消息打断) 连续相同 tool + 相同参数调用
+    ///   达到该次数时, ToolcallNode 经 permission 总线发起询问警告用户,
+    ///   用户确认后才继续执行, 拒绝则中止本次调用
+    /// - 0 表示禁用检查 (即使 tool 启用了 repeatCallCheck)
+    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
+    size_t toolcallRepeatCheckThreshold = 5;
+
+    /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
+    /// - CodeAgent 启动时按模式注册文件系统读写默认规则:
+    ///   Ask=工作目录内允许+其他询问 / AllAsk=全部询问 / Pass=全部放行 / Deny=全部拒绝
+    PermissionMode permissionMode = PermissionMode::Ask;
+
     /// 工具白名单过滤开关 (默认 false = 不过滤, 创建全部工具)
     /// - 子代理"无工具/自定义工具/继承父工具"场景由 AgentHost 按需开启
     bool enableToolFiltering = false;
-
-    /// 工具白名单 (enableToolFiltering 时生效): 仅保留名称在列表中的工具;
-    /// 列表中的名称在子代理中不存在时自然跳过 (不报错)
-    std::vector<std::string> toolWhitelist;
 
     /// 上下文压缩 (summarization) 中间件开关 (默认 true)
     /// - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
@@ -232,83 +347,7 @@ public:
     /// - 子代理经 AgentHost::spawnOneTask 继承父会话绑定
     ///   (workDir 预置为 worktree 路径 + inheritedWorktreePath 标记)
     bool enableWorktree = false;
-
-    /// 子代理继承的父会话 worktree 路径 (非配置项, 由 AgentHost 派生时填充)
-    /// - 仅作提示词展示与权限规则注册依据; 实际路径解析基准经 workDir 字段
-    ///   预置为同一值, 使子代理全部工具链自动落入 worktree
-    std::string inheritedWorktreePath;
-
-    /// 主模型配置
-    ModelConfig model;
-
-    /// 当前选中的模型显示名称
-    /// - 应为 [availableModels] 的 key; 为空时使用 [model]
-    std::string currentModelName;
-
-    /// 可用模型列表 (供运行时切换)
-    /// - key: 模型显示名称, value: 模型配置
-    /// - 由客户端从配置文件加载填充
-    std::map<std::string, ModelConfig> availableModels;
-
-    /// subagent 模型配置
-    /// - 未指定时默认使用主模型 [model]
-    std::optional<ModelConfig> subagentModel;
-
-    /// 获取 subagent 实际使用的模型配置
-    /// - 如果指定了 subagentModel 则返回它，否则返回主模型
-    const ModelConfig& getSubagentModel() const;
-
-    std::string currentSystemName;
     bool        isSystemWSL = false;
-
-    agentxx::agent::AgentPrompt prompt;
-    std::vector<std::string>    skillDirPaths{};
-    /// 上下文文件路径列表
-    /// - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
-    /// - 文件内容会在每次模型调用时注入系统提示词
-    std::vector<std::string> memoryFilePaths{};
-    /// MCP 服务器配置
-    /// - key: MCP 命名空间 (每个 MCP 的命名空间应当唯一，作为该服务所有 tool 的名称前缀)
-    std::map<std::string, McpServerConfig> mcpServerUrls{};
-    std::vector<std::string>               ragDocsPaths{};
-
-    /// 统一数据根目录 (全局设置/会话/codegraph 索引等数据的存放根)
-    /// - 为空表示不持久化: 全局设置/会话/codegraph 等数据仅存内存,
-    ///   不写入磁盘 (BaseAgent 初始化时输出警告); 此时会话持久化与
-    ///   codegraph 索引自动禁用 (除非显式指定了 sessionStoreDirectory)
-    /// - 非空时数据子路径:
-    ///   - {dataDir}/sqlite/global.db                     全局设置 (TUI 设置等)
-    ///   - {dataDir}/sqlite/sessions/{sessionId}/          会话数据
-    ///   - {dataDir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
-    /// - 相对路径按程序工作目录解析为绝对路径 (由 client 启动时解析)
-    std::string dataDir;
-
-    /// 会话工作目录 (yaml `work_dir`; FFI config_json "workDir")
-    /// - 为空 (默认) 时回退进程当前工作目录, 完全保持旧行为 (见 resolvedWorkDir)
-    /// - 非空时应为绝对路径 (client/FFI 装配侧负责把相对路径按进程 cwd 解析),
-    ///   作为本 agent 的逻辑工作目录, 摆脱对进程全局 cwd 的隐式依赖:
-    ///   - permission Ask 模式默认放行规则 (code_agent initMiddleware)
-    ///   - filesystem 工具与权限校验的相对路径解析基准 (toCurrentSystemAbsolutePath)
-    ///   - 命令执行子进程的初始工作目录 (execute_command 工具)
-    ///   - 插件宿主信息 get_config 的 projectRoot (如 codegraph 默认索引根)
-    /// - 用途: 单进程多 agent 实例 (App 嵌入 libagentxx / FFI 多句柄) 各自绑定
-    ///   独立项目目录; 也使 server 部署不再要求以项目目录作为启动目录
-    std::string workDir;
-
-    /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
-    /// - CodeAgent 启动时按模式注册文件系统读写默认规则:
-    ///   Ask=工作目录内允许+其他询问 / AllAsk=全部询问 / Pass=全部放行 / Deny=全部拒绝
-    PermissionMode permissionMode = PermissionMode::Ask;
-
-    /// 权限白名单: 始终放行 (ALLOW) 的路径列表 (yaml `permission.whitelist`)
-    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
-    /// - 优先级高于模式默认规则 (如 Deny 模式下白名单路径仍可访问)
-    std::vector<std::string> permissionAllowPaths;
-
-    /// 权限黑名单: 始终拒绝 (DENY) 的路径列表 (yaml `permission.blacklist`)
-    /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
-    /// - 与白名单同路径时黑名单优先 (后注册覆盖)
-    std::vector<std::string> permissionDenyPaths;
 
     /// 是否启用会话 SQLite 持久化 (消息上下文/展示历史/share store)
     /// - 数据目录: {dataDir}/sqlite/sessions/{sessionId}/
@@ -316,37 +355,7 @@ public:
     /// - 开启后会话在重启后可恢复历史消息/上下文/模型选择/share store
     /// - 默认关闭 (库使用方按需开启); agentxx_cli 在 buildDefaultConfig 中开启
     bool enableSessionStore = false;
-
-    /// 会话持久化根目录 (enableSessionStore 开启时生效)
-    /// - 为空时使用 {dataDir}/sqlite/sessions/ (要求 dataDir 非空;
-    ///   dataDir 为空且 root 未指定时, 会话持久化自动禁用, 不落盘)
-    /// - 数据目录结构: {root}/{sessionId}/session.db (单库, 含 store 表)
-    std::string sessionStoreDirectory;
-
-    /// LLM 节点最大重试次数
-    /// - 最多执行 1 + 5(retry) = 6 次
-    size_t llmMaxRetry = 5;
-    /// - 当 toolcall 启用了 [agentxx::tools::XXToolBase::autoSummaryOutput]
-    /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时进行压缩
-    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
-    size_t toolcallSummaryLimitOutputLength = 2 * 1024;
-
-    /// 连续相同调用重复检查阈值 (默认 5 次)
-    /// - 当 tool 启用了 [agentxx::tools::XXToolBase::repeatCallCheck] 且同一
-    ///   llm <-> tool 交替链内 (无用户消息打断) 连续相同 tool + 相同参数调用
-    ///   达到该次数时, ToolcallNode 经 permission 总线发起询问警告用户,
-    ///   用户确认后才继续执行, 拒绝则中止本次调用
-    /// - 0 表示禁用检查 (即使 tool 启用了 repeatCallCheck)
-    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
-    size_t toolcallRepeatCheckThreshold = 5;
-
-    /// - [duckduckgo] `https://duckduckgo.com/html/?q={}` 国内连接不稳定
-    std::string websearchApiUrl               = "";
     bool        websearchConvertHtml2markdown = true;
-    /// 使用模型进行网络搜索的配置
-    /// - 指定后将使用模型搜索替代传统 websearchApiUrl 方式
-    /// - 未指定时按 websearchApiUrl 判断是否启用传统搜索
-    std::optional<ModelConfig> websearchModel;
 
     /// 在向 llm api 发起请求之前，自动检查 [messages] 是否符合 utf-8 编码、角色顺序等要求
     bool repairMessages = true;
@@ -356,13 +365,6 @@ public:
     bool logPrintMessagesBeforeLLM              = false;
     bool logPrintMessagesBeforeLLMWithSystemMsg = false;
     bool logPrintSummarizationResultTokenCount  = false;
-
-    /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
-    /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
-    ///   由插件自行读取, 如 codegraph 插件的 loadPaths/ignorePaths/loadCwd/useGitignore)
-    /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
-    ///   codegraph 等依赖数据目录的插件自动跳过
-    std::vector<PluginConfig> plugins{};
 
     /// 配置校验 (client 启动时调用, 聚合全部字段合法性)
     /// - 校验 dataDir 相对路径规范化、模型合法性等, 失败返回错误描述, 避免分散告警

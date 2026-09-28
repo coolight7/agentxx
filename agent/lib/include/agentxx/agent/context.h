@@ -119,6 +119,11 @@ public:
 
     Session() = default;
     ~Session();
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+
+    /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
+    /// - 仅 ioContext 线程可读写 (写: appendViewMessage), 通过 assertIoThread() 强制
+    std::vector<ViewMessage> viewMessages;
 
     /// 本会话的 IO
     std::shared_ptr<AgentIOBase> io = nullptr;
@@ -128,13 +133,6 @@ public:
 
     /// 本会话的上下文统计
     std::shared_ptr<ContextStats> contextStats = std::make_shared<ContextStats>();
-
-    /// 当前活动状态 (io 通过此字段感知状态变化)
-    SessionActivity activity = SessionActivity::Idle;
-
-    /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
-    /// - 仅 ioContext 线程可读写 (写: appendViewMessage), 通过 assertIoThread() 强制
-    std::vector<ViewMessage> viewMessages;
 
     /// LLM 上下文消息 (可压缩/裁剪, 仅用于调用 LLM API)
     /// - 本会话是上下文的唯一权威: 图状态通道不再持有上下文, 节点直接经
@@ -150,6 +148,9 @@ public:
     /// - 由 EventBridge / Session::nextDeltaSeq 统一分配, 服务端增量重放缓冲
     ///   依赖 seq 单调性; 除重放路径外, 新产出的 WireDelta 必须经 nextDeltaSeq 分配
     uint64_t deltaSeq = 0;
+
+    /// 当前活动状态 (io 通过此字段感知状态变化)
+    SessionActivity activity = SessionActivity::Idle;
 
     // -------------------------------------------------------------------
     // 线程绑定: 强制 viewMessages/上下文消息/chainHash 只在 io 线程写入
@@ -374,47 +375,6 @@ public:
 
 private:
 
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
-    std::string                                   modelName_;
-    std::string                                   language_;
-    uint64_t                                      msgIdCounter_ = 0;
-
-    // -------------------------------------------------------------------
-    // LLM 上下文 (唯一权威; 仅 io 线程)
-    // -------------------------------------------------------------------
-
-    /// 上下文消息 (typed 权威存储)
-    std::vector<neograph::ChatMessage> messages_;
-
-    /// 上下文版本号 (每次变更 +1)
-    uint64_t messagesVersion_ = 0;
-
-    /// 上下文 Json 镜像 (惰性生成: 仅边界形态需要时构造, 避免每次写入都深拷贝)
-    mutable utilxx_base::Json llmMessagesJsonCache_ = utilxx_base::Json::array();
-    mutable bool              llmMessagesJsonDirty_ = true;
-
-    /// 标记上下文已变更: 版本号递增 + Json 镜像失效
-    void markMessagesChanged();
-
-    /// worktree 绑定 (仅 io 线程读写; path 为空 = 未绑定)
-    WorktreeBinding worktreeBinding_;
-
-    /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
-    std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
-
-    /// 持久化回调 (可选; 为空时不落库)
-    SessionStoreHooks hooks_;
-
-    // -------------------------------------------------------------------
-    // 持久化节流 (仅 io 线程访问)
-    // - 规则: 首次触发立即落盘; 距上次落盘 < kPersistThrottleMs 的后续触发
-    //   合并 (view 压入待落盘队列 / llm 仅更新内存), 待下次触发或轮末强制
-    //   补存。进程异常退出最多丢失一个窗口内的增量
-    // -------------------------------------------------------------------
-
-    /// 节流窗口 (毫秒)
-    static constexpr int64_t kPersistThrottleMs = 3000;
-
     /// 待落盘的 viewMessages 操作 (保持 append/update 混合顺序, 回放即重放写序列)
     /// - 只记录 viewMessages 下标 (append-only 容器, 下标稳定), 不持有消息副本:
     ///   节流窗口内可能有成百上千条消息待落盘, 逐条深拷贝会让消息在内存中存在
@@ -427,11 +387,11 @@ private:
         uint64_t counter  = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
     };
 
-    std::vector<PendingViewOp> pendingViewOps_;
-    /// 上次 viewMessages 实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
-    int64_t viewLastPersistMs_ = 0;
-    /// 上次 llm 上下文实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
-    int64_t llmLastSaveMs_ = 0;
+    /// 持久化回调 (可选; 为空时不落库)
+    SessionStoreHooks hooks_;
+
+    /// worktree 绑定 (仅 io 线程读写; path 为空 = 未绑定)
+    WorktreeBinding worktreeBinding_;
 
     /// viewMessages 的 msgId → 下标索引 (仅 ioContext 线程读写)
     /// - 供 updateViewMessage 的 O(1) 定位: tool 结果回填按 msgId 更新历史消息,
@@ -439,6 +399,48 @@ private:
     /// - 仅在 appendViewMessage / restore / updateViewMessage 内维护; 索引未命中
     ///   或与 viewMessages 不一致时回退线性扫描并修复索引 (防御其他直接改动)
     std::unordered_map<std::string, size_t, std::hash<std::string>, std::equal_to<>> msgIndex_;
+
+    /// 上下文 Json 镜像 (惰性生成: 仅边界形态需要时构造, 避免每次写入都深拷贝)
+    mutable utilxx_base::Json llmMessagesJsonCache_ = utilxx_base::Json::array();
+    std::string                                   modelName_;
+    std::string                                   language_;
+
+    // -------------------------------------------------------------------
+    // LLM 上下文 (唯一权威; 仅 io 线程)
+    // -------------------------------------------------------------------
+
+    /// 上下文消息 (typed 权威存储)
+    std::vector<neograph::ChatMessage> messages_;
+
+    std::vector<PendingViewOp> pendingViewOps_;
+
+    /// 标记上下文已变更: 版本号递增 + Json 镜像失效
+    void markMessagesChanged();
+
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
+    uint64_t                                      msgIdCounter_ = 0;
+
+    /// 上下文版本号 (每次变更 +1)
+    uint64_t messagesVersion_ = 0;
+
+    // -------------------------------------------------------------------
+    // 持久化节流 (仅 io 线程访问)
+    // - 规则: 首次触发立即落盘; 距上次落盘 < kPersistThrottleMs 的后续触发
+    //   合并 (view 压入待落盘队列 / llm 仅更新内存), 待下次触发或轮末强制
+    //   补存。进程异常退出最多丢失一个窗口内的增量
+    // -------------------------------------------------------------------
+
+    /// 节流窗口 (毫秒)
+    static constexpr int64_t kPersistThrottleMs = 3000;
+
+    /// 上次 viewMessages 实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
+    int64_t viewLastPersistMs_ = 0;
+    /// 上次 llm 上下文实际落盘时刻 (steady ms; 0 = 本进程内尚未落过)
+    int64_t llmLastSaveMs_ = 0;
+
+    /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
+    std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
+    mutable bool              llmMessagesJsonDirty_ = true;
 
     /// 压入一条待落盘 view 操作并按节流规则决定是否立即刷出
     void enqueueViewPersist(PendingViewOp op);

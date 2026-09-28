@@ -682,23 +682,24 @@ public:
 private:
 
     std::vector<ScrollItem> buildItems();
-
-    TUICtx&                     ctx_;
-    std::string                 title_;
-    std::string                 content_;
-    bool                        markdown_;
-    std::shared_ptr<Scrollable> scrollable_;
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     std::function<void()>       onClose_;
     /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
     OverlayOptions options_;
+    std::string                 title_;
+    std::string                 content_;
+    std::string                        cachedContent_;
+    std::string                        cachedThemeName_;
 
     /// markdown 渲染缓存 (DomBuilder 生命周期与 Element 绑定, 见 attachments)
     std::vector<std::shared_ptr<void>> cachedAttachments_;
-    std::string                        cachedContent_;
-    int                                cachedMaxW_ = 0;
-    std::string                        cachedThemeName_;
-    bool                               cachedMarkdown_ = true;
+    std::shared_ptr<Scrollable> scrollable_;
     ftxui::Element                     cachedElement_;
+
+    TUICtx&                     ctx_;
+    int                                cachedMaxW_ = 0;
+    bool                        markdown_;
+    bool                               cachedMarkdown_ = true;
 };
 
 /// 通用 diff overlay (open_overlay DIFF 驱动; payload={path,old_str,new_str})
@@ -862,11 +863,12 @@ private:
 
     /// 目录条目
     struct DirEntry {
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
         std::string               name;     ///< 显示名 (文件名, 不含图标)
         std::string               fullPath; ///< 绝对路径
+        uint64_t                  sizeBytes = 0;
         bool                      isDir     = false;
         bool                      supported = true; ///< 当前模型是否支持该文件类型
-        uint64_t                  sizeBytes = 0;
         agentxx::agent::MediaType mediaType = agentxx::agent::MediaType::Image;
     };
 

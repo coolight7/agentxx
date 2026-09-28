@@ -10,15 +10,16 @@
 namespace agentxx_screen_capture_plugin {
 
 struct ScreenFrame {
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+    std::string                           screenName;
+    std::vector<uint8_t>                  pixelData;
+    std::chrono::steady_clock::time_point timestamp;
     int                                   width       = 0;
     int                                   height      = 0;
     int                                   offsetX     = 0;
     int                                   offsetY     = 0;
     int                                   screenIndex = 0;
-    std::string                           screenName;
     bool                                  isPrimary = false;
-    std::vector<uint8_t>                  pixelData;
-    std::chrono::steady_clock::time_point timestamp;
 };
 
 using ScreenFrameListener = std::function<void(const std::vector<ScreenFrame>& frames)>;

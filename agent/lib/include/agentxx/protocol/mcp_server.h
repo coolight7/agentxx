@@ -284,12 +284,13 @@ private:
     // -----------------------------------------------------------------------
 
     struct RequestContext {
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
         std::string protocolVersion;  // 本次请求声明的协议版本 (空 = 未声明/legacy)
-        bool        isModern = false; // 2026-07-28 及更新
         // HTTP 特有 (供 header 校验)
         std::string httpProtocolVersionHeader;
         std::string httpMcpMethodHeader;
         std::string httpMcpNameHeader;
+        bool        isModern = false; // 2026-07-28 及更新
         bool        isHttp = false;
     };
 

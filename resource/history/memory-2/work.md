@@ -223,3 +223,52 @@ python resource/benchmark/harness/scan_coro_frames.py <agentxx_cli.exe> [--map <
 - 附带发现: 老编译器产出的 `/GL` 目标文件可以被**新链接器**正常 LTCG 重链
   (14.51.36231 → 14.51.36260 同 minor 版本), 所以"只用新链接器重链"也是一种
   低成本复测手段 (本次结果与新旧编译器全套重编一致)。
+
+## 7. 后续: 机制量化与处置落地 (2026-09-28 / c957b504)
+
+本节由排查"每轮 11 次 ≥512 KiB 分配"直接接续, 补上了 §1 里"机制"的最后一环
+(**外层协程帧把每个被 `co_await` 的内层协程帧又算了一遍**), 并把 §3 建议的第 3 条
+换成了不牺牲 LTO 的代码级处置 (已落地)。
+
+### 7.1 机制 (反汇编证据)
+
+反汇编 `AgentRunner::run` 的恢复函数 (release `/LTCG`) 可见:
+
+```
+mov     ecx,0C9EF0h                   ; 825,584 B = 内层 GraphEngine::run_stream_async 帧大小
+call    awaitable_frame_base<...>::operator new
+mov     qword ptr [rbx+19A000h],rax   ; 内层帧指针写进**本函数自己的帧**的 1.6 MB 偏移处
+```
+
+统计该函数对自身帧的全部 1017 个内存操作数: 634 个 < 4 KiB, 365 个在 4~64 KiB,
+0 个在 64 KiB~1 MiB, 18 个在 1~1.6 MiB —— 即 2.5 MB 里只有前 64 KiB 密集使用,
+后半段是给两个被 `co_await` 的内层协程留的状态区。尺寸逐位吻合:
+2,506,528 B ≈ 825,584 (run_stream_async) + 1,661,232 (resume_async) + 自身 ≈19,712 B。
+
+⇒ §1 的"与 LTO 内联面正相关"应表述为: 内层协程被内联进来时, 外层帧会**再算一份
+内层帧**, 而内层帧本身仍单独分配; 链条越深、内层越大, 外层帧越大 (与 §1 的事实的
+2/4 一致, 也解释了"薄包装协程拿到 2.5 MB"与训练链上 11 个同级帧)。
+
+### 7.2 处置 (已落地, 不关 LTO)
+
+- `AgentRunner::run` 打 `__declspec(noinline)` (宏 `AGENTXX_NOINLINE` 定义在
+  agent/lib/include/agentxx/agent/agent_runner.h);
+- neograph 的引擎调用用**非协程 noinline 转发函数**包住
+  (agent/lib/src/agent/agent_runner.cpp 的 `engineRunStreamAsync` / `engineResumeAsync`):
+  包装自身没有帧, 内层帧在包装里单独分配, 调用者只拿到一个 awaitable 句柄。
+
+效果 (同一构建, 只加上述改动): 静态 ≥384 KiB 的帧 96 → 66 个 (165.6 → 92.9 MiB),
+1~4 MiB 的帧 41 → 11, **生产路径 (agent 轮次) 不再有 ≥384 KiB 的帧**;
+运行时 (mimalloc, 100×8KB) `huge` 累计 2.3 GiB → 433 MiB、峰值提交 149.5 → 89.1 MiB、
+稳态提交 148.8 → 89.1 MB、专用工作集 59.8 → 42.0 MB。
+完整表格与复现口径见 [benchmark.md 第 13 节](../../../docs/zh-cn/design/benchmark.md)。
+
+未处置: 训练模式 (`runTrainingMode` 6.77 MB / `runEvolutionLoop` 1.67 MB) 与
+neograph 子图 (`SubgraphNode::run` 4.98 MB / `run_subgraph_async` 1.66 MB),
+都只在非默认路径上分配, 需要时用同样的两种做法处理。
+
+### 7.3 与 §3 建议的关系
+
+§3 建议的第 3 条 (把长链协程所在 TU 排除出 `/GL`) 仍是兜底手段, 但会牺牲跨 TU 内联;
+本轮改用"在重边界打断内联"的代码级处置, 代价只有两处调用不再内联, 效果与
+"排除 base_agent.cpp 出 LTO" 同量级 (§2.5: 94 → 51), 且不依赖构建开关。

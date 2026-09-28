@@ -174,19 +174,20 @@ private:
 
     /// 跳到首个/末个可用项
     void moveSelectionEdge(bool toLast);
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+
+    std::function<void(int)> onSelectionChanged_;
+
+    /// 选中项 id (setItems 后据此恢复选中项)
+    std::string selectedId_;
 
     std::vector<UiActionItem> items_;
 
     /// 选中项下标 (始终落在 [0, size-1]; 列表为空时无意义)
     int selectedIndex_ = 0;
 
-    /// 选中项 id (setItems 后据此恢复选中项)
-    std::string selectedId_;
-
     /// 条目之间插入的空行数
     int rowGap_ = 0;
-
-    std::function<void(int)> onSelectionChanged_;
 };
 
 } // namespace client

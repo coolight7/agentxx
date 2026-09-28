@@ -166,12 +166,12 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     }
 
     emitDelta(agentxx::agent::WireDelta{
+        .text        = std::move(token),
+        .startTimeMs = nodeStartTimeMs_,
+        .think       = std::move(thinkData),
         .type        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING)
                            ? agentxx::agent::WireDelta::Type::ThinkToken
                            : agentxx::agent::WireDelta::Type::TextToken,
-        .text        = std::move(token),
-        .think       = std::move(thinkData),
-        .startTimeMs = nodeStartTimeMs_,
         // token WireDelta 不再携带 durationMs: think 耗时由 finalizeThinkSegment()
         // 在段落完成时以独立结算包发送 (见 handleLLMToken 内 THINKING 流段跟踪)
     });
@@ -196,10 +196,10 @@ void EventBridge::finalizeThinkSegment() {
     }
     lastThinkSegDurationMs_ += durationMs;
     emitDelta(agentxx::agent::WireDelta{
-        .type        = agentxx::agent::WireDelta::Type::ThinkToken,
         .text        = {},
         .startTimeMs = thinkSegStartMs_,
         .durationMs  = lastThinkSegDurationMs_,
+        .type        = agentxx::agent::WireDelta::Type::ThinkToken,
     });
 }
 
@@ -227,8 +227,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             tipType = WireDelta::TipType::Error;
         }
         emitDelta(WireDelta{
-            .type    = WireDelta::Type::MessageUITip,
             .text    = value.value("text", std::string{}),
+            .type    = WireDelta::Type::MessageUITip,
             .tipType = tipType,
         });
         return;
@@ -298,14 +298,14 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 session_->appendViewMessage(std::move(m));
                 if (isEncrypted || reasoningTokens > 0) {
                     emitDelta(WireDelta{
-                        .type        = WireDelta::Type::ThinkToken,
                         .text        = "",
+                        .startTimeMs = thinkStartTimeMs,
+                        .durationMs  = thinkDurationMs,
                         .think       = ViewMessage::ThinkData{
                             .reasoningTokens = reasoningTokens,
                             .isEncrypted     = isEncrypted,
                         },
-                        .startTimeMs = thinkStartTimeMs,
-                        .durationMs  = thinkDurationMs,
+                        .type        = WireDelta::Type::ThinkToken,
                     });
                 }
                 lastThinkSegStartMs_    = 0;
@@ -364,12 +364,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                         toolCallHistoryIndex_[toolCallId] = historyIndex;
                     }
                     emitDelta(WireDelta{
-                        .type        = WireDelta::Type::ToolStart,
                         .msgId       = msgId,
                         .toolName    = toolName,
                         .toolCallId  = toolCallId,
                         .arguments   = arguments,
                         .startTimeMs = startMs,
+                        .type        = WireDelta::Type::ToolStart,
                     });
                 }
             }
@@ -447,13 +447,13 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 //  ToolData::diff 字段保留供未来)
             }
             emitDelta(WireDelta{
-                .type        = WireDelta::Type::ToolEnd,
                 .toolName    = toolName,
                 .toolCallId  = toolCallId,
                 .result      = content,
-                .hasError    = false,
                 .startTimeMs = target ? target->startTimeMs : toolStartTimeMs,
                 .durationMs  = target ? target->durationMs : toolDurationMs,
+                .type        = WireDelta::Type::ToolEnd,
+                .hasError    = false,
             });
         }
     }
@@ -542,9 +542,9 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
             .count()
     );
     emitDelta(agentxx::agent::WireDelta{
-        .type        = agentxx::agent::WireDelta::Type::NodeStart,
         .nodeName    = event.node_name,
         .startTimeMs = nodeStartTimeMs_,
+        .type        = agentxx::agent::WireDelta::Type::NodeStart,
     });
 }
 
@@ -562,10 +562,10 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
         )
                                    .count());
     emitDelta(agentxx::agent::WireDelta{
-        .type        = agentxx::agent::WireDelta::Type::NodeEnd,
         .nodeName    = event.node_name,
         .startTimeMs = nodeStartTimeMs_,
         .durationMs  = duration_ms,
+        .type        = agentxx::agent::WireDelta::Type::NodeEnd,
     });
 }
 

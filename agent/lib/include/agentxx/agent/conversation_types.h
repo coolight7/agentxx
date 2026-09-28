@@ -222,18 +222,6 @@ struct ViewMessage {
         Expired
     };
 
-    // ---- 通用字段 (所有 role) ----
-    /// 历史消息 id (appendViewMessage 分配); 客户端本地消息 (如 TUI 中断消息) 可为空
-    std::string id;
-    Role        role = Role::User;
-    /// 正文: User/Assistant/Think/System 消息文本; Tool 消息为工具参数
-    /// (arguments JSON 字符串, 与渲染侧现有约定一致)
-    std::string text;
-    int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
-    int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
-    /// 折叠展示 (Think/Tool/System/Tip 消息; 点击可折叠/展开)
-    bool collapsed = false;
-
     // ---- Role::Tool 专属 ----
     struct ToolData {
         std::string toolName;
@@ -273,12 +261,25 @@ struct ViewMessage {
     };
 
     std::optional<ToolData>      tool      = std::nullopt; ///< Role::Tool 有效
-    std::optional<TipData>       tip       = std::nullopt; ///< Role::Tip 有效
     std::optional<InterruptData> interrupt = std::nullopt; ///< Role::Interrupt 有效
-    std::optional<ThinkData>     think     = std::nullopt; ///< Role::Think 有效
+
+    // ---- 成员: 按对齐/尺寸从大到小排列, 减少结构体内填充字节 ----
+    // ---- 通用字段 (所有 role) ----
+    /// 历史消息 id (appendViewMessage 分配); 客户端本地消息 (如 TUI 中断消息) 可为空
+    std::string id;
+    /// 正文: User/Assistant/Think/System 消息文本; Tool 消息为工具参数
+    /// (arguments JSON 字符串, 与渲染侧现有约定一致)
+    std::string text;
 
     /// 多模态媒体附件列表
     std::vector<MediaAttachment> attachments;
+    int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
+    int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
+    std::optional<ThinkData>     think     = std::nullopt; ///< Role::Think 有效
+    std::optional<TipData>       tip       = std::nullopt; ///< Role::Tip 有效
+    Role        role = Role::User;
+    /// 折叠展示 (Think/Tool/System/Tip 消息; 点击可折叠/展开)
+    bool collapsed = false;
 
     /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip)
     /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
@@ -322,11 +323,12 @@ struct AppendComponentNotification {
         Memory, // Memory 文件
         Plugin, // Agent 侧加载的插件
     };
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+    std::string name;         // 名称 (MCP 命名空间 / Skill 名 / Memory 文件名)
+    std::string errorMessage; // 失败时的错误信息
 
     Type        type;
-    std::string name;         // 名称 (MCP 命名空间 / Skill 名 / Memory 文件名)
     bool        success;      // 是否加载成功
-    std::string errorMessage; // 失败时的错误信息
 };
 
 /// 链式哈希 (FNV-1a 逐段追加): 将消息序列逐个 append 形成一条哈希链,
@@ -379,9 +381,7 @@ struct WireDelta {
         UpdateMessage,
     };
 
-    Type     type = Type::TextToken;
-    uint64_t seq  = 0;
-
+    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     std::string text;
 
     std::string msgId;
@@ -390,18 +390,12 @@ struct WireDelta {
     std::string arguments;
 
     std::string result;
-    bool        hasError = false;
 
     std::string nodeName;
-
-    // MessageUITip: 通用提示消息 (文本复用 text 字段)
-    TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
-
-    // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
-    std::optional<ViewMessage::ThinkData> think = std::nullopt;
-
-    uint64_t    historyCount = 0;
     std::string tailHash;
+
+    uint64_t seq          = 0;
+    uint64_t historyCount = 0;
 
     // 运行时长统计
     int64_t startTimeMs = 0; // 开始时间戳 (毫秒)
@@ -419,6 +413,16 @@ struct WireDelta {
     /// - 此处仅传元数据（displayName/mimeType/pathOrUrl/sizeBytes/type），
     ///   不传 dataUrl（Base64 体积大，走 Sync 全量时再补齐）
     std::vector<MediaAttachment> attachments;
+
+    // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
+    std::optional<ViewMessage::ThinkData> think = std::nullopt;
+
+    Type type = Type::TextToken;
+
+    // MessageUITip: 通用提示消息 (文本复用 text 字段)
+    TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
+
+    bool hasError = false;
 };
 
 /// 估算一条展示消息在内存中大致占用的字节数 (对象本身 + 各字段字符串)
