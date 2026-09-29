@@ -54,7 +54,9 @@ public:
     // 与 Render 同帧顺序: Select 于 SetBox->prepareLayout 之后执行,
     // 可见子项已构建并定位 (屏幕坐标), 此处对可见子项逐一递归即可。
     void Select(Selection& selection) override {
-        if (Box::Intersection(selection.GetBox(), box_).IsEmpty()) {
+        // 参与判定用根选择的原始矩形 (容器夹取后的矩形可能被收窄, 见
+        // ftxui::Selection::Root 的说明)
+        if (Box::Intersection(selection.Root().GetBox(), box_).IsEmpty()) {
             return;
         }
         for (size_t i : comp_->visibleIndices_) {

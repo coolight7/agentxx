@@ -12,7 +12,7 @@
 // - [行内样式] 粗体/暗色/斜体/下划线/颜色落到正确单元格; 未设置的通道继承
 //   外层装饰器颜色
 // - [选择] 行区间 + 列区间取文本 (含跨行、宽字符、组合字符; 元素左缘不在 0 列
-//   时同样按屏幕列取, 不丢每行开头的列)
+//   时同样按屏幕列取, 不丢每行开头的列; 列表项悬挂缩进列按空白格取出)
 // - [链接区段] 链接的可见区段写进登记目标 (供鼠标点击命中)
 #include "agentxx-test/client/test_markdown_flow.h"
 
@@ -280,6 +280,34 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(selectText(row, 14, 1, 3, 0, 13, 0), std::string{"hello world"});
         // 留白本身是文本节点, 从左缘整体拖选时它照旧被取到 (不丢左侧列)
         XX_TEST_EXPECT_EQ(selectText(row, 14, 1, 0, 0, 13, 0), std::string{"   hello world"});
+    }
+
+    // ---------------- 选择取文本 (列表项悬挂缩进) ----------------
+    {
+        // 列表项内容节点左缘在项目符号之后, 续行左端 4 列 (符号所占的列) 是空白格:
+        // 落在这些列上的端点不再被夹成"整行选中" (旧行为: 复制出整行正文), 选中
+        // 范围内的缩进列按空白格取出 (复制结果与所见一致)
+        auto       flow = plainNode("aaaa bbbb cccc");
+        const auto el   = std::static_pointer_cast<ftxui::Node>(flow);
+        flow->setHangIndent(4);
+        auto selectBox = [&](int x0, int y0, int x1, int y1) {
+            el->ComputeRequirement();
+            el->SetBox(ftxui::Box{4, 9, 0, 5}); // 盒左缘 4 (左侧 4 列是列表前缀)
+            ftxui::Selection sel(x0, y0, x1, y1);
+            el->Select(sel);
+            return sel.GetParts();
+        };
+        // 折行: "aaaa" / "bbbb" / "cccc" (行宽 6)
+        XX_TEST_EXPECT_EQ(layoutHeight(el, 6), 3);
+        // 续行整行: 悬挂缩进 4 列按空白格取出
+        XX_TEST_EXPECT_EQ(selectBox(0, 1, 9, 1), std::string{"    bbbb"});
+        // 从缩进列中间起: 只补选区内的缩进列
+        XX_TEST_EXPECT_EQ(selectBox(2, 1, 9, 1), std::string{"  bbbb"});
+        // 正文内部: 不含缩进列
+        XX_TEST_EXPECT_EQ(selectBox(5, 1, 6, 1), std::string{"bb"});
+        // 终点落在续行的缩进列上: 只取缩进列 (不把整行正文带出来)
+        XX_TEST_EXPECT_EQ(selectBox(6, 0, 1, 1), std::string{"aa\n  "});
+        XX_TEST_EXPECT_TRUE(selectBox(6, 0, 1, 1).find("bbbb") == std::string::npos);
     }
 
     // ---------------- 选中高亮 (与 ftxui::Text 一致: 选中单元格执行 Screen 的选中样式) ----------------

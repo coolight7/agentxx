@@ -209,19 +209,19 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | TOOL-2 | 并发分类和上限 | harness、dsh、openclaw | P0 | `ConcurrencyClass{ReadOnly,Exclusive,Interactive}`，默认独占；配置全局和分类上限；使用 RAII 释放配额。 | 待定 |
 | TOOL-3 | 并行取消和收尾 | codex、dsh、opencode | P0 | 已完成结果保留，未启动补取消结果，执行中请求取消；任何取消都保证每个 tool call 有对应结果，测试完成顺序和提交顺序不同的情况。 | 可行 |
 | TOOL-4 | 分发层硬超时 | harness、codex、dsh | P0 | 工具只声明 `timeoutMs`，分发层竞速取消并返回结构化 timeout 状态；复用现有进程组/Job Object/CancelRegistry。 | 待定，待进一步理解 |
-| TOOL-5 | 工具结果守卫 | openclaw、opencode、dsh、harness | P1 | 写入会话前检查 UTF-8、合法消息、tool_call 配对和硬上限。 |  |
-| TOOL-6 | 聚合结果预算 | openclaw、opencode、harness | P1 | 保留现有单调用 offload；增加一次请求所有工具结果的总预算。超限时最旧结果优先换为 share_store 预览。 |
-| TOOL-7 | 结构化定位符和首尾预览 | openclaw、opencode、codex | P1 | 现有 share_store 文本增加 `spillId/bytes/lines/preview` 元数据；预览保留首尾，中间省略；不另建存储系统。 |
-| TOOL-8 | 结构化结果与模型投影分离 | dsh、opencode、pi | P1 | `ToolResult{value, content, meta, status}` 作为内部可选返回类型；先兼容现有字符串工具，插件 ABI 通过 JSON 扩展。 |
-| TOOL-9 | 单调安全 guard | dsh、opencode | P1 | 所有可改写输入的钩子后增加只能拒绝、不能重新放行的 guard，执行身份和 worktree 边界在此复验。 |
-| TOOL-10 | 错误状态和可重试性 | codex、harness、opencode | P1 | 区分 `invalid_args/respond_to_model/denied/timeout/cancelled/fatal`；模型可修正的错误才回模型，致命错误结束本轮。 |
-| TOOL-11 | 工具定义公告身份 | opencode、openclaw | P1 | 请求中记录工具名、定义哈希、插件实例 id；结算前不一致就返回“工具已变化，请重新调用”，不把旧调用打到新实现。 |
-| TOOL-12 | 工具可用性与授权分层 | openclaw、opencode、dsh | P1 | 可用性只描述模型能力、插件状态、附件能力和执行环境；授权仍由 Permission 中间件负责。提供诊断原因。 |
-| TOOL-13 | 审批缓存和执行身份绑定 | codex、openclaw、opencode | P1 | 规范化目标作为缓存键；持久化后提供撤销。批准时保存可执行绝对路径、argv、cwd，执行前复验；若暂时不能绑定完整执行身份，先只实现审批缓存，不放行身份未复验的高风险执行。 |
-| TOOL-14 | 工具注册表暴露等级 | codex、dsh | P1 | 保留当前冲突拒绝；增加 `always/deferred` 暴露级别和命名空间，延迟工具不占完整 schema 预算。 |
-| TOOL-15 | 工具后置上下文 | dsh、opencode | P2 | 提供 `deferContext(text, source)`，让工具把发现追加为独立消息，而不是塞进结果文本。 |
-| TOOL-16 | 文件写串行化 | pi | P1 | 按执行世界和规范化路径加短生命周期 mutex，保护读-改-写；不做全局无限增长 map。 |
-| TOOL-17 | 执行环境加固 | codex | P0 | `execute_command` 固定 `NO_COLOR=1`、`TERM=dumb`、清空 `PAGER`，注入会话和权限 profile 标识；在平台可用时设置 `LC_ALL=C.UTF-8`，否则使用明确的 UTF-8/C locale fallback，并记录实际环境策略。 |
+| TOOL-5 | 工具结果守卫 | openclaw、opencode、dsh、harness | P1 | 写入会话前检查 UTF-8、合法消息、tool_call 配对和硬上限。 | 不考虑，这个功能已经实现 |
+| TOOL-6 | 聚合结果预算 | openclaw、opencode、harness | P1 | 保留现有单调用 offload；增加一次请求所有工具结果的总预算。超限时最旧结果优先换为 share_store 预览。 | 不考虑 |
+| TOOL-7 | 结构化定位符和首尾预览 | openclaw、opencode、codex | P1 | 现有 share_store 文本增加 `spillId/bytes/lines/preview` 元数据；预览保留首尾，中间省略；不另建存储系统。 | 不考虑，已有行提示 |
+| TOOL-8 | 结构化结果与模型投影分离 | dsh、opencode、pi | P1 | `ToolResult{value, content, meta, status}` 作为内部可选返回类型；先兼容现有字符串工具，插件 ABI 通过 JSON 扩展。 | 不考虑，旧版本实现过，徒增结构化和转义，若 utf8 处理不充足还会导致解析错误 |
+| TOOL-9 | 单调安全 guard | dsh、opencode | P1 | 所有可改写输入的钩子后增加只能拒绝、不能重新放行的 guard，执行身份和 worktree 边界在此复验。 | 待定 |
+| TOOL-10 | 错误状态和可重试性 | codex、harness、opencode | P1 | 区分 `invalid_args/respond_to_model/denied/timeout/cancelled/fatal`；模型可修正的错误才回模型，致命错误结束本轮。 | 不考虑，已实现 |
+| TOOL-11 | 工具定义公告身份 | opencode、openclaw | P1 | 请求中记录工具名、定义哈希、插件实例 id；结算前不一致就返回“工具已变化，请重新调用”，不把旧调用打到新实现。 | 暂不考虑 |
+| TOOL-12 | 工具可用性与授权分层 | openclaw、opencode、dsh | P1 | 可用性只描述模型能力、插件状态、附件能力和执行环境；授权仍由 Permission 中间件负责。提供诊断原因。 | 待定 |
+| TOOL-13 | 审批缓存和执行身份绑定 | codex、openclaw、opencode | P1 | 规范化目标作为缓存键；持久化后提供撤销。批准时保存可执行绝对路径、argv、cwd，执行前复验；若暂时不能绑定完整执行身份，先只实现审批缓存，不放行身份未复验的高风险执行。 | 待定 |
+| TOOL-14 | 工具注册表暴露等级 | codex、dsh | P1 | 保留当前冲突拒绝；增加 `always/deferred` 暴露级别和命名空间，延迟工具不占完整 schema 预算。 | 待定 |
+| TOOL-15 | 工具后置上下文 | dsh、opencode | P2 | 提供 `deferContext(text, source)`，让工具把发现追加为独立消息，而不是塞进结果文本。 | 待定，延迟加载 tool |
+| TOOL-16 | 文件写串行化 | pi | P1 | 按执行世界和规范化路径加短生命周期 mutex，保护读-改-写；不做全局无限增长 map。 | 待定 |
+| TOOL-17 | 执行环境加固 | codex | P0 | `execute_command` 固定 `NO_COLOR=1`、`TERM=dumb`、清空 `PAGER`，注入会话和权限 profile 标识；在平台可用时设置 `LC_ALL=C.UTF-8`，否则使用明确的 UTF-8/C locale fallback，并记录实际环境策略。 | 待定 |
 
 ### 5.3 已实现、不要重复做
 
@@ -235,8 +235,8 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 | 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
 |---|---|---|---|---|
-| LLM-1 | 模型能力元数据集中化 | codex、dsh、opencode、pi、openclaw | P0 | `ModelConfig` 增加上下文窗口、最大输出、模态、reasoning、并行工具、严格 schema、缓存能力和价格；provider 请求和压缩统一读取。 |
-| LLM-2 | 错误分类和重试策略 | dsh、opencode、pi、codex、openclaw | P0 | 识别 overflow/auth/rate-limit/timeout/server/invalid-request；读取 `retry-after`，使用有界指数退避和抖动；额度/计费错误不重试。策略数据和执行器分开。 |
+| LLM-1 | 模型能力元数据集中化 | codex、dsh、opencode、pi、openclaw | P0 | `ModelConfig` 增加上下文窗口、最大输出、模态、reasoning、并行工具、严格 schema、缓存能力和价格；provider 请求和压缩统一读取。 | 待定，已实现一部分 |
+| LLM-2 | 错误分类和重试策略 | dsh、opencode、pi、codex、openclaw | P0 | 识别 overflow/auth/rate-limit/timeout/server/invalid-request；读取 `retry-after`，使用有界指数退避和抖动；额度/计费错误不重试。策略数据和执行器分开。 |  |
 | LLM-3 | 溢出一次性压缩重试 | opencode、openclaw、dsh、harness | P0 | provider 报上下文超限且本轮没有新副作用时压缩一次，复用已经完成的工具结果，最多重试一次，再走硬截断。 |
 | LLM-4 | 静默看门狗 | openclaw、dsh、opencode | P0 | 记录最后 chunk 时间，默认 120 秒可按模型覆盖；只处理中途无输出，不替代整体执行预算。 |
 | LLM-5 | 假 provider | pi、opencode、harness、codex | P0 | provider 可注入固定流、错误、延迟和 tool call；覆盖重试、压缩、中断、取消和工具循环，不依赖真实网络或额度。录制回放在同一注入接缝中作为后续 P1 扩展。 |

@@ -478,6 +478,107 @@ void testBannerRetryButtonHitArea() {
 // 回归: 内容更新帧与同内容再渲染帧必须完全一致 (流式抖动)
 // ---------------------------------------------------------------------------
 
+
+// 回归: markdown 列表文本的拖选复制 (消息列表层, 含正文左侧留白与列表悬挂缩进)
+//
+// 背景: 列表项内容左缘在项目符号 (marker) 之后, 续行靠左侧空列 (marker 所占的
+// 列) 形成悬挂缩进 —— 那些列没有任何节点绘制。修复前逐行取文本用的是"容器夹取
+// 后的端点": 落在这些空列上的端点被夹成"整行选中", 复制结果多出用户没选中的
+// 整行文本 (还会补出一串空格), 而每行开头的缩进又取不出来 (用户报告"在列表中的
+// 文本会缺失头部、额外复制了末尾之后的字符")。
+// 现在每行按"起点行到行尾 / 终点行从行首 / 中间行整行"的区间取文本与高亮
+// (见 ftxui::Selection::RowRange), 列表项的悬挂缩进列按空白格取出。
+static void testMarkdownListTextCopy() {
+    // 视口 40x12: 正文左侧留白 3 列, 列表项前缀 "  • " (缩进 2 + 符号 2)
+    ScrollFixture f;
+    f.width  = 40;
+    f.height = 12;
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        auto m  = std::make_shared<TUIMessage>();
+        m->role = TUIMessage::Role::Assistant;
+        m->text
+            = "- alpha bravo charlie delta echo foxtrot golf hotel india juliet\n"
+              "- second\n";
+        st.messages.push_back(std::move(m));
+    });
+    f.render();
+    f.render();
+
+    /// 拖选复制的结果 (复制文本 + 该帧屏幕, 用于核对高亮与复制一致)
+    struct CopyProbe {
+        std::string   text;
+        ftxui::Screen screen;
+    };
+
+    /// 按 App 的帧顺序 (渲染 -> Select -> GetParts) 取一次拖选复制的结果
+    auto copyOf = [&](int x0, int y0, int x1, int y1) {
+        auto el     = f.comp->Render();
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(f.width), ftxui::Dimension::Fixed(f.height));
+        ftxui::Selection sel(x0, y0, x1, y1);
+        ftxui::Render(screen, el.get(), sel);
+        return CopyProbe{sel.GetParts(), std::move(screen)};
+    };
+
+    // 屏幕版面 (左起: 3 列留白 + "  • " + 正文, 续行与正文对齐; 留白是版面留白,
+    // 不属于内容, 拖选复制不会带出来):
+    //   row0 |     • alpha bravo charlie delta        |
+    //   row1 |       echo foxtrot golf hotel india    |
+    //   row2 |       juliet                            |
+    //   row3 |     • second                            |
+
+    // 整体拖选: 项目符号与正文都取出; 续行保留 4 列悬挂缩进, 不夹带消息列表留白
+    {
+        const auto probe = copyOf(0, 0, 35, 2);
+        XX_TEST_EXPECT_EQ(
+            probe.text,
+            std::string{"  • alpha bravo charlie delta\n"
+                        "    echo foxtrot golf hotel india\n"
+                        "    juliet"}
+        );
+        // 悬挂缩进列 (3..6) 与正文一起高亮 —— 高亮与复制一致
+        for (int x = 3; x <= 6; ++x) {
+            XX_TEST_EXPECT_TRUE(probe.screen.PixelAt(x, 1).inverted);
+        }
+        XX_TEST_EXPECT_TRUE(probe.screen.PixelAt(7, 1).inverted);
+    }
+
+    // 右下 -> 左上拖选: 终点落在续行的悬挂缩进列上。
+    // 修复前: 终点被夹成"整行选中" -> 复制出整行正文 (末尾多出大量字符);
+    //         起点所在行的左侧空列被补成一串空格 -> 开头多出空白
+    {
+        XX_TEST_EXPECT_EQ(copyOf(20, 0, 2, 1).text, std::string{"harlie delta"});
+    }
+
+    // 终点落在续行正文之中: 只取到终点列, 不多取
+    {
+        XX_TEST_EXPECT_EQ(
+            copyOf(10, 0, 12, 1).text,
+            std::string{"ha bravo charlie delta\n    echo f"}
+        );
+    }
+
+    // 续行内部拖选: 只取该行的对应列 (选区不含缩进列, 不带出悬挂缩进)
+    {
+        XX_TEST_EXPECT_EQ(copyOf(14, 1, 23, 1).text, std::string{"xtrot golf"});
+    }
+
+    // 只选续行的一部分: 从该行行首取到终点列 (含悬挂缩进的空白列)
+    {
+        XX_TEST_EXPECT_EQ(copyOf(0, 1, 10, 1).text, std::string{"    echo"});
+    }
+
+    // 选区完全落在正文左侧留白内: 不取任何正文 (不越界取整行)
+    {
+        XX_TEST_EXPECT_EQ(copyOf(0, 0, 2, 1).text, std::string{});
+    }
+
+    // 第二个列表项 (marker 在正文左侧): 整体拖选取出 marker 与正文
+    {
+        XX_TEST_EXPECT_EQ(copyOf(0, 3, 35, 3).text, std::string{"  • second"});
+    }
+}
+
 TestResult testTuiScroll() {
     XX_TEST_EXPECT_TRUE(true);
 
@@ -492,6 +593,9 @@ TestResult testTuiScroll() {
     testRoleLabelLocalization();
 
     testBannerRetryButtonHitArea();
+
+    // markdown 列表文本的拖选复制 (列表悬挂缩进 / 行内空白列上的端点)
+    testMarkdownListTextCopy();
 
     {
         // 场景 1: 流式输出中, 内容更新帧 vs 同内容再渲染帧 (鼠标移动帧)
@@ -1957,6 +2061,8 @@ TestResult testTuiScroll() {
         // 恢复原始设置
         settings.setAnimationLevel(origAnim);
     }
+
+
 
     // 恢复原始界面语言
     tuiSettings.setLanguage(savedLang);

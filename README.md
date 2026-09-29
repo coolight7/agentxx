@@ -15,9 +15,7 @@
 
 - C++ 协程异步实现的 AI Agent，可编译为`单程序、动态库`直接启动使用。内存占用和程序包体积小、摆脱了庞大的 动态库、python、js 等依赖，可在普通性能的手机、电脑等设备上高效运行
 - 目标支持嵌入App辅助扩展实现高性能的Agent功能，顺带实现 cli/TUI 的 Code Agent; GUI客户端计划将由[Lumenxx](https://github.com/coolight7/lumenxx-docx)支持，并实现 音视频处理、自动化控制 等 Agent 
-- 已实测过最长单轮任务自动运行8小时完成，本项目已由 Agentxx 自身介入开发
-
-> 初步完成 agent核心及服务、TUI、插件接口、FFI接口，但仍可能大幅度重构，接口可能大改动.
+- 实测最长单轮任务自动运行超8小时完成，本项目已由 Agentxx 自身介入开发，已实践在 C/C++、flutter、Web 等项目上使用
 
 - [特点](#特点)
 - [兼容性](#兼容性)
@@ -78,7 +76,7 @@
     -   插件加载: 外置加载5个常用插件 agentxx_filesystem, agentxx_execute_command, agentxx_system, agentxx_websearch, agentxx_planning
     -   如果编译时启用 mimalloc，内存分配性能会提升 (windows ~ 10%, linux ~ 33%), 但内存占用近乎翻3倍
 
-| agentxx_cli Target | 初始化 RAM | 100K 上下文 | 200K上下文 | TIP |
+| agentxx_cli Target | 启动时内存占用 | 100K 上下文 | 200K上下文 | TIP |
 |---|---|---|---|---|
 | **Win/TUI** | 4.2M | 13.2M | 19.7M | 任务管理器查看内存占用 |
 | **Win/TUI** | 3.3M | - | - | 不加载插件 |

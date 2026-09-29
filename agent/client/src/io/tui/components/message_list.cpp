@@ -322,9 +322,12 @@ Element MessageListComponent::OnRender() {
     attachmentHits_.clear();
 
     return hbox({
-               text("   "),
+               // 左右留白用不可选择的空白 (filler): 它们是版面留白, 不是内容 ——
+               // 用 text("   ") 时拖选复制会把留白当空白格取出 (且只有它所在的那一行,
+               // 结果随消息在视口内的位置变化), 见 docs/zh-cn/design/tui.md §3.2
+               filler() | size(WIDTH, EQUAL, 3),
                scrollable_->Render() | bold | flex,
-               text("   "),
+               filler() | size(WIDTH, EQUAL, 3),
            })
            | reflect(areaBox_);
 }

@@ -249,8 +249,8 @@ TestResult testFtxuiText() {
         XX_TEST_EXPECT_EQ(selectText(text("hello world"), 11, 1, 6, 0, 10, 0), std::string{"world"});
         // 选择区间超出盒宽时按盒宽收敛 (SaturateHorizontal)
         XX_TEST_EXPECT_EQ(selectText(text("hello world"), 11, 1, 0, 0, 99, 0), std::string{"hello world"});
-        // 跨行选择: 行间以换行分隔。注意 FTXUI 的选择是"按行横向收敛"
-        // (SaturateHorizontal): 起始行从起点列取到行尾, 结束行从行首取到终点列
+        // 跨行选择: 行间以换行分隔 —— 起点行从起点列取到行尾, 结束行从行首取到
+        // 终点列, 中间行整行 (见 ftxui::Selection::RowRange)
         XX_TEST_EXPECT_EQ(selectText(text("abc\ndef"), 3, 2, 0, 0, 2, 1), std::string{"abc\ndef"});
         XX_TEST_EXPECT_EQ(selectText(text("abc\ndef"), 3, 2, 1, 0, 1, 1), std::string{"bc\nde"});
         // 完全在盒外的选择取不到内容
@@ -262,6 +262,17 @@ TestResult testFtxuiText() {
         // 组合字符随其所修饰的字符一起被选中
         XX_TEST_EXPECT_EQ(selectText(text("e\xCC\x81x"), 2, 1, 0, 0, 0, 0), std::string{"e\xCC\x81"});
         XX_TEST_EXPECT_EQ(selectText(text("e\xCC\x81x"), 2, 1, 1, 0, 1, 0), std::string{"x"});
+
+        // 端点落在同一行的空白列 (没有任何节点绘制的列, 如列表项续行的悬挂缩进、
+        // 面板留白) 上时, 该行只取"起点列到行尾" (反向拖选反之), 不会把整行都算进
+        // 选择; 行内其它节点的整段文本也不会因此被取出
+        {
+            const auto row = hbox({text("  "), text("abc\ndef")});
+            // 选区 [1..5]x[0..1]: 起点行只取第 5 列之后 (无), 终点行取到第 1 列 (无)
+            XX_TEST_EXPECT_EQ(selectText(row, 6, 2, 5, 0, 1, 1), std::string{});
+            // 普通跨行选区不受影响 (起点行取到行尾, 终点行从行首取)
+            XX_TEST_EXPECT_EQ(selectText(row, 6, 2, 4, 0, 3, 1), std::string{"c\nde"});
+        }
     }
 
     // ---------------- 渲染树内存 ----------------
