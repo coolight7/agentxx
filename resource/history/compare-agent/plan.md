@@ -75,17 +75,17 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ### 1.2 适合融合的设计
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| ARC-1 | 核心边界可执行检查 | opencode、openclaw、dsh | P0 | 新增 `agent/script/check_boundaries.py` 或测试模块，检查 client 不含 `agent/lib/src` 私有头、插件只含 SDK umbrella 和工具库公开头、DSO 导出仍是入口白名单。加入 CI。 |
-| ARC-2 | 目录级规则文件 | openclaw、pi | P1 | 新增 `agent/lib/AGENTS.md`、`agent/client/AGENTS.md`、`agent/plugins/AGENTS.md`、`agent/test/AGENTS.md`；只写局部硬约束，根 `AGENTS.md` 只保留跨目录规则。 |
-| ARC-3 | 装配清单和启动断言 | harness、codex | P0 | 把启动阶段整理为带名字、依赖、回滚函数的 `InitStep` 清单；末尾统一检查模型、必要节点、工具 schema、插件目录和 SQLite。只有在配置要求持久化时才要求 dataDir/session root 可写；空 dataDir 的内存模式继续保留，但必须明确记录为非持久化，不能静默产生部分持久化。 |
-| ARC-4 | 子系统配置视图 | harness | P1 | 从 `AgentConfig` 生成 `ModelRegistryConfig`、`SessionStoreConfig`、`PluginManagerConfig`、`SummarizationConfig` 等只读配置对象，避免子系统各自读取总配置。 |
-| ARC-5 | 分阶段关闭和后台任务收敛 | harness、codex、dsh | P1 | `shutdownAsync` 依次停止输入、等待轮次/作业、停定时器、停插件、刷盘；新增轻量 `TaskScope`，统一记录后台任务并在关闭时等待或取消。 |
-| ARC-6 | 生效装配快照 | harness、openclaw、dsh | P1 | 增加 `get_diagnostics` 或扩展 `WireGetContext`，输出模型来源、中间件顺序、插件状态、工具清单、图定义、权限模式、作业和队列状态。CLI 增加 `--dump-config`。 |
-| ARC-7 | 新能力不进入核心骨架 | codex、pi、openclaw | P0 | 文档明确：`lib/src/agent` 只负责会话生命周期、上下文、持久化骨架；新增能力优先放 `nodes/`、`middlewares/`、`tools/`、`plugins/` 或独立工具库。 |
-| ARC-8 | 消费者使用窄接口 | harness、opencode | P2 | 为中间件和宿主适配 `SessionReader`、`PermissionCheck`、`ToolRegistrar` 等窄视图；不改变 C ABI 总体形状，先用于测试替身。 |
-| ARC-9 | 领域与策略分开 | opencode | P2 | 配置决策集中在装配层，领域代码只消费已解析策略；不新增 Effect 容器。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| ARC-1 | 核心边界可执行检查 | opencode、openclaw、dsh | P0 | 新增 `agent/script/check_boundaries.py` 或测试模块，检查 client 不含 `agent/lib/src` 私有头、插件只含 SDK umbrella 和工具库公开头、DSO 导出仍是入口白名单。加入 CI。 | 可行 |
+| ARC-2 | 目录级规则文件 | openclaw、pi | P1 | 新增 `agent/lib/AGENTS.md`、`agent/client/AGENTS.md`、`agent/plugins/AGENTS.md`、`agent/test/AGENTS.md`；只写局部硬约束，根 `AGENTS.md` 只保留跨目录规则。 | 可行 |
+| ARC-3 | 装配清单和启动断言 | harness、codex | P0 | 把启动阶段整理为带名字、依赖、回滚函数的 `InitStep` 清单；末尾统一检查模型、必要节点、工具 schema、插件目录和 SQLite。只有在配置要求持久化时才要求 dataDir/session root 可写；空 dataDir 的内存模式继续保留，但必须明确记录为非持久化，不能静默产生部分持久化。 |可行 |
+| ARC-4 | 子系统配置视图 | harness | P1 | 从 `AgentConfig` 生成 `ModelRegistryConfig`、`SessionStoreConfig`、`PluginManagerConfig`、`SummarizationConfig` 等只读配置对象，避免子系统各自读取总配置。 | 没必要，准寻高内聚，有些功能杂糅需要读完整配置更方便 |
+| ARC-5 | 分阶段关闭和后台任务收敛 | harness、codex、dsh | P1 | `shutdownAsync` 依次停止输入、等待轮次/作业、停定时器、停插件、刷盘；新增轻量 `TaskScope`，统一记录后台任务并在关闭时等待或取消。 | 待定 |
+| ARC-6 | 生效装配快照 | harness、openclaw、dsh | P1 | 增加 `get_diagnostics` 或扩展 `WireGetContext`，输出模型来源、中间件顺序、插件状态、工具清单、图定义、权限模式、作业和队列状态。CLI 增加 `--dump-config`。 | 待定，似乎主要用于调试排错，降低优先级 |
+| ARC-7 | 新能力不进入核心骨架 | codex、pi、openclaw | P0 | 文档明确：`lib/src/agent` 只负责会话生命周期、上下文、持久化骨架；新增能力优先放 `nodes/`、`middlewares/`、`tools/`、`plugins/` 或独立工具库。 | 待定，未说明具体实施内容 |
+| ARC-8 | 消费者使用窄接口 | harness、opencode | P2 | 为中间件和宿主适配 `SessionReader`、`PermissionCheck`、`ToolRegistrar` 等窄视图；不改变 C ABI 总体形状，先用于测试替身。 | 待定，似乎是将部分功能定义接口，以便注册替换实现 |
+| ARC-9 | 领域与策略分开 | opencode | P2 | 配置决策集中在装配层，领域代码只消费已解析策略；不新增 Effect 容器。 | 待定，未理解含义 |
 
 ### 1.3 不采用
 
@@ -104,19 +104,19 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ### 2.2 适合融合的设计
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| LOOP-1 | 持久化收件箱两段状态 | opencode、openclaw、pi、dsh | P0 | 会话库新增 `session_input`：`id/payload/delivery/admitted_seq/promoted_seq/status`。收到输入先落库，真正进入上下文时标记 promoted；重启后只恢复为“待确认”，不自动重放副作用。依赖 STO-1/STO-2。 |
-| LOOP-2 | `next-step`、`next-turn`、`inject` | codex、dsh、openclaw、pi | P0 | `WireUserInput` 增加 `delivery`；`next-turn` 保持队列，`next-step` 在下一个安全 modelcall 边界注入，`inject` 只进入下一次请求的动态注入队列并记录来源，不直接改写权威 transcript，也不唤醒会话。持久化关闭时保持相同语义，但只保存在内存。 |
-| LOOP-3 | 投递结果显式化 | codex、pi、opencode | P1 | 返回 `started/queued/steered/rejected`，拒绝原因结构化（会话不存在、等待中断、压缩中、队列暂停、内容为空）。客户端不再从 delta 猜测。 |
-| LOOP-4 | QueueState 状态机 | openclaw、dsh | P1 | 用 `idle/running/paused/draining` 替代两个 bool；定义每个 wire 操作的状态转移并做穷举测试。 |
-| LOOP-5 | 输入和副作用幂等键 | opencode、openclaw、harness、pi | P0 | `user_input`、`interrupt_and_run_next`、`compact_context` 等增加 `idempotencyKey`；同 key 同内容返回原结果，同 key 不同内容返回冲突。小型 TTL 表即可。 |
-| LOOP-6 | 轮次记录和结束原因 | pi、opencode、harness、dsh | P1 | 新增 `turn` 表，记录 `turnId/source/start/end/status/reason/model/usage`；`TurnResult` 增加 `completed/failed/cancelled/interrupted/max_steps/skipped`。 |
-| LOOP-7 | 请求抢占 | codex、dsh | P1 | 在 `next-step` 输入到达时取消当前 provider 流，保留已收到部分，下一次请求继续；先完成 LOOP-2 的安全边界和重试一致性，再实现。 |
-| LOOP-8 | 步骤快照 | codex | P2 | 每次 modelcall 捕获模型、工具定义指纹、权限快照；结算只使用该快照，防止插件热切换后模型看到的工具和实际执行实现不一致。 |
-| LOOP-9 | 优雅取消和无进展断言 | codex、pi、harness | P1 | 取消后给工具一个可配置收敛时间，超时记录并强制收尾；`resume_async` 返回后若没有新中断、resume 值或终态，记录明确错误。 |
-| LOOP-10 | 中断和失败结构化留痕 | codex、dsh、opencode | P1 | 保留现有 `[User canceled]` 占位，但同时写 `attempt`/`turn` 元数据，记录阶段和原因，不把诊断记录伪装成模型消息。 |
-| LOOP-11 | `collect` 合并投递 | openclaw、dsh、pi | P1 | 在可配置的短暂静默窗口内合并同一客户端的连续输入；保留每条输入的来源和幂等键，合并失败时逐条返回拒绝原因。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| LOOP-1 | 持久化收件箱两段状态 | opencode、openclaw、pi、dsh | P0 | 会话库新增 `session_input`：`id/payload/delivery/admitted_seq/promoted_seq/status`。收到输入先落库，真正进入上下文时标记 promoted；重启后只恢复为“待确认”，不自动重放副作用。依赖 STO-1/STO-2。 | 可行 |
+| LOOP-2 | `next-step`、`next-turn`、`inject` | codex、dsh、openclaw、pi | P0 | `WireUserInput` 增加 `delivery`；`next-turn` 保持队列，`next-step` 在下一个安全 modelcall 边界注入，`inject` 只进入下一次请求的动态注入队列并记录来源，不直接改写权威 transcript，也不唤醒会话。持久化关闭时保持相同语义，但只保存在内存。 | 可行 |
+| LOOP-3 | 投递结果显式化 | codex、pi、opencode | P1 | 返回 `started/queued/steered/rejected`，拒绝原因结构化（会话不存在、等待中断、压缩中、队列暂停、内容为空）。客户端不再从 delta 猜测。 | 可行 |
+| LOOP-4 | QueueState 状态机 | openclaw、dsh | P1 | 用 `idle/running/paused/draining` 替代两个 bool；定义每个 wire 操作的状态转移并做穷举测试。 | 可行 |
+| LOOP-5 | 输入和副作用幂等键 | opencode、openclaw、harness、pi | P0 | `user_input`、`interrupt_and_run_next`、`compact_context` 等增加 `idempotencyKey`；同 key 同内容返回原结果，同 key 不同内容返回冲突。小型 TTL 表即可。 | 待定，待进一步详细理解 |
+| LOOP-6 | 轮次记录和结束原因 | pi、opencode、harness、dsh | P1 | 新增 `turn` 表，记录 `turnId/source/start/end/status/reason/model/usage`；`TurnResult` 增加 `completed/failed/cancelled/interrupted/max_steps/skipped`。 | 意义不大，view 消息列表中有记录错误和停止原因、时间点、耗时 |
+| LOOP-7 | 请求抢占 | codex、dsh | P1 | 在 `next-step` 输入到达时取消当前 provider 流，保留已收到部分，下一次请求继续；先完成 LOOP-2 的安全边界和重试一致性，再实现。 | 待定，似乎是类似原有设计立即中断插入新消息，预估可行 |
+| LOOP-8 | 步骤快照 | codex | P2 | 每次 modelcall 捕获模型、工具定义指纹、权限快照；结算只使用该快照，防止插件热切换后模型看到的工具和实际执行实现不一致。 | 不考虑，复杂度增加过多，想严格保证准确得保存大量额外字段和消息，后续增删除功能还得同步改 |
+| LOOP-9 | 优雅取消和无进展断言 | codex、pi、harness | P1 | 取消后给工具一个可配置收敛时间，超时记录并强制收尾；`resume_async` 返回后若没有新中断、resume 值或终态，记录明确错误。 | 暂时不考虑，此举很影响用户感受，且超时时间难定，工具被强制收尾后续的修复也是大麻烦，跟直接立即中断没有解决根本问题 |
+| LOOP-10 | 中断和失败结构化留痕 | codex、dsh、opencode | P1 | 保留现有 `[User canceled]` 占位，但同时写 `attempt`/`turn` 元数据，记录阶段和原因，不把诊断记录伪装成模型消息。 | 不需要，有必要的状态变更已通知模型，详细记录和告诉模型在大部分agent和网络错误上模型并没什么办法，反而污染上下文 |
+| LOOP-11 | `collect` 合并投递 | openclaw、dsh、pi | P1 | 在可配置的短暂静默窗口内合并同一客户端的连续输入；保留每条输入的来源和幂等键，合并失败时逐条返回拒绝原因。 | 可行 |
 
 ### 2.3 现有行为必须保留
 
@@ -134,24 +134,24 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ### 3.2 适合融合的设计
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| CTX-1 | 来源化上下文和 Context Epoch | opencode、codex、dsh、openclaw | P0 | 新增 `ContextSource`：`key/load/baseline/update/removed`；保存来源快照和基线文本。首轮或压缩后生成基线，变化进入请求装配的 dynamic suffix；只有 provider 明确支持该位置时才投影为追加的 system/developer 内容，不直接把任意 system 消息插入权威 transcript。 |
-| CTX-2 | 三态来源 | opencode | P0 | `unavailable` 表示暂时取不到，保留上次生效值；空值表示明确移除；有值表示更新。来源快照与请求动态段同步更新，避免技能/环境读取失败把旧事实静默清空。 |
-| CTX-3 | 消息来源、原因和可信状态 | codex、dsh、openclaw | P0 | 内部消息 metadata 或消息旁路记录 `source/category/reason/trust`；至少支持 `user/tool/plugin/summary/inject`。宿主统一打标，模型不能自行声明可信。来源字段用于压缩、审计和 UI，不得让不可信文本取得更高执行权限。 |
-| CTX-4 | 只读快照和一致读切面 | codex、dsh、pi | P1 | `SessionSnapshot{messagesVersion, messages, stats, configGeneration}`；wire 响应带同一版本，UI 不拼接来自不同时间点的数据。后续再做共享底层，先保证版本一致。 |
-| CTX-5 | 历史替换记录 | dsh、opencode、openclaw | P1 | 新增 `replacement` 记录：范围、操作、原因、摘要 id、前后 token；不改变当前 Session 读模型。 |
-| CTX-6 | 自定义条目与投影 | pi、opencode | P2 | 为插件私有状态、工具附加上下文、摘要信息提供不默认进模型的 custom 条目；投影器明确决定是否进入请求。 |
-| CTX-7 | 附件引用而不是反复内联 Base64 | codex、dsh、harness、openclaw | P1 | 展示历史已有剥离 dataUrl；上下文进一步使用引用 id + 校验元数据，provider 层按需读取。保留当前服务端路径读取和线程池卸载。 |
-| CTX-8 | 会话工作上下文和派生态失效 | opencode、harness | P2 | 收敛工作目录、worktree、权限基准和附件根为 `SessionWorkContext`；切换或解绑 worktree 时清空 prompt 基线、权限缓存和执行环境派生数据，避免旧目录状态继续生效。 |
-| CTX-9 | 会话重建统一入口 | codex、harness、opencode | P2 | 把从 SQLite 恢复 typed messages、展示历史、事件游标和未闭合操作的步骤收进一个可测试入口；附件不重新上传，恢复只做本地校验。 |
-| PRM-1 | stablePrefix/dynamicSuffix | openclaw、opencode、dsh、pi | P0 | `AgentPrompt` 明确静态稳定段和动态段；动态段不得插入稳定段内部。动态内容优先在请求装配层作为稳定位置的 suffix 发送，不为缓存优化随意改写 Session transcript；provider 不支持该形态时才整体重建并记录缓存失效。 |
-| PRM-2 | 段落排序号和固定槽位 | dsh、pi、codex | P1 | 把 `map<key,text>` 改为带 `order` 的条目；同层重复 key 失败。固定槽位建议 `persona/planning/capabilities/policy/skills/memory/dynamic`。 |
-| PRM-3 | 指令变化通知 | opencode、dsh、openclaw | P1 | 技能集合、记忆文件或插件资源变化时更新来源快照，并在请求动态段中追加“替换此前集合”的内容；集合清空时追加撤销内容。不得为了通知而改写稳定 transcript。 |
-| PRM-4 | 记忆分层和按需检索 | openclaw | P0 | 常驻记忆有字符预算，检索记忆只提供目录和读取方法；超限警告，不把整个日记文件每轮注入。 |
-| PRM-5 | 技能优先级和同名裁决 | openclaw、opencode | P1 | 会话/项目 > 用户 > 插件/内置；同名取最高优先级，并把来源显示给模型和 UI。 |
-| PRM-6 | 提示词整体覆盖语义 | dsh | P2 | headless/嵌入场景可声明 `complete`；多个完整提示词同时生效时失败，不静默选一个。 |
-| PRM-7 | 提示词和请求体快照 | codex、openclaw、pi | P1 | 默认提示词、来源列表、工具定义和最终请求 JSON 做快照/哈希测试。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| CTX-1 | 来源化上下文和 Context Epoch | opencode、codex、dsh、openclaw | P0 | 新增 `ContextSource`：`key/load/baseline/update/removed`；保存来源快照和基线文本。首轮或压缩后生成基线，变化进入请求装配的 dynamic suffix；只有 provider 明确支持该位置时才投影为追加的 system/developer 内容，不直接把任意 system 消息插入权威 transcript。 | 不考虑 |
+| CTX-2 | 三态来源 | opencode | P0 | `unavailable` 表示暂时取不到，保留上次生效值；空值表示明确移除；有值表示更新。来源快照与请求动态段同步更新，避免技能/环境读取失败把旧事实静默清空。 | 不考虑 |
+| CTX-3 | 消息来源、原因和可信状态 | codex、dsh、openclaw | P0 | 内部消息 metadata 或消息旁路记录 `source/category/reason/trust`；至少支持 `user/tool/plugin/summary/inject`。宿主统一打标，模型不能自行声明可信。来源字段用于压缩、审计和 UI，不得让不可信文本取得更高执行权限。 | 待定，可考虑实施对插入的 skill 等消息备注可能不可信 |
+| CTX-4 | 只读快照和一致读切面 | codex、dsh、pi | P1 | `SessionSnapshot{messagesVersion, messages, stats, configGeneration}`；wire 响应带同一版本，UI 不拼接来自不同时间点的数据。后续再做共享底层，先保证版本一致。 | 待定，待进一步理解 |
+| CTX-5 | 历史替换记录 | dsh、opencode、openclaw | P1 | 新增 `replacement` 记录：范围、操作、原因、摘要 id、前后 token；不改变当前 Session 读模型。 | 不考虑 |
+| CTX-6 | 自定义条目与投影 | pi、opencode | P2 | 为插件私有状态、工具附加上下文、摘要信息提供不默认进模型的 custom 条目；投影器明确决定是否进入请求。 | 待定，待进一步理解 |
+| CTX-7 | 附件引用而不是反复内联 Base64 | codex、dsh、harness、openclaw | P1 | 展示历史已有剥离 dataUrl；上下文进一步使用引用 id + 校验元数据，provider 层按需读取。保留当前服务端路径读取和线程池卸载。 | 可行，但需进一步理解具体实施内容 |
+| CTX-8 | 会话工作上下文和派生态失效 | opencode、harness | P2 | 收敛工作目录、worktree、权限基准和附件根为 `SessionWorkContext`；切换或解绑 worktree 时清空 prompt 基线、权限缓存和执行环境派生数据，避免旧目录状态继续生效。 | 待定，似乎可行 |
+| CTX-9 | 会话重建统一入口 | codex、harness、opencode | P2 | 把从 SQLite 恢复 typed messages、展示历史、事件游标和未闭合操作的步骤收进一个可测试入口；附件不重新上传，恢复只做本地校验。 | 待定，似乎可行，需要确定具体改动 |
+| PRM-1 | stablePrefix/dynamicSuffix | openclaw、opencode、dsh、pi | P0 | `AgentPrompt` 明确静态稳定段和动态段；动态段不得插入稳定段内部。动态内容优先在请求装配层作为稳定位置的 suffix 发送，不为缓存优化随意改写 Session transcript；provider 不支持该形态时才整体重建并记录缓存失效。 | 待定 |
+| PRM-2 | 段落排序号和固定槽位 | dsh、pi、codex | P1 | 把 `map<key,text>` 改为带 `order` 的条目；同层重复 key 失败。固定槽位建议 `persona/planning/capabilities/policy/skills/memory/dynamic`。 | 待定 |
+| PRM-3 | 指令变化通知 | opencode、dsh、openclaw | P1 | 技能集合、记忆文件或插件资源变化时更新来源快照，并在请求动态段中追加“替换此前集合”的内容；集合清空时追加撤销内容。不得为了通知而改写稳定 transcript。 | 暂不考虑，有必要的变动才通知 |
+| PRM-4 | 记忆分层和按需检索 | openclaw | P0 | 常驻记忆有字符预算，检索记忆只提供目录和读取方法；超限警告，不把整个日记文件每轮注入。 | 待定 |
+| PRM-5 | 技能优先级和同名裁决 | openclaw、opencode | P1 | 会话/项目 > 用户 > 插件/内置；同名取最高优先级，并把来源显示给模型和 UI。 | 可行 |
+| PRM-6 | 提示词整体覆盖语义 | dsh | P2 | headless/嵌入场景可声明 `complete`；多个完整提示词同时生效时失败，不静默选一个。 | 不考虑，目前支持修改 systemPrompt，应当扩展支持修改 context |
+| PRM-7 | 提示词和请求体快照 | codex、openclaw、pi | P1 | 默认提示词、来源列表、工具定义和最终请求 JSON 做快照/哈希测试。 | 待定 |
 
 ### 3.3 不能改变的边界
 
@@ -167,23 +167,25 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 `SessionStore` 是每会话 SQLite 四表结构，带连接 LRU、预编译语句、链式哈希和 `msg_id` 迁移；但 `ensureSchema` 没有通用版本链，只有 `msg_id` 的一次性检查；没有跨进程写者锁；delta 重放主要依靠进程内环形缓冲；上下文是单行整体替换。
 
+补充说明: 消息上下文记录分两部分，ViewMessage 只追加或修改单消息，一般不允许移除和覆盖大量消息，负责记录用户看到的消息列表；LLMContext 则记录要发送给 LLM 的上下文；分离设计可以让 上下文压缩、消息提示、自定义渲染 等互相隔离，不会影响显示和污染LLM上下文。且 LLMContext 由于模型上下文有限制不会很大，viewMessages 能一直积累，则可以通过分页、转移到硬盘存储
+
 ### 4.2 适合融合的设计
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| STO-1 | 会话目录内核级写租约 | codex、dsh、harness、openclaw、opencode | P0 | 写句柄打开会话目录时获取稳定 `.writer.lock`；POSIX `flock`，Windows 命名内核对象；持有期等于写句柄生命周期，不设超时，崩溃由系统释放。读操作不需要写锁。 |
-| STO-2 | schema 版本和相邻迁移链 | dsh、harness、opencode、pi、openclaw | P0 | `meta.schema_version`；每次迁移独立事务、幂等、有迁移前备份；高版本数据库拒绝打开。现有 `msg_id` 补列成为一个历史迁移步骤。 |
-| STO-3 | 关键事实事件序列 | opencode、dsh、pi、openclaw、harness | P1 | 新增 `event(seq,type,version,payload,time)`，只记录消息追加、工具结算、轮次、压缩、权限决定、基线重建等事实；现有 `view_message` 和 `llm_context` 继续作为读模型。 |
-| STO-4 | durable 事件流与实时 delta 分开 | opencode、openclaw、dsh | P1 | `after/limit` 历史事件补拉和实时 token/思考片段分成两类。服务重启后用 durable 事件补齐关键状态，实时片段不承诺重放。 |
-| STO-5 | 持久化语义分级与 flush | codex、dsh | P1 | `persistNow(reason)` 用于用户输入、工具结算、压缩完成、轮次终态；`persistThrottled(reason)` 用于展示历史和统计。日志写出原因。 |
-| STO-6 | turn/attempt/compaction 记录 | dsh、pi、codex、opencode | P1 | 不把失败尝试塞进模型上下文；在独立表记录 provider 失败、重试、取消、压缩 started/ended。 |
-| STO-7 | 启动清账和崩溃配平 | opencode、dsh、codex | P1 | 恢复时发现未闭合轮次、running 工具或未完成压缩，补“被中断”终态；未执行 tool call 生成合法占位。 |
-| STO-8 | 用量账本 | pi、opencode、harness、openclaw | P1 | 每次模型结算记录 input/output/cache read/cache write/cost/provider/model/turnId；失败和重试也记 attempt，UI 从账本聚合。 |
-| STO-9 | 持久化降级可见 | opencode、pi、harness | P1 | 展示历史写失败可继续运行但标记降级；上下文、轮次和工具结果写失败推送明确警告。 |
-| STO-10 | 大写入不阻塞 io 线程 | openclaw、harness | P2 | 先保持短事务在 io 线程；超过阈值的整段上下文或 spill 写入线程池，完成后回 io 线程更新状态。不要照搬所有 DB worker。 |
-| STO-11 | settings_db 乐观版本 | harness | P1 | `settings_db` 增加 version，冲突返回可识别错误，避免多个客户端静默覆盖。 |
-| STO-12 | 会话检索和标题 | codex、dsh、pi、harness | P1 | `meta.title/titleSource` 独立可改；视需要给 `view_message` 加 FTS5；先做当前会话/标题搜索，不先建跨库复杂索引。 |
-| STO-13 | 会话导出和取证包 | pi、harness | P2 | 导出展示历史、工具定位符、轮次和诊断；配置脱敏、API key 不进入报告。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| STO-1 | 会话目录内核级写租约 | codex、dsh、harness、openclaw、opencode | P0 | 写句柄打开会话目录时获取稳定 `.writer.lock`；POSIX `flock`，Windows 命名内核对象；持有期等于写句柄生命周期，不设超时，崩溃由系统释放。读操作不需要写锁。 | 可行 |
+| STO-2 | schema 版本和相邻迁移链 | dsh、harness、opencode、pi、openclaw | P0 | `meta.schema_version`；每次迁移独立事务、幂等、有迁移前备份；高版本数据库拒绝打开。现有 `msg_id` 补列成为一个历史迁移步骤。 | 可行 |
+| STO-3 | 关键事实事件序列 | opencode、dsh、pi、openclaw、harness | P1 | 新增 `event(seq,type,version,payload,time)`，只记录消息追加、工具结算、轮次、压缩、权限决定、基线重建等事实；现有 `view_message` 和 `llm_context` 继续作为读模型。 | 不考虑，如有需求可直接写入到 view_messages 中，渲染决定隐藏，避免了多份数据且保证时间顺序 |
+| STO-4 | durable 事件流与实时 delta 分开 | opencode、openclaw、dsh | P1 | `after/limit` 历史事件补拉和实时 token/思考片段分成两类。服务重启后用 durable 事件补齐关键状态，实时片段不承诺重放。 | 待定，待进一步理解 |
+| STO-5 | 持久化语义分级与 flush | codex、dsh | P1 | `persistNow(reason)` 用于用户输入、工具结算、压缩完成、轮次终态；`persistThrottled(reason)` 用于展示历史和统计。日志写出原因。 | 待定 |
+| STO-6 | turn/attempt/compaction 记录 | dsh、pi、codex、opencode | P1 | 不把失败尝试塞进模型上下文；在独立表记录 provider 失败、重试、取消、压缩 started/ended。 | 不考虑，不符合 agentxx 现有设计分析，目前为分离消息记录，失败重试不会记录在模型上下文 |
+| STO-7 | 启动清账和崩溃配平 | opencode、dsh、codex | P1 | 恢复时发现未闭合轮次、running 工具或未完成压缩，补“被中断”终态；未执行 tool call 生成合法占位。 | 不考虑，不符合 agentxx 的现有设计分析，目前已经有自动修正上下文等兜底 |
+| STO-8 | 用量账本 | pi、opencode、harness、openclaw | P1 | 每次模型结算记录 input/output/cache read/cache write/cost/provider/model/turnId；失败和重试也记 attempt，UI 从账本聚合。 | 可行，实现用量统计 |
+| STO-9 | 持久化降级可见 | opencode、pi、harness | P1 | 展示历史写失败可继续运行但标记降级；上下文、轮次和工具结果写失败推送明确警告。 | 待定 |
+| STO-10 | 大写入不阻塞 io 线程 | openclaw、harness | P2 | 先保持短事务在 io 线程；超过阈值的整段上下文或 spill 写入线程池，完成后回 io 线程更新状态。不要照搬所有 DB worker。 | 待定 |
+| STO-11 | settings_db 乐观版本 | harness | P1 | `settings_db` 增加 version，冲突返回可识别错误，避免多个客户端静默覆盖。 | 可行 |
+| STO-12 | 会话检索和标题 | codex、dsh、pi、harness | P1 | `meta.title/titleSource` 独立可改；视需要给 `view_message` 加 FTS5；先做当前会话/标题搜索，不先建跨库复杂索引。 | 可行 |
+| STO-13 | 会话导出和取证包 | pi、harness | P2 | 导出展示历史、工具定位符、轮次和诊断；配置脱敏、API key 不进入报告。 | 可行 |
 
 ### 4.3 明确不采用
 
@@ -201,13 +203,13 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ### 5.2 适合融合的设计
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| TOOL-1 | 分阶段并行：prepare/dispatch/finalize | codex、dsh、openclaw、opencode、pi、harness | P0 | 参数解析、权限、询问按源顺序串行；只读且显式 `supportsParallel` 的执行体并发；写/交互工具形成屏障；结果按原始 `tool_call_id` 顺序写回。 |
-| TOOL-2 | 并发分类和上限 | harness、dsh、openclaw | P0 | `ConcurrencyClass{ReadOnly,Exclusive,Interactive}`，默认独占；配置全局和分类上限；使用 RAII 释放配额。 |
-| TOOL-3 | 并行取消和收尾 | codex、dsh、opencode | P0 | 已完成结果保留，未启动补取消结果，执行中请求取消；任何取消都保证每个 tool call 有对应结果，测试完成顺序和提交顺序不同的情况。 |
-| TOOL-4 | 分发层硬超时 | harness、codex、dsh | P0 | 工具只声明 `timeoutMs`，分发层竞速取消并返回结构化 timeout 状态；复用现有进程组/Job Object/CancelRegistry。 |
-| TOOL-5 | 工具结果守卫 | openclaw、opencode、dsh、harness | P1 | 写入会话前检查 UTF-8、合法消息、tool_call 配对和硬上限。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| TOOL-1 | 分阶段并行：prepare/dispatch/finalize | codex、dsh、openclaw、opencode、pi、harness | P0 | 参数解析、权限、询问按源顺序串行；只读且显式 `supportsParallel` 的执行体并发；写/交互工具形成屏障；结果按原始 `tool_call_id` 顺序写回。 | 可行 |
+| TOOL-2 | 并发分类和上限 | harness、dsh、openclaw | P0 | `ConcurrencyClass{ReadOnly,Exclusive,Interactive}`，默认独占；配置全局和分类上限；使用 RAII 释放配额。 | 待定 |
+| TOOL-3 | 并行取消和收尾 | codex、dsh、opencode | P0 | 已完成结果保留，未启动补取消结果，执行中请求取消；任何取消都保证每个 tool call 有对应结果，测试完成顺序和提交顺序不同的情况。 | 可行 |
+| TOOL-4 | 分发层硬超时 | harness、codex、dsh | P0 | 工具只声明 `timeoutMs`，分发层竞速取消并返回结构化 timeout 状态；复用现有进程组/Job Object/CancelRegistry。 | 待定，待进一步理解 |
+| TOOL-5 | 工具结果守卫 | openclaw、opencode、dsh、harness | P1 | 写入会话前检查 UTF-8、合法消息、tool_call 配对和硬上限。 |  |
 | TOOL-6 | 聚合结果预算 | openclaw、opencode、harness | P1 | 保留现有单调用 offload；增加一次请求所有工具结果的总预算。超限时最旧结果优先换为 share_store 预览。 |
 | TOOL-7 | 结构化定位符和首尾预览 | openclaw、opencode、codex | P1 | 现有 share_store 文本增加 `spillId/bytes/lines/preview` 元数据；预览保留首尾，中间省略；不另建存储系统。 |
 | TOOL-8 | 结构化结果与模型投影分离 | dsh、opencode、pi | P1 | `ToolResult{value, content, meta, status}` 作为内部可选返回类型；先兼容现有字符串工具，插件 ABI 通过 JSON 扩展。 |

@@ -218,6 +218,12 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     // decorate 留空: buildBanner 按 theme.accentColor 在外部着色 (与原 "~" 一致)
     startupSpinner_ = std::make_shared<SpinnerComponent>(std::move(startupCfg));
     Add(startupSpinner_);
+
+    // 空列表 banner 艺术字动画 ("AGENT++" 的 "++" 由两个大字 "+" 变形为机器人图案):
+    // - 门槛 High (与两个 spinner 一致); 等级不足时组件内部直接渲染末帧
+    // - 注册为子项: 与两个 spinner 同款, 播放中的动画回调经组件树转发
+    bannerArt_ = std::make_shared<BannerArtComponent>();
+    Add(bannerArt_);
 }
 
 void MessageListComponent::invalidateCache() {
@@ -786,7 +792,10 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
         const bool bannerAnimating = startupSpinner_ && startupSpinner_->animationEnabled()
                                      && st.connState == ConnState::Connecting
                                      && !st.startupProgress.empty();
-        out.cacheable = !bannerAnimating;
+        // 艺术字变形动画 ("++" → 机器人图案) 播放期间同样不可缓存:
+        // 缓存命中的旧 Element 停留在动画的某一帧, 不再推进
+        const bool artAnimating = bannerArt_ && bannerArt_->animating();
+        out.cacheable           = !bannerAnimating && !artAnimating;
         return out;
     }
     if (index < st.messages.size()) {
@@ -870,17 +879,16 @@ Element MessageListComponent::buildBanner() {
 
     return vbox({
         filler(),
-        text(R"_(
-
- █████╗  ██████╗ ███████╗███╗   ██╗████████╗      ╔══╗     ╔══╗
-██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝   ╔══╬══╬═════╬══╬══╗
-███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║    ╔═╬  ║++║     ║++║  ╬═╗
-██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║    ╚═╬       \_/       ╬═╝
-██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║      ╚═══════   ═══════╝
-╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚══╝     ╚══╝   
-
-)_") | bold | color(theme.accentColor)
-            | center,
+        // 艺术字 "AGENT++": 右侧 "++" 由 BannerArtComponent 逐帧给出
+        // (启动阶段由两个与 AGENT 同风格的大字 "+" 变形为机器人图案, 见 banner_art.h);
+        // 上下各留两行空白, 与静态艺术字的间距一致
+        vbox({
+            text(""),
+            text(""),
+            bannerArt_->Render() | bold | color(theme.accentColor),
+            text(""),
+            text(""),
+        }) | center,
         statusLine,
         filler(),
     });

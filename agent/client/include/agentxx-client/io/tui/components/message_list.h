@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx-client/io/tui/components/banner_art.h"
 #include "agentxx-client/io/tui/components/interrupt_view.h"
 #include "agentxx-client/io/tui/components/spinner.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
@@ -336,6 +337,12 @@ private:
     /// - isActive 绑定 Connecting 且 startupProgress 非空 (仅启动阶段运行)
     /// - 注册为子项以接收 OnAnimation, 与 runSpinner_ 同款 braille 点阵
     std::shared_ptr<SpinnerComponent> startupSpinner_;
+
+    /// 空消息列表 banner 艺术字 "AGENT++" 中 "++" 的变形动画
+    /// (两个大字 "+" → 机器人图案; 见 [banner_art.h] 说明):
+    /// - 启动后首次渲染 banner 时播放一次, 结束后静止在机器人图案
+    /// - 注册为子项 (与两个 spinner 同款): 动画回调经组件树转发, 未入树收不到
+    std::shared_ptr<BannerArtComponent> bannerArt_;
 
     // ---- 流式增量 markdown 渲染器 ----
     // 流式输出期间避免每帧对整段累积文本全量重解析 (O(n^2) -> 稳定块缓存 O(n)):

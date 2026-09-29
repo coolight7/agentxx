@@ -137,6 +137,7 @@
 | 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 (含跨设备标签页, 见 §2.9) |
 | `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定; 控件与提交行复用 `ui_components`) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
+| `BannerArtComponent` | [components/banner_art.h](/agent/client/include/agentxx-client/io/tui/components/banner_art.h) | 空列表 banner 艺术字 (`AGENT++`): 右侧 `++` 由两个大字 `+` 变形为机器人图案 (见 §2.10) |
 | `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把界面描述层 (`cxx_pluginxx_ui`) 的组件项渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
 
 `ui_components` 是全部展示描述的唯一渲染实现: 侧边栏面板、Info 段落、工具消息装饰、
@@ -410,6 +411,31 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 路径字符串在界面、wire 与文件系统访问之间一律 UTF-8 (`utilxx_base::pathToUtf8Generic` /
   `utilxx_base::utf8ToPath`), Windows 下中文目录不会显示为乱码。
 - 模态行为与其它弹窗一致: 未命中的鼠标事件同样吞掉 (滚轮不会滚动被遮挡的消息列表)。
+
+### 2.10 空状态艺术字动画 (`AGENT++`)
+
+消息列表为空时展示的 banner 艺术字由
+[components/banner_art.h](/agent/client/include/agentxx-client/io/tui/components/banner_art.h)
+提供: 左侧 "AGENT" 固定不变, 右侧 "++" 在启动阶段先画成两个与 AGENT 同风格的大字 "+",
+再通过动画变形为机器人图案 (机器人眼睛里的 `++` 就是这两个加号)。
+
+- 帧序列在首次访问时生成一次
+  ([banner_art.cpp](/agent/client/src/io/tui/components/banner_art.cpp)):
+  5 帧加号保持 + 16 帧变形 = 21 帧 (每帧 70ms, 合计约 1.5 秒)。
+  每帧 6 行、每行补齐到 68 列 (44 列 "AGENT" + 24 列图案框), 各帧块宽一致 —— FTXUI
+  的多行 `text()` 按最宽行定块宽, 各帧等宽才能保证居中的艺术字不左右跳动。
+- 变形规则 (`p` = 变形进度, `dn` = 该格到最近一个加号中心的归一化距离):
+  加号格在 `p >= 0.45 * (1 - dn)` 时清空 (由外端向中心收回),
+  机器人格在 `p >= 0.45 + 0.55 * dn` 时写入 (由中间两只眼睛向外长出);
+  两阶段不重叠, 不会出现两种图案挤在同一处。末帧与改动前的静态艺术字逐字符一致。
+- 播放由 `BannerArtComponent` 完成 (与 `SpinnerComponent` 同一套 FTXUI 动画机制):
+  首次渲染时经 `RequestAnimationFrame()` 启动帧循环, 每次动画回调按累计时长推进一帧,
+  到末帧停止并停止续约 —— 一次性播放, 不重播 (banner 再次出现时直接展示机器人图案)。
+- 动画等级门槛为 `High` (与 banner 内的启动加载点阵、运行中的旋转点阵一致);
+  等级不足时组件内部直接渲染末帧, 不进入动画。
+- 播放期间 banner 子项**不可跨帧缓存** (`MessageListComponent::buildItem` 置
+  `cacheable = false`): 缓存命中的旧 Element 会停在动画中的某一帧, 不再随帧推进。
+- 测试: `agentxx_test banner_art` (帧结构/前缀不变/末帧一致/逐帧收敛 + 播放与空列表接入)。
 
 ---
 

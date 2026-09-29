@@ -65,6 +65,7 @@
 #include "asio/use_awaitable.hpp"
 #include "utilxx_base/log.h"
 #ifdef AGENTXX_BUILD_CLIENT
+#include "agentxx-test/client/test_banner_art.h"
 #include "agentxx-test/client/test_config_loader.h"
 #include "agentxx-test/client/test_ftxui_text.h"
 #include "agentxx-test/client/test_markdown_block.h"
@@ -226,6 +227,7 @@ int main(int argn, char** argv) {
         runSync("plugin_bridge", agentxx::test::testPluginBridge);
 #ifdef AGENTXX_BUILD_CLIENT
         runSync("config_loader", agentxx::test::testConfigLoader);
+        runSync("banner_art", agentxx::test::testBannerArt);
         runSync("tui_settings", agentxx::test::testTuiSettings);
         runSync("update_check", agentxx::test::testUpdateCheck);
         runSync("tui_input", agentxx::test::testTuiInput);

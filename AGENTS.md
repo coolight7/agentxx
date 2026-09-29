@@ -320,6 +320,12 @@ path/to/agentxx_test string_util regex
   打开下载页经 `util/open_url.h` 校验 http/https 后交系统浏览器
 - 设置弹窗: 条目按 界面/显示/更新/其他 分组, 内容超出终端高度时内容区限高可滚动
   (`vscroll_indicator | yframe`, 选中项带 focus 自动滚入视口, 滚轮 = 上/下移动选中项)
+- 空列表 banner 艺术字 `AGENT++`: 右侧 `++` 由 `BannerArtComponent`
+  (`agent/client/include/agentxx-client/io/tui/components/banner_art.h`, 门槛 `High`)
+  在启动阶段播放一次变形动画 —— 先画成两个与 AGENT 同风格的大字 `+`, 再变形为机器人图案
+  (21 帧 × 70ms; 首帧 5 帧保持, 之后加号由外向内收回 + 机器人图案由眼睛向外长出);
+  帧由 `bannerArtFrames()` 首次访问时生成 (每帧 6 行 × 68 列定宽, 末帧 = 原静态艺术字),
+  播放期间 banner 子项不可跨帧缓存; 等级不足/播放结束 = 静态末帧; 见 tui.md §2.10
 - share store 内存策略: 会话库 `store` 表为唯一数据源, 内存仅保留
   `SessionShareStore::kCacheCapacity` (3) 条 LRU 缓存; 首次访问某会话只取回 `max(id)` 作自增计数
   (内存占用与条目数无关); id 大于 lastId (从未分配) 按参数错误抛异常; 已不支持删除条目
@@ -355,7 +361,7 @@ path/to/agentxx_test string_util regex
     `BaseAgent::initRegisterNodes` 同时注册到 per-agent 与进程级全局条件表
     (自建 GraphRegistry 的宿主需自行调用 `registerAgentGraphConditions`)
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
-- 测试模块: client 侧 18 个 (含 `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
+- 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
 
 ## 编译
