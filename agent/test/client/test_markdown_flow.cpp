@@ -11,7 +11,8 @@
 // - [硬换行] '\n' 分段, 尾随换行保留一行空行
 // - [行内样式] 粗体/暗色/斜体/下划线/颜色落到正确单元格; 未设置的通道继承
 //   外层装饰器颜色
-// - [选择] 行区间 + 列区间取文本 (含跨行、宽字符、组合字符)
+// - [选择] 行区间 + 列区间取文本 (含跨行、宽字符、组合字符; 元素左缘不在 0 列
+//   时同样按屏幕列取, 不丢每行开头的列)
 // - [链接区段] 链接的可见区段写进登记目标 (供鼠标点击命中)
 #include "agentxx-test/client/test_markdown_flow.h"
 
@@ -78,13 +79,20 @@ std::vector<std::string> renderRows(const ftxui::Element& el, int w, int h) {
     return rows;
 }
 
-/// 按 FTXUI 拖选路径取回 [x0, y0] - [x1, y1] 区域内的文本
-std::string selectText(const ftxui::Element& el, int w, int h, int x0, int y0, int x1, int y1) {
+/// 按 FTXUI 拖选路径取回 [x0, y0] - [x1, y1] 区域内的文本, 元素盒左缘落在 `left` 列
+/// (模拟元素左侧带留白/缩进/边框的版面: 消息列表子项左侧 3 列留白、面板边框内 1 列等)
+std::string
+    selectTextAt(const ftxui::Element& el, int left, int w, int h, int x0, int y0, int x1, int y1) {
     el->ComputeRequirement();
-    el->SetBox(ftxui::Box{0, w - 1, 0, h - 1});
+    el->SetBox(ftxui::Box{left, left + w - 1, 0, h - 1});
     ftxui::Selection selection(x0, y0, x1, y1);
     el->Select(selection);
     return selection.GetParts();
+}
+
+/// 同上, 元素盒左缘在 0 列
+std::string selectText(const ftxui::Element& el, int w, int h, int x0, int y0, int x1, int y1) {
+    return selectTextAt(el, 0, w, h, x0, y0, x1, y1);
 }
 
 } // namespace
@@ -240,6 +248,40 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(selectText(combining, 2, 1, 1, 0, 1, 0), std::string{"x"});
     }
 
+    // ---------------- 选择取文本 (元素左缘不在 0 列) ----------------
+    {
+        // 节点内的字形列从 0 起算 (相对盒左缘), 选择区间是屏幕列: 两者口径不同,
+        // 混用会漏掉每行开头若干字符 —— 元素左缘越靠右丢得越多。
+        // 宿主里正文常带左侧留白 (消息列表 3 列留白、面板边框内 1~2 列),
+        // 用户表现为"鼠标选中复制总是缺最左边的一两列"。
+        auto flow = plainNode("hello world"); // 屏幕列 3..13
+        XX_TEST_EXPECT_EQ(selectTextAt(flow, 3, 11, 1, 3, 0, 13, 0), std::string{"hello world"});
+        XX_TEST_EXPECT_EQ(selectTextAt(flow, 3, 11, 1, 3, 0, 7, 0), std::string{"hello"});
+        XX_TEST_EXPECT_EQ(selectTextAt(flow, 3, 11, 1, 9, 0, 13, 0), std::string{"world"});
+        XX_TEST_EXPECT_EQ(selectTextAt(flow, 3, 11, 1, 5, 0, 9, 0), std::string{"llo w"});
+
+        // 折行后跨行选择: 每一行的首列字符都要取到
+        auto wrapped = plainNode("aaa bbb"); // 盒宽 3 -> 两行, 各从第 3 列起
+        XX_TEST_EXPECT_EQ(selectTextAt(wrapped, 3, 3, 2, 3, 0, 5, 0), std::string{"aaa"});
+        XX_TEST_EXPECT_EQ(selectTextAt(wrapped, 3, 3, 2, 3, 1, 5, 1), std::string{"bbb"});
+        XX_TEST_EXPECT_EQ(selectTextAt(wrapped, 3, 3, 2, 3, 0, 5, 1), std::string{"aaa\nbbb"});
+
+        // 宽字符 (两列) 与组合字符 (零宽并入前一格) 同样按屏幕列判定
+        auto wide = plainNode("汉字 abc"); // 汉 2..3, 字 4..5, 空格 6, abc 7..9
+        XX_TEST_EXPECT_EQ(selectTextAt(wide, 2, 8, 1, 2, 0, 2, 0), std::string{"汉"});
+        XX_TEST_EXPECT_EQ(selectTextAt(wide, 2, 8, 1, 2, 0, 9, 0), std::string{"汉字 abc"});
+        XX_TEST_EXPECT_EQ(selectTextAt(wide, 2, 8, 1, 7, 0, 9, 0), std::string{"abc"});
+        auto combining = plainNode("e\xCC\x81x"); // "é" 占第 4 列, "x" 占第 5 列
+        XX_TEST_EXPECT_EQ(selectTextAt(combining, 4, 2, 1, 4, 0, 4, 0), std::string{"e\xCC\x81"});
+        XX_TEST_EXPECT_EQ(selectTextAt(combining, 4, 2, 1, 5, 0, 5, 0), std::string{"x"});
+
+        // 与消息列表同样的版面 (左侧 3 列留白 + 正文): 拖选正文取回完整文本
+        const auto row = ftxui::hbox({ftxui::text("   "), plainNode("hello world")});
+        XX_TEST_EXPECT_EQ(selectText(row, 14, 1, 3, 0, 13, 0), std::string{"hello world"});
+        // 留白本身是文本节点, 从左缘整体拖选时它照旧被取到 (不丢左侧列)
+        XX_TEST_EXPECT_EQ(selectText(row, 14, 1, 0, 0, 13, 0), std::string{"   hello world"});
+    }
+
     // ---------------- 选中高亮 (与 ftxui::Text 一致: 选中单元格执行 Screen 的选中样式) ----------------
     {
         // 逐帧顺序与 App 相同: ComputeRequirement -> SetBox -> Select -> Render
@@ -297,6 +339,21 @@ TestResult testMarkdownFlow() {
         }
         XX_TEST_EXPECT_EQ(wrapSel.GetParts(), std::string{"aaa\nbbb"});
 
+        // 元素左缘不在 0 列 (左侧 3 列留白): 高亮区间与复制文本仍一致 ——
+        // 两者都按屏幕列判定, 正文首列字符既高亮也进复制结果
+        const auto offsetRow = ftxui::hbox({ftxui::text("   "), plainNode("hello world")});
+        auto       offsetScreen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(14), ftxui::Dimension::Fixed(1));
+        ftxui::Selection offsetSel(9, 0, 13, 0); // "world" (第 9..13 列)
+        ftxui::Render(offsetScreen, offsetRow.get(), offsetSel);
+        for (int x = 0; x <= 8; ++x) {
+            XX_TEST_EXPECT_FALSE(offsetScreen.PixelAt(x, 0).inverted);
+        }
+        for (int x = 9; x <= 13; ++x) {
+            XX_TEST_EXPECT_TRUE(offsetScreen.PixelAt(x, 0).inverted);
+        }
+        XX_TEST_EXPECT_EQ(offsetSel.GetParts(), std::string{"world"});
+
         // 代码块 (自绘节点) 同样按选中列高亮: 只有被绘制的字符格高亮
         using markdown::CellStyle;
         auto block      = std::make_shared<markdown::FlowCodeBlock>("ab\ncd", "", CellStyle{});
@@ -309,6 +366,14 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_TRUE(blockScreen.PixelAt(2, 1).inverted);  // 'b'
         XX_TEST_EXPECT_FALSE(blockScreen.PixelAt(1, 2).inverted); // 第二行代码未选中
         XX_TEST_EXPECT_EQ(blockSel.GetParts(), std::string{"ab"});
+
+        // 代码块左缘不在 0 列 (左侧留白 2 列): 代码行文字从盒左缘 + 1 列 (内边距)
+        // 起画, 取文本按屏幕列判定 —— 选中整个代码区应取回完整代码
+        auto offsetBlock = std::make_shared<markdown::FlowCodeBlock>("ab\ncd", "", CellStyle{});
+        XX_TEST_EXPECT_EQ(
+            selectTextAt(offsetBlock, 2, 6, 4, 2, 1, 7, 2),
+            std::string{"ab\ncd"}
+        );
     }
 
     // ---------------- 链接可见区段登记 ----------------
