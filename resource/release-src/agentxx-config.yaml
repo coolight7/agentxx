@@ -150,7 +150,7 @@ model:
         reasoning:
           effort: high 
 
-    - name: command-code-deepseek-flash
+    - name: command-code-deepseek-v4-flash
       type: "openai"
       base_url: "https://api.commandcode.ai/provider/v1"
       api_key: "${COMMANDCODE_API_KEY}"
