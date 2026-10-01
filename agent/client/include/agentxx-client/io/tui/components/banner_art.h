@@ -45,7 +45,11 @@ public:
         AnimationLevel requiredLevel = AnimationLevel::High;
     };
 
-    explicit BannerArtComponent(Config config = Config{});
+    /// 默认配置构造 (等价于 `BannerArtComponent(Config{})`)
+    /// - 不写成 `Config config = Config{}` 的默认实参: Config 的默认成员初始化器
+    ///   要等外层类完整后才能求值, 类内默认实参里用它会编译不过
+    BannerArtComponent();
+    explicit BannerArtComponent(Config config);
 
     /// 渲染当前帧 (6 行艺术字; 颜色/居中由调用方装饰)
     ftxui::Element OnRender() override;

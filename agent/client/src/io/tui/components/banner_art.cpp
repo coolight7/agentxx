@@ -275,6 +275,8 @@ const std::string& bannerArtFinalFrame() {
     return bannerArtFrames().back();
 }
 
+BannerArtComponent::BannerArtComponent() : BannerArtComponent(Config{}) {}
+
 BannerArtComponent::BannerArtComponent(Config config) : config_(config) {
     // 帧间隔下限保护: 非正值视为每次动画回调推进一帧 (实际仍受 FTXUI 帧率上限约束)
     interval_ = config_.frameInterval > std::chrono::milliseconds(0)
