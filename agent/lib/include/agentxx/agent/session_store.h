@@ -150,6 +150,38 @@ public:
     /// 最近的用量记录 (按时间倒序, 至多 limit 条; limit == 0 返回空)
     std::vector<UsageRecord> recentUsage(std::string_view sessionId, size_t limit);
 
+    // ---- 会话标题与检索 (计划 STO-12) ----
+
+    /// 检索默认返回条数上限 (limit == 0 时使用)
+    static constexpr size_t kSearchDefaultLimit = 50;
+
+    /// 会话标题 (meta.title; 无记录/读取失败返回空)
+    std::string sessionTitle(std::string_view sessionId);
+
+    /// 设置会话标题并标记来源为用户 (再写入 meta.titleSource = "user")
+    /// - 空标题忽略并返回 false (标题为空会让会话列表无法辨认)
+    /// - 自动标题 (首条用户消息预览) 只在标题不存在时写入, 不会覆盖用户改名
+    bool setSessionTitle(std::string_view sessionId, std::string_view title);
+
+    /// 会话标题来源: "user" (用户改名) / "auto" (首条用户消息预览) / 空 (未知)
+    std::string sessionTitleSource(std::string_view sessionId);
+
+    /// 会话检索命中项
+    struct SessionSearchHit {
+        SessionInfo info;
+        std::string snippet; ///< 命中处的文本片段 (标题命中时为空)
+        bool        titleMatch = false;
+    };
+
+    /// 关键词检索会话 (标题或展示历史正文包含关键词)
+    ///
+    /// - 匹配语义: 大小写不敏感的子串匹配 (SQL LIKE; 关键词中的 `%` `_` `\` 自动转义)
+    /// - 不做跨库索引: 逐个会话目录用临时只读连接查询 (与列表接口同顺序),
+    ///   需要更强检索能力时再考虑 FTS5 (见计划 STO-12)
+    /// - 结果按最近活动时间降序; [limit] 为 0 时用 [kSearchDefaultLimit];
+    ///   空关键词返回空结果
+    std::vector<SessionSearchHit> searchSessions(std::string_view keyword, size_t limit = 0);
+
     // ---- share store (session.db store 表) ----
 
     /// 读取条目; 不存在/打开失败返回 nullopt
@@ -240,6 +272,9 @@ private:
 
     /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
     static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
+
+    /// 读取会话 meta 中单个键 (只读临时连接, 不取写租约; 无数据返回空串)
+    std::string readMetaValue(std::string_view sessionId, std::string_view key) const;
 
     std::string rootDir_;
     /// 是否启用跨进程写租约 (见构造函数说明)

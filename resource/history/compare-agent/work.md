@@ -22,7 +22,7 @@
 | LOOP-11 | `collect` 合并投递 | P1 | 待完成 | — |
 | CTX-7 | 附件引用而不是反复内联 Base64 | P1 | 待完成（计划标注"需进一步理解实施内容"，先不动） | — |
 | PRM-5 | 技能优先级和同名裁决 | P1 | 待完成 | — |
-| STO-12 | 会话检索和标题 | P1 | 待完成 | — |
+| STO-12 | 会话检索和标题 | P1 | 存储层完成（界面入口待接） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions` |
 | STO-13 | 会话导出和取证包 | P2 | 待完成 | — |
 | TOOL-1 | 分阶段并行：prepare/dispatch/finalize | P0 | 待完成 | — |
 | TOOL-3 | 并行取消和收尾 | P0 | 待完成 | — |
@@ -102,7 +102,29 @@
 - 用量账本暂不记录成本（`cost`）与 attempt/重试分类：模型价格元数据（LLM-1）尚未落地，
   重试信息目前在 modelcall 内部；账本字段留好，等 LLM-1 完成后补。
 
-## 阶段 A + B 验证结果
+## 阶段 C：会话标题与检索（STO-12，存储层）
+
+已完成：
+
+- 标题独立可改：`meta.title` + 新增 `meta.titleSource`（`auto` = 首条用户消息预览，
+  `user` = 用户改名）。`setSessionTitle` 一次事务写入标题与来源；自动标题仍然只在
+  标题不存在时写入，因此用户改名不会被后续消息覆盖；空标题被忽略。
+- 只读查询：`sessionTitle` / `sessionTitleSource` 用临时只读连接，不取写租约、不建目录。
+- 会话检索：`searchSessions(keyword, limit)` —— 标题或展示历史正文（`json_extract(json,'$.text')`）
+  的子串匹配，大小写不敏感（SQL LIKE），关键词中的 `%` `_` `\` 自动转义；结果按最近活动
+  时间降序并按 `limit`（默认 50）截断；正文命中返回关键词附近的片段。
+- 实现取舍：按会话目录逐个用只读连接查询，不建 FTS5 索引（计划 STO-12 的"先做标题/
+  当前会话搜索，不先建跨库复杂索引"）。无法读取的会话库按跳过处理并记 Debug 日志。
+- 测试：`session_schema` 模块新增自动标题/来源、用户改名、改名不被覆盖、空标题忽略、
+  未持久化会话不建目录、标题命中、正文命中与片段、通配符转义、空关键词、limit 截断
+  （模块 73 用例全通过）。
+
+待接（不属于本次范围）：
+
+- 协议与界面入口：`WireListSessions`/会话弹窗还没有"改名"和"搜索"操作；需要新增
+  协议消息（或扩展已有的会话列表请求）并在 TUI 会话弹窗接输入框。存储层 API 已就绪。
+
+## 验证结果（阶段 A/B/C）
 
 构建：`agent/script/windows_debug_build.bat`（Debug，MSVC，ASan+UBSan 插桩）通过，无 error/warning 新增。
 
@@ -129,6 +151,70 @@
 - LOOP-1/2/3/4/11：输入投递的持久化收件箱、`next-step|next-turn|inject|collect` 语义、
   投递结果回执与 `QueueState` 状态机（涉及 `wire_protocol`、`session_server_agent_io`、
   modelcall 请求装配）。
-- PRM-5：技能优先级与同名裁决；STO-12：会话标题独立可改 + 关键词检索；
-  STO-13：会话导出。CTX-7（附件引用）计划本身标注"需进一步理解具体实施内容"，暂缓。
-- TOOL-1/TOOL-3：工具分阶段并行与并行取消收尾（`nodes/toolcall.cpp`）。
+- PRM-5：技能优先级与同名裁决；STO-13：会话导出。CTX-7（附件引用）计划本身标注
+  "需进一步理解具体实施内容"，暂缓。
+- STO-12 的协议/界面入口（改名、搜索框）见"阶段 C"。
+- TOOL-1/TOOL-3：工具分阶段并行与并行取消收尾（`nodes/toolcall.cpp`）——**仍未实施**，
+  原因见下方"未实施项的原因与建议路径"。
+
+## 与计划的差异（记录用）
+
+- ARC-1：计划写"`check_boundaries.py` **或**测试模块"，这里选测试模块（`boundaries`），
+  规则只保留一份实现并进入 `agentxx_test` 门禁；二进制导出白名单仍由现有
+  `agent/script/check_plugin_exports.sh` 负责。
+- STO-1：租约持有期是"写连接的存活期"（连接 LRU 淘汰/对象析构时释放），并在**进程内可重入**
+  （引用计数）——同一进程的多个实例/测试不会互相冲突，跨进程才互斥。读路径（`loadSession`、
+  标题读取、检索）不取写租约，只读连接直接读文件。
+- STO-2：迁移只在**写路径**首次打开库时执行（读操作不改磁盘结构）；迁移前备份文件名为
+  `session.db.bak.v{旧版本}`，备份失败只告警不阻断。
+- STO-8：账本字段包含 prompt/completion/total/cached/reasoning 与失败原因，暂不含 cost 与
+  attempt 分类（模型价格元数据 LLM-1 未落地）；`ModelCallWrapNode` 的记账失败只记日志，
+  不影响对话流程。
+- STO-11：`set()` 保持"无条件写入"语义并递增版本，需要读-改-写的调用方用
+  `getVersioned` + `setVersioned`（冲突返回 `Conflict` 且不改内容）。
+- STO-12：只做存储层与检索（不建 FTS5、无协议/界面入口）。
+- ARC-3：装配步骤的回滚动作只做"释放本步骤创建的对象"（模型注册表/事件总线/中间件上下文/
+  插件管理器/图注册表/引擎/工具列表）；插件卸载走框架的 `shutdownAll()`。启动断言失败抛
+  `std::runtime_error`（带失败原因），由调用方决定如何上报。
+
+## 修订记录
+
+- 阶段 A/B 完成后提交：`添加目录级规则文件 (计划 ARC-2)`、
+  `实现计划 1-5 章可行项: 架构边界检查、装配清单、会话写租约、schema 迁移链、用量账本、
+  设置乐观版本 (ARC-1/ARC-3/STO-1/STO-2/STO-8/STO-11)`。
+- 阶段 C（STO-12 存储层）完成后提交：见 git 记录 `实现会话标题与检索 (计划 STO-12)`。
+
+## 未实施项的原因与建议路径（下次继续）
+
+### TOOL-1 / TOOL-3（工具并行与取消收尾，P0）
+
+现状：`ToolcallWrapNode::baseRun` 对同一条 assistant 消息里的 tool_calls 逐个 `co_await`；
+`execTool` 把"参数修正 → 权限检查（可能询问用户）→ 连续重复调用确认（HIL 中断）→ 执行 →
+摘要"串在一起，取消/中断通过异常与控制流占位消息收尾（`insertAbortedToolResults`、
+`completedToolcallIds`、`interruptToolcallCache`）。
+
+要做的事（建议顺序）：
+
+1. 先把 `execTool` 拆成三段：`prepareToolCall`（参数修正 + 权限 + 重复确认，全部串行、保持
+   源顺序）、`runToolBody`（纯执行，可并发）、`finalizeToolCall`（摘要/结果文本/日志）。
+   这一段是纯重构，行为不变，可单独提交并用现有 `agent`/`toolcall_args` 测试回归。
+2. 加上"只读 + 声明支持并行"的分类（`XXToolBase` 侧新增 `supportsParallel` 标记，
+   默认独占），只对这批调用并发执行（`asio::experimental::awaitable_operators` 或
+   `co_spawn` + 收集），写/交互工具仍然形成屏障顺序执行。
+3. 结果一律按原始 `tool_call_id` 顺序写回（并发完成顺序 ≠ 提交顺序），取消时已完成结果保留、
+   未启动的补取消占位、执行中的请求取消——现有 `insertAbortedToolResults` 逻辑需要改成
+   "按 id 补齐"，测试要覆盖"完成顺序与提交顺序不同"的场景。
+
+风险提示：`execTool` 的 HIL/取消语义很细（中断缓存、插件工具保活、`tool_call_id` 复用），
+并行化必须在第 1 步重构完成后单独提交，避免和并发改动混在一起导致难以定位回归。
+
+### LOOP-1 / LOOP-2 / LOOP-3 / LOOP-4 / LOOP-11（输入投递，P0/P1）
+
+现状：`SessionServerAgentIO` 用内存 `deque` + `queuePaused_`/`pendingInsert_` 两个 bool
+管理输入；`WireUserInput` 只有 text/model/attachments；重连靠 delta 环形缓冲，没有 durable inbox。
+
+建议路径：先做 LOOP-4（把两个 bool 换成 `idle/running/paused/draining` 状态机 + 转移测试，
+纯内部改动），再做 LOOP-3（`WireUserInput` 增加 `delivery`、新增投递回执消息），
+最后做 LOOP-1（`session_input` 表 + 恢复时不自动重放副作用）。`next-step`（下一个安全
+modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入队列"入口，建议与 CTX/PRM
+的动态段一起设计，避免二次改请求装配。

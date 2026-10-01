@@ -86,6 +86,8 @@ static constexpr std::string_view kMetaSchemaVersion = "schema_version";
 static constexpr std::string_view kMetaSessionId    = "sessionId";
 static constexpr std::string_view kMetaTitle        = "title";
 static constexpr std::string_view kMetaLastActiveMs = "lastActiveMs";
+/// 标题来源: "auto" (首条用户消息预览) / "user" (用户改名); 老数据无该键
+static constexpr std::string_view kMetaTitleSource  = "titleSource";
 
 /// 会话名称预览: 取首行并截断到 max 个 UTF-8 字符 (避免弹窗展示过宽)
 static std::string titlePreview(std::string_view s, size_t max = 60) {
@@ -893,6 +895,11 @@ void SessionStore::appendViewMessage(
                         titleStmt.bindText(1, kMetaTitle);
                         titleStmt.bindText(2, title);
                         titleStmt.step();
+                        // 标题来源: 自动标题 (用户改名会覆盖为 "user", 见 setSessionTitle)
+                        titleStmt.reset();
+                        titleStmt.bindText(1, kMetaTitleSource);
+                        titleStmt.bindText(2, "auto");
+                        titleStmt.step();
                     }
                 }
 
@@ -1069,6 +1076,225 @@ std::vector<SessionStore::UsageRecord>
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: recentUsage({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// 会话标题与检索 (meta.title / meta.titleSource)
+// ---------------------------------------------------------------------------
+
+std::string SessionStore::readMetaValue(std::string_view sessionId, std::string_view key) const {
+    const auto      dbFile = fs::path(rootDir_) / sanitizeSessionId(sessionId) / "session.db";
+    std::error_code ec;
+    if (!fs::exists(dbFile, ec)) {
+        return {};
+    }
+    std::string out;
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            agentxx::util::SqliteDb db;
+            db.open(dbFile.string());
+            auto stmt = db.prepare("SELECT value FROM meta WHERE key = ?");
+            stmt.bindText(1, key);
+            if (stmt.step()) {
+                out = stmt.columnText(0);
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGD("SessionStore: readMetaValue({}, {}) failed: {}", sessionId, key, errmsg);
+            return false;
+        }
+    );
+    return out;
+}
+
+std::string SessionStore::sessionTitle(std::string_view sessionId) {
+    return readMetaValue(sessionId, kMetaTitle);
+}
+
+std::string SessionStore::sessionTitleSource(std::string_view sessionId) {
+    return readMetaValue(sessionId, kMetaTitleSource);
+}
+
+bool SessionStore::setSessionTitle(std::string_view sessionId, std::string_view title) {
+    if (title.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    return agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db = dbs(sessionId).sessionDb;
+            db.beginImmediate();
+            bool inTx = true;
+            try {
+                // 标题与来源一起提交: 界面据此区分"自动标题/用户改名"
+                auto stmt = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) "
+                                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+                stmt.bindText(1, kMetaTitle);
+                stmt.bindText(2, title);
+                stmt.step();
+                stmt.reset();
+                stmt.bindText(1, kMetaTitleSource);
+                stmt.bindText(2, "user");
+                stmt.step();
+                db.commit();
+                inTx = false;
+            } catch (...) {
+                if (inTx) {
+                    agentxx::util::catchError<bool>(
+                        [&]() -> bool {
+                            db.rollback();
+                            return true;
+                        },
+                        [](std::string) -> bool {
+                            return false;
+                        }
+                    );
+                }
+                throw;
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: setSessionTitle({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+}
+
+/// 转义 LIKE 关键词中的通配符 (`\` `%` `_`), 使子串匹配语义严格
+static std::string escapeLikeKeyword(std::string_view keyword) {
+    std::string out;
+    out.reserve(keyword.size() + 8);
+    for (const char c : keyword) {
+        if (c == '\\' || c == '%' || c == '_') {
+            out.push_back('\\');
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+/// 从命中文本中截取关键词附近的片段 (用于检索结果展示)
+/// - 关键词大小写不敏感定位 (ASCII); 找不到时取文本开头
+/// - 片段长度上限约 120 字节, 两端被截断时加省略号
+static std::string makeSearchSnippet(std::string_view text, std::string_view keyword) {
+    if (text.empty()) {
+        return {};
+    }
+    auto lower = [](std::string_view s) {
+        std::string out{s};
+        for (auto& c : out) {
+            if (c >= 'A' && c <= 'Z') {
+                c = static_cast<char>(c + ('a' - 'A'));
+            }
+        }
+        return out;
+    };
+    const auto loweredText = lower(text);
+    const auto loweredKey  = lower(keyword);
+    size_t     pos         = loweredText.find(loweredKey);
+    if (pos == std::string::npos) {
+        pos = 0;
+    }
+    const size_t begin = (pos > 40) ? (pos - 40) : 0;
+    const size_t end   = std::min(text.size(), begin + 120);
+    std::string  snippet{text.substr(begin, end - begin)};
+    // 片段内的换行折成空格, 避免列表里显示为多行
+    for (auto& c : snippet) {
+        if (c == '\n' || c == '\r' || c == '\t') {
+            c = ' ';
+        }
+    }
+    if (begin > 0) {
+        snippet.insert(0, "...");
+    }
+    if (end < text.size()) {
+        snippet += "...";
+    }
+    return snippet;
+}
+
+std::vector<SessionStore::SessionSearchHit>
+    SessionStore::searchSessions(std::string_view keyword, size_t limit) {
+    std::vector<SessionSearchHit> out;
+    if (keyword.empty()) {
+        return out;
+    }
+    const auto pattern = "%" + escapeLikeKeyword(keyword) + "%";
+    if (limit == 0) {
+        limit = kSearchDefaultLimit;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            std::error_code ec;
+            fs::path        root{rootDir_};
+            if (!fs::exists(root, ec)) {
+                return true;
+            }
+            for (const auto& entry : fs::directory_iterator(root, ec)) {
+                if (ec || !entry.is_directory(ec)) {
+                    continue;
+                }
+                SessionSearchHit hit;
+                hit.info.sessionId = entry.path().filename().string();
+                readSessionDirMeta(entry.path(), hit.info);
+
+                const auto dbFile = entry.path() / "session.db";
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        agentxx::util::SqliteDb db;
+                        db.open(dbFile.string());
+                        // 标题命中
+                        auto titleStmt = db.prepare(
+                            "SELECT 1 FROM meta WHERE key = 'title' AND value LIKE ? ESCAPE '\\'"
+                        );
+                        titleStmt.bindText(1, pattern);
+                        if (titleStmt.step()) {
+                            hit.titleMatch = true;
+                            out.push_back(std::move(hit));
+                            return true;
+                        }
+                        // 正文命中: 取最后一条命中的消息文本作为片段
+                        auto textStmt = db.prepare(
+                            "SELECT json_extract(json, '$.text') FROM view_message "
+                            "WHERE json_extract(json, '$.text') LIKE ? ESCAPE '\\' "
+                            "ORDER BY seq DESC LIMIT 1"
+                        );
+                        textStmt.bindText(1, pattern);
+                        if (textStmt.step() && !textStmt.columnIsNull(0)) {
+                            hit.snippet
+                                = makeSearchSnippet(textStmt.columnText(0), keyword);
+                            out.push_back(std::move(hit));
+                        }
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGD(
+                            "SessionStore: searchSessions skip {} ({})",
+                            entry.path().filename().string(),
+                            errmsg
+                        );
+                        return false;
+                    }
+                );
+            }
+            std::sort(out.begin(), out.end(), [](const SessionSearchHit& a, const SessionSearchHit& b) {
+                return sessionNewerFirst(a.info, b.info);
+            });
+            if (out.size() > limit) {
+                out.resize(limit);
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: searchSessions failed: {}", errmsg);
             return false;
         }
     );

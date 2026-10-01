@@ -405,6 +405,72 @@ TestResult testSessionSchema() {
         XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
     }
 
+    // -----------------------------------------------------------------------
+    // G) 会话标题与检索 (STO-12): 自动标题与来源、用户改名、关键词检索
+    // -----------------------------------------------------------------------
+    {
+        SessionStore store{root};
+        // 首条用户消息生成自动标题 (来源 auto)
+        store.appendViewMessage("s-title", makeMsg("t1", "帮我查一下构建脚本 build script"), 1);
+        XX_TEST_EXPECT_EQ(
+            store.sessionTitle("s-title"),
+            std::string{"帮我查一下构建脚本 build script"}
+        );
+        XX_TEST_EXPECT_EQ(store.sessionTitleSource("s-title"), std::string{"auto"});
+
+        // 用户改名: 覆盖标题并记录来源
+        XX_TEST_EXPECT_TRUE(store.setSessionTitle("s-title", "构建脚本排查"));
+        XX_TEST_EXPECT_EQ(store.sessionTitle("s-title"), std::string{"构建脚本排查"});
+        XX_TEST_EXPECT_EQ(store.sessionTitleSource("s-title"), std::string{"user"});
+
+        // 后续自动标题不覆盖用户改名 (只写标题为空的情况)
+        store.appendViewMessage("s-title", makeMsg("t2", "another user message"), 2);
+        XX_TEST_EXPECT_EQ(store.sessionTitle("s-title"), std::string{"构建脚本排查"});
+
+        // 空标题被忽略 (不把标题清空)
+        XX_TEST_EXPECT_FALSE(store.setSessionTitle("s-title", ""));
+        XX_TEST_EXPECT_EQ(store.sessionTitle("s-title"), std::string{"构建脚本排查"});
+
+        // 未持久化的会话: 标题为空, 且不会因读取而创建目录
+        XX_TEST_EXPECT_TRUE(store.sessionTitle("s-none").empty());
+        XX_TEST_EXPECT_FALSE(fs::exists(utilxx_base::utf8ToPath(sessionDir(root, "s-none"))));
+    }
+    {
+        SessionStore store{root};
+        // 第一条消息不含关键词 (避免同时命中自动标题), 第二条才含关键词
+        store.appendViewMessage("s-body", makeMsg("b1", "第一条消息 只是开场"), 1);
+        store.appendViewMessage("s-body", makeMsg("b2", "正文里出现了 needle-keyword 关键词"), 2);
+
+        // 标题命中
+        auto hits           = store.searchSessions("构建脚本排查");
+        bool titleHitFound = false;
+        for (const auto& h : hits) {
+            if (h.info.sessionId == "s-title") {
+                titleHitFound = h.titleMatch;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(titleHitFound);
+
+        // 正文命中: 返回命中片段
+        auto bodyHits = store.searchSessions("needle-keyword");
+        XX_TEST_EXPECT_EQ(bodyHits.size(), size_t{1});
+        if (bodyHits.size() == 1) {
+            XX_TEST_EXPECT_EQ(bodyHits[0].info.sessionId, std::string{"s-body"});
+            XX_TEST_EXPECT_FALSE(bodyHits[0].titleMatch);
+            XX_TEST_EXPECT_TRUE(bodyHits[0].snippet.find("needle-keyword") != std::string::npos);
+        }
+
+        // 通配符按字面匹配 (LIKE 通配符已转义), 空关键词返回空
+        XX_TEST_EXPECT_EQ(store.searchSessions("%").size(), size_t{0});
+        XX_TEST_EXPECT_EQ(store.searchSessions("_").size(), size_t{0});
+        XX_TEST_EXPECT_EQ(store.searchSessions("").size(), size_t{0});
+
+        // limit 截断: 两个会话命中同一关键词
+        store.appendViewMessage("s-body2", makeMsg("c1", "needle-keyword 又出现一次"), 1);
+        XX_TEST_EXPECT_EQ(store.searchSessions("needle-keyword").size(), size_t{2});
+        XX_TEST_EXPECT_EQ(store.searchSessions("needle-keyword", 1).size(), size_t{1});
+    }
+
     removeTempRoot(root);
     return TestResult{g_ss_passed, g_ss_failed};
 }
