@@ -233,8 +233,8 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ## 6. LLM provider、流式、鉴权和成本
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
 | LLM-1 | 模型能力元数据集中化 | codex、dsh、opencode、pi、openclaw | P0 | `ModelConfig` 增加上下文窗口、最大输出、模态、reasoning、并行工具、严格 schema、缓存能力和价格；provider 请求和压缩统一读取。 | 待定，已实现一部分 |
 | LLM-2 | 错误分类和重试策略 | dsh、opencode、pi、codex、openclaw | P0 | 识别 overflow/auth/rate-limit/timeout/server/invalid-request；读取 `retry-after`，使用有界指数退避和抖动；额度/计费错误不重试。策略数据和执行器分开。 |  |
 | LLM-3 | 溢出一次性压缩重试 | opencode、openclaw、dsh、harness | P0 | provider 报上下文超限且本轮没有新副作用时压缩一次，复用已经完成的工具结果，最多重试一次，再走硬截断。 |

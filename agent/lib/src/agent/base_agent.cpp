@@ -22,16 +22,24 @@
 #include "utilxx/async_offload.h"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
+#include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace agentxx {
 namespace agent {
+
+namespace fs = std::filesystem;
 
 BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     ioCtx                     = std::make_shared<asio::io_context>();
@@ -146,225 +154,594 @@ static void checkToolSchemaValidity(
     }
 }
 
-asio::awaitable<void> BaseAgent::init() {
-    // dataDir 未配置 (为空) 时: 设置/会话/codegraph 等数据均不落盘, 仅存内存
-    // - 警告提示用户: 重启后设置与历史会话无法恢复
-    // - 会话持久化/CodeGraph 索引在无 dataDir 时自动禁用 (见构造函数/CodeAgent)
-    // - 放在 init() 而非构造函数: 构造函数可能早于日志 sink 注册, 警告会丢失
-    if (agentContext->agentConfig->dataDir.empty()) {
-        XX_LOGW("AgentConfig::dataDir is not set: settings/sessions/codegraph data "
-                "will NOT be persisted to disk (in-memory only)");
-    }
+/// 启动装配步骤 (计划 ARC-3)
+///
+/// 把启动阶段变成可检查的清单, 而不是一串顺序调用:
+/// - [name] 步骤名: 日志、失败提示与依赖引用都用它
+/// - [after] 前置步骤名 (空 = 无依赖): 清单顺序写错时立即报错
+/// - [run] 执行体 (协程; 同步步骤直接 `co_return`)
+/// - [rollback] 失败回滚 (可空): 后续步骤失败时按逆序调用, 释放本步骤已建资源
+struct InitStep {
+    std::string                            name;
+    std::string                            after;
+    std::function<asio::awaitable<void>()> run;
+    std::function<void()>                  rollback;
+};
 
-    // 逐步上报启动进度 (客户端 TUI 在"启动中"banner 展示当前正在执行的操作)
-    notifyInitProgress("初始化模型注册表 ...");
-    initModelRegistry();
-    notifyInitProgress("初始化事件总线 ...");
-    initEventBus();
-
-    agentContext->middlewareHandleContext
-        = std::make_shared<agentxx::middleware::MiddlewareContext>(
-            agentContext->sessions->sessionStore
-        );
-
-    // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
-    // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
-    // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
-    //   handles 栈, 与既有中间件并存
-    // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
-    notifyInitProgress("初始化插件系统 ...");
-    agentContext->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
-    agentContext->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
-    // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
-    // 执行并同步等待 (init 运行于 io 线程, 此处记录的线程 id 即 io 线程)
-    agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
-
-    {
-        auto registry = std::make_shared<neograph::graph::GraphRegistry>();
-        initRegisterNodes(*registry);
-        graphRegistry = std::move(registry);
-        // 注入 AgentContext: 插件 graph 接口表经此注册节点类型/读写图定义
-        agentContext->graphRegistry = graphRegistry;
-    }
-
-    notifyInitProgress("注册中间件 (权限 / Skill / Memory / 规划) ...");
-    co_await initMiddleware();
-
-    notifyInitProgress("创建工具集 ...");
-    auto tools = co_await initTools();
-
-    initMiddlewareTools(tools);
-
-    // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
-    // - 作用于 initTools + 中间件收集后的完整工具集
-    // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
-    if (agentContext->agentConfig->enableToolFiltering) {
-        const auto& whitelist = agentContext->agentConfig->toolWhitelist;
-        tools.erase(
-            std::remove_if(
-                tools.begin(),
-                tools.end(),
-                [&](const std::unique_ptr<agentxx::tools::XXToolBase>& tool) {
-                    return std::find(whitelist.begin(), whitelist.end(), tool->get_name())
-                           == whitelist.end();
-                }
-            ),
-            tools.end()
-        );
-        XX_LOGD(
-            "Tool whitelist filter: keep {} tools of whitelist {}",
-            tools.size(),
-            whitelist.size()
-        );
-    }
-
-    notifyInitProgress("初始化上下文压缩 ...");
-    initSummarizationHandles(tools);
-
-    // 检查 tools 的提示词 (tool prompt 经 AgentPrompt::toolPrompt 填充到工具
-    // 定义; 启动时校验, 避免请求期才暴露问题导致严格网关 HTTP 400)
-    for (const auto& item : tools) {
-        const auto& name = item->get_name();
-        const auto  def  = item->get_definition();
-        assert(def.name == name);
-
-        // - tool prompt 描述 (depict) 为空时, 定义 description 为空,
-        //   模型无法理解工具用途; 插件/MCP 工具可无 toolPrompt 条目,
-        //   故仅检查最终生成的 description 而非条目存在性
-        if (def.description.empty()) {
-            XX_LOGW(
-                "Tool `{}` definition description is empty (missing/empty toolPrompt "
-                "depict); add an entry to AgentPrompt::toolPrompt",
-                name
-            );
+/// 逆序回滚已完成的装配步骤
+/// - 回滚自身出错只记日志, 不掩盖最初的失败原因
+void rollbackInitSteps(const std::vector<InitStep>& steps, const std::vector<size_t>& done) {
+    for (auto it = done.rbegin(); it != done.rend(); ++it) {
+        const auto& step = steps[*it];
+        if (!step.rollback) {
+            continue;
         }
-
-        // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因 "parameters":
-        // null 返回 400 "Format Error")
-        assert(def.parameters.is_object());
-        // - 递归校验 parameters JSON Schema (enum 扁平标量数组等),
-        //   非法 schema 会被严格网关以 HTTP 400 拒绝
-        checkToolSchemaValidity(def.parameters, name, "parameters");
-    }
-
-    // 先计算默认执行图定义 (名称 "agentxx.default"), 供插件经 graph 接口表
-    // 查看/修改; 插件加载(下方)完成后, 以最终值构建 engine
-    agentContext->graphDefinitionJson = initGraphDefinition();
-
-    // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
-    // - 提前到 engine 构建之前: 插件可在 create 阶段注册自定义节点类型
-    //   (graph 接口表 register_node_type, 注入 per-agent GraphRegistry) 并
-    //   修改执行图 JSON (set_graph_json, 覆盖默认图); 加载完成后下方以
-    //   最终图定义构建 engine
-    notifyInitProgress("加载插件 ...");
-    if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
-        co_await agentContext->pluginManager->loadConfiguredPlugins(
-            agentContext->agentConfig->plugins
-        );
-    }
-
-    // 构建执行图: 使用插件可能修改后的最终图定义; 插件修改非法时回退默认图
-    notifyInitProgress("构建执行图 ...");
-    auto graphDef = agentContext->graphDefinitionJson;
-    if (false == graphDef.is_object()) {
-        XX_LOGE("Graph definition is not an object, falling back to default graph");
-        graphDef = initGraphDefinition();
-    }
-
-    auto config = agentContext->agentConfig;
-
-    /// 构建图节点上下文 (instructions / provider / tools)
-    /// - **必须每次重新构造**: NodeContext 会被 move 进 EngineConfig, 图构建失败
-    ///   回退默认图时要再构建一份 (复用已被 move 的对象只会得到空 provider/tools,
-    ///   表现为回退后 agent 启动成功但首次 modelcall 就失败)
-    auto makeNodeContext = [&]() -> neograph::graph::NodeContext {
-        neograph::graph::NodeContext ctx{};
-        ctx.instructions = config->prompt.systemPrompt;
-        ctx.provider     = ModelProviderRegistry::createProvider(config->model);
-        ctx.extra_config = neograph::json{
-            {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
-        };
-
-        std::vector<neograph::Tool*> toolPtrs;
-        toolPtrs.reserve(tools.size());
-        for (auto& t : tools) {
-            toolPtrs.push_back(t.get());
-        }
-        ctx.tools = std::move(toolPtrs);
-        return ctx;
-    };
-
-    /// 以 [def] 构建执行图 (编译 → 校验 → link)
-    /// - 编译/校验/link 都可能抛异常 (插件改坏了图定义): 三者必须都在 try 内,
-    ///   否则 parse 抛出的异常会直接逃逸出 init(), agent 连回退机会都没有
-    /// - 每次调用都新建 NodeContext/EngineConfig/EngineResources (link 内部 move)
-    auto buildEngine
-        = [&](const neograph::json& def) -> std::unique_ptr<neograph::graph::GraphEngine> {
-        auto topology = neograph::graph::GraphCompiler::parse(def, *graphRegistry);
-        auto validated
-            = neograph::graph::GraphValidator::require_valid(std::move(topology), *graphRegistry);
-
-        neograph::graph::EngineConfig engineConfig;
-        engineConfig.node_context = makeNodeContext();
-        // 仅保留每个 session 最新一个 checkpoint:
-        // - engine 恢复 (resume / update_state) 只依赖最新 checkpoint 与其 pending writes
-        // - 历史 checkpoint 仅用于 fork / 时间旅行, agentxx 未使用
-        // - 避免每轮会话累积 O(super-steps) 的 checkpoint 内存, 无需轮末手动裁剪
-        engineConfig.checkpoint_store
-            = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
-
-        neograph::graph::EngineResources resources;
-        resources.registry = graphRegistry;
-
-        return neograph::graph::GraphEngine::link(
-            std::move(validated),
-            std::move(engineConfig),
-            std::move(resources)
-        );
-    };
-
-    try {
-        engine = buildEngine(graphDef);
-    } catch (const std::exception& e) {
-        // 插件修改的图定义非法 (未通过编译/校验): 回退默认图, 保证 agent 可启动
-        XX_LOGE(
-            "Graph build failed (plugin-modified graph likely invalid): {}\n"
-            "Falling back to default graph",
-            e.what()
-        );
-        agentContext->graphDefinitionJson = initGraphDefinition();
-        graphDef                          = agentContext->graphDefinitionJson;
-        // 默认图构建失败属实现错误: 异常继续上抛 (不再兜底)
-        engine = buildEngine(graphDef);
-    }
-    assert(nullptr != engine);
-    {
-        // 装配静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
-        // - 必须在 own_tools 之前收集: own_tools 会把 tools 元素 move 成空
-        //   unique_ptr, 之后遍历将解引用空指针
-        if (agentContext->toolRegistry) {
-            std::vector<std::string> staticNames;
-            staticNames.reserve(tools.size());
-            for (auto& tool : tools) {
-                staticNames.push_back(tool->get_name());
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                step.rollback();
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                XX_LOGW("init rollback `{}` failed: {}", step.name, errmsg);
+                return false;
             }
-            agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
-        }
-        // 记录本 agent 装配的工具名列表 (供子代理"全量继承父工具"使用)
-        agentContext->toolNames.clear();
-        agentContext->toolNames.reserve(tools.size());
-        for (auto& tool : tools) {
-            agentContext->toolNames.push_back(tool->get_name());
-        }
-
-        auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
-        for (auto& tool : tools) {
-            crudeTools.push_back(std::move(tool));
-        }
-        engine->own_tools(std::move(crudeTools));
+        );
     }
+}
+
+/// 按清单顺序执行装配步骤
+/// - 依赖检查: [InitStep::after] 指向的步骤必须已经成功执行
+/// - 记录每步耗时 (Debug 日志), 便于定位启动慢的环节
+/// - 任一步失败: 逆序回滚已完成步骤, 抛出带步骤名的错误;
+///   取消/中断 (控制流) 先回滚再原样重抛, 不改变取消语义
+asio::awaitable<void> runInitSteps(const std::vector<InitStep>& steps) {
+    std::vector<size_t> done;
+    done.reserve(steps.size());
+    for (size_t i = 0; i < steps.size(); ++i) {
+        const auto& step = steps[i];
+        if (!step.after.empty()) {
+            const bool satisfied = std::any_of(done.begin(), done.end(), [&](size_t idx) {
+                return steps[idx].name == step.after;
+            });
+            if (!satisfied) {
+                throw std::runtime_error{fmt::format(
+                    "init plan: step `{}` requires `{}`, which did not complete before it",
+                    step.name,
+                    step.after
+                )};
+            }
+        }
+        const auto  begin = std::chrono::steady_clock::now();
+        std::string failure;
+        // 回滚 + 记录: 返回 nullopt 表示控制流异常 (取消/中断) 需要原样重抛
+        auto onFailed = [&](std::string errmsg, bool controlFlow) -> std::optional<bool> {
+            failure = errmsg;
+            XX_LOGE("init step `{}` failed: {}", step.name, errmsg);
+            rollbackInitSteps(steps, done);
+            if (controlFlow) {
+                return std::nullopt;
+            }
+            return std::optional<bool>{false};
+        };
+        const bool ok = co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                co_await step.run();
+                co_return true;
+            },
+            [&](std::string errmsg) -> asio::awaitable<bool> {
+                (void)onFailed(std::move(errmsg), false);
+                co_return false;
+            },
+            [&](std::string& errmsg) -> std::optional<bool> {
+                return onFailed(std::move(errmsg), true);
+            }
+        );
+        if (!ok) {
+            throw std::runtime_error{
+                fmt::format("init step `{}` failed: {}", step.name, failure)
+            };
+        }
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - begin
+        )
+                            .count();
+        XX_LOGD("init step `{}` done in {} ms", step.name, ms);
+        done.push_back(i);
+    }
+    co_return;
+}
+
+asio::awaitable<void> BaseAgent::init() {
+    // - 依赖关系显式写出 (requires), 清单顺序写错立即报错, 不隐式重排
+    // - 任一步骤失败: 逆序回滚已完成步骤, 抛出的错误带步骤名, 便于定位
+    // - 全部完成后统一做启动断言 (见 [verifyStartupAssembly])
+    std::vector<InitStep>                                    steps;
+    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
+    const auto&                                              config = agentContext->agentConfig;
+
+    steps.push_back(InitStep{
+        .name = "config_precheck",
+        .run  = [&]() -> asio::awaitable<void> {
+            // dataDir 未配置 (为空) 时: 设置/会话/codegraph 等数据均不落盘, 仅存内存
+            // - 警告提示用户: 重启后设置与历史会话无法恢复
+            // - 会话持久化/CodeGraph 索引在无 dataDir 时自动禁用 (见构造函数/CodeAgent)
+            // - 放在 init() 而非构造函数: 构造函数可能早于日志 sink 注册, 警告会丢失
+            if (config->dataDir.empty()) {
+                XX_LOGW("AgentConfig::dataDir is not set: settings/sessions/codegraph data "
+                        "will NOT be persisted to disk (in-memory only)");
+            }
+            co_return;
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "model_registry",
+        .after = "config_precheck",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 逐步上报启动进度 (客户端 TUI 在"启动中"banner 展示当前正在执行的操作)
+            notifyInitProgress("初始化模型注册表 ...");
+            initModelRegistry();
+            co_return;
+        },
+        .rollback = [this]() {
+            agentContext->modelRegistry.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "event_bus",
+        .after = "model_registry",
+        .run      = [&]() -> asio::awaitable<void> {
+            notifyInitProgress("初始化事件总线 ...");
+            initEventBus();
+            co_return;
+        },
+        .rollback = [this]() {
+            agentContext->bus.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "middleware_context",
+        .after = "event_bus",
+        .run      = [&]() -> asio::awaitable<void> {
+            agentContext->middlewareHandleContext
+                = std::make_shared<agentxx::middleware::MiddlewareContext>(
+                    agentContext->sessions->sessionStore
+                );
+            co_return;
+        },
+        .rollback = [this]() {
+            agentContext->middlewareHandleContext.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "plugin_system",
+        .after = "middleware_context",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
+            // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
+            // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
+            //   handles 栈, 与既有中间件并存
+            // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
+            notifyInitProgress("初始化插件系统 ...");
+            agentContext->toolRegistry
+                = std::make_shared<agentxx::plugin::ToolRegistry>();
+            agentContext->pluginManager
+                = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
+            // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
+            // 执行并同步等待 (init 运行于 io 线程, 此处记录的线程 id 即 io 线程)
+            agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+            co_return;
+        },
+        .rollback = [this]() {
+            agentContext->pluginManager.reset();
+            agentContext->toolRegistry.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "graph_registry",
+        .after = "plugin_system",
+        .run      = [&]() -> asio::awaitable<void> {
+            auto registry = std::make_shared<neograph::graph::GraphRegistry>();
+            initRegisterNodes(*registry);
+            graphRegistry = std::move(registry);
+            // 注入 AgentContext: 插件 graph 接口表经此注册节点类型/读写图定义
+            agentContext->graphRegistry = graphRegistry;
+            co_return;
+        },
+        .rollback = [this]() {
+            agentContext->graphRegistry.reset();
+            graphRegistry.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "middleware",
+        .after = "graph_registry",
+        .run      = [&]() -> asio::awaitable<void> {
+            notifyInitProgress("注册中间件 (权限 / Skill / Memory / 规划) ...");
+            co_await initMiddleware();
+            co_return;
+        },
+        .rollback = [this]() {
+            // 中间件自带的工具由 initTools 收集, 此处只清中间件栈
+            if (agentContext->middlewareHandleContext) {
+                agentContext->middlewareHandleContext->handles.clear();
+            }
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "tools",
+        .after = "middleware",
+        .run      = [&]() -> asio::awaitable<void> {
+            notifyInitProgress("创建工具集 ...");
+            tools = co_await initTools();
+            initMiddlewareTools(tools);
+            co_return;
+        },
+        .rollback = [&]() {
+            tools.clear();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "tool_whitelist",
+        .after = "tools",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
+            // - 作用于 initTools + 中间件收集后的完整工具集
+            // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
+            if (agentContext->agentConfig->enableToolFiltering) {
+                const auto& whitelist = agentContext->agentConfig->toolWhitelist;
+                tools.erase(
+                    std::remove_if(
+                        tools.begin(),
+                        tools.end(),
+                        [&](const std::unique_ptr<agentxx::tools::XXToolBase>& tool) {
+                            return std::find(whitelist.begin(), whitelist.end(), tool->get_name())
+                                   == whitelist.end();
+                        }
+                    ),
+                    tools.end()
+                );
+                XX_LOGD(
+                    "Tool whitelist filter: keep {} tools of whitelist {}",
+                    tools.size(),
+                    whitelist.size()
+                );
+            }
+            co_return;
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "summarization",
+        .after = "tool_whitelist",
+        .run      = [&]() -> asio::awaitable<void> {
+            notifyInitProgress("初始化上下文压缩 ...");
+            initSummarizationHandles(tools);
+            co_return;
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "tool_definition_check",
+        .after = "summarization",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 检查 tools 的提示词 (tool prompt 经 AgentPrompt::toolPrompt 填充到工具
+            // 定义; 启动时校验, 避免请求期才暴露问题导致严格网关 HTTP 400)
+            for (const auto& item : tools) {
+                const auto& name = item->get_name();
+                const auto  def  = item->get_definition();
+                assert(def.name == name);
+
+                // - tool prompt 描述 (depict) 为空时, 定义 description 为空,
+                //   模型无法理解工具用途; 插件/MCP 工具可无 toolPrompt 条目,
+                //   故仅检查最终生成的 description 而非条目存在性
+                if (def.description.empty()) {
+                    XX_LOGW(
+                        "Tool `{}` definition description is empty (missing/empty toolPrompt "
+                        "depict); add an entry to AgentPrompt::toolPrompt",
+                        name
+                    );
+                }
+
+                // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因 "parameters":
+                // null 返回 400 "Format Error")
+                assert(def.parameters.is_object());
+                // - 递归校验 parameters JSON Schema (enum 扁平标量数组等),
+                //   非法 schema 会被严格网关以 HTTP 400 拒绝
+                checkToolSchemaValidity(def.parameters, name, "parameters");
+            }
+            co_return;
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "graph_definition",
+        .after = "tool_definition_check",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 先计算默认执行图定义 (名称 "agentxx.default"), 供插件经 graph 接口表
+            // 查看/修改; 插件加载(下方)完成后, 以最终值构建 engine
+            agentContext->graphDefinitionJson = initGraphDefinition();
+            co_return;
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "plugins_load",
+        .after = "graph_definition",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
+            // - 提前到 engine 构建之前: 插件可在 create 阶段注册自定义节点类型
+            //   (graph 接口表 register_node_type, 注入 per-agent GraphRegistry) 并
+            //   修改执行图 JSON (set_graph_json, 覆盖默认图); 加载完成后下方以
+            //   最终图定义构建 engine
+            notifyInitProgress("加载插件 ...");
+            if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
+                co_await agentContext->pluginManager->loadConfiguredPlugins(
+                    agentContext->agentConfig->plugins
+                );
+            }
+            co_return;
+        },
+        .rollback = [this]() {
+            // 插件在 start 阶段可能已注册资源: 用同步关闭入口撤销
+            // (init 期间没有进行中的插件回调, 可安全调用 shutdownAll)
+            if (agentContext->pluginManager) {
+                agentContext->pluginManager->shutdownAll();
+            }
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "engine_build",
+        .after = "plugins_load",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 构建执行图: 使用插件可能修改后的最终图定义; 插件修改非法时回退默认图
+            notifyInitProgress("构建执行图 ...");
+            auto graphDef = agentContext->graphDefinitionJson;
+            if (false == graphDef.is_object()) {
+                XX_LOGE("Graph definition is not an object, falling back to default graph");
+                graphDef = initGraphDefinition();
+            }
+
+            /// 构建图节点上下文 (instructions / provider / tools)
+            /// - **必须每次重新构造**: NodeContext 会被 move 进 EngineConfig, 图构建失败
+            ///   回退默认图时要再构建一份 (复用已被 move 的对象只会得到空 provider/tools,
+            ///   表现为回退后 agent 启动成功但首次 modelcall 就失败)
+            auto makeNodeContext = [&]() -> neograph::graph::NodeContext {
+                neograph::graph::NodeContext ctx{};
+                ctx.instructions = config->prompt.systemPrompt;
+                ctx.provider     = ModelProviderRegistry::createProvider(config->model);
+                ctx.extra_config = neograph::json{
+                    {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
+                };
+
+                std::vector<neograph::Tool*> toolPtrs;
+                toolPtrs.reserve(tools.size());
+                for (auto& t : tools) {
+                    toolPtrs.push_back(t.get());
+                }
+                ctx.tools = std::move(toolPtrs);
+                return ctx;
+            };
+
+            /// 以 [def] 构建执行图 (编译 → 校验 → link)
+            /// - 编译/校验/link 都可能抛异常 (插件改坏了图定义): 三者必须都在 try 内,
+            ///   否则 parse 抛出的异常会直接逃逸出 init(), agent 连回退机会都没有
+            /// - 每次调用都新建 NodeContext/EngineConfig/EngineResources (link 内部 move)
+            auto buildEngine
+                = [&](const neograph::json& def) -> std::unique_ptr<neograph::graph::GraphEngine> {
+                auto topology = neograph::graph::GraphCompiler::parse(def, *graphRegistry);
+                auto validated = neograph::graph::GraphValidator::require_valid(
+                    std::move(topology),
+                    *graphRegistry
+                );
+
+                neograph::graph::EngineConfig engineConfig;
+                engineConfig.node_context = makeNodeContext();
+                // 仅保留每个 session 最新一个 checkpoint:
+                // - engine 恢复 (resume / update_state) 只依赖最新 checkpoint 与其 pending writes
+                // - 历史 checkpoint 仅用于 fork / 时间旅行, agentxx 未使用
+                // - 避免每轮会话累积 O(super-steps) 的 checkpoint 内存, 无需轮末手动裁剪
+                engineConfig.checkpoint_store
+                    = std::make_shared<agentxx::agent::InMemorySingleCheckpointStore>();
+
+                neograph::graph::EngineResources resources;
+                resources.registry = graphRegistry;
+
+                return neograph::graph::GraphEngine::link(
+                    std::move(validated),
+                    std::move(engineConfig),
+                    std::move(resources)
+                );
+            };
+
+            try {
+                engine = buildEngine(graphDef);
+            } catch (const std::exception& e) {
+                // 插件修改的图定义非法 (未通过编译/校验): 回退默认图, 保证 agent 可启动
+                XX_LOGE(
+                    "Graph build failed (plugin-modified graph likely invalid): {}\n"
+                    "Falling back to default graph",
+                    e.what()
+                );
+                agentContext->graphDefinitionJson = initGraphDefinition();
+                graphDef                          = agentContext->graphDefinitionJson;
+                // 默认图构建失败属实现错误: 异常继续上抛 (不再兜底)
+                engine = buildEngine(graphDef);
+            }
+            assert(nullptr != engine);
+            co_return;
+        },
+        .rollback = [this]() {
+            engine.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "bind_tools",
+        .after = "engine_build",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 装配静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
+            // - 必须在 own_tools 之前收集: own_tools 会把 tools 元素 move 成空
+            //   unique_ptr, 之后遍历将解引用空指针
+            if (agentContext->toolRegistry) {
+                std::vector<std::string> staticNames;
+                staticNames.reserve(tools.size());
+                for (auto& tool : tools) {
+                    staticNames.push_back(tool->get_name());
+                }
+                agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
+            }
+            // 记录本 agent 装配的工具名列表 (供子代理"全量继承父工具"使用)
+            agentContext->toolNames.clear();
+            agentContext->toolNames.reserve(tools.size());
+            for (auto& tool : tools) {
+                agentContext->toolNames.push_back(tool->get_name());
+            }
+
+            auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
+            for (auto& tool : tools) {
+                crudeTools.push_back(std::move(tool));
+            }
+            engine->own_tools(std::move(crudeTools));
+            co_return;
+        },
+    });
+
+    // 按清单顺序执行装配; 失败时逆序回滚已完成步骤并抛出带步骤名的错误
+    co_await runInitSteps(steps);
+
+    // 装配后启动断言: 模型 / 必要节点 / 工具定义 / 插件目录 / 持久化
+    // - 配置或依赖有问题在这里立即失败, 而不是等第一轮对话才暴露
+    verifyStartupAssembly();
 
     co_return;
+}
+
+void BaseAgent::verifyStartupAssembly() const {
+    const auto& config = agentContext->agentConfig;
+
+    // ---- 模型: 至少注册一个模型, 且默认模型可解析 ----
+    if (!agentContext->modelRegistry) {
+        throw std::runtime_error{"startup check failed: model registry is missing"};
+    }
+    if (agentContext->modelRegistry->size() == 0) {
+        throw std::runtime_error{
+            "startup check failed: no model registered (check `model` / `models` in config)"
+        };
+    }
+    if (agentContext->modelRegistry->getDefaultModelName().empty()) {
+        throw std::runtime_error{"startup check failed: default model is not resolved"};
+    }
+
+    // ---- 必要图节点: 默认 ReAct 图用到的节点类型必须在 per-agent 注册表中 ----
+    if (!graphRegistry) {
+        throw std::runtime_error{"startup check failed: graph registry is missing"};
+    }
+    for (const std::string_view type :
+         {std::string_view{agentxx::nodes::AgentStartCallWrapNode::defNodeType},
+          std::string_view{agentxx::nodes::AgentEndCallWrapNode::defNodeType},
+          std::string_view{agentxx::nodes::ModelCallWrapNode::defNodeType},
+          std::string_view{agentxx::nodes::ToolcallWrapNode::defNodeType}}) {
+        if (!graphRegistry->contains_type(std::string{type})) {
+            throw std::runtime_error{
+                fmt::format("startup check failed: node type `{}` is not registered", type)
+            };
+        }
+    }
+
+    // ---- 图引擎 ----
+    if (!engine) {
+        throw std::runtime_error{"startup check failed: graph engine is not built"};
+    }
+
+    // ---- 工具: 名字必须有效 (重名由工具注册表在注册时拒绝) ----
+    if (agentContext->toolNames.empty()) {
+        XX_LOGW("startup check: no tool assembled (assistant can only chat)");
+    }
+    for (const auto& name : agentContext->toolNames) {
+        if (name.empty()) {
+            throw std::runtime_error{"startup check failed: tool with empty name"};
+        }
+    }
+
+    // ---- 插件目录: 配置引用的插件文件缺失只告警不阻断 (可选依赖) ----
+    for (const auto& plugin : config->plugins) {
+        if (plugin.path.empty()) {
+            XX_LOGW("startup check: plugin entry with empty path is ignored");
+            continue;
+        }
+        // 内置插件 (builtin://<name>) 无需外部文件
+        if (plugin.path.rfind("builtin://", 0) == 0) {
+            continue;
+        }
+        std::error_code ec;
+        if (!fs::exists(utilxx_base::utf8ToPath(plugin.path), ec)) {
+            XX_LOGW(
+                "startup check: plugin path not found: {} (it will be skipped)",
+                plugin.path
+            );
+        }
+    }
+
+    // ---- 持久化: 只有配置要求持久化时才校验目录可写 ----
+    // 未要求持久化时保留可用的内存模式, 但必须明确记录, 避免"以为存了实际没存"
+    const bool persistenceRequested
+        = config->enableSessionStore
+          && (!config->dataDir.empty() || !config->sessionStoreDirectory.empty());
+    if (!persistenceRequested) {
+        XX_LOGW(
+            "session persistence is OFF ({}): session history/settings stay in memory and are "
+            "lost on exit",
+            config->enableSessionStore ? "dataDir and sessionStoreDirectory are both empty"
+                                       : "enableSessionStore is false"
+        );
+        return;
+    }
+    if (!agentContext->sessions || !agentContext->sessions->sessionStore) {
+        throw std::runtime_error{
+            "startup check failed: session persistence requested but session store is not created"
+        };
+    }
+    const auto      root     = agentContext->sessions->sessionStore->rootDir();
+    const auto      rootPath = utilxx_base::utf8ToPath(root);
+    std::error_code ec;
+    fs::create_directories(rootPath, ec);
+    if (ec) {
+        throw std::runtime_error{fmt::format(
+            "startup check failed: session root `{}` is not usable: {}",
+            root,
+            ec.message()
+        )};
+    }
+    // 目录存在不代表可写 (只读挂载/权限): 写入探针文件再删除
+    const auto probe = rootPath / ".write_probe";
+    {
+        std::ofstream ofs{probe, std::ios::binary | std::ios::trunc};
+        if (!ofs) {
+            throw std::runtime_error{fmt::format(
+                "startup check failed: session root `{}` is not writable",
+                root
+            )};
+        }
+        ofs << "agentxx";
+        ofs.flush();
+        if (!ofs.good()) {
+            throw std::runtime_error{fmt::format(
+                "startup check failed: session root `{}` is not writable (probe write failed)",
+                root
+            )};
+        }
+    }
+    fs::remove(probe, ec);
+    XX_LOGI("session persistence enabled: root = {}", root);
 }
 
 void BaseAgent::notifyInitProgress(std::string_view step) {

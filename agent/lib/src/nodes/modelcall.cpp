@@ -1,6 +1,7 @@
 #include "agentxx/nodes/modelcall.h"
 
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
@@ -98,7 +99,8 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     neograph::CompletionParams& params,
     neograph::graph::NodeInput& input
 ) {
-    auto ctxPtr = agentContext.lock()->middlewareHandleContext;
+    auto agentCtx = agentContext.lock();
+    auto ctxPtr   = agentCtx->middlewareHandleContext;
 
     auto                               callback = input.stream_cb;
     neograph::FormatDataStreamCallback onToken;
@@ -138,8 +140,62 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         };
     }
 
-    auto completion
-        = co_await resolveCurrentProvider(input.ctx.thread_id)->invoke_format_data(params, onToken);
+    auto provider = resolveCurrentProvider(input.ctx.thread_id);
+    // 账本里记录本次实际使用的模型名 (会话可能已切换模型)
+    auto modelName = resolveCurrentModelName(input.ctx.thread_id);
+    // 用量账本 (计划 STO-8): 每次模型调用记一行, 成功记用量, 失败记原因
+    auto recordUsage = [&agentCtx, &input, &modelName](
+                           const neograph::ChatCompletion::Usage& usage,
+                           bool                                   ok,
+                           std::string_view                       errorKind
+                       ) {
+        if (!agentCtx || !agentCtx->sessions || !agentCtx->sessions->sessionStore) {
+            return;
+        }
+        agentxx::agent::SessionStore::UsageRecord rec;
+        rec.timeMs = static_cast<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            )
+                .count()
+        );
+        rec.model              = modelName;
+        rec.promptTokens       = usage.prompt_tokens;
+        rec.completionTokens   = usage.completion_tokens;
+        rec.totalTokens        = usage.total_tokens;
+        rec.cachedPromptTokens = usage.cached_prompt_tokens;
+        rec.reasoningTokens    = usage.reasoning_tokens;
+        rec.ok                 = ok;
+        rec.errorKind          = std::string{errorKind};
+        agentCtx->sessions->sessionStore->addUsage(input.ctx.thread_id, rec);
+    };
+
+    neograph::ChatCompletion completion;
+    bool                     callFailed   = false;
+    std::string              callErrorMsg;
+    std::exception_ptr       callErrorEx;
+    // provider 调用包一层错误记录: 取消/中断按控制流原样抛出 (catchErrorAsync
+    // 未提供 onRethrow 时的默认行为), 其余异常记录账本后按原异常类型重抛,
+    // 不改动上层原有的错误处理与重试语义
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            completion = co_await provider->invoke_format_data(params, onToken);
+            co_return true;
+        },
+        [&](std::string errmsg) -> asio::awaitable<bool> {
+            callFailed   = true;
+            callErrorMsg = errmsg;
+            callErrorEx  = std::current_exception();
+            recordUsage({}, false, errmsg);
+            co_return false;
+        }
+    );
+    if (callFailed) {
+        if (callErrorEx) {
+            std::rethrow_exception(callErrorEx);
+        }
+        throw std::runtime_error{callErrorMsg};
+    }
 
     // 记录 token使用量
     ctxPtr->setGraphDataItemValue<int>(
@@ -147,6 +203,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
         completion.usage.total_tokens
     );
+    recordUsage(completion.usage, true, {});
     co_return completion.message;
 }
 

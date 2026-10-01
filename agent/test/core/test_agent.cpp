@@ -393,6 +393,23 @@ DaSimServer startDaSimServer() {
                         append(utilxx_base::Json::object(), "stop");
                     }
 
+                    // include_usage 语义: 结束前最后一个 chunk 携带 usage 且 choices 为空
+                    // - 真实 OpenAI 在请求带 stream_options.include_usage 时这样返回
+                    //   (provider 已默认带上该选项); 缺少它会导致流式请求拿不到用量统计,
+                    //   用量账本/上下文统计在流式路径上恒为 0
+                    {
+                        auto ev       = utilxx_base::Json::object();
+                        ev["id"]      = "chatcmpl-test-sim";
+                        ev["object"]  = "chat.completion.chunk";
+                        ev["choices"] = utilxx_base::Json::array();
+                        ev["usage"]   = utilxx_base::Json{
+                            {"prompt_tokens", g_da_sim_prompt_tokens},
+                            {"completion_tokens", g_da_sim_completion_tokens},
+                            {"total_tokens", g_da_sim_prompt_tokens + g_da_sim_completion_tokens},
+                        };
+                        sseBody += "data: " + ev.dump() + "\n\n";
+                    }
+
                     sseBody += "data: [DONE]\n\n";
 
                     resp.result(http::status::ok);

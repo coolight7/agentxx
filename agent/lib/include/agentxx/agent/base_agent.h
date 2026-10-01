@@ -214,6 +214,13 @@ protected:
     /// - 必须由 agent 线程 (init 协程上下文) 调用
     void notifyInitProgress(std::string_view step);
 
+    /// 装配后启动断言 (计划 ARC-3): 模型 / 必要图节点 / 工具定义 / 插件目录 / 持久化
+    /// - 配置或依赖有问题时立即失败 (抛出带原因的 std::runtime_error), 而不是等
+    ///   第一轮对话才暴露
+    /// - 持久化只在配置要求时校验目录可写; 未配置 dataDir 的内存模式保留可用,
+    ///   但明确记录为"不持久化", 不做部分持久化
+    void verifyStartupAssembly() const;
+
 private:
 
     /// 执行图定义兜底存储 (agentContext 为空时使用; 正常情况下

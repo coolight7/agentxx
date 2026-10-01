@@ -34,12 +34,13 @@ static std::string defaultRootDir() {
     return agentxx::agent::AgentConfigStatic::getSessionsDir("");
 }
 
-/// 会话全量状态 SQL (session.db: view_message/llm_context/meta/store 单库)
+/// 会话全量状态 SQL (session.db: view_message/llm_context/meta/store/usage 单库)
 /// 表结构 (幂等)
 /// - view_message: seq 自增主键 + json; msg_id 为消息 id 的独立列 (带索引),
 ///   供 updateViewMessage 走索引定位 (如果用 json_extract(json,'$.id') 全表
 ///   扫描 + 逐行 JSON 解析, 长会话 (数千条) 下每次 tool 结果回填都要重扫一遍)
 /// - 老库 (无 msg_id 列) 由 [ensureViewMessageMsgIdColumn] 迁移补齐
+/// - usage: 每次模型调用的用量账本 (成功/失败各一行), 供界面与诊断聚合
 static constexpr const char* kSessionSchema = R"sql(
 CREATE TABLE IF NOT EXISTS view_message (
     seq    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,10 +59,25 @@ CREATE TABLE IF NOT EXISTS store (
     id    INTEGER PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    time_ms              INTEGER NOT NULL,
+    model                TEXT NOT NULL,
+    prompt_tokens        INTEGER NOT NULL DEFAULT 0,
+    completion_tokens    INTEGER NOT NULL DEFAULT 0,
+    total_tokens         INTEGER NOT NULL DEFAULT 0,
+    cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens     INTEGER NOT NULL DEFAULT 0,
+    ok                   INTEGER NOT NULL DEFAULT 1,
+    error_kind           TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_usage_time ON usage(time_ms);
 )sql";
 
 /// meta 键名
 static constexpr std::string_view kMetaMsgIdCounter = "msgIdCounter";
+/// schema 结构版本 (见 [SessionStore::kSchemaVersion]; 迁移步骤见 applyMigrationStep)
+static constexpr std::string_view kMetaSchemaVersion = "schema_version";
 /// 会话元数据 (供会话列表展示): 原始 sessionId / 会话名称 / 最近活动时间
 /// - sessionId: 目录名经 sanitizeSessionId 清洗后可能失真, 原始值单独存于 meta,
 ///   listSessions 恢复真实 sessionId; 老数据无此键时回退目录名
@@ -186,8 +202,9 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
 // SessionStore
 // ---------------------------------------------------------------------------
 
-SessionStore::SessionStore(std::string rootDir) :
-    rootDir_(rootDir.empty() ? defaultRootDir() : std::move(rootDir)) {}
+SessionStore::SessionStore(std::string rootDir, bool enableWriterLease) :
+    rootDir_(rootDir.empty() ? defaultRootDir() : std::move(rootDir)),
+    enableWriterLease_(enableWriterLease) {}
 
 std::string SessionStore::sanitizeSessionId(std::string_view sessionId) {
     if (sessionId.empty()) {
@@ -225,9 +242,9 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
-        throw std::runtime_error{
-            fmt::format("SessionStore: create dir {} failed: {}", dir.string(), ec.message())
-        };
+        auto reason = fmt::format("create dir {} failed: {}", dir.string(), ec.message());
+        lastWriteError_ = reason;
+        throw std::runtime_error{"SessionStore: " + reason};
     }
 
     auto it = dbs_.find(sessionId);
@@ -237,15 +254,43 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     }
     auto entry = DbsEntry{};
     entry.dbs  = std::make_shared<SessionDbs>();
+    // 跨进程写租约: 同一会话目录同时只允许一个进程写入 (读操作不经本函数)
+    // - 租约被其它进程持有时抛异常 → 写操作明确失败并给出原因, 不覆盖对方数据
+    // - 同一进程内可重入 (引用计数), 便于多实例/测试共用同一目录
+    if (enableWriterLease_) {
+        std::string leaseErr;
+        entry.dbs->writerLease = SessionWriterLease::acquire(dir, &leaseErr);
+        if (!entry.dbs->writerLease) {
+            auto reason = fmt::format("session dir is busy: {}", leaseErr);
+            lastWriteError_ = reason;
+            XX_LOGE("SessionStore: {} ({})", reason, sessionId);
+            throw std::runtime_error{"SessionStore: " + reason};
+        }
+    }
     // 打开失败 (权限/磁盘) 抛异常, 由上层 catchError 记录日志
-    entry.dbs->sessionDb.open((dir / "session.db").string());
-    ensureSchema(entry.dbs->sessionDb);
+    const auto dbFile = (dir / "session.db").string();
+    entry.dbs->sessionDb.open(dbFile);
+    try {
+        ensureSchema(entry.dbs->sessionDb, dbFile);
+    } catch (...) {
+        // 迁移失败/库版本过高: 释放已获取的连接与租约, 记录原因
+        lastWriteError_ = fmt::format("open session db {} failed (see log)", dbFile);
+        entry.dbs->sessionDb.close();
+        entry.dbs->writerLease.reset();
+        throw;
+    }
+    lastWriteError_.clear();
     entry.lastUseSeq = ++dbsUseSeq_;
     auto [insertIt, _]
         = utilxx_base::insertHeterogeneous(dbs_, std::string{sessionId}, std::move(entry));
     // 连接数上限 (LRU 淘汰; 刚插入的条目为最新, 不会被淘汰)
     evictLruDbs();
     return *insertIt->second.dbs;
+}
+
+std::string SessionStore::lastWriteError() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastWriteError_;
 }
 
 void SessionStore::evictLruDbs() {
@@ -263,14 +308,154 @@ void SessionStore::evictLruDbs() {
             kMaxOpenSessionDbs
         );
         // 显式 close (WAL 自动 checkpoint), 再从缓存移除
+        // (移除条目同时释放写租约: 租约随对象析构回收)
         lru->second.dbs->sessionDb.close();
+        lru->second.dbs->writerLease.reset();
         dbs_.erase(lru);
     }
 }
 
-void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb) {
-    sessionDb.exec(kSessionSchema);
-    ensureViewMessageMsgIdColumn(sessionDb);
+int SessionStore::readSchemaVersion(agentxx::util::SqliteDb& sessionDb) {
+    // meta 表可能尚未建立 (全新库/极老库): 读失败按版本 0 处理
+    return agentxx::util::catchError<int>(
+        [&]() -> int {
+            auto stmt = sessionDb.prepare("SELECT value FROM meta WHERE key = ?");
+            stmt.bindText(1, kMetaSchemaVersion);
+            if (!stmt.step()) {
+                return 0;
+            }
+            return static_cast<int>(stmt.columnInt64(0));
+        },
+        [&](std::string) -> int {
+            return 0;
+        }
+    );
+}
+
+void SessionStore::writeSchemaVersion(agentxx::util::SqliteDb& sessionDb, int version) {
+    auto stmt = sessionDb.prepare("INSERT INTO meta(key, value) VALUES(?, ?) "
+                                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    stmt.bindText(1, kMetaSchemaVersion);
+    stmt.bindInt64(2, version);
+    stmt.step();
+}
+
+void SessionStore::backupDbFile(
+    agentxx::util::SqliteDb& sessionDb,
+    const std::string&       dbFilePath,
+    int                      fromVersion
+) {
+    if (dbFilePath.empty()) {
+        return;
+    }
+    // 全新库 (没有任何表) 无需备份, 避免产生无意义的文件
+    bool hasTable = false;
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto stmt = sessionDb.prepare("SELECT count(*) FROM sqlite_master WHERE type = 'table'");
+            if (stmt.step()) {
+                hasTable = stmt.columnInt64(0) > 0;
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGW("SessionStore: inspect schema before migration failed: {}", errmsg);
+            return false;
+        }
+    );
+    if (!hasTable) {
+        return;
+    }
+    // 备份前把 WAL 内容合并回主库, 否则复制出的文件缺最近提交
+    (void)agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            sessionDb.exec("PRAGMA wal_checkpoint(FULL)");
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGW("SessionStore: wal_checkpoint before backup failed: {}", errmsg);
+            return false;
+        }
+    );
+    const auto src = fs::path{dbFilePath};
+    const auto dst = fs::path{dbFilePath + fmt::format(".bak.v{}", fromVersion)};
+    std::error_code ec;
+    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        // 备份失败不阻断迁移: 记录后继续 (迁移本身每步独立事务, 幂等)
+        XX_LOGW(
+            "SessionStore: backup {} -> {} failed: {}",
+            src.string(),
+            dst.string(),
+            ec.message()
+        );
+        return;
+    }
+    XX_LOGI(
+        "SessionStore: schema migration backup written: {} (from version {})",
+        dst.string(),
+        fromVersion
+    );
+}
+
+void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb, const std::string& dbFilePath) {
+    const int current = readSchemaVersion(sessionDb);
+    if (current > kSchemaVersion) {
+        // 高版本库 (由更新的程序写入) 拒绝打开: 旧程序不认识新结构, 继续写会毁数据
+        throw std::runtime_error{fmt::format(
+            "SessionStore: session db schema version {} is newer than supported {} ({}); "
+            "open it with a newer agentxx build",
+            current,
+            kSchemaVersion,
+            dbFilePath
+        )};
+    }
+    if (current == kSchemaVersion) {
+        return;
+    }
+    // 迁移前备份 (老库才有内容; 全新库直接建表)
+    backupDbFile(sessionDb, dbFilePath, current);
+    for (int step = current + 1; step <= kSchemaVersion; ++step) {
+        // 每一步独立事务: 中途失败已提交的步骤保持有效, 下次打开从该版本续做
+        sessionDb.beginImmediate();
+        bool inTx = true;
+        try {
+            applyMigrationStep(sessionDb, step);
+            writeSchemaVersion(sessionDb, step);
+            sessionDb.commit();
+            inTx = false;
+        } catch (...) {
+            if (inTx) {
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        sessionDb.rollback();
+                        return true;
+                    },
+                    [](std::string) -> bool {
+                        return false;
+                    }
+                );
+            }
+            throw;
+        }
+        XX_LOGI("SessionStore: schema migrated to version {} ({})", step, dbFilePath);
+    }
+}
+
+void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int step) {
+    switch (step) {
+        case 1:
+            // v1: 基线结构 (四张老表 + msg_id 列/索引 + 用量账本表)
+            // - 老库 (无 schema_version 记录) 走这一步补齐缺失的表与列
+            // - 建表全部 IF NOT EXISTS, 重复执行安全
+            sessionDb.exec(kSessionSchema);
+            ensureViewMessageMsgIdColumn(sessionDb);
+            break;
+        default:
+            throw std::runtime_error{
+                fmt::format("SessionStore: unknown schema migration step {}", step)
+            };
+    }
 }
 
 /// 迁移: 保证 view_message 有 msg_id 列与索引 (幂等)
@@ -305,10 +490,47 @@ bool SessionStore::sessionDataDirExists(std::string_view sessionId) const {
 }
 
 SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    LoadedSession               out;
-    // 目录不存在 = 从未写入过, 直接返回空 (避免只读访问创建目录/空文件)
-    if (!sessionDataDirExists(sessionId)) {
+    LoadedSession out;
+    // 只读路径: 用临时连接直接读文件, 不获取写租约
+    // - 另一进程正在写该会话 (持有写租约) 时, 本进程仍可读取历史, 不会因
+    //   读操作而互相阻塞; 写操作才需要租约 (见 [dbs])
+    // - 文件不存在 = 从未写入过, 直接返回空 (避免只读访问创建目录/空文件)
+    const auto      dbFile = fs::path(rootDir_) / sanitizeSessionId(sessionId) / "session.db";
+    std::error_code ec;
+    if (!fs::exists(dbFile, ec)) {
+        return out;
+    }
+    agentxx::util::SqliteDb db;
+    const auto              opened = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            db.open(dbFile.string());
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE(
+                "SessionStore: loadSession({}) open {} failed: {}",
+                sessionId,
+                dbFile.string(),
+                errmsg
+            );
+            return false;
+        }
+    );
+    if (!opened) {
+        return out;
+    }
+    // 库版本高于本程序支持的版本时拒绝读取: 新结构可能已改变表/列语义, 按老结构
+    // 解析只会得到"看起来空"的错误历史; 这里明确失败并提示用更新的版本打开
+    // (写路径同样拒绝, 见 [ensureSchema])
+    if (const int version = readSchemaVersion(db); version > kSchemaVersion) {
+        XX_LOGE(
+            "SessionStore: loadSession({}) refused: session db schema version {} is newer than "
+            "supported {} ({})",
+            sessionId,
+            version,
+            kSchemaVersion,
+            dbFile.string()
+        );
         return out;
     }
     // 分区恢复 (崩溃/断电后尽量少丢数据):
@@ -316,9 +538,9 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     //   —— 原实现任一异常都会把 LoadedSession 重置为空, 表现为"会话数据全部
     //   丢失", 且后续 saveLlmMessages 会用新上下文覆盖库内旧数据 (不可恢复)
     // - 展示历史 / LLM 上下文 / meta 三段各自独立捕获, 一段失败不影响其余
+    //   (三段共用上面打开的只读连接 [db])
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(sessionId).sessionDb;
             // 展示历史 (按追加顺序)
             auto stmt = db.prepare("SELECT seq, json FROM view_message ORDER BY seq");
             while (stmt.step()) {
@@ -354,8 +576,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     // meta: msgIdCounter (失败时按历史条数兜底, 不丢弃历史)
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).sessionDb;
-            auto  stmt = db.prepare("SELECT key, value FROM meta");
+            auto stmt = db.prepare("SELECT key, value FROM meta");
             while (stmt.step()) {
                 if (stmt.columnText(0) == kMetaMsgIdCounter) {
                     out.msgIdCounter = static_cast<uint64_t>(stmt.columnInt64(1));
@@ -376,8 +597,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     // LLM 上下文 (单行; 解析失败时保留空上下文, 展示历史不受影响)
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).sessionDb;
-            auto  stmt = db.prepare("SELECT json FROM llm_context WHERE id = 1");
+            auto stmt = db.prepare("SELECT json FROM llm_context WHERE id = 1");
             if (stmt.step()) {
                 out.llmMessages = utilxx_base::Json::parse(stmt.columnText(0));
             }
@@ -740,6 +960,119 @@ void SessionStore::saveLlmMessages(
             return false;
         }
     );
+}
+
+// ---------------------------------------------------------------------------
+// 用量账本 (session.db usage 表)
+// ---------------------------------------------------------------------------
+
+void SessionStore::addUsage(std::string_view sessionId, const UsageRecord& record) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db     = dbs(sessionId).sessionDb;
+            auto  insert = db.prepare(
+                "INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, "
+                "total_tokens, cached_prompt_tokens, reasoning_tokens, ok, error_kind) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            );
+            insert.bindInt64(1, record.timeMs);
+            insert.bindText(2, record.model);
+            insert.bindInt64(3, record.promptTokens);
+            insert.bindInt64(4, record.completionTokens);
+            insert.bindInt64(5, record.totalTokens);
+            insert.bindInt64(6, record.cachedPromptTokens);
+            insert.bindInt64(7, record.reasoningTokens);
+            insert.bindInt64(8, record.ok ? 1 : 0);
+            insert.bindText(9, record.errorKind);
+            insert.step();
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE(
+                "SessionStore: addUsage({}, model={}) failed: {}",
+                sessionId,
+                record.model,
+                errmsg
+            );
+            return false;
+        }
+    );
+}
+
+SessionStore::UsageSummary SessionStore::usageSummary(std::string_view sessionId) {
+    UsageSummary out;
+    // 目录不存在 = 从未写入过, 直接返回全 0 (不创建目录/空库)
+    if (!sessionDataDirExists(sessionId)) {
+        return out;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare(
+                "SELECT count(*), "
+                "COALESCE(sum(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0), "
+                "COALESCE(sum(prompt_tokens), 0), COALESCE(sum(completion_tokens), 0), "
+                "COALESCE(sum(total_tokens), 0), COALESCE(sum(cached_prompt_tokens), 0), "
+                "COALESCE(sum(reasoning_tokens), 0) FROM usage"
+            );
+            if (stmt.step()) {
+                out.calls              = stmt.columnInt64(0);
+                out.failedCalls        = stmt.columnInt64(1);
+                out.promptTokens       = stmt.columnInt64(2);
+                out.completionTokens   = stmt.columnInt64(3);
+                out.totalTokens        = stmt.columnInt64(4);
+                out.cachedPromptTokens = stmt.columnInt64(5);
+                out.reasoningTokens    = stmt.columnInt64(6);
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: usageSummary({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    return out;
+}
+
+std::vector<SessionStore::UsageRecord>
+    SessionStore::recentUsage(std::string_view sessionId, size_t limit) {
+    std::vector<UsageRecord> out;
+    if (limit == 0 || !sessionDataDirExists(sessionId)) {
+        return out;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db   = dbs(sessionId).sessionDb;
+            auto  stmt = db.prepare(
+                "SELECT time_ms, model, prompt_tokens, completion_tokens, total_tokens, "
+                "cached_prompt_tokens, reasoning_tokens, ok, error_kind FROM usage "
+                "ORDER BY id DESC LIMIT ?"
+            );
+            stmt.bindInt64(1, static_cast<int64_t>(limit));
+            while (stmt.step()) {
+                UsageRecord rec;
+                rec.timeMs             = stmt.columnInt64(0);
+                rec.model              = stmt.columnText(1);
+                rec.promptTokens       = stmt.columnInt64(2);
+                rec.completionTokens   = stmt.columnInt64(3);
+                rec.totalTokens        = stmt.columnInt64(4);
+                rec.cachedPromptTokens = stmt.columnInt64(5);
+                rec.reasoningTokens    = stmt.columnInt64(6);
+                rec.ok                 = stmt.columnInt64(7) != 0;
+                rec.errorKind          = stmt.columnText(8);
+                out.push_back(std::move(rec));
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: recentUsage({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    return out;
 }
 
 // ---------------------------------------------------------------------------

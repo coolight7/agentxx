@@ -4,6 +4,7 @@
 #include "agentxx-test/core/test_agent_host.h"
 #include "agentxx-test/core/test_aho_corasick.h"
 #include "agentxx-test/core/test_anthropic_provider.h"
+#include "agentxx-test/core/test_boundaries.h"
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
 #include "agentxx-test/core/test_command_tools.h"
@@ -31,6 +32,7 @@
 #include "agentxx-test/core/test_regex.h"
 #include "agentxx-test/core/test_remote_agent.h"
 #include "agentxx-test/core/test_session_persistence.h"
+#include "agentxx-test/core/test_session_schema.h"
 #include "agentxx-test/core/test_settings_db.h"
 #include "agentxx-test/core/test_share_store.h"
 #include "agentxx-test/core/test_string_tools.h"
@@ -41,8 +43,10 @@
 #include "agentxx-test/core/test_training.h"
 #include "agentxx-test/core/test_ui_items.h"
 #include "agentxx-test/core/test_ui_kit.h"
+#include "agentxx-test/core/test_usage_ledger.h"
 #include "agentxx-test/core/test_util_misc.h"
 #include "agentxx-test/core/test_worktree.h"
+#include "agentxx-test/core/test_writer_lease.h"
 #include "agentxx-test/plugin/test_client_plugins.h"
 #include "agentxx-test/plugin/test_codegraph_tools.h"
 #include "agentxx-test/plugin/test_cpu_gpu_use.h"
@@ -204,6 +208,8 @@ int main(int argn, char** argv) {
     };
 
     try {
+        // 架构边界检查放在最前: 分层约定被破坏时立即失败, 不再跑后续用例
+        runSync("boundaries", agentxx::test::testBoundaries);
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
@@ -217,6 +223,8 @@ int main(int argn, char** argv) {
         runSync("util_misc", agentxx::test::testUtilMisc);
         runSync("training", agentxx::test::testTraining);
         runSync("settings_db", agentxx::test::testSettingsDb);
+        runSync("session_schema", agentxx::test::testSessionSchema);
+        runSync("writer_lease", agentxx::test::testWriterLease);
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
         runSync("interrupt_ui", agentxx::test::testInterruptUi);
         runSync("ui_items", agentxx::test::testUiItems);
@@ -400,6 +408,7 @@ int main(int argn, char** argv) {
                 co_await run("summarization", agentxx::test::run_summarization_tests);
                 co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
                 co_await run("agent", agentxx::test::run_agent_tests);
+                co_await run("usage_ledger", agentxx::test::test_usage_ledger);
                 co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 
                 ioCtx.stop();

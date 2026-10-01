@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/settings_db.h"
+#include "agentxx/util/sqlite.h"
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
@@ -135,6 +136,102 @@ static TestResult testTypedAccess() {
     return TestResult{};
 }
 
+/// 版本与乐观写入 (计划 STO-11):
+/// 无条件写入递增版本、按期望版本提交、版本不匹配返回冲突且不改内容、
+/// 两个句柄竞争时不丢更新的语义、重启后版本延续、老库(无 version 列)迁移
+static TestResult testVersionedWrite() {
+    using agentxx::util::SettingsDb;
+    using agentxx::util::SqliteDb;
+
+    auto root = makeTempRoot();
+    auto path = (fs::path(root) / "global.db").string();
+    {
+        auto db = std::make_shared<SettingsDb>(path);
+
+        // 条目不存时版本视为 0
+        XX_TEST_EXPECT_EQ(db->version("k"), int64_t{0});
+        int64_t v = -1;
+        XX_TEST_EXPECT_FALSE(db->getVersioned("k", &v).has_value());
+        XX_TEST_EXPECT_EQ(v, int64_t{0});
+
+        // 无条件写入: 版本自增
+        XX_TEST_EXPECT_TRUE(db->set("k", "v1"));
+        XX_TEST_EXPECT_EQ(db->version("k"), int64_t{1});
+        v = 0;
+        auto val1 = db->getVersioned("k", &v);
+        XX_TEST_EXPECT_HAS_VALUE(val1);
+        XX_TEST_EXPECT_EQ(v, int64_t{1});
+        XX_TEST_EXPECT_TRUE(db->set("k", "v2"));
+        XX_TEST_EXPECT_EQ(db->version("k"), int64_t{2});
+
+        // 乐观写入: 期望版本不匹配 → 冲突, 库中内容与版本都不变
+        auto conflict = db->setVersioned("k", "v3", 1);
+        XX_TEST_EXPECT_TRUE(conflict.status == SettingsDb::WriteStatus::Conflict);
+        XX_TEST_EXPECT_EQ(conflict.version, int64_t{2});
+        auto cur = db->get("k");
+        XX_TEST_EXPECT_HAS_VALUE(cur);
+        if (cur) {
+            XX_TEST_EXPECT_EQ(*cur, std::string{"v2"});
+        }
+        XX_TEST_EXPECT_EQ(db->version("k"), int64_t{2});
+
+        // 期望版本匹配 → 写入成功, 版本加一
+        auto ok1 = db->setVersioned("k", "v3", 2);
+        XX_TEST_EXPECT_TRUE(ok1.status == SettingsDb::WriteStatus::Ok);
+        XX_TEST_EXPECT_EQ(ok1.version, int64_t{3});
+
+        // 新建条目: 期望版本 0
+        auto okNew = db->setVersioned("brand-new", "first", 0);
+        XX_TEST_EXPECT_TRUE(okNew.status == SettingsDb::WriteStatus::Ok);
+        XX_TEST_EXPECT_EQ(okNew.version, int64_t{1});
+        auto fresh = db->get("brand-new");
+        XX_TEST_EXPECT_HAS_VALUE(fresh);
+        if (fresh) {
+            XX_TEST_EXPECT_EQ(*fresh, std::string{"first"});
+        }
+
+        // 两个写入者竞争: A 读到版本后 B 先提交, A 再提交得到冲突 (不静默覆盖 B)
+        auto    dbB = std::make_shared<SettingsDb>(path);
+        int64_t vA  = 0;
+        auto    valA = db->getVersioned("k", &vA);
+        XX_TEST_EXPECT_HAS_VALUE(valA);
+        XX_TEST_EXPECT_EQ(vA, int64_t{3});
+        XX_TEST_EXPECT_TRUE(dbB->set("k", "from B"));
+        auto lostUpdate = db->setVersioned("k", "from A", vA);
+        XX_TEST_EXPECT_TRUE(lostUpdate.status == SettingsDb::WriteStatus::Conflict);
+        XX_TEST_EXPECT_EQ(lostUpdate.version, int64_t{4});
+        auto afterB = dbB->get("k");
+        XX_TEST_EXPECT_HAS_VALUE(afterB);
+        if (afterB) {
+            XX_TEST_EXPECT_EQ(*afterB, std::string{"from B"});
+        }
+    }
+    // 重启后版本延续 (不是从 0 重新计数)
+    {
+        auto db = std::make_shared<SettingsDb>(path);
+        XX_TEST_EXPECT_EQ(db->version("k"), int64_t{4});
+    }
+    // 老库迁移: 只有 key/value 两列的库补 version 列, 已有数据版本从 0 起算
+    {
+        auto legacy = (fs::path(root) / "legacy.db").string();
+        {
+            SqliteDb raw;
+            raw.open(legacy);
+            raw.exec("CREATE TABLE setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+            raw.exec("INSERT INTO setting(key, value) VALUES('tui.theme', '1')");
+            raw.close();
+        }
+        auto db = std::make_shared<SettingsDb>(legacy);
+        XX_TEST_EXPECT_EQ(db->getInt64("tui.theme", -1), int64_t{1});
+        XX_TEST_EXPECT_EQ(db->version("tui.theme"), int64_t{0});
+        XX_TEST_EXPECT_TRUE(db->set("tui.theme", "0"));
+        XX_TEST_EXPECT_EQ(db->version("tui.theme"), int64_t{1});
+        XX_TEST_EXPECT_EQ(db->getInt64("tui.theme", -1), int64_t{0});
+    }
+    fs::remove_all(root);
+    return TestResult{};
+}
+
 static TestResult testDefaultPath() {
     // 默认路径: {defaultDataDir}/sqlite/global.db
     using agentxx::agent::AgentConfigStatic;
@@ -171,6 +268,7 @@ TestResult testSettingsDb() {
 
     testKvRoundtrip();
     testTypedAccess();
+    testVersionedWrite();
     testDefaultPath();
 
     return TestResult{g_sdb_passed, g_sdb_failed};

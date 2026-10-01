@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/agent/writer_lease.h"
 #include "agentxx/util/sqlite.h"
 #include "utilxx_base/json.h"
 #include <map>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace agentxx {
 namespace agent {
@@ -19,9 +21,17 @@ namespace agent {
 ///   - session.db  会话全量状态 (单库):
 ///                   view_message 表  展示历史 (append-only, 每消息一行 JSON)
 ///                   llm_context 表  LLM 上下文消息 (单行整体替换, 每轮结束保存)
-///                   meta 表          msgIdCounter / session 元数据
+///                   meta 表          msgIdCounter / schema_version / session 元数据
 ///                   store 表         agentxx_share_store KV 存储 id(自增) -> value
 ///                                   (内存只保留少量最近使用的条目, 其余按需读取)
+///                   usage 表         每次模型调用的用量账本 (成功与失败各一行)
+///   - .writer.lock  写租约锁文件 (见 [SessionWriterLease]):
+///                   同一会话目录同时只允许一个进程写入, 第二个进程写操作
+///                   明确失败而不是互相覆盖; 读操作不取锁
+///
+/// schema 版本 (计划 STO-2): meta.schema_version 记录结构版本; 打开写连接时
+/// 按相邻步骤迁移 (每步独立事务、幂等、迁移前备份 session.db.bak.v{n});
+/// 库版本高于本程序支持的版本时拒绝打开, 避免新数据被旧程序改坏。
 ///
 /// 默认 root: {dataDir}/sqlite/sessions/ (dataDir 为空时 ~/.agentxx/,
 /// 取不到用户主目录时回退系统临时目录), 数据目录统一由 client 经
@@ -35,9 +45,14 @@ namespace agent {
 class SessionStore {
 public:
 
+    /// 当前支持的最新 schema 版本 (新增结构变更时递增并追加迁移步骤)
+    static constexpr int kSchemaVersion = 1;
+
     /// - [rootDir] 数据根目录; 为空使用默认 {dataDir}/sqlite/sessions/
     ///   (dataDir 为空时 ~/.agentxx/, 取不到用户主目录时回退系统临时目录)
-    explicit SessionStore(std::string rootDir = "");
+    /// - [enableWriterLease] 是否对写连接启用跨进程写租约 (默认开启);
+    ///   仅嵌入方在明确不需要互斥的场景才关闭
+    explicit SessionStore(std::string rootDir = "", bool enableWriterLease = true);
 
     // ---- 会话消息状态 (session.db) ----
 
@@ -99,6 +114,42 @@ public:
     /// - 失败仅记录日志, 不影响内存状态
     void saveLlmMessages(std::string_view sessionId, const utilxx_base::Json& llmMessages);
 
+    // ---- 用量账本 (session.db usage 表) ----
+
+    /// 单次模型调用用量 (成功与失败都记一行; 失败时 ok=false 并带 errorKind)
+    struct UsageRecord {
+        /// 成员按尺寸从大到小排列, 减少结构体内填充字节
+        std::string model;
+        std::string errorKind; ///< 失败分类文本 (成功时为空)
+        int64_t     timeMs              = 0;
+        int64_t     promptTokens        = 0;
+        int64_t     completionTokens    = 0;
+        int64_t     totalTokens         = 0;
+        int64_t     cachedPromptTokens  = 0;
+        int64_t     reasoningTokens     = 0;
+        bool        ok                  = true;
+    };
+
+    /// 会话用量聚合 (供界面/诊断展示; 由账本汇总, 不依赖内存中的最后一次统计)
+    struct UsageSummary {
+        int64_t calls              = 0; ///< 记录次数 (含失败)
+        int64_t failedCalls        = 0; ///< 失败次数
+        int64_t promptTokens       = 0;
+        int64_t completionTokens   = 0;
+        int64_t totalTokens        = 0;
+        int64_t cachedPromptTokens = 0;
+        int64_t reasoningTokens    = 0;
+    };
+
+    /// 追加一条用量记录 (失败仅记日志; 账本是统计信息, 不影响对话流程)
+    void addUsage(std::string_view sessionId, const UsageRecord& record);
+
+    /// 会话用量聚合; 无记录/读取失败返回全 0
+    UsageSummary usageSummary(std::string_view sessionId);
+
+    /// 最近的用量记录 (按时间倒序, 至多 limit 条; limit == 0 返回空)
+    std::vector<UsageRecord> recentUsage(std::string_view sessionId, size_t limit);
+
     // ---- share store (session.db store 表) ----
 
     /// 读取条目; 不存在/打开失败返回 nullopt
@@ -121,6 +172,13 @@ public:
         return rootDir_;
     }
 
+    /// 最近一次写路径失败原因 (空 = 无失败)
+    ///
+    /// 写连接不可用时 (会话目录被其它进程写了、库版本高于本程序支持、目录/文件
+    /// 无法创建) 写操作会失败并在此留下原因; 写库本身已记录错误日志, 本接口供
+    /// 宿主在诊断或界面上给出明确提示 (而不是让用户以为消息已保存)。
+    std::string lastWriteError() const;
+
     /// 将 sessionId 清洗为安全目录名 (非法字符替换/超长截断/保留名规避,
     /// 发生改写时附加哈希尾缀保证唯一性); 静态方法便于测试
     static std::string sanitizeSessionId(std::string_view sessionId);
@@ -129,6 +187,8 @@ private:
 
     struct SessionDbs {
         agentxx::util::SqliteDb sessionDb;
+        /// 会话目录写租约 (跨进程互斥; 随连接一同释放, 见 [dbs])
+        std::shared_ptr<SessionWriterLease> writerLease;
     };
 
     /// 连接缓存条目 (含最近使用序号, 供 LRU 淘汰)
@@ -156,14 +216,37 @@ private:
     /// 该 session 的数据目录是否存在 (未创建过 = 无数据, 读取直接返回空)
     bool sessionDataDirExists(std::string_view sessionId) const;
 
-    /// 建表 (幂等, 单库包含 view_message/llm_context/meta/store)
-    static void ensureSchema(agentxx::util::SqliteDb& sessionDb);
+    /// 建表 + schema 迁移 (幂等)
+    /// - 版本低于 [kSchemaVersion] 时按相邻步骤迁移 (每步独立事务, 迁移前备份)
+    /// - 库版本高于本程序支持的版本时抛异常拒绝打开
+    /// - [dbFilePath] 会话库文件路径 (迁移备份用)
+    static void ensureSchema(agentxx::util::SqliteDb& sessionDb, const std::string& dbFilePath);
+
+    /// 读取 meta.schema_version (无该表/无该键时返回 0)
+    static int readSchemaVersion(agentxx::util::SqliteDb& sessionDb);
+
+    /// 写入 meta.schema_version (UPSERT)
+    static void writeSchemaVersion(agentxx::util::SqliteDb& sessionDb, int version);
+
+    /// 执行单个迁移步骤 (幂等; 由 [ensureSchema] 按顺序调用)
+    static void applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int step);
+
+    /// 迁移前备份库文件 (仅库内已有表时执行; 失败只记日志, 不阻断迁移)
+    static void backupDbFile(
+        agentxx::util::SqliteDb& sessionDb,
+        const std::string&       dbFilePath,
+        int                      fromVersion
+    );
 
     /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
     static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
 
     std::string rootDir_;
-    std::mutex  mutex_;
+    /// 是否启用跨进程写租约 (见构造函数说明)
+    bool        enableWriterLease_ = true;
+    /// 最近一次写路径失败原因 (空 = 无失败; 见 [lastWriteError])
+    std::string lastWriteError_;
+    mutable std::mutex mutex_;
     /// key: 原始 sessionId (未清洗, 清洗仅用于目录名)
     std::map<std::string, DbsEntry, std::less<>> dbs_;
     /// 连接使用序号 (每次取用连接时自增, 值越大越新; 仅 [mutex_] 内访问)
