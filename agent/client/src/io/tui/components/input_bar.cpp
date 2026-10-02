@@ -102,15 +102,23 @@ Element InputComponent::OnRender() {
     }
 
     // 多模态文件选择按钮 [ @︎ ] (仅当当前模型支持多模态输入时展示并登记命中)
+    //
+    // 按钮固定在输入框第一行 (与指示器、输入文本首行同高): hbox 会把整列高度
+    // 原样交给每个子项, 若直接把带背景色的按钮放进输入行 hbox, 输入框多行变高时
+    // 按钮背景会跟着撑满整列高度; 这里用 vbox 让按钮只占一行, 其余高度交给 filler,
+    // 于是按钮下方的区域仍是外层输入框背景色。
     Element attachButton = text("");
     if (config_.canAttach && config_.canAttach()) {
-        attachButton = hbox({
-            text(" "),
-            hits_.add(
-                text(std::string(TuiI18n::instance().t("input.attach")))
-                    | color(theme.buttonTextColor) | bgcolor(theme.buttonBgColor) | bold,
-                std::string{kAttachHitId}
-            ),
+        attachButton = vbox({
+            hbox({
+                text(" "),
+                hits_.add(
+                    text(std::string(TuiI18n::instance().t("input.attach")))
+                        | color(theme.buttonTextColor) | bgcolor(theme.buttonBgColor) | bold,
+                    std::string{kAttachHitId}
+                ),
+            }),
+            filler(),
         });
     }
 

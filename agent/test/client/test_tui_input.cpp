@@ -9,6 +9,7 @@
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "ftxui/component/animation.hpp"
 #include "ftxui/component/event.hpp"
+#include "ftxui/component/mouse.hpp"
 #include "ftxui/screen/screen.hpp"
 #include <chrono>
 #include <filesystem>
@@ -78,6 +79,25 @@ struct InputFixture {
         for (char c : s) {
             comp.OnEvent(ftxui::Event::Character(c));
         }
+    }
+
+    /// 构造鼠标左键释放事件 (一次点击完成)
+    static ftxui::Event leftClickAt(int x, int y) {
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = x;
+        m.y      = y;
+        return ftxui::Event::Mouse("", m);
+    }
+
+    /// 取屏幕上某一行的可见文字 (逐格拼接; 宽字符的占位格为空串)
+    static std::string rowText(const ftxui::Screen& screen, int y, int width) {
+        std::string out;
+        for (int x = 0; x < width; ++x) {
+            out += screen.PixelAt(x, y).character;
+        }
+        return out;
     }
 
     /// 模拟一次括号粘贴: 终端启用 \x1B[?2004h 后发送 \x1B[200~ ... \x1B[201~,
@@ -365,6 +385,75 @@ void test_input_attach_button_visibility() {
         // 按钮文本为 "[ @ ]" (i18n key `input.attach`, 中英同形)
         XX_TEST_EXPECT_TRUE(out.find("[ @ ]") != std::string::npos);
     }
+}
+
+// ---------------------------------------------------------------------------
+// [ @ ] 按钮高度: 输入框多行变高时按钮仍只占一行, 且贴在输入框第一行
+// (回归: 带背景色的按钮若直接放进输入行 hbox, hbox 会把整列高度原样交给子项,
+//  输入框变高后按钮背景色跟着撑满整列)
+// ---------------------------------------------------------------------------
+
+void test_input_attach_button_single_line_top() {
+    InputFixture           f;
+    InputComponent::Config cfg;
+    bool                   opened = false;
+    cfg.onSend = [](std::string, std::vector<agentxx::agent::MediaAttachment>) -> bool {
+        return true;
+    };
+    cfg.canAttach = [] {
+        return true;
+    };
+    cfg.onOpenAttachPicker = [&opened] {
+        opened = true;
+    };
+    f.ctx.viewportWidth  = 80;
+    f.ctx.viewportHeight = 20;
+    auto comp            = std::make_shared<InputComponent>(f.ctx, std::move(cfg));
+
+    // 输入 4 行文本 (Alt+Enter 插入换行): 输入框被撑高
+    InputFixture::type(*comp, "a");
+    for (int i = 0; i < 3; ++i) {
+        comp->OnEvent(ftxui::Event::Special("\x1B\n")); // Alt+Enter
+    }
+    XX_TEST_EXPECT_EQ(comp->inputText(), std::string("a\n\n\n"));
+
+    constexpr int kWidth  = 80;
+    constexpr int kHeight = 12;
+    ftxui::Screen screen(kWidth, kHeight);
+    ftxui::Render(screen, comp->OnRender());
+
+    const ftxui::Box box = comp->attachButtonBox();
+    XX_TEST_EXPECT_TRUE(!box.IsEmpty());
+    // 命中区仍是一行 (不随输入框变高)
+    XX_TEST_EXPECT_EQ(box.y_max - box.y_min, 0);
+    // 按钮与输入文本首行同行 (居上): 该行同时出现首行文字 "a" 与按钮文本
+    const std::string firstRow = InputFixture::rowText(screen, box.y_min, kWidth);
+    XX_TEST_EXPECT_TRUE(firstRow.find('a') != std::string::npos);
+    XX_TEST_EXPECT_TRUE(firstRow.find("[ @ ]") != std::string::npos);
+    // 按钮背景只占一行: 按列扫描, 除按钮所在行外同列都是输入框背景色
+    // (按钮背景色是半透明色, FTXUI 会把它与已有背景混合, 故只断言"该行不是
+    //  输入框背景、其余行都是输入框背景")
+    XX_TEST_EXPECT_TRUE(
+        screen.CellAt(box.x_min, box.y_min).background_color != f.theme.inputBgColor
+    );
+    for (int y = 0; y < kHeight; ++y) {
+        if (y == box.y_min) {
+            continue;
+        }
+        XX_TEST_EXPECT_TRUE(screen.CellAt(box.x_min, y).background_color == f.theme.inputBgColor);
+    }
+    // 按钮下一行 (输入框内容区) 同列仍是输入框背景色 (修复前会被按钮背景填满)
+    XX_TEST_EXPECT_TRUE(
+        screen.CellAt(box.x_min, box.y_min + 1).background_color == f.theme.inputBgColor
+    );
+
+    // 点击按钮仍打开附件选择弹窗; 按钮下一行不属于按钮 (点击无响应)
+    const int centerX = (box.x_min + box.x_max) / 2;
+    comp->OnEvent(InputFixture::leftClickAt(centerX, box.y_min));
+    XX_TEST_EXPECT_TRUE(opened);
+    opened = false;
+    comp->OnEvent(InputFixture::leftClickAt(centerX, box.y_min + 1));
+    XX_TEST_EXPECT_FALSE(opened);
 }
 
 void test_tui_state_message_queue_sync() {
@@ -764,6 +853,7 @@ TestResult testTuiInput() {
     test_tui_state_message_queue_sync();
     test_input_attachment_tray_send();
     test_input_attach_button_visibility();
+    test_input_attach_button_single_line_top();
     test_input_pending_queue_visibility();
     test_input_pending_queue_above_attachments();
     test_file_picker_navigation_without_filter();
