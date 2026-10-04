@@ -1,6 +1,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/config_writer.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/event/event_stream.h"
@@ -23,6 +24,7 @@
 #include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 namespace agentxx {
 namespace agent {
@@ -483,6 +485,8 @@ void SessionServerAgentIO::onPeerMessage(
                     return;
                 }
                 sendToClient(sender, buildModelInfo(m.sessionId));
+            } else if constexpr (std::is_same_v<T, WireAddModel>) {
+                handleAddModel(m, sender);
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 auto agent = agent_.lock();
                 if (!agent) {
@@ -1534,6 +1538,63 @@ WireModelInfo SessionServerAgentIO::buildModelInfo(std::string_view sessionId) {
         });
     }
     return info;
+}
+
+void SessionServerAgentIO::handleAddModel(
+    const WireAddModel&                          req,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    WireAddModelResult result;
+    result.name = req.name;
+
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->agentConfig) {
+        result.error = "agent 尚未就绪, 无法添加模型";
+        sendToClient(sender, std::move(result));
+        return;
+    }
+    auto              cfg = agent->agentContext->agentConfig;
+    const ModelConfig mc  = agentxx::agent::io::addModelToConfig(req);
+
+    // 校验: 与客户端表单同一套规则 (客户端已先校验一次, 此处是权威校验)
+    std::set<std::string, std::less<>> existing;
+    for (const auto& entry : cfg->availableModels) {
+        existing.insert(entry.first);
+    }
+    if (auto check = validateNewModelConfig(mc, existing); !check.has_value()) {
+        result.error = check.error();
+        sendToClient(sender, std::move(result));
+        return;
+    }
+
+    // 先落盘再注册: 写盘失败时不注册, 避免"本次可用、重启后消失"的半生效状态
+    // (配置文件为几 KB 级同步写, 直接在本线程完成, 不卸载到线程池)
+    const std::string configPath = modelConfigYamlPath(cfg->dataDir);
+    if (auto written = appendModelConfigToYamlFile(configPath, mc); !written.has_value()) {
+        XX_LOGE("[model] add model '{}' failed: {}", mc.name, written.error());
+        result.error = written.error();
+        sendToClient(sender, std::move(result));
+        return;
+    }
+
+    // 注册到运行时 (模型选择弹窗列表 + 切换模型都取自这里)
+    cfg->availableModels[mc.name] = mc;
+    if (agent->agentContext->modelRegistry) {
+        agent->agentContext->modelRegistry->registerModel(mc.name, mc);
+    }
+    // 保存成功即使用: 发起请求的会话立即切换为新模型
+    agent->selectModel(req.sessionId, mc.name);
+
+    result.ok = true;
+    sendToClient(sender, std::move(result));
+    // 模型列表已变化: 回推模型信息刷新客户端弹窗列表 (其他客户端在其下次请求时刷新)
+    sendToClient(sender, buildModelInfo(req.sessionId));
+    XX_LOGI(
+        "[model] added model '{}' (config: {}), session '{}' switched to it",
+        mc.name,
+        configPath,
+        req.sessionId
+    );
 }
 
 std::shared_ptr<Session> SessionServerAgentIO::session() {

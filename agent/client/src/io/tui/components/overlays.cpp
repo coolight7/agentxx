@@ -53,7 +53,20 @@ void ModelSelectorOverlay::buildItems() {
     const auto& st = *ctx_.frameState;
 
     std::vector<UiActionItem> items;
-    items.reserve(st.modelNames.size());
+    items.reserve(st.modelNames.size() + 1);
+    // 顶部固定条目: 打开模型配置表单 (新增模型; 与会话弹窗顶部"新会话"入口同理)
+    // 注意: 只触发外部回调, 不置 closeRequested_ —— 表单弹窗由外部替换本弹窗,
+    // 取消表单时再重新打开本弹窗 (取消后回到列表并保留当前模型选中)
+    items.push_back(UiActionItem{
+        .id    = std::string{kAddModelId},
+        .label = std::string{tr("model.add")},
+        .onActivate =
+            [this] {
+                if (onAddModel_) {
+                    onAddModel_();
+                }
+            },
+    });
     for (const auto& name : st.modelNames) {
         items.push_back(UiActionItem{
             .id    = name,
@@ -72,6 +85,24 @@ void ModelSelectorOverlay::buildItems() {
         list_.selectById(st.cachedModelName);
         initialAligned_ = true;
     }
+    // 新增模型成功后再打开列表: 该项已出现在列表里则选中它 (未出现则保持原对齐)
+    if (!selectAfterLoad_.empty()) {
+        for (const auto& item : list_.items()) {
+            if (item.id == selectAfterLoad_) {
+                list_.selectById(selectAfterLoad_);
+                selectAfterLoad_.clear();
+                break;
+            }
+        }
+    }
+}
+
+std::vector<std::string> ModelSelectorOverlay::itemIds() const {
+    std::vector<std::string> out;
+    for (const auto& item : list_.items()) {
+        out.push_back(item.id);
+    }
+    return out;
 }
 
 Element ModelSelectorOverlay::OnRender() {
@@ -140,6 +171,651 @@ void ModelSelectorOverlay::close() {
     if (onClose_) {
         onClose_();
     }
+}
+
+// ---------------------------------------------------------------------------
+// ModelConfigOverlay
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 未消费的上/下方向键用于滚动弹窗内容区
+/// (定义在本文件后面的弹窗辅助区; 这里先用前置声明, 便于本组件就近使用)
+bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollable, Event event);
+
+/// 带语言键的文本 (缺键回退 fallback, 见 TuiI18n)
+pluginxx::ui::TextValue trText(std::string_view key, std::string_view fallback) {
+    pluginxx::ui::TextValue v;
+    v.key.assign(key);
+    v.fallback.assign(fallback);
+    return v;
+}
+
+/// 文本输入控件 (value 非空时作为初始值)
+pluginxx::ui::Item makeTextControl(
+    std::string_view id,
+    std::string_view labelKey,
+    std::string_view labelFallback,
+    std::string_view helpKey,
+    std::string_view helpFallback,
+    std::string_view value = {}
+) {
+    pluginxx::ui::Item item = pluginxx::ui::build::control(
+        "text",
+        id,
+        trText(labelKey, labelFallback),
+        {},
+        value.empty() ? std::string{} : utilxx_base::Json(std::string{value}).dump()
+    );
+    if (!helpFallback.empty()) {
+        item.help = trText(helpKey, helpFallback);
+    }
+    return item;
+}
+
+/// 整数输入控件 (上下键 / [ - ] [ + ] 步进, 受 min/max 约束)
+pluginxx::ui::Item makeNumberControl(
+    std::string_view id,
+    std::string_view labelKey,
+    std::string_view labelFallback,
+    std::string_view helpKey,
+    std::string_view helpFallback,
+    int64_t          value,
+    int64_t          minValue,
+    int64_t          maxValue
+) {
+    pluginxx::ui::Item item = pluginxx::ui::build::control(
+        "number",
+        id,
+        trText(labelKey, labelFallback),
+        {},
+        utilxx_base::Json(value).dump()
+    );
+    item.integer = true;
+    item.hasMin  = true;
+    item.minValue = static_cast<double>(minValue);
+    item.hasMax   = true;
+    item.maxValue = static_cast<double>(maxValue);
+    item.hasStep  = true;
+    item.step     = 1.0;
+    if (!helpFallback.empty()) {
+        item.help = trText(helpKey, helpFallback);
+    }
+    return item;
+}
+
+/// 勾选框控件 (空格/点击翻转)
+pluginxx::ui::Item makeCheckControl(
+    std::string_view id,
+    std::string_view labelKey,
+    std::string_view labelFallback,
+    std::string_view helpKey,
+    std::string_view helpFallback,
+    bool             value
+) {
+    pluginxx::ui::Item item = pluginxx::ui::build::control(
+        "checkbox",
+        id,
+        trText(labelKey, labelFallback),
+        {},
+        utilxx_base::Json(value).dump()
+    );
+    if (!helpFallback.empty()) {
+        item.help = trText(helpKey, helpFallback);
+    }
+    return item;
+}
+
+/// 下拉候选项 (值 + 显示文本)
+pluginxx::ui::ControlOption makeOption(
+    std::string_view value,
+    std::string_view labelKey,
+    std::string_view labelFallback
+) {
+    pluginxx::ui::ControlOption o;
+    o.valueJson = utilxx_base::Json(std::string{value}).dump();
+    o.label     = trText(labelKey, labelFallback);
+    return o;
+}
+
+/// 下拉控件 (左右键 / 点击候选项切换)
+pluginxx::ui::Item makeSelectControl(
+    std::string_view                         id,
+    std::string_view                         labelKey,
+    std::string_view                         labelFallback,
+    std::string_view                         helpKey,
+    std::string_view                         helpFallback,
+    std::vector<pluginxx::ui::ControlOption> options,
+    std::string_view                         value
+) {
+    pluginxx::ui::Item item = pluginxx::ui::build::control(
+        "select",
+        id,
+        trText(labelKey, labelFallback),
+        {},
+        utilxx_base::Json(std::string{value}).dump()
+    );
+    item.options = std::move(options);
+    if (!helpFallback.empty()) {
+        item.help = trText(helpKey, helpFallback);
+    }
+    return item;
+}
+
+/// 去掉首尾空白 (用户输入的口径统一)
+std::string trimField(std::string_view s) {
+    size_t begin = 0;
+    size_t end   = s.size();
+    auto   blank = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    while (begin < end && blank(s[begin])) {
+        ++begin;
+    }
+    while (end > begin && blank(s[end - 1])) {
+        --end;
+    }
+    return std::string{s.substr(begin, end - begin)};
+}
+
+} // namespace
+
+ModelConfigOverlay::ModelConfigOverlay(TUICtx& ctx) :
+    ctx_(ctx) {
+    buildItems();
+    scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
+        const auto& theme = *ctx_.theme;
+        agentxx::client::UiRenderCtx rc;
+        rc.theme = &theme;
+        // 内容宽度取滚动容器上一帧的测量值 (口径与 CustomOverlay 一致):
+        // 首帧未知时按终端宽度估算
+        {
+            const int measured = scrollable_ ? scrollable_->contentWidth() : -1;
+            rc.width           = measured > 0 ? measured : (ctx_.terminalSize().dimx - 8);
+        }
+        rc.separatorStyle = agentxx::client::UiSeparatorStyle::Block;
+        rc.form           = &form_;
+
+        UiRenderResult res;
+        agentxx::client::renderItems(formItems_, rc, res);
+        if (!res.builders.empty()) {
+            mdBuilders_ = std::move(res.builders);
+        }
+        std::vector<ScrollItem> out;
+        out.reserve(res.rows.size() + 1);
+        for (auto& row : res.rows) {
+            ScrollItem item;
+            item.element = std::move(row.element);
+            item.hits    = std::move(row.regions);
+            out.push_back(std::move(item));
+        }
+        if (!errorText_.empty()) {
+            out.push_back(ScrollItem{text(errorText_) | color(theme.errorColor), false});
+        }
+        return out;
+    });
+    scrollable_->setStickToBottom(false);
+    Add(scrollable_);
+
+    // 键盘输入默认作用于第一个控件 (Tab / Shift+Tab 在控件之间移动焦点)
+    const auto ids = agentxx::client::collectControlIds(formItems_);
+    if (!ids.empty()) {
+        form_.focusedId = ids.front();
+    }
+}
+
+void ModelConfigOverlay::buildItems() {
+    using pluginxx::ui::build::button;
+    using pluginxx::ui::build::caption;
+    using pluginxx::ui::build::dispatch;
+    using pluginxx::ui::build::divider;
+    using pluginxx::ui::build::row;
+
+    formItems_.clear();
+    // 说明: 配置落到哪、保存后如何生效
+    formItems_.push_back(caption(std::string{tr("model.form.desc")}));
+    formItems_.push_back(divider());
+
+    // ---- 基本字段 ----
+    formItems_.push_back(makeTextControl(
+        kNameId,
+        "model.form.name",
+        "名称 *",
+        "model.form.nameHelp",
+        "模型标识, 弹窗列表显示名; 需唯一 (建议英文/数字/下划线)"
+    ));
+    formItems_.push_back(makeSelectControl(
+        kTypeId,
+        "model.form.type",
+        "类型",
+        "model.form.typeHelp",
+        "接口类型; 决定 API 路径与请求/响应格式",
+        {
+            makeOption("openai", "", "openai"),
+            makeOption("openai-responses", "", "openai-responses"),
+            makeOption("anthropic", "", "anthropic"),
+        },
+        "openai"
+    ));
+    formItems_.push_back(makeTextControl(
+        kBaseUrlId,
+        "model.form.baseUrl",
+        "API 地址",
+        "model.form.baseUrlHelp",
+        "如 https://api.example.com/v1; 留空则用该类型的官方地址"
+    ));
+    formItems_.push_back(makeTextControl(
+        kApiPathId,
+        "model.form.apiPath",
+        "API 路径",
+        "model.form.apiPathHelp",
+        "可选; 留空按类型自动选择 (openai: /chat/completions, responses: /responses)"
+    ));
+    formItems_.push_back(makeTextControl(
+        kApiKeyId,
+        "model.form.apiKey",
+        "API Key",
+        "model.form.apiKeyHelp",
+        "无鉴权服务填 EMPTY; 也可写成 ${ENV_NAME} 引用环境变量"
+    ));
+    formItems_.push_back(makeTextControl(
+        kModelNameId,
+        "model.form.modelName",
+        "模型名",
+        "model.form.modelNameHelp",
+        "请求体里 model 字段的值, 如 deepseek-chat"
+    ));
+
+    // ---- 高级选项 ----
+    formItems_.push_back(caption(std::string{tr("model.form.advanced")}));
+    formItems_.push_back(makeNumberControl(
+        kContextTokenId,
+        "model.form.contextToken",
+        "上下文 token 上限",
+        "model.form.contextTokenHelp",
+        "0 = 未指定 (上下文压缩用默认值)",
+        0,
+        0,
+        10000000
+    ));
+    formItems_.push_back(makeNumberControl(
+        kConnectTimeoutId,
+        "model.form.connectTimeout",
+        "连接超时 (秒)",
+        "model.form.connectTimeoutHelp",
+        "建立 HTTP 连接的超时时间",
+        16,
+        1,
+        86400
+    ));
+    formItems_.push_back(makeNumberControl(
+        kReadTimeoutId,
+        "model.form.readTimeout",
+        "读取超时 (秒)",
+        "model.form.readTimeoutHelp",
+        "相邻响应数据分段之间的最长间隔",
+        60,
+        1,
+        86400
+    ));
+    formItems_.push_back(makeNumberControl(
+        kMaxConnectionsId,
+        "model.form.maxConnections",
+        "最大并发连接数",
+        "model.form.maxConnectionsHelp",
+        "该 API 端点的连接池上限; 0 = 不限制",
+        5,
+        0,
+        4096
+    ));
+    formItems_.push_back(makeCheckControl(
+        kSendThinkingId,
+        "model.form.sendThinking",
+        "发送 thinking",
+        "model.form.sendThinkingHelp",
+        "请求时携带思考内容 (部分模型要求开启才能正常对话)",
+        false
+    ));
+    formItems_.push_back(makeCheckControl(
+        kReasoningSummaryId,
+        "model.form.reasoningSummary",
+        "请求思考摘要",
+        "model.form.reasoningSummaryHelp",
+        "Responses API 的 include 参数; 上游不支持 reasoning.summary_text 时需关闭, 否则 API 报 400",
+        true
+    ));
+    formItems_.push_back(makeSelectControl(
+        kSslVerifyId,
+        "model.form.sslVerify",
+        "TLS 证书校验",
+        "model.form.sslVerifyHelp",
+        "默认 = 跟随全局设置",
+        {
+            makeOption("default", "model.form.sslDefault", "默认"),
+            makeOption("true", "model.form.sslOn", "开启"),
+            makeOption("false", "model.form.sslOff", "关闭"),
+        },
+        "default"
+    ));
+    formItems_.push_back(makeCheckControl(
+        kImageInputId,
+        "model.form.imageInput",
+        "图片输入",
+        "model.form.imageInputHelp",
+        "该模型支持图片输入 (开启后输入栏出现附件按钮)",
+        false
+    ));
+    formItems_.push_back(makeCheckControl(
+        kAudioInputId,
+        "model.form.audioInput",
+        "音频输入",
+        "model.form.audioInputHelp",
+        "该模型支持音频输入",
+        false
+    ));
+    formItems_.push_back(makeCheckControl(
+        kVideoInputId,
+        "model.form.videoInput",
+        "视频输入",
+        "model.form.videoInputHelp",
+        "该模型支持视频输入",
+        false
+    ));
+    formItems_.push_back(makeTextControl(
+        kExtraHeadersId,
+        "model.form.extraHeaders",
+        "额外请求头 (JSON)",
+        "model.form.extraHeadersHelp",
+        "可选; 形如 {\"X-Gateway\":\"xxx\"}, 留空表示不添加"
+    ));
+    formItems_.push_back(makeTextControl(
+        kExtraConfigId,
+        "model.form.extraConfig",
+        "额外 API 参数 (JSON)",
+        "model.form.extraConfigHelp",
+        "可选; 合并进请求体, 如 {\"reasoning_effort\":\"high\"}"
+    ));
+
+    formItems_.push_back(divider());
+    // 提交行: __submit / __cancel 是域内约定 (见 ui_components.h), 由本组件处理
+    formItems_.push_back(row(
+        {
+            button(std::string{tr("ui.save")}, dispatch(kFormSubmitActionId), "primary"),
+            button(std::string{tr("ui.cancel")}, dispatch(kFormCancelActionId), "secondary"),
+        },
+        pluginxx::ui::gen::kDefaultCellWidth * 2.0
+    ));
+
+    // 表单状态初始化 (只初始化新控件, 已有输入保持不变)
+    agentxx::client::initFormState(form_, formItems_);
+}
+
+Element ModelConfigOverlay::OnRender() {
+    const auto& theme = *ctx_.theme;
+    double      wFrac = 0.7, hFrac = 0.85;
+    int         popupW = 0, popupH = 0;
+    const auto  termSize = ctx_.terminalSize();
+    popupW = std::clamp(static_cast<int>(static_cast<double>(termSize.dimx) * wFrac), 40, std::max(40, termSize.dimx - 4));
+    popupH = std::clamp(static_cast<int>(static_cast<double>(termSize.dimy) * hFrac), 10, std::max(10, termSize.dimy - 4));
+    const auto style = TuiSurfaceStyle::fromTheme(theme);
+    return tuiSurfacePopup(style, tr("model.form.title"), scrollable_->Render() | flex, tr("model.form.hint"))
+           | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
+           | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
+}
+
+bool ModelConfigOverlay::OnEvent(Event event) {
+    if (event == Event::Escape) {
+        ctx_.postRedraw();
+        requestClose();
+        flushClose();
+        return true;
+    }
+    if (event.is_mouse()) {
+        const auto& mouse = event.mouse();
+        size_t      index = 0;
+        int         localX = 0;
+        int         localY = 0;
+        if (scrollable_->hitTestItem(mouse.x, mouse.y, index, localX, localY)) {
+            const auto& rows = scrollable_->items();
+            if (index < rows.size()) {
+                const auto* region = matchUiHitRegion(rows[index].hits, localX, localY);
+                const bool  clicked
+                    = (mouse.button == Mouse::Left && mouse.motion == Mouse::Released);
+                if (clicked && region != nullptr
+                    && region->kind == agentxx::client::UiHitRegionKind::Form) {
+                    const auto action = agentxx::client::handleFormControlHit(
+                        formItems_,
+                        form_,
+                        region->id,
+                        region->sub
+                    );
+                    if (action != agentxx::client::UiFormAction::None) {
+                        errorText_.clear();
+                        ctx_.postRedraw();
+                    }
+                    return true;
+                }
+                if (clicked && region != nullptr
+                    && region->kind == agentxx::client::UiHitRegionKind::FormSubmit) {
+                    const auto action = agentxx::client::handleFormSubmitHit(region->id);
+                    if (action == agentxx::client::UiFormAction::Submit) {
+                        submitForm();
+                    } else if (action == agentxx::client::UiFormAction::Cancel) {
+                        requestClose();
+                    }
+                    ctx_.postRedraw();
+                    flushClose();
+                    return true;
+                }
+            }
+        }
+        if (scrollable_->OnEvent(event)) {
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+    // 键盘: 有焦点控件时字符输入进控件; Enter 提交; 上/下键滚动内容区
+    if (event == Event::Return) {
+        submitForm();
+        ctx_.postRedraw();
+        flushClose();
+        return true;
+    }
+    if (agentxx::client::handleFormKeyInput(formItems_, form_, event)) {
+        errorText_.clear();
+        ctx_.postRedraw();
+        return true;
+    }
+    // 未被控件消费的方向键用于滚动内容区 (字段较多, 需要滚动查看/操作)
+    if (overlayScrollByKey(ctx_, scrollable_, event)) {
+        return true;
+    }
+    return true;
+}
+
+void ModelConfigOverlay::submitForm() {
+    errorText_.clear();
+    if (!agentxx::client::validateForm(formItems_, form_)) {
+        return;
+    }
+    const auto values = agentxx::client::formValues(formItems_, form_);
+    // 名称必填: 除底部错误行外, 同时在控件下方给出提示 (长表单里错误行可能在视野外)
+    {
+        const auto& v      = values.contains("values") ? values["values"] : values;
+        auto        it     = v.find(kNameId);
+        const auto  nameJs = (it == v.end()) ? utilxx_base::Json{} : it.value();
+        if (!nameJs.is_string() || trimField(nameJs.get<std::string>()).empty()) {
+            setControlTip(kNameId, std::string{tr("model.form.errName")});
+        }
+    }
+    auto mc = configOfValues(values);
+    if (!mc.has_value()) {
+        errorText_ = mc.error();
+        // 错误行排在内容末尾 (提交行下方): 滚动到底部让用户看到原因
+        scrollable_->setStickToBottom(true);
+        return;
+    }
+    const std::string err = onSubmit_ ? onSubmit_(mc.value()) : std::string{};
+    if (!err.empty()) {
+        errorText_ = err;
+        scrollable_->setStickToBottom(true);
+        return;
+    }
+    errorText_.clear();
+    requestClose();
+}
+
+void ModelConfigOverlay::setControlTip(std::string_view id, std::string tip) {
+    form_.ensure(id).tip = std::move(tip);
+    ++form_.version;
+}
+
+void ModelConfigOverlay::requestClose() {
+    closeRequested_ = true;
+}
+
+void ModelConfigOverlay::flushClose() {
+    if (!closeRequested_) {
+        return;
+    }
+    closeRequested_ = false;
+    if (onClose_) {
+        onClose_();
+    }
+}
+
+void ModelConfigOverlay::setControlText(std::string_view id, std::string textValue) {
+    auto& state      = form_.ensure(id);
+    state.initialized = true;
+    state.edited      = true;
+    state.editText    = std::move(textValue);
+    ++form_.version;
+}
+
+bool ModelConfigOverlay::submitByTest() {
+    const bool closedBefore = closeRequested_;
+    (void)closedBefore;
+    submitForm();
+    const bool accepted = closeRequested_;
+    flushClose();
+    return accepted;
+}
+
+void ModelConfigOverlay::cancelByTest() {
+    requestClose();
+    flushClose();
+}
+
+std::expected<agentxx::agent::ModelConfig, std::string>
+    ModelConfigOverlay::configOfValues(const utilxx_base::Json& values) {
+    using agentxx::agent::ModelConfig;
+    const utilxx_base::Json& v = values.contains("values") ? values["values"] : values;
+
+    auto childOf = [&](std::string_view id) -> utilxx_base::Json {
+        auto it = v.find(id);
+        return (it == v.end()) ? utilxx_base::Json{} : it.value();
+    };
+    auto textOf = [&](std::string_view id) -> std::string {
+        const auto j = childOf(id);
+        return j.is_string() ? trimField(j.get<std::string>()) : std::string{};
+    };
+    auto numberOf = [&](std::string_view id, int64_t fallback) -> int64_t {
+        const auto j = childOf(id);
+        if (j.is_number_integer()) {
+            return j.get<int64_t>();
+        }
+        if (j.is_number()) {
+            return static_cast<int64_t>(j.get<double>());
+        }
+        return fallback;
+    };
+    auto flagOf = [&](std::string_view id, bool fallback) -> bool {
+        const auto j = childOf(id);
+        return j.is_boolean() ? j.get<bool>() : fallback;
+    };
+    /// 取 JSON 对象型字段: 表单里是 JSON 对象文本, 也接受已解析的对象
+    /// (调用方直接给出结构时无需再序列化); 语法/类型非法返回错误文本
+    auto jsonObjectOf
+        = [&](std::string_view id, utilxx_base::Json& out) -> std::expected<void, std::string> {
+        const auto child = childOf(id);
+        if (child.is_object()) {
+            out = child;
+            return {};
+        }
+        if (!child.is_string() && !child.is_null()) {
+            // 数组/数值等非对象取值: 与"文本不是 JSON 对象"同样按错误处理
+            return std::unexpected{fmt::format("{}: {}", id, tr("model.form.errJsonObject"))};
+        }
+        const std::string text
+            = child.is_string() ? trimField(child.get<std::string>()) : std::string{};
+        if (text.empty()) {
+            return {};
+        }
+        try {
+            auto parsed = utilxx_base::Json::parse(text);
+            if (!parsed.is_object()) {
+                return std::unexpected{fmt::format("{}: {}", id, tr("model.form.errJsonObject"))};
+            }
+            out = std::move(parsed);
+            return {};
+        } catch (const std::exception& e) {
+            return std::unexpected{fmt::format("{}: {} ({})", id, tr("model.form.errJson"), e.what())};
+        }
+    };
+
+    ModelConfig mc;
+    mc.name = textOf(kNameId);
+    if (mc.name.empty()) {
+        return std::unexpected{std::string{tr("model.form.errName")}};
+    }
+    mc.type      = textOf(kTypeId);
+    mc.baseUrl   = textOf(kBaseUrlId);
+    mc.apiPath   = textOf(kApiPathId);
+    mc.apiKey    = textOf(kApiKeyId);
+    // 无鉴权服务的 Key 留空: 按 EMPTY 归一 (与写盘口径一致)
+    if (mc.apiKey.empty()) {
+        mc.apiKey = "EMPTY";
+    }
+    mc.modelName = textOf(kModelNameId);
+    mc.modelContenxtMaxToken
+        = static_cast<size_t>(std::max<int64_t>(0, numberOf(kContextTokenId, 0)));
+    mc.connectTimeoutSeconds
+        = static_cast<int>(numberOf(kConnectTimeoutId, ModelConfig::defaultModelConfig.connectTimeoutSeconds));
+    mc.readChunkTimeoutSeconds
+        = static_cast<int>(numberOf(kReadTimeoutId, ModelConfig::defaultModelConfig.readChunkTimeoutSeconds));
+    mc.maxConcurrentConnections = static_cast<size_t>(
+        std::max<int64_t>(0, numberOf(kMaxConnectionsId, static_cast<int64_t>(ModelConfig::defaultModelConfig.maxConcurrentConnections)))
+    );
+    mc.sendThinking            = flagOf(kSendThinkingId, false);
+    mc.requestReasoningSummary = flagOf(kReasoningSummaryId, true);
+    mc.imageInput              = flagOf(kImageInputId, false);
+    mc.audioInput              = flagOf(kAudioInputId, false);
+    mc.videoInput              = flagOf(kVideoInputId, false);
+
+    const std::string ssl = textOf(kSslVerifyId);
+    if (ssl == "true") {
+        mc.sslVerify = true;
+    } else if (ssl == "false") {
+        mc.sslVerify = false;
+    }
+
+    utilxx_base::Json headers;
+    if (auto ok = jsonObjectOf(kExtraHeadersId, headers); !ok.has_value()) {
+        return std::unexpected{ok.error()};
+    }
+    for (const auto& [key, value] : headers.items()) {
+        if (!value.is_string()) {
+            return std::unexpected{std::string{tr("model.form.errHeaderValue")}};
+        }
+        mc.extraHeaders[std::string{key}] = value.get<std::string>();
+    }
+    utilxx_base::Json extraConfig;
+    if (auto ok = jsonObjectOf(kExtraConfigId, extraConfig); !ok.has_value()) {
+        return std::unexpected{ok.error()};
+    }
+    mc.extraConfig = std::move(extraConfig);
+    return mc;
 }
 
 // ---------------------------------------------------------------------------

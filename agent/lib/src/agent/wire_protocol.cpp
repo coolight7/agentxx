@@ -181,6 +181,14 @@ utilxx_base::Json toJson(const WirePermissionState& msg) {
     return makePermissionState(msg.fullAuth);
 }
 
+utilxx_base::Json toJson(const WireAddModel& msg) {
+    return makeAddModelMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireAddModelResult& msg) {
+    return makeAddModelResultMsg(msg);
+}
+
 // ---------------------------------------------------------------------------
 // 对称 fromJson 实现
 // ---------------------------------------------------------------------------
@@ -540,6 +548,14 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::PermissionState,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return permissionStateFromJson(j);
+         }},
+        {MsgType::AddModel,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return addModelFromJson(j);
+         }},
+        {MsgType::AddModelResult,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return addModelResultFromJson(j);
          }},
     };
     return s_map;

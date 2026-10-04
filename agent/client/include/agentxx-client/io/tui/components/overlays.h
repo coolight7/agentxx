@@ -5,6 +5,7 @@
 #include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/ui_components.h"
+#include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "ftxui/component/component_base.hpp"
@@ -12,6 +13,7 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
 #include "utilxx_base/json.h"
+#include <expected>
 #include <functional>
 #include <map>
 #include <markdown/dom_builder.hpp>
@@ -28,6 +30,9 @@ namespace agentxx::client {
 ///
 /// 交互 (上下键移动/Enter 确认/鼠标点击命中/Esc 关闭) 与选中高亮由 [UiActionList]
 /// 统一实现; 本组件只负责把模型列表映射为条目表, 以及确认后的模型切换。
+///
+/// 条目表 = 顶部固定条目「添加模型配置」(见 [onAddModel]) + 服务端返回的模型列表
+/// (模型条目确认后切换当前会话的模型)。
 class ModelSelectorOverlay : public ftxui::ComponentBase {
 public:
 
@@ -42,6 +47,17 @@ public:
         onConfirm_ = std::move(fn);
     }
 
+    /// "添加模型配置"条目回调 (打开模型配置表单弹窗; 见 [ModelConfigOverlay])
+    void onAddModel(std::function<void()> fn) {
+        onAddModel_ = std::move(fn);
+    }
+
+    /// 重新打开本弹窗时优先选中的模型名 (新增模型成功后再打开列表时选中它;
+    /// 该模型尚未出现在列表时保持原有对齐)
+    void selectModelAfterLoad(std::string name) {
+        selectAfterLoad_ = std::move(name);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
@@ -50,9 +66,15 @@ public:
         return list_.selectedIndex();
     }
 
+    /// 测试辅助: 当前条目 id 列表 (首次调用前需先渲染一次)
+    std::vector<std::string> itemIds() const;
+
+    /// 顶部固定条目「添加模型配置」的条目 id
+    static constexpr std::string_view kAddModelId = "model/add";
+
 private:
 
-    /// 重建条目表 (首次打开时把选中项对齐到当前使用的模型)
+    /// 重建条目表 (顶部固定条目 + 模型条目; 首次打开时把选中项对齐到当前使用的模型)
     void buildItems();
     /// 确认选中模型 (写入当前模型 + 通知外部; 关闭弹窗)
     void confirmItem(std::string_view model);
@@ -68,6 +90,9 @@ private:
     /// 首次渲染时是否已把选中项对齐到当前使用的模型 (只对齐一次, 之后以用户选择为准)
     bool initialAligned_ = false;
 
+    /// 重新打开列表时优先选中的模型名 (见 [selectModelAfterLoad]; 命中一次后清空)
+    std::string selectAfterLoad_;
+
     /// 条目激活动作里只记录"该关闭弹窗", 实际关闭 (onClose_ -> 移除模态) 在条目
     /// 列表事件处理返回后执行 —— 直接在闭包内关闭会在列表迭代/回调执行过程中
     /// 析构本对象 (闭包自身就在被销毁的容器里)
@@ -75,6 +100,118 @@ private:
 
     std::function<void()>            onClose_;
     std::function<void(std::string)> onConfirm_;
+    std::function<void()>            onAddModel_;
+};
+
+/// 模型配置表单弹窗 (选择模型弹窗顶部「添加模型配置」条目打开)
+///
+/// 表单字段 (控件 id 即字段名, 见 [ModelConfigOverlay::kNameId] 等常量):
+/// - 基本: name (必填, 唯一) / type (openai / openai-responses / anthropic) /
+///   base_url / api_path / api_key / model_name
+/// - 高级: model_context_max_token / connect_timeout / read_chunk_timeout /
+///   max_concurrent_connections (数值), send_thinking / request_reasoning_summary /
+///   image_input / audio_input / video_input (开关), ssl_verify (三态下拉),
+///   extra_headers / extra_api_config (JSON 对象文本)
+///
+/// 交互 (与插件 overlay 表单同一套实现, 见 ui_components.h 的表单交互):
+/// - 点击/键盘 Tab 切换焦点控件; 字符输入进当前焦点控件
+/// - Enter (有焦点控件时) 或点击 [ 保存 ] 提交; Esc 或点击 [ 取消 ] 关闭
+/// - 内容区可滚动 (字段较多, 上/下键与滚轮滚动)
+///
+/// 提交: 先做本组件内的字段检查 (数值范围/JSON 语法/必填), 再把表单取值转成
+/// [agentxx::agent::ModelConfig] 交 [onSubmit] —— 外部据此做重名等完整校验并把
+/// 配置发给 agent 侧; [onSubmit] 返回错误文本时弹窗保持打开并就地显示该文本。
+class ModelConfigOverlay : public ftxui::ComponentBase {
+public:
+
+    explicit ModelConfigOverlay(TUICtx& ctx);
+
+    void onClose(std::function<void()> fn) {
+        onClose_ = std::move(fn);
+    }
+
+    /// 提交回调 (参数: 表单填写的模型配置)
+    /// - 返回空串: 已受理 (外部关闭本弹窗)
+    /// - 返回非空: 校验失败, 弹窗保持打开并显示该错误文本
+    void onSubmit(std::function<std::string(const agentxx::agent::ModelConfig&)> fn) {
+        onSubmit_ = std::move(fn);
+    }
+
+    bool           OnEvent(ftxui::Event event) override;
+    ftxui::Element OnRender() override;
+
+    /// 表单控件项 (测试辅助: 断言字段构成)
+    const std::vector<pluginxx::ui::Item>& items() const {
+        return formItems_;
+    }
+
+    /// 测试辅助: 设置控件文本值 (模拟用户输入; 控件不存在时忽略)
+    void setControlText(std::string_view id, std::string text);
+    /// 测试辅助: 表单底部错误文本 (无错误时为空)
+    const std::string& errorText() const {
+        return errorText_;
+    }
+    /// 测试辅助: 当前键盘焦点控件 id (无焦点时为空)
+    const std::string& focusedControlId() const {
+        return form_.focusedId;
+    }
+    /// 测试辅助: 提交按钮命中 (等价点击 [ 保存 ]; 返回外部是否已受理)
+    bool submitByTest();
+    /// 测试辅助: 取消按钮命中 (等价点击 [ 取消 ])
+    void cancelByTest();
+
+    /// 控件 id (供外部/测试引用)
+    static constexpr std::string_view kNameId              = "name";
+    static constexpr std::string_view kTypeId              = "type";
+    static constexpr std::string_view kBaseUrlId           = "base_url";
+    static constexpr std::string_view kApiPathId           = "api_path";
+    static constexpr std::string_view kApiKeyId            = "api_key";
+    static constexpr std::string_view kModelNameId         = "model_name";
+    static constexpr std::string_view kContextTokenId      = "model_context_max_token";
+    static constexpr std::string_view kConnectTimeoutId    = "connect_timeout";
+    static constexpr std::string_view kReadTimeoutId       = "read_chunk_timeout";
+    static constexpr std::string_view kMaxConnectionsId    = "max_concurrent_connections";
+    static constexpr std::string_view kSendThinkingId      = "send_thinking";
+    static constexpr std::string_view kReasoningSummaryId  = "request_reasoning_summary";
+    static constexpr std::string_view kImageInputId        = "image_input";
+    static constexpr std::string_view kAudioInputId        = "audio_input";
+    static constexpr std::string_view kVideoInputId        = "video_input";
+    static constexpr std::string_view kSslVerifyId         = "ssl_verify";
+    static constexpr std::string_view kExtraHeadersId      = "extra_headers";
+    static constexpr std::string_view kExtraConfigId       = "extra_api_config";
+
+    /// 表单取值 → 模型配置 (`values` 为 formValues 的 `{"values":{...}}` 载荷)
+    /// - 空 API Key 按 "EMPTY" 处理; ssl_verify 的 默认/true/false 映射为
+    ///   std::nullopt / true / false
+    /// - 两个 JSON 字段 (extra_headers / extra_api_config) 取 JSON 对象文本,
+    ///   也接受已解析的对象
+    /// - 数值取值非法、JSON 文本非法/不是对象、必填项为空时返回错误文本
+    static std::expected<agentxx::agent::ModelConfig, std::string>
+        configOfValues(const utilxx_base::Json& values);
+
+private:
+
+    /// 构建表单组件项 (构造与语言切换时重建)
+    void buildItems();
+    /// 处理表单提交 (字段检查 → 取值 → onSubmit_)
+    void submitForm();
+    /// 设置某控件的就地提示 (校验失败时显示在控件下方)
+    void setControlTip(std::string_view id, std::string tip);
+    void requestClose();
+    void flushClose();
+
+    TUICtx&                         ctx_;
+    std::shared_ptr<Scrollable>     scrollable_;
+    agentxx::client::UiFormState    form_;
+    std::vector<pluginxx::ui::Item> formItems_;
+    std::string                     errorText_;
+    bool                            closeRequested_ = false;
+
+    /// markdown 渲染器生命周期 (Element 内部容器/链接 Box 指向它; 随内容重建)
+    std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders_;
+
+    std::function<void()>                                         onClose_;
+    std::function<std::string(const agentxx::agent::ModelConfig&)> onSubmit_;
 };
 
 /// 会话选择弹窗组件 (F3 / 状态栏 [F3] Sessions 按钮)

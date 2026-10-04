@@ -320,6 +320,16 @@ path/to/agentxx_test string_util regex
   打开下载页经 `util/open_url.h` 校验 http/https 后交系统浏览器
 - 设置弹窗: 条目按 界面/显示/更新/其他 分组, 内容超出终端高度时内容区限高可滚动
   (`vscroll_indicator | yframe`, 选中项带 focus 自动滚入视口, 滚轮 = 上/下移动选中项)
+- 添加模型配置 (2026-10): 选择模型弹窗 (F2) 顶部固定条目「+ 添加模型配置」打开表单弹窗
+  (`ModelConfigOverlay`, 基本字段 + 高级项; 控件用组件描述层构建器 + 共用表单交互);
+  提交经新线消息 `WireAddModel` 交服务端 `SessionServerAgentIO::handleAddModel`:
+  校验 (`agentxx::agent::validateNewModelConfig`, 与客户端同一套规则) →
+  写入 `{data_dir}/agentxx-config.yaml` 的 `model.list`
+  (`agentxx::agent::appendModelConfigToYamlFile`, 文件不存在则创建, 按行插入保留注释,
+  写入前内存回读校验) → 注册到 `ModelProviderRegistry` + `AgentConfig::availableModels` →
+  当前会话立即切换 → 回 `WireAddModelResult` + `WireModelInfo` (先落盘后注册,
+  避免"能用但重启消失"); 回执成功客户端 setPendingModel + toast;
+  见 tui.md §2.11
 - 空列表 banner 艺术字 `AGENT++`: 右侧 `++` 由 `BannerArtComponent`
   (`agent/client/include/agentxx-client/io/tui/components/banner_art.h`, 门槛 `High`)
   在启动阶段播放一次变形动画 —— 先画成两个与 AGENT 同风格的大字 `+`, 再变形为机器人图案

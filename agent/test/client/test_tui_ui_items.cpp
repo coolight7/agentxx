@@ -110,6 +110,18 @@ std::string renderToGrid(const UiRenderResult& res, int w = 60, int h = 20) {
     return out;
 }
 
+/// 渲染行模型到屏幕 (需要检查单元底色/前景色的用例使用)
+ftxui::Screen renderScreen(UiRenderResult& res, int w, int h) {
+    ftxui::Elements els;
+    for (const auto& row : res.rows) {
+        els.push_back(row.element);
+    }
+    ftxui::Screen screen
+        = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
+    ftxui::Render(screen, ftxui::vbox(std::move(els)));
+    return screen;
+}
+
 /// 行模型元素真实布局后的高度 (行)
 int layoutLines(UiRenderResult& res, int w) {
     ftxui::Elements els;
@@ -772,6 +784,121 @@ TestResult testTuiUiItems() {
         // 选项列表: 选中项带指示符 + (反色底), 未选中项同宽占位
         XX_TEST_EXPECT_TRUE(screenHas(text, "+ B"));
         XX_TEST_EXPECT_TRUE(screenHas(text, "  A"));
+    }
+
+    // ---------------- 输入类控件: 整行输入框 + help 作为占位文本 ----------------
+    {
+        auto ctx   = ctxFor(40);
+        auto form  = std::make_shared<agentxx::client::UiFormState>();
+        ctx.form   = form.get();
+        auto items = pluginxx::ui::parseBlocks(Json::parse(
+            R"({"items":[{"kind":"Control","id":"url","control":"text","label":"URL",
+                "help":"如 https://api.example.com/v1"}]})"
+        ));
+        agentxx::client::initFormState(*form, items);
+
+        agentxx::client::UiRenderResult res;
+        agentxx::client::renderItems(items, ctx, res);
+
+        // 空值: help 作为占位文本显示在输入框内 (不再单起一行说明)
+        const auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "URL"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "如 https://api.example.com/v1"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{2}); // 标签行 + 输入框行
+
+        // 命中区域整行可点 (w = 0 表示延伸到行右边界)
+        const auto* region = findRegion(res, "url");
+        XX_TEST_EXPECT_TRUE(region != nullptr);
+        if (region != nullptr) {
+            XX_TEST_EXPECT_EQ(region->kind, UiHitRegionKind::Form);
+            XX_TEST_EXPECT_EQ(region->x, 0);
+            XX_TEST_EXPECT_EQ(region->w, 0);
+            XX_TEST_EXPECT_EQ(region->sub, 0);
+            // 行内任意列 (含第 39 列 = 行右端) 都落在命中范围内
+            XX_TEST_EXPECT_TRUE(region->contains(0, 0));
+            XX_TEST_EXPECT_TRUE(region->contains(20, 0));
+            XX_TEST_EXPECT_TRUE(region->contains(39, 0));
+        }
+
+        // 整行铺输入框底色 (第 2 行 = 输入框行, 第 0 列到最后一列都是底色)
+        {
+            auto screen = renderScreen(res, 40, 4);
+            bool bandFull = true;
+            for (int x = 0; x < 40; ++x) {
+                if (screen.CellAt(x, 1).background_color != theme().inputBgColor) {
+                    bandFull = false;
+                    break;
+                }
+            }
+            XX_TEST_EXPECT_TRUE(bandFull);
+            // 占位文本从第 1 列开始 (输入框左内边距 1 格)
+            XX_TEST_EXPECT_EQ(screen.CellAt(0, 1).character, std::string{" "});
+            XX_TEST_EXPECT_TRUE(screen.CellAt(1, 1).character != std::string{" "});
+        }
+
+        // 一输入则占位隐藏: 只显示值
+        form->ensure("url").initialized = true;
+        form->ensure("url").edited      = true;
+        form->ensure("url").editText    = "https://x.example.com/v1";
+        agentxx::client::UiRenderResult res2;
+        agentxx::client::renderItems(items, ctx, res2);
+        const auto text2 = renderToText(res2, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text2, "https://x.example.com/v1"));
+        XX_TEST_EXPECT_FALSE(screenHas(text2, "如 https://api.example.com/v1"));
+    }
+    {
+        // 数值控件: 整行 (两端步进按钮 + 值区域撑满中间); 值非空时不显示占位
+        auto ctx   = ctxFor(40);
+        auto form  = std::make_shared<agentxx::client::UiFormState>();
+        ctx.form   = form.get();
+        auto items = pluginxx::ui::parseBlocks(Json::parse(
+            R"({"items":[{"kind":"Control","id":"num","control":"number","label":"Num",
+                "integer":true,"value":5,"help":"范围 1 ~ 100"}]})"
+        ));
+        agentxx::client::initFormState(*form, items);
+
+        agentxx::client::UiRenderResult res;
+        agentxx::client::renderItems(items, ctx, res);
+        const auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "[ - ]"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "[ + ]"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "5"));
+        XX_TEST_EXPECT_FALSE(screenHas(text, "范围 1 ~ 100"));
+
+        int minusX = -1;
+        int plusX  = -1;
+        int valueX = -1;
+        int valueW = -1;
+        for (const auto& r : allRegions(res)) {
+            if (r.id != "num") {
+                continue;
+            }
+            if (r.sub == 0) {
+                minusX = r.x;
+            } else if (r.sub == 1) {
+                plusX = r.x;
+            } else if (r.sub == 2) {
+                valueX = r.x;
+                valueW = r.w;
+                // 值区域延伸到 "+" 之前: 行中间任意列可点, 但 "-" 按钮区域不属于它
+                XX_TEST_EXPECT_TRUE(r.contains(20, 0));
+                XX_TEST_EXPECT_FALSE(r.contains(0, 0));
+            }
+        }
+        XX_TEST_EXPECT_EQ(minusX, 0);
+        XX_TEST_EXPECT_TRUE(plusX > 0);
+        XX_TEST_EXPECT_TRUE(valueX > minusX);
+        XX_TEST_EXPECT_TRUE(valueX < plusX);
+        XX_TEST_EXPECT_EQ(valueW, 0);
+
+        // 底色: 中间输入框部分铺输入框底色, 两端步进按钮不带输入框底色
+        // (步进按钮自身背景是半透明的按钮色, 会与所处背景混合, 故只断言"不是输入框底色")
+        {
+            auto screen = renderScreen(res, 40, 4);
+            XX_TEST_EXPECT_TRUE(screen.CellAt(0, 1).background_color != theme().inputBgColor);
+            XX_TEST_EXPECT_EQ(screen.CellAt(20, 1).background_color, theme().inputBgColor);
+            XX_TEST_EXPECT_TRUE(screen.CellAt(39, 1).background_color != theme().inputBgColor);
+        }
     }
 
     // ---------------- 文本 + 按钮合并行 ----------------

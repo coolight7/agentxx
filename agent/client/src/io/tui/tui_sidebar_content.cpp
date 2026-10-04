@@ -62,7 +62,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
 ///
 /// - `return` 内容行数 (各行行数之和; 供可用尺寸上报, 与面板口径一致)
 static size_t appendPluginItems(
-    const std::vector<pluginxx::ui::Item>&                            items,
+    const std::vector<pluginxx::ui::Item>&                           items,
     std::string_view                                                 plugin,
     std::string_view                                                 ownerId,
     const agentxx::plugin::ClientUiRegistry*                         reg,
@@ -347,7 +347,7 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
                 std::string{kUpdateNoticeHitId}
             ),
             filler(),
-            text(tr("info.updateHint")) | theme_.dim() | xflex_shrink,
+            text(tr("info.updateHint")) | color(theme_.hintColor) | xflex_shrink,
         }));
     }
 

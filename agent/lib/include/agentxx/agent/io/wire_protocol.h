@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "utilxx_base/json.h"
@@ -47,6 +48,8 @@ struct MsgType {
     inline static constexpr std::string_view GetPermissionState = "get_permission_state";
     /// 客户端切换"完全授权所有权限"状态
     inline static constexpr std::string_view SetFullAuth = "set_full_auth";
+    /// 客户端新增模型配置 (TUI 选择模型弹窗的"添加模型配置")
+    inline static constexpr std::string_view AddModel = "add_model";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -79,6 +82,8 @@ struct MsgType {
     inline static constexpr std::string_view ListDirResult = "list_dir_result";
     /// 服务端权限状态 (查询响应 / 切换后广播)
     inline static constexpr std::string_view PermissionState = "permission_state";
+    /// 服务端新增模型配置的结果 (AddModel 回执; 失败时 error 为给用户看的原因)
+    inline static constexpr std::string_view AddModelResult = "add_model_result";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -1169,6 +1174,174 @@ inline WirePermissionState permissionStateFromJson(const utilxx_base::Json& j) {
     return m;
 }
 
+// ---------------------------------------------------------------------------
+// 新增模型配置 (TUI 选择模型弹窗的"添加模型配置")
+// ---------------------------------------------------------------------------
+
+/// 模型配置 + 会话 id → 线消息 (客户端表单取值 → WireAddModel)
+inline WireAddModel addModelOfConfig(std::string_view sessionId, const ModelConfig& mc) {
+    WireAddModel m;
+    m.sessionId                = std::string{sessionId};
+    m.name                     = mc.name;
+    m.modelType                = mc.type;
+    m.baseUrl                  = mc.baseUrl;
+    m.apiPath                  = mc.apiPath;
+    m.apiKey                   = mc.apiKey;
+    m.modelName                = mc.modelName;
+    m.modelContextMaxToken     = mc.modelContenxtMaxToken;
+    m.maxConcurrentConnections = mc.maxConcurrentConnections;
+    m.connectTimeoutSeconds    = mc.connectTimeoutSeconds;
+    m.readChunkTimeoutSeconds  = mc.readChunkTimeoutSeconds;
+    m.sslVerify = mc.sslVerify.has_value() ? (*mc.sslVerify ? int8_t{1} : int8_t{0}) : int8_t{-1};
+    m.sendThinking            = mc.sendThinking;
+    m.requestReasoningSummary = mc.requestReasoningSummary;
+    m.imageInput              = mc.imageInput;
+    m.audioInput              = mc.audioInput;
+    m.videoInput              = mc.videoInput;
+    m.extraApiConfig          = mc.extraConfig;
+    if (!mc.extraHeaders.empty()) {
+        utilxx_base::Json headers = utilxx_base::Json::object();
+        for (const auto& [k, v] : mc.extraHeaders) {
+            headers[k] = v;
+        }
+        m.extraHeaders = std::move(headers);
+    }
+    return m;
+}
+
+/// 线消息 → 模型配置 (服务端校验/注册/写盘前的取值; 空值按默认口径补齐)
+inline ModelConfig addModelToConfig(const WireAddModel& m) {
+    ModelConfig mc;
+    mc.name                     = m.name;
+    mc.type                     = m.modelType.empty() ? std::string{"openai"} : m.modelType;
+    mc.baseUrl                  = m.baseUrl;
+    mc.apiPath                  = m.apiPath;
+    mc.apiKey                   = m.apiKey.empty() ? std::string{"EMPTY"} : m.apiKey;
+    mc.modelName                = m.modelName;
+    mc.modelContenxtMaxToken    = static_cast<size_t>(m.modelContextMaxToken);
+    mc.maxConcurrentConnections = static_cast<size_t>(m.maxConcurrentConnections);
+    mc.connectTimeoutSeconds    = m.connectTimeoutSeconds;
+    mc.readChunkTimeoutSeconds  = m.readChunkTimeoutSeconds;
+    if (m.sslVerify == 0 || m.sslVerify == 1) {
+        mc.sslVerify = (m.sslVerify == 1);
+    }
+    mc.sendThinking            = m.sendThinking;
+    mc.requestReasoningSummary = m.requestReasoningSummary;
+    mc.imageInput              = m.imageInput;
+    mc.audioInput              = m.audioInput;
+    mc.videoInput              = m.videoInput;
+    mc.extraConfig             = m.extraApiConfig;
+    if (m.extraHeaders.is_object()) {
+        for (const auto& [k, v] : m.extraHeaders.items()) {
+            if (v.is_string()) {
+                mc.extraHeaders[k] = v.get<std::string>();
+            }
+        }
+    }
+    return mc;
+}
+
+inline utilxx_base::Json makeAddModelMsg(const WireAddModel& m) {
+    utilxx_base::Json j = {
+        {"type",      MsgType::AddModel     },
+        {"sessionId", m.sessionId           },
+        {"name",      m.name                },
+        {"modelType", m.modelType           },
+        {"baseUrl",   m.baseUrl             },
+        {"apiKey",    m.apiKey              },
+        {"modelName", m.modelName           },
+    };
+    if (!m.apiPath.empty()) {
+        j["apiPath"] = m.apiPath;
+    }
+    if (m.modelContextMaxToken > 0) {
+        j["modelContextMaxToken"] = m.modelContextMaxToken;
+    }
+    if (m.maxConcurrentConnections != 5) {
+        j["maxConcurrentConnections"] = m.maxConcurrentConnections;
+    }
+    if (m.connectTimeoutSeconds != 16) {
+        j["connectTimeoutSeconds"] = m.connectTimeoutSeconds;
+    }
+    if (m.readChunkTimeoutSeconds != 60) {
+        j["readChunkTimeoutSeconds"] = m.readChunkTimeoutSeconds;
+    }
+    if (m.sslVerify >= 0) {
+        j["sslVerify"] = (m.sslVerify == 1);
+    }
+    if (m.sendThinking) {
+        j["sendThinking"] = true;
+    }
+    if (!m.requestReasoningSummary) {
+        j["requestReasoningSummary"] = false;
+    }
+    if (m.imageInput) {
+        j["imageInput"] = true;
+    }
+    if (m.audioInput) {
+        j["audioInput"] = true;
+    }
+    if (m.videoInput) {
+        j["videoInput"] = true;
+    }
+    if (m.extraApiConfig.is_object() && m.extraApiConfig.size() > 0) {
+        j["extraApiConfig"] = m.extraApiConfig;
+    }
+    if (m.extraHeaders.is_object() && m.extraHeaders.size() > 0) {
+        j["extraHeaders"] = m.extraHeaders;
+    }
+    return j;
+}
+
+inline WireAddModel addModelFromJson(const utilxx_base::Json& j) {
+    WireAddModel m;
+    m.sessionId                = j.value("sessionId", std::string{});
+    m.name                     = j.value("name", std::string{});
+    m.modelType                = j.value("modelType", std::string{});
+    m.baseUrl                  = j.value("baseUrl", std::string{});
+    m.apiPath                  = j.value("apiPath", std::string{});
+    m.apiKey                   = j.value("apiKey", std::string{});
+    m.modelName                = j.value("modelName", std::string{});
+    m.modelContextMaxToken     = j.value("modelContextMaxToken", uint64_t{0});
+    m.maxConcurrentConnections = j.value("maxConcurrentConnections", uint64_t{5});
+    m.connectTimeoutSeconds = static_cast<int32_t>(j.value("connectTimeoutSeconds", 16));
+    m.readChunkTimeoutSeconds = static_cast<int32_t>(j.value("readChunkTimeoutSeconds", 60));
+    m.sslVerify = j.contains("sslVerify") ? (j.value("sslVerify", true) ? int8_t{1} : int8_t{0})
+                                          : int8_t{-1};
+    m.sendThinking            = j.value("sendThinking", false);
+    m.requestReasoningSummary = j.value("requestReasoningSummary", true);
+    m.imageInput              = j.value("imageInput", false);
+    m.audioInput              = j.value("audioInput", false);
+    m.videoInput              = j.value("videoInput", false);
+    if (j.contains("extraApiConfig") && j["extraApiConfig"].is_object()) {
+        m.extraApiConfig = j["extraApiConfig"];
+    }
+    if (j.contains("extraHeaders") && j["extraHeaders"].is_object()) {
+        m.extraHeaders = j["extraHeaders"];
+    }
+    return m;
+}
+
+inline utilxx_base::Json makeAddModelResultMsg(const WireAddModelResult& r) {
+    utilxx_base::Json j = {
+        {"type", MsgType::AddModelResult},
+        {"ok",   r.ok                   },
+        {"name", r.name                 },
+    };
+    if (!r.error.empty()) {
+        j["error"] = r.error;
+    }
+    return j;
+}
+
+inline WireAddModelResult addModelResultFromJson(const utilxx_base::Json& j) {
+    WireAddModelResult r;
+    r.ok    = j.value("ok", false);
+    r.name  = j.value("name", std::string{});
+    r.error = j.value("error", std::string{});
+    return r;
+}
+
 /// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
 inline std::string msgTypeView(const utilxx_base::JsonView& jv) {
     if (!jv.is_object()) {
@@ -1281,6 +1454,10 @@ utilxx_base::Json toJson(const WireGetPermissionState& msg);
 utilxx_base::Json toJson(const WireSetFullAuth& msg);
 
 utilxx_base::Json toJson(const WirePermissionState& msg);
+
+utilxx_base::Json toJson(const WireAddModel& msg);
+
+utilxx_base::Json toJson(const WireAddModelResult& msg);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

@@ -8,6 +8,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/io/ws_io_transport.h"
+#include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "utilxx/http_server.h"
 #include "utilxx/ws_client.h"
@@ -20,7 +21,10 @@
 #include <asio/use_awaitable.hpp>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -3319,6 +3323,186 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 新增模型配置 (WireAddModel: 校验 -> 写入 {data_dir}/agentxx-config.yaml ->
+// 注册 -> 当前会话立即切换)
+// ---------------------------------------------------------------------------
+
+/// 本组测试专用的临时数据目录 (唯一; 用例结束删除)
+static std::filesystem::path tempAddModelDataDir() {
+    auto path = std::filesystem::temp_directory_path()
+                / fmt::format(
+                    "agentxx_add_model_test_{}",
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                );
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);
+    return path;
+}
+
+static std::string readWholeFile(const std::filesystem::path& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    return std::string{
+        std::istreambuf_iterator<char>(ifs),
+        std::istreambuf_iterator<char>()
+    };
+}
+
+static asio::awaitable<void> test_add_model_config_via_wire() {
+    auto ex = co_await asio::this_coro::executor;
+
+    const auto dataDir = tempAddModelDataDir();
+    const auto cfgPath = dataDir / "agentxx-config.yaml";
+
+    auto cfg                         = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->dataDir                     = dataDir.string();
+    cfg->model.baseUrl               = "http://127.0.0.1:1";
+    cfg->model.apiKey                = "EMPTY";
+    cfg->model.modelName             = "existing";
+    agentxx::agent::ModelConfig existing;
+    existing.name                    = "existing";
+    existing.baseUrl                 = "http://127.0.0.1:1";
+    existing.apiKey                  = "EMPTY";
+    existing.modelName               = "existing";
+    cfg->availableModels["existing"] = existing;
+    auto agent                       = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+
+    // 最小装配: 不跑 agent->init() (测试不需要图/工具), 只补上模型注册表
+    // (selectModel 要求注册表里有该模型才会切换会话模型)
+    agent->agentContext->modelRegistry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    agent->agentContext->modelRegistry->registerModel("existing", existing);
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "add-model-session";
+    auto sc         = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        },
+        asio::detached
+    );
+
+    // ---- 1. 正常新增: 回执成功 + 模型信息带回新模型 + 当前会话切到新模型 ----
+    {
+        agentxx::agent::WireAddModel req;
+        req.sessionId      = "add-model-session";
+        req.name           = "added-by-wire";
+        req.modelType      = "openai";
+        req.baseUrl        = "https://api.example.com/v1";
+        req.apiKey         = "sk-wire";
+        req.modelName      = "gpt-wire";
+        req.imageInput     = true;
+        req.sendThinking   = true;
+        req.extraApiConfig = utilxx_base::Json::parse(R"({"reasoning_effort":"high"})");
+        clientT->send(agentxx::agent::WireMessage{req});
+
+        auto first = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(first.has_value());
+        if (first) {
+            auto* r = std::get_if<agentxx::agent::WireAddModelResult>(&*first);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_TRUE(r->ok);
+                XX_TEST_EXPECT_EQ(r->name, std::string("added-by-wire"));
+                XX_TEST_EXPECT_TRUE(r->error.empty());
+            }
+        }
+
+        auto second = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(second.has_value());
+        if (second) {
+            auto* mi = std::get_if<agentxx::agent::WireModelInfo>(&*second);
+            XX_TEST_EXPECT_TRUE(mi != nullptr);
+            if (mi) {
+                XX_TEST_EXPECT_EQ(mi->currentModel, std::string("added-by-wire"));
+                XX_TEST_EXPECT_EQ(mi->models.size(), size_t{2});
+                // 多模态能力随列表回推 (客户端据此决定是否显示附件按钮)
+                for (const auto& cap : mi->capabilities) {
+                    if (cap.name == "added-by-wire") {
+                        XX_TEST_EXPECT_TRUE(cap.imageInput);
+                    }
+                }
+            }
+        }
+
+        // 运行时状态: 注册进配置与注册表, 且当前会话已切换到新模型
+        XX_TEST_EXPECT_TRUE(
+            agent->agentContext->agentConfig->availableModels.contains("added-by-wire")
+        );
+        XX_TEST_EXPECT_TRUE(agent->agentContext->modelRegistry->hasModel("added-by-wire"));
+        XX_TEST_EXPECT_EQ(
+            agent->getCurrentModelName("add-model-session"),
+            std::string("added-by-wire")
+        );
+
+        // 配置文件落在数据目录下 (文件不存在时创建, 内容含新条目)
+        XX_TEST_EXPECT_TRUE(std::filesystem::exists(cfgPath));
+        const std::string text = readWholeFile(cfgPath);
+        XX_TEST_EXPECT_TRUE(text.find("added-by-wire") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("gpt-wire") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("reasoning_effort") != std::string::npos);
+    }
+
+    // ---- 2. 非法配置 (地址与 Key 都缺省): 回执失败, 不注册也不落盘 ----
+    {
+        agentxx::agent::WireAddModel bad;
+        bad.sessionId = "add-model-session";
+        bad.name      = "bad-model";
+        bad.modelType = "openai";
+        clientT->send(agentxx::agent::WireMessage{bad});
+
+        auto resp = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(resp.has_value());
+        if (resp) {
+            auto* r = std::get_if<agentxx::agent::WireAddModelResult>(&*resp);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_FALSE(r->ok);
+                XX_TEST_EXPECT_FALSE(r->error.empty());
+            }
+        }
+        XX_TEST_EXPECT_FALSE(agent->agentContext->agentConfig->availableModels.contains("bad-model"));
+        XX_TEST_EXPECT_EQ(
+            agent->getCurrentModelName("add-model-session"),
+            std::string("added-by-wire")
+        );
+    }
+
+    // ---- 3. 重名: 回执失败, 配置文件保持原样 ----
+    {
+        const std::string before = readWholeFile(cfgPath);
+        agentxx::agent::WireAddModel dup;
+        dup.sessionId = "add-model-session";
+        dup.name      = "added-by-wire";
+        dup.baseUrl   = "https://other.example.com";
+        dup.apiKey    = "sk-other";
+        clientT->send(agentxx::agent::WireMessage{dup});
+
+        auto resp = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(resp.has_value());
+        if (resp) {
+            auto* r = std::get_if<agentxx::agent::WireAddModelResult>(&*resp);
+            XX_TEST_EXPECT_TRUE(r != nullptr);
+            if (r) {
+                XX_TEST_EXPECT_FALSE(r->ok);
+            }
+        }
+        XX_TEST_EXPECT_EQ(readWholeFile(cfgPath), before);
+    }
+
+    sc->stop();
+    std::error_code ec;
+    std::filesystem::remove_all(dataDir, ec);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
     co_await test_remote_protocol_roundtrip();
@@ -3404,6 +3588,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] wire pagination roundtrip..." << std::endl;
     co_await test_wire_pagination_roundtrip();
+
+    std::cout << "  [remote] add model config via wire..." << std::endl;
+    co_await test_add_model_config_via_wire();
 
     co_return TestResult{g_remote_passed, g_remote_failed};
 }

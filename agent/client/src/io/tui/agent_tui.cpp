@@ -14,6 +14,8 @@
 #include "agentxx-client/util/clipboard.h"
 #include "agentxx-client/util/open_url.h"
 #include "agentxx/agent/config_static.h"
+#include "agentxx/agent/config_writer.h"
+#include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/permission.h"
@@ -42,6 +44,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <set>
 
 namespace agentxx::client {
 
@@ -1080,6 +1083,13 @@ void TUIClientAgentIO::openModelSelector() {
     }
     // 弹窗自身会把选中项对齐到当前使用中的模型 (首次渲染时按 cachedModelName)
     auto overlay = std::make_shared<ModelSelectorOverlay>(ctx_);
+    // 刚提交过新增模型时: 该模型已出现在列表里就选中它 (回执先到时
+    // cachedModelName 已更新, 由弹窗自身的对齐逻辑选中)
+    overlay->selectModelAfterLoad(pendingNewModel_);
+    // 顶部条目「添加模型配置」: 打开表单模态 (替换本弹窗; 取消后重新打开列表)
+    overlay->onAddModel([this] {
+        openModelConfigForm();
+    });
     // 确认选择: 记录为待应用选择 (setPendingModel), 同时立即向服务端发送
     // WireSelectModel 同步当前会话的模型设定。
     // 状态栏显示已由弹窗确认时更新 cachedModelName
@@ -1091,6 +1101,47 @@ void TUIClientAgentIO::openModelSelector() {
     });
     overlay->onClose([this] {
         modal_->popModal();
+    });
+    modal_->pushModal(overlay);
+    postRedraw();
+}
+
+void TUIClientAgentIO::openModelConfigForm() {
+    // server-io 未就绪时无法把配置交给 agent 侧 (边填边等更糟): 先提示再打开
+    if (ctx_.frameState && ctx_.frameState->connState != ConnState::Connected) {
+        showToast(std::string(tr("toast.notReady")));
+        postRedraw();
+        return;
+    }
+    auto overlay = std::make_shared<ModelConfigOverlay>(ctx_);
+    // 提交: 与 agent 侧同一套校验规则 (重名/类型/地址/数值范围) 先在本端拦一遍,
+    // 通过后发 WireAddModel —— 由 agent 侧落盘到 {data_dir}/agentxx-config.yaml、
+    // 注册到模型列表并让当前会话立即切换使用; 结果经 WireAddModelResult 回来
+    overlay->onSubmit([this](const agentxx::agent::ModelConfig& mc) -> std::string {
+        if (!transport_) {
+            return std::string{tr("model.form.errSend")};
+        }
+        std::set<std::string, std::less<>> names;
+        {
+            auto snap = sharedState_.readSnapshot();
+            for (const auto& name : snap->modelNames) {
+                names.insert(name);
+            }
+        }
+        if (auto check = agentxx::agent::validateNewModelConfig(mc, names); !check.has_value()) {
+            return check.error();
+        }
+        pendingNewModel_ = mc.name;
+        sendToPeer(agentxx::agent::io::addModelOfConfig(currentSessionId(), mc));
+        return {};
+    });
+    // 关闭 (保存成功或取消) 后回到模型选择弹窗: 重开在下一帧执行, 不在当前
+    // 弹窗的事件回调里重建模态栈
+    overlay->onClose([this] {
+        modal_->popModal();
+        enqueueUiAction([this] {
+            openModelSelector();
+        });
     });
     modal_->pushModal(overlay);
     postRedraw();
@@ -1911,6 +1962,25 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     st.fullAuthorized = m.fullAuth;
                     postRedraw();
                 }
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireAddModelResult>) {
+                // 新增模型配置的回执: 成功时立即使用该模型 (状态栏 + 下一条消息携带;
+                // 与 WireSelectModel 同一机制), 失败时把 agent 侧的原因提示给用户
+                if (m.ok) {
+                    setPendingModel(m.name);
+                }
+                const bool        ok   = m.ok;
+                const std::string name = m.name;
+                const std::string err  = m.error;
+                // 提示与"待选中模型"清理属 UI 线程独占状态: 投递到 UI 线程执行
+                enqueueUiAction([this, ok, name, err] {
+                    pendingNewModel_.clear();
+                    if (ok) {
+                        showToast(trf("toast.modelAdded", name));
+                    } else {
+                        showToast(trf("toast.modelAddFailed", err));
+                    }
+                });
+                postRedraw();
             }
         },
         std::move(msg)

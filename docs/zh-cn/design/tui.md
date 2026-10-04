@@ -294,6 +294,11 @@ struct UiActionItem {
 - 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由宿主维护, 提交经
   动作通道回传 `__submit` (参数 `{"values":{控件 id: 值}}`), 取消回传 `__cancel`,
   `commitOnPick` 的候选项点击即提交。插件不接触 UI 线程, 只收结果。
+- 输入类控件 (`text` / `number`) 渲染为**整行输入框** (与主消息输入框同一套形态):
+  整行铺 `inputBgColor` 底色、左右各 1 格内边距、**整行可点** (命中区域延伸到行右边界),
+  点击行内任意位置即聚焦该控件; 控件描述的 `help` 作为输入框的**占位文本**
+  (值为空时用弱化色显示, 一输入就隐藏), 不再单起一行说明; `number` 两端保留
+  `[ - ]` / `[ + ]` 步进按钮, 中间值区域撑满其余宽度 (点击即聚焦)。
 - 中断表单 (`InterruptView`) 与插件表单共用同一实现 (`ui_components` 的控件渲染 +
   `UiFormState` + 点击/键盘/校验/取值函数), 差别只有结果去处 (中断经结果通道回传
   `{"values":{...}}`)。中断侧的命中区域记录 "行元素框 + 行内区域" (控件所在行由
@@ -436,6 +441,52 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 播放期间 banner 子项**不可跨帧缓存** (`MessageListComponent::buildItem` 置
   `cacheable = false`): 缓存命中的旧 Element 会停在动画中的某一帧, 不再随帧推进。
 - 测试: `agentxx_test banner_art` (帧结构/前缀不变/末帧一致/逐帧收敛 + 播放与空列表接入)。
+
+### 2.11 添加模型配置 (选择模型弹窗 → 表单 → 线消息 → 服务端落盘)
+
+模型列表来自服务端 (`WireModelInfo`), 模型本身是服务端配置 (`model.list`), 因此
+"添加模型" 由 **界面收集输入 + 服务端落盘并注册** 两段组成, 界面侧不写任何配置文件。
+
+- 入口: **选择模型弹窗 (F2 / 状态栏模型名) 顶部固定条目「+ 添加模型配置」**
+  (`ModelSelectorOverlay::kAddModelId`)。条目表 = 该固定条目 + 服务端模型列表
+  (§2.4 的 `UiActionList`); 激活它只调用 `onAddModel` 回调, 不置 `closeRequested_`
+  (弹窗保持选中当前位置, 便于取消后回到列表)。
+- 表单弹窗
+  [ModelConfigOverlay](/agent/client/include/agentxx-client/io/tui/components/overlays.h)
+  (模态只有一个, 因此它**替换**选择模型弹窗, 取消/提交后由
+  `TUIClientAgentIO::openModelConfigForm` 经 `enqueueUiAction` 重新打开列表):
+  - 字段: `name`(必填, 唯一) / `type`(openai / openai-responses / anthropic) /
+    `base_url` / `api_path` / `api_key` / `model_name` +
+    高级项 (`model_context_max_token` / 连接与读取超时 / 最大并发连接 /
+    `send_thinking` / `request_reasoning_summary` / 三态 `ssl_verify` /
+    图片·音频·视频输入 / `extra_headers` / `extra_api_config`);
+  - 输入框为整行形态 (见 §2.6): 整行底色 + 整行可点聚焦, 字段的 `help` 作为占位文本
+    (空值时显示, 一输入就隐藏, 与主消息输入框一致);
+  - 控件树用组件描述层的构建器 (`pluginxx::ui::build::control`) 拼出, 渲染/命中/键盘
+    输入全部走 §2.6 的同一套表单实现 (`renderItems` + `handleFormControlHit` +
+    `handleFormKeyInput`), 提交行是 `__submit` / `__cancel` 两个按钮;
+  - 字段级校验 (必填、JSON 对象文本、数值范围) 在
+    `ModelConfigOverlay::configOfValues` 完成, 失败时把错误文本显示在表单底部并保持打开;
+  - 取值 → `agentxx::agent::ModelConfig` 由 `configOfValues` 负责 (空 API Key 归一为
+    `EMPTY`, `ssl_verify` 三态映射为 `std::nullopt`/`true`/`false`)。
+- 提交路径: `WireAddModel` (客户端 → 服务端, 见 wire_protocol.h) →
+  `SessionServerAgentIO::handleAddModel`:
+  1. 校验 (`agentxx::agent::validateNewModelConfig`, 与客户端同一份规则 → 重名/类型/
+     地址/数值范围);
+  2. 写入 `{data_dir}/agentxx-config.yaml` 的 `model.list`
+     (`agentxx::agent::appendModelConfigToYamlFile`, 文件不存在则创建;
+     按行文本插入, **保留原文件注释与写法**; 写入前先在内存里回读校验, 失败不落盘);
+  3. 注册到 `ModelProviderRegistry` 与 `AgentConfig::availableModels`
+     (立即出现在模型列表里, 可切换; 无需重启);
+  4. 先把配置落盘再注册: 写盘失败则不注册, 避免"本次能用、重启后消失"的半生效状态;
+  5. 回执 `WireAddModelResult` (失败带原因文本) + 回推 `WireModelInfo` 刷新列表。
+- 保存成功即生效: 回执成功时客户端 `setPendingModel`(状态栏显示新模型, 下一条消息携带);
+  重新打开的列表会选中它 (回执先到时按 `cachedModelName`, 后到时按
+  `ModelSelectorOverlay::selectModelAfterLoad`)。失败时 toast 显示服务端原因,
+  列表与当前模型不变。
+- 测试: `agentxx_test config_loader` (写回/校验规则/CRLF/重名与不支持结构)、
+  `tui_settings` (顶部条目与表单取值映射)、`util_misc` (线消息往返)、
+  `remote_agent` (端到端: 校验 → 落盘 → 注册 → 立即切换 + 非法/重名分支)。
 
 ---
 

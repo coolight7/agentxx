@@ -596,6 +596,126 @@ void test_wire_permission_state_protocol() {
     }
 }
 
+void test_wire_add_model_protocol() {
+    using namespace agentxx::agent;
+    using namespace agentxx::agent::io;
+
+    // 1. 新增模型请求: 关键字段往返 (含可选字段与默认值口径)
+    {
+        WireAddModel req;
+        req.sessionId                = "sess-1";
+        req.name                     = "my-model";
+        req.modelType                = "openai-responses";
+        req.baseUrl                  = "https://api.example.com/v1";
+        req.apiPath                  = "/responses";
+        req.apiKey                   = "sk-test";
+        req.modelName                = "gpt-x";
+        req.modelContextMaxToken     = 200000;
+        req.maxConcurrentConnections = 8;
+        req.connectTimeoutSeconds    = 30;
+        req.readChunkTimeoutSeconds  = 90;
+        req.sslVerify                = 0; // 不验证
+        req.sendThinking             = true;
+        req.requestReasoningSummary  = false;
+        req.imageInput               = true;
+        req.extraApiConfig           = utilxx_base::Json::parse(R"({"reasoning_effort":"high"})");
+        req.extraHeaders             = utilxx_base::Json::parse(R"({"X-Gateway":"gw1"})");
+
+        auto reqJson = toJson(req);
+        XX_TEST_EXPECT_EQ(reqJson["type"].get<std::string>(), std::string(MsgType::AddModel));
+        XX_TEST_EXPECT_EQ(reqJson["name"].get<std::string>(), std::string("my-model"));
+        XX_TEST_EXPECT_TRUE(reqJson["sendThinking"].get<bool>());
+        XX_TEST_EXPECT_FALSE(reqJson["requestReasoningSummary"].get<bool>());
+        XX_TEST_EXPECT_FALSE(reqJson["sslVerify"].get<bool>());
+
+        WireMessage wireMsg = req;
+        auto        deser   = deserialize(serialize(wireMsg));
+        XX_TEST_EXPECT_TRUE(deser.has_value());
+        auto* p = std::get_if<WireAddModel>(&deser.value());
+        XX_TEST_EXPECT_TRUE(p != nullptr);
+        if (p) {
+            XX_TEST_EXPECT_EQ(p->sessionId, std::string("sess-1"));
+            XX_TEST_EXPECT_EQ(p->name, std::string("my-model"));
+            XX_TEST_EXPECT_EQ(p->modelType, std::string("openai-responses"));
+            XX_TEST_EXPECT_EQ(p->baseUrl, std::string("https://api.example.com/v1"));
+            XX_TEST_EXPECT_EQ(p->apiPath, std::string("/responses"));
+            XX_TEST_EXPECT_EQ(p->apiKey, std::string("sk-test"));
+            XX_TEST_EXPECT_EQ(p->modelName, std::string("gpt-x"));
+            XX_TEST_EXPECT_EQ(p->modelContextMaxToken, uint64_t{200000});
+            XX_TEST_EXPECT_EQ(p->maxConcurrentConnections, uint64_t{8});
+            XX_TEST_EXPECT_EQ(p->connectTimeoutSeconds, int32_t{30});
+            XX_TEST_EXPECT_EQ(p->readChunkTimeoutSeconds, int32_t{90});
+            XX_TEST_EXPECT_EQ(p->sslVerify, int8_t{0});
+            XX_TEST_EXPECT_TRUE(p->sendThinking);
+            XX_TEST_EXPECT_FALSE(p->requestReasoningSummary);
+            XX_TEST_EXPECT_TRUE(p->imageInput);
+            XX_TEST_EXPECT_EQ(p->extraApiConfig.value("reasoning_effort", std::string{}), "high");
+            XX_TEST_EXPECT_EQ(p->extraHeaders.value("X-Gateway", std::string{}), "gw1");
+        }
+    }
+
+    // 2. 缺省字段: sslVerify 未指定 -> -1 (表示不写该项), 数值取默认
+    {
+        auto parsed = addModelFromJson(utilxx_base::Json::parse(R"({"type":"add_model","name":"m"})"));
+        XX_TEST_EXPECT_EQ(parsed.sslVerify, int8_t{-1});
+        XX_TEST_EXPECT_EQ(parsed.maxConcurrentConnections, uint64_t{5});
+        XX_TEST_EXPECT_EQ(parsed.connectTimeoutSeconds, int32_t{16});
+        XX_TEST_EXPECT_EQ(parsed.readChunkTimeoutSeconds, int32_t{60});
+        XX_TEST_EXPECT_TRUE(parsed.requestReasoningSummary);
+        XX_TEST_EXPECT_FALSE(parsed.sendThinking);
+    }
+
+    // 3. 模型配置 <-> 线消息转换: 未指定 TLS 校验时保持 nullopt
+    {
+        ModelConfig mc;
+        mc.name                = "cfg-model";
+        mc.baseUrl             = "https://api.example.com";
+        mc.apiKey              = "k";
+        mc.modelContenxtMaxToken = 1024;
+        mc.extraHeaders["X-A"] = "1";
+        auto wire              = addModelOfConfig("sess", mc);
+        XX_TEST_EXPECT_EQ(wire.sslVerify, int8_t{-1});
+        auto back = addModelToConfig(wire);
+        XX_TEST_EXPECT_EQ(back.name, std::string("cfg-model"));
+        XX_TEST_EXPECT_EQ(back.modelContenxtMaxToken, size_t{1024});
+        XX_TEST_EXPECT_FALSE(back.sslVerify.has_value());
+        XX_TEST_EXPECT_TRUE(back.extraHeaders.size() == 1);
+        XX_TEST_EXPECT_EQ(back.extraHeaders["X-A"], std::string("1"));
+        // 空 API Key 按 "EMPTY" 归一 (无鉴权服务)
+        ModelConfig noKey;
+        noKey.name = "no-key";
+        noKey.apiKey.clear();
+        noKey.baseUrl = "http://127.0.0.1:8080/v1";
+        XX_TEST_EXPECT_EQ(addModelToConfig(addModelOfConfig("s", noKey)).apiKey, std::string("EMPTY"));
+    }
+
+    // 4. 结果回执: 成功/失败往返
+    {
+        WireAddModelResult ok;
+        ok.ok   = true;
+        ok.name = "added-model";
+        auto okJson = toJson(ok);
+        XX_TEST_EXPECT_EQ(okJson["type"].get<std::string>(), std::string(MsgType::AddModelResult));
+        XX_TEST_EXPECT_TRUE(okJson["ok"].get<bool>());
+        XX_TEST_EXPECT_FALSE(okJson.contains("error"));
+
+        WireAddModelResult fail;
+        fail.ok    = false;
+        fail.name  = "bad-model";
+        fail.error = "模型名称已存在: bad-model";
+        WireMessage failMsg = fail;
+        auto        deser   = deserialize(serialize(failMsg));
+        XX_TEST_EXPECT_TRUE(deser.has_value());
+        auto* p = std::get_if<WireAddModelResult>(&deser.value());
+        XX_TEST_EXPECT_TRUE(p != nullptr);
+        if (p) {
+            XX_TEST_EXPECT_FALSE(p->ok);
+            XX_TEST_EXPECT_EQ(p->name, std::string("bad-model"));
+            XX_TEST_EXPECT_EQ(p->error, std::string("模型名称已存在: bad-model"));
+        }
+    }
+}
+
 void test_cross_device_determination() {
     agentxx::client::TUICtx ctx;
 
@@ -644,6 +764,7 @@ TestResult testUtilMisc() {
     test_md5_and_device_id();
     test_wire_list_dir_protocol();
     test_wire_permission_state_protocol();
+    test_wire_add_model_protocol();
     test_cross_device_determination();
 
     return TestResult{g_um_passed, g_um_failed};

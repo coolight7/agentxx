@@ -939,23 +939,32 @@ bool controlChecked(const Item& item, const UiFormState* form) {
     return value.is_boolean() && value.get<bool>();
 }
 
-/// 输入框显示宽度 (" " + 值 + 右侧补齐 + " "; 最小 4 列, 与命中区域宽度一致)
+/// 输入框显示宽度 (" " + 值 + 右侧补齐 + " "; 最小 4 列; 仅用于宽度不可知时的兜底命中区域)
 int inputFieldWidth(std::string_view value) {
     return std::max(4, pluginxx::ui::displayWidth(value) + 2);
 }
 
-/// 输入框元素 (背景填充表示可编辑; 获得键盘焦点时加粗下划线)
-Element inputField(std::string value, const Item& item, const UiRenderCtx& ctx) {
+/// 输入框行 (整行: 左右各 1 格内边距 + 输入框底色, 与主消息输入框同一形态)
+///
+/// - 占位文本取控件 help: 与主消息输入框一致 —— 值为空时显示, 一输入就隐藏
+/// - 值为空时文字用弱化色 (占位), 有值时用输入文字色
+/// - 获得键盘焦点时加粗加下划线 (与既有控件一致)
+/// - 文字元素水平撑满 (`xflex`): 视觉上是一条整行输入框, 命中区域也按整行登记
+Element inputFieldRow(
+    const std::string& value,
+    const std::string& placeholder,
+    const Item&        item,
+    const UiRenderCtx& ctx
+) {
     const auto& theme = *ctx.theme;
-    const int   width = inputFieldWidth(value);
-    const int   pad   = std::max(0, width - 2 - pluginxx::ui::displayWidth(value));
-    Element     el    = text(" " + value + std::string(static_cast<size_t>(pad), ' ') + " ")
-                 | bgcolor(theme.inputBgColor)
-                 | color(value.empty() ? theme.hintColor : theme.inputTextColor);
+    const bool  empty = value.empty();
+    const std::string& shown = empty ? placeholder : value;
+    Element el = text(" " + shown + " ")
+                 | color(empty ? theme.hintColor : theme.inputTextColor) | xflex;
     if (ctx.form != nullptr && ctx.form->focusedId == item.id) {
         el = el | bold | underlined;
     }
-    return el | xflex_shrink;
+    return hbox({std::move(el)}) | bgcolor(theme.inputBgColor);
 }
 
 /// 数值控件的步进按钮 ("[ - ]" / "[ + ]")
@@ -1639,10 +1648,13 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         const std::string label = textOf(item.label, ctx);
         const std::string help  = textOf(item.help, ctx);
         const bool inlineLabel  = (item.control == "checkbox" || item.control == "switch");
+        // 输入类控件 (text/number): help 作为输入框内的占位文本 (空值时显示),
+        // 不再单起一行说明 (与主消息输入框的占位行为一致)
+        const bool inputLike    = (item.control == "text" || item.control == "number");
         if (!label.empty() && !inlineLabel) {
             pushPlain(text(label) | color(theme.accentColor) | bold, 1);
         }
-        if (!help.empty()) {
+        if (!help.empty() && !inputLike) {
             const int helpW = std::max(1, contentWidth(ctx));
             for (const auto& line : wrapTextToLines(help, helpW)) {
                 pushPlain(text(line) | color(theme.hintColor) | theme.dim(), 1);
@@ -1663,28 +1675,40 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             }
             pushPlain(std::move(el), 1, std::move(regions));
         } else if (item.control == "text") {
-            Element                  el = inputField(controlEditText(item, ctx.form), item, ctx);
+            // 整行输入框: 点击行内任意位置聚焦输入 (w = 0 表示延伸到行右边界)
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
                 addControlRegion(regions, ctx, item, 0, 0, 0, 0);
             }
-            pushPlain(hbox({std::move(el)}), 1, std::move(regions));
+            pushPlain(
+                inputFieldRow(controlEditText(item, ctx.form), help, item, ctx),
+                1,
+                std::move(regions)
+            );
         } else if (item.control == "number") {
-            const std::string        value   = controlEditText(item, ctx.form);
-            constexpr int            kMinusW = 5; // "[ - ]"
-            const int                valueW  = inputFieldWidth(value);
-            Element                  el      = hbox({
+            // 整行输入框 + 两端步进按钮 "[ - ]" / "[ + ]" (值区域撑满其余宽度)
+            const std::string value  = controlEditText(item, ctx.form);
+            constexpr int     kStepW = 5; // "[ - ]" 与 "[ + ]" 的显示宽度
+            const int         rowW   = contentWidth(ctx);
+            Element           el     = hbox({
                 inputStepButton("[ - ]", theme),
-                text(" "),
-                inputField(value, item, ctx),
-                text(" "),
+                inputFieldRow(value, help, item, ctx) | flex,
                 inputStepButton("[ + ]", theme),
             });
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
-                addControlRegion(regions, ctx, item, 0, 0, kMinusW, 0);
-                addControlRegion(regions, ctx, item, kMinusW + 1, 0, valueW, 2);
-                addControlRegion(regions, ctx, item, kMinusW + 1 + valueW + 1, 0, kMinusW, 1);
+                addControlRegion(regions, ctx, item, 0, 0, kStepW, 0);
+                if (rowW > kStepW * 2) {
+                    // 宽度可知: "+" 贴右边界, 值区域延伸到 "+" 之前
+                    // (顺序在 "+" 之后登记: 命中查询取第一个匹配项)
+                    addControlRegion(regions, ctx, item, rowW - kStepW, 0, kStepW, 1);
+                    addControlRegion(regions, ctx, item, kStepW, 0, 0, 2);
+                } else {
+                    // 宽度未知 (不限宽渲染): 按内容宽度兜底
+                    const int valueW = inputFieldWidth(value.empty() ? help : value);
+                    addControlRegion(regions, ctx, item, kStepW, 0, valueW, 2);
+                    addControlRegion(regions, ctx, item, kStepW + valueW, 0, kStepW, 1);
+                }
             }
             pushPlain(std::move(el), 1, std::move(regions));
         } else if (item.control == "buttons") {

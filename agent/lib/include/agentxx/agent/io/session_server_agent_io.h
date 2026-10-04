@@ -238,6 +238,25 @@ private:
     /// - `return` agent 已释放时返回除空模型名外全空的响应
     WireModelInfo buildModelInfo(std::string_view sessionId);
 
+    /// 处理客户端新增模型配置请求 (WireAddModel)
+    ///
+    /// 顺序: 校验 (与客户端表单同一套规则, 见
+    /// agentxx::agent::validateNewModelConfig) → 写入 {dataDir}/agentxx-config.yaml
+    /// (文件不存在则创建) → 注册到 ModelProviderRegistry 与
+    /// AgentConfig::availableModels → 当前会话切换为新模型 → 回执
+    /// (WireAddModelResult) + 回推模型信息 (WireModelInfo)。
+    ///
+    /// 先落盘再注册: 写盘失败时不注册, 避免出现"本次能用、重启后模型消失"的
+    /// 半生效状态; 任何失败都经回执的 error 文本告知客户端。
+    ///
+    /// - `args`:
+    ///     - [req] 客户端提交的模型配置
+    ///     - [sender] 发起请求的客户端 transport (回执与模型信息只发回给它)
+    void handleAddModel(
+        const WireAddModel&                          req,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
+
     /// 向客户端推送当前上下文统计 (target 指定时仅发向该客户端; 为空时向所有客户端广播)
     void sendContextStats(const std::shared_ptr<AgentIOTransportBase>& target = nullptr);
 

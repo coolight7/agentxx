@@ -236,34 +236,34 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
 |---|---|---|---|---|---|
 | LLM-1 | 模型能力元数据集中化 | codex、dsh、opencode、pi、openclaw | P0 | `ModelConfig` 增加上下文窗口、最大输出、模态、reasoning、并行工具、严格 schema、缓存能力和价格；provider 请求和压缩统一读取。 | 待定，已实现一部分 |
-| LLM-2 | 错误分类和重试策略 | dsh、opencode、pi、codex、openclaw | P0 | 识别 overflow/auth/rate-limit/timeout/server/invalid-request；读取 `retry-after`，使用有界指数退避和抖动；额度/计费错误不重试。策略数据和执行器分开。 |  |
-| LLM-3 | 溢出一次性压缩重试 | opencode、openclaw、dsh、harness | P0 | provider 报上下文超限且本轮没有新副作用时压缩一次，复用已经完成的工具结果，最多重试一次，再走硬截断。 |
-| LLM-4 | 静默看门狗 | openclaw、dsh、opencode | P0 | 记录最后 chunk 时间，默认 120 秒可按模型覆盖；只处理中途无输出，不替代整体执行预算。 |
-| LLM-5 | 假 provider | pi、opencode、harness、codex | P0 | provider 可注入固定流、错误、延迟和 tool call；覆盖重试、压缩、中断、取消和工具循环，不依赖真实网络或额度。录制回放在同一注入接缝中作为后续 P1 扩展。 |
-| LLM-13 | HTTP 录制回放 | opencode、harness | P1 | 新增 `agent/test/http_recorder` 或可注入传输层，按请求摘要和顺序保存/回放响应流；敏感 headers 和 API key 脱敏，固定装置不进入生产代码。 |
-| LLM-6 | 流式组装唯一实现 | dsh、opencode、codex | P1 | provider 只解析协议 chunk，统一组装文本、thinking、tool call 和结束状态；不让 TUI 和 stdio 各自拼接。 |
-| LLM-7 | 消费端退出取消 | codex、dsh、opencode | P1 | 流对象析构或消费方放弃时 RAII 取消 provider，避免连接继续占用。 |
-| LLM-8 | 缓存断点和缓存用量 | openclaw、opencode、codex | P1 | 先完成 PRM-1/CTX-1，再给 Anthropic 加可选 breakpoint；记录 cache read/write 到 usage ledger。OpenAI 侧只依赖稳定前缀和 provider 自身缓存能力，不假设存在可控断点。 |
-| LLM-9 | 轮次局部模型回退 | openclaw、dsh | P1 | fallback 只影响当前轮，不改会话选中的模型；结果记录实际模型。 |
-| LLM-10 | 凭据来源分层 | opencode、pi | P2 | API key、环境变量、设置库、可选 OAuth 刷新分离；不立即引入完整 OAuth 生态。 |
-| LLM-11 | 会话级/轮次级连接状态 | codex | P2 | provider 粘性令牌和 websocket 增量状态只在同一轮复用；认证/回退状态按会话保存。 |
-| LLM-12 | 结构化输出统一入口 | opencode、pi | P2 | 标题、摘要、计划等场景可通过强制工具式 schema 获得 JSON；不影响现有普通工具协议。 |
+| LLM-2 | 错误分类和重试策略 | dsh、opencode、pi、codex、openclaw | P0 | 识别 overflow/auth/rate-limit/timeout/server/invalid-request；读取 `retry-after`，使用有界指数退避和抖动；额度/计费错误不重试。策略数据和执行器分开。 | 可行，各家api错误内容不同，适配可参考这些项目的实现 |
+| LLM-3 | 溢出一次性压缩重试 | opencode、openclaw、dsh、harness | P0 | provider 报上下文超限且本轮没有新副作用时压缩一次，复用已经完成的工具结果，最多重试一次，再走硬截断。 | 待定，待进一步理解 |
+| LLM-4 | 静默看门狗 | openclaw、dsh、opencode | P0 | 记录最后 chunk 时间，默认 120 秒可按模型覆盖；只处理中途无输出，不替代整体执行预算。 | 不考虑，已实现 |
+| LLM-5 | 假 provider | pi、opencode、harness、codex | P0 | provider 可注入固定流、错误、延迟和 tool call；覆盖重试、压缩、中断、取消和工具循环，不依赖真实网络或额度。录制回放在同一注入接缝中作为后续 P1 扩展。 | 可行，测试中似乎已经实现 |
+| LLM-6 | 流式组装唯一实现 | dsh、opencode、codex | P1 | provider 只解析协议 chunk，统一组装文本、thinking、tool call 和结束状态；不让 TUI 和 stdio 各自拼接。 | 待定，似乎可行 |
+| LLM-7 | 消费端退出取消 | codex、dsh、opencode | P1 | 流对象析构或消费方放弃时 RAII 取消 provider，避免连接继续占用。 | 可行 |
+| LLM-8 | 缓存断点和缓存用量 | openclaw、opencode、codex | P1 | 先完成 PRM-1/CTX-1，再给 Anthropic 加可选 breakpoint；记录 cache read/write 到 usage ledger。OpenAI 侧只依赖稳定前缀和 provider 自身缓存能力，不假设存在可控断点。 | 可行 |
+| LLM-9 | 轮次局部模型回退 | openclaw、dsh | P1 | fallback 只影响当前轮，不改会话选中的模型；结果记录实际模型。 | 待定 |
+| LLM-10 | 凭据来源分层 | opencode、pi | P2 | API key、环境变量、设置库、可选 OAuth 刷新分离；不立即引入完整 OAuth 生态。 | 待定 |
+| LLM-11 | 会话级/轮次级连接状态 | codex | P2 | provider 粘性令牌和 websocket 增量状态只在同一轮复用；认证/回退状态按会话保存。 | 待定 |
+| LLM-12 | 结构化输出统一入口 | opencode、pi | P2 | 标题、摘要、计划等场景可通过强制工具式 schema 获得 JSON；不影响现有普通工具协议。 | 待定 |
+| LLM-13 | HTTP 录制回放 | opencode、harness | P1 | 新增 `agent/test/http_recorder` 或可注入传输层，按请求摘要和顺序保存/回放响应流；敏感 headers 和 API key 脱敏，固定装置不进入生产代码。 | 可行 |
 
 ---
 
 ## 7. 上下文压缩和预算
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| CMP-1 | `ContextBudget` 单一口径 | openclaw、dsh、harness、opencode | P0 | 集中模型上限、工具 schema、输出预留、buffer、阈值、兜底阈值；统计、预检、压缩共用。 |
-| CMP-2 | 剪枝→度量→摘要 | dsh、openclaw、pi | P1 | 先做确定性工具结果剪枝和噪音清理，再测量，最后才调用摘要模型；每步记录前后 token 和消息范围。 |
-| CMP-3 | 结构化摘要和尾部原文 | opencode、pi、openclaw、codex | P0 | 摘要包含目标、完成、进行中、阻塞、下一步、关键路径/命令/错误；最近消息按显式 token 预算保留。 |
-| CMP-4 | 保留用户意图和原文可回取 | codex、pi、dsh | P1 | 摘要不把用户目标全部丢掉；被压缩原文保留为不可变历史或 share_store 定位符，必要时再投影回模型。 |
-| CMP-5 | 压缩 started/ended 和幂等代次 | dsh、opencode、openclaw | P1 | 压缩开始先写标记，完成才替换上下文；失败或重启可识别；`compactionGeneration` 防同一段重复压缩。 |
-| CMP-6 | 压缩恢复元数据 | codex、opencode、pi | P1 | 记录区间、触发原因、模型、tokensBefore/After、保留段、摘要用量和时间。 |
-| CMP-7 | 压缩质量门 | openclaw、dsh | P2 | 非空、结构标题、关键标识符校验；失败重试一次，仍失败走确定性策略，不写坏摘要。 |
-| CMP-8 | 压缩请求缓存前缀重建 | dsh、codex | P2 | 系统提示、工具 schema、压缩区间先组成稳定前缀，压缩指令放末尾；依赖 provider 缓存能力。 |
-| CMP-9 | 压缩前写记忆提醒 | openclaw | P2 | 仅在用户或配置启用时插入提示，不改变压缩正确性。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| CMP-1 | `ContextBudget` 单一口径 | openclaw、dsh、harness、opencode | P0 | 集中模型上限、工具 schema、输出预留、buffer、阈值、兜底阈值；统计、预检、压缩共用。 | 待定 |
+| CMP-2 | 剪枝→度量→摘要 | dsh、openclaw、pi | P1 | 先做确定性工具结果剪枝和噪音清理，再测量，最后才调用摘要模型；每步记录前后 token 和消息范围。 | 不考虑，已实现部分 |
+| CMP-3 | 结构化摘要和尾部原文 | opencode、pi、openclaw、codex | P0 | 摘要包含目标、完成、进行中、阻塞、下一步、关键路径/命令/错误；最近消息按显式 token 预算保留。 | 待定，已实现一部分 |
+| CMP-4 | 保留用户意图和原文可回取 | codex、pi、dsh | P1 | 摘要不把用户目标全部丢掉；被压缩原文保留为不可变历史或 share_store 定位符，必要时再投影回模型。 | 待定 |
+| CMP-5 | 压缩 started/ended 和幂等代次 | dsh、opencode、openclaw | P1 | 压缩开始先写标记，完成才替换上下文；失败或重启可识别；`compactionGeneration` 防同一段重复压缩。 | 不考虑 |
+| CMP-6 | 压缩恢复元数据 | codex、opencode、pi | P1 | 记录区间、触发原因、模型、tokensBefore/After、保留段、摘要用量和时间。 |  |
+| CMP-7 | 压缩质量门 | openclaw、dsh | P2 | 非空、结构标题、关键标识符校验；失败重试一次，仍失败走确定性策略，不写坏摘要。 |  |
+| CMP-8 | 压缩请求缓存前缀重建 | dsh、codex | P2 | 系统提示、工具 schema、压缩区间先组成稳定前缀，压缩指令放末尾；依赖 provider 缓存能力。 |  |
+| CMP-9 | 压缩前写记忆提醒 | openclaw | P2 | 仅在用户或配置启用时插入提示，不改变压缩正确性。 |  |
 
 保留当前 `hardTruncate` 的“保证请求可发送”原则；不要用质量优化路径取代可靠兜底。
 
@@ -410,15 +410,15 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ## 14. 检索、附件、输出、诊断和可观测性
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| RET-1 | 会话全文检索 | codex、dsh、pi、harness | P1 | 先给 view_message 建 FTS5 或轻量关键词索引，支持标题、命中片段和分页；不先做跨库复杂投影。 |
-| RET-2 | 独立标题元数据 | codex、dsh、pi | P1 | `meta.title/titleSource`，自动标题可被用户改名；列表和检索统一使用。 |
-| RET-3 | 附件校验元数据 | dsh、harness、openclaw | P1 | 当前已有大小和附件数量上限；补实际 mime/size/hash/像素验证、路径读取前权限、HTTP(S) 策略。 |
-| RET-4 | 结构化 spill 定位符 | dsh、codex、openclaw | P1 | 在现有 share_store 上补字节数、行数、首尾预览和读取提示；不复制完整内容到第二个存储。 |
-| RET-5 | 统一 opId/callId | harness、codex、dsh | P0 | 每轮、工具调用、插件操作和 wire 事件带关联 id；日志上下文统一。 |
-| OBS-1 | 诊断入口 | harness、openclaw、codex | P1 | `get_diagnostics` 输出内存、线程、连接、队列、作业、插件、模型、缓存、最近错误和持久化状态。 |
-| OBS-2 | telemetry 内容边界 | pi、dsh、harness | P1 | `turn/modelcall/tool/session.write` span；属性只允许 id、名称、计数、时长、状态和用量，禁止 prompt、参数、结果、路径内容、凭据和 headers。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| RET-1 | 会话全文检索 | codex、dsh、pi、harness | P1 | 先给 view_message 建 FTS5 或轻量关键词索引，支持标题、命中片段和分页；不先做跨库复杂投影。 | 待定 |
+| RET-2 | 独立标题元数据 | codex、dsh、pi | P1 | `meta.title/titleSource`，自动标题可被用户改名；列表和检索统一使用。 | 可行 |
+| RET-3 | 附件校验元数据 | dsh、harness、openclaw | P1 | 当前已有大小和附件数量上限；补实际 mime/size/hash/像素验证、路径读取前权限、HTTP(S) 策略。 | 不考虑 |
+| RET-4 | 结构化 spill 定位符 | dsh、codex、openclaw | P1 | 在现有 share_store 上补字节数、行数、首尾预览和读取提示；不复制完整内容到第二个存储。 | 不考虑 |
+| RET-5 | 统一 opId/callId | harness、codex、dsh | P0 | 每轮、工具调用、插件操作和 wire 事件带关联 id；日志上下文统一。 | 待定 |
+| OBS-1 | 诊断入口 | harness、openclaw、codex | P1 | `get_diagnostics` 输出内存、线程、连接、队列、作业、插件、模型、缓存、最近错误和持久化状态。 | 不考虑 |
+| OBS-2 | telemetry 内容边界 | pi、dsh、harness | P1 | `turn/modelcall/tool/session.write` span；属性只允许 id、名称、计数、时长、状态和用量，禁止 prompt、参数、结果、路径内容、凭据和 headers。 |  |
 | OBS-3 | 关键指标 | harness、codex、pi | P2 | 首 token、轮次耗时、工具成功/失败/超时、压缩次数、上下文 token、缓存命中；复用 benchmark 基础设施。 |
 | OBS-4 | 诊断包导出 | pi、harness | P2 | 会话摘要、日志尾部、脱敏配置、插件和环境，便于报障。 |
 | OBS-5 | 模块级日志开关 | harness | P2 | 按模块和插件前缀调整日志级别，避免全局 debug 破坏 TUI。 |
@@ -429,23 +429,23 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 ## 15. 测试和质量门禁
 
-| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 |
-|---|---|---|---|---|
-| TST-1 | 假 provider | pi、opencode、harness、codex | P0 | provider 可注入固定流、错误、延迟和 tool call；覆盖重试、压缩、中断、取消和工具循环，不依赖真实网络或额度。 |
-| TST-2 | Wire 往返和 schema 一致性 | codex、harness、pi、opencode | P0 | 每条消息 round-trip；生成 schema 与实现对比。 |
-| TST-3 | 持久化迁移/恢复测试 | dsh、opencode、pi、harness | P0 | 老库、升级失败、崩溃未闭合轮次、writer 冲突、事件 after 重放。 |
-| TST-4 | 并发和竞态清单 | pi、dsh、codex | P1 | 取消 vs 工具结算、取消 vs resume、插件卸载 vs 工具执行、持久化节流 vs 轮末、并行结果乱序。 |
-| TST-5 | UI 快照测试工具链 | codex、openclaw、harness、pi | P0 | 为 UI-2 提供固定尺寸基线、命中区序列化、一键更新和差异输出；覆盖窄终端、CJK、未来未知组件和超长内容。UI-2 定义覆盖范围，本项负责测试夹具与门禁接入。 |
-| TST-6 | 一致性测试骨架 | pi、harness | P1 | SessionStore、share_store、settings_db 的替身/后端统一跑同一语义断言。 |
-| TST-7 | 边界/导出/清理门禁 | openclaw、dsh、opencode | P1 | 依赖方向、DSO 白名单、接口表集合、UI block 名、插件注册清理和文档路径。 |
-| TST-8 | CI 一键门禁 | harness、openclaw、opencode | P0 | Debug 构建、fail-fast、回放/协议、边界、负面编译、sanitizer；基准阈值可选。 |
-| TST-9 | 测试隔离、耗时和脱敏 | openclaw、pi | P1 | 临时 HOME/TMP/XDG、清凭据环境；每模块打印耗时/用例数；路径和 key 脱敏。 |
-| TST-10 | 安全负面测试 | codex、harness、openclaw | P0 | 未声明危险工具、private URL、软链接越界、配置拒绝绕过、审批失效、陈旧工具身份。 |
-| TST-11 | 构建产物级 e2e | dsh、harness、pi | P2 | 使用构建后的 CLI、子进程和 PTY，验证安装布局和插件加载。 |
-| TST-12 | 覆盖率和基准门禁 | dsh、harness、openclaw | P2 | 核心目录覆盖率作为 review 信息；改动会话/上下文/插件时附 ΔRSS/ΔPSS。 |
-| TST-13 | 单一实现状态清单 | opencode、dsh、pi | P1 | `docs/zh-cn/design/roadmap.md` 记录已实现/部分/未实现、代码位置和验收测试；不要再把 TODO 分散在多份比较文档里。 |
-| TST-14 | 安全守卫有效性测试 | dsh、harness | P2 | 安全改动必须包含一条先让回归测试失败、再验证修复的负面用例；避免只写无法证明边界的测试。 |
-| TST-15 | 测试目录按领域分组 | opencode | P2 | 测试模块继续增长时按 `protocol/session/tools/middleware/ui` 分组，保持现有唯一 include 根和完整头路径规则。 |
+| 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
+|---|---|---|---|---|---|
+| TST-1 | 假 provider | pi、opencode、harness、codex | P0 | provider 可注入固定流、错误、延迟和 tool call；覆盖重试、压缩、中断、取消和工具循环，不依赖真实网络或额度。 | 可行 |
+| TST-2 | Wire 往返和 schema 一致性 | codex、harness、pi、opencode | P0 | 每条消息 round-trip；生成 schema 与实现对比。 | 可行 |
+| TST-3 | 持久化迁移/恢复测试 | dsh、opencode、pi、harness | P0 | 老库、升级失败、崩溃未闭合轮次、writer 冲突、事件 after 重放。 | 可行 |
+| TST-4 | 并发和竞态清单 | pi、dsh、codex | P1 | 取消 vs 工具结算、取消 vs resume、插件卸载 vs 工具执行、持久化节流 vs 轮末、并行结果乱序。 | 可行 |
+| TST-5 | UI 快照测试工具链 | codex、openclaw、harness、pi | P0 | 为 UI-2 提供固定尺寸基线、命中区序列化、一键更新和差异输出；覆盖窄终端、CJK、未来未知组件和超长内容。UI-2 定义覆盖范围，本项负责测试夹具与门禁接入。 | 待定，比较复杂 |
+| TST-6 | 一致性测试骨架 | pi、harness | P1 | SessionStore、share_store、settings_db 的替身/后端统一跑同一语义断言。 | 可行 |
+| TST-7 | 边界/导出/清理门禁 | openclaw、dsh、opencode | P1 | 依赖方向、DSO 白名单、接口表集合、UI block 名、插件注册清理和文档路径。 | 可行 |
+| TST-8 | CI 一键门禁 | harness、openclaw、opencode | P0 | Debug 构建、fail-fast、回放/协议、边界、负面编译、sanitizer；基准阈值可选。 | 可行 |
+| TST-9 | 测试隔离、耗时和脱敏 | openclaw、pi | P1 | 临时 HOME/TMP/XDG、清凭据环境；每模块打印耗时/用例数；路径和 key 脱敏。 | 可行，已完成一部分 |
+| TST-10 | 安全负面测试 | codex、harness、openclaw | P0 | 未声明危险工具、private URL、软链接越界、配置拒绝绕过、审批失效、陈旧工具身份。 | 待定 |
+| TST-11 | 构建产物级 e2e | dsh、harness、pi | P2 | 使用构建后的 CLI、子进程和 PTY，验证安装布局和插件加载。 | 可行 |
+| TST-12 | 覆盖率和基准门禁 | dsh、harness、openclaw | P2 | 核心目录覆盖率作为 review 信息；改动会话/上下文/插件时附 ΔRSS/ΔPSS。 | 可行 |
+| TST-13 | 单一实现状态清单 | opencode、dsh、pi | P1 | `docs/zh-cn/design/roadmap.md` 记录已实现/部分/未实现、代码位置和验收测试；不要再把 TODO 分散在多份比较文档里。 | 可行 |
+| TST-14 | 安全守卫有效性测试 | dsh、harness | P2 | 安全改动必须包含一条先让回归测试失败、再验证修复的负面用例；避免只写无法证明边界的测试。 | 待定 |
+| TST-15 | 测试目录按领域分组 | opencode | P2 | 测试模块继续增长时按 `protocol/session/tools/middleware/ui` 分组，保持现有唯一 include 根和完整头路径规则。 | 可行 |
 
 ---
 

@@ -18,7 +18,6 @@
 - tui 弹窗标题居中
 - 修复 tui plan graph 按钮样式
 - tui 提示消息 dim
-- tui 实现添加 模型
 
 - SVG绘制支持
 - 链式 session 任务队列

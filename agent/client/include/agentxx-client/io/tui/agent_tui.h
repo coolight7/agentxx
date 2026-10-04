@@ -627,6 +627,11 @@ private:
 
     /// 打开模型选择器模态
     void openModelSelector();
+    /// 打开"添加模型配置"表单模态 (由模型选择弹窗顶部条目触发)
+    ///
+    /// 提交: 校验后经 WireAddModel 交给 agent 侧 (落盘 + 注册 + 立即切换);
+    /// 关闭后重新打开模型选择弹窗 (取消回到列表, 成功后列表里选中新模型)
+    void openModelConfigForm();
     /// 打开设置模态
     void openSettings();
     /// 打开关于模态
@@ -751,6 +756,12 @@ private:
     // ---- 屏幕上方提示 (toast, UI 线程独占) ----
     /// 当前 toast 文本 (空 = 无提示); 渲染时检查超时并清除
     std::string toastText_;
+
+    // ---- 新增模型 (选择模型弹窗的"添加模型配置") ----
+    /// 已提交待服务端回执的模型名 (UI 线程独占)
+    /// - 提交后设置: 模型列表弹窗重新打开时若该模型已出现在列表里就选中它
+    /// - 收到 WireAddModelResult (成功或失败) 时清空
+    std::string pendingNewModel_;
     /// toast 显示起始时刻 (渲染时据此判断是否超过 kToastDuration)
     std::chrono::steady_clock::time_point toastShownAt_;
     /// toast 超时定时器 (client io_context 上): 超时后仅触发重绘,

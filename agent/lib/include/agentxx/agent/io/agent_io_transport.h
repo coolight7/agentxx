@@ -332,6 +332,42 @@ struct WirePermissionState {
     bool fullAuth = false;
 };
 
+/// 客户端新增模型配置 (Client -> Server; TUI 选择模型弹窗顶部的"添加模型配置")
+///
+/// 服务端以此注册一个运行时可用的模型 (立即出现在模型列表、可切换) 并把配置
+/// 写入数据目录的 `agentxx-config.yaml` (文件不存在则创建), 使其重启后仍可用。
+/// 字段语义与 yaml `model.list` 条目一致 (见 agentxx::agent::ModelConfig)。
+struct WireAddModel {
+    std::string sessionId; ///< 发起请求的会话 (注册成功后该会话立即切换为新模型)
+    std::string name;      ///< 模型名称 (配置键; 必填且不可与已有模型重名)
+    std::string modelType; ///< openai / openai-responses / anthropic (空 = openai)
+    std::string baseUrl;   ///< API 地址 (与 apiKey 至少给出其一)
+    std::string apiPath;   ///< 自定义 API 路径 (可空 = 按类型用默认路径)
+    std::string apiKey;    ///< API Key (无鉴权服务填 EMPTY)
+    std::string modelName; ///< 请求体里的 model 字段值
+    uint64_t    modelContextMaxToken    = 0;
+    uint64_t    maxConcurrentConnections = 5;
+    int32_t     connectTimeoutSeconds    = 16;
+    int32_t     readChunkTimeoutSeconds  = 60;
+    int8_t      sslVerify                = -1; ///< -1 未指定 / 0 不验证 / 1 验证
+    bool        sendThinking             = false;
+    bool        requestReasoningSummary  = true;
+    bool        imageInput               = false;
+    bool        audioInput               = false;
+    bool        videoInput               = false;
+    /// 额外请求体参数 (yaml `extra_api_config`; 空对象 = 未指定)
+    utilxx_base::Json extraApiConfig;
+    /// 额外请求头 (yaml `extra_headers`; 空对象 = 未指定)
+    utilxx_base::Json extraHeaders;
+};
+
+/// 新增模型配置的结果 (Server -> Client)
+struct WireAddModelResult {
+    bool        ok = false;
+    std::string name;  ///< 新增的模型名 (ok=true 时客户端据此立即切换)
+    std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -370,7 +406,9 @@ using WireMessage = std::variant<
     WireListDirResult,
     WireGetPermissionState,
     WireSetFullAuth,
-    WirePermissionState>;
+    WirePermissionState,
+    WireAddModel,
+    WireAddModelResult>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

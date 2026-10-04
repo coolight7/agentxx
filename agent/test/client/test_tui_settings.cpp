@@ -11,6 +11,7 @@
 #include "ftxui/component/event.hpp"
 #include "ftxui/screen/screen.hpp"
 #include "utilxx_base/env.h"
+#include <algorithm>
 #include <chrono>
 #include <cctype>
 #include <filesystem>
@@ -1848,6 +1849,353 @@ void test_keybind_list_overlay_scroll() {
     XX_TEST_EXPECT_TRUE(end.find("ctrl+alt+x") != std::string::npos);
 }
 
+/// 模型选择弹窗: 顶部固定条目「添加模型配置」触发新增模型回调
+void test_model_selector_add_entry() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    // 文案键存在 (缺键时 TuiI18n 会回退为 key 本身)
+    XX_TEST_EXPECT_TRUE(tr("model.add") != std::string_view{"model.add"});
+    XX_TEST_EXPECT_TRUE(tr("model.form.title") != std::string_view{"model.form.title"});
+
+    TUISharedState sharedState;
+    TUITheme       theme = TUITheme::darkTheme();
+    TUICtx         ctx;
+    ctx.state      = &sharedState;
+    ctx.theme      = &theme;
+    ctx.sessionId  = "test-session";
+    ctx.postRedraw = [] {};
+
+    sharedState.mutate([](TUIRenderState& st) {
+        st.modelNames      = {"model-a", "model-b"};
+        st.cachedModelName = "model-b";
+        st.modelInfoLoaded = true;
+    });
+    ctx.frameState = sharedState.readSnapshot();
+
+    auto overlay  = std::make_shared<ModelSelectorOverlay>(ctx);
+    int  addCalls = 0;
+    int  confirmCalls = 0;
+    bool closed       = false;
+    overlay->onAddModel([&] { ++addCalls; });
+    overlay->onConfirm([&](std::string) { ++confirmCalls; });
+    overlay->onClose([&] { closed = true; });
+
+    // 条目表 = 顶部固定条目 + 两个模型; 首次渲染选中项对齐到当前使用的模型
+    (void)overlay->Render();
+    const auto ids = overlay->itemIds();
+    XX_TEST_EXPECT_EQ(ids.size(), size_t{3});
+    if (!ids.empty()) {
+        XX_TEST_EXPECT_EQ(ids[0], std::string(ModelSelectorOverlay::kAddModelId));
+    }
+    XX_TEST_EXPECT_EQ(overlay->selectedIndex(), 2);
+
+    // 上移到顶部条目并回车: 触发新增回调, 既不确认选择也不关闭弹窗
+    overlay->OnEvent(ftxui::Event::ArrowUp);
+    overlay->OnEvent(ftxui::Event::ArrowUp);
+    XX_TEST_EXPECT_EQ(overlay->selectedIndex(), 0);
+    overlay->OnEvent(ftxui::Event::Return);
+    XX_TEST_EXPECT_EQ(addCalls, 1);
+    XX_TEST_EXPECT_EQ(confirmCalls, 0);
+    XX_TEST_EXPECT_FALSE(closed);
+    XX_TEST_EXPECT_EQ(sharedState.readSnapshot()->cachedModelName, std::string("model-b"));
+
+    // 重新打开并指定"优先选中刚添加的模型": 列表里存在时选中它
+    auto reopened = std::make_shared<ModelSelectorOverlay>(ctx);
+    reopened->selectModelAfterLoad("model-a");
+    (void)reopened->Render();
+    XX_TEST_EXPECT_EQ(reopened->selectedIndex(), 1);
+}
+
+/// 添加模型配置表单: 字段构成 / 取值映射 / 字段级校验
+void test_model_config_form_overlay_submit() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    TUISharedState sharedState;
+    TUITheme       theme = TUITheme::darkTheme();
+    TUICtx         ctx;
+    ctx.state      = &sharedState;
+    ctx.theme      = &theme;
+    ctx.sessionId  = "test-session";
+    ctx.postRedraw = [] {};
+    ctx.frameState = sharedState.readSnapshot();
+
+    auto overlay = std::make_shared<ModelConfigOverlay>(ctx);
+    std::vector<agentxx::agent::ModelConfig> submitted;
+    overlay->onSubmit([&](const agentxx::agent::ModelConfig& mc) -> std::string {
+        submitted.push_back(mc);
+        return {};
+    });
+
+    // 字段构成 (基本 + 高级选项都在)
+    const auto controlIds = agentxx::client::collectControlIds(overlay->items());
+    auto       hasId      = [&](std::string_view id) {
+        return std::find(controlIds.begin(), controlIds.end(), std::string{id}) != controlIds.end();
+    };
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kNameId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kTypeId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kBaseUrlId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kApiKeyId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kModelNameId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kContextTokenId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kConnectTimeoutId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kReadTimeoutId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kMaxConnectionsId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kSendThinkingId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kReasoningSummaryId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kSslVerifyId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kImageInputId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kExtraHeadersId));
+    XX_TEST_EXPECT_TRUE(hasId(ModelConfigOverlay::kExtraConfigId));
+
+    // 必填项为空: 不提交并就地提示
+    XX_TEST_EXPECT_FALSE(overlay->submitByTest());
+    XX_TEST_EXPECT_TRUE(submitted.empty());
+    XX_TEST_EXPECT_FALSE(overlay->errorText().empty());
+
+    // 填写必填项后提交: 取值映射到模型配置 (未填的走默认口径)
+    overlay->setControlText(ModelConfigOverlay::kNameId, "my-model");
+    overlay->setControlText(ModelConfigOverlay::kBaseUrlId, "https://api.example.com/v1");
+    overlay->setControlText(ModelConfigOverlay::kApiKeyId, "sk-1");
+    overlay->setControlText(ModelConfigOverlay::kModelNameId, "gpt-x");
+    XX_TEST_EXPECT_TRUE(overlay->submitByTest());
+    XX_TEST_EXPECT_EQ(submitted.size(), size_t{1});
+    if (!submitted.empty()) {
+        const auto& mc = submitted.front();
+        XX_TEST_EXPECT_EQ(mc.name, std::string("my-model"));
+        XX_TEST_EXPECT_EQ(mc.type, std::string("openai"));
+        XX_TEST_EXPECT_EQ(mc.baseUrl, std::string("https://api.example.com/v1"));
+        XX_TEST_EXPECT_EQ(mc.apiKey, std::string("sk-1"));
+        XX_TEST_EXPECT_EQ(mc.modelName, std::string("gpt-x"));
+        XX_TEST_EXPECT_FALSE(mc.sslVerify.has_value()); // 默认: 跟随全局
+        XX_TEST_EXPECT_EQ(mc.connectTimeoutSeconds, 16);
+        XX_TEST_EXPECT_EQ(mc.readChunkTimeoutSeconds, 60);
+        XX_TEST_EXPECT_EQ(mc.maxConcurrentConnections, size_t{5});
+        XX_TEST_EXPECT_TRUE(mc.requestReasoningSummary);
+        XX_TEST_EXPECT_FALSE(mc.sendThinking);
+        XX_TEST_EXPECT_EQ(mc.modelContenxtMaxToken, size_t{0});
+    }
+
+    // JSON 文本非法 / 不是对象: 不提交并提示; 合法对象解析进配置
+    overlay->setControlText(ModelConfigOverlay::kExtraConfigId, "{not json}");
+    XX_TEST_EXPECT_FALSE(overlay->submitByTest());
+    XX_TEST_EXPECT_EQ(submitted.size(), size_t{1});
+    XX_TEST_EXPECT_FALSE(overlay->errorText().empty());
+    overlay->setControlText(ModelConfigOverlay::kExtraConfigId, "[1,2]");
+    XX_TEST_EXPECT_FALSE(overlay->submitByTest());
+    XX_TEST_EXPECT_EQ(submitted.size(), size_t{1});
+    overlay->setControlText(ModelConfigOverlay::kExtraConfigId, R"({"reasoning_effort":"high"})");
+    XX_TEST_EXPECT_TRUE(overlay->submitByTest());
+    XX_TEST_EXPECT_EQ(submitted.size(), size_t{2});
+    if (submitted.size() == 2) {
+        XX_TEST_EXPECT_EQ(
+            submitted[1].extraConfig.value("reasoning_effort", std::string{}),
+            "high"
+        );
+    }
+
+    // 外部校验失败 (如重名): onSubmit 返回错误文本 -> 弹窗保持打开并提示
+    auto       rejected    = std::make_shared<ModelConfigOverlay>(ctx);
+    const auto rejectCalls = std::make_shared<int>(0);
+    rejected->onSubmit([&](const agentxx::agent::ModelConfig&) -> std::string {
+        ++(*rejectCalls);
+        return "模型名称已存在: my-model";
+    });
+    rejected->setControlText(ModelConfigOverlay::kNameId, "my-model");
+    rejected->setControlText(ModelConfigOverlay::kBaseUrlId, "https://api.example.com/v1");
+    XX_TEST_EXPECT_FALSE(rejected->submitByTest());
+    XX_TEST_EXPECT_EQ(*rejectCalls, 1);
+    XX_TEST_EXPECT_EQ(rejected->errorText(), std::string("模型名称已存在: my-model"));
+
+    // 取消: 只关弹窗, 不提交
+    rejected->cancelByTest();
+    XX_TEST_EXPECT_EQ(*rejectCalls, 1);
+}
+
+/// 添加模型配置表单: 表单取值 -> 模型配置的映射 (选择/勾选控件与 JSON 字段)
+void test_model_config_values_mapping() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    // 选择/勾选控件取值 (type/ssl_verify/开关) + 额外请求头 + 额外参数
+    auto values = utilxx_base::Json::parse(R"({"values":{
+        "name":"mapped",
+        "type":"anthropic",
+        "base_url":"https://api.example.com",
+        "api_path":"/v1/messages",
+        "api_key":"sk-2",
+        "model_name":"claude-x",
+        "model_context_max_token":200000,
+        "connect_timeout":30,
+        "read_chunk_timeout":90,
+        "max_concurrent_connections":9,
+        "send_thinking":true,
+        "request_reasoning_summary":false,
+        "ssl_verify":"true",
+        "image_input":true,
+        "audio_input":false,
+        "video_input":true,
+        "extra_headers":{"X-Gateway":"gw1"},
+        "extra_api_config":{"reasoning":{"effort":"high"}}
+    }})");
+    auto mc = ModelConfigOverlay::configOfValues(values);
+    XX_TEST_EXPECT_TRUE(mc.has_value());
+    if (mc.has_value()) {
+        XX_TEST_EXPECT_EQ(mc->name, std::string("mapped"));
+        XX_TEST_EXPECT_EQ(mc->type, std::string("anthropic"));
+        XX_TEST_EXPECT_EQ(mc->apiPath, std::string("/v1/messages"));
+        XX_TEST_EXPECT_EQ(mc->modelContenxtMaxToken, size_t{200000});
+        XX_TEST_EXPECT_EQ(mc->connectTimeoutSeconds, 30);
+        XX_TEST_EXPECT_EQ(mc->readChunkTimeoutSeconds, 90);
+        XX_TEST_EXPECT_EQ(mc->maxConcurrentConnections, size_t{9});
+        XX_TEST_EXPECT_TRUE(mc->sendThinking);
+        XX_TEST_EXPECT_FALSE(mc->requestReasoningSummary);
+        XX_TEST_EXPECT_TRUE(mc->sslVerify.has_value() && *mc->sslVerify);
+        XX_TEST_EXPECT_TRUE(mc->imageInput);
+        XX_TEST_EXPECT_FALSE(mc->audioInput);
+        XX_TEST_EXPECT_TRUE(mc->videoInput);
+        XX_TEST_EXPECT_EQ(mc->extraHeaders["X-Gateway"], std::string("gw1"));
+        XX_TEST_EXPECT_EQ(
+            mc->extraConfig.value("reasoning", utilxx_base::Json::object())
+                .value("effort", std::string{}),
+            "high"
+        );
+    }
+
+    // TLS 关闭三态 / 空 API Key 归一 / 空 JSON 文本按未指定处理
+    {
+        auto v = utilxx_base::Json::parse(
+            R"({"values":{"name":"n","ssl_verify":"false","api_key":"","base_url":"https://x.example.com","extra_headers":"  ","extra_api_config":""}})"
+        );
+        auto m = ModelConfigOverlay::configOfValues(v);
+        XX_TEST_EXPECT_TRUE(m.has_value());
+        if (m.has_value()) {
+            XX_TEST_EXPECT_TRUE(m->sslVerify.has_value() && !*m->sslVerify);
+            XX_TEST_EXPECT_EQ(m->apiKey, std::string{"EMPTY"});
+            XX_TEST_EXPECT_TRUE(m->extraHeaders.empty());
+            XX_TEST_EXPECT_TRUE(m->extraConfig.is_null() || m->extraConfig.is_object());
+        }
+    }
+
+    // 错误口径: 名称为空 / 请求头值不是字符串 / 额外参数不是对象
+    {
+        auto noName = utilxx_base::Json::parse(R"({"values":{"name":"   "}})");
+        XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(noName).has_value());
+
+        auto badHeader = utilxx_base::Json::parse(
+            R"({"values":{"name":"n","extra_headers":{"X-A":1}}})"
+        );
+        XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(badHeader).has_value());
+
+        auto badExtra = utilxx_base::Json::parse(
+            R"({"values":{"name":"n","extra_api_config":[1]}})"
+        );
+        XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(badExtra).has_value());
+    }
+}
+
+/// 新增模型回执: 成功时立即切换为当前模型 (状态栏显示 + 下一条消息携带)
+void test_tui_add_model_result_switches_model() {
+    asio::io_context ioc;
+    auto             ex = ioc.get_executor();
+
+    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto transport = std::make_shared<MockTestTransport>();
+    tui->setTransport(transport);
+
+    // 成功回执: cachedModelName (状态栏) 与 pendingModel (下一条消息) 都切到新模型
+    tui->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireAddModelResult{
+                                      .ok    = true,
+                                      .name  = "new-model",
+                                      .error = {},
+                                      }
+    });
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        XX_TEST_EXPECT_EQ(snap->cachedModelName, std::string("new-model"));
+        XX_TEST_EXPECT_EQ(snap->pendingModel, std::string("new-model"));
+    }
+
+    // 失败回执: 不改动当前模型, 也不丢已记录的模型名
+    tui->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireAddModelResult{
+                                      .ok    = false,
+                                      .name  = "bad-model",
+                                      .error = "模型名称已存在: bad-model",
+                                      }
+    });
+    {
+        auto snap = tui->sharedState().readSnapshot();
+        XX_TEST_EXPECT_EQ(snap->cachedModelName, std::string("new-model"));
+        XX_TEST_EXPECT_EQ(snap->pendingModel, std::string("new-model"));
+    }
+}
+
+/// 添加模型配置表单: 输入框为整行形态 (整行底色 + help 作为占位文本)
+void test_model_config_form_row_band() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
+
+    TUISharedState sharedState;
+    TUITheme       theme = TUITheme::darkTheme();
+    TUICtx         ctx;
+    ctx.state      = &sharedState;
+    ctx.theme      = &theme;
+    ctx.sessionId  = "test-session";
+    ctx.postRedraw = [] {};
+    ctx.frameState = sharedState.readSnapshot();
+
+    auto overlay = std::make_shared<ModelConfigOverlay>(ctx);
+    auto screen
+        = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(30));
+    (void)ftxui::Render(screen, overlay->Render());
+
+    auto rowText = [&](int y) {
+        std::string row;
+        for (int x = 0; x < 100; ++x) {
+            row += screen.CellAt(x, y).character;
+        }
+        return row;
+    };
+
+    // 定位"名称 *"标签行: 其下一行应是整行输入框
+    int labelRow = -1;
+    for (int y = 0; y < 30; ++y) {
+        if (rowText(y).find("名称") != std::string::npos) {
+            labelRow = y;
+            break;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(labelRow >= 0);
+    if (labelRow >= 0 && labelRow + 1 < 30) {
+        // 整行底色: 输入框底色的列数远大于输入框内文字宽度 (不是"只有几个字符宽")
+        int bandCols = 0;
+        for (int x = 0; x < 100; ++x) {
+            if (screen.CellAt(x, labelRow + 1).background_color == theme.inputBgColor) {
+                ++bandCols;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(bandCols > 50);
+        // 值为空: 控件 help 作为占位文本显示在输入框内
+        XX_TEST_EXPECT_TRUE(rowText(labelRow + 1).find("模型标识") != std::string::npos);
+
+        // 整行可点击输入: 先把焦点移开 (Tab), 再点击输入框行 (右侧的空白区域同样可点,
+        // 行内任意列都落在命中范围内, 见 tui_ui_items 的 contains 断言)
+        overlay->OnEvent(ftxui::Event::Tab);
+        XX_TEST_EXPECT_TRUE(
+            overlay->focusedControlId() != std::string{ModelConfigOverlay::kNameId}
+        );
+        ftxui::Mouse click;
+        click.button = ftxui::Mouse::Left;
+        click.motion = ftxui::Mouse::Released;
+        click.x      = 40;
+        click.y      = labelRow + 1;
+        XX_TEST_EXPECT_TRUE(overlay->OnEvent(ftxui::Event::Mouse("", click)));
+        XX_TEST_EXPECT_EQ(
+            overlay->focusedControlId(),
+            std::string{ModelConfigOverlay::kNameId}
+        );
+    }
+}
+
 TestResult testTuiSettings() {
     g_tui_settings_passed = 0;
     g_tui_settings_failed = 0;
@@ -1889,6 +2237,11 @@ TestResult testTuiSettings() {
     test_keybind_list_overlay_empty();
     test_keybind_list_overlay_entries();
     test_keybind_list_overlay_scroll();
+    test_model_selector_add_entry();
+    test_model_config_form_overlay_submit();
+    test_model_config_values_mapping();
+    test_model_config_form_row_band();
+    test_tui_add_model_result_switches_model();
 
     return TestResult{g_tui_settings_passed, g_tui_settings_failed};
 }
