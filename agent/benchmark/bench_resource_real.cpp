@@ -450,7 +450,7 @@ void benchResourceRealTui() {
     mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     mc.apiKey                             = "EMPTY";
     mc.modelName                          = "bench-sim";
-    mc.modelContenxtMaxToken              = 8 << 20;
+    mc.modelContextMaxToken              = 8 << 20;
     agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
     agentConfig->currentModelName         = mc.name;

@@ -219,8 +219,8 @@ static std::vector<std::string> modelEntryLines(const ModelConfig& mc, int itemI
     if (!mc.modelName.empty()) {
         out.push_back(keyPad + "model_name: " + yamlQuoted(mc.modelName));
     }
-    if (mc.modelContenxtMaxToken > 0) {
-        out.push_back(keyPad + fmt::format("model_context_max_token: {}", mc.modelContenxtMaxToken));
+    if (mc.modelContextMaxToken > 0) {
+        out.push_back(keyPad + fmt::format("model_context_max_token: {}", mc.modelContextMaxToken));
     }
     if (mc.sendThinking) {
         out.push_back(keyPad + "send_thinking: true");
@@ -433,7 +433,7 @@ std::expected<void, std::string>
     if (mc.maxConcurrentConnections > 4096) {
         return std::unexpected{"最大并发连接数应不超过 4096 (0 = 不限制)"};
     }
-    if (mc.modelContenxtMaxToken > 10000000) {
+    if (mc.modelContextMaxToken > 10000000) {
         return std::unexpected{"上下文 token 上限应不超过 10000000 (0 = 未指定)"};
     }
 

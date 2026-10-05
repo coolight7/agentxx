@@ -177,6 +177,41 @@
   插件管理器/图注册表/引擎/工具列表）；插件卸载走框架的 `shutdownAll()`。启动断言失败抛
   `std::runtime_error`（带失败原因），由调用方决定如何上报。
 
+## 阶段 D：压缩摘要提示词固定小节 + 配置字段拼写修正（2026-10-05）
+
+- 计划原文：[plan.md](plan.md) 修订记录「第六批：§7 压缩与预算」。
+
+已完成：
+
+- **CMP-3 提示词微调**（计划核定"进行提示词微调"）：`agent/lib/src/agent/prompt.cpp` 的默认
+  压缩提示词（`appendSystemPrompts["summarization"]`）由"编号 MUST keep / MAY discard 列表"
+  改为固定小节：`## Goal` / `## Done` / `## In progress` / `## Blocked` / `## Key facts` / `## Next`，
+  末尾保留 `Rules:`（合并旧摘要 + 可丢弃项）与 `{omitted_note}` / `{max_words}` 占位符。
+  语义未变（保留要点集合一致），只是把"必须保留"的信息组织成固定小节，便于模型续跑与人工阅读。
+  约束：`test_summarization` 断言默认模板含 `Summarize` 与两个占位符，改写时保留。
+- **配置字段拼写修正**：`ModelConfig::modelContenxtMaxToken` → `modelContextMaxToken`
+  （yaml 键 `model_context_max_token` 与 FFI JSON 键 `modelContextMaxToken` 原本就是正确拼写，
+  只有 C++ 字段名写错）。共 **16 个代码文件、63 处**（lib / client / test / benchmark）。
+  `resource/history/` 下的历史比较文档按仓库约定**未改动**，其中仍保留旧字段名。
+
+验证：
+
+- 构建：`cmake --build <build>/agentxx_test_repo-prefix/src/agentxx_test_repo-build --config Debug
+  --target agentxx_test --parallel 8` → exit=0，仅有原有的编译警告（C4834/C4100/C4456/C4702），
+  与本次改动无关。
+- 测试（`agentxx_test`，Debug + ASan/UBSan）：`boundaries` 7/0、`writer_lease` 25/0、
+  `toolcall_args` 173/0、`agent` 192/0、`util_misc` 230/0、`session_schema` 73/0、
+  `config_loader` 368/0、`tui_settings` 552/0、`summarization` 445/0、`usage_ledger` 21/0、
+  `memgrowth` 15/0 —— 合计 **2101 项断言全通过**。
+
+注意事项 / 与计划的差异：
+
+- CMP-1（`ContextBudget` 单一口径）、CMP-4（原文可回取）、CMP-9（压缩前写记忆提醒）经人工核定
+  **不做**，故未引入预算结构、压缩内容外置与记忆提醒；`summarization` 的阈值常量保持原处。
+- 提示词改用固定小节后，摘要文本比原来多几个小节标题行（约 40 token），对长会话成本影响可忽略。
+- 构建脚本 `windows_debug_build.bat` 整体执行时间较长（superbuild），验证时直接构建
+  `agentxx_test` 目标；`agentxx_cli` 已由脚本先行构建完成。
+
 ## 修订记录
 
 - 阶段 A/B 完成后提交：`添加目录级规则文件 (计划 ARC-2)`、

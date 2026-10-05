@@ -252,7 +252,7 @@ bool FfiAgentRuntime::buildConfigs(
     mc.readChunkTimeoutSeconds  = mj.value("readChunkTimeoutSeconds", 100);
     mc.maxConcurrentConnections = mj.value("maxConcurrentConnections", size_t{5});
     mc.anthropicVersion         = mj.value("anthropicVersion", "2023-06-01");
-    mc.modelContenxtMaxToken    = mj.value("modelContextMaxToken", size_t{0});
+    mc.modelContextMaxToken    = mj.value("modelContextMaxToken", size_t{0});
     mc.sendThinking             = mj.value("sendThinking", false);
     // 多模态输入能力 (与 yaml 的 image_input/audio_input/video_input 同义):
     // 决定宿主能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发

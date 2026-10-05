@@ -778,7 +778,7 @@ std::expected<agentxx::agent::ModelConfig, std::string>
         mc.apiKey = "EMPTY";
     }
     mc.modelName = textOf(kModelNameId);
-    mc.modelContenxtMaxToken
+    mc.modelContextMaxToken
         = static_cast<size_t>(std::max<int64_t>(0, numberOf(kContextTokenId, 0)));
     mc.connectTimeoutSeconds
         = static_cast<int>(numberOf(kConnectTimeoutId, ModelConfig::defaultModelConfig.connectTimeoutSeconds));

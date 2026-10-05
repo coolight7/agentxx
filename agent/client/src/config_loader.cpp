@@ -488,7 +488,7 @@ static YamlAppConfig parseYamlConfigNode(
                 );
                 unsigned long long parsed = 0;
                 if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
-                    mc.modelContenxtMaxToken = static_cast<size_t>(parsed);
+                    mc.modelContextMaxToken = static_cast<size_t>(parsed);
                 }
             }
             if (node["image_input"]) {

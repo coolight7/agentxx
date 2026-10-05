@@ -146,7 +146,7 @@ void benchResourceCli() {
     mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     mc.apiKey                             = "EMPTY";
     mc.modelName                          = "bench-sim";
-    mc.modelContenxtMaxToken              = 8 << 20; // 8M 确保不触发压缩/截断
+    mc.modelContextMaxToken              = 8 << 20; // 8M 确保不触发压缩/截断
     agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
     agentConfig->currentModelName         = mc.name;
@@ -632,7 +632,7 @@ void benchResourceTui() {
     mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     mc.apiKey                             = "EMPTY";
     mc.modelName                          = "bench-sim";
-    mc.modelContenxtMaxToken              = 8 << 20;
+    mc.modelContextMaxToken              = 8 << 20;
     agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
     agentConfig->currentModelName         = mc.name;

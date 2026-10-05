@@ -2013,7 +2013,7 @@ static agentxx::agent::ModelConfig sampleWriterModel(std::string name) {
     mc.baseUrl                  = "https://api.example.com/v1";
     mc.apiKey                   = "sk-test";
     mc.modelName                = "gpt-test";
-    mc.modelContenxtMaxToken    = 128000;
+    mc.modelContextMaxToken    = 128000;
     mc.sendThinking             = true;
     mc.imageInput               = true;
     mc.maxConcurrentConnections = 7;
@@ -2031,7 +2031,7 @@ void test_config_writer_creates_file() {
     mc.baseUrl               = "https://api.example.com/v1";
     mc.apiKey                = "sk-test";
     mc.modelName             = "gpt-test";
-    mc.modelContenxtMaxToken = 128000;
+    mc.modelContextMaxToken = 128000;
     mc.imageInput            = true;
 
     auto written = agentxx::agent::appendModelConfigToYamlFile(path, mc);
@@ -2047,7 +2047,7 @@ void test_config_writer_creates_file() {
         XX_TEST_EXPECT_EQ(it->second.baseUrl, std::string("https://api.example.com/v1"));
         XX_TEST_EXPECT_EQ(it->second.apiKey, std::string("sk-test"));
         XX_TEST_EXPECT_EQ(it->second.modelName, std::string("gpt-test"));
-        XX_TEST_EXPECT_EQ(it->second.modelContenxtMaxToken, size_t{128000});
+        XX_TEST_EXPECT_EQ(it->second.modelContextMaxToken, size_t{128000});
         XX_TEST_EXPECT_TRUE(it->second.imageInput);
     }
     const std::string text = readTextFile(path);
@@ -2272,7 +2272,7 @@ void test_validate_new_model_config_rules() {
         mc.maxConcurrentConnections = 5000;
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
         mc = base();
-        mc.modelContenxtMaxToken = 20000000;
+        mc.modelContextMaxToken = 20000000;
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
     }
     // extra_api_config 必须是对象

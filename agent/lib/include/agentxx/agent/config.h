@@ -93,7 +93,7 @@ public:
     /// 模型支持的最大上下文 token 数
     /// - 0 表示未指定, 此时上下文压缩中间件使用其默认值
     ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]
-    size_t modelContenxtMaxToken = 0;
+    size_t modelContextMaxToken = 0;
 
     /// 建立Http连接的超时时间
     int connectTimeoutSeconds = 16;

@@ -1972,7 +1972,7 @@ void test_model_config_form_overlay_submit() {
         XX_TEST_EXPECT_EQ(mc.maxConcurrentConnections, size_t{5});
         XX_TEST_EXPECT_TRUE(mc.requestReasoningSummary);
         XX_TEST_EXPECT_FALSE(mc.sendThinking);
-        XX_TEST_EXPECT_EQ(mc.modelContenxtMaxToken, size_t{0});
+        XX_TEST_EXPECT_EQ(mc.modelContextMaxToken, size_t{0});
     }
 
     // JSON 文本非法 / 不是对象: 不提交并提示; 合法对象解析进配置
@@ -2042,7 +2042,7 @@ void test_model_config_values_mapping() {
         XX_TEST_EXPECT_EQ(mc->name, std::string("mapped"));
         XX_TEST_EXPECT_EQ(mc->type, std::string("anthropic"));
         XX_TEST_EXPECT_EQ(mc->apiPath, std::string("/v1/messages"));
-        XX_TEST_EXPECT_EQ(mc->modelContenxtMaxToken, size_t{200000});
+        XX_TEST_EXPECT_EQ(mc->modelContextMaxToken, size_t{200000});
         XX_TEST_EXPECT_EQ(mc->connectTimeoutSeconds, 30);
         XX_TEST_EXPECT_EQ(mc->readChunkTimeoutSeconds, 90);
         XX_TEST_EXPECT_EQ(mc->maxConcurrentConnections, size_t{9});

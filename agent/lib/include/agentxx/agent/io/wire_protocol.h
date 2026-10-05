@@ -1188,7 +1188,7 @@ inline WireAddModel addModelOfConfig(std::string_view sessionId, const ModelConf
     m.apiPath                  = mc.apiPath;
     m.apiKey                   = mc.apiKey;
     m.modelName                = mc.modelName;
-    m.modelContextMaxToken     = mc.modelContenxtMaxToken;
+    m.modelContextMaxToken     = mc.modelContextMaxToken;
     m.maxConcurrentConnections = mc.maxConcurrentConnections;
     m.connectTimeoutSeconds    = mc.connectTimeoutSeconds;
     m.readChunkTimeoutSeconds  = mc.readChunkTimeoutSeconds;
@@ -1218,7 +1218,7 @@ inline ModelConfig addModelToConfig(const WireAddModel& m) {
     mc.apiPath                  = m.apiPath;
     mc.apiKey                   = m.apiKey.empty() ? std::string{"EMPTY"} : m.apiKey;
     mc.modelName                = m.modelName;
-    mc.modelContenxtMaxToken    = static_cast<size_t>(m.modelContextMaxToken);
+    mc.modelContextMaxToken    = static_cast<size_t>(m.modelContextMaxToken);
     mc.maxConcurrentConnections = static_cast<size_t>(m.maxConcurrentConnections);
     mc.connectTimeoutSeconds    = m.connectTimeoutSeconds;
     mc.readChunkTimeoutSeconds  = m.readChunkTimeoutSeconds;

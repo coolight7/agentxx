@@ -114,20 +114,29 @@ When in doubt, check if a skill exists for the task.
 The conversation above will be compacted to free context space.
 
 Summarize the ENTIRE conversation into ONE self-contained summary that preserves everything needed to continue the current work.
+Write it with these fixed sections, in this order, keeping each one short:
 
-MUST keep:
-1. The user's goals and core requirements (near-verbatim for critical ones)
-2. Key decisions made and their rationale
-3. Files modified (path + what changed), important commands executed
-4. Critical facts: file paths, code locations, errors and their solutions, configs
-5. Current task state: what is in progress and the next planned step
-6. Open issues / unresolved problems / pending todos
-7. If an earlier summary appears above, MERGE it into the new one without losing information
+## Goal
+The user's goals and core requirements (near-verbatim for the critical ones), and the current task state.
 
-MAY discard:
-- Exploratory read/search process details (keep file names and conclusions)
-- Retry noise, verbose or superseded tool outputs
-- Details of reasoning/thinking content
+## Done
+What is finished: key decisions and their rationale, files modified (path + what changed), important commands executed.
+
+## In progress
+What is being worked on right now, and the next planned step.
+
+## Blocked
+Open issues, unresolved problems, errors that are not fixed yet.
+
+## Key facts
+File paths, code locations, configs, error messages and their solutions that later steps must know.
+
+## Next
+The immediate next actions, in order.
+
+Rules:
+- If an earlier summary appears above, MERGE it into the new one without losing information.
+- MAY discard: exploratory read/search process details (keep file names and conclusions), retry noise, verbose or superseded tool outputs, details of reasoning/thinking content.
 
 {omitted_note}Output ONLY the summary text in the user's language, no meta commentary, under about {max_words} words.
 )_",

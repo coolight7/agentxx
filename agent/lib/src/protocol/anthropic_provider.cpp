@@ -345,8 +345,8 @@ AnthropicProvider::AnthropicProvider(agentxx::agent::ModelConfig config) :
 utilxx_base::Json AnthropicProvider::buildBody(const neograph::CompletionParams& params) const {
     utilxx_base::Json body;
     body["model"] = params.model.empty() ? config_.modelName : params.model;
-    if (config_.modelContenxtMaxToken > 0) {
-        body["max_tokens"] = config_.modelContenxtMaxToken;
+    if (config_.modelContextMaxToken > 0) {
+        body["max_tokens"] = config_.modelContextMaxToken;
     }
 
     auto [system, messages] = convertMessages(params.messages, config_.sendThinking);

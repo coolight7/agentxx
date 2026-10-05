@@ -671,13 +671,13 @@ void test_wire_add_model_protocol() {
         mc.name                = "cfg-model";
         mc.baseUrl             = "https://api.example.com";
         mc.apiKey              = "k";
-        mc.modelContenxtMaxToken = 1024;
+        mc.modelContextMaxToken = 1024;
         mc.extraHeaders["X-A"] = "1";
         auto wire              = addModelOfConfig("sess", mc);
         XX_TEST_EXPECT_EQ(wire.sslVerify, int8_t{-1});
         auto back = addModelToConfig(wire);
         XX_TEST_EXPECT_EQ(back.name, std::string("cfg-model"));
-        XX_TEST_EXPECT_EQ(back.modelContenxtMaxToken, size_t{1024});
+        XX_TEST_EXPECT_EQ(back.modelContextMaxToken, size_t{1024});
         XX_TEST_EXPECT_FALSE(back.sslVerify.has_value());
         XX_TEST_EXPECT_TRUE(back.extraHeaders.size() == 1);
         XX_TEST_EXPECT_EQ(back.extraHeaders["X-A"], std::string("1"));

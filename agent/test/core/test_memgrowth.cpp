@@ -186,7 +186,7 @@ asio::awaitable<int> runScenario(
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
     if (hugeTokenLimit) {
         // 极大上下文上限: summarization 永远不会触发, 观察纯线性增长
-        cfg->model.modelContenxtMaxToken = 1024ull * 1024ull * 1024ull;
+        cfg->model.modelContextMaxToken = 1024ull * 1024ull * 1024ull;
     }
 
     // 每条 assistant 回复约 responseKB KB

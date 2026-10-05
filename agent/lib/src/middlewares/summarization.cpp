@@ -479,8 +479,8 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     size_t modelMaxToken = modelSupportMaxTokenDefault;
     {
         const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
-        if (currentModelConfig.modelContenxtMaxToken > 0) {
-            modelMaxToken = currentModelConfig.modelContenxtMaxToken;
+        if (currentModelConfig.modelContextMaxToken > 0) {
+            modelMaxToken = currentModelConfig.modelContextMaxToken;
         }
     }
 
@@ -729,12 +729,12 @@ asio::awaitable<void>
     const auto& sessionId = in.ctx.thread_id;
 
     // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
-    size_t modelContenxtMaxToken = modelSupportMaxTokenDefault;
+    size_t modelContextMaxToken = modelSupportMaxTokenDefault;
     bool   enableCountThinking   = false;
     {
         const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
-        if (currentModelConfig.modelContenxtMaxToken > 0) {
-            modelContenxtMaxToken = currentModelConfig.modelContenxtMaxToken;
+        if (currentModelConfig.modelContextMaxToken > 0) {
+            modelContextMaxToken = currentModelConfig.modelContextMaxToken;
         }
         enableCountThinking = currentModelConfig.sendThinking;
     }
@@ -760,11 +760,11 @@ asio::awaitable<void>
     if (session->contextStats) {
         // UI显示优先使用 apiTokenUsage 即可
         session->contextStats->contextTokens    = tokenUsage;
-        session->contextStats->maxContextTokens = modelContenxtMaxToken;
+        session->contextStats->maxContextTokens = modelContextMaxToken;
     }
 
     // ---- 超过 75% 上限时自动压缩 ----
-    if (tokenUsage >= modelContenxtMaxToken * 0.75) {
+    if (tokenUsage >= modelContextMaxToken * 0.75) {
         const auto startTime = std::chrono::steady_clock::now();
         const auto startTimeMs
             = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -855,7 +855,7 @@ asio::awaitable<void>
         // LLM 同上下文压缩
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
         const size_t recentBudget
-            = static_cast<size_t>(modelContenxtMaxToken * recentTokenBudgetRatio);
+            = static_cast<size_t>(modelContextMaxToken * recentTokenBudgetRatio);
         const size_t oldEnd   = splitRecentByTokenBudget(messages, systemCount, recentBudget);
         const size_t oldStart = systemCount;
 
@@ -924,7 +924,7 @@ asio::awaitable<void>
                     agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount,
                     failCount
                 );
-                if (failCount >= 2 || tokenUsage >= modelContenxtMaxToken * 0.95) {
+                if (failCount >= 2 || tokenUsage >= modelContextMaxToken * 0.95) {
                     action = ReplaceAction::HardTruncate;
                 }
                 XX_LOGD(
@@ -961,7 +961,7 @@ asio::awaitable<void>
                     std::move_iterator(recentMessages.end())
                 );
             } else if (action == ReplaceAction::HardTruncate) {
-                compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
+                compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
             } else {
                 compressedMessages = messages;
             }
@@ -974,13 +974,13 @@ asio::awaitable<void>
         // 即使按预算切分 (recent 至少 1 条) 仍 >= 95% 上限;
         // 硬截断 (30% 预算 + 单条二分截断) 是最终兜底
         if (countTokens({}, compressedMessages, enableCountThinking)
-            >= modelContenxtMaxToken * 0.95) {
+            >= modelContextMaxToken * 0.95) {
             XX_LOGW(
                 "SummarizationMiddlewareHandle: 压缩后仍超限 ({}/{}), 降级硬截断兜底",
                 countTokens({}, compressedMessages, enableCountThinking),
-                modelContenxtMaxToken
+                modelContextMaxToken
             );
-            compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
+            compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
         }
 
         // ---- 压缩结果写回会话上下文 (唯一权威) ----
@@ -1019,7 +1019,7 @@ asio::awaitable<void>
             "Summarized LLM Context {}->{}/{} · {}",
             oldTokens,
             newTokens,
-            modelContenxtMaxToken,
+            modelContextMaxToken,
             utilxx_base::formatDurationMilliseconds(durationMs)
         );
         vm.durationMs = durationMs;
@@ -1034,7 +1034,7 @@ asio::awaitable<void>
             }
             if (session->contextStats) {
                 session->contextStats->contextTokens    = newTokens;
-                session->contextStats->maxContextTokens = modelContenxtMaxToken;
+                session->contextStats->maxContextTokens = modelContextMaxToken;
             }
             // 本次压缩结束: 清除挂起提示标记 (下次压缩重新追加提示消息)
             agentCtxPtr->middlewareHandleContext->removeGraphDataItem(
@@ -1057,7 +1057,7 @@ asio::awaitable<void>
             apiTokenUsage,
             countTokenUsage,
             tokenUsage,
-            modelContenxtMaxToken
+            modelContextMaxToken
         );
     }
 
@@ -1081,12 +1081,12 @@ asio::awaitable<bool>
         co_return false;
     }
 
-    size_t modelContenxtMaxToken = modelSupportMaxTokenDefault;
+    size_t modelContextMaxToken = modelSupportMaxTokenDefault;
     bool   enableCountThinking   = false;
     {
         const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
-        if (currentModelConfig.modelContenxtMaxToken > 0) {
-            modelContenxtMaxToken = currentModelConfig.modelContenxtMaxToken;
+        if (currentModelConfig.modelContextMaxToken > 0) {
+            modelContextMaxToken = currentModelConfig.modelContextMaxToken;
         }
         enableCountThinking = currentModelConfig.sendThinking;
     }
@@ -1122,7 +1122,7 @@ asio::awaitable<bool>
 
     // 3. LLM 同上下文总结压缩
     const size_t systemCount  = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
-    const size_t recentBudget = static_cast<size_t>(modelContenxtMaxToken * recentTokenBudgetRatio);
+    const size_t recentBudget = static_cast<size_t>(modelContextMaxToken * recentTokenBudgetRatio);
     const size_t oldEnd       = splitRecentByTokenBudget(messages, systemCount, recentBudget);
     const size_t oldStart     = systemCount;
 
@@ -1171,7 +1171,7 @@ asio::awaitable<bool>
                 std::move_iterator(recentMessages.end())
             );
         } else {
-            compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
+            compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
         }
     } else {
         compressedMessages = messages;
@@ -1179,13 +1179,13 @@ asio::awaitable<bool>
 
     // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
     // (与 onModelcallRunFunc 相同语义; 手动压缩也保证结果不超限)
-    if (countTokens({}, compressedMessages, enableCountThinking) >= modelContenxtMaxToken * 0.95) {
+    if (countTokens({}, compressedMessages, enableCountThinking) >= modelContextMaxToken * 0.95) {
         XX_LOGW(
             "SummarizationMiddlewareHandle: 手动压缩后仍超限 ({}/{}), 降级硬截断兜底",
             countTokens({}, compressedMessages, enableCountThinking),
-            modelContenxtMaxToken
+            modelContextMaxToken
         );
-        compressedMessages = hardTruncate(messages, systemCount, modelContenxtMaxToken);
+        compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
     }
 
     const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
@@ -1201,7 +1201,7 @@ asio::awaitable<bool>
         "Summarized LLM Context {}->{}/{} · {}",
         oldTokens,
         newTokens,
-        modelContenxtMaxToken,
+        modelContextMaxToken,
         utilxx_base::formatDurationMilliseconds(durationMs)
     );
     vm.durationMs = durationMs;
@@ -1212,11 +1212,11 @@ asio::awaitable<bool>
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
             .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
         });
-        session->io->sendToPeer(agentxx::agent::WireContextStats{newTokens, modelContenxtMaxToken});
+        session->io->sendToPeer(agentxx::agent::WireContextStats{newTokens, modelContextMaxToken});
     }
     if (session->contextStats) {
         session->contextStats->contextTokens    = newTokens;
-        session->contextStats->maxContextTokens = modelContenxtMaxToken;
+        session->contextStats->maxContextTokens = modelContextMaxToken;
     }
 
     co_return true;
