@@ -705,6 +705,14 @@ public:
         }
     }
 
+    /// 会话语言是否由配置显式指定 (yaml `language` / FFI 配置 JSON 的 language 键)
+    /// - 为 true 时连接端点不再用客户端界面语言覆盖会话语言 (见
+    ///   SessionServerAgentIO::handleHello); 客户端界面语言是各端本机偏好,
+    ///   会话语言是可分发配置, 两者互不覆盖
+    bool isLanguageExplicit() const {
+        return agentConfig && agentConfig->languageExplicit;
+    }
+
     std::string getSessionCurrentModelName(std::string_view sessionId) const;
     // 可能会变，建议仅在同步代码中使用
     const ModelConfig& getSessionCurrentModelConfig(std::string_view sessionId) const;

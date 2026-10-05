@@ -65,6 +65,12 @@ struct YamlAppConfig {
     ///   作为 permission Ask 默认放行范围、filesystem 工具与权限校验的相对路径
     ///   解析基准、命令执行子进程初始目录、插件 projectRoot (codegraph 默认索引根)
     std::string workDir;
+
+    /// 会话 (模型提示词) 语言 (yaml `language`, `zh-cn` / `en`, 不支持 auto)
+    /// - 为空 = 未配置: 由客户端连接时携带的界面语言决定会话语言
+    /// - 非空 = 显式配置: 置 AgentConfig::languageExplicit, 客户端界面语言不再覆盖
+    ///   (界面语言见设置库键 `tui.lang`)
+    std::string language;
     std::vector<std::string>                      skillDirPaths;
     std::vector<std::string>                      memoryFilePaths;
     /// 权限白名单: 始终放行的路径列表 (yaml `permission.whitelist`)

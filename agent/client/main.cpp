@@ -234,6 +234,12 @@ static void applySharedRuntimeConfig(
     config->enableSubagent = yamlCfg.enableSubagent;
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
     config->enableWorktree = yamlCfg.worktreeEnable;
+    // 会话语言 (yaml `language`): 显式配置后客户端界面语言不再覆盖 (见
+    // docs/zh-cn/design/configuration.md "语言" 一节)
+    if (!yamlCfg.language.empty()) {
+        config->language         = agentxx::agent::normalizeLanguage(yamlCfg.language);
+        config->languageExplicit = true;
+    }
     // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
     // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
     // - path 前缀 `builtin://` 为内置插件简写, 保留原样不做文件路径解析

@@ -842,7 +842,18 @@ void SessionServerAgentIO::handleHello(
     if (!hello.language.empty()) {
         auto agent = agent_.lock();
         if (agent) {
-            agent->setLanguage(hello.language, config_.sessionId);
+            // 配置显式指定会话语言时不被客户端界面语言覆盖 (客户端界面语言属
+            // 各端本机偏好, 会话语言属可分发配置; 见 AgentContext::isLanguageExplicit)
+            if (agent->isLanguageExplicit()) {
+                XX_LOGD(
+                    "SessionServerAgentIO: session language '{}' from config, ignore client "
+                    "language '{}'",
+                    agent->getLanguage(config_.sessionId),
+                    hello.language
+                );
+            } else {
+                agent->setLanguage(hello.language, config_.sessionId);
+            }
         }
     }
 

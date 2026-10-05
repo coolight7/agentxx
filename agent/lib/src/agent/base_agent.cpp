@@ -1092,6 +1092,10 @@ void BaseAgent::setLanguage(std::string_view language, std::string_view sessionI
     }
 }
 
+bool BaseAgent::isLanguageExplicit() const {
+    return agentContext && agentContext->isLanguageExplicit();
+}
+
 void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotification>& notifications
 ) {
     // MCP 工具

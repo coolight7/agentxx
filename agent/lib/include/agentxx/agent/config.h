@@ -206,7 +206,14 @@ public:
     std::string agentNameView = "Agentxx";
 
     /// 会话使用的语言 (yaml `language`, 默认 "en", 不支持 auto)
+    /// - 解析优先级: YAML 显式配置 > 客户端 hello 携带的界面语言 > 默认 "en"
+    ///   (见 [languageExplicit] 与 SessionServerAgentIO::handleHello)
     std::string language = "en";
+
+    /// `language` 是否由配置显式指定 (yaml / FFI 配置 JSON)
+    /// - true 时不再被客户端连接时的界面语言覆盖: 会话语言属于可分发配置,
+    ///   客户端界面语言只在本机偏好未配置时兜底 (见 docs/zh-cn/design/configuration.md)
+    bool languageExplicit = false;
 
     /// 子代理继承的父会话 worktree 路径 (非配置项, 由 AgentHost 派生时填充)
     /// - 仅作提示词展示与权限规则注册依据; 实际路径解析基准经 workDir 字段

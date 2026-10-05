@@ -72,6 +72,10 @@ public:
     /// 指定使用的语言 (不支持 auto, 为空或 auto 设为 "en")
     void setLanguage(std::string_view language, std::string_view sessionId = "");
 
+    /// 会话语言是否由配置显式指定 (yaml `language` / FFI 配置 JSON)
+    /// - 为 true 时连接端点不再用客户端界面语言覆盖 (见 AgentContext::isLanguageExplicit)
+    bool isLanguageExplicit() const;
+
     /// 执行一轮对话
     /// - 消息由 Session 内部管理 (viewMessages 展示历史 + 会话 LLM 上下文两个数据集;
     ///   上下文是唯一权威, 图状态不持有消息)

@@ -1032,11 +1032,48 @@ void test_subagent_enable_false();
 void test_subagent_enable_true_variants();
 void test_subagent_enable_invalid_fallback();
 void test_subagent_enable_env_expand();
+void test_language_absent_keeps_empty();
+void test_language_parse_and_normalize();
+void test_language_env_expand();
 void test_plugins_config_path_parse();
 
 void test_subagent_enable_default_true() {
     auto cfg = loadYaml("data_dir: default\n");
     XX_TEST_EXPECT_TRUE(cfg.enableSubagent);
+}
+
+// ---------------------------------------------------------------------------
+// 会话语言 (yaml `language`; 见 docs/zh-cn/design/configuration.md)
+// ---------------------------------------------------------------------------
+
+void test_language_absent_keeps_empty() {
+    // 未配置: 保持空 (由客户端界面语言决定会话语言)
+    auto cfg = loadYaml("data_dir: default\n");
+    XX_TEST_EXPECT_TRUE(cfg.language.empty());
+}
+
+void test_language_parse_and_normalize() {
+    auto cfg = loadYaml("language: zh-cn\n");
+    XX_TEST_EXPECT_EQ(cfg.language, std::string{"zh-cn"});
+
+    // 大小写不敏感
+    cfg = loadYaml("language: ZH-CN\n");
+    XX_TEST_EXPECT_EQ(cfg.language, std::string{"zh-cn"});
+
+    cfg = loadYaml("language: En\n");
+    XX_TEST_EXPECT_EQ(cfg.language, std::string{"en"});
+
+    // auto / 空串按未配置处理 (不支持 auto)
+    cfg = loadYaml("language: auto\n");
+    XX_TEST_EXPECT_EQ(cfg.language, std::string{"en"});
+    cfg = loadYaml("language: \"\"\n");
+    XX_TEST_EXPECT_TRUE(cfg.language.empty());
+}
+
+void test_language_env_expand() {
+    SystemEnvGuard guard{"AGENTXX_TEST_LANGUAGE", "zh-cn"};
+    auto           cfg = loadYaml("language: ${AGENTXX_TEST_LANGUAGE}\n");
+    XX_TEST_EXPECT_EQ(cfg.language, std::string{"zh-cn"});
 }
 
 void test_subagent_enable_false() {
@@ -2333,6 +2370,9 @@ TestResult testConfigLoader() {
     test_plugin_args_env_expand();
     test_plugins_config_path_parse();
     test_subagent_enable_default_true();
+    test_language_absent_keeps_empty();
+    test_language_parse_and_normalize();
+    test_language_env_expand();
     test_subagent_enable_false();
     test_subagent_enable_true_variants();
     test_subagent_enable_invalid_fallback();

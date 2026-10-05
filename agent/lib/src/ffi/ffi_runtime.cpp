@@ -173,6 +173,8 @@ bool FfiAgentRuntime::buildConfigs(
         config->agentName             = cfgJ.value("agentName", config->agentName);
         config->llmMaxRetry           = cfgJ.value("llmMaxRetry", config->llmMaxRetry);
         config->language              = agent::normalizeLanguage(cfgJ.value("language", "en"));
+        // 配置 JSON 显式给出 language 时标记为显式: 连接客户端不再用界面语言覆盖
+        config->languageExplicit      = cfgJ.contains("language");
         {
             std::lock_guard<std::mutex> lock(langMutex_);
             language_ = config->language;

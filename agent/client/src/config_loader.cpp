@@ -617,6 +617,21 @@ static YamlAppConfig parseYamlConfigNode(
             = resolveEnvVars(root["work_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
     }
 
+    // 会话 (模型提示词) 语言 (yaml `language`, 默认 "en", 不支持 auto)
+    // - 属于可分发/团队共享配置, 显式配置后不再被客户端界面语言覆盖
+    //   (客户端界面语言见 settings_db 的 `tui.lang`, 两者互不影响)
+    // - 空值视为未配置 (保持 AgentConfig 默认 "en")
+    if (root["language"]) {
+        const auto raw = resolveEnvVars(
+            root["language"].as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        if (!raw.empty()) {
+            cfg.language = agent::normalizeLanguage(raw);
+        }
+    }
+
     // subagent 开关 (yaml `subagent.enable`, 默认 true)
     if (root["subagent"] && root["subagent"].IsMap() && root["subagent"]["enable"]) {
         auto val = resolveEnvVars(

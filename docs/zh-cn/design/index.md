@@ -1,5 +1,5 @@
 # Agentxx 整体设计文档
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [benchmark.md](benchmark.md) (资源与性能基准)
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [roadmap.md](roadmap.md) (实施状态清单)
 
 ## 目录
 
@@ -733,6 +733,12 @@ mcp:
 skill:
   list:
     - "./skills"
+
+# 会话与模型提示词语言 (zh-cn / en; 不支持 auto, 留空或不配置 = "en")
+# - 属于可分发配置: 显式配置后, 客户端连接时携带的界面语言 (TUI 设置 `tui.lang`)
+#   不再覆盖它; 未配置时客户端界面语言生效
+# - 界面显示语言与它互不影响, 见 docs/zh-cn/design/configuration.md
+# language: zh-cn
 
 # 上下文文件列表 (Memory; 每次模型调用时内容注入系统提示词)
 memory:
