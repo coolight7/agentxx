@@ -60,6 +60,13 @@ constexpr std::string_view kTimeoutDesc
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
+/// 只读工具的注册 flags: 自动摘要 + 声明并行安全
+/// - list/read/glob/grep 只读且不改插件内部共享状态 (会话取消注册表只按
+///   sessionId 读写), 允许与其他并行安全工具在同一批 tool_call 里并发执行;
+///   写/编辑工具保持独占 (不声明), 与其他调用形成顺序屏障
+constexpr int32_t kReadOnlyFlags
+    = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY | AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE;
+
 } // namespace
 
 struct FsPluginCtx : public PluginBase {};
@@ -137,7 +144,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             );
         },
         0,
-        kAutoSummary
+        kReadOnlyFlags
     );
     // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
     // 列出的条目 (含 recursive 下钻结果) 在工具内逐项复核权限后才输出
@@ -178,7 +185,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 // 局部量: 其生命周期覆盖整个 co_await (异步读完整文件/逐行读)
                 std::string workDirStr(workDir);
                 co_return co_await fileReadExecuteAsync(args.raw(), workDirStr);
-            }
+            },
+            0,
+            kReadOnlyFlags
         );
     } else {
         blocking_tool(
@@ -199,7 +208,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
-            }
+            },
+            0,
+            kReadOnlyFlags
         );
     }
     registerReadPathPermission(ctx, kNameRead, "path");
@@ -405,7 +416,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             );
         },
         0,
-        kAutoSummary
+        kReadOnlyFlags
     );
     registerReadPathPermission(ctx, kNameGlob, "file_patterns");
 
@@ -503,7 +514,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
             );
         },
         0,
-        kAutoSummary
+        kReadOnlyFlags
     );
     // 权限限制: 同 glob —— 按 `file_patterns` (数组) 声明读权限决定是否询问,
     // 扫描出的文件在工具内逐项复核后才读取 (被拒/未获批准的文件不读)

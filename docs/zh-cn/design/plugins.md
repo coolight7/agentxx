@@ -426,6 +426,21 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.graph` | 1 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改宿主执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 宿主构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被宿主改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx.agent.tasks` | 1 | 后台任务宿主托管: `register_task/cancel_task` (kit `spawn` 自动注册; 宿主登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 
+### 工具注册 flags (`AgentxxPluginToolSpec::flags`)
+
+注册工具时传入的位标志决定宿主如何对待该工具的执行:
+
+| 标志 | 含义 |
+|---|---|
+| `AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY` | 输出超过 `toolcallSummaryLimitOutputLength` 时自动压缩 (原文经 share_store 卸载) |
+| `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE` | **执行体可与其他并行安全工具并发执行** |
+
+`PARALLEL_SAFE` 只应给"只读、不写会话、不改插件内部共享状态"的工具置位 (文件读 / list /
+glob / grep / 网络查询等); 写文件、命令执行、交互询问类工具保持不置位, 它们与同一批
+tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 assistant 消息声明的调用之间
+(上限见 `AgentConfig::toolParallelMaxConcurrency`), 结果仍按声明的 `tool_call_id`
+顺序写回会话。
+
 ### 工具权限声明的语义 (agentxx.agent.permission)
 
 工具权限限制**由工具来源方 (插件) 声明**, 宿主权限中间件只负责按声明执行统一判定:

@@ -87,6 +87,14 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - **延迟加载**: 插件工具按需注册；`XXToolBase::canDelayLoad` 标记可延迟工具 (默认 true), 初始仅名称注入 system prompt
 - **参数自愈**: `ToolcallWrapNode::autoFixArgsType` 按 JSON Schema 自动修正参数类型 (string↔数组/数值/布尔互转), 提高模型兼容性
 - **重复调用检查**: 启用 `repeatCallCheck` 的 tool 在同一 llm↔tool 链内连续同名同参调用达阈值 (`toolcallRepeatCheckThreshold`, 默认 5, 0=禁用) 时经 permission 总线询问用户确认，防止模型陷入死循环；重置轮次时自愈
+- **受限并行执行**: 同一条 assistant 消息声明的多个 tool_call 拆成三段执行 ——
+  prepare (参数修正 + 权限 + 重复确认) 与 finalize (结果定稿) 按声明顺序串行，
+  run (执行体) 只对**显式声明并行安全**的工具并发 (内置工具 `XXToolBase::supportsParallel`，
+  插件工具注册 flags `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE`；文件读/list/glob/grep 已声明)。
+  未声明的工具保持独占并形成顺序屏障 (写文件、命令执行、交互询问仍严格按声明顺序)；
+  并发上限 `AgentConfig::toolParallelMaxConcurrency` (默认 4，夹到 [1, 32])；
+  结果始终按原始 `tool_call_id` 顺序写回，完成顺序不影响提交顺序；取消时已完成结果保留、
+  未完成的补 `[User canceled]` 占位
 - **去重机制**: 文件读写等工具支持 SummarizationToolHandle，重复调用时截断旧结果
 - **上下文修复优化**: `ModelCallWrapNode::repairMessages` 在调用 LLM 前自动检查和修复上下文结构（合并连续同角色消息、规范化 tool_call 与 tool_result 配对），采用按需验证与最小拷贝优化，显著降低深轮次对话的开销
 - **事件驱动取消**: 命令执行等重型工具接入插件开发框架通用设施 `CancelRegistry`，支持跨线程排他防悬挂锁与即时回调通知，在 Windows 与 Linux/POSIX 下毫秒级即时终止子进程组与管道，而非单纯依赖休眠轮询

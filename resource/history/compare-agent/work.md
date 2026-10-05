@@ -24,8 +24,9 @@
 | PRM-5 | 技能优先级和同名裁决 | P1 | 待完成 | — |
 | STO-12 | 会话检索和标题 | P1 | 存储层完成（界面入口待接） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions` |
 | STO-13 | 会话导出和取证包 | P2 | 待完成 | — |
-| TOOL-1 | 分阶段并行：prepare/dispatch/finalize | P0 | 待完成 | — |
-| TOOL-3 | 并行取消和收尾 | P0 | 待完成 | — |
+| TOOL-1 | 分阶段并行：prepare/dispatch/finalize | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
+| TOOL-2 | 并发分类与上限 | P0 | 完成（已构建 + 测试通过） | `tools/tool.h`、`plugin_api.h`、`config.h` |
+| TOOL-3 | 并行取消和收尾 | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
 | CFG-8 | 配置与设置边界（含会话语言接线） | P1 | 完成（已构建 + 测试通过） | `docs/zh-cn/design/configuration.md`、`AgentConfig::languageExplicit` |
@@ -131,6 +132,63 @@
 
 - 协议与界面入口：`WireListSessions`/会话弹窗还没有"改名"和"搜索"操作；需要新增
   协议消息（或扩展已有的会话列表请求）并在 TUI 会话弹窗接输入框。存储层 API 已就绪。
+
+## 阶段 G：工具三段式执行与受限并行（TOOL-1、TOOL-2、TOOL-3，2026-10-05）
+
+已完成：
+
+- **TOOL-1 分阶段执行**（`agent/lib/src/nodes/toolcall.cpp`）：把原来的 `execTool`
+  一次做完的流程拆成三段，语义等价：
+  - `prepareToolCall`：工具查找（静态表 → 动态插件注册表，插件工具 `shared_ptr` 保活）、
+    参数解析与 `sessionId`/`tool_call_id` 注入、参数类型修正、权限检查、连续重复调用确认；
+    产出 `PreparedToolCall`（含 `args`/`repeatKey`/`shortCircuit`/`startMs`/`parallelSafe`）。
+  - `runToolCallBody`：只执行执行体（含 `maxRetry` 重试），返回原始结果文本。
+  - `finalizeToolCall`：结果定稿（超限时经 share_store 卸载并给定位提示）。
+  - `execTool` 保留为"单次调用完整路径"（prepare → run → finalize），行为与旧实现一致。
+- **TOOL-2 并发分类与上限**：
+  - `XXToolBase` 新增 `supportsParallel`（构造参数 + `extra["supportsParallel"]`，默认 false=独占）；
+  - 插件 API 新增 `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE`（`plugin_api.h`），
+    `PluginTool` 按该位设置；`agentxx_filesystem` 的 list/read/glob/grep 声明并行安全
+    （`kReadOnlyFlags`），写/编辑保持独占；
+  - `AgentConfig::toolParallelMaxConcurrency`（默认 4，夹到 [1, 32]）；
+  - 分批规则：把**连续**的并行安全调用合成一批（不超过上限），遇到独占调用即断批 ——
+    独占工具与其前后调用形成顺序屏障（写文件/命令执行/交互询问的先后关系不变）。
+- **TOOL-3 并行取消与收尾**：
+  - 结果按 `declaredToolCalls` 顺序写回（完成顺序 ≠ 提交顺序时仍按声明顺序入上下文）；
+  - 批内并发用 `co_spawn` + `experimental::channel` 收集完成信号（与 `AgentHost::spawnBatch`
+    同一套做法），子协程捕获共享状态（batch 拷贝进 `shared_ptr`，不引用父协程栈）；
+  - 批次自带 `asio::cancellation_signal`，子协程经 `bind_cancellation_slot` 绑定：
+    会话取消时先发取消信号让子协程的挂起等待尽快结束，再让调用方按取消路径收尾
+    （已完成结果保留、未完成补 `[User canceled]`、每条 tool_call 都有回复）；
+  - 所有逃逸异常在 `runPreparedToolCallGuarded` 收口（`NodeInterrupt` → 中断语义；
+    其余 → 取消语义）：派生协程里的未捕获异常会走到 detached 处理器并终止进程，必须兜住。
+
+测试（新模块 `toolcall_parallel`，`agent/test/core/test_toolcall_parallel.cpp`，48 项断言）：
+
+| 用例 | 覆盖点 |
+|---|---|
+| T1 | 3 个并行安全工具区间重叠（b/c 在 a 结束前已开始）、完成顺序与声明顺序不同、结果仍按声明顺序 |
+| T2 | 独占工具与前后调用互不重叠且顺序严格（p1 → w → p2），结果顺序正确 |
+| T3 | 并发上限 2 生效（3 个调用分成 2 + 1 批，同时在跑峰值 = 2） |
+| T4 | 取消：快工具结果保留、执行中的与未启动的补 `[User canceled]`、未启动的执行体确实未运行 |
+
+验证：
+
+- 构建：`agentxx_lib_repo-build` 的 `INSTALL` + `agentxx_test` 均 exit=0，无新增 error/warning。
+- 测试：`toolcall_parallel` 48/0、`toolcall_args` 173/0、`agent` 192/0、`boundaries` 8/0、
+  `message_supplement` 95/0、`cancel` 45/0、`session_persistence` 621/0、
+  `plugin_resources` 88/0、`usage_ledger` 21/0 —— 全部 0 失败。
+
+注意事项 / 与计划的差异：
+
+- 计划把 TOOL-1/2/3 拆成三次提交（先纯重构、再加并发、最后取消收尾）。本次一次完成：
+  三段式拆分与并发调度共用同一批 `PreparedToolCall` 结构，分三次提交会产生两轮中间态
+  改动与回归成本；改为一次性提交并用 `toolcall_parallel` + `agent`/`message_supplement`/
+  `cancel` 三组回归覆盖旧行为（顺序执行路径、中断、取消收尾）。
+- 并发只在**同一条 assistant 消息声明的调用**之间发生；跨轮次、跨会话不引入新并发。
+- 独占工具不再"等待前一个独占工具完成才准备下一个"：prepare 阶段仍然全部串行（权限询问与
+  HIL 顺序稳定），只是执行阶段按批次推进。
+- 内置工具目前只有插件工具声明了并行安全；`XXToolBase` 派生类可用构造参数声明。
 
 ## 阶段 F：执行环境加固、记忆体积告警、UI 兼容与渲染边界（TOOL-17、PRM-4、UI-3、UI-4，2026-10-05）
 
@@ -319,6 +377,7 @@
 - 阶段 C（STO-12 存储层）完成后提交：见 git 记录 `实现会话标题与检索 (计划 STO-12)`。
 - 阶段 E（SEC-9 / TST-13 / CFG-8）完成后提交：`新增安全责任、配置边界与实施状态文档, 会话语言与界面语言解耦 (SEC-9/TST-13/CFG-8)`。
 - 阶段 F（TOOL-17 / PRM-4 / UI-3 / UI-4）完成后提交：`命令执行环境加固、记忆文件体积告警、UI 兼容与渲染边界测试 (TOOL-17/PRM-4/UI-3/UI-4)`。
+- 阶段 G（TOOL-1 / TOOL-2 / TOOL-3）完成后提交：`工具调用三段式执行与受限并行 (TOOL-1/TOOL-2/TOOL-3)`。
 
 ## 未实施项的原因与建议路径（下次继续）
 

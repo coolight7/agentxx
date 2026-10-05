@@ -39,6 +39,7 @@
 #include "agentxx-test/core/test_string_util.h"
 #include "agentxx-test/core/test_subagent_bus.h"
 #include "agentxx-test/core/test_subagent_tool.h"
+#include "agentxx-test/core/test_toolcall_parallel.h"
 #include "agentxx-test/core/test_summarization.h"
 #include "agentxx-test/core/test_training.h"
 #include "agentxx-test/core/test_ui_items.h"
@@ -409,6 +410,7 @@ int main(int argn, char** argv) {
                 co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
                 co_await run("agent", agentxx::test::run_agent_tests);
                 co_await run("usage_ledger", agentxx::test::test_usage_ledger);
+    co_await run("toolcall_parallel", agentxx::test::run_toolcall_parallel_tests);
                 co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 
                 ioCtx.stop();

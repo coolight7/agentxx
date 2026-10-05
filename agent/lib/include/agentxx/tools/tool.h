@@ -67,13 +67,21 @@ public:
     /// - 功能实现见 [agentxx::nodes::ToolcallWrapNode::execTool]
     const bool repeatCallCheck;
 
+    /// - 执行体是否可与其他同样声明并行安全的工具**并发执行** (默认 false = 独占)
+    /// - 只应给只读、不写会话、不改共享状态的工具置为 true (文件读/搜索/网络查询);
+    ///   写文件、命令执行、交互询问类工具必须保持 false
+    /// - 并发只发生在同一条 assistant 消息声明的工具调用之间, 结果按声明顺序写回;
+    ///   并发上限见 [agentxx::agent::AgentConfig::toolParallelMaxConcurrency]
+    const bool supportsParallel;
+
     XXToolBase(
         std::string_view                            in_name,
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
         bool                                        in_autoSummaryOutput = false,
         bool                                        in_canDelayLoad      = true,
         size_t                                      in_maxRetry          = 0,
-        bool                                        in_repeatCallCheck   = false
+        bool                                        in_repeatCallCheck   = false,
+        bool                                        in_supportsParallel  = false
     );
 
     std::string get_name() const override;
@@ -123,7 +131,8 @@ public:
         size_t                                                      in_maxRetry          = 0,
         std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
         = std::nullopt,
-        bool in_repeatCallCheck = false
+        bool in_repeatCallCheck = false,
+        bool in_supportsParallel = false
     );
 
     std::string get_name() const override;

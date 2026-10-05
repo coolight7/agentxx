@@ -1,4 +1,5 @@
 #include "agentxx/nodes/toolcall.h"
+#include "agentxx/util/exception.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/event/event_stream.h"
@@ -7,6 +8,14 @@
 #include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
+#include "asio/as_tuple.hpp"
+#include "asio/bind_cancellation_slot.hpp"
+#include "asio/cancellation_signal.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/experimental/channel.hpp"
+#include "asio/this_coro.hpp"
+#include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
@@ -14,12 +23,14 @@
 #include <cassert>
 #include <cerrno>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -611,19 +622,46 @@ asio::awaitable<void> ToolcallWrapNode::onHandleEnd(
     co_await item.onToolcallEndFunc(in, result);
 }
 
-asio::awaitable<std::string> ToolcallWrapNode::execTool(
+bool ToolcallWrapNode::isParallelSafeTool(const neograph::Tool& tool) {
+    // 执行体显式声明并行安全才参与并发 (未声明 = 独占, 与后续调用形成顺序屏障):
+    // 声明来自工具自身 —— 内置工具走 XXToolBase 构造参数, 插件工具走注册 flags,
+    // 两者最终都落在 tool->extra 表上
+    const auto it = tool.extra.find("supportsParallel");
+    return it != tool.extra.end() && it->second == "true";
+}
+
+size_t ToolcallWrapNode::toolParallelLimit() const {
+    size_t limit = 4;
+    if (auto ctx = agentContext.lock(); ctx && ctx->agentConfig) {
+        limit = ctx->agentConfig->toolParallelMaxConcurrency;
+    }
+    // 上限夹到 [1, 32]: 0/异常配置退化为串行, 避免误配出无界并发
+    if (limit == 0) {
+        return 1;
+    }
+    return std::min<size_t>(limit, 32);
+}
+
+namespace {
+
+/// prepare 阶段的执行体无关部分: 参数类型修正 + 权限检查 + 连续重复调用确认
+/// - 全程串行执行 (权限询问与 HIL 询问按模型声明顺序发生), 不写会话、不执行工具
+/// - `return` 无需执行执行体时的结果内容 (权限拒绝 / 重复调用被用户拒绝)
+/// - 取消 (CancelledException) 与中断 (NodeInterrupt) 照常抛出, 由调用方按控制流处理
+asio::awaitable<std::optional<std::string>> prepareToolInvocation(
+    const std::shared_ptr<agentxx::agent::AgentContext>& agentCtxPtr,
     neograph::Tool*                                      tool,
     utilxx_base::Json&                                   args,
     const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
     bool                                                 repeatCallTriggered,
     std::string_view                                     repeatCallKey
-) const {
-    auto agentCtxPtr = agentContext.lock();
+) {
+    (void)cancelToken;
     {
         // 参数类型自动修正: 根据 tool 参数 JSON Schema 尽量让 arg 类型匹配参数需求
         // (string<->number/bool, string->字符串数组, [单字符串数组]->string 等)
         try {
-            autoFixArgsType(tool->get_definition(), args);
+            ToolcallWrapNode::autoFixArgsType(tool->get_definition(), args);
         } catch (const std::exception& e) {
             XX_LOGW("Toolcall auto-fix arg type failed: {}", e.what());
         }
@@ -646,7 +684,7 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
                           std::chrono::milliseconds{0}
                       );
             if (resp.has_value() && !resp->allow) {
-                co_return "[Permission denied]";
+                co_return std::string{"[Permission denied]"};
             }
         }
     }
@@ -722,10 +760,99 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
             }
         }
     }
+    co_return std::nullopt;
+}
 
-    // 权限检查可能 co_await 挂起过, 执行 tool 前检查取消埋点
-    if (cancelToken) {
-        cancelToken->throw_if_cancelled("before tool execution");
+} // namespace
+
+asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
+    const neograph::ToolCall&                            tc,
+    std::string_view                                     sessionId,
+    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
+    const std::set<std::string>&                         repeatTriggeredKeys,
+    const std::map<std::string, std::string>&            toolcallsCache,
+    PreparedToolCall&                                    out
+) const {
+    auto agentCtxPtr = agentContext.lock();
+
+    out = PreparedToolCall{};
+    out.tc        = &tc;
+    out.cancelToken = cancelToken;
+    out.startMs   = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        )
+            .count()
+    );
+    out.repeatKey = makeRepeatCallKey(tc.name, tc.arguments);
+    out.repeatHit = repeatTriggeredKeys.count(out.repeatKey) > 0;
+
+    // 中断缓存: 上次中断前已完成的结果直接复用 (不再执行, 也不再询问)
+    if (auto cacheIt = toolcallsCache.find(tc.id); cacheIt != toolcallsCache.end()) {
+        out.shortCircuit = cacheIt->second;
+        co_return false;
+    }
+
+    // 执行体查找: 静态工具列表优先, 未命中再查动态插件工具注册表
+    // - 插件工具以 shared_ptr 持有 (与插件 inflight 计数配合: 卸载等待归零后
+    //   才 dlclose, 执行期间代码段保持有效)
+    auto it = std::find_if(tools_.begin(), tools_.end(), [&](neograph::Tool* t) {
+        return t->get_name() == tc.name;
+    });
+    if (it != tools_.end()) {
+        out.tool = *it;
+    } else {
+        auto pluginTool = (agentCtxPtr && agentCtxPtr->toolRegistry)
+                              ? agentCtxPtr->toolRegistry->find(tc.name)
+                              : nullptr;
+        if (!pluginTool) {
+            out.shortCircuit = fmt::format(R"([Error] Tool not found: {})", tc.name);
+            co_return false;
+        }
+        out.tool      = pluginTool.get();
+        out.keepAlive = std::move(pluginTool);
+    }
+
+    // 参数: 解析模型给出的 JSON 后注入会话标识 (与旧实现同口径)
+    // - 解析失败按"本次调用失败"处理 (结果消息回给模型), 不影响同批其他调用
+    utilxx_base::Json args;
+    try {
+        args = utilxx_base::Json::parse(tc.arguments);
+    } catch (const std::exception& e) {
+        out.shortCircuit = fmt::format("[Exception aborted: {}]", e.what());
+        co_return false;
+    }
+    if (args.is_object()) {
+        args["sessionId"]    = std::string{sessionId};
+        args["tool_call_id"] = tc.id;
+    }
+    out.args         = std::move(args);
+    out.parallelSafe = isParallelSafeTool(*out.tool);
+
+    // 参数修正 + 权限检查 + 重复调用确认 (可能挂起等待用户, 全程串行)
+    auto shortCircuit = co_await prepareToolInvocation(
+        agentCtxPtr,
+        out.tool,
+        out.args,
+        cancelToken,
+        out.repeatHit,
+        out.repeatKey
+    );
+    if (shortCircuit.has_value()) {
+        out.shortCircuit = std::move(shortCircuit);
+        co_return false;
+    }
+    co_return true;
+}
+
+asio::awaitable<std::string>
+    ToolcallWrapNode::runToolCallBody(const PreparedToolCall& prepared) const {
+    auto*       tool = prepared.tool;
+    const auto& args = prepared.args;
+
+    // 权限检查/重复确认可能 co_await 挂起过, 执行 tool 前检查取消埋点
+    if (prepared.cancelToken) {
+        prepared.cancelToken->throw_if_cancelled("before tool execution");
     }
 
     size_t maxRetry = 0;
@@ -781,6 +908,21 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         retry++;
     } while (true);
 
+    co_return result;
+}
+
+asio::awaitable<std::string> ToolcallWrapNode::finalizeToolCall(
+    const PreparedToolCall& prepared,
+    std::string             rawResult
+) const {
+    auto agentCtxPtr = agentContext.lock();
+    if (!agentCtxPtr || !agentCtxPtr->agentConfig) {
+        co_return std::move(rawResult);
+    }
+    auto*       tool   = prepared.tool;
+    const auto& args   = prepared.args;
+    std::string result = std::move(rawResult);
+
     const size_t limitLength = agentCtxPtr->agentConfig->toolcallSummaryLimitOutputLength;
     // 用 find 读取 (operator[] 会插入缺失键); 缺失 = 未启用压缩
     const auto autoSummaryIt = tool->extra.find("autoSummaryOutput");
@@ -827,6 +969,291 @@ asio::awaitable<std::string> ToolcallWrapNode::execTool(
         }
     }
     co_return result;
+}
+
+asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPreparedToolCall(
+    const PreparedToolCall& prepared,
+    std::exception_ptr*     outError,
+    bool*                   outInterrupted
+) const {
+    // 节点/agent 已释放 (协程被并发调度后上下文消失): 不产出结果
+    if (agentContext.expired()) {
+        co_return std::nullopt;
+    }
+
+    neograph::ChatMessage tool_msg;
+    tool_msg.role                 = "tool";
+    tool_msg.tool_call_id         = prepared.tc ? prepared.tc->id : std::string{};
+    tool_msg.tool_name            = prepared.tc ? prepared.tc->name : std::string{};
+    tool_msg.extra["startTimeMs"] = prepared.startMs;
+
+    if (prepared.shortCircuit.has_value()) {
+        // 无需执行: 中断缓存命中 / 工具不存在 / 权限拒绝 / 重复调用被拒 / 中断占位
+        tool_msg.content = *prepared.shortCircuit;
+        if (prepared.interrupted) {
+            tool_msg.flags |= neograph::MessageFlag::Interrupt;
+        }
+        tool_msg.extra["durationMs"] = 0;
+        co_return tool_msg;
+    }
+
+    bool        ok      = false;
+    std::string content;
+    co_await agentxx::util::catchErrorAsync<bool>(
+        [&]() -> asio::awaitable<bool> {
+            try {
+                content = co_await runToolCallBody(prepared);
+                content = co_await finalizeToolCall(prepared, std::move(content));
+                // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
+                if (prepared.cancelToken) {
+                    prepared.cancelToken->throw_if_cancelled("after tool execution");
+                }
+                ok = true;
+            } catch (const neograph::graph::CancelledException&) {
+                // 取消属于控制流: 记录后由调用方按取消路径收尾
+                if (outError) {
+                    *outError = std::current_exception();
+                }
+            } catch (const neograph::graph::NodeInterrupt&) {
+                // tool 触发中断: 只标记本调用, 中断参数由上层在恢复时按 resultId 取
+                if (outInterrupted) {
+                    *outInterrupted = true;
+                }
+                tool_msg.flags  |= neograph::MessageFlag::Interrupt;
+                tool_msg.content = "[Interrupt]";
+            }
+            co_return true;
+        },
+        [&](std::string errinfo) -> asio::awaitable<bool> {
+            content = fmt::format("[Exception aborted: {}]", errinfo);
+            ok      = true;
+            co_return true;
+        },
+        // 控制流异常兜底 (取消/中断): 不由本函数向外抛 —— 派生协程里逃逸的异常
+        // 会走到 detached 处理器并终止进程; 顺序路径也会跳过调用方的取消收尾。
+        // 这里统一记为"本次调用被取消", 由调用方补 [User canceled] 占位
+        [&](std::string& errinfo) -> std::optional<bool> {
+            if (outError) {
+                *outError = std::make_exception_ptr(
+                    neograph::graph::CancelledException(errinfo)
+                );
+            }
+            return std::optional<bool>{true};
+        },
+        // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted 转换为
+        // CancelledException, 避免取消被当作普通 tool 错误吞掉
+        prepared.cancelToken
+    );
+
+    if (outError && *outError) {
+        // 取消: 不产出结果 (由调用方补 [User canceled] 占位并保留已完成结果)
+        co_return std::nullopt;
+    }
+    if (tool_msg.content.empty()) {
+        tool_msg.content = std::move(content);
+    }
+    if (ok) {
+        const auto endMs = static_cast<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            )
+                .count()
+        );
+        tool_msg.extra["durationMs"] = std::max<int64_t>(0, endMs - prepared.startMs);
+    } else {
+        tool_msg.extra["durationMs"] = 0;
+    }
+    co_return tool_msg;
+}
+
+asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
+    const PreparedToolCall&               prepared,
+    std::optional<neograph::ChatMessage>& outMsg,
+    std::exception_ptr&                   outError,
+    bool&                                 outInterrupted
+) const {
+    try {
+        auto msg = co_await runPreparedToolCall(prepared, &outError, &outInterrupted);
+        if (msg.has_value()) {
+            outMsg = std::move(*msg);
+        }
+    } catch (const neograph::graph::NodeInterrupt&) {
+        // 中断逃逸到此 (内层已按中断语义处理大部分情况): 保持中断语义
+        outInterrupted = true;
+        neograph::ChatMessage msg;
+        msg.role                 = "tool";
+        msg.tool_call_id         = prepared.tc ? prepared.tc->id : std::string{};
+        msg.tool_name            = prepared.tc ? prepared.tc->name : std::string{};
+        msg.content              = "[Interrupt]";
+        msg.flags               |= neograph::MessageFlag::Interrupt;
+        msg.extra["startTimeMs"] = prepared.startMs;
+        msg.extra["durationMs"]  = 0;
+        outMsg                   = std::move(msg);
+    } catch (...) {
+        // 取消 (含 asio 取消产生的 operation_aborted) 与其它逃逸异常: 一律记为取消,
+        // 由调用方补 [User canceled] 占位并保留已完成结果
+        if (outError == nullptr) {
+            outError = std::make_exception_ptr(
+                neograph::graph::CancelledException("tool call aborted")
+            );
+        }
+    }
+    co_return;
+}
+
+asio::awaitable<void> ToolcallWrapNode::runToolBatch(
+    const std::vector<PreparedToolCall>&              batch,
+    std::vector<std::optional<neograph::ChatMessage>>& outMsgs,
+    std::exception_ptr&                               outError,
+    bool&                                             outInterrupted
+) const {
+    outMsgs.assign(batch.size(), std::nullopt);
+    outError       = nullptr;
+    outInterrupted = false;
+    if (batch.empty()) {
+        co_return;
+    }
+
+    // 单条调用: 直接顺序执行 (不额外派生协程, 省一次调度)
+    if (batch.size() == 1) {
+        co_await runPreparedToolCallGuarded(batch[0], outMsgs[0], outError, outInterrupted);
+        co_return;
+    }
+
+    // 多条: 派生为独立协程并发推进 (单 io 线程上交错执行, 不引入线程锁)
+    // - 结果按 batch 内槽位写回: 完成顺序与提交顺序无关
+    // - batch 复制进共享状态: 派生的协程不引用本协程栈上的数据
+    auto ex = co_await asio::this_coro::executor;
+    struct BatchState {
+        std::vector<PreparedToolCall>                     batch;
+        std::vector<std::optional<neograph::ChatMessage>> msgs;
+        std::exception_ptr                                error;
+        bool                                              interrupted = false;
+    };
+    auto state       = std::make_shared<BatchState>();
+    state->batch     = batch;
+    state->msgs.assign(batch.size(), std::nullopt);
+    auto doneChannel = std::make_shared<
+        asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>(
+        ex,
+        static_cast<unsigned>(batch.size())
+    );
+    // 本批次的取消信号: 会话取消时先向子协程发信号 (让它们的挂起等待尽快结束),
+    // 再按取消路径返回, 不留下后台仍在推进的工具执行
+    auto batchCancelSignal = std::make_shared<asio::cancellation_signal>();
+
+    for (size_t i = 0; i < state->batch.size(); ++i) {
+        asio::co_spawn(
+            ex,
+            [this, state, doneChannel, batchCancelSignal, i]() -> asio::awaitable<void> {
+                // RAII 守卫: 无论单条调用如何退出都保证发送完成信号 (父协程不悬挂)
+                struct DoneGuard {
+                    std::shared_ptr<
+                        asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>
+                           ch;
+                    size_t idx;
+
+                    ~DoneGuard() {
+                        if (ch) {
+                            ch->async_send(
+                                utilxx_base::AsioErrorCode{},
+                                idx,
+                                [](utilxx_base::AsioErrorCode) {}
+                            );
+                        }
+                    }
+                } guard{doneChannel, i};
+
+                // 派生协程内绝不允许异常逃逸 (detached 处理器的未捕获异常会终止进程):
+                // 取消/中断等控制流异常记入共享状态, 其余记为该调用的错误结果
+                co_await runPreparedToolCallGuarded(
+                    state->batch[i],
+                    state->msgs[i],
+                    state->error,
+                    state->interrupted
+                );
+            },
+            asio::bind_cancellation_slot(batchCancelSignal->slot(), asio::detached)
+        );
+    }
+    // 等待全部完成 (接收 n 次)
+    // - 会话取消会让节点协程上挂起的等待以 operation_aborted 结束 (as_tuple 把
+    //   错误作为结果返回, 不抛异常): 此时停止等待, 保留已完成结果, 让调用方按
+    //   取消路径补齐 [User canceled] 占位 (未完成的槽位保持空)
+    bool waitCancelled = false;
+    for (size_t i = 0; i < state->batch.size(); ++i) {
+        auto [ec, idx]
+            = co_await doneChannel->async_receive(asio::as_tuple(asio::use_awaitable));
+        (void)idx;
+        if (ec) {
+            waitCancelled = true;
+            break;
+        }
+    }
+    if (waitCancelled) {
+        // 让子协程的挂起等待尽快结束 (避免取消后仍在后台推进工具执行)
+        batchCancelSignal->emit(asio::cancellation_type::all);
+        outMsgs = state->msgs;
+        if (outError == nullptr) {
+            outError = std::make_exception_ptr(
+                neograph::graph::CancelledException("cancelled while waiting tool batch")
+            );
+        }
+        XX_LOGD(
+            "Toolcall batch wait cancelled: {} of {} call(s) already finished",
+            [&] {
+                size_t done = 0;
+                for (const auto& m : outMsgs) {
+                    if (m.has_value()) {
+                        ++done;
+                    }
+                }
+                return done;
+            }(),
+            outMsgs.size()
+        );
+        co_return;
+    }
+
+    outMsgs        = std::move(state->msgs);
+    outError       = state->error;
+    outInterrupted = state->interrupted;
+    co_return;
+}
+
+asio::awaitable<std::string> ToolcallWrapNode::execTool(
+    neograph::Tool*                                      tool,
+    utilxx_base::Json&                                   args,
+    const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,
+    bool                                                 repeatCallTriggered,
+    std::string_view                                     repeatCallKey
+) const {
+    // 单次调用的完整路径 (prepare → run → finalize), 顺序执行时使用
+    auto agentCtxPtr = agentContext.lock();
+
+    PreparedToolCall prepared;
+    prepared.tool        = tool;
+    prepared.args        = args;
+    prepared.cancelToken = cancelToken;
+    prepared.repeatKey   = std::string{repeatCallKey};
+    prepared.repeatHit   = repeatCallTriggered;
+
+    auto shortCircuit = co_await prepareToolInvocation(
+        agentCtxPtr,
+        tool,
+        prepared.args,
+        cancelToken,
+        repeatCallTriggered,
+        repeatCallKey
+    );
+    if (shortCircuit.has_value()) {
+        // 参数被修正过也要写回 (调用方可能继续使用 args)
+        args = prepared.args;
+        co_return std::move(*shortCircuit);
+    }
+    auto raw = co_await runToolCallBody(prepared);
+    args     = prepared.args;
+    co_return co_await finalizeToolCall(prepared, std::move(raw));
 }
 
 asio::awaitable<void> ToolcallWrapNode::baseRun(
@@ -942,176 +1369,121 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             = findConsecutiveRepeatCallKeys(messages, assistantMsgIndex, repeatThreshold);
     }
 
-    auto onExecTool = [&](const neograph::ToolCall& tc) -> asio::awaitable<neograph::ChatMessage> {
-        const auto    execStartTime = std::chrono::system_clock::now();
-        const int64_t startMs       = static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(execStartTime.time_since_epoch())
-                .count()
+    // ---- 工具调用执行: prepare (串行) → run (受限并发) → finalize (串行) ----
+    //
+    // - prepare/finalize 串行: 权限询问与重复调用确认按模型声明顺序发生, 询问与
+    //   HIL 语义与顺序执行时完全一致
+    // - run 只对**声明并行安全**的执行体并发 (见 XXToolBase::supportsParallel):
+    //   连续的可并行调用合成一批 (上限 [AgentConfig::toolParallelMaxConcurrency]),
+    //   独占调用单独成批, 与前后调用形成顺序屏障 —— 写文件、命令执行、交互询问
+    //   仍保持模型声明的先后关系
+    // - 结果始终按 [declaredToolCalls] 顺序写回: 并发完成顺序不影响提交顺序;
+    //   取消时已完成结果保留, 未完成补 [User canceled] 占位 (见下方取消分支)
+    auto preparedCalls = std::vector<PreparedToolCall>{};
+    preparedCalls.reserve(declaredToolCalls.size());
+    for (const auto& tc : declaredToolCalls) {
+        PreparedToolCall   prepared;
+        std::exception_ptr prepError;
+        bool               prepInterrupted = false;
+        co_await agentxx::util::catchErrorAsync<bool>(
+            [&]() -> asio::awaitable<bool> {
+                try {
+                    co_return co_await prepareToolCall(
+                        tc,
+                        in.ctx.thread_id,
+                        in.ctx.cancel_token,
+                        repeatTriggeredKeys,
+                        toolcallsCache,
+                        prepared
+                    );
+                } catch (const neograph::graph::CancelledException&) {
+                    prepError = std::current_exception();
+                } catch (const neograph::graph::NodeInterrupt&) {
+                    // 重复调用确认触发中断: 本调用留 [Interrupt] 占位且不执行,
+                    // 其余调用照常执行 (与旧实现一致: 结果与占位一起进中断缓存,
+                    // 恢复时已完成的结果复用, 中断的那条重新执行)
+                    prepInterrupted = true;
+                } catch (const std::exception& e) {
+                    // 其他异常: 会话已取消 (如 asio 取消导致的 operation_aborted)
+                    // 按取消处理, 否则作为本次调用的错误结果回给模型
+                    if (in.ctx.cancel_token && in.ctx.cancel_token->is_cancelled()) {
+                        prepError = std::current_exception();
+                    } else {
+                        prepared.shortCircuit = fmt::format("[Exception aborted: {}]", e.what());
+                    }
+                }
+                co_return false;
+            },
+            [&](std::string errinfo) -> asio::awaitable<bool> {
+                // 参数解析/权限服务等普通异常: 作为本次调用的结果, 不影响同批其他调用
+                prepared.shortCircuit = fmt::format("[Exception aborted: {}]", errinfo);
+                co_return true;
+            },
+            // 控制流异常兜底 (取消/中断): 记为取消, 由调用方按取消路径收尾
+            [&](std::string& errinfo) -> std::optional<bool> {
+                prepError = std::make_exception_ptr(neograph::graph::CancelledException(errinfo));
+                return std::optional<bool>{true};
+            },
+            in.ctx.cancel_token
         );
-        neograph::ChatMessage tool_msg;
-        tool_msg.role         = "tool";
-        tool_msg.tool_call_id = tc.id;
-        tool_msg.tool_name    = tc.name;
-        {
-            // 尝试缓存
-            auto cacheit = toolcallsCache.find(tc.id);
-            if (cacheit != toolcallsCache.end()) {
-                tool_msg.content              = cacheit->second;
-                tool_msg.extra["startTimeMs"] = startMs;
-                tool_msg.extra["durationMs"]  = 0;
-                co_return tool_msg;
-            }
+        if (prepError) {
+            // 取消: 停止准备, 未执行的调用由下方统一补占位
+            isCancel       = true;
+            cancelErrorPtr = prepError;
+            break;
         }
+        if (prepInterrupted) {
+            prepared.interrupted  = true;
+            prepared.shortCircuit = "[Interrupt]";
+            isInterrupt           = true;
+        }
+        preparedCalls.push_back(std::move(prepared));
+    }
 
-        // 当前调用的重复标识 key 与是否命中循环检测 (仅命中的调用会被询问确认)
-        const auto repeatKey = makeRepeatCallKey(tc.name, tc.arguments);
-        const bool repeatHit = repeatTriggeredKeys.count(repeatKey) > 0;
-
-        auto it = std::find_if(tools_.begin(), tools_.end(), [&](neograph::Tool* t) {
-            return t->get_name() == tc.name;
-        });
-        if (it == tools_.end()) {
-            // 静态列表未命中: 查动态插件工具注册表 (热插拔工具)
-            // - 返回 shared_ptr 保持插件代码段存活 (与插件的 inflight 计数配合,
-            //   卸载流程等计数归零后才 dlclose)
-            auto pluginTool = (agentCtxPtr && agentCtxPtr->toolRegistry)
-                                  ? agentCtxPtr->toolRegistry->find(tc.name)
-                                  : nullptr;
-            if (!pluginTool) {
-                tool_msg.content = fmt::format(R"([Error] Tool not found: {})", tc.name);
-            } else {
-                std::exception_ptr errorPtr;
-                co_await agentxx::util::catchErrorAsync<bool>(
-                    [&]() -> asio::awaitable<bool> {
-                        try {
-                            auto args = utilxx_base::Json::parse(tc.arguments);
-                            if (args.is_object()) {
-                                // append arg `session_id`
-                                args["sessionId"] = in.ctx.thread_id;
-                                // - 注入 toolCallId 供 tool 使用 (如 agentxx_subagent
-                                // 的中断 resultId)
-                                args["tool_call_id"] = tc.id;
-                            }
-                            tool_msg.content = co_await execTool(
-                                pluginTool.get(),
-                                args,
-                                in.ctx.cancel_token,
-                                repeatHit,
-                                repeatKey
-                            );
-                            // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
-                            if (in.ctx.cancel_token) {
-                                in.ctx.cancel_token->throw_if_cancelled("after tool execution");
-                            }
-                        } catch (const neograph::graph::CancelledException&) {
-                            // TODO: 保存已有的 toolcall 结果由 baseRun 的取消捕获处保存后再重新抛出
-                            errorPtr = std::current_exception();
-                        } catch (const neograph::graph::NodeInterrupt&) {
-                            // tool触发中断
-                            // - 不应在这里提取中断参数，协程并发等 co_await
-                            // 执行完成时可能参数数组已经不是单一值
-                            isInterrupt       = true;
-                            tool_msg.flags   |= neograph::MessageFlag::Interrupt;
-                            tool_msg.content  = "[Interrupt]";
-                        }
-                        co_return true;
-                    },
-                    [&](std::string errinfo) -> asio::awaitable<bool> {
-                        tool_msg.content = fmt::format("[Exception aborted: {}]", errinfo);
-                        co_return true;
-                    },
-                    nullptr,
-                    // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted
-                    // 转换为 CancelledException, 避免取消被当作普通 tool 错误吞掉
-                    in.ctx.cancel_token
-                );
-                if (errorPtr) {
-                    std::rethrow_exception(errorPtr);
+    if (false == isCancel) {
+        // ---- 分批执行: 批内并发 (仅并行安全调用), 批间按声明顺序串行 ----
+        const size_t parallelLimit = toolParallelLimit();
+        size_t       index         = 0;
+        while (index < preparedCalls.size()) {
+            std::vector<PreparedToolCall> batch;
+            batch.reserve(parallelLimit);
+            batch.push_back(preparedCalls[index]);
+            const bool collectMore = preparedCalls[index].parallelSafe;
+            ++index;
+            // 只把**连续**的并行安全调用合批: 中间出现独占工具即断批, 保证写/交互
+            // 类工具与其前后调用的先后顺序
+            if (collectMore) {
+                while (index < preparedCalls.size() && preparedCalls[index].parallelSafe
+                       && batch.size() < parallelLimit) {
+                    batch.push_back(preparedCalls[index]);
+                    ++index;
                 }
             }
-        } else {
-            std::exception_ptr errorPtr;
-            co_await agentxx::util::catchErrorAsync<bool>(
-                [&]() -> asio::awaitable<bool> {
-                    try {
-                        auto args = utilxx_base::Json::parse(tc.arguments);
-                        if (args.is_object()) {
-                            // append arg `session_id`
-                            args["sessionId"] = in.ctx.thread_id;
-                            // - 注入 tool_call_id 供 tool 使用 (如 agentxx_subagent 的中断
-                            // resultId)
-                            args["tool_call_id"] = tc.id;
-                        }
-                        tool_msg.content = co_await execTool(
-                            *it,
-                            args,
-                            in.ctx.cancel_token,
-                            repeatHit,
-                            repeatKey
-                        );
-                        // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
-                        if (in.ctx.cancel_token) {
-                            in.ctx.cancel_token->throw_if_cancelled("after tool execution");
-                        }
-                    } catch (const neograph::graph::CancelledException&) {
-                        // TODO: 保存已有的 toolcall 结果由 baseRun 的取消捕获处保存后再重新抛出
-                        errorPtr = std::current_exception();
-                    } catch (const neograph::graph::NodeInterrupt&) {
-                        // tool触发中断
-                        // - 不应在这里提取中断参数，协程并发等 co_await
-                        // 执行完成时可能参数数组已经不是单一值
-                        isInterrupt       = true;
-                        tool_msg.flags   |= neograph::MessageFlag::Interrupt;
-                        tool_msg.content  = "[Interrupt]";
-                    }
-                    co_return true;
-                },
-                [&](std::string errinfo) -> asio::awaitable<bool> {
-                    tool_msg.content = fmt::format("[Exception aborted: {}]", errinfo);
-                    co_return true;
-                },
-                nullptr,
-                // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted
-                // 转换为 CancelledException, 避免取消被当作普通 tool 错误吞掉
-                in.ctx.cancel_token
-            );
-            if (errorPtr) {
-                std::rethrow_exception(errorPtr);
-            }
-        }
-        const auto    execEndTime = std::chrono::system_clock::now();
-        const int64_t durationMs  = std::max(
-            int64_t{0},
-            static_cast<int64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(execEndTime - execStartTime)
-                    .count()
-            )
-        );
-        tool_msg.extra["startTimeMs"] = startMs;
-        tool_msg.extra["durationMs"]  = durationMs;
-        co_return tool_msg;
-    };
 
-    /// 执行 toolcall
-    std::vector<asio::awaitable<neograph::ChatMessage>> toolcallResults{};
-    for (const auto& tc : declaredToolCalls) {
-        toolcallResults.emplace_back(onExecTool(tc));
-    }
-    for (auto& item : toolcallResults) {
-        // TODO: 真正并行
-        try {
-            auto           msg = co_await std::move(item);
-            neograph::json neoJson;
-            neograph::to_json(neoJson, msg);
-            results.push_back(agentxx::util::fromNeographJson(neoJson));
-            typedResults.push_back(std::move(msg));
-            completedToolcallIds.insert(typedResults.back().tool_call_id);
-        } catch (const neograph::graph::CancelledException&) {
-            // - 取消: 停止执行后续 tool, 由下方补齐未完成 tool 的取消提示消息
-            // - 中断 (NodeInterrupt) 已在 onExecTool 内部捕获处理, 不会抛到这里
-            isCancel       = true;
-            cancelErrorPtr = std::current_exception();
-            break;
+            std::vector<std::optional<neograph::ChatMessage>> batchMsgs;
+            std::exception_ptr                                batchError;
+            bool                                              batchInterrupted = false;
+            co_await runToolBatch(batch, batchMsgs, batchError, batchInterrupted);
+            if (batchInterrupted) {
+                isInterrupt = true;
+            }
+            for (auto& msg : batchMsgs) {
+                if (false == msg.has_value()) {
+                    continue;
+                }
+                neograph::json neoJson;
+                neograph::to_json(neoJson, *msg);
+                results.push_back(agentxx::util::fromNeographJson(neoJson));
+                completedToolcallIds.insert(msg->tool_call_id);
+                typedResults.push_back(std::move(*msg));
+            }
+            if (batchError) {
+                // - 取消: 停止执行后续批次, 由下方补齐未完成 tool 的取消提示消息
+                // - 已完成批次的工具结果保留 (会话是唯一权威, 不受图状态回滚影响)
+                isCancel       = true;
+                cancelErrorPtr = batchError;
+                break;
+            }
         }
     }
 
@@ -1121,6 +1493,12 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         //   唯一权威, 不受图状态回滚影响, 已完成的 tool 结果不会丢失
         // - 未完成的 tool 插入 [User canceled] 提示, 保证每条 assistant tool_call
         //   都有对应的 tool 结果消息, 上下文角色顺序和内容完整
+        XX_LOGD(
+            "Toolcall cancel path: declared={} completed={} results={}",
+            declaredToolCalls.size(),
+            completedToolcallIds.size(),
+            typedResults.size()
+        );
         for (const auto& tc : declaredToolCalls) {
             if (completedToolcallIds.count(tc.id)) {
                 continue;

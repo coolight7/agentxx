@@ -66,11 +66,11 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| TOOL-1 | 分阶段并行 prepare / dispatch / finalize | 待实施 | `nodes/toolcall.cpp` |
-| TOOL-2 | 并发分类与上限 | 待实施 | `tools/tool.h`（`supportsParallel`）、`nodes/toolcall.cpp` |
-| TOOL-3 | 并行取消与收尾 | 待实施 | `nodes/toolcall.cpp` |
+| TOOL-1 | 分阶段并行 prepare / dispatch / finalize | 已实施 | `nodes/toolcall.cpp`（prepare/run/finalize 三段）；模块 `toolcall_parallel` |
+| TOOL-2 | 并发分类与上限 | 已实施 | `tools/tool.h`（`supportsParallel`）+ `AgentConfig::toolParallelMaxConcurrency`；插件 flags `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE` |
+| TOOL-3 | 并行取消与收尾 | 已实施 | `nodes/toolcall.cpp`（按声明顺序写回、已完成结果保留、未完成补 `[User canceled]`）；模块 `toolcall_parallel` |
 | TOOL-16 | 按规范化文件路径排队执行 | 待实施 | 文件写工具 |
-| TOOL-17 | 执行环境加固（`NO_COLOR` / `TERM` / `PAGER` / locale） | 待实施 | `plugins/agentxx_execute_command/execute_command_impl.h` |
+| TOOL-17 | 执行环境加固（`NO_COLOR` / `TERM` / `PAGER` / locale） | 已实施 | `plugins/agentxx_execute_command/execute_command_impl.h` |
 | TOOL-12 | 工具可用性与授权分层（并入 ARC-6 快照） | 待实施 | 装配快照 |
 | TOOL-4 / TOOL-5 / TOOL-6 / TOOL-7 / TOOL-8 / TOOL-9 / TOOL-10 / TOOL-11 / TOOL-13 / TOOL-15 | 分发层超时 / 结果守卫 / 聚合预算 / 结构化定位符 / 结构化结果 / 单调 guard / 错误状态 / 公告身份 / 审批身份绑定 / 后置上下文 | 不做 | 各工具自带超时、share_store 定位、异常分类已覆盖；插件为受信代码（见 [security.md](security.md)） |
 | TOOL-14 | 延迟工具暴露级别 | 后续计划 | 现有延迟加载不完善，暂不启用 |
@@ -170,7 +170,7 @@
 | TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 待实施 | 测试夹具 |
 | TST-2 | Wire 往返与 schema 一致性 | 待实施 | 与 PRO-1 同批 |
 | TST-3 | 持久化迁移/恢复测试 | 部分实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝）；崩溃未闭合轮次待补 |
-| TST-4 | 并发与竞态清单 | 待实施 | 模块 `agent` / `toolcall` |
+| TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
 | TST-7 | 边界/导出/清理门禁 | 待实施 | 模块 `boundaries` 扩展 |
 | TST-8 | CI 一键门禁 | 待实施 | 构建脚本 + 测试模块集合 |
@@ -196,3 +196,4 @@
 ## 16. 修订记录
 
 - 2026-10-05：建立本清单（计划 TST-13），按 §1~§15 汇总六篇比较文档的裁定结果与代码位置。
+- 2026-10-05：TOOL-1 / TOOL-2 / TOOL-3 / TOOL-17 标记为已实施（工具三段式执行 + 受限并行 + 命令执行环境加固）。

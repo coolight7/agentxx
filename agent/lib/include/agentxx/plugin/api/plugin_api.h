@@ -48,6 +48,12 @@ extern "C" {
 
 #define AGENTXX_PLUGIN_TOOL_FLAG_NONE         0
 #define AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY (1 << 0) ///< 输出超限时自动压缩 (经 share_store 卸载)
+/// 该工具的执行体可与其他声明了本标志的工具**并发执行**
+/// - 只应给"只读、不写会话、不改插件内部共享状态"的工具置位; 未置位=独占
+///   (写文件、命令执行、交互询问类工具必须保持独占)
+/// - 并发只发生在同一条 assistant 消息声明的工具调用之间, 结果仍按声明顺序写回
+/// - 宿主侧并发上限见 [AgentConfig::toolParallelMaxConcurrency]
+#define AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE (1 << 1)
 
 typedef struct AgentxxPluginToolSpec {
     PluginxxStringView name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)

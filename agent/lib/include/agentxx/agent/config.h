@@ -321,6 +321,12 @@ public:
     /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
     size_t toolcallRepeatCheckThreshold = 5;
 
+    /// 同一条 assistant 消息内**并行安全工具**的最大并发数 (默认 4)
+    /// - 只有声明了并行安全的工具 (见 [agentxx::tools::XXToolBase::supportsParallel])
+    ///   才会并发; 其余工具保持独占并按声明顺序形成屏障
+    /// - 取值被夹到 [1, 32]; 结果始终按声明的 tool_call 顺序写回
+    size_t toolParallelMaxConcurrency = 4;
+
     /// 权限询问处理模式 (yaml `permission.mode`; 见 PermissionMode)
     /// - CodeAgent 启动时按模式注册文件系统读写默认规则:
     ///   Ask=工作目录内允许+其他询问 / AllAsk=全部询问 / Pass=全部放行 / Deny=全部拒绝

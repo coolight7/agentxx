@@ -35,18 +35,21 @@ XXToolBase::XXToolBase(
     bool                                        in_autoSummaryOutput,
     bool                                        in_canDelayLoad,
     size_t                                      in_maxRetry,
-    bool                                        in_repeatCallCheck
+    bool                                        in_repeatCallCheck,
+    bool                                        in_supportsParallel
 ) :
     name(in_name),
     agentContext(in_agentContext),
     autoSummaryOutput(in_autoSummaryOutput),
     canDelayLoad(in_canDelayLoad),
     maxRetry(in_maxRetry),
-    repeatCallCheck(in_repeatCallCheck) {
+    repeatCallCheck(in_repeatCallCheck),
+    supportsParallel(in_supportsParallel) {
     extra["autoSummaryOutput"] = autoSummaryOutput ? "true" : "false";
     extra["canDelayLoad"]      = canDelayLoad ? "true" : "false";
     extra["maxRetry"]          = std::to_string(maxRetry);
     extra["repeatCallCheck"]   = repeatCallCheck ? "true" : "false";
+    extra["supportsParallel"]  = supportsParallel ? "true" : "false";
 }
 
 std::string XXToolBase::get_name() const {
@@ -115,7 +118,8 @@ XXToolWrap::XXToolWrap(
     bool                                                        in_canDelayLoad,
     size_t                                                      in_maxRetry,
     std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle,
-    bool                                                        in_repeatCallCheck
+    bool                                                        in_repeatCallCheck,
+    bool                                                        in_supportsParallel
 ) :
     XXToolBase(
         in_inner->get_name(),
@@ -123,7 +127,8 @@ XXToolWrap::XXToolWrap(
         in_autoSummaryOutput,
         in_canDelayLoad,
         in_maxRetry,
-        in_repeatCallCheck
+        in_repeatCallCheck,
+        in_supportsParallel
     ),
     inner(std::move(in_inner)),
     summarizationHandle(in_summarizationHandle) {}
