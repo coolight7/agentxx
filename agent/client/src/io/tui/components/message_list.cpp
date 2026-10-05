@@ -82,7 +82,7 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
     }
     // 投递前零拷贝判断: 同键同输入特征已有请求在执行时, 本帧直接用通用回退,
     // 不为投递拷贝 args/result 大文本 (未命中期间 UI 每帧都会走到这里)
-    const std::string key = plugin::ClientToolRenderRequest::keyFor(toolCallId, toolName);
+    const std::string key       = plugin::ClientToolRenderRequest::keyFor(toolCallId, toolName);
     const uint64_t    inputHash = plugin::ClientToolRenderRequest::hashInputs(
         toolName,
         argsJson,
@@ -162,7 +162,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     // 全量渲染 173MB)。因此 sourceBytes 按"渲染树估算字节"(源 × 64 系数) 上报
     // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 实测 100K/200K
     // 上下文时消息列表渲染树缓存即占 10+ MB。
-    budget.maxItems = 64;              // 条数预算: 可见 ~30 条 + 少量滚动余量
+    budget.maxItems = 64; // 条数预算: 可见 ~30 条 + 少量滚动余量
     // 渲染树估算字节预算: 2MiB。sourceBytes 已按实测标定 (固定 2KB + 源×24),
     // 典型消息 5~30KB, 64 条 × ~30KB ≈ 2MB —— 预算与真实驻留一致 (见
     // buildMessageItem 的 sourceBytes 注释)
@@ -266,7 +266,8 @@ Element MessageListComponent::OnRender() {
     if (ctx_.frameState) {
         const auto& vboxes = scrollable_->visibleBoxes();
         const auto& msgs   = ctx_.frameState->messages;
-        for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {            const auto& msg = *msgs[i];
+        for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
+            const auto& msg = *msgs[i];
             // 可折叠消息: Think / Tool / System (点击 header 折叠/展开)
             const bool collapsible
                 = (msg.role == TUIMessage::Role::Think || msg.role == TUIMessage::Role::Tool
@@ -719,10 +720,10 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
                 }
                 // 展开: header + 参数 + 结果 (粗略折算; 不做插件渲染查询/装饰实测,
                 // 也不做参数 JSON 缩进格式化 —— 那些都留给进入视口的真实构建)
-                const bool finished = msg.tool && msg.tool->toolFinished;
-                size_t     lines    = 1; // header
-                lines += roughRows(msg.text.size());
-                lines += finished ? roughRows(msg.tool->toolResult.size()) : 1;
+                const bool finished  = msg.tool && msg.tool->toolFinished;
+                size_t     lines     = 1; // header
+                lines               += roughRows(msg.text.size());
+                lines               += finished ? roughRows(msg.tool->toolResult.size()) : 1;
                 return lines + 1; // +1: 尾部空行
             }
             case TUIMessage::Role::Interrupt:
@@ -761,6 +762,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
     }
     return 1;
 }
+
 bool MessageListComponent::fillViewport(size_t index) {
     const auto& st = *ctx_.frameState;
     return index == 0 && st.messages.empty() && !hasStreamingToken(st);
@@ -1223,12 +1225,17 @@ Element MessageListComponent::buildMessageBlock(
                                    )) | color(theme.accentColor)
                                        | bold,
                                    text(attachmentSizeText(att.sizeBytes)) | theme.dim(),
+                                   text(" "),
                                    text(std::string(TuiI18n::instance().t("msg.attachOpen")))
                                        | color(theme.accentColor),
                                })
                                | reflect(*boxPtr);
                 userElements.push_back(cardRow);
             }
+            if (false == userElements.empty()) {
+                userElements.push_back(text("|") | color(theme.accentColor) | bold);
+            }
+
             userElements.push_back(hbox({
                 text("> ") | color(theme.userColor),
                 // 正文按纯文本折行渲染 (不解析 markdown): 单节点承载整段文本,
@@ -1705,8 +1712,8 @@ bool MessageListComponent::handleDecorButtonClick(const Mouse& mouse) {
         std::string actionId = h.actionId;
         std::string argsJson = h.argsJson;
         if (!h.regions.empty()) {
-            const int localX = mouse.x - box.x_min;
-            const int localY = mouse.y - box.y_min;
+            const int   localX = mouse.x - box.x_min;
+            const int   localY = mouse.y - box.y_min;
             const auto* region = matchUiHitRegion(h.regions, localX, localY);
             if (region == nullptr) {
                 continue; // 落在行内的非可点位置: 不算命中
@@ -1800,9 +1807,9 @@ void revealPathInFileManager(std::string path) {
         // 统一用文件所在目录调起文件管理器保证可显示对应位置;
         // 目录不存在 (如临时落盘失败的远端残留路径) 时回退直接打开原路径
         std::error_code       ec;
-        std::filesystem::path fp    = utilxx_base::utf8ToPath(p);
-        std::filesystem::path dir   = fp.parent_path();
-        const bool            hasDir = !dir.empty() && std::filesystem::is_directory(dir, ec) && !ec;
+        std::filesystem::path fp   = utilxx_base::utf8ToPath(p);
+        std::filesystem::path dir  = fp.parent_path();
+        const bool        hasDir   = !dir.empty() && std::filesystem::is_directory(dir, ec) && !ec;
         const std::string showPath = hasDir ? utilxx_base::pathToUtf8Generic(dir) : p;
         std::string       cmd      = "xdg-open \"" + showPath + "\" >/dev/null 2>&1 &";
         (void)std::system(cmd.c_str());
