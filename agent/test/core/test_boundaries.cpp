@@ -298,12 +298,55 @@ void checkPluginRawExport(const fs::path& root, Violations& v, size_t& scanned) 
     }
 }
 
+/// 规则 7: 组件渲染层只依赖"描述 + 渲染上下文"
+/// - 渲染层 ([UiRenderCtx] / [renderItems] / 命中) 不得直接依赖连接、会话、
+///   端点或插件管理器实现: 数据来源与连接状态由调用方组装后传入
+/// - 只检查**直接** `#include` (间接引用由各自模块的规则约束: 插件管理器类型
+///   经共享的 UI 注册表快照头引入, 属于允许的只读快照依赖)
+/// - 文件缺失即失败: 改名/搬移后必须同步更新本规则, 不允许静默跳过
+void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
+    const std::vector<fs::path> files{
+        root / "client" / "include" / "agentxx-client" / "io" / "tui" / "ui_components.h",
+        root / "client" / "src" / "io" / "tui" / "ui_components.cpp",
+        root / "client" / "include" / "agentxx-client" / "io" / "tui" / "framework" / "ui_hit.h",
+    };
+    static const std::string_view kForbidden[] = {
+        "agentxx-client/io/tui/agent_tui.h",      // TUI 端点 (连接/会话状态/事件循环)
+        "agentxx-client/io/tui/components/",      // 具体界面部件 (持有会话镜像与端点)
+        "agentxx/plugin/client_plugin_manager.h", // 插件管理器实现 (加载/生命周期)
+        "agentxx/agent/io/",                      // 端点 / transport / wire
+        "agentxx/agent/session",                  // 会话与持久化
+        "agentxx/agent/agent_host.h",             // 宿主与子代理派生
+        "utilxx/http_client.h",                   // 网络
+        "utilxx/ws_client.h",                     // 网络
+    };
+    for (const auto& f : files) {
+        std::error_code ec;
+        if (!fs::is_regular_file(f, ec)) {
+            v.push_back(
+                "渲染层文件缺失: " + toGeneric(f.lexically_relative(root))
+                + " (改名后需同步更新 boundaries 的渲染层规则)"
+            );
+            continue;
+        }
+        for (const auto& inc : readIncludes(f)) {
+            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            for (const auto& bad : kForbidden) {
+                if (inc.path.rfind(bad, 0) == 0) {
+                    v.push_back(
+                        where + ": 渲染层依赖了 `" + inc.path + "` (只允许描述与渲染上下文)"
+                    );
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
 // 测试入口
 // ---------------------------------------------------------------------------
-
 TestResult testBoundaries() {
     const auto root = agentSourceRoot();
     if (root.empty()) {
@@ -329,6 +372,9 @@ TestResult testBoundaries() {
     checkPluginExportConfig(root, exportViolations);
     checkPluginRawExport(root, exportViolations, scannedPlugin);
 
+    Violations renderViolations;
+    checkRenderLayerIncludes(root, renderViolations);
+
     // 扫描量下限: 防止目录改名/收集逻辑失效导致"零文件全通过"的假通过
     // (数值留出余量, 目录增删几十个文件不应触发失败)
     XX_TEST_EXPECT_GE(scannedClient, size_t{40});
@@ -339,6 +385,7 @@ TestResult testBoundaries() {
     reportViolations("插件边界", pluginViolations);
     reportViolations("lib 边界", libViolations);
     reportViolations("插件导出白名单", exportViolations);
+    reportViolations("渲染层边界", renderViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

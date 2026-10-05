@@ -204,6 +204,88 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
     return truncateWithStoreFormat(s, kMaxStdErrUtf8Length, storeId);
 }
 
+// ---------------------------------------------------------------------
+// 子进程执行环境加固
+//
+// 命令输出的用途是给模型读, 不是给人看的终端会话。因此固定下发:
+// - NO_COLOR=1        : 尊重 NO_COLOR 约定的工具不再输出 ANSI 颜色码
+// - TERM=dumb         : 不假定终端支持光标控制, 进度条/清屏序列自动关闭
+// - PAGER=cat         : less/more 不进入交互分页等待 (否则管道不关闭, 工具挂到超时)
+// - GIT_PAGER=cat     : git 的 log/diff 等子命令同样不分页
+// - LC_ALL (POSIX)    : 使用当前环境已是 UTF-8 的取值, 否则用 C.UTF-8;
+//                       保证子进程按 UTF-8 输出 (命令本身改不了宿主进程的 locale)
+// - Windows           : 不改 locale (控制台代码页与命令自身编码策略共同决定输出,
+//                       强行覆盖会破坏中文等本地命令的输出)
+//
+// 两条执行路径都要覆盖: boost.process 路径经 [applyExecEnvPolicy] 改写子进程环境表,
+// popen 回退路径无法指定环境, 用 [execEnvCommandPrefix] 在命令字符串前加赋值语句。
+// ---------------------------------------------------------------------
+
+/// 子进程环境加固策略 (由当前进程环境解析, 两侧路径共用同一份取值)
+struct ExecEnvPolicy {
+    /// POSIX: 下发的 LC_ALL 值; Windows: 空串表示不改 locale
+    std::string locale;
+
+    /// 一次性描述 (写日志用: 说明本次运行实际生效的策略)
+    std::string describe;
+};
+
+/// locale 名称是否已是 UTF-8 变体 (C.UTF-8 / en_US.UTF-8 / *.utf8 ...)
+inline bool isUtf8LocaleName(std::string_view name) {
+    if (name.empty()) {
+        return false;
+    }
+    auto upper = utilxx_base::toUpper(name);
+    return upper.find("UTF-8") != std::string::npos || upper.find("UTF8") != std::string::npos;
+}
+
+/// 当前进程的 locale 取值 (LC_ALL 优先, 回退 LANG)
+inline std::string currentLocaleEnvValue() {
+    auto read = [](const char* key) -> std::string {
+        const char* v = std::getenv(key);
+        return (v && *v) ? std::string{v} : std::string{};
+    };
+    auto v = read("LC_ALL");
+    if (v.empty()) {
+        v = read("LANG");
+    }
+    return v;
+}
+
+/// 解析子进程环境加固策略 (每次执行前调用: 只读环境变量, 开销可忽略)
+inline ExecEnvPolicy resolveExecEnvPolicy() {
+    ExecEnvPolicy p;
+#if XX_IS_WIN_D
+    p.describe = "NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat (Windows: locale untouched)";
+#else
+    const auto current = currentLocaleEnvValue();
+    // 已是 UTF-8 时保持用户取值 (语言/排序规则不变), 否则用通用 UTF-8 locale;
+    // 系统不提供 C.UTF-8 时子进程退回 C locale, 仍保证不出现本地编码乱码
+    p.locale = isUtf8LocaleName(current) ? current : std::string{"C.UTF-8"};
+    p.describe
+        = fmt::format("NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat LC_ALL={}", p.locale);
+#endif
+    return p;
+}
+
+/// popen 回退路径: 环境加固的命令前缀 (该路径无法单独指定子进程环境)
+/// - POSIX (`/bin/sh -c`): `export A=1 B=2; ` 对整条命令生效
+/// - Windows (`cmd /c`)  : `set A=1&& ...` 对后续命令生效
+inline std::string execEnvCommandPrefix(const ExecEnvPolicy& policy) {
+#if XX_IS_WIN_D
+    (void)policy;
+    // 注意 `=` 与 `&&` 之间不能有空格: 有空格会被当成变量值的一部分
+    return "set NO_COLOR=1&& set TERM=dumb&& set PAGER=cat&& set GIT_PAGER=cat&& ";
+#else
+    std::string prefix = "export NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat";
+    if (!policy.locale.empty()) {
+        prefix += fmt::format(" LC_ALL='{}'", policy.locale);
+    }
+    prefix += "; ";
+    return prefix;
+#endif
+}
+
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 
 #if XX_IS_MACOS_D || XX_IS_IOS_D
@@ -242,6 +324,22 @@ inline std::string subprocessWorkDir(const std::string& workDir) {
 // 与 timeoutGuard 需要调用它们)
 inline void killProcGroup(boost::process::process& proc, void* winJob = nullptr);
 inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip);
+
+/// 把加固项写入子进程环境表 (boost.process 路径; 覆盖同名继承值)
+inline void applyExecEnvPolicy(
+    std::unordered_map<boost::process::environment::key, boost::process::environment::value>& env,
+    const ExecEnvPolicy&                                                                     policy
+) {
+    using EnvKey   = boost::process::environment::key;
+    using EnvValue = boost::process::environment::value;
+    env[EnvKey{"NO_COLOR"}]  = EnvValue{"1"};
+    env[EnvKey{"TERM"}]      = EnvValue{"dumb"};
+    env[EnvKey{"PAGER"}]     = EnvValue{"cat"};
+    env[EnvKey{"GIT_PAGER"}] = EnvValue{"cat"};
+    if (!policy.locale.empty()) {
+        env[EnvKey{"LC_ALL"}] = EnvValue{policy.locale};
+    }
+}
 
 /// 会话取消监听协程体 (与主工作经 awaitable_operators 并行运行):
 /// - 事件驱动: 优先通过 CancelRegistry 事件回调触发 killProcGroup 与关闭管道，
@@ -682,6 +780,8 @@ inline asio::awaitable<std::string> bashExecuteAsync(
             procEnv[kv.key()] = kv.value();
         }
     }
+    // 执行环境加固 (NO_COLOR / TERM / PAGER / locale; 见 resolveExecEnvPolicy)
+    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy());
 
 #if XX_IS_WIN_D
     auto procExe  = boost::process::environment::find_executable("bash");
@@ -758,6 +858,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
             procEnv[kv.key()] = kv.value();
         }
     }
+    // 执行环境加固 (与 bashExecuteAsync 同一份策略)
+    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy());
 
     auto launch  = detail::buildWinProcLaunch(command);
     auto procExe = boost::process::environment::find_executable(launch.exeName);
@@ -866,10 +968,16 @@ inline std::string bashExecute(
     if (command.empty()) {
         throw std::invalid_argument{"Arg `command` is empty"};
     }
+    // popen 无法单独指定子进程环境: 把加固项作为命令前缀 (POSIX `export ...;`
+    // / Windows `set ...&&`), 与 boost.process 路径同一份策略 (见 resolveExecEnvPolicy)
+    const auto hardenedCommand
+        = detail::execEnvCommandPrefix(detail::resolveExecEnvPolicy()) + command;
 #if XX_IS_WIN_D
-    auto pipe = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(command.c_str(), "r"), _pclose};
+    auto pipe
+        = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(hardenedCommand.c_str(), "r"), _pclose};
 #else
-    auto pipe = std::unique_ptr<FILE, decltype(&pclose)>{popen(command.c_str(), "r"), pclose};
+    auto pipe
+        = std::unique_ptr<FILE, decltype(&pclose)>{popen(hardenedCommand.c_str(), "r"), pclose};
 #endif
     if (!pipe) {
         auto ec = std::error_code{errno, std::system_category()};

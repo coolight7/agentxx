@@ -35,6 +35,7 @@ asio::awaitable<void>
 #endif
 
         fileContents.clear();
+        oversizeFiles_.clear();
         std::string logContent;
         for (const auto& filepath : memoryFilePaths) {
             auto systemCharsetFilePath = utilxx_base::toCurrentSystemAbsolutePath(
@@ -89,6 +90,26 @@ asio::awaitable<void>
                         stream.close();
                     }
                     utilxx_base::autoConvertToUtf8(content);
+                    // 体积告警: 记忆文件整份注入系统提示词, 过大时持续占用上下文
+                    // 预算; 只提示用户精简 (不截断、不改变注入方式)
+                    const size_t chars = utilxx_base::utf8GetLength(content);
+                    if (chars > MemoryFileMiddlewareHandle::kOversizeWarnChars) {
+                        oversizeFiles_.emplace_back(filepath, chars);
+                        XX_LOGW(
+                            "Memory file too large: `{}` {} chars > {} chars; keep it short and "
+                            "index-like (list what exists and how to fetch it), detail should be "
+                            "read on demand",
+                            filepath,
+                            chars,
+                            MemoryFileMiddlewareHandle::kOversizeWarnChars
+                        );
+                        logContent += fmt::format(
+                            "┣━ ⚠️ Memory file too large: `{}` | {} chars (limit {})\n",
+                            filepath,
+                            chars,
+                            MemoryFileMiddlewareHandle::kOversizeWarnChars
+                        );
+                    }
                     fileContents.emplace_back(filepath, content);
                     logContent += fmt::format("┣━ ✅ Loaded Memory file: `{}`\n", filepath);
                     co_return true;

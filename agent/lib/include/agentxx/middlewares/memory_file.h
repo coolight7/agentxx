@@ -42,7 +42,17 @@ protected:
     /// - 初始为 1 (状态侧 cachedResourceEpoch 默认 0, 保证首轮必定生成缓存)
     uint64_t resourceEpoch = 1;
 
+    /// 最近一次加载中超过 [kOversizeWarnChars] 的文件 <路径, 字符数>
+    std::vector<std::pair<std::string, size_t>> oversizeFiles_;
+
 public:
+
+    /// 常驻记忆文件的体积警告阈值 (UTF-8 字符数)
+    /// - 记忆文件每轮整份注入系统提示词, 过大会持续占用上下文预算
+    /// - 超过阈值只告警提示用户精简, 不截断内容、不改变注入方式
+    /// - 推荐的记忆文件形态与 skill 相同: 保持简略、索引式 (写清"有哪些信息、
+    ///   放在哪里、怎么取"), 详细内容按需读取, 不要每轮整篇注入
+    inline static constexpr size_t kOversizeWarnChars = 8000;
 
     MemoryFileMiddlewareHandle(
         const std::vector<std::string>&             in_memoryFilePaths,
@@ -55,6 +65,12 @@ public:
         memoryFilePaths(in_memoryFilePaths) {}
 
     asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
+
+    /// 最近一次加载中体积超过 [kOversizeWarnChars] 的 <文件路径, 字符数>
+    /// (测试/诊断用; 每次全量重读时重建)
+    const std::vector<std::pair<std::string, size_t>>& oversizeMemoryFiles() const {
+        return oversizeFiles_;
+    }
 
     // ---------------- 插件资源扩展: 动态增删上下文文件 (仅 io 线程调用) ----------------
 

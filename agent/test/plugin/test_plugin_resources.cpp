@@ -531,6 +531,49 @@ mcp:
         XX_TEST_EXPECT_TRUE(skillMw->skillDirPathList() == beforeSkills); // 未被污染
     }
 
+    // ================= T6. 记忆文件过大警告 (不截断、不改变注入方式) =================
+    // 记忆文件每轮整份注入系统提示词, 超出阈值时只告警提示用户精简:
+    // 内容照原样注入, 中间件不截断也不换注入方式
+    TEST_INFO << "[T6] oversize memory file warning" << std::endl;
+    {
+        const auto limit = agentxx::middleware::MemoryFileMiddlewareHandle::kOversizeWarnChars;
+        auto       bigPath   = tmpRoot / "big_memory.md";
+        auto       smallPath = tmpRoot / "small_memory.md";
+        const std::string bigContent(limit + 32, 'a');
+        writeTextFile(bigPath, bigContent);
+        writeTextFile(smallPath, "small memory");
+
+        auto memHandle = std::make_shared<agentxx::middleware::MemoryFileMiddlewareHandle>(
+            std::vector<std::string>{bigPath.string(), smallPath.string()},
+            ctx
+        );
+
+        neograph::graph::GraphState  state;
+        neograph::graph::RunContext  runCtx;
+        runCtx.thread_id = "mem_oversize_test";
+        neograph::graph::NodeInput in{state, runCtx, nullptr};
+        co_await memHandle->onAgentcallStartFunc(in);
+
+        // 只有超限文件被记录
+        const auto& oversize = memHandle->oversizeMemoryFiles();
+        XX_TEST_EXPECT_EQ(oversize.size(), size_t{1});
+        if (!oversize.empty()) {
+            XX_TEST_EXPECT_EQ(oversize[0].first, bigPath.string());
+            XX_TEST_EXPECT_EQ(oversize[0].second, bigContent.size());
+        }
+        // 内容未被截断: 注入的系统消息里仍带整份文件
+        const auto& injected = ctx->middlewareHandleContext
+                                   ->getGraphDataItemValue<std::vector<std::string>>(
+                                       runCtx.thread_id,
+                                       agentxx::middleware::MiddlewareContext::
+                                           graphDataKey_appendSystemMessage
+                                   );
+        XX_TEST_EXPECT_FALSE(injected.empty());
+        if (!injected.empty()) {
+            XX_TEST_EXPECT_TRUE(injected.back().find(bigContent) != std::string::npos);
+        }
+    }
+
     // 清理临时目录并等待后台协程收尾
     ctx->resourceApplier.reset();
     ctx->pluginManager.reset();

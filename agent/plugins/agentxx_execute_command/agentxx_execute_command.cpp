@@ -93,6 +93,14 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     //   由宿主固化, 之后无法再刷新 (提示词注入了也只能改宿主提示词表)
     ctx.env = detectExecEnv();
 
+    // 记录本次运行实际生效的子进程环境加固策略 (排查"为什么工具里跑命令的输出
+    // 与手敲不同": NO_COLOR/TERM/PAGER 固定下发, POSIX 侧 locale 按环境选择,
+    // Windows 侧不动 locale; 见 execute_command_impl.h 的 resolveExecEnvPolicy)
+    XX_LOGI(
+        "agentxx_execute_command: child env policy: {}",
+        agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe
+    );
+
 #if XX_IS_WIN_D
     // Windows 侧命令的语法指引随实际执行路径变化: boost.process v2 直传 argv
     // (命令作为单个 -Command 参数) 与 popen 回退 (命令经外层 shell 解析) 的

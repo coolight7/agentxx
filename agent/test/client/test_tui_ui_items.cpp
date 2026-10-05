@@ -225,6 +225,65 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_TRUE(skipped.find("UnknownY") == std::string::npos);
     }
 
+    // ---------------- 未知字段 / 高版本组件的向前兼容 ----------------
+    {
+        // 已知组件带未知字段: 忽略不认识的字段, 其余照常渲染 (新增字段不会让整条失效)
+        auto res = renderToText(renderJson(
+            R"([{"kind":"Text","text":"kept","futureField":{"a":1},"futureFlag":true}])",
+            ctxFor(40)
+        ));
+        XX_TEST_EXPECT_TRUE(screenHas(res, "kept"));
+
+        // 高版本才有的组件 (本端不认识): 走 fallback 文本, 未知字段一并忽略
+        auto future = renderToText(renderJson(
+            R"([{"kind":"TimelineV9","version":9,"nodes":[],"futureFlag":1,"fallback":"未来组件"}])",
+            ctxFor(40)
+        ));
+        XX_TEST_EXPECT_TRUE(screenHas(future, "未来组件"));
+
+        // 已知字段出现未知枚举取值: 退回默认取值, 不行渲染失败 (不崩溃)
+        auto enumRes = renderToText(renderJson(
+            R"([{"kind":"Table","columns":[{"title":"A","width":48,"align":"diagonal"}],"rows":[["x"]]}])",
+            ctxFor(40)
+        ));
+        XX_TEST_EXPECT_TRUE(screenHas(enumRes, "A"));
+        XX_TEST_EXPECT_TRUE(screenHas(enumRes, "x"));
+
+        // 高版本组件混在已知组件中: 只降级自己, 兄弟组件不受影响
+        auto mixed = renderToText(renderJson(
+            R"([{"kind":"Text","text":"before"},{"kind":"SuperTree","fallback":"降级"},{"kind":"Text","text":"after"}])",
+            ctxFor(40)
+        ));
+        XX_TEST_EXPECT_TRUE(screenHas(mixed, "before"));
+        XX_TEST_EXPECT_TRUE(screenHas(mixed, "降级"));
+        XX_TEST_EXPECT_TRUE(screenHas(mixed, "after"));
+    }
+
+    // ---------------- 渲染层不依赖运行期注册表 (空注册表也能出画面) ----------------
+    {
+        // UiRenderCtx 的注册表字段为空 (客户端插件未加载/加载失败) 时,
+        // 文本/表格/控件等内置组件仍按描述渲染, 不因缺注册表整体失败
+        UiRenderCtx bare = ctxFor(40);
+        bare.registry    = nullptr;
+        auto res         = renderJson(
+            R"([{"kind":"Text","text":"bare"},{"kind":"Table","header":false,
+                     "columns":[{"title":"A","width":48}],"rows":[["r1"]]}])",
+            bare
+        );
+        auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "bare"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "r1"));
+        // 自定义组件 (需要插件注册的 renderer) 在空注册表下降级为 fallback
+        auto custom = renderToText(
+            renderJson(
+                R"([{"kind":"Custom","renderer":"plug.x","args":{},"fallback":"缺渲染器"}])",
+                bare
+            ),
+            40
+        );
+        XX_TEST_EXPECT_TRUE(screenHas(custom, "缺渲染器"));
+    }
+
     // ---------------- 表格 ----------------
     {
         auto res = renderJson(
