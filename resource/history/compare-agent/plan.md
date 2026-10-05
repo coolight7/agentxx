@@ -84,7 +84,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | ARC-5 | 分阶段关闭和后台任务收敛 | harness、codex、dsh | P1 | `shutdownAsync` 依次停止输入、停定时器、停插件、刷盘；新增轻量 `TaskScope`，统一记录后台任务并在关闭时取消/等待。**不等待当前轮次结束**（等待会拖长退出时间、影响使用感受）。 | 可行（2026-10-04 核定：不等待轮次结束） |
 | ARC-6 | 生效装配快照 | harness、openclaw、dsh | P1 | 增加 `get_diagnostics` 或扩展 `WireGetContext`，输出模型来源、中间件顺序、插件状态、工具清单、图定义、权限模式、作业和队列状态。CLI 增加 `--dump-config`。 | 可行（2026-10-04 核定，限定范围）：只做启动一次性装配快照写日志 + CLI `--dump-config`；不做 TUI 诊断页与 wire 侧 `get_diagnostics` |
 | ARC-7 | 新能力不进入核心骨架 | codex、pi、openclaw | P0 | 文档明确：`lib/src/agent` 只负责会话生命周期、上下文、持久化骨架；新增能力优先放 `nodes/`、`middlewares/`、`tools/`、`plugins/` 或独立工具库。 | 现有（2026-10-04 核定：纪律已写入 `agent/lib/AGENTS.md`「新增能力的位置」节；已有千行文件的拆分另立 ARC-7b） |
-| ARC-7b | 核心千行文件拆分（由 ARC-7 拆出） | opencode、本次核对 | P2 | 把 `lib/src/agent/session_server_agent_io.cpp`（1519 行）按职责拆为输入队列 / 会话切换 / delta 重放三部分；`base_agent.cpp`（1246 行）、`nodes/toolcall.cpp`（1184 行）同类评估。与纪律条目分开提交，不与功能改动混做。 | 待定（P2 可选，未排期） |
+| ARC-7b | 核心千行文件拆分（由 ARC-7 拆出） | opencode、本次核对 | P2 | 按 2026-10-04 复核的行数拆分大文件：`plugins/client_plugin_manager.cpp`（4278 行）、`protocol/mcp_client.cpp`（2381）、`protocol/openai_provider.cpp`（2226）、`agent/base_agent.cpp`（1718）、`protocol/mcp_server.cpp`（1707）、`agent/io/session_server_agent_io.cpp`（1688）。与纪律条目分开提交，不与功能改动混做。 | 不考虑（2026-10-04 核定）：纯重构、无功能收益，现有规模仍在可维护范围 |
 | ARC-8 | 消费者使用窄接口 | harness、opencode | P2 | 为中间件和宿主适配 `SessionReader`、`PermissionCheck`、`ToolRegistrar` 等窄视图；不改变 C ABI 总体形状，先用于测试替身。 | 可行（2026-10-04 核定，限定范围）：先试点 2~3 个消费者（summarization/permission 中间件、subagent 工具），确认测试替身收益后再推广；插件 ABI 不变 |
 | ARC-9 | 领域与策略分开 | opencode | P2 | 配置决策集中在装配层，领域代码只消费已解析策略；不新增 Effect 容器。 | 不考虑（2026-10-04 核定：概念过多、收益不足）；只保留评审纪律「新增配置项经策略对象注入」 |
 
@@ -139,20 +139,20 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 |---|---|---|---|---|---|
 | CTX-1 | 来源化上下文和 Context Epoch | opencode、codex、dsh、openclaw | P0 | 新增 `ContextSource`：`key/load/baseline/update/removed`；保存来源快照和基线文本。首轮或压缩后生成基线，变化进入请求装配的 dynamic suffix；只有 provider 明确支持该位置时才投影为追加的 system/developer 内容，不直接把任意 system 消息插入权威 transcript。 | 不考虑 |
 | CTX-2 | 三态来源 | opencode | P0 | `unavailable` 表示暂时取不到，保留上次生效值；空值表示明确移除；有值表示更新。来源快照与请求动态段同步更新，避免技能/环境读取失败把旧事实静默清空。 | 不考虑 |
-| CTX-3 | 消息来源、原因和可信状态 | codex、dsh、openclaw | P0 | 内部消息 metadata 或消息旁路记录 `source/category/reason/trust`；至少支持 `user/tool/plugin/summary/inject`。宿主统一打标，模型不能自行声明可信。来源字段用于压缩、审计和 UI，不得让不可信文本取得更高执行权限。 | 待定，可考虑实施对插入的 skill 等消息备注可能不可信 |
-| CTX-4 | 只读快照和一致读切面 | codex、dsh、pi | P1 | `SessionSnapshot{messagesVersion, messages, stats, configGeneration}`；wire 响应带同一版本，UI 不拼接来自不同时间点的数据。后续再做共享底层，先保证版本一致。 | 待定，待进一步理解 |
+| CTX-3 | 消息来源、原因和可信状态 | codex、dsh、openclaw | P0 | 内部消息 metadata 或消息旁路记录 `source/category/reason/trust`；至少支持 `user/tool/plugin/summary/inject`。宿主统一打标，模型不能自行声明可信。来源字段用于压缩、审计和 UI，不得让不可信文本取得更高执行权限。 | 不考虑（2026-10-04 核定） |
+| CTX-4 | 只读快照和一致读切面 | codex、dsh、pi | P1 | `SessionSnapshot{messagesVersion, messages, stats, configGeneration}`；wire 响应带同一版本，UI 不拼接来自不同时间点的数据。后续再做共享底层，先保证版本一致。 | 不考虑（2026-10-04 核定）：影响很小（LLM 上下文查看视图为人工排查用） |
 | CTX-5 | 历史替换记录 | dsh、opencode、openclaw | P1 | 新增 `replacement` 记录：范围、操作、原因、摘要 id、前后 token；不改变当前 Session 读模型。 | 不考虑 |
-| CTX-6 | 自定义条目与投影 | pi、opencode | P2 | 为插件私有状态、工具附加上下文、摘要信息提供不默认进模型的 custom 条目；投影器明确决定是否进入请求。 | 待定，待进一步理解 |
+| CTX-6 | 自定义条目与投影 | pi、opencode | P2 | 为插件私有状态、工具附加上下文、摘要信息提供不默认进模型的 custom 条目；投影器明确决定是否进入请求。 | 不考虑（2026-10-04 核定）：机制已存在（`ChatMessage.flags` / `extra` 不进 LLM 请求体；`history_contents` 保留旧版本；大内容走 share_store 定位符） |
 | CTX-7 | 附件引用而不是反复内联 Base64 | codex、dsh、harness、openclaw | P1 | 展示历史已有剥离 dataUrl；上下文进一步使用引用 id + 校验元数据，provider 层按需读取。保留当前服务端路径读取和线程池卸载。 | 可行，但需进一步理解具体实施内容 |
-| CTX-8 | 会话工作上下文和派生态失效 | opencode、harness | P2 | 收敛工作目录、worktree、权限基准和附件根为 `SessionWorkContext`；切换或解绑 worktree 时清空 prompt 基线、权限缓存和执行环境派生数据，避免旧目录状态继续生效。 | 待定，似乎可行 |
-| CTX-9 | 会话重建统一入口 | codex、harness、opencode | P2 | 把从 SQLite 恢复 typed messages、展示历史、事件游标和未闭合操作的步骤收进一个可测试入口；附件不重新上传，恢复只做本地校验。 | 待定，似乎可行，需要确定具体改动 |
-| PRM-1 | stablePrefix/dynamicSuffix | openclaw、opencode、dsh、pi | P0 | `AgentPrompt` 明确静态稳定段和动态段；动态段不得插入稳定段内部。动态内容优先在请求装配层作为稳定位置的 suffix 发送，不为缓存优化随意改写 Session transcript；provider 不支持该形态时才整体重建并记录缓存失效。 | 待定 |
-| PRM-2 | 段落排序号和固定槽位 | dsh、pi、codex | P1 | 把 `map<key,text>` 改为带 `order` 的条目；同层重复 key 失败。固定槽位建议 `persona/planning/capabilities/policy/skills/memory/dynamic`。 | 待定 |
+| CTX-8 | 会话工作上下文和派生态失效 | opencode、harness | P2 | 收敛工作目录、worktree、权限基准和附件根为 `SessionWorkContext`；切换或解绑 worktree 时清空 prompt 基线、权限缓存和执行环境派生数据，避免旧目录状态继续生效。 | 不考虑（2026-10-04 核定）：现状已满足——worktree 绑定在 `Session`、工作目录统一经 `AgentContext::getSessionWorkDir/getSessionBaseWorkDir` 取值、权限隔离边界是权限中间件的按会话 map、系统提示词刻意取不含 worktree 的基准目录；没有需要失效的派生态缓存 |
+| CTX-9 | 会话重建统一入口 | codex、harness、opencode | P2 | 把从 SQLite 恢复 typed messages、展示历史、事件游标和未闭合操作的步骤收进一个可测试入口；附件不重新上传，恢复只做本地校验。 | 不考虑（2026-10-04 核定）：恢复链已存在（`getOrCreateAsync` → `SessionStore::loadSession` → `Session::restore`）；"未闭合操作"随 durable inbox（不做）与作业（JOB 不做）已无对象 |
+| PRM-1 | stablePrefix/dynamicSuffix | openclaw、opencode、dsh、pi | P0 | `AgentPrompt` 明确静态稳定段和动态段；动态段不得插入稳定段内部。动态内容优先在请求装配层作为稳定位置的 suffix 发送，不为缓存优化随意改写 Session transcript；provider 不支持该形态时才整体重建并记录缓存失效。 | 可行（2026-10-04 核定）：稳定段（`systemPrompt` + 静态附加段 + 工具 schema）+ 末尾追加的带来源动态消息 + 每轮稳定段哈希（哈希变化即标记缓存失效）；不做 provider 能力探测（LLM-1 已否）；LLM-8 缓存断点依赖本项 |
+| PRM-2 | 段落排序号和固定槽位 | dsh、pi、codex | P1 | 把 `map<key,text>` 改为带 `order` 的条目；同层重复 key 失败。固定槽位建议 `persona/planning/capabilities/policy/skills/memory/dynamic`。 | 可行（2026-10-04 核定，限定范围）：只加 `order` 固定排序字段（同层重复 key 仍失败），**不引入固定槽位枚举**；槽位名作为推荐值写进文档 |
 | PRM-3 | 指令变化通知 | opencode、dsh、openclaw | P1 | 技能集合、记忆文件或插件资源变化时更新来源快照，并在请求动态段中追加“替换此前集合”的内容；集合清空时追加撤销内容。不得为了通知而改写稳定 transcript。 | 暂不考虑，有必要的变动才通知 |
-| PRM-4 | 记忆分层和按需检索 | openclaw | P0 | 常驻记忆有字符预算，检索记忆只提供目录和读取方法；超限警告，不把整个日记文件每轮注入。 | 待定 |
+| PRM-4 | 记忆分层和按需检索 | openclaw | P0 | 常驻记忆有字符预算，检索记忆只提供目录和读取方法；超限警告，不把整个日记文件每轮注入。 | 可行（2026-10-04 核定，限定范围）：只加"记忆文件过大警告"（不做分层、不做按需检索、不做截断）；默认用户添加的记忆文件应当像 skill 一样简略/索引式，超限时提示用户精简 |
 | PRM-5 | 技能优先级和同名裁决 | openclaw、opencode | P1 | 会话/项目 > 用户 > 插件/内置；同名取最高优先级，并把来源显示给模型和 UI。 | 可行 |
 | PRM-6 | 提示词整体覆盖语义 | dsh | P2 | headless/嵌入场景可声明 `complete`；多个完整提示词同时生效时失败，不静默选一个。 | 不考虑，目前支持修改 systemPrompt，应当扩展支持修改 context |
-| PRM-7 | 提示词和请求体快照 | codex、openclaw、pi | P1 | 默认提示词、来源列表、工具定义和最终请求 JSON 做快照/哈希测试。 | 待定 |
+| PRM-7 | 提示词和请求体快照 | codex、openclaw、pi | P1 | 默认提示词、来源列表、工具定义和最终请求 JSON 做快照/哈希测试。 | 可行（2026-10-04 核定，限定范围）：做"请求体结构断言 + 稳定段哈希断言"（与 PRM-1 配合），**不做整段提示词快照**（提示词改动频繁，快照维护成本高于收益） |
 
 ### 3.3 不能改变的边界
 
@@ -174,8 +174,8 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 | 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
 |---|---|---|---|---|---|
-| STO-1 | 会话目录内核级写租约 | codex、dsh、harness、openclaw、opencode | P0 | 写句柄打开会话目录时获取稳定 `.writer.lock`；POSIX `flock`，Windows 命名内核对象；持有期等于写句柄生命周期，不设超时，崩溃由系统释放。读操作不需要写锁。 | 可行 |
-| STO-2 | schema 版本和相邻迁移链 | dsh、harness、opencode、pi、openclaw | P0 | `meta.schema_version`；每次迁移独立事务、幂等、有迁移前备份；高版本数据库拒绝打开。现有 `msg_id` 补列成为一个历史迁移步骤。 | 可行 |
+| STO-1 | 会话目录内核级写租约 | codex、dsh、harness、openclaw、opencode | P0 | 写句柄打开会话目录时获取稳定 `.writer.lock`；POSIX `flock`，Windows 命名内核对象；持有期等于写句柄生命周期，不设超时，崩溃由系统释放。读操作不需要写锁。 | 可行（已实施）：`agent/lib/{include/agentxx/agent/writer_lease.h,src/agent/writer_lease.cpp}`——POSIX `flock(LOCK_EX\|LOCK_NB)` / Windows 不共享方式 `CreateFileW`，进程内引用计数可重入、租约随写连接释放，读路径不取锁，失败原因经 `SessionStore::lastWriteError()` 暴露 |
+| STO-2 | schema 版本和相邻迁移链 | dsh、harness、opencode、pi、openclaw | P0 | `meta.schema_version`；每次迁移独立事务、幂等、有迁移前备份；高版本数据库拒绝打开。现有 `msg_id` 补列成为一个历史迁移步骤。 | 可行（已实施）：`SessionStore::kSchemaVersion` + `ensureSchema` 相邻迁移（每步独立事务、幂等、迁移前备份 `session.db.bak.v{n}`、失败不推进版本）+ 高版本库拒绝读写；迁移只在写路径首次打开时发生（读操作不改磁盘结构） |
 | STO-3 | 关键事实事件序列 | opencode、dsh、pi、openclaw、harness | P1 | 新增 `event(seq,type,version,payload,time)`，只记录消息追加、工具结算、轮次、压缩、权限决定、基线重建等事实；现有 `view_message` 和 `llm_context` 继续作为读模型。 | 不考虑，如有需求可直接写入到 view_messages 中，渲染决定隐藏，避免了多份数据且保证时间顺序 |
 | STO-4 | durable 事件流与实时 delta 分开 | opencode、openclaw、dsh | P1 | `after/limit` 历史事件补拉和实时 token/思考片段分成两类。服务重启后用 durable 事件补齐关键状态，实时片段不承诺重放。 | 可行（2026-10-04 核定，限定范围）：只做 `view_message` 加 `seq` 列 + `hello.afterSeq` 增量补拉；不新增 `event` 表、不做类型化事件、不建投影器 |
 | STO-5 | 持久化语义分级与 flush | codex、dsh | P1 | `persistNow(reason)` 用于用户输入、工具结算、压缩完成、轮次终态；`persistThrottled(reason)` 用于展示历史和统计。日志写出原因。 | 可行（2026-10-04 核定）：用户输入、工具结算、压缩完成、轮次终态立即落盘；展示历史与统计保持节流；两者都写原因日志 |
@@ -183,9 +183,9 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | STO-7 | 启动清账和崩溃配平 | opencode、dsh、codex | P1 | 恢复时发现未闭合轮次、running 工具或未完成压缩，补“被中断”终态；未执行 tool call 生成合法占位。 | 不考虑，不符合 agentxx 的现有设计分析，目前已经有自动修正上下文等兜底 |
 | STO-8 | 用量账本 | pi、opencode、harness、openclaw | P1 | 每次模型结算记录 input/output/cache read/cache write/cost/provider/model/turnId；失败和重试也记 attempt，UI 从账本聚合。 | 可行（已实施）：`usage` 表已落地（time_ms/model/prompt/completion/total/cached/reasoning/ok/error_kind）；2026-10-04 核定**不记录 cost**（表内无该列，无需改代码），也不做 attempt 分类 |
 | STO-9 | 持久化降级可见 | opencode、pi、harness | P1 | 展示历史写失败可继续运行但标记降级；上下文、轮次和工具结果写失败推送明确警告。 | 可行（2026-10-04 核定，限定范围）：只做"首次写失败推一条 `MessageTip` 警告 + 恢复后不再重复提示"；不做 Info 侧边栏与状态栏的降级标记 |
-| STO-10 | 大写入不阻塞 io 线程 | openclaw、harness | P2 | 先保持短事务在 io 线程；超过阈值的整段上下文或 spill 写入线程池，完成后回 io 线程更新状态。不要照搬所有 DB worker。 | 待定（2026-10-04：前置条件是先量出"长上下文轮末写盘阻塞 io 线程的时长"，实测可观再做） |
-| STO-11 | settings_db 乐观版本 | harness | P1 | `settings_db` 增加 version，冲突返回可识别错误，避免多个客户端静默覆盖。 | 可行 |
-| STO-12 | 会话检索和标题 | codex、dsh、pi、harness | P1 | `meta.title/titleSource` 独立可改；视需要给 `view_message` 加 FTS5；先做当前会话/标题搜索，不先建跨库复杂索引。 | 可行 |
+| STO-10 | 大写入不阻塞 io 线程 | openclaw、harness | P2 | 先保持短事务在 io 线程；超过阈值的整段上下文或 spill 写入线程池，完成后回 io 线程更新状态。不要照搬所有 DB worker。 | 不考虑（2026-10-04 核定）：短事务在 io 线程 + 轮末权威写是刻意设计，没有阻塞明显的证据；若将来实测出现卡顿再评估 |
+| STO-11 | settings_db 乐观版本 | harness | P1 | `settings_db` 增加 version，冲突返回可识别错误，避免多个客户端静默覆盖。 | 可行（已实施）：`setting.version` 列（老库自动补列）+ `getVersioned` / `setVersioned`（期望版本不匹配返回 `Conflict` 且不改内容）；`set()` 保持无条件写入并递增版本 |
+| STO-12 | 会话检索和标题 | codex、dsh、pi、harness | P1 | `meta.title/titleSource` 独立可改；视需要给 `view_message` 加 FTS5；先做当前会话/标题搜索，不先建跨库复杂索引。 | 可行（存储层已实施）：`meta.title` / `titleSource`（auto/user）+ `setSessionTitle` + `searchSessions`（标题或正文子串、通配符转义、最近活动排序、命中片段）；协议与 TUI 入口待接（与 RET-1a 同批） |
 | STO-13 | 会话导出和取证包 | pi、harness | P2 | 导出展示历史、工具定位符、轮次和诊断；配置脱敏、API key 不进入报告。 | 可行 |
 
 ### 4.3 明确不采用
@@ -292,7 +292,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | SEC-3 | 审批记忆持久化和撤销 | codex、opencode、pi、openclaw | P0 | saved approval 写 `settings_db` 或会话库；提供列表、删除、来源和时间；区分一次性允许和记住。 | 不考虑（2026-10-04 核定：保持现在"仅本次运行有效"的语义，不持久化记住的选择） |
 | SEC-4 | 出网策略 | harness、codex、openclaw | P0 | connect 前解析和分类公网、loopback、private、link-local、reserved；HTTP/WS/MCP/外部命令目标统一检查。默认阻止 agent 主动访问内网；明确配置的本地模型端点和本地 MCP 端点必须通过单独 allowlist 放行，错误不泄露内网可达性。 | 不考虑 |
 | SEC-5 | 运行期权威复验和单调 guard | openclaw、dsh、codex | P0 | 询问完成后、真正副作用前再次检查；批准的命令身份和工具定义不一致即拒绝；后续插件不能翻转安全拒绝。 | 可行（2026-10-04 核定，表述收窄）：只做"执行前对**模型本次工具调用**的目标复验（批准目标 = 实际执行目标）"，避免"批准的是 A、执行的是 B"；删去"后续插件不能翻转安全拒绝"等对抗插件表述（插件视为受信代码，见 §8.0） |
-| SEC-6 | 符号链接真实路径 | codex、harness、openclaw | P1 | 对存在路径优先 `weakly_canonical` 再判定，先覆盖写操作；同步 `decidePaths` 和文件系统工具，评估 Windows 语义。 | 待定 |
+| SEC-6 | 符号链接真实路径 | codex、harness、openclaw | P1 | 对存在路径优先 `weakly_canonical` 再判定，先覆盖写操作；同步 `decidePaths` 和文件系统工具，评估 Windows 语义。 | 未来计划（2026-10-04 核定）：门禁判定正确度问题（非隔离机制），当前不做；实施时先覆盖写操作，并在 SEC-9 文档中写明边界 |
 | SEC-7 | 仅元数据审计 | harness、codex、openclaw、pi | P1 | 记录时间、opId/callId、工具、scope、target 摘要、decision、reason、duration、status，不复制参数/提示词/文件内容。 | 不考虑 |
 | SEC-8 | 项目信任 | pi、opencode、openclaw | P1 | 首次加载项目级配置、skill、memory 前询问；不信任时不加载项目资源。 | 不考虑（2026-10-04 核定，与 CFG-7 一致）；保留为未来可选：首次在某项目路径启动时询问一次 |
 | SEC-9 | 安全责任文档 | pi、opencode、codex、openclaw | P0 | 明确权限不是沙箱，宿主权限仍有效，worktree 只限制写边界，插件是同进程原生代码，列出软链接和出网覆盖范围。 | 可行（2026-10-04 核定）：按 §8.0 三条原则重写——① 权限只约束模型经工具发起的运行期动作；② 插件与宿主同权、不受权限系统约束（声明为约定，未声明即放行）；③ 门禁不是隔离，强制隔离只能靠沙箱（SEC-12）；并列出软链接与命令出网的覆盖边界 |
@@ -301,7 +301,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | SEC-12 | 可选沙箱执行后端 | codex、harness、dsh | P2 | Linux bubblewrap/Landlock、macOS Seatbelt 作为“可用则收窄”的后端，不作为默认，不在 Windows/Android 假装提供等价隔离。 | 后续计划（2026-10-04 核定）：作为"唯一的真隔离路径"保留为后续计划，不在当前计划实施；实施前需先定平台能力与不做假承诺的文案 |
 | SEC-13 | 先读后编辑 | dsh | P2 | 文件写工具可选要求先读目标，作为插件策略，不写进通用权限硬规则。 | 不考虑，已在提示词建议 |
 | SEC-14 | 内容侧安全扫描 | harness | P2 | 写文件、提交或导出前可扫描常见凭据模式；扫描结果只给结构化告警，不把文件内容复制到审计记录。与权限判定分开，可按配置关闭。 | 不考虑 |
-| SEC-15 | 通用动作权限 | opencode、dsh | P2 | 在保留路径规则的基础上，为进程终止、MCP 方法和设备动作提供 `action + target` 作用域；先由少数插件试用，不把所有动作一次性抽象成复杂 RBAC。 | 待定 |
+| SEC-15 | 通用动作权限 | opencode、dsh | P2 | 在保留路径规则的基础上，为进程终止、MCP 方法和设备动作提供 `action + target` 作用域；先由少数插件试用，不把所有动作一次性抽象成复杂 RBAC。 | 不考虑（2026-10-04 核定）：与 SEC-1 同族（动作类工具难以界定可靠目标），在"未声明即放行"的取向下只增加声明负担 |
 
 ### 8.2 已有能力不重复做
 
@@ -335,7 +335,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 | 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
 |---|---|---|---|---|---|
-| UI-1 | 客户端模型层 | dsh、codex、opencode | P1 | 从 TUI 中抽出会话/消息窗口/队列/分页/重连/中断的状态镜像；UI 只读快照，方便无终端单测。 | 待定 | 可行（2026-10-04 核定，限定范围）：只抽三块（历史分页窗口 / 消息队列镜像 / 重连与 seq 校验）到无 FTXUI 依赖的模型类 |
+| UI-1 | 客户端模型层 | dsh、codex、opencode | P1 | 从 TUI 中抽出会话/消息窗口/队列/分页/重连/中断的状态镜像；UI 只读快照，方便无终端单测。 | 可行（2026-10-04 核定，限定范围）：只抽三块（历史分页窗口 / 消息队列镜像 / 重连与 seq 校验）到无 FTXUI 依赖的模型类 |
 | UI-2 | 渲染和命中快照 | codex、openclaw、harness、opencode、pi | P0 | 固定尺寸输出纯文本和命中区列表；覆盖表格、树、差异、Markdown、表单、中断。 | 可行（2026-10-04 核定）：与 TST-5 合并为“UI 快照夹具”（固定尺寸文本 + 命中区基线 + 一键更新） |
 | UI-3 | 未知组件宽容降级 | opencode、pi | P1 | 未知 kind、字段和缺失能力按 schema 适配为 Text/plainText；添加未来版本组件测试。 | 可行（2026-10-04 核定）：未知 kind 降级已实现，补“未知字段 + 高版本组件”两个测试 |
 | UI-4 | 渲染层边界测试 | opencode、pi | P1 | 断言 `ui_components`、解析和命中不依赖网络、会话和插件管理器。 | 可行（2026-10-04 核定）：运行时（空注册表渲染）+ 静态边界检查各一条 |
@@ -365,7 +365,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | PRO-9 | daemon/control socket | codex、pi、harness | P2 | server 后台常驻、PID/锁、健康检查、attach；依赖 writer lease 和连接阶段机。 | 不考虑（2026-10-04 核定）：本项目已支持 server 常驻后台、单进程合并启动 server+client、FFI 等多种形态，无需另做 daemon/control socket |
 | PRO-10 | 轻量开放 SDK | pi、codex、opencode | P2 | 若外部需求明确，先用生成 schema 做一种语言；嵌入和远程保持同一 API 表面。 | 不考虑（2026-10-04 核定）：嵌入已支持 FFI 调用动态库，插件侧也有开发 SDK；另做语言绑定无需求 |
 | PRO-11 | 统一错误对象和 wire 错误码 | harness、codex、opencode、pi | P0 | 在 `util/exception.h`、工具/节点边界和 `wire_protocol.h` 之间统一 `code/message/details/retryable`；未知码按 internal 处理，展示文本与机器错误码分开。保留现有工具结果文本投影，不把错误 JSON 直接当模型消息。 | 可行 |
-| PRO-12 | 工具/轮次/作业结果状态元数据 | harness、dsh、openclaw | P1 | 统一 `success/denied/cancelled/timeout/error` 等终态，供 UI、统计和重试使用；不改变控制流异常仍按取消/中断传播的规则。 | 待定 |
+| PRO-12 | 工具/轮次/作业结果状态元数据 | harness、dsh、openclaw | P1 | 统一 `success/denied/cancelled/timeout/error` 等终态，供 UI、统计和重试使用；不改变控制流异常仍按取消/中断传播的规则。 | 不考虑（2026-10-04 核定）：工具结果状态元数据与 TOOL-10（不考虑）重叠，作业部分随 JOB 整节不做，轮次终态枚举也被 LOOP-6 的裁定覆盖 |
 
 不引入 REST/Swagger 作为核心交互协议，也不维护 CBOR RPC 和 JSONL 两套消息定义。
 
@@ -379,14 +379,14 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 |---|---|---|---|---|---|
 | PLG-1 | 注册可逆和清理审计 | dsh、opencode、openclaw | P1 | 生命周期框架已有撤销和 owner 清理；补一份统一注册清单、禁用/卸载后的基线断言，以及工具、权限、能力、订阅、UI、定时器和键位的清理测试，不改 ABI。 | 可行 |
 | PLG-2 | 声明式贡献集合和重算 | opencode、dsh | P1 | 提示词、工具、资源、UI 描述采用“活动贡献集合”；启用/禁用后重新计算派生状态，减少逆向恢复遗漏。 | 可行 |
-| PLG-3 | 细粒度变更事件和批量重算 | opencode、dsh | P1 | 工具集变更只重算工具视图，提示词变更只重算 prompt；批量启停结束只重算一次，同 id 重载保留顺序位。 | 待定 |
+| PLG-3 | 细粒度变更事件和批量重算 | opencode、dsh | P1 | 工具集变更只重算工具视图，提示词变更只重算 prompt；批量启停结束只重算一次，同 id 重载保留顺序位。 | 不考虑（2026-10-04 核定）：当前没有会过期的派生缓存——工具定义每次请求现组装（`modelcall.cpp:248/256`），提示词由贡献表实时拼装，插件禁用/卸载时贡献被撤销；将来若为性能引入派生缓存再一并引入失效事件 |
 | PLG-4 | 独占能力 slot | openclaw、opencode | P1 | 只为压缩器、context assembler、memory provider 等少数独占能力提供 slot；卸载自动回到内置。工具仍采用叠加模型。 | 可行 |
-| PLG-5 | manifest 配置 schema 和静态能力 | openclaw、harness、dsh | P1 | plugin.yaml 声明 config schema、设置 UI 元数据、能力快照；宿主在实例化前校验。 | 待定 |
+| PLG-5 | manifest 配置 schema 和静态能力 | openclaw、harness、dsh | P1 | plugin.yaml 声明 config schema、设置 UI 元数据、能力快照；宿主在实例化前校验。 | 不考虑（2026-10-04 核定）：宿主不解析插件 `args` 是刻意设计（参数语义完全由插件定义），声明式 schema 校验会与"原样透传"的取向冲突 |
 | PLG-6 | 装配树和域视图查询 | dsh、opencode、harness | P1 | `--dump-config`/诊断页列出插件、接口、依赖、能力、提示词段、工具、图类型和来源。 | 可行 |
 | PLG-7 | 教学式错误和信任声明 | dsh、openclaw | P1 | 错误告诉插件作者如何修正；文档明确原生插件同进程、无沙箱、只能加载可信代码。 | 可行 |
 | PLG-8 | 清单和文档分页 | openclaw、pi、dsh | P1 | `plugins.md` 拆为入门、生命周期、SDK、宿主、client、规则；接口表数字由生成物或常量校验。 | 可行 |
-| PLG-9 | 作用域过滤 | dsh、openclaw | P2 | 全局注册 + agent/subagent 过滤视图，schema 和执行同时不可见；不引入 Cordis realm。 | 待定 |
-| PLG-10 | 插件错误和成本诊断 | openclaw | P2 | 记录插件/阶段/slot 的渲染错误、加载耗时和边际内存。 | 待定 |
+| PLG-9 | 作用域过滤 | dsh、openclaw | P2 | 全局注册 + agent/subagent 过滤视图，schema 和执行同时不可见；不引入 Cordis realm。 | 不考虑（2026-10-04 核定）：子代理工具白名单（`enableToolFiltering` + `toolWhitelist`）已实现"schema 与执行同时不可见"，多租户式作用域叠加无实际需求 |
+| PLG-10 | 插件错误和成本诊断 | openclaw | P2 | 记录插件/阶段/slot 的渲染错误、加载耗时和边际内存。 | 可行（2026-10-04 核定，限定范围）：记录"加载/启停耗时 + 接口协商结果 + 注册计数（工具/钩子/UI/定时器）"到日志与 ARC-6 装配快照；渲染错误计数可选；不做常驻内存/CPU 采样（benchmark 已覆盖边际内存） |
 | PLG-11 | 高权限插件显式加载许可 | harness、openclaw | P2 | 插件声明 `ProcessExec`、`DeviceCapture` 或出网能力后，宿主可要求配置明确许可才加载；权限声明和加载许可分开记录。 | 移除（2026-10-04 核定）：与"插件 = 宿主等价受信代码"冲突，且宿主无法约束同进程原生代码；如保留信息价值，只作为"插件能力声明（仅展示/审计，不做加载门禁）"的展示项 |
 
 ### 12.2 必须保留
@@ -424,7 +424,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 | 编号 | 设计 | 来源 | 优先级 | 融合方式与落点 | 人工核定 |
 |---|---|---|---|---|---|
-| RET-1 | 会话全文检索 | codex、dsh、pi、harness | P1 | 先给 view_message 建 FTS5 或轻量关键词索引，支持标题、命中片段和分页；不先做跨库复杂投影。 | 待定（2026-10-04：存储层 `searchSessions` 已实现；建议拆为 RET-1a 协议/TUI 入口（做）+ RET-1b FTS5 索引（按需），待确认） |
+| RET-1 | 会话全文检索 | codex、dsh、pi、harness | P1 | 先给 view_message 建 FTS5 或轻量关键词索引，支持标题、命中片段和分页；不先做跨库复杂投影。 | 拆两条（2026-10-04 核定）：**RET-1a 协议 + TUI 入口**（可行，与 RET-2 的改名/搜索入口同批做，用户可见）；**RET-1b FTS5 索引**（不考虑：逐会话子串扫描在会话量不大时够用，真出现慢查询再加） |
 | RET-2 | 独立标题元数据 | codex、dsh、pi | P1 | `meta.title/titleSource`，自动标题可被用户改名；列表和检索统一使用。 | 可行 |
 | RET-3 | 附件校验元数据 | dsh、harness、openclaw | P1 | 当前已有大小和附件数量上限；补实际 mime/size/hash/像素验证、路径读取前权限、HTTP(S) 策略。 | 不考虑 |
 | RET-4 | 结构化 spill 定位符 | dsh、codex、openclaw | P1 | 在现有 share_store 上补字节数、行数、首尾预览和读取提示；不复制完整内容到第二个存储。 | 不考虑 |
@@ -451,13 +451,13 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 | TST-6 | 一致性测试骨架 | pi、harness | P1 | SessionStore、share_store、settings_db 的替身/后端统一跑同一语义断言。 | 可行 |
 | TST-7 | 边界/导出/清理门禁 | openclaw、dsh、opencode | P1 | 依赖方向、DSO 白名单、接口表集合、UI block 名、插件注册清理和文档路径。 | 可行 |
 | TST-8 | CI 一键门禁 | harness、openclaw、opencode | P0 | Debug 构建、fail-fast、回放/协议、边界、负面编译、sanitizer；基准阈值可选。 | 可行 |
-| TST-9 | 测试隔离、耗时和脱敏 | openclaw、pi | P1 | 临时 HOME/TMP/XDG、清凭据环境；每模块打印耗时/用例数；路径和 key 脱敏。 | 可行，已完成一部分 |
+| TST-9 | 测试隔离、耗时和脱敏 | openclaw、pi | P1 | 临时 HOME/TMP/XDG、清凭据环境；每模块打印耗时/用例数；路径和 key 脱敏。 | 可行（部分已实施）：测试使用独立临时目录（如 `agentxx_ss_test_*`）、模块耗时与用例数已打印；脱敏与凭据环境清理待补 |
 | TST-10 | 安全负面测试 | codex、harness、openclaw | P0 | 未声明危险工具、private URL、软链接越界、配置拒绝绕过、审批失效、陈旧工具身份。 | 可行（2026-10-04 核定，用例集收窄）：保留"未声明工具放行语义、软链接越界、配置拒绝优先于完全授权、工作区隔离优先于白名单"等**门禁正确性**用例；去掉"审批失效、陈旧工具身份"这类针对插件身份的用例（插件为受信代码，见 §8.0） |
-| TST-11 | 构建产物级 e2e | dsh、harness、pi | P2 | 使用构建后的 CLI、子进程和 PTY，验证安装布局和插件加载。 | 可行 |
-| TST-12 | 覆盖率和基准门禁 | dsh、harness、openclaw | P2 | 核心目录覆盖率作为 review 信息；改动会话/上下文/插件时附 ΔRSS/ΔPSS。 | 可行 |
-| TST-13 | 单一实现状态清单 | opencode、dsh、pi | P1 | `docs/zh-cn/design/roadmap.md` 记录已实现/部分/未实现、代码位置和验收测试；不要再把 TODO 分散在多份比较文档里。 | 可行 |
-| TST-14 | 安全守卫有效性测试 | dsh、harness | P2 | 安全改动必须包含一条先让回归测试失败、再验证修复的负面用例；避免只写无法证明边界的测试。 | 待定 |
-| TST-15 | 测试目录按领域分组 | opencode | P2 | 测试模块继续增长时按 `protocol/session/tools/middleware/ui` 分组，保持现有唯一 include 根和完整头路径规则。 | 可行 |
+| TST-11 | 构建产物级 e2e | dsh、harness、pi | P2 | 使用构建后的 CLI、子进程和 PTY，验证安装布局和插件加载。 | 现有（部分，2026-10-04 核对）：benchmark 已有真实两进程 + PTY 驱动 TUI 子进程场景（`benchmark/bench_resource_real.cpp`）；不新增独立 e2e |
+| TST-12 | 覆盖率和基准门禁 | dsh、harness、openclaw | P2 | 核心目录覆盖率作为 review 信息；改动会话/上下文/插件时附 ΔRSS/ΔPSS。 | 不考虑（2026-10-04 核定）：脚本里没有任何覆盖率工具链（Windows/MSVC 成本高）；"改动会话/上下文/插件时附 ΔRSS/ΔPSS"本就是 `AGENTS.md` 约定，保留约定不立门禁 |
+| TST-13 | 单一实现状态清单 | opencode、dsh、pi | P1 | `docs/zh-cn/design/roadmap.md` 记录已实现/部分/未实现、代码位置和验收测试；不要再把 TODO 分散在多份比较文档里。 | 可行（2026-10-04 核定，低成本；待二次确认）：现状 `docs/zh-cn/design/roadmap.md` 不存在，本计划收口后按"已实施 / 待实施 / 不做 / 未来计划"落成一份 |
+| TST-14 | 安全守卫有效性测试 | dsh、harness | P2 | 安全改动必须包含一条先让回归测试失败、再验证修复的负面用例；避免只写无法证明边界的测试。 | 写入文档约定（2026-10-04 核定）：作为 `agent/lib/AGENTS.md` 的评审约定（不立实施项；实质用例已由 TST-10 覆盖） |
+| TST-15 | 测试目录按领域分组 | opencode | P2 | 测试模块继续增长时按 `protocol/session/tools/middleware/ui` 分组，保持现有唯一 include 根和完整头路径规则。 | 不考虑（2026-10-04 核定）：现状已按 `core/ plugin/ client/` 分组，模块名扁平，够用 |
 
 ---
 
@@ -522,7 +522,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 #### 批次 C：上下文和 LLM 成本
 
-- PRM-1、PRM-2、PRM-3、PRM-4、PRM-5、PRM-7、CTX-1、CTX-2、CTX-3、CTX-4、CTX-5、CTX-7：提示词边界、来源快照、记忆分层、变化通知、版本和一致读。
+- PRM-1、PRM-2、PRM-5、PRM-7、CTX-7，以及 PRM-4 的"记忆文件过大警告"：稳定段/动态段分离、段落 order、技能优先级与同名裁决、请求体结构 + 稳定段哈希断言、附件引用。（CTX-1 ~ CTX-6、CTX-8、CTX-9 与 PRM-3、PRM-6 已核定不做；PRM-4 不做分层与按需检索）
 - CMP-1、CMP-2、CMP-3、CMP-4、CMP-5、CMP-6；LLM-2、LLM-3、LLM-4、LLM-5、LLM-8、LLM-13。（LLM-1 元数据集中化 2026-10-04 核定不做）
 
 完成标准：连续两轮请求中稳定请求段保持前缀关系；动态来源只在变化时更新；来源读取失败不会抹掉旧值；超限只压缩一次且不重放已完成工具；摘要失败走确定性兜底；实际请求 token 和账本一致。
@@ -531,7 +531,7 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 - TOOL-1、TOOL-2、TOOL-3、TOOL-16、TOOL-17：工具并行化（分类与上限并入）、按规范化路径排队串行写、执行环境加固。（TOOL-4 超时、TOOL-9 单调 guard、TOOL-13 审批缓存与身份绑定已核定不做；TOOL-14 延迟工具暂不启用）
 - TOOL-5、TOOL-6、TOOL-7、TOOL-8、TOOL-10、TOOL-11、TOOL-12：按 id 结算、结果守卫、聚合预算、结构化定位、错误分类与可用性诊断（其中 TOOL-5/6/7/8/10 已核定"不考虑/已实现"，TOOL-12 待确认是否并入 ARC-6）。
-- SEC-2、SEC-5、SEC-6、SEC-9：权限决定理由、执行前目标复验（按 §8.0 收窄表述）、软链接路径判定、安全责任文档重写。（SEC-1、SEC-3、SEC-4、SEC-7、SEC-8、SEC-10、SEC-11、SEC-13、SEC-14 已核定不做；SEC-12 沙箱列为后续计划、不在当前计划实施）
+- SEC-2、SEC-5、SEC-9：权限决定理由、执行前目标复验（按 §8.0 收窄表述）、安全责任文档重写。（SEC-1、SEC-3、SEC-4、SEC-7、SEC-8、SEC-10、SEC-11、SEC-13、SEC-14、SEC-15 已核定不做；SEC-6 软链接判定与 SEC-12 沙箱列为未来计划、不在当前计划实施）
 
 完成标准：只读工具耗时接近最大值而不是总和；写/交互工具仍有序；取消不留悬挂 tool call；多个结果总量受限但原文可回取；未声明危险工具有明确策略；private/loopback 地址在连接前被拦截；每个权限分支有理由和审计记录。
 
@@ -539,13 +539,13 @@ agentxx 已有 `agent/lib`、`agent/client`、`agent/plugins` 三层，插件与
 
 - JOB-1、JOB-2、JOB-3、JOB-4、JOB-5、JOB-6、JOB-7、JOB-11：作业表、进度、后台命令、子代理记录、配额、fork 和目标状态。（**整节 2026-10-04 核定不考虑，留作未来计划**：子代理整块改造较大）
 - PLG-1、PLG-2、PLG-3、PLG-4、PLG-5、PLG-6、PLG-7、PLG-8：贡献重算、变更事件、批量启停、slot、清单 schema、诊断和文档。
-- CFG-4、CFG-8、CFG-9（CFG-4 与 LLM-1 合并；CFG-2、CFG-5、CFG-6、CFG-7 已核定不做，CFG-3 已并入 ARC-6）；UI-1、UI-3、UI-4、UI-5、UI-9（UI-2 归批次 A；UI-6、UI-8、UI-10 已核定不做；UI-7 列入未来计划）；PRO-3、PRO-5、PRO-6、PRO-7、PRO-8、PRO-12。
+- CFG-4、CFG-8、CFG-9（CFG-4 已裁定与 LLM-1 同判不做；CFG-2、CFG-5、CFG-6、CFG-7 已核定不做，CFG-3 已并入 ARC-6）；UI-1、UI-3、UI-4、UI-5、UI-9（UI-2 归批次 A；UI-6、UI-8、UI-10 已核定不做；UI-7 列入未来计划）；PRO-3、PRO-5、PRO-7（限"会话 ID 校验统一化"）、PRO-8（PRO-6 并入 STO-4；PRO-12 已核定不做）；RET-1a（协议 + TUI 搜索/改名入口，与 RET-2 同批；RET-1b FTS5 不做）。
 
 完成标准：长命令不阻塞父轮次，进程重启可看到超期作业；插件卸载后所有注册恢复到基线；配置迁移有备份和回滚；客户端模型能独立测试重连/分页；老客户端按能力协商降级。
 
 #### 批次 F：按需求扩展
 
-- JOB-8、JOB-9、JOB-10、JOB-12、CTX-6、CTX-8、CTX-9、CMP-7、CMP-8、CMP-9、SEC-12、SEC-13、SEC-14、SEC-15、PRO-9、PRO-10、RET-1、RET-2、RET-3、RET-4、OBS-3、OBS-4、OBS-5、TST-11、TST-12、TST-14、TST-15。（SEC-8、CFG-7、CFG-6、CFG-5、CFG-2、JOB 整节、UI-6、UI-8、UI-10、TST-5 已于 2026-10-04 核定不做/合并；UI-7 列入未来计划；OBS-2 作为未来设计约束保留；LLM-9、LLM-12 列为后续计划、不在本计划实施。）
+- JOB-8、JOB-9、JOB-10、JOB-12、CTX-6、CTX-8、CTX-9、CMP-7、CMP-8、CMP-9、SEC-12、SEC-13、SEC-14、SEC-15、RET-2、RET-3、RET-4、OBS-3、OBS-4、OBS-5、TST-11、TST-12、TST-13、TST-14、TST-15。（2026-10-04 核定：SEC-8、CFG-7、CFG-6、CFG-5、CFG-2、JOB 整节、UI-6、UI-8、UI-10、PRO-2、PRO-9、PRO-10、PRO-12、PLG-3、PLG-5、PLG-9、PLG-11、ARC-7b、STO-10、SEC-15、TST-12、TST-15、RET-1b 不做；TST-5 并入 UI-2；UI-7、SEC-6、SEC-12 列入未来计划；TST-14 写入 AGENTS.md 约定；OBS-2 作为未来设计约束保留；LLM-9、LLM-12 列为后续计划、不在本计划实施。）
 - 每项开始前先补“需求、成本、取消边界、权限、持久化和验收”设计，不因比较文档提到就自动实施。
 
 ---
@@ -565,15 +565,15 @@ P0 不是“所有重要功能”，而是第一阶段必须解决的风险和�
 | LOOP-5 | 幂等键（2026-10-04 核定不做） | 客户端不引入发送重试，重复执行风险不成立 |
 | STO-1 | writer lease | 多进程不互相覆盖会话 |
 | STO-2 | schema migration | 数据结构可安全演进 |
-| PRM-1 | prompt cache boundary | 长会话前缀稳定 |
+| PRM-1/PRM-2/PRM-7 | 稳定前缀、段落顺序、请求体断言 | 长会话前缀稳定、缓存有效 |
 | CTX-1/CTX-2/CTX-3 | 来源、基线、三态 | 动态上下文可审计且不误清空 |
-| PRM-4 | memory 分层 | 大记忆文件不吞上下文 |
+| PRM-4 | memory 过大警告 | 大记忆文件不吞上下文（只提示，不截断） |
 | CMP-3 | 结构化摘要与固定小节（已实施） | 压缩后保留最近工作细节与下一步 |
 | LLM-1/LLM-2/LLM-3/LLM-4/LLM-5 | provider 能力、错误分类、溢出恢复、看门狗和假 provider | provider 失败可分类、可测、可恢复（LLM-1 元数据集中化 2026-10-04 核定不做） |
 | TOOL-1/TOOL-2/TOOL-3/TOOL-16/TOOL-17 | 并行、上限、取消、按路径排队写、环境 | 延迟降低且不会无界消耗资源（TOOL-4 超时、TOOL-9 guard、TOOL-13 身份绑定已核定不做） |
-| SEC-2/SEC-5/SEC-6/SEC-9 | 权限决定理由、执行前目标复验、软链接路径判定、安全责任文档 | 让门禁判定可解释、可复核（SEC-1/SEC-3/SEC-4 已核定不做） |
+| SEC-2/SEC-5/SEC-9 | 权限决定理由、执行前目标复验、安全责任文档 | 让门禁判定可解释（SEC-1/SEC-3/SEC-4 已核定不做；SEC-6 未来计划） |
 | JOB-1/JOB-2（2026-10-04 核定不做） | 作业表和进度 | 子代理整块改造较大，留作未来计划 |
-| PRO-1/PRO-2/PRO-11 | 协议契约、幂等和错误码 | 远程交互可靠，错误可被机器和 UI 区分 |
+| PRO-1/PRO-11 | 协议契约和错误码 | 远程交互可靠，错误可被机器和 UI 区分（PRO-2 幂等键 2026-10-04 核定不做） |
 | UI-2 | UI 快照 | 渲染回归可自动发现 | 可行（2026-10-04 核定）：与 TST-5 合并为“UI 快照夹具”（固定尺寸文本 + 命中区基线 + 一键更新） |
 | TST-1/TST-2/TST-3/TST-5/TST-8/TST-10 | 测试基础和门禁 | 后续重构有安全网 |
 | RET-5 | opId/callId（2026-10-04 核定不做） | 收益不明显，仅在需要统一日志追踪时再评估 |
@@ -787,3 +787,48 @@ P0 不是“所有重要功能”，而是第一阶段必须解决的风险和�
 - **现状记录**：TUI 端点仍是单类（`agent_tui.cpp` 3017 行）承担协议处理 + 状态镜像 + 渲染协调；
   `ui_components.cpp`（2376 行）与 `components/overlays.cpp`（3048 行）为另外两个大文件；
   `UiRenderCtx` 已是纯数据上下文（主题/宽度/缩进/归属/可选注册表快照/折叠查询/翻译/表单状态）。
+
+### 2026-10-04：人工核定（第九批：§11 协议 + §12 插件）
+
+- **核定结果（§11）**：
+    - PRO-2 不考虑（与 LOOP-5 一致：客户端不引入发送确认/重试）。
+    - PRO-6 并入 STO-4（由 `view_message.seq` + `hello.afterSeq` 承载，不单列）。
+    - PRO-7 可行（限定范围）：只做"端点入口统一校验 `req.sessionId` 与当前绑定会话不匹配即拒绝"
+      （现状只有历史分页请求做了该校验，`session_server_agent_io.cpp:1474`）；不做请求级取消。
+    - PRO-9 不考虑：本项目已支持 server 常驻后台、单进程合并启动 server+client、FFI 等多种形态。
+    - PRO-10 不考虑：嵌入已支持 FFI 调用动态库，插件侧也有开发 SDK。
+    - PRO-12 不考虑：与 TOOL-10（不考虑）重叠，作业部分随 JOB 整节不做，轮次终态枚举被 LOOP-6 裁定覆盖。
+- **核定结果（§12）**：
+    - PLG-3 不考虑：当前没有会过期的派生缓存（工具定义每次请求现组装、提示词实时拼装）。
+    - PLG-5 不考虑：宿主不解析插件 `args` 是刻意设计，声明式 schema 校验与"原样透传"取向冲突。
+    - PLG-9 不考虑：子代理工具白名单（`enableToolFiltering` + `toolWhitelist`）已实现 schema 与执行同时不可见。
+    - PLG-10 可行（限定范围）：记录加载/启停耗时、接口协商结果与注册计数（工具/钩子/UI/定时器）到日志与 ARC-6 快照。
+
+### 2026-10-04：人工核定（第十批：§3 上下文、提示词、技能和记忆）
+
+- **核定结果**：
+    - CTX-3、CTX-4、CTX-6、CTX-8、CTX-9 **全部不考虑**（机制或需求已满足：`flags`/`extra` 不进 LLM 请求体、
+      `history_contents` 保留旧版本、恢复链已存在、系统提示词刻意取不含 worktree 的基准目录、无可失效的派生态缓存）。
+    - PRM-1 可行：稳定段（`systemPrompt` + 静态附加段 + 工具 schema）+ 末尾追加的带来源动态消息 +
+      每轮稳定段哈希；不做 provider 能力探测；LLM-8 缓存断点依赖本项。
+    - PRM-2 可行（限定）：只加 `order` 固定排序字段（同层重复 key 仍失败），**不引入固定槽位枚举**。
+    - PRM-4 可行（限定）：**只加"记忆文件过大警告"**，不做分层、不做按需检索、不做截断；
+      默认用户添加的记忆文件应当像 skill 一样简略/索引式。
+    - PRM-7 可行（限定）：请求体结构断言 + 稳定段哈希断言；不做整段提示词快照。
+- **现状记录**：`PRM-4` 的现状是"记忆文件整份内容每轮注入系统消息，无任何大小限制或截断"
+  （`MemoryFileMiddleware`，懒加载 + 缓存 + 自愈重读）；本轮只补警告，不改注入方式。
+
+### 2026-10-04：人工核定（第十一批：遗留项收口，全部条目核定完毕）
+
+- **核定结果**：
+    - ARC-7b 不考虑（纯重构、无功能收益；当前最大文件 4278 行仍可维护）。
+    - STO-10 不考虑（短事务 + 轮末权威写是刻意设计，无阻塞证据）。
+    - SEC-6 未来计划（符号链接真实路径判定，实施时先覆盖写操作）。
+    - SEC-15 不考虑（与 SEC-1 同族：动作类工具难以界定可靠目标）。
+    - RET-1 拆两条：**RET-1a 协议 + TUI 入口（做，与 RET-2 同批）**；RET-1b FTS5 索引（不做）。
+    - TST-14 写入 `agent/lib/AGENTS.md` 文档约定（不立实施项）。
+    - TST-13 可行（低成本，待二次确认）：`docs/zh-cn/design/roadmap.md` 现状不存在，按"已实施 / 待实施 / 不做 / 未来计划"落成一份。
+- **收口结论**：六章比较文档的全部条目均已有明确裁定（可行 / 不考虑 / 未来计划），
+  实施按 §16.2 批次 A→F 推进；每项实施要求仍按 §0.5「统一验收原则」（至少一条会失败的测试）执行。
+- **最早可开工的批次**：批次 A（ARC-6 启动快照 + `--dump-config`、CFG-1 结构化校验、SEC-9 安全责任文档、
+  UI-2 + TST-5 快照夹具、TST-13 roadmap.md）。
