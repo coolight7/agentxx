@@ -123,7 +123,7 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | PRO-1 | 消息往返测试 | 已实施 | 模块 `wire_roundtrip`（全消息类型往返 + 幂等 + 未知字段/类型兼容）；`remote_agent` 亦有协议往返段 |
-| PRO-3 | 协议版本与能力握手 | 待实施 | `WireHello` / `WireHelloAck` |
+| PRO-3 | 协议版本与能力握手 | 已实施 | `WireProtocol` 常量 + `WireHello/WireHelloAck` 的版本与能力字段；服务端版本检查（不静默降级）、客户端重连声明与拒绝处理；模块 `wire_roundtrip` / `remote_agent` |
 | PRO-4 | 生成 `wire-schema.json` 与字段文档 | 待实施 | 脚本 + CI 新鲜度检查 |
 | PRO-5 | 连接阶段与错误分类 | 待实施 | 端点状态机 |
 | PRO-7 | 会话 ID 校验统一化 | 已实施 | `SessionServerAgentIO::acceptSessionScope`（入口统一校验，不匹配回 `WireError`）；`remote_agent` 的 `session scope validation` 用例 |

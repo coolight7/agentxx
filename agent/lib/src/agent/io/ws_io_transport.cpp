@@ -110,6 +110,9 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     // 记录 sessionId 供重连时复用
     helloSessionId_ = hello.sessionId;
     helloLanguage_  = hello.language;
+    // 协议版本与能力声明 (计划 PRO-3): 重连时沿用同一份声明
+    helloProtocolVersion_ = hello.protocolVersion;
+    helloCapabilities_    = hello.capabilities;
 
     // 客户端模式：发送 hello 并等待 helloAck
     // 注意：HelloAck 在此处被处理 (仅用于握手判断), 不会传递给 runTransportLoop 的调用方
@@ -118,11 +121,15 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
         hello.token,
         hello.lastSeq,
         hello.tailHash,
-        hello.language
+        hello.language,
+        hello.afterViewSeq,
+        hello.protocolVersion,
+        hello.capabilities
     );
     writeQueue_->try_send(ErrorCode{}, helloJson.dump());
 
     // 等待 HelloAck; 超时或 channel 关闭时按连接失败处理
+    bool handshakeRejected = false;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
             for (;;) {
@@ -131,6 +138,16 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                 );
                 if (auto* ack = std::get_if<WireHelloAck>(&msg)) {
                     lastHelloAck_ = *ack;
+                    // 服务端明确拒绝 (鉴权失败 / 协议版本不受支持, 见计划 PRO-3):
+                    // 握手按失败处理, 原因经 lastHelloAck().error 暴露给调用方展示;
+                    // 继续"连接成功"会让调用方在错误的前提下工作
+                    if (!ack->ok) {
+                        handshakeRejected = true;
+                        XX_LOGE(
+                            "[ws_transport] hello rejected by server: {}",
+                            ack->error.empty() ? std::string{"<no reason>"} : ack->error
+                        );
+                    }
                     break;
                 }
                 // 防御: 先于 HelloAck 到达的其余消息 (如 Log/ContextStats) 缓存
@@ -147,11 +164,15 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
             // 使已启动的 readLoop 退出且不进入自动重连循环 —— 否则调用方在 connect()
             // 返回 false 后已放弃连接, readLoop 仍会每 reconnectBackoff 无限重连
             // (maxReconnectAttempts=0 表示无限), 泄漏协程与持续的连接尝试
-            close();
-            connected_.store(false, std::memory_order_release); // 明确设置连接状态
+            handshakeRejected = true;
             co_return false;
         }
     );
+
+    if (handshakeRejected) {
+        close();
+        connected_.store(false, std::memory_order_release);
+    }
 
     co_return connected_.load(std::memory_order_acquire);
 }
@@ -384,7 +405,9 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 lastDeltaSeq_.load(std::memory_order_acquire),
                 lastTailHash_,
                 helloLanguage_,
-                lastViewSeq_.load(std::memory_order_acquire)
+                lastViewSeq_.load(std::memory_order_acquire),
+                helloProtocolVersion_,
+                helloCapabilities_
             );
             writeQueue_->try_send(ErrorCode{}, helloJson.dump());
             reconnected = true;

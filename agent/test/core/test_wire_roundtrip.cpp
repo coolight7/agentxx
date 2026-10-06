@@ -67,8 +67,12 @@ TestResult testWireRoundtrip() {
         ack.sessionId = "sess-中文-1";
         ack.tailHash  = "deadbeef";
         ack.models    = {"gpt-x", "claude-y"};
-        ack.deviceId  = "device-42";
-        ack.workDir   = "D:/work/项目";
+        ack.deviceId = "device-42";
+        ack.workDir  = "D:/work/项目";
+        // 协议版本与能力声明 (计划 PRO-3) 一并往返
+        ack.protocolVersion = WireProtocol::kVersion;
+        ack.capabilities    = serverWireCapabilities();
+
         ack.plugins.push_back(
             WireHelloAck::PluginInfo{
                 .name       = "agentxx_filesystem",
@@ -88,6 +92,69 @@ TestResult testWireRoundtrip() {
             XX_TEST_EXPECT_EQ(back.plugins[0].name, std::string{"agentxx_filesystem"});
             XX_TEST_EXPECT_EQ(back.plugins[0].version, std::string{"1.2.3"});
             XX_TEST_EXPECT_EQ(back.plugins[0].interfaces.size(), size_t{2});
+        }
+        // 协议版本与能力声明 (计划 PRO-3)
+        XX_TEST_EXPECT_EQ(back.protocolVersion, WireProtocol::kVersion);
+        XX_TEST_EXPECT_EQ(back.capabilities.size(), serverWireCapabilities().size());
+        XX_TEST_EXPECT_EQ(back.error, std::string{});
+    }
+
+    // ---------------- 握手: 协议版本与能力 (计划 PRO-3) ----------------
+
+    {
+        WireHello hello;
+        hello.sessionId       = "sess-中文-1";
+        hello.token           = "tok";
+        hello.lastSeq         = 42;
+        hello.tailHash        = "abc";
+        hello.language        = "zh-cn";
+        hello.afterViewSeq    = 128;
+        hello.protocolVersion = WireProtocol::kVersion;
+        hello.capabilities    = {
+            std::string{WireProtocol::kCapInputDelivery},
+            std::string{WireProtocol::kCapUiForm},
+        };
+        auto back = roundTrip(hello);
+        XX_TEST_EXPECT_EQ(back.sessionId, std::string{"sess-中文-1"});
+        XX_TEST_EXPECT_EQ(back.lastSeq, uint64_t{42});
+        XX_TEST_EXPECT_EQ(back.afterViewSeq, uint64_t{128});
+        XX_TEST_EXPECT_EQ(back.protocolVersion, WireProtocol::kVersion);
+        XX_TEST_EXPECT_EQ(back.capabilities.size(), size_t{2});
+
+        // 老客户端 (缺字段): 版本 0、能力空 (服务端按最低兼容版本处理)
+        auto legacyJson = utilxx_base::Json::parse(WsAgentIOTransport::serialize(WireMessage{hello}));
+        legacyJson.erase("protocolVersion");
+        legacyJson.erase("capabilities");
+        auto legacyBack = WsAgentIOTransport::deserialize(legacyJson.dump());
+        XX_TEST_EXPECT_TRUE(legacyBack.has_value());
+        if (legacyBack.has_value()) {
+            auto* legacy = std::get_if<WireHello>(&legacyBack.value());
+            XX_TEST_EXPECT_TRUE(legacy != nullptr);
+            if (legacy != nullptr) {
+                XX_TEST_EXPECT_EQ(legacy->protocolVersion, 0);
+                XX_TEST_EXPECT_TRUE(legacy->capabilities.empty());
+            }
+        }
+
+        // 服务端拒绝: 版本更高时给出可读原因 (不静默降级)
+        auto rejectJson = WsAgentIOTransport::serialize(WireMessage{WireHelloAck{
+            .ok              = false,
+            .sessionId       = "sess-中文-1",
+            .error           = "client protocol version 99 is newer than server version 1",
+            .protocolVersion = WireProtocol::kVersion,
+            .capabilities    = serverWireCapabilities(),
+        }});
+        auto rejectBack = WsAgentIOTransport::deserialize(rejectJson);
+        XX_TEST_EXPECT_TRUE(rejectBack.has_value());
+        if (rejectBack.has_value()) {
+            auto* reject = std::get_if<WireHelloAck>(&rejectBack.value());
+            XX_TEST_EXPECT_TRUE(reject != nullptr);
+            if (reject != nullptr) {
+                XX_TEST_EXPECT_FALSE(reject->ok);
+                XX_TEST_EXPECT_TRUE(reject->error.find("99") != std::string::npos);
+                XX_TEST_EXPECT_EQ(reject->protocolVersion, WireProtocol::kVersion);
+                XX_TEST_EXPECT_EQ(reject->capabilities.size(), serverWireCapabilities().size());
+            }
         }
     }
 

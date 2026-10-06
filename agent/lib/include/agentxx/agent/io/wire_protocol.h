@@ -419,7 +419,9 @@ inline utilxx_base::Json makeHello(
     uint64_t         lastSeq      = 0,
     std::string_view tailHash     = "",
     std::string_view language     = "",
-    uint64_t         afterViewSeq = 0
+    uint64_t         afterViewSeq = 0,
+    int              protocolVersion = WireProtocol::kVersion,
+    const std::vector<std::string>& capabilities = {}
 ) {
     utilxx_base::Json j = {
         {"type",      MsgType::Hello},
@@ -438,6 +440,12 @@ inline utilxx_base::Json makeHello(
     // 已持有的展示历史序号 (计划 STO-4): 请求"该序号之后的展示消息"增量补拉
     if (afterViewSeq > 0) {
         j["afterViewSeq"] = afterViewSeq;
+    }
+    // 协议版本与能力声明 (计划 PRO-3): 总是携带版本号 (老服务端忽略未知字段);
+    // 能力列表为空时不携带 (服务端按"未声明"处理, 走最保守路径)
+    j["protocolVersion"] = protocolVersion;
+    if (!capabilities.empty()) {
+        j["capabilities"] = capabilities;
     }
     return j;
 }
@@ -555,7 +563,10 @@ inline utilxx_base::Json makeHelloAck(
     const std::vector<std::string>&              models,
     const std::vector<WireHelloAck::PluginInfo>& plugins  = {},
     std::string_view                             deviceId = "",
-    std::string_view                             workDir  = ""
+    std::string_view                             workDir  = "",
+    std::string_view                             error    = "",
+    int                                          protocolVersion = WireProtocol::kVersion,
+    const std::vector<std::string>&              capabilities    = {}
 ) {
     utilxx_base::Json j = {
         {"type",      MsgType::HelloAck},
@@ -567,6 +578,15 @@ inline utilxx_base::Json makeHelloAck(
     }
     if (!models.empty()) {
         j["models"] = models;
+    }
+    // 拒绝原因 (计划 PRO-3: 协议版本/能力不匹配时给客户端可读说明)
+    if (!error.empty()) {
+        j["error"] = error;
+    }
+    // 协议版本与能力声明 (服务端侧; 老客户端忽略未知字段)
+    j["protocolVersion"] = protocolVersion;
+    if (!capabilities.empty()) {
+        j["capabilities"] = capabilities;
     }
     if (!deviceId.empty()) {
         j["deviceId"] = deviceId;

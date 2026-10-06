@@ -91,6 +91,49 @@ inline SessionQueueState sessionQueueStateFromText(std::string_view text) noexce
     return SessionQueueState::Idle;
 }
 
+/// 协议版本与能力协商 (计划 PRO-3)
+///
+/// - 版本号只在**破坏性变更**时递增: 对端版本更高时明确拒绝 (回
+///   `WireHelloAck{ok=false, error=…}`) 而不是静默降级 —— 静默降级会让新客户端
+///   以为老服务端支持某能力, 行为难以排查;
+/// - 老客户端不带 `protocolVersion` (解析为 0): 服务端按"最低兼容版本"处理,
+///   不拒绝 (向后兼容);
+/// - 能力用字符串列表声明 (见下方常量); 未声明即"对端可能不支持", 调用方按最
+///   保守方式降级。能力名只在双方都认识时才有意义, 未知名字忽略即可。
+struct WireProtocol {
+    /// 当前协议版本
+    inline static constexpr int kVersion = 1;
+    /// 兼容的最低版本 (0 = 未声明版本的老客户端)
+    inline static constexpr int kMinVersion = 0;
+
+    /// 能力: 输入投递模式 `next-step` / `inject` (LOOP-2)
+    inline static constexpr std::string_view kCapInputDelivery = "input.delivery";
+    /// 能力: 输入受理回执 (`WireInputAck`, LOOP-3)
+    inline static constexpr std::string_view kCapInputAck = "input.ack";
+    /// 能力: 队列状态 (排队/暂停/消化, LOOP-4)
+    inline static constexpr std::string_view kCapQueueState = "queue.state";
+    /// 能力: 展示历史增量补拉 (`afterViewSeq`, STO-4)
+    inline static constexpr std::string_view kCapViewAfterSeq = "view.after_seq";
+    /// 能力: 会话重命名与搜索 (RET-1a; 服务端提供时客户端显示入口)
+    inline static constexpr std::string_view kCapSessionSearch = "session.search";
+    /// 能力: 界面组件描述层 (agentxx.ui.item; 客户端声明)
+    inline static constexpr std::string_view kCapUiItems = "ui.items";
+    /// 能力: 声明式表单 (多字段提交 / `__submit` / `__cancel`; 客户端声明)
+    inline static constexpr std::string_view kCapUiForm = "ui.form";
+    /// 能力: 插件面板与 overlay (客户端声明)
+    inline static constexpr std::string_view kCapUiPanels = "ui.panels";
+};
+
+/// 服务端声明支持的能力 (hello ack 里回传)
+inline std::vector<std::string> serverWireCapabilities() {
+    return {
+        std::string{WireProtocol::kCapInputDelivery},
+        std::string{WireProtocol::kCapInputAck},
+        std::string{WireProtocol::kCapQueueState},
+        std::string{WireProtocol::kCapViewAfterSeq},
+    };
+}
+
 struct WireHello {
     std::string sessionId;
     std::string token;
@@ -101,6 +144,10 @@ struct WireHello {
     /// 已持有的展示历史序号 (计划 STO-4): >0 时服务端按"该序号之后的消息"增量补拉
     /// (见 WireSyncPayload::incremental), 0 = 未提供 (全量/尾窗同步)
     uint64_t afterViewSeq = 0;
+    /// 协议版本 (计划 PRO-3): 客户端按自身实现上报; 老客户端缺字段 → 0
+    int protocolVersion = WireProtocol::kVersion;
+    /// 客户端能力声明 (取值见 [WireProtocol]; 缺省 = 老客户端, 服务端按最保守处理)
+    std::vector<std::string> capabilities;
 };
 
 struct WireHelloAck {
@@ -108,6 +155,11 @@ struct WireHelloAck {
     std::string              sessionId;
     std::string              tailHash;
     std::vector<std::string> models;
+    /// 拒绝原因 (仅 ok=false 时有值; 如协议版本不受支持)
+    std::string error;
+    /// 服务端协议版本与能力声明 (计划 PRO-3)
+    int                      protocolVersion = WireProtocol::kVersion;
+    std::vector<std::string> capabilities;
 
     /// 单个服务端插件的声明信息
     struct PluginInfo {

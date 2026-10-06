@@ -441,12 +441,17 @@ static asio::awaitable<void> runRemoteCliAsync(
 
     // 连接并握手
     agent::WireHello hello{
-        .sessionId = sessionId,
-        .token     = token,
-        .lastSeq   = 0,
-        .tailHash  = "",
-        .model     = "",
-        .language  = "en",
+        .sessionId       = sessionId,
+        .token           = token,
+        .lastSeq         = 0,
+        .tailHash        = "",
+        .model           = "",
+        .language        = "en",
+        // 协议版本与能力声明 (计划 PRO-3): 服务端据此决定是否下发补拉/回执等能力
+        .protocolVersion = agent::WireProtocol::kVersion,
+        .capabilities    = {std::string{agent::WireProtocol::kCapInputDelivery},
+                            std::string{agent::WireProtocol::kCapInputAck},
+                            std::string{agent::WireProtocol::kCapViewAfterSeq}},
     };
     bool ok = co_await transport->connect(hello);
     if (!ok) {
@@ -539,12 +544,21 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // - 用户点击重试 → requestRetry() 置 Connecting 并唤醒 waitRetry 重新循环
     // - TUI 退出 (running_=false) 时流程尽快终止
     agent::WireHello hello{
-        .sessionId = sessionId,
-        .token     = token,
-        .lastSeq   = 0,
-        .tailHash  = "",
-        .model     = "",
-        .language  = TUISettings::instance().languageCode(),
+        .sessionId       = sessionId,
+        .token           = token,
+        .lastSeq         = 0,
+        .tailHash        = "",
+        .model           = "",
+        .language        = TUISettings::instance().languageCode(),
+        // 协议版本与能力声明 (计划 PRO-3): 版本高于服务端时握手会被明确拒绝
+        .protocolVersion = agent::WireProtocol::kVersion,
+        .capabilities    = {std::string{agent::WireProtocol::kCapInputDelivery},
+                            std::string{agent::WireProtocol::kCapInputAck},
+                            std::string{agent::WireProtocol::kCapQueueState},
+                            std::string{agent::WireProtocol::kCapViewAfterSeq},
+                            std::string{agent::WireProtocol::kCapUiItems},
+                            std::string{agent::WireProtocol::kCapUiForm},
+                            std::string{agent::WireProtocol::kCapUiPanels}},
     };
     bool                                       connected = false;
     std::shared_ptr<agent::WsAgentIOTransport> transport;

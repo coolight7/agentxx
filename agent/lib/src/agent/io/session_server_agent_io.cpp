@@ -1418,6 +1418,45 @@ void SessionServerAgentIO::handleHello(
 ) {
     cancelGraceTimer();
 
+    // 协议版本协商 (计划 PRO-3): 对端版本更高时明确拒绝, 不静默降级
+    // - 0 = 老客户端未声明版本: 按最低兼容版本继续 (向后兼容)
+    // - 高于本服务端版本: 新客户端可能依赖本端不认识的消息/字段, 继续跑会出现
+    //   难以排查的行为, 因此回 ok=false + 可读原因
+    if (hello.protocolVersion > agentxx::agent::WireProtocol::kVersion) {
+        XX_LOGW(
+            "[session_ctrl] hello rejected: client protocol version {} > server {}",
+            hello.protocolVersion,
+            agentxx::agent::WireProtocol::kVersion
+        );
+        WireHelloAck reject;
+        reject.ok        = false;
+        reject.sessionId = config_.sessionId;
+        reject.error     = fmt::format(
+            "client protocol version {} is newer than server version {}; "
+            "please update the server side",
+            hello.protocolVersion,
+            agentxx::agent::WireProtocol::kVersion
+        );
+        reject.protocolVersion = agentxx::agent::WireProtocol::kVersion;
+        reject.capabilities    = agentxx::agent::serverWireCapabilities();
+        if (sender) {
+            sendToClient(sender, WireMessage{std::move(reject)});
+        } else {
+            sendToPeer(WireMessage{std::move(reject)});
+        }
+        return;
+    }
+    if (hello.protocolVersion == 0) {
+        // 老客户端: 按最低兼容版本处理 (能力按未声明降级)
+        XX_LOGD("[session_ctrl] hello without protocol version: treating as legacy client");
+    } else {
+        XX_LOGD(
+            "[session_ctrl] hello protocol version {} capabilities={}",
+            hello.protocolVersion,
+            hello.capabilities.size()
+        );
+    }
+
     if (!hello.language.empty()) {
         auto agent = agent_.lock();
         if (agent) {
@@ -1545,6 +1584,9 @@ void SessionServerAgentIO::handleHello(
     helloAck.models    = std::move(models);
     helloAck.plugins   = std::move(loadedPlugins);
     helloAck.deviceId  = utilxx::getDeviceId();
+    // 协议版本与能力声明 (计划 PRO-3): 客户端据此判断可用功能 (如 afterViewSeq 补拉)
+    helloAck.protocolVersion = agentxx::agent::WireProtocol::kVersion;
+    helloAck.capabilities    = agentxx::agent::serverWireCapabilities();
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
         helloAck.workDir = agent->agentContext->getSessionWorkDir(config_.sessionId);
     }

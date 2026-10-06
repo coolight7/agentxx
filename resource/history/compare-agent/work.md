@@ -1202,3 +1202,61 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli`、`agentxx_filesystem` 插件目标均 exit=0。
 - 手工验证：`agentxx_cli --dump-config` 输出配置侧 + 运行侧装配快照（13 模型 / 6 中间件 /
   17 插件工具 / 7 插件装载耗时 / 图 / 持久化 / 配置问题 2 条），退出码 0。
+## 阶段 T：协议版本与能力握手（PRO-3，2026-10-06）
+
+计划依据：`plan.md` §11 PRO-3（"Hello/HelloAck 增加 protocolVersion、能力列表、可选消息；
+不支持时明确降级或拒绝"）。
+
+已完成：
+
+- **协议版本与能力常量**（`agent/lib/include/agentxx/agent/io/agent_io_transport.h`）：
+  - `WireProtocol`：`kVersion = 1` / `kMinVersion = 0`，以及能力名常量
+    （`input.delivery`、`input.ack`、`queue.state`、`view.after_seq`、`session.search`、
+    `ui.items`、`ui.form`、`ui.panels`）；`serverWireCapabilities()` 给出服务端声明集；
+  - `WireHello` 增 `protocolVersion`（默认当前版本）与 `capabilities`；
+  - `WireHelloAck` 增 `protocolVersion`、`capabilities` 与 `error`（拒绝原因，老客户端忽略）。
+  - 语义约定写进注释：**版本只在破坏性变更时递增；对端更高时明确拒绝而不是静默降级**
+    （静默降级会让新客户端误以为老服务端支持某能力）；缺失字段 = 老客户端（版本 0），
+    服务端按最低兼容版本继续（向后兼容）。
+- **JSON 编解码**（`lib/src/agent/wire_protocol.cpp`、`lib/include/.../wire_protocol.h`）：
+  `makeHello` / `makeHelloAck` 增参数（默认值保持旧调用点零改动），`helloFromJson`
+  缺字段 → 版本 0 / 空能力，`helloAckFromJson` 同样按缺省解析。
+- **服务端握手**（`lib/src/agent/io/session_server_agent_io.cpp`）：
+  `handleHello` 开头做版本检查：`> kVersion` 时回 `WireHelloAck{ok=false, error="client
+  protocol version N is newer than server version M; please update the server side",
+  protocolVersion=kVersion, capabilities=serverWireCapabilities()}` 并直接返回（不建立同步）；
+  成功回执同样携带版本与能力声明。
+- **客户端**：
+  - `WsAgentIOTransport`：首次 `connect` 与**重连**都携带协议版本与能力（重连复用首次
+    连接时的声明）；收到 `ack.ok == false` 时握手按失败处理（`connect()` 返回 false，
+    原因经 `lastHelloAck().error` 暴露）—— 之前只认"收到 HelloAck"就当作成功，
+    鉴权失败/版本不匹配时会让调用方在错误前提下继续工作；
+  - TUI/CLI 的 `WireHello`（`client/src/mode_runners.cpp`）声明版本与各自能力
+    （TUI 额外声明 ui.items / ui.form / ui.panels）。
+
+测试：
+
+- `wire_roundtrip`（+16 项断言，模块 210/0）：`WireHello` 版本+能力往返；`WireHelloAck`
+  版本+能力+error 往返；**老客户端形态**（删掉 `protocolVersion` / `capabilities` 字段的
+  JSON）解析为版本 0 与空能力；拒绝回执的 `error`/版本/能力逐项比对。
+- `remote_agent`（+21 项断言，模块 474/0）：
+  - 假服务端升级为"与真实服务端同语义"（版本检查 + 回执声明能力）；
+  - 客户端侧：正常握手回执带版本与能力、老客户端（version 0）照常成功、
+    版本高于服务端时 `connect()` 返回 false 且 `lastHelloAck()` 给出 `newer` 原因；
+  - 真实 `AgentServer`（channel transport）：成功回执带版本与能力；版本更高的
+    Hello 被明确拒绝且**不影响其它已连客户端**。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0。
+- 测试：`wire_roundtrip` 210/0、`remote_agent` 474/0、`websocket` 230/0、`mcp` 391/0、
+  `acp` 56/0、`a2a` 177/0、`cancel` 45/0、`boundaries` 8/0。
+
+注意事项 / 与计划的差异：
+
+- 计划的"可选消息"能力没有单列：能力列表本身就是"对端可选支持什么"的声明，
+  未声明即按最保守路径工作（如不请求 `afterViewSeq` 补拉）。
+- 版本检查只在服务端做（客户端对服务端版本更低的情况没有额外处理：老服务端缺字段
+  解析为 0，客户端按"对端未声明能力"降级，不拒绝）。
+- 客户端 `connect()` 现在会在 `ack.ok == false` 时返回 false；这是行为变化（此前
+  "收到 HelloAck 即视为连接成功"），属修正：鉴权失败不再表现为"连上了但没有响应"。

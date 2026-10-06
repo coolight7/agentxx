@@ -128,6 +128,9 @@ private:
     std::string                 lastTailHash_;
     std::string                 helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
     std::string                 helloLanguage_;  // 首次 connect 时的 language, 重连时复用
+    /// 首次 connect 时的协议版本与能力声明 (计划 PRO-3), 重连时复用
+    int                         helloProtocolVersion_ = 0;
+    std::vector<std::string>    helloCapabilities_;
     std::optional<WireHelloAck> lastHelloAck_;   // 最近一次握手成功的 HelloAck
 
     /// 握手期间 (connect 等待 HelloAck) 到达的非 HelloAck 消息 (仅 ex_ 线程访问)

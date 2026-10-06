@@ -641,8 +641,47 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
     if (!hello) {
         co_return;
     }
+    // 与真实服务端同语义 (计划 PRO-3): 版本更高明确拒绝, 并在回执里声明
+    // 本端版本与能力 —— 客户端据此判断可用功能
+    const auto clientVersion = static_cast<int>(hello->value("protocolVersion", int64_t{0}));
+    if (clientVersion > agentxx::agent::WireProtocol::kVersion) {
+        co_await wsSendJson(
+            ws,
+            io::makeHelloAck(
+                false,
+                hello->value("sessionId", std::string{}),
+                "",
+                {},
+                {},
+                "",
+                "",
+                fmt::format(
+                    "client protocol version {} is newer than server version {}",
+                    clientVersion,
+                    agentxx::agent::WireProtocol::kVersion
+                ),
+                agentxx::agent::WireProtocol::kVersion,
+                agentxx::agent::serverWireCapabilities()
+            )
+        );
+        co_return;
+    }
     bool ok = (hello->value("token", std::string{}) == "test-token");
-    co_await wsSendJson(ws, io::makeHelloAck(ok, hello->value("sessionId", std::string{}), "", {}));
+    co_await wsSendJson(
+        ws,
+        io::makeHelloAck(
+            ok,
+            hello->value("sessionId", std::string{}),
+            "",
+            {},
+            {},
+            "",
+            "",
+            ok ? std::string{} : std::string{"invalid token"},
+            agentxx::agent::WireProtocol::kVersion,
+            agentxx::agent::serverWireCapabilities()
+        )
+    );
     if (!ok) {
         co_return;
     }
@@ -704,6 +743,14 @@ static asio::awaitable<void> test_remote_client_handshake() {
         agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
         bool                      ok = co_await transport->connect(hello);
         XX_TEST_EXPECT_TRUE(ok);
+        // 服务端在 HelloAck 里回传协议版本与能力声明 (计划 PRO-3)
+        if (auto ack = transport->lastHelloAck(); ack.has_value()) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+            XX_TEST_EXPECT_EQ(ack->protocolVersion, agentxx::agent::WireProtocol::kVersion);
+            XX_TEST_EXPECT_GE(ack->capabilities.size(), size_t{1});
+        } else {
+            XX_TEST_EXPECT_TRUE(false);
+        }
 
         if (ok) {
             asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
@@ -738,6 +785,65 @@ static asio::awaitable<void> test_remote_client_handshake() {
         agentxx::agent::WireHello hello{"session", "wrong-token", 0, ""};
         bool                      ok = co_await transport->connect(hello);
         XX_TEST_EXPECT_FALSE(ok);
+        transport->close();
+    }
+
+    // ----- 老客户端 (未声明协议版本): 按最低兼容版本接受, 不拒绝 -----
+    {
+        agentxx::agent::WsAgentIOTransport::Config cfg;
+        cfg.heartbeatInterval = std::chrono::seconds{60};
+        cfg.authTimeout       = std::chrono::seconds{3};
+        utilxx::WsClientConfig wsCfg;
+        wsCfg.recvTimeout = std::chrono::seconds{5};
+
+        auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+            ex,
+            url,
+            "test-token",
+            cfg,
+            wsCfg
+        );
+        agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+        hello.protocolVersion = 0; // 老客户端: 不带版本号
+        hello.capabilities.clear();
+        bool ok = co_await transport->connect(hello);
+        XX_TEST_EXPECT_TRUE(ok);
+        if (auto ack = transport->lastHelloAck(); ack.has_value()) {
+            XX_TEST_EXPECT_TRUE(ack->ok);
+            XX_TEST_EXPECT_TRUE(ack->error.empty());
+            XX_TEST_EXPECT_GE(ack->capabilities.size(), size_t{1});
+        } else {
+            XX_TEST_EXPECT_TRUE(false);
+        }
+        transport->close();
+    }
+
+    // ----- 协议版本高于服务端: 明确拒绝 (不静默降级) -----
+    {
+        agentxx::agent::WsAgentIOTransport::Config cfg;
+        cfg.heartbeatInterval = std::chrono::seconds{60};
+        cfg.authTimeout       = std::chrono::seconds{3};
+        utilxx::WsClientConfig wsCfg;
+        wsCfg.recvTimeout = std::chrono::seconds{5};
+
+        auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+            ex,
+            url,
+            "test-token",
+            cfg,
+            wsCfg
+        );
+        agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+        hello.protocolVersion = agentxx::agent::WireProtocol::kVersion + 1;
+        bool ok               = co_await transport->connect(hello);
+        XX_TEST_EXPECT_FALSE(ok);
+        if (auto ack = transport->lastHelloAck(); ack.has_value()) {
+            XX_TEST_EXPECT_FALSE(ack->ok);
+            XX_TEST_EXPECT_TRUE(ack->error.find("newer") != std::string::npos);
+            XX_TEST_EXPECT_EQ(ack->protocolVersion, agentxx::agent::WireProtocol::kVersion);
+        } else {
+            XX_TEST_EXPECT_TRUE(false);
+        }
         transport->close();
     }
 
@@ -2668,6 +2774,12 @@ static asio::awaitable<void> test_agent_server_multi_client() {
     if (ack1) {
         auto* a = std::get_if<agentxx::agent::WireHelloAck>(&*ack1);
         XX_TEST_EXPECT_TRUE(a != nullptr && a->ok);
+        if (a != nullptr) {
+            // 服务端回执声明协议版本与能力 (计划 PRO-3)
+            XX_TEST_EXPECT_EQ(a->protocolVersion, agentxx::agent::WireProtocol::kVersion);
+            XX_TEST_EXPECT_GE(a->capabilities.size(), size_t{1});
+            XX_TEST_EXPECT_TRUE(a->error.empty());
+        }
     }
 
     // 客户端 2 握手同一个 session
@@ -2682,6 +2794,33 @@ static asio::awaitable<void> test_agent_server_multi_client() {
     // 验证：客户端 1 和客户端 2 均依然 alive (旧连接未被踢掉，支持 1:N 并存)
     XX_TEST_EXPECT_TRUE(client1->alive());
     XX_TEST_EXPECT_TRUE(client2->alive());
+
+    // 协议版本高于服务端: 明确拒绝 (计划 PRO-3), 且不影响其它连接
+    {
+        auto [c3, s3] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto client3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c3));
+        auto server3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s3));
+        asio::co_spawn(ex, server->serveTransport(server3), asio::detached);
+        client3->send(agentxx::agent::WireHello{
+            .sessionId       = "co-session",
+            .token           = "secret-123",
+            .protocolVersion = agentxx::agent::WireProtocol::kVersion + 1,
+        });
+        auto ack3 = co_await client3->recv();
+        XX_TEST_EXPECT_TRUE(ack3.has_value());
+        if (ack3) {
+            auto* a = std::get_if<agentxx::agent::WireHelloAck>(&*ack3);
+            XX_TEST_EXPECT_TRUE(a != nullptr);
+            if (a != nullptr) {
+                XX_TEST_EXPECT_FALSE(a->ok);
+                XX_TEST_EXPECT_TRUE(a->error.find("newer") != std::string::npos);
+                XX_TEST_EXPECT_EQ(a->protocolVersion, agentxx::agent::WireProtocol::kVersion);
+                XX_TEST_EXPECT_GE(a->capabilities.size(), size_t{1});
+            }
+        }
+        XX_TEST_EXPECT_TRUE(client1->alive());
+        client3->close();
+    }
 
     client1->close();
     client2->close();

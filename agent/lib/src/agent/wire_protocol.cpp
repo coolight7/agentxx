@@ -18,7 +18,9 @@ utilxx_base::Json toJson(const WireHello& msg) {
         msg.lastSeq,
         msg.tailHash,
         msg.language,
-        msg.afterViewSeq
+        msg.afterViewSeq,
+        msg.protocolVersion,
+        msg.capabilities
     );
 }
 
@@ -30,7 +32,10 @@ utilxx_base::Json toJson(const WireHelloAck& msg) {
         msg.models,
         msg.plugins,
         msg.deviceId,
-        msg.workDir
+        msg.workDir,
+        msg.error,
+        msg.protocolVersion,
+        msg.capabilities
     );
 }
 
@@ -219,6 +224,9 @@ WireHello helloFromJson(const utilxx_base::Json& j) {
     hello.tailHash  = j.value("tailHash", std::string{});
     hello.language  = j.value("language", std::string{});
     hello.afterViewSeq = j.value("afterViewSeq", uint64_t{0});
+    // 协议版本 (计划 PRO-3): 老客户端缺字段 → 0 (最低兼容版本, 服务端不拒绝)
+    hello.protocolVersion = static_cast<int>(j.value("protocolVersion", int64_t{0}));
+    hello.capabilities    = utilxx_base::jsonGetStringArray(j, "capabilities");
     return hello;
 }
 
@@ -255,6 +263,11 @@ WireHelloAck helloAckFromJson(const utilxx_base::Json& j) {
     }
     ack.deviceId = j.value("deviceId", std::string{});
     ack.workDir  = j.value("workDir", std::string{});
+    ack.error    = j.value("error", std::string{});
+    // 协议版本与能力声明 (计划 PRO-3): 老服务端缺字段 → 0 / 空列表,
+    // 客户端按"对端未声明"处理 (保守降级)
+    ack.protocolVersion = static_cast<int>(j.value("protocolVersion", int64_t{0}));
+    ack.capabilities    = utilxx_base::jsonGetStringArray(j, "capabilities");
     return ack;
 }
 
