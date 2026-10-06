@@ -1770,6 +1770,9 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     // 保持当前选定模型不变 (不随会话切换自动重置), 记录为新会话的 pendingModel
     std::string currentModel;
     sharedState_.mutate([&](TUIRenderState& st) {
+        // 历史窗口与队列镜像随会话切换作废 (旧会话的迟到响应/快照据此被丢弃)
+        st.history.resetForSession(newThreadId);
+        st.queue.clear();
         st.pendingInputs.clear();
         st.contextMessages.reset();
         st.showContextOverlay = false;
@@ -2114,19 +2117,34 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
         if (st.pendingInputs.empty() && update.items.empty()) {
             return;
         }
+        // 界面展开态按"条目 id(空则文本)"保留: 队列快照整体替换时不能让用户
+        // 正在查看的条目被折回
         std::map<std::string, bool> expandedMap;
         for (const auto& pi : st.pendingInputs) {
             auto key         = pi.id.empty() ? pi.text : pi.id;
             expandedMap[key] = pi.expanded;
         }
-        st.pendingInputs.clear();
+        // 服务端队列是唯一权威: 先应用快照 (含队列状态), 展示列表由镜像派生
+        std::vector<agentxx::client::MessageQueueMirror::Entry> entries;
+        entries.reserve(update.items.size());
         for (const auto& item : update.items) {
+            entries.push_back(agentxx::client::MessageQueueMirror::Entry{
+                item.id,
+                item.text,
+                item.model,
+                item.attachments,
+                item.createdAtMs,
+            });
+        }
+        st.queue.applySnapshot(entries, update.state);
+        st.pendingInputs.clear();
+        for (const auto& entry : st.queue.entries()) {
             TUIPendingInput pi;
-            pi.id          = item.id;
-            pi.text        = item.text;
-            pi.model       = item.model;
-            pi.attachments = item.attachments;
-            pi.createdAtMs = item.createdAtMs;
+            pi.id          = entry.id;
+            pi.text        = entry.text;
+            pi.model       = entry.model;
+            pi.attachments = entry.attachments;
+            pi.createdAtMs = entry.createdAtMs;
             auto key       = pi.id.empty() ? pi.text : pi.id;
             if (expandedMap.count(key)) {
                 pi.expanded = expandedMap[key];
@@ -2151,11 +2169,15 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
     bool   anchored       = false;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto&                       st = sharedState_.mutableState();
-        // 加载标志复位 (无论本页是否可用, 请求生命周期已结束)
-        st.historyLoading = false;
-        // 会话不匹配: 切换会话后迟到的旧页响应, 丢弃
-        if (!page.sessionId.empty() && page.sessionId != currentSessionId()) {
+        auto& st = sharedState_.mutableState();
+        // 页响应判定集中在窗口模型 (迟到会话/空页/不连续页/重复响应)
+        const auto outcome = st.history.applyPage(
+            page.sessionId,
+            page.startIndex,
+            page.messages.size(),
+            page.totalCount
+        );
+        if (outcome == agentxx::client::HistoryWindow::PageOutcome::StaleSession) {
             XX_LOGW(
                 "[tui] drop stale history page (session {} != {})",
                 page.sessionId,
@@ -2163,27 +2185,17 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
             );
             return;
         }
-        if (page.messages.empty()) {
-            // 空页: 无更早历史 (或会话不存在), 窗口起点归零终止后续触发
-            st.historyWindowStart = 0;
-            if (page.totalCount > 0) {
-                st.historyTotal = page.totalCount;
-            }
+        if (outcome == agentxx::client::HistoryWindow::PageOutcome::Empty) {
             return;
         }
-        // 连续性校验: 页尾必须紧贴当前窗口首条 (分页请求按序应答且同一时刻
-        // 只有一个请求, 不连续说明窗口已被 Sync 整体替换, 本页过期丢弃)
-        const uint64_t pageEnd = page.startIndex + page.messages.size();
-        if (st.historyWindowStart != 0 || !st.messages.empty()) {
-            if (pageEnd != st.historyWindowStart) {
-                XX_LOGW(
-                    "[tui] drop non-contiguous history page ([{}, {}) vs window start {})",
-                    page.startIndex,
-                    pageEnd,
-                    st.historyWindowStart
-                );
-                return;
-            }
+        if (outcome == agentxx::client::HistoryWindow::PageOutcome::NonContiguous) {
+            XX_LOGW(
+                "[tui] drop non-contiguous history page (start={}, count={}, window start={})",
+                page.startIndex,
+                page.messages.size(),
+                st.history.windowStart()
+            );
+            return;
         }
         prependedCount = page.messages.size();
         prependedCount = page.messages.size();
@@ -2202,10 +2214,8 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
         }
         prependedCount = converted.size();
         st.messages.insert(st.messages.begin(), converted.begin(), converted.end());
-        st.historyWindowStart = page.startIndex;
-        if (page.totalCount > st.historyTotal) {
-            st.historyTotal = page.totalCount;
-        }
+        // 窗口起点左移到本页起始下标, 条数按实际入列表条数累加
+        st.history.notePrepended(page.startIndex, prependedCount);
     }
     // 滚动锚定: LazyScrollable 为 UI 线程独占, 经动作队列在帧间执行。
     // anchored=false 表示首屏填充 (前插前无消息), 无需稳定旧视口内容
@@ -2223,11 +2233,10 @@ void TUIClientAgentIO::requestOlderHistory() {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         // 边界判断 + 请求去重 (UI 线程滚动事件可能高频触发)
-        if (st.historyLoading || !st.hasMoreHistory()) {
+        if (!st.history.beginOlderPageRequest()) {
             return;
         }
-        st.historyLoading = true;
-        beforeIndex       = st.historyWindowStart;
+        beforeIndex = st.history.windowStart();
     }
     requestViewMessagesPage(currentSessionId(), beforeIndex, kHistoryPageSize);
 }
@@ -2933,11 +2942,29 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             }
             // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
             // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 全量同步时为 0);
-            // 未返回的分页请求随整体替换作废, 复位加载标志
-            st->historyWindowStart = payload.fromIndex;
-            st->historyTotal
-                = payload.totalMessages != 0 ? payload.totalMessages : payload.messages.size();
-            st->historyLoading = false;
+            // 未返回的分页请求随整体替换作废 (loading 复位), 尾部序号作为新基线
+            st->history.resetForSession(std::string{currentSessionId()});
+            st->history.reset(
+                payload.fromIndex,
+                payload.totalMessages != 0 ? payload.totalMessages : payload.messages.size(),
+                st->messages.size()
+            );
+            st->history.observeTailSeq(payload.lastViewSeq);
+            // 队列镜像同步 (服务端排队消息镜像; 队列状态随快照到达)
+            {
+                std::vector<agentxx::client::MessageQueueMirror::Entry> entries;
+                entries.reserve(payload.messageQueue.size());
+                for (const auto& item : payload.messageQueue) {
+                    entries.push_back(agentxx::client::MessageQueueMirror::Entry{
+                        item.id,
+                        item.text,
+                        item.model,
+                        item.attachments,
+                        item.createdAtMs,
+                    });
+                }
+                st->queue.applySnapshot(entries, payload.queueState);
+            }
             // 直接替换 (旧快照由 UI 线程持有, 自然释放)
             cur = std::move(*st);
         });
@@ -2971,6 +2998,7 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         if (!st.messages.empty()) {
+            const size_t messagesBefore = st.messages.size();
             std::set<std::string> knownIds;
             for (const auto& m : st.messages) {
                 if (m && !m->id.empty()) {
@@ -2987,8 +3015,21 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
                 }
                 st.messages.push_back(std::move(msg));
             }
-            st.historyTotal = payload.totalMessages != 0 ? payload.totalMessages
-                                                        : st.historyTotal;
+            // 序号连续性: 增量补拉的尾部序号应当接着上次观察到的值
+            // (断号说明中间还有未收到的消息; 下一次重连的 afterViewSeq 补拉会补齐,
+            //  这里先记警告并把序号基线推进到新值, 供诊断与后续判断使用)
+            const auto seqOutcome = st.history.observeTailSeq(payload.lastViewSeq);
+            if (seqOutcome == agentxx::client::HistoryWindow::SeqOutcome::Gap) {
+                XX_LOGW(
+                    "[tui] incremental sync seq gap: received {}, expected {}",
+                    payload.lastViewSeq,
+                    st.history.lastSeq()
+                );
+            }
+            st.history.noteTailAppended(
+                st.messages.size() - messagesBefore,
+                payload.totalMessages
+            );
             applied = true;
         }
     }

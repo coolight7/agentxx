@@ -64,6 +64,17 @@ inline constexpr std::string_view kFormCancelActionId = middleware::kInterruptCa
 /// - 支持的控件形态: buttons / select / checkbox / switch / text / number
 const pluginxx::ui::Capabilities& tuiUiCapabilities();
 
+/// 输入栏是否使用终端自身的光标显示输入位置 (计划 UI-5)
+///
+/// - 输入元素在聚焦时使用**可见光标形状** (竖条/方块), 终端据此把系统光标画在
+///   光标格上; 中文/日文输入法的候选框因此出现在正确位置 (否则会跑到屏幕角落);
+/// - 终端对光标处理有已知问题时 (FTXUI 的终端特性检测 CursorHiding 为假, 例如
+///   部分老终端会把光标下的字符吃掉), 本端不请求硬件光标: 输入栏自己绘制的
+///   光标格 (反色空格) 承担指示作用, 功能不受影响, 只是看不到系统光标;
+/// - 结果同时是能力段 `terminal.hardware_cursor` 的取值来源 (单一来源, 插件读到
+///   的值与本端实际行为不会分叉)。
+bool tuiHardwareCursorSupported();
+
 /// 按本客户端能力适配组件 (渲染前调用; 结果只含本客户端支持的组件)
 ///
 /// 不适配也能渲染 (渲染层对不认识的组件走 `fallback`), 但"降级成什么"只应由描述层

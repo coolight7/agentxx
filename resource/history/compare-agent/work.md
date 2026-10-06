@@ -66,6 +66,8 @@
 | PLG-2 | 声明式贡献集合与重算 | P1 | 完成（提示词贡献模型 + 测试 + 文档，见阶段 AA） | `plugin_manager_vtable.cpp`（既有实现）+ 模块 `plugin_cleanup` + `plugins.md` §15.7 |
 | PLG-4 | 独占能力 slot（执行图定义） | P1 | 完成（已构建 + 测试通过） | `plugin_manager.{h,cpp}`（占用/拒绝/释放回内置）；模块 `plugin_cleanup` |
 | PLG-7 | 教学式错误与信任声明 | P1 | 完成（已构建 + 测试通过） | `PluginManager::diagnosePluginPath` + 装载入口 WARN + `plugins.md` §15.7 |
+| UI-1 | 客户端模型层 | P1 | 完成（已构建 + 测试通过） | `client/.../io/tui/model/{history_window,queue_mirror}.{h,cpp}` + TUI 接线；模块 `tui_model` |
+| UI-5 | 输入栏硬件光标 | P1 | 完成（已构建 + 测试通过） | `tuiHardwareCursorSupported()`（`ui_components.*`）+ 能力段 `terminal.hardware_cursor` |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -500,10 +502,6 @@
     （agent 侧 19 张 / client 侧 9 张已在文档中，缺自动校验）；
   - CFG-9（生成式配置键目录）：从 `AgentConfig`/`YamlAppConfig` 生成"键路径/类型/默认值"
     目录并与 PRO-4 共用生成器骨架 + 新鲜度门禁；
-  - UI-1（客户端模型层）：把历史分页窗口 / 消息队列镜像 / 重连 seq 校验抽到无 FTXUI 依赖的
-    模型类（便于无终端单测）；
-  - UI-5（输入栏硬件光标）：输入栏上报硬件光标位置，终端不支持时降级（能力位
-    `terminal.hardware_cursor` 目前如实上报 false）；
   - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、STO-13（会话导出与取证包）、
     OBS-3/4/5（关键指标 / 诊断包 / 模块级日志开关）。
     （TST-4 并发竞态清单、TST-6 存储一致性骨架已完成，见阶段 Z；TST-7 的
@@ -583,6 +581,65 @@
 - TST-4 不断言"谁先谁后"（那会变成看调度运气），只断言不变量（结果唯一性、顺序、
   收敛时间、悬挂上限与后续修复）。R3 的取消分支实测会留下 1 条悬挂 tool_call，
   属该轮工具调用尚未定稿的既定形态，由下一次请求前的 `repairMessages` 修正。
+
+## 阶段 AB：客户端模型层与输入栏硬件光标（UI-1 / UI-5，2026-10-07）
+
+计划依据：`plan.md` §10 UI-1（"只抽三块（历史分页窗口 / 消息队列镜像 / 重连与 seq 校验）
+到无 FTXUI 依赖的模型类"）、UI-5（"只做'输入栏硬件光标 + 终端不支持时降级'"）。
+
+已完成：
+
+- **UI-1 客户端模型层**（新增 `agent/client/.../io/tui/model/{history_window,queue_mirror}.{h,cpp}`）：
+  - 两块状态从 `TUIClientAgentIO` 抽成**可拷贝的值类型**，随 `TUIRenderState` 渲染快照一起
+    复制（UI 线程每帧读到的是同一份状态），端点只负责发请求/渲染/提示：
+    - `HistoryWindow`：已加载区间 `[windowStart, +loadedCount)`、"上方是否还有更早历史"、
+      分页请求去重与在途标记、页响应判定（接受 / 空页 / 迟到会话 / 不连续页 / 无在途请求）、
+      断线增量补拉的尾部**序号连续性**（首个 / 连续 / 断号 / 重复）与切换会话失效；
+    - `MessageQueueMirror`：服务端排队输入的镜像（整体快照为唯一权威）、按 id 删除/查找/清空、
+      队列状态（idle/running/paused/draining，未知文本按 idle，空值按 idle）、**投递回执记账**
+      （同一 requestId 只记一次 → 界面不重复提示，容量上限按最旧淘汰）。
+  - TUI 接线：`TUIRenderState` 的 `historyWindowStart/historyTotal/historyLoading` 三个标量
+    由 `HistoryWindow history` 取代（`hasMoreHistory()` 改为委托），
+    `onViewMessagesPage` / `requestOlderHistory` / `onSync` / `onIncrementalSync` /
+    `switchToSession` / `onMessageQueueUpdate` 全部改为调用模型；
+    队列镜像另使 `onMessageQueueUpdate` 的"保留界面展开态"逻辑只写一处；
+  - 增量补拉在追加消息时用 `observeTailSeq(payload.lastViewSeq)` 做一次连续性观察，
+    断号记 WARN（下一步重连的 `afterViewSeq` 补拉会补齐，这里留诊断线索）；
+  - 边界纪律：新增 `boundaries` 规则「客户端模型层边界」—— `model/` 目录下的文件不得包含
+    ftxui/*、TUI 端点/组件/渲染状态、插件管理器实现、网络头；目录为空也判失败
+    （防止抽取被挪走后规则静默失效）。模型层可依赖协议数据结构（要镜像 wire 上的队列/消息）。
+- **UI-5 输入栏硬件光标**（`tuiHardwareCursorSupported()` + 能力段）：
+  - 输入元素聚焦时使用**可见光标形状**（竖条/方块），终端据此把系统光标画在光标格上 ——
+    中文输入法候选框跟随真实光标位置；终端对光标处理有已知问题时（FTXUI 的终端特性检测
+    `Quirks::CursorHiding()` 为假，如部分老终端会把光标下的字符吃掉）不请求硬件光标，
+    由输入栏自绘的光标格（反色空格）承担指示作用（功能不受影响，只是看不到系统光标）；
+  - 该判定成为能力段 `terminal.hardware_cursor` 的**唯一来源**（此前硬编码 false +
+    "待实施"注释，属于虚报缺失能力）；
+  - `docs/zh-cn/design/tui.md` 新增 §2.12（模型层 + 输入栏光标两节）。
+
+测试：
+
+- 新模块 `tui_model`（134 项断言，同步，无终端依赖）：历史窗口的同步/分页/序号全流程
+  （含不连续页、迟到会话、空页、重复请求、序号断号与恢复、切换会话后旧页失效），
+  队列镜像的快照/状态/删除/查找/清空/回执去重与容量淘汰。
+- `ui_capabilities` 改为断言能力段取值与 `tuiHardwareCursorSupported()` 一致（单一来源）；
+- `tui_scroll`（772）与 `tui_stream`（134）同步改用模型 API 后回归通过；
+- `boundaries` 12/0（新增模型层边界规则）。
+
+验证：
+
+- 构建：`agentxx_cli`（含 TUI）与 `agentxx_test` 均 exit=0。
+- 测试：`tui_model` 134/0、`tui_scroll` 772/0、`tui_stream` 134/0、`tui_surface` 673/0、
+  `ui_capabilities` 26/0、`tui_input` 124/0、`boundaries` 12/0。
+
+注意事项 / 与计划的差异：
+
+- 计划的"重连与 seq 校验"落在 `HistoryWindow::observeTailSeq` 上：客户端的重连补拉由
+  WS 传输层（`hello.afterViewSeq` + delta 重放）负责，模型这一层只做**连续性观察与记录**，
+  不重复实现补拉决策（避免两处判断漂移）；断号时记 WARN 供诊断，实际补齐仍走传输层。
+- UI-5 的"降级"没有做成开关项：FTXUI 的输入元素内部决定光标形状装饰器，宿主无法在
+  不重写输入渲染的前提下切换成"只画自绘光标"；当前降级路径 = 终端不定位光标时输入栏
+  自绘光标格仍然可见（能力位如实反映"是否请求硬件光标"）。
 
 ## 阶段 AA：插件注册可逆、独占 slot 与教学式错误（PLG-1 / PLG-2 / PLG-4 / PLG-7，2026-10-07）
 
@@ -1676,6 +1733,9 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 阶段 AA（PLG-1 / PLG-2 / PLG-4 / PLG-7）完成后提交：
   `插件注册清单、执行图独占 slot 与装载失败建议 (PLG-1/PLG-2/PLG-4/PLG-7)`
   （新增模块 `plugin_cleanup` 96 项）。
+- 阶段 AB（UI-1 / UI-5）完成后提交：
+  `客户端模型层（历史窗口/队列镜像）与输入栏硬件光标 (UI-1/UI-5)`
+  （新增模块 `tui_model` 134 项、`boundaries` 12 项）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 

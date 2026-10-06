@@ -488,6 +488,36 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `tui_settings` (顶部条目与表单取值映射)、`util_misc` (线消息往返)、
   `remote_agent` (端到端: 校验 → 落盘 → 注册 → 立即切换 + 非法/重名分支)。
 
+### 2.12 客户端模型层 (历史窗口 / 队列镜像) 与输入栏光标
+
+**模型层 (计划 UI-1)**: 与"数据从哪来、怎么画"无关的两块状态抽成独立模型, 放在
+`agentxx-client/io/tui/model/` 下, **不依赖 FTXUI / 端点 / 网络 / 插件管理器**, 因此可脱离
+终端直接单测 (`agentxx_test tui_model`, 边界条件全部在无终端环境跑):
+
+| 模型 | 文件 | 负责 |
+|------|------|------|
+| `HistoryWindow` | [model/history_window.h](/agent/client/include/agentxx-client/io/tui/model/history_window.h) | 展示历史的已加载区间 `[windowStart, +loadedCount)`, "上方是否还有更早历史", 分页请求的去重与在途标记; 页响应判定 (接受 / 空页 / 迟到会话 / 不连续页); 断线增量补拉的尾部**序号连续性** (首个/连续/断号/重复) |
+| `MessageQueueMirror` | [model/queue_mirror.h](/agent/client/include/agentxx-client/io/tui/model/queue_mirror.h) | 服务端排队输入的镜像 (整体快照 = 唯一权威), 按 id 删除/查找, 队列状态 (idle/running/paused/draining, 未知文本按 idle), **投递回执记账** (同一 requestId 只记一次, 容量上限按最旧淘汰) |
+
+两者都是**可拷贝的值类型**, 随渲染快照 (`TUIRenderState`) 一起复制, 因此 UI 线程读到的
+是本帧一致的一份状态; 端点只负责"发请求 / 渲染 / 提示"。
+
+- 历史窗口: 页响应必须紧贴当前窗口首条 (`startIndex + count == windowStart`) 才被接受,
+  否则视为窗口已被整体替换后的过期响应; `windowStart == 0` 表示上方没有更早历史
+  (全量同步、或已拉到会话开头)。切换会话时 `resetForSession` 使旧会话的迟到响应失效。
+- 队列镜像: 快照应用时保留**界面展开态** (按条目 id/文本为键), 队列整体刷新不会把用户
+  正展开的条目折回; 投递回执的重复/迟到不会重复提示用户。
+- 边界纪律: 模型层不得包含 FTXUI/组件/端点头 (`boundaries` 测试模块有专门规则, 目录为空
+  也判失败), 需要镜像的协议结构直接依赖 `agentxx/agent/io/*` 的数据定义。
+
+**输入栏光标 (计划 UI-5)**: 输入元素聚焦时使用**可见光标形状** (竖条/方块), 终端据此把
+系统光标画在光标格上 —— 中文/日文输入法的候选框因此跟随真实光标位置, 而不是跑到屏幕角落。
+终端对光标处理有已知问题 (FTXUI 的终端特性检测 `Quirks::CursorHiding()` 为假, 例如部分老
+终端会把光标下的字符吃掉) 时, 本端**不请求**硬件光标, 由输入栏自绘的光标格 (反色空格)
+承担指示作用: 功能不受影响, 只是看不到系统光标。该判定是能力段
+`terminal.hardware_cursor` 的唯一来源 (`tuiHardwareCursorSupported()`), 插件读到的值与
+本端实际行为不会分叉。
+
 ---
 
 ## 3. 必须遵守的约束

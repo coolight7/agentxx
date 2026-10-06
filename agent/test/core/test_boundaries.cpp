@@ -574,6 +574,63 @@ void checkDocumentedPaths(const fs::path& root, Violations& v) {
     }
 }
 
+/// 规则 12: 客户端模型层只依赖数据与标准库 (计划 UI-1)
+///
+/// 背景: 历史分页窗口与消息队列镜像被抽成独立模型 (client/.../tui/model/),
+/// 目的之一是**脱离终端可单测**。若模型里混进 FTXUI / 端点 / 传输 / 插件管理器
+/// 头, 单测就得拉起终端与连接, 抽取的意义随之消失。这里按目录检查:
+///   - `client/include/.../tui/model/*.h` 与 `client/src/io/tui/model/*.cpp`
+///     不得包含 ftxui/*、agentxx-client/io/tui/agent_tui.h、components/、
+///     agentxx/agent/io/(端点与 wire 之外的实现)、插件管理器实现等;
+///   - 允许的类型来源: 标准库 + `agentxx/agent/io/agent_io_transport.h` 一类的
+///     **协议数据结构** (模型要镜像 wire 上的队列/消息) + 描述层。
+///
+/// 目录为空同样判失败 (抽取被挪走/改名后规则不能静默失效)。
+void checkModelLayerIncludes(const fs::path& root, Violations& v) {
+    const auto includeDir = root / "client" / "include" / "agentxx-client" / "io" / "tui" / "model";
+    const auto srcDir     = root / "client" / "src" / "io" / "tui" / "model";
+
+    std::vector<fs::path> files;
+    collectSources(includeDir, files);
+    collectSources(srcDir, files);
+    if (files.empty()) {
+        v.push_back(
+            "客户端模型层为空: "
+            + toGeneric(includeDir.lexically_relative(root)) + " / "
+            + toGeneric(srcDir.lexically_relative(root))
+            + " (抽取被挪走后需同步更新本规则)"
+        );
+        return;
+    }
+
+    static const std::string_view kForbidden[] = {
+        "ftxui/",                                  // 终端渲染框架
+        "agentxx-client/io/tui/agent_tui.h",       // TUI 端点 (连接/会话状态/事件循环)
+        "agentxx-client/io/tui/components/",       // 具体界面部件
+        "agentxx-client/io/tui/framework/tui_state.h", // 渲染状态快照 (含组件状态)
+        "agentxx-client/io/tui/ui_components.h",   // 渲染层
+        "agentxx-client/io/tui/surface.h",
+        "agentxx-client/plugin_ui_items.h",
+        "agentxx/plugin/client_plugin_manager.h",  // 插件管理器实现
+        "agentxx/agent/agent_host.h",              // 宿主与子代理派生
+        "utilxx/http_client.h",                    // 网络
+        "utilxx/ws_client.h",
+    };
+    for (const auto& f : files) {
+        for (const auto& inc : readIncludes(f)) {
+            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            for (const auto& bad : kForbidden) {
+                if (inc.path.rfind(bad, 0) == 0) {
+                    v.push_back(
+                        where + ": 模型层依赖了 `" + inc.path
+                        + "` (模型只应依赖标准库与协议数据结构, 否则无法脱离终端单测)"
+                    );
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 /// 规则 8: 接口表数量与文档一致 (计划 PLG-8 / TST-7)
@@ -682,6 +739,9 @@ TestResult testBoundaries() {
     Violations docPathViolations;
     checkDocumentedPaths(root, docPathViolations);
 
+    Violations modelViolations;
+    checkModelLayerIncludes(root, modelViolations);
+
     // 扫描量下限: 防止目录改名/收集逻辑失效导致"零文件全通过"的假通过
     // (数值留出余量, 目录增删几十个文件不应触发失败)
     XX_TEST_EXPECT_GE(scannedClient, size_t{40});
@@ -696,6 +756,7 @@ TestResult testBoundaries() {
     reportViolations("接口表数量", ifaceViolations);
     reportViolations("UI 组件名", uiBlockViolations);
     reportViolations("文档路径", docPathViolations);
+    reportViolations("客户端模型层边界", modelViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

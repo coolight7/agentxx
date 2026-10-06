@@ -105,6 +105,7 @@
 #include "agentxx-test/client/test_tui_stream.h"
 #include "agentxx-test/client/test_tui_surface.h"
 #include "agentxx-test/client/test_tui_theme.h"
+#include "agentxx-test/client/test_tui_model.h"
 #include "agentxx-test/client/test_tui_tool_header.h"
 #include "agentxx-test/client/test_tui_ui_items.h"
 #include "agentxx-test/client/test_tui_widget.h"
@@ -301,6 +302,7 @@ int main(int argn, char** argv) {
         runSync("tui_ui_items", agentxx::test::testTuiUiItems);
         runSync("tui_widget", agentxx::test::testTuiWidget);
         runSync("ui_snapshot", agentxx::test::testUiSnapshots);
+        runSync("tui_model", agentxx::test::testTuiModels);
         runSync("ui_capabilities", agentxx::test::testUiCapabilities);
         runSync("sessionId", agentxx::test::testSessionId);
         runSync("mermaid_state", agentxx::test::testMermaidState);

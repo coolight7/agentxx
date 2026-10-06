@@ -94,7 +94,9 @@ public:
         term["truecolor"]         = true;
         term["mouse"]             = true;
         term["wide_chars"]        = true; // CJK 双宽正确测量
-        term["hardware_cursor"]   = false; // 见 UI-5 (待实施): 输入栏硬件光标
+        // 输入栏硬件光标: 终端支持时把光标放在真实光标位置 (输入法候选框跟随);
+        // 不支持时回退到输入栏自绘的光标格 (计划 UI-5)
+        term["hardware_cursor"]   = tuiHardwareCursorSupported();
         j["terminal"]             = std::move(term);
 
         return j.dump();

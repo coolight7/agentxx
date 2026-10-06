@@ -990,8 +990,8 @@ void testTuiStreamScenario10(asio::io_context& ioCtx) {
             XX_TEST_EXPECT_EQ(snap->messages[1]->text, std::string{"历史回答"});
         }
         // 历史窗口元数据仍按服务端 viewMessages 计数 (与本地列表条数解耦)
-        XX_TEST_EXPECT_EQ(snap->historyTotal, uint64_t{4});
-        XX_TEST_EXPECT_EQ(snap->historyWindowStart, uint64_t{0});
+        XX_TEST_EXPECT_EQ(snap->history.totalCount(), uint64_t{4});
+        XX_TEST_EXPECT_EQ(snap->history.windowStart(), uint64_t{0});
     }
 
     // ⑨ Tool / Think 不受空 content 过滤影响 (头部/思考时长仍有意义)

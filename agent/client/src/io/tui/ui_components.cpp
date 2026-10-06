@@ -1886,6 +1886,13 @@ double stepOf(const Item& item) {
 // 能力段与适配
 // ---------------------------------------------------------------------------
 
+bool tuiHardwareCursorSupported() {
+    // FTXUI 在界面安装时探测终端特性: "现代终端"(支持 UTF-8/颜色/VT220+) 能正确
+    // 隐藏并定位光标, 其余按不可靠处理。默认值 (尚未探测) 为可靠, 与 FTXUI 自身
+    // 的默认行为一致; 探测到老终端后本端自动回退到自绘光标格。
+    return ftxui::Terminal::GetQuirks().CursorHiding();
+}
+
 const pluginxx::ui::Capabilities& tuiUiCapabilities() {
     static const pluginxx::ui::Capabilities caps = [] {
         pluginxx::ui::Capabilities out;

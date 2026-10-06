@@ -238,8 +238,7 @@ static void testHistoryPrependAnchoring() {
         f.addHistory(8);
         // 模拟尾窗同步窗口元数据: 窗口上方还有 100 条更早历史
         f.sharedState.mutate([&](TUIRenderState& st) {
-            st.historyWindowStart = 100;
-            st.historyTotal       = 108;
+            st.history.reset(100, 108, st.messages.size());
         });
         f.render();
         f.render(); // 两帧建立测量/缓存
@@ -263,8 +262,7 @@ static void testHistoryPrependAnchoring() {
                 }
                 st.messages.insert(st.messages.begin(), std::move(m));
             }
-            st.historyWindowStart = 96;
-            st.historyTotal       = 108;
+            st.history.reset(96, 108, st.messages.size());
         });
         f.comp->onHistoryPrepended(4);
         std::string after = f.render();
@@ -285,8 +283,7 @@ static void testHistoryPrependAnchoring() {
         ScrollFixture f;
         f.addHistory(8);
         f.sharedState.mutate([&](TUIRenderState& st) {
-            st.historyWindowStart = 100;
-            st.historyTotal       = 108;
+            st.history.reset(100, 108, st.messages.size());
         });
         f.render();
         f.render();
@@ -296,7 +293,7 @@ static void testHistoryPrependAnchoring() {
             m->role = TUIMessage::Role::Assistant;
             m->text = "PAGED_OLDER_MESSAGE";
             st.messages.insert(st.messages.begin(), std::move(m));
-            st.historyWindowStart = 99;
+            st.history.reset(99, 108, st.messages.size());
         });
         f.comp->onHistoryPrepended(1);
         f.render();
@@ -332,7 +329,7 @@ static void testHistoryPrependAnchoring() {
             m->role = TUIMessage::Role::Assistant;
             m->text = "FIRST_LOADED";
             st.messages.push_back(std::move(m));
-            st.historyWindowStart = 50;
+            st.history.reset(50, 50, st.messages.size());
         });
         f.comp->onHistoryPrepended(1); // 空数组上调用安全 (仅记录条数语义)
         std::string frame = f.render();

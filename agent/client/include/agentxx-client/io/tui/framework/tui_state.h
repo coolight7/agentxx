@@ -1,5 +1,7 @@
 #pragma once
 
+#include "agentxx-client/io/tui/model/history_window.h"
+#include "agentxx-client/io/tui/model/queue_mirror.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -86,6 +88,7 @@ enum class ConnState : uint8_t {
 struct TUIRenderState {
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
 
+    /// 待发送队列的展示列表 (由 [queue] 镜像 + 界面展开态派生)
     std::deque<TUIPendingInput> pendingInputs;
 
     /// 启动更新检查发现的新版本标签 (空 = 未发现更新/未开启检查/检查失败)
@@ -102,9 +105,9 @@ struct TUIRenderState {
 
     std::string currentNodeName;
 
-    /// 是否还有未加载的更早历史 (historyWindowStart > 0 即窗口上方非空)
+    /// 是否还有未加载的更早历史 (窗口上方非空; 判定在 [HistoryWindow] 内)
     bool hasMoreHistory() const noexcept {
-        return historyWindowStart > 0;
+        return history.hasMore();
     }
     std::string              cachedModelName;
 
@@ -145,10 +148,9 @@ struct TUIRenderState {
 
     // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
     /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
-    /// - 全量同步时为 0 (与旧行为一致); 尾窗同步时 > 0 表示上方还有更早历史
-    uint64_t historyWindowStart = 0;
-    /// 服务端会话总消息数 (Sync.totalMessages / Page.totalCount; 0 = 未知)
-    uint64_t historyTotal = 0;
+    /// 历史分页窗口 (计划 UI-1: 上下边界/在途请求/序号连续性都在模型内,
+    /// 见 [HistoryWindow]); 全量同步后 windowStart()==0, 尾窗同步后 > 0
+    HistoryWindow history;
     /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
     /// - 语义 = 流身份: 同一流内 currentToken 只会被原地 append (或 COW 复制,
     ///   内容仍是同一流的延续), epoch 不变
@@ -191,8 +193,8 @@ struct TUIRenderState {
     /// 放在共享状态而非 UI 组件内: 提交落盘发生在 client 线程, 需要读到用户
     /// 在 UI 线程点击的结果 (双方经 sharedState 的 mutex + COW 访问)。
     int streamThinkOverride = -1;
-    /// 是否有未返回的历史分页请求 (滚动触发去重)
-    bool historyLoading = false;
+    /// 消息队列镜像 (计划 UI-1: 队列快照/状态/投递回执记账见 [MessageQueueMirror])
+    MessageQueueMirror queue;
 
     /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
     /// - 由 agent 侧权限中间件持有 (权限询问卡片勾选 fullAuth 或客户端切换按钮)

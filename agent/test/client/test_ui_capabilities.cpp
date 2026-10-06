@@ -68,7 +68,13 @@ TestResult testUiCapabilities() {
     XX_TEST_EXPECT_TRUE(json["terminal"].value("mouse", false));
     XX_TEST_EXPECT_TRUE(json["terminal"].value("wide_chars", false));
     // 硬件光标尚未实现 (UI-5 待实施): 如实上报 false, 不虚报能力
-    XX_TEST_EXPECT_FALSE(json["terminal"].value("hardware_cursor", true));
+    // 输入栏硬件光标 (计划 UI-5): 取值来自 tuiHardwareCursorSupported() —— 终端
+    // 支持时请求系统光标定位 (输入法候选框跟随), 不支持时回退到自绘光标格。
+    // 这里断言能力段与该唯一来源一致 (不允许各写一份常量)。
+    XX_TEST_EXPECT_EQ(
+        json["terminal"].value("hardware_cursor", false),
+        agentxx::client::tuiHardwareCursorSupported()
+    );
 
     // ---- 字段只增不改: 能力段仍能被描述层解析为同一份能力 ----
     const auto parsed = pluginxx::ui::capabilitiesFromJson(json);
