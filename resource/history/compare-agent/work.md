@@ -489,7 +489,8 @@
   （LOOP-5、JOB-1/JOB-2、LLM-1、RET-5 等见 `plan.md` 各条目"人工核定"列）。
 - **P1 余项（按计划核定可行、本轮未做）**：
   - PRO-8（stdio JSONL 一次性运行）：需要新的客户端运行模式（复用 Wire 结构 + JSONL 分帧）
-    与配套用例，属独立功能块；
+    与配套用例，属独立功能块（本轮未动，建议单独一轮做：先定 stdout 协议帧格式与
+    "响应 ≠ 轮次完成"的语义，再接入 `mode_runners`）；
   - LLM-8（Anthropic 缓存断点 + 缓存用量入账）：需要 ① 请求体加可选 `cache_control` 断点
     （新配置项 + Anthropic 请求装配改动 + 请求体断言用例）、② 解析 Anthropic
     `cache_read_input_tokens` / `cache_creation_input_tokens` 并落到账本
@@ -506,7 +507,9 @@
     （agent 侧 19 张 / client 侧 9 张已在文档中，缺自动校验）；
   - CFG-9（生成式配置键目录）：从 `AgentConfig`/`YamlAppConfig` 生成"键路径/类型/默认值"
     目录并与 PRO-4 共用生成器骨架 + 新鲜度门禁；
-  - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、OBS-5（模块级日志开关，需改日志库信道格式）。
+  - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、OBS-5（模块级日志开关，需改日志库信道格式）；
+  - PLG-8 的文档拆分（`plugins.md` 入门/生命周期/SDK/宿主/client/规则）：接口表数量校验已完成，
+    纯文档重组留待需要时再做。
     （TST-4 并发竞态清单、TST-6 存储一致性骨架已完成，见阶段 Z；TST-7 的
     "插件注册清理"那一半随 PLG-1 做。）
 - **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
@@ -719,6 +722,33 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
   互相覆盖时无法判断恢复谁"的真实场景），机制与拒绝/恢复语义都实现并测到了；
 - `diagnosePluginPath` 只在失败路径调用，不做装载前的强制校验 —— 避免与内核已有的
   路径/清单解析逻辑重复并在边缘情形（内置回退、另一端插件）误判。
+
+## 本轮全量回归（2026-10-07，阶段 Z~AC 完成后）
+
+- 全量 `agentxx_test`（Debug + ASan/UBSan，全部模块）：**35,985 项断言 0 失败**，
+  进程 exit=0，无 AddressSanitizer 报告（上一轮基线 35,328 → 本轮 +657）。
+- 新增模块：`storage_consistency` 260、`race_guards` 68、`plugin_cleanup` 96、
+  `tui_model` 134、`observability` 96；既有模块增量：`boundaries` 9→12（UI 组件名 /
+  接口表名集合 / 文档路径 / 客户端模型层边界）、`tui_scroll` 与 `tui_stream` 改用模型 API、
+  `ui_capabilities` 改为断言能力段与唯一来源一致。
+- 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0。
+- 手工验证：`agentxx_cli --dump-diagnostics` 输出完整报障包（环境/指标/装配含配置 JSON/
+  插件逐项/日志尾部 67 行）并退出码 0；`agentxx_cli --dump-config` 不受影响。
+
+### 本轮之后仍待实施（按价值排序）
+
+1. **PRO-8 stdio JSONL 一次性运行**（P1，独立功能块）：新运行模式 + JSONL 分帧 + 用例。
+2. **LLM-8 Anthropic 缓存断点与缓存用量**（P1）：① 请求体可选 `cache_control` 断点
+   （新配置项 + Anthropic 请求装配 + 请求体断言）；② 解析 `cache_read_input_tokens` /
+   `cache_creation_input_tokens` 落账本（"缓存写入量"需要 schema v3 迁移 + 新列）。
+3. **LLM-13 HTTP 录制回放**（P1）：测试侧"可注入传输层 + 录制/回放服务器"夹具（按请求摘要与
+   顺序保存响应流、敏感 headers 脱敏），与已完成的假 provider 接缝互补。
+4. **CFG-9 生成式配置键目录**（P1）：从 `YamlAppConfig`/`AgentConfig` 生成"键路径/类型/
+   默认值"目录 + 与 PRO-4 共用生成器骨架 + 新鲜度门禁。
+5. **ARC-8 窄接口试点**（P2）：先试点 2~3 个消费者（summarization/permission 中间件、
+   subagent 工具），确认测试替身收益后再推广。
+6. **OBS-5 模块级日志开关**（P2，需改日志库信道格式）。
+7. 已核定"暂缓/不考虑"的条目见 `plan.md` 各行的"人工核定"列（CTX-7 附件引用仍在暂缓）。
 
 ## 阶段 AC：关键指标与诊断包导出（OBS-3 / OBS-4 / STO-13，2026-10-07）
 
