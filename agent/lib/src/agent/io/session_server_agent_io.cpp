@@ -549,6 +549,21 @@ void SessionServerAgentIO::handleUserInput(
         );
         return;
     }
+    // agent 侧分阶段关闭 (计划 ARC-5): agent 已进入关闭阶段时同样不受理新输入
+    // - 与上面的端点停止相互独立: 端点在进程退出时由调用方 stop, agent 可能
+    //   更早开始关闭 (例如宿主先关 agent 再停端点)
+    if (auto agent = agent_.lock();
+        agent && agent->agentContext && agent->agentContext->isShuttingDown()) {
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            InputStatus::Rejected,
+            InputRejectReason::ServerStopped,
+            "agent is shutting down"
+        );
+        return;
+    }
     if (!InputDelivery::known(delivery)) {
         XX_LOGW(
             "[session_ctrl] user_input rejected: unknown delivery '{}' (session={})",

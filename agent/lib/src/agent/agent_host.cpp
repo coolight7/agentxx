@@ -7,6 +7,7 @@
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/task_scope.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -276,25 +277,27 @@ void AgentHost::publishProgress(
     if (!hostBus_) {
         return;
     }
-    asio::co_spawn(
-        hostBus_->executor(),
-        [bus           = hostBus_,
-         agentId       = std::string{agentId},
-         parentAgentId = std::string{parentAgentId},
-         kind          = std::string{kind},
-         data          = std::string{data}]() -> asio::awaitable<void> {
-            co_await bus->publish<events::EventHostProgress>(
-                events::HostTopic::AgentProgress,
-                events::EventHostProgress{
-                    .agentId       = agentId,
-                    .parentAgentId = parentAgentId,
-                    .kind          = kind,
-                    .data          = data,
-                }
-            );
-        },
-        asio::detached
-    );
+    auto task = [bus           = hostBus_,
+                 agentId       = std::string{agentId},
+                 parentAgentId = std::string{parentAgentId},
+                 kind          = std::string{kind},
+                 data          = std::string{data}]() -> asio::awaitable<void> {
+        co_await bus->publish<events::EventHostProgress>(
+            events::HostTopic::AgentProgress,
+            events::EventHostProgress{
+                .agentId       = agentId,
+                .parentAgentId = parentAgentId,
+                .kind          = kind,
+                .data          = data,
+            }
+        );
+    };
+    // 后台任务登记 (计划 ARC-5): 根 agent 有登记表时由它统一取消/等待
+    if (rootAgent_ && rootAgent_->agentContext && rootAgent_->agentContext->taskScope) {
+        rootAgent_->agentContext->taskScope->spawn("host-progress", task());
+        return;
+    }
+    asio::co_spawn(hostBus_->executor(), task(), asio::detached);
 }
 
 asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(

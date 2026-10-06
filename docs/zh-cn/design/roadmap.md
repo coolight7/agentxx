@@ -17,7 +17,7 @@
 | ARC-1 | 核心边界可执行检查 | 已实施 | `agent/test/core/test_boundaries.cpp`（测试模块 `boundaries`） |
 | ARC-2 | 目录级规则文件 | 已实施 | `agent/{lib,client,plugins,test}/AGENTS.md` |
 | ARC-3 | 装配清单和启动断言 | 已实施 | `agent/lib/src/agent/base_agent.cpp`（`InitStep` 清单 + `verifyStartupAssembly`） |
-| ARC-5 | 分阶段关闭与后台任务收敛 | 待实施 | `BaseAgent::shutdownAsync` |
+| ARC-5 | 分阶段关闭与后台任务收敛 | 已实施（不等待轮次） | `util/task_scope.{h,cpp}` + `BaseAgent::shutdownAsync`（停止输入 → 后台任务取消收敛 → 关插件 → 刷盘）+ `AgentContext::markShuttingDown`；模块 `task_scope`、`shutdown_stages` |
 | ARC-6 | 生效装配快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
 | ARC-7 | 新能力不进入核心骨架 | 已实施（纪律） | `agent/lib/AGENTS.md` |
 | ARC-8 | 消费者使用窄接口（试点） | 待实施 | 中间件 / subagent 工具 |
@@ -203,3 +203,6 @@
 - 2026-10-06：ARC-6（启动装配快照 + `--dump-config`，含 CFG-3 / PLG-6 / PLG-10 / TOOL-12 诊断）
   与 CFG-1（结构化配置校验）标记为已实施；UI-2 与 TST-5 合并为"UI 快照夹具"并已实施；
   TST-8 一键门禁脚本（`gate.sh` / `gate.ps1`）已实施。
+
+- 2026-10-06：ARC-5（分阶段关闭 + `TaskScope`，不等待当前轮次）与 TOOL-16（按规范化路径排队）
+  标记为已实施；新增测试模块 `task_scope` / `shutdown_stages`。

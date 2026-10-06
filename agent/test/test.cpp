@@ -42,6 +42,7 @@
 #include "agentxx-test/core/test_session_schema.h"
 #include "agentxx-test/core/test_session_sync.h"
 #include "agentxx-test/core/test_settings_db.h"
+#include "agentxx-test/core/test_shutdown_stages.h"
 #include "agentxx-test/core/test_share_store.h"
 #include "agentxx-test/core/test_string_tools.h"
 #include "agentxx-test/core/test_string_util.h"
@@ -223,6 +224,7 @@ int main(int argn, char** argv) {
         runSync("boundaries", agentxx::test::testBoundaries);
         runSync("assembly_snapshot", agentxx::test::testAssemblySnapshotConfig);
         runSync("config_validation", agentxx::test::testConfigValidation);
+        runSync("task_scope", agentxx::test::testTaskScopeSemantics);
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
@@ -418,6 +420,7 @@ int main(int argn, char** argv) {
                 co_await run("session_sync", agentxx::test::run_session_sync_tests);
                 co_await run("prompt_stability_io", agentxx::test::run_prompt_stability_tests);
                 co_await run("assembly_snapshot_io", agentxx::test::run_assembly_snapshot_tests);
+                co_await run("shutdown_stages", agentxx::test::run_shutdown_stage_tests);
 
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);

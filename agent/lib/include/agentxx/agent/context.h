@@ -39,6 +39,10 @@ class ToolRegistry;
 class PluginManager;
 } // namespace plugin
 
+namespace util {
+class TaskScope;
+} // namespace util
+
 namespace tools {
 class SubAgentManagerTool;
 }
@@ -572,7 +576,17 @@ public:
     /// 获取指定 sessionId 的会话; 不存在时返回 nullptr
     std::shared_ptr<Session> get(std::string_view sessionId);
 
+    /// 遍历全部已加载会话 ({sessionId, session}; 关闭时刷盘用)
+    const std::map<std::string, std::shared_ptr<Session>, std::less<>>& all() const noexcept {
+        return sessions_;
+    }
+
     void remove(std::string_view sessionId);
+
+    /// 已加载会话数 (诊断/测试用)
+    size_t size() const noexcept {
+        return sessions_.size();
+    }
 
     /// - 会话 SQLite 持久化 (AgentConfig::enableSessionStore 开启时由
     /// BaseAgent 创建并注入; 为空表示不持久化)
@@ -633,6 +647,18 @@ public:
     AgentContext();
     ~AgentContext();
 
+    /// 分阶段关闭 (计划 ARC-5): 标记"正在关闭"
+    /// - 置位后端点不再受理新的用户输入 (回执给出 `server_stopped`)
+    /// - 只影响新输入, **不等待也不取消正在跑的轮次** (退出时间不被长工具拖住)
+    void markShuttingDown() noexcept {
+        shuttingDown_ = true;
+    }
+
+    /// 是否正在关闭
+    bool isShuttingDown() const noexcept {
+        return shuttingDown_;
+    }
+
     /// 在所属 IO executor 仍运行时安全关闭本上下文的全部插件。
     asio::awaitable<bool>
         shutdownPluginsAsync(std::chrono::milliseconds timeout = std::chrono::seconds{30});
@@ -678,6 +704,12 @@ public:
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
+
+    /// 后台任务登记表 (计划 ARC-5)
+    /// - fire-and-forget 的短后台任务 (事件发布 / 进度通知) 统一登记,
+    ///   关闭时先取消再等待收敛 (见 [agentxx::util::TaskScope])
+    /// - 由 BaseAgent::init 创建并注入; 未创建时这些调用点退化为直接 co_spawn
+    std::shared_ptr<agentxx::util::TaskScope> taskScope = nullptr;
 
     /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
     /// - 由 BaseAgent::init 创建并注入; 插件经 graph 接口表注册自定义节点类型
@@ -894,6 +926,10 @@ private:
     /// - mutable: 只读入口 (getSessionWorkDir) 为 const, 仍需加锁读该表
     mutable std::mutex                                      sessionWorkDirMu_;
     mutable std::map<std::string, std::string, std::less<>> sessionWorkDirs_;
+
+    /// 正在关闭 (见 markShuttingDown / isShuttingDown)
+    /// - 端点入口可能在任意线程读 (取消/输入受理), 用原子量避免数据竞争
+    std::atomic<bool> shuttingDown_{false};
 };
 
 } // namespace agent

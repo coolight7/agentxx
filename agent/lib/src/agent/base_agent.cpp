@@ -13,6 +13,7 @@
 #include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/task_scope.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/use_awaitable.hpp"
@@ -295,9 +296,15 @@ asio::awaitable<void> BaseAgent::init() {
         .run      = [&]() -> asio::awaitable<void> {
             notifyInitProgress("初始化事件总线 ...");
             initEventBus();
+            // 后台任务登记表 (计划 ARC-5): 与事件总线同一生命周期 —— 事件发布
+            // 与进度通知这类 fire-and-forget 任务登记在此, 关闭时先取消再等待收敛
+            agentContext->taskScope = std::make_shared<agentxx::util::TaskScope>(
+                co_await asio::this_coro::executor
+            );
             co_return;
         },
         .rollback = [this]() {
+            agentContext->taskScope.reset();
             agentContext->bus.reset();
         },
     });
@@ -1619,22 +1626,111 @@ BaseAgent::~BaseAgent() {
     engine = nullptr;
 }
 
+/// 分阶段关闭 (计划 ARC-5)
+///
+/// 顺序: ① 停止受理新输入 → ② 取消并等待后台任务收敛 → ③ 关闭插件 → ④ 刷盘。
+/// - **不等待当前轮次结束**: 轮次是调用方 await 的受控工作, 等待会把退出时间拖到
+///   工具执行结束 (人工核定的结论);
+/// - ② 只等"短后台任务"(事件发布/进度通知一类), 它们通常已经结束, 实际等待接近 0;
+/// - ③ 沿用既有的插件关闭契约 (stop → lease 归零 → destroy/dlclose);
+/// - ④ 对每个会话立即落盘 (上下文 + 展示历史), 避免"退出丢最后一批消息"。
+/// 总时长受 `timeout` 约束; 任一步失败记日志并继续后续步骤 (关闭要尽量做完)。
 asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout) {
-    if (!agentContext || !agentContext->pluginManager) {
+    if (!agentContext) {
         co_return true;
     }
-    // stop 事务必须跑在插件管理器注册的 IO executor 上 (init 时绑定), 不能想当然
-    // 用 ioCtx: 宿主 spawn 的子代理在调用方 executor 上直跑 (engine 直跑),
-    // 其自身 ioCtx 从未 run(); 投递到那里会让 shutdownAsync 永久挂起。
-    // 调用方可能来自任意 executor, 因此这里只借用管理器的 executor 执行事务。
-    if (const auto& pluginEx = agentContext->pluginManager->ioExecutor()) {
-        co_return co_await asio::co_spawn(
-            pluginEx,
-            agentContext->shutdownPluginsAsync(timeout),
-            asio::use_awaitable
+    const auto begin       = std::chrono::steady_clock::now();
+    auto       remainingMs = [&]() -> std::chrono::milliseconds {
+        const auto used = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - begin
+        );
+        return (used >= timeout) ? std::chrono::milliseconds{0} : (timeout - used);
+    };
+
+    // ---- ① 停止受理新输入 (不等待当前轮次) ----
+    agentContext->markShuttingDown();
+    XX_LOGI("shutdown stage 1/4: stop accepting new input");
+
+    // ---- ② 取消并等待后台任务收敛 ----
+    if (agentContext->taskScope) {
+        const size_t pendingBefore = agentContext->taskScope->pending();
+        const size_t cancelled     = agentContext->taskScope->cancelAll();
+        bool         idle          = true;
+        if (pendingBefore > 0) {
+            // awaitIdle 用当前协程的 executor 轮询等待 (任务本身跑在 agent io 线程上)
+            idle = co_await agentContext->taskScope->awaitIdle(remainingMs());
+        }
+        XX_LOGI(
+            "shutdown stage 2/4: background tasks pending={} cancelled={}{}",
+            pendingBefore,
+            cancelled,
+            idle ? "" : " (some still running after timeout)"
         );
     }
-    co_return co_await agentContext->shutdownPluginsAsync(timeout);
+
+    // ---- ③ 关闭插件 ----
+    bool pluginsClosed = true;
+    if (agentContext->pluginManager) {
+        // stop 事务必须跑在插件管理器注册的 IO executor 上 (init 时绑定), 不能想当然
+        // 用 ioCtx: 宿主 spawn 的子代理在调用方 executor 上直跑 (engine 直跑),
+        // 其自身 ioCtx 从未 run(); 投递到那里会让 shutdownAsync 永久挂起。
+        // 调用方可能来自任意 executor, 因此这里只借用管理器的 executor 执行事务。
+        if (const auto& pluginEx = agentContext->pluginManager->ioExecutor()) {
+            pluginsClosed = co_await asio::co_spawn(
+                pluginEx,
+                agentContext->shutdownPluginsAsync(remainingMs()),
+                asio::use_awaitable
+            );
+        } else {
+            pluginsClosed = co_await agentContext->shutdownPluginsAsync(remainingMs());
+        }
+        XX_LOGI(
+            "shutdown stage 3/4: plugins closed={}{}",
+            pluginsClosed,
+            pluginsClosed ? "" : " (instances keep context/dso, see CloseFailed)"
+        );
+    }
+
+    // ---- ④ 刷盘: 每个会话立即落盘 (上下文 + 展示历史) ----
+    // 会话状态只在 agent io 线程访问: 借插件管理器在 init 时记录的 io executor
+    // 执行 (与关闭契约同一线程); 未绑定时用当前 executor (子代理场景由调用方驱动)
+    size_t flushed = 0;
+    if (agentContext->sessions) {
+        auto flushAll = [this]() -> asio::awaitable<size_t> {
+            size_t count = 0;
+            for (const auto& [sessionId, session] : agentContext->sessions->all()) {
+                if (!session) {
+                    continue;
+                }
+                const bool ok = agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        session->persistNow("shutdown");
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGW("shutdown: persist session `{}` failed: {}", sessionId, errmsg);
+                        return false;
+                    }
+                );
+                if (ok) {
+                    count++;
+                }
+            }
+            co_return count;
+        };
+        if (agentContext->pluginManager && agentContext->pluginManager->ioExecutor()) {
+            flushed = co_await asio::co_spawn(
+                agentContext->pluginManager->ioExecutor(),
+                flushAll(),
+                asio::use_awaitable
+            );
+        } else {
+            flushed = co_await flushAll();
+        }
+    }
+    XX_LOGI("shutdown stage 4/4: flushed {} session(s)", flushed);
+
+    co_return pluginsClosed;
 }
 
 neograph::graph::GraphEngine* BaseAgent::getEngine() {

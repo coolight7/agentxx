@@ -40,6 +40,7 @@
 | UI-2 | UI 快照夹具（含 TST-5） | P0 | 完成（已构建 + 测试通过） | `test/client/test_ui_snapshot.cpp` + `include/agentxx-test/client/ui_snapshot.h` + 基线 `test/snapshots/ui/`（模块 `ui_snapshot`） |
 | TST-8 | 一键质量门禁 | P0 | 完成 | `agent/script/gate.sh`、`agent/script/gate.ps1` |
 | TOOL-16 | 按规范化路径排队执行 | P1 | 完成（已构建 + 测试通过） | `plugins/agentxx_filesystem/filesystem_impl.h`（`PathLockTable`/`lockPathBlocking`/`lockPathAsync`）；模块 `filesystem` |
+| ARC-5 | 分阶段关闭与后台任务收敛（不等待轮次） | P1 | 完成（已构建 + 测试通过） | `util/task_scope.{h,cpp}`、`BaseAgent::shutdownAsync`、`AgentContext::markShuttingDown`、`io/session_server_agent_io.cpp`；模块 `task_scope`、`shutdown_stages` |
 | PLG-10 | 插件装载耗时与注册计数（限定范围） | P2 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`PluginListView` 诊断字段）、`plugin_manager_lifecycle.cpp` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
@@ -1062,3 +1063,68 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   行为更简单；不引入"队首票据 + 定时器唤醒"那套机制（避免取消路径下的悬挂票据问题）。
 - 门闩只覆盖内置 filesystem 插件的写/改工具；其他写文件的路径（如命令执行）不在其内，
   属已知边界（它们不共享同一实现）。
+## 阶段 R：分阶段关闭与后台任务收敛（ARC-5，2026-10-06）
+
+计划依据：`plan.md` §1.2 ARC-5（人工核定：**不等待当前轮次结束**）：`shutdownAsync` 依次
+停止输入、停定时器、停插件、刷盘；新增轻量 `TaskScope` 统一记录后台任务并在关闭时取消/等待。
+
+已完成：
+
+- **`TaskScope`**（新增 `agent/lib/{include/agentxx/util/task_scope.h,src/util/task_scope.cpp}`）：
+  - `spawn(name, awaitable)`：登记并启动一个 fire-and-forget 后台任务（每个任务一个
+    `asio::cancellation_signal`，取消信号绑定到任务）；完成处理器摘除登记项，并把
+    后台任务的异常在边界内分类记录（**不让异常逃逸到 detached 处理器终止进程**）；
+  - `pending()` / `pendingNames()` / `totalSpawned()`（诊断与测试可观测）、
+    `cancelAll()`（向全部运行中任务发取消信号，返回条数）、
+    `awaitIdle(timeout)`（2ms 轮询等待收敛，超时返回 false —— 不假装成功）；
+  - 边界刻意收窄（见头文件说明）：**不接管当前轮次**（轮次由调用方 await，等待会拖长退出）、
+    **不接管插件任务**（由插件 `stop` 负责）；只收 fire-and-forget 的短任务。
+- **接入点**（真实后台任务的登记）：
+  - `EventBridge::publishModelToken` / `publishError`（`lib/src/event/event_stream.cpp`）：
+    有登记表时经 `spawn("event-publish", ...)`，否则退回原 `co_spawn(detached)`；
+  - `AgentHost::publishProgress`（`lib/src/agent/agent_host.cpp`）：经根 agent 的登记表
+    `spawn("host-progress", ...)`。
+- **`AgentContext`**：新增 `taskScope`（init 的 `event_bus` 步骤创建，与事件总线同生命周期）
+  与 `markShuttingDown()` / `isShuttingDown()`（原子标志，端点可能在任意线程读）。
+- **分阶段关闭 `BaseAgent::shutdownAsync(timeout)`**（`lib/src/agent/base_agent.cpp`）：
+  1. **停止受理新输入**：置位"正在关闭"；`SessionServerAgentIO::handleUserInput` 在该标志
+     置位时回 `WireInputAck(rejected, server_stopped, "agent is shutting down")`
+     （与端点自身 `stop()` 的拒绝相互独立）；
+  2. **后台任务取消并收敛**：`cancelAll()` + `awaitIdle(剩余预算)`，日志给出
+     `pending/cancelled` 与"是否仍在跑"；
+  3. **关闭插件**：沿用既有契约（stop → lease 归零 → destroy/dlclose，失败保留 CloseFailed）；
+  4. **刷盘**：对每个已加载会话 `persistNow("shutdown")`（上下文 + 展示历史），
+     经插件管理器记录的 io executor 执行（会话状态只在 agent io 线程访问）。
+  总耗时受 `timeout` 约束（每阶段用"剩余预算"）；**全过程不等待也不取消正在跑的轮次**。
+- 新增 `SessionsManager::all()` / `size()`（刷盘遍历与诊断；`SessionsManager` 原本只有 get）。
+
+测试：
+
+- 新同步模块 `task_scope`（12 项断言）：立即完成任务的摘除与计数、长定时器任务取消后
+  `operation_aborted` 收尾、`awaitIdle` 的"已空闲返回 true / 未收敛超时返回 false"两条路径、
+  `pendingNames` 清空、累计发起计数。
+- 新异步模块 `shutdown_stages`（17 项断言，真实 `CodeAgent` + 会话端点 + 本地 LLM 模拟器）：
+  - **停止输入 + 刷盘**：跑一轮真实对话 → `shutdownAsync(3s)` 返回 true 且耗时远小于超时 →
+    `isShuttingDown()` 为真 → 关闭后新输入收到 `rejected` + `server_stopped` 回执 →
+    用**另一个 `SessionStore`** 打开同一目录能读到关闭前的展示历史与 LLM 上下文
+    （证明阶段 ④ 真的落盘，而不是只改了内存）；
+  - **不等待当前轮次**：模型延迟 1200ms 期间调用 `shutdownAsync(500ms)`，返回耗时 < 900ms
+    且此刻**尚无轮次结果**；随后轮次自行结束（未被取消）—— 证明关闭不等轮次也不打断它。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0，无新增 error。
+- 测试：`task_scope` 12/0、`shutdown_stages` 17/0、`agent` 198/0、`plugins` 541/0、
+  `plugin_resources` 89/0、`remote_agent` 453/0、`input_delivery` 78/0、`persist_semantics` 25/0、
+  `session_persistence` 621/0、`boundaries` 8/0。
+
+注意事项 / 与计划的差异：
+
+- 计划的"停定时器"在本项目里没有 agent 自持的定时器需要单独停止：会话落盘是同步写入
+  （节流是时间戳判断而非定时器），定时器都属插件（由插件 `stop` 随阶段 ③ 处理）或
+  工具调用内的短计时。因此阶段 ② 的职责落在"后台任务取消与收敛"上，未单列停定时器。
+- 计划提到"插件卸载/取消等待"在阶段 ③ 以前已有实现（`PluginManager` 生命周期骨架），
+  本次只是把它排进分阶段序列并加上剩余时间预算。
+- 后台任务的覆盖是**渐进**的：目前登记的是事件发布与宿主进度通知两类；子代理轮次
+  （`AgentHost::spawnBatch` 的派生协程）仍由调用方/取消级联负责，未迁入登记表
+  （它们不是"可丢弃的短任务"，迁入需要单独设计取消语义）。

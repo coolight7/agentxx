@@ -3,6 +3,7 @@
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/util/task_scope.h"
 #include "fmt/format.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
@@ -661,25 +662,27 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
         == bus.hasListeners<agentxx::events::EventModelToken>(agentxx::events::Topic::ModelToken)) {
         return;
     }
-    asio::co_spawn(
-        bus.executor(),
-        [busPtr,
-         agentName = agentName_,
-         sessionId = sessionId_,
-         token, // 捕获副本, 协程生命周期独立于本对象
-         kind = std::string{kind}]() -> asio::awaitable<void> {
-            co_await busPtr->publish<agentxx::events::EventModelToken>(
-                agentxx::events::Topic::ModelToken,
-                agentxx::events::EventModelToken{
-                    .agentName = agentName,
-                    .sessionId = sessionId,
-                    .token     = token,
-                    .kind      = kind,
-                }
-            );
-        },
-        asio::detached
-    );
+    auto task = [busPtr,
+                 agentName = agentName_,
+                 sessionId = sessionId_,
+                 token, // 捕获副本, 协程生命周期独立于本对象
+                 kind = std::string{kind}]() -> asio::awaitable<void> {
+        co_await busPtr->publish<agentxx::events::EventModelToken>(
+            agentxx::events::Topic::ModelToken,
+            agentxx::events::EventModelToken{
+                .agentName = agentName,
+                .sessionId = sessionId,
+                .token     = token,
+                .kind      = kind,
+            }
+        );
+    };
+    // 后台任务登记 (计划 ARC-5): 有登记表时由它统一在关闭阶段取消并等待收敛
+    if (ctxPtr->taskScope) {
+        ctxPtr->taskScope->spawn("event-publish", task());
+        return;
+    }
+    asio::co_spawn(bus.executor(), task(), asio::detached);
 }
 
 void EventBridge::publishError(std::string message, std::string where) {
@@ -693,25 +696,26 @@ void EventBridge::publishError(std::string message, std::string where) {
     if (false == bus.hasListeners<agentxx::events::EventError>(agentxx::events::Topic::Error)) {
         return;
     }
-    asio::co_spawn(
-        bus.executor(),
-        [busPtr,
-         agentName = agentName_,
-         sessionId = sessionId_,
-         message   = std::move(message),
-         where     = std::move(where)]() -> asio::awaitable<void> {
-            co_await busPtr->publish<agentxx::events::EventError>(
-                agentxx::events::Topic::Error,
-                agentxx::events::EventError{
-                    .agentName = agentName,
-                    .sessionId = sessionId,
-                    .message   = message,
-                    .where     = where,
-                }
-            );
-        },
-        asio::detached
-    );
+    auto task = [busPtr,
+                 agentName = agentName_,
+                 sessionId = sessionId_,
+                 message   = std::move(message),
+                 where     = std::move(where)]() -> asio::awaitable<void> {
+        co_await busPtr->publish<agentxx::events::EventError>(
+            agentxx::events::Topic::Error,
+            agentxx::events::EventError{
+                .agentName = agentName,
+                .sessionId = sessionId,
+                .message   = message,
+                .where     = where,
+            }
+        );
+    };
+    if (ctxPtr->taskScope) {
+        ctxPtr->taskScope->spawn("event-publish", task());
+        return;
+    }
+    asio::co_spawn(bus.executor(), task(), asio::detached);
 }
 
 } // namespace events
