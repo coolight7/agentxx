@@ -1190,7 +1190,7 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 ## 本轮全量回归（2026-10-06，阶段 N~S 完成后）
 
 - 一键门禁（`pwsh -File agent/script/gate.ps1`，Debug + ASan）：
-  **34,049 项断言 0 失败**，汇总输出 `[gate] OK`（上一轮基线 33,868，本轮新增 181 项）。
+  **34,049 项断言 0 失败**，汇总输出 `[gate] OK`（上一轮基线 33,868）。
 - 新增/改动模块单独复核：`assembly_snapshot` 37/0、`assembly_snapshot_io` 27/0、
   `config_validation` 47/0、`boundaries` 8/0、`ui_snapshot` 22/0、`filesystem` 147/0、
   `task_scope` 12/0、`shutdown_stages` 17/0、`ui_capabilities` 26/0。
@@ -1260,3 +1260,5 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   解析为 0，客户端按"对端未声明能力"降级，不拒绝）。
 - 客户端 `connect()` 现在会在 `ack.ok == false` 时返回 false；这是行为变化（此前
   "收到 HelloAck 即视为连接成功"），属修正：鉴权失败不再表现为"连上了但没有响应"。
+- 阶段 R~T 提交后再跑一次全量门禁：**34,115 项断言 0 失败**，`[gate] OK`
+  （相对阶段 P 时的 34,049 又新增 66 项：ARC-5 29、UI-9 26、PRO-3 37，去重后为 66）。
