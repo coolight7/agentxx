@@ -37,6 +37,8 @@
 | ARC-6 | 生效装配快照 + `--dump-config`（限定范围） | P1 | 完成（已构建 + 测试通过） | `include/agentxx/agent/assembly_snapshot.h` + `src/agent/assembly_snapshot.cpp`、`client/main.cpp` |
 | CFG-3 | 配置来源与诊断清单（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | 同上（配置侧快照） |
 | CFG-1 | 结构化配置校验（限定范围） | P0 | 完成（已构建 + 测试通过） | `include/agentxx/agent/config_validation.h` + `src/agent/config_validation.cpp`、`config.cpp`、`client/main.cpp` |
+| UI-2 | UI 快照夹具（含 TST-5） | P0 | 完成（已构建 + 测试通过） | `test/client/test_ui_snapshot.cpp` + `include/agentxx-test/client/ui_snapshot.h` + 基线 `test/snapshots/ui/`（模块 `ui_snapshot`） |
+| TST-8 | 一键质量门禁 | P0 | 完成 | `agent/script/gate.sh`、`agent/script/gate.ps1` |
 | PLG-10 | 插件装载耗时与注册计数（限定范围） | P2 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`PluginListView` 诊断字段）、`plugin_manager_lifecycle.cpp` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
@@ -536,6 +538,57 @@
 - 全量回归与测试夹具修正完成后提交：`修正测试夹具内存生命周期与只读工具自动摘要预期`。
 - 阶段 N（ARC-6 / TOOL-12 / CFG-3 / PLG-10）完成后提交：`启动装配快照与 --dump-config、插件装载耗时与注册计数 (ARC-6/TOOL-12/CFG-3/PLG-10)`。
 - 阶段 O（CFG-1）完成后提交：`配置结构化校验: 键路径/严重级别/来源, 路径与权限组合检查 (CFG-1)`。
+
+## 阶段 P：UI 快照夹具与一键门禁（UI-2 / TST-5 / TST-8，2026-10-06）
+
+计划依据：`plan.md` §10 UI-2（与 TST-5 合并为"UI 快照夹具"：固定尺寸文本 + 命中区基线 +
+一键更新 + 差异输出）、§15 TST-8（Debug 构建、fail-fast、边界、负面编译、sanitizer；基准可选）。
+
+已完成：
+
+- **UI 快照夹具**（新增 `agent/test/include/agentxx-test/client/ui_snapshot.h` +
+  `agent/test/client/test_ui_snapshot.cpp`）：
+  - `renderRowsToGrid(res, w, h)`：把渲染行模型铺到固定尺寸字符网格（每格一个字符，
+    宽字符只占首格、续格为空格，因此网格文本与显示宽度一一对应）；
+  - `serializeHitRegions(res)`：命中区清单一行一条（`row/kind/id/sub/x/y/w/h/arg/owner/plugin`），
+    顺序稳定；
+  - `checkUiSnapshot(name, actual)`：与 `agent/test/snapshots/ui/<name>.snap` 比较；
+    基线缺失判失败并提示生成命令；内容不同时打印**首个不同的行/列 + 两侧整行内容**
+    （含两侧行数）；`AGENTXX_UPDATE_UI_SNAPSHOTS=1` 时写回基线（一键更新）；
+    未注入基线目录（独立构建）时退化为"只渲染不比较"；
+  - 夹具的失败路径本身有自测（基线缺失判失败、内容不同判失败且 `diff` 带 `line/col`）。
+- **快照用例**（模块 `ui_snapshot`，22 项断言）：Markdown（标题/列表/行内代码/围栏代码折行）、
+  表格（CJK 双宽 + 右对齐 + 超宽截断 + 可点单元格）、树（展开 / 宿主折叠）、差异、
+  表单（buttons/text/switch/number + 提交取消行，含"已交互"状态）、窄终端（24 列）、
+  超长内容裁剪、未知组件与未知字段降级。每个用例比较"文本画面 + 命中区清单"两份基线。
+- **基线入库**：`agent/test/snapshots/ui/*.snap`（10 个画面 + 对应 `.hits.snap`），
+  已在 `agent/test/AGENTS.md` 写明更新流程（改渲染后人工 review diff 再提交）。
+- **一键门禁**：
+  - `agent/script/gate.sh`（Linux/macOS）：可选构建 → 全模块 fail-fast 测试
+    （含 `boundaries` 边界检查、`wire_roundtrip` 协议往返、`config_validation` 配置校验、
+    `ui_snapshot` 快照）→ 插件导出白名单（`check_plugin_exports.sh`）→ SDK 反例编译
+    （`check_sdk_negative_compile.sh`）→ 可选基准；末尾打印 PASS/SKIP/FAIL 汇总，任一失败退出码 1；
+  - `agent/script/gate.ps1`（Windows）：同一份流程（构建 + fail-fast 测试 + 可选基准），
+    导出白名单与 SDK 反例编译在 Windows 上显式记为 SKIP（需要 nm/python3/bash）；
+  - Debug 构建默认带 ASan（+ 非 MSVC 的 UBSan），因此"跑 Debug 测试"即 sanitizer 门禁。
+
+验证：
+
+- 构建：`agentxx_test` exit=0，无新增 error。
+- 测试：`ui_snapshot` 22/0（含 2 条夹具失败路径自测）、`tui_ui_items` 203/0、`ui_items` 117/0。
+- 门禁自测：`pwsh -File agent/script/gate.ps1 -Modules "boundaries,ui_snapshot,config_validation"`
+  → 三个模块全通过、汇总输出 `[gate] OK`（全量 fail-fast 见"全量回归"一节）。
+- 更新流程自测：`AGENTXX_UPDATE_UI_SNAPSHOTS=1` 生成基线 → 比较模式再次运行全部通过。
+
+注意事项 / 与计划的差异：
+
+- 基线用的是"逐格字符网格"而不是 `Screen::ToString()`：后者会把颜色转义序列写进文件，
+  子串与列位断言都会被转义码打断；颜色差异不在本夹具范围内（需要颜色断言时用现有
+  `renderScreen` 那类接口）。
+- 一键更新只重写基线，不做自动"接受全部差异"的判断：更新后必须人工 review git diff
+  （已在 `agent/test/AGENTS.md` 写明）。
+- Windows 门禁脚本不跑导出白名单与 SDK 反例编译（工具链不同），这两项由 Linux/macOS 的
+  `gate.sh` 负责；CI 上应当至少跑一份 `gate.sh`。
 
 ## 阶段 O：配置结构化校验（CFG-1，2026-10-06）
 

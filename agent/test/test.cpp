@@ -100,6 +100,7 @@
 #include "agentxx-test/client/test_tui_tool_header.h"
 #include "agentxx-test/client/test_tui_ui_items.h"
 #include "agentxx-test/client/test_tui_widget.h"
+#include "agentxx-test/client/test_ui_snapshot.h"
 #include "agentxx-test/client/test_update_check.h"
 #endif
 #include "agentxx-test/core/test_util_misc.h"
@@ -267,6 +268,7 @@ int main(int argn, char** argv) {
         runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
         runSync("tui_ui_items", agentxx::test::testTuiUiItems);
         runSync("tui_widget", agentxx::test::testTuiWidget);
+        runSync("ui_snapshot", agentxx::test::testUiSnapshots);
         runSync("sessionId", agentxx::test::testSessionId);
         runSync("mermaid_state", agentxx::test::testMermaidState);
         runSync("markdown_block", agentxx::test::testMarkdownBlock);

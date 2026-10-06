@@ -1,0 +1,9 @@
+row=1 kind=2 id=mode sub=0 x=0 y=0 w=8 h=1 arg= owner= plugin=
+row=1 kind=2 id=mode sub=1 x=9 y=0 w=8 h=1 arg= owner= plugin=
+row=3 kind=2 id=name sub=0 x=0 y=0 w=0 h=1 arg= owner= plugin=
+row=4 kind=2 id=enabled sub=0 x=0 y=0 w=0 h=1 arg= owner= plugin=
+row=6 kind=2 id=count sub=0 x=0 y=0 w=5 h=1 arg= owner= plugin=
+row=6 kind=2 id=count sub=1 x=43 y=0 w=5 h=1 arg= owner= plugin=
+row=6 kind=2 id=count sub=2 x=5 y=0 w=0 h=1 arg= owner= plugin=
+row=7 kind=3 id=__submit sub=0 x=0 y=0 w=8 h=1 arg={} owner= plugin=
+row=7 kind=3 id=__cancel sub=0 x=24 y=0 w=8 h=1 arg={} owner= plugin=

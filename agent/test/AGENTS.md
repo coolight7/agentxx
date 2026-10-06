@@ -29,3 +29,13 @@
 - 临时文件写到 `fs::temp_directory_path()` 下的唯一子目录，测试结束自行清理。
 - 加 `XX_TEST_EXPECT_*` 前先想清楚"这条断言失败说明什么"，避免写只能证明
   自己实现的空断言。
+
+## 门禁与快照
+
+- 一键门禁：`agent/script/gate.sh`（Linux/macOS）或 `agent/script/gate.ps1`
+  （Windows）。改动渲染、协议、配置、持久化后至少跑一次
+  `agentxx_test -f`（fail-fast，含 `boundaries` 边界检查）。
+- UI 快照基线在 `agent/test/snapshots/ui/`（固定尺寸纯文本画面 + 命中区清单），
+  由 `ui_snapshot` 模块比较；渲染改动后人工确认差异并更新：
+  `AGENTXX_UPDATE_UI_SNAPSHOTS=1 agentxx_test ui_snapshot`，然后 review
+  git diff 再提交（不要直接无条件更新基线）。

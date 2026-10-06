@@ -150,6 +150,11 @@ if (AGENTXX_BUILD_CLIENT)
   target_include_directories(agentxx_test PRIVATE 
     "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
   )
+  # UI 快照基线目录 (计划 UI-2 / TST-5): 固定尺寸纯文本画面 + 命中区清单存在仓库内,
+  # 一键更新用 AGENTXX_UPDATE_UI_SNAPSHOTS=1 (见 include/agentxx-test/client/ui_snapshot.h)
+  target_compile_definitions(agentxx_test PRIVATE
+    AGENTXX_UI_SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/snapshots/ui"
+  )
 endif()
 
 # PCH: 只预编译稳定第三方头，加速测试编译 (GCC/Clang，与 lib 保持一致)。

@@ -18,7 +18,7 @@
 | ARC-2 | 目录级规则文件 | 已实施 | `agent/{lib,client,plugins,test}/AGENTS.md` |
 | ARC-3 | 装配清单和启动断言 | 已实施 | `agent/lib/src/agent/base_agent.cpp`（`InitStep` 清单 + `verifyStartupAssembly`） |
 | ARC-5 | 分阶段关闭与后台任务收敛 | 待实施 | `BaseAgent::shutdownAsync` |
-| ARC-6 | 生效装配快照（启动日志 + `--dump-config`） | 待实施 | `BaseAgent` 装配、`agent/client/main.cpp` |
+| ARC-6 | 生效装配快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
 | ARC-7 | 新能力不进入核心骨架 | 已实施（纪律） | `agent/lib/AGENTS.md` |
 | ARC-8 | 消费者使用窄接口（试点） | 待实施 | 中间件 / subagent 工具 |
 | ARC-4 / ARC-7b / ARC-9 | 子系统配置视图 / 千行文件拆分 / 领域与策略分离 | 不做 | 提高内聚、无功能收益 |
@@ -27,22 +27,22 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| LOOP-1 | 持久化收件箱（两段状态） | 待实施 | 会话库 `session_input` 表；依赖 STO-1/STO-2（已实施） |
-| LOOP-2 | `next-step` / `next-turn` / `inject` | 待实施 | `wire_protocol.h`、`session_server_agent_io.cpp`、`nodes/modelcall.cpp` |
-| LOOP-3 | 投递结果显式化 | 待实施 | 同上（`started/queued/steered/rejected` + 结构化原因） |
-| LOOP-4 | QueueState 状态机 | 待实施 | `idle/running/paused/draining` |
-| LOOP-11 | `collect` 合并投递 | 待实施 | 同上（短暂静默窗口内合并连续输入） |
+| LOOP-1 | 持久化收件箱（两段状态） | 已实施 | 会话库 `session_input` 表（schema v2）+ `SessionServerAgentIO::recoverPendingInputs`；模块 `input_delivery` |
+| LOOP-2 | `next-step` / `next-turn` / `inject` | 已实施 | `wire_protocol.h`（`delivery`）、`context.h`（待注入输入）、`nodes/session_context.cpp`（`drainPendingSessionInputs`）、`nodes/modelcall.cpp`；模块 `input_delivery` |
+| LOOP-3 | 投递结果显式化 | 已实施 | `WireInputAck` + `InputStatus` / `InputRejectReason`；TUI 回执提示；模块 `input_delivery`、`wire_roundtrip` |
+| LOOP-4 | QueueState 状态机 | 已实施 | `SessionQueueState`（`idle/running/paused/draining`）+ 队列同步携带状态；模块 `input_delivery` |
+| LOOP-11 | `collect` 合并投递 | 已实施 | `SessionServerAgentIO::Config::collectWindow` + `flushCollectWindow`；模块 `input_delivery` |
 | LOOP-5 / LOOP-6 / LOOP-7 / LOOP-8 / LOOP-9 / LOOP-10 | 幂等键 / 轮次表 / 请求抢占 / 步骤快照 / 优雅取消 / 失败结构化留痕 | 不做 | 现有中断+插入+重跑、view 消息记录与错误提示已覆盖需求 |
 
 ## 3. 上下文、提示词、技能与记忆
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| PRM-1 | stablePrefix / dynamicSuffix | 待实施 | `nodes/modelcall.cpp`、`agent/prompt.cpp` |
-| PRM-2 | 段落排序号（`order`） | 待实施 | 提示词贡献表 |
-| PRM-4 | 记忆文件过大警告 | 待实施 | `middlewares/memory_file.cpp` |
-| PRM-5 | 技能优先级与同名裁决 | 待实施 | 技能加载链路 |
-| PRM-7 | 请求体结构断言 + 稳定段哈希断言 | 待实施 | 测试模块 `agent` / `modelcall` |
+| PRM-1 | stablePrefix / dynamicSuffix | 已实施 | `agent/context.cpp`（稳定段/动态段分离）+ `nodes/modelcall.cpp`（末尾动态消息 + 稳定段哈希）；模块 `prompt_stability`、`prompt_stability_io` |
+| PRM-2 | 段落排序号（`order`） | 已实施（限定：只加 order） | `agent/prompt.{h,cpp}`（`PromptSectionMeta` / `setAppendSection` / `orderedAppendSections`）；模块 `prompt_stability` |
+| PRM-4 | 记忆文件过大警告 | 已实施（限定：只告警） | `middlewares/memory_file.{h,cpp}`（`kOversizeWarnChars = 8000`）；模块 `plugin_resources` |
+| PRM-5 | 技能优先级与同名裁决 | 已实施 | `middlewares/skill.{h,cpp}`（`SkillDirEntry` 优先级 + 同名裁决 + 来源展示）；模块 `prompt_stability_io` |
+| PRM-7 | 请求体结构断言 + 稳定段哈希断言 | 已实施（限定：不做整段提示词快照） | 模块 `prompt_stability` / `prompt_stability_io` |
 | CMP-3 | 结构化摘要与尾部原文 | 已实施 | `agent/lib/src/agent/prompt.cpp`（固定小节 Goal/Done/In progress/Blocked/Key facts/Next） |
 | CTX-1 ~ CTX-9 | 来源化上下文 / 三态来源 / 消息来源 / 只读快照 / 历史替换记录 / 自定义条目 / 附件引用 / 工作上下文 / 会话重建入口 | 不做（CTX-7 待理解） | `flags`/`extra` 不进请求体、`history_contents` 保留旧版本等机制已覆盖需求 |
 
@@ -56,9 +56,9 @@
 | STO-11 | settings_db 乐观版本 | 已实施 | `util/settings_db.*`；模块 `settings_db` |
 | STO-12 | 会话标题与检索（存储层） | 已实施 | `session_store`（`sessionTitle` / `setSessionTitle` / `searchSessions`）；模块 `session_schema` |
 | STO-12b | 标题/检索的协议与 TUI 入口（RET-1a） | 待实施 | `wire_protocol.h`、TUI 会话弹窗 |
-| STO-4 | `view_message.seq` + `hello.afterSeq` 增量补拉 | 待实施 | `session_store.cpp`、`session_server_agent_io.cpp` |
-| STO-5 | 持久化语义分级（`persistNow` / `persistThrottled`） | 待实施 | 会话写入口 |
-| STO-9 | 持久化降级可见（首次写失败推 `MessageTip`） | 待实施 | 会话写入口 |
+| STO-4 | `view_message.seq` + `hello.afterSeq` 增量补拉 | 已实施（限定范围） | `session_store.cpp`（显式序号 + `loadViewMessagesAfter`）、`session_server_agent_io.cpp`（增量补拉策略）；模块 `session_sync` |
+| STO-5 | 持久化语义分级（`persistNow` / `persistThrottled`） | 已实施 | `Session::persistNow` / `persistThrottled`（用户输入/工具结算/压缩完成/轮次终态立即落盘）；模块 `persist_semantics` |
+| STO-9 | 持久化降级可见（首次写失败推 `MessageTip`） | 已实施（限定范围） | `SessionStore::lastWriteError` + 会话持久化回调；模块 `persist_semantics` |
 | STO-13 | 会话导出与取证包 | 待实施 | 新导出入口 |
 | STO-3 / STO-6 / STO-7 / STO-10 | 事件序列表 / turn-attempt 表 / 启动清账 / 大写入不阻塞 io 线程 | 不做 | 读模型已足够；`viewMessages` 可直接承载记录 |
 
@@ -71,7 +71,7 @@
 | TOOL-3 | 并行取消与收尾 | 已实施 | `nodes/toolcall.cpp`（按声明顺序写回、已完成结果保留、未完成补 `[User canceled]`）；模块 `toolcall_parallel` |
 | TOOL-16 | 按规范化文件路径排队执行 | 待实施 | 文件写工具 |
 | TOOL-17 | 执行环境加固（`NO_COLOR` / `TERM` / `PAGER` / locale） | 已实施 | `plugins/agentxx_execute_command/execute_command_impl.h` |
-| TOOL-12 | 工具可用性与授权分层（并入 ARC-6 快照） | 待实施 | 装配快照 |
+| TOOL-12 | 工具可用性诊断（并入 ARC-6 快照） | 已实施（限定范围） | `AgentContext::ToolAssemblyRecord` + `assembly_snapshot.cpp`（来源 / 开关 / 被白名单过滤原因）；模块 `assembly_snapshot_io` |
 | TOOL-4 / TOOL-5 / TOOL-6 / TOOL-7 / TOOL-8 / TOOL-9 / TOOL-10 / TOOL-11 / TOOL-13 / TOOL-15 | 分发层超时 / 结果守卫 / 聚合预算 / 结构化定位符 / 结构化结果 / 单调 guard / 错误状态 / 公告身份 / 审批身份绑定 / 后置上下文 | 不做 | 各工具自带超时、share_store 定位、异常分类已覆盖；插件为受信代码（见 [security.md](security.md)） |
 | TOOL-14 | 延迟工具暴露级别 | 后续计划 | 现有延迟加载不完善，暂不启用 |
 
@@ -110,9 +110,9 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | UI-1 | 客户端模型层（分页窗口 / 队列镜像 / 重连 seq） | 待实施 | 无 FTXUI 依赖的模型类 |
-| UI-2 | UI 快照夹具（固定尺寸文本 + 命中区基线） | 待实施 | 测试模块 `tui_ui_items` |
-| UI-3 | 未知组件宽容降级（补两个测试） | 待实施 | `ui_components.cpp` |
-| UI-4 | 渲染层边界测试 | 待实施 | 测试模块 `ui_items` / `boundaries` |
+| UI-2 | UI 快照夹具（固定尺寸文本 + 命中区基线） | 已实施（含 TST-5） | `agent/test/{client/test_ui_snapshot.cpp,include/agentxx-test/client/ui_snapshot.h}` + 基线 `agent/test/snapshots/ui/`；模块 `ui_snapshot`（一键更新 `AGENTXX_UPDATE_UI_SNAPSHOTS=1`） |
+| UI-3 | 未知组件宽容降级（补两个测试） | 已实施 | `test_tui_ui_items.cpp`（未知字段 / 高版本组件 / 未知枚举值）；模块 `tui_ui_items` |
+| UI-4 | 渲染层边界测试 | 已实施 | 模块 `tui_ui_items`（空注册表渲染）+ `boundaries`（渲染层 include 规则） |
 | UI-5 | 输入栏硬件光标（终端不支持时降级） | 待实施 | `components/input_bar.*` |
 | UI-9 | 能力与体验级别声明 | 待实施 | `tuiUiCapabilities()` |
 | UI-6 / UI-8 / UI-10 | Markdown offload / 进度卡 slot / 文案门禁 | 不做 | 现有渲染与测量共用实现足够 |
@@ -138,18 +138,18 @@
 | PLG-1 | 注册可逆与清理审计 | 待实施 | 插件生命周期测试 |
 | PLG-2 | 声明式贡献集合与重算 | 待实施 | 贡献表 |
 | PLG-4 | 独占能力 slot | 待实施 | 压缩器 / 记忆提供者 |
-| PLG-6 | 装配树与域视图查询 | 待实施（并入 ARC-6） | `--dump-config` |
+| PLG-6 | 装配树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动装配快照（插件/接口/依赖/能力/工具/图） |
 | PLG-7 | 教学式错误与信任声明 | 待实施 | 插件 SDK 错误文案 + 文档 |
 | PLG-8 | 文档分页与接口表数字校验 | 待实施 | `plugins.md` |
-| PLG-10 | 插件加载耗时与注册计数诊断 | 待实施 | 插件管理器日志 + ARC-6 快照 |
+| PLG-10 | 插件加载耗时与注册计数诊断 | 已实施（限定范围） | `plugin_manager.h`（`PluginListView` 诊断字段）+ `plugin_manager_lifecycle.cpp`（装载耗时 + 装载摘要日志）；模块 `assembly_snapshot_io` |
 | PLG-3 / PLG-5 / PLG-9 / PLG-11 | 细粒度变更事件 / manifest schema / 作用域过滤 / 加载许可 | 不做 | 无派生缓存；`args` 原样透传；子代理白名单已实现 schema 与执行同时不可见 |
 
 ## 12. 配置
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| CFG-1 | 配置回填与统一校验（键路径 + 来源 + 致命/警告） | 待实施 | `agent/client/src/config_loader.cpp` |
-| CFG-8 | 设置与配置边界（YAML / settings_db / 安全状态） | 待实施 | `docs/zh-cn/design/index.md` + 语言接线 |
+| CFG-1 | 配置回填与统一校验（键路径 + 来源 + 致命/警告） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/config_validation.*` + `agent/client/main.cpp` 的 `validateStartupConfig`；模块 `config_validation` |
+| CFG-8 | 设置与配置边界（YAML / settings_db / 安全状态） | 已实施 | `docs/zh-cn/design/configuration.md` + `AgentConfig::languageExplicit` 接线 |
 | CFG-9 | 生成式配置键目录 | 待实施 | 脚本 + CI 新鲜度检查 |
 | CFG-2 / CFG-3 / CFG-4 / CFG-5 / CFG-6 / CFG-7 | 配置版本迁移 / 来源清单 / 模型元数据 / 世代快照 / 凭据分层 / 项目信任 | 不做（3 并入 ARC-6） | 结构变化用告警 + 内存态适配；不写版本、不改源文件 |
 
@@ -173,10 +173,10 @@
 | TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
 | TST-7 | 边界/导出/清理门禁 | 待实施 | 模块 `boundaries` 扩展 |
-| TST-8 | CI 一键门禁 | 待实施 | 构建脚本 + 测试模块集合 |
+| TST-8 | CI 一键门禁 | 已实施 | `agent/script/gate.sh`（Linux/macOS: 构建 + 全模块 fail-fast + 导出白名单 + SDK 反例编译 + 可选基准）、`agent/script/gate.ps1`（Windows 等价物） |
 | TST-9 | 测试隔离、耗时和脱敏 | 部分实施 | 独立临时目录与模块耗时已实现；脱敏与凭据环境清理待补 |
-| TST-10 | 安全负面测试 | 待实施 | 见 §8 |
-| TST-5 | UI 快照夹具 | 待实施（并入 UI-2） | — |
+| TST-10 | 安全负面测试 | 部分实施 | 见 §8 |
+| TST-5 | UI 快照夹具 | 已实施（并入 UI-2） | 见 §9 UI-2 |
 | TST-11 / TST-12 / TST-13 / TST-14 / TST-15 | 产物级 e2e / 覆盖率门禁 / 状态清单 / 守卫有效性用例 / 测试目录分组 | 部分实施 | 本文即 TST-13；TST-14 为 `agent/lib/AGENTS.md` 评审约定；benchmark 已覆盖真实两进程与 PTY |
 
 ## 15. 未来计划
@@ -197,3 +197,9 @@
 
 - 2026-10-05：建立本清单（计划 TST-13），按 §1~§15 汇总六篇比较文档的裁定结果与代码位置。
 - 2026-10-05：TOOL-1 / TOOL-2 / TOOL-3 / TOOL-17 标记为已实施（工具三段式执行 + 受限并行 + 命令执行环境加固）。
+- 2026-10-06：按实施记录同步状态：LOOP-1/2/3/4/11、STO-4/5/9、PRM-1/2/4/5/7、SEC-2/5/9、
+  TST-10、PRO-1/7/11、LLM-2/3、TOOL-1/2/3/12/17、CFG-8 与 UI-3/4 均已完成（详见
+  `resource/history/compare-agent/work.md`）。
+- 2026-10-06：ARC-6（启动装配快照 + `--dump-config`，含 CFG-3 / PLG-6 / PLG-10 / TOOL-12 诊断）
+  与 CFG-1（结构化配置校验）标记为已实施；UI-2 与 TST-5 合并为"UI 快照夹具"并已实施；
+  TST-8 一键门禁脚本（`gate.sh` / `gate.ps1`）已实施。
