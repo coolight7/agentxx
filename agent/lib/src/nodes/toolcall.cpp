@@ -781,7 +781,8 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     auto agentCtxPtr = agentContext.lock();
 
     out = PreparedToolCall{};
-    out.tc        = &tc;
+    out.id        = tc.id;
+    out.name      = tc.name;
     out.cancelToken = cancelToken;
     out.startMs   = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1016,8 +1017,8 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
 
     neograph::ChatMessage tool_msg;
     tool_msg.role                 = "tool";
-    tool_msg.tool_call_id         = prepared.tc ? prepared.tc->id : std::string{};
-    tool_msg.tool_name            = prepared.tc ? prepared.tc->name : std::string{};
+    tool_msg.tool_call_id         = prepared.id;
+    tool_msg.tool_name            = prepared.name;
     tool_msg.extra["startTimeMs"] = prepared.startMs;
 
     if (prepared.shortCircuit.has_value()) {
@@ -1115,8 +1116,8 @@ asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
         outInterrupted = true;
         neograph::ChatMessage msg;
         msg.role                 = "tool";
-        msg.tool_call_id         = prepared.tc ? prepared.tc->id : std::string{};
-        msg.tool_name            = prepared.tc ? prepared.tc->name : std::string{};
+        msg.tool_call_id         = prepared.id;
+        msg.tool_name            = prepared.name;
         msg.content              = "[Interrupt]";
         msg.flags               |= neograph::MessageFlag::Interrupt;
         msg.extra["startTimeMs"] = prepared.startMs;

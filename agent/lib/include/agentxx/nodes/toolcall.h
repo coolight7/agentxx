@@ -55,8 +55,11 @@ public:
     ///   因此并发安全 (只读) 的工具必须在 [supportsParallel] 上声明
     /// - 结构在单轮 toolcall 的协程内使用, 不跨轮次保存
     struct PreparedToolCall {
-        /// 声明的 tool 调用 (指向本轮协程内拷出的声明列表, 生命周期覆盖整批执行)
-        const neograph::ToolCall* tc = nullptr;
+        /// 工具调用 id 与工具名 (从模型声明拷出, 生命周期随本结构)
+        /// - 结果消息只依赖这两个字段, 不持有声明的指针: 取消后派生的子协程可能比
+        ///   本协程的局部变量 (声明列表) 活得更久, 持指针会悬垂
+        std::string id;
+        std::string name;
         /// 执行体 (静态注册表工具或动态插件工具)
         neograph::Tool* tool = nullptr;
         /// 动态插件工具保活 (静态工具为空; 插件卸载等待 inflight 归零)
