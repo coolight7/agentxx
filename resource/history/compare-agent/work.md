@@ -51,6 +51,8 @@
 | UI-3 | 未知组件宽容降级（补测试） | P1 | 完成（测试通过） | `test_tui_ui_items.cpp` 未知字段/高版本组件 |
 | UI-4 | 渲染层边界测试 | P1 | 完成（测试通过） | `test_tui_ui_items.cpp` 空注册表渲染 + `boundaries` 渲染层规则 |
 | TST-10 | 安全负面测试（门禁正确性） | P0 | 待完成 | — |
+| TST-3 | 持久化迁移/恢复测试（迁移中断） | P0 | 完成（已构建 + 测试通过） | 模块 `session_schema`（D2 段：迁移失败不推进版本、数据不丢、排除故障后续做） |
+| TST-1 / LLM-5 | 假 provider 接缝 | P0 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider` |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -464,13 +466,10 @@
 > PLG-6、PLG-10、CFG-3、TOOL-12、UI-9、ARC-5、ARC-6 均已完成，见对应阶段记录）。
 
 - **P0 余项**：
-  - TST-3（持久化迁移/恢复测试，部分实施）：老库迁移/幂等/高版本拒绝已覆盖（`session_schema`），
-    余下"崩溃未闭合轮次"对应 STO-7（已核定不做），可只补"迁移中断后重开库仍是旧版本、
-    数据不丢"的用例；
-  - LLM-5 / TST-1（假 provider）：本地 LLM 模拟器（`agent/test/core/test_agent.cpp` 的
-    `DaSimServer`）已能注入固定流/错误状态码/延迟/tool call；余下工作是把这份能力抽成
-    独立"假 provider"接缝（`ModelProviderRegistry::setProvider` 已有注入点），供压缩/重试/
-    中断用例共用。
+  - TST-3（持久化迁移/恢复测试）：**已完成**（见"阶段 U"）—— 老库迁移/幂等/高版本拒绝 + 迁移中断
+    （失败不推进版本、数据不丢、排除故障后续做）；"崩溃未闭合轮次"对应 STO-7（已核定不做）。
+  - LLM-5 / TST-1（假 provider）：**已完成**（见"阶段 U"）—— `ModelProviderRegistry::setProvider`
+    注入的 `FakeProvider`, 覆盖固定流/工具循环/错误分类与重试/溢出压缩/取消/用量记账, 不依赖网络。
 - **P1 余项**：
   - PRO-3（协议版本与能力握手）、PRO-4（生成 `wire-schema.json` 与字段文档）、
     PRO-5（连接阶段与错误分类）、PRO-8（stdio JSONL 一次性运行）；
@@ -1262,3 +1261,57 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   "收到 HelloAck 即视为连接成功"），属修正：鉴权失败不再表现为"连上了但没有响应"。
 - 阶段 R~T 提交后再跑一次全量门禁：**34,115 项断言 0 失败**，`[gate] OK`
   （相对阶段 P 时的 34,049 又新增 66 项：ARC-5 29、UI-9 26、PRO-3 37，去重后为 66）。
+
+## 阶段 U：假 provider 接缝与迁移中断用例（LLM-5 / TST-1 / TST-3，2026-10-07）
+
+计划依据：`plan.md` §6 LLM-5（"provider 可注入固定流、错误、延迟和 tool call；覆盖重试、
+压缩、中断、取消和工具循环，不依赖真实网络或额度"）、§15 TST-1（同一目标的测试项）、
+§15 TST-3（持久化迁移/恢复测试余项）。这两项是 work.md"待完成"里剩下的 P0 条目。
+
+已完成：
+
+- **假 provider 夹具**（新增 `agent/test/include/agentxx-test/core/fake_provider.h`）：
+  - `FakeStep` 脚本条目: `Text` / `ToolCalls` / `Error` 三类, 可带 `delayMs`（可被取消中断）、
+    `chunkChars`（流式分片, 按 UTF-8 边界切）、`thinking`（思考片段）、用量字段;
+  - `FakeProvider` 实现 `neograph::Provider`: `invoke_format_data` 按脚本产出（思考片段走
+    `TYPE_THINKING`、正文走 `TYPE_CONTENT`）、`complete_async` 复用同一路径、`get_name()`
+    返回 `fake`; 脚本用尽后回 `defaultText`（默认 `fake response`）;
+  - 记录能力: `requestCount()` / `requestAt(i)` / `requests()` / `lastRequestRoles()` /
+    `cancelObserved()`, 供请求体结构、重试次数与取消断言;
+  - 注入方式 `FakeProvider::inject(agent, modelName, provider)`（内部走
+    `ModelProviderRegistry::setProvider`, 与真实 provider 同一调用路径, 需在 `init()` 之后注入）;
+  - 等待期间轮询 `params.cancel_token->is_cancelled()` 并捕获协程取消（`operation_aborted`）,
+    命中即抛 `neograph::graph::CancelledException` —— 与真实 provider 的"取消中断在途请求"同语义。
+- **假 provider 用例**（新模块 `fake_provider`, 36 项断言, 6 组）：
+  - 固定流: 正文分片拼接结果与脚本完全一致（含 CJK/多字节字符）、思考片段不混入正文、
+    请求体首条是 system、工具 schema 随请求下发、模型名正确;
+  - 工具循环: `tool_call` → 自定义回显工具真实执行 → 第二次请求带回 `echo:hello` 的 tool 消息
+    → 以最终回答结束;
+  - 错误分类: 401 只请求一次即结束（不可重试）; 500 + `retry_after` 按退避等待约 1 秒后第二次成功;
+  - 溢出压缩: 400 + `context_length_exceeded` 触发一次压缩后重试成功（请求数 ≤ 4 而非重试耗尽）,
+    且摘要正文确实进入会话语义上下文;
+  - 取消: 5 秒延迟的响应在取消后 < 2 秒结束, 且假 provider 确实在等待期间观察到取消;
+  - 用量记账: 假 provider 上报的用量（123/45/7/3）进入会话账本 `usage` 表汇总。
+- **迁移中断用例**（`agent/test/core/test_session_schema.cpp` 新增 D2 段, 模块 91→104 项断言）：
+  用"与 `session_input` 同名的视图"制造迁移失败（SQLite: views may not be indexed），验证
+  ① 写路径明确失败（`lastWriteError()` 非空）且不落数据；② `schema_version` 未推进（仍是老库）、
+  `usage` 表与 `msg_id` 列未留半成品（事务回滚）；③ 老数据仍在；④ 排除故障（删视图）后重新
+  打开可续做, 迁移完成且历史与新写入都保留。
+
+验证：
+
+- 构建：`agentxx_test` exit=0（新增测试源文件后需重跑一次 CMake 配置, 见"注意事项"）。
+- 测试：`fake_provider` 36/0、`session_schema` 104/0、`agent` 198/0、`usage_ledger` 21/0、
+  `cancel` 45/0、`boundaries` 8/0。
+
+注意事项 / 与计划的差异：
+
+- 计划 LLM-5 提到"录制回放在同一注入接缝中作为后续 P1 扩展": 本次只做**注入**这一半,
+  HTTP 录制回放仍是 LLM-13（待实施）。
+- 假 provider 不替换本地 HTTP 模拟服务器（`DaSimServer`）: 后者覆盖 provider 内部的
+  SSE/JSON 解析与错误结构, 两者互补; 新用例覆盖的是"provider 之上"的行为（重试策略、
+  压缩、取消、工具循环、记账）。
+- 新增 `agent/test/core/*.cpp` 或 `agent/test/client/*.cpp` 后必须重跑一次 CMake 配置
+  （测试工程按 `file(GLOB ...)` 收集源码）:
+  `cmake -S agent/test -B <build>/agentxx_test_repo-prefix/src/agentxx_test_repo-build`,
+  否则表现为 `LNK2019 无法解析的外部符号`。

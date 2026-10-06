@@ -312,6 +312,56 @@ TestResult testSessionSchema() {
     XX_TEST_EXPECT_EQ(countRows(dbFuture, "view_message"), int64_t{1});
 
     // -----------------------------------------------------------------------
+    // D2) 迁移中断 (计划 TST-3): 迁移步骤失败时不推进版本、不改坏老数据;
+    //     排除故障后重新打开可从旧版本续做 (每步独立事务)
+    // -----------------------------------------------------------------------
+    const auto dbBroken = sessionDbFile(root, "s-broken");
+    createLegacyDb(dbBroken);
+    {
+        // 制造"迁移做不下去"的库状态: 建一个与 schema 里 session_input 同名的视图,
+        // 迁移建索引时必然失败 (SQLite: views may not be indexed)
+        agentxx::util::SqliteDb db;
+        db.open(dbBroken);
+        db.exec("CREATE VIEW session_input AS SELECT 1 AS id");
+        db.close();
+    }
+    {
+        SessionStore store{root};
+        // 读路径不受影响: 老库的历史按老结构照常读到
+        auto loaded = store.loadSession("s-broken");
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
+        // 写路径: 迁移失败明确失败, 不落数据
+        store.appendViewMessage("s-broken", makeMsg("m-broken", "should not be written"), 2);
+        XX_TEST_EXPECT_FALSE(store.lastWriteError().empty());
+    }
+    // 版本未推进 (仍是老库), 老数据不丢, 失败步骤没有留下半成品结构
+    XX_TEST_EXPECT_EQ(readSchemaVersionAt(dbBroken), -1);
+    XX_TEST_EXPECT_EQ(countRows(dbBroken, "view_message"), int64_t{1});
+    XX_TEST_EXPECT_FALSE(tableExists(dbBroken, "usage"));
+    XX_TEST_EXPECT_FALSE(tableHasColumn(dbBroken, "view_message", "msg_id"));
+    // 迁移失败前的老行仍在, 只是还没有回填 msg_id
+    XX_TEST_EXPECT_TRUE(jsonOfMsgId(dbBroken, "legacy-1").empty());
+
+    {
+        // 排除故障后重新打开: 从旧版本续做, 迁移完成且历史保留
+        agentxx::util::SqliteDb db;
+        db.open(dbBroken);
+        db.exec("DROP VIEW session_input");
+        db.close();
+    }
+    {
+        SessionStore store{root};
+        store.appendViewMessage("s-broken", makeMsg("m-after", "after fix"), 2);
+        XX_TEST_EXPECT_TRUE(store.lastWriteError().empty());
+    }
+    XX_TEST_EXPECT_EQ(readSchemaVersionAt(dbBroken), SessionStore::kSchemaVersion);
+    XX_TEST_EXPECT_EQ(countRows(dbBroken, "view_message"), int64_t{2});
+    // 迁移失败期间被拒的消息确实没写进去, 修好后写入的是新消息
+    XX_TEST_EXPECT_TRUE(!jsonOfMsgId(dbBroken, "legacy-1").empty());
+    XX_TEST_EXPECT_TRUE(!jsonOfMsgId(dbBroken, "m-after").empty());
+    XX_TEST_EXPECT_TRUE(jsonOfMsgId(dbBroken, "m-broken").empty());
+
+    // -----------------------------------------------------------------------
     // E) 用量账本: 追加、聚合、最近若干条
     // -----------------------------------------------------------------------
     {

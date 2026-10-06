@@ -16,6 +16,7 @@
 #include "agentxx-test/core/test_event_bridge.h"
 #include "agentxx-test/core/test_event_stream.h"
 #include "agentxx-test/core/test_events.h"
+#include "agentxx-test/core/test_fake_provider.h"
 #include "agentxx-test/core/test_filesystem_tools.h"
 #include "agentxx-test/core/test_http.h"
 #include "agentxx-test/core/test_interrupt_bus.h"
@@ -419,6 +420,7 @@ int main(int argn, char** argv) {
                 co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
     co_await run("permission", agentxx::test::run_permission_tests);
                 co_await run("input_delivery", agentxx::test::run_input_delivery_tests);
+                co_await run("fake_provider", agentxx::test::run_fake_provider_tests);
                 co_await run("session_sync", agentxx::test::run_session_sync_tests);
                 co_await run("prompt_stability_io", agentxx::test::run_prompt_stability_tests);
                 co_await run("assembly_snapshot_io", agentxx::test::run_assembly_snapshot_tests);

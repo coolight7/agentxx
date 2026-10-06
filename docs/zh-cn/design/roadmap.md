@@ -81,7 +81,7 @@
 |---|---|---|---|
 | LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
-| LLM-5 | 假 provider | 待实施（测试已有模拟器） | `agent/test/core/test_agent.cpp` 的本地 LLM 模拟器（支持失败状态码/响应体） |
+| LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 消费端退出取消 | 待实施 | provider 流对象 |
 | LLM-8 | 缓存断点与缓存用量 | 待实施 | Anthropic 请求装配 + 用量账本 |
 | LLM-13 | HTTP 录制回放 | 待实施 | 测试夹具 |
@@ -167,9 +167,9 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 待实施 | 测试夹具 |
+| TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider`（经 `ModelProviderRegistry::setProvider` 注入） |
 | TST-2 | Wire 往返与 schema 一致性 | 部分实施 | 模块 `wire_roundtrip`（往返 + 幂等 + 兼容）；schema 生成一致性待补 |
-| TST-3 | 持久化迁移/恢复测试 | 部分实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝）；崩溃未闭合轮次待补 |
+| TST-3 | 持久化迁移/恢复测试 | 已实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝、**迁移中断**：失败不推进版本/数据不丢/修复后续做）；"崩溃未闭合轮次"随 STO-7 不做 |
 | TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
 | TST-7 | 边界/导出/清理门禁 | 待实施 | 模块 `boundaries` 扩展 |
@@ -208,3 +208,5 @@
   标记为已实施；新增测试模块 `task_scope` / `shutdown_stages`。
 - 2026-10-06：UI-9（界面能力段补体验级别字段：表单提交方式 / 布局形态 / 终端能力）
   标记为已实施；新增测试模块 `ui_capabilities`。
+- 2026-10-07：LLM-5 / TST-1（假 provider 接缝）与 TST-3（迁移中断用例）标记为已实施；
+  新增测试夹具 `agentxx-test/core/fake_provider.h` 与测试模块 `fake_provider`。
