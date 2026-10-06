@@ -55,7 +55,7 @@
 | STO-8 | 用量账本 | 已实施 | `session_store`（`usage` 表）+ `nodes/modelcall.cpp`；模块 `usage_ledger` |
 | STO-11 | settings_db 乐观版本 | 已实施 | `util/settings_db.*`；模块 `settings_db` |
 | STO-12 | 会话标题与检索（存储层） | 已实施 | `session_store`（`sessionTitle` / `setSessionTitle` / `searchSessions`）；模块 `session_schema` |
-| STO-12b | 标题/检索的协议与 TUI 入口（RET-1a） | 待实施 | `wire_protocol.h`、TUI 会话弹窗 |
+| STO-12b | 标题/检索的协议与 TUI 入口（RET-1a） | 已实施 | `WireListSessions.keyword` + `WireRenameSession`/`WireRenameSessionResult` + `SessionInfo.snippet`；端点 `handleRenameSession` / `listSessionsFor`；TUI 会话弹窗检索行 + `Ctrl+R` 改名；模块 `session_admin`、`wire_roundtrip`、`tui_surface` |
 | STO-4 | `view_message.seq` + `hello.afterSeq` 增量补拉 | 已实施（限定范围） | `session_store.cpp`（显式序号 + `loadViewMessagesAfter`）、`session_server_agent_io.cpp`（增量补拉策略）；模块 `session_sync` |
 | STO-5 | 持久化语义分级（`persistNow` / `persistThrottled`） | 已实施 | `Session::persistNow` / `persistThrottled`（用户输入/工具结算/压缩完成/轮次终态立即落盘）；模块 `persist_semantics` |
 | STO-9 | 持久化降级可见（首次写失败推 `MessageTip`） | 已实施（限定范围） | `SessionStore::lastWriteError` + 会话持久化回调；模块 `persist_semantics` |
@@ -157,7 +157,7 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| RET-1a | 会话搜索/改名的协议与 TUI 入口 | 待实施 | 与 STO-12b 同批 |
+| RET-1a | 会话搜索/改名的协议与 TUI 入口 | 已实施 | `WireListSessions.keyword`、`WireRenameSession`/`WireRenameSessionResult`、`SessionInfo.snippet`；TUI 会话弹窗检索行（直接输入）+ `Ctrl+R` 改名；模块 `session_admin`、`tui_surface` |
 | OBS-3 | 关键指标（首 token / 轮次耗时 / 压缩次数等） | 待实施 | 复用 benchmark 基础设施 |
 | OBS-4 | 诊断包导出 | 待实施 | 与 STO-13 合并 |
 | OBS-5 | 模块级日志开关 | 待实施 | 日志前缀过滤 |
@@ -214,3 +214,6 @@
   [wire-protocol-fields.md](wire-protocol-fields.md)，模块 `wire_schema` 做新鲜度门禁）、
   PRO-5（连接阶段 `WireConnectionStage` 与 `MessageNotFound`/`InvalidState` 错误分类）与
   TST-2（schema 与实现一致性）标记为已实施。
+- 2026-10-07：RET-1a / STO-12b（会话检索与改名的协议、端点与 TUI 入口）标记为已实施：
+  `WireListSessions.keyword`、`WireRenameSession` / `WireRenameSessionResult`、
+  `SessionInfo.snippet`，TUI 会话弹窗检索行 + `Ctrl+R` 改名；新增测试模块 `session_admin`。

@@ -33,6 +33,75 @@ namespace agent {
 /// - 超过该值说明客户端离线时间很长, 回退全量/尾窗同步, 避免一次传输过大
 static constexpr size_t kIncrementalReplayMaxMessages = 512;
 
+/// 会话标题规范化 (计划 RET-1a): 去首尾空白、换行/制表符折叠为空格、限长
+/// - 标题是会话列表里的单行文本, 不是正文: 多行内容会被截断为一行
+/// - 超长截断按 UTF-8 字符边界处理, 避免产生半个字符
+static std::string normalizeSessionTitle(std::string_view raw) {
+    static constexpr size_t kMaxTitleChars = 120;
+    std::string out;
+    out.reserve(std::min(raw.size(), kMaxTitleChars * 4));
+    bool lastWasSpace = true; // 前导空白一并吃掉
+    size_t chars = 0;
+    for (size_t i = 0; i < raw.size();) {
+        const unsigned char c = static_cast<unsigned char>(raw[i]);
+        const size_t        len = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0 ? 2 : ((c & 0xF0) == 0xE0 ? 3 : 4));
+        if (i + len > raw.size()) {
+            break; // 尾部不完整的多字节序列直接丢弃
+        }
+        const bool isSpace = (c == ' ' || c == '\t' || c == '\r' || c == '\n');
+        if (isSpace) {
+            lastWasSpace = true;
+        } else {
+            if (lastWasSpace && !out.empty()) {
+                out.push_back(' ');
+                ++chars;
+            }
+            if (chars >= kMaxTitleChars) {
+                break;
+            }
+            out.append(raw.substr(i, len));
+            ++chars;
+            lastWasSpace = false;
+        }
+        i += len;
+    }
+    return out;
+}
+
+/// 会话列表/检索请求的统一取数实现 (计划 RET-1a)
+///
+/// 三种形态共用同一条消息 (`WireListSessions`):
+/// - 关键词非空: 按标题/展示历史正文检索 (忽略游标字段), 命中片段随条目回传
+/// - limit > 0:  keyset 游标分页, 只返回一页 + 总数/续取标志
+/// - 其余:        旧行为全量列举
+///
+/// 目录扫描与 SQLite 读取属阻塞 I/O, 调用方负责把它卸载到线程池执行。
+static WireSessionList
+    listSessionsFor(const WireListSessions& req, agentxx::agent::SessionStore& store) {
+    if (!req.keyword.empty()) {
+        auto       hits = store.searchSessions(req.keyword, req.limit);
+        std::vector<SessionInfo> sessions;
+        sessions.reserve(hits.size());
+        for (auto& hit : hits) {
+            SessionInfo info = std::move(hit.info);
+            // 正文命中时把命中片段带上, 客户端在列表第二行展示"命中的是哪一段"
+            info.snippet = std::move(hit.snippet);
+            sessions.push_back(std::move(info));
+        }
+        // 检索不做分页: 一次返回全部命中 (数量上限由 SessionStore::kSearchDefaultLimit
+        // / 客户端传入的 limit 决定), hasMore 恒为 false
+        const auto count = static_cast<uint64_t>(sessions.size());
+        return WireSessionList{std::move(sessions), count, false};
+    }
+    if (req.limit > 0) {
+        const auto p = store.listSessionsPage(req.beforeMs, req.beforeId, req.limit);
+        return WireSessionList{std::move(p.sessions), p.totalCount, p.hasMore};
+    }
+    // 旧行为全量列举 (totalCount/hasMore 旧客户端不处理)
+    auto sessions = store.listSessions();
+    return WireSessionList{std::move(sessions), 0, false};
+}
+
 // ---------------------------------------------------------------------------
 // 宿主约定事件 (host convention events)
 //
@@ -1183,44 +1252,20 @@ void SessionServerAgentIO::onPeerMessage(
                             resp = co_await utilxx::offloadAsync<WireSessionList>(
                                 *agent->agentContext->threadPool,
                                 [sessionStore, req]() -> asio::awaitable<WireSessionList> {
-                                    if (req.limit > 0) {
-                                        // keyset 游标分页: 仅返回一页 + 总数/续取标志
-                                        const auto p = sessionStore->listSessionsPage(
-                                            req.beforeMs,
-                                            req.beforeId,
-                                            req.limit
-                                        );
-                                        co_return WireSessionList{
-                                            std::move(p.sessions),
-                                            p.totalCount,
-                                            p.hasMore
-                                        };
-                                    }
-                                    // 旧行为全量列举 (totalCount/hasMore 旧客户端不处理)
-                                    auto sessions = sessionStore->listSessions();
-                                    co_return WireSessionList{std::move(sessions), 0, false};
+                                    co_return listSessionsFor(req, *sessionStore);
                                 }
                             );
                         } else {
-                            if (req.limit > 0) {
-                                const auto p = sessionStore->listSessionsPage(
-                                    req.beforeMs,
-                                    req.beforeId,
-                                    req.limit
-                                );
-                                resp = WireSessionList{
-                                    std::move(p.sessions),
-                                    p.totalCount,
-                                    p.hasMore
-                                };
-                            } else {
-                                resp = WireSessionList{sessionStore->listSessions(), 0, false};
-                            }
+                            resp = listSessionsFor(req, *sessionStore);
                         }
                         self->sendToClient(sender, std::move(resp));
                     },
                     asio::detached
                 );
+            } else if constexpr (std::is_same_v<T, WireRenameSession>) {
+                // 会话重命名 (计划 RET-1a): 标题写入会话库 meta.title 并把来源标为
+                // 用户命名 (此后不再被自动标题覆盖); 结果回执让客户端区分成功与原因
+                handleRenameSession(m, sender);
             } else if constexpr (std::is_same_v<T, WireListDir>) {
                 // 目录列举不带 sessionId (只读服务端文件系统, 与会话无关)
                 // 客户端请求服务端目录列举 (跨设备附件选择):
@@ -2258,6 +2303,62 @@ WireSyncPayload SessionServerAgentIO::buildIncrementalSync(
 std::string SessionServerAgentIO::currentTailHash() {
     auto sess = session();
     return sess ? sess->getHashInfo().tailHex : std::string{};
+}
+
+void SessionServerAgentIO::handleRenameSession(
+    const WireRenameSession&                     req,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    auto reply = [this, &sender](WireRenameSessionResult result) {
+        if (sender) {
+            sendToClient(sender, WireMessage{std::move(result)});
+        } else {
+            sendToPeer(WireMessage{std::move(result)});
+        }
+    };
+
+    // 会话 id 为空 = 当前绑定会话 (与其它请求同口径); 非空时允许改列表里的任意会话
+    const std::string sessionId = req.sessionId.empty() ? config_.sessionId : req.sessionId;
+    const std::string title     = normalizeSessionTitle(req.title);
+
+    WireRenameSessionResult result;
+    result.sessionId = sessionId;
+
+    if (title.empty()) {
+        result.error = "session title must not be empty";
+        reply(std::move(result));
+        return;
+    }
+
+    auto agent = agent_.lock();
+    auto store = (agent && agent->agentContext && agent->agentContext->sessions)
+                     ? agent->agentContext->sessions->sessionStore
+                     : nullptr;
+    if (!store) {
+        result.error = "session store is not available (persistence disabled)";
+        reply(std::move(result));
+        return;
+    }
+    // 不存在的会话不建目录: 改名是"给已有会话起名", 不是新建会话的入口
+    if (!store->sessionDataDirExists(sessionId)) {
+        result.error = fmt::format("session '{}' does not exist", sessionId);
+        reply(std::move(result));
+        return;
+    }
+    if (!store->setSessionTitle(sessionId, title)) {
+        result.error = "failed to persist the session title";
+        reply(std::move(result));
+        return;
+    }
+
+    XX_LOGI(
+        "[session_ctrl] session '{}' renamed to '{}'",
+        sessionId,
+        title
+    );
+    result.ok    = true;
+    result.title = title;
+    reply(std::move(result));
 }
 
 bool SessionServerAgentIO::acceptSessionScope(

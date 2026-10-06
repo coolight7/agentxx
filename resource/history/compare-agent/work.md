@@ -471,10 +471,9 @@
   - LLM-5 / TST-1（假 provider）：**已完成**（见"阶段 U"）—— `ModelProviderRegistry::setProvider`
     注入的 `FakeProvider`, 覆盖固定流/工具循环/错误分类与重试/溢出压缩/取消/用量记账, 不依赖网络。
 - **P1 余项**：
-  - PRO-3（已完成，见"阶段 T"）、**PRO-4 已完成**（见"阶段 U2"）、**PRO-5 已完成**（见"阶段 U2"）、
+  - PRO-3（已完成，见"阶段 T"）、**PRO-4 已完成**（见"阶段 V"）、**PRO-5 已完成**（见"阶段 V"）、
     PRO-8（stdio JSONL 一次性运行）；
-  - RET-1a + STO-12b（会话改名/搜索的协议与 TUI 入口；存储层 `searchSessions`/`setSessionTitle`
-    已就绪，见"阶段 C"）；
+  - RET-1a + STO-12b（会话改名/搜索的协议与 TUI 入口）：**已完成**（见"阶段 W"）；
   - PLG-1（注册可逆与清理审计：统一注册清单 + 禁用/卸载后基线断言）、PLG-2（声明式贡献集合
     与重算）、PLG-4（独占能力 slot）、PLG-7（教学式错误与信任声明）、PLG-8（插件文档分页与
     接口表数字校验）；
@@ -1374,3 +1373,72 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   兼容性, 仅记录在字段清单里, 不改协议;
 - `MessageNotFound` 只用在删除队列条目这一条路径（其他"按 id 定位"的请求目前都是幂等语义
   或回空页), 后续新增按 id 定位的请求可复用该码。
+
+## 阶段 W：会话检索与改名的协议 / 端点 / TUI 入口（RET-1a / STO-12b，2026-10-07）
+
+计划依据：`plan.md` §14 RET-1（拆条结果中的 **RET-1a：协议 + TUI 入口**，与 RET-2 同批）、
+§13 STO-12（存储层已实施，界面入口待接）、§16.2 批次 E（"RET-1a（协议 + TUI 搜索/改名入口，
+与 RET-2 同批）"）。
+
+已完成：
+
+- **协议（lib）**：
+  - `WireListSessions` 增 `keyword` 字段（空 = 普通分页/全量列举；非空 = 检索）；
+  - 新增两条消息：`WireRenameSession{sessionId, title}`（客户端→服务端）与
+    `WireRenameSessionResult{sessionId, ok, title, error}`（服务端→客户端），
+    含 `MsgType` 常量、`make*/fromJson` 编解码、变体成员（**追加在变体末尾**，既有下标不变）
+    与 `serialize`/`deserialize` 分派；
+  - `SessionInfo` 增 `snippet` 字段（检索命中片段；普通列表为空时不出现在 JSON 里，
+    老客户端不受影响）；
+  - `AgentIOBase` 增 `requestRenameSession(sessionId, title)`，`requestSessionListPage`
+    增可选 `keyword` 参数（默认空，旧调用点零改动）。
+- **服务端（SessionServerAgentIO）**：
+  - 会话列表取数收敛为 `listSessionsFor(req, store)` 一处：关键词检索（`searchSessions`，
+    命中片段随 `snippet` 回传、不参与分页续取）→ keyset 分页 → 全量列举；阻塞 I/O 仍卸载到
+    线程池；
+  - 新增 `handleRenameSession`：标题规范化（去首尾空白、换行折叠为空格、按 UTF-8 边界限长
+    120 字符）→ 校验（空标题 / 会话不存在 / 无持久化各回可读原因）→ 写
+    `SessionStore::setSessionTitle`（同时把来源标为 `user`，此后不被自动标题覆盖）→
+    回执；**会话不存在时不建目录**（改名不是新建会话的入口）。
+- **客户端 / TUI**：
+  - `TUIRenderState` 增 `sessionListKeyword`，`TUICtx` 增 `requestSessionSearch` /
+    `renameSession` 回调；`TUIClientAgentIO` 增 `requestSessionSearch`（重置列表为 loading
+    并按关键词重发请求）、`onSessionRenameResult`（成功就地改本地列表标题、失败 toast 原因）、
+    以及在握手回执分支旁新增的 `WireRenameSessionResult` 分发；
+  - `SessionSelectorOverlay`：列表上方新增检索行（**直接输入字符即检索**，Backspace 删除，
+    Esc 先清空关键词再关闭）；`Ctrl+R` 进入/退出**改名编辑态**（输入标题，Enter 提交，
+    Esc 取消，编辑态独占键盘不触发检索）；条目第二行在正文命中时显示命中片段而不是时间；
+    检索状态下不预取下一页。i18n 补 `session.searchPrompt` / `session.searchHint` /
+    `session.renamePrompt` / `session.renameFailed` 与底栏提示（中英双语）。
+- **测试**：
+  - 新模块 `session_admin`（38 项断言）：真实 agent + 会话端点 + 客户端传输，
+    覆盖改名成功（落库 `meta.title` + 来源 `user`）、空标题被拒且保留原标题、不存在的会话
+    被拒且**不建目录**、标题检索（只回命中项、无片段）、正文检索（片段含关键词）、
+    协议入口检索、空关键词回到普通列表（标题为改名后的值）、无持久化时改名明确失败；
+  - `wire_roundtrip` 210→233 项：`WireRenameSession` / `WireRenameSessionResult`（成功与
+    失败两种形态）、`WireListSessions.keyword`、`SessionInfo.snippet`（含缺省形态）；
+  - `tui_surface` 用例新增检索/改名交互断言（打开时沿用上次关键词、输入触发检索回调、
+    Backspace 按 UTF-8 退格、Esc 先清空再关闭、Ctrl+R 进入编辑态且编辑态不触发检索、
+    Esc 取消不改名、Enter 提交回调收到 (sessionId, 新标题)），模块 673/0;
+  - `wire_schema` 生成物随新消息重新生成（门禁要求，一并提交）。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0。
+- 测试：`session_admin` 38/0、`wire_roundtrip` 233/0、`wire_schema` 1034/0、`tui_surface` 673/0、
+  `input_delivery` 97/0、`remote_agent` 477/0、`session_schema` 104/0、`session_persistence` 621/0、
+  `tui_settings` 552/0、`tui_widget` 129/0、`ui_snapshot` 22/0、`client_plugins` 657/0。
+
+注意事项 / 与计划的差异：
+
+- 检索**不做分页续取**：`SessionStore::searchSessions` 一次返回上限内的命中项
+  （默认 50，可按请求 limit 调整），命中数很大时靠关键词收敛；真出现慢查询再按
+  RET-1b（FTS5，已核定不做）评估。
+- 改名只改 `meta.title`：不改会话目录名/sessionId（目录名是会话身份，改名会打断已建立的
+  连接与前端缓存）；标题来源标 `user` 后自动标题不再覆盖（存储层原有语义）。
+- 本地模拟器按**字节**切片推送 SSE 片段：用例里的 LLM 回复正文改用 ASCII（多字节字符会被
+  切在中间），用户输入仍用中文 —— 这是测试夹具限制，不是产品行为（真实 provider 不会
+  在字符中间切片）。
+- TUI 的改名入口是 `Ctrl+R`（而不是可打印字符键）：检索行直接吃字符输入，用组合键避免
+  与检索输入冲突。
+

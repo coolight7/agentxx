@@ -313,6 +313,9 @@ struct SessionInfo {
     std::string sessionId;
     std::string title;
     int64_t     lastActiveMs = 0;
+    /// 检索命中片段 (计划 RET-1a; 仅检索结果填充, 普通列表为空)
+    /// - 正文命中时为关键词附近的文本片段; 标题命中时为空 (标题本身即命中处)
+    std::string snippet;
 };
 
 /// 加载组件通知：显示加载的插件/MCP/Skill/Memory 信息

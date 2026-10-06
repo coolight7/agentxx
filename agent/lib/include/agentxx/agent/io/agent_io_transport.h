@@ -405,6 +405,10 @@ struct WireListSessions {
     std::string beforeId;
     /// 页大小; 0 = 全量列举 (旧行为)
     uint32_t limit = 0;
+    /// 关键词 (计划 RET-1a): 非空时按标题/展示历史正文的子串检索
+    /// - 检索模式下忽略游标字段, 服务端按最近活动降序返回命中项 (含命中片段)
+    /// - 老服务端不认识该字段: 忽略并返回普通列表 (客户端按未检索处理)
+    std::string keyword;
 };
 
 /// 服务端持久化会话列表响应 (Server -> Client)
@@ -592,6 +596,26 @@ struct WireAddModelResult {
     std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
 };
 
+// ---------------------------------------------------------------------------
+// 会话重命名 (计划 RET-1a)
+// ---------------------------------------------------------------------------
+
+/// 客户端重命名会话 (Client -> Server)
+/// - 标题持久化到会话库 `meta.title`, 来源标记为用户命名 (不会被后续消息的自动
+///   标题覆盖); 空标题被服务端拒绝
+struct WireRenameSession {
+    std::string sessionId;
+    std::string title; ///< 新标题 (单行; 服务端按原样去首尾空白后保存)
+};
+
+/// 服务端重命名结果 (Server -> Client)
+struct WireRenameSessionResult {
+    std::string sessionId;
+    std::string title; ///< 生效后的标题 (ok=true 时非空)
+    std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
+    bool        ok = false;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -633,7 +657,10 @@ using WireMessage = std::variant<
     WireSetFullAuth,
     WirePermissionState,
     WireAddModel,
-    WireAddModelResult>;
+    WireAddModelResult,
+    /// 会话重命名 (计划 RET-1a; 追加在末尾保持既有变体下标稳定)
+    WireRenameSession,
+    WireRenameSessionResult>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

@@ -217,9 +217,13 @@ private:
 /// 会话选择弹窗组件 (F3 / 状态栏 [F3] Sessions 按钮)
 /// - 列表顶部固定一项 "新会话" (选中确认后创建全新会话, 不切换历史)
 /// - 列表项两行: 第一行会话名称 (title, 空时回退 sessionId), 第二行最近活动日期
-/// - Up/Down 选择, Enter/鼠标点击切换会话, Esc 关闭
+///   (检索命中正文时第二行显示命中片段)
+/// - 交互: Up/Down 选择, Enter/鼠标点击切换会话, Esc 关闭
+///   - 直接输入字符 = 检索会话 (标题/正文子串; Backspace 删除, Esc 先清空关键词)
+///   - Ctrl+R = 重命名选中会话 (编辑态: 输入标题, Enter 提交, Esc 取消)
 /// - 列表分页加载: 打开弹窗先加载最新一页; 选择项下移接近已加载列表末尾时
 ///   经 ctx_.requestMoreSessions 自动预取下一页, 尾部显示加载进度提示行
+///   (检索结果是一次性结果集, 不参与分页续取)
 /// - 首页未到达时显示 loading (sessionListLoaded == false)
 class SessionSelectorOverlay : public ftxui::ComponentBase {
 public:
@@ -240,12 +244,37 @@ public:
         onNewSession_ = std::move(fn);
     }
 
+    /// 检索回调 (搜索行内容变化时触发; 空串 = 回到普通分页列表)
+    void onSearch(std::function<void(std::string)> fn) {
+        onSearch_ = std::move(fn);
+    }
+
+    /// 改名回调 (编辑态确认时触发: sessionId + 新标题)
+    void onRename(std::function<void(std::string, std::string)> fn) {
+        onRename_ = std::move(fn);
+    }
+
     bool           OnEvent(ftxui::Event event) override;
     ftxui::Element OnRender() override;
 
     /// 测试辅助: 选中项下标 (-1 = 无)
     int selectedIndex() const {
         return list_.selectedIndex();
+    }
+
+    /// 测试辅助: 当前检索关键词
+    const std::string& keyword() const {
+        return keyword_;
+    }
+
+    /// 测试辅助: 是否处于改名编辑态
+    bool renameMode() const {
+        return renameMode_;
+    }
+
+    /// 测试辅助: 改名编辑框内容
+    const std::string& renameText() const {
+        return renameText_;
     }
 
 private:
@@ -257,18 +286,34 @@ private:
     /// 执行 [requestClose] 请求的关闭与切换 (空 sessionId = 新建会话)
     void flushActivation();
 
+    /// 更新检索关键词并通知外部 (去抖交给实现方: 每次变化都重发一次请求)
+    void setKeyword(std::string keyword);
+    /// 进入改名编辑态 (取当前选中会话; 选中 "新会话" 入口时不进入)
+    void beginRename();
+    /// 提交改名 (编辑内容为空时按取消处理)
+    void submitRename();
+
     TUICtx&       ctx_;
     UiActionList  list_;
     UiHitMap      hits_;
     UiActionStyle style_;
 
+    /// 检索关键词 (与 TUIRenderState::sessionListKeyword 同步)
+    std::string keyword_;
+    /// 改名编辑态: 目标会话 id + 正在编辑的标题
+    bool        renameMode_ = false;
+    std::string renameSessionId_;
+    std::string renameText_;
+
     /// 请求关闭并切换到的会话 id (空 = "新会话" 入口; 见 [requestClose])
     bool        closeRequested_ = false;
     std::string pendingSessionId_;
 
-    std::function<void()>            onClose_;
-    std::function<void(std::string)> onSelect_;
-    std::function<void()>            onNewSession_;
+    std::function<void()>                            onClose_;
+    std::function<void(std::string)>                 onSelect_;
+    std::function<void()>                            onNewSession_;
+    std::function<void(std::string)>                 onSearch_;
+    std::function<void(std::string, std::string)>    onRename_;
 
     /// 条目 id: "新会话" 入口固定为 [kNewSessionId], 会话项为 kSessionIdPrefix + sessionId
     static constexpr const char* kNewSessionId    = "new-session";

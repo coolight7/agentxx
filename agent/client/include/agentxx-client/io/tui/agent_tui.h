@@ -618,6 +618,13 @@ private:
     /// - 已有请求未返回时直接忽略 (sessionListLoadingMore 去重); sessionListHasMore 边界判断
     /// - 游标取已加载列表最后一条的 (lastActiveMs, sessionId)
     void requestNextSessionListPage();
+
+    /// 按关键词检索会话 (计划 RET-1a; UI 线程触发, ctx_.requestSessionSearch 入口)
+    /// - 重置本地列表为 loading 并按关键词请求 (空关键词回到普通分页列表)
+    void requestSessionSearch(std::string keyword);
+
+    /// 会话改名结果 (client 线程): 成功就地更新列表标题, 失败提示原因
+    void onSessionRenameResult(const agentxx::agent::WireRenameSessionResult& resp);
     /// 会话列表分页每页条数 (首屏一页即可覆盖弹窗可视区域数倍, 减少请求次数)
     static constexpr uint32_t kSessionListPageSize = 50;
 

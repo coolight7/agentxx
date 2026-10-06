@@ -326,6 +326,67 @@ TestResult testWireRoundtrip() {
         auto back = roundTrip(WireSwitchSession{.sessionId = "s10"});
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s10"});
     }
+    // 会话检索与重命名 (计划 RET-1a)
+    {
+        // 检索: 关键词随请求往返; 命中片段随列表项往返
+        WireListSessions req;
+        req.beforeMs = 0;
+        req.limit    = 20;
+        req.keyword  = "重构 计划";
+        auto back    = roundTrip(req);
+        XX_TEST_EXPECT_EQ(back.keyword, std::string{"重构 计划"});
+        XX_TEST_EXPECT_EQ(back.limit, uint32_t{20});
+
+        SessionInfo hit;
+        hit.sessionId    = "s11";
+        hit.title        = "会话标题";
+        hit.lastActiveMs = 1700000000001LL;
+        hit.snippet      = "...命中片段...";
+        WireSessionList hits;
+        hits.sessions.push_back(hit);
+        hits.totalCount = 1;
+        auto hitsBack   = roundTrip(hits);
+        XX_TEST_EXPECT_EQ(hitsBack.sessions.size(), size_t{1});
+        if (hitsBack.sessions.size() == 1) {
+            XX_TEST_EXPECT_EQ(hitsBack.sessions[0].sessionId, std::string{"s11"});
+            XX_TEST_EXPECT_EQ(hitsBack.sessions[0].snippet, std::string{"...命中片段..."});
+            XX_TEST_EXPECT_EQ(hitsBack.sessions[0].lastActiveMs, int64_t{1700000000001LL});
+        }
+        // 普通列表项 (无片段): 字段缺省, 老客户端不受影响
+        SessionInfo plain;
+        plain.sessionId = "s12";
+        WireSessionList plainList;
+        plainList.sessions.push_back(plain);
+        auto plainBack = roundTrip(plainList);
+        XX_TEST_EXPECT_EQ(plainBack.sessions.size(), size_t{1});
+        if (plainBack.sessions.size() == 1) {
+            XX_TEST_EXPECT_TRUE(plainBack.sessions[0].snippet.empty());
+            XX_TEST_EXPECT_EQ(plainBack.sessions[0].lastActiveMs, int64_t{0});
+        }
+    }
+    {
+        auto rename = roundTrip(WireRenameSession{.sessionId = "s11", .title = "新标题"});
+        XX_TEST_EXPECT_EQ(rename.sessionId, std::string{"s11"});
+        XX_TEST_EXPECT_EQ(rename.title, std::string{"新标题"});
+
+        auto ok = roundTrip(WireRenameSessionResult{
+            .sessionId = "s11",
+            .title     = "新标题",
+            .ok        = true,
+        });
+        XX_TEST_EXPECT_TRUE(ok.ok);
+        XX_TEST_EXPECT_EQ(ok.title, std::string{"新标题"});
+        XX_TEST_EXPECT_TRUE(ok.error.empty());
+
+        // 失败回执: 只有原因, 无标题
+        auto fail = roundTrip(WireRenameSessionResult{
+            .sessionId = "s11",
+            .error     = "session title must not be empty",
+        });
+        XX_TEST_EXPECT_FALSE(fail.ok);
+        XX_TEST_EXPECT_TRUE(fail.title.empty());
+        XX_TEST_EXPECT_EQ(fail.error, std::string{"session title must not be empty"});
+    }
 
     // ---------------- 队列与取消 ----------------
 

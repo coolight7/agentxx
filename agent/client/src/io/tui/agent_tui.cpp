@@ -474,6 +474,16 @@ void TUIClientAgentIO::start() {
         ctx_.requestMoreSessions = [this] {
             requestNextSessionListPage();
         };
+        // 会话检索钩子 (计划 RET-1a): 弹窗搜索行内容变化时触发, 重置列表并按
+        // 关键词重新请求 (空关键词回到普通分页列表)
+        ctx_.requestSessionSearch = [this](std::string keyword) {
+            requestSessionSearch(std::move(keyword));
+        };
+        // 会话改名钩子: 弹窗内确认改名后发送 WireRenameSession, 结果经
+        // onSessionRenameResult 回填列表标题/提示
+        ctx_.renameSession = [this](std::string sessionId, std::string title) {
+            requestRenameSession(std::move(sessionId), std::move(title));
+        };
         ctx_.requestServerListDir
             = [this](
                   std::string                                                   path,
@@ -1690,6 +1700,14 @@ void TUIClientAgentIO::openSessionSelector() {
         XX_LOGI("[tui] new session: {}", newThreadId);
         switchToSession(newThreadId);
     });
+    // 会话检索 (RET-1a): 关键词变化即重置列表并按关键词请求 (空串回到普通分页)
+    overlay->onSearch([this](std::string keyword) {
+        requestSessionSearch(std::move(keyword));
+    });
+    // 会话改名 (RET-1a): 发 WireRenameSession, 结果经 onSessionRenameResult 回填
+    overlay->onRename([this](std::string sessionId, std::string title) {
+        requestRenameSession(std::move(sessionId), std::move(title));
+    });
     modal_->pushModal(overlay);
     postRedraw();
 }
@@ -1933,6 +1951,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireSessionList>) {
                 // 会话选择弹窗数据源: 分页响应回填/追加到已加载会话列表
                 onSessionListPage(m);
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireRenameSessionResult>) {
+                // 会话改名结果: 成功则就地更新本地列表标题, 失败提示原因 (计划 RET-1a)
+                onSessionRenameResult(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
                 onMessageQueueUpdate(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireViewMessagesPage>) {
@@ -2502,12 +2523,60 @@ void TUIClientAgentIO::requestNextSessionListPage() {
             || st.sessionList.empty()) {
             return;
         }
+        // 检索结果不是分页区间: 不续取 (关键词不变时结果集固定)
+        if (!st.sessionListKeyword.empty()) {
+            return;
+        }
         st.sessionListLoadingMore = true;
         // 游标取已加载列表最后一条 (排序最旧), 服务端返回严格排在其后的至多一页
         beforeMs = st.sessionList.back().lastActiveMs;
         beforeId = st.sessionList.back().sessionId;
     }
     requestSessionListPage(beforeMs, std::move(beforeId), kSessionListPageSize);
+}
+
+void TUIClientAgentIO::requestSessionSearch(std::string keyword) {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        // 与打开弹窗同口径: 清空列表先显示 loading, 再按关键词（或普通分页）请求
+        st.sessionListKeyword     = keyword;
+        st.sessionList.clear();
+        st.sessionListLoaded      = false;
+        st.sessionListHasMore     = false;
+        st.sessionListLoadingMore = false;
+        st.sessionListTotalCount  = 0;
+    }
+    // 检索忽略游标: 一次拿回命中项; 空关键词回到普通第一页
+    requestSessionListPage(0, "", kSessionListPageSize, std::move(keyword));
+    postRedraw();
+}
+
+void TUIClientAgentIO::onSessionRenameResult(
+    const agentxx::agent::WireRenameSessionResult& resp
+) {
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        if (resp.ok) {
+            // 就地更新标题: 列表项与状态栏随下一帧刷新 (无需重新请求列表)
+            for (auto& s : st.sessionList) {
+                if (s.sessionId == resp.sessionId) {
+                    s.title = resp.title;
+                    break;
+                }
+            }
+        }
+    }
+    if (!resp.ok) {
+        // 失败原因来自服务端 (空标题/会话不存在/无持久化), 直接提示给用户
+        const std::string msg = resp.error.empty() ? std::string{tr("session.renameFailed")}
+                                                   : resp.error;
+        enqueueUiAction([this, msg] {
+            showToast(msg);
+        });
+    }
+    postRedraw();
 }
 
 // ---------------------------------------------------------------------------

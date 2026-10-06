@@ -86,8 +86,17 @@ void AgentIOBase::requestViewMessagesPage(
     sendToPeer(WireGetViewMessages{std::move(sessionId), beforeIndex, count});
 }
 
-void AgentIOBase::requestSessionListPage(int64_t beforeMs, std::string beforeId, uint32_t count) {
-    sendToPeer(WireListSessions{beforeMs, std::move(beforeId), count});
+void AgentIOBase::requestSessionListPage(
+    int64_t     beforeMs,
+    std::string beforeId,
+    uint32_t    count,
+    std::string keyword
+) {
+    sendToPeer(WireListSessions{beforeMs, std::move(beforeId), count, std::move(keyword)});
+}
+
+void AgentIOBase::requestRenameSession(std::string sessionId, std::string title) {
+    sendToPeer(WireRenameSession{std::move(sessionId), std::move(title)});
 }
 
 void AgentIOBase::sendUserInput(std::string sessionId, std::string text) {

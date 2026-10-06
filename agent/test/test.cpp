@@ -40,6 +40,7 @@
 #include "agentxx-test/core/test_regex.h"
 #include "agentxx-test/core/test_remote_agent.h"
 #include "agentxx-test/core/test_session_persistence.h"
+#include "agentxx-test/core/test_session_admin.h"
 #include "agentxx-test/core/test_session_schema.h"
 #include "agentxx-test/core/test_session_sync.h"
 #include "agentxx-test/core/test_settings_db.h"
@@ -423,6 +424,7 @@ int main(int argn, char** argv) {
     co_await run("permission", agentxx::test::run_permission_tests);
                 co_await run("input_delivery", agentxx::test::run_input_delivery_tests);
                 co_await run("fake_provider", agentxx::test::run_fake_provider_tests);
+                co_await run("session_admin", agentxx::test::run_session_admin_tests);
                 co_await run("session_sync", agentxx::test::run_session_sync_tests);
                 co_await run("prompt_stability_io", agentxx::test::run_prompt_stability_tests);
                 co_await run("assembly_snapshot_io", agentxx::test::run_assembly_snapshot_tests);

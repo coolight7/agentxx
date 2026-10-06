@@ -191,6 +191,18 @@ pluginxx::ui::TextValue trText(std::string_view key, std::string_view fallback) 
     return v;
 }
 
+/// 删除末尾一个 UTF-8 字符 (Backspace: 不产生半个字符)
+void popUtf8Char(std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+    size_t pos = text.size() - 1;
+    while (pos > 0 && (static_cast<unsigned char>(text[pos]) & 0xC0) == 0x80) {
+        --pos;
+    }
+    text.erase(pos);
+}
+
 /// 文本输入控件 (value 非空时作为初始值)
 pluginxx::ui::Item makeTextControl(
     std::string_view id,
@@ -825,8 +837,13 @@ std::expected<agentxx::agent::ModelConfig, std::string>
 SessionSelectorOverlay::SessionSelectorOverlay(TUICtx& ctx) :
     ctx_(ctx),
     style_(UiActionStyle::fromTheme(*ctx.theme)) {
+    // 关键词与状态镜像同步 (弹窗重开时保留上次检索词)
+    if (ctx_.frameState) {
+        keyword_ = ctx_.frameState->sessionListKeyword;
+    }
     // 选择项接近已加载列表末尾时预取下一页 (提前 kSessionPrefetchAhead 项):
     // 实现方内部做执行中去重与 hasMore 边界判断, 高频调用安全
+    // (检索结果是一次性结果集, 实现方在关键词非空时不续取)
     list_.onSelectionChanged([this](int index) {
         if (index + kSessionPrefetchAhead >= static_cast<int>(list_.size())
             && ctx_.requestMoreSessions) {
@@ -852,13 +869,15 @@ void SessionSelectorOverlay::buildItems() {
     });
 
     for (const auto& s : st.sessionList) {
-        // 第一行: 会话名称 (title 为空时回退 sessionId); 第二行: 最近活动日期
+        // 第一行: 会话名称 (title 为空时回退 sessionId); 第二行: 检索命中片段或
+        // 最近活动日期 (检索正文命中时片段比日期更有用, 见 RET-1a)
         const bool        isCurrent = (s.sessionId == ctx_.sessionId);
         const std::string title     = s.title.empty() ? s.sessionId : s.title;
         items.push_back(UiActionItem{
             .id    = std::string{kSessionIdPrefix} + s.sessionId,
             .label = isCurrent ? trf("session.current", title) : title,
-            .hint  = utilxx_base::formatDateTimeMilliseconds(s.lastActiveMs),
+            .hint  = s.snippet.empty() ? utilxx_base::formatDateTimeMilliseconds(s.lastActiveMs)
+                                       : s.snippet,
             .onActivate =
                 [this, id = s.sessionId] {
                     requestClose(id);
@@ -866,6 +885,38 @@ void SessionSelectorOverlay::buildItems() {
         });
     }
     list_.setItems(std::move(items));
+}
+
+void SessionSelectorOverlay::setKeyword(std::string keyword) {
+    keyword_ = std::move(keyword);
+    if (onSearch_) {
+        onSearch_(keyword_);
+    }
+}
+
+void SessionSelectorOverlay::beginRename() {
+    const auto& st = *ctx_.frameState;
+    // 选中 "新会话" 入口 (下标 0) 或空列表时不进入改名态
+    const int index = list_.selectedIndex();
+    if (st.sessionList.empty() || index <= 0 || index > static_cast<int>(st.sessionList.size())) {
+        return;
+    }
+    const auto& target = st.sessionList[static_cast<size_t>(index - 1)];
+    renameMode_      = true;
+    renameSessionId_ = target.sessionId;
+    renameText_      = target.title.empty() ? target.sessionId : target.title;
+}
+
+void SessionSelectorOverlay::submitRename() {
+    const std::string title = renameText_;
+    const std::string id    = renameSessionId_;
+    renameMode_ = false;
+    renameSessionId_.clear();
+    renameText_.clear();
+    if (title.empty() || !onRename_) {
+        return;
+    }
+    onRename_(id, title);
 }
 
 Element SessionSelectorOverlay::OnRender() {
@@ -908,6 +959,25 @@ Element SessionSelectorOverlay::OnRender() {
     }
 
     Elements rows;
+    // 检索行 (计划 RET-1a): 直接输入字符即检索; 空关键词时显示提示文案
+    if (renameMode_) {
+        rows.push_back(
+            hbox({
+                text(std::string{tr("session.renamePrompt")}) | theme.dim(),
+                text(" "),
+                text(renameText_ + "_"),
+            })
+        );
+    } else {
+        rows.push_back(
+            hbox({
+                text(std::string{tr("session.searchPrompt")}) | theme.dim(),
+                text(" "),
+                keyword_.empty() ? (text(std::string{tr("session.searchHint")}) | theme.dim())
+                                 : text(keyword_ + "_"),
+            })
+        );
+    }
     rows.push_back(list_.render(hits_, style_, rowBuilder));
     if (!tailHint.empty()) {
         rows.push_back(text(tailHint) | theme.dim());
@@ -925,11 +995,65 @@ Element SessionSelectorOverlay::OnRender() {
 }
 
 bool SessionSelectorOverlay::OnEvent(Event event) {
+    // 改名编辑态: 独占键盘 (输入标题; Enter 提交, Esc 取消), 列表不动
+    if (renameMode_) {
+        if (event == Event::Escape) {
+            renameMode_ = false;
+            renameSessionId_.clear();
+            renameText_.clear();
+            ctx_.postRedraw();
+            return true;
+        }
+        if (event == Event::Return) {
+            submitRename();
+            ctx_.postRedraw();
+            return true;
+        }
+        if (event == Event::Backspace) {
+            popUtf8Char(renameText_);
+            ctx_.postRedraw();
+            return true;
+        }
+        if (event.is_character()) {
+            renameText_ += event.character();
+            ctx_.postRedraw();
+            return true;
+        }
+        return true;
+    }
+
     if (event == Event::Escape) {
+        // 有检索词时先清空检索 (回到完整列表), 再按一次才关闭弹窗
+        if (!keyword_.empty()) {
+            setKeyword({});
+            ctx_.postRedraw();
+            return true;
+        }
         ctx_.postRedraw();
         if (onClose_) {
             onClose_();
         }
+        return true;
+    }
+    // Ctrl+R: 重命名选中会话 (普通字符输入用于检索, 所以用组合键避免冲突)
+    if (event == Event::CtrlR) {
+        beginRename();
+        ctx_.postRedraw();
+        return true;
+    }
+    // 检索输入: 可打印字符进关键词 (Backspace 删除); 每次变化即重新请求
+    if (event == Event::Backspace) {
+        if (!keyword_.empty()) {
+            popUtf8Char(keyword_);
+            setKeyword(keyword_);
+            ctx_.postRedraw();
+        }
+        return true;
+    }
+    if (event.is_character() && !event.character().empty()) {
+        keyword_ += event.character();
+        setKeyword(keyword_);
+        ctx_.postRedraw();
         return true;
     }
     // Up/Down/Home/End 移动 (接近末尾时自动预取), Enter/鼠标点击命中 = 确认

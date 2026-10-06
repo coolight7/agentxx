@@ -360,6 +360,14 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& target = nullptr
     );
 
+    /// 处理会话重命名 (WireRenameSession → WireRenameSessionResult, 计划 RET-1a)
+    /// - 标题写入会话库 `meta.title` 并标记来源为用户; 空标题/会话不存在/无持久化
+    ///   都回 ok=false + 可读原因 (客户端据此提示)
+    void handleRenameSession(
+        const WireRenameSession&                     req,
+        const std::shared_ptr<AgentIOTransportBase>& sender = nullptr
+    );
+
     /// 会话 ID 校验 (端点绑定单一会话; 统一入口校验, 见计划 PRO-7)
     /// - `sessionId` 为空: 视为"未指定", 按当前绑定会话处理 (旧客户端兼容)
     /// - 与当前绑定会话不一致: 拒绝该请求, 回 WireError(SessionMismatch) 给来源

@@ -50,6 +50,9 @@ struct MsgType {    // ===== Client -> Server =====
     /// 客户端新增模型配置 (TUI 选择模型弹窗的"添加模型配置")
     inline static constexpr std::string_view AddModel = "add_model";
 
+    /// 客户端重命名会话 (计划 RET-1a: 会话标题 + 检索入口)
+    inline static constexpr std::string_view RenameSession = "rename_session";
+
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
     inline static constexpr std::string_view DeltaMsg         = "delta";
@@ -85,6 +88,8 @@ struct MsgType {    // ===== Client -> Server =====
     inline static constexpr std::string_view AddModelResult = "add_model_result";
     /// 服务端输入受理回执 (仅当 user_input 携带 requestId > 0 时回复)
     inline static constexpr std::string_view InputAck = "input_ack";
+    /// 服务端会话重命名结果 (RenameSession 回执; 计划 RET-1a)
+    inline static constexpr std::string_view RenameSessionResult = "rename_session_result";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -837,8 +842,14 @@ inline utilxx_base::Json makeContextMessages(const utilxx_base::Json& messages) 
 /// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
 /// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全量列举),
 ///   与旧版服务端互通
-inline utilxx_base::Json
-    makeListSessions(int64_t beforeMs = 0, std::string_view beforeId = "", uint32_t limit = 0) {
+/// - keyword 非空时按关键词检索 (标题或展示历史正文的子串, 计划 RET-1a):
+///   服务端忽略分页字段, 按最近活动降序返回命中项 (数量上限见服务端)
+inline utilxx_base::Json makeListSessions(
+    int64_t          beforeMs = 0,
+    std::string_view beforeId = "",
+    uint32_t         limit    = 0,
+    std::string_view keyword  = {}
+) {
     utilxx_base::Json j = {
         {"type", MsgType::ListSessions},
     };
@@ -851,6 +862,9 @@ inline utilxx_base::Json
     if (limit > 0) {
         j["limit"] = limit;
     }
+    if (!keyword.empty()) {
+        j["keyword"] = std::string{keyword};
+    }
     return j;
 }
 
@@ -859,6 +873,50 @@ inline WireListSessions listSessionsFromJson(const utilxx_base::Json& j) {
     m.beforeMs = j.value("beforeMs", int64_t{0});
     m.beforeId = j.value("beforeId", std::string{});
     m.limit    = j.value("limit", uint32_t{0});
+    m.keyword  = j.value("keyword", std::string{});
+    return m;
+}
+
+/// 客户端重命名会话 (空标题由服务端拒绝; 计划 RET-1a)
+inline utilxx_base::Json makeRenameSession(std::string_view sessionId, std::string_view title) {
+    return utilxx_base::Json{
+        {"type",      MsgType::RenameSession},
+        {"sessionId", std::string{sessionId}},
+        {"title",     std::string{title}    },
+    };
+}
+
+inline WireRenameSession renameSessionFromJson(const utilxx_base::Json& j) {
+    WireRenameSession m;
+    m.sessionId = j.value("sessionId", std::string{});
+    m.title     = j.value("title", std::string{});
+    return m;
+}
+
+/// 服务端重命名结果 (失败时 error 为给用户看的原因)
+inline utilxx_base::Json makeRenameSessionResult(const WireRenameSessionResult& m) {
+    utilxx_base::Json j = {
+        {"type", MsgType::RenameSessionResult},
+        {"ok",   m.ok                        },
+    };
+    if (!m.sessionId.empty()) {
+        j["sessionId"] = m.sessionId;
+    }
+    if (!m.title.empty()) {
+        j["title"] = m.title;
+    }
+    if (!m.error.empty()) {
+        j["error"] = m.error;
+    }
+    return j;
+}
+
+inline WireRenameSessionResult renameSessionResultFromJson(const utilxx_base::Json& j) {
+    WireRenameSessionResult m;
+    m.sessionId = j.value("sessionId", std::string{});
+    m.title     = j.value("title", std::string{});
+    m.error     = j.value("error", std::string{});
+    m.ok        = j.value("ok", false);
     return m;
 }
 
@@ -870,6 +928,9 @@ inline utilxx_base::Json sessionInfoToJson(const SessionInfo& s) {
     if (!s.title.empty()) {
         j["title"] = s.title;
     }
+    if (!s.snippet.empty()) {
+        j["snippet"] = s.snippet;
+    }
     return j;
 }
 
@@ -878,6 +939,7 @@ inline SessionInfo sessionInfoFromJson(const utilxx_base::Json& j) {
     s.sessionId    = j.value("sessionId", std::string{});
     s.title        = j.value("title", std::string{});
     s.lastActiveMs = j.value("lastActiveMs", int64_t{0});
+    s.snippet      = j.value("snippet", std::string{});
     return s;
 }
 
@@ -1563,6 +1625,10 @@ utilxx_base::Json toJson(const WirePermissionState& msg);
 utilxx_base::Json toJson(const WireAddModel& msg);
 
 utilxx_base::Json toJson(const WireAddModelResult& msg);
+
+utilxx_base::Json toJson(const WireRenameSession& msg);
+
+utilxx_base::Json toJson(const WireRenameSessionResult& msg);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

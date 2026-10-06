@@ -8,7 +8,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `1` · 消息类型数: 40
+协议版本: `1` · 消息类型数: 42
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
@@ -55,6 +55,8 @@
 | 37 | permission_state | `permission_state` | `type` string, `fullAuth` boolean |
 | 38 | add_model | `add_model` | `type` string, `sessionId` string, `name` string, `modelType` string, `baseUrl` string, `apiKey` string, `modelName` string, `apiPath` string, `modelContextMaxToken` integer, `maxConcurrentConnections` integer, `connectTimeoutSeconds` integer, `readChunkTimeoutSeconds` integer, `sslVerify` boolean, `sendThinking` boolean, `requestReasoningSummary` boolean, `imageInput` boolean, `extraApiConfig` object{k:integer}, `extraHeaders` object{H:string} |
 | 39 | add_model_result | `add_model_result` | `type` string, `ok` boolean, `name` string, `error` string |
+| 40 | rename_session | `rename_session` | `type` string, `sessionId` string, `title` string |
+| 41 | rename_session_result | `rename_session_result` | `type` string, `ok` boolean, `sessionId` string, `title` string |
 
 ## 说明
 

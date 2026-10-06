@@ -85,6 +85,8 @@ using agentxx::agent::WirePermissionState;
 using agentxx::agent::WirePluginData;
 using agentxx::agent::WirePluginDataUp;
 using agentxx::agent::WireRemoveQueueItem;
+using agentxx::agent::WireRenameSession;
+using agentxx::agent::WireRenameSessionResult;
 using agentxx::agent::WireSelectModel;
 using agentxx::agent::WireSessionList;
 using agentxx::agent::WireSetFullAuth;
@@ -515,6 +517,22 @@ std::vector<WireSample> wireSamples() {
         m.name  = "bad";
         m.error = "name duplicated";
         out.push_back({"add_model_result", WireMessage{std::move(m)}});
+    }
+    // 41) 会话重命名 (计划 RET-1a)
+    {
+        WireRenameSession m;
+        m.sessionId = "s1";
+        m.title     = "重构会话标题";
+        out.push_back({"rename_session", WireMessage{std::move(m)}});
+    }
+    // 42) 会话重命名结果
+    {
+        WireRenameSessionResult m;
+        m.sessionId = "s1";
+        m.title     = "重构会话标题";
+        m.error     = "";
+        m.ok        = true;
+        out.push_back({"rename_session_result", WireMessage{std::move(m)}});
     }
     return out;
 }

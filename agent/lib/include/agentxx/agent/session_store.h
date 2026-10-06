@@ -219,6 +219,11 @@ public:
     /// 会话标题 (meta.title; 无记录/读取失败返回空)
     std::string sessionTitle(std::string_view sessionId);
 
+    /// 该会话是否已存在数据目录 (未创建过 = 无数据)
+    /// - 供"给已有会话改名""校验目标会话"这类操作先判断存在性, 避免为了写一个
+    ///   字段就把目录/库建出来 (改名不是新建会话的入口)
+    bool sessionDataDirExists(std::string_view sessionId) const;
+
     /// 设置会话标题并标记来源为用户 (再写入 meta.titleSource = "user")
     /// - 空标题忽略并返回 false (标题为空会让会话列表无法辨认)
     /// - 自动标题 (首条用户消息预览) 只在标题不存在时写入, 不会覆盖用户改名
@@ -315,9 +320,6 @@ private:
     /// LRU 淘汰: 连接数超出 [kMaxOpenSessionDbs] 时关闭最久未使用的连接
     /// - 调用方必须持有 [mutex_]
     void evictLruDbs();
-
-    /// 该 session 的数据目录是否存在 (未创建过 = 无数据, 读取直接返回空)
-    bool sessionDataDirExists(std::string_view sessionId) const;
 
     /// 建表 + schema 迁移 (幂等)
     /// - 版本低于 [kSchemaVersion] 时按相邻步骤迁移 (每步独立事务, 迁移前备份)

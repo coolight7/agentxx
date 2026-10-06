@@ -88,7 +88,18 @@ public:
     /// - 客户端先加载最新一页, 用户浏览到列表末尾时以上一页最后一条为游标续取,
     ///   避免一次性加载全量会话; 服务端以 WireSessionList 回应 (携带
     ///   totalCount/hasMore 分页元数据; 旧版服务端忽略分页参数返回全量列表)
-    virtual void requestSessionListPage(int64_t beforeMs, std::string beforeId, uint32_t count);
+    /// - `keyword` 非空时按关键词检索 (标题或正文子串, 计划 RET-1a): 服务端忽略
+    ///   游标字段, 一次返回命中项 (含命中片段), 客户端按"检索结果"整体替换列表
+    virtual void requestSessionListPage(
+        int64_t     beforeMs,
+        std::string beforeId,
+        uint32_t    count,
+        std::string keyword = {}
+    );
+
+    /// 重命名会话 [client] (计划 RET-1a)
+    /// - 服务端把标题持久化到会话库并回 WireRenameSessionResult (成功/失败原因)
+    virtual void requestRenameSession(std::string sessionId, std::string title);
 
     /// 发送用户输入到对端 [client]
     /// - 是否首轮由服务端自行管理; 模型切换经 requestSelectModel

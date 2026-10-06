@@ -134,7 +134,7 @@ utilxx_base::Json toJson(const WireContextMessages& msg) {
 }
 
 utilxx_base::Json toJson(const WireListSessions& msg) {
-    return makeListSessions(msg.beforeMs, msg.beforeId, msg.limit);
+    return makeListSessions(msg.beforeMs, msg.beforeId, msg.limit, msg.keyword);
 }
 
 utilxx_base::Json toJson(const WireSessionList& msg) {
@@ -210,6 +210,14 @@ utilxx_base::Json toJson(const WireAddModel& msg) {
 
 utilxx_base::Json toJson(const WireAddModelResult& msg) {
     return makeAddModelResultMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireRenameSession& msg) {
+    return makeRenameSession(msg.sessionId, msg.title);
+}
+
+utilxx_base::Json toJson(const WireRenameSessionResult& msg) {
+    return makeRenameSessionResult(msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +606,14 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::AddModelResult,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return addModelResultFromJson(j);
+         }},
+        {MsgType::RenameSession,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return renameSessionFromJson(j);
+         }},
+        {MsgType::RenameSessionResult,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return renameSessionResultFromJson(j);
          }},
     };
     return s_map;

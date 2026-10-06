@@ -42,6 +42,16 @@ struct TUICtx {
     ///   hasMore 边界判断并以上一页最后一条为 keyset 游标发起请求
     std::function<void()> requestMoreSessions;
 
+    /// 按关键词检索会话 (计划 RET-1a; UI 线程调用)
+    /// - 实现方 (TUIClientAgentIO::requestSessionSearch) 重置本地列表并按关键词
+    ///   重新请求; 空关键词回到普通分页列表 (服务端按"非检索"处理)
+    std::function<void(std::string keyword)> requestSessionSearch;
+
+    /// 重命名会话 (计划 RET-1a; UI 线程调用)
+    /// - 实现方 (AgentIOBase::requestRenameSession) 发送 WireRenameSession;
+    ///   结果经 onPeerMessage 的 WireRenameSessionResult 分支回填列表与提示
+    std::function<void(std::string sessionId, std::string title)> renameSession;
+
     /// 请求服务端列举目录 (跨设备附件选择; 线程安全, 回调由 UI 线程执行)
     std::function<void(
         std::string                                                   path,

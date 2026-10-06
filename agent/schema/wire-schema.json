@@ -1,6 +1,6 @@
 {
   "protocolVersion": 1,
-  "messageCount": 40,
+  "messageCount": 42,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
     {
@@ -844,6 +844,38 @@
         "ok": false,
         "name": "bad",
         "error": "name duplicated"
+      }
+    },
+    {
+      "index": 40,
+      "name": "rename_session",
+      "type": "rename_session",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "title": "string"
+      },
+      "sample": {
+        "type": "rename_session",
+        "sessionId": "s1",
+        "title": "重构会话标题"
+      }
+    },
+    {
+      "index": 41,
+      "name": "rename_session_result",
+      "type": "rename_session_result",
+      "fields": {
+        "type": "string",
+        "ok": "boolean",
+        "sessionId": "string",
+        "title": "string"
+      },
+      "sample": {
+        "type": "rename_session_result",
+        "ok": true,
+        "sessionId": "s1",
+        "title": "重构会话标题"
       }
     }
   ]
