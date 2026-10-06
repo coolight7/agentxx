@@ -98,6 +98,8 @@ static constexpr std::string_view kMetaTitle        = "title";
 static constexpr std::string_view kMetaLastActiveMs = "lastActiveMs";
 /// 标题来源: "auto" (首条用户消息预览) / "user" (用户改名); 老数据无该键
 static constexpr std::string_view kMetaTitleSource  = "titleSource";
+/// 展示历史持久化序号计数 (计划 STO-4; 见 SessionStore::LoadedSession::lastViewSeq)
+static constexpr std::string_view kMetaViewSeqCounter = "viewSeqCounter";
 
 /// 会话名称预览: 取首行并截断到 max 个 UTF-8 字符 (避免弹窗展示过宽)
 static std::string titlePreview(std::string_view s, size_t max = 60) {
@@ -205,6 +207,8 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
                 msg.id,
                 errmsg
             );
+            // 记录写失败原因 (计划 STO-9; 只记根因, 见 appendViewMessage 处注释)
+            lastWriteError_ = errmsg;
             return false;
         }
     );
@@ -612,6 +616,8 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             while (stmt.step()) {
                 if (stmt.columnText(0) == kMetaMsgIdCounter) {
                     out.msgIdCounter = static_cast<uint64_t>(stmt.columnInt64(1));
+                } else if (stmt.columnText(0) == kMetaViewSeqCounter) {
+                    out.lastViewSeq = static_cast<uint64_t>(stmt.columnInt64(1));
                 }
             }
             return true;
@@ -625,6 +631,22 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     // (历史 append-only, id 连续分配, 条数即最后序号)
     if (out.msgIdCounter == 0) {
         out.msgIdCounter = out.viewMessages.size();
+    }
+    // 兜底: 老数据无 viewSeqCounter 记录时取库内最大行序号 (Session::restore 亦会
+    // 按历史条数兜底, 二者一致: 老库行序号即追加顺序 1..N)
+    if (out.lastViewSeq == 0) {
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                auto stmt = db.prepare("SELECT COALESCE(MAX(seq), 0) FROM view_message");
+                if (stmt.step()) {
+                    out.lastViewSeq = static_cast<uint64_t>(stmt.columnInt64(0));
+                }
+                return true;
+            },
+            [&](std::string) -> bool {
+                return false;
+            }
+        );
     }
     // LLM 上下文 (单行; 解析失败时保留空上下文, 展示历史不受影响)
     agentxx::util::catchError<bool>(
@@ -882,7 +904,8 @@ SessionStore::SessionListPage
 void SessionStore::appendViewMessage(
     std::string_view   sessionId,
     const ViewMessage& msg,
-    uint64_t           msgIdCounter
+    uint64_t           msgIdCounter,
+    uint64_t           seq
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
@@ -891,9 +914,22 @@ void SessionStore::appendViewMessage(
             db.beginImmediate();
             bool inTx = true;
             try {
-                auto insert = db.prepare("INSERT INTO view_message(json, msg_id) VALUES (?, ?)");
-                insert.bindText(1, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
-                insert.bindText(2, msg.id);
+                // 显式序号 (计划 STO-4): seq > 0 时按调用方给的展示历史序号写入
+                // (会话内单调递增, 与内存中的 viewMessages 一一对应); seq == 0
+                // (老调用方) 才用库内自增
+                auto insert = seq > 0
+                                  ? db.prepare(
+                                        "INSERT INTO view_message(seq, json, msg_id) VALUES (?, ?, ?)"
+                                    )
+                                  : db.prepare("INSERT INTO view_message(json, msg_id) VALUES (?, ?)");
+                if (seq > 0) {
+                    insert.bindInt64(1, static_cast<int64_t>(seq));
+                    insert.bindText(2, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
+                    insert.bindText(3, msg.id);
+                } else {
+                    insert.bindText(1, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
+                    insert.bindText(2, msg.id);
+                }
                 insert.step();
 
                 // UPSERT 计数: 新线程首条消息时 meta 不存在, 需 INSERT
@@ -902,6 +938,14 @@ void SessionStore::appendViewMessage(
                 meta.bindText(1, kMetaMsgIdCounter);
                 meta.bindInt64(2, static_cast<int64_t>(msgIdCounter));
                 meta.step();
+
+                // 展示历史序号计数 (计划 STO-4; 供重启后继续编号与增量补拉)
+                if (seq > 0) {
+                    meta.reset();
+                    meta.bindText(1, kMetaViewSeqCounter);
+                    meta.bindInt64(2, static_cast<int64_t>(seq));
+                    meta.step();
+                }
 
                 // ---- 会话列表元数据 (供 listSessions 展示, 与消息同事务提交) ----
                 // 原始 sessionId (目录名经清洗后可能失真)
@@ -953,6 +997,10 @@ void SessionStore::appendViewMessage(
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: appendViewMessage({}) failed: {}", sessionId, errmsg);
+            // 记录写失败原因 (计划 STO-9: 会话侧据此提示"消息未落盘")
+            // - 只记根因 (不含操作名): 同一次故障下"追加消息"与"保存上下文"两条
+            //   写路径的失败原因一致, 会话侧的提示去重才能合并成一条
+            lastWriteError_ = errmsg;
             return false;
         }
     );
@@ -994,15 +1042,108 @@ void SessionStore::saveLlmMessages(
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: saveLlmMessages({}) failed: {}", sessionId, errmsg);
+            // 记录写失败原因 (计划 STO-9; 只记根因, 见 appendViewMessage 处注释)
+            lastWriteError_ = errmsg;
             return false;
         }
     );
 }
 
 // ---------------------------------------------------------------------------
-// 输入收件箱 (session.db session_input 表; 计划 LOOP-1)
+// 展示历史增量补拉 (计划 STO-4)
 // ---------------------------------------------------------------------------
 
+std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
+    std::string_view sessionId,
+    uint64_t         afterSeq,
+    size_t           limit
+) {
+    std::vector<ViewMessageRow> out;
+    // 只读路径: 目录不存在直接返回空 (不创建目录/不取写租约)
+    if (!sessionDataDirExists(sessionId)) {
+        return out;
+    }
+    const auto dbFile = fs::path(rootDir_) / sanitizeSessionId(sessionId) / "session.db";
+    agentxx::util::SqliteDb db;
+    const auto             opened = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            db.open(dbFile.string());
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGW(
+                "SessionStore: loadViewMessagesAfter({}) open {} failed: {}",
+                sessionId,
+                dbFile.string(),
+                errmsg
+            );
+            return false;
+        }
+    );
+    if (!opened) {
+        return out;
+    }
+    if (const int version = readSchemaVersion(db); version > kSchemaVersion) {
+        XX_LOGE(
+            "SessionStore: loadViewMessagesAfter({}) refused: schema version {} is newer than "
+            "supported {}",
+            sessionId,
+            version,
+            kSchemaVersion
+        );
+        return out;
+    }
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto stmt = limit > 0
+                            ? db.prepare("SELECT seq, json FROM view_message WHERE seq > ? "
+                                         "ORDER BY seq LIMIT ?")
+                            : db.prepare("SELECT seq, json FROM view_message WHERE seq > ? "
+                                         "ORDER BY seq");
+            stmt.bindInt64(1, static_cast<int64_t>(afterSeq));
+            if (limit > 0) {
+                stmt.bindInt64(2, static_cast<int64_t>(limit));
+            }
+            while (stmt.step()) {
+                ViewMessageRow row;
+                row.seq = static_cast<uint64_t>(stmt.columnInt64(0));
+                // 单行解析失败只跳过该行 (与 loadSession 同一容错策略)
+                const auto jsonText = stmt.columnText(1);
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        row.message = ViewMessage::fromJson(utilxx_base::Json::parse(jsonText));
+                        out.push_back(std::move(row));
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGW(
+                            "SessionStore: loadViewMessagesAfter({}) 跳过无法解析的消息 "
+                            "(seq={}): {}",
+                            sessionId,
+                            row.seq,
+                            errmsg
+                        );
+                        return false;
+                    }
+                );
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE(
+                "SessionStore: loadViewMessagesAfter({}) failed: {}",
+                sessionId,
+                errmsg
+            );
+            return false;
+        }
+    );
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// 输入收件箱 (session.db session_input 表; 计划 LOOP-1)
+// ---------------------------------------------------------------------------
 void SessionStore::addSessionInput(std::string_view sessionId, const SessionInputRecord& record) {
     if (record.id.empty()) {
         return;

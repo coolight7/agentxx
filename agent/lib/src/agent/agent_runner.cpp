@@ -57,7 +57,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
     auto fOnBeforeResume = [&]() -> asio::awaitable<void> {
         // 上下文以会话为唯一权威: resume 前无需把会话上下文重新塞回图状态
         // (图状态不再持有 messages 通道), 只需保证会话内容已按节流窗口落盘
-        session->requestSaveLlmMessages();
+        session->persistThrottled("before-resume");
         if (hooks.onBeforeResume) {
             co_await hooks.onBeforeResume(sessionId);
         }

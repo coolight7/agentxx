@@ -471,6 +471,73 @@ TestResult testSessionSchema() {
         XX_TEST_EXPECT_EQ(store.searchSessions("needle-keyword", 1).size(), size_t{1});
     }
 
+    // ---- 展示历史序号与增量补拉 (计划 STO-4) ----
+    {
+        SessionStore store{root};
+        const std::string seqSession = "s-seq";
+
+        // 显式序号写入 (会话分配): 恢复时按 meta 的 viewSeqCounter 续编号
+        store.appendViewMessage(seqSession, makeMsg("s1", "first"), 1, 10);
+        store.appendViewMessage(seqSession, makeMsg("s2", "second"), 2, 11);
+        store.appendViewMessage(seqSession, makeMsg("s3", "third"), 3, 12);
+
+        auto loaded = store.loadSession(seqSession);
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{3});
+        XX_TEST_EXPECT_EQ(loaded.lastViewSeq, uint64_t{12});
+        XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{3});
+
+        // 增量补拉: 只回补序号更大的消息
+        auto after10 = store.loadViewMessagesAfter(seqSession, 10);
+        XX_TEST_EXPECT_EQ(after10.size(), size_t{2});
+        if (after10.size() == 2) {
+            XX_TEST_EXPECT_EQ(after10[0].seq, uint64_t{11});
+            XX_TEST_EXPECT_EQ(after10[0].message.id, std::string{"s2"});
+            XX_TEST_EXPECT_EQ(after10[0].message.text, std::string{"second"});
+            XX_TEST_EXPECT_EQ(after10[1].seq, uint64_t{12});
+        }
+        XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 0).size(), size_t{3});
+        XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 12).size(), size_t{0});
+        // limit: 只取前 N 条 (调用方据此判断"差量过大, 回退全量同步")
+        XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 10, 1).size(), size_t{1});
+        // 不存在的会话不创建目录
+        XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter("s-seq-missing", 0).size(), size_t{0});
+        XX_TEST_EXPECT_FALSE(fs::exists(fs::path(utilxx_base::utf8ToPath(root)) / "s-seq-missing"));
+
+        // 更新已有消息不改动序号 (增量补拉不会重复下发已持有消息)
+        auto updated = makeMsg("s3", "third (updated)");
+        store.updateViewMessage(seqSession, updated);
+        XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 11).size(), size_t{1});
+        if (auto rows = store.loadViewMessagesAfter(seqSession, 11); rows.size() == 1) {
+            XX_TEST_EXPECT_EQ(rows[0].seq, uint64_t{12});
+            XX_TEST_EXPECT_EQ(rows[0].message.text, std::string{"third (updated)"});
+        }
+
+        // 老库 (无 viewSeqCounter 记录) 兜底: 取库内最大行序号
+        {
+            const auto dbFile = fs::path(utilxx_base::utf8ToPath(root))
+                                / utilxx_base::utf8ToPath(
+                                    SessionStore::sanitizeSessionId("s-seq-legacy")
+                                )
+                                / "session.db";
+            fs::create_directories(dbFile.parent_path());
+            agentxx::util::SqliteDb db;
+            db.open(dbFile.string());
+            db.exec(
+                "CREATE TABLE view_message (seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT "
+                "NULL, msg_id TEXT)"
+            );
+            db.exec("INSERT INTO view_message(json, msg_id) VALUES ('{\"id\":\"l1\",\"role\":"
+                    "\"user\",\"text\":\"legacy one\"}', 'l1')");
+            db.exec("INSERT INTO view_message(json, msg_id) VALUES ('{\"id\":\"l2\",\"role\":"
+                    "\"user\",\"text\":\"legacy two\"}', 'l2')");
+            db.close();
+
+            auto legacy = store.loadSession("s-seq-legacy");
+            XX_TEST_EXPECT_EQ(legacy.viewMessages.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(legacy.lastViewSeq, uint64_t{2});
+        }
+    }
+
     removeTempRoot(root);
     return TestResult{g_ss_passed, g_ss_failed};
 }

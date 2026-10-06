@@ -178,6 +178,8 @@ void WsAgentIOTransport::updateReconnectSessionId(std::string newSessionId) {
             return;
         }
         self->helloSessionId_ = tid;
+        // 展示历史序号同属旧会话: 一并复位, 重连时不请求增量补拉
+        self->lastViewSeq_.store(0, std::memory_order_release);
         self->lastDeltaSeq_.store(0, std::memory_order_release);
         self->lastTailHash_.clear();
     });
@@ -305,6 +307,10 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 }
             } else if (auto* sync = std::get_if<WireSyncPayload>(&wireMsg.value())) {
                 lastTailHash_ = sync->tailHash;
+                // 展示历史序号 (计划 STO-4): 记录快照末尾序号, 重连时按它请求增量补拉
+                if (sync->lastViewSeq > 0) {
+                    lastViewSeq_.store(sync->lastViewSeq, std::memory_order_release);
+                }
                 // 快照序号: 全量/尾窗 Sync 已包含 seq <= deltaSeq 的全部增量,
                 // 据此**覆盖**去重用的序号 (而非取较大值)。
                 // - 服务端进程重启/会话重建后 seq 从 0 重新计数, 客户端保留的旧序号
@@ -377,7 +383,8 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 token_,
                 lastDeltaSeq_.load(std::memory_order_acquire),
                 lastTailHash_,
-                helloLanguage_
+                helloLanguage_,
+                lastViewSeq_.load(std::memory_order_acquire)
             );
             writeQueue_->try_send(ErrorCode{}, helloJson.dump());
             reconnected = true;

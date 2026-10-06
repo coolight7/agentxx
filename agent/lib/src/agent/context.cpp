@@ -1,4 +1,5 @@
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
@@ -25,6 +26,66 @@ int64_t steadyNowMs() {
                std::chrono::steady_clock::now().time_since_epoch()
     )
         .count();
+}
+
+/// 持久化写入失败时提示一次 (计划 STO-9)
+///
+/// - 仅在"同一失败原因尚未提示过"时推送一条 `WireDelta::MessageUITip`
+///   (客户端插入提示消息), 避免每次写失败都刷屏
+/// - 提示走增量通道而不改写会话历史: 该函数由持久化回调内部调用, 若再往
+///   历史里追加消息会与持久化回调相互递归
+/// - io 线程调用 (与 Session 写入同一线程)
+void reportPersistFailure(
+    const std::shared_ptr<Session>&      session,
+    const std::shared_ptr<SessionStore>& store
+) {
+    if (!session || !store) {
+        return;
+    }
+    const auto err = store->lastWriteError();
+    if (err.empty() || err == session->lastPersistWarning()) {
+        return;
+    }
+    session->setLastPersistWarning(err);
+    XX_LOGW("Session: persistence degraded ({}): {}", session->lastPersistWarning(), err);
+    if (!session->io) {
+        return;
+    }
+    auto delta = WireDelta{
+        .text    = fmt::format("Persistence degraded: {} (changes may not be saved)", err),
+        .type    = WireDelta::Type::MessageUITip,
+        .tipType = WireDelta::TipType::Warning,
+    };
+    delta.seq = session->nextDeltaSeq();
+    session->io->sendToPeer(std::move(delta));
+}
+
+/// 组装会话持久化回调 (计划 STO-9: 每次写入后检查写失败并提示一次)
+/// - 捕获 sessionId 副本, 回调生命周期随 session, 无悬垂风险;
+///   session 用 weak_ptr 避免回调与 session 互相持有
+SessionStoreHooks makeSessionStoreHooks(
+    const std::shared_ptr<SessionStore>& store,
+    std::string                          sessionId,
+    const std::shared_ptr<Session>&      session
+) {
+    std::weak_ptr<Session> weakSession = session;
+    return SessionStoreHooks{
+        .onAppendViewMessage =
+            [store, sessionId, weakSession](const ViewMessage& msg, uint64_t counter, uint64_t seq) {
+                store->appendViewMessage(sessionId, msg, counter, seq);
+                reportPersistFailure(weakSession.lock(), store);
+            },
+        .onUpdateViewMessage =
+            [store, sessionId, weakSession](const ViewMessage& msg) {
+                store->updateViewMessage(sessionId, msg);
+                reportPersistFailure(weakSession.lock(), store);
+            },
+        .onSaveLlmMessages =
+            [store, sessionId, weakSession](const utilxx_base::Json& msgs) {
+                store->saveLlmMessages(sessionId, msgs);
+                reportPersistFailure(weakSession.lock(), store);
+            },
+    };
 }
 
 /// Json 边界形态 -> typed 上下文 (逐条 ChatMessage JSON 反序列化)
@@ -95,6 +156,8 @@ std::string Session::appendViewMessage(ViewMessage msg) {
     chainHash.append(msg.toJson().dump());
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
     msg.id  = id;
+    // 展示历史持久化序号 (计划 STO-4): 会话内单调递增, 与库里 view_message.seq 一致
+    const auto viewSeq = ++viewSeqCounter_;
     viewMessages.push_back(std::move(msg));
     // 维护 msgId → 下标索引 (updateViewMessage 的 O(1) 定位用)
     msgIndex_.insert_or_assign(id, viewMessages.size() - 1);
@@ -105,6 +168,7 @@ std::string Session::appendViewMessage(ViewMessage msg) {
             .isAppend = true,
             .index    = viewMessages.size() - 1,
             .counter  = msgIdCounter_,
+            .seq      = viewSeq,
         });
     }
     return id;
@@ -156,7 +220,7 @@ void Session::setStoreHooks(SessionStoreHooks hooks) {
     hooks_ = std::move(hooks);
 }
 
-void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter) {
+void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq) {
     assertIoThread();
 
     // 整体替换 viewMessages 前丢弃待落盘队列: 队列按下标引用消息, 替换后
@@ -172,6 +236,9 @@ void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter) 
     }
     viewMessages  = std::move(messages);
     msgIdCounter_ = msgIdCounter;
+    // 展示历史序号: 库内最大值优先; 老数据无记录时按历史条数兜底, 保证后续
+    // 追加的序号严格大于已存在的历史 (重连增量补拉不会漏消息)
+    viewSeqCounter_ = std::max(lastViewSeq, static_cast<uint64_t>(viewMessages.size()));
     // 重建 msgId → 下标索引 (与 viewMessages 同步; 恢复的历史全量建索引)
     msgIndex_.clear();
     msgIndex_.reserve(viewMessages.size());
@@ -279,6 +346,32 @@ void Session::flushViewMessages() {
     flushPendingViewOps();
 }
 
+void Session::persistNow(std::string_view reason) {
+    assertIoThread();
+    if (!hooks_.onSaveLlmMessages && !hooks_.onAppendViewMessage && !hooks_.onUpdateViewMessage) {
+        // 内存模式 (未启用持久化): 无落盘内容, 也不产生日志噪音
+        return;
+    }
+    XX_LOGD("Session: persist now ({})", reason);
+    saveLlmMessages();
+    flushViewMessages();
+}
+
+void Session::persistThrottled(std::string_view reason) {
+    assertIoThread();
+    if (!hooks_.onSaveLlmMessages) {
+        return;
+    }
+    XX_LOGT("Session: persist throttled ({})", reason);
+    // 上下文按既有节流窗口 (首次/超窗口立即写)
+    requestSaveLlmMessages();
+    // 展示历史: 追加时已入待落盘队列, 这里只在窗口外补一次刷出
+    if (!pendingViewOps_.empty() && viewLastPersistMs_ != 0
+        && steadyNowMs() - viewLastPersistMs_ >= kPersistThrottleMs) {
+        flushPendingViewOps();
+    }
+}
+
 void Session::enqueueViewPersist(PendingViewOp op) {
     pendingViewOps_.push_back(std::move(op));
     const auto nowMs = steadyNowMs();
@@ -306,7 +399,7 @@ void Session::flushPendingViewOps() {
         const auto& msg = viewMessages[op.index];
         if (op.isAppend) {
             if (hooks_.onAppendViewMessage) {
-                hooks_.onAppendViewMessage(msg, op.counter);
+                hooks_.onAppendViewMessage(msg, op.counter, op.seq);
             }
         } else {
             if (hooks_.onUpdateViewMessage) {
@@ -372,24 +465,13 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
     if (sessionStore) {
         // 从 SQLite 恢复该 session 的历史消息/LLM 上下文, 并绑定持久化回调
         auto loaded = sessionStore->loadSession(sessionId);
-        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter);
+        session->restore(
+            std::move(loaded.viewMessages),
+            loaded.msgIdCounter,
+            loaded.lastViewSeq
+        );
         session->replaceMessagesFromJson(loaded.llmMessages);
-        // 捕获 sessionId 副本, 回调生命周期随 session, 无悬垂风险
-        auto tid = std::string{sessionId};
-        session->setStoreHooks(SessionStoreHooks{
-            .onAppendViewMessage =
-                [sessionStore, tid](const ViewMessage& msg, uint64_t counter) {
-                    sessionStore->appendViewMessage(tid, msg, counter);
-                },
-            .onUpdateViewMessage =
-                [sessionStore, tid](const ViewMessage& msg) {
-                    sessionStore->updateViewMessage(tid, msg);
-                },
-            .onSaveLlmMessages =
-                [sessionStore, tid](const utilxx_base::Json& msgs) {
-                    sessionStore->saveLlmMessages(tid, msgs);
-                },
-        });
+        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session));
     }
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     return session;
@@ -425,23 +507,13 @@ asio::awaitable<std::shared_ptr<Session>>
 
     auto session = std::make_shared<Session>();
     if (sessionStore) {
-        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter);
+        session->restore(
+            std::move(loaded.viewMessages),
+            loaded.msgIdCounter,
+            loaded.lastViewSeq
+        );
         session->replaceMessagesFromJson(loaded.llmMessages);
-        auto tid             = std::string{sessionId};
-        session->setStoreHooks(SessionStoreHooks{
-            .onAppendViewMessage =
-                [sessionStore, tid](const ViewMessage& msg, uint64_t counter) {
-                    sessionStore->appendViewMessage(tid, msg, counter);
-                },
-            .onUpdateViewMessage =
-                [sessionStore, tid](const ViewMessage& msg) {
-                    sessionStore->updateViewMessage(tid, msg);
-                },
-            .onSaveLlmMessages =
-                [sessionStore, tid](const utilxx_base::Json& msgs) {
-                    sessionStore->saveLlmMessages(tid, msgs);
-                },
-        });
+        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session));
     }
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     co_return session;

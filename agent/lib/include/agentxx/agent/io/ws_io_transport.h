@@ -123,6 +123,8 @@ private:
 
     // 重连增量重放状态
     std::atomic<uint64_t>       lastDeltaSeq_{0};
+    /// 已持有的展示历史序号 (计划 STO-4; 由 Sync 快照更新, 重连时经 hello 回传)
+    std::atomic<uint64_t>       lastViewSeq_{0};
     std::string                 lastTailHash_;
     std::string                 helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
     std::string                 helloLanguage_;  // 首次 connect 时的 language, 重连时复用

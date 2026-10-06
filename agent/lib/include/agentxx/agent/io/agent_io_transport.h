@@ -98,6 +98,9 @@ struct WireHello {
     std::string tailHash;
     std::string model;
     std::string language = "en"; ///< 界面/客户端指定使用的语言 (默认 "en", 不支持 auto)
+    /// 已持有的展示历史序号 (计划 STO-4): >0 时服务端按"该序号之后的消息"增量补拉
+    /// (见 WireSyncPayload::incremental), 0 = 未提供 (全量/尾窗同步)
+    uint64_t afterViewSeq = 0;
 };
 
 struct WireHelloAck {

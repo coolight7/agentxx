@@ -358,6 +358,13 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"]    = p.totalMessages;
+    // 展示历史序号 (计划 STO-4): lastViewSeq = 本快照最后一条消息的持久化序号,
+    // 客户端记录后在重连 hello 里回传 (afterViewSeq) 请求增量补拉;
+    // incremental = true 表示本批消息是"追加到已有历史尾部"的增量补拉
+    j["lastViewSeq"] = p.lastViewSeq;
+    if (p.incremental) {
+        j["incremental"] = true;
+    }
     utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& vm : p.messages) {
         arr.push_back(vm.toJson());
@@ -385,6 +392,8 @@ inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
     p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
     p.deltaSeq      = j.value("deltaSeq", uint64_t{0});
+    p.lastViewSeq   = j.value("lastViewSeq", uint64_t{0});
+    p.incremental   = j.value("incremental", false);
     auto msgs       = j.value("messages", utilxx_base::Json::array());
     if (msgs.is_array()) {
         for (const auto& m : msgs) {
@@ -407,9 +416,10 @@ inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
 inline utilxx_base::Json makeHello(
     std::string_view sessionId,
     std::string_view token,
-    uint64_t         lastSeq  = 0,
-    std::string_view tailHash = "",
-    std::string_view language = ""
+    uint64_t         lastSeq      = 0,
+    std::string_view tailHash     = "",
+    std::string_view language     = "",
+    uint64_t         afterViewSeq = 0
 ) {
     utilxx_base::Json j = {
         {"type",      MsgType::Hello},
@@ -424,6 +434,10 @@ inline utilxx_base::Json makeHello(
     }
     if (!language.empty()) {
         j["language"] = language;
+    }
+    // 已持有的展示历史序号 (计划 STO-4): 请求"该序号之后的展示消息"增量补拉
+    if (afterViewSeq > 0) {
+        j["afterViewSeq"] = afterViewSeq;
     }
     return j;
 }

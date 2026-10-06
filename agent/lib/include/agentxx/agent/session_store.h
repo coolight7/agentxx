@@ -61,10 +61,24 @@ public:
         utilxx_base::Json        llmMessages = utilxx_base::Json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
+        /// 库内最大展示消息序号 (计划 STO-4; 供重连增量补拉与继续编号)
+        uint64_t lastViewSeq = 0;
     };
 
     /// 加载指定 session 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)
     LoadedSession loadSession(std::string_view sessionId);
+
+    /// 读取展示历史中序号大于 [afterSeq] 的消息 (计划 STO-4: 断线增量补拉)
+    ///
+    /// - 返回 `{seq, ViewMessage}` 列表, 按 seq 升序; 消息 id 为空的老数据也返回
+    ///   (调用方按需回退全量同步)
+    /// - `limit > 0` 时最多返回 limit 条 (超出时调用方应回退全量/尾窗同步,
+    ///   避免一次补拉过大)
+    /// - 只读连接 (不取写租约); 无数据/打开失败返回空
+    using ViewMessageRow = SequencedViewMessage;
+
+    std::vector<ViewMessageRow>
+        loadViewMessagesAfter(std::string_view sessionId, uint64_t afterSeq, size_t limit = 0);
 
     /// 列举全部持久化会话的摘要 (供会话选择弹窗), 按最近活动时间降序
     /// - 扫描根目录下各 session 目录, 以独立临时连接读取 session.db meta 表
@@ -95,13 +109,16 @@ public:
 
     SessionListPage listSessionsPage(int64_t beforeMs, std::string_view beforeId, uint32_t limit);
 
-    /// 追加一条展示历史消息 (事务: 消息 + msgIdCounter 一起提交)
+    /// 追加一条展示历史消息 (事务: 消息 + msgIdCounter + viewSeqCounter 一起提交)
     /// - msgIdCounter 为追加后会话的计数 (新消息 id 序号), 供重启恢复
+    /// - seq 为该消息的展示历史持久化序号 (见 `LoadedSession::lastViewSeq`);
+    ///   0 表示由库内自增 (老调用方)
     /// - 失败仅记录日志, 不影响内存状态
     void appendViewMessage(
         std::string_view   sessionId,
         const ViewMessage& msg,
-        uint64_t           msgIdCounter
+        uint64_t           msgIdCounter,
+        uint64_t           seq = 0
     );
 
     /// 更新一条已持久化的展示历史消息 (按 msg.id 定位行)

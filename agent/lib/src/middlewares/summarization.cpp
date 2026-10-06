@@ -991,6 +991,8 @@ asio::awaitable<void>
         const auto   newTokens       = countTokens({}, compressedMessages, enableCountThinking);
         session->replaceMessages(std::move(compressedMessages));
         agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
+        // 压缩完成属"事实"变更: 立即落盘 (计划 STO-5 分级), 不等轮末节流窗口
+        session->persistNow("compaction");
 
         if (compacted) {
             // 成功压缩: 记录本次压缩后的消息条数, 供后续轮次做冷却判断
@@ -1190,8 +1192,8 @@ asio::awaitable<bool>
 
     const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
     session->replaceMessages(std::move(compressedMessages));
-    // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存兜底)
-    session->saveLlmMessages();
+    // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存兜底; 计划 STO-5 分级)
+    session->persistNow("manual-compaction");
     const auto durationMs
         = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - startTime

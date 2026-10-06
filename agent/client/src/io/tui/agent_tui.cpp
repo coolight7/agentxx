@@ -2805,6 +2805,12 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
+    // 增量补拉 (计划 STO-4): 服务端只回补"客户端已持有序号之后"的消息,
+    // 按 msg.id 去重后追加到本地历史尾部, 不重置本地窗口 (也不清空待输入等状态)
+    if (payload.incremental) {
+        onIncrementalSync(payload);
+        return;
+    }
     {
         // 单次 mutate (内部加锁): 不得在持锁状态下再调 mutate() ——
         // 如果先 lock_guard 再调 mutate() 会对同一非递归 mutex 二次加锁,
@@ -2882,6 +2888,50 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
 // ---------------------------------------------------------------------------
 // onTurnResult / onContextStats (client 线程)
 // ---------------------------------------------------------------------------
+
+/// 增量补拉 (计划 STO-4): 追加服务端回补的展示消息
+///
+/// - 按 msg.id 去重 (既有历史里已存在则跳过): 断线期间经 delta 已收到的消息
+///   不会重复插入
+/// - 历史窗口起点保持不变 (只追加), 总数按服务端给出的值更新
+/// - 若本地历史为空 (如首次接入即拿到增量, 不应发生), 退化为整体替换语义,
+///   由调用方按普通 Sync 处理
+void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& payload) {
+    bool applied = false;
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        if (!st.messages.empty()) {
+            std::set<std::string> knownIds;
+            for (const auto& m : st.messages) {
+                if (m && !m->id.empty()) {
+                    knownIds.insert(m->id);
+                }
+            }
+            for (const auto& vm : payload.messages) {
+                if (!vm.id.empty() && knownIds.count(vm.id) != 0) {
+                    continue;
+                }
+                auto msg = std::make_shared<TUIMessage>(vm);
+                if (isBlankContentMessage(*msg)) {
+                    continue;
+                }
+                st.messages.push_back(std::move(msg));
+            }
+            st.historyTotal = payload.totalMessages != 0 ? payload.totalMessages
+                                                        : st.historyTotal;
+            applied = true;
+        }
+    }
+    if (applied) {
+        postRedraw();
+        return;
+    }
+    // 本地无历史 (异常组合): 按普通 Sync 的整体替换语义处理
+    agentxx::agent::WireSyncPayload full = payload;
+    full.incremental                     = false;
+    onSync(full);
+}
 
 void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*result*/) {
     {

@@ -72,8 +72,10 @@ struct WorktreeBinding {
 /// - 所有回调仅做"尽力而为"持久化, 内部已捕获异常并记录日志, 不中断主流程
 struct SessionStoreHooks {
     /// 追加展示历史消息后调用 (msg 已含分配 id; msgIdCounter 为追加后计数,
-    /// 供重启恢复时延续 id 分配)
-    std::function<void(const ViewMessage&, uint64_t msgIdCounter)> onAppendViewMessage;
+    /// 供重启恢复时延续 id 分配; seq 为该消息的持久化序号, 见
+    /// [Session::lastViewSeq], 供重连增量补拉)
+    std::function<void(const ViewMessage&, uint64_t msgIdCounter, uint64_t seq)>
+        onAppendViewMessage;
 
     /// 更新一条已持久化历史消息后调用 (msg 已含分配 id; 如 tool 结果回填)
     std::function<void(const ViewMessage&)> onUpdateViewMessage;
@@ -297,7 +299,17 @@ public:
     /// 从持久化状态恢复: 重建链式哈希 (对不含 id 的消息内容, 与
     /// appendViewMessage 语义一致) 并恢复 msgIdCounter
     /// - 不触发持久化回调 (恢复本身不产生新的写入)
-    void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter);
+    /// - [lastViewSeq] 为库内最大展示消息序号 (见 [lastViewSeq]), 供重连
+    ///   增量补拉继续编号; 0 = 老数据未记录 (按 0 起算)
+    void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq = 0);
+
+    /// 展示历史持久化序号 (计划 STO-4; 单调递增, 每条消息一个)
+    /// - 与 deltaSeq (WireDelta 流序号) 相互独立: 本序号标识"持久化历史里的第几条"
+    /// - 客户端在 Sync 里记录它, 重连时经 WriteHello.afterViewSeq 请求增量补拉
+    uint64_t lastViewSeq() const {
+        assertIoThread();
+        return viewSeqCounter_;
+    }
 
     /// 持久化 LLM 上下文消息 (每轮对话结束时由 BaseAgent 调用)
     /// - 未绑定回调时为 no-op
@@ -310,6 +322,34 @@ public:
     /// - 由消息写入方 (节点/中间件) 经 EventBridge 触发: 进程在轮次中途被杀/崩溃
     ///   时, 已结算的上下文最多丢失一个节流窗口 (kPersistThrottleMs) 而非整轮
     void requestSaveLlmMessages();
+
+    /// 最近一次已提示的持久化失败原因 (计划 STO-9; 空 = 尚未提示过)
+    /// - 同一原因只提示一次, 避免每次写入失败都刷屏
+    std::string lastPersistWarning() const {
+        assertIoThread();
+        return lastPersistWarning_;
+    }
+
+    /// 记录"已提示"的持久化失败原因 (由持久化回调在推送警告后调用)
+    void setLastPersistWarning(std::string reason) {
+        assertIoThread();
+        lastPersistWarning_ = std::move(reason);
+    }
+
+    // -------------------------------------------------------------------
+    // 持久化语义分级 (计划 STO-5; 仅 io 线程)
+    //
+    // - persistNow: 用户输入 / 工具结算 / 压缩完成 / 轮次终态等"事实"立即落盘
+    // - persistThrottled: 展示历史与统计保持节流 (默认路径)
+    // 两者都记录原因 (Debug/Trace 日志), 便于排查"磁盘写入从哪里来"
+    // 未启用持久化 (内存模式) 时为 no-op, 不产生日志噪音。
+    // -------------------------------------------------------------------
+
+    /// 立即落盘: LLM 上下文 + 展示历史待落盘操作 (失败由持久化降级提示负责)
+    void persistNow(std::string_view reason);
+
+    /// 节流落盘: 展示历史按既有窗口压队, LLM 上下文超窗口时立即保存
+    void persistThrottled(std::string_view reason);
 
     /// 立即补存节流窗口内未落盘的 viewMessages 操作 (轮末统一调用)
     /// - 保证正常结束的轮次其 view 消息全部落库, 与旧有逐条即时落盘语义收敛一致;
@@ -407,6 +447,7 @@ private:
         bool     isAppend = false;
         size_t   index    = 0; ///< viewMessages 下标 (isAppend/isUpdate 均为该条消息)
         uint64_t counter  = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
+        uint64_t seq      = 0; ///< isAppend 时的展示历史持久化序号 (见 [lastViewSeq])
     };
 
     /// 持久化回调 (可选; 为空时不落库)
@@ -426,6 +467,8 @@ private:
     mutable utilxx_base::Json llmMessagesJsonCache_ = utilxx_base::Json::array();
     std::string                                   modelName_;
     std::string                                   language_;
+    /// 最近一次已提示的持久化失败原因 (计划 STO-9; 去重)
+    std::string lastPersistWarning_;
 
     // -------------------------------------------------------------------
     // LLM 上下文 (唯一权威; 仅 io 线程)
@@ -444,6 +487,9 @@ private:
 
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     uint64_t                                      msgIdCounter_ = 0;
+
+    /// 展示历史持久化序号计数 (计划 STO-4; 每次 appendViewMessage 递增)
+    uint64_t viewSeqCounter_ = 0;
 
     /// 上下文版本号 (每次变更 +1)
     uint64_t messagesVersion_ = 0;

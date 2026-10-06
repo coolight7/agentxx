@@ -12,7 +12,14 @@ namespace io {
 // ---------------------------------------------------------------------------
 
 utilxx_base::Json toJson(const WireHello& msg) {
-    return makeHello(msg.sessionId, msg.token, msg.lastSeq, msg.tailHash, msg.language);
+    return makeHello(
+        msg.sessionId,
+        msg.token,
+        msg.lastSeq,
+        msg.tailHash,
+        msg.language,
+        msg.afterViewSeq
+    );
 }
 
 utilxx_base::Json toJson(const WireHelloAck& msg) {
@@ -211,6 +218,7 @@ WireHello helloFromJson(const utilxx_base::Json& j) {
     hello.lastSeq   = j.value("lastSeq", uint64_t{0});
     hello.tailHash  = j.value("tailHash", std::string{});
     hello.language  = j.value("language", std::string{});
+    hello.afterViewSeq = j.value("afterViewSeq", uint64_t{0});
     return hello;
 }
 

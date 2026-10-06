@@ -567,6 +567,8 @@ protected:
     void onContextStats(const agentxx::agent::WireContextStats& stats) override;
     /// 输入受理回执 (计划 LOOP-3): 被拒绝时提示用户; 其余状态由队列展示承担
     void onInputAck(const agentxx::agent::WireInputAck& ack);
+    /// 增量补拉 (计划 STO-4): 追加服务端回补的展示消息 (按 msg.id 去重)
+    void onIncrementalSync(const agentxx::agent::WireSyncPayload& payload);
 
 private:
 

@@ -15,6 +15,9 @@
 | STO-2 | schema 版本和相邻迁移链 | P0 | 完成（已构建 + 测试通过） | `agent/lib/src/agent/session_store.cpp`（`kSchemaVersion`/`applyMigrationStep`/备份） |
 | STO-8 | 用量账本 | P1 | 完成（已构建 + 测试通过） | `session_store`（usage 表/聚合）、`nodes/modelcall.cpp`（记录点） |
 | STO-11 | settings_db 乐观版本 | P1 | 完成（已构建 + 测试通过） | `agent/lib/{include/agentxx/util,src/util}/settings_db.*` |
+| STO-4 | durable 事件流与实时 delta 分开（限定） | P1 | 完成（已构建 + 测试通过） | `view_message.seq` 显式序号 + `hello.afterViewSeq` 增量补拉；模块 `session_sync` |
+| STO-5 | 持久化语义分级与 flush | P1 | 完成（已构建 + 测试通过） | `Session::persistNow` / `persistThrottled`（用户输入/工具结算/压缩完成/轮次终态立即落盘） |
+| STO-9 | 持久化降级可见（限定） | P1 | 完成（已构建 + 测试通过） | `SessionStore` 写失败原因 + 会话侧 `persistNow` 提示一次（`MessageUITip`） |
 | LOOP-1 | 持久化收件箱两段状态 | P0 | 完成（已构建 + 测试通过） | `session_store`（`session_input` 表 / schema v2）、`session_server_agent_io`（受理落库 + 启动恢复） |
 | LOOP-2 | `next-step` / `next-turn` / `inject` | P0 | 完成（已构建 + 测试通过） | `wire_protocol`（`delivery`）、`context`（待注入输入）、`session_context`（`drainPendingSessionInputs`）、`modelcall` |
 | LOOP-3 | 投递结果显式化 | P1 | 完成（已构建 + 测试通过） | `WireInputAck` + `InputStatus` / `InputRejectReason`；TUI 回执提示 |
@@ -444,7 +447,6 @@
 
 ## 待完成（后续阶段）
 
-- STO-4/STO-5/STO-9：`view_message.seq` + `hello.afterSeq` 增量补拉、落盘原因分级、写失败提示。
 - PRM-1/PRM-2/PRM-5/PRM-7：提示词稳定段/动态段、段落 `order`、技能优先级与同名裁决、
   请求体结构 + 稳定段哈希断言。CTX-7（附件引用）计划本身标注"需进一步理解具体实施内容"，暂缓。
 - TOOL-16：按规范化路径排队执行（与 TOOL-1 并行化配套）。
@@ -521,6 +523,72 @@
 - 阶段 I（SEC-2 / SEC-5 / TST-10）完成后提交：`权限判定理由与执行前目标复验 (SEC-2/SEC-5/TST-10)`。
 - 阶段 J（LLM-2 / LLM-3）完成后提交：`LLM 错误分类、退避策略与溢出压缩重试 (LLM-2/LLM-3)`。
 - 阶段 K（LOOP-1 / LOOP-2 / LOOP-3 / LOOP-4 / LOOP-11）完成后提交：`输入投递: 持久化收件箱、投递模式与队列状态机 (LOOP-1/2/3/4/11)`。
+- 阶段 L（STO-4 / STO-5 / STO-9）完成后提交：`展示历史序号与增量补拉、落盘分级、写失败降级提示 (STO-4/STO-5/STO-9)`。
+
+## 阶段 L：持久化语义与断线增量补拉（STO-4/STO-5/STO-9，2026-10-06）
+
+计划依据：`plan.md` §4（持久化、事务和崩溃恢复）、§16.2 批次 B 的 STO 项。
+
+已完成：
+
+- **STO-5 落盘分级**（`Session::persistNow` / `Session::persistThrottled`）：
+  - `persistNow(reason)`：上下文 + 展示历史待落盘队列一起立即写；
+    `persistThrottled(reason)`：上下文按既有节流窗口（首次/超窗口立即写），展示历史只补刷窗口外的积压；
+    两者都记 Debug/Trace 日志（含原因），内存模式（无持久化回调）为 no-op、不产日志噪音。
+  - 调用点：**用户输入**（`BaseAgent::runTurnAsync` 写入 user 消息后, reason `user-input`）、
+    **工具结算**（EventBridge 的 channel 写入批次含 tool 角色时, reason `tool-settle`；纯模型输出仍按节流
+    `llm-output`）、**压缩完成**（`SummarizationMiddlewareHandle` 轮内压缩 `compaction` 与手动压缩
+    `manual-compaction`）、**轮次终态**（`turn-end`）、恢复前落盘（`before-resume`）。
+- **STO-9 持久化降级可见**（限定范围）：
+  - `SessionStore` 在消息写路径失败时记录根因到 `lastWriteError()`（只记根因、不带操作名前缀，
+    使同一故障下"追加消息"与"保存上下文"两条路径的原因一致, 便于去重）；
+  - 会话持久化回调（`makeSessionStoreHooks`）每次写入后检查写失败, 首次失败推一条
+    `WireDelta::MessageUITip`（Warning, 文案 `Persistence degraded: ...`）, 同一原因只提示一次,
+    恢复后不重复提示; 提示走增量通道而不改写会话历史（避免与持久化回调递归）。
+- **STO-4 展示历史序号与增量补拉**（限定范围：只做序号 + `hello.afterViewSeq`）：
+  - 展示消息序号改为**会话分配**并显式落库：`Session::lastViewSeq()` 单调递增，
+    `view_message.seq` 显式写入（老调用方 seq=0 时仍走库内自增），meta 增加 `viewSeqCounter`
+    （老库无记录时按 `MAX(seq)` 兜底）；`SessionStore::LoadedSession.lastViewSeq` 供恢复续编号；
+  - `SessionStore::loadViewMessagesAfter(sessionId, afterSeq, limit)`：只读连接按序号取差量
+    （含解析失败跳过单行、高版本库拒绝、limit 截断）；
+  - `WireHello.afterViewSeq` + `WireSyncPayload{lastViewSeq, incremental}`：
+    服务端握手同步策略按代价排序 —— ① delta 重放（客户端 lastSeq 仍在缓冲内，传输最小）
+    → ② 增量补拉（序号落在服务端历史范围内且差量 ≤ `kIncrementalReplayMaxMessages`=512）
+    → ③ 全量/尾窗同步兜底（首次接入、序号超前、内存模式、差量过大）；
+    delta 缓冲溢出（原实现无条件全量）现在也优先走增量补拉；老数据（无 msg id）无法去重时回退全量；
+  - 客户端：WS 传输在收到 Sync 时记录 `lastViewSeq` 并在重连 hello 中回传（切会话时复位），
+    TUI 收到 `incremental` 载荷时按 `msg.id` 去重后追加到本地历史尾部（不重置窗口与其它界面状态）。
+
+测试：
+
+- 新模块 `persist_semantics`（25 项断言）：落盘分级（首条立即写、窗口内合并、`persistNow` 不受窗口限制、
+  内存模式 no-op）、序号恢复与增量查询联调、写失败提示一次（外部持锁模拟，`ForeignWriterLock`）+
+  同原因不重复 + 恢复后不提示 + 失败期间的消息确实未落盘。
+- 新模块 `session_sync`（30 项断言）：增量补拉（序号命中只补差量 / 已最新回空增量 / 序号超前回退常规同步 /
+  未提供序号保持旧行为 / delta 有效时优先 delta 重放不发快照）、内存模式无持久化时回退常规同步、
+  重启后（会话重建）序号继续且只回补新消息。
+- `session_schema` 增补序号与增量查询用例（显式序号写入、`lastViewSeq` 恢复、`loadViewMessagesAfter`
+  的区间/limit/更新不改序号/老库兜底/不存在会话不建目录），模块 91/0；
+  `session_persistence` 同步 `SessionStoreHooks` 新签名（621/0）。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli`（含 TUI）均 exit=0，无新增 error/warning。
+- 测试：`persist_semantics` 25/0、`session_sync` 30/0、`session_schema` 91/0、`session_persistence` 621/0、
+  `input_delivery` 78/0、`wire_roundtrip` 191/0、`remote_agent` 453/0、`agent` 198/0、
+  `summarization` 445/0、`toolcall_parallel` 48/0、`cancel` 45/0、`message_supplement` 95/0、
+  `usage_ledger` 21/0、`settings_db` 73/0、`permission` 45/0、`llm_error` 65/0、`boundaries` 8/0。
+
+注意事项 / 与计划的差异：
+
+- 计划 STO-4 写"`view_message` 加 seq 列"：库内 `seq` 列（AUTOINCREMENT 主键）原本就存在，
+  本次把它改为**会话分配并显式写入**，并补 `meta.viewSeqCounter` 与 `hello.afterViewSeq` 补拉路径；
+  不新增 `event` 表、不做类型化事件、不建投影器（计划的限定范围）。
+- 增量补拉的安全性依赖"消息 id 稳定且 append-only"：客户端按 `msg.id` 去重，服务端遇到无 id 的老数据
+  直接回退全量同步；已被就地更新的历史消息（tool 结果回填）不改序号，客户端若持有旧内容则不会收到补发
+  （与 delta 重放路径同一限制，属已知取舍）。
+- STO-9 只做"首次写失败提示一次"，不做 Info 侧边栏/状态栏的降级标记（计划的限定范围）；
+  写失败提示是增量提示消息，不写会话历史（避免与持久化回调递归）。
 
 ## 阶段 K：输入投递（LOOP-1/2/3/4/11，2026-10-06）
 

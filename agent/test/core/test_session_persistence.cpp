@@ -1227,7 +1227,7 @@ static void testSessionDestructorThreadSafety() {
 
             sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
                 .onAppendViewMessage =
-                    [&](const agentxx::agent::ViewMessage&, uint64_t) {
+                    [&](const agentxx::agent::ViewMessage&, uint64_t, uint64_t) {
                         hookCalled = true;
                     },
             });
@@ -1254,7 +1254,7 @@ static void testSessionDestructorThreadSafety() {
 
         sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
             .onAppendViewMessage =
-                [&](const agentxx::agent::ViewMessage&, uint64_t) {
+                [&](const agentxx::agent::ViewMessage&, uint64_t, uint64_t) {
                     hookCalledOffThread = true;
                 },
         });
@@ -1454,7 +1454,7 @@ static TestResult testPendingViewOpsIndexReplay() {
         std::vector<std::pair<bool, std::string>> replayed; // (isAppend, text)
         sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
             .onAppendViewMessage =
-                [&](const V& m, uint64_t) {
+                [&](const V& m, uint64_t, uint64_t) {
                     replayed.emplace_back(true, m.text);
                 },
             .onUpdateViewMessage =
@@ -1510,7 +1510,7 @@ static TestResult testPendingViewOpsIndexReplay() {
         int updateCalls = 0;
         sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
             .onAppendViewMessage =
-                [&](const V&, uint64_t) {
+                [&](const V&, uint64_t, uint64_t) {
                     ++appendCalls;
                 },
             .onUpdateViewMessage =

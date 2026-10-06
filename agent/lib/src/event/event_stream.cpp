@@ -238,6 +238,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         return;
     }
     bool hasLLMOutput = false;
+    // 本批是否含已结算的工具结果 (计划 STO-5: 工具结算属"事实", 立即落盘)
+    bool hasToolResult = false;
     for (const auto& jm : value) {
         auto role = jm.value("role", std::string{});
         if (role == "assistant") {
@@ -374,6 +376,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 }
             }
         } else if (role == "tool") {
+            hasToolResult = true;
             auto content = jm.value("content", std::string{});
             // 注意: 消息 JSON 由 neograph::ChatMessage::to_json 序列化, tool 结果
             // 的字段名为 snake_case (tool_name/tool_call_id); 兼容读取 camelCase
@@ -463,7 +466,13 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     // 使进程在轮次中途被杀/崩溃时已结算的上下文最多丢一个节流窗口
     // (Session::kPersistThrottleMs), 而非整轮。
     // - 上下文写入 (含系统提示词更新 / 压缩回写) 不产生本事件, 因此不会重复落盘
-    session_->requestSaveLlmMessages();
+    // - 分级 (计划 STO-5): 工具结算立即落盘 (结果体积大且是后续推理的输入),
+    //   纯模型输出保持节流 (窗口内合并, 轮末权威保存兜底)
+    if (hasToolResult) {
+        session_->persistNow("tool-settle");
+    } else {
+        session_->persistThrottled("llm-output");
+    }
 
     // llm node 执行完成，推送上下文统计更新
     if (hasLLMOutput && io_ && session_->contextStats) {

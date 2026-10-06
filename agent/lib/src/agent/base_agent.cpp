@@ -1368,6 +1368,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         session->appendMessages({std::move(userMsg)}, false);
     }
 
+    // 用户输入已进入上下文: 立即落盘 (计划 STO-5: 用户输入属"事实", 不能让
+    // "用户已看到自己的消息、磁盘上却没有" 的窗口存在)
+    session->persistNow("user-input");
+
     // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
     eventBridge->handleTurnStart();
 
@@ -1550,10 +1554,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
     // - 轮内已由 EventBridge 按消息结算节流落盘 (requestSaveLlmMessages),
     //   此处为权威终态同步; 进程中途被杀最多丢一个节流窗口 (<3s) 的增量
-    session->saveLlmMessages();
-    // 补存节流窗口内尚未落库的 view 消息操作, 保证正常结束的轮次其展示历史
-    // 全部落库 (含刚插入的轮次统计系统提示; 仅进程中途被杀才可能丢失窗口内 <3s 的尾部消息)
-    session->flushViewMessages();
+    // 轮次终态: 上下文 + 展示历史立即落盘 (计划 STO-5: 轮次终态属"事实")
+    session->persistNow("turn-end");
 
     eventBridge->emitDelta(WireDelta{
         .tailHash     = session->chainHash.tailHex(),

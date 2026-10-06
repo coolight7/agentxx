@@ -232,6 +232,13 @@ private:
     ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取
     /// - tailCount==0 时等价 buildFullSync() (全量, fromIndex=0)
     WireSyncPayload          buildTailSync(size_t tailCount);
+    /// 构建增量补拉载荷 (计划 STO-4): 仅含 [afterSeq] 之后的展示消息
+    /// - `incremental = true`: 客户端按 msg.id 去重后追加到本地历史尾部
+    /// - 消息 id 为空的老数据不可去重: 此时返回全量同步 (调用方回退)
+    WireSyncPayload buildIncrementalSync(
+        std::vector<SequencedViewMessage> rows,
+        uint64_t                          afterSeq
+    );
     std::shared_ptr<Session> session();
 
     /// 构建模型信息响应 (WireModelInfo): 当前会话模型名 + 可用模型列表 +
@@ -435,6 +442,9 @@ private:
     uint64_t                             nextCollectId_ = 1;
     /// 收件箱条目自增序号 (与队列条目 id 无关, 仅用于恢复时的稳定 id)
     uint64_t nextInboxId_ = 1;
+    /// 本端点实例受理过的收件箱条目 id (启动恢复时用于跳过"本进程刚受理、还没轮到
+    /// 执行"的条目: 它们不是上次进程的遗留, 不该被当成待确认项)
+    std::set<std::string, std::less<>> locallyAdmittedInputs_;
 
     // 唤醒 channel (驱动循环等待新输入/事件)
     std::shared_ptr<WakeChannel> wakeChannel_;

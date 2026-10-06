@@ -524,6 +524,14 @@ struct SessionPendingInput {
     int64_t                      createdAtMs = 0;
 };
 
+/// 带持久化序号的展示历史消息 (计划 STO-4)
+/// - `seq` 为该消息在会话库 `view_message.seq` 中的序号 (会话内单调递增)
+/// - 断线重连增量补拉时按序号取差量 (见 SessionStore::loadViewMessagesAfter)
+struct SequencedViewMessage {
+    uint64_t    seq = 0;
+    ViewMessage message;
+};
+
 struct WireSyncPayload {
     /// 本批 messages 首条在服务端完整 viewMessages 中的绝对下标
     /// - 全量同步: 0
@@ -545,6 +553,17 @@ struct WireSyncPayload {
 
     /// 消息队列状态 (取值见 SessionQueueState; 空 = 旧服务端未提供)
     std::string queueState;
+
+    /// 本快照最后一条展示消息的持久化序号 (计划 STO-4; 0 = 无消息/未提供)
+    /// - 客户端记录后在重连 hello 中回传 (`WireHello::afterViewSeq`), 请求
+    ///   "该序号之后"的增量补拉, 避免重连时重传整个尾窗
+    uint64_t lastViewSeq = 0;
+
+    /// 本批消息是否为**增量补拉** (计划 STO-4)
+    /// - true: `messages` 是既有历史尾部的追加内容, 客户端应按 msg.id 去重后追加,
+    ///   不得整体替换本地历史
+    /// - false (默认): 全量或尾窗快照, 客户端整体替换本地历史
+    bool incremental = false;
 };
 
 // ---------------------------------------------------------------------------

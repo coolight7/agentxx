@@ -29,6 +29,10 @@
 namespace agentxx {
 namespace agent {
 
+/// 增量补拉单次最多回补的展示消息条数 (计划 STO-4)
+/// - 超过该值说明客户端离线时间很长, 回退全量/尾窗同步, 避免一次传输过大
+static constexpr size_t kIncrementalReplayMaxMessages = 512;
+
 // ---------------------------------------------------------------------------
 // 宿主约定事件 (host convention events)
 //
@@ -796,6 +800,11 @@ void SessionServerAgentIO::flushCollectWindow() {
 }
 
 void SessionServerAgentIO::persistInputAdmitted(const MessageQueueItem& item, uint64_t requestId) {
+    if (!item.id.empty()) {
+        // 记录"本实例已受理": 启动恢复时据此跳过本进程刚受理、尚未轮到执行的条目
+        // (它们不是上个进程的遗留, 不该被当成待确认项而暂停队列)
+        locallyAdmittedInputs_.insert(item.id);
+    }
     auto agent = agent_.lock();
     if (!agent || !agent->agentContext || !agent->agentContext->sessions
         || !agent->agentContext->sessions->sessionStore || item.id.empty()) {
@@ -884,7 +893,26 @@ void SessionServerAgentIO::recoverPendingInputs() {
     if (rows.empty()) {
         return;
     }
+    size_t recoveredCount = 0;
     for (auto& row : rows) {
+        // 跳过"本进程已受理"的条目: 它们可能只是还没轮到执行 (启动恢复与
+        // 客户端首次输入可能交错), 不应被当成待确认项而暂停队列
+        if (locallyAdmittedInputs_.count(row.id) != 0) {
+            continue;
+        }
+        {
+            // 队列里已在等待的条目同理 (防御: 恢复只在启动时执行一次)
+            const bool queued = std::any_of(
+                messageQueue_.begin(),
+                messageQueue_.end(),
+                [&](const MessageQueueItem& it) {
+                    return it.id == row.id;
+                }
+            );
+            if (queued) {
+                continue;
+            }
+        }
         MessageQueueItem item;
         item.id = row.id;
         item.delivery = row.delivery.empty() ? std::string{InputDelivery::NextTurn} : row.delivery;
@@ -922,8 +950,11 @@ void SessionServerAgentIO::recoverPendingInputs() {
             continue;
         }
         messageQueue_.push_back(std::move(item));
+        ++recoveredCount;
     }
-    if (messageQueue_.empty()) {
+    // 恢复只在本端点启动时执行一次: 之后不再需要"本进程已受理"的记录 (有界内存)
+    locallyAdmittedInputs_.clear();
+    if (recoveredCount == 0) {
         return;
     }
     // 恢复的输入不自动执行: 置暂停由用户确认 (发新输入解除暂停, 或删除条目),
@@ -932,7 +963,7 @@ void SessionServerAgentIO::recoverPendingInputs() {
     XX_LOGW(
         "[session_ctrl] recovered {} pending input(s) after restart; queue paused until user "
         "confirms (session={})",
-        messageQueue_.size(),
+        recoveredCount,
         config_.sessionId
     );
     sendMessageQueueUpdate();
@@ -1392,27 +1423,75 @@ void SessionServerAgentIO::handleHello(
 
     std::vector<WireDelta>            replayDeltas;
     std::optional<WireSyncPayload>    replaySync;
+    /// 客户端 lastSeq 已超出 delta 缓冲: 必须下发一份快照 (全量或增量补拉)
+    bool                              deltaBufferMissed = false;
     std::string                       tailHash;
     std::vector<WireInterruptRequest> pendingInterrupts;
 
     auto sess = session();
     tailHash  = sess ? sess->getHashInfo().tailHex : std::string{};
 
+    // 同步策略 (按代价从低到高, 先满足者胜出):
+    // ① delta 重放: 实时重连 (客户端 lastSeq 仍在缓冲内) 时传输量最小
+    // ② 增量补拉 (计划 STO-4): 客户端给出已持有的展示历史序号时只补差量
+    // ③ 全量/尾窗同步: 首次接入或序列不匹配时的兜底
     if (hello.lastSeq > 0) {
         auto deltas = deltasSince(hello.lastSeq);
         if (deltas.has_value()) {
             replayDeltas = std::move(deltas.value());
         } else {
-            // delta 缓冲溢出回退全量 sync: 保证重连后客户端与服务端严格一致
-            // (罕见路径, 不走尾窗; 客户端收到后整体重置历史窗口)
-            replaySync = buildFullSync();
+            deltaBufferMissed = true;
         }
-    } else {
-        // 首次接入: 按 initialSyncTailCount 决定全量或尾窗同步。
-        // 尾窗同步时客户端仅持有末尾窗口, 上方更早历史由其分页拉取
-        // (WireGetViewMessages), 避免长会话恢复时全量传输
+        // 缓冲溢出 (客户端离线过久): 落到 ②/③ 处理, 不再无条件下发全量
+        // 但必须给出快照 (客户端在等): 由下方兜底保证
+    }
+
+    // 增量补拉 (计划 STO-4): 客户端给出已持有的展示历史序号时只补差量
+    // - 优先于全量/尾窗同步, 但只有在序号落在服务端历史范围内时可用
+    //   (序号超前说明客户端持有的是另一份历史, 如服务端会话被重建/换会话)
+    // - 差量条数超过 [kIncrementalReplayMaxMessages] 时回退常规同步,
+    //   避免长时间离线后一次传输过大
+    // - 需要会话库可读 (序号是持久化序号): 内存模式 (无 SessionStore) 回退常规同步
+    if (replayDeltas.empty() && hello.afterViewSeq > 0 && sess
+        && hello.afterViewSeq <= sess->lastViewSeq()) {
+        auto agent = agent_.lock();
+        auto store = (agent && agent->agentContext && agent->agentContext->sessions)
+                         ? agent->agentContext->sessions->sessionStore
+                         : nullptr;
+        if (store) {
+            auto rows = store->loadViewMessagesAfter(
+                config_.sessionId,
+                hello.afterViewSeq,
+                kIncrementalReplayMaxMessages + 1
+            );
+            if (rows.size() <= kIncrementalReplayMaxMessages) {
+                replaySync = buildIncrementalSync(
+                    std::move(rows),
+                    static_cast<uint64_t>(hello.afterViewSeq)
+                );
+            } else {
+                XX_LOGD(
+                    "[session_ctrl] incremental replay too large ({} rows > {}), fall back to "
+                    "full/tail sync (session={})",
+                    rows.size(),
+                    kIncrementalReplayMaxMessages,
+                    config_.sessionId
+                );
+            }
+        }
+    }
+
+    // 兜底: 首次接入或 ①/② 均不可用 → 按 initialSyncTailCount 决定全量或尾窗同步。
+    // 尾窗同步时客户端仅持有末尾窗口, 上方更早历史由其分页拉取
+    // (WireGetViewMessages), 避免长会话恢复时全量传输
+    // - delta 缓冲溢出 (deltaBufferMissed) 时客户端在等一份快照, 即使当前没有
+    //   消息也必须下发 (空全量), 否则客户端握手后一直等不到同步
+    if (!replaySync.has_value() && replayDeltas.empty()
+        && (deltaBufferMissed || hello.lastSeq == 0)) {
         if (sess && sess->viewMessageCount() > 0) {
             replaySync = buildTailSync(config_.initialSyncTailCount);
+        } else if (deltaBufferMissed) {
+            replaySync = buildFullSync();
         }
     }
 
@@ -1991,7 +2070,8 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
         p.tailHash      = sess->getHashInfo().tailHex;
         p.totalMessages = p.messages.size();
         // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
-        p.deltaSeq = sess->deltaSeq;
+        p.deltaSeq    = sess->deltaSeq;
+        p.lastViewSeq = sess->lastViewSeq();
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     p.queueState   = std::string{sessionQueueStateText(queueState_)};
@@ -2018,8 +2098,54 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     p.tailHash         = sess->getHashInfo().tailHex;
     // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
     p.deltaSeq     = sess->deltaSeq;
+    p.lastViewSeq  = sess->lastViewSeq();
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     p.queueState   = std::string{sessionQueueStateText(queueState_)};
+    return p;
+}
+
+WireSyncPayload SessionServerAgentIO::buildIncrementalSync(
+    std::vector<SequencedViewMessage> rows,
+    uint64_t                          afterSeq
+) {
+    WireSyncPayload p;
+    p.incremental = true;
+    auto sess     = session();
+    if (!sess) {
+        // 会话不可用 (已释放): 回退全量同步语义 (客户端整体重置)
+        return buildFullSync();
+    }
+    // 老数据 (无 msg id) 无法在客户端去重: 回退全量同步
+    for (const auto& row : rows) {
+        if (row.message.id.empty()) {
+            XX_LOGD(
+                "[session_ctrl] incremental replay unavailable: message without id (seq={}, session={})",
+                row.seq,
+                config_.sessionId
+            );
+            return buildFullSync();
+        }
+    }
+    const auto total = sess->viewMessageCount();
+    p.messages.reserve(rows.size());
+    for (auto& row : rows) {
+        p.messages.push_back(std::move(row.message));
+    }
+    // 追加位置: 本批消息在服务端完整 viewMessages 中的起始绝对下标
+    // (增量补拉时必然位于末尾, 条数不超过服务端总量)
+    p.fromIndex     = total > p.messages.size() ? total - p.messages.size() : 0;
+    p.totalMessages = total;
+    p.tailHash      = sess->getHashInfo().tailHex;
+    p.deltaSeq      = sess->deltaSeq;
+    p.lastViewSeq   = sess->lastViewSeq();
+    p.messageQueue  = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+    p.queueState    = std::string{sessionQueueStateText(queueState_)};
+    XX_LOGD(
+        "[session_ctrl] incremental replay {} message(s) after seq {} (session={})",
+        p.messages.size(),
+        afterSeq,
+        config_.sessionId
+    );
     return p;
 }
 
