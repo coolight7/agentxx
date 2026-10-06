@@ -28,7 +28,13 @@
 | PRM-7 | 提示词和请求体快照（限定：结构断言 + 稳定段哈希） | P1 | 完成（已构建 + 测试通过） | 测试模块 `prompt_stability` / `prompt_stability_io` |
 | PRM-5 | 技能优先级和同名裁决 | P1 | 完成（已构建 + 测试通过） | `middlewares/skill.{h,cpp}`（`SkillDirEntry` 优先级 + 同名裁决 + 来源展示） |
 | CTX-7 | 附件引用而不是反复内联 Base64 | P1 | 待完成（计划标注"需进一步理解实施内容"，先不动） | — |
-| STO-12 | 会话检索和标题 | P1 | 存储层完成（界面入口待接） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions` |
+| STO-12 | 会话检索和标题 | P1 | 完成（含协议/TUI 入口，见阶段 W） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions`；`WireRenameSession` 等 |
+| STO-12b / RET-1a | 会话检索与改名的协议 + TUI 入口 | P1 | 完成（已构建 + 测试通过） | `wire_protocol`（`keyword`/重命名消息/`snippet`）、`session_server_agent_io`（`listSessionsFor`/`handleRenameSession`）、TUI 会话弹窗检索行 + `Ctrl+R` 改名；模块 `session_admin`、`tui_surface` |
+| PRO-4 | Wire 协议字段清单（生成物 + 新鲜度门禁） | P1 | 完成（已构建 + 测试通过） | `agent/schema/wire-schema.json` + `docs/zh-cn/design/wire-protocol-fields.md`；模块 `wire_schema` |
+| PRO-5 | 连接阶段与错误分类 | P1 | 完成（已构建 + 测试通过） | `WireConnectionStage` + 传输 `stage()/setStage()` + 端点未握手拒绝 + `MessageNotFound`；模块 `input_delivery`、`remote_agent` |
+| TST-2 | Wire 往返与 schema 一致性 | P0 | 完成（已构建 + 测试通过） | 模块 `wire_roundtrip` + `wire_schema`（实现一致性、覆盖度） |
+| LLM-7 | 消费端退出取消 | P1 | 完成（已构建 + 测试通过） | `agentxx/nodes/provider_call_scope.h` + `nodes/modelcall.cpp`；模块 `provider_call_scope` |
+| TST-9 | 测试隔离、耗时与脱敏 | P1 | 完成（已构建 + 测试通过） | `test.cpp`（每模块耗时 + 清凭据环境）、`test_framework.h`（`redactSecret`） |
 | STO-13 | 会话导出和取证包 | P2 | 待完成 | — |
 | TOOL-1 | 分阶段并行：prepare/dispatch/finalize | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
 | TOOL-2 | 并发分类与上限 | P0 | 完成（已构建 + 测试通过） | `tools/tool.h`、`plugin_api.h`、`config.h` |
@@ -50,7 +56,7 @@
 | PRM-4 | 记忆文件过大警告 | P0 | 完成（已构建 + 测试通过） | `middlewares/memory_file.*` |
 | UI-3 | 未知组件宽容降级（补测试） | P1 | 完成（测试通过） | `test_tui_ui_items.cpp` 未知字段/高版本组件 |
 | UI-4 | 渲染层边界测试 | P1 | 完成（测试通过） | `test_tui_ui_items.cpp` 空注册表渲染 + `boundaries` 渲染层规则 |
-| TST-10 | 安全负面测试（门禁正确性） | P0 | 待完成 | — |
+| TST-10 | 安全负面测试（门禁正确性） | P0 | 完成（用例集收窄，见阶段 I） | 模块 `permission`（配置拒绝优先、工作区隔离优先、未声明权限放行、执行前目标复验）；软链接越界用例随 SEC-6 未来计划 |
 | TST-3 | 持久化迁移/恢复测试（迁移中断） | P0 | 完成（已构建 + 测试通过） | 模块 `session_schema`（D2 段：迁移失败不推进版本、数据不丢、排除故障后续做） |
 | TST-1 / LLM-5 | 假 provider 接缝 | P0 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider` |
 
@@ -462,29 +468,38 @@
 
 ## 待完成（后续阶段）
 
-> 本节在 2026-10-06 按实施进度刷新（此前列出的 TOOL-16、CFG-1、UI-2+TST-5、TST-8、
-> PLG-6、PLG-10、CFG-3、TOOL-12、UI-9、ARC-5、ARC-6 均已完成，见对应阶段记录）。
+> 本节在 2026-10-07 按实施进度刷新（此前列出的 TOOL-16、CFG-1、UI-2+TST-5、TST-8、
+> PLG-6、PLG-10、CFG-3、TOOL-12、UI-9、ARC-5、ARC-6 均已完成；本轮的 TST-3、LLM-5/TST-1、
+> PRO-4、PRO-5、TST-2、RET-1a/STO-12b、LLM-7、TST-9 也已完成，见阶段 U~X）。
 
-- **P0 余项**：
-  - TST-3（持久化迁移/恢复测试）：**已完成**（见"阶段 U"）—— 老库迁移/幂等/高版本拒绝 + 迁移中断
-    （失败不推进版本、数据不丢、排除故障后续做）；"崩溃未闭合轮次"对应 STO-7（已核定不做）。
-  - LLM-5 / TST-1（假 provider）：**已完成**（见"阶段 U"）—— `ModelProviderRegistry::setProvider`
-    注入的 `FakeProvider`, 覆盖固定流/工具循环/错误分类与重试/溢出压缩/取消/用量记账, 不依赖网络。
-- **P1 余项**：
-  - PRO-3（已完成，见"阶段 T"）、**PRO-4 已完成**（见"阶段 V"）、**PRO-5 已完成**（见"阶段 V"）、
-    PRO-8（stdio JSONL 一次性运行）；
-  - RET-1a + STO-12b（会话改名/搜索的协议与 TUI 入口）：**已完成**（见"阶段 W"）；
-  - PLG-1（注册可逆与清理审计：统一注册清单 + 禁用/卸载后基线断言）、PLG-2（声明式贡献集合
-    与重算）、PLG-4（独占能力 slot）、PLG-7（教学式错误与信任声明）、PLG-8（插件文档分页与
-    接口表数字校验）；
-  - LLM-7（消费端退出取消）、LLM-8（缓存断点与缓存用量，依赖 PRM-1 已实施）、
-    LLM-13（HTTP 录制回放）；
-  - CFG-9（从 `AgentConfig`/`YamlAppConfig` 生成键目录 + CI 新鲜度检查）；
-  - UI-1（客户端模型层：历史分页窗口 / 消息队列镜像 / 重连 seq 校验抽到无 FTXUI 依赖的模型类）、
-    UI-5（输入栏硬件光标 + 不支持时降级）；
-  - ROM：ARC-8（消费者窄接口试点 2~3 处）、STO-13（会话导出与取证包）、TST-4（并发竞态清单
-    余项）、TST-6（存储后端一致性骨架）、TST-7（边界/导出/清理门禁扩展）、TST-9（脱敏与
-    凭据环境清理）、OBS-3/4/5（关键指标 / 诊断包 / 模块级日志开关）。
+- **P0 余项**：无。计划 §17.1 的 P0 条目已全部落地或经人工核定不做
+  （LOOP-5、JOB-1/JOB-2、LLM-1、RET-5 等见 `plan.md` 各条目"人工核定"列）。
+- **P1 余项（按计划核定可行、本轮未做）**：
+  - PRO-8（stdio JSONL 一次性运行）：需要新的客户端运行模式（复用 Wire 结构 + JSONL 分帧）
+    与配套用例，属独立功能块；
+  - LLM-8（Anthropic 缓存断点 + 缓存用量入账）：需要 ① 请求体加可选 `cache_control` 断点
+    （新配置项 + Anthropic 请求装配改动 + 请求体断言用例）、② 解析 Anthropic
+    `cache_read_input_tokens` / `cache_creation_input_tokens` 并落到账本
+    （账本当前只有 `cached_prompt_tokens` 一列，"写入量"需要 schema v3 迁移 + 新列）；
+  - LLM-13（HTTP 录制回放）：需要在测试侧新增"可注入传输层/录制服务器 + 回放服务器"
+    夹具（按请求摘要与顺序保存响应流、敏感 headers 脱敏），与 LLM-5 的 provider 级注入互补；
+  - PLG-1（注册可逆与清理审计）：统一注册清单 + 禁用/卸载后的基线断言（工具/权限/能力/
+    订阅/UI/定时器/键位逐项清理用例，不改 ABI）；
+  - PLG-2（声明式贡献集合与重算）：把提示词/工具/资源/UI 贡献做成"活动集合"并在启停后重算；
+  - PLG-4（独占能力 slot）：为压缩器/记忆提供者等少数独占能力建 slot（卸载回落到内置）；
+  - PLG-7（教学式错误与信任声明）：插件装载失败原因补"怎么改"的指引 + 文档写明原生插件
+    同进程、无沙箱、只能加载可信代码（后者已在 `security.md` 写明，SDK 侧文案待补）；
+  - PLG-8（插件文档分页与接口表数字校验）：`plugins.md` 拆分 + 接口表数量由常量校验
+    （agent 侧 19 张 / client 侧 9 张已在文档中，缺自动校验）；
+  - CFG-9（生成式配置键目录）：从 `AgentConfig`/`YamlAppConfig` 生成"键路径/类型/默认值"
+    目录并与 PRO-4 共用生成器骨架 + 新鲜度门禁；
+  - UI-1（客户端模型层）：把历史分页窗口 / 消息队列镜像 / 重连 seq 校验抽到无 FTXUI 依赖的
+    模型类（便于无终端单测）；
+  - UI-5（输入栏硬件光标）：输入栏上报硬件光标位置，终端不支持时降级（能力位
+    `terminal.hardware_cursor` 目前如实上报 false）；
+  - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、STO-13（会话导出与取证包）、
+    TST-4（并发竞态清单余项）、TST-6（存储后端一致性骨架）、TST-7（边界/导出/清理门禁扩展）、
+    OBS-3/4/5（关键指标 / 诊断包 / 模块级日志开关）。
 - **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
   "引用 id + 校验元数据"在 provider 侧的具体形态再动手。
 - **已核定不做**：见 `plan.md` 各条目的"人工核定"列与 `docs/zh-cn/design/roadmap.md` §15。
@@ -565,6 +580,10 @@
 - 阶段 O（CFG-1）完成后提交：`配置结构化校验: 键路径/严重级别/来源, 路径与权限组合检查 (CFG-1)`。
 - 阶段 P（UI-2 / TST-5 / TST-8）完成后提交：`UI 快照夹具与一键门禁脚本 (UI-2/TST-5/TST-8)`。
 - 阶段 Q（TOOL-16）完成后提交：`按规范化文件路径排队执行写/改操作 (TOOL-16)`。
+- 阶段 U（LLM-5 / TST-1 / TST-3）完成后提交：`假 provider 接缝与迁移中断用例 (LLM-5/TST-1/TST-3)`。
+- 阶段 V（PRO-4 / PRO-5 / TST-2）完成后提交：`Wire 协议字段清单生成物与连接阶段状态机 (PRO-4/PRO-5/TST-2)`。
+- 阶段 W（RET-1a / STO-12b）完成后提交：`会话检索与改名: 协议消息、端点处理与 TUI 入口 (RET-1a/STO-12b)`。
+- 阶段 X（LLM-7 / TST-9）完成后提交：`单次 provider 调用取消域、测试耗时打印与凭据环境清理 (LLM-7/TST-9)`。
 
 ## 阶段 P：UI 快照夹具与一键门禁（UI-2 / TST-5 / TST-8，2026-10-06）
 
@@ -1482,5 +1501,17 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   不再等待"的情形）。
 - TST-9 的"路径脱敏"未做：测试失败信息里的路径都是临时目录/仓库路径，不是敏感信息；
   真正需要脱敏的是凭据取值（已有 `redactSecret`，且 `assembly_snapshot` 断言不落凭据）。
+
+## 本轮全量回归（2026-10-07，阶段 U~X 完成后）
+
+- 全量 `agentxx_test`（Debug + ASan/UBSan，全部模块）：**35,327 项断言 0 失败**，进程 exit=0，
+  无 AddressSanitizer 报告（阶段 P 基线 34,049 → 阶段 T 34,115 → 本轮 35,327）。
+- 新增模块：`fake_provider` 36、`wire_schema` 1034、`session_admin` 38、`provider_call_scope` 18；
+  既有模块增量：`session_schema` 91→104（迁移中断）、`wire_roundtrip` 210→233（重命名/检索/
+  片段）、`input_delivery` 78→97（连接阶段校验）、`remote_agent` 474→477（WS 连接阶段）、
+  `tui_surface` 630→673（会话弹窗检索/改名交互）。
+- 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0（无新增 error）。
+- 生成物新鲜度：`wire_schema` 比较模式通过（`agent/schema/wire-schema.json` 与
+  `docs/zh-cn/design/wire-protocol-fields.md` 与实现一致，改动协议时忘记重新生成会直接失败）。
 
 
