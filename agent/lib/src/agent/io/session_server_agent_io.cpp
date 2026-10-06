@@ -449,6 +449,10 @@ void SessionServerAgentIO::onPeerMessage(
             if constexpr (std::is_same_v<T, WireHello>) {
                 handleHello(m, {}, sender);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
+                // 会话校验 (统一入口, 见 PRO-7): 不匹配的请求直接拒绝并回错误
+                if (!acceptSessionScope(m.sessionId, sender, "user_input")) {
+                    return;
+                }
                 cancelGraceTimer();
                 pushMessageQueueItem(
                     std::move(m.text),
@@ -456,6 +460,9 @@ void SessionServerAgentIO::onPeerMessage(
                     std::move(m.attachments)
                 );
             } else if constexpr (std::is_same_v<T, WireCancel>) {
+                if (!acceptSessionScope(m.sessionId, sender, "cancel")) {
+                    return;
+                }
                 // 仅在轮次进行中时暂停队列: 空闲时收到取消 (无轮次可取消) 不应
                 // 置位暂停, 否则后续所有新输入都会因队列被误暂停而永远等待执行
                 if (turnActive_.load(std::memory_order_acquire)) {
@@ -463,17 +470,31 @@ void SessionServerAgentIO::onPeerMessage(
                 }
                 onCancel();
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
+                if (!acceptSessionScope(m.sessionId, sender, "interrupt_and_run_next")) {
+                    return;
+                }
                 interruptAndRunNext();
             } else if constexpr (std::is_same_v<T, WireGetViewMessages>) {
                 // 客户端历史分页请求: 切片 [max(0, before-count), before) 回应。
                 // viewMessages 为 append-only, 绝对下标恒定, 轮次进行中追加
                 // 新消息不影响既有下标, 无竞态; 全程 ex_ 线程 (= Session io 线程)
+                // (会话不匹配由 handleGetViewMessages 回空页处理: 客户端按页解析,
+                //  回错误会打断其分页状态机)
                 handleGetViewMessages(m, sender);
             } else if constexpr (std::is_same_v<T, WireClearMessageQueue>) {
+                if (!acceptSessionScope(m.sessionId, sender, "clear_message_queue")) {
+                    return;
+                }
                 clearMessageQueue();
             } else if constexpr (std::is_same_v<T, WireRemoveQueueItem>) {
+                if (!acceptSessionScope(m.sessionId, sender, "remove_queue_item")) {
+                    return;
+                }
                 removeQueueItem(m.itemId);
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
+                if (!acceptSessionScope(m.sessionId, sender, "select_model")) {
+                    return;
+                }
                 auto agent = agent_.lock();
                 if (agent) {
                     agent->selectModel(m.sessionId, m.model);
@@ -481,6 +502,9 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
                 resolveInterrupt(m.id, std::move(m.result));
             } else if constexpr (std::is_same_v<T, WireGetModel>) {
+                if (!acceptSessionScope(m.sessionId, sender, "get_model")) {
+                    return;
+                }
                 if (!agent_.lock()) {
                     return;
                 }
@@ -488,6 +512,9 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireAddModel>) {
                 handleAddModel(m, sender);
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
+                if (!acceptSessionScope(m.sessionId, sender, "get_append_component_info")) {
+                    return;
+                }
                 auto agent = agent_.lock();
                 if (!agent) {
                     return;
@@ -497,6 +524,9 @@ void SessionServerAgentIO::onPeerMessage(
                 agent->collectAppendComponentInfo(notifications);
                 sendToClient(sender, WireAppendComponentInfo{std::move(notifications)});
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
+                if (!acceptSessionScope(m.sessionId, sender, "get_context")) {
+                    return;
+                }
                 auto              agent = agent_.lock();
                 auto              sess  = session();
                 // 上下文取自会话 (唯一权威); llmMessagesJson() 为惰性生成的 Json 形态
@@ -527,6 +557,9 @@ void SessionServerAgentIO::onPeerMessage(
                 }
                 sendToClient(sender, WireContextMessages{std::move(msgs)});
             } else if constexpr (std::is_same_v<T, WireCompactContext>) {
+                if (!acceptSessionScope(m.sessionId, sender, "compact_context")) {
+                    return;
+                }
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext || !agent->agentContext->bus) {
                     return;
@@ -605,6 +638,7 @@ void SessionServerAgentIO::onPeerMessage(
                     asio::detached
                 );
             } else if constexpr (std::is_same_v<T, WireListDir>) {
+                // 目录列举不带 sessionId (只读服务端文件系统, 与会话无关)
                 // 客户端请求服务端目录列举 (跨设备附件选择):
                 // 目录扫描属阻塞 I/O, 卸载到 threadPool 执行, 避免阻塞 agent io 线程
                 auto agent = agent_.lock();
@@ -1469,6 +1503,36 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
 std::string SessionServerAgentIO::currentTailHash() {
     auto sess = session();
     return sess ? sess->getHashInfo().tailHex : std::string{};
+}
+
+bool SessionServerAgentIO::acceptSessionScope(
+    std::string_view                             sessionId,
+    const std::shared_ptr<AgentIOTransportBase>& sender,
+    std::string_view                             what
+) {
+    // 空 sessionId = 未指定: 按当前绑定会话处理 (旧客户端兼容, 语义与拆分前一致)
+    if (sessionId.empty() || sessionId == config_.sessionId) {
+        return true;
+    }
+    XX_LOGW(
+        "SessionServerAgentIO: reject '{}' for session '{}' (endpoint bound to '{}')",
+        what,
+        sessionId,
+        config_.sessionId
+    );
+    sendToClient(
+        sender,
+        WireError{
+            .code    = WireErrorCode::SessionMismatch,
+            .message = fmt::format(
+                "request '{}' targets session '{}' but this endpoint serves '{}'",
+                what,
+                sessionId,
+                config_.sessionId
+            ),
+        }
+    );
+    return false;
 }
 
 void SessionServerAgentIO::handleGetViewMessages(

@@ -3503,6 +3503,82 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
     co_return;
 }
 
+// ---------------------------------------------------------------------------
+// 会话 ID 校验 (PRO-7): 端点只服务绑定的会话
+// - 请求携带的 sessionId 与绑定会话不一致 → 回 WireError(SessionMismatch), 不处理
+// - 空 sessionId (旧客户端未携带) 按绑定会话处理, 语义与拆分前一致
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_scope_validation() {
+    auto ex = co_await asio::this_coro::executor;
+
+    SessionServerAgentIO::Config cfg;
+    cfg.sessionId        = "bound-session";
+    cfg.gracePeriod      = std::chrono::milliseconds{400};
+    cfg.interruptTimeout = std::chrono::seconds{5};
+    cfg.deltaBufferCap   = 32;
+
+    auto sc = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+    auto [c1, s1] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c1));
+    auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
+    // setTransport: 同时登记为端点主 transport (广播路径 sendToPeer 依赖它)
+    sc->setTransport(server1);
+    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+
+    client1->send(agentxx::agent::WireHello{"bound-session", "", 0, ""});
+    auto helloMsg = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(helloMsg.has_value());
+    if (helloMsg.has_value()) {
+        XX_TEST_EXPECT_TRUE(std::holds_alternative<agentxx::agent::WireHelloAck>(*helloMsg));
+    }
+
+    // 1) 会话不匹配: 拒绝并回结构化错误 (码供程序判断, 文本给人看)
+    client1->send(
+        agentxx::agent::WireUserInput{.sessionId = "other-session", .text = "rejected"}
+    );
+    auto errMsg = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(errMsg.has_value());
+    if (errMsg.has_value()) {
+        auto* err = std::get_if<agentxx::agent::WireError>(&*errMsg);
+        XX_TEST_EXPECT_TRUE(err != nullptr);
+        if (err != nullptr) {
+            XX_TEST_EXPECT_EQ(err->code, agentxx::agent::WireErrorCode::SessionMismatch);
+            XX_TEST_EXPECT_FALSE(err->message.empty());
+        }
+    }
+
+    // 2) 空会话 ID / 匹配会话 ID: 视为当前绑定会话, 正常受理
+    //    (清空队列必回队列快照, 且该消息本身带 sessionId 会走同一套校验)
+    client1->send(agentxx::agent::WireClearMessageQueue{.sessionId = ""});
+    auto qMsg = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(qMsg.has_value());
+    if (qMsg.has_value()) {
+        auto* q = std::get_if<agentxx::agent::WireMessageQueueUpdate>(&*qMsg);
+        XX_TEST_EXPECT_TRUE(q != nullptr);
+        if (q != nullptr) {
+            XX_TEST_EXPECT_EQ(q->sessionId, std::string{"bound-session"});
+        }
+    }
+    client1->send(agentxx::agent::WireClearMessageQueue{.sessionId = "bound-session"});
+    auto qMsg2 = co_await client1->recv();
+    XX_TEST_EXPECT_TRUE(qMsg2.has_value());
+    if (qMsg2.has_value()) {
+        XX_TEST_EXPECT_TRUE(
+            std::holds_alternative<agentxx::agent::WireMessageQueueUpdate>(*qMsg2)
+        );
+    }
+
+    client1->close();
+    sc->stop();
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    co_return;
+}
+
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
     co_await test_remote_protocol_roundtrip();
@@ -3527,6 +3603,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller grace period..." << std::endl;
     co_await test_session_controller_grace();
+
+    std::cout << "  [remote] session scope validation..." << std::endl;
+    co_await test_session_scope_validation();
 
     std::cout << "  [remote] client auto-reconnect..." << std::endl;
     co_await test_remote_client_reconnect();

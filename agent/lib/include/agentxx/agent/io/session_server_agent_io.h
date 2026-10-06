@@ -282,6 +282,22 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& target = nullptr
     );
 
+    /// 会话 ID 校验 (端点绑定单一会话; 统一入口校验, 见计划 PRO-7)
+    /// - `sessionId` 为空: 视为"未指定", 按当前绑定会话处理 (旧客户端兼容)
+    /// - 与当前绑定会话不一致: 拒绝该请求, 回 WireError(SessionMismatch) 给来源
+    ///   (来源为空时广播), 并记警告日志 —— 避免切换会话后迟到的旧请求写到新会话
+    ///
+    /// - `args`:
+    ///     - [sessionId] 请求携带的会话 ID
+    ///     - [sender]    请求来源 transport (错误回执只发回给它)
+    ///     - [what]      请求名称 (日志与错误文本用, 如 "user_input")
+    /// - `return` 是否接受该请求
+    bool acceptSessionScope(
+        std::string_view                             sessionId,
+        const std::shared_ptr<AgentIOTransportBase>& sender,
+        std::string_view                             what
+    );
+
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();
 

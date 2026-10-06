@@ -133,6 +133,51 @@
 - 协议与界面入口：`WireListSessions`/会话弹窗还没有"改名"和"搜索"操作；需要新增
   协议消息（或扩展已有的会话列表请求）并在 TUI 会话弹窗接输入框。存储层 API 已就绪。
 
+## 阶段 H：协议往返测试、会话 ID 校验、wire 错误码（PRO-1、PRO-7、PRO-11，2026-10-05）
+
+已完成：
+
+- **PRO-1 / TST-2 消息往返测试**（新模块 `wire_roundtrip`，`agent/test/core/test_wire_roundtrip.cpp`，
+  165 项断言）：对每条 Wire 消息做 `serialize → deserialize → 再 serialize`，断言
+  ① 回到同一变体成员、② 两份 JSON 完全一致（字段稳定）、③ 关键字段逐一比对：
+  HelloAck（含 plugins/deviceId/workDir/中文会话 id）、TurnResult、ContextStats、WireError、
+  ModelInfo（含多模态能力表）、GetModel/SelectModel、GetContext/CompactContext/ContextMessages、
+  GetViewMessages/ViewMessagesPage（含 ViewMessage 角色与耗时字段）、ListSessions/SessionList/
+  SwitchSession、MessageQueueUpdate/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/Cancel、
+  InterruptRequest/Response/Expired、PluginData/PluginDataUp、GetAppendComponentInfo/
+  AppendComponentInfo（成功与失败条目）、GetPermissionState/SetFullAuth/PermissionState、
+  ListDir/ListDirResult（含 WireDirEntry）、AddModel/AddModelResult、Log；心跳（裸 JSON）另测。
+  兼容性用例：未知字段被忽略、未知消息类型返回 `nullopt`（不抛异常）。
+- **PRO-11 wire 错误码**（`agent_io_transport.h`）：新增 `WireErrorCode`（`Internal` /
+  `InvalidState` / `SessionNotFound` / `SessionMismatch` / `InvalidArgs`），并写明"未知码按
+  `Internal` 处理"；文本与机器码分开（`message` 给人看、`code` 给程序判断）。
+- **PRO-7 会话 ID 统一校验**（`session_server_agent_io.cpp` / `.h`）：新增
+  `acceptSessionScope(sessionId, sender, what)`，在 `onPeerMessage` 入口对
+  user_input / cancel / interrupt_and_run_next / clear_message_queue / remove_queue_item /
+  select_model / get_model / get_context / compact_context / get_append_component_info
+  统一校验；不匹配时回 `WireError(SessionMismatch)` 并记警告日志，空 `sessionId`
+  视为未指定（按绑定会话处理，兼容旧客户端）。历史分页保持原有"回空页"处理
+  （客户端按页解析，回错误会打断其分页状态机）。`WireListDir` 不带 sessionId，不参与校验。
+
+测试（`remote_agent` 模块新增 `session scope validation` 用例）：
+
+- 不匹配的 `user_input` → 收到 `WireError`（码 = `SessionMismatch`，文本非空）；
+- 空 sessionId 与匹配 sessionId 的 `clear_message_queue` → 正常受理并回队列快照。
+
+验证：
+
+- 构建：lib `INSTALL` 与 `agentxx_test` 均 exit=0，无新增 error/warning。
+- 测试：`wire_roundtrip` 165/0、`remote_agent` 453/0、`boundaries` 8/0、
+  `toolcall_parallel` 48/0 全部通过。
+
+注意事项：
+
+- 新增测试源文件后必须重跑一次 CMake 配置（测试工程用 `file(GLOB ...)` 收集源码），
+  否则新模块不会参与链接（表现为 `LNK2019 无法解析的外部符号`）：
+  `cmake -S test -B <build>/agentxx_test_repo-prefix/src/agentxx_test_repo-build`。
+- `run_remote_agent_tests` 等模块的 `recv()` 无超时：测试里"期待某条消息"的断言必须确保
+  该消息真的会被发送（例如空闲且队列为空时的 `user_input` 不推送队列更新，会导致等待挂起）。
+
 ## 阶段 G：工具三段式执行与受限并行（TOOL-1、TOOL-2、TOOL-3，2026-10-05）
 
 已完成：

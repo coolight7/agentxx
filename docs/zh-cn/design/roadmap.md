@@ -122,13 +122,13 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| PRO-1 | 消息往返测试 | 待实施 | 测试模块 `wire_protocol` |
+| PRO-1 | 消息往返测试 | 已实施 | 模块 `wire_roundtrip`（全消息类型往返 + 幂等 + 未知字段/类型兼容）；`remote_agent` 亦有协议往返段 |
 | PRO-3 | 协议版本与能力握手 | 待实施 | `WireHello` / `WireHelloAck` |
 | PRO-4 | 生成 `wire-schema.json` 与字段文档 | 待实施 | 脚本 + CI 新鲜度检查 |
 | PRO-5 | 连接阶段与错误分类 | 待实施 | 端点状态机 |
-| PRO-7 | 会话 ID 校验统一化 | 待实施 | 端点消息入口 |
+| PRO-7 | 会话 ID 校验统一化 | 已实施 | `SessionServerAgentIO::acceptSessionScope`（入口统一校验，不匹配回 `WireError`）；`remote_agent` 的 `session scope validation` 用例 |
 | PRO-8 | stdio JSONL 一次性运行 | 待实施 | `agent/client`（复用 Wire 结构） |
-| PRO-11 | 统一错误对象与 wire 错误码 | 待实施 | `util/exception.h` + `wire_protocol.h` |
+| PRO-11 | 统一错误对象与 wire 错误码 | 部分实施 | `WireErrorCode`（`agent_io_transport.h`，未知码按 `Internal`）+ 会话校验/错误回执已用；工具与节点边界的统一错误对象待补 |
 | PRO-2 / PRO-6 / PRO-9 / PRO-10 / PRO-12 | 幂等键 / durable after 游标 / daemon / 开放 SDK / 结果状态元数据 | 不做（6 并入 STO-4） | 已支持常驻 server、同进程合并启动、FFI |
 
 ## 11. 插件与扩展机制
@@ -168,7 +168,7 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 待实施 | 测试夹具 |
-| TST-2 | Wire 往返与 schema 一致性 | 待实施 | 与 PRO-1 同批 |
+| TST-2 | Wire 往返与 schema 一致性 | 部分实施 | 模块 `wire_roundtrip`（往返 + 幂等 + 兼容）；schema 生成一致性待补 |
 | TST-3 | 持久化迁移/恢复测试 | 部分实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝）；崩溃未闭合轮次待补 |
 | TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |

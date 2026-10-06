@@ -17,8 +17,7 @@ namespace io {
 
 /// 双向 WS JSON 消息类型常量
 /// - 约定: {"type": "<msgType>", "id": <opt requestId>, "sessionId": <sessionId>, ...payload}
-struct MsgType {
-    // ===== Client -> Server =====
+struct MsgType {    // ===== Client -> Server =====
     inline static constexpr std::string_view Hello                  = "hello";
     inline static constexpr std::string_view UserInput              = "user_input";
     inline static constexpr std::string_view InterruptResponse      = "interrupt_response";

@@ -112,6 +112,24 @@ struct WireContextStats {
     double tps = 0.0;
 };
 
+/// Wire 层错误码 (`WireError::code`)
+///
+/// 展示文本与机器错误码分开: `message` 给人看 (可本地化/含细节), `code` 供程序判断
+/// (客户端按码决定"重试 / 提示 / 忽略")。**未知码按 [Internal] 处理**, 不要因为
+/// 对端新增了码就报错或丢弃消息。
+struct WireErrorCode {
+    /// 其他内部错误 (未知码的兜底)
+    inline static constexpr int Internal = 0;
+    /// 当前状态不允许该请求 (如未完成握手就发业务消息)
+    inline static constexpr int InvalidState = 1;
+    /// 会话不存在 (已删除/未创建)
+    inline static constexpr int SessionNotFound = 2;
+    /// 请求的会话 ID 与本端点绑定的会话不一致
+    inline static constexpr int SessionMismatch = 3;
+    /// 请求参数不合法 (缺字段/取值越界)
+    inline static constexpr int InvalidArgs = 4;
+};
+
 struct WireError {
     int         code = 0;
     std::string message;
