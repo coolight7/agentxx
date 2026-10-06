@@ -59,6 +59,9 @@
 | TST-10 | 安全负面测试（门禁正确性） | P0 | 完成（用例集收窄，见阶段 I） | 模块 `permission`（配置拒绝优先、工作区隔离优先、未声明权限放行、执行前目标复验）；软链接越界用例随 SEC-6 未来计划 |
 | TST-3 | 持久化迁移/恢复测试（迁移中断） | P0 | 完成（已构建 + 测试通过） | 模块 `session_schema`（D2 段：迁移失败不推进版本、数据不丢、排除故障后续做） |
 | TST-1 / LLM-5 | 假 provider 接缝 | P0 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider` |
+| TST-4 | 并发与竞态清单 | P1 | 完成（已构建 + 测试通过） | 模块 `race_guards`（取消 vs 结算/中断应答/节流、乱序提交、执行中注销） |
+| TST-6 | 存储一致性测试骨架 | P1 | 完成（已构建 + 测试通过） | 模块 `storage_consistency`（同一份键值语义跑 4 个后端） |
+| TST-7 | 门禁扩展（UI 组件名 / 接口表名集合 / 文档路径） | P1 | 完成（部分，见阶段 Z） | `agent/test/core/test_boundaries.cpp`；插件注册清理随 PLG-1 |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -498,11 +501,85 @@
   - UI-5（输入栏硬件光标）：输入栏上报硬件光标位置，终端不支持时降级（能力位
     `terminal.hardware_cursor` 目前如实上报 false）；
   - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、STO-13（会话导出与取证包）、
-    TST-4（并发竞态清单余项）、TST-6（存储后端一致性骨架）、TST-7（边界/导出/清理门禁扩展）、
     OBS-3/4/5（关键指标 / 诊断包 / 模块级日志开关）。
+    （TST-4 并发竞态清单、TST-6 存储一致性骨架已完成，见阶段 Z；TST-7 的
+    "插件注册清理"那一半随 PLG-1 做。）
 - **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
   "引用 id + 校验元数据"在 provider 侧的具体形态再动手。
 - **已核定不做**：见 `plan.md` 各条目的"人工核定"列与 `docs/zh-cn/design/roadmap.md` §15。
+## 阶段 Z：竞态清单、存储一致性骨架与门禁扩展（TST-4 / TST-6 / TST-7，2026-10-07）
+
+计划依据：`plan.md` §15 TST-4（"取消 vs 工具结算、取消 vs resume、插件卸载 vs 工具执行、
+持久化节流 vs 轮末、并行结果乱序"）、TST-6（"SessionStore、share_store、settings_db 的
+替身/后端统一跑同一语义断言"）、TST-7（"依赖方向、DSO 白名单、接口表集合、UI block 名、
+插件注册清理和文档路径"）。
+
+已完成：
+
+- **TST-7 门禁扩展**（`agent/test/core/test_boundaries.cpp` 新增三条规则，模块 8→11 断言）：
+  - 规则 9「UI 组件名」：解析客户端 `ui_components.cpp` 的 `kTuiBlockNames`，要求
+    ① 每个名字都能在描述层组件表（`pluginxx::ui::gen::kBlockTable`）里找到（拼错/自造名
+    立即失败）；② 不得重复；③ 组件表里 `BlockLevel::Core` 的组件必须全部声明（核心组件
+    不支持 = 大面积降级）。只读源码文本，不依赖本次是否构建 client，避免关掉 client 后
+    规则静默失效。
+  - 规则 10「接口表名集合」：从三份 SDK 头读出接口表**名字**（内核 `tables.h` 的
+    `PLUGINXX_IFACE_*` 10 张、`plugin_api.h` 的 `AGENTXX_PLUGIN_IFACE_AGENT_*` 9 张、
+    `client_plugin_api.h` 的 `AGENTXX_IFACE_CLIENT_*` 9 张），校验数量、唯一性与前缀，
+    并要求 18 张领域表名都出现在 `docs/zh-cn/design/plugins.md`（文档漏写新表 = 插件作者
+    查不到该 IID）。数量常量只能发现"少一张表"，本规则能发现"名字写错"。
+  - 规则 11「文档路径」：扫描根 `AGENTS.md` 与四份目录级 `AGENTS.md` 里出现的
+    `docs/zh-cn/**.md` 路径，逐个按仓库根解析并要求文件存在（文档改名后引用会变死链）；
+    一处都没解析到即判失败（防止规则本身失效）。
+- **TST-6 存储一致性骨架**（新模块 `storage_consistency`，260 项断言）：
+  - 定义薄适配层 `KvBackend{name, durable, put, get, reopen, failureVisibleOnReadBack,
+    makeWritesFail, restoreWrites, lastError}` 与一份共享语义用例 `runKvContract`，
+    同一组断言跑四个后端：`settings_db`、`SessionStore` 的 `store` 表、share store 纯内存
+    替身、share store「缓存 + 回库」；
+  - 契约条目：① 未写入的键读回无值；② 往返 + 覆盖写读到最新值；③ 空串 = "存在但内容为空"；
+    ④ 多条目隔离（顺序读 + 逆序读，穿过 LRU 缓存容量上限）；⑤ 256 KB 大值往返；
+    ⑥ 重开（= 进程重启）：持久化后端保留、纯内存替身明确清空；⑦ 写失败可感知 +
+    恢复可写后继续工作；
+  - 写失败的两种可观察形态被显式区分（并各自断言）：`settings_db`（父目录被文件占住）
+    与 `SessionStore`（外部持锁）**读回立即能看出失败**；注入持久化的 share store
+    则是"内存副本先可见、落盘失败"，靠 `lastWriteError()` 诊断，并断言"恢复可写后重新
+    打开确实看不到那次写入"；
+  - 顺带记录一处既有语义：`SessionStore::lastWriteError()` 是**粘性**的（成功写入不清理），
+    所以适配层的"写失败"判据用读回结果 + 外部锁，而不是该字段的瞬时值。
+- **TST-4 竞态清单**（新模块 `race_guards`，68 项断言，5 组用例）：
+  - R1 取消 vs 工具结算：快工具已结算、中工具执行中、独占工具未启动时取消 —— 断言
+    每条声明恰好一条结果、顺序按声明顺序、已结算结果保留真实值、未启动的执行体确实没跑；
+  - R2 并行结果乱序：5 个并行安全调用睡眠时长递减（完成顺序与声明顺序完全相反），
+    结果仍按声明顺序写回，并断言最先结束的确是最后声明的那个；
+  - R3 中断应答在途 vs 取消：中断已问出、应答还在路上时取消 —— 断言轮次一定收敛
+    （< 6s 不挂死）、中断只问一次、执行不超过两次；两条合法结局分别断言
+    （取消结束 / 应答落地后 resume 返回真实应答）；取消分支允许留下至多 1 条悬挂
+    tool_call，并**再跑一轮**验证下一次请求前悬挂被修正（`danglingToolCallCount == 0`）；
+  - R4 工具执行中被注销（插件工具的动态注册表路径）：执行体保活、调用正常返回真实结果、
+    注册表已摘除、调用结束后保活引用释放（`weak_ptr expired`）；
+  - R5 持久化节流 vs 轮末：节流窗口内连续追加 + 中途节流刷盘 + 轮末 `persistNow`，
+    断言库内消息数量/顺序/序号与内存一致（不重复、不丢失）。
+  - 说明：TST-4 的"插件卸载 vs 工具执行"里"卸载与 inflight 租约"那一半已由
+    `plugin_runtime` / `plugin_multi_instance` 覆盖（卸载先欠着、lease 归零后再 destroy 可重试），
+    本模块补的是"工具侧保活"这一半。
+
+验证：
+
+- 构建：`agentxx_test` exit=0（新增测试源文件后重跑了一次 CMake 配置）。
+- 测试：`boundaries` 11/0、`storage_consistency` 260/0、`race_guards` 68/0、
+  `toolcall_parallel` 48/0、`cancel` 45/0、`message_supplement` 95/0、
+  `persist_semantics` 25/0、`session_schema` 104/0、`settings_db` 73/0、`writer_lease` 25/0。
+- 负面验证（门禁确实会红）：规则 9/10/11 各自依赖的"数据源"缺失或改名即失败
+  （文件缺失、数组解析失败、引用数为 0 都走失败分支）。
+
+注意事项 / 与计划的差异：
+
+- TST-6 的"替身"落在 share store 的**纯内存模式**上（`MiddlewareContext` 未注入持久化时
+  内存是唯一副本），而不是另写一套内存桩 —— 它与持久化后端跑同一组断言，差异只有
+  "重开后是否保留"，这条差异被写成断言而不是被适配层抹掉。
+- TST-4 不断言"谁先谁后"（那会变成看调度运气），只断言不变量（结果唯一性、顺序、
+  收敛时间、悬挂上限与后续修复）。R3 的取消分支实测会留下 1 条悬挂 tool_call，
+  属该轮工具调用尚未定稿的既定形态，由下一次请求前的 `repairMessages` 修正。
+
 ## 与计划的差异（记录用）
 
 - ARC-1：计划写"`check_boundaries.py` **或**测试模块"，这里选测试模块（`boundaries`），
@@ -1513,6 +1590,9 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 生成物新鲜度：`wire_schema` 比较模式通过（`agent/schema/wire-schema.json` 与
   `docs/zh-cn/design/wire-protocol-fields.md` 与实现一致，改动协议时忘记重新生成会直接失败）。
 - 阶段 Y（接口表数量门禁）之后复跑全量：**35,328 项断言 0 失败**（`boundaries` 8→9）。
+- 阶段 Z（TST-4 / TST-6 / TST-7）完成后提交：
+  `竞态清单、存储一致性骨架与门禁扩展 (TST-4/TST-6/TST-7)`（`boundaries` 9→11、
+  新增模块 `storage_consistency` 260 项、`race_guards` 68 项）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 

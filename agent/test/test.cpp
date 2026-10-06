@@ -36,6 +36,7 @@
 #include "agentxx-test/core/test_persist_semantics.h"
 #include "agentxx-test/core/test_prompt_stability.h"
 #include "agentxx-test/core/test_provider_call_scope.h"
+#include "agentxx-test/core/test_race_guards.h"
 #include "agentxx-test/core/test_permission.h"
 #include "agentxx-test/core/test_rag_search_tools.h"
 #include "agentxx-test/core/test_regex.h"
@@ -45,6 +46,7 @@
 #include "agentxx-test/core/test_session_schema.h"
 #include "agentxx-test/core/test_session_sync.h"
 #include "agentxx-test/core/test_settings_db.h"
+#include "agentxx-test/core/test_storage_consistency.h"
 #include "agentxx-test/core/test_shutdown_stages.h"
 #include "agentxx-test/core/test_share_store.h"
 #include "agentxx-test/core/test_string_tools.h"
@@ -267,6 +269,7 @@ int main(int argn, char** argv) {
         runSync("training", agentxx::test::testTraining);
         runSync("settings_db", agentxx::test::testSettingsDb);
         runSync("session_schema", agentxx::test::testSessionSchema);
+        runSync("storage_consistency", agentxx::test::testStorageConsistency);
         runSync("writer_lease", agentxx::test::testWriterLease);
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
         runSync("wire_roundtrip", agentxx::test::testWireRoundtrip);
@@ -472,6 +475,7 @@ int main(int argn, char** argv) {
                 );
                 co_await run("client_plugins", agentxx::test::run_client_plugin_tests);
                 co_await run("cancel", agentxx::test::run_cancel_tests);
+                co_await run("race_guards", agentxx::test::run_race_guard_tests);
                 co_await run("message_supplement", agentxx::test::run_message_supplement_tests);
                 co_await run("summarization", agentxx::test::run_summarization_tests);
                 co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
