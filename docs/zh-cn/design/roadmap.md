@@ -79,13 +79,13 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| LLM-2 | 错误分类与重试策略 | 待实施 | `protocol/*provider.cpp`、`nodes/modelcall.cpp` |
-| LLM-3 | 溢出一次性压缩重试 | 待实施 | 同上（与 LLM-2 共用入口） |
-| LLM-5 | 假 provider | 待实施（测试已有模拟器） | `agent/test/core/test_agent.cpp` 的本地 LLM 模拟器 |
+| LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
+| LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
+| LLM-5 | 假 provider | 待实施（测试已有模拟器） | `agent/test/core/test_agent.cpp` 的本地 LLM 模拟器（支持失败状态码/响应体） |
 | LLM-7 | 消费端退出取消 | 待实施 | provider 流对象 |
 | LLM-8 | 缓存断点与缓存用量 | 待实施 | Anthropic 请求装配 + 用量账本 |
 | LLM-13 | HTTP 录制回放 | 待实施 | 测试夹具 |
-| LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗 |
+| LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
 | LLM-1 / LLM-9 / LLM-10 / LLM-11 / LLM-12 | 模型能力元数据 / 轮次局部回退 / 凭据分层 / 连接状态 / 结构化输出入口 | 不做（9、12 后续计划） | 不补价格与能力元数据；provider 全走 HTTP |
 
 ## 7. 上下文压缩与预算

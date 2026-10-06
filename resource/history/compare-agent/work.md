@@ -133,6 +133,53 @@
 - 协议与界面入口：`WireListSessions`/会话弹窗还没有"改名"和"搜索"操作；需要新增
   协议消息（或扩展已有的会话列表请求）并在 TUI 会话弹窗接输入框。存储层 API 已就绪。
 
+## 阶段 J：LLM 错误分类与溢出压缩重试（LLM-2、LLM-3，2026-10-05）
+
+已完成：
+
+- **LLM-2 错误分类与重试策略**（新增 `agent/lib/include/agentxx/nodes/llm_error.h` +
+  `src/nodes/llm_error.cpp`）：
+  - `LlmErrorKind`：Unknown / Auth / Quota / InvalidRequest / ContextOverflow / RateLimit /
+    Timeout / Server；按"HTTP 状态码 + 常见关键词"双口径识别（provider 错误结构各家不同，
+    关键词覆盖 OpenAI / Anthropic / 中文错误文本）；
+  - `isLlmErrorRetryable`：鉴权、额度/计费、请求非法三类**不重试**（重试无意义，
+    直接结束本轮，省掉无用等待与请求）；其余可重试；
+  - `llmRetryDelaySeconds`：**有界指数退避 + 抖动**（限流基数 5 秒、其余 2 秒，按次数翻倍，
+    夹到 60 秒上限，抖动 0~2 秒由错误文本哈希决定），错误文本里带 `retry-after` /
+    `retry_after`（JSON 或 HTTP 头）时**优先采用**该值；
+  - `modelcall.cpp` 的重试循环改为按分类决策：不可重试立即走失败路径；日志与 UI 提示
+    都带分类文本（`llmErrorKindText`）；原先的 `defaultRateLimitTag`（Aho-Corasick 关键词）
+    与 `retry*3 + appendDelay` 固定公式被分类器取代。
+- **LLM-3 溢出一次性压缩重试**（`nodes/modelcall.cpp`）：
+  - 分类为 `ContextOverflow` 时，**首次**触发 `service.summarization.compact`
+    （`EventCompactContext`）并**立即重试**（不等待退避），同时向 UI 推一条 warning 提示；
+  - 每轮只压缩重试一次（`overflowCompactUsed`）：第二次仍溢出即按失败结束
+    （由上层按需硬截断），避免反复压缩；
+  - 无事件总线（嵌入式无压缩服务）时按不可恢复处理，直接结束本轮。
+
+测试：
+
+- 新模块 `llm_error`（`test/core/test_llm_error.cpp`，65 项断言）：八个分类的代表性错误文本、
+  可重试性、溢出识别、退避策略（指数增长、上限、限流基数、`retry-after` 优先与夹取、
+  抖动不为 0）。
+- `agent` 模块新增 `test_agent_llm_error_policy`（本地模拟器新增失败状态码与响应体两个开关）：
+  ① 401 鉴权失败 → 只请求 1 次（不重试）；② 400 + `context_length_exceeded` → 压缩后立即
+  重试，第二次成功且请求数远小于重试上限；③ 持续溢出 → 恰好 2 次请求后结束。
+
+验证：
+
+- 构建：lib `INSTALL` 与 `agentxx_test` 均 exit=0，无新增 error/warning。
+- 测试：`llm_error` 65/0、`agent` 198/0（含新增 3 组错误策略用例）。
+
+注意事项 / 与计划的差异：
+
+- 计划 LLM-2 提到"策略数据与执行器分开"：这里把**策略**放在 `llm_error.{h,cpp}`
+  （分类 + 退避计算，纯函数、可单测），**执行器**仍是 modelcall 的重试循环，
+  未引入策略对象树。
+- 计划 LLM-5（假 provider）要求"可注入固定流、错误、延迟和 tool call"：本地 LLM 模拟器
+  已具备这些能力（本次又补了失败状态码与响应体），但尚未抽出为独立"假 provider"
+  接缝；仍按"待实施"记录。
+
 ## 阶段 I：权限判定理由与执行前目标复验（SEC-2、SEC-5、TST-10，2026-10-05）
 
 已完成：
@@ -470,6 +517,7 @@
 - 阶段 G（TOOL-1 / TOOL-2 / TOOL-3）完成后提交：`工具调用三段式执行与受限并行 (TOOL-1/TOOL-2/TOOL-3)`。
 - 阶段 H（PRO-1 / PRO-7 / PRO-11）完成后提交：`wire 协议往返测试、会话 ID 统一校验、wire 错误码 (PRO-1/PRO-7/PRO-11)`。
 - 阶段 I（SEC-2 / SEC-5 / TST-10）完成后提交：`权限判定理由与执行前目标复验 (SEC-2/SEC-5/TST-10)`。
+- 阶段 J（LLM-2 / LLM-3）完成后提交：`LLM 错误分类、退避策略与溢出压缩重试 (LLM-2/LLM-3)`。
 
 ## 未实施项的原因与建议路径（下次继续）
 

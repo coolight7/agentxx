@@ -2,6 +2,9 @@
 
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
+#include "agentxx/nodes/llm_error.h"
 #include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
@@ -11,7 +14,6 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
-#include "utilxx/aho_corasick.h"
 #include "utilxx_base/hash.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
@@ -27,18 +29,6 @@ namespace nodes {
 inline static constexpr std::string_view defaultExceptionTip{"[Exception aborted]"};
 inline static constexpr std::string_view defaultUserCancelTip{"[User cancelled]"};
 inline static constexpr std::string_view defaultContinueTip{"[Please continue]"};
-
-// 限速
-inline static const auto defaultRateLimitTag = utilxx::AhoCorasick<char>{
-    std::vector<std::string>{
-                             "429", "rate limit",
-                             "has been exhausted", "insufficient",
-                             "速率限制", "限速",
-                             "请求频率", "已耗尽",
-                             "已用完"
-    },
-    true
-};
 
 // 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
 // - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
@@ -757,6 +747,9 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     // 连续重试次数 (用于退避延时计算): 达到配置上限后停止重试, 不因部分输出重置,
     // 保证总失败次数严格不超过 llmMaxRetry, 避免消息无限堆积
     size_t retry = 0;
+    /// 本轮是否已经用掉"上下文超限 → 压缩一次后重试"的机会 (计划 LLM-3):
+    /// 每次溢出只压缩一次, 再次溢出直接按失败处理, 避免反复压缩
+    bool overflowCompactUsed = false;
 
     // 插入 assistant 兜底消息 (保留部分输出, 或插入异常/取消提示):
     // - 保证消息上下文完整, 用户能看到本次 LLM 调用失败
@@ -839,8 +832,30 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent
         );
 
-        // - 取消 或 连续重试达到配置上限: 停止重试, 抛出原始异常结束本轮执行
-        if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
+        // 错误分类与重试策略 (见 llm_error.h):
+        // - 鉴权/额度/请求非法: 重试无意义, 直接结束本轮 (省掉无用的等待与请求)
+        // - 上下文超限: 压缩一次后立即重试 (LLM-3); 再次超限则按失败结束
+        // - 其余 (限流/超时/服务端/未知): 有界指数退避 + 抖动后重试
+        const auto        errKind   = classifyLlmError(errInfo);
+        const bool        retryable = isLlmErrorRetryable(errKind);
+        const bool        overflow  = isLlmContextOverflow(errKind);
+        // 本轮已用掉"溢出压缩重试"机会: 不再压缩, 避免反复压缩 (压缩本身也要花时间)
+        if (overflow) {
+            if (overflowCompactUsed) {
+                // 已压缩过一次仍超限: 走失败路径 (由上层按需硬截断)
+                XX_LOGW(
+                    "LLMCallNode context overflow again after compaction; stop retrying: {}",
+                    errInfo
+                );
+            } else {
+                overflowCompactUsed = true;
+            }
+        }
+
+        // - 取消 / 不可重试 / 连续重试达到配置上限: 停止重试, 抛出原始异常结束本轮执行
+        if (isCancel || !retryable
+            || (overflow && overflowCompactUsed && retry > 0)
+            || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
             // 抛出前检查末尾消息角色: 若末尾不是 assistant, 或末尾 assistant
             // 仍带 tool_calls (悬挂), 插入兜底提示消息
             // - 覆盖 无输出/短输出 失败的情况 (上轮未插入过)
@@ -876,19 +891,50 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
         // 自动重试
         retry++;
-        size_t appendDelay = 0;
-        if (defaultRateLimitTag.contains(errInfo)) {
-            // 限速，增加延时
-            appendDelay = retry * 5;
+
+        // 上下文超限 (首次): 触发一次压缩后立即重试, 不再按退避等待 ——
+        // 压缩把历史换成摘要, 请求长度立刻下降, 是唯一能真正解决问题的一步
+        if (overflow && overflowCompactUsed) {
+            auto bus = (agentCtxPtr && agentCtxPtr->bus) ? agentCtxPtr->bus : nullptr;
+            if (bus) {
+                XX_LOGW(
+                    "LLMCallNode context overflow: compact session context once and retry: {}",
+                    errInfo
+                );
+                if (nullptr != in.stream_cb) {
+                    neograph::json tipJson = neograph::json{
+                        {"channel", "message_tip"},
+                        {"value",
+                         neograph::json{
+                             {"tipType", "warning"},
+                             {"text",
+                              "LLM 请求超出上下文长度，已压缩会话上下文后重试一次"},
+                         }},
+                    };
+                    (*in.stream_cb)(neograph::graph::GraphEvent{
+                        neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+                        nodeName,
+                        std::move(tipJson),
+                    });
+                }
+                co_await bus->publish<events::EventCompactContext>(
+                    events::Topic::SummarizationCompact,
+                    events::EventCompactContext{.sessionId = std::string{in.ctx.thread_id}}
+                );
+                continue; // 立即重试 (不等待退避)
+            }
+            // 无总线 (嵌入式/无压缩服务): 无处触发压缩, 按不可恢复处理
+            XX_LOGW("LLMCallNode context overflow without event bus; stop retrying");
+            std::rethrow_exception(errorPtr);
         }
-        // 实际等待时长: retry*3 秒 + 限速附加延时 (appendDelay 单位: 秒)
-        // - 日志与 UI 提示、定时器必须用同一数值, 否则提示的等待时长与实际不符
-        const auto delaySec = retry * 3 + appendDelay;
+
+        size_t delaySec = static_cast<size_t>(llmRetryDelaySeconds(errKind, retry, errInfo));
         XX_LOGD(
-            "LLMCallNode Retry delay {} seconds: {}/{} | {}",
+            "LLMCallNode Retry delay {} seconds: {}/{} | kind={} | {}",
             delaySec,
             retry,
             agentCtxPtr->agentConfig->llmMaxRetry,
+            llmErrorKindText(errKind),
             errInfo
         );
         // 通知 UI 层: LLM API 调用失败, 即将自动重试 (经 base_agent 转为 WireDelta::MessageUITip,
@@ -901,7 +947,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                      {"tipType", "warning"},
                      {"text",
                       fmt::format(
-                          "LLM API 请求失败，{} 秒后自动重试 ({}/{})，错误: {}",
+                          "LLM API 请求失败 ({}), {} 秒后自动重试 ({}/{})，错误: {}",
+                          llmErrorKindText(errKind),
                           delaySec,
                           retry,
                           agentCtxPtr->agentConfig->llmMaxRetry,

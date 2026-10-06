@@ -38,6 +38,11 @@ extern int g_da_sim_delay_ms;
 extern std::atomic<int> g_da_sim_request_count;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 extern int g_da_sim_fail_count;
+/// 失败响应的 HTTP 状态码 (0 = 默认 500): 供测试区分"可重试"与"不可重试"错误 ——
+/// 例如 401 鉴权失败应立即停止重试, 400 + 上下文超限关键词应触发压缩后重试
+extern int g_da_sim_fail_status;
+/// 失败响应的响应体 (空 = 默认 `{"error":{"message":"simulated failure"}}`)
+extern std::string g_da_sim_fail_body;
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
 extern int g_da_sim_tool_calls_remaining;
 

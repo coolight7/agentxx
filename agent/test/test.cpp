@@ -21,6 +21,7 @@
 #include "agentxx-test/core/test_json.h"
 #include "agentxx-test/core/test_json_reflection.h"
 #include "agentxx-test/core/test_json_view.h"
+#include "agentxx-test/core/test_llm_error.h"
 #include "agentxx-test/core/test_math_tools.h"
 #include "agentxx-test/core/test_mcp.h"
 #include "agentxx-test/core/test_memgrowth.h"
@@ -218,6 +219,7 @@ int main(int argn, char** argv) {
         runSync("json", agentxx::test::testJson);
         runSync("json_view", agentxx::test::testJsonView);
         runSync("json_reflection", agentxx::test::testJsonReflection);
+        runSync("llm_error", agentxx::test::testLlmError);
         runSync("diff_util", agentxx::test::testDiffUtil);
         runSync("events", agentxx::test::test_events);
         runSync("concurrency", agentxx::test::testConcurrency);

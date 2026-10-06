@@ -189,6 +189,11 @@ std::vector<utilxx_base::Json> g_da_sim_requests;
 std::atomic<int> g_da_sim_request_count = 0;
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 int g_da_sim_fail_count = 0;
+/// 失败响应的 HTTP 状态码 (0 = 默认 500) 与响应体 (空 = 默认错误文本)
+/// - 供测试区分"可重试"与"不可重试"错误 (如 401 应立即停止重试,
+///   400 + 上下文超限关键词应触发压缩后重试)
+int         g_da_sim_fail_status = 0;
+std::string g_da_sim_fail_body;
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
 /// - 供嵌套委派等"先工具后文本"的多请求序列测试; 由测试显式设置并在
 ///   结束时恢复 -1 (响应 handler 处理递减, 不自动重置)
@@ -230,6 +235,8 @@ void DaSimServer::stop() {
     port                          = 0;
     g_da_sim_delay_ms             = 0;
     g_da_sim_fail_count           = 0;
+    g_da_sim_fail_status          = 0;
+    g_da_sim_fail_body.clear();
     g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_tool_calls_remaining = -1;
 }
@@ -246,6 +253,8 @@ DaSimServer startDaSimServer() {
     g_da_sim_requests.clear();
     g_da_sim_request_count        = 0;
     g_da_sim_fail_count           = 0;
+    g_da_sim_fail_status          = 0;
+    g_da_sim_fail_body.clear();
     g_da_sim_tool_calls_remaining = -1;
     utilxx::HttpClient::clearConnectionPool();
 
@@ -287,9 +296,15 @@ DaSimServer startDaSimServer() {
                 g_da_sim_request_count++; // 含失败请求
 
                 if (failing) {
-                    resp.result(http::status::internal_server_error);
+                    const auto status = static_cast<http::status>(
+                        g_da_sim_fail_status > 0 ? g_da_sim_fail_status
+                                                 : static_cast<int>(http::status::internal_server_error)
+                    );
+                    resp.result(status);
                     resp.set(http::field::content_type, "application/json");
-                    resp.body() = R"({"error":{"message":"simulated failure"}})";
+                    resp.body() = g_da_sim_fail_body.empty()
+                                      ? std::string{R"({"error":{"message":"simulated failure"}})"}
+                                      : g_da_sim_fail_body;
                     resp.prepare_payload();
                     co_return;
                 }
@@ -1067,9 +1082,94 @@ asio::awaitable<void> test_agent_has_tool_calls_condition() {
     co_return;
 }
 
-/// 验收: LLM 上下文不在图状态里 (会话为唯一权威)
+/// 验收: LLM 错误分类与重试策略 (计划 LLM-2 / LLM-3)
+/// - 不可重试错误 (401 鉴权失败): 立即结束本轮, 不反复请求
+/// - 上下文超限 (400 + 关键词): 触发一次压缩后立即重试, 第二次请求成功
+/// - 上下文持续超限: 只压缩重试一次, 第二次失败即结束 (不消耗全部重试次数)
+asio::awaitable<void> test_agent_llm_error_policy() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto makeCfg = [&]() {
+        auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.baseUrl       = baseUrl;
+        cfg->model.apiKey        = "EMPTY";
+        cfg->model.modelName     = "test-sim";
+        cfg->prompt.systemPrompt = "You are a helpful assistant.";
+        cfg->llmMaxRetry         = 5;
+        return cfg;
+    };
+
+    // ---- 1) 401 鉴权失败: 不可重试, 请求次数为 1 ----
+    {
+        g_da_sim_request_count = 0;
+        g_da_sim_fail_count    = 1;
+        g_da_sim_fail_status   = 401;
+        g_da_sim_fail_body     = R"({"error":{"type":"authentication_error","message":"Invalid API key"}})";
+
+        auto cfg      = makeCfg();
+        auto agent    = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await agent->init();
+        (void)co_await agent->runTurnAsync("llm_err_auth", "hello", nullptr);
+
+        const int requests = g_da_sim_request_count.load();
+        XX_TEST_EXPECT_EQ(requests, 1); // 鉴权失败不重试
+    }
+
+    // ---- 2) 上下文超限: 压缩一次后重试成功 ----
+    {
+        g_da_sim_request_count = 0;
+        g_da_sim_fail_count    = 1;
+        g_da_sim_fail_status   = 400;
+        g_da_sim_fail_body
+            = R"({"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens"}})";
+        g_da_sim_response_content = "Recovered after compaction.";
+
+        auto cfg   = makeCfg();
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await agent->init();
+        const auto result = co_await agent->runTurnAsync("llm_err_overflow", "hello", nullptr);
+
+        // 第二次请求成功 → 本轮正常结束 (不是重试耗尽)
+        XX_TEST_EXPECT_FALSE(result.hasError);
+        XX_TEST_EXPECT_TRUE(g_da_sim_request_count.load() >= 2);
+        // 请求次数远小于 1 + llmMaxRetry: 溢出走的是"压缩一次立即重试"路径
+        XX_TEST_EXPECT_TRUE(g_da_sim_request_count.load() <= 4);
+
+        g_da_sim_fail_status = 0;
+        g_da_sim_fail_body.clear();
+    }
+
+    // ---- 3) 上下文持续超限: 只压缩重试一次即结束 ----
+    {
+        g_da_sim_request_count = 0;
+        g_da_sim_fail_count    = 100; // 一直失败
+        g_da_sim_fail_status   = 400;
+        g_da_sim_fail_body
+            = R"({"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}})";
+
+        auto cfg   = makeCfg();
+        auto realAgent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        co_await realAgent->init();
+        const auto result = co_await realAgent->runTurnAsync("llm_err_overflow2", "hello", nullptr);
+
+        XX_TEST_EXPECT_TRUE(result.hasError);
+        // 只允许两次请求: 原始请求 + 压缩后的一次重试
+        XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 2);
+
+        g_da_sim_fail_count  = 0;
+        g_da_sim_fail_status = 0;
+        g_da_sim_fail_body.clear();
+    }
+
+    sim.stop();
+    co_return;
+}
+
+
 /// - 会话上下文里能查到本轮用户正文 (权威面)
 /// - 图状态序列化载荷既不含该正文, 也远小于上下文本身 (只含控制通道)
+/// 验收: LLM 上下文不在图状态里 (会话为唯一权威)
 asio::awaitable<void> test_agent_context_not_in_graph_state() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -1994,6 +2094,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_multi_session_io();
         co_await test_agent_reuse_session_bus();
         co_await test_agent_llm_retry_exhaust();
+        co_await test_agent_llm_error_policy();
         co_await test_agent_toolcall_intercept_exception();
         co_await test_agent_build_system_prompt_and_wire_get_context();
         co_await test_agent_system_prompt_session_dirs();
