@@ -83,6 +83,8 @@ struct MsgType {    // ===== Client -> Server =====
     inline static constexpr std::string_view PermissionState = "permission_state";
     /// 服务端新增模型配置的结果 (AddModel 回执; 失败时 error 为给用户看的原因)
     inline static constexpr std::string_view AddModelResult = "add_model_result";
+    /// 服务端输入受理回执 (仅当 user_input 携带 requestId > 0 时回复)
+    inline static constexpr std::string_view InputAck = "input_ack";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -314,6 +316,12 @@ inline utilxx_base::Json messageQueueItemToJson(const MessageQueueItem& item) {
     if (!item.model.empty()) {
         j["model"] = item.model;
     }
+    if (!item.delivery.empty()) {
+        j["delivery"] = item.delivery;
+    }
+    if (item.recovered) {
+        j["recovered"] = true;
+    }
     if (!item.attachments.empty()) {
         utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& att : item.attachments) {
@@ -330,6 +338,8 @@ inline MessageQueueItem messageQueueItemFromJson(const utilxx_base::Json& j) {
     item.text        = j.value("text", std::string{});
     item.model       = j.value("model", std::string{});
     item.createdAtMs = j.value("createdAtMs", int64_t{0});
+    item.delivery    = j.value("delivery", std::string{});
+    item.recovered   = j.value("recovered", false);
     if (j.contains("attachments") && j["attachments"].is_array()) {
         for (const auto& att : j["attachments"]) {
             item.attachments.push_back(MediaAttachment::fromJson(att));
@@ -360,6 +370,9 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
         }
         j["message_queue"] = std::move(qArr);
     }
+    if (!p.queueState.empty()) {
+        j["queue_state"] = p.queueState;
+    }
     return j;
 }
 
@@ -383,6 +396,7 @@ inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
             p.messageQueue.push_back(messageQueueItemFromJson(qm));
         }
     }
+    p.queueState = j.value("queue_state", std::string{});
     return p;
 }
 
@@ -418,7 +432,9 @@ inline utilxx_base::Json makeUserInput(
     std::string_view                    sessionId,
     std::string_view                    text,
     std::string_view                    model       = "",
-    const std::vector<MediaAttachment>& attachments = {}
+    const std::vector<MediaAttachment>& attachments = {},
+    std::string_view                    delivery    = "",
+    uint64_t                            requestId   = 0
 ) {
     utilxx_base::Json j = {
         {"type",      MsgType::UserInput},
@@ -428,6 +444,12 @@ inline utilxx_base::Json makeUserInput(
     if (!model.empty()) {
         j["model"] = model;
     }
+    if (!delivery.empty()) {
+        j["delivery"] = delivery;
+    }
+    if (requestId != 0) {
+        j["requestId"] = requestId;
+    }
     if (!attachments.empty()) {
         utilxx_base::Json arr = utilxx_base::Json::array();
         for (const auto& att : attachments) {
@@ -436,6 +458,46 @@ inline utilxx_base::Json makeUserInput(
         j["attachments"] = std::move(arr);
     }
     return j;
+}
+
+/// 输入受理回执 (Server -> Client): 状态与拒绝原因均为字符串常量 (见
+/// [InputStatus] / [InputRejectReason]); 空字段不写入, 保证往返一致
+inline utilxx_base::Json makeInputAck(const WireInputAck& ack) {
+    utilxx_base::Json j = {
+        {"type",   MsgType::InputAck   },
+        {"status", ack.status          },
+    };
+    if (ack.requestId != 0) {
+        j["requestId"] = ack.requestId;
+    }
+    if (!ack.sessionId.empty()) {
+        j["sessionId"] = ack.sessionId;
+    }
+    if (!ack.delivery.empty()) {
+        j["delivery"] = ack.delivery;
+    }
+    if (!ack.reason.empty()) {
+        j["reason"] = ack.reason;
+    }
+    if (!ack.detail.empty()) {
+        j["detail"] = ack.detail;
+    }
+    if (!ack.itemId.empty()) {
+        j["itemId"] = ack.itemId;
+    }
+    return j;
+}
+
+inline WireInputAck inputAckFromJson(const utilxx_base::Json& j) {
+    WireInputAck ack;
+    ack.requestId = j.value("requestId", uint64_t{0});
+    ack.sessionId = j.value("sessionId", std::string{});
+    ack.delivery  = j.value("delivery", std::string{});
+    ack.status    = j.value("status", std::string{});
+    ack.reason    = j.value("reason", std::string{});
+    ack.detail    = j.value("detail", std::string{});
+    ack.itemId    = j.value("itemId", std::string{});
+    return ack;
 }
 
 inline utilxx_base::Json makeInterruptResponse(int64_t id, const utilxx_base::Json& result) {
@@ -886,12 +948,18 @@ inline WirePluginDataUp pluginDataUpFromJson(const utilxx_base::Json& j) {
 // 消息队列相关 (Client <-> Server)
 // ---------------------------------------------------------------------------
 
-inline utilxx_base::Json
-    makeMessageQueueUpdate(std::string_view sessionId, const std::vector<MessageQueueItem>& items) {
+inline utilxx_base::Json makeMessageQueueUpdate(
+    std::string_view                    sessionId,
+    const std::vector<MessageQueueItem>& items,
+    std::string_view                    state = ""
+) {
     utilxx_base::Json j = {
         {"type",      MsgType::MessageQueueUpdate},
         {"sessionId", sessionId                  },
     };
+    if (!state.empty()) {
+        j["state"] = state;
+    }
     utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& item : items) {
         arr.push_back(messageQueueItemToJson(item));
@@ -903,6 +971,7 @@ inline utilxx_base::Json
 inline WireMessageQueueUpdate messageQueueUpdateFromJson(const utilxx_base::Json& j) {
     WireMessageQueueUpdate u;
     u.sessionId = j.value("sessionId", std::string{});
+    u.state     = j.value("state", std::string{});
     if (j.contains("items") && j["items"].is_array()) {
         for (const auto& item : j["items"]) {
             u.items.push_back(messageQueueItemFromJson(item));
@@ -1369,6 +1438,9 @@ WireHelloAck      helloAckFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireUserInput& msg);
 WireUserInput     userInputFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json toJson(const WireInputAck& msg);
+WireInputAck      inputAckMsgFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json toJson(const WireCancel& msg);
 WireCancel        cancelFromJson(const utilxx_base::Json& j);

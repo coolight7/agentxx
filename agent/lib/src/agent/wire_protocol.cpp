@@ -28,7 +28,18 @@ utilxx_base::Json toJson(const WireHelloAck& msg) {
 }
 
 utilxx_base::Json toJson(const WireUserInput& msg) {
-    return makeUserInput(msg.sessionId, msg.text, msg.model, msg.attachments);
+    return makeUserInput(
+        msg.sessionId,
+        msg.text,
+        msg.model,
+        msg.attachments,
+        msg.delivery,
+        msg.requestId
+    );
+}
+
+utilxx_base::Json toJson(const WireInputAck& msg) {
+    return makeInputAck(msg);
 }
 
 utilxx_base::Json toJson(const WireCancel& msg) {
@@ -131,7 +142,7 @@ utilxx_base::Json toJson(const WirePluginDataUp& msg) {
 }
 
 utilxx_base::Json toJson(const WireMessageQueueUpdate& msg) {
-    return makeMessageQueueUpdate(msg.sessionId, msg.items);
+    return makeMessageQueueUpdate(msg.sessionId, msg.items, msg.state);
 }
 
 utilxx_base::Json toJson(const WireClearMessageQueue& msg) {
@@ -244,12 +255,18 @@ WireUserInput userInputFromJson(const utilxx_base::Json& j) {
     input.sessionId = j.value("sessionId", std::string{});
     input.text      = j.value("text", std::string{});
     input.model     = j.value("model", std::string{});
+    input.delivery  = j.value("delivery", std::string{});
+    input.requestId = j.value("requestId", uint64_t{0});
     if (j.contains("attachments") && j["attachments"].is_array()) {
         for (const auto& item : j["attachments"]) {
             input.attachments.push_back(MediaAttachment::fromJson(item));
         }
     }
     return input;
+}
+
+WireInputAck inputAckMsgFromJson(const utilxx_base::Json& j) {
+    return inputAckFromJson(j);
 }
 
 WireCancel cancelFromJson(const utilxx_base::Json& j) {
@@ -409,6 +426,10 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::UserInput,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return userInputFromJson(j);
+         }},
+        {MsgType::InputAck,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return inputAckMsgFromJson(j);
          }},
         {MsgType::Cancel,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {

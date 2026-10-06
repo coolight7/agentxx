@@ -1962,6 +1962,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     st.fullAuthorized = m.fullAuth;
                     postRedraw();
                 }
+            } else if constexpr (std::is_same_v<T, agentxx::agent::WireInputAck>) {
+                // 输入受理回执 (计划 LOOP-3): 被拒绝时明确提示, 不再从 delta 猜测
+                onInputAck(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireAddModelResult>) {
                 // 新增模型配置的回执: 成功时立即使用该模型 (状态栏 + 下一条消息携带;
                 // 与 WireSelectModel 同一机制), 失败时把 agent 侧的原因提示给用户
@@ -2066,7 +2069,9 @@ void TUIClientAgentIO::sendUserInputLocked(
             currentSessionId(),
             text,
             std::move(pendingModel),
-            std::move(attachments)
+            std::move(attachments),
+            std::string{agentxx::agent::InputDelivery::NextTurn},
+            ++nextInputRequestId_
         });
     } else {
         // 无 transport (遗留直连模式): 输入经本地 channel 送达, 无法携带
@@ -2886,6 +2891,20 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
         resetTrailingRunningToolsLocked(st);
         st.isStreaming = false;
     }
+    postRedraw();
+}
+
+void TUIClientAgentIO::onInputAck(const agentxx::agent::WireInputAck& ack) {
+    // 输入受理回执 (计划 LOOP-3): 界面不再从 delta 猜测投递结果
+    // - rejected: 明确提示用户 (文本/原因由服务端给出)
+    // - started/queued/steered: 正常路径 (排队状态由 MessageQueueUpdate 展示)
+    if (ack.status != agentxx::agent::InputStatus::Rejected) {
+        return;
+    }
+    const std::string detail = ack.detail.empty() ? ack.reason : ack.detail;
+    enqueueUiAction([this, detail] {
+        showToast(trf("toast.inputRejected", detail));
+    });
     postRedraw();
 }
 

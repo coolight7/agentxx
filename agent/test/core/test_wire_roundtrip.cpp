@@ -265,20 +265,92 @@ TestResult testWireRoundtrip() {
     {
         WireMessageQueueUpdate up;
         up.sessionId = "s5";
+        up.state     = "paused";
         MessageQueueItem item;
         item.id          = "q1";
         item.text        = "排队消息";
         item.model       = "gpt-x";
         item.createdAtMs = 1700000000999LL;
+        item.delivery    = "next-turn";
+        item.recovered   = true;
         up.items.push_back(std::move(item));
         auto back = roundTrip(up);
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s5"});
+        XX_TEST_EXPECT_EQ(back.state, std::string{"paused"});
         XX_TEST_EXPECT_EQ(back.items.size(), size_t{1});
         if (!back.items.empty()) {
             XX_TEST_EXPECT_EQ(back.items[0].id, std::string{"q1"});
             XX_TEST_EXPECT_EQ(back.items[0].text, std::string{"排队消息"});
             XX_TEST_EXPECT_EQ(back.items[0].createdAtMs, 1700000000999LL);
+            XX_TEST_EXPECT_EQ(back.items[0].delivery, std::string{"next-turn"});
+            XX_TEST_EXPECT_TRUE(back.items[0].recovered);
         }
+    }
+    // 输入投递与受理回执 (计划 LOOP-2 / LOOP-3)
+    {
+        WireUserInput input;
+        input.sessionId = "s5";
+        input.text      = "插话内容";
+        input.model     = "gpt-x";
+        input.delivery  = std::string{InputDelivery::NextStep};
+        input.requestId = 77;
+        auto back       = roundTrip(input);
+        XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s5"});
+        XX_TEST_EXPECT_EQ(back.text, std::string{"插话内容"});
+        XX_TEST_EXPECT_EQ(back.model, std::string{"gpt-x"});
+        XX_TEST_EXPECT_EQ(back.delivery, std::string{InputDelivery::NextStep});
+        XX_TEST_EXPECT_EQ(back.requestId, uint64_t{77});
+
+        // 旧客户端不带 delivery/requestId: 解析为零值, 不报错
+        auto legacy = agentxx::agent::io::userInputFromJson(
+            utilxx_base::Json{
+                {"type",      agentxx::agent::io::MsgType::UserInput},
+                {"sessionId", "s5"                                   },
+                {"text",      "legacy"                               },
+        }
+        );
+        XX_TEST_EXPECT_TRUE(legacy.delivery.empty());
+        XX_TEST_EXPECT_EQ(legacy.requestId, uint64_t{0});
+        XX_TEST_EXPECT_EQ(
+            std::string{InputDelivery::normalize(legacy.delivery)},
+            std::string{InputDelivery::NextTurn}
+        );
+    }
+    {
+        WireInputAck ack;
+        ack.requestId = 77;
+        ack.sessionId = "s5";
+        ack.delivery  = std::string{InputDelivery::NextStep};
+        ack.status    = std::string{InputStatus::Steered};
+        ack.reason    = std::string{InputRejectReason::EmptyContent};
+        ack.detail    = "输入为空: 请填写内容";
+        ack.itemId    = "i-9";
+        auto back     = roundTrip(ack);
+        XX_TEST_EXPECT_EQ(back.requestId, uint64_t{77});
+        XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s5"});
+        XX_TEST_EXPECT_EQ(back.delivery, std::string{InputDelivery::NextStep});
+        XX_TEST_EXPECT_EQ(back.status, std::string{InputStatus::Steered});
+        XX_TEST_EXPECT_EQ(back.reason, std::string{InputRejectReason::EmptyContent});
+        XX_TEST_EXPECT_EQ(back.detail, std::string{"输入为空: 请填写内容"});
+        XX_TEST_EXPECT_EQ(back.itemId, std::string{"i-9"});
+
+        // 拒绝回执 (最小字段集) 与队列状态文本往返
+        auto rejected = roundTrip(WireInputAck{
+            .requestId = 1,
+            .status    = std::string{InputStatus::Rejected},
+            .reason    = std::string{InputRejectReason::BadDelivery},
+        });
+        XX_TEST_EXPECT_EQ(rejected.requestId, uint64_t{1});
+        XX_TEST_EXPECT_TRUE(rejected.itemId.empty());
+        XX_TEST_EXPECT_EQ(
+            std::string{sessionQueueStateText(SessionQueueState::Paused)},
+            std::string{"paused"}
+        );
+        XX_TEST_EXPECT_TRUE(
+            sessionQueueStateFromText("draining") == SessionQueueState::Draining
+        );
+        // 未知状态文本按 idle 处理 (老客户端/新服务端组合)
+        XX_TEST_EXPECT_TRUE(sessionQueueStateFromText("bogus") == SessionQueueState::Idle);
     }
     {
         auto back = roundTrip(WireClearMessageQueue{.sessionId = "s5"});

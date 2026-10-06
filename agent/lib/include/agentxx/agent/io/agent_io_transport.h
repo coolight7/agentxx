@@ -20,6 +20,77 @@ namespace agent {
 // - WS 传输: 内部负责 JSON 编解码, 调用方无感知
 // ---------------------------------------------------------------------------
 
+/// 输入受理状态 (`WireInputAck.status`; 计划 LOOP-3)
+///
+/// 客户端据此展示"已开始 / 已排队 / 已注入 / 被拒绝", 不再从 delta 猜测。
+struct InputStatus {
+    inline static constexpr std::string_view Started  = "started";  ///< 已立即开始新轮次
+    inline static constexpr std::string_view Queued   = "queued";   ///< 已受理, 排队等待
+    inline static constexpr std::string_view Steered  = "steered";  ///< 已注入当前轮次
+    inline static constexpr std::string_view Rejected = "rejected"; ///< 未受理 (原因见 reason)
+};
+
+/// 输入被拒绝的结构化原因 (`WireInputAck.reason`; 与展示文本 detail 分开)
+struct InputRejectReason {
+    /// 文本与附件都为空
+    inline static constexpr std::string_view EmptyContent = "empty_content";
+    /// 会话不可用 (agent 已释放/会话无法创建)
+    inline static constexpr std::string_view SessionNotFound = "session_not_found";
+    /// 请求携带的会话 ID 与本端点绑定的会话不一致
+    inline static constexpr std::string_view SessionMismatch = "session_mismatch";
+    /// 服务端已停止接受输入
+    inline static constexpr std::string_view ServerStopped = "server_stopped";
+    /// 投递模式取值非法
+    inline static constexpr std::string_view BadDelivery = "bad_delivery";
+    /// 队列在本次输入提交前被清空 (collect 合并窗口内的输入被丢弃)
+    inline static constexpr std::string_view QueueCleared = "queue_cleared";
+};
+
+/// 服务端消息队列状态 (计划 LOOP-4: 取代"两个 bool"的隐式状态)
+///
+/// 状态含义与转移:
+/// - `Idle`:     无进行中轮次; 队列为空时等待用户输入, 非空时即将开始执行
+/// - `Running`:  有进行中轮次, 队列中消息将在本轮正常结束后按序继续
+/// - `Paused`:   上一轮以取消/异常/中断结束, 队列暂停不自动继续;
+///               只有新的用户输入或"打断并运行下一条"能解除
+/// - `Draining`: 暂停解除后正在按序消化积压队列 (诊断/界面区分用, 与 Running
+///               同义但表示"队列非空且刚开始消化")
+enum class SessionQueueState : uint8_t {
+    Idle = 0,
+    Running,
+    Paused,
+    Draining,
+};
+
+/// 队列状态文本 (Wire 传输与日志用; 客户端按字符串识别, 未知值按 Idle 处理)
+inline std::string_view sessionQueueStateText(SessionQueueState state) noexcept {
+    switch (state) {
+        case SessionQueueState::Running:
+            return "running";
+        case SessionQueueState::Paused:
+            return "paused";
+        case SessionQueueState::Draining:
+            return "draining";
+        case SessionQueueState::Idle:
+        default:
+            return "idle";
+    }
+}
+
+/// 解析队列状态文本 (未知/空 → Idle)
+inline SessionQueueState sessionQueueStateFromText(std::string_view text) noexcept {
+    if (text == "running") {
+        return SessionQueueState::Running;
+    }
+    if (text == "paused") {
+        return SessionQueueState::Paused;
+    }
+    if (text == "draining") {
+        return SessionQueueState::Draining;
+    }
+    return SessionQueueState::Idle;
+}
+
 struct WireHello {
     std::string sessionId;
     std::string token;
@@ -64,6 +135,25 @@ struct WireUserInput {
     /// 开始时 (runTurnAsync 内 selectModel) 自动切换
     std::string                  model;
     std::vector<MediaAttachment> attachments; ///< 携带附件
+    /// 投递模式 (取值见 [InputDelivery]; 空 = next-turn, 兼容旧客户端)
+    std::string delivery;
+    /// 客户端请求序号: >0 时服务端回 [WireInputAck] 明确受理结果;
+    /// 0 = 不需要回执 (旧客户端; 服务端不回, 避免对端不认识新消息类型)
+    uint64_t requestId = 0;
+};
+
+/// 输入受理回执 (Server -> Client; 计划 LOOP-3)
+///
+/// 仅在 `WireUserInput.requestId > 0` 时发送: 老客户端不认识本消息类型,
+/// WS 解码遇到未知类型会断开连接, 因此不能用"总是回执"的方式。
+struct WireInputAck {
+    uint64_t    requestId = 0;  ///< 回显请求序号 (客户端据此关联本地输入)
+    std::string sessionId;
+    std::string delivery;       ///< 归一化后的投递模式 ([InputDelivery])
+    std::string status;         ///< 受理状态 ([InputStatus])
+    std::string reason;         ///< 拒绝原因 ([InputRejectReason]; 仅 rejected)
+    std::string detail;         ///< 给人看的说明 (可本地化/含细节)
+    std::string itemId;         ///< 队列条目 id (queued/started 时有值)
 };
 
 struct WireCancel {
@@ -253,6 +343,9 @@ struct WirePluginDataUp {
 struct WireMessageQueueUpdate {
     std::string                   sessionId;
     std::vector<MessageQueueItem> items;
+    /// 队列状态 (取值见 SessionQueueState::text: idle/running/paused/draining;
+    /// 空 = 旧服务端未提供). 客户端据此区分"正在排队执行"与"已暂停不再自动执行"
+    std::string state;
 };
 
 /// 客户端请求清空消息队列 (Client -> Server)
@@ -391,6 +484,7 @@ using WireMessage = std::variant<
     WireHello,
     WireHelloAck,
     WireUserInput,
+    WireInputAck,
     WireCancel,
     WireSelectModel,
     WireInterruptRequest,

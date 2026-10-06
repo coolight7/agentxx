@@ -64,6 +64,7 @@ constexpr Entry kTable[] = {
      "Cannot open the browser (select the link to copy it)",                                                             "无法打开浏览器 (可拖选链接复制)"                                                            },
     {"toast.modelAdded",                "Model {} added and switched to it",                                             "已添加模型 {} 并切换使用"                                                                       },
     {"toast.modelAddFailed",            "Add model failed: {}",                                                          "添加模型失败: {}"                                                                                   },
+    {"toast.inputRejected",             "Input not accepted: {}",                                                        "输入未被受理: {}"                                                                                   },
 
  // ---- 待发送消息队列 (顶栏 + 弹窗) ----
     {"queue.barTitle",                  "  • Message Queue: {}",                                                       "  • 待发送消息队列: {}"                                                                          },

@@ -261,8 +261,17 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
 asio::awaitable<neograph::graph::NodeOutput>
     ModelCallWrapNode::callLLM(neograph::graph::NodeInput& in) {
     XX_LOGT("ModelCallWrapNode::callLLM START");
+    // 安全边界: 请求装配前取用待注入输入 (计划 LOOP-2)
+    // - next-step: 作为 user 消息进入权威上下文与展示历史 (本请求即包含)
+    // - inject:    只拼进本次请求 (不改写上下文)
+    // 放在 build_params 之前: next-step 追加的消息由 build_params 一并复制
+    auto injections
+        = agentxx::nodes::drainPendingSessionInputs(agentContext.lock(), in, in.ctx.thread_id, nodeName);
     auto params         = build_params(in.ctx.thread_id);
     params.cancel_token = in.ctx.cancel_token;
+    for (auto& injected : injections.requestScoped) {
+        params.messages.push_back(std::move(injected));
+    }
 
     auto completion = co_await onReceiveToken(params, in);
     neograph::graph::record_usage(in.ctx, completion); // #88

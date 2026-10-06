@@ -51,5 +51,38 @@ size_t appendSessionMessages(
     std::string_view                                     nodeName = {}
 );
 
+/// 待注入输入的取用结果 (见 [drainPendingSessionInputs])
+struct PendingInjections {
+    /// 已写入权威上下文 (并进入展示历史) 的 next-step 条数
+    size_t promotedSteps = 0;
+    /// 只对本次请求可见的动态注入消息 (inject 投递; 不写入权威上下文)
+    std::vector<neograph::ChatMessage> requestScoped;
+};
+
+/// 在 modelcall 请求装配前的安全边界注入待处理的 next-step / inject 输入
+/// (计划 LOOP-2)
+///
+/// - 调用时机: 每次请求装配前 (modelcall 节点内), 即"安全边界": 不会打断
+///   正在进行的 provider 流; 空闲时会话没有请求装配, 待注入输入保持等待
+/// - `next-step`: 作为 user 消息追加到会话权威上下文 + 展示历史, 并通知 UI
+///   (EventBridge 不展开 user 角色消息, 因此这里自行追加展示消息与 WireDelta)
+/// - `inject`: 只返回给调用方拼进本次请求 (记录来源; 非 user 来源加来源前缀),
+///   不改写权威上下文, 因此在后续轮次里不可见
+/// - 已持久化收件箱条目同步标记 promoted (进程重启后不会重复投递)
+///
+/// - `args`:
+///     - [ctx] 当前 agent 上下文 (会话表与持久化来源)
+///     - [in] 节点输入 (thread_id / stream_cb)
+///     - [sessionId] 目标会话 id
+///     - [nodeName] 事件上报的节点名
+///
+/// - `return` 本次取用的输入 (无待注入输入时两项均为空)
+PendingInjections drainPendingSessionInputs(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    const neograph::graph::NodeInput&                    in,
+    std::string_view                                     sessionId,
+    std::string_view                                     nodeName = {}
+);
+
 } // namespace nodes
 } // namespace agentxx

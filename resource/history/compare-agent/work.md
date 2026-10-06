@@ -15,11 +15,11 @@
 | STO-2 | schema 版本和相邻迁移链 | P0 | 完成（已构建 + 测试通过） | `agent/lib/src/agent/session_store.cpp`（`kSchemaVersion`/`applyMigrationStep`/备份） |
 | STO-8 | 用量账本 | P1 | 完成（已构建 + 测试通过） | `session_store`（usage 表/聚合）、`nodes/modelcall.cpp`（记录点） |
 | STO-11 | settings_db 乐观版本 | P1 | 完成（已构建 + 测试通过） | `agent/lib/{include/agentxx/util,src/util}/settings_db.*` |
-| LOOP-1 | 持久化收件箱两段状态 | P0 | 待完成 | — |
-| LOOP-2 | `next-step` / `next-turn` / `inject` | P0 | 待完成 | — |
-| LOOP-3 | 投递结果显式化 | P1 | 待完成 | — |
-| LOOP-4 | QueueState 状态机 | P1 | 待完成 | — |
-| LOOP-11 | `collect` 合并投递 | P1 | 待完成 | — |
+| LOOP-1 | 持久化收件箱两段状态 | P0 | 完成（已构建 + 测试通过） | `session_store`（`session_input` 表 / schema v2）、`session_server_agent_io`（受理落库 + 启动恢复） |
+| LOOP-2 | `next-step` / `next-turn` / `inject` | P0 | 完成（已构建 + 测试通过） | `wire_protocol`（`delivery`）、`context`（待注入输入）、`session_context`（`drainPendingSessionInputs`）、`modelcall` |
+| LOOP-3 | 投递结果显式化 | P1 | 完成（已构建 + 测试通过） | `WireInputAck` + `InputStatus` / `InputRejectReason`；TUI 回执提示 |
+| LOOP-4 | QueueState 状态机 | P1 | 完成（已构建 + 测试通过） | `SessionQueueState`（idle/running/paused/draining）+ 队列同步携带状态 |
+| LOOP-11 | `collect` 合并投递 | P1 | 完成（已构建 + 测试通过） | `SessionServerAgentIO::Config::collectWindow` + `flushCollectWindow` |
 | CTX-7 | 附件引用而不是反复内联 Base64 | P1 | 待完成（计划标注"需进一步理解实施内容"，先不动） | — |
 | PRM-5 | 技能优先级和同名裁决 | P1 | 待完成 | — |
 | STO-12 | 会话检索和标题 | P1 | 存储层完成（界面入口待接） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions` |
@@ -444,14 +444,14 @@
 
 ## 待完成（后续阶段）
 
-- LOOP-1/2/3/4/11：输入投递的持久化收件箱、`next-step|next-turn|inject|collect` 语义、
-  投递结果回执与 `QueueState` 状态机（涉及 `wire_protocol`、`session_server_agent_io`、
-  modelcall 请求装配）。
-- PRM-5：技能优先级与同名裁决；STO-13：会话导出。CTX-7（附件引用）计划本身标注
-  "需进一步理解具体实施内容"，暂缓。
+- STO-4/STO-5/STO-9：`view_message.seq` + `hello.afterSeq` 增量补拉、落盘原因分级、写失败提示。
+- PRM-1/PRM-2/PRM-5/PRM-7：提示词稳定段/动态段、段落 `order`、技能优先级与同名裁决、
+  请求体结构 + 稳定段哈希断言。CTX-7（附件引用）计划本身标注"需进一步理解具体实施内容"，暂缓。
+- TOOL-16：按规范化路径排队执行（与 TOOL-1 并行化配套）。
+- 批次 A 余项：CFG-1（结构化配置校验）、UI-2 + TST-5（UI 快照夹具）、PRO-4（schema 生成）、
+  TST-8（一键门禁）、LLM-13（HTTP 录制回放）。
+- 批次 E：PLG-1/2/4/6/7/8、CFG-9、UI-1/5/9、PRO-3/5/8、RET-1a/STO-12 界面入口、STO-13。
 - STO-12 的协议/界面入口（改名、搜索框）见"阶段 C"。
-- TOOL-1/TOOL-3：工具分阶段并行与并行取消收尾（`nodes/toolcall.cpp`）——**仍未实施**，
-  原因见下方"未实施项的原因与建议路径"。
 
 ## 与计划的差异（记录用）
 
@@ -520,6 +520,91 @@
 - 阶段 H（PRO-1 / PRO-7 / PRO-11）完成后提交：`wire 协议往返测试、会话 ID 统一校验、wire 错误码 (PRO-1/PRO-7/PRO-11)`。
 - 阶段 I（SEC-2 / SEC-5 / TST-10）完成后提交：`权限判定理由与执行前目标复验 (SEC-2/SEC-5/TST-10)`。
 - 阶段 J（LLM-2 / LLM-3）完成后提交：`LLM 错误分类、退避策略与溢出压缩重试 (LLM-2/LLM-3)`。
+- 阶段 K（LOOP-1 / LOOP-2 / LOOP-3 / LOOP-4 / LOOP-11）完成后提交：`输入投递: 持久化收件箱、投递模式与队列状态机 (LOOP-1/2/3/4/11)`。
+
+## 阶段 K：输入投递（LOOP-1/2/3/4/11，2026-10-06）
+
+计划依据：`plan.md` §2（轮次与输入投递）、§16.2 批次 B。
+
+已完成：
+
+- **LOOP-4 队列状态机**（`session_server_agent_io.{h,cpp}`）：
+  - 用 `SessionQueueState`（`idle` / `running` / `paused` / `draining`）取代原来的
+    `queuePaused_` / `pendingInsert_` 两个 bool；所有转移集中到 `setQueueState()` 一处，
+    并打印 Debug 日志（旧状态 → 新状态 + 原因），便于排查"消息为什么不执行"。
+  - 转移规则：轮次正常结束 → 队列非空为 `running`、空为 `idle`；轮次取消/异常/中断结束 →
+    `paused`（不自动继续）；`paused` 下收到新用户输入 → `draining`（消化积压）→ `idle`；
+    "打断并运行下一条"→ `draining` 并取消当前轮次。
+  - 状态随 `WireMessageQueueUpdate.state` 与 `WireSyncPayload.queueState` 同步给客户端
+    （未知文本按 `idle` 处理，老客户端忽略该字段）。
+- **LOOP-3 投递结果显式化**：
+  - 新消息 `WireInputAck`（`requestId/sessionId/delivery/status/reason/detail/itemId`）+
+    常量表 `InputStatus`（started/queued/steered/rejected）与 `InputRejectReason`
+    （empty_content/session_not_found/session_mismatch/server_stopped/bad_delivery/queue_cleared）；
+  - `WireUserInput` 增加 `requestId`（0 = 不要回执）：**只有 requestId > 0 才回执**，
+    避免老客户端收到不认识的类型（WS 解码遇未知类型会断开连接）；
+  - TUI 每次发送输入自增 `requestId`，收到 `rejected` 回执时弹提示
+    （`toast.inputRejected`，中英文案已补）。
+- **LOOP-2 投递模式**（`WireUserInput.delivery`）：
+  - `next-turn`（默认，空值归一化到它）：进入消息队列（旧行为）；
+  - `next-step`：轮次进行中登记为"待注入"，在**下一个 modelcall 请求装配前**（安全边界）
+    作为 user 消息写入会话权威上下文 + 展示历史（EventBridge 不展开 user 角色消息，
+    因此由 `appendUserViewMessage` 自行追加展示消息并广播 `InsertMessage`）；
+    空闲时按 `next-turn` 立即开轮；
+  - `inject`：只在下一次请求里追加（请求级可见），**不改写权威上下文、不唤醒会话**；
+    来源写入消息 `extra.input_source`（非 user 来源在正文前加 `[来源]` 前缀）；
+  - 待注入输入存放在 `Session::pendingInputs_`（`enqueuePendingInput` / `takePendingInputs`），
+    取用入口是 `agentxx::nodes::drainPendingSessionInputs()`（`session_context.{h,cpp}`），
+    由 `ModelCallWrapNode::callLLM` 在 `build_params` 之前调用；
+  - 带附件的 `next-step`/`inject` 回落为 `next-turn` 排队（附件只在本轮启动路径加载），
+    回执 detail 明确说明。
+- **LOOP-11 `collect` 合并投递**：`SessionServerAgentIO::Config::collectWindow`（默认 400ms）
+  静默窗口内的连续输入合并为一条（正文按输入顺序换行拼接、附件累加、模型取最后一个非空），
+  窗口到期后按 `next-turn` 提交；每个请求都拿到带同一合并条目 id 的回执；
+  清空队列会丢弃窗口内暂存输入并逐条回 `queue_cleared`（避免客户端一直等回执）。
+- **LOOP-1 持久化收件箱**：
+  - 会话库新增 `session_input` 表（schema **v2**，迁移步骤 2：老库补表，`IF NOT EXISTS` 幂等）；
+    字段 `id / payload / delivery / status / admitted_seq / promoted_seq / created_ms`；
+  - `SessionStore` 新增 `addSessionInput` / `markSessionInputPromoted` / `setSessionInputStatus`
+    / `listSessionInputs`（状态常量见 `SessionStore::SessionInputStatus`）；
+  - 受理即落库（`admitted`），真正进入上下文或本次请求时标记 `promoted`
+    （`drainPendingSessionInputs` 内完成），用户删除或清空队列标记 `dropped`；
+    载荷只存元数据（文本/模型/投递模式/附件元数据），附件 Base64 不进库；
+  - 端点启动（`run()` 预热会话之后）`recoverPendingInputs()`：只恢复 `admitted` 条目，
+    作为 `recovered=true` 的排队项进入队列并**置 `paused`**——用户确认（发新输入）或删除后才执行，
+    进程重启不重放副作用；日志给出恢复条数。
+
+测试：
+
+- 新模块 `input_delivery`（`agent/test/core/test_input_delivery.cpp`，78 项断言，7 组用例）：
+  ① 回执状态与拒绝原因（空内容 / 会话不匹配 / 未知投递模式 / started / queued / 旧客户端不回执）；
+  ② 状态机（初始 idle → 排队 queued → 取消 paused + 队列同步状态 → 新输入解除暂停并消化积压 → idle）；
+  ③ next-step 注入（回执 steered、内容进入权威上下文与展示历史）；
+  ④ inject（空闲不唤醒会话、只出现在下一次请求体、不进上下文与展示历史）；
+  ⑤ collect 合并（三条输入合成一轮，请求体含全部文本）；
+  ⑥ 收件箱存储 API（写入 / 按状态过滤 / promoted / dropped / 同 id 覆盖 + schema v2 迁移）；
+  ⑦ 重启恢复（未投递条目恢复为待确认且不自动执行；删除/清空的条目不恢复）。
+- `wire_roundtrip` 模块补 26 项断言：`WireInputAck` 全字段往返、`WireUserInput` 的
+  `delivery`/`requestId` 往返与"老客户端缺字段"解析、队列状态文本往返与未知文本兜底、
+  `MessageQueueItem` 新字段往返。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli`（含 TUI）均 exit=0，无新增 error/warning。
+- 测试：`input_delivery` 78/0、`wire_roundtrip` 191/0、`remote_agent` 453/0、`agent` 198/0、
+  `session_persistence` 621/0、`session_schema` 73/0、`settings_db` 73/0、`permission` 45/0、
+  `boundaries` 8/0、`cancel` 45/0、`message_supplement` 95/0 —— 全部 0 失败。
+
+注意事项 / 与计划的差异：
+
+- 计划 LOOP-1 字段写成 `admitted_seq/promoted_seq`，实现一致（记录受理/投递时的会话 delta seq）；
+  恢复语义按计划"只恢复为待确认，不自动重放副作用"：恢复项进入消息队列并置 `paused`，
+  界面上表现为可查看、可删除、需用户确认的积压消息。
+- 计划 LOOP-2 要求"持久化关闭时保持相同语义，但只保存在内存"：收件箱写入在无
+  `SessionStore`（未配置 dataDir 或 `enableSessionStore=false`）时为 no-op，其余语义完全一致。
+- LOOP-5/LOOP-7 经人工核定不做；LOOP-6/LOOP-10 亦不做（理由见 plan.md 修订记录）。
+- 队列状态已随消息同步，但 TUI 侧暂只用"进行中/排队"既有展示，未单独渲染
+  `paused`/`recovered` 文案（接口与字段已就绪，后续按需要补展示）。
 
 ## 未实施项的原因与建议路径（下次继续）
 

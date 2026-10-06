@@ -565,6 +565,8 @@ protected:
     void onSync(const agentxx::agent::WireSyncPayload& payload) override;
     void onTurnResult(const agentxx::agent::WireTurnResult& result) override;
     void onContextStats(const agentxx::agent::WireContextStats& stats) override;
+    /// 输入受理回执 (计划 LOOP-3): 被拒绝时提示用户; 其余状态由队列展示承担
+    void onInputAck(const agentxx::agent::WireInputAck& ack);
 
 private:
 
@@ -656,6 +658,9 @@ private:
     /// 通知事件接收器: 用户输入已发送 (sendUserInputLocked 内部调用;
     /// 任意线程, 内部按需 post 到 client io 线程)
     void notifyUserInputSent(const std::string& sessionId, const std::string& text);
+
+    /// 输入请求序号 (计划 LOOP-3): 每次发送用户输入自增, 用于关联受理回执
+    uint64_t nextInputRequestId_ = 0;
 
     /// client 插件管理器 (装配后不可变; uiRegistrySnapshot/hasCommand 线程安全)
     std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager_;

@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS usage (
     error_kind           TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_usage_time ON usage(time_ms);
+CREATE TABLE IF NOT EXISTS session_input (
+    id           TEXT PRIMARY KEY,
+    payload      TEXT NOT NULL,
+    delivery     TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'admitted',
+    admitted_seq INTEGER NOT NULL DEFAULT 0,
+    promoted_seq INTEGER NOT NULL DEFAULT 0,
+    created_ms   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_session_input_status ON session_input(status);
 )sql";
 
 /// meta 键名
@@ -452,6 +462,26 @@ void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int st
             // - 建表全部 IF NOT EXISTS, 重复执行安全
             sessionDb.exec(kSessionSchema);
             ensureViewMessageMsgIdColumn(sessionDb);
+            break;
+        case 2:
+            // v2: 输入收件箱 (session_input 表; 计划 LOOP-1)
+            // - 老库补表; 新库建表时已含 (IF NOT EXISTS 幂等)
+            // - 无需数据回填: 老库中的输入要么已经执行完 (不在库内), 要么随进程
+            //   退出丢失 (老版本不持久化输入)
+            sessionDb.exec(
+                "CREATE TABLE IF NOT EXISTS session_input ("
+                "    id           TEXT PRIMARY KEY,"
+                "    payload      TEXT NOT NULL,"
+                "    delivery     TEXT NOT NULL DEFAULT '',"
+                "    status       TEXT NOT NULL DEFAULT 'admitted',"
+                "    admitted_seq INTEGER NOT NULL DEFAULT 0,"
+                "    promoted_seq INTEGER NOT NULL DEFAULT 0,"
+                "    created_ms   INTEGER NOT NULL DEFAULT 0"
+                ")"
+            );
+            sessionDb.exec(
+                "CREATE INDEX IF NOT EXISTS idx_session_input_status ON session_input(status)"
+            );
             break;
         default:
             throw std::runtime_error{
@@ -967,6 +997,133 @@ void SessionStore::saveLlmMessages(
             return false;
         }
     );
+}
+
+// ---------------------------------------------------------------------------
+// 输入收件箱 (session.db session_input 表; 计划 LOOP-1)
+// ---------------------------------------------------------------------------
+
+void SessionStore::addSessionInput(std::string_view sessionId, const SessionInputRecord& record) {
+    if (record.id.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db = dbs(sessionId).sessionDb;
+            auto  insert = db.prepare(
+                "INSERT INTO session_input(id, payload, delivery, status, admitted_seq, "
+                "promoted_seq, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, "
+                "delivery = excluded.delivery, status = excluded.status"
+            );
+            insert.bindText(1, record.id);
+            insert.bindText(2, record.payload);
+            insert.bindText(3, record.delivery);
+            insert.bindText(4, record.status.empty() ? std::string{SessionInputStatus::Admitted}
+                                                     : record.status);
+            insert.bindInt64(5, record.admittedSeq);
+            insert.bindInt64(6, record.promotedSeq);
+            insert.bindInt64(7, record.createdMs);
+            insert.step();
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: addSessionInput({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+}
+
+void SessionStore::markSessionInputPromoted(
+    std::string_view sessionId,
+    std::string_view id,
+    uint64_t         promotedSeq
+) {
+    if (id.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db     = dbs(sessionId).sessionDb;
+            auto  update = db.prepare(
+                "UPDATE session_input SET status = ?, promoted_seq = ? WHERE id = ?"
+            );
+            update.bindText(1, std::string{SessionInputStatus::Promoted});
+            update.bindInt64(2, static_cast<int64_t>(promotedSeq));
+            update.bindText(3, id);
+            update.step();
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: markSessionInputPromoted({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+}
+
+void SessionStore::setSessionInputStatus(
+    std::string_view sessionId,
+    std::string_view id,
+    std::string_view status
+) {
+    if (id.empty() || status.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db     = dbs(sessionId).sessionDb;
+            auto  update = db.prepare("UPDATE session_input SET status = ? WHERE id = ?");
+            update.bindText(1, status);
+            update.bindText(2, id);
+            update.step();
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: setSessionInputStatus({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+}
+
+std::vector<SessionStore::SessionInputRecord>
+    SessionStore::listSessionInputs(std::string_view sessionId, std::string_view statusFilter) {
+    std::vector<SessionInputRecord> out;
+    std::lock_guard<std::mutex>     lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db = dbs(sessionId).sessionDb;
+            auto  stmt
+                = statusFilter.empty()
+                      ? db.prepare("SELECT id, payload, delivery, status, admitted_seq, "
+                                   "promoted_seq, created_ms FROM session_input ORDER BY created_ms, id")
+                      : db.prepare("SELECT id, payload, delivery, status, admitted_seq, "
+                                   "promoted_seq, created_ms FROM session_input WHERE status = ? "
+                                   "ORDER BY created_ms, id");
+            if (!statusFilter.empty()) {
+                stmt.bindText(1, statusFilter);
+            }
+            while (stmt.step()) {
+                SessionInputRecord record;
+                record.id          = stmt.columnText(0);
+                record.payload     = stmt.columnText(1);
+                record.delivery    = stmt.columnText(2);
+                record.status      = stmt.columnText(3);
+                record.admittedSeq = stmt.columnInt64(4);
+                record.promotedSeq = stmt.columnInt64(5);
+                record.createdMs   = stmt.columnInt64(6);
+                out.push_back(std::move(record));
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: listSessionInputs({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    return out;
 }
 
 // ---------------------------------------------------------------------------

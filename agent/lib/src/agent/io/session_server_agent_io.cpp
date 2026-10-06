@@ -94,6 +94,7 @@ SessionServerAgentIO::SessionServerAgentIO(
     ex_(std::move(ex)),
     agent_(std::move(agent)),
     config_(std::move(config)),
+    collectTimer_(std::make_shared<asio::steady_timer>(ex_)),
     wakeChannel_(std::make_shared<WakeChannel>(ex_, 64)) {}
 
 SessionServerAgentIO::~SessionServerAgentIO() {
@@ -353,16 +354,33 @@ void SessionServerAgentIO::sendMessageQueueUpdate() {
     sendToPeer(WireMessageQueueUpdate{
         .sessionId = config_.sessionId,
         .items     = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end()),
+        .state     = std::string{sessionQueueStateText(queueState_)},
     });
 }
 
-void SessionServerAgentIO::pushMessageQueueItem(
+void SessionServerAgentIO::setQueueState(SessionQueueState state, std::string_view reason) {
+    if (queueState_ == state) {
+        return;
+    }
+    XX_LOGD(
+        "[session_ctrl] queue state {} -> {} ({}; session={})",
+        sessionQueueStateText(queueState_),
+        sessionQueueStateText(state),
+        reason,
+        config_.sessionId
+    );
+    queueState_ = state;
+}
+
+std::string SessionServerAgentIO::pushMessageQueueItem(
     std::string                  text,
     std::string                  model,
-    std::vector<MediaAttachment> attachments
+    std::vector<MediaAttachment> attachments,
+    std::string                  delivery,
+    bool                         recovered
 ) {
     if (text.empty() && attachments.empty()) {
-        return;
+        return {};
     }
     const auto nowMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                 std::chrono::system_clock::now().time_since_epoch()
@@ -374,6 +392,8 @@ void SessionServerAgentIO::pushMessageQueueItem(
     item.model       = std::move(model);
     item.attachments = std::move(attachments);
     item.createdAtMs = nowMs;
+    item.delivery    = std::move(delivery);
+    item.recovered   = recovered;
 
     // 注意: 空闲状态下收到用户新输入时, 无论队列是否已有积压消息, 均解除暂停并唤醒执行:
     // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
@@ -384,11 +404,18 @@ void SessionServerAgentIO::pushMessageQueueItem(
     //   同时向客户端推送包含全部排队项的最新队列状态
     const bool isIdle   = !turnActive_.load(std::memory_order_acquire);
     const bool wasEmpty = messageQueue_.empty();
+    const bool wasHalted = isQueueHalted();
 
+    const std::string itemId = item.id;
     messageQueue_.push_back(std::move(item));
 
     if (isIdle) {
-        queuePaused_ = false;
+        if (wasHalted) {
+            setQueueState(
+                wasEmpty ? SessionQueueState::Idle : SessionQueueState::Draining,
+                "user input"
+            );
+        }
         wakeChannel_->try_send(ErrorCode{}, 1);
         if (!wasEmpty) {
             sendMessageQueueUpdate();
@@ -397,13 +424,18 @@ void SessionServerAgentIO::pushMessageQueueItem(
         // 真正进入排队等待 (前有进行中轮次)，同步队列给客户端
         sendMessageQueueUpdate();
     }
+    return itemId;
 }
 
 void SessionServerAgentIO::interruptAndRunNext() {
     if (messageQueue_.empty()) {
         return;
     }
-    queuePaused_ = false;
+    setQueueState(
+        turnActive_.load(std::memory_order_acquire) ? SessionQueueState::Draining
+                                                    : SessionQueueState::Idle,
+        "interrupt and run next"
+    );
     if (turnActive_.load(std::memory_order_acquire)) {
         pendingInsert_ = true;
         onCancel();
@@ -413,6 +445,22 @@ void SessionServerAgentIO::interruptAndRunNext() {
 }
 
 void SessionServerAgentIO::clearMessageQueue() {
+    // 清空的条目在收件箱中标记终态: 重启后不再作为"待确认"重新出现
+    for (const auto& item : messageQueue_) {
+        persistInputStatus(item.id, SessionStore::SessionInputStatus::Dropped);
+    }
+    // 待合并的 collect 输入一并丢弃: 必须回执, 否则对应客户端会一直等受理结果
+    for (auto& entry : collectPending_) {
+        sendInputAck(
+            entry.sender,
+            entry.requestId,
+            InputDelivery::Collect,
+            InputStatus::Rejected,
+            InputRejectReason::QueueCleared,
+            "message queue cleared before the input was submitted"
+        );
+    }
+    collectPending_.clear();
     messageQueue_.clear();
     sendMessageQueueUpdate();
 }
@@ -426,9 +474,468 @@ void SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
         }
     );
     if (it != messageQueue_.end()) {
+        persistInputStatus(itemId, SessionStore::SessionInputStatus::Dropped);
         messageQueue_.erase(it);
         sendMessageQueueUpdate();
     }
+}
+
+// ---------------------------------------------------------------------------
+// AgentIOBase: 对端 (客户端) 发来的消息分发
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 输入投递 (LOOP-1/2/3/4/11)
+// ---------------------------------------------------------------------------
+
+void SessionServerAgentIO::sendInputAck(
+    const std::shared_ptr<AgentIOTransportBase>& sender,
+    uint64_t                                     requestId,
+    std::string_view                             delivery,
+    std::string_view                             status,
+    std::string_view                             reason,
+    std::string                                  detail,
+    std::string_view                             itemId
+) {
+    // 旧客户端没有 requestId (也不认识 InputAck 消息类型): 不回执, 保持旧行为
+    if (requestId == 0) {
+        return;
+    }
+    WireInputAck ack;
+    ack.requestId = requestId;
+    ack.sessionId = config_.sessionId;
+    ack.delivery  = std::string{delivery};
+    ack.status    = std::string{status};
+    ack.reason    = std::string{reason};
+    ack.detail    = std::move(detail);
+    ack.itemId    = std::string{itemId};
+    sendToClient(sender, std::move(ack));
+}
+
+void SessionServerAgentIO::handleUserInput(
+    WireUserInput                                input,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    const std::string_view delivery = InputDelivery::normalize(input.delivery);
+
+    // 会话范围校验: 不匹配时除了既有 WireError, 再回一条结构化拒绝 (客户端据此展示)
+    if (!acceptSessionScope(input.sessionId, sender, "user_input")) {
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            InputStatus::Rejected,
+            InputRejectReason::SessionMismatch,
+            fmt::format(
+                "request session '{}' does not match the bound session '{}'",
+                input.sessionId,
+                config_.sessionId
+            )
+        );
+        return;
+    }
+    if (stopped_.load(std::memory_order_acquire)) {
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            InputStatus::Rejected,
+            InputRejectReason::ServerStopped,
+            "session controller is stopping"
+        );
+        return;
+    }
+    if (!InputDelivery::known(delivery)) {
+        XX_LOGW(
+            "[session_ctrl] user_input rejected: unknown delivery '{}' (session={})",
+            input.delivery,
+            config_.sessionId
+        );
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            InputStatus::Rejected,
+            InputRejectReason::BadDelivery,
+            fmt::format("unknown delivery mode '{}'", input.delivery)
+        );
+        return;
+    }
+    if (input.text.empty() && input.attachments.empty()) {
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            InputStatus::Rejected,
+            InputRejectReason::EmptyContent,
+            "input has neither text nor attachments"
+        );
+        return;
+    }
+
+    cancelGraceTimer();
+
+    // `collect`: 进入静默合并窗口 (窗口内同一客户端的连续输入合并为一条)
+    if (delivery == InputDelivery::Collect && config_.collectWindow.count() > 0) {
+        collectPending_.push_back(CollectEntry{
+            .requestId   = input.requestId,
+            .text        = std::move(input.text),
+            .model       = std::move(input.model),
+            .attachments = std::move(input.attachments),
+            .sender      = sender,
+        });
+        if (collectTimer_) {
+            collectTimer_->expires_after(config_.collectWindow);
+            collectTimer_->async_wait([self = shared_from_this()](ErrorCode ec) {
+                if (!ec) {
+                    self->flushCollectWindow();
+                }
+            });
+        }
+        XX_LOGD(
+            "[session_ctrl] input collected ({} pending, session={})",
+            collectPending_.size(),
+            config_.sessionId
+        );
+        return;
+    }
+
+    const bool turnActive = turnActive_.load(std::memory_order_acquire);
+
+    // `inject` / `next-step`: 登记为待注入输入 (由 modelcall 的请求装配边界取用)
+    // - inject:    只进入下一次请求 (不改写上下文, 不唤醒会话)
+    // - next-step: 轮次进行中才注入 (空闲时按 next-turn 立即开轮, 否则用户会
+    //              发现"发了消息却没有任何反应")
+    const bool steerAtStep
+        = (delivery == InputDelivery::Inject) || (delivery == InputDelivery::NextStep && turnActive);
+    if (steerAtStep) {
+        auto sess = session();
+        if (!sess) {
+            sendInputAck(
+                sender,
+                input.requestId,
+                delivery,
+                InputStatus::Rejected,
+                InputRejectReason::SessionNotFound,
+                fmt::format("session '{}' is not available", config_.sessionId)
+            );
+            return;
+        }
+        // 带附件的输入无法在请求装配边界处理 (附件需要服务端加载并转 Base64,
+        // 只在轮次启动路径实现): 按 next-turn 排队, 保证内容不丢失
+        if (!input.attachments.empty()) {
+            // 收件箱载荷 (元数据) 需在 move 前构造
+            MessageQueueItem inboxItem;
+            inboxItem.text        = input.text;
+            inboxItem.model       = input.model;
+            inboxItem.attachments = input.attachments;
+            inboxItem.delivery    = std::string{InputDelivery::NextTurn};
+            const auto itemId     = pushMessageQueueItem(
+                std::move(input.text),
+                std::move(input.model),
+                std::move(input.attachments),
+                std::string{InputDelivery::NextTurn}
+            );
+            inboxItem.id = itemId;
+            persistInputAdmitted(inboxItem, input.requestId);
+            sendInputAck(
+                sender,
+                input.requestId,
+                delivery,
+                turnActive ? InputStatus::Queued : InputStatus::Started,
+                {},
+                "input carries attachments: queued as a new turn",
+                itemId
+            );
+            return;
+        }
+
+        SessionPendingInput pending;
+        pending.id          = fmt::format("i-{}", nextInboxId_++);
+        pending.text        = std::move(input.text);
+        pending.model       = std::move(input.model);
+        pending.source      = "user";
+        pending.delivery    = std::string{delivery};
+        pending.createdAtMs = static_cast<int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            )
+                .count()
+        );
+        // 收件箱载荷需要在 move 进会话前拷贝 (move 后 input.text 为空)
+        MessageQueueItem inboxItem{
+            .id          = pending.id,
+            .text        = pending.text,
+            .model       = pending.model,
+            .attachments = {},
+            .createdAtMs = pending.createdAtMs,
+            .delivery    = pending.delivery,
+            .recovered   = false,
+        };
+        const auto pendingId = pending.id;
+        sess->enqueuePendingInput(std::move(pending));
+        // 收件箱: 受理即落库 (真正进入上下文/请求时标记 promoted)
+        persistInputAdmitted(inboxItem, input.requestId);
+        XX_LOGI(
+            "[session_ctrl] input steered as {} (turn_active={}, session={})",
+            delivery,
+            turnActive,
+            config_.sessionId
+        );
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            turnActive ? InputStatus::Steered : InputStatus::Queued,
+            {},
+            turnActive ? "input will join the running turn at the next request"
+                       : "input will join the next request",
+            pendingId
+        );
+        return;
+    }
+
+    // `next-turn` (以及空闲时的 next-step): 进入消息队列
+    const bool startsNow = !turnActive && messageQueue_.empty();
+    // 队列落库需要文本/模型副本 (pushMessageQueueItem 会 move 走)
+    const std::string textCopy  = input.text;
+    const std::string modelCopy = input.model;
+    const auto        itemId    = pushMessageQueueItem(
+        std::move(input.text),
+        std::move(input.model),
+        std::move(input.attachments),
+        std::string{delivery}
+    );
+    persistInputAdmitted(
+        MessageQueueItem{
+            .id          = itemId,
+            .text        = textCopy,
+            .model       = modelCopy,
+            .attachments = {},
+            .createdAtMs = 0,
+            .delivery    = std::string{delivery},
+            .recovered   = false,
+        },
+        input.requestId
+    );
+    sendInputAck(
+        sender,
+        input.requestId,
+        delivery,
+        startsNow ? InputStatus::Started : InputStatus::Queued,
+        {},
+        startsNow ? "turn started" : "queued behind the running turn",
+        itemId
+    );
+}
+
+void SessionServerAgentIO::flushCollectWindow() {
+    if (collectPending_.empty()) {
+        return;
+    }
+    auto pending = std::move(collectPending_);
+    collectPending_.clear();
+
+    // 合并: 文本按输入顺序用换行拼接, 附件累加, 模型取最后一个非空
+    std::string                         mergedText;
+    std::string                         mergedModel;
+    std::vector<MediaAttachment>        mergedAttachments;
+    for (auto& entry : pending) {
+        if (!mergedText.empty()) {
+            mergedText += "\n";
+        }
+        mergedText += entry.text;
+        if (!entry.model.empty()) {
+            mergedModel = entry.model;
+        }
+        for (auto& att : entry.attachments) {
+            mergedAttachments.push_back(std::move(att));
+        }
+    }
+    const bool turnActive = turnActive_.load(std::memory_order_acquire);
+    const bool startsNow  = !turnActive && messageQueue_.empty();
+    // 收件箱落库需要文本副本 (pushMessageQueueItem 会 move 走)
+    const std::string mergedTextCopy = mergedText;
+
+    const auto itemId = pushMessageQueueItem(
+        std::move(mergedText),
+        std::move(mergedModel),
+        std::move(mergedAttachments),
+        std::string{InputDelivery::NextTurn}
+    );
+    persistInputAdmitted(
+        MessageQueueItem{
+            .id          = itemId,
+            .text        = mergedTextCopy,
+            .model       = {},
+            .attachments = {},
+            .createdAtMs = 0,
+            .delivery    = std::string{InputDelivery::NextTurn},
+            .recovered   = false,
+        },
+        pending.empty() ? 0 : pending.front().requestId
+    );
+
+    // 合并结果按条目逐条回执: 每个请求都能得到"已开始/已排队 + 合并条目 id"
+    for (auto& entry : pending) {
+        sendInputAck(
+            entry.sender,
+            entry.requestId,
+            InputDelivery::Collect,
+            startsNow ? InputStatus::Started : InputStatus::Queued,
+            {},
+            fmt::format("merged with {} other collected input(s)", pending.size() - 1),
+            itemId
+        );
+    }
+    XX_LOGI(
+        "[session_ctrl] collected {} input(s) merged into one turn (session={})",
+        pending.size(),
+        config_.sessionId
+    );
+}
+
+void SessionServerAgentIO::persistInputAdmitted(const MessageQueueItem& item, uint64_t requestId) {
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->sessions
+        || !agent->agentContext->sessions->sessionStore || item.id.empty()) {
+        XX_LOGD(
+            "[session_ctrl] inbox disabled for input {} (persistence off or invalid id)",
+            item.id
+        );
+        return;
+    }
+    auto store = agent->agentContext->sessions->sessionStore;
+    SessionStore::SessionInputRecord record;
+    record.id       = item.id;
+    record.delivery = item.delivery;
+    record.status   = std::string{SessionStore::SessionInputStatus::Admitted};
+    record.createdMs = item.createdAtMs > 0
+                           ? item.createdAtMs
+                           : static_cast<int64_t>(
+                                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch()
+                                 )
+                                     .count()
+                             );
+    // 载荷只保留元数据 (文本/模型/投递模式/附件元数据): 附件 Base64 不进库,
+    // 恢复后由服务端按 pathOrUrl 重新读取, 避免会话库被大块 Base64 撑大
+    utilxx_base::Json payload{
+        {"text",     item.text    },
+        {"model",    item.model   },
+        {"delivery", item.delivery},
+    };
+    if (requestId != 0) {
+        payload["requestId"] = requestId;
+    }
+    if (!item.attachments.empty()) {
+        utilxx_base::Json arr = utilxx_base::Json::array();
+        for (const auto& att : item.attachments) {
+            auto meta = att;
+            meta.dataUrl.clear();
+            arr.push_back(meta.toJson());
+        }
+        payload["attachments"] = std::move(arr);
+    }
+    record.payload = utilxx_base::Json(payload).dump();
+    auto sess      = session();
+    record.admittedSeq = sess ? static_cast<int64_t>(sess->deltaSeq) : 0;
+    store->addSessionInput(config_.sessionId, record);
+    XX_LOGD(
+        "[session_ctrl] inbox admitted input {} (session={}, delivery={})",
+        record.id,
+        config_.sessionId,
+        record.delivery
+    );
+}
+
+void SessionServerAgentIO::persistInputStatus(
+    std::string_view id,
+    std::string_view status,
+    uint64_t         promotedSeq
+) {
+    if (id.empty()) {
+        return;
+    }
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->sessions
+        || !agent->agentContext->sessions->sessionStore) {
+        return;
+    }
+    auto store = agent->agentContext->sessions->sessionStore;
+    if (status == SessionStore::SessionInputStatus::Promoted) {
+        store->markSessionInputPromoted(config_.sessionId, id, promotedSeq);
+    } else {
+        store->setSessionInputStatus(config_.sessionId, id, status);
+    }
+}
+
+void SessionServerAgentIO::recoverPendingInputs() {
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->sessions
+        || !agent->agentContext->sessions->sessionStore) {
+        return;
+    }
+    auto store = agent->agentContext->sessions->sessionStore;
+    auto rows  = store->listSessionInputs(
+        config_.sessionId,
+        SessionStore::SessionInputStatus::Admitted
+    );
+    if (rows.empty()) {
+        return;
+    }
+    for (auto& row : rows) {
+        MessageQueueItem item;
+        item.id = row.id;
+        item.delivery = row.delivery.empty() ? std::string{InputDelivery::NextTurn} : row.delivery;
+        item.recovered = true;
+        item.createdAtMs = row.createdMs;
+        // 载荷解析失败只跳过该条 (历史脏数据不应阻断会话启动)
+        agentxx::util::catchError<bool>(
+            [&]() -> bool {
+                auto payload = utilxx_base::Json::parse(row.payload);
+                item.text    = payload.value("text", std::string{});
+                item.model   = payload.value("model", std::string{});
+                if (payload.contains("attachments") && payload["attachments"].is_array()) {
+                    for (const auto& att : payload["attachments"]) {
+                        item.attachments.push_back(MediaAttachment::fromJson(att));
+                    }
+                }
+                return true;
+            },
+            [&](std::string errmsg) -> bool {
+                XX_LOGW(
+                    "[session_ctrl] recovered input {} payload unreadable ({}): {}",
+                    row.id,
+                    config_.sessionId,
+                    errmsg
+                );
+                return false;
+            }
+        );
+        if (item.text.empty() && item.attachments.empty()) {
+            store->setSessionInputStatus(
+                config_.sessionId,
+                row.id,
+                SessionStore::SessionInputStatus::Dropped
+            );
+            continue;
+        }
+        messageQueue_.push_back(std::move(item));
+    }
+    if (messageQueue_.empty()) {
+        return;
+    }
+    // 恢复的输入不自动执行: 置暂停由用户确认 (发新输入解除暂停, 或删除条目),
+    // 避免进程重启后重放副作用
+    setQueueState(SessionQueueState::Paused, "recovered pending inputs");
+    XX_LOGW(
+        "[session_ctrl] recovered {} pending input(s) after restart; queue paused until user "
+        "confirms (session={})",
+        messageQueue_.size(),
+        config_.sessionId
+    );
+    sendMessageQueueUpdate();
 }
 
 // ---------------------------------------------------------------------------
@@ -449,16 +956,8 @@ void SessionServerAgentIO::onPeerMessage(
             if constexpr (std::is_same_v<T, WireHello>) {
                 handleHello(m, {}, sender);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
-                // 会话校验 (统一入口, 见 PRO-7): 不匹配的请求直接拒绝并回错误
-                if (!acceptSessionScope(m.sessionId, sender, "user_input")) {
-                    return;
-                }
-                cancelGraceTimer();
-                pushMessageQueueItem(
-                    std::move(m.text),
-                    std::move(m.model),
-                    std::move(m.attachments)
-                );
+                // 输入受理 (投递模式分发 + 回执 + 收件箱落库, 见 LOOP-1/2/3/11)
+                handleUserInput(std::move(m), sender);
             } else if constexpr (std::is_same_v<T, WireCancel>) {
                 if (!acceptSessionScope(m.sessionId, sender, "cancel")) {
                     return;
@@ -466,7 +965,7 @@ void SessionServerAgentIO::onPeerMessage(
                 // 仅在轮次进行中时暂停队列: 空闲时收到取消 (无轮次可取消) 不应
                 // 置位暂停, 否则后续所有新输入都会因队列被误暂停而永远等待执行
                 if (turnActive_.load(std::memory_order_acquire)) {
-                    queuePaused_ = true;
+                    setQueueState(SessionQueueState::Paused, "cancel");
                 }
                 onCancel();
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
@@ -1083,9 +1582,10 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     config_.sessionId             = newThreadId;
     // delta 重放缓冲属于旧会话的 seq 空间, 新会话 seq 独立编号, 清空避免错配重放
     deltaBuffer_.clear();
-    // 消息队列重置
+    // 消息队列与待合并输入重置 (旧会话的排队输入不再适用于新会话)
     messageQueue_.clear();
-    queuePaused_   = false;
+    collectPending_.clear();
+    setQueueState(SessionQueueState::Idle, "session switched");
     pendingInsert_ = false;
 
     XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.sessionId);
@@ -1260,13 +1760,16 @@ asio::awaitable<void> SessionServerAgentIO::run() {
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
         co_await agent->agentContext->getSessionAsync(config_.sessionId);
     }
+    // 持久化收件箱恢复 (计划 LOOP-1): 未投递的输入作为"待确认"回到队列并暂停,
+    // 不自动执行 —— 进程重启后重放副作用的代价高于"少跑一轮"
+    recoverPendingInputs();
     while (!stopped_.load(std::memory_order_acquire)) {
         if (pendingInsert_) {
             pendingInsert_ = false;
-            queuePaused_   = false;
+            setQueueState(SessionQueueState::Draining, "insert after interrupt");
         }
 
-        if (queuePaused_ || messageQueue_.empty()) {
+        if (isQueueHalted() || messageQueue_.empty()) {
             turnActive_.store(false, std::memory_order_release);
             auto [ec, val]
                 = co_await wakeChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
@@ -1282,6 +1785,17 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         sendMessageQueueUpdate();
 
         turnActive_.store(true, std::memory_order_release);
+        setQueueState(
+            queueState_ == SessionQueueState::Draining ? SessionQueueState::Draining
+                                                       : SessionQueueState::Running,
+            "turn started"
+        );
+        // 收件箱: 该条目已进入执行路径 (重启后不再作为"待确认"恢复)
+        persistInputStatus(
+            currentItem.id,
+            SessionStore::SessionInputStatus::Promoted,
+            session() ? session()->deltaSeq : 0
+        );
 
         auto agent = agent_.lock();
         if (!agent) {
@@ -1369,9 +1883,12 @@ asio::awaitable<void> SessionServerAgentIO::run() {
 
         // 仅当正常执行成功一轮后，才继续自动发送消息队列中的消息
         if (!turnResult.hasError && !turnResult.interrupted) {
-            queuePaused_ = false;
+            setQueueState(
+                messageQueue_.empty() ? SessionQueueState::Idle : SessionQueueState::Running,
+                "turn completed"
+            );
         } else {
-            queuePaused_ = true;
+            setQueueState(SessionQueueState::Paused, "turn failed or interrupted");
             if (!messageQueue_.empty()) {
                 sendMessageQueueUpdate();
             }
@@ -1398,6 +1915,9 @@ void SessionServerAgentIO::stopImpl() {
     cancelGraceTimer();
     failAllPending();
     wakeChannel_->close();
+    // 待合并输入丢弃 (客户端已断开, 无需回执)
+    collectPending_.clear();
+    collectTimer_->cancel();
     onCancel();
     // 退订插件事件前缀 (防止端点析构后回调悬垂)
     if (pluginSubId_ != 0) {
@@ -1474,6 +1994,7 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
         p.deltaSeq = sess->deltaSeq;
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+    p.queueState   = std::string{sessionQueueStateText(queueState_)};
     return p;
 }
 
@@ -1485,6 +2006,7 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     auto            sess = session();
     if (!sess) {
         p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+    p.queueState   = std::string{sessionQueueStateText(queueState_)};
         return p;
     }
     const size_t total = sess->viewMessageCount();
@@ -1497,6 +2019,7 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
     p.deltaSeq     = sess->deltaSeq;
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
+    p.queueState   = std::string{sessionQueueStateText(queueState_)};
     return p;
 }
 

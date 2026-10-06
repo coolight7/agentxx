@@ -339,6 +339,28 @@ public:
     }
 
     // -------------------------------------------------------------------
+    // 待注入输入 (next-step / inject; 计划 LOOP-2; 仅 io 线程)
+    //
+    // 与消息队列的区别: 队列条目等待"下一个轮次", 待注入输入等待"下一个安全的
+    // modelcall 边界"。两者都不写入上下文, 直到被取用:
+    // - next-step: 取用时作为 user 消息追加到权威上下文与展示历史
+    // - inject:    取用时只作为本次请求的额外消息, 不改写权威上下文
+    // -------------------------------------------------------------------
+
+    /// 登记一条待注入输入 (保持登记顺序; 不唤醒会话, 不进入消息队列)
+    void enqueuePendingInput(SessionPendingInput input);
+
+    /// 取走并清空指定投递模式的待注入输入
+    /// - `return` 按登记顺序返回; 无匹配时为空
+    std::vector<SessionPendingInput> takePendingInputs(std::string_view delivery);
+
+    /// 待注入输入条数 (诊断/测试)
+    size_t pendingInputCount() const {
+        assertIoThread();
+        return pendingInputs_.size();
+    }
+
+    // -------------------------------------------------------------------
     // worktree 绑定 (worktree 模式; 仅 io 线程读写)
     // - path 非空表示已绑定: 该会话的相对路径解析基准/权限隔离边界切换到 worktree
     // -------------------------------------------------------------------
@@ -411,6 +433,9 @@ private:
 
     /// 上下文消息 (typed 权威存储)
     std::vector<neograph::ChatMessage> messages_;
+
+    /// 待注入输入 (next-step / inject; 仅 io 线程)
+    std::vector<SessionPendingInput> pendingInputs_;
 
     std::vector<PendingViewOp> pendingViewOps_;
 

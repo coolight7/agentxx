@@ -464,6 +464,35 @@ inline size_t estimateWireDeltaBytes(const WireDelta& delta) {
     return bytes;
 }
 
+/// 输入投递模式 (`WireUserInput.delivery`; 计划 LOOP-2)
+///
+/// - `next-turn` (默认): 排队等待当前轮次结束后作为新轮次执行
+/// - `next-step`: 在当前轮次的下一个 modelcall 安全边界注入 (写入会话权威上下文),
+///   不打断正在进行的 provider 流; 空闲时等同 `next-turn`
+/// - `inject`: 只进入下一次请求的动态注入队列 (请求级可见, 不改写权威上下文,
+///   也不唤醒会话); 空闲时保持待注入, 直到下一次请求装配时被取走
+/// - `collect`: 在短暂静默窗口内合并同一客户端的连续输入 (计划 LOOP-11),
+///   窗口结束后按 `next-turn` 语义提交为一条
+///
+/// 放在会话类型头 (而非 wire 头): 会话内待注入输入与消息队列条目都使用同一套
+/// 取值, 非 wire 代码 (节点/会话) 也需要引用。
+struct InputDelivery {
+    inline static constexpr std::string_view NextTurn = "next-turn";
+    inline static constexpr std::string_view NextStep = "next-step";
+    inline static constexpr std::string_view Inject   = "inject";
+    inline static constexpr std::string_view Collect  = "collect";
+
+    /// 归一化投递模式: 空取 [NextTurn]; 其余原样返回 (未知取值由调用方拒绝)
+    static std::string_view normalize(std::string_view v) noexcept {
+        return v.empty() ? NextTurn : v;
+    }
+
+    /// 是否为已知投递模式
+    static bool known(std::string_view v) noexcept {
+        return v == NextTurn || v == NextStep || v == Inject || v == Collect;
+    }
+};
+
 /// 排队等待发送的消息条目 (服务端按会话维护, 同步到客户端展示)
 struct MessageQueueItem {
     std::string id;    ///< 条目唯一标识 (如 "q-1")
@@ -471,6 +500,28 @@ struct MessageQueueItem {
     std::string model; ///< 本条消息指定的待应用模型 (空 = 默认/当前)
     std::vector<MediaAttachment> attachments;     ///< 排队项保留附件
     int64_t                      createdAtMs = 0; ///< 创建时间戳 (毫秒)
+    /// 投递模式 (取值见 agentxx::agent::InputDelivery; 空 = next-turn)
+    std::string delivery;
+    /// 是否为进程重启后恢复的待确认输入 (计划 LOOP-1):
+    /// 恢复项不会自动执行, 由用户确认 (发送新输入解除暂停) 或删除
+    bool recovered = false;
+};
+
+/// 会话内待注入的输入 (next-step / inject; 计划 LOOP-2)
+///
+/// 与 MessageQueueItem 的区别: 排队条目等待"下一个轮次", 本结构等待"下一个
+/// 安全的 modelcall 边界", 因此不进入消息队列, 也不唤醒会话。
+struct SessionPendingInput {
+    std::string id;    ///< 条目标识 (与持久化收件箱 session_input.id 对应; 可空)
+    std::string text;  ///< 文本内容
+    std::string model; ///< 本条输入指定的待应用模型 (空 = 默认/当前)
+    /// 来源 (计划 LOOP-2 要求"记录来源"): "user" = 用户, 其余为插件名/内部来源
+    std::string source = "user";
+    /// 投递模式 (InputDelivery::NextStep / Inject)
+    std::string delivery;
+    /// 附件 (next-step/inject 不接受附件: 带附件时按 next-turn 排队)
+    std::vector<MediaAttachment> attachments;
+    int64_t                      createdAtMs = 0;
 };
 
 struct WireSyncPayload {
@@ -491,6 +542,9 @@ struct WireSyncPayload {
     ///   (如 5000) 则会把新会话的 seq=1,2,... 全部判为重复并丢弃 (界面不再刷新)
     /// - 0 = 未提供/无会话 (客户端按"复位为 0"处理, 放行后续全部增量)
     uint64_t deltaSeq = 0;
+
+    /// 消息队列状态 (取值见 SessionQueueState; 空 = 旧服务端未提供)
+    std::string queueState;
 };
 
 // ---------------------------------------------------------------------------

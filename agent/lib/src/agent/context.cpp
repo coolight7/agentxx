@@ -338,6 +338,29 @@ std::string Session::getModelName() const {
     return modelName_;
 }
 
+void Session::enqueuePendingInput(SessionPendingInput input) {
+    assertIoThread();
+    if (input.delivery.empty()) {
+        input.delivery = std::string{InputDelivery::NextTurn};
+    }
+    pendingInputs_.push_back(std::move(input));
+}
+
+std::vector<SessionPendingInput> Session::takePendingInputs(std::string_view delivery) {
+    assertIoThread();
+    std::vector<SessionPendingInput> out;
+    auto                             it = pendingInputs_.begin();
+    while (it != pendingInputs_.end()) {
+        if (it->delivery == delivery) {
+            out.push_back(std::move(*it));
+            it = pendingInputs_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return out;
+}
+
 std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId) {
     auto it = sessions_.find(sessionId);
     if (it != sessions_.end()) {

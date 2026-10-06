@@ -1,7 +1,12 @@
 #include "agentxx/nodes/session_context.h"
 
+#include "agentxx/agent/session_store.h"
+#include "agentxx/agent/io/agent_io.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "fmt/format.h"
+#include "utilxx_base/log.h"
+#include <chrono>
 #include <neograph/graph/node.h>
 
 namespace agentxx {
@@ -129,6 +134,133 @@ size_t appendSessionMessages(
         });
     }
     return session->messagesCount();
+}
+
+namespace {
+
+/// 标记持久化收件箱条目已投递 (promoted); 未启用持久化/无 id 时为 no-op
+void markSessionInputPromoted(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    std::string_view                                     sessionId,
+    std::string_view                                     inputId,
+    uint64_t                                             seq
+) {
+    if (!ctx || !ctx->sessions || !ctx->sessions->sessionStore || inputId.empty()) {
+        return;
+    }
+    ctx->sessions->sessionStore->markSessionInputPromoted(sessionId, inputId, seq);
+}
+
+/// 构造一条来源化的 user 消息 (来源写入 extra, 供诊断/审计读取)
+neograph::ChatMessage makeInjectedUserMessage(const agentxx::agent::SessionPendingInput& input) {
+    utilxx_base::Json j{
+        {"role",    "user"          },
+        {"content", input.text      },
+    };
+    neograph::ChatMessage msg;
+    neograph::from_json(agentxx::util::toNeographJson(j), msg);
+    neograph::json extra = neograph::json::object();
+    extra["input_source"]   = input.source.empty() ? std::string{"user"} : input.source;
+    extra["input_delivery"] = input.delivery;
+    if (!input.id.empty()) {
+        extra["input_id"] = input.id;
+    }
+    msg.extra = std::move(extra);
+    return msg;
+}
+
+/// 追加一条展示消息 (user 输入) 并通知 UI
+/// - EventBridge 只展开 assistant/tool 角色, user 消息需调用方自行落到展示历史,
+///   否则 UI 看不到注入的输入 (只出现在 LLM 上下文里)
+void appendUserViewMessage(
+    const std::shared_ptr<agentxx::agent::Session>& session,
+    const agentxx::agent::SessionPendingInput&      input
+) {
+    if (!session) {
+        return;
+    }
+    const auto nowMs = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        )
+            .count()
+    );
+    auto vm = agentxx::agent::ViewMessage::makeText(
+        agentxx::agent::ViewMessage::Role::User,
+        input.text,
+        input.createdAtMs > 0 ? input.createdAtMs : nowMs
+    );
+    vm.id = session->appendViewMessage(vm);
+    if (!session->io) {
+        return;
+    }
+    auto delta = agentxx::agent::WireDelta{
+        .message = std::make_shared<agentxx::agent::ViewMessage>(std::move(vm)),
+        .type    = agentxx::agent::WireDelta::Type::InsertMessage,
+    };
+    delta.seq = session->nextDeltaSeq();
+    session->io->sendToPeer(std::move(delta));
+}
+
+} // namespace
+
+PendingInjections drainPendingSessionInputs(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    const neograph::graph::NodeInput&                    in,
+    std::string_view                                     sessionId,
+    std::string_view                                     nodeName
+) {
+    PendingInjections out;
+    if (!ctx || !ctx->sessions || sessionId.empty()) {
+        return out;
+    }
+    auto session = ctx->sessions->get(sessionId);
+    if (!session) {
+        return out;
+    }
+    if (session->pendingInputCount() == 0) {
+        return out;
+    }
+
+    // next-step: 写入权威上下文 (安全边界 = 请求装配前, 不需打断流式输出)
+    auto steps = session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
+    if (!steps.empty()) {
+        std::vector<neograph::ChatMessage> msgs;
+        msgs.reserve(steps.size());
+        for (const auto& input : steps) {
+            msgs.push_back(makeInjectedUserMessage(input));
+        }
+        appendSessionMessages(ctx, in, std::move(msgs), nodeName);
+        for (const auto& input : steps) {
+            appendUserViewMessage(session, input);
+            markSessionInputPromoted(ctx, sessionId, input.id, session->deltaSeq);
+        }
+        out.promotedSteps = steps.size();
+        XX_LOGI(
+            "[session_context] promoted {} next-step input(s) at modelcall boundary (session={})",
+            steps.size(),
+            sessionId
+        );
+    }
+
+    // inject: 仅本次请求可见 (不改写权威上下文)
+    auto injects = session->takePendingInputs(agentxx::agent::InputDelivery::Inject);
+    for (auto& input : injects) {
+        auto msg = makeInjectedUserMessage(input);
+        if (!input.source.empty() && input.source != "user") {
+            msg.content = fmt::format("[{}] {}", input.source, msg.content);
+        }
+        out.requestScoped.push_back(std::move(msg));
+        markSessionInputPromoted(ctx, sessionId, input.id, session->deltaSeq);
+    }
+    if (!injects.empty()) {
+        XX_LOGI(
+            "[session_context] attached {} injected input(s) to this request (session={})",
+            injects.size(),
+            sessionId
+        );
+    }
+    return out;
 }
 
 } // namespace nodes

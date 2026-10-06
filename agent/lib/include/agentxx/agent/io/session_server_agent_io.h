@@ -71,6 +71,10 @@ public:
         ///   (TUI) 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取
         ///   更早历史, 避免长会话恢复时全量传输
         size_t initialSyncTailCount = 0;
+        /// `collect` 投递模式的静默合并窗口 (计划 LOOP-11)
+        /// - 窗口内同一客户端的连续输入合并为一条, 窗口结束后按 next-turn 提交
+        /// - <=0 表示不合并 (collect 等同 next-turn)
+        std::chrono::milliseconds collectWindow = std::chrono::milliseconds{400};
     };
 
     SessionServerAgentIO(asio::any_io_executor ex, std::weak_ptr<BaseAgent> agent, Config config);
@@ -174,7 +178,12 @@ public:
 
     /// 测试辅助: 获取消息队列是否处于暂停态
     bool isQueuePausedForTest() const noexcept {
-        return queuePaused_;
+        return queueState_ == SessionQueueState::Paused;
+    }
+
+    /// 当前消息队列状态 (计划 LOOP-4)
+    SessionQueueState queueState() const noexcept {
+        return queueState_;
     }
 
     /// 测试辅助: 获取当前消息队列大小
@@ -262,14 +271,75 @@ private:
 
     /// 向客户端推送当前消息队列更新
     void sendMessageQueueUpdate();
-    void pushMessageQueueItem(
+
+    /// 追加一条排队消息并同步客户端 (空闲时解除暂停并唤醒驱动循环)
+    /// - `return` 分配的条目 id (内容为空时返回空串, 不追加)
+    std::string pushMessageQueueItem(
         std::string                  text,
         std::string                  model       = "",
-        std::vector<MediaAttachment> attachments = {}
+        std::vector<MediaAttachment> attachments = {},
+        std::string                  delivery    = std::string{InputDelivery::NextTurn},
+        bool                         recovered   = false
     );
     void interruptAndRunNext();
     void clearMessageQueue();
     void removeQueueItem(std::string_view itemId);
+
+    // ----- 输入投递 (计划 LOOP-1/2/3/4/11; 仅 ex_ 线程) -----
+
+    /// 受理一条客户端输入 (投递模式分发 + 回执 + 收件箱落库)
+    ///
+    /// 顺序: 会话校验 → 参数校验 (空内容/投递模式) → 按投递模式分发:
+    /// - `next-turn`: 进入消息队列 (空闲时立即执行)
+    /// - `next-step`: 轮次进行中登记为待注入 (下一个 modelcall 边界写入上下文),
+    ///   空闲时按 next-turn 处理
+    /// - `inject`:    登记为待注入 (只进入下一次请求; 不改写上下文/不唤醒会话)
+    /// - `collect`:   进入静默合并窗口, 窗口结束后按 next-turn 提交
+    ///
+    /// 受理结果经 [WireInputAck] 回给请求方 (仅 requestId > 0 时);
+    /// 被拒绝的输入不写收件箱。
+    ///
+    /// - `args`:
+    ///     - [input]  客户端输入 (携带 sessionId/delivery/requestId)
+    ///     - [sender] 来源 transport (回执只发给它; 为空时广播)
+    void handleUserInput(
+        WireUserInput                                input,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
+
+    /// 发送输入受理回执 (requestId == 0 时跳过: 旧客户端不认识该消息类型)
+    void sendInputAck(
+        const std::shared_ptr<AgentIOTransportBase>& sender,
+        uint64_t                                     requestId,
+        std::string_view                             delivery,
+        std::string_view                             status,
+        std::string_view                             reason  = {},
+        std::string                              detail  = {},
+        std::string_view                             itemId  = {}
+    );
+
+    /// 队列状态转移 (记 Debug 日志: 旧状态 → 新状态 + 原因)
+    void setQueueState(SessionQueueState state, std::string_view reason);
+
+    /// 队列是否处于"不自动继续"状态
+    bool isQueueHalted() const noexcept {
+        return queueState_ == SessionQueueState::Paused;
+    }
+
+    /// 收件箱落库 (status=admitted): 进程重启后可按"待确认"恢复
+    /// - 无持久化 / 条目无 id / payload 为空时 no-op
+    void persistInputAdmitted(const MessageQueueItem& item, uint64_t requestId);
+
+    /// 标记收件箱条目终态 (promoted/dropped)
+    void persistInputStatus(std::string_view id, std::string_view status, uint64_t promotedSeq = 0);
+
+    /// 从持久化收件箱恢复未投递输入 (run() 预热会话后调用一次)
+    /// - 只恢复 status=admitted 的条目, 作为"待确认"进入队列并置 Paused
+    ///   (不自动执行, 避免重启后重放副作用)
+    void recoverPendingInputs();
+
+    /// `collect` 静默窗口到期: 合并暂存输入为一条并提交
+    void flushCollectWindow();
 
     void startGraceTimer();
     void cancelGraceTimer();
@@ -347,8 +417,24 @@ private:
     // 服务端消息队列 (仅 ex_ 线程访问)
     std::deque<MessageQueueItem> messageQueue_;
     uint64_t                     nextQueueItemId_ = 1;
-    bool                         queuePaused_     = false;
-    bool                         pendingInsert_   = false;
+    /// 队列状态 (计划 LOOP-4: 取代 queuePaused_/pendingInsert_ 两个 bool)
+    SessionQueueState queueState_ = SessionQueueState::Idle;
+    /// 轮次进行中收到"打断并运行下一条"时置位: 本轮结束后不暂停队列, 直接继续
+    bool pendingInsert_ = false;
+
+    /// `collect` 静默合并窗口暂存 (计划 LOOP-11; 仅 ex_ 线程)
+    struct CollectEntry {
+        uint64_t                            requestId = 0;
+        std::string                         text;
+        std::string                         model;
+        std::vector<MediaAttachment>        attachments;
+        std::shared_ptr<AgentIOTransportBase> sender;
+    };
+    std::vector<CollectEntry>            collectPending_;
+    std::shared_ptr<asio::steady_timer>  collectTimer_;
+    uint64_t                             nextCollectId_ = 1;
+    /// 收件箱条目自增序号 (与队列条目 id 无关, 仅用于恢复时的稳定 id)
+    uint64_t nextInboxId_ = 1;
 
     // 唤醒 channel (驱动循环等待新输入/事件)
     std::shared_ptr<WakeChannel> wakeChannel_;

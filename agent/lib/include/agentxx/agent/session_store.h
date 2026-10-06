@@ -46,7 +46,7 @@ class SessionStore {
 public:
 
     /// 当前支持的最新 schema 版本 (新增结构变更时递增并追加迁移步骤)
-    static constexpr int kSchemaVersion = 1;
+    static constexpr int kSchemaVersion = 2;
 
     /// - [rootDir] 数据根目录; 为空使用默认 {dataDir}/sqlite/sessions/
     ///   (dataDir 为空时 ~/.agentxx/, 取不到用户主目录时回退系统临时目录)
@@ -113,6 +113,50 @@ public:
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - 失败仅记录日志, 不影响内存状态
     void saveLlmMessages(std::string_view sessionId, const utilxx_base::Json& llmMessages);
+
+    // ---- 输入收件箱 (session.db session_input 表; 计划 LOOP-1) ----
+    //
+    // 输入受理时先落库 (status=admitted), 真正进入上下文时标记 promoted;
+    // 进程重启后只恢复 admitted 条目为"待确认", 不自动重放副作用。
+
+    /// 收件箱条目状态
+    struct SessionInputStatus {
+        /// 已受理, 尚未进入上下文 (重启后按"待确认"恢复)
+        inline static constexpr std::string_view Admitted = "admitted";
+        /// 已投递 (进入上下文或本次请求); 重启后不再恢复
+        inline static constexpr std::string_view Promoted = "promoted";
+        /// 已被用户删除 / 队列被清空
+        inline static constexpr std::string_view Dropped = "dropped";
+    };
+
+    /// 收件箱条目 (payload 为 WireUserInput 的 JSON 形态, 由调用方提供)
+    struct SessionInputRecord {
+        std::string id;                 ///< 条目标识 (队列条目 id, 如 "q-1")
+        std::string payload;            ///< 原始输入载荷 (JSON; 文本/模型/附件/投递模式)
+        std::string delivery;           ///< 投递模式 (InputDelivery 取值)
+        std::string status;             ///< 见 [SessionInputStatus]
+        int64_t     admittedSeq = 0;    ///< 受理时的会话 delta seq
+        int64_t     promotedSeq = 0;    ///< 投递时的会话 delta seq
+        int64_t     createdMs   = 0;    ///< 受理时间戳 (毫秒)
+    };
+
+    /// 写入一条收件箱条目 (同 id 覆盖; 失败仅记日志)
+    void addSessionInput(std::string_view sessionId, const SessionInputRecord& record);
+
+    /// 标记条目已投递 (status=promoted + promotedSeq); 失败仅记日志
+    void markSessionInputPromoted(std::string_view sessionId, std::string_view id, uint64_t promotedSeq);
+
+    /// 标记条目终态 (dropped 等); 失败仅记日志
+    void setSessionInputStatus(
+        std::string_view sessionId,
+        std::string_view id,
+        std::string_view status
+    );
+
+    /// 列出收件箱条目 (按受理顺序; statusFilter 为空时不过滤)
+    /// - 供重启恢复: 只取 [SessionInputStatus::Admitted] 条目
+    std::vector<SessionInputRecord>
+        listSessionInputs(std::string_view sessionId, std::string_view statusFilter = {});
 
     // ---- 用量账本 (session.db usage 表) ----
 
