@@ -114,7 +114,7 @@
 | UI-3 | 未知组件宽容降级（补两个测试） | 已实施 | `test_tui_ui_items.cpp`（未知字段 / 高版本组件 / 未知枚举值）；模块 `tui_ui_items` |
 | UI-4 | 渲染层边界测试 | 已实施 | 模块 `tui_ui_items`（空注册表渲染）+ `boundaries`（渲染层 include 规则） |
 | UI-5 | 输入栏硬件光标（终端不支持时降级） | 待实施 | `components/input_bar.*` |
-| UI-9 | 能力与体验级别声明 | 待实施 | `tuiUiCapabilities()` |
+| UI-9 | 能力与体验级别声明 | 已实施 | 客户端能力段 JSON 追加 form/layout/terminal 体验字段（`client/include/agentxx-client/io/tui/tui_plugin_adapter.h`）；模块 `ui_capabilities` |
 | UI-6 / UI-8 / UI-10 | Markdown offload / 进度卡 slot / 文案门禁 | 不做 | 现有渲染与测量共用实现足够 |
 | UI-7 | 统一浮层管理器 | 未来计划 | 需要时再引入最小浮层模型 |
 

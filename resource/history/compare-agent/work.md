@@ -460,12 +460,36 @@
 
 ## 待完成（后续阶段）
 
-- TOOL-16：按规范化路径排队执行（与 TOOL-1 并行化配套）。
-- 批次 A 余项：CFG-1（结构化配置校验）、UI-2 + TST-5（UI 快照夹具）、PRO-4（schema 生成）、
-  TST-8（一键门禁）、LLM-13（HTTP 录制回放）。
-- 批次 E：PLG-1/2/4/6/7/8、CFG-9、UI-1/5/9、PRO-3/5/8、RET-1a/STO-12 界面入口、STO-13。
-- CTX-7（附件引用）计划本身标注"需进一步理解具体实施内容"，暂缓。
-- STO-12 的协议/界面入口（改名、搜索框）见"阶段 C"。
+> 本节在 2026-10-06 按实施进度刷新（此前列出的 TOOL-16、CFG-1、UI-2+TST-5、TST-8、
+> PLG-6、PLG-10、CFG-3、TOOL-12、UI-9、ARC-5、ARC-6 均已完成，见对应阶段记录）。
+
+- **P0 余项**：
+  - TST-3（持久化迁移/恢复测试，部分实施）：老库迁移/幂等/高版本拒绝已覆盖（`session_schema`），
+    余下"崩溃未闭合轮次"对应 STO-7（已核定不做），可只补"迁移中断后重开库仍是旧版本、
+    数据不丢"的用例；
+  - LLM-5 / TST-1（假 provider）：本地 LLM 模拟器（`agent/test/core/test_agent.cpp` 的
+    `DaSimServer`）已能注入固定流/错误状态码/延迟/tool call；余下工作是把这份能力抽成
+    独立"假 provider"接缝（`ModelProviderRegistry::setProvider` 已有注入点），供压缩/重试/
+    中断用例共用。
+- **P1 余项**：
+  - PRO-3（协议版本与能力握手）、PRO-4（生成 `wire-schema.json` 与字段文档）、
+    PRO-5（连接阶段与错误分类）、PRO-8（stdio JSONL 一次性运行）；
+  - RET-1a + STO-12b（会话改名/搜索的协议与 TUI 入口；存储层 `searchSessions`/`setSessionTitle`
+    已就绪，见"阶段 C"）；
+  - PLG-1（注册可逆与清理审计：统一注册清单 + 禁用/卸载后基线断言）、PLG-2（声明式贡献集合
+    与重算）、PLG-4（独占能力 slot）、PLG-7（教学式错误与信任声明）、PLG-8（插件文档分页与
+    接口表数字校验）；
+  - LLM-7（消费端退出取消）、LLM-8（缓存断点与缓存用量，依赖 PRM-1 已实施）、
+    LLM-13（HTTP 录制回放）；
+  - CFG-9（从 `AgentConfig`/`YamlAppConfig` 生成键目录 + CI 新鲜度检查）；
+  - UI-1（客户端模型层：历史分页窗口 / 消息队列镜像 / 重连 seq 校验抽到无 FTXUI 依赖的模型类）、
+    UI-5（输入栏硬件光标 + 不支持时降级）；
+  - ROM：ARC-8（消费者窄接口试点 2~3 处）、STO-13（会话导出与取证包）、TST-4（并发竞态清单
+    余项）、TST-6（存储后端一致性骨架）、TST-7（边界/导出/清理门禁扩展）、TST-9（脱敏与
+    凭据环境清理）、OBS-3/4/5（关键指标 / 诊断包 / 模块级日志开关）。
+- **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
+  "引用 id + 校验元数据"在 provider 侧的具体形态再动手。
+- **已核定不做**：见 `plan.md` 各条目的"人工核定"列与 `docs/zh-cn/design/roadmap.md` §15。
 
 ## 与计划的差异（记录用）
 
@@ -1163,3 +1187,18 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 体验字段加在**客户端的 JSON 输出**里，没有改 `cxx_pluginxx_ui` 的 `Capabilities` 结构
   （第三方库不宜为宿主体验字段改动；描述层只解析自己认识的键）。
 - `hardware_cursor` 目前固定 false；UI-5 实施后改为按终端能力上报。
+## 本轮全量回归（2026-10-06，阶段 N~S 完成后）
+
+- 一键门禁（`pwsh -File agent/script/gate.ps1`，Debug + ASan）：
+  **34,049 项断言 0 失败**，汇总输出 `[gate] OK`（上一轮基线 33,868，本轮新增 181 项）。
+- 新增/改动模块单独复核：`assembly_snapshot` 37/0、`assembly_snapshot_io` 27/0、
+  `config_validation` 47/0、`boundaries` 8/0、`ui_snapshot` 22/0、`filesystem` 147/0、
+  `task_scope` 12/0、`shutdown_stages` 17/0、`ui_capabilities` 26/0。
+- 受影响模块回归：`agent` 198/0、`plugins` 541/0、`plugin_resources` 89/0、
+  `remote_agent` 453/0、`input_delivery` 78/0、`persist_semantics` 25/0、
+  `session_persistence` 621/0、`session_schema` 91/0、`config_loader` 375/0、
+  `client_plugins` 657/0、`ui_kit` 167/0、`tui_widget` 129/0、`tui_ui_items` 203/0、
+  `ui_items` 117/0、`command` 49/0、`worktree` 0/0（须在工作目录下运行）。
+- 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli`、`agentxx_filesystem` 插件目标均 exit=0。
+- 手工验证：`agentxx_cli --dump-config` 输出配置侧 + 运行侧装配快照（13 模型 / 6 中间件 /
+  17 插件工具 / 7 插件装载耗时 / 图 / 持久化 / 配置问题 2 条），退出码 0。
