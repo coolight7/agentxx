@@ -41,6 +41,7 @@
 | TST-8 | 一键质量门禁 | P0 | 完成 | `agent/script/gate.sh`、`agent/script/gate.ps1` |
 | TOOL-16 | 按规范化路径排队执行 | P1 | 完成（已构建 + 测试通过） | `plugins/agentxx_filesystem/filesystem_impl.h`（`PathLockTable`/`lockPathBlocking`/`lockPathAsync`）；模块 `filesystem` |
 | ARC-5 | 分阶段关闭与后台任务收敛（不等待轮次） | P1 | 完成（已构建 + 测试通过） | `util/task_scope.{h,cpp}`、`BaseAgent::shutdownAsync`、`AgentContext::markShuttingDown`、`io/session_server_agent_io.cpp`；模块 `task_scope`、`shutdown_stages` |
+| UI-9 | 能力与体验级别声明 | P2 | 完成（已构建 + 测试通过） | `client/include/agentxx-client/io/tui/tui_plugin_adapter.h`（`uiCapabilitiesJson` 补 form/layout/terminal 段）；模块 `ui_capabilities` |
 | PLG-10 | 插件装载耗时与注册计数（限定范围） | P2 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`PluginListView` 诊断字段）、`plugin_manager_lifecycle.cpp` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
@@ -1128,3 +1129,37 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 后台任务的覆盖是**渐进**的：目前登记的是事件发布与宿主进度通知两类；子代理轮次
   （`AgentHost::spawnBatch` 的派生协程）仍由调用方/取消级联负责，未迁入登记表
   （它们不是"可丢弃的短任务"，迁入需要单独设计取消语义）。
+## 阶段 S：界面能力段的体验级别字段（UI-9，2026-10-06）
+
+计划依据：`plan.md` §10 UI-9（低成本可做）："除组件 kind 外声明表单多字段提交、取消、
+布局尺寸、终端能力"。
+
+已完成（`agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h`）：
+
+- `uiCapabilitiesJson()` 在描述层 `capabilitiesToJson(tuiUiCapabilities())` 的基础上
+  **追加**三段体验级别字段（只增不改，未知键插件忽略即可，描述层解析不受影响）：
+  - `form`: `multi_field`（一次提交多个控件值）/ `submit_cancel`（`__submit`、`__cancel`）
+    / `commit_on_pick`（中断一问一答点击即提交）/ `validation`（控件下方校验提示）；
+  - `layout`: `auto` / `fixed` / `scroll`（内容超高可滚动）；
+  - `terminal`: `truecolor` / `mouse` / `wide_chars`（CJK 双宽测量）/ `hardware_cursor`
+    —— 最后一项**如实上报 false**（UI-5 输入栏硬件光标待实施，不虚报能力）。
+- 组件/控件能力仍只有一处来源（`tuiUiCapabilities()`），插件读到的能力与渲染前
+  `adaptItems` 使用的能力不会分叉（测试断言两者一致）。
+
+测试（新同步模块 `ui_capabilities`，26 项断言，`agent/test/client/test_ui_capabilities.cpp`）：
+
+- 描述层字段与 `tuiUiCapabilities()` 同源（apiVersion / kind / blocks / controls /
+  cell / gap，及 `colsOf` 换算口径）；
+- 三段体验字段取值齐全；`hardware_cursor` 为 false；
+- `capabilitiesFromJson` 能解析含新增字段的 JSON（字段只增不改、不破坏描述层）。
+
+验证：
+
+- 构建：`agentxx_test` exit=0；测试：`ui_capabilities` 26/0、`client_plugins` 657/0、
+  `ui_kit` 167/0、`tui_widget` 129/0、`ui_snapshot` 22/0。
+
+注意事项 / 与计划的差异：
+
+- 体验字段加在**客户端的 JSON 输出**里，没有改 `cxx_pluginxx_ui` 的 `Capabilities` 结构
+  （第三方库不宜为宿主体验字段改动；描述层只解析自己认识的键）。
+- `hardware_cursor` 目前固定 false；UI-5 实施后改为按终端能力上报。

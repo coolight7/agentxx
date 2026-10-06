@@ -66,8 +66,38 @@ public:
     /// 组件/控件、每格相当于多少 u 与默认行距。内容由界面描述层的
     /// `capabilitiesToJson` 生成, 与渲染前 `adaptItems` 使用的是同一份
     /// [tuiUiCapabilities] —— 插件读到的能力与本端实际能力不会分叉。
+    ///
+    /// 另外补一段**体验级别**字段 (计划 UI-9): 描述层的能力段只表达"能画哪些
+    /// 组件/控件", 而插件在选择交互形态时还需要知道表单提交方式、尺寸形态与终端
+    /// 能力。这些字段只增不改 (未知字段插件忽略即可), 描述层的解析不受影响。
     std::string uiCapabilitiesJson() const override {
-        return pluginxx::ui::capabilitiesToJson(tuiUiCapabilities()).dump();
+        auto j = pluginxx::ui::capabilitiesToJson(tuiUiCapabilities());
+
+        // 表单: 一次提交整份表单的值 (本项目域内约定 `__submit`/`__cancel`),
+        // 单个控件点击即派发; 多字段提交是中断表单与插件面板的共同形态
+        utilxx_base::Json form    = utilxx_base::Json::object();
+        form["multi_field"]       = true; // 一次提交多个控件值
+        form["submit_cancel"]     = true; // 提供 __submit / __cancel
+        form["commit_on_pick"]    = true; // 中断一问一答: 点击候选项即提交
+        form["validation"]        = true; // 校验失败在控件下方给出提示
+        j["form"]                 = std::move(form);
+
+        // 布局/尺寸形态: 描述层的 percent/aspect 之外, 本端还支持 auto 与固定尺寸
+        utilxx_base::Json layout  = utilxx_base::Json::object();
+        layout["auto"]            = true;
+        layout["fixed"]           = true;
+        layout["scroll"]          = true; // 内容超高时滚动 (面板/overlay)
+        j["layout"]               = std::move(layout);
+
+        // 终端能力: 颜色数/鼠标/宽字符/光标
+        utilxx_base::Json term    = utilxx_base::Json::object();
+        term["truecolor"]         = true;
+        term["mouse"]             = true;
+        term["wide_chars"]        = true; // CJK 双宽正确测量
+        term["hardware_cursor"]   = false; // 见 UI-5 (待实施): 输入栏硬件光标
+        j["terminal"]             = std::move(term);
+
+        return j.dump();
     }
 
     // ---- 状态栏项 ----
