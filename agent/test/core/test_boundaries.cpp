@@ -1,9 +1,14 @@
 #include "agentxx-test/core/test_boundaries.h"
 
+#include "agentxx/plugin/client_plugin_manager.h"
+#include "agentxx/plugin/plugin_manager.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -344,6 +349,71 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
 
 } // namespace
 
+/// 规则 8: 接口表数量与文档一致 (计划 PLG-8 / TST-7)
+/// - 数量常量在 `PluginManager::kInterfaceTableCount` / `ClientPluginManager::kInterfaceTableCount`
+/// - 文档: `docs/zh-cn/design/plugins.md` 与仓库根 `AGENTS.md` 都写明两侧数量;
+///   增删接口表却忘记同步文档时本规则失败 (数字对不上就是漏更新)
+void checkInterfaceTableCount(const fs::path& root, Violations& v) {
+    const auto repoRoot  = root.parent_path();
+    const auto pluginsMd = repoRoot / "docs" / "zh-cn" / "design" / "plugins.md";
+    const auto agentsMd  = repoRoot / "AGENTS.md";
+
+    const size_t agentCount  = agentxx::plugin::PluginManager::kInterfaceTableCount;
+    const size_t clientCount = agentxx::plugin::ClientPluginManager::kInterfaceTableCount;
+
+    // 数量本身: 10 张通用表 + 9 张 agent 领域表 / 7 张基础表 + 2 张交互表
+    if (agentCount != 19) {
+        v.push_back("PluginManager::kInterfaceTableCount 应为 19 (10 通用 + 9 领域), 实际 "
+                    + std::to_string(agentCount));
+    }
+    if (clientCount != 9) {
+        v.push_back("ClientPluginManager::kInterfaceTableCount 应为 9 (7 基础 + 2 交互), 实际 "
+                    + std::to_string(clientCount));
+    }
+
+    const auto contains = [](const std::string& text, std::string_view needle) {
+        return text.find(needle) != std::string::npos;
+    };
+    const auto readAll = [](const fs::path& p) -> std::optional<std::string> {
+        std::ifstream in(utilxx_base::utf8ToPath(p.string()), std::ios::binary);
+        if (!in) {
+            return std::nullopt;
+        }
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        return buf.str();
+    };
+
+    const auto pluginsText = readAll(pluginsMd);
+    if (!pluginsText.has_value()) {
+        v.push_back("缺少文档 `docs/zh-cn/design/plugins.md` (接口表数量校验依赖它)");
+    } else {
+        // 文档里两侧数量各出现一次口径: "19 张 agent" 与 "9 张 client"
+        const std::string agentNeedle  = std::to_string(agentCount) + " 张 agent";
+        const std::string clientNeedle = std::to_string(clientCount) + " 张 client";
+        if (!contains(*pluginsText, agentNeedle)) {
+            v.push_back("plugins.md 未写明 `" + agentNeedle + "` (接口表数量已变化?)");
+        }
+        if (!contains(*pluginsText, clientNeedle)) {
+            v.push_back("plugins.md 未写明 `" + clientNeedle + "` (接口表数量已变化?)");
+        }
+    }
+
+    const auto agentsText = readAll(agentsMd);
+    if (!agentsText.has_value()) {
+        v.push_back("缺少根 `AGENTS.md` (接口表数量校验依赖它)");
+    } else {
+        if (!contains(*agentsText, std::to_string(agentCount) + " 张")) {
+            v.push_back("根 AGENTS.md 未写明 agent 侧接口表数量 `" + std::to_string(agentCount)
+                        + " 张`");
+        }
+        if (!contains(*agentsText, std::to_string(clientCount) + " 张")) {
+            v.push_back("根 AGENTS.md 未写明 client 侧接口表数量 `" + std::to_string(clientCount)
+                        + " 张`");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 测试入口
 // ---------------------------------------------------------------------------
@@ -375,6 +445,9 @@ TestResult testBoundaries() {
     Violations renderViolations;
     checkRenderLayerIncludes(root, renderViolations);
 
+    Violations ifaceViolations;
+    checkInterfaceTableCount(root, ifaceViolations);
+
     // 扫描量下限: 防止目录改名/收集逻辑失效导致"零文件全通过"的假通过
     // (数值留出余量, 目录增删几十个文件不应触发失败)
     XX_TEST_EXPECT_GE(scannedClient, size_t{40});
@@ -386,6 +459,7 @@ TestResult testBoundaries() {
     reportViolations("lib 边界", libViolations);
     reportViolations("插件导出白名单", exportViolations);
     reportViolations("渲染层边界", renderViolations);
+    reportViolations("接口表数量", ifaceViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

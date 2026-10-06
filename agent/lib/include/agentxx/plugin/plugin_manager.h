@@ -240,6 +240,15 @@ class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public pluginxx::DomainHooks {
 public:
 
+    /// 本宿主向插件提供的接口表数量 (计划 PLG-8: 文档里的数字有常量可校验)
+    /// - 10 张通用表 (`pluginxx.*`, 由插件框架内核实现: log/json/config/plugins/events/
+    ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
+    /// - 9 张 agent 领域表 (`agentxx.agent.*`: tools/permission/hooks/session/context/
+    ///   model/prompt/resources/graph)
+    /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
+    ///   (测试模块 `boundaries` 会校验三者一致)
+    inline static constexpr size_t kInterfaceTableCount = 10 + 9;
+
     struct PluginListView {
         std::string              name;
         std::string              version;

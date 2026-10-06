@@ -508,6 +508,13 @@ class ClientPluginManager : public agentxx::agent::ClientEventSink,
                             public std::enable_shared_from_this<ClientPluginManager> {
 public:
 
+    /// 本宿主向客户端插件提供的接口表数量 (计划 PLG-8: 文档里的数字有常量可校验)
+    /// - 7 张基础表 (`agentxx.client.*`: ui/events/session/wire/self/json/log)
+    /// - 2 张交互表 (`agentxx.client.timer` / `agentxx.client.keybind`)
+    /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §9 与根 `AGENTS.md`
+    ///   (测试模块 `boundaries` 会校验三者一致)
+    inline static constexpr size_t kInterfaceTableCount = 7 + 2;
+
     struct PluginListView {
         std::string              name;
         std::string              version;

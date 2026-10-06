@@ -404,6 +404,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
+> 共 19 张: 9 张 agent 领域表 (`agentxx.agent.*`, 本表第 1~3、8~13 行) + 10 张通用表
+> (`pluginxx.*`, 由插件框架内核实现, 表内其余行)。**通用表的查询 IID 就是 `pluginxx.<名>`**
+> (如 `pluginxx.log`), `pluginxx.kit` 正在用这组名字查询; 下表把它们写在宿主命名空间下
+> 只是为了与领域表并列阅读 —— 按 `agentxx.agent.log` 查询不会命中。
+
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |

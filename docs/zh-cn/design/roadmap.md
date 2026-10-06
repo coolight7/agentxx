@@ -140,7 +140,7 @@
 | PLG-4 | 独占能力 slot | 待实施 | 压缩器 / 记忆提供者 |
 | PLG-6 | 装配树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动装配快照（插件/接口/依赖/能力/工具/图） |
 | PLG-7 | 教学式错误与信任声明 | 待实施 | 插件 SDK 错误文案 + 文档 |
-| PLG-8 | 文档分页与接口表数字校验 | 待实施 | `plugins.md` |
+| PLG-8 | 文档分页与接口表数字校验 | 部分实施 | 接口表数量常量（`PluginManager::kInterfaceTableCount` = 19 / `ClientPluginManager` = 9）+ `boundaries` 规则 8 校验文档数字与文件存在；`plugins.md` §8 澄清通用表 IID；文档拆分未做 |
 | PLG-10 | 插件加载耗时与注册计数诊断 | 已实施（限定范围） | `plugin_manager.h`（`PluginListView` 诊断字段）+ `plugin_manager_lifecycle.cpp`（装载耗时 + 装载摘要日志）；模块 `assembly_snapshot_io` |
 | PLG-3 / PLG-5 / PLG-9 / PLG-11 | 细粒度变更事件 / manifest schema / 作用域过滤 / 加载许可 | 不做 | 无派生缓存；`args` 原样透传；子代理白名单已实现 schema 与执行同时不可见 |
 
@@ -172,7 +172,7 @@
 | TST-3 | 持久化迁移/恢复测试 | 已实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝、**迁移中断**：失败不推进版本/数据不丢/修复后续做）；"崩溃未闭合轮次"随 STO-7 不做 |
 | TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
-| TST-7 | 边界/导出/清理门禁 | 待实施 | 模块 `boundaries` 扩展 |
+| TST-7 | 边界/导出/清理门禁 | 部分实施 | 模块 `boundaries`（依赖方向 / 渲染层 include / 导出白名单配置 / **接口表数量与文档一致**）+ `agent/script/check_plugin_exports.sh`；插件注册清理基线见 PLG-1（待实施） |
 | TST-8 | CI 一键门禁 | 已实施 | `agent/script/gate.sh`（Linux/macOS: 构建 + 全模块 fail-fast + 导出白名单 + SDK 反例编译 + 可选基准）、`agent/script/gate.ps1`（Windows 等价物） |
 | TST-9 | 测试隔离、耗时和脱敏 | 已实施 | 独立临时目录 + 每模块耗时/用例数（`test.cpp` 打印 `(N ms)`）+ 启动清凭据环境变量（`clearCredentialEnv`）+ `redactSecret` 脱敏助手（`agentxx-test/test_framework.h`） |
 | TST-10 | 安全负面测试 | 部分实施 | 见 §8 |
@@ -219,3 +219,5 @@
   `SessionInfo.snippet`，TUI 会话弹窗检索行 + `Ctrl+R` 改名；新增测试模块 `session_admin`。
 - 2026-10-07：LLM-7（单次 provider 调用取消域 `ProviderCallScope`）与 TST-9（每模块耗时打印、
   启动清凭据环境、脱敏助手）标记为已实施。
+- 2026-10-07：PLG-8 部分实施（接口表数量常量 + `boundaries` 规则 8 校验文档数字与文件存在、
+  `plugins.md` §8 澄清通用表查询 IID）与 TST-7 部分实施（边界门禁含接口表数量）。

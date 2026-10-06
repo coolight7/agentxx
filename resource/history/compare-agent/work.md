@@ -503,7 +503,6 @@
 - **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
   "引用 id + 校验元数据"在 provider 侧的具体形态再动手。
 - **已核定不做**：见 `plan.md` 各条目的"人工核定"列与 `docs/zh-cn/design/roadmap.md` §15。
-
 ## 与计划的差异（记录用）
 
 - ARC-1：计划写"`check_boundaries.py` **或**测试模块"，这里选测试模块（`boundaries`），
@@ -1513,5 +1512,36 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0（无新增 error）。
 - 生成物新鲜度：`wire_schema` 比较模式通过（`agent/schema/wire-schema.json` 与
   `docs/zh-cn/design/wire-protocol-fields.md` 与实现一致，改动协议时忘记重新生成会直接失败）。
+
+## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
+
+计划依据：`plan.md` §12 PLG-8（"插件文档分页与接口表数字校验"）、§15 TST-7（"边界/导出/清理
+门禁：依赖方向、DSO 白名单、**接口表集合**、UI block 名、插件注册清理和文档路径"）。
+
+已完成：
+
+- **数量常量**：`PluginManager::kInterfaceTableCount`（19 = 10 张通用表 `pluginxx.*` + 9 张
+  agent 领域表 `agentxx.agent.*`）与 `ClientPluginManager::kInterfaceTableCount`
+  （9 = 7 张基础表 `agentxx.client.*` + 2 张交互表 timer/keybind），注释写明"增删接口表时
+  要同步文档"。
+- **门禁规则**（`boundaries` 模块新增规则 8「接口表数量」）：数量常量必须等于 19 / 9，且
+  ① `docs/zh-cn/design/plugins.md` 必须写明 `<n> 张 agent` 与 `<n> 张 client`；
+  ② 仓库根 `AGENTS.md` 必须写明两侧数量；文档文件缺失同样判失败（避免规则静默失效）。
+  扫描量下限与失败输出沿用既有 `reportViolations`（打印条目数 + 首若干条）。
+- **文档澄清**：`plugins.md` §8 补一段说明 —— 通用表的**查询 IID 就是 `pluginxx.<名>`**
+  （`pluginxx.kit` 正在用这组名字查询），表格里按宿主命名空间列出的 `agentxx.agent.log`
+  等只是排版并列，按该名查询不会命中（此前表格容易让人误以为 IID 带宿主前缀）。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test` 均 exit=0。
+- 测试：`boundaries` 9/0（新增规则通过；文档路径解析、数量匹配均被实际执行）。
+
+注意事项 / 与计划的差异：
+
+- 计划 PLG-8 还含"`plugins.md` 拆为入门/生命周期/SDK/宿主/client/规则"：本轮只做**数量校验
+  与文档澄清**（拆分是纯文档重组，收益低于改动成本，留待需要时再做）；
+- "接口表集合"的另一半（逐张表的 vtable 可用性/版本）由现有 `plugin_runtime` /
+  `plugin_multi_instance` 用例覆盖（真实插件查询每一张表并断言版本与结构尺寸）。
 
 
