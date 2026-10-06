@@ -761,6 +761,161 @@ asio::awaitable<void> test_inbox_dropped_item_not_restored() {
     removeTempRoot(root);
 }
 
+/// 连接阶段校验与错误码 (计划 PRO-5)
+///
+/// - 未握手的传输不能发业务消息: 端点回 `WireError(InvalidState)` (而不是按正常
+///   流程处理或静默丢弃)
+/// - 收到 hello 后端点把该传输推进到 ready, 之后业务消息照常受理
+/// - 引用不存在的队列条目回 `WireError(MessageNotFound)`
+asio::awaitable<void> test_connection_stage_guard() {
+    /// 测试用传输: 阶段可控, 记录端点的阶段更新与发出的消息
+    class StageTransport : public agentxx::agent::AgentIOTransportBase {
+    public:
+
+        void send(agentxx::agent::WireMessage msg) override {
+            sent.push_back(std::move(msg));
+        }
+
+        asio::awaitable<std::optional<agentxx::agent::WireMessage>> recv() override {
+            co_return std::nullopt;
+        }
+
+        void close() override {}
+
+        bool alive() const noexcept override {
+            return true;
+        }
+
+        agentxx::agent::WireConnectionStage stage() const noexcept override {
+            return stage_;
+        }
+
+        void setStage(agentxx::agent::WireConnectionStage s, std::string_view /*reason*/) override {
+            stage_ = s;
+            ++setStageCalls;
+        }
+
+        /// 是否收到过指定错误码的 WireError
+        bool hasError(int code) const {
+            for (const auto& msg : sent) {
+                if (const auto* err = std::get_if<agentxx::agent::WireError>(&msg)) {
+                    if (err->code == code) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        std::vector<agentxx::agent::WireMessage> sent;
+        int                                      setStageCalls = 0;
+        agentxx::agent::WireConnectionStage      stage_
+            = agentxx::agent::WireConnectionStage::Unhandshaken;
+    };
+
+    auto fx = co_await makeFixture("stage_session", {}, "stage response");
+
+    auto t = std::make_shared<StageTransport>();
+    XX_TEST_EXPECT_TRUE(
+        t->stage() == agentxx::agent::WireConnectionStage::Unhandshaken
+    );
+
+    // 1) 未握手时发业务消息: 只回 InvalidState, 不进入业务处理
+    fx->endpoint->onPeerMessage(
+        agentxx::agent::WireMessage{
+            agentxx::agent::WireUserInput{.sessionId = "stage_session", .text = "too early"}
+        },
+        t
+    );
+    XX_TEST_EXPECT_TRUE(t->hasError(agentxx::agent::WireErrorCode::InvalidState));
+    XX_TEST_EXPECT_EQ(fx->endpoint->queueSizeForTest(), size_t{0});
+
+    // 2) hello 后端点把该传输推进到 ready (阶段由端点更新)
+    fx->endpoint->onPeerMessage(
+        agentxx::agent::WireMessage{
+            agentxx::agent::WireHello{.sessionId = "stage_session", .token = "t"}
+        },
+        t
+    );
+    XX_TEST_EXPECT_TRUE(t->stage() == agentxx::agent::WireConnectionStage::Ready);
+    XX_TEST_EXPECT_GE(t->setStageCalls, 1);
+
+    // 3) 握手后同一传输的业务消息被受理 (带 requestId: 应收到受理回执)
+    t->sent.clear();
+    fx->endpoint->onPeerMessage(
+        agentxx::agent::WireMessage{
+            agentxx::agent::WireUserInput{
+                .sessionId = "stage_session",
+                .text      = "accepted now",
+                .requestId = 7,
+            }
+        },
+        t
+    );
+    XX_TEST_EXPECT_FALSE(t->hasError(agentxx::agent::WireErrorCode::InvalidState));
+    bool sawAck = false;
+    for (const auto& msg : t->sent) {
+        if (const auto* ack = std::get_if<agentxx::agent::WireInputAck>(&msg)) {
+            if (ack->requestId == 7) {
+                sawAck = true;
+            }
+        }
+    }
+    XX_TEST_EXPECT_TRUE(sawAck);
+    co_await spin(std::chrono::milliseconds{200});
+
+    // 4) 删除不存在的队列条目: 明确回 MessageNotFound (不再静默成功)
+    fx->clientT->send(
+        agentxx::agent::WireMessage{
+            agentxx::agent::WireRemoveQueueItem{
+                .sessionId = "stage_session",
+                .itemId    = "no-such-item",
+            }
+        }
+    );
+    for (int i = 0; i < 200; ++i) {
+        co_await spin(std::chrono::milliseconds{5});
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(fx->recorder->mu);
+            for (const auto& err : fx->recorder->errors) {
+                if (err.code == agentxx::agent::WireErrorCode::MessageNotFound) {
+                    found = true;
+                }
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+    bool foundNotFound = false;
+    {
+        std::lock_guard<std::mutex> lock(fx->recorder->mu);
+        for (const auto& err : fx->recorder->errors) {
+            if (err.code == agentxx::agent::WireErrorCode::MessageNotFound) {
+                foundNotFound = true;
+            }
+        }
+    }
+    XX_TEST_EXPECT_TRUE(foundNotFound);
+
+    // 5) 阶段文本往返 (未知文本返回 nullopt, 由调用方兜底)
+    for (auto s : {agentxx::agent::WireConnectionStage::Unhandshaken,
+                   agentxx::agent::WireConnectionStage::Unbound,
+                   agentxx::agent::WireConnectionStage::Ready,
+                   agentxx::agent::WireConnectionStage::Reconnecting,
+                   agentxx::agent::WireConnectionStage::Draining}) {
+        auto parsed = agentxx::agent::wireConnectionStageFromText(
+            agentxx::agent::wireConnectionStageText(s)
+        );
+        XX_TEST_EXPECT_HAS_VALUE(parsed);
+        if (parsed) {
+            XX_TEST_EXPECT_TRUE(*parsed == s);
+        }
+    }
+    XX_TEST_EXPECT_FALSE(agentxx::agent::wireConnectionStageFromText("nonsense").has_value());
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_input_delivery_tests() {
@@ -772,6 +927,7 @@ asio::awaitable<TestResult> run_input_delivery_tests() {
     co_await test_inbox_store_api();
     co_await test_durable_inbox_recovery();
     co_await test_inbox_dropped_item_not_restored();
+    co_await test_connection_stage_guard();
 
     // 还原全局模拟器开关 (避免影响后续模块)
     g_da_sim_delay_ms             = 0;

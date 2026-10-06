@@ -172,6 +172,13 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     if (handshakeRejected) {
         close();
         connected_.store(false, std::memory_order_release);
+        setStage(WireConnectionStage::Unhandshaken, "handshake rejected or timed out");
+    } else if (connected_.load(std::memory_order_acquire)) {
+        // 握手完成: 有 sessionId 才是"可收发业务消息"; 还没绑定会话时为 unbound
+        setStage(
+            helloSessionId_.empty() ? WireConnectionStage::Unbound : WireConnectionStage::Ready,
+            "handshake completed"
+        );
     }
 
     co_return connected_.load(std::memory_order_acquire);
@@ -181,6 +188,7 @@ void WsAgentIOTransport::close() {
     if (stopped_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
+    setStage(WireConnectionStage::Draining, "transport closing");
     stopLoops();
 }
 
@@ -208,6 +216,25 @@ void WsAgentIOTransport::updateReconnectSessionId(std::string newSessionId) {
 
 bool WsAgentIOTransport::alive() const noexcept {
     return !stopped_.load(std::memory_order_acquire) && connected_.load(std::memory_order_acquire);
+}
+
+WireConnectionStage WsAgentIOTransport::stage() const noexcept {
+    return static_cast<WireConnectionStage>(stage_.load(std::memory_order_acquire));
+}
+
+void WsAgentIOTransport::setStage(WireConnectionStage stage, std::string_view reason) {
+    const auto next = static_cast<uint8_t>(stage);
+    auto       prev = stage_.exchange(next, std::memory_order_acq_rel);
+    if (prev == next) {
+        return;
+    }
+    XX_LOGI(
+        "[ws_transport] connection stage {} -> {} ({}; clientMode={})",
+        wireConnectionStageText(static_cast<WireConnectionStage>(prev)),
+        wireConnectionStageText(stage),
+        reason,
+        clientMode_
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +372,14 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 lastHelloAck_ = *ack;
                 if (ack->ok) {
                     connected_.store(true, std::memory_order_release);
+                    setStage(
+                        helloSessionId_.empty() ? WireConnectionStage::Unbound
+                                                : WireConnectionStage::Ready,
+                        "hello ack received"
+                    );
+                } else {
+                    // 服务端明确拒绝 (鉴权/版本): 未握手阶段保持, 等调用方决定关闭
+                    setStage(WireConnectionStage::Unhandshaken, "hello rejected by server");
                 }
             }
 
@@ -359,6 +394,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
 
         // 客户端模式: 自动重连
         connected_.store(false, std::memory_order_release);
+        setStage(WireConnectionStage::Reconnecting, "connection lost, reconnecting");
         int  attempts    = 0;
         bool reconnected = false;
         while (!stopped_.load(std::memory_order_acquire)) {
@@ -411,6 +447,9 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             );
             writeQueue_->try_send(ErrorCode{}, helloJson.dump());
             reconnected = true;
+            // 重连只恢复了传输: 会话内容仍靠随后的 Sync(全量/增量) 补齐,
+            // 因此在收到 HelloAck 之前保持 reconnecting 阶段
+            setStage(WireConnectionStage::Reconnecting, "reconnected, waiting for hello ack");
             break;
         }
         if (!reconnected) {

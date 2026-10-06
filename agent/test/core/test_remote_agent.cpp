@@ -608,9 +608,16 @@ static asio::awaitable<void> test_remote_transport_loopback() {
     auto transport
         = std::make_shared<agentxx::agent::WsAgentIOTransport>(ex, url, "test-token", cfg, wsCfg);
 
+    // 连接阶段 (计划 PRO-5): 握手前为 unhandshaken
+    XX_TEST_EXPECT_TRUE(
+        transport->stage() == agentxx::agent::WireConnectionStage::Unhandshaken
+    );
+
     agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
     bool                      ok = co_await transport->connect(hello);
     XX_TEST_EXPECT_TRUE(ok);
+    // 握手成功且已带 sessionId: ready
+    XX_TEST_EXPECT_TRUE(transport->stage() == agentxx::agent::WireConnectionStage::Ready);
 
     if (ok) {
         agentxx::agent::WireUserInput input{"session", "ping"};
@@ -627,6 +634,8 @@ static asio::awaitable<void> test_remote_transport_loopback() {
         }
     }
     transport->close();
+    // 关闭后进入 draining (不再受理新请求)
+    XX_TEST_EXPECT_TRUE(transport->stage() == agentxx::agent::WireConnectionStage::Draining);
 
     server.stop();
     th.join();

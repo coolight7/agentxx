@@ -469,7 +469,10 @@ void SessionServerAgentIO::clearMessageQueue() {
     sendMessageQueueUpdate();
 }
 
-void SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
+/// 删除消息队列条目
+/// - `return` true = 找到并删除; false = 条目不存在 (调用方据此回 `MessageNotFound`,
+///   让客户端能区分"删掉了"与"条目已经不在"而不是静默成功)
+bool SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
     auto it = std::find_if(
         messageQueue_.begin(),
         messageQueue_.end(),
@@ -477,11 +480,13 @@ void SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
             return item.id == itemId;
         }
     );
-    if (it != messageQueue_.end()) {
-        persistInputStatus(itemId, SessionStore::SessionInputStatus::Dropped);
-        messageQueue_.erase(it);
-        sendMessageQueueUpdate();
+    if (it == messageQueue_.end()) {
+        return false;
     }
+    persistInputStatus(itemId, SessionStore::SessionInputStatus::Dropped);
+    messageQueue_.erase(it);
+    sendMessageQueueUpdate();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -996,6 +1001,26 @@ void SessionServerAgentIO::onPeerMessage(
     WireMessage                                  msg,
     const std::shared_ptr<AgentIOTransportBase>& sender
 ) {
+    // 连接阶段校验 (计划 PRO-5): 传输报告"尚未握手"时, 除 hello 之外的业务消息
+    // 一律按 InvalidState 拒绝并给出原因, 而不是按正常流程处理或静默丢弃。
+    // - 进程内 Channel 传输恒为 ready, 因此同进程宿主的行为不变
+    // - WS 传输在对端 hello 被接受之前为 unhandshaken
+    if (sender && !std::holds_alternative<WireHello>(msg)
+        && sender->stage() == WireConnectionStage::Unhandshaken) {
+        XX_LOGW(
+            "[session_ctrl] reject business message before handshake (session={})",
+            config_.sessionId
+        );
+        sendToClient(
+            sender,
+            WireError{
+                .code    = WireErrorCode::InvalidState,
+                .message = "handshake not completed for this connection; send hello first",
+            }
+        );
+        return;
+    }
+
     std::visit(
         [this, &sender](auto&& m) {
             using T = std::decay_t<decltype(m)>;
@@ -1035,7 +1060,21 @@ void SessionServerAgentIO::onPeerMessage(
                 if (!acceptSessionScope(m.sessionId, sender, "remove_queue_item")) {
                     return;
                 }
-                removeQueueItem(m.itemId);
+                if (!removeQueueItem(m.itemId)) {
+                    // 条目已不在 (被清空/已受理/重复删除): 明确告知对端, 不静默成功
+                    auto err = WireError{
+                        .code    = WireErrorCode::MessageNotFound,
+                        .message = fmt::format(
+                            "queue item '{}' not found (already removed or submitted)",
+                            m.itemId
+                        ),
+                    };
+                    if (sender) {
+                        sendToClient(sender, std::move(err));
+                    } else {
+                        sendToPeer(std::move(err));
+                    }
+                }
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
                 if (!acceptSessionScope(m.sessionId, sender, "select_model")) {
                     return;
@@ -1440,6 +1479,11 @@ void SessionServerAgentIO::handleHello(
         reject.protocolVersion = agentxx::agent::WireProtocol::kVersion;
         reject.capabilities    = agentxx::agent::serverWireCapabilities();
         if (sender) {
+            // 连接阶段保持"未握手": 该对端不能发业务消息 (见 onPeerMessage 的阶段校验)
+            sender->setStage(
+                agentxx::agent::WireConnectionStage::Unhandshaken,
+                "hello rejected: protocol version newer than server"
+            );
             sendToClient(sender, WireMessage{std::move(reject)});
         } else {
             sendToPeer(WireMessage{std::move(reject)});
@@ -1600,6 +1644,11 @@ void SessionServerAgentIO::handleHello(
     };
 
     doSend(std::move(helloAck));
+
+    // 握手完成 (计划 PRO-5): 该传输进入可收发业务消息的阶段
+    if (sender) {
+        sender->setStage(agentxx::agent::WireConnectionStage::Ready, "hello accepted");
+    }
 
     for (const auto& d : replayDeltas) {
         doSend(d);

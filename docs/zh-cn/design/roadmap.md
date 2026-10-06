@@ -124,8 +124,8 @@
 |---|---|---|---|
 | PRO-1 | 消息往返测试 | 已实施 | 模块 `wire_roundtrip`（全消息类型往返 + 幂等 + 未知字段/类型兼容）；`remote_agent` 亦有协议往返段 |
 | PRO-3 | 协议版本与能力握手 | 已实施 | `WireProtocol` 常量 + `WireHello/WireHelloAck` 的版本与能力字段；服务端版本检查（不静默降级）、客户端重连声明与拒绝处理；模块 `wire_roundtrip` / `remote_agent` |
-| PRO-4 | 生成 `wire-schema.json` 与字段文档 | 待实施 | 脚本 + CI 新鲜度检查 |
-| PRO-5 | 连接阶段与错误分类 | 待实施 | 端点状态机 |
+| PRO-4 | 生成 `wire-schema.json` 与字段文档 | 已实施 | 模块 `wire_schema`（每条消息一个示例 → 生成 `agent/schema/wire-schema.json` + [wire-protocol-fields.md](wire-protocol-fields.md)，逐字节比对做新鲜度门禁，`AGENTXX_UPDATE_WIRE_SCHEMA=1` 一键更新） |
+| PRO-5 | 连接阶段与错误分类 | 已实施 | `WireConnectionStage`（unhandshaken/unbound/ready/reconnecting/draining）+ 传输 `stage()/setStage()` + WS 流转 + 端点未握手拒绝业务消息（`InvalidState`）+ `WireErrorCode::MessageNotFound`；模块 `input_delivery`、`remote_agent` |
 | PRO-7 | 会话 ID 校验统一化 | 已实施 | `SessionServerAgentIO::acceptSessionScope`（入口统一校验，不匹配回 `WireError`）；`remote_agent` 的 `session scope validation` 用例 |
 | PRO-8 | stdio JSONL 一次性运行 | 待实施 | `agent/client`（复用 Wire 结构） |
 | PRO-11 | 统一错误对象与 wire 错误码 | 部分实施 | `WireErrorCode`（`agent_io_transport.h`，未知码按 `Internal`）+ 会话校验/错误回执已用；工具与节点边界的统一错误对象待补 |
@@ -168,7 +168,7 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider`（经 `ModelProviderRegistry::setProvider` 注入） |
-| TST-2 | Wire 往返与 schema 一致性 | 部分实施 | 模块 `wire_roundtrip`（往返 + 幂等 + 兼容）；schema 生成一致性待补 |
+| TST-2 | Wire 往返与 schema 一致性 | 已实施 | 模块 `wire_roundtrip`（往返 + 兼容）+ `wire_schema`（生成物与实现一致性、覆盖度） |
 | TST-3 | 持久化迁移/恢复测试 | 已实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝、**迁移中断**：失败不推进版本/数据不丢/修复后续做）；"崩溃未闭合轮次"随 STO-7 不做 |
 | TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
@@ -210,3 +210,7 @@
   标记为已实施；新增测试模块 `ui_capabilities`。
 - 2026-10-07：LLM-5 / TST-1（假 provider 接缝）与 TST-3（迁移中断用例）标记为已实施；
   新增测试夹具 `agentxx-test/core/fake_provider.h` 与测试模块 `fake_provider`。
+- 2026-10-07：PRO-4（Wire 协议字段清单生成物 `agent/schema/wire-schema.json` +
+  [wire-protocol-fields.md](wire-protocol-fields.md)，模块 `wire_schema` 做新鲜度门禁）、
+  PRO-5（连接阶段 `WireConnectionStage` 与 `MessageNotFound`/`InvalidState` 错误分类）与
+  TST-2（schema 与实现一致性）标记为已实施。

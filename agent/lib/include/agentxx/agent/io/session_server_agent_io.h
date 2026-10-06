@@ -290,7 +290,8 @@ private:
     );
     void interruptAndRunNext();
     void clearMessageQueue();
-    void removeQueueItem(std::string_view itemId);
+    /// 删除消息队列条目; `return` false = 条目不存在 (调用方回 MessageNotFound)
+    bool removeQueueItem(std::string_view itemId);
 
     // ----- 输入投递 (计划 LOOP-1/2/3/4/11; 仅 ex_ 线程) -----
 

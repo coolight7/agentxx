@@ -273,7 +273,65 @@ struct WireErrorCode {
     inline static constexpr int SessionMismatch = 3;
     /// 请求参数不合法 (缺字段/取值越界)
     inline static constexpr int InvalidArgs = 4;
+    /// 引用的对象不存在 (如要删除的消息队列条目/消息 id 已不在)
+    inline static constexpr int MessageNotFound = 5;
 };
+
+/// 连接阶段 (计划 PRO-5)
+///
+/// 传输层用它表达"现在能不能收发业务消息", 端点据此在错误阶段回 `InvalidState`
+/// 而不是静默丢弃或按正常流程处理。进程内传输 (Channel) 建立即可用, 因此恒为
+/// [Ready]; WS 传输按握手/重连/关闭流转。
+enum class WireConnectionStage : uint8_t {
+    /// 传输已建立但握手未完成: 只接受 hello, 其余业务消息按 `InvalidState` 拒绝
+    Unhandshaken = 0,
+    /// 握手完成但尚未绑定会话 (对端还没确定 sessionId)
+    Unbound = 1,
+    /// 可正常收发业务消息
+    Ready = 2,
+    /// 断线重连中: 实时片段可能丢失, 由增量补拉/全量同步补齐后回到 Ready
+    Reconnecting = 3,
+    /// 正在关闭: 不再受理新请求
+    Draining = 4,
+};
+
+/// 连接阶段文本 (日志、诊断与 Wire 传输用; 未知文本按 [WireConnectionStage::Unhandshaken]
+/// 处理 —— 认不出阶段时按最保守的"未就绪"看待, 不去猜"可以对端发业务消息")
+inline std::string_view wireConnectionStageText(WireConnectionStage stage) noexcept {
+    switch (stage) {
+        case WireConnectionStage::Unbound:
+            return "unbound";
+        case WireConnectionStage::Ready:
+            return "ready";
+        case WireConnectionStage::Reconnecting:
+            return "reconnecting";
+        case WireConnectionStage::Draining:
+            return "draining";
+        case WireConnectionStage::Unhandshaken:
+            break;
+    }
+    return "unhandshaken";
+}
+
+/// 连接阶段文本 -> 枚举 (未知文本返回 nullopt, 由调用方决定兜底取值)
+inline std::optional<WireConnectionStage> wireConnectionStageFromText(std::string_view text) {
+    if (text == "unhandshaken") {
+        return WireConnectionStage::Unhandshaken;
+    }
+    if (text == "unbound") {
+        return WireConnectionStage::Unbound;
+    }
+    if (text == "ready") {
+        return WireConnectionStage::Ready;
+    }
+    if (text == "reconnecting") {
+        return WireConnectionStage::Reconnecting;
+    }
+    if (text == "draining") {
+        return WireConnectionStage::Draining;
+    }
+    return std::nullopt;
+}
 
 struct WireError {
     int         code = 0;
@@ -621,6 +679,18 @@ public:
     /// - Channel/服务端模式: 无重连, 默认 no-op
     /// 线程安全: 可从任意线程调用 (实现内部投递回自身 executor)
     virtual void updateReconnectSessionId(std::string /*newSessionId*/) {}
+
+    /// 当前连接阶段 (计划 PRO-5)
+    /// - 进程内 Channel 传输建立即可用, 默认返回 [WireConnectionStage::Ready]
+    /// - WS 传输覆写为真实阶段 (握手/重连/关闭)
+    virtual WireConnectionStage stage() const noexcept {
+        return WireConnectionStage::Ready;
+    }
+
+    /// 更新连接阶段 (默认忽略: 进程内传输没有阶段变化)
+    /// - 由端点在对端握手完成、版本被拒、关闭时调用; WS 实现记录并打日志
+    /// - 线程安全: 可从任意线程调用
+    virtual void setStage(WireConnectionStage /*stage*/, std::string_view /*reason*/) {}
 };
 
 } // namespace agent

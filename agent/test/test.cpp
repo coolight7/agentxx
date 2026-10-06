@@ -51,6 +51,7 @@
 #include "agentxx-test/core/test_subagent_tool.h"
 #include "agentxx-test/core/test_toolcall_parallel.h"
 #include "agentxx-test/core/test_wire_roundtrip.h"
+#include "agentxx-test/core/test_wire_schema.h"
 #include "agentxx-test/core/test_summarization.h"
 #include "agentxx-test/core/test_training.h"
 #include "agentxx-test/core/test_ui_items.h"
@@ -247,6 +248,7 @@ int main(int argn, char** argv) {
         runSync("writer_lease", agentxx::test::testWriterLease);
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
         runSync("wire_roundtrip", agentxx::test::testWireRoundtrip);
+        runSync("wire_schema", agentxx::test::testWireSchema);
         runSync("interrupt_ui", agentxx::test::testInterruptUi);
         runSync("ui_items", agentxx::test::testUiItems);
         runSync("ui_kit", agentxx::test::testUiKit);

@@ -471,8 +471,8 @@
   - LLM-5 / TST-1（假 provider）：**已完成**（见"阶段 U"）—— `ModelProviderRegistry::setProvider`
     注入的 `FakeProvider`, 覆盖固定流/工具循环/错误分类与重试/溢出压缩/取消/用量记账, 不依赖网络。
 - **P1 余项**：
-  - PRO-3（协议版本与能力握手）、PRO-4（生成 `wire-schema.json` 与字段文档）、
-    PRO-5（连接阶段与错误分类）、PRO-8（stdio JSONL 一次性运行）；
+  - PRO-3（已完成，见"阶段 T"）、**PRO-4 已完成**（见"阶段 U2"）、**PRO-5 已完成**（见"阶段 U2"）、
+    PRO-8（stdio JSONL 一次性运行）；
   - RET-1a + STO-12b（会话改名/搜索的协议与 TUI 入口；存储层 `searchSessions`/`setSessionTitle`
     已就绪，见"阶段 C"）；
   - PLG-1（注册可逆与清理审计：统一注册清单 + 禁用/卸载后基线断言）、PLG-2（声明式贡献集合
@@ -1315,3 +1315,62 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   （测试工程按 `file(GLOB ...)` 收集源码）:
   `cmake -S agent/test -B <build>/agentxx_test_repo-prefix/src/agentxx_test_repo-build`,
   否则表现为 `LNK2019 无法解析的外部符号`。
+
+## 阶段 V：Wire 协议字段清单与连接阶段（PRO-4 / PRO-5 / TST-2，2026-10-07）
+
+计划依据：`plan.md` §11 PRO-4（"先生成 `wire-schema.json` 和字段文档，再考虑 C++ 编解码/TS
+绑定；不把整个项目改成代码生成"）、PRO-5（"`unhandshaken/unbound/ready/reconnecting/draining`
+状态；明确 SessionNotFound、MessageNotFound、InvalidState"）、§15 TST-2（生成 schema 与实现对比）。
+
+已完成：
+
+- **PRO-4 协议字段清单（生成物 + 新鲜度门禁，新模块 `wire_schema`，945 项断言）**：
+  - 每个 `WireMessage` 变体成员准备一个示例实例（顺序必须与变体一致），序列化后按
+    "字段名 → JSON 类型" 生成两份生成物：
+    `agent/schema/wire-schema.json`（协议版本 / 消息数 / 每条消息的 type、字段类型、示例值）
+    与 `docs/zh-cn/design/wire-protocol-fields.md`（人工阅读的字段表 + 错误码/连接阶段说明）；
+  - 门禁: 生成结果与仓库内生成物**逐字节比对**, 不一致即失败并打印首个不同行
+    （提示 `AGENTXX_UPDATE_WIRE_SCHEMA=1` 重新生成）; 与 UI 快照同一套"一键更新 + 人工 review"做法;
+  - 覆盖度断言: 示例数量必须等于 `std::variant_size_v<WireMessage>` 且每条示例的变体下标
+    与其位置一致 —— 新增消息类型却忘记补示例时立即失败; 另断言每条消息序列化后 `type` 非空、
+    互不重复、反序列化回到同一变体成员 (TST-2: 生成 schema 与实现一致性);
+  - 生成物已纳入 `docs/zh-cn/design/index.md` 的相关文档入口, 并在 CMake 里用
+    `AGENTXX_WIRE_SCHEMA_PATH` / `AGENTXX_WIRE_SCHEMA_DOC_PATH` 注入路径。
+- **PRO-5 连接阶段与错误分类**：
+  - 新增 `WireConnectionStage`（`Unhandshaken` / `Unbound` / `Ready` / `Reconnecting` /
+    `Draining`）与 `wireConnectionStageText` / `wireConnectionStageFromText`（未知文本返回
+    `nullopt`, 由调用方兜底; 认不出阶段时按最保守的"未就绪"看待）;
+  - `AgentIOTransportBase` 新增 `stage()` / `setStage()`: 进程内 Channel 传输默认恒为
+    `Ready`（建立即可用）, 因此同进程宿主与既有用例行为不变;
+  - `WsAgentIOTransport` 实现真实流转: 构造即 `Unhandshaken` → 握手成功带 sessionId 为
+    `Ready`（未带 sessionId 为 `Unbound`）→ 断线 `Reconnecting` → 重连成功后收到 HelloAck
+    回 `Ready` → `close()` 为 `Draining`; 阶段变化记 Info 日志（含原因）;
+  - 端点（`SessionServerAgentIO`）: `onPeerMessage` 入口对**未握手**的传输拒绝除 `hello`
+    之外的业务消息并回 `WireError(InvalidState)`（不再按正常流程处理）; `handleHello` 成功
+    时把该传输推进到 `Ready`, 版本被拒时保持 `Unhandshaken`;
+  - 新增错误码 `WireErrorCode::MessageNotFound = 5`: 删除不存在的消息队列条目时明确回错误
+    （此前静默成功, 客户端无法区分"删掉了"与"条目已不在"）。
+- **测试**：
+  - 新模块 `wire_schema`（945 项断言）: 覆盖度、type 唯一性与往返、生成物比对（含更新模式）;
+  - `input_delivery` 新增 `test_connection_stage_guard`（78→97）: 未握手时业务消息被拒
+    （回 `InvalidState` 且不入队）、hello 后传输被推进到 `Ready`、之后同一传输的输入被受理
+    并回带 requestId 的受理回执、删除不存在条目回 `MessageNotFound`、阶段文本往返与未知文本兜底;
+  - `remote_agent` 的 WS 回环用例补 3 项断言（474→477）: 连接前 `Unhandshaken`、握手后
+    `Ready`、关闭后 `Draining`。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test` 均 exit=0，无新增 error。
+- 测试：`wire_schema` 945/0、`input_delivery` 97/0、`remote_agent` 477/0、`wire_roundtrip` 210/0、
+  `session_sync` 30/0、`boundaries` 8/0、`fake_provider` 36/0、`session_schema` 104/0。
+- 生成物自检：`AGENTXX_UPDATE_WIRE_SCHEMA=1` 生成后, 比较模式再次运行全部通过。
+
+注意事项 / 与计划的差异：
+
+- 计划提到"再考虑 C++ 编解码/TS 绑定": 本次只做**生成物 + 新鲜度门禁**, 不引入代码生成
+  （编解码仍是手写实现, 生成物只是可读契约）;
+- 生成物暴露了几处历史命名不一致（`delta` 的 `tool_name`/`tool_call_id`、`sync` 的
+  `message_queue`/`queue_state` 为下划线命名, 其余为驼峰）: 属既有线上格式, 改动会破坏
+  兼容性, 仅记录在字段清单里, 不改协议;
+- `MessageNotFound` 只用在删除队列条目这一条路径（其他"按 id 定位"的请求目前都是幂等语义
+  或回空页), 后续新增按 id 定位的请求可复用该码。

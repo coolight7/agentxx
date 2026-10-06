@@ -1,0 +1,850 @@
+{
+  "protocolVersion": 1,
+  "messageCount": 40,
+  "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
+  "messages": [
+    {
+      "index": 0,
+      "name": "hello",
+      "type": "hello",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "token": "string",
+        "lastSeq": "integer",
+        "tailHash": "string",
+        "language": "string",
+        "afterViewSeq": "integer",
+        "protocolVersion": "integer",
+        "capabilities": "array<string>"
+      },
+      "sample": {
+        "type": "hello",
+        "sessionId": "sess-中文-1",
+        "token": "token-abc",
+        "lastSeq": 42,
+        "tailHash": "deadbeef",
+        "language": "zh-cn",
+        "afterViewSeq": 128,
+        "protocolVersion": 1,
+        "capabilities": [
+          "input.delivery",
+          "ui.form"
+        ]
+      }
+    },
+    {
+      "index": 1,
+      "name": "hello_ack",
+      "type": "hello_ack",
+      "fields": {
+        "type": "string",
+        "ok": "boolean",
+        "sessionId": "string",
+        "tailHash": "string",
+        "models": "array<string>",
+        "protocolVersion": "integer",
+        "capabilities": "array<string>",
+        "deviceId": "string",
+        "workDir": "string",
+        "plugins": "array<object{name:string, version:string, interfaces:array<string>}>"
+      },
+      "sample": {
+        "type": "hello_ack",
+        "ok": true,
+        "sessionId": "sess-中文-1",
+        "tailHash": "deadbeef",
+        "models": [
+          "gpt-x",
+          "claude-y"
+        ],
+        "protocolVersion": 1,
+        "capabilities": [
+          "input.delivery",
+          "input.ack",
+          "queue.state",
+          "view.after_seq"
+        ],
+        "deviceId": "device-42",
+        "workDir": "D:/work/项目",
+        "plugins": [
+          {
+            "name": "agentxx_filesystem",
+            "version": "1.2.3",
+            "interfaces": [
+              "agentxx.agent.tools"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "index": 2,
+      "name": "user_input",
+      "type": "user_input",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "text": "string",
+        "model": "string",
+        "delivery": "string",
+        "requestId": "integer"
+      },
+      "sample": {
+        "type": "user_input",
+        "sessionId": "s1",
+        "text": "你好",
+        "model": "gpt-x",
+        "delivery": "next-step",
+        "requestId": 77
+      }
+    },
+    {
+      "index": 3,
+      "name": "input_ack",
+      "type": "input_ack",
+      "fields": {
+        "type": "string",
+        "status": "string",
+        "requestId": "integer",
+        "sessionId": "string",
+        "delivery": "string",
+        "reason": "string",
+        "detail": "string",
+        "itemId": "string"
+      },
+      "sample": {
+        "type": "input_ack",
+        "status": "queued",
+        "requestId": 77,
+        "sessionId": "s1",
+        "delivery": "next-turn",
+        "reason": "empty_content",
+        "detail": "输入为空",
+        "itemId": "i-9"
+      }
+    },
+    {
+      "index": 4,
+      "name": "cancel",
+      "type": "cancel",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "cancel",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 5,
+      "name": "select_model",
+      "type": "select_model",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "model": "string"
+      },
+      "sample": {
+        "type": "select_model",
+        "sessionId": "s1",
+        "model": "claude-y"
+      }
+    },
+    {
+      "index": 6,
+      "name": "interrupt_request",
+      "type": "interrupt_request",
+      "fields": {
+        "type": "string",
+        "id": "integer",
+        "sessionId": "string",
+        "node": "string",
+        "value": "string",
+        "argJson": "string"
+      },
+      "sample": {
+        "type": "interrupt_request",
+        "id": 42,
+        "sessionId": "s1",
+        "node": "xx_Toolcall",
+        "value": "repeat_toolcall",
+        "argJson": "{\"tool_name\":\"x\"}"
+      }
+    },
+    {
+      "index": 7,
+      "name": "interrupt_response",
+      "type": "interrupt_response",
+      "fields": {
+        "type": "string",
+        "id": "integer",
+        "result": "object{allow:string}"
+      },
+      "sample": {
+        "type": "interrupt_response",
+        "id": 42,
+        "result": {
+          "allow": "true"
+        }
+      }
+    },
+    {
+      "index": 8,
+      "name": "interrupt_expired",
+      "type": "interrupt_expired",
+      "fields": {
+        "type": "string",
+        "id": "integer",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "interrupt_expired",
+        "id": 42,
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 9,
+      "name": "delta",
+      "type": "delta",
+      "fields": {
+        "type": "string",
+        "seq": "integer",
+        "text": "string",
+        "msgId": "string",
+        "tool_name": "string",
+        "tool_call_id": "string",
+        "arguments": "string",
+        "result": "string",
+        "historyCount": "integer",
+        "tailHash": "string",
+        "startTimeMs": "integer",
+        "durationMs": "integer",
+        "tps": "number",
+        "nodeName": "string",
+        "message": "object{role:string, text:string, startTimeMs:integer, durationMs:integer}",
+        "kind": "string"
+      },
+      "sample": {
+        "type": "delta",
+        "seq": 128,
+        "text": "增量文本",
+        "msgId": "m-12",
+        "tool_name": "agentxx_filesystem_read",
+        "tool_call_id": "call_1",
+        "arguments": "{\"path\":\"a.txt\"}",
+        "result": "文件内容",
+        "historyCount": 12,
+        "tailHash": "cafebabe",
+        "startTimeMs": 1700000000123,
+        "durationMs": 456,
+        "tps": 12.5,
+        "nodeName": "llm",
+        "message": {
+          "role": "assistant",
+          "text": "插入的完整消息",
+          "startTimeMs": 0,
+          "durationMs": 0
+        },
+        "kind": "insert_message"
+      }
+    },
+    {
+      "index": 10,
+      "name": "sync",
+      "type": "sync",
+      "fields": {
+        "fromIndex": "integer",
+        "tailHash": "string",
+        "deltaSeq": "integer",
+        "totalMessages": "integer",
+        "lastViewSeq": "integer",
+        "incremental": "boolean",
+        "messages": "array<object{role:string, text:string, startTimeMs:integer, durationMs:integer}>",
+        "message_queue": "array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>",
+        "queue_state": "string",
+        "type": "string"
+      },
+      "sample": {
+        "fromIndex": 0,
+        "tailHash": "deadbeef",
+        "deltaSeq": 7,
+        "totalMessages": 1,
+        "lastViewSeq": 5,
+        "incremental": true,
+        "messages": [
+          {
+            "role": "user",
+            "text": "历史消息",
+            "startTimeMs": 0,
+            "durationMs": 0
+          }
+        ],
+        "message_queue": [
+          {
+            "id": "q-1",
+            "text": "排队消息",
+            "createdAtMs": 1700000000999,
+            "model": "gpt-x",
+            "delivery": "next-turn",
+            "recovered": true
+          }
+        ],
+        "queue_state": "paused",
+        "type": "sync"
+      }
+    },
+    {
+      "index": 11,
+      "name": "turn_result",
+      "type": "turn_result",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "hasError": "boolean",
+        "interrupted": "boolean",
+        "errorMessage": "string",
+        "startTimeMs": "integer",
+        "durationMs": "integer"
+      },
+      "sample": {
+        "type": "turn_result",
+        "sessionId": "s1",
+        "hasError": true,
+        "interrupted": false,
+        "errorMessage": "取消: 用户中止",
+        "startTimeMs": 1700000000123,
+        "durationMs": 4567
+      }
+    },
+    {
+      "index": 12,
+      "name": "context_stats",
+      "type": "context_stats",
+      "fields": {
+        "type": "string",
+        "contextTokens": "integer",
+        "maxContextTokens": "integer",
+        "tps": "number"
+      },
+      "sample": {
+        "type": "context_stats",
+        "contextTokens": 123456,
+        "maxContextTokens": 200000,
+        "tps": 12.5
+      }
+    },
+    {
+      "index": 13,
+      "name": "error",
+      "type": "error",
+      "fields": {
+        "type": "string",
+        "code": "integer",
+        "message": "string"
+      },
+      "sample": {
+        "type": "error",
+        "code": 3,
+        "message": "request targets another session"
+      }
+    },
+    {
+      "index": 14,
+      "name": "log",
+      "type": "log",
+      "fields": {
+        "type": "string",
+        "level": "integer",
+        "message": "string"
+      },
+      "sample": {
+        "type": "log",
+        "level": 3,
+        "message": "警告: 写入失败"
+      }
+    },
+    {
+      "index": 15,
+      "name": "get_model",
+      "type": "get_model",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "get_model",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 16,
+      "name": "model_info",
+      "type": "model_info",
+      "fields": {
+        "type": "string",
+        "currentModel": "string",
+        "models": "array<string>",
+        "capabilities": "array<object{name:string, image_input:boolean, audio_input:boolean, video_input:boolean}>"
+      },
+      "sample": {
+        "type": "model_info",
+        "currentModel": "gpt-x",
+        "models": [
+          "gpt-x",
+          "claude-y"
+        ],
+        "capabilities": [
+          {
+            "name": "gpt-x",
+            "image_input": true,
+            "audio_input": false,
+            "video_input": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 17,
+      "name": "get_append_component_info",
+      "type": "get_append_component_info",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "get_append_component_info",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 18,
+      "name": "append_component_info",
+      "type": "append_component_info",
+      "fields": {
+        "type": "string",
+        "notifications": "array<object{type:integer, name:string, success:boolean, errorMessage:string}>"
+      },
+      "sample": {
+        "type": "append_component_info",
+        "notifications": [
+          {
+            "type": 3,
+            "name": "agentxx_filesystem",
+            "success": true,
+            "errorMessage": ""
+          },
+          {
+            "type": 0,
+            "name": "broken-mcp",
+            "success": false,
+            "errorMessage": "connect failed"
+          }
+        ]
+      }
+    },
+    {
+      "index": 19,
+      "name": "get_context",
+      "type": "get_context",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "get_context",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 20,
+      "name": "compact_context",
+      "type": "compact_context",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "compact_context",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 21,
+      "name": "context_messages",
+      "type": "context_messages",
+      "fields": {
+        "type": "string",
+        "messages": "array<object{role:string, content:string}>"
+      },
+      "sample": {
+        "type": "context_messages",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "你好"
+          }
+        ]
+      }
+    },
+    {
+      "index": 22,
+      "name": "list_sessions",
+      "type": "list_sessions",
+      "fields": {
+        "type": "string",
+        "beforeMs": "integer",
+        "beforeId": "string",
+        "limit": "integer"
+      },
+      "sample": {
+        "type": "list_sessions",
+        "beforeMs": 1700000000000,
+        "beforeId": "s10",
+        "limit": 20
+      }
+    },
+    {
+      "index": 23,
+      "name": "session_list",
+      "type": "session_list",
+      "fields": {
+        "type": "string",
+        "sessions": "array<object{sessionId:string, lastActiveMs:integer, title:string}>",
+        "totalCount": "integer",
+        "hasMore": "boolean"
+      },
+      "sample": {
+        "type": "session_list",
+        "sessions": [
+          {
+            "sessionId": "s10",
+            "lastActiveMs": 1700000000000,
+            "title": "会话标题"
+          }
+        ],
+        "totalCount": 3,
+        "hasMore": true
+      }
+    },
+    {
+      "index": 24,
+      "name": "switch_session",
+      "type": "switch_session",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "switch_session",
+        "sessionId": "s10"
+      }
+    },
+    {
+      "index": 25,
+      "name": "plugin_data",
+      "type": "plugin_data",
+      "fields": {
+        "type": "string",
+        "plugin": "string",
+        "event": "string",
+        "data": "string"
+      },
+      "sample": {
+        "type": "plugin_data",
+        "plugin": "agentxx_codegraph",
+        "event": "status",
+        "data": "{\"ok\":true}"
+      }
+    },
+    {
+      "index": 26,
+      "name": "plugin_data_up",
+      "type": "plugin_data_up",
+      "fields": {
+        "type": "string",
+        "plugin": "string",
+        "event": "string",
+        "data": "string"
+      },
+      "sample": {
+        "type": "plugin_data_up",
+        "plugin": "agentxx_host",
+        "event": "client_interfaces",
+        "data": "{\"interfaces\":[\"ui\"]}"
+      }
+    },
+    {
+      "index": 27,
+      "name": "message_queue_update",
+      "type": "message_queue_update",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "state": "string",
+        "items": "array<object{id:string, text:string, createdAtMs:integer}>"
+      },
+      "sample": {
+        "type": "message_queue_update",
+        "sessionId": "s1",
+        "state": "running",
+        "items": [
+          {
+            "id": "q-1",
+            "text": "排队消息",
+            "createdAtMs": 1700000000999
+          }
+        ]
+      }
+    },
+    {
+      "index": 28,
+      "name": "clear_message_queue",
+      "type": "clear_message_queue",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "clear_message_queue",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 29,
+      "name": "remove_queue_item",
+      "type": "remove_queue_item",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "itemId": "string"
+      },
+      "sample": {
+        "type": "remove_queue_item",
+        "sessionId": "s1",
+        "itemId": "q-1"
+      }
+    },
+    {
+      "index": 30,
+      "name": "interrupt_and_run_next",
+      "type": "interrupt_and_run_next",
+      "fields": {
+        "type": "string",
+        "sessionId": "string"
+      },
+      "sample": {
+        "type": "interrupt_and_run_next",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "index": 31,
+      "name": "get_view_messages",
+      "type": "get_view_messages",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "beforeIndex": "integer",
+        "count": "integer"
+      },
+      "sample": {
+        "type": "get_view_messages",
+        "sessionId": "s1",
+        "beforeIndex": 512,
+        "count": 100
+      }
+    },
+    {
+      "index": 32,
+      "name": "view_messages_page",
+      "type": "view_messages_page",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "startIndex": "integer",
+        "totalCount": "integer",
+        "messages": "array<object{role:string, text:string, startTimeMs:integer, durationMs:integer}>"
+      },
+      "sample": {
+        "type": "view_messages_page",
+        "sessionId": "s1",
+        "startIndex": 412,
+        "totalCount": 512,
+        "messages": [
+          {
+            "role": "user",
+            "text": "hi",
+            "startTimeMs": 111,
+            "durationMs": 222
+          },
+          {
+            "role": "assistant",
+            "text": "hello",
+            "startTimeMs": 0,
+            "durationMs": 0
+          }
+        ]
+      }
+    },
+    {
+      "index": 33,
+      "name": "list_dir",
+      "type": "list_dir",
+      "fields": {
+        "type": "string",
+        "reqId": "integer",
+        "path": "string",
+        "allowedExtensions": "array<string>"
+      },
+      "sample": {
+        "type": "list_dir",
+        "reqId": 7,
+        "path": "D:/素材",
+        "allowedExtensions": [
+          "png",
+          "jpg"
+        ]
+      }
+    },
+    {
+      "index": 34,
+      "name": "list_dir_result",
+      "type": "list_dir_result",
+      "fields": {
+        "type": "string",
+        "reqId": "integer",
+        "ok": "boolean",
+        "currentDir": "string",
+        "parentDir": "string",
+        "entries": "array<object{name:string, fullPath:string, isDir:boolean, supported:boolean, sizeBytes:integer, mediaType:integer}>"
+      },
+      "sample": {
+        "type": "list_dir_result",
+        "reqId": 7,
+        "ok": true,
+        "currentDir": "D:/素材",
+        "parentDir": "D:/",
+        "entries": [
+          {
+            "name": "图.png",
+            "fullPath": "D:/素材/图.png",
+            "isDir": false,
+            "supported": true,
+            "sizeBytes": 1024,
+            "mediaType": 0
+          }
+        ]
+      }
+    },
+    {
+      "index": 35,
+      "name": "get_permission_state",
+      "type": "get_permission_state",
+      "fields": {
+        "type": "string"
+      },
+      "sample": {
+        "type": "get_permission_state"
+      }
+    },
+    {
+      "index": 36,
+      "name": "set_full_auth",
+      "type": "set_full_auth",
+      "fields": {
+        "type": "string",
+        "fullAuth": "boolean"
+      },
+      "sample": {
+        "type": "set_full_auth",
+        "fullAuth": true
+      }
+    },
+    {
+      "index": 37,
+      "name": "permission_state",
+      "type": "permission_state",
+      "fields": {
+        "type": "string",
+        "fullAuth": "boolean"
+      },
+      "sample": {
+        "type": "permission_state",
+        "fullAuth": true
+      }
+    },
+    {
+      "index": 38,
+      "name": "add_model",
+      "type": "add_model",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "name": "string",
+        "modelType": "string",
+        "baseUrl": "string",
+        "apiKey": "string",
+        "modelName": "string",
+        "apiPath": "string",
+        "modelContextMaxToken": "integer",
+        "maxConcurrentConnections": "integer",
+        "connectTimeoutSeconds": "integer",
+        "readChunkTimeoutSeconds": "integer",
+        "sslVerify": "boolean",
+        "sendThinking": "boolean",
+        "requestReasoningSummary": "boolean",
+        "imageInput": "boolean",
+        "extraApiConfig": "object{k:integer}",
+        "extraHeaders": "object{H:string}"
+      },
+      "sample": {
+        "type": "add_model",
+        "sessionId": "s1",
+        "name": "本机 ollama",
+        "modelType": "openai",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "EMPTY",
+        "modelName": "qwen3",
+        "apiPath": "/chat/completions",
+        "modelContextMaxToken": 131072,
+        "maxConcurrentConnections": 3,
+        "connectTimeoutSeconds": 8,
+        "readChunkTimeoutSeconds": 30,
+        "sslVerify": false,
+        "sendThinking": true,
+        "requestReasoningSummary": false,
+        "imageInput": true,
+        "extraApiConfig": {
+          "k": 1
+        },
+        "extraHeaders": {
+          "H": "v"
+        }
+      }
+    },
+    {
+      "index": 39,
+      "name": "add_model_result",
+      "type": "add_model_result",
+      "fields": {
+        "type": "string",
+        "ok": "boolean",
+        "name": "string",
+        "error": "string"
+      },
+      "sample": {
+        "type": "add_model_result",
+        "ok": false,
+        "name": "bad",
+        "error": "name duplicated"
+      }
+    }
+  ]
+}

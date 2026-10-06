@@ -157,6 +157,13 @@ if (AGENTXX_BUILD_CLIENT)
   )
 endif()
 
+# Wire 协议字段清单生成物 (计划 PRO-4 / TST-2): 模块 wire_schema 把生成结果与仓库内
+# 生成物逐字节比对, 不一致即失败; 一键更新用 AGENTXX_UPDATE_WIRE_SCHEMA=1
+target_compile_definitions(agentxx_test PRIVATE
+  AGENTXX_WIRE_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../schema/wire-schema.json"
+  AGENTXX_WIRE_SCHEMA_DOC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../docs/zh-cn/design/wire-protocol-fields.md"
+)
+
 # PCH: 只预编译稳定第三方头，加速测试编译 (GCC/Clang，与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
 if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)

@@ -80,6 +80,12 @@ public:
         return lastHelloAck_;
     }
 
+    /// 当前连接阶段 (计划 PRO-5); 见 [WireConnectionStage]
+    WireConnectionStage stage() const noexcept override;
+
+    /// 更新连接阶段 (握手完成/被拒/重连/关闭时调用; 阶段变化记 Info 日志)
+    void setStage(WireConnectionStage stage, std::string_view reason) override;
+
     // ----- 序列化工具 (供 ServerWsIOTransport 复用) -----
 
     /// WireMessage -> JSON 文本帧
@@ -140,6 +146,8 @@ private:
 
     std::atomic<bool> stopped_{false};
     std::atomic<bool> connected_{false};
+    /// 连接阶段 (计划 PRO-5): 端点可能从其它线程读取/设置, 用原子保存枚举底层类型
+    std::atomic<uint8_t> stage_{static_cast<uint8_t>(WireConnectionStage::Unhandshaken)};
 };
 
 } // namespace agent
