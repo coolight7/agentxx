@@ -1512,6 +1512,7 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0（无新增 error）。
 - 生成物新鲜度：`wire_schema` 比较模式通过（`agent/schema/wire-schema.json` 与
   `docs/zh-cn/design/wire-protocol-fields.md` 与实现一致，改动协议时忘记重新生成会直接失败）。
+- 阶段 Y（接口表数量门禁）之后复跑全量：**35,328 项断言 0 失败**（`boundaries` 8→9）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
