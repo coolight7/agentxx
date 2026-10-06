@@ -24,4 +24,8 @@ resource\history\compare-agent\compare-openclaw.md，并在最后整理一下整
 resource\history\compare-agent\compare-harness.md，并在最后整理一下整个 compare-harness.md 文档
 
 - 请完整通读 resource\history\compare-agent\compare-*.md 多个架构设计比较，可结合读取多个项目源码，仔细思考分析，最终整理出每个模块中较好的、适合迁移融合进 agentxx 实现的设计，分模块写入到文件 resource\history\compare-agent\plan.md，最终再仔细思考整体整理一下 plan.md
+
+- 请完整通读 功能融合计划 resource\history\compare-agent\plan.md，此前已经完成了一部分任务，记录在
+resource\history\compare-agent\work.md，现在请逐步实现 plan.md 中人工核定可行、待实施的设计，并逐步更新任务执行状态到
+work.md，在每完成一定任务内容后自行提交git
 ```
