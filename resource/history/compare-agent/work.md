@@ -1442,3 +1442,45 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - TUI 的改名入口是 `Ctrl+R`（而不是可打印字符键）：检索行直接吃字符输入，用组合键避免
   与检索输入冲突。
 
+## 阶段 X：单次 provider 调用取消域与测试隔离收尾（LLM-7 / TST-9，2026-10-07）
+
+计划依据：`plan.md` §6 LLM-7（"流对象析构或消费方放弃时 RAII 取消 provider，避免连接继续
+占用"）、§15 TST-9（"临时 HOME/TMP/XDG、清凭据环境；每模块打印耗时/用例数；路径和 key 脱敏"）。
+
+已完成：
+
+- **LLM-7 单次调用取消域**（新增 `agent/lib/include/agentxx/nodes/provider_call_scope.h`）：
+  - `ProviderCallScope`：用 `CancelToken::fork()` 为**每次** provider 调用建立子令牌 ——
+    运行级取消照常级联到子令牌（用户取消/关停语义不变），而子令牌单独取消只中止本次调用；
+  - RAII 契约：调用正常收尾（成功或错误路径）必须 `markDone()`；未标记就析构（消费方放弃、
+    协程帧被销毁）时析构函数取消子令牌，让在途请求尽快结束而不是把响应读完；
+  - `nodes/modelcall.cpp` 接线：`params.cancel_token` 由"运行令牌"改为本次调用的子令牌，
+    `co_await` 后与异常路径都标记完成（错误路径不算放弃）；
+  - 边界：不做超时竞速（TOOL-4 分发层硬超时经人工核定不做），只提供取消域。
+- **TST-9 测试隔离与脱敏**：
+  - 每模块打印耗时（`--- 模块 done: passed=N failed=M (T ms) ---`，同步与异步两条运行器都改）；
+  - 启动时清除常见模型 API 凭据与端点覆盖环境变量（`clearCredentialEnv`，仅清凭据类，
+    不动 PATH/HOME 等运行必需变量），使"意外联网"直接失败而不是悄悄产生费用；清理结果打印
+    条数与变量名（不打印取值）；
+  - 新增 `redactSecret` 脱敏助手（保留首尾少量字符，其余以 `*` 代替），供测试日志/断言信息
+    打印可能含凭据的值；测试临时目录隔离（独立 `agentxx_*_test_*` 目录）此前已实施。
+- **测试**：新同步模块 `provider_call_scope`（18 项断言）：父令牌取消级联、调用域单独取消
+  不影响父令牌、同一轮次多个调用域互不影响、`markDone` 后析构不取消、未 `markDone` 析构即取消、
+  父令牌为空时的独立令牌、父令牌已取消时新建调用域立即处于取消态。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test` 均 exit=0。
+- 测试：`provider_call_scope` 18/0、`fake_provider` 36/0、`agent` 198/0、`cancel` 45/0、
+  `toolcall_parallel` 48/0、`summarization` 445/0、`usage_ledger` 21/0、`shutdown_stages` 17/0。
+
+注意事项 / 与计划的差异：
+
+- 计划把 LLM-7 描述为"流对象析构或消费方放弃时 RAII 取消 provider"：本项目的 provider 调用
+  没有独立"流对象"（就是一次 `co_await`），因此实现落在**调用域**上；协程帧被销毁时 asio
+  本身也会取消其挂起操作，这里的 RAII 取消是与之并列的一道保险（并覆盖"帧仍活着但消费方
+  不再等待"的情形）。
+- TST-9 的"路径脱敏"未做：测试失败信息里的路径都是临时目录/仓库路径，不是敏感信息；
+  真正需要脱敏的是凭据取值（已有 `redactSecret`，且 `assembly_snapshot` 断言不落凭据）。
+
+

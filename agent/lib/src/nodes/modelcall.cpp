@@ -5,6 +5,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/nodes/llm_error.h"
+#include "agentxx/nodes/provider_call_scope.h"
 #include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/openai_provider.h"
@@ -322,13 +323,26 @@ asio::awaitable<neograph::graph::NodeOutput>
     // 放在 build_params 之前: next-step 追加的消息由 build_params 一并复制
     auto injections
         = agentxx::nodes::drainPendingSessionInputs(agentContext.lock(), in, in.ctx.thread_id, nodeName);
-    auto params         = build_params(in.ctx.thread_id);
-    params.cancel_token = in.ctx.cancel_token;
+    auto params = build_params(in.ctx.thread_id);
+    // 单次调用的取消域 (计划 LLM-7): 运行取消照常级联, 消费方放弃时只中止本次调用
+    // (在途 HTTP/SSE 请求立即结束, 不必等响应读完或套接字超时)
+    agentxx::nodes::ProviderCallScope callScope{in.ctx.cancel_token};
+    params.cancel_token = callScope.token();
     for (auto& injected : injections.requestScoped) {
         params.messages.push_back(std::move(injected));
     }
 
-    auto completion = co_await onReceiveToken(params, in);
+    neograph::ChatCompletion completion;
+    try {
+        completion = co_await onReceiveToken(params, in);
+        // 调用已收尾 (含 provider 抛错后由上层重试/结束): 不再视为"消费方放弃"
+        callScope.markDone();
+    } catch (...) {
+        // provider 抛错时调用同样已经结束 (上层负责分类/重试): 标记完成后原样抛出,
+        // 避免把"错误路径"误当成"消费方放弃"再取消一次
+        callScope.markDone();
+        throw;
+    }
     neograph::graph::record_usage(in.ctx, completion); // #88
 
     // 部分 OpenAI 兼容 API (如 Ollama) 流式响应不返回 tool_call id，

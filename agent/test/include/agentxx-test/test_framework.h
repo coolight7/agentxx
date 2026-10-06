@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if XX_IS_WIN_D
@@ -62,6 +64,54 @@ inline std::optional<std::filesystem::path> executableDir() {
     }
     return std::nullopt;
 #endif
+}
+
+/// 清除模型 API 凭据类环境变量 (计划 TST-9)
+///
+/// 目的: 本机装有真实 API key 时, 任何"顺带发一次请求"的代码路径都会打线上服务
+/// (按量计费)。测试只在本地模拟器/假 provider 上跑, 因此启动时先清掉常见凭据,
+/// 使"意外联网"直接失败而不是悄悄花钱。只清凭据与端点覆盖项, 不动 PATH/HOME 等
+/// 运行必需变量。
+///
+/// - `return` 实际清除的变量名列表 (供打印)
+inline std::vector<std::string> clearCredentialEnv() {
+    static constexpr const char* kNames[] = {
+        "OPENAI_API_KEY",     "OPENAI_BASE_URL",    "OPENAI_API_BASE",
+        "ANTHROPIC_API_KEY",  "ANTHROPIC_BASE_URL", "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY",     "GOOGLE_API_KEY",     "MOONSHOT_API_KEY",
+        "DASHSCOPE_API_KEY",  "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT", "AGENTXX_API_KEY",
+    };
+    std::vector<std::string> cleared;
+#if XX_IS_WIN_D
+    for (const char* name : kNames) {
+        if (::GetEnvironmentVariableA(name, nullptr, 0) > 0) {
+            ::SetEnvironmentVariableA(name, nullptr);
+            cleared.emplace_back(name);
+        }
+    }
+#else
+    for (const char* name : kNames) {
+        if (::getenv(name) != nullptr) {
+            ::unsetenv(name);
+            cleared.emplace_back(name);
+        }
+    }
+#endif
+    return cleared;
+}
+
+/// 敏感值脱敏: 保留首尾少量字符, 中间以 `*` 代替 (长度不足时整体掩掉)
+/// - 用于测试日志/断言失败信息中打印可能含凭据的值
+inline std::string redactSecret(std::string_view value) {
+    if (value.empty()) {
+        return {};
+    }
+    if (value.size() <= 6) {
+        return std::string(value.size(), '*');
+    }
+    return std::string{value.substr(0, 3)} + std::string(value.size() - 5, '*')
+           + std::string{value.substr(value.size() - 2)};
 }
 
 struct TestResult {

@@ -82,7 +82,7 @@
 | LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
-| LLM-7 | 消费端退出取消 | 待实施 | provider 流对象 |
+| LLM-7 | 消费端退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在消费方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
 | LLM-8 | 缓存断点与缓存用量 | 待实施 | Anthropic 请求装配 + 用量账本 |
 | LLM-13 | HTTP 录制回放 | 待实施 | 测试夹具 |
 | LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
@@ -174,7 +174,7 @@
 | TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
 | TST-7 | 边界/导出/清理门禁 | 待实施 | 模块 `boundaries` 扩展 |
 | TST-8 | CI 一键门禁 | 已实施 | `agent/script/gate.sh`（Linux/macOS: 构建 + 全模块 fail-fast + 导出白名单 + SDK 反例编译 + 可选基准）、`agent/script/gate.ps1`（Windows 等价物） |
-| TST-9 | 测试隔离、耗时和脱敏 | 部分实施 | 独立临时目录与模块耗时已实现；脱敏与凭据环境清理待补 |
+| TST-9 | 测试隔离、耗时和脱敏 | 已实施 | 独立临时目录 + 每模块耗时/用例数（`test.cpp` 打印 `(N ms)`）+ 启动清凭据环境变量（`clearCredentialEnv`）+ `redactSecret` 脱敏助手（`agentxx-test/test_framework.h`） |
 | TST-10 | 安全负面测试 | 部分实施 | 见 §8 |
 | TST-5 | UI 快照夹具 | 已实施（并入 UI-2） | 见 §9 UI-2 |
 | TST-11 / TST-12 / TST-13 / TST-14 / TST-15 | 产物级 e2e / 覆盖率门禁 / 状态清单 / 守卫有效性用例 / 测试目录分组 | 部分实施 | 本文即 TST-13；TST-14 为 `agent/lib/AGENTS.md` 评审约定；benchmark 已覆盖真实两进程与 PTY |
@@ -217,3 +217,5 @@
 - 2026-10-07：RET-1a / STO-12b（会话检索与改名的协议、端点与 TUI 入口）标记为已实施：
   `WireListSessions.keyword`、`WireRenameSession` / `WireRenameSessionResult`、
   `SessionInfo.snippet`，TUI 会话弹窗检索行 + `Ctrl+R` 改名；新增测试模块 `session_admin`。
+- 2026-10-07：LLM-7（单次 provider 调用取消域 `ProviderCallScope`）与 TST-9（每模块耗时打印、
+  启动清凭据环境、脱敏助手）标记为已实施。

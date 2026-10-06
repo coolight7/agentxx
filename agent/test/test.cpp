@@ -35,6 +35,7 @@
 #include "agentxx-test/core/test_input_delivery.h"
 #include "agentxx-test/core/test_persist_semantics.h"
 #include "agentxx-test/core/test_prompt_stability.h"
+#include "agentxx-test/core/test_provider_call_scope.h"
 #include "agentxx-test/core/test_permission.h"
 #include "agentxx-test/core/test_rag_search_tools.h"
 #include "agentxx-test/core/test_regex.h"
@@ -112,6 +113,7 @@
 #include "agentxx-test/core/test_web_search_tools.h"
 #include "agentxx-test/core/test_websocket.h"
 #include <cstring>
+#include <chrono>
 #include <iostream>
 #include <map>
 
@@ -170,6 +172,18 @@ int main(int argn, char** argv) {
     auto testLogSink = std::make_shared<TestWarnErrorLogSink>();
     utilxx_base::LogDispatcher::instance().addSink(testLogSink);
 
+    // 凭据环境清理 (计划 TST-9): 见 clearCredentialEnv 说明
+    {
+        const auto cleared = agentxx::test::clearCredentialEnv();
+        if (!cleared.empty()) {
+            std::cout << "[INFO] cleared credential env vars (" << cleared.size() << "):";
+            for (const auto& name : cleared) {
+                std::cout << " " << name;
+            }
+            std::cout << std::endl;
+        }
+    }
+
     // 解析参数
     std::vector<std::string> selectedModules;
     for (int i = 1; i < argn; ++i) {
@@ -212,10 +226,16 @@ int main(int argn, char** argv) {
             return;
         }
         std::cout << "--- " << name << " ---" << std::endl;
+        const auto _t0 = std::chrono::steady_clock::now();
         auto r  = fn();
         total  += r;
         std::cout << "--- " << name << " done: passed=" << r.passed << " failed=" << r.failed
-                  << " ---" << std::endl;
+                  << " ("
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - _t0
+                     )
+                         .count()
+                  << " ms) ---" << std::endl;
         if (r.failed > 0 && agentxx::test::g_failFast) {
             std::cout << "======= FAIL-FAST: aborting after " << name << " =======" << std::endl;
             failFastTriggered = true;
@@ -237,6 +257,7 @@ int main(int argn, char** argv) {
         runSync("json_view", agentxx::test::testJsonView);
         runSync("json_reflection", agentxx::test::testJsonReflection);
         runSync("llm_error", agentxx::test::testLlmError);
+        runSync("provider_call_scope", agentxx::test::testProviderCallScope);
         runSync("diff_util", agentxx::test::testDiffUtil);
         runSync("events", agentxx::test::test_events);
         runSync("concurrency", agentxx::test::testConcurrency);
@@ -306,10 +327,16 @@ int main(int argn, char** argv) {
                     }
                     std::cout << "--- " << name << " ---" << std::endl;
                     try {
+                        const auto _t0 = std::chrono::steady_clock::now();
                         auto r  = co_await testFn();
                         total  += r;
                         std::cout << "--- " << name << " done: passed=" << r.passed
-                                  << " failed=" << r.failed << " ---" << std::endl;
+                                  << " failed=" << r.failed << " ("
+                                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - _t0
+                                     )
+                                         .count()
+                                  << " ms) ---" << std::endl;
                         if (r.failed > 0 && agentxx::test::g_failFast) {
                             std::cout << "======= FAIL-FAST: aborting after " << name
                                       << " =======" << std::endl;
@@ -341,10 +368,16 @@ int main(int argn, char** argv) {
                     }
                     std::cout << "--- " << name << " ---" << std::endl;
                     try {
+                        const auto _t0 = std::chrono::steady_clock::now();
                         auto r  = co_await testFn(ctx);
                         total  += r;
                         std::cout << "--- " << name << " done: passed=" << r.passed
-                                  << " failed=" << r.failed << " ---" << std::endl;
+                                  << " failed=" << r.failed << " ("
+                                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - _t0
+                                     )
+                                         .count()
+                                  << " ms) ---" << std::endl;
                         if (r.failed > 0 && agentxx::test::g_failFast) {
                             std::cout << "======= FAIL-FAST: aborting after " << name
                                       << " =======" << std::endl;
