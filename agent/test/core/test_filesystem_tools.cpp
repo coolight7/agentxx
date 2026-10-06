@@ -2678,9 +2678,11 @@ asio::awaitable<void> test_plugin_real_link() {
         linkCtx->toolRegistry->find("agentxx_filesystem_grep")->extra["autoSummaryOutput"],
         std::string{"true"}
     );
+    // read 与 list/glob/grep 同属读取类工具: 注册时带只读 flags (自动摘要 + 并行安全),
+    // 大输出按 [AgentConfig::toolcallSummaryLimitOutputLength] 自动摘要 (见 kReadOnlyFlags)
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_read")->extra["autoSummaryOutput"],
-        std::string{"false"}
+        std::string{"true"}
     );
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_list")->extra["autoSummaryOutput"],

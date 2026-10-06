@@ -454,7 +454,7 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
     tools.push_back(std::make_unique<TraceTool>("test_can_fast", trace, 30, true));
-    tools.push_back(std::make_unique<TraceTool>("test_can_slow", trace, 5000, true));
+    tools.push_back(std::make_unique<TraceTool>("test_can_slow", trace, 800, true));
     tools.push_back(std::make_unique<TraceTool>("test_can_never", trace, 10, /*parallelSafe=*/false));
 
     ParallelTestAgent agent(cfg, std::move(tools));
@@ -531,6 +531,26 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
         XX_TEST_EXPECT_EQ(results[1].second, std::string{"[User canceled]"});
         XX_TEST_EXPECT_EQ(results[2].first, std::string{"call_never"});
         XX_TEST_EXPECT_EQ(results[2].second, std::string{"[User canceled]"});
+    }
+
+    // 等待被取消的慢工具执行体真正结束 (其内部计时器不随取消信号中止):
+    // 不等待就返回会让它在本函数返回后继续运行, 触碰已析构的工具对象
+    // (ASan: heap-use-after-free)。等待上限大于工具自身的睡眠时长。
+    {
+        asio::steady_timer timer(ex);
+        const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+        while (std::chrono::steady_clock::now() < deadline) {
+            const bool slowDone = std::any_of(
+                trace->begin(),
+                trace->end(),
+                [](const TraceEntry& e) { return e.name == "test_can_slow" && !e.isStart; }
+            );
+            if (slowDone) {
+                break;
+            }
+            timer.expires_after(std::chrono::milliseconds{10});
+            co_await timer.async_wait(asio::use_awaitable);
+        }
     }
 
     g_da_sim_tool_calls = utilxx_base::Json::array();

@@ -528,6 +528,7 @@
 - 阶段 L（STO-4 / STO-5 / STO-9）完成后提交：`展示历史序号与增量补拉、落盘分级、写失败降级提示 (STO-4/STO-5/STO-9)`。
 - 阶段 M（PRM-1 / PRM-2 / PRM-7）完成后提交：`提示词稳定段与动态段分离、段落排序、请求体结构断言 (PRM-1/PRM-2/PRM-7)`。
 - 阶段 M 补充（PRM-5）完成后提交：`技能优先级与同名裁决 (PRM-5)`。
+- 全量回归与测试夹具修正完成后提交：`修正测试夹具内存生命周期与只读工具自动摘要预期`。
 
 ## 阶段 M：提示词稳定段与动态段（PRM-1/PRM-2/PRM-7，2026-10-06）
 
@@ -613,6 +614,19 @@
 
 验证：`prompt_stability` 19/0、`prompt_stability_io` 32/0、`plugins` 541/0、
 `plugin_resources` 89/0、`agent` 198/0、`summarization` 445/0。
+
+## 全量回归与测试夹具修正（2026-10-06）
+
+- 全量 `agentxx_test`（Debug + ASan/UBSan，全部模块）：**33868 项断言 0 失败**，进程 exit=0，
+  无 AddressSanitizer 报告。
+- 顺带修正两个与本次改动无关、但会污染全量回归的问题：
+  1. `toolcall_parallel` 取消用例（T4）：被取消的慢工具（`test_can_slow`，原 5000ms 睡眠）
+     内部计时器不随取消信号中止，用例返回后其协程继续运行并触碰已析构的工具对象
+     （ASan: heap-use-after-free，`test_toolcall_parallel.cpp:107`）。修正：睡眠改为 800ms，
+     并在用例结束前等待该工具执行体真正结束（上限 3s）。
+  2. `filesystem` 模块 `autoSummaryOutput` 断言：读取类工具（list/read/glob/grep）在
+     TOOL-2 起统一带只读 flags（自动摘要 + 并行安全），测试仍期望 `read` 为 `false`
+     （旧预期），改为 `true` 与插件注册一致。
 
 ## 阶段 L：持久化语义与断线增量补拉（STO-4/STO-5/STO-9，2026-10-06）
 
