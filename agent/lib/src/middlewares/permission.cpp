@@ -235,23 +235,45 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
     std::string_view   toolName,
     utilxx_base::Json& args
 ) {
+    std::string reason;
+    co_return co_await checkToolPermission(toolName, args, &reason);
+}
+
+asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
+    std::string_view   toolName,
+    utilxx_base::Json& args,
+    std::string*       reasonOut
+) {
     // 未声明权限的工具不参与权限判定 (直接放行): 权限限制随工具来源 (插件) 走,
     // 未加载/未声明的工具与无权限需求一致
     const auto* spec = toolPermission(toolName);
     if (!spec) {
+        if (reasonOut) {
+            *reasonOut = "tool declares no permission scope (unconstrained)";
+        }
         co_return true;
     }
-    co_return co_await checkToolPermission(toolName, args, *spec);
+    co_return co_await checkToolPermission(toolName, args, *spec, reasonOut);
 }
 
-asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
-    std::string_view          toolName,
-    utilxx_base::Json&        args,
-    const ToolPermissionSpec& spec
+std::string PermissionMiddlewareHandle::approvedTargetsKey(
+    std::string_view toolName,
+    std::string_view toolCallId
 ) {
-    // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
+    // 分隔符用不可打印字符: 工具名与调用 id 都来自外部文本, 用 '\x1f' 避免拼接歧义
+    std::string key{toolName};
+    key += '\x1f';
+    key += toolCallId;
+    return key;
+}
+
+std::vector<std::string> PermissionMiddlewareHandle::resolveDeclaredTargets(
+    const utilxx_base::Json&  args,
+    const ToolPermissionSpec& spec
+) const {
+    std::vector<std::string> targets;
     if (spec.targetKind == ToolPermissionTargetKind::None || spec.targetArgs.empty()) {
-        co_return co_await checkTargetPermission(toolName, args, spec.scope, {}, spec.category);
+        return targets;
     }
     const auto sessionId = args.value("sessionId", std::string{});
     for (const auto& argName : spec.targetArgs) {
@@ -280,17 +302,105 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
             if (target.empty()) {
                 continue;
             }
-            // 依次判定: 任一目标被拒绝即拒绝整个调用 (询问逐个进行)
-            if (!co_await checkTargetPermission(
-                    toolName,
-                    args,
-                    spec.scope,
-                    target,
-                    spec.category
-                )) {
-                co_return false;
-            }
+            targets.push_back(std::move(target));
         }
+    }
+    return targets;
+}
+
+PermissionMiddlewareHandle::ReverifyResult PermissionMiddlewareHandle::reverifyApprovedTargets(
+    std::string_view         toolName,
+    std::string_view         toolCallId,
+    const utilxx_base::Json& args
+) const {
+    if (toolCallId.empty()) {
+        return ReverifyResult{}; // 无调用 id: 无法关联到具体批准记录
+    }
+    const auto it = approvedTargets_.find(approvedTargetsKey(toolName, toolCallId));
+    if (it == approvedTargets_.end()) {
+        return ReverifyResult{}; // 未经过权限判定 (未声明权限): 无约束
+    }
+    const auto current = resolveDeclaredTargets(args, it->second.spec);
+    if (current == it->second.targets) {
+        return ReverifyResult{};
+    }
+    auto describe = [](const std::vector<std::string>& v) {
+        std::string out;
+        for (const auto& t : v) {
+            if (!out.empty()) {
+                out += ", ";
+            }
+            out += t;
+        }
+        return out.empty() ? std::string{"<none>"} : out;
+    };
+    return ReverifyResult{
+        .ok     = false,
+        .reason = fmt::format(
+            "permission target changed between check and execution (approved: [{}], "
+            "executing: [{}])",
+            describe(it->second.targets),
+            describe(current)
+        ),
+    };
+}
+
+asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
+    std::string_view          toolName,
+    utilxx_base::Json&        args,
+    const ToolPermissionSpec& spec,
+    std::string*              reasonOut
+) {
+    // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
+    if (spec.targetKind == ToolPermissionTargetKind::None || spec.targetArgs.empty()) {
+        const bool allow = co_await checkTargetPermission(
+            toolName,
+            args,
+            spec.scope,
+            {},
+            spec.category
+        );
+        if (reasonOut) {
+            *reasonOut = allow ? std::string{"allow"} : std::string{"denied"};
+        }
+        co_return allow;
+    }
+
+    // 按声明解析全部受约束目标 (判定与执行前复验同一口径)
+    const auto sessionId = args.value("sessionId", std::string{});
+    const auto targets   = resolveDeclaredTargets(args, spec);
+    for (const auto& target : targets) {
+        const auto decision = explainTarget(target, spec.scope, sessionId);
+        XX_LOGD(
+            "Permission check: tool='{}' target='{}' session='{}' decision={} reason={}",
+            toolName,
+            target,
+            sessionId,
+            decision.decision == PathDecision::Allow
+                ? "allow"
+                : (decision.decision == PathDecision::Deny ? "deny" : "ask"),
+            decision.describe()
+        );
+        if (decision.decision == PathDecision::Deny && reasonOut) {
+            *reasonOut = decision.describe();
+        }
+        // 依次判定: 任一目标被拒绝即拒绝整个调用 (询问逐个进行)
+        if (!co_await checkTargetPermission(
+                toolName,
+                args,
+                spec.scope,
+                target,
+                spec.category
+            )) {
+            co_return false;
+        }
+    }
+
+    // 记录已批准目标: 执行前按同一口径复验 (计划 SEC-5)
+    const auto toolCallId = args.value("tool_call_id", std::string{});
+    if (!toolCallId.empty()) {
+        approvedTargets_[approvedTargetsKey(toolName, toolCallId)]
+            = ApprovedTargets{.targets = targets, .spec = spec};
     }
     co_return true;
 }
@@ -345,14 +455,26 @@ PathDecision PermissionMiddlewareHandle::decideTarget(
     size_t           index,
     std::string_view sessionId
 ) const {
+    return explainTarget(path, index, sessionId).decision;
+}
+
+PermissionDecision PermissionMiddlewareHandle::explainTarget(
+    std::string_view path,
+    size_t           index,
+    std::string_view sessionId
+) const {
     // TODO(符号链接跟随): 本判定基于词法规范化路径, 不解析符号链接 —— 允许范围
     // 内的链接 (如 <root>/link -> <root>/deny) 被读取/写入时会跟随链接进入被拒目录,
     // 逐路径过滤接口也看不到链接目标 (枚举出的只是链接自身路径)。彻底处理需对
     // 已存在路径取 std::filesystem::weakly_canonical 后再判定一次 (影响所有工具
     // 与查询接口, 需评估性能与 Windows 语义), 暂不处理。
+    PermissionDecision out;
+    out.target = std::string{path};
     if (path.empty()) {
         // 空目标无法判定: 不按"已批准"处理 (调用方按未获批准丢弃)
-        return PathDecision::Ask;
+        out.decision = PathDecision::Ask;
+        out.reason   = PermissionReason::Unresolved;
+        return out;
     }
     // worktree 会话隔离边界 (优先于一切已注册规则):
     // - worktree 子树 (allowPath) 内读写照常处理 (不参与下面的主检出写拒绝):
@@ -372,19 +494,26 @@ PathDecision PermissionMiddlewareHandle::decideTarget(
                 sessionId,
                 path
             );
-            return PathDecision::Deny;
+            out.decision = PathDecision::Deny;
+            out.reason   = PermissionReason::WorktreeIsolation;
+            out.rule     = iso->denyWritePath;
+            return out;
         }
     }
 
     // 配置文件显式拒绝的路径: 无论后续是否完全授权, 始终保持拒绝且不询问
     if (isConfigDenied(path, index)) {
         XX_LOGD("Permission: path '{}' matches config deny rule, denied", path);
-        return PathDecision::Deny;
+        out.decision = PathDecision::Deny;
+        out.reason   = PermissionReason::ConfigDeny;
+        return out;
     }
 
     // 若用户已完全授权所有权限: 允许任意权限访问, 不再询问
     if (isFullAuthorized()) {
-        return PathDecision::Allow;
+        out.decision = PathDecision::Allow;
+        out.reason   = PermissionReason::FullAuth;
+        return out;
     }
 
     std::string re_path;
@@ -392,26 +521,68 @@ PathDecision PermissionMiddlewareHandle::decideTarget(
     auto handle = const_cast<XXRouter<PermissionOperator, 2>&>(filesystemPermission)
                       .get(std::string{path}, static_cast<int>(index), re_path, true);
     if (nullptr != handle) {
+        out.rule = re_path;
         switch (*handle) {
             case PermissionOperator::ALLOW:
-                return PathDecision::Allow;
+                out.decision = PathDecision::Allow;
+                out.reason   = PermissionReason::Rule;
+                return out;
             case PermissionOperator::DENY:
-                return PathDecision::Deny;
+                out.decision = PathDecision::Deny;
+                out.reason   = PermissionReason::Rule;
+                return out;
             case PermissionOperator::INTERRUPT:
-                return PathDecision::Ask;
+                out.decision = PathDecision::Ask;
+                out.reason   = PermissionReason::Rule;
+                return out;
         }
     }
     // 未命中任何规则: 按 noRuleOperator 处理 (CodeAgent 按 permission.mode 设置;
     // 默认 ALLOW 与历史行为一致, 无规则即放行)
+    out.reason = PermissionReason::NoRuleDefault;
     switch (noRuleOperator) {
         case PermissionOperator::ALLOW:
-            return PathDecision::Allow;
+            out.decision = PathDecision::Allow;
+            return out;
         case PermissionOperator::DENY:
-            return PathDecision::Deny;
+            out.decision = PathDecision::Deny;
+            return out;
         case PermissionOperator::INTERRUPT:
-            return PathDecision::Ask;
+            out.decision = PathDecision::Ask;
+            return out;
     }
-    return PathDecision::Allow;
+    out.decision = PathDecision::Allow;
+    out.reason   = PermissionReason::NoRuleDefault;
+    return out;
+}
+
+std::string_view permissionReasonText(PermissionReason reason) noexcept {
+    switch (reason) {
+        case PermissionReason::Unresolved:
+            return "target could not be resolved";
+        case PermissionReason::WorktreeIsolation:
+            return "blocked by workspace isolation (write outside the session worktree)";
+        case PermissionReason::ConfigDeny:
+            return "blocked by configuration deny rule";
+        case PermissionReason::FullAuth:
+            return "allowed by full authorization";
+        case PermissionReason::Rule:
+            return "matched a registered permission rule";
+        case PermissionReason::NoRuleDefault:
+            return "no rule matched, using the configured default";
+    }
+    return "unknown reason";
+}
+
+std::string PermissionDecision::describe() const {
+    std::string out{permissionReasonText(reason)};
+    if (!rule.empty()) {
+        out += fmt::format(" [rule: {}]", rule);
+    }
+    if (!target.empty()) {
+        out += fmt::format(" [target: {}]", target);
+    }
+    return out;
 }
 
 std::vector<PathDecision> PermissionMiddlewareHandle::decidePaths(
@@ -513,6 +684,8 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
     // - 工具权限限制由工具来源方声明: 插件在注册工具后经 agentxx.agent.permission
     //   接口表声明 (见 PluginManager::registerToolPermission), 本中间件据此判定
     // - 未声明权限的工具不参与权限判定 (直接放行)
+    // - 判定理由 (decision/reason/rule/target) 随响应回给调用方, 供工具结果文本、
+    //   日志与诊断共用 (计划 SEC-2)
     checkServerId_ = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
                             events::Topic::ToolPermissionCheck
     )
@@ -520,10 +693,40 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                              [this](const events::ReqToolPermissionCheck& req, size_t)
                                  -> asio::awaitable<events::RespToolPermissionCheck> {
                                  utilxx_base::Json argsCopy = req.arguments;
-                                 auto allow = co_await checkToolPermission(req.toolName, argsCopy);
-                                 co_return events::RespToolPermissionCheck{.allow = allow};
+                                 std::string       reason;
+                                 auto allow = co_await checkToolPermission(
+                                     req.toolName,
+                                     argsCopy,
+                                     &reason
+                                 );
+                                 co_return events::RespToolPermissionCheck{
+                                     .allow  = allow,
+                                     .reason = std::move(reason),
+                                 };
                              }
                          );
+
+    // 1b. 注册执行前目标复验服务 (ReqPermissionReverify -> RespPermissionReverify):
+    //     判定阶段记录"已批准目标", 执行前用当前参数按同一口径复验, 防止
+    //     判定与执行之间参数被改写 (计划 SEC-5: 批准目标 = 实际执行目标)
+    reverifyServerId_ = bus
+                            ->getRR<events::ReqPermissionReverify, events::RespPermissionReverify>(
+                                events::Topic::PermissionReverify
+                            )
+                            .registerServer(
+                                [this](const events::ReqPermissionReverify& req, size_t)
+                                    -> asio::awaitable<events::RespPermissionReverify> {
+                                    const auto r = reverifyApprovedTargets(
+                                        req.toolName,
+                                        req.toolCallId,
+                                        req.arguments
+                                    );
+                                    co_return events::RespPermissionReverify{
+                                        .ok     = r.ok,
+                                        .reason = r.reason,
+                                    };
+                                }
+                            );
 
     // 2. 订阅会话隔离设置事件 (EventSetSessionIsolation)
     // - 发布方: agentxx_git_worktree (工具, 经 ctx->bus 即本总线发布)
@@ -563,6 +766,13 @@ void PermissionMiddlewareHandle::unregisterFromBus() {
             )
                 .unregisterServer(checkServerId_);
             checkServerId_ = 0;
+        }
+        if (reverifyServerId_ != 0) {
+            bus->getRR<events::ReqPermissionReverify, events::RespPermissionReverify>(
+                   events::Topic::PermissionReverify
+            )
+                .unregisterServer(reverifyServerId_);
+            reverifyServerId_ = 0;
         }
         if (setIsolationSubId_ != 0) {
             bus->get<events::EventSetSessionIsolation>(events::Topic::PermissionSetIsolation)

@@ -66,6 +66,9 @@ struct Topic {
     /// 工具执行权限检查: ReqToolPermissionCheck / RespToolPermissionCheck
     inline static constexpr std::string_view ToolPermissionCheck{"service.permission.check"};
 
+    /// 执行前目标复验 (计划 SEC-5): ReqPermissionReverify / RespPermissionReverify
+    inline static constexpr std::string_view PermissionReverify{"service.permission.reverify"};
+
     /// 每会话文件系统隔离边界设置/清除 (单向事件): EventSetSessionIsolation /
     /// EventClearSessionIsolation
     inline static constexpr std::string_view PermissionSetIsolation{
@@ -350,6 +353,21 @@ struct ReqToolPermissionCheck {
 
 struct RespToolPermissionCheck {
     bool        allow = true;
+    std::string reason;
+};
+
+/// 执行前目标复验 (service.permission.reverify; 计划 SEC-5)
+/// - 调用方: 工具调用节点在执行执行体之前 (判定阶段已记录已批准目标)
+/// - 语义: 用当前参数按同一口径重新解析目标并与已批准目标比对, 不一致即拒绝执行
+struct ReqPermissionReverify {
+    std::string       sessionId;
+    std::string       toolName;
+    std::string       toolCallId;
+    utilxx_base::Json arguments;
+};
+
+struct RespPermissionReverify {
+    bool        ok = true;
     std::string reason;
 };
 

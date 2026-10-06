@@ -28,6 +28,7 @@
 #include "agentxx-test/core/test_misc_fixes.h"
 #include "agentxx-test/core/test_network_timeout.h"
 #include "agentxx-test/core/test_openai_provider.h"
+#include "agentxx-test/core/test_permission.h"
 #include "agentxx-test/core/test_rag_search_tools.h"
 #include "agentxx-test/core/test_regex.h"
 #include "agentxx-test/core/test_remote_agent.h"
@@ -398,6 +399,7 @@ int main(int argn, char** argv) {
                 co_await run("acp", agentxx::test::run_acp_tests);
                 co_await run("a2a", agentxx::test::run_a2a_tests);
                 co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
+    co_await run("permission", agentxx::test::run_permission_tests);
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);
                 co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);

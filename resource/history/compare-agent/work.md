@@ -133,6 +133,51 @@
 - 协议与界面入口：`WireListSessions`/会话弹窗还没有"改名"和"搜索"操作；需要新增
   协议消息（或扩展已有的会话列表请求）并在 TUI 会话弹窗接输入框。存储层 API 已就绪。
 
+## 阶段 I：权限判定理由与执行前目标复验（SEC-2、SEC-5、TST-10，2026-10-05）
+
+已完成：
+
+- **SEC-2 判定理由**（`middlewares/permission.{h,cpp}`）：
+  - 新增 `PermissionReason`（`Unresolved` / `WorktreeIsolation` / `ConfigDeny` / `FullAuth` /
+    `Rule` / `NoRuleDefault`）与 `PermissionDecision{decision, reason, rule, target, describe()}`；
+  - 原 `decideTarget` 内联的所有分支改由新的 `explainTarget` 单一实现给出（`decideTarget`
+    退化为取其 `decision`），因此**判定与理由不可能不一致**；
+  - 工具权限检查服务（`service.permission.check`）的响应回填 `reason`
+    （`checkToolPermission(..., std::string* reasonOut)`），工具被拒时的结果文本由
+    `[Permission denied]` 变为 `[Permission denied] <理由 + 命中规则/目标>` —— 模型与用户
+    都能看到"为什么被拒"；
+  - 每次判定记 Debug 日志（工具/目标/会话/结论/理由）。
+- **SEC-5 执行前目标复验**：
+  - 判定通过时按 (工具名, `tool_call_id`) 记录"已批准目标"（`approvedTargets_`，
+    与判定共用 `resolveDeclaredTargets` 的同一口径：路径目标按会话工作目录规范化、
+    数组逐项、空目标跳过）；
+  - 新增总线服务 `service.permission.reverify`
+    （`ReqPermissionReverify` / `RespPermissionReverify`，topic `PermissionReverify`）：
+    用**当前参数**重新解析目标并与已批准集合比对；不一致返回
+    `permission target changed between check and execution (approved: [...], executing: [...])`；
+  - `ToolcallWrapNode::prepareToolCall` 末尾（执行体启动前）调用该服务，失败即把该调用
+    置为 `[Permission denied] <reason>` 短路结果，不执行执行体；纯校验、不重复询问用户，
+    未声明权限的工具（无批准记录）视为通过。
+- **TST-10 门禁正确性用例**（新模块 `permission`，`agent/test/core/test_permission.cpp`，
+  45 项断言）：判定理由全分支（未解析 / 未命中按默认 / 命中规则允许·拒绝·询问 /
+  完全授权 / 配置拒绝优先于完全授权 / 工作区隔离写拒绝优先于白名单、读不受限）；
+  执行前复验（参数未变通过、目标被改写拒绝且理由含两边目标、未声明权限无约束、
+  被拒的调用不产生批准记录）；批量路径三态（`decidePaths`：允许 / 拒绝 / 未获批准）。
+
+验证：
+
+- 构建：lib `INSTALL` 与 `agentxx_test` 均 exit=0，无新增 error/warning。
+- 测试：`permission` 45/0、`agent` 192/0、`toolcall_parallel` 48/0、`wire_roundtrip` 165/0、
+  `plugin_resources` 88/0、`message_supplement` 95/0 全部通过。
+
+注意事项 / 与计划的差异：
+
+- 计划 SEC-5 表述为"询问完成后、真正副作用前再次检查"；实现为**判定阶段记录 + 执行前
+  按同一口径复验目标集合**，不重复发起询问（重复询问会打扰用户，且"记住本次选择"未开启时
+  会二次弹窗）。复验能拦下"判定与执行之间参数被改写/规则变化"的情况。
+- 计划的 TST-10 还含"软链接越界"用例：软链接真实路径判定（SEC-6）本身是未来计划，
+  该用例随 SEC-6 一起做。
+
 ## 阶段 H：协议往返测试、会话 ID 校验、wire 错误码（PRO-1、PRO-7、PRO-11，2026-10-05）
 
 已完成：
@@ -423,6 +468,8 @@
 - 阶段 E（SEC-9 / TST-13 / CFG-8）完成后提交：`新增安全责任、配置边界与实施状态文档, 会话语言与界面语言解耦 (SEC-9/TST-13/CFG-8)`。
 - 阶段 F（TOOL-17 / PRM-4 / UI-3 / UI-4）完成后提交：`命令执行环境加固、记忆文件体积告警、UI 兼容与渲染边界测试 (TOOL-17/PRM-4/UI-3/UI-4)`。
 - 阶段 G（TOOL-1 / TOOL-2 / TOOL-3）完成后提交：`工具调用三段式执行与受限并行 (TOOL-1/TOOL-2/TOOL-3)`。
+- 阶段 H（PRO-1 / PRO-7 / PRO-11）完成后提交：`wire 协议往返测试、会话 ID 统一校验、wire 错误码 (PRO-1/PRO-7/PRO-11)`。
+- 阶段 I（SEC-2 / SEC-5 / TST-10）完成后提交：`权限判定理由与执行前目标复验 (SEC-2/SEC-5/TST-10)`。
 
 ## 未实施项的原因与建议路径（下次继续）
 

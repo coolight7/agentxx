@@ -80,6 +80,42 @@ enum class PathDecision {
     Ask,
 };
 
+/// 权限判定理由 (为什么允许/拒绝/需要询问)
+///
+/// 判定理由与判定结果一起产生、一起使用: 日志、权限询问卡片与诊断信息共用同一份
+/// 理由, 避免"同一路径在两处给出不同解释"。新增判定分支时必须同时给出理由。
+enum class PermissionReason {
+    /// 未解析 (空目标或规范化失败): 不能按"已批准"处理
+    Unresolved,
+    /// 工作区隔离 (worktree): 主检出子树的写操作被拒绝
+    WorktreeIsolation,
+    /// 配置文件显式拒绝的路径 (优先于完全授权, 且不询问)
+    ConfigDeny,
+    /// 已完全授权 (询问卡片勾选或客户端切换)
+    FullAuth,
+    /// 命中已注册规则 (白名单/黑名单/记住的选择/工作目录规则)
+    Rule,
+    /// 未命中任何规则, 按模式默认动作兜底
+    NoRuleDefault,
+};
+
+/// 判定理由的可读文本 (日志与卡片显示用)
+std::string_view permissionReasonText(PermissionReason reason) noexcept;
+
+/// 单目标权限判定结果 (三态 + 理由 + 命中规则)
+struct PermissionDecision {
+    PathDecision decision = PathDecision::Allow;
+    /// 判定理由 (见 PermissionReason)
+    PermissionReason reason = PermissionReason::Unresolved;
+    /// 命中的规则 (路径前缀; 未命中规则/按默认兜底时为空)
+    std::string rule;
+    /// 判定目标 (已规范化; 空目标时为空)
+    std::string target;
+
+    /// 生成给人看的说明 (`reason text` + 命中规则/目标)
+    std::string describe() const;
+};
+
 /// 每会话文件系统隔离边界 (worktree 模式; 见 setSessionIsolation)
 struct SessionFsIsolation {
     /// worktree 根 (规范化目录路径, 尾斜杠): 该子树内读写不受隔离约束
@@ -128,12 +164,23 @@ public:
     ///   直接判定的调用方都走这里
     asio::awaitable<bool> checkToolPermission(std::string_view toolName, utilxx_base::Json& args);
 
+    /// 同上; [reasonOut] 非空时写入判定理由 (拒绝理由或放行说明)
+    asio::awaitable<bool> checkToolPermission(
+        std::string_view   toolName,
+        utilxx_base::Json& args,
+        std::string*       reasonOut
+    );
+
     /// 按声明判定工具调用是否允许 (目标按声明从 args 解析, 依次判定全部目标)
     /// - 声明无目标或目标参数缺省/为空: 退化为工具级判定 (见 [checkTargetPermission])
+    /// - [reasonOut] 非空时写入拒绝/放行理由 (来自最后参与判定的目标)
+    /// - 判定通过时按 (toolName, toolCallId) 记录已判定目标, 供执行前复验
+    ///   (见 [reverifyApprovedTargets])
     asio::awaitable<bool> checkToolPermission(
         std::string_view          toolName,
         utilxx_base::Json&        args,
-        const ToolPermissionSpec& spec
+        const ToolPermissionSpec& spec,
+        std::string*              reasonOut = nullptr
     );
 
     /// 判定单个目标是否允许 (权限规则统一入口)
@@ -165,6 +212,31 @@ public:
     /// - `path` 须为已规范化的绝对路径 (见 [normalizePermissionPath])
     PathDecision
         decideTarget(std::string_view path, size_t scope, std::string_view sessionId) const;
+
+    /// 同上, 但返回带理由的完整判定结果 (日志/卡片/诊断共用同一口径)
+    PermissionDecision
+        explainTarget(std::string_view path, size_t scope, std::string_view sessionId) const;
+
+    // ---------------- 执行前目标复验 (计划 SEC-5) ----------------
+
+    /// 复验结果: 批准时的目标与当前参数解析出的目标是否一致
+    struct ReverifyResult {
+        /// 是否一致 (通过复验)
+        bool ok = true;
+        /// 不一致/未批准时的说明 (供拒绝文本与日志使用)
+        std::string reason;
+    };
+
+    /// 执行前复验"批准目标 = 实际执行目标"
+    /// - 判定阶段 ([checkToolPermission]) 已按 (toolName, toolCallId) 记录已判定目标;
+    ///   执行前用**当前参数**按同一口径重新解析并比对, 不一致即拒绝执行
+    /// - 未记录过批准 (未声明权限的工具/无 toolCallId): 视为通过 (无权限约束)
+    /// - 仅比对目标集合, 不重复询问用户 (询问只发生在判定阶段一次)
+    ReverifyResult reverifyApprovedTargets(
+        std::string_view          toolName,
+        std::string_view          toolCallId,
+        const utilxx_base::Json&  args
+    ) const;
 
     /// 批量判定路径 (相对路径按会话生效工作目录规范化; 空路径或规范化失败按
     /// [PathDecision::Ask] 返回: 无法判定时不按"已批准"处理)
@@ -261,6 +333,24 @@ private:
     /// 配置文件显式拒绝的路径路由 (优先判定, 无论是否完全授权均保持拒绝)
     XXRouter<PermissionOperator, 2> configDenyPermission_{};
 
+    /// 已批准的工具调用目标 (执行前复验用; 键 = toolName + '\x1f' + toolCallId)
+    /// - 判定阶段写入, 复验时读取; 仅 io 线程访问, 无需锁
+    /// - 条目按工具调用 id 隔离, 同一会话可同时存在多批并行工具调用的记录;
+    ///   条目数有界 (每次判定覆盖同键, 且随工具调用结束不再使用), 不做额外淘汰
+    struct ApprovedTargets {
+        std::vector<std::string> targets;
+        ToolPermissionSpec       spec;
+    };
+    std::map<std::string, ApprovedTargets, std::less<>> approvedTargets_{};
+
+    /// 按声明从参数解析受约束目标 (判定与执行前复验共用同一口径)
+    /// - 路径目标按会话生效工作目录规范化为绝对路径; 文本目标原样; 空目标跳过
+    std::vector<std::string>
+        resolveDeclaredTargets(const utilxx_base::Json& args, const ToolPermissionSpec& spec) const;
+
+    /// 生成"已批准目标"的存储键 (toolName + 分隔符 + toolCallId)
+    static std::string approvedTargetsKey(std::string_view toolName, std::string_view toolCallId);
+
     /// <工具名, 权限声明> (插件注册工具后声明; 仅 io 线程读写, 与中间件链同线程模型)
     std::map<std::string, ToolPermissionSpec, std::less<>> toolPermissions_{};
 
@@ -272,6 +362,8 @@ private:
 
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
     size_t                                   checkServerId_       = 0;
+    /// 执行前目标复验服务注册 id (计划 SEC-5)
+    size_t                                   reverifyServerId_    = 0;
     size_t                                   setIsolationSubId_   = 0;
     size_t                                   clearIsolationSubId_ = 0;
 };

@@ -668,6 +668,8 @@ asio::awaitable<std::optional<std::string>> prepareToolInvocation(
     }
     {
         // 权限检查 (经 EventBus 请求 service.permission.check, 未配置权限服务时默认放行)
+        // - 拒绝理由随响应返回 (decision/reason/rule/target, 计划 SEC-2), 一并回给模型,
+        //   便于模型与用户理解"为什么被拒绝"而不是只看到一句 Permission denied
         if (agentCtxPtr && agentCtxPtr->bus) {
             auto resp
                 = co_await agentCtxPtr->bus
@@ -684,7 +686,10 @@ asio::awaitable<std::optional<std::string>> prepareToolInvocation(
                           std::chrono::milliseconds{0}
                       );
             if (resp.has_value() && !resp->allow) {
-                co_return std::string{"[Permission denied]"};
+                if (resp->reason.empty()) {
+                    co_return std::string{"[Permission denied]"};
+                }
+                co_return fmt::format("[Permission denied] {}", resp->reason);
             }
         }
     }
@@ -841,6 +846,34 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     if (shortCircuit.has_value()) {
         out.shortCircuit = std::move(shortCircuit);
         co_return false;
+    }
+
+    // 执行前目标复验 (计划 SEC-5): 判定阶段记录过"已批准目标", 这里用最终参数
+    // 按同一口径再解析一次并比对 —— 判定与执行之间的任何改写都会在这里被拦下
+    // (纯校验, 不重复询问用户; 服务未注册/无调用 id 时视为通过)
+    if (agentCtxPtr && agentCtxPtr->bus && out.tool && !tc.id.empty()) {
+        auto resp
+            = co_await agentCtxPtr->bus
+                  ->request<events::ReqPermissionReverify, events::RespPermissionReverify>(
+                      events::Topic::PermissionReverify,
+                      events::ReqPermissionReverify{
+                          .sessionId  = std::string{sessionId},
+                          .toolName   = out.tool->get_name(),
+                          .toolCallId = tc.id,
+                          .arguments  = out.args,
+                      },
+                      std::chrono::milliseconds{0}
+                  );
+        if (resp.has_value() && !resp->ok) {
+            XX_LOGW(
+                "Toolcall permission reverify failed: tool='{}' id='{}' reason={}",
+                out.tool->get_name(),
+                tc.id,
+                resp->reason
+            );
+            out.shortCircuit = fmt::format("[Permission denied] {}", resp->reason);
+            co_return false;
+        }
     }
     co_return true;
 }

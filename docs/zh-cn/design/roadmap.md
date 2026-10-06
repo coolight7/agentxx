@@ -98,10 +98,10 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| SEC-2 | 权限决定与理由（`decision/reason/rule/target`） | 待实施 | `middlewares/permission.cpp` |
-| SEC-5 | 执行前目标复验（批准目标 = 实际执行目标） | 待实施 | `nodes/toolcall.cpp` + 权限中间件 |
+| SEC-2 | 权限决定与理由（`decision/reason/rule/target`） | 已实施 | `middlewares/permission.{h,cpp}`（`PermissionReason` / `PermissionDecision` / `explainTarget`）；模块 `permission` |
+| SEC-5 | 执行前目标复验（批准目标 = 实际执行目标） | 已实施 | `service.permission.reverify` + `reverifyApprovedTargets` + `nodes/toolcall.cpp` 的 prepare 末尾复验；模块 `permission` |
 | SEC-9 | 安全责任与边界文档 | 已实施 | [security.md](security.md) |
-| TST-10 | 安全负面测试（门禁正确性） | 待实施 | 测试模块 `permission` / `boundaries` |
+| TST-10 | 安全负面测试（门禁正确性） | 部分实施 | 模块 `permission`（配置拒绝优先于完全授权、工作区隔离优先于白名单、未声明权限放行）；软链接越界用例待补（依赖 SEC-6 未来计划） |
 | SEC-1 / SEC-3 / SEC-4 / SEC-7 / SEC-8 / SEC-10 / SEC-11 / SEC-13 / SEC-14 / SEC-15 | 危险工具声明全覆盖 / 审批持久化 / 出网策略 / 审计 / 项目信任 / 规则定义分离 / 样例校验 / 先读后编辑 / 内容扫描 / 通用动作权限 | 不做 | 见 [security.md](security.md) §1 三条基本判断 |
 | SEC-6 / SEC-12 | 符号链接真实路径 / 可选沙箱后端 | 未来计划 | 真隔离路径；实施前先定平台能力与文案 |
 

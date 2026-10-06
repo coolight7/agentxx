@@ -41,7 +41,7 @@
 
 ### 2.1 判定顺序
 
-单目标判定（`PermissionMiddlewareHandle::decideTarget`）依次为：
+单目标判定（`PermissionMiddlewareHandle::explainTarget`）依次为：
 
 1. **worktree 会话隔离**：绑定了 worktree 的会话，对主检出子树的写操作直接拒绝（读不受限）；
 2. **配置显式拒绝**（`permission.blacklist` / `permissionDenyPaths`）：无论是否完全授权，始终拒绝且不询问；
@@ -50,6 +50,16 @@
 5. **兜底**：`noRuleOperator`（由 `permission.mode` 决定：`ask`/`all_ask` → 询问，`pass` → 允许，`deny` → 拒绝）。
 
 `permission.mode` 的默认值 `ask` 表示"当前会话工作目录内允许读写，其他路径询问用户"。
+
+**判定理由**（`PermissionReason`）：每一步都同时给出理由（工作区隔离 / 配置拒绝 / 完全授权 /
+命中规则 / 未命中按默认 / 未解析）以及命中的规则与目标，日志与拒绝文本共用同一份说明
+（拒绝时工具结果形如 `[Permission denied] blocked by configuration deny rule [target: ...]`），
+避免"同一路径在两处得到不同解释"。
+
+**执行前目标复验**（`service.permission.reverify`）：判定阶段按 (工具名, `tool_call_id`)
+记录已批准的目标集合，工具执行体启动前用最终参数按同一口径重新解析并比对，不一致即拒绝
+执行（`[Permission denied] permission target changed between check and execution (...)`）。
+纯校验、不重复询问用户，用来保证"批准的对象 = 执行的对象"。
 
 ### 2.2 已知覆盖边界
 
