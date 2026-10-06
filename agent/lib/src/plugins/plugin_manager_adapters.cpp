@@ -4,6 +4,7 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/agent/resource_applier.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
@@ -738,19 +739,127 @@ int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_j
     if (!ctx) {
         return -1;
     }
+    // 独占 slot (计划 PLG-4): 图定义同时只允许一个插件实例占用。
+    // 两个插件交替覆盖时, 任何一方卸载都无法判断该恢复成哪一份定义;
+    // 因此先占用者继续修改, 后到者明确被拒绝 (而不是静默覆盖)。
+    if (!graphDefinitionOwner_.empty() && graphDefinitionOwner_ != inst->name) {
+        XX_LOGW(
+            "Plugin `{}` set_graph_json rejected: graph definition is owned by plugin `{}` "
+            "(unload/disable it first, or use hooks/tools instead of replacing the whole graph)",
+            inst->name,
+            graphDefinitionOwner_
+        );
+        return -1;
+    }
     try {
         auto j = utilxx_base::Json::parse(std::string_view{graph_json.data, graph_json.size});
         if (!j.is_object()) {
             XX_LOGW("Plugin `{}` set_graph_json: not a JSON object", inst->name);
             return -1;
         }
+        if (graphDefinitionOwner_.empty()) {
+            // 首次占用: 记住当前定义 (内置图或宿主/前一个占用者留下的定义),
+            // 释放时恢复它 = "回到内置"
+            graphDefinitionBase_         = ctx->graphDefinitionJson.dump();
+            graphDefinitionBaseCaptured_ = true;
+            graphDefinitionOwner_        = inst->name;
+        }
         ctx->graphDefinitionJson = agentxx::util::toNeographJson(j);
-        XX_LOGI("Plugin `{}` modified graph definition", inst->name);
+        XX_LOGI(
+            "Plugin `{}` modified graph definition (slot owner: {})",
+            inst->name,
+            graphDefinitionOwner_
+        );
         return 0;
     } catch (const std::exception& e) {
         XX_LOGW("Plugin `{}` set_graph_json parse failed: {}", inst->name, e.what());
         return -1;
     }
+}
+
+void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
+    if (!inst || graphDefinitionOwner_ != inst->name) {
+        return;
+    }
+    auto ctx = agentContext_.lock();
+    if (ctx && graphDefinitionBaseCaptured_) {
+        try {
+            auto base = utilxx_base::Json::parse(graphDefinitionBase_);
+            ctx->graphDefinitionJson = agentxx::util::toNeographJson(base);
+            XX_LOGI(
+                "Plugin `{}` released graph definition slot; restored the previous definition",
+                inst->name
+            );
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin `{}` restore graph definition failed: {}", inst->name, e.what());
+        }
+    }
+    graphDefinitionOwner_.clear();
+    graphDefinitionBase_.clear();
+    graphDefinitionBaseCaptured_ = false;
+}
+
+PluginManager::RegistrationInventory
+    PluginManager::registrationInventory(const PluginInstance& inst) const {
+    // 只统计"当前生效"的注册 (禁用/卸载后实例仍保留注册记录, 但那些记录不在
+    // 宿主侧生效: 工具已被摘出注册表、钩子中间件已从链上移除、图节点 slot 已失效)。
+    // 因此每一项都按"生效事实"取数, 而不是按记录条数。
+    RegistrationInventory out;
+    for (const auto& name : inst.toolNames) {
+        if (registry_ && registry_->contains(name)) {
+            ++out.tools;
+        }
+    }
+    out.permissionTools    = inst.permissionToolNames.size();
+    out.eventSubscriptions = inst.subscriptions.size();
+
+    bool middlewareAttached = false;
+    if (auto ctx = agentContext_.lock()) {
+        if (ctx->middlewareHandleContext && inst.middleware) {
+            const auto& handles = ctx->middlewareHandleContext->handles;
+            middlewareAttached  = std::any_of(
+                handles.begin(),
+                handles.end(),
+                [&inst](const std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>& h) {
+                    return h.get() == inst.middleware.get();
+                }
+            );
+        }
+    }
+    out.middlewareAttached = middlewareAttached;
+    // 钩子挂在中间件上: 中间件不在链上 = 钩子不生效
+    out.hooks = middlewareAttached ? inst.hookRegistrations.size() : size_t{0};
+
+    for (const auto& graph : inst.graphNodeTypes) {
+        if (graph.slot && graph.slot->snapshot().active) {
+            ++out.graphNodeTypes;
+        }
+    }
+    for (const auto& cap : inst.capabilityRegistrations) {
+        if (hasCapability(cap.name) > 0) {
+            ++out.capabilities;
+        }
+    }
+    // 提示词键: 只数"该 owner 有存活贡献"的键 (禁用/卸载时贡献已被删除)
+    for (const auto& [key, state] : promptKeys_) {
+        (void)key;
+        if (state.contributions.find(inst.name) != state.contributions.end()) {
+            ++out.promptKeys;
+        }
+    }
+    // 清单/运行时资源: 应用器在禁用时摘生效、保留记录, 因此只在启用状态下计数
+    if (inst.enabled) {
+        if (auto ctx = agentContext_.lock()) {
+            if (ctx->resourceApplier) {
+                const auto owned = ctx->resourceApplier->ownedBy(inst.name);
+                out.skillDirs     = owned.skillDirs.size();
+                out.memoryFiles   = owned.memoryFiles.size();
+                out.mcpNamespaces = owned.mcpNamespaces.size();
+            }
+        }
+    }
+    out.ownsGraphDefinition = (!graphDefinitionOwner_.empty() && graphDefinitionOwner_ == inst.name);
+    return out;
 }
 
 } // namespace plugin

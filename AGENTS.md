@@ -263,8 +263,18 @@ path/to/agentxx_test string_util regex
   三态判定 (DENY/ALLOW/ASK, 不发起询问; SDK: `filterPathPermissions` 等), 逐项丢弃
   被拒或未获批准的路径 —— 声明目标只决定"是否询问一次", 逐路径复核才保证子目录
   拒绝规则不被 `**` 模式绕过; 详见 `docs/zh-cn/design/plugins.md` §8 节
+- 注册可逆与独占 slot (2026-10-07): 插件贡献分三类 —— **叠加型** (工具/权限声明/钩子/
+  图节点类型/事件订阅/能力/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
+  启用由 `start` 重新声明, 卸载全摘; **贡献型** (提示词) 记 `(owner,key,sequence,value)`
+  并按基础值重新合成, 禁用/卸载只删自己的贡献 (不写回旧值, 不顶掉别人的贡献与用户直写);
+  **独占型** (`set_graph_json` 执行图定义) 同时只允许一个占用者, 后到者被拒绝,
+  占用者禁用/卸载恢复占用前的定义 (回到内置)。诊断: `PluginManager::registrationInventory`
+  给出各分类**生效**计数 (0 = 已回到基线), 装配快照输出 `registration_total` 与图定义
+  `definition_owner`; 装载失败由 `PluginManager::diagnosePluginPath` 给出"照什么改"的
+  建议 (路径/清单/入口符号)。PLG-1/PLG-2/PLG-4/PLG-7, 测试模块 `plugin_cleanup`
 
 客户端 UI 组件层 (2026-09): 仪表盘/Info/装饰/overlay/中断描述共用同一套组件描述
+
 (`agentxx.ui.item`, 数据层, 零 ABI 变更) 与同一份渲染实现:
 - 描述层 `agent/lib/{include/agentxx/ui,src/ui}`: `item.h`/`item.cpp` 解析与纯文本降级
   (`plainText`)、`text_width.h` 终端列宽、`build.h` 链式构建器 (`agentxx::ui::Items`)

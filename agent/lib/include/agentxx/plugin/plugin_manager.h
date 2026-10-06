@@ -279,6 +279,16 @@ public:
         size_t eventSubCount = 0;
         /// 已声明权限限制的工具数
         size_t permissionToolCount = 0;
+        /// 统一注册清单 (计划 PLG-1): 各项的合计 (0 = 已回到基线)
+        size_t registrationTotal = 0;
+        /// 其中的提示词键占用数
+        size_t promptKeyCount = 0;
+        /// 其中的 skill 目录 / memory 文件 / MCP 命名空间数 (资源应用器)
+        size_t skillDirCount     = 0;
+        size_t memoryFileCount   = 0;
+        size_t mcpNamespaceCount = 0;
+        /// 是否占用执行图定义 (独占 slot; 计划 PLG-4)
+        bool ownsGraphDefinition = false;
     };
 
     explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
@@ -286,6 +296,49 @@ public:
 
     PluginManager(const PluginManager&)            = delete;
     PluginManager& operator=(const PluginManager&) = delete;
+
+    /// 统一注册清单 (计划 PLG-1)
+    ///
+    /// 一个插件实例能向宿主贡献的东西分散在多处 (工具注册表、权限中间件、
+    /// 中间件链、图注册表、事件总线、能力表、提示词、资源应用器)。禁用/卸载后
+    /// "到底清干净了没有"需要一份可比较的口径, 因此这里把**宿主可撤销**的注册
+    /// 计数集中成一个结构: 全部为 0 = 已回到基线。
+    ///
+    /// - 只统计本实例名下的注册 (不统计内置工具/主配置资源);
+    /// - `graphTypeNameResidual`: `GraphRegistry` 没有删除类型名的 API, 注销后
+    ///   类型名仍留在注册表里 (工厂持弱引用, 实例释放后创建即失败)。这项恒为
+    ///   已注册的图节点类型数, 供诊断说明"残留的只是名字, 不会再创建实例"。
+    struct RegistrationInventory {
+        size_t tools               = 0; ///< 工具注册表内的工具
+        size_t permissionTools     = 0; ///< 已声明的工具权限限制
+        size_t hooks               = 0; ///< 钩子点登记
+        size_t graphNodeTypes      = 0; ///< 自定义图节点类型 (激活中)
+        size_t eventSubscriptions  = 0; ///< 事件订阅
+        size_t capabilities        = 0; ///< 能力声明
+        size_t promptKeys          = 0; ///< 占用中的提示词键 (prompt 贡献)
+        size_t skillDirs           = 0; ///< skill 扫描目录 (资源应用器)
+        size_t memoryFiles         = 0; ///< memory 上下文文件 (资源应用器)
+        size_t mcpNamespaces       = 0; ///< MCP 命名空间 (资源应用器)
+        bool   middlewareAttached  = false; ///< 钩子中间件是否挂在中间件链上
+        bool   ownsGraphDefinition = false; ///< 是否占用执行图定义 (独占 slot)
+
+        /// 宿主可撤销注册的总数 (不含 [graphNodeTypes] 的注册表残留)
+        size_t total() const {
+            return tools + permissionTools + hooks + graphNodeTypes + eventSubscriptions
+                   + capabilities + promptKeys + skillDirs + memoryFiles + mcpNamespaces
+                   + (middlewareAttached ? 1 : 0) + (ownsGraphDefinition ? 1 : 0);
+        }
+    };
+
+    /// 统计实例当前"宿主侧生效"的注册 (禁用/卸载后的基线断言与诊断)
+    RegistrationInventory registrationInventory(const PluginInstance& inst) const;
+
+    /// 执行图定义的占用者 (独占 slot; 空 = 无插件占用, 使用内置/宿主定义)
+    /// - 见 [setGraphJson]: 同一时刻至多一个插件实例占用, 占用者卸载/禁用后
+    ///   自动恢复占用前的定义 ("回到内置")
+    const std::string& graphDefinitionOwner() const {
+        return graphDefinitionOwner_;
+    }
 
     // =====================================================================
     // 装载 (旧签名; 内部转成内核的 PluginLoadOptions 后交给宿主生命周期骨架)
@@ -434,9 +487,32 @@ public:
         return unregisterGraphNodeType(inst, strToSv(type));
     }
 
+    /// 装载失败时的"怎么改"提示 (计划 PLG-7)
+    ///
+    /// 内核只报"哪一步失败了", 不解释"你该怎么改"。本函数按路径形态巡检常见的
+    /// 装载失败原因, 返回一句可直接照做的建议 (没发现问题返回空串):
+    /// - `path` 为空;
+    /// - `builtin://<name>` 的内置清单不存在;
+    /// - 路径不存在 (相对路径按进程当前工作目录解析);
+    /// - 目录下没有 `plugin.yaml` 清单 / 清单 YAML 语法错误 / 清单 `entry`
+    ///   指向的库文件不存在;
+    /// - 库文件缺少宿主入口符号 (agent 侧 `agentxx_plugin_agent_{create,start,stop}`;
+    ///   `destroy` 由实例析构入口单独查找)。
+    ///
+    /// - 只读检查 (不改变任何状态); 需要读导出符号时会短暂打开库文件,
+    ///   失败路径上由装载入口调用, 正常装载不调用;
+    /// - 装载入口在失败后把这句建议记 WARN 日志, 便于插件作者定位。
+    std::string diagnosePluginPath(std::string_view path) const;
+
     /// 获取当前执行图 JSON 定义 (host->alloc 语义由 vtable 层处理)
     std::string getGraphJson();
-    /// 设置执行图 JSON 定义 (覆盖; 非法 JSON 返回非 0)
+    /// 设置执行图 JSON 定义 (独占 slot; 见 [graphDefinitionOwner])
+    ///
+    /// - 无占用者时: 记录当前定义为"基础定义"并成为占用者;
+    /// - 本实例已是占用者: 允许继续修改 (插件热更新自己的图);
+    /// - 其他实例占用中: 拒绝 (返回非 0 并给出占用者), 避免两个插件交替覆盖
+    ///   彼此的图定义 —— 卸载其中一方时无法判断该恢复成哪一份;
+    /// - 占用者禁用/卸载时恢复基础定义 (内置或宿主自定义的图)。
     int setGraphJson(PluginInstance* inst, PluginxxStringView graph_json);
 
     int setGraphJson(PluginInstance* inst, std::string_view graph_json) {
@@ -672,6 +748,9 @@ private:
 
     void eraseMiddleware(PluginMiddlewareHandle* mw);
 
+    /// 释放执行图定义 slot (占用者禁用/卸载时调用): 恢复基础定义并清空占用者
+    void releaseGraphDefinitionSlot(PluginInstance* inst);
+
     /// agent 装配的权限中间件 (插件工具权限声明实际生效处; 未装配返回 nullptr)
     /// - 在中间件链中查找; 权限中间件由 BaseAgent::initMiddleware 装配, 插件
     ///   加载 (create/start 事务) 在其后执行, 正常运行期可查到
@@ -690,6 +769,13 @@ private:
     size_t                                                             runningTurns_ = 0;
     std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
     uint64_t                                                           promptSequence_ = 0;
+
+    /// 执行图定义独占 slot (计划 PLG-4): 占用者 + 占用前的基础定义
+    /// - [graphDefinitionBase] 存 JSON 文本, 恢复时解析回 neograph json
+    ///   (避免在头文件里带 neograph 类型)
+    std::string    graphDefinitionOwner_;
+    std::string    graphDefinitionBase_;
+    bool           graphDefinitionBaseCaptured_ = false;
 };
 
 } // namespace plugin

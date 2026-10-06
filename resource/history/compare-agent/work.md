@@ -62,6 +62,10 @@
 | TST-4 | 并发与竞态清单 | P1 | 完成（已构建 + 测试通过） | 模块 `race_guards`（取消 vs 结算/中断应答/节流、乱序提交、执行中注销） |
 | TST-6 | 存储一致性测试骨架 | P1 | 完成（已构建 + 测试通过） | 模块 `storage_consistency`（同一份键值语义跑 4 个后端） |
 | TST-7 | 门禁扩展（UI 组件名 / 接口表名集合 / 文档路径） | P1 | 完成（部分，见阶段 Z） | `agent/test/core/test_boundaries.cpp`；插件注册清理随 PLG-1 |
+| PLG-1 | 注册可逆与清理审计 | P1 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`RegistrationInventory`）、`plugin_manager_adapters.cpp`；模块 `plugin_cleanup` |
+| PLG-2 | 声明式贡献集合与重算 | P1 | 完成（提示词贡献模型 + 测试 + 文档，见阶段 AA） | `plugin_manager_vtable.cpp`（既有实现）+ 模块 `plugin_cleanup` + `plugins.md` §15.7 |
+| PLG-4 | 独占能力 slot（执行图定义） | P1 | 完成（已构建 + 测试通过） | `plugin_manager.{h,cpp}`（占用/拒绝/释放回内置）；模块 `plugin_cleanup` |
+| PLG-7 | 教学式错误与信任声明 | P1 | 完成（已构建 + 测试通过） | `PluginManager::diagnosePluginPath` + 装载入口 WARN + `plugins.md` §15.7 |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -579,6 +583,82 @@
 - TST-4 不断言"谁先谁后"（那会变成看调度运气），只断言不变量（结果唯一性、顺序、
   收敛时间、悬挂上限与后续修复）。R3 的取消分支实测会留下 1 条悬挂 tool_call，
   属该轮工具调用尚未定稿的既定形态，由下一次请求前的 `repairMessages` 修正。
+
+## 阶段 AA：插件注册可逆、独占 slot 与教学式错误（PLG-1 / PLG-2 / PLG-4 / PLG-7，2026-10-07）
+
+计划依据：`plan.md` §12（"生命周期框架已有撤销和 owner 清理；补一份统一注册清单、
+禁用/卸载后的基线断言"；"提示词、工具、资源、UI 描述采用'活动贡献集合'，启用/禁用后
+重新计算派生状态"；"只为压缩器、context assembler、memory provider 等少数独占能力提供
+slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文档明确原生插件同进程、无沙箱"）。
+
+已完成：
+
+- **PLG-1 统一注册清单**（`plugin_manager.h` 的 `PluginManager::RegistrationInventory` +
+  `registrationInventory(inst)`）：
+  - 一个插件能贡献的东西分散在工具注册表/权限中间件/中间件链/图注册表/事件总线/能力表/
+    提示词/资源应用器里；本结构把**宿主可撤销**的注册集中成一份可比较口径：
+    `tools / permissionTools / hooks / graphNodeTypes / eventSubscriptions / capabilities /
+    promptKeys / skillDirs / memoryFiles / mcpNamespaces / middlewareAttached /
+    ownsGraphDefinition`，加 `total()`（0 = 已回到基线）；
+  - **按"生效事实"取数，不按记录条数**：禁用时实例仍保留注册记录（供 enable 重新声明），
+    因此工具按"是否还在注册表里"、钩子按"中间件是否还在链上"、能力按
+    `hasCapability(name)`、图节点按 slot 是否 active 计数，资源和提示词按应用器/贡献表；
+  - `PluginListView` 增 `registrationTotal / promptKeyCount / skillDirCount / memoryFileCount /
+    mcpNamespaceCount / ownsGraphDefinition`，装配快照（ARC-6）按插件输出这些字段。
+- **PLG-2 贡献集合与重算（现状核对 + 测试 + 文档）**：
+  - 提示词贡献模型（`PromptKeyState`：base + 按 sequence 应用的全部存活贡献；
+    删除 owner 贡献后**重新合成**）在源码中已实现，但此前没有任何测试；
+  - 本阶段补了针对它的用例（多 owner、卸载只删自己的贡献、外部直写 rebase 基础值），
+    并把三类贡献的撤销方式写进 `docs/zh-cn/design/plugins.md` §15.7。
+- **PLG-4 独占 slot（执行图定义）**（`PluginManager::setGraphJson` +
+  `releaseGraphDefinitionSlot`）：
+  - 原来 `set_graph_json` 是**无条件覆盖**：两个插件交替设置后，任何一方卸载都无法判断
+    该恢复成哪一份定义，而且没有任何恢复动作。现在改为独占 slot：
+    首次占用记录"占用前的定义"（内置图或宿主自定义图）并成为占用者；同一占用者可继续修改；
+    **其他实例占用中被拒绝**（返回非 0，日志给出占用者与"先卸载/禁用它"的建议）；
+  - 占用者禁用/卸载时（`detachDomainRegistrations`）恢复占用前的定义 = **回到内置**，
+    并清空占用者；
+  - 装配快照的执行图段输出 `definition_owner`，渲染文本在非空时标注
+    `(definition from plugin 'x')`。
+- **PLG-7 教学式错误**（`PluginManager::diagnosePluginPath` + 三个装载入口）：
+  - 只读巡检常见装载失败原因并返回"照什么改"的建议：路径为空 / `builtin://` 缺名字 /
+    内置名未注册 / 路径不存在 / 目录下没有 `plugin.yaml` / 清单 YAML 非法或缺字段 /
+    清单 `entry` 指向的库文件不存在 / 库缺少 `agentxx_plugin_agent_{create,start,stop}`
+    入口符号（提示用 `AGENTXX_PLUGIN_AGENT_EXPORT` 或 `..._LIFECYCLE_EXPORT`，并检查导出
+    白名单）；
+  - 装载入口（`loadNativeAsync` / `loadBuiltinAsync` / `loadPluginAsync`）在**失败后**
+    记一条 WARN 建议（`allowClientOnlySkip` 的"另一端插件"跳过不记），成功路径零开销；
+  - `plugins.md` §15.7 写明信任声明（原生插件与宿主同进程、加载即信任、权限系统约束的是
+    模型经工具发起的运行期动作）。
+
+测试（新模块 `plugin_cleanup`，96 项断言，5 组用例）：
+
+| 用例 | 覆盖点 |
+|---|---|
+| 注册清单基线 | 装载后各分类计数与插件的实际注册一致（tools=5/hooks=1/caps=1/…，total=12）；`list()` 的诊断字段与清单同源；禁用后宿主侧全部为 0（实例记录保留）；启用后由 start 重新声明（工具/hook/能力恢复）；卸载后实例消失、注册与提示词条目无残留 |
+| 提示词贡献多 owner | A 贡献 → B 贡献后写者生效；卸载 A 后 B 的取值仍在；外部直写立即生效但触发合成后成为新基础值（B 的贡献在其上重新应用）；卸载 B 后外部值保留（不会清成"不存在"）；`removeAppendSection` 收尾 |
+| 执行图独占 slot | A 占用成功（占用者/图内容/清单 `ownsGraphDefinition`）；B 被拒绝且不覆盖；占用者自身可改；A 卸载后恢复到占用前定义且 slot 释放；随后 B 可占用；禁用同样释放 |
+| 真实插件路径 | `example_graph_node` 在其 `start` 里 `set_graph_json` → 占用者即它；卸载后定义回到 base |
+| 装载失败建议 | 空路径 / 路径不存在 / 内置名不存在 / 无 `plugin.yaml` / YAML 非法 / `entry` 库缺失 / 库缺入口符号（用主库本体验证）；另在 `plugin_resources` 的失败场景里能看到真实告警文本 |
+
+验证：
+
+- 构建：lib `INSTALL`（含插件重建）、`agentxx_test` 均 exit=0，无新增 error。
+- 测试：`plugin_cleanup` 96/0、`plugins` 541/0、`plugin_resources` 89/0、
+  `plugin_runtime` 672/0、`plugin_multi_instance` 80/0、`assembly_snapshot` 37/0、
+  `assembly_snapshot_io` 27/0、`boundaries` 11/0。
+
+注意事项 / 与计划的差异：
+
+- 计划的 PLG-2 提到"UI 描述"也走活动贡献集合：客户端的 UI 注册（面板/Info/定时器/键位）
+  本来就是"注册即记账、撤销即摘除"的叠加模型，且已有 `client_plugins` 用例覆盖，
+  本轮未改动；
+- 计划的 PLG-4 举例是压缩器 / context assembler / memory provider 这类"实现替换型"能力：
+  本项目这些点目前没有"替换内置实现"的需求与消费者，强行加桩会变成没人用的死代码；
+  因此本轮把"独占 slot"落在**已经存在替换语义的执行图定义**上（它正是"多个贡献者
+  互相覆盖时无法判断恢复谁"的真实场景），机制与拒绝/恢复语义都实现并测到了；
+- `diagnosePluginPath` 只在失败路径调用，不做装载前的强制校验 —— 避免与内核已有的
+  路径/清单解析逻辑重复并在边缘情形（内置回退、另一端插件）误判。
 
 ## 与计划的差异（记录用）
 
@@ -1593,6 +1673,9 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 阶段 Z（TST-4 / TST-6 / TST-7）完成后提交：
   `竞态清单、存储一致性骨架与门禁扩展 (TST-4/TST-6/TST-7)`（`boundaries` 9→11、
   新增模块 `storage_consistency` 260 项、`race_guards` 68 项）。
+- 阶段 AA（PLG-1 / PLG-2 / PLG-4 / PLG-7）完成后提交：
+  `插件注册清单、执行图独占 slot 与装载失败建议 (PLG-1/PLG-2/PLG-4/PLG-7)`
+  （新增模块 `plugin_cleanup` 96 项）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 

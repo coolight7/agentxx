@@ -27,6 +27,7 @@
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 
 #include <algorithm>
 #include <chrono>
@@ -159,6 +160,9 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
         }
     }
 
+    // 执行图定义独占 slot: 占用者禁用/卸载时恢复占用前的定义 ("回到内置")
+    releaseGraphDefinitionSlot(inst);
+
     restorePromptBackup(inst);
 
     if (inst->middleware) {
@@ -265,7 +269,154 @@ void notePluginLoaded(
     );
 }
 
+/// 装载失败后记一句"怎么改"的建议 (计划 PLG-7)
+/// - 内核日志已经说明"哪一步失败了"; 这里补的是"照什么改" (路径/清单/导出符号),
+///   只在失败路径调用, 正常装载不产生额外开销
+/// - 装载失败本身不是错误用法 (例如插件只是没装), 因此按 WARN 记录
+void logLoadAdvice(const PluginManager& mgr, std::string_view path) {
+    const auto advice = mgr.diagnosePluginPath(path);
+    if (!advice.empty()) {
+        XX_LOGW("Plugin load failed: {}", advice);
+    }
+}
+
 } // namespace
+
+std::string PluginManager::diagnosePluginPath(std::string_view path) const {
+    namespace fs = std::filesystem;
+    const std::string pathStr{path};
+    if (pathStr.empty()) {
+        return "插件 path 为空: 在 agentxx-config.yaml 的 plugin.list[].path 里写插件目录、"
+               "动态库路径或 builtin://<name>";
+    }
+
+    if (isBuiltinScheme(pathStr)) {
+        const auto builtinName = parseBuiltinName(pathStr);
+        if (builtinName.empty()) {
+            return "builtin:// 后面没有插件名: 写法应为 builtin://<name> (如 builtin://agentxx_math)";
+        }
+        if (!findBuiltinPlugin(builtinName)) {
+            return fmt::format(
+                "内置注册表里没有插件 `{}`: 检查名字拼写, 或确认该插件参与了本次构建"
+                "(内置插件以静态库形式合并进主程序, 见 plugins.md)",
+                builtinName
+            );
+        }
+        if (!findBuiltinManifest(builtinName)) {
+            return fmt::format(
+                "内置插件 `{}` 没有清单: 该插件未参与内置清单收集 (plugins/<name>/plugin.yaml)",
+                builtinName
+            );
+        }
+        return {};
+    }
+
+    std::error_code ec;
+    fs::path        p{utilxx_base::utf8ToPath(pathStr)};
+    if (!fs::exists(p, ec)) {
+        return fmt::format(
+            "插件路径不存在: `{}` (相对路径按进程当前工作目录解析; 安装布局一般在 "
+            "<可执行文件目录>/plugins/<name>)",
+            pathStr
+        );
+    }
+
+    std::string libPath;
+    if (fs::is_directory(p, ec)) {
+        const auto manifestPath = p / "plugin.yaml";
+        if (!fs::exists(manifestPath, ec)) {
+            return fmt::format(
+                "插件目录 `{}` 下没有 plugin.yaml: 清单至少要写 name 与 entry "
+                "(entry 指向 agent 侧动态库文件名; 见 plugins.md 的清单字段)",
+                pathStr
+            );
+        }
+        std::string              manifestName, manifestEntry;
+        std::vector<std::string> depends, optionalDepends;
+        PluginManifestResources  resources;
+        PluginManifestInterfaces interfaces;
+        if (!parsePluginManifest(
+                p,
+                manifestName,
+                manifestEntry,
+                depends,
+                optionalDepends,
+                &resources,
+                &interfaces
+            )) {
+            return fmt::format(
+                "plugin.yaml 解析失败或不完整: `{}` (检查 YAML 语法缩进与 name/entry 字段; "
+                "解析失败时装载会被拒绝且不产生任何注册)",
+                manifestPath.string()
+            );
+        }
+        libPath = resolvePluginEntryPath(p, manifestEntry);
+        if (!fs::exists(utilxx_base::utf8ToPath(libPath), ec)) {
+            const auto fallback = p / manifestName;
+            return fmt::format(
+                "清单 entry `{}` 指向的库文件不存在: `{}` (该目录下应放插件动态库, "
+                "如 `{}` + 平台后缀)",
+                manifestEntry,
+                libPath,
+                fallback.string()
+            );
+        }
+    } else {
+        libPath = pathStr;
+    }
+
+    // 导出符号检查: 缺少入口符号是"插件编译方式不对"的最常见原因,
+    // 这里直接把缺哪个符号、应该怎么导出说清楚 (短暂打开库文件后立即关闭)
+    std::string openErr;
+    void*       handle = pluginxx::NativeLoader::open(libPath, openErr);
+    if (!handle) {
+        return fmt::format("无法打开插件动态库 `{}`: {}", libPath, openErr);
+    }
+    std::vector<std::string> missing;
+    {
+        std::string symErr;
+        if (!pluginxx::NativeLoader::sym(
+                handle,
+                std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE}.c_str(),
+                symErr
+            )) {
+            missing.push_back(std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE});
+        }
+        symErr.clear();
+        if (!pluginxx::NativeLoader::sym(
+                handle,
+                std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_START}.c_str(),
+                symErr
+            )) {
+            missing.push_back(std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_START});
+        }
+        symErr.clear();
+        if (!pluginxx::NativeLoader::sym(
+                handle,
+                std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_STOP}.c_str(),
+                symErr
+            )) {
+            missing.push_back(std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_STOP});
+        }
+    }
+    pluginxx::NativeLoader::close(handle);
+
+    if (!missing.empty()) {
+        std::string list;
+        for (size_t i = 0; i < missing.size(); ++i) {
+            list += (i == 0 ? "" : ", ") + missing[i];
+        }
+        return fmt::format(
+            "动态库 `{}` 缺少宿主入口符号: {} (插件必须导出 create/destroy/start/stop 五个入口; "
+            "C++ 插件用 AGENTXX_PLUGIN_AGENT_EXPORT 宏一次生成, 手写 create/destroy 的用 "
+            "AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT 补 start/stop; 另外检查导出白名单是否把入口"
+            "符号也隐藏了)",
+            libPath,
+            list
+        );
+    }
+    return {};
+}
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     std::string                             path,
@@ -286,6 +437,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
         interfaces
     );
     notePluginLoaded(inst, begin);
+    if (!inst && !allowClientOnlySkip) {
+        logLoadAdvice(*this, path);
+    }
     co_return inst;
 }
 
@@ -302,6 +456,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
+    const std::string pathForAdvice = path;
     auto inst = co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadBuiltinAsync(
         std::move(name),
         std::move(path),
@@ -312,6 +467,9 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         interfaces
     );
     notePluginLoaded(inst, begin);
+    if (!inst) {
+        logLoadAdvice(*this, pathForAdvice);
+    }
     co_return inst;
 }
 
@@ -324,12 +482,16 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
+    const std::string pathForAdvice = path;
     auto inst = co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadPluginAsync(
         std::move(path),
         hasOptions ? &options : nullptr,
         allowClientOnlySkip
     );
     notePluginLoaded(inst, begin);
+    if (!inst && !allowClientOnlySkip) {
+        logLoadAdvice(*this, pathForAdvice);
+    }
     co_return inst;
 }
 
@@ -361,6 +523,15 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
         view.graphNodeCount        = inst->graphNodeTypes.size();
         view.eventSubCount         = inst->subscriptions.size();
         view.permissionToolCount   = inst->permissionToolNames.size();
+        {
+            const auto inventory      = registrationInventory(*inst);
+            view.registrationTotal    = inventory.total();
+            view.promptKeyCount       = inventory.promptKeys;
+            view.skillDirCount        = inventory.skillDirs;
+            view.memoryFileCount      = inventory.memoryFiles;
+            view.mcpNamespaceCount    = inventory.mcpNamespaces;
+            view.ownsGraphDefinition  = inventory.ownsGraphDefinition;
+        }
         for (const auto& cap : inst->capabilityRegistrations) {
             view.capabilities.push_back(cap.name);
         }

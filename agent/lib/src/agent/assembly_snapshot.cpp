@@ -113,6 +113,13 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
         item["capability_count"]    = v.capabilities.size();
         item["capabilities"]        = v.capabilities;
         item["permission_tools"]    = v.permissionToolCount;
+        // 统一注册清单合计 (计划 PLG-1): 0 = 该实例当前没有向宿主贡献任何注册
+        item["registration_total"]  = v.registrationTotal;
+        item["prompt_key_count"]    = v.promptKeyCount;
+        item["skill_dir_count"]     = v.skillDirCount;
+        item["memory_file_count"]   = v.memoryFileCount;
+        item["mcp_namespace_count"] = v.mcpNamespaceCount;
+        item["owns_graph_definition"] = v.ownsGraphDefinition;
         item["depends"]             = v.depends;
         item["optional_depends"]    = v.optionalDepends;
         item["require_interfaces"]  = v.requiredInterfaces;
@@ -363,6 +370,9 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     } else {
         graph["name"] = "";
     }
+    // 执行图定义的独占占用者 (计划 PLG-4): 非空表示当前图定义由某插件覆盖
+    graph["definition_owner"]
+        = ctx.pluginManager ? ctx.pluginManager->graphDefinitionOwner() : std::string{};
     root["graph"] = std::move(graph);
 
     // ---- 持久化 ----
@@ -557,12 +567,15 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
         }
     }
     if (snapshot.contains("graph") && snapshot["graph"].is_object()) {
-        const auto& graph = snapshot["graph"];
+        const auto& graph       = snapshot["graph"];
+        const auto  definitionOwner = graph.value("definition_owner", std::string{});
         add(fmt::format(
-            "graph: {} nodes={} edges={}",
+            "graph: {} nodes={} edges={}{}",
             graph.value("name", std::string{}),
             graph.value("nodes", 0),
-            graph.value("edges", 0)
+            graph.value("edges", 0),
+            definitionOwner.empty() ? std::string{}
+                                    : fmt::format(" (definition from plugin `{}`)", definitionOwner)
         ));
     }
     if (snapshot.contains("persistence") && snapshot["persistence"].is_object()) {
