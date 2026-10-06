@@ -13,6 +13,7 @@
 #include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/observability.h"
 #include "agentxx/util/task_scope.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -301,9 +302,12 @@ asio::awaitable<void> BaseAgent::init() {
             agentContext->taskScope = std::make_shared<agentxx::util::TaskScope>(
                 co_await asio::this_coro::executor
             );
+            // 关键指标 (计划 OBS-3): 与总线同一生命周期, 诊断包/快照可读
+            agentContext->metrics = std::make_shared<agentxx::util::KeyMetrics>();
             co_return;
         },
         .rollback = [this]() {
+            agentContext->metrics.reset();
             agentContext->taskScope.reset();
             agentContext->bus.reset();
         },
@@ -1227,6 +1231,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     auto ioPtr = session->io;
 
+    // 关键指标: 轮次开始 (首 token 延迟的计时起点)
+    if (agentContext->metrics) {
+        agentContext->metrics->noteTurnStart();
+    }
+
     // 基于 system_clock 记录开始时间，用于后续时长计算
     const auto startTime = std::chrono::system_clock::now();
     // 记录轮次开始时间 (毫秒, Unix 时间戳, 用于显示)
@@ -1617,6 +1626,20 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 插件轮次结束: 正常路径登记轮次退出 (异常路径下轮开始时自愈)
     if (agentContext->pluginManager) {
         agentContext->pluginManager->onTurnEnd();
+    }
+
+    // 关键指标: 轮次终态 (正常/出错/取消/中断) 与总耗时
+    if (agentContext->metrics) {
+        using agentxx::util::KeyMetrics;
+        KeyMetrics::TurnOutcome outcome = KeyMetrics::TurnOutcome::Completed;
+        if (turnResult.hasError) {
+            outcome = (turnResult.errorMessage.find("Cancelled") != std::string::npos)
+                          ? KeyMetrics::TurnOutcome::Cancelled
+                          : KeyMetrics::TurnOutcome::Failed;
+        } else if (turnResult.interrupted) {
+            outcome = KeyMetrics::TurnOutcome::Interrupted;
+        }
+        agentContext->metrics->noteTurnEnd(outcome, durationMs);
     }
 
     co_return turnResult;

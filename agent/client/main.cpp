@@ -11,6 +11,7 @@
 #include "agentxx/agent/config_validation.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
+#include "agentxx/util/diagnostics.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/settings_db.h"
 #include "agentxx/version.h"
@@ -277,6 +278,84 @@ static void applySharedRuntimeConfig(
 
 /// 打印生效装配快照 (计划 ARC-6)
 ///
+/// `--dump-diagnostics` 的实现 (计划 OBS-4): 装配一次 agent 后导出诊断包文本
+///
+/// 与 [dumpConfigAndExit] 共用装配路径, 但导出的是"报障包": 环境与版本、关键指标、
+/// 装配快照 (配置含"是否已设置 Key"、不含 Key 取值)、会话摘要、日志尾部 (脱敏)。
+/// - 不做任何网络请求、不进入交互模式, 打印完退出
+/// - 装配失败时仍会打印已生成的部分并附上失败原因, 依然有排查价值
+static int dumpDiagnosticsAndExit(
+    const std::string&                                       mode,
+    const YamlAppConfig&                                     yamlCfg,
+    const std::string&                                       resolvedDataDir,
+    const std::string&                                       resolvedWorkDir,
+    const std::function<std::string(std::string_view path)>& resolvePath,
+    std::string_view                                         configPath,
+    const std::string&                                       baseConfigPath
+) {
+    auto config     = buildDefaultConfig();
+    config->dataDir = resolvedDataDir;
+    config->workDir = resolvedWorkDir;
+    applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+    applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
+    applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+    applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+    applySharedRuntimeConfig(config, yamlCfg, resolvePath);
+
+    // 日志尾部: 先装捕获再装配, 这样 init 期间的日志也进包
+    agentxx::util::enableLogCapture(200);
+
+    XX_OUT("=== agentxx dump-diagnostics (mode={}) ===\n", mode);
+    XX_OUT("config file : {}\n", configPath);
+    if (!baseConfigPath.empty()) {
+        XX_OUT("base config : {}\n", baseConfigPath);
+    }
+    XX_OUT("\n");
+
+    auto agent     = std::make_shared<agentxx::agent::CodeAgent>(config);
+    auto initError = std::make_shared<std::string>();
+    asio::co_spawn(
+        *agent->ioCtx,
+        [agent, initError]() -> asio::awaitable<void> {
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    co_await agent->init();
+                    co_return true;
+                },
+                [&](std::string errmsg) -> asio::awaitable<bool> {
+                    *initError = std::move(errmsg);
+                    co_return false;
+                },
+                [&](std::string& errmsg) -> std::optional<bool> {
+                    *initError = std::move(errmsg);
+                    return std::optional<bool>{false};
+                }
+            );
+            co_return;
+        },
+        asio::detached
+    );
+    agent->ioCtx->run();
+
+    // 不带会话: CLI 的一次性导出没有"当前会话"; 带会话的导出由库调用方按需传入
+    XX_OUT(
+        "{}\n",
+        agentxx::util::buildDiagnosticsText(
+            *agent->agentContext,
+            std::string_view{},
+            agentxx::util::DiagnosticsOptions{}
+        )
+    );
+    if (!initError->empty()) {
+        XX_OUT("\n[init failed] {}\n", *initError);
+        return 1;
+    }
+    if (agentxx::agent::validateAgentConfigWithPaths(*config).hasFatal()) {
+        return 1;
+    }
+    return 0;
+}
+
 /// `--dump-config` 的实现: 先打印配置侧快照 (不需要可用模型, 配置写错时也能看),
 /// 有可用模型时再构造一次 CodeAgent 并 init, 补上运行侧快照 (模型注册表 /
 /// 中间件顺序 / 工具清单与来源 / 插件装载结果 / 执行图 / 持久化)。
@@ -484,6 +563,7 @@ int main(int argn, char** argv) {
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
     bool dumpConfig     = false; ///< --dump-config: 打印生效装配快照后退出
+    bool dumpDiagnostics = false; ///< --dump-diagnostics: 打印诊断包后退出 (计划 OBS-4)
     std::string overrideEnvPath;
     std::string mode = "tui";
     std::string agentUrl;
@@ -518,6 +598,7 @@ Options:
     --host <host>        服务监听地址 (默认: 127.0.0.1)
     --port <port>        服务监听端口 (默认: 7007)
     --dump-config        打印生效装配快照 (配置 + 模型/中间件/工具/插件/图/持久化) 后退出
+    --dump-diagnostics   打印诊断包 (环境/关键指标/装配/会话摘要/日志尾部, 已脱敏) 后退出
 )_");
             return 0;
         } else if (arg == "--config" && i + 1 < argn) {
@@ -539,6 +620,8 @@ Options:
         } else if (arg == "--host" && i + 1 < argn) {
             ++i;
             srvHost = argv[i];
+        } else if (arg == "--dump-diagnostics") {
+            dumpDiagnostics = true;
         } else if (arg == "--dump-config") {
             dumpConfig = true;
         } else if (arg == "--port" && i + 1 < argn) {
@@ -698,6 +781,21 @@ Options:
         }
         return (std::filesystem::current_path() / fp).lexically_normal().string();
     };
+
+    // `--dump-diagnostics`: 打印诊断包后退出 (计划 OBS-4)
+    // - 与 --dump-config 同一位置与同一装配路径, 导出的是"报障包"
+    // - 只读导出: 不发网络请求、不写会话库
+    if (dumpDiagnostics) {
+        return dumpDiagnosticsAndExit(
+            mode,
+            yamlCfg,
+            resolvedDataDir,
+            resolvedWorkDir,
+            resolvePath,
+            configPath,
+            loadedCfg.baseConfigPath
+        );
+    }
 
     // `--dump-config`: 打印生效装配快照后退出 (计划 ARC-6)
     // - 不进入任何交互模式, 不监听端口; 配置写错 (无可用模型) 时也打印配置侧快照

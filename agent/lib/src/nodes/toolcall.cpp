@@ -1,6 +1,7 @@
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/observability.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -1028,6 +1029,13 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
             tool_msg.flags |= neograph::MessageFlag::Interrupt;
         }
         tool_msg.extra["durationMs"] = 0;
+        // 关键指标 (计划 OBS-3): 未执行即定案 (中断占位记 Interrupted, 其余记 Failed)
+        if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
+            ctx->metrics->noteToolCall(
+                prepared.interrupted ? agentxx::util::KeyMetrics::ToolOutcome::Interrupted
+                                     : agentxx::util::KeyMetrics::ToolOutcome::Failed
+            );
+        }
         co_return tool_msg;
     }
 
@@ -1048,6 +1056,9 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
                 if (outError) {
                     *outError = std::current_exception();
                 }
+                if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
+                    ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Cancelled);
+                }
             } catch (const neograph::graph::NodeInterrupt&) {
                 // tool 触发中断: 只标记本调用, 中断参数由上层在恢复时按 resultId 取
                 if (outInterrupted) {
@@ -1055,12 +1066,18 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
                 }
                 tool_msg.flags  |= neograph::MessageFlag::Interrupt;
                 tool_msg.content = "[Interrupt]";
+                if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
+                    ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Interrupted);
+                }
             }
             co_return true;
         },
         [&](std::string errinfo) -> asio::awaitable<bool> {
             content = fmt::format("[Exception aborted: {}]", errinfo);
             ok      = true;
+            if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
+                ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Failed);
+            }
             co_return true;
         },
         // 控制流异常兜底 (取消/中断): 不由本函数向外抛 —— 派生协程里逃逸的异常
@@ -1085,6 +1102,12 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
     }
     if (tool_msg.content.empty()) {
         tool_msg.content = std::move(content);
+    }
+    if (ok) {
+        // 关键指标: 执行体产出结果 (工具自身的错误文本也算执行成功, 与结果口径一致)
+        if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
+            ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Ok);
+        }
     }
     if (ok) {
         const auto endMs = static_cast<int64_t>(

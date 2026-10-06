@@ -31,6 +31,7 @@
 #include "agentxx-test/core/test_message_supplement.h"
 #include "agentxx-test/core/test_misc_fixes.h"
 #include "agentxx-test/core/test_network_timeout.h"
+#include "agentxx-test/core/test_observability.h"
 #include "agentxx-test/core/test_openai_provider.h"
 #include "agentxx-test/core/test_input_delivery.h"
 #include "agentxx-test/core/test_persist_semantics.h"
@@ -267,6 +268,7 @@ int main(int argn, char** argv) {
         runSync("concurrency", agentxx::test::testConcurrency);
         runSync("misc_fixes", agentxx::test::testMiscFixes);
         runSync("aho_corasick", agentxx::test::testAhoCorasick);
+        runSync("observability", agentxx::test::testObservability);
         runSync("util_misc", agentxx::test::testUtilMisc);
         runSync("training", agentxx::test::testTraining);
         runSync("settings_db", agentxx::test::testSettingsDb);

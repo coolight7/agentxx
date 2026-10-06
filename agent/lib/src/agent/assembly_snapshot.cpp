@@ -14,6 +14,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
+#include "agentxx/util/observability.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "utilxx_base/log.h"
@@ -402,6 +403,11 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     components["failed"] = std::move(failures);
     root["components"]   = std::move(components);
 
+    // ---- 关键指标 (计划 OBS-3): 计数与耗时, 不含任何内容 ----
+    if (ctx.metrics) {
+        root["metrics"] = ctx.metrics->toJson();
+    }
+
     return root;
 }
 
@@ -590,6 +596,19 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
         } else {
             add("persistence: OFF (in-memory only, history is lost on exit)");
         }
+    }
+    if (snapshot.contains("metrics") && snapshot["metrics"].is_object()) {
+        const auto& m = snapshot["metrics"];
+        add(fmt::format(
+            "metrics: turns={} (ok={} failed={}) ttft_avg_ms={:.1f} model_calls={} tools={} compactions={}",
+            m["turns"].value("total", 0),
+            m["turns"].value("completed", 0),
+            m["turns"].value("failed", 0),
+            m["ttft"].value("avg_ms", 0.0),
+            m["model"].value("calls", 0),
+            m["tools"].value("total", 0),
+            m["compaction"].value("count", 0)
+        ));
     }
     if (snapshot.contains("components") && snapshot["components"].is_object()) {
         const auto& comp = snapshot["components"];

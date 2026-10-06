@@ -11,6 +11,7 @@
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/observability.h"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
@@ -96,9 +97,16 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     auto                               callback = input.stream_cb;
     neograph::FormatDataStreamCallback onToken;
     if (nullptr != callback) {
-        onToken = [&input, callback, ctxPtr, this](const neograph::ChatStreamChunk& token) {
+        onToken = [&input, callback, ctxPtr, agentCtx, this](
+                      const neograph::ChatStreamChunk& token
+                  ) {
             switch (token.type) {
                 case neograph::ChatStreamChunk::TYPE_CONTENT: {
+                    // 关键指标 (计划 OBS-3): 本轮首个正文/思考 token 的时间 (TTFT;
+                    // 同一轮只记第一次, 见 KeyMetrics) —— 这里只记"有内容到达"的事件
+                    if (agentCtx && agentCtx->metrics) {
+                        agentCtx->metrics->noteFirstToken();
+                    }
                     // 记录 本次请求的临时LLM消息，以便触发异常时处理
                     ctxPtr->modifyGraphDataItemValue<std::string>(
                         input.ctx.thread_id,
@@ -109,6 +117,9 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
                     );
                 } break;
                 case neograph::ChatStreamChunk::TYPE_THINKING: {
+                    if (agentCtx && agentCtx->metrics) {
+                        agentCtx->metrics->noteFirstToken();
+                    }
                     ctxPtr->modifyGraphDataItemValue<std::string>(
                         input.ctx.thread_id,
                         agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking,
@@ -160,6 +171,20 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         rec.errorKind          = std::string{errorKind};
         agentCtx->sessions->sessionStore->addUsage(input.ctx.thread_id, rec);
     };
+    // 关键指标: 模型调用与用量 (失败在错误分类处记)
+    auto noteMetrics = [&agentCtx](
+                           const neograph::ChatCompletion::Usage& usage,
+                           bool                                   ok
+                       ) {
+        if (!agentCtx || !agentCtx->metrics || !ok) {
+            return;
+        }
+        agentCtx->metrics->noteModelCall(
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.cached_prompt_tokens
+        );
+    };
 
     neograph::ChatCompletion completion;
     bool                     callFailed   = false;
@@ -178,6 +203,11 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
             callErrorMsg = errmsg;
             callErrorEx  = std::current_exception();
             recordUsage({}, false, errmsg);
+            if (agentCtx && agentCtx->metrics) {
+                agentCtx->metrics->noteModelError(
+                    std::string{llmErrorKindText(classifyLlmError(errmsg))}
+                );
+            }
             co_return false;
         }
     );
@@ -195,6 +225,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         completion.usage.total_tokens
     );
     recordUsage(completion.usage, true, {});
+    noteMetrics(completion.usage, true);
     co_return completion.message;
 }
 

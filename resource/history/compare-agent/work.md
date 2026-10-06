@@ -68,6 +68,10 @@
 | PLG-7 | 教学式错误与信任声明 | P1 | 完成（已构建 + 测试通过） | `PluginManager::diagnosePluginPath` + 装载入口 WARN + `plugins.md` §15.7 |
 | UI-1 | 客户端模型层 | P1 | 完成（已构建 + 测试通过） | `client/.../io/tui/model/{history_window,queue_mirror}.{h,cpp}` + TUI 接线；模块 `tui_model` |
 | UI-5 | 输入栏硬件光标 | P1 | 完成（已构建 + 测试通过） | `tuiHardwareCursorSupported()`（`ui_components.*`）+ 能力段 `terminal.hardware_cursor` |
+| OBS-3 | 关键指标 | P2 | 完成（已构建 + 测试通过） | `include/agentxx/util/observability.h` + 打点（base_agent/modelcall/toolcall）；模块 `observability` |
+| OBS-4 | 诊断包导出 | P2 | 完成（已构建 + 测试通过） | `include/agentxx/util/diagnostics.h`、CLI `--dump-diagnostics`（含 STO-13 的导出需求） |
+| STO-13 | 会话导出与取证包 | P2 | 完成（并入 OBS-4：会话摘要段 + 可选消息正文） | `diagnostics.cpp` 的 session 段 |
+| OBS-5 | 模块级日志开关 | P2 | 未实施（见阶段 AC 的差异说明：utilxx_base 的 `LogEntry` 不带模块名，按模块过滤需要改日志库的信道格式） | — |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -502,8 +506,7 @@
     （agent 侧 19 张 / client 侧 9 张已在文档中，缺自动校验）；
   - CFG-9（生成式配置键目录）：从 `AgentConfig`/`YamlAppConfig` 生成"键路径/类型/默认值"
     目录并与 PRO-4 共用生成器骨架 + 新鲜度门禁；
-  - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、STO-13（会话导出与取证包）、
-    OBS-3/4/5（关键指标 / 诊断包 / 模块级日志开关）。
+  - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、OBS-5（模块级日志开关，需改日志库信道格式）。
     （TST-4 并发竞态清单、TST-6 存储一致性骨架已完成，见阶段 Z；TST-7 的
     "插件注册清理"那一半随 PLG-1 做。）
 - **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
@@ -716,6 +719,74 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
   互相覆盖时无法判断恢复谁"的真实场景），机制与拒绝/恢复语义都实现并测到了；
 - `diagnosePluginPath` 只在失败路径调用，不做装载前的强制校验 —— 避免与内核已有的
   路径/清单解析逻辑重复并在边缘情形（内置回退、另一端插件）误判。
+
+## 阶段 AC：关键指标与诊断包导出（OBS-3 / OBS-4 / STO-13，2026-10-07）
+
+计划依据：`plan.md` §14 OBS-3（"首 token、轮次耗时、工具成功/失败/超时、压缩次数、
+上下文 token、缓存命中；复用 benchmark 基础设施"）、OBS-4（"会话摘要、日志尾部、
+脱敏配置、插件和环境，便于报障"）、§4 STO-13（"导出展示历史、工具定位符、轮次和诊断；
+配置脱敏、API key 不进入报告"）。
+
+已完成：
+
+- **OBS-3 关键指标**（新增 `agent/lib/{include/agentxx/util,src/util}/observability.{h,cpp}`）：
+  - `KeyMetrics`：轮次 (总数 + 正常/出错/取消/中断)、**首 token 延迟 (TTFT)** 的样本数/
+    累计/最大值、轮次耗时累计/最大、模型调用次数与 prompt/completion/cached token、
+    模型错误次数与最近一次错误分类、工具终态 (成功/失败/取消/中断)、压缩次数与压缩前后 token；
+  - 打点位置 (每处只做几个原子操作)：
+    - 轮次起止与终态分类：`BaseAgent::runTurnAsync`（起：`noteTurnStart`；止：按
+      `hasError`/`errorMessage`/`interrupted` 归类后 `noteTurnEnd(durationMs)`）；
+    - 首 token：`ModelCallWrapNode` 的流式回调（同一轮只记第一次，DONE/空 chunk 不计）；
+    - 模型调用与用量：`recordUsage` 旁的成功路径（沿用同一次 usage 结算，不再多算一次）；
+    - 模型错误：provider 异常路径按 `classifyLlmError` 分类记录（与重试策略同一分类器）；
+    - 工具终态：`ToolcallWrapNode` 的结算点（短路未执行、取消、中断、异常、正常产出各一处）；
+  - 指标对象挂在 `AgentContext::metrics`（`BaseAgent::init` 的 `event_bus` 步骤创建，
+    与事件总线同一生命周期，回滚时释放）；装配快照新增 `metrics` 段并在渲染文本给一行摘要。
+- **OBS-4 诊断包**（新增 `agent/lib/{include/agentxx/util,src/util}/diagnostics.{h,cpp}`）：
+  - `buildDiagnosticsText(ctx, sessionId, options)` 按段输出 Markdown 风格文本：
+    头部 (时间/版本/平台/核数)、关键指标 (摘要 + JSON)、装配 (配置侧快照 + 运行侧
+    快照 + **配置快照 JSON**)、会话 (标题/消息计数/上下文条数/序号/账本聚合/持久化计数)、
+    后台任务 (TaskScope 待办与名称)、插件逐项 (各分类生效计数 + 图定义占用者)、日志尾部；
+  - 内容边界：默认**不含消息正文** (计数与用量足够定位问题)，需要时 `includeMessages`
+    显式打开 (按 `maxMessageChars` 截断)；配置只输出 `api_key_set` 这类布尔与键名；
+    日志尾部与消息正文都过 `redactSecrets`；
+  - `redactSecrets`：`key=value`/`key: value` (含引号、`Bearer/Basic` 前缀)、裸 token
+    (`sk-`/`ghp_`/`github_pat_`)、URL userinfo、URL 查询参数五类形态 (普通文本不受影响，
+    避免"什么都屏蔽"让诊断失去价值)；
+  - 日志捕获：`enableLogCapture(capacity)` / `recentLogLines(limit)` / `clearCapturedLogs()`，
+    基于 `ThreadedLogSink` 的环形缓冲 (自带后台线程；取快照前 `flush`，刚写的日志也在包里)；
+  - CLI：`--dump-diagnostics` 与 `--dump-config` 同一位置/同一装配路径，打印诊断包后退出
+    (只读导出：不发网络请求、不写会话库；无可用模型时仍给出配置侧信息与失败原因)。
+- **STO-13 并入**：会话段即"导出展示历史摘要 + 轮次/用量 + 诊断"的取证口径；
+  `includeMessages=true` 时按行导出最近 50 条展示消息 (带序号与 id, 已截断/脱敏)，
+  不含 share_store 全文 (那是工具的定位符存储, 由会话库自身管理)。
+
+测试（新模块 `observability`，96 项断言）：
+
+| 组 | 覆盖点 |
+|---|---|
+| KeyMetrics | 轮次终态四分类与耗时累计/最大值、TTFT 只记一次、模型调用用量与错误分类、工具四终态、压缩、JSON/summary 字段、reset |
+| 凭据脱敏 | `api_key=...` / JSON `"apiKey":"..."` / `Authorization: Bearer ...` / 裸 `sk-...` / URL userinfo / 查询参数；普通日志文本不被误伤 |
+| 日志捕获 | 未启用时读不到 (不隐式占内存)、容量上限按最旧淘汰、级别前缀、limit、清空、重装与关闭 |
+| 诊断包 | 段落齐全 (版本/平台/指标/装配/会话/日志尾部)、`config_json` 含 `api_key_set` 但不含 Key 取值、默认不含消息正文 (会话段)、日志尾部已脱敏、`includeMessages=true` 时出现截断正文、`logTailLines=0` 时无日志段、无配置/无会话/无指标对象的降级路径不崩 |
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0；手工运行
+  `agentxx_cli --dump-diagnostics` 输出完整诊断包 (12 核/13 模型/7 插件/日志尾部 67 行) 并退出码 0。
+- 测试：`observability` 96/0、`boundaries` 12/0、`session_schema` 104/0、`agent` 198/0、
+  `usage_ledger` 21/0、`assembly_snapshot` 37/0。
+
+注意事项 / 与计划的差异：
+
+- OBS-3 的"工具超时"计数未单列：`execute_command` 等工具超时是**工具自身**的超时
+  (返回文本)，分发层硬超时按 TOOL-4 的裁定不做，因此指标里只区分成功/失败/取消/中断；
+- OBS-3 的"缓存命中"只落 `cached_tokens` (prompt 缓存读)；缓存**写**量需要
+  LLM-8 的 Anthropic `cache_creation_input_tokens` (账本当前无该列)，本轮不引入；
+- **OBS-5（模块级日志开关）未实施**：`utilxx_base::LogEntry` 目前只有 level/seq/时间/正文，
+  不带模块或来源；按模块过滤只能在**记录点**带上模块标签 (改日志宏与调用点) 或在 sink 侧
+  按消息文本猜前缀（不可靠）。这项要动日志库的信道格式，属于独立改动，本轮不做（保持现状：
+  全局级别 + TUI 日志窗口级别过滤）。
 
 ## 与计划的差异（记录用）
 
@@ -1736,6 +1807,8 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 阶段 AB（UI-1 / UI-5）完成后提交：
   `客户端模型层（历史窗口/队列镜像）与输入栏硬件光标 (UI-1/UI-5)`
   （新增模块 `tui_model` 134 项、`boundaries` 12 项）。
+- 阶段 AC（OBS-3 / OBS-4 / STO-13）完成后提交：
+  `关键指标与诊断包导出 (OBS-3/OBS-4/STO-13)`（新增模块 `observability` 96 项）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 

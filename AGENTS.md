@@ -357,6 +357,11 @@ path/to/agentxx_test string_util regex
   折行宽度 = 可用宽度 - 左右各 1 列内边距 - 外层缩进 (块引用每层 2 列 / 列表项前缀,
   构建期经 `tl_indent` + `IndentScope` 累加); `estimateMarkdownLines` 用同一函数统计
   行数, 两侧口径必须保持一致 (改动折行规则时两处同步)
+- 可观测性 (2026-10-07): `agentxx::util::KeyMetrics` (计划 OBS-3) 记轮次终态/TTFT/
+  模型调用与用量/工具终态/压缩, 挂在 `AgentContext::metrics`, 装配快照含 `metrics` 段;
+  `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` (计划 OBS-4) 导出
+  环境/指标/装配(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
+  (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
 - 接口表数量: agent 侧 19 张 (10 张通用表 `pluginxx.*` + 9 张领域表 `agentxx.agent.*`,
   新增 `agentxx.agent.context`: 会话 LLM 上下文查询 `get_messages`/`messages_count`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)

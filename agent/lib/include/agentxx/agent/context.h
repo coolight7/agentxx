@@ -40,6 +40,7 @@ class PluginManager;
 } // namespace plugin
 
 namespace util {
+class KeyMetrics;
 class TaskScope;
 } // namespace util
 
@@ -710,6 +711,11 @@ public:
     ///   关闭时先取消再等待收敛 (见 [agentxx::util::TaskScope])
     /// - 由 BaseAgent::init 创建并注入; 未创建时这些调用点退化为直接 co_spawn
     std::shared_ptr<agentxx::util::TaskScope> taskScope = nullptr;
+
+    /// 关键指标 (计划 OBS-3): 轮次/首 token 延迟/模型调用与用量/工具终态/压缩次数
+    /// - 由 BaseAgent::init 创建 (与事件总线同一生命周期), 诊断包与装配快照可读
+    /// - 只记"发生了什么"的计数与耗时, 不含任何内容, 因此可安全导出 (见 diagnostics.h)
+    std::shared_ptr<agentxx::util::KeyMetrics> metrics = nullptr;
 
     /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
     /// - 由 BaseAgent::init 创建并注入; 插件经 graph 接口表注册自定义节点类型
