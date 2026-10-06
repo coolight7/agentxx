@@ -8,6 +8,7 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/config_static.h"
+#include "agentxx/agent/config_validation.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
 #include "agentxx/util/exception.h"
@@ -312,12 +313,21 @@ static int dumpConfigAndExit(
         XX_OUT("{}\n", line);
     }
 
+    // 配置校验结果 (计划 CFG-1): 键路径 + 严重级别, 配置排查时先看这一段
+    auto report = agentxx::agent::validateAgentConfigWithPaths(*config);
+    report.setSource(std::string{configPath});
+    XX_OUT("\nconfig issues[{}]:\n", report.issues.size());
+    for (const auto& line : report.render()) {
+        XX_OUT("  {}\n", line);
+    }
+
     if (!resolveModelConfig(yamlCfg.models, yamlCfg.useModelDefault).isValid()) {
         XX_OUT(
             "\n[assembly snapshot skipped] no usable default model configured "
             "(see `model.list` / `model.use` above)\n"
         );
-        return 0;
+        // 配置有致命问题时以非零码退出, 便于在脚本/CI 中当作配置门禁使用
+        return report.hasFatal() ? 1 : 0;
     }
 
     XX_OUT("\n=== effective assembly (init once, then exit) ===\n");
@@ -356,7 +366,40 @@ static int dumpConfigAndExit(
         XX_OUT("{}\n", line);
     }
     // 插件关闭: agent 局部对象析构时经 AgentContext → PluginManager 同步关闭全部实例
-    return 0;
+    // 配置有致命问题时返回非零 (快照照常打印完, 便于一次性看到全部问题)
+    return report.hasFatal() ? 1 : 0;
+}
+
+/// 启动期配置校验 (计划 CFG-1)
+///
+/// 打印结构化问题 (键路径 + 严重级别 + 来源), 致命问题返回 false 由调用方终止启动。
+/// 校验规则只有一份实现 (agentxx::agent::validateAgentConfigWithPaths), 与
+/// `AgentConfig::validate()` 同源。
+static bool validateStartupConfig(
+    const std::shared_ptr<agentxx::agent::AgentConfig>& config,
+    std::string_view                                    sourceLabel
+) {
+    auto report = agentxx::agent::validateAgentConfigWithPaths(*config);
+    report.setSource(sourceLabel);
+    for (const auto& line : report.render()) {
+        if (line.starts_with("[fatal]")) {
+            XX_LOGE("[Config] {}", line);
+        } else {
+            XX_LOGW("[Config] {}", line);
+        }
+    }
+    if (report.hasFatal()) {
+        XX_LOGE(
+            "[Config] {} fatal config problem(s) found, startup aborted",
+            report.count(agentxx::agent::ConfigIssueLevel::Fatal)
+        );
+        return false;
+    }
+    const auto warnings = report.count(agentxx::agent::ConfigIssueLevel::Warning);
+    if (warnings > 0) {
+        XX_LOGI("[Config] {} config warning(s) reported above, startup continues", warnings);
+    }
+    return true;
 }
 
 int main(int argn, char** argv) {
@@ -757,6 +800,9 @@ Options:
         // 曾缺失导致 acp 启动的 agent 不加载任何插件
         applySharedRuntimeConfig(config, yamlCfg, resolvePath);
         // CodeGraph 参数经 plugins 配置传递 (宿主不解析 args 字段语义)
+        if (!validateStartupConfig(config, configPath)) {
+            return 1;
+        }
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
         asio::co_spawn(
             *agent->ioCtx,
@@ -780,6 +826,13 @@ Options:
     applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
     applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
     applySharedRuntimeConfig(config, yamlCfg, resolvePath);
+
+    // 配置校验 (计划 CFG-1): 结构/语义 + 路径存在性与权限组合
+    // - 致命问题 (无可用模型 / 必需绝对路径写错 / 持久化目录不可用) 在此终止启动
+    // - 警告照常启动 (内存降级、会被夹取的取值、白黑名单重复等)
+    if (!validateStartupConfig(config, configPath)) {
+        return 1;
+    }
 
     // ======================== TUI 全局设置持久化 ========================
     // 全局设置 (主题/动画等级/日志等级/末尾思考/界面语言等) 存于 {dataDir}/sqlite/global.db,

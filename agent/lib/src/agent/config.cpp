@@ -1,6 +1,7 @@
 #include "agentxx/agent/config.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/agent/config_validation.h"
 #include <expected>
 #include <filesystem>
 #include <fmt/format.h>
@@ -38,48 +39,14 @@ std::string AgentConfig::resolvedWorkDir() const noexcept {
 }
 
 std::expected<void, std::string> AgentConfig::validate() const {
-    if (!model.isValid() && availableModels.empty()) {
-        return std::unexpected{
-            "AgentConfig: no valid model (model.baseUrl/apiKey empty and availableModels empty)"
-        };
-    }
-    if (!availableModels.empty() && !currentModelName.empty()
-        && !availableModels.contains(currentModelName)) {
-        return std::unexpected{fmt::format(
-            "AgentConfig: currentModelName '{}' not in availableModels",
-            currentModelName
-        )};
-    }
-    if (enableSessionStore && dataDir.empty() && sessionStoreDirectory.empty()) {
-        // 仅警告, 不阻断: 会话将仅内存 (BaseAgent 构造时已处理)
-    }
-    // dataDir 相对路径规范化在 ConfigStatic 层, 此处仅校验非空时可解析
-    if (!dataDir.empty()) {
-        std::error_code ec;
-        auto            p = std::filesystem::path(dataDir);
-        if (p.empty()) {
-            return std::unexpected{"AgentConfig: dataDir is empty path"};
-        }
-        (void)ec;
-    }
-    // workDir: 非空时必须为绝对路径 (相对路径的解析归属装配侧, 按进程 cwd 展开;
-    // lib 内不隐式解析, 避免"配置相对路径在不同启动目录下语义漂移")
-    if (!workDir.empty() && !std::filesystem::path(workDir).is_absolute()) {
-        return std::unexpected{fmt::format(
-            "AgentConfig: workDir must be an absolute path (got '{}'); "
-            "resolve relative paths against the process cwd at assembly time",
-            workDir
-        )};
-    }
-    for (const auto& pc : plugins) {
-        // configPath 非空时必须为绝对路径 (装配侧已归一化)
-        if (!pc.configPath.empty() && !std::filesystem::path(pc.configPath).is_absolute()
-            && !pc.configPath.starts_with("builtin://")) {
-            return std::unexpected{fmt::format(
-                "AgentConfig: plugin '{}' config must be an absolute path (got '{}')",
-                pc.path,
-                pc.configPath
-            )};
+    // 校验规则只有一份实现 (validateAgentConfig, 见 config_validation.h);
+    // 本函数返回其中的致命问题 (旧调用方语义: 只关心能否启动)
+    const auto report = agentxx::agent::validateAgentConfig(*this);
+    for (const auto& issue : report.issues) {
+        if (issue.level == agentxx::agent::ConfigIssueLevel::Fatal) {
+            return std::unexpected{
+                fmt::format("AgentConfig: {}: {}", issue.keyPath, issue.message)
+            };
         }
     }
     return {};

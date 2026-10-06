@@ -36,6 +36,7 @@
 | TOOL-12 | 工具可用性诊断（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | `context.h`（`ToolAssemblyRecord`/`toolAssembly`）、`base_agent.cpp`、`assembly_snapshot.cpp` |
 | ARC-6 | 生效装配快照 + `--dump-config`（限定范围） | P1 | 完成（已构建 + 测试通过） | `include/agentxx/agent/assembly_snapshot.h` + `src/agent/assembly_snapshot.cpp`、`client/main.cpp` |
 | CFG-3 | 配置来源与诊断清单（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | 同上（配置侧快照） |
+| CFG-1 | 结构化配置校验（限定范围） | P0 | 完成（已构建 + 测试通过） | `include/agentxx/agent/config_validation.h` + `src/agent/config_validation.cpp`、`config.cpp`、`client/main.cpp` |
 | PLG-10 | 插件装载耗时与注册计数（限定范围） | P2 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`PluginListView` 诊断字段）、`plugin_manager_lifecycle.cpp` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
@@ -534,6 +535,65 @@
 - 阶段 M 补充（PRM-5）完成后提交：`技能优先级与同名裁决 (PRM-5)`。
 - 全量回归与测试夹具修正完成后提交：`修正测试夹具内存生命周期与只读工具自动摘要预期`。
 - 阶段 N（ARC-6 / TOOL-12 / CFG-3 / PLG-10）完成后提交：`启动装配快照与 --dump-config、插件装载耗时与注册计数 (ARC-6/TOOL-12/CFG-3/PLG-10)`。
+- 阶段 O（CFG-1）完成后提交：`配置结构化校验: 键路径/严重级别/来源, 路径与权限组合检查 (CFG-1)`。
+
+## 阶段 O：配置结构化校验（CFG-1，2026-10-06）
+
+计划依据：`plan.md` §13 CFG-1（限定范围：校验结果结构化 (键路径 + 来源文件 + 致命/警告)，
+补"路径存在性"与"权限组合"两类检查；不做配置对象树重建、不改 base/overlay 合并语义）。
+
+已完成：
+
+- **新增 `agentxx/agent/config_validation.{h,cpp}`**：
+  - `ConfigIssueLevel`（Warning / Fatal）、`ConfigIssue{level, keyPath, message, source}`、
+    `ConfigValidationReport{issues, hasFatal(), count(), render(), toJson(), setSource()}`
+    （`render()` 一行一条：`[fatal] work_dir: ... (agentxx-config.yaml)`）；
+  - `validateAgentConfig(cfg)`：**不访问文件系统**的结构/语义校验 —— 模型（无可用模型、
+    `model.use` 指向不存在的模型、可用模型条目缺 base_url/api_key）、路径形态（`work_dir`
+    必须绝对、`data_dir`/会话根相对路径提示）、权限组合（`deny` + 白名单、`pass` 模式提示、
+    白黑名单同路径说明"黑名单优先"、空条目）、会被夹取或无效的取值（并行上限越界、
+    开启工具过滤但白名单为空、重复调用阈值 0、`llm.max_retry` 过大）、插件声明
+    （空 path、`config` 必须绝对、同路径重复声明）、MCP（空命名空间、空 url）、
+    持久化组合（开启但无目录 = 内存降级；配了根但关掉持久化 = 根未使用）；
+  - `validateConfigPaths(cfg)`：**访问文件系统** —— `data_dir`/会话根目录可建/可写
+    （要求持久化时不可用 = 致命，否则警告）、skill/memory/rag 路径存在性（警告，
+    启动时记为加载失败）、插件文件是否存在（警告，启动时跳过）、MCP 端点协议前缀；
+  - `validateAgentConfigWithPaths(cfg)`：两者合并（启动装配侧统一入口）。
+- **`AgentConfig::validate()` 改为同一套规则**（取第一条致命问题返回），消除两份实现漂移；
+  之前该函数无调用点（"client 启动时调用"只是注释）。
+- **CLI 接线**（`agent/client/main.cpp`）：`validateStartupConfig()` 在启动路径
+  （ACP 模式 / 本地 tui·cli·server·远程 client 共用路径）执行校验：致命问题逐条
+  `XX_LOGE`（键路径 + 来源）后终止启动返回 1；警告逐条 `XX_LOGW` 后照常启动并汇总条数。
+  `--dump-config` 打印 `config issues[N]:` 段（与快照同一份校验结果），有致命问题时
+  仍打印完整快照再以返回码 1 退出（可当配置门禁使用）。
+
+测试：
+
+- 新同步模块 `config_validation`（47 项断言，`agent/test/core/test_config_validation.cpp`）：
+  正常配置无致命；无模型 / `model.use` 不存在 / `work_dir` 相对 / 插件 `config` 相对 → 致命；
+  `deny` + 白名单、`pass`、白黑名单同路径、并行上限越界、空白名单 + 过滤、会话根未生效、
+  MCP 空命名空间/非 http 端点、skill/memory/rag 路径缺失、插件文件缺失与同路径重复 →
+  警告且不致命；内存模式（无 data_dir）为警告；会话根被同名文件占用 → 致命；
+  `toJson()` 的 level/key/source 字段与 `render()` 的来源标注；
+  `AgentConfig::validate()` 与同一规则同源（相对 work_dir 时返回错误）。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0，无新增 error。
+- 测试：`config_validation` 47/0、`assembly_snapshot` 37/0、`boundaries` 8/0、`agent` 198/0、
+  `config_loader` 375/0、`session_schema` 91/0、`plugin_resources` 89/0、`remote_agent` 453/0。
+- 手工验证：`agentxx_cli --dump-config` 在真实配置下输出 2 条警告（`memory.paths[0]` 缺失、
+  来源标注为配置文件），退出码 0。
+
+注意事项 / 与计划的差异：
+
+- "来源文件"用"配置链标签"表示（overlay 路径，`setSource()` 统一打标），没有做**逐键**
+  来源追踪：`YamlAppConfig` 的 base/overlay 合并是按键覆盖，逐键来源需要改合并层数据结构，
+  属计划明确不做的"配置对象树重建"。键路径足以定位到配置项。
+- `ask` 模式在 `work_dir` 为空时回退进程 cwd 属既定行为，不产生警告（避免每个默认配置
+  都刷警告）；只报"配置之间互相矛盾或无效"的组合。
+- 校验只在 CLI 装配侧调用；库使用方（FFI/嵌入）仍按需自行调用
+  `validateAgentConfigWithPaths()`，lib 不替调用方决定终止启动。
 
 ## 阶段 N：启动装配快照与工具清单诊断（ARC-6 / TOOL-12 / CFG-3 / PLG-10，2026-10-06）
 

@@ -9,6 +9,7 @@
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
 #include "agentxx-test/core/test_command_tools.h"
+#include "agentxx-test/core/test_config_validation.h"
 #include "agentxx-test/core/test_concurrency.h"
 #include "agentxx-test/core/test_datetime_tool.h"
 #include "agentxx-test/core/test_diff_util.h"
@@ -220,6 +221,7 @@ int main(int argn, char** argv) {
         // 架构边界检查放在最前: 分层约定被破坏时立即失败, 不再跑后续用例
         runSync("boundaries", agentxx::test::testBoundaries);
         runSync("assembly_snapshot", agentxx::test::testAssemblySnapshotConfig);
+        runSync("config_validation", agentxx::test::testConfigValidation);
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
