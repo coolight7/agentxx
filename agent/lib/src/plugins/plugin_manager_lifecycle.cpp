@@ -232,6 +232,39 @@ void toLoadOptions(
     }
 }
 
+/// 记录装载耗时与注册计数 (计划 PLG-10)
+///
+/// 在装载入口收尾时调用: 写回 [PluginInstance::loadMs] 并把"装载完成后到底注册了
+/// 什么"打到日志, 便于回答"插件装了但模型看不到工具"一类问题;
+/// 完整清单另见装配快照 (ARC-6, `--dump-config`)。
+void notePluginLoaded(
+    const std::shared_ptr<PluginInstance>& inst,
+    std::chrono::steady_clock::time_point  begin
+) {
+    if (!inst) {
+        return;
+    }
+    inst->loadMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - begin
+        )
+        .count()
+    );
+    XX_LOGI(
+        "Plugin `{}` loaded in {} ms: tools={} hooks={} graphNodes={} events={} capabilities={} "
+        "permissionTools={} (enable={})",
+        inst->name,
+        inst->loadMs,
+        inst->toolNames.size(),
+        inst->hookRegistrations.size(),
+        inst->graphNodeTypes.size(),
+        inst->subscriptions.size(),
+        inst->capabilityRegistrations.size(),
+        inst->permissionToolNames.size(),
+        inst->enabled
+    );
+}
+
 } // namespace
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
@@ -241,16 +274,19 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     const plugin::PluginManifestResources&  resources,
     const plugin::PluginManifestInterfaces& interfaces
 ) {
+    const auto        begin     = std::chrono::steady_clock::now();
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
-    co_return co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadNativeAsync(
+    auto inst = co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadNativeAsync(
         std::move(path),
         hasOptions ? &options : nullptr,
         allowClientOnlySkip,
         resources,
         interfaces
     );
+    notePluginLoaded(inst, begin);
+    co_return inst;
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync(
@@ -262,10 +298,11 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     const plugin::PluginManifestResources&  resources,
     const plugin::PluginManifestInterfaces& interfaces
 ) {
+    const auto        begin     = std::chrono::steady_clock::now();
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
-    co_return co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadBuiltinAsync(
+    auto inst = co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadBuiltinAsync(
         std::move(name),
         std::move(path),
         std::move(depends),
@@ -274,6 +311,8 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
         resources,
         interfaces
     );
+    notePluginLoaded(inst, begin);
+    co_return inst;
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
@@ -281,14 +320,17 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowClientOnlySkip
 ) {
+    const auto        begin     = std::chrono::steady_clock::now();
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
-    co_return co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadPluginAsync(
+    auto inst = co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadPluginAsync(
         std::move(path),
         hasOptions ? &options : nullptr,
         allowClientOnlySkip
     );
+    notePluginLoaded(inst, begin);
+    co_return inst;
 }
 
 // =====================================================================
@@ -312,6 +354,13 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
         view.optionalDepends    = inst->optionalDepends;
         view.requiredInterfaces = inst->interfaces.require;
         view.optionalInterfaces = inst->interfaces.optional;
+        view.userDisabled          = inst->userDisabled;
+        view.blockedByDependencies = inst->blockedByDependencies;
+        view.loadMs                = inst->loadMs;
+        view.hookCount             = inst->hookRegistrations.size();
+        view.graphNodeCount        = inst->graphNodeTypes.size();
+        view.eventSubCount         = inst->subscriptions.size();
+        view.permissionToolCount   = inst->permissionToolNames.size();
         for (const auto& cap : inst->capabilityRegistrations) {
             view.capabilities.push_back(cap.name);
         }

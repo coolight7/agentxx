@@ -4,6 +4,7 @@
 #include "agentxx-test/core/test_agent_host.h"
 #include "agentxx-test/core/test_aho_corasick.h"
 #include "agentxx-test/core/test_anthropic_provider.h"
+#include "agentxx-test/core/test_assembly_snapshot.h"
 #include "agentxx-test/core/test_boundaries.h"
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
@@ -218,6 +219,7 @@ int main(int argn, char** argv) {
     try {
         // 架构边界检查放在最前: 分层约定被破坏时立即失败, 不再跑后续用例
         runSync("boundaries", agentxx::test::testBoundaries);
+        runSync("assembly_snapshot", agentxx::test::testAssemblySnapshotConfig);
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
@@ -411,6 +413,7 @@ int main(int argn, char** argv) {
                 co_await run("input_delivery", agentxx::test::run_input_delivery_tests);
                 co_await run("session_sync", agentxx::test::run_session_sync_tests);
                 co_await run("prompt_stability_io", agentxx::test::run_prompt_stability_tests);
+                co_await run("assembly_snapshot_io", agentxx::test::run_assembly_snapshot_tests);
 
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);

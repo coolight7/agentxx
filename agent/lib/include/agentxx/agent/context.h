@@ -604,6 +604,29 @@ struct AgentAppendComponentInfo {
     std::vector<AppendComponentNotification> failedComponents;
 };
 
+/// 单个工具的装配记录 (计划 TOOL-12 / ARC-6)
+///
+/// 记录"装配期看到的事实", 供启动装配快照与诊断输出使用:
+/// 工具是否进入执行图, 来自哪里, 有哪些行为开关;
+/// 被工具白名单过滤掉的工具也保留一条记录 (filtered=true), 便于回答
+/// "为什么模型看不到这个工具"。
+struct ToolAssemblyRecord {
+    /// 工具名 (LLM 请求里看到的名称)
+    std::string name;
+    /// 来源: `builtin` / `middleware:<中间件名>` / `plugin:<插件名>` / `mcp:<命名空间>` / `dynamic`
+    std::string source;
+    /// 是否被工具白名单过滤掉 (未进入执行图)
+    bool filtered = false;
+    /// 过滤原因 (仅 filtered 为 true 时有值)
+    std::string filterReason;
+    /// 工具行为开关 (与 agentxx::tools::XXToolBase 的构造参数对应)
+    bool   autoSummaryOutput = false;
+    bool   canDelayLoad      = false;
+    bool   repeatCallCheck   = false;
+    bool   supportsParallel  = false;
+    size_t maxRetry          = 0;
+};
+
 class AgentContext {
 public:
 
@@ -643,6 +666,14 @@ public:
     /// - 供子代理"全量继承父 agent 工具" (tools=["*"]) 使用:
     ///   AgentHost 据此填充子代理的 toolWhitelist
     std::vector<std::string> toolNames;
+
+    /// 工具装配记录 (含被白名单过滤掉的工具; BaseAgent::init 填充)
+    /// - 供启动装配快照 (ARC-6)、工具清单诊断 (TOOL-12) 与 --dump-config 使用
+    std::vector<ToolAssemblyRecord> toolAssembly;
+
+    /// 工具来源提示 (工具名 → 来源): 装配期由中间件工具收集处写入,
+    /// 创建装配记录时优先取这里的值, 取不到再按插件/MCP/内置推断
+    std::map<std::string, std::string, std::less<>> toolSourceHints;
 
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
     /// - 由 BaseAgent::init 创建并注入

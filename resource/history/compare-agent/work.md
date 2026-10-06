@@ -33,6 +33,10 @@
 | TOOL-1 | 分阶段并行：prepare/dispatch/finalize | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
 | TOOL-2 | 并发分类与上限 | P0 | 完成（已构建 + 测试通过） | `tools/tool.h`、`plugin_api.h`、`config.h` |
 | TOOL-3 | 并行取消和收尾 | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
+| TOOL-12 | 工具可用性诊断（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | `context.h`（`ToolAssemblyRecord`/`toolAssembly`）、`base_agent.cpp`、`assembly_snapshot.cpp` |
+| ARC-6 | 生效装配快照 + `--dump-config`（限定范围） | P1 | 完成（已构建 + 测试通过） | `include/agentxx/agent/assembly_snapshot.h` + `src/agent/assembly_snapshot.cpp`、`client/main.cpp` |
+| CFG-3 | 配置来源与诊断清单（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | 同上（配置侧快照） |
+| PLG-10 | 插件装载耗时与注册计数（限定范围） | P2 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`PluginListView` 诊断字段）、`plugin_manager_lifecycle.cpp` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
 | CFG-8 | 配置与设置边界（含会话语言接线） | P1 | 完成（已构建 + 测试通过） | `docs/zh-cn/design/configuration.md`、`AgentConfig::languageExplicit` |
@@ -529,6 +533,85 @@
 - 阶段 M（PRM-1 / PRM-2 / PRM-7）完成后提交：`提示词稳定段与动态段分离、段落排序、请求体结构断言 (PRM-1/PRM-2/PRM-7)`。
 - 阶段 M 补充（PRM-5）完成后提交：`技能优先级与同名裁决 (PRM-5)`。
 - 全量回归与测试夹具修正完成后提交：`修正测试夹具内存生命周期与只读工具自动摘要预期`。
+- 阶段 N（ARC-6 / TOOL-12 / CFG-3 / PLG-10）完成后提交：`启动装配快照与 --dump-config、插件装载耗时与注册计数 (ARC-6/TOOL-12/CFG-3/PLG-10)`。
+
+## 阶段 N：启动装配快照与工具清单诊断（ARC-6 / TOOL-12 / CFG-3 / PLG-10，2026-10-06）
+
+计划依据：`plan.md` §1.2 ARC-6（限定范围：启动一次性装配快照写日志 + CLI `--dump-config`；
+不做 TUI 诊断页与 wire 侧 `get_diagnostics`）、§5.2 TOOL-12（并入 ARC-6 的工具清单诊断）、
+§13 CFG-3（并入 ARC-6 的来源清单）、§12 PLG-10（限定范围：装载耗时 + 接口声明 + 注册计数）。
+
+已完成：
+
+- **装配快照模块**（新增 `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.{h,cpp}`）：
+  - `buildConfigSnapshot(AgentConfig&)`（配置侧，不需要构造 agent）、
+    `buildRuntimeSnapshot(AgentContext&)`（init() 之后）、`mergeAssemblySnapshot`、
+    `renderAssemblySnapshot`（人工可读文本，日志与 `--dump-config` 同源）、
+    `logAssemblySnapshot`（Info 一行计数 + Debug 完整 JSON）、
+    `resolveToolSource`（工具来源推断）；
+  - **配置侧**：模型（含可用模型逐项、`api_key_set` 布尔、`extra_headers`/`extra_config`
+    只输出键名）、路径（data_dir / work_dir / session_root）、权限（mode + 白黑名单）、
+    特性开关与工具白名单、上限（重试/摘要阈值/重复调用阈值/并行上限）、资源
+    （skill/memory/rag/mcp）、插件声明（path/enabled/sides/config/args 键名）、语言与来源标记、
+    提示词段落与哈希。**凭据与参数值一律不落快照**（有断言）。
+  - **运行侧**：模型注册表（默认 + 全部名称 + 数量）、中间件顺序（名称/是否禁用/会话数）、
+    工具清单（装配项：来源/行为开关/是否被白名单过滤 + 原因；动态插件项：来源）、
+    插件条目（启用状态/用户禁用/依赖阻塞/装载耗时/注册计数/接口声明/工具名）、
+    执行图（名称/节点数/节点类型/边数）、持久化（是否开启/根目录/schema 版本/写租约）、
+    组件加载信息（skill/memory/mcp 与失败项及原因）。
+- **工具装配记录**（`AgentContext::ToolAssemblyRecord` + `toolAssembly` + `toolSourceHints`）：
+  - 中间件贡献的工具在收集时写入来源提示（`middleware:<中间件名>`）；
+  - 白名单过滤改为 `stable_partition`，被过滤的工具保留一条 `filtered=true` 记录
+    （原因 `not in toolWhitelist (enableToolFiltering)`），被移出集合的工具对象不再丢信息；
+  - `bind_tools` 步骤在工具被 move 进图引擎之前收集来源/开关（并行安全、延迟加载、
+    自动摘要、重复调用检查、重试次数）。
+- **启动日志**（`BaseAgent::init()` 末尾，`verifyStartupAssembly()` 之后）：
+  `assembly snapshot (startup): models=.. middlewares=.. tools=.. plugins=.. graph=.. persistence=..`
+  （Info）+ 完整 JSON（Debug）。正常启动不打全量。
+- **CLI `--dump-config`**（`agent/client/main.cpp`）：
+  - 不进入交互模式、不监听端口；先打印配置侧快照（**无可用模型时也能打印**，这正是排查
+    配置问题的场景），有可用模型时再构造一次 `CodeAgent`、`init()` 并打印运行侧快照；
+  - `init()` 失败打印 `[init failed] <原因>` 并返回 1；打印完退出（插件经 AgentContext →
+    PluginManager 析构同步关闭）；`--help` 已补该选项说明。
+- **PLG-10 插件装载诊断**（`plugin_manager.{h}` + `plugin_manager_lifecycle.cpp`）：
+  - `PluginListView` 增加 `userDisabled` / `blockedByDependencies` / `loadMs` / `hookCount` /
+    `graphNodeCount` / `eventSubCount` / `permissionToolCount`（`list()` 填充）；
+  - 三个装载入口（native/builtin/plugin）统一记录**装载总耗时**（dlopen + create + start +
+    注册收尾）并打印一行装载摘要：`Plugin `x` loaded in N ms: tools=.. hooks=.. graphNodes=..
+    events=.. capabilities=.. permissionTools=.. (enable=..)`；
+  - 接口声明（require/optional）随 `list()` 输出（协商结果本身在 client 侧判定，
+    agent 侧只记录"插件声明了什么"）。
+- **存储小接口**：`SessionStore::writerLeaseEnabled()` / `SessionStore::schemaVersion()`
+  （快照展示用，均为只读）。
+
+测试：
+
+- 新同步模块 `assembly_snapshot`（37 项断言，`agent/test/core/test_assembly_snapshot.cpp`）：
+  配置侧字段齐全、API key 与 header 取值不外泄、插件参数只出键名、渲染文本包含各小节、
+  合并快照运行侧键优先。
+- 新异步模块 `assembly_snapshot_io`（27 项断言）：真实 `CodeAgent::init()` 后的运行侧快照
+  ——模型注册表、中间件顺序（含 `PermissionMiddlewareHandle` 与末尾 `LogPrint`）、
+  工具来源（`agentxx_share_store`=builtin、至少一个 `middleware:*`）、MCP 命名空间前缀推断、
+  未知名回退 builtin、执行图名称/节点数、持久化关闭时的 `persistence: OFF`、
+  白名单过滤场景下被过滤记录的 `filter_reason`、渲染文本与日志摘要调用。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0，无新增 error。
+- 测试：`assembly_snapshot` 37/0、`assembly_snapshot_io` 27/0、`boundaries` 8/0。
+- 手工验证：`agentxx_cli.exe --dump-config` 输出 13 个模型、6 层中间件顺序、17 个插件工具
+  （来源逐项标注）、7 个插件的装载耗时与注册计数、图 `agentxx.default`（4 节点 5 边）、
+  持久化根目录与 schema v2、AGENTS.md 缺失记入 `components.failed`。
+
+注意事项 / 与计划的差异：
+
+- 计划 ARC-6 提到"作业和队列状态"：作业整节不做（JOB 核定不考虑），队列状态是运行期
+  按会话变化的量（`SessionQueueState`），不属于启动装配快照；未纳入。
+- 计划 ARC-6 的"TUI 诊断页 / wire `get_diagnostics`"按限定范围不做；快照只走日志与 CLI。
+- 工具来源中的 `dynamic`（插件动态注册表）与 `assembled`（进入执行图的静态工具）分开列出：
+  插件工具不进图引擎静态工具集，混在一起会误导"哪个集合在参与冲突检测"。
+- PLG-10 的"渲染错误计数"未做（快照不含 UI 渲染路径）；"接口协商结果"在 agent 侧只输出
+  插件声明，因为 agent 侧装载不按接口集合拒绝（client 侧才做协商）。
 
 ## 阶段 M：提示词稳定段与动态段（PRM-1/PRM-2/PRM-7，2026-10-06）
 

@@ -265,6 +265,16 @@ public:
         return rootDir_;
     }
 
+    /// 是否对写连接启用跨进程写租约 (诊断/装配快照展示用)
+    bool writerLeaseEnabled() const noexcept {
+        return enableWriterLease_;
+    }
+
+    /// 本程序支持的会话库 schema 版本 (写入时按相邻迁移链升到这个版本)
+    static constexpr int schemaVersion() noexcept {
+        return kSchemaVersion;
+    }
+
     /// 最近一次写路径失败原因 (空 = 无失败)
     ///
     /// 写连接不可用时 (会话目录被其它进程写了、库版本高于本程序支持、目录/文件

@@ -120,6 +120,9 @@ public:
     std::vector<GraphNodeTypeRegistration> graphNodeTypes;
     PromptBackup                           promptBackup;
 
+    /// 装载总耗时 (毫秒; 由 PluginManager 装载入口记录, 见 PLG-10)
+    uint64_t loadMs = 0;
+
     /// 通用表相关登记 (事件订阅 / 睡眠句柄 / 能力声明) 由基类持有, 见
     /// [pluginxx::PluginInstanceBase]: 通用表实现只依赖基类, 新增宿主无需重复实现。
 
@@ -251,6 +254,22 @@ public:
         std::vector<std::string> optionalDepends;
         std::vector<std::string> requiredInterfaces;
         std::vector<std::string> optionalInterfaces;
+
+        // ---- 诊断字段 (计划 PLG-10 / ARC-6 装配快照) ----
+        /// 是否被用户显式禁用 (区别于依赖级联禁用)
+        bool userDisabled = false;
+        /// 是否因必选依赖不可用被级联禁用
+        bool blockedByDependencies = false;
+        /// 装载总耗时 (dlopen + create + start + 注册收尾), 毫秒; 0 表示未记录
+        uint64_t loadMs = 0;
+        /// 钩子登记数 (中间件钩子点)
+        size_t hookCount = 0;
+        /// 自定义图节点类型登记数
+        size_t graphNodeCount = 0;
+        /// 事件订阅数
+        size_t eventSubCount = 0;
+        /// 已声明权限限制的工具数
+        size_t permissionToolCount = 0;
     };
 
     explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext);

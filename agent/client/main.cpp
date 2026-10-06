@@ -6,6 +6,7 @@
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/agent_server.h"
 #include "agentxx/protocol/acp_server.h"
@@ -273,6 +274,91 @@ static void applySharedRuntimeConfig(
     }
 }
 
+/// 打印生效装配快照 (计划 ARC-6)
+///
+/// `--dump-config` 的实现: 先打印配置侧快照 (不需要可用模型, 配置写错时也能看),
+/// 有可用模型时再构造一次 CodeAgent 并 init, 补上运行侧快照 (模型注册表 /
+/// 中间件顺序 / 工具清单与来源 / 插件装载结果 / 执行图 / 持久化)。
+/// - 不启动任何交互界面, 不监听端口, 打印完直接退出
+/// - 打印的是"实际装配结果", 与启动日志中的装配快照同源
+static int dumpConfigAndExit(
+    const std::string&                                       mode,
+    const YamlAppConfig&                                     yamlCfg,
+    const std::string&                                       resolvedDataDir,
+    const std::string&                                       resolvedWorkDir,
+    const std::function<std::string(std::string_view path)>& resolvePath,
+    std::string_view                                         configPath,
+    const std::string&                                       baseConfigPath
+) {
+    // 与正常启动一致地构建配置 (模式相关的日志开关不生效, 快照需要完整信息)
+    auto config     = buildDefaultConfig();
+    config->dataDir = resolvedDataDir;
+    config->workDir = resolvedWorkDir;
+    applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+    applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
+    applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+    applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+    applySharedRuntimeConfig(config, yamlCfg, resolvePath);
+
+    XX_OUT("=== agentxx dump-config (mode={}) ===\n", mode);
+    XX_OUT("config file : {}", configPath);
+    if (!baseConfigPath.empty()) {
+        XX_OUT("base config : {}", baseConfigPath);
+    }
+    XX_OUT("\n");
+
+    auto configSnapshot = agentxx::agent::buildConfigSnapshot(*config);
+    for (const auto& line : agentxx::agent::renderAssemblySnapshot(configSnapshot)) {
+        XX_OUT("{}\n", line);
+    }
+
+    if (!resolveModelConfig(yamlCfg.models, yamlCfg.useModelDefault).isValid()) {
+        XX_OUT(
+            "\n[assembly snapshot skipped] no usable default model configured "
+            "(see `model.list` / `model.use` above)\n"
+        );
+        return 0;
+    }
+
+    XX_OUT("\n=== effective assembly (init once, then exit) ===\n");
+    auto                          agent = std::make_shared<agentxx::agent::CodeAgent>(config);
+    utilxx_base::Json             runtimeSnapshot;
+    std::string                   initError;
+    asio::co_spawn(
+        *agent->ioCtx,
+        [agent, &runtimeSnapshot, &initError]() -> asio::awaitable<void> {
+            co_await agentxx::util::catchErrorAsync<bool>(
+                [&]() -> asio::awaitable<bool> {
+                    co_await agent->init();
+                    runtimeSnapshot = agentxx::agent::buildRuntimeSnapshot(*agent->agentContext);
+                    co_return true;
+                },
+                [&](std::string errmsg) -> asio::awaitable<bool> {
+                    initError = std::move(errmsg);
+                    co_return false;
+                },
+                [&](std::string& errmsg) -> std::optional<bool> {
+                    // 控制流异常 (取消/中断) 在 init 阶段不应出现; 记录后同样停止
+                    initError = std::move(errmsg);
+                    return std::optional<bool>{false};
+                }
+            );
+            co_return;
+        },
+        asio::detached
+    );
+    agent->ioCtx->run();
+    if (!initError.empty()) {
+        XX_OUT("[init failed] {}\n", initError);
+        return 1;
+    }
+    for (const auto& line : agentxx::agent::renderAssemblySnapshot(runtimeSnapshot)) {
+        XX_OUT("{}\n", line);
+    }
+    // 插件关闭: agent 局部对象析构时经 AgentContext → PluginManager 同步关闭全部实例
+    return 0;
+}
+
 int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);
@@ -354,6 +440,7 @@ int main(int argn, char** argv) {
 
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
+    bool dumpConfig     = false; ///< --dump-config: 打印生效装配快照后退出
     std::string overrideEnvPath;
     std::string mode = "tui";
     std::string agentUrl;
@@ -387,6 +474,7 @@ Options:
     --model <model>      远程模型名称
     --host <host>        服务监听地址 (默认: 127.0.0.1)
     --port <port>        服务监听端口 (默认: 7007)
+    --dump-config        打印生效装配快照 (配置 + 模型/中间件/工具/插件/图/持久化) 后退出
 )_");
             return 0;
         } else if (arg == "--config" && i + 1 < argn) {
@@ -408,6 +496,8 @@ Options:
         } else if (arg == "--host" && i + 1 < argn) {
             ++i;
             srvHost = argv[i];
+        } else if (arg == "--dump-config") {
+            dumpConfig = true;
         } else if (arg == "--port" && i + 1 < argn) {
             ++i;
             // 容错解析: 非法值报错退出, 避免 std::stoi 抛异常崩溃
@@ -565,6 +655,20 @@ Options:
         }
         return (std::filesystem::current_path() / fp).lexically_normal().string();
     };
+
+    // `--dump-config`: 打印生效装配快照后退出 (计划 ARC-6)
+    // - 不进入任何交互模式, 不监听端口; 配置写错 (无可用模型) 时也打印配置侧快照
+    if (dumpConfig) {
+        return dumpConfigAndExit(
+            mode,
+            yamlCfg,
+            resolvedDataDir,
+            resolvedWorkDir,
+            resolvePath,
+            configPath,
+            loadedCfg.baseConfigPath
+        );
+    }
 
     if (mode == "train") {
         // 训练模式需要 训练/评分/优化 三个模型, 任一缺失即引导退出

@@ -2,6 +2,7 @@
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/agent_runner.h"
+#include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
@@ -395,19 +396,27 @@ asio::awaitable<void> BaseAgent::init() {
             // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
             // - 作用于 initTools + 中间件收集后的完整工具集
             // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
+            // - 被过滤掉的工具保留一条装配记录 (filtered=true + 原因), 便于回答
+            //   "为什么模型看不到这个工具" (计划 TOOL-12)
             if (agentContext->agentConfig->enableToolFiltering) {
                 const auto& whitelist = agentContext->agentConfig->toolWhitelist;
-                tools.erase(
-                    std::remove_if(
-                        tools.begin(),
-                        tools.end(),
-                        [&](const std::unique_ptr<agentxx::tools::XXToolBase>& tool) {
-                            return std::find(whitelist.begin(), whitelist.end(), tool->get_name())
-                                   == whitelist.end();
-                        }
-                    ),
-                    tools.end()
+                auto        removed   = std::stable_partition(
+                    tools.begin(),
+                    tools.end(),
+                    [&](const std::unique_ptr<agentxx::tools::XXToolBase>& tool) {
+                        return std::find(whitelist.begin(), whitelist.end(), tool->get_name())
+                               != whitelist.end();
+                    }
                 );
+                for (auto it = removed; it != tools.end(); ++it) {
+                    ToolAssemblyRecord rec;
+                    rec.name         = (*it)->get_name();
+                    rec.source       = resolveToolSource(*agentContext, rec.name);
+                    rec.filtered     = true;
+                    rec.filterReason = "not in toolWhitelist (enableToolFiltering)";
+                    agentContext->toolAssembly.push_back(std::move(rec));
+                }
+                tools.erase(removed, tools.end());
                 XX_LOGD(
                     "Tool whitelist filter: keep {} tools of whitelist {}",
                     tools.size(),
@@ -606,6 +615,22 @@ asio::awaitable<void> BaseAgent::init() {
                 agentContext->toolNames.push_back(tool->get_name());
             }
 
+            // 工具装配记录 (计划 TOOL-12 / ARC-6): 名称 + 来源 + 行为开关
+            // - 此时 tools 已是白名单过滤后的最终集合 (被过滤的已在过滤步骤记录)
+            // - 必须在 own_tools 之前收集: 之后工具对象归图引擎所有
+            agentContext->toolAssembly.reserve(agentContext->toolAssembly.size() + tools.size());
+            for (auto& tool : tools) {
+                ToolAssemblyRecord rec;
+                rec.name              = tool->get_name();
+                rec.source            = resolveToolSource(*agentContext, rec.name);
+                rec.autoSummaryOutput = tool->autoSummaryOutput;
+                rec.canDelayLoad      = tool->canDelayLoad;
+                rec.repeatCallCheck   = tool->repeatCallCheck;
+                rec.supportsParallel  = tool->supportsParallel;
+                rec.maxRetry          = tool->maxRetry;
+                agentContext->toolAssembly.push_back(std::move(rec));
+            }
+
             auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
             for (auto& tool : tools) {
                 crudeTools.push_back(std::move(tool));
@@ -621,6 +646,11 @@ asio::awaitable<void> BaseAgent::init() {
     // 装配后启动断言: 模型 / 必要节点 / 工具定义 / 插件目录 / 持久化
     // - 配置或依赖有问题在这里立即失败, 而不是等第一轮对话才暴露
     verifyStartupAssembly();
+
+    // 启动装配快照 (计划 ARC-6 / PLG-10): 记录本次启动实际装配成了什么
+    // - 计数摘要走 Info, 完整 JSON 走 Debug (常规启动不打全量, 排查时按需打开)
+    // - `agentxx_cli --dump-config` 用同一份实现打印到标准输出
+    logAssemblySnapshot(buildRuntimeSnapshot(*agentContext), "startup");
 
     co_return;
 }
@@ -1044,6 +1074,14 @@ void BaseAgent::initMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::
 ) {
     for (auto& item : agentContext->middlewareHandleContext->handles) {
         if (false == item->toolcalls.empty()) {
+            // 记录来源 (工具装配记录用): 中间件贡献的工具在装配期就能确定归属,
+            // 之后工具对象被 move 进图引擎, 无法再反查
+            for (const auto& tool : item->toolcalls) {
+                if (tool) {
+                    agentContext->toolSourceHints[tool->get_name()]
+                        = fmt::format("middleware:{}", item->name);
+                }
+            }
             tools.insert(
                 tools.end(),
                 std::make_move_iterator(item->toolcalls.begin()),
