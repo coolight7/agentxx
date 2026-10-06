@@ -18,15 +18,18 @@ static constexpr std::string_view kDynamicSourceSkills = "skills";
 std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
     std::string oss;
     for (const auto& item : skillCache.skillData) {
+        // 来源展示给模型 (计划 PRM-5): 同名技能已按优先级裁决, 每个名字一条
         oss += fmt::format(
             R"(
 - **{}** Skill: {}
+  - source: {}
   - compatibility: {}
   - allowed-tools: {}
   - Read file `{}` for full instructions
 )",
             item.second.name,
             item.second.description,
+            item.second.source.empty() ? std::string{"builtin"} : item.second.source,
             item.second.compatibility,
             utilxx_base::stringVectorJoin(item.second.allowed_tools),
             fmt::format("{}/SKILL.md", item.first)
@@ -115,7 +118,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
 }
 
 asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
-    if (skillDirPaths.empty()) {
+    if (skillDirs.empty()) {
         co_return;
     }
 
@@ -133,28 +136,49 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
 
         decltype(skillCache.skillData)  loadedData;
         decltype(skillCache.loadErrors) loadedErrors;
-        auto skillQueue = std::vector<std::string>{skillDirPaths.begin(), skillDirPaths.end()};
+        // 待扫描队列: 从各扫描目录出发向下遍历 (子目录继承根目录的优先级与来源)
+        auto skillQueue = std::vector<SkillDirEntry>{skillDirs.begin(), skillDirs.end()};
+        // 成功加载的条目 (供"同名裁决"按优先级排序)
+        struct LoadedEntry {
+            int         priority = 0;
+            std::string source;
+            std::string dirpath;
+        };
+        std::vector<LoadedEntry> loadedOrder;
         for (size_t i = 0; i < skillQueue.size(); ++i) {
-            auto& itempath = skillQueue[i];
+            const auto entry = skillQueue[i];
             // catchErrorAsync: 单个目录处理失败仅记录错误, 不中断整体加载
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
-                    auto dir = std::filesystem::directory_entry{itempath};
+                    auto dir = std::filesystem::directory_entry{entry.path};
                     if (dir.is_directory()) {
-                        if (std::filesystem::is_regular_file(fmt::format("{}/SKILL.md", itempath)
+                        if (std::filesystem::is_regular_file(
+                                fmt::format("{}/SKILL.md", entry.path)
                             )) {
                             // load skill metadata
-                            const auto [err, metadata] = co_await readSkillFile(itempath);
+                            const auto [err, metadata] = co_await readSkillFile(entry.path);
                             if (err.empty()) {
-                                loadedData[itempath] = metadata;
+                                auto withSource       = metadata;
+                                withSource.priority   = entry.priority;
+                                withSource.source     = entry.source;
+                                loadedData[entry.path] = std::move(withSource);
+                                loadedOrder.push_back(LoadedEntry{
+                                    .priority = entry.priority,
+                                    .source   = entry.source,
+                                    .dirpath  = entry.path
+                                });
                             } else {
-                                loadedErrors[itempath] = err;
+                                loadedErrors[entry.path] = err;
                             }
                         } else {
-                            // 添加子目录等待加载
+                            // 添加子目录等待加载 (继承本目录的优先级与来源)
                             for (const auto& entity : std::filesystem::directory_iterator(dir)) {
                                 if (entity.is_directory()) {
-                                    skillQueue.push_back(entity.path().string());
+                                    skillQueue.push_back(SkillDirEntry{
+                                        .path     = entity.path().string(),
+                                        .priority = entry.priority,
+                                        .source   = entry.source
+                                    });
                                 }
                             }
                         }
@@ -162,10 +186,51 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
                     co_return true;
                 },
                 [&](std::string errmsg) -> asio::awaitable<bool> {
-                    loadedErrors[itempath] = std::move(errmsg);
+                    loadedErrors[entry.path] = std::move(errmsg);
                     co_return false;
                 }
             );
+        }
+
+        // ---- 同名裁决 (计划 PRM-5) ----
+        // 优先级数字小的先注册 (会话/项目 < 用户 < 插件 < 内置): 同名技能只保留
+        // 优先级最高的一份, 其余记为被遮蔽并记日志 —— 模型与 UI 看到的清单里
+        // 每个名字只有一条, 且带来源
+        shadowedSkills_.clear();
+        if (!loadedOrder.empty()) {
+            std::stable_sort(
+                loadedOrder.begin(),
+                loadedOrder.end(),
+                [](const LoadedEntry& a, const LoadedEntry& b) {
+                    return a.priority < b.priority;
+                }
+            );
+            std::map<std::string, std::string, std::less<>> winnerOf; // name -> dirpath
+            for (const auto& loaded : loadedOrder) {
+                auto itData = loadedData.find(loaded.dirpath);
+                if (itData == loadedData.end()) {
+                    continue;
+                }
+                const auto& name = itData->second.name;
+                if (name.empty()) {
+                    continue;
+                }
+                if (auto itWin = winnerOf.find(name); itWin != winnerOf.end()) {
+                    shadowedSkills_.push_back(
+                        std::array<std::string, 3>{name, loaded.dirpath, itWin->second}
+                    );
+                    XX_LOGW(
+                        "[skill] skill '{}' from '{}' shadowed by '{}' (existing source: {})",
+                        name,
+                        loaded.dirpath,
+                        itWin->second,
+                        itData->second.source
+                    );
+                    loadedData.erase(itData);
+                } else {
+                    winnerOf[name] = loaded.dirpath;
+                }
+            }
         }
 
         // 加载完成, 整体替换缓存
@@ -235,21 +300,77 @@ You have access to a skills library that provides specialized capabilities and d
     co_return;
 }
 
+SkillMiddlewareHandle::SkillMiddlewareHandle(
+    const std::vector<std::string>&             in_initSkillDirPaths,
+    std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+    int                                         in_priority,
+    std::string_view                            in_source
+) :
+    BaseMiddlewareHandle<SkillMiddlewareState>("SkillMiddlewareHandle", in_agentContext) {
+    skillDirs.reserve(in_initSkillDirPaths.size());
+    for (const auto& path : in_initSkillDirPaths) {
+        if (!path.empty()) {
+            skillDirs.push_back(SkillDirEntry{
+                .path     = path,
+                .priority = in_priority,
+                .source   = std::string{in_source}
+            });
+        }
+    }
+}
+
+std::vector<std::string> SkillMiddlewareHandle::skillDirPathList() const {
+    std::vector<std::string> paths;
+    paths.reserve(skillDirs.size());
+    for (const auto& dir : skillDirs) {
+        paths.push_back(dir.path);
+    }
+    return paths;
+}
+
 void SkillMiddlewareHandle::addSkillDirs(std::vector<std::string> paths) {
+    // 插件贡献的目录: 优先级低于项目/用户配置 (数字大 = 优先级低)
+    addSkillDirs(std::move(paths), 100, "plugin");
+}
+
+void SkillMiddlewareHandle::addSkillDirs(
+    std::vector<std::string> paths,
+    int                      priority,
+    std::string_view         source
+) {
     bool changed = false;
     for (auto& p : paths) {
         if (p.empty()) {
             continue;
         }
         // 去重: 与 yaml 主配置/已注册目录重复时不重复扫描
-        if (std::find(skillDirPaths.begin(), skillDirPaths.end(), p) == skillDirPaths.end()) {
-            skillDirPaths.push_back(std::move(p));
+        const bool exists = std::any_of(
+            skillDirs.begin(),
+            skillDirs.end(),
+            [&](const SkillDirEntry& dir) {
+                return dir.path == p;
+            }
+        );
+        if (!exists) {
+            skillDirs.push_back(SkillDirEntry{
+                .path     = std::move(p),
+                .priority = priority,
+                .source   = std::string{source}
+            });
             changed = true;
         }
     }
     if (!changed) {
         return;
     }
+    // 按优先级排序 (数字小的优先; 同优先级保持注册顺序, 先注册的先扫描)
+    std::stable_sort(
+        skillDirs.begin(),
+        skillDirs.end(),
+        [](const SkillDirEntry& a, const SkillDirEntry& b) {
+            return a.priority < b.priority;
+        }
+    );
     ++resourceEpoch;
     // 未加载过 → 首轮自然全量加载; 已加载 → 置重载标记下次轮次重扫
     needReloadSkillMetadata = haveLoadSkillMetadata;
@@ -258,9 +379,15 @@ void SkillMiddlewareHandle::addSkillDirs(std::vector<std::string> paths) {
 void SkillMiddlewareHandle::removeSkillDirs(const std::vector<std::string>& paths) {
     bool changed = false;
     for (const auto& p : paths) {
-        auto it = std::find(skillDirPaths.begin(), skillDirPaths.end(), p);
-        if (it != skillDirPaths.end()) {
-            skillDirPaths.erase(it);
+        auto it = std::find_if(
+            skillDirs.begin(),
+            skillDirs.end(),
+            [&](const SkillDirEntry& dir) {
+                return dir.path == p;
+            }
+        );
+        if (it != skillDirs.end()) {
+            skillDirs.erase(it);
             changed = true;
         }
     }

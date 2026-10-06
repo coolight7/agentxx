@@ -9,6 +9,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/prompt.h"
+#include "agentxx/middlewares/skill.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/redirect_error.hpp>
@@ -366,6 +367,96 @@ asio::awaitable<void> test_request_structure_and_stable_prefix() {
     removeTempRoot(root);
 }
 
+// ---------------------------------------------------------------------------
+// 3. 技能同名裁决 (计划 PRM-5): 优先级高者生效, 来源展示给模型
+// ---------------------------------------------------------------------------
+
+/// 取 agent 装配的技能中间件 (未装配返回 nullptr)
+agentxx::middleware::SkillMiddlewareHandle* findSkillMiddleware(agentxx::agent::CodeAgent& agent) {
+    auto ctx = agent.agentContext;
+    if (!ctx || !ctx->middlewareHandleContext) {
+        return nullptr;
+    }
+    for (auto& handle : ctx->middlewareHandleContext->handles) {
+        if (auto* skill
+            = dynamic_cast<agentxx::middleware::SkillMiddlewareHandle*>(handle.get())) {
+            return skill;
+        }
+    }
+    return nullptr;
+}
+
+/// 写一个技能目录 (name 目录 + SKILL.md, 含 metadata)
+void writeSkillDir(const fs::path& parent, const std::string& name, const std::string& description) {
+    const auto dir = parent / name;
+    fs::create_directories(dir);
+    std::ofstream ofs{utilxx_base::utf8ToPath((dir / "SKILL.md").string())};
+    ofs << "---\n";
+    ofs << "name: " << name << "\n";
+    ofs << "description: " << description << "\n";
+    ofs << "---\n\n";
+    ofs << "# " << name << "\n\nBody of " << description << "\n";
+}
+
+asio::awaitable<void> test_skill_name_adjudication() {
+    const auto root = makeTempRoot();
+    // 项目级目录 (优先级 0) 与插件级目录 (优先级 100) 各放一个同名技能
+    const auto projectDir = fs::path{root} / "project-skills";
+    const auto pluginDir  = fs::path{root} / "plugin-skills";
+    fs::create_directories(projectDir);
+    fs::create_directories(pluginDir);
+    writeSkillDir(projectDir, "shared-skill", "PROJECT-VERSION-DESC");
+    writeSkillDir(pluginDir, "shared-skill", "PLUGIN-VERSION-DESC");
+    writeSkillDir(pluginDir, "plugin-only", "PLUGIN-ONLY-DESC");
+
+    agentxx::agent::AgentConfig tweaks;
+    tweaks.skillDirPaths.push_back(projectDir.string());
+
+    auto fx = co_await makeFixture("skill-priority-session", tweaks);
+
+    // 插件 (或宿主) 再注册一个低优先级目录
+    auto* skillMiddleware = findSkillMiddleware(*fx->agent);
+    XX_TEST_EXPECT_TRUE(skillMiddleware != nullptr);
+    if (!skillMiddleware) {
+        removeTempRoot(root);
+        co_return;
+    }
+    skillMiddleware->addSkillDirs({pluginDir.string()}, 100, "plugin");
+    XX_TEST_EXPECT_EQ(skillMiddleware->skillDirPathList().size(), size_t{2});
+
+    co_await runOneTurn(fx, "first turn");
+
+    // 同名技能只保留高优先级的一份: 项目级正文出现, 插件级正文不出现;
+    // 插件目录里只剩不同名的那一个 (清单里每个名字一条)
+    const auto request = g_da_sim_last_request.dump();
+    XX_TEST_EXPECT_EQ(countOccurrences(request, "PROJECT-VERSION-DESC"), size_t{1});
+    XX_TEST_EXPECT_EQ(countOccurrences(request, "PLUGIN-VERSION-DESC"), size_t{0});
+    XX_TEST_EXPECT_EQ(countOccurrences(request, "plugin-skills"), size_t{1});
+    XX_TEST_EXPECT_EQ(countOccurrences(request, "project-skills"), size_t{1});
+    // 不同名技能都保留 (插件级也能生效)
+    XX_TEST_EXPECT_TRUE(request.find("plugin-only") != std::string::npos);
+    // 来源展示给模型
+    XX_TEST_EXPECT_TRUE(request.find("source: config") != std::string::npos);
+
+    // 被遮蔽的技能记录在案 (诊断/UI 展示)
+    const auto& shadowed = skillMiddleware->shadowedSkills();
+    XX_TEST_EXPECT_EQ(shadowed.size(), size_t{1});
+    if (shadowed.size() == 1) {
+        XX_TEST_EXPECT_EQ(shadowed[0][0], std::string{"shared-skill"});
+        XX_TEST_EXPECT_TRUE(shadowed[0][1].find("plugin-skills") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(shadowed[0][2].find("project-skills") != std::string::npos);
+    }
+
+    // 摘除高优先级目录后, 同名技能由插件级目录接管 (重扫后生效)
+    skillMiddleware->removeSkillDirs({projectDir.string()});
+    co_await runOneTurn(fx, "second turn");
+    const auto request2 = g_da_sim_last_request.dump();
+    XX_TEST_EXPECT_TRUE(request2.find("PLUGIN-VERSION-DESC") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(skillMiddleware->shadowedSkills().empty());
+
+    removeTempRoot(root);
+}
+
 } // namespace
 
 TestResult testPromptSectionOrder() {
@@ -378,6 +469,7 @@ asio::awaitable<TestResult> run_prompt_stability_tests() {
     const int passedBefore = g_pr_passed;
     const int failedBefore = g_pr_failed;
     co_await test_request_structure_and_stable_prefix();
+    co_await test_skill_name_adjudication();
     co_return TestResult{g_pr_passed - passedBefore, g_pr_failed - failedBefore};
 }
 

@@ -26,7 +26,7 @@
 | PRM-1 | stablePrefix/dynamicSuffix | P0 | 完成（已构建 + 测试通过） | `context.cpp`（稳定段/动态段分离）、`modelcall.cpp`（末尾动态消息 + 稳定段哈希） |
 | PRM-2 | 段落排序号和固定槽位（限定：只加 order） | P1 | 完成（已构建 + 测试通过） | `prompt.{h,cpp}`（`PromptSectionMeta` / `setAppendSection` / `orderedAppendSections`） |
 | PRM-7 | 提示词和请求体快照（限定：结构断言 + 稳定段哈希） | P1 | 完成（已构建 + 测试通过） | 测试模块 `prompt_stability` / `prompt_stability_io` |
-| PRM-5 | 技能优先级和同名裁决 | P1 | 待完成 | — |
+| PRM-5 | 技能优先级和同名裁决 | P1 | 完成（已构建 + 测试通过） | `middlewares/skill.{h,cpp}`（`SkillDirEntry` 优先级 + 同名裁决 + 来源展示） |
 | CTX-7 | 附件引用而不是反复内联 Base64 | P1 | 待完成（计划标注"需进一步理解实施内容"，先不动） | — |
 | STO-12 | 会话检索和标题 | P1 | 存储层完成（界面入口待接） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions` |
 | STO-13 | 会话导出和取证包 | P2 | 待完成 | — |
@@ -450,7 +450,6 @@
 
 ## 待完成（后续阶段）
 
-- PRM-5：技能优先级与同名裁决（会话/项目 > 用户 > 插件/内置，同名取最高优先级并显示来源）。
 - TOOL-16：按规范化路径排队执行（与 TOOL-1 并行化配套）。
 - 批次 A 余项：CFG-1（结构化配置校验）、UI-2 + TST-5（UI 快照夹具）、PRO-4（schema 生成）、
   TST-8（一键门禁）、LLM-13（HTTP 录制回放）。
@@ -528,6 +527,7 @@
 - 阶段 K（LOOP-1 / LOOP-2 / LOOP-3 / LOOP-4 / LOOP-11）完成后提交：`输入投递: 持久化收件箱、投递模式与队列状态机 (LOOP-1/2/3/4/11)`。
 - 阶段 L（STO-4 / STO-5 / STO-9）完成后提交：`展示历史序号与增量补拉、落盘分级、写失败降级提示 (STO-4/STO-5/STO-9)`。
 - 阶段 M（PRM-1 / PRM-2 / PRM-7）完成后提交：`提示词稳定段与动态段分离、段落排序、请求体结构断言 (PRM-1/PRM-2/PRM-7)`。
+- 阶段 M 补充（PRM-5）完成后提交：`技能优先级与同名裁决 (PRM-5)`。
 
 ## 阶段 M：提示词稳定段与动态段（PRM-1/PRM-2/PRM-7，2026-10-06）
 
@@ -595,7 +595,24 @@
   统一按"稳定段 + 末尾动态消息"装配；稳定段变化经 `stablePrefixChanges` 计数 + 日志暴露。
 - 动态段的 `source` 目前由中间件固定写入（`memory` / `skills`）；插件若需要贡献动态段，
   仍应经 `appendSystemPrompts`（静态段）或后续扩展该 map（未在本轮开放插件接口）。
-- PRM-5（技能优先级与同名裁决）本轮未实施，仍列为待完成项。
+### 阶段 M 补充：技能优先级与同名裁决（PRM-5，2026-10-06）
+
+- **扫描目录带优先级与来源**（`SkillDirEntry{path, priority, source}`）：
+  - 构造时传入的配置目录（项目/用户）= 优先级 0、来源 `config`；
+    `addSkillDirs(paths)` 兼容旧调用方，按插件语义（优先级 100、来源 `plugin`）；
+    新增 `addSkillDirs(paths, priority, source)` 供会话/项目级（0）、内置（200）等使用；
+  - 目录列表按优先级稳定排序（数字小的优先），子目录扫描继承根目录的优先级与来源。
+- **同名裁决**：加载完成后按优先级顺序遍历，同名技能只保留优先级最高的一份，
+  其余从缓存移除并记入 `shadowedSkills_`（`{技能名, 被遮蔽目录, 生效目录}`）与警告日志；
+  摘除高优先级目录后（重扫）由次高优先级接管。
+- **来源展示**：技能清单每条新增 `source:` 行（无来源时显示 `builtin`），
+  模型与 UI 都能看到技能来自哪一级；`skillDirPathList()` 保持原返回值形态（供测试/诊断）。
+- 测试：`prompt_stability_io` 补用例（项目级 0 与插件级 100 同名技能并发；
+  断言清单里高优先级正文出现、低优先级正文不出现、被遮蔽记录内容正确、
+  摘除高优先级目录后低优先级接管），模块 32/0。
+
+验证：`prompt_stability` 19/0、`prompt_stability_io` 32/0、`plugins` 541/0、
+`plugin_resources` 89/0、`agent` 198/0、`summarization` 445/0。
 
 ## 阶段 L：持久化语义与断线增量补拉（STO-4/STO-5/STO-9，2026-10-06）
 

@@ -2,6 +2,7 @@
 
 #include "agentxx/middlewares/middleware.h"
 #include "asio/io_context.hpp"
+#include <array>
 #include <cstdint>
 #include <map>
 #include <neograph/neograph.h>
@@ -59,6 +60,22 @@ public:
 
     /// SKILL.md text conetnt
     std::string mdText;
+
+    /// 所属扫描目录的优先级 (数字小的优先; 计划 PRM-5)
+    int priority = 0;
+
+    /// 来源标识 (config / project / user / plugin / builtin; 展示给模型与 UI)
+    std::string source;
+};
+
+/// skill 扫描目录条目 (计划 PRM-5: 优先级与来源)
+/// - `priority` 小的先注册; 同名技能由优先级小(高)的一个生效,
+///   其余记为被遮蔽 (shadowed) 供诊断展示
+/// - 约定优先级: 会话/项目 0, 用户配置 10, 插件 100, 内置 200
+struct SkillDirEntry {
+    std::string path;
+    int         priority = 0;
+    std::string source   = "config";
 };
 
 class _SkillContext {
@@ -127,10 +144,14 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
 
     /// skill 扫描目录列表 (可变: 支持插件运行期追加/摘除 —— 见 addSkillDirs/
     /// removeSkillDirs; 仅 io 线程读写, 与轮次执行同线程无锁)
-    std::vector<std::string> skillDirPaths;
+    /// - 顺序即优先级顺序 (先注册的优先); 同名技能取最先注册的目录
+    std::vector<SkillDirEntry> skillDirs;
 
     _SkillContext skillCache{};
     bool          haveLoadSkillMetadata = false;
+
+    /// 被同名高优先级技能遮蔽的技能 ({技能名, 被遮蔽目录, 生效目录}; 计划 PRM-5)
+    std::vector<std::array<std::string, 3>> shadowedSkills_;
 
     /// 是否需要重扫 (插件运行期增删扫描目录后置位; 下次 onAgentcallStartFunc 全量重扫)
     bool needReloadSkillMetadata = false;
@@ -142,10 +163,10 @@ public:
 
     SkillMiddlewareHandle(
         const std::vector<std::string>&             in_initSkillDirPaths,
-        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
-    ) :
-        BaseMiddlewareHandle<SkillMiddlewareState>("SkillMiddlewareHandle", in_agentContext),
-        skillDirPaths(in_initSkillDirPaths) {}
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
+        int                                         in_priority = 0,
+        std::string_view                            in_source   = "config"
+    );
 
     std::string formatSkillsMetadataList();
 
@@ -160,14 +181,22 @@ public:
     /// 动态追加 skill 扫描目录 (插件声明/运行时注册)
     /// - 元数据未加载: 直接并入列表, 首轮懒加载自然包含
     /// - 已加载: 置重载标记 + 递增纪元, 下次轮次开始全量重扫 (缓存失效自愈)
+    /// - 默认按"插件"来源与优先级 (插件贡献的目录优先级低于项目/用户配置)
     void addSkillDirs(std::vector<std::string> paths);
+
+    /// 追加扫描目录并指定优先级/来源 (计划 PRM-5; 数字小的优先)
+    void addSkillDirs(std::vector<std::string> paths, int priority, std::string_view source);
 
     /// 摘除扫描目录并置重载标记 (io 线程; 缓存随下次轮次重建)
     void removeSkillDirs(const std::vector<std::string>& paths);
 
     /// 当前扫描目录列表 (测试/调试用)
-    const std::vector<std::string>& skillDirPathList() const {
-        return skillDirPaths;
+    std::vector<std::string> skillDirPathList() const;
+
+    /// 被同名高优先级技能遮蔽的技能 (诊断/UI 展示用)
+    /// - 每项: {技能名, 被遮蔽目录, 生效目录}
+    const std::vector<std::array<std::string, 3>>& shadowedSkills() const {
+        return shadowedSkills_;
     }
 };
 
