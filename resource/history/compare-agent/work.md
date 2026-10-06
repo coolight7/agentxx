@@ -39,6 +39,7 @@
 | CFG-1 | 结构化配置校验（限定范围） | P0 | 完成（已构建 + 测试通过） | `include/agentxx/agent/config_validation.h` + `src/agent/config_validation.cpp`、`config.cpp`、`client/main.cpp` |
 | UI-2 | UI 快照夹具（含 TST-5） | P0 | 完成（已构建 + 测试通过） | `test/client/test_ui_snapshot.cpp` + `include/agentxx-test/client/ui_snapshot.h` + 基线 `test/snapshots/ui/`（模块 `ui_snapshot`） |
 | TST-8 | 一键质量门禁 | P0 | 完成 | `agent/script/gate.sh`、`agent/script/gate.ps1` |
+| TOOL-16 | 按规范化路径排队执行 | P1 | 完成（已构建 + 测试通过） | `plugins/agentxx_filesystem/filesystem_impl.h`（`PathLockTable`/`lockPathBlocking`/`lockPathAsync`）；模块 `filesystem` |
 | PLG-10 | 插件装载耗时与注册计数（限定范围） | P2 | 完成（已构建 + 测试通过） | `plugin_manager.h`（`PluginListView` 诊断字段）、`plugin_manager_lifecycle.cpp` |
 | SEC-9 | 安全责任与边界文档 | P0 | 完成 | `docs/zh-cn/design/security.md` |
 | TST-13 | 单一实施状态清单 | P1 | 完成 | `docs/zh-cn/design/roadmap.md` |
@@ -538,6 +539,8 @@
 - 全量回归与测试夹具修正完成后提交：`修正测试夹具内存生命周期与只读工具自动摘要预期`。
 - 阶段 N（ARC-6 / TOOL-12 / CFG-3 / PLG-10）完成后提交：`启动装配快照与 --dump-config、插件装载耗时与注册计数 (ARC-6/TOOL-12/CFG-3/PLG-10)`。
 - 阶段 O（CFG-1）完成后提交：`配置结构化校验: 键路径/严重级别/来源, 路径与权限组合检查 (CFG-1)`。
+- 阶段 P（UI-2 / TST-5 / TST-8）完成后提交：`UI 快照夹具与一键门禁脚本 (UI-2/TST-5/TST-8)`。
+- 阶段 Q（TOOL-16）完成后提交：`按规范化文件路径排队执行写/改操作 (TOOL-16)`。
 
 ## 阶段 P：UI 快照夹具与一键门禁（UI-2 / TST-5 / TST-8，2026-10-06）
 
@@ -1007,3 +1010,55 @@
 最后做 LOOP-1（`session_input` 表 + 恢复时不自动重放副作用）。`next-step`（下一个安全
 modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入队列"入口，建议与 CTX/PRM
 的动态段一起设计，避免二次改请求装配。
+
+## 阶段 Q：按规范化路径排队执行（TOOL-16，2026-10-06）
+
+计划依据：`plan.md` §5.2 TOOL-16（核定形态修正：**不做互斥锁对象**，改为"按规范化文件路径
+排队执行（进程全局队列，与会话无关），保护读-改-写"，与 TOOL-1 工具并行化配套落地）。
+
+已完成（`agent/plugins/agentxx_filesystem/filesystem_impl.h` 的 `detail` 段）：
+
+- **路径门闩表 `PathLockTable`**（进程内按动态库共享）：
+  - 表项 = `mutex + locked 标记 + 引用计数`；`acquireEntry` 取用（引用计数 +1），
+    `release` 归还（引用计数归零且未加锁时立即删除表项）—— 不会随"历史上访问过的
+    路径数"增长，`entryCount()` 供测试断言"用完即删"；
+  - `Lease` 为 RAII 凭证：析构即解锁并归还表项，异常/取消路径同样释放。
+- **规范化路径键 `pathLockKey`**：`weakly_canonical`（解析已存在部分的软链接与 `..`）+
+  词法归一，使 `a/b/../x.txt`、`a//x.txt`、绝对路径等写法落到同一把门闩。
+- **两种获取方式共用同一 `locked` 标记**：
+  - `lockPathBlocking`（同步实现用：1ms 间隔重试，单文件操作毫秒级，等待时间可忽略）；
+  - `lockPathAsync`（协程实现用：`steady_timer` 1ms 间隔重试，不阻塞 io 线程）。
+- **接入点 4 处**：`fileWriteExecuteImpl` / `fileEditExecuteImpl`（同步兜底路径）与
+  `fileWriteExecuteAsyncImpl` / `fileEditExecuteAsyncImpl`（协程路径）在执行前获取门闩，
+  覆盖"存在性检查 + 写入"与"读-改-写整段"；只读工具（list/read/glob/grep）不获取门闩
+  （它们本就声明并行安全，门闩只解决写-写 / 写-改冲突）。
+- **与"多实例三铁律"的关系**（注释中写明）：门闩不是插件实例状态，而是"同一文件的互斥"
+  —— 同一动态库内多个插件实例（多个 agent 宿主）写同一文件时**本就应当**排队，
+  因此这里刻意共用一张表；表内只存瞬时状态、用完即删。
+
+测试（`agent/test/core/test_filesystem_tools.cpp` 新增 `test_path_queue_serializes_read_modify_write`，模块 `filesystem` 147 项断言）：
+
+- 路径键归一：三种等价写法同键、不同文件不同键；
+- 门闩互斥：持有期间第二次获取不完成（等待 100ms 仍被挡住），释放后立即完成；
+- 端到端：两次并发 `edit` 抢同一文件 → **恰好一次成功、一次报 `No match`**，
+  文件内容等于其中一次的替换结果（不出现两次都成功而互相覆盖的丢失更新）；
+- 不同路径互不阻塞（两个文件各写一次都成功）；同步实现共用同一门闩；
+- 全部操作结束后 `entryCount() == 0`（表已清空）。
+
+验证：
+
+- 构建：`agentxx_test` 与插件目标 `agentxx_filesystem`（含内置合并形态）均 exit=0。
+- 测试：`filesystem` 147/0、`command` 49/0、`boundaries` 8/0。
+- **负面验证（断言确实能失败）**：临时注释掉协程 edit 的门闩获取后重跑，模块报
+  `passed=145 failed=2`（`successCount == 2`、`noMatchCount == 0`），恢复后回到 147/0
+  —— 即"去掉该机制时测试会红"。
+
+注意事项 / 与计划的差异：
+
+- 计划原文写"加短生命周期 mutex …不做全局无限增长 map"：实现保持"短生命周期表项 +
+  引用计数归零即删"，但**同步与协程两种执行体共用同一个 `locked` 标记**（不是两套锁），
+  因此同步路径与协程路径同时使用时也不会互相越过。
+- 等待策略是"1ms 间隔重试"而非严格 FIFO 唤醒：单文件写操作在毫秒级，重试次数极小且
+  行为更简单；不引入"队首票据 + 定时器唤醒"那套机制（避免取消路径下的悬挂票据问题）。
+- 门闩只覆盖内置 filesystem 插件的写/改工具；其他写文件的路径（如命令执行）不在其内，
+  属已知边界（它们不共享同一实现）。

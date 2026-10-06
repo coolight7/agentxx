@@ -10,6 +10,7 @@
 #include "asio/read.hpp"
 #include "asio/read_until.hpp"
 #include "asio/redirect_error.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/stream_file.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
@@ -31,12 +32,15 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace agentxx_fs_plugin {
@@ -85,6 +89,178 @@ inline std::string toUtf8(const std::filesystem::path& p) {
 ///   为空时回退进程 cwd (resolvedWorkDir 兜底, 与单参 toCurrentSystemAbsolutePath 一致)
 inline std::string wsAbs(const std::string& workDir, const std::string& path) {
     return utilxx_base::toCurrentSystemAbsolutePath(path, workDir);
+}
+
+// ---------------------------------------------------------------------------
+// 按规范化文件路径排队执行 (计划 TOOL-16)
+//
+// 目的: 写文件与"读-改-写"(edit) 操作在同一进程内按**规范化绝对路径**互斥, 避免
+// 两个会话(或同一会话的两次工具调用) 并发改同一文件时互相覆盖 (丢失更新)。
+//
+// 形状与边界:
+// - 表是按路径的短生命周期门闩, **不属于插件实例状态**: 同一动态库内所有实例共享
+//   同一张表 —— 这正是需要的行为 (两个 agent 实例写同一文件同样要排队);
+// - 表项只保存 `mutex + locked 标记 + 引用计数`, 引用计数归零且未加锁时立即删除,
+//   不会随"历史上访问过的路径数"增长 (见 [pathLockStats] 的 entries 计数);
+// - 同步执行体用阻塞等待, 协程执行体用 1ms 间隔的 try-lock 轮询 (单个文件操作通常
+//   在毫秒级, 轮询次数可忽略); 两者共用同一个 locked 标记, 因此不会同时进入;
+// - 只读操作 (list/read/glob/grep) 不加门闩: 它们本就声明并行安全, 且门闩只解决
+//   "写-写/写-改" 冲突, 读到的中间态由调用方的调用顺序决定。
+// ---------------------------------------------------------------------------
+
+/// 规范化路径键: 已存在部分解析软链接/`..` (weakly_canonical), 其余按词法归一
+/// - 同一文件的不同写法 (相对/绝对/`..`/软链接) 归一到同一把门闩
+inline std::string pathLockKey(std::string_view absolutePath) {
+    auto            p  = utilxx_base::utf8ToPath(std::string{absolutePath});
+    std::error_code ec;
+    auto            canonical = std::filesystem::weakly_canonical(p, ec);
+    if (ec) {
+        canonical = p.lexically_normal();
+    } else {
+        canonical = canonical.lexically_normal();
+    }
+    return utilxx_base::pathToUtf8Generic(canonical);
+}
+
+/// 路径门闩表 (进程内按动态库共享)
+class PathLockTable {
+public:
+
+    struct Entry {
+        std::mutex mutex;
+        bool       locked = false;
+        size_t     refs   = 0;
+    };
+
+    /// 单个路径的持有凭证 (RAII): 析构即解锁并归还表项
+    class Lease {
+    public:
+
+        Lease(std::shared_ptr<Entry> entry, std::string key) :
+            entry_(std::move(entry)),
+            key_(std::move(key)) {}
+
+        ~Lease() {
+            if (!entry_) {
+                return;
+            }
+            {
+                std::lock_guard<std::mutex> lock(entry_->mutex);
+                entry_->locked = false;
+            }
+            PathLockTable::instance().release(key_, entry_);
+        }
+
+        Lease(const Lease&)            = delete;
+        Lease& operator=(const Lease&) = delete;
+
+        /// 是否真正持有门闩 (暂不支持超时, 恒为 true; 保留接口便于将来扩展)
+        bool ownsLock() const noexcept {
+            return entry_ != nullptr;
+        }
+
+        const std::string& key() const noexcept {
+            return key_;
+        }
+
+    private:
+
+        std::shared_ptr<Entry> entry_;
+        std::string            key_;
+    };
+
+    static PathLockTable& instance() {
+        static PathLockTable table;
+        return table;
+    }
+
+    /// 取表项 (引用计数 +1; 不存在则创建)
+    std::shared_ptr<Entry> acquireEntry(const std::string& key) {
+        std::lock_guard<std::mutex> lock(tableMutex_);
+        auto&                       slot = table_[key];
+        if (!slot) {
+            slot = std::make_shared<Entry>();
+        }
+        slot->refs++;
+        return slot;
+    }
+
+    /// 归还表项 (引用计数 -1; 归零且未加锁时删除, 避免表无限增长)
+    void release(const std::string& key, const std::shared_ptr<Entry>& entry) {
+        std::lock_guard<std::mutex> lock(tableMutex_);
+        auto                        it = table_.find(key);
+        if (it == table_.end()) {
+            return;
+        }
+        if (entry && entry->refs > 0) {
+            entry->refs--;
+        }
+        if (it->second && it->second->refs == 0) {
+            bool locked = false;
+            {
+                std::lock_guard<std::mutex> entryLock(it->second->mutex);
+                locked = it->second->locked;
+            }
+            if (!locked) {
+                table_.erase(it);
+            }
+        }
+    }
+
+    /// 表内条目数 (测试断言"用完即删")
+    size_t entryCount() {
+        std::lock_guard<std::mutex> lock(tableMutex_);
+        return table_.size();
+    }
+
+private:
+
+    PathLockTable() = default;
+
+    std::mutex                                              tableMutex_;
+    std::map<std::string, std::shared_ptr<Entry>, std::less<>> table_;
+};
+
+/// 同步获取路径门闩 (阻塞直到拿到)
+inline std::shared_ptr<PathLockTable::Lease> lockPathBlocking(const std::string& absolutePath) {
+    const auto                    key   = pathLockKey(absolutePath);
+    std::shared_ptr<PathLockTable::Entry> entry = PathLockTable::instance().acquireEntry(key);
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(entry->mutex);
+            if (!entry->locked) {
+                entry->locked = true;
+                return std::make_shared<PathLockTable::Lease>(entry, key);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+}
+
+/// 协程获取路径门闩 (等待时按 1ms 间隔重试)
+inline asio::awaitable<std::shared_ptr<PathLockTable::Lease>>
+    lockPathAsync(std::string absolutePath) {
+    const auto                              key   = pathLockKey(absolutePath);
+    std::shared_ptr<PathLockTable::Entry>   entry = PathLockTable::instance().acquireEntry(key);
+    const auto                              executor = co_await asio::this_coro::executor;
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(entry->mutex);
+            if (!entry->locked) {
+                entry->locked = true;
+                co_return std::make_shared<PathLockTable::Lease>(entry, key);
+            }
+        }
+        asio::steady_timer timer{executor};
+        timer.expires_after(std::chrono::milliseconds{1});
+        utilxx_base::AsioErrorCode ec;
+        co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+    }
+}
+
+/// 路径门闩表统计 (测试用: entries 应当在使用结束后回到 0)
+inline PathLockTable& pathLockTable() {
+    return PathLockTable::instance();
 }
 
 /// 将文本中的 CRLF (`\r\n`) 行尾统一转换为 LF (`\n`)。
@@ -696,6 +872,8 @@ inline std::string fileWriteExecuteImpl(
 
     std::ofstream stream;
     auto          path = utilxx_base::utf8ToPath(filepath);
+    // 按规范化路径排队 (计划 TOOL-16): 存在性检查与写入必须相对其它写者原子
+    auto pathLease = detail::lockPathBlocking(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
@@ -762,6 +940,8 @@ inline std::string fileEditExecuteImpl(
     detail::normalizeCrlfToLf(new_str);
 
     auto            path = utilxx_base::utf8ToPath(filepath);
+    // 按规范化路径排队 (计划 TOOL-16): 读-改-写整段相对其它写者原子
+    auto            pathLease = detail::lockPathBlocking(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
     if (fsEc) {
@@ -1743,6 +1923,8 @@ inline asio::awaitable<std::string>
 
     // 存在性检查与父目录创建: 快速元数据操作, 与原实现一致内联执行
     auto path = utilxx_base::utf8ToPath(filepath);
+    // 按规范化路径排队 (计划 TOOL-16): 存在性检查与写入必须相对其它写者原子
+    auto            pathLease = co_await detail::lockPathAsync(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
@@ -1811,6 +1993,8 @@ inline asio::awaitable<std::string>
     detail::normalizeCrlfToLf(new_str);
 
     auto            path = utilxx_base::utf8ToPath(filepath);
+    // 按规范化路径排队 (计划 TOOL-16): 读-改-写整段相对其它写者原子
+    auto            pathLease = co_await detail::lockPathAsync(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
     if (fsEc) {

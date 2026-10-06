@@ -10,6 +10,10 @@
 #include "agentxx_filesystem/agentxx_fs_plugin.h" // 渲染摘要 helper (parseEditReplaceHits)
 #include "agentxx_filesystem/filesystem_impl.h"
 #include "utilxx_base/string_util.h"
+#include <asio/experimental/concurrent_channel.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/this_coro.hpp>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -3235,6 +3239,195 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 按规范化路径排队执行 (计划 TOOL-16)
+///
+/// 覆盖:
+/// - 同一文件的两次"读-改-写"并发执行: 只有一次命中 `old_str`, 另一次报
+///   "No match old_str" —— 串行化语义 (不会两个都读旧内容再互相覆盖后都报成功)
+/// - 文件最终内容一致 (等于其中一次替换结果, 不是混写)
+/// - 门闩表用完即删 (`pathLockTable().entryCount()` 回到 0)
+/// - 等价路径写法 (`.` / `..` 归一) 共用同一把门闩; 不同路径互不阻塞
+/// - 同步实现同样参与同一把门闩 (同步写与协程写交替时不会同时进入)
+asio::awaitable<void> test_path_queue_serializes_read_modify_write(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    namespace fs = std::filesystem;
+    auto        dirPath  = testDir + "/路径排队测试目录";
+    auto        filePath = dirPath + "/queue.txt";
+    fs::create_directories(utilxx_base::utf8ToPath(dirPath));
+
+    // 路径键归一: 同一文件的不同写法必须落到同一把门闩
+    const auto keyA = agentxx_fs_plugin::detail::pathLockKey(filePath);
+    const auto keyB = agentxx_fs_plugin::detail::pathLockKey(dirPath + "/sub/../queue.txt");
+    const auto keyC = agentxx_fs_plugin::detail::pathLockKey(dirPath + "//queue.txt");
+    XX_TEST_EXPECT_EQ(keyA, keyB);
+    XX_TEST_EXPECT_EQ(keyA, keyC);
+    XX_TEST_EXPECT_TRUE(keyA != agentxx_fs_plugin::detail::pathLockKey(dirPath + "/other.txt"));
+
+    // 门闩互斥 (直接测门闩本身): 持有时第二次获取不完成, 释放后立即完成
+    {
+        auto lease = co_await agentxx_fs_plugin::detail::lockPathAsync(filePath);
+        XX_TEST_EXPECT_TRUE(lease->ownsLock());
+        XX_TEST_EXPECT_GE(agentxx_fs_plugin::detail::pathLockTable().entryCount(), size_t{1});
+
+        bool        secondAcquired = false;
+        auto        ex             = co_await asio::this_coro::executor;
+        auto        done           = std::make_shared<bool>(false);
+        asio::co_spawn(
+            ex,
+            [&, done]() -> asio::awaitable<void> {
+                auto second = co_await agentxx_fs_plugin::detail::lockPathAsync(filePath);
+                secondAcquired = true;
+                (void)second;
+                co_return;
+            },
+            [done](std::exception_ptr) { *done = true; }
+        );
+        // 让出控制权若干轮: 第二次获取必须仍被挡住
+        for (int i = 0; i < 20; ++i) {
+            asio::steady_timer timer{ex};
+            timer.expires_after(std::chrono::milliseconds{5});
+            utilxx_base::AsioErrorCode ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        }
+        XX_TEST_EXPECT_FALSE(secondAcquired);
+        XX_TEST_EXPECT_FALSE(*done);
+        lease.reset(); // 释放: 第二次获取应当很快完成
+        for (int i = 0; i < 40 && !secondAcquired; ++i) {
+            asio::steady_timer timer{ex};
+            timer.expires_after(std::chrono::milliseconds{5});
+            utilxx_base::AsioErrorCode ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        }
+        XX_TEST_EXPECT_TRUE(secondAcquired);
+    }
+
+    // 端到端: 两次并发 edit 抢同一文件 -> 一次成功、一次报未命中; 内容只被替换一次
+    {
+        auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
+        auto editTool  = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+
+        auto writeRes = co_await writeTool.execute_async(
+            utilxx_base::Json{
+                {"path",      filePath},
+                {"content",   "alpha\nbeta\ngamma\n"},
+                {"overwrite", true},
+        }
+        );
+        XX_TEST_EXPECT_EQ(writeRes, std::string{"success"});
+
+        auto ex = co_await asio::this_coro::executor;
+        auto editArgsA = utilxx_base::Json{
+            {"path",    filePath},
+            {"old_str", "beta"   },
+            {"new_str", "BETA"   },
+        };
+        auto editArgsB = utilxx_base::Json{
+            {"path",    filePath},
+            {"old_str", "beta"   },
+            {"new_str", "beta2"  },
+        };
+        std::string resA;
+        std::string resB;
+        bool        doneA = false;
+        bool        doneB = false;
+        asio::co_spawn(
+            ex,
+            [&]() -> asio::awaitable<void> {
+                resA  = co_await editTool.execute_async(editArgsA);
+                doneA = true;
+                co_return;
+            },
+            asio::detached
+        );
+        asio::co_spawn(
+            ex,
+            [&]() -> asio::awaitable<void> {
+                resB  = co_await editTool.execute_async(editArgsB);
+                doneB = true;
+                co_return;
+            },
+            asio::detached
+        );
+        // 等待两个并发 edit 结束 (两者都在同一 io_context 上交错执行)
+        for (int i = 0; i < 2000 && !(doneA && doneB); ++i) {
+            asio::steady_timer timer{ex};
+            timer.expires_after(std::chrono::milliseconds{2});
+            utilxx_base::AsioErrorCode ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        }
+        XX_TEST_EXPECT_TRUE(doneA);
+        XX_TEST_EXPECT_TRUE(doneB);
+
+        int successCount = 0;
+        int noMatchCount = 0;
+        for (const auto& r : {resA, resB}) {
+            if (r == "success") {
+                successCount++;
+            } else if (r.find("No match") != std::string::npos) {
+                noMatchCount++;
+            }
+        }
+        XX_TEST_EXPECT_EQ(successCount, 1);
+        XX_TEST_EXPECT_EQ(noMatchCount, 1);
+
+        std::ifstream     in{utilxx_base::utf8ToPath(filePath)};
+        const std::string content{
+            std::istreambuf_iterator<char>{in},
+            std::istreambuf_iterator<char>{}
+        };
+        const bool appliedA = content == "alpha\nBETA\ngamma\n";
+        const bool appliedB = content == "alpha\nbeta2\ngamma\n";
+        XX_TEST_EXPECT_TRUE(appliedA || appliedB);
+    }
+
+    // 不同路径互不阻塞: 两个文件的写操作都成功
+    {
+        auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
+        auto resA      = co_await writeTool.execute_async(
+            utilxx_base::Json{
+                {"path",      dirPath + "/a.txt"},
+                {"content",   "A"               },
+                {"overwrite", true              },
+        }
+        );
+        auto resB = co_await writeTool.execute_async(
+            utilxx_base::Json{
+                {"path",      dirPath + "/b.txt"},
+                {"content",   "B"               },
+                {"overwrite", true              },
+        }
+        );
+        XX_TEST_EXPECT_EQ(resA, std::string{"success"});
+        XX_TEST_EXPECT_EQ(resB, std::string{"success"});
+    }
+
+    // 同步实现共用同一把门闩 (引用计数归还后表项删除)
+    {
+        auto syncWriteRes = agentxx_fs_plugin::fileWriteExecute(
+            utilxx_base::Json{
+                {"path",      dirPath + "/sync.txt"},
+                {"content",   "sync"                },
+                {"overwrite", true                  },
+        },
+            agentxx::tools::testResolvedWorkDir(agentContext)
+        );
+        XX_TEST_EXPECT_EQ(syncWriteRes, std::string{"success"});
+        const auto syncEditRes = agentxx_fs_plugin::fileEditExecute(
+            utilxx_base::Json{
+                {"path",    dirPath + "/sync.txt"},
+                {"old_str", "sync"                },
+                {"new_str", "sync-edited"         },
+        },
+            agentxx::tools::testResolvedWorkDir(agentContext)
+        );
+        XX_TEST_EXPECT_EQ(syncEditRes, std::string{"success"});
+    }
+    // 全部操作结束: 门闩表应当已清空 (不随访问过的路径数增长)
+    XX_TEST_EXPECT_EQ(agentxx_fs_plugin::detail::pathLockTable().entryCount(), size_t{0});
+    co_return;
+}
+
 asio::awaitable<TestResult>
     run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     setupTestDir();
@@ -3338,6 +3531,9 @@ asio::awaitable<TestResult>
 
     // 同步兜底路径 (强制关闭文件异步 I/O 后 read/write/edit 走同步实现)
     co_await run(test_sync_fallback_without_async_file_io);
+
+    // 按规范化路径排队执行 (计划 TOOL-16)
+    co_await run(test_path_queue_serializes_read_modify_write);
 
     // 插件真实调用冒烟 (dlopen + 宿主 op_driver 完整流程; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)

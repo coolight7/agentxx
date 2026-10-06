@@ -69,7 +69,7 @@
 | TOOL-1 | 分阶段并行 prepare / dispatch / finalize | 已实施 | `nodes/toolcall.cpp`（prepare/run/finalize 三段）；模块 `toolcall_parallel` |
 | TOOL-2 | 并发分类与上限 | 已实施 | `tools/tool.h`（`supportsParallel`）+ `AgentConfig::toolParallelMaxConcurrency`；插件 flags `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE` |
 | TOOL-3 | 并行取消与收尾 | 已实施 | `nodes/toolcall.cpp`（按声明顺序写回、已完成结果保留、未完成补 `[User canceled]`）；模块 `toolcall_parallel` |
-| TOOL-16 | 按规范化文件路径排队执行 | 待实施 | 文件写工具 |
+| TOOL-16 | 按规范化文件路径排队执行 | 已实施 | `plugins/agentxx_filesystem/filesystem_impl.h`（`PathLockTable` / `lockPathBlocking` / `lockPathAsync`，写与读-改-写共用同一门闩）；模块 `filesystem` |
 | TOOL-17 | 执行环境加固（`NO_COLOR` / `TERM` / `PAGER` / locale） | 已实施 | `plugins/agentxx_execute_command/execute_command_impl.h` |
 | TOOL-12 | 工具可用性诊断（并入 ARC-6 快照） | 已实施（限定范围） | `AgentContext::ToolAssemblyRecord` + `assembly_snapshot.cpp`（来源 / 开关 / 被白名单过滤原因）；模块 `assembly_snapshot_io` |
 | TOOL-4 / TOOL-5 / TOOL-6 / TOOL-7 / TOOL-8 / TOOL-9 / TOOL-10 / TOOL-11 / TOOL-13 / TOOL-15 | 分发层超时 / 结果守卫 / 聚合预算 / 结构化定位符 / 结构化结果 / 单调 guard / 错误状态 / 公告身份 / 审批身份绑定 / 后置上下文 | 不做 | 各工具自带超时、share_store 定位、异常分类已覆盖；插件为受信代码（见 [security.md](security.md)） |
