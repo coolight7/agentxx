@@ -337,6 +337,37 @@ public:
     }
 
     // -------------------------------------------------------------------
+    // 稳定提示前缀指纹 (计划 PRM-1 / PRM-7; 仅 io 线程)
+    //
+    // 请求装配时对"稳定段" (system 消息 + 工具 schema) 取指纹: 连续请求中它不变,
+    // provider 的前缀缓存才有效。变化时计数并记日志, 供排查"缓存命中率突然下降"。
+    // -------------------------------------------------------------------
+
+    /// 记录本次请求的稳定段指纹
+    /// - `return` 是否与上一次不同 (true = 前缀变化, 缓存前缀失效)
+    bool noteStablePrefixHash(uint64_t hash) {
+        assertIoThread();
+        const bool changed = stablePrefixHash_ != 0 && stablePrefixHash_ != hash;
+        if (changed) {
+            ++stablePrefixChanges_;
+        }
+        stablePrefixHash_ = hash;
+        return changed;
+    }
+
+    /// 最近一次请求的稳定段指纹 (0 = 尚未取过)
+    uint64_t stablePrefixHash() const {
+        assertIoThread();
+        return stablePrefixHash_;
+    }
+
+    /// 稳定段变化次数 (诊断/测试)
+    uint64_t stablePrefixChanges() const {
+        assertIoThread();
+        return stablePrefixChanges_;
+    }
+
+    // -------------------------------------------------------------------
     // 持久化语义分级 (计划 STO-5; 仅 io 线程)
     //
     // - persistNow: 用户输入 / 工具结算 / 压缩完成 / 轮次终态等"事实"立即落盘
@@ -469,6 +500,10 @@ private:
     std::string                                   language_;
     /// 最近一次已提示的持久化失败原因 (计划 STO-9; 去重)
     std::string lastPersistWarning_;
+
+    /// 稳定提示前缀指纹与变化次数 (计划 PRM-1/PRM-7; 仅 io 线程)
+    uint64_t stablePrefixHash_    = 0;
+    uint64_t stablePrefixChanges_ = 0;
 
     // -------------------------------------------------------------------
     // LLM 上下文 (唯一权威; 仅 io 线程)
@@ -795,6 +830,29 @@ public:
     /// - `${work_dir}` 取 [getSessionBaseWorkDir] (不含 worktree 绑定), 使进出
     ///   worktree 不改变系统提示词
     std::string buildSystemPrompt(std::string_view sessionId = "") const;
+
+    // -------------------------------------------------------------------
+    // 稳定段 / 动态段分离 (计划 PRM-1)
+    //
+    // 提示词分两部分, 请求装配时分别放置, 保证连续请求的前缀稳定:
+    // - 稳定段 (`buildSystemPromptStable`): systemPrompt + 静态附加段
+    //   (appendSystemPrompts, 按 order 排序) —— 进 system 消息, 内容不随轮次变化
+    // - 动态段 (`buildDynamicContextSections`): 中间件每轮产出的片段
+    //   (记忆文件内容 / 技能清单等), 连同来源标识, 由 modelcall 作为
+    //   **请求末尾的独立消息**附加, 不再插入 system 消息内部
+    // -------------------------------------------------------------------
+
+    /// 稳定段文本 (systemPrompt + 静态附加段; 已做会话级占位符替换)
+    std::string buildSystemPromptStable(std::string_view sessionId = "") const;
+
+    /// 动态段片段 (来源 → 正文; 按来源键名升序稳定排列)
+    /// - 由中间件经 `graphDataKey_appendSystemMessage` 写入 (同来源覆盖, 不累积)
+    std::vector<std::pair<std::string, std::string>>
+        buildDynamicContextSections(std::string_view sessionId = "") const;
+
+    /// 替换提示词里的会话级占位符 (工作目录 / 临时目录 / 会话 ID)
+    std::string renderPromptVars(std::string text, std::string_view sessionId) const;
+
 
 private:
 

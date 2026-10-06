@@ -18,6 +18,9 @@
 namespace agentxx {
 namespace middleware {
 
+/// 动态上下文来源标识 (记忆文件; 见 AgentContext::buildDynamicContextSections)
+static constexpr std::string_view kDynamicSourceMemory = "memory";
+
 asio::awaitable<void>
     MemoryFileMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
     if (memoryFilePaths.empty()) {
@@ -160,13 +163,18 @@ asio::awaitable<void>
     }
 
     if (!state->cacheContextContent.empty()) {
-        auto  agentCtxPtr = agentContext.lock();
-        auto& appendSystemMsgList
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<std::vector<std::string>>(
+        auto agentCtxPtr = agentContext.lock();
+        if (agentCtxPtr && agentCtxPtr->middlewareHandleContext) {
+            // 动态段按来源写入 (计划 PRM-1): 同一来源每轮覆盖, 不再逐轮追加 ——
+            // 旧实现把片段 push_back 进 vector, 每轮都会把上一轮的片段再拼一次,
+            // 系统提示词逐轮变长
+            auto& sections = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<
+                std::map<std::string, std::string, std::less<>>>(
                 in.ctx.thread_id,
                 agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
             );
-        appendSystemMsgList.push_back(state->cacheContextContent);
+            sections[std::string{kDynamicSourceMemory}] = state->cacheContextContent;
+        }
     }
     co_return;
 }

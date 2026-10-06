@@ -247,6 +247,32 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
         }
     }
 
+    // 动态段 (记忆文件 / 技能清单等中间件片段): 作为请求末尾的独立消息附加,
+    // 不插入稳定段内部 (计划 PRM-1)
+    // - 角色用 user: openai-responses 与 anthropic 都会把 system 消息归并到系统
+    //   字段 (放到请求最前面), 用 system 会让动态内容进入前缀, 破坏前缀缓存
+    // - 用来源标签包裹, 模型能看出这是宿主注入的上下文, 不是用户发言
+    // - 只在本请求可见, 不改写会话上下文 (权威 transcript 不含动态段)
+    if (ctxPtr) {
+        auto sections = ctxPtr->buildDynamicContextSections(sessionId);
+        if (!sections.empty()) {
+            std::string dynamic;
+            for (const auto& [source, text] : sections) {
+                dynamic += fmt::format(
+                    "<dynamic_context source=\"{}\">\n{}\n</dynamic_context>\n",
+                    source,
+                    text
+                );
+            }
+            neograph::ChatMessage dynMsg{
+                .role    = "user",
+                .content = std::move(dynamic),
+            };
+            dynMsg.flags = neograph::MessageFlag::AutoInserted;
+            messages.push_back(std::move(dynMsg));
+        }
+    }
+
     neograph::CompletionParams params;
     params.model    = resolveCurrentModelName(sessionId);
     params.messages = std::move(messages);
@@ -254,6 +280,35 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     if (!sessionId.empty()) {
         params.extra_fields[std::string(agentxx::protocol::kExtraFieldSessionId)]
             = std::string{sessionId};
+    }
+
+    // 稳定段指纹 (计划 PRM-1 / PRM-7): system 消息 + 工具 schema
+    // - 连续请求中该指纹不变 = provider 前缀缓存有效; 变化时计数并记日志
+    if (ctxPtr && ctxPtr->sessions && !sessionId.empty()) {
+        if (auto session = ctxPtr->sessions->get(sessionId); session) {
+            uint64_t h = 0;
+            for (const auto& m : params.messages) {
+                if (m.role != "system") {
+                    continue;
+                }
+                h = utilxx_base::hash::fnv1a64(
+                    fmt::format("{}|{}", h, m.content)
+                );
+            }
+            for (const auto& tool : params.tools) {
+                h = utilxx_base::hash::fnv1a64(
+                    fmt::format("{}|{}|{}", h, tool.name, tool.description)
+                );
+            }
+            if (session->noteStablePrefixHash(h)) {
+                XX_LOGI(
+                    "[modelcall] stable prompt prefix changed ({} change(s) so far, session={})"
+                    "; provider prefix cache is invalidated",
+                    session->stablePrefixChanges(),
+                    sessionId
+                );
+            }
+        }
     }
     return params;
 }
@@ -739,7 +794,9 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             newSystemMsg = msgs.front();
         }
         if (agentCtxPtr) {
-            newSystemMsg.content = agentCtxPtr->buildSystemPrompt(in.ctx.thread_id);
+            // 稳定段 (systemPrompt + 静态附加段): 动态段 (记忆/技能) 由 build_params
+            // 作为请求末尾的独立消息附加, 不写进 system 消息 (计划 PRM-1)
+            newSystemMsg.content = agentCtxPtr->buildSystemPromptStable(in.ctx.thread_id);
         }
         if (haveSystemMsg) {
             msgs.front() = std::move(newSystemMsg);

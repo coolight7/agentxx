@@ -561,16 +561,19 @@ mcp:
             XX_TEST_EXPECT_EQ(oversize[0].first, bigPath.string());
             XX_TEST_EXPECT_EQ(oversize[0].second, bigContent.size());
         }
-        // 内容未被截断: 注入的系统消息里仍带整份文件
+        // 内容未被截断: 注入的动态段里仍带整份文件 (计划 PRM-1: 动态段按来源写入)
         const auto& injected = ctx->middlewareHandleContext
-                                   ->getGraphDataItemValue<std::vector<std::string>>(
+                                   ->getGraphDataItemValue<
+                                       std::map<std::string, std::string, std::less<>>>(
                                        runCtx.thread_id,
                                        agentxx::middleware::MiddlewareContext::
                                            graphDataKey_appendSystemMessage
                                    );
         XX_TEST_EXPECT_FALSE(injected.empty());
-        if (!injected.empty()) {
-            XX_TEST_EXPECT_TRUE(injected.back().find(bigContent) != std::string::npos);
+        auto itMemory = injected.find("memory");
+        XX_TEST_EXPECT_TRUE(itMemory != injected.end());
+        if (itMemory != injected.end()) {
+            XX_TEST_EXPECT_TRUE(itMemory->second.find(bigContent) != std::string::npos);
         }
     }
 

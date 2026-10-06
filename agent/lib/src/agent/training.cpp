@@ -234,11 +234,17 @@ utilxx_base::Json normalizePromptPatch(const utilxx_base::Json& parsed) {
     if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
         utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& item : parsed["appendSystemPrompts"].items()) {
+            // 兼容两种形态: 纯字符串 (旧) 与 {text, order, source} 对象 (PRM-2);
+            // 补丁只带正文 (order/source 由宿主写入, 不参与模型变异)
+            std::string text;
             if (item.second.is_string()) {
-                auto s = item.second.get<std::string>();
-                if (!s.empty()) {
-                    append[item.first] = std::move(s);
-                }
+                text = item.second.get<std::string>();
+            } else if (item.second.is_object() && item.second.contains("text")
+                       && item.second["text"].is_string()) {
+                text = item.second["text"].get<std::string>();
+            }
+            if (!text.empty()) {
+                append[item.first] = std::move(text);
             }
         }
         if (!append.empty()) {

@@ -553,6 +553,17 @@ public:
                 return j.get<std::vector<std::string>>();
             }
             return {};
+        } else if constexpr (std::is_same_v<T, std::map<std::string, std::string, std::less<>>>) {
+            // 来源键 → 文本 的动态段表 (计划 PRM-1: 记忆文件 / 技能清单等片段)
+            std::map<std::string, std::string, std::less<>> out;
+            if (j.is_object()) {
+                for (const auto& item : j.items()) {
+                    if (item.second.is_string()) {
+                        out[item.first] = item.second.get<std::string>();
+                    }
+                }
+            }
+            return out;
         } else if constexpr (std::is_same_v<T, std::vector<neograph::ChatMessage>>) {
             std::vector<neograph::ChatMessage> msgs;
             if (j.is_array()) {

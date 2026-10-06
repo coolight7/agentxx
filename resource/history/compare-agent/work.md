@@ -23,8 +23,11 @@
 | LOOP-3 | 投递结果显式化 | P1 | 完成（已构建 + 测试通过） | `WireInputAck` + `InputStatus` / `InputRejectReason`；TUI 回执提示 |
 | LOOP-4 | QueueState 状态机 | P1 | 完成（已构建 + 测试通过） | `SessionQueueState`（idle/running/paused/draining）+ 队列同步携带状态 |
 | LOOP-11 | `collect` 合并投递 | P1 | 完成（已构建 + 测试通过） | `SessionServerAgentIO::Config::collectWindow` + `flushCollectWindow` |
-| CTX-7 | 附件引用而不是反复内联 Base64 | P1 | 待完成（计划标注"需进一步理解实施内容"，先不动） | — |
+| PRM-1 | stablePrefix/dynamicSuffix | P0 | 完成（已构建 + 测试通过） | `context.cpp`（稳定段/动态段分离）、`modelcall.cpp`（末尾动态消息 + 稳定段哈希） |
+| PRM-2 | 段落排序号和固定槽位（限定：只加 order） | P1 | 完成（已构建 + 测试通过） | `prompt.{h,cpp}`（`PromptSectionMeta` / `setAppendSection` / `orderedAppendSections`） |
+| PRM-7 | 提示词和请求体快照（限定：结构断言 + 稳定段哈希） | P1 | 完成（已构建 + 测试通过） | 测试模块 `prompt_stability` / `prompt_stability_io` |
 | PRM-5 | 技能优先级和同名裁决 | P1 | 待完成 | — |
+| CTX-7 | 附件引用而不是反复内联 Base64 | P1 | 待完成（计划标注"需进一步理解实施内容"，先不动） | — |
 | STO-12 | 会话检索和标题 | P1 | 存储层完成（界面入口待接） | `session_store` 的 `sessionTitle`/`setSessionTitle`/`searchSessions` |
 | STO-13 | 会话导出和取证包 | P2 | 待完成 | — |
 | TOOL-1 | 分阶段并行：prepare/dispatch/finalize | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
@@ -447,12 +450,12 @@
 
 ## 待完成（后续阶段）
 
-- PRM-1/PRM-2/PRM-5/PRM-7：提示词稳定段/动态段、段落 `order`、技能优先级与同名裁决、
-  请求体结构 + 稳定段哈希断言。CTX-7（附件引用）计划本身标注"需进一步理解具体实施内容"，暂缓。
+- PRM-5：技能优先级与同名裁决（会话/项目 > 用户 > 插件/内置，同名取最高优先级并显示来源）。
 - TOOL-16：按规范化路径排队执行（与 TOOL-1 并行化配套）。
 - 批次 A 余项：CFG-1（结构化配置校验）、UI-2 + TST-5（UI 快照夹具）、PRO-4（schema 生成）、
   TST-8（一键门禁）、LLM-13（HTTP 录制回放）。
 - 批次 E：PLG-1/2/4/6/7/8、CFG-9、UI-1/5/9、PRO-3/5/8、RET-1a/STO-12 界面入口、STO-13。
+- CTX-7（附件引用）计划本身标注"需进一步理解具体实施内容"，暂缓。
 - STO-12 的协议/界面入口（改名、搜索框）见"阶段 C"。
 
 ## 与计划的差异（记录用）
@@ -524,6 +527,75 @@
 - 阶段 J（LLM-2 / LLM-3）完成后提交：`LLM 错误分类、退避策略与溢出压缩重试 (LLM-2/LLM-3)`。
 - 阶段 K（LOOP-1 / LOOP-2 / LOOP-3 / LOOP-4 / LOOP-11）完成后提交：`输入投递: 持久化收件箱、投递模式与队列状态机 (LOOP-1/2/3/4/11)`。
 - 阶段 L（STO-4 / STO-5 / STO-9）完成后提交：`展示历史序号与增量补拉、落盘分级、写失败降级提示 (STO-4/STO-5/STO-9)`。
+- 阶段 M（PRM-1 / PRM-2 / PRM-7）完成后提交：`提示词稳定段与动态段分离、段落排序、请求体结构断言 (PRM-1/PRM-2/PRM-7)`。
+
+## 阶段 M：提示词稳定段与动态段（PRM-1/PRM-2/PRM-7，2026-10-06）
+
+计划依据：`plan.md` §3（会话上下文、提示词、技能和记忆）、§16.2 批次 C。
+
+已完成：
+
+- **PRM-2 段落排序号**（限定：只加 `order`，不引入固定槽位枚举）：
+  - `AgentPrompt` 新增 `appendSystemPromptMeta`（键 → `{order, source}`）与
+    `setAppendSection(key, text, order, source)` / `removeAppendSection` /
+    `appendSectionKeys` / `orderedAppendSections`；
+  - 拼接顺序改为 `order` 升序 + 同 order 按键名字典序（**去掉**原先硬编码的
+    planning → skill → codegraph → 其余 的顺序）；`appendSystemPrompts` 仍是
+    `map<string,string>`，旧调用方（插件 iface / 训练 / 测试）零改动；
+  - 序列化：段落写成 `{text, order, source}` 对象，读取时兼容旧的纯字符串形态与
+    `null`(删除)；`promptHash()` 计入 order（且"有无元数据"不影响哈希，保证
+    JSON 往返后哈希一致 —— 训练模块的往返断言依赖此性质）。
+- **PRM-1 稳定段 / 动态段分离**：
+  - `AgentContext::buildSystemPromptStable()`：只含 `systemPrompt` + 静态附加段
+    （按 order 排序），即进 system 消息的部分；
+  - `AgentContext::buildDynamicContextSections()`：中间件每轮产出的片段
+    （记忆文件内容 / 技能清单），**按来源键写入 `graphDataKey_appendSystemMessage`**
+    （键排序 map，同来源覆盖）。这同时修掉一个既有缺陷：旧实现用
+    `vector<string>` 追加，`onAgentcallStartFunc` 每轮 push 一次且无人清理，
+    系统提示词会逐轮累积重复片段（长会话上下文与成本持续膨胀）；
+  - 请求装配（`ModelCallProcessNode`/`build_params`）：动态段作为**请求末尾的独立
+    user 消息**附加，用 `<dynamic_context source="...">` 包裹并标 `AutoInserted`；
+    不写会话上下文（权威 transcript 只存稳定段）。选 user 角色而非 system 的原因：
+    openai-responses 与 anthropic provider 会把 system 消息归并到系统字段（请求最前），
+    那样动态内容会进入前缀、破坏前缀缓存；
+  - 执行流：`baseRun` 写入 system 消息时改用稳定段；
+    `buildSystemPrompt()`（完整段，供 UI/上下文查看）保持不变。
+- **PRM-7 请求体结构 + 稳定段哈希断言**：
+  - `Session::noteStablePrefixHash(hash)` / `stablePrefixHash()` / `stablePrefixChanges()`：
+    请求装配时对 "system 消息 + 工具 schema" 取指纹，变化即记 Info 日志并计数
+    （排查"provider 前缀缓存命中率下降"）；
+  - 测试断言请求体结构（system 只含稳定段、动态段在末尾带来源、工具 schema 非空、
+    记忆内容整条请求只出现一次）与连续两轮稳定段字节一致 + 变化次数为 0。
+
+测试：
+
+- 新模块 `prompt_stability`（19 项断言，同步）：段落排序（含同 order 键名裁决、
+  空段落不参与）、键列表、JSON 往返（新对象形态 + 旧字符串形态 + null 删除）、
+  order 影响哈希。
+- 新模块 `prompt_stability_io`（18 项断言，异步）：真实一轮 + 第二轮请求体断言
+  ——system 不含记忆内容、末尾是 `<dynamic_context source="memory">` 消息、
+  记忆标记全请求只出现 2 次（来源包裹内的正文）、工具 schema 随请求下发、
+  第二轮 system 字节一致、稳定段变化次数 0、会话上下文首条 system 也不含记忆内容。
+- 回归同步调整：`test_summarization`（段落 JSON 读 `text` 字段）、
+  `test_plugin_resources`（动态段按来源 map 读取）、`training.cpp` 的补丁提取
+  兼容两种段落形态。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli`（含 TUI）均 exit=0，无新增 error/warning。
+- 测试：`prompt_stability` 19/0、`prompt_stability_io` 18/0、`agent` 198/0、
+  `summarization` 445/0、`training` 97/0、`plugin_resources` 89/0、`plugin_runtime` 672/0、
+  `plugins` 541/0、`remote_agent` 453/0、`session_sync` 30/0、`input_delivery` 78/0、
+  `persist_semantics` 25/0、`boundaries` 8/0。
+
+注意事项 / 与计划的差异：
+
+- 计划 PRM-1 提到"provider 不支持该形态时才整体重建并记录缓存失效"：本项目三家 provider
+  都接受末尾的 user 消息，因此不做 provider 能力探测（LLM-1 已核定不补能力元数据元数据），
+  统一按"稳定段 + 末尾动态消息"装配；稳定段变化经 `stablePrefixChanges` 计数 + 日志暴露。
+- 动态段的 `source` 目前由中间件固定写入（`memory` / `skills`）；插件若需要贡献动态段，
+  仍应经 `appendSystemPrompts`（静态段）或后续扩展该 map（未在本轮开放插件接口）。
+- PRM-5（技能优先级与同名裁决）本轮未实施，仍列为待完成项。
 
 ## 阶段 L：持久化语义与断线增量补拉（STO-4/STO-5/STO-9，2026-10-06）
 

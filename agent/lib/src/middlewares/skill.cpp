@@ -12,6 +12,9 @@
 namespace agentxx {
 namespace middleware {
 
+/// 动态上下文来源标识 (技能清单; 见 AgentContext::buildDynamicContextSections)
+static constexpr std::string_view kDynamicSourceSkills = "skills";
+
 std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
     std::string oss;
     for (const auto& item : skillCache.skillData) {
@@ -221,12 +224,13 @@ You have access to a skills library that provides specialized capabilities and d
             skillState->cachedResourceEpoch = resourceEpoch;
         }
 
-        auto& appendSystemMsgList
-            = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<std::vector<std::string>>(
-                in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
-            );
-        appendSystemMsgList.push_back(skillState->cacheFormatSkillPrompt);
+        // 动态段按来源写入 (计划 PRM-1): 同一来源每轮覆盖, 不再逐轮追加
+        auto& sections = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<
+            std::map<std::string, std::string, std::less<>>>(
+            in.ctx.thread_id,
+            agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
+        );
+        sections[std::string{kDynamicSourceSkills}] = skillState->cacheFormatSkillPrompt;
     }
     co_return;
 }

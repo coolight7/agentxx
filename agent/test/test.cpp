@@ -31,6 +31,7 @@
 #include "agentxx-test/core/test_openai_provider.h"
 #include "agentxx-test/core/test_input_delivery.h"
 #include "agentxx-test/core/test_persist_semantics.h"
+#include "agentxx-test/core/test_prompt_stability.h"
 #include "agentxx-test/core/test_permission.h"
 #include "agentxx-test/core/test_rag_search_tools.h"
 #include "agentxx-test/core/test_regex.h"
@@ -221,6 +222,7 @@ int main(int argn, char** argv) {
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
     runSync("persist_semantics", agentxx::test::testPersistSemantics);
+    runSync("prompt_stability", agentxx::test::testPromptSectionOrder);
         runSync("json_view", agentxx::test::testJsonView);
         runSync("json_reflection", agentxx::test::testJsonReflection);
         runSync("llm_error", agentxx::test::testLlmError);
@@ -408,6 +410,7 @@ int main(int argn, char** argv) {
     co_await run("permission", agentxx::test::run_permission_tests);
                 co_await run("input_delivery", agentxx::test::run_input_delivery_tests);
                 co_await run("session_sync", agentxx::test::run_session_sync_tests);
+                co_await run("prompt_stability_io", agentxx::test::run_prompt_stability_tests);
 
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);

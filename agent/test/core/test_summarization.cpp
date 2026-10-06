@@ -671,8 +671,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         {
             agentxx::agent::AgentPrompt p;
             const auto&                 j = p.toJson();
+            // 段落序列化为对象 (计划 PRM-2: text/order/source); 正文在 "text" 字段
             XX_TEST_EXPECT_EQ(
-                j["appendSystemPrompts"]["summarization"].get<std::string>(),
+                j["appendSystemPrompts"]["summarization"].value("text", std::string{}),
                 p.appendSystemPrompts.at("summarization")
             );
             // 往返: 定制后序列化再合并, 字段一致

@@ -5,6 +5,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace agentxx {
 namespace agent {
@@ -32,6 +33,23 @@ struct PromptSessionVars {
     std::string sessionId;
 };
 
+/// 附加段的元数据 (计划 PRM-2)
+///
+/// - `order`: 排序号 (小的在前; 同值按键名字典序稳定排序), 替代原先的硬编码键顺序
+/// - `source`: 来源标识 (内置 / 插件名), 供诊断与"同名裁决"展示; 不参与拼接
+struct PromptSectionMeta {
+    int         order = 0;
+    std::string source;
+};
+
+/// 附加段的只读视图 (拼接与诊断用; 引用随提示词对象有效)
+struct AppendSectionView {
+    std::string_view key;
+    std::string_view text;
+    int              order  = 0;
+    std::string_view source;
+};
+
 /// 提示词注册表
 /// - 聚合系统提示词与各工具提示词, 便于定制、自更新与训练序列化
 /// - 提示词文本全部定义在 [prompt.cpp]: 本头文件只声明成员与取值方式,
@@ -54,7 +72,30 @@ public:
     /// (skill/memory 动态) 组成
     /// - 为空时不占位，避免无对应工具时误导模型
     /// - 取值同样可写会话级占位符, 与 `systemPrompt` 一起替换
+    /// - 段落的元数据 (order/source) 见 [appendSystemPromptMeta]; 未登记的键按
+    ///   order=0 处理
     std::map<std::string, std::string, std::less<>> appendSystemPrompts;
+
+    /// 附加段元数据表 (键与 [appendSystemPrompts] 一致; 计划 PRM-2)
+    std::map<std::string, PromptSectionMeta, std::less<>> appendSystemPromptMeta;
+
+    /// 写入/更新一个附加段 (正文 + 元数据; 同键覆盖)
+    /// - `args`: [key] 段落键 / [text] 正文 / [order] 排序号 / [source] 来源标识
+    void setAppendSection(
+        std::string_view key,
+        std::string      text,
+        int              order  = 0,
+        std::string_view source = {}
+    );
+
+    /// 删除一个附加段 (正文与元数据一起删除; 不存在时返回 false)
+    bool removeAppendSection(std::string_view key);
+
+    /// 已存在的附加段键列表 (按键名升序; 供诊断/测试)
+    std::vector<std::string> appendSectionKeys() const;
+
+    /// 按 order 升序 (同 order 按键名) 返回非空段落视图
+    std::vector<AppendSectionView> orderedAppendSections() const;
 
     /// git worktree 模式的系统提示词段
     /// - CodeAgent 初始化时 (配置启用 worktree 时) 追加到 `appendSystemPrompts["git-worktree"]`

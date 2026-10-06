@@ -88,6 +88,22 @@ SessionStoreHooks makeSessionStoreHooks(
     };
 }
 
+/// 拼接提示词段 (空段跳过; 段间用一个空行分隔)
+void appendPromptSegment(std::string& combined, const std::string& segment) {
+    if (segment.empty()) {
+        return;
+    }
+    if (!combined.empty()) {
+        if (combined.back() != (char)0x0a) {
+            combined += "\n";
+        }
+        if (combined.size() < 2 || combined.compare(combined.size() - 2, 2, "\n\n") != 0) {
+            combined += "\n";
+        }
+    }
+    combined += segment;
+}
+
 /// Json 边界形态 -> typed 上下文 (逐条 ChatMessage JSON 反序列化)
 std::vector<neograph::ChatMessage> messagesFromJson(const utilxx_base::Json& msgs) {
     std::vector<neograph::ChatMessage> typed;
@@ -629,56 +645,30 @@ const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view s
     return agentConfig ? agentConfig->model : ModelConfig::defaultModelConfig;
 }
 
-std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
-    if (!agentConfig) {
-        return "";
+std::vector<std::pair<std::string, std::string>>
+    AgentContext::buildDynamicContextSections(std::string_view sessionId) const {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (!middlewareHandleContext || sessionId.empty()) {
+        return out;
     }
-    std::string combined         = agentConfig->prompt.systemPrompt;
-    auto        appendIfNonEmpty = [&](const std::string& seg) {
-        if (seg.empty()) {
-            return;
-        }
-        if (!combined.empty() && combined.back() != '\n') {
-            combined += "\n";
-        }
-        if (!combined.empty() && combined.size() >= 2
-            && combined.compare(combined.size() - 2, 2, "\n\n") != 0) {
-            combined += "\n";
-        }
-        combined += seg;
-    };
-
-    const auto& appendMap   = agentConfig->prompt.appendSystemPrompts;
-    auto        appendByKey = [&](const std::string& key) {
-        auto it = appendMap.find(key);
-        if (it != appendMap.end()) {
-            appendIfNonEmpty(it->second);
-        }
-    };
-    appendByKey("planning");
-    appendByKey("skill");
-    appendByKey("codegraph");
-    for (const auto& kv : appendMap) {
-        if (kv.first == "planning" || kv.first == "skill" || kv.first == "codegraph"
-            || kv.first == "summarization") {
-            continue;
-        }
-        appendIfNonEmpty(kv.second);
-    }
-
-    if (middlewareHandleContext && !sessionId.empty()) {
-        const auto& appendSystemMsgList
-            = middlewareHandleContext->getGraphDataItemValue<std::vector<std::string>>(
-                sessionId,
-                agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
-            );
-        if (!appendSystemMsgList.empty()) {
-            std::string appendJoined = fmt::format("{}", fmt::join(appendSystemMsgList, "\n"));
-            appendIfNonEmpty(appendJoined);
+    // 键排序的 map: 同一来源每轮覆盖写入 (不累积), 顺序稳定 (计划 PRM-1);
+    // 旧实现用 vector 追加, 每轮都会把上一轮的片段再拼一次 (系统提示词逐轮变长)
+    const auto& sections
+        = middlewareHandleContext->getGraphDataItemValue<
+            std::map<std::string, std::string, std::less<>>>(
+            sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
+        );
+    out.reserve(sections.size());
+    for (const auto& kv : sections) {
+        if (!kv.second.empty()) {
+            out.emplace_back(kv.first, kv.second);
         }
     }
+    return out;
+}
 
-    // 会话级占位符替换 (工作目录 / 临时目录 / 会话 ID)
+std::string AgentContext::renderPromptVars(std::string text, std::string_view sessionId) const {
     // - 拼装完成后统一替换, 自定义 systemPrompt 与各附加段都生效
     // - 工作目录取基准值 (不含 worktree 绑定): 进出 worktree 由工具在会话内切换,
     //   模型从工具结果得知, 系统提示词不跟着变化
@@ -687,7 +677,38 @@ std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
     vars.sessionId = sessionId.empty() ? std::string{"default"} : std::string{sessionId};
     vars.workDir   = getSessionBaseWorkDir(sessionId);
     vars.tempDir   = sessionTempDir(sessionId);
-    return AgentPrompt::renderVars(combined, vars);
+    return AgentPrompt::renderVars(text, vars);
+}
+
+std::string AgentContext::buildSystemPromptStable(std::string_view sessionId) const {
+    if (!agentConfig) {
+        return "";
+    }
+    std::string combined;
+    appendPromptSegment(combined, agentConfig->prompt.systemPrompt);
+    // 静态附加段: 按段落 order 排序 (计划 PRM-2), 同 order 按键名字典序稳定排列
+    for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
+        appendPromptSegment(combined, std::string{section.text});
+    }
+    return renderPromptVars(std::move(combined), sessionId);
+}
+
+std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
+    if (!agentConfig) {
+        return "";
+    }
+    std::string combined;
+    appendPromptSegment(combined, agentConfig->prompt.systemPrompt);
+    for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
+        appendPromptSegment(combined, std::string{section.text});
+    }
+    // 动态段 (记忆 / 技能清单): 完整提示词里保留在末尾 (供 UI 查看);
+    // 请求装配使用 buildSystemPromptStable + 末尾动态消息 (见 modelcall)
+    for (const auto& [source, text] : buildDynamicContextSections(sessionId)) {
+        (void)source;
+        appendPromptSegment(combined, text);
+    }
+    return renderPromptVars(std::move(combined), sessionId);
 }
 
 } // namespace agent

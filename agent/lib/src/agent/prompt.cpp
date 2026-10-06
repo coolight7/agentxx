@@ -1,7 +1,10 @@
 #include "agentxx/agent/prompt.h"
+
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
+#include <algorithm>
 #include <cassert>
+#include <utility>
 
 namespace agentxx {
 namespace agent {
@@ -536,13 +539,80 @@ std::string AgentPrompt::renderVars(std::string_view text, const PromptSessionVa
     return out;
 }
 
+void AgentPrompt::setAppendSection(
+    std::string_view key,
+    std::string      text,
+    int              order,
+    std::string_view source
+) {
+    if (key.empty()) {
+        return;
+    }
+    utilxx_base::insertOrAssignHeterogeneous(appendSystemPrompts, key, std::move(text));
+    auto& meta   = utilxx_base::getOrCreateHeterogeneous(appendSystemPromptMeta, key);
+    meta.order   = order;
+    meta.source  = std::string{source};
+}
+
+bool AgentPrompt::removeAppendSection(std::string_view key) {
+    // 异构删除复用 utilxx_base::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
+    const bool removed = utilxx_base::eraseHeterogeneous(appendSystemPrompts, key);
+    utilxx_base::eraseHeterogeneous(appendSystemPromptMeta, key);
+    return removed;
+}
+
+std::vector<std::string> AgentPrompt::appendSectionKeys() const {
+    std::vector<std::string> keys;
+    keys.reserve(appendSystemPrompts.size());
+    for (const auto& kv : appendSystemPrompts) {
+        keys.push_back(kv.first);
+    }
+    return keys; // map 本身按键名升序
+}
+
+std::vector<AppendSectionView> AgentPrompt::orderedAppendSections() const {
+    std::vector<AppendSectionView> sections;
+    sections.reserve(appendSystemPrompts.size());
+    for (const auto& kv : appendSystemPrompts) {
+        if (kv.second.empty()) {
+            continue;
+        }
+        AppendSectionView view{.key = kv.first, .text = kv.second};
+        if (auto it = appendSystemPromptMeta.find(kv.first); it != appendSystemPromptMeta.end()) {
+            view.order  = it->second.order;
+            view.source = it->second.source;
+        }
+        sections.push_back(std::move(view));
+    }
+    // order 升序; 同 order 按键名字典序 (map 迭代序即键名序, 用稳定排序保持)
+    std::stable_sort(
+        sections.begin(),
+        sections.end(),
+        [](const auto& a, const auto& b) {
+            return a.order < b.order;
+        }
+    );
+    return sections;
+}
+
 utilxx_base::Json AgentPrompt::toJson() const {
     utilxx_base::Json j;
     j["systemPrompt"] = systemPrompt;
     {
         utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& kv : appendSystemPrompts) {
-            append[kv.first] = kv.second;
+            utilxx_base::Json section;
+            section["text"]  = kv.second;
+            section["order"] = 0;
+            section["source"] = "";
+            if (auto it = appendSystemPromptMeta.find(kv.first);
+                it != appendSystemPromptMeta.end()) {
+                section["order"] = it->second.order;
+                if (!it->second.source.empty()) {
+                    section["source"] = it->second.source;
+                }
+            }
+            append[kv.first] = std::move(section);
         }
         j["appendSystemPrompts"] = std::move(append);
     }
@@ -577,11 +647,23 @@ void AgentPrompt::mergeFromJson(const utilxx_base::Json& j) {
             const auto& key = item.first;
             const auto& val = item.second;
             if (val.is_string()) {
-                utilxx_base::insertOrAssignHeterogeneous(
-                    appendSystemPrompts,
-                    key,
-                    val.get<std::string>()
-                );
+                // 兼容旧形态: 直接字符串 = 段落正文 (order 0, 无来源)
+                setAppendSection(key, val.get<std::string>());
+            } else if (val.is_object()) {
+                // 新形态: {text, order, source} (计划 PRM-2)
+                std::string text;
+                if (val.contains("text") && val["text"].is_string()) {
+                    text = val["text"].get<std::string>();
+                }
+                int         order = 0;
+                std::string source;
+                if (val.contains("order") && val["order"].is_number()) {
+                    order = val["order"].get<int>();
+                }
+                if (val.contains("source") && val["source"].is_string()) {
+                    source = val["source"].get<std::string>();
+                }
+                setAppendSection(key, std::move(text), order, source);
             } else if (val.is_null()) {
                 // 异构删除复用 utilxx_base::eraseHeterogeneous (libc++ 无 C++23 异构 erase)
                 utilxx_base::eraseHeterogeneous(appendSystemPrompts, key);
@@ -619,6 +701,14 @@ size_t AgentPrompt::promptHash() const {
     for (const auto& kv : appendSystemPrompts) {
         h ^= std::hash<std::string>{}(kv.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<std::string>{}(kv.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        // 排序号参与哈希 (顺序是提示词内容的一部分); 未登记元数据的段落按 order 0,
+        // 保证"有/无元数据"不影响哈希 (JSON 往返后哈希一致)
+        int order = 0;
+        if (auto it = appendSystemPromptMeta.find(kv.first);
+            it != appendSystemPromptMeta.end()) {
+            order = it->second.order;
+        }
+        h ^= std::hash<int>{}(order) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
     for (const auto& kv : toolPrompt) {
         h ^= std::hash<std::string>{}(kv.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
