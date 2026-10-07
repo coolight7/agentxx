@@ -84,7 +84,7 @@
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 消费端退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在消费方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
 | LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求装配（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量口径折算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 旁路进账本 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
-| LLM-13 | HTTP 录制回放 | 待实施 | 测试夹具 |
+| LLM-13 | HTTP 录制回放 | 已实施 | `agent/test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder` 录制器 / `HttpPlayer` 回放器 / `HttpFixture` 固定装置 + 脱敏）；模块 `http_recorder` |
 | LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
 | LLM-1 / LLM-9 / LLM-10 / LLM-11 / LLM-12 | 模型能力元数据 / 轮次局部回退 / 凭据分层 / 连接状态 / 结构化输出入口 | 不做（9、12 后续计划） | 不补价格与能力元数据；provider 全走 HTTP |
 

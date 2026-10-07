@@ -74,6 +74,7 @@
 | OBS-5 | 模块级日志开关 | P2 | 未实施（见阶段 AC 的差异说明：utilxx_base 的 `LogEntry` 不带模块名，按模块过滤需要改日志库的信道格式） | — |
 | PRO-8 | stdio JSONL 一次性运行（复用 Wire 结构 + JSONL 分帧） | P1 | 完成（已构建 + 测试通过 + 真实进程手工验证） | `lib/.../io/jsonl_io_transport.{h,cpp}`、`client/src/io/jsonl/jsonl_mode.cpp`；模块 `jsonl_mode`、`jsonl_runner` |
 | LLM-8 | Anthropic 缓存断点与缓存用量 | P1 | 完成（已构建 + 测试通过） | `ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints` / `applyUsage`；账本 `usage.cache_write_prompt_tokens`（schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
+| LLM-13 | HTTP 录制回放夹具 | P1 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder`/`HttpPlayer`/`HttpFixture` + 脱敏）；模块 `http_recorder` |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -1843,6 +1844,11 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `关键指标与诊断包导出 (OBS-3/OBS-4/STO-13)`（新增模块 `observability` 96 项）。
 - 阶段 AD（PRO-8）完成后提交：
   `JSONL stdio 一次性运行模式 (PRO-8)`（新增模块 `jsonl_mode` 65 项、`jsonl_runner` 16 项）。
+- 阶段 AE（LLM-8）完成后提交：
+  `Anthropic prompt 缓存断点与缓存用量入账 (LLM-8)`（模块 `anthropic_provider` 286、
+  `fake_provider` 46、`session_schema` 121、`config_loader` 381）。
+- 阶段 AF（LLM-13）完成后提交：
+  `HTTP 录制回放夹具 (LLM-13)`（新增模块 `http_recorder` 81 项）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
@@ -2038,3 +2044,63 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   打开即可; 后续要表单化时再补。
 - 未做缓存命中率的自动诊断/告警: 指标与账本已经把 cache read/write 都记下来
   (OBS-3 的 `cache_write_tokens` 与诊断包会话段), 是否命中由用户按数字判断。
+
+## 阶段 AF：HTTP 录制回放夹具（LLM-13，2026-10-08）
+
+计划依据：`plan.md` §6 LLM-13（"新增 `agent/test/http_recorder` 或可注入传输层，按请求摘要和
+顺序保存/回放响应流；敏感 headers 和 API key 脱敏，固定装置不进入生产代码"）。
+
+已完成（新增测试侧夹具 `agent/test/include/agentxx-test/core/http_recorder.h`，仅测试使用）：
+
+- **录制器 `HttpRecorder`**: 本地 HTTP 服务, 把收到的请求**转发给上游** (origin + 原路径,
+  透传头, 排除逐跳头), 同时把 (请求摘要 + 响应状态/类型/正文) 记入固定装置;
+  这样"跑一次真实/模拟上游"就能得到可重复的固定装置。
+- **回放器 `HttpPlayer`**: 本地 HTTP 服务, 按**顺序**回放固定装置里的响应;
+  - 每条请求都要与装置里下一条对得上 (方法 + 路径 + 请求体摘要), 不符时回 400 并把
+    `expectedIndex/expectedDigest/actualDigest` 与可读原因写进响应体, 同时记入
+    `mismatches()` 供用例断言 (游标不推进);
+  - 装置用尽后再来请求同样被拒 (`no more recorded interaction`), 并在 `mismatches()`
+    留下 `unexpected extra request`。
+- **固定装置 `HttpFixture`**: `version / note / interactions[]`, 可 `toJson` / `fromJson` /
+  `saveToFile` / `loadFromFile` (文件不存在明确抛错)。`HttpInteraction` 含方法、路径、
+  请求摘要 (FNV-1a 64 十六进制)、请求字节数、脱敏后的请求体、头快照、状态码、content-type、
+  响应正文 (SSE 原样保存, 因此流式也可回放)。
+- **脱敏** (固定装置要能入库):
+  - 请求头只落白名单 (`content-type` / `accept` / `anthropic-version` / `user-agent`);
+  - 凭据类头 (`authorization` / `x-api-key` / `api-key` / `cookie` / `proxy-authorization`)
+    只记 `<名>_present: true`, **不记取值**;
+  - 请求体与响应体先按调用方给的 `secrets` 字面替换, 再过
+    `agentxx::util::redactSecrets` (复用诊断包那套凭据形态匹配, 只有一处实现);
+  - 请求摘要基于**原始**请求体计算, 脱敏不影响匹配。
+- **与既有替身的分工** (写入 `agent/test/AGENTS.md` "测试替身" 节): 假 provider 在 provider
+  之上 (重试/压缩/取消/工具循环), 本夹具在 provider 之下 (真实 HTTP 编解码与 SSE 解析),
+  手工 mock 保留覆盖个别响应形态。
+
+测试（新模块 `http_recorder`，81 项断言）：
+
+| 用例 | 覆盖点 |
+|---|---|
+| 摘要与装置往返 | 摘要对同输入稳定 (16 位十六进制)、方法/路径/正文任一变化即不同; 装置 JSON 与文件往返 (含目录自动创建); 文件不存在明确抛错 |
+| 脱敏 | 头白名单取值保留、凭据只记 `*_present` 且取值不出现在装置文本里; 正文按 `secrets` 与通用凭据形态屏蔽, 无凭据文本原样保留 |
+| 录制 → 回放 | 真实 OpenAI provider → 录制器 → 本地 LLM 模拟器: 装置记录 1 条 (路径/状态/响应正文/摘要/凭据标记), 装置文本不含 API Key; 落盘后停上游, 回放器再跑同一次调用 → 结果一致、命中 1 条、无不匹配 |
+| 顺序/摘要校验 | 请求体与装置不符 → 回放器 400 + provider 抛错 + `mismatches()` 记 `request #0 mismatch` 且游标不推进; 装置用尽后的额外请求 → 400 + `extra request` |
+| 流式回放 | 模拟器的 SSE 响应原样录制 (正文含 `data:`), 回放后 provider 解析出的正文与流式分片与首次完全一致 |
+
+验证：
+
+- 构建：`agentxx_test` exit=0，无新增 error。
+- 测试：`http_recorder` 81/0（含 3 处 ASan 复查：首版用例把 `mismatches()` 返回的临时
+  容器元素绑成引用, ASan 直接报 heap-use-after-free, 已改为先取快照再引用）。
+- 收尾: 用例结束调用 `HttpClient::clearConnectionPool()`, 释放指向已停服务的空闲连接。
+
+注意事项 / 与计划的差异：
+
+- 计划写"`agent/test/http_recorder` 或可注入传输层": 选**独立夹具 + 本地服务**形态 ——
+  provider 的 HTTP 走 `utilxx::HttpClient` (没有传输层接口), 注入点若放在 provider 内部
+  就要改生产代码; 本地服务既不改生产代码, 又能把真实网络路径完整跑一遍。
+- 只支持 POST 转发 (三家 provider 的补全请求都是 POST); GET/其他方法回 502 并在装置里
+  记下原因。若将来要录制 GET (如模型列表), 在此处补分支即可。
+- 路由是精确匹配, 夹具把常见 LLM 路径 (`/chat/completions` / `/v1/chat/completions` /
+  `/messages` / `/v1/messages` / `/responses` / `/v1/responses` / `/`) 都注册了一遍。
+- 本阶段未录制真实线上流量并入库 (不引入任何外部服务依赖): 夹具本身可用作"本地录一次、
+  之后离线回放"的工具, 入库的固定装置应按需人工挑选并 review 脱敏结果。

@@ -19,6 +19,7 @@
 #include "agentxx-test/core/test_fake_provider.h"
 #include "agentxx-test/core/test_filesystem_tools.h"
 #include "agentxx-test/core/test_http.h"
+#include "agentxx-test/core/test_http_recorder.h"
 #include "agentxx-test/core/test_interrupt_bus.h"
 #include "agentxx-test/core/test_interrupt_ui.h"
 #include "agentxx-test/core/test_json.h"
@@ -491,6 +492,7 @@ int main(int argn, char** argv) {
                 co_await run("agent", agentxx::test::run_agent_tests);
                 co_await run("usage_ledger", agentxx::test::test_usage_ledger);
     co_await run("toolcall_parallel", agentxx::test::run_toolcall_parallel_tests);
+                co_await run("http_recorder", agentxx::test::run_http_recorder_tests);
                 co_await run("jsonl_mode", agentxx::test::run_jsonl_mode_tests);
                 co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 

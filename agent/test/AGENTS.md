@@ -30,6 +30,18 @@
 - 加 `XX_TEST_EXPECT_*` 前先想清楚"这条断言失败说明什么"，避免写只能证明
   自己实现的空断言。
 
+## 测试替身
+
+- 假 provider（`include/agentxx-test/core/fake_provider.h`）：provider **之上**的替身
+  （脚本化响应/错误/延迟/工具调用，经 `ModelProviderRegistry::setProvider` 注入），
+  覆盖重试、压缩、取消、工具循环与用量记账。
+- HTTP 录制/回放（`include/agentxx-test/core/http_recorder.h`，模块 `http_recorder`）：
+  provider **之下**的夹具 —— 录制器把请求转发给上游并保存「请求摘要 + 响应」，
+  回放器按顺序回放固定装置；覆盖真实 HTTP/SSE 编解码。
+  固定装置落盘前会脱敏（请求头白名单、凭据只记 `*_present`、正文过
+  `redactSecrets` + 调用方 `secrets`），因此可以提交进仓库；
+  需要真实上游时只在本地录制，不要把线上响应直接入库。
+
 ## 门禁与快照
 
 - 一键门禁：`agent/script/gate.sh`（Linux/macOS）或 `agent/script/gate.ps1`
