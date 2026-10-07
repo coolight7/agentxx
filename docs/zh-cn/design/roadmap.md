@@ -51,7 +51,7 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | STO-1 | 会话目录内核级写租约 | 已实施 | `agent/lib/{include/agentxx/agent,src/agent}/writer_lease.*`；模块 `writer_lease` |
-| STO-2 | schema 版本和相邻迁移链 | 已实施 | `session_store.cpp`（`kSchemaVersion` / `applyMigrationStep` / 备份）；模块 `session_schema` |
+| STO-2 | schema 版本和相邻迁移链 | 已实施 | `session_store.cpp`（`kSchemaVersion` / `applyMigrationStep` / 备份）；模块 `session_schema`（v0/v2 → v3：msg_id 回填、session_input 建表、usage 缓存写入量列） |
 | STO-8 | 用量账本 | 已实施 | `session_store`（`usage` 表）+ `nodes/modelcall.cpp`；模块 `usage_ledger` |
 | STO-11 | settings_db 乐观版本 | 已实施 | `util/settings_db.*`；模块 `settings_db` |
 | STO-12 | 会话标题与检索（存储层） | 已实施 | `session_store`（`sessionTitle` / `setSessionTitle` / `searchSessions`）；模块 `session_schema` |
@@ -83,7 +83,7 @@
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 消费端退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在消费方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
-| LLM-8 | 缓存断点与缓存用量 | 待实施 | Anthropic 请求装配 + 用量账本 |
+| LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求装配（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量口径折算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 旁路进账本 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放 | 待实施 | 测试夹具 |
 | LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
 | LLM-1 / LLM-9 / LLM-10 / LLM-11 / LLM-12 | 模型能力元数据 / 轮次局部回退 / 凭据分层 / 连接状态 / 结构化输出入口 | 不做（9、12 后续计划） | 不补价格与能力元数据；provider 全走 HTTP |
@@ -225,3 +225,8 @@
   `JsonlAgentIOTransport`（一行一条 Wire 消息、stdin EOF 只结束输入不关闭输出、非法行回
   `WireError(InvalidArgs)` 不中断会话）+ `agentxx_cli jsonl` 运行模式（读 stdin 行、写 stdout
   协议行、日志走 stderr、EOF 后等轮次跑完自动收尾）；新增测试模块 `jsonl_mode`、`jsonl_runner`。
+- 2026-10-08：LLM-8（Anthropic 缓存断点与缓存用量）标记为已实施：`ModelConfig::cacheControl`
+  （yaml `cache_control`，默认关闭）+ `AnthropicProvider::applyCacheBreakpoints`（系统提示 /
+  工具定义 / 最后一条非动态段消息加 `cache_control` 断点）；用量口径折算为
+  `prompt_tokens = input_tokens + cache_read + cache_creation`，缓存写入量经
+  `provider_common.h` 的补充用量旁路写入账本新列 `usage.cache_write_prompt_tokens`（schema v3）。

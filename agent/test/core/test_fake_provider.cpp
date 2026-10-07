@@ -20,6 +20,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/observability.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
@@ -377,6 +378,7 @@ asio::awaitable<void> test_fake_provider_cancel() {
 
 // ---------------------------------------------------------------------------
 // 6) 用量记账: 假 provider 上报的用量进入会话账本 (记账调用点在 modelcall)
+//    含缓存读/写量 (计划 LLM-8: Anthropic 的 cache_read/cache_creation)
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_usage_ledger() {
     auto dir = makeTempDir();
@@ -388,6 +390,7 @@ asio::awaitable<void> test_fake_provider_usage_ledger() {
         step.promptTokens     = 123;
         step.completionTokens = 45;
         step.cachedTokens     = 7;
+        step.cacheWriteTokens = 11;
         step.reasoningTokens  = 3;
         provider->pushStep(step);
 
@@ -408,8 +411,33 @@ asio::awaitable<void> test_fake_provider_usage_ledger() {
             XX_TEST_EXPECT_EQ(summary.promptTokens, int64_t{123});
             XX_TEST_EXPECT_EQ(summary.completionTokens, int64_t{45});
             XX_TEST_EXPECT_EQ(summary.cachedPromptTokens, int64_t{7});
+            XX_TEST_EXPECT_EQ(summary.cacheWritePromptTokens, int64_t{11});
             XX_TEST_EXPECT_EQ(summary.reasoningTokens, int64_t{3});
             XX_TEST_EXPECT_EQ(summary.totalTokens, int64_t{168});
+
+            // 逐行核对: 缓存写入量落到记录里, 且**不**混进会话消息
+            auto recent = store->recentUsage("fake_usage", 1);
+            XX_TEST_EXPECT_EQ(recent.size(), size_t{1});
+            if (recent.size() == 1) {
+                XX_TEST_EXPECT_EQ(recent[0].cachedPromptTokens, int64_t{7});
+                XX_TEST_EXPECT_EQ(recent[0].cacheWritePromptTokens, int64_t{11});
+            }
+            // 关键指标: 缓存读/写量进聚合 (OBS-3)
+            XX_TEST_EXPECT_EQ(agent->agentContext->metrics->cachedTokens(), int64_t{7});
+            XX_TEST_EXPECT_EQ(agent->agentContext->metrics->cacheWriteTokens(), int64_t{11});
+
+            // 会话消息里没有内部记账键 (取出后已置空)
+            auto session = agent->agentContext->sessions->get("fake_usage");
+            XX_TEST_EXPECT_TRUE(session != nullptr);
+            if (session) {
+                for (const auto& m : session->messages()) {
+                    XX_TEST_EXPECT_FALSE(
+                        m.extra.contains(std::string{agentxx::protocol::kUsageDetailExtraKey})
+                        && !m.extra[std::string{agentxx::protocol::kUsageDetailExtraKey}]
+                                .is_null()
+                    );
+                }
+            }
         }
     }
     removeTempDir(dir);

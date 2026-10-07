@@ -49,7 +49,13 @@ public:
     // ---- 模型调用 ----
 
     /// 一次模型调用结算 (成功路径); usage 可为 0 (provider 未上报)
-    void noteModelCall(int64_t promptTokens, int64_t completionTokens, int64_t cachedTokens);
+    /// - cacheWriteTokens: 写入 prompt 缓存的 token 数 (仅 Anthropic 回报, 计划 LLM-8)
+    void noteModelCall(
+        int64_t promptTokens,
+        int64_t completionTokens,
+        int64_t cachedTokens,
+        int64_t cacheWriteTokens = 0
+    );
     /// 一次模型调用失败 (kind = 错误分类文本, 见 nodes/llm_error.h)
     void noteModelError(std::string_view kind);
 
@@ -119,6 +125,10 @@ public:
     int64_t cachedTokens() const noexcept {
         return cachedTokens_.load(std::memory_order_relaxed);
     }
+    /// 写入 prompt 缓存的 token 累计 (仅 Anthropic 回报; 计划 LLM-8)
+    int64_t cacheWriteTokens() const noexcept {
+        return cacheWriteTokens_.load(std::memory_order_relaxed);
+    }
     uint64_t toolOk() const noexcept {
         return toolOk_.load(std::memory_order_relaxed);
     }
@@ -162,6 +172,7 @@ private:
     std::atomic<int64_t>  promptTokens_{0};
     std::atomic<int64_t>  completionTokens_{0};
     std::atomic<int64_t>  cachedTokens_{0};
+    std::atomic<int64_t>  cacheWriteTokens_{0};
 
     std::atomic<uint64_t> toolOk_{0};
     std::atomic<uint64_t> toolFailed_{0};

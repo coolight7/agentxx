@@ -82,7 +82,8 @@ void KeyMetrics::noteTurnEnd(const TurnOutcome outcome, const int64_t durationMs
 void KeyMetrics::noteModelCall(
     const int64_t promptTokens,
     const int64_t completionTokens,
-    const int64_t cachedTokens
+    const int64_t cachedTokens,
+    const int64_t cacheWriteTokens
 ) {
     modelCalls_.fetch_add(1, std::memory_order_relaxed);
     if (promptTokens > 0) {
@@ -93,6 +94,9 @@ void KeyMetrics::noteModelCall(
     }
     if (cachedTokens > 0) {
         cachedTokens_.fetch_add(cachedTokens, std::memory_order_relaxed);
+    }
+    if (cacheWriteTokens > 0) {
+        cacheWriteTokens_.fetch_add(cacheWriteTokens, std::memory_order_relaxed);
     }
 }
 
@@ -164,6 +168,7 @@ utilxx_base::Json KeyMetrics::toJson() const {
     model["prompt_tokens"]     = promptTokens_.load(std::memory_order_relaxed);
     model["completion_tokens"] = completionTokens_.load(std::memory_order_relaxed);
     model["cached_tokens"]     = cachedTokens_.load(std::memory_order_relaxed);
+    model["cache_write_tokens"] = cacheWriteTokens_.load(std::memory_order_relaxed);
     j["model"]                 = std::move(model);
 
     utilxx_base::Json tools = utilxx_base::Json::object();
@@ -227,6 +232,7 @@ void KeyMetrics::reset() {
     promptTokens_.store(0);
     completionTokens_.store(0);
     cachedTokens_.store(0);
+    cacheWriteTokens_.store(0);
     toolOk_.store(0);
     toolFailed_.store(0);
     toolCancelled_.store(0);

@@ -248,13 +248,15 @@ std::vector<std::string> sessionSection(
 
     const auto usage = store->usageSummary(std::string{sessionId});
     lines.push_back(fmt::format(
-        "- usage ledger: calls={} failed={} prompt={} completion={} total={} cached={} reasoning={}",
+        "- usage ledger: calls={} failed={} prompt={} completion={} total={} cached={} "
+        "cache_write={} reasoning={}",
         usage.calls,
         usage.failedCalls,
         usage.promptTokens,
         usage.completionTokens,
         usage.totalTokens,
         usage.cachedPromptTokens,
+        usage.cacheWritePromptTokens,
         usage.reasoningTokens
     ));
 

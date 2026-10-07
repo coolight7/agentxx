@@ -706,6 +706,216 @@ asio::awaitable<void> test_non_streaming_thinking(MockAnthropicServer& mock, uin
     }
 }
 
+/// prompt 缓存断点 (计划 LLM-8): 打开 `cache_control` 时, 断点落在稳定前缀末尾
+///
+/// 覆盖: system 字符串转内容块数组 (末块带断点) / 工具定义只给最后一个加断点 /
+/// 消息断点落在**动态段之前**那条 (末条 `<dynamic_context ...>` 不加断点)
+asio::awaitable<void> test_cache_control_breakpoints(MockAnthropicServer& mock, uint16_t port) {
+    const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode                 = AnthropicMockMode::Normal;
+
+    auto cfg         = makeAntCfg("sk-ant-test", baseUrl);
+    cfg.cacheControl = true;
+    auto provider    = server::AnthropicProvider::create(cfg);
+
+    neograph::CompletionParams params;
+    params.model    = "claude-sonnet-4-20250514";
+    params.messages = {
+        neograph::ChatMessage{.role = "system", .content = "你是助手"  },
+        neograph::ChatMessage{.role = "user", .content = "第一轮问题"},
+        neograph::ChatMessage{.role = "assistant", .content = "第一轮回答"},
+    };
+    // 请求末尾的动态段 (PRM-1 的稳定段/动态段分离): 内容每轮都可能变,
+    // 断点若落在它上面就每轮写新缓存而读不到旧缓存, 因此必须跳过
+    {
+        neograph::ChatMessage dyn;
+        dyn.role    = "user";
+        dyn.content = "<dynamic_context source=\"memory\">\n记忆内容\n</dynamic_context>\n";
+        dyn.flags   = neograph::MessageFlag::AutoInserted;
+        params.messages.push_back(std::move(dyn));
+    }
+    params.tools = {
+        neograph::ChatTool{
+                           .name        = "tool_a",
+                           .description = "A",
+                           .parameters  = agentxx::util::parseNeographJson(R"({"type":"object"})")
+        },
+        neograph::ChatTool{
+                           .name        = "tool_b",
+                           .description = "B",
+                           .parameters  = agentxx::util::parseNeographJson(R"({"type":"object"})")
+        },
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.message.role, "assistant");
+
+        auto sent = utilxx_base::Json::parse(mock.lastRequestBody);
+
+        // ① 系统提示: 字符串形态转成内容块数组, 末块带断点 (原文不变)
+        XX_TEST_EXPECT_TRUE(sent.contains("system"));
+        XX_TEST_EXPECT_TRUE(sent["system"].is_array());
+        if (sent["system"].is_array() && !sent["system"].empty()) {
+            const auto& block = sent["system"].back();
+            XX_TEST_EXPECT_EQ(block.value("type", std::string{}), std::string{"text"});
+            XX_TEST_EXPECT_EQ(block.value("text", std::string{}), std::string{"你是助手"});
+            XX_TEST_EXPECT_TRUE(block.contains("cache_control"));
+            if (block.contains("cache_control")) {
+                XX_TEST_EXPECT_EQ(
+                    block["cache_control"].value("type", std::string{}),
+                    std::string{"ephemeral"}
+                );
+            }
+        }
+
+        // ② 工具定义: 只有最后一个带断点 (前缀断点之后的工具变化不影响缓存)
+        XX_TEST_EXPECT_TRUE(sent.contains("tools"));
+        XX_TEST_EXPECT_EQ(sent["tools"].size(), size_t{2});
+        XX_TEST_EXPECT_FALSE(sent["tools"][0].contains("cache_control"));
+        XX_TEST_EXPECT_TRUE(sent["tools"][1].contains("cache_control"));
+
+        // ③ 消息: 末条是动态段 (不加断点), 断点落在前一条 (第一轮回答) 上
+        XX_TEST_EXPECT_TRUE(sent.contains("messages"));
+        const auto& msgs = sent["messages"];
+        XX_TEST_EXPECT_GE(msgs.size(), size_t{3});
+        if (msgs.size() >= 3) {
+            const auto& dynamicMsg = msgs.back();
+            XX_TEST_EXPECT_EQ(dynamicMsg.value("role", std::string{}), std::string{"user"});
+            XX_TEST_EXPECT_TRUE(
+                dynamicMsg["content"].is_string()
+                && dynamicMsg["content"].get<std::string>().starts_with("<dynamic_context")
+            );
+            // 字符串内容里不会带 cache_control (断点不落在动态段上)
+            XX_TEST_EXPECT_FALSE(
+                dynamicMsg["content"].get<std::string>().find("cache_control") != std::string::npos
+            );
+
+            const auto& stableMsg = msgs[msgs.size() - 2];
+            XX_TEST_EXPECT_EQ(stableMsg.value("role", std::string{}), std::string{"assistant"});
+            XX_TEST_EXPECT_TRUE(stableMsg["content"].is_array());
+            if (stableMsg["content"].is_array() && !stableMsg["content"].empty()) {
+                const auto& block = stableMsg["content"].back();
+                XX_TEST_EXPECT_TRUE(block.contains("cache_control"));
+                XX_TEST_EXPECT_EQ(block.value("text", std::string{}), std::string{"第一轮回答"});
+            }
+        }
+
+        // 未打开开关时请求体里不出现该字段 (兼容不认识的网关)
+        {
+            auto cfgOff         = makeAntCfg("sk-ant-test", baseUrl);
+            cfgOff.cacheControl = false;
+            auto providerOff    = server::AnthropicProvider::create(cfgOff);
+            co_await providerOff->invoke(params, nullptr);
+            XX_TEST_EXPECT_TRUE(
+                mock.lastRequestBody.find("cache_control") == std::string::npos
+            );
+        }
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "cache breakpoint test failed: " << e.what() << std::endl;
+    }
+}
+
+/// 缓存用量 (计划 LLM-8): Anthropic 的 input_tokens 只含未命中缓存的输入,
+/// 缓存读/写量单独回报 —— 统一折算成整段 prompt 规模, 并保留写入量供账本使用
+asio::awaitable<void> test_usage_cache_tokens(MockAnthropicServer& mock, uint16_t port) {
+    const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode                 = AnthropicMockMode::Normal;
+    mock.customResponse       = utilxx_base::Json::parse(R"({
+        "id": "msg_cache",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "cached answer"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 900,
+            "cache_creation_input_tokens": 512
+        }
+    })");
+
+    auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "claude-sonnet-4-20250514";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "cache usage?"}
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        // prompt = input + cache_read + cache_creation (整段 prompt 规模)
+        XX_TEST_EXPECT_EQ(result.usage.prompt_tokens, 100 + 900 + 512);
+        XX_TEST_EXPECT_EQ(result.usage.completion_tokens, 20);
+        XX_TEST_EXPECT_EQ(result.usage.total_tokens, 100 + 900 + 512 + 20);
+        XX_TEST_EXPECT_EQ(result.usage.cached_prompt_tokens, 900);
+
+        // 补充用量经旁路带给模型调用节点; 取出后置空 (不进入会话消息)
+        const auto detail = agentxx::protocol::readUsageDetail(result);
+        XX_TEST_EXPECT_EQ(detail.cacheReadTokens, int64_t{900});
+        XX_TEST_EXPECT_EQ(detail.cacheWriteTokens, int64_t{512});
+        const auto taken = agentxx::protocol::takeUsageDetail(result);
+        XX_TEST_EXPECT_EQ(taken.cacheWriteTokens, int64_t{512});
+        XX_TEST_EXPECT_TRUE(agentxx::protocol::readUsageDetail(result).empty());
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "cache usage test failed: " << e.what() << std::endl;
+    }
+}
+
+/// 缓存用量 (流式): message_start 报输入与缓存量, message_delta 只报输出量 ——
+/// 缺失字段必须沿用已知值, 不能把 prompt 计数清零
+asio::awaitable<void> test_streaming_usage_cache_tokens(MockAnthropicServer& mock, uint16_t port) {
+    const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode                 = AnthropicMockMode::Streaming;
+    mock.sseChunks            = {
+        MockAnthropicServer::sseEvent(
+            "message_start",
+            R"({"type":"message_start","message":{"id":"msg_stream","type":"message","role":"assistant","usage":{"input_tokens":7,"cache_read_input_tokens":800,"cache_creation_input_tokens":64}}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_start",
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_delta",
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}})"
+        ),
+        MockAnthropicServer::sseEvent("content_block_stop", R"({"type":"content_block_stop","index":0})"),
+        MockAnthropicServer::sseEvent(
+            "message_delta",
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}})"
+        ),
+        MockAnthropicServer::sseEvent("message_stop", R"({"type":"message_stop"})"),
+    };
+
+    auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "claude-sonnet-4-20250514";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "stream cache usage"}
+    };
+
+    try {
+        // 有 stream 回调才会走向流式路径 (与真实调用一致)
+        neograph::StreamCallback noop = [](const std::string&) {};
+        auto result = co_await provider->invoke(params, noop);
+        XX_TEST_EXPECT_EQ(result.usage.prompt_tokens, 7 + 800 + 64);
+        XX_TEST_EXPECT_EQ(result.usage.completion_tokens, 4);
+        XX_TEST_EXPECT_EQ(result.usage.total_tokens, 7 + 800 + 64 + 4);
+        XX_TEST_EXPECT_EQ(result.usage.cached_prompt_tokens, 800);
+        const auto detail = agentxx::protocol::readUsageDetail(result);
+        XX_TEST_EXPECT_EQ(detail.cacheReadTokens, int64_t{800});
+        XX_TEST_EXPECT_EQ(detail.cacheWriteTokens, int64_t{64});
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "streaming cache usage test failed: " << e.what() << std::endl;
+    }
+}
+
 asio::awaitable<void> test_rate_limit_error(MockAnthropicServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = AnthropicMockMode::RateLimit;
@@ -2345,6 +2555,9 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     co_await test_non_streaming_completion(*mock, port);
     co_await test_non_streaming_tool_call(*mock, port);
     co_await test_non_streaming_thinking(*mock, port);
+    co_await test_cache_control_breakpoints(*mock, port);
+    co_await test_usage_cache_tokens(*mock, port);
+    co_await test_streaming_usage_cache_tokens(*mock, port);
     co_await test_rate_limit_error(*mock, port);
     co_await test_server_error(*mock, port);
     co_await test_request_headers(*mock, port);

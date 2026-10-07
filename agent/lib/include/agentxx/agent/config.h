@@ -125,6 +125,16 @@ public:
     /// 是否支持视频输入 (多模态)
     bool videoInput = false;
 
+    /// 是否在请求体里加 prompt 缓存断点 (yaml `cache_control`, 默认关闭)
+    /// - 仅 Anthropic 协议生效 (`type: anthropic`): 在**稳定前缀**末尾加
+    ///   `cache_control: {type: "ephemeral"}` 断点 (系统提示 / 工具定义 /
+    ///   最后一条正文消息), 让上游把这些内容缓存下来, 后续请求命中缓存
+    ///   (账单里体现为 cache read, 成本与延迟都更低; 见计划 LLM-8)
+    /// - 默认关闭的原因: 部分 Anthropic 兼容网关不认识 `cache_control` 字段,
+    ///   打开后可能被拒; 确认服务端支持时再按模型打开
+    /// - OpenAI 侧不需要该开关: 前缀缓存由上游自动根据稳定前缀生效
+    bool cacheControl = false;
+
     /// 是否支持任何一种多模态输入
     bool hasMultimodalInput() const noexcept {
         return imageInput || audioInput || videoInput;

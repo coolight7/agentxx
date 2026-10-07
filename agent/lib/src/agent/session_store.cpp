@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS usage (
     completion_tokens    INTEGER NOT NULL DEFAULT 0,
     total_tokens         INTEGER NOT NULL DEFAULT 0,
     cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_prompt_tokens INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens     INTEGER NOT NULL DEFAULT 0,
     ok                   INTEGER NOT NULL DEFAULT 1,
     error_kind           TEXT NOT NULL DEFAULT ''
@@ -487,6 +488,14 @@ void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int st
                 "CREATE INDEX IF NOT EXISTS idx_session_input_status ON session_input(status)"
             );
             break;
+        case 3:
+            // v3: 用量账本补"缓存写入量"列 (cache_write_prompt_tokens; 计划 LLM-8)
+            // - Anthropic 的 cache_creation_input_tokens (写入 prompt 缓存的量) 与
+            //   cached_prompt_tokens (命中缓存的读取量) 分开记账, 便于评估
+            //   `cache_control` 断点的收益
+            // - 老库补列 (默认 0); 新库建表时已含该列 (幂等)
+            ensureUsageCacheWriteColumn(sessionDb);
+            break;
         default:
             throw std::runtime_error{
                 fmt::format("SessionStore: unknown schema migration step {}", step)
@@ -518,6 +527,29 @@ void SessionStore::ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& session
         );
     }
     sessionDb.exec("CREATE INDEX IF NOT EXISTS idx_view_message_msg_id ON view_message(msg_id)");
+}
+
+/// 迁移: 保证 usage 有 cache_write_prompt_tokens 列 (幂等; 计划 LLM-8)
+/// - 新库: CREATE TABLE 已含该列, 此处什么都不用做
+/// - 老库 (无该列): ALTER 增加列并默认 0 (历史记录没有缓存写入量, 不猜测回填)
+void SessionStore::ensureUsageCacheWriteColumn(agentxx::util::SqliteDb& sessionDb) {
+    bool hasColumn = false;
+    {
+        auto stmt = sessionDb.prepare("PRAGMA table_info(usage)");
+        while (stmt.step()) {
+            // 列信息: cid, name, type, notnull, dflt_value, pk
+            if (stmt.columnText(1) == "cache_write_prompt_tokens") {
+                hasColumn = true;
+                break;
+            }
+        }
+    }
+    if (false == hasColumn) {
+        sessionDb.exec(
+            "ALTER TABLE usage ADD COLUMN cache_write_prompt_tokens INTEGER NOT NULL DEFAULT 0"
+        );
+        XX_LOGI("SessionStore: usage table migrated (added cache_write_prompt_tokens column)");
+    }
 }
 
 bool SessionStore::sessionDataDirExists(std::string_view sessionId) const {
@@ -1278,8 +1310,9 @@ void SessionStore::addUsage(std::string_view sessionId, const UsageRecord& recor
             auto& db     = dbs(sessionId).sessionDb;
             auto  insert = db.prepare(
                 "INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, "
-                "total_tokens, cached_prompt_tokens, reasoning_tokens, ok, error_kind) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "total_tokens, cached_prompt_tokens, cache_write_prompt_tokens, "
+                "reasoning_tokens, ok, error_kind) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             );
             insert.bindInt64(1, record.timeMs);
             insert.bindText(2, record.model);
@@ -1287,9 +1320,10 @@ void SessionStore::addUsage(std::string_view sessionId, const UsageRecord& recor
             insert.bindInt64(4, record.completionTokens);
             insert.bindInt64(5, record.totalTokens);
             insert.bindInt64(6, record.cachedPromptTokens);
-            insert.bindInt64(7, record.reasoningTokens);
-            insert.bindInt64(8, record.ok ? 1 : 0);
-            insert.bindText(9, record.errorKind);
+            insert.bindInt64(7, record.cacheWritePromptTokens);
+            insert.bindInt64(8, record.reasoningTokens);
+            insert.bindInt64(9, record.ok ? 1 : 0);
+            insert.bindText(10, record.errorKind);
             insert.step();
             return true;
         },
@@ -1320,16 +1354,18 @@ SessionStore::UsageSummary SessionStore::usageSummary(std::string_view sessionId
                 "COALESCE(sum(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0), "
                 "COALESCE(sum(prompt_tokens), 0), COALESCE(sum(completion_tokens), 0), "
                 "COALESCE(sum(total_tokens), 0), COALESCE(sum(cached_prompt_tokens), 0), "
-                "COALESCE(sum(reasoning_tokens), 0) FROM usage"
+                "COALESCE(sum(reasoning_tokens), 0), "
+                "COALESCE(sum(cache_write_prompt_tokens), 0) FROM usage"
             );
             if (stmt.step()) {
-                out.calls              = stmt.columnInt64(0);
-                out.failedCalls        = stmt.columnInt64(1);
-                out.promptTokens       = stmt.columnInt64(2);
-                out.completionTokens   = stmt.columnInt64(3);
-                out.totalTokens        = stmt.columnInt64(4);
-                out.cachedPromptTokens = stmt.columnInt64(5);
-                out.reasoningTokens    = stmt.columnInt64(6);
+                out.calls                  = stmt.columnInt64(0);
+                out.failedCalls            = stmt.columnInt64(1);
+                out.promptTokens           = stmt.columnInt64(2);
+                out.completionTokens       = stmt.columnInt64(3);
+                out.totalTokens            = stmt.columnInt64(4);
+                out.cachedPromptTokens     = stmt.columnInt64(5);
+                out.reasoningTokens        = stmt.columnInt64(6);
+                out.cacheWritePromptTokens = stmt.columnInt64(7);
             }
             return true;
         },
@@ -1353,21 +1389,23 @@ std::vector<SessionStore::UsageRecord>
             auto& db   = dbs(sessionId).sessionDb;
             auto  stmt = db.prepare(
                 "SELECT time_ms, model, prompt_tokens, completion_tokens, total_tokens, "
-                "cached_prompt_tokens, reasoning_tokens, ok, error_kind FROM usage "
+                "cached_prompt_tokens, reasoning_tokens, ok, error_kind, "
+                "cache_write_prompt_tokens FROM usage "
                 "ORDER BY id DESC LIMIT ?"
             );
             stmt.bindInt64(1, static_cast<int64_t>(limit));
             while (stmt.step()) {
                 UsageRecord rec;
-                rec.timeMs             = stmt.columnInt64(0);
-                rec.model              = stmt.columnText(1);
-                rec.promptTokens       = stmt.columnInt64(2);
-                rec.completionTokens   = stmt.columnInt64(3);
-                rec.totalTokens        = stmt.columnInt64(4);
-                rec.cachedPromptTokens = stmt.columnInt64(5);
-                rec.reasoningTokens    = stmt.columnInt64(6);
-                rec.ok                 = stmt.columnInt64(7) != 0;
-                rec.errorKind          = stmt.columnText(8);
+                rec.timeMs                  = stmt.columnInt64(0);
+                rec.model                   = stmt.columnText(1);
+                rec.promptTokens            = stmt.columnInt64(2);
+                rec.completionTokens        = stmt.columnInt64(3);
+                rec.totalTokens             = stmt.columnInt64(4);
+                rec.cachedPromptTokens      = stmt.columnInt64(5);
+                rec.reasoningTokens         = stmt.columnInt64(6);
+                rec.ok                      = stmt.columnInt64(7) != 0;
+                rec.errorKind               = stmt.columnText(8);
+                rec.cacheWritePromptTokens  = stmt.columnInt64(9);
                 out.push_back(std::move(rec));
             }
             return true;

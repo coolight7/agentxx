@@ -73,6 +73,7 @@
 | STO-13 | 会话导出与取证包 | P2 | 完成（并入 OBS-4：会话摘要段 + 可选消息正文） | `diagnostics.cpp` 的 session 段 |
 | OBS-5 | 模块级日志开关 | P2 | 未实施（见阶段 AC 的差异说明：utilxx_base 的 `LogEntry` 不带模块名，按模块过滤需要改日志库的信道格式） | — |
 | PRO-8 | stdio JSONL 一次性运行（复用 Wire 结构 + JSONL 分帧） | P1 | 完成（已构建 + 测试通过 + 真实进程手工验证） | `lib/.../io/jsonl_io_transport.{h,cpp}`、`client/src/io/jsonl/jsonl_mode.cpp`；模块 `jsonl_mode`、`jsonl_runner` |
+| LLM-8 | Anthropic 缓存断点与缓存用量 | P1 | 完成（已构建 + 测试通过） | `ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints` / `applyUsage`；账本 `usage.cache_write_prompt_tokens`（schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -1953,3 +1954,87 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   需要常驻多客户端时用 `server` 模式 (同一套协议, WS 传输)。
 - 会话 id 绑定沿用端点的既有语义 (开机绑定 + 空 id = 当前会话), 未新增"由对端指定会话 id"
   的消息 (那属于 `switch_session` 的既有能力, 一次性运行不需要)。
+
+## 阶段 AE：Anthropic 缓存断点与缓存用量（LLM-8，2026-10-08）
+
+计划依据：`plan.md` §6 LLM-8（"先完成 PRM-1/CTX-1，再给 Anthropic 加可选 breakpoint；
+记录 cache read/write 到 usage ledger。OpenAI 侧只依赖稳定前缀和 provider 自身缓存能力，
+不假设存在可控断点"）。PRM-1（稳定段/动态段分离）已在阶段 M 完成，因此本阶段落地两件事：
+请求体断点 + 缓存用量入账。
+
+已完成：
+
+- **可选缓存断点**（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`）：
+  - 新增 `ModelConfig::cacheControl`（yaml `cache_control`，默认 **false**）：
+    仅 `type: anthropic` 生效; 默认关闭的理由是部分 Anthropic 兼容网关不认识
+    `cache_control` 字段 (打开会被拒), 确认服务端支持后按模型打开;
+  - 断点加在**稳定前缀**末尾 (Anthropic 单请求最多 4 个断点, 这里用 3 个):
+    ① 系统提示 (`system` 由字符串转内容块数组, 末块带断点);
+    ② 工具定义 (最后一个工具带断点);
+    ③ 最后一条**非请求期插入**的消息 —— 请求末尾的动态段
+    (`<dynamic_context ...>`, PRM-1 每轮按来源拼装, 内容可能变化) 之前的那条, 否则每轮
+    都会写新缓存而读不到旧缓存; 动态段与工具应答被合并到同一条消息时整条跳过该断点;
+  - `markCacheBreakpoint` 从末尾往前找第一个可带断点的块 (text / tool_use / tool_result /
+    image / document): thinking 块 (带 signature) 不接受该字段, 命中时继续往前找;
+  - 关闭时不改写请求体 (用例断言请求体里不出现 `cache_control` 子串)。
+- **缓存用量入账**（口径折算 + 账本新列）：
+  - 上游语义与 OpenAI 不同: Anthropic 的 `input_tokens` **只统计未命中缓存的输入**,
+    命中缓存的读取量与写入量分别是 `cache_read_input_tokens` / `cache_creation_input_tokens`。
+    新增 `AnthropicProvider::applyUsage` 作为两条路径 (非流式 `parseResponse` 与流式
+    `message_start` / `message_delta`) 的**唯一**用量组装入口:
+    `prompt_tokens = input + cache_read + cache_creation`, `total = prompt + completion`,
+    `cached_prompt_tokens = cache_read`; 流式路径缺失字段沿用已知值 (message_delta 只带
+    output_tokens 时不会把 prompt 计数清零, 这是改造中顺手修掉的一个隐患);
+  - 缓存写入量经**补充用量旁路**上报: `neograph::ChatCompletion::Usage` 没有对应字段
+    (第三方结构, 不改动), 因此在 `provider_common.h` 增加
+    `kUsageDetailExtraKey` 旁路 (provider 写入 `message.extra`, 模型调用节点
+    `takeUsageDetail` 取出后把该键置空) —— 记账字段不进入会话消息, 也不进入下一轮请求体;
+  - 账本: `UsageRecord/UsageSummary` 增加 `cacheWritePromptTokens`, 会话库 schema
+    **v3** 迁移补列 `usage.cache_write_prompt_tokens` (老库 ALTER 补列, 历史记录按 0 保留,
+    不猜测回填; 迁移前照常备份 `session.db.bak.v2`); `addUsage` / `usageSummary` /
+    `recentUsage` 三处 SQL 同步;
+  - 关键指标 (OBS-3): `KeyMetrics::noteModelCall` 增加缓存写入量参数与累计
+    (`cache_write_tokens` 进 JSON), 诊断包的用量段输出 `cache_write=...`。
+
+测试：
+
+- `anthropic_provider`（+3 组用例, 模块 280→286 项断言）：
+  ① 断点定位: system 转内容块数组且末块带断点、工具只给最后一个加、断点落在动态段
+  之前那条消息上 (动态段那条不带断点、正文原样保留); 关闭开关时请求体无该字段;
+  ② 非流式缓存用量: `usage{input 100, output 20, cache_read 900, cache_creation 512}`
+  → `prompt_tokens=1512`、`cached_prompt_tokens=900`、旁路 detail 读/写量正确、
+  `takeUsageDetail` 取出后旁路置空;
+  ③ 流式缓存用量: `message_start` 报输入与缓存量、`message_delta` 只报输出量
+  → 折算结果同上 (缺失字段沿用已知值)。
+- `fake_provider`（模块 36→46 项断言）：假 provider 上报 `cache_write_tokens` 后,
+  真实一轮会话的账本聚合与逐行记录都带缓存写入量, `KeyMetrics` 累计一致,
+  且会话消息里没有内部记账键 (取出即置空)。
+- `session_schema`（模块 104→121 项断言）：新增 v2 → v3 迁移用例 —— 造一个 v2 结构库
+  (usage 表无 cache_write 列, `schema_version=2`), 写路径迁移后列已补、版本推进、
+  备份 `session.db.bak.v2` 生成; 新记录带缓存写入量, 老记录该列为 0 且其余字段不变;
+  聚合把两者都算进去。
+- `config_loader`（模块 375→381 项断言）：`cache_control` 未配置默认 false、
+  显式 true / "TRUE" / false 三种写法解析正确。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0，无新增 error。
+- 测试：`anthropic_provider` 286/0、`fake_provider` 46/0、`session_schema` 121/0、
+  `config_loader` 381/0、`usage_ledger` 21/0、`observability` 96/0；
+  回归：`agent` 198/0、`session_persistence` 621/0、`session_sync` 30/0、
+  `summarization` 445/0、`prompt_stability_io` 32/0、`remote_agent` 477/0、`boundaries` 13/0。
+
+注意事项 / 与计划的差异：
+
+- 计划提到 "OpenAI 侧只依赖稳定前缀和 provider 自身缓存能力": 未改动 OpenAI / Responses
+  provider (其用量解析保持原样, 已按 `prompt_tokens_details.cached_tokens` 记读取量);
+  缓存断点是 Anthropic 专有的可选开关。
+- 计划的 "记录 cache read/write" 落在账本上: 读取量复用既有 `cached_prompt_tokens` 口径,
+  写入量是**新增列** (schema v3)。之所以走 `message.extra` 旁路而不是给
+  `neograph::ChatCompletion::Usage` 加字段: 该结构属于第三方库 (独立仓库维护),
+  按仓库约定尽量不改; 旁路键在模型调用节点取出后立即置空, 不落进会话消息。
+- 未把 `cache_control` 加到 TUI 的"添加模型配置"表单与 `WireAddModel` 协议
+  (需要改表单/协议/校验三处): 需要该开关的用户按 yaml `model.list[].cache_control: true`
+  打开即可; 后续要表单化时再补。
+- 未做缓存命中率的自动诊断/告警: 指标与账本已经把 cache read/write 都记下来
+  (OBS-3 的 `cache_write_tokens` 与诊断包会话段), 是否命中由用户按数字判断。

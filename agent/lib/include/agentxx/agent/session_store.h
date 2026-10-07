@@ -46,7 +46,7 @@ class SessionStore {
 public:
 
     /// 当前支持的最新 schema 版本 (新增结构变更时递增并追加迁移步骤)
-    static constexpr int kSchemaVersion = 2;
+    static constexpr int kSchemaVersion = 3;
 
     /// - [rootDir] 数据根目录; 为空使用默认 {dataDir}/sqlite/sessions/
     ///   (dataDir 为空时 ~/.agentxx/, 取不到用户主目录时回退系统临时目录)
@@ -182,24 +182,28 @@ public:
         /// 成员按尺寸从大到小排列, 减少结构体内填充字节
         std::string model;
         std::string errorKind; ///< 失败分类文本 (成功时为空)
-        int64_t     timeMs              = 0;
-        int64_t     promptTokens        = 0;
-        int64_t     completionTokens    = 0;
-        int64_t     totalTokens         = 0;
-        int64_t     cachedPromptTokens  = 0;
-        int64_t     reasoningTokens     = 0;
-        bool        ok                  = true;
+        int64_t     timeMs                  = 0;
+        int64_t     promptTokens            = 0;
+        int64_t     completionTokens        = 0;
+        int64_t     totalTokens             = 0;
+        int64_t     cachedPromptTokens      = 0;
+        /// 写入 prompt 缓存的 token 数 (Anthropic 的 cache_creation_input_tokens;
+        /// 其余 provider 为 0; 计划 LLM-8)
+        int64_t     cacheWritePromptTokens  = 0;
+        int64_t     reasoningTokens         = 0;
+        bool        ok                      = true;
     };
 
     /// 会话用量聚合 (供界面/诊断展示; 由账本汇总, 不依赖内存中的最后一次统计)
     struct UsageSummary {
-        int64_t calls              = 0; ///< 记录次数 (含失败)
-        int64_t failedCalls        = 0; ///< 失败次数
-        int64_t promptTokens       = 0;
-        int64_t completionTokens   = 0;
-        int64_t totalTokens        = 0;
-        int64_t cachedPromptTokens = 0;
-        int64_t reasoningTokens    = 0;
+        int64_t calls                  = 0; ///< 记录次数 (含失败)
+        int64_t failedCalls            = 0; ///< 失败次数
+        int64_t promptTokens           = 0;
+        int64_t completionTokens       = 0;
+        int64_t totalTokens            = 0;
+        int64_t cachedPromptTokens     = 0;
+        int64_t cacheWritePromptTokens = 0;
+        int64_t reasoningTokens        = 0;
     };
 
     /// 追加一条用量记录 (失败仅记日志; 账本是统计信息, 不影响对话流程)
@@ -345,6 +349,9 @@ private:
 
     /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
     static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
+
+    /// 迁移 usage 的 cache_write_prompt_tokens 列 (幂等; 老库 ALTER 补列, 计划 LLM-8)
+    static void ensureUsageCacheWriteColumn(agentxx::util::SqliteDb& sessionDb);
 
     /// 读取会话 meta 中单个键 (只读临时连接, 不取写租约; 无数据返回空串)
     std::string readMetaValue(std::string_view sessionId, std::string_view key) const;

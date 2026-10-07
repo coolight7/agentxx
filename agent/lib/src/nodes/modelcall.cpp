@@ -146,8 +146,10 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     // 账本里记录本次实际使用的模型名 (会话可能已切换模型)
     auto modelName = resolveCurrentModelName(input.ctx.thread_id);
     // 用量账本 (计划 STO-8): 每次模型调用记一行, 成功记用量, 失败记原因
+    // - detail: 补充用量 (缓存读/写; 计划 LLM-8), provider 经 message.extra 旁路回报
     auto recordUsage = [&agentCtx, &input, &modelName](
                            const neograph::ChatCompletion::Usage& usage,
+                           const agentxx::protocol::UsageDetail&  detail,
                            bool                                   ok,
                            std::string_view                       errorKind
                        ) {
@@ -161,19 +163,24 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
             )
                 .count()
         );
-        rec.model              = modelName;
-        rec.promptTokens       = usage.prompt_tokens;
-        rec.completionTokens   = usage.completion_tokens;
-        rec.totalTokens        = usage.total_tokens;
-        rec.cachedPromptTokens = usage.cached_prompt_tokens;
-        rec.reasoningTokens    = usage.reasoning_tokens;
-        rec.ok                 = ok;
-        rec.errorKind          = std::string{errorKind};
+        rec.model                  = modelName;
+        rec.promptTokens           = usage.prompt_tokens;
+        rec.completionTokens       = usage.completion_tokens;
+        rec.totalTokens            = usage.total_tokens;
+        // 命中缓存的读取量: 旁路里有明确值时以它为准 (Anthropic 会把读取量从
+        // input_tokens 里剔除, 与 OpenAI 的 cached_tokens 同口径)
+        rec.cachedPromptTokens     = detail.cacheReadTokens > 0 ? detail.cacheReadTokens
+                                                               : usage.cached_prompt_tokens;
+        rec.cacheWritePromptTokens = detail.cacheWriteTokens;
+        rec.reasoningTokens        = usage.reasoning_tokens;
+        rec.ok                     = ok;
+        rec.errorKind              = std::string{errorKind};
         agentCtx->sessions->sessionStore->addUsage(input.ctx.thread_id, rec);
     };
     // 关键指标: 模型调用与用量 (失败在错误分类处记)
     auto noteMetrics = [&agentCtx](
                            const neograph::ChatCompletion::Usage& usage,
+                           const agentxx::protocol::UsageDetail&  detail,
                            bool                                   ok
                        ) {
         if (!agentCtx || !agentCtx->metrics || !ok) {
@@ -182,7 +189,8 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         agentCtx->metrics->noteModelCall(
             usage.prompt_tokens,
             usage.completion_tokens,
-            usage.cached_prompt_tokens
+            detail.cacheReadTokens > 0 ? detail.cacheReadTokens : usage.cached_prompt_tokens,
+            detail.cacheWriteTokens
         );
     };
 
@@ -202,7 +210,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
             callFailed   = true;
             callErrorMsg = errmsg;
             callErrorEx  = std::current_exception();
-            recordUsage({}, false, errmsg);
+            recordUsage({}, {}, false, errmsg);
             if (agentCtx && agentCtx->metrics) {
                 agentCtx->metrics->noteModelError(
                     std::string{llmErrorKindText(classifyLlmError(errmsg))}
@@ -224,8 +232,10 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
         completion.usage.total_tokens
     );
-    recordUsage(completion.usage, true, {});
-    noteMetrics(completion.usage, true);
+    // 补充用量 (缓存读/写; 计划 LLM-8): 取出即置空, 不把记账字段带进会话消息
+    const auto usageDetail = agentxx::protocol::takeUsageDetail(completion);
+    recordUsage(completion.usage, usageDetail, true, {});
+    noteMetrics(completion.usage, usageDetail, true);
     co_return completion.message;
 }
 

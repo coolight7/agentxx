@@ -693,6 +693,12 @@ model:
                                       # SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件
                                       # 降级为 [用户附带了图片/音频/视频] 纯文本标签
       model_context_max_token: 128000
+      cache_control: false            # 是否在请求体里加 prompt 缓存断点 (计划 LLM-8)
+                                      # 仅 `type: anthropic` 生效: 在稳定前缀末尾
+                                      # (系统提示 / 工具定义 / 最后一条正文消息) 加
+                                      # cache_control 断点, 上游把这些内容缓存下来供后续
+                                      # 请求命中 (费用与首 token 延迟都更低);
+                                      # 默认关闭: 部分 Anthropic 兼容网关不认识该字段
       extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
         x-custom-header: "value"
       extra_api_config:           # 合并到请求 body 的扩展配置

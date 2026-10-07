@@ -611,6 +611,54 @@ void test_model_multimodal_input() {
 }
 
 // ---------------------------------------------------------------------------
+// prompt 缓存断点开关 (yaml `model.list[].cache_control`, 默认 false; 计划 LLM-8)
+// ---------------------------------------------------------------------------
+
+void test_model_cache_control() {
+    // 未配置: 默认关闭 (不认识的网关不会被 cache_control 字段打回)
+    auto cfg = loadYaml("model:\n  list:\n    - name: m1\n      type: \"anthropic\"\n");
+    auto it  = cfg.models.find("m1");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_FALSE(it->second.cacheControl);
+    }
+
+    // 显式打开
+    cfg = loadYaml(R"(model:
+  list:
+    - name: m2
+      type: "anthropic"
+      cache_control: true
+)");
+    it  = cfg.models.find("m2");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_TRUE(it->second.cacheControl);
+    }
+
+    // 显式关闭与大小写写法
+    cfg = loadYaml(R"(model:
+  list:
+    - name: m3
+      type: "anthropic"
+      cache_control: "TRUE"
+    - name: m4
+      type: "anthropic"
+      cache_control: false
+)");
+    if (auto m3 = cfg.models.find("m3"); m3 != cfg.models.end()) {
+        XX_TEST_EXPECT_TRUE(m3->second.cacheControl);
+    } else {
+        XX_TEST_EXPECT_TRUE(false);
+    }
+    if (auto m4 = cfg.models.find("m4"); m4 != cfg.models.end()) {
+        XX_TEST_EXPECT_FALSE(m4->second.cacheControl);
+    } else {
+        XX_TEST_EXPECT_TRUE(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // codegraph 参数迁移到插件配置 (yaml `plugins` 条目 args):
 // 宿主只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
 // ---------------------------------------------------------------------------
@@ -2361,6 +2409,7 @@ TestResult testConfigLoader() {
     test_model_max_concurrent_connections();
     test_model_request_reasoning_summary();
     test_model_multimodal_input();
+    test_model_cache_control();
     test_plugins_empty_by_default();
     test_plugin_name_form_removed();
     test_plugin_args_paths_parse();

@@ -257,8 +257,82 @@ inline utilxx_base::Json chatToolsToOpenAIJson(const std::vector<neograph::ChatT
     return arr;
 }
 
-/// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考载体
-/// - 加密思考载体存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
+/// 补充用量明细 (缓存 token) 的旁路传递 (计划 LLM-8)
+///
+/// 背景: `neograph::ChatCompletion::Usage` 只有 prompt / completion / total /
+/// cached_prompt / reasoning 五项; Anthropic 另外回报"缓存写入量"
+/// (`cache_creation_input_tokens`), 它在 agentxx 用量账本里单独成列。
+/// 为了不改动第三方库的结构, provider 把这类补充用量写进
+/// `completion.message.extra[kUsageDetailExtraKey]` (对象), 由模型调用节点取出后
+/// 写账本, 并把该键置空 —— 不让内部记账字段混进会话消息。
+///
+/// - 该键不会被序列化进下一轮请求体 (extra 不参与请求装配)
+/// - provider 不上报时键不存在, 调用方按 0 处理
+inline constexpr std::string_view kUsageDetailExtraKey = "_agentxx_usage_detail";
+
+/// 补充用量字段名: 命中缓存的 prompt token 数 (`cached_prompt_tokens` 的同源值)
+inline constexpr std::string_view kUsageCacheReadTokensKey = "cache_read_tokens";
+/// 补充用量字段名: 写入缓存的 prompt token 数 (仅 Anthropic 回报)
+inline constexpr std::string_view kUsageCacheWriteTokensKey = "cache_write_tokens";
+
+/// 补充用量明细 (缓存读/写)
+struct UsageDetail {
+    int64_t cacheReadTokens  = 0;
+    int64_t cacheWriteTokens = 0;
+
+    bool empty() const noexcept {
+        return cacheReadTokens == 0 && cacheWriteTokens == 0;
+    }
+};
+
+/// provider 侧: 写入补充用量 (值为 0 的字段照写, 便于对端区分"已知为 0"与"未上报")
+inline void setUsageDetail(neograph::ChatCompletion& completion, const UsageDetail& detail) {
+    neograph::json obj                          = neograph::json::object();
+    obj[std::string{kUsageCacheReadTokensKey}]  = detail.cacheReadTokens;
+    obj[std::string{kUsageCacheWriteTokensKey}] = detail.cacheWriteTokens;
+    completion.message.extra[std::string{kUsageDetailExtraKey}] = std::move(obj);
+}
+
+/// 模型调用节点侧: 取出补充用量, 并把该键置空 (不进入会话消息)
+/// - 键不存在时返回全 0
+inline UsageDetail takeUsageDetail(neograph::ChatCompletion& completion) {
+    auto        out = UsageDetail{};
+    const std::string key{kUsageDetailExtraKey};
+    auto&             extra = completion.message.extra;
+    if (!extra.is_object() || !extra.contains(key)) {
+        return out;
+    }
+    auto obj = extra[key];
+    if (obj.is_object()) {
+        out.cacheReadTokens
+            = static_cast<int64_t>(obj.value(std::string{kUsageCacheReadTokensKey}, int64_t{0}));
+        out.cacheWriteTokens
+            = static_cast<int64_t>(obj.value(std::string{kUsageCacheWriteTokensKey}, int64_t{0}));
+    }
+    // 置空而非删除: 第三方 json 结构没有删除键的接口, 置空同样能保证不混进会话消息
+    extra[key] = neograph::json(nullptr);
+    return out;
+}
+
+/// 只读读取补充用量 (不改动 completion; provider 内部结算用)
+inline UsageDetail readUsageDetail(const neograph::ChatCompletion& completion) {
+    auto              out = UsageDetail{};
+    const std::string key{kUsageDetailExtraKey};
+    const auto&       extra = completion.message.extra;
+    if (!extra.is_object() || !extra.contains(key)) {
+        return out;
+    }
+    auto obj = extra[key];
+    if (obj.is_object()) {
+        out.cacheReadTokens
+            = static_cast<int64_t>(obj.value(std::string{kUsageCacheReadTokensKey}, int64_t{0}));
+        out.cacheWriteTokens
+            = static_cast<int64_t>(obj.value(std::string{kUsageCacheWriteTokensKey}, int64_t{0}));
+    }
+    return out;
+}
+
+/// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考载体/// - 加密思考载体存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
 ///   (summary/content 均空) 时唯一的有效载体; 数组非空即视为有载体
 /// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
 ///   由调用方抛出异常, 经 modelcall 重试流程自动重试并提示 UI

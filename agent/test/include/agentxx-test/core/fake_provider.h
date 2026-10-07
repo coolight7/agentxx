@@ -15,6 +15,7 @@
 /// 注意: 必须在 `agent.init()` 之后注入 —— 注册模型会清除已注入的实例。
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/protocol/provider_common.h"
 #include "neograph/graph/cancel.h"
 #include "neograph/provider.h"
 #include <asio/awaitable.hpp>
@@ -67,6 +68,8 @@ struct FakeStep {
     int promptTokens     = 100;
     int completionTokens = 50;
     int cachedTokens     = 0;
+    /// 写入 prompt 缓存的 token 数 (计划 LLM-8; 仅 Anthropic 类 provider 会回报)
+    int cacheWriteTokens = 0;
     int reasoningTokens  = 0;
 };
 
@@ -251,6 +254,14 @@ public:
         completion.usage.total_tokens         = step.promptTokens + step.completionTokens;
         completion.usage.cached_prompt_tokens = step.cachedTokens;
         completion.usage.reasoning_tokens     = step.reasoningTokens;
+        // 缓存写入量 (计划 LLM-8): 真实 Anthropic provider 也走这条旁路,
+        // 由模型调用节点取出写账本 (取用后该键置空, 不进入会话消息)
+        if (step.cacheWriteTokens > 0) {
+            agentxx::protocol::setUsageDetail(
+                completion,
+                agentxx::protocol::UsageDetail{step.cachedTokens, step.cacheWriteTokens}
+            );
+        }
         co_return completion;
     }
 

@@ -518,6 +518,17 @@ static YamlAppConfig parseYamlConfigNode(
             if (node["extra_api_config"]) {
                 mc.extraConfig = yamlToJson(node["extra_api_config"]);
             }
+            // prompt 缓存断点开关 (yaml `cache_control`, 默认 false; 计划 LLM-8)
+            // 仅 anthropic 类型生效: 在稳定前缀末尾加 cache_control 断点,
+            // 上游把系统提示/工具定义/正文前缀缓存下来供后续请求命中
+            if (node["cache_control"]) {
+                mc.cacheControl = utilxx_base::toLower(resolveEnvVars(
+                                      (node["cache_control"]).as<std::string>("false"),
+                                      dotEnvVars,
+                                      overrideEnvVars
+                                  ))
+                                  == "true";
+            }
             if (!mc.name.empty()) {
                 cfg.models[mc.name] = std::move(mc);
             }

@@ -63,6 +63,54 @@ public:
     /// 将 neograph 工具定义转换为 Anthropic 格式
     static utilxx_base::Json convertTools(const std::vector<neograph::ChatTool>& tools);
 
+    /// 组装 Anthropic 用量 (计划 LLM-8; 非流式与流式两条路径共用的唯一入口)
+    ///
+    /// 上游语义与 OpenAI 不同: `input_tokens` **只统计未命中缓存的输入**,
+    /// 命中缓存的读取量与写入量分别是 `cache_read_input_tokens` /
+    /// `cache_creation_input_tokens`。这里统一折算成与其他 provider 同口径的
+    /// `prompt_tokens` (整段 prompt 的规模), 并把缓存读/写量分别写到
+    /// `usage.cached_prompt_tokens` 与补充用量旁路 (见 provider_common.h 的
+    /// [agentxx::protocol::setUsageDetail]), 供模型调用节点写入用量账本。
+    ///
+    /// - `args`:
+    ///     - [completion] 待填充的补全结果
+    ///     - [inputTokens] `input_tokens` (未命中缓存的输入)
+    ///     - [cacheReadTokens] `cache_read_input_tokens` (命中缓存读取)
+    ///     - [cacheWriteTokens] `cache_creation_input_tokens` (写入缓存)
+    ///     - [outputTokens] `output_tokens`; < 0 表示本次事件未携带 (保持原值)
+    static void applyUsage(
+        neograph::ChatCompletion& completion,
+        int                       inputTokens,
+        int                       cacheReadTokens,
+        int                       cacheWriteTokens,
+        int                       outputTokens
+    ) {
+        completion.usage.prompt_tokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+        if (outputTokens >= 0) {
+            completion.usage.completion_tokens = outputTokens;
+        }
+        completion.usage.total_tokens
+            = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+        completion.usage.cached_prompt_tokens = cacheReadTokens;
+        agentxx::protocol::setUsageDetail(
+            completion,
+            agentxx::protocol::UsageDetail{cacheReadTokens, cacheWriteTokens}
+        );
+    }
+
+    /// 在请求体里加 prompt 缓存断点 (计划 LLM-8; 仅 `ModelConfig::cacheControl` 打开时调用)
+    ///
+    /// 断点加在**稳定前缀**的末尾, 使上游能把这些内容缓存下来供后续请求命中:
+    /// ① 系统提示 (system 由字符串转内容块数组, 末块带断点);
+    /// ② 工具定义 (最后一个工具带断点);
+    /// ③ 最后一条**非请求期插入**的消息 —— 请求末尾的动态段
+    ///   (`<dynamic_context ...>`, `MessageFlag::AutoInserted`) 每轮都可能变化,
+    ///   断点必须落在它之前, 否则每轮都写新缓存而读不到旧缓存。
+    ///
+    /// Anthropic 单请求最多 4 个断点, 这里最多用 3 个; 上游不支持该字段时应保持
+    /// 关闭 (默认关闭, 见 `ModelConfig::cacheControl`)。
+    static void applyCacheBreakpoints(utilxx_base::Json& body);
+
     /// 解析非流式 Anthropic 响应
     static neograph::ChatCompletion parseResponse(const utilxx_base::Json& resp);
 
@@ -247,8 +295,15 @@ public:
             if (msgView.valid() && msgView.is_object()) {
                 auto usageView = msgView["usage"];
                 if (usageView.valid() && usageView.is_object()) {
-                    completion.usage.prompt_tokens
-                        = viewInt(usageView, "input_tokens", completion.usage.prompt_tokens);
+                    // 用量口径 (计划 LLM-8): input_tokens 只含未命中缓存的输入,
+                    // 缓存读/写量单独回报, 统一由 [applyUsage] 折算成 prompt_tokens
+                    applyUsage(
+                        completion,
+                        viewInt(usageView, "input_tokens", 0),
+                        viewInt(usageView, "cache_read_input_tokens", 0),
+                        viewInt(usageView, "cache_creation_input_tokens", 0),
+                        -1
+                    );
                 }
             }
         } else if (currentEvent == "content_block_start") {
@@ -323,14 +378,29 @@ public:
         } else if (currentEvent == "message_delta") {
             auto usageView = jv["usage"];
             if (usageView.valid() && usageView.is_object()) {
-                // 命中后物化语义: output_tokens 缺失时保持原值 (与原 value<int> 缺省 0 不同,
-                // 此处显式判 contains 后再覆盖, 避免无 usage 块时误清零; 有 usage 块时按原语义)
+                // 缺失字段沿用已知值: output_tokens 缺失保持原值 (与原行为一致),
+                // input_tokens / 缓存量缺失时沿用 message_start 报过的值 (计划 LLM-8)
+                const auto detail = agentxx::protocol::readUsageDetail(completion);
+                const int  knownInputTokens
+                    = completion.usage.prompt_tokens
+                      - static_cast<int>(completion.usage.cached_prompt_tokens)
+                      - static_cast<int>(detail.cacheWriteTokens);
+                const int inputTokens = viewInt(usageView, "input_tokens", knownInputTokens);
+                const int cacheRead   = viewInt(
+                    usageView,
+                    "cache_read_input_tokens",
+                    static_cast<int>(completion.usage.cached_prompt_tokens)
+                );
+                const int cacheWrite = viewInt(
+                    usageView,
+                    "cache_creation_input_tokens",
+                    static_cast<int>(detail.cacheWriteTokens)
+                );
+                int outputTokens = -1;
                 if (usageView.contains("output_tokens")) {
-                    completion.usage.completion_tokens
-                        = viewInt(usageView, "output_tokens", completion.usage.completion_tokens);
-                    completion.usage.total_tokens
-                        = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+                    outputTokens = viewInt(usageView, "output_tokens", 0);
                 }
+                applyUsage(completion, inputTokens, cacheRead, cacheWrite, outputTokens);
             }
         }
         return currentEvent == "message_stop";
@@ -339,6 +409,15 @@ public:
 private:
 
     static constexpr std::string_view kDefaultBaseUrl{"https://api.anthropic.com"};
+
+    /// 是否为请求末尾的动态段内容块 (`<dynamic_context ...>`; 见
+    /// [applyCacheBreakpoints] 的说明), 仅供缓存断点定位使用
+    static bool isDynamicContextBlock(const utilxx_base::Json& block);
+
+    /// 在一段内容 (字符串或内容块数组) 末尾的可缓存块上加 `cache_control` 断点
+    /// - thinking 块 (带 signature) 不接受该字段, 命中时继续往前找
+    /// - `return` 是否成功加上断点
+    static bool markCacheBreakpoint(utilxx_base::Json& content);
 
     explicit AnthropicProvider(agentxx::agent::ModelConfig config);
 

@@ -281,6 +281,92 @@ utilxx_base::Json AnthropicProvider::convertTools(const std::vector<neograph::Ch
     return arr;
 }
 
+/// 是否为请求末尾的动态段内容块 (`<dynamic_context ...>`, 计划 PRM-1)
+/// - 动态段由 modelcall 每轮按当前来源拼装 (记忆/技能等), 内容可能变化,
+///   因此它不属于稳定前缀: 缓存断点必须落在它之前的消息上
+bool AnthropicProvider::isDynamicContextBlock(const utilxx_base::Json& block) {
+    if (!block.is_object() || block.value("type", std::string{}) != "text") {
+        return false;
+    }
+    return block.value("text", std::string{}).starts_with("<dynamic_context");
+}
+
+/// 在一段内容 (字符串或内容块数组) 的末尾可缓存块上加断点; 无可加块返回 false
+bool AnthropicProvider::markCacheBreakpoint(utilxx_base::Json& content) {
+    static const utilxx_base::Json kBreakpoint{
+        {"type", "ephemeral"}
+    };
+    // 纯字符串内容: 转成文本块数组后加断点 (Anthropic 两种形态都接受)
+    if (content.is_string()) {
+        utilxx_base::Json block;
+        block["type"]          = "text";
+        block["text"]          = content.get<std::string>();
+        block["cache_control"] = kBreakpoint;
+        content                = utilxx_base::Json::array({std::move(block)});
+        return true;
+    }
+    if (!content.is_array() || content.empty()) {
+        return false;
+    }
+    // 从末尾往前找第一个可带断点的块: thinking 块 (带 signature) 不接受
+    // cache_control, 命中时继续往前找
+    for (size_t i = content.size(); i > 0; --i) {
+        auto& block = content[i - 1];
+        if (!block.is_object()) {
+            continue;
+        }
+        const auto type = block.value("type", std::string{});
+        if (type == "text" || type == "tool_use" || type == "tool_result" || type == "image"
+            || type == "document") {
+            block["cache_control"] = kBreakpoint;
+            return true;
+        }
+    }
+    return false;
+}
+
+void AnthropicProvider::applyCacheBreakpoints(utilxx_base::Json& body) {
+    // ① 系统提示: 字符串 → 内容块数组 (末块带断点)
+    if (body.contains("system")) {
+        markCacheBreakpoint(body["system"]);
+    }
+
+    // ② 工具定义: 最后一个工具带断点 (工具 schema 是稳定的最大固定段之一)
+    if (body.contains("tools") && body["tools"].is_array() && !body["tools"].empty()) {
+        body["tools"].back()["cache_control"] = utilxx_base::Json{{"type", "ephemeral"}};
+    }
+
+    // ③ 消息: 断点落在"最后一条非动态段消息"的末尾可缓存块上
+    if (!body.contains("messages") || !body["messages"].is_array() || body["messages"].empty()) {
+        return;
+    }
+    auto&  messages = body["messages"];
+    size_t idx      = messages.size();
+    // 末尾消息若只承载动态段, 则它不是稳定前缀的一部分, 往前退一条
+    // (动态段与工具应答被合并到同一条消息时, 整条跳过: 该条里含动态段内容)
+    while (idx > 0) {
+        const auto& msg = messages[idx - 1];
+        if (!msg.is_object() || !msg.contains("content")) {
+            break;
+        }
+        const auto& content = msg["content"];
+        bool        dynamic = false;
+        if (content.is_array() && !content.empty()) {
+            dynamic = isDynamicContextBlock(content.back());
+        } else if (content.is_string()) {
+            dynamic = content.get<std::string>().starts_with("<dynamic_context");
+        }
+        if (!dynamic) {
+            break;
+        }
+        --idx;
+    }
+    if (idx == 0) {
+        return;
+    }
+    markCacheBreakpoint(messages[idx - 1]["content"]);
+}
+
 void AnthropicProvider::appendThinkingBlock(
     neograph::ChatCompletion& completion,
     const utilxx_base::Json&  block
@@ -325,11 +411,16 @@ neograph::ChatCompletion AnthropicProvider::parseResponse(const utilxx_base::Jso
     }
 
     if (resp.contains("usage")) {
-        auto u                             = resp["usage"];
-        completion.usage.prompt_tokens     = u.value("input_tokens", 0);
-        completion.usage.completion_tokens = u.value("output_tokens", 0);
-        completion.usage.total_tokens
-            = completion.usage.prompt_tokens + completion.usage.completion_tokens;
+        auto u = resp["usage"];
+        // 用量口径 (计划 LLM-8): input_tokens 只含未命中缓存的输入, 缓存读/写量
+        // 单独回报; 统一折算成整段 prompt 规模, 并把缓存写入量放进旁路供账本使用
+        applyUsage(
+            completion,
+            u.value("input_tokens", 0),
+            u.value("cache_read_input_tokens", 0),
+            u.value("cache_creation_input_tokens", 0),
+            u.value("output_tokens", 0)
+        );
     }
 
     return completion;
@@ -357,6 +448,11 @@ utilxx_base::Json AnthropicProvider::buildBody(const neograph::CompletionParams&
 
     if (!params.tools.empty()) {
         body["tools"] = convertTools(params.tools);
+    }
+
+    // prompt 缓存断点 (计划 LLM-8): 默认关闭, 由 model.list 条目的 `cache_control` 打开
+    if (config_.cacheControl) {
+        applyCacheBreakpoints(body);
     }
 
     if (params.temperature >= 0.0f) {

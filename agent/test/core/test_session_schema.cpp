@@ -217,6 +217,63 @@ CREATE TABLE store (
     db.close();
 }
 
+/// 建立一个 v2 结构的会话库 (计划 LLM-8 的迁移起点):
+/// 结构上到 v2 为止 (usage 表**没有** cache_write_prompt_tokens 列, 有 session_input),
+/// 且 meta.schema_version = 2, 用于验证按相邻步骤迁移到 v3
+void createV2Db(const std::string& dbFile) {
+    fs::create_directories(utilxx_base::utf8ToPath(fs::path{dbFile}.parent_path().string()));
+    agentxx::util::SqliteDb db;
+    db.open(dbFile);
+    db.exec(R"sql(
+CREATE TABLE view_message (
+    seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+    json   TEXT NOT NULL,
+    msg_id TEXT
+);
+CREATE TABLE llm_context (
+    id   INTEGER PRIMARY KEY CHECK (id = 1),
+    json TEXT NOT NULL
+);
+CREATE TABLE meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE store (
+    id    INTEGER PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE usage (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    time_ms              INTEGER NOT NULL,
+    model                TEXT NOT NULL,
+    prompt_tokens        INTEGER NOT NULL DEFAULT 0,
+    completion_tokens    INTEGER NOT NULL DEFAULT 0,
+    total_tokens         INTEGER NOT NULL DEFAULT 0,
+    cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens     INTEGER NOT NULL DEFAULT 0,
+    ok                   INTEGER NOT NULL DEFAULT 1,
+    error_kind           TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE session_input (
+    id           TEXT PRIMARY KEY,
+    payload      TEXT NOT NULL,
+    delivery     TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'admitted',
+    admitted_seq INTEGER NOT NULL DEFAULT 0,
+    promoted_seq INTEGER NOT NULL DEFAULT 0,
+    created_ms   INTEGER NOT NULL DEFAULT 0
+);
+)sql");
+    db.exec("INSERT INTO meta(key, value) VALUES('schema_version', '2')");
+    // 历史用量记录: v2 形态 (没有"缓存写入量"这一列)
+    db.exec(
+        "INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, total_tokens, "
+        "cached_prompt_tokens, reasoning_tokens, ok, error_kind) "
+        "VALUES(1700000000000, 'legacy-model', 10, 5, 15, 3, 1, 1, '')"
+    );
+    db.close();
+}
+
 } // namespace
 
 TestResult testSessionSchema() {
@@ -360,6 +417,51 @@ TestResult testSessionSchema() {
     XX_TEST_EXPECT_TRUE(!jsonOfMsgId(dbBroken, "legacy-1").empty());
     XX_TEST_EXPECT_TRUE(!jsonOfMsgId(dbBroken, "m-after").empty());
     XX_TEST_EXPECT_TRUE(jsonOfMsgId(dbBroken, "m-broken").empty());
+
+    // -----------------------------------------------------------------------
+    // D2) v2 -> v3: 用量账本补"缓存写入量"列 (计划 LLM-8), 老记录按 0 保留
+    // -----------------------------------------------------------------------
+    const auto dbV2 = sessionDbFile(root, "s-v2");
+    createV2Db(dbV2);
+    XX_TEST_EXPECT_TRUE(tableExists(dbV2, "usage"));
+    XX_TEST_EXPECT_FALSE(tableHasColumn(dbV2, "usage", "cache_write_prompt_tokens"));
+    XX_TEST_EXPECT_EQ(readSchemaVersionAt(dbV2), 2);
+    {
+        SessionStore store{root};
+        // 写路径触发迁移; 迁移后写入一条带缓存写入量的记录
+        SessionStore::UsageRecord rec;
+        rec.timeMs                 = 2000;
+        rec.model                  = "claude-x";
+        rec.promptTokens           = 1512;
+        rec.completionTokens       = 20;
+        rec.totalTokens            = 1532;
+        rec.cachedPromptTokens     = 900;
+        rec.cacheWritePromptTokens = 512;
+        store.addUsage("s-v2", rec);
+        XX_TEST_EXPECT_TRUE(store.lastWriteError().empty());
+    }
+    XX_TEST_EXPECT_EQ(readSchemaVersionAt(dbV2), SessionStore::kSchemaVersion);
+    XX_TEST_EXPECT_TRUE(tableHasColumn(dbV2, "usage", "cache_write_prompt_tokens"));
+    XX_TEST_EXPECT_TRUE(fs::exists(utilxx_base::utf8ToPath(dbV2 + ".bak.v2")));
+    {
+        SessionStore store{root};
+        auto         recent = store.recentUsage("s-v2", 5);
+        XX_TEST_EXPECT_EQ(recent.size(), size_t{2});
+        if (recent.size() == 2) {
+            // 新记录: 缓存读/写量都在
+            XX_TEST_EXPECT_EQ(recent[0].cachedPromptTokens, int64_t{900});
+            XX_TEST_EXPECT_EQ(recent[0].cacheWritePromptTokens, int64_t{512});
+            // 老记录: 无缓存写入量 → 0, 其余字段原样保留
+            XX_TEST_EXPECT_EQ(recent[1].model, std::string{"legacy-model"});
+            XX_TEST_EXPECT_EQ(recent[1].promptTokens, int64_t{10});
+            XX_TEST_EXPECT_EQ(recent[1].cachedPromptTokens, int64_t{3});
+            XX_TEST_EXPECT_EQ(recent[1].cacheWritePromptTokens, int64_t{0});
+        }
+        auto sum = store.usageSummary("s-v2");
+        XX_TEST_EXPECT_EQ(sum.calls, int64_t{2});
+        XX_TEST_EXPECT_EQ(sum.cachedPromptTokens, int64_t{903});
+        XX_TEST_EXPECT_EQ(sum.cacheWritePromptTokens, int64_t{512});
+    }
 
     // -----------------------------------------------------------------------
     // E) 用量账本: 追加、聚合、最近若干条
