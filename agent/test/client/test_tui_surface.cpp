@@ -404,7 +404,7 @@ TestResult testTuiSurface() {
         }
     }
 
-    // ---- 会话选择弹窗: 检索与改名 (计划 RET-1a) ----
+    // ---- 会话选择弹窗: 改名 (Ctrl+R) 与关闭 (弹窗已无搜索行) ----
     {
         SurfaceFixture fx;
         fx.sharedState.mutate([](TUIRenderState& st) {
@@ -413,17 +413,12 @@ TestResult testTuiSurface() {
                 {"s1", "编译优化", 1700000000000},
                 {"s2", "部署记录", 1700000001000},
             };
-            st.sessionListKeyword = "编";
         });
         // 弹窗构造时读取本帧快照 (真实渲染器每帧刷新), 这里手动同步一次
         fx.ctx.frameState = fx.sharedState.readSnapshot();
-        std::vector<std::string>                         searched;
         std::vector<std::pair<std::string, std::string>> renamed;
         bool                                             closed = false;
         auto comp = std::make_shared<SessionSelectorOverlay>(fx.ctx);
-        comp->onSearch([&](std::string kw) {
-            searched.push_back(std::move(kw));
-        });
         comp->onRename([&](std::string id, std::string title) {
             renamed.emplace_back(std::move(id), std::move(title));
         });
@@ -431,39 +426,12 @@ TestResult testTuiSurface() {
             closed = true;
         });
 
-        // 检索行: 打开时沿用上次关键词 (状态镜像), 提示文案可见
+        // 无搜索行: 弹窗内不出现搜索提示; 输入普通字符不进入任何编辑态
         auto r = fx.probe(comp);
-        XX_TEST_EXPECT_EQ(comp->keyword(), std::string{"编"});
-        XX_TEST_EXPECT_TRUE(r.text.find("搜索") != std::string::npos);
-
-        // 输入字符 → 检索回调逐次收到新关键词 (每次变化都重发请求)
+        XX_TEST_EXPECT_TRUE(r.text.find("搜索") == std::string::npos);
         comp->OnEvent(ftxui::Event::Character("译"));
-        XX_TEST_EXPECT_EQ(searched.size(), size_t{1});
-        if (!searched.empty()) {
-            XX_TEST_EXPECT_EQ(searched[0], std::string{"编译"});
-        }
-        XX_TEST_EXPECT_EQ(comp->keyword(), std::string{"编译"});
-        auto r2 = fx.probe(comp);
-        XX_TEST_EXPECT_TRUE(r2.text.find("编译") != std::string::npos);
-
-        // Backspace 退格 (按 UTF-8 字符边界)
-        comp->OnEvent(ftxui::Event::Backspace);
-        XX_TEST_EXPECT_EQ(comp->keyword(), std::string{"编"});
-        XX_TEST_EXPECT_EQ(searched.size(), size_t{2});
-        if (searched.size() >= 2) {
-            XX_TEST_EXPECT_EQ(searched[1], std::string{"编"});
-        }
-
-        // Esc: 先清空检索词 (弹窗保持打开), 再按一次才关闭
-        comp->OnEvent(ftxui::Event::Escape);
+        XX_TEST_EXPECT_FALSE(comp->renameMode());
         XX_TEST_EXPECT_FALSE(closed);
-        XX_TEST_EXPECT_TRUE(comp->keyword().empty());
-        XX_TEST_EXPECT_EQ(searched.size(), size_t{3});
-        if (searched.size() >= 3) {
-            XX_TEST_EXPECT_TRUE(searched[2].empty());
-        }
-        comp->OnEvent(ftxui::Event::Escape);
-        XX_TEST_EXPECT_TRUE(closed);
 
         // Ctrl+R: 重命名选中会话 (先 Down 选中第一个会话项, 0 号是 "新会话" 入口)
         comp->OnEvent(ftxui::Event::ArrowDown);
@@ -471,18 +439,18 @@ TestResult testTuiSurface() {
         comp->OnEvent(ftxui::Event::CtrlR);
         XX_TEST_EXPECT_TRUE(comp->renameMode());
         XX_TEST_EXPECT_EQ(comp->renameText(), std::string{"编译优化"});
-        auto r3 = fx.probe(comp);
-        XX_TEST_EXPECT_TRUE(r3.text.find("改名") != std::string::npos);
-        // 编辑态独占键盘: 字符进编辑框, 不触发检索
+        auto r2 = fx.probe(comp);
+        XX_TEST_EXPECT_TRUE(r2.text.find("改名") != std::string::npos);
+        // 编辑态独占键盘: 字符与退格只作用于编辑框
         comp->OnEvent(ftxui::Event::Character("v2"));
         XX_TEST_EXPECT_EQ(comp->renameText(), std::string{"编译优化v2"});
-        XX_TEST_EXPECT_EQ(searched.size(), size_t{3});
         comp->OnEvent(ftxui::Event::Backspace);
         XX_TEST_EXPECT_EQ(comp->renameText(), std::string{"编译优化v"});
-        // Esc 取消编辑: 退出编辑态且不触发改名
+        // Esc 取消编辑: 退出编辑态且不触发改名 (弹窗保持打开)
         comp->OnEvent(ftxui::Event::Escape);
         XX_TEST_EXPECT_FALSE(comp->renameMode());
         XX_TEST_EXPECT_TRUE(renamed.empty());
+        XX_TEST_EXPECT_FALSE(closed);
 
         // 再次进入编辑并 Enter 提交 → 回调收到 (sessionId, 新标题)
         comp->OnEvent(ftxui::Event::CtrlR);
@@ -494,6 +462,10 @@ TestResult testTuiSurface() {
             XX_TEST_EXPECT_EQ(renamed[0].first, std::string{"s1"});
             XX_TEST_EXPECT_EQ(renamed[0].second, std::string{"编译优化"});
         }
+
+        // Esc 关闭弹窗 (搜索词已移除, 不再需要"先清空关键词再关闭")
+        comp->OnEvent(ftxui::Event::Escape);
+        XX_TEST_EXPECT_TRUE(closed);
     }
 
     // ---- 设置弹窗 ----

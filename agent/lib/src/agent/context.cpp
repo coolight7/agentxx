@@ -368,6 +368,12 @@ void Session::persistNow(std::string_view reason) {
         // 内存模式 (未启用持久化): 无落盘内容, 也不产生日志噪音
         return;
     }
+    // 空会话不落盘: 只连接/切换过、还没产生任何消息的会话落盘会建出空的会话库,
+    // 会话列表里随后多出一条无内容条目; 第一条消息写入时 (appendViewMessage /
+    // saveLlmMessages) 才建立会话库。进程退出时的整体刷盘也走本入口
+    if (viewMessages.empty() && messages_.empty() && pendingViewOps_.empty()) {
+        return;
+    }
     XX_LOGD("Session: persist now ({})", reason);
     saveLlmMessages();
     flushViewMessages();

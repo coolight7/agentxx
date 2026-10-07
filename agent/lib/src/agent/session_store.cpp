@@ -1264,6 +1264,12 @@ void SessionStore::setSessionInputStatus(
 std::vector<SessionStore::SessionInputRecord>
     SessionStore::listSessionInputs(std::string_view sessionId, std::string_view statusFilter) {
     std::vector<SessionInputRecord> out;
+    // 只读路径: 目录不存在 = 从未写入过, 直接返回空 (不创建目录/空库)
+    // - 端点启动时的收件箱恢复走本方法: 若在此建库, 仅连接、还没发过消息的会话
+    //   也会在磁盘留下空会话, 会话列表里就多出一条无内容条目
+    if (!sessionDataDirExists(sessionId)) {
+        return out;
+    }
     std::lock_guard<std::mutex>     lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {

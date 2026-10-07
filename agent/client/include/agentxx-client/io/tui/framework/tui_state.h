@@ -128,10 +128,6 @@ struct TUIRenderState {
     ///   loading); true = 已收到响应 (列表为空则确实无持久化会话)
     std::vector<agentxx::agent::SessionInfo> sessionList;
 
-    /// 会话列表检索关键词 (计划 RET-1a; 空 = 普通分页列表)
-    /// - 由会话选择弹窗的搜索行维护; 非空时列表是"检索结果"(不参与分页续取)
-    std::string sessionListKeyword;
-
     std::vector<agentxx::agent::AppendComponentNotification> appendComponents;
     /// client 插件 UI 注册表快照 (工具消息装饰等; 每帧开头由主渲染器从
     /// ClientPluginManager 拉取, 渲染/事件期间无锁读取; 无插件管理器时为空)

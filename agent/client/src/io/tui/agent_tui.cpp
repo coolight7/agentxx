@@ -474,11 +474,6 @@ void TUIClientAgentIO::start() {
         ctx_.requestMoreSessions = [this] {
             requestNextSessionListPage();
         };
-        // 会话检索钩子 (计划 RET-1a): 弹窗搜索行内容变化时触发, 重置列表并按
-        // 关键词重新请求 (空关键词回到普通分页列表)
-        ctx_.requestSessionSearch = [this](std::string keyword) {
-            requestSessionSearch(std::move(keyword));
-        };
         // 会话改名钩子: 弹窗内确认改名后发送 WireRenameSession, 结果经
         // onSessionRenameResult 回填列表标题/提示
         ctx_.renameSession = [this](std::string sessionId, std::string title) {
@@ -1700,10 +1695,6 @@ void TUIClientAgentIO::openSessionSelector() {
         XX_LOGI("[tui] new session: {}", newThreadId);
         switchToSession(newThreadId);
     });
-    // 会话检索 (RET-1a): 关键词变化即重置列表并按关键词请求 (空串回到普通分页)
-    overlay->onSearch([this](std::string keyword) {
-        requestSessionSearch(std::move(keyword));
-    });
     // 会话改名 (RET-1a): 发 WireRenameSession, 结果经 onSessionRenameResult 回填
     overlay->onRename([this](std::string sessionId, std::string title) {
         requestRenameSession(std::move(sessionId), std::move(title));
@@ -2532,33 +2523,12 @@ void TUIClientAgentIO::requestNextSessionListPage() {
             || st.sessionList.empty()) {
             return;
         }
-        // 检索结果不是分页区间: 不续取 (关键词不变时结果集固定)
-        if (!st.sessionListKeyword.empty()) {
-            return;
-        }
         st.sessionListLoadingMore = true;
         // 游标取已加载列表最后一条 (排序最旧), 服务端返回严格排在其后的至多一页
         beforeMs = st.sessionList.back().lastActiveMs;
         beforeId = st.sessionList.back().sessionId;
     }
     requestSessionListPage(beforeMs, std::move(beforeId), kSessionListPageSize);
-}
-
-void TUIClientAgentIO::requestSessionSearch(std::string keyword) {
-    {
-        std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto&                       st = sharedState_.mutableState();
-        // 与打开弹窗一致: 清空列表先显示 loading, 再按关键词（或普通分页）请求
-        st.sessionListKeyword     = keyword;
-        st.sessionList.clear();
-        st.sessionListLoaded      = false;
-        st.sessionListHasMore     = false;
-        st.sessionListLoadingMore = false;
-        st.sessionListTotalCount  = 0;
-    }
-    // 检索忽略游标: 一次拿回命中项; 空关键词回到普通第一页
-    requestSessionListPage(0, "", kSessionListPageSize, std::move(keyword));
-    postRedraw();
 }
 
 void TUIClientAgentIO::onSessionRenameResult(

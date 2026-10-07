@@ -55,7 +55,7 @@
 | STO-8 | 用量记录 | 已实施 | `session_store`（`usage` 表）+ `nodes/modelcall.cpp`；模块 `usage_ledger` |
 | STO-11 | settings_db 乐观版本 | 已实施 | `util/settings_db.*`；模块 `settings_db` |
 | STO-12 | 会话标题与检索（存储层） | 已实施 | `session_store`（`sessionTitle` / `setSessionTitle` / `searchSessions`）；模块 `session_schema` |
-| STO-12b | 标题/检索的协议与 TUI 入口（RET-1a） | 已实施 | `WireListSessions.keyword` + `WireRenameSession`/`WireRenameSessionResult` + `SessionInfo.snippet`；端点 `handleRenameSession` / `listSessionsFor`；TUI 会话弹窗检索行 + `Ctrl+R` 改名；模块 `session_admin`、`wire_roundtrip`、`tui_surface` |
+| STO-12b | 标题/检索的协议与 TUI 入口（RET-1a） | 已实施（TUI 检索入口已移除） | `WireListSessions.keyword` + `WireRenameSession`/`WireRenameSessionResult` + `SessionInfo.snippet`；端点 `handleRenameSession` / `listSessionsFor`；TUI 会话弹窗保留 `Ctrl+R` 改名（弹窗检索行已删除，关键词检索能力仍在协议与存储层）；模块 `session_admin`、`wire_roundtrip`、`tui_surface` |
 | STO-4 | `view_message.seq` + `hello.afterSeq` 增量补拉 | 已实施（限定范围） | `session_store.cpp`（显式序号 + `loadViewMessagesAfter`）、`session_server_agent_io.cpp`（增量补拉策略）；模块 `session_sync` |
 | STO-5 | 持久化语义分级（`persistNow` / `persistThrottled`） | 已实施 | `Session::persistNow` / `persistThrottled`（用户输入/工具结算/压缩完成/轮次终态立即落盘）；模块 `persist_semantics` |
 | STO-9 | 持久化降级可见（首次写失败推 `MessageTip`） | 已实施（限定范围） | `SessionStore::lastWriteError` + 会话持久化回调；模块 `persist_semantics` |

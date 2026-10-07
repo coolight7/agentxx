@@ -192,8 +192,6 @@ constexpr Entry kTable[] = {
     {"session.loadMore",                "↓ Scroll down for more",                                                      "↓ 下移加载更多"                                                                                   },
     {"session.hint",
      " [Up/Down] Move [Enter] Switch [Ctrl+R] Rename [Esc] Cancel ",                                                     " [方向键] 移动 [Enter] 切换 [Ctrl+R] 改名 [Esc] 取消 "                                            },
-    {"session.searchPrompt",            "[Search]",                                                                      "[搜索]"                                                                                                 },
-    {"session.searchHint",              "type to search sessions (title or content)",                                    "输入文字检索会话 (标题或正文)"                                                                     },
     {"session.renamePrompt",            "[Rename]",                                                                      "[改名]"                                                                                                 },
     {"session.renameFailed",            "rename failed",                                                                 "会话改名失败"                                                                                      },
 

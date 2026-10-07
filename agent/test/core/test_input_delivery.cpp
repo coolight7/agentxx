@@ -644,6 +644,22 @@ asio::awaitable<void> test_inbox_store_api() {
         // 重复写入同 id 覆盖 (幂等)
         store.addSessionInput(sessionId, rec);
         XX_TEST_EXPECT_EQ(store.listSessionInputs(sessionId).size(), size_t{1});
+
+        // 只读查询不建立会话库: 从未写入过的会话查收件箱返回空, 且不创建目录/文件
+        // (端点启动时的收件箱恢复走同一入口: 只连接、还没发过消息的会话不应在
+        // 磁盘留下空会话)
+        const std::string neverWritten = "store-api-never-written";
+        XX_TEST_EXPECT_EQ(store.listSessionInputs(neverWritten).size(), size_t{0});
+        XX_TEST_EXPECT_EQ(
+            store
+                .listSessionInputs(
+                    neverWritten,
+                    agentxx::agent::SessionStore::SessionInputStatus::Admitted
+                )
+                .size(),
+            size_t{0}
+        );
+        XX_TEST_EXPECT_FALSE(store.sessionDataDirExists(neverWritten));
     }
     removeTempRoot(root);
     co_return;
@@ -916,6 +932,43 @@ asio::awaitable<void> test_connection_stage_guard() {
     XX_TEST_EXPECT_FALSE(agentxx::agent::wireConnectionStageFromText("nonsense").has_value());
 }
 
+// ---------------------------------------------------------------------------
+// 8. 会话文件延迟创建: 只连接不落盘, 首条输入才建立会话库
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_session_file_created_on_first_input() {
+    const auto        root      = makeTempRoot();
+    const std::string sessionId = "lazy-create-session";
+
+    {
+        auto fx    = co_await makeFixture(sessionId, root, "lazy response");
+        auto store = fx->agent->agentContext->sessions->sessionStore;
+        XX_TEST_EXPECT_TRUE(store != nullptr);
+
+        // 等到端点驱动循环把会话预热进内存 (说明 run() 已经执行到收件箱恢复),
+        // 此时磁盘上仍不该出现会话目录/库, 否则会话列表会多出一条无内容条目
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+            return fx->agent->agentContext->sessions->get(sessionId) != nullptr;
+        }));
+        co_await spin(std::chrono::milliseconds{100});
+        if (store) {
+            XX_TEST_EXPECT_FALSE(store->sessionDataDirExists(sessionId));
+        }
+
+        // 首条用户输入受理即落库 (收件箱 + 展示历史) → 会话目录/库建立
+        fx->send("first message", std::string{agentxx::agent::InputDelivery::NextTurn}, 1);
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+            return store && store->sessionDataDirExists(sessionId);
+        }));
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+            return fx->recorder->turnResults.load() >= 1;
+        }));
+    }
+
+    removeTempRoot(root);
+    co_return;
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_input_delivery_tests() {
@@ -928,6 +981,7 @@ asio::awaitable<TestResult> run_input_delivery_tests() {
     co_await test_durable_inbox_recovery();
     co_await test_inbox_dropped_item_not_restored();
     co_await test_connection_stage_guard();
+    co_await test_session_file_created_on_first_input();
 
     // 还原全局模拟器开关 (避免影响后续模块)
     g_da_sim_delay_ms             = 0;
