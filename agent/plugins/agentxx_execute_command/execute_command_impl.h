@@ -100,8 +100,9 @@ namespace detail {
 //   [Content offloaded. Use the `agentxx_share_store` tool ... Total X lines,
 //    show [1, Y], hide [Y+1, X]]\n<cropped>...
 //   与 ToolcallNode::execTool 的 offload 格式统一, 便于模型用
-//   agentxx_share_store 按行分页取回 (当前插件侧暂不实际 offload 到
-//   share_store，storeId==-1 时省略 ID，仅提示可用 share_store)
+//   agentxx_share_store 按行分页取回; 超限时经 [StoreFn] 把该路完整原文写入
+//   share_store 并把 ID 写进提示 (storeFn 为空, 或宿主未提供 add_share_store 时
+//   省略 ID, 仅提示可用 share_store)
 // - 保持 UTF-8 安全, 使用 findIndexAndLastLineIndexByUtf8Length (行边界优先)
 // - 限制值选取 30k 字符/每路 (≈ 30KB 文本, 远大于 ToolcallNode 的 2k 全局限制
 //   但足以避免 60k+ 超长输出撑爆 LLM 上下文); 总结果 ≤ 60k+ 开销, 适中

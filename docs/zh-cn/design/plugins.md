@@ -440,6 +440,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY` | 输出超过 `toolcallSummaryLimitOutputLength` 时自动压缩 (原文经 share_store 卸载) |
 | `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE` | **执行体可与其他并行安全工具并发执行** |
 
+`AUTO_SUMMARY` 只给"输出大小无法由参数决定"的工具置位。工具自己能控制输出大小的**不要置位**:
+
+- 自带分页参数的工具 (读多少由调用方参数决定, 例如 `agentxx_filesystem_read` 的
+  `line_offset`/`line_limit`): 宿主再截断一次会与工具自身的分页重复, 摘要后的行号也会与源内容对不上;
+- 自带裁剪逻辑的工具 (例如 `agentxx_execute_windows_command` / `agentxx_execute_bash_command`
+  按 stdout/stderr 两路各自裁剪到 30k 字符): 宿主按整段结果压缩时, 过长的 `[StdOut]` 会把
+  `[StdErr]` 一起裁进隐藏区, 模型必须读回全量才能判断 stderr 是否有内容。
+
 `PARALLEL_SAFE` 只应给"只读、不写会话、不改插件内部共享状态"的工具置位 (文件读 / list /
 glob / grep / 网络查询等); 写文件、命令执行、交互询问类工具保持不置位, 它们与同一批
 tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 assistant 消息声明的调用之间

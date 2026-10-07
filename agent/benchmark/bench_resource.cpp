@@ -855,7 +855,7 @@ void benchResourceTui() {
     // 严格连续, 否则客户端按"不连续"丢弃该页
     tui->sendToPeer(agent::WireGetViewMessages{
         sessionId,
-        tui->sharedState().readSnapshot()->historyWindowStart,
+        tui->sharedState().readSnapshot()->history.windowStart(),
         100
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -947,7 +947,7 @@ void benchResourceTui() {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     tui->sendToPeer(agent::WireGetViewMessages{
         sessionId,
-        tui->sharedState().readSnapshot()->historyWindowStart,
+        tui->sharedState().readSnapshot()->history.windowStart(),
         100
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(200));

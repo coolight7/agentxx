@@ -103,7 +103,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | **JS Execution** | `example_js_execute_command` | Executes JS code via QuickJS (depends: `interpreter.js` capability of `agentxx_javascript_engine`). |
 
 Tool Characteristics:
-- **Automatic Compaction**: Compresses summaries when tool outputs exceed `toolcallSummaryLimitOutputLength` (default 2K) and the tool enables `autoSummaryOutput` (original text offloaded via share_store).
+- **Automatic Compaction**: Compresses summaries when tool outputs exceed `toolcallSummaryLimitOutputLength` (default 2K) and the tool enables `autoSummaryOutput` (original text offloaded via share_store); tools that come with their own pagination parameters do not enable it (e.g. `agentxx_filesystem_read` with `line_offset`/`line_limit`: the caller decides how many lines to read, the result is returned as-is); tools that crop their own output do not enable it either (the command tools crop stdout/stderr separately to 30k characters so the `[ExitCode]`/`[StdOut]`/`[StdErr]` structure stays intact).
 - **Lazy Loading**: Plugin tools register on demand; `XXToolBase::canDelayLoad` flags deferrable tools (default true), injecting only names into the system prompt initially.
 - **Argument Self-Healing**: `ToolcallWrapNode::autoFixArgsType` auto-corrects argument types against JSON Schema (string↔array/number/boolean coercion), improving model compatibility.
 - **Repeat-Call Guard**: Tools enabling `repeatCallCheck` prompt the user via the permission bus when identical calls repeat consecutively within one LLM↔tool chain up to `toolcallRepeatCheckThreshold` (default 5, 0=disabled) to prevent infinite loops.

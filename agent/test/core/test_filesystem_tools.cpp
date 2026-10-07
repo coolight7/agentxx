@@ -2672,8 +2672,9 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(linkCtx->toolRegistry->contains(name));
     }
 
-    // 验证 glob、grep、list 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩),
-    // read 不开启
+    // 验证 list/glob/grep 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩):
+    // 三个工具输出可能很大, 超过 [AgentConfig::toolcallSummaryLimitOutputLength] 时由宿主压缩
+    // (原文经 share_store 卸载, 见 kReadOnlyFlags)
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_glob")->extra["autoSummaryOutput"],
         std::string{"true"}
@@ -2682,15 +2683,15 @@ asio::awaitable<void> test_plugin_real_link() {
         linkCtx->toolRegistry->find("agentxx_filesystem_grep")->extra["autoSummaryOutput"],
         std::string{"true"}
     );
-    // read 与 list/glob/grep 同属读取类工具: 注册时带只读 flags (自动摘要 + 并行安全),
-    // 大输出按 [AgentConfig::toolcallSummaryLimitOutputLength] 自动摘要 (见 kReadOnlyFlags)
-    XX_TEST_EXPECT_EQ(
-        linkCtx->toolRegistry->find("agentxx_filesystem_read")->extra["autoSummaryOutput"],
-        std::string{"true"}
-    );
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_list")->extra["autoSummaryOutput"],
         std::string{"true"}
+    );
+    // read 自带 line_offset/line_limit 分页参数, 读多少行由调用方决定:
+    // 注册时只声明并行安全 (见 kReadFlags), 结果不做自动摘要, 原样交给调用方
+    XX_TEST_EXPECT_EQ(
+        linkCtx->toolRegistry->find("agentxx_filesystem_read")->extra["autoSummaryOutput"],
+        std::string{"false"}
     );
 
     // 经 ToolRegistry 完整流程执行 (op_driver 驱动插件三件套); sessionId 注入

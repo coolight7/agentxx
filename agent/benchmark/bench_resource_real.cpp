@@ -718,7 +718,7 @@ void benchResourceRealTui() {
         for (int p = 0; p < pages; ++p) {
             uint64_t start = 0;
             if (auto snap = tui->sharedState().readSnapshot()) {
-                start = snap->historyWindowStart;
+                start = snap->history.windowStart();
             }
             if (start == 0) {
                 break; // 窗口已到顶

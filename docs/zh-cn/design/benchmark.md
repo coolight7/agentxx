@@ -8,8 +8,9 @@
 - 报告目录: `{build}/exec/bench/` (可用 `AGENTXX_BENCH_OUTPUT_DIR` 覆盖)
 - 每次运行输出两份报告: `bench_<时间戳>.json` (机器对比) 与 `bench_<时间戳>.md` (人工阅读)
 - 数据标注: 文档内的实测数据一律标注**日期 + 主仓 commit** (规范见第 0 节);
-  当前最新一批为 `2026-09-28 / c957b504` (neograph `1522761`, cxx_utilxx `6bc7f72`;
-  第 12 节), 上一批为 `2026-09-26 / 88fee6e0` (第 5、9~11 节), 原始文件在
+  当前最新一批为 `2026-10-07 / d6e21470` (系统分配器; 第 14 节), 上一批为
+  `2026-09-28 / c957b504` (neograph `1522761`, cxx_utilxx `6bc7f72`; 第 12、13 节),
+  再上一批为 `2026-09-26 / 88fee6e0` (第 5、9~11 节), 原始文件在
   [`resource/benchmark/`](../../../resource/benchmark/README.md)
 
 ```bash
@@ -943,5 +944,126 @@ python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
 - 训练模式: `runTrainingMode` 链 6.77 MB、`runEvolutionLoop` 1.67 MB (仅 `agentxx_cli train`);
 - neograph 子图: `SubgraphNode::run` 4.98 MB、`run_subgraph_async` 1.66 MB
   (仅图里含子图时才会走到; 默认 agent 图不含)。
+
+## 14. 界面层与可观测性改动后的重测: 无内存回退, 帧处置后的提交量下移 (Windows release, 2026-10-07 / d6e21470)
+
+第 12、13 节之后主仓又合入 67 个提交, 主要是客户端模型层 (历史窗口/队列镜像,
+UI-1/UI-5)、输入投递队列、会话检索与改名、可观测性 (关键指标/诊断包, OBS-3/OBS-4/STO-13)、
+插件注册可逆与独占 slot (PLG-*) 与配置/协议门禁等; 与内存直接相关的是
+`2d6c1961` (结构体成员顺序调整, 减小内存) 与第 13 节的巨帧处置 (本批构建已包含)。
+本节是**同一台机器、同一套负载与脚本**下的重新实测, 默认构建 (系统分配器),
+用于确认这些改动没有让常驻内存回退。
+
+> 标注: 2026-10-07 (本地时间) / 主仓 `d6e21470`; 依赖 neograph `1522761` (未变)、
+> cxx_utilxx `6bc7f72` (未变)、cxx_utilxx_base `9c142320` (上一批 `e00bdf9`)、
+> cxx_pluginxx `1c7a04a7` (上一批 `88de2a5`)、cxx_pluginxx_ui `4309de94`
+> (上一批 `a95d8ef`)。环境: Windows Release / VS18 (MSVC 14.51) /
+> AMD Ryzen 5 5600G (6C12T) / 52 GB; `AGENTXX_ENABLE_MIMALLOC=OFF` (默认, 本批未重建
+> mimalloc 变体, 对比只在系统分配器之间)。原始数据存于
+> [`resource/benchmark/2026-10-07_d6e21470_windows-resource/`](../../../resource/benchmark/2026-10-07_d6e21470_windows-resource/README.md)。
+> 对照批 = 2026-09-28 / `c957b504` (第 12 节, 系统分配器单次聚合)。
+> 两点注意: ① 两批之间主仓 67 个提交 + 三个依赖变化, 差值不是单一改动;
+> ② 上一批的 Windows `resource` 数据采集于巨帧处置**之前**, 本批已含处置。
+> 基准侧为适配客户端历史窗口 API 改了 3 处引用
+> (`historyWindowStart` → `history.windowStart()`), 只影响能否编过, 不影响负载。
+
+### 14.1 Windows `agentxx_benchmark resource` 全场景 (RSS, MB; 3 次运行取中位)
+
+| 场景 | 侧 | 采样点 | 09-28 | 本批 | ΔRSS |
+|---|---|---|---|---|---|
+| cli | self | startup | 19.96 | 19.56 | -0.40 |
+| cli | self | ctx100k | 22.08 | 21.57 | -0.51 |
+| cli | self | ctx200k | 24.55 | 24.13 | -0.42 |
+| cli | self | rounds20x8192 (真实逐轮) | 30.06 | 30.73 | +0.67 |
+| tui (headless) | self | startup | 19.95 | 19.58 | -0.37 |
+| tui | self | ctx100k | 22.54 | 22.11 | -0.43 |
+| tui | self | ctx200k | 25.21 | 24.79 | -0.42 |
+| split_cli | server | startup | 15.64 | 16.55 | +0.91 |
+| split_cli | server | ctx100k | 30.01 | 28.66 | -1.35 |
+| split_cli | server | ctx200k | 40.46 | 39.86 | -0.60 |
+| split_cli | client | startup | 13.59 | 13.33 | -0.26 |
+| split_cli | client | ctx100k | 13.90 | 13.70 | -0.20 |
+| split_cli | client | ctx200k | 13.91 | 13.71 | -0.20 |
+| split_tui | server | startup | 15.68 | 16.59 | +0.91 |
+| split_tui | server | ctx100k | 29.79 | 27.77 | -2.02 |
+| split_tui | server | ctx200k | 38.98 | 37.29 | -1.69 |
+| split_tui | client | startup | 12.84 | 12.18 | -0.66 |
+| split_tui | client | ctx100k | 13.96 | 13.30 | -0.66 |
+| split_tui | client | ctx200k | 14.29 | 13.63 | -0.66 |
+| ffi | self | startup | 崩溃无数据 | 20.41 | 新增 |
+| ffi | self | ctx100k | 崩溃无数据 | 28.19 | 新增 |
+| ffi | self | ctx200k | 崩溃无数据 | 34.30 | 新增 |
+| real_tui (真实界面) | self | startup | 23.78 | 20.31 | -3.47 |
+| real_tui | self | ctx100k | 27.21 | 25.98 | -1.23 |
+| real_tui | self | ctx200k | 29.74 | 28.66 | -1.08 |
+| server_only | server | 空载 | 13.55 | 13.30 | -0.25 |
+| server_only | server | 117 轮 / ≈100K token | 30.00 | 27.89 | -2.11 |
+| server_only | server | 235 轮 / 200K token | 41.47 | 36.32 | -5.15 |
+| server_only | server | 断开后 | 41.59 | 36.39 | -5.20 |
+| plugin_attrib | self | 未加载插件 | 10.54 | 10.11 | -0.43 |
+| plugin_attrib | self | agentxx_filesystem | 11.82 | 11.42 | -0.40 |
+| plugin_attrib | self | agentxx_execute_command | 12.45 | 12.00 | -0.45 |
+| plugin_attrib | self | agentxx_system | 12.70 | 12.27 | -0.43 |
+| plugin_attrib | self | agentxx_websearch | 13.00 | 12.58 | -0.42 |
+| plugin_attrib | self | agentxx_planning (5 插件全载) | 13.26 | 12.83 | -0.43 |
+| plugin_attrib | self | 全部卸载后 | 11.90 | 11.48 | -0.42 |
+
+- 3 次运行的极差: 进程内生场景 ≤0.16 MB; 真实 server 的轮次场景较大
+  (split_tui ctx200k 34.26~38.64、server_only 235 轮 34.40~37.57、
+  split_cli ctx100k 27.31~30.62), 与第 3 节"专用工作集随分配器归还时机有 ±20~30%
+  波动"的记录一致, 故取中位;
+- 34 个可比采样点中 31 个下降 (-0.20 ~ -5.20 MB), 3 个上升: 两个 server 启动点
+  (+0.91, 两侧一致) 与 cli 真实逐轮 (+0.67, 3 次极差 0.90, 在运行间波动内);
+- `resource_ffi` 本批首次拿到系统分配器的采样点 (第 12.3 节的签名修复之后);
+  `resource_real_tui_child` 仍按设计无数据 (需要 PTY)。
+
+### 14.2 长上下文 harness 负载 (专用工作集 / 提交)
+
+同一套 mock LLM harness (`resource/benchmark/harness/run_load.ps1`),
+50×8KB 与 100×8KB 各 3 次, 其余单次:
+
+| 场景 | 09-28 | 本批 |
+|---|---|---|
+| ≈100K token (50 × 8KB) | 8.39 / 17.85 (r2 9.65/23.76, r3 7.25/17.86) | 9.21 / 11.55 (r2 9.23/11.56, r3 7.30/11.00) |
+| ≈100K token (5 × 80KB) | 6.68 / 15.79 | 7.23 / 9.18 |
+| ≈200K token (100 × 8KB) | 15.79 / 25.75 (峰值提交 43.90) | 15.97 / 19.88 (峰值提交 22.03; r2 27.55/31.21, r3 15.37/17.96) |
+| 小上下文 (50 × 100B) | 4.48 / 14.29 | 4.80 / 7.36 |
+| server 空闲 (WS / 提交) | 10.86 / 2.91 | 10.71 / 2.98 |
+
+- 专用工作集与上一批基本持平 (差 ≤0.9 MB); **提交量整体下移**: 50×8KB 17.9 → 11.6
+  (-35%)、100×8KB 25.8 → 19.9 (-23%)、50×100B 14.3 → 7.4 (-48%),
+  100×8KB 的峰值提交 43.9 → 22.0 (-50%) —— 与第 13.3 节的机制一致: 巨帧不再被
+  分配, 提交量按帧生命期下移; 系统分配器路径的常驻本来就不含未触碰页, 所以工作集
+  只小幅变化;
+- 进程 CPU 时间 (累计, 100 × 8KB 组): 上一批 2.00 s (user 0.64 / kernel 1.36);
+  本批 2.14 / 2.20 / 2.49 s (user 1.22~1.44, kernel 0.84~1.05) —— 总量接近
+  (中位 +10%), 分布从内核态转向用户态 (不再分配/清零 MB 级帧);
+- server 空闲 (无客户端) 三项指标都在噪声内。
+
+### 14.3 巨帧回归卡口 (静态扫描)
+
+`scan_coro_frames.py` 扫 release `agentxx_cli.exe`:
+
+| 指标 | 13.3 处置后 (09-28) | 本批 (10-07) |
+|---|---|---|
+| ≥384 KiB 的帧 | 66 个 / 92.9 MiB | 66 个 / 92.7 MiB |
+| 1 ~ 4 MiB 的帧 | 11 | 11 |
+| 最大帧 | – | 6.4 MiB (训练链, 见 13.4) |
+
+即 67 个提交与依赖变化没有把巨帧带回来; 生产路径最大帧保持 < 384 KiB,
+最大帧仍是 13.4 列出的训练链 (`runTrainingMode`, 仅在 `agentxx_cli train` 走到)。
+原始扫描输出见
+[`resource/benchmark/2026-10-07_d6e21470_windows-resource/frames_scan_agentxx_cli_2026-10-07.txt`](../../../resource/benchmark/2026-10-07_d6e21470_windows-resource/frames_scan_agentxx_cli_2026-10-07.txt)。
+
+### 14.4 结论
+
+1. 本轮改动**没有引入内存回退**: 全场景 34 个可比采样点 31 降 3 升, 升幅都在
+   运行间波动量级或装配新增的开销上 (两个 server 启动点 +0.91);
+2. 第 13 节的帧处置与分配量收敛在长上下文上兑现为提交量: 50×8KB -35%、
+   100×8KB -23%、50×100B -48%, 100×8KB 峰值提交 -50%; 专用工作集持平;
+3. 巨帧静态卡口维持 66 个 / 92.7 MiB, 与处置后一致 (训练链 6.4 MiB 未处置,
+   与生产路径无关);
+4. 默认值不变: `AGENTXX_ENABLE_MIMALLOC` 保持 `OFF` (本批未重建 mimalloc 变体,
+   第 10.4、12.4 节的判断依据与 13.3 的修复后数据仍然适用)。
 
 
