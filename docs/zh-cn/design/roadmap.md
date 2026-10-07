@@ -20,7 +20,7 @@
 | ARC-5 | 分阶段关闭与后台任务收敛 | 已实施（不等待轮次） | `util/task_scope.{h,cpp}` + `BaseAgent::shutdownAsync`（停止输入 → 后台任务取消收敛 → 关插件 → 刷盘）+ `AgentContext::markShuttingDown`；模块 `task_scope`、`shutdown_stages` |
 | ARC-6 | 生效装配快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
 | ARC-7 | 新能力不进入核心骨架 | 已实施（纪律） | `agent/lib/AGENTS.md` |
-| ARC-8 | 消费者使用窄接口（试点） | 待实施 | 中间件 / subagent 工具 |
+| ARC-8 | 消费者使用窄接口（试点） | 部分实施（试点结论：不新增一层） | 现有等价窄接口：上下文 `nodes/session_context.h`（读/写入口 + 影子通道刷新）、权限走总线服务 `service.permission.check/reverify`、工具注册 `agentxx.agent.tools` 表 + `ToolAssemblyRecord`、子代理 `service.subagent`（`AgentHost::spawnBatch`）；四处都有测试替身用例（`prompt_stability_io` / `permission` / `assembly_snapshot_io` / `subagent_bus`），再包一层 C++ 窄视图属重复抽象，故不新增 |
 | ARC-4 / ARC-7b / ARC-9 | 子系统配置视图 / 千行文件拆分 / 领域与策略分离 | 不做 | 提高内聚、无功能收益 |
 
 ## 2. 轮次与输入投递
@@ -44,7 +44,7 @@
 | PRM-5 | 技能优先级与同名裁决 | 已实施 | `middlewares/skill.{h,cpp}`（`SkillDirEntry` 优先级 + 同名裁决 + 来源展示）；模块 `prompt_stability_io` |
 | PRM-7 | 请求体结构断言 + 稳定段哈希断言 | 已实施（限定：不做整段提示词快照） | 模块 `prompt_stability` / `prompt_stability_io` |
 | CMP-3 | 结构化摘要与尾部原文 | 已实施 | `agent/lib/src/agent/prompt.cpp`（固定小节 Goal/Done/In progress/Blocked/Key facts/Next） |
-| CTX-1 ~ CTX-9 | 来源化上下文 / 三态来源 / 消息来源 / 只读快照 / 历史替换记录 / 自定义条目 / 附件引用 / 工作上下文 / 会话重建入口 | 不做（CTX-7 待理解） | `flags`/`extra` 不进请求体、`history_contents` 保留旧版本等机制已覆盖需求 |
+| CTX-1 ~ CTX-9 | 来源化上下文 / 三态来源 / 消息来源 / 只读快照 / 历史替换记录 / 自定义条目 / 附件引用 / 工作上下文 / 会话重建入口 | 不做（CTX-7 暂缓：需先明确 provider 侧形态） | `flags`/`extra` 不进请求体、`history_contents` 保留旧版本等机制已覆盖需求 |
 
 ## 4. 持久化与崩溃恢复
 
@@ -59,7 +59,7 @@
 | STO-4 | `view_message.seq` + `hello.afterSeq` 增量补拉 | 已实施（限定范围） | `session_store.cpp`（显式序号 + `loadViewMessagesAfter`）、`session_server_agent_io.cpp`（增量补拉策略）；模块 `session_sync` |
 | STO-5 | 持久化语义分级（`persistNow` / `persistThrottled`） | 已实施 | `Session::persistNow` / `persistThrottled`（用户输入/工具结算/压缩完成/轮次终态立即落盘）；模块 `persist_semantics` |
 | STO-9 | 持久化降级可见（首次写失败推 `MessageTip`） | 已实施（限定范围） | `SessionStore::lastWriteError` + 会话持久化回调；模块 `persist_semantics` |
-| STO-13 | 会话导出与取证包 | 待实施 | 新导出入口 |
+| STO-13 | 会话导出与取证包 | 已实施（并入 OBS-4） | `util/diagnostics.*` 的 session 段（可选含消息正文，默认只有计数与用量）+ CLI `--dump-diagnostics`；模块 `observability` |
 | STO-3 / STO-6 / STO-7 / STO-10 | 事件序列表 / turn-attempt 表 / 启动清账 / 大写入不阻塞 io 线程 | 不做 | 读模型已足够；`viewMessages` 可直接承载记录 |
 
 ## 5. 工具系统
@@ -109,11 +109,11 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| UI-1 | 客户端模型层（分页窗口 / 队列镜像 / 重连 seq） | 待实施 | 无 FTXUI 依赖的模型类 |
+| UI-1 | 客户端模型层（分页窗口 / 队列镜像 / 重连 seq） | 已实施 | `client/.../io/tui/model/{history_window,queue_mirror}.{h,cpp}`（值类型，随渲染快照复制）+ TUI 接线；模块 `tui_model`、`tui_scroll`、`tui_stream`；边界见 `boundaries` 的模型层规则 |
 | UI-2 | UI 快照夹具（固定尺寸文本 + 命中区基线） | 已实施（含 TST-5） | `agent/test/{client/test_ui_snapshot.cpp,include/agentxx-test/client/ui_snapshot.h}` + 基线 `agent/test/snapshots/ui/`；模块 `ui_snapshot`（一键更新 `AGENTXX_UPDATE_UI_SNAPSHOTS=1`） |
 | UI-3 | 未知组件宽容降级（补两个测试） | 已实施 | `test_tui_ui_items.cpp`（未知字段 / 高版本组件 / 未知枚举值）；模块 `tui_ui_items` |
 | UI-4 | 渲染层边界测试 | 已实施 | 模块 `tui_ui_items`（空注册表渲染）+ `boundaries`（渲染层 include 规则） |
-| UI-5 | 输入栏硬件光标（终端不支持时降级） | 待实施 | `components/input_bar.*` |
+| UI-5 | 输入栏硬件光标（终端不支持时降级） | 已实施 | `tuiHardwareCursorSupported()`（`ui_components.*`）+ 能力段 `terminal.hardware_cursor`（唯一来源）；模块 `ui_capabilities`、`tui_input` |
 | UI-9 | 能力与体验级别声明 | 已实施 | 客户端能力段 JSON 追加 form/layout/terminal 体验字段（`client/include/agentxx-client/io/tui/tui_plugin_adapter.h`）；模块 `ui_capabilities` |
 | UI-6 / UI-8 / UI-10 | Markdown offload / 进度卡 slot / 文案门禁 | 不做 | 现有渲染与测量共用实现足够 |
 | UI-7 | 统一浮层管理器 | 未来计划 | 需要时再引入最小浮层模型 |
@@ -135,12 +135,12 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| PLG-1 | 注册可逆与清理审计 | 待实施 | 插件生命周期测试 |
-| PLG-2 | 声明式贡献集合与重算 | 待实施 | 贡献表 |
-| PLG-4 | 独占能力 slot | 待实施 | 压缩器 / 记忆提供者 |
+| PLG-1 | 注册可逆与清理审计 | 已实施 | `PluginManager::RegistrationInventory`（按生效事实计数）+ `registrationInventory()` + `PluginListView` 诊断字段；模块 `plugin_cleanup` |
+| PLG-2 | 声明式贡献集合与重算 | 已实施 | 提示词贡献模型（`PromptKeyState`：base + 按 sequence 的全部存活贡献，删除 owner 贡献后重新合成）+ `plugins.md` §15.7；模块 `plugin_cleanup` |
+| PLG-4 | 独占能力 slot（执行图定义） | 已实施 | `PluginManager::setGraphJson` / `releaseGraphDefinitionSlot`（占用者记载 + 他人占用被拒 + 禁用/卸载恢复占用前定义）；模块 `plugin_cleanup` |
 | PLG-6 | 装配树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动装配快照（插件/接口/依赖/能力/工具/图） |
-| PLG-7 | 教学式错误与信任声明 | 待实施 | 插件 SDK 错误文案 + 文档 |
-| PLG-8 | 文档分页与接口表数字校验 | 部分实施 | 接口表数量常量（`PluginManager::kInterfaceTableCount` = 19 / `ClientPluginManager` = 9）+ `boundaries` 规则 8 校验文档数字与文件存在；`plugins.md` §8 澄清通用表 IID；文档拆分未做 |
+| PLG-7 | 教学式错误与信任声明 | 已实施 | `PluginManager::diagnosePluginPath`（路径/清单/入口符号逐项给出怎么改）+ 装载失败 WARN + `plugins.md` §15.7 信任声明；模块 `plugin_cleanup`、`plugin_resources` |
+| PLG-8 | 文档分页与接口表数字校验 | 部分实施（拆分不做） | 接口表名称集合与数量常量（`PluginManager::kInterfaceTableCount` = 19 / `ClientPluginManager` = 9）由 `boundaries` 规则 8/10 校验；`plugins.md` §8 澄清通用表查询 IID；文档拆分经核定不做（纯重组、收益低于改动成本） |
 | PLG-10 | 插件加载耗时与注册计数诊断 | 已实施（限定范围） | `plugin_manager.h`（`PluginListView` 诊断字段）+ `plugin_manager_lifecycle.cpp`（装载耗时 + 装载摘要日志）；模块 `assembly_snapshot_io` |
 | PLG-3 / PLG-5 / PLG-9 / PLG-11 | 细粒度变更事件 / manifest schema / 作用域过滤 / 加载许可 | 不做 | 无派生缓存；`args` 原样透传；子代理白名单已实现 schema 与执行同时不可见 |
 
@@ -158,8 +158,8 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | RET-1a | 会话搜索/改名的协议与 TUI 入口 | 已实施 | `WireListSessions.keyword`、`WireRenameSession`/`WireRenameSessionResult`、`SessionInfo.snippet`；TUI 会话弹窗检索行（直接输入）+ `Ctrl+R` 改名；模块 `session_admin`、`tui_surface` |
-| OBS-3 | 关键指标（首 token / 轮次耗时 / 压缩次数等） | 待实施 | 复用 benchmark 基础设施 |
-| OBS-4 | 诊断包导出 | 待实施 | 与 STO-13 合并 |
+| OBS-3 | 关键指标（首 token / 轮次耗时 / 压缩次数等） | 已实施 | `util/observability.*`（`KeyMetrics`：轮次终态/TTFT/轮次耗时/模型调用与用量（含缓存读+写）/工具四终态/压缩前后 token）+ 装配快照 `metrics` 段；模块 `observability`、`fake_provider` |
+| OBS-4 | 诊断包导出 | 已实施 | `util/diagnostics.*`（`buildDiagnosticsText` + `redactSecrets` + 日志环形捕获）+ CLI `--dump-diagnostics`；模块 `observability` |
 | OBS-5 | 模块级日志开关 | 已实施 | `utilxx_base/log.h`（`LogEntry::module` + `logModuleOf` + `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`）、宿主插件日志记为 `plugin.<名字>`（`pluginxx/host/tables_impl.h`）、CLI `AGENTXX_LOG_MODULES=前缀=级别,...`；模块 `log_modules`；见 [index.md](index.md) §按模块调日志级别 |
 | RET-1b / RET-2 / RET-3 / RET-4 / RET-5 / OBS-1 / OBS-2 | FTS5 索引 / 标题元数据独立 / 附件校验元数据 / 结构化定位符 / opId / `get_diagnostics` / telemetry 边界 | 不做（RET-2 已并入 STO-12、OBS-2 保留为设计约束） | 逐会话子串扫描够用；share_store 已有行定位提示 |
 
@@ -170,9 +170,9 @@
 | TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider`（经 `ModelProviderRegistry::setProvider` 注入） |
 | TST-2 | Wire 往返与 schema 一致性 | 已实施 | 模块 `wire_roundtrip`（往返 + 兼容）+ `wire_schema`（生成物与实现一致性、覆盖度） |
 | TST-3 | 持久化迁移/恢复测试 | 已实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝、**迁移中断**：失败不推进版本/数据不丢/修复后续做）；"崩溃未闭合轮次"随 STO-7 不做 |
-| TST-4 | 并发与竞态清单 | 部分实施 | 模块 `toolcall_parallel`（并行完成顺序 vs 提交顺序、屏障、并发上限、取消收尾）；其余待补 |
-| TST-6 | 一致性测试骨架 | 待实施 | 存储替身 |
-| TST-7 | 边界/导出/清理门禁 | 部分实施 | 模块 `boundaries`（依赖方向 / 渲染层 include / 导出白名单配置 / **接口表数量与文档一致**）+ `agent/script/check_plugin_exports.sh`；插件注册清理基线见 PLG-1（待实施） |
+| TST-4 | 并发与竞态清单 | 已实施 | 模块 `race_guards`（取消 vs 结算 / 中断应答在途 / 并行乱序提交 / 执行中注销 / 节流 vs 轮末）+ `toolcall_parallel`；插件卸载与 inflight 由 `plugin_runtime`·`plugin_multi_instance` 覆盖 |
+| TST-6 | 一致性测试骨架 | 已实施 | 模块 `storage_consistency`（同一份键值语义跑 4 个后端：settings_db / SessionStore.store / share store 内存 / share store 回库） |
+| TST-7 | 边界/导出/清理门禁 | 已实施 | 模块 `boundaries` 13 条规则（依赖方向 / 渲染层 include / 导出白名单配置 / 接口表数量与名称集合 / UI 组件名 / 文档路径 / 客户端模型层 / JSONL 模式 stdout 纪律）+ `agent/script/check_plugin_exports.sh`（二进制导出白名单）；插件注册清理基线见 PLG-1 |
 | TST-8 | CI 一键门禁 | 已实施 | `agent/script/gate.sh`（Linux/macOS: 构建 + 全模块 fail-fast + 导出白名单 + SDK 反例编译 + 可选基准）、`agent/script/gate.ps1`（Windows 等价物） |
 | TST-9 | 测试隔离、耗时和脱敏 | 已实施 | 独立临时目录 + 每模块耗时/用例数（`test.cpp` 打印 `(N ms)`）+ 启动清凭据环境变量（`clearCredentialEnv`）+ `redactSecret` 脱敏助手（`agentxx-test/test_framework.h`） |
 | TST-10 | 安全负面测试 | 部分实施 | 见 §8 |
@@ -229,4 +229,23 @@
   （yaml `cache_control`，默认关闭）+ `AnthropicProvider::applyCacheBreakpoints`（系统提示 /
   工具定义 / 最后一条非动态段消息加 `cache_control` 断点）；用量口径折算为
   `prompt_tokens = input_tokens + cache_read + cache_creation`，缓存写入量经
-  `provider_common.h` 的补充用量旁路写入账本新列 `usage.cache_write_prompt_tokens`（schema v3）。
+  `provider_common.h` 的补充用量旁路写入账本新列 `usage.cache_write_prompt_tokens`
+  （schema v3，模块 `session_schema` 覆盖 v2→v3 迁移）。
+- 2026-10-08：PRO-8 之外的批次收尾（阶段 AD~AH）：
+    - LLM-13（HTTP 录制回放夹具）已实施：`test/include/agentxx-test/core/http_recorder.h`
+      的 `HttpRecorder`（转发上游并录制请求摘要+响应）/ `HttpPlayer`（按顺序回放、不符即 400
+      并给可读原因）/ `HttpFixture`（JSON 落盘，头白名单 + 凭据只记存在标记 + 正文脱敏）；
+      模块 `http_recorder`（81 项）。
+    - CFG-9（配置键目录）已实施：`config_keys` 模块（49 个键 × 默认/样例两次真实加载 +
+      `config_loader.cpp` 源码扫描门禁）+ 生成物 `agent/schema/config-keys.json` 与
+      [config-keys.md](config-keys.md)（`AGENTXX_UPDATE_CONFIG_KEYS=1` 一键更新），
+      生成器骨架与 PRO-4 共用（`test/include/agentxx-test/core/schema_artifact.h`）；
+      期间修掉 `config_loader` 的小数截断缺陷（`extra_api_config` 的 `0.7` 被写成 `0`）。
+    - OBS-5（按模块日志级别）已实施：`LogEntry::module` + `logModuleOf(__FILE__)` +
+      `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`
+      （CLI 读 `AGENTXX_LOG_MODULES`，宿主日志记为 `plugin.<名字>`）；模块 `log_modules`。
+    - ARC-8（消费者窄接口试点）结论：**不新增一层窄视图** —— 四处等价窄接口已存在
+      （`nodes/session_context.h`、`service.permission.*`、`agentxx.agent.tools` 表 +
+      `ToolAssemblyRecord`、`service.subagent`），且都有测试替身用例；再包一层属重复抽象。
+    - PLG-8 文档拆分经核定不做（保留数量/名称校验与 §8 澄清）。
+    - 全量回归（Debug + ASan/UBSan）：**36,438 项断言 0 失败**（上一轮 35,985）。

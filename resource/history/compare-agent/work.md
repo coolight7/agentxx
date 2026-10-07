@@ -72,6 +72,8 @@
 | OBS-4 | 诊断包导出 | P2 | 完成（已构建 + 测试通过） | `include/agentxx/util/diagnostics.h`、CLI `--dump-diagnostics`（含 STO-13 的导出需求） |
 | STO-13 | 会话导出与取证包 | P2 | 完成（并入 OBS-4：会话摘要段 + 可选消息正文） | `diagnostics.cpp` 的 session 段 |
 | OBS-5 | 模块级日志开关 | P2 | 完成（已构建 + 全量回归通过） | `utilxx_base/log.h|cpp`（`LogEntry::module` / `logModuleOf` / `setModuleLevel` / `applyLogModuleLevelSpec`）+ 内核 `pluginxx/host/tables_impl.h`（`plugin.<名字>`）+ CLI `AGENTXX_LOG_MODULES`；模块 `log_modules` |
+| ARC-8 | 消费者使用窄接口（试点） | P2 | 结论：不新增一层（等价窄接口已存在，见阶段 AI） | `nodes/session_context.h` / `service.permission.*` / `agentxx.agent.tools` 表 + `ToolAssemblyRecord` / `service.subagent`；替身用例：`prompt_stability_io`、`permission`、`assembly_snapshot_io`、`subagent_bus` |
+| PLG-8 | 插件文档分页 | P1（部分） | 不做拆分（数量/名称校验与 §8 澄清已做，见阶段 Y） | `boundaries` 规则 8/10 |
 | PRO-8 | stdio JSONL 一次性运行（复用 Wire 结构 + JSONL 分帧） | P1 | 完成（已构建 + 测试通过 + 真实进程手工验证） | `lib/.../io/jsonl_io_transport.{h,cpp}`、`client/src/io/jsonl/jsonl_mode.cpp`；模块 `jsonl_mode`、`jsonl_runner` |
 | LLM-8 | Anthropic 缓存断点与缓存用量 | P1 | 完成（已构建 + 测试通过） | `ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints` / `applyUsage`；账本 `usage.cache_write_prompt_tokens`（schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放夹具 | P1 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder`/`HttpPlayer`/`HttpFixture` + 脱敏）；模块 `http_recorder` |
@@ -485,40 +487,24 @@
 
 ## 待完成（后续阶段）
 
-> 本节在 2026-10-07 按实施进度刷新（此前列出的 TOOL-16、CFG-1、UI-2+TST-5、TST-8、
-> PLG-6、PLG-10、CFG-3、TOOL-12、UI-9、ARC-5、ARC-6 均已完成；本轮的 TST-3、LLM-5/TST-1、
-> PRO-4、PRO-5、TST-2、RET-1a/STO-12b、LLM-7、TST-9 也已完成，见阶段 U~X）。
+> 本节在 2026-10-08 按实施进度刷新：此前列出的 PRO-8、LLM-8、LLM-13、PLG-1、PLG-2、
+> PLG-4、PLG-7、CFG-9、OBS-5 均已完成（见阶段 AD~AH），ARC-8 的试点结论为"不新增一层窄接口"，
+> PLG-8 的文档拆分经核定不做。**按计划核定为"可行"的条目已全部处理完毕**；
+> 下面只剩"暂缓 / 后续计划 / 核定不做"三类。
 
-- **P0 余项**：无。计划 §17.1 的 P0 条目已全部落地或经人工核定不做
-  （LOOP-5、JOB-1/JOB-2、LLM-1、RET-5 等见 `plan.md` 各条目"人工核定"列）。
-- **P1 余项（按计划核定可行、本轮未做）**：
-  - PRO-8（stdio JSONL 一次性运行）：需要新的客户端运行模式（复用 Wire 结构 + JSONL 分帧）
-    与配套用例，属独立功能块（本轮未动，建议单独一轮做：先定 stdout 协议帧格式与
-    "响应 ≠ 轮次完成"的语义，再接入 `mode_runners`）；
-  - LLM-8（Anthropic 缓存断点 + 缓存用量入账）：需要 ① 请求体加可选 `cache_control` 断点
-    （新配置项 + Anthropic 请求装配改动 + 请求体断言用例）、② 解析 Anthropic
-    `cache_read_input_tokens` / `cache_creation_input_tokens` 并落到账本
-    （账本当前只有 `cached_prompt_tokens` 一列，"写入量"需要 schema v3 迁移 + 新列）；
-  - LLM-13（HTTP 录制回放）：需要在测试侧新增"可注入传输层/录制服务器 + 回放服务器"
-    夹具（按请求摘要与顺序保存响应流、敏感 headers 脱敏），与 LLM-5 的 provider 级注入互补；
-  - PLG-1（注册可逆与清理审计）：统一注册清单 + 禁用/卸载后的基线断言（工具/权限/能力/
-    订阅/UI/定时器/键位逐项清理用例，不改 ABI）；
-  - PLG-2（声明式贡献集合与重算）：把提示词/工具/资源/UI 贡献做成"活动集合"并在启停后重算；
-  - PLG-4（独占能力 slot）：为压缩器/记忆提供者等少数独占能力建 slot（卸载回落到内置）；
-  - PLG-7（教学式错误与信任声明）：插件装载失败原因补"怎么改"的指引 + 文档写明原生插件
-    同进程、无沙箱、只能加载可信代码（后者已在 `security.md` 写明，SDK 侧文案待补）；
-  - PLG-8（插件文档分页与接口表数字校验）：`plugins.md` 拆分 + 接口表数量由常量校验
-    （agent 侧 19 张 / client 侧 9 张已在文档中，缺自动校验）；
-  - CFG-9（生成式配置键目录）：从 `AgentConfig`/`YamlAppConfig` 生成"键路径/类型/默认值"
-    目录并与 PRO-4 共用生成器骨架 + 新鲜度门禁；
-  - P2/ROM：ARC-8（消费者窄接口试点 2~3 处）、OBS-5（模块级日志开关，需改日志库信道格式）；
-  - PLG-8 的文档拆分（`plugins.md` 入门/生命周期/SDK/宿主/client/规则）：接口表数量校验已完成，
-    纯文档重组留待需要时再做。
-    （TST-4 并发竞态清单、TST-6 存储一致性骨架已完成，见阶段 Z；TST-7 的
-    "插件注册清理"那一半随 PLG-1 做。）
-- **暂缓**：CTX-7（附件引用）——计划本身标注"需进一步理解具体实施内容"，需要先明确
-  "引用 id + 校验元数据"在 provider 侧的具体形态再动手。
-- **已核定不做**：见 `plan.md` 各条目的"人工核定"列与 `docs/zh-cn/design/roadmap.md` §15。
+- **暂缓（有明确前置条件）**：
+  - CTX-7（附件引用代替反复内联 Base64）：计划本身标注"需进一步理解具体实施内容"，
+    需要先定"引用 id + 校验元数据"在 provider 侧的具体形态（现状：展示历史已剥离 dataUrl，
+    上下文仍内联；服务端路径读取与线程池卸载已实现）。
+- **后续计划（触发条件见 `plan.md` 与 `roadmap.md` §15）**：
+  - SEC-12 可选沙箱执行后端（唯一真隔离路径）、SEC-6 符号链接真实路径判定（实施时先覆盖写操作）；
+  - LLM-9 轮次局部模型回退、LLM-12 结构化输出统一入口、TOOL-14 延迟工具暴露级别、
+    UI-7 统一浮层管理器；
+  - SEC-8 / CFG-7 项目信任（首次在某项目路径启动时询问一次）。
+- **已核定不做**：见 `plan.md` 各条目的"人工核定"列与 `docs/zh-cn/design/roadmap.md` §15；
+  本轮新增两条不做结论：ARC-8 不新增窄视图层（阶段 AI 给出四处等价窄接口与证据）、
+  PLG-8 的 `plugins.md` 拆分（纯文档重组、收益低于改动成本）。
+
 ## 阶段 Z：竞态清单、存储一致性骨架与门禁扩展（TST-4 / TST-6 / TST-7，2026-10-07）
 
 计划依据：`plan.md` §15 TST-4（"取消 vs 工具结算、取消 vs resume、插件卸载 vs 工具执行、
@@ -1855,6 +1841,12 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `config_loader` 的小数截断问题并补 26 项断言）。
 - 阶段 AH（OBS-5）完成后提交：
   `按模块日志级别 (OBS-5)`（新增模块 `log_modules` 35 项；全量回归 36,438 项断言 0 失败）。
+- 阶段 AF（LLM-13）完成后提交：
+  `HTTP 录制回放夹具: 请求摘要与顺序校验、凭据脱敏、SSE 原样回放 (LLM-13)`（新增模块 81 项）。
+- 阶段 AG（CFG-9）完成后提交：
+  `配置键目录生成与新鲜度门禁, 修正小数配置被截断 (CFG-9)`（新增模块 `config_keys` 157 项）。
+- 阶段 AI（ARC-8 试点结论 + 本轮收尾）完成后提交：
+  `ARC-8 试点结论与本轮收尾: 窄接口不新增, roadmap 状态清账 (ARC-8/PLG-8)`。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
@@ -2240,3 +2232,57 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - `LogEntry` 加了字段（导出结构）: 宿主与工具库在同一 superbuild 下同时重建，
   插件侧按旧头文件编译也能工作（两参数入口保留）；跨版本混用时插件日志不带模块名，
   过滤规则对它不生效（按"未命中不过滤"处理）。
+
+## 阶段 AI：ARC-8 窄接口试点结论 + 本轮收尾（2026-10-08）
+
+计划依据：`plan.md` §1.2 ARC-8（"为中间件和宿主适配 `SessionReader`、`PermissionCheck`、
+`ToolRegistrar` 等窄视图；不改变 C ABI 总体形状，先用于测试替身"，人工核定"先试点 2~3 个
+消费者，确认测试替身收益后再推广"）。
+
+**试点结论：不新增窄视图层**（等价窄接口已存在，再包一层属重复抽象）。逐项核对：
+
+| 计划提的窄视图 | 现有等价接口 | 已被测试替身覆盖的用例 |
+|---|---|---|
+| `SessionReader` | `agentxx/nodes/session_context.h`（`sessionMessages` 只读借用 / `appendSessionMessages` 受控写入 + 影子通道刷新 / `updateMessagesMeta`），会话本身仍归 `SessionsManager` + `Session` | `prompt_stability_io`（请求装配读会话上下文）、`summarization`（压缩改上下文）|
+| `PermissionCheck` | 事件总线服务 `service.permission.check` / `service.permission.reverify`（JSON 进 JSON 出，工具与节点不直接依赖权限中间件实现） | `permission`（45 项：判定理由全分支 + 执行前目标复验）、`toolcall_parallel`（权限短路结果）|
+| `ToolRegistrar` | 插件经 `agentxx.agent.tools` 接口表注册；宿主侧 `ToolRegistry`（重名/内置冲突拒绝）+ `AgentContext::ToolAssemblyRecord`（来源/开关/被过滤原因） | `assembly_snapshot_io`（工具清单与来源）、`plugins`/`plugin_resources`（注册与撤销）、`toolcall_args`（分发） |
+| （子代理） | 服务 `service.subagent` + `AgentHost::spawnBatch`（根 agent 与子代理平等挂在 HostBus 上） | `subagent_bus`、`subagent_tool`、`agent_host` |
+
+理由：这四处已经满足 ARC-8 想要的三个性质 —— ① 消费者不依赖实现细节（要么是纯函数入口，
+要么是 JSON 服务）；② 可替换（测试里用的就是真实接口 + 假 provider / 假传输 / 假宿主）；
+③ 不改变 C ABI 形状。再引入一层 C++ 窄视图对象只会增加转发代码与维护面，收益不明确，
+按计划"确认测试替身收益后再推广"的措辞，这里给出**不推广**的结论并记录证据。
+
+本轮（阶段 AD~AH）交付总览：
+
+| 阶段 | 条目 | 交付 | 测试增量 |
+|---|---|---|---|
+| AD | PRO-8 | `JsonlAgentIOTransport` + `agentxx_cli jsonl`（stdout 只写协议行、EOF 后跑完收尾） | `jsonl_mode` 69、`jsonl_runner` 16 |
+| AE | LLM-8 | `cache_control` 断点 + 缓存用量入账（schema v3 新列） | `anthropic_provider` +6、`fake_provider` +10、`session_schema` +17、`config_loader`（与 AG 合并计） |
+| AF | LLM-13 | HTTP 录制/回放夹具（摘要与顺序校验 + 脱敏） | `http_recorder` 81 |
+| AG | CFG-9 | 配置键目录生成物 + 新鲜度门禁 + 顺带修 `config_loader` 小数截断 | `config_keys` 157、`config_loader` +26 |
+| AH | OBS-5 | 按模块日志级别（`LogEntry::module` + 前缀过滤 + `AGENTXX_LOG_MODULES`） | `log_modules` 35 |
+
+验证（本轮收尾）：
+
+- 全量 `agentxx_test`（Debug + ASan/UBSan，全部模块）：**36,438 项断言 0 失败**，进程 exit=0，
+  无 AddressSanitizer 报告（上一轮基线 35,985；本轮新增模块 6 个：
+  `jsonl_mode`/`jsonl_runner`/`http_recorder`/`config_keys`/`log_modules` + 既有模块增量）。
+- 产物构建：lib `INSTALL`（含内置插件与独立插件动态库全部重编）、`agentxx_test`、
+  `agentxx_cli` 均 exit=0，无新增 error。
+- 手工验证：`agentxx_cli jsonl` 真实进程（重定向 stdin/stdout/stderr）跑通握手 → 受理回执 →
+  轮次结果，stdout 24 行全部是可解析协议行、诊断在 stderr。
+- 生成物自检：`wire_schema`（1034 项）与 `config_keys`（157 项）在比较模式下通过，
+  `AGENTXX_UPDATE_*=1` 可一键更新。
+- 工具库改动（log.h/log.cpp、内核 tables_impl.h）提交在各自子模块仓库
+  （`cxx_utilxx_base` 6070e74、`cxx_pluginxx` e44a36b），父仓库记录指针；**这两个子模块提交
+  目前只在本地**，需要时由维护者推送到各自远端。
+
+注意事项：
+
+- `plan.md` §16.2 的批次 A~F 中，除已核定"不做/未来计划"的条目外，本轮不再有 P0/P1 待实施项：
+  剩余的都是被人工核定否掉或列入未来计划的（安全沙箱 SEC-12、软链接判定 SEC-6、
+  作业/子代理整节 JOB-*、`LLM-9`/`LLM-12` 后续计划、`TOOL-14` 后续计划、`UI-7` 未来计划、
+  `CTX-7` 暂缓）。
+- ARC-8 的结论只覆盖"是否新增窄视图"这一决策；若将来出现"某个消费者必须携带半套
+  AgentContext 才能测试"的具体痛点，可按同一清单就近提取窄视图并补替身用例。
