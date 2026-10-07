@@ -432,6 +432,7 @@ void test_log_sink_level_filter() {
             level,
             0,
             0,
+            "test_module",
             msg,
         });
     };

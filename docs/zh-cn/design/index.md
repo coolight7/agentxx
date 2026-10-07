@@ -553,8 +553,29 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   布局分两阶段: 先构建/实测可见子项 (修正估算高度)，再以修正后的总高度与滚动
   偏移统一定位 —— 避免基于估算偏移定位导致当前帧与后续帧位置不一致 (流式输出
   逐 token 高度估算偏差会造成帧间 ±1 行抖动)
-- **TUILogSink**: XX_LOG 日志输出接入 TUI 右侧日志面板
+- **TUILogSink**: XX_LOG 日志输出接入 TUI 右侧日志面板; 支持**按模块调级别**
+  (`AGENTXX_LOG_MODULES=前缀=级别,...`, 见下)
 - **CLI 模式**: 基于 stdin/stdout 的简洁命令行交互
+
+#### 按模块调日志级别 (`AGENTXX_LOG_MODULES`)
+
+日志条目带"模块名": `XX_LOG*` 宏自动取源文件基名 (`logModuleOf(__FILE__)`, 如
+`modelcall` / `session_store`), 插件经宿主日志表的日志记为 `plugin.<插件名>`。
+环境变量 `AGENTXX_LOG_MODULES` 按模块名或前缀单独设置最低级别:
+
+```bash
+# 只把 modelcall 与 toolcall 调到 trace/debug, 其余模块保持全局级别
+AGENTXX_LOG_MODULES="modelcall=debug,toolcall=trace" agentxx_cli tui
+
+# 插件日志整体只留警告以上, 但 codegraph 插件单独放开
+AGENTXX_LOG_MODULES="plugin.=warn,plugin.agentxx_codegraph=debug" agentxx_cli tui
+```
+
+- 级别取 `trace|debug|info|warn|error` (大小写不敏感); 非法段跳过并打印一行 `[Log]` 提示
+- 语义是"低于该级别的日志**直接丢弃**"(不入队, 不受 sink 侧全局级别影响);
+  `Out` 级别 (XX_OUT) 恒不被拦
+- 多条命中时**最长前缀**生效 (长度相同时后设置者胜); 未命中任何条目的模块不受影响
+- `LogDispatcher::setModuleLevel/clearModuleLevels` 是同一能力的 API (宿主/嵌入方可直接调用)
 
 ### 训练系统
 

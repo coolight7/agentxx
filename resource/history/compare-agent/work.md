@@ -71,7 +71,7 @@
 | OBS-3 | 关键指标 | P2 | 完成（已构建 + 测试通过） | `include/agentxx/util/observability.h` + 打点（base_agent/modelcall/toolcall）；模块 `observability` |
 | OBS-4 | 诊断包导出 | P2 | 完成（已构建 + 测试通过） | `include/agentxx/util/diagnostics.h`、CLI `--dump-diagnostics`（含 STO-13 的导出需求） |
 | STO-13 | 会话导出与取证包 | P2 | 完成（并入 OBS-4：会话摘要段 + 可选消息正文） | `diagnostics.cpp` 的 session 段 |
-| OBS-5 | 模块级日志开关 | P2 | 未实施（见阶段 AC 的差异说明：utilxx_base 的 `LogEntry` 不带模块名，按模块过滤需要改日志库的信道格式） | — |
+| OBS-5 | 模块级日志开关 | P2 | 完成（已构建 + 全量回归通过） | `utilxx_base/log.h|cpp`（`LogEntry::module` / `logModuleOf` / `setModuleLevel` / `applyLogModuleLevelSpec`）+ 内核 `pluginxx/host/tables_impl.h`（`plugin.<名字>`）+ CLI `AGENTXX_LOG_MODULES`；模块 `log_modules` |
 | PRO-8 | stdio JSONL 一次性运行（复用 Wire 结构 + JSONL 分帧） | P1 | 完成（已构建 + 测试通过 + 真实进程手工验证） | `lib/.../io/jsonl_io_transport.{h,cpp}`、`client/src/io/jsonl/jsonl_mode.cpp`；模块 `jsonl_mode`、`jsonl_runner` |
 | LLM-8 | Anthropic 缓存断点与缓存用量 | P1 | 完成（已构建 + 测试通过） | `ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints` / `applyUsage`；账本 `usage.cache_write_prompt_tokens`（schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放夹具 | P1 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder`/`HttpPlayer`/`HttpFixture` + 脱敏）；模块 `http_recorder` |
@@ -1853,6 +1853,8 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - 阶段 AG（CFG-9）完成后提交：
   `配置键目录生成与新鲜度门禁 (CFG-9)`（新增模块 `config_keys` 157 项；顺带修掉
   `config_loader` 的小数截断问题并补 26 项断言）。
+- 阶段 AH（OBS-5）完成后提交：
+  `按模块日志级别 (OBS-5)`（新增模块 `log_modules` 35 项；全量回归 36,438 项断言 0 失败）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
@@ -2179,3 +2181,62 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   全模块 fail-fast 已经覆盖; 另开 CI 配置属于外部集成, 不在本项目仓库范围。
 - `overwrite` 只在 `model` 段做了两层加载用例: 其余列表段共用同一实现 (`readListSection`
   与合并函数), 机制一致, 逐段重复用例收益低。
+
+## 阶段 AH：按模块日志级别（OBS-5，2026-10-08）
+
+计划依据：`plan.md` §14 OBS-5（"按模块和插件前缀调整日志级别，避免全局 debug 破坏 TUI"）。
+
+已完成：
+
+- **日志条目带模块名**（`third_party/cxx_utilxx_base`）：
+  - `LogEntry` 增加 `std::string module`（空 = 未指定）；
+  - 新增 `constexpr logModuleOf(__FILE__)`：由源文件路径取基名去扩展名（兼容 `/` 与 `\`），
+    编译期求值、无运行期分配；`XX_LOG*` 宏经 `XX_LOG_MODULE` 自动带上它 —— **调用点零改动**；
+  - `xxLogPrint` 增加三参数重载（级别 + 模块 + 正文），**保留原两参数版本**：老调用点 /
+    按旧头文件编译的插件动态库继续可用（不因签名变化链接失败）。
+- **按模块过滤**（`LogDispatcher`）：
+  - `setModuleLevel(前缀, 最低级别)` / `clearModuleLevels()` / `moduleLevelCount()`；
+    表用 copy-on-write 快照，dispatch 热路径只做一次小表线性查找，**未命中任何条目时
+    与改动前完全等价**；
+  - 匹配规则: 最长前缀生效（长度相同后注册者胜）；命中后低于该级别的日志**直接丢弃**
+    （连 `LogEntry` 都不构造）；`Out` 级别恒通过（`XX_OUT` 是"必须展示"的输出）。
+- **配置入口**：
+  - `applyLogModuleLevelSpec("前缀=级别,...")` 解析器（空白/大小写容错、空段跳过、
+    非法段写回 `invalidEntries` 供调用方告警）；
+  - CLI 启动时读取环境变量 `AGENTXX_LOG_MODULES`（`client/main.cpp`，所有模式共用），
+    应用后打印一行 `[Log] module levels applied: N`，非法段逐条提示；
+  - 宿主/嵌入方也可直接调 `LogDispatcher::setModuleLevel`。
+- **插件日志记为 `plugin.<插件名>`**：内核 `pluginxx/host/tables_impl.h` 的 log 表入口
+  经 `enterHost(host, allowClosing=true)` 取实例名作为模块名（`plugin.<name>`），
+  于是 `plugin.agentxx_codegraph=debug` 这类按插件的级别设置直接可用；实例取不到时
+  退化为 `plugin`。客户端侧插件宿主有独立的 log 入口（`client_plugin_manager.cpp` 的
+  `xx_clog`），那里暂未接实例名（沿用 `client_plugin_manager` 模块），已在"差异"里记录。
+
+测试（新模块 `log_modules`，35 项断言）：
+
+| 组 | 覆盖点 |
+|---|---|
+| `logModuleOf` | `__FILE__` 推导、`/` 与 `\` 两种分隔符、无扩展名、多点文件名、空串 |
+| 规格解析 | 多段/空白/大小写；缺 `=`、空前缀、级别名非法各自进 `invalidEntries`；结尾逗号与空段不算错误；同前缀重复设置是覆盖而非叠加；`clearModuleLevels` 归零 |
+| 过滤语义 | 默认不过滤（行为与改动前一致）；命中模块的低级别被丢弃而其它模块不受影响；`Out` 恒通过；`plugin.` 命中 `plugin.foo` 但不命中 `plugins_other`（前缀语义）；最长前缀优先（`plugin.noisy` 放宽后仅它通过）；清空后恢复全量 |
+
+验证：
+
+- 构建：删除 `cxx_utilxx_base_repo-prefix` / `cxx_pluginxx_repo-prefix` 让工具库与插件全部重编
+  （改的是共享头，按仓库约定必须让 cmake 重新编译），`agentxx_lib_repo`、`agentxx_test`、
+  `agentxx_cli` 三个目标均 exit=0，无新增 error；内置插件动态库与最终程序一起重建成功。
+- 测试：`log_modules` 35/0；**全量回归**（`agentxx_test` 全模块, Debug + ASan/UBSan）
+  **36,438 项断言 0 失败**, 进程 exit=0, 无 ASan 报告（上一轮基线 35,985）。
+
+注意事项 / 与计划的差异：
+
+- 计划的"按模块"指模块名，实现取**源文件基名**（`modelcall` / `session_store` / ...）:
+  与文件一一对应、无需人工维护映射表；要按"逻辑模块"分组时用前缀匹配即可
+  （例如 `plugin.` 覆盖全部插件、`client_plugin` 覆盖客户端插件管理器）。
+- 客户端侧插件日志暂未带插件名（`client_plugin_manager` 的 `xx_clog` 没有实例解析路径，
+  需要补一层 host→实例 的查找）; 需要时按同一做法补，属独立小改动。
+- 未做 TUI 设置项: 级别设置走环境变量与 API（部署/排查场景更常用）; 进设置弹窗需要
+  新的界面条目与持久化键，收益低，未列入本轮。
+- `LogEntry` 加了字段（导出结构）: 宿主与工具库在同一 superbuild 下同时重建，
+  插件侧按旧头文件编译也能工作（两参数入口保留）；跨版本混用时插件日志不带模块名，
+  过滤规则对它不生效（按"未命中不过滤"处理）。

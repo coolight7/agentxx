@@ -545,6 +545,27 @@ int main(int argn, char** argv) {
     auto defaultLogSink = std::make_shared<StderrLogSink>();
     utilxx_base::LogDispatcher::instance().addSink(defaultLogSink);
 
+    // 按模块调日志级别 (计划 OBS-5): `AGENTXX_LOG_MODULES=前缀=级别,...`
+    // - 例: `modelcall=debug,toolcall=trace,plugin.=warn`
+    // - 未命中任何条目的模块照常输出 (由 sink 侧按全局级别过滤)
+    // - 非法段跳过并告警, 不影响其它段
+    if (const auto* spec = std::getenv("AGENTXX_LOG_MODULES"); spec != nullptr) {
+        std::vector<std::string> invalid;
+        const auto               applied = utilxx_base::applyLogModuleLevelSpec(spec, &invalid);
+        if (applied > 0) {
+            XX_OUT(
+                "[Log] module levels applied: {} (from AGENTXX_LOG_MODULES)\n",
+                applied
+            );
+        }
+        for (const auto& bad : invalid) {
+            XX_OUT(
+                "[Log] warning: invalid AGENTXX_LOG_MODULES entry `{}` (expect `prefix=level`)\n",
+                bad
+            );
+        }
+    }
+
 #if defined(AGENTXX_ENABLE_MIMALLOC_D)
     // 记录实际接入的内存分配器 (mimalloc 版本号编码: 主版本 + 2 位次版本 + 2 位修订)
     // - 日志中可直接确认进程用的是 mimalloc 而不是 glibc/CRT

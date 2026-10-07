@@ -28,6 +28,7 @@
 #include "agentxx-test/core/test_json_view.h"
 #include "agentxx-test/core/test_jsonl_mode.h"
 #include "agentxx-test/core/test_llm_error.h"
+#include "agentxx-test/core/test_log_modules.h"
 #include "agentxx-test/core/test_math_tools.h"
 #include "agentxx-test/core/test_mcp.h"
 #include "agentxx-test/core/test_memgrowth.h"
@@ -258,6 +259,7 @@ int main(int argn, char** argv) {
         runSync("assembly_snapshot", agentxx::test::testAssemblySnapshotConfig);
         runSync("config_validation", agentxx::test::testConfigValidation);
         runSync("config_keys", agentxx::test::testConfigKeys);
+        runSync("log_modules", agentxx::test::testLogModuleLevels);
         runSync("task_scope", agentxx::test::testTaskScopeSemantics);
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
