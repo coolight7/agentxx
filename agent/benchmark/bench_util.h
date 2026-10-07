@@ -1109,7 +1109,7 @@ private:
         if (!baselinePath_.empty()) {
             md << fmt::format("- 基线对比: `{}`\n", baselinePath_);
         }
-        md << "\n> 指标口径: RSS=常驻物理内存; PSS=按共享比例分摊后的常驻; 私脏=私有脏页\n"
+        md << "\n> 指标定义: RSS=常驻物理内存; PSS=按共享比例分摊后的常驻; 私脏=私有脏页\n"
               "> (最接近\"真实独占\"); 堆在用=glibc uordblks; 堆空闲=已 free 但保留在堆内(碎片);\n"
               "> 可回收=malloc_trim(0) 后 RSS 下降量 (归还系统); 匿名=匿名映射常驻。\n";
 

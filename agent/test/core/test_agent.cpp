@@ -29,7 +29,7 @@ namespace {
 int g_da_passed = 0;
 int g_da_failed = 0;
 
-/// 权限路径期望值 (与 PermissionMiddlewareHandle::normalizePermissionPath 同一口径):
+/// 权限路径期望值 (与 PermissionMiddlewareHandle::normalizePermissionPath 一致):
 /// 展开 `~`、按进程工作目录绝对化、Unix 分隔符; Windows 上文件系统大小写不敏感,
 /// 权限路径统一转小写
 /// - Windows 上 `/data/outside.txt` 是根相对路径 (无盘符), 会被解析到当前盘符下
@@ -411,7 +411,7 @@ DaSimServer startDaSimServer() {
                     // include_usage 语义: 结束前最后一个 chunk 携带 usage 且 choices 为空
                     // - 真实 OpenAI 在请求带 stream_options.include_usage 时这样返回
                     //   (provider 已默认带上该选项); 缺少它会导致流式请求拿不到用量统计,
-                    //   用量账本/上下文统计在流式路径上恒为 0
+                    //   用量记录/上下文统计在流式路径上恒为 0
                     {
                         auto ev       = utilxx_base::Json::object();
                         ev["id"]      = "chatcmpl-test-sim";
@@ -587,9 +587,9 @@ asio::awaitable<void> test_agent_permission_mode_rules() {
     cfgBase->model.apiKey    = "EMPTY";
     cfgBase->model.modelName = "test-sim";
 
-    // 路径集合 (与中间件归一化口径一致: 相对/绝对均基于 cwd 解析)
+    // 路径集合 (与中间件归一化方式一致: 相对/绝对均基于 cwd 解析)
     // 注: 路由器通配符仅支持整段 "*", 白/黑名单目录按最长前缀回退匹配其子路径
-    // 工作目录外路径的期望值按归一化口径给出 (Windows 上会解析为当前盘符下的小写路径)
+    // 工作目录外路径的期望值按归一化方式给出 (Windows 上会解析为当前盘符下的小写路径)
     const std::string cwd         = std::filesystem::current_path().generic_string();
     const std::string insidePath  = cwd + "/inside.txt";
     const std::string trustedPath = cwd + "/trusted/trusted.txt";
@@ -771,7 +771,7 @@ asio::awaitable<void> test_permission_normalize_path() {
     const std::string cwd = std::filesystem::current_path().generic_string();
 
     // 1. 普通文件 (不存在或存在) 规范化后绝无尾斜杠
-    //    (Windows 上还会按当前盘符绝对化并转小写, 期望值按同一口径给出)
+    //    (Windows 上还会按当前盘符绝对化并转小写, 期望值按同样方式给出)
     auto normFile = perm.normalizePermissionPath("/data/projects/foo.txt");
     XX_TEST_EXPECT_EQ(normFile, expectPermissionPath("/data/projects/foo.txt"));
     XX_TEST_EXPECT_TRUE(normFile.back() != '/');

@@ -293,7 +293,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
         // 4b. 受控轮询工具: 业务体是 asio 协程, 等待插件本地 reactor 上的内核就绪事件
         //     (socket/子进程管道/文件/本地 timer)。插件注册时声明"需要受控轮询驱动",
-        //     桥据此在有在途操作时继续申请请求 (有进展立即续 / 无进展退避 10ms /
+        //     桥据此在有操作进行中时继续申请请求 (有进展立即续 / 无进展退避 10ms /
         //     空闲零开销), 不占宿主工作线程。详见 §16.5。
         polled_tool(
             ctx,
@@ -455,7 +455,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   (工具 args 中的字段名; 目标值按**参数实际 JSON 类型**处理 —— 字符串为单目标,
   数组 (如 `file_patterns`) 自动逐项判定) 与可选的权限分类文本 (权限询问卡片显示,
   留空按作用域生成)
-- **声明落地**: 宿主把声明交给权限中间件 (工具名 → 声明表)。工具调用时中间件按声明
+- **声明如何生效**: 宿主把声明交给权限中间件 (工具名 → 声明表)。工具调用时中间件按声明
   从 args 解析目标 (路径目标按会话生效工作目录规范化为绝对路径), 再按既有规则判定
   (白/黑名单、`permission.mode` 默认规则、用户"记住本次选择"、工作区隔离、完全授权);
   插件不参与判定
@@ -473,7 +473,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   后只输出"已明确允许"的条目, 因此 `limit` 只统计真正输出的条目 (被拒条目不会
   占掉额度), 且不会退化成"每个条目一次跨线程查询"
 - **`check_paths` 语义**: 批量入参 (路径数组 + 作用域 + 会话), 出参三态
-  (`DENY` 已明确拒绝 / `ALLOW` 已明确允许 / `ASK` 未获批准); 判定口径与工具调用
+  (`DENY` 已明确拒绝 / `ALLOW` 已明确允许 / `ASK` 未获批准); 判定规则与工具调用
   权限检查一致 (工作区隔离 → 配置拒绝 → 完全授权 → 规则表 → `noRuleOperator`),
   区别仅在于 `ASK` 不发起询问。工具侧约定: `DENY` 丢弃, `ASK` 同样不作为
   (未获批准的范围不进入结果); 空路径/规范化失败按 `ASK` 返回 (不按已批准处理)。
@@ -526,7 +526,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 | `agentxx.client.timer` | 1 | 一次性/周期定时器与区域可见性查询 (暂停策略见 §9.5) |
 | `agentxx.client.keybind` | 1 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
 
-**版本口径**: `agentxx.client.ui` 表自身 `version` 恒为 1 (表结构未变)。新增展示能力一律走
+**版本约定**: `agentxx.client.ui` 表自身 `version` 恒为 1 (表结构未变)。新增展示能力一律走
 **数据层** (新组件 kind / 新字段) 或**新增接口表**, 不在表尾追加成员 —— SDK 侧的接口校验是
 `version != 1 || struct_size < sizeof(Iface)` 即整表判为不可用, 表尾追加成员会让新插件在
 老宿主上丢掉整张表 (面板/状态栏/渲染器全部失效)。
@@ -1079,7 +1079,7 @@ Closing → CloseFailed → Closing (可重试)
   占用者禁用/卸载时恢复占用前的定义（内置图或宿主自定义图）= **回到内置**。
   多插件交替覆盖会让"谁该恢复"无解，因此这里选择显式拒绝而不是静默覆盖。
 
-诊断口径：`PluginManager::registrationInventory(inst)` 给出各分类**当前生效**的注册计数
+诊断信息：`PluginManager::registrationInventory(inst)` 给出各分类**当前生效**的注册计数
 （不是记录条数），全部为 0 表示该实例在宿主侧已回到基线；`--dump-config` 的装配快照
 按插件输出 `registration_total` 等字段与图定义的占用者。
 
@@ -1186,15 +1186,15 @@ typedef struct PluginxxCoroutineRuntimeIface {
 | `wakePending_` | 一次显式 `wake` 尚未被请求覆盖（兼容"插件直接向 `local_executor` 投递"） |
 | `driverQueued_` / `driverRunning_` | 已申请请求（含 `request_driver` 正在返回的窗口）/ 回调正在执行 |
 | `pendingEpoch_` / `nextEpoch_` | 请求世代，用于识别"回调已消费本轮请求"的窗口 |
-| `polledRoots_` | 在途**受控轮询根**数（声明式 `polled_tool`；0 = 不轮询、不建定时器） |
+| `polledRoots_` | 进行中**受控轮询根**数（声明式 `polled_tool`；0 = 不轮询、不建定时器） |
 | `pumpPending_` | 受控轮询判定"该继续驱动"（第二类申请请求理由） |
-| `pumpWaitScheduled_` / `pumpWaitOp_` | 在途退避定时器（宿主 `scheduler.sleep`）与其句柄 |
+| `pumpWaitScheduled_` / `pumpWaitOp_` | 已排定的退避定时器（宿主 `scheduler.sleep`）与其句柄 |
 | `pollBurst_` | 连续"有进展"步数（用于突发上限让出） |
 
 关键不变量：
 
 1. 每张请求**恰好一次** `localIo_.poll_one()`（一个 host driver ⇔ 一个局部 continuation）；
-2. 只有确实还有可运行工作（`readySteps_ > 0`、未覆盖的显式 wake，或有在途 polled 操作
+2. 只有确实还有可运行工作（`readySteps_ > 0`、未覆盖的显式 wake，或有未结束的 polled 操作
    且轮询策略判定需要续票）才申请下一次请求，`poll_one()==0` **不会**在无工作的状态下
    重新排队 —— 空闲时既不占宿主任务队列也不建定时器；
 3. 宿主回调完成后只做 `postToLocal(continuation) + wake()`，**绝不在宿主回调栈内
@@ -1212,7 +1212,7 @@ typedef struct PluginxxCoroutineRuntimeIface {
     → scheduler.sleep 安排一次退避（无进展 10ms；突发上限后让出 1ms）
       → 到期回调只 request_driver（不恢复插件协程）
 polledRoots_ 归零
-    → 取消在途退避，之后不再申请请求（空闲零开销）
+    → 取消已排定的退避，之后不再申请请求（空闲零开销）
 ```
 
 **根的生命周期（`BridgeRoot` / `PolledRoot`）**
@@ -1235,7 +1235,7 @@ polledRoots_ 归零
   exactly-once 仲裁（正常完成 vs 桥停止时放弃，用一次 CAS 决定）；
 - 正常完成：`detail::runPolledPumpJob` 认领 → 注销登记（`polledRoots_` 递减，必要时
   停止 pump）→ 上报终态 → 执行清理回收 `Job`；
-- 桥停止：`failAllPolledRoots` 把在途根整批摘下 → 每个根按 `FAILED` 上报一次 →
+- 桥停止：`failAllPolledRoots` 把未结束的根整批摘下 → 每个根按 `FAILED` 上报一次 →
   执行清理回收 `Job`；挂起的帧随本地 reactor 销毁而释放。
 
 **已接桥的 kit 路径**
@@ -1268,12 +1268,12 @@ polledRoots_ 归零
 
 | 项 | 值 | 说明 |
 |---|---|---|
-| 触发条件 | `polledRoots_ > 0` | 只在有在途 polled 操作时轮询；空闲零请求、零定时器 |
+| 触发条件 | `polledRoots_ > 0` | 只在有未结束的 polled 操作时轮询；空闲零请求、零定时器 |
 | 有进展 | 立即续票 | 本轮 `poll_one` 执行到了 handler（就绪事件被收走） |
 | 无进展 | 退避 10ms | `PollOneBridge::kPollIntervalMs`，经宿主 `scheduler.sleep`；到期回调只 `request_driver` |
 | 突发上限 | 连续 256 步后让出 1ms | `kPollBurstMax` / `kPollBurstYieldMs`，避免同实例自循环独占 IO 线程 |
-| 取消 | 置取消标志 + 取消在途退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避量子即可看到取消并收束根 |
-| 无 driver 的宿主 | 不支持 | `coroutine_runtime` 是宿主必备能力：缺失时 kit 无法推进协程（驱动请求失败会终结在途根并记日志），不再有 offload 降级路径 |
+| 取消 | 置取消标志 + 取消已排定的退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避量子即可看到取消并收束根 |
+| 无 driver 的宿主 | 不支持 | `coroutine_runtime` 是宿主必备能力：缺失时 kit 无法推进协程（驱动请求失败会终结未结束的根并记日志），不再有 offload 降级路径 |
 
 业务签名与 `blocking_tool` 同形（只是返回 `asio::awaitable<std::string>`），因此迁移
 通常只是换一个注册函数名：
@@ -1356,7 +1356,7 @@ polled_tool(ctx, name, depict, schema,
 | C ABI | `test_plugin_abi_c17.c`：协程驱动表 8 字节对齐、`version/struct_size` 偏移、版本号；C++ 侧逐项对照（`plugin_runtime`） |
 | 宿主请求 | `plugin_runtime`：恒异步、每票至多一次、取消后不再执行、排队持 lease、幂等取消、伪造句柄安全忽略、Closing 允许 / Closed 拒绝、空回调返回 `NULL + error_out` |
 | kit 桥接 | `plugin_bridge`（伪宿主 C ABI 驱动）：不内联、每票一次 `poll_one`、空闲不自旋、wake 三个窗口不丢、宿主回调不重入、取消唯一终态、拒绝驱动即终结、stop 取消排队请求、多实例隔离 |
-| kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消在途退避）、取消会取消在途退避并只产生一个 `CANCELLED` 终态、`stop` 时在途 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出 |
+| kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消已排定的退避）、取消会取消已排定的退避并只产生一个 `CANCELLED` 终态、`stop` 时未结束的 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出 |
 | 端到端 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实宿主执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间宿主任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
 | 端到端（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收束、pump 停止、inflight 归零且耗时远小于命令自身超时 |
-| 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（在途卸载/放弃路径）后不变 |
+| 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（操作进行中时卸载/放弃的路径）后不变 |

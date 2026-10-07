@@ -1,4 +1,4 @@
-# gate.ps1 —— 一键质量门禁 (Windows 版; 计划 TST-8)
+# gate.ps1 —— 一键质量检查 (Windows 版; 计划 TST-8)
 #
 # 与 agent/script/gate.sh 对应的 Windows 实现: 构建 (可选) → 全模块 fail-fast 测试
 # (含 boundaries 边界检查 / wire_roundtrip 协议往返 / config_validation 配置校验 /
@@ -7,7 +7,7 @@
 # Linux/macOS 侧跑 gate.sh 完成这两项)。
 #
 # sanitizer: 本项目 Debug 构建默认带 ASan (+ MSVC 无 UBSan), 即"跑 Debug 测试"本身
-# 就是 sanitizer 门禁。
+# 就是 sanitizer 检查。
 #
 # 用法:
 #   pwsh -File agent/script/gate.ps1
@@ -97,7 +97,7 @@ if ($Bench) {
     Record-Result "benchmark" "skip" "use -Bench"
 }
 
-# ---------------- 4. 平台相关门禁 (bash 脚本) ----------------
+# ---------------- 4. 平台相关检查 (bash 脚本) ----------------
 Record-Result "plugin exports" "skip" "run agent/script/gate.sh on Linux/macOS (needs nm)"
 Record-Result "sdk negative compile" "skip" "run agent/script/gate.sh on Linux/macOS (needs python3)"
 

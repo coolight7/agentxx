@@ -382,7 +382,7 @@ void test_json_dump() {
     // 控制字符 \u00xx 转义
     Json ctrl(std::string("\x01\x1F", 2));
     XX_TEST_EXPECT_EQ(ctrl.dump(), std::string("\"\\u0001\\u001f\""));
-    // 浮点形态: 纯整数写法补 .0 (与 neograph dump 口径一致)
+    // 浮点形态: 纯整数写法补 .0 (与 neograph 的 dump 一致)
     XX_TEST_EXPECT_EQ(Json(1.0).dump(), std::string("1.0"));
     XX_TEST_EXPECT_TRUE(Json(1.5).dump().find("1.5") != std::string::npos);
     // 浮点最短往返表示

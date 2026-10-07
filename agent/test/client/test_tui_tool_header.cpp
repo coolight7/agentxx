@@ -274,7 +274,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         std::string newStr       = j.value("new_str", std::string{});
         const bool  multiReplace = j.value("multi_replace", false);
         out->displayName         = makeTestString("Edit");
-        // 折叠头摘要与真实插件同口径: " · [+行 -行] path"
+        // 折叠头摘要与真实插件一致: " · [+行 -行] path"
         // (增删行数经共享 helper 计算 —— 与插件渲染器、展开体 diff 三者同源,
         // 见 agentxx_fs_plugin.h 的 diffStatText; multi_replace 完成后按结果里的
         // 命中处数换算整个文件的总行数, 完成前按单处展示)
@@ -1335,7 +1335,7 @@ void testTuiToolHeaderPlanningRestored() {
 
 // filesystem edit 折叠头摘要: 类似 git 的 "+行 -行" 提示 (`[+3 -1] path`)
 //
-// 行数统计口径与展开体 diff 同源 (utilxx::computeLineDiff 的逐行 LCS 结果),
+// 行数统计方式与展开体 diff 同源 (utilxx::computeLineDiff 的逐行 LCS 结果),
 // 不是 old_str/new_str 的行数差 —— 替换块里未变的上下文行不计入增删。
 void testTuiToolHeaderEditDiffStat() {
     // 单行替换: 1 增 1 删

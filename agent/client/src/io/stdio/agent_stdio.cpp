@@ -442,7 +442,7 @@ asio::awaitable<utilxx_base::Json> StdIOClientAgentIO::handleInterrupt(
                 }
                 inputSuccess = true;
             } else {
-                // 未知控件形态: 跳过 (不参与结果; 与 TUI 诊断行口径一致)
+                // 未知控件形态: 跳过 (不参与结果; 与 TUI 诊断行一致)
                 std::cout << "  ┣━ Unsupported control, skipped.\n" << std::flush;
                 inputSuccess = true;
                 continue;

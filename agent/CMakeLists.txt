@@ -190,7 +190,7 @@ set(XX_IS_GCC_D 0)
 set(XX_IS_CLANG_D 0)
 # MinGW 工具链 (Windows + GNU/Clang 前端, 非 MSVC): 供代码内条件编译使用,
 # 取代编译器内置的 __MINGW32__ 宏 (内置宏无法由 CMake 统一控制, 交叉编译/
-# 模拟环境/未来工具链变化时判定口径分散)
+# 模拟环境/未来工具链变化时判定规则分散)
 set(XX_IS_MINGW_D 0)
 
 if (MSVC)

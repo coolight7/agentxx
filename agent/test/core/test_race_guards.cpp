@@ -10,7 +10,7 @@
 /// - R1 取消 vs 工具结算: 取消时已完成的结果保留, 未启动的补取消占位,
 ///   整批结果数量与 tool_call 一一对应
 /// - R2 并行结果乱序: 5 个并行安全调用按声明顺序提交 (完成顺序完全相反)
-/// - R3 中断应答在途 vs 取消: 无论落到"取消结束"还是"应答后 resume",
+/// - R3 中断应答进行中 vs 取消: 无论落到"取消结束"还是"应答后 resume",
 ///   轮次收敛且结果唯一 (应答迟到不重复执行)
 /// - R4 工具执行中被注销 (插件工具的动态注册表路径): 执行体保活,
 ///   调用正常返回真实结果, 注册表已不再包含该工具
@@ -611,7 +611,7 @@ asio::awaitable<void> test_parallel_reverse_completion_order() {
 }
 
 // ===========================================================================
-// R3: 中断应答在途 vs 取消
+// R3: 中断应答进行中 vs 取消
 // ===========================================================================
 asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
     const std::string sessionId = "race_interrupt_cancel";
@@ -679,7 +679,7 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
     // 中断只问一次 (取消不会引起第二次询问)
     XX_TEST_EXPECT_EQ(io->interruptCalls.load(), 1);
 
-    // 两条合法结局之一: ① 取消结束 (应答迟到不再 resume); ② 应答先落地, resume 完成
+    // 两条合法结局之一: ① 取消结束 (应答迟到不再 resume); ② 应答先完成, resume 完成
     auto session = agent.agentContext->sessions->get(sessionId);
     if (turnResult.hasError) {
         XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
@@ -699,7 +699,7 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
             XX_TEST_EXPECT_EQ(danglingToolCallCount(after), size_t{0});
         }
     } else {
-        // 应答落地后 resume: 工具返回真实应答文本, 不是占位
+        // 应答完成后 resume: 工具返回真实应答文本, 不是占位
         XX_TEST_EXPECT_TRUE(co_await waitToolResults(session, 1));
         const auto results = toolResults(session);
         XX_TEST_EXPECT_EQ(results.size(), size_t{1});
@@ -872,7 +872,7 @@ asio::awaitable<TestResult> run_race_guard_tests() {
         {
             const auto t0 = std::chrono::steady_clock::now();
             co_await test_interrupt_answer_inflight_vs_cancel();
-            TEST_INFO << "[race_guards] R3 中断应答在途 vs 取消 用时 " << elapsedMs(t0) << " ms"
+            TEST_INFO << "[race_guards] R3 中断应答进行中 vs 取消 用时 " << elapsedMs(t0) << " ms"
                       << std::endl;
         }
         {

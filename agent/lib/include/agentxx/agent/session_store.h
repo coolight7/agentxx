@@ -24,7 +24,7 @@ namespace agent {
 ///                   meta 表          msgIdCounter / schema_version / session 元数据
 ///                   store 表         agentxx_share_store KV 存储 id(自增) -> value
 ///                                   (内存只保留少量最近使用的条目, 其余按需读取)
-///                   usage 表         每次模型调用的用量账本 (成功与失败各一行)
+///                   usage 表         每次模型调用的用量记录 (成功与失败各一行)
 ///   - .writer.lock  写租约锁文件 (见 [SessionWriterLease]):
 ///                   同一会话目录同时只允许一个进程写入, 第二个进程写操作
 ///                   明确失败而不是互相覆盖; 读操作不取锁
@@ -175,7 +175,7 @@ public:
     std::vector<SessionInputRecord>
         listSessionInputs(std::string_view sessionId, std::string_view statusFilter = {});
 
-    // ---- 用量账本 (session.db usage 表) ----
+    // ---- 用量记录 (session.db usage 表) ----
 
     /// 单次模型调用用量 (成功与失败都记一行; 失败时 ok=false 并带 errorKind)
     struct UsageRecord {
@@ -194,7 +194,7 @@ public:
         bool        ok                      = true;
     };
 
-    /// 会话用量聚合 (供界面/诊断展示; 由账本汇总, 不依赖内存中的最后一次统计)
+    /// 会话用量聚合 (供界面/诊断展示; 由用量记录汇总, 不依赖内存中的最后一次统计)
     struct UsageSummary {
         int64_t calls                  = 0; ///< 记录次数 (含失败)
         int64_t failedCalls            = 0; ///< 失败次数
@@ -206,7 +206,7 @@ public:
         int64_t reasoningTokens        = 0;
     };
 
-    /// 追加一条用量记录 (失败仅记日志; 账本是统计信息, 不影响对话流程)
+    /// 追加一条用量记录 (失败仅记日志; 用量记录是统计信息, 不影响对话流程)
     void addUsage(std::string_view sessionId, const UsageRecord& record);
 
     /// 会话用量聚合; 无记录/读取失败返回全 0

@@ -600,7 +600,7 @@ void test_wire_add_model_protocol() {
     using namespace agentxx::agent;
     using namespace agentxx::agent::io;
 
-    // 1. 新增模型请求: 关键字段往返 (含可选字段与默认值口径)
+    // 1. 新增模型请求: 关键字段往返 (含可选字段与默认取值)
     {
         WireAddModel req;
         req.sessionId                = "sess-1";

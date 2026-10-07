@@ -59,7 +59,7 @@ std::vector<InterruptUiOption> jsonOptions(const Json& j, std::string_view key) 
     return out;
 }
 
-/// 缩进 (终端口径的列数) → 描述层的 Padding (长度 u)
+/// 缩进 (按终端列数) → 描述层的 Padding (长度 u)
 ///
 /// 描述层没有"缩进"字段 (终端专有概念, 见 plan §3.5): 缩进由容器表达,
 /// 客户端渲染时按能力段把 u 换算成列/行。
@@ -400,7 +400,7 @@ bool interruptValueBool(const Json& values, std::string_view id, bool defaultVal
         return v->get<double>() != 0.0;
     }
     if (v->is_string()) {
-        // 与 preset::inputForm 的 bool 控件取值口径一致 ("true"/"yes"/"y"/"1")
+        // 与 preset::inputForm 的 bool 控件取值规则一致 ("true"/"yes"/"y"/"1")
         auto s = utilxx_base::toLower(utilxx_base::removeBetweenSpace(v->get<std::string>()));
         if (s == "true" || s == "yes" || s == "y" || s == "1") {
             return true;
@@ -476,7 +476,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         value.fallback = text;
         return value;
     };
-    // 空行数 (中断描述里的终端口径) → 长度 u: 一行 ≈ 能力段默认格高
+    // 空行数 (中断描述里按终端行算) → 长度 u: 一行 ≈ 能力段默认格高
     const auto gapSizeOf = [](int lines) {
         return pluginxx::ui::SizeValue::of(
             static_cast<double>(std::max(0, lines)) * pluginxx::ui::gen::kDefaultCellHeight

@@ -425,7 +425,7 @@ void test_markdown_block_render() {
     XX_TEST_EXPECT_TRUE(rendered.find("bold") != std::string::npos);
     XX_TEST_EXPECT_TRUE(rendered.find("item one") != std::string::npos);
     // markdown 块参与估算 (多行; 估算与实测允许 1 行偏差:
-    // markdown 渲染器的块间空行口径与估算近似, 进入视口后由懒列表实测修正)
+    // markdown 渲染器的块间空行数与估算接近, 进入视口后由懒列表实测修正)
     const size_t markdownEst = f.comp->interruptEstimate(mi, 120);
     const size_t markdownGot = f.renderedRows();
     XX_TEST_EXPECT_TRUE(markdownEst > 2);

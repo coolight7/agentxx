@@ -8,7 +8,7 @@
 /// - `agent/schema/wire-schema.json` (机器可读: 类型标签 + 字段类型 + 示例值)
 /// - `docs/zh-cn/design/wire-protocol-fields.md` (人工阅读的字段表)
 ///
-/// 门禁: 生成结果与仓库内提交的生成物逐字节比对, 不一致即失败 (提示如何更新)。
+/// 检查: 生成结果与仓库内提交的生成物逐字节比对, 不一致即失败 (提示如何更新)。
 /// 变体数量与示例数量必须一致 —— 新增消息类型却忘了补示例时, 本模块立即失败,
 /// 避免字段清单悄悄漏掉新消息。
 #include "agentxx-test/core/test_wire_schema.h"

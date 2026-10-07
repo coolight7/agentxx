@@ -1,4 +1,4 @@
-/// 冒烟检查 —— 进程内 mock OpenAI 兼容 SSE 服务器 + 真实 libagentxx 会话。
+/// 基本功能检查 —— 进程内 mock OpenAI 兼容 SSE 服务器 + 真实 libagentxx 会话。
 ///
 /// 覆盖两条链路 (与 C++ 测试 test_ffi_c_api.cpp 同构):
 ///   场景 A: create→start→EVT_READY→send_input→流式 DELTA→TURN_END
@@ -24,7 +24,7 @@ Future<void> main() async {
     await _scenarioB(server);    stdout.writeln('✓ 场景 B 通过 (HIL 权限中断)');
   } on Object catch (e, st) {
     failed = true;
-    stdout.writeln('✗ 冒烟检查失败: $e');
+    stdout.writeln('✗ 基本功能检查失败: $e');
     stdout.writeln(st.toString());
   } finally {
     await server.server.close(force: true);

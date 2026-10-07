@@ -125,8 +125,8 @@ void PermissionMiddlewareHandle::setSessionIsolation(
     std::string_view   sessionId,
     SessionFsIsolation isolation
 ) {
-    // 与 setFilesystemPermission 同一口径: 传入路径先归一化 (绝对化 + Unix 分隔符
-    // + Windows 转小写) 再存储。判定时被检查路径已按同一口径归一化, 若这里保留
+    // 与 setFilesystemPermission 一致: 传入路径先归一化 (绝对化 + Unix 分隔符
+    // + Windows 转小写) 再存储。判定时被检查路径已按同样方式归一化, 若这里保留
     // 原始大小写 (如盘符 `D:` 与目录名大小写不同), 前缀比较会失配, 表现为隔离
     // 边界不生效 (主检出内写操作未被拒绝)
     isolation.allowPath     = normalizePermissionPath(isolation.allowPath, sessionId);
@@ -366,7 +366,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
         co_return allow;
     }
 
-    // 按声明解析全部受约束目标 (判定与执行前复验同一口径)
+    // 按声明解析全部受约束目标 (判定与执行前复验同一套规则)
     const auto sessionId = args.value("sessionId", std::string{});
     const auto targets   = resolveDeclaredTargets(args, spec);
     for (const auto& target : targets) {
@@ -396,7 +396,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
         }
     }
 
-    // 记录已批准目标: 执行前按同一口径复验 (计划 SEC-5)
+    // 记录已批准目标: 执行前按同一套规则复验 (计划 SEC-5)
     const auto toolCallId = args.value("tool_call_id", std::string{});
     if (!toolCallId.empty()) {
         approvedTargets_[approvedTargetsKey(toolName, toolCallId)]
@@ -594,7 +594,7 @@ std::vector<PathDecision> PermissionMiddlewareHandle::decidePaths(
     decisions.reserve(paths.size());
     for (const auto& raw : paths) {
         // 相对路径按会话生效工作目录规范化为绝对路径 (与工具实际访问路径、
-        // 规则匹配口径一致); 规范化失败 (空路径) 按未获批准处理
+        // 与规则匹配时一致); 规范化失败 (空路径) 按未获批准处理
         const auto normalized = normalizePermissionPath(raw, sessionId);
         decisions.push_back(
             normalized.empty() ? PathDecision::Ask : decideTarget(normalized, index, sessionId)
@@ -707,7 +707,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
                          );
 
     // 1b. 注册执行前目标复验服务 (ReqPermissionReverify -> RespPermissionReverify):
-    //     判定阶段记录"已批准目标", 执行前用当前参数按同一口径复验, 防止
+    //     判定阶段记录"已批准目标", 执行前用当前参数按同一套规则复验, 防止
     //     判定与执行之间参数被改写 (计划 SEC-5: 批准目标 = 实际执行目标)
     reverifyServerId_ = bus
                             ->getRR<events::ReqPermissionReverify, events::RespPermissionReverify>(

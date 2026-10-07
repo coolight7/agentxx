@@ -31,7 +31,7 @@ namespace {
 constexpr std::string_view kToolShareStore = "agentxx_share_store";
 constexpr std::string_view kToolSubagent   = "agentxx_subagent";
 
-/// 折叠头显示名 (与插件渲染器口径一致: 简短英文名, 如 Read/Edit/Bash)
+/// 折叠头显示名 (与插件渲染器规则一致: 简短英文名, 如 Read/Edit/Bash)
 constexpr std::string_view kNameShareStore = "Store";
 constexpr std::string_view kNameSubagent   = "Subagent";
 
@@ -41,7 +41,7 @@ struct RenderText {
     std::string summary;
 };
 
-/// 摘要预览的可见字符数上限 (与宿主预设模版渲染器同口径: 宽度预算不足时取 80)
+/// 摘要预览的可见字符数上限 (与宿主预设模版渲染器同一套规则: 宽度预算不足时取 80)
 size_t summaryPreviewCols(int maxWidth) {
     return (maxWidth > 20) ? static_cast<size_t>(maxWidth - 15) : size_t{80};
 }

@@ -65,7 +65,7 @@ lib/src/events.dart       wire 协议 JSON → Dart 事件模型
 lib/src/repl.dart         终端渲染 + REPL + 中断应答流程
 lib/src/dll_loader.dart   动态库定位加载
 lib/src/console_setup.dart Windows 控制台 UTF-8/ANSI 适配
-example/smoke_check.dart  冒烟检查 (内置 mock LLM, 覆盖对话+HIL 权限链路)
+example/smoke_check.dart  基本功能检查 (内置 mock LLM, 覆盖对话+HIL 权限链路)
 example/mock_llm.dart     独立 mock LLM 服务器 (端到端联调用)
 ```
 

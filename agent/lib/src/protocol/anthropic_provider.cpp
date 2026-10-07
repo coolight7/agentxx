@@ -412,8 +412,8 @@ neograph::ChatCompletion AnthropicProvider::parseResponse(const utilxx_base::Jso
 
     if (resp.contains("usage")) {
         auto u = resp["usage"];
-        // 用量口径 (计划 LLM-8): input_tokens 只含未命中缓存的输入, 缓存读/写量
-        // 单独回报; 统一折算成整段 prompt 规模, 并把缓存写入量放进旁路供账本使用
+        // 用量计算方式 (计划 LLM-8): input_tokens 只含未命中缓存的输入, 缓存读/写量
+        // 单独回报; 统一折算成整段 prompt 规模, 并把缓存写入量放进额外字段供用量记录使用
         applyUsage(
             completion,
             u.value("input_tokens", 0),

@@ -1,7 +1,7 @@
-/// 配置键目录与新鲜度门禁 (计划 CFG-9)
+/// 配置键目录与新鲜度校验 (计划 CFG-9)
 ///
 /// 背景: yaml 配置的键只有 `client/src/config_loader.cpp` 一处权威实现, 用户/运维
-/// 没有可读的键清单, 键名改动也没有门禁。C++ 没有反射, 因此这里用"表 + 真实加载校验
+/// 没有可读的键清单, 键名改动也没有检查。C++ 没有反射, 因此这里用"表 + 真实加载校验
 /// + 源码扫描"三件套保证目录不会漂移:
 ///
 /// 1. **表** (`configKeyEntries()`): 每个键登记 键路径 / 类型 / 默认值 / 样例 yaml /
@@ -12,7 +12,7 @@
 ///    集合, 要求每个名字都能在目录里找到 (新增键必须登记), 并检查扫描量下限 (规则失效
 ///    时不能"零命中全通过");
 /// 3. **生成物**: `agent/schema/config-keys.json` (机器可读) 与
-///    `docs/zh-cn/design/config-keys.md` (人工阅读), 逐字节比对做门禁,
+///    `docs/zh-cn/design/config-keys.md` (人工阅读), 逐字节比对做检查,
 ///    `AGENTXX_UPDATE_CONFIG_KEYS=1` 一键更新 (更新后人工 review diff)。
 #include "agentxx-test/core/test_config_keys.h"
 

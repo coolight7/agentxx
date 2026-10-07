@@ -1,12 +1,12 @@
 /// test_permission —— 权限判定理由与执行前目标复验 (计划 SEC-2 / SEC-5 / TST-10)
 ///
 /// 覆盖:
-/// - SEC-2 判定理由 (PermissionReason): 同一套判定口径下每个分支都给出理由 ——
+/// - SEC-2 判定理由 (PermissionReason): 同一套判定规则下每个分支都给出理由 ——
 ///   未解析的目标、工作区隔离写拒绝、配置显式拒绝(优先于完全授权)、完全授权、
 ///   命中规则、未命中规则按模式默认兜底; 理由文本与命中规则/目标一并给出
-/// - SEC-5 执行前目标复验: 判定阶段记录"已批准目标", 执行前用当前参数按同一口径
+/// - SEC-5 执行前目标复验: 判定阶段记录"已批准目标", 执行前用当前参数按同一套规则
 ///   复验 —— 参数被改写时拒绝执行; 未声明权限的工具无约束
-/// - 门禁正确性 (TST-10 收窄用例集): 配置拒绝优先于完全授权、工作区隔离写拒绝
+/// - 判定规则正确性 (TST-10 收窄用例集): 配置拒绝优先于完全授权、工作区隔离写拒绝
 ///   优先于白名单、未声明权限的工具直接放行
 #include "agentxx-test/core/test_permission.h"
 
@@ -233,7 +233,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         );
         XX_TEST_EXPECT_FALSE(deniedReason.empty());
 
-        // 批量路径查询 (check_paths 同口径): 明确允许 / 明确拒绝 / 未获批准
+        // 批量路径查询 (check_paths 一致): 明确允许 / 明确拒绝 / 未获批准
         const std::vector<std::string> batch{
             "./perm_test_base/allowed.txt",
             "./perm_test_base/secret.txt",

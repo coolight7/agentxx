@@ -42,9 +42,9 @@
   `redactSecrets` + 调用方 `secrets`），因此可以提交进仓库；
   需要真实上游时只在本地录制，不要把线上响应直接入库。
 
-## 门禁与快照
+## 检查与快照
 
-- 一键门禁：`agent/script/gate.sh`（Linux/macOS）或 `agent/script/gate.ps1`
+- 一键检查：`agent/script/gate.sh`（Linux/macOS）或 `agent/script/gate.ps1`
   （Windows）。改动渲染、协议、配置、持久化后至少跑一次
   `agentxx_test -f`（fail-fast，含 `boundaries` 边界检查）。
 - UI 快照基线在 `agent/test/snapshots/ui/`（固定尺寸纯文本画面 + 命中区清单），

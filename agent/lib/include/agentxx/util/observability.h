@@ -23,7 +23,7 @@ namespace util {
 class KeyMetrics {
 public:
 
-    /// 工具调用终态 (与工具结算口径一致)
+    /// 工具调用终态 (与工具结算规则一致)
     enum class ToolOutcome {
         Ok = 0,      ///< 执行成功 (含工具自身返回的错误文本)
         Failed,      ///<< 抛异常被格式化为错误结果

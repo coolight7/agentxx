@@ -143,7 +143,7 @@ path/to/agentxx_test string_util regex
         - process
         - exception
     - [codegraph-cpp](agent/third_party/codegraph-cpp/)
-    - [cmark-gfm](agent/third_party/cmark-gfm/)
+    - [cmark-gfm](agent/third_party/cmark_gfm/) (仓库目录名 `cmark_gfm`)
     - [curl](agent/third_party/curl/)
     - [fmt](agent/third_party/fmt/)
     - [FTXUI](agent/third_party/ftxui/)
@@ -153,9 +153,11 @@ path/to/agentxx_test string_util regex
     - [iconv] | [libiconv-native](agent/third_party/libiconv-native/)
     - [liburing](agent/third_party/liburing/)
     - [NeoGraph](agent/third_party/neograph/)
-    - [Markdown-ui](agent/third_party/markdown-ui/)
+    - [MarkdownFTXUI](agent/third_party/markdown_ftxui/) (markdown 渲染)
     - [mimalloc](agent/third_party/mimalloc/) 内存分配器 (Linux/Windows 默认启用; macOS/iOS 无覆盖机制, 自动关闭, 见"编译"节)
-    - [OpenSSL](agent/third_party/openssl-4.0.1/)
+    - [OpenSSL] 4.0.1 (源码目录 `agent/third_party/openssl-4.0.1/`; 缺失时 Linux/macOS 由
+      `agent/script/deps/libbuild.sh` 自动下载源码, Windows 由 `deps/prepare_windows_deps.ps1` 取预编译包)
+    - [quickjs](agent/third_party/quickjs/) (JS 插件引擎)
     - [simdjson](agent/third_party/simdjson/)
     - [sqlite3] | [sqlite3-cmake](agent/third_party/sqlite3-cmake/)
     - [uchardet](agent/third_party/uchardet/)
@@ -168,7 +170,7 @@ path/to/agentxx_test string_util regex
   [ui-layer.md](docs/zh-cn/design/ui-layer.md) 与 [plugins.md](docs/zh-cn/design/plugins.md) §9）
 - **改界面相关内容先看三处**:
   - 组件字段/枚举/适配规则 → 库的 `schema/ui.def.json`（改完在库仓库跑 `dart run tools/gen_ui.dart`
-    并提交生成物, `--check` 是门禁）；
+    并提交生成物, `--check` 是提交前的检查）；
   - 本端渲染与能力表 → `agent/client/src/io/tui/ui_components.cpp`（渲染 + 测量）与
     `tuiUiCapabilities()` / `kTuiBlockNames`（如实上报, 少声明只会降级, 多声明会画不出来）；
   - 插件侧组装 → `agentxx::ui::build` / `agentxx::ui::kit`（扩展 kit 生成物在
@@ -222,7 +224,7 @@ path/to/agentxx_test string_util regex
   text_selection_monitor 仅 Windows, audio_stream 全平台未实现,
   system_monitor 覆盖 windows/linux/android/macos (macOS 经 mach
   host_statistics + IOKit IOAccelerator 读取 CPU/内存/GPU/显存,
-  Apple Silicon 为统一内存: 无独立显存, 用共享内存口径);
+  Apple Silicon 为统一内存: 无独立显存, 按共享内存统计);
   跨平台插件默认放行; 见 docs/zh-cn/design/plugins.md §14
 - 工具函数复用: 插件复用 `cxx_utilxx_base` / `cxx_utilxx` 两个独立静态库
   (拆分自原 `agentxx_util`; 基础件 log/json/json_view/string_util/env/system/
@@ -356,7 +358,7 @@ path/to/agentxx_test string_util regex
   按显示宽度折行 (`markdown::wrap_line_by_width`, 见 markdown_ftxui 的 `build_code_block`):
   折行宽度 = 可用宽度 - 左右各 1 列内边距 - 外层缩进 (块引用每层 2 列 / 列表项前缀,
   构建期经 `tl_indent` + `IndentScope` 累加); `estimateMarkdownLines` 用同一函数统计
-  行数, 两侧口径必须保持一致 (改动折行规则时两处同步)
+  行数, 两侧算法必须保持一致 (改动折行规则时两处同步)
 - 可观测性 (2026-10-07): `agentxx::util::KeyMetrics` (计划 OBS-3) 记轮次终态/TTFT/
   模型调用与用量/工具终态/压缩, 挂在 `AgentContext::metrics`, 装配快照含 `metrics` 段;
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` (计划 OBS-4) 导出

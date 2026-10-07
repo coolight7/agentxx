@@ -257,14 +257,14 @@ inline utilxx_base::Json chatToolsToOpenAIJson(const std::vector<neograph::ChatT
     return arr;
 }
 
-/// 补充用量明细 (缓存 token) 的旁路传递 (计划 LLM-8)
+/// 补充用量明细 (缓存 token) 的单独传递 (计划 LLM-8)
 ///
 /// 背景: `neograph::ChatCompletion::Usage` 只有 prompt / completion / total /
 /// cached_prompt / reasoning 五项; Anthropic 另外回报"缓存写入量"
-/// (`cache_creation_input_tokens`), 它在 agentxx 用量账本里单独成列。
+/// (`cache_creation_input_tokens`), 它在 agentxx 用量记录里单独成列。
 /// 为了不改动第三方库的结构, provider 把这类补充用量写进
 /// `completion.message.extra[kUsageDetailExtraKey]` (对象), 由模型调用节点取出后
-/// 写账本, 并把该键置空 —— 不让内部记账字段混进会话消息。
+/// 写用量记录, 并把该键置空 —— 不让内部记账字段混进会话消息。
 ///
 /// - 该键不会被序列化进下一轮请求体 (extra 不参与请求装配)
 /// - provider 不上报时键不存在, 调用方按 0 处理

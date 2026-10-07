@@ -10,7 +10,7 @@ namespace client {
 /// 展示历史的分页窗口 (计划 UI-1: 从 TUI 抽出的可单测模型, 无 FTXUI/无 IO 依赖)
 ///
 /// 背景: 长会话恢复时服务端只同步末尾窗口, 用户向上滚动时按绝对下标分页拉取
-/// 更早历史。窗口的"上下边界 + 在途请求 + 序号连续性"判断原先写在 TUI 端点里,
+/// 更早历史。窗口的"上下边界 + 未完成的请求 + 序号连续性"判断原先写在 TUI 端点里,
 /// 与渲染/线程代码缠在一起, 无法脱离终端测试。这里把状态机收敛成一个可拷贝的
 /// 值类型 (随渲染快照一起复制), 端点只负责发请求与渲染。
 ///
@@ -29,7 +29,7 @@ public:
         Accepted,       ///< 页已可用 (调用方前插后调用 [notePrepended])
         Empty,          ///< 空页 = 上方没有更早历史, 窗口起点归零
         StaleSession,   ///< 迟到响应 (会话已切换), 丢弃
-        NotLoading,     ///< 当前没有在途请求 (重复/意外响应), 丢弃
+        NotLoading,     ///< 当前没有未完成的请求 (重复/意外响应), 丢弃
         NonContiguous,  ///< 页不紧贴窗口首条 (窗口已被整体替换), 丢弃
     };
 
@@ -47,7 +47,7 @@ public:
     /// - `loadedCount` = 本批实际装载条数 (界面过滤空消息后可能少于服务端条数)
     void reset(uint64_t windowStart, uint64_t totalCount, uint64_t loadedCount);
 
-    /// 切换会话: 窗口作废, 在途请求随之失效 (迟到响应返回 [PageOutcome::StaleSession])
+    /// 切换会话: 窗口作废, 未完成的请求随之失效 (迟到响应返回 [PageOutcome::StaleSession])
     void resetForSession(std::string sessionId);
     const std::string& sessionId() const noexcept {
         return sessionId_;
@@ -112,7 +112,7 @@ private:
     uint64_t totalCount_ = 0;
     /// 已加载条数
     uint64_t loadedCount_ = 0;
-    /// 是否有在途的分页请求
+    /// 是否有未完成的分页请求
     bool loading_ = false;
     /// 最近观察到的尾部序号
     uint64_t lastSeq_ = 0;

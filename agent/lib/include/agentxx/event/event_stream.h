@@ -623,7 +623,7 @@ public:
 
     /// 取走本轮会话的 LLM API 平均生成速度 (token/s) 并重置轮级统计
     /// - 由 BaseAgent 在发送 TurnEnd WireDelta 前调用, 结果填入 WireDelta::tps
-    /// - 计算口径: 本轮所有 ModelCall 的累计估算 token / 累计流式耗时;
+    /// - 计算方式: 本轮所有 ModelCall 的累计估算 token / 累计流式耗时;
     ///   无 LLM 流式输出时返回 0
     double takeTurnTps();
 
@@ -645,7 +645,7 @@ private:
 
     /// 估算 UTF-8 字符串对应的 token 数
     /// - 优先使用 EventBus 上注册的 TokenCount 服务 (由 SummarizationMiddleware 提供,
-    ///   上下文压缩/上下文统计共用同一口径)
+    ///   上下文压缩/上下文统计共用同一套规则)
     /// - 无注册时 (如测试/裸 EventBridge) 回退内置估算:
     ///   ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token
     double countTokens(std::string_view text);
@@ -700,7 +700,7 @@ private:
 
     /// tps (token/s) 统计: 从每次 ModelCall 流式开始 (节点开始后首个 token) 计时,
     /// 累计估算 token 数, 每 [tpsPushIntervalSec_] 秒推送一次到对端 (WireContextStats.tps)
-    /// - 推送口径为"最近一个窗口 (推送间隔) 内的平均生成速度":
+    /// - 推送方式为"最近一个窗口 (推送间隔) 内的平均生成速度":
     ///   窗口内 token 增量 / 窗口时长, 而非自流开始以来的累计平均
     ///   (长时间流的速度波动不会被早期数据平滑掉, 反映当前实际生成速度)
     /// - 新流开始判定: handleLLMToken 进入时 lastChatChunkType_ == TYPE_UNKNOWN

@@ -85,7 +85,7 @@ std::string jsonText(const Json& v) {
     return v.is_null() ? std::string{} : v.dump();
 }
 
-/// 紧凑 JSON 文本 → JSON (空/非法时返回 null; 描述里的 `valueJson` 用这个口径)
+/// 紧凑 JSON 文本 → JSON (空/非法时返回 null; 描述里的 `valueJson` 按这个规则解析)
 Json jsonOf(const std::string& text) {
     if (text.empty()) {
         return Json{};
@@ -229,7 +229,7 @@ Row stackRows(const Rows& rows, int dx = 0, int dy = 0) {
 // 文本与富文本
 // ---------------------------------------------------------------------------
 
-/// 文本项折行结果 (与渲染同一口径: 空内容 = 空列表)
+/// 文本项折行结果 (与渲染结果一致: 空内容 = 空列表)
 std::vector<std::string> textLines(const Item& item, const UiRenderCtx& ctx) {
     const std::string value = textOf(item.text, ctx);
     if (value.empty()) {
@@ -452,7 +452,7 @@ std::vector<int> layoutColumnWidths(
     return widths;
 }
 
-/// 单元格文本按列宽补齐/截断 (显示列宽口径; 宽字符安全)
+/// 单元格文本按列宽补齐/截断 (显示列宽算法; 宽字符安全)
 std::string cellPadded(std::string_view content, int width, std::string_view align) {
     const std::string trimmed = pluginxx::ui::truncateToWidth(content, width);
     const int         used    = pluginxx::ui::displayWidth(trimmed);
@@ -2278,7 +2278,7 @@ utilxx_base::Json formValues(const std::vector<pluginxx::ui::Item>& items, UiFor
                           const std::string text
                               = state.edited ? state.editText : defaultEditText(item);
                           const double v = parseNumber(text, item.integer, 0.0);
-                          // 整数控件写整数 (与声明口径一致), 浮点控件保留小数
+                          // 整数控件写整数 (与声明一致), 浮点控件保留小数
                           if (item.integer) {
                               values[item.id] = utilxx_base::Json(static_cast<int64_t>(v));
                           } else {

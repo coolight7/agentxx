@@ -139,12 +139,12 @@ void test_settings_check_update_toggle() {
     XX_TEST_EXPECT_FALSE(settings.checkUpdateOnStartup());
     settings.setCheckUpdateOnStartup(true);
     XX_TEST_EXPECT_TRUE(settings.checkUpdateOnStartup());
-    // 复位 (本模块与 tui_settings 模块共用单例; 落库口径见该模块 test_persist_to_db)
+    // 复位 (本模块与 tui_settings 模块共用单例; 落库说明见该模块 test_persist_to_db)
     settings.setCheckUpdateOnStartup(original);
 }
 
 void test_check_update_storage_key() {
-    // 持久化键 `tui.checkUpdateOnStartup` 的取值口径: 1 = 开, 0 = 关,
+    // 持久化键 `tui.checkUpdateOnStartup` 的取值规则: 1 = 开, 0 = 关,
     // 键缺失时按默认值 (开) 处理 (见 TUISettings::attachDb)
     auto root = std::filesystem::temp_directory_path()
                 / ("agentxx_update_check_test_"

@@ -142,7 +142,7 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     }
 
     // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
-    // 此处累加文本, 推送时统一经 countTokens 折算 token, 保持与 summarization 同口径
+    // 此处累加文本, 推送时统一经 countTokens 折算 token, 与 summarization 保持一致
     tpsPendingText_ += token;
     // 每 16 token (约 64 字节) 或窗口到期再做一次 countTokens 批量折算
     constexpr size_t kBatchChars = 64;
@@ -592,7 +592,7 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
 }
 
 double EventBridge::countTokens(std::string_view text) {
-    // 优先使用 EventBus 上注册的 token 计算服务 (与上下文压缩/上下文统计同口径)
+    // 优先使用 EventBus 上注册的 token 计算服务 (与上下文压缩/上下文统计一致)
     if (auto ctxPtr = ctx_.lock(); ctxPtr && ctxPtr->bus) {
         auto count
             = ctxPtr->bus->callService<size_t(std::string_view)>(events::Topic::TokenCount, text);
@@ -609,7 +609,7 @@ double EventBridge::countTokens(std::string_view text) {
     }
 
     // 回退: 无 summarization (测试/裸 EventBridge) 时的内置估算
-    // 口径与 SummarizationMiddlewareHandle::countTokensForUtf8Str / utilxx_base::estimateTokenCount
+    // 规则与 SummarizationMiddlewareHandle::countTokensForUtf8Str / utilxx_base::estimateTokenCount
     // 完全一致:
     // - 0xF8-0xFF (无效 UTF-8 前导, 5/6 字节编码已被 RFC 3629 废弃) 按 ascii
     //   单字节处理, 避免吞掉后续字节少计

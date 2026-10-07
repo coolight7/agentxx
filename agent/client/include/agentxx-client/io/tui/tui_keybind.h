@@ -1,6 +1,6 @@
 #pragma once
 
-/// 终端按键事件 → 快捷键描述 (与宿主的 `normalizeKeybindSpec` 同一口径)
+/// 终端按键事件 → 快捷键描述 (与宿主的 `normalizeKeybindSpec` 同一套规则)
 ///
 /// 背景: 插件经 `agentxx.client.keybind` 表注册全局快捷键, 注册时宿主把键位描述
 /// 规范化 (小写 + 修饰键固定顺序, 如 `"ctrl+alt+k"`); 界面侧收到按键事件后必须

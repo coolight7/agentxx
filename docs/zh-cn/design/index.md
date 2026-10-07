@@ -1,13 +1,42 @@
 # Agentxx 整体设计文档
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
+
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [ui-layer.md](ui-layer.md) (界面描述层/适配/kit) · [agentxx-ui-kit.md](agentxx-ui-kit.md) (扩展 kit 生成物) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
 
 ## 目录
 
 - [概述](#概述)
 - [功能效果](#功能效果)
+    - [核心对话能力](#核心对话能力)
+    - [工具调用 (ToolCall)](#工具调用-toolcall)
+    - [Git Worktree 模式 (yaml `worktree.enable`, 默认关闭)](#git-worktree-模式-yaml-worktreeenable-默认关闭)
+    - [中间件系统](#中间件系统)
+    - [事件系统](#事件系统)
+    - [多会话与并发](#多会话与并发)
+    - [远程通信](#远程通信)
+    - [协议支持](#协议支持)
+    - [客户端 UI](#客户端-ui)
+    - [训练系统](#训练系统)
+    - [扩展能力](#扩展能力)
+    - [依赖注入](#依赖注入)
 - [使用方法](#使用方法)
+    - [编译](#编译)
+    - [运行测试](#运行测试)
+    - [配置文件](#配置文件)
+    - [命令行使用](#命令行使用)
+    - [JSONL 模式 (脚本驱动, 计划 PRO-8)](#jsonl-模式-脚本驱动-计划-pro-8)
+    - [作为库使用](#作为库使用)
 - [架构设计](#架构设计)
+    - [整体架构](#整体架构)
+    - [数据流](#数据流)
+    - [核心设计模式](#核心设计模式)
+    - [连接与重连机制](#连接与重连机制)
+    - [内存占用与分配器调整](#内存占用与分配器调整)
+    - [依赖注入容器](#依赖注入容器)
 - [代码结构](#代码结构)
+    - [关键依赖关系](#关键依赖关系)
+- [附录 A: 核心数据模型 (conversation_types.h)](#附录-a-核心数据模型-conversation_typesh)
+- [附录 B: 插件系统 v1 要点 (详见 plugins.md)](#附录-b-插件系统-v1-要点-详见-pluginsmd)
+- [附录 C: 会话工作目录多源回退 (AgentContext::getSessionWorkDir)](#附录-c-会话工作目录多源回退-agentcontextgetsessionworkdir)
 
 ---
 
@@ -67,7 +96,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
-| | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个为计数口径含 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
+| | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个是 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
@@ -322,7 +351,6 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - 跨 agent 消息 (agent.message): 本地 mailbox 路由 (持久会话 agent 扩展点),
   或经 A2A 桥接转发远程 agent (registerRemoteAgent); 未注册目标返回明确的
   not-implemented 错误
-```
 
 ### 远程通信
 
@@ -338,8 +366,8 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - GetPermissionState / SetFullAuth / PermissionState: 查询与切换"完全授权所有权限"
     (状态源在服务端权限中间件, 客户端只持镜像; 切换后服务端向全部接入端点广播新状态)
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync;
-  客户端水位高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退全量 Sync,
-  SyncPayload.deltaSeq 携带快照水位 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此复位去重水位
+  客户端记录的序号高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退全量 Sync,
+  SyncPayload.deltaSeq 携带快照序号 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此重置去重序号
 - **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口
   (SessionServerAgentIO::Config::initialSyncTailCount, 本地 TUI 模式 =100,
   远程经 AgentServer::Config 透传, 0=全量); SyncPayload.fromIndex 携带窗口
@@ -348,7 +376,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   以 ViewMessagesPage(startIndex, totalCount, messages) 回应; viewMessages 为
   append-only, 绝对下标恒定, 前插不影响既有下标 (无竞态)。TUI 侧前插后经
   LazyScrollable::notifyPrepended 做滚动锚定 (既有条目缓存/实测高度随索引
-  平移保留, 偏移按新增区高度在 prepareLayout 内以新快照口径全额补偿并随
+  平移保留, 偏移按新增区高度在 prepareLayout 内按新快照全额补偿并随
   实测增量收敛), 视口内容保持稳定
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
@@ -1297,13 +1325,13 @@ end1  ←   end2  ←   end3
 
 取消基于 `neograph::graph::CancelToken` (每轮次创建, 存于 Session)，两条传播路径：
 
-1. **轮询埋点 (主路径)**: 在逻辑边界手动调用 `throw_if_cancelled()` / `is_cancelled()`，
+1. **轮询检查点 (主路径)**: 在逻辑边界手动调用 `throw_if_cancelled()` / `is_cancelled()`，
    取消点可控、异常路径可预期：
    - graph 每个 super-step 之间 (engine)
    - toolcall 分发前 / 每个 tool 执行前后 (ToolcallWrapNode)
    - LLM 调用前、重试等待后 (ModelCallWrapNode)
 2. **asio 信号中断 (仅限可安全中止的耗时 IO)**: `CancelToken::cancel()` 经绑定的
-   executor emit `cancellation_signal`，中断在途 LLM HTTP 流、socket 读写、定时器等，
+   executor emit `cancellation_signal`，中断正在进行的 LLM HTTP 流、socket 读写、定时器等，
    在 co_await 点表现为 `system_error(operation_aborted)`。这是唯一允许产生
    `operation_aborted` 的场景。
 
@@ -1320,7 +1348,7 @@ end1  ←   end2  ←   end3
   graphData (interruptToolcallCache) 后再重抛
 - 线程池卸载 (`offloadCancellableAsync`): 工作线程同步执行不挂起, asio 信号无法抢占,
   等待方 co_await 也不会提前返回 —— 带 CancelToken 的重载额外启动 watcher 协程
-  轮询令牌, 取消时置位 cancelFlag 打通 "会话取消 -> 工作线程轮询退出" 通知链
+  轮询令牌, 取消时置位 cancelFlag, 使 "会话取消 -> 工作线程轮询退出" 的通知生效
   (filesystem_list/glob/grep 已接入)
 - **插件事件驱动取消 (`CancelRegistry`)**: 针对跨进程命令执行 (如 `agentxx_execute_command` 的 bash/PowerShell 子进程) 与长耗时插件任务，单纯休眠轮询无法及时打断阻塞中的子进程。框架在 `plugin_kit.h` 提供了实例级 `CancelRegistry` 机制：
   - 任务启动时通过 `registerCallback(sessionKey, cb)` 注册取消动作（如向子进程组发送 `SIGKILL` / `TerminateProcess` 并关闭输出管道），获取 `ScopedRegistration` RAII 守卫；
@@ -1448,7 +1476,7 @@ neograph GraphEngine (run_stream_async)
   经 WireContextStats.tps 下发; 每个流结束 (节点结束/出错) 结算一次
 - 轮级 (TurnEnd 展示): 一轮内所有 ModelCall 的累计估算 token / 累计流式耗时,
   TurnEnd Delta 携带 tps 字段, 并显示在轮次统计系统提示中
-- token 估算与 SummarizationMiddleware 共用 `countTokensForUtf8Str` 口径
+- token 估算与 SummarizationMiddleware 共用 `countTokensForUtf8Str` 算法
   (ascii ≈ 4 字符/token, 非 ascii ≈ 1.1 字符/token; 无 summarization 时内置回退)
 
 #### 4. EventBus 强类型事件
@@ -1553,9 +1581,9 @@ AgentContext
   ├── heartbeatLoop(): 每 heartbeatInterval 发送 Ping
   └── Delta 去重: 收到 delta 时更新 lastDeltaSeq_, 重放重复投递的
       seq <= last 直接丢弃, 避免 UI 重复渲染
-      收到 Sync 时按 SyncPayload.deltaSeq **覆盖**水位 (快照已含
+      收到 Sync 时按 SyncPayload.deltaSeq **覆盖**记录的序号 (快照已含
       seq <= deltaSeq 的全部增量): 服务端重启/会话重建后 seq 从 0 重新
-      计数, 若保留旧水位 (如 100) 会把新增量全部判为重复而丢弃 ——
+      计数, 若保留旧序号 (如 100) 会把新增量全部判为重复而丢弃 ——
       表现为重连成功、历史快照也拿到了, 但界面再也不刷新
 ```
 
@@ -1586,9 +1614,9 @@ Client                              Server
   │                                    │
   │──── Hello (seq=3, tailHash) ─────→│ 增量重放 seq>3 的 delta
   │←── HelloAck + Delta replay ───────│ seq 不连续时回退全量 Sync;
-  │                                    │ 客户端水位 > 服务端当前 seq
+  │                                    │ 客户端序号 > 服务端当前 seq
   │                                    │ (进程重启) 同样回退全量 Sync,
-  │                                    │ 客户端按 Sync.deltaSeq 复位水位
+  │                                    │ 客户端按 Sync.deltaSeq 重置记录的序号
   │                                    │
   │──── Cancel ──────────────────────→│ 取消当前轮次
   │                                    │
@@ -2065,7 +2093,7 @@ agent/
 │
 ├── example/                      # 嵌入/绑定使用示例
 │   └── ffi/dart/                 # Dart CLI 示例 (经 FFI 驱动 libagentxx:
-│                                 #   流式渲染/HIL 权限与会话切换/mock LLM 冒烟检查)
+│                                 #   流式渲染/HIL 权限与会话切换/mock LLM 基本功能检查)
 │
 ├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h;
 │                                 #   编译产物统一输出到 exec/plugins/<插件名>/)
@@ -2155,6 +2183,8 @@ EventBus (事件总线)
   ├── EventStream<T> (单向: publish/subscribe/unsubscribe)
   ├── RequestResponseStream<Req, Resp> (双向: request/serve)
   └── 主题表 (Topic 命名空间常量)
+```
+
 ---
 
 ## 附录 A: 核心数据模型 (conversation_types.h)
@@ -2178,9 +2208,9 @@ EventBus (事件总线)
 - SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, deltaSeq, messageQueue[]}
   - 全量同步: fromIndex=0, totalMessages==messages.size()
   - 尾窗同步: fromIndex=窗口起始下标 (>0 表示上方还有更早消息), totalMessages=会话总消息数, 客户端按 WireGetViewMessages 分页拉取
-  - deltaSeq: 快照水位 (= Session::deltaSeq, 即快照已包含 seq <= deltaSeq 的全部增量);
-    客户端据此**覆盖**去重水位 —— 服务端进程重启/会话重建后 seq 从 0 重新计数,
-    客户端若保留旧水位 (如 100) 会把之后 seq=1,2,... 的增量全部判为重复丢弃
+  - deltaSeq: 快照序号 (= Session::deltaSeq, 即快照已包含 seq <= deltaSeq 的全部增量);
+    客户端据此**覆盖**去重序号 —— 服务端进程重启/会话重建后 seq 从 0 重新计数,
+    客户端若保留旧序号 (如 100) 会把之后 seq=1,2,... 的增量全部判为重复丢弃
     (表现为重连成功但界面永不刷新); 0 表示未提供 (客户端按 0 处理, 放行后续增量)
 - MessageQueueItem {id, text, model (待应用模型, 空=默认), createdAtMs}
 - ChainHash: FNV-1a 链式哈希, append(string) 累积, tailHex 供 Hello/Sync 校验
@@ -2188,7 +2218,7 @@ EventBus (事件总线)
 ### Wire 协议分页语义
 - ListSessions: keyset 游标 {beforeMs, beforeId, limit} 按 lastActiveMs 降序分页; 服务端回 WireSessionList {sessions[], totalCount, hasMore}
 - GetViewMessages: {beforeIndex, count} 请求 [max(0,before-count), before) 区间; 服务端回 WireViewMessagesPage {startIndex, totalCount, messages[]} (append-only 下标恒定, 无竞态)
-- GetContext 等同步查询: 阻塞等待服务端响应 (最长 10s, 同一句柄同一时刻仅允许一个在途)
+- GetContext 等同步查询: 阻塞等待服务端响应 (最长 10s, 同一句柄同一时刻仅允许一个未完成的请求)
 
 ---
 

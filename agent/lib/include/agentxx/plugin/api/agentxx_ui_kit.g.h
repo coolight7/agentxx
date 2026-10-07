@@ -6,7 +6,7 @@
 // 参数用 utilxx_base::Json 传（对象），键即组件参数名：
 //   agentxx::ui::kit::listRow({{"title", "切歌次数"}, {"trailing", "3"}})
 // 传 env（客户端能力摘要）时按目标选择更合适的变体；不传 env 时产出中立描述，
-// 由客户端的 adapt() 收口。
+// 由客户端的 adapt() 决定最终形态。
 
 #include <pluginxx/ui/item.h>
 #include <pluginxx/ui/kit_runtime.h>

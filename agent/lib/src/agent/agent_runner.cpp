@@ -264,7 +264,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
 
             // 恢复执行中断点, 直接回到触发中断的 Node
             // - 必须携带 cancel_token: 否则 resume 出的新 run 无取消能力,
-            //   后续 llm/toolcall 的取消埋点 (if cancel_token) 全部跳过,
+            //   后续 llm/toolcall 的取消检查点 (if cancel_token) 全部跳过,
             //   执行中 HTTP 也无法被打断, 表现为"压缩完成后怎么都停不下来"
             neograph::graph::RunConfig resumeCfg;
             resumeCfg.thread_id    = std::string{sessionId};

@@ -14,7 +14,7 @@ namespace test {
 /// 2. **源码扫描**: 从 `client/src/config_loader.cpp` 扫出所有被解析的 yaml 键名,
 ///    与目录做集合比对 (加载器新增键却忘了登记时失败);
 /// 3. **生成物**: 由目录生成 `agent/schema/config-keys.json` 与
-///    `docs/zh-cn/design/config-keys.md`, 逐字节比对做新鲜度门禁
+///    `docs/zh-cn/design/config-keys.md`, 逐字节比对做新鲜度校验
 ///    (`AGENTXX_UPDATE_CONFIG_KEYS=1` 一键更新)。
 TestResult testConfigKeys();
 

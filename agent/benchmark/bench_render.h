@@ -4,7 +4,7 @@
 ///
 /// 覆盖 (对应方案 §5.2):
 /// 1. 单条消息: markdown 解析 + 建树 (用户/助手/工具/思考 四类文本)
-/// 2. 布局口径: 首次测量 / 同宽度重复布局 (折行缓存命中) / 流式盒位置上移
+/// 2. 布局方式: 首次测量 / 同宽度重复布局 (折行缓存命中) / 流式盒位置上移
 /// 3. 整屏: N 条消息的构建 + 每帧重排 + 绘制 + Screen::ToString
 /// 4. 消息列表组件: 100/1000/5000 条消息下渲染一帧 (验证每帧成本与条数解耦)
 ///    以及滚动一屏的成本
@@ -112,7 +112,7 @@ inline std::shared_ptr<LazyScrollable> makeList(size_t count, size_t height) {
 constexpr int kScreenW = 100;
 constexpr int kScreenH = 40;
 
-/// 渲染组件一帧 (含屏幕创建与 ToString, 与真实 UI 循环口径一致)
+/// 渲染组件一帧 (含屏幕创建与 ToString, 与真实 UI 帧循环一致)
 inline size_t renderFrame(const std::shared_ptr<LazyScrollable>& list) {
     auto el     = list->Render() | ftxui::flex;
     auto screen = ftxui::Screen::Create(
@@ -174,7 +174,7 @@ inline void benchRender() {
         printResult(r);
     }
 
-    // ---- 2. 布局口径 ----
+    // ---- 2. 布局方式 ----
     {
         auto [el, builder]
             = renderMarkdown(assistantMd, ftxui::Color::White, renderTheme(), kScreenW);

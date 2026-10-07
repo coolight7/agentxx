@@ -406,7 +406,7 @@ static int dumpConfigAndExit(
             "\n[assembly snapshot skipped] no usable default model configured "
             "(see `model.list` / `model.use` above)\n"
         );
-        // 配置有致命问题时以非零码退出, 便于在脚本/CI 中当作配置门禁使用
+        // 配置有致命问题时以非零码退出, 便于在脚本/CI 中当作配置校验使用
         return report.hasFatal() ? 1 : 0;
     }
 

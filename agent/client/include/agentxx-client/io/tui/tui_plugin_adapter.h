@@ -234,7 +234,7 @@ public:
             return;
         }
         tui->postToUi([tui, plugin]() {
-            (void)plugin; // 归因预留 (当前单模态 last-wins, 直接关闭)
+            (void)plugin; // 来源记录预留 (当前单模态 last-wins, 直接关闭)
             tui->closeOverlay();
         });
     }

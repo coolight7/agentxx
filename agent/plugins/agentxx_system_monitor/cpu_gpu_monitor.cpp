@@ -466,7 +466,7 @@ private:
     ULONGLONG prevIdleTime_  = 0;
     ULONGLONG prevTotalTime_ = 0;
 
-    /// CPU 逻辑核心数 (构造时取一次; 展示口径与 GetSystemTimes 的整机利用率一致)
+    /// CPU 逻辑核心数 (构造时取一次; 展示的数值与 GetSystemTimes 的整机利用率一致)
     uint32_t cpuCoreCount_ = queryCpuCoreCount();
 
     /// GPU 适配器枚举缓存 (每实例一份; 见 [GpuAdapterCache] 说明)
@@ -632,13 +632,13 @@ public:
 protected:
 
     CpuTimes _sample;
-    /// CPU 逻辑核心数 (构造时取一次; 展示口径与 /proc/stat 的整机利用率一致)
+    /// CPU 逻辑核心数 (构造时取一次; 展示的数值与 /proc/stat 的整机利用率一致)
     uint32_t cpuCoreCount_ = queryCpuCoreCount();
     /// GPU 枚举缓存 (每实例一份; 见 [LinuxGpuCache] 的说明)
     LinuxGpuCache _gpuCache;
 
     /// 查询 CPU 逻辑核心数 (含超线程; 取不到返回 0)
-    /// - 取**在线**核数: 离线核不参与 /proc/stat 的整机时间累计, 显示在线数量才与利用率口径一致
+    /// - 取**在线**核数: 离线核不参与 /proc/stat 的整机时间累计, 显示在线数量才与利用率一致
     static uint32_t queryCpuCoreCount() {
         long online = ::sysconf(_SC_NPROCESSORS_ONLN);
         if (online > 0) {
@@ -1031,7 +1031,7 @@ public:
         result.cpuCoreCount = cpuCoreCount_;
 
         /// 首轮没有基线: 先采一次, 等 100ms 后再采一次算出时间差
-        /// (与 Windows/Linux 分支同一口径: 整机利用率)
+        /// (与 Windows/Linux 分支同一统计方式: 整机利用率)
         MacCpuTicks oldTicks = _cpuTicks;
         if (_cpuTicks.total == 0) {
             readCpuTicks(oldTicks);
@@ -1070,7 +1070,7 @@ protected:
     host_t host_ = MACH_PORT_NULL;
     /// CPU 累计时间片基线 (每轮刷新; total == 0 表示尚无基线)
     MacCpuTicks _cpuTicks;
-    /// CPU 逻辑核心数 (构造时取一次; 与 host_statistics 的整机利用率同一口径)
+    /// CPU 逻辑核心数 (构造时取一次; 与 host_statistics 的整机利用率一致)
     uint32_t cpuCoreCount_ = queryCpuCoreCount();
     /// 物理内存总量 MB (构造时取一次: sysctl hw.memsize)
     uint64_t totalPhysicalMemoryMB_ = queryTotalPhysicalMemoryMB();
@@ -1287,7 +1287,7 @@ protected:
 
     /// 读取单个 GPU 的性能统计 (IOAccelerator 的 `PerformanceStatistics` 字典)
     ///
-    /// 字段口径 (不同厂商/架构给出的字段不同):
+    /// 字段定义 (不同厂商/架构给出的字段不同):
     /// - `Device Utilization %`: GPU 利用率 (0~100)
     /// - `vramTotalBytes` / `vramUsedBytes` / `vramFreeBytes`: **独立显存**;
     ///   总量字段缺失时按"已用 + 空闲"推算 (Intel/AMD 独显与划分出显存的核显)
@@ -1336,7 +1336,7 @@ protected:
         }
 
         if (hasSystemMemoryUsed) {
-            /// 共享/统一内存口径: 总量取物理内存, 已用量取 GPU 当前占用的系统内存
+            /// 共享/统一内存取值: 总量取物理内存, 已用量取 GPU 当前占用的系统内存
             uint64_t usedBytes  = toBytes(systemMemoryUsed);
             uint64_t limitBytes = totalPhysicalMemoryMB_ * 1024 * 1024;
             if (limitBytes > 0 && usedBytes > limitBytes) {
@@ -1349,7 +1349,7 @@ protected:
         if (hasUtilization) {
             info.usagePercent = clampPercent(utilization);
         } else if (info.dedicatedVramMB > 0 && info.dedicatedVramUsedMB > 0) {
-            /// 无利用率字段时按独立显存占用比例估算 (与 Linux AMD 分支同一口径)
+            /// 无利用率字段时按独立显存占用比例估算 (与 Linux AMD 分支一致)
             info.usagePercent = clampPercent(
                 static_cast<double>(info.dedicatedVramUsedMB)
                 / static_cast<double>(info.dedicatedVramMB) * 100.0

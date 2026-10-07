@@ -293,7 +293,7 @@ void LazyScrollable::syncItemArrays(size_t count) {
     }
 
     // 头部前插区 (notifyPrepended 设置: 那时状态快照尚未刷新, 不能估算)
-    // 在此按新快照口径补齐粗略高度 —— 只补前插区这一段前缀, 不做全量扫描。
+    // 在此按新快照补齐粗略高度 —— 只补前插区这一段前缀, 不做全量扫描。
     // 前插区全部位于锚点上方: 补齐只改变 totalHeight_/rowsAboveAnchor_ (滚动条),
     // 视口内容不受影响 (不变量 1)
     if (unknownPrefix_ > 0) {
@@ -424,8 +424,8 @@ void LazyScrollable::notifyPrepended(size_t count) {
         anchorIndex_ += count;
     }
     // 新增区高度暂记未知 (-1): 调用方在状态前插后、本帧快照刷新前调用
-    // (UI 动作队列语义), 此时经回调估算读到的是旧快照内容, 口径必然错误。
-    // 下一帧 prepareLayout 的 syncItemArrays 以新快照口径补齐粗略高度 ——
+    // (UI 动作队列语义), 此时经回调估算读到的是旧快照内容, 算出的结果必然错误。
+    // 下一帧 prepareLayout 的 syncItemArrays 按新快照补齐粗略高度 ——
     // 新增区位于锚点上方, 只影响滚动条长度, 不影响视口内容。
     // 帧间连续多次前插 (分页连发) 时未知区在前缀累加, 故用 += 而非取最大值
     unknownPrefix_ += count;

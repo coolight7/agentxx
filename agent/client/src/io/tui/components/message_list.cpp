@@ -306,7 +306,7 @@ Element MessageListComponent::OnRender() {
     // 按钮消失后不再占用那块区域。
     // 注意: 不能每帧无条件清空 —— banner 元素跨帧缓存时不重建, 若每帧清空则会
     // 丢失登记 (按钮变成点不动); 缓存期间命中项连同其 Box 由 reflect 每帧更新。
-    // 判定口径与 itemCount/fillViewport 一致: "无消息且无流式内容" 才渲染 banner
+    // 判定规则与 itemCount/fillViewport 一致: "无消息且无流式内容" 才渲染 banner
     if (ctx_.frameState
         && !(ctx_.frameState->messages.empty() && !hasStreamingToken(*ctx_.frameState))) {
         bannerHits_.beginFrame();
@@ -1540,7 +1540,7 @@ Element MessageListComponent::buildMessageBlock(
             if (expanded) {
                 if (renderRes.matched && !renderRes.items.empty() && !(finished && isError)) {
                     // 插件装饰/特化工具体 (items 渲染; 失败时回退通用错误展示)
-                    // decor 按钮 owner=tool_call_id (renderRes 携带归因);
+                    // decor 按钮 owner=tool_call_id (renderRes 携带来源);
                     // 非 decor (toolRenderer) 按钮 owner 同样为 tool_call_id
                     // (TUI 侧组装, 无需插件操心)
                     agentxx::plugin::ClientToolDecor decorForBody;

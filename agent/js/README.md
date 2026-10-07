@@ -4,7 +4,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `agentxx_ui_kit.js` | agentxx 扩展 kit：插件界面描述层的组件装配函数，写全局 `pluginxx.ui.kit`。内容是**合并后的超集**（基础 kit 的全部组件 + agentxx 自己的留白口径与常用组合），只加载它一个就够 |
+| `agentxx_ui_kit.js` | agentxx 扩展 kit：插件界面描述层的组件装配函数，写全局 `pluginxx.ui.kit`。内容是**合并后的超集**（基础 kit 的全部组件 + agentxx 自己的留白规则与常用组合），只加载它一个就够 |
 
 ## 当前状态：JS 侧还没有界面入口
 

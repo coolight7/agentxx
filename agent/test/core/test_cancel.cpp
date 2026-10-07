@@ -40,13 +40,13 @@ namespace agentxx {
 namespace test {
 
 // ===========================================================================
-// CancelToken 基础行为: 轮询埋点 + fork 级联
+// CancelToken 基础行为: 轮询检查点 + fork 级联
 // ===========================================================================
 asio::awaitable<void> test_cancel_token_checkpoint() {
     auto token = std::make_shared<neograph::graph::CancelToken>();
     XX_TEST_EXPECT_FALSE(token->is_cancelled());
 
-    // 未取消时埋点不抛出
+    // 未取消时检查点不抛出
     bool threw = false;
     try {
         token->throw_if_cancelled("checkpoint");
@@ -61,7 +61,7 @@ asio::awaitable<void> test_cancel_token_checkpoint() {
     XX_TEST_EXPECT_TRUE(token->is_cancelled());
     XX_TEST_EXPECT_TRUE(child->is_cancelled());
 
-    // 已取消时埋点抛出 CancelledException
+    // 已取消时检查点抛出 CancelledException
     threw = false;
     try {
         token->throw_if_cancelled("checkpoint");
@@ -449,7 +449,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
         // 串行 toolcall: 先执行 slow (2s 执行中), 取消发生在 slow 执行期间:
-        // - slow 被取消信号立即中断 (未自然完成) → 经取消埋点补 [User canceled]
+        // - slow 被取消信号立即中断 (未自然完成) → 经取消检查点补 [User canceled]
         // - marker 排在 slow 之后, 取消后不再执行
         bool foundSlow = false;
         for (int i = 0; i < 2000; ++i) {

@@ -1230,7 +1230,7 @@ asio::awaitable<void>
     }
 
     // client 折叠头摘要按结果里的命中处数换算总行数
-    // (见 agentxx_fs_plugin::parseEditReplaceHits): 解析口径必须与实际输出的
+    // (见 agentxx_fs_plugin::parseEditReplaceHits): 解析方式必须与实际输出的
     // 结果文本一致, 这里用真实执行结果覆盖, 防止两处格式各自漂移
     const int64_t hits = agentxx_fs_plugin::parseEditReplaceHits(result);
     if (hits == 3) {
@@ -2601,7 +2601,7 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
     co_return;
 }
 
-/// 插件真实调用冒烟测试: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
+/// 插件真实调用基本功能检查: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
 /// op_driver 完整流程执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
 ///     →done 上报; asio stream_file 异步文件 I/O 在寄生 loop 上推进)
@@ -3535,7 +3535,7 @@ asio::awaitable<TestResult>
     // 按规范化路径排队执行 (计划 TOOL-16)
     co_await run(test_path_queue_serializes_read_modify_write);
 
-    // 插件真实调用冒烟 (dlopen + 宿主 op_driver 完整流程; 插件未构建时跳过)
+    // 插件真实调用基本功能检查 (dlopen + 宿主 op_driver 完整流程; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)
     try {
         co_await test_plugin_real_link();

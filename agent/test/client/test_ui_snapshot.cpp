@@ -264,7 +264,7 @@ TestResult testUiSnapshots() {
                   << std::endl;
     }
 
-    // ---------------- 夹具自身的失败路径 (门禁必须真的会红) ----------------
+    // ---------------- 夹具自身的失败路径 (检查用例必须真的会失败) ----------------
     {
         // 基线不存在: 判失败并提示如何生成
         auto missing = checkUiSnapshot("__no_such_baseline__", "x\n");

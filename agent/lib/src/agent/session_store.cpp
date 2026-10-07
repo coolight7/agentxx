@@ -40,7 +40,7 @@ static std::string defaultRootDir() {
 ///   供 updateViewMessage 走索引定位 (如果用 json_extract(json,'$.id') 全表
 ///   扫描 + 逐行 JSON 解析, 长会话 (数千条) 下每次 tool 结果回填都要重扫一遍)
 /// - 老库 (无 msg_id 列) 由 [ensureViewMessageMsgIdColumn] 迁移补齐
-/// - usage: 每次模型调用的用量账本 (成功/失败各一行), 供界面与诊断聚合
+/// - usage: 每次模型调用的用量记录 (成功/失败各一行), 供界面与诊断聚合
 static constexpr const char* kSessionSchema = R"sql(
 CREATE TABLE IF NOT EXISTS view_message (
     seq    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -462,7 +462,7 @@ void SessionStore::ensureSchema(agentxx::util::SqliteDb& sessionDb, const std::s
 void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int step) {
     switch (step) {
         case 1:
-            // v1: 基线结构 (四张老表 + msg_id 列/索引 + 用量账本表)
+            // v1: 基线结构 (四张老表 + msg_id 列/索引 + 用量记录表)
             // - 老库 (无 schema_version 记录) 走这一步补齐缺失的表与列
             // - 建表全部 IF NOT EXISTS, 重复执行安全
             sessionDb.exec(kSessionSchema);
@@ -489,7 +489,7 @@ void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int st
             );
             break;
         case 3:
-            // v3: 用量账本补"缓存写入量"列 (cache_write_prompt_tokens; 计划 LLM-8)
+            // v3: 用量记录补"缓存写入量"列 (cache_write_prompt_tokens; 计划 LLM-8)
             // - Anthropic 的 cache_creation_input_tokens (写入 prompt 缓存的量) 与
             //   cached_prompt_tokens (命中缓存的读取量) 分开记账, 便于评估
             //   `cache_control` 断点的收益
@@ -714,7 +714,7 @@ static bool sessionNewerFirst(const SessionInfo& a, const SessionInfo& b) {
 /// file_clock 时间戳 → unix 毫秒
 /// - 以"两时钟当前时刻差"运行期锚定一次换算偏移, 避免依赖 clock_cast
 ///   (部分 libstdc++ 版本未实现); 偏移在进程生命周期内恒定 (NTP 微调可忽略)
-/// - 供文件修改时间与 meta 中存储的 unix 毫秒时间戳比较/展示统一口径
+/// - 供文件修改时间与 meta 中存储的 unix 毫秒时间戳比较/展示使用同一套规则
 static int64_t fileTimeToUnixMs(fs::file_time_type tp) {
     static const int64_t anchorDelta = [] {
         const auto fNow = fs::file_time_type::clock::now().time_since_epoch();
@@ -1300,7 +1300,7 @@ std::vector<SessionStore::SessionInputRecord>
 }
 
 // ---------------------------------------------------------------------------
-// 用量账本 (session.db usage 表)
+// 用量记录 (session.db usage 表)
 // ---------------------------------------------------------------------------
 
 void SessionStore::addUsage(std::string_view sessionId, const UsageRecord& record) {

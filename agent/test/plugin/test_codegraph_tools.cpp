@@ -180,7 +180,7 @@ static std::vector<std::string> parseResultFiles(const std::string& out) {
     return files;
 }
 
-/// 文件是否属于数据/文档类 (按扩展名判断, 口径与插件内一致)
+/// 文件是否属于数据/文档类 (按扩展名判断, 规则与插件内一致)
 static bool isDocOrDataFile(const std::string& path) {
     static const char* kExts[] = {
         "json", "md", "mdx", "markdown", "yaml", "yml", "xml", "html", "htm", "css",

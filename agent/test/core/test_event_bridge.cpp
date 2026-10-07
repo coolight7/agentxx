@@ -525,7 +525,7 @@ asio::awaitable<void> test_eventbridge_tps() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->bus
         = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
-    // 注入 summarization 中间件: countTokens 应复用其 token 计算口径
+    // 注入 summarization 中间件: countTokens 应复用它的 token 计算方式
     auto summarizationMiddleware
         = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext);
     summarizationMiddleware->registerOnBus(agentContext->bus);

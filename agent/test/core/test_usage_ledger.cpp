@@ -83,7 +83,7 @@ asio::awaitable<TestResult> test_usage_ledger() {
     agentxx::agent::CodeAgent agent(cfg);
     co_await agent.init();
 
-    // ---- 成功轮次: 账本记录一次调用与用量 ----
+    // ---- 成功轮次: 用量记录里记一次调用与用量 ----
     auto result = co_await agent.runTurnAsync("ledger_sess", "hello ledger", nullptr);
     XX_TEST_EXPECT_FALSE(result.hasError);
 
@@ -107,7 +107,7 @@ asio::awaitable<TestResult> test_usage_ledger() {
         }
     }
 
-    // ---- 失败轮次: API 持续失败也要留痕 (失败原因进账本) ----
+    // ---- 失败轮次: API 持续失败也要留痕 (失败原因进用量记录) ----
     g_da_sim_fail_count = 5;
     auto failed         = co_await agent.runTurnAsync("ledger_fail", "make it fail", nullptr);
     XX_TEST_EXPECT_TRUE(failed.hasError);
@@ -124,7 +124,7 @@ asio::awaitable<TestResult> test_usage_ledger() {
             XX_TEST_EXPECT_FALSE(recent[0].errorKind.empty());
             XX_TEST_EXPECT_EQ(recent[0].model, std::string{"test-sim"});
         }
-        // 成功会话的账本不受失败会话影响
+        // 成功会话的用量记录不受失败会话影响
         auto okSum = store->usageSummary("ledger_sess");
         XX_TEST_EXPECT_EQ(okSum.calls, int64_t{1});
         XX_TEST_EXPECT_EQ(okSum.failedCalls, int64_t{0});

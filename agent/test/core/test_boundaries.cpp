@@ -353,7 +353,7 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
 /// 背景: 客户端只声明自己真的能画的组件 (能力段), 声明错名字的后果是三层
 /// 静默失效 —— `adapt()` 认为客户端不支持该组件而提前降级, 渲染器里那条分支
 /// 永远走不到, 插件按能力表以为可以拿到富组件。因此这里把"声明"与"描述层
-/// 组件表"绑成一条门禁:
+/// 组件表"绑成一条检查规则:
 ///   - 客户端能力数组 (`kTuiBlockNames`) 里每个名字都必须能在组件表里找到
 ///     (同大小写; 拼错 / 自造名字立即失败);
 ///   - 组件表里 `BlockLevel::Core` 的组件必须全部声明 (核心组件不支持等于
@@ -447,7 +447,7 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
 /// 同时要求 18 张领域表名都写进 `docs/zh-cn/design/plugins.md` (文档漏写新表
 /// 等于插件作者查不到 IID)。
 ///
-/// 数量口径: 10 张通用表 + 9 张 agent 领域表 = 19 (与 `PluginManager::kInterfaceTableCount`
+/// 数量约定: 10 张通用表 + 9 张 agent 领域表 = 19 (与 `PluginManager::kInterfaceTableCount`
 /// 一致); 7 张 client 基础表 + 2 张交互表 (timer / keybind) = 9。
 void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     const auto genericHeader = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx"
@@ -475,7 +475,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
         const auto text  = readTextFile(*group.file);
         const auto where = toGeneric(group.file->lexically_relative(root));
         if (text.empty()) {
-            v.push_back(where + ": 无法读取接口表声明头 (接口表名门禁依赖它)");
+            v.push_back(where + ": 无法读取接口表声明头 (接口表名检查依赖它)");
             continue;
         }
         const std::regex pattern{
@@ -555,7 +555,7 @@ void checkDocumentedPaths(const fs::path& root, Violations& v) {
         const auto text  = readTextFile(file);
         const auto where = toGeneric(file.lexically_relative(repoRoot));
         if (text.empty()) {
-            v.push_back(where + ": 无法读取 (文档路径门禁依赖它)");
+            v.push_back(where + ": 无法读取 (文档路径检查依赖它)");
             continue;
         }
         std::error_code ec;
@@ -712,7 +712,7 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     if (!pluginsText.has_value()) {
         v.push_back("缺少文档 `docs/zh-cn/design/plugins.md` (接口表数量校验依赖它)");
     } else {
-        // 文档里两侧数量各出现一次口径: "19 张 agent" 与 "9 张 client"
+        // 文档里两侧数量各有一处明确数值: "19 张 agent" 与 "9 张 client"
         const std::string agentNeedle  = std::to_string(agentCount) + " 张 agent";
         const std::string clientNeedle = std::to_string(clientCount) + " 张 client";
         if (!contains(*pluginsText, agentNeedle)) {

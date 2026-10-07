@@ -1953,7 +1953,7 @@ void test_model_config_form_overlay_submit() {
     XX_TEST_EXPECT_TRUE(submitted.empty());
     XX_TEST_EXPECT_FALSE(overlay->errorText().empty());
 
-    // 填写必填项后提交: 取值映射到模型配置 (未填的走默认口径)
+    // 填写必填项后提交: 取值映射到模型配置 (未填的用默认值)
     overlay->setControlText(ModelConfigOverlay::kNameId, "my-model");
     overlay->setControlText(ModelConfigOverlay::kBaseUrlId, "https://api.example.com/v1");
     overlay->setControlText(ModelConfigOverlay::kApiKeyId, "sk-1");
@@ -2076,7 +2076,7 @@ void test_model_config_values_mapping() {
         }
     }
 
-    // 错误口径: 名称为空 / 请求头值不是字符串 / 额外参数不是对象
+    // 错误情况: 名称为空 / 请求头值不是字符串 / 额外参数不是对象
     {
         auto noName = utilxx_base::Json::parse(R"({"values":{"name":"   "}})");
         XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(noName).has_value());

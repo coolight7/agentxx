@@ -157,7 +157,7 @@ public:
         bool*                   outInterrupted
     ) const;
 
-    /// 执行单条已准备的调用并把结果写入槽位, 所有异常在此收口 (不向外抛)
+    /// 执行单条已准备的调用并把结果写入槽位, 所有异常在此统一处理 (不向外抛)
     /// - 取消 (含 asio 取消导致的 operation_aborted): 记为 `outError`, 槽位保持空
     /// - 中断 (NodeInterrupt): 置 `outInterrupted`, 槽位写 `[Interrupt]` 结果
     /// - 其余异常: 兜底按取消处理 (普通工具错误已在 [runPreparedToolCall] 内转为结果文本)
@@ -182,7 +182,7 @@ public:
     static std::string makeRepeatCallKey(std::string_view toolName, std::string_view arguments);
 
     /// 检测 messages 中以 [assistantMsg] 结尾的连续 llm <-> tool 交替链内的循环调用,
-    /// 返回达到 [threshold] 次连续相同调用 (key 口径见 makeRepeatCallKey) 的 key 集合
+    /// 返回达到 [threshold] 次连续相同调用 (key 说明见 makeRepeatCallKey) 的 key 集合
     /// (通常为空; 同轮并行调用可能多于一个)
     /// - 连续链: 从 assistantMsg 起向前仅允许出现 assistant(带 tool_calls) 与
     ///   tool 结果消息, 二者交替; 遇到 user/system 等其他角色消息即视为断开;

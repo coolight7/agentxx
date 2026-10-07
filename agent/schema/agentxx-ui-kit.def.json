@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kitVersion": 1,
-  "doc": "agentxx 扩展 kit：终端留白口径 + 工具行 / 思考块 / 统计表 / 路径差异 / 状态图 / 确认行等本客户端常用组合（只装配，不含逻辑）",
+  "doc": "agentxx 扩展 kit：终端留白规则 + 工具行 / 思考块 / 统计表 / 路径差异 / 状态图 / 确认行等本客户端常用组合（只装配，不含逻辑）",
   "components": [
     {
       "name": "card",

@@ -6,7 +6,7 @@
 // - 组件项 → 中断块 (blockOf) 与 blocksOf 的往返 (内容字段不丢)
 // - 预设模板生成的结构 (输入表单 / 确认卡片 / 权限卡片: 控件 id、候选项值、块种类)
 // - 纯文本降级: 行式前端 (CLI/日志/FFI) 上内容与空行都不丢
-// - 显示列宽辅助 (终端渲染与文本降级共用同一口径)
+// - 显示列宽辅助 (终端渲染与文本降级共用同一套算法)
 #include "agentxx-test/core/test_ui_items.h"
 
 #include "agentxx/middlewares/interrupt_presets.h"
@@ -416,7 +416,7 @@ TestResult testUiItems() {
         XX_TEST_EXPECT_EQ(interruptUiPlainText(desc, 0), std::string{"n/a"});
     }
 
-    // ---------------- 显示列宽 (终端渲染与文本降级同一口径) ----------------
+    // ---------------- 显示列宽 (终端渲染与文本降级同一套规则) ----------------
     {
         XX_TEST_EXPECT_EQ(pluginxx::ui::displayWidth("abc"), 3);
         XX_TEST_EXPECT_EQ(pluginxx::ui::displayWidth("中文"), 4);

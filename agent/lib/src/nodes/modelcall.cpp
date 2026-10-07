@@ -143,10 +143,10 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     }
 
     auto provider = resolveCurrentProvider(input.ctx.thread_id);
-    // 账本里记录本次实际使用的模型名 (会话可能已切换模型)
+    // 用量记录里记录本次实际使用的模型名 (会话可能已切换模型)
     auto modelName = resolveCurrentModelName(input.ctx.thread_id);
-    // 用量账本 (计划 STO-8): 每次模型调用记一行, 成功记用量, 失败记原因
-    // - detail: 补充用量 (缓存读/写; 计划 LLM-8), provider 经 message.extra 旁路回报
+    // 用量记录 (计划 STO-8): 每次模型调用记一行, 成功记用量, 失败记原因
+    // - detail: 补充用量 (缓存读/写; 计划 LLM-8), provider 经 message.extra 单独回报
     auto recordUsage = [&agentCtx, &input, &modelName](
                            const neograph::ChatCompletion::Usage& usage,
                            const agentxx::protocol::UsageDetail&  detail,
@@ -167,8 +167,8 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         rec.promptTokens           = usage.prompt_tokens;
         rec.completionTokens       = usage.completion_tokens;
         rec.totalTokens            = usage.total_tokens;
-        // 命中缓存的读取量: 旁路里有明确值时以它为准 (Anthropic 会把读取量从
-        // input_tokens 里剔除, 与 OpenAI 的 cached_tokens 同口径)
+        // 命中缓存的读取量: 额外字段里有明确值时以它为准 (Anthropic 会把读取量从
+        // input_tokens 里剔除, 与 OpenAI 的 cached_tokens 同一套规则)
         rec.cachedPromptTokens     = detail.cacheReadTokens > 0 ? detail.cacheReadTokens
                                                                : usage.cached_prompt_tokens;
         rec.cacheWritePromptTokens = detail.cacheWriteTokens;
@@ -199,7 +199,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     std::string              callErrorMsg;
     std::exception_ptr       callErrorEx;
     // provider 调用包一层错误记录: 取消/中断按控制流原样抛出 (catchErrorAsync
-    // 未提供 onRethrow 时的默认行为), 其余异常记录账本后按原异常类型重抛,
+    // 未提供 onRethrow 时的默认行为), 其余异常记录用量记录后按原异常类型重抛,
     // 不改动上层原有的错误处理与重试语义
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
@@ -366,7 +366,7 @@ asio::awaitable<neograph::graph::NodeOutput>
         = agentxx::nodes::drainPendingSessionInputs(agentContext.lock(), in, in.ctx.thread_id, nodeName);
     auto params = build_params(in.ctx.thread_id);
     // 单次调用的取消域 (计划 LLM-7): 运行取消照常级联, 消费方放弃时只中止本次调用
-    // (在途 HTTP/SSE 请求立即结束, 不必等响应读完或套接字超时)
+    // (正在进行的 HTTP/SSE 请求立即结束, 不必等响应读完或套接字超时)
     agentxx::nodes::ProviderCallScope callScope{in.ctx.cancel_token};
     params.cancel_token = callScope.token();
     for (auto& injected : injections.requestScoped) {
@@ -910,7 +910,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 修正上下文角色顺序
         repairMessages(in);
 
-        // 取消埋点: 进入 LLM 调用前检查 (重试路径可能已经处于取消状态)
+        // 取消检查点: 进入 LLM 调用前检查 (重试路径可能已经处于取消状态)
         if (in.ctx.cancel_token) {
             in.ctx.cancel_token->throw_if_cancelled("before llm call");
         }

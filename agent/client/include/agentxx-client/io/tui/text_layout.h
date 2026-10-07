@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 
-/// 文本布局辅助 (消息列表 / 中断视图 / 折叠预览共用; 显示宽度口径统一为
+/// 文本布局辅助 (消息列表 / 中断视图 / 折叠预览共用; 显示宽度统一按
 /// markdown::utf8_display_width: 宽字符 (CJK/emoji) 按 2 列计)
 namespace agentxx {
 namespace client {

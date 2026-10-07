@@ -176,7 +176,7 @@ public:
         // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取
         // - 客户端结果恒为对象形态 {"values": {控件 id: 值}}: 服务端取 values
         //   写回 resume 值, 故此处按控件值对象解析 (取首个控件值, 与 toolcall
-        //   重复调用检查等生产消费者同口径)
+        //   重复调用检查等生产消费者一致)
         if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
             auto val = result[resultId];
             if (val.is_string()) {
@@ -1048,7 +1048,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
 }
 
 /// 重复调用确认 (repeatCallCheck) 测试工具: 记录执行次数, 供断言"用户点允许后
-/// 工具真的被执行" (修复前: HIL 取值口径错误导致点允许也一律按拒绝处理)
+/// 工具真的被执行" (修复前: HIL 取值规则错误导致点允许也一律按拒绝处理)
 class RepeatCheckTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -1143,7 +1143,7 @@ protected:
 // ===========================================================================
 // 重复调用确认 E2E (M4-1 回归):
 // - 阈值 2: 第 2 次相同调用触发 HIL 询问
-// - 用户点"允许"后工具必须真的执行 (修复前: 结果取值口径错误 → 恒按拒绝处理,
+// - 用户点"允许"后工具必须真的执行 (修复前: 结果取值规则错误 → 恒按拒绝处理,
 //   返回 "[Repeated call denied by user: ...]" 且不再执行)
 // ===========================================================================
 asio::awaitable<void> test_repeat_call_check_allow() {

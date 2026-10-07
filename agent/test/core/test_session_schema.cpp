@@ -419,7 +419,7 @@ TestResult testSessionSchema() {
     XX_TEST_EXPECT_TRUE(jsonOfMsgId(dbBroken, "m-broken").empty());
 
     // -----------------------------------------------------------------------
-    // D2) v2 -> v3: 用量账本补"缓存写入量"列 (计划 LLM-8), 老记录按 0 保留
+    // D2) v2 -> v3: 用量记录补"缓存写入量"列 (计划 LLM-8), 老记录按 0 保留
     // -----------------------------------------------------------------------
     const auto dbV2 = sessionDbFile(root, "s-v2");
     createV2Db(dbV2);
@@ -464,7 +464,7 @@ TestResult testSessionSchema() {
     }
 
     // -----------------------------------------------------------------------
-    // E) 用量账本: 追加、聚合、最近若干条
+    // E) 用量记录: 追加、聚合、最近若干条
     // -----------------------------------------------------------------------
     {
         SessionStore store{root};
@@ -520,7 +520,7 @@ TestResult testSessionSchema() {
         }
         XX_TEST_EXPECT_EQ(store.recentUsage("s-usage", 0).size(), size_t{0});
     }
-    // 账本落库: 重新打开仍能聚合 (账本是持久事实, 不依赖内存)
+    // 用量记录落库: 重新打开仍能聚合 (用量记录是持久事实, 不依赖内存)
     {
         SessionStore store{root};
         auto         sum = store.usageSummary("s-usage");

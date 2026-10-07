@@ -2026,7 +2026,7 @@ void benchResourceAll() {
     //   的堆 arena/页驻留/峰值 RSS 会污染后一场景的 startup 数据 (实测同进程
     //   连跑时 plugin_attrib 的基线由 12MB 变成 41MB, 峰值 RSS 继承自前置场景)
     // - 单个场景崩溃/超时不影响其余场景, 长跑更稳
-    // 环境变量 AGENTXX_BENCH_NO_ISOLATE=1 可退回同进程顺序运行 (快速冒烟用)
+    // 环境变量 AGENTXX_BENCH_NO_ISOLATE=1 可退回同进程顺序运行 (快速验证用)
     const bool noIsolate = utilxx_base::ApplicationEnv::instance().has("AGENTXX_BENCH_NO_ISOLATE");
     if (noIsolate) {
         std::cout << "\n[resource] 同进程顺序运行全部场景 (AGENTXX_BENCH_NO_ISOLATE=1)\n";

@@ -786,7 +786,7 @@ void test_file_picker_navigation_without_filter() {
     fs::remove_all(root, ec);
 }
 
-/// 快捷键事件映射 (agentxx/client/io/tui/tui_keybind.h): 界面按键 → 宿主快捷键口径
+/// 快捷键事件映射 (agentxx/client/io/tui/tui_keybind.h): 界面按键 → 宿主快捷键格式
 /// - 与宿主 normalizeKeybindSpec 必须一致, 否则插件注册的快捷键永远匹配不上
 void test_keybind_event_mapping() {
     using agentxx::client::keybindOfEvent;
@@ -818,7 +818,7 @@ void test_keybind_event_mapping() {
         XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Mouse("", m)).empty());
     }
 
-    // 与宿主规范化口径对齐: 界面产物必须能被宿主原样接受 (往返一致)
+    // 与宿主规范化结果对齐: 界面产物必须能被宿主原样接受 (往返一致)
     const ftxui::Event samples[] = {
         ftxui::Event::CtrlAltK,
         ftxui::Event::AltA,

@@ -3,7 +3,7 @@
 > 本文件由 `tools/gen_ui.dart` 生成。定义来源：`schema/ui.def.json` / `schema/kit.def.json`；扩展 kit 定义：`agent/schema/agentxx-ui-kit.def.json`。
 
 纪律：① 只写数值单位 u（8 / 12 / 20 这类）；② 不引用客户端专属块；③ 不含逻辑（只装配）。
-需要项目特有的间距口径时，由扩展 kit 覆盖同名组件实现。
+需要项目特有的间距规则时，由扩展 kit 覆盖同名组件实现。
 
 | 组件 | 参数 | 说明 |
 |---|---|---|

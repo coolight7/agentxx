@@ -48,7 +48,7 @@ TestResult testUiCapabilities() {
     XX_TEST_EXPECT_EQ(json["blocks"].size(), caps.blocks.size());
     XX_TEST_EXPECT_EQ(json["controls"].size(), caps.controls.size());
     XX_TEST_EXPECT_TRUE(json.contains("cell") && json.contains("gap"));
-    // 终端换算口径一致: 固定 8u 换算出的列数与能力段自身算法一致
+    // 终端换算方式一致: 固定 8u 换算出的列数与能力段自身算法一致
     XX_TEST_EXPECT_EQ(caps.colsOf(8.0, true), static_cast<int>(8.0 / caps.cell.width + 0.5));
 
     // ---- 体验级别字段 (UI-9) ----

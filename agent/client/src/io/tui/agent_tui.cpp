@@ -2548,7 +2548,7 @@ void TUIClientAgentIO::requestSessionSearch(std::string keyword) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        // 与打开弹窗同口径: 清空列表先显示 loading, 再按关键词（或普通分页）请求
+        // 与打开弹窗一致: 清空列表先显示 loading, 再按关键词（或普通分页）请求
         st.sessionListKeyword     = keyword;
         st.sessionList.clear();
         st.sessionListLoaded      = false;

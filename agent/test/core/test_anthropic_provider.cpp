@@ -818,7 +818,7 @@ asio::awaitable<void> test_cache_control_breakpoints(MockAnthropicServer& mock, 
 }
 
 /// 缓存用量 (计划 LLM-8): Anthropic 的 input_tokens 只含未命中缓存的输入,
-/// 缓存读/写量单独回报 —— 统一折算成整段 prompt 规模, 并保留写入量供账本使用
+/// 缓存读/写量单独回报 —— 统一折算成整段 prompt 规模, 并保留写入量供用量记录使用
 asio::awaitable<void> test_usage_cache_tokens(MockAnthropicServer& mock, uint16_t port) {
     const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode                 = AnthropicMockMode::Normal;
@@ -852,7 +852,7 @@ asio::awaitable<void> test_usage_cache_tokens(MockAnthropicServer& mock, uint16_
         XX_TEST_EXPECT_EQ(result.usage.total_tokens, 100 + 900 + 512 + 20);
         XX_TEST_EXPECT_EQ(result.usage.cached_prompt_tokens, 900);
 
-        // 补充用量经旁路带给模型调用节点; 取出后置空 (不进入会话消息)
+        // 补充用量经额外字段带给模型调用节点; 取出后置空 (不进入会话消息)
         const auto detail = agentxx::protocol::readUsageDetail(result);
         XX_TEST_EXPECT_EQ(detail.cacheReadTokens, int64_t{900});
         XX_TEST_EXPECT_EQ(detail.cacheWriteTokens, int64_t{512});

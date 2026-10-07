@@ -11,8 +11,8 @@
 /// - 工具循环: 模型给出 tool_call → 工具真实执行 → 第二次请求带回 tool 结果
 /// - 错误注入: 不可重试 (401) 立即结束; 可重试 (500 + retry_after) 退避后成功
 /// - 溢出压缩: 400 + context_length_exceeded 触发一次压缩后重试成功
-/// - 取消: 等待期间的取消立即中断在途请求 (不必等延迟走完)
-/// - 用量记账: 假 provider 上报的用量进入会话账本 (STO-8 的调用点)
+/// - 取消: 等待期间的取消立即中断未完成的请求 (不必等延迟走完)
+/// - 用量记账: 假 provider 上报的用量进入会话用量记录 (STO-8 的调用点)
 #include "agentxx-test/core/test_fake_provider.h"
 
 #include "agentxx-test/core/fake_provider.h"
@@ -331,7 +331,7 @@ asio::awaitable<void> test_fake_provider_overflow_compaction() {
 }
 
 // ---------------------------------------------------------------------------
-// 5) 取消: 等待期间取消立即中断在途请求 (不必等延迟走完)
+// 5) 取消: 等待期间取消立即中断未完成的请求 (不必等延迟走完)
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_cancel() {
     auto provider = std::make_shared<FakeProvider>();
@@ -377,7 +377,7 @@ asio::awaitable<void> test_fake_provider_cancel() {
 }
 
 // ---------------------------------------------------------------------------
-// 6) 用量记账: 假 provider 上报的用量进入会话账本 (记账调用点在 modelcall)
+// 6) 用量记账: 假 provider 上报的用量进入会话用量记录 (记账调用点在 modelcall)
 //    含缓存读/写量 (计划 LLM-8: Anthropic 的 cache_read/cache_creation)
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_usage_ledger() {

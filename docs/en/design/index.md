@@ -1,14 +1,42 @@
 # Agentxx Comprehensive Architecture Design Document
+
 > Related docs: [design](index.md) (Architecture) · [plugins.md](plugins.md) (Pure C ABI Plugin Paradigm) · [ffi.md](ffi.md) (FFI Interface Design)
 > (TUI and benchmark design docs are currently maintained in Chinese only: `docs/zh-cn/design/tui.md`, `docs/zh-cn/design/benchmark.md`.)
+> Translation status: the Chinese pages under `docs/zh-cn/design/` are the reference; this page
+> may lag behind them (for example the memory / allocator section in `docs/zh-cn/design/index.md`).
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Features & Capabilities](#features--capabilities)
+    - [Core Conversational Capabilities](#core-conversational-capabilities)
+    - [Tool Invocations (ToolCall)](#tool-invocations-toolcall)
+    - [Middleware System](#middleware-system)
+    - [Event System](#event-system)
+    - [Multi-Session & Concurrency](#multi-session--concurrency)
+    - [Remote Communication](#remote-communication)
+    - [Protocol Support](#protocol-support)
+    - [Client UI](#client-ui)
+    - [Training System](#training-system)
+    - [Extension Capabilities](#extension-capabilities)
+    - [Dependency Injection](#dependency-injection)
 - [Usage Guide](#usage-guide)
+    - [Compilation](#compilation)
+    - [Running Tests](#running-tests)
+    - [Configuration File](#configuration-file)
+    - [Command-Line Usage](#command-line-usage)
+    - [Using as a Library](#using-as-a-library)
 - [Architectural Design](#architectural-design)
+    - [Overall Architecture](#overall-architecture)
+    - [Data Flow](#data-flow)
+    - [Core Design Patterns](#core-design-patterns)
+    - [Connection & Reconnection Mechanism](#connection--reconnection-mechanism)
+    - [Dependency Injection Container](#dependency-injection-container)
 - [Code Structure](#code-structure)
+    - [Key Dependencies](#key-dependencies)
+- [Appendix A: Core Data Models (conversation_types.h)](#appendix-a-core-data-models-conversation_typesh)
+- [Appendix B: Plugin System v1 Key Concepts (See plugins.md)](#appendix-b-plugin-system-v1-key-concepts-see-pluginsmd)
+- [Appendix C: Session Working Directory Multi-Source Fallback (AgentContext::getSessionWorkDir)](#appendix-c-session-working-directory-multi-source-fallback-agentcontextgetsessionworkdir)
 
 ---
 

@@ -69,7 +69,7 @@ std::string formatUsageText(const CpuGpuUsage& usage) {
     );
     for (size_t i = 0; i < usage.gpus.size(); ++i) {
         const auto& gpu = usage.gpus[i];
-        /// 显存口径: 优先独立显存; 统一内存 GPU (如 Apple Silicon) 没有独立显存,
+        /// 显存取值: 优先独立显存; 统一内存 GPU (如 Apple Silicon) 没有独立显存,
         /// 退回与系统内存同源的共享显存, 否则该行会显示成 0MB/0MB
         const bool        useSharedVram = gpu.dedicatedVramMB == 0 && gpu.sharedVramMB > 0;
         const uint64_t    vramTotalMB   = useSharedVram ? gpu.sharedVramMB : gpu.dedicatedVramMB;

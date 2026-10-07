@@ -147,7 +147,7 @@ public:
     /// - start 出现错误时，跳过 baseRun，执行对应的 end
     asio::awaitable<neograph::graph::NodeOutput> run(neograph::graph::NodeInput in) override final {
         if (in.ctx.cancel_token) {
-            // 取消埋点
+            // 取消检查点
             in.ctx.cancel_token->throw_if_cancelled(
                 fmt::format("before WrapNode call: {}", nodeName)
             );

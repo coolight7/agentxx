@@ -50,7 +50,7 @@ class InterruptView {
 public:
 
     /// 控件命中区域 (渲染时由共享组件层的行模型登记; 点击命中检测按"行元素框 +
-    /// 行内区域"两级判定, 局部坐标口径与 [UiHitRegion] 一致)
+    /// 行内区域"两级判定, 局部坐标定义与 [UiHitRegion] 一致)
     struct HitBox {
         /// 消息下标 (0-based, 对应 TUIRenderState::messages)
         size_t msgIndex = 0;
@@ -147,7 +147,7 @@ private:
     /// 提交行在描述块未声明 id 时使用的固定命中 id
     static constexpr std::string_view kItemIdSubmit = "submit";
 
-    /// 描述里的控件/提交行块 → 共享组件项 (附来源块下标, 渲染时用于命中归因)
+    /// 描述里的控件/提交行块 → 共享组件项 (附来源块下标, 渲染时用于记录命中来源)
     struct FormItem {
         /// 来源块下标 (ui.blocks 的下标)
         size_t blockIndex = 0;

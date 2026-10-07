@@ -161,7 +161,7 @@ struct InterruptUiBlock {
     bool commitOnPick = false;
 
     // ---- control: number ----
-    /// 仅接受整数 (校验/步进口径)
+    /// 仅接受整数 (校验/步进规则)
     bool integer = false;
     /// 下界 (hasMin = false 表示不限)
     bool   hasMin   = false;
@@ -204,7 +204,7 @@ struct InterruptUi {
     utilxx_base::Json  toJson() const;
 };
 
-/// 中断结果组装 (客户端提交后回传的 JSON 形态; 与 agent 侧解析口径一致)
+/// 中断结果组装 (客户端提交后回传的 JSON 形态; 与 agent 侧解析规则一致)
 ///
 /// 结果**恒为对象形态**: `{"values": {控件 id: 值}}`
 /// - 非对象 values 归一化为空对象 (取消/未提交时为空对象)
@@ -212,10 +212,10 @@ utilxx_base::Json makeInterruptResult(const utilxx_base::Json& values);
 
 /// 结果值容错读取 (结果对象或其内层 `values` 对象均可传入)
 ///
-/// - 对象含 `values` 对象时自动下钻 (兼容整体结果对象与纯 values 对象两种口径)
+/// - 对象含 `values` 对象时自动下钻 (兼容整体结果对象与纯 values 对象两种形式)
 /// - 未命中 id / 类型不符时返回 defaultValue
-/// - 布尔口径: 布尔值直取; 字符串 "true"/"yes"/"y"/"1" 视为 true
-///   (与 [preset::inputForm] 生成的 bool 控件取值口径一致)
+/// - 布尔值规则: 布尔值直取; 字符串 "true"/"yes"/"y"/"1" 视为 true
+///   (与 [preset::inputForm] 生成的 bool 控件取值规则一致)
 bool interruptValueBool(
     const utilxx_base::Json& values,
     std::string_view         id,

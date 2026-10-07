@@ -254,8 +254,8 @@ public:
         completion.usage.total_tokens         = step.promptTokens + step.completionTokens;
         completion.usage.cached_prompt_tokens = step.cachedTokens;
         completion.usage.reasoning_tokens     = step.reasoningTokens;
-        // 缓存写入量 (计划 LLM-8): 真实 Anthropic provider 也走这条旁路,
-        // 由模型调用节点取出写账本 (取用后该键置空, 不进入会话消息)
+        // 缓存写入量 (计划 LLM-8): 真实 Anthropic provider 也走这条额外通道,
+        // 由模型调用节点取出写用量记录 (取用后该键置空, 不进入会话消息)
         if (step.cacheWriteTokens > 0) {
             agentxx::protocol::setUsageDetail(
                 completion,
@@ -286,7 +286,7 @@ private:
     }
 
     /// 等待 `ms` 毫秒; 期间轮询取消令牌, 被取消返回 false
-    /// - 轮询间隔 10 ms: 假 provider 没有真实套接字, 用它模拟"取消立即中断在途请求"
+    /// - 轮询间隔 10 ms: 假 provider 没有真实套接字, 用它模拟"取消立即中断未完成的请求"
     asio::awaitable<bool>
         waitInterruptible(int ms, const neograph::CompletionParams& params) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{ms};

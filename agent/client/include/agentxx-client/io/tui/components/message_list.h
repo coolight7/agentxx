@@ -101,7 +101,7 @@ public:
     /// 历史分页前插通知 (client 线程经 UI 动作队列调用, 帧间执行):
     /// - 转发给 LazyScrollable::notifyPrepended: 并行数组头插 + 锚点索引同步平移,
     ///   视口顶行仍指向同一条内容 —— 前插对视口零影响 (不需要任何偏移校正)
-    /// - 新增区高度下一次布局时按新快照口径补齐 (只影响滚动条长度)
+    /// - 新增区高度下一次布局时按新快照补齐 (只影响滚动条长度)
     void onHistoryPrepended(size_t count) {
         if (count > 0) {
             scrollable_->notifyPrepended(count);
@@ -378,7 +378,7 @@ private:
     /// 上报视角内"工具消息装饰区域"的可见性 (UI 线程; 每帧一次)
     ///
     /// 插件用 `tool_call_id` 作区域 id 注册 `pause_when_hidden` 定时器
-    /// (装饰的按钮/控件归因同样是 tool_call_id) 时, 该区域是否可见由本函数上报;
+    /// (装饰的按钮/控件也同样归到 tool_call_id) 时, 该区域是否可见由本函数上报;
     /// 只有**曾经登记过装饰**的 id 才参与上报 (否则宿主的可见性表会随会话长度
     /// 无界增长, 且绝大多数 tool_call_id 无人关心)。
     /// - `args`:

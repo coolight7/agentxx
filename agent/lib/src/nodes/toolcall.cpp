@@ -741,7 +741,7 @@ asio::awaitable<std::optional<std::string>> prepareToolInvocation(
                 // 解析用户响应: agent_runner 把结果 values 对象 (控件 id → 值)
                 // 按 resultId (工具调用 id) 写回 interruptResult, 形如
                 // {"<tool_call_id>": {"allow": "true"}}; 未应答/取消 = 空对象 → 拒绝
-                // - 必须先按自身 resultId 下钻取值 (与 subagent 工具同口径):
+                // - 必须先按自身 resultId 下钻取值 (与 subagent 工具一致):
                 //   直接对顶层对象取 "allow" 恒取不到, 会使用户点"允许"也被拒绝
                 const auto  toolCallId = args.value("tool_call_id", std::string{});
                 const auto* valuesPtr  = &result;
@@ -820,7 +820,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
         out.keepAlive = std::move(pluginTool);
     }
 
-    // 参数: 解析模型给出的 JSON 后注入会话标识 (与旧实现同口径)
+    // 参数: 解析模型给出的 JSON 后注入会话标识 (与旧实现一致)
     // - 解析失败按"本次调用失败"处理 (结果消息回给模型), 不影响同批其他调用
     utilxx_base::Json args;
     try {
@@ -851,7 +851,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     }
 
     // 执行前目标复验 (计划 SEC-5): 判定阶段记录过"已批准目标", 这里用最终参数
-    // 按同一口径再解析一次并比对 —— 判定与执行之间的任何改写都会在这里被拦下
+    // 按同一套规则再解析一次并比对 —— 判定与执行之间的任何改写都会在这里被拦下
     // (纯校验, 不重复询问用户; 服务未注册/无调用 id 时视为通过)
     if (agentCtxPtr && agentCtxPtr->bus && out.tool && !tc.id.empty()) {
         auto resp
@@ -885,7 +885,7 @@ asio::awaitable<std::string>
     auto*       tool = prepared.tool;
     const auto& args = prepared.args;
 
-    // 权限检查/重复确认可能 co_await 挂起过, 执行 tool 前检查取消埋点
+    // 权限检查/重复确认可能 co_await 挂起过, 执行 tool 前检查取消检查点
     if (prepared.cancelToken) {
         prepared.cancelToken->throw_if_cancelled("before tool execution");
     }
@@ -1046,7 +1046,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
             try {
                 content = co_await runToolCallBody(prepared);
                 content = co_await finalizeToolCall(prepared, std::move(content));
-                // 取消埋点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
+                // 取消检查点: tool 执行完成后检查, 避免取消后继续收集/执行后续 tool
                 if (prepared.cancelToken) {
                     prepared.cancelToken->throw_if_cancelled("after tool execution");
                 }
@@ -1104,7 +1104,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         tool_msg.content = std::move(content);
     }
     if (ok) {
-        // 关键指标: 执行体产出结果 (工具自身的错误文本也算执行成功, 与结果口径一致)
+        // 关键指标: 执行体产出结果 (工具自身的错误文本也算执行成功, 与结果规则一致)
         if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
             ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Ok);
         }

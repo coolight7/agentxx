@@ -8,7 +8,7 @@
 ///   fork 级联);
 /// - **异常适配**: [awaitHostPluginOp] 把内核抛出的 `utilxx::CancelledException`
 ///   转换为宿主的 `neograph::graph::CancelledException`, 保持宿主侧 (tool / 图节点 /
-///   中间件) 的取消判定口径与拆分前一致。
+///   中间件) 的取消判定规则与拆分前一致。
 ///
 /// 用法:
 /// ```c++
@@ -93,7 +93,7 @@ inline utilxx::CancelTokenPtr adaptCancelToken(std::shared_ptr<neograph::graph::
 /// 背景: 插件框架内核 (`cxx_pluginxx`) 按统一取消抽象抛 `utilxx::CancelledException`,
 /// 而 agentxx 的 tool / 图节点 / 中间件层全部按 `neograph::graph::CancelledException`
 /// 判定取消 (例如 toolcall 节点显式 catch 该类型以避免取消被当成普通工具错误吞掉)。
-/// 因此在宿主边界统一转换, 使拆分前后的取消判定口径完全一致。
+/// 因此在宿主边界统一转换, 使拆分前后的取消判定规则完全一致。
 ///
 /// - 其余语义 (完成协议 / lease / 取消传播) 与 [pluginxx::awaitPluginOp] 完全一致;
 /// - 无取消时异常原样传播。

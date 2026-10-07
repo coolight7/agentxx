@@ -358,7 +358,7 @@ struct RespToolPermissionCheck {
 
 /// 执行前目标复验 (service.permission.reverify; 计划 SEC-5)
 /// - 调用方: 工具调用节点在执行执行体之前 (判定阶段已记录已批准目标)
-/// - 语义: 用当前参数按同一口径重新解析目标并与已批准目标比对, 不一致即拒绝执行
+/// - 语义: 用当前参数按同一套规则重新解析目标并与已批准目标比对, 不一致即拒绝执行
 struct ReqPermissionReverify {
     std::string       sessionId;
     std::string       toolName;

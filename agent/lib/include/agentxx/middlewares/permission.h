@@ -45,8 +45,8 @@ enum class ToolPermissionTargetKind {
 /// 工具权限声明: 由插件在注册工具后声明自身工具的权限限制, 宿主据此解析目标
 /// 并执行统一规则判定 (白/黑名单、permission.mode 默认规则、记住的选择、
 /// 工作区隔离、完全授权)
-/// - 权限规则本身不在此结构内: 结构只描述"哪些参数是受约束目标", 判定口径
-///   与内置规则一致 (见 [PermissionMiddlewareHandle::checkTargetPermission])
+/// - 权限规则本身不在此结构内: 结构只描述"哪些参数是受约束目标", 判定规则
+///   与内置一致 (见 [PermissionMiddlewareHandle::checkTargetPermission])
 /// - 未声明权限的工具不参与权限判定 (直接放行): 无权限需求的工具无需任何声明
 struct ToolPermissionSpec {
     /// 权限作用域 (规则表索引): [PermissionMiddlewareHandle::FilesystemPermissionREAD] /
@@ -66,7 +66,7 @@ struct ToolPermissionSpec {
 };
 
 /// 目标权限判定结果 (三态)
-/// - 与"工具调用权限检查"完全同一口径, 区别仅在于 [Ask] 不在判定阶段发起询问:
+/// - 与"工具调用权限检查"完全一致, 区别仅在于 [Ask] 不在判定阶段发起询问:
 ///   需要询问的场合由调用方决定 (工具调用检查会经总线询问用户, 路径查询接口
 ///   则把它作为"未获批准"返回, 不弹任何界面)
 enum class PathDecision {
@@ -192,7 +192,7 @@ public:
     ///     - [toolName] 被检查的工具名 (询问时下发给外部授权者)
     ///     - [args]     tool 调用参数 (取 sessionId 定位会话总线; 原样下发)
     ///     - [scope]    规则作用域: [FilesystemPermissionREAD] / [FilesystemPermissionWRITE]
-    ///     - [target]   受约束目标 (已规范化的绝对路径或文本, 与规则匹配口径一致)
+    ///     - [target]   受约束目标 (已规范化的绝对路径或文本, 与规则匹配时一致)
     ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> checkTargetPermission(
         std::string_view   toolName,
@@ -213,7 +213,7 @@ public:
     PathDecision
         decideTarget(std::string_view path, size_t scope, std::string_view sessionId) const;
 
-    /// 同上, 但返回带理由的完整判定结果 (日志/卡片/诊断共用同一口径)
+    /// 同上, 但返回带理由的完整判定结果 (日志/卡片/诊断共用同一套规则)
     PermissionDecision
         explainTarget(std::string_view path, size_t scope, std::string_view sessionId) const;
 
@@ -229,7 +229,7 @@ public:
 
     /// 执行前复验"批准目标 = 实际执行目标"
     /// - 判定阶段 ([checkToolPermission]) 已按 (toolName, toolCallId) 记录已判定目标;
-    ///   执行前用**当前参数**按同一口径重新解析并比对, 不一致即拒绝执行
+    ///   执行前用**当前参数**按同一套规则重新解析并比对, 不一致即拒绝执行
     /// - 未记录过批准 (未声明权限的工具/无 toolCallId): 视为通过 (无权限约束)
     /// - 仅比对目标集合, 不重复询问用户 (询问只发生在判定阶段一次)
     ReverifyResult reverifyApprovedTargets(
@@ -274,7 +274,7 @@ public:
     ///   文件编辑" 同语义); 命中 allowPath 的路径是该约束的例外 (worktree
     ///   本身位于主检出内), 按已注册规则照常处理; 读操作与其他路径完全不受影响
     /// - 两个路径在存储前统一经 [normalizePermissionPath] 归一化 (与注册规则、
-    ///   被检查路径同一口径), 调用方可直接传入原始路径
+    ///   被检查路径同一套规则), 调用方可直接传入原始路径
     void setSessionIsolation(std::string_view sessionId, SessionFsIsolation isolation);
 
     /// 清除指定会话的隔离边界 (解绑/删除 worktree 时)
@@ -305,7 +305,7 @@ public:
     ///     - [toolName] 被检查的 tool 名 (询问时下发给外部授权者)
     ///     - [args]  tool 调用参数 (取 sessionId 定位会话总线; 原样下发)
     ///     - [scope] 规则作用域: [FilesystemPermissionREAD] / [FilesystemPermissionWRITE]
-    ///     - [target] 受约束目标 (已规范化的绝对路径, 与规则匹配口径一致)
+    ///     - [target] 受约束目标 (已规范化的绝对路径, 与规则匹配时一致)
     ///     - [category] 权限分类文本 (询问卡片显示; 空 = 按作用域生成)
     asio::awaitable<bool> requestPermission(
         std::string_view   toolName,
@@ -343,7 +343,7 @@ private:
     };
     std::map<std::string, ApprovedTargets, std::less<>> approvedTargets_{};
 
-    /// 按声明从参数解析受约束目标 (判定与执行前复验共用同一口径)
+    /// 按声明从参数解析受约束目标 (判定与执行前复验共用同一套规则)
     /// - 路径目标按会话生效工作目录规范化为绝对路径; 文本目标原样; 空目标跳过
     std::vector<std::string>
         resolveDeclaredTargets(const utilxx_base::Json& args, const ToolPermissionSpec& spec) const;

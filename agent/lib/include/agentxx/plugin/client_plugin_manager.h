@@ -177,7 +177,7 @@ struct ClientKeybindConflict {
 /// (`control`→`ctrl` / `cmd`/`win`/`meta`→`super` / `return`→`enter`);
 /// 非法描述 (空 / 未知修饰键 / 缺少主键 / 多个主键 / 无修饰键的可打印单字符) 返回空串。
 ///
-/// 宿主与界面侧必须用同一口径: 界面把按键事件转成同格式描述后按字符串比较
+/// 宿主与界面侧必须用同一种格式: 界面把按键事件转成同格式描述后按字符串比较
 /// (见 TUI 侧 `keybindOfEvent`)。
 std::string normalizeKeybindSpec(std::string_view keys);
 
@@ -241,7 +241,7 @@ struct ClientToolRenderResult {
     bool pendingRender = false;
     /// pendingRender=true 时的 renderer 归属插件 (空 = 未知)
     std::string pendingPlugin;
-    /// decor 归因 (isDecor=true 时有效; UI 侧组装 owner_id=toolCallId 用):
+    /// decor 来源 (isDecor=true 时有效; UI 侧组装 owner_id=toolCallId 用):
     /// button 派发 owner_id 统一为 tool_call_id (以 toolCallId 作 owner_id,
     /// 插件 bind 一次永久生效, 见方案 A); 非 decor 时为空
     std::string decorPlugin;
@@ -630,7 +630,7 @@ public:
         requestToolRender(const ClientToolRenderRequest& req);
 
     /// 该键的这次输入特征是否已有渲染请求在执行 (UI 线程; 零拷贝)。
-    /// UI 侧查询工具渲染时先问一次: 在途则本帧用通用回退, 不必为投递
+    /// UI 侧查询工具渲染时先问一次: 请求尚未返回时本帧用通用回退, 不必为投递
     /// 拷贝 args/result 大文本 (见 message_list 的 queryToolRender)
     bool toolRenderInFlight(std::string_view key, uint64_t inputHash) const;
 
@@ -926,7 +926,7 @@ public:
     /// 当前快捷键列表 (任意线程; 按键位升序)
     std::vector<ClientKeybind> keybinds() const;
     /// 投递快捷键触发到 client io 线程执行 (任意线程; 未注册/插件禁用时忽略)
-    /// - keys 须为 [normalizeKeybindSpec] 口径 (界面把按键事件转成该口径)
+    /// - keys 须为 [normalizeKeybindSpec] 的格式 (界面把按键事件转成该格式)
     void postKeybindInvocation(std::string keys);
 
     /// 自描述

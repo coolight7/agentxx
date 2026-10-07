@@ -377,7 +377,7 @@ void test_result_contract_helpers() {
     XX_TEST_EXPECT_TRUE(result.is_object());
     XX_TEST_EXPECT_TRUE(result["values"].is_object());
 
-    // 整体结果对象 / 纯 values 对象两种口径均可读取
+    // 整体结果对象 / 纯 values 对象两种形式均可读取
     XX_TEST_EXPECT_TRUE(interruptValueBool(result, "decision", false));
     XX_TEST_EXPECT_TRUE(interruptValueBool(result["values"], "decision", false));
     XX_TEST_EXPECT_FALSE(interruptValueBool(result, "remember", true));
@@ -399,7 +399,7 @@ void test_result_contract_helpers() {
         int64_t{-1}
     );
 
-    // 布尔容错口径: 字符串 "true"/"yes"/"y"/"1" 与非 0 数值均为 true
+    // 布尔值容错规则: 字符串 "true"/"yes"/"y"/"1" 与非 0 数值均为 true
     XX_TEST_EXPECT_TRUE(interruptValueBool(
         Json{
             {"a", "yes"}
@@ -570,7 +570,7 @@ void test_plain_text_extended_blocks() {
     unknown.blocks.push_back(InterruptUiBlock::fromJson(Json{{"kind", "future_widget"}}));
     XX_TEST_EXPECT_EQ(interruptUiPlainText(unknown, 0), std::string{});
 
-    // 缩进与折行 (宽度按显示列宽口径, 与文本块一致)
+    // 缩进与折行 (宽度按显示列宽算法, 与文本块一致)
     InterruptUi indented;
     indented.blocks.push_back(InterruptUiBlock::fromJson(Json{
         {"kind", "text"},

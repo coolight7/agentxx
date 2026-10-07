@@ -2317,7 +2317,7 @@ void SessionServerAgentIO::handleRenameSession(
         }
     };
 
-    // 会话 id 为空 = 当前绑定会话 (与其它请求同口径); 非空时允许改列表里的任意会话
+    // 会话 id 为空 = 当前绑定会话 (与其它请求一致); 非空时允许改列表里的任意会话
     const std::string sessionId = req.sessionId.empty() ? config_.sessionId : req.sessionId;
     const std::string title     = normalizeSessionTitle(req.title);
 

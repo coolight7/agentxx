@@ -50,7 +50,7 @@ std::shared_ptr<markdown::FlowText> plainNode(std::string_view content) {
     return markdown::FlowText::plain(content);
 }
 
-/// 按宽度布局一次并返回实测高度 (与消息列表的测量口径一致)
+/// 按宽度布局一次并返回实测高度 (与消息列表的测量方式一致)
 int layoutHeight(const ftxui::Element& el, int width) {
     return layoutAndMeasure(el, ftxui::Box{0, width - 1, 0, kTallHeight});
 }
@@ -250,7 +250,7 @@ TestResult testMarkdownFlow() {
 
     // ---------------- 选择取文本 (元素左缘不在 0 列) ----------------
     {
-        // 节点内的字形列从 0 起算 (相对盒左缘), 选择区间是屏幕列: 两者口径不同,
+        // 节点内的字形列从 0 起算 (相对盒左缘), 选择区间是屏幕列: 两者坐标系不同,
         // 混用会漏掉每行开头若干字符 —— 元素左缘越靠右丢得越多。
         // 宿主里正文常带左侧留白 (消息列表 3 列留白、面板边框内 1~2 列),
         // 用户表现为"鼠标选中复制总是缺最左边的一两列"。

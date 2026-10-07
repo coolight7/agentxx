@@ -2,7 +2,7 @@
 //
 // 描述层本身 (解析/上限/序列化/纯文本/适配规则/基础 kit) 的用例在库仓库
 // (cxx_pluginxx_ui) 的单测里; 本模块覆盖 agentxx 这一侧:
-// - 扩展 kit 组件 (agentxx::ui::kit) 的装配结果与留白口径
+// - 扩展 kit 组件 (agentxx::ui::kit) 的装配结果与留白
 // - 带 env (客户端能力摘要) 时的变体选择: 目标未知用第一个变体, 目标不支持时走兜底
 // - 同一份描述在不同能力下 adapt 的收敛结果 (只含声明支持的组件, 最多降到 Text)
 // - kit 产出 → dumpItem → parseBlock 的往返
@@ -93,7 +93,7 @@ bool allSupported(const std::vector<Item>& items, const Capabilities& caps) {
     return true;
 }
 
-/// 终端常用集: 去掉 Stack / Image 与客户端专属块 (与 TUI 客户端上报的口径一致)
+/// 终端常用集: 去掉 Stack / Image 与客户端专属块 (与 TUI 客户端上报的一致)
 Capabilities tuiCaps() {
     Capabilities             caps = pluginxx::ui::fullCapabilities();
     caps.kind                     = "tui";
@@ -125,7 +125,7 @@ Capabilities capsWithout(std::string_view drop) {
 } // namespace
 
 TestResult testUiKit() {
-    // ---------------- 基础 kit 的 agentxx 口径 ----------------
+    // ---------------- 基础 kit 的 agentxx 覆盖 ----------------
     {
         const Item title = agentxx::ui::kit::title({{"text", "会话统计"}});
         XX_TEST_EXPECT_EQ(title.kind, std::string{"Text"});

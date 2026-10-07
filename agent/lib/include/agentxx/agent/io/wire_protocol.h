@@ -1373,7 +1373,7 @@ inline WireAddModel addModelOfConfig(std::string_view sessionId, const ModelConf
     return m;
 }
 
-/// 线消息 → 模型配置 (服务端校验/注册/写盘前的取值; 空值按默认口径补齐)
+/// 线消息 → 模型配置 (服务端校验/注册/写盘前的取值; 空值按默认值补齐)
 inline ModelConfig addModelToConfig(const WireAddModel& m) {
     ModelConfig mc;
     mc.name                     = m.name;

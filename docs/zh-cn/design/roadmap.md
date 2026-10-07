@@ -52,7 +52,7 @@
 |---|---|---|---|
 | STO-1 | 会话目录内核级写租约 | 已实施 | `agent/lib/{include/agentxx/agent,src/agent}/writer_lease.*`；模块 `writer_lease` |
 | STO-2 | schema 版本和相邻迁移链 | 已实施 | `session_store.cpp`（`kSchemaVersion` / `applyMigrationStep` / 备份）；模块 `session_schema`（v0/v2 → v3：msg_id 回填、session_input 建表、usage 缓存写入量列） |
-| STO-8 | 用量账本 | 已实施 | `session_store`（`usage` 表）+ `nodes/modelcall.cpp`；模块 `usage_ledger` |
+| STO-8 | 用量记录 | 已实施 | `session_store`（`usage` 表）+ `nodes/modelcall.cpp`；模块 `usage_ledger` |
 | STO-11 | settings_db 乐观版本 | 已实施 | `util/settings_db.*`；模块 `settings_db` |
 | STO-12 | 会话标题与检索（存储层） | 已实施 | `session_store`（`sessionTitle` / `setSessionTitle` / `searchSessions`）；模块 `session_schema` |
 | STO-12b | 标题/检索的协议与 TUI 入口（RET-1a） | 已实施 | `WireListSessions.keyword` + `WireRenameSession`/`WireRenameSessionResult` + `SessionInfo.snippet`；端点 `handleRenameSession` / `listSessionsFor`；TUI 会话弹窗检索行 + `Ctrl+R` 改名；模块 `session_admin`、`wire_roundtrip`、`tui_surface` |
@@ -83,7 +83,7 @@
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 消费端退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在消费方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
-| LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求装配（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量口径折算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 旁路进账本 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
+| LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求装配（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量换算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 额外字段进用量记录 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放 | 已实施 | `agent/test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder` 录制器 / `HttpPlayer` 回放器 / `HttpFixture` 固定装置 + 脱敏）；模块 `http_recorder` |
 | LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
 | LLM-1 / LLM-9 / LLM-10 / LLM-11 / LLM-12 | 模型能力元数据 / 轮次局部回退 / 凭据分层 / 连接状态 / 结构化输出入口 | 不做（9、12 后续计划） | 不补价格与能力元数据；provider 全走 HTTP |
@@ -92,7 +92,7 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| CMP-1 / CMP-2 / CMP-4 / CMP-5 / CMP-6 / CMP-7 / CMP-8 / CMP-9 | 预算单一口径 / 剪枝-度量-摘要 / 原文可回取 / 压缩事务 / 恢复元数据 / 质量门 / 缓存前缀 / 记忆提醒 | 不做（CMP-8 保持现状） | 现状：确定性清理 → 子代理摘要 → `hardTruncate`；原文在 `viewMessages` 可查 |
+| CMP-1 / CMP-2 / CMP-4 / CMP-5 / CMP-6 / CMP-7 / CMP-8 / CMP-9 | 预算统一规则 / 剪枝-度量-摘要 / 原文可回取 / 压缩事务 / 恢复元数据 / 质量门 / 缓存前缀 / 记忆提醒 | 不做（CMP-8 保持现状） | 现状：确定性清理 → 子代理摘要 → `hardTruncate`；原文在 `viewMessages` 可查 |
 
 ## 8. 权限与安全
 
@@ -101,7 +101,7 @@
 | SEC-2 | 权限决定与理由（`decision/reason/rule/target`） | 已实施 | `middlewares/permission.{h,cpp}`（`PermissionReason` / `PermissionDecision` / `explainTarget`）；模块 `permission` |
 | SEC-5 | 执行前目标复验（批准目标 = 实际执行目标） | 已实施 | `service.permission.reverify` + `reverifyApprovedTargets` + `nodes/toolcall.cpp` 的 prepare 末尾复验；模块 `permission` |
 | SEC-9 | 安全责任与边界文档 | 已实施 | [security.md](security.md) |
-| TST-10 | 安全负面测试（门禁正确性） | 部分实施 | 模块 `permission`（配置拒绝优先于完全授权、工作区隔离优先于白名单、未声明权限放行）；软链接越界用例待补（依赖 SEC-6 未来计划） |
+| TST-10 | 安全负面测试（判定规则正确性） | 部分实施 | 模块 `permission`（配置拒绝优先于完全授权、工作区隔离优先于白名单、未声明权限放行）；软链接越界用例待补（依赖 SEC-6 未来计划） |
 | SEC-1 / SEC-3 / SEC-4 / SEC-7 / SEC-8 / SEC-10 / SEC-11 / SEC-13 / SEC-14 / SEC-15 | 危险工具声明全覆盖 / 审批持久化 / 出网策略 / 审计 / 项目信任 / 规则定义分离 / 样例校验 / 先读后编辑 / 内容扫描 / 通用动作权限 | 不做 | 见 [security.md](security.md) §1 三条基本判断 |
 | SEC-6 / SEC-12 | 符号链接真实路径 / 可选沙箱后端 | 未来计划 | 真隔离路径；实施前先定平台能力与文案 |
 
@@ -115,7 +115,7 @@
 | UI-4 | 渲染层边界测试 | 已实施 | 模块 `tui_ui_items`（空注册表渲染）+ `boundaries`（渲染层 include 规则） |
 | UI-5 | 输入栏硬件光标（终端不支持时降级） | 已实施 | `tuiHardwareCursorSupported()`（`ui_components.*`）+ 能力段 `terminal.hardware_cursor`（唯一来源）；模块 `ui_capabilities`、`tui_input` |
 | UI-9 | 能力与体验级别声明 | 已实施 | 客户端能力段 JSON 追加 form/layout/terminal 体验字段（`client/include/agentxx-client/io/tui/tui_plugin_adapter.h`）；模块 `ui_capabilities` |
-| UI-6 / UI-8 / UI-10 | Markdown offload / 进度卡 slot / 文案门禁 | 不做 | 现有渲染与测量共用实现足够 |
+| UI-6 / UI-8 / UI-10 | Markdown offload / 进度卡 slot / 文案检查 | 不做 | 现有渲染与测量共用实现足够 |
 | UI-7 | 统一浮层管理器 | 未来计划 | 需要时再引入最小浮层模型 |
 
 ## 10. 协议与服务形态
@@ -124,7 +124,7 @@
 |---|---|---|---|
 | PRO-1 | 消息往返测试 | 已实施 | 模块 `wire_roundtrip`（全消息类型往返 + 幂等 + 未知字段/类型兼容）；`remote_agent` 亦有协议往返段 |
 | PRO-3 | 协议版本与能力握手 | 已实施 | `WireProtocol` 常量 + `WireHello/WireHelloAck` 的版本与能力字段；服务端版本检查（不静默降级）、客户端重连声明与拒绝处理；模块 `wire_roundtrip` / `remote_agent` |
-| PRO-4 | 生成 `wire-schema.json` 与字段文档 | 已实施 | 模块 `wire_schema`（每条消息一个示例 → 生成 `agent/schema/wire-schema.json` + [wire-protocol-fields.md](wire-protocol-fields.md)，逐字节比对做新鲜度门禁，`AGENTXX_UPDATE_WIRE_SCHEMA=1` 一键更新） |
+| PRO-4 | 生成 `wire-schema.json` 与字段文档 | 已实施 | 模块 `wire_schema`（每条消息一个示例 → 生成 `agent/schema/wire-schema.json` + [wire-protocol-fields.md](wire-protocol-fields.md)，逐字节比对做新鲜度校验，`AGENTXX_UPDATE_WIRE_SCHEMA=1` 一键更新） |
 | PRO-5 | 连接阶段与错误分类 | 已实施 | `WireConnectionStage`（unhandshaken/unbound/ready/reconnecting/draining）+ 传输 `stage()/setStage()` + WS 流转 + 端点未握手拒绝业务消息（`InvalidState`）+ `WireErrorCode::MessageNotFound`；模块 `input_delivery`、`remote_agent` |
 | PRO-7 | 会话 ID 校验统一化 | 已实施 | `SessionServerAgentIO::acceptSessionScope`（入口统一校验，不匹配回 `WireError`）；`remote_agent` 的 `session scope validation` 用例 |
 | PRO-8 | stdio JSONL 一次性运行 | 已实施 | `agent/lib/{include/agentxx/agent/io,src/agent/io}/jsonl_io_transport.*`（`JsonlAgentIOTransport` + `jsonlEncodeMessage`/`jsonlDecodeLine`）+ `agent/client/src/io/jsonl/jsonl_mode.cpp`（`agentxx_cli jsonl`）；模块 `jsonl_mode`、`jsonl_runner`；见 [index.md](index.md) §命令行使用 "JSONL 模式" |
@@ -163,21 +163,21 @@
 | OBS-5 | 模块级日志开关 | 已实施 | `utilxx_base/log.h`（`LogEntry::module` + `logModuleOf` + `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`）、宿主插件日志记为 `plugin.<名字>`（`pluginxx/host/tables_impl.h`）、CLI `AGENTXX_LOG_MODULES=前缀=级别,...`；模块 `log_modules`；见 [index.md](index.md) §按模块调日志级别 |
 | RET-1b / RET-2 / RET-3 / RET-4 / RET-5 / OBS-1 / OBS-2 | FTS5 索引 / 标题元数据独立 / 附件校验元数据 / 结构化定位符 / opId / `get_diagnostics` / telemetry 边界 | 不做（RET-2 已并入 STO-12、OBS-2 保留为设计约束） | 逐会话子串扫描够用；share_store 已有行定位提示 |
 
-## 14. 测试与门禁
+## 14. 测试与检查
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | TST-1 | 假 provider（固定流 / 错误 / 延迟 / tool call） | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h` + 模块 `fake_provider`（经 `ModelProviderRegistry::setProvider` 注入） |
 | TST-2 | Wire 往返与 schema 一致性 | 已实施 | 模块 `wire_roundtrip`（往返 + 兼容）+ `wire_schema`（生成物与实现一致性、覆盖度） |
 | TST-3 | 持久化迁移/恢复测试 | 已实施 | 模块 `session_schema`（老库迁移、幂等、高版本拒绝、**迁移中断**：失败不推进版本/数据不丢/修复后续做）；"崩溃未闭合轮次"随 STO-7 不做 |
-| TST-4 | 并发与竞态清单 | 已实施 | 模块 `race_guards`（取消 vs 结算 / 中断应答在途 / 并行乱序提交 / 执行中注销 / 节流 vs 轮末）+ `toolcall_parallel`；插件卸载与 inflight 由 `plugin_runtime`·`plugin_multi_instance` 覆盖 |
+| TST-4 | 并发与竞态清单 | 已实施 | 模块 `race_guards`（取消 vs 结算 / 中断应答进行中 / 并行乱序提交 / 执行中注销 / 节流 vs 轮末）+ `toolcall_parallel`；插件卸载与 inflight 由 `plugin_runtime`·`plugin_multi_instance` 覆盖 |
 | TST-6 | 一致性测试骨架 | 已实施 | 模块 `storage_consistency`（同一份键值语义跑 4 个后端：settings_db / SessionStore.store / share store 内存 / share store 回库） |
-| TST-7 | 边界/导出/清理门禁 | 已实施 | 模块 `boundaries` 13 条规则（依赖方向 / 渲染层 include / 导出白名单配置 / 接口表数量与名称集合 / UI 组件名 / 文档路径 / 客户端模型层 / JSONL 模式 stdout 纪律）+ `agent/script/check_plugin_exports.sh`（二进制导出白名单）；插件注册清理基线见 PLG-1 |
-| TST-8 | CI 一键门禁 | 已实施 | `agent/script/gate.sh`（Linux/macOS: 构建 + 全模块 fail-fast + 导出白名单 + SDK 反例编译 + 可选基准）、`agent/script/gate.ps1`（Windows 等价物） |
+| TST-7 | 边界/导出/清理检查 | 已实施 | 模块 `boundaries` 13 条规则（依赖方向 / 渲染层 include / 导出白名单配置 / 接口表数量与名称集合 / UI 组件名 / 文档路径 / 客户端模型层 / JSONL 模式 stdout 纪律）+ `agent/script/check_plugin_exports.sh`（二进制导出白名单）；插件注册清理基线见 PLG-1 |
+| TST-8 | CI 一键检查 | 已实施 | `agent/script/gate.sh`（Linux/macOS: 构建 + 全模块 fail-fast + 导出白名单 + SDK 反例编译 + 可选基准）、`agent/script/gate.ps1`（Windows 等价物） |
 | TST-9 | 测试隔离、耗时和脱敏 | 已实施 | 独立临时目录 + 每模块耗时/用例数（`test.cpp` 打印 `(N ms)`）+ 启动清凭据环境变量（`clearCredentialEnv`）+ `redactSecret` 脱敏助手（`agentxx-test/test_framework.h`） |
 | TST-10 | 安全负面测试 | 部分实施 | 见 §8 |
 | TST-5 | UI 快照夹具 | 已实施（并入 UI-2） | 见 §9 UI-2 |
-| TST-11 / TST-12 / TST-13 / TST-14 / TST-15 | 产物级 e2e / 覆盖率门禁 / 状态清单 / 守卫有效性用例 / 测试目录分组 | 部分实施 | 本文即 TST-13；TST-14 为 `agent/lib/AGENTS.md` 评审约定；benchmark 已覆盖真实两进程与 PTY |
+| TST-11 / TST-12 / TST-13 / TST-14 / TST-15 | 产物级 e2e / 覆盖率检查 / 状态清单 / 守卫有效性用例 / 测试目录分组 | 部分实施 | 本文即 TST-13；TST-14 为 `agent/lib/AGENTS.md` 评审约定；benchmark 已覆盖真实两进程与 PTY |
 
 ## 15. 未来计划
 
@@ -202,7 +202,7 @@
   `resource/history/compare-agent/work.md`）。
 - 2026-10-06：ARC-6（启动装配快照 + `--dump-config`，含 CFG-3 / PLG-6 / PLG-10 / TOOL-12 诊断）
   与 CFG-1（结构化配置校验）标记为已实施；UI-2 与 TST-5 合并为"UI 快照夹具"并已实施；
-  TST-8 一键门禁脚本（`gate.sh` / `gate.ps1`）已实施。
+  TST-8 一键检查脚本（`gate.sh` / `gate.ps1`）已实施。
 
 - 2026-10-06：ARC-5（分阶段关闭 + `TaskScope`，不等待当前轮次）与 TOOL-16（按规范化路径排队）
   标记为已实施；新增测试模块 `task_scope` / `shutdown_stages`。
@@ -211,7 +211,7 @@
 - 2026-10-07：LLM-5 / TST-1（假 provider 接缝）与 TST-3（迁移中断用例）标记为已实施；
   新增测试夹具 `agentxx-test/core/fake_provider.h` 与测试模块 `fake_provider`。
 - 2026-10-07：PRO-4（Wire 协议字段清单生成物 `agent/schema/wire-schema.json` +
-  [wire-protocol-fields.md](wire-protocol-fields.md)，模块 `wire_schema` 做新鲜度门禁）、
+  [wire-protocol-fields.md](wire-protocol-fields.md)，模块 `wire_schema` 做新鲜度校验）、
   PRO-5（连接阶段 `WireConnectionStage` 与 `MessageNotFound`/`InvalidState` 错误分类）与
   TST-2（schema 与实现一致性）标记为已实施。
 - 2026-10-07：RET-1a / STO-12b（会话检索与改名的协议、端点与 TUI 入口）标记为已实施：
@@ -220,16 +220,16 @@
 - 2026-10-07：LLM-7（单次 provider 调用取消域 `ProviderCallScope`）与 TST-9（每模块耗时打印、
   启动清凭据环境、脱敏助手）标记为已实施。
 - 2026-10-07：PLG-8 部分实施（接口表数量常量 + `boundaries` 规则 8 校验文档数字与文件存在、
-  `plugins.md` §8 澄清通用表查询 IID）与 TST-7 部分实施（边界门禁含接口表数量）。
+  `plugins.md` §8 澄清通用表查询 IID）与 TST-7 部分实施（边界检查含接口表数量）。
 - 2026-10-08：PRO-8（stdio JSONL 一次性运行）标记为已实施：传输
   `JsonlAgentIOTransport`（一行一条 Wire 消息、stdin EOF 只结束输入不关闭输出、非法行回
   `WireError(InvalidArgs)` 不中断会话）+ `agentxx_cli jsonl` 运行模式（读 stdin 行、写 stdout
   协议行、日志走 stderr、EOF 后等轮次跑完自动收尾）；新增测试模块 `jsonl_mode`、`jsonl_runner`。
 - 2026-10-08：LLM-8（Anthropic 缓存断点与缓存用量）标记为已实施：`ModelConfig::cacheControl`
   （yaml `cache_control`，默认关闭）+ `AnthropicProvider::applyCacheBreakpoints`（系统提示 /
-  工具定义 / 最后一条非动态段消息加 `cache_control` 断点）；用量口径折算为
+  工具定义 / 最后一条非动态段消息加 `cache_control` 断点）；用量换算为
   `prompt_tokens = input_tokens + cache_read + cache_creation`，缓存写入量经
-  `provider_common.h` 的补充用量旁路写入账本新列 `usage.cache_write_prompt_tokens`
+  `provider_common.h` 的补充用量经额外字段写入用量记录新列 `usage.cache_write_prompt_tokens`
   （schema v3，模块 `session_schema` 覆盖 v2→v3 迁移）。
 - 2026-10-08：PRO-8 之外的批次收尾（阶段 AD~AH）：
     - LLM-13（HTTP 录制回放夹具）已实施：`test/include/agentxx-test/core/http_recorder.h`
@@ -237,7 +237,7 @@
       并给可读原因）/ `HttpFixture`（JSON 落盘，头白名单 + 凭据只记存在标记 + 正文脱敏）；
       模块 `http_recorder`（81 项）。
     - CFG-9（配置键目录）已实施：`config_keys` 模块（49 个键 × 默认/样例两次真实加载 +
-      `config_loader.cpp` 源码扫描门禁）+ 生成物 `agent/schema/config-keys.json` 与
+      `config_loader.cpp` 源码扫描检查）+ 生成物 `agent/schema/config-keys.json` 与
       [config-keys.md](config-keys.md)（`AGENTXX_UPDATE_CONFIG_KEYS=1` 一键更新），
       生成器骨架与 PRO-4 共用（`test/include/agentxx-test/core/schema_artifact.h`）；
       期间修掉 `config_loader` 的小数截断缺陷（`extra_api_config` 的 `0.7` 被写成 `0`）。

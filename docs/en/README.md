@@ -1,4 +1,5 @@
 # Agentxx
+
 [Github agentxx](https://github.com/coolight7/agentxx)
 
 - **README.md**: [中文 zh-cn](/README.md) | [English en](/docs/en/README.md)
@@ -361,6 +362,8 @@ npm install --legacy-peer-deps
     - [Linux / WSL Executable / Shared Library (.so) / Static Library (.a)](/docs/en/build/linux.md)
     - [Android Shared Library (.so) / Static Library (.a)](/docs/en/build/android.md)
     - [Windows Executable (.exe) / Shared Library (.dll) / Static Library (.lib)](/docs/en/build/windows.md)
+    - macOS: currently documented in Chinese only ([macOS 编译](/docs/zh-cn/build/macos.md))
+- Developer docs: [Development Guide](/docs/en/develop.md) · [Architecture](/docs/en/design/index.md) · [Plugins](/docs/en/design/plugins.md)
 - Generated Library Linking:
     - Shared library: `libagentxx` (Debug adds `d`: `libagentxxd`). Unified multi-platform naming, differing only in extensions (`.so`, `.dll`, `.dylib`).
     - Static library: `libagentxx_static` (Debug adds `d`: `libagentxx_staticd`). Unified naming across platforms (`.a`, `.lib`). Supports static linking of all dependencies to produce standalone executables like `agentxx_cli` (verified on Linux and Windows). You can likewise statically link `libagentxx_static` and its static dependencies into your own application to eliminate dynamic library dependencies.

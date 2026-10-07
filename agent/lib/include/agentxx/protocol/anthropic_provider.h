@@ -67,10 +67,10 @@ public:
     ///
     /// 上游语义与 OpenAI 不同: `input_tokens` **只统计未命中缓存的输入**,
     /// 命中缓存的读取量与写入量分别是 `cache_read_input_tokens` /
-    /// `cache_creation_input_tokens`。这里统一折算成与其他 provider 同口径的
+    /// `cache_creation_input_tokens`。这里统一折算成与其他 provider 一致的
     /// `prompt_tokens` (整段 prompt 的规模), 并把缓存读/写量分别写到
-    /// `usage.cached_prompt_tokens` 与补充用量旁路 (见 provider_common.h 的
-    /// [agentxx::protocol::setUsageDetail]), 供模型调用节点写入用量账本。
+    /// `usage.cached_prompt_tokens` 与补充用量额外通道 (见 provider_common.h 的
+    /// [agentxx::protocol::setUsageDetail]), 供模型调用节点写入用量记录。
     ///
     /// - `args`:
     ///     - [completion] 待填充的补全结果
@@ -295,7 +295,7 @@ public:
             if (msgView.valid() && msgView.is_object()) {
                 auto usageView = msgView["usage"];
                 if (usageView.valid() && usageView.is_object()) {
-                    // 用量口径 (计划 LLM-8): input_tokens 只含未命中缓存的输入,
+                    // 用量计算方式 (计划 LLM-8): input_tokens 只含未命中缓存的输入,
                     // 缓存读/写量单独回报, 统一由 [applyUsage] 折算成 prompt_tokens
                     applyUsage(
                         completion,

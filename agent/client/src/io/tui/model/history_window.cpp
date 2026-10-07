@@ -75,7 +75,7 @@ HistoryWindow::PageOutcome HistoryWindow::applyPage(
 void HistoryWindow::notePrepended(const uint64_t startIndex, const uint64_t prependedCount) {
     // 前插后窗口起点左移到本页起始下标; 条数按实际入列表的条数累加
     // (界面过滤掉空 content 消息时 prependedCount 会小于页内条数, 但绝对下标
-    //  仍以服务端 startIndex 为准 —— 两者口径不同, 不能混算)
+    //  仍以服务端 startIndex 为准 —— 两者下标基准不同, 不能混算)
     if (prependedCount == 0 && startIndex == windowStart_) {
         return;
     }

@@ -189,7 +189,7 @@ asio::awaitable<TestResult>
                 XX_TEST_EXPECT_TRUE(total > 0);
                 XX_TEST_EXPECT_TRUE(j.contains("gpus"));
                 /// 内存已用量必须落在 [0, 总量] 内 (macOS 分支按
-                /// "物理内存 - 可回收页" 计算, 防止页统计口径写反)
+                /// "物理内存 - 可回收页" 计算, 防止页统计方式写反)
                 uint64_t used = j.value("mem_used_mb", uint64_t{0});
                 XX_TEST_EXPECT_TRUE(used <= total);
                 /// GPU 条目字段自检 (各平台逐卡读取; 无 GPU 的机器上数组为空,

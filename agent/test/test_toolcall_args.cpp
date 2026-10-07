@@ -615,7 +615,7 @@ TestResult testToolcallArgs() {
         // key 格式: {toolName}_{arg长度}_{hash}, 以 toolName_ 开头且包含参数长度段
         XX_TEST_EXPECT_TRUE(base.starts_with("tool_a_7_"));
     }
-    // #38 makeRepeatCallKey: 长度相同但内容不同的参数 (降低哈希碰撞误判的验证口径)
+    // #38 makeRepeatCallKey: 长度相同但内容不同的参数 (降低哈希碰撞误判的验证定义)
     {
         const auto k1 = ToolcallWrapNode::makeRepeatCallKey("tool_a", "abcdefgh");
         const auto k2 = ToolcallWrapNode::makeRepeatCallKey("tool_a", "abcdefgi");

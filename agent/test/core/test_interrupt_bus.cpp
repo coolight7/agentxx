@@ -459,7 +459,7 @@ asio::awaitable<void> test_permission_path_query_decisions() {
     // 关键保证: 批量判定全程不发起权限询问 (工具调用级检查才会询问)
     XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
 
-    // 相对路径按会话工作目录解析 (与工具实际访问口径一致)
+    // 相对路径按会话工作目录解析 (与工具实际访问规则一致)
     auto relDecisions = permission->decidePaths(
         {"a.txt", "secret/key.pem", "../outside.txt"},
         Mw::FilesystemPermissionREAD,
@@ -485,7 +485,7 @@ asio::awaitable<void> test_permission_path_query_decisions() {
     }
     XX_TEST_EXPECT_EQ(io->interruptCalls, 0);
 
-    // 工作区隔离: 主检出子树写拒绝, worktree 子树例外 (与工具调用级检查同一口径)
+    // 工作区隔离: 主检出子树写拒绝, worktree 子树例外 (与工具调用级检查一致)
     {
         auto wtPermission
             = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(agentContext);
@@ -1069,7 +1069,7 @@ void test_make_interrupt_result_forms() {
     XX_TEST_EXPECT_TRUE(normalized["values"].is_object());
     XX_TEST_EXPECT_TRUE(normalized["values"].empty());
 
-    // 结果取值 helper: 整体结果对象与纯 values 对象两种口径均可
+    // 结果取值 helper: 整体结果对象与纯 values 对象两种形式均可
     const auto boolTrue = Json{
         {"decision", "true"}
     };

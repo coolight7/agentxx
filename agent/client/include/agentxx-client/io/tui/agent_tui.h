@@ -400,7 +400,7 @@ public:
 
     /// 通用 overlay 打开 (open_overlay 驱动; UI 线程; 单模态 last-wins):
     /// - type: AgentxxOverlayType (0=MERMAID 1=TEXT 2=DIFF 3=CUSTOM)
-    /// - ownerPlugin: 发起插件 (CUSTOM 内按钮与 close 归因用)
+    /// - ownerPlugin: 发起插件 (CUSTOM 内按钮与 close 的来源记录用)
     /// (由 TuiPluginAdapter 在 client io 线程经 postToUi 投递调用)
     void openOverlay(
         int         type,
@@ -837,8 +837,8 @@ private:
     /// 打开 Logs 侧边栏底部 [Menu] 菜单弹窗 (LLM 上下文 / 总结上下文 / 清空日志)
     void openLogsMenu();
 
-    /// 当前通用 overlay 的发起插件 (CUSTOM 内按钮与 close 归因用;
-    /// 单模态 last-wins, 仅记日志/归因, 不做强互斥)
+    /// 当前通用 overlay 的发起插件 (CUSTOM 内按钮与 close 的来源记录用;
+    /// 单模态 last-wins, 仅记日志与来源, 不做强互斥)
     std::string overlayOwnerPlugin_;
 
     static constexpr const char* kLogTabId            = "xx_logs";

@@ -1,6 +1,10 @@
 # Plugin System Development Guide
 
 > Related: [design](index.md) (Core Architecture) · [ffi.md](ffi.md) (FFI) · Source: [agent/plugins/](/agent/plugins/) · C ABI Contracts: [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) / [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) / SDK: [plugin_kit.h](/agent/lib/include/agentxx/plugin/api/plugin_kit.h)
+>
+> Translation status: the Chinese guide (`docs/zh-cn/design/plugins.md`) is the reference;
+> it has 16 sections, including the instance lifecycle / async contract (§15) that this page
+> does not cover yet. Check the Chinese page when a section here looks out of date.
 
 ---
 

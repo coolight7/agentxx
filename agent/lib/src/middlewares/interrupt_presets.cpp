@@ -116,7 +116,7 @@ InterruptUiBlock tableBlock(
     for (const auto& [title, align, width] : columns) {
         TableColumn col;
         col.title = TextValue::of(title);
-        // 对齐口径: 描述层用 start/center/end (旧写法 left/right 在此转换)
+        // 对齐方式: 描述层用 start/center/end (旧写法 left/right 在此转换)
         col.align = align.empty() || align == "left" ? std::string{"start"}
                   : align == "right"                 ? std::string{"end"}
                                                      : align;
@@ -225,7 +225,7 @@ InterruptUiBlock separatorBlock(int indent) {
 }
 
 InterruptUiBlock gapBlock(int lines) {
-    // 中断描述的空行数是终端口径, 换算成描述层的长度 u (一行 ≈ 格高)
+    // 中断描述的空行数按终端行算, 换算成描述层的长度 u (一行 ≈ 格高)
     pluginxx::ui::Item item = pluginxx::ui::build::gap(
         static_cast<double>(std::max(0, lines)) * pluginxx::ui::gen::kDefaultCellHeight
     );

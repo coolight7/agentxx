@@ -191,9 +191,9 @@ public:
     /// 在并行数组头部插入 count 个新条目 —— 既有条目的缓存 Element 与实测
     /// 高度随索引整体平移而保留 (key 对齐校验通过, 不失效重建), 锚点索引同步
     /// 平移: 视口顶行仍指向同一条内容, **零校正**。
-    /// 新增区高度暂记未知 (-1), 由下一次 prepareLayout 以新快照口径补齐粗略
+    /// 新增区高度暂记未知 (-1), 由下一次 prepareLayout 按新快照补齐粗略
     /// 高度 (调用时刻状态快照尚未刷新, 此刻经 quickHeight 读到的是旧快照内容,
-    /// 口径必然错误) —— 新增区位于锚点上方, 只影响滚动条长度。
+    /// 算出的结果必然错误) —— 新增区位于锚点上方, 只影响滚动条长度。
     /// - 应在状态前插完成后、下一帧渲染前调用 (UI 动作队列语义)
     /// - 尚未布局过 (无任何缓存/高度数据) 时仅记录条数 (首屏填充场景无需锚定)
     void notifyPrepended(size_t count);
@@ -332,7 +332,7 @@ private:
     std::list<Entry>                                 lruList_;
     ftxui::Box              box_;
     /// 头部前插区待补高度的前缀长度 (notifyPrepended 设置: 该区间高度为 -1,
-    /// 下一次 syncItemArrays 以新快照口径补齐后归零)
+    /// 下一次 syncItemArrays 按新快照补齐后归零)
     size_t                unknownPrefix_ = 0;
     uint64_t                    frameSeq_          = 0;     // OnRender 递增 (帧边界)
     uint64_t                    lastPreparedFrame_ = ~0ULL; // transientItems_ 所属帧

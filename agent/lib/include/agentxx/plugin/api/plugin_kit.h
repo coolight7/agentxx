@@ -1803,7 +1803,7 @@ inline int32_t unregisterToolPermission(const Ctx& ctx, std::string_view toolNam
  * 这类模式参数, 模式展开后可能触及被拒绝的子目录, 因此工具在枚举出实际路径后
  * 还要逐项查询一次, 只处理已明确允许的路径。
  *
- * 判定三态 (见 PathDecision): 与工具调用权限检查同一口径, 只是"需要询问"的场合
+ * 判定三态 (见 PathDecision): 与工具调用权限检查同一套规则, 只是"需要询问"的场合
  * 返回 Ask 而**不发起任何询问/中断** (本查询纯只读)。
  * 工具侧约定: Deny 丢弃; Ask 表示"未获批准", 同样不应访问 (fail-closed)。
  */
@@ -2662,7 +2662,7 @@ public:
     /// kit 的环境参数 (客户端能力摘要)
     ///
     /// 传给 kit 组件时, kit 会按目标挑选更合适的变体 (例如目标不支持 `Image` 时
-    /// 用文字行); 不传时产出中立描述, 由客户端渲染前的 `adapt` 收口。
+    /// 用文字行); 不传时产出中立描述, 由客户端渲染前的 `adapt` 统一处理。
     /// ```c++
     /// items.push_back(agentxx::ui::kit::listRow({{"title", "切歌次数"}}, kitEnv()));
     /// ```
@@ -3091,7 +3091,7 @@ inline void logClientCreateFailure(
 /// 插件侧的界面命名空间: 插件源码可以书写 `agentxx::ui::...` 拿到界面描述层
 /// (`Item` / `build` / `parse` / `adapt` … 名字与 `pluginxx::ui` 是同一份),
 /// 以及本客户端的扩展 kit `agentxx::ui::kit`(见生成的 `agentxx_ui_kit.g.h`;
-/// 它自包含基础 kit 的全部组件, 并把终端留白口径改成本客户端习惯)。
+/// 它自包含基础 kit 的全部组件, 并把终端留白规则改成本客户端习惯)。
 ///
 /// 注意: `agentxx::ui::kit` 是**扩展 kit**(直接声明), 基础 kit 仍在
 /// `pluginxx::ui::kit`; 扩展 kit 里同名组件的语义与基础 kit 一致, 只是留白更紧。

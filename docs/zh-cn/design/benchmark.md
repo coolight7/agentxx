@@ -65,7 +65,7 @@
 内存基准要求各场景从相同的干净进程基线开始, 同进程连续运行时前一场景的堆 arena/
 页驻留/峰值 RSS 会污染后续场景的 startup 数据 (实测同进程连跑时 `plugin_attrib`
 基线由 12MB 变为 41MB, 峰值 RSS 也会继承前者)。`AGENTXX_BENCH_NO_ISOLATE=1`
-可退回同进程顺序运行 (快速冒烟)。
+可退回同进程顺序运行 (快速验证)。
 
 真实两进程场景的轮次负载可用 `AGENTXX_BENCH_SCALE` (0.01~1.0, 默认 1.0) 缩放,
 报告 note 会标注实际使用的系数与目标 token 数。
@@ -125,7 +125,7 @@ Windows 平台取可获取的部分 (工作集/私有/峰值/句柄数/线程数
   `client.tui.session_list` / `client.tui.append_components` / `client.tui.pending_inputs`
 - `__store.*` (会话库/索引库/全局库的**磁盘**占用, 不计入逻辑合计)
 
-口径: 消息按字段长度求和 + 对象开销 (不调用 `toJson().dump()`, 避免统计本身产生
+统计方式: 消息按字段长度求和 + 对象开销 (不调用 `toJson().dump()`, 避免统计本身产生
 大量临时分配而干扰 RSS 采样)。
 
 ### 2.4 分阶段增量 (`MemPhaseTracker`)
@@ -182,7 +182,7 @@ process_base → agent_constructed → tui_started → agent_init_done
 重复 3 次时提交量稳定在 ±3%, 而专用工作集/工作集随分配器归还时机有 ±20~30% 波动,
 对照数值时应以提交量为主, 见 10.2 与 11 节。)
 
-## 4. 已知口径与限制
+## 4. 已知限制与统计方式
 
 - `mallinfo2` / `malloc_trim` 只能作用于**自身进程**: 子进程场景 (split_*、
   real_tui_child、server_only) 的堆列显示 `n/a`。
@@ -253,7 +253,7 @@ process_base → agent_constructed → tui_started → agent_init_done
    `[heap]` 2.40MB + 各插件库私脏。
 2. **glibc 堆碎片仍然高**: 场景内堆空闲 6.43MB (占该进程堆 57%), `malloc_trim`
    可回收 1.98MB —— 优化方向仍是按大小类缓存/对象池复用长生命周期缓冲、
-   避免反复"增长-释放"造成的 arena 空洞 (第 11 节给出了当前每轮分配次数的归因)。
+   避免反复"增长-释放"造成的 arena 空洞 (第 11 节给出了当前每轮分配次数的来源分析)。
 3. **插件成本可量化**: 5 个常用插件合计 +8.36MB (其中 filesystem 4.12MB /
    websearch 2.12MB 是主要来源), 卸载后可回收 6.44MB; 插件内静态依赖 (curl/正则等)
    与工具 schema 是主要构成, 可按需加载 (lazy load) 降低常驻。
@@ -382,7 +382,7 @@ CPU 与耗时 (真实 server 进程, `split_cli` 场景 235 轮 WebSocket 会话
 同批 `server_only` 235 轮场景方向一致 (user 4600 → 4270 ms, sys 1410 → 580 ms,
 wall 6288 → 4737 ms)。
 
-口径说明与结论:
+统计方式说明与结论:
 
 - mimalloc 侧的 `堆在用` / `堆空闲` / `可回收` 恒为 0 (这些指标读的是
   glibc `mallinfo2`), 内存都在 mimalloc 自己的页管理中; 模块分解里表现为
@@ -413,10 +413,10 @@ wall 6288 → 4737 ms)。
 
 > 本节数据为 **2026-09-26 重新实测**: 主仓 commit `88fee6e0`, neograph `1522761`;
 > 环境: Windows release / VS18 (MSVC) / AMD Ryzen 5 5600G (6C12T) / 52 GB;
-> 负载与采样口径见 §10.5; 原始采样 (每配置的 `*.summary.json` 与
+> 负载与采样说明见 §10.5; 原始采样 (每配置的 `*.summary.json` 与
 > `MIMALLOC_SHOW_STATS` 统计) 存于 `resource/benchmark/2026-09-26_88fee6e0_windows-longctx/`。
 > 与 2026-09-25 上一轮实测 (commit 未记录, neograph 为 `11764c5`, 即依赖重写前) 的差异见第 11 节。
-> **2026-09-28 重测见第 12 节**: 同口径下 mimalloc 提交量 224.4 → 112.6 MB、
+> **2026-09-28 重测见第 12 节**: 同样条件下 mimalloc 提交量 224.4 → 112.6 MB、
 > 系统分配器 24.1 → 17.9 MB (100K 组), 本节的方向性结论不变。
 
 四组对照:
@@ -428,7 +428,7 @@ wall 6288 → 4737 ms)。
 | mimalloc 调参 | 当前代码 + mimalloc + 运行期 `MIMALLOC_PURGE_DELAY=0` + `MIMALLOC_PAGE_COMMIT_ON_DEMAND=1` |
 | no-mimalloc | 当前代码 + `-DAGENTXX_ENABLE_MIMALLOC=OFF` (系统分配器; 与"mimalloc 默认"只差这一个开关) |
 
-口径与负载:
+统计方式与负载:
 
 - 专用工作集 = 任务管理器"内存"列 (`Working Set - Private`); WS = 工作集;
   提交 = 私有字节; 单位 MB
@@ -436,7 +436,7 @@ wall 6288 → 4737 ms)。
   用户消息 ≈ 100K token 上下文, 100 条 ≈ 200K token; 另加"5 条 × 80KB"作为
   "同样上下文、更少轮次"的对照
 - 每轮都要把整段上下文 (含历史) 重新序列化并发给 LLM, 是该负载 CPU 与临时缓冲的主要
-  来源之一 (分配次数的分档归因与 2026-09-26 的更正见第 11 节)
+  来源之一 (分配次数的分档来源分析与 2026-09-26 的更正见第 11 节)
 
 ### 10.1 启动与空闲 (无插件, 2026-09-26 / 88fee6e0 重测)
 
@@ -469,7 +469,7 @@ wall 6288 → 4737 ms)。
 `arenas reserved 1.0 GiB / committed peak 220.3 MiB / current 8.9 MiB`、`purged 211.3 MiB`、
 线程峰值 26、用时 5.376 s (user 0.343 s / sys 0.562 s)、进程峰值 RSS 63.1 MiB /
 峰值提交 224.9 MiB —— "分配-释放-保留"的量级远大于存活数据, 而系统分配器对大块释放
-会直接交还系统。分配次数的逐 bin 归因与根因见第 11 节。
+会直接交还系统。分配次数按 bin 的来源分析与根因见第 11 节。
 
 > 表内同一格是"专用工作集 / WS / 提交"。同一配置重复运行之间, 提交量稳定 (±3%),
 > 专用工作集/WS 随分配器归还时机有 ±20~30% 波动, 表中范围包含全部重复运行
@@ -512,7 +512,7 @@ user −25% / sys −68% (235 轮 WebSocket 长跑), 且 glibc arena 的 mmap/mu
 6. 与 2026-09-25 的上一轮实测 (commit 未记录, neograph 为 `11764c5`) 相比,
    同一负载的数值整体升高 (mimalloc 提交
    69.9 → 224.4 MB, 系统分配器提交 10.36 → 21.0~24.1 MB): 依赖库重写后每轮的
-   分配次数增加了约 1.4 倍, 归因与优化方向见第 11 节
+   分配次数增加了约 1.4 倍, 来源分析与优化方向见第 11 节
 
 ### 10.5 复现方式
 
@@ -532,7 +532,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
   `base_url: http://127.0.0.1:<port>/v1` 且 `plugin.list: []`, 然后用
   `agentxx_cli cli --config <cfg>` 逐条送入固定大小的用户消息 (每条一轮),
   其间按固定间隔采样专用工作集/工作集/提交
-- Windows 专用工作集口径: `Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate`
+- Windows 专用工作集定义: `Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate`
   (任务管理器"内存"列); WS / 提交取 `WorkingSet64` / `PrivateMemorySize64`
 - 本次 (2026-09-26 / 88fee6e0) 使用的驱动: mock 为最小 Python SSE 服务 (立即返回),
   驱动逐条写被测进程的 stdin (每行一条消息 = 一轮), 轮次全部被 mock 服务收到后
@@ -544,11 +544,11 @@ cmake --build agent/build/windows-release --config Release --parallel 6
   另外 mock LLM 支持 `AGENTXX_BENCH_STREAM_CHUNKS` 把回复切成 N 个 SSE 事件,
   用于测量逐事件解析开销 (memory-1 方案 §P3)
 
-## 11. 依赖重写后的重新实测与分配次数归因 (2026-09-26 / 88fee6e0)
+## 11. 依赖重写后的重新实测与分配次数来源分析 (2026-09-26 / 88fee6e0)
 
 2026-09-25 把 neograph 子模块更新为上游重写后的 master + 重写后的 fork 补丁
 (`1522761`, 主仓提交 `88fee6e0`) 之后, 同一负载的每轮分配次数与常驻内存都上升了。
-本节记录重新实测的数据与归因; 针对性的优化设计 (零拷贝读取、就地 append、
+本节记录重新实测的数据与来源分析; 针对性的优化设计 (零拷贝读取、就地 append、
 收敛整段状态序列化) 与验收指标见
 [resource/history/memory-1/plan.md](../../../resource/history/memory-1/plan.md)。
 **2026-09-28 重测 (第 12 节)**: 同一负载的 `malloc req~` 已降到 1.5 GiB (50 × 8KB) /
@@ -575,7 +575,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 | 100 轮 × 8KB (≈200K token) | 9.9 GiB (99 MB/轮) | – | – |
 | 5 轮 × 80KB (≈100K token, 更少轮次) | 364.8 MiB (73 MB/轮) | – | – |
 
-50 轮 × 8KB 组的分 bin 归因 (累计量 / 每轮块数):
+50 轮 × 8KB 组的按 bin 来源分析 (累计量 / 每轮块数):
 
 | 块大小 (bin) | 累计量 | 块数 | 每轮块数 | 备注 |
 |---|---|---|---|---|
@@ -590,7 +590,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 | 6.0 KiB | 47.7 MiB | 8.1K | ≈162 | |
 | 128 B / 32 B | 19.8 / 7.2 MiB | 162.8K / 237.7K | ≈3.3K / ≈4.8K | |
 
-归因 (代码位置, 2026-09-26 复核后更正): 图状态确实每步都在整段序列化, 但**位置与占比与初版归因不同**
+来源分析 (代码位置, 2026-09-26 复核后更正): 图状态确实每步都在整段序列化, 但**位置与占比与初版分析不同**
 agentxx 路径上真正每步执行的是 `neograph/src/core/graph_engine.cpp:1503-1505`
 (VALUES 事件 `state.serialize()`, 而 agentxx 侧 `EventBridge::handleChannelWrite`
 不消费 `__state__`, 载荷作废) 与 coordinator 的 checkpoint
@@ -635,7 +635,7 @@ asio 的帧回收缓存只缓存 ≤1020 字节的块, 所以这些大帧每轮�
 > (94 个 / 164.6 MiB / 最大 6.45 MiB), 上述缓解手段仍然有效; 小工程探针
 > (`resource/benchmark/harness/min_coro_frame/`) 在 LTO / 非 LTO 下都只有 ~2 KiB 的帧,
 > 复现不出来 —— 巨帧需要"全程序 LTO 的大内联面"。
-> 静态口径可用 [`resource/benchmark/harness/scan_coro_frames.py`](../../../resource/benchmark/harness/scan_coro_frames.py)
+> 静态统计可用 [`resource/benchmark/harness/scan_coro_frames.py`](../../../resource/benchmark/harness/scan_coro_frames.py)
 > 复核 (当前 release 基线: 94 个 ≥384 KiB / 最大 6.45 MiB)。
 
 真正随上下文增长的是:
@@ -647,13 +647,13 @@ asio 的帧回收缓存只缓存 ≤1020 字节的块, 所以这些大帧每轮�
 - `384 B` / `128 B` / `32 B` 三档与消息**条数**成正比 (50 × 100 B 与 50 × 8 KB 三档
   块数逐位相同, 5 × 80 KB 只有约 1/3) ⇒ typed 层逐条 `from_json` / `to_json` 的小对象。
 
-> 口径说明 (2026-09-26 复核补充): 上表"每轮块数" = 累计 ÷ 轮数, 含**启动成本**
+> 统计方式说明 (2026-09-26 复核补充): 上表"每轮块数" = 累计 ÷ 轮数, 含**启动成本**
 > (单进程启动自身就有 `malloc req~` 35.9 MiB / `huge` 14 块), 也把"每轮固定量"与
-> "随轮次累积量"混在一起; 改用 N 轮与 N+1 轮相减的差分口径后, 每轮增量为
+> "随轮次累积量"混在一起; 改用 N 轮与 N+1 轮相减的差分方式后, 每轮增量为
 > ≈11 块 `huge` (≈22 MB), 详见
 > [memory-1/plan.md §0.4](../../../resource/history/memory-1/plan.md)。
 
-常驻内存对照 (系统分配器口径, 专用工作集 / WS / 提交, MB):
+常驻内存对照 (按系统分配器统计, 专用工作集 / WS / 提交, MB):
 
 | 组 | 重测 | 上一轮 |
 |---|---|---|
@@ -678,7 +678,7 @@ Linux 侧同批重测 (完整表见第 5 节; 与上一轮对照 RSS, MB):
 结论:
 
 1. **每轮分配次数上升约 2~4 倍**: 小上下文组的固定开销从 5.8 MB/轮 涨到 26 MB/轮;
-   差分口径下这 26 MB/轮 里 ≈22 MB 是 **asio 协程帧** (Windows/MSVC 构建特有:
+   按差分计算, 这 26 MB/轮 里 ≈22 MB 是 **asio 协程帧** (Windows/MSVC 构建特有:
    ≈11 块/轮, 帧尺寸远超实际用量, 见本节前文与
    [memory-1/work.md §3.1](../../../resource/history/memory-1/work.md)),
    其余 ≈4 MB 才是协议/持久化/序列化等每轮固定项 (见 plan.md §0.4);
@@ -730,7 +730,7 @@ Linux 侧同批重测 (完整表见第 5 节; 与上一轮对照 RSS, MB):
 总 CPU −18%; 而 50 × 8KB 组两者接近 (系统 0.80~0.84 s, mimalloc 0.83~0.88 s),
 差值在重复运行的波动量级内。
 
-读法 (与上一批同一口径):
+读法 (与上一批同样的统计方式):
 
 1. **系统分配器下长上下文小幅下降**: 200K 组专用工作集 19.9 → 15.8 MB、提交
    30.8 → 25.8 MB; 100K 组提交中位 22.1 → 17.9 MB; 小上下文与 server 空闲持平;
@@ -772,7 +772,7 @@ server 空闲三者一致 (专用 1.6 MB / 提交 2.9 MB)。
 | 384 B | 59.4 MiB / 162.3K | 21.5 MiB / 58.9K | typed 层逐条小对象 |
 | 128 B / 32 B | 19.8 / 7.2 MiB | 7.2 / 2.1 MiB | 同上 |
 
-结论与归因:
+结论与原因:
 
 1. **16~257 KiB 的整段/请求体缓冲档几乎清零** (−95%~−99%): 与"请求体不再逐层拷贝"
    (主仓 `f59814d6` + cxx_utilxx `6bc7f72`) 和"LLM 上下文不再随图状态整段序列化"
@@ -847,7 +847,7 @@ Windows 上只有 RSS (工作集) / 峰值 / 线程 / 句柄可用, PSS/私脏/�
 ## 13. 巨帧根因与处置: 嵌套协程帧在外层帧里重复 (2026-09-28 / c957b504)
 
 第 11 节把 `huge` 档 (每轮 ≈11 块 × ≈2 MB) 定位为 "asio awaitable 协程帧",
-并归因到 "MSVC + 全程序 LTO 的内联面"; 本节给出**机制**、**处置**与**实测**。
+并归结到 "MSVC + 全程序 LTO 的内联面"; 本节给出**机制**、**处置**与**实测**。
 
 ### 13.1 机制: 外层帧把每个被 `co_await` 的内层协程帧又算了一遍
 
@@ -891,7 +891,7 @@ AgentRunner::run 帧            2,506,528 B
 
 ### 13.2 处置: 在"重"边界上打断内联 (不改编译选项)
 
-| 做法 | 适用 | 本项目落地 |
+| 做法 | 适用 | 本项目用法 |
 |---|---|---|
 | `__declspec(noinline)` 标在**重协程**的声明上 | 自己有源码的协程 | `AgentRunner::run` (agent_runner.h) |
 | **非协程转发函数** (noinline) 包住调用 | 第三方/不能改的协程 | `agent_runner.cpp` 的 `engineRunStreamAsync` / `engineResumeAsync` (转发 neograph 的两个引擎调用) |
@@ -902,7 +902,7 @@ AgentRunner::run 帧            2,506,528 B
 
 ### 13.3 效果 (同一构建目录, 只加上述标记 + 两个转发包装)
 
-静态口径 (release `agentxx_cli.exe`, `scan_coro_frames.py`):
+静态统计方式 (release `agentxx_cli.exe`, `scan_coro_frames.py`):
 
 | 指标 | 处置前 | 处置后 |
 |---|---|---|
@@ -910,7 +910,7 @@ AgentRunner::run 帧            2,506,528 B
 | 1 ~ 4 MiB 的帧 | 41 | **11** |
 | 生产路径 (agent 轮次) 最大帧 | 2.5 MB (`AgentRunner::run` 链) | **< 384 KiB** |
 
-运行时口径 (Windows release, `AGENTXX_ENABLE_MIMALLOC=ON` + `MIMALLOC_LINK=SHARED`,
+运行时统计方式 (Windows release, `AGENTXX_ENABLE_MIMALLOC=ON` + `MIMALLOC_LINK=SHARED`,
 `agentxx_cli cli` + mock LLM, 8 KB/轮):
 
 | 指标 (50×8KB / 100×8KB) | 处置前 | 处置后 |
@@ -918,7 +918,7 @@ AgentRunner::run 帧            2,506,528 B
 | `huge` (≥512 KiB) 累计 / 块数 | 1.1 GiB / 570、2.3 GiB / 1.3K | **131 MiB / 167、433 MiB / 577** |
 | `huge` 峰值 | 28.0 / 29.4 MiB | **3.0 / 4.4 MiB** |
 | `malloc req~` 累计 | 1.5 / 3.7 GiB | 599 MiB / 1.8 GiB |
-| 进程峰值提交 (分配器口径) | 114.5 / 149.5 MiB | **80.6 / 89.1 MiB** |
+| 进程峰值提交 (按分配器统计) | 114.5 / 149.5 MiB | **80.6 / 89.1 MiB** |
 | 稳态提交 | 112.6 / 148.8 MB | **80.6 / 89.1 MB** |
 | 稳态专用工作集 | 36.0 (31.2~47.6) / 59.8 MB | **31.2~32.7 / 42.0 MB** |
 | CPU 合计 (user+kernel) | 0.875 / 1.641 s | 0.78~0.86 / 1.48 s |
@@ -930,12 +930,12 @@ AgentRunner::run 帧            2,506,528 B
 ### 13.4 复现与回归卡口
 
 ```powershell
-# 静态口径: ≥384 KiB 的帧数与最大帧 (无需运行)
+# 静态统计方式: ≥384 KiB 的帧数与最大帧 (无需运行)
 python resource/benchmark/harness/scan_coro_frames.py <agentxx_cli.exe>
 # 归属到函数 (定位"帧尺寸来自哪个函数", 也就是需要打断内联的位置)
 python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
 #   /MAP 需要一次等价重链 (/DEBUG:FULL /MAP, ≈150 s), 做法见 memory-2/work.md §2.1
-# 运行时口径: MIMALLOC_SHOW_STATS=1 看 huge 档累计量/块数 (块数 ÷ 轮数 = 每轮巨帧次数)
+# 运行时统计方式: MIMALLOC_SHOW_STATS=1 看 huge 档累计量/块数 (块数 ÷ 轮数 = 每轮巨帧次数)
 ```
 
 未处置的巨帧 (与生产路径无关, 需要时按 13.2 处理):

@@ -314,7 +314,7 @@ pluginxx::ui::Item makeSelectControl(
     return item;
 }
 
-/// 去掉首尾空白 (用户输入的口径统一)
+/// 去掉首尾空白 (所有用户输入统一处理)
 std::string trimField(std::string_view s) {
     size_t begin = 0;
     size_t end   = s.size();
@@ -339,7 +339,7 @@ ModelConfigOverlay::ModelConfigOverlay(TUICtx& ctx) :
         const auto& theme = *ctx_.theme;
         agentxx::client::UiRenderCtx rc;
         rc.theme = &theme;
-        // 内容宽度取滚动容器上一帧的测量值 (口径与 CustomOverlay 一致):
+        // 内容宽度取滚动容器上一帧的测量值 (与 CustomOverlay 一致):
         // 首帧未知时按终端宽度估算
         {
             const int measured = scrollable_ ? scrollable_->contentWidth() : -1;
@@ -785,7 +785,7 @@ std::expected<agentxx::agent::ModelConfig, std::string>
     mc.baseUrl   = textOf(kBaseUrlId);
     mc.apiPath   = textOf(kApiPathId);
     mc.apiKey    = textOf(kApiKeyId);
-    // 无鉴权服务的 Key 留空: 按 EMPTY 归一 (与写盘口径一致)
+    // 无鉴权服务的 Key 留空: 按 EMPTY 归一 (与写盘时一致)
     if (mc.apiKey.empty()) {
         mc.apiKey = "EMPTY";
     }

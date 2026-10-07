@@ -711,7 +711,7 @@ void benchResourceRealTui() {
     // TUI 触发同步 (尾窗 100) + 分页拉取更早历史; 该窗口内的帧统计即"新内容首次渲染"成本
     // 历史同步 + 分页拉取 (模拟用户滚动查看更早历史):
     // - 服务端仅同步末尾 initialSyncTailCount 条; 更早历史由客户端按
-    //   historyWindowStart 逐页拉取 (benchmark 此处复刻 TUI 的 requestOlderHistory 口径)
+    //   historyWindowStart 逐页拉取 (benchmark 此处复刻 TUI 里 requestOlderHistory 的做法)
     auto syncAndPullHistory = [&](int pages) {
         tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "", "en"});
         std::this_thread::sleep_for(std::chrono::milliseconds(150));

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# gate.sh —— 一键质量门禁 (计划 TST-8)
+# gate.sh —— 一键质量检查 (计划 TST-8)
 #
 # 在干净环境跑一条命令即可完成本轮改动要求的检查:
-#   1. 构建 (可选, --build): 只构建门禁需要的目标 (agentxx_test / 插件)
+#   1. 构建 (可选, --build): 只构建检查需要的目标 (agentxx_test / 插件)
 #   2. 单元测试: 全模块 fail-fast (含边界、协议往返、配置校验、UI 快照、装配快照)
 #   3. 源码/构建配置边界: `boundaries` 模块 (随上面一起跑)
 #   4. 插件导出符号白名单: check_plugin_exports.sh (Linux/macOS, 需 nm)
@@ -10,10 +10,10 @@
 #   6. 基准阈值 (可选, --bench): 跑 agentxx_benchmark, 仅报告不做阈值判定
 #
 # sanitizer: 本项目的 Debug 构建默认带 ASan + UBSan (AGENTXX_ENABLE_SANITIZER=ON),
-# 因此"跑 Debug 测试"本身即 sanitizer 门禁; 传 --release 时跳过该结论说明。
+# 因此"跑 Debug 测试"本身即 sanitizer 检查; 传 --release 时跳过该结论说明。
 #
 # 用法:
-#   agent/script/gate.sh                 # 用已有构建产物跑门禁
+#   agent/script/gate.sh                 # 用已有构建产物跑检查
 #   agent/script/gate.sh --build         # 先构建再跑 (Debug)
 #   agent/script/gate.sh --build --bench # 附带基准
 #   agent/script/gate.sh --build-dir agent/build/linux-debug

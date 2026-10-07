@@ -1,4 +1,5 @@
 # TUI 实现与架构 (FTXUI)
+
 > 相关文档: [index.md](index.md) (整体设计) · [plugins.md](plugins.md) (插件系统, 含插件 UI 扩展)
 
 本文整理 client 端 TUI 的实现与分层: 先说明 FTXUI 的机制 (事件/渲染/坐标/命中),
@@ -302,7 +303,7 @@ struct UiActionItem {
 - 中断表单 (`InterruptView`) 与插件表单共用同一实现 (`ui_components` 的控件渲染 +
   `UiFormState` + 点击/键盘/校验/取值函数), 差别只有结果去处 (中断经结果通道回传
   `{"values":{...}}`)。中断侧的命中区域记录 "行元素框 + 行内区域" (控件所在行由
-  `ui_components` 登记区域, `InterruptView` 按块归因), 与其它接入点的两级判定一致。
+  `ui_components` 登记区域, `InterruptView` 按块记录归属), 与其它接入点的两级判定一致。
 - **定时器与快捷键**: 插件不能自己起线程/定时器, 需要"按时间刷新"或"响应按键"时经
   `agentxx.client.timer` / `agentxx.client.keybind` 两张表注册 (回调都在 client io
   线程执行, 插件代码永不进 UI 线程):
@@ -496,7 +497,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 
 | 模型 | 文件 | 负责 |
 |------|------|------|
-| `HistoryWindow` | [model/history_window.h](/agent/client/include/agentxx-client/io/tui/model/history_window.h) | 展示历史的已加载区间 `[windowStart, +loadedCount)`, "上方是否还有更早历史", 分页请求的去重与在途标记; 页响应判定 (接受 / 空页 / 迟到会话 / 不连续页); 断线增量补拉的尾部**序号连续性** (首个/连续/断号/重复) |
+| `HistoryWindow` | [model/history_window.h](/agent/client/include/agentxx-client/io/tui/model/history_window.h) | 展示历史的已加载区间 `[windowStart, +loadedCount)`, "上方是否还有更早历史", 分页请求的去重与进行中标记; 页响应判定 (接受 / 空页 / 迟到会话 / 不连续页); 断线增量补拉的尾部**序号连续性** (首个/连续/断号/重复) |
 | `MessageQueueMirror` | [model/queue_mirror.h](/agent/client/include/agentxx-client/io/tui/model/queue_mirror.h) | 服务端排队输入的镜像 (整体快照 = 唯一权威), 按 id 删除/查找, 队列状态 (idle/running/paused/draining, 未知文本按 idle), **投递回执记账** (同一 requestId 只记一次, 容量上限按最旧淘汰) |
 
 两者都是**可拷贝的值类型**, 随渲染快照 (`TUIRenderState`) 一起复制, 因此 UI 线程读到的
@@ -570,7 +571,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   两者都做, 否则表现为"能复制但拖动时没有反色高亮"。`Select` 只在选择非空时被调用,
   所以高亮状态由 `ComputeRequirement` 复位; 懒构建列表跳过每帧 `ComputeRequirement`,
   拖选松开复制完成后须显式调 `resetSelectionHighlight()` 清掉残留反色。
-  自绘节点的列有两套口径: 字形位置是**行内列** (相对自身盒左缘, 从 0 起算),
+  自绘节点的列有两种含义: 字形位置是**行内列** (相对自身盒左缘, 从 0 起算),
   而 `Selection` 给的是**屏幕列**; 取文本与画高亮都要先换算成屏幕列
   (`盒左缘 + 行内列`, 见 `FlowText::Render`/`FlowText::Select` 的 `cellX`)。
   两者混用不会报错, 只会让复制结果每行开头少掉"盒左缘列数"个字符
@@ -618,7 +619,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   - 列区间取文本与高亮都按屏幕列判定 (行内列 + 盒左缘), 每行的选中列区间由
     `Selection::RowRange` 给出 (见 3.2); 列表项内容节点另记悬挂缩进列数
     (`setHangIndent`), 续行左端的空白列按空白格取出并补画高亮
-  - 迭代布局与 `ftxui::flexbox` 同口径 (`asked_` + `need_iteration`), 上报高度
+  - 迭代布局与 `ftxui::flexbox` 同一套做法 (`asked_` + `need_iteration`), 上报高度
     即该盒宽下的实测高度
 - **自绘代码块** (`markdown::FlowCodeBlock`): 语言标签行 + 上下内边距 + 按盒宽
   折行的代码行 (一个节点); 背景/文字色仍由外层 `theme.code_block` 装饰器铺满。
@@ -658,7 +659,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   **不在事件里构建元素**: 构建会登记命中区 (decor 按钮/中断控件), 而每帧 `OnRender`
   会清空登记表, 事件期构建的元素其命中区会丢 (同一元素不再重建) -> 按钮点击失效。
 - **前插 (历史分页)**: `notifyPrepended` 把并行数组与锚点索引一起平移, 视口内容零
-  跳变, 不需要任何"偏移校正"状态; 新增区高度在下一帧按新快照口径补齐 (位于锚点上方,
+  跳变, 不需要任何"偏移校正"状态; 新增区高度在下一帧按新快照补齐 (位于锚点上方,
   只影响滚动条长度)。
 - **内容收缩后回夹到底部窗口**: 内容变短 (典型: 展开的长消息被折叠) 后可能出现
   "从视口顶行到内容末尾不足一屏" —— 屏幕下半全是空白。定位阶段发现该情形时按尾部
@@ -683,7 +684,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   (`setElementBudget`, 默认 16 块 / 256KB 源字节): 超预算按最久未上屏释放
   element+builder (源码文本保留, 需要时按块重建), 渲染树内存与流长解耦。
 - 每帧只查一次终端尺寸 (`ctx_.terminalSize()`), 不直接调用 `ftxui::Terminal::Size()`
-  (Linux 上是 `ioctl` 系统调用), 同时保证同帧内布局口径一致。
+  (Linux 上是 `ioctl` 系统调用), 同时保证同帧内布局方式一致。
 
 ### 3.4 文案与样式
 
@@ -694,7 +695,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 
 ---
 
-## 4. 本次整理修复的问题 (回归测试见 `agentxx_test tui_widget`)
+## 4. 曾出现的交互问题与现在的做法 (回归测试见 `agentxx_test tui_widget`)
 
 | 问题 | 位置 | 处理 |
 |------|------|------|

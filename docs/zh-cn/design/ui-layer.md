@@ -24,7 +24,7 @@
 |---|---|---|
 | 描述层（库） | `agent/third_party/cxx_pluginxx_ui`（submodule） | 模型 / 解析 / 适配 / 纯文本降级 / 构建器 / kit / 能力段 |
 | 插件 SDK | `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | 领域 helper + `agentxx::ui`（描述层）+ `agentxx::ui::kit`（扩展 kit）+ 提交入口 |
-| 扩展 kit（生成物） | `agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h`、`agent/js/agentxx_ui_kit.js` | agentxx 的留白口径与常用组合（定义在 `agent/schema/agentxx-ui-kit.def.json`） |
+| 扩展 kit（生成物） | `agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h`、`agent/js/agentxx_ui_kit.js` | agentxx 的留白规则与常用组合（定义在 `agent/schema/agentxx-ui-kit.def.json`） |
 | TUI 渲染 | `agent/client/{include,src}/agentxx-client/io/tui/ui_components.*` | 消费**适配后**的模型；`measureItem` 与渲染同源 |
 | 中断桥接 | `agent/lib/include/agentxx/middlewares/interrupt_ui.h` | 中断描述块 ↔ 组件项（域内词汇与描述层词汇的映射） |
 | 能力上报 | `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` | `uiCapabilitiesJson()` → 客户端状态快照 `ui` 段 |
@@ -109,13 +109,13 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 | kit | 命名空间 | 内容 |
 |---|---|---|
 | 基础 kit（库） | `pluginxx::ui::kit` | `title` / `hint` / `text` / `badge` / `icon` / `gap` / `divider` / `button` / `actionsRow` / `card` / `listRow` / `section` / `kv` / `table` / `tree` / `sparkline` / `progressRow` + `cols` / `rows` |
-| 扩展 kit（本项目） | `agentxx::ui::kit` | 上面全部 + agentxx 口径的覆盖与常用组合：`card` / `listRow`（终端留白更紧）、`progressRow`（默认按百分比）、`toolCallRow`、`thinkingBlock`、`sessionStats`、`pathDiffRow`、`diagramBlock`、`interruptRow` |
+| 扩展 kit（本项目） | `agentxx::ui::kit` | 上面全部 + agentxx 风格的覆盖与常用组合：`card` / `listRow`（终端留白更紧）、`progressRow`（默认按百分比）、`toolCallRow`、`thinkingBlock`、`sessionStats`、`pathDiffRow`、`diagramBlock`、`interruptRow` |
 
 - 插件写 `agentxx::ui::Item` / `agentxx::ui::build::button` / `agentxx::ui::kit::toolCallRow`
   （`agentxx::ui` 与 `pluginxx::ui` 是同一批名字，扩展 kit 在 `agentxx::ui::kit`）；
 - kit 只装配、不含逻辑；参数用 `utilxx_base::Json` 对象传，键即参数名；
 - 传 `env`（能力摘要）时 kit 会挑更合适的变体（例如目标不支持 `Diff` 时
-  `pathDiffRow` 退化成等宽文本）；不传就是中立描述，由客户端 `adapt` 收口；
+  `pathDiffRow` 退化成等宽文本）；不传就是中立描述，由客户端 `adapt` 统一处理；
 - 组件说明见生成的 `docs/zh-cn/design/agentxx-ui-kit.md`；
 - 改 kit：改 `agent/schema/agentxx-ui-kit.def.json` → 跑 `pwsh -NoProfile -File agent/script/gen_ui_kit.ps1`
   → 生成物一起提交（`agentxx_ui_kit.g.h` / `agentxx_ui_kit.js` / 生成的文档）；
@@ -218,7 +218,7 @@ auto renderable = pluginxx::ui::adaptDocument(doc, guiCapabilities(), &adaptRepo
 一处内容、三处发布（不要各写一份）：
 
 1. 客户端状态快照 `get_client_state()` 的 `ui` 段（`PluginUiAdapter::uiCapabilitiesJson()`）；
-2. 与 TUI 相同口径的粗粒度能力名（`agentxx.client.components` 等）；
+2. 与 TUI 相同的粗粒度能力名（`agentxx.client.components` 等）；
 3. 客户端自己的调试/诊断界面（用于回答"插件为什么没给我某个组件"）。
 
 ### 11.4 动作与控件通道
@@ -234,8 +234,8 @@ auto renderable = pluginxx::ui::adaptDocument(doc, guiCapabilities(), &adaptRepo
 | 直接复用 | 说明 |
 |---|---|
 | `cxx_pluginxx_ui`（C++/Dart/JS 绑定） | 模型、解析、适配、纯文本、构建器、基础 kit |
-| `agentxx::ui::kit`（本项目扩展 kit） | agentxx 口径的留白与常用组合 |
-| 中断桥接 `interrupt_ui.h` / `interrupt_presets.h` | 中断描述与组件项互转、预设模板（域内词汇在这一层收口） |
+| `agentxx::ui::kit`（本项目扩展 kit） | agentxx 风格的留白与常用组合 |
+| 中断桥接 `interrupt_ui.h` / `interrupt_presets.h` | 中断描述与组件项互转、预设模板（域内词汇集中在这一层） |
 | 能力段与上报通道 | `uiCapabilitiesJson()` + 粗粒度能力名 |
 | 测试夹具 | 库 `fixtures/*.json`（解析/适配/纯文本），可直接拿来跑新渲染器的回归 |
 
