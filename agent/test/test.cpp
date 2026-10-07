@@ -24,6 +24,7 @@
 #include "agentxx-test/core/test_json.h"
 #include "agentxx-test/core/test_json_reflection.h"
 #include "agentxx-test/core/test_json_view.h"
+#include "agentxx-test/core/test_jsonl_mode.h"
 #include "agentxx-test/core/test_llm_error.h"
 #include "agentxx-test/core/test_math_tools.h"
 #include "agentxx-test/core/test_mcp.h"
@@ -91,6 +92,7 @@
 #include "agentxx-test/client/test_banner_art.h"
 #include "agentxx-test/client/test_config_loader.h"
 #include "agentxx-test/client/test_ftxui_text.h"
+#include "agentxx-test/client/test_jsonl_runner.h"
 #include "agentxx-test/client/test_markdown_block.h"
 #include "agentxx-test/client/test_markdown_flow.h"
 #include "agentxx-test/client/test_mermaid_state.h"
@@ -305,6 +307,7 @@ int main(int argn, char** argv) {
         runSync("tui_widget", agentxx::test::testTuiWidget);
         runSync("ui_snapshot", agentxx::test::testUiSnapshots);
         runSync("tui_model", agentxx::test::testTuiModels);
+        runSync("jsonl_runner", agentxx::test::testJsonlRunner);
         runSync("ui_capabilities", agentxx::test::testUiCapabilities);
         runSync("sessionId", agentxx::test::testSessionId);
         runSync("mermaid_state", agentxx::test::testMermaidState);
@@ -488,6 +491,7 @@ int main(int argn, char** argv) {
                 co_await run("agent", agentxx::test::run_agent_tests);
                 co_await run("usage_ledger", agentxx::test::test_usage_ledger);
     co_await run("toolcall_parallel", agentxx::test::run_toolcall_parallel_tests);
+                co_await run("jsonl_mode", agentxx::test::run_jsonl_mode_tests);
                 co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 
                 ioCtx.stop();

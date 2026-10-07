@@ -72,6 +72,7 @@
 | OBS-4 | 诊断包导出 | P2 | 完成（已构建 + 测试通过） | `include/agentxx/util/diagnostics.h`、CLI `--dump-diagnostics`（含 STO-13 的导出需求） |
 | STO-13 | 会话导出与取证包 | P2 | 完成（并入 OBS-4：会话摘要段 + 可选消息正文） | `diagnostics.cpp` 的 session 段 |
 | OBS-5 | 模块级日志开关 | P2 | 未实施（见阶段 AC 的差异说明：utilxx_base 的 `LogEntry` 不带模块名，按模块过滤需要改日志库的信道格式） | — |
+| PRO-8 | stdio JSONL 一次性运行（复用 Wire 结构 + JSONL 分帧） | P1 | 完成（已构建 + 测试通过 + 真实进程手工验证） | `lib/.../io/jsonl_io_transport.{h,cpp}`、`client/src/io/jsonl/jsonl_mode.cpp`；模块 `jsonl_mode`、`jsonl_runner` |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -1839,6 +1840,8 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   （新增模块 `tui_model` 134 项、`boundaries` 12 项）。
 - 阶段 AC（OBS-3 / OBS-4 / STO-13）完成后提交：
   `关键指标与诊断包导出 (OBS-3/OBS-4/STO-13)`（新增模块 `observability` 96 项）。
+- 阶段 AD（PRO-8）完成后提交：
+  `JSONL stdio 一次性运行模式 (PRO-8)`（新增模块 `jsonl_mode` 65 项、`jsonl_runner` 16 项）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
@@ -1872,3 +1875,81 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `plugin_multi_instance` 用例覆盖（真实插件查询每一张表并断言版本与结构尺寸）。
 
 
+
+## 阶段 AD：JSONL stdio 一次性运行模式（PRO-8，2026-10-08）
+
+计划依据：`plan.md` §11 PRO-8（"复用 Wire 结构和语义，只增加 JSONL 分帧；stdout 只输出协议
+记录，诊断到 stderr，响应不等于轮次完成"）、§16.2 批次 E。
+
+已完成：
+
+- **传输层**（新增 `agent/lib/include/agentxx/agent/io/jsonl_io_transport.h` +
+  `agent/lib/src/agent/io/jsonl_io_transport.cpp`）：
+  - `JsonlAgentIOTransport`（`AgentIOTransportBase` 实现）: 一行一条 Wire 消息;
+    写 = `serialize` + 换行 (与 WS 传输同一份报文编码, 只换分帧方式), 写后立即 flush,
+    写操作加锁 (可从任意线程发送); 读 = 默认用后台线程阻塞 `std::getline(stdin)` 后投递到
+    asio 通道 (`recv()` 在 io 线程异步等待), 与 client 侧 `StdinReader` 同一做法,
+    线程只持有共享状态 (通道 + 停止标记), 不持有传输对象 (析构后不会访问已释放对象);
+    Windows 下 stdin/stdout 切二进制模式, 避免 CRLF 转换破坏分帧;
+  - **输入结束与关闭分开**: stdin EOF 只置"输入结束"(`inputEnded()`), `recv()` 返回
+    nullopt 让端点接收循环退出, 但 `send()` 继续写 —— 对端关掉写入端不等于不想读结果
+    (否则 EOF 之后的 `turn_result` 会被丢弃);
+  - 非法行不中断会话: 回一条 `WireError(InvalidArgs)` 后继续读下一行 (空行跳过);
+    单行长度上限 64 MiB (附件 Base64 内联仍够用, 畸形输入不占无限内存);
+  - 起始连接阶段 `Unhandshaken`, 握手后由端点推进到 `Ready` (复用 PRO-5 的阶段校验);
+  - 单行编解码 `jsonlEncodeMessage` / `jsonlDecodeLine` (纯函数, 区分"不是 JSON 对象"
+    /"缺 type"/"类型不认识"三类错误提示); 另提供 `stats()` (读入/写出/非法行计数)。
+- **运行模式**（新增 `agent/client/include/agentxx-client/io/jsonl/jsonl_mode.h` +
+  `agent/client/src/io/jsonl/jsonl_mode.cpp`,`agentxx_cli jsonl`）：
+  - 与 `server` 模式共用同一套会话驱动实现: 接收循环 → `init()` → 端点 `run()` →
+    轮次 → 结果; 装配顺序与进程内 TUI/CLI 模式一致 (接收循环先于 `init` 启动,
+    子代理宿主 `AgentHost::attachRoot` 一并挂载);
+  - **一次性运行收尾**: 输入结束 (或 SIGINT/SIGTERM) 后等待当前轮次与排队输入跑完
+    (EOF 上限 300 秒, 信号上限 5 秒), 然后停端点 → 关插件刷盘 → 关传输 → 停 io_context;
+    超时按"未跑完"记警告收尾 (不假装成功);
+  - 断线宽限期取长值 (1 小时): 一次性运行没有"多客户端重连", 默认 30 秒会把长轮次当断线取消;
+  - `--session-id <id>` 可选参数 (默认自动生成, 对端从 `hello_ack.sessionId` 读回;
+    空 `sessionId` 的请求按"当前绑定会话"处理, 因此脚本也可以完全不关心该 id);
+  - 行读写注入点 `LineIo` (默认 stdin/stdout, 测试注入内存缓冲) —— 运行器本身不写 stdout,
+    stdout 只有传输写出的协议行, 日志走日志系统 (默认 stderr)。
+
+测试：
+
+- 新模块 `jsonl_mode`（65 项断言, `agent/test/core/test_jsonl_mode.cpp`）：
+  ① 分帧编解码: 编码恰好一行 (`'\n'` 结尾、内部无裸换行)、`\r\n` 与前后空白容错、空行跳过、
+  非法 JSON / 根节点非对象 / 缺 `type` / 未知类型 / 超长行各自的错误文本;
+  ② 传输与真实 agent 联调 (本地 LLM 模拟器 + 会话端点 + JSONL 传输, 注入内存行缓冲):
+  首条输出必为 `hello_ack` (带会话 id 与能力声明)、第一条输入的 `input_ack` 状态为
+  `started` **且此刻 `turn_result` 尚未出现** (响应 ≠ 轮次完成)、两条输入各跑完一轮、
+  第二条输入在轮次进行中到达走 `queued`、非法行回 `WireError(InvalidArgs)` 且会话继续可用
+  (第二轮照常受理与执行)、输出行全部可解析 (stdout 只有协议行)、读入/非法行计数;
+  ③ 未握手阶段只接受 `hello` (握手前的业务消息 → `InvalidState`, 且拒绝排在受理回执之前,
+  握手后阶段推进到 `ready`)。
+- 新模块 `jsonl_runner`（16 项断言, `agent/test/client/test_jsonl_runner.cpp`）：
+  端到端跑 `runJsonlStdio`（内存 IO）—— 输入只剩 EOF 时仍写出 `turn_result` 并自动收尾返回,
+  输出顺序为 `hello_ack` → `input_ack` → deltas → `turn_result`, 模型正文出现在流式增量里,
+  会话上下文里有该轮输入; 完全无输入时立即收尾返回、不空转。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0，无新增 error。
+- 测试：`jsonl_mode` 65/0、`jsonl_runner` 16/0（合计 81 项断言）。
+- 真实进程手工验证 (`agentxx_cli jsonl` + 重定向 stdin/stdout/stderr, 假模型端点):
+  - hello (不带 sessionId) → `hello_ack` (自动生成会话 id); 空 `sessionId` 的 `user_input`
+    被受理 (`started`); 随后 delta (turn_start / node_start / node_end / message_tip)、
+    `context_stats`、`turn_result` (模型连不上 → `hasError=true`, 错误文本在协议里);
+  - 24 行 stdout 全部是可解析的协议行, 日志与关停阶段信息全在 stderr (4 个阶段 + 刷盘);
+  - 写错 `sessionId` 时按 PRO-7 规则回 `session_mismatch` (错误对象) + `input_ack`
+    `rejected`, 非法行走 JSONL 分帧错误对象, 进程照常收尾退出 (exit=0)。
+
+注意事项 / 与计划的差异：
+
+- 计划写"stdout 只输出协议记录，诊断到 stderr": 实现上没有另建诊断通道 —— 传输只写
+  stdout, 其余全部走日志系统 (宿主默认 sink 即 stderr), `agentxx_cli jsonl` 不移除该 sink。
+- 计划写"响应不等于轮次完成": 该语义由协议本身承载 (`input_ack` 只报受理状态),
+  本轮把它写进 `index.md` 的 JSONL 模式一节与 `jsonl_mode.h` 说明, 并有用例断言
+  "回执已到、轮次结果未到"。
+- 未做 `jsonl` 模式下的多轮交互服务形态: 输入结束即收尾 (一次性运行);
+  需要常驻多客户端时用 `server` 模式 (同一套协议, WS 传输)。
+- 会话 id 绑定沿用端点的既有语义 (开机绑定 + 空 id = 当前会话), 未新增"由对端指定会话 id"
+  的消息 (那属于 `switch_session` 的既有能力, 一次性运行不需要)。

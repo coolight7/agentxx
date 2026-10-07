@@ -631,6 +631,46 @@ void checkModelLayerIncludes(const fs::path& root, Violations& v) {
     }
 }
 
+/// 规则 13: JSONL 一次性运行模式的 stdout 纪律 (计划 PRO-8)
+///
+/// 背景: `agentxx_cli jsonl` 的 stdout 就是对外协议 (每行一条 Wire 消息), 外部脚本按行
+/// 解析。运行器里若混进直接打印 (调试输出/进度提示), stdout 会被污染, 脚本解析随之失败。
+/// 因此本规则要求:
+///   - `client/src/io/jsonl/jsonl_mode.cpp` 存在 (搬移/改名后必须同步本规则);
+///   - 该文件里不出现直接写 stdout / stderr 的调用 (协议行由传输层写, 诊断走 XX_LOG*)
+void checkJsonlModeStdoutDiscipline(const fs::path& root, Violations& v) {
+    const auto      file = root / "client" / "src" / "io" / "jsonl" / "jsonl_mode.cpp";
+    std::error_code ec;
+    if (!fs::is_regular_file(file, ec)) {
+        v.push_back(
+            toGeneric(file.lexically_relative(root))
+            + ": JSONL 运行模式实现缺失 (搬移后需同步更新本规则)"
+        );
+        return;
+    }
+    const auto text = readTextFile(file);
+    if (text.empty()) {
+        v.push_back(toGeneric(file.lexically_relative(root)) + ": 无法读取内容");
+        return;
+    }
+    static const std::string_view kForbidden[] = {
+        "std::cout",
+        "std::cerr",
+        "printf(",
+        "fputs(",
+        "putchar(",
+    };
+    const auto where = toGeneric(file.lexically_relative(root));
+    for (const auto& bad : kForbidden) {
+        if (text.find(bad) != std::string::npos) {
+            v.push_back(
+                where + ": 出现 `" + std::string{bad}
+                + "` (stdout 只允许由 JsonlAgentIOTransport 写协议行, 诊断走 XX_LOG*)"
+            );
+        }
+    }
+}
+
 } // namespace
 
 /// 规则 8: 接口表数量与文档一致 (计划 PLG-8 / TST-7)
@@ -742,6 +782,9 @@ TestResult testBoundaries() {
     Violations modelViolations;
     checkModelLayerIncludes(root, modelViolations);
 
+    Violations jsonlViolations;
+    checkJsonlModeStdoutDiscipline(root, jsonlViolations);
+
     // 扫描量下限: 防止目录改名/收集逻辑失效导致"零文件全通过"的假通过
     // (数值留出余量, 目录增删几十个文件不应触发失败)
     XX_TEST_EXPECT_GE(scannedClient, size_t{40});
@@ -757,6 +800,7 @@ TestResult testBoundaries() {
     reportViolations("UI 组件名", uiBlockViolations);
     reportViolations("文档路径", docPathViolations);
     reportViolations("客户端模型层边界", modelViolations);
+    reportViolations("JSONL 模式 stdout 纪律", jsonlViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

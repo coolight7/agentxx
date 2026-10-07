@@ -1,4 +1,5 @@
 #include "agentxx-client/config_loader.h"
+#include "agentxx-client/io/jsonl/jsonl_mode.h"
 #include "agentxx-client/io/stdio/agent_stdio.h"
 #include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
@@ -569,6 +570,7 @@ int main(int argn, char** argv) {
     std::string agentUrl;
     std::string agentToken;
     std::string remoteModel;
+    std::string jsonlSessionId; ///< jsonl 模式使用的会话 id (空 = 自动生成)
     std::string srvHost = "127.0.0.1";
     uint16_t    srvPort = 7007;
     for (int i = 1; i < argn; ++i) {
@@ -584,6 +586,7 @@ Modes:
     tui                  TUI 交互模式 (默认)
     cli                  命令行 stdio 交互模式
     server               启动 WebSocket agent 服务
+    jsonl                stdin/stdout 逐行 JSON (Wire 协议) 一次性运行模式
     acp                  ACP stdio 服务模式
     train                训练模式
 
@@ -597,6 +600,7 @@ Options:
     --model <model>      远程模型名称
     --host <host>        服务监听地址 (默认: 127.0.0.1)
     --port <port>        服务监听端口 (默认: 7007)
+    --session-id <id>    jsonl 模式使用的会话 id (默认自动生成, 见 hello_ack)
     --dump-config        打印生效装配快照 (配置 + 模型/中间件/工具/插件/图/持久化) 后退出
     --dump-diagnostics   打印诊断包 (环境/关键指标/装配/会话摘要/日志尾部, 已脱敏) 后退出
 )_");
@@ -617,6 +621,9 @@ Options:
         } else if (arg == "--model" && i + 1 < argn) {
             ++i;
             remoteModel = argv[i];
+        } else if (arg == "--session-id" && i + 1 < argn) {
+            ++i;
+            jsonlSessionId = argv[i];
         } else if (arg == "--host" && i + 1 < argn) {
             ++i;
             srvHost = argv[i];
@@ -634,7 +641,7 @@ Options:
                 return 1;
             }
         } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
-                   || arg == "train") {
+                   || arg == "train" || arg == "jsonl") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -930,6 +937,32 @@ Options:
     // - 警告照常启动 (内存降级、会被夹取的取值、白黑名单重复等)
     if (!validateStartupConfig(config, configPath)) {
         return 1;
+    }
+
+    // ======================== JSONL stdio 一次性运行模式 (计划 PRO-8) ========================
+    // 与 server 模式同一套 Wire 协议与同一份会话驱动实现, 传输换成 stdin/stdout 逐行 JSON:
+    // - stdout 只写协议行 (可被外部脚本逐行解析), 日志与诊断走 stderr
+    // - 对端从 hello_ack 的 sessionId 读回会话 id; 输入受理回执不等于轮次完成,
+    //   轮次结束以 turn_result 为准 (见 agentxx-client/io/jsonl/jsonl_mode.h)
+    if (mode == "jsonl") {
+        if (!ensureModelConfigured(
+                yamlCfg.models,
+                yamlCfg.useModelDefault,
+                "default model",
+                configPath,
+                loadedCfg.baseConfigPath,
+                configLoaded
+            )) {
+            return 1;
+        }
+        // 与 cli 模式一致: 关闭工具调用/消息正文的日志打印, 让 stderr 只剩诊断信息
+        config->logPrintToolcall                       = false;
+        config->logPrintMessagesBeforeLLM              = false;
+        config->logPrintMessagesBeforeLLMWithSystemMsg = false;
+        config->logPrintSummarizationResultTokenCount  = false;
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(config);
+        agentxx::client::runJsonlStdio(agent, jsonlSessionId);
+        return 0;
     }
 
     // ======================== TUI 全局设置持久化 ========================

@@ -127,7 +127,7 @@
 | PRO-4 | 生成 `wire-schema.json` 与字段文档 | 已实施 | 模块 `wire_schema`（每条消息一个示例 → 生成 `agent/schema/wire-schema.json` + [wire-protocol-fields.md](wire-protocol-fields.md)，逐字节比对做新鲜度门禁，`AGENTXX_UPDATE_WIRE_SCHEMA=1` 一键更新） |
 | PRO-5 | 连接阶段与错误分类 | 已实施 | `WireConnectionStage`（unhandshaken/unbound/ready/reconnecting/draining）+ 传输 `stage()/setStage()` + WS 流转 + 端点未握手拒绝业务消息（`InvalidState`）+ `WireErrorCode::MessageNotFound`；模块 `input_delivery`、`remote_agent` |
 | PRO-7 | 会话 ID 校验统一化 | 已实施 | `SessionServerAgentIO::acceptSessionScope`（入口统一校验，不匹配回 `WireError`）；`remote_agent` 的 `session scope validation` 用例 |
-| PRO-8 | stdio JSONL 一次性运行 | 待实施 | `agent/client`（复用 Wire 结构） |
+| PRO-8 | stdio JSONL 一次性运行 | 已实施 | `agent/lib/{include/agentxx/agent/io,src/agent/io}/jsonl_io_transport.*`（`JsonlAgentIOTransport` + `jsonlEncodeMessage`/`jsonlDecodeLine`）+ `agent/client/src/io/jsonl/jsonl_mode.cpp`（`agentxx_cli jsonl`）；模块 `jsonl_mode`、`jsonl_runner`；见 [index.md](index.md) §命令行使用 "JSONL 模式" |
 | PRO-11 | 统一错误对象与 wire 错误码 | 部分实施 | `WireErrorCode`（`agent_io_transport.h`，未知码按 `Internal`）+ 会话校验/错误回执已用；工具与节点边界的统一错误对象待补 |
 | PRO-2 / PRO-6 / PRO-9 / PRO-10 / PRO-12 | 幂等键 / durable after 游标 / daemon / 开放 SDK / 结果状态元数据 | 不做（6 并入 STO-4） | 已支持常驻 server、同进程合并启动、FFI |
 
@@ -221,3 +221,7 @@
   启动清凭据环境、脱敏助手）标记为已实施。
 - 2026-10-07：PLG-8 部分实施（接口表数量常量 + `boundaries` 规则 8 校验文档数字与文件存在、
   `plugins.md` §8 澄清通用表查询 IID）与 TST-7 部分实施（边界门禁含接口表数量）。
+- 2026-10-08：PRO-8（stdio JSONL 一次性运行）标记为已实施：传输
+  `JsonlAgentIOTransport`（一行一条 Wire 消息、stdin EOF 只结束输入不关闭输出、非法行回
+  `WireError(InvalidArgs)` 不中断会话）+ `agentxx_cli jsonl` 运行模式（读 stdin 行、写 stdout
+  协议行、日志走 stderr、EOF 后等轮次跑完自动收尾）；新增测试模块 `jsonl_mode`、`jsonl_runner`。

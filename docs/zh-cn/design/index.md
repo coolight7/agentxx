@@ -957,6 +957,7 @@ agentxx_cli [mode] [options]
 | `tui` | TUI 交互模式 (默认) |
 | `cli` | 命令行 stdio 交互模式 |
 | `server` | 启动 WebSocket agent 服务 |
+| `jsonl` | stdin/stdout 逐行 JSON (Wire 协议) 一次性运行模式 (见下) |
 | `acp` | ACP stdio 服务模式 |
 | `train` | 训练模式 |
 
@@ -973,6 +974,7 @@ agentxx_cli [mode] [options]
 | `--model <model>` | 远程模型名称 |
 | `--host <host>` | 服务监听地址 (默认: 127.0.0.1) |
 | `--port <port>` | 服务监听端口 (默认: 7007) |
+| `--session-id <id>` | `jsonl` 模式使用的会话 id (默认自动生成, 见 `hello_ack`) |
 
 **典型用法:**
 
@@ -992,12 +994,59 @@ agentxx_cli tui --agent ws://192.168.1.100:17000/agent --token xxx
 # 连接远程 agent (CLI)
 agentxx_cli cli --agent ws://192.168.1.100:17000/agent?token=xxx
 
+# JSONL 一次性运行 (脚本/其它语言驱动; 见 "JSONL 模式" 一节)
+agentxx_cli jsonl --config agentxx-config.yaml < request.jsonl > response.jsonl
+
 # ACP stdio 服务
 agentxx_cli acp --config agentxx-config.yaml
 
 # 训练模式
 agentxx_cli train --config agentxx-config.yaml
 ```
+
+### JSONL 模式 (脚本驱动, 计划 PRO-8)
+
+`jsonl` 模式与 `server` 模式共用同一套 Wire 协议与同一份会话驱动实现, 只把传输换成
+stdin/stdout 的逐行 JSON, 让外部脚本或其它语言的进程直接驱动一个会话 (无需 WebSocket,
+也无需写 C++ 客户端):
+
+```
+stdin  : 一行一条 client → server 消息 (hello / user_input / cancel / select_model ...)
+stdout : 一行一条 server → client 消息 (hello_ack / input_ack / delta / turn_result ...)
+stderr : 日志与诊断 (不混进 stdout, 保证 stdout 可逐行解析)
+```
+
+报文格式与 WebSocket 传输完全一致 (同一份 `WireMessage` 定义, 见
+[wire-protocol-fields.md](wire-protocol-fields.md)), 只是分帧方式不同。
+
+约定:
+
+- **会话 id 可以省略**: 空 `sessionId` 按"当前绑定会话"处理。若填写, 必须与
+  `hello_ack.sessionId` 一致 (端点开机时已绑定一个自动生成的会话; 与之一致即可),
+  否则请求按 `session_mismatch` 拒绝
+- **响应不等于轮次完成**: `input_ack` 只表示输入已受理 (`started` / `queued` /
+  `steered`), 轮次结束以 `turn_result` 为准 (`hasError` / `interrupted` /
+  `errorMessage`); 进程退出码只表示"是否正常跑完", 不表示轮次结果
+- **一次性运行**: stdin EOF 后不再受理新输入, 但会等待进行中的轮次与排队输入跑完
+  (默认最多 300 秒) 再退出; 收到 `SIGINT`/`SIGTERM` 时同样收尾, 但等待时限很短
+  (5 秒, 不等长轮次跑完)
+- 非法行不会中断会话: 本端回一条 `{"type":"error","code":4,...}` 后继续读下一行;
+  空行忽略
+- 连接阶段与 WS 一致: 未握手前只接受 `hello` (其余请求按 `invalid_state` 拒绝)
+
+最小示例:
+
+```bash
+printf '%s\n' '{"type":"hello"}' \
+              '{"type":"user_input","text":"你好","requestId":1}' \
+  | agentxx_cli jsonl --config agentxx-config.yaml \
+  | jq -c 'select(.type=="input_ack" or .type=="turn_result")'
+```
+
+实现位置: 传输层 `agent/lib/{include/agentxx/agent/io,src/agent/io}/jsonl_io_transport.*`
+(`JsonlAgentIOTransport` + 单行编解码 `jsonlEncodeMessage` / `jsonlDecodeLine`),
+运行模式 `agent/client/src/io/jsonl/jsonl_mode.cpp`。
+测试模块: `jsonl_mode` (分帧与传输联调)、`jsonl_runner` (一次性运行收尾与 stdout 纪律)。
 
 ### 作为库使用
 
