@@ -164,6 +164,13 @@ target_compile_definitions(agentxx_test PRIVATE
   AGENTXX_WIRE_SCHEMA_DOC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../docs/zh-cn/design/wire-protocol-fields.md"
 )
 
+# 配置键目录生成物 (计划 CFG-9): 模块 config_keys 生成并逐字节比对, 一键更新用
+# AGENTXX_UPDATE_CONFIG_KEYS=1 (生成后人工 review diff 再提交)
+target_compile_definitions(agentxx_test PRIVATE
+  AGENTXX_CONFIG_KEYS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../schema/config-keys.json"
+  AGENTXX_CONFIG_KEYS_DOC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../docs/zh-cn/design/config-keys.md"
+)
+
 # PCH: 只预编译稳定第三方头，加速测试编译 (GCC/Clang，与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
 if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)

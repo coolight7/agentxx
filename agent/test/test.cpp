@@ -9,6 +9,7 @@
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
 #include "agentxx-test/core/test_command_tools.h"
+#include "agentxx-test/core/test_config_keys.h"
 #include "agentxx-test/core/test_config_validation.h"
 #include "agentxx-test/core/test_concurrency.h"
 #include "agentxx-test/core/test_datetime_tool.h"
@@ -256,6 +257,7 @@ int main(int argn, char** argv) {
         runSync("boundaries", agentxx::test::testBoundaries);
         runSync("assembly_snapshot", agentxx::test::testAssemblySnapshotConfig);
         runSync("config_validation", agentxx::test::testConfigValidation);
+        runSync("config_keys", agentxx::test::testConfigKeys);
         runSync("task_scope", agentxx::test::testTaskScopeSemantics);
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);

@@ -1,5 +1,5 @@
 # Agentxx 整体设计文档
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
 
 ## 目录
 

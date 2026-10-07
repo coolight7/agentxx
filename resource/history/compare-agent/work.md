@@ -75,6 +75,7 @@
 | PRO-8 | stdio JSONL 一次性运行（复用 Wire 结构 + JSONL 分帧） | P1 | 完成（已构建 + 测试通过 + 真实进程手工验证） | `lib/.../io/jsonl_io_transport.{h,cpp}`、`client/src/io/jsonl/jsonl_mode.cpp`；模块 `jsonl_mode`、`jsonl_runner` |
 | LLM-8 | Anthropic 缓存断点与缓存用量 | P1 | 完成（已构建 + 测试通过） | `ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints` / `applyUsage`；账本 `usage.cache_write_prompt_tokens`（schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放夹具 | P1 | 完成（已构建 + 测试通过） | `test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder`/`HttpPlayer`/`HttpFixture` + 脱敏）；模块 `http_recorder` |
+| CFG-9 | 配置键目录生成与新鲜度门禁 | P1 | 完成（已构建 + 测试通过） | `test/core/test_config_keys.cpp`（键目录表 + 真实加载校验 + 源码扫描）、生成物 `agent/schema/config-keys.json` 与 `docs/zh-cn/design/config-keys.md`、共用骨架 `test/include/agentxx-test/core/schema_artifact.h`；模块 `config_keys` |
 
 ## 阶段 A：护栏与目录规则（ARC-1、ARC-2）
 
@@ -1849,6 +1850,9 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `fake_provider` 46、`session_schema` 121、`config_loader` 381）。
 - 阶段 AF（LLM-13）完成后提交：
   `HTTP 录制回放夹具 (LLM-13)`（新增模块 `http_recorder` 81 项）。
+- 阶段 AG（CFG-9）完成后提交：
+  `配置键目录生成与新鲜度门禁 (CFG-9)`（新增模块 `config_keys` 157 项；顺带修掉
+  `config_loader` 的小数截断问题并补 26 项断言）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
@@ -2104,3 +2108,74 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `/messages` / `/v1/messages` / `/responses` / `/v1/responses` / `/`) 都注册了一遍。
 - 本阶段未录制真实线上流量并入库 (不引入任何外部服务依赖): 夹具本身可用作"本地录一次、
   之后离线回放"的工具, 入库的固定装置应按需人工挑选并 review 脱敏结果。
+
+## 阶段 AG：配置键目录生成与新鲜度门禁（CFG-9，2026-10-08）
+
+计划依据：`plan.md` §13 CFG-9（"从 `AgentConfig`/`YamlAppConfig` 生成键目录（键路径/类型/
+默认值），与 PRO-4 共用生成器骨架，CI 检查新鲜度"）。
+
+已完成：
+
+- **共用生成器骨架**（新增 `agent/test/include/agentxx-test/core/schema_artifact.h`）：
+  `checkGeneratedArtifact(path, actual, update, artifact, updateEnv)` + `readArtifactFile` /
+  `writeArtifactFile` / `artifactDiffLines` / `artifactUpdateMode`；`wire_schema` 模块改成
+  调用同一实现（原来那份读写/比对代码删除），两处生成物的门禁行为与失败信息一致
+  （首个差异行 + 行的两侧内容 + 重新生成命令）。
+- **键目录表**（新增 `agent/test/core/test_config_keys.cpp`，模块 `config_keys`，49 个键）：
+  每个键登记 键路径 / 类型 / 默认值 / 样例 yaml / 默认用例文档 / 期望默认值 / 期望样例值 /
+  观测函数，逐键做**两次真实加载**：
+  - 默认: 顶层键用"只写 `data_dir` 的最小文档", 条目级键（`model.list[]` / `plugin.list[]` /
+    `mcp.list[]`）用"只写必需字段的最小条目", 比对默认值;
+  - 样例: 覆盖层文档（`overwrite.*` 用两层加载，base = 两个模型 + 两个技能目录）比对样例值。
+  被覆盖的范围: 顶层 (`data_dir` / `work_dir` / `language` / `subagent.enable` /
+  `worktree.enable`) · 权限 (`mode` / `whitelist` / `blacklist`) · 技能与记忆列表 ·
+  `model.use.*` 七个用途 · 模型条目 20 个字段 (含 `extra_api_config` / `extra_headers` /
+  `cache_control`) · 两层合并策略 (`overwrite.mode` / `overwrite.remove`) ·
+  插件条目 6 个字段 · MCP 条目 3 个字段 · 已废弃旧键 3 个 (`models` / `plugins` /
+  `use_model`, 断言"识别但不生效")。
+- **源码扫描门禁**：从 `client/src/config_loader.cpp` 扫出被解析的键名
+  (`["键名"]` / `mapChild(..., "键")` / `useValue("键")` / 段常量定义值), 要求每个名字都能在
+  目录里找到 —— 加载器新增键却忘记登记时直接失败 (扫描量下限 30, 防止规则本身失效)。
+- **生成物**：
+  - `agent/schema/config-keys.json`（机器可读: path/type/default/sample）;
+  - `docs/zh-cn/design/config-keys.md`（人工阅读: 键表 + 每键样例 + 列表段/`overwrite`/
+    废弃键/`${VAR}` 的说明）;
+  - 新鲜度门禁与一键更新 `AGENTXX_UPDATE_CONFIG_KEYS=1`（与 PRO-4 同一套做法）。
+- **顺带修掉一个真实缺陷**（由键目录的样例校验发现）：
+  `config_loader.cpp` 里数值标量一律用 `utilxx_base::parseNumberFromString(...).ec == std::errc{}`
+  判定成功, 但 `std::from_chars` 对 `"0.7"` / `"16abc"` 这类文本会**部分消费**且返回空 `ec` ——
+  于是 `extra_api_config: {temperature: 0.7}` 被写成 `0`、插件 `args` 里的小数同样被截断成整数,
+  非法数字键值也被静默当合法值。改法: 新增 `parseFullNumber()` 辅助 (要求消费到字符串末尾),
+  替换 9 处调用点; 数值键解析失败时补一条 `Warning: invalid xxx ... keeping default` 告警。
+  校验方式: 键目录里 `extra_api_config` 的期望值就是 `{"temperature":0.7}` (修前必然失败),
+  `config_loader` 模块另加 26 项断言覆盖小数保留 / 插件 args 小数 / 非法值落回默认 / 合法值生效。
+
+测试：
+
+- 新模块 `config_keys`（157 项断言）：49 键 ×（默认 + 样例）+ 路径唯一性 + 数量下限 +
+  源码扫描比对 + 生成物比对与形状断言。
+- `config_loader`（模块 381→407 项断言)：小数与非法数值的解析行为。
+- `wire_schema`（模块 1034 项）回归: 改用共用骨架后生成物比对行为不变。
+
+验证：
+
+- 构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0，无新增 error。
+- 测试：`config_keys` 157/0、`config_loader` 407/0、`config_validation` 47/0、
+  `wire_schema` 1034/0。
+- 生成物自检：`AGENTXX_UPDATE_CONFIG_KEYS=1` 生成后, 比较模式再次运行全部通过。
+- 负面验证：把 `parseFullNumber` 换回旧的 `ec` 判定, `config_keys` 与 `config_loader`
+  的小数用例都会失败 (期望 0.7 实得 0)。
+
+注意事项 / 与计划的差异：
+
+- 计划写"从 `AgentConfig`/`YamlAppConfig` **生成**键目录": C++ 没有反射, 真正的自动生成要么
+  改数据结构加反射, 要么维护一份与解析代码平行的表。这里选**表 + 真实加载校验 + 源码扫描**:
+  表提供类型/默认值/样例 (文档价值), 校验保证表与加载器一致 (含"加载器新增键必须登记"),
+  等价于计划要的"新鲜度检查"而不引入反射或代码生成。
+- 目录只覆盖 **yaml 应用配置** (`YamlAppConfig` 一层); `AgentConfig` 的其余字段由库使用方
+  (client/FFI) 填充, 不属于用户可写的配置面, 因此不列入 (计划里的 `AgentConfig` 部分按
+  "用户可配置键 = yaml 键" 收窄)。
+- 未做 CI 接入: 门禁随 `agentxx_test`（`config_keys` 模块）运行, `agent/script/gate.sh` 的
+  全模块 fail-fast 已经覆盖; 另开 CI 配置属于外部集成, 不在本项目仓库范围。
+- `overwrite` 只在 `model` 段做了两层加载用例: 其余列表段共用同一实现 (`readListSection`
+  与合并函数), 机制一致, 逐段重复用例收益低。

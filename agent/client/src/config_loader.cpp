@@ -227,6 +227,20 @@ std::string resolveEnvVars(
 // YAML → JSON
 // ---------------------------------------------------------------------------
 
+/// 解析数字标量: 要求**完整消费**文本
+///
+/// `std::from_chars` 对 "0.7" / "16abc" 这类文本会成功消费前缀 (整数分支得到 0 /
+/// 16) 并返回空 `ec`, 只判 `ec` 会把小数截断成整数、把带后缀的值当合法值
+/// (例如 `extra_api_config: {temperature: 0.7}` 会被写成 0)。这里同时要求
+/// 消费到字符串末尾, 不满足即视为非法 (调用方回退默认值并告警)。
+template<typename T>
+static bool parseFullNumber(std::string_view text, T& out) {
+    const auto result = utilxx_base::parseNumberFromString(text, out);
+    return result.ec == std::errc{} && result.ptr == text.data() + text.size();
+}
+
+
+
 /// YAML → JSON 并递归展开 ${VAR} (插件 args 专用)
 /// - 标量先经 resolveEnvVars 展开再判断类型 (true/false/数字/字符串)
 /// - 与 yamlToJson 语义一致, 仅多了 env 展开步骤
@@ -248,10 +262,10 @@ static utilxx_base::Json yamlToJsonResolveEnv(
         if (s == "false") {
             return utilxx_base::Json(false);
         }
-        if (utilxx_base::parseNumberFromString(s, i).ec == std::errc{}) {
+        if (parseFullNumber(s, i)) {
             return utilxx_base::Json(i);
         }
-        if (utilxx_base::parseNumberFromString(s, d).ec == std::errc{}) {
+        if (parseFullNumber(s, d)) {
             return utilxx_base::Json(d);
         }
         return utilxx_base::Json(s);
@@ -292,10 +306,10 @@ static utilxx_base::Json yamlToJson(const YAML::Node& node) {
         if (node.as<std::string>() == "false") {
             return utilxx_base::Json(false);
         }
-        if (utilxx_base::parseNumberFromString(node.as<std::string>(), i).ec == std::errc{}) {
+        if (parseFullNumber(node.as<std::string>(), i)) {
             return utilxx_base::Json(i);
         }
-        if (utilxx_base::parseNumberFromString(node.as<std::string>(), d).ec == std::errc{}) {
+        if (parseFullNumber(node.as<std::string>(), d)) {
             return utilxx_base::Json(d);
         }
         return utilxx_base::Json(node.as<std::string>());
@@ -439,8 +453,14 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 int parsed = mc.connectTimeoutSeconds;
-                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (parseFullNumber(val, parsed)) {
                     mc.connectTimeoutSeconds = parsed;
+                } else {
+                    XX_LOGW(
+                        "[Config] Warning: invalid connect_timeout `{}`, keeping default {}",
+                        val,
+                        mc.connectTimeoutSeconds
+                    );
                 }
             }
             if (node["read_chunk_timeout"]) {
@@ -451,8 +471,14 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 int parsed = mc.readChunkTimeoutSeconds;
-                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (parseFullNumber(val, parsed)) {
                     mc.readChunkTimeoutSeconds = parsed;
+                } else {
+                    XX_LOGW(
+                        "[Config] Warning: invalid read_chunk_timeout `{}`, keeping default {}",
+                        val,
+                        mc.readChunkTimeoutSeconds
+                    );
                 }
             }
             if (node["ssl_verify"]) {
@@ -475,8 +501,15 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 unsigned long long parsed = 0;
-                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (parseFullNumber(val, parsed)) {
                     mc.maxConcurrentConnections = static_cast<size_t>(parsed);
+                } else {
+                    XX_LOGW(
+                        "[Config] Warning: invalid max_concurrent_connections `{}`, keeping "
+                        "default {}",
+                        val,
+                        mc.maxConcurrentConnections
+                    );
                 }
             }
             if (node["model_context_max_token"]) {
@@ -487,8 +520,15 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 unsigned long long parsed = 0;
-                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (parseFullNumber(val, parsed)) {
                     mc.modelContextMaxToken = static_cast<size_t>(parsed);
+                } else {
+                    XX_LOGW(
+                        "[Config] Warning: invalid model_context_max_token `{}`, keeping "
+                        "default {}",
+                        val,
+                        mc.modelContextMaxToken
+                    );
                 }
             }
             if (node["image_input"]) {
@@ -578,8 +618,15 @@ static YamlAppConfig parseYamlConfigNode(
                     overrideEnvVars
                 );
                 int parsed = 120;
-                if (utilxx_base::parseNumberFromString(val, parsed).ec == std::errc{}) {
+                if (parseFullNumber(val, parsed)) {
                     mcpCfg.toolTimeout = std::chrono::seconds{std::max(parsed, 0)};
+                } else {
+                    XX_LOGW(
+                        "[Config] Warning: invalid mcp timeout `{}` (namespace `{}`), keeping "
+                        "default 120s",
+                        val,
+                        ns
+                    );
                 }
             }
             if (cfg.mcpServers.contains(ns)) {

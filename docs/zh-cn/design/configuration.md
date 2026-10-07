@@ -1,6 +1,7 @@
 # 配置与设置边界
 
-> 相关文档: [index.md](index.md)（配置示例与加载流程）· [security.md](security.md) ·
+> 相关文档: [index.md](index.md)（配置示例与加载流程）· [config-keys.md](config-keys.md)
+> （配置键目录, 生成物: 每个 yaml 键的类型与默认值）· [security.md](security.md) ·
 > [roadmap.md](roadmap.md)
 
 ## 1. 两个存储、三种归属

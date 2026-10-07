@@ -13,6 +13,7 @@
 /// 避免字段清单悄悄漏掉新消息。
 #include "agentxx-test/core/test_wire_schema.h"
 
+#include "agentxx-test/core/schema_artifact.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -617,93 +618,6 @@ std::string buildSchemaDoc(const std::vector<WireSample>& samples) {
     return out;
 }
 
-/// 读取文件全文 (不存在返回 nullopt)
-std::optional<std::string> readFileIfExists(const std::string& path) {
-    std::ifstream in(utilxx_base::utf8ToPath(path), std::ios::binary);
-    if (!in) {
-        return std::nullopt;
-    }
-    std::ostringstream buf;
-    buf << in.rdbuf();
-    return buf.str();
-}
-
-bool writeFileAll(const std::string& path, const std::string& content) {
-    std::error_code ec;
-    fs::create_directories(utilxx_base::utf8ToPath(fs::path{path}.parent_path().string()), ec);
-    std::ofstream out(utilxx_base::utf8ToPath(path), std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-    out << content;
-    return out.good();
-}
-
-/// 逐行比较, 给出首个不同位置 (便于定位改了什么)
-std::string diffLines(const std::string& expected, const std::string& actual) {
-    auto split = [](const std::string& text) {
-        std::vector<std::string> out;
-        std::string              cur;
-        std::istringstream       in(text);
-        while (std::getline(in, cur)) {
-            if (!cur.empty() && cur.back() == '\r') {
-                cur.pop_back();
-            }
-            out.push_back(cur);
-        }
-        return out;
-    };
-    const auto expLines = split(expected);
-    const auto actLines = split(actual);
-    const auto count    = std::max(expLines.size(), actLines.size());
-    for (size_t i = 0; i < count; ++i) {
-        const std::string e = i < expLines.size() ? expLines[i] : std::string{"<missing>"};
-        const std::string a = i < actLines.size() ? actLines[i] : std::string{"<missing>"};
-        if (e != a) {
-            return fmt::format(
-                "first difference at line {}:\n  baseline: {}\n  generated: {}",
-                i + 1,
-                e,
-                a
-            );
-        }
-    }
-    return "content differs only in line endings";
-}
-
-/// 更新模式下写回; 否则与仓库内生成物比对
-void checkGenerated(
-    const std::string& path,
-    const std::string& actual,
-    bool               update,
-    std::string_view   artifact
-) {
-    if (update) {
-        const bool ok = writeFileAll(path, actual);
-        XX_TEST_EXPECT_TRUE(ok);
-        if (ok) {
-            TEST_INFO << "[" << artifact << "] regenerated: " << path << std::endl;
-        }
-        return;
-    }
-    const auto baseline = readFileIfExists(path);
-    if (!baseline.has_value()) {
-        XX_TEST_EXPECT_TRUE(false);
-        TEST_FAIL << "[" << artifact << "] missing: " << path
-                  << " (run with AGENTXX_UPDATE_WIRE_SCHEMA=1 to generate)" << std::endl;
-        return;
-    }
-    if (*baseline == actual) {
-        XX_TEST_EXPECT_TRUE(true);
-        return;
-    }
-    XX_TEST_EXPECT_TRUE(false);
-    TEST_FAIL << "[" << artifact << "] out of date: " << path << "\n"
-              << diffLines(*baseline, actual)
-              << "\nrun with AGENTXX_UPDATE_WIRE_SCHEMA=1 to regenerate" << std::endl;
-}
-
-/// 编译期注入的生成物路径 (未注入时退化为"只生成不比较")
 std::string schemaPath() {
 #ifdef AGENTXX_WIRE_SCHEMA_PATH
     return std::string{AGENTXX_WIRE_SCHEMA_PATH};
@@ -720,10 +634,6 @@ std::string schemaDocPath() {
 #endif
 }
 
-bool updateMode() {
-    const char* v = std::getenv("AGENTXX_UPDATE_WIRE_SCHEMA");
-    return v != nullptr && (std::string_view{v} == "1" || std::string_view{v} == "true");
-}
 
 } // namespace
 
@@ -757,18 +667,42 @@ TestResult testWireSchema() {
         typeTags.push_back(tag);
     }
 
-    // 生成物比对 (缺失即失败; 更新模式写回)
+    // 生成物比对 (缺失即失败; 更新模式写回; 比对实现见 schema_artifact.h)
     const auto jsonText = buildSchemaJson(samples);
     const auto docText  = buildSchemaDoc(samples);
-    const bool update   = updateMode();
+    const bool update   = agentxx::test::artifactUpdateMode("AGENTXX_UPDATE_WIRE_SCHEMA");
 
     const auto jsonPath = schemaPath();
     if (!jsonPath.empty()) {
-        checkGenerated(jsonPath, jsonText, update, "wire-schema.json");
+        const auto check = agentxx::test::checkGeneratedArtifact(
+            jsonPath,
+            jsonText,
+            update,
+            "wire-schema.json",
+            "AGENTXX_UPDATE_WIRE_SCHEMA"
+        );
+        XX_TEST_EXPECT_TRUE(check.ok);
+        if (!check.ok) {
+            TEST_FAIL << check.message << std::endl;
+        } else if (update) {
+            TEST_INFO << check.message << std::endl;
+        }
     }
     const auto docPath = schemaDocPath();
     if (!docPath.empty()) {
-        checkGenerated(docPath, docText, update, "wire-protocol-fields.md");
+        const auto check = agentxx::test::checkGeneratedArtifact(
+            docPath,
+            docText,
+            update,
+            "wire-protocol-fields.md",
+            "AGENTXX_UPDATE_WIRE_SCHEMA"
+        );
+        XX_TEST_EXPECT_TRUE(check.ok);
+        if (!check.ok) {
+            TEST_FAIL << check.message << std::endl;
+        } else if (update) {
+            TEST_INFO << check.message << std::endl;
+        }
     }
 
     // 生成内容本身的形状断言 (路径未注入时也校验)

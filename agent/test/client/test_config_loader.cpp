@@ -659,6 +659,95 @@ void test_model_cache_control() {
 }
 
 // ---------------------------------------------------------------------------
+// 数值与扩展配置解析 (CFG-9 期间修掉的小数截断问题)
+// ---------------------------------------------------------------------------
+
+void test_model_numeric_and_extra_config() {
+    // extra_api_config 的小数必须保留 (from_chars 的整数分支会部分消费 "0.7" 得到 0,
+    // 只判 ec 会把温度写成 0)
+    auto cfg = loadYaml(R"(model:
+  list:
+    - name: m1
+      type: "openai"
+      extra_api_config:
+        temperature: 0.7
+        top_p: 0.95
+        max_tokens: 1024
+        stream: true
+        note: "hello"
+)");
+    auto it  = cfg.models.find("m1");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        const auto& extra = it->second.extraConfig;
+        XX_TEST_EXPECT_TRUE(extra.is_object());
+        XX_TEST_EXPECT_TRUE(extra.contains("temperature"));
+        XX_TEST_EXPECT_TRUE(extra["temperature"].is_number_float());
+        XX_TEST_EXPECT_TRUE(extra["temperature"].get<double>() > 0.69);
+        XX_TEST_EXPECT_TRUE(extra["temperature"].get<double>() < 0.71);
+        XX_TEST_EXPECT_TRUE(extra["top_p"].is_number_float());
+        XX_TEST_EXPECT_TRUE(extra["max_tokens"].is_number_integer());
+        XX_TEST_EXPECT_EQ(extra["max_tokens"].get<int64_t>(), int64_t{1024});
+        XX_TEST_EXPECT_TRUE(extra["stream"].is_boolean());
+        XX_TEST_EXPECT_TRUE(extra["stream"].get<bool>());
+        XX_TEST_EXPECT_TRUE(extra["note"].is_string());
+    }
+
+    // 插件 args 里的小数同样保留
+    cfg = loadYaml(R"(plugin:
+  list:
+    - path: "builtin://agentxx_filesystem"
+      args:
+        depth: 0.5
+        index_root: "/repo"
+)");
+    XX_TEST_EXPECT_EQ(cfg.plugins.size(), size_t{1});
+    if (!cfg.plugins.empty()) {
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].args.contains("depth"));
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].args["depth"].is_number_float());
+        XX_TEST_EXPECT_TRUE(cfg.plugins[0].args["depth"].get<double>() > 0.49);
+    }
+
+    // 非法数值: 保留默认值 (不因 std::stoi 抛异常崩溃, 也不把 "16abc" 当 16)
+    cfg = loadYaml(R"(model:
+  list:
+    - name: m2
+      type: "openai"
+      connect_timeout: "16abc"
+      read_chunk_timeout: "abc"
+      max_concurrent_connections: "3x"
+      model_context_max_token: "1e5"
+)");
+    it  = cfg.models.find("m2");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_EQ(it->second.connectTimeoutSeconds, 16);
+        XX_TEST_EXPECT_EQ(it->second.readChunkTimeoutSeconds, 60);
+        XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{5});
+        XX_TEST_EXPECT_EQ(it->second.modelContextMaxToken, size_t{0});
+    }
+
+    // 合法数值照常生效 (确认上面的失败不是"全部落回默认")
+    cfg = loadYaml(R"(model:
+  list:
+    - name: m3
+      type: "openai"
+      connect_timeout: 3
+      read_chunk_timeout: 7
+      max_concurrent_connections: 2
+      model_context_max_token: 128000
+)");
+    it  = cfg.models.find("m3");
+    XX_TEST_EXPECT_TRUE(it != cfg.models.end());
+    if (it != cfg.models.end()) {
+        XX_TEST_EXPECT_EQ(it->second.connectTimeoutSeconds, 3);
+        XX_TEST_EXPECT_EQ(it->second.readChunkTimeoutSeconds, 7);
+        XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{2});
+        XX_TEST_EXPECT_EQ(it->second.modelContextMaxToken, size_t{128000});
+    }
+}
+
+// ---------------------------------------------------------------------------
 // codegraph 参数迁移到插件配置 (yaml `plugins` 条目 args):
 // 宿主只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
 // ---------------------------------------------------------------------------
@@ -2410,6 +2499,7 @@ TestResult testConfigLoader() {
     test_model_request_reasoning_summary();
     test_model_multimodal_input();
     test_model_cache_control();
+    test_model_numeric_and_extra_config();
     test_plugins_empty_by_default();
     test_plugin_name_form_removed();
     test_plugin_args_paths_parse();

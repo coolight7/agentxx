@@ -150,7 +150,7 @@
 |---|---|---|---|
 | CFG-1 | 配置回填与统一校验（键路径 + 来源 + 致命/警告） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/config_validation.*` + `agent/client/main.cpp` 的 `validateStartupConfig`；模块 `config_validation` |
 | CFG-8 | 设置与配置边界（YAML / settings_db / 安全状态） | 已实施 | `docs/zh-cn/design/configuration.md` + `AgentConfig::languageExplicit` 接线 |
-| CFG-9 | 生成式配置键目录 | 待实施 | 脚本 + CI 新鲜度检查 |
+| CFG-9 | 生成式配置键目录 | 已实施 | `agent/test/core/test_config_keys.cpp`（键目录表 + 真实加载校验 + `config_loader.cpp` 源码扫描）、生成物 `agent/schema/config-keys.json` 与 [config-keys.md](config-keys.md)（`AGENTXX_UPDATE_CONFIG_KEYS=1` 一键更新）；共用生成器骨架 `agent/test/include/agentxx-test/core/schema_artifact.h`；模块 `config_keys` |
 | CFG-2 / CFG-3 / CFG-4 / CFG-5 / CFG-6 / CFG-7 | 配置版本迁移 / 来源清单 / 模型元数据 / 世代快照 / 凭据分层 / 项目信任 | 不做（3 并入 ARC-6） | 结构变化用告警 + 内存态适配；不写版本、不改源文件 |
 
 ## 13. 检索、诊断与可观测性

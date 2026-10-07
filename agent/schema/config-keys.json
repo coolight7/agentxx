@@ -1,0 +1,308 @@
+{
+  "version": 1,
+  "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
+  "source": "agent/client/src/config_loader.cpp",
+  "count": 50,
+  "keys": [
+    {
+      "path": "data_dir",
+      "type": "string",
+      "default": "空 (不持久化: 数据仅存内存)",
+      "sample": "data_dir: cfg-keys-data"
+    },
+    {
+      "path": "work_dir",
+      "type": "string",
+      "default": "空 (用进程当前工作目录)",
+      "sample": "work_dir: cfg-keys-work"
+    },
+    {
+      "path": "language",
+      "type": "string (zh-cn | en)",
+      "default": "空 (由客户端界面语言决定)",
+      "sample": "language: ZH-CN"
+    },
+    {
+      "path": "subagent.enable",
+      "type": "bool",
+      "default": "true",
+      "sample": "subagent:\n  enable: false"
+    },
+    {
+      "path": "worktree.enable",
+      "type": "bool",
+      "default": "false",
+      "sample": "worktree:\n  enable: true"
+    },
+    {
+      "path": "permission.mode",
+      "type": "enum (ask | all_ask | pass | deny)",
+      "default": "ask",
+      "sample": "permission:\n  mode: deny"
+    },
+    {
+      "path": "permission.whitelist.list",
+      "type": "list<string>",
+      "default": "空",
+      "sample": "permission:\n  whitelist:\n    list: [\"/data/a\", \"./b\"]"
+    },
+    {
+      "path": "permission.blacklist.list",
+      "type": "list<string>",
+      "default": "空",
+      "sample": "permission:\n  blacklist:\n    list: [\"./secret\"]"
+    },
+    {
+      "path": "skill.list",
+      "type": "list<string>",
+      "default": "空",
+      "sample": "skill:\n  list: [\"./skills\", \"./more\"]"
+    },
+    {
+      "path": "memory.list",
+      "type": "list<string>",
+      "default": "空",
+      "sample": "memory:\n  list: [\"./AGENTS.md\"]"
+    },
+    {
+      "path": "model.use.default",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    default: m1"
+    },
+    {
+      "path": "model.use.subagent",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    subagent: m1"
+    },
+    {
+      "path": "model.use.web_search",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    web_search: m1"
+    },
+    {
+      "path": "model.use.acp",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    acp: m1"
+    },
+    {
+      "path": "model.use.train",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    train: m1"
+    },
+    {
+      "path": "model.use.train_scorer",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    train_scorer: m1"
+    },
+    {
+      "path": "model.use.train_optimizer",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  use:\n    train_optimizer: m1"
+    },
+    {
+      "path": "model.list[].name",
+      "type": "string (必填)",
+      "default": "无 (缺 name 的条目被跳过)",
+      "sample": "model:\n  list:\n    - name: m9\n      type: \"openai\""
+    },
+    {
+      "path": "model.list[].type",
+      "type": "string (openai | anthropic | openai-responses)",
+      "default": "openai",
+      "sample": "model:\n  list:\n    - name: m1\n      type: \"anthropic\""
+    },
+    {
+      "path": "model.list[].base_url",
+      "type": "string",
+      "default": "空 (用 provider 默认官方地址)",
+      "sample": "model:\n  list:\n    - name: m1\n      base_url: \"https://api.example.com\""
+    },
+    {
+      "path": "model.list[].api_key",
+      "type": "string (支持 ${VAR} 展开)",
+      "default": "空",
+      "sample": "model:\n  list:\n    - name: m1\n      api_key: \"EMPTY\""
+    },
+    {
+      "path": "model.list[].model_name",
+      "type": "string",
+      "default": "空",
+      "sample": "model:\n  list:\n    - name: m1\n      model_name: \"gpt-4\""
+    },
+    {
+      "path": "model.list[].api_path",
+      "type": "string",
+      "default": "空 (按 type 用默认路径)",
+      "sample": "model:\n  list:\n    - name: m1\n      api_path: \"/v1/chat/completions\""
+    },
+    {
+      "path": "model.list[].send_thinking",
+      "type": "bool",
+      "default": "false",
+      "sample": "model:\n  list:\n    - name: m1\n      send_thinking: true"
+    },
+    {
+      "path": "model.list[].request_reasoning_summary",
+      "type": "bool",
+      "default": "true",
+      "sample": "model:\n  list:\n    - name: m1\n      request_reasoning_summary: false"
+    },
+    {
+      "path": "model.list[].cache_control",
+      "type": "bool (仅 anthropic 生效)",
+      "default": "false",
+      "sample": "model:\n  list:\n    - name: m1\n      cache_control: true"
+    },
+    {
+      "path": "model.list[].connect_timeout",
+      "type": "int (秒)",
+      "default": "16",
+      "sample": "model:\n  list:\n    - name: m1\n      connect_timeout: 3"
+    },
+    {
+      "path": "model.list[].read_chunk_timeout",
+      "type": "int (秒)",
+      "default": "60",
+      "sample": "model:\n  list:\n    - name: m1\n      read_chunk_timeout: 7"
+    },
+    {
+      "path": "model.list[].ssl_verify",
+      "type": "bool (省略 = 未指定, 用全局默认策略)",
+      "default": "未指定 (nullopt)",
+      "sample": "model:\n  list:\n    - name: m1\n      ssl_verify: false"
+    },
+    {
+      "path": "model.list[].max_concurrent_connections",
+      "type": "int (0 = 不限制)",
+      "default": "5",
+      "sample": "model:\n  list:\n    - name: m1\n      max_concurrent_connections: 2"
+    },
+    {
+      "path": "model.list[].model_context_max_token",
+      "type": "int (0 = 未指定)",
+      "default": "0",
+      "sample": "model:\n  list:\n    - name: m1\n      model_context_max_token: 128000"
+    },
+    {
+      "path": "model.list[].image_input",
+      "type": "bool",
+      "default": "false",
+      "sample": "model:\n  list:\n    - name: m1\n      image_input: true"
+    },
+    {
+      "path": "model.list[].audio_input",
+      "type": "bool",
+      "default": "false",
+      "sample": "model:\n  list:\n    - name: m1\n      audio_input: true"
+    },
+    {
+      "path": "model.list[].video_input",
+      "type": "bool",
+      "default": "false",
+      "sample": "model:\n  list:\n    - name: m1\n      video_input: true"
+    },
+    {
+      "path": "model.list[].extra_headers",
+      "type": "map<string, string>",
+      "default": "空",
+      "sample": "model:\n  list:\n    - name: m1\n      extra_headers:\n        x-custom: v"
+    },
+    {
+      "path": "model.list[].extra_api_config",
+      "type": "map<string, any> (合并进请求体)",
+      "default": "空",
+      "sample": "model:\n  list:\n    - name: m1\n      extra_api_config:\n        temperature: 0.7"
+    },
+    {
+      "path": "model.overwrite.mode",
+      "type": "enum (merge | replace)",
+      "default": "merge (继承并叠加 base 层)",
+      "sample": "model:\n  overwrite:\n    mode: replace\n  list:\n    - name: m3\n      type: \"openai\""
+    },
+    {
+      "path": "model.overwrite.remove",
+      "type": "list<string> (按 name 剔除 base 项)",
+      "default": "空 (不剔除)",
+      "sample": "model:\n  overwrite:\n    remove: [m1]"
+    },
+    {
+      "path": "plugin.list[].path",
+      "type": "string (必填; 支持 builtin://<名字>)",
+      "default": "无 (缺 path/name 的条目被跳过)",
+      "sample": "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\""
+    },
+    {
+      "path": "plugin.list[].name",
+      "type": "string (内置插件简写, 等价 builtin://<name>)",
+      "default": "空 (缺 path 时按内置名补齐)",
+      "sample": "plugin:\n  list:\n    - name: agentxx_filesystem"
+    },
+    {
+      "path": "plugin.list[].enabled",
+      "type": "bool",
+      "default": "true",
+      "sample": "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\"\n      enabled: false"
+    },
+    {
+      "path": "plugin.list[].sides",
+      "type": "enum (auto | agent | client)",
+      "default": "auto",
+      "sample": "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\"\n      sides: agent"
+    },
+    {
+      "path": "plugin.list[].args",
+      "type": "map<string, any> (原样传给插件, 标量递归展开 ${VAR})",
+      "default": "空",
+      "sample": "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\"\n      args:\n        index_root: \"/repo\"\n        depth: 0.5"
+    },
+    {
+      "path": "plugin.list[].config",
+      "type": "string (插件配置文件/目录; 支持 ~ 与 ${VAR})",
+      "default": "空",
+      "sample": "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\"\n      config: \"./conf\""
+    },
+    {
+      "path": "mcp.list[].namespace",
+      "type": "string (必填; 命名空间)",
+      "default": "无 (缺 namespace/url 的条目被跳过)",
+      "sample": "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\""
+    },
+    {
+      "path": "mcp.list[].url",
+      "type": "string",
+      "default": "空 (缺 url 的条目被跳过)",
+      "sample": "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\""
+    },
+    {
+      "path": "mcp.list[].timeout",
+      "type": "int (秒; 0 = 不限制)",
+      "default": "120 (秒)",
+      "sample": "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\"\n      timeout: 5"
+    },
+    {
+      "path": "models",
+      "type": "已废弃 (改名为 `model.list`)",
+      "default": "不生效 (整段忽略)",
+      "sample": "models:\n  - name: legacy\n    type: \"openai\""
+    },
+    {
+      "path": "plugins",
+      "type": "已废弃 (改名为 `plugin.list`)",
+      "default": "不生效 (整段忽略)",
+      "sample": "plugins:\n  - path: \"builtin://agentxx_filesystem\""
+    },
+    {
+      "path": "use_model",
+      "type": "已废弃 (移到 `model.use`)",
+      "default": "不生效 (整段忽略)",
+      "sample": "use_model:\n  default: legacy-model"
+    }
+  ]
+}
