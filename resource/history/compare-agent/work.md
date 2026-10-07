@@ -1847,6 +1847,8 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `配置键目录生成与新鲜度门禁, 修正小数配置被截断 (CFG-9)`（新增模块 `config_keys` 157 项）。
 - 阶段 AI（ARC-8 试点结论 + 本轮收尾）完成后提交：
   `ARC-8 试点结论与本轮收尾: 窄接口不新增, roadmap 状态清账 (ARC-8/PLG-8)`。
+- 收尾补提交：`统一行尾: 修正被文本重写转成 CRLF 的两个文件`（`config_loader.cpp` 与
+  `test_wire_schema.cpp` 被文本处理误转 CRLF；恢复 LF，避免后续每个改动都产生整文件 diff）。
 
 ## 阶段 Y：接口表数量与文档一致性校验（PLG-8 部分 / TST-7，2026-10-07）
 
