@@ -774,8 +774,10 @@ static void
 /// - 组件项经描述层与 kit 组装 (构建器 + kit, 不手写 JSON 字符串)
 /// - `graphAsButton` false: 内联状态图 (Diagram 组件;
 ///   工具消息展开体, 状态图随消息一起渲染)
-/// - `graphAsButton` true:  "|- " 前缀 + 可点 Graph 按钮 (Info 段落, 点击经
-///   dispatch 动作 planning.open_graph 弹窗; owner_id 由宿主组装)
+/// - `graphAsButton` true: "|- " 前缀 + 可点 Graph 按钮 (Info 段落, 点击经
+///   dispatch 动作 planning.open_graph 弹窗; owner_id 由宿主组装)。
+///   前缀与按钮是**相邻两项**: 客户端把相邻的 Text + Button 渲染成同一行
+///   (按钮紧跟文本之后, 见 [renderItems] 的合并说明)
 /// - plan 显式带 items 数组时直接透传 (read 模式占位提示等自定义内容)
 static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool graphAsButton) {
     if (plan.contains("items") && plan["items"].is_array()) {
@@ -791,16 +793,14 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
             action.kind = pluginxx::ui::Action::Kind::Dispatch;
             action.name = kActionOpenGraph;
 
-            pluginxx::ui::Item row = pluginxx::ui::build::row({
-                pluginxx::ui::build::text("|- "),
-                agentxx::ui::kit::button(
-                    {{"label", "Graph"}, {"action", pluginxx::ui::dumpAction(action)}}
-                ),
-            });
-            row.hasGap = true;
-            row.gap    = pluginxx::ui::SizeValue::of(8.0);
-            row.cross  = "center";
-            items.push_back(std::move(row));
+            // 前缀与按钮做成相邻两项: 由客户端合并到同一行 (按钮紧跟文本之后)。
+            // 不要用 Row 表达"前缀 + 按钮": Row 里没声明 flex 的列会分走剩余宽度,
+            // 按钮会被推到整行右侧, 按钮底色还会被拉长到该列的右边缘
+            pluginxx::ui::Item prefix = pluginxx::ui::build::text("|- ");
+            items.push_back(std::move(prefix));
+            items.push_back(agentxx::ui::kit::button(
+                {{"label", "Graph"}, {"action", pluginxx::ui::dumpAction(action)}}
+            ));
         } else {
             pluginxx::ui::Item diagram = pluginxx::ui::build::node("Diagram");
             diagram.mermaid            = roadmap;

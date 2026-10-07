@@ -962,14 +962,26 @@ TestResult testTuiUiItems() {
 
     // ---------------- 文本 + 按钮合并行 ----------------
     {
+        // 前缀 + 按钮写成相邻两项: 客户端把相邻的 Text + Button 合并到同一行,
+        // 按钮紧跟在文本之后。若改用 Row 表达, 没声明 flex 的列会分走剩余宽度 ——
+        // 按钮被推到行的右侧, 按钮底色被拉长到该列的右边缘 (planning 的 Graph 行如此)。
+        // 按钮取 variant=primary: 实色底, 便于按单元底色断言覆盖范围 (默认的 secondary
+        // 是半透明底, 混到默认底色上后分不出覆盖范围)
         auto res = renderJson(
-            R"([{"kind":"Text","text":"|- "},{"kind":"Button","label":"Rebuild"}])",
+            R"([{"kind":"Text","text":"|- "},{"kind":"Button","label":"Rebuild","variant":"primary"}])",
             ctxFor(40)
         );
         auto text = renderToText(res, 40);
         XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
         XX_TEST_EXPECT_TRUE(screenHas(text, "|- "));
         XX_TEST_EXPECT_TRUE(screenHas(text, "Rebuild"));
+        // 按钮紧跟前缀 (前缀宽 3 列后就是按钮)
+        XX_TEST_EXPECT_TRUE(screenHas(text, "|- [ Rebuild ]"));
+        // 按钮底色只盖住按钮自身, 不铺到行尾
+        auto       screen = renderScreen(res, 40, 1);
+        const auto btnBg  = screen.CellAt(3, 0).background_color;  // 按钮首列 "["
+        const auto tailBg = screen.CellAt(39, 0).background_color; // 行尾空白列
+        XX_TEST_EXPECT_TRUE(btnBg != tailBg);
     }
     {
         // 无绑定时按钮不可点 (registry 为空 → 视为可点; 有 registry 且无绑定时不可点)

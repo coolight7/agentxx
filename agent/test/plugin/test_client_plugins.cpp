@@ -1337,23 +1337,23 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
-                    // 验证 "|- " 前缀 + Graph 按钮的布局契约: 一行 (Row) 内一个文本
-                    // 一个按钮, 动作是 dispatch (描述层规范写法)
+                    // 验证 "|- " 前缀 + Graph 按钮的布局契约: 前缀文本与按钮是**相邻两项**
+                    // (客户端把相邻的 Text + Button 渲染在同一行, 按钮紧跟文本之后),
+                    // 动作是 dispatch (描述层规范写法)
                     XX_TEST_EXPECT_TRUE(sec.items.is_array());
-                    XX_TEST_EXPECT_TRUE(sec.items.size() >= 2);
-                    const auto& graphRow = sec.items[0];
-                    XX_TEST_EXPECT_EQ(graphRow.value("kind", ""), std::string{"Row"});
-                    XX_TEST_EXPECT_TRUE(graphRow.contains("children"));
-                    const auto& graphCells = graphRow["children"];
-                    XX_TEST_EXPECT_TRUE(graphCells.is_array());
-                    XX_TEST_EXPECT_TRUE(graphCells.size() >= 2);
-                    XX_TEST_EXPECT_EQ(graphCells[0].value("kind", ""), std::string{"Text"});
-                    XX_TEST_EXPECT_EQ(graphCells[0].value("text", ""), std::string{"|- "});
-                    XX_TEST_EXPECT_EQ(graphCells[1].value("kind", ""), std::string{"Button"});
-                    XX_TEST_EXPECT_EQ(graphCells[1].value("label", ""), std::string{"Graph"});
+                    XX_TEST_EXPECT_TRUE(sec.items.size() >= 3);
+                    const auto& graphPrefix = sec.items[0];
+                    XX_TEST_EXPECT_EQ(graphPrefix.value("kind", ""), std::string{"Text"});
+                    XX_TEST_EXPECT_EQ(graphPrefix.value("text", ""), std::string{"|- "});
+                    const auto& graphButton = sec.items[1];
+                    XX_TEST_EXPECT_EQ(graphButton.value("kind", ""), std::string{"Button"});
+                    XX_TEST_EXPECT_EQ(graphButton.value("label", ""), std::string{"Graph"});
+                    // 前缀与按钮之间不夹别的项, 否则客户端不会合并到同一行
+                    XX_TEST_EXPECT_TRUE(sec.items[2].is_object());
+                    XX_TEST_EXPECT_EQ(sec.items[2].value("kind", ""), std::string{"Text"});
                     // 动作按描述层解析: 短写字符串与对象写法等价 (dispatch + 名字)
                     const auto graphAction
-                        = pluginxx::ui::parseAction(graphCells[1]["action"]);
+                        = pluginxx::ui::parseAction(graphButton["action"]);
                     XX_TEST_EXPECT_EQ(
                         graphAction.kind,
                         pluginxx::ui::Action::Kind::Dispatch
