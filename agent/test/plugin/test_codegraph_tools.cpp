@@ -152,6 +152,31 @@ add 是示例符号 (文档文件, 搜索结果里应排在代码文件之后)�
 })";
     }
 
+    // Swift 夹具: 覆盖 .swift 的提取路径。lang-swift 的 scanner 曾用
+    // calloc(0, sizeof(struct ScannerState)) 分配状态块 (长度为 0), 却全程读写其中的
+    // ongoing_raw_str_hash_count (4 字节), 解析任意 .swift 文件都会越界访问该块 ——
+    // Debug 默认开 ASan 时直接以 heap-buffer-overflow 中止进程 (索引到 lumenxx 的
+    // macos/ios 下的 .swift 文件即崩), Release 则是堆越界读写。见
+    // codegraph-cpp/CMakeLists.txt 里对该 scanner 的修正。
+    // 原始字符串 (带 # 定界) 与字符串插值会走 scanner 的 raw_str 分支, 正是崩的那条路径
+    {
+        // 用 SWIFT 定界符: 夹具正文里带 Swift 的 `#"..."#` 原始字符串与字符串插值
+        // (含 `)"` 序列), 用默认的 R"(...)" 会在那里提前结束字面量
+        std::ofstream f(code_dir / "widgets.swift");
+        f << R"SWIFT(import Foundation
+
+final class WidgetBoard {
+    func flockWidget(_ value: Int) -> Int {
+        return value + 1
+    }
+
+    func banner() -> String {
+        return #"widgets \#(flockWidget(1))"#
+    }
+}
+)SWIFT";
+    }
+
     return tmp_dir.generic_string();
 }
 
@@ -346,6 +371,34 @@ asio::awaitable<TestResult>
             bool sawDocOrData = false;
             XX_TEST_EXPECT_TRUE(codeFilesComeFirst(out, sawDocOrData));
             XX_TEST_EXPECT_TRUE(sawDocOrData);
+            // Swift 夹具入库: 校验 .swift 走通提取路径。lang-swift 的 scanner 曾用
+            // calloc(0, ...) 分配状态块 (长度为 0) 又读写其中的 4 字节计数, 解析 .swift
+            // 即越界 —— Debug 的 ASan 会直接中止进程 (见 codegraph-cpp/CMakeLists.txt
+            // 里对该 scanner 的修正)。此处若提取失败, 搜索不到 widgets.swift。
+            auto hasSwiftFixture = [](const std::string& text) {
+                return text.find("widgets.swift") != std::string::npos;
+            };
+            auto swiftOut = co_await tool->execute_async(utilxx_base::Json{
+                {"query", "flockWidget"}
+            });
+            int waitedSwiftMs = 0;
+            while (!hasSwiftFixture(swiftOut) && waitedSwiftMs < kWaitTimeoutMs) {
+                timer.expires_after(std::chrono::milliseconds(500));
+                co_await timer.async_wait(asio::use_awaitable);
+                waitedSwiftMs += 500;
+                swiftOut       = co_await tool->execute_async(utilxx_base::Json{
+                          {"query", "flockWidget"}
+                });
+            }
+            if (!hasSwiftFixture(swiftOut)) {
+                fprintf(
+                    stderr,
+                    "[codegraph] search 'flockWidget' timeout after %dms, last out: %.400s\n",
+                    waitedSwiftMs,
+                    swiftOut.c_str()
+                );
+            }
+            XX_TEST_EXPECT_TRUE(hasSwiftFixture(swiftOut));
             // 空 query → 参数检查失败抛异常 (插件侧抛 std::invalid_argument,
             // 经插件边界由宿主重新抛出为 std::runtime_error; 消息保留)
             bool threw = false;
