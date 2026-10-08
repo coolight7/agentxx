@@ -683,6 +683,19 @@ std::string AgentContext::renderPromptVars(std::string text, std::string_view se
     vars.sessionId = sessionId.empty() ? std::string{"default"} : std::string{sessionId};
     vars.workDir   = getSessionBaseWorkDir(sessionId);
     vars.tempDir   = sessionTempDir(sessionId);
+#if XX_IS_WIN_D
+    vars.platform  = "Windows";
+#elif XX_IS_LINUX_D
+    vars.platform  = "Linux";
+#elif XX_IS_MACOS_D
+    vars.platform  = "macOS";
+#elif XX_IS_ANDROID_D
+    vars.platform  = "Android";
+#elif XX_IS_IOS_D
+    vars.platform  = "iOS";
+#else
+    vars.platform  = "Unknown";
+#endif
     return AgentPrompt::renderVars(text, vars);
 }
 

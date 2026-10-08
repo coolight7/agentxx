@@ -31,6 +31,8 @@ struct PromptSessionVars {
     std::string tempDir;
     /// 会话 ID (原文; 临时目录路径里的目录段已按文件系统规则清洗)
     std::string sessionId;
+    /// 宿主操作系统平台 (如 "Windows", "Linux", "macOS", "Android", "iOS")
+    std::string platform;
 };
 
 /// 附加段的元数据 (计划 PRM-2)
@@ -101,6 +103,9 @@ public:
     /// - CodeAgent 初始化时 (配置启用 worktree 时) 追加到 `appendSystemPrompts["git-worktree"]`
     std::string kGitWorktreePrompt;
 
+    /// 上下文压缩总结模板 (供上下文压缩中间件使用, 不拼入常规系统提示词)
+    std::string summarizePrompt;
+
     /// 工具提示词表: key 为工具名, 值为该工具的 depict/args 提示词覆写
     std::map<std::string, ToolPrompt, std::less<>> toolPrompt;
 
@@ -109,6 +114,7 @@ public:
     inline static constexpr std::string_view kVarWorkDir   = "${work_dir}";
     inline static constexpr std::string_view kVarTempDir   = "${temp_dir}";
     inline static constexpr std::string_view kVarSessionId = "${session_id}";
+    inline static constexpr std::string_view kVarPlatform  = "${platform}";
 
     /// 替换提示词文本中的会话级占位符
     /// - 只做固定 token 的纯文本替换, 不按 fmt 模板解析: 自定义提示词里出现
