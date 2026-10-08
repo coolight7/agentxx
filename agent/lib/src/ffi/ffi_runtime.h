@@ -124,6 +124,35 @@ public:
     std::string getLanguage(std::string& err);
 
     // -------------------------------------------------------------------
+    // 能力清单 (A6)
+    // -------------------------------------------------------------------
+    std::string getCapabilities();
+
+    // -------------------------------------------------------------------
+    // 模型管理 (A1)
+    // -------------------------------------------------------------------
+    int         addModel(std::string_view modelJson, std::string& err);
+    int         removeModel(std::string_view modelName, std::string& err);
+    std::string listModels(std::string& err);
+
+    // -------------------------------------------------------------------
+    // Wire 透传 (A2)
+    // -------------------------------------------------------------------
+    int sendWire(std::string_view wireJson, std::string& err);
+
+    // -------------------------------------------------------------------
+    // 宿主工具 (A3)
+    // -------------------------------------------------------------------
+    int toolRegister(std::string_view toolJson, std::string& err);
+    int toolUnregister(std::string_view name, std::string& err);
+    int toolRespond(int64_t callId, int32_t isError, std::string_view resultJson, std::string& err);
+
+    // -------------------------------------------------------------------
+    // 文本合批 (A11)
+    // -------------------------------------------------------------------
+    int setDeltaBatch(int32_t maxDelayMs, std::string& err);
+
+    // -------------------------------------------------------------------
     // 同步查询 (阻塞等待服务端应答, 最长 10s; 返回 JSON 字符串或空)
     // -------------------------------------------------------------------
 

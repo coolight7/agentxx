@@ -388,6 +388,193 @@ static std::expected<void, std::string> verifyNewText(std::string_view newText, 
     return std::unexpected{fmt::format("写入后校验失败: 未找到模型 '{}'", mc.name)};
 }
 
+/// 条目行区间 → 可解析的 yaml 映射文本 (删除前判定"这一条是不是目标模型")
+/// - 内容列统一为 `itemIndent + 2`: 该列之前的空白 (首行还有 `- ` 前缀) 全部去掉,
+///   于是各键在还原后的文本里回到同一层缩进, 拼出来的是一份合法映射
+///   (只去 `itemIndent` 会让首行在第 0 列、其余键在第 2 列, yaml 会把后续键
+///   当成首行标量的多行续写, name 取不到值)
+static std::string
+    entryMappingText(const std::vector<std::string>& lines, size_t begin, size_t end, int itemIndent) {
+    const size_t stripCols = static_cast<size_t>(itemIndent) + 2;
+    std::string  out;
+    for (size_t i = begin; i < end; ++i) {
+        std::string_view lv{lines[i]};
+        size_t           skip = 0;
+        while (skip < lv.size() && (lv[skip] == ' ' || lv[skip] == '\t') && skip < stripCols) {
+            ++skip;
+        }
+        if (i == begin && lv.substr(skip).starts_with("- ")) {
+            skip += 2;
+        }
+        out.append(lv.substr(skip));
+        out.push_back('\n');
+    }
+    return out;
+}
+
+/// model.list 里的一个条目 (纯行扫描结果)
+struct ModelListEntry {
+    size_t      begin = 0; ///< 条目起始行 (`- ` 开头那一行)
+    size_t      end   = 0; ///< 条目结束行 (不含: 下一条目起始行或 list 块之后)
+    std::string name;      ///< 解析出的 name (单条解析失败时为空串)
+};
+
+/// 扫描 yaml 行里的 model.list 条目
+///
+/// 只做行扫描 (不依赖 yaml 节点类型判定): 追加、删除与删除后回读校验共用同一套
+/// 结构假设, 三者对"条目/注释/空行"的认定天然一致。
+///
+/// - `args`:
+///     - [lines] 文件按行切分的结果 (见 [splitLines])
+///     - [err] 结构不支持时写入原因
+/// - `return` 条目列表 (可为空); 结构不支持 (缺 model/list 段、内联写法、
+///   条目区出现非条目内容) 返回 nullopt
+static std::optional<std::vector<ModelListEntry>>
+    scanModelListEntries(const std::vector<std::string>& lines, std::string& err) {
+    err.clear();
+    size_t modelLine = lines.size();
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (isRootKeyLine(lines[i], "model")) {
+            modelLine = i;
+            break;
+        }
+    }
+    if (modelLine == lines.size()) {
+        err = "未找到 model 段";
+        return std::nullopt;
+    }
+    // 段范围: 到下一个根级键为止 (空行不结束段)
+    size_t sectionEnd = lines.size();
+    for (size_t i = modelLine + 1; i < lines.size(); ++i) {
+        if (!lines[i].empty() && indentOf(lines[i]) == 0) {
+            sectionEnd = i;
+            break;
+        }
+    }
+    // `list:` 行 (取缩进最小的那个)
+    size_t listLine   = sectionEnd;
+    int    listIndent = 0;
+    for (size_t i = modelLine + 1; i < sectionEnd; ++i) {
+        if (lines[i].empty()) {
+            continue;
+        }
+        const int  ind = indentOf(lines[i]);
+        const auto t   = trimmedView(lines[i]);
+        if (ind <= 0 || !t.starts_with("list") || t.size() <= 4 || t[4] != ':') {
+            continue;
+        }
+        if (listLine == sectionEnd || ind < listIndent) {
+            listLine   = i;
+            listIndent = ind;
+        }
+    }
+    if (listLine == sectionEnd) {
+        err = "model 段没有 list 列表";
+        return std::nullopt;
+    }
+    const std::string inlineVal = inlineValueOf(lines[listLine], "list");
+    if (inlineVal == "[]") {
+        return std::vector<ModelListEntry>{}; // 空流式序列: 没有条目
+    }
+    if (!inlineVal.empty()) {
+        err = "model.list 是内联写法";
+        return std::nullopt;
+    }
+
+    std::vector<ModelListEntry> entries;
+    for (size_t i = listLine + 1; i < sectionEnd;) {
+        if (lines[i].empty() || isBlankOrComment(lines[i])) {
+            ++i;
+            continue;
+        }
+        if (indentOf(lines[i]) <= listIndent) {
+            break; // 回到 list 的同级/更外层: 条目区结束
+        }
+        const int startIndent = indentOf(lines[i]);
+        if (!trimmedView(lines[i]).starts_with('-')) {
+            err = "model.list 下存在非条目内容";
+            return std::nullopt;
+        }
+        size_t end = i + 1;
+        for (; end < sectionEnd; ++end) {
+            if (lines[end].empty() || isBlankOrComment(lines[end])) {
+                continue;
+            }
+            if (indentOf(lines[end]) <= listIndent) {
+                break;
+            }
+            // 同缩进的 `- ` 起始行 = 下一个条目
+            if (indentOf(lines[end]) == startIndent && trimmedView(lines[end]).starts_with('-')) {
+                break;
+            }
+        }
+        ModelListEntry entry;
+        entry.begin = i;
+        entry.end   = end;
+        try {
+            const auto node = YAML::Load(entryMappingText(lines, i, end, startIndent));
+            if (node.IsMap()) {
+                entry.name = node["name"].as<std::string>("");
+            }
+        } catch (const std::exception&) {
+            // 单条解析不了: name 留空 (既不会误删, 也不影响其它条目)
+        }
+        entries.push_back(std::move(entry));
+        i = end;
+    }
+    return entries;
+}
+
+/// 原子写文本: 先写临时文件再改名; 失败时回写 [original] 并报错
+static std::expected<void, std::string> writeTextAtomically(
+    const std::filesystem::path& path,
+    std::string_view             newText,
+    std::string_view             original
+) {
+    std::error_code ec;
+    const auto      dir = path.parent_path();
+    if (!dir.empty()) {
+        std::filesystem::create_directories(dir, ec);
+        if (ec) {
+            return std::unexpected{fmt::format("创建目录失败: {}", ec.message())};
+        }
+    }
+    auto tmp = path;
+    tmp += ".tmp";
+    {
+        std::ofstream outFile(tmp, std::ios::binary | std::ios::trunc);
+        if (!outFile) {
+            return std::unexpected{
+                fmt::format("无法写入临时文件: {}", utilxx_base::pathToUtf8Generic(tmp))
+            };
+        }
+        outFile.write(newText.data(), static_cast<std::streamsize>(newText.size()));
+        outFile.flush();
+        if (!outFile) {
+            outFile.close();
+            std::filesystem::remove(tmp, ec);
+            return std::unexpected{"写入配置内容失败"};
+        }
+    }
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        // Windows 下目标已存在时改名会失败: 先删除目标再改名, 改名仍失败则回写原内容
+        std::error_code removeEc;
+        std::filesystem::remove(path, removeEc);
+        std::filesystem::rename(tmp, path, ec);
+        if (ec) {
+            std::error_code tmpEc;
+            std::filesystem::remove(tmp, tmpEc);
+            if (!original.empty()) {
+                std::ofstream restore(path, std::ios::binary | std::ios::trunc);
+                restore.write(original.data(), static_cast<std::streamsize>(original.size()));
+            }
+            return std::unexpected{fmt::format("保存配置文件失败: {}", ec.message())};
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -654,46 +841,8 @@ std::expected<void, std::string>
     }
 
     // ---- 写盘 (先写临时文件再改名: 写入失败时原文件保持原样) ----
-    std::error_code ec;
-    const auto      dir = path.parent_path();
-    if (!dir.empty()) {
-        std::filesystem::create_directories(dir, ec);
-        if (ec) {
-            return std::unexpected{fmt::format("创建目录失败: {}", ec.message())};
-        }
-    }
-    auto tmp = path;
-    tmp += ".tmp";
-    {
-        std::ofstream outFile(tmp, std::ios::binary | std::ios::trunc);
-        if (!outFile) {
-            return std::unexpected{
-                fmt::format("无法写入临时文件: {}", utilxx_base::pathToUtf8Generic(tmp))
-            };
-        }
-        outFile.write(newText.data(), static_cast<std::streamsize>(newText.size()));
-        outFile.flush();
-        if (!outFile) {
-            outFile.close();
-            std::filesystem::remove(tmp, ec);
-            return std::unexpected{"写入配置内容失败"};
-        }
-    }
-    std::filesystem::rename(tmp, path, ec);
-    if (ec) {
-        // Windows 下目标已存在时改名会失败: 先删除目标再改名, 改名仍失败则回写原内容
-        std::error_code removeEc;
-        std::filesystem::remove(path, removeEc);
-        std::filesystem::rename(tmp, path, ec);
-        if (ec) {
-            std::error_code tmpEc;
-            std::filesystem::remove(tmp, tmpEc);
-            if (!original.empty()) {
-                std::ofstream restore(path, std::ios::binary | std::ios::trunc);
-                restore.write(original.data(), static_cast<std::streamsize>(original.size()));
-            }
-            return std::unexpected{fmt::format("保存配置文件失败: {}", ec.message())};
-        }
+    if (auto written = writeTextAtomically(path, newText, original); !written.has_value()) {
+        return written;
     }
     XX_LOGI(
         "[Config] model '{}' appended to yaml config: {}",
@@ -701,6 +850,101 @@ std::expected<void, std::string>
         utilxx_base::pathToUtf8Generic(path)
     );
     return {};
+}
+
+// ---------------------------------------------------------------------------
+// 删除写入
+// ---------------------------------------------------------------------------
+
+std::expected<bool, std::string>
+    removeModelConfigFromYamlFile(std::string_view yamlPath, std::string_view modelName) {
+    if (yamlPath.empty()) {
+        return std::unexpected{"配置路径为空"};
+    }
+    if (trimWhitespace(modelName).empty()) {
+        return std::unexpected{"模型名称不能为空"};
+    }
+    const auto path = utilxx_base::utf8ToPath(yamlPath);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        return false; // 文件不存在 = 没有需要删除的条目
+    }
+    auto text = readFileText(path);
+    if (!text.has_value()) {
+        return std::unexpected{"读取配置文件失败"};
+    }
+    const std::string original = std::move(*text);
+    if (trimWhitespace(original).empty()) {
+        return false; // 空文件 = 没有需要删除的条目
+    }
+
+    // 用行扫描定位条目 (与追加写入共用同一套结构假设, 不依赖 yaml 节点类型判定):
+    // 文件里没有该条目时返回 false —— 模型可能来自 overlay 层配置或运行时注入
+    std::string              eol;
+    std::vector<std::string> lines = splitLines(original, eol);
+    std::string              scanErr;
+    auto                     entries = scanModelListEntries(lines, scanErr);
+    if (!entries.has_value()) {
+        return std::unexpected{fmt::format("配置文件结构不支持删除: {}", scanErr)};
+    }
+    size_t entryBegin = lines.size();
+    size_t entryEnd   = lines.size();
+    for (const auto& entry : *entries) {
+        if (entry.name == modelName) {
+            entryBegin = entry.begin;
+            entryEnd   = entry.end;
+            break;
+        }
+    }
+    if (entryBegin == lines.size()) {
+        return false;
+    }
+    // 条目上方紧跟的"由界面添加"说明注释随条目一起删除 (其余注释保留)
+    if (entryBegin > 0 && trimmedView(lines[entryBegin - 1]) == kEntryComment) {
+        --entryBegin;
+    }
+
+    std::vector<std::string> out;
+    out.reserve(lines.size());
+    out.insert(out.end(), lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(entryBegin));
+    out.insert(out.end(), lines.begin() + static_cast<std::ptrdiff_t>(entryEnd), lines.end());
+    std::string   newText = joinLines(out, eol);
+    constexpr char kLast = '\n';
+    if (!original.empty() && original.back() == kLast) {
+        newText.push_back(kLast);
+    }
+
+    // ---- 写入前回读校验: 目标条目必须已消失, 条目数只减 1 ----
+    // 同样用行扫描判定 (删掉最后一个条目后 `list:` 下面没有内容, yaml 会把它解析为
+    // null 而不是空序列, 按节点类型判定会把这种合法结果误判为"不是列表")
+    {
+        std::string verifyErr;
+        std::string verifyEol;
+        auto        after
+            = scanModelListEntries(splitLines(newText, verifyEol), verifyErr);
+        if (!after.has_value()) {
+            return std::unexpected{fmt::format("删除后校验失败: {}", verifyErr)};
+        }
+        for (const auto& entry : *after) {
+            if (entry.name == modelName) {
+                return std::unexpected{"删除后校验失败: 目标模型仍然存在"};
+            }
+        }
+        if (after->size() + 1 != entries->size()) {
+            return std::unexpected{"删除后校验失败: 条目数量变化异常"};
+        }
+    }
+
+    if (auto written = writeTextAtomically(path, newText, original); !written.has_value()) {
+        return std::unexpected{written.error()};
+    }
+    XX_LOGI(
+        "[Config] model '{}' removed from yaml config: {}",
+        modelName,
+        utilxx_base::pathToUtf8Generic(path)
+    );
+    return true;
 }
 
 } // namespace agent

@@ -16,6 +16,22 @@ void ModelProviderRegistry::registerModel(std::string_view name, const ModelConf
     }
 }
 
+bool ModelProviderRegistry::removeModel(std::string_view name) {
+    if (false == models_.contains(name)) {
+        return false;
+    }
+    utilxx_base::eraseHeterogeneous(models_, name);
+    utilxx_base::eraseHeterogeneous(providerCache_, name);
+    if (defaultName_ == name) {
+        if (!models_.empty()) {
+            defaultName_ = models_.begin()->first;
+        } else {
+            defaultName_.clear();
+        }
+    }
+    return true;
+}
+
 bool ModelProviderRegistry::setDefaultModel(std::string_view name) {
     if (false == models_.contains(name)) {
         return false;

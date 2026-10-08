@@ -5,11 +5,14 @@
 #include "agentxx/ffi_api.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
+#include "asio/steady_timer.hpp"
 #include "utilxx_base/json.h"
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -88,6 +91,15 @@ public:
     /// 失败全部挂起中断 (client io 线程调用; 停止或析构时清理)
     void failAllPendingInterrupts();
 
+    /// 设置文本合批窗口 (ms; <= 0 关闭合批)
+    void setDeltaBatch(int32_t maxDelayMs);
+
+    /// 提交宿主工具调用应答 (client io 线程)
+    bool submitHostToolResponse(int64_t callId, int32_t isError, std::string resultJson);
+
+    /// 刷新积压的文本合批 (client io 线程)
+    void flushDeltaBatch();
+
     // -----------------------------------------------------------------------
     // 同步应答路由 (由运行层注入; 收到对应 Wire 响应时在 client io 线程调用)
     // -----------------------------------------------------------------------
@@ -96,6 +108,8 @@ public:
         ModelInfo,
         ContextMessages,
         SessionList,
+        AddModelResult,
+        RemoveModelResult,
     };
 
     /// client io 线程: 把指定类型的服务端应答转发给运行层同步查询等待方
@@ -145,6 +159,19 @@ private:
 
     /// 挂起的中断应答通道 (wire id → channel; 仅 client io 线程访问，无锁)
     std::map<int64_t, std::shared_ptr<RespChannel>> pending_;
+
+    // ---- 文本增量合批 (A11; 仅 client io 线程访问) ----
+
+    /// 合批窗口毫秒数 (<=0 = 关闭合批, 逐条发 EVT_DELTA)
+    int32_t deltaBatchMs_ = 0;
+    /// 合批到期定时器 (首次开启合批时创建)
+    std::shared_ptr<asio::steady_timer> deltaBatchTimer_;
+    /// 积压的增量文本与类别 (text/thinking; 类别变化时先冲刷再累积)
+    std::string pendingDeltaText_;
+    std::string pendingDeltaKind_;
+
+    /// 已下发 EVT_HOST_TOOL_CALL 但宿主尚未应答的调用 id (用于停止时上报取消)
+    std::set<int64_t> pendingHostToolCalls_;
 
     /// client io 线程 id 与 agent io 线程 id (判 stop/destroy 调用方)
     std::thread::id clientThreadId_;

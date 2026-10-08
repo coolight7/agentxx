@@ -223,6 +223,10 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                     // 逐步上报启动进度: MCP 网络连接较慢, 逐 server 报告名称+地址
                     notifyInitProgress(fmt::format("加载 MCP: {} ({})", ns, mcpCfg.url));
                     XX_LOGD("load mcp tool: {} | {}", ns, mcpCfg.url);
+                    utilxx::HeaderMap mcpHeaders;
+                    for (const auto& [k, v] : mcpCfg.headers) {
+                        mcpHeaders.set(k, v);
+                    }
                     auto mcpClient = std::make_shared<agentxx::protocol::McpClient>(
                         agentxx::protocol::McpClient::Config{
                             .serverUrl = mcpCfg.url,
@@ -230,6 +234,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                             = std::string{agentxx::protocol::McpClient::kProtocol2026_07_28},
                             .toolNamespace   = ns,
                             .toolCallTimeout = mcpCfg.toolTimeout,
+                            .extraHeaders    = std::move(mcpHeaders),
                         }
                     );
                     auto result = co_await mcpClient->initialize();

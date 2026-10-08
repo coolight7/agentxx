@@ -273,6 +273,35 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& sender
     );
 
+    /// 处理客户端删除模型配置请求 (WireRemoveModel)
+    void handleRemoveModel(
+        const WireRemoveModel&                       req,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
+
+    /// 处理客户端注册宿主工具 (WireHostToolRegister)
+    void handleHostToolRegister(
+        const WireHostToolRegister&                  req,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
+
+    /// 处理客户端注销宿主工具 (WireHostToolUnregister)
+    void handleHostToolUnregister(
+        const WireHostToolUnregister&                req,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
+
+    /// 处理客户端返回宿主工具执行结果 (WireHostToolResult)
+    void handleHostToolResult(const WireHostToolResult& resp);
+
+    /// 反向调用客户端执行宿主工具
+    asio::awaitable<std::string> callHostToolAsync(
+        std::shared_ptr<AgentIOTransportBase> client,
+        std::string_view                      name,
+        const utilxx_base::Json&              args,
+        uint32_t                              timeoutSec
+    );
+
     /// 向客户端推送当前上下文统计 (target 指定时仅发向该客户端; 为空时向所有客户端广播)
     void sendContextStats(const std::shared_ptr<AgentIOTransportBase>& target = nullptr);
 
@@ -484,6 +513,19 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};
     std::atomic<bool> stopped_{false};
+
+    using HostToolRespChannel
+        = asio::experimental::concurrent_channel<void(ErrorCode, WireHostToolResult)>;
+
+    struct PendingHostToolCall {
+        std::shared_ptr<HostToolRespChannel> ch;
+        std::string                          name;
+    };
+
+    std::map<int64_t, PendingHostToolCall> pendingHostToolCalls_;
+    std::atomic<int64_t>                   nextHostToolCallId_{1};
+    std::map<std::shared_ptr<AgentIOTransportBase>, std::vector<std::string>, std::owner_less<>>
+        clientHostTools_;
 };
 
 } // namespace agent

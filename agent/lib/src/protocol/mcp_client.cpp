@@ -1281,7 +1281,7 @@ asio::awaitable<void> McpClient::discoverSseEndpoint() {
 
     std::string sseUrl = buildSseUrl(config_.serverUrl);
 
-    auto headers = utilxx::HeaderMap{};
+    auto headers = config_.extraHeaders;
     headers.set("Accept", "text/event-stream");
 
     std::string sseBody;

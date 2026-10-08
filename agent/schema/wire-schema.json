@@ -1,6 +1,6 @@
 {
   "protocolVersion": 1,
-  "messageCount": 42,
+  "messageCount": 48,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
     {
@@ -876,6 +876,123 @@
         "ok": true,
         "sessionId": "s1",
         "title": "重构会话标题"
+      }
+    },
+    {
+      "index": 42,
+      "name": "remove_model",
+      "type": "remove_model",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "name": "string"
+      },
+      "sample": {
+        "type": "remove_model",
+        "sessionId": "s1",
+        "name": "gpt-x"
+      }
+    },
+    {
+      "index": 43,
+      "name": "remove_model_result",
+      "type": "remove_model_result",
+      "fields": {
+        "type": "string",
+        "ok": "boolean",
+        "name": "string"
+      },
+      "sample": {
+        "type": "remove_model_result",
+        "ok": true,
+        "name": "gpt-x"
+      }
+    },
+    {
+      "index": 44,
+      "name": "host_tool_register",
+      "type": "host_tool_register",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "tools": "array<object{name:string, description:string, inputSchema:object, timeoutSec:integer, maxConcurrent:integer}>"
+      },
+      "sample": {
+        "type": "host_tool_register",
+        "sessionId": "s1",
+        "tools": [
+          {
+            "name": "lumen_open_file",
+            "description": "打开宿主编辑器里的文件",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              }
+            },
+            "timeoutSec": 30,
+            "maxConcurrent": 2
+          }
+        ]
+      }
+    },
+    {
+      "index": 45,
+      "name": "host_tool_unregister",
+      "type": "host_tool_unregister",
+      "fields": {
+        "type": "string",
+        "sessionId": "string",
+        "names": "array<string>"
+      },
+      "sample": {
+        "type": "host_tool_unregister",
+        "sessionId": "s1",
+        "names": [
+          "lumen_open_file"
+        ]
+      }
+    },
+    {
+      "index": 46,
+      "name": "host_tool_call",
+      "type": "host_tool_call",
+      "fields": {
+        "type": "string",
+        "callId": "integer",
+        "sessionId": "string",
+        "name": "string",
+        "argsJson": "string",
+        "timeoutSec": "integer"
+      },
+      "sample": {
+        "type": "host_tool_call",
+        "callId": 7,
+        "sessionId": "s1",
+        "name": "lumen_open_file",
+        "argsJson": "{\"path\":\"/tmp/a.txt\"}",
+        "timeoutSec": 30
+      }
+    },
+    {
+      "index": 47,
+      "name": "host_tool_result",
+      "type": "host_tool_result",
+      "fields": {
+        "type": "string",
+        "callId": "integer",
+        "ok": "boolean",
+        "resultJson": "string",
+        "errorMessage": "string"
+      },
+      "sample": {
+        "type": "host_tool_result",
+        "callId": 7,
+        "ok": true,
+        "resultJson": "{\"opened\":true}",
+        "errorMessage": ""
       }
     }
   ]

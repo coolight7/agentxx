@@ -46,6 +46,10 @@ public:
     /// - 同名 registerModel 会清除注入的实例 (下次 getProvider 重新创建)
     void setProvider(std::string_view name, std::shared_ptr<neograph::Provider> provider);
 
+    /// 删除指定模型 (不能删除最后一个默认模型, 或删除后重设默认模型)
+    /// - 返回 true 表示成功删除, false 表示模型不存在
+    bool removeModel(std::string_view name);
+
     /// 所有已注册模型的显示名称
     std::vector<std::string> listModelNames() const;
 

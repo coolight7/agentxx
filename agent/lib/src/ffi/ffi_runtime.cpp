@@ -778,6 +778,340 @@ std::string FfiAgentRuntime::listSessions(std::string& err) {
     );
 }
 
+// -------------------------------------------------------------------
+// 能力清单 (A6)
+// -------------------------------------------------------------------
+
+std::string FfiAgentRuntime::getCapabilities() {
+    utilxx_base::Json j = {
+        {"apiVersion",     AGENTXX_FFI_API_VERSION},
+        {"libraryVersion", "0.4.0"},
+        {"capabilities",   {
+            AGENTXX_FFI_CAP_ADD_MODEL,
+            AGENTXX_FFI_CAP_REMOVE_MODEL,
+            AGENTXX_FFI_CAP_LIST_MODELS,
+            AGENTXX_FFI_CAP_MESSAGE_QUEUE,
+            AGENTXX_FFI_CAP_VIEW_MESSAGES,
+            AGENTXX_FFI_CAP_HOST_TOOLS,
+            AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
+            AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
+            AGENTXX_FFI_CAP_DELTA_BATCH,
+        }}
+    };
+    return j.dump();
+}
+
+// -------------------------------------------------------------------
+// 模型管理 (A1)
+// -------------------------------------------------------------------
+
+int FfiAgentRuntime::addModel(std::string_view modelJson, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    utilxx_base::Json j;
+    try {
+        j = utilxx_base::Json::parse(modelJson);
+    } catch (const std::exception& e) {
+        err = fmt::format("model_json JSON 解析失败: {}", e.what());
+        return AGENTXX_FFI_ERR_JSON;
+    }
+    if (!j.is_object() || !j.contains("name") || !j["name"].is_string()
+        || j["name"].get<std::string>().empty()) {
+        err = "model_json 格式错误: 缺少必填字段 name";
+        return AGENTXX_FFI_ERR_CONFIG;
+    }
+
+    auto req      = agentxx::agent::io::addModelFromJson(j);
+    req.sessionId = sessionId_;
+
+    auto resStr = syncQuery(
+        FfiClientAgentIO::SyncKind::AddModelResult,
+        [this, req = std::move(req)]() mutable {
+            clientIO_->sendToPeer(std::move(req));
+        },
+        err
+    );
+    if (resStr.empty()) {
+        return AGENTXX_FFI_ERR_TIMEOUT;
+    }
+    try {
+        auto resJ = utilxx_base::Json::parse(resStr);
+        if (!resJ.value("ok", false)) {
+            err = resJ.value("error", "添加模型失败");
+            return AGENTXX_FFI_ERR_CONFIG;
+        }
+    } catch (...) {
+        err = "解析添加模型回执失败";
+        return AGENTXX_FFI_ERR_INTERNAL;
+    }
+    return AGENTXX_FFI_OK;
+}
+
+int FfiAgentRuntime::removeModel(std::string_view modelName, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    if (modelName.empty()) {
+        err = "model_name 不能为空";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    agent::WireRemoveModel req{
+        .sessionId = std::string(sessionId_),
+        .name      = std::string(modelName),
+    };
+
+    auto resStr = syncQuery(
+        FfiClientAgentIO::SyncKind::RemoveModelResult,
+        [this, req = std::move(req)]() mutable {
+            clientIO_->sendToPeer(std::move(req));
+        },
+        err
+    );
+    if (resStr.empty()) {
+        return AGENTXX_FFI_ERR_TIMEOUT;
+    }
+    try {
+        auto resJ = utilxx_base::Json::parse(resStr);
+        if (!resJ.value("ok", false)) {
+            err = resJ.value("error", "删除模型失败");
+            return AGENTXX_FFI_ERR_CONFIG;
+        }
+    } catch (...) {
+        err = "解析删除模型回执失败";
+        return AGENTXX_FFI_ERR_INTERNAL;
+    }
+    return AGENTXX_FFI_OK;
+}
+
+std::string FfiAgentRuntime::listModels(std::string& err) {
+    return getModelInfo(err);
+}
+
+// -------------------------------------------------------------------
+// Wire 透传 (A2)
+// -------------------------------------------------------------------
+
+int FfiAgentRuntime::sendWire(std::string_view wireJson, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    utilxx_base::Json j;
+    try {
+        j = utilxx_base::Json::parse(wireJson);
+    } catch (const std::exception& e) {
+        err = fmt::format("wire_json JSON 解析失败: {}", e.what());
+        return AGENTXX_FFI_ERR_JSON;
+    }
+    if (!j.is_object() || !j.contains("type") || !j["type"].is_string()) {
+        err = "wire_json 格式错误: 缺少必填字段 type";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    const std::string msgType = j["type"].get<std::string>();
+
+    // 黑名单拦截
+    if (msgType == "hello" || msgType == "ping" || msgType == "pong") {
+        err = "核心连接消息禁止由 send_wire 发送";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "user_input") {
+        err = "发送用户输入请使用专用接口 agentxx_ffi_send_input";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "cancel") {
+        err = "取消当前轮次请使用专用接口 agentxx_ffi_cancel";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "select_model") {
+        err = "切换当前模型请使用专用接口 agentxx_ffi_select_model";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "switch_session") {
+        err = "切换当前会话请使用专用接口 agentxx_ffi_switch_session";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "interrupt_response") {
+        err = "提交中断应答请使用专用接口 agentxx_ffi_interrupt_respond";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "add_model") {
+        err = "添加模型配置请使用专用接口 agentxx_ffi_add_model";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "remove_model") {
+        err = "删除模型配置请使用专用接口 agentxx_ffi_remove_model";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    if (msgType == "get_model" || msgType == "get_context" || msgType == "list_sessions") {
+        err = "同步查询请使用对应的专用查询符号 (如 agentxx_ffi_get_model_info 等)";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    // 白名单放行校验
+    static const std::set<std::string, std::less<>> s_whitelist = {
+        "compact_context",
+        "get_view_messages",
+        "list_dir",
+        "rename_session",
+        "set_full_auth",
+        "get_permission_state",
+        "clear_message_queue",
+        "remove_queue_item",
+        "interrupt_and_run_next",
+        "plugin_data_up",
+        "host_tool_register",
+        "host_tool_unregister",
+        "host_tool_result",
+    };
+
+    if (!s_whitelist.contains(msgType)) {
+        err = fmt::format("消息类型 '{}' 不在白名单允许范围内", msgType);
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    // 如果未带 sessionId, 自动补齐为当前绑定 sessionId
+    if (!j.contains("sessionId") || j["sessionId"].is_null()
+        || (j["sessionId"].is_string() && j["sessionId"].get<std::string>().empty())) {
+        j["sessionId"] = sessionId_;
+    }
+
+    auto wireMsg = agentxx::agent::io::deserialize(j.dump());
+    if (!wireMsg.has_value()) {
+        err = fmt::format("线消息反序列化失败: type={}", msgType);
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    asio::post(*clientIoCtx_, [self = shared_from_this(), msg = std::move(*wireMsg)]() mutable {
+        self->clientIO_->sendToPeer(std::move(msg));
+    });
+    return AGENTXX_FFI_OK;
+}
+
+// -------------------------------------------------------------------
+// 宿主工具 (A3)
+// -------------------------------------------------------------------
+
+int FfiAgentRuntime::toolRegister(std::string_view toolJson, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    utilxx_base::Json j;
+    try {
+        j = utilxx_base::Json::parse(toolJson);
+    } catch (const std::exception& e) {
+        err = fmt::format("tool_json JSON 解析失败: {}", e.what());
+        return AGENTXX_FFI_ERR_JSON;
+    }
+
+    agent::WireHostToolRegister reg;
+    reg.sessionId = sessionId_;
+
+    auto parseOneTool = [](const utilxx_base::Json& item) -> std::optional<agent::WireHostToolInfo> {
+        if (!item.is_object() || !item.contains("name") || !item["name"].is_string()) {
+            return std::nullopt;
+        }
+        agent::WireHostToolInfo info;
+        info.name        = item["name"].get<std::string>();
+        info.description = item.value("description", std::string{});
+        if (item.contains("inputSchema")) {
+            info.inputSchema = item["inputSchema"];
+        }
+        info.timeoutSec    = item.value("timeoutSec", uint32_t{0});
+        info.maxConcurrent = item.value("maxConcurrent", uint32_t{0});
+        return info;
+    };
+
+    if (j.is_array()) {
+        for (const auto& item : j) {
+            if (auto t = parseOneTool(item)) {
+                reg.tools.push_back(std::move(*t));
+            }
+        }
+    } else if (j.is_object()) {
+        if (j.contains("tools") && j["tools"].is_array()) {
+            for (const auto& item : j["tools"]) {
+                if (auto t = parseOneTool(item)) {
+                    reg.tools.push_back(std::move(*t));
+                }
+            }
+        } else {
+            if (auto t = parseOneTool(j)) {
+                reg.tools.push_back(std::move(*t));
+            }
+        }
+    }
+
+    if (reg.tools.empty()) {
+        err = "tool_json 未包含有效的工具定义 (需 name 字段)";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    asio::post(*clientIoCtx_, [self = shared_from_this(), req = std::move(reg)]() mutable {
+        self->clientIO_->sendToPeer(std::move(req));
+    });
+    return AGENTXX_FFI_OK;
+}
+
+int FfiAgentRuntime::toolUnregister(std::string_view name, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    if (name.empty()) {
+        err = "工具名称不能为空";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    agent::WireHostToolUnregister unreg{
+        .sessionId = std::string(sessionId_),
+        .names     = {std::string(name)},
+    };
+    asio::post(*clientIoCtx_, [self = shared_from_this(), req = std::move(unreg)]() mutable {
+        self->clientIO_->sendToPeer(std::move(req));
+    });
+    return AGENTXX_FFI_OK;
+}
+
+int FfiAgentRuntime::toolRespond(
+    int64_t          callId,
+    int32_t          isError,
+    std::string_view resultJson,
+    std::string&     err
+) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    auto str = std::string(resultJson);
+    asio::post(
+        *clientIoCtx_,
+        [self = shared_from_this(), callId, isError, str = std::move(str)]() mutable {
+            self->clientIO_->submitHostToolResponse(callId, isError, std::move(str));
+        }
+    );
+    return AGENTXX_FFI_OK;
+}
+
+// -------------------------------------------------------------------
+// 文本合批 (A11)
+// -------------------------------------------------------------------
+
+int FfiAgentRuntime::setDeltaBatch(int32_t maxDelayMs, std::string& err) {
+    if (!stateUsable(state())) {
+        err = "状态错误: 未启动或已停止";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    asio::post(*clientIoCtx_, [self = shared_from_this(), maxDelayMs]() {
+        self->clientIO_->setDeltaBatch(maxDelayMs);
+    });
+    return AGENTXX_FFI_OK;
+}
+
 // ---------------------------------------------------------------------------
 // HIL 中断
 // ---------------------------------------------------------------------------

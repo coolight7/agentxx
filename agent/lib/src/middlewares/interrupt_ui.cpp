@@ -235,6 +235,32 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
             b.props = *it;
         }
     }
+
+    b.dataUrl   = j.value("dataUrl", j.value("data_url", ""));
+    b.alt       = j.value("alt", "");
+    b.maxHeight = static_cast<int>(j.value("maxHeight", j.value("max_height", 0)));
+
+    {
+        bool   has = false;
+        double v   = jsonNumber(j, "value", has);
+        if (has) {
+            b.progressValue = v;
+        }
+        double t = jsonNumber(j, "total", has);
+        if (has) {
+            b.progressTotal = t;
+        }
+    }
+
+    b.pathMode = j.value("mode", "file");
+    if (j.contains("filter") && j["filter"].is_array()) {
+        for (const auto& f : j["filter"]) {
+            if (f.is_string()) {
+                b.filter.push_back(f.get<std::string>());
+            }
+        }
+    }
+
     return b;
 }
 
@@ -260,6 +286,22 @@ Json InterruptUiBlock::toJson() const {
     putIfNotEmpty(j, "path", path);
     putIfNotEmpty(j, "oldStr", oldStr);
     putIfNotEmpty(j, "newStr", newStr);
+
+    putIfNotEmpty(j, "dataUrl", dataUrl);
+    putIfNotEmpty(j, "alt", alt);
+    if (maxHeight > 0) {
+        j["maxHeight"] = maxHeight;
+    }
+    if (kind == "progress" || progressValue > 0 || progressTotal > 0) {
+        j["value"] = progressValue;
+        j["total"] = progressTotal;
+    }
+    if (control == "path") {
+        putIfNotEmpty(j, "mode", pathMode);
+        if (!filter.empty()) {
+            j["filter"] = filter;
+        }
+    }
 
     putIfNotEmpty(j, "id", id);
     putIfNotEmpty(j, "control", control);
@@ -511,6 +553,39 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         item.newStr = block.newStr;
         return withIndent(std::move(item));
     }
+    if (block.kind == "image") {
+        // 组件层没有"图片"元素: 降级为一行文本 —— 优先替代文本, 其次路径, 最后数据源
+        // (都没有时输出占位, 不静默丢内容)
+        item.kind          = "Text";
+        std::string detail = block.alt;
+        if (detail.empty()) {
+            detail = block.path;
+        }
+        if (detail.empty() && !block.dataUrl.empty()) {
+            detail = "内嵌图片";
+        }
+        item.text = textOf(
+            "",
+            detail.empty() ? std::string{"[图片]"} : fmt::format("[图片: {}]", detail)
+        );
+        return withIndent(std::move(item));
+    }
+    if (block.kind == "progress") {
+        item.kind       = "Text";
+        std::string lbl = block.label.empty() ? (block.text.empty() ? "" : block.text) : block.label;
+        if (!lbl.empty()) {
+            item.text = textOf(
+                "",
+                fmt::format("[进度: {}/{} {}]", block.progressValue, block.progressTotal, lbl)
+            );
+        } else {
+            item.text = textOf(
+                "",
+                fmt::format("[进度: {}/{}]", block.progressValue, block.progressTotal)
+            );
+        }
+        return withIndent(std::move(item));
+    }
     if (block.kind == "separator") {
         item.kind = "Divider";
         return withIndent(std::move(item));
@@ -521,6 +596,19 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         return withIndent(std::move(item));
     }
     if (block.kind == "control") {
+        if (block.control == "path") {
+            item.kind          = "Text";
+            std::string prompt = block.label.empty() ? block.id : block.label;
+            item.text          = textOf(
+                "",
+                fmt::format(
+                    "{}: [路径输入 ({})]",
+                    prompt,
+                    block.pathMode.empty() ? "file" : block.pathMode
+                )
+            );
+            return withIndent(std::move(item));
+        }
         item.kind      = "Control";
         item.id        = block.id;
         item.control   = block.control;

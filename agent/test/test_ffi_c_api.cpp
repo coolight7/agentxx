@@ -25,8 +25,11 @@
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -930,6 +933,279 @@ void testLanguageApis() {
     mock.stop();
 }
 
+/// 9) 能力清单查询: agentxx_ffi_get_capabilities
+void testCapabilities() {
+    AgentxxString log{};
+    AgentxxString capsOut{};
+
+    // 1. 无 handle 时亦可查询库基础能力
+    XX_TEST_EXPECT_EQ(agentxx_ffi_get_capabilities(nullptr, &capsOut, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(capsOut.data != nullptr);
+    if (capsOut.data != nullptr) {
+        try {
+            auto j = utilxx_base::Json::parse(std::string_view(capsOut.data, capsOut.size));
+            XX_TEST_EXPECT_EQ(j.value("apiVersion", 0), AGENTXX_FFI_API_VERSION);
+            XX_TEST_EXPECT_TRUE(j.contains("capabilities"));
+            auto caps = j["capabilities"];
+            XX_TEST_EXPECT_TRUE(caps.is_array());
+            auto hasCap = [&](const char* name) {
+                for (const auto& c : caps) {
+                    if (c.is_string() && c.get<std::string>() == name) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            XX_TEST_EXPECT_TRUE(hasCap(AGENTXX_FFI_CAP_ADD_MODEL));
+            XX_TEST_EXPECT_TRUE(hasCap(AGENTXX_FFI_CAP_REMOVE_MODEL));
+            XX_TEST_EXPECT_TRUE(hasCap(AGENTXX_FFI_CAP_LIST_MODELS));
+            XX_TEST_EXPECT_TRUE(hasCap(AGENTXX_FFI_CAP_HOST_TOOLS));
+            XX_TEST_EXPECT_TRUE(hasCap(AGENTXX_FFI_CAP_WIRE_PASSTHROUGH));
+            XX_TEST_EXPECT_TRUE(hasCap(AGENTXX_FFI_CAP_DELTA_BATCH));
+        } catch (...) {
+            g_ffi_failed++;
+            TEST_FAIL << "capabilities payload not valid JSON" << std::endl;
+        }
+    }
+    agentxx_ffi_string_free(&capsOut);
+
+    // 2. 参数校验: null out
+    XX_TEST_EXPECT_EQ(
+        agentxx_ffi_get_capabilities(nullptr, nullptr, &log),
+        AGENTXX_FFI_ERR_INVALID
+    );
+    agentxx_ffi_string_free(&log);
+}
+
+/// 10) 模型管理: add_model / remove_model / list_models
+/// - 用临时 dataDir: 模型配置会落到 {dataDir}/agentxx-config.yaml, 必须与真实
+///   用户数据目录隔离 (否则污染 ~/.agentxx 的配置, 重复运行还因同名模型失败)
+void testModelManagement() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    namespace fs = std::filesystem;
+    const auto tmpDataDir
+        = fs::temp_directory_path()
+          / ("ffi_model_mgmt_"
+             + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    fs::remove_all(tmpDataDir, ec);
+    fs::create_directories(tmpDataDir, ec);
+    const std::string cfgJson
+        = utilxx_base::Json{{"dataDir", tmpDataDir.generic_string()}}.dump();
+
+    AgentxxString    log{};
+    auto             cfgSv   = agentxx_string_view(cfgJson.data(), cfgJson.size());
+    auto             mjson   = mock.modelJson();
+    auto             mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a       = agentxx_ffi_create(&cfgSv, &mjsonSv, nullptr, &log);
+    XX_TEST_EXPECT_TRUE(a != nullptr);
+    XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
+
+    // 1. 列举初始模型
+    AgentxxString listOut{};
+    XX_TEST_EXPECT_EQ(agentxx_ffi_list_models(a, &listOut, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(listOut.data != nullptr);
+    agentxx_ffi_string_free(&listOut);
+
+    // 2. 添加模型配置
+    std::string newModelJson = fmt::format(
+        R"({{"name":"new-mock-model","type":"openai","baseUrl":"http://127.0.0.1:{}/v1","apiKey":"EMPTY"}})",
+        port
+    );
+    auto newModelSv = agentxx_string_view(newModelJson.data(), newModelJson.size());
+    XX_TEST_EXPECT_EQ(agentxx_ffi_add_model(a, &newModelSv, &log), AGENTXX_FFI_OK);
+
+    // 2b. 落盘校验: 模型已写入临时 dataDir 的 yaml (先落盘后注册)
+    {
+        const auto yamlPath = tmpDataDir / "agentxx-config.yaml";
+        XX_TEST_EXPECT_TRUE(fs::exists(yamlPath, ec));
+        if (auto text = [&]() -> std::string {
+                std::ifstream f(yamlPath, std::ios::binary);
+                return f ? std::string((std::istreambuf_iterator<char>(f)), {}) : std::string{};
+            }();
+            !text.empty()) {
+            XX_TEST_EXPECT_TRUE(text.find("new-mock-model") != std::string::npos);
+        }
+    }
+
+    // 3. 再次列举模型, 校验新模型存在
+    XX_TEST_EXPECT_EQ(agentxx_ffi_list_models(a, &listOut, &log), AGENTXX_FFI_OK);
+    if (listOut.data != nullptr) {
+        std::string s(listOut.data, listOut.size);
+        XX_TEST_EXPECT_TRUE(s.find("new-mock-model") != std::string::npos);
+    }
+    agentxx_ffi_string_free(&listOut);
+
+    // 3b. 重名添加应被拒绝 (配置里已有同名模型)
+    XX_TEST_EXPECT_TRUE(
+        agentxx_ffi_add_model(a, &newModelSv, &log) != AGENTXX_FFI_OK
+    );
+    agentxx_ffi_string_free(&log);
+
+    // 4. 尝试删除当前正在使用的模型 (应被拒绝):
+    // - add_model 成功即把发起会话切到新模型, 因此这里先验证"正在使用"这一保护,
+    //   再切回 ffi-mock 才能删掉新模型
+    auto addModelSv = agentxx_string_view_cstr("new-mock-model");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_remove_model(a, &addModelSv, &log), AGENTXX_FFI_ERR_CONFIG);
+    agentxx_ffi_string_free(&log);
+
+    // 4b. 配置里的主模型 (currentModelName) 同样不可删除
+    auto curModelSv = agentxx_string_view_cstr("ffi-mock");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_remove_model(a, &curModelSv, &log), AGENTXX_FFI_ERR_CONFIG);
+    agentxx_ffi_string_free(&log);
+
+    // 4c. 切回主模型 (select_model 走同一 client io 队列, 与后续删除保持先后序)
+    XX_TEST_EXPECT_EQ(agentxx_ffi_select_model(a, &curModelSv, &log), AGENTXX_FFI_OK);
+    // 确认切换已生效 (查询是同步应答, 排在 select_model 之后)
+    {
+        AgentxxString mi{};
+        XX_TEST_EXPECT_EQ(agentxx_ffi_get_model_info(a, &mi, &log), AGENTXX_FFI_OK);
+        if (mi.data != nullptr) {
+            auto j = utilxx_base::Json::parse(std::string_view(mi.data, mi.size));
+            XX_TEST_EXPECT_EQ(j.value("currentModel", std::string{}), std::string{"ffi-mock"});
+        }
+        agentxx_ffi_string_free(&mi);
+    }
+
+    // 5. 成功删除新模型
+    auto delModelSv = agentxx_string_view_cstr("new-mock-model");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_remove_model(a, &delModelSv, &log), AGENTXX_FFI_OK);
+
+    // 5b. 落盘校验: 条目已从 yaml 移除 (重启后不会复现)
+    {
+        std::ifstream f(tmpDataDir / "agentxx-config.yaml", std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        XX_TEST_EXPECT_TRUE(text.find("new-mock-model") == std::string::npos);
+    }
+
+    // 5c. 删除后列表里不再有该模型
+    XX_TEST_EXPECT_EQ(agentxx_ffi_list_models(a, &listOut, &log), AGENTXX_FFI_OK);
+    if (listOut.data != nullptr) {
+        std::string s(listOut.data, listOut.size);
+        XX_TEST_EXPECT_TRUE(s.find("new-mock-model") == std::string::npos);
+    }
+    agentxx_ffi_string_free(&listOut);
+
+    // 6. 再次删除已不存在的模型 (应报错)
+    XX_TEST_EXPECT_EQ(agentxx_ffi_remove_model(a, &delModelSv, &log), AGENTXX_FFI_ERR_CONFIG);
+    agentxx_ffi_string_free(&log);
+
+    // 7. 参数校验: 非法 JSON / 空名称
+    {
+        auto badSv = agentxx_string_view_cstr("{not json");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_add_model(a, &badSv, &log), AGENTXX_FFI_ERR_JSON);
+        agentxx_ffi_string_free(&log);
+
+        auto noNameSv = agentxx_string_view_cstr(R"({"baseUrl":"http://127.0.0.1:1/v1"})");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_add_model(a, &noNameSv, &log), AGENTXX_FFI_ERR_CONFIG);
+        agentxx_ffi_string_free(&log);
+
+        auto emptyNameSv = agentxx_string_view_cstr("");
+        XX_TEST_EXPECT_EQ(
+            agentxx_ffi_remove_model(a, &emptyNameSv, &log),
+            AGENTXX_FFI_ERR_INVALID
+        );
+        agentxx_ffi_string_free(&log);
+    }
+
+    XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
+    mock.stop();
+
+    std::error_code cleanupEc;
+    fs::remove_all(tmpDataDir, cleanupEc);
+}
+
+/// 11) Wire 透传: agentxx_ffi_send_wire (黑白名单校验)
+void testSendWire() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    AgentxxString    log{};
+    auto             mjson   = mock.modelJson();
+    auto             mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a       = agentxx_ffi_create(nullptr, &mjsonSv, nullptr, &log);
+    XX_TEST_EXPECT_TRUE(a != nullptr);
+    XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
+
+    // 1. 黑名单拦截测试: user_input 应被拒绝并提示使用专用接口
+    auto blackSv = agentxx_string_view_cstr(R"({"type":"user_input","text":"hi"})");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_wire(a, &blackSv, &log), AGENTXX_FFI_ERR_INVALID);
+    if (log.data != nullptr) {
+        std::string err(log.data, log.size);
+        XX_TEST_EXPECT_TRUE(err.find("agentxx_ffi_send_input") != std::string::npos);
+    }
+    agentxx_ffi_string_free(&log);
+
+    // 2. 白名单放行测试: compact_context
+    auto whiteSv = agentxx_string_view_cstr(R"({"type":"compact_context"})");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_wire(a, &whiteSv, &log), AGENTXX_FFI_OK);
+
+    // 3. 非法类型
+    auto invalidSv = agentxx_string_view_cstr(R"({"type":"unknown_custom_type"})");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_wire(a, &invalidSv, &log), AGENTXX_FFI_ERR_INVALID);
+    agentxx_ffi_string_free(&log);
+
+    XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
+    mock.stop();
+}
+
+/// 12) 宿主工具与文本合批接口: tool_register / tool_unregister / tool_respond / set_delta_batch
+void testHostToolAndDeltaBatch() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    AgentxxString    log{};
+    auto             mjson   = mock.modelJson();
+    auto             mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a       = agentxx_ffi_create(nullptr, &mjsonSv, nullptr, &log);
+    XX_TEST_EXPECT_TRUE(a != nullptr);
+    XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
+
+    // 1. 注册宿主工具
+    std::string toolJson = R"({
+        "tools": [{
+            "name": "my_host_tool",
+            "description": "test tool",
+            "inputSchema": {"type":"object","properties":{"p":{"type":"string"}}},
+            "timeoutSec": 30
+        }]
+    })";
+    auto toolSv = agentxx_string_view(toolJson.data(), toolJson.size());
+    XX_TEST_EXPECT_EQ(agentxx_ffi_tool_register(a, &toolSv, &log), AGENTXX_FFI_OK);
+
+    // 2. 响应工具
+    auto resSv = agentxx_string_view_cstr(R"({"output":"ok"})");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_tool_respond(a, 999, 0, &resSv, &log), AGENTXX_FFI_OK);
+
+    // 3. 注销工具
+    auto nameSv = agentxx_string_view_cstr("my_host_tool");
+    XX_TEST_EXPECT_EQ(agentxx_ffi_tool_unregister(a, &nameSv, &log), AGENTXX_FFI_OK);
+
+    // 4. 设置文本合批
+    XX_TEST_EXPECT_EQ(agentxx_ffi_set_delta_batch(a, 50, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_EQ(agentxx_ffi_set_delta_batch(a, 0, &log), AGENTXX_FFI_OK);
+
+    XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
+    mock.stop();
+}
+
 agentxx::test::TestResult testFfiCApi() {
     testVersionAndMemory();
     testCreateInvalid();
@@ -939,6 +1215,10 @@ agentxx::test::TestResult testFfiCApi() {
     testCancel();
     testMultipleRuntimesConcurrent();
     testEventQueue();
+    testCapabilities();
+    testModelManagement();
+    testSendWire();
+    testHostToolAndDeltaBatch();
     return TestResult(g_ffi_passed, g_ffi_failed);
 }
 

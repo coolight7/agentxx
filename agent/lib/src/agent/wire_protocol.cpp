@@ -220,6 +220,30 @@ utilxx_base::Json toJson(const WireRenameSessionResult& msg) {
     return makeRenameSessionResult(msg);
 }
 
+utilxx_base::Json toJson(const WireRemoveModel& msg) {
+    return makeRemoveModelMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireRemoveModelResult& msg) {
+    return makeRemoveModelResultMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireHostToolRegister& msg) {
+    return makeHostToolRegisterMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireHostToolUnregister& msg) {
+    return makeHostToolUnregisterMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireHostToolCall& msg) {
+    return makeHostToolCallMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireHostToolResult& msg) {
+    return makeHostToolResultMsg(msg);
+}
+
 // ---------------------------------------------------------------------------
 // 对称 fromJson 实现
 // ---------------------------------------------------------------------------
@@ -427,6 +451,30 @@ WireContextMessages contextMessagesFromJson(const utilxx_base::Json& j) {
     return resp;
 }
 
+WireRemoveModel removeModelMsgFromJson(const utilxx_base::Json& j) {
+    return removeModelFromJson(j);
+}
+
+WireRemoveModelResult removeModelResultMsgFromJson(const utilxx_base::Json& j) {
+    return removeModelResultFromJson(j);
+}
+
+WireHostToolRegister hostToolRegisterMsgFromJson(const utilxx_base::Json& j) {
+    return hostToolRegisterFromJson(j);
+}
+
+WireHostToolUnregister hostToolUnregisterMsgFromJson(const utilxx_base::Json& j) {
+    return hostToolUnregisterFromJson(j);
+}
+
+WireHostToolCall hostToolCallMsgFromJson(const utilxx_base::Json& j) {
+    return hostToolCallFromJson(j);
+}
+
+WireHostToolResult hostToolResultMsgFromJson(const utilxx_base::Json& j) {
+    return hostToolResultFromJson(j);
+}
+
 // ---------------------------------------------------------------------------
 // 顶层序列化与反序列化
 // ---------------------------------------------------------------------------
@@ -614,6 +662,30 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::RenameSessionResult,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return renameSessionResultFromJson(j);
+         }},
+        {MsgType::RemoveModel,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return removeModelMsgFromJson(j);
+         }},
+        {MsgType::RemoveModelResult,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return removeModelResultMsgFromJson(j);
+         }},
+        {MsgType::HostToolRegister,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return hostToolRegisterMsgFromJson(j);
+         }},
+        {MsgType::HostToolUnregister,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return hostToolUnregisterMsgFromJson(j);
+         }},
+        {MsgType::HostToolCall,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return hostToolCallMsgFromJson(j);
+         }},
+        {MsgType::HostToolResult,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return hostToolResultMsgFromJson(j);
          }},
     };
     return s_map;

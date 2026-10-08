@@ -1,0 +1,8 @@
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    camel_case_types: ignore
+    non_constant_identifier_names: ignore

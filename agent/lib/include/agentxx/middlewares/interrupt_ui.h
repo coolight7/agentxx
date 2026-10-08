@@ -69,6 +69,9 @@ struct InterruptUiOption {
 /// - `text`      文本行 (`text`/`textKey` + color/bold/dim/wrap/indent)
 /// - `markdown`  markdown 富文本块 (客户端按 markdown 渲染; 行式前端打印原文)
 /// - `diff`      差异对比 (`path`/`oldStr`/`newStr`)
+/// - `image`     图片 (`dataUrl` 或 `path` + `alt`/`maxHeight`; 无图宿主降级为一行文本)
+/// - `progress`  进度 (`progressValue`/`progressTotal` + `label`/`labelKey` 或 `text`/`textKey`;
+///               `progressTotal` 为 0 表示不确定态)
 /// - `separator` 分隔线 (`indent`)
 /// - `gap`       空行 (`lines` 行)
 /// - `control`   交互控件 (值进入结果 `values[id]`, 见下)
@@ -82,6 +85,8 @@ struct InterruptUiOption {
 /// - `text`     文本输入框 (`multiline` 预留)
 /// - `number`   数值控件 (`integer`/`min`/`max`/`step`)
 /// - `checkbox` 勾选项 (布尔值)
+/// - `path`     路径选择 (`pathMode` = file/dir/multi, `filter` = 扩展名白名单;
+///               由宿主用自己的文件选择器取值, 无选择器的宿主按文本输入降级)
 ///
 /// 未知 kind / 未知 control: 客户端渲染 fallback 文本或诊断行, 不使整份描述失效
 /// (向前兼容, 且不静默丢内容)。
@@ -118,6 +123,24 @@ struct InterruptUiBlock {
     std::string path;
     std::string oldStr;
     std::string newStr;
+
+    // ---- image ----
+    /// 图片数据 (data:image/...;base64,... 或 http URL; 与 path 二选一)
+    std::string dataUrl;
+    /// 替代文本
+    std::string alt;
+    /// 最大高度 (0 = 不限)
+    int maxHeight = 0;
+
+    // ---- progress ----
+    double progressValue = 0.0;
+    double progressTotal = 0.0;
+
+    // ---- control: path ----
+    /// 路径模式 (file / dir / multi; 默认 file)
+    std::string pathMode = "file";
+    /// 文件扩展名白名单 (如 .png, .jpg)
+    std::vector<std::string> filter;
 
     // ---- control: 标识与标签 ----
     /// 控件 id (结果 `values` 的键; 同一描述内必须唯一)

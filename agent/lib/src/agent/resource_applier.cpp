@@ -325,6 +325,11 @@ bool AgentResourceApplier::addMcpServer(
     // 连接身份: client 在登记前创建, 协程各阶段经指针比对识别 stale 条目
     // (注销后旧协程不再写回任何状态; 连接释放依赖 shared_ptr 引用计数 —— 不与
     // 执行中网络操作并发 close, 由最后一个引用析构时关闭, 规避竞态)
+    utilxx::HeaderMap mcpHeaders;
+    for (const auto& [k, v] : cfg.headers) {
+        mcpHeaders.set(k, v);
+    }
+
     auto client = std::make_shared<protocol::McpClient>(protocol::McpClient::Config{
         .serverUrl       = cfg.url,
         .protocolVersion = std::string{protocol::McpClient::kProtocol2026_07_28},
@@ -332,6 +337,7 @@ bool AgentResourceApplier::addMcpServer(
         .initTimeout
         = cfg.toolTimeout.count() > 0 ? cfg.toolTimeout : std::chrono::milliseconds{10000},
         .toolCallTimeout = cfg.toolTimeout,
+        .extraHeaders    = std::move(mcpHeaders),
     });
 
     auto& entry                          = mcpEntries_[ns];

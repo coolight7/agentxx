@@ -60,6 +60,27 @@ std::expected<void, std::string> validateNewModelConfig(
 std::expected<void, std::string>
     appendModelConfigToYamlFile(std::string_view yamlPath, const ModelConfig& mc);
 
+/// 从 yaml 文件的 `model.list` 段删除指定模型条目
+///
+/// 与 [appendModelConfigToYamlFile] 对称: 同样按行文本删除, 保留其余条目的注释、
+/// 键顺序与缩进风格; 写入前回读校验"目标条目已消失且条目数只减 1", 校验不通过
+/// 则不写文件。
+///
+/// 删除范围: 条目自身的全部行, 以及紧邻其上方的"由界面添加"说明注释 (其余注释保留)。
+/// 只操作 [yamlPath] 指向的那一个文件 (overlay 层里的同名条目由调用方自行处理)。
+///
+/// - `args`:
+///     - [yamlPath] yaml 配置文件路径 (UTF-8)
+///     - [modelName] 待删除的模型名称 (与 `name` 字段精确匹配)
+///
+/// - `return`:
+///     - `true`:  文件里原本有该条目, 已删除
+///     - `false`: 文件里没有该条目 (文件不存在/内容为空/条目缺失), 无需改动 ——
+///       不算错误: 模型可能来自 overlay 层配置或运行时注入, 调用方只摘除运行时即可
+///     - `unexpected`: 读不了文件 / 配置结构不支持 / 写盘失败 (文件保持原样)
+std::expected<bool, std::string>
+    removeModelConfigFromYamlFile(std::string_view yamlPath, std::string_view modelName);
+
 /// 模型配置对应的 yaml 配置文件路径: {dataDir}/agentxx-config.yaml
 /// - dataDir 为空时取系统数据目录 (与设置库/会话数据的回退一致,
 ///   见 AgentConfigStatic::getDataDir)

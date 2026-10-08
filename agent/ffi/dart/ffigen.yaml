@@ -20,6 +20,7 @@ compiler-opts:
   - '-I../../lib/include'
 # LLVM 工具链位置 (clang); 未设置时 ffigen 依次探测环境变量 LLVM/bin 等
 llvm-path:
+  - 'D:/0Acoolight/App/LLVM'
 functions:
   include: # 精确放行 ffi_api.h 全部导出符号, 保证导出面收敛于契约
     - 'agentxx_ffi_malloc'
@@ -47,6 +48,17 @@ functions:
     - 'agentxx_ffi_event_queue_free'
     - 'agentxx_ffi_event_queue_on_event'
     - 'agentxx_ffi_event_queue_pop'
+    - 'agentxx_ffi_set_language'
+    - 'agentxx_ffi_get_language'
+    - 'agentxx_ffi_get_capabilities'
+    - 'agentxx_ffi_add_model'
+    - 'agentxx_ffi_remove_model'
+    - 'agentxx_ffi_list_models'
+    - 'agentxx_ffi_send_wire'
+    - 'agentxx_ffi_tool_register'
+    - 'agentxx_ffi_tool_unregister'
+    - 'agentxx_ffi_tool_respond'
+    - 'agentxx_ffi_set_delta_batch'
 structs:
   include:
     - 'AgentxxFFICallbacks'

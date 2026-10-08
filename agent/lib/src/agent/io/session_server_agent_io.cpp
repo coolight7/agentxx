@@ -8,6 +8,8 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/tool_registry.h"
+#include "agentxx/tools/host_tool.h"
 #include "agentxx/util/exception.h"
 #include "asio/bind_cancellation_slot.hpp"
 #include "asio/cancel_after.hpp"
@@ -1164,6 +1166,14 @@ void SessionServerAgentIO::onPeerMessage(
                 sendToClient(sender, buildModelInfo(m.sessionId));
             } else if constexpr (std::is_same_v<T, WireAddModel>) {
                 handleAddModel(m, sender);
+            } else if constexpr (std::is_same_v<T, WireRemoveModel>) {
+                handleRemoveModel(m, sender);
+            } else if constexpr (std::is_same_v<T, WireHostToolRegister>) {
+                handleHostToolRegister(m, sender);
+            } else if constexpr (std::is_same_v<T, WireHostToolUnregister>) {
+                handleHostToolUnregister(m, sender);
+            } else if constexpr (std::is_same_v<T, WireHostToolResult>) {
+                handleHostToolResult(m);
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 if (!acceptSessionScope(m.sessionId, sender, "get_append_component_info")) {
                     return;
@@ -1676,6 +1686,13 @@ void SessionServerAgentIO::handleHello(
     // 协议版本与能力声明 (计划 PRO-3): 客户端据此判断可用功能 (如 afterViewSeq 补拉)
     helloAck.protocolVersion = agentxx::agent::WireProtocol::kVersion;
     helloAck.capabilities    = agentxx::agent::serverWireCapabilities();
+    if (std::find(hello.capabilities.begin(), hello.capabilities.end(), "host_tools")
+        != hello.capabilities.end()) {
+        if (std::find(helloAck.capabilities.begin(), helloAck.capabilities.end(), "host_tools")
+            == helloAck.capabilities.end()) {
+            helloAck.capabilities.push_back("host_tools");
+        }
+    }
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
         helloAck.workDir = agent->agentContext->getSessionWorkDir(config_.sessionId);
     }
@@ -1759,11 +1776,29 @@ void SessionServerAgentIO::handleHello(
 }
 
 void SessionServerAgentIO::onDisconnect(const std::shared_ptr<AgentIOTransportBase>& transport) {
+    auto cleanupClientTools = [this](const std::shared_ptr<AgentIOTransportBase>& client) {
+        if (!client) {
+            return;
+        }
+        auto it = clientHostTools_.find(client);
+        if (it != clientHostTools_.end()) {
+            if (auto agent = agent_.lock();
+                agent && agent->agentContext && agent->agentContext->toolRegistry) {
+                for (const auto& name : it->second) {
+                    agent->agentContext->toolRegistry->unregisterTool(name);
+                }
+            }
+            clientHostTools_.erase(it);
+        }
+    };
+
     if (transport) {
+        cleanupClientTools(transport);
         detachClient(transport);
     } else {
         for (auto it = clients_.begin(); it != clients_.end();) {
             if (!(*it) || !(*it)->alive()) {
+                cleanupClientTools(*it);
                 if (transport_ == *it) {
                     transport_.reset();
                 }
@@ -2526,6 +2561,235 @@ void SessionServerAgentIO::handleAddModel(
         configPath,
         req.sessionId
     );
+}
+
+void SessionServerAgentIO::handleRemoveModel(
+    const WireRemoveModel&                       req,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    WireRemoveModelResult result;
+    result.name = req.name;
+
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->agentConfig) {
+        result.error = "agent 尚未就绪, 无法删除模型";
+        sendToClient(sender, std::move(result));
+        return;
+    }
+
+    auto cfg = agent->agentContext->agentConfig;
+    if (!cfg->availableModels.contains(req.name)) {
+        result.error = fmt::format("模型不存在: {}", req.name);
+        sendToClient(sender, std::move(result));
+        return;
+    }
+
+    // 不能删除当前正在使用的模型 (含会话级选择与配置默认模型两种情况)
+    const std::string curModel = agent->getCurrentModelName(req.sessionId);
+    if (curModel == req.name || cfg->currentModelName == req.name
+        || (!cfg->model.name.empty() && cfg->model.name == req.name)) {
+        result.error = fmt::format("无法删除当前正在使用的模型: {}", req.name);
+        sendToClient(sender, std::move(result));
+        return;
+    }
+
+    // 先落盘再摘除运行时: 与 handleAddModel 对称。落盘失败时不摘除, 避免
+    // "本次列表里消失、重启后又回来"的半生效状态。
+    // - 文件里没有该条目 (模型来自 overlay 层配置或运行时注入) 返回 false,
+    //   不算失败: 此时只需摘除运行时注册
+    const std::string configPath = modelConfigYamlPath(cfg->dataDir);
+    auto              removed    = removeModelConfigFromYamlFile(configPath, req.name);
+    if (!removed.has_value()) {
+        XX_LOGE("[model] remove model '{}' failed: {}", req.name, removed.error());
+        result.error = removed.error();
+        sendToClient(sender, std::move(result));
+        return;
+    }
+    const bool removedFromYaml = removed.value();
+    if (!removedFromYaml) {
+        XX_LOGD(
+            "[model] model '{}' not in yaml config ({}), removing runtime registration only",
+            req.name,
+            configPath
+        );
+    }
+
+    cfg->availableModels.erase(req.name);
+    if (agent->agentContext->modelRegistry) {
+        agent->agentContext->modelRegistry->removeModel(req.name);
+    }
+
+    result.ok = true;
+    sendToClient(sender, std::move(result));
+    sendToClient(sender, buildModelInfo(req.sessionId));
+    XX_LOGI(
+        "[model] removed model '{}' from session '{}' (yaml: {}, config: {})",
+        req.name,
+        req.sessionId,
+        removedFromYaml ? "updated" : "unchanged",
+        configPath
+    );
+}
+
+asio::awaitable<std::string> SessionServerAgentIO::callHostToolAsync(
+    std::shared_ptr<AgentIOTransportBase> client,
+    std::string_view                      name,
+    const utilxx_base::Json&              args,
+    uint32_t                              timeoutSec
+) {
+    if (!client || !client->alive()) {
+        throw std::runtime_error(fmt::format("host tool client is not connected for tool: {}", name));
+    }
+
+    const int64_t callId = nextHostToolCallId_++;
+    auto          ch     = std::make_shared<HostToolRespChannel>(ex_, 1);
+    pendingHostToolCalls_[callId] = PendingHostToolCall{ch, std::string(name)};
+
+    WireHostToolCall call;
+    call.callId     = callId;
+    call.sessionId  = config_.sessionId;
+    call.name       = std::string(name);
+    call.argsJson   = args.is_string() ? args.get<std::string>() : args.dump();
+    call.timeoutSec = timeoutSec;
+
+    sendToClient(client, std::move(call));
+
+    std::shared_ptr<asio::steady_timer> timer;
+    if (timeoutSec > 0) {
+        timer = std::make_shared<asio::steady_timer>(ex_, std::chrono::seconds(timeoutSec));
+        timer->async_wait([ch, callId](const utilxx_base::AsioErrorCode& ec) {
+            if (!ec) {
+                WireHostToolResult timeoutRes;
+                timeoutRes.callId       = callId;
+                timeoutRes.ok           = false;
+                timeoutRes.errorMessage = "host tool execution timed out";
+                ch->try_send(utilxx_base::AsioErrorCode{}, std::move(timeoutRes));
+            }
+        });
+    }
+
+    struct ScopeGuard {
+        std::map<int64_t, PendingHostToolCall>& map;
+        int64_t                                 id;
+        std::shared_ptr<asio::steady_timer>     t;
+        ~ScopeGuard() {
+            map.erase(id);
+            if (t) {
+                t->cancel();
+            }
+        }
+    } guard{pendingHostToolCalls_, callId, timer};
+
+    utilxx_base::AsioErrorCode ec;
+    WireHostToolResult         res;
+    std::tie(ec, res) = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+
+    if (ec) {
+        throw std::runtime_error("host tool response channel closed");
+    }
+
+    if (!res.ok) {
+        throw std::runtime_error(
+            res.errorMessage.empty() ? "host tool returned error" : res.errorMessage
+        );
+    }
+
+    co_return res.resultJson;
+}
+
+void SessionServerAgentIO::handleHostToolRegister(
+    const WireHostToolRegister&                  req,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    if (!sender) {
+        return;
+    }
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->toolRegistry) {
+        XX_LOGW("[host_tool] agent toolRegistry not ready for host tool register");
+        return;
+    }
+
+    auto  toolRegistry    = agent->agentContext->toolRegistry;
+    auto& registeredNames = clientHostTools_[sender];
+
+    for (const auto& toolInfo : req.tools) {
+        if (toolInfo.name.empty()) {
+            continue;
+        }
+
+        toolRegistry->unregisterTool(toolInfo.name);
+
+        auto weakSender = std::weak_ptr<AgentIOTransportBase>{sender};
+        auto weakSelf   = std::weak_ptr<SessionServerAgentIO>{shared_from_this()};
+
+        auto handler = [weakSelf, weakSender](
+                           std::string_view         name,
+                           const utilxx_base::Json& args,
+                           uint32_t                 timeoutSec
+                       ) -> asio::awaitable<std::string> {
+            auto self   = weakSelf.lock();
+            auto client = weakSender.lock();
+            if (!self || !client) {
+                throw std::runtime_error("host tool server or client no longer valid");
+            }
+            co_return co_await self->callHostToolAsync(client, name, args, timeoutSec);
+        };
+
+        auto hostTool = std::make_shared<tools::HostTool>(
+            toolInfo,
+            agent->agentContext,
+            std::move(handler)
+        );
+
+        if (toolRegistry->registerTool(toolInfo.name, hostTool)) {
+            if (std::find(registeredNames.begin(), registeredNames.end(), toolInfo.name)
+                == registeredNames.end()) {
+                registeredNames.push_back(toolInfo.name);
+            }
+            XX_LOGI("[host_tool] registered host tool '{}'", toolInfo.name);
+        } else {
+            XX_LOGW("[host_tool] failed to register host tool '{}' (conflict)", toolInfo.name);
+        }
+    }
+}
+
+void SessionServerAgentIO::handleHostToolUnregister(
+    const WireHostToolUnregister&                req,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || !agent->agentContext->toolRegistry) {
+        return;
+    }
+    auto                      toolRegistry    = agent->agentContext->toolRegistry;
+    std::vector<std::string>* registeredNames = nullptr;
+    if (sender) {
+        auto it = clientHostTools_.find(sender);
+        if (it != clientHostTools_.end()) {
+            registeredNames = &it->second;
+        }
+    }
+
+    for (const auto& name : req.names) {
+        toolRegistry->unregisterTool(name);
+        if (registeredNames) {
+            registeredNames->erase(
+                std::remove(registeredNames->begin(), registeredNames->end(), name),
+                registeredNames->end()
+            );
+        }
+        XX_LOGI("[host_tool] unregistered host tool '{}'", name);
+    }
+}
+
+void SessionServerAgentIO::handleHostToolResult(const WireHostToolResult& resp) {
+    auto it = pendingHostToolCalls_.find(resp.callId);
+    if (it != pendingHostToolCalls_.end()) {
+        it->second.ch->try_send(utilxx_base::AsioErrorCode{}, resp);
+    } else {
+        XX_LOGW("[host_tool] received result for unknown callId {}", resp.callId);
+    }
 }
 
 std::shared_ptr<Session> SessionServerAgentIO::session() {

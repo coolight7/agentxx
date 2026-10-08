@@ -2388,6 +2388,148 @@ void test_config_writer_keeps_crlf() {
     fs::remove(path, ec);
 }
 
+/// 删除模型配置: 条目从 model.list 移除, 其余条目/注释/其它段保持不变
+void test_config_writer_removes_model() {
+    const auto path = tempWriterYamlPath("remove");
+    writeTextFile(
+        path,
+        "# 顶层注释\n"
+        "data_dir: default\n"
+        "model:\n"
+        "  # 模型列表\n"
+        "  list:\n"
+        "    # 声明模型, [name] 只是自定义名称\n"
+        "    - name: first\n"
+        "      type: \"openai\" # 必选\n"
+        "      base_url: \"https://a.example.com\" # API 地址\n"
+        "    # 由界面添加, 可直接编辑\n"
+        "    - name: second\n"
+        "      type: \"openai\"\n"
+        "      base_url: \"https://b.example.com\"\n"
+        "    - name: third\n"
+        "      type: \"openai\"\n"
+        "      base_url: \"https://c.example.com\"\n"
+        "  use:\n"
+        "    default: first\n"
+        "plugin:\n"
+        "  list: []\n"
+    );
+
+    auto removed = agentxx::agent::removeModelConfigFromYamlFile(path, "second");
+    XX_TEST_EXPECT_TRUE(removed.has_value());
+    XX_TEST_EXPECT_TRUE(removed.value());
+
+    const std::string text = readTextFile(path);
+    // 目标条目与其上方"由界面添加"注释一并消失; 其余注释/条目/段都保留
+    XX_TEST_EXPECT_TRUE(text.find("second") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("# 由界面添加, 可直接编辑") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("# 顶层注释") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("# 模型列表") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("# 声明模型, [name] 只是自定义名称") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("# 必选") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("  use:") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("plugin:") != std::string::npos);
+
+    // 加载后只剩另外两个模型, 字段未被改动
+    auto cfg = agentxx::client::loadYamlConfig(path, {}, {});
+    XX_TEST_EXPECT_EQ(cfg.models.size(), size_t{2});
+    XX_TEST_EXPECT_TRUE(cfg.models.contains("first"));
+    XX_TEST_EXPECT_TRUE(cfg.models.contains("third"));
+    XX_TEST_EXPECT_FALSE(cfg.models.contains("second"));
+    XX_TEST_EXPECT_EQ(cfg.useModelDefault, std::string("first"));
+    XX_TEST_EXPECT_EQ(cfg.dataDir, std::string("default"));
+
+    // 再删一次: 文件里已没有该条目 -> false (不算错误)
+    auto again = agentxx::agent::removeModelConfigFromYamlFile(path, "second");
+    XX_TEST_EXPECT_TRUE(again.has_value());
+    XX_TEST_EXPECT_FALSE(again.value());
+    XX_TEST_EXPECT_EQ(agentxx::client::loadYamlConfig(path, {}, {}).models.size(), size_t{2});
+
+    // 删不存在于文件的模型: false, 文件不变
+    const std::string before = readTextFile(path);
+    auto              missing = agentxx::agent::removeModelConfigFromYamlFile(path, "nope");
+    XX_TEST_EXPECT_TRUE(missing.has_value());
+    XX_TEST_EXPECT_FALSE(missing.value());
+    XX_TEST_EXPECT_EQ(readTextFile(path), before);
+
+    std::error_code ec;
+    fs::remove(path, ec);
+}
+
+/// 删除模型配置: 删掉最后一个条目后 list 为空, 文件仍可被加载器解析
+void test_config_writer_removes_last_model() {
+    const auto path = tempWriterYamlPath("remove_last");
+    writeTextFile(
+        path,
+        "model:\n"
+        "  list:\n"
+        "    # 由界面添加, 可直接编辑\n"
+        "    - name: only\n"
+        "      type: \"openai\"\n"
+        "      base_url: \"https://only.example.com\"\n"
+    );
+
+    auto removed = agentxx::agent::removeModelConfigFromYamlFile(path, "only");
+    XX_TEST_EXPECT_TRUE(removed.has_value());
+    XX_TEST_EXPECT_TRUE(removed.value());
+    XX_TEST_EXPECT_TRUE(readTextFile(path).find("only") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(agentxx::client::loadYamlConfig(path, {}, {}).models.empty());
+
+    // 空列表状态下仍能追加回条目 (两条路径对同一结构的一致假设)
+    auto written = agentxx::agent::appendModelConfigToYamlFile(path, sampleWriterModel("back"));
+    XX_TEST_EXPECT_TRUE(written.has_value());
+    auto cfg = agentxx::client::loadYamlConfig(path, {}, {});
+    XX_TEST_EXPECT_EQ(cfg.models.size(), size_t{1});
+    XX_TEST_EXPECT_TRUE(cfg.models.contains("back"));
+
+    std::error_code ec;
+    fs::remove(path, ec);
+}
+
+/// 删除模型配置: 文件不存在/内容为空/结构不支持时的返回
+void test_config_writer_remove_edge_cases() {
+    // 文件不存在 -> false (无需删除)
+    {
+        const auto      path = tempWriterYamlPath("remove_missing_file");
+        std::error_code ec;
+        fs::remove(path, ec);
+        auto removed = agentxx::agent::removeModelConfigFromYamlFile(path, "m1");
+        XX_TEST_EXPECT_TRUE(removed.has_value());
+        XX_TEST_EXPECT_FALSE(removed.value());
+        XX_TEST_EXPECT_FALSE(fs::exists(path));
+    }
+    // 空文件 -> false
+    {
+        const auto path = tempWriterYamlPath("remove_empty");
+        writeTextFile(path, "");
+        auto removed = agentxx::agent::removeModelConfigFromYamlFile(path, "m1");
+        XX_TEST_EXPECT_TRUE(removed.has_value());
+        XX_TEST_EXPECT_FALSE(removed.value());
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+    // 模型名为空 -> 直接拒绝
+    {
+        const auto path = tempWriterYamlPath("remove_empty_name");
+        writeTextFile(path, "model:\n  list:\n    - name: m1\n");
+        auto removed = agentxx::agent::removeModelConfigFromYamlFile(path, "");
+        XX_TEST_EXPECT_FALSE(removed.has_value());
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+    // list 是内联写法: 结构不支持, 不改动文件
+    {
+        const auto        path     = tempWriterYamlPath("remove_flow_list");
+        const std::string original = "model:\n  list: [{name: m1}]\n";
+        writeTextFile(path, original);
+        auto removed = agentxx::agent::removeModelConfigFromYamlFile(path, "m1");
+        XX_TEST_EXPECT_FALSE(removed.has_value());
+        XX_TEST_EXPECT_EQ(readTextFile(path), original);
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+}
+
 void test_validate_new_model_config_rules() {
     using agentxx::agent::ModelConfig;
     using agentxx::agent::validateNewModelConfig;
@@ -2547,6 +2689,9 @@ TestResult testConfigLoader() {
     test_config_writer_appends_section_when_missing();
     test_config_writer_rejects_duplicate_and_bad_structure();
     test_config_writer_keeps_crlf();
+    test_config_writer_removes_model();
+    test_config_writer_removes_last_model();
+    test_config_writer_remove_edge_cases();
     test_validate_new_model_config_rules();
 
     return TestResult{g_config_loader_passed, g_config_loader_failed};

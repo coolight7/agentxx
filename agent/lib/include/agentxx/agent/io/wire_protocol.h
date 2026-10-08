@@ -90,6 +90,18 @@ struct MsgType {    // ===== Client -> Server =====
     inline static constexpr std::string_view InputAck = "input_ack";
     /// 服务端会话重命名结果 (RenameSession 回执; 计划 RET-1a)
     inline static constexpr std::string_view RenameSessionResult = "rename_session_result";
+    /// 客户端请求删除模型配置
+    inline static constexpr std::string_view RemoveModel = "remove_model";
+    /// 服务端删除模型配置的结果
+    inline static constexpr std::string_view RemoveModelResult = "remove_model_result";
+    /// 客户端注册 host tool
+    inline static constexpr std::string_view HostToolRegister = "host_tool_register";
+    /// 客户端注销 host tool
+    inline static constexpr std::string_view HostToolUnregister = "host_tool_unregister";
+    /// 服务端调用 host tool
+    inline static constexpr std::string_view HostToolCall = "host_tool_call";
+    /// 客户端返回 host tool 执行结果
+    inline static constexpr std::string_view HostToolResult = "host_tool_result";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -1506,6 +1518,148 @@ inline WireAddModelResult addModelResultFromJson(const utilxx_base::Json& j) {
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// WireRemoveModel / WireRemoveModelResult
+// ---------------------------------------------------------------------------
+
+inline utilxx_base::Json makeRemoveModelMsg(const WireRemoveModel& m) {
+    return {
+        {"type",      MsgType::RemoveModel},
+        {"sessionId", m.sessionId         },
+        {"name",      m.name              },
+    };
+}
+
+inline WireRemoveModel removeModelFromJson(const utilxx_base::Json& j) {
+    WireRemoveModel m;
+    m.sessionId = j.value("sessionId", std::string{});
+    m.name      = j.value("name", std::string{});
+    return m;
+}
+
+inline utilxx_base::Json makeRemoveModelResultMsg(const WireRemoveModelResult& r) {
+    utilxx_base::Json j = {
+        {"type", MsgType::RemoveModelResult},
+        {"ok",   r.ok                      },
+        {"name", r.name                    },
+    };
+    if (!r.error.empty()) {
+        j["error"] = r.error;
+    }
+    return j;
+}
+
+inline WireRemoveModelResult removeModelResultFromJson(const utilxx_base::Json& j) {
+    WireRemoveModelResult r;
+    r.ok    = j.value("ok", false);
+    r.name  = j.value("name", std::string{});
+    r.error = j.value("error", std::string{});
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// WireHostToolRegister / WireHostToolUnregister / WireHostToolCall / WireHostToolResult
+// ---------------------------------------------------------------------------
+
+inline utilxx_base::Json makeHostToolRegisterMsg(const WireHostToolRegister& m) {
+    utilxx_base::Json tools = utilxx_base::Json::array();
+    for (const auto& t : m.tools) {
+        utilxx_base::Json tj = {
+            {"name",          t.name         },
+            {"description",   t.description  },
+            {"inputSchema",   t.inputSchema  },
+            {"timeoutSec",    t.timeoutSec   },
+            {"maxConcurrent", t.maxConcurrent},
+        };
+        tools.push_back(std::move(tj));
+    }
+    return {
+        {"type",      MsgType::HostToolRegister},
+        {"sessionId", m.sessionId              },
+        {"tools",     std::move(tools)         },
+    };
+}
+
+inline WireHostToolRegister hostToolRegisterFromJson(const utilxx_base::Json& j) {
+    WireHostToolRegister m;
+    m.sessionId = j.value("sessionId", std::string{});
+    if (j.contains("tools") && j["tools"].is_array()) {
+        for (const auto& item : j["tools"]) {
+            WireHostToolInfo info;
+            info.name        = item.value("name", std::string{});
+            info.description = item.value("description", std::string{});
+            if (item.contains("inputSchema")) {
+                info.inputSchema = item["inputSchema"];
+            }
+            info.timeoutSec    = item.value("timeoutSec", uint32_t{0});
+            info.maxConcurrent = item.value("maxConcurrent", uint32_t{0});
+            m.tools.push_back(std::move(info));
+        }
+    }
+    return m;
+}
+
+inline utilxx_base::Json makeHostToolUnregisterMsg(const WireHostToolUnregister& m) {
+    return {
+        {"type",      MsgType::HostToolUnregister},
+        {"sessionId", m.sessionId                },
+        {"names",     m.names                    },
+    };
+}
+
+inline WireHostToolUnregister hostToolUnregisterFromJson(const utilxx_base::Json& j) {
+    WireHostToolUnregister m;
+    m.sessionId = j.value("sessionId", std::string{});
+    if (j.contains("names") && j["names"].is_array()) {
+        for (const auto& item : j["names"]) {
+            if (item.is_string()) {
+                m.names.push_back(item.get<std::string>());
+            }
+        }
+    }
+    return m;
+}
+
+inline utilxx_base::Json makeHostToolCallMsg(const WireHostToolCall& m) {
+    return {
+        {"type",       MsgType::HostToolCall},
+        {"callId",     m.callId             },
+        {"sessionId",  m.sessionId          },
+        {"name",       m.name               },
+        {"argsJson",   m.argsJson           },
+        {"timeoutSec", m.timeoutSec         },
+    };
+}
+
+inline WireHostToolCall hostToolCallFromJson(const utilxx_base::Json& j) {
+    WireHostToolCall m;
+    m.callId     = j.value("callId", int64_t{0});
+    m.sessionId  = j.value("sessionId", std::string{});
+    m.name       = j.value("name", std::string{});
+    m.argsJson   = j.value("argsJson", std::string{});
+    m.timeoutSec = j.value("timeoutSec", uint32_t{0});
+    return m;
+}
+
+inline utilxx_base::Json makeHostToolResultMsg(const WireHostToolResult& m) {
+    return {
+        {"type",         MsgType::HostToolResult},
+        {"callId",       m.callId               },
+        {"ok",           m.ok                   },
+        {"resultJson",   m.resultJson           },
+        {"errorMessage", m.errorMessage         },
+    };
+}
+
+inline WireHostToolResult hostToolResultFromJson(const utilxx_base::Json& j) {
+    WireHostToolResult m;
+    m.callId       = j.value("callId", int64_t{0});
+    m.ok           = j.value("ok", false);
+    m.resultJson   = j.value("resultJson", std::string{});
+    m.errorMessage = j.value("errorMessage", std::string{});
+    return m;
+}
+
 /// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
 inline std::string msgTypeView(const utilxx_base::JsonView& jv) {
     if (!jv.is_object()) {
@@ -1629,6 +1783,24 @@ utilxx_base::Json toJson(const WireAddModelResult& msg);
 utilxx_base::Json toJson(const WireRenameSession& msg);
 
 utilxx_base::Json toJson(const WireRenameSessionResult& msg);
+
+utilxx_base::Json toJson(const WireRemoveModel& msg);
+WireRemoveModel   removeModelMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json     toJson(const WireRemoveModelResult& msg);
+WireRemoveModelResult removeModelResultMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json    toJson(const WireHostToolRegister& msg);
+WireHostToolRegister hostToolRegisterMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json      toJson(const WireHostToolUnregister& msg);
+WireHostToolUnregister hostToolUnregisterMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json toJson(const WireHostToolCall& msg);
+WireHostToolCall  hostToolCallMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json  toJson(const WireHostToolResult& msg);
+WireHostToolResult hostToolResultMsgFromJson(const utilxx_base::Json& j);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

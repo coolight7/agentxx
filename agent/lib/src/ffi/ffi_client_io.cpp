@@ -115,6 +115,50 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
         }
     }
     pending_.clear();
+    for (int64_t id : pendingHostToolCalls_) {
+        utilxx_base::Json j = {
+            {"callId", id},
+            {"reason", "cancelled"},
+        };
+        emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, dump(j));
+    }
+    pendingHostToolCalls_.clear();
+    flushDeltaBatch();
+}
+
+void FfiClientAgentIO::setDeltaBatch(int32_t maxDelayMs) {
+    deltaBatchMs_ = maxDelayMs;
+    if (deltaBatchMs_ <= 0) {
+        flushDeltaBatch();
+        if (deltaBatchTimer_) {
+            deltaBatchTimer_->cancel();
+        }
+    } else if (!deltaBatchTimer_) {
+        deltaBatchTimer_ = std::make_shared<asio::steady_timer>(ex_);
+    }
+}
+
+bool FfiClientAgentIO::submitHostToolResponse(int64_t callId, int32_t isError, std::string resultJson) {
+    pendingHostToolCalls_.erase(callId);
+    sendToPeer(agent::WireHostToolResult{
+        .callId       = callId,
+        .ok           = (isError == 0),
+        .resultJson   = (isError == 0 ? std::move(resultJson) : ""),
+        .errorMessage = (isError != 0 ? std::move(resultJson) : ""),
+    });
+    return true;
+}
+
+void FfiClientAgentIO::flushDeltaBatch() {
+    if (pendingDeltaText_.empty()) {
+        return;
+    }
+    utilxx_base::Json j = {
+        {"kind", pendingDeltaKind_},
+        {"text", std::move(pendingDeltaText_)},
+    };
+    pendingDeltaText_.clear();
+    emitEvent(AGENTXX_FFI_EVT_DELTA_TEXT_BATCH, dump(j));
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +166,28 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
 // ---------------------------------------------------------------------------
 
 void FfiClientAgentIO::onDelta(const agent::WireDelta& delta) {
+    using T = agent::WireDelta::Type;
+    if (deltaBatchMs_ > 0 && (delta.type == T::TextToken || delta.type == T::ThinkToken)) {
+        const std::string kind = (delta.type == T::TextToken) ? "text" : "thinking";
+        if (!pendingDeltaText_.empty() && pendingDeltaKind_ != kind) {
+            flushDeltaBatch();
+        }
+        pendingDeltaKind_ = kind;
+        pendingDeltaText_ += delta.text;
+        if (deltaBatchTimer_) {
+            deltaBatchTimer_->expires_after(std::chrono::milliseconds(deltaBatchMs_));
+            auto weakSelf = std::weak_ptr<FfiClientAgentIO>{shared_from_this()};
+            deltaBatchTimer_->async_wait([weakSelf](const utilxx_base::AsioErrorCode& ec) {
+                if (!ec) {
+                    if (auto self = weakSelf.lock()) {
+                        self->flushDeltaBatch();
+                    }
+                }
+            });
+        }
+        return;
+    }
+    flushDeltaBatch();
     emitEvent(AGENTXX_FFI_EVT_DELTA, dump(agent::io::makeDeltaMsg(delta)));
 }
 
@@ -130,6 +196,7 @@ void FfiClientAgentIO::onSync(const agent::WireSyncPayload& payload) {
 }
 
 void FfiClientAgentIO::onTurnResult(const agent::WireTurnResult& result) {
+    flushDeltaBatch();
     emitEvent(
         AGENTXX_FFI_EVT_TURN_END,
         dump(agent::io::makeTurnResult(
@@ -233,6 +300,38 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 j["code"]           = m.code;
                 j["message"]        = m.message;
                 emitEvent(AGENTXX_FFI_EVT_ERROR, dump(j));
+            } else if constexpr (std::is_same_v<T, agent::WireHostToolCall>) {
+                pendingHostToolCalls_.insert(m.callId);
+                utilxx_base::Json j = {
+                    {"callId",     m.callId},
+                    {"name",       m.name},
+                    {"argsJson",   m.argsJson},
+                    {"sessionId",  m.sessionId},
+                    {"timeoutSec", m.timeoutSec},
+                };
+                emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CALL, dump(j));
+            } else if constexpr (std::is_same_v<T, agent::WireAddModelResult>) {
+                // 模型增删回执: 走同步查询应答路由 (宿主 agentxx_ffi_add_model/
+                // remove_model 在等待), 同时作为 EVT_WIRE 透传给宿主
+                auto j = agent::io::toJson(m);
+                if (onSyncReply) {
+                    onSyncReply(SyncKind::AddModelResult, j);
+                }
+                emitEvent(AGENTXX_FFI_EVT_WIRE, dump(j));
+            } else if constexpr (std::is_same_v<T, agent::WireRemoveModelResult>) {
+                auto j = agent::io::toJson(m);
+                if (onSyncReply) {
+                    onSyncReply(SyncKind::RemoveModelResult, j);
+                }
+                emitEvent(AGENTXX_FFI_EVT_WIRE, dump(j));
+            } else if constexpr (
+                std::is_same_v<T, agent::WireListDirResult>
+                || std::is_same_v<T, agent::WireViewMessagesPage>
+                || std::is_same_v<T, agent::WireMessageQueueUpdate>
+                || std::is_same_v<T, agent::WirePermissionState>
+                || std::is_same_v<T, agent::WireRenameSessionResult>
+            ) {
+                emitEvent(AGENTXX_FFI_EVT_WIRE, dump(agent::io::toJson(m)));
             } else {
                 agent::AgentIOBase::onPeerMessage(agent::WireMessage{std::move(m)});
             }

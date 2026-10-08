@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 50,
+  "count": 51,
   "keys": [
     {
       "path": "data_dir",
@@ -285,6 +285,12 @@
       "type": "int (秒; 0 = 不限制)",
       "default": "120 (秒)",
       "sample": "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\"\n      timeout: 5"
+    },
+    {
+      "path": "mcp.list[].headers",
+      "type": "map<string, string> (HTTP 请求头; 支持 ${VAR} 展开)",
+      "default": "空 (不附加自定义请求头)",
+      "sample": "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\"\n      headers:\n        Authorization: \"Bearer token\""
     },
     {
       "path": "models",

@@ -96,6 +96,14 @@ using agentxx::agent::WireSyncPayload;
 using agentxx::agent::WireTurnResult;
 using agentxx::agent::WireUserInput;
 using agentxx::agent::WireViewMessagesPage;
+// 模型删除与 host tool (追加在变体末尾)
+using agentxx::agent::WireHostToolCall;
+using agentxx::agent::WireHostToolInfo;
+using agentxx::agent::WireHostToolRegister;
+using agentxx::agent::WireHostToolResult;
+using agentxx::agent::WireHostToolUnregister;
+using agentxx::agent::WireRemoveModel;
+using agentxx::agent::WireRemoveModelResult;
 
 namespace {
 
@@ -534,6 +542,65 @@ std::vector<WireSample> wireSamples() {
         m.error     = "";
         m.ok        = true;
         out.push_back({"rename_session_result", WireMessage{std::move(m)}});
+    }
+    // 43) 删除模型配置 (计划 A1; 追加在变体末尾)
+    {
+        WireRemoveModel m;
+        m.sessionId = "s1";
+        m.name      = "gpt-x";
+        out.push_back({"remove_model", WireMessage{std::move(m)}});
+    }
+    // 44) 删除模型配置结果
+    {
+        WireRemoveModelResult m;
+        m.name  = "gpt-x";
+        m.ok    = true;
+        m.error = "";
+        out.push_back({"remove_model_result", WireMessage{std::move(m)}});
+    }
+    // 45) 客户端注册宿主工具 (计划 A4)
+    {
+        WireHostToolRegister m;
+        m.sessionId = "s1";
+        m.tools.push_back(
+            WireHostToolInfo{
+                .name          = "lumen_open_file",
+                .description   = "打开宿主编辑器里的文件",
+                .inputSchema   = utilxx_base::Json{
+                    {"type",       "object"                                  },
+                    {"properties", utilxx_base::Json{{"path", utilxx_base::Json{{"type", "string"}}}}},
+                },
+                .timeoutSec    = 30,
+                .maxConcurrent = 2,
+            }
+        );
+        out.push_back({"host_tool_register", WireMessage{std::move(m)}});
+    }
+    // 46) 客户端注销宿主工具
+    {
+        WireHostToolUnregister m;
+        m.sessionId = "s1";
+        m.names     = {"lumen_open_file"};
+        out.push_back({"host_tool_unregister", WireMessage{std::move(m)}});
+    }
+    // 47) 服务端请求客户端执行宿主工具
+    {
+        WireHostToolCall m;
+        m.callId     = 7;
+        m.sessionId  = "s1";
+        m.name       = "lumen_open_file";
+        m.argsJson   = R"({"path":"/tmp/a.txt"})";
+        m.timeoutSec = 30;
+        out.push_back({"host_tool_call", WireMessage{std::move(m)}});
+    }
+    // 48) 客户端返回宿主工具执行结果
+    {
+        WireHostToolResult m;
+        m.callId       = 7;
+        m.ok           = true;
+        m.resultJson   = R"({"opened":true})";
+        m.errorMessage = "";
+        out.push_back({"host_tool_result", WireMessage{std::move(m)}});
     }
     return out;
 }

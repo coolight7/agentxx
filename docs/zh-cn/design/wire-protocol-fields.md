@@ -8,7 +8,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `1` · 消息类型数: 42
+协议版本: `1` · 消息类型数: 48
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
@@ -57,6 +57,12 @@
 | 39 | add_model_result | `add_model_result` | `type` string, `ok` boolean, `name` string, `error` string |
 | 40 | rename_session | `rename_session` | `type` string, `sessionId` string, `title` string |
 | 41 | rename_session_result | `rename_session_result` | `type` string, `ok` boolean, `sessionId` string, `title` string |
+| 42 | remove_model | `remove_model` | `type` string, `sessionId` string, `name` string |
+| 43 | remove_model_result | `remove_model_result` | `type` string, `ok` boolean, `name` string |
+| 44 | host_tool_register | `host_tool_register` | `type` string, `sessionId` string, `tools` array<object{name:string, description:string, inputSchema:object, timeoutSec:integer, maxConcurrent:integer}> |
+| 45 | host_tool_unregister | `host_tool_unregister` | `type` string, `sessionId` string, `names` array<string> |
+| 46 | host_tool_call | `host_tool_call` | `type` string, `callId` integer, `sessionId` string, `name` string, `argsJson` string, `timeoutSec` integer |
+| 47 | host_tool_result | `host_tool_result` | `type` string, `callId` integer, `ok` boolean, `resultJson` string, `errorMessage` string |
 
 ## 说明
 

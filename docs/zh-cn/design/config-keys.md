@@ -11,7 +11,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 50
+键数: 51
 
 | 键路径 | 类型 | 默认值 |
 |---|---|---|
@@ -62,6 +62,7 @@
 | `mcp.list[].namespace` | string (必填; 命名空间) | 无 (缺 namespace/url 的条目被跳过) |
 | `mcp.list[].url` | string | 空 (缺 url 的条目被跳过) |
 | `mcp.list[].timeout` | int (秒; 0 = 不限制) | 120 (秒) |
+| `mcp.list[].headers` | map<string, string> (HTTP 请求头; 支持 ${VAR} 展开) | 空 (不附加自定义请求头) |
 | `models` | 已废弃 (改名为 `model.list`) | 不生效 (整段忽略) |
 | `plugins` | 已废弃 (改名为 `plugin.list`) | 不生效 (整段忽略) |
 | `use_model` | 已废弃 (移到 `model.use`) | 不生效 (整段忽略) |
@@ -467,6 +468,17 @@ mcp:
     - namespace: "tools"
       url: "http://127.0.0.1:9/sse"
       timeout: 5
+```
+
+### `mcp.list[].headers`
+
+```yaml
+mcp:
+  list:
+    - namespace: "tools"
+      url: "http://127.0.0.1:9/sse"
+      headers:
+        Authorization: "Bearer token"
 ```
 
 ### `models`

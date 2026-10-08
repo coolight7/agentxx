@@ -583,6 +583,180 @@ void test_plain_text_extended_blocks() {
 }
 
 // ---------------------------------------------------------------------------
+// 新增块类型与控制: image / progress / control path (计划 A7)
+// ---------------------------------------------------------------------------
+
+/// A7: 图片块 / 进度块 / 路径控件的 JSON 往返与纯文本降级
+///
+/// 三者都是"宿主 GUI 能做得更好、行式前端仍要有内容"的形态: 往返必须不丢字段,
+/// 纯文本降级必须给出可读的一行 (不能静默丢内容)。
+void test_ui_image_progress_path() {
+    using namespace agentxx::middleware;
+
+    InterruptUi ui;
+    // 1) 图片块 (dataUrl 形态)
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "image"},
+        {"dataUrl", "data:image/png;base64,AAAA"},
+        {"alt", "生成结果预览"},
+        {"maxHeight", 12},
+    }));
+    // 2) 图片块 (path 形态; 无 alt)
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "image"},
+        {"path", "/tmp/out.png"},
+    }));
+    // 3) 进度块 (有总量 + 标签)
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "progress"},
+        {"value", 72},
+        {"total", 100},
+        {"label", "生成进度"},
+    }));
+    // 4) 进度块 (无总量 = 不确定态)
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "progress"},
+        {"value", 3},
+        {"total", 0},
+        {"textKey", "interrupt.progress"},
+    }));
+    // 5) 路径控件
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "control"},
+        {"control", "path"},
+        {"id", "target"},
+        {"label", "选择文件"},
+        {"help", "支持 png/jpg"},
+        {"mode", "dir"},
+        {"filter", Json::array({".png", ".jpg"})},
+        {"defaultValue", "/tmp"},
+    }));
+    // 6) 路径控件 (缺 mode = 默认 file)
+    ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "control"},
+        {"control", "path"},
+        {"id", "picked"},
+        {"label", "文件"},
+    }));
+
+    // --- 字段还原 ---
+    XX_TEST_EXPECT_EQ(ui.blocks.size(), size_t{6});
+    XX_TEST_EXPECT_EQ(ui.blocks[0].kind, std::string("image"));
+    XX_TEST_EXPECT_EQ(ui.blocks[0].dataUrl, std::string("data:image/png;base64,AAAA"));
+    XX_TEST_EXPECT_EQ(ui.blocks[0].alt, std::string("生成结果预览"));
+    XX_TEST_EXPECT_EQ(ui.blocks[0].maxHeight, 12);
+    XX_TEST_EXPECT_EQ(ui.blocks[1].kind, std::string("image"));
+    XX_TEST_EXPECT_EQ(ui.blocks[1].path, std::string("/tmp/out.png"));
+    XX_TEST_EXPECT_EQ(ui.blocks[1].maxHeight, 0);
+    XX_TEST_EXPECT_EQ(ui.blocks[2].kind, std::string("progress"));
+    XX_TEST_EXPECT_EQ(ui.blocks[2].progressValue, 72.0);
+    XX_TEST_EXPECT_EQ(ui.blocks[2].progressTotal, 100.0);
+    XX_TEST_EXPECT_EQ(ui.blocks[2].label, std::string("生成进度"));
+    XX_TEST_EXPECT_EQ(ui.blocks[3].progressTotal, 0.0);
+    XX_TEST_EXPECT_EQ(ui.blocks[3].textKey, std::string("interrupt.progress"));
+    const auto* path = findControl(ui, "path");
+    XX_TEST_EXPECT_TRUE(path != nullptr);
+    if (path) {
+        XX_TEST_EXPECT_EQ(path->id, std::string("target"));
+        XX_TEST_EXPECT_EQ(path->label, std::string("选择文件"));
+        XX_TEST_EXPECT_EQ(path->help, std::string("支持 png/jpg"));
+        XX_TEST_EXPECT_EQ(path->pathMode, std::string("dir"));
+        XX_TEST_EXPECT_EQ(path->filter.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(path->filter[0], std::string(".png"));
+        XX_TEST_EXPECT_EQ(path->defaultValue.get<std::string>(), std::string("/tmp"));
+    }
+    XX_TEST_EXPECT_EQ(countControls(ui, "path"), size_t{2});
+    XX_TEST_EXPECT_EQ(ui.blocks[5].pathMode, std::string("file")); // 缺省
+
+    // --- JSON 往返稳定 ---
+    const auto dumped = ui.toJson();
+    const auto back   = InterruptUi::fromJson(dumped);
+    XX_TEST_EXPECT_EQ(back.blocks.size(), ui.blocks.size());
+    XX_TEST_EXPECT_EQ(back.blocks[0].alt, std::string("生成结果预览"));
+    XX_TEST_EXPECT_EQ(back.blocks[0].maxHeight, 12);
+    XX_TEST_EXPECT_EQ(back.blocks[2].progressValue, 72.0);
+    XX_TEST_EXPECT_EQ(back.blocks[2].progressTotal, 100.0);
+    const auto* backPath = findControl(back, "path");
+    XX_TEST_EXPECT_TRUE(backPath != nullptr);
+    if (backPath) {
+        XX_TEST_EXPECT_EQ(backPath->pathMode, std::string("dir"));
+        XX_TEST_EXPECT_EQ(backPath->filter.size(), size_t{2});
+    }
+    XX_TEST_EXPECT_EQ(back.toJson().dump(), dumped.dump());
+
+    // --- 纯文本降级 (行式前端仍要有内容) ---
+    const auto text = interruptUiPlainText(ui, 0);
+    XX_TEST_EXPECT_TRUE(text.find("生成结果预览") != std::string::npos); // 图片: 用 alt
+    XX_TEST_EXPECT_TRUE(text.find("/tmp/out.png") != std::string::npos);  // 图片: 无 alt 用路径
+    XX_TEST_EXPECT_TRUE(text.find("72/100") != std::string::npos);        // 进度: value/total
+    XX_TEST_EXPECT_TRUE(text.find("生成进度") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("选择文件") != std::string::npos); // 路径控件标签
+    XX_TEST_EXPECT_TRUE(text.find("dir") != std::string::npos);      // 路径模式
+}
+
+/// A7: 图片/进度块经组件桥接 (itemOf) 也要有可见输出
+void test_ui_image_progress_bridge() {
+    using namespace agentxx::middleware;
+
+    // 图片块: 组件层没有图片元素, 桥接为带替代文本的文本行
+    const auto image = InterruptUiBlock::fromJson(Json{
+        {"kind", "image"},
+        {"dataUrl", "data:image/png;base64,AAAA"},
+        {"alt", "预览图"},
+    });
+    const auto imageItem = itemOf(image);
+    XX_TEST_EXPECT_TRUE(imageItem.has_value());
+    if (imageItem) {
+        XX_TEST_EXPECT_EQ(imageItem->kind, std::string{"Text"});
+        XX_TEST_EXPECT_TRUE(imageItem->text.fallback.find("预览图") != std::string::npos);
+    }
+
+    // 进度块: 桥接为 "value/total" 文本行
+    const auto progress = InterruptUiBlock::fromJson(Json{
+        {"kind", "progress"},
+        {"value", 5},
+        {"total", 8},
+    });
+    const auto progressItem = itemOf(progress);
+    XX_TEST_EXPECT_TRUE(progressItem.has_value());
+    if (progressItem) {
+        XX_TEST_EXPECT_EQ(progressItem->kind, std::string{"Text"});
+        XX_TEST_EXPECT_TRUE(progressItem->text.fallback.find("5/8") != std::string::npos);
+    }
+
+    // 路径控件: 非交互宿主按 "标签: [路径输入 (mode)]" 降级
+    const auto pathControl = InterruptUiBlock::fromJson(Json{
+        {"kind", "control"},
+        {"control", "path"},
+        {"id", "f"},
+        {"label", "文件"},
+        {"mode", "multi"},
+    });
+    const auto pathItem = itemOf(pathControl);
+    XX_TEST_EXPECT_TRUE(pathItem.has_value());
+    if (pathItem) {
+        XX_TEST_EXPECT_EQ(pathItem->kind, std::string{"Text"});
+        XX_TEST_EXPECT_TRUE(pathItem->text.fallback.find("multi") != std::string::npos);
+    }
+
+    // 其余控件形态不受影响 (buttons 仍走 Control)
+    const auto buttons = preset::buttonControl(
+        "ok",
+        {preset::option("true", "Yes")},
+        "Confirm",
+        {},          // labelKey
+        Json(true),  // defaultValue
+        true         // commitOnPick
+    );
+    const auto buttonsItem = itemOf(buttons);
+    XX_TEST_EXPECT_TRUE(buttonsItem.has_value());
+    if (buttonsItem) {
+        XX_TEST_EXPECT_EQ(buttonsItem->kind, std::string{"Control"});
+        XX_TEST_EXPECT_EQ(buttonsItem->control, std::string{"buttons"});
+    }
+}
+
+// ---------------------------------------------------------------------------
 // InterruptHandleArg 序列化 (ui 唯一描述来源; inputs[] 已删除)
 // ---------------------------------------------------------------------------
 
@@ -763,6 +937,8 @@ TestResult testInterruptUi() {
     test_plain_text_degrade();
     test_plain_text_extended_blocks();
     test_component_bridge();
+    test_ui_image_progress_path();
+    test_ui_image_progress_bridge();
     test_interrupt_handle_arg_serialization();
 
     return TestResult{g_interrupt_ui_passed, g_interrupt_ui_failed};

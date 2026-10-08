@@ -10,7 +10,7 @@ Provides a **strictly controlled and standardized C ABI export surface** for `li
 
 Core specifications and goals:
 
-1. **Strictly Converged Export Symbols**: The shared library export surface is pruned from ~170,000 C++ symbols (default full export) down to **only 26 top-level C symbols**, adhering to the hard requirement that "exported symbols must be pure C APIs" (standard runtime dependencies like `libstdc++` remain `DT_NEEDED`, which is normal dynamic linking).
+1. **Strictly Converged Export Symbols**: The shared library export surface is pruned from ~170,000 C++ symbols (default full export) down to **only 35 top-level C symbols**, adhering to the hard requirement that "exported symbols must be pure C APIs" (standard runtime dependencies like `libstdc++` remain `DT_NEEDED`, which is normal dynamic linking).
 2. **Strict C ABI Conventions**:
    - 8-byte struct alignment: Global `#pragma pack(push, 8)`.
    - Fixed-width primitive types: Exclusively uses `int32_t`, `int64_t`, `uint32_t`, `uint64_t`.
@@ -130,15 +130,20 @@ agentxx_ffi_event_queue_free(q);
 - Bounded Queue (capacity 16,384): Drops oldest events when host stops polling, injecting an `EVT_ERROR` warning event.
 - Implementation: `agent/lib/src/ffi/event_queue.cpp`.
 
-### 4.3 Exported Symbol Inventory (26 FFI C API symbols, see whitelist in `agent/lib/ffi_symbols.map`)
+### 4.3 Exported Symbol Inventory (35 FFI C API symbols, see whitelist in `agent/lib/ffi_symbols.map`)
 
 | Category | Symbols | Description |
 |---|---|---|
 | Memory | `agentxx_ffi_malloc` / `agentxx_ffi_free` / `agentxx_ffi_string_free` / `agentxx_ffi_strdup_n` | Sole allocation and deallocation channel across CRT heap boundaries |
 | Version | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API version check / Library version string view out-parameter |
 | Error | `agentxx_ffi_strerror` | Error code → static string view out-parameter |
+| Capability Inventory | `agentxx_ffi_get_capabilities` | Returns `{"apiVersion","libraryVersion","capabilities":[...]}`; lets hosts check which features this build supports (a second check on top of "is the symbol present"); works with a NULL handle |
 | Lifecycle | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | Create (does not start threads) / Async start (`EVT_READY`) / Sync stop (idempotent) / Destroy (auto-stops if running) |
 | Session (Async) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | Dispatched to IO thread for serial execution; inputs sent before READY are auto-queued |
+| Model Management | `agentxx_ffi_add_model` / `agentxx_ffi_remove_model` / `agentxx_ffi_list_models` | Dynamic add/remove/list of model configs; shares the wire-side implementation (send request + await acknowledgment), persists to disk before registering; removing the model currently in use is rejected; see Section 4.7 |
+| Wire Passthrough | `agentxx_ffi_send_wire` | Low-frequency operations go through passthrough (blacklist blocks core connection messages, whitelist admits the remaining client→server messages); see Section 4.8 |
+| Host Tools | `agentxx_ffi_tool_register` / `agentxx_ffi_tool_unregister` / `agentxx_ffi_tool_respond` | Host registers dynamic tools → server registers them into the ToolRegistry → on hit it emits `EVT_HOST_TOOL_CALL` → host responds; see Section 4.9 |
+| Delta Batching | `agentxx_ffi_set_delta_batch` | Sets the text/thinking delta batching window (ms; <=0 disables); see Section 4.10 |
 | Synchronous Queries | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | Blocks waiting for server response (max 10s); results written to `AgentxxString* out` (freed via `agentxx_ffi_string_free`); only one in-flight query per handle |
 | HITL Response | `agentxx_ffi_interrupt_respond` | Submits the response for `EVT_INTERRUPT_REQ` (payload is always an object `{"values":[...],"options":{...}}`: `values` order follows the descriptor's declared controls, `options` carries declared toggles; non-object payloads return `AGENTXX_FFI_ERR_INVALID`) |
 | Logging | `agentxx_ffi_drain_logs` | Drains pending logs `[{"level","message"},...]` into `AgentxxString* out` (for post-failure diagnostics) |
@@ -153,6 +158,7 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
 | `EVT_READY` | `{"sessionId"}` | Server is ready; input transmission can begin |
 | `EVT_SYNC` | wire sync JSON | Full or partial history sync (supports `fromIndex` tail-window semantics) |
 | `EVT_DELTA` | wire delta JSON | Streaming delta (`kind=text_token/thinking_token/tool_start/tool_end/turn_end/...`) |
+| `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"new text since last event"}` | Batched text/thinking delta (emitted only while `set_delta_batch(>0)`); the host appends the text directly instead of parsing every wire delta field; tool and turn events are never batched and stay strictly ordered |
 | `EVT_TURN_END` | wire turn_result JSON | Turn finished (`has_error` field reports asynchronous errors) |
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) |
 | `EVT_MODEL_INFO` | wire model_info JSON | Current model information (query/switch result) |
@@ -160,6 +166,9 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`): **`ui` is the required declarative form descriptor** (header segments + ordered blocks text/markdown/diff/separator/gap/control/submit + reserved custom). See 4.6 for the rendering guide |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | Interrupt expired or cancelled; can no longer be answered |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | Agent-side plugin event forwarding (`{plugin,event,data}`) |
+| `EVT_WIRE` | raw outbound wire JSON | Passthrough for low-frequency outbound messages (structural messages outside the dedicated set): `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; the host dispatches on `type` |
+| `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | Server asks the host to run a registered host tool (see 4.9); `argsJson` is JSON text |
+| `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | A host tool call was cancelled (calls still unanswered at stop/destroy are all reported), so the host can release local resources |
 | `EVT_ERROR` | `{"code","message"}` | Internal error |
 
 ### 4.5 Configuration and Model JSON (`agentxx_ffi_create` parameters)
@@ -223,6 +232,8 @@ ui = { "version": 1,
 | `text` | `text`/`textKey`, `color`, `bold`, `dim`, `wrap`, `indent` | Text line (`wrap` = hard-wrap to width; empty text renders nothing) |
 | `markdown` | `text`, `indent` | Rich markdown (headings/lists/tables/code fences; hosts without markdown may print the raw source) |
 | `diff` | `path`, `oldStr`, `newStr` | Diff view (hosts may degrade to unified diff text) |
+| `image` | `dataUrl` or `path`, `alt`, `maxHeight` | Image preview (capable hosts display it directly; terminals and other text hosts degrade to a line carrying `alt`) |
+| `progress` | `value`, `total`, `label`/`labelKey`, `text`/`textKey` | Progress bar (indeterminate when `total` is 0; hosts without bars degrade to a `value/total` text line) |
 | `separator` | `indent` | Divider line |
 | `gap` | `lines` | Blank line(s) |
 | `custom` | `component`, `props`, `fallback` | **Reserved fields**: client-side custom component (name + props); hosts without it render `fallback` |
@@ -236,6 +247,7 @@ ui = { "version": 1,
 | `checkbox` | `label`/`labelKey`, `defaultValue`(bool) | Checkbox row | Bool |
 | `text` | `label`/`labelKey`, `help`/`helpKey`, `defaultValue`, `multiline`(reserved) | Text input | String |
 | `number` | `defaultValue`, `integer`, `min`, `max`, `step` | Numeric control (- input +) | Number (integer when `integer=true`) |
+| `path` | `label`/`labelKey`, `mode`(`file`/`dir`/`multi`), `filter` (extension list), `defaultValue` | Path picker (hosts use their own file chooser; hosts without one degrade to a text input) | Path string (an array of paths for multi-select) |
 
 Common control fields: `id` (result key, unique per descriptor; defaults to `"value"`),
 `label`/`labelKey` (label above the control), `help`/`helpKey` (description below),
@@ -313,11 +325,122 @@ answer `{"values":{}}` on cancel.
 > `control`-block-driven Q&A) and the fully descriptor-driven TUI `InterruptView`
 > (`agent/client/.../components/interrupt_view.cpp`).
 
+### 4.7 Model Management (`agentxx_ffi_add_model` / `remove_model` / `list_models`)
+
+A GUI needs "list models + add + remove + switch", yet `create` only accepts a single
+`model_json`; switching models by destroying and recreating the handle would interrupt
+an in-flight session (the UI shows "reconnecting"). These three symbols therefore share
+the wire-side implementation: post a `remove_model` / `add_model` request and await the
+acknowledgment.
+
+- `add_model(model_json)`: fields are identical to the `model_json` passed to `create`
+  (`name`/`type`/`baseUrl`/`apiKey`/`modelName`/...); a duplicate name or invalid field
+  returns `ERR_CONFIG` / `ERR_JSON` and writes the detail to `log`; on success the
+  calling session switches to the new model immediately; **`apiKey` never appears in
+  logs or error messages**
+- `remove_model(model_name)`: removing the model currently in use is rejected
+  (`ERR_CONFIG`); the server persists first (removes the entry from `model.list` in
+  `{data_dir}/agentxx-config.yaml`) and only then unregisters it at runtime, so a model
+  cannot "disappear now, come back after restart"; if the entry was never in that file
+  (the model came from an overlay config or was injected at runtime) that is not an
+  error — only the runtime registration is dropped
+- `list_models(out)`: same shape as `EVT_MODEL_INFO`
+  (`{currentModel, models[], capabilities[]}`)
+- All three share the constraint of the other synchronous queries: only one in-flight
+  request per handle at a time
+
+### 4.8 Wire Passthrough (`agentxx_ffi_send_wire` + `EVT_WIRE`)
+
+Whatever remote mode can do, local mode must be able to do as well; otherwise the same
+UI needs two code paths depending on the connection type. The split is by "how often"
+and "does the caller need the error immediately":
+
+- **Dedicated symbols**: model add/remove/list, host tool register and respond,
+  interrupt response, the three synchronous queries — used daily, wrong arguments must
+  fail synchronously, and a host can decide "can I use this" by checking whether the
+  symbol exists;
+- **Passthrough entry**: the four queue operations, `compact_context`, `rename_session`,
+  `get_permission_state`, `set_full_auth`, `list_dir`, `plugin_data_up`, plus any wire
+  message added later — rarely used, still evolving, not worth a new symbol and a new
+  release each time.
+
+`send_wire(wire_json)` takes exactly the JSON a WS client would send (the in-process
+channel passes it through with zero serialization, and the server handles it with the
+same code as the WS path), so it only "decodes + validates + posts":
+
+- JSON parse failure → `ERR_JSON`; missing `type` → `ERR_INVALID`
+- **Blacklist** (returns `ERR_INVALID` and the log names the symbol to use instead):
+  `hello`/`ping`/`pong`, `user_input`, `cancel`, `select_model`, `switch_session`,
+  `interrupt_response`, `add_model`, `remove_model`,
+  `get_model`/`get_context`/`list_sessions` — endpoints that must keep state or that
+  already have a dedicated symbol do not go through passthrough
+- **Whitelist**: `compact_context` / `get_view_messages` / `list_dir` /
+  `rename_session` / `set_full_auth` / `get_permission_state` / `clear_message_queue` /
+  `remove_queue_item` / `interrupt_and_run_next` / `plugin_data_up` /
+  `host_tool_register` / `host_tool_unregister` / `host_tool_result`; anything else
+  returns `ERR_INVALID`
+- A missing `sessionId` is filled in with the currently bound session
+- Server replies for this kind of message come back through `EVT_WIRE` (payload is the
+  raw wire JSON; the host dispatches on `type`): `list_dir_result` /
+  `view_messages_page` / `message_queue_update` / `permission_state` /
+  `rename_session_result` / `add_model_result` / `remove_model_result`
+
+### 4.9 Host Tools (`agentxx_ffi_tool_register` / `tool_unregister` / `tool_respond`)
+
+Lets the agent call the host's own tools in local mode without opening an inbound port
+for them.
+
+Call sequence:
+
+```
+tool_register(tool_json) × N          → server registers them into the ToolRegistry
+send_input(...)                       → the model decides to call a host tool
+EVT_HOST_TOOL_CALL {callId,name,argsJson,sessionId,timeoutSec}
+tool_respond(callId, isError, result) → result goes back (the server coroutine resumes the turn)
+```
+
+- `tool_json` accepts either a single tool object or `{"tools":[ ... ]}` (register several
+  at once); each tool needs `name` (required) and may carry `description` /
+  `inputSchema` (a JSON Schema object) / `timeoutSec` (0 = unlimited) / `maxConcurrent`
+- Re-registering the same name unregisters the old one first, so a host can reconnect or
+  swap implementations without unregistering manually
+- Host tools are wrapped as `HostTool` in the `ToolRegistry`; a call goes through
+  `callHostToolAsync`, which sends `host_tool_call` to the client that registered the
+  tool and awaits the response. Once `timeoutSec` elapses the server marks it timed out
+  and lets the turn continue (that tool result is recorded as a failure), so a session
+  never hangs forever
+- `tool_respond(call_id, is_error, result_json)`: when `is_error != 0`, `result_json` is
+  treated as the error text
+- Tools registered by a client are unregistered automatically when that client
+  disconnects; calls still unanswered at `stop`/`destroy` are all reported as
+  `EVT_HOST_TOOL_CANCELLED {callId, reason}` so the host can release local resources
+
+### 4.10 Delta Batching (`agentxx_ffi_set_delta_batch`)
+
+The only high-frequency cross-language traffic on the local path is the per-token
+`EVT_DELTA` (one JSON event per token, each decoded by the host).
+`set_delta_batch(max_delay_ms)` accumulates text/thinking tokens of the same turn and
+stream into one `EVT_DELTA_TEXT_BATCH` at the end of the window:
+
+```
+set_delta_batch(24)                   → enable batching (16~33ms recommended)
+EVT_DELTA_TEXT_BATCH {kind,text} × N  → host appends the text directly
+set_delta_batch(0)                    → disable; behavior is exactly as before (per-token EVT_DELTA)
+```
+
+- Batching **does not change event ordering semantics**: tool start/end, turn end and
+  interrupts must remain separate, strictly ordered events — when one of them arrives the
+  pending text is flushed first, and then the event is emitted in its original order
+- Thinking content and body text are batched separately (`kind: "thinking"` / `"text"`;
+  when the two alternate, the pending one is flushed before switching)
+- Pending text is flushed on turn end / stop / destroy, so no trailing content is lost
+
 ## 5. Language Bindings & Examples
 
 | Directory | Description |
 |---|---|
 | [`agent/ffi/dart/`](/agent/ffi/dart/) | Dart FFI binding package: `ffigen.yaml` auto-generates bindings from `ffi_api.h` (`dart run ffigen --config ffigen.yaml`, outputting `lib/agentxx_ffi_bindings.dart`). |
+| [`agent/ffi/dart_wire/`](/agent/ffi/dart_wire/) | Pure Dart wire client package: full message models and JSON codecs plus WebSocket connection management (handshake / heartbeat / event stream / host tool responses), with no FFI or native library dependency. |
 | [`agent/example/ffi/dart/`](/agent/example/ffi/dart/) | Dart CLI example (`agentxx_dart_cli`): Streaming rendering, HITL permissions, session switching, `/model`, `/sessions`, `/logs` commands, Ctrl+C graceful exit, and mock LLM smoke checks (`example/smoke_check.dart`). See its README for details. |
 
 Other languages integrate via the same pattern: load whitelisted symbols via `dlopen`/`dlsym` (or platform equivalent) and register `AgentxxFFICallbacks`. For runtimes sensitive to payload lifetimes, bridge through the event queue described in Section 4.2.

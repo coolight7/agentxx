@@ -1514,9 +1514,11 @@ agent/
 │   ├── yaml-cpp/                 # YAML parser
 │   └── zlib/                     # Compression
 │
-├── ffi/                          # Language binding generation configurations
-│   └── dart/                     # Dart FFI bindings (ffigen.yaml generates
-│                                 #   agentxx_ffi_bindings.dart from ffi_api.h; dart pub get + ffigen)
+├── ffi/                          # Language binding generation configs & client packages
+│   ├── dart/                     # Dart FFI bindings (ffigen.yaml generates
+│   │                             #   agentxx_ffi_bindings.dart from ffi_api.h; dart pub get + ffigen)
+│   └── dart_wire/                # Pure Dart wire client package (message models + JSON codecs +
+│                                 #   WebSocket connection management; no FFI or native dependency)
 │
 ├── example/                      # Embedding and binding examples
 │   └── ffi/dart/                 # Dart CLI example (drives libagentxx via FFI:

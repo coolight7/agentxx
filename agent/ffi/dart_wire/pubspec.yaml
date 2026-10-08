@@ -1,0 +1,6 @@
+name: agentxx_wire
+description: Pure Dart client for Agentxx Wire protocol.
+version: 0.1.0
+
+environment:
+  sdk: ^3.6.0

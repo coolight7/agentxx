@@ -413,6 +413,202 @@ int32_t AGENTXX_FFI_CALL
 }
 
 int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_get_capabilities(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
+    if (out == nullptr) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
+    }
+    out->data = nullptr;
+    out->size = 0;
+    try {
+        std::string capsJson;
+        if (a != nullptr && a->impl) {
+            capsJson = a->impl->getCapabilities();
+        } else {
+            utilxx_base::Json j = {
+                {"apiVersion",     AGENTXX_FFI_API_VERSION},
+                {"libraryVersion", "0.4.0"},
+                {"capabilities",   {
+                    AGENTXX_FFI_CAP_ADD_MODEL,
+                    AGENTXX_FFI_CAP_REMOVE_MODEL,
+                    AGENTXX_FFI_CAP_LIST_MODELS,
+                    AGENTXX_FFI_CAP_MESSAGE_QUEUE,
+                    AGENTXX_FFI_CAP_VIEW_MESSAGES,
+                    AGENTXX_FFI_CAP_HOST_TOOLS,
+                    AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
+                    AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
+                    AGENTXX_FFI_CAP_DELTA_BATCH,
+                }}
+            };
+            capsJson = j.dump();
+        }
+        fillString(out, capsJson);
+        return AGENTXX_FFI_OK;
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_add_model(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* model_json,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    if (model_json == nullptr || model_json->data == nullptr || model_json->size == 0) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null or empty model_json", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->addModel(toSv(model_json), err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_remove_model(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* model_name,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    if (model_name == nullptr || model_name->data == nullptr || model_name->size == 0) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null or empty model_name", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->removeModel(toSv(model_name), err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_list_models(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
+    if (out == nullptr) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);
+    }
+    out->data = nullptr;
+    out->size = 0;
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    std::string err, res;
+    try {
+        res = a->impl->listModels(err);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+    if (res.empty()) {
+        return ffiFail(AGENTXX_FFI_ERR_TIMEOUT, err, log);
+    }
+    fillString(out, res);
+    ffiOk(log);
+    return AGENTXX_FFI_OK;
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_send_wire(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* wire_json,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    if (wire_json == nullptr || wire_json->data == nullptr || wire_json->size == 0) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null or empty wire_json", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->sendWire(toSv(wire_json), err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_register(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* tool_json,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    if (tool_json == nullptr || tool_json->data == nullptr || tool_json->size == 0) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null or empty tool_json", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->toolRegister(toSv(tool_json), err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_unregister(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* name,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    if (name == nullptr || name->data == nullptr || name->size == 0) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null or empty name", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->toolUnregister(toSv(name), err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_respond(
+    AgentxxFFIAgent*         a,
+    int64_t                  call_id,
+    int32_t                  is_error,
+    const AgentxxStringView* result_json,
+    AgentxxString*           log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->toolRespond(call_id, is_error, toSv(result_json), err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL agentxx_ffi_set_delta_batch(
+    AgentxxFFIAgent* a,
+    int32_t          maxDelayMs,
+    AgentxxString*   log
+) {
+    if (a == nullptr || !a->impl) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
+    }
+    std::string err;
+    try {
+        const int rc = a->impl->setDeltaBatch(maxDelayMs, err);
+        return ffiFinish(rc, err, log);
+    } catch (...) {
+        return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);
+    }
+}
+
+int32_t AGENTXX_FFI_CALL
     agentxx_ffi_get_context_messages(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log) {
     if (out == nullptr) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null out pointer", log);

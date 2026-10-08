@@ -616,6 +616,57 @@ struct WireRenameSessionResult {
     bool        ok = false;
 };
 
+/// 客户端请求删除模型配置 (Client -> Server)
+struct WireRemoveModel {
+    std::string sessionId;
+    std::string name; ///< 待删除的模型名称
+};
+
+/// 删除模型配置的结果 (Server -> Client)
+struct WireRemoveModelResult {
+    std::string name;
+    bool        ok = false;
+    std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
+};
+
+/// 宿主/客户端注册的工具元数据
+struct WireHostToolInfo {
+    std::string       name;          ///< 工具名
+    std::string       description;   ///< 工具描述
+    utilxx_base::Json inputSchema;   ///< JSON Schema 对象
+    uint32_t          timeoutSec    = 0; ///< 超时秒数 (0 = 不限)
+    uint32_t          maxConcurrent = 0; ///< 最大并发数 (0 = 默认)
+};
+
+/// 客户端注册 host tool (Client -> Server)
+struct WireHostToolRegister {
+    std::string                   sessionId;
+    std::vector<WireHostToolInfo> tools;
+};
+
+/// 客户端注销 host tool (Client -> Server)
+struct WireHostToolUnregister {
+    std::string              sessionId;
+    std::vector<std::string> names;
+};
+
+/// 服务端请求客户端执行 host tool (Server -> Client)
+struct WireHostToolCall {
+    int64_t     callId = 0;
+    std::string sessionId;
+    std::string name;
+    std::string argsJson;
+    uint32_t    timeoutSec = 0;
+};
+
+/// 客户端返回 host tool 执行结果 (Client -> Server)
+struct WireHostToolResult {
+    int64_t     callId = 0;
+    bool        ok     = false;
+    std::string resultJson;
+    std::string errorMessage;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -660,7 +711,14 @@ using WireMessage = std::variant<
     WireAddModelResult,
     /// 会话重命名 (计划 RET-1a; 追加在末尾保持既有变体下标稳定)
     WireRenameSession,
-    WireRenameSessionResult>;
+    WireRenameSessionResult,
+    /// 模型删除与 host tool
+    WireRemoveModel,
+    WireRemoveModelResult,
+    WireHostToolRegister,
+    WireHostToolUnregister,
+    WireHostToolCall,
+    WireHostToolResult>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

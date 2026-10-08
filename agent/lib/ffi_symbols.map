@@ -40,5 +40,14 @@
     agentxx_ffi_event_queue_free;
     agentxx_ffi_event_queue_on_event;
     agentxx_ffi_event_queue_pop;
+    agentxx_ffi_get_capabilities;
+    agentxx_ffi_add_model;
+    agentxx_ffi_remove_model;
+    agentxx_ffi_list_models;
+    agentxx_ffi_send_wire;
+    agentxx_ffi_tool_register;
+    agentxx_ffi_tool_unregister;
+    agentxx_ffi_tool_respond;
+    agentxx_ffi_set_delta_batch;
   local: *;
 };

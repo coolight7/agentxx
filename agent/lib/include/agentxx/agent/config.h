@@ -151,6 +151,9 @@ struct McpServerConfig {
     /// MCP 服务器 URL
     std::string url;
 
+    /// HTTP 请求头 (仅 http 传输时有效, 如 Authorization: "Bearer ...")
+    std::map<std::string, std::string> headers;
+
     /// MCP 工具调用超时限制 (毫秒)
     /// - 0 表示不限制
     /// - 默认 120 秒; yaml 中按秒配置 (timeout 字段, 0=不限制)

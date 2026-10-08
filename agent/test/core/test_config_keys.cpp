@@ -784,6 +784,27 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
              return std::to_string(m.toolTimeout.count());
          })}
     );
+    out.push_back(
+        {"mcp.list[].headers",
+         "map<string, string> (HTTP 请求头; 支持 ${VAR} 展开)",
+         "空 (不附加自定义请求头)",
+         "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\"\n"
+         "      headers:\n        Authorization: \"Bearer token\"\n",
+         kMinimalMcpYaml,
+         false,
+         "",
+         "Authorization=Bearer token",
+         mcpProbe("tools", [](const agentxx::agent::McpServerConfig& m) {
+             std::string text;
+             for (const auto& [key, value] : m.headers) {
+                 if (!text.empty()) {
+                     text += "|";
+                 }
+                 text += key + "=" + value;
+             }
+             return text;
+         })}
+    );
 
     // ---- 已废弃的旧键 (识别但不生效, 只记一次迁移提示) ----
     out.push_back(

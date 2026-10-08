@@ -610,6 +610,24 @@ static YamlAppConfig parseYamlConfigNode(
             }
             agent::McpServerConfig mcpCfg;
             mcpCfg.url = url;
+            // 自定义 HTTP 请求头 (仅 http/sse 传输时发送, 如 Authorization 等)
+            if (node["headers"] && node["headers"].IsMap()) {
+                for (const auto& kv : node["headers"]) {
+                    auto hKey = resolveEnvVars(
+                        kv.first.as<std::string>(""),
+                        dotEnvVars,
+                        overrideEnvVars
+                    );
+                    auto hVal = resolveEnvVars(
+                        kv.second.as<std::string>(""),
+                        dotEnvVars,
+                        overrideEnvVars
+                    );
+                    if (!hKey.empty()) {
+                        mcpCfg.headers[hKey] = hVal;
+                    }
+                }
+            }
             // 工具调用超时 (秒, 0=不限制, 默认 120); 容错解析, 非法时保留默认
             if (node["timeout"]) {
                 auto val = resolveEnvVars(

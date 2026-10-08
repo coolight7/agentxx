@@ -145,15 +145,20 @@ agentxx_ffi_event_queue_free(q);
 - 队列有界 (16384): 宿主停轮询时丢最旧并补发一条 EVT_ERROR 提示
 - 实现: `agent/lib/src/ffi/event_queue.cpp`
 
-### 4.3 导出符号清单 (26 个 FFI C API, 白名单见 `agent/lib/ffi_symbols.map`)
+### 4.3 导出符号清单 (35 个 FFI C API, 白名单见 `agent/lib/ffi_symbols.map`)
 
 | 分组 | 符号 | 说明 |
 |------|------|------|
 | 内存 | `agentxx_ffi_malloc` / `agentxx_ffi_free` / `agentxx_ffi_string_free` / `agentxx_ffi_strdup_n` | 跨 CRT 堆边界唯一分配与释放通道 |
 | 版本 | `agentxx_ffi_api_version` / `agentxx_ffi_library_version` | API 版本校验 / 库版本字符串视图出参 |
 | 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串视图出参 |
+| 能力清单 | `agentxx_ffi_get_capabilities` | 返回 `{"apiVersion","libraryVersion","capabilities":[...]}`; 宿主据此判断本版本支持哪些功能 (符号在不在之外的第二层校验); 传 NULL 句柄也可查询 |
 | 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
 | 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
+| 模型管理 | `agentxx_ffi_add_model` / `agentxx_ffi_remove_model` / `agentxx_ffi_list_models` | 动态增删查模型配置; 与服务端 wire 侧同一套实现 (投递请求 + 等回执), 先落盘后注册; 删除当前正在使用的模型被拒绝; 见 4.7 |
+| Wire 透传 | `agentxx_ffi_send_wire` | 低频操作走透传 (黑名单拦截核心连接消息, 白名单放行其余 client→server 消息); 见 4.8 |
+| 宿主工具 | `agentxx_ffi_tool_register` / `agentxx_ffi_tool_unregister` / `agentxx_ffi_tool_respond` | 宿主注册动态工具 → 服务端注册进 ToolRegistry → 命中时发 EVT_HOST_TOOL_CALL → 宿主应答; 见 4.9 |
+| 文本合批 | `agentxx_ffi_set_delta_batch` | 设置文本/思考增量合批窗口 (ms; <=0 关闭); 见 4.10 |
 | 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 结果写入 `AgentxxString* out` 出参 (`agentxx_ffi_string_free` 释放); 同一句柄同一时刻仅允许一个未完成的请求 |
 | HIL 应答 | `agentxx_ffi_interrupt_respond` | 提交 EVT_INTERRUPT_REQ 的应答 (载荷恒为对象形态 `{"values":[...],"options":{...}}`: values 顺序 = 描述声明的控件顺序; options 对应描述声明的勾选项, 非对象形态返回 AGENTXX_FFI_ERR_INVALID) |
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
@@ -170,6 +175,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_READY` | `{"sessionId"}` | 服务端就绪, 可开始发送输入 |
 | `EVT_SYNC` | wire sync JSON | 全量/部分历史同步 (含 fromIndex 尾窗语义) |
 | `EVT_DELTA` | wire delta JSON | 流式增量 (kind=text_token/thinking_token/tool_start/tool_end/turn_end/...) |
+| `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"自上次事件以来的新增文本"}` | 合批后的文本/思考增量 (仅 `set_delta_batch(>0)` 时产出); 宿主直接追加, 不必解析 wire delta 全部字段; 工具/轮次事件不受合批影响, 仍严格有序 |
 | `EVT_TURN_END` | wire turn_result JSON | 轮次结束 (`has_error` 字段报告异步错误) |
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果): `{currentModel, models[], capabilities[]}`; `capabilities` 为各模型多模态输入能力 `{name, image_input, audio_input, video_input}`, 宿主据此判断是否展示图片/音频/视频输入入口 |
@@ -177,6 +183,9 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
+| `EVT_WIRE` | 原始下行 wire JSON | 低频下行消息透传 (白名单外的结构性消息): `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; 宿主按 `type` 自行分派 |
+| `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | 服务端请求宿主执行已注册的宿主工具 (见 4.9); `argsJson` 为 JSON 文本 |
+| `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | 宿主工具调用被取消 (停止/销毁时未应答的调用统一上报), 宿主可据此释放本地资源 |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
 
 ### 4.5 配置与模型 JSON (`agentxx_ffi_create` 参数)
@@ -241,6 +250,8 @@ ui = { "version": 1,
 | `text` | `text`/`textKey`, `color`, `bold`, `dim`, `wrap`, `indent` | 文本行 (wrap=按宽度硬折行; 空文本不渲染) |
 | `markdown` | `text`, `indent` | markdown 富文本 (标题/列表/表格/代码块均可由此表达; 无 markdown 能力的宿主可直接打印原文) |
 | `diff` | `path`, `oldStr`, `newStr` | 差异对比 (宿主可降级为统一 diff 文本) |
+| `image` | `dataUrl` 或 `path`, `alt`, `maxHeight` | 图片预览 (有能力的宿主直接显示; 终端等无图宿主降级为 `alt` 文本行) |
+| `progress` | `value`, `total`, `label`/`labelKey`, `text`/`textKey` | 进度条 (`total` 为 0 时渲染不确定态; 无进度条能力的宿主降级为 `value/total` 文本行) |
 | `separator` | `indent` | 分隔线 |
 | `gap` | `lines` | 空行 |
 | `custom` | `component`, `props`, `fallback` | **预留字段**: 客户端自定义渲染组件 (组件名 + 属性); 宿主无该组件时渲染 `fallback` 文本 |
@@ -254,6 +265,7 @@ ui = { "version": 1,
 | `checkbox` | `label`/`labelKey`, `defaultValue`(bool) | 勾选行 | 布尔 |
 | `text` | `label`/`labelKey`, `help`/`helpKey`, `defaultValue`, `multiline`(预留) | 文本输入框 | 字符串 |
 | `number` | `defaultValue`, `integer`, `min`, `max`, `step` | 数值控件 (- 输入 +) | 数值 (integer=true 时为整数) |
+| `path` | `label`/`labelKey`, `mode`(`file`/`dir`/`multi`), `filter`(扩展名列表), `defaultValue` | 路径选择 (宿主用自己的文件选择器; 无选择器的宿主降级为文本输入) | 路径字符串 (多选为路径数组) |
 
 通用控件字段: `id` (结果键, 同一描述内唯一; 缺省 "value")、`label`/`labelKey`
 (控件上方标签)、`help`/`helpKey` (标签下方说明)、`indent`。
@@ -321,11 +333,97 @@ ui = { "version": 1,
 > 参考实现: 控制台宿主见 `agent/example/ffi/dart/` (按 `control` 块逐项问答的最小形态);
 > 完整描述驱动渲染见 TUI 的 `InterruptView` (`agent/client/.../components/interrupt_view.cpp`)。
 
+### 4.7 模型管理 (`agentxx_ffi_add_model` / `remove_model` / `list_models`)
+
+GUI 需要"模型列表 + 新增 + 删除 + 切换"，而 `create` 只接收单个 `model_json`；
+换模型若只能销毁重建句柄会打断正在进行的会话 (界面出现"重连中")。因此这三个符号
+走与 wire 侧同一套实现: 投递 `remove_model` / `add_model` 请求 → 等服务端回执。
+
+- `add_model(model_json)`: 字段与 `create` 的 `model_json` 同构 (`name`/`type`/
+  `baseUrl`/`apiKey`/`modelName`/...); 重名或字段非法返回 `ERR_CONFIG` /
+  `ERR_JSON` 并写 log; 成功后发起会话立即切到新模型; **`apiKey` 不会出现在日志或错误信息里**
+- `remove_model(model_name)`: 删除当前会话正在使用的模型被拒绝 (`ERR_CONFIG`);
+  服务端先落盘 (从 `{data_dir}/agentxx-config.yaml` 的 `model.list` 删条目) 再摘除运行时注册,
+  避免"本次列表里消失、重启后又回来"; 配置里本就没有该条目 (模型来自 overlay 层或运行时注入)
+  不算失败, 只摘运行时
+- `list_models(out)`: 与 `EVT_MODEL_INFO` 同形态 (`{currentModel, models[], capabilities[]}`)
+- 三者与其余同步查询共享同一条约束: 同一句柄同一时刻只允许一个未完成请求
+
+### 4.8 Wire 透传 (`agentxx_ffi_send_wire` + `EVT_WIRE`)
+
+远程模式能做的操作, 本地模式也要能做, 否则同一套界面要按连接类型写两套逻辑。
+按"用得多少"和"是否要马上拿到错误"划分:
+
+- **专用符号**: 模型增删查、宿主工具注册与应答、中断应答、三个同步查询 ——
+  天天要用, 参数写错要同步报错, 宿主按"符号在不在"就能判断能不能用;
+- **透传入口**: 队列 4 项、`compact_context`、`rename_session`、`get_permission_state`、
+  `set_full_auth`、`list_dir`、`plugin_data_up`, 以及以后新加的 wire 消息 ——
+  用得少、协议还在改, 不值得为每条加一个符号、等一个新版本。
+
+`send_wire(wire_json)` 与 WS 客户端发出的 JSON 完全一致 (进程内 Channel 零序列化直达,
+服务端处理代码与 WS 路径相同), 只做"解码 + 校验 + 投递":
+
+- JSON 解析失败 → `ERR_JSON`; 缺 `type` → `ERR_INVALID`
+- **黑名单** (返回 `ERR_INVALID` 并在 log 里指出该用哪个符号): `hello`/`ping`/`pong`、
+  `user_input`、`cancel`、`select_model`、`switch_session`、`interrupt_response`、
+  `add_model`、`remove_model`、`get_model`/`get_context`/`list_sessions`
+  (端点需要维护状态或已有专用符号的, 不走透传)
+- **白名单放行**: `compact_context` / `get_view_messages` / `list_dir` / `rename_session` /
+  `set_full_auth` / `get_permission_state` / `clear_message_queue` / `remove_queue_item` /
+  `interrupt_and_run_next` / `plugin_data_up` / `host_tool_register` / `host_tool_unregister` /
+  `host_tool_result`; 其余类型返回 `ERR_INVALID`
+- 未带 `sessionId` 时自动补齐为当前绑定会话
+- 这类消息的下行应答经 `EVT_WIRE` 透传 (payload 为原始 wire JSON, 宿主按 `type` 分派):
+  `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` /
+  `rename_session_result` / `add_model_result` / `remove_model_result`
+
+### 4.9 宿主工具 (`agentxx_ffi_tool_register` / `tool_unregister` / `tool_respond`)
+
+本地模式下让 agent 调用宿主自己的工具, 不必为工具反开一个入站端口。
+
+调用序列:
+
+```
+tool_register(tool_json) × N          → 服务端注册进 ToolRegistry
+send_input(...)                       → 模型决定调用宿主工具
+EVT_HOST_TOOL_CALL {callId,name,argsJson,sessionId,timeoutSec}
+tool_respond(callId, isError, result) → 回送结果 (服务端协程继续本轮)
+```
+
+- `tool_json` 支持两种形态: 单个工具对象, 或 `{"tools":[ ... ]}` 数组 (一次注册多个);
+  每个工具需 `name` (必填), 可选 `description` / `inputSchema` (JSON Schema 对象) /
+  `timeoutSec` (0 = 不限) / `maxConcurrent`
+- 同名工具重复注册会先注销旧的再注册 (宿主重连/换实现时不必先手工注销)
+- 宿主工具在 `ToolRegistry` 里带 `HostTool` 包装, 调用时经 `callHostToolAsync` 向注册该工具的
+  客户端发 `host_tool_call` 并等应答; 超过 `timeoutSec` 由服务端判定超时并让本轮继续
+  (工具结果记为失败), 不会永久挂住会话
+- `tool_respond(call_id, is_error, result_json)`: `is_error != 0` 时 `result_json` 作为错误文本
+- 客户端断开时该客户端注册的宿主工具自动注销; `stop`/`destroy` 时未应答的调用统一上报
+  `EVT_HOST_TOOL_CANCELLED {callId, reason}`, 宿主可据此释放本地资源
+
+### 4.10 文本增量合批 (`agentxx_ffi_set_delta_batch`)
+
+本地路径唯一高频跨语言边界的是逐 token 的 `EVT_DELTA` (每个 token 一条 JSON, 宿主逐条
+`jsonDecode`)。`set_delta_batch(max_delay_ms)` 把同一轮次同一流里的文本/思考 token 累积到
+窗口结束再发一条 `EVT_DELTA_TEXT_BATCH`:
+
+```
+set_delta_batch(24)                   → 打开合批 (建议 16~33ms)
+EVT_DELTA_TEXT_BATCH {kind,text} × N  → 宿主直接追加文本
+set_delta_batch(0)                    → 关闭, 行为与现在完全一致 (逐条 EVT_DELTA)
+```
+
+- 合批**不改变事件顺序语义**: 工具开始/结束、轮次结束、中断必须单独成条且严格有序 ——
+  这些事件到达时先冲刷积压文本, 再按原顺序发出
+- 思考内容与正文分开合批 (`kind: "thinking"` / `"text"`; 两类交替时先冲刷再累积)
+- 轮次结束/停止/销毁时冲刷积压文本, 不丢尾部内容
+
 ## 5. 语言绑定与示例
 
 | 目录 | 说明 |
 |------|------|
 | [`agent/ffi/dart/`](/agent/ffi/dart/) | Dart FFI 绑定包: `ffigen.yaml` 由 `ffi_api.h` 自动生成符号定义 (`dart run ffigen --config ffigen.yaml`, 输出 `lib/agentxx_ffi_bindings.dart`) |
+| [`agent/ffi/dart_wire/`](/agent/ffi/dart_wire/) | 纯 Dart wire 客户端包: 全消息模型与 JSON 编解码 + WebSocket 连接管理 (握手/心跳/事件流/宿主工具应答), 不依赖 FFI 与原生库 |
 | [`agent/example/ffi/dart/`](/agent/example/ffi/dart/) | Dart CLI 示例 (`agentxx_dart_cli`): 流式渲染/HIL 权限与会话切换/`/model` `/sessions` `/logs` 等命令/Ctrl+C 优雅退出; 含 mock LLM 基本功能检查 (`example/smoke_check.dart`); 详见其 README |
 
 其他语言按同样模式接入: 经 dlopen/dlsym (或平台等价物) 查找白名单符号,

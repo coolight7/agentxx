@@ -2087,9 +2087,11 @@ agent/
 │   ├── yaml-cpp/                 # YAML 解析
 │   └── zlib/                     # 压缩
 │
-├── ffi/                          # 其他编程语言绑定生成配置
-│   └── dart/                     # Dart FFI 绑定 (ffigen.yaml 由 ffi_api.h 生成
-│                                 #   agentxx_ffi_bindings.dart; dart pub get + ffigen)
+├── ffi/                          # 其他编程语言绑定与客户端包
+│   ├── dart/                     # Dart FFI 绑定 (ffigen.yaml 由 ffi_api.h 生成
+│   │                             #   agentxx_ffi_bindings.dart; dart pub get + ffigen)
+│   └── dart_wire/                # 纯 Dart wire 客户端包 (全消息模型 + JSON 编解码 +
+│                                 #   WebSocket 连接管理; 不依赖 FFI 与原生库)
 │
 ├── example/                      # 嵌入/绑定使用示例
 │   └── ffi/dart/                 # Dart CLI 示例 (经 FFI 驱动 libagentxx:
