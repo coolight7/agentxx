@@ -16,7 +16,6 @@
 - 排查 llm api 输出 toolcall 时间隔较久
 - 将 llm api toolcall 刚开始就通知 tui 显示 `creating toolcall...`
 - tui 弹窗标题居中
-- 修复 tui plan graph 按钮样式
 - tui 提示消息 dim
 
 - SVG绘制支持

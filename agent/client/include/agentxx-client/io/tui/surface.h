@@ -57,10 +57,10 @@ struct TuiSurfaceStyle {
     }
 };
 
-/// 标题栏行 (纯文字标题; 左右留白由外框提供, 文字无需自带空格)
+/// 标题栏行 (纯文字标题居中; 左右留白由外框提供, 文字无需自带空格)
 inline ftxui::Element
     tuiSurfaceHeaderBar(std::string_view title, const ftxui::Color& fg, const ftxui::Color& bg) {
-    return ftxui::text(title) | ftxui::bold | ftxui::color(fg) | ftxui::bgcolor(bg);
+    return ftxui::text(title) | ftxui::bold | ftxui::center | ftxui::color(fg) | ftxui::bgcolor(bg);
 }
 
 /// 标题栏行 (自定义内容: 如标题文字 + 右侧按钮), 整行填充 [bg]

@@ -1903,10 +1903,12 @@ Element PendingInputsOverlay::OnRender() {
         HitInfo{HitInfo::Kind::Clear, {}}
     );
     Element header = tuiSurfaceHeaderRow(
-        hbox({
-            text(tr("queue.title")) | bold | color(surface.title),
-            filler(),
-            std::move(clearBtn),
+        dbox({
+            text(tr("queue.title")) | bold | center | color(surface.title),
+            hbox({
+                filler(),
+                std::move(clearBtn),
+            }),
         }),
         surface.header
     );
