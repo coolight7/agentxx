@@ -200,6 +200,9 @@ inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) no
     if (s == "message_tip") {
         return T::MessageUITip;
     }
+    if (s == "gen_status") {
+        return T::GenStatus;
+    }
     if (s == "insert_message") {
         return T::InsertMessage;
     }

@@ -15,6 +15,7 @@
 - 用户发送消息、轮次完成时 立即写入 sql
 - tui 提示消息 dim
 - 添加连续多次压缩检查
+- 队列输入消息单条过长时通过 agentxx_share_store 分页
 
 - SVG绘制支持
 - 链式 session 任务队列

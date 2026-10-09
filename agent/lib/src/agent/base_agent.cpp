@@ -12,6 +12,7 @@
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/task_scope.h"
@@ -1798,7 +1799,10 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
                 } else if (ev.data.is_object()) {
                     neograph::ChatStreamChunk ch;
                     neograph::from_json(ev.data, ch);
-                    if (ch.type != neograph::ChatStreamChunk::TYPE_THINKING) {
+                    // 生成阶段标记 (见 protocol/provider_common.h): 不是模型输出文本,
+                    // 不参与正文累积 (否则工具名等标记会被拼进结果)
+                    if (ch.type != neograph::ChatStreamChunk::TYPE_THINKING
+                        && !agentxx::protocol::chunk_type::isStatusChunk(ch.type)) {
                         oss += ch.data;
                     }
                 }

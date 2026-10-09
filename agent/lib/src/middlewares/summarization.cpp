@@ -666,42 +666,67 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         {"enable_summarization", false                 },
     };
 
-    co_return co_await agentxx::util::catchErrorAsync<std::string>(
-        [&]() -> asio::awaitable<std::string> {
-            // NodeInterrupt 会被 catchErrorAsync 放行 (中断/取消不捕获),
-            // 传播到引擎后由 Session 派生 subagent, resume 后返回结果
-            auto resp = co_await agentCtxPtr->bus
-                            ->request<events::ReqSubagentExecute, events::RespSubagentExecute>(
-                                events::Topic::SubagentExecute,
-                                events::ReqSubagentExecute{.arguments = std::move(args)},
-                                std::chrono::milliseconds{0}
-                            );
-            if (!resp.has_value()) {
-                XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 请求失败: {}", resp.error());
+    // 经总线请求压缩 subagent (service.subagent.execute)
+    auto requestViaBus = [&]() -> asio::awaitable<std::string> {
+        // SubAgentManagerTool 经 requestInterrupt 抛 NodeInterrupt:
+        // 自动路径由 catchErrorAsync 放行传播给 AgentRunner 中断循环处理
+        auto resp = co_await agentCtxPtr->bus
+                        ->request<events::ReqSubagentExecute, events::RespSubagentExecute>(
+                            events::Topic::SubagentExecute,
+                            events::ReqSubagentExecute{.arguments = args},
+                            std::chrono::milliseconds{0}
+                        );
+        if (!resp.has_value()) {
+            XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 请求失败: {}", resp.error());
+            co_return "";
+        }
+        if (resp->hasError) {
+            XX_LOGE(
+                "SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}",
+                resp->errorMessage
+            );
+            co_return "";
+        }
+        // 取消/错误串透传防护: 子代理被取消时宿主返回
+        // `{"error":"Sub-agent cancelled..."}` (AgentRunner 已优先按取消
+        // 抛, 此处为直接调用路径的兜底), 不得当作有效摘要写回上下文,
+        // 否则表现为"压缩成功 + 继续执行", 取消形同虚设
+        if (resp->result.size() >= 2 && resp->result.front() == '{'
+            && resp->result.find("\"error\"") != std::string::npos) {
+            XX_LOGW(
+                "SummarizationMiddlewareHandle 压缩结果为错误串, 按失败处理: {}",
+                std::string_view{resp->result}.substr(0, 256)
+            );
+            co_return "";
+        }
+        // 摘要超长 (模型不遵守指令里的字数要求): 截断后写回
+        co_return fitSummaryMaxTokens(resp->result);
+    };
+
+    if (direct) {
+        // 直派模式: 无 AgentRunner 中断循环, 中断异常从这里抛出后无人处理 ——
+        // 手动压缩的调用方 (事件订阅协程) 不在中断循环里, 逃逸的中断会让
+        // 压缩静默失败; 溢出压缩更是运行在轮次内, 会造成本轮以"中断未完成"
+        // 静默结束。故此处把控制流异常 (中断/取消) 转成"压缩失败"返回空串,
+        // 由调用方走硬截断兜底 (见 summarization.h 说明)
+        co_return co_await agentxx::util::catchErrorAsync<std::string>(
+            requestViaBus,
+            [](std::string errmsg) -> asio::awaitable<std::string> {
+                XX_LOGE("SummarizationMiddlewareHandle 直派压缩 subagent 调用失败: {}", errmsg);
                 co_return "";
-            }
-            if (resp->hasError) {
-                XX_LOGE(
-                    "SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}",
-                    resp->errorMessage
-                );
-                co_return "";
-            }
-            // 取消/错误串透传防护: 子代理被取消时宿主返回
-            // `{"error":"Sub-agent cancelled..."}` (AgentRunner 已优先按取消
-            // 抛, 此处为直接调用路径的兜底), 不得当作有效摘要写回上下文,
-            // 否则表现为"压缩成功 + 继续执行", 取消形同虚设
-            if (resp->result.size() >= 2 && resp->result.front() == '{'
-                && resp->result.find("\"error\"") != std::string::npos) {
+            },
+            [](std::string& errmsg) -> std::optional<std::string> {
                 XX_LOGW(
-                    "SummarizationMiddlewareHandle 压缩结果为错误串, 按失败处理: {}",
-                    std::string_view{resp->result}.substr(0, 256)
+                    "SummarizationMiddlewareHandle 直派压缩无中断处理者, 按压缩失败处理: {}",
+                    errmsg
                 );
-                co_return "";
+                return std::optional<std::string>{std::string{}};
             }
-            // 摘要超长 (模型不遵守指令里的字数要求): 截断后写回
-            co_return fitSummaryMaxTokens(resp->result);
-        },
+        );
+    }
+
+    co_return co_await agentxx::util::catchErrorAsync<std::string>(
+        requestViaBus,
         [](std::string errmsg) -> asio::awaitable<std::string> {
             XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 调用失败: {}", errmsg);
             co_return "";

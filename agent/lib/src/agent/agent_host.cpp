@@ -5,6 +5,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/a2a_client.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/task_scope.h"
@@ -635,6 +636,11 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                         } else if (event.data.is_object()) {
                             neograph::ChatStreamChunk chunk;
                             neograph::from_json(event.data, chunk);
+                            // 生成阶段标记 (见 protocol/provider_common.h): 不是模型
+                            // 输出文本, 跳过 (否则工具名等标记会被当正文拼进子代理结果)
+                            if (agentxx::protocol::chunk_type::isStatusChunk(chunk.type)) {
+                                break;
+                            }
                             token = std::move(chunk.data);
                             if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
                                 kind = "thinking";

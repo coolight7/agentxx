@@ -836,6 +836,13 @@ TestResult testTuiInput() {
     g_tui_input_passed = 0;
     g_tui_input_failed = 0;
 
+    // 配色断言按具体 RGB 值比较 (半透明按钮底色与输入框底色的区分度): 测试进程
+    // 无终端色彩能力探测 (无 COLORTERM 等) 时 FTXUI 会把主题各色降级成终端默认色,
+    // 两组颜色塌成同一个值, 区分度断言全部落空。主题对象在本函数内构造, 故在
+    // 构造任何夹具之前固定声明真彩色支持, 结束时恢复原探测值
+    const auto savedColorSupport = ftxui::Terminal::ColorSupport();
+    ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
+
     test_multiline_paste_inserted_not_sent();
     test_paste_crlf_dedup();
     test_paste_preserves_tab();
@@ -859,6 +866,7 @@ TestResult testTuiInput() {
     test_file_picker_navigation_without_filter();
     test_keybind_event_mapping();
 
+    ftxui::Terminal::SetColorSupport(savedColorSupport);
     return TestResult{g_tui_input_passed, g_tui_input_failed};
 }
 

@@ -22,8 +22,10 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "ftxui/screen/string.hpp"
 #include "utilxx_base/json.h"
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -314,6 +316,12 @@ struct SurfaceFixture {
 } // namespace
 
 TestResult testTuiSurface() {
+    // 颜色断言按具体 RGB 值比较: 测试进程无终端色彩能力探测 (无 COLORTERM) 时
+    // FTXUI 会把主题各色降级为终端默认色, 断言随之失真 (区分度的断言全部落空);
+    // 固定声明真彩色支持, 结束时恢复原探测值 (与 test_tui_theme 同一做法)
+    const auto savedColorSupport = ftxui::Terminal::ColorSupport();
+    ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
+
     auto savedLang = TUISettings::instance().language();
     TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
 
@@ -349,12 +357,19 @@ TestResult testTuiSurface() {
         checkNoFrameGlyphs(r, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("选择模型") != std::string::npos);
 
-        // 标题与内容行都贴外框左内边距 (x_min + 2), 行内不再自带首尾空格
+        // 标题居中 (见 surface.h 的标题栏构建): 与外框左内边距之间留出弹性空白,
+        // 文字不再贴左内边距; 左右两侧留白对称 (居中留白为奇数时会偏向一侧,
+        // 故只断言两侧留白相差不超过 1 列)
+        // - 汉字占 2 列, 标题占位宽度按显示宽度算 (不能用字数)
         int        tx = -1, ty = -1;
         const bool titleFound = r.findText("选择模型", tx, ty);
         XX_TEST_EXPECT_TRUE(titleFound);
         if (titleFound) {
-            XX_TEST_EXPECT_EQ(tx, r.bounds.x_min + 2);
+            const int titleWidth = ftxui::string_width("选择模型");
+            const int leftGap    = tx - (r.bounds.x_min + 2);
+            const int rightGap   = (r.bounds.x_max - 2) - (tx + titleWidth - 1);
+            XX_TEST_EXPECT_TRUE(leftGap > 0); // 不再贴左内边距
+            XX_TEST_EXPECT_TRUE(std::abs(leftGap - rightGap) <= 1); // 左右留白对称
             XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1); // 标题栏位于上内边距下一行
         }
 
@@ -674,9 +689,10 @@ TestResult testTuiSurface() {
         // checkSurfaceRegions 内含角标/内边距检查 (外框不含直线字符; 图内容自身框线不计)
         checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
         XX_TEST_EXPECT_TRUE(r.text.find("状态图") != std::string::npos);
+        // 标题居中: 不贴左内边距, 且与左内边距之间留出弹性空白
         int gx = -1, gy = -1;
         XX_TEST_EXPECT_TRUE(r.findText("状态图", gx, gy));
-        XX_TEST_EXPECT_EQ(gx, r.bounds.x_min + 2);
+        XX_TEST_EXPECT_TRUE(gx > r.bounds.x_min + 2);
         XX_TEST_EXPECT_EQ(gy, r.bounds.y_min + 1);
     }
 
@@ -814,6 +830,7 @@ TestResult testTuiSurface() {
     }
 
     TUISettings::instance().setLanguage(savedLang);
+    ftxui::Terminal::SetColorSupport(savedColorSupport);
 
     // ---- 通用 overlay 尺寸与外观选项 (extra_json, 数据层) ----
     {
