@@ -94,7 +94,6 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     double                                      in_unicodeCharsPerToken,
     double                                      in_tokensPerImage,
     double                                      in_extraTokensPerMessage,
-    double                                      in_recentTokenBudgetRatio,
     size_t                                      in_summaryMaxTokens
 ) :
     BaseMiddlewareHandle<_SummarizationMiddlewareState>(
@@ -106,13 +105,11 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     unicodeCharsPerToken(in_unicodeCharsPerToken),
     tokensPerImage(in_tokensPerImage),
     extraTokensPerMessage(in_extraTokensPerMessage),
-    recentTokenBudgetRatio(in_recentTokenBudgetRatio),
     summaryMaxTokens(in_summaryMaxTokens) {
     assert(asciiCharsPerToken >= 0);
     assert(unicodeCharsPerToken >= 0);
     assert(tokensPerImage >= 0);
     assert(extraTokensPerMessage >= 0);
-    assert(recentTokenBudgetRatio >= 0 && recentTokenBudgetRatio < 1.0);
 }
 
 size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_str) const {
@@ -228,6 +225,67 @@ void SummarizationMiddlewareHandle::cleanNoiseMessages(std::vector<neograph::Cha
         }
     }
     messages = std::move(out2);
+}
+
+void SummarizationMiddlewareHandle::cleanThinkingMessages(std::vector<neograph::ChatMessage>& messages
+) {
+    // 只保留最新一条 thinking: 旧轮 thinking 对续写没有价值 (结论已写在 content /
+    // tool 结果里), 且部分模型的 thinking 是加密内容, 按字符估算 token 不准
+    int64_t keepIndex = -1;
+    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
+        if (!messages[static_cast<size_t>(i)].reasoning_content.empty()) {
+            keepIndex = i;
+            break;
+        }
+    }
+    for (int64_t i = 0; i < static_cast<int64_t>(messages.size()); ++i) {
+        if (i != keepIndex) {
+            messages[static_cast<size_t>(i)].reasoning_content.clear();
+        }
+    }
+}
+
+std::string SummarizationMiddlewareHandle::fitSummaryMaxTokens(std::string summary) const {
+    if (summary.empty()) {
+        return summary;
+    }
+    const size_t summaryTokens = countTokensForUtf8Str(summary);
+    if (summaryTokens <= summaryMaxTokens) {
+        return summary;
+    }
+    // 截断说明 (放在摘要末尾, 让模型知道后面还有内容被省略)
+    static constexpr std::string_view kTruncatedNote
+        = "\n[Summary truncated to fit the context limit.]";
+    // 二分: 找满足上限的最大前缀 (与 hardTruncate 的单条内容截断同一思路)
+    // - 探测时把截断说明一起算进去: 前缀与说明分别计数后相加, 整数取整可能多出
+    //   1 个 token, 合并计数才能保证最终结果不超上限
+    const auto countPrefixWithNote = [&](size_t prefixBytes) -> size_t {
+        std::string probe = summary.substr(0, prefixBytes);
+        probe.append(kTruncatedNote);
+        return countTokensForUtf8Str(probe);
+    };
+    size_t lo = 0, hi = summary.size();
+    while (lo < hi) {
+        const size_t mid = (lo + hi + 1) / 2;
+        if (countPrefixWithNote(mid) <= summaryMaxTokens) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    std::string out = summary.substr(0, lo);
+    // 回退到 UTF-8 字符边界: 避免末尾留下半个字符 (按字节切分可能切断多字节字符)
+    while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80) {
+        out.pop_back();
+    }
+    out.append(kTruncatedNote);
+    XX_LOGW(
+        "SummarizationMiddlewareHandle: 摘要超长 ({} -> {} token, 上限 {}), 已截断",
+        summaryTokens,
+        countTokensForUtf8Str(out),
+        summaryMaxTokens
+    );
+    return out;
 }
 
 void SummarizationMiddlewareHandle::foldExploratoryToolcalls(
@@ -594,7 +652,9 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 );
                 co_return "";
             }
-            co_return item.content;
+            // 摘要超长 (模型不遵守指令里的字数要求): 截断后写回, 避免刚压下去的
+            // 上下文被摘要重新撑大
+            co_return fitSummaryMaxTokens(item.content);
         }
         // 无 host 时 (如单测 mock 环境), 降级走总线请求
     }
@@ -639,7 +699,8 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 );
                 co_return "";
             }
-            co_return resp->result;
+            // 摘要超长 (模型不遵守指令里的字数要求): 截断后写回
+            co_return fitSummaryMaxTokens(resp->result);
         },
         [](std::string errmsg) -> asio::awaitable<std::string> {
             XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 调用失败: {}", errmsg);
@@ -853,10 +914,6 @@ asio::awaitable<void>
 
         // LLM 同上下文压缩
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
-        const size_t recentBudget
-            = static_cast<size_t>(modelContextMaxToken * recentTokenBudgetRatio);
-        const size_t oldEnd   = splitRecentByTokenBudget(messages, systemCount, recentBudget);
-        const size_t oldStart = systemCount;
 
         std::vector<neograph::ChatMessage> compressedMessages;
         bool                               compacted = false;
@@ -867,29 +924,17 @@ asio::awaitable<void>
                 lastSummarizedMsgCount
             );
             compressedMessages = messages;
-        } else if (oldEnd > oldStart) {
-            // 压缩段 (system 之后, recent 之前)
-            auto oldMessages = std::vector<neograph::ChatMessage>{
-                messages.begin() + oldStart,
-                messages.begin() + oldEnd
-            };
-            auto recentMessages
-                = std::vector<neograph::ChatMessage>{messages.begin() + oldEnd, messages.end()};
+        } else if (messages.size() > systemCount) {
+            // 同上下文压缩请求: 当前完整上下文 (system + 全部消息) + 末尾压缩指令。
+            // 最近的消息也交给模型: 由它在摘要里写清末尾要点 (进行中的动作, 最近一次
+            // 工具调用的结果, 下一步), 因此压缩后不再原样保留最近消息
+            auto toSummarize = messages;
 
-            // 同上下文压缩请求: system + 压缩段 (不包含 recent)
-            std::vector<neograph::ChatMessage> toSummarize;
-            if (systemCount > 0) {
-                toSummarize.push_back(messages[0]);
-            }
-            toSummarize.insert(
-                toSummarize.end(),
-                std::move_iterator(oldMessages.begin()),
-                std::move_iterator(oldMessages.end())
-            );
-
-            // 压缩前清洗旧消息中的多模态 data URL (Base64) 替换为纯文本标签
+            // 压缩前清洗消息中的多模态 data URL (Base64) 替换为纯文本标签
             // TODO: 替换前存储为文件，记录路径
             downgradeMultimodalUrlsToText(toSummarize);
+            // 只保留最新一条 thinking, 其余清空 (旧轮 thinking 无续写价值)
+            cleanThinkingMessages(toSummarize);
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
             auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/false);
@@ -940,7 +985,9 @@ asio::awaitable<void>
                     compressedMessages.push_back(messages[0]);
                 }
                 // 追加压缩后的信息
-                // system | user | assistant | [user/tool]recentMessages
+                // system | user | assistant
+                // - 不再追加最近消息: 末尾的消息已交给 subagent, 要点写在摘要里;
+                //   追加会让刚压下去的上下文立刻被最近消息重新填满
                 compressedMessages.push_back(neograph::ChatMessage{
                     .role    = "user",
                     .content = "[Please compact context to save space]",
@@ -953,12 +1000,6 @@ asio::awaitable<void>
                     .flags
                     = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
                 });
-                // 添加最近消息
-                compressedMessages.insert(
-                    compressedMessages.end(),
-                    std::move_iterator(recentMessages.begin()),
-                    std::move_iterator(recentMessages.end())
-                );
             } else if (action == ReplaceAction::HardTruncate) {
                 compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
             } else {
@@ -969,9 +1010,8 @@ asio::awaitable<void>
         }
 
         // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
-        // 场景: LLM 摘要本身超长 / recent 段单条消息超大 (如超大附件、长日志),
-        // 即使按预算切分 (recent 至少 1 条) 仍 >= 95% 上限;
-        // 硬截断 (30% 预算 + 单条二分截断) 是最终兜底
+        // 场景: system 本身很大, 或摘要超长 (截断后仍超), 压缩结果仍 >= 95% 上限;
+        // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最终兜底
         if (countTokens({}, compressedMessages, enableCountThinking)
             >= modelContextMaxToken * 0.95) {
             XX_LOGW(
@@ -1122,32 +1162,18 @@ asio::awaitable<bool>
     cleanNoiseMessages(messages);
 
     // 3. LLM 同上下文总结压缩
-    const size_t systemCount  = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
-    const size_t recentBudget = static_cast<size_t>(modelContextMaxToken * recentTokenBudgetRatio);
-    const size_t oldEnd       = splitRecentByTokenBudget(messages, systemCount, recentBudget);
-    const size_t oldStart     = systemCount;
+    const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
 
     std::vector<neograph::ChatMessage> compressedMessages;
-    if (oldEnd > oldStart) {
-        auto oldMessages = std::vector<neograph::ChatMessage>{
-            messages.begin() + oldStart,
-            messages.begin() + oldEnd
-        };
-        auto recentMessages
-            = std::vector<neograph::ChatMessage>{messages.begin() + oldEnd, messages.end()};
+    if (messages.size() > systemCount) {
+        // 同上下文压缩请求: 当前完整上下文 (system + 全部消息) + 末尾压缩指令;
+        // 最近的消息也交给模型判断, 因此压缩后不再原样保留最近消息
+        auto toSummarize = messages;
 
-        std::vector<neograph::ChatMessage> toSummarize;
-        if (systemCount > 0) {
-            toSummarize.push_back(messages[0]);
-        }
-        toSummarize.insert(
-            toSummarize.end(),
-            std::move_iterator(oldMessages.begin()),
-            std::move_iterator(oldMessages.end())
-        );
-
-        // 压缩前清洗旧消息中的多模态 data URL (Base64) 降级为纯文本标签
+        // 压缩前清洗消息中的多模态 data URL (Base64) 降级为纯文本标签
         downgradeMultimodalUrlsToText(toSummarize);
+        // 只保留最新一条 thinking, 其余清空 (旧轮 thinking 无续写价值)
+        cleanThinkingMessages(toSummarize);
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
@@ -1156,6 +1182,7 @@ asio::awaitable<bool>
             if (systemCount > 0) {
                 compressedMessages.push_back(messages[0]);
             }
+            // system | user | assistant (不追加最近消息, 同自动压缩)
             compressedMessages.push_back(neograph::ChatMessage{
                 .role    = "user",
                 .content = "[Please compact context to save space]",
@@ -1166,11 +1193,6 @@ asio::awaitable<bool>
                 .content = fmt::format("[Previous conversation summary]: \n{}", summary),
                 .flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
             });
-            compressedMessages.insert(
-                compressedMessages.end(),
-                std::move_iterator(recentMessages.begin()),
-                std::move_iterator(recentMessages.end())
-            );
         } else {
             compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
         }

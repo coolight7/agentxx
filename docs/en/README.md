@@ -179,8 +179,7 @@
     - Tool-specific compaction handlers:
         - Prunes obsolete historical messages (filesystem I/O, planning state, share_store variables).
     - Offloads critical long messages to `agentxx_share_store` instead of lossy compression, retrievable on demand.
-    - LLM-assisted summarization.
-    - Preserves recent conversation window.
+    - LLM-assisted summarization of the whole context: the request carries the full context (system + all messages) plus a compaction instruction, and the sub-agent decides what must be preserved (the template asks it to carry the latest turns, the in-flight action and the next step into the summary). The context is replaced by `system | user notice | assistant summary` — no verbatim tail is kept, thinking beyond the newest message is dropped, and an oversized summary is truncated (built-in 64K token cap).
 - ✅ **Memory and Context Management**
     - ✅ Custom YAML configuration for loading Memory files.
     - ✅ SQLite persistence for session context and recovery after process restarts.

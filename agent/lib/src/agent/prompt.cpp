@@ -132,14 +132,18 @@ Open issues, unresolved problems, errors that are not fixed yet.
 ## Key facts
 File paths, code locations, configs, error messages and their solutions that later steps must know.
 
+## Latest exchange
+The most recent turns, in enough detail to continue without a break: the user's latest request (near-verbatim), what is being done right now, the last tool calls and what their results said (paths, commands, error text, values that matter), and anything still waiting for the user's confirmation.
+
 ## Next
 The immediate next actions, in order.
 
 Rules:
 - If an earlier summary appears above, MERGE it into the new one without losing information.
 - MAY discard: exploratory read/search process details (keep file names and conclusions), retry noise, verbose or superseded tool outputs, details of reasoning/thinking content.
+- The recent messages are NOT kept after compaction: anything missing from the summary is lost, so write the Latest exchange section carefully.
 
-{omitted_note}Output ONLY the summary text in the user's language, no meta commentary, under about {max_words} words.
+{omitted_note}Output ONLY the summary text in the user's language, no meta commentary; keep it as short as possible while keeping the work continuable (at most about {max_words} words).
 )_"),
     toolPrompt{
       {

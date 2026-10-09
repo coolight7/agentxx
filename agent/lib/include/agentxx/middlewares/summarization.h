@@ -19,15 +19,23 @@ public:
 };
 
 /// 上下文压缩
-/// - `system prompt`、最近的消息 不压缩
+/// - `system prompt` 不压缩
 /// - 超过 75% 上限时自动压缩:
 ///   - 触发压缩时先发送一条 viewMessage 提示 "正在压缩上下文"
 ///   - 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
-///   - LLM 同上下文总结压缩 (保持同一上下文, 不传入任何工具,
-///     由 subagent 对当前上下文原样总结压缩)
+///   - LLM 同上下文总结压缩 (保持同一上下文, 不传入任何工具):
+///     压缩请求 = 当前完整上下文 (system + 全部消息) + 末尾压缩指令, 由 subagent
+///     决定哪些信息必须写进摘要 —— 末尾的消息也交给它, 让它在摘要里写清进行中的
+///     动作、最近一次工具调用的要点与下一步
 ///   - 压缩完成时更新 viewMessage 为 "压缩上下文
 ///   {旧上下文token量}->{新上下文token量}/{最大上下文限制} · {耗时}"
-/// - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要] | 最近消息
+/// - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要]
+///   (不再追加最近消息: 末尾要点已由摘要覆盖, 否则刚压完的上下文立刻被最近消息
+///   重新填满, 压缩等于没做)
+/// - 压缩请求中的 thinking 只保留最新一条, 其余清空: 旧轮 thinking 对续写没有价值
+///   (结论已写在 content / tool 结果里), 加密 thinking 也无法按字符估算 token
+/// - 摘要有内置长度上限 [summaryMaxTokensDefault]: 超过时截断后写回, 避免模型写出
+///   超长摘要把刚压下去的上下文重新撑大
 /// - 压缩完成即把压缩结果写回会话上下文并落盘: 进程在压缩后到轮末之间退出
 ///   (崩溃/被杀) 时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩
 /// - 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后本中间件从头重新执行:
@@ -36,8 +44,10 @@ public:
 class SummarizationMiddlewareHandle : public BaseMiddlewareHandle<_SummarizationMiddlewareState> {
 protected:
 
-    /// 最近消息保留的 token 预算比例默认值 (占模型上下文上限)
-    static constexpr double recentTokenBudgetRatioDefault = 0.20;
+    /// 摘要 (写回的 assistant 压缩结果) 的最大 token 数, 内置值不暴露配置
+    /// - 上限而非目标: 正常摘要远小于它, 这里只拦住模型写出的超长摘要
+    /// - 同时作为压缩指令里 {max_words} 的来源 ([summaryMaxTokens] / 4)
+    static constexpr size_t summaryMaxTokensDefault = 64 * 1024;
 
 public:
 
@@ -55,9 +65,9 @@ protected:
     const double unicodeCharsPerToken;
     const double tokensPerImage;
     const double extraTokensPerMessage;
-    /// 最近消息保留的 token 预算比例 (占模型上下文上限, LLM 压缩时使用)
-    const double recentTokenBudgetRatio;
-    /// LLM 压缩摘要的最大输出 token 数 (经 {max_words} 注入压缩指令)
+    /// 摘要 (assistant 压缩结果) 的最大 token 数
+    /// - 经 {max_words} (= [summaryMaxTokens] / 4) 注入压缩指令
+    /// - 写回前超长时按它截断, 见 [fitSummaryMaxTokens]
     const size_t summaryMaxTokens;
 
 public:
@@ -72,8 +82,7 @@ public:
         double in_unicodeCharsPerToken        = 1.1,
         double in_tokensPerImage              = 400.0,
         double in_extraTokensPerMessage       = 3.0,
-        double in_recentTokenBudgetRatio      = recentTokenBudgetRatioDefault,
-        size_t in_summaryMaxTokens            = 2048
+        size_t in_summaryMaxTokens            = summaryMaxTokensDefault
     );
 
     size_t countTokensForUtf8Str(std::string_view in_str) const;
@@ -89,12 +98,25 @@ public:
         bool                                      includeSystem = false
     ) const;
 
-    /// 确定性噪音清理 (保留 thinking, 不做 offload):
+    /// 确定性噪音清理 (不做 offload):
     /// - 删除完全空的消息 (无 content/tool_calls/reasoning/附件)
     /// - 相邻完全相同的消息只保留最后一条
     /// - 连续出现的 AutoInserted 提示噪音 ([Please continue] 等) 只保留最后一条
-    /// - 对全部消息执行 (语义上保留最新, 对 recent 段安全)
+    /// - 对全部消息执行 (语义上保留最新)
     void cleanNoiseMessages(std::vector<neograph::ChatMessage>& messages);
+
+    /// thinking 清理: 只保留最新一条非空 thinking, 其余全部清空
+    /// - 旧轮 thinking 对续写没有价值 (结论已写在 content / tool 结果里)
+    /// - 部分模型的 thinking 是加密内容, 按字符估算 token 不准, 不留在上下文里
+    /// - 保留最新一条: 压缩子代理据此看到父会话最近一次的推理状态
+    /// - 用于压缩请求; 压缩结果只含摘要, 写回结果无需再清理
+    void cleanThinkingMessages(std::vector<neograph::ChatMessage>& messages);
+
+    /// 摘要超过 [summaryMaxTokens] 时按估算 token 截断后返回 (保留开头 + 截断说明)
+    /// - 压缩指令里的长度要求不保证被模型遵守, 这里保证写回的摘要不会把
+    ///   刚压下去的上下文重新撑大
+    /// - 未超限时原样返回
+    std::string fitSummaryMaxTokens(std::string summary) const;
 
     /// 工具调用压缩: 去重截断 (现有) + 探索型调用序列折叠
     /// - 连续 >= 3 次的同工具单工具调用段 (中间无 user/system 打断, 且工具注册了
@@ -118,7 +140,7 @@ public:
     ) const;
 
     /// LLM 同上下文压缩: 通过 subagent 完成 (同上下文模式)
-    /// - 请求参数: subagent="subagent_task", messages=压缩段原消息(含 system)
+    /// - 请求参数: subagent="subagent_task", messages=当前完整上下文(含 system)
     ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
     ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
     ///   tools=[] (子代理无任何工具, 仅对当前上下文原样做压缩, 不经过

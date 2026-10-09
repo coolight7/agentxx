@@ -17,6 +17,7 @@
 - 将 llm api toolcall 刚开始就通知 tui 显示 `creating toolcall...`
 - 检查压缩、重复tool调用检查
 - tui 提示消息 dim
+- 添加连续多次压缩检查
 
 - SVG绘制支持
 - 链式 session 任务队列
