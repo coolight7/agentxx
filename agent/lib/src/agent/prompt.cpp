@@ -730,12 +730,5 @@ size_t AgentPrompt::promptHash() const {
     return h;
 }
 
-h ^= std::hash<std::string>{}(a.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
-}
-}
-
-return h;
-}
-
 } // namespace agent
 } // namespace agentxx

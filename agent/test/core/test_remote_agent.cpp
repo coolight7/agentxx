@@ -3727,6 +3727,305 @@ static asio::awaitable<void> test_session_scope_validation() {
     co_return;
 }
 
+// ---------------------------------------------------------------------------
+// 24. wire user_input 附件传输与超限拒绝 (计划 A10)
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_remote_user_input_attachments() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    SessionServerAgentIO::Config cfg;
+    cfg.sessionId = "att-session";
+    auto sc = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+    clientT->send(agentxx::agent::WireHello{"att-session", "", 0, ""});
+    auto helloAck = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(helloAck.has_value());
+
+    // 发送携带合法图片附件的 user_input
+    agentxx::agent::WireUserInput input;
+    input.sessionId = "att-session";
+    input.text      = "请分析这张图";
+    input.requestId = 88;
+    input.attachments.push_back(agentxx::agent::MediaAttachment{
+        .type        = agentxx::agent::MediaType::Image,
+        .displayName = "diagram.png",
+        .mimeType    = "image/png",
+        .dataUrl     = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        .sizeBytes   = 68,
+    });
+    clientT->send(input);
+
+    auto ackMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(ackMsg.has_value());
+    if (ackMsg) {
+        auto* ack = std::get_if<agentxx::agent::WireInputAck>(&*ackMsg);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_EQ(ack->requestId, uint64_t{88});
+            XX_TEST_EXPECT_EQ(ack->status, std::string(agentxx::agent::InputStatus::Started));
+        }
+    }
+
+    clientT->close();
+    sc->stop();
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    co_return;
+}
+
+static asio::awaitable<void> test_remote_user_input_attachment_oversize() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    SessionServerAgentIO::Config cfg;
+    cfg.sessionId = "att-oversize-session";
+    auto sc = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+
+    clientT->send(agentxx::agent::WireHello{"att-oversize-session", "", 0, ""});
+    auto helloAck = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(helloAck.has_value());
+
+    // 发送携带超大附件 (图片上限为 10MB，这里指定 15MB)
+    agentxx::agent::WireUserInput input;
+    input.sessionId = "att-oversize-session";
+    input.text      = "超大文件";
+    input.requestId = 99;
+    input.attachments.push_back(agentxx::agent::MediaAttachment{
+        .type        = agentxx::agent::MediaType::Image,
+        .displayName = "too_large.png",
+        .sizeBytes   = 15 * 1024 * 1024,
+    });
+    clientT->send(input);
+
+    // 服务端应回执 rejected 且原因 = attachment_too_large
+    auto ackMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(ackMsg.has_value());
+    if (ackMsg) {
+        auto* ack = std::get_if<agentxx::agent::WireInputAck>(&*ackMsg);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_EQ(ack->requestId, uint64_t{99});
+            XX_TEST_EXPECT_EQ(ack->status, std::string(agentxx::agent::InputStatus::Rejected));
+            XX_TEST_EXPECT_EQ(
+                ack->reason,
+                std::string(agentxx::agent::InputRejectReason::AttachmentTooLarge)
+            );
+            XX_TEST_EXPECT_FALSE(ack->detail.empty());
+        }
+    }
+
+    // 同时也应收到 WireError
+    auto errMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(errMsg.has_value());
+    if (errMsg) {
+        auto* err = std::get_if<agentxx::agent::WireError>(&*errMsg);
+        XX_TEST_EXPECT_TRUE(err != nullptr);
+        if (err) {
+            XX_TEST_EXPECT_EQ(err->code, agentxx::agent::WireErrorCode::InvalidArgs);
+            XX_TEST_EXPECT_FALSE(err->message.empty());
+        }
+    }
+
+    clientT->close();
+    sc->stop();
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    co_return;
+}
+
+// 附件条数上限: 一次带 6 个附件 (上限 5) 应被拒绝, 不进入轮次
+static asio::awaitable<void> test_remote_user_input_attachment_count_limit() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    SessionServerAgentIO::Config cfg;
+    cfg.sessionId = "att-count-session";
+    auto sc = std::make_shared<SessionServerAgentIO>(
+        ex,
+        std::weak_ptr<agentxx::agent::BaseAgent>{},
+        cfg
+    );
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+
+    clientT->send(agentxx::agent::WireHello{"att-count-session", "", 0, ""});
+    auto helloAck = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(helloAck.has_value());
+
+    agentxx::agent::WireUserInput input;
+    input.sessionId = "att-count-session";
+    input.text      = "太多附件";
+    input.requestId = 120;
+    for (size_t i = 0; i < agentxx::agent::kMaxAttachmentsPerMessage + 1; ++i) {
+        input.attachments.push_back(agentxx::agent::MediaAttachment{
+            .type        = agentxx::agent::MediaType::Image,
+            .displayName = fmt::format("img{}.png", i),
+            .mimeType    = "image/png",
+            .sizeBytes   = 1024,
+        });
+    }
+    clientT->send(input);
+
+    auto ackMsg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(ackMsg.has_value());
+    if (ackMsg) {
+        auto* ack = std::get_if<agentxx::agent::WireInputAck>(&*ackMsg);
+        XX_TEST_EXPECT_TRUE(ack != nullptr);
+        if (ack) {
+            XX_TEST_EXPECT_EQ(ack->requestId, uint64_t{120});
+            XX_TEST_EXPECT_EQ(ack->status, std::string(agentxx::agent::InputStatus::Rejected));
+            XX_TEST_EXPECT_EQ(
+                ack->reason,
+                std::string(agentxx::agent::InputRejectReason::TooManyAttachments)
+            );
+            XX_TEST_EXPECT_FALSE(ack->detail.empty());
+        }
+    }
+
+    clientT->close();
+    sc->stop();
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    co_return;
+}
+
+// 带附件的一轮对话: 附件必须组装进 LLM 请求体 (mock LLM 断言请求内容)
+static asio::awaitable<void> test_remote_user_input_attachment_to_llm() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto       sim            = startDaSimServer();
+    const auto baseUrl        = "http://127.0.0.1:" + std::to_string(sim.port);
+    g_da_sim_response_content = "attachment received";
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
+
+    auto cfg              = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl    = baseUrl;
+    cfg->model.apiKey     = "EMPTY";
+    cfg->model.modelName  = "att-model";
+    // 图片输入能力: 客户端据此展示附件入口; 服务端组装请求体不依赖本开关
+    cfg->model.imageInput = true;
+    auto agent            = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    co_await agent->init();
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "att-llm-session";
+    auto sc         = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireHello{
+        .sessionId = "att-llm-session",
+        .token     = "",
+        .lastSeq   = 0,
+        .tailHash  = "",
+        .model     = "",
+        .language  = "zh-cn",
+    }});
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        [sc]() -> asio::awaitable<void> {
+            co_await sc->run();
+        },
+        asio::detached
+    );
+
+    // 1x1 PNG (Base64): 走 dataUrl 直传, 服务端无需读文件
+    const std::string dataUrl
+        = "data:image/png;base64,"
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9"
+          "awAAAABJRU5ErkJggg==";
+    const int req0 = g_da_sim_request_count;
+
+    agentxx::agent::WireUserInput input;
+    input.sessionId = "att-llm-session";
+    input.text      = "看一下这张图";
+    input.requestId = 501;
+    input.attachments.push_back(agentxx::agent::MediaAttachment{
+        .type        = agentxx::agent::MediaType::Image,
+        .displayName = "diagram.png",
+        .mimeType    = "image/png",
+        .dataUrl     = dataUrl,
+        .sizeBytes   = 68,
+    });
+    clientT->send(input);
+
+    // 握手后会先收到 HelloAck/统计/权限状态等下行消息, 这里只等 LLM 请求到达
+    // (轮次真的开跑即证明输入被受理); 受理回执本身由附件用例单独覆盖
+    bool sawRequest = false;
+    for (int i = 0; i < 200; ++i) {
+        if (g_da_sim_request_count > req0) {
+            sawRequest = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{50});
+    }
+    XX_TEST_EXPECT_TRUE(sawRequest);
+    if (sawRequest) {
+        // 请求体里应出现带图片内容段的 user 消息: content 为数组,
+        // 含 {type:"image_url", image_url:{url:<dataUrl>}} (见 provider_common.h)
+        const auto& msgs  = g_da_sim_last_request["messages"];
+        bool        found = false;
+        if (msgs.is_array()) {
+            for (const auto& m : msgs) {
+                if (!m.contains("content") || !m["content"].is_array()) {
+                    continue;
+                }
+                for (const auto& part : m["content"]) {
+                    if (!part.is_object() || !part.contains("type")
+                        || part["type"].get<std::string>() != "image_url") {
+                        continue;
+                    }
+                    if (part.contains("image_url") && part["image_url"].is_object()
+                        && part["image_url"].value("url", std::string{}) == dataUrl) {
+                        found = true;
+                    }
+                    // 文本段与图片段同一条消息 (文本不丢)
+                    XX_TEST_EXPECT_TRUE(m["content"].size() >= 2);
+                    XX_TEST_EXPECT_EQ(
+                        m["content"][0].value("type", std::string{}),
+                        std::string("text")
+                    );
+                }
+            }
+        }
+        XX_TEST_EXPECT_TRUE(found);
+    }
+
+    clientT->close();
+    sc->stop();
+    co_await testSleep(ex, std::chrono::milliseconds{50});
+    co_return;
+}
+
 asio::awaitable<TestResult> run_remote_agent_tests() {
     std::cout << "  [remote] protocol roundtrip..." << std::endl;
     co_await test_remote_protocol_roundtrip();
@@ -3818,6 +4117,18 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] add model config via wire..." << std::endl;
     co_await test_add_model_config_via_wire();
+
+    std::cout << "  [remote] user input attachments..." << std::endl;
+    co_await test_remote_user_input_attachments();
+
+    std::cout << "  [remote] user input attachment oversize..." << std::endl;
+    co_await test_remote_user_input_attachment_oversize();
+
+    std::cout << "  [remote] user input attachment count limit..." << std::endl;
+    co_await test_remote_user_input_attachment_count_limit();
+
+    std::cout << "  [remote] user input attachment to llm..." << std::endl;
+    co_await test_remote_user_input_attachment_to_llm();
 
     co_return TestResult{g_remote_passed, g_remote_failed};
 }

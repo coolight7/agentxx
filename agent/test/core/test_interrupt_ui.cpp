@@ -692,6 +692,36 @@ void test_ui_image_progress_path() {
     XX_TEST_EXPECT_TRUE(text.find("生成进度") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("选择文件") != std::string::npos); // 路径控件标签
     XX_TEST_EXPECT_TRUE(text.find("dir") != std::string::npos);      // 路径模式
+
+    // --- preset helper 构造与字段测试 ---
+    const auto pImg1 = preset::imageBlock("data:image/jpeg;base64,123", "AltImg", 200, true);
+    XX_TEST_EXPECT_EQ(pImg1.kind, std::string("image"));
+    XX_TEST_EXPECT_EQ(pImg1.dataUrl, std::string("data:image/jpeg;base64,123"));
+    XX_TEST_EXPECT_EQ(pImg1.alt, std::string("AltImg"));
+    XX_TEST_EXPECT_EQ(pImg1.maxHeight, 200);
+
+    const auto pImg2 = preset::imageBlock("/data/img.png", "", 0, false);
+    XX_TEST_EXPECT_EQ(pImg2.kind, std::string("image"));
+    XX_TEST_EXPECT_EQ(pImg2.path, std::string("/data/img.png"));
+    XX_TEST_EXPECT_EQ(pImg2.dataUrl, std::string(""));
+
+    const auto pProg = preset::progressBlock(50.0, 100.0, "加载中", "prog.loading");
+    XX_TEST_EXPECT_EQ(pProg.kind, std::string("progress"));
+    XX_TEST_EXPECT_EQ(pProg.progressValue, 50.0);
+    XX_TEST_EXPECT_EQ(pProg.progressTotal, 100.0);
+    XX_TEST_EXPECT_EQ(pProg.label, std::string("加载中"));
+    XX_TEST_EXPECT_EQ(pProg.labelKey, std::string("prog.loading"));
+
+    const auto pPath = preset::pathControl("p1", "选择图片", "p.key", "multi", {".png"}, Json("/tmp"));
+    XX_TEST_EXPECT_EQ(pPath.kind, std::string("control"));
+    XX_TEST_EXPECT_EQ(pPath.control, std::string("path"));
+    XX_TEST_EXPECT_EQ(pPath.id, std::string("p1"));
+    XX_TEST_EXPECT_EQ(pPath.label, std::string("选择图片"));
+    XX_TEST_EXPECT_EQ(pPath.labelKey, std::string("p.key"));
+    XX_TEST_EXPECT_EQ(pPath.pathMode, std::string("multi"));
+    XX_TEST_EXPECT_EQ(pPath.filter.size(), static_cast<size_t>(1));
+    const auto defVal = pPath.defaultValue.get<std::string>();
+    XX_TEST_EXPECT_EQ(defVal, std::string("/tmp"));
 }
 
 /// A7: 图片/进度块经组件桥接 (itemOf) 也要有可见输出

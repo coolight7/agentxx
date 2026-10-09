@@ -139,7 +139,7 @@ agentxx_ffi_event_queue_free(q);
 | Error | `agentxx_ffi_strerror` | Error code → static string view out-parameter |
 | Capability Inventory | `agentxx_ffi_get_capabilities` | Returns `{"apiVersion","libraryVersion","capabilities":[...]}`; lets hosts check which features this build supports (a second check on top of "is the symbol present"); works with a NULL handle |
 | Lifecycle | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | Create (does not start threads) / Async start (`EVT_READY`) / Sync stop (idempotent) / Destroy (auto-stops if running) |
-| Session (Async) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | Dispatched to IO thread for serial execution; inputs sent before READY are auto-queued |
+| Session (Async) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | Dispatched to IO thread for serial execution; inputs sent before READY are auto-queued; `send_input` takes an **input JSON** (`{"text","attachments","model","delivery"}`, multimodal attachments supported), see Section 4.11 |
 | Model Management | `agentxx_ffi_add_model` / `agentxx_ffi_remove_model` / `agentxx_ffi_list_models` | Dynamic add/remove/list of model configs; shares the wire-side implementation (send request + await acknowledgment), persists to disk before registering; removing the model currently in use is rejected; see Section 4.7 |
 | Wire Passthrough | `agentxx_ffi_send_wire` | Low-frequency operations go through passthrough (blacklist blocks core connection messages, whitelist admits the remaining client→server messages); see Section 4.8 |
 | Host Tools | `agentxx_ffi_tool_register` / `agentxx_ffi_tool_unregister` / `agentxx_ffi_tool_respond` | Host registers dynamic tools → server registers them into the ToolRegistry → on hit it emits `EVT_HOST_TOOL_CALL` → host responds; see Section 4.9 |
@@ -149,7 +149,7 @@ agentxx_ffi_event_queue_free(q);
 | Logging | `agentxx_ffi_drain_logs` | Drains pending logs `[{"level","message"},...]` into `AgentxxString* out` (for post-failure diagnostics) |
 | Event Queue | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | See Section 4.2 |
 
-Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
+Version Policy: `AGENTXX_FFI_API_VERSION` is currently **2** (the single change from 1 to 2: `agentxx_ffi_send_input` takes an input JSON instead of a plain text argument, see Section 4.11). Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
 
 ### 4.4 Event Types (`AgentxxFFIEventType`, payloads are `const AgentxxStringView*` JSON)
 
@@ -163,10 +163,10 @@ Version Policy: Global `AGENTXX_FFI_API_VERSION` is reset to 1. Callers and lang
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) |
 | `EVT_MODEL_INFO` | wire model_info JSON | Current model information (query/switch result) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | Startup components (MCP, Skills, Memory, Plugins) loading status |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`): **`ui` is the required declarative form descriptor** (header segments + ordered blocks text/markdown/diff/separator/gap/control/submit + reserved custom). See 4.6 for the rendering guide |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`): **`ui` is the required declarative form descriptor** (header segments + ordered blocks text/markdown/diff/image/progress/separator/gap/control/submit + reserved custom). See 4.6 for the rendering guide |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | Interrupt expired or cancelled; can no longer be answered |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | Agent-side plugin event forwarding (`{plugin,event,data}`) |
-| `EVT_WIRE` | raw outbound wire JSON | Passthrough for low-frequency outbound messages (structural messages outside the dedicated set): `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; the host dispatches on `type` |
+| `EVT_WIRE` | raw outbound wire JSON | Passthrough for low-frequency outbound messages (structural messages outside the dedicated set): `input_ack` (input acceptance receipt, see Section 4.11) / `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; the host dispatches on `type` |
 | `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | Server asks the host to run a registered host tool (see 4.9); `argsJson` is JSON text |
 | `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | A host tool call was cancelled (calls still unanswered at stop/destroy are all reported), so the host can release local resources |
 | `EVT_ERROR` | `{"code","message"}` | Internal error |
@@ -435,6 +435,54 @@ set_delta_batch(0)                    → disable; behavior is exactly as before
   when the two alternate, the pending one is flushed before switching)
 - Pending text is flushed on turn end / stop / destroy, so no trailing content is lost
 
+### 4.11 User Input JSON (`agentxx_ffi_send_input`)
+
+The argument of `send_input` is an **input JSON** (no longer plain text), because an input may
+carry multimodal attachments in addition to text:
+
+```json
+{ "text": "look at this image",           // text and attachments: at least one non-empty
+  "attachments": [                        // optional; <= 5 attachments per message
+    { "type": "image",                    // image|audio|video (alias: kind)
+      "display_name": "diagram.png",      // alias: name
+      "mime_type": "image/png",           // alias: mimeType
+      "data_url": "data:image/png;base64,...",  // alias: dataUrl; inline for small files
+      "path_or_url": "/abs/photo.png",    // alias: path; mutually exclusive with data_url
+      "size_bytes": 68 }                  // alias: size
+  ],
+  "model": "m2",                          // optional; empty = do not switch models
+  "delivery": "next-turn" }               // optional; empty = next-turn
+```
+
+Limits and rejection (same rules as the wire side; a violation is returned synchronously as
+`AGENTXX_FFI_ERR_INVALID` with `log` naming the offending item):
+
+| Item | Limit | Notes |
+| --- | --- | --- |
+| Attachments per message | 5 | Excess rejects the input; no turn starts |
+| Image | 10 MB | judged from `size_bytes`; when absent, estimated from the `data_url` Base64 length, falling back to the local file size |
+| Audio | 25 MB | same as above |
+| Video | 50 MB | same as above |
+
+- When `data_url` is empty and `path_or_url` is a local path, the **server reads and encodes the
+  file**; the host does not need to read it itself (for cross-device setups the host first picks a
+  server-side file through `send_wire`'s `list_dir` and sends only the path)
+- Attachments are merged into `ChatMessage`'s `image_urls` / `audio_urls` / `video_urls` by kind,
+  and each provider assembles them into request-body content parts (OpenAI: `image_url` /
+  `input_audio` / `video_url` parts inside the `content` array)
+- The acceptance result comes back through `EVT_WIRE` as `input_ack` (see Section 4.8), letting the
+  host show "started / queued / rejected":
+  `{"type":"input_ack","requestId":1,"status":"started|queued|steered|rejected",
+    "reason":"...","detail":"...","itemId":"..."}`;
+  rejection reasons are the `InputRejectReason` values (`empty_content` / `attachment_too_large` /
+  `too_many_attachments` / `session_mismatch` / `server_stopped` / `bad_delivery` / `queue_cleared`)
+- Input carrying attachments is queued as **next-turn** (attachments are loaded and encoded by the
+  server, which only happens at the start of a turn): it starts immediately when idle, otherwise it
+  waits and runs automatically once the running turn finishes
+- Model capability: the host should read whether the current model accepts image/audio/video input
+  from `capabilities` in `EVT_MODEL_INFO` / `get_model_info` (declared by `model_json`'s
+  `imageInput`/`audioInput`/`videoInput`) before offering an attachment entry point
+
 ## 5. Language Bindings & Examples
 
 | Directory | Description |
@@ -457,5 +505,5 @@ Other languages integrate via the same pattern: load whitelisted symbols via `dl
 - **Working Directory Resolution**: `config_json.workDir` supports `~`/`${VAR}` expansion and relative paths (resolved to absolute against process `cwd`). If unspecified, it falls back to process `cwd`, matching `AgentConfig::resolvedWorkDir()` semantics. Session-level worktree bindings (`Session::WorktreeBinding`) and multi-source fallbacks via `AgentContext::getSessionWorkDir` operate identically for FFI handles (all relative paths within the session adapt dynamically).
 - **Plugin Sides Option**: `plugins[].sides` accepts `auto` (default, detected automatically via `agentxx_plugin_client_create` export), `agent` (loaded only on agent side), or `client` (loaded only on client side; FFI typically uses `agent`).
 - **Synchronous Query Concurrency**: For `get_model_info`/`get_context_messages`/`list_sessions`, only one in-flight request per handle is permitted at any given time (server protocols are strictly sequential). On 10s timeout, it returns `AGENTXX_FFI_ERR_TIMEOUT`, and an `EVT_ERROR` payload `{"code","message"}` is also dispatched.
-- **HITL Input Schema**: In `EVT_INTERRUPT_REQ`, `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`). `ui` is the required declarative form descriptor (schema: `agent/middlewares/interrupt_ui.h`; block kinds text/markdown/diff/separator/gap/control/submit) — see section 4.6 for the generic host rendering guide. The answer is always `{"values": {"<control id>": value}}` (empty object = not answered). The typed-parameter declaration (`inputs[]`) and the whole "parameter type" concept were removed: producers that want a "typed inputs + confirm" form use the preset template `preset::inputForm` to generate the descriptor.
+- **HITL Input Schema**: In `EVT_INTERRUPT_REQ`, `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`). `ui` is the required declarative form descriptor (schema: `agent/middlewares/interrupt_ui.h`; block kinds text/markdown/diff/image/progress/separator/gap/control/submit) — see section 4.6 for the generic host rendering guide. The answer is always `{"values": {"<control id>": value}}` (empty object = not answered). The typed-parameter declaration (`inputs[]`) and the whole "parameter type" concept were removed: producers that want a "typed inputs + confirm" form use the preset template `preset::inputForm` to generate the descriptor.
 - **Cross-CRT Heap Management**: All `char*` return values and `char** log` pointers are allocated via `agentxx_ffi_malloc`; hosts must release them using `agentxx_ffi_free`. `agentxx_ffi_strdup_n` is the standard copy helper.

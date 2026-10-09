@@ -232,6 +232,39 @@ InterruptUiBlock gapBlock(int lines) {
     return contentBlock(std::move(item));
 }
 
+InterruptUiBlock imageBlock(
+    std::string pathOrDataUrl,
+    std::string alt,
+    int         maxHeight,
+    bool        isDataUrl
+) {
+    InterruptUiBlock b;
+    b.kind = "image";
+    if (isDataUrl) {
+        b.dataUrl = std::move(pathOrDataUrl);
+    } else {
+        b.path = std::move(pathOrDataUrl);
+    }
+    b.alt       = std::move(alt);
+    b.maxHeight = maxHeight;
+    return b;
+}
+
+InterruptUiBlock progressBlock(
+    double      value,
+    double      total,
+    std::string label,
+    std::string labelKey
+) {
+    InterruptUiBlock b;
+    b.kind          = "progress";
+    b.progressValue = value;
+    b.progressTotal = total;
+    b.label         = std::move(label);
+    b.labelKey      = std::move(labelKey);
+    return b;
+}
+
 InterruptUiBlock submitBlock(
     std::string label,
     std::string labelKey,
@@ -344,6 +377,30 @@ InterruptUiBlock selectControl(
     b.labelKey     = std::move(labelKey);
     b.help         = std::move(help);
     b.defaultValue = std::move(defaultValue);
+    return b;
+}
+
+InterruptUiBlock pathControl(
+    std::string              id,
+    std::string              label,
+    std::string              labelKey,
+    std::string              mode,
+    std::vector<std::string> filter,
+    utilxx_base::Json        defaultValue,
+    std::string              help,
+    std::string              helpKey
+) {
+    InterruptUiBlock b;
+    b.kind         = "control";
+    b.control      = "path";
+    b.id           = std::move(id);
+    b.label        = std::move(label);
+    b.labelKey     = std::move(labelKey);
+    b.pathMode     = std::move(mode);
+    b.filter       = std::move(filter);
+    b.defaultValue = std::move(defaultValue);
+    b.help         = std::move(help);
+    b.helpKey      = std::move(helpKey);
     return b;
 }
 

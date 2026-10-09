@@ -1782,7 +1782,7 @@ void benchResourceFfi() {
     }
 
     // 预热一轮
-    std::string       warmupInput = "hello";
+    std::string       warmupInput = R"({"text":"hello"})";
     AgentxxStringView wInputSv{warmupInput.data(), static_cast<uint64_t>(warmupInput.size())};
     tracker.turnDone = false;
     agentxx_ffi_send_input(ffiAgent, &wInputSv, &logOut);
@@ -1839,7 +1839,9 @@ void benchResourceFfi() {
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
             i + 1
         );
-        AgentxxStringView inputSv{userText.data(), static_cast<uint64_t>(userText.size())};
+        // send_input 参数为输入 JSON (含 text/attachments/model/delivery)
+        std::string       inputJson = utilxx_base::Json{{"text", userText}}.dump();
+        AgentxxStringView inputSv{inputJson.data(), static_cast<uint64_t>(inputJson.size())};
         agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
         if (logOut.data) {
             agentxx_ffi_string_free(&logOut);
@@ -1899,7 +1901,9 @@ void benchResourceFfi() {
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
             i + 1
         );
-        AgentxxStringView inputSv{userText.data(), static_cast<uint64_t>(userText.size())};
+        // send_input 参数为输入 JSON (含 text/attachments/model/delivery)
+        std::string       inputJson = utilxx_base::Json{{"text", userText}}.dump();
+        AgentxxStringView inputSv{inputJson.data(), static_cast<uint64_t>(inputJson.size())};
         agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
         if (logOut.data) {
             agentxx_ffi_string_free(&logOut);

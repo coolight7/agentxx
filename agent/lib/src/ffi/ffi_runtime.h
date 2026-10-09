@@ -116,7 +116,7 @@ public:
     // 会话交互 (异步, 投递 client io 线程转 Wire 消息发往服务端)
     // -------------------------------------------------------------------
 
-    int         sendInput(std::string_view text, std::string& err);
+    int         sendInput(std::string_view inputJson, std::string& err);
     int         cancel(std::string& err);
     int         selectModel(std::string_view modelName, std::string& err);
     int         switchSession(std::string_view sessionId, std::string& err);
@@ -263,6 +263,9 @@ private:
     // ---- 3. 状态与会话 ----
     std::string        sessionId_;
     std::atomic<State> state_{State::Created};
+
+    /// 输入请求序号 (sendInput 自增; 服务端据 >0 回 input_ack, 宿主经 EVT_WIRE 看到受理结果)
+    std::atomic<uint64_t> nextInputRequestId_{0};
 
     /// HIL 中断等待宿主应答超时 (SessionServerAgentIO 配置)
     std::chrono::milliseconds interruptTimeout_{0};

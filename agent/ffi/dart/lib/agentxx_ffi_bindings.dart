@@ -252,7 +252,7 @@ class AgentxxFfiBindings {
   late final _agentxx_ffi_free =
       _agentxx_ffi_freePtr.asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 
-  /// 查询当前 FFI 运行时能力清单 (JSON: {"apiVersion":1,"libraryVersion":"0.4.0","capabilities":[...]})
+  /// 查询当前 FFI 运行时能力清单 (JSON: {"apiVersion":2,"libraryVersion":"0.4.0","capabilities":[...]})
   /// out 需经 agentxx_ffi_string_free 释放
   int agentxx_ffi_get_capabilities(
     ffi.Pointer<AgentxxFFIAgent> a,
@@ -511,14 +511,34 @@ class AgentxxFfiBindings {
               ffi.Pointer<AgentxxStringView>, ffi.Pointer<AgentxxString>)>();
 
   /// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序处理)
+  ///
+  /// `input_json` 字段 (UTF-8 JSON 对象):
+  /// - `text`        字符串, 输入文本 (与 `attachments` 至少有一个非空)
+  /// - `attachments` 数组, 附件列表 (每个元素字段与 wire `user_input.attachments`
+  /// 一致, 见 [MediaAttachment]; 也可用 `kind`/`name`/`path` 等别名):
+  /// `{type|kind: image|audio|video, display_name|name, mime_type|mimeType,
+  /// path_or_url|path, data_url|dataUrl, size_bytes|size}`
+  /// - `model`       字符串, 本条消息携带的模型选择 (空 = 不切换)
+  /// - `delivery`    字符串, 投递模式 (`next-turn` / `next-step` / `inject` / `collect`;
+  /// 空 = next-turn)
+  ///
+  /// 附件限额 (超限同步返回 AGENTXX_FFI_ERR_INVALID, log 写明是哪一项):
+  /// 单条消息 ≤ `kMaxAttachmentsPerMessage` (5) 个; 单个附件 ≤ 10MB (图片) /
+  /// 25MB (音频) / 50MB (视频)。`dataUrl` 为空且 `path_or_url` 为本地路径时,
+  /// 由服务端读取并编码 (宿主无需自行读文件)。
+  ///
+  /// 受理结果经 `EVT_WIRE` 透出 `input_ack` (`{type:"input_ack", requestId, status,
+  /// reason, detail, itemId}`): `status` 为 `started` / `queued` / `steered` / `rejected`,
+  /// 被拒绝时 `reason` 给出结构化原因 (`empty_content` / `attachment_too_large` /
+  /// `too_many_attachments` 等)。宿主据此展示"已开始 / 已排队 / 被拒绝"。
   int agentxx_ffi_send_input(
     ffi.Pointer<AgentxxFFIAgent> a,
-    ffi.Pointer<AgentxxStringView> text,
+    ffi.Pointer<AgentxxStringView> input_json,
     ffi.Pointer<AgentxxString> log,
   ) {
     return _agentxx_ffi_send_input(
       a,
-      text,
+      input_json,
       log,
     );
   }
@@ -779,7 +799,7 @@ class AgentxxFfiBindings {
               ffi.Pointer<AgentxxStringView>, ffi.Pointer<AgentxxString>)>();
 }
 
-const int AGENTXX_FFI_API_VERSION = 1;
+const int AGENTXX_FFI_API_VERSION = 2;
 
 const String AGENTXX_FFI_CAP_ADD_MODEL = 'add_model';
 

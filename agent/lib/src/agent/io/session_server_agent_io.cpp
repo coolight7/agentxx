@@ -668,6 +668,67 @@ void SessionServerAgentIO::handleUserInput(
         return;
     }
 
+    if (input.attachments.size() > kMaxAttachmentsPerMessage) {
+        auto errMsg = fmt::format(
+            "too many attachments: {} > {} (single message limit)",
+            input.attachments.size(),
+            kMaxAttachmentsPerMessage
+        );
+        XX_LOGW(
+            "[session_ctrl] user_input rejected: {} (session={})",
+            errMsg,
+            config_.sessionId
+        );
+        sendInputAck(
+            sender,
+            input.requestId,
+            delivery,
+            InputStatus::Rejected,
+            InputRejectReason::TooManyAttachments,
+            errMsg
+        );
+        sendToPeer(WireError{
+            .code    = WireErrorCode::InvalidArgs,
+            .message = errMsg,
+        });
+        return;
+    }
+
+    for (const auto& att : input.attachments) {
+        uint64_t maxSize = maxBytesForMediaType(att.type);
+        uint64_t estSize = estimateAttachmentSizeBytes(att);
+        if (estSize > maxSize) {
+            std::string name = !att.displayName.empty()
+                ? att.displayName
+                : (!att.pathOrUrl.empty() ? att.pathOrUrl : "attachment");
+            std::string errMsg = fmt::format(
+                "attachment '{}' exceeds maximum allowed size for {} ({} bytes > {} bytes)",
+                name,
+                mediaTypeToString(att.type),
+                estSize,
+                maxSize
+            );
+            XX_LOGW(
+                "[session_ctrl] user_input rejected: {} (session={})",
+                errMsg,
+                config_.sessionId
+            );
+            sendInputAck(
+                sender,
+                input.requestId,
+                delivery,
+                InputStatus::Rejected,
+                InputRejectReason::AttachmentTooLarge,
+                errMsg
+            );
+            sendToPeer(WireError{
+                .code    = WireErrorCode::InvalidArgs,
+                .message = errMsg,
+            });
+            return;
+        }
+    }
+
     cancelGraceTimer();
 
     // `collect`: 进入静默合并窗口 (窗口内同一客户端的连续输入合并为一条)

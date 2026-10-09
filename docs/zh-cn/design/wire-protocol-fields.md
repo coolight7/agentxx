@@ -17,7 +17,7 @@
 |---:|---|---|---|
 | 0 | hello | `hello` | `type` string, `sessionId` string, `token` string, `lastSeq` integer, `tailHash` string, `language` string, `afterViewSeq` integer, `protocolVersion` integer, `capabilities` array<string> |
 | 1 | hello_ack | `hello_ack` | `type` string, `ok` boolean, `sessionId` string, `tailHash` string, `models` array<string>, `protocolVersion` integer, `capabilities` array<string>, `deviceId` string, `workDir` string, `plugins` array<object{name:string, version:string, interfaces:array<string>}> |
-| 2 | user_input | `user_input` | `type` string, `sessionId` string, `text` string, `model` string, `delivery` string, `requestId` integer |
+| 2 | user_input | `user_input` | `type` string, `sessionId` string, `text` string, `model` string, `delivery` string, `requestId` integer, `attachments` array<object{type:string, display_name:string, mime_type:string, path_or_url:string, data_url:string, size_bytes:integer}> |
 | 3 | input_ack | `input_ack` | `type` string, `status` string, `requestId` integer, `sessionId` string, `delivery` string, `reason` string, `detail` string, `itemId` string |
 | 4 | cancel | `cancel` | `type` string, `sessionId` string |
 | 5 | select_model | `select_model` | `type` string, `sessionId` string, `model` string |

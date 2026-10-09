@@ -365,6 +365,12 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     目录扫描卸载到线程池, 路径一律以 UTF-8 在两端传递)
   - GetPermissionState / SetFullAuth / PermissionState: 查询与切换"完全授权所有权限"
     (状态源在服务端权限中间件, 客户端只持镜像; 切换后服务端向全部接入端点广播新状态)
+- **上行多模态附件**: `UserInput.attachments` 携带附件列表 (字段见
+  [wire-protocol-fields.md](wire-protocol-fields.md)); 服务端受理前校验大小
+  (图片 10MB / 音频 25MB / 视频 50MB) 与条数 (单条 ≤5), 超限回
+  `InputAck{status:"rejected", reason:"attachment_too_large"|"too_many_attachments"}`
+  并附一条 `Error{code:4}`; 附件的 `dataUrl` 直接可用, 只给 `pathOrUrl` 时由服务端
+  自行读取编码 (跨设备选服务端文件的情形)
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync;
   客户端记录的序号高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退全量 Sync,
   SyncPayload.deltaSeq 携带快照序号 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此重置去重序号
@@ -1087,6 +1093,7 @@ stderr : 日志与诊断 (不混进 stdout, 保证 stdout 可逐行解析)
   (5 秒, 不等长轮次跑完)
 - 非法行不会中断会话: 本端回一条 `{"type":"error","code":4,...}` 后继续读下一行;
   空行忽略
+- **支持携带多模态附件 (attachments)**: `user_input` 可携带附件列表 (每个附件包含 `kind`/`type`: image|audio|video, `name`/`display_name`, `mimeType`/`mime_type`, `size`/`size_bytes`, `dataUrl`/`data_url` 或 `path`/`path_or_url`)。服务端受理前校验: 超过大小限制 (图片 10MB, 音频 25MB, 视频 50MB) 以 `attachment_too_large` 拒绝, 单条消息超过 5 个附件以 `too_many_attachments` 拒绝 (同时回一条 `error` 消息, code = 4)
 - 连接阶段与 WS 一致: 未握手前只接受 `hello` (其余请求按 `invalid_state` 拒绝)
 
 最小示例:

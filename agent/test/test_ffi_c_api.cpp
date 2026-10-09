@@ -161,6 +161,15 @@ struct FfiMockLLM {
     /// >0 时响应前延迟 (取消测试用)
     int slowMs = 0;
 
+    /// 最近一次 /chat/completions 的请求体 (供测试断言上下文与附件组装)
+    std::mutex  bodyMutex;
+    std::string lastRequestBody;
+
+    std::string capturedBody() {
+        std::lock_guard<std::mutex> lock(bodyMutex);
+        return lastRequestBody;
+    }
+
     ~FfiMockLLM() {
         stop();
     }
@@ -236,10 +245,15 @@ struct FfiMockLLM {
         );
         auto handler = std::make_shared<utilxx::HttpServer::Handler>(
             [this](
-                utilxx::HttpServer::Request&,
+                utilxx::HttpServer::Request& req,
                 utilxx::HttpServer::Response& resp,
                 std::string_view
             ) -> asio::awaitable<void> {
+                {
+                    // 记录请求体: 附件/上下文组装断言的数据来源
+                    std::lock_guard<std::mutex> lock(bodyMutex);
+                    lastRequestBody = std::string{req.body()};
+                }
                 const int n = requestCount.fetch_add(1);
                 if (slowMs > 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(slowMs));
@@ -443,7 +457,7 @@ void testLifecycleAndConversation() {
     agentxx_ffi_string_free(&mi);
 
     // 发送输入 → 流式 delta → 轮次结束
-    auto inputSv = agentxx_string_view_cstr("hello");
+    auto inputSv = agentxx_string_view_cstr(R"({"text":"hello"})");
     XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &inputSv, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
     XX_TEST_EXPECT_TRUE(rec.hasDeltaKind("text_token"));
@@ -532,7 +546,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
 
     // 停止后: 状态错误
-    auto xSv = agentxx_string_view_cstr("x");
+    auto xSv = agentxx_string_view_cstr(R"({"text":"x"})");
     XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(nullptr, &xSv, &log), AGENTXX_FFI_ERR_INVALID);
     agentxx_ffi_string_free(&log);
     mock.stop();
@@ -585,7 +599,7 @@ void testHilInterrupt() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_READY, 20000));
 
-    auto cmdSv = agentxx_string_view_cstr("read /etc/hostname");
+    auto cmdSv = agentxx_string_view_cstr(R"({"text":"read /etc/hostname"})");
     XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &cmdSv, &log), AGENTXX_FFI_OK);
 
     // 等待权限中断请求
@@ -702,7 +716,7 @@ void testCancel() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_READY, 20000));
 
-    auto runSv = agentxx_string_view_cstr("run slow");
+    auto runSv = agentxx_string_view_cstr(R"({"text":"run slow"})");
     XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &runSv, &log), AGENTXX_FFI_OK);
     // 模拟用户提前取消
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -770,7 +784,7 @@ void testMultipleRuntimesConcurrent() {
     // 并发发送输入
     for (size_t i = 0; i < kRuntimeCount; ++i) {
         AgentxxString log{};
-        auto          slotSv = agentxx_string_view_cstr("Hello from slot");
+        auto          slotSv = agentxx_string_view_cstr(R"({"text":"Hello from slot"})");
         XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(slots[i].agent, &slotSv, &log), AGENTXX_FFI_OK);
         agentxx_ffi_string_free(&log);
     }
@@ -789,6 +803,154 @@ void testMultipleRuntimesConcurrent() {
         agentxx_ffi_string_free(&log);
     }
 
+    mock.stop();
+}
+
+/// 7) send_input 的 JSON 参数: 附件透传、本地限额校验、拒绝回执
+void testSendInputJsonAndAttachments() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    FfiEventRecorder    rec;
+    AgentxxFFICallbacks cb;
+    std::memset(&cb, 0, sizeof(cb));
+    cb.on_event  = FfiEventRecorder::onEvent;
+    cb.user_data = &rec;
+
+    AgentxxString    log{};
+    auto             mjson   = mock.modelJson(/*multimodal=*/true);
+    auto             mjsonSv = agentxx_string_view(mjson.data(), mjson.size());
+    AgentxxFFIAgent* a       = agentxx_ffi_create(nullptr, &mjsonSv, &cb, &log);
+    XX_TEST_EXPECT_TRUE(a != nullptr);
+    XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_READY, 20000));
+
+    // ---- 参数校验 (同步返回, 不产生轮次) ----
+    {
+        // 非法 JSON
+        auto badSv = agentxx_string_view_cstr("{not json");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &badSv, &log), AGENTXX_FFI_ERR_JSON);
+        agentxx_ffi_string_free(&log);
+
+        // 非对象
+        auto arrSv = agentxx_string_view_cstr(R"(["hello"])");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &arrSv, &log), AGENTXX_FFI_ERR_INVALID);
+        agentxx_ffi_string_free(&log);
+
+        // text 与 attachments 都为空
+        auto emptySv = agentxx_string_view_cstr(R"({"text":""})");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &emptySv, &log), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_TRUE(
+            log.data != nullptr && std::strstr(log.data, "至少需要") != nullptr
+        );
+        agentxx_ffi_string_free(&log);
+
+        // attachments 不是数组
+        auto badAttSv = agentxx_string_view_cstr(R"({"text":"x","attachments":"oops"})");
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &badAttSv, &log), AGENTXX_FFI_ERR_INVALID);
+        agentxx_ffi_string_free(&log);
+
+        // 附件条数超限 (上限 5): log 写明是条数问题
+        std::string tooMany = R"({"text":"x","attachments":[)";
+        for (int i = 0; i < 6; ++i) {
+            tooMany += (i == 0 ? "" : ",");
+            tooMany += fmt::format(R"({{"type":"image","name":"i{}.png","size":10}})", i);
+        }
+        tooMany += "]}";
+        auto tooManySv = agentxx_string_view(tooMany.data(), tooMany.size());
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &tooManySv, &log), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_TRUE(
+            log.data != nullptr && std::strstr(log.data, "条数") != nullptr
+        );
+        agentxx_ffi_string_free(&log);
+
+        // 单个附件超大小上限 (图片 10MB; 声明 15MB)
+        auto oversizeSv = agentxx_string_view_cstr(
+            R"({"text":"x","attachments":[{"type":"image","name":"big.png","size":15728640}]})"
+        );
+        XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &oversizeSv, &log), AGENTXX_FFI_ERR_INVALID);
+        XX_TEST_EXPECT_TRUE(
+            log.data != nullptr && std::strstr(log.data, "上限") != nullptr
+        );
+        agentxx_ffi_string_free(&log);
+
+        // 以上非法输入都不应开启轮次
+        XX_TEST_EXPECT_FALSE(rec.has(AGENTXX_FFI_EVT_TURN_END));
+    }
+
+    // ---- 合法附件: 组装进 LLM 请求体 (1x1 PNG, dataUrl 直传) ----
+    const std::string dataUrl
+        = "data:image/png;base64,"
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9"
+          "awAAAABJRU5ErkJggg==";
+    std::string inputJson = fmt::format(
+        R"({{"text":"看一下这张图","attachments":[{{"kind":"image","name":"diagram.png",)"
+        R"("mimeType":"image/png","dataUrl":"{}","size":68}}]}})",
+        dataUrl
+    );
+    auto inputSv = agentxx_string_view(inputJson.data(), inputJson.size());
+    XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &inputSv, &log), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
+
+    // 受理回执 (input_ack) 经 EVT_WIRE 透出: 宿主据此展示受理状态与拒绝原因
+    {
+        bool sawAck = false;
+        for (const auto& [type, payload] : [&]() {
+                 std::lock_guard<std::mutex> lock(rec.m);
+                 return rec.events;
+             }()) {
+            if (type != AGENTXX_FFI_EVT_WIRE) {
+                continue;
+            }
+            auto j = utilxx_base::Json::parse(payload);
+            if (j.value("type", std::string{}) != "input_ack") {
+                continue;
+            }
+            sawAck = true;
+            // 附件输入按 next-turn 排队, 空闲时即开始执行
+            XX_TEST_EXPECT_TRUE(j.contains("requestId"));
+            XX_TEST_EXPECT_FALSE(j.value("status", std::string{}).empty());
+            XX_TEST_EXPECT_TRUE(j.value("reason", std::string{}).empty());
+        }
+        XX_TEST_EXPECT_TRUE(sawAck);
+    }
+
+    // LLM 请求体应带图片内容段: content 为数组且含 image_url 分片
+    {
+        auto body = mock.capturedBody();
+        XX_TEST_EXPECT_TRUE(!body.empty());
+        bool found = false;
+        if (!body.empty()) {
+            auto j     = utilxx_base::Json::parse(body);
+            auto msgs  = j.value("messages", utilxx_base::Json::array());
+            for (const auto& m : msgs) {
+                if (!m.contains("content") || !m["content"].is_array()) {
+                    continue;
+                }
+                for (const auto& part : m["content"]) {
+                    if (!part.is_object() || !part.contains("type")) {
+                        continue;
+                    }
+                    if (part["type"].get<std::string>() != "image_url") {
+                        continue;
+                    }
+                    found = true;
+                    XX_TEST_EXPECT_EQ(
+                        part["image_url"].value("url", std::string{}),
+                        dataUrl
+                    );
+                }
+            }
+        }
+        XX_TEST_EXPECT_TRUE(found);
+    }
+
+    XX_TEST_EXPECT_EQ(agentxx_ffi_destroy(a, &log), AGENTXX_FFI_OK);
     mock.stop();
 }
 
@@ -1214,6 +1376,7 @@ agentxx::test::TestResult testFfiCApi() {
     testHilInterrupt();
     testCancel();
     testMultipleRuntimesConcurrent();
+    testSendInputJsonAndAttachments();
     testEventQueue();
     testCapabilities();
     testModelManagement();

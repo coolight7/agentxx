@@ -59,7 +59,10 @@
 extern "C" {
 #endif
 
-#define AGENTXX_FFI_API_VERSION 1
+/// FFI API 版本
+/// - 1 → 2: `agentxx_ffi_send_input` 的文本参数改为输入 JSON (支持附件),
+///   属于参数语义变更 (见版本策略)
+#define AGENTXX_FFI_API_VERSION 2
 
 #if defined(_WIN32)
 #define AGENTXX_FFI_EXPORT __declspec(dllexport)
@@ -188,7 +191,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_library_version(AgentxxS
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
     agentxx_ffi_strerror(int32_t code, AgentxxStringView* out);
 
-/// 查询当前 FFI 运行时能力清单 (JSON: {"apiVersion":1,"libraryVersion":"0.4.0","capabilities":[...]})
+/// 查询当前 FFI 运行时能力清单 (JSON: {"apiVersion":2,"libraryVersion":"0.4.0","capabilities":[...]})
 /// out 需经 agentxx_ffi_string_free 释放
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_get_capabilities(
     AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
@@ -255,8 +258,31 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 /* ==================== 会话交互 (异步, 投递 io 线程执行) ==================== */
 
 /// 发送用户输入 (EVT_READY 前发送会缓存, 就绪后按序处理)
-AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
-    agentxx_ffi_send_input(AgentxxFFIAgent* a, const AgentxxStringView* text, AgentxxString* log);
+///
+/// `input_json` 字段 (UTF-8 JSON 对象):
+/// - `text`        字符串, 输入文本 (与 `attachments` 至少有一个非空)
+/// - `attachments` 数组, 附件列表 (每个元素字段与 wire `user_input.attachments`
+///                 一致, 见 [MediaAttachment]; 也可用 `kind`/`name`/`path` 等别名):
+///                 `{type|kind: image|audio|video, display_name|name, mime_type|mimeType,
+///                   path_or_url|path, data_url|dataUrl, size_bytes|size}`
+/// - `model`       字符串, 本条消息携带的模型选择 (空 = 不切换)
+/// - `delivery`    字符串, 投递模式 (`next-turn` / `next-step` / `inject` / `collect`;
+///                 空 = next-turn)
+///
+/// 附件限额 (超限同步返回 AGENTXX_FFI_ERR_INVALID, log 写明是哪一项):
+/// 单条消息 ≤ `kMaxAttachmentsPerMessage` (5) 个; 单个附件 ≤ 10MB (图片) /
+/// 25MB (音频) / 50MB (视频)。`dataUrl` 为空且 `path_or_url` 为本地路径时,
+/// 由服务端读取并编码 (宿主无需自行读文件)。
+///
+/// 受理结果经 `EVT_WIRE` 透出 `input_ack` (`{type:"input_ack", requestId, status,
+/// reason, detail, itemId}`): `status` 为 `started` / `queued` / `steered` / `rejected`,
+/// 被拒绝时 `reason` 给出结构化原因 (`empty_content` / `attachment_too_large` /
+/// `too_many_attachments` 等)。宿主据此展示"已开始 / 已排队 / 被拒绝"。
+AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_send_input(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* input_json,
+    AgentxxString*           log
+);
 
 /// 请求取消当前轮次
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL

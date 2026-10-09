@@ -195,12 +195,21 @@ class AgentClient {
   // -------------------------------------------------------------------------
 
   /// 发送用户输入 (READY 前发送会被服务端缓存, 就绪后按序处理)
-  void sendInput(String text) {
+  ///
+  /// - [text] 文本内容; [attachments] 附件列表 (可选, 与 text 至少一个非空)
+  /// - 附件字段与 wire `user_input.attachments` 一致 (见 `ffi.md` §4.11);
+  ///   `dataUrl` 与 `path` 二选一, 只给 `path` 时由服务端读取编码
+  /// - 受理结果经 `EVT_WIRE` 的 `input_ack` 事件返回 (`started` / `queued` / `rejected`)
+  void sendInput(String text, {List<Map<String, Object?>> attachments = const []}) {
     _checkHandle('发送输入');
+    final inputJson = jsonEncode({
+      'text': text,
+      if (attachments.isNotEmpty) 'attachments': attachments,
+    });
     final (rc, log) = withUtf8(
-        text,
-        (textPtr) => _withLog((logPtr) =>
-            _bind.agentxx_ffi_send_input(_handle, textPtr, logPtr)));
+        inputJson,
+        (inputPtr) => _withLog((logPtr) =>
+            _bind.agentxx_ffi_send_input(_handle, inputPtr, logPtr)));
     if (rc != bind.AGENTXX_FFI_OK) {
       throw AgentxxException(rc, log ?? '发送输入失败');
     }

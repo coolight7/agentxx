@@ -44,6 +44,10 @@ struct InputRejectReason {
     inline static constexpr std::string_view BadDelivery = "bad_delivery";
     /// 队列在本次输入提交前被清空 (collect 合并窗口内的输入被丢弃)
     inline static constexpr std::string_view QueueCleared = "queue_cleared";
+    /// 附件超出大小限制
+    inline static constexpr std::string_view AttachmentTooLarge = "attachment_too_large";
+    /// 附件条数超出上限 (单条消息允许的附件个数)
+    inline static constexpr std::string_view TooManyAttachments = "too_many_attachments";
 };
 
 /// 服务端消息队列状态 (计划 LOOP-4: 取代"两个 bool"的隐式状态)

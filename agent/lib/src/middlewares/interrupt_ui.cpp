@@ -252,7 +252,7 @@ InterruptUiBlock InterruptUiBlock::fromJson(const Json& j) {
         }
     }
 
-    b.pathMode = j.value("mode", "file");
+    b.pathMode = j.value("mode", j.value("pathMode", "file"));
     if (j.contains("filter") && j["filter"].is_array()) {
         for (const auto& f : j["filter"]) {
             if (f.is_string()) {
@@ -564,6 +564,9 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         if (detail.empty() && !block.dataUrl.empty()) {
             detail = "内嵌图片";
         }
+        if (detail.empty() && !block.fallback.empty()) {
+            detail = block.fallback;
+        }
         item.text = textOf(
             "",
             detail.empty() ? std::string{"[图片]"} : fmt::format("[图片: {}]", detail)
@@ -573,17 +576,21 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
     if (block.kind == "progress") {
         item.kind       = "Text";
         std::string lbl = block.label.empty() ? (block.text.empty() ? "" : block.text) : block.label;
-        if (!lbl.empty()) {
-            item.text = textOf(
-                "",
-                fmt::format("[进度: {}/{} {}]", block.progressValue, block.progressTotal, lbl)
-            );
+        std::string textStr;
+        if (block.progressTotal > 0.0) {
+            if (!lbl.empty()) {
+                textStr = fmt::format("[进度: {}/{} {}]", block.progressValue, block.progressTotal, lbl);
+            } else {
+                textStr = fmt::format("[进度: {}/{}]", block.progressValue, block.progressTotal);
+            }
         } else {
-            item.text = textOf(
-                "",
-                fmt::format("[进度: {}/{}]", block.progressValue, block.progressTotal)
-            );
+            if (!lbl.empty()) {
+                textStr = fmt::format("[进度: {} {}]", block.progressValue, lbl);
+            } else {
+                textStr = fmt::format("[进度: {}]", block.progressValue);
+            }
         }
+        item.text = textOf(block.labelKey.empty() ? block.textKey : block.labelKey, textStr);
         return withIndent(std::move(item));
     }
     if (block.kind == "separator") {

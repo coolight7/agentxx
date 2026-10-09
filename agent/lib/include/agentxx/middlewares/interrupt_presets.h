@@ -113,6 +113,22 @@ InterruptUiBlock separatorBlock(int indent = 0);
 /// 空行
 InterruptUiBlock gapBlock(int lines = 1);
 
+/// 图片块 (dataUrl 或 path 二选一; alt 与 maxHeight 可选)
+InterruptUiBlock imageBlock(
+    std::string pathOrDataUrl,
+    std::string alt       = {},
+    int         maxHeight = 0,
+    bool        isDataUrl = false
+);
+
+/// 进度块 (progressTotal <= 0 表示不确定态)
+InterruptUiBlock progressBlock(
+    double      value,
+    double      total    = 0.0,
+    std::string label    = {},
+    std::string labelKey = {}
+);
+
 /// 确认/取消行 (label/labelKey 空 = 客户端 i18n 默认 "确认"/"取消")
 InterruptUiBlock submitBlock(
     std::string label          = {},
@@ -169,6 +185,18 @@ InterruptUiBlock selectControl(
     std::string                    labelKey     = {},
     utilxx_base::Json              defaultValue = {},
     std::string                    help         = {}
+);
+
+/// 路径选择控件 (mode = file / dir / multi, filter 为扩展名列表)
+InterruptUiBlock pathControl(
+    std::string              id,
+    std::string              label        = {},
+    std::string              labelKey     = {},
+    std::string              mode         = "file",
+    std::vector<std::string> filter       = {},
+    utilxx_base::Json        defaultValue = {},
+    std::string              help         = {},
+    std::string              helpKey      = {}
 );
 
 // ---------------------------------------------------------------------------

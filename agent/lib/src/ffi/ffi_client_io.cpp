@@ -330,7 +330,10 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 || std::is_same_v<T, agent::WireMessageQueueUpdate>
                 || std::is_same_v<T, agent::WirePermissionState>
                 || std::is_same_v<T, agent::WireRenameSessionResult>
+                || std::is_same_v<T, agent::WireInputAck>
             ) {
+                // 输入受理回执也走这条: 宿主据此区分"已开始 / 已排队 / 被拒绝"
+                // (被拒绝时 reason 给出结构化原因, 如 attachment_too_large)
                 emitEvent(AGENTXX_FFI_EVT_WIRE, dump(agent::io::toJson(m)));
             } else {
                 agent::AgentIOBase::onPeerMessage(agent::WireMessage{std::move(m)});

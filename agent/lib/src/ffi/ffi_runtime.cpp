@@ -589,24 +589,91 @@ bool stateUsable(FfiAgentRuntime::State s) {
     return s == FfiAgentRuntime::State::Starting || s == FfiAgentRuntime::State::Ready;
 }
 
+/// 检查附件是否超出单文件限额; 超限时返回可读原因 (哪一项、多大、上限多少)
+std::string attachmentLimitError(const agentxx::agent::MediaAttachment& att) {
+    const uint64_t maxSize = agentxx::agent::maxBytesForMediaType(att.type);
+    const uint64_t estSize = agentxx::agent::estimateAttachmentSizeBytes(att);
+    if (estSize <= maxSize) {
+        return {};
+    }
+    std::string name = !att.displayName.empty()
+                           ? att.displayName
+                           : (!att.pathOrUrl.empty() ? att.pathOrUrl : "attachment");
+    return fmt::format(
+        "附件 '{}' 超出 {} 类型的大小上限 ({} 字节 > {} 字节)",
+        name,
+        agentxx::agent::mediaTypeToString(att.type),
+        estSize,
+        maxSize
+    );
+}
+
 } // namespace
 
-int FfiAgentRuntime::sendInput(std::string_view text, std::string& err) {
+int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
     if (!stateUsable(state())) {
         err = "状态错误: 未启动或已停止";
         return AGENTXX_FFI_ERR_STATE;
     }
-    if (text.empty()) {
-        err = "输入文本为空";
+
+    // 输入 JSON 解析: text 与 attachments 至少有一个非空 (附件走服务端加载/编码路径)
+    utilxx_base::Json j;
+    try {
+        j = utilxx_base::Json::parse(inputJson);
+    } catch (const std::exception& e) {
+        err = fmt::format("input_json JSON 解析失败: {}", e.what());
+        return AGENTXX_FFI_ERR_JSON;
+    }
+    if (!j.is_object()) {
+        err = "input_json 必须是 JSON 对象, 形如 {\"text\":\"...\",\"attachments\":[...]}";
         return AGENTXX_FFI_ERR_INVALID;
     }
+
+    agent::WireUserInput input;
+    input.text      = j.value("text", std::string{});
+    input.model     = j.value("model", std::string{});
+    input.delivery  = j.value("delivery", std::string{});
+    input.sessionId = sessionId_;
+    // 受理回执照样经 EVT_WIRE 透出: 服务端只在 requestId > 0 时回 input_ack
+    input.requestId = nextInputRequestId_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    if (j.contains("attachments") && j["attachments"].is_array()) {
+        for (const auto& item : j["attachments"]) {
+            // fromJson 同时认下划线与驼峰/别名写法 (与 wire user_input.attachments 一致)
+            input.attachments.push_back(agent::MediaAttachment::fromJson(item));
+        }
+    } else if (j.contains("attachments") && !j["attachments"].is_null()) {
+        err = "input_json.attachments 必须是数组";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    if (input.text.empty() && input.attachments.empty()) {
+        err = "输入为空: text 与 attachments 至少需要一个非空";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    // 条数与大小在本地先拦一次 (与 wire 服务端同一套约定): 参数写错立刻同步报错,
+    // 不让宿主等到 input_ack(rejected) 才发现
+    if (input.attachments.size() > agent::kMaxAttachmentsPerMessage) {
+        err = fmt::format(
+            "附件条数超出上限: {} > {} (单条消息)",
+            input.attachments.size(),
+            agent::kMaxAttachmentsPerMessage
+        );
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    for (const auto& att : input.attachments) {
+        auto limitErr = attachmentLimitError(att);
+        if (!limitErr.empty()) {
+            err = std::move(limitErr);
+            return AGENTXX_FFI_ERR_INVALID;
+        }
+    }
+
     auto clientIO = clientIO_;
-    auto tid      = sessionId_;
-    auto textStr  = std::string{text};
     asio::post(
         *clientIoCtx_,
-        [clientIO, tid = std::move(tid), text = std::move(textStr)]() mutable {
-            clientIO->sendToPeer(agent::WireUserInput{std::move(tid), std::move(text)});
+        [clientIO, input = std::move(input)]() mutable {
+            clientIO->sendToPeer(std::move(input));
         }
     );
     return AGENTXX_FFI_OK;

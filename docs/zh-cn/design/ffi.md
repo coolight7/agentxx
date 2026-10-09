@@ -154,7 +154,7 @@ agentxx_ffi_event_queue_free(q);
 | 错误 | `agentxx_ffi_strerror` | 错误码 → 静态字符串视图出参 |
 | 能力清单 | `agentxx_ffi_get_capabilities` | 返回 `{"apiVersion","libraryVersion","capabilities":[...]}`; 宿主据此判断本版本支持哪些功能 (符号在不在之外的第二层校验); 传 NULL 句柄也可查询 |
 | 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
-| 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存 |
+| 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存; `send_input` 参数为**输入 JSON** (`{"text","attachments","model","delivery"}`, 支持多模态附件), 见 4.11 |
 | 模型管理 | `agentxx_ffi_add_model` / `agentxx_ffi_remove_model` / `agentxx_ffi_list_models` | 动态增删查模型配置; 与服务端 wire 侧同一套实现 (投递请求 + 等回执), 先落盘后注册; 删除当前正在使用的模型被拒绝; 见 4.7 |
 | Wire 透传 | `agentxx_ffi_send_wire` | 低频操作走透传 (黑名单拦截核心连接消息, 白名单放行其余 client→server 消息); 见 4.8 |
 | 宿主工具 | `agentxx_ffi_tool_register` / `agentxx_ffi_tool_unregister` / `agentxx_ffi_tool_respond` | 宿主注册动态工具 → 服务端注册进 ToolRegistry → 命中时发 EVT_HOST_TOOL_CALL → 宿主应答; 见 4.9 |
@@ -164,7 +164,8 @@ agentxx_ffi_event_queue_free(q);
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
 | 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | 见 4.2 |
 
-版本策略: 全局 `AGENTXX_FFI_API_VERSION` 重置为 1;
+版本策略: 当前 `AGENTXX_FFI_API_VERSION` 为 **2**
+(1 → 2 的唯一变更: `agentxx_ffi_send_input` 的文本参数改为输入 JSON, 见 4.11);
 调用方/宿主绑定加载时应当校验 `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION`，
 以支持非破坏性扩展向前兼容；新增符号/字段为非破坏性不递增，删除/重命名或修改参数语义时递增。
 
@@ -180,10 +181,10 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果): `{currentModel, models[], capabilities[]}`; `capabilities` 为各模型多模态输入能力 `{name, image_input, audio_input, video_input}`, 宿主据此判断是否展示图片/音频/视频输入入口 |
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
-| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
+| `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/image/progress/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
-| `EVT_WIRE` | 原始下行 wire JSON | 低频下行消息透传 (白名单外的结构性消息): `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; 宿主按 `type` 自行分派 |
+| `EVT_WIRE` | 原始下行 wire JSON | 低频下行消息透传 (白名单外的结构性消息): `input_ack` (输入受理回执, 见 4.11) / `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; 宿主按 `type` 自行分派 |
 | `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | 服务端请求宿主执行已注册的宿主工具 (见 4.9); `argsJson` 为 JSON 文本 |
 | `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | 宿主工具调用被取消 (停止/销毁时未应答的调用统一上报), 宿主可据此释放本地资源 |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
@@ -418,6 +419,49 @@ set_delta_batch(0)                    → 关闭, 行为与现在完全一致 (�
 - 思考内容与正文分开合批 (`kind: "thinking"` / `"text"`; 两类交替时先冲刷再累积)
 - 轮次结束/停止/销毁时冲刷积压文本, 不丢尾部内容
 
+### 4.11 用户输入 JSON (`agentxx_ffi_send_input`)
+
+`send_input` 的参数是**输入 JSON**(不再是纯文本), 因为输入除文本外还可能带多模态附件:
+
+```json
+{ "text": "看一下这张图",                 // 与 attachments 至少一个非空
+  "attachments": [                        // 可选; 单条消息 ≤ 5 个
+    { "type": "image",                    // image|audio|video (别名 kind)
+      "display_name": "diagram.png",      // 别名 name
+      "mime_type": "image/png",           // 别名 mimeType
+      "data_url": "data:image/png;base64,...",  // 别名 dataUrl; 小文件直接内嵌
+      "path_or_url": "/abs/photo.png",    // 别名 path; 与 data_url 二选一
+      "size_bytes": 68 }                  // 别名 size
+  ],
+  "model": "m2",                          // 可选; 空 = 不切换模型
+  "delivery": "next-turn" }               // 可选; 空 = next-turn
+```
+
+限额与拒绝(与 wire 侧同一套约定, 同步返回 `AGENTXX_FFI_ERR_INVALID`, `log` 写明是哪一项):
+
+| 项 | 上限 | 说明 |
+| --- | --- | --- |
+| 单条消息附件数 | 5 | 超限即拒绝, 不进入轮次 |
+| 图片 | 10 MB | 按 `size_bytes` 判定; 缺失时按 `data_url` 的 Base64 长度估算, 再退到本地文件大小 |
+| 音频 | 25 MB | 同上 |
+| 视频 | 50 MB | 同上 |
+
+- `data_url` 为空且 `path_or_url` 为本机路径时, **服务端读取并编码**, 宿主不必自己读文件
+  (跨设备场景由宿主先经 `send_wire` 的 `list_dir` 选服务端文件, 只传路径即可)
+- 附件最终按类型汇入 `ChatMessage` 的 `image_urls` / `audio_urls` / `video_urls`,
+  由各 Provider 组装成请求体内容段 (OpenAI: `content` 数组里的
+  `image_url` / `input_audio` / `video_url` 分片)
+- 受理结果经 `EVT_WIRE` 透出 `input_ack` (见 4.8), 宿主据此展示"已开始 / 已排队 / 被拒绝":
+  `{"type":"input_ack","requestId":1,"status":"started|queued|steered|rejected",
+    "reason":"...","detail":"...","itemId":"..."}`;
+  拒绝原因取值见 `InputRejectReason`(`empty_content` / `attachment_too_large` /
+  `too_many_attachments` / `session_mismatch` / `server_stopped` / `bad_delivery` / `queue_cleared`)
+- 带附件的输入按 **next-turn 排队**(附件需要服务端加载编码, 只在轮次起始处理):
+  空闲时即开始执行, 轮次进行中则排队并在当前轮次结束后自动执行
+- 模型能力: 宿主应先从 `EVT_MODEL_INFO` / `get_model_info` 的 `capabilities` 读到当前模型是否
+  支持图片/音频/视频输入 (由 `model_json` 的 `imageInput`/`audioInput`/`videoInput` 声明),
+  再决定是否给出附件入口
+
 ## 5. 语言绑定与示例
 
 | 目录 | 说明 |
@@ -443,7 +487,7 @@ set_delta_batch(0)                    → 关闭, 行为与现在完全一致 (�
 - **工作目录回退**：`config_json.workDir` 支持 `~`/`\${VAR}` 展开与相对路径 (按进程 cwd 解析为绝对)；未配置时回退进程 `cwd`，与 `AgentConfig::resolvedWorkDir()` 语义一致；会话级 worktree 绑定 (`Session::WorktreeBinding`) 与 `AgentContext::getSessionWorkDir` 的多源回退对 FFI 句柄同样生效 (会话内所有相对路径自动切换)
 - **权限 sides**：`plugins[].sides` 取值 `auto` (默认, 按导出符号 `agentxx_plugin_client_create` 自动决定) / `agent` (仅 agent 侧加载) / `client` (仅 client 侧，FFI 场景通常为 agent)
 - **同步查询约束**：`get_model_info/get_context_messages/list_sessions` 同一句柄同一时刻仅允许一个未完成的请求 (服务端逐条协议)；超时 10s 返回 `AGENTXX_FFI_ERR_TIMEOUT`，payload 为 `{"code","message"}` 的 `EVT_ERROR` 也会并发上报
-- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化 (`{name,arg,resultId,ui}`)；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此零语义通用渲染 (块类型 text/markdown/diff/separator/gap/control/submit，渲染指引见 4.6)；结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。参数类型化声明 (`inputs[]`) 与"参数类型"概念已删除：需要"若干类型化输入 + 确认"形态时由生产者用预设模板 `preset::inputForm` 生成描述
+- **HIL 输入描述**：`EVT_INTERRUPT_REQ` 的 `argJson` 为 `InterruptHandleArg` 序列化 (`{name,arg,resultId,ui}`)；`ui` 为必填的中断 UI 描述 (schema 见 `agent/middlewares/interrupt_ui.h`)，宿主可据此零语义通用渲染 (块类型 text/markdown/diff/image/progress/separator/gap/control/submit，渲染指引见 4.6)；结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。参数类型化声明 (`inputs[]`) 与"参数类型"概念已删除：需要"若干类型化输入 + 确认"形态时由生产者用预设模板 `preset::inputForm` 生成描述
 - **跨 CRT 堆**：所有 `char*` 返回值与 `char** log` 均经 `agentxx_ffi_malloc` 分配，宿主必须 `agentxx_ffi_free` 释放；`agentxx_ffi_strdup_n` 为统一拷贝入口
 
 

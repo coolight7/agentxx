@@ -267,17 +267,20 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_destroy(AgentxxFFIAgent* a, AgentxxString* 
 // 会话交互 (异步)
 // ---------------------------------------------------------------------------
 
-int32_t AGENTXX_FFI_CALL
-    agentxx_ffi_send_input(AgentxxFFIAgent* a, const AgentxxStringView* text, AgentxxString* log) {
+int32_t AGENTXX_FFI_CALL agentxx_ffi_send_input(
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* input_json,
+    AgentxxString*           log
+) {
     if (a == nullptr || !a->impl) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
     }
-    if (text == nullptr || text->data == nullptr) {
-        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null text", log);
+    if (input_json == nullptr || input_json->data == nullptr) {
+        return ffiFail(AGENTXX_FFI_ERR_INVALID, "null input_json", log);
     }
     std::string err;
     try {
-        const int rc = a->impl->sendInput(toSv(text), err);
+        const int rc = a->impl->sendInput(toSv(input_json), err);
         return ffiFinish(rc, err, log);
     } catch (...) {
         return ffiFail(AGENTXX_FFI_ERR_INTERNAL, cxxErrText(), log);

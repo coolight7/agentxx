@@ -201,6 +201,14 @@ std::vector<WireSample> wireSamples() {
         m.model     = "gpt-x";
         m.delivery  = std::string{agentxx::agent::InputDelivery::NextStep};
         m.requestId = 77;
+        m.attachments.push_back(agentxx::agent::MediaAttachment{
+            .type        = agentxx::agent::MediaType::Image,
+            .displayName = "photo.png",
+            .mimeType    = "image/png",
+            .pathOrUrl   = "/path/to/photo.png",
+            .dataUrl     = "data:image/png;base64,AAAA",
+            .sizeBytes   = 1024,
+        });
         out.push_back({"user_input", WireMessage{std::move(m)}});
     }
     // 4) 输入受理回执

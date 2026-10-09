@@ -88,7 +88,8 @@
         "text": "string",
         "model": "string",
         "delivery": "string",
-        "requestId": "integer"
+        "requestId": "integer",
+        "attachments": "array<object{type:string, display_name:string, mime_type:string, path_or_url:string, data_url:string, size_bytes:integer}>"
       },
       "sample": {
         "type": "user_input",
@@ -96,7 +97,17 @@
         "text": "你好",
         "model": "gpt-x",
         "delivery": "next-step",
-        "requestId": 77
+        "requestId": 77,
+        "attachments": [
+          {
+            "type": "image",
+            "display_name": "photo.png",
+            "mime_type": "image/png",
+            "path_or_url": "/path/to/photo.png",
+            "data_url": "data:image/png;base64,AAAA",
+            "size_bytes": 1024
+          }
+        ]
       }
     },
     {

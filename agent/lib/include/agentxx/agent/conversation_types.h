@@ -1,8 +1,10 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 
 #include "utilxx_base/json.h"
+#include "utilxx_base/string_util.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -169,15 +171,48 @@ struct MediaAttachment {
 
     static MediaAttachment fromJson(const utilxx_base::Json& j) {
         MediaAttachment att;
-        att.type        = mediaTypeFromString(j.value("type", std::string{}));
-        att.displayName = j.value("display_name", std::string{});
-        att.mimeType    = j.value("mime_type", std::string{});
-        att.pathOrUrl   = j.value("path_or_url", std::string{});
-        att.dataUrl     = j.value("data_url", std::string{});
-        att.sizeBytes   = j.value("size_bytes", uint64_t{0});
+        att.type        = mediaTypeFromString(j.value("type", j.value("kind", std::string{})));
+        att.displayName = j.value("display_name", j.value("displayName", j.value("name", std::string{})));
+        att.mimeType    = j.value("mime_type", j.value("mimeType", std::string{}));
+        att.pathOrUrl   = j.value("path_or_url", j.value("pathOrUrl", j.value("path", std::string{})));
+        att.dataUrl     = j.value("data_url", j.value("dataUrl", std::string{}));
+        if (j.contains("size_bytes") && j["size_bytes"].is_number()) {
+            att.sizeBytes = j["size_bytes"].get<uint64_t>();
+        } else if (j.contains("sizeBytes") && j["sizeBytes"].is_number()) {
+            att.sizeBytes = j["sizeBytes"].get<uint64_t>();
+        } else if (j.contains("size") && j["size"].is_number()) {
+            att.sizeBytes = j["size"].get<uint64_t>();
+        } else {
+            att.sizeBytes = 0;
+        }
         return att;
     }
 };
+
+/// 估算附件字节大小 (优先取 sizeBytes; 其次估算 dataUrl Base64 解码后大小; 再次检查本地文件大小)
+inline uint64_t estimateAttachmentSizeBytes(const MediaAttachment& att) {
+    if (att.sizeBytes > 0) {
+        return att.sizeBytes;
+    }
+    if (!att.dataUrl.empty()) {
+        auto comma = att.dataUrl.find(',');
+        if (comma != std::string::npos) {
+            size_t b64len = att.dataUrl.size() - comma - 1;
+            return (b64len * 3) / 4;
+        }
+        return att.dataUrl.size();
+    }
+    if (!att.pathOrUrl.empty() && !att.pathOrUrl.starts_with("http://")
+        && !att.pathOrUrl.starts_with("https://")) {
+        std::error_code ec;
+        auto            p  = utilxx_base::utf8ToPath(att.pathOrUrl);
+        auto            sz = std::filesystem::file_size(p, ec);
+        if (!ec) {
+            return sz;
+        }
+    }
+    return 0;
+}
 
 /// UI 展示消息 (server Session::viewMessages / wire Sync / client 渲染共用)
 ///
