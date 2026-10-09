@@ -1089,6 +1089,107 @@ void testTuiStreamScenario11(asio::io_context& ioCtx) {
     }
 }
 
+// 场景 12: 生成占位提示 (GenStatus) 状态机 —— 模型节点开始执行后, 首个正文/思考
+// token 或工具消息到达前展示占位提示, 到达后自动清除:
+// - Waiting: 尚无可见输出 -> 占位生效, 但不产生任何消息
+// - 首个思考/正文 token -> 占位清除 (位置由真实流式内容接替)
+// - ToolCall: 正在接收工具调用参数 -> 占位生效 (带工具名)
+// - ToolStart / TurnEnd / Done 增量 -> 占位清除
+void testTuiStreamScenario12(asio::io_context& ioCtx) {
+    using GP = WireDelta::GenPhase;
+    TestTUIClientIO client(ioCtx);
+
+    // 用户消息 (轮次开始)
+    {
+        WireDelta d;
+        d.type  = WireDelta::Type::TurnStart;
+        d.text  = "hi";
+        d.msgId = "u1";
+        client.testOnDelta(d);
+    }
+    // 模型节点开始执行: 请求已发出, 首个 token 未到达
+    {
+        WireDelta d;
+        d.type     = WireDelta::Type::GenStatus;
+        d.genPhase = GP::Waiting;
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_TRUE(snap->genPhase == GP::Waiting);
+        XX_TEST_EXPECT_TRUE(snap->genToolName.empty());
+        // 占位提示不是消息: 只展示用户消息
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+        XX_TEST_EXPECT_TRUE(snap->isStreaming);
+    }
+
+    // 首个思考 token 到达: 占位提示被真实内容取代
+    {
+        WireDelta d;
+        d.type = WireDelta::Type::ThinkToken;
+        d.text = "思考中";
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_TRUE(snap->genPhase == GP::Done);
+    }
+
+    // 工具调用开始 (带工具名): 参数未接收完, 展示占位提示
+    {
+        WireDelta d;
+        d.type     = WireDelta::Type::GenStatus;
+        d.genPhase = GP::ToolCall;
+        d.toolName = "read_file";
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_TRUE(snap->genPhase == GP::ToolCall);
+        XX_TEST_EXPECT_EQ(snap->genToolName, std::string{"read_file"});
+    }
+
+    // 工具消息到达: 占位提示清除, 真实工具消息入列表
+    {
+        WireDelta d;
+        d.type       = WireDelta::Type::ToolStart;
+        d.toolName   = "read_file";
+        d.toolCallId = "call_1";
+        d.arguments  = "{\"path\":\"a.txt\"}";
+        client.testOnDelta(d);
+
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_TRUE(snap->genPhase == GP::Done);
+        XX_TEST_EXPECT_TRUE(snap->genToolName.empty());
+        XX_TEST_EXPECT_TRUE(snap->messages.back()->role == TUIMessage::Role::Tool);
+    }
+
+    // Done 增量 (节点结束/出错时下发): 直接清除占位提示
+    {
+        WireDelta d;
+        d.type     = WireDelta::Type::GenStatus;
+        d.genPhase = GP::Waiting;
+        client.testOnDelta(d);
+        XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->genPhase == GP::Waiting);
+
+        WireDelta done;
+        done.type     = WireDelta::Type::GenStatus;
+        done.genPhase = GP::Done;
+        client.testOnDelta(done);
+        XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->genPhase == GP::Done);
+    }
+
+    // 轮次结束: 占位提示不残留
+    {
+        WireDelta d;
+        d.type = WireDelta::Type::GenStatus;
+        d.genPhase = GP::Waiting;
+        client.testOnDelta(d);
+
+        WireDelta end;
+        end.type = WireDelta::Type::TurnEnd;
+        client.testOnDelta(end);
+        XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->genPhase == GP::Done);
+    }
+}
+
 } // namespace
 
 TestResult testTuiStream() {
@@ -1106,6 +1207,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario9(ioCtx);
     testTuiStreamScenario10(ioCtx);
     testTuiStreamScenario11(ioCtx);
+    testTuiStreamScenario12(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

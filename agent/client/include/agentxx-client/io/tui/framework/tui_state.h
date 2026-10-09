@@ -193,11 +193,19 @@ struct TUIRenderState {
     MessageQueueMirror queue;
 
     /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
-    /// - 由 agent 侧权限中间件持有 (权限询问卡片勾选 fullAuth 或客户端切换按钮)
+    /// - 由 agent 侧权限中间件持有 (权限切换按钮或权限询问卡片勾选 fullAuth 由客户端切换)
     /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
     bool fullAuthorized = false;
     TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
     bool                         isStreaming      = false;
+
+    // ---- 生成占位提示 (服务端 GenStatus 增量) ----
+    /// 模型生成阶段: 模型节点开始执行后, 首个正文/思考 token 或工具消息到达前,
+    /// 消息列表末尾展示占位提示 ("等待响应..."/"正在调用工具..."), 到达后清除
+    /// - GenPhase::Done 表示无占位提示 (其余取值见 WireDelta::GenPhase)
+    /// - genToolName: 正在接收的工具调用对应的工具名 (可能为空: 工具名尚未到达)
+    agentxx::agent::WireDelta::GenPhase genPhase = agentxx::agent::WireDelta::GenPhase::Done;
+    std::string                         genToolName;
 
     /// agent-io 连接状态 (默认 Connecting: TUI 启动后、服务就绪前输入受限,
     /// banner 显示"启动中"; 连接建立后由 mode_runners 置 Connected)

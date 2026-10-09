@@ -128,6 +128,11 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
                         }
                     );
                 } break;
+                default:
+                    // 生成阶段标记 (请求已发出 / 工具调用开始, 见
+                    // protocol/provider_common.h): 不是模型输出文本, 不参与正文与
+                    // 思考累积, 只随下面的事件转发给 UI (占位提示)
+                    break;
             }
 
             if (nullptr != callback) {
@@ -198,6 +203,15 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     bool                     callFailed   = false;
     std::string              callErrorMsg;
     std::exception_ptr       callErrorEx;
+    // 生成阶段提示 (见 protocol/provider_common.h): 通知 UI 本次请求已发出,
+    // 首个 token 尚未到达 (UI 展示"等待响应"占位提示, 直到正文/思考/工具消息到达)
+    // - 重试路径每次尝试都会重新下发 (上一轮的提示已在上次失败时收尾)
+    if (onToken) {
+        onToken(neograph::ChatStreamChunk{
+            agentxx::protocol::chunk_type::kGenerationStart,
+            std::string{},
+        });
+    }
     // provider 调用包一层错误记录: 取消/中断按控制流原样抛出 (catchErrorAsync
     // 未提供 onRethrow 时的默认行为), 其余异常记录用量记录后按原异常类型重抛,
     // 不改动上层原有的错误处理与重试语义

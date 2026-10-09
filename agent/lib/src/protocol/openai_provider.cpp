@@ -1552,6 +1552,8 @@ bool OpenAIProvider::processSseLine(
                     }
                 }
             }
+            // 本次分片是否该调用的首片 (下面 tcMap[idx] 访问会插入条目)
+            const bool firstFragment = (tcMap.find(idx) == tcMap.end());
             {
                 auto idView = tc["id"];
                 if (idView.valid() && !idView.is_null()) {
@@ -1561,6 +1563,8 @@ bool OpenAIProvider::processSseLine(
                 }
             }
             auto fn = tc["function"];
+            // 工具名到达前是否为空 (用于判定"本次分片才首次拿到工具名")
+            const bool nameWasEmpty = tcMap[idx].name.empty();
             if (fn.valid() && fn.is_object()) {
                 auto nameView = fn["name"];
                 if (nameView.valid() && nameView.is_string()) {
@@ -1576,6 +1580,15 @@ bool OpenAIProvider::processSseLine(
                     } catch (...) {
                     }
                 }
+            }
+            // 工具调用开始 (见 protocol/provider_common.h): 首个分片即通知 UI
+            // (此时参数必然不完整, 内容无法展示); 工具名可能晚于首片到达, 首次拿到
+            // 名字时再补发一次, 使 UI 占位提示能带出工具名
+            if (on_chunk && (firstFragment || (nameWasEmpty && !tcMap[idx].name.empty()))) {
+                on_chunk(neograph::ChatStreamChunk{
+                    chunk_type::kToolCallStart,
+                    tcMap[idx].name,
+                });
             }
         }
     }
@@ -1813,14 +1826,24 @@ bool OpenAIProvider::processResponsesSseLine(
         if (item.valid() && item.is_object()) {
             std::string itype = viewStrField(item, "type");
             if (itype == "function_call") {
-                int         idx = viewOutputIndex(jv);
-                auto&       tc  = tcMap[idx];
-                std::string id  = viewStrField(item, "call_id");
+                int idx = viewOutputIndex(jv);
+                // 本次事件是否该调用的首次出现 (下面 tcMap[idx] 访问会插入条目)
+                const bool firstFragment = (tcMap.find(idx) == tcMap.end());
+                auto&      tc           = tcMap[idx];
+                std::string id          = viewStrField(item, "call_id");
                 if (id.empty()) {
                     id = viewStrField(item, "id");
                 }
                 tc.id   = std::move(id);
                 tc.name = viewStrField(item, "name");
+                // 工具调用开始 (见 protocol/provider_common.h): function_call 项
+                // 声明即通知 UI (此时参数增量尚未到达, 内容不完整无法展示)
+                if (firstFragment && on_chunk) {
+                    on_chunk(neograph::ChatStreamChunk{
+                        chunk_type::kToolCallStart,
+                        tc.name,
+                    });
+                }
             } else if (itype == "reasoning") {
                 // 捕获 encrypted_content (added/done 均尝试, 按 enc 值去重)
                 auto encView = item["encrypted_content"];

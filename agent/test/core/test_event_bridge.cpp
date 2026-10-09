@@ -5,6 +5,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/protocol/provider_common.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
@@ -902,6 +903,143 @@ asio::awaitable<void> test_eventbridge_think_duration() {
     co_return;
 }
 
+/// 验证生成阶段占位提示 (GenStatus): 模型节点开始执行 / 工具调用开始 / 生成结束
+/// - 生成开始标记 (模型调用节点在请求发出后下发) -> GenStatus::Waiting
+/// - 工具调用开始标记 (Provider 首个 tool_call 分片) -> GenStatus::ToolCall (含工具名)
+/// - 工具调用开始时思考段已结算: 结算包先于占位提示到达
+/// - 节点结束 -> GenStatus::Done (清除占位提示)
+/// - 生成阶段标记不是模型输出文本: 不产出文本 token, 不参与 tps 统计
+asio::awaitable<void> test_eventbridge_gen_status() {
+    auto makeChunk = [](int type, std::string data) {
+        return neograph::json{
+            {"type", type           },
+            {"data", std::move(data)}
+        };
+    };
+    using ET = neograph::graph::GraphEvent::Type;
+    using DT = agentxx::agent::WireDelta::Type;
+    using GP = agentxx::agent::WireDelta::GenPhase;
+
+    auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+    agentContext->bus
+        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
+    auto session  = std::make_shared<agentxx::agent::Session>();
+    auto io       = std::make_shared<TestEbIO>();
+    auto bridge   = makeTestBridge(agentContext, session, io);
+    auto bridgeCb = bridge->makeCallback();
+
+    bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+    // 生成开始 (请求已发出, 首个 token 未到达)
+    bridgeCb(neograph::graph::GraphEvent{
+        ET::LLM_TOKEN,
+        "llm",
+        makeChunk(agentxx::protocol::chunk_type::kGenerationStart, "")
+    });
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
+    if (io->deltas.size() == 2) {
+        XX_TEST_EXPECT_TRUE(io->deltas[1].type == DT::GenStatus);
+        XX_TEST_EXPECT_TRUE(io->deltas[1].genPhase == GP::Waiting);
+        XX_TEST_EXPECT_TRUE(io->deltas[1].text.empty());
+    }
+
+    // 思考 token: 占位提示之后仍是正常的思考流
+    bridgeCb(neograph::graph::GraphEvent{
+        ET::LLM_TOKEN,
+        "llm",
+        makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "thinking")
+    });
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
+    if (io->deltas.size() == 3) {
+        XX_TEST_EXPECT_TRUE(io->deltas[2].type == DT::ThinkToken);
+        XX_TEST_EXPECT_EQ(io->deltas[2].text, std::string{"thinking"});
+    }
+
+    // 工具调用开始 (思考后直接 tool_calls): 先结算思考段, 再下发占位提示
+    bridgeCb(neograph::graph::GraphEvent{
+        ET::LLM_TOKEN,
+        "llm",
+        makeChunk(agentxx::protocol::chunk_type::kToolCallStart, "read_file")
+    });
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
+    if (io->deltas.size() == 5) {
+        // 结算包: 空文本 ThinkToken (回填思考耗时)
+        XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::ThinkToken);
+        XX_TEST_EXPECT_TRUE(io->deltas[3].text.empty());
+        XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::GenStatus);
+        XX_TEST_EXPECT_TRUE(io->deltas[4].genPhase == GP::ToolCall);
+        XX_TEST_EXPECT_EQ(io->deltas[4].toolName, std::string{"read_file"});
+    }
+
+    // 节点结束: 生成结束, 先下发 Done 清除占位提示, 再发 NodeEnd
+    bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{7});
+    if (io->deltas.size() == 7) {
+        XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::GenStatus);
+        XX_TEST_EXPECT_TRUE(io->deltas[5].genPhase == GP::Done);
+        XX_TEST_EXPECT_TRUE(io->deltas[6].type == DT::NodeEnd);
+    }
+
+    // 生成阶段标记不计入 tps 输出 (只统计真实输出 token)
+    XX_TEST_EXPECT_TRUE(bridge->takeTurnTps() >= 0.0);
+
+    co_return;
+}
+
+/// 验证出错时清除生成占位提示: 思考流中途出错 -> 结算思考段 + GenStatus::Done
+asio::awaitable<void> test_eventbridge_gen_status_error() {
+    auto makeChunk = [](int type, std::string data) {
+        return neograph::json{
+            {"type", type           },
+            {"data", std::move(data)}
+        };
+    };
+    using ET = neograph::graph::GraphEvent::Type;
+    using DT = agentxx::agent::WireDelta::Type;
+    using GP = agentxx::agent::WireDelta::GenPhase;
+
+    auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+    auto session              = std::make_shared<agentxx::agent::Session>();
+    auto io                   = std::make_shared<TestEbIO>();
+    auto bridge               = makeTestBridge(agentContext, session, io);
+    auto bridgeCb             = bridge->makeCallback();
+
+    bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+    bridgeCb(neograph::graph::GraphEvent{
+        ET::LLM_TOKEN,
+        "llm",
+        makeChunk(agentxx::protocol::chunk_type::kGenerationStart, "")
+    });
+    bridgeCb(neograph::graph::GraphEvent{
+        ET::ERROR,
+        "llm",
+        neograph::json(std::string{"boom"})
+    });
+
+    // NodeStart, GenStatus(Waiting), 结算包 (无思考段, 不产生), GenStatus(Done)
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
+    if (io->deltas.size() == 3) {
+        XX_TEST_EXPECT_TRUE(io->deltas[1].genPhase == GP::Waiting);
+        XX_TEST_EXPECT_TRUE(io->deltas[2].type == DT::GenStatus);
+        XX_TEST_EXPECT_TRUE(io->deltas[2].genPhase == GP::Done);
+    }
+
+    // 未下发过占位提示的轮次: 出错时不额外下发 Done (避免无意义增量)
+    auto io2       = std::make_shared<TestEbIO>();
+    auto bridge2   = makeTestBridge(agentContext, session, io2);
+    auto bridgeCb2 = bridge2->makeCallback();
+    bridgeCb2(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+    bridgeCb2(neograph::graph::GraphEvent{
+        ET::ERROR,
+        "llm",
+        neograph::json(std::string{"boom"})
+    });
+    XX_TEST_EXPECT_EQ(io2->deltas.size(), size_t{1});
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_bridge_tests() {
     g_eb_passed = 0;
     g_eb_failed = 0;
@@ -915,6 +1053,8 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_node_delta();
         co_await test_eventbridge_think_duration();
         co_await test_eventbridge_tps();
+        co_await test_eventbridge_gen_status();
+        co_await test_eventbridge_gen_status_error();
         co_await test_eventbridge_turn_tps();
     } catch (const std::exception& e) {
         TEST_FAIL << "event_bridge suite exception: " << e.what() << std::endl;

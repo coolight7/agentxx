@@ -13,9 +13,6 @@
 - 事件驱动触发 agent
 - 主动记忆 插件tool
 - 用户发送消息、轮次完成时 立即写入 sql
-- 排查 llm api 输出 toolcall 时间隔较久
-- 将 llm api toolcall 刚开始就通知 tui 显示 `creating toolcall...`
-- 检查压缩、重复tool调用检查
 - tui 提示消息 dim
 - 添加连续多次压缩检查
 

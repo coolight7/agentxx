@@ -136,12 +136,39 @@ inline std::string_view deltaTypeToString(WireDelta::Type t) noexcept {
             return "node_end";
         case T::MessageUITip:
             return "message_tip";
+        case T::GenStatus:
+            return "gen_status";
         case T::InsertMessage:
             return "insert_message";
         case T::UpdateMessage:
             return "update_message";
     }
     return "text_token";
+}
+
+/// 生成阶段 (GenStatus 的 genPhase 字段) <-> 字符串
+inline std::string_view genPhaseToString(WireDelta::GenPhase p) noexcept {
+    using P = WireDelta::GenPhase;
+    switch (p) {
+        case P::Waiting:
+            return "waiting";
+        case P::ToolCall:
+            return "tool_call";
+        case P::Done:
+            return "done";
+    }
+    return "done";
+}
+
+inline WireDelta::GenPhase genPhaseFromString(std::string_view s) noexcept {
+    using P = WireDelta::GenPhase;
+    if (s == "waiting") {
+        return P::Waiting;
+    }
+    if (s == "tool_call") {
+        return P::ToolCall;
+    }
+    return P::Done;
 }
 
 inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) noexcept {
@@ -206,6 +233,10 @@ inline utilxx_base::Json deltaToJson(const WireDelta& d) {
     }
     if (d.hasError) {
         j["hasError"] = d.hasError;
+    }
+    // GenStatus: 生成阶段 (占位提示; tool_name 复用同名字段)
+    if (d.type == WireDelta::Type::GenStatus) {
+        j["genPhase"] = std::string(genPhaseToString(d.genPhase));
     }
     if (d.historyCount > 0) {
         j["historyCount"] = d.historyCount;
@@ -316,6 +347,9 @@ inline std::optional<WireDelta> deltaFromJson(const utilxx_base::Json& j) {
         } else {
             d.tipType = WireDelta::TipType::Info;
         }
+    }
+    if (d.type == WireDelta::Type::GenStatus) {
+        d.genPhase = genPhaseFromString(j.value("genPhase", std::string{"done"}));
     }
     return d;
 }

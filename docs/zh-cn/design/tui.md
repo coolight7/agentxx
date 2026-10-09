@@ -519,6 +519,39 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 `terminal.hardware_cursor` 的唯一来源 (`tuiHardwareCursorSupported()`), 插件读到的值与
 本端实际行为不会分叉。
 
+### 2.13 生成占位提示 (等待响应 / 正在调用工具)
+
+模型节点开始执行到首个可见输出之间常有一段空档 (请求排队、上游 prefill、推理模型出思考前),
+期间界面若没有任何提示, 用户无法区分"正在生成"与"卡住了"。占位提示就是填这段空档,
+并在真实内容到达时让位:
+
+- 来源: agent 侧 `WireDelta::Type::GenStatus` (`genPhase` = Waiting / ToolCall / Done)
+  - `Waiting`: 模型调用节点发出请求后下发 (见
+    [provider_common.h](/agent/lib/include/agentxx/protocol/provider_common.h) 的
+    `chunk_type::kGenerationStart`)
+  - `ToolCall`: Provider 收到工具调用的**首个分片**后下发 (`chunk_type::kToolCallStart`),
+    `toolName` 为已解析出的工具名 (可能为空)。工具调用参数按增量分片传输, 接收完成前
+    JSON 不完整、无法展示, 因此该阶段只提示"正在调用工具"; 接收完成后照常发
+    `ToolStart` (完整参数 + 工具消息)
+  - `Done`: 节点结束/出错时下发 (兜底清除)
+- 渲染: [MessageListComponent::buildGenPlaceholderItem](/agent/client/include/agentxx-client/io/tui/components/message_list.h)
+  在列表末尾渲染单行占位项 (`- [思考] 等待响应...` / `- [工具] read_file 正在调用工具...`),
+  位置 = 消息与流式内容之后 (`genPlaceholderIndex`); 生成中头部用加载动画, 该子项不跨帧缓存
+- 清除: 首个正文/思考 token、ToolStart、NodeEnd、TurnEnd 到达时由 client 线程清除
+  (`TUIClientAgentIO::onDelta` 的 `clearGenPlaceholder`), 占位位置由真实内容接替 ——
+  因此占位是**瞬态渲染态** (`TUIRenderState::genPhase` / `genToolName`), 不进消息列表、
+  不落历史、不参与上下文统计
+- 空状态 banner 判定 (`showEmptyBanner`) 把占位提示也算作"有内容":
+  itemCount/itemKey/quickHeight/buildItem/fillViewport/OnRender 必须用同一判定, 否则
+  子项下标错位
+- 占位项的判定必须排在"流式区"各分支之前 (四个回调一致): 占位提示出现时流式区
+  还没有 token (`currentToken` 为空, 且 `streamUseIncremental_` 可能为假), 若先走
+  流式降级分支, 占位项下标会落到流式子项分支上解引空的 `currentToken` (崩溃)
+- 流结束 (无 token) 的帧里 `OnRender` 要把流式区子项数归零
+  (`streamUseIncremental_` / `streamHeaderCount_`): 无 token 时 `itemCount` 不会调用
+  `syncStream`, 这两个值会停留在上一流的状态 (增量模式的思考流留下头部项),
+  使占位项的下标被推到列表末尾之外 —— 占位提示不显示, 该位置留下上一流的空头部行
+
 ---
 
 ## 3. 必须遵守的约束

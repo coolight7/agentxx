@@ -327,6 +327,9 @@ constexpr Entry kTable[] = {
     {"tool.result",                     "  result: ",                                                                    "  结果: "                                                                                               },
     {"tool.file",                       "  file: ",                                                                      "  文件: "                                                                                               },
     {"tool.running",                    "  running...",                                                                  "  运行中..."                                                                                           },
+    // 生成占位提示 (GenStatus: 模型节点已开始执行但尚无可见输出时展示)
+    {"msg.genWaiting",                  "waiting for response...",                                                       "等待响应..."                                                                                            },
+    {"msg.genToolCalling",              "receiving tool call...",                                                        "正在调用工具..."                                                                                        },
     {"tool.noChanges",                  "  ( no changes )",                                                              "  ( 未更改 )"                                                                                          },
 
  // ---- 状态栏 ----

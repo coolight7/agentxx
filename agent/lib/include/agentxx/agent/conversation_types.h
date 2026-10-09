@@ -402,6 +402,21 @@ struct WireDelta {
         Error,   ///< 错误
     };
 
+    /// 生成阶段 (GenStatus 使用): 模型节点执行期间 UI 占位提示的位置
+    ///
+    /// 占位提示只用于填补"节点已开始执行但尚无任何可见输出"的空档:
+    /// - [Waiting]: 请求已发出, 首个 token 未到达 → UI 展示"等待响应"
+    /// - [ToolCall]: 正在接收工具调用参数 (参数不完整, 内容无法展示) → UI 展示"正在调用工具"
+    /// - [Done]: 生成结束 (节点结束/出错/取消) → UI 清除占位提示
+    ///
+    /// 首个正文/思考 token 或工具消息 (ToolStart) 到达时, UI 自行清除占位提示
+    /// (占位内容所在位置被真实消息取代)
+    enum class GenPhase : uint8_t {
+        Waiting,
+        ToolCall,
+        Done,
+    };
+
     enum class Type : uint8_t {
         TextToken,
         ThinkToken,
@@ -413,6 +428,11 @@ struct WireDelta {
         NodeEnd,
         /// 通用瞬态提示消息 (info/warning/error, 仅 UI 展示, 不入会话历史)
         MessageUITip,
+        /// 模型生成阶段 (占位提示; 仅 UI 展示, 不入会话历史)
+        /// - 由 agent 在模型节点开始执行 (GenPhase::Waiting) 与开始接收工具调用
+        ///   参数 (GenPhase::ToolCall) 时下发, 生成结束下发 GenPhase::Done
+        /// - toolName: ToolCall 阶段已解析出的工具名 (可能为空: 工具名尚未到达)
+        GenStatus,
         /// 完整 ViewMessage 消息插入 (原子消息载荷, 如 Tip 提示、完整卡片等)
         InsertMessage,
         /// 完整 ViewMessage 消息更新 (按 msgId 定位更新已插入的消息)
@@ -459,6 +479,9 @@ struct WireDelta {
 
     // MessageUITip: 通用提示消息 (文本复用 text 字段)
     TipType tipType = TipType::Info; ///< 提示级别 (Info/Warning/Error)
+
+    // GenStatus: 模型生成阶段 (占位提示)
+    GenPhase genPhase = GenPhase::Done;
 
     bool hasError = false;
 };

@@ -2567,9 +2567,17 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
+        // 清除生成占位提示 (等待响应 / 正在调用工具):
+        // 真实输出 (正文/思考/工具消息) 到达或生成结束时调用 —— 占位项所在位置
+        // 被真实内容取代 (见 TUIRenderState::genPhase 注释)
+        auto clearGenPlaceholder = [&st]() {
+            st.genPhase = agentxx::agent::WireDelta::GenPhase::Done;
+            st.genToolName.clear();
+        };
         switch (delta.type) {
             case Type::TextToken:
             case Type::ThinkToken: {
+                clearGenPlaceholder();
                 if (delta.type == Type::ThinkToken && delta.text.empty()) {
                     // 空文本 ThinkToken: 加密思考载体或思考元数据更新 (如
                     // reasoning_tokens/duration) 若当前正在累积明文 Think 流 (尚未收到正文
@@ -2677,6 +2685,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 st.isStreaming = true;
             } break;
             case Type::ToolStart: {
+                // 工具消息到达: 占位提示 (等待响应/正在调用工具) 由真实工具消息取代
+                clearGenPlaceholder();
                 pushCurrentTokenLocked(st);
                 auto m                = std::make_shared<TUIMessage>();
                 m->role               = TUIMessage::Role::Tool;
@@ -2743,6 +2753,9 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 st.currentNodeName = delta.nodeName;
             } break;
             case Type::NodeEnd: {
+                // 节点结束即该节点的生成结束: 兜底清除占位提示 (正常已由首个
+                // 正文/思考 token 或工具消息清除; agent 侧同时会下发 GenStatus::Done)
+                clearGenPlaceholder();
                 if (st.currentNodeName == delta.nodeName) {
                     st.currentNodeName.clear();
                 }
@@ -2815,7 +2828,20 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     }
                 }
             } break;
+            case Type::GenStatus: {
+                // 生成阶段提示 (agent 侧 GenStatus 增量): 模型节点开始执行但尚无
+                // 可见输出时, 消息列表末尾展示占位项; 首个正文/思考 token 或工具
+                // 消息到达即由本函数清除 (见 TUIRenderState::genPhase 注释)
+                st.genPhase    = delta.genPhase;
+                st.genToolName = delta.genPhase == agentxx::agent::WireDelta::GenPhase::ToolCall
+                                     ? delta.toolName
+                                     : std::string{};
+                if (delta.genPhase != agentxx::agent::WireDelta::GenPhase::Done) {
+                    st.isStreaming = true;
+                }
+            } break;
             case Type::TurnStart: {
+                clearGenPlaceholder();
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
                 // 空文本+有附件的纯附件消息也需回显（此前 !text.empty() 会吞掉）;
@@ -2838,6 +2864,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 st.isStreaming = true;
             } break;
             case Type::TurnEnd: {
+                clearGenPlaceholder();
                 st.currentNodeName.clear();
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);

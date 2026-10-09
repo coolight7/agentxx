@@ -635,6 +635,16 @@ private:
     void handleNodeEnd(const neograph::graph::GraphEvent& event);
     void handleError(const neograph::graph::GraphEvent& event);
 
+    /// 处理生成阶段标记 chunk (非模型输出文本; 见 protocol/provider_common.h):
+    /// 映射为 GenStatus 增量 (等待响应 / 正在调用工具), 由 client 展示占位提示
+    /// - 思考流未结算时先结算 (工具调用开始即思考结束), client 先回填耗时再收占位
+    void handleGenStatusChunk(const neograph::ChatStreamChunk& chunk);
+
+    /// 下发生成阶段 (占位提示): 同时维护 genStatusActive_ (生成是否仍在进行)
+    /// - [phase] 为 Done 时清除占位提示, 其余阶段展示占位提示
+    /// - [toolName] 仅 ToolCall 阶段使用 (已解析出的工具名, 可为空)
+    void emitGenStatus(agentxx::agent::WireDelta::GenPhase phase, std::string_view toolName = {});
+
     /// 结算当前 THINKING 流段: 发送空文本 ThinkToken WireDelta (仅携带
     /// startTimeMs/durationMs), client 据此为已提交的 Think 消息回填耗时。
     /// - think 输出完成 (切换到正文/节点结束/出错/输出最终 assistant 消息) 时调用,
@@ -674,6 +684,9 @@ private:
 
     /// 最近一次 LLM 流式 chunk 类型 (用于 think 流段切换检测)
     int lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
+    /// 是否已下发"生成进行中"的占位提示 (GenStatus::Waiting/ToolCall):
+    /// 节点结束/出错时据此补发 GenStatus::Done 清除 client 侧占位提示
+    bool genStatusActive_ = false;
     /// 当前节点开始计时 (NODE_START 重置)
     std::chrono::system_clock::time_point nodeStartTime_{};
     int64_t                               nodeStartTimeMs_ = 0;

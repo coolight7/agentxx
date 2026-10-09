@@ -2059,7 +2059,96 @@ TestResult testTuiScroll() {
         settings.setAnimationLevel(origAnim);
     }
 
+    {
+        // 场景 20 (崩溃回归): 生成占位提示 (GenStatus) 出现时的子项高度估算
+        //
+        // 背景: 模型节点开始执行到首个可见输出之间, agent 下发 GenStatus 增量,
+        // 消息列表末尾出现占位项 (见 docs/zh-cn/design/tui.md §2.13)。此时
+        // isStreaming 为真但 currentToken 尚未建立 (首个 token 未到达), 且
+        // streamUseIncremental_ 为假 —— 估算走"流式区降级路径"。
+        // 修复前 quickHeight 的占位项判定写在降级路径之后 (不可达): 占位项下标
+        // 落入降级分支解引空的 currentToken 构造 string_view, 进程立即崩溃
+        // (用户报告: TUI 会话中一发送消息就退出, 且无 ASan 报告 —— 崩溃在
+        //  消息列表渲染帧内, 终端处于全屏界面, 报告不可见)
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hello gen placeholder";
+            st.messages.push_back(std::move(m));
+            // GenStatus(Waiting) 到达后的客户端状态: 生成中, 尚无 token
+            st.isStreaming = true;
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
+        });
 
+        // 占位项 = " - [Think] waiting for response..." (英文界面, 各段为独立
+        // 文本节点, 屏幕文本中节点间会插入样式转义序列, 故按段断言):
+        // 子项数 = 1 条用户消息 + 1 条占位项, 高度 = 2 + 2
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("[Think]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("waiting for response...") != std::string::npos);
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 4);
+        // 占位提示不是消息: 不进入消息列表
+        XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages.size(), (size_t)1);
+
+        // 工具调用阶段 (已解析出工具名): 展示工具名与阶段说明
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+            st.genToolName = "read_file";
+        });
+        frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("[Tool]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("read_file") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 4);
+
+        // 生成结束 (Done): 占位项清除, 高度回到用户消息本身
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase = agentxx::agent::WireDelta::GenPhase::Done;
+            st.genToolName.clear();
+            st.isStreaming = false;
+        });
+        frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("waiting for response...") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("receiving tool call...") == std::string::npos);
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 2);
+    }
+
+    {
+        // 场景 20b: 上一流以增量渲染结束 (Ultra 动画等级下的思考流) 后进入新轮次
+        //
+        // 流结束后流式区子项数必须归零 (OnRender 的无 token 分支): 否则生成占位
+        // 提示的下标被推到列表末尾之外 —— 占位提示不显示, 该位置留下一条空白的
+        // "[Think]" 头部行 (用户看到的"等待响应"提示从第二条消息起消失)
+        auto&      settings = TUISettings::instance();
+        const auto origAnim = settings.animationLevel();
+        settings.setAnimationLevel(AnimationLevel::Ultra);
+
+        ScrollFixture g;
+        g.sharedState.mutate([&](TUIRenderState& st) {
+            st.currentTokenRole  = TUIMessage::Role::Think;
+            st.currentTokenEpoch = 21;
+            st.currentToken      = std::make_shared<std::string>("thinking THK20_STALE");
+            st.isStreaming       = true;
+        });
+        g.render(); // 思考流走增量渲染 (子项数 = 头部 1 + 尾部块 1)
+        g.sharedState.mutate([&](TUIRenderState& st) {
+            st.currentToken.reset(); // 流结束 (提交落盘 + 复位流式状态)
+            st.isStreaming = false;
+        });
+        g.render(); // 无 token 帧
+
+        // 新轮次: GenStatus(Waiting) 到达, 尚无 token
+        g.sharedState.mutate([&](TUIRenderState& st) {
+            st.isStreaming = true;
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
+        });
+        std::string next = g.render();
+        XX_TEST_EXPECT_TRUE(next.find("waiting for response...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(next.find("THK20_STALE") == std::string::npos);
+
+        settings.setAnimationLevel(origAnim);
+    }
 
     // 恢复原始界面语言
     tuiSettings.setLanguage(savedLang);

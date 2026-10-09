@@ -3,6 +3,7 @@
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/task_scope.h"
 #include "fmt/format.h"
 #include "utilxx_base/container_util.h"
@@ -114,6 +115,12 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     } else if (event.data.is_object()) {
         neograph::ChatStreamChunk chunk;
         neograph::from_json(event.data, chunk);
+        // 生成阶段标记 (见 protocol/provider_common.h): 不是模型输出文本,
+        // 只更新 UI 占位提示, 不参与正文/思考流段与 tps 统计
+        if (agentxx::protocol::chunk_type::isStatusChunk(chunk.type)) {
+            handleGenStatusChunk(chunk);
+            return;
+        }
         token              = std::move(chunk.data);
         lastChatChunkType_ = chunk.type;
         if (chunk.type == neograph::ChatStreamChunk::TYPE_THINKING) {
@@ -175,6 +182,33 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
                            : agentxx::agent::WireDelta::Type::TextToken,
         // token WireDelta 不再携带 durationMs: think 耗时由 finalizeThinkSegment()
         // 在段落完成时以独立结算包发送 (见 handleLLMToken 内 THINKING 流段跟踪)
+    });
+}
+
+void EventBridge::handleGenStatusChunk(const neograph::ChatStreamChunk& chunk) {
+    using Phase = agentxx::agent::WireDelta::GenPhase;
+    if (chunk.type == agentxx::protocol::chunk_type::kGenerationStart) {
+        // 模型节点开始执行 (请求已发出): 提示 UI "等待响应"
+        emitGenStatus(Phase::Waiting);
+        return;
+    }
+    // 工具调用开始 (参数未接收完, 内容无法展示): 提示 UI "正在调用工具"
+    // - 思考流此时已结束 (工具调用紧接思考/正文之后), 先结算思考段耗时,
+    //   保证 client 先回填 Think 消息耗时再展示占位提示
+    finalizeThinkSegment();
+    emitGenStatus(Phase::ToolCall, chunk.data);
+}
+
+void EventBridge::emitGenStatus(
+    agentxx::agent::WireDelta::GenPhase phase,
+    std::string_view                 toolName
+) {
+    // 生成结束: 占位提示清除 (client 侧对重复的 Done 无副作用)
+    genStatusActive_ = (phase != agentxx::agent::WireDelta::GenPhase::Done);
+    emitDelta(agentxx::agent::WireDelta{
+        .toolName = std::string{toolName},
+        .type     = agentxx::agent::WireDelta::Type::GenStatus,
+        .genPhase = phase,
     });
 }
 
@@ -496,6 +530,9 @@ void EventBridge::handleTurnStart() {
     tpsPendingText_.clear();
     tpsLastPushSec_   = 0.0;
     tpsLastPushToken_ = 0.0;
+    // 新轮次开始: 上一轮的生成占位提示已随 client 侧 TurnEnd 清除, 此处只重置标记
+    // (不补发 Done: 补发会在新轮次的用户消息之后插入一条无意义的清除指令)
+    genStatusActive_ = false;
 }
 
 void EventBridge::settleCurrentStream() {
@@ -564,6 +601,11 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
     // 结算未闭合的 THINKING 段 (思考后无正文直接结束的流, 如纯思考/仅 tool_calls):
     // 结算包先于 NodeEnd WireDelta 发送, client 先回填 Think 时长再收节点结束事件
     finalizeThinkSegment();
+    // 生成阶段提示收尾: 节点结束即生成结束, 清除 client 侧占位提示
+    // (正常路径下正文/工具消息已先到达并让 client 清除; 此处兜底无输出即结束的场景)
+    if (genStatusActive_) {
+        emitGenStatus(agentxx::agent::WireDelta::GenPhase::Done);
+    }
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     // 计算持续时间
     const int64_t duration_ms
@@ -586,6 +628,10 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
     // 结算未闭合的 THINKING 段: 错误/取消中断思考流时同样回填已耗时长,
     // 使 client 已落盘的 Think 消息携带中断前的真实耗时
     finalizeThinkSegment();
+    // 生成阶段提示收尾: 出错/取消时清除 client 侧占位提示 (不再有后续输出)
+    if (genStatusActive_) {
+        emitGenStatus(agentxx::agent::WireDelta::GenPhase::Done);
+    }
     lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
     auto msg           = event.data.is_string() ? event.data.get<std::string>() : event.data.dump();
     publishError(std::move(msg), event.node_name);

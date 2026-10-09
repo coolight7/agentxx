@@ -319,8 +319,17 @@ public:
                 }
                 blockTypes[idx] = type;
                 if (type == "tool_use") {
-                    tcMap[idx].id   = viewStr(cbView["id"]);
-                    tcMap[idx].name = viewStr(cbView["name"]);
+                    // 工具调用开始 (见 protocol/provider_common.h): tool_use 块声明即
+                    // 通知 UI (此时参数增量尚未到达, 内容不完整无法展示)
+                    const bool firstFragment = (tcMap.find(idx) == tcMap.end());
+                    tcMap[idx].id            = viewStr(cbView["id"]);
+                    tcMap[idx].name          = viewStr(cbView["name"]);
+                    if (firstFragment && on_chunk) {
+                        on_chunk(neograph::ChatStreamChunk{
+                            chunk_type::kToolCallStart,
+                            tcMap[idx].name,
+                        });
+                    }
                 } else if (type == "redacted_thinking") {
                     // redacted_thinking 块必须在多轮对话中原样回传 (命中后物化)
                     utilxx_base::Json b;

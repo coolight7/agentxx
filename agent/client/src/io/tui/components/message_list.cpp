@@ -248,6 +248,11 @@ Element MessageListComponent::OnRender() {
         }
         streamFedLen_ = 0;
         streamEpoch_  = ~0ULL;
+        // 流式区子项数一并归零: 无 token 时 itemCount 不会调用 syncStream, 这两个值
+        // 会停留在上一流的值 (增量模式的 Think 流留下头部项), 使生成占位提示的下标
+        // 被推到列表末尾之外 —— 占位提示不显示, 该位置留下上一流的空头部行
+        streamUseIncremental_ = false;
+        streamHeaderCount_    = 0;
         // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
         // msg.collapsed 管理 —— 用户手动展开过的流已在提交时落盘为展开),
         // 下一次思考回到设置模式的默认展示。
@@ -306,9 +311,9 @@ Element MessageListComponent::OnRender() {
     // 按钮消失后不再占用那块区域。
     // 注意: 不能每帧无条件清空 —— banner 元素跨帧缓存时不重建, 若每帧清空则会
     // 丢失登记 (按钮变成点不动); 缓存期间命中项连同其 Box 由 reflect 每帧更新。
-    // 判定规则与 itemCount/fillViewport 一致: "无消息且无流式内容" 才渲染 banner
-    if (ctx_.frameState
-        && !(ctx_.frameState->messages.empty() && !hasStreamingToken(*ctx_.frameState))) {
+    // 判定规则与 itemCount/fillViewport 一致: 无消息、无流式内容且无生成占位提示
+    // 才渲染 banner
+    if (ctx_.frameState && !showEmptyBanner(*ctx_.frameState)) {
         bannerHits_.beginFrame();
     }
 
@@ -497,6 +502,23 @@ bool MessageListComponent::hasStreamingToken(const TUIRenderState& st) const {
     return st.isStreaming && st.currentToken && !st.currentToken->empty();
 }
 
+bool MessageListComponent::showEmptyBanner(const TUIRenderState& st) const {
+    return st.messages.empty() && !hasStreamingToken(st) && !hasGenPlaceholder(st);
+}
+
+bool MessageListComponent::hasGenPlaceholder(const TUIRenderState& st) const {
+    return st.genPhase != agentxx::agent::WireDelta::GenPhase::Done;
+}
+
+size_t MessageListComponent::genPlaceholderIndex(const TUIRenderState& st) const {
+    // 占位提示排在列表最后 (消息与流式内容之后): 流式区子项数随渲染是否降级变化
+    size_t n = st.messages.size();
+    if (hasStreamingToken(st)) {
+        n += streamUseIncremental_ ? streamItemCount() : 1;
+    }
+    return n;
+}
+
 bool MessageListComponent::hasRunningToolOrThink() const {
     if (!ctx_.frameState) {
         return false;
@@ -527,7 +549,7 @@ Element MessageListComponent::runningHeaderMark(bool expanded) const {
 
 size_t MessageListComponent::itemCount() {
     const auto& st = *ctx_.frameState;
-    if (st.messages.empty() && !hasStreamingToken(st)) {
+    if (showEmptyBanner(st)) {
         return 1; // 空状态 banner (fillViewport)
     }
     size_t n = st.messages.size();
@@ -538,6 +560,10 @@ size_t MessageListComponent::itemCount() {
         } else {
             n += 1; // 降级: 整段 paragraph 单子项
         }
+    }
+    // 生成占位提示 (等待响应/正在调用工具): 排在消息与流式内容之后
+    if (hasGenPlaceholder(st)) {
+        ++n;
     }
     return n;
 }
@@ -635,6 +661,17 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         }
         return h;
     }
+    // ---- 生成占位提示项 (列表最后一项; 见 [genPlaceholderIndex]) ----
+    if (hasGenPlaceholder(st) && index == genPlaceholderIndex(st)) {
+        // 阶段与工具名进入 key (阶段推进/工具名到达时重建); 运行中头部使用
+        // 加载动画, 动画等级热切换同样使缓存失效
+        uint64_t h = combine(0x6707E000ull, static_cast<uint64_t>(st.genPhase));
+        for (const char c : st.genToolName) {
+            h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
+        }
+        h = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
+        return h;
+    }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
         // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估。
@@ -677,7 +714,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
     // 的 layoutForm —— 这些成本只应发生在条目真正进入视口被构建时 (布局即测量,
     // 实测值随 key 缓存)。视口内的定位只由锚点与实测高度决定, 估算偏差不影响
     // 视口内容 (只让滚动条长度暂时偏旧)。
-    if (st.messages.empty() && !hasStreamingToken(st)) {
+    if (showEmptyBanner(st)) {
         return 1; // banner 为 fillViewport, 高度由 LazyScrollable 置为视口高度
     }
     // 按字节折算行数 (含中文时略有高估, 属可接受偏差; 低估更安全, 见上)
@@ -734,13 +771,20 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
         return 2; // 未知角色兜底: 内容 1 行 + 空行
     }
     // ---- 流式区 ----
+    // 生成占位提示项先判定 (判定顺序必须与 itemKey/buildItem 一致): 占位提示出现
+    // 时流式区通常还未开始 (首个 token 未到达, currentToken 为 null), 若先走
+    // 降级路径, 占位项下标会落到流式子项分支上解引空的 currentToken
+    if (hasGenPlaceholder(st) && index == genPlaceholderIndex(st)) {
+        return 2; // 占位提示: 1 行 header + 1 行尾部空行 (与消息块一致)
+    }
     if (!streamUseIncremental_) {
         if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed(st)) {
             // 单行折叠流式 thinking: 1 行 header + 1 行尾部空行
             return 2;
         }
-        // 降级路径: 单个 paragraph 项
-        return 1 + estimateLines(*st.currentToken, width);
+        // 降级路径: 单个 paragraph 项 (无流式 token 时按 1 行兜底: 占位项已在
+        // 上方返回, 走到这里的无 token 分支只用于防御异常状态)
+        return st.currentToken ? 1 + estimateLines(*st.currentToken, width) : 1;
     }
     const size_t si = index - st.messages.size();
     if (si < streamHeaderCount_) {
@@ -765,7 +809,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
 
 bool MessageListComponent::fillViewport(size_t index) {
     const auto& st = *ctx_.frameState;
-    return index == 0 && st.messages.empty() && !hasStreamingToken(st);
+    return index == 0 && showEmptyBanner(st);
 }
 
 void MessageListComponent::maybeRequestMoreHistory() {
@@ -788,7 +832,7 @@ void MessageListComponent::maybeRequestMoreHistory() {
 
 LazyBuiltItem MessageListComponent::buildItem(size_t index) {
     const auto& st = *ctx_.frameState;
-    if (st.messages.empty() && !hasStreamingToken(st)) {
+    if (showEmptyBanner(st)) {
         LazyBuiltItem out;
         out.element = buildBanner();
         // 启动进度行使用加载动画时不可缓存: 缓存命中的旧 Element 是静止帧快照,
@@ -805,6 +849,10 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
     }
     if (index < st.messages.size()) {
         return buildMessageItem(*st.messages[index], index);
+    }
+    // ---- 生成占位提示项 (列表最后一项; 见 [genPlaceholderIndex]) ----
+    if (hasGenPlaceholder(st) && index == genPlaceholderIndex(st)) {
+        return buildGenPlaceholderItem(st);
     }
     // ---- 流式区 ----
     if (!streamUseIncremental_) {
@@ -1037,6 +1085,38 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
         block = paragraph(*st.currentToken) | color(theme.normalColor);
     }
     out.element = std::move(block);
+    return out;
+}
+
+LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState& st) {
+    using Phase = agentxx::agent::WireDelta::GenPhase;
+    const auto& theme    = *ctx_.theme;
+    const bool  toolCall = (st.genPhase == Phase::ToolCall);
+    const auto  c        = toolCall ? theme.toolColor : theme.thinkingColor;
+
+    // 单行占位项: 折叠标记 (生成中恒为运行态) + 角色标签 + 阶段说明 (工具调用阶段
+    // 附带已解析出的工具名)。首个正文/思考 token 或工具消息到达后由 client 线程
+    // 清除占位 (见 TUIRenderState::genPhase 注释), 位置由真实内容接替
+    Elements header;
+    const bool animMark = runSpinner_->animationEnabled();
+    header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(c));
+    header.push_back(text(toolCall ? tr("msg.roleTool") : tr("msg.roleThink")) | color(c));
+    if (toolCall && !st.genToolName.empty()) {
+        header.push_back(text(st.genToolName + " ") | color(theme.accentColor) | bold);
+    }
+    header.push_back(
+        text(tr(toolCall ? "msg.genToolCalling" : "msg.genWaiting")) | color(c) | theme.dim()
+        | xflex_shrink
+    );
+
+    LazyBuiltItem out;
+    out.element = vbox({
+        hbox(std::move(header)),
+        text(""), // 尾部空行 (与消息块一致, 见 quickHeight 的高度说明)
+    });
+    // 使用加载动画时不可缓存 (每帧重建刷新点阵帧); 静态标识时保持可缓存
+    out.cacheable   = !animMark;
+    out.sourceBytes = 0;
     return out;
 }
 

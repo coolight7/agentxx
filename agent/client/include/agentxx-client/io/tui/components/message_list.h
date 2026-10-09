@@ -269,6 +269,19 @@ private:
 
     bool hasStreamingToken(const TUIRenderState& st) const;
 
+    /// 空状态 banner 判定 (无消息且无流式内容且无生成占位提示):
+    /// itemCount/itemKey/quickHeight/buildItem/fillViewport/OnRender 共用同一判定,
+    /// 任一渲染分支的判定不一致都会让子项下标错位
+    bool showEmptyBanner(const TUIRenderState& st) const;
+
+    /// 生成占位提示子项 (agent 侧 GenStatus 增量): 模型节点开始执行后, 首个
+    /// 正文/思考 token 或工具消息到达前, 在列表末尾展示"等待响应/正在调用工具"
+    /// - 位置固定在列表末尾 (消息与流式内容之后), 由 [genPlaceholderIndex] 给出
+    bool hasGenPlaceholder(const TUIRenderState& st) const;
+    /// 占位提示子项下标 (= 消息数 + 流式子项数; 无占位提示时无意义)
+    size_t genPlaceholderIndex(const TUIRenderState& st) const;
+    LazyBuiltItem buildGenPlaceholderItem(const TUIRenderState& st);
+
     ftxui::Element buildMessageBlock(
         const TUIMessage&                                   msg,
         size_t                                              msgIndex,

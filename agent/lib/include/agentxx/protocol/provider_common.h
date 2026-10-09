@@ -24,6 +24,32 @@
 namespace agentxx {
 namespace protocol {
 
+/// 流式 chunk 类型扩展 (agentxx 自定义标记)
+///
+/// neograph::ChatStreamChunk 的 `type` 为 int, 上游只固定提供 TYPE_CONTENT /
+/// TYPE_THINKING; 取值 1 << 20 起为本项目自定义, 不会与上游取值冲突。
+///
+/// 这些 chunk **不是模型输出文本**, 只用于把"生成阶段变化"通知 UI (占位提示),
+/// 因此不参与正文/思考累积与 tps 统计:
+/// - 发出方: 各 Provider 的 SSE 解析 (工具调用开始)、模型调用节点 (请求已发出)
+/// - 消费方: `ModelCallWrapNode::onReceiveToken` 的 token 回调 (原样转发) →
+///   `EventBridge::handleLLMToken` (映射为 `WireDelta::Type::GenStatus`)
+namespace chunk_type {
+
+/// 模型节点开始生成: 请求已发出, 首个 token 尚未到达 (data 为空)
+inline constexpr int kGenerationStart = 1 << 20;
+
+/// 工具调用开始: 收到工具调用的首个分片 (参数未接收完, 内容不完整无法展示)
+/// - data 为工具名 (可能为空: 工具名分片尚未到达, 如 Anthropic 的 tool_use 块)
+inline constexpr int kToolCallStart = 1 << 21;
+
+/// 判定是否为生成阶段标记 (非模型输出文本)
+inline constexpr bool isStatusChunk(int type) noexcept {
+    return type == kGenerationStart || type == kToolCallStart;
+}
+
+} // namespace chunk_type
+
 /// 会话 ID 关联请求头键名
 inline constexpr std::string_view kHeaderSessionId       = "X-Session-Id";
 inline constexpr std::string_view kHeaderOpencodeSession = "X-Opencode-Session";
