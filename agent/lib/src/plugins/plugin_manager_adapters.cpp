@@ -33,7 +33,7 @@ PluginTool::PluginTool(
         (spec.flags & AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY) != 0,
         false,
         0,
-        false,
+        (spec.flags & AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK) != 0,
         (spec.flags & AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE) != 0
     ),
     name_{spec.name.data ? spec.name.data : "", spec.name.size},

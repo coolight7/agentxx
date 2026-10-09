@@ -2694,6 +2694,24 @@ asio::awaitable<void> test_plugin_real_link() {
         std::string{"false"}
     );
 
+    // 重复调用检查 (repeatCallCheck; 对应注册 flags 里的
+    // AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK): list/read/glob/grep/write 启用
+    // (宿主在连续同名同参调用达阈值时询问用户), edit 不启用
+    for (const char* name : {"agentxx_filesystem_list",
+                             "agentxx_filesystem_read",
+                             "agentxx_filesystem_glob",
+                             "agentxx_filesystem_grep",
+                             "agentxx_filesystem_write"}) {
+        XX_TEST_EXPECT_EQ(
+            linkCtx->toolRegistry->find(name)->extra["repeatCallCheck"],
+            std::string{"true"}
+        );
+    }
+    XX_TEST_EXPECT_EQ(
+        linkCtx->toolRegistry->find("agentxx_filesystem_edit")->extra["repeatCallCheck"],
+        std::string{"false"}
+    );
+
     // 经 ToolRegistry 完整流程执行 (op_driver 驱动插件三件套); sessionId 注入
     // thread_id → 会话工作目录解析流程
     auto callTool

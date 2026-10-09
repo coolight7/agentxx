@@ -439,6 +439,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 |---|---|
 | `AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY` | 输出超过 `toolcallSummaryLimitOutputLength` 时自动压缩 (原文经 share_store 卸载) |
 | `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE` | **执行体可与其他并行安全工具并发执行** |
+| `AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK` | **连续相同调用重复检查**: 同一 llm↔tool 链内连续同名同参调用达阈值 (`toolcallRepeatCheckThreshold`, 默认 5) 时询问用户, 确认后才继续执行 (与内置工具 `XXToolBase::repeatCallCheck` 同语义) |
 
 `AUTO_SUMMARY` 只给"输出大小无法由参数决定"的工具置位。工具自己能控制输出大小的**不要置位**:
 
@@ -453,6 +454,12 @@ glob / grep / 网络查询等); 写文件、命令执行、交互询问类工具
 tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 assistant 消息声明的调用之间
 (上限见 `AgentConfig::toolParallelMaxConcurrency`), 结果仍按声明的 `tool_call_id`
 顺序写回会话。
+
+`REPEAT_CALL_CHECK` 默认关闭 (未置位), 只给"模型可能以同一参数反复调用"的工具置位
+(当前: `agentxx_filesystem` 的 read/list/glob/grep/write、`agentxx_planning`、
+`agentxx_string_html_to_markdown`、`agentxx_get_current_datetime`); 同一 llm↔tool 交替链内
+连续同名同参调用达阈值 (`AgentConfig::toolcallRepeatCheckThreshold`, 默认 5, 0 = 全局禁用)
+时向用户询问, 确认后才继续执行 —— 与内置工具 `XXToolBase::repeatCallCheck` 同语义。
 
 ### 工具权限声明的语义 (agentxx.agent.permission)
 

@@ -11,6 +11,10 @@ namespace {
 constexpr std::string_view kNameDatetime   = "agentxx_get_current_datetime";
 constexpr std::string_view kDepictDatetime = "Get the current date, time, and Unix timestamp.";
 
+/// 连续相同调用重复检查: 达阈值时由宿主询问用户确认后再继续
+/// (见 [XXToolBase::repeatCallCheck] 与 AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK)
+constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
+
 } // namespace
 
 struct SysPluginCtx : public PluginBase {};
@@ -19,9 +23,17 @@ struct SysPluginCtx : public PluginBase {};
 static int32_t sysSetup(SysPluginCtx& ctx) {
     auto schema = ctx.schema(kNameDatetime).build();
 
-    fast_tool(ctx, kNameDatetime, kDepictDatetime, schema, [](std::string_view) -> std::string {
-        return currentDatetimeExecute();
-    });
+    fast_tool(
+        ctx,
+        kNameDatetime,
+        kDepictDatetime,
+        schema,
+        [](std::string_view) -> std::string {
+            return currentDatetimeExecute();
+        },
+        0,
+        kRepeatCheck
+    );
     return 0;
 }
 

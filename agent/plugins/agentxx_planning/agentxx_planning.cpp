@@ -44,6 +44,10 @@ namespace {
 
 constexpr std::string_view kNamePlanning = "agentxx_planning";
 
+/// 连续相同调用重复检查: 达阈值时由宿主询问用户确认后再继续
+/// (见 [XXToolBase::repeatCallCheck] 与 AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK)
+constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
+
 constexpr std::string_view kDepictPlanning =
     R"(Two-level task planning tool for complex multi-step work sessions.
 
@@ -506,7 +510,9 @@ static int planningSetup(PluginCtx* ctx) {
                 publishPlanningEvent(c, planJson);
 
                 return "success";
-            }
+            },
+            0,
+            kRepeatCheck
         );
     }
 

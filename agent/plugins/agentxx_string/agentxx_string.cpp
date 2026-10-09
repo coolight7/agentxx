@@ -18,6 +18,10 @@ Operates on in-memory text content (not files).)";
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
+/// 连续相同调用重复检查: 达阈值时由宿主询问用户确认后再继续
+/// (见 [XXToolBase::repeatCallCheck] 与 AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK)
+constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
+
 } // namespace
 
 struct StringPluginCtx : public PluginBase {};
@@ -46,7 +50,7 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
             return out;
         },
         0,
-        kAutoSummary
+        kAutoSummary | kRepeatCheck
     );
 
     // 2. regexp

@@ -54,6 +54,12 @@ extern "C" {
 /// - 并发只发生在同一条 assistant 消息声明的工具调用之间, 结果仍按声明顺序写回
 /// - 宿主侧并发上限见 [AgentConfig::toolParallelMaxConcurrency]
 #define AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE (1 << 1)
+/// 连续相同调用重复检查 (与内置工具 [agentxx::tools::XXToolBase::repeatCallCheck] 同语义)
+/// - 置位: 同一 llm <-> tool 交替链内 (无用户消息打断) 连续多次 (阈值
+///   [AgentConfig::toolcallRepeatCheckThreshold], 默认 5 次) 相同工具 + 相同参数
+///   调用时, 宿主经用户确认通道询问, 确认后才继续执行, 拒绝则中止本次调用
+/// - 未置位 = 关闭 (默认): 只给"模型可能以同一参数反复调用"的工具置位
+#define AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK (1 << 2)
 
 typedef struct AgentxxPluginToolSpec {
     PluginxxStringView name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)

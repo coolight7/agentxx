@@ -60,20 +60,31 @@ constexpr std::string_view kTimeoutDesc
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
-/// 搜索/列表类只读工具的注册 flags: 自动摘要 + 声明并行安全
+/// 连续相同调用重复检查 (与内置工具 [XXToolBase::repeatCallCheck] 同语义):
+/// 同一 llm <-> tool 交替链内 (无用户消息打断) 连续同名同参调用达到阈值
+/// ([AgentConfig::toolcallRepeatCheckThreshold], 默认 5 次) 时, 宿主询问用户
+/// 确认后才继续执行; read/list/glob/grep/write 启用, edit 不启用
+constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
+
+/// 搜索/列表类只读工具的注册 flags: 自动摘要 + 声明并行安全 + 重复调用检查
 /// - 输出可能远超 [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength],
 ///   由宿主压缩 (原文经 share_store 卸载, 需要时可按行取回)
 /// - list/glob/grep 只读且不改插件内部共享状态 (会话取消注册表只按
 ///   sessionId 读写), 允许与其他并行安全工具在同一批 tool_call 里并发执行;
 ///   写/编辑工具保持独占 (不声明), 与其他调用形成顺序屏障
-constexpr int32_t kReadOnlyFlags = kAutoSummary | AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE;
+constexpr int32_t kReadOnlyFlags
+    = kAutoSummary | AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE | kRepeatCheck;
 
-/// `read` 的注册 flags: 只声明并行安全, 不做自动摘要
+/// `read` 的注册 flags: 并行安全 + 重复调用检查, 不做自动摘要
 /// - `read` 自带 `line_offset`/`line_limit` 分页参数, 读多少行由调用方决定;
 ///   宿主再按 [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength]
 ///   自动摘要会把一次读取切成"头部 + share_store 页码", 与工具自身的分页重复 ——
 ///   调用方看到的行号会变成摘要后的结果行号, 与文件行号对不上
-constexpr int32_t kReadFlags = AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE;
+constexpr int32_t kReadFlags = AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE | kRepeatCheck;
+
+/// `write` 的注册 flags: 只做重复调用检查
+/// - 写文件保持独占 (不声明并行安全), 与其他调用形成顺序屏障
+constexpr int32_t kWriteFlags = kRepeatCheck;
 
 } // namespace
 
@@ -260,7 +271,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 }
                 std::string workDirStr(workDir);
                 co_return co_await fileWriteExecuteAsync(args.raw(), workDirStr);
-            }
+            },
+            0,
+            kWriteFlags
         );
     } else {
         blocking_tool(
@@ -282,7 +295,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
                 });
-            }
+            },
+            0,
+            kWriteFlags
         );
     }
     registerWritePathPermission(ctx, kNameWrite, "path");
