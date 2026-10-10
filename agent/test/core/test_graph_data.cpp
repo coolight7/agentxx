@@ -104,6 +104,12 @@ TestResult testGraphData() {
             MiddlewareContext::graphDataKey_appendSystemMessage,
             SectionMap{{"memory", "M"}, {"skills", "S"}}
         );
+        // 稳定附加段与新通道同形 (记忆/技能内容走它随 system 消息下发), 一并覆盖往返
+        source->setGraphDataItemValue<SectionMap>(
+            sessionId,
+            MiddlewareContext::graphDataKey_appendSystemMessageStable,
+            SectionMap{{"memory", "SM"}, {"skills", "SS"}}
+        );
         source->setGraphDataItemValue<std::string>(
             sessionId,
             MiddlewareContext::graphDataKey_interruptNode,
@@ -134,6 +140,12 @@ TestResult testGraphData() {
         XX_TEST_EXPECT_EQ(savedSections.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(stringAt(savedSections, "memory"), std::string("M"));
 
+        // 稳定附加段通道同样完整落盘 (记忆/技能内容随它进 system 消息)
+        const auto& savedStable
+            = savedSnapshot[MiddlewareContext::graphDataKey_appendSystemMessageStable];
+        XX_TEST_EXPECT_TRUE(savedStable.is_object());
+        XX_TEST_EXPECT_EQ(stringAt(savedStable, "memory"), std::string("SM"));
+
         // 恢复 (程序重启 resume 的入口)
         auto target = std::make_shared<MiddlewareContext>();
         target->setGraphDataFromState(savedSnapshot, sessionId);
@@ -145,6 +157,13 @@ TestResult testGraphData() {
         XX_TEST_EXPECT_EQ(restoredSections.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(sectionAt(restoredSections, "memory"), std::string("M"));
         XX_TEST_EXPECT_EQ(sectionAt(restoredSections, "skills"), std::string("S"));
+
+        const auto& restoredStable = target->getGraphDataItemValue<SectionMap>(
+            sessionId,
+            MiddlewareContext::graphDataKey_appendSystemMessageStable
+        );
+        XX_TEST_EXPECT_EQ(restoredStable.size(), (size_t)2);
+        XX_TEST_EXPECT_EQ(sectionAt(restoredStable, "skills"), std::string("SS"));
 
         // 其余常用类型同样往返完整
         XX_TEST_EXPECT_EQ(

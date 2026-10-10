@@ -905,17 +905,26 @@ public:
     //
     // 提示词分两部分, 请求装配时分别放置, 保证连续请求的前缀稳定:
     // - 稳定段 (`buildSystemPromptStable`): systemPrompt + 静态附加段
-    //   (appendSystemPrompts, 按 order 排序) —— 进 system 消息, 内容不随轮次变化
-    // - 动态段 (`buildDynamicContextSections`): 中间件每轮产出的片段
-    //   (记忆文件内容 / 技能清单等), 连同来源标识, 由 modelcall 作为
-    //   **请求末尾的独立消息**附加, 不再插入 system 消息内部
+    //   (appendSystemPrompts, 按 order 排序) + 运行时稳定附加段
+    //   (记忆文件内容 / 技能清单, 随配置与插件构造, 不随轮次变化) —— 全部进
+    //   system 消息, 属于稳定前缀, 上游的 KV/前缀缓存可命中 (每轮不重复计费)
+    // - 动态段 (`buildDynamicContextSections`): 每轮都可能变化的片段, 由
+    //   modelcall 作为**请求末尾的独立消息**附加 —— 位置在稳定前缀之外, 每次
+    //   调用都要重新发送且命中不了缓存, 只留给"确实每轮都变"的插件/今后功能
     // -------------------------------------------------------------------
 
-    /// 稳定段文本 (systemPrompt + 静态附加段; 已做会话级占位符替换)
+    /// 稳定段文本 (systemPrompt + 静态附加段 + 运行时稳定附加段; 已做会话级占位符替换)
     std::string buildSystemPromptStable(std::string_view sessionId = "") const;
+
+    /// 运行时稳定附加段 (来源 → 正文; 按来源键名升序稳定排列)
+    /// - 由中间件经 `graphDataKey_appendSystemMessageStable` 写入 (同来源覆盖, 不累积)
+    /// - 内容随配置/插件构造 (记忆文件 / 技能清单), 会话内不变: 拼进 system 末尾
+    std::vector<std::pair<std::string, std::string>>
+        buildStableContextSections(std::string_view sessionId = "") const;
 
     /// 动态段片段 (来源 → 正文; 按来源键名升序稳定排列)
     /// - 由中间件经 `graphDataKey_appendSystemMessage` 写入 (同来源覆盖, 不累积)
+    /// - 由 modelcall 附加在请求末尾, 不写进 system 消息 (会明显降低缓存命中率)
     std::vector<std::pair<std::string, std::string>>
         buildDynamicContextSections(std::string_view sessionId = "") const;
 

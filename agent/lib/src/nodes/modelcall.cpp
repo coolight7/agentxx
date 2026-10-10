@@ -303,15 +303,35 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
         }
     }
 
-    // 动态段 (记忆文件 / 技能清单等中间件片段): 作为请求末尾的独立消息附加,
-    // 不插入稳定段内部 (计划 PRM-1)
+    // 动态段 (每轮都可能变化的中间件片段; 记忆文件/技能清单已改为稳定附加段,
+    // 见 buildSystemPromptStable): 作为请求末尾的独立消息附加, 不写进 system 消息
     // - 角色用 user: openai-responses 与 anthropic 都会把 system 消息归并到系统
-    //   字段 (放到请求最前面), 用 system 会让动态内容进入前缀, 破坏前缀缓存
+    //   字段 (放到请求最前面), 用 system 会让非稳定内容进入前缀, 破坏前缀缓存
     // - 用来源标签包裹, 模型能看出这是宿主注入的上下文, 不是用户发言
     // - 只在本请求可见, 不改写会话上下文 (权威 transcript 不含动态段)
+    // - 代价: 位置在稳定前缀之外, 每次调用都要重新发送且命中不了缓存, 会明显拉低
+    //   KV 缓存命中率 (下方存在性检查会告警, 当前无写入方)
     if (ctxPtr) {
         auto sections = ctxPtr->buildDynamicContextSections(sessionId);
         if (!sections.empty()) {
+            // 检查与告警: 动态段不在稳定前缀内, 每次调用都全额重发且无缓存命中;
+            // 内容不随轮次变化的片段应写入稳定附加段
+            // (MiddlewareContext::graphDataKey_appendSystemMessageStable)
+            std::string sources;
+            for (const auto& [source, text] : sections) {
+                if (!sources.empty()) {
+                    sources += ", ";
+                }
+                sources += source;
+            }
+            XX_LOGW(
+                "[modelcall] dynamic context section(s) [{}] present: content is attached at "
+                "the request tail, outside the stable prefix, so every call resends it without "
+                "cache hits and the KV cache hit rate drops noticeably; keep content that does "
+                "not change per turn in the stable appended sections "
+                "(graphDataKey_appendSystemMessageStable)",
+                sources
+            );
             std::string dynamic;
             for (const auto& [source, text] : sections) {
                 dynamic += fmt::format(
@@ -863,8 +883,9 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             newSystemMsg = msgs.front();
         }
         if (agentCtxPtr) {
-            // 稳定段 (systemPrompt + 静态附加段): 动态段 (记忆/技能) 由 build_params
-            // 作为请求末尾的独立消息附加, 不写进 system 消息 (计划 PRM-1)
+            // 稳定段 (systemPrompt + 静态附加段 + 运行时稳定附加段: 记忆文件/技能清单)
+            // 随 system 消息下发, 属于稳定前缀; 动态段由 build_params 作为请求末尾的
+            // 独立消息附加, 不写进 system 消息 (计划 PRM-1)
             newSystemMsg.content = agentCtxPtr->buildSystemPromptStable(in.ctx.thread_id);
         }
         if (haveSystemMsg) {

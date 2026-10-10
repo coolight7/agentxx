@@ -12,8 +12,8 @@
 namespace agentxx {
 namespace middleware {
 
-/// 动态上下文来源标识 (技能清单; 见 AgentContext::buildDynamicContextSections)
-static constexpr std::string_view kDynamicSourceSkills = "skills";
+/// 稳定附加段来源标识 (技能清单; 见 AgentContext::buildSystemPromptStable)
+static constexpr std::string_view kStableSourceSkills = "skills";
 
 std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
     std::string oss;
@@ -289,13 +289,15 @@ You have access to a skills library that provides specialized capabilities and d
             skillState->cachedResourceEpoch = resourceEpoch;
         }
 
-        // 动态段按来源写入 (计划 PRM-1): 同一来源每轮覆盖, 不再逐轮追加
+        // 稳定附加段按来源写入 (计划 PRM-1): 同一来源每轮覆盖, 不再逐轮追加
+        // - 技能清单随 system 消息一起进稳定前缀 (上游 KV/前缀缓存可命中);
+        //   内容只在插件增删技能目录时改写, 改写会让该会话的前缀缓存失效一次
         auto& sections = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<
             std::map<std::string, std::string, std::less<>>>(
             in.ctx.thread_id,
-            agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
+            agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessageStable
         );
-        sections[std::string{kDynamicSourceSkills}] = skillState->cacheFormatSkillPrompt;
+        sections[std::string{kStableSourceSkills}] = skillState->cacheFormatSkillPrompt;
     }
     co_return;
 }

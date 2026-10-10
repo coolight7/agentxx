@@ -9,6 +9,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/prompt.h"
+#include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -22,6 +23,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -324,22 +326,21 @@ asio::awaitable<void> test_request_structure_and_stable_prefix() {
     const auto request1 = g_da_sim_last_request;
     const auto system1  = systemContentOf(request1);
     XX_TEST_EXPECT_TRUE(!system1.empty());
-    // 稳定段不含记忆内容 (动态段不插入稳定段内部)
-    XX_TEST_EXPECT_TRUE(system1.find("MEMORY-MARKER") == std::string::npos);
+    // 记忆内容进稳定段 (system 消息末尾): 随前缀一起被上游缓存命中 (PRM-1 修正)
+    XX_TEST_EXPECT_TRUE(system1.find("MEMORY-MARKER") != std::string::npos);
 
-    // 动态段: 请求末尾的独立消息, 带来源标签
+    // 动态段当前没有写入方: 请求末尾不再附加 <dynamic_context> 消息
     const auto last1 = lastMessageOf(request1);
     XX_TEST_EXPECT_EQ(last1.value("role", std::string{}), std::string{"user"});
     const auto lastContent1 = last1.value("content", std::string{});
-    XX_TEST_EXPECT_TRUE(lastContent1.find("<dynamic_context source=\"memory\">") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(lastContent1.find("MEMORY-MARKER") != std::string::npos);
-    // 整条请求里记忆内容只出现一次 (旧实现每轮往 system 里追加一份)
+    XX_TEST_EXPECT_TRUE(lastContent1.find("<dynamic_context") == std::string::npos);
+    // 整条请求里记忆内容只有一份且落在 system 消息里 (每轮不重复发送)
     XX_TEST_EXPECT_EQ(countOccurrences(request1.dump(), "MEMORY-MARKER"), size_t{2});
     // 工具 schema 随请求下发 (稳定段的一部分)
     XX_TEST_EXPECT_TRUE(request1.contains("tools") && request1["tools"].is_array());
     XX_TEST_EXPECT_TRUE(!request1["tools"].empty());
 
-    // 第二轮: system 消息逐字节不变 (前缀稳定), 记忆内容仍只出现一次
+    // 第二轮: system 消息逐字节不变 (前缀稳定), 记忆内容仍只有一份
     co_await runOneTurn(fx, "second turn");
     XX_TEST_EXPECT_TRUE(g_da_sim_request_count.load() >= 2);
     const auto request2 = g_da_sim_last_request;
@@ -354,13 +355,13 @@ asio::awaitable<void> test_request_structure_and_stable_prefix() {
         XX_TEST_EXPECT_EQ(session->stablePrefixChanges(), uint64_t{0});
     }
 
-    // 系统消息本身 (会话上下文第一条) 只含稳定段, 不含动态段
+    // 系统消息本身 (会话上下文第一条) 含稳定段: 记忆内容随 system 一起下发
     if (session) {
         const auto& msgs = session->messages();
         XX_TEST_EXPECT_TRUE(!msgs.empty());
         if (!msgs.empty()) {
             XX_TEST_EXPECT_EQ(msgs.front().role, std::string{"system"});
-            XX_TEST_EXPECT_TRUE(msgs.front().content.find("MEMORY-MARKER") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(msgs.front().content.find("MEMORY-MARKER") != std::string::npos);
         }
     }
 
@@ -457,6 +458,102 @@ asio::awaitable<void> test_skill_name_adjudication() {
     removeTempRoot(root);
 }
 
+// ---------------------------------------------------------------------------
+// 4. 动态段机制保留 (预留给插件/今后功能, 计划 PRM-1 修正)
+//
+// 写入 `xx_appendSystemMessage` 的片段仍作为**请求末尾的独立消息**附加, 不进
+// system 消息: 它位于稳定前缀之外, 每次调用全额重发且命中不了前缀缓存, 会明显
+// 降低 KV 缓存命中率 (modelcall 里有存在性检查与告警)
+// ---------------------------------------------------------------------------
+
+/// 测试用动态段写入句柄 (模拟插件): 每轮 agent 调用开始时写入一个动态段来源
+/// - graphData 是每轮执行的临时数据 (AgentStartCall 刷新), 所以不能在运行前
+///   直接写, 必须像真实中间件那样在钩子里写
+class TestDynamicSectionHandle
+    : public agentxx::middleware::BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState> {
+public:
+
+    TestDynamicSectionHandle(
+        std::string                                 source,
+        std::string                                 text,
+        std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
+    ) :
+        BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState>(
+            "TestDynamicSectionHandle",
+            std::move(in_agentContext)
+        ),
+        source_(std::move(source)),
+        text_(std::move(text)) {}
+
+    asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override {
+        auto ctxPtr = agentContext.lock();
+        if (ctxPtr && ctxPtr->middlewareHandleContext) {
+            auto& sections = ctxPtr->middlewareHandleContext->getGraphDataItemValue<
+                std::map<std::string, std::string, std::less<>>>(
+                in.ctx.thread_id,
+                agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
+            );
+            sections[source_] = text_;
+        }
+        co_return;
+    }
+
+private:
+
+    std::string source_;
+    std::string text_;
+};
+
+asio::awaitable<void> test_dynamic_section_tail() {
+    const auto root       = makeTempRoot();
+    const auto memoryFile = (fs::path{root} / "memory.md").string();
+    {
+        std::ofstream ofs{utilxx_base::utf8ToPath(memoryFile)};
+        ofs << "MEMORY-MARKER: stable section content\n";
+    }
+
+    agentxx::agent::AgentConfig tweaks;
+    tweaks.memoryFilePaths.push_back(memoryFile);
+
+    auto fx = co_await makeFixture("dynamic-section-session", tweaks);
+
+    // 模拟插件写入动态段: 本轮请求末尾应出现带来源标签的独立消息
+    fx->agent->agentContext->middlewareHandleContext->handles.push_back(
+        std::make_shared<TestDynamicSectionHandle>(
+            "plugin-extra",
+            "DYNAMIC-MARKER",
+            fx->agent->agentContext
+        )
+    );
+
+    co_await runOneTurn(fx, "dynamic turn");
+
+    const auto request = g_da_sim_last_request;
+    // 记忆内容在 system 稳定段; 动态段内容不进 system 消息
+    const auto system = systemContentOf(request);
+    XX_TEST_EXPECT_TRUE(system.find("MEMORY-MARKER") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(system.find("DYNAMIC-MARKER") == std::string::npos);
+
+    const auto last        = lastMessageOf(request);
+    const auto lastContent = last.value("content", std::string{});
+    XX_TEST_EXPECT_EQ(last.value("role", std::string{}), std::string{"user"});
+    XX_TEST_EXPECT_TRUE(
+        lastContent.find("<dynamic_context source=\"plugin-extra\">") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(lastContent.find("DYNAMIC-MARKER") != std::string::npos);
+
+    // 动态段只在本请求可见: 不写进会话上下文 (权威 transcript)
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    if (session) {
+        XX_TEST_EXPECT_TRUE(
+            session->llmMessagesJson().dump().find("DYNAMIC-MARKER") == std::string::npos
+        );
+    }
+
+    removeTempRoot(root);
+}
+
 } // namespace
 
 TestResult testPromptSectionOrder() {
@@ -470,6 +567,7 @@ asio::awaitable<TestResult> run_prompt_stability_tests() {
     const int failedBefore = g_pr_failed;
     co_await test_request_structure_and_stable_prefix();
     co_await test_skill_name_adjudication();
+    co_await test_dynamic_section_tail();
     co_return TestResult{g_pr_passed - passedBefore, g_pr_failed - failedBefore};
 }
 

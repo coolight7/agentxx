@@ -104,6 +104,40 @@ void appendPromptSegment(std::string& combined, const std::string& segment) {
     combined += segment;
 }
 
+/// 取附加段表 (来源 → 正文; 稳定附加段与动态段同形, 只有通道键不同)
+/// - 键排序的 map: 同一来源每轮覆盖写入 (不累积), 顺序稳定 (计划 PRM-1);
+///   旧实现用 vector 追加, 每轮都会把上一轮的片段再拼一次 (系统提示词逐轮变长)
+/// - 空正文的条目跳过
+///
+/// - `args`:
+///     - [middlewareCtx] 中间件上下文 (空则返回空列表)
+///     - [sessionId] 会话 id (空则返回空列表)
+///     - [key] 附加段通道键 (见 `MiddlewareContext::graphDataKey_appendSystemMessage*`)
+///
+/// - `return` (来源, 正文) 列表, 按来源键名升序
+std::vector<std::pair<std::string, std::string>> collectAppendSections(
+    const std::shared_ptr<agentxx::middleware::MiddlewareContext>& middlewareCtx,
+    std::string_view                                               sessionId,
+    const std::string&                                             key
+) {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (!middlewareCtx || sessionId.empty()) {
+        return out;
+    }
+    const auto& sections
+        = middlewareCtx->getGraphDataItemValue<std::map<std::string, std::string, std::less<>>>(
+            sessionId,
+            key
+        );
+    out.reserve(sections.size());
+    for (const auto& kv : sections) {
+        if (!kv.second.empty()) {
+            out.emplace_back(kv.first, kv.second);
+        }
+    }
+    return out;
+}
+
 /// Json 边界形态 -> typed 上下文 (逐条 ChatMessage JSON 反序列化)
 std::vector<neograph::ChatMessage> messagesFromJson(const utilxx_base::Json& msgs) {
     std::vector<neograph::ChatMessage> typed;
@@ -652,26 +686,21 @@ const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view s
 }
 
 std::vector<std::pair<std::string, std::string>>
+    AgentContext::buildStableContextSections(std::string_view sessionId) const {
+    return collectAppendSections(
+        middlewareHandleContext,
+        sessionId,
+        agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessageStable
+    );
+}
+
+std::vector<std::pair<std::string, std::string>>
     AgentContext::buildDynamicContextSections(std::string_view sessionId) const {
-    std::vector<std::pair<std::string, std::string>> out;
-    if (!middlewareHandleContext || sessionId.empty()) {
-        return out;
-    }
-    // 键排序的 map: 同一来源每轮覆盖写入 (不累积), 顺序稳定 (计划 PRM-1);
-    // 旧实现用 vector 追加, 每轮都会把上一轮的片段再拼一次 (系统提示词逐轮变长)
-    const auto& sections
-        = middlewareHandleContext->getGraphDataItemValue<
-            std::map<std::string, std::string, std::less<>>>(
-            sessionId,
-            agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
-        );
-    out.reserve(sections.size());
-    for (const auto& kv : sections) {
-        if (!kv.second.empty()) {
-            out.emplace_back(kv.first, kv.second);
-        }
-    }
-    return out;
+    return collectAppendSections(
+        middlewareHandleContext,
+        sessionId,
+        agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
+    );
 }
 
 std::string AgentContext::renderPromptVars(std::string text, std::string_view sessionId) const {
@@ -709,6 +738,12 @@ std::string AgentContext::buildSystemPromptStable(std::string_view sessionId) co
     for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
         appendPromptSegment(combined, std::string{section.text});
     }
+    // 运行时稳定附加段 (记忆文件内容 / 技能清单): 随 system 消息一起进稳定前缀,
+    // 上游的 KV/前缀缓存能命中; 内容只在配置/插件资源变化时变 (会话内不变)
+    for (const auto& [source, text] : buildStableContextSections(sessionId)) {
+        (void)source;
+        appendPromptSegment(combined, text);
+    }
     return renderPromptVars(std::move(combined), sessionId);
 }
 
@@ -721,8 +756,12 @@ std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
     for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
         appendPromptSegment(combined, std::string{section.text});
     }
-    // 动态段 (记忆 / 技能清单): 完整提示词里保留在末尾 (供 UI 查看);
-    // 请求装配使用 buildSystemPromptStable + 末尾动态消息 (见 modelcall)
+    // 稳定附加段与动态段都保留在末尾 (完整提示词仅供 UI 查看): 请求装配时稳定
+    // 附加段随 system 消息下发, 动态段作为请求末尾的独立消息附加 (见 modelcall)
+    for (const auto& [source, text] : buildStableContextSections(sessionId)) {
+        (void)source;
+        appendPromptSegment(combined, text);
+    }
     for (const auto& [source, text] : buildDynamicContextSections(sessionId)) {
         (void)source;
         appendPromptSegment(combined, text);

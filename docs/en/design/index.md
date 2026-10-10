@@ -132,7 +132,7 @@ Stacked middleware architecture intercepting execution before and after Graph no
 |---|---|
 | **PermissionMiddleware** | Tool execution authorization via EventBus requesting user decisions (HITL). Filesystem rules use longest-prefix matching with `*` wildcard support: rules on `/data/projects` apply to all nested children with fallback to parent chain rules (see `XXRouter::get`'s `prefix_fallback`). Default behavior governed by YAML `permission.mode` (Ask = ALLOW in workDir + INTERRUPT elsewhere / AllAsk = all INTERRUPT / Pass = all ALLOW / Deny = all DENY). Whitelists always allow; blacklists always deny (blacklists take priority on collision); `noRuleOperator` provides final fallback. Clients can select "remember this choice": the permission card is rendered from a declarative UI descriptor (see [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) and the preset template `preset::permissionCard`); the checkbox value is returned as `values.remember` in the interrupt result and the permission handler registers the path rule on the agent side (the client holds no permission semantics). |
 | **SkillMiddleware** | Progressive discovery and loading of skill definitions (`SKILL.md`). |
-| **MemoryFileMiddleware** | Reads and caches context memory files, injecting them into system prompts before each model call. |
+| **MemoryFileMiddleware** | Reads and caches context memory files; content is appended to the end of the system message (stable prefix, so upstream KV/prefix caching can hit it). |
 | **SummarizationMiddleware** | Token tracking and automatic context compaction, preventing model window overflow. |
 | **SubagentManagerMiddleware** | Subagent delegation management: owns the `SubAgentManagerTool` singleton (`agentxx_subagent`), injecting it for models per YAML `subagent.enable`; the `service.subagent.execute` bus service stays registered (for internal paths like context compaction). |
 | **AgentHost** | Process-level agent host: Registers root agent and subagents as equal peers (`AgentNode`), spawning independent agents for subagent execution, serving `service.subagent` on both root and child global buses (flattening nested and root delegations into identical paths), enforcing depth and concurrency budgets, routing inter-agent messages via `HostBus`, and handling lifecycle cleanup. |
@@ -526,7 +526,8 @@ skill:
   list:
     - "./skills"
 
-  # Context file list (Memory; injected into system prompts prior to every model call)
+  # Context file list (Memory; content is appended to the system message,
+  # which is part of the stable prefix and can hit upstream KV/prefix caching)
 memory:
   list:
     - "./AGENT.md"

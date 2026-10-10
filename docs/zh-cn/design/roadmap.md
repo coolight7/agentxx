@@ -38,7 +38,7 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| PRM-1 | stablePrefix / dynamicSuffix | 已实施 | `agent/context.cpp`（稳定段/动态段分离）+ `nodes/modelcall.cpp`（末尾动态消息 + 稳定段哈希）；模块 `prompt_stability`、`prompt_stability_io` |
+| PRM-1 | stablePrefix / dynamicSuffix | 已实施 | `agent/context.cpp`（稳定段含运行时稳定附加段: 记忆文件/技能清单拼进 system 消息末尾，随前缀命中缓存）+ `nodes/modelcall.cpp`（末尾动态消息仅预留给插件/今后功能 + 稳定段哈希 + 动态段存在性告警）；模块 `prompt_stability`、`prompt_stability_io` |
 | PRM-2 | 段落排序号（`order`） | 已实施（限定：只加 order） | `agent/prompt.{h,cpp}`（`PromptSectionMeta` / `setAppendSection` / `orderedAppendSections`）；模块 `prompt_stability` |
 | PRM-4 | 记忆文件过大警告 | 已实施（限定：只告警） | `middlewares/memory_file.{h,cpp}`（`kOversizeWarnChars = 8000`）；模块 `plugin_resources` |
 | PRM-5 | 技能优先级与同名裁决 | 已实施 | `middlewares/skill.{h,cpp}`（`SkillDirEntry` 优先级 + 同名裁决 + 来源展示）；模块 `prompt_stability_io` |
