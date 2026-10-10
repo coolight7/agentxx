@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/feature/points.h"
 #include "agentxx/middlewares/middleware.h"
 #include "asio/io_context.hpp"
 #include <map>
@@ -70,10 +71,31 @@ protected:
     /// - 写回前超长时按它截断, 见 [fitSummaryMaxTokens]
     const size_t summaryMaxTokens;
 
+    /// token 估算规则 (功能点 `agentxx.context.countTokens` 的核心实现与
+    /// 同步快路径共用同一份实例: 规则只写一次, 两个入口结果必然一致)
+    std::shared_ptr<agentxx::feature::TokenEstimator> tokenEstimator;
+
+    /// 本中间件声明的上下文功能点 (token 估算 / 压缩)
+    /// - 在构造时声明 (早于插件装载), 因此插件可以为这两个点登记实现
+    /// - 未取到 AgentContext 时为空 (单测直接构造中间件的场景)
+    agentxx::feature::ContextPoints featurePoints;
+
 public:
 
     /// 压缩 tool 时处理函数
     std::map<std::string, SummarizationToolHandle> summarizationToolHandles{};
+
+    /// 本中间件声明的上下文功能点 (token 估算 / 压缩)
+    /// - 在构造时声明 (早于插件装载), 因此插件可以为这两个点登记实现
+    /// - 未取到 AgentContext 时为空 (单测直接构造中间件的场景)
+    const agentxx::feature::ContextPoints& points() const noexcept {
+        return featurePoints;
+    }
+
+    /// token 估算规则实例 (功能点核心实现与同步快路径共用同一份)
+    const std::shared_ptr<agentxx::feature::TokenEstimator>& estimator() const noexcept {
+        return tokenEstimator;
+    }
 
     SummarizationMiddlewareHandle(
         std::weak_ptr<agentxx::agent::AgentContext> in_agentContext,
@@ -92,6 +114,17 @@ public:
         const std::vector<neograph::ChatMessage>& messages,
         bool                                      countThinking = false
     ) const;
+
+    /// 经功能点 `agentxx.context.countTokens` 取 token 数 (预算计算用)
+    /// - 插件 / FFI 宿主为该点登记的实现会在这里生效; 同步快路径
+    ///   ([countTokensForUtf8Str] / [countTokens], 供 TPS 与内部裁剪使用)
+    ///   仍只走核心实现, 插件实现不参与 (见 plan §8.1)
+    /// - 拿不到值时回退同步快路径 (功能点不可用不影响压缩流程)
+    asio::awaitable<size_t> countTokensViaPoint(
+        std::string_view                          sessionId,
+        const std::vector<neograph::ChatMessage>& messages,
+        bool                                      countThinking
+    );
 
     std::string messagesToText(
         const std::vector<neograph::ChatMessage>& msgs,
@@ -118,8 +151,7 @@ public:
     /// - 未超限时原样返回
     std::string fitSummaryMaxTokens(std::string summary) const;
 
-    /// 工具调用压缩: 去重截断 (现有) + 探索型调用序列折叠
-    /// - 连续 >= 3 次的同工具单工具调用段 (中间无 user/system 打断, 且工具注册了
+    /// 工具调用压缩: 去重截断 (现有) + 探索型调用序列折叠    /// - 连续 >= 3 次的同工具单工具调用段 (中间无 user/system 打断, 且工具注册了
     ///   truncateResponse 而无 truncateRequest 的"读类"工具), 只保留最后一组
     ///   (assistant + tool 结果), 其余整组删除: 探索过程无价值, 结论在最后一组
     void doSummarizeToolcall(std::vector<neograph::ChatMessage>& messages);
@@ -139,7 +171,11 @@ public:
         size_t                                    tokenBudget
     ) const;
 
-    /// LLM 同上下文压缩: 通过 subagent 完成 (同上下文模式)
+    /// LLM 同上下文压缩的核心实现 (功能点 `agentxx.context.summarize` 的 core 层)
+    ///
+    /// 只产出摘要文本: 不替换会话消息、不发提示消息、不写 share store ——
+    /// 写回由编排方 (本中间件) 做。内部派生"用完即弃"的压缩子代理属于实现细节。
+    ///
     /// - 请求参数: subagent="subagent_task", messages=当前完整上下文(含 system)
     ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
     ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
@@ -157,6 +193,16 @@ public:
     ///   或失败返回空字符串 (调用方保留原消息)
     /// - 无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
     asio::awaitable<std::string> doSummarizeWithLLM(
+        std::string_view                          sessionId,
+        const std::vector<neograph::ChatMessage>& messages,
+        bool                                      direct = false
+    );
+
+    /// 经功能点 `agentxx.context.summarize` 取摘要文本 (编排方入口)
+    /// - 插件 / FFI 宿主为该点登记的实现会在这里生效; 拿不到值时返回空串
+    ///   (调用方走硬截断兜底)
+    /// - 本轮该点声明为不可对外开放调用 (`callable = false`), 只由本中间件取用
+    asio::awaitable<std::string> summarizeViaPoint(
         std::string_view                          sessionId,
         const std::vector<neograph::ChatMessage>& messages,
         bool                                      direct = false

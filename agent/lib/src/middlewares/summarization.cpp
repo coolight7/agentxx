@@ -110,39 +110,44 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     assert(unicodeCharsPerToken >= 0);
     assert(tokensPerImage >= 0);
     assert(extraTokensPerMessage >= 0);
+
+    // token 估算规则: 一份实例, 功能点核心实现与同步快路径共用
+    // (规则本身在 agentxx::feature::TokenEstimator 里, 这里只注入本中间件的系数)
+    tokenEstimator          = std::make_shared<agentxx::feature::TokenEstimator>();
+    tokenEstimator->asciiCharsPerToken     = asciiCharsPerToken;
+    tokenEstimator->unicodeCharsPerToken   = unicodeCharsPerToken;
+    tokenEstimator->tokensPerImage         = tokensPerImage;
+    tokenEstimator->extraTokensPerMessage  = extraTokensPerMessage;
+
+    // 声明上下文两点 (token 估算 / 压缩) 并登记核心实现
+    // - 中间件在插件装载前装配, 因此插件登记实现时点一定已存在
+    // - 单测直接构造本中间件 (无 AgentContext) 时 featurePoints 为空, 走同步路径即可
+    if (auto ctx = agentContext.lock(); ctx != nullptr && ctx->features != nullptr) {
+        agentxx::feature::ContextPointOptions pointOptions;
+        pointOptions.estimator = *tokenEstimator;
+        pointOptions.summarizeImpl
+            = [this](const agentxx::feature::SummarizeRequest&  req,
+                     const agentxx::feature::ImplContext& /*ictx*/)
+            -> asio::awaitable<std::optional<agentxx::feature::SummarizeValue>> {
+            // 核心实现: 只产出摘要文本, 不写回会话 (编排在中间件)
+            auto summary = co_await doSummarizeWithLLM(req.sessionId, req.messages, req.manual);
+            if (summary.empty()) {
+                co_return std::nullopt; // 失败按"没意见"处理, 由编排方兜底
+            }
+            agentxx::feature::SummarizeValue value;
+            value.summary   = std::move(summary);
+            value.truncated = false;
+            co_return value;
+        };
+        featurePoints = agentxx::feature::registerContextPoints(*ctx->features, pointOptions);
+    } else {
+        XX_LOGD("SummarizationMiddlewareHandle: 未取到功能点注册表, 只用同步估算路径");
+    }
 }
 
 size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_str) const {
-    size_t unicodeCount = 0, asciiCount = 0;
-    for (size_t i = 0, step = 0; i < in_str.size(); i += step) {
-        unsigned char byte = in_str[i];
-        if (byte >= 0xF8) {
-            // 0xF8-0xFF: 无效 UTF-8 前导 (5/6 字节编码已被 RFC 3629 废弃),
-            // 按 ascii 单字节处理, 避免吞掉后续字节少计
-            step = 1;
-            ++asciiCount;
-            continue;
-        } else if (byte >= 0xF0) {
-            // 4 字节前导 0xF0-0xF7
-            step = 4;
-        } else if (byte >= 0xE0) {
-            // 3 字节前导 0xE0-0xEF
-            step = 3;
-        } else if (byte >= 0xC0) {
-            // 2 字节前导 0xC0-0xDF
-            step = 2;
-        } else {
-            // ascii 0x00-0x7F / 续字节 0x80-0xBF (单独出现无效): 单字节处理
-            step = 1;
-            ++asciiCount;
-            continue;
-        }
-        ++unicodeCount;
-    }
-    // ascii / unicode 分别按各自折算比例取整后再相加 (与测试/文档语义一致:
-    // "ascii + unicode 分别折算"), 避免先相加再整体截断导致高估 token 数
-    return static_cast<size_t>(unicodeCount / unicodeCharsPerToken)
-           + static_cast<size_t>(asciiCount / asciiCharsPerToken);
+    // 转发到功能点核心实现所用的同一份估算规则 (只保留一份实现)
+    return tokenEstimator->estimateText(in_str);
 }
 
 size_t SummarizationMiddlewareHandle::countTokens(
@@ -152,24 +157,63 @@ size_t SummarizationMiddlewareHandle::countTokens(
 ) const {
     size_t count = 0;
     for (const auto& msg : systemMsgs) {
-        count += static_cast<size_t>(extraTokensPerMessage) + countTokensForUtf8Str(msg);
+        count += static_cast<size_t>(extraTokensPerMessage) + tokenEstimator->estimateText(msg);
     }
-    for (const auto& item : messages) {
-        count += static_cast<size_t>(extraTokensPerMessage) + countTokensForUtf8Str(item.role)
-                 + countTokensForUtf8Str(item.content);
-        if (countThinking) {
-            count += countTokensForUtf8Str(item.reasoning_content);
-        }
-        for (const auto& tool : item.tool_calls) {
-            count += countTokensForUtf8Str(tool.id) + countTokensForUtf8Str(tool.name)
-                     + countTokensForUtf8Str(tool.arguments);
-        }
-        count += static_cast<size_t>(tokensPerImage * item.image_urls.size());
-        // 音视频附件同样按图片 token 估算 (各家 API 对多媒体计费粒度不一, 粗略按图片计)
-        count += static_cast<size_t>(tokensPerImage * item.audio_urls.size());
-        count += static_cast<size_t>(tokensPerImage * item.video_urls.size());
-    }
+    count += tokenEstimator->estimateMessages(messages, countThinking);
     return count;
+}
+
+asio::awaitable<size_t> SummarizationMiddlewareHandle::countTokensViaPoint(
+    std::string_view                          sessionId,
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      countThinking
+) {
+    if (featurePoints.countTokens == nullptr) {
+        co_return countTokens({}, messages, countThinking);
+    }
+    agentxx::feature::CountTokensRequest req;
+    req.messages      = messages;
+    req.kind          = "messages";
+    req.countThinking = countThinking;
+    if (auto ctx = agentContext.lock(); ctx != nullptr) {
+        req.model = ctx->getSessionCurrentModelName(sessionId);
+    }
+    auto result = co_await featurePoints.countTokens->ask(
+        req,
+        agentxx::feature::AskOptions{.sessionId = std::string{sessionId}}
+    );
+    if (!result.ok()) {
+        // 点不可用时不影响压缩流程: 回退同步快路径
+        co_return countTokens({}, messages, countThinking);
+    }
+    co_return static_cast<size_t>(std::max<int64_t>(result.value->tokens, 0));
+}
+
+asio::awaitable<std::string> SummarizationMiddlewareHandle::summarizeViaPoint(
+    std::string_view                          sessionId,
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      direct
+) {
+    if (featurePoints.summarize == nullptr) {
+        co_return co_await doSummarizeWithLLM(sessionId, messages, direct);
+    }
+    agentxx::feature::SummarizeRequest req;
+    req.sessionId        = std::string{sessionId};
+    req.messages         = messages;
+    req.maxSummaryTokens = static_cast<int64_t>(summaryMaxTokens);
+    req.manual           = direct;
+    if (auto ctx = agentContext.lock(); ctx != nullptr) {
+        req.model    = ctx->getSessionCurrentModelName(sessionId);
+        req.language = ctx->getLanguage(sessionId);
+    }
+    auto result = co_await featurePoints.summarize->ask(
+        req,
+        agentxx::feature::AskOptions{.sessionId = std::string{sessionId}}
+    );
+    if (!result.ok()) {
+        co_return std::string{};
+    }
+    co_return result.value->summary;
 }
 
 std::string SummarizationMiddlewareHandle::messagesToText(
@@ -839,7 +883,10 @@ asio::awaitable<void>
         }
     }
 
-    const auto countTokenUsage = countTokens({}, messages, enableCountThinking);
+    // 预算计算经功能点取 token 数: 插件提供的 tokenizer 在这里可见
+    // (TPS 显示的同步快路径不参与, 见 plan §8.1)
+    const auto countTokenUsage
+        = co_await countTokensViaPoint(in.ctx.thread_id, messages, enableCountThinking);
     const auto tokenUsage      = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
     // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
     if (session->contextStats) {
@@ -962,7 +1009,9 @@ asio::awaitable<void>
             cleanThinkingMessages(toSummarize);
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
-            auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/false);
+            /// - 经功能点取摘要文本: 插件 / FFI 宿主的实现可在这里替换核心压缩;
+            ///   编排 (提示消息 / 写回 / 兜底) 仍在本中间件
+            auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/false);
 
             enum class ReplaceAction {
                 None,
@@ -1037,11 +1086,13 @@ asio::awaitable<void>
         // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
         // 场景: system 本身很大, 或摘要超长 (截断后仍超), 压缩结果仍 >= 95% 上限;
         // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最终兜底
-        if (countTokens({}, compressedMessages, enableCountThinking)
-            >= modelContextMaxToken * 0.95) {
+        // - 与触发判定用同一个取数入口 (功能点), 避免两条口径混用
+        const size_t compressedTokens
+            = co_await countTokensViaPoint(sessionId, compressedMessages, enableCountThinking);
+        if (compressedTokens >= modelContextMaxToken * 0.95) {
             XX_LOGW(
                 "SummarizationMiddlewareHandle: 压缩后仍超限 ({}/{}), 降级硬截断兜底",
-                countTokens({}, compressedMessages, enableCountThinking),
+                compressedTokens,
                 modelContextMaxToken
             );
             compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
@@ -1163,7 +1214,7 @@ asio::awaitable<bool>
                                    std::chrono::system_clock::now().time_since_epoch()
         )
                                    .count());
-    const auto oldTokens = countTokens({}, messages, enableCountThinking);
+    const auto oldTokens = co_await countTokensViaPoint(sessionId, messages, enableCountThinking);
 
     // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
     agentxx::agent::ViewMessage vm = agentxx::agent::ViewMessage::makeText(
@@ -1202,7 +1253,8 @@ asio::awaitable<bool>
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
-        auto summary = co_await doSummarizeWithLLM(sessionId, toSummarize, /*direct=*/true);
+        // (经功能点取摘要文本: 编排仍在本中间件)
+        auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/true);
         if (!summary.empty()) {
             if (systemCount > 0) {
                 compressedMessages.push_back(messages[0]);
@@ -1236,7 +1288,8 @@ asio::awaitable<bool>
         compressedMessages = hardTruncate(messages, systemCount, modelContextMaxToken);
     }
 
-    const auto newTokens = countTokens({}, compressedMessages, enableCountThinking);
+    const auto newTokens
+        = co_await countTokensViaPoint(sessionId, compressedMessages, enableCountThinking);
     session->replaceMessages(std::move(compressedMessages));
     // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存兜底; 计划 STO-5 分级)
     session->persistNow("manual-compaction");

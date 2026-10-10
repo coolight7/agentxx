@@ -14,8 +14,10 @@
 #include "agentxx-test/core/test_feature_points.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/agent/context.h"
 #include "agentxx/feature/points.h"
 #include "agentxx/feature/registry.h"
+#include "agentxx/middlewares/summarization.h"
 #include "asio/this_coro.hpp"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/json.h"
@@ -914,6 +916,48 @@ asio::awaitable<void> test_plugin_points() {
     co_return;
 }
 
+/// 同步快路径与功能点取值必须是同一份实现 (一份规则, 两个入口)
+/// - 压缩中间件上的 `countTokens` / `countTokensForUtf8Str` 供 TPS 与内部裁剪同步调用;
+///   功能点 `agentxx.context.countTokens` 供预算计算与插件调用
+/// - 这条测试守住"估算规则只写一次": 两边结果必须相等
+asio::awaitable<void> test_sync_path_matches_point() {
+    auto ctx        = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->features   = std::make_shared<Registry>();
+
+    auto handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(ctx);
+    XX_TEST_EXPECT_TRUE(handle->points().countTokens != nullptr);
+    XX_TEST_EXPECT_TRUE(handle->points().summarize != nullptr);
+
+    std::vector<neograph::ChatMessage> messages;
+    messages.push_back(neograph::ChatMessage{.role = "user", .content = "hello world"});
+    messages.push_back(neograph::ChatMessage{.role = "assistant", .content = "你好，世界"});
+
+    const size_t syncCount = handle->countTokens({}, messages, false);
+    const size_t pointa    = co_await handle->countTokensViaPoint("s1", messages, false);
+    XX_TEST_EXPECT_EQ(syncCount, pointa);
+    // 纯文本估算同样一致
+    XX_TEST_EXPECT_EQ(
+        handle->countTokensForUtf8Str("hello world"),
+        static_cast<size_t>(handle->estimator()->estimateText("hello world"))
+    );
+
+    // 声明顺序: 注册表里两个核心点已存在, 且 token 估算可被外部调用
+    auto* point = ctx->features->find(std::string{agentxx::feature::points::kContextCountTokens});
+    XX_TEST_EXPECT_TRUE(point != nullptr);
+    if (point != nullptr) {
+        XX_TEST_EXPECT_TRUE(point->callable());
+        XX_TEST_EXPECT_EQ(point->origin(), std::string{"core"});
+    }
+    auto* summarizePoint
+        = ctx->features->find(std::string{agentxx::feature::points::kContextSummarize});
+    XX_TEST_EXPECT_TRUE(summarizePoint != nullptr);
+    if (summarizePoint != nullptr) {
+        XX_TEST_EXPECT_FALSE(summarizePoint->callable());
+    }
+    co_return;
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_feature_points_tests() {
@@ -929,6 +973,7 @@ asio::awaitable<TestResult> run_feature_points_tests() {
         co_await test_list_and_dev_mode();
         co_await test_context_count_tokens_point();
         co_await test_plugin_points();
+        co_await test_sync_path_matches_point();
     } catch (const std::exception& e) {
         TEST_FAIL << "feature_points suite exception: " << e.what() << std::endl;
         g_fp_failed++;

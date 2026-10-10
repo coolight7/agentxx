@@ -70,33 +70,36 @@ size_t TokenEstimator::estimateMessages(
 }
 
 std::string TokenEstimator::identityOf(const CountTokensRequest& req) const {
+    // 身份串: model | kind | fnv1a64(输入指纹)
+    // - 增量哈希 (不拼接临时大字符串): 整段上下文的消息可能有几百 KB,
+    //   拼接后再哈希会多一次大分配
     const std::string kind
         = req.kind.empty() ? (req.messages.empty() ? "text" : "messages") : req.kind;
-    std::string payload = req.text;
+    uint64_t hash = utilxx_base::hash::kFnv1a64OffsetBasis;
     if (!req.messages.empty()) {
-        // messages 形态: 按拼接后的文本哈希 (逐条角色 + 正文 + 工具调用)
-        payload.clear();
         for (const auto& msg : req.messages) {
-            payload.append(msg.role);
-            payload.push_back('\x1f');
-            payload.append(msg.content);
-            payload.push_back('\x1e');
+            hash = utilxx_base::hash::fnv1a64(msg.role, hash);
+            hash = utilxx_base::hash::fnv1a64("\x1f", hash);
+            hash = utilxx_base::hash::fnv1a64(msg.content, hash);
+            hash = utilxx_base::hash::fnv1a64("\x1e", hash);
             for (const auto& tool : msg.tool_calls) {
-                payload.append(tool.name);
-                payload.push_back('\x1d');
-                payload.append(tool.arguments);
-                payload.push_back('\x1e');
+                hash = utilxx_base::hash::fnv1a64(tool.name, hash);
+                hash = utilxx_base::hash::fnv1a64("\x1d", hash);
+                hash = utilxx_base::hash::fnv1a64(tool.arguments, hash);
+                hash = utilxx_base::hash::fnv1a64("\x1e", hash);
             }
         }
         if (req.countThinking) {
-            payload.append("\x1f?thinking");
+            hash = utilxx_base::hash::fnv1a64("\x1f?thinking", hash);
         }
+    } else {
+        hash = utilxx_base::hash::fnv1a64(req.text, hash);
     }
     return fmt::format(
         "{}|{}|{:016x}",
         req.model.empty() ? "-" : req.model,
         kind,
-        utilxx_base::hash::fnv1a64(payload)
+        hash
     );
 }
 
@@ -185,6 +188,7 @@ std::string Codec<SummarizeRequest>::toJson(const SummarizeRequest& req) {
     json["targetTokens"]     = req.targetTokens;
     json["maxSummaryTokens"] = req.maxSummaryTokens;
     json["language"]         = req.language;
+    json["manual"]           = req.manual;
     return json.dump();
 }
 
@@ -201,6 +205,7 @@ std::optional<SummarizeRequest> Codec<SummarizeRequest>::fromJson(std::string_vi
             req.targetTokens     = json.value<int64_t>("targetTokens", 0);
             req.maxSummaryTokens = json.value<int64_t>("maxSummaryTokens", 0);
             req.language         = json.value<std::string>("language", "");
+            req.manual           = json.value<bool>("manual", false);
             if (auto it = json.find("messages"); it != json.end() && it->is_array()) {
                 const auto neoJson = agentxx::util::toNeographJson(*it);
                 for (const auto& item : neoJson) {
@@ -250,21 +255,24 @@ std::optional<SummarizeValue> Codec<SummarizeValue>::fromJson(std::string_view t
 std::string summarizeIdentity(const SummarizeRequest& req) {
     // 身份只含"这次算哪一份输入": 会话 + 消息内容指纹 + 模型
     // (不含 targetTokens 这类策略参数; 要不同策略请显式给 identity 或 refresh)
-    std::string payload;
+    // - 增量哈希: 消息可能很大, 不拼接临时字符串
+    uint64_t hash = utilxx_base::hash::kFnv1a64OffsetBasis;
+    bool     hashedMessages = false;
     for (const auto& msg : req.messages) {
-        payload.append(msg.role);
-        payload.push_back('\x1f');
-        payload.append(msg.content);
-        payload.push_back('\x1e');
+        hashedMessages = true;
+        hash = utilxx_base::hash::fnv1a64(msg.role, hash);
+        hash = utilxx_base::hash::fnv1a64("\x1f", hash);
+        hash = utilxx_base::hash::fnv1a64(msg.content, hash);
+        hash = utilxx_base::hash::fnv1a64("\x1e", hash);
     }
-    if (payload.empty()) {
-        payload = req.sessionId;
+    if (!hashedMessages) {
+        hash = utilxx_base::hash::fnv1a64(req.sessionId, hash);
     }
     return fmt::format(
         "{}|{}|{:016x}",
         req.sessionId.empty() ? "-" : req.sessionId,
         req.model.empty() ? "-" : req.model,
-        utilxx_base::hash::fnv1a64(payload)
+        hash
     );
 }
 

@@ -129,6 +129,10 @@ struct SummarizeRequest {
     /// 摘要长度上限 (可选, 0 = 用实现内置值)
     int64_t maxSummaryTokens = 0;
     std::string language;
+    /// 手动触发 (agent 空闲时调用):
+    /// - true: 核心实现直接派生压缩子代理并等待完成, 不抛中断 (与轮次无关)
+    /// - false (默认): 轮次内自动触发, 核心实现走中断路径派生 (需要 AgentRunner 中断循环)
+    bool manual = false;
 };
 
 /// 上下文压缩的结果 (只有摘要文本; 写回会话由编排方做)
