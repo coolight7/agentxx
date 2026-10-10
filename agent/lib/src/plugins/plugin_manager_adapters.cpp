@@ -141,129 +141,6 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
 }
 
 // =====================================================================
-// PluginMiddlewareHandle
-// =====================================================================
-
-PluginMiddlewareHandle::PluginMiddlewareHandle(
-    std::string_view                            name,
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext,
-    std::shared_ptr<PluginInstance>             instance
-) :
-    BaseMiddlewareHandle(name, std::move(agentContext)),
-    instance_(instance) {}
-
-void PluginMiddlewareHandle::setHook(const AgentxxPluginHookSpec& spec) {
-    if (spec.point < 0 || spec.point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-        return;
-    }
-    auto& h  = hooks_[static_cast<size_t>(spec.point)];
-    h.start  = spec.hook_start;
-    h.cancel = spec.hook_cancel;
-    h.ud     = spec.user_data;
-    h.set    = spec.hook_start != nullptr;
-}
-
-void PluginMiddlewareHandle::clearHook(AgentxxPluginHookPoint point) {
-    if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-        return;
-    }
-    hooks_[static_cast<size_t>(point)] = HookEntry{};
-}
-
-static utilxx_base::Json
-    summarizeNodeInput(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in) {
-    utilxx_base::Json j;
-    j["sessionId"] = in.ctx.thread_id;
-    j["point"]     = static_cast<int>(point);
-    return j;
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::dispatch(
-    AgentxxPluginHookPoint            point,
-    const neograph::graph::NodeInput& in
-) {
-    if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-        co_return;
-    }
-    const auto& hook = hooks_[static_cast<size_t>(point)];
-    if (!hook.set || !hook.start) {
-        co_return;
-    }
-    auto inst = instance_.lock();
-    if (!inst || !inst->enabled) {
-        co_return;
-    }
-
-    auto inputJson = summarizeNodeInput(point, in).dump();
-    auto ex        = co_await asio::this_coro::executor;
-    auto instKeep  = inst;
-
-    plugin::OpDrive drive;
-    drive.start = [hook,
-                   instKeep,
-                   inputJson,
-                   point](const PluginxxOperatorNotify* notify, PluginxxString* err) -> void* {
-        auto inSv = agentxx::plugin::PluginStringView::from(inputJson.data(), inputJson.size());
-        return hook.start(hook.ud, point, &inSv, notify, err);
-    };
-    drive.cancel = [hook](void* op) {
-        if (hook.cancel) {
-            hook.cancel(hook.ud, op);
-        }
-    };
-
-    try {
-        co_await agentxx::util::awaitHostPluginOp(plugin::PluginOpAwaitArgs{
-            .inst        = inst,
-            .label       = fmt::format("hook#{}", static_cast<int>(point)),
-            .ex          = ex,
-            .cancelToken = nullptr,
-            .drive       = std::move(drive),
-        });
-    } catch (const std::exception& e) {
-        XX_LOGW(
-            "Plugin `{}` hook point={} failed: {}",
-            inst->name,
-            static_cast<int>(point),
-            e.what()
-        );
-    } catch (...) {
-        XX_LOGW("Plugin `{}` hook point={} unknown failure", inst->name, static_cast<int>(point));
-    }
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_AGENT_START, in);
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::
-    onAgentcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_AGENT_END, in);
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::onModelcallStartFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_MODEL_START, in);
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::onModelcallRunFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_MODEL_RUN, in);
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::
-    onModelcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_MODEL_END, in);
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::onToolcallStartFunc(neograph::graph::NodeInput& in) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_TOOL_START, in);
-}
-
-asio::awaitable<void> PluginMiddlewareHandle::
-    onToolcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    co_await dispatch(AGENTXX_PLUGIN_HOOK_TOOL_END, in);
-}
-
-// =====================================================================
 // 注册与事件方法
 // =====================================================================
 
@@ -506,73 +383,6 @@ int PluginManager::checkPermissionPaths(
     return 0;
 }
 
-int PluginManager::registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec) {
-    if (!inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
-        || !spec->hook_start) {
-        return -1;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW("Plugin `{}` registerHook rejected: instance is closing or disabled", inst->name);
-        return -1;
-    }
-    auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->middlewareHandleContext) {
-        return -1;
-    }
-    if (!inst->middleware) {
-        auto shared = inst->self.lock();
-        if (!shared) {
-            return -1;
-        }
-        inst->middleware = std::make_shared<PluginMiddlewareHandle>(
-            fmt::format("{}_middleware", inst->name),
-            agentContext_,
-            shared
-        );
-        ctx->middlewareHandleContext->handles.push_back(inst->middleware);
-    }
-    inst->middleware->setHook(*spec);
-
-    inst->hookRegistrations.erase(
-        std::remove_if(
-            inst->hookRegistrations.begin(),
-            inst->hookRegistrations.end(),
-            [spec](const PluginInstance::HookRegistration& h) {
-                return h.point == spec->point;
-            }
-        ),
-        inst->hookRegistrations.end()
-    );
-    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{
-        spec->point,
-        spec->hook_start,
-        spec->hook_cancel,
-        spec->user_data
-    });
-    return 0;
-}
-
-int PluginManager::unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint point) {
-    if (!inst || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-        return -1;
-    }
-    auto it = std::find_if(
-        inst->hookRegistrations.begin(),
-        inst->hookRegistrations.end(),
-        [point](const PluginInstance::HookRegistration& h) {
-            return h.point == point;
-        }
-    );
-    if (it == inst->hookRegistrations.end()) {
-        return -1;
-    }
-    inst->hookRegistrations.erase(it);
-    if (inst->middleware) {
-        inst->middleware->clearHook(point);
-    }
-    return 0;
-}
-
 // =====================================================================
 // 执行图节点类型注册 + 图定义读写 (插件 graph 接口表)
 // =====================================================================
@@ -803,7 +613,7 @@ void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
 PluginManager::RegistrationInventory
     PluginManager::registrationInventory(const PluginInstance& inst) const {
     // 只统计"当前生效"的注册 (禁用/卸载后实例仍保留注册记录, 但那些记录不在
-    // 宿主侧生效: 工具已被摘出注册表、钩子中间件已从链上移除、图节点 slot 已失效)。
+    // 宿主侧生效: 工具已被摘出注册表、钩子处理器已从注册表移除、图节点 slot 已失效)。
     // 因此每一项都按"生效事实"取数, 而不是按记录条数。
     RegistrationInventory out;
     for (const auto& name : inst.toolNames) {
@@ -813,23 +623,8 @@ PluginManager::RegistrationInventory
     }
     out.permissionTools    = inst.permissionToolNames.size();
     out.eventSubscriptions = inst.subscriptions.size();
-
-    bool middlewareAttached = false;
-    if (auto ctx = agentContext_.lock()) {
-        if (ctx->middlewareHandleContext && inst.middleware) {
-            const auto& handles = ctx->middlewareHandleContext->handles;
-            middlewareAttached  = std::any_of(
-                handles.begin(),
-                handles.end(),
-                [&inst](const std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>& h) {
-                    return h.get() == inst.middleware.get();
-                }
-            );
-        }
-    }
-    out.middlewareAttached = middlewareAttached;
-    // 钩子挂在中间件上: 中间件不在链上 = 钩子不生效
-    out.hooks = middlewareAttached ? inst.hookRegistrations.size() : size_t{0};
+    // 钩子: 注册表里属于本实例的处理器条数 (禁用/卸载后为 0)
+    out.hooks = liveHookHandlersOf(inst);
 
     for (const auto& graph : inst.graphNodeTypes) {
         if (graph.slot && graph.slot->snapshot().active) {

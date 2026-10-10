@@ -6,3 +6,6 @@ interfaces:
   require:
     - agentxx.agent.core
     - agentxx.agent.feature
+  # 有序钩子登记属可选能力: 老宿主没有这张表, 插件降级为不登记 (加载照常成功)
+  optional:
+    - agentxx.agent.hooks_ex

@@ -1,7 +1,7 @@
 # 插件共享功能（功能点统一）— 实施记录
 
 > 方案文档: [plan.md](plan.md)（7 个阶段，每阶段一个提交）
-> 状态: **实施中** — 阶段 1~4 已完成
+> 状态: **实施中** — 阶段 1~5 已完成
 
 ## 阶段进度总览
 
@@ -11,7 +11,7 @@
 | 2 | 第一批核心点迁移（`countTokens` / `summarize`，行为不变） | ✅ 已完成 |
 | 3 | C ABI 接口表 + kit（插件登记实现） | ✅ 已完成 |
 | 4 | 对外开放调用与插件自定义点 | ✅ 已完成 |
-| 5 | 钩子处理器清单与优先级 | ⬜ 待开始 |
+| 5 | 钩子处理器清单与优先级 | ✅ 已完成 |
 | 6 | 命令行与 FFI 接入 | ⬜ 待开始 |
 | 7 | 第二批点与文档收尾 | ⬜ 待开始 |
 
@@ -323,9 +323,158 @@ agentxx_test boundaries observability plugin_bridge feature_points plugin_cleanu
    由点的 `argsDoc` 说明、实现自己判断 —— 否则插件点想收数组参数会被框架拦住。
 2. **`bad_args` 与 `not_callable` 的顺序**：先判参数（`bad_args`）再判可调性
    （`not_callable`）—— 参数错是调用方最该先看到的问题。
-3. **阶段 5（钩子清单与优先级）尚独立未做**：`register_hook_ex` / `list_hooks` /
-   单一派发器 + `plugin_hooks` 测试模块；与功能点体系共用"默认优先级带 + 越界裁剪 +
-   不设数量上限 + 开发者模式记录"这套口径。
+3. **阶段 5（钩子清单与优先级）已完成** —— 见下方"阶段 5"章节；接口表新增一张
+   （`agentxx.agent.hooks_ex`，agent 侧 20 → 21 张）。
 4. **阶段 6（命令行 / FFI 接入）**：`feature` 子命令与 FFI 导出会走本阶段确立的
    `call()` 入口（按 JSON 请求解码），届时 `bad_args` / `not_callable` / 超时
    这些错误码会直接在命令行输出里出现。
+5. **钩子清单也可作为排障入口**：`PluginManager::hooksJson()` / `handlersOf(point)`
+   与 `list_feature_points` 同一层级，阶段 6 接命令行时可一并暴露
+   （`--dump-diagnostics` 现在已经包含它）。
+
+---
+
+## 阶段 5：钩子处理器清单与优先级（已完成）
+
+> 方案文档 §6（设计 D，586-684 行）+ §15 阶段 5（1320-1329 行）。
+> 本轮**不改钩子语义**（载荷仍是 `{sessionId, point}`、结果仍丢弃、仍是 7 个固定点），
+> 只补两件"能读、能排"的事。
+
+### 与方案的一处偏离（重要）
+
+方案 §6.2 主张在 `AgentxxPluginHooksIface` 表尾追加三项（`register_hook_ex` /
+`unregister_hook_ex` / `list_hooks`），靠 `struct_size` 守卫兼容老插件。**这条在本仓库行不通**：
+
+- SDK 的接口表校验是 `version != 1 || struct_size < sizeof(Iface)` 即**整表判为不可用**
+  （`pluginxx/kit/kit.h` 的 `validateInterface`）；
+- 表尾追加成员后，新插件编译出的 `sizeof(AgentxxPluginHooksIface)` 变大，老宿主返回的
+  `struct_size` 更小 → `queryInterface` 返回 nullptr → 新插件在**老宿主上连基础的
+  `register_hook` 一起丢掉**（能力"越用越少"）；
+- 仓库已有明文约定：**新增能力一律走"新接口表或新能力名"，不在表尾追加成员**
+  （`docs/zh-cn/design/plugins.md` §9 "版本约定" 与 `client_plugin_api.h` 的同类注释）。
+
+**实际做法**：基础表 `agentxx.agent.hooks`（2 项）结构一字未动，扩展能力放进**新接口表**
+`agentxx.agent.hooks_ex` v1（3 项）。插件把新表当可选能力：查不到就退回 `hook()`。
+四个"接口表数量"位置由 20 同步为 21（`kInterfaceTableCount` / `plugins.md` §8 /
+根 `AGENTS.md` / `boundaries` 规则 8+10）。
+
+### 已完成内容
+
+**C ABI / SDK**
+
+- `agentxx/plugin/api/plugin_api.h`：
+  - `AgentxxPluginHookSpecEx`（`struct_size` / `point` / `priority` / `flags` /
+    `owner_tag` / `depict` / `hook_start` / `hook_cancel` / `user_data`）；
+  - 新表 `AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX = "agentxx.agent.hooks_ex"` v1：
+    `register_hook_ex`（出参句柄）/ `unregister_hook_ex`（按句柄）/ `list_hooks`（清单 JSON）；
+    表头注释写清"为什么不并在基础表里"。
+- `agentxx/plugin/plugin_interfaces.h`：`plugin_interfaces::AgentHooksEx`（并说明它是
+  **可选能力**：只用到基础两项的插件应声明 `AgentHooks`，否则会在只支持基础钩子的老宿主上
+  被跳过加载）。
+- `plugin_kit.h`：
+  - `AgentIfaces::hooksEx`（一次查询，老宿主为 NULL）；
+  - 把钩子执行体（`hookStart` / `hookCancel` 模板，含同步 void 与 `Task<T>` 两种形态、
+    `RootRequest` 拥有型输入、`HookJob` 回收）抽成 `detail::` 共享模板 —— 基础 `hook()`
+    与新增 `hookEx()` 只差"交给哪张表"，执行体只有一份；
+  - 新增 `HookOptions{priority, ownerTag, depict}`、`hookEx()`（返回句柄，`0` = 宿主不支持
+    或拒绝）、`unhookEx()`、`listHooks()`。
+
+**宿主实现（新文件 `agent/lib/src/plugins/plugin_manager_hooks.cpp`）**
+
+- **注册表**：`PluginManager::hookHandlers_`（`{句柄, 点, 优先级, 登记序号, 层, 归属,
+  ownerTag, depict, load, 实例, 执行体}`），顺序 = `plugin` 层按 `(priority 升序, 登记序号)`
+  → `core` 层同规则；`priority` 复用功能点的 `kPriorityMin/kPriorityMax`（±100000）裁剪并记警告；
+  处理器数量不设上限。
+- **单派发器** `PluginHookDispatchHandle`（中间件名 `plugin_hooks`）：首次登记时插入中间件链，
+  没有处理器时移除（轮次执行中先置 `disabled` 跳过，轮末经 `flushPendingCleanup` 摘除 ——
+  与旧的"每插件一个中间件句柄"同一套安全路径）。旧的按插件派发完全移除。
+- **派发** `dispatchHook()`：开始派发时取一次排序快照（派发中登记/撤销不影响本次），
+  逐个处理器执行前仍复核实例是否启用；插件层走操作协议（`awaitHostPluginOp`，失败只记日志），
+  core 层在 io 线程同步调用（给一个"什么都不做"的完成通知器，返回操作句柄的按"core 层只支持
+  同步处理器"记警告并请求取消）。
+- **登记入口**：`registerHook`（覆盖式，`priority` = 插件默认带 0）/`unregisterHook`（按点，
+  只影响基础登记）/`registerHookEx`（多处理器 + 句柄，带 `struct_size` 守卫）/
+  `unregisterHookEx`（按句柄，校验归属）/`addCoreHookHandler`/`removeCoreHookHandler`。
+- **清单** `hooksJson()`：`{devMode, count:7, handlers:N, points:[{point,name,count,handlers[]}]}`
+  （7 个点都在，`stat` 段只在开发者模式出现）；`handlersOf(point)` 给 C++ 侧排序视图。
+- **实例记录**：`PluginInstance::HookRegistration` 改成 `{point, handle, base}`
+  （基础/扩展共用一份记录，`handle = 0` 表示已摘除），旧的函数指针与 `middleware` 字段删除。
+- **生命周期**：`detachDomainRegistrations` 调 `detachHookHandlers`（摘注册表、记录留、句柄置 0）；
+  `clearDomainRegistrations` 清记录；`detachDomainOwnedResources` 不再管理中间件句柄
+  （派发器是宿主级单例）；`RegistrationInventory::middlewareAttached` 删除，
+  `hooks` 改为"注册表里该实例的条数"，`PluginListView` 加 `hookPriorities`。
+
+**接线与可观测性**
+
+- `plugin_manager_vtable.cpp`：3 个 trampoline + `g_ifaceHooksEx` + `query_interface` 分支。
+- `assembly_snapshot.cpp`：插件行加 `hook_priorities`；运行侧新增 `hooks` 段；
+  文本渲染加插件行 `prio=[...]` 与 `hookHandlers[N] devMode=…:` 段
+  （`点 (n): owner#handle[prio=…] -> … dispatches=… lastMs=… lastOrder=…`）。
+- `plugin_manager.h`：`kInterfaceTableCount` 20 → 21（10 通用 + 11 领域）。
+- 示例插件 `example_feature` 加一段 `hookEx` 用法（优先级 -10、`ownerTag`/`depict`，
+  并注明老宿主降级路径）；`plugin.yaml` 把 `agentxx.agent.hooks_ex` 声明为 `optional`。
+
+**文档**
+
+- `docs/zh-cn/design/plugins.md`：§8 数量 20 → 21、架构图标注、新增
+  `agentxx.agent.hooks_ex` 行。
+- 根 `AGENTS.md`：接口表数量 21 + 新增"钩子处理器清单与优先级 (2026-10)"一节。
+
+**测试**
+
+- 新模块 `plugin_hooks`（`agent/test/plugin/test_plugin_hooks.cpp` +
+  `include/agentxx-test/plugin/test_plugin_hooks.h`，`test.cpp` 注册；**156 项断言**）：
+  1. 顺序：`plugin` 层按 `(priority, 登记序号)`、同优先级按登记顺序、`core` 层恒在后
+     （负数优先级也越不过层）；
+  2. 一个点多个处理器 + 按句柄精确撤销 + 别人的句柄被拒；
+  3. 基础登记覆盖式、与扩展登记互相独立（撤基础不动扩展）；
+  4. `priority` 越界裁剪到上下限（不拒绝登记）；
+  5. 单派发器挂载/停用/摘除三态（含轮次中先停用、轮末 flush）；
+  6. 实际派发顺序（插件层 → core 层）、单个处理器抛异常或返回操作句柄都不影响后续；
+  7. 清单字段（`layer/owner/ownerTag/depict/priority/seq/enabled/load`）与
+     开发者模式对 `stat` 段的开关；
+  8. 禁用摘除 / 启用重登记 / 卸载回基线；
+  9. 插件面：kit 的 `hookEx` / `listHooks` / `unhookEx` 经真实宿主视图走一遍。
+- `test_plugins` 第 5/7/8/24 节与 DSO 回滚用例改写为新语义（按注册表与 `plugin_hooks`
+  句柄断言）；`test_plugin_cleanup` 去掉 `middlewareAttached` 断言。
+- `assembly_snapshot`（+11：`hooks` 段 7 点 / 空处理器 / 渲染行）、
+  `observability`（+1：诊断包含 `hookHandlers[`）。
+
+### 验证结果
+
+- 主验证：`agentxx_test plugin_hooks plugin_runtime plugin_cleanup plugin_multi_instance
+  boundaries` → **1016 通过 / 0 失败**（`plugin_hooks` 首跑 152 项，补 core 异步用例后 156）。
+- 钩子相关回归：`plugins`(551) + `plugin_bridge`(193) + `plugin_sdk`(115) +
+  `plugin_feature`(132) + `plugin_resources`(89) + `client_plugins`(657) +
+  `assembly_snapshot`(37) + `assembly_snapshot_io`(41) + `observability`(100) +
+  `config_keys`(163) → **2078 通过 / 0 失败**。
+- 宽回归：`agent`(198) + `summarization`(462) + `shutdown_stages`(17) +
+  `session_admin`(38) + `session_sync`(30) + `prompt_stability_io`(38) +
+  `race_guards`(68) + `cancel`(45) + `toolcall_parallel`(48) + `checkpoint_store`(52) +
+  `usage_ledger`(21) + `memgrowth`(15) + `feature_points`(134) + `config_validation`(47) →
+  **1554 通过 / 0 失败**（`agent` 与 `memgrowth` 各要 2~3 分钟，与钩子无关，只是确认没被牵连）。
+- 清单人工核对（临时断言，校验后已删）：`hookHandlers[2] devMode=yes:
+  AGENT_START (2): plugin:example_feature#2[prio=-20] -> plugin:example_feature#1[prio=-10]
+  dispatches=1 lastMs=1 lastOrder=plugin:example_feature#2, plugin:example_feature#1`。
+
+### 注意事项 / 留给后续阶段
+
+1. **规范偏离已落地并写成注释**：新能力走新接口表（不用表尾追加 + `struct_size` 守卫）。
+   后续要给已有表加能力时照此处理；`struct_size` 守卫只在"入参结构体"上用
+   （`AgentxxPluginHookSpecEx` 自己带了，非 0 且过小时拒绝登记）。
+2. **core 层处理器只支持同步**：`addCoreHookHandler` 是库内自用入口，派发时不走操作协议
+   （给一个空实现的完成通知器）；返回操作句柄会被记警告并请求取消。库内当前无使用者 ——
+   将来真要用异步 core 处理器，需要像插件层那样接 `OpCore` 驱动。
+3. **`hooksJson()` 的线程约定**：读注册表当前状态，应在宿主 io 线程调用（`list_hooks`
+   入口已由 vtable 投递；装配快照与诊断也在同一生命周期阶段取数）。装配快照若哪天改到
+   别的线程构建，需要给注册表加锁或改成快照缓存。
+4. **清单只是只读视图**：不参与派发判定（派发只看注册表当前状态，且每次派发取一次快照）。
+5. **顺序调整 = 重新登记**：没有"运行时改优先级"的接口（
+   `unregister_hook_ex` + `register_hook_ex`），与方案 §6.5 一致。
+6. **`example_feature` 现在同时示范功能点与有序钩子**：如果后续想拆成两个示例插件
+   （一个只讲功能点、一个只讲钩子）更清晰，注意 `plugin.yaml` 的 `interfaces.require`
+   别把 `hooks_ex` 写成 require（老宿主会整插件跳过加载）。
+7. **阶段 6 待做**：命令行 / FFI 接入（`feature` 子命令 + FFI 导出 + wire 消息 +
+   `ffi_symbols.map` + ffi.md + Dart 绑定）；钩子清单可顺带在同一入口暴露。
+8. **阶段 7 待做**：第二批功能点、`docs/zh-cn/design/feature-points.md`、
+   插件作者文档补"钩子优先级与默认带 / 超时口径 / `provide` 写法"。

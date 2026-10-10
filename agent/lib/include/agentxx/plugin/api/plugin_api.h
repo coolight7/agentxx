@@ -15,7 +15,8 @@
 /// - 与宿主领域无关的基座与通用表: `pluginxx/api/abi.h` / `pluginxx/api/tables.h`
 ///   (本头已包含, 插件源码只需包含本头即可拿到全部声明)
 /// - **本头只声明 agent 领域表**: 工具 (agentxx.agent.tools)、工具权限声明
-///   (agentxx.agent.permission)、中间件钩子 (agentxx.agent.hooks)、会话访问
+///   (agentxx.agent.permission)、中间件钩子 (agentxx.agent.hooks) 与钩子有序登记
+///   (agentxx.agent.hooks_ex)、会话访问
 ///   (agentxx.agent.session)、主模型配置 (agentxx.agent.model)、宿主提示词读写
 ///   (agentxx.agent.prompt)、会话资源贡献 (agentxx.agent.resources)、执行图
 ///   (agentxx.agent.graph)
@@ -114,6 +115,38 @@ typedef struct AgentxxPluginHookSpec {
     void(PLUGINXX_CALL* hook_cancel)(void* user_data, void* op); ///< 可为 NULL
     void* user_data;
 } AgentxxPluginHookSpec;
+
+/// 钩子处理器登记选项 (有序登记: 同一实例同一个点可以登记多个处理器)
+///
+/// 与 [AgentxxPluginHookSpec] 的区别: 多了层内顺序 ([priority]) 与展示信息
+/// ([owner_tag] / [depict]), 且**不覆盖**同点已有处理器 —— 每次登记都得到一个
+/// 独立句柄, 经 [AgentxxPluginHooksExIface::unregister_hook_ex] 精确撤销。
+typedef struct AgentxxPluginHookSpecEx {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginHookSpecEx); 0 = 按当前布局
+    int32_t  point;       ///< AgentxxPluginHookPoint
+    /// 层内顺序, 小者先 (默认 0 = 按登记顺序 = 插件装载顺序)
+    /// - 越界裁剪到宿主允许范围并记一条警告, 不拒绝登记
+    int32_t priority;
+    int32_t flags; ///< 预留 (本轮无定义标志, 传 0)
+    /// 展示归属标签 (可空; 清单里显示, 便于看出"这是谁的处理器")
+    PluginxxStringView owner_tag;
+    /// 一句话说明 (可空; 清单里显示)
+    PluginxxStringView depict;
+
+    /// 执行体 (语义与 [AgentxxPluginHookSpec::hook_start] 完全一致):
+    /// - 宿主 io 线程调用; 结果被丢弃 (钩子只用于通知)
+    /// - 快同步: 算完 → notify->done(PLUGINXX_OPERATOR_OK, NULL) → 返回 NULL
+    /// - 锚定协程/自管异步: 创建或挂起任务 → 返回 op 句柄
+    void*(PLUGINXX_CALL* hook_start)(
+        void*                         user_data,
+        int32_t                       point,
+        const PluginxxStringView*     node_input_json,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    );
+    void(PLUGINXX_CALL* hook_cancel)(void* user_data, void* op); ///< 可为 NULL
+    void* user_data;
+} AgentxxPluginHookSpecEx;
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
@@ -259,6 +292,52 @@ typedef struct AgentxxPluginHooksIface {
     );
     int32_t(PLUGINXX_CALL* unregister_hook)(const PluginxxHost* host, int32_t point);
 } AgentxxPluginHooksIface;
+
+/* ==================== 接口表: 钩子有序登记与清单 (agentxx.agent.hooks_ex) ==================== */
+
+/// 钩子注册表的扩展项 (基础两项见 [AgentxxPluginHooksIface])
+///
+/// 钩子 (7 个固定点) 是"核心在某一步通知所有关心的人"的机制: 载荷仍是
+/// `{sessionId, point}`、结果仍被丢弃、仍是 7 个点。本表只补两件"能读、能排"的事:
+/// 1. **有序登记**: 同一实例在同一个点可以登记任意多个处理器 (基础表一个点只能一个),
+///    每个处理器给一个句柄, 顺序 = `plugin` 层 (插件 / FFI 宿主) 按 (priority 升序,
+///    登记序号), 其后是 `core` 层;
+/// 2. **清单**: 读出"这个点上有哪些处理器、谁的、什么顺序"。
+///
+/// 登记语义:
+/// - 不声明 `priority` (= 0) 时顺序就是登记顺序 (插件装载顺序) —— 与基础登记一致;
+/// - 处理器数量不设上限 (一个点可以登记任意多个);
+/// - 处理器跟着实例走: 插件禁用 → 不生效 (派发时跳过), 卸载 → 全部摘除,
+///   重新启用时由插件 `start` 重新登记。
+///
+/// 为什么单列一张表而不是在 [AgentxxPluginHooksIface] 表尾追加成员: 表尾追加会让
+/// 新插件在老宿主上**整表校验失败** (SDK 校验为 `struct_size >= sizeof(表结构)`),
+/// 连基础的 `register_hook` 一起丢掉。新能力一律走新接口表 (见
+/// docs/zh-cn/design/plugins.md §9), 插件应把本表当可选能力: 查询不到时降级用基础两项。
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX         "agentxx.agent.hooks_ex"
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION 1
+
+typedef struct AgentxxPluginHooksExIface {
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION
+    uint32_t struct_size;
+
+    /// 登记一个钩子处理器 (同一实例同一个点可登记任意多个, 各自句柄)
+    /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记);
+    /// - 拒绝的情形只有: `point` 越界 / `hook_start` 为空 / 实例正在关闭或已禁用
+    ///
+    /// `return`: 0 成功 (`*out_handle` 收到句柄, 之后凭它精确撤销); 非 0 失败
+    int32_t(PLUGINXX_CALL* register_hook_ex)(
+        const PluginxxHost*            host,
+        const AgentxxPluginHookSpecEx* spec,
+        int64_t*                       out_handle
+    );
+    /// 撤销本实例登记的一个处理器 (按句柄; 别人的句柄会被拒绝)
+    ///
+    /// `return`: 0 成功; 非 0 失败 (句柄不存在 / 不属于本实例)
+    int32_t(PLUGINXX_CALL* unregister_hook_ex)(const PluginxxHost* host, int64_t handle);
+    /// 处理器清单 JSON (host->alloc; 形状见 docs/zh-cn/design/plugins.md §8)
+    int32_t(PLUGINXX_CALL* list_hooks)(const PluginxxHost* host, PluginxxString* out_json);
+} AgentxxPluginHooksExIface;
 
 /* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
 

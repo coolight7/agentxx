@@ -110,6 +110,12 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
         item["tools"]               = v.tools;
         item["tool_count"]          = v.tools.size();
         item["hook_count"]          = v.hookCount;
+        // 钩子处理器的生效优先级 (按派发顺序; 一眼看出谁先跑)
+        utilxx_base::Json hookPriorities = utilxx_base::Json::array();
+        for (const auto priority : v.hookPriorities) {
+            hookPriorities.push_back(priority);
+        }
+        item["hook_priorities"] = std::move(hookPriorities);
         item["graph_node_count"]    = v.graphNodeCount;
         item["event_sub_count"]     = v.eventSubCount;
         item["capability_count"]    = v.capabilities.size();
@@ -402,6 +408,17 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         root["feature_points"]  = std::move(empty);
     }
 
+    // ---- 钩子处理器 (清单: 各点处理器与顺序; 只读快照 —— 派发只看注册表当前状态) ----
+    utilxx_base::Json hooksJson = utilxx_base::Json::object();
+    if (ctx.pluginManager) {
+        try {
+            hooksJson = utilxx_base::Json::parse(ctx.pluginManager->hooksJson());
+        } catch (const std::exception&) {
+            hooksJson = utilxx_base::Json::object();
+        }
+    }
+    root["hooks"] = std::move(hooksJson);
+
     // ---- 已加载组件 (skill / memory / mcp) 与加载失败项 ----
     utilxx_base::Json components  = utilxx_base::Json::object();
     components["skills"]          = ctx.appendComponentInfo.skills;
@@ -447,6 +464,26 @@ utilxx_base::Json mergeAssemblySnapshot(
 std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapshot) {
     std::vector<std::string> lines;
     auto                     add = [&lines](std::string text) { lines.push_back(std::move(text)); };
+
+    /// 插件行的钩子优先级片段 (` prio=[0,-10]`; 该插件没有处理器时为空)
+    auto hookPrioritiesText = [](const utilxx_base::Json& pluginItem) -> std::string {
+        if (!pluginItem.contains("hook_priorities") || !pluginItem["hook_priorities"].is_array()) {
+            return {};
+        }
+        const auto& values = pluginItem["hook_priorities"];
+        if (values.empty()) {
+            return {};
+        }
+        std::string out = " prio=[";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) {
+                out += ",";
+            }
+            out += std::to_string(values[i].get<int>());
+        }
+        out += "]";
+        return out;
+    };
 
     // ---- 配置侧 ----
     if (snapshot.contains("model") && snapshot["model"].is_object()) {
@@ -574,7 +611,7 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             }
             add(fmt::format(
                 "  - {} v{} [{}] load={}ms tools={} hooks={} graphNodes={} events={} caps={} "
-                "permTools={} features={}/{}",
+                "permTools={} features={}/{}{}",
                 p.value("name", std::string{}),
                 p.value("version", std::string{}),
                 state,
@@ -586,7 +623,8 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
                 p.value("capability_count", 0),
                 p.value("permission_tools", 0),
                 p.value("feature_point_count", 0),
-                p.value("feature_impl_count", 0)
+                p.value("feature_impl_count", 0),
+                hookPrioritiesText(p)
             ));
         }
     }
@@ -621,6 +659,60 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
                 cacheMode,
                 p.value("callable", false) ? "yes" : "no",
                 disabledBy.empty() ? std::string{} : fmt::format(" disabledBy={}", disabledBy)
+            ));
+        }
+    }
+    // 钩子处理器: 各点上有哪些处理器、谁排在前面 (排障时与 featurePoints 一起看)
+    if (snapshot.contains("hooks") && snapshot["hooks"].is_object()) {
+        const auto& section  = snapshot["hooks"];
+        const auto& points   = section.contains("points") && section["points"].is_array()
+                                   ? section["points"]
+                                   : utilxx_base::Json::array();
+        const auto  devMode  = section.value("devMode", false);
+        add(fmt::format(
+            "hookHandlers[{}] devMode={}:",
+            section.value("handlers", 0),
+            devMode ? "yes" : "no"
+        ));
+        for (const auto& p : points) {
+            if (!p.is_object()) {
+                continue;
+            }
+            const auto& handlers = p.contains("handlers") && p["handlers"].is_array()
+                                       ? p["handlers"]
+                                       : utilxx_base::Json::array();
+            if (handlers.empty()) {
+                continue; // 空点不占行
+            }
+            std::string order;
+            for (const auto& h : handlers) {
+                if (!order.empty()) {
+                    order += " -> ";
+                }
+                order += fmt::format(
+                    "{}#{}[prio={}{}]",
+                    h.value("owner", std::string{}),
+                    h.value("handle", 0),
+                    h.value("priority", 0),
+                    h.value("enabled", true) ? "" : ",disabled"
+                );
+            }
+            std::string statText;
+            if (devMode && p.contains("stat") && p["stat"].is_object()) {
+                const auto& stat = p["stat"];
+                statText         = fmt::format(
+                    " dispatches={} lastMs={} lastOrder={}",
+                    stat.value("dispatches", 0),
+                    stat.value("lastMs", 0),
+                    stat.value("lastOrder", std::string{"-"})
+                );
+            }
+            add(fmt::format(
+                "  - {} ({}): {}{}",
+                p.value("name", std::string{}),
+                p.value("count", 0),
+                order,
+                statText
             ));
         }
     }

@@ -194,7 +194,7 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     TEST_INFO << "[plugin_cleanup] example_plugin inventory: tools=" << inv.tools
               << " hooks=" << inv.hooks << " events=" << inv.eventSubscriptions
               << " caps=" << inv.capabilities << " promptKeys=" << inv.promptKeys
-              << " middleware=" << inv.middlewareAttached << " total=" << inv.total() << std::endl;
+              << " total=" << inv.total() << std::endl;
     XX_TEST_EXPECT_GE(inv.tools, size_t{5}); // echo / caller / sleep / bridge / polled_timer
     XX_TEST_EXPECT_EQ(inv.hooks, size_t{1});
     XX_TEST_EXPECT_GE(inv.eventSubscriptions, size_t{2});
@@ -206,7 +206,6 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     XX_TEST_EXPECT_EQ(inv.skillDirs, size_t{0});
     XX_TEST_EXPECT_EQ(inv.memoryFiles, size_t{0});
     XX_TEST_EXPECT_EQ(inv.mcpNamespaces, size_t{0});
-    XX_TEST_EXPECT_TRUE(inv.middlewareAttached);
     XX_TEST_EXPECT_FALSE(inv.ownsGraphDefinition);
     XX_TEST_EXPECT_GE(inv.promptKeys, size_t{1}); // toolPrompt.example_echo
     XX_TEST_EXPECT_GE(inv.total(), size_t{10});
@@ -243,7 +242,6 @@ asio::awaitable<void> test_registration_inventory_baseline() {
         XX_TEST_EXPECT_EQ(disabled.promptKeys, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.featurePoints, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.featureImpls, size_t{0});
-        XX_TEST_EXPECT_FALSE(disabled.middlewareAttached);
         XX_TEST_EXPECT_EQ(disabled.total(), size_t{0}); ///< 回到基线
     }
 
@@ -267,7 +265,6 @@ asio::awaitable<void> test_registration_inventory_baseline() {
         XX_TEST_EXPECT_EQ(enabled.hooks, inv.hooks);
         XX_TEST_EXPECT_GE(enabled.eventSubscriptions, size_t{2});
         XX_TEST_EXPECT_GE(enabled.capabilities, inv.capabilities);
-        XX_TEST_EXPECT_TRUE(enabled.middlewareAttached);
         XX_TEST_EXPECT_GE(enabled.total(), size_t{9});
     }
 

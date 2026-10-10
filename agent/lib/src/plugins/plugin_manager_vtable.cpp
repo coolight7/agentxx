@@ -305,6 +305,49 @@ static int32_t PLUGINXX_CALL xx_unregister_hook(const PluginxxHost* host, int32_
     });
 }
 
+// ==================== 钩子有序登记与清单 (agentxx.agent.hooks_ex) ====================
+
+static int32_t PLUGINXX_CALL xx_register_hook_ex(
+    const PluginxxHost*            host,
+    const AgentxxPluginHookSpecEx* spec,
+    int64_t*                       out_handle
+) {
+    if (spec == nullptr || out_handle == nullptr) {
+        return -1;
+    }
+    *out_handle = 0;
+    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+        auto call = enterHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
+            || !spec->hook_start) {
+            return -1;
+        }
+        auto                   mgrPtr   = mgr;
+        auto                   instPtr  = inst;
+        AgentxxPluginHookSpecEx specCopy = *spec;
+        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, out_handle]() {
+            return mgrPtr->registerHookEx(instPtr, &specCopy, out_handle);
+        });
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_unregister_hook_ex(const PluginxxHost* host, int64_t handle) {
+    if (handle <= 0) {
+        return -1;
+    }
+    return onInstanceIo(host, [handle](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->unregisterHookEx(inst, handle);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_list_hooks(const PluginxxHost* host, PluginxxString* out) {
+    return queryStringIo(host, out, [](PluginInstance*, PluginManager* mgr) {
+        return mgr->hooksJson();
+    });
+}
+
 static int32_t PLUGINXX_CALL xx_get_share_store(
     const PluginxxHost*       host,
     const PluginxxStringView* session_id,
@@ -737,6 +780,14 @@ static const AgentxxPluginHooksIface g_ifaceHooks = {
     /* unregister_hook */ xx_unregister_hook,
 };
 
+static const AgentxxPluginHooksExIface g_ifaceHooksEx = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginHooksExIface),
+    /* register_hook_ex */ xx_register_hook_ex,
+    /* unregister_hook_ex */ xx_unregister_hook_ex,
+    /* list_hooks */ xx_list_hooks,
+};
+
 static const AgentxxPluginSessionIface g_ifaceSession = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION,
     /* struct_size */ sizeof(AgentxxPluginSessionIface),
@@ -826,6 +877,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
         return &g_ifaceHooks;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX) {
+        return &g_ifaceHooksEx;
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;

@@ -94,32 +94,17 @@ PluginManager::~PluginManager() {
 
 void PluginManager::flushPendingCleanup() {
     for (auto& item : pendingCleanups_) {
-        if (auto mw = item.mw.lock()) {
-            eraseMiddleware(mw.get());
+        auto handle = item.handle.lock();
+        if (!handle) {
+            continue;
+        }
+        eraseHookDispatch(handle.get());
+        // 排队摘除的句柄就是当前派发器时一并释放 (没有处理器才会排队, 这里再确认一次)
+        if (hookHandlers_.empty() && hookDispatch_.get() == handle.get()) {
+            hookDispatch_ = nullptr;
         }
     }
     pendingCleanups_.clear();
-}
-
-void PluginManager::eraseMiddleware(PluginMiddlewareHandle* mw) {
-    if (!mw) {
-        return;
-    }
-    auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->middlewareHandleContext) {
-        return;
-    }
-    auto& handles = ctx->middlewareHandleContext->handles;
-    handles.erase(
-        std::remove_if(
-            handles.begin(),
-            handles.end(),
-            [mw](const std::shared_ptr<agentxx::middleware::BaseMiddlewareHandleInterface>& h) {
-                return h.get() == mw;
-            }
-        ),
-        handles.end()
-    );
 }
 
 // =====================================================================
@@ -137,7 +122,7 @@ std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) 
     return inst;
 }
 
-/// 摘除实例的领域注册 (工具 / 工具权限 / 图节点类型 / 提示词贡献 / 功能点 / 中间件停用)
+/// 摘除实例的领域注册 (工具 / 工具权限 / 图节点类型 / 提示词贡献 / 功能点 / 钩子处理器)
 /// - 只摘除宿主侧生效的注册, 保留实例内的注册记录 (启用时由 start 事务重新声明);
 /// - 事件订阅与能力声明的撤销属通用部分, 由骨架的 detachAll 处理。
 void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
@@ -177,18 +162,17 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
 
     restorePromptBackup(inst);
 
-    if (inst->middleware) {
-        inst->middleware->disabled = true;
-    }
+    // 钩子处理器: 从注册表摘除本实例的全部处理器 (记录保留, 句柄置 0);
+    // 没有处理器时派发器按需摘除 (轮次执行中先停用, 轮末真正摘除)
+    detachHookHandlers(inst);
 }
 
-/// 摘除实例专属资源的所有权: 中间件句柄 + 资源应用器上的启用标记
+/// 摘除实例专属资源的所有权: 资源应用器上的启用标记 (钩子派发器是宿主级单例,
+/// 不在实例名下, 处理器由 [detachHookHandlers] 从注册表摘除)
 void PluginManager::detachDomainOwnedResources(PluginInstance* inst) {
     if (!inst) {
         return;
     }
-    eraseMiddleware(inst->middleware.get());
-    inst->middleware = nullptr;
     if (auto c = agentContext_.lock()) {
         if (c->resourceApplier) {
             c->resourceApplier->setOwnerEnabled(inst->name, false);
@@ -533,7 +517,11 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
         view.userDisabled          = inst->userDisabled;
         view.blockedByDependencies = inst->blockedByDependencies;
         view.loadMs                = inst->loadMs;
-        view.hookCount             = inst->hookRegistrations.size();
+        // 钩子: 注册表里生效中的条数 + 各处理器优先级 (按派发顺序, 一眼看出谁先跑)
+        view.hookCount             = liveHookHandlersOf(*inst);
+        for (const auto& handler : allHookHandlersOf(*inst)) {
+            view.hookPriorities.push_back(handler.priority);
+        }
         view.graphNodeCount        = inst->graphNodeTypes.size();
         view.eventSubCount         = inst->subscriptions.size();
         view.permissionToolCount   = inst->permissionToolNames.size();

@@ -85,6 +85,10 @@ inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 /// 清单 interfaces.require 可按插件实际查询的表精确声明)
 inline constexpr std::string_view AgentTools        = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS;
 inline constexpr std::string_view AgentHooks        = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS;
+/// 钩子有序登记与清单: 优先级 + 一个点多个处理器 + `list_hooks` (见
+/// AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX)。属可选能力: 声明 `require` 会让插件在
+/// 仅支持基础钩子的老宿主上被跳过加载, 只用到基础两项时请声明 [AgentHooks]
+inline constexpr std::string_view AgentHooksEx      = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX;
 inline constexpr std::string_view AgentEvents       = PLUGINXX_IFACE_EVENTS;
 inline constexpr std::string_view AgentCapabilities = PLUGINXX_IFACE_CAPABILITIES;
 inline constexpr std::string_view AgentScheduler    = PLUGINXX_IFACE_SCHEDULER;

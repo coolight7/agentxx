@@ -444,10 +444,10 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
 ///   - 通用表 (`pluginxx.*`, 由插件框架内核声明): 数量 + 唯一 + 前缀;
 ///   - agent 领域表 (`agentxx.agent.*`): 数量 + 唯一 + 前缀;
 ///   - client 侧表 (`agentxx.client.*`): 数量 + 唯一 + 前缀;
-/// 同时要求 18 张领域表名都写进 `docs/zh-cn/design/plugins.md` (文档漏写新表
-/// 等于插件作者查不到 IID)。
+/// 同时要求 21 张 agent/client 领域表名都写进 `docs/zh-cn/design/plugins.md`
+/// (文档漏写新表等于插件作者查不到 IID)。
 ///
-/// 数量约定: 10 张通用表 + 10 张 agent 领域表 = 20 (与 `PluginManager::kInterfaceTableCount`
+/// 数量约定: 10 张通用表 + 11 张 agent 领域表 = 21 (与 `PluginManager::kInterfaceTableCount`
 /// 一致); 7 张 client 基础表 + 2 张交互表 (timer / keybind) = 9。
 void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     const auto genericHeader = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx"
@@ -466,7 +466,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     };
     const Group groups[] = {
         {&genericHeader, "PLUGINXX_IFACE_", 10, "pluginxx.", false},
-        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", 10, "agentxx.agent.", true},
+        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", 11, "agentxx.agent.", true},
         {&clientHeader, "AGENTXX_IFACE_CLIENT_", 9, "agentxx.client.", true},
     };
 
@@ -685,9 +685,9 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     const size_t agentCount  = agentxx::plugin::PluginManager::kInterfaceTableCount;
     const size_t clientCount = agentxx::plugin::ClientPluginManager::kInterfaceTableCount;
 
-    // 数量本身: 10 张通用表 + 10 张 agent 领域表 / 7 张基础表 + 2 张交互表
-    if (agentCount != 20) {
-        v.push_back("PluginManager::kInterfaceTableCount 应为 20 (10 通用 + 10 领域), 实际 "
+    // 数量本身: 10 张通用表 + 11 张 agent 领域表 / 7 张基础表 + 2 张交互表
+    if (agentCount != 21) {
+        v.push_back("PluginManager::kInterfaceTableCount 应为 21 (10 通用 + 11 领域), 实际 "
                     + std::to_string(agentCount));
     }
     if (clientCount != 9) {

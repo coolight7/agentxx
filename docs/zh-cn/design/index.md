@@ -1850,9 +1850,9 @@ agent/
 │   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,
 │   │   │   │                     #          host_core,tables_impl,lifecycle}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
-│   │   │   ├── plugin_manager.h  # PluginManager 领域部分 (工具/权限/钩子/图/提示词/资源) /
+│   │   │   ├── plugin_manager.h  # PluginManager 领域部分 (工具/权限/钩子/图/提示词/资源/功能点) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
-│   │   │   │                     #   PluginMiddlewareHandle (7 钩子→C 回调);
+│   │   │   │                     #   PluginHookDispatchHandle (宿主级单派发器, 7 钩子点);
 │   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore,
 │   │   │   │                     #   装载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
 │   │   │   │                     #   (领域数据经 pluginxx::DomainHooks + 生命周期接缝提供)

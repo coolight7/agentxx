@@ -23,7 +23,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...20 张 agent + 9 张 client
+         │ tools       │ hooks       │ events       │ scheduler   │  ...21 张 agent + 9 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -404,7 +404,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 20 张: 10 张 agent 领域表 (`agentxx.agent.*`) + 10 张通用表
+> 共 21 张 agent 侧接口表: 11 张领域表 (`agentxx.agent.*`) + 10 张通用表
 > (`pluginxx.*`, 由插件框架内核实现, 表内其余行)。**通用表的查询 IID 就是 `pluginxx.<名>`**
 > (如 `pluginxx.log`), `pluginxx.kit` 正在用这组名字查询; 下表把它们写在宿主命名空间下
 > 只是为了与领域表并列阅读 —— 按 `agentxx.agent.log` 查询不会命中。
@@ -414,6 +414,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |
 | `agentxx.agent.permission` | 1 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 钩子点, 操作) |
+| `agentxx.agent.hooks_ex` | 1 | 钩子有序登记与清单: `register_hook_ex` (同一实例同一个点登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook_ex` (按句柄精确撤销) + `list_hooks` (处理器清单 JSON)。单列一张表而不是在 `agentxx.agent.hooks` 表尾追加成员: 表尾追加会让新插件在老宿主上整表校验失败 (见 §9 "版本约定"), 连基础 `register_hook` 一起丢 |
 | `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=宿主计时器; offload=阻塞池委托, 需 cancel_token) |

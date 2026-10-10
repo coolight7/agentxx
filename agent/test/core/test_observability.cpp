@@ -290,6 +290,8 @@ void testDiagnosticsPackage() {
     XX_TEST_EXPECT_TRUE(text.find("featurePoints[") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("agentxx.context.countTokens") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("agentxx.context.summarize") != std::string::npos);
+    // 钩子处理器清单同理 (没有处理器时只有一行标题, 空的点不占行)
+    XX_TEST_EXPECT_TRUE(text.find("hookHandlers[") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("config_json:") != std::string::npos);
 
     // 会话段: 计数与用量 (不含正文)

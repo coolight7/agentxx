@@ -1294,7 +1294,7 @@ agent/
 │   │   │   ├── op_driver.h       # Async operation driver (AgentxxOpNotify Done protocol)
 │   │   │   ├── plugin_manager.h  # PluginManager lifecycle (load/enable/disable/unload) /
 │   │   │   │                     #   PluginTool (C callback -> thread pool offload execution) /
-│   │   │   │                     #   PluginMiddlewareHandle (7 hooks -> C callbacks) /
+│   │   │   │                     #   PluginHookDispatchHandle (host-wide single dispatcher, 7 hooks) /
 │   │   │   │                     #   CapabilityRegistry / NativeLoader (dlopen <-> LoadLibraryW)
 │   │   │   ├── plugin_manager_base.h # Common base class for plugin managers (shared by agent/client: instance base, IO posting, waiting, memory management pair)
 │   │   │   ├── plugin_common.h   # Host-side common plugin utilities

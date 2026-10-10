@@ -106,6 +106,9 @@ struct AgentIfaces {
     const AgentxxPluginToolsIface*      tools        = nullptr; ///< "agentxx.agent.tools"
     const AgentxxPluginPermissionIface* permission   = nullptr; ///< "agentxx.agent.permission"
     const AgentxxPluginHooksIface*      hooks        = nullptr; ///< "agentxx.agent.hooks"
+    /// "agentxx.agent.hooks_ex": 钩子有序登记 (优先级 / 一个点多个处理器) 与清单
+    /// - 老宿主没有这张表 (NULL): 插件降级用 [hooks] 的基础登记
+    const AgentxxPluginHooksExIface*    hooksEx      = nullptr;
     const PluginxxEventsIface*          events       = nullptr; ///< "pluginxx.events"
     const PluginxxCapabilitiesIface*    capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*       scheduler    = nullptr; ///< "pluginxx.scheduler"
@@ -140,6 +143,8 @@ struct AgentIfaces {
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
         );
         f.hooks  = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
+        f.hooksEx
+            = queryInterface<AgentxxPluginHooksExIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX);
         f.events = queryInterface<PluginxxEventsIface>(host, PLUGINXX_IFACE_EVENTS);
         f.capabilities
             = queryInterface<PluginxxCapabilitiesIface>(host, PLUGINXX_IFACE_CAPABILITIES);
@@ -1820,108 +1825,208 @@ inline decltype(auto) invokeHook(HookFn& fn, Ctx& ctx, int32_t pt, std::string_v
 
 } // namespace detail
 
+/* ==================== 钩子处理器登记 (基础 / 有序) ==================== */
+
+namespace detail {
+
+/// 钩子执行体 (基础登记与有序登记共用)
+///
+/// 登记入口只差"交给哪张接口表", 执行体完全一致, 所以放在这里:
+/// - [hook] 用 [AgentxxPluginHookSpec] (一个实例一个点一个处理器, 覆盖式);
+/// - [hookEx] 用 [AgentxxPluginHookSpecEx] (一个点可以登记多个, 各自句柄)。
+template<typename Ctx, typename HookFn>
+struct HookShim {
+    Ctx*                 ctx = nullptr;
+    std::decay_t<HookFn> fn;
+};
+
+/// 异步钩子的 provider 句柄: 拥有输入 Request, 由 promise.opCleanup_ 回收
+template<typename Ctx, typename HookFn>
+struct HookJob {
+    HookShim<Ctx, HookFn>*             shim = nullptr;
+    std::shared_ptr<std::atomic<bool>> cancelFlag;
+    void*                              coroAddr = nullptr;
+    RootRequest                        request;
+};
+
+/// 提供给宿主的执行体 (与 AgentxxPluginHookSpec/Ex::hook_start 同签名)
+template<typename Ctx, typename HookFn>
+inline void* hookStart(
+    void*                         user_data,
+    int32_t                       pt,
+    const PluginxxStringView*     node_input_json,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
+    using ShimT = HookShim<Ctx, HookFn>;
+    using JobT  = HookJob<Ctx, HookFn>;
+
+    auto* shim = static_cast<ShimT*>(user_data);
+    (void)error_out;
+    if (!shim || !shim->ctx) {
+        CompletionGuard guard(notify);
+        guard.failed("hook context released");
+        return nullptr;
+    }
+
+    /// 输入纳入拥有型 Request：同步钩子在调用期间有效，异步 Task 由 Job 持有到
+    /// 协程真正结束（F13）。
+    auto request = RootRequest::forHook(shim->ctx->host, node_input_json);
+
+    using HookRet = decltype(invokeHook(shim->fn, *shim->ctx, pt, std::string_view{}));
+    if constexpr (std::is_void_v<HookRet>) {
+        /// 同步 void 钩子：调用返回即完成；异常统一映射为终态。
+        CompletionGuard guard(notify);
+        try {
+            invokeHook(shim->fn, *shim->ctx, pt, request.args());
+            guard.ok();
+        } catch (...) {
+            guard.fromCurrentException();
+        }
+        return nullptr;
+    } else {
+        /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
+        /// 通知，返回 Job 作为宿主可取消的 provider 句柄（F19）。
+        auto* job
+            = new JobT{shim, std::make_shared<std::atomic<bool>>(false), nullptr, std::move(request)};
+        auto task = invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
+        if (!task.handle_) {
+            delete job;
+            CompletionGuard guard(notify);
+            guard.failed("hook returned an empty task");
+            return nullptr;
+        }
+        auto h        = task.handle_;
+        task.handle_  = nullptr;
+        auto& p       = h.promise();
+        p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
+        p.host_       = job->request.host;
+        p.cancelFlag_ = job->cancelFlag;
+        job->coroAddr = h.address();
+
+        // 根的首步由 host driver 推进 (不在 start 里同步跑插件协程,
+        // 因此没有 completion 重入, 也不占住宿主 IO 线程)。
+        startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
+            delete job;
+        });
+        return job;
+    }
+}
+
+/// 提供给宿主的取消回调 (与 AgentxxPluginHookSpec/Ex::hook_cancel 同签名)
+template<typename Ctx, typename HookFn>
+inline void hookCancel(void* user_data, void* op) {
+    (void)user_data;
+    if (!op) {
+        return;
+    }
+    auto* job = static_cast<HookJob<Ctx, HookFn>*>(op);
+    if (job->cancelFlag) {
+        job->cancelFlag->store(true, std::memory_order_release);
+    }
+    if (job->coroAddr) {
+        auto handle = std::coroutine_handle<PromiseBase<void>>::from_address(job->coroAddr);
+        handle.promise().cancel_outstanding();
+    }
+}
+
+} // namespace detail
+
 template<typename Ctx, typename HookFn>
 inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
-    struct HookShim {
-        Ctx*                 ctx = nullptr;
-        std::decay_t<HookFn> fn;
-    };
+    using ShimT = detail::HookShim<Ctx, HookFn>;
 
-    /// 异步钩子的 provider 句柄：拥有输入 Request，并由 promise.opCleanup_ 回收。
-    struct HookJob {
-        HookShim*                          shim = nullptr;
-        std::shared_ptr<std::atomic<bool>> cancelFlag;
-        void*                              coroAddr = nullptr;
-        detail::RootRequest                request;
-    };
-
-    auto shim = ctx.storeShim(std::make_unique<HookShim>(HookShim{&ctx, std::forward<HookFn>(fn)}));
+    auto shim = ctx.storeShim(std::make_unique<ShimT>(ShimT{&ctx, std::forward<HookFn>(fn)}));
 
     AgentxxPluginHookSpec spec{};
-    spec.point     = point;
-    spec._reserved = 0;
-    spec.user_data = shim;
-
-    spec.hook_start = [](void*                         user_data,
-                         int32_t                       pt,
-                         const PluginxxStringView*     node_input_json,
-                         const PluginxxOperatorNotify* notify,
-                         PluginxxString*               error_out) -> void* {
-        auto* shim = static_cast<HookShim*>(user_data);
-        (void)error_out;
-        if (!shim || !shim->ctx) {
-            detail::CompletionGuard guard(notify);
-            guard.failed("hook context released");
-            return nullptr;
-        }
-
-        /// 输入纳入拥有型 Request：同步钩子在调用期间有效，异步 Task 由 HookJob
-        /// 持有到协程真正结束（F13）。
-        auto request = detail::RootRequest::forHook(shim->ctx->host, node_input_json);
-
-        using HookRet = decltype(detail::invokeHook(shim->fn, *shim->ctx, pt, std::string_view{}));
-        if constexpr (std::is_void_v<HookRet>) {
-            /// 同步 void 钩子：调用返回即完成；异常统一映射为终态。
-            detail::CompletionGuard guard(notify);
-            try {
-                detail::invokeHook(shim->fn, *shim->ctx, pt, request.args());
-                guard.ok();
-            } catch (...) {
-                guard.fromCurrentException();
-            }
-            return nullptr;
-        } else {
-            /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
-            /// 通知，返回 Job 作为宿主可取消的 provider 句柄（F19）。
-            auto* job = new HookJob{
-                shim,
-                std::make_shared<std::atomic<bool>>(false),
-                nullptr,
-                std::move(request)
-            };
-            auto task = detail::invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
-            if (!task.handle_) {
-                delete job;
-                detail::CompletionGuard guard(notify);
-                guard.failed("hook returned an empty task");
-                return nullptr;
-            }
-            auto h        = task.handle_;
-            task.handle_  = nullptr;
-            auto& p       = h.promise();
-            p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
-            p.host_       = job->request.host;
-            p.cancelFlag_ = job->cancelFlag;
-            job->coroAddr = h.address();
-
-            // 根的首步由 host driver 推进 (不在 start 里同步跑插件协程,
-            // 因此没有 completion 重入, 也不占住宿主 IO 线程)。
-            detail::startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
-                delete job;
-            });
-            return job;
-        }
-    };
-
-    spec.hook_cancel = [](void* user_data, void* op) {
-        (void)user_data;
-        if (!op) {
-            return;
-        }
-        auto* job = static_cast<HookJob*>(op);
-        if (job->cancelFlag) {
-            job->cancelFlag->store(true, std::memory_order_release);
-        }
-        if (job->coroAddr) {
-            auto handle
-                = std::coroutine_handle<detail::PromiseBase<void>>::from_address(job->coroAddr);
-            handle.promise().cancel_outstanding();
-        }
-    };
+    spec.point      = point;
+    spec._reserved  = 0;
+    spec.user_data  = shim;
+    spec.hook_start = &detail::hookStart<Ctx, HookFn>;
+    spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
 
     if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
         ctx.iface.hooks->register_hook(ctx.host, &spec);
     }
+}
+
+/// 钩子登记选项 (有序登记; 见 `agentxx.agent.hooks_ex` 接口表)
+struct HookOptions {
+    /// 层内顺序, 小者先 (插件默认 0 = 按登记顺序 = 插件装载顺序)
+    /// - 越界由宿主裁剪到上下限并记一条警告 (不拒绝登记)
+    int32_t priority = 0;
+    /// 展示归属标签 (处理器清单里显示; 可空)
+    std::string ownerTag;
+    /// 一句话说明 (处理器清单里显示; 可空)
+    std::string depict;
+};
+
+/// 登记一个钩子处理器 (有序登记: 同一个点可以登记任意多个, 每个一根句柄)
+///
+/// 与 [hook] 的区别:
+/// - 不覆盖: 同一实例同一个点可以登记多个处理器, 各自句柄;
+/// - 可排顺序: `priority` 小的先跑, 相同则按登记顺序;
+/// - 可写清单信息: `ownerTag` / `depict` 出现在宿主清单 (`listHooks`) 里。
+///
+/// `return`: 句柄 (> 0); **0 = 宿主不支持或登记被拒** —— 老宿主没有
+/// `agentxx.agent.hooks_ex` 表 (查询不到), 此时应降级用 [hook] 或不登记。
+///
+/// 撤销: [unhookEx] 按句柄精确撤销; 不撤销也会随实例卸载一并摘除。
+template<typename Ctx, typename HookFn>
+inline int64_t
+    hookEx(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn, const HookOptions& opts = {}) {
+    if (!ctx.iface.hooksEx || !ctx.iface.hooksEx->register_hook_ex) {
+        return 0; // 老宿主: 没有有序登记表
+    }
+    using ShimT = detail::HookShim<Ctx, HookFn>;
+
+    auto shim = ctx.storeShim(std::make_unique<ShimT>(ShimT{&ctx, std::forward<HookFn>(fn)}));
+
+    AgentxxPluginHookSpecEx spec{};
+    spec.struct_size = sizeof(AgentxxPluginHookSpecEx);
+    spec.point       = point;
+    spec.priority    = opts.priority;
+    spec.flags       = 0;
+    spec.owner_tag   = PluginStringView::from(opts.ownerTag.data(), opts.ownerTag.size());
+    spec.depict      = PluginStringView::from(opts.depict.data(), opts.depict.size());
+    spec.user_data   = shim;
+    spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
+    spec.hook_cancel  = &detail::hookCancel<Ctx, HookFn>;
+
+    int64_t handle = 0;
+    if (ctx.iface.hooksEx->register_hook_ex(ctx.host, &spec, &handle) != 0) {
+        return 0;
+    }
+    return handle;
+}
+
+/// 撤销一个有序登记的钩子处理器 (按句柄; 不是本实例的句柄会被宿主拒绝)
+///
+/// `return`: 0 成功; 非 0 失败 (宿主不支持 / 句柄不存在)
+template<typename Ctx>
+inline int32_t unhookEx(Ctx& ctx, int64_t handle) {
+    if (!ctx.iface.hooksEx || !ctx.iface.hooksEx->unregister_hook_ex || handle <= 0) {
+        return -1;
+    }
+    return ctx.iface.hooksEx->unregister_hook_ex(ctx.host, handle);
+}
+
+/// 处理器清单 JSON (宿主侧 `agentxx.agent.hooks_ex` 的 `list_hooks`)
+///
+/// 用于回答"这个点上有哪些处理器、谁的、什么顺序": 派发记录 (`stat` 段) 只在
+/// 宿主开发者模式下出现。老宿主 / 宿主未装配时返回 `{}`。
+template<typename Ctx>
+inline std::string listHooks(const Ctx& ctx) {
+    if (!ctx.iface.hooksEx || !ctx.iface.hooksEx->list_hooks) {
+        return "{}";
+    }
+    PluginxxString text{nullptr, 0};
+    if (ctx.iface.hooksEx->list_hooks(ctx.host, &text) != 0 || text.data == nullptr) {
+        return "{}";
+    }
+    std::string out(text.data, static_cast<size_t>(text.size));
+    PluginString::free(ctx.host, &text);
+    return out;
 }
 
 namespace detail {

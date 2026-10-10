@@ -357,15 +357,22 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 保持引擎加载，供后续 JS 用例复用
     }
 
-    // ---- 5. 钩子注册: 中间件句柄入栈 + 钩子点记录 ----
+    // ---- 5. 钩子登记: 宿主级派发器入链 + 处理器清单 ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-            return h->name == "example_plugin_middleware";
+            return h->name == "plugin_hooks";
         });
-        XX_TEST_EXPECT_TRUE(found);
+        XX_TEST_EXPECT_TRUE(found); ///< 中间件链上只有一个宿主级派发器
         XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
-        XX_TEST_EXPECT_TRUE(inst->middleware != nullptr);
+        XX_TEST_EXPECT_GE(inst->hookRegistrations.front().handle, int64_t{1});
+        const auto handlers = ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
+        XX_TEST_EXPECT_EQ(handlers.size(), size_t{1});
+        if (!handlers.empty()) {
+            XX_TEST_EXPECT_EQ(handlers.front().owner, std::string{"plugin:example_plugin"});
+            XX_TEST_EXPECT_EQ(handlers.front().layer, std::string{"plugin"});
+            XX_TEST_EXPECT_TRUE(handlers.front().enabled);
+        }
     }
 
     // ---- 6. 事件订阅/发布回环 (plugin.demo.topic) ----
@@ -386,13 +393,15 @@ asio::awaitable<TestResult> run_plugin_tests() {
         ctx->bus->get<std::string>("plugin.demo.topic").unsubscribe(subId);
     }
 
-    // ---- 7. 禁用 → 工具摘除/钩子停用; 启用 → 恢复 ----
+    // ---- 7. 禁用 → 工具摘除/钩子处理器摘除; 启用 → 恢复 ----
     {
         ctx->pluginManager->disable("example_plugin");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->registry()->contains("example_caller"));
-        // 无轮次执行时 disable 立即摘除中间件 (hooks 停用; enable 时按记录重建)
-        XX_TEST_EXPECT_TRUE(inst->middleware == nullptr);
+        // 无轮次执行时 disable 立即摘除派发器; 处理器随实例一起摘除 (记录保留, 句柄置 0)
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty());
+        XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->hookRegistrations.front().handle, int64_t{0});
         XX_TEST_EXPECT_FALSE(inst->enabled);
 
         ctx->pluginManager->enable("example_plugin");
@@ -400,10 +409,21 @@ asio::awaitable<TestResult> run_plugin_tests() {
         for (int i = 0; i < 200 && !ctx->toolRegistry->contains("example_echo"); ++i) {
             co_await sleepMs(5);
         }
+        for (int i = 0; i < 200
+                        && ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty();
+             ++i) {
+            co_await sleepMs(5);
+        }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
-        XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_caller"));
-        XX_TEST_EXPECT_TRUE(inst->middleware != nullptr);
-        XX_TEST_EXPECT_FALSE(inst->middleware->disabled);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->registry()->contains("example_caller"));
+        XX_TEST_EXPECT_EQ(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{1});
+        {
+            const auto& handles = ctx->middlewareHandleContext->handles;
+            const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                return h->name == "plugin_hooks" && !h->disabled;
+            });
+            XX_TEST_EXPECT_TRUE(found); ///< 重新登记后派发器回到链上并生效
+        }
         XX_TEST_EXPECT_TRUE(inst->enabled);
     }
 
@@ -414,12 +434,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_plugin") == nullptr);
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("example.demo"));
-        // 中间件应从 handles 摘除 (pendingCleanup 于下轮 flush; 无轮次时直接摘除)
+        // 没有处理器后派发器从 handles 摘除 (轮次执行中先置 disabled, 由 flush 摘除)
+        ctx->pluginManager->flushPendingCleanup();
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-            return h->name == "example_plugin_middleware";
+            return h->name == "plugin_hooks";
         });
         XX_TEST_EXPECT_FALSE(found);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty());
         // 工具对象应已释放 (inflight 归零后 dlclose)
         XX_TEST_EXPECT_EQ(inst->tools.size(), size_t{0});
     }
@@ -869,29 +891,56 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 24. H4 回归: disable 跨轮次 (中间件已物理摘除) 后 enable 钩子恢复 ----
+    // ---- 24. H4 回归: 轮次中 disable → 摘除留到轮末; enable 后钩子重新登记 ----
     {
         auto inst24 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst24 != nullptr);
         if (inst24) {
-            XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
+            XX_TEST_EXPECT_EQ(
+                ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
+                size_t{1}
+            );
             ctx->pluginManager->onTurnBegin(); // 轮次执行中
             ctx->pluginManager->disable("example_plugin");
-            ctx->pluginManager->flushPendingCleanup(); // 轮末摘除中间件
+            // 轮次执行中不修改中间件链: 处理器立即摘除, 派发器停用待摘除
+            XX_TEST_EXPECT_TRUE(
+                ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
+            );
+            {
+                const auto& handles = ctx->middlewareHandleContext->handles;
+                const bool  disabledOnChain
+                    = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                          return h->name == "plugin_hooks" && h->disabled;
+                      });
+                XX_TEST_EXPECT_TRUE(disabledOnChain);
+            }
+            ctx->pluginManager->flushPendingCleanup(); // 轮末摘除派发器
             ctx->pluginManager->onTurnEnd();
-            XX_TEST_EXPECT_TRUE(inst24->middleware == nullptr); // 已物理摘除
+            {
+                const auto& handles = ctx->middlewareHandleContext->handles;
+                const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                    return h->name == "plugin_hooks";
+                });
+                XX_TEST_EXPECT_FALSE(found); // 已物理摘除
+            }
             XX_TEST_EXPECT_TRUE(inst24->hookRegistrations.size() == size_t{1});
-            // 启用: 钩子按注册记录重建中间件
+            XX_TEST_EXPECT_EQ(inst24->hookRegistrations.front().handle, int64_t{0});
+            // 启用: start 事务重新登记钩子 (派发器随首次登记回到链上)
             ctx->pluginManager->enable("example_plugin");
-            // 启用走 start 事务 (IO 线程异步执行): 等待插件重新注册钩子
-            for (int i = 0; i < 200 && inst24->middleware == nullptr; ++i) {
+            for (int i = 0; i < 200
+                            && ctx->pluginManager
+                                   ->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START)
+                                   .empty();
+                 ++i) {
                 co_await sleepMs(5);
             }
-            XX_TEST_EXPECT_TRUE(inst24->middleware != nullptr);
-            XX_TEST_EXPECT_FALSE(inst24->middleware->disabled);
+            XX_TEST_EXPECT_EQ(
+                ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
+                size_t{1}
+            );
             const auto& handles = ctx->middlewareHandleContext->handles;
             bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                return h->name == "example_plugin_middleware" && !h->disabled;
+                return h->name == "plugin_hooks" && !h->disabled;
             });
             XX_TEST_EXPECT_TRUE(found);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -3114,13 +3163,17 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("dso_rollback.watch", "{}"), 0);
         // 能力已注销: 失败加载不得留下能力注册
         XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
-        // hook 中间件已摘除: 失败实例的中间件句柄不得留在句柄栈上
+        // hook 处理器已摘除: 失败实例的处理器不得留在注册表里 (派发器也随之摘除)
         {
+            sctx->pluginManager->flushPendingCleanup();
             const auto& handles = sctx->middlewareHandleContext->handles;
             const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                return h->name == "test_start_fail_plugin_middleware";
+                return h->name == "plugin_hooks";
             });
             XX_TEST_EXPECT_FALSE(found);
+            XX_TEST_EXPECT_TRUE(
+                sctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
+            );
         }
         // 资源已摘除: 失败实例不得留下 skill 目录所有权记录
         XX_TEST_EXPECT_TRUE(applier->ownedBy("test_start_fail_plugin").skillDirs.empty());
