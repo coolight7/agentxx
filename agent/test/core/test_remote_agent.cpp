@@ -2271,6 +2271,116 @@ static asio::awaitable<void> test_session_controller_switch_session() {
 }
 
 // ---------------------------------------------------------------------------
+// 19b. SessionServerAgentIO: 切换会话期间发给目标会话的请求不被丢弃
+//      切换要先在线程池里加载目标会话历史, 提交绑定之前端点仍指向旧会话:
+//      客户端切换后紧接着发出的请求 (如"沿用当前模型"的 WireSelectModel) 若按
+//      旧绑定校验会被判为会话不匹配 (日志警告 + WireError) 而丢失 —— 期望它们
+//      先暂存, 切换提交后按原顺序重新分发, 最终落在新会话上
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_session_switch_defers_target_requests() {
+    auto ex = co_await asio::this_coro::executor;
+
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    // 会话持久化 (临时目录): 目标会话未加载 -> 切换经线程池读库, 切换请求与
+    // 提交绑定之间因此存在一段窗口 (即线上"切换后紧跟模型选择"的时序)
+    const auto dataDir = std::filesystem::temp_directory_path()
+                         / fmt::format(
+                             "agentxx_switch_defer_test_{}",
+                             std::chrono::steady_clock::now().time_since_epoch().count()
+                         );
+    std::error_code dirEc;
+    std::filesystem::create_directories(dataDir, dirEc);
+
+    auto cfg                    = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl          = "http://127.0.0.1:1";
+    cfg->model.apiKey           = "EMPTY";
+    cfg->model.modelName        = "test-model";
+    cfg->dataDir                = dataDir.string();
+    cfg->enableSessionStore     = true;
+    // 可切换的模型 (selectModel 只接受已注册的模型名)
+    agentxx::agent::ModelConfig textModel;
+    textModel.name                     = "test-model";
+    textModel.modelName                = "test-model";
+    textModel.baseUrl                  = cfg->model.baseUrl;
+    textModel.apiKey                   = cfg->model.apiKey;
+    cfg->availableModels["test-model"] = textModel;
+    auto agent                         = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    co_await agent->init();
+
+    // 只给目标会话一个可切换的模型名 (模型选择要求名字在注册表里)
+    agentxx::agent::ModelConfig switchTo;
+    switchTo.name                    = "text-model";
+    switchTo.modelName               = "text-model";
+    switchTo.baseUrl                 = cfg->model.baseUrl;
+    agent->agentContext->modelRegistry->registerModel("text-model", switchTo);
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "session-a";
+    // 起点会话先加载 (端点绑定的会话总是在内存里), 切换目标会话则保持未加载
+    agent->agentContext->getSession("session-a");
+    auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    // 切换请求: 目标会话历史尚未加载, 切换在加载完成后才提交绑定
+    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSwitchSession{
+        "target-session",
+    }});
+    XX_TEST_EXPECT_EQ(std::string{sc->sessionId()}, std::string("session-a"));
+
+    // 切换后紧接着发出的模型选择 (发给目标会话): 暂存, 不按旧绑定校验
+    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSelectModel{
+        "target-session",
+        "text-model",
+    }});
+
+    // 等切换提交 (目标会话成为绑定会话)
+    bool switched = false;
+    for (int i = 0; i < 200; ++i) {
+        if (sc->sessionId() == std::string_view{"target-session"}) {
+            switched = true;
+            break;
+        }
+        co_await testSleep(ex, std::chrono::milliseconds{20});
+    }
+    XX_TEST_EXPECT_TRUE(switched);
+
+    // 暂存的模型选择已落到目标会话上 (被拒绝时该会话取不到模型, 仍为空)
+    auto target = agent->agentContext->sessions->get("target-session");
+    XX_TEST_EXPECT_TRUE(target != nullptr);
+    if (target) {
+        XX_TEST_EXPECT_EQ(target->getModelName(), std::string("text-model"));
+    }
+
+    // 发给其他会话的请求不放行: 切换完成后旧会话请求仍按既有规则拒绝
+    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSelectModel{
+        "session-a",
+        "text-model",
+    }});
+    auto stale = agent->agentContext->sessions->get("session-a");
+    XX_TEST_EXPECT_TRUE(stale != nullptr);
+    if (stale) {
+        XX_TEST_EXPECT_TRUE(stale->getModelName().empty());
+    }
+
+    clientT->close();
+    sc->stop();
+    // 待 SQLite 连接释放后再删临时目录 (Windows 上被占用的文件删不掉)
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        std::error_code ec;
+        std::filesystem::remove_all(dataDir, ec);
+        if (!ec) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    }
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 20. TUI 切模型随下一条用户消息携带 (WireUserInput.model):
 //     TUI 不再直接通知 server-io 切换 (WireSelectModel), 而是把选择的模型随
 //     下一次发送的用户消息携带; SessionServerAgentIO 记录待应用模型并传给
@@ -4093,6 +4203,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller switch session..." << std::endl;
     co_await test_session_controller_switch_session();
+
+    std::cout << "  [remote] session switch defers target requests..." << std::endl;
+    co_await test_session_switch_defers_target_requests();
 
     std::cout << "  [remote] model switch with next input..." << std::endl;
     co_await test_model_switch_with_next_input();

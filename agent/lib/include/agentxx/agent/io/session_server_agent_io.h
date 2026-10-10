@@ -401,6 +401,8 @@ private:
     /// - `sessionId` 为空: 视为"未指定", 按当前绑定会话处理 (旧客户端兼容)
     /// - 与当前绑定会话不一致: 拒绝该请求, 回 WireError(SessionMismatch) 给来源
     ///   (来源为空时广播), 并记警告日志 —— 避免切换会话后迟到的旧请求写到新会话
+    /// - 发给**正在切换过去**的会话的请求不会走到这里: 它们在 [onPeerMessage] 里
+    ///   先被暂存, 等切换提交后按原顺序重新分发 (见 [stashWhileSwitching])
     ///
     /// - `args`:
     ///     - [sessionId] 请求携带的会话 ID
@@ -412,6 +414,25 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& sender,
         std::string_view                             what
     );
+
+    /// 切换会话进行中时暂存发给目标会话的请求 (仅 ex_ 线程)
+    ///
+    /// 切换要先把目标会话历史在线程池里加载完 (避免 io 线程阻塞读), 期间端点仍
+    /// 绑定在旧会话上。客户端切换后紧接着发的请求 (如"沿用当前模型"的
+    /// WireSelectModel) 若按旧绑定校验会被判为会话不匹配而丢弃, 只能在切换提交
+    /// 后按到达顺序重新分发 —— 效果等同"这些请求在切换之后才发出"。
+    ///
+    /// - `args`:
+    ///     - [msg]    收到的消息
+    ///     - [sender] 消息来源 transport (重放时原样回传, 保证错误回执仍只发给来源)
+    /// - `return` true = 已暂存, 调用方应直接返回; false = 照常分发
+    bool stashWhileSwitching(
+        const WireMessage&                           msg,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
+
+    /// 重新分发切换期间暂存的请求 (切换提交或失败后调用, 按到达顺序)
+    void replayStashedWhileSwitching();
 
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();
@@ -458,6 +479,16 @@ private:
 
     // delta 环形缓冲 (仅 ex_ 线程访问: sendToPeer 写, handleHello 读)
     std::deque<WireDelta> deltaBuffer_;
+
+    // ----- 会话切换中的请求暂存 (仅 ex_ 线程访问) -----
+
+    /// 切换会话请求序号: 切换要等目标会话历史加载完才提交绑定, 期间可能又来一次
+    /// 切换请求 —— 只让序号最新的一次提交, 避免先发出的旧请求后到把会话切回旧目标
+    uint64_t switchSeq_ = 0;
+    /// 正在切换过去的会话 id (空 = 没有进行中的切换; 见 [SessionServerAgentIO::stashWhileSwitching])
+    std::string switchTargetId_;
+    /// 切换期间暂存的消息 (按到达顺序, 切换提交后原样重新分发)
+    std::vector<std::pair<WireMessage, std::shared_ptr<AgentIOTransportBase>>> stashedWhileSwitching_;
 
     // 服务端消息队列 (仅 ex_ 线程访问)
     std::deque<MessageQueueItem> messageQueue_;

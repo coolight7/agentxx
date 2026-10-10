@@ -1189,6 +1189,8 @@ Client                              Server
   │←── SessionList ───────────────────│
   │──── SwitchSession (sessionId) ───│ Switches session: clears replay buffer,
   │                                   │ pushes new session Sync (tail paginated) + model + stats
+  │                                   │ (requests for the target session arriving during the switch
+  │                                   │  are held, then handled in order after the binding commits)
   │                                    │
   │ (Optional) History Pagination      │
   │──── GetViewMessages (before, n) ──│ Slices [max(0, before-n), before)

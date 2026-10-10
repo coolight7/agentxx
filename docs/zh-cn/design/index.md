@@ -1659,6 +1659,7 @@ Client                              Server
   │←── SessionList ───────────────────│
   │──── SwitchSession (sessionId) ───│ 切换会话绑定: 清空 delta 缓冲,
   │                                   │ 回推新会话 Sync (尾窗分页) + 模型信息 + 上下文统计
+  │                                   │ (切换期间发给目标会话的请求先暂存, 提交绑定后按到达顺序处理)
   │                                    │
   │ (可选) 历史分页 (TUI 向上滚动到窗口顶部)
   │──── GetViewMessages (before, n) ──│ 切片 [max(0,before-n), before) 回应

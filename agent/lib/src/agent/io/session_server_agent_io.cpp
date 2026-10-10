@@ -35,6 +35,12 @@ namespace agent {
 /// - 超过该值说明客户端离线时间很长, 回退全量/尾窗同步, 避免一次传输过大
 static constexpr size_t kIncrementalReplayMaxMessages = 512;
 
+/// 会话切换期间最多暂存的消息条数 (见 [SessionServerAgentIO::stashWhileSwitching])
+/// - 切换窗口 = 目标会话历史加载耗时, 正常只有 1~2 条 (切换后紧随的模型选择/输入)
+/// - 超过上限说明对端在切换尚未完成时持续发消息: 不再暂存, 照常分发让它拿到
+///   明确的拒绝结果, 好过无上限堆积
+static constexpr size_t kMaxStashedWhileSwitching = 64;
+
 /// 会话标题规范化 (计划 RET-1a): 去首尾空白、换行/制表符折叠为空格、限长
 /// - 标题是会话列表里的单行文本, 不是正文: 多行内容会被截断为一行
 /// - 超长截断按 UTF-8 字符边界处理, 避免产生半个字符
@@ -1129,6 +1135,24 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
     onPeerMessage(std::move(msg), nullptr);
 }
 
+/// 取消息携带的会话 id (消息没有该字段时返回空)
+///
+/// 切换会话期间用它判断"这条请求是不是发给正在切换过去的那个会话"
+/// (见 [SessionServerAgentIO::stashWhileSwitching])。
+static std::string_view wireSessionIdOf(const WireMessage& msg) {
+    return std::visit(
+        [](const auto& m) -> std::string_view {
+            using T = std::decay_t<decltype(m)>;
+            if constexpr (requires { m.sessionId; }) {
+                return m.sessionId;
+            } else {
+                return {};
+            }
+        },
+        msg
+    );
+}
+
 void SessionServerAgentIO::onPeerMessage(
     WireMessage                                  msg,
     const std::shared_ptr<AgentIOTransportBase>& sender
@@ -1150,6 +1174,12 @@ void SessionServerAgentIO::onPeerMessage(
                 .message = "handshake not completed for this connection; send hello first",
             }
         );
+        return;
+    }
+
+    // 切换会话进行中: 发给目标会话的请求先暂存, 等切换提交后按原顺序重新分发
+    // (见 [stashWhileSwitching])
+    if (stashWhileSwitching(msg, sender)) {
         return;
     }
 
@@ -1490,14 +1520,45 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
                 // 客户端请求切换会话 (弹窗选择后); 运行态拦截由客户端前置完成
                 // 先在线程池中异步预热加载目标会话历史, 避免在 io 线程产生阻塞 SQLite 读
+                //
+                // 加载期间端点仍绑定在旧会话上: 客户端切换后紧接着发出的请求
+                // (如"沿用当前模型"的 WireSelectModel) 不能按旧绑定校验, 否则会被
+                // 误判为会话不匹配而丢弃 —— 先暂存 (见 [stashWhileSwitching]),
+                // 切换提交后按到达顺序重放
+                const uint64_t switchSeq = ++switchSeq_;
+                switchTargetId_          = m.sessionId;
                 asio::co_spawn(
                     ex_,
                     [self  = shared_from_this(),
-                     newId = std::move(m.sessionId)]() -> asio::awaitable<void> {
+                     newId = std::move(m.sessionId),
+                     switchSeq]() -> asio::awaitable<void> {
                         if (auto agent = self->agent_.lock(); agent && agent->agentContext) {
-                            co_await agent->agentContext->getSessionAsync(newId);
+                            // 加载失败 (如会话库损坏) 不阻断切换: 记录原因后按空历史提交,
+                            // 保证暂存的请求仍会被重放
+                            co_await agentxx::util::catchErrorAsync(
+                                [agent, newId]() -> asio::awaitable<void> {
+                                    co_await agent->agentContext->getSessionAsync(newId);
+                                    co_return;
+                                },
+                                [newId](std::string errmsg) -> asio::awaitable<void> {
+                                    XX_LOGW(
+                                        "[session_ctrl] load session '{}' before switch failed: {}",
+                                        newId,
+                                        errmsg
+                                    );
+                                    co_return;
+                                }
+                            );
                         }
+                        // 已有更新的切换请求: 本次作废 (新请求自己提交并重放暂存请求)
+                        if (self->switchSeq_ != switchSeq) {
+                            co_return;
+                        }
+                        self->switchTargetId_.clear();
                         self->switchSession(std::move(newId));
+                        // 暂存请求按到达顺序重新分发: 此时端点已绑定新会话,
+                        // 它们的会话校验与平时一致
+                        self->replayStashedWhileSwitching();
                     },
                     asio::detached
                 );
@@ -2244,6 +2305,9 @@ void SessionServerAgentIO::stopImpl() {
     // 待合并输入丢弃 (客户端已断开, 无需回执)
     collectPending_.clear();
     collectTimer_->cancel();
+    // 切换会话期间暂存的消息一并丢弃 (端点已停止, 不再重放)
+    switchTargetId_.clear();
+    stashedWhileSwitching_.clear();
     onCancel();
     // 退订插件事件前缀 (防止端点析构后回调悬垂)
     if (pluginSubId_ != 0) {
@@ -2485,6 +2549,49 @@ bool SessionServerAgentIO::acceptSessionScope(
         }
     );
     return false;
+}
+
+bool SessionServerAgentIO::stashWhileSwitching(
+    const WireMessage&                           msg,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
+    if (switchTargetId_.empty()) {
+        return false;
+    }
+    // 握手与切换请求本身不暂存: 前者属于连接建立流程 (重连后客户端要立刻拿到
+    // hello_ack), 后者要马上登记为最新的切换目标
+    if (std::holds_alternative<WireHello>(msg)
+        || std::holds_alternative<WireSwitchSession>(msg)) {
+        return false;
+    }
+    // 只暂存发给"正在切换过去的那个会话"的请求; 发给其他会话的照常按当前绑定
+    // 校验, 切换后迟到的旧会话请求仍按既有规则拒绝
+    if (wireSessionIdOf(msg) != switchTargetId_) {
+        return false;
+    }
+    if (stashedWhileSwitching_.size() >= kMaxStashedWhileSwitching) {
+        XX_LOGW(
+            "SessionServerAgentIO: too many requests while switching to session '{}' "
+            "(more than {}); stop deferring them",
+            switchTargetId_,
+            kMaxStashedWhileSwitching
+        );
+        return false;
+    }
+    stashedWhileSwitching_.emplace_back(msg, sender);
+    return true;
+}
+
+void SessionServerAgentIO::replayStashedWhileSwitching() {
+    if (stashedWhileSwitching_.empty()) {
+        return;
+    }
+    // 先整体移出: 重放中的请求可能再次触发切换, 不能让它改写正在遍历的容器
+    auto stashed = std::move(stashedWhileSwitching_);
+    stashedWhileSwitching_.clear();
+    for (auto& [msg, sender] : stashed) {
+        onPeerMessage(std::move(msg), sender);
+    }
 }
 
 void SessionServerAgentIO::handleGetViewMessages(
