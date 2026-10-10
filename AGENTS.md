@@ -501,6 +501,16 @@ path/to/agentxx_test string_util regex
   VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
   导致每次构建都全量重编 (增量编译完全失效)。参数经 superbuild 多层 CMake
   传递极易重复叠加, 故项目统一不使用这两个选项, 各 CMakeLists 中已有注释标记
+- Windows 增量编译还会被 **vcpkg 用户级集成**的开关切换破坏 (2026-10-10): 由
+  `vcpkg integrate install` 装在 `%LOCALAPPDATA%\vcpkg\vcpkg.user.props` / `.targets`,
+  集成是否生效只看环境变量 `VCPkgLocalAppDataDisabled` / `VcpkgEnabled` —— 生效时
+  `vcpkg.targets` 会给每个工程补 `...\vcpkg\installed\<triplet>\include` 等编译/链接参数,
+  于是"构建脚本 (script/windows_*_build.bat 里清了这两个变量) 编译的产物"与
+  "终端/IDE 直接 `cmake --build` (未清) 编译的产物"命令行不同, MSVC FileTracker
+  判源文件过期 → 每次都从依赖库开始全量重编 (实测单个依赖库 12/14 个源文件重编,
+  全树小时级)。顶层 `agent/CMakeLists.txt` 现在会在 `{build}/Directory.Build.props`
+  固定关闭 vcpkg (`VCPkgLocalAppDataDisabled=1` / `VcpkgEnabled=false`),
+  脚本/终端/IDE 各入口命令行一致, 无需再手工切换环境变量
 - 如果遇到编译器崩溃 (ICE)，直接重新运行编译尝试即可; 也可能是内存不足或内存中的缓存占用太多了，可以清理一下再编译试试; 如果多次运行都崩溃，则可能确实代码有问题，需要重新检查一下。
 ```sh
 # 清理内存缓存

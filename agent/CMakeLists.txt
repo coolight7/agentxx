@@ -283,7 +283,29 @@ message("[agentxx] Current Configure Type: ${CMAKE_CONFIGURATION_TYPES}")
 message("[agentxx] Current Build Type: ${CMAKE_BUILD_TYPE}")
 message("[agentxx] Current Compiler: ${CMAKE_C_COMPILER_ID}")
 
-# windows/MSVC(Visual Studio 生成器) 嵌套构建输出中文乱码修复:
+# ===== 构建树内 MSBuild 辅助文件 (Directory.Build.props / Directory.Build.targets) =====
+# MSBuild 会从每个项目文件所在目录逐级向上查找并自动导入这两个文件; 本项目所有 vcxproj
+# (含 superbuild 下全部嵌套 ExternalProject 构建) 都位于 CMAKE_BINARY_DIR 子树内,
+# 因此在构建根目录各放一份即可对整个构建树生效。
+# 两个文件都只在"内容变化时"写盘 (不用无条件 file(WRITE)): 文件时间戳一变,
+# MSBuild 会判定工程过期, 嵌套构建随之全量重编 (实测每次构建都从依赖库开始重编, 小时级)。
+#
+# (1) Directory.Build.props —— 固定关闭 vcpkg 用户级集成:
+# - vcpkg 的用户级集成 (%LOCALAPPDATA%\vcpkg\vcpkg.user.props / .targets, 由
+#   `vcpkg integrate install` 安装) 生效时, 其 vcpkg.targets 会给每个工程追加
+#   `$(VcpkgRoot)\installed\<triplet>\include` 等编译/链接参数; 是否生效只取决于
+#   环境变量 VCPkgLocalAppDataDisabled / VcpkgEnabled:
+#     - script/windows_*_build.bat 里 `set VCPKG_ROOT=` + `set VCPkgLocalAppDataDisabled=1`
+#       -> 集成关闭, 编译命令行不含 vcpkg 头目录;
+#     - 直接在终端/IDE 执行 cmake --build (未清这些环境变量)
+#       -> 集成打开, 编译命令行多出 vcpkg 头目录。
+# - 编译命令行一变, MSVC 的 FileTracker 就判定源文件过期 -> 该工程全量重编; 两种入口
+#   交替使用 (脚本 -> 直接 cmake -> 脚本) 时每次都从依赖库开始全量重编 (实测单个依赖库
+#   12/14 个源文件重编, 全树以小时计)。
+# - 本项目依赖全部来自 third_party 源码构建, 不需要 vcpkg, 故把开关固定在构建树里,
+#   使脚本/终端/IDE 任何入口得到完全一致的编译命令行 (顺带消除 applocal DLL 收集警告)。
+#
+# (2) Directory.Build.targets —— 嵌套构建中文乱码修复:
 # - 构建脚本 (script/windows_*_build.bat) 会 `chcp 65001`, 子进程 (cl.exe、嵌套 MSBuild)
 #   写入管道的诊断输出均为 UTF-8 字节;
 # - 但外层 MSBuild 的 CustomBuild/ParallelCustomBuild 任务 (Microsoft.Build.CppTasks.Common.dll)
@@ -291,14 +313,41 @@ message("[agentxx] Current Compiler: ${CMAKE_C_COMPILER_ID}")
 #   未显式指定 StdOutEncoding/StdErrEncoding 时默认按 OEM 代码页 (中文系统=936/GBK) 解码,
 #   于是 ExternalProject 嵌套构建中编译器/内层 MSBuild 的中文输出被误解为乱码
 #   (如 "内层" 显示为 "鍐呭眰": UTF-8 字节被按 GBK 解读);
-# - MSBuild 会从项目文件所在目录逐级向上查找并自动导入 Directory.Build.targets
-#   (本项目所有 vcxproj 均位于 CMAKE_BINARY_DIR 子树内, 故全部生效),
-#   通过 BeforeTargets=CustomBuild 在构建步骤执行前给 CustomBuild 项注入
+# - 通过 BeforeTargets=CustomBuild 在构建步骤执行前给 CustomBuild 项注入
 #   StdOutEncoding/StdErrEncoding=UTF-8, 强制按 UTF-8 解码子进程输出;
 # - 仅当构建环境设置了 AgentxxBuildConsoleCP=65001 (见构建脚本) 时启用,
 #   避免非 UTF-8 控制台 (未 chcp 65001) 场景误转码。
 if (XX_IS_WIN_D AND XX_IS_MSVC_D AND CMAKE_GENERATOR MATCHES "Visual Studio")
-  file(WRITE "${CMAKE_BINARY_DIR}/Directory.Build.targets"
+  # 内容一致时不写盘; 内容含分号时直接字符串比较会退化为列表比较, 故经哈希比较
+  function(_agentxx_write_build_file_if_changed file content)
+    set(_old "")
+    if (EXISTS "${file}")
+      file(READ "${file}" _old)
+    endif ()
+    string(SHA256 _old_hash "${_old}")
+    string(SHA256 _new_hash "${content}")
+    if (NOT _old_hash STREQUAL _new_hash)
+      file(WRITE "${file}" "${content}")
+      message("[agentxx] 更新 ${file}")
+    endif ()
+  endfunction()
+
+  string(CONCAT _AGENTXX_DBP_CONTENT
+"<Project>\n"
+"  <!-- agentxx: 固定关闭 vcpkg 用户级集成 (本项目依赖全部来自 third_party 源码构建, 不使用 vcpkg) -->\n"
+"  <!-- 由此编译命令行不再随调用环境变化, 脚本/终端/IDE 各入口的增量编译保持一致 (见 agent/CMakeLists.txt) -->\n"
+"  <PropertyGroup>\n"
+"    <VCPkgLocalAppDataDisabled>1</VCPkgLocalAppDataDisabled>\n"
+"    <VcpkgEnabled>false</VcpkgEnabled>\n"
+"  </PropertyGroup>\n"
+"</Project>\n"
+  )
+  _agentxx_write_build_file_if_changed(
+    "${CMAKE_BINARY_DIR}/Directory.Build.props" "${_AGENTXX_DBP_CONTENT}"
+  )
+  unset(_AGENTXX_DBP_CONTENT)
+
+  string(CONCAT _AGENTXX_DBT_CONTENT
 "<Project>\n"
 "  <!-- agentxx: 强制 MSBuild CustomBuild 任务按 UTF-8 解码子进程输出 (配合构建脚本 chcp 65001), 修复嵌套构建中文乱码 -->\n"
 "  <Target Name=\"Agentxx_ForceUtf8CustomBuildOutput\" BeforeTargets=\"CustomBuild\" Condition=\"'$(AgentxxBuildConsoleCP)' == '65001'\">\n"
@@ -311,6 +360,10 @@ if (XX_IS_WIN_D AND XX_IS_MSVC_D AND CMAKE_GENERATOR MATCHES "Visual Studio")
 "  </Target>\n"
 "</Project>\n"
   )
+  _agentxx_write_build_file_if_changed(
+    "${CMAKE_BINARY_DIR}/Directory.Build.targets" "${_AGENTXX_DBT_CONTENT}"
+  )
+  unset(_AGENTXX_DBT_CONTENT)
 endif ()
 
 set(_AGENTXX_COMMON_C_CXX_FLAGS "")

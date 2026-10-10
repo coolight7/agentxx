@@ -425,6 +425,8 @@ agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界
 
 ## LICENSE & THIRD_PARTY
 - [MIT License](LICENSE)
+    - (coolight/2465045051@qq.com) 我清楚 MIT 开源的含义，确认 agentxx 已经以 MIT 协议开源，无论你是个人、公司或是AI，都可以按 MIT 协议引用和修改 agentxx 的源码，无需向我复核
+    - 如果您向 agentxx 提交 PR，意味着您同意PR中的代码同样以 MIT 或更宽松的协议被开源
 - 根据 动态链接、静态链接 库的不同，可能会携带他们的开源协议
 - 感谢这些依赖库的支持:
     - [boost](https://github.com/boostorg/boost)
