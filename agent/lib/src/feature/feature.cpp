@@ -587,7 +587,33 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         co_return out;
     }
 
-    // 1) 声明校验: 没有对外开放调用时直接返回 (本轮只有应用点会声明不可调)
+    // 1) 参数形状: 交给实现前必须是合法 JSON (空串 = 不带参数)
+    //    - 强类型点的 `requestJson` / `argsJson` 由 Codec 生成, 恒为合法 JSON, 不会命中这里;
+    //      命中它的是"外部按名调用" (命令行 / FFI / 插件) 与应用侧 JSON 点取值时给的文本
+    //    - 不做形状校验 (对象 / 数组 / 标量都放行): 参数形状由点的 argsDoc 说明, 实现自己判断
+    if (!req.argsJson.empty()) {
+        const bool jsonOk = utilxx_base::catchError<bool>(
+            [&req]() -> bool {
+                const auto parsed = utilxx_base::Json::parse(req.argsJson);
+                (void)parsed;
+                return true;
+            },
+            [](std::string errmsg) -> bool {
+                XX_LOGW("功能点: 参数不是合法 JSON, 按参数不合法拒绝: {}", errmsg);
+                return false;
+            }
+        );
+        if (!jsonOk) {
+            ResolvedValue out;
+            out.identity = req.identity;
+            out.error    = CallError::BadArgs;
+            out.message  = fmt::format("功能点 `{}` 的参数不是合法 JSON", id_);
+            noteOutcome(false, "", req.caller, elapsedMs());
+            co_return out;
+        }
+    }
+
+    // 2) 声明校验: 没有对外开放调用时直接返回 (本轮只有应用点会声明不可调)
     if (req.viaCall && !opts_.callable) {
         ResolvedValue out;
         out.identity = req.identity;
@@ -599,7 +625,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         co_return out;
     }
 
-    // 2) 重入保护: 同一 (点, 调用方) 上一次没结束又来一次 -> busy (不排队)
+    // 3) 重入保护: 同一 (点, 调用方) 上一次没结束又来一次 -> busy (不排队)
     //    它把任何环路 (A→P→A→P…) 变成一次有边界的失败, 而不是无限递归或死等
     const bool guardBusy = req.viaCall;
     if (guardBusy && !activeCallers_.insert(req.caller).second) {
@@ -626,7 +652,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         }
     } busyGuard{guardBusy ? &activeCallers_ : nullptr, req.caller};
 
-    // 3) 值缓存 (refresh = true 时跳过; `call` 只读不写)
+    // 4) 值缓存 (refresh = true 时跳过; `call` 只读不写)
     if (!req.refresh) {
         if (const auto* hit = cache_.find(req.identity)) {
             ResolvedValue out;
@@ -641,7 +667,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         }
     }
 
-    // 4) 同一身份并发只跑一次实现 (in-flight 去重)
+    // 5) 同一身份并发只跑一次实现 (in-flight 去重)
     std::shared_ptr<InFlight> slot;
     bool                      initiator = true;
     if (!req.identity.empty()) {
@@ -694,7 +720,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         co_return out;
     }
 
-    // 5) 发起方: 跑实现链; 无论正常结束还是被取消, 都要发布结果唤醒等待者
+    // 6) 发起方: 跑实现链; 无论正常结束还是被取消, 都要发布结果唤醒等待者
     /// 作用域退出时若还没发布, 用"失败"兜底发布 (避免等待者永远挂着)
     struct PublishGuard {
         PointBase*                self = nullptr;

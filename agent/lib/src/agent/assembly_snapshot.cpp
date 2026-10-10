@@ -573,7 +573,8 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
                 state += "/blocked-by-deps";
             }
             add(fmt::format(
-                "  - {} v{} [{}] load={}ms tools={} hooks={} graphNodes={} events={} caps={} permTools={}",
+                "  - {} v{} [{}] load={}ms tools={} hooks={} graphNodes={} events={} caps={} "
+                "permTools={} features={}/{}",
                 p.value("name", std::string{}),
                 p.value("version", std::string{}),
                 state,
@@ -583,7 +584,43 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
                 p.value("graph_node_count", 0),
                 p.value("event_sub_count", 0),
                 p.value("capability_count", 0),
-                p.value("permission_tools", 0)
+                p.value("permission_tools", 0),
+                p.value("feature_point_count", 0),
+                p.value("feature_impl_count", 0)
+            ));
+        }
+    }
+    // 功能点: 声明了几个点、每个点谁在生效 / 有几条实现 (排障时先看这里)
+    if (snapshot.contains("feature_points") && snapshot["feature_points"].is_object()) {
+        const auto& section = snapshot["feature_points"];
+        const auto& points  = section.contains("points") && section["points"].is_array()
+                                 ? section["points"]
+                                 : utilxx_base::Json::array();
+        add(fmt::format(
+            "featurePoints[{}] devMode={}:",
+            points.size(),
+            section.value("devMode", false) ? "yes" : "no"
+        ));
+        for (const auto& p : points) {
+            if (!p.is_object()) {
+                continue;
+            }
+            const auto  impls      = p.contains("impls") && p["impls"].is_array() ? p["impls"].size()
+                                                                                 : size_t{0};
+            const auto  by         = p.value("effectiveBy", std::string{});
+            const auto  disabledBy = p.value("disabledBy", std::string{});
+            const auto  cacheMode  = p.contains("cache") && p["cache"].is_object()
+                                         ? p["cache"].value("mode", std::string{})
+                                         : std::string{};
+            add(fmt::format(
+                "  - {} [{}] impls={} by={} cache={} callable={}{}",
+                p.value("id", std::string{}),
+                p.value("origin", std::string{}),
+                impls,
+                by.empty() ? std::string{"-"} : by,
+                cacheMode,
+                p.value("callable", false) ? "yes" : "no",
+                disabledBy.empty() ? std::string{} : fmt::format(" disabledBy={}", disabledBy)
             ));
         }
     }

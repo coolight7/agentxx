@@ -11,6 +11,8 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/feature/points.h"
+#include "agentxx/feature/registry.h"
 #include "agentxx/util/diagnostics.h"
 #include "agentxx/util/observability.h"
 #include "utilxx_base/log.h"
@@ -222,6 +224,10 @@ void testDiagnosticsPackage() {
     ctx->agentConfig->model.modelName = "test-model";
     ctx->agentConfig->dataDir         = dir.string();
     ctx->agentConfig->enableSessionStore = true;
+    // 功能点: 装配上下文两个核心点 (与 BaseAgent::init 同一顺序), 让诊断包的
+    // featurePoints 段有真实内容可断言
+    ctx->features = std::make_shared<agentxx::feature::Registry>();
+    agentxx::feature::registerContextPoints(*ctx->features, agentxx::feature::ContextPointOptions{});
 
     const std::string sessionId = "obs-session";
     auto store = std::make_shared<agentxx::agent::SessionStore>(
@@ -280,6 +286,10 @@ void testDiagnosticsPackage() {
     );
     XX_TEST_EXPECT_TRUE(text.find("tools:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("plugins[") != std::string::npos);
+    // 功能点清单也进装配段 (插件作者与排障看得到"哪个实现现在生效")
+    XX_TEST_EXPECT_TRUE(text.find("featurePoints[") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("agentxx.context.countTokens") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("agentxx.context.summarize") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("config_json:") != std::string::npos);
 
     // 会话段: 计数与用量 (不含正文)

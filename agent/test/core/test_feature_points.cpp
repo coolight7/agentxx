@@ -865,6 +865,53 @@ asio::awaitable<void> test_context_count_tokens_point() {
     co_return;
 }
 
+/// 参数形状: 交给实现前必须是合法 JSON, 否则按 `bad_args` 结果回 (不进实现链)
+asio::awaitable<void> test_bad_args_shape() {
+    Registry registry;
+    PointOptions opts;
+    opts.title    = "参数形状";
+    opts.depict   = "验证非法 JSON 参数按 bad_args 回";
+    opts.callable = true;
+    opts.cache    = agentxx::feature::CacheMode::None;
+    auto& point = registry.provideJson("test.bad_args", opts, "core");
+
+    int implCalls = 0;
+    registry.addImpl("test.bad_args", jsonImpl("plugin:p", 0, [&implCalls](std::string) {
+                         ++implCalls;
+                         return std::string{R"({"value":{"ok":1}})"};
+                     }));
+
+    // 非法 JSON: 按 bad_args 回 (受理成功, 实现一次都没跑)
+    {
+        auto r = co_await point.call("not-a-json", CallOptions{.caller = "plugin:x"});
+        XX_TEST_EXPECT_EQ(static_cast<int>(r.error), static_cast<int>(CallError::BadArgs));
+        XX_TEST_EXPECT_TRUE(r.message.find("不是合法 JSON") != std::string::npos);
+        XX_TEST_EXPECT_EQ(implCalls, 0);
+    }
+    // 应用侧取值同样受这一层校验 (参数由应用给错也要明确说清)
+    {
+        auto r = co_await point.ask("{oops}");
+        XX_TEST_EXPECT_EQ(static_cast<int>(r.error), static_cast<int>(CallError::BadArgs));
+        XX_TEST_EXPECT_EQ(implCalls, 0);
+    }
+    // 合法 JSON 就放行 (形状不限: 对象之外的数组 / 标量也可, 由点的 argsDoc 说明)
+    {
+        auto r = co_await point.call(R"({"k":1})", CallOptions{.caller = "plugin:x"});
+        XX_TEST_EXPECT_TRUE(r.ok());
+        XX_TEST_EXPECT_EQ(implCalls, 1);
+        auto scalar = co_await point.call("42", CallOptions{.caller = "plugin:x"});
+        XX_TEST_EXPECT_TRUE(scalar.ok());
+        XX_TEST_EXPECT_EQ(implCalls, 2);
+    }
+    // 空串 = 不带参数 (不当成坏参数; 由调用方决定要不要传)
+    {
+        auto r = co_await point.call("", CallOptions{.caller = "plugin:x"});
+        XX_TEST_EXPECT_TRUE(r.ok());
+        XX_TEST_EXPECT_EQ(implCalls, 3);
+    }
+    co_return;
+}
+
 /// 插件点: 声明 / 实现 / 撤销 / 命名空间校验
 asio::awaitable<void> test_plugin_points() {
     Registry registry;
@@ -973,6 +1020,7 @@ asio::awaitable<TestResult> run_feature_points_tests() {
         co_await test_list_and_dev_mode();
         co_await test_context_count_tokens_point();
         co_await test_plugin_points();
+        co_await test_bad_args_shape();
         co_await test_sync_path_matches_point();
     } catch (const std::exception& e) {
         TEST_FAIL << "feature_points suite exception: " << e.what() << std::endl;

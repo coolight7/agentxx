@@ -1,7 +1,7 @@
 # 插件共享功能（功能点统一）— 实施记录
 
 > 方案文档: [plan.md](plan.md)（7 个阶段，每阶段一个提交）
-> 状态: **实施中** — 阶段 1~3 已完成
+> 状态: **实施中** — 阶段 1~4 已完成
 
 ## 阶段进度总览
 
@@ -10,7 +10,7 @@
 | 1 | 子系统骨架（`agentxx::feature` + 值缓存 + 开发者模式 + `feature_points` 测试） | ✅ 已完成 |
 | 2 | 第一批核心点迁移（`countTokens` / `summarize`，行为不变） | ✅ 已完成 |
 | 3 | C ABI 接口表 + kit（插件登记实现） | ✅ 已完成 |
-| 4 | 对外开放调用与插件自定义点 | ⬜ 待开始 |
+| 4 | 对外开放调用与插件自定义点 | ✅ 已完成 |
 | 5 | 钩子处理器清单与优先级 | ⬜ 待开始 |
 | 6 | 命令行与 FFI 接入 | ⬜ 待开始 |
 | 7 | 第二批点与文档收尾 | ⬜ 待开始 |
@@ -268,3 +268,64 @@ agentxx_test boundaries config_validation plugin_bridge feature_points plugins
    阶段 7 收尾时把这条写进插件作者文档 (plugins.md 的"功能点"一节)。
 5. **`struct_size` 守卫**：宿主侧目前未做 `struct_size` 校验（与既有表一致），
    新增字段扩版本时需一并补上（阶段 7 统一处理接口表版本升级约定时处理）。
+
+---
+
+## 阶段 4：对外开放调用与插件自定义点（已完成）
+
+> 说明：本阶段的大部分内容在阶段 1/2（核心侧 `call()` / 三道保护 / 两处超时 /
+> `callable` + `callDoc` / `countTokens` 声明为可调）与阶段 3（`define_point` /
+> `undefine_point` / 插件点按名调用）已经落地；本轮补齐剩余缺口并补测试。
+
+### 本轮改动
+
+**`bad_args` 错误码真正产生（此前只是"声明了但没人产生"）**
+
+- `agent/lib/src/feature/feature.cpp`：`runResolve` 新增第 1 步"参数形状"——
+  `argsJson` 非空时必须能解析为 JSON，否则直接返回 `bad_args`
+  （**不进实现链**，实现一次都不会被问到）；空串 = 不带参数，放行；
+  形状不做限制（对象 / 数组 / 标量都由点的 `callDoc` / `argsDoc` 说明），
+  强类型点的 `requestJson` 由 Codec 生成，恒为合法 JSON，不受影响。
+- `agent/lib/src/plugins/plugin_manager_feature.cpp`：删掉"参数非法就清空 argsText"的
+  旧处理（它让 `bad_args` 永远不可见，坏参数被静默降级成"没带参数"），
+  改为原样交给点判定 —— 插件拿到的结果 JSON 里就是 `{"ok":false,"error":"bad_args"}`。
+
+**清单进装配快照与 `--dump-diagnostics`**
+
+- `agent/lib/src/agent/assembly_snapshot.cpp`：
+  - 插件条目文本行补 `features=<生效点>/<生效实现>`；
+  - 新增 `featurePoints[N] devMode=yes|no:` 段，逐条列出
+    `id [origin] impls=N by=<生效实现> cache=<策略> callable=yes|no [disabledBy=…]`
+    —— 排障时"哪个实现现在生效 / 被谁置空"一眼可见（`buildDiagnosticsText`
+    复用同一份渲染，因此 `--dump-diagnostics` 与 `--dump-config` 都带这段）。
+
+### 测试结果
+
+```
+agentxx_test boundaries observability plugin_bridge feature_points plugin_cleanup
+             plugin_feature summarization
+→ passed=1135 failed=0
+   boundaries 13 / observability 99 / plugin_bridge 193 / feature_points 134 /
+   plugin_cleanup 102 / plugin_feature 132 / summarization 462
+```
+
+新增断言：
+
+- `feature_points`（+11）：`bad_args`（`call` 与 `ask` 两条入口、实现零调用）、
+  合法 JSON 放行（对象 / 标量）、空串按"不带参数"处理；
+- `plugin_feature`（+4）：插件按名调用传非法 JSON → 受理成功 + `bad_args`；
+- `observability`（+3）：诊断包装配段含 `featurePoints[`、两个核心点 id 与
+  `devMode` 标注。
+
+### 注意事项 / 留给后续阶段
+
+1. **参数形状只校验"是不是合法 JSON"**：形状（对象 / 数组 / 标量）不设限制，
+   由点的 `argsDoc` 说明、实现自己判断 —— 否则插件点想收数组参数会被框架拦住。
+2. **`bad_args` 与 `not_callable` 的顺序**：先判参数（`bad_args`）再判可调性
+   （`not_callable`）—— 参数错是调用方最该先看到的问题。
+3. **阶段 5（钩子清单与优先级）尚独立未做**：`register_hook_ex` / `list_hooks` /
+   单一派发器 + `plugin_hooks` 测试模块；与功能点体系共用"默认优先级带 + 越界裁剪 +
+   不设数量上限 + 开发者模式记录"这套口径。
+4. **阶段 6（命令行 / FFI 接入）**：`feature` 子命令与 FFI 导出会走本阶段确立的
+   `call()` 入口（按 JSON 请求解码），届时 `bad_args` / `not_callable` / 超时
+   这些错误码会直接在命令行输出里出现。

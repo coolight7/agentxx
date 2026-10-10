@@ -387,21 +387,11 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
         return nullptr;
     }
 
-    // 参数必须是合法 JSON 对象; 不合法按 bad_args 结果回 (受理成功, 失败经回调)
+    // 参数原样交给点: 非法 JSON 由点按 bad_args 结果回 (受理成功, 失败经回调)
+    // —— 这里不做形状判断 (对象 / 数组 / 标量都由点的 argsDoc 说明)
     std::string argsText = viewToStr(argsJson);
     if (argsText.empty()) {
         argsText = "{}";
-    }
-    const auto parsed = utilxx_base::catchError<std::optional<utilxx_base::Json>>(
-        [&]() -> std::optional<utilxx_base::Json> {
-            return utilxx_base::Json::parse(argsText);
-        },
-        [](std::string) -> std::optional<utilxx_base::Json> {
-            return std::nullopt;
-        }
-    );
-    if (!parsed.has_value() || !parsed->is_object()) {
-        argsText.clear(); // 交给点的 bad_args 判定 (JsonProvidePoint::call 里会按参数不合法回)
     }
 
     auto runtime = caller->sharedSelf<PluginInstance>();

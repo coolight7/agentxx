@@ -468,6 +468,15 @@ asio::awaitable<void> test_call_point_paths() {
         XX_TEST_EXPECT_TRUE(out.acceptError.find("not declared") != std::string::npos);
     }
 
+    // (6b) 参数不是合法 JSON: 受理成功, 结果是 bad_args (实现不会被问到)
+    {
+        auto out = co_await callPoint(f, caller.get(), "plugin.example_feature.beat", "not-json");
+        XX_TEST_EXPECT_TRUE(out.accepted);
+        XX_TEST_EXPECT_TRUE(out.finished);
+        XX_TEST_EXPECT_FALSE(out.ok);
+        XX_TEST_EXPECT_EQ(out.error, std::string{"bad_args"});
+    }
+
     // (7) 点存在但没人给值: 受理成功, 结果是 no_impl
     {
         declareHostPoint(f, "host.test.no_impl");
