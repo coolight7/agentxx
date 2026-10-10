@@ -537,6 +537,20 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 渲染: [MessageListComponent::buildGenPlaceholderItem](/agent/client/include/agentxx-client/io/tui/components/message_list.h)
   在列表末尾渲染单行占位项 (`- [思考] 等待响应...` / `- [工具] read_file 正在调用工具...`),
   位置 = 消息与流式内容之后 (`genPlaceholderIndex`); 生成中头部用加载动画, 该子项不跨帧缓存
+  - 工具名按正常工具消息的同一套解析换成特化显示名 (`genPlaceholderToolDisplayName`
+    经 `queryToolRender`, 如 `agentxx_filesystem_list` -> `List`); 该阶段参数/结果尚未
+    接收完, 因此只查显示名不查摘要, 未命中渲染器/模版时回退原始工具名
+- 子项间距的统一约定: 列表内**所有**子项都自带尾部空行 (消息块 `buildMessageItem`、
+  增量稳定块 `buildStreamingStable`、流式区末尾项 `buildStreamingFrontier`/降级
+  `buildStreamingItem`、占位项本身), 因此下一项直接接排即可, 渲染与高度估算都不必
+  再判断"上方是哪类子项"。唯一不带尾部空行的是流式 thinking 的头部行 (`buildStreamingHeader`
+  的 `[Think]` 行): 它是紧随其后的正文的标题行, 加了空行会把标签与正文分开; 该行只在
+  增量模式下出现, 而增量模式成立要求 token 非空 -> 渲染器文本非空 -> 其后必有尾部块或
+  稳定块, 故它不会是列表最后一项
+- `quickHeight` 的流式估算必须与实测一致: 上述尾部空行都要计入 (尾部块 +1、降级整段 +1),
+  漏掉一项就会总高度偏低 -> 吸附底部的偏移偏小 -> 底部最新内容被推出视口
+- 加载动画的帧循环由 `hasRunningToolOrThink()` 维持, 占位提示出现时它必然为真 ——
+  该时刻既没有流式思考输出也没有未完成的工具消息, 漏掉占位判定会让点阵停在首帧
 - 清除: 首个正文/思考 token、ToolStart、NodeEnd、TurnEnd 到达时由 client 线程清除
   (`TUIClientAgentIO::onDelta` 的 `clearGenPlaceholder`), 占位位置由真实内容接替 ——
   因此占位是**瞬态渲染态** (`TUIRenderState::genPhase` / `genToolName`), 不进消息列表、

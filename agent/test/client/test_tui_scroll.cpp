@@ -16,6 +16,7 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "asio/io_context.hpp"
+#include "ftxui/component/animation.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
@@ -23,6 +24,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -229,6 +231,78 @@ static std::string normalizeScreenForCompare(const std::string& s, int width) {
         pos = nl + 1;
     }
     return out;
+}
+
+/// 剥离 ANSI 转义序列 (颜色/样式码), 便于按纯文本断言跨多个文本节点的内容
+static std::string stripAnsiCodes(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\033' && i + 1 < s.size() && s[i + 1] == '[') {
+            i += 2;
+            while (i < s.size() && !(s[i] >= '@' && s[i] <= '~')) {
+                ++i;
+            }
+            continue;
+        }
+        out += s[i];
+    }
+    return out;
+}
+
+/// 屏幕文本中首个包含 needle 的行号 (0 起; 未找到返回 -1)
+/// 用于断言版面行序 (如"正文 / 空行 / 占位提示"三行的相对位置)
+static int screenRowOf(std::string_view screen, std::string_view needle) {
+    int    row = 0;
+    size_t pos = 0;
+    while (pos <= screen.size()) {
+        const size_t nl  = screen.find('\n', pos);
+        const size_t end = (nl == std::string_view::npos) ? screen.size() : nl;
+        if (screen.substr(pos, end - pos).find(needle) != std::string_view::npos) {
+            return row;
+        }
+        if (nl == std::string_view::npos) {
+            break;
+        }
+        pos = nl + 1;
+        ++row;
+    }
+    return -1;
+}
+
+/// 屏幕文本第 row 行 (0 起; 越界返回空串)
+static std::string screenRowText(std::string_view screen, int row) {
+    if (row < 0) {
+        return {};
+    }
+    int    cur = 0;
+    size_t pos = 0;
+    while (pos <= screen.size()) {
+        const size_t nl  = screen.find('\n', pos);
+        const size_t end = (nl == std::string_view::npos) ? screen.size() : nl;
+        if (cur == row) {
+            return std::string{screen.substr(pos, end - pos)};
+        }
+        if (nl == std::string_view::npos) {
+            break;
+        }
+        pos = nl + 1;
+        ++cur;
+    }
+    return {};
+}
+
+/// 该行是否为空白行 (无任何可见字符)
+static bool isBlankRow(std::string_view row) {
+    return row.find_first_not_of(" \t\r") == std::string_view::npos;
+}
+
+/// 推进组件树动画 n 帧 (与运行期一致: 每次回调只给上一帧到当前的时间差)
+static void advanceAnimation(ftxui::ComponentBase& comp, int frames, float stepSeconds = 0.09F) {
+    for (int i = 0; i < frames; ++i) {
+        ftxui::animation::Params params{ftxui::animation::Duration{stepSeconds}};
+        comp.OnAnimation(params);
+    }
 }
 
 static void testHistoryPrependAnchoring() {
@@ -612,9 +686,12 @@ TestResult testTuiScroll() {
             std::string mouseFrame = f.render();
 
             XX_TEST_EXPECT_TRUE(contentFrame == mouseFrame);
-            // 吸附底部: 屏幕最底行必须包含最新 token 的尾部标记 (不能多出空行)
+            // 吸附底部: 屏幕最后两行内必须包含最新 token 的尾部标记。
+            // 流式子项与消息块一样自带尾部空行 (见 message_list.cpp 的
+            // "所有子项都自带尾部空行" 约定), 故标记落在倒数第二行
             XX_TEST_EXPECT_TRUE(
-                ScrollFixture::lastLine(contentFrame).find("M" + std::to_string(step) + "END")
+                ScrollFixture::lastLines(contentFrame, 2)
+                    .find("M" + std::to_string(step) + "END")
                 != std::string::npos
             );
         }
@@ -673,7 +750,10 @@ TestResult testTuiScroll() {
         // 底部内容增长 -> 跟随
         f.setToken("follow me to the bottom marker F9AA");
         f.render();
-        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLine(f.render()).find("F9AA") != std::string::npos);
+        // 流式子项自带尾部空行 (与消息块一致), 最新内容落在屏幕倒数第二行
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(f.render(), 2).find("F9AA") != std::string::npos
+        );
     }
 
     {
@@ -690,8 +770,9 @@ TestResult testTuiScroll() {
             std::string c1 = f.render();
             std::string c2 = f.render();
             XX_TEST_EXPECT_TRUE(c1 == c2);
+            // 流式子项自带尾部空行 (与消息块一致), 最新内容落在屏幕倒数第二行
             XX_TEST_EXPECT_TRUE(
-                ScrollFixture::lastLine(c1).find(std::to_string(step)) != std::string::npos
+                ScrollFixture::lastLines(c1, 2).find(std::to_string(step)) != std::string::npos
             );
         }
     }
@@ -720,12 +801,17 @@ TestResult testTuiScroll() {
         // 用户发送消息后新一轮首 token: epoch 0 -> 1, 与 UI 缓存的 streamEpoch_ 相等
         f.setTokenEpoch(1, "second stream marker S2ND");
         std::string frame = f.render();
-        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLine(frame).find("S2ND") != std::string::npos);
+        // 流式子项自带尾部空行 (与消息块一致), 最新内容落在屏幕倒数第二行
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(frame, 2).find("S2ND") != std::string::npos
+        );
 
         // 同流后续 token 追加 (epoch 不变) 仍正常增量显示
         f.setTokenEpoch(1, "second stream marker S2ND with more tail T3ST");
         std::string frame2 = f.render();
-        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLine(frame2).find("T3ST") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(frame2, 2).find("T3ST") != std::string::npos
+        );
     }
 
     {
@@ -2148,6 +2234,201 @@ TestResult testTuiScroll() {
         XX_TEST_EXPECT_TRUE(next.find("THK20_STALE") == std::string::npos);
 
         settings.setAnimationLevel(origAnim);
+    }
+
+    {
+        // 场景 21 (回归): 生成占位提示紧跟流式正文时, 与正文之间必须有空行
+        //
+        // 背景: 列表里每个子项自带尾部空行 (消息块/增量稳定块), 但流式区末尾
+        // 子项 (仍在增长的尾部块 / 降级整段) 后面原本没有内容, 因此不带尾部
+        // 空行。生成占位提示紧跟其后时就会贴着正文显示 (用户报告: 正文之后
+        // "正在调用工具"提示缺少边距); 思考内容后面因为思考流结算时提交为
+        // 消息块 (自带尾部空行), 所以看起来正常
+        auto&      settings = TUISettings::instance();
+        const auto origAnim = settings.animationLevel();
+        settings.setAnimationLevel(AnimationLevel::High); // 走增量渲染 (尾部块路径)
+
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hi";
+            st.messages.push_back(std::move(m));
+            // 流式正文已积累 (增量渲染), 随后上游开始接收工具调用
+            st.currentTokenRole  = TUIMessage::Role::Assistant;
+            st.currentTokenEpoch = 31;
+            st.currentToken      = std::make_shared<std::string>("answer text MARK21_BODY");
+            st.isStreaming       = true;
+        });
+        f.render(); // 首帧: 建立流式渲染 (内容行已上屏)
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+            st.genToolName = "read_file";
+        });
+        std::string frame = f.render();
+        XX_TEST_EXPECT_TRUE(frame.find("MARK21_BODY") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("receiving tool call...") != std::string::npos);
+        // 正文行与提示行之间必须隔一个空白行
+        const int bodyRow  = screenRowOf(stripAnsiCodes(frame), "MARK21_BODY");
+        const int placeRow = screenRowOf(stripAnsiCodes(frame), "receiving tool call...");
+        XX_TEST_EXPECT_TRUE(bodyRow >= 0);
+        XX_TEST_EXPECT_EQ(placeRow - bodyRow, 2);
+        XX_TEST_EXPECT_TRUE(isBlankRow(screenRowText(stripAnsiCodes(frame), bodyRow + 1)));
+
+        // 降级路径 (动画等级不足, 流式整段 paragraph 单子项) 同样要有空行
+        settings.setAnimationLevel(AnimationLevel::Disabled);
+        ScrollFixture g;
+        g.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hi";
+            st.messages.push_back(std::move(m));
+            st.currentTokenRole = TUIMessage::Role::Assistant;
+            st.currentToken     = std::make_shared<std::string>("fallback text MARK21_FALLBACK");
+            st.isStreaming      = true;
+        });
+        g.render();
+        g.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+            st.genToolName = "read_file";
+        });
+        std::string fallbackFrame = g.render();
+        const int   fBodyRow = screenRowOf(stripAnsiCodes(fallbackFrame), "MARK21_FALLBACK");
+        const int   fPlaceRow
+            = screenRowOf(stripAnsiCodes(fallbackFrame), "receiving tool call...");
+        XX_TEST_EXPECT_TRUE(fBodyRow >= 0);
+        XX_TEST_EXPECT_EQ(fPlaceRow - fBodyRow, 2);
+
+        // 上方是消息块 (自带尾部空行) 时不多出空行: 占位项仍只占 2 行
+        ScrollFixture h;
+        h.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hi";
+            st.messages.push_back(std::move(m));
+            st.isStreaming = true;
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
+        });
+        h.render();
+        XX_TEST_EXPECT_EQ(h.comp->totalHeight(), 4); // 用户消息 2 行 + 占位项 2 行
+        const int userRow  = screenRowOf(stripAnsiCodes(h.render()), "> hi");
+        const int waitRow  = screenRowOf(stripAnsiCodes(h.render()), "waiting for response...");
+        XX_TEST_EXPECT_TRUE(userRow >= 0);
+        XX_TEST_EXPECT_EQ(waitRow - userRow, 2);
+
+        settings.setAnimationLevel(origAnim);
+    }
+
+    {
+        // 场景 22 (回归): 生成占位提示行首的加载动画必须随动画帧转动
+        //
+        // isActive 判定 (hasRunningToolOrThink) 原先只看流式思考输出与未完成的
+        // 工具消息: 占位提示出现时两者都不存在 (既无 token 也无工具消息), 帧循环
+        // 从未启动 —— 该行点阵停在首帧不动 (用户报告"等待响应/正在调用工具的
+        // 加载中动画卡住")。补上占位判定后帧循环正常推进
+        auto&      settings = TUISettings::instance();
+        const auto origAnim = settings.animationLevel();
+        settings.setAnimationLevel(AnimationLevel::High);
+
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hi";
+            st.messages.push_back(std::move(m));
+            st.isStreaming = true;
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
+        });
+        // 首帧: 点阵为 spinner 首帧 (测试环境无帧循环, 帧索引停在首帧)
+        std::string first = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(first.find("⠋ [Think]") != std::string::npos);
+
+        // 推进动画: 经组件树转发 OnAnimation 到 runSpinner_ (占位行此时是
+        // 唯一的运行中条目, 帧循环由本判定维持)
+        advanceAnimation(*f.comp, 1);
+        std::string next = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(next.find("⠋ [Think]") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(next.find("⠙ [Think]") != std::string::npos);
+
+        // 工具调用阶段的占位行 (角色标签 [Tool]) 同样转动
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+            st.genToolName = "read_file";
+        });
+        f.render();
+        advanceAnimation(*f.comp, 1);
+        std::string toolRow = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(toolRow.find("⠹ [Tool]") != std::string::npos);
+
+        // 占位提示清除后 (无运行中条目): 帧循环不再推进
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase = agentxx::agent::WireDelta::GenPhase::Done;
+            st.genToolName.clear();
+            st.isStreaming = false;
+        });
+        f.render();
+        advanceAnimation(*f.comp, 3);
+        std::string idle = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(idle.find("waiting for response...") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(idle.find("receiving tool call...") == std::string::npos);
+
+        settings.setAnimationLevel(origAnim);
+    }
+
+    {
+        // 场景 23 (回归): 占位提示的工具名换成工具特化显示名
+        //
+        // 占位行原先直接显示 genToolName (如 "agentxx_filesystem_list"), 与
+        // 正常工具消息的折叠头 ("List") 不一致。现在经同一套工具特化渲染查询
+        // (queryToolRender) 换显示名, 未命中渲染器时回退原始工具名
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::User;
+            m->text = "hi";
+            st.messages.push_back(std::move(m));
+            st.isStreaming = true;
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+        });
+
+        // 已知工具 (模板类渲染器): 显示名 "List"，不出现原始工具名
+        // (显示名与阶段说明是相邻的两个文本节点, 样式不同 -> 屏幕文本中夹 ANSI
+        //  转义序列, 故先剥离再按纯文本断言)
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genToolName = "agentxx_filesystem_list";
+        });
+        XX_TEST_EXPECT_TRUE(
+            stripAnsiCodes(f.render()).find("List receiving tool call...") != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(
+            stripAnsiCodes(f.render()).find("agentxx_filesystem_list") == std::string::npos
+        );
+
+        // 内置工具渲染器同样生效 (agentxx_share_store -> "Store")
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genToolName = "agentxx_share_store";
+        });
+        XX_TEST_EXPECT_TRUE(
+            stripAnsiCodes(f.render()).find("Store receiving tool call...") != std::string::npos
+        );
+
+        // 未注册渲染器的工具: 回退原始工具名
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genToolName = "unknown_tool_xyz";
+        });
+        XX_TEST_EXPECT_TRUE(
+            stripAnsiCodes(f.render()).find("unknown_tool_xyz receiving tool call...")
+            != std::string::npos
+        );
+
+        // 等待响应阶段不显示工具名
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase = agentxx::agent::WireDelta::GenPhase::Waiting;
+            st.genToolName.clear();
+        });
+        std::string waiting = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(waiting.find("[Think] waiting for response...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(waiting.find("List ") == std::string::npos);
     }
 
     // 恢复原始界面语言

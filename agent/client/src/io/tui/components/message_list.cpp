@@ -524,6 +524,12 @@ bool MessageListComponent::hasRunningToolOrThink() const {
         return false;
     }
     const auto& st = *ctx_.frameState;
+    // 生成占位提示显示中 (等待响应 / 正在调用工具): 头部同样是运行中的加载动画。
+    // 缺此判定时占位行的点阵停在首帧不动 —— 该提示出现时既无流式 token 也无
+    // 未完成的工具消息, 上面的两条判定都为假, spinner 收不到动画帧
+    if (hasGenPlaceholder(st)) {
+        return true;
+    }
     // 流式 think 输出中 (流式区 "[Think]" 头部正在推进)
     if (hasStreamingToken(st) && st.currentTokenRole == TUIMessage::Role::Think) {
         return true;
@@ -670,6 +676,15 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
         }
         h = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
+        // 工具显示名由工具特化渲染器给出 (异步写入缓存): 版本号变化触发重建,
+        // 使占位行由原始工具名切换为特化名称 (如 "Read")
+        if (ctx_.pluginManager && !st.genToolName.empty()) {
+            const auto key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                std::string_view{},
+                st.genToolName
+            );
+            h = combine(h, ctx_.pluginManager->toolRenderCache()->version(key));
+        }
         return h;
     }
     // ---- 流式区 ----
@@ -775,20 +790,28 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
     // 时流式区通常还未开始 (首个 token 未到达, currentToken 为 null), 若先走
     // 降级路径, 占位项下标会落到流式子项分支上解引空的 currentToken
     if (hasGenPlaceholder(st) && index == genPlaceholderIndex(st)) {
-        return 2; // 占位提示: 1 行 header + 1 行尾部空行 (与消息块一致)
+        // 占位提示: 1 行 header + 1 行尾部空行 (与消息块一致)。上方即使是流式区
+        // 末尾子项也自带尾部空行, 故无需前置空行 (见 buildGenPlaceholderItem)
+        return 2;
     }
     if (!streamUseIncremental_) {
         if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed(st)) {
             // 单行折叠流式 thinking: 1 行 header + 1 行尾部空行
             return 2;
         }
-        // 降级路径: 单个 paragraph 项 (无流式 token 时按 1 行兜底: 占位项已在
-        // 上方返回, 走到这里的无 token 分支只用于防御异常状态)
-        return st.currentToken ? 1 + estimateLines(*st.currentToken, width) : 1;
+        // 降级路径: 单个子项 (think 展开态为头部行 + 整段正文) + 尾部空行。
+        // 无流式 token 时按 1 行兜底: 占位项已在上方返回, 走到这里的无 token
+        // 分支只用于防御异常状态
+        if (!st.currentToken) {
+            return 1;
+        }
+        const size_t body   = estimateLines(*st.currentToken, width);
+        const bool   header = (st.currentTokenRole == TUIMessage::Role::Think);
+        return (header ? 1 + body : body) + 1; // +1: 尾部空行
     }
     const size_t si = index - st.messages.size();
     if (si < streamHeaderCount_) {
-        return 1; // thinking 头部单行
+        return 1; // thinking 头部行 (正文标题行, 其后紧接正文, 不带尾部空行)
     }
     const size_t bi = si - streamHeaderCount_;
     if (streamRenderer_) {
@@ -797,14 +820,15 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
             // 稳定块内容为 markdown 块 (段落 softbreak 合并语义), 同消息估算
             return 1 + estimateMarkdownLines(streamRenderer_->stableBlockSource(bi), width);
         }
-        // 尾部块 (仍增长, markdown 语义: softbreak 合并/围栏等, 同消息估算)
+        // 尾部块 (仍增长) + 尾部空行 (与 buildStreamingFrontier 的
+        // vbox{block, text("")} 对应); markdown 语义估算 (softbreak 合并/围栏等), 同消息
         const auto   t = streamRenderer_->text();
         const size_t f = streamRenderer_->frontierStart();
         if (f < t.size()) {
-            return std::max(static_cast<size_t>(1), estimateMarkdownLines(t.substr(f), width));
+            return std::max(static_cast<size_t>(1), estimateMarkdownLines(t.substr(f), width)) + 1;
         }
     }
-    return 1;
+    return 1; // 无渲染器的兜底项 (buildStreamingFrontier 的防御分支: 1 行空项)
 }
 
 bool MessageListComponent::fillViewport(size_t index) {
@@ -1010,6 +1034,7 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
 
 LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st) {
     // 降级路径 (动画等级不足, 未启用增量渲染): 整段 paragraph 单子项
+    // (同样自带尾部空行, 与消息块/增量稳定块统一)
     const auto& theme = *ctx_.theme;
 
     LazyBuiltItem out;
@@ -1084,7 +1109,9 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
     } else {
         block = paragraph(*st.currentToken) | color(theme.normalColor);
     }
-    out.element = std::move(block);
+    // 尾部空行: 列表内所有子项 (消息块、增量稳定块、流式区末尾项) 都自带尾部
+    // 空行, 因此占位提示/后续内容直接接排, 无需判断"上方是哪类子项"
+    out.element = vbox({std::move(block), text("")});
     return out;
 }
 
@@ -1102,22 +1129,52 @@ LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState
     header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(c));
     header.push_back(text(toolCall ? tr("msg.roleTool") : tr("msg.roleThink")) | color(c));
     if (toolCall && !st.genToolName.empty()) {
-        header.push_back(text(st.genToolName + " ") | color(theme.accentColor) | bold);
+        // 工具名按正常工具消息的同一套解析换成特化显示名 (如 agentxx_filesystem_read
+        // -> "Read"): 此阶段参数尚未接收完, 渲染器只能拿到工具名, 拿不到摘要
+        header.push_back(
+            text(genPlaceholderToolDisplayName(st) + " ") | color(theme.accentColor) | bold
+        );
     }
     header.push_back(
         text(tr(toolCall ? "msg.genToolCalling" : "msg.genWaiting")) | color(c) | theme.dim()
         | xflex_shrink
     );
 
+    Elements rows;
+    rows.push_back(hbox(std::move(header)));
+    rows.push_back(text("")); // 尾部空行 (与消息块一致, 见 quickHeight 的高度说明)
+
     LazyBuiltItem out;
-    out.element = vbox({
-        hbox(std::move(header)),
-        text(""), // 尾部空行 (与消息块一致, 见 quickHeight 的高度说明)
-    });
+    out.element = vbox(std::move(rows));
     // 使用加载动画时不可缓存 (每帧重建刷新点阵帧); 静态标识时保持可缓存
     out.cacheable   = !animMark;
     out.sourceBytes = 0;
     return out;
+}
+
+std::string MessageListComponent::genPlaceholderToolDisplayName(const TUIRenderState& st) const {
+    if (st.genToolName.empty()) {
+        return {};
+    }
+    // 参数与结果此时都还没有 (工具调用参数仍在接收), 只按工具名换显示名 ——
+    // 与正常工具消息走同一套工具特化渲染查询, 未命中渲染器/模版时回退原始工具名。
+    // 不传宽度 (0 = 不限): 占位行只展示显示名, 显示名与宽度无关, 固定的输入特征
+    // 使请求只投递一次, 终端宽度变化也不会重复请求
+    auto res = queryToolRender(
+        ctx_,
+        st,
+        std::string_view{}, // 无 toolCallId: 阶段装饰按调用 id 注册, 此时尚未分配
+        st.genToolName,
+        std::string_view{},
+        std::string_view{},
+        false,
+        false,
+        0
+    );
+    if (res.matched && !res.displayName.empty()) {
+        return res.displayName;
+    }
+    return st.genToolName;
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {
@@ -1188,8 +1245,12 @@ LazyBuiltItem MessageListComponent::buildStreamingFrontier(const TUIRenderState&
         if (!el) {
             el = text("");
         }
-        out.element = el | color(c);
+        // 尾部空行: 与消息块/增量稳定块一致 (见 quickHeight 的高度说明)。
+        // 有此空行后, 紧跟其后的占位提示/后续内容直接接排即可, 不再需要判断
+        // "上方是哪类子项"
+        out.element = vbox({el | color(c), text("")});
     } else {
+        // 防御分支 (无渲染器): 1 行空项, 与 quickHeight 的兜底估算一致
         out.element = text("");
     }
     return out;
