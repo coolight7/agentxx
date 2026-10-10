@@ -18,6 +18,7 @@
 #include "agentxx-test/core/test_event_stream.h"
 #include "agentxx-test/core/test_events.h"
 #include "agentxx-test/core/test_fake_provider.h"
+#include "agentxx-test/core/test_feature_points.h"
 #include "agentxx-test/core/test_filesystem_tools.h"
 #include "agentxx-test/core/test_graph_data.h"
 #include "agentxx-test/core/test_http.h"
@@ -417,6 +418,7 @@ int main(int argn, char** argv) {
                 };
 
                 co_await run("event_stream", agentxx::test::run_event_stream_tests);
+                co_await run("feature_points", agentxx::test::run_feature_points_tests);
                 co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
                 co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);
                 co_await run("subagent_bus", agentxx::test::run_subagent_bus_tests);

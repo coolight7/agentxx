@@ -7,6 +7,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
@@ -315,8 +316,27 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name     = "middleware_context",
+        .name     = "feature_registry",
         .after = "event_bus",
+        .run      = [&]() -> asio::awaitable<void> {
+            // 功能点注册表 (点 / 实现 / 调用): 早于中间件装配, 因此中间件可以声明
+            // 核心点 (如 agentxx.context.countTokens); 也早于插件装载, 因此插件
+            // 登记实现时点已存在
+            // - 开发者模式在启动时读取配置后冻结: 库内热路径只读进程级标记
+            //   (与 benchmark 标记同一做法)
+            agentxx::agent::AgentConfigStatic::devMode
+                = agentContext->agentConfig && agentContext->agentConfig->devMode;
+            agentContext->features = std::make_shared<agentxx::feature::Registry>();
+            co_return;
+        },
+        .rollback = [this]() {
+            agentContext->features.reset();
+        },
+    });
+
+    steps.push_back(InitStep{
+        .name     = "middleware_context",
+        .after = "feature_registry",
         .run      = [&]() -> asio::awaitable<void> {
             agentContext->middlewareHandleContext
                 = std::make_shared<agentxx::middleware::MiddlewareContext>(

@@ -107,6 +107,11 @@ struct YamlAppConfig {
     ///   修改任务开始时创建独立 worktree 并绑定会话 (详见
     ///   [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h))
     bool worktreeEnable = false;
+    /// 开发者模式 (yaml `dev_mode`, 默认 false)
+    /// - 开启时才收集"记录数据": 功能点调用统计、钩子派发记录、成功调用日志
+    /// - 启动时读取后冻结 (镜像到 AgentConfigStatic::devMode), 只控制记录收集,
+    ///   不改变任何行为
+    bool devMode = false;
 };
 
 /// 程序内置环境变量: 程序启动后的工作目录

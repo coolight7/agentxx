@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 51,
+  "count": 52,
   "keys": [
     {
       "path": "data_dir",
@@ -33,6 +33,12 @@
       "type": "bool",
       "default": "false",
       "sample": "worktree:\n  enable: true"
+    },
+    {
+      "path": "dev_mode",
+      "type": "bool",
+      "default": "false",
+      "sample": "dev_mode: true"
     },
     {
       "path": "permission.mode",

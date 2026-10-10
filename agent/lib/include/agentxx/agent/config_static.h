@@ -42,6 +42,16 @@ public:
         return enableBenchmark.exchange(enabled, std::memory_order_relaxed);
     }
 
+    /// 开发者模式开关 (进程级全局标记, 默认关闭; 启动期读取配置后冻结)
+    /// - 开启时才收集各种"记录数据": 功能点调用统计 (asks/calls/errors/lastBy...)、
+    ///   钩子派发记录、功能点成功调用的一行 info 日志
+    /// - **只控制记录数据的收集, 不改变任何行为** (实现链 / 值缓存策略 / 超时 /
+    ///   日志级别都不受影响)
+    /// - 关闭时热路径只多一次只读布尔判断, 不分配统计结构、不保留历史
+    /// - 与 benchmark 标记同一做法: 配置里声明 (yaml `dev_mode` / FFI `devMode` /
+    ///   命令行 `--dev`), 启动时镜像到本标记, 库内热路径只读它
+    inline static bool devMode = false;
+
     /// 默认数据根目录名 (置于用户主目录下)
     inline static constexpr std::string_view agentxxDataDirPath = ".agentxx";
 

@@ -238,6 +238,9 @@ static void applySharedRuntimeConfig(
     config->enableSubagent = yamlCfg.enableSubagent;
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
     config->enableWorktree = yamlCfg.worktreeEnable;
+    // 开发者模式 (yaml `dev_mode`, 默认 false): 只控制"记录数据"的收集
+    // (功能点调用统计 / 钩子派发记录 / 成功调用日志), 启动时冻结
+    config->devMode = yamlCfg.devMode;
     // 会话语言 (yaml `language`): 显式配置后客户端界面语言不再覆盖 (见
     // docs/zh-cn/design/configuration.md "语言" 一节)
     if (!yamlCfg.language.empty()) {

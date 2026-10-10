@@ -228,6 +228,14 @@ public:
     ///   客户端界面语言只在本机偏好未配置时兜底 (见 docs/zh-cn/design/configuration.md)
     bool languageExplicit = false;
 
+    /// 开发者模式 (yaml `dev_mode` / FFI 配置 JSON `devMode` / 命令行 `--dev`)
+    /// - 开启时才收集各种"记录数据": 功能点调用统计、钩子派发记录、
+    ///   功能点成功调用的一行 info 日志
+    /// - **只控制记录数据的收集, 不改变任何行为**; 启动时镜像到进程级只读标记
+    ///   [AgentConfigStatic::devMode] 后冻结 (运行期改配置不生效)
+    /// - 关闭时清单里没有 `stat` 段, 热路径只多一次只读布尔判断
+    bool devMode = false;
+
     /// 子代理继承的父会话 worktree 路径 (非配置项, 由 AgentHost 派生时填充)
     /// - 仅作提示词展示与权限规则注册依据; 实际路径解析基准经 workDir 字段
     ///   预置为同一值, 使子代理全部工具链自动落入 worktree

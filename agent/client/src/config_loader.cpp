@@ -752,6 +752,24 @@ static YamlAppConfig parseYamlConfigNode(
     // CodeGraph 参数已迁移到插件配置 (yaml `plugin.list` 段 agentxx_codegraph
     // 条目的 args): 宿主不解析其字段语义, 整体原样传递给插件
 
+    // 开发者模式 (yaml `dev_mode`, 默认 false; 顶层标量键)
+    // - 开启时才收集"记录数据" (功能点调用统计 / 钩子派发记录 / 成功调用日志);
+    //   启动时读取后冻结, 只控制记录收集, 不改变任何行为
+    if (root["dev_mode"]) {
+        auto val = utilxx_base::toLower(resolveEnvVars(
+            root["dev_mode"].as<std::string>("false"),
+            dotEnvVars,
+            overrideEnvVars
+        ));
+        if (val == "true" || val == "1" || val == "yes" || val == "on") {
+            cfg.devMode = true;
+        } else if (val == "false" || val == "0" || val == "no" || val == "off" || val.empty()) {
+            cfg.devMode = false;
+        } else {
+            XX_LOGW("[Config] Warning: unknown dev_mode '{}', fallback to false", val);
+        }
+    }
+
     // 权限配置 (permission 块: mode / whitelist / blacklist)
     // - mode:      询问处理模式 (ask/all_ask/pass/deny; 忽略大小写, 非法值警告回退 ask)
     // - whitelist/blacklist: 始终放行/拒绝的路径列表 (段结构 `list:` + `overwrite:`)

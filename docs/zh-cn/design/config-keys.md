@@ -11,7 +11,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 51
+键数: 52
 
 | 键路径 | 类型 | 默认值 |
 |---|---|---|
@@ -20,6 +20,7 @@
 | `language` | string (zh-cn | en) | 空 (由客户端界面语言决定) |
 | `subagent.enable` | bool | true |
 | `worktree.enable` | bool | false |
+| `dev_mode` | bool | false |
 | `permission.mode` | enum (ask | all_ask | pass | deny) | ask |
 | `permission.whitelist.list` | list<string> | 空 |
 | `permission.blacklist.list` | list<string> | 空 |
@@ -101,6 +102,12 @@ subagent:
 ```yaml
 worktree:
   enable: true
+```
+
+### `dev_mode`
+
+```yaml
+dev_mode: true
 ```
 
 ### `permission.mode`

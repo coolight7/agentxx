@@ -39,6 +39,12 @@ class ToolRegistry;
 class PluginManager;
 } // namespace plugin
 
+namespace feature {
+/// 功能点注册表 (点 / 实现 / 调用; 详见
+/// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
+class Registry;
+} // namespace feature
+
 namespace util {
 class KeyMetrics;
 class TaskScope;
@@ -716,6 +722,13 @@ public:
     /// - 由 BaseAgent::init 创建 (与事件总线同一生命周期), 诊断包与装配快照可读
     /// - 只记"发生了什么"的计数与耗时, 不含任何内容, 因此可安全导出 (见 diagnostics.h)
     std::shared_ptr<agentxx::util::KeyMetrics> metrics = nullptr;
+
+    /// 功能点注册表 (点 / 实现 / 调用; 计划 PLG 系列, 见
+    /// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
+    /// - 由 BaseAgent::init 创建 (早于中间件装配, 因此中间件可以声明核心点;
+    ///   也早于插件装载, 因此插件登记实现时点已存在)
+    /// - 随本 AgentContext 一份: 多 agent 实例互不影响, 不使用全局变量
+    std::shared_ptr<agentxx::feature::Registry> features = nullptr;
 
     /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
     /// - 由 BaseAgent::init 创建并注入; 插件经 graph 接口表注册自定义节点类型

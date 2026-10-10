@@ -33,6 +33,10 @@ class AgentContext;
 class AgentResourceApplier;
 } // namespace agent
 
+namespace feature {
+class Registry;
+}
+
 namespace events {
 class EventBus;
 }

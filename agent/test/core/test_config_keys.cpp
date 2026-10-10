@@ -244,6 +244,17 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          [](const YamlAppConfig& cfg) { return boolText(cfg.worktreeEnable); }}
     );
     out.push_back(
+        {"dev_mode",
+         "bool",
+         "false",
+         "dev_mode: true\n",
+         "",
+         false,
+         "false",
+         "true",
+         [](const YamlAppConfig& cfg) { return boolText(cfg.devMode); }}
+    );
+    out.push_back(
         {"permission.mode",
          "enum (ask | all_ask | pass | deny)",
          "ask",

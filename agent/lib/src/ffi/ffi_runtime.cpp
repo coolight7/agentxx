@@ -175,6 +175,8 @@ bool FfiAgentRuntime::buildConfigs(
         config->language              = agent::normalizeLanguage(cfgJ.value("language", "en"));
         // 配置 JSON 显式给出 language 时标记为显式: 连接客户端不再用界面语言覆盖
         config->languageExplicit      = cfgJ.contains("language");
+        // 开发者模式 (配置 JSON `devMode`): 只控制"记录数据"的收集
+        config->devMode               = cfgJ.value("devMode", false);
         {
             std::lock_guard<std::mutex> lock(langMutex_);
             language_ = config->language;
