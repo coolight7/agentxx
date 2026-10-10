@@ -122,7 +122,11 @@ public:
     std::vector<std::string>               permissionToolNames;
     std::vector<HookRegistration>          hookRegistrations;
     std::vector<GraphNodeTypeRegistration> graphNodeTypes;
-    PromptBackup                           promptBackup;
+    /// 本实例声明的功能点 id (`plugin.<自己>.*`; 禁用摘生效, 卸载全摘)
+    std::vector<std::string> featurePoints;
+    /// 本实例登记的功能点实现所在点 id (同一实例同一个点只保留一个实现)
+    std::vector<std::string> featurePointImpls;
+    PromptBackup             promptBackup;
 
     /// 装载总耗时 (毫秒; 由 PluginManager 装载入口记录, 见 PLG-10)
     uint64_t loadMs = 0;
@@ -247,11 +251,11 @@ public:
     /// 本宿主向插件提供的接口表数量 (计划 PLG-8: 文档里的数字有常量可校验)
     /// - 10 张通用表 (`pluginxx.*`, 由插件框架内核实现: log/json/config/plugins/events/
     ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
-    /// - 9 张 agent 领域表 (`agentxx.agent.*`: tools/permission/hooks/session/context/
-    ///   model/prompt/resources/graph)
+    /// - 10 张 agent 领域表 (`agentxx.agent.*`: tools/permission/hooks/session/context/
+    ///   model/prompt/resources/graph/feature)
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 10 + 9;
+    inline static constexpr size_t kInterfaceTableCount = 10 + 10;
 
     struct PluginListView {
         std::string              name;
@@ -283,6 +287,9 @@ public:
         size_t eventSubCount = 0;
         /// 已声明权限限制的工具数
         size_t permissionToolCount = 0;
+        /// 本实例声明的功能点数 / 登记的实现数
+        size_t featurePointCount = 0;
+        size_t featureImplCount  = 0;
         /// 统一注册清单 (计划 PLG-1): 各项的合计 (0 = 已回到基线)
         size_t registrationTotal = 0;
         /// 其中的提示词键占用数
@@ -323,6 +330,8 @@ public:
         size_t skillDirs           = 0; ///< skill 扫描目录 (资源应用器)
         size_t memoryFiles         = 0; ///< memory 上下文文件 (资源应用器)
         size_t mcpNamespaces       = 0; ///< MCP 命名空间 (资源应用器)
+        size_t featurePoints       = 0; ///< 本实例声明的功能点 (生效中)
+        size_t featureImpls        = 0; ///< 本实例登记的功能点实现 (生效中)
         bool   middlewareAttached  = false; ///< 钩子中间件是否挂在中间件链上
         bool   ownsGraphDefinition = false; ///< 是否占用执行图定义 (独占 slot)
 
@@ -330,7 +339,8 @@ public:
         size_t total() const {
             return tools + permissionTools + hooks + graphNodeTypes + eventSubscriptions
                    + capabilities + promptKeys + skillDirs + memoryFiles + mcpNamespaces
-                   + (middlewareAttached ? 1 : 0) + (ownsGraphDefinition ? 1 : 0);
+                   + featurePoints + featureImpls + (middlewareAttached ? 1 : 0)
+                   + (ownsGraphDefinition ? 1 : 0);
         }
     };
 
@@ -481,6 +491,58 @@ public:
 
     int registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec);
     int unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint point);
+
+    // ==================== 功能点 (agentxx.agent.feature) ====================
+
+    /// 为某个点登记实现 (插件的功能点表入口)
+    /// - 点必须已声明 (宿主点在装配期声明; 插件点先经 [defineFeaturePoint])
+    /// - 同一 `(点, 实例)` 重复登记 = 覆盖; 数量不设上限
+    /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记)
+    /// - 实现体经操作协议驱动 (与工具同一套), 完成回调在宿主 IO 线程发布
+    ///
+    /// `return`: 0 成功; 非 0 失败 (点未声明 / 回调为空 / 实例不可用)
+    int registerFeatureImpl(PluginInstance* inst, const AgentxxPluginFeatureImplSpec* spec);
+
+    /// 撤销本实例在某点上的实现
+    ///
+    /// `return`: 0 成功; 非 0 不存在
+    int unregisterFeatureImpl(PluginInstance* inst, PluginxxStringView pointId);
+
+    int unregisterFeatureImpl(PluginInstance* inst, std::string_view pointId) {
+        return unregisterFeatureImpl(inst, strToSv(pointId));
+    }
+
+    /// 声明本实例自己的功能点 (id 必须落在 `plugin.<本实例插件名>.*`)
+    /// - 本轮只允许 `provide` 类型; 重复声明 = 覆盖 (记一条日志)
+    /// - 声明期间恒可被调用; 值缓存固定不缓存 (调用方按结果里的 identity 自理)
+    ///
+    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与宿主点冲突)
+    int defineFeaturePoint(PluginInstance* inst, const AgentxxPluginFeaturePointSpec* spec);
+
+    /// 撤销本实例声明的点 (连带撤掉这些点上的全部实现)
+    ///
+    /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是本实例声明的点)
+    int undefineFeaturePoint(PluginInstance* inst, PluginxxStringView pointId);
+
+    int undefineFeaturePoint(PluginInstance* inst, std::string_view pointId) {
+        return undefineFeaturePoint(inst, strToSv(pointId));
+    }
+
+    /// 功能点清单 JSON (插件 `list_points`、装配快照与诊断共用同一份实现)
+    std::string listFeaturePoints();
+
+    /// 调用一个功能点 (异步; 完成回调经 notify 在宿主 IO 线程发布)
+    /// - 只拿数据: 只读值缓存、不记置空、不写调用方会话 / 不发提示 / 不落盘
+    /// - 受理失败返回 NULL 并写 error_out; 调用本身的失败 (not_callable / bad_args /
+    ///   no_impl / disabled / busy / failed) 经回调的结果 JSON 回
+    PluginxxOperatorHandle* callFeatureAsync(
+        PluginInstance*          caller,
+        PluginxxStringView       pointId,
+        PluginxxStringView       argsJson,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
 
     /// 注册插件节点类型到 per-agent GraphRegistry (插件 graph 接口表)
     int registerGraphNodeType(PluginInstance* inst, const AgentxxPluginGraphNodeTypeSpec* spec);

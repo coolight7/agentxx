@@ -1,0 +1,8 @@
+name: example_feature
+version: 1.0.0
+description: "Example feature-point plugin: declares a point, implements host points, calls points"
+entry: libexample_feature.so
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.feature

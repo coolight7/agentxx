@@ -201,6 +201,8 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     XX_TEST_EXPECT_EQ(inv.capabilities, size_t{1});
     XX_TEST_EXPECT_EQ(inv.permissionTools, size_t{0});
     XX_TEST_EXPECT_EQ(inv.graphNodeTypes, size_t{0});
+    XX_TEST_EXPECT_EQ(inv.featurePoints, size_t{0}); ///< example_plugin 不登记功能点
+    XX_TEST_EXPECT_EQ(inv.featureImpls, size_t{0});
     XX_TEST_EXPECT_EQ(inv.skillDirs, size_t{0});
     XX_TEST_EXPECT_EQ(inv.memoryFiles, size_t{0});
     XX_TEST_EXPECT_EQ(inv.mcpNamespaces, size_t{0});
@@ -217,6 +219,8 @@ asio::awaitable<void> test_registration_inventory_baseline() {
             XX_TEST_EXPECT_EQ(views[0].registrationTotal, inv.total());
             XX_TEST_EXPECT_EQ(views[0].promptKeyCount, inv.promptKeys);
             XX_TEST_EXPECT_EQ(views[0].ownsGraphDefinition, inv.ownsGraphDefinition);
+            XX_TEST_EXPECT_EQ(views[0].featurePointCount, inv.featurePoints);
+            XX_TEST_EXPECT_EQ(views[0].featureImplCount, inv.featureImpls);
         }
     }
 
@@ -237,6 +241,8 @@ asio::awaitable<void> test_registration_inventory_baseline() {
         XX_TEST_EXPECT_EQ(disabled.eventSubscriptions, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.capabilities, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.promptKeys, size_t{0});
+        XX_TEST_EXPECT_EQ(disabled.featurePoints, size_t{0});
+        XX_TEST_EXPECT_EQ(disabled.featureImpls, size_t{0});
         XX_TEST_EXPECT_FALSE(disabled.middlewareAttached);
         XX_TEST_EXPECT_EQ(disabled.total(), size_t{0}); ///< 回到基线
     }

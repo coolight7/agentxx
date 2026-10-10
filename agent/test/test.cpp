@@ -76,6 +76,7 @@
 #include "agentxx-test/plugin/test_cpu_gpu_use.h"
 #include "agentxx-test/plugin/test_plugin_bridge.h"
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
+#include "agentxx-test/plugin/test_plugin_feature.h"
 #include "agentxx-test/plugin/test_plugin_multi_instance.h"
 #include "agentxx-test/plugin/test_plugin_resources.h"
 #include "agentxx-test/plugin/test_plugin_runtime.h"
@@ -486,6 +487,7 @@ int main(int argn, char** argv) {
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);
                 co_await run("plugin_cleanup", agentxx::test::run_plugin_cleanup_tests);
+                co_await run("plugin_feature", agentxx::test::run_plugin_feature_tests);
                 co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
                 co_await run(
                     "plugin_multi_instance",

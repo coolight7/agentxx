@@ -96,6 +96,8 @@ inline constexpr std::string_view AgentJson         = PLUGINXX_IFACE_JSON;
 inline constexpr std::string_view AgentLog          = PLUGINXX_IFACE_LOG;
 inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES;
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
+/// 功能点: 登记实现 / 声明插件点 / 调用点 / 读清单 (见 AGENTXX_PLUGIN_IFACE_AGENT_FEATURE)
+inline constexpr std::string_view AgentFeature      = AGENTXX_PLUGIN_IFACE_AGENT_FEATURE;
 inline constexpr std::string_view AgentCancel       = PLUGINXX_IFACE_CANCEL;
 inline constexpr std::string_view AgentTasks        = PLUGINXX_IFACE_TASKS;
 /// 通用协程驱动表 (driver ticket / wake 协议; kit 的 PollOneBridge 依赖它)

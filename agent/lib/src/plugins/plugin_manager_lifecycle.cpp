@@ -16,6 +16,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
+#include "agentxx/feature/registry.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_framework.h"
@@ -136,7 +137,7 @@ std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) 
     return inst;
 }
 
-/// 摘除实例的领域注册 (工具 / 工具权限 / 图节点类型 / prompt 贡献 / 中间件停用)
+/// 摘除实例的领域注册 (工具 / 工具权限 / 图节点类型 / 提示词贡献 / 功能点 / 中间件停用)
 /// - 只摘除宿主侧生效的注册, 保留实例内的注册记录 (启用时由 start 事务重新声明);
 /// - 事件订阅与能力声明的撤销属通用部分, 由骨架的 detachAll 处理。
 void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
@@ -153,6 +154,17 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
         }
     }
     inst->permissionToolNames.clear();
+
+    // 功能点: 撤销本实例登记的实现, 并摘除它自己声明的点
+    if (auto ctx = agentContext_.lock(); ctx && ctx->features) {
+        const std::string owner = fmt::format("plugin:{}", inst->name);
+        for (const auto& pointId : inst->featurePointImpls) {
+            ctx->features->removeImpl(pointId, owner);
+        }
+        for (const auto& pointId : inst->featurePoints) {
+            ctx->features->undefinePluginPoint(pointId);
+        }
+    }
 
     for (const auto& graph : inst->graphNodeTypes) {
         if (graph.slot) {
@@ -184,7 +196,7 @@ void PluginManager::detachDomainOwnedResources(PluginInstance* inst) {
     }
 }
 
-/// 清空"由插件 start 事务重新声明"的领域记录 (工具/权限/hook/图)
+/// 清空"由插件 start 事务重新声明"的领域记录 (工具/权限/hook/图/功能点)
 /// - 通用记录 (事件订阅/能力声明) 由骨架的 clearPluginOwnedRegistrations 清空;
 /// - stop 成功后调用, 避免下次 start 在旧记录上重复累积。
 void PluginManager::clearDomainRegistrations(PluginInstance* inst) {
@@ -196,6 +208,8 @@ void PluginManager::clearDomainRegistrations(PluginInstance* inst) {
     inst->tools.clear();
     inst->hookRegistrations.clear();
     inst->graphNodeTypes.clear();
+    inst->featurePoints.clear();
+    inst->featurePointImpls.clear();
 }
 
 /// 卸载时释放实例级资源: 工具对象列表 + 清单资源所有权
@@ -531,6 +545,8 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
             view.memoryFileCount      = inventory.memoryFiles;
             view.mcpNamespaceCount    = inventory.mcpNamespaces;
             view.ownsGraphDefinition  = inventory.ownsGraphDefinition;
+            view.featurePointCount    = inventory.featurePoints;
+            view.featureImplCount     = inventory.featureImpls;
         }
         for (const auto& cap : inst->capabilityRegistrations) {
             view.capabilities.push_back(cap.name);

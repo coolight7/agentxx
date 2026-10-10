@@ -265,8 +265,22 @@ path/to/agentxx_test string_util regex
   三态判定 (DENY/ALLOW/ASK, 不发起询问; SDK: `filterPathPermissions` 等), 逐项丢弃
   被拒或未获批准的路径 —— 声明目标只决定"是否询问一次", 逐路径复核才保证子目录
   拒绝规则不被 `**` 模式绕过; 详见 `docs/zh-cn/design/plugins.md` §8 节
+- 功能点体系 (2026-10): 核心在关键位置留出的扩展点统一成"功能点"
+  (`agentxx/feature/feature.h`: `PointBase` / `ProvidePoint<TReq,TValue>` / `JsonProvidePoint`,
+  `registry.h`: 点表 + 清单, `points.h`: `agentxx.context.countTokens` /
+  `agentxx.context.summarize` / `agentxx.tool.summarizeOutput` 三个核心点与 `TokenEstimator`)。
+  实现链 `plugin`(0) → `core`(1), 层内按 `(priority 升序, 登记序号)`; 调用两态:
+  应用自己 `ask` (读+写值缓存、记置空标记) / 外部 `call` (只读缓存、不记置空、零副作用);
+  三道保护: 载荷带 caller/viaCall、调用方自己的实现不问、同 (点, 调用方) 重入 → `busy`。
+  错误码字符串 `not_callable|bad_args|no_impl|disabled|busy|failed`; 实现抛异常/非法 JSON/
+  空对象都只等于"没意见"。插件面经 `agentxx.agent.feature` 接口表 (声明自己的点
+  `plugin.<插件名>.*` / 为任意点登记实现 / 按名调用通用 JSON 点), SDK 见
+  `plugin_kit.h` 的 `defineFeaturePoint`/`provideFeature`/`featureAnswer`/`callFeature`/
+  `listFeaturePoints`; 压缩中间件已改用功能点取 token 与摘要 (见 `middlewares/summarization.cpp`)。
+  统计只在开发者模式 (`dev_mode`, 启动期冻结) 收集。测试: `feature_points` (核心侧),
+  `plugin_feature` (插件面端到端), 示例插件 `agent/plugins/example_feature`
 - 注册可逆与独占 slot (2026-10-07): 插件贡献分三类 —— **叠加型** (工具/权限声明/钩子/
-  图节点类型/事件订阅/能力/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
+  图节点类型/事件订阅/能力/功能点声明与实现/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
   启用由 `start` 重新声明, 卸载全摘; **贡献型** (提示词) 记 `(owner,key,sequence,value)`
   并按基础值重新合成, 禁用/卸载只删自己的贡献 (不写回旧值, 不顶掉别人的贡献与用户直写);
   **独占型** (`set_graph_json` 执行图定义) 同时只允许一个占用者, 后到者被拒绝,
@@ -364,8 +378,10 @@ path/to/agentxx_test string_util regex
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` (计划 OBS-4) 导出
   环境/指标/装配(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
-- 接口表数量: agent 侧 19 张 (10 张通用表 `pluginxx.*` + 9 张领域表 `agentxx.agent.*`,
-  新增 `agentxx.agent.context`: 会话 LLM 上下文查询 `get_messages`/`messages_count`),
+- 接口表数量: agent 侧 20 张 (10 张通用表 `pluginxx.*` + 10 张领域表 `agentxx.agent.*`;
+  领域表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
+  与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
+  `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
 - LLM 上下文归属 (2026-09): **会话是上下文唯一权威**, 图状态里没有 `messages` 通道
   (`state.serialize()` / checkpoint / 插件 stateJson 与上下文大小无关):

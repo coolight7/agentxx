@@ -996,8 +996,13 @@ TestResult testPluginBridge() {
                 harness.runOne();
             }
         };
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        pumpUntilDone(200);
+        // 本地 timer 到期后 root 才会跑完: 计时依赖机器负载, 固定一次等待在重负载下
+        // 会偶发失败 (本地 timer 尚未到期就没法继续推进), 因此按总时限重试
+        const auto pumpDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (probe.calls == 0 && std::chrono::steady_clock::now() < pumpDeadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            pumpUntilDone(200);
+        }
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled-ok"});
@@ -1072,18 +1077,22 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
 
         // 继续驱动: 本地 5ms timer 到期后业务体看到取消 -> CANCELLED 终态
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        for (int i = 0; i < 200 && probe.calls == 0; ++i) {
-            if (harness.queuedTicketCount() == 0) {
-                if (harness.sleeps.empty()) {
-                    break;
+        // (同样按总时限重试: 计时依赖机器负载, 只等一次在重负载下会偶发失败)
+        const auto cancelDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (probe.calls == 0 && std::chrono::steady_clock::now() < cancelDeadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            for (int i = 0; i < 200 && probe.calls == 0; ++i) {
+                if (harness.queuedTicketCount() == 0) {
+                    if (harness.sleeps.empty()) {
+                        break;
+                    }
+                    auto pending = harness.sleeps.front();
+                    harness.sleeps.erase(harness.sleeps.begin());
+                    pending.cb(pending.ud, PLUGINXX_OPERATOR_OK, nullptr);
+                    continue;
                 }
-                auto pending = harness.sleeps.front();
-                harness.sleeps.erase(harness.sleeps.begin());
-                pending.cb(pending.ud, PLUGINXX_OPERATOR_OK, nullptr);
-                continue;
+                harness.runOne();
             }
-            harness.runOne();
         }
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELLED);

@@ -1,7 +1,7 @@
 # 插件共享功能（功能点统一）— 实施记录
 
 > 方案文档: [plan.md](plan.md)（7 个阶段，每阶段一个提交）
-> 状态: **实施中** — 阶段 1 已完成
+> 状态: **实施中** — 阶段 1~3 已完成
 
 ## 阶段进度总览
 
@@ -9,7 +9,7 @@
 |---|---|---|
 | 1 | 子系统骨架（`agentxx::feature` + 值缓存 + 开发者模式 + `feature_points` 测试） | ✅ 已完成 |
 | 2 | 第一批核心点迁移（`countTokens` / `summarize`，行为不变） | ✅ 已完成 |
-| 3 | C ABI 接口表 + kit（插件登记实现） | ⬜ 待开始 |
+| 3 | C ABI 接口表 + kit（插件登记实现） | ✅ 已完成 |
 | 4 | 对外开放调用与插件自定义点 | ⬜ 待开始 |
 | 5 | 钩子处理器清单与优先级 | ⬜ 待开始 |
 | 6 | 命令行与 FFI 接入 | ⬜ 待开始 |
@@ -168,3 +168,103 @@ agentxx_test summarization feature_points event_stream event_bridge agent plugin
    只用核心实现。
 3. **阶段 3 待办**：`agentxx.agent.feature` 表 + `plugin_manager_feature.cpp` + kit 糖；
    接口表数量 19 → 20（`kInterfaceTableCount` / `plugins.md` §8 / 根 `AGENTS.md` 三处一起改）。
+
+---
+
+## 阶段 3：C ABI 接口表 + kit（已完成）
+
+### 已完成内容
+
+**接口表（`agentxx.agent.feature`，v1）**
+
+- `agent/lib/include/agentxx/plugin/api/plugin_api.h`：新增
+  `AGENTXX_PLUGIN_IFACE_AGENT_FEATURE`（IID = `agentxx.agent.feature`）、
+  `AgentxxPluginFeaturePointSpec`（点声明：id / type / title / depict / args_doc /
+  result_doc / impl_timeout_ms）、`AgentxxPluginFeatureImplSpec`（实现登记：point_id /
+  priority / default_timeout_ms / `impl_start` / `impl_cancel` / user_data）、
+  `AgentxxPluginFeatureIface`（7 个入口：`list_points` / `define_point` / `undefine_point` /
+  `register_impl` / `unregister_impl` / `call_point_async` / `op_cancel`）；
+  `plugin_interfaces.h` 加 `plugin_interfaces::AgentFeature` 常量。
+- `agent/lib/src/plugins/plugin_manager_feature.cpp`（新文件）：接口表的宿主落地
+  —— 实现登记（`pluginxx::OpCore` 驱动插件回调，与工具/钩子同一套操作协议）、
+  点声明/撤销、清单、按名调用（在 IO 线程跑实现链并把结果 JSON 经完成协议回给调用方）。
+- `plugin_manager_vtable.cpp`：新增 `g_ifaceFeature` 静态表 + 7 个 trampoline 入口 +
+  `query_interface` 分支；`plugin_manager.h` 的 `kInterfaceTableCount` 19 → 20。
+- 生命周期与记账：`PluginInstance` 新增 `featurePoints` / `featurePointImpls` 记录；
+  `detachDomainRegistrations` 撤实现与点、`clearDomainRegistrations` 清记录；
+  `registrationInventory` 统计生效中的 `featurePoints` / `featureImpls`（计入 `total()`）；
+  `list()` 视图新增 `featurePointCount` / `featureImplCount`；
+  装配快照新增插件条目 `feature_point_count` / `feature_impl_count` 与运行侧 `feature_points` 段。
+
+**SDK（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）**
+
+- `AgentIfaces::feature` + `query()` 查询。
+- `FeaturePointSpec` / `FeatureImplOptions`；`defineFeaturePoint` / `undefineFeaturePoint`；
+  `provideFeature`（**同步 `std::string` 与协程 `Task<T>` 两种形态**）/ `unprovideFeature`；
+  `listFeaturePoints`；`callFeature`（协程 Awaiter，结果 JSON 原样回，失败读 `ok` 字段）；
+  新增 `featureAnswer(...)`：协程实现返回值的包装糖（与同步形态同语义）。
+
+**示例插件（`agent/plugins/example_feature`，内置/动态双模式）**
+
+声明三个点（`plugin.example_feature.beat` 同步实现 / `.slow` 协程实现 /
+`.tooslow` 点声明 `impl_timeout_ms=50` 而实现等 400ms），并为宿主点
+`agentxx.context.countTokens` 登记实现（返回固定值 `{"tokens":424242}`，便于断言）。
+
+**测试（`plugin_feature` 模块，128 项断言）**
+
+覆盖：声明与登记（归属 / 可调 / 实现层序 / 实例视图与注册清单计数 / 清单 JSON）、
+插件实现覆盖核心点与摘除后回落（含按归属失效值缓存）、按名调用的各条结果路径
+（同步实现 / 协程实现 / 实现超时按没意见继续 / 同归属调用不问自己的实现 /
+强类型点拒绝受理 / 点不存在 / 无实现 / 显式置空）、`call` 的零副作用契约
+（不写值缓存、不记置空标记）、并发重入 `busy`、禁用/启用/卸载三态可逆。
+
+**改动同步**
+
+- 接口表数量三处一起改：`PluginManager::kInterfaceTableCount`、
+  `docs/zh-cn/design/plugins.md` §8（新增 `agentxx.agent.feature` 行 + 数量 19 → 20）、
+  根 `AGENTS.md`（19 张 → 20 张，并补功能点体系一节）；
+  `agent/test/core/test_boundaries.cpp` 规则 10（领域表 9 → 10）与规则 8（19 → 20）。
+- `agent/test/plugin/test_plugin_cleanup.cpp`：注册清单基线补功能点计数（装载 0 /
+  禁用 0 / `list()` 视图与 `registrationInventory` 同源）。
+
+### 本轮修掉的真实缺陷（都由新测试暴露）
+
+1. **协程实现收到悬垂入参**：`provideFeature` 的异步分支把 `impl_start` 栈上的
+   `callText` 以 `string_view` 交给延迟启动的协程，协程恢复时该字符串已析构
+   （ASan 报 heap-use-after-free）。改为传 Job 拥有的 `RootRequest` 副本。
+2. **失败/取消的回包被当成回答**：插件实现失败或取消时回包里是错误文本，原先直接
+   当回答解析（错误文本恰好是 JSON 时会被当成值）。改为非 OK 状态按"没意见"继续。
+3. **协程实现与同步实现的回答形状不一致**：同步形态由 kit 自动把裸数据包成
+   `{"value": ...}`，协程形态原先要求自己包。现在插件边界统一规范化
+   （`normalizePluginAnswer`），并给 SDK 补 `featureAnswer()` 糖，两种形态写法一致。
+
+### 测试结果
+
+```
+agentxx_test boundaries config_validation plugin_bridge feature_points plugins
+             plugin_cleanup plugin_feature summarization
+→ passed=1609 failed=0
+   boundaries 13 / config_validation 47 / plugin_bridge 193 / feature_points 123 /
+   plugins 541 / plugin_cleanup 102 / plugin_feature 128 / summarization 462
+```
+
+顺带修掉 `plugin_bridge` 两处时间敏感断言（本地 timer 到期 + 固定 `sleep_for` 后单次
+驱动，在重负载下偶发失败）：改为按总时限重试（语义不变，只是不再依赖机器负载）。
+
+### 注意事项 / 留给后续阶段
+
+1. **实现超时不会取消插件侧的活**：`ImplSpec::cancel` 已存储但**当前无人调用**，
+   点声明的 `implTimeoutMs` 到点只让调用方拿到 `no_impl` 并继续链，插件那边的操作
+   仍会跑完（结果丢弃）。插件实现是 CPU 重活时这会白算一次 —— 阶段 4/6 接入
+   命令行/FFI 调用时一并处理（要么在超时回调里调 `entry.cancel`，要么让
+   `ImplOps` 强持 OpCore 后再取消），本轮先按现状记录，未列入阶段 3 范围。
+2. **按名调用只支持通用 JSON 点**：强类型核心点（如 `agentxx.context.countTokens`）
+   返回受理错误（需要类型化请求对象），插件改图/重写点后可经 `xx_*` 通道或用
+   JSON 点中转；阶段 4 的对外调用入口按 JSON 请求解码补齐这条路径。
+3. **调用方自己的实现不会被问到**（保护 ②）：同一插件内部要取值请直接调本地函数；
+   SDK 文档已写明（`callFeature` 注释），否则会出现"自己的点调用返回 `no_impl`"的困惑。
+4. **回答保留键**：`value` / `disable` / `verdict` 是回答的形状键 —— 业务数据里出现
+   同名字段时会被当成回答解读（本轮示例数据就踩到过），SDK 文档已标注；
+   阶段 7 收尾时把这条写进插件作者文档 (plugins.md 的"功能点"一节)。
+5. **`struct_size` 守卫**：宿主侧目前未做 `struct_size` 校验（与既有表一致），
+   新增字段扩版本时需一并补上（阶段 7 统一处理接口表版本升级约定时处理）。

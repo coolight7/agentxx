@@ -458,6 +458,140 @@ typedef struct AgentxxPluginGraphIface {
     );
 } AgentxxPluginGraphIface;
 
+/* ==================== 接口表: 功能点 (agentxx.agent.feature) ==================== */
+
+/// 功能点 (feature point) —— 核心在关键位置主动调用的扩展点
+///
+/// 三层: 点 (Point) / 实现 (Impl) / 调用 (Call)。插件可以:
+/// 1. 为**任何已声明的点**登记实现 ([AgentxxPluginFeatureImplSpec]): 应用点由宿主
+///    装配期声明, 插件点由插件自己经 define_point 声明;
+/// 2. **声明自己的点** ([AgentxxPluginFeaturePointSpec]): id 必须落在
+///    `plugin.<本实例插件名>.*`, 声明期间恒可被任何一方调用 (本轮只允许 provide 类型);
+/// 3. **调用点** (call_point_async): 只拿数据 —— 不写值缓存、不记置空、不改调用方
+///    会话与上下文、不发界面提示、不落盘。
+///
+/// 实现链顺序: `plugin` 层 (插件 / FFI 宿主) → `core` 层 (libagentxx 自身兜底);
+/// 层内按 `(priority 升序, 登记顺序)`, 默认优先级带为插件 `0` / FFI 宿主 `1000`。
+/// 每个实现返回 `{"value": ...}` 给出值、`{"disable": true}` 显式置空 (不再问后面的
+/// 实现)、`{}` 表示没意见 (继续问下一个)。
+///
+/// 超时: 点的声明方可以给自己的点设 `impl_timeout_ms` (等单个实现的上限); 实现方
+/// 可以自报 `default_timeout_ms`; 宿主取两者中非 0 的较小值, 都为 0 (默认) 表示不限。
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE         "agentxx.agent.feature"
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION 1
+
+/// 功能点类型 (本轮只开放 `PROVIDE`; `DECIDE` 只有宿主留出的点使用)
+#define AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE 0
+#define AGENTXX_PLUGIN_FEATURE_TYPE_DECIDE  1
+
+/// 功能点实现自报的耗时上限 (毫秒; 0 = 不限); 与点的 `impl_timeout_ms` 取较小非 0 值
+/// (字段语义与 [AgentxxPluginToolSpec::default_timeout_ms] 一致)
+
+/// 插件声明自己的功能点
+typedef struct AgentxxPluginFeaturePointSpec {
+    /// 本结构体字节数 (sizeof(AgentxxPluginFeaturePointSpec)); 传 0 时按当前布局解析
+    uint32_t struct_size;
+    /// 类型 (AGENTXX_PLUGIN_FEATURE_TYPE_*)
+    int32_t type;
+    /// 等实现方的超时 (毫秒; 0 = 不限, 默认): 到点取消当次实现并按"没意见"继续链
+    int32_t impl_timeout_ms;
+    int32_t _reserved; ///< 8 字节补齐
+    /// 点 id, 必须为 `plugin.<本实例插件名>.<名字>` (不含空白字符)
+    PluginxxStringView id;
+    /// 展示名 (可空, 缺省用 id)
+    PluginxxStringView title;
+    /// 一句话说明
+    PluginxxStringView depict;
+    /// 参数说明 (文本; 进清单与作者文档)
+    PluginxxStringView args_doc;
+    /// 结果说明 (文本)
+    PluginxxStringView result_doc;
+} AgentxxPluginFeaturePointSpec;
+
+/// 功能点实现登记 (与工具 `execute_start` 同一套操作协议)
+typedef struct AgentxxPluginFeatureImplSpec {
+    /// 本结构体字节数; 传 0 时按当前布局解析
+    uint32_t struct_size;
+    /// 层内顺序, 小者先 (插件默认 0; 越界裁剪到上下限并记警告, 不拒绝登记)
+    int32_t priority;
+    /// 自报的最大耗时 (毫秒; 0 = 不限, 默认)
+    int32_t default_timeout_ms;
+    /// 目标点 id (该点必须已声明)
+    PluginxxStringView point_id;
+    void*              user_data;
+    /// 启动实现 (【宿主 io 线程调用】, 非阻塞; 操作契约):
+    /// - `point_id`: 目标点 id (只读借用, 仅本次调用有效)
+    /// - `call_json`: 调用上下文 JSON (只读借用), 形状见下:
+    ///   `{ "point": "...", "args": {...}, "request": {...}, "caller": "插件名或空",
+    ///      "viaCall": true/false, "identity": "..." }`
+    /// - `notify`: 完成/失败/取消都经它回到宿主 IO 线程 (必须恰好回调一次)
+    /// - 快同步实现: 算完 → notify->done(OK, &answer) → 返回 NULL
+    /// - 锚定协程/自管异步: 返回 op 句柄 (宿主用 impl_cancel 请求取消)
+    /// - 回答文本: `{"value": ...}` 给出值 / `{"disable": true}` 显式置空 /
+    ///   `{}` (或空串) 没意见
+    /// - 失败: 返回 NULL 且 *error_out 输出错误 (host->alloc 分配)
+    void*(PLUGINXX_CALL* impl_start)(
+        void*                         user_data,
+        const PluginxxStringView*     point_id,
+        const PluginxxStringView*     call_json,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    );
+    /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
+    void(PLUGINXX_CALL* impl_cancel)(void* user_data, void* op);
+} AgentxxPluginFeatureImplSpec;
+
+typedef struct AgentxxPluginFeatureIface {
+    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION
+    uint32_t struct_size;
+
+    /// 功能点清单 (JSON 文本; 出参经 host->alloc 分配, 失败返回非 0)
+    int32_t(PLUGINXX_CALL* list_points)(const PluginxxHost* host, PluginxxString* out_json);
+
+    /// 声明插件自己的功能点
+    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与宿主点冲突)
+    int32_t(PLUGINXX_CALL* define_point)(
+        const PluginxxHost*                    host,
+        const AgentxxPluginFeaturePointSpec*   spec
+    );
+    /// 撤销插件自己的点 (连带撤掉这些点上的全部实现; 禁用/卸载时宿主自动处理)
+    /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是本实例声明的点)
+    int32_t(PLUGINXX_CALL* undefine_point)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* point_id
+    );
+
+    /// 登记实现 (同一 `(点, 实例)` 重复登记 = 覆盖; 数量不设上限)
+    /// `return`: 0 成功; 非 0 失败 (点未声明 / 回调为空)
+    int32_t(PLUGINXX_CALL* register_impl)(
+        const PluginxxHost*                   host,
+        const AgentxxPluginFeatureImplSpec*   spec
+    );
+    /// 撤销实现 (按点 id)
+    /// `return`: 0 成功; 非 0 不存在
+    int32_t(PLUGINXX_CALL* unregister_impl)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* point_id
+    );
+
+    /// 调用一个功能点 (异步; 完成回调经 notify 在宿主 IO 线程发布)
+    /// - `args_json`: 调用方原样给的参数 (JSON; 空串按空对象处理)
+    /// - 结果 JSON: `{"ok":true,"id":...,"identity":...,"value":...,"by":...,"fromCache":...,
+    ///   "ms":N}` 或 `{"ok":false,"id":...,"error":"not_callable|bad_args|no_impl|
+    ///   disabled|busy|failed","message":"..."}`
+    /// - 受理失败 (参数非法/宿主不支持) 返回 NULL 并写 error_out; 调用本身的失败经回调回
+    PluginxxOperatorHandle*(PLUGINXX_CALL* call_point_async)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* point_id,
+        const PluginxxStringView* args_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 取消一次功能点调用 (协作式; 上一次调用没结束时同一 (点, 调用方) 的重入会被拒绝)
+    void(PLUGINXX_CALL* op_cancel)(PluginxxOperatorHandle* op);
+} AgentxxPluginFeatureIface;
+
 #pragma pack(pop)
 
 #ifdef __cplusplus

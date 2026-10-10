@@ -11,6 +11,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
@@ -114,6 +115,9 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
         item["capability_count"]    = v.capabilities.size();
         item["capabilities"]        = v.capabilities;
         item["permission_tools"]    = v.permissionToolCount;
+        // 功能点: 本实例声明的点数 / 登记的实现数 (禁用/卸载后回 0)
+        item["feature_point_count"] = v.featurePointCount;
+        item["feature_impl_count"]  = v.featureImplCount;
         // 统一注册清单合计 (计划 PLG-1): 0 = 该实例当前没有向宿主贡献任何注册
         item["registration_total"]  = v.registrationTotal;
         item["prompt_key_count"]    = v.promptKeyCount;
@@ -386,6 +390,17 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         persist["writer_lease"] = ctx.sessions->sessionStore->writerLeaseEnabled();
     }
     root["persistence"] = std::move(persist);
+
+    // ---- 功能点 (清单: 点数 / 各点生效实现 / 可调性; 见 plan §11) ----
+    if (ctx.features) {
+        root["feature_points"] = ctx.features->listPointsJson();
+    } else {
+        utilxx_base::Json empty = utilxx_base::Json::object();
+        empty["devMode"]        = false;
+        empty["count"]          = 0;
+        empty["points"]         = utilxx_base::Json::array();
+        root["feature_points"]  = std::move(empty);
+    }
 
     // ---- 已加载组件 (skill / memory / mcp) 与加载失败项 ----
     utilxx_base::Json components  = utilxx_base::Json::object();

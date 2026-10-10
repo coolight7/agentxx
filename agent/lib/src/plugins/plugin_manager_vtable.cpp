@@ -535,6 +535,89 @@ static int32_t PLUGINXX_CALL
     });
 }
 
+// ==================== 功能点表 (agentxx.agent.feature) ====================
+
+static int32_t PLUGINXX_CALL xx_feature_list_points(const PluginxxHost* host, PluginxxString* out) {
+    return queryStringIo(host, out, [](PluginInstance*, PluginManager* mgr) {
+        return mgr->listFeaturePoints();
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_feature_define_point(
+    const PluginxxHost*                   host,
+    const AgentxxPluginFeaturePointSpec*  spec
+) {
+    if (spec == nullptr) {
+        return -1;
+    }
+    auto specCopy = *spec;
+    return onInstanceIo(host, [specCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->defineFeaturePoint(inst, &specCopy);
+    });
+}
+
+static int32_t PLUGINXX_CALL
+    xx_feature_undefine_point(const PluginxxHost* host, const PluginxxStringView* point_id) {
+    if (agentxx::plugin::PluginStringView::empty(point_id)) {
+        return -1;
+    }
+    auto idCopy = *point_id;
+    return onInstanceIo(host, [idCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->undefineFeaturePoint(inst, idCopy);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_feature_register_impl(
+    const PluginxxHost*                  host,
+    const AgentxxPluginFeatureImplSpec*  spec
+) {
+    if (spec == nullptr || !spec->impl_start) {
+        return -1;
+    }
+    auto specCopy = *spec;
+    return onInstanceIo(host, [specCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->registerFeatureImpl(inst, &specCopy);
+    });
+}
+
+static int32_t PLUGINXX_CALL
+    xx_feature_unregister_impl(const PluginxxHost* host, const PluginxxStringView* point_id) {
+    if (agentxx::plugin::PluginStringView::empty(point_id)) {
+        return -1;
+    }
+    auto idCopy = *point_id;
+    return onInstanceIo(host, [idCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->unregisterFeatureImpl(inst, idCopy);
+    });
+}
+
+static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_feature_call_point_async(
+    const PluginxxHost*       host,
+    const PluginxxStringView* point_id,
+    const PluginxxStringView* args_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return guardVtableCall<::PluginxxOperatorHandle*>(nullptr, [&]() {
+        auto  call = enterHost(host);
+        auto* inst = call.instance();
+        auto* mgr  = call.manager();
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(point_id)) {
+            hostMemorySetString(error_out, "call_point_async: plugin runtime unavailable");
+            return static_cast<::PluginxxOperatorHandle*>(nullptr);
+        }
+        return mgr->callFeatureAsync(
+            inst,
+            *point_id,
+            args_json ? *args_json : PluginxxStringView{},
+            cb,
+            ud,
+            error_out
+        );
+    });
+}
+
 static int32_t PLUGINXX_CALL xx_get_prompt(const PluginxxHost* host, PluginxxString* out) {
     return queryStringIo(host, out, [](PluginInstance* inst, PluginManager* mgr) {
         return mgr->getPromptJson();
@@ -697,6 +780,18 @@ static const AgentxxPluginGraphIface g_ifaceGraph = {
     /* set_graph_json */ xx_set_graph_json,
 };
 
+static const AgentxxPluginFeatureIface g_ifaceFeature = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginFeatureIface),
+    /* list_points */ xx_feature_list_points,
+    /* define_point */ xx_feature_define_point,
+    /* undefine_point */ xx_feature_undefine_point,
+    /* register_impl */ xx_feature_register_impl,
+    /* unregister_impl */ xx_feature_unregister_impl,
+    /* call_point_async */ xx_feature_call_point_async,
+    /* op_cancel */ xx_op_cancel,
+};
+
 const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 
 static const PluginxxHostVtable g_hostVtable = {
@@ -749,6 +844,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH) {
         return &g_ifaceGraph;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_FEATURE) {
+        return &g_ifaceFeature;
     }
     return nullptr;
 }
