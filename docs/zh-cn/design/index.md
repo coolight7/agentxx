@@ -689,7 +689,7 @@ path/to/agentxx_test string_util regex agent
 ```
 
 可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ui_kit` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+- 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `graph_data` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ui_kit` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
 - 同步模块 (client 侧, 仅 `AGENTXX_BUILD_CLIENT`): `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`
 - 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
 - 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 透出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
@@ -2010,6 +2010,7 @@ agent/
 │       │   ├── test_message_supplement.h      # 消息补全/修复测试
 │       │   ├── test_summarization.h           # 上下文压缩测试 (token 统计/去重/LLM 压缩)
 │       │   ├── test_checkpoint_store.h        # 单检查点存储测试 (InMemorySingleCheckpointStore)
+│       │   ├── test_graph_data.h              # graphData <-> Json/state 通道序列化测试 (中断 checkpoint 丢值回归)
 │       │   ├── test_memgrowth.h               # 多轮内存增长测试 (泄漏检测)
 │       │   ├── test_session_persistence.h     # 会话 SQLite 持久化测试 (消息/上下文/share store 落库与重启恢复)
 │       │   ├── test_remote_agent.h            # 远程 Agent (WS 传输 / SessionServerAgentIO) 测试

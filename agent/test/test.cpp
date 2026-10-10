@@ -19,6 +19,7 @@
 #include "agentxx-test/core/test_events.h"
 #include "agentxx-test/core/test_fake_provider.h"
 #include "agentxx-test/core/test_filesystem_tools.h"
+#include "agentxx-test/core/test_graph_data.h"
 #include "agentxx-test/core/test_http.h"
 #include "agentxx-test/core/test_http_recorder.h"
 #include "agentxx-test/core/test_interrupt_bus.h"
@@ -274,6 +275,7 @@ int main(int argn, char** argv) {
         runSync("events", agentxx::test::test_events);
         runSync("concurrency", agentxx::test::testConcurrency);
         runSync("misc_fixes", agentxx::test::testMiscFixes);
+        runSync("graph_data", agentxx::test::testGraphData);
         runSync("aho_corasick", agentxx::test::testAhoCorasick);
         runSync("observability", agentxx::test::testObservability);
         runSync("util_misc", agentxx::test::testUtilMisc);

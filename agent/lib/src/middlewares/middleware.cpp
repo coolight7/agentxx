@@ -229,6 +229,17 @@ utilxx_base::Json MiddlewareContext::anyToJson(const std::any& val) {
     if (t == typeid(std::vector<std::string>)) {
         return std::any_cast<const std::vector<std::string>&>(val);
     }
+    // 来源键 → 文本 的动态段表 (xx_appendSystemMessage; 与 jsonToValue 的同名分支对称):
+    // 缺失时中断序列化 graphData 到 state checkpoint 会把该键写成 null, 重启恢复后丢段
+    if (t == typeid(std::map<std::string, std::string, std::less<>>)) {
+        auto& sections
+            = std::any_cast<const std::map<std::string, std::string, std::less<>>&>(val);
+        auto saved = utilxx_base::Json::object();
+        for (const auto& [key, text] : sections) {
+            saved[key] = text;
+        }
+        return saved;
+    }
     if (t == typeid(std::vector<neograph::ChatMessage>)) {
         auto& msgs = std::any_cast<const std::vector<neograph::ChatMessage>&>(val);
         auto  arr  = utilxx_base::Json::array();
