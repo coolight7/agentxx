@@ -14,6 +14,7 @@
 - 主动记忆 插件tool
 - 用户发送消息、轮次完成时 立即写入 sql
 - tui 提示消息 dim
+- tui 显示缓存命中率
 - 添加连续多次压缩检查
 - 队列输入消息单条过长时通过 agentxx_share_store 分页
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
