@@ -5,8 +5,10 @@
 #include "pluginxx/ui/gen/blocks.g.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <regex>
 #include <sstream>
@@ -536,6 +538,336 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     }
 }
 
+/// 规则 13: 接口表四件套齐全 (计划 plugin-version §3.9)
+///
+/// 每张接口表必须同时具备四项, 缺一不可 (新增表同样):
+/// - **IID** (`X_IFACE_<名>` 字符串常量): `query_interface` 的键;
+/// - **`struct_size`** 字段: 主程序装配时填 `sizeof(表)`;
+/// - **`version`** 字段 + `X_VERSION`: 语义档位;
+/// - **`X_MIN_VERSION`**: 本头能协同工作的最低表版本;
+/// - **`X_BASELINE_SIZE`**: 所有提供本表的主程序都应具备的字节数。
+///
+/// 还检查:
+/// - 三个常量都写在这张表声明之前 (声明顺序即"邻近"), 且 `sizeof(表名)` 指回同一张表;
+/// - `MIN_VERSION <= VERSION`;
+/// - 每张表在 `plugin_iface_meta.h` / `pluginxx/api/iface_meta.h` 里恰有一条
+///   `IfaceMeta` 特化 (漏加特化不会编译失败, 只会让该表退化为"必须完整", 因此必须查)。
+///
+/// 数量: 通用 10 + agent 领域 10 + client 领域 9 = 29 张。
+void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
+    struct Group {
+        const fs::path* file;
+        const char*     macro;  ///< IID 宏前缀 (不含尾随 `_<名>`)
+        const char*     label;
+        size_t          expect;
+    };
+    const fs::path genericHeader
+        = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx" / "api" / "tables.h";
+    const fs::path genericMeta = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx"
+                                 / "api" / "iface_meta.h";
+    const fs::path agentHeader
+        = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_api.h";
+    const fs::path clientHeader
+        = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "client_plugin_api.h";
+    const fs::path agentMeta
+        = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_iface_meta.h";
+
+    const Group groups[] = {
+        {&genericHeader, "PLUGINXX_IFACE_", "通用", 10},
+        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 领域", 10},
+        {&clientHeader, "AGENTXX_IFACE_CLIENT_", "client 领域", 9},
+    };
+
+    size_t                        tableTotal = 0;
+    std::vector<fs::path>         metaFiles{genericMeta, agentMeta};
+    for (const auto& group : groups) {
+        const auto text  = readTextFile(*group.file);
+        const auto where = toGeneric(group.file->lexically_relative(root));
+        if (text.empty()) {
+            v.push_back(where + ": 无法读取接口表声明头 (四件套检查依赖它)");
+            continue;
+        }
+        // 表结构体名 (typedef struct XxxIface { ... } XxxIface;)
+        const std::regex tableRe{R"re(typedef[ \t]+struct[ \t]+(\w+Iface)[ \t]*\{)re"};
+        // 一行一条 `#define`: IID / 数值 / 基线(sizeof) 三种形态用同一条正则拆开,
+        // 避免 `X_MIN_VERSION` 被 `X_VERSION` 的写法重复匹配
+        const std::regex defineRe{
+            std::string{R"re(^[ \t]*#[ \t]*define[ \t]+)re"} + group.macro
+            + R"re((\w+)[ \t]+(.+)[ \t]*$)re"
+        };
+
+        std::vector<std::string> tables;
+        {
+            std::string_view rest{text};
+            size_t           pos = 0;
+            while (true) {
+                std::smatch m;
+                const auto  sub = std::string{rest.substr(pos)};
+                if (!std::regex_search(sub, m, tableRe)) {
+                    break;
+                }
+                tables.push_back(m[1].str());
+                pos += static_cast<size_t>(m.position(1) + m[1].length());
+            }
+        }
+        std::vector<std::string> iids;
+        std::vector<std::string> versions;
+        std::vector<std::string> minVersions;
+        std::vector<std::string> baselines;
+        {
+            std::string_view rest{text};
+            size_t           pos = 0;
+            while (pos <= rest.size()) {
+                const auto nl  = rest.find('\n', pos);
+                const auto end = (nl == std::string_view::npos) ? rest.size() : nl;
+                const auto line = std::string{rest.substr(pos, end - pos)};
+                std::smatch m;
+                if (std::regex_search(line, m, defineRe) && m.size() > 2) {
+                    const std::string name = m[1].str();
+                    const std::string body = m[2].str();
+                    if (!body.empty() && body.front() == '"') {
+                        iids.push_back(name);
+                    } else if (name.ends_with("_BASELINE_SIZE")) {
+                        static const std::regex kSizeof{R"re(sizeof[ \t]*\([ \t]*(\w+)[ \t]*\))re"};
+                        std::smatch                sm;
+                        if (std::regex_search(body, sm, kSizeof) && sm.size() > 1) {
+                            baselines.push_back(sm[1].str());
+                        } else {
+                            v.push_back(
+                                where + ": `" + name + "` 不是 `sizeof(表名)` 形态 (基线必须由编译器算)"
+                            );
+                        }
+                    } else if (name.ends_with("_MIN_VERSION")) {
+                        minVersions.push_back(body);
+                    } else if (name.ends_with("_VERSION")) {
+                        versions.push_back(body);
+                    }
+                }
+                if (nl == std::string_view::npos) {
+                    break;
+                }
+                pos = nl + 1;
+            }
+        }
+
+        if (tables.size() != group.expect) {
+            v.push_back(
+                where + ": " + group.label + "接口表结构体数量为 " + std::to_string(tables.size())
+                + ", 期望 " + std::to_string(group.expect)
+            );
+        }
+        if (iids.size() != tables.size()) {
+            v.push_back(
+                where + ": " + group.label + "接口表 IID 宏数量为 " + std::to_string(iids.size())
+                + ", 表数量为 " + std::to_string(tables.size())
+                + " (每张表都要有 IID 宏)"
+            );
+        }
+        if (versions.size() != tables.size()) {
+            v.push_back(
+                where + ": " + group.label + "接口表 X_VERSION 宏数量为 "
+                + std::to_string(versions.size()) + ", 表数量为 " + std::to_string(tables.size())
+            );
+        }
+        if (minVersions.size() != tables.size()) {
+            v.push_back(
+                where + ": " + group.label + "接口表 X_MIN_VERSION 宏数量为 "
+                + std::to_string(minVersions.size()) + ", 表数量为 " + std::to_string(tables.size())
+                + " (每张表都要有最低兼容版本)"
+            );
+        }
+        if (baselines.size() != tables.size()) {
+            v.push_back(
+                where + ": " + group.label + "接口表 X_BASELINE_SIZE 宏数量为 "
+                + std::to_string(baselines.size()) + ", 表数量为 " + std::to_string(tables.size())
+            );
+        }
+        // 基线的 sizeof 必须指回本组的某张表 (写错表名 = 判定用错尺寸)
+        for (const auto& target : baselines) {
+            if (std::find(tables.begin(), tables.end(), target) == tables.end()) {
+                v.push_back(
+                    where + ": BASELINE_SIZE 指向 `sizeof(" + target
+                    + ")`, 它不是本组的接口表结构体"
+                );
+            }
+        }
+        // MIN_VERSION <= VERSION (按行序配对: 两组宏数量相同才逐项比对)
+        if (versions.size() == minVersions.size()) {
+            for (size_t i = 0; i < versions.size(); ++i) {
+                if (std::stoi(minVersions[i]) > std::stoi(versions[i])) {
+                    v.push_back(
+                        where + ": 第 " + std::to_string(i + 1) + " 张表的 MIN_VERSION("
+                        + minVersions[i] + ") 大于 VERSION(" + versions[i] + ")"
+                    );
+                }
+            }
+        }
+        tableTotal += tables.size();
+    }
+
+    // 特化数量必须等于表数量 (漏加特化不会编译失败, 只会让该表退化为"必须完整")
+    size_t metaCount = 0;
+    for (const auto& file : metaFiles) {
+        const auto text = readTextFile(file);
+        if (text.empty()) {
+            v.push_back(
+                toGeneric(file.lexically_relative(root)) + ": 无法读取 IfaceMeta 特化头"
+            );
+            continue;
+        }
+        static const std::regex kSpecialize{R"re(struct[ \t]+IfaceMeta[ \t]*<[ \t]*\w+[ \t]*>)re"};
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), kSpecialize);
+             it != std::sregex_iterator();
+             ++it) {
+            ++metaCount;
+        }
+    }
+    if (metaCount != tableTotal) {
+        v.push_back(
+            "IfaceMeta 特化数量为 " + std::to_string(metaCount) + ", 接口表数量为 "
+            + std::to_string(tableTotal) + " (每张表恰一条特化)"
+        );
+    }
+    if (tableTotal != 29) {
+        v.push_back(
+            "接口表合计为 " + std::to_string(tableTotal) + ", 期望 29 (通用 10 + agent 10 + client 9)"
+        );
+    }
+}
+
+/// 规则 14: 接口表成员顺序台账 (计划 plugin-version §3.6/§7)
+///
+/// 重排成员、改成员签名、删除成员都**可能不改变结构体大小** —— 版本号与
+/// `struct_size` 都拦不住, 旧调用方会静默调到隔壁函数。唯一可行的防线是把"成员顺序"
+/// 冻结成台账: 这里从三个表头按声明顺序抽出每张表的顶层函数指针成员, 与下方期望台账
+/// 逐项比对。
+///
+/// 追加成员时同步更新本台账 (在期望顺序末尾加一项), 同时 `X_VERSION` +1、
+/// `X_BASELINE_SIZE` 保持不变、调用点改用 `ifaceHas`。
+void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
+    struct TableLayout {
+        const char* table;   ///< 表结构体名
+        const char* members; ///< 顶层函数指针成员, 按声明顺序以 `|` 分隔
+    };
+    // 台账由表头按声明顺序生成 (生成脚本见 resource/history/plugin-version/work.md)
+    static const TableLayout kExpected[] = {
+    {"AgentxxClientEventsIface",         "subscribe|unsubscribe"},
+    {"AgentxxClientJsonIface",           "json_get_string|json_escape"},
+    {"AgentxxClientKeybindIface",        "register_keybind|unregister_keybind|list_keybinds"},
+    {"AgentxxClientLogIface",            "log"},
+    {"AgentxxClientSelfIface",           "get_own_info|get_plugin_args|get_plugin_config_path|get_language|set_language"},
+    {"AgentxxClientSessionIface",        "get_client_state|send_user_input|request_cancel"},
+    {"AgentxxClientTimerIface",          "set_timer|cancel_timer|is_visible"},
+    {"AgentxxClientUiIface",             "register_status_item|update_status_item|unregister_status_item|register_panel|update_panel|unregister_panel|register_info_section|update_info_section|unregister_info_section|register_command|unregister_command|show_toast|update_tool_decor|register_tool_renderer|unregister_tool_renderer|bind_action_handler|unbind_action_handler|open_overlay|close_overlay"},
+    {"AgentxxClientWireIface",           "send_plugin_data"},
+    {"AgentxxPluginContextIface",        "get_messages|messages_count"},
+    {"AgentxxPluginFeatureIface",        "list_points|define_point|undefine_point|register_impl|unregister_impl|call_point_async|op_cancel"},
+    {"AgentxxPluginGraphIface",          "register_node_type|unregister_node_type|get_graph_json|get_graph_name|set_graph_json"},
+    {"AgentxxPluginHooksIface",          "register_hook|unregister_hook|register_hook_ex|unregister_hook_ex|list_hooks"},
+    {"AgentxxPluginModelIface",          "get_config"},
+    {"AgentxxPluginPermissionIface",     "register_tool_permission|unregister_tool_permission|check_paths"},
+    {"AgentxxPluginPromptIface",         "get_prompt|set_prompt"},
+    {"AgentxxPluginResourcesIface",      "register_skill_dir|unregister_skill_dir|register_memory_file|unregister_memory_file|register_mcp_server|unregister_mcp_server|get_own_resources"},
+    {"AgentxxPluginSessionIface",        "get_share_store|emit_message_tip|add_share_store"},
+    {"AgentxxPluginToolsIface",          "register_tool|unregister_tool|call_tool_async|op_cancel"},
+    {"PluginxxCancelIface",              "is_cancelled"},
+    {"PluginxxCapabilitiesIface",        "register_capability|register_capability_ex|unregister_capability|has_capability|invoke_capability_async|op_cancel"},
+    {"PluginxxConfigIface",              "get_config|get_plugin_args|get_tool_prompt|get_session_work_dir|get_plugin_config_path|get_language|set_language"},
+    {"PluginxxCoroutineRuntimeIface",    "request_driver|cancel_driver|is_io_thread"},
+    {"PluginxxEventsIface",              "subscribe|unsubscribe|publish"},
+    {"PluginxxJsonIface",                "json_get_string|json_escape"},
+    {"PluginxxLogIface",                 "log"},
+    {"PluginxxPluginsIface",             "list_plugins|get_plugin|get_own_info"},
+    {"PluginxxSchedulerIface",           "is_io_thread|post_to_io|sleep|op_cancel|offload"},
+    {"PluginxxTasksIface",               "register_task|cancel_task"},
+    };
+
+    const fs::path headers[] = {
+        root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx" / "api" / "tables.h",
+        root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_api.h",
+        root / "lib" / "include" / "agentxx" / "plugin" / "api" / "client_plugin_api.h",
+    };
+
+    /// 从表结构体定义体里按声明顺序抽顶层函数指针成员
+    /// (括号深度必须为 0: 表内嵌套的函数指针参数 —— 如 client ui 表
+    /// `register_command` 的 `execute` 参数 —— 不是成员)
+    const auto membersOf = [](std::string_view body) {
+        std::vector<std::string> out;
+        int                      depth = 0;
+        constexpr std::string_view kMark = "(PLUGINXX_CALL*";
+        for (size_t i = 0; i < body.size(); ++i) {
+            if (body[i] == '(') {
+                ++depth;
+                if (depth == 1 && body.compare(i, kMark.size(), kMark) == 0) {
+                    size_t j = i + kMark.size();
+                    while (j < body.size() && std::isspace(static_cast<unsigned char>(body[j]))) {
+                        ++j;
+                    }
+                    size_t k = j;
+                    while (k < body.size()
+                           && (std::isalnum(static_cast<unsigned char>(body[k])) || body[k] == '_')) {
+                        ++k;
+                    }
+                    if (k > j) {
+                        out.emplace_back(body.substr(j, k - j));
+                    }
+                }
+            } else if (body[i] == ')') {
+                --depth;
+            }
+        }
+        return out;
+    };
+
+    std::map<std::string, std::string> actual;
+    for (const auto& header : headers) {
+        const auto text = readTextFile(header);
+        if (text.empty()) {
+            v.push_back(toGeneric(header.lexically_relative(root)) + ": 无法读取 (成员台账依赖它)");
+            continue;
+        }
+        static const std::regex kTable{R"re(typedef[ \t]+struct[ \t]+(\w+Iface)[ \t]*\{([\s\S]*?)\}[ \t]*\1[ \t]*;)re"};
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), kTable);
+             it != std::sregex_iterator();
+             ++it) {
+            const auto joined = membersOf((*it)[2].str());
+            std::string text2;
+            for (const auto& m : joined) {
+                if (!text2.empty()) {
+                    text2.push_back('|');
+                }
+                text2 += m;
+            }
+            actual[(*it)[1].str()] = std::move(text2);
+        }
+    }
+
+    size_t expectedCount = 0;
+    for (const auto& item : kExpected) {
+        ++expectedCount;
+        const auto it = actual.find(item.table);
+        if (it == actual.end()) {
+            v.push_back(
+                std::string{"接口表 `"} + item.table + "` 未在表头里找到 (改名后需同步本台账)"
+            );
+            continue;
+        }
+        if (it->second != item.members) {
+            v.push_back(
+                std::string{"接口表 `"} + item.table + "` 成员顺序变了:\n      期望: " + item.members
+                + "\n      实际: " + it->second
+                + "\n      (追加成员只允许加在末尾, 并同步本台账; 重排/改签名/删成员请换 IID)"
+            );
+        }
+    }
+    if (actual.size() != expectedCount) {
+        v.push_back(
+            "表头里找到 " + std::to_string(actual.size()) + " 张接口表, 台账列了 "
+            + std::to_string(expectedCount) + " 张 (新增表时同步本台账)"
+        );
+    }
+}
+
 /// 规则 11: 文档路径存在 (计划 TST-7)
 ///
 /// `AGENTS.md` 是给人和 AI 看的入口, 里面引用的 `docs/zh-cn/**.md` 一旦改名或
@@ -772,6 +1104,8 @@ TestResult testBoundaries() {
     Violations ifaceViolations;
     checkInterfaceTableCount(root, ifaceViolations);
     checkInterfaceTableNames(root, ifaceViolations);
+    checkInterfaceTableQuadruple(root, ifaceViolations);
+    checkInterfaceTableLayout(root, ifaceViolations);
 
     Violations uiBlockViolations;
     checkTuiBlockNames(root, uiBlockViolations);

@@ -1153,6 +1153,135 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(agentxx_test_abi_value(9999), UINT64_MAX);
     }
 
+    /// 版本对 + 基线判定 (plugin-version §3.2/§3.3) 与跨边界结构体长度门槛 (§3.5):
+    /// - `validateInterface`: 版本低于最低 / 表长低于基线 → 拒绝; 更高版本 + 完整长度 → 接受;
+    /// - `ifaceHas`: 表长覆盖某成员为真 (追加成员段的唯一判据), NULL 表为假;
+    /// - `ifaceHasVersion`: 语义档位两态;
+    /// - `specSizeOk`: `0` (基线布局) 与 `>= 基线` 接受, 低于基线拒绝;
+    /// - `specHas`: 追加字段可读判定两态。
+    {
+        struct FakeTable {
+            int32_t  version;
+            uint32_t struct_size;
+            void*    base_member;
+            void*    added_member;
+        };
+        constexpr uint32_t kPtrBytes = static_cast<uint32_t>(sizeof(void*));
+        const uint32_t     baseEnd
+            = static_cast<uint32_t>(offsetof(FakeTable, base_member)) + kPtrBytes;
+        const uint32_t addedEnd
+            = static_cast<uint32_t>(offsetof(FakeTable, added_member)) + kPtrBytes;
+
+        FakeTable table{};
+        table.version = 1;
+        // 只覆盖基线成员: 追加成员判为不可用
+        table.struct_size = baseEnd;
+        XX_TEST_EXPECT_TRUE(pluginxx::ifaceHas<&FakeTable::base_member>(&table));
+        XX_TEST_EXPECT_TRUE(!pluginxx::ifaceHas<&FakeTable::added_member>(&table));
+        // 覆盖到追加成员: 可用
+        table.struct_size = addedEnd;
+        XX_TEST_EXPECT_TRUE(pluginxx::ifaceHas<&FakeTable::added_member>(&table));
+        XX_TEST_EXPECT_TRUE(
+            !pluginxx::ifaceHas<&FakeTable::base_member>(static_cast<const FakeTable*>(nullptr))
+        );
+        // 语义档位
+        XX_TEST_EXPECT_TRUE(pluginxx::ifaceHasVersion(&table, 1));
+        XX_TEST_EXPECT_TRUE(!pluginxx::ifaceHasVersion(&table, 2));
+        XX_TEST_EXPECT_TRUE(!pluginxx::ifaceHasVersion(static_cast<const FakeTable*>(nullptr), 1));
+
+        // 结构体长度门槛: 0 = 基线布局 / 基线 / 低于基线
+        XX_TEST_EXPECT_TRUE(agentxx::plugin::specSizeOk<FakeTable>(0));
+        XX_TEST_EXPECT_TRUE(
+            agentxx::plugin::specSizeOk<FakeTable>(static_cast<uint32_t>(sizeof(FakeTable)))
+        );
+        XX_TEST_EXPECT_TRUE(
+            !agentxx::plugin::specSizeOk<FakeTable>(static_cast<uint32_t>(sizeof(FakeTable) - 1))
+        );
+        // 追加字段可读判定 (与 ifaceHas 同一思路, 长度由对方给)
+        XX_TEST_EXPECT_TRUE(!agentxx::plugin::specHas(&FakeTable::added_member, baseEnd));
+        XX_TEST_EXPECT_TRUE(agentxx::plugin::specHas(&FakeTable::added_member, addedEnd));
+    }
+
+    /// 跨边界结构体布局 (plugin-version §5.3):
+    /// - 6 个"零成本"结构体: 用原 `_reserved` 的位置放 `struct_size`, 大小与关键偏移不变;
+    /// - 3 个"+8"结构体: 插入 `struct_size` (首位或 `version` 之后);
+    /// - 全部: `struct_size` 都是 8 字节对齐下的首字段 (或 `version` 之后)。
+    {
+        constexpr size_t kPtr = sizeof(void*);
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginToolSpec, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginToolSpec, name), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginToolSpec, execute_start), 8u + 3 * 16u);
+        XX_TEST_EXPECT_EQ(
+            offsetof(AgentxxPluginToolSpec, user_data),
+            offsetof(AgentxxPluginToolSpec, execute_start) + 2 * kPtr
+        );
+        XX_TEST_EXPECT_EQ(
+            offsetof(AgentxxPluginToolSpec, default_timeout_ms),
+            offsetof(AgentxxPluginToolSpec, user_data) + kPtr
+        );
+        XX_TEST_EXPECT_EQ(
+            offsetof(AgentxxPluginToolSpec, flags),
+            offsetof(AgentxxPluginToolSpec, default_timeout_ms) + 8u
+        );
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginGraphNodeTypeSpec, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginGraphNodeTypeSpec, type), size_t{8});
+        XX_TEST_EXPECT_EQ(
+            offsetof(AgentxxPluginGraphNodeTypeSpec, run_start),
+            offsetof(AgentxxPluginGraphNodeTypeSpec, type) + 16u
+        );
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, version), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, struct_size), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, type), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, title), size_t{16});
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, point), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, hook_start), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, user_data), 8u + 2 * kPtr);
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, version), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, tool_name), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, template_json), 8u + 16u + 2 * kPtr);
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, version), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, tool_call_id), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, is_finished), 8u + 4 * 16u);
+        XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderInput), 8u + 4 * 16u + 16u);
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxUiActionContext, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxUiActionContext, version), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxUiActionContext, owner_id), size_t{8});
+        XX_TEST_EXPECT_EQ(sizeof(AgentxxUiActionContext), 8u + 3 * 16u);
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxTimerSpec, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxTimerSpec, version), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxTimerSpec, interval_ms), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxTimerSpec, owner_id), size_t{24});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxTimerSpec, on_timer), 24u + 16u);
+
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxKeybindSpec, struct_size), size_t{0});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxKeybindSpec, version), size_t{4});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxKeybindSpec, keys), size_t{8});
+        XX_TEST_EXPECT_EQ(offsetof(AgentxxKeybindSpec, on_keybind), 8u + 32u);
+
+        // 绝对值只在 64 位环境断言 (32 位下指针宽度不同)
+        if (kPtr == 8) {
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginToolSpec), size_t{96});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginGraphNodeTypeSpec), size_t{64});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxOverlaySpec), size_t{64});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginHookSpec), size_t{32});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderSpec), size_t{56});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxTimerSpec), size_t{56});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxKeybindSpec), size_t{56});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginFeaturePointSpec), size_t{96});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginFeatureImplSpec), size_t{56});
+        }
+    }
+
     /// R3/P1-A: 接口表协商 —— 判定规则为
     /// `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE` (见
     /// `pluginxx/api/iface_meta.h`): 低于最低版本、表长不足基线、NULL 表都必须被 SDK

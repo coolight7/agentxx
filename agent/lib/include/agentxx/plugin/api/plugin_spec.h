@@ -54,10 +54,11 @@ constexpr bool specSizeOk(uint32_t struct_size) noexcept {
 ///
 /// - 与接口表的 `pluginxx::ifaceHas` 同一思路, 区别只在"长度由对方给"而不是"我方看表";
 /// - 基线以内的字段不需要它 (长度门槛已保证);
-/// - 用法: `specHas<&AgentxxOverlaySpec::extra_json>(spec->struct_size)`。
-template<auto Member, typename Spec>
-inline bool specHas(uint32_t struct_size) noexcept {
-    return struct_size >= pluginxx::memberEndOffset<Member, Spec>();
+/// - 用法: `specHas(&AgentxxOverlaySpec::extra_json, spec->struct_size)`
+///   (`Spec` 由成员指针自动推出)。
+template<typename Spec, typename M>
+inline bool specHas(M Spec::* member, uint32_t struct_size) noexcept {
+    return struct_size >= pluginxx::memberEndOf(member);
 }
 
 /* ==================== 基线常量特化 (每处一行, 便于清点) ==================== */

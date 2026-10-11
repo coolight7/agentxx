@@ -639,6 +639,70 @@ asio::awaitable<void> test_lifecycle_detach_and_restore() {
     co_return;
 }
 
+/// 跨边界结构体长度门槛 (`specSizeOk`): 功能点两处新增检查
+///
+/// - 声明自己的点 (`AgentxxPluginFeaturePointSpec`): `struct_size` 低于基线 → 拒绝,
+///   点不进注册表; `0` (基线布局) 与 `sizeof` → 接受;
+/// - 登记实现 (`AgentxxPluginFeatureImplSpec`): 同上, 低于基线 → 拒绝。
+asio::awaitable<void> test_spec_size_gate() {
+    auto f = co_await makeFixture();
+
+    const auto pluginPath = findPluginDir("example_feature");
+    auto       inst       = co_await f.mgr->loadPluginAsync(pluginPath);
+    XX_TEST_EXPECT_TRUE(inst != nullptr);
+    if (!inst) {
+        co_return;
+    }
+    const size_t pointsBefore = f.ctx->features->pointsCount();
+
+    AgentxxPluginFeaturePointSpec point{};
+    point.type = AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE;
+    point.id   = agentxx::plugin::PluginStringView::fromCstr("plugin.example_feature.gate_probe");
+    point.depict = agentxx::plugin::PluginStringView::fromCstr("长度门槛探针");
+
+    // 低于基线: 拒绝, 点不落注册表
+    point.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginFeaturePointSpec) - 1);
+    XX_TEST_EXPECT_EQ(f.mgr->defineFeaturePoint(inst.get(), &point), -1);
+    XX_TEST_EXPECT_EQ(f.ctx->features->pointsCount(), pointsBefore);
+    XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.gate_probe") == nullptr);
+
+    // 0 = 基线布局: 接受
+    point.struct_size = 0;
+    XX_TEST_EXPECT_EQ(f.mgr->defineFeaturePoint(inst.get(), &point), 0);
+    XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.gate_probe") != nullptr);
+
+    // sizeof: 接受
+    point.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginFeaturePointSpec));
+    XX_TEST_EXPECT_EQ(f.mgr->defineFeaturePoint(inst.get(), &point), 0);
+
+    // 实现登记: 低于基线 → 拒绝
+    AgentxxPluginFeatureImplSpec impl{};
+    impl.point_id = agentxx::plugin::PluginStringView::fromCstr(
+        "plugin.example_feature.gate_probe"
+    );
+    impl.impl_start = +[](void*, const PluginxxStringView*, const PluginxxStringView*,
+                          const PluginxxOperatorNotify* notify, PluginxxString*) -> void* {
+        if (notify != nullptr && notify->done != nullptr) {
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        }
+        return nullptr;
+    };
+    impl.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginFeatureImplSpec) - 1);
+    XX_TEST_EXPECT_EQ(f.mgr->registerFeatureImpl(inst.get(), &impl), -1);
+    impl.struct_size = 0;
+    XX_TEST_EXPECT_EQ(f.mgr->registerFeatureImpl(inst.get(), &impl), 0);
+
+    // 收尾: 撤掉探针点, 不留残余
+    XX_TEST_EXPECT_EQ(
+        f.mgr->undefineFeaturePoint(
+            inst.get(),
+            agentxx::plugin::PluginStringView::fromCstr("plugin.example_feature.gate_probe")
+        ),
+        0
+    );
+    co_return;
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_plugin_feature_tests() {
@@ -651,6 +715,7 @@ asio::awaitable<TestResult> run_plugin_feature_tests() {
         co_await test_call_point_paths();
         co_await test_call_busy_protection();
         co_await test_lifecycle_detach_and_restore();
+        co_await test_spec_size_gate();
     } catch (const std::exception& e) {
         TEST_FAIL << "plugin_feature suite exception: " << e.what() << std::endl;
         g_pf_failed++;
