@@ -1153,8 +1153,10 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(agentxx_test_abi_value(9999), UINT64_MAX);
     }
 
-    /// R3/P1-A: 接口表严格协商 —— 版本不为 1、struct_size 过短、NULL 表都必须被
-    /// SDK 拒绝；只有 version == 1 且 struct_size 覆盖完整表才可用。
+    /// R3/P1-A: 接口表协商 —— 判定规则为
+    /// `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE` (见
+    /// `pluginxx/api/iface_meta.h`): 低于最低版本、表长不足基线、NULL 表都必须被 SDK
+    /// 拒绝; 声明了更高版本的完整表必须接受 (不再写死字面量 1)。
     {
         PluginxxStringView toolsIid  = PluginStringView::fromCstr(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS);
         const auto*        realTools = static_cast<const AgentxxPluginToolsIface*>(
@@ -1169,15 +1171,30 @@ TestResult testPluginRuntime() {
         fake.table = realTools;
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools != nullptr);
 
-        AgentxxPluginToolsIface badVersion = *realTools;
-        badVersion.version                 = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION + 1;
-        fake.table                         = &badVersion;
+        // 更高版本的完整表: 接受 (修掉"一张表升版连累所有表"的写法)
+        AgentxxPluginToolsIface newerVersion = *realTools;
+        newerVersion.version                = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION + 1;
+        fake.table                         = &newerVersion;
+        XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools != nullptr);
+
+        // 低于最低版本: 拒绝
+        AgentxxPluginToolsIface oldVersion = *realTools;
+        oldVersion.version                 = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION - 1;
+        fake.table                         = &oldVersion;
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
 
+        // 表长不足基线 (模拟老主程序): 拒绝
         AgentxxPluginToolsIface shortTable = *realTools;
         shortTable.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginToolsIface) - 8);
         fake.table             = &shortTable;
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
+
+        // 表长等于基线: 接受
+        AgentxxPluginToolsIface baselineTable = *realTools;
+        baselineTable.struct_size
+            = static_cast<uint32_t>(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE);
+        fake.table = &baselineTable;
+        XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools != nullptr);
 
         fake.table = nullptr;
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);

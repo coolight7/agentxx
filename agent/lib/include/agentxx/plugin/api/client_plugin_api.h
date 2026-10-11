@@ -10,9 +10,10 @@
 ///   * 结构体入参统一采用指针传递 (const Struct*)
 ///   * 结构体返回值统一改为函数出参 (Struct* out) 并返回 int32_t 状态码
 /// - 版本策略:
-///   * 全局 AGENTXX_CLIENT_PLUGIN_API_VERSION 版本限制 (要求 >=
-///   AGENTXX_CLIENT_PLUGIN_API_VERSION，当前为 1)
-///   * 全部接口表版本统一重置为 1
+///   * 插件级: 全局 `AGENTXX_CLIENT_PLUGIN_API_VERSION` (要求 `api_version >=` 该值)
+///   * 表级: 每张表四项齐全 (IID / `struct_size` / `version` - `_VERSION` / `_MIN_VERSION` /
+///     `_BASELINE_SIZE`); 判定规则与追加策略见 `pluginxx/api/tables.h` 文件头
+///     与 docs/zh-cn/design/plugins.md §9
 ///
 /// ════════════════════════════════════════════════════════════════════
 /// 归属分层 (框架内核已拆分为 cxx_pluginxx 独立工程)
@@ -115,7 +116,7 @@ typedef struct AgentxxToolRenderSpec {
     PluginxxStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由宿主解析执行)
 } AgentxxToolRenderSpec;
 
-/* ==================== 通用交互: 动作回调与 overlay (v3) ==================== */
+/* ==================== 通用交互: 动作回调与 overlay ==================== */
 
 /// 动作派发上下文 (宿主在 client io 线程构造, 仅本次回调有效; 全部只读借用)
 typedef struct AgentxxUiActionContext {
@@ -157,11 +158,14 @@ typedef struct AgentxxOverlaySpec {
 
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_UI         "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION 1
+#define AGENTXX_IFACE_CLIENT_UI             "agentxx.client.ui"
+#define AGENTXX_IFACE_CLIENT_UI_VERSION     1   /* 追加成员 / 语义变化 -> +1 */
+#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 1   /* 只在破坏性改动时 +1 (优先换 IID) */
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE sizeof(AgentxxClientUiIface)
 
 typedef struct AgentxxClientUiIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_UI_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_UI_VERSION
     uint32_t struct_size;
 
     /* ---- 状态栏项 ---- */
@@ -315,11 +319,12 @@ typedef struct AgentxxClientUiIface {
 
     /* ---- 通用交互 (动作回调与 overlay)
      *
-     * 表 version 恒为 1 (见 AGENTXX_IFACE_CLIENT_UI_VERSION): 本段成员属于首版
-     * 表结构, 老宿主同位置为空指针 → 插件按"该子能力不支持"降级 (能力名协商:
-     * `agentxx.client.action` / `agentxx.client.overlay`)。
-     * 新增能力一律走"新接口表或新能力名", 不在此表尾追加成员 (表结构变大会让
-     * 老宿主的整表校验失败, 见 docs/zh-cn/design/plugins.md §9)。
+     * 本段成员属于本表的首版布局 (= 基线), 因此只判空即可: 成员为 NULL 表示主程序
+     * 不支持该子能力 (精简客户端), 插件据此降级 (能力名协商: `agentxx.client.action`
+     * / `agentxx.client.overlay`)。
+     * 以后新增能力优先走"新接口表或新能力名"; 确实要往本表加成员时只能追加在表尾,
+     * `_BASELINE_SIZE` 保持当前值并用 `pluginxx::ifaceHas` 判定 (见
+     * docs/zh-cn/design/plugins.md §9 的追加策略)。
      */
     /// 绑定动作处理器 (client io 线程约束):
     /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
@@ -350,11 +355,14 @@ typedef struct AgentxxClientUiIface {
 
 /* ==================== 接口表: 事件订阅 (agentxx.client.events) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_EVENTS         "agentxx.client.events"
-#define AGENTXX_IFACE_CLIENT_EVENTS_VERSION 1
+#define AGENTXX_IFACE_CLIENT_EVENTS             "agentxx.client.events"
+#define AGENTXX_IFACE_CLIENT_EVENTS_VERSION     1
+#define AGENTXX_IFACE_CLIENT_EVENTS_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE sizeof(AgentxxClientEventsIface)
 
 typedef struct AgentxxClientEventsIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_EVENTS_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_EVENTS_VERSION
     uint32_t struct_size;
 
     /// 订阅 client 事件 (payload JSON 字符串; 卸载自动退订); event 为
@@ -370,11 +378,14 @@ typedef struct AgentxxClientEventsIface {
 
 /* ==================== 接口表: 会话上下文与操作 (agentxx.client.session) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_SESSION         "agentxx.client.session"
-#define AGENTXX_IFACE_CLIENT_SESSION_VERSION 1
+#define AGENTXX_IFACE_CLIENT_SESSION             "agentxx.client.session"
+#define AGENTXX_IFACE_CLIENT_SESSION_VERSION     1
+#define AGENTXX_IFACE_CLIENT_SESSION_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_SESSION_BASELINE_SIZE sizeof(AgentxxClientSessionIface)
 
 typedef struct AgentxxClientSessionIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SESSION_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_SESSION_VERSION
     uint32_t struct_size;
 
     /// 当前 client 状态 JSON 快照 (host->alloc):
@@ -408,11 +419,14 @@ typedef struct AgentxxClientSessionIface {
 
 /* ==================== 接口表: 跨端数据通道 (agentxx.client.wire) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_WIRE         "agentxx.client.wire"
-#define AGENTXX_IFACE_CLIENT_WIRE_VERSION 1
+#define AGENTXX_IFACE_CLIENT_WIRE             "agentxx.client.wire"
+#define AGENTXX_IFACE_CLIENT_WIRE_VERSION     1
+#define AGENTXX_IFACE_CLIENT_WIRE_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_WIRE_BASELINE_SIZE sizeof(AgentxxClientWireIface)
 
 typedef struct AgentxxClientWireIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_WIRE_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_WIRE_VERSION
     uint32_t struct_size;
 
     /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`
@@ -427,11 +441,14 @@ typedef struct AgentxxClientWireIface {
 
 /* ==================== 接口表: 自描述/配置 (agentxx.client.self) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_SELF         "agentxx.client.self"
-#define AGENTXX_IFACE_CLIENT_SELF_VERSION 1
+#define AGENTXX_IFACE_CLIENT_SELF             "agentxx.client.self"
+#define AGENTXX_IFACE_CLIENT_SELF_VERSION     1
+#define AGENTXX_IFACE_CLIENT_SELF_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_SELF_BASELINE_SIZE sizeof(AgentxxClientSelfIface)
 
 typedef struct AgentxxClientSelfIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_SELF_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_SELF_VERSION
     uint32_t struct_size;
 
     /// 本插件信息 JSON {"name","version","description","path"}
@@ -457,11 +474,14 @@ typedef struct AgentxxClientSelfIface {
 
 /* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_JSON         "agentxx.client.json"
-#define AGENTXX_IFACE_CLIENT_JSON_VERSION 1
+#define AGENTXX_IFACE_CLIENT_JSON             "agentxx.client.json"
+#define AGENTXX_IFACE_CLIENT_JSON_VERSION     1
+#define AGENTXX_IFACE_CLIENT_JSON_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE sizeof(AgentxxClientJsonIface)
 
 typedef struct AgentxxClientJsonIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_JSON_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_JSON_VERSION
     uint32_t struct_size;
 
     /// 从 JSON 字符串提取指定 key 的字符串值 (宿主解析; 结果 host->alloc)
@@ -481,11 +501,14 @@ typedef struct AgentxxClientJsonIface {
 
 /* ==================== 接口表: 日志 (agentxx.client.log) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_LOG         "agentxx.client.log"
-#define AGENTXX_IFACE_CLIENT_LOG_VERSION 1
+#define AGENTXX_IFACE_CLIENT_LOG             "agentxx.client.log"
+#define AGENTXX_IFACE_CLIENT_LOG_VERSION     1
+#define AGENTXX_IFACE_CLIENT_LOG_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE sizeof(AgentxxClientLogIface)
 
 typedef struct AgentxxClientLogIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_LOG_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_LOG_VERSION
     uint32_t struct_size;
 
     /// 日志 (线程安全; 0=trace 1=debug 2=info 3=warn 4=error)
@@ -495,8 +518,11 @@ typedef struct AgentxxClientLogIface {
 
 /* ==================== 接口表: 定时器 (agentxx.client.timer) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_TIMER         "agentxx.client.timer"
-#define AGENTXX_IFACE_CLIENT_TIMER_VERSION 1
+#define AGENTXX_IFACE_CLIENT_TIMER             "agentxx.client.timer"
+#define AGENTXX_IFACE_CLIENT_TIMER_VERSION     1
+#define AGENTXX_IFACE_CLIENT_TIMER_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_TIMER_BASELINE_SIZE sizeof(AgentxxClientTimerIface)
 
 /// 定时器句柄 (宿主拥有; 取消或实例卸载后失效)
 typedef struct AgentxxTimer AgentxxTimer;
@@ -525,7 +551,7 @@ typedef struct AgentxxTimerSpec {
 } AgentxxTimerSpec;
 
 typedef struct AgentxxClientTimerIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_TIMER_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_TIMER_VERSION
     uint32_t struct_size;
 
     /// 注册定时器 (client io 线程; 返回句柄, 失败返回 NULL)
@@ -548,8 +574,11 @@ typedef struct AgentxxClientTimerIface {
 
 /* ==================== 接口表: 全局快捷键 (agentxx.client.keybind) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_KEYBIND         "agentxx.client.keybind"
-#define AGENTXX_IFACE_CLIENT_KEYBIND_VERSION 1
+#define AGENTXX_IFACE_CLIENT_KEYBIND             "agentxx.client.keybind"
+#define AGENTXX_IFACE_CLIENT_KEYBIND_VERSION     1
+#define AGENTXX_IFACE_CLIENT_KEYBIND_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_IFACE_CLIENT_KEYBIND_BASELINE_SIZE sizeof(AgentxxClientKeybindIface)
 
 /// 快捷键句柄 (宿主拥有; 注销或实例卸载后失效)
 typedef struct AgentxxKeybind AgentxxKeybind;
@@ -576,7 +605,7 @@ typedef struct AgentxxKeybindSpec {
 } AgentxxKeybindSpec;
 
 typedef struct AgentxxClientKeybindIface {
-    int32_t  version; ///< 必须 == AGENTXX_IFACE_CLIENT_KEYBIND_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_KEYBIND_VERSION
     uint32_t struct_size;
 
     /// 注册全局快捷键 (client io 线程; 返回句柄, 失败返回 NULL)
@@ -627,6 +656,13 @@ typedef void(PLUGINXX_CALL* AgentxxClientPluginDestroyFn)(void* plugin_ctx);
 
 #ifdef __cplusplus
 }
+#endif
+
+/* C++ 侧: 本头各表的 IfaceMeta 特化 (最低版本 + 基线字节数), 供
+ * `pluginxx::validateInterface` / `ifaceHas` 使用。必须放在表声明之后,
+ * 且纯 C 编译单元不参与 (本块被 `__cplusplus` 排除)。 */
+#ifdef __cplusplus
+#include "agentxx/plugin/api/plugin_iface_meta.h"
 #endif
 
 #endif /* AGENTXX_CLIENT_PLUGIN_API_H */

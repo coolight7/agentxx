@@ -7,7 +7,9 @@
 /// - 明确基本类型: 统一使用定长基本类型 (int32_t, int64_t, uint64_t)
 /// - 明确函数调用约定: 接口表函数指针、入口符号与回调全部显式标注 PLUGINXX_CALL
 /// - 结构体传递与返回值规范: 入参用指针, 返回值用出参 + int32_t 状态码
-/// - 版本策略: 全局 PLUGINXX_API_VERSION + 各表 version/struct_size 自校验
+/// - 版本策略: 全局 PLUGINXX_API_VERSION + 每张表四项齐全 (IID / `struct_size` /
+///   `version` - `_VERSION` / `_MIN_VERSION` / `_BASELINE_SIZE`), 判定规则与追加策略
+///   见 `pluginxx/api/tables.h` 的文件头说明与 docs/zh-cn/design/plugins.md §9
 ///
 /// ════════════════════════════════════════════════════════════════════
 /// 归属分层 (框架内核已拆分为 cxx_pluginxx 独立工程)
@@ -150,12 +152,15 @@ typedef struct AgentxxPluginHookSpecEx {
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS         "agentxx.agent.tools"
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS             "agentxx.agent.tools"
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE sizeof(AgentxxPluginToolsIface)
 
 typedef struct AgentxxPluginToolsIface {
-    int32_t  version;     ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
-    uint32_t struct_size; ///< sizeof(AgentxxPluginToolsIface) or a larger known table
+    int32_t  version;     ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
+    uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginToolsIface) 或更大的已知表长
 
     /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
     /// `return`: 0 成功, 非 0 冲突或失败
@@ -185,8 +190,11 @@ typedef struct AgentxxPluginToolsIface {
 
 /* ==================== 接口表: 工具权限声明 (agentxx.agent.permission) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION         "agentxx.agent.permission"
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION             "agentxx.agent.permission"
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_BASELINE_SIZE sizeof(AgentxxPluginPermissionIface)
 
 /// 权限作用域 (读/写各自一套规则表, 互不影响)
 #define AGENTXX_PLUGIN_PERMISSION_SCOPE_READ  1
@@ -237,8 +245,8 @@ typedef struct AgentxxPluginPermissionPathQuery {
 } AgentxxPluginPermissionPathQuery;
 
 typedef struct AgentxxPluginPermissionIface {
-    int32_t  version;     ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
-    uint32_t struct_size; ///< sizeof(AgentxxPluginPermissionIface) or a larger known table
+    int32_t  version;     ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
+    uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginPermissionIface) 或更大的已知表长
 
     /// 声明工具权限限制 (工具注册后调用; 同工具重复声明为覆盖)
     /// - 未声明的工具不参与权限判定 (直接放行); 声明后由宿主按权限规则
@@ -279,11 +287,14 @@ typedef struct AgentxxPluginPermissionIface {
 
 /* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS         "agentxx.agent.hooks"
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS             "agentxx.agent.hooks"
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE sizeof(AgentxxPluginHooksIface)
 
 typedef struct AgentxxPluginHooksIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
     uint32_t struct_size;
 
     int32_t(PLUGINXX_CALL* register_hook)(
@@ -314,11 +325,14 @@ typedef struct AgentxxPluginHooksIface {
 /// 新插件在老宿主上**整表校验失败** (SDK 校验为 `struct_size >= sizeof(表结构)`),
 /// 连基础的 `register_hook` 一起丢掉。新能力一律走新接口表 (见
 /// docs/zh-cn/design/plugins.md §9), 插件应把本表当可选能力: 查询不到时降级用基础两项。
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX         "agentxx.agent.hooks_ex"
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX             "agentxx.agent.hooks_ex"
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_BASELINE_SIZE sizeof(AgentxxPluginHooksExIface)
 
 typedef struct AgentxxPluginHooksExIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION
     uint32_t struct_size;
 
     /// 登记一个钩子处理器 (同一实例同一个点可登记任意多个, 各自句柄)
@@ -341,11 +355,14 @@ typedef struct AgentxxPluginHooksExIface {
 
 /* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION         "agentxx.agent.session"
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION             "agentxx.agent.session"
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE sizeof(AgentxxPluginSessionIface)
 
 typedef struct AgentxxPluginSessionIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION
     uint32_t struct_size;
 
     /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
@@ -372,8 +389,11 @@ typedef struct AgentxxPluginSessionIface {
 
 /* ==================== 接口表: 会话上下文查询 (agentxx.agent.context) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT         "agentxx.agent.context"
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT             "agentxx.agent.context"
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE sizeof(AgentxxPluginContextIface)
 
 /// 会话 LLM 上下文查询
 ///
@@ -381,7 +401,7 @@ typedef struct AgentxxPluginSessionIface {
 /// 插件需要上下文内容时经本表查询, 图状态里的 `xx_messagesMeta` 通道只给
 /// 条数/版本/末尾消息摘要等轻量信息 (与上下文大小无关)。
 typedef struct AgentxxPluginContextIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION
     uint32_t struct_size;
 
     /// 读取会话 LLM 上下文 (JSON 数组文本; 宿主 alloc, 需 host->vtable->free 释放)
@@ -402,11 +422,14 @@ typedef struct AgentxxPluginContextIface {
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL         "agentxx.agent.model"
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL             "agentxx.agent.model"
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE sizeof(AgentxxPluginModelIface)
 
 typedef struct AgentxxPluginModelIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
     uint32_t struct_size;
     /// 宿主主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
     int32_t(PLUGINXX_CALL* get_config)(const PluginxxHost* host, PluginxxString* out);
@@ -414,11 +437,14 @@ typedef struct AgentxxPluginModelIface {
 
 /* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT         "agentxx.agent.prompt"
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT             "agentxx.agent.prompt"
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE sizeof(AgentxxPluginPromptIface)
 
 typedef struct AgentxxPluginPromptIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
     uint32_t struct_size;
 
     int32_t(PLUGINXX_CALL* get_prompt)(const PluginxxHost* host, PluginxxString* out);
@@ -430,11 +456,14 @@ typedef struct AgentxxPluginPromptIface {
 
 /* ==================== 接口表: 会话资源贡献 (agentxx.agent.resources) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES         "agentxx.agent.resources"
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES             "agentxx.agent.resources"
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_BASELINE_SIZE sizeof(AgentxxPluginResourcesIface)
 
 typedef struct AgentxxPluginResourcesIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
     uint32_t struct_size;
 
     int32_t(PLUGINXX_CALL* register_skill_dir)(
@@ -506,11 +535,14 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 /// - get/set graph JSON 用于插件查看/修改宿主执行图 (默认名 "agentxx.default");
 ///   修改后的 JSON 在宿主构建 engine 前生效 (插件须保证图合法性, 非法时宿主
 ///   回退默认图并记日志)
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH         "agentxx.agent.graph"
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH             "agentxx.agent.graph"
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE sizeof(AgentxxPluginGraphIface)
 
 typedef struct AgentxxPluginGraphIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
     uint32_t struct_size;
 
     /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
@@ -556,8 +588,11 @@ typedef struct AgentxxPluginGraphIface {
 ///
 /// 超时: 点的声明方可以给自己的点设 `impl_timeout_ms` (等单个实现的上限); 实现方
 /// 可以自报 `default_timeout_ms`; 宿主取两者中非 0 的较小值, 都为 0 (默认) 表示不限。
-#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE         "agentxx.agent.feature"
-#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION 1
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE             "agentxx.agent.feature"
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_BASELINE_SIZE sizeof(AgentxxPluginFeatureIface)
 
 /// 功能点类型 (本轮只开放 `PROVIDE`; `DECIDE` 只有宿主留出的点使用)
 #define AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE 0
@@ -621,7 +656,7 @@ typedef struct AgentxxPluginFeatureImplSpec {
 } AgentxxPluginFeatureImplSpec;
 
 typedef struct AgentxxPluginFeatureIface {
-    int32_t  version; ///< 必须 == AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION
     uint32_t struct_size;
 
     /// 功能点清单 (JSON 文本; 出参经 host->alloc 分配, 失败返回非 0)
@@ -675,6 +710,13 @@ typedef struct AgentxxPluginFeatureIface {
 
 #ifdef __cplusplus
 }
+#endif
+
+/* C++ 侧: 本头各表的 IfaceMeta 特化 (最低版本 + 基线字节数), 供
+ * `pluginxx::validateInterface` / `ifaceHas` 使用。必须放在表声明之后,
+ * 且纯 C 编译单元不参与 (本块被 `__cplusplus` 排除)。 */
+#ifdef __cplusplus
+#include "agentxx/plugin/api/plugin_iface_meta.h"
 #endif
 
 #endif /* AGENTXX_PLUGIN_API_H */

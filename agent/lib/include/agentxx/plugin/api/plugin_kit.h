@@ -76,6 +76,8 @@ using pluginxx::CancelledException;
 using pluginxx::CancelRegistry;
 using pluginxx::capability;
 using pluginxx::ctxGuardLogger;
+using pluginxx::ifaceHas;
+using pluginxx::ifaceHasVersion;
 using pluginxx::invoke_cap;
 using pluginxx::invoke_capability_blocking;
 using pluginxx::Json;
