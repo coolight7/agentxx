@@ -313,7 +313,7 @@ static int32_t PLUGINXX_CALL xx_unregister_hook(const PluginxxHost* host, int32_
     });
 }
 
-// ==================== 钩子有序登记与清单 (agentxx.agent.hooks_ex) ====================
+// ==================== 钩子有序登记与清单 (agentxx.agent.hooks 的表尾三成员) ====================
 
 static int32_t PLUGINXX_CALL xx_register_hook_ex(
     const PluginxxHost*            host,
@@ -790,11 +790,6 @@ static const AgentxxPluginHooksIface g_ifaceHooks = {
     /* struct_size */ sizeof(AgentxxPluginHooksIface),
     /* register_hook */ xx_register_hook,
     /* unregister_hook */ xx_unregister_hook,
-};
-
-static const AgentxxPluginHooksExIface g_ifaceHooksEx = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginHooksExIface),
     /* register_hook_ex */ xx_register_hook_ex,
     /* unregister_hook_ex */ xx_unregister_hook_ex,
     /* list_hooks */ xx_list_hooks,
@@ -889,9 +884,6 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
         return &g_ifaceHooks;
-    }
-    if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX) {
-        return &g_ifaceHooksEx;
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;

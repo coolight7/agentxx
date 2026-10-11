@@ -1,4 +1,4 @@
-/// 钩子处理器注册表与派发 (接口表 `agentxx.agent.hooks` / `agentxx.agent.hooks_ex` 的落地)
+/// 钩子处理器注册表与派发 (接口表 `agentxx.agent.hooks` 的实现)
 ///
 /// 一个文件承载三件事:
 /// 1. **注册表**: 一个钩子点 -> 处理器列表, 条目为

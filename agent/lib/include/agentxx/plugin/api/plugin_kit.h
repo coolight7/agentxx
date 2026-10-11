@@ -107,10 +107,8 @@ using pluginxx::yield;
 struct AgentIfaces {
     const AgentxxPluginToolsIface*      tools        = nullptr; ///< "agentxx.agent.tools"
     const AgentxxPluginPermissionIface* permission   = nullptr; ///< "agentxx.agent.permission"
-    const AgentxxPluginHooksIface*      hooks        = nullptr; ///< "agentxx.agent.hooks"
-    /// "agentxx.agent.hooks_ex": 钩子有序登记 (优先级 / 一个点多个处理器) 与清单
-    /// - 老宿主没有这张表 (NULL): 插件降级用 [hooks] 的基础登记
-    const AgentxxPluginHooksExIface*    hooksEx      = nullptr;
+    /// "agentxx.agent.hooks": 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表)
+    const AgentxxPluginHooksIface*      hooks        = nullptr;
     const PluginxxEventsIface*          events       = nullptr; ///< "pluginxx.events"
     const PluginxxCapabilitiesIface*    capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*       scheduler    = nullptr; ///< "pluginxx.scheduler"
@@ -145,8 +143,6 @@ struct AgentIfaces {
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
         );
         f.hooks  = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
-        f.hooksEx
-            = queryInterface<AgentxxPluginHooksExIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX);
         f.events = queryInterface<PluginxxEventsIface>(host, PLUGINXX_IFACE_EVENTS);
         f.capabilities
             = queryInterface<PluginxxCapabilitiesIface>(host, PLUGINXX_IFACE_CAPABILITIES);
@@ -1956,9 +1952,9 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     }
 }
 
-/// 钩子登记选项 (有序登记; 见 `agentxx.agent.hooks_ex` 接口表)
+/// 钩子登记选项 (有序登记; 见 `agentxx.agent.hooks` 接口表)
 struct HookOptions {
-    /// 层内顺序, 小者先 (插件默认 0 = 按登记顺序 = 插件装载顺序)
+    /// 层内顺序, 小者先 (插件默认 0 = 按登记顺序 = 插件加载顺序)
     /// - 越界由宿主裁剪到上下限并记一条警告 (不拒绝登记)
     int32_t priority = 0;
     /// 展示归属标签 (处理器清单里显示; 可空)
@@ -1974,15 +1970,14 @@ struct HookOptions {
 /// - 可排顺序: `priority` 小的先跑, 相同则按登记顺序;
 /// - 可写清单信息: `ownerTag` / `depict` 出现在宿主清单 (`listHooks`) 里。
 ///
-/// `return`: 句柄 (> 0); **0 = 宿主不支持或登记被拒** —— 老宿主没有
-/// `agentxx.agent.hooks_ex` 表 (查询不到), 此时应降级用 [hook] 或不登记。
+/// `return`: 句柄 (> 0); **0 = 主程序不支持或登记被拒**。
 ///
 /// 撤销: [unhookEx] 按句柄精确撤销; 不撤销也会随实例卸载一并摘除。
 template<typename Ctx, typename HookFn>
 inline int64_t
     hookEx(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn, const HookOptions& opts = {}) {
-    if (!ctx.iface.hooksEx || !ctx.iface.hooksEx->register_hook_ex) {
-        return 0; // 老宿主: 没有有序登记表
+    if (!ctx.iface.hooks || !ctx.iface.hooks->register_hook_ex) {
+        return 0; // 主程序不支持有序登记
     }
     using ShimT = detail::HookShim<Ctx, HookFn>;
 
@@ -2000,34 +1995,34 @@ inline int64_t
     spec.hook_cancel  = &detail::hookCancel<Ctx, HookFn>;
 
     int64_t handle = 0;
-    if (ctx.iface.hooksEx->register_hook_ex(ctx.host, &spec, &handle) != 0) {
+    if (ctx.iface.hooks->register_hook_ex(ctx.host, &spec, &handle) != 0) {
         return 0;
     }
     return handle;
 }
 
-/// 撤销一个有序登记的钩子处理器 (按句柄; 不是本实例的句柄会被宿主拒绝)
+/// 撤销一个有序登记的钩子处理器 (按句柄; 不是本实例的句柄会被主程序拒绝)
 ///
-/// `return`: 0 成功; 非 0 失败 (宿主不支持 / 句柄不存在)
+/// `return`: 0 成功; 非 0 失败 (主程序不支持 / 句柄不存在)
 template<typename Ctx>
 inline int32_t unhookEx(Ctx& ctx, int64_t handle) {
-    if (!ctx.iface.hooksEx || !ctx.iface.hooksEx->unregister_hook_ex || handle <= 0) {
+    if (!ctx.iface.hooks || !ctx.iface.hooks->unregister_hook_ex || handle <= 0) {
         return -1;
     }
-    return ctx.iface.hooksEx->unregister_hook_ex(ctx.host, handle);
+    return ctx.iface.hooks->unregister_hook_ex(ctx.host, handle);
 }
 
-/// 处理器清单 JSON (宿主侧 `agentxx.agent.hooks_ex` 的 `list_hooks`)
+/// 处理器清单 JSON (主程序侧 `agentxx.agent.hooks` 的 `list_hooks`)
 ///
 /// 用于回答"这个点上有哪些处理器、谁的、什么顺序": 派发记录 (`stat` 段) 只在
-/// 宿主开发者模式下出现。老宿主 / 宿主未装配时返回 `{}`。
+/// 主程序开发者模式下出现。主程序不支持 / 未装配时返回 `{}`。
 template<typename Ctx>
 inline std::string listHooks(const Ctx& ctx) {
-    if (!ctx.iface.hooksEx || !ctx.iface.hooksEx->list_hooks) {
+    if (!ctx.iface.hooks || !ctx.iface.hooks->list_hooks) {
         return "{}";
     }
     PluginxxString text{nullptr, 0};
-    if (ctx.iface.hooksEx->list_hooks(ctx.host, &text) != 0 || text.data == nullptr) {
+    if (ctx.iface.hooks->list_hooks(ctx.host, &text) != 0 || text.data == nullptr) {
         return "{}";
     }
     std::string out(text.data, static_cast<size_t>(text.size));

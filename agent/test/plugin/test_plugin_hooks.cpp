@@ -1,5 +1,5 @@
 /// test_plugin_hooks —— 钩子处理器清单与优先级
-/// (接口表 `agentxx.agent.hooks` / `agentxx.agent.hooks_ex`)
+/// (接口表 `agentxx.agent.hooks`)
 ///
 /// 背景: 钩子过去只有"一个实例一个点一个处理器、按装载顺序执行"这一种形态,
 /// 也读不到"这个点上有谁"。本轮补上注册表与清单, 且**默认行为不变** —— 不声明
@@ -834,7 +834,7 @@ asio::awaitable<void> test_plugin_side_kit() {
     HookSdkCtx sdk;
     sdk.init(host);
     XX_TEST_EXPECT_TRUE(sdk.iface.hooks != nullptr);
-    XX_TEST_EXPECT_TRUE(sdk.iface.hooksEx != nullptr); ///< 宿主提供有序登记表
+    XX_TEST_EXPECT_TRUE(sdk.iface.hooks->register_hook_ex != nullptr); ///< 主程序提供有序登记三成员
 
     // 经 kit 登记 (优先级 -5 -> 排在基础登记之前)
     agentxx::plugin::HookOptions opts;
@@ -880,7 +880,7 @@ asio::awaitable<void> test_plugin_side_kit() {
 // ===========================================================================
 
 asio::awaitable<TestResult> run_plugin_hooks_tests() {
-    TEST_INFO << "[plugin_hooks] 钩子处理器清单与优先级 (agentxx.agent.hooks / hooks_ex)"
+    TEST_INFO << "[plugin_hooks] 钩子处理器清单与优先级 (agentxx.agent.hooks)"
               << std::endl;
     try {
         co_await test_order_by_layer_priority_seq();

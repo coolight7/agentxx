@@ -378,12 +378,12 @@ path/to/agentxx_test string_util regex
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` (计划 OBS-4) 导出
   环境/指标/装配(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
-- 接口表数量: agent 侧 21 张 (10 张通用表 `pluginxx.*` + 11 张领域表 `agentxx.agent.*`;
+- 接口表数量: agent 侧 20 张 (10 张通用表 `pluginxx.*` + 10 张领域表 `agentxx.agent.*`;
   领域表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
   `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
-- 钩子处理器清单与优先级 (2026-10, 接口表 `agentxx.agent.hooks_ex`):
+- 钩子处理器清单与优先级 (2026-10, 接口表 `agentxx.agent.hooks` 的表尾三成员):
   - 宿主维护**一张**钩子注册表 (`PluginManager::hookHandlers_`), 处理器按
     `(层, priority 升序, 登记序号)` 执行: `plugin` 层 (插件 / FFI 宿主) 在前, `core` 层在后;
     不声明 `priority` (= 0) 时顺序就是登记顺序 = 插件装载顺序 (与旧行为一致);
@@ -393,10 +393,10 @@ path/to/agentxx_test string_util regex
     首次登记时插入、没有处理器时移除 (轮次执行中先置 `disabled`, 轮末
     `flushPendingCleanup` 摘除); 旧的"每插件一个中间件句柄"与
     `PluginInstance::middleware` / `RegistrationInventory::middlewareAttached` 已删除
-  - 基础表 `agentxx.agent.hooks` 结构未变 (一个实例一个点一个处理器, 覆盖式);
-    扩展表 `agentxx.agent.hooks_ex` 提供 `register_hook_ex`/`unregister_hook_ex`/`list_hooks`
+  - 单张钩子表 `agentxx.agent.hooks`: 基础两项 (一个实例一个点一个处理器, 覆盖式) +
+    表尾三项 `register_hook_ex`/`unregister_hook_ex`/`list_hooks`
     (SDK: `hookEx`/`unhookEx`/`listHooks`; 清单里的 `layer`/`owner` 与功能点同一口径);
-    老宿主查不到该表 -> 插件降级用 `hook`
+    三成员属本表 v1 布局 (基线), 主程序不支持时判空降级
   - 清单进装配快照 (`hooks` 段 + 插件行 `hook_priorities`) 与 `--dump-diagnostics`
     (`hookHandlers[N]`); 派发记录 (`stat` 段: 次数 / 上次顺序与耗时) 只在开发者模式收集
   - 禁用: 处理器从注册表摘除 (派发时仍复核实例状态), 启用由 `start` 事务重新登记;

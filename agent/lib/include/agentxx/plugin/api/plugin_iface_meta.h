@@ -47,16 +47,6 @@ static_assert(AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE <= sizeof(AgentxxPluginHooksIface));
 
 template<>
-struct IfaceMeta<AgentxxPluginHooksExIface> {
-    static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_MIN_VERSION;
-    static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_BASELINE_SIZE;
-};
-static_assert(AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_BASELINE_SIZE >= 8u);
-static_assert(
-    AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_EX_BASELINE_SIZE <= sizeof(AgentxxPluginHooksExIface)
-);
-
-template<>
 struct IfaceMeta<AgentxxPluginSessionIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE;

@@ -12,8 +12,8 @@
 /// 另含一个异步形态的实现示例 (`plugin.example_feature.slow`): 用 kit 协程原语
 /// (`co_await sleep`) 等待, 由插件协程驱动桥推进 (与 tool/hook 的写法一致)。
 ///
-/// 还演示**钩子有序登记** (`agentxx.agent.hooks_ex`): 以优先级 -10 登记一个
-/// `AGENT_START` 处理器, 让它排在其它插件的钩子之前 (基础 `hook()` 只能按装载顺序排)。
+/// 还演示**钩子有序登记** (`agentxx.agent.hooks` 的表尾三成员): 以优先级 -10 登记一个
+/// `AGENT_START` 处理器, 让它排在其它插件的钩子之前 (基础 `hook()` 只能按加载顺序排)。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -197,12 +197,12 @@ static int featureAgentSetup(FeatureCtx& ctx) {
         ctx.log.info("example_feature: host point agentxx.context.countTokens not declared yet");
     }
 
-    // 6. 有序登记一个钩子处理器 (`agentxx.agent.hooks_ex`)
+    // 6. 有序登记一个钩子处理器 (`agentxx.agent.hooks` 的表尾三成员)
     //    - 优先级 -10: 排在默认优先级 (0) 的其它插件钩子之前
     //    - 同一个点可以登记多个 (各持一根句柄, 用 unhookEx 精确撤销); 不撤销也行:
-    //      处理器跟着实例走, 禁用/卸载时宿主自动摘除
-    //    - 老宿主没有这张表时返回 0, 这里按"功能不可用"降级 (加载照常成功)
-    if (ctx.iface.hooksEx && ctx.iface.hooksEx->register_hook_ex) {
+    //      处理器跟着实例走, 禁用/卸载时由主程序自动摘除
+    //    - 主程序不支持时返回 0, 这里按"功能不可用"降级 (加载照常成功)
+    if (ctx.iface.hooks && ctx.iface.hooks->register_hook_ex) {
         HookOptions opts;
         opts.priority = -10;
         opts.ownerTag = "example_feature";
@@ -224,7 +224,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
             ctx.log.info("example_feature: ordered hook registration rejected by host");
         }
     } else {
-        ctx.log.info("example_feature: hooks_ex iface unavailable, ordered hook skipped");
+        ctx.log.info("example_feature: agentxx.agent.hooks ordered members unavailable, skipped");
     }
 
     return 0;
