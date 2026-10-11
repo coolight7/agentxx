@@ -934,7 +934,7 @@
         "tools": [
           {
             "name": "lumen_open_file",
-            "description": "打开宿主编辑器里的文件",
+            "description": "在编辑器里打开文件",
             "inputSchema": {
               "type": "object",
               "properties": {
