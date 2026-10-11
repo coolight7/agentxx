@@ -6,6 +6,10 @@
 
 ## 1. 总览
 
+agentxx 是主程序；它使用 cxx_* 库实现的插件框架动态加载插件。插件有两种：
+直接加载的**动态库插件**，以及由 **JS 运行时插件**（`agentxx_javascript_engine`）加载的
+**JS 插件**。（本文档里的"主程序"都指 agentxx；cxx_* 库的文档里同一词是通用含义。）
+
 Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 
 - **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `PluginxxStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
