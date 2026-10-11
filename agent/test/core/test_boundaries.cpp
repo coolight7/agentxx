@@ -868,6 +868,189 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
     }
 }
 
+/// 规则 15: 称呼与用词 (计划 plugin-version §11)
+///
+/// 同一件事在全项目只有一个称呼 (§11.1): 主程序 / 插件框架 / 动态库插件 / JS 插件 /
+/// JS 运行时插件 / 嵌入方程序。含糊称呼与直译词一旦回潮, 读代码的人就要靠上下文猜
+/// "这句在说谁", 因此这里做静态检查:
+///
+/// - 含糊称呼: `宿主` / `应用侧` / `基座`;
+/// - 直译词 (中文读者要先回译成英文才懂的词): `装载` / `载入` / `承载` / `载体` /
+///   `编排` / `接缝` / `链路` / `视角` / `口径` / `落地` / `埋点` / `门禁` / `颗粒度`;
+/// - `内核`: 只允许操作系统内核含义 (`内核对象` / `内核级` / `内核就绪事件`);
+/// - `领域`: 只允许出现在标识符所在行 (`DomainHooks` /
+///   `plugin_manager_domain_hooks` 一类);
+/// - `拓扑`: 只允许 `拓扑排序` (算法名)。
+///
+/// 豁免:
+/// - 一行里出现两个及以上禁用词时判为"禁用词表本身" (AGENTS.md 与
+///   `prompt.cpp` 里列出这些词的那两处);
+/// - `resource/history/**` 是历史记录, 整体不检查;
+/// - 第三方上游库不检查 (只查自研的 cxx_* 与 agentxx 自己的代码/文档)。
+void checkTerminology(const fs::path& root, Violations& v) {
+    struct Rule {
+        const char* term;
+        const char* why;
+    };
+    // 本表自身就是"停用词"清单, 逐行带 `term-table` 标记跳过检查
+    static const Rule kRules[] = {
+        {"宿主", "统一称呼为'主程序'(FFI 场景为'嵌入方程序')"}, // term-table
+        {"应用侧", "统一称呼为'主程序'"},                     // term-table
+        {"基座", "统一称呼为'插件框架'"},                     // term-table
+        {"装载", "统一用'加载'"},                             // term-table
+        {"载入", "统一用'加载'"},                             // term-table
+        {"承载", "按句意写'保存/包含/提供/负责'"},            // term-table
+        {"载体", "按句意写'内容/数据/块'"},                   // term-table
+        {"编排", "用'调度/组织'"},                            // term-table
+        {"接缝", "用'扩展点/对接点'"},                        // term-table
+        {"链路", "用'流程/调用路径'"},                        // term-table
+        {"视角", "用'角度'"},                                 // term-table
+        {"口径", "用'规则/定义'"},                            // term-table
+        {"落地", "用'实现'"},                                 // term-table
+        {"埋点", "用'扩展点'"},                               // term-table
+        {"门禁", "用'校验/检查'"},                            // term-table
+        {"颗粒度", "用'划分粗细/粒度'"},                      // term-table
+    };
+
+    const auto repoRoot = root.parent_path();
+    std::vector<fs::path> files;
+    const fs::path scanDirs[] = {
+        root / "lib",
+        root / "client",
+        root / "plugins",
+        root / "test",
+        root / "third_party" / "cxx_pluginxx",
+        root / "third_party" / "cxx_pluginxx_ui",
+        root / "third_party" / "cxx_utilxx",
+        root / "third_party" / "cxx_utilxx_base",
+        repoRoot / "docs",
+    };
+    for (const auto& dir : scanDirs) {
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) {
+            continue;
+        }
+        for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied,
+                                                ec),
+             end;
+             it != end;
+             it.increment(ec)) {
+            if (ec) {
+                break;
+            }
+            const auto& p = it->path();
+            if (it->is_directory(ec)) {
+                const auto name = p.filename().string();
+                if (isSkippedDir(name)) {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+            if (!it->is_regular_file(ec)) {
+                continue;
+            }
+            const auto ext = p.extension().string();
+            if (ext == ".h" || ext == ".hpp" || ext == ".cpp" || ext == ".c" || ext == ".md"
+                || ext == ".yaml") {
+                files.push_back(p);
+            }
+        }
+    }
+    const auto agentsMd = repoRoot / "AGENTS.md";
+    std::error_code ec;
+    if (fs::is_regular_file(agentsMd, ec)) {
+        files.push_back(agentsMd);
+    }
+
+    size_t scanned = 0;
+    for (const auto& file : files) {
+        // 历史记录与构建产物不检查
+        const auto genericPath = toGeneric(file.lexically_relative(repoRoot));
+        if (genericPath.find("resource/history/") != std::string::npos) {
+            continue;
+        }
+        // 本规则自身 (停用词清单与逐条说明) 不参与检查
+        if (genericPath == "agent/test/core/test_boundaries.cpp") {
+            continue;
+        }
+        const auto text = readTextFile(file);
+        if (text.empty()) {
+            continue;
+        }
+        ++scanned;
+        int         lineNo = 0;
+        std::string_view rest{text};
+        size_t           pos = 0;
+        while (pos <= rest.size()) {
+            const auto nl  = rest.find('\n', pos);
+            const auto end = (nl == std::string_view::npos) ? rest.size() : nl;
+            const auto line = std::string{rest.substr(pos, end - pos)};
+            ++lineNo;
+
+            // 禁用词表本身 (一行里列了多个禁词) 与检查表自身 (带 `term-table` 标记) 不判违规
+            size_t bannedInLine = 0;
+            for (const auto& rule : kRules) {
+                if (line.find(rule.term) != std::string::npos) {
+                    ++bannedInLine;
+                }
+            }
+            if (bannedInLine < 2 && line.find("term-table") == std::string::npos) {
+                for (const auto& rule : kRules) {
+                    if (line.find(rule.term) != std::string::npos) {
+                        v.push_back(
+                            genericPath + ":" + std::to_string(lineNo) + ": 称呼/用词 `"
+                            + rule.term + "` 已停用 (" + rule.why + ")\n      " + line
+                        );
+                    }
+                }
+                // `内核` 只允许操作系统内核含义
+                if (line.find("内核") != std::string::npos
+                    && line.find("内核对象") == std::string::npos
+                    && line.find("内核级") == std::string::npos
+                    && line.find("内核态") == std::string::npos
+                    && line.find("内核时间") == std::string::npos
+                    && line.find("内核接口") == std::string::npos
+                    && line.find("内核累计") == std::string::npos
+                    && line.find("内核过旧") == std::string::npos
+                    && line.find("内核把") == std::string::npos
+                    && line.find("内核直接回收") == std::string::npos
+                    && line.find("内核就绪") == std::string::npos) {
+                    v.push_back(
+                        genericPath + ":" + std::to_string(lineNo)
+                        + ": `内核` 只用于操作系统内核含义 (指插件框架时写'插件框架')\n      "
+                        + line
+                    );
+                }
+                // `领域` 只允许出现在标识符行
+                if (line.find("领域") != std::string::npos && line.find("domain") == std::string::npos
+                    && line.find("Domain") == std::string::npos) {
+                    v.push_back(
+                        genericPath + ":" + std::to_string(lineNo)
+                        + ": `领域` 只在标识符里保留, 正文写'业务'\n      " + line
+                    );
+                }
+                if (line.find("拓扑") != std::string::npos
+                    && line.find("拓扑排序") == std::string::npos) {
+                    v.push_back(
+                        genericPath + ":" + std::to_string(lineNo)
+                        + ": `拓扑` 只在算法名'拓扑排序'里保留, 其余写'结构/顺序'\n      " + line
+                    );
+                }
+            }
+
+            if (nl == std::string_view::npos) {
+                break;
+            }
+            pos = nl + 1;
+        }
+    }
+    if (scanned < 500) {
+        v.push_back(
+            "称呼检查只扫到 " + std::to_string(scanned) + " 个文件 (少于预期, 检查已失效?)"
+        );
+    }
+}
+
 /// 规则 11: 文档路径存在 (计划 TST-7)
 ///
 /// `AGENTS.md` 是给人和 AI 看的入口, 里面引用的 `docs/zh-cn/**.md` 一旦改名或
@@ -1119,6 +1302,9 @@ TestResult testBoundaries() {
     Violations jsonlViolations;
     checkJsonlModeStdoutDiscipline(root, jsonlViolations);
 
+    Violations termViolations;
+    checkTerminology(root, termViolations);
+
     // 扫描量下限: 防止目录改名/收集逻辑失效导致"零文件全通过"的假通过
     // (数值留出余量, 目录增删几十个文件不应触发失败)
     XX_TEST_EXPECT_GE(scannedClient, size_t{40});
@@ -1135,6 +1321,7 @@ TestResult testBoundaries() {
     reportViolations("文档路径", docPathViolations);
     reportViolations("客户端模型层边界", modelViolations);
     reportViolations("JSONL 模式 stdout 纪律", jsonlViolations);
+    reportViolations("称呼与用词", termViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

@@ -129,7 +129,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `PluginxxSubscription` + 幂等撤销)、`domain_hooks.h` (业务数据入口 `DomainHooks`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
 
 - **通用表实现整体在 `cxx_pluginxx`**: log/json/config/plugins/events/scheduler/
-  coroutine_runtime/tasks/cancel/capabilities 十张表的**定义与实现**都在内核 ——
+  coroutine_runtime/tasks/cancel/capabilities 十张表的**定义与实现**都在插件框架 ——
   `PluginHostCore<InstanceT>` 提供方法实现 (能力登记/事件订阅/睡眠/委托/任务托管/取消
   投递), `tables_impl.h` 提供 C ABI 入口 (解析主程序控制块 → 投递 IO 线程 → 调用同名方法);
   主程序只需 `class MyManager : public pluginxx::PluginHostCore<MyInstance>` +
@@ -143,7 +143,7 @@ auto b64 = utilxx_base::base64Encode(data);
   `create`/`start` 事务、启用与禁用级联、`stop` 事务补齐、inflight 归零等待、`destroy`
   与动态库卸载、失败回滚与关闭超时重试全部只有一份实现 —— agent 侧 `PluginManager`
   与 client 侧 `ClientPluginManager` 都继承它。主程序只提供少量扩展点:
-  - 纯虚: `selfRef()` (管理器自引用, 因内核不能自己继承 `enable_shared_from_this`,
+  - 纯虚: `selfRef()` (管理器自引用, 因插件框架不能自己继承 `enable_shared_from_this`,
       否则与主程序管理器的同名基类形成多基类歧义)、`createInstance(name)` (生成业务实例)、
       `hostVtable()` (交给自己插件的 vtable);
   - 可选覆写: `detachDomainRegistrations` (摘除业务注册: 工具/权限/钩子/图/提示词 或
@@ -169,7 +169,7 @@ auto b64 = utilxx_base::base64Encode(data);
   插件源码的 `#include` 路径与 `agentxx::plugin::Xxx` 写法**零改动**；
   通用基类 `pluginxx::PluginBaseT<IfacesT>` 以主程序接口表聚合为模板实参，agentxx 侧
   `PluginBase : PluginBaseT<AgentIfaces>` 只补业务 helper 并覆写 `onHostReady()` 挂钩业务事件
-- agentxx 侧配套头: `agentxx/plugin/plugin_framework.h` (把内核类型以逐条 `using` 引入
+- agentxx 侧配套头: `agentxx/plugin/plugin_framework.h` (把插件框架的类型以逐条 `using` 引入
   `agentxx::plugin`)、`agentxx/plugin/plugin_interfaces.h` (接口协商/清单目录)、
   `agentxx/util/cancel_adapter.h` (图引擎令牌与统一取消抽象互适配)
 - 库归属与命名空间：`cxx_utilxx_base` → `utilxx_base` (另含跨库共享契约 `utilxx::CancelToken`
@@ -198,7 +198,7 @@ auto b64 = utilxx_base::base64Encode(data);
   漏查找会在 configure 期报目标不存在, 或运行期 dlopen 报
   `undefined symbol: io_uring_queue_init`
 - **通用库不得引用主程序符号**: 内置插件表由主程序生成，故 `cxx_pluginxx` 经
-  `pluginxx::setBuiltinPluginProvider` 注册点取数 (主程序静态初始化期登记)，内核自身不链接
+  `pluginxx::setBuiltinPluginProvider` 注册点取数 (主程序静态初始化期登记)，插件框架自身不链接
   `agentxx_plugin_get_builtin_*`
 - 定位为内置插件便捷库 (与主程序同一 superbuild 构建、依赖齐全)；第三方插件仅需纯 C 头
   `plugin_api.h` / SDK `plugin_kit.h`，无需链接主程序库
@@ -1102,7 +1102,7 @@ Closing → CloseFailed → Closing (可重试)
 （不是记录条数），全部为 0 表示该实例在主程序侧已回到基线；`--dump-config` 的装配快照
 按插件输出 `registration_total` 等字段与图定义的占用者。
 
-**加载失败提示**：内核日志说明"哪一步失败"，主程序再补一句"照什么改"
+**加载失败提示**：插件框架的日志说明"哪一步失败"，主程序再补一句"照什么改"
 （`PluginManager::diagnosePluginPath`）：路径为空、路径不存在、目录下没有 `plugin.yaml`、
 清单 YAML 非法/缺字段、清单 `entry` 指向的库文件不存在、库缺少
 `agentxx_plugin_agent_{create,start,stop}` 入口符号、`builtin://<name>` 未注册等。

@@ -112,14 +112,14 @@ path/to/agentxx_test string_util regex
     - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/正则/路由/差异/
       worktree/散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
       (不含数据库依赖: sqlite 封装与设置库属于主程序, 见 `agentxx/util/`)
-    - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架内核 (纯 C ABI 基座 pluginxx/api/、
+    - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架 (纯 C ABI 契约 pluginxx/api/、
       插件 SDK kit/{kit.h,guard.h}、运行时 runtime/、主程序实现 host/), 依赖 cxx_utilxx_base +
       fmt + yaml-cpp (仅 Boost 头); 产物 `libcxx_pluginxx(.so|_static.a)`
         - SDK 分层: 通用 (跨边界字符串工具/通用表聚合 PluginIfaceCore/Task 锚定协程/锚定原语/
-          CancelRegistry/OpCtl/ArgReader/PluginBaseT<IfacesT>/导出宏) 在内核,
-          主程序业务 helper 在主程序侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含内核头 +
+          CancelRegistry/OpCtl/ArgReader/PluginBaseT<IfacesT>/导出宏) 在插件框架,
+          主程序业务 helper 在主程序侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含插件框架的头 +
           逐条 `using` 引入 agentxx::plugin, 插件源码零改动)
-        - 通用表实现 (十张表的**定义与实现**) 也在内核: `host/host_core.h`
+        - 通用表实现 (十张表的**定义与实现**) 也在插件框架: `host/host_core.h`
           (`PluginHostCore<InstanceT>`: 能力/事件/调度/任务/取消投递的通用实现) +
           `host/tables_impl.h` (C ABI 入口 + `queryGenericPluginIface<I,M>`) +
           `host/domain_hooks.h` (`DomainHooks`: 通用表需要主程序数据的入口) +
@@ -127,7 +127,7 @@ path/to/agentxx_test string_util regex
           agentxx 侧主程序实现见 `agent/lib/src/plugins/plugin_manager_domain_hooks.cpp`
           (事件后端包装 `agentxx::events::EventBus`) 与 `plugin_manager_vtable.cpp`
           (业务表 + `query_interface` 先查通用表)
-        - 生命周期骨架也在内核: `host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`
+        - 生命周期公共实现也在插件框架: `host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`
           (继承 `PluginHostCore`) 提供加载/启停/禁用启用/卸载/级联依赖/关闭超时重试
           的唯一实现, 主程序只提供扩展点 (纯虚 `selfRef`/`createInstance`/`hostVtable`,
           可选 `detachDomainRegistrations`/`clearDomainRegistrations`/

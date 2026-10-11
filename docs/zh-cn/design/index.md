@@ -1845,7 +1845,7 @@ agent/
 │   │   │   │   └── agentxx_ui_kit.g.h # agentxx 扩展 kit (生成物; 命名空间 agentxx::ui::kit,
 │   │   │   │   │                     #   自包含基础 kit; 定义见 agent/schema/agentxx-ui-kit.def.json)
 │   │   │   ├── plugin_framework.h # 把插件框架 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
-│   │   │   │                     #   内核实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
+│   │   │   │                     #   通用部分实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
 │   │   │   │                     #   (kit/{kit,guard}.h; runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
 │   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,
 │   │   │   │                     #          host_core,tables_impl,lifecycle}.h)
