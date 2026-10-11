@@ -124,7 +124,7 @@ inline constexpr std::string_view kBuiltinWorkDirEnv = "AGENTXX_WORK_DIR";
 /// - yaml 配置中可经 `${AGENTXX_EXEC_DIR}` 引用 (如模型/插件路径相对 exe 目录)
 /// - 值为程序启动时解析的可执行文件所在目录 (正斜杠格式); 仅 main 入口注入
 /// - 未注入时 (测试/嵌入场景) resolveEnvVars 保留 ${AGENTXX_EXEC_DIR} 原样
-///   (可执行目录无法惰性推导, 须由宿主在启动时注入)
+///   (可执行目录无法惰性推导, 须由主程序在启动时注入)
 inline constexpr std::string_view kBuiltinExecDirEnv = "AGENTXX_EXEC_DIR";
 
 /// 注入程序内置环境变量 (main 启动时尽早调用; 供 yaml `${VAR}` 展开使用)

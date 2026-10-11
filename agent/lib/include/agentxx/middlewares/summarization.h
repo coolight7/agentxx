@@ -76,7 +76,7 @@ protected:
     std::shared_ptr<agentxx::feature::TokenEstimator> tokenEstimator;
 
     /// 本中间件声明的上下文功能点 (token 估算 / 压缩)
-    /// - 在构造时声明 (早于插件装载), 因此插件可以为这两个点登记实现
+    /// - 在构造时声明 (早于插件加载), 因此插件可以为这两个点登记实现
     /// - 未取到 AgentContext 时为空 (单测直接构造中间件的场景)
     agentxx::feature::ContextPoints featurePoints;
 
@@ -86,7 +86,7 @@ public:
     std::map<std::string, SummarizationToolHandle> summarizationToolHandles{};
 
     /// 本中间件声明的上下文功能点 (token 估算 / 压缩)
-    /// - 在构造时声明 (早于插件装载), 因此插件可以为这两个点登记实现
+    /// - 在构造时声明 (早于插件加载), 因此插件可以为这两个点登记实现
     /// - 未取到 AgentContext 时为空 (单测直接构造中间件的场景)
     const agentxx::feature::ContextPoints& points() const noexcept {
         return featurePoints;
@@ -116,7 +116,7 @@ public:
     ) const;
 
     /// 经功能点 `agentxx.context.countTokens` 取 token 数 (预算计算用)
-    /// - 插件 / FFI 宿主为该点登记的实现会在这里生效; 同步快路径
+    /// - 插件 / FFI 主程序为该点登记的实现会在这里生效; 同步快路径
     ///   ([countTokensForUtf8Str] / [countTokens], 供 TPS 与内部裁剪使用)
     ///   仍只走核心实现, 插件实现不参与 (见 plan §8.1)
     /// - 拿不到值时回退同步快路径 (功能点不可用不影响压缩流程)
@@ -174,7 +174,7 @@ public:
     /// LLM 同上下文压缩的核心实现 (功能点 `agentxx.context.summarize` 的 core 层)
     ///
     /// 只产出摘要文本: 不替换会话消息、不发提示消息、不写 share store ——
-    /// 写回由编排方 (本中间件) 做。内部派生"用完即弃"的压缩子代理属于实现细节。
+    /// 写回由调度方 (本中间件) 做。内部派生"用完即弃"的压缩子代理属于实现细节。
     ///
     /// - 请求参数: subagent="subagent_task", messages=当前完整上下文(含 system)
     ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
@@ -188,7 +188,7 @@ public:
     ///   requestInterrupt), resume 后返回结果; 必须在 AgentRunner
     ///   中断循环内执行, 否则 NodeInterrupt 无人处理会逃逸
     /// - direct=true: 手动触发压缩, agent 空闲时调用 (无 AgentRunner 中断
-    ///   循环) —— 直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待
+    ///   循环) —— 直接经agent 节点容器 AgentHost::spawnBatch 派生压缩子代理并等待
     ///   完成, 不抛 NodeInterrupt; 需要 AgentContext::host 有效, 超时
     ///   或失败返回空字符串 (调用方保留原消息)
     /// - 无 subagentManager / 消息为空 / 压缩失败时返回空串 (调用方保留原消息)
@@ -198,8 +198,8 @@ public:
         bool                                      direct = false
     );
 
-    /// 经功能点 `agentxx.context.summarize` 取摘要文本 (编排方入口)
-    /// - 插件 / FFI 宿主为该点登记的实现会在这里生效; 拿不到值时返回空串
+    /// 经功能点 `agentxx.context.summarize` 取摘要文本 (调度方入口)
+    /// - 插件 / FFI 主程序为该点登记的实现会在这里生效; 拿不到值时返回空串
     ///   (调用方走硬截断兜底)
     /// - 本轮该点声明为不可对外开放调用 (`callable = false`), 只由本中间件取用
     asio::awaitable<std::string> summarizeViaPoint(

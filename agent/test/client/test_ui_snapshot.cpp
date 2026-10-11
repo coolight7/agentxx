@@ -3,7 +3,7 @@
 /// 夹具实现 (固定尺寸文本 + 命中区基线 + 一键更新 + 差异输出) 在本文件, 供其它
 /// 渲染相关模块复用 (见 agentxx-test/client/ui_snapshot.h)。
 ///
-/// 覆盖范围 (UI-2 定义): Markdown 文本 / 表格 (含 CJK 与截断) / 树 (含宿主折叠) /
+/// 覆盖范围 (UI-2 定义): Markdown 文本 / 表格 (含 CJK 与截断) / 树 (含主程序折叠) /
 /// 差异 / 表单 (控件 + 提交取消) / 窄终端 / 超长内容裁剪 / 未知组件降级 /
 /// 命中区基线 (表格单元格与表单控件)。
 #include "agentxx-test/client/test_ui_snapshot.h"
@@ -224,7 +224,7 @@ UiRenderCtx ctxFor(int width, int indent = 0) {
     return ctx;
 }
 
-/// 解析 + 适配 + 渲染 (与宿主实际调用路径一致: 宿主先经 renderItemJson)
+/// 解析 + 适配 + 渲染 (与主程序实际调用路径一致: 主程序先经 renderItemJson)
 UiRenderResult renderJson(const std::string& json, const UiRenderCtx& ctx) {
     UiRenderResult out;
     renderItemJson(utilxx_base::Json::parse(json), ctx, out);
@@ -297,14 +297,14 @@ TestResult testUiSnapshots() {
         XX_EXPECT_SNAPSHOT("table_cjk", res, 48, 10);
     }
 
-    // ---------------- 树 (连接线 + 宿主折叠状态) ----------------
+    // ---------------- 树 (连接线 + 主程序折叠状态) ----------------
     const std::string treeJson = R"([{"kind":"Tree","nodes":[{"label":"src","children":[{"label":"main.cpp"},{"label":"io.cpp"}]},{"label":"README.md"}]}])";
     {
         auto res = renderJson(treeJson, ctxFor(40));
         XX_EXPECT_SNAPSHOT("tree_expanded", res, 40, 8);
     }
     {
-        // 宿主维护折叠状态: 键为节点路径 (见 UI 折叠约定)
+        // 主程序维护折叠状态: 键为节点路径 (见 UI 折叠约定)
         auto ctx = ctxFor(40);
         ctx.collapseExpanded = [](const std::string& id, bool defaultValue) {
             return (id.find("src") != std::string::npos) ? false : defaultValue;

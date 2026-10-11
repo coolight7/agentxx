@@ -290,7 +290,7 @@ static agentxx::middleware::SummarizationToolHandle makeBothTruncateHandle() {
 // 运行 onModelcallRunFunc 的辅助: 构造会话上下文 + GraphState + RunContext + NodeInput
 // ---------------------------------------------------------------------------
 
-/// 运行前把消息写入会话 (会话是 LLM 上下文的唯一权威, 图状态不再承载 messages 通道),
+/// 运行前把消息写入会话 (会话是 LLM 上下文的唯一权威, 图状态不再保存 messages 通道),
 /// 运行后从会话读回中间件处理过的上下文
 static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
     const std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle>& handle,
@@ -1790,7 +1790,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
     // --- T20. subagent 失败返回错误 JSON (非空串): 不得当作有效摘要,
     //           按失败处理 (走失败计数/保留原消息或硬截断), 不污染上下文 ---
-    // - 背景: 子代理被取消时宿主返回 `{"error":"Sub-agent cancelled..."}`
+    // - 背景: 子代理被取消时主程序返回 `{"error":"Sub-agent cancelled..."}`
     //   错误串; 若当摘要写回, 取消后会显示"压缩成功"并继续执行
     {
         auto env = std::make_shared<SummarizationTestEnv>();

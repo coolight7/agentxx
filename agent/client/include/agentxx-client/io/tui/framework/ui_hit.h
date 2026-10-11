@@ -69,7 +69,7 @@ struct UiHitInfo {
 enum class UiHitRegionKind : uint8_t {
     /// 派发动作: `id` = 动作 id, `arg` = 参数 JSON
     Action = 0,
-    /// 折叠标题: `id` = 组件 id (调用方翻转宿主维护的展开状态后重绘)
+    /// 折叠标题: `id` = 组件 id (调用方翻转主程序维护的展开状态后重绘)
     Collapse = 1,
     /// 表单控件: `id` = 控件 id, `sub` = 子序号 (候选值下标 / 步进按钮 / 输入框)
     Form = 2,

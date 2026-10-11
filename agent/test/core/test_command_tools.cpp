@@ -35,7 +35,7 @@ int g_cmd_failed = 0;
 namespace agentxx {
 namespace tools {
 
-/// 与插件入口同源: 优先宿主 toolPrompt (由插件 start 注入, 含启动时探测到的
+/// 与插件入口同源: 优先主程序 toolPrompt (由插件 start 注入, 含启动时探测到的
 /// python/node/PowerShell 描述), 未配置回退内置默认描述
 inline neograph::ChatTool execmdDefinitionOf(
     const std::weak_ptr<agentxx::agent::AgentContext>& ctx,

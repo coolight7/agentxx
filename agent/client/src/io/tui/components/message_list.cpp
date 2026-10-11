@@ -49,7 +49,7 @@ const agentxx::plugin::ClientToolDecor*
 }
 
 /// 工具语义渲染统一入口 (UI 线程):
-/// - decor / 预设模版由宿主直接计算 (纯宿主数据)
+/// - decor / 预设模版由主程序直接计算 (纯主程序数据)
 /// - 自定义 renderer 只读 [ClientToolRenderCache] 的语义快照; 未命中时提交一次
 ///   后台渲染请求, 本帧用通用回退; 结果写入缓存后 adapter 触发重绘, 下一帧
 ///   由缓存命中上屏 (不在 UI 线程执行插件回调, plugin.md 第 8.2 节)
@@ -301,7 +301,7 @@ Element MessageListComponent::OnRender() {
         }
     }
 
-    // 插件定时器的可见性门控: 上报视角内工具消息装饰区域的可见性
+    // 插件定时器的可见性门控: 上报角度内工具消息装饰区域的可见性
     // (区域 id = tool_call_id; 仅对登记过装饰的 id 上报, 见函数说明)
     if (ctx_.frameState) {
         reportDecorVisibility(scrollable_->visibleBoxes());
@@ -338,7 +338,7 @@ Element MessageListComponent::OnRender() {
            | reflect(areaBox_);
 }
 
-/// 上报视角内工具消息装饰区域的可见性 (见头文件说明)
+/// 上报角度内工具消息装饰区域的可见性 (见头文件说明)
 void MessageListComponent::reportDecorVisibility(const std::vector<Box>& vboxes) {
     auto mgr = ctx_.pluginManager;
     if (!mgr || !ctx_.frameState) {
@@ -355,7 +355,7 @@ void MessageListComponent::reportDecorVisibility(const std::vector<Box>& vboxes)
         if (msg.role != TUIMessage::Role::Tool || !msg.tool || msg.tool->toolCallId.empty()) {
             continue;
         }
-        // 只上报"确实登记过装饰"的 id: 否则宿主的可见性表会被每个 tool_call_id 撑大
+        // 只上报"确实登记过装饰"的 id: 否则主程序的可见性表会被每个 tool_call_id 撑大
         if (!findToolDecor(st, msg.tool->toolCallId)) {
             continue;
         }
@@ -1379,7 +1379,7 @@ Element MessageListComponent::buildMessageBlock(
 
             userElements.push_back(hbox({
                 text("> ") | color(theme.userColor),
-                // 正文按纯文本折行渲染 (不解析 markdown): 单节点承载整段文本,
+                // 正文按纯文本折行渲染 (不解析 markdown): 单节点包含整段文本,
                 // 折行结果按宽度缓存 (见 markdown::FlowText)
                 renderPlainText(msg.text, theme.userColor),
             }));
@@ -1733,7 +1733,7 @@ Element MessageListComponent::buildMessageBlock(
 // ---------------------------------------------------------------------------
 // 差异对比渲染 (diff)
 // ---------------------------------------------------------------------------
-// 说明: 曾经有过"宿主为 edit 工具专门渲染展开体"的入口 (appendEditToolBody /
+// 说明: 曾经有过"主程序为 edit 工具专门渲染展开体"的入口 (appendEditToolBody /
 // renderEditToolDiff), 现在工具特化渲染统一由插件提供 (消息装饰 / 工具渲染器),
 // 该入口已删除; 需要 diff 外观时用 [renderPluginDiff]。
 

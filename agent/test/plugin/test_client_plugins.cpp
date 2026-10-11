@@ -10,10 +10,10 @@
 /// 18. 通用交互: bind/unbind 覆盖 + 精确优先 vs fallback + 上下文透传
 /// 19. 通用 overlay: open/close 参数校验 + 适配器信号
 /// 20. planning 端到端: dispatch(open_graph) → open_overlay(MERMAID)
-/// 21. kit::ActionController 单测 (header-only, 无宿主)
-/// 28. 宿主内置工具特化渲染: agentxx_share_store / agentxx_subagent
-///     (lib 内置工具无对应插件, 由宿主注册内置渲染器)
-/// 29. 接口协商: TUI 宿主声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
+/// 21. kit::ActionController 单测 (header-only, 无主程序)
+/// 28. 主程序内置工具特化渲染: agentxx_share_store / agentxx_subagent
+///     (lib 内置工具无对应插件, 由主程序注册内置渲染器)
+/// 29. 接口协商: TUI 主程序声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
 ///     client 侧声明必须全部被满足 (避免启动误报"可选接口不支持")
 #include "agentxx-test/plugin/test_client_plugins.h"
 
@@ -144,7 +144,7 @@ public:
 
     agentxx::plugin::InterfaceSet supportedInterfaces() const override {
         namespace pi = agentxx::plugin::plugin_interfaces;
-        return {// 与 TuiPluginAdapter 声明集保持一致 (完整消息渲染面宿主):
+        return {// 与 TuiPluginAdapter 声明集保持一致 (完整消息渲染面主程序):
                 // ui 表整体 + 全部子能力
                 std::string{pi::ClientUi},
                 std::string{pi::ClientStatusItem},
@@ -409,9 +409,9 @@ private:
 };
 
 /// 工具语义渲染模型:
-/// - decor / 预设模版: 纯宿主计算, 直接返回
+/// - decor / 预设模版: 纯主程序计算, 直接返回
 /// - 自定义 renderer: 只在 client io 线程执行; 未命中时提交请求并等待结果写入
-///   缓存, 再从缓存读取 (UI 线程只读宿主语义快照, 不进入插件代码)
+///   缓存, 再从缓存读取 (UI 线程只读主程序语义快照, 不进入插件代码)
 asio::awaitable<agentxx::plugin::ClientToolRenderResult> renderToolAsync(
     const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr,
     std::string                                                  toolCallId,
@@ -582,11 +582,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
     // ---- 3. 事件分发 ----
     // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello");
-    //        插件事件分发完成后宿主上报 client_interfaces (三期6, 镜像
+    //        插件事件分发完成后主程序上报 client_interfaces (三期6, 镜像
     //        server_plugins —— agent 侧插件据此感知 client 接口集)
     mgr->onReady();
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
-    // 宿主接口集上报最后发出 (插件 READY 处理器先行)
+    // 主程序接口集上报最后发出 (插件 READY 处理器先行)
     XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), "client_interfaces");
     XX_TEST_EXPECT_EQ(adapter->lastDataPlugin(), "agentxx_host");
 
@@ -963,7 +963,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 10. 宿主约定事件 (server_plugins) + 对端缺失可观测性 ----
+    // ---- 10. 主程序约定事件 (server_plugins) + 对端缺失可观测性 ----
     // - server_plugins (结构化载荷) → 记录服务端已加载插件列表, get_client_state
     //   以 "agentPlugins" 暴露 [{name,version,interfaces},...] (client 插件
     //   判断对端可用性/能力的正式通道)
@@ -1002,13 +1002,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr->onPluginData(orphan);
     }
 
-    // ---- 11. 接口协商: 宿主支持集 / require 限制 / 发现通道 ----
+    // ---- 11. 接口协商: 主程序支持集 / require 限制 / 发现通道 ----
     // - 限制双道生效: dlopen 前跳过 (loadConfiguredClientPlugins) 与
     //   dlopen 后直连路径 (loadNativeAsync); 此处覆盖后者 + 发现通道
     {
         namespace fs = std::filesystem;
 
-        // 11.1 clientStateJson 暴露宿主接口清单 (Mock 适配器: status_item/
+        // 11.1 clientStateJson 暴露主程序接口清单 (Mock 适配器: status_item/
         //      panel/toast/info_section/command)
         auto stateJson = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson.find("\"interfaces\"") != std::string::npos);
@@ -1052,7 +1052,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         );
 
         // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后限制):
-        // 拷贝真实可加载的示例库, manifest 声明本宿主不支持的必选接口
+        // 拷贝真实可加载的示例库, manifest 声明本主程序不支持的必选接口
         auto gateDir
             = fs::temp_directory_path()
               / ("agentxx_iface_gate_"
@@ -1971,7 +1971,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(cap.owner, "toolCallX");
                 XX_TEST_EXPECT_EQ(cap.action, "planning.open_graph");
                 XX_TEST_EXPECT_TRUE(cap.args.find("\"k\"") != std::string::npos);
-                // 未知 action_id 同样派发 (插件侧查表, 宿主不拦截);
+                // 未知 action_id 同样派发 (插件侧查表, 主程序不拦截);
                 // 无绑定插件 → 丢弃不崩溃
                 mgr->dispatchAction("example_plugin", "sec1", "no.such", "{}");
                 mgr->dispatchAction("no_plugin", "sec1", "a.do", "{}");
@@ -2032,7 +2032,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // close → 适配器收到信号 (不崩溃)
                 ui->close_overlay(exInst->hostView());
                 XX_TEST_EXPECT_EQ(adapter->overlayCloseCount(), 1);
-                // DIFF payload 透传 (宿主不解析, 仅校验类型)
+                // DIFF payload 透传 (主程序不解析, 仅校验类型)
                 AgentxxOverlaySpec diffSpec{};
                 diffSpec.version = 1;
                 diffSpec.type    = AGENTXX_OVERLAY_DIFF;
@@ -2074,7 +2074,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 21. kit::ActionController 单测 (header-only, 无宿主) ----
+    // ---- 21. kit::ActionController 单测 (header-only, 无主程序) ----
     {
         agentxx::plugin::kit::ActionController ctl;
         XX_TEST_EXPECT_TRUE(ctl.empty());
@@ -2429,7 +2429,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         inst->pluginCtx           = &probe;
         inst->lifecycleStarted    = true;
 
-        // 禁用: 宿主侧同步摘除, stop 事务投递到 client io 线程
+        // 禁用: 主程序侧同步摘除, stop 事务投递到 client io 线程
         mgr2->disable("fake_lifecycle");
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
@@ -2587,7 +2587,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 26. 客户端加载期 start 失败的真实 DSO 回滚 (R2 遗留: UI 项) ----
     // 测试插件 start 依次注册 状态栏项/面板/Info 段落/命令/订阅, 每步注册后
     // 立即经句柄自检 (update 必须成功, 保证"走到最后一步"意味着前面的注册
-    // 真实生效), 然后主动失败: 宿主必须回滚全部 UI 注册与订阅。
+    // 真实生效), 然后主动失败: 主程序必须回滚全部 UI 注册与订阅。
     // 随后置 `AGENTXX_TEST_CLIENT_START_OK` 再次加载同一 DSO 必须完整成功
     // (证明 id/命令/订阅无残留冲突), 卸载后再次清空。
     {
@@ -2622,7 +2622,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                   return false;
               };
 
-        // 第一次加载: 全注册后失败, 宿主回滚
+        // 第一次加载: 全注册后失败, 主程序回滚
         clearSystemEnvVar("AGENTXX_TEST_CLIENT_START_OK");
         auto failed = co_await mgr2->loadNativeAsync(dsoPath);
         XX_TEST_EXPECT_TRUE(failed == nullptr);
@@ -2728,11 +2728,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_EQ(cache.version("k3"), uint64_t{0});
     }
 
-    // ---- 28. 宿主内置工具特化渲染: agentxx_share_store / agentxx_subagent ----
-    // lib 内置工具没有对应插件, 渲染器由宿主自身注册
+    // ---- 28. 主程序内置工具特化渲染: agentxx_share_store / agentxx_subagent ----
+    // lib 内置工具没有对应插件, 渲染器由主程序自身注册
     // (registerBuiltinToolRenderers → ClientPluginManager::registerBuiltinToolRenderer):
     // 存入 builtinToolRenderers 分表, 渲染走与插件渲染器相同的路径
-    // (client io 线程执行 + 语义缓存), 展开体保持宿主通用展示 (不提供 items)。
+    // (client io 线程执行 + 语义缓存), 展开体保持主程序通用展示 (不提供 items)。
     {
         auto mgr2     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
         auto adapter2 = std::make_shared<MockPluginUiAdapter>();
@@ -2969,7 +2969,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(longRes.summary.find("...") != std::string::npos);
         }
 
-        // 28.10 匹配优先级: 插件注册项优先于宿主内置项 (同一 tool_name)
+        // 28.10 匹配优先级: 插件注册项优先于主程序内置项 (同一 tool_name)
         {
             agentxx::plugin::ClientUiRegistry reg;
             reg.builtinToolRenderers.push_back({
@@ -3006,7 +3006,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(withPlugin.displayName, "PluginStore");
             XX_TEST_EXPECT_EQ(withPlugin.summary, " · plugin wins");
 
-            // 插件项不存在时回退宿主内置渲染器
+            // 插件项不存在时回退主程序内置渲染器
             reg.toolRenderers.clear();
             auto builtinOnly = agentxx::plugin::renderClientTool(
                 &reg,
@@ -3048,8 +3048,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 29. 接口协商: TUI 宿主声明 ui 表整体 + 内置插件 client 侧声明全被满足 ----
-    // "agentxx.client.ui" 是 ui 表 IID (表整体): 只有覆盖表内全部子能力的宿主才声明它;
+    // ---- 29. 接口协商: TUI 主程序声明 ui 表整体 + 内置插件 client 侧声明全被满足 ----
+    // "agentxx.client.ui" 是 ui 表 IID (表整体): 只有覆盖表内全部子能力的主程序才声明它;
     // 内置插件的 client 入口只用到工具消息特化渲染, 清单按细粒度名
     // agentxx.client.msg_decor 声明。两者必须互相对应 —— 否则 TUI 启动会误报
     // "optional interface `...` not supported by host, related features disabled"
@@ -3123,7 +3123,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         missing += " " + n;
                     }
                     XX_LOGW(
-                        "[test] plugin `{}` client 侧接口声明未被 TUI 宿主支持: {}",
+                        "[test] plugin `{}` client 侧接口声明未被 TUI 主程序支持: {}",
                         pluginName,
                         missing
                     );
@@ -3500,7 +3500,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             = agentxx::plugin::queryInterface<AgentxxClientUiIface>(inst->hostView(), AGENTXX_IFACE_CLIENT_UI);
         XX_TEST_EXPECT_TRUE(ifaceUi != nullptr);
         if (inst && ifaceUi) {
-            // 超大描述: 单条 JSON 超过 1 MiB (宿主在入口处直接拒绝, 不解析不落表)
+            // 超大描述: 单条 JSON 超过 1 MiB (主程序在入口处直接拒绝, 不解析不落表)
             const std::string huge = std::string{"{\"items\":[{\"kind\":\"text\",\"text\":\""}
                                      + std::string(1024 * 1024 + 64, 'x') + "\"}]}";
             XX_TEST_EXPECT_TRUE(huge.size() > agentxx::plugin::kUiJsonMaxBytes);

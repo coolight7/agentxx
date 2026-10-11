@@ -529,7 +529,7 @@ int PluginManager::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringV
     }
     inst->graphNodeTypes.erase(it);
     // GraphRegistry 无删除 API: 仅移出实例注册表; 若引擎尚未编译 (插件加载
-    // 阶段) 而类型已被替换/删除, 图编译引用该类型将失败 → 宿主回退默认图
+    // 阶段) 而类型已被替换/删除, 图编译引用该类型将失败 → 主程序回退默认图
     XX_LOGI("Plugin `{}` unregistered graph node type `{}`", inst->name, typeStr);
     return 0;
 }
@@ -569,7 +569,7 @@ int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_j
             return -1;
         }
         if (graphDefinitionOwner_.empty()) {
-            // 首次占用: 记住当前定义 (内置图或宿主/前一个占用者留下的定义),
+            // 首次占用: 记住当前定义 (内置图或主程序/前一个占用者留下的定义),
             // 释放时恢复它 = "回到内置"
             graphDefinitionBase_         = ctx->graphDefinitionJson.dump();
             graphDefinitionBaseCaptured_ = true;
@@ -613,7 +613,7 @@ void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
 PluginManager::RegistrationInventory
     PluginManager::registrationInventory(const PluginInstance& inst) const {
     // 只统计"当前生效"的注册 (禁用/卸载后实例仍保留注册记录, 但那些记录不在
-    // 宿主侧生效: 工具已被摘出注册表、钩子处理器已从注册表移除、图节点 slot 已失效)。
+    // 主程序侧生效: 工具已被摘出注册表、钩子处理器已从注册表移除、图节点 slot 已失效)。
     // 因此每一项都按"生效事实"取数, 而不是按记录条数。
     RegistrationInventory out;
     for (const auto& name : inst.toolNames) {

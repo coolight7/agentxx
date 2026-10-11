@@ -265,7 +265,7 @@ asio::awaitable<TestResult>
     // ---- 2. 加载 agentxx_codegraph 插件 ----
     auto path = findCodegraphPluginPath();
     XX_TEST_EXPECT_TRUE(path.find("agentxx_codegraph") != std::string::npos);
-    // 插件参数经 plugins 配置传递 (宿主不解析 args 字段语义, 整体传给插件;
+    // 插件参数经 plugins 配置传递 (主程序不解析 args 字段语义, 整体传给插件;
     // 按配置 path 匹配插件, 与 yaml 配置行为一致)。注意: 必须把 cfg 传入
     // loadPluginAsync(path, &cfg) —— 单参形式 cfg=nullptr 时 args 不会写入
     // PluginInstance, 插件读到的是默认配置 (load_cwd=true → 索引测试进程
@@ -400,7 +400,7 @@ asio::awaitable<TestResult>
             }
             XX_TEST_EXPECT_TRUE(hasSwiftFixture(swiftOut));
             // 空 query → 参数检查失败抛异常 (插件侧抛 std::invalid_argument,
-            // 经插件边界由宿主重新抛出为 std::runtime_error; 消息保留)
+            // 经插件边界由主程序重新抛出为 std::runtime_error; 消息保留)
             bool threw = false;
             try {
                 (void)co_await tool->execute_async(utilxx_base::Json{

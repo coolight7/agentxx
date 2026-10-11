@@ -240,7 +240,7 @@ interfaces:
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", true));
         XX_TEST_EXPECT_TRUE(plugin::sideCaresAboutInterface("vendor.custom", false));
 
-        // ---- 宿主支持集限制 (client 视角; v4 起宿主接口集为名字集合,
+        // ---- 主程序支持集限制 (client 角度; v4 起主程序接口集为名字集合,
         //      位图映射已移除 —— 直接构造支持集) ----
         {
             plugin::InterfaceSet hostIf;
@@ -250,7 +250,7 @@ interfaces:
             XX_TEST_EXPECT_TRUE(hostIf.contains("agentxx.client.command"));
             XX_TEST_EXPECT_FALSE(hostIf.contains("agentxx.client.toast"));
 
-            // 满足场景: require 中 agentxx.agent.* 被忽略 (client 视角), agentxx.client.panel
+            // 满足场景: require 中 agentxx.agent.* 被忽略 (client 角度), agentxx.client.panel
             // 受支持 → satisfied; 可选 agentxx.client.toast 缺失仅进 missingOptional
             auto r1 = plugin::checkInterfacesForSide(ifaces, hostIf, false);
             XX_TEST_EXPECT_TRUE(r1.satisfied);
@@ -258,7 +258,7 @@ interfaces:
             XX_TEST_EXPECT_TRUE(r1.missingOptional.size() == 1);
             XX_TEST_EXPECT_TRUE(r1.missingOptional[0] == "agentxx.client.toast");
 
-            // 不满足场景: require 声明宿主不支持的接口 → 列出全部缺失项
+            // 不满足场景: require 声明主程序不支持的接口 → 列出全部缺失项
             plugin::PluginManifestInterfaces unsat;
             unsat.require.push_back("agentxx.client.info_section"); // caps 未含
             unsat.require.push_back("vendor.custom");
@@ -268,13 +268,13 @@ interfaces:
             XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "agentxx.client.info_section"));
             XX_TEST_EXPECT_TRUE(contains(r1b.missingRequired, "vendor.custom"));
 
-            // agent 视角: agentxx.client.* 全部被忽略, agentxx.agent.core 受支持 → 满足
-            // (agent 宿主支持集 = {agentxx.agent.core}, 见接口协商设计)
+            // agent 角度: agentxx.client.* 全部被忽略, agentxx.agent.core 受支持 → 满足
+            // (agent 主程序支持集 = {agentxx.agent.core}, 见接口协商设计)
             plugin::InterfaceSet agentHostIf;
             agentHostIf.insert("agentxx.agent.core");
             auto r2 = plugin::checkInterfacesForSide(ifaces, agentHostIf, true);
             XX_TEST_EXPECT_TRUE(r2.satisfied && r2.missingRequired.empty());
-            // vendor 前缀: 双方都检查 (agent 视角同样不满足)
+            // vendor 前缀: 双方都检查 (agent 角度同样不满足)
             plugin::PluginManifestInterfaces vendorDecl;
             vendorDecl.require.push_back("vendor.custom");
             auto r3 = plugin::checkInterfacesForSide(vendorDecl, agentHostIf, true);
@@ -482,7 +482,7 @@ mcp:
 
         // ---- enable: 恢复生效 ----
         ctx->pluginManager->enable(ownerName);
-        // 启用走 start 事务 (IO 线程异步执行): 等宿主侧资源重新生效
+        // 启用走 start 事务 (IO 线程异步执行): 等主程序侧资源重新生效
         for (int i = 0; i < 200 && !contains(skillMw->skillDirPathList(), absSkill); ++i) {
             co_await sleepMs(5);
         }

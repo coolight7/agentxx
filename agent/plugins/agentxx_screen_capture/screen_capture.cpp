@@ -183,7 +183,7 @@ public:
 
     /// WIC 编码 BGRA 像素为 PNG 文件
     /// - WIC 在调用线程内自管理 COM 初始化 (CoInitializeEx/CoUninitialize),
-    ///   线程池线程安全调用 (宿主 execute 回调即运行在线程池)
+    ///   线程池线程安全调用 (主程序 execute 回调即运行在线程池)
     /// - pixelData 为 B8G8R8A8 (DXGI/GDI 原生内存顺序), 与 WIC 32bppBGRA
     ///   格式完全一致, 无需像素转换
     bool saveFramePng(const ScreenFrame& frame, const std::string& path) const {

@@ -3,7 +3,7 @@
 /// 演示一个插件在功能点体系里能做的三件事:
 /// 1. **声明自己的点** (`plugin.example_feature.beat`):
 ///    命名空间必须落在 `plugin.<自己>.*`, 声明期间恒可被任何一方调用;
-/// 2. **为宿主点登记实现** (`agentxx.context.countTokens`):
+/// 2. **为主程序点登记实现** (`agentxx.context.countTokens`):
 ///    插件实现排在 `plugin` 层 (默认优先级 0), 因此会先于核心实现生效;
 ///    摘除后自动回落到核心实现;
 /// 3. **调用功能点** (`callFeature`): 只拿数据 —— 不写值缓存、不记置空、
@@ -31,7 +31,7 @@
 /// =====================================================================
 
 struct FeatureCtx : public agentxx::plugin::PluginBase {
-    /// 本实例登记过实现的点 (stop 时无需反注册: 宿主随实例禁用/卸载摘除)
+    /// 本实例登记过实现的点 (stop 时无需反注册: 主程序随实例禁用/卸载摘除)
     int counter = 0;
 };
 
@@ -88,7 +88,7 @@ extern "C" PLUGINXX_EXPORT int
 static int featureAgentSetup(FeatureCtx& ctx) {
     using namespace agentxx::plugin;
 
-    // 功能点接口表缺失 (宿主太旧 / 清单未声明): 按"功能不可用"降级, 不影响加载
+    // 功能点接口表缺失 (主程序太旧 / 清单未声明): 按"功能不可用"降级, 不影响加载
     if (!ctx.iface.feature || !ctx.iface.feature->define_point) {
         ctx.log.info("example_feature: feature iface unavailable, plugin stays idle");
         return 0;
@@ -103,7 +103,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
         spec.argsDoc   = "path (本地文件路径), 可选 minBpm / maxBpm";
         spec.resultDoc = "{bpm, beats:[ms], confident}";
         if (defineFeaturePoint(ctx, spec) != 0) {
-            return -1; // start 事务失败: 宿主按拒绝处理并回滚
+            return -1; // start 事务失败: 主程序按拒绝处理并回滚
         }
     }
     // 另一个点: 用来演示异步实现形态 (等待 60ms 后给值)
@@ -188,12 +188,12 @@ static int featureAgentSetup(FeatureCtx& ctx) {
         return -1;
     }
 
-    // 5. 为宿主点登记实现 (覆盖核心 token 估算: 固定值, 便于测试断言)
+    // 5. 为主程序点登记实现 (覆盖核心 token 估算: 固定值, 便于测试断言)
     if (provideFeature(ctx, "agentxx.context.countTokens", [](FeatureCtx&, std::string_view) {
             return std::string{R"({"tokens":424242})"};
         })
         != 0) {
-        // 宿主点可能未装配 (如裸 PluginManager 环境): 不算致命, 记一条日志继续
+        // 主程序点可能未装配 (如裸 PluginManager 环境): 不算致命, 记一条日志继续
         ctx.log.info("example_feature: host point agentxx.context.countTokens not declared yet");
     }
 
@@ -257,7 +257,7 @@ static void* featureAgentStart(FeatureCtx& ctx, const PluginxxOperatorNotify* no
 }
 
 static void* featureAgentStop(FeatureCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 反注册由宿主在 stop 后统一撤销 (实现/点随实例走), 这里只给完成信号
+    // 反注册由主程序在 stop 后统一撤销 (实现/点随实例走), 这里只给完成信号
     ctx.log.info("example_feature stopped");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;

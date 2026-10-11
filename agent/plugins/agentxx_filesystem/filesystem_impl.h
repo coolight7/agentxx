@@ -455,10 +455,10 @@ inline std::vector<std::filesystem::path>
     for (const auto& p : paths) {
         candidates.push_back(toUtf8(p));
     }
-    // 批量查询 (过滤器内部按批调用宿主并对相同路径去重)
+    // 批量查询 (过滤器内部按批调用主程序并对相同路径去重)
     const auto allowed = pathFilter(candidates);
     if (allowed.size() != candidates.size()) {
-        // 宿主不支持路径查询或调用失败: 跳过过滤 (日志留痕便于排查)
+        // 主程序不支持路径查询或调用失败: 跳过过滤 (日志留痕便于排查)
         XX_LOGW("filesystem: path permission query unavailable, path filtering skipped");
         return paths;
     }
@@ -586,7 +586,7 @@ inline std::string fileListExecuteImpl(
     /// - 只在这里应用输出上限: 达到 limit 后丢弃剩余待处理条目 (与未过滤时
     ///   "读到一个条目就判断上限" 的输出结果一致)
     /// - 不在此检查取消/超时: 由外层循环处理 (避免重复输出终止提示行)
-    /// - 查询不可用 (宿主未装配权限中间件/失败) 时不过滤, 保持原行为
+    /// - 查询不可用 (主程序未装配权限中间件/失败) 时不过滤, 保持原行为
     auto flushPending = [&]() {
         if (pending.empty()) {
             return;
@@ -1757,7 +1757,7 @@ inline std::string fileGrepExecute(
 // =====================================================================
 // 协程版执行体 (read / write / edit)
 // - 插件入口经 plugin_kit::polled_tool 注册: 协程跑在插件本地 reactor 上,
-//   由宿主受控轮询 (driver 请求 + poll_one) 驱动 asio::stream_file 的异步 IO;
+//   由主程序受控轮询 (driver 请求 + poll_one) 驱动 asio::stream_file 的异步 IO;
 //   上述 *Execute 同步版仍由 list / glob / grep 使用 (CPU/遍历类工具走
 //   blocking_tool + offload, 是显式例外);
 // - 文件异步 I/O 的可用性由 utilxx_base::isAsyncFileIoSupported() 判断

@@ -159,7 +159,7 @@ struct EventSubagentProgress {
     /// 进度类型: "token" | "tool_start" | "tool_end" | "turn_end"
     std::string kind;
     std::string data;
-    /// 宿主中的 agent 唯一 id (AgentHost 发布时填充; 旧发布方为空)
+    /// agent 节点容器里的 agent 唯一 id (AgentHost 发布时填充; 旧发布方为空)
     std::string agentId;
     /// 父 agent id (AgentHost 发布时填充; 空 = 根/旧发布方)
     std::string parentAgentId;
@@ -333,7 +333,7 @@ struct RespSubagentBatchItem {
     bool        hasError  = false;
     bool        cancelled = false;
     std::string errorMessage;
-    /// 宿主派生时的 agent 唯一 id (AgentHost 填充; 节点已回收, 仅用于日志/关联)
+    /// agent 节点容器派生时的 agent 唯一 id (AgentHost 填充; 节点已回收, 仅用于日志/关联)
     std::string agentId;
 };
 

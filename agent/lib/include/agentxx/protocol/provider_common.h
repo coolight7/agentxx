@@ -358,14 +358,14 @@ inline UsageDetail readUsageDetail(const neograph::ChatCompletion& completion) {
     return out;
 }
 
-/// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考载体/// - 加密思考载体存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
-///   (summary/content 均空) 时唯一的有效载体; 数组非空即视为有载体
+/// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考内容/// - 加密思考内容存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
+///   (summary/content 均空) 时唯一的有效内容; 数组非空即视为有内容
 /// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
 ///   由调用方抛出异常, 经 modelcall 重试流程自动重试并提示 UI
 ///
 /// - `args`:
 ///     - [completion] 待判定的补全结果
-///     - [carrierKey] 加密思考载体在 `message.extra` 中的键
+///     - [carrierKey] 加密思考内容在 `message.extra` 中的键
 ///       (OpenAI Responses: [OpenAIProvider::kResponsesReasoningItemsKey];
 ///        Anthropic: [AnthropicProvider::kThinkingBlocksKey])
 ///

@@ -1,12 +1,12 @@
-/// 功能点宿主实现 (接口表 `agentxx.agent.feature` 的落地)
+/// 功能点主程序实现 (接口表 `agentxx.agent.feature` 的实现)
 ///
-/// 一个文件承载三件事:
+/// 一个文件包含三件事:
 /// 1. **实现登记**: 插件写的 `impl_start` / `impl_cancel` 经操作协议驱动
 ///    (`pluginxx::OpCore`, 与工具/钩子同一套), 包装成 `agentxx::feature::ImplSpec`
 ///    交给点;
 /// 2. **插件点声明**: `define_point` / `undefine_point` 落到注册表 (命名空间校验与
 ///    生命周期记账都在注册表与实例记录里);
-/// 3. **调用**: `call_point_async` 在宿主 IO 线程上跑点的实现链, 结果经回调返回。
+/// 3. **调用**: `call_point_async` 在主程序 IO 线程上跑点的实现链, 结果经回调返回。
 ///
 /// 线程约定: 本文件的入口都由 vtable 层投递到 IO 线程后调用 (见
 /// plugin_manager_vtable.cpp 的 ioCallSyncKeep); 只有 IO 线程访问注册表与实例记录。
@@ -80,7 +80,7 @@ std::string normalizePluginAnswer(std::string_view text) {
     return wrapped.dump();
 }
 
-/// 写 C ABI 出参错误串 (经实例的宿主视图分配, 与插件侧释放路径一致)
+/// 写 C ABI 出参错误串 (经实例的主程序视图分配, 与插件侧释放路径一致)
 void setFeatureErrOut(PluginInstance* inst, PluginxxString* error_out, const std::string& msg) {
     if (error_out == nullptr || error_out->data != nullptr) {
         return;
@@ -183,7 +183,7 @@ int PluginManager::registerFeatureImpl(PluginInstance* inst, const AgentxxPlugin
         }
         auto runtime = instPtr->runtime.lock();
         if (!runtime || !isRuntimeIoThread(runtime)) {
-            XX_LOGW("功能点 `{}`: 实例 `{}` 的实现不在宿主 IO 线程上调用, 按没意见处理",
+            XX_LOGW("功能点 `{}`: 实例 `{}` 的实现不在主程序 IO 线程上调用, 按没意见处理",
                     pointId, instPtr->name);
             co_return std::nullopt;
         }
@@ -381,7 +381,7 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
         );
         return nullptr;
     }
-    // 通用 JSON 点 (插件点与宿主点) 的调用入参就是调用方原样给的 JSON;
+    // 通用 JSON 点 (插件点与主程序点) 的调用入参就是调用方原样给的 JSON;
     // 强类型核心点需要类型化的请求对象, 插件没法直接构造 —— 这类点的调用在
     // 阶段 4/6 经命令行与 FFI 接入时按 JSON 请求解码 (见 plan §4.1)。
     auto* jsonPoint = dynamic_cast<agentxx::feature::JsonProvidePoint*>(point);

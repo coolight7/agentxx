@@ -407,7 +407,7 @@ TestResult testTuiSidebar() {
         // 按钮标签随界面语言 (默认简体中文; 英文包为 Menu/LLM Context/...)
         XX_TEST_EXPECT_TRUE(out.find("菜单") != std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("LLM 上下文") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("总结上下文") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("压缩上下文") != std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("清空日志") != std::string::npos);
 
         // 键盘 Enter: 默认第 0 项 LLM Context

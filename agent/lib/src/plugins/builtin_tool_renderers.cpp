@@ -2,11 +2,11 @@
 ///
 /// 背景: 工具特化渲染 (见 docs/zh-cn/design/plugins.md "工具特化渲染架构") 通常由
 /// 提供工具的插件注册; lib 内置工具 (agentxx_share_store / agentxx_subagent)
-/// 没有对应插件, 因此由宿主自身注册内置渲染器
+/// 没有对应插件, 因此由主程序自身注册内置渲染器
 /// (见 ClientPluginManager::registerBuiltinToolRenderer)。
 ///
 /// 渲染范围: 折叠头的显示名与一行摘要 (与插件渲染器的 "displayName + summary"
-/// 形态一致)。不提供 items —— 展开体保持宿主通用展示 (参数 JSON + 结果文本),
+/// 形态一致)。不提供 items —— 展开体保持主程序通用展示 (参数 JSON + 结果文本),
 /// 特化渲染不隐藏工具的原始信息。
 #include "agentxx/plugin/builtin_tool_renderers.h"
 
@@ -35,13 +35,13 @@ constexpr std::string_view kToolSubagent   = "agentxx_subagent";
 constexpr std::string_view kNameShareStore = "Store";
 constexpr std::string_view kNameSubagent   = "Subagent";
 
-/// 渲染中间结果 (宿主内部 C++ 形态; 最终经宿主堆字符串写入 C ABI 输出结构)
+/// 渲染中间结果 (主程序内部 C++ 形态; 最终经主程序堆字符串写入 C ABI 输出结构)
 struct RenderText {
     std::string displayName;
     std::string summary;
 };
 
-/// 摘要预览的可见字符数上限 (与宿主预设模版渲染器同一套规则: 宽度预算不足时取 80)
+/// 摘要预览的可见字符数上限 (与主程序预设模版渲染器同一套规则: 宽度预算不足时取 80)
 size_t summaryPreviewCols(int maxWidth) {
     return (maxWidth > 20) ? static_cast<size_t>(maxWidth - 15) : size_t{80};
 }
@@ -253,9 +253,9 @@ int32_t renderSubagent(const AgentxxToolRenderInput& in, RenderText& out) {
     return 0;
 }
 
-/// 渲染回调公共外壳: 调用具体渲染逻辑 → 经宿主堆字符串写入 C ABI 输出
+/// 渲染回调公共外壳: 调用具体渲染逻辑 → 经主程序堆字符串写入 C ABI 输出
 /// - 输出字符串仅在渲染成功时分配 (空串不分配, 调用方按 nullptr 跳过)
-/// - items 不提供 (展开体保持宿主通用展示)
+/// - items 不提供 (展开体保持主程序通用展示)
 template<typename Fn>
 int32_t runRenderer(
     void*                         userData,

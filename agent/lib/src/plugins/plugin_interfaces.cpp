@@ -1,7 +1,7 @@
 /// agentxx 插件接口协商实现 (见 agentxx/plugin/plugin_interfaces.h)
 ///
-/// 原实现位于 plugin_common.cpp: 接口协商需要知道本宿主实现的接口表目录, 属宿主
-/// 领域, 因此留在 agentxx; 而与领域无关的清单解析/名称推导等通用设施已移至
+/// 原实现位于 plugin_common.cpp: 接口协商需要知道本主程序实现的接口表目录, 属主程序
+/// 业务, 因此留在 agentxx; 而与业务无关的清单解析/名称推导等通用设施已移至
 /// cxx_pluginxx ([pluginxx::parsePluginManifest] 等)。
 #include "agentxx/plugin/plugin_interfaces.h"
 
@@ -17,7 +17,7 @@ bool sideCaresAboutInterface(std::string_view name, bool agentSide) {
         return !agentSide;
     }
     // 无前缀 / <vendor>.* / 其他 agentxx.* 子命名空间: 两侧都检查
-    // (宿主不认识即不支持, 保守安全)
+    // (主程序不认识即不支持, 保守安全)
     return true;
 }
 

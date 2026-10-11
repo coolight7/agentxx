@@ -1,7 +1,7 @@
 // SubAgentManagerTool (`agentxx_subagent` 工具) 单元测试
 //
 // 设计要点 (见 [subagent.h](/agent/lib/include/agentxx/tools/subagent.h)):
-// - 注册表仅承载静态元数据 (SubAgentTaskBase); 实际执行由 AgentHost 派生
+// - 注册表只保存静态元数据 (SubAgentTaskBase); 实际执行由 AgentHost 派生
 //   独立 agent 完成 (中断委派), 本模块聚焦工具层行为:
 //   1) 可用性: 工具名/定义 schema (enum 列表随注册表更新, required 字段,
 //      tasks 数组结构)
@@ -183,12 +183,12 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             XX_TEST_EXPECT_TRUE(tHasSubagent && tHasMessage);
         }
 
-        // SubAgentTaskBase 元数据承载
+        // SubAgentTaskBase 元数据登记
         {
             const agentxx::tools::SubAgentNormalTask normal("n1", "depict-1");
             XX_TEST_EXPECT_EQ(normal.name, std::string{"n1"});
             XX_TEST_EXPECT_EQ(normal.depict, std::string{"depict-1"});
-            // Normal 任务默认系统提示为空串 (由宿主派生时回退默认)
+            // Normal 任务默认系统提示为空串 (由主程序派生时回退默认)
             XX_TEST_EXPECT_EQ(normal.systemPrompt, std::string{""});
         }
     }
@@ -590,7 +590,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 (void)co_await env->tool->execute_async(args);
             } catch (const neograph::graph::NodeInterrupt&) {
             }
-            // 仅写入 r2 的结果 (r1 缺失, 如宿主超时未应答)
+            // 仅写入 r2 的结果 (r1 缺失, 如主程序超时未应答)
             env->ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,

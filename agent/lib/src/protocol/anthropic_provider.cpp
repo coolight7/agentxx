@@ -13,9 +13,9 @@ namespace protocol {
 
 namespace {
 
-/// 本协议的空响应判定 (加密思考载体键固定)
+/// 本协议的空响应判定 (加密思考内容键固定)
 /// - 带 signature 的 thinking 块存于 message.extra[kThinkingBlocksKey], 属于有效
-///   思考载体 (回传上下文时需要), 不视为空; 数组非空即存在有效载体
+///   思考内容 (回传上下文时需要), 不视为空; 数组非空即存在有效内容
 /// - 判定实现与 OpenAI 等协议共用, 见 [isEmptyResponse]
 bool isEmptyResponse(const neograph::ChatCompletion& completion) {
     return agentxx::protocol::isEmptyResponse(completion, AnthropicProvider::kThinkingBlocksKey);
@@ -342,7 +342,7 @@ void AnthropicProvider::applyCacheBreakpoints(utilxx_base::Json& body) {
     }
     auto&  messages = body["messages"];
     size_t idx      = messages.size();
-    // 末尾消息若只承载动态段, 则它不是稳定前缀的一部分, 往前退一条
+    // 末尾消息若只保存动态段, 则它不是稳定前缀的一部分, 往前退一条
     // (动态段与工具应答被合并到同一条消息时, 整条跳过: 该条里含动态段内容)
     while (idx > 0) {
         const auto& msg = messages[idx - 1];

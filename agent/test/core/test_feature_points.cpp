@@ -1,7 +1,7 @@
 /// 功能点子系统测试 (阶段 1: 点 / 实现 / 调用三层骨架)
 ///
 /// 覆盖点:
-/// - 顺序与默认优先级带 (插件 0 / FFI 宿主 1000 / core 层), 同优先级按登记顺序;
+/// - 顺序与默认优先级带 (插件 0 / FFI 主程序 1000 / core 层), 同优先级按登记顺序;
 ///   `priority` 越界被裁剪到上下限 (用清单读回生效值断言);
 /// - 不设注册数量上限 (一个点多个实现、一个实现登记多个点);
 /// - 异常隔离 (实现抛异常 / 返回不合法 JSON 都只等于"没意见");
@@ -215,7 +215,7 @@ asio::awaitable<void> test_order_and_priority_band() {
     XX_TEST_EXPECT_EQ((r1.ok() ? r1.value->value : -1), 2);
     XX_TEST_EXPECT_EQ(r1.by, std::string{"plugin:a"});
 
-    // FFI 宿主实现默认优先级 1000: 排在插件之后、core 之前
+    // FFI 主程序实现默认优先级 1000: 排在插件之后、core 之前
     registry.addImpl(
         "test.order",
         jsonImpl("host:h1", agentxx::feature::kHostDefaultPriority, [](std::string) {
@@ -230,7 +230,7 @@ asio::awaitable<void> test_order_and_priority_band() {
     auto r3 = co_await point.ask(PingRequest{"k3"});
     XX_TEST_EXPECT_EQ(r3.by, std::string{"plugin:b"});
 
-    // 显式优先级覆盖默认带: 插件 b 改 priority 1001 (排在宿主 1000 之后)
+    // 显式优先级覆盖默认带: 插件 b 改 priority 1001 (排在主程序 1000 之后)
     registry.addImpl(
         "test.order",
         jsonImpl("plugin:b", 1001, [](std::string) {
@@ -585,7 +585,7 @@ asio::awaitable<void> test_call_protections() {
             co_return std::string{R"({"value":5})"};
         })
     );
-    // 一个优先级更高的宿主实现 (排在 plugin:inner 之后, 因为默认带 1000)
+    // 一个优先级更高的主程序实现 (排在 plugin:inner 之后, 因为默认带 1000)
     registry.addImpl(
         "test.call",
         jsonImpl("host:outer", agentxx::feature::kHostDefaultPriority, [](std::string) {
@@ -603,7 +603,7 @@ asio::awaitable<void> test_call_protections() {
     XX_TEST_EXPECT_EQ(callJson.value<std::string>("point", ""), std::string{"test.call"});
     XX_TEST_EXPECT_EQ(callJson["args"].value<std::string>("key", ""), std::string{"K"});
 
-    // 调用方自己的实现不问回自己: 只有 plugin:outer 一个插件实现时跳过插件层 -> 拿宿主值
+    // 调用方自己的实现不问回自己: 只有 plugin:outer 一个插件实现时跳过插件层 -> 拿主程序值
     Registry registry2;
     auto&    point2 = makePingPoint(
         registry2,
@@ -888,7 +888,7 @@ asio::awaitable<void> test_bad_args_shape() {
         XX_TEST_EXPECT_TRUE(r.message.find("不是合法 JSON") != std::string::npos);
         XX_TEST_EXPECT_EQ(implCalls, 0);
     }
-    // 应用侧取值同样受这一层校验 (参数由应用给错也要明确说清)
+    // 主程序取值同样受这一层校验 (参数由应用给错也要明确说清)
     {
         auto r = co_await point.ask("{oops}");
         XX_TEST_EXPECT_EQ(static_cast<int>(r.error), static_cast<int>(CallError::BadArgs));

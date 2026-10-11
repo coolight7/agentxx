@@ -65,7 +65,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
 
 /// 协程版测试适配 (read/write/edit): 直调插件 *ExecuteAsync 协程执行体 ——
 /// 插件运行时经 poll 寄生驱动在实例 PollLoop 上 spawn (asio stream_file 真
-/// 异步文件 I/O), 测试在宿主 io_context 上直接 co_await 同一实现, 覆盖一致
+/// 异步文件 I/O), 测试在主程序 io_context 上直接 co_await 同一实现, 覆盖一致
 #define AGENTXX_TEST_FS_TOOL_ASYNC(NAME, IMPL_ASYNC_FN, TOOL_NAME, DEPICT)                         \
     struct NAME {                                                                                  \
         std::weak_ptr<agentxx::agent::AgentContext> ctx;                                           \
@@ -2601,12 +2601,12 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
     co_return;
 }
 
-/// 插件真实调用基本功能检查: dlopen agentxx_filesystem .so, 经宿主 PluginManager/
+/// 插件真实调用基本功能检查: dlopen agentxx_filesystem .so, 经主程序 PluginManager/
 /// op_driver 完整流程执行 —— 覆盖单测直测 impl 纯函数覆盖不到的接线层:
 ///   - read/write/edit: poll 寄生驱动三件套 (PolledToolShim start→poll 步进
 ///     →done 上报; asio stream_file 异步文件 I/O 在寄生 loop 上推进)
 ///   - list/grep: offload线程池适配异步接口
-/// 会话工作目录经宿主 get_session_work_dir 接口注入 (绑定 testDir), 同时覆盖
+/// 会话工作目录经主程序 get_session_work_dir 接口注入 (绑定 testDir), 同时覆盖
 /// work_dir 接口表装配; 插件未构建 (无 .so 产物) 时优雅跳过
 asio::awaitable<void> test_plugin_real_link() {
     namespace fs = std::filesystem;
@@ -2646,7 +2646,7 @@ asio::awaitable<void> test_plugin_real_link() {
     // 构造最小 AgentContext (io 线程环境, 与 test_plugins/库内无锁模型一致)
     auto linkCtx                     = std::make_shared<agentxx::agent::AgentContext>();
     linkCtx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
-    linkCtx->agentConfig->workDir    = testDir; ///< 相对路径基准经宿主接口注入
+    linkCtx->agentConfig->workDir    = testDir; ///< 相对路径基准经主程序接口注入
     linkCtx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
     linkCtx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     linkCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
@@ -2673,7 +2673,7 @@ asio::awaitable<void> test_plugin_real_link() {
     }
 
     // 验证 list/glob/grep 启用了 autoSummaryOutput (经 flags 传入 ToolcallNode 自动截断压缩):
-    // 三个工具输出可能很大, 超过 [AgentConfig::toolcallSummaryLimitOutputLength] 时由宿主压缩
+    // 三个工具输出可能很大, 超过 [AgentConfig::toolcallSummaryLimitOutputLength] 时由主程序压缩
     // (原文经 share_store 卸载, 见 kReadOnlyFlags)
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_glob")->extra["autoSummaryOutput"],
@@ -2696,7 +2696,7 @@ asio::awaitable<void> test_plugin_real_link() {
 
     // 重复调用检查 (repeatCallCheck; 对应注册 flags 里的
     // AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK): list/read/glob/grep/write 启用
-    // (宿主在连续同名同参调用达阈值时询问用户), edit 不启用
+    // (主程序在连续同名同参调用达阈值时询问用户), edit 不启用
     for (const char* name : {"agentxx_filesystem_list",
                              "agentxx_filesystem_read",
                              "agentxx_filesystem_glob",
@@ -2725,7 +2725,7 @@ asio::awaitable<void> test_plugin_real_link() {
         co_return co_await tool->execute_async(merged);
     };
 
-    // write (polled): 相对路径以宿主 workDir 为基准创建文件
+    // write (polled): 相对路径以主程序 workDir 为基准创建文件
     {
         auto out = co_await callTool(
             "agentxx_filesystem_write",
@@ -2821,28 +2821,28 @@ asio::awaitable<void> test_plugin_real_link() {
         auto outW = co_await callTool(
             "agentxx_filesystem_write",
             utilxx_base::Json{
-                {"path",      "中文目录_真实链路/中文文件.txt"},
-                {"content",   "中文链路数据_初始版本\n"         },
+                {"path",      "中文目录_真实流程/中文文件.txt"},
+                {"content",   "中文流程数据_初始版本\n"         },
                 {"overwrite", false                                       },
         }
         );
         XX_TEST_EXPECT_EQ(outW, std::string{"success"});
         XX_TEST_EXPECT_TRUE(
-            fs::exists(utilxx_base::utf8ToPath(testDir + "/中文目录_真实链路/中文文件.txt"))
+            fs::exists(utilxx_base::utf8ToPath(testDir + "/中文目录_真实流程/中文文件.txt"))
         );
 
         auto outR = co_await callTool(
             "agentxx_filesystem_read",
             utilxx_base::Json{
-                {"path", "中文目录_真实链路/中文文件.txt"}
+                {"path", "中文目录_真实流程/中文文件.txt"}
         }
         );
-        XX_TEST_EXPECT_TRUE(outR.find("中文链路数据_初始版本") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(outR.find("中文流程数据_初始版本") != std::string::npos);
 
         auto outE = co_await callTool(
             "agentxx_filesystem_edit",
             utilxx_base::Json{
-                {"path",    "中文目录_真实链路/中文文件.txt"},
+                {"path",    "中文目录_真实流程/中文文件.txt"},
                 {"old_str", "初始版本"                              },
                 {"new_str", "更新版本"                              }
         }
@@ -2852,7 +2852,7 @@ asio::awaitable<void> test_plugin_real_link() {
         auto outL = co_await callTool(
             "agentxx_filesystem_list",
             utilxx_base::Json{
-                {"path", "中文目录_真实链路/*.txt"}
+                {"path", "中文目录_真实流程/*.txt"}
         }
         );
         XX_TEST_EXPECT_TRUE(outL.find("中文文件.txt") != std::string::npos);
@@ -2861,13 +2861,13 @@ asio::awaitable<void> test_plugin_real_link() {
             "agentxx_filesystem_grep",
             utilxx_base::Json{
                 {"text_patterns", utilxx_base::Json::array({"更新版本"})                   },
-                {"file_patterns", utilxx_base::Json::array({"中文目录_真实链路/*.txt"})},
+                {"file_patterns", utilxx_base::Json::array({"中文目录_真实流程/*.txt"})},
                 {"output_mode",   "files_with_matches"                                         }
         }
         );
         XX_TEST_EXPECT_TRUE(outG.find("中文文件.txt") != std::string::npos);
 
-        fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文目录_真实链路"), ec);
+        fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文目录_真实流程"), ec);
     }
 
     // 卸载 (寄生 loop)
@@ -3554,7 +3554,7 @@ asio::awaitable<TestResult>
     // 按规范化路径排队执行 (计划 TOOL-16)
     co_await run(test_path_queue_serializes_read_modify_write);
 
-    // 插件真实调用基本功能检查 (dlopen + 宿主 op_driver 完整流程; 插件未构建时跳过)
+    // 插件真实调用基本功能检查 (dlopen + 主程序 op_driver 完整流程; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)
     try {
         co_await test_plugin_real_link();

@@ -25,7 +25,7 @@
 #define XX_TEST_FAILED result.failed
 
 namespace agentxx::plugin {
-/// 宿主 vtable 装配入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
+/// 主程序 vtable 装配入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
 /// 拿到真实接口表，从而直接驱动 C ABI 入口）。
 const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 } // namespace agentxx::plugin
@@ -65,8 +65,8 @@ struct RuntimeFixture {
         // 只依赖 PluginInstanceBase::ownerSelf, 因此夹具必须与 makeInstance 一样设置它
         inst->ownerSelf = inst;
         inst->manager   = manager;
-        // 宿主控制块：交给插件的 host 视图必须有进程级稳定地址；这里装配真实
-        // 宿主 vtable，便于用例直接驱动 C ABI 入口。
+        // 主程序控制块：交给插件的 host 视图必须有进程级稳定地址；这里装配真实
+        // 主程序 vtable，便于用例直接驱动 C ABI 入口。
         auto vtableSv     = PluginStringView::fromCstr("__vtable");
         inst->hostControl = PluginHostControl::create(
             inst,
@@ -205,7 +205,7 @@ struct CallbackState {
 
 /// 顺序记录（取消 → 恢复 → 完成 → 回调 → 销毁）。
 ///
-/// 追加来自后台任务线程（resumed/doneSubmitted）、宿主 IO 线程（cancel/callback/
+/// 追加来自后台任务线程（resumed/doneSubmitted）、主程序 IO 线程（cancel/callback/
 /// completion）；主线程在 join 之前也要读它（断言"卸载停在 lease 等待上"时
 /// order[0] 已是 cancel）。所有访问因此必须经互斥量 —— 裸 vector 在这里就是
 /// 一条真实的数据竞争（TSan 定向回归会命中）。
@@ -292,7 +292,7 @@ void PLUGINXX_CALL fakeDestroyHook(void* ud) {
     ++*static_cast<int*>(ud);
 }
 
-/// P1-A 接口表严格协商探针：伪装宿主只返回一次可控接口表，用于验证 SDK 对
+/// P1-A 接口表严格协商探针：伪装主程序只返回一次可控接口表，用于验证 SDK 对
 /// version / struct_size / NULL 表的拒绝行为（plugin.md 第 11.1 节）。
 struct FakeIfaceHost {
     PluginxxHost                   host{};
@@ -362,7 +362,7 @@ void* PLUGINXX_CALL
         probe.partialGraphRegistration = (rc == 0);
     }
     if (probe.failStart) {
-        // 事务中途失败：宿主必须撤销这次已生效的注册（部分注册回滚）。
+        // 事务中途失败：主程序必须撤销这次已生效的注册（部分注册回滚）。
         hostMemorySetString(error, "start refused by probe");
         return nullptr;
     }
@@ -1329,7 +1329,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
     }
 
-    /// P0-1: 宿主控制块 —— 实例关闭后，插件保存的旧 host 指针仍然可读，但所有
+    /// P0-1: 主程序控制块 —— 实例关闭后，插件保存的旧 host 指针仍然可读，但所有
     /// vtable 入口安全失败；同名新实例使用新令牌，旧指针绝不转交到新实例。
     {
         RuntimeFixture f;
@@ -1434,11 +1434,11 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(prompt.toolPrompt.find("demo_tool") == prompt.toolPrompt.end());
     }
 
-    /// P1-4: 禁用/启用事务（导出 start/stop 的插件）—— 宿主侧立即摘除注册，
+    /// P1-4: 禁用/启用事务（导出 start/stop 的插件）—— 主程序侧立即摘除注册，
     /// stop 在 IO 线程撤销插件自管注册，start 重新声明；stop 成功后清空旧记录，
     /// 因此重复 enable/disable 不会累积重复项。
     {
-        // 图类型注册需要宿主 graphRegistry (AgentContext 装配)。
+        // 图类型注册需要主程序 graphRegistry (AgentContext 装配)。
         auto           ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture f(ctx);
         ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
@@ -1465,7 +1465,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.manager->registerTool(inst.get(), &probe->spec), 0);
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
 
-        // ---- disable: 宿主侧同步摘除；stop 事务投递到 IO 线程 ----
+        // ---- disable: 主程序侧同步摘除；stop 事务投递到 IO 线程 ----
         f.manager->disable("lifecycle_plugin");
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
@@ -1611,7 +1611,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(top->blockedByDependencies);
         XX_TEST_EXPECT_FALSE(top->userDisabled);
 
-        // ---- 启用按依赖拓扑恢复全部被级联禁用的插件 ----
+        // ---- 启用按依赖顺序恢复全部被级联禁用的插件 ----
         f.manager->enable("leaf");
         XX_TEST_EXPECT_TRUE(leaf->enabled);
         XX_TEST_EXPECT_TRUE(mid->enabled);
@@ -1806,7 +1806,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(order.size() >= 1);
         XX_TEST_EXPECT_EQ(order.at(0), std::string{"cancel"});
 
-        // 任务在自有线程恢复并提交 done; 宿主回收 lease 与句柄, 卸载随后继续。
+        // 任务在自有线程恢复并提交 done; 主程序回收 lease 与句柄, 卸载随后继续。
         allowDone.set_value();
         task.join();
         XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
@@ -2073,7 +2073,7 @@ TestResult testPluginRuntime() {
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
 
-        // 重复退订: 第二次必须是空操作 (alive 先失效再移除宿主引用)。
+        // 重复退订: 第二次必须是空操作 (alive 先失效再移除主程序引用)。
         ifaces.events->unsubscribe(sub);
         ifaces.events->unsubscribe(sub);
         XX_TEST_EXPECT_FALSE(sub->alive.load());
@@ -2110,7 +2110,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
     }
 
-    /// 协程驱动请求 (`agentxx.agent.coroutine_runtime`) 的宿主语义：
+    /// 协程驱动请求 (`agentxx.agent.coroutine_runtime`) 的主程序语义：
     /// 恒异步、每张至多一次、取消后不再执行、排队期间持有实例 lease、关闭后拒绝。
     {
         RuntimeFixture f;
@@ -2131,7 +2131,7 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_TRUE(runtime->cancel_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->is_io_thread != nullptr);
             // is_io_thread: RuntimeFixture 由当前线程装配 io executor, 因此本线程
-            // 就是该实例的 "IO 线程" (真实宿主里是 io_context 的 run 线程)。
+            // 就是该实例的 "IO 线程" (真实主程序里是 io_context 的 run 线程)。
             XX_TEST_EXPECT_EQ(runtime->is_io_thread(host), 1);
 
             struct DriveProbe {

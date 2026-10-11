@@ -258,7 +258,7 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto cuPath = findComputerUsePluginPath();
         XX_TEST_EXPECT_TRUE(cuPath.find("agentxx_computer_use") != std::string::npos);
-        // 当前已加载 screen_capture, 依赖满足, 应加载成功 (拓扑/依赖检查通过)
+        // 当前已加载 screen_capture, 依赖满足, 应加载成功 (依赖检查通过)
         auto cuInst = co_await ctx->pluginManager->loadPluginAsync(cuPath);
         XX_TEST_EXPECT_TRUE(cuInst != nullptr);
         if (cuInst) {

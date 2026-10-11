@@ -1,7 +1,7 @@
 /// agentxx/ffi_api.h —— libagentxx 对外 FFI C API (唯一跨版本稳定接口)
 ///
 /// 用途: 供其他编程语言 (Python/Rust/Go/C#/Java/Node...) 经 FFI (ctypes/
-///       JNA/wasm-abi 等) 链接 libagentxx_shared 动态库, 在宿主进程内嵌入
+///       JNA/wasm-abi 等) 链接 libagentxx_shared 动态库, 在嵌入方程序进程内嵌入
 ///       agent 会话运行。导出符号全部为纯 C (extern "C" + 无 STL/异常外泄),
 ///       动态库经 version script / 导出列表严格控制导出面 (见 lib/ffi_symbols.map)。
 ///
@@ -28,7 +28,7 @@
 ///     (与服务端 wire 协议 JSON 字段一致, 见
 ///     [wire_protocol.h](/agent/lib/include/agentxx/agent/io/wire_protocol.h))
 ///   - 回调在 client io 线程同步调用, 必须快速返回 (不得阻塞; 长时间任务请
-///     投递到宿主自己的线程池)
+///     投递到嵌入方程序自己的线程池)
 ///   - payload 字符串视图仅回调期间有效, 需保存必须自行拷贝
 ///   - 回调内可调用本 API (自动投递回 io 线程, 不死锁); 但不得调用
 ///     agentxx_ffi_stop/agentxx_ffi_destroy
@@ -36,11 +36,11 @@
 /// 错误处理约定:
 ///   - 同步错误: 返回值 = 错误码 (AGENTXX_FFI_OK=0 成功, 见 AGENTXX_FFI_ERR_*);
 ///     可选的 AgentxxString* log 参数非 NULL 时, 函数在出错时填入详情字符串,
-///     宿主用后必须以 agentxx_ffi_string_free 释放; 成功/无日志时 log->data 为 NULL
+///     嵌入方程序用后必须以 agentxx_ffi_string_free 释放; 成功/无日志时 log->data 为 NULL
 ///   - 异步错误: 经 EVT_ERROR / EVT_TURN_END(hasError) 事件上报
 ///
 /// 生命周期与线程:
-///   - agentxx_ffi_create 在宿主任意线程调用; 成功后:
+///   - agentxx_ffi_create 在嵌入方程序任意线程调用; 成功后:
 ///       agentxx_ffi_start 启动内置 agent io 线程, 异步就绪 (EVT_READY)
 ///       agentxx_ffi_stop 同步停止并等待 io 线程退出 (幂等)
 ///       agentxx_ffi_destroy 销毁句柄 (未 stop 时自动 stop)
@@ -135,7 +135,7 @@ typedef struct AgentxxStringView {
 #endif
 } AgentxxStringView;
 
-/// 跨 CRT 堆分配字符串 (具有显式所有权: 由宿主库分配, 调用方接管并负责释放)
+/// 跨 CRT 堆分配字符串 (具有显式所有权: 由嵌入方程序库分配, 调用方接管并负责释放)
 typedef struct AgentxxString {
     char*    data; ///< 指向堆分配的 UTF-8 字节序列 (以 \0 结尾; 空时为 NULL)
     uint64_t size; ///< 字节数 (不含结尾 \0)
@@ -213,8 +213,8 @@ typedef enum AgentxxFFIEventType {
     AGENTXX_FFI_EVT_PLUGIN_DATA,       ///< 插件事件转发: wire plugin_data JSON
     AGENTXX_FFI_EVT_ERROR,             ///< 内部错误: {"code","message"}
     AGENTXX_FFI_EVT_WIRE,              ///< 下行 Wire 消息透传: 原始 JSON
-    AGENTXX_FFI_EVT_HOST_TOOL_CALL,    ///< 宿主工具调用请求
-    AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, ///< 宿主工具调用取消
+    AGENTXX_FFI_EVT_HOST_TOOL_CALL,    ///< 嵌入方程序工具调用请求
+    AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, ///< 嵌入方程序工具调用取消
     AGENTXX_FFI_EVT_DELTA_TEXT_BATCH,  ///< 文本/思考增量合批
 } AgentxxFFIEventType;
 
@@ -222,7 +222,7 @@ typedef struct AgentxxFFICallbacks {
     /// 事件回调 (client io 线程; payload_json 仅回调期间有效)
     void(AGENTXX_FFI_CALL*
              on_event)(int32_t type, const AgentxxStringView* payload_json, void* user_data);
-    /// 宿主上下文 (原样透传给 on_event)
+    /// 嵌入方程序上下文 (原样透传给 on_event)
     void* user_data;
 } AgentxxFFICallbacks;
 
@@ -272,12 +272,12 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 /// 附件限额 (超限同步返回 AGENTXX_FFI_ERR_INVALID, log 写明是哪一项):
 /// 单条消息 ≤ `kMaxAttachmentsPerMessage` (5) 个; 单个附件 ≤ 10MB (图片) /
 /// 25MB (音频) / 50MB (视频)。`dataUrl` 为空且 `path_or_url` 为本地路径时,
-/// 由服务端读取并编码 (宿主无需自行读文件)。
+/// 由服务端读取并编码 (嵌入方程序无需自行读文件)。
 ///
 /// 受理结果经 `EVT_WIRE` 透出 `input_ack` (`{type:"input_ack", requestId, status,
 /// reason, detail, itemId}`): `status` 为 `started` / `queued` / `steered` / `rejected`,
 /// 被拒绝时 `reason` 给出结构化原因 (`empty_content` / `attachment_too_large` /
-/// `too_many_attachments` 等)。宿主据此展示"已开始 / 已排队 / 被拒绝"。
+/// `too_many_attachments` 等)。嵌入方程序据此展示"已开始 / 已排队 / 被拒绝"。
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_send_input(
     AgentxxFFIAgent*         a,
     const AgentxxStringView* input_json,
@@ -332,17 +332,17 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_list_models(
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_send_wire(
     AgentxxFFIAgent* a, const AgentxxStringView* wire_json, AgentxxString* log);
 
-/* ==================== 宿主工具 (Host Tool) ==================== */
+/* ==================== 嵌入方程序工具 (Host Tool) ==================== */
 
-/// 宿主注册动态工具 (tool_json 包含 name, description, inputSchema, timeoutSec, maxConcurrent 等)
+/// 嵌入方程序注册动态工具 (tool_json 包含 name, description, inputSchema, timeoutSec, maxConcurrent 等)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_register(
     AgentxxFFIAgent* a, const AgentxxStringView* tool_json, AgentxxString* log);
 
-/// 宿主注销动态工具
+/// 嵌入方程序注销动态工具
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_unregister(
     AgentxxFFIAgent* a, const AgentxxStringView* name, AgentxxString* log);
 
-/// 宿主返回工具执行结果 (is_error 非 0 表示执行失败)
+/// 嵌入方程序返回工具执行结果 (is_error 非 0 表示执行失败)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_respond(
     AgentxxFFIAgent*         a,
     int64_t                  call_id,
@@ -363,7 +363,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_set_delta_batch(
 /// 当前模型信息:
 /// `{"currentModel","models":[...],"capabilities":[{"name","image_input","audio_input","video_input"},...]}`
 /// - capabilities 为各可用模型的多模态输入能力 (与 wire model_info 同构),
-///   宿主据此判断是否展示图片/音频/视频输入入口 (model_json 的
+///   嵌入方程序据此判断是否展示图片/音频/视频输入入口 (model_json 的
 ///   imageInput/audioInput/videoInput 配置决定, 兼容下划线写法)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
     agentxx_ffi_get_model_info(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);

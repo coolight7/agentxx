@@ -3815,7 +3815,7 @@ asio::awaitable<void>
     }
 
     // 3) 测试流式响应中正确触发 TYPE_THINKING chunk 并捕获 encrypted_content
-    // (载体信号在 output_item.done 时机发射: added 仅捕获不发信号)
+    // (思考信号在 output_item.done 时机发射: added 仅捕获不发信号)
     {
         mock.mode      = MockMode::ResponsesStreaming;
         mock.sseChunks = {
@@ -3961,16 +3961,16 @@ asio::awaitable<void> test_responses_reasoning_item_missing_summary_normalized(
     }
 }
 
-/// Responses API: 加密思考载体信号时机回归测试
+/// Responses API: 加密思考内容信号时机回归测试
 /// (deepseek-v4-flash / opencode zen 网关: output_item.added 即预填 encrypted_content,
-///  随后流式输出明文 reasoning_text.delta; 载体信号应推迟到 done 且该项有可见
+///  随后流式输出明文 reasoning_text.delta; 思考信号应推迟到 done 且该项有可见
 ///  思考文本时不发, 避免先弹"加密思考"提示再跟明文思考气泡)
 asio::awaitable<void>
     test_responses_encrypted_signal_deferred_to_done(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::ResponsesStreaming;
 
-    // 1) deepseek 形态: added 带 enc → 明文思考增量 → done 带可见 content → 无载体信号
+    // 1) deepseek 形态: added 带 enc → 明文思考增量 → done 带可见 content → 无思考信号
     {
         mock.sseChunks = {
             MockOpenAIServer::sseData(
@@ -4019,7 +4019,7 @@ asio::awaitable<void>
                 result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey].size(),
                 (size_t)1
             );
-            // 不应有空文本 TYPE_THINKING (加密载体信号), 只允许明文思考增量与正文
+            // 不应有空文本 TYPE_THINKING (加密思考信号), 只允许明文思考增量与正文
             bool hasEmptyThinking = false;
             for (const auto& ch : receivedChunks) {
                 if (ch.type == neograph::ChatStreamChunk::TYPE_THINKING && ch.data.empty()) {
@@ -4043,7 +4043,7 @@ asio::awaitable<void>
     }
 
     // 2) 仅 added 带 enc 的网关形态: done 无 enc 字段, 回退检查已捕获项,
-    //    载体信号仍应在 done 时机发出 (无可见思考文本时)
+    //    思考信号仍应在 done 时机发出 (无可见思考文本时)
     {
         mock.sseChunks = {
             MockOpenAIServer::sseData(
@@ -4084,7 +4084,7 @@ asio::awaitable<void>
                 result.message.extra[server::OpenAIProvider::kResponsesReasoningItemsKey].size(),
                 (size_t)1
             );
-            // done 时回退判定有载体 → 发出空文本 TYPE_THINKING 信号
+            // done 时回退判定有思考内容 → 发出空文本 TYPE_THINKING 信号
             bool hasEmptyThinking = false;
             for (const auto& ch : receivedChunks) {
                 if (ch.type == neograph::ChatStreamChunk::TYPE_THINKING && ch.data.empty()) {

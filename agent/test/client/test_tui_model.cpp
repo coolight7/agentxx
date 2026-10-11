@@ -46,7 +46,7 @@ void testHistoryWindow() {
     HistoryWindow win;
     win.resetForSession("sess-1");
 
-    // 装载前: 无历史, 不触发分页
+    // 加载前: 无历史, 不触发分页
     XX_TEST_EXPECT_EQ(win.windowStart(), uint64_t{0});
     XX_TEST_EXPECT_FALSE(win.hasMore());
     XX_TEST_EXPECT_FALSE(win.beginOlderPageRequest());

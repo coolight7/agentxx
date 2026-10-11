@@ -566,14 +566,14 @@ std::vector<WireSample> wireSamples() {
         m.error = "";
         out.push_back({"remove_model_result", WireMessage{std::move(m)}});
     }
-    // 45) 客户端注册宿主工具 (计划 A4)
+    // 45) 客户端注册主程序工具 (计划 A4)
     {
         WireHostToolRegister m;
         m.sessionId = "s1";
         m.tools.push_back(
             WireHostToolInfo{
                 .name          = "lumen_open_file",
-                .description   = "打开宿主编辑器里的文件",
+                .description   = "在编辑器里打开文件",
                 .inputSchema   = utilxx_base::Json{
                     {"type",       "object"                                  },
                     {"properties", utilxx_base::Json{{"path", utilxx_base::Json{{"type", "string"}}}}},
@@ -584,14 +584,14 @@ std::vector<WireSample> wireSamples() {
         );
         out.push_back({"host_tool_register", WireMessage{std::move(m)}});
     }
-    // 46) 客户端注销宿主工具
+    // 46) 客户端注销主程序工具
     {
         WireHostToolUnregister m;
         m.sessionId = "s1";
         m.names     = {"lumen_open_file"};
         out.push_back({"host_tool_unregister", WireMessage{std::move(m)}});
     }
-    // 47) 服务端请求客户端执行宿主工具
+    // 47) 服务端请求客户端执行主程序工具
     {
         WireHostToolCall m;
         m.callId     = 7;
@@ -601,7 +601,7 @@ std::vector<WireSample> wireSamples() {
         m.timeoutSec = 30;
         out.push_back({"host_tool_call", WireMessage{std::move(m)}});
     }
-    // 48) 客户端返回宿主工具执行结果
+    // 48) 客户端返回主程序工具执行结果
     {
         WireHostToolResult m;
         m.callId       = 7;

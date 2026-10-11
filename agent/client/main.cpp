@@ -226,7 +226,7 @@ static void applySharedRuntimeConfig(
     for (const auto& p : yamlCfg.memoryFilePaths) {
         config->memoryFilePaths.push_back(resolvePath(p));
     }
-    // CodeGraph 参数经 plugins 配置传递 (宿主不解析 args 字段语义;
+    // CodeGraph 参数经 plugins 配置传递 (主程序不解析 args 字段语义;
     // 所有插件统一经 path 外置指定加载)
 
     // 权限配置 (模式 + 白/黑名单; CodeAgent 启动时按此注册文件系统读写规则)
@@ -362,7 +362,7 @@ static int dumpDiagnosticsAndExit(
 
 /// `--dump-config` 的实现: 先打印配置侧快照 (不需要可用模型, 配置写错时也能看),
 /// 有可用模型时再构造一次 CodeAgent 并 init, 补上运行侧快照 (模型注册表 /
-/// 中间件顺序 / 工具清单与来源 / 插件装载结果 / 执行图 / 持久化)。
+/// 中间件顺序 / 工具清单与来源 / 插件加载结果 / 执行图 / 持久化)。
 /// - 不启动任何交互界面, 不监听端口, 打印完直接退出
 /// - 打印的是"实际装配结果", 与启动日志中的装配快照同源
 static int dumpConfigAndExit(
@@ -928,7 +928,7 @@ Options:
         // 运行在独立进程 (分离进程启动), 与 server/tui 模式一致需要完整装配;
         // 曾缺失导致 acp 启动的 agent 不加载任何插件
         applySharedRuntimeConfig(config, yamlCfg, resolvePath);
-        // CodeGraph 参数经 plugins 配置传递 (宿主不解析 args 字段语义)
+        // CodeGraph 参数经 plugins 配置传递 (主程序不解析 args 字段语义)
         if (!validateStartupConfig(config, configPath)) {
             return 1;
         }

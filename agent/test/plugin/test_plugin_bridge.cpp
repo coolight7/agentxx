@@ -1,13 +1,13 @@
 /// 插件协程驱动桥测试（设计文档第 10 节的 kit 侧完成条件）。
 ///
-/// 测试形态: 用**伪宿主**直接实现 `agentxx.agent.coroutine_runtime` 表：
-/// - `request_driver` 只把回调入队并返回请求 (永不内联), 由用例在"宿主 IO 线程"
+/// 测试形态: 用**伪主程序**直接实现 `agentxx.agent.coroutine_runtime` 表：
+/// - `request_driver` 只把回调入队并返回请求 (永不内联), 由用例在"主程序 IO 线程"
 ///   上按需调用 [Harness::runOne], 从而精确观察"一次请求 = 一次 poll_one";
-/// - `cancel_driver` 记录取消 (只对尚未执行的请求生效, 与宿主实现语义一致);
-/// - `is_io_thread` 恒返回 1 (用例本身就在模拟宿主 IO 线程)。
+/// - `cancel_driver` 记录取消 (只对尚未执行的请求生效, 与主程序实现语义一致);
+/// - `is_io_thread` 恒返回 1 (用例本身就在模拟主程序 IO 线程)。
 ///
 /// 因此用例可以断言真实实现里很难观察的不变量: 不内联、恰好一次推进、空闲不新增
-/// 请求、wake 三个窗口不丢失、宿主回调不重入插件协程、取消只产生一个终态。
+/// 请求、wake 三个窗口不丢失、主程序回调不重入插件协程、取消只产生一个终态。
 #include "agentxx-test/plugin/test_plugin_bridge.h"
 
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -35,7 +35,7 @@ namespace {
 using namespace agentxx::plugin;
 
 /// 请求句柄: 对插件侧只是不透明指针 (`PluginxxDriver` 为不完整类型),
-/// 伪宿主用自建 token 表示它, 并记录回调/取消/执行状态。
+/// 伪主程序用自建 token 表示它, 并记录回调/取消/执行状态。
 struct Harness;
 
 /// 伪调度器句柄记录 (sleep/offload 返回的不透明句柄):
@@ -57,24 +57,24 @@ struct FakeTicket {
     bool                cancelled = false;
 };
 
-/// 伪宿主驱动 + 调度设施。所有调用都发生在用例线程上 (模拟宿主 IO 线程)。
+/// 伪主程序驱动 + 调度设施。所有调用都发生在用例线程上 (模拟主程序 IO 线程)。
 struct Harness {
-    /// 伪调度器 sleep 的挂起点 (用例手工触发到期, 模拟宿主 timer adapter)。
+    /// 伪调度器 sleep 的挂起点 (用例手工触发到期, 模拟主程序 timer adapter)。
     struct PendingSleep {
         int64_t                  ms     = 0;
         PluginxxOperatorCallback cb     = nullptr;
         void*                    ud     = nullptr;
         uintptr_t                handle = 0;
-        /// 已被 op_cancel 请求取消。真宿主会在取消后以 CANCELLED 触发完成回调,
-        /// 伪宿主只做标记, 由用例决定何时触发 (保持对既有用例的兼容)。
+        /// 已被 op_cancel 请求取消。真主程序会在取消后以 CANCELLED 触发完成回调,
+        /// 伪主程序只做标记, 由用例决定何时触发 (保持对既有用例的兼容)。
         bool cancelled = false;
     };
 
-    std::deque<FakeTicket*> pending; ///< 已申请、尚未执行的请求 (FIFO = 宿主任务队列)
+    std::deque<FakeTicket*> pending; ///< 已申请、尚未执行的请求 (FIFO = 主程序任务队列)
     std::vector<FakeTicket*>             all;
     std::vector<PendingSleep>            sleeps;
     std::vector<std::unique_ptr<FakeOp>> ops;  ///< 已发放的伪句柄记录
-    std::vector<std::string>             logs; ///< 经宿主日志接口表收到的诊断
+    std::vector<std::string>             logs; ///< 经主程序日志接口表收到的诊断
     int                                  refuseCount = 0; ///< >0 时 request_driver 直接失败
     int                                  cancelCalls = 0;
     int                                  isIoThreadCalls = 0;
@@ -86,7 +86,7 @@ struct Harness {
         return pending.size();
     }
 
-    /// 执行"下一次请求" (等价于宿主把一次投递排到 IO 线程并执行它)。
+    /// 执行"下一次请求" (等价于主程序把一次投递排到 IO 线程并执行它)。
     /// `return`: 是否真的执行了一次请求
     bool runOne() {
         if (pending.empty()) {
@@ -130,7 +130,7 @@ Harness* harnessOf(const PluginxxHost* host) {
     return host ? static_cast<Harness*>(host->opaque) : nullptr;
 }
 
-/// 伪宿主的错误输出: 测试进程内用 malloc 即可 (真实宿主经 host->vtable->alloc)。
+/// 伪主程序的错误输出: 测试进程内用 malloc 即可 (真实主程序经 host->vtable->alloc)。
 void setHostError(PluginxxString* out, std::string_view message) {
     if (!out) {
         return;
@@ -177,7 +177,7 @@ void PLUGINXX_CALL fakeCancelDriver(PluginxxDriver* driver) {
     if (ticket->harness) {
         ++ticket->harness->cancelCalls;
     }
-    // 与宿主实现一致: 取消只对尚未执行的请求生效, 执行中的不打断。
+    // 与主程序实现一致: 取消只对尚未执行的请求生效, 执行中的不打断。
     if (!ticket->executed) {
         ticket->cancelled = true;
     }
@@ -190,7 +190,7 @@ int32_t PLUGINXX_CALL fakeIsIoThread(const PluginxxHost* host) {
     return 1;
 }
 
-/// 伪 sleep: 记录回调, 由用例触发到期 (真宿主 timer adapter 的等价物)。
+/// 伪 sleep: 记录回调, 由用例触发到期 (真主程序 timer adapter 的等价物)。
 PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
     const PluginxxHost*      host,
     int64_t                  ms,
@@ -217,9 +217,9 @@ PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
     return reinterpret_cast<PluginxxOperatorHandle*>(raw);
 }
 
-/// 伪 op_cancel: 只标记句柄对应的挂起点为"已取消" (真宿主随后会以 CANCELLED
+/// 伪 op_cancel: 只标记句柄对应的挂起点为"已取消" (真主程序随后会以 CANCELLED
 /// 触发完成回调; 用例按需手工触发, 以免影响既有用例的手工时序)。
-/// 句柄不含 host 参数, 因此伪宿主把 (harness, handle) 记录在堆对象里。
+/// 句柄不含 host 参数, 因此伪主程序把 (harness, handle) 记录在堆对象里。
 void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
     auto* record = reinterpret_cast<FakeOp*>(op);
     if (!record || !record->harness) {
@@ -244,7 +244,7 @@ int32_t PLUGINXX_CALL fakeOffloadIsCancelled(const PluginxxCancelToken*) {
 }
 
 /// 伪 offload: 用例线程内联执行工作体后触发完成回调。
-/// (真宿主在工作线程池执行; 这里只需验证"降级路径能跑完"的语义, 不引入线程。)
+/// (真主程序在工作线程池执行; 这里只需验证"降级路径能跑完"的语义, 不引入线程。)
 PluginxxOperatorHandle* PLUGINXX_CALL fakeOffload(
     const PluginxxHost* host,
     void*(PLUGINXX_CALL*
@@ -322,7 +322,7 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* op_cancel */ nullptr,
 };
 
-/// 用例可临时置空来验证"宿主不提供驱动时"的回退路径。
+/// 用例可临时置空来验证"主程序不提供驱动时"的回退路径。
 const PluginxxCoroutineRuntimeIface* g_runtimeForTest = &g_fakeRuntime;
 
 const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
@@ -348,7 +348,7 @@ const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const Pluginxx
     return nullptr;
 }
 
-/// 伪宿主内存操作: kit 会用 host->vtable->free 释放 request_driver 的
+/// 伪主程序内存操作: kit 会用 host->vtable->free 释放 request_driver 的
 /// error_out (缺失该函数会导致测试进程真的泄漏, 不是被测代码的问题)。
 void* PLUGINXX_CALL fakeAlloc(uint64_t size) {
     return std::malloc(static_cast<size_t>(size));
@@ -509,7 +509,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(bridge->activeRootCount(), size_t{0});
     }
 
-    /// 2. 宿主回调不重入插件协程 (post + wake), continuation 由下一次请求恢复。
+    /// 2. 主程序回调不重入插件协程 (post + wake), continuation 由下一次请求恢复。
     {
         harness.clear();
         NotifyProbe probe; // 必须比 ctx 声明更早: ctx 析构时桥会终结残留根
@@ -645,7 +645,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(steps, 1);
     }
 
-    /// 5. 宿主 sleep 适配 (timer adapter): 到期回调不重入插件协程, 由其后的请求恢复。
+    /// 5. 主程序 sleep 适配 (timer adapter): 到期回调不重入插件协程, 由其后的请求恢复。
     {
         harness.clear();
         NotifyProbe probe;
@@ -680,7 +680,7 @@ TestResult testPluginBridge() {
         const auto ticketsBefore = bridge->ticketsIssued();
         auto&      sleepEntry    = harness.sleeps.front();
         sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_OK, nullptr);
-        XX_TEST_EXPECT_FALSE(resumed); // 未在宿主回调栈内重入
+        XX_TEST_EXPECT_FALSE(resumed); // 未在主程序回调栈内重入
         XX_TEST_EXPECT_EQ(probe.calls, 0);
         XX_TEST_EXPECT_EQ(bridge->ticketsIssued(), ticketsBefore + 1);
 
@@ -716,7 +716,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_EQ(harness.sleeps.size(), size_t{1});
 
-        // 宿主取消 Operation (execute_cancel 协作式取消)
+        // 主程序取消 Operation (execute_cancel 协作式取消)
         XX_TEST_EXPECT_TRUE(spec.execute_cancel != nullptr);
         spec.execute_cancel(spec.user_data, op);
         XX_TEST_EXPECT_EQ(probe.calls, 0); // 取消请求本身不完成操作
@@ -728,13 +728,13 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELLED);
 
-        // 终态唯一: 宿主的 OpCore 在 done 提交后短路一切取消 (不会再用 op 句柄回调
+        // 终态唯一: 主程序的 OpCore 在 done 提交后短路一切取消 (不会再用 op 句柄回调
         // 插件), 因此这里不再调用 execute_cancel, 只确认没有第二个终态。
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(harness.runPending(), 0);
     }
 
-    /// 7. 宿主拒绝驱动: 根被终结为失败 (否则宿主 Operation 永远不完成)。
+    /// 7. 主程序拒绝驱动: 根被终结为失败 (否则主程序 Operation 永远不完成)。
     {
         harness.clear();
         NotifyProbe probe;
@@ -757,7 +757,7 @@ TestResult testPluginBridge() {
         harness.refuseCount = 1;
         auto  spec          = g_capturedTool.spec;
         void* op            = startTool(spec, probe);
-        // 操作已被接受 (返回 provider 句柄), 但宿主拒绝驱动 -> 立刻以 FAILED 终结;
+        // 操作已被接受 (返回 provider 句柄), 但主程序拒绝驱动 -> 立刻以 FAILED 终结;
         // 这是 ABI 内存操作契约允许的形态 (返回句柄就必须 exactly-once 通知, 而不是
         // 返回 NULL + error_out)。返回 NULL 只用于参数/实例状态非法的同步拒绝。
         XX_TEST_EXPECT_TRUE(op != nullptr);
@@ -769,7 +769,7 @@ TestResult testPluginBridge() {
     }
 
     /// 8. stop: 取消尚未开始的请求 + 终结活跃根 (恰好一次失败上报) + 幂等 +
-    ///    放弃后的迟到宿主回调安全跳过 (不访问已终结的根)。
+    ///    放弃后的迟到主程序回调安全跳过 (不访问已终结的根)。
     {
         harness.clear();
         NotifyProbe probe;
@@ -816,7 +816,7 @@ TestResult testPluginBridge() {
         ctx.stopBridge();
         XX_TEST_EXPECT_EQ(probe.calls, 1);
 
-        // 迟到的宿主完成回调: 根已被放弃, 必须安全跳过 (不恢复协程, 不二次上报)
+        // 迟到的主程序完成回调: 根已被放弃, 必须安全跳过 (不恢复协程, 不二次上报)
         auto& sleepEntry = harness.sleeps.front();
         sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_OK, nullptr);
         XX_TEST_EXPECT_EQ(harness.runPending(), 0);
@@ -854,7 +854,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_EQ(harness.cancelCalls, 1);
         XX_TEST_EXPECT_TRUE(harness.pending.front()->cancelled);
-        // 宿主按取消语义丢弃请求
+        // 主程序按取消语义丢弃请求
         harness.pending.clear();
         XX_TEST_EXPECT_FALSE(bodyRan);
     }
@@ -944,7 +944,7 @@ TestResult testPluginBridge() {
                 ++bodyRuns;
                 auto* bridge = &c.bridge();
                 sawPumping   = bridge != nullptr && bridge->isPumping();
-                // 插件本地 reactor 上的等待 (没有宿主可见唤醒源)
+                // 插件本地 reactor 上的等待 (没有主程序可见唤醒源)
                 auto               ex = co_await asio::this_coro::executor;
                 asio::steady_timer timer(ex, std::chrono::milliseconds(15));
                 co_await timer.async_wait(asio::use_awaitable);
@@ -1061,7 +1061,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(bridge->idlePollCount(), uint64_t{1});
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
 
-        // 取消: 尚未触发的退避被 op_cancel 取消 (真宿主随后会以 CANCELLED 触发完成回调)
+        // 取消: 尚未触发的退避被 op_cancel 取消 (真主程序随后会以 CANCELLED 触发完成回调)
         XX_TEST_EXPECT_TRUE(spec.execute_cancel != nullptr);
         spec.execute_cancel(spec.user_data, op);
         XX_TEST_EXPECT_EQ(harness.opCancelCalls, 1);
@@ -1160,7 +1160,7 @@ TestResult testPluginBridge() {
     }
 
     /// 14. 突发上限: 连续有进展 (业务体自己给自己 post) 达到 kPollBurstMax 后
-    ///     强制让出 1ms, 避免同实例长期独占宿主 IO 线程。
+    ///     强制让出 1ms, 避免同实例长期独占主程序 IO 线程。
     {
         harness.clear();
         NotifyProbe probe;

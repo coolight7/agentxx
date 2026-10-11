@@ -646,7 +646,7 @@ Row renderKeyValue(const Item& item, const UiRenderCtx& ctx) {
 
 /// 层级列表 (连接线 + 缩进; 节点可点则登记整行区域)
 ///
-/// 折叠态由**宿主**维护 (键 = 从根到该节点的路径, 如 `src/io/`): 提供
+/// 折叠态由**主程序**维护 (键 = 从根到该节点的路径, 如 `src/io/`): 提供
 /// [UiRenderCtx::collapseExpanded] 时, 有子节点的行可点击展开/收起 (行首标记
 /// `-`/`+`), 收起后子树不渲染且不占点击区域; 未提供时按全展开渲染 (行式前端与
 /// 不关心折叠的调用方行为不变)。
@@ -1287,7 +1287,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         Element           el    = buttonElement(label, item.tone, item.variant, theme, item.disabled);
         const std::string actionId = actionIdOf(item.action);
         std::vector<UiHitRegion> regions;
-        // 域内的表单提交/取消动作由宿主处理 (插件不需要绑定动作处理器), 其余动作要求
+        // 域内的表单提交/取消动作由主程序处理 (插件不需要绑定动作处理器), 其余动作要求
         // 快照里存在该插件的绑定; 未提供表单状态时提交行只是展示, 不登记命中区域
         const bool formSubmit = isFormSubmitAction(actionId);
         const bool actionable = !actionId.empty() && !item.disabled

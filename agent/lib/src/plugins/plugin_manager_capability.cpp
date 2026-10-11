@@ -2,7 +2,7 @@
 ///
 /// 通用表 (能力/事件/调度/任务/协程驱动/日志/JSON/配置/插件互查/取消) 的实现已
 /// 下沉到 cxx_pluginxx (见 pluginxx/host/host_core.h 与 tables_impl.h); 本文件只保留
-/// 领域部分: 工具调用与工具注册表/实例状态的耦合 (工具表是 agent 领域表)。
+/// 业务部分: 工具调用与工具注册表/实例状态的耦合 (工具表是 agent 业务表)。
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "asio/post.hpp"
@@ -19,8 +19,8 @@ namespace plugin {
 
 namespace {
 
-/// 写 C ABI 出参错误串: 优先经实例的宿主视图分配 (与插件侧释放路径一致),
-/// 失败时回退宿主堆内存
+/// 写 C ABI 出参错误串: 优先经实例的主程序视图分配 (与插件侧释放路径一致),
+/// 失败时回退主程序堆内存
 void setErrOut(PluginInstance* caller, PluginxxString* error_out, const std::string& msg) {
     if (!error_out || error_out->data) {
         return;

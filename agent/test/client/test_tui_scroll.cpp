@@ -1411,7 +1411,7 @@ TestResult testTuiScroll() {
             }
             argsJson += "\"}";
             et->text  = std::move(argsJson);
-            // diff 内容由**插件自己的工具渲染器**提供 (宿主不再按工具名特化):
+            // diff 内容由**插件自己的工具渲染器**提供 (主程序不再按工具名特化):
             // 这里模拟插件推送的装饰 (Diff 组件项), 覆盖"大 diff 消息"的滚动场景
             {
                 auto reg = st.pluginRegistry

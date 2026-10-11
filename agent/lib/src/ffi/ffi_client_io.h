@@ -94,7 +94,7 @@ public:
     /// 设置文本合批窗口 (ms; <= 0 关闭合批)
     void setDeltaBatch(int32_t maxDelayMs);
 
-    /// 提交宿主工具调用应答 (client io 线程)
+    /// 提交嵌入方程序工具调用应答 (client io 线程)
     bool submitHostToolResponse(int64_t callId, int32_t isError, std::string resultJson);
 
     /// 刷新积压的文本合批 (client io 线程)
@@ -137,7 +137,7 @@ private:
     using ErrorCode   = utilxx_base::AsioErrorCode;
     using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, utilxx_base::Json)>;
 
-    /// client io 线程: 挂起等待宿主应答 (agentxx_ffi_interrupt_respond 经 submitInterruptResponse
+    /// client io 线程: 挂起等待嵌入方程序应答 (agentxx_ffi_interrupt_respond 经 submitInterruptResponse
     /// 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止, 不回送响应)
     asio::awaitable<std::pair<bool, utilxx_base::Json>>
         waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch);
@@ -170,7 +170,7 @@ private:
     std::string pendingDeltaText_;
     std::string pendingDeltaKind_;
 
-    /// 已下发 EVT_HOST_TOOL_CALL 但宿主尚未应答的调用 id (用于停止时上报取消)
+    /// 已下发 EVT_HOST_TOOL_CALL 但嵌入方程序尚未应答的调用 id (用于停止时上报取消)
     std::set<int64_t> pendingHostToolCalls_;
 
     /// client io 线程 id 与 agent io 线程 id (判 stop/destroy 调用方)

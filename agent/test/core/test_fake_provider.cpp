@@ -1,4 +1,4 @@
-/// test_fake_provider —— 假 provider 接缝 (计划 LLM-5 / TST-1)
+/// test_fake_provider —— 假 provider 扩展点 (计划 LLM-5 / TST-1)
 ///
 /// 背景: 现有 LLM 交互用例多经本地 HTTP 模拟服务器验证, 依赖端口、服务线程与
 /// HTTP 协议栈。本模块改为经 `ModelProviderRegistry::setProvider` 注入假 provider
@@ -204,7 +204,7 @@ asio::awaitable<void> test_fake_provider_stream() {
     auto req = provider->requestAt(0);
     XX_TEST_EXPECT_TRUE(!req.messages.empty());
     XX_TEST_EXPECT_EQ(req.messages[0].role, std::string{"system"});
-    // system 首条含配置的系统提示词 (宿主可能在末尾追加语言指令等固定后缀, 故按包含判断)
+    // system 首条含配置的系统提示词 (主程序可能在末尾追加语言指令等固定后缀, 故按包含判断)
     XX_TEST_EXPECT_TRUE(
         req.messages[0].content.find(cfg->prompt.systemPrompt) != std::string::npos
     );

@@ -1175,7 +1175,7 @@ TUITheme& keybindTheme() {
     return theme;
 }
 
-/// 声明快捷键能力的测试适配器 (宿主未声明 `agentxx.client.keybind` 时
+/// 声明快捷键能力的测试适配器 (主程序未声明 `agentxx.client.keybind` 时
 /// registerKeybind 会被能力门控拒绝)
 class KeybindTestUiAdapter : public agentxx::plugin::PluginUiAdapter {
 public:

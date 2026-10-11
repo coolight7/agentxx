@@ -1,12 +1,12 @@
-/// 插件宿主领域钩子实现 (pluginxx::DomainHooks)
+/// 插件主程序业务数据入口实现 (pluginxx::DomainHooks)
 ///
 /// 背景: 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
 /// cancel/capabilities) 的实现位于 cxx_pluginxx (见 pluginxx/host/host_core.h); 其中
-/// 需要宿主数据的入口经 [pluginxx::DomainHooks] 取数。本文件把这些钩子接到
+/// 需要主程序数据的入口经 [pluginxx::DomainHooks] 取数。本文件把这些钩子接到
 /// agentxx 的 AgentContext / EventBus / 工作线程池上, 另含事件表的事件后端适配
 /// (AgentEventBusSource)。
 ///
-/// 线程约定: 钩子都在宿主 IO 线程被调用 (通用表入口先投递到 IO 线程); 只有
+/// 线程约定: 钩子都在主程序 IO 线程被调用 (通用表入口先投递到 IO 线程); 只有
 /// `postToWorkerThread` 例外, 它把一段阻塞工作投递到工作线程池。
 #include "agentxx/plugin/plugin_manager.h"
 
@@ -26,7 +26,7 @@ namespace agentxx {
 namespace plugin {
 namespace {
 
-/// 插件事件表的宿主后端: agentxx::events::EventBus 适配
+/// 插件事件表的主程序后端: agentxx::events::EventBus 适配
 ///
 /// - 主题到事件流的映射: `bus->get<std::string>(topic)` (插件事件载荷为 JSON 文本);
 /// - 订阅的 handler 由 EventBus 在其所属执行器 (agent IO 线程) 上调用, 本适配器

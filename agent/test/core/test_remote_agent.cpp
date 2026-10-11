@@ -250,7 +250,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        // ThinkToken: 加密 thinking 载体 WireDelta 序列化往返
+        // ThinkToken: 加密 thinking 内容 WireDelta 序列化往返
         WireDelta d;
         d.type  = WireDelta::Type::ThinkToken;
         d.seq   = 15;
@@ -450,7 +450,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         // 插件事件转发: WirePluginData 序列化往返 (载荷为插件定义 schema 的
-        // JSON 字符串, 宿主只透传; 系统资源占用数据通道 (agentxx_system_monitor
+        // JSON 字符串, 主程序只透传; 系统资源占用数据通道 (agentxx_system_monitor
         // 周期采集) 与 codegraph 索引状态均走本通道)
         agentxx::agent::WirePluginData pd;
         pd.plugin = "agentxx_system_monitor";

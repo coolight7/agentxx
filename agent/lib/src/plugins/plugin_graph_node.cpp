@@ -67,7 +67,7 @@ void PluginGraphNode::applyMessagesWrite(
         return;
     }
 
-    // 事件载荷: 本次写入的消息批 (与宿主节点写入同形), 供 UI 增量与节流持久化
+    // 事件载荷: 本次写入的消息批 (与主程序节点写入同形), 供 UI 增量与节流持久化
     if (in.stream_cb != nullptr && value.is_array()) {
         (*in.stream_cb)(neograph::graph::GraphEvent{
             neograph::graph::GraphEvent::Type::CHANNEL_WRITE,

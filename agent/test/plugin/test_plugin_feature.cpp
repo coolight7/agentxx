@@ -85,10 +85,10 @@ std::string findPluginDir(const char* pluginName) {
     return std::string{"plugins/"} + pluginName;
 }
 
-/// 最小宿主夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
+/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
 ///
 /// 功能点注册表与上下文核心点在这里先装配 (与 BaseAgent::init 同一顺序:
-/// 核心点先声明, 插件装载时才有地方登记实现)。
+/// 核心点先声明, 插件加载时才有地方登记实现)。
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>   ctx;
     std::shared_ptr<agentxx::plugin::PluginManager> mgr;
@@ -132,7 +132,7 @@ asio::awaitable<bool> waitFor(std::function<bool()> cond, int timeoutMs = 5000) 
     co_return cond();
 }
 
-/// 一次按名调用的完成探针 (完成回调在宿主 IO 线程发布)
+/// 一次按名调用的完成探针 (完成回调在主程序 IO 线程发布)
 struct CallProbe {
     bool        done    = false;
     int32_t     status  = 0;
@@ -160,7 +160,7 @@ struct CallOutcome {
     std::string error;            ///< 结果 JSON 的 error (失败时的错误码字符串)
 };
 
-/// 经宿主入口调用一个功能点并等结果
+/// 经主程序入口调用一个功能点并等结果
 asio::awaitable<CallOutcome>
     callPoint(Fixture& f, agentxx::plugin::PluginInstance* caller, std::string_view pointId, std::string_view argsJson) {
     CallOutcome out;
@@ -202,12 +202,12 @@ asio::awaitable<CallOutcome>
     co_return out;
 }
 
-/// 声明一个宿主 JSON 点 (可调; 不缓存), 返回点引用
+/// 声明一个主程序 JSON 点 (可调; 不缓存), 返回点引用
 agentxx::feature::JsonProvidePoint&
     declareHostPoint(Fixture& f, std::string_view id) {
     agentxx::feature::PointOptions opts;
     opts.title    = std::string{id};
-    opts.depict   = "测试用的宿主点";
+    opts.depict   = "测试用的主程序点";
     opts.callable = true;
     opts.cache    = agentxx::feature::CacheMode::None;
     return f.ctx->features->provideJson(id, std::move(opts), "core");
@@ -240,7 +240,7 @@ asio::awaitable<void> test_declaration_and_inventory() {
     auto f = co_await makeFixture();
 
     const auto pluginPath = findPluginDir("example_feature");
-    // 装载前: 注册表里只有宿主核心点
+    // 加载前: 注册表里只有主程序核心点
     XX_TEST_EXPECT_EQ(f.ctx->features->pointsCount(), size_t{2});
     XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.beat") == nullptr);
 
@@ -263,7 +263,7 @@ asio::awaitable<void> test_declaration_and_inventory() {
     XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.tooslow") != nullptr);
     XX_TEST_EXPECT_EQ(f.ctx->features->pointsCount(), size_t{5});
 
-    // 宿主点上的插件实现: 插件层排在 core 之前, 因此它就是当前生效者
+    // 主程序点上的插件实现: 插件层排在 core 之前, 因此它就是当前生效者
     auto* tokens = f.ctx->features->find(agentxx::feature::points::kContextCountTokens);
     XX_TEST_EXPECT_TRUE(tokens != nullptr);
     if (tokens != nullptr) {
@@ -281,7 +281,7 @@ asio::awaitable<void> test_declaration_and_inventory() {
         }
     }
 
-    // 实例视图与注册清单: 3 个点 + 4 个实现 (3 个自己的点 + 宿主点 1 个)
+    // 实例视图与注册清单: 3 个点 + 4 个实现 (3 个自己的点 + 主程序点 1 个)
     {
         const auto inv = f.mgr->registrationInventory(*inst);
         XX_TEST_EXPECT_EQ(inv.featurePoints, size_t{3});
@@ -330,7 +330,7 @@ asio::awaitable<void> test_plugin_impl_overrides_core_ask() {
         co_return;
     }
 
-    // 装载前: 核心实现给值 (核心归属)
+    // 加载前: 核心实现给值 (核心归属)
     {
         agentxx::feature::CountTokensRequest req;
         req.text    = "probe text before plugin load";
@@ -346,7 +346,7 @@ asio::awaitable<void> test_plugin_impl_overrides_core_ask() {
         co_return;
     }
 
-    // 装载后: 插件实现先被问到, 因此核心点由插件给值 (固定值, 便于断言)
+    // 加载后: 插件实现先被问到, 因此核心点由插件给值 (固定值, 便于断言)
     agentxx::feature::CountTokensRequest probe;
     probe.text = "probe text with plugin loaded";
     {
@@ -625,7 +625,7 @@ asio::awaitable<void> test_lifecycle_detach_and_restore() {
         XX_TEST_EXPECT_EQ(inv.featureImpls, size_t{4});
     }
 
-    // ---- 卸载: 实例消失, 注册表回到基线 (只剩宿主核心点) ----
+    // ---- 卸载: 实例消失, 注册表回到基线 (只剩主程序核心点) ----
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_feature", std::chrono::seconds{5}));
     XX_TEST_EXPECT_TRUE(f.mgr->find("example_feature") == nullptr);
     XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.beat") == nullptr);

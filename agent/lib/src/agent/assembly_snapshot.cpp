@@ -124,7 +124,7 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
         // 功能点: 本实例声明的点数 / 登记的实现数 (禁用/卸载后回 0)
         item["feature_point_count"] = v.featurePointCount;
         item["feature_impl_count"]  = v.featureImplCount;
-        // 统一注册清单合计 (计划 PLG-1): 0 = 该实例当前没有向宿主贡献任何注册
+        // 统一注册清单合计 (计划 PLG-1): 0 = 该实例当前没有向主程序贡献任何注册
         item["registration_total"]  = v.registrationTotal;
         item["prompt_key_count"]    = v.promptKeyCount;
         item["skill_dir_count"]     = v.skillDirCount;
@@ -274,8 +274,8 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
         }
         plugins.push_back(std::move(item));
     }
-    // 键名与运行侧区分: 这里只是"配置里声明了哪些插件", 装载结果在运行侧快照的
-    // `plugins` (含启用状态 / 装载耗时 / 注册计数)
+    // 键名与运行侧区分: 这里只是"配置里声明了哪些插件", 加载结果在运行侧快照的
+    // `plugins` (含启用状态 / 加载耗时 / 注册计数)
     root["plugin_declarations"] = std::move(plugins);
     root["language"] = config.language;
     root["language_explicit"] = config.languageExplicit;

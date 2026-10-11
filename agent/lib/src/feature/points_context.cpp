@@ -285,7 +285,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
     // ---- agentxx.context.countTokens (可调; 按身份的值缓存) ----
     PointOptions countOpts;
     countOpts.title     = "文本 Token 估算";
-    countOpts.depict    = "按模型口径估算一段文本或一组消息的 token 数";
+    countOpts.depict    = "按模型规则估算一段文本或一组消息的 token 数";
     countOpts.callable  = true;
     countOpts.callDoc
         = "参数: text 或 messages (二选一, 两个都给时以 messages 为准), "
@@ -317,7 +317,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
         }
     );
 
-    // ---- agentxx.context.summarize (本轮不可调; 结果由编排方写回会话) ----
+    // ---- agentxx.context.summarize (本轮不可调; 结果由调度方写回会话) ----
     PointOptions summarizeOpts;
     summarizeOpts.title      = "上下文压缩";
     summarizeOpts.depict     = "把一段上下文压成一段摘要文本 (不写回会话)";

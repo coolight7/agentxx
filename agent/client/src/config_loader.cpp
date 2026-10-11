@@ -750,7 +750,7 @@ static YamlAppConfig parseYamlConfigNode(
     }
 
     // CodeGraph 参数已迁移到插件配置 (yaml `plugin.list` 段 agentxx_codegraph
-    // 条目的 args): 宿主不解析其字段语义, 整体原样传递给插件
+    // 条目的 args): 主程序不解析其字段语义, 整体原样传递给插件
 
     // 开发者模式 (yaml `dev_mode`, 默认 false; 顶层标量键)
     // - 开启时才收集"记录数据" (功能点调用统计 / 钩子派发记录 / 成功调用日志);
@@ -822,7 +822,7 @@ static YamlAppConfig parseYamlConfigNode(
     //   兼容 `name` 字段简写: `{name: foo}` 等价于 `{path:
     //   "builtin://foo"}` (仅当 path 缺省且 name 对应内置插件时)
     // - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto)
-    // - args: 插件参数 (整体传递给插件, 宿主不解析)
+    // - args: 插件参数 (整体传递给插件, 主程序不解析)
     // - config: 插件配置文件所在目录或文件路径 (可指向文件/目录;
     //   支持 `~`/`${VAR}`/相对路径, 由装配侧解析为绝对路径后透传给插件)
     // 插件列表 (归一化形状: `plugin.list`)
@@ -880,7 +880,7 @@ static YamlAppConfig parseYamlConfigNode(
                 }
             }
             if (node["args"]) {
-                // 插件参数整体传递 (宿主不解析字段语义); 标量递归展开 ${VAR}
+                // 插件参数整体传递 (主程序不解析字段语义); 标量递归展开 ${VAR}
                 pc.args = yamlToJsonResolveEnv(node["args"], dotEnvVars, overrideEnvVars);
             }
             if (node["config"]) {

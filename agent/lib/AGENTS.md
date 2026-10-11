@@ -10,7 +10,7 @@
   （边界检查见测试模块 `boundaries`）。
 - 子目录分工：`agent/`（会话生命周期、BaseAgent/CodeAgent、持久化骨架）、
   `io/`（端点与 wire 协议）、`nodes/`（图节点）、`middlewares/`、`protocol/`
-  （provider 与对外协议）、`tools/`、`plugins/`（插件宿主实现）、`util/`（宿主
+  （provider 与对外协议）、`tools/`、`plugins/`（插件主程序实现）、`util/`（主程序
   专用工具：异常、sqlite、settings_db）。
 - 三个自研工具库（`cxx_utilxx_base`/`cxx_utilxx`/`cxx_pluginxx`）在
   `agent/third_party/`，按独立工程维护，本目录不复制它们的实现。

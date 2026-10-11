@@ -281,7 +281,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
         return nullptr;
     }
 
-    // 8. 全部注册成功后主动失败 (触发宿主回滚)
+    // 8. 全部注册成功后主动失败 (触发主程序回滚)
     report(host, "all", true);
     setError(host, error_out, "start failed on purpose after full registration");
     return nullptr;

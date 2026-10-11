@@ -57,7 +57,7 @@ namespace {
 /// 用于过滤"空 content 消息": 这类消息在列表中渲染为一个空块 (只占一行空白),
 /// 直接不进入消息列表 (TUI 忽略其渲染)。
 /// - 仅适用于正文类角色 (User/Assistant/System/Tip): Tool 消息的正文是工具参数、
-///   Think 消息可为空思考载体 (仍有 "[Think] 时长" 头部)、Interrupt 消息内嵌
+///   Think 消息可为空思考内容 (仍有 "[Think] 时长" 头部)、Interrupt 消息内嵌
 ///   交互控件, 均不按正文过滤
 /// - 带附件的消息视为有内容 (纯附件消息无正文但需渲染附件卡片)
 bool isBlankContentMessage(const TUIMessage& msg) {
@@ -125,7 +125,7 @@ Element TUIClientAgentIO::applyToastOverlay(Element content) {
     }
     const auto surfaceStyle = TuiSurfaceStyle::fromTheme(theme_);
     // 仿照弹窗背景面性风格: 上下左右各 1 格内边距, 四角为 '+' 角标,
-    // 以弹窗内容区背景色 (theme_.surfaceColor) 承载提示文字;
+    // 以弹窗内容区背景色 (theme_.surfaceColor) 显示提示文字;
     // 显示期间以 dbox 叠加在整棵树之上, 水平居中、垂直靠顶
     // (vbox 顶部 + filler 撑满), 与主界面一致加粗
     return dbox({
@@ -403,7 +403,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
         item.hits    = std::move(row.regions);
         out.push_back(std::move(item));
     }
-    // 上报可用尺寸: 值变化时宿主会向插件投递 UI_LAYOUT 事件 (插件按宽度重排)
+    // 上报可用尺寸: 值变化时主程序会向插件投递 UI_LAYOUT 事件 (插件按宽度重排)
     if (mgr) {
         mgr->reportRegionSize(panel->id, avail, static_cast<int>(lines));
     }
@@ -557,7 +557,7 @@ void TUIClientAgentIO::start() {
                           ) -> bool {
             // ---- 插件命令拦截 (UI 线程) ----
             // 输入以 "/" 开头且匹配插件注册的命令时, 拦截并投递到 client io
-            // 线程执行命令回调 (execute 返回动作 JSON, 由宿主解释执行);
+            // 线程执行命令回调 (execute 返回动作 JSON, 由主程序解释执行);
             // 未命中命令照常作为普通消息发送
             if (pluginManager_ && !text.empty() && text[0] == '/') {
                 const auto spacePos = text.find(' ');
@@ -1539,7 +1539,7 @@ bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
         return false;
     }
     if (region->kind == UiHitRegionKind::Collapse) {
-        // 折叠标题: 翻转宿主维护的展开状态, 下一帧按新状态渲染
+        // 折叠标题: 翻转主程序维护的展开状态, 下一帧按新状态渲染
         const std::string key = region->ownerId + ":" + region->id;
         auto              it  = collapseStates_.find(key);
         const bool        cur = (it == collapseStates_.end()) ? true : it->second;
@@ -1556,7 +1556,7 @@ bool TUIClientAgentIO::handleSidebarRegionClick(const ftxui::Mouse& mouse) {
         }
         return true;
     }
-    // 表单控件与提交行: 状态由宿主维护, 结果经动作通道回传
+    // 表单控件与提交行: 状态由主程序维护, 结果经动作通道回传
     auto formIt = pluginForms_.find(region->ownerId);
     if (formIt == pluginForms_.end()) {
         return false;
@@ -2426,7 +2426,7 @@ void TUIClientAgentIO::openUpdateNotice(std::string latestTag, std::string url) 
     overlay->onClose([this] {
         modal_->popModal();
     });
-    // 打开动作由宿主实现 (弹窗只负责展示与命中)
+    // 打开动作由主程序实现 (弹窗只负责展示与命中)
     overlay->onDownload([this, target] {
         if (!agentxx::client::openUrlInBrowser(target)) {
             // 链接未通过校验 (不会发起任何命令): 保留弹窗 (链接可拖选复制) 并提示
@@ -2579,7 +2579,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             case Type::ThinkToken: {
                 clearGenPlaceholder();
                 if (delta.type == Type::ThinkToken && delta.text.empty()) {
-                    // 空文本 ThinkToken: 加密思考载体或思考元数据更新 (如
+                    // 空文本 ThinkToken: 加密思考内容或思考元数据更新 (如
                     // reasoning_tokens/duration) 若当前正在累积明文 Think 流 (尚未收到正文
                     // TextToken / ToolStart), 先将已累积的思考文本落盘到 messages
                     if (st.currentTokenRole == TUIMessage::Role::Think && st.hasPendingToken()) {
@@ -2802,7 +2802,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             } break;
             case Type::InsertMessage: {
                 // 完整 ViewMessage 消息插入 (轮次统计、系统提示、中断头等):
-                // 服务端已完成 appendViewMessage 与持久化, 客户端直接装载展示
+                // 服务端已完成 appendViewMessage 与持久化, 客户端直接加载展示
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
                 // 空 content 消息过滤 (如正文为空/全空白的 assistant 消息)

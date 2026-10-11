@@ -129,7 +129,7 @@ static void* computerUseAgentStart(
     return nullptr;
 }
 
-/// stop: 本插件不持有自管线程/定时器, 只上报完成 (宿主负责撤销注册)
+/// stop: 本插件不持有自管线程/定时器, 只上报完成 (主程序负责撤销注册)
 static void*
     computerUseAgentStop(ComputerUsePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);

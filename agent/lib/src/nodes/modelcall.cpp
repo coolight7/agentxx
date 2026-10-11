@@ -307,7 +307,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     // 见 buildSystemPromptStable): 作为请求末尾的独立消息附加, 不写进 system 消息
     // - 角色用 user: openai-responses 与 anthropic 都会把 system 消息归并到系统
     //   字段 (放到请求最前面), 用 system 会让非稳定内容进入前缀, 破坏前缀缓存
-    // - 用来源标签包裹, 模型能看出这是宿主注入的上下文, 不是用户发言
+    // - 用来源标签包裹, 模型能看出这是主程序注入的上下文, 不是用户发言
     // - 只在本请求可见, 不改写会话上下文 (权威 transcript 不含动态段)
     // - 代价: 位置在稳定前缀之外, 每次调用都要重新发送且命中不了缓存, 会明显拉低
     //   KV 缓存命中率 (下方存在性检查会告警, 当前无写入方)

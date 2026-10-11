@@ -6,7 +6,7 @@
 ///
 /// 注册表只提供:
 /// - 声明点 ([provide] / [provideJson] / [definePluginPoint]);
-/// - 实现登记与撤销 (插件 / FFI 宿主, 按归属记账, 供禁用与卸载时整批摘除);
+/// - 实现登记与撤销 (插件 / FFI 主程序, 按归属记账, 供禁用与卸载时整批摘除);
 /// - 清单 ([listPointsJson]) —— 插件 `list_points`、装配快照与 `--dump-diagnostics`
 ///   共用同一份实现, 保证"各条出口看到的是同一份事实"。
 #pragma once
@@ -55,7 +55,7 @@ public:
 
     // ==================== 声明点 ====================
 
-    /// 声明一个取值型功能点 (核心点在自己的装配代码里调用; 早于插件装载)
+    /// 声明一个取值型功能点 (核心点在自己的装配代码里调用; 早于插件加载)
     /// - 同一 id 重复声明: 类型一致时返回已有点 (无害重声明), 否则记一条错误日志
     ///   并返回新点 (新点不注册进点表, 不会顶掉已有点)
     ///
@@ -86,7 +86,7 @@ public:
         return static_cast<ProvidePoint<TReq, TValue>&>(addPoint(std::move(point)));
     }
 
-    /// 声明一个通用 JSON 取值点 (宿主声明的点用; 插件点走 [definePluginPoint])
+    /// 声明一个通用 JSON 取值点 (主程序声明的点用; 插件点走 [definePluginPoint])
     JsonProvidePoint& provideJson(std::string_view id, PointOptions opts, std::string origin);
 
     /// 插件声明自己的功能点
@@ -109,7 +109,7 @@ public:
     /// 点总数
     size_t pointsCount() const noexcept;
 
-    // ==================== 实现登记 (插件 / FFI 宿主) ====================
+    // ==================== 实现登记 (插件 / FFI 主程序) ====================
 
     /// 登记实现
     /// - 点不存在时失败 (应用点未装配 / 插件点未 `define_point`)

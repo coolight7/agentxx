@@ -394,7 +394,7 @@ public:
     /// - 走客户端 HIL 的中断**必填**: 生产者用 `preset::*` 预设模板生成
     ///   ([interrupt_presets.h], 如 `preset::inputForm` / `preset::permissionCard`)
     ///   或自行组装 [InterruptUi::blocks] (内容块 + 控件块)
-    /// - 经总线由宿主处理、不进入客户端渲染路径的中断 (如 subagent 委派) 可为空
+    /// - 经总线由主程序处理、不进入客户端渲染路径的中断 (如 subagent 委派) 可为空
     /// - 一条中断请求 = 一份表单 (客户端渲染为一条消息, 可含多个控件),
     ///   用户一次提交全部值
     /// - 结果契约 (客户端 → agent): `{"values": {"<控件 id>": 值}}`
@@ -443,7 +443,7 @@ public:
     inline static const std::string channel_savedGraphData{"xx_savedGraphData"};
 
     /// 上下文影子信息 channel (只读): 条数 / 版本 / 末尾消息角色与 tool_calls 摘要
-    /// - LLM 上下文由会话持有 (会话为唯一权威), 图状态不再承载消息内容;
+    /// - LLM 上下文由会话持有 (会话为唯一权威), 图状态不再保存消息内容;
     ///   该通道只提供与上下文大小无关的轻量元信息, 供插件图节点观察,
     ///   也是图条件 `xx_has_tool_calls` 的取值来源
     /// - 载荷: {"count": N, "version": V, "role_counts": {"user": N, ...},

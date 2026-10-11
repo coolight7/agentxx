@@ -416,7 +416,7 @@ public:
     ///
     /// 经 [SidebarComponent::contentScrollable] 把屏幕坐标映射到"第几个子项 +
     /// 子项内局部坐标", 再按子项登记的可命中区域分类处理:
-    /// - 折叠标题: 翻转宿主维护的展开状态并重绘
+    /// - 折叠标题: 翻转主程序维护的展开状态并重绘
     /// - 动作区域: 经 [ClientPluginManager::dispatchAction] 投递到插件回调
     /// - 表单控件: 交由表单状态处理 (值编辑与提交; 见后续阶段)
     ///
@@ -439,12 +439,12 @@ public:
 
     /// 插件表单 (面板 / Info 段落 / overlay 的控件): 归属 id → 状态 + 最近一次描述
     ///
-    /// 控件值、勾选态、选中项与校验提示都由宿主维护 (UI 线程独占), 插件只收到
+    /// 控件值、勾选态、选中项与校验提示都由主程序维护 (UI 线程独占), 插件只收到
     /// 提交结果 (`{"values":{控件 id: 值}}` 经动作通道回传), 不进入 UI 线程。
     struct PluginFormData {
         /// 归属插件名 (动作派发需要)
-        std::string                    plugin;
-        agentxx::client::UiFormState   state;
+        std::string                     plugin;
+        agentxx::client::UiFormState    state;
         std::vector<pluginxx::ui::Item> items;
     };
 
@@ -457,8 +457,11 @@ public:
     /// 取/刷新某归属的表单数据 (按最新描述初始化控件, 保留用户已编辑的值)
     /// - 返回映射内引用 (调用方直接修改状态; 键不存在时创建)
     /// - 控件状态变化后调用方应 [`postRedraw`] 触发重绘
-    PluginFormData&
-        formFor(const std::string& ownerId, const std::string& plugin, std::vector<pluginxx::ui::Item> items);
+    PluginFormData& formFor(
+        const std::string&              ownerId,
+        const std::string&              plugin,
+        std::vector<pluginxx::ui::Item> items
+    );
 
     /// 侧边栏表单键盘输入 (UI 线程; 有焦点且已消费返回 true)
     bool handleSidebarFormKey(const ftxui::Event& event);
@@ -830,7 +833,7 @@ private:
     /// 处理 shell 级按钮命中 (UI 线程; 由全局鼠标事件经 shellHits_ 分发)
     void handleShellHit(std::string_view id);
 
-    /// 打开 Logs 侧边栏底部 [Menu] 菜单弹窗 (LLM 上下文 / 总结上下文 / 清空日志)
+    /// 打开 Logs 侧边栏底部 [Menu] 菜单弹窗 (LLM 上下文 / 压缩上下文 / 清空日志)
     void openLogsMenu();
 
     /// 当前通用 overlay 的发起插件 (CUSTOM 内按钮与 close 的来源记录用;

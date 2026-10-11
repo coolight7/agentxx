@@ -13,7 +13,7 @@
 namespace agentxx {
 namespace tools {
 
-/// subagent 注册项基类: 仅承载名称/描述/系统提示等静态元数据
+/// subagent 注册项基类: 只保存名称/描述/系统提示等静态元数据
 /// - 实际执行由 AgentHost 派生独立 agent 完成 (中断委派, 不再使用图内
 ///   嵌套 subgraph; 旧的 getSubgraph/onSubagentEnd 已移除)
 class SubAgentTaskBase {
@@ -78,7 +78,7 @@ private:
 /// 从中断参数构建批量委派请求 (统一批量语义)
 /// - agentName: 发起方 agent 名 (ReqSubagentBatch.parentAgentName)
 /// - sessionId:  发起方会话 thread (ReqSubagentBatch.parentSessionId,
-///   宿主据此查 sessionDepth_ 嵌套深度预算)
+///   主程序据此查 sessionDepth_ 嵌套深度预算)
 /// - cancelToken: 级联取消令牌 (父取消 → 中止全部在跑子代理; 可空)
 events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
     const middleware::InterruptHandleArg&         interruptArg,

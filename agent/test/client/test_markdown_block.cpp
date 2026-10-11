@@ -321,7 +321,7 @@ TestResult testMarkdownBlock() {
             }
         }
 
-        // 标题 / 列表 / 引用 / 图片: 块级结构保持原样, 内容由折行节点承载
+        // 标题 / 列表 / 引用 / 图片: 块级结构保持原样, 内容由折行节点渲染
         {
             auto rows2 = renderRows("# Title", W, W, 3);
             XX_TEST_EXPECT_EQ(rtrim(rows2[0]), std::string{"Title"});

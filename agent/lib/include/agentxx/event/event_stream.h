@@ -493,7 +493,7 @@ public:
     /// - 载荷经 std::any 类型擦除传递, 回调须自行 any_cast 校验类型
     ///   (插件事件均为 std::string; 不匹配直接返回)
     /// - 回调在发布方线程 (io 线程) 同步调用, 须快速返回
-    /// - 返回订阅 id (unlistenPrefix 用); 宿主生命周期内有效
+    /// - 返回订阅 id (unlistenPrefix 用); 主程序生命周期内有效
     size_t listenPrefix(
         std::string_view                                                  prefix,
         std::function<void(std::string_view topic, const std::any& data)> handler

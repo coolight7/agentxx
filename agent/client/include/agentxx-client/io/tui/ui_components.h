@@ -57,7 +57,7 @@ inline constexpr std::string_view kFormCancelActionId = middleware::kInterruptCa
 /// 本客户端 (TUI) 的界面能力段
 ///
 /// 内容即"如实上报": 实际支持的组件/控件、每个字符格相当于多少 u、默认行距。
-/// 插件经宿主能力通道读到同一份内容 (`agentxx.client.ui`), 据此选择用什么组件;
+/// 插件经主程序能力通道读到同一份内容 (`agentxx.client.ui`), 据此选择用什么组件;
 /// `adaptItems` 也按它做降级。
 /// - 不支持的组件: `Stack` (叠放, 降级为最后一个子节点)、`Image` (图片, 降级为
 ///   `alt` 文本)、`musicxx.Shader` (其他客户端专属块, 跳过)
@@ -78,7 +78,7 @@ bool tuiHardwareCursorSupported();
 /// 按本客户端能力适配组件 (渲染前调用; 结果只含本客户端支持的组件)
 ///
 /// 不适配也能渲染 (渲染层对不认识的组件走 `fallback`), 但"降级成什么"只应由描述层
-/// 的规则决定 —— 所以除了 [renderItemJson] 这类直接吃 JSON 的入口, 宿主自己构造的
+/// 的规则决定 —— 所以除了 [renderItemJson] 这类直接吃 JSON 的入口, 主程序自己构造的
 /// 组件树也应当先经这里 (或 [adaptItem]) 再渲染。
 std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>& items);
 pluginxx::ui::Item              adaptItem(const pluginxx::ui::Item& item);
@@ -189,7 +189,7 @@ void renderItems(
 void renderItem(const pluginxx::ui::Item& item, const UiRenderCtx& ctx, UiRenderResult& out);
 
 /// 渲染描述 JSON (块数组 / `{"blocks":[…]}` / `{"items":[…]}` / `{title,subtitle,blocks}`)
-/// - 内部完成解析 + 按本客户端能力适配 (宿主不必自己适配)
+/// - 内部完成解析 + 按本客户端能力适配 (主程序不必自己适配)
 void renderItemJson(const utilxx_base::Json& json, const UiRenderCtx& ctx, UiRenderResult& out);
 
 /// 单个组件项的行数 (与 [renderItem] 同一实现: 内部渲染一次后取行数之和)
@@ -256,7 +256,7 @@ utilxx_base::Json formValues(const std::vector<pluginxx::ui::Item>& items, UiFor
 
 /// 按组件描述初始化表单状态 (缺省值/选中项/勾选态/编辑文本)
 /// - 已初始化的控件不会被覆盖 (保留用户输入); 递归处理容器内的控件
-/// - 宿主在创建或刷新一份表单时调用一次 (之后用户交互只改状态表)
+/// - 主程序在创建或刷新一份表单时调用一次 (之后用户交互只改状态表)
 void initFormState(UiFormState& form, const std::vector<pluginxx::ui::Item>& items);
 
 /// 收集组件树中的全部控件 id (含容器内; 供表单状态清理使用)

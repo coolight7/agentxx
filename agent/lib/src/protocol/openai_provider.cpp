@@ -473,11 +473,11 @@ std::string OpenAIProvider::extractApiError(const std::string& body) {
 
 namespace {
 
-/// 本协议的空响应判定 (加密思考载体键固定)
-/// - 加密思考载体 (Responses API reasoning items) 存于 message.extra
-///   [kResponsesReasoningItemsKey], gemini 等载体网关可能返回 summary/content 均空、
+/// 本协议的空响应判定 (加密思考内容键固定)
+/// - 加密思考内容 (Responses API reasoning items) 存于 message.extra
+///   [kResponsesReasoningItemsKey], gemini 等网关可能返回 summary/content 均空、
 ///   仅 enc 的响应, 不视为空; 捕获侧保证 item 的 encrypted_content 非空,
-///   数组非空即存在有效载体
+///   数组非空即存在有效内容
 /// - 判定实现与 Anthropic 等协议共用, 见 [isEmptyResponse]
 bool isEmptyResponse(const neograph::ChatCompletion& completion) {
     return agentxx::protocol::isEmptyResponse(
@@ -503,7 +503,7 @@ utilxx_base::Json OpenAIProvider::buildBody(const neograph::CompletionParams& pa
     body["model"] = params.model.empty() ? config_.modelName : params.model;
     // 直接由 typed 上下文构造 messages / tools: 省掉
     // "typed -> neograph json -> utilxx Json" 的一次整段 DOM 拷贝
-    // (加密思考载体与明文思考的取舍也在这里一次完成, 不再构造后逐条删键)
+    // (加密思考内容与明文思考的取舍也在这里一次完成, 不再构造后逐条删键)
     body["messages"]
         = agentxx::protocol::chatMessagesToOpenAIJson(params.messages, config_.sendThinking);
 
@@ -1877,7 +1877,7 @@ bool OpenAIProvider::processResponsesSseLine(
                         }
                     }
                 }
-                // 加密思考载体信号 (空文本 TYPE_THINKING): 推迟到 done 时机发射,
+                // 加密思考内容信号 (空文本 TYPE_THINKING): 推迟到 done 时机发射,
                 // 且仅当该项最终没有任何可见思考文本时才发 (语义与原 Json 路径一致)
                 if (type == "response.output_item.done") {
                     bool hasVisibleText = false;

@@ -9,7 +9,7 @@ namespace test {
 /// - client 不引用 lib 私有实现头 (`agent/lib/src/**`), 且 `agentxx/*` 引用都能
 ///   落到 lib/client 的公开 include 根
 /// - 插件只引用 SDK 公开头 (`agentxx/plugin/api/*` + `agentxx/util/exception.h`)
-///   与工具库公开头 (`pluginxx/*` / `utilxx*/*`), 不引用宿主内部头
+///   与工具库公开头 (`pluginxx/*` / `utilxx*/*`), 不引用主程序内部头
 /// - lib 不反向依赖 client
 /// - 插件导出仍是入口白名单: 构建侧保留 version script / exported_symbols_list,
 ///   源码侧不手写 dllexport / visibility("default")

@@ -1,4 +1,4 @@
-/// agentxx 插件系统纯 C ABI 契约 (agent 侧领域表 + 通用基座)
+/// agentxx 插件系统纯 C ABI 契约 (agent 侧业务表 + 插件框架通用部分)
 ///
 /// ════════════════════════════════════════════════════════════════════
 /// 架构: COM 风格接口表查询
@@ -14,16 +14,16 @@
 ///   `agentxx/plugin/api/plugin_spec.h`); 新增可选字段只能加在结构体尾部
 ///
 /// ════════════════════════════════════════════════════════════════════
-/// 归属分层 (框架内核已拆分为 cxx_pluginxx 独立工程)
+/// 归属分层 (插件框架已拆分为 cxx_pluginxx 独立工程)
 /// ════════════════════════════════════════════════════════════════════
-/// - 与宿主领域无关的基座与通用表: `pluginxx/api/abi.h` / `pluginxx/api/tables.h`
+/// - 插件框架的通用部分 (与主程序业务无关): `pluginxx/api/abi.h` / `pluginxx/api/tables.h`
 ///   (本头已包含, 插件源码只需包含本头即可拿到全部声明)
-/// - **本头只声明 agent 领域表**: 工具 (agentxx.agent.tools)、工具权限声明
+/// - **本头只声明 agent 业务表**: 工具 (agentxx.agent.tools)、工具权限声明
 ///   (agentxx.agent.permission)、中间件钩子与钩子有序登记 (agentxx.agent.hooks)、会话访问
-///   (agentxx.agent.session)、主模型配置 (agentxx.agent.model)、宿主提示词读写
+///   (agentxx.agent.session)、主模型配置 (agentxx.agent.model)、主程序提示词读写
 ///   (agentxx.agent.prompt)、会话资源贡献 (agentxx.agent.resources)、执行图
 ///   (agentxx.agent.graph)
-/// - client 侧领域表见 `agentxx/plugin/api/client_plugin_api.h`
+/// - client 侧业务表见 `agentxx/plugin/api/client_plugin_api.h`
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
 
@@ -38,8 +38,8 @@
 extern "C" {
 #endif
 
-/* ==================== 插件入口符号名 (宿主自定义, 内核不再提供) ==================== */
-/* 内核只定义"宿主怎么交出符号名"的接缝 (pluginxx/api/entry.h); 符号名属于宿主命名空间。 */
+/* ==================== 插件入口符号名 (主程序自定义, 插件框架不再提供) ==================== */
+/* 插件框架只定义"主程序怎么交出符号名"的扩展点 (pluginxx/api/entry.h); 符号名属于主程序命名空间。 */
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO "agentxx_plugin_agent_get_info"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE   "agentxx_plugin_agent_create"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_START    "agentxx_plugin_agent_start"
@@ -56,12 +56,12 @@ extern "C" {
 /// - 只应给"只读、不写会话、不改插件内部共享状态"的工具置位; 未置位=独占
 ///   (写文件、命令执行、交互询问类工具必须保持独占)
 /// - 并发只发生在同一条 assistant 消息声明的工具调用之间, 结果仍按声明顺序写回
-/// - 宿主侧并发上限见 [AgentConfig::toolParallelMaxConcurrency]
+/// - 主程序侧并发上限见 [AgentConfig::toolParallelMaxConcurrency]
 #define AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE (1 << 1)
 /// 连续相同调用重复检查 (与内置工具 [agentxx::tools::XXToolBase::repeatCallCheck] 同语义)
 /// - 置位: 同一 llm <-> tool 交替链内 (无用户消息打断) 连续多次 (阈值
 ///   [AgentConfig::toolcallRepeatCheckThreshold], 默认 5 次) 相同工具 + 相同参数
-///   调用时, 宿主经用户确认通道询问, 确认后才继续执行, 拒绝则中止本次调用
+///   调用时, 主程序经用户确认通道询问, 确认后才继续执行, 拒绝则中止本次调用
 /// - 未置位 = 关闭 (默认): 只给"模型可能以同一参数反复调用"的工具置位
 #define AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK (1 << 2)
 
@@ -75,7 +75,7 @@ typedef struct AgentxxPluginToolSpec {
     PluginxxStringView description;
     PluginxxStringView parameters_json; ///< JSON Schema 字符串 (json object)
 
-    /// 启动执行 (【宿主 io 线程调用】, 非阻塞; 操作契约):
+    /// 启动执行 (【主程序 io 线程调用】, 非阻塞; 操作契约):
     /// - 入参均为指针传递 (只读借用, 仅本次调用有效)
     /// - 快同步工具: 算完 → notify->done(PLUGINXX_OPERATOR_OK, &res_sv) → 返回 NULL
     /// - 锚定协程/自管异步: 创建/挂起任务 → 返回 op 句柄
@@ -138,8 +138,8 @@ typedef struct AgentxxPluginHookSpec {
 typedef struct AgentxxPluginHookSpecEx {
     uint32_t struct_size; ///< sizeof(AgentxxPluginHookSpecEx); 0 = 基线布局
     int32_t  point;       ///< AgentxxPluginHookPoint
-    /// 层内顺序, 小者先 (默认 0 = 按登记顺序 = 插件装载顺序)
-    /// - 越界裁剪到宿主允许范围并记一条警告, 不拒绝登记
+    /// 层内顺序, 小者先 (默认 0 = 按登记顺序 = 插件加载顺序)
+    /// - 越界裁剪到主程序允许范围并记一条警告, 不拒绝登记
     int32_t priority;
     int32_t flags; ///< 预留 (本轮无定义标志, 传 0)
     /// 展示归属标签 (可空; 清单里显示, 便于看出"这是谁的处理器")
@@ -148,7 +148,7 @@ typedef struct AgentxxPluginHookSpecEx {
     PluginxxStringView depict;
 
     /// 执行体 (语义与 [AgentxxPluginHookSpec::hook_start] 完全一致):
-    /// - 宿主 io 线程调用; 结果被丢弃 (钩子只用于通知)
+    /// - 主程序 io 线程调用; 结果被丢弃 (钩子只用于通知)
     /// - 快同步: 算完 → notify->done(PLUGINXX_OPERATOR_OK, NULL) → 返回 NULL
     /// - 锚定协程/自管异步: 创建或挂起任务 → 返回 op 句柄
     void*(PLUGINXX_CALL* hook_start)(
@@ -177,7 +177,7 @@ typedef struct AgentxxPluginToolsIface {
     int32_t  version;     ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginToolsIface) 或更大的已知表长
 
-    /// 注册工具 (io 线程约束, 非 io 线程由宿主投递同步等待)
+    /// 注册工具 (io 线程约束, 非 io 线程由主程序投递同步等待)
     /// `return`: 0 成功, 非 0 冲突或失败
     int32_t(PLUGINXX_CALL* register_tool)(
         const PluginxxHost*          host,
@@ -225,7 +225,7 @@ typedef struct AgentxxPluginToolsIface {
 #define AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW 1 ///< 已明确允许 (白名单/工作目录/完全授权等)
 #define AGENTXX_PLUGIN_PERMISSION_DECISION_ASK   2 ///< 未获批准 (本查询不发起询问)
 
-/// 工具权限声明 (插件在注册工具后为自身工具声明权限限制; 由宿主统一判定)
+/// 工具权限声明 (插件在注册工具后为自身工具声明权限限制; 由主程序统一判定)
 typedef struct AgentxxPluginToolPermissionSpec {
     /// 目标工具名 (须为本实例已注册的工具)
     PluginxxStringView tool_name;
@@ -253,7 +253,7 @@ typedef struct AgentxxPluginPermissionPathQuery {
     uint32_t struct_size;
     /// 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_READ / _WRITE)
     int32_t scope;
-    /// paths 元素个数 (须 > 0 且不超过宿主上限)
+    /// paths 元素个数 (须 > 0 且不超过主程序上限)
     int32_t  path_count;
     uint32_t _reserved; ///< 8 字节补齐
     /// 会话 (解析会话工作目录与工作区隔离边界; 可为空, 为空时按进程工作目录解析)
@@ -270,15 +270,15 @@ typedef struct AgentxxPluginPermissionIface {
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginPermissionIface) 或更大的已知表长
 
     /// 声明工具权限限制 (工具注册后调用; 同工具重复声明为覆盖)
-    /// - 未声明的工具不参与权限判定 (直接放行); 声明后由宿主按权限规则
+    /// - 未声明的工具不参与权限判定 (直接放行); 声明后由主程序按权限规则
     ///   (白/黑名单、permission.mode、记住的选择、工作区隔离) 统一判定
-    /// - 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略
+    /// - 权限声明属于附加能力: 主程序未装配权限中间件时返回非 0, 插件可忽略
     /// `return`: 0 成功, 非 0 不支持或失败
     int32_t(PLUGINXX_CALL* register_tool_permission)(
         const PluginxxHost*                    host,
         const AgentxxPluginToolPermissionSpec* spec
     );
-    /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由宿主自动撤销, 一般无需手动调用)
+    /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由主程序自动撤销, 一般无需手动调用)
     /// `return`: 0 成功, 非 0 不存在
     int32_t(PLUGINXX_CALL* unregister_tool_permission)(
         const PluginxxHost*       host,
@@ -291,8 +291,8 @@ typedef struct AgentxxPluginPermissionIface {
     /// - 判定规则与工具调用权限检查一致 (工作区隔离 → 配置拒绝 → 完全授权 →
     ///   规则表 → noRuleOperator); 区别仅在于"应询问(INTERRUPT)"以 ASK 返回而不询问
     /// - 工具侧建议: DENY 丢弃; ASK 表示"未获批准"同样不应访问 (按未批准处理)
-    /// - 线程: 任意线程可调用 (非 io 线程由宿主投递到 io 线程同步等待);
-    ///   单次批量不宜过大 (宿主在 io 线程执行), 建议按需分批 (如 512 项)
+    /// - 线程: 任意线程可调用 (非 io 线程由主程序投递到 io 线程同步等待);
+    ///   单次批量不宜过大 (主程序在 io 线程执行), 建议按需分批 (如 512 项)
     ///
     /// - `args`:
     ///     - [query] 查询入参 (路径数组/作用域/会话)
@@ -379,7 +379,7 @@ typedef struct AgentxxPluginSessionIface {
 
     /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
     /// - 条目不存在或 id 未分配 (大于自增 id, 见 add_share_store) 时返回 -1
-    ///   (out 不分配内存, 宿主不抛异常)
+    ///   (out 不分配内存, 主程序不抛异常)
     int32_t(PLUGINXX_CALL* get_share_store)(
         const PluginxxHost*       host,
         const PluginxxStringView* session_id,
@@ -416,7 +416,7 @@ typedef struct AgentxxPluginContextIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION
     uint32_t struct_size;
 
-    /// 读取会话 LLM 上下文 (JSON 数组文本; 宿主 alloc, 需 host->vtable->free 释放)
+    /// 读取会话 LLM 上下文 (JSON 数组文本; 主程序 alloc, 需 host->vtable->free 释放)
     /// - 返回 0 成功 (out 为 ChatMessage JSON 数组文本), -1 失败/会话不存在
     int32_t(PLUGINXX_CALL* get_messages)(
         const PluginxxHost*       host,
@@ -443,11 +443,11 @@ typedef struct AgentxxPluginContextIface {
 typedef struct AgentxxPluginModelIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
     uint32_t struct_size;
-    /// 宿主主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
+    /// 主程序主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
     int32_t(PLUGINXX_CALL* get_config)(const PluginxxHost* host, PluginxxString* out);
 } AgentxxPluginModelIface;
 
-/* ==================== 接口表: 宿主提示词读写 (agentxx.agent.prompt) ==================== */
+/* ==================== 接口表: 主程序提示词读写 (agentxx.agent.prompt) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT             "agentxx.agent.prompt"
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     1
@@ -507,7 +507,7 @@ typedef struct AgentxxPluginResourcesIface {
 
 /* ==================== 接口表: 执行图 (agentxx.agent.graph) ==================== */
 
-/// 插件节点执行函数 (【宿主 io 线程调用】, 非阻塞):
+/// 插件节点执行函数 (【主程序 io 线程调用】, 非阻塞):
 /// - node_name/config_json/state_json/thread_id: 只读借用, 仅本次调用有效
 /// - state_json 为 GraphState::serialize() 的结果: {"channels": {<ch名>: {"value": ..., "version":
 /// N}}, "global_version": N}
@@ -547,11 +547,11 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_PLUGIN_GRAPH_NODE_TYPE_SPEC_BASELINE_SIZE sizeof(AgentxxPluginGraphNodeTypeSpec)
 
-/// 执行图接口表: 插件注册自定义节点类型 + 读写宿主执行图 JSON 定义
+/// 执行图接口表: 插件注册自定义节点类型 + 读写主程序执行图 JSON 定义
 /// - 节点类型注册进 per-agent GraphRegistry (多实例隔离), 图编译时按类型名
 ///   实例化; 卸载插件后不再编译新图 (engine 已构建), 注册残留无害
-/// - get/set graph JSON 用于插件查看/修改宿主执行图 (默认名 "agentxx.default");
-///   修改后的 JSON 在宿主构建 engine 前生效 (插件须保证图合法性, 非法时宿主
+/// - get/set graph JSON 用于插件查看/修改主程序执行图 (默认名 "agentxx.default");
+///   修改后的 JSON 在主程序构建 engine 前生效 (插件须保证图合法性, 非法时主程序
 ///   回退默认图并记日志)
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH             "agentxx.agent.graph"
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     1
@@ -563,13 +563,13 @@ typedef struct AgentxxPluginGraphIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
     uint32_t struct_size;
 
-    /// 注册节点类型 (io 线程约束, 非 io 线程由宿主投递同步等待)
+    /// 注册节点类型 (io 线程约束, 非 io 线程由主程序投递同步等待)
     /// `return`: 类型名冲突返回非 0
     int32_t(PLUGINXX_CALL* register_node_type)(
         const PluginxxHost*                   host,
         const AgentxxPluginGraphNodeTypeSpec* spec
     );
-    /// 注销节点类型 (按类型名; 卸载时宿主自动清理)
+    /// 注销节点类型 (按类型名; 卸载时主程序自动清理)
     /// `return`: 不存在返回非 0
     int32_t(PLUGINXX_CALL* unregister_node_type)(
         const PluginxxHost*       host,
@@ -579,7 +579,7 @@ typedef struct AgentxxPluginGraphIface {
     int32_t(PLUGINXX_CALL* get_graph_json)(const PluginxxHost* host, PluginxxString* out);
     /// 获取当前执行图名称 (host->alloc; 默认 "agentxx.default")
     int32_t(PLUGINXX_CALL* get_graph_name)(const PluginxxHost* host, PluginxxString* out);
-    /// 设置执行图 JSON 定义 (覆盖; 宿主构建 engine 前生效)
+    /// 设置执行图 JSON 定义 (覆盖; 主程序构建 engine 前生效)
     /// `return`: JSON 非法返回非 0 (host 侧解析失败)
     int32_t(PLUGINXX_CALL* set_graph_json)(
         const PluginxxHost*       host,
@@ -592,27 +592,27 @@ typedef struct AgentxxPluginGraphIface {
 /// 功能点 (feature point) —— 核心在关键位置主动调用的扩展点
 ///
 /// 三层: 点 (Point) / 实现 (Impl) / 调用 (Call)。插件可以:
-/// 1. 为**任何已声明的点**登记实现 ([AgentxxPluginFeatureImplSpec]): 应用点由宿主
+/// 1. 为**任何已声明的点**登记实现 ([AgentxxPluginFeatureImplSpec]): 应用点由主程序
 ///    装配期声明, 插件点由插件自己经 define_point 声明;
 /// 2. **声明自己的点** ([AgentxxPluginFeaturePointSpec]): id 必须落在
 ///    `plugin.<本实例插件名>.*`, 声明期间恒可被任何一方调用 (本轮只允许 provide 类型);
 /// 3. **调用点** (call_point_async): 只拿数据 —— 不写值缓存、不记置空、不改调用方
 ///    会话与上下文、不发界面提示、不落盘。
 ///
-/// 实现链顺序: `plugin` 层 (插件 / FFI 宿主) → `core` 层 (libagentxx 自身兜底);
-/// 层内按 `(priority 升序, 登记顺序)`, 默认优先级带为插件 `0` / FFI 宿主 `1000`。
+/// 实现链顺序: `plugin` 层 (插件 / FFI 主程序) → `core` 层 (libagentxx 自身兜底);
+/// 层内按 `(priority 升序, 登记顺序)`, 默认优先级带为插件 `0` / FFI 主程序 `1000`。
 /// 每个实现返回 `{"value": ...}` 给出值、`{"disable": true}` 显式置空 (不再问后面的
 /// 实现)、`{}` 表示没意见 (继续问下一个)。
 ///
 /// 超时: 点的声明方可以给自己的点设 `impl_timeout_ms` (等单个实现的上限); 实现方
-/// 可以自报 `default_timeout_ms`; 宿主取两者中非 0 的较小值, 都为 0 (默认) 表示不限。
+/// 可以自报 `default_timeout_ms`; 主程序取两者中非 0 的较小值, 都为 0 (默认) 表示不限。
 #define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE             "agentxx.agent.feature"
 #define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION     1
 #define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_BASELINE_SIZE sizeof(AgentxxPluginFeatureIface)
 
-/// 功能点类型 (本轮只开放 `PROVIDE`; `DECIDE` 只有宿主留出的点使用)
+/// 功能点类型 (本轮只开放 `PROVIDE`; `DECIDE` 只有主程序留出的点使用)
 #define AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE 0
 #define AGENTXX_PLUGIN_FEATURE_TYPE_DECIDE  1
 
@@ -654,14 +654,14 @@ typedef struct AgentxxPluginFeatureImplSpec {
     /// 目标点 id (该点必须已声明)
     PluginxxStringView point_id;
     void*              user_data;
-    /// 启动实现 (【宿主 io 线程调用】, 非阻塞; 操作契约):
+    /// 启动实现 (【主程序 io 线程调用】, 非阻塞; 操作契约):
     /// - `point_id`: 目标点 id (只读借用, 仅本次调用有效)
     /// - `call_json`: 调用上下文 JSON (只读借用), 形状见下:
     ///   `{ "point": "...", "args": {...}, "request": {...}, "caller": "插件名或空",
     ///      "viaCall": true/false, "identity": "..." }`
-    /// - `notify`: 完成/失败/取消都经它回到宿主 IO 线程 (必须恰好回调一次)
+    /// - `notify`: 完成/失败/取消都经它回到主程序 IO 线程 (必须恰好回调一次)
     /// - 快同步实现: 算完 → notify->done(OK, &answer) → 返回 NULL
-    /// - 锚定协程/自管异步: 返回 op 句柄 (宿主用 impl_cancel 请求取消)
+    /// - 锚定协程/自管异步: 返回 op 句柄 (主程序用 impl_cancel 请求取消)
     /// - 回答文本: `{"value": ...}` 给出值 / `{"disable": true}` 显式置空 /
     ///   `{}` (或空串) 没意见
     /// - 失败: 返回 NULL 且 *error_out 输出错误 (host->alloc 分配)
@@ -687,12 +687,12 @@ typedef struct AgentxxPluginFeatureIface {
     int32_t(PLUGINXX_CALL* list_points)(const PluginxxHost* host, PluginxxString* out_json);
 
     /// 声明插件自己的功能点
-    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与宿主点冲突)
+    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
     int32_t(PLUGINXX_CALL* define_point)(
         const PluginxxHost*                    host,
         const AgentxxPluginFeaturePointSpec*   spec
     );
-    /// 撤销插件自己的点 (连带撤掉这些点上的全部实现; 禁用/卸载时宿主自动处理)
+    /// 撤销插件自己的点 (连带撤掉这些点上的全部实现; 禁用/卸载时主程序自动处理)
     /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是本实例声明的点)
     int32_t(PLUGINXX_CALL* undefine_point)(
         const PluginxxHost*       host,
@@ -712,12 +712,12 @@ typedef struct AgentxxPluginFeatureIface {
         const PluginxxStringView* point_id
     );
 
-    /// 调用一个功能点 (异步; 完成回调经 notify 在宿主 IO 线程发布)
+    /// 调用一个功能点 (异步; 完成回调经 notify 在主程序 IO 线程发布)
     /// - `args_json`: 调用方原样给的参数 (JSON; 空串按空对象处理)
     /// - 结果 JSON: `{"ok":true,"id":...,"identity":...,"value":...,"by":...,"fromCache":...,
     ///   "ms":N}` 或 `{"ok":false,"id":...,"error":"not_callable|bad_args|no_impl|
     ///   disabled|busy|failed","message":"..."}`
-    /// - 受理失败 (参数非法/宿主不支持) 返回 NULL 并写 error_out; 调用本身的失败经回调回
+    /// - 受理失败 (参数非法/主程序不支持) 返回 NULL 并写 error_out; 调用本身的失败经回调回
     PluginxxOperatorHandle*(PLUGINXX_CALL* call_point_async)(
         const PluginxxHost*       host,
         const PluginxxStringView* point_id,

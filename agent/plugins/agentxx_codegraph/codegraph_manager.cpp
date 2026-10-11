@@ -1,5 +1,5 @@
 /// agentxx_codegraph 插件 —— CodeGraphManager 实现 (从 lib 迁移)
-/// - 插件不链接 libagentxx: 日志经宿主 vtable log; 数据目录由宿主接口表提供
+/// - 插件不链接 libagentxx: 日志经主程序 vtable log; 数据目录由主程序接口表提供
 ///   (agentxx.agent.config get_config dataDir, 插件不直接读环境变量推导)
 /// - 本文件为索引管理核心实现 (单 TU); 插件入口在
 ///   [agentxx_codegraph.cpp](/agent/plugins/agentxx_codegraph/agentxx_codegraph.cpp)
@@ -78,11 +78,11 @@ static T catchError(std::function<T()> func, std::function<T(std::string)> onErr
 
 // ---------------------------------------------------------------------------
 // sqlite 数据目录约定 (插件不直接读环境变量):
-// - 数据目录由宿主提供: 入口
+// - 数据目录由主程序提供: 入口
 //   ([agentxx_codegraph.cpp](/agent/plugins/agentxx_codegraph/agentxx_codegraph.cpp))
 //   经 agentxx.agent.config 接口表 get_config 读取 dataDir 后拼接
 //   "{dataDir}/sqlite" 传入构造函数;
-//   环境变量派生配置 (yaml ${VAR}) 由宿主配置加载器统一展开 (.env/内置/系统
+//   环境变量派生配置 (yaml ${VAR}) 由主程序配置加载器统一展开 (.env/内置/系统
 //   变量优先级见 [design](/docs/zh-cn/design)), 插件侧只处理最终值
 // - sqliteDir 为空视为配置缺失: initialize 失败并记日志
 //   (不再从 HOME/TMPDIR 等环境变量自行推导默认目录)
@@ -200,7 +200,7 @@ static std::vector<std::string> foldSegments(const std::vector<std::string>& seg
 }
 
 /// 项目根目录对应的索引数据库路径: {sqliteDir}/codegraph/<折叠路径层级>/index.db
-/// - sqliteDir 由宿主提供 (构造传入), initialize 已保证非空
+/// - sqliteDir 由主程序提供 (构造传入), initialize 已保证非空
 static fs::path getIndexDbPath(std::string_view project_root, std::string_view sqliteDir) {
     fs::path dir = fs::path(sqliteDir) / kCodeGraphSqliteSubDirName;
     for (const auto& seg : foldSegments(projectRootToSegments(project_root))) {
@@ -1080,7 +1080,7 @@ public:
 
     bool initialize(std::string_view project_root) {
         if (sqlite_dir_.empty()) {
-            // 设计约束: sqlite 数据目录由宿主提供 (agentxx.agent.config
+            // 设计约束: sqlite 数据目录由主程序提供 (agentxx.agent.config
             // get_config 的 dataDir 派生), 插件不从环境变量推导默认值;
             // 缺失视为配置错误, 记日志并失败 (插件入口会跳过工具注册)
             XX_LOGE("CodeGraphManager: sqlite dir is empty (host dataDir not set?)");
@@ -2305,7 +2305,7 @@ private:
     std::atomic<bool> indexing_{false};
     std::atomic<bool> file_watcher_running_{false};
     bool              needs_initialize_;
-    /// sqlite 数据目录 ({dataDir}/sqlite; 宿主提供, 为空时 initialize 失败)
+    /// sqlite 数据目录 ({dataDir}/sqlite; 主程序提供, 为空时 initialize 失败)
     std::string sqlite_dir_;
 
     // ------------------------------------------------------------------
@@ -2319,7 +2319,7 @@ private:
     IndexProgressCallback progress_callback_;
 };
 
-/// - [sqliteDir] sqlite 数据目录 ({dataDir}/sqlite; 由插件入口经宿主
+/// - [sqliteDir] sqlite 数据目录 ({dataDir}/sqlite; 由插件入口经主程序
 ///   agentxx.agent.config get_config 的 dataDir 拼接提供; 插件不读
 ///   环境变量推导默认目录, 为空时 initialize 失败)
 /// - [config] 索引过滤配置 (加载路径/忽略路径/gitignore 开关)

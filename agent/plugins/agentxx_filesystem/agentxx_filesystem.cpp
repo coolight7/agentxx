@@ -3,12 +3,12 @@
 /// 分工 (见 plugin_kit.h 的 polled_tool 说明):
 /// - `read` / `write` / `edit`: 实现体是 asio 协程 (`asio::stream_file` 异步读写),
 ///   等待的是插件本地 reactor 上的文件 IO 就绪事件, 因此文件异步 I/O 可用时注册为
-///   **声明式受控轮询**工具 —— 大文件读写不再占用宿主工作线程池;
+///   **声明式受控轮询**工具 —— 大文件读写不再占用主程序工作线程池;
 ///   文件异步 I/O 不可用 (编译期未启用, 或运行环境的 io_uring 被 seccomp 拦截)
 ///   时回退同步实现, 改注册 `blocking_tool` (offload 工作线程);
 ///   可用性判断统一走 `utilxx_base::isAsyncFileIoSupported()`;
 /// - `list` / `glob` / `grep`: 目录遍历 + 全文件扫描 + 正则/编码转换, 这是 CPU/阻塞
-///   工作而非异步 IO, 放进受控轮询只会阻塞宿主 IO 线程, 因此保持 `blocking_tool`。
+///   工作而非异步 IO, 放进受控轮询只会阻塞主程序 IO 线程, 因此保持 `blocking_tool`。
 #include "agentxx_fs_plugin.h"
 #include "asio/awaitable.hpp"
 #include "filesystem_impl.h"
@@ -62,13 +62,13 @@ constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
 /// 连续相同调用重复检查 (与内置工具 [XXToolBase::repeatCallCheck] 同语义):
 /// 同一 llm <-> tool 交替链内 (无用户消息打断) 连续同名同参调用达到阈值
-/// ([AgentConfig::toolcallRepeatCheckThreshold], 默认 5 次) 时, 宿主询问用户
+/// ([AgentConfig::toolcallRepeatCheckThreshold], 默认 5 次) 时, 主程序询问用户
 /// 确认后才继续执行; read/list/glob/grep/write 启用, edit 不启用
 constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 
 /// 搜索/列表类只读工具的注册 flags: 自动摘要 + 声明并行安全 + 重复调用检查
 /// - 输出可能远超 [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength],
-///   由宿主压缩 (原文经 share_store 卸载, 需要时可按行取回)
+///   由主程序压缩 (原文经 share_store 卸载, 需要时可按行取回)
 /// - list/glob/grep 只读且不改插件内部共享状态 (会话取消注册表只按
 ///   sessionId 读写), 允许与其他并行安全工具在同一批 tool_call 里并发执行;
 ///   写/编辑工具保持独占 (不声明), 与其他调用形成顺序屏障
@@ -77,7 +77,7 @@ constexpr int32_t kReadOnlyFlags
 
 /// `read` 的注册 flags: 并行安全 + 重复调用检查, 不做自动摘要
 /// - `read` 自带 `line_offset`/`line_limit` 分页参数, 读多少行由调用方决定;
-///   宿主再按 [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength]
+///   主程序再按 [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength]
 ///   自动摘要会把一次读取切成"头部 + share_store 页码", 与工具自身的分页重复 ——
 ///   调用方看到的行号会变成摘要后的结果行号, 与文件行号对不上
 constexpr int32_t kReadFlags = AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE | kRepeatCheck;
@@ -92,7 +92,7 @@ struct FsPluginCtx : public PluginBase {};
 
 /// 构造按模式参数展开后的路径权限过滤器 (读作用域; 见 filesystem_impl.h 的 PathFilterFn)
 /// - 已明确允许(Allow)才保留; 被拒绝(Deny)与未获批准(Ask)一律不进入结果 (fail-closed)
-/// - 宿主未装配权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
+/// - 主程序未装配权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
 static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessionId) {
     return [&ctx, sid = std::string{sessionId}](const std::vector<std::string>& paths) {
         return agentxx::plugin::filterPathPermissions(
@@ -104,10 +104,10 @@ static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessio
     };
 }
 
-/// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
+/// 注册事务 (start 的实际内容); 失败由主程序按拒绝处理并回滚。
 static int32_t fsSetup(FsPluginCtx& ctx) {
     // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
-    // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由宿主
+    // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由主程序
     // 权限中间件执行; 未声明的工具不参与权限判定 (直接放行)
 
     // 1. List
@@ -565,7 +565,7 @@ static void*
 }
 
 static void* fsStop(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+    // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -745,7 +745,7 @@ static void*
 }
 
 static void* fsClientStop(FsClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // UI 注册记录由宿主在 stop 后统一撤销。
+    // UI 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

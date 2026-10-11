@@ -2,9 +2,9 @@
 /// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 依赖: cxx_utilxx (HttpClient) + cxx_utilxx_base (Json / 字符串工具 / 日志) +
-///   agentxx/util/exception.h (宿主侧异常分类) + fmt
+///   agentxx/util/exception.h (主程序侧异常分类) + fmt
 /// - 与原实现的差异点:
-///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在宿主线程池,
+///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在主程序线程池,
 ///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
 ///     agentxx_websearch 的 runSync 同模式)
 ///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口装配真实 HTTP 版本,
@@ -446,7 +446,7 @@ inline double cosineSimilarity(const std::vector<double>& a, const std::vector<d
     return denom > 0.0 ? dot / denom : 0.0;
 }
 
-/// 内存向量库 (embedder 经 EmbedFn 注入; 全部接口同步, 仅宿主线程池内调用)
+/// 内存向量库 (embedder 经 EmbedFn 注入; 全部接口同步, 仅主程序线程池内调用)
 class VectorStore {
 public:
 
@@ -639,7 +639,7 @@ protected:
 // =========================================================================
 
 /// 构造真实 EmbedFn (OpenAI 兼容 POST {baseUrl}/embeddings; 局部 io_context
-/// 同步驱动, 仅宿主线程池内调用; readChunkTimeout=15s 与原实现一致)
+/// 同步驱动, 仅主程序线程池内调用; readChunkTimeout=15s 与原实现一致)
 inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
     return [baseUrl = std::move(baseUrl),
             model   = std::move(model)](const std::vector<std::string>& texts

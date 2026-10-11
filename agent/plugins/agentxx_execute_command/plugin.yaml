@@ -5,10 +5,10 @@ entry: libagentxx_execute_command.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
 # - agentxx.agent.prompt: 插件在 start 事务注入自身工具的提示词 (depict + 参数
-#   描述, 含启动时探测到的 python/node 与 PowerShell 信息); 宿主按所有者记录
+#   描述, 含启动时探测到的 python/node 与 PowerShell 信息); 主程序按所有者记录
 #   贡献, 插件卸载/禁用时自动撤销
 # - agentxx.client.msg_decor: client 入口经 ui 表 register_tool_renderer 注册
-#   折叠头/展开体 (工具消息特化渲染); 无消息渲染面的宿主 (cli) 不支持时注册
+#   折叠头/展开体 (工具消息特化渲染); 无消息渲染面的主程序 (cli) 不支持时注册
 #   被拒绝, 工具按通用样式展示
 interfaces:
   require:

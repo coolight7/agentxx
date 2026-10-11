@@ -415,7 +415,7 @@ asio::awaitable<void> test_skill_name_adjudication() {
 
     auto fx = co_await makeFixture("skill-priority-session", tweaks);
 
-    // 插件 (或宿主) 再注册一个低优先级目录
+    // 插件 (或主程序) 再注册一个低优先级目录
     auto* skillMiddleware = findSkillMiddleware(*fx->agent);
     XX_TEST_EXPECT_TRUE(skillMiddleware != nullptr);
     if (!skillMiddleware) {

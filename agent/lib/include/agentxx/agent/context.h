@@ -726,7 +726,7 @@ public:
     /// 功能点注册表 (点 / 实现 / 调用; 计划 PLG 系列, 见
     /// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
     /// - 由 BaseAgent::init 创建 (早于中间件装配, 因此中间件可以声明核心点;
-    ///   也早于插件装载, 因此插件登记实现时点已存在)
+    ///   也早于插件加载, 因此插件登记实现时点已存在)
     /// - 随本 AgentContext 一份: 多 agent 实例互不影响, 不使用全局变量
     std::shared_ptr<agentxx::feature::Registry> features = nullptr;
 
@@ -741,7 +741,7 @@ public:
     ///   插件修改非法时回退默认图并记日志
     neograph::json graphDefinitionJson = neograph::json::object();
 
-    /// 会话资源应用器 (插件向宿主贡献 Skill/Memory/MCP 的实现接口)
+    /// 会话资源应用器 (插件向主程序贡献 Skill/Memory/MCP 的实现接口)
     /// - 由 CodeAgent::initMiddleware 构造注入 (单一具体实现,
     ///   见 [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h));
     ///   BaseAgent 场景无中间件 → 保持 nullptr,
@@ -751,8 +751,8 @@ public:
     ///   [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h))
     std::shared_ptr<AgentResourceApplier> resourceApplier = nullptr;
 
-    /// 宿主引用 (由 AgentHost attachRoot/派生时注入; 无宿主时为空)
-    /// - 节点/工具可经此感知宿主 (如查询子代理模板、发起跨 agent 消息)
+    /// agent 节点容器引用 (由 AgentHost attachRoot/派生时注入; 无容器时为空)
+    /// - 节点/工具可经此感知主程序 (如查询子代理模板、发起跨 agent 消息)
     std::weak_ptr<AgentHost> host;
 
     /// 线程安全的启动进度通知器包装:
@@ -826,7 +826,7 @@ public:
     /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式)
     /// - 否则同 [getSessionBaseWorkDir] (会话覆写 > agent 配置 / 进程 cwd)
     /// - 均不可用时返回空串 (调用方自行兜底)
-    /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件宿主侧
+    /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件主程序侧
     ///   经 ioCallSync 投递); 覆写表经 mutex 保护, 任意线程可读写
     /// - const: 只读取状态 (覆写表/互斥量按 mutable 处理), 供只读场景使用
     std::string getSessionWorkDir(std::string_view sessionId) const;

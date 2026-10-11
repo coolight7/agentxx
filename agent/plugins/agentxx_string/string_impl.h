@@ -16,7 +16,7 @@
 
 namespace agentxx_string_plugin {
 
-/// 参数检查失败时抛出的异常 (由插件 SDK 边界捕获, 宿主统一按工具错误结果回给模型)
+/// 参数检查失败时抛出的异常 (由插件 SDK 边界捕获, 主程序统一按工具错误结果回给模型)
 /// - 参数错误不返回编码后的 JSON: 错误与正常结果不混在同一形态里
 using ArgError = std::invalid_argument;
 

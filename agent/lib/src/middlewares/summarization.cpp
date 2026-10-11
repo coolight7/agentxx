@@ -120,7 +120,7 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     tokenEstimator->extraTokensPerMessage  = extraTokensPerMessage;
 
     // 声明上下文两点 (token 估算 / 压缩) 并登记核心实现
-    // - 中间件在插件装载前装配, 因此插件登记实现时点一定已存在
+    // - 中间件在插件加载前装配, 因此插件登记实现时点一定已存在
     // - 单测直接构造本中间件 (无 AgentContext) 时 featurePoints 为空, 走同步路径即可
     if (auto ctx = agentContext.lock(); ctx != nullptr && ctx->features != nullptr) {
         agentxx::feature::ContextPointOptions pointOptions;
@@ -129,10 +129,10 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
             = [this](const agentxx::feature::SummarizeRequest&  req,
                      const agentxx::feature::ImplContext& /*ictx*/)
             -> asio::awaitable<std::optional<agentxx::feature::SummarizeValue>> {
-            // 核心实现: 只产出摘要文本, 不写回会话 (编排在中间件)
+            // 核心实现: 只产出摘要文本, 不写回会话 (调度在中间件)
             auto summary = co_await doSummarizeWithLLM(req.sessionId, req.messages, req.manual);
             if (summary.empty()) {
-                co_return std::nullopt; // 失败按"没意见"处理, 由编排方兜底
+                co_return std::nullopt; // 失败按"没意见"处理, 由调度方兜底
             }
             agentxx::feature::SummarizeValue value;
             value.summary   = std::move(summary);
@@ -642,7 +642,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 中断委派路径 —— 该路径的中断只能由 AgentRunner 处理, 空闲时
         // 会穿过所有 catchErrorAsync 逃逸到 EventBus publish 的 detached
         // 协程被 asio 静默丢弃, 表现为压缩永久卡在 "Summarizing..."。
-        // 改为直接经宿主 AgentHost::spawnBatch 派生压缩子代理并等待完成,
+        // 改为直接经 agent 节点容器 AgentHost::spawnBatch 派生压缩子代理并等待完成,
         // 与中断路径复用同一 spawnOneTask (同上下文模式语义一致: 相同
         // sessionId + 父会话模型 → KV cache 命中), 不抛中断。
         auto host = agentCtxPtr->host.lock();
@@ -731,7 +731,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             );
             co_return "";
         }
-        // 取消/错误串透传防护: 子代理被取消时宿主返回
+        // 取消/错误串透传防护: 子代理被取消时主程序返回
         // `{"error":"Sub-agent cancelled..."}` (AgentRunner 已优先按取消
         // 抛, 此处为直接调用路径的兜底), 不得当作有效摘要写回上下文,
         // 否则表现为"压缩成功 + 继续执行", 取消形同虚设
@@ -1009,8 +1009,8 @@ asio::awaitable<void>
             cleanThinkingMessages(toSummarize);
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
-            /// - 经功能点取摘要文本: 插件 / FFI 宿主的实现可在这里替换核心压缩;
-            ///   编排 (提示消息 / 写回 / 兜底) 仍在本中间件
+            /// - 经功能点取摘要文本: 插件 / FFI 主程序的实现可在这里替换核心压缩;
+            ///   调度 (提示消息 / 写回 / 兜底) 仍在本中间件
             auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/false);
 
             enum class ReplaceAction {
@@ -1086,7 +1086,7 @@ asio::awaitable<void>
         // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
         // 场景: system 本身很大, 或摘要超长 (截断后仍超), 压缩结果仍 >= 95% 上限;
         // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最终兜底
-        // - 与触发判定用同一个取数入口 (功能点), 避免两条口径混用
+        // - 与触发判定用同一个取数入口 (功能点), 避免两条规则混用
         const size_t compressedTokens
             = co_await countTokensViaPoint(sessionId, compressedMessages, enableCountThinking);
         if (compressedTokens >= modelContextMaxToken * 0.95) {
@@ -1253,7 +1253,7 @@ asio::awaitable<bool>
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
-        // (经功能点取摘要文本: 编排仍在本中间件)
+        // (经功能点取摘要文本: 调度仍在本中间件)
         auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/true);
         if (!summary.empty()) {
             if (systemCount > 0) {

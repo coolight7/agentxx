@@ -7,16 +7,16 @@
 ///   的定义。这里用 `PluginManager::registrationInventory` 做基线断言。
 /// - PLG-4: 执行图定义是"独占能力"的典型: 两个插件交替覆盖后, 任何一方卸载都
 ///   无法判断该恢复成哪一份定义。这里验证占用/拒绝/释放后回到原定义 (内置)。
-/// - PLG-7: 装载失败时宿主给出"照什么改"的建议 (路径/清单/导出符号)。
+/// - PLG-7: 加载失败时主程序给出"照什么改"的建议 (路径/清单/导出符号)。
 ///
 /// 覆盖:
-/// 1. 注册清单基线: 装载 → 各计数与注册效果; 禁用 → 全部摘除且实例记录保留;
+/// 1. 注册清单基线: 加载 → 各计数与注册效果; 禁用 → 全部摘除且实例记录保留;
 ///    启用 → start 事务重新声明; 卸载 → 实例消失、注册与提示词贡献无残留
 /// 2. 提示词贡献多 owner: 后写者生效, 卸载只删自己的贡献 (不会把旧值写回),
 ///    外部直写会 rebase 基础值
 /// 3. 执行图定义独占 slot: 先到者占用, 后到者被拒绝, 占用者卸载恢复原定义
 ///    (含真实插件 example_graph_node 在 start 里设置图的路径)
-/// 4. 装载失败建议: 空路径 / 路径不存在 / 无清单 / 清单非法 / entry 库缺失 /
+/// 4. 加载失败建议: 空路径 / 路径不存在 / 无清单 / 清单非法 / entry 库缺失 /
 ///    库缺入口符号 / 内置名不存在
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
 
@@ -118,7 +118,7 @@ void writeTextFile(const fs::path& path, std::string_view text) {
     ofs << text;
 }
 
-/// 最小宿主夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 插件管理器
+/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 插件管理器
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>    ctx;
     std::shared_ptr<agentxx::plugin::PluginManager>  mgr;
@@ -167,7 +167,7 @@ std::string appendSectionText(const agentxx::agent::AgentPrompt& prompt, const s
 } // namespace
 
 // ===========================================================================
-// 1. 注册清单基线: 装载 / 禁用 / 启用 / 卸载
+// 1. 注册清单基线: 加载 / 禁用 / 启用 / 卸载
 // ===========================================================================
 namespace {
 
@@ -175,7 +175,7 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     auto      f           = co_await makeFixture();
     const auto pluginPath = findPluginDir("example_plugin");
 
-    // 装载前的基线: 没有工具、没有提示词贡献
+    // 加载前的基线: 没有工具、没有提示词贡献
     XX_TEST_EXPECT_FALSE(f.ctx->toolRegistry->contains("example_echo"));
     XX_TEST_EXPECT_EQ(
         appendSectionText(f.ctx->agentConfig->prompt, "toolPrompt"),
@@ -189,7 +189,7 @@ asio::awaitable<void> test_registration_inventory_baseline() {
         co_return;
     }
 
-    // 装载后: 统一注册清单的每一项都对得上 example_plugin 实际注册的内容
+    // 加载后: 统一注册清单的每一项都对得上 example_plugin 实际注册的内容
     const auto inv = f.mgr->registrationInventory(*inst);
     TEST_INFO << "[plugin_cleanup] example_plugin inventory: tools=" << inv.tools
               << " hooks=" << inv.hooks << " events=" << inv.eventSubscriptions
@@ -223,12 +223,12 @@ asio::awaitable<void> test_registration_inventory_baseline() {
         }
     }
 
-    // 装载后的实际效果: 工具有、中间件在链上、提示词贡献生效
+    // 加载后的实际效果: 工具有、中间件在链上、提示词贡献生效
     XX_TEST_EXPECT_TRUE(f.ctx->toolRegistry->contains("example_echo"));
     const size_t handlesBefore = f.ctx->middlewareHandleContext->handles.size();
     XX_TEST_EXPECT_GE(handlesBefore, size_t{1});
 
-    // ---- 禁用: 宿主侧生效注册全部摘除, 实例内记录保留 (启用时 start 重新声明) ----
+    // ---- 禁用: 主程序侧生效注册全部摘除, 实例内记录保留 (启用时 start 重新声明) ----
     f.mgr->disable("example_plugin");
     XX_TEST_EXPECT_FALSE(inst->enabled);
     XX_TEST_EXPECT_FALSE(f.ctx->toolRegistry->contains("example_echo"));
@@ -258,8 +258,8 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     XX_TEST_EXPECT_TRUE(enabledAgain);
     {
         // 重新启用后按"插件 start 到底声明了什么"计数: 工具/hook/能力由 start 重新声明
-        // 因而与装载时一致; 事件订阅与提示词贡献是**条件性**的 (插件只补缺失项,
-        // 宿主也可能自己增减订阅), 因此只断言"至少恢复", 不断言与装载时完全相等。
+        // 因而与加载时一致; 事件订阅与提示词贡献是**条件性**的 (插件只补缺失项,
+        // 主程序也可能自己增减订阅), 因此只断言"至少恢复", 不断言与加载时完全相等。
         const auto enabled = f.mgr->registrationInventory(*inst);
         XX_TEST_EXPECT_GE(enabled.tools, inv.tools);
         XX_TEST_EXPECT_EQ(enabled.hooks, inv.hooks);
@@ -333,7 +333,7 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
     XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"from-B"});
 
-    // 外部直写 (用户/宿主代码): 直写立即生效 (模型看到的是直写值),
+    // 外部直写 (用户/主程序代码): 直写立即生效 (模型看到的是直写值),
     // 贡献会在下一次"合成"时被识别为新基础值并在其上重新应用
     f.ctx->agentConfig->prompt.setAppendSection(probeKey, "external", 0, "user");
     XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"external"});
@@ -421,7 +421,7 @@ asio::awaitable<void> test_graph_definition_slot() {
     );
     XX_TEST_EXPECT_TRUE(f.mgr->getGraphJson().find("plugin-graph-a2") != std::string::npos);
 
-    // 占用者卸载: 恢复到占用前的定义 (内置/宿主定义), slot 释放
+    // 占用者卸载: 恢复到占用前的定义 (内置/主程序定义), slot 释放
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
     XX_TEST_EXPECT_EQ(f.mgr->getGraphJson(), baseJson);
@@ -466,7 +466,7 @@ asio::awaitable<void> test_graph_slot_with_real_plugin() {
 }
 
 // ===========================================================================
-// 4. 装载失败建议 (PLG-7)
+// 4. 加载失败建议 (PLG-7)
 // ===========================================================================
 asio::awaitable<void> test_load_failure_advice() {
     auto f = co_await makeFixture();
@@ -515,7 +515,7 @@ asio::awaitable<void> test_load_failure_advice() {
         const auto msg = mgr.diagnosePluginPath(dir.string());
         XX_TEST_EXPECT_TRUE(msg.find("不存在") != std::string::npos);
     }
-    // 库文件存在但缺宿主入口符号 (用主库本体当"缺少入口符号的库")
+    // 库文件存在但缺主程序入口符号 (用主库本体当"缺少入口符号的库")
     {
         std::string candidate;
         if (auto exeDir = executableDir()) {
@@ -544,7 +544,7 @@ asio::awaitable<void> test_load_failure_advice() {
         }
         if (!candidate.empty() && fs::exists(utilxx_base::utf8ToPath(candidate))) {
             const auto msg = mgr.diagnosePluginPath(candidate);
-            XX_TEST_EXPECT_TRUE(msg.find("缺少宿主入口符号") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(msg.find("缺少主程序入口符号") != std::string::npos);
         } else {
             TEST_INFO << "[plugin_cleanup] 跳过缺入口符号用例: 未找到可用的非插件动态库"
                       << std::endl;

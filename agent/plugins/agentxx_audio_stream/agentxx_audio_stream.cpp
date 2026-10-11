@@ -216,7 +216,7 @@ static void* audioStreamAgentStart(
     return nullptr;
 }
 
-/// stop: 停止采集并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
+/// stop: 停止采集并摘除监听器 (可重复调用), 之后主程序才会调用 destroy
 static void*
     audioStreamAgentStop(AudioStreamPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.holder) {

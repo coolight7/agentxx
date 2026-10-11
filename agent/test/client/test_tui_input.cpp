@@ -142,7 +142,7 @@ void test_paste_crlf_dedup() {
     auto         comp = f.makeComponent();
 
     // 粘贴内容中的空行 (\n\n) 必须原样保留。
-    // 背景: FTXUI 解析层已把 \r 归一化为 \n, 事件层面无法区分
+    // 背景: FTXUI 解析层已把 \r 归一化为 \n, 事件方面无法区分
     // "CRLF 的第二个 \n" 与 "粘贴内容中真实的空行" —— 去重会吞掉空行
     // (如代码块中的空行), 代价大于个别 Windows 终端 (CRLF 粘贴) 多出的空行,
     // 故不做去重, 全部换行原样保留。
@@ -786,8 +786,8 @@ void test_file_picker_navigation_without_filter() {
     fs::remove_all(root, ec);
 }
 
-/// 快捷键事件映射 (agentxx/client/io/tui/tui_keybind.h): 界面按键 → 宿主快捷键格式
-/// - 与宿主 normalizeKeybindSpec 必须一致, 否则插件注册的快捷键永远匹配不上
+/// 快捷键事件映射 (agentxx/client/io/tui/tui_keybind.h): 界面按键 → 主程序快捷键格式
+/// - 与主程序 normalizeKeybindSpec 必须一致, 否则插件注册的快捷键永远匹配不上
 void test_keybind_event_mapping() {
     using agentxx::client::keybindOfEvent;
 
@@ -818,7 +818,7 @@ void test_keybind_event_mapping() {
         XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Mouse("", m)).empty());
     }
 
-    // 与宿主规范化结果对齐: 界面产物必须能被宿主原样接受 (往返一致)
+    // 与主程序规范化结果对齐: 界面产物必须能被主程序原样接受 (往返一致)
     const ftxui::Event samples[] = {
         ftxui::Event::CtrlAltK,
         ftxui::Event::AltA,

@@ -4,7 +4,7 @@
 
 ## 目录与 include
 
-- 源码按领域分目录：`core/`（lib 核心）、`plugin/`（插件）、`client/`（界面）。
+- 源码按业务分目录：`core/`（lib 核心）、`plugin/`（插件）、`client/`（界面）。
 - 头文件统一放 `include/agentxx-test/{,core/,plugin/,client/}`，与源码目录同名
   对应；`include/` 是测试唯一的 include 根，源码一律写完整路径
   （`#include "agentxx-test/core/test_xxx.h"`），不要用相对路径或短名引用，

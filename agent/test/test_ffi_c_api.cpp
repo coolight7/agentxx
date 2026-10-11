@@ -431,7 +431,7 @@ void testLifecycleAndConversation() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_get_model_info(a, &mi, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(mi.data != nullptr && std::strstr(mi.data, "currentModel") != nullptr);
     // 能力清单: model_json 的 imageInput/videoInput 声明应原样出现在 capabilities 中
-    // (宿主据此判断是否展示图片/视频输入入口; 缺失时能力判定失效)
+    // (嵌入方程序据此判断是否展示图片/视频输入入口; 缺失时能力判定失效)
     XX_TEST_EXPECT_TRUE(mi.data != nullptr && std::strstr(mi.data, "capabilities") != nullptr);
     if (mi.data != nullptr) {
         try {
@@ -626,7 +626,7 @@ void testHilInterrupt() {
         }
     }
 
-    // 在独立线程延迟应答 allow (模拟宿主 UI 异步操作)
+    // 在独立线程延迟应答 allow (模拟嵌入方程序 UI 异步操作)
     int32_t     respondRc = -999;
     std::thread responder([a, interruptId, &respondRc]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -897,7 +897,7 @@ void testSendInputJsonAndAttachments() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &inputSv, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
 
-    // 受理回执 (input_ack) 经 EVT_WIRE 透出: 宿主据此展示受理状态与拒绝原因
+    // 受理回执 (input_ack) 经 EVT_WIRE 透出: 嵌入方程序据此展示受理状态与拒绝原因
     {
         bool sawAck = false;
         for (const auto& [type, payload] : [&]() {
@@ -1323,7 +1323,7 @@ void testSendWire() {
     mock.stop();
 }
 
-/// 12) 宿主工具与文本合批接口: tool_register / tool_unregister / tool_respond / set_delta_batch
+/// 12) 嵌入方程序工具与文本合批接口: tool_register / tool_unregister / tool_respond / set_delta_batch
 void testHostToolAndDeltaBatch() {
     FfiMockLLM mock;
     uint16_t   port = 0;
@@ -1340,7 +1340,7 @@ void testHostToolAndDeltaBatch() {
     XX_TEST_EXPECT_TRUE(a != nullptr);
     XX_TEST_EXPECT_EQ(agentxx_ffi_start(a, &log), AGENTXX_FFI_OK);
 
-    // 1. 注册宿主工具
+    // 1. 注册嵌入方程序工具
     std::string toolJson = R"({
         "tools": [{
             "name": "my_host_tool",

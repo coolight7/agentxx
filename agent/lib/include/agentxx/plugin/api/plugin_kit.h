@@ -1,12 +1,12 @@
-/// 插件开发 SDK (C++ header-only) —— agentxx 侧领域部分
+/// 插件开发 SDK (C++ header-only) —— agentxx 侧业务部分
 ///
-/// 分层 (插件框架内核已拆分为 cxx_pluginxx 独立工程):
+/// 分层 (插件框架已拆分为 cxx_pluginxx 独立工程):
 /// - **通用部分**位于 `pluginxx/kit/kit.h`: 跨边界字符串工具 (PluginStringView /
 ///   PluginString)、通用接口表查询与聚合、实例级 Logger、Task/锚定协程原语、
 ///   CancelRegistry / OpCtl / ArgReader、后台任务 spawn、通用导出宏 —— 本头在开头
 ///   包含它, 并把其中的名字逐条 using 引入 `agentxx::plugin`, 插件源码书写
 ///   `agentxx::plugin::Xxx` 与拆分前完全一致;
-/// - **本头只提供 agent 领域 helper**: 接口表聚合 (AgentIfaces / ClientIfaces)、
+/// - **本头只提供 agent 业务 helper**: 接口表聚合 (AgentIfaces / ClientIfaces)、
 ///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool / fast_tool / blocking_tool /
 ///   polled_tool)、钩子 (hook)、图节点 (graph node)、工具权限声明、阻塞便捷调用
 ///   (call_tool_blocking)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
@@ -61,11 +61,11 @@ namespace plugin {
 
 /* ==================== 通用 SDK 名的引入 (pluginxx/kit/kit.h) ====================
  *
- * 插件源码一直书写 `agentxx::plugin::Xxx`, 为保持**插件源码零改动**, 这里把内核通用
+ * 插件源码一直书写 `agentxx::plugin::Xxx`, 为保持**插件源码零改动**, 这里把插件框架通用
  * 部分的名字逐条引入本命名空间:
  * - 类型本体只有 `pluginxx` 一份 (using 声明不产生新类型, 无 ODR 风险);
  * - `agentxx::plugin::Task<T>` 与 `pluginxx::Task<T>` 是同一模板;
- * - 新增内核通用名字时按需在此追加一行, 引入面始终显式可读。
+ * - 新增插件框架通用名字时按需在此追加一行, 引入面始终显式可读。
  *
  * 注意: 这不是"转发头"——没有 `agentxx/plugin/api/plugin_kit_core.h` 之类的路径兼容层,
  * 通用 SDK 只能经 `pluginxx/kit/kit.h` 包含。
@@ -103,7 +103,7 @@ using pluginxx::yield;
 
 /* ==================== 接口表聚合 ==================== */
 
-/// agent 侧接口表聚合 (一次查询; 成员为 NULL 表示宿主未实现该接口)
+/// agent 侧接口表聚合 (一次查询; 成员为 NULL 表示主程序未实现该接口)
 struct AgentIfaces {
     const AgentxxPluginToolsIface*      tools        = nullptr; ///< "agentxx.agent.tools"
     const AgentxxPluginPermissionIface* permission   = nullptr; ///< "agentxx.agent.permission"
@@ -131,7 +131,7 @@ struct AgentIfaces {
     /// "pluginxx.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
 
-    /// 从宿主查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
+    /// 从主程序查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const PluginxxHost* host) {
         AgentIfaces f;
         if (!host || !host->vtable || !host->vtable->query_interface) {
@@ -173,7 +173,7 @@ struct AgentIfaces {
     }
 };
 
-/// client 侧接口表聚合 (一次查询; 成员为 NULL 表示宿主未实现该接口)
+/// client 侧接口表聚合 (一次查询; 成员为 NULL 表示主程序未实现该接口)
 struct ClientIfaces {
     const AgentxxClientUiIface*      ui      = nullptr; ///< "agentxx.client.ui"
     const AgentxxClientEventsIface*  events  = nullptr; ///< "agentxx.client.events"
@@ -185,7 +185,7 @@ struct ClientIfaces {
     const AgentxxClientTimerIface*   timer   = nullptr; ///< "agentxx.client.timer"
     const AgentxxClientKeybindIface* keybind = nullptr; ///< "agentxx.client.keybind"
 
-    /// 从宿主查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
+    /// 从主程序查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
     static ClientIfaces query(const PluginxxHost* host) {
         ClientIfaces f;
         if (!host || !host->vtable || !host->vtable->query_interface) {
@@ -368,15 +368,15 @@ private:
     std::vector<std::string> required_;
 };
 
-/* ==================== 插件实例上下文基类 (agentxx 领域扩展) ==================== */
+/* ==================== 插件实例上下文基类 (agentxx 业务扩展) ==================== */
 
 /// agentxx 插件实例上下文基类
 ///
 /// 通用能力 (host / iface / log / config / workDir / language / strdup / jsonEscape /
 /// cancelRegistry / 协程驱动桥 / 后台协作任务) 全部继承自 [pluginxx::PluginBaseT],
 /// 以 agent 侧接口表聚合 [AgentIfaces] 作为其模板实参;
-/// 本类只补齐 agent 领域 helper: 工具模式构建 (schema)、工具提示词描述 (toolPrompt)、
-/// 会话共享存储 (addShareStore), 并在 [onHostReady] 中挂钩领域事件。
+/// 本类只补齐 agent 业务 helper: 工具模式构建 (schema)、工具提示词描述 (toolPrompt)、
+/// 会话共享存储 (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
 class PluginBase : public pluginxx::PluginBaseT<AgentIfaces> {
 public:
 
@@ -385,7 +385,7 @@ public:
         return ToolSchemaBuilder(toolPrompt(toolName));
     }
 
-    /// 工具提示词描述 (经宿主 agentxx.agent.config 接口表查询; 缺失时返回空描述)
+    /// 工具提示词描述 (经主程序 agentxx.agent.config 接口表查询; 缺失时返回空描述)
     ToolPromptText toolPrompt(std::string_view tool) const {
         ToolPromptText res;
         if (!host || !iface.config || !iface.config->get_tool_prompt) {
@@ -416,7 +416,7 @@ public:
         return res;
     }
 
-    /// 写入会话共享存储 (经宿主 agentxx.agent.session 接口表)
+    /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表)
     int64_t addShareStore(PluginxxStringView tid, std::string_view content) const {
         if (!host || !iface.session || !iface.session->add_share_store) {
             return -1;
@@ -429,9 +429,9 @@ public:
         return addShareStore(PluginStringView::from(tid.data(), tid.size()), content);
     }
 
-    /// 读取会话 LLM 上下文 (经宿主 agentxx.agent.context 接口表)
+    /// 读取会话 LLM 上下文 (经主程序 agentxx.agent.context 接口表)
     /// - 上下文不在图状态里 (会话为唯一权威), 需要内容时经此查询
-    /// - 返回 JSON 数组文本; 宿主未实现该能力或查询失败时返回空串
+    /// - 返回 JSON 数组文本; 主程序未实现该能力或查询失败时返回空串
     std::string getSessionMessages(std::string_view tid) const {
         if (!host || !iface.context || !iface.context->get_messages) {
             return {};
@@ -446,7 +446,7 @@ public:
         return text;
     }
 
-    /// 会话 LLM 上下文条数 (宿主未实现该能力时返回 -1)
+    /// 会话 LLM 上下文条数 (主程序未实现该能力时返回 -1)
     int64_t sessionMessagesCount(std::string_view tid) const {
         if (!host || !iface.context || !iface.context->messages_count) {
             return -1;
@@ -457,8 +457,8 @@ public:
 
 protected:
 
-    /// 领域挂钩: 基类 [init] 末尾调用 —— 挂钩会话轮次开始事件, 自动为当前会话重置
-    /// 实例级取消登记 (宿主下发 cancel 时已通过 execute_cancel 写入 CancelRegistry)
+    /// 业务挂钩: 基类 [init] 末尾调用 —— 挂钩会话轮次开始事件, 自动为当前会话重置
+    /// 实例级取消登记 (主程序下发 cancel 时已通过 execute_cancel 写入 CancelRegistry)
     void onHostReady() override {
         if (!iface.events || !iface.events->subscribe) {
             return;
@@ -489,13 +489,13 @@ protected:
 
 private:
 
-    /// 会话轮次开始事件的订阅句柄 (实例销毁时由宿主随实例一并清理)
+    /// 会话轮次开始事件的订阅句柄 (实例销毁时由主程序随实例一并清理)
     PluginxxSubscription* roundStartSub_ = nullptr;
 };
 
-/* ==================== 内核 detail 名的引入 (pluginxx/kit/kit.h) ====================
+/* ==================== 插件框架 detail 名的引入 (pluginxx/kit/kit.h) ====================
  *
- * 领域 helper (polled_tool / graph node / call_tool awaiter) 需要内核协程设施的
+ * 业务 helper (polled_tool / graph node / call_tool awaiter) 需要插件框架协程设施的
  * detail 类型与函数; 同样以 using 声明引入, 类型本体仍在 pluginxx::detail 一份。
  */
 
@@ -602,7 +602,7 @@ struct CallToolAwaiter {
                 auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
                 handle.promise().clear_outstanding();
 
-                // 桥接路径不在宿主回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
+                // 桥接路径不在主程序回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
                 resumePluginCoroutine(s->bridge, handle);
             },
             holder,
@@ -670,7 +670,7 @@ inline detail::CallToolAwaiter call_tool(
 
 /// 功能点实现的登记选项
 struct FeatureImplOptions {
-    /// 层内顺序, 小者先 (插件默认 0; 宿主默认 1000); 越界由宿主裁剪并记警告
+    /// 层内顺序, 小者先 (插件默认 0; 主程序默认 1000); 越界由主程序裁剪并记警告
     int32_t priority = 0;
     /// 自报的最大耗时 (毫秒; 0 = 不限, 默认): 与点的 impl_timeout_ms 取较小非 0 值
     int32_t defaultTimeoutMs = 0;
@@ -694,7 +694,7 @@ struct FeaturePointSpec {
 
 namespace detail {
 
-/// 把插件业务体返回的文本包成宿主认识的回答 JSON
+/// 把插件业务体返回的文本包成主程序认识的回答 JSON
 /// - 已经是完整回答 (`{"value":...}` / `{"disable":...}` / `{"verdict":...}`) 时原样返回;
 /// - 合法 JSON 标量/数组/对象 → `{"value": <该 JSON>}`;
 /// - 非 JSON 文本 → `{"value": "<文本>"}`
@@ -792,7 +792,7 @@ struct FeatureCallAwaiter {
                 auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
                 handle.promise().clear_outstanding();
 
-                // 桥接路径不在宿主回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
+                // 桥接路径不在主程序回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
                 resumePluginCoroutine(s->bridge, handle);
             },
             holder,
@@ -828,7 +828,7 @@ struct FeatureCallAwaiter {
     /// - `return`: 受限结果 JSON 文本 (`{"ok":...}`; 失败时 `{"ok":false,"error":...}`)
     std::string await_resume() {
         if (!st->startError.empty()) {
-            // 受理失败: 与宿主的坏参数/不支持的语义区分开, 这里直接抛
+            // 受理失败: 与主程序的坏参数/不支持的语义区分开, 这里直接抛
             throw std::runtime_error("call_feature start failed: " + st->startError);
         }
         if (st->status == PLUGINXX_OPERATOR_CANCELLED) {
@@ -844,7 +844,7 @@ struct FeatureCallAwaiter {
 
 /// 声明插件自己的功能点 (本轮只允许 provide; 声明期间恒可被调用)
 ///
-/// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与宿主点冲突)
+/// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
 inline int32_t defineFeaturePoint(const PluginBase& ctx, const FeaturePointSpec& spec) {
     if (!ctx.iface.feature || !ctx.iface.feature->define_point) {
         return -1;
@@ -870,7 +870,7 @@ inline int32_t undefineFeaturePoint(const PluginBase& ctx, std::string_view id) 
     return ctx.iface.feature->undefine_point(ctx.host, &idSv);
 }
 
-/// 把协程实现 (`Task<T>`) 的返回值包成宿主认识的回答 JSON
+/// 把协程实现 (`Task<T>`) 的返回值包成主程序认识的回答 JSON
 ///
 /// 同步实现 (`std::string` 形态) 由 kit 自动包装, 协程实现则是"返回什么就发什么",
 /// 因此协程里请用它包一层, 两种形态写起来一致:
@@ -970,7 +970,7 @@ inline int32_t
             p.cancelFlag_ = job->cancelFlag;
             job->coroAddr = h.address();
 
-            // 根的首步由宿主 driver 推进 (与 hook/tool 的异步形态一致)
+            // 根的首步由主程序 driver 推进 (与 hook/tool 的异步形态一致)
             detail::startBridgedRoot(shimPtr->ctx->bridge(), p.notify_, h, [job] {
                 delete job;
             });
@@ -1009,7 +1009,7 @@ inline int32_t unprovideFeature(const PluginBase& ctx, std::string_view pointId)
     return ctx.iface.feature->unregister_impl(ctx.host, &idSv);
 }
 
-/// 读功能点清单 (JSON 文本; 宿主不支持或查询失败返回空串)
+/// 读功能点清单 (JSON 文本; 主程序不支持或查询失败返回空串)
 inline std::string listFeaturePoints(const PluginBase& ctx) {
     if (!ctx.iface.feature || !ctx.iface.feature->list_points) {
         return {};
@@ -1029,7 +1029,7 @@ inline std::string listFeaturePoints(const PluginBase& ctx) {
 /// 调用一个功能点 (协程形态; 结果 JSON 文本 `{"ok":...}`)
 /// - 只拿数据: 调用不写值缓存、不记置空、不改调用方会话
 /// - 调用本身的失败 (no_impl / disabled / busy / not_callable / bad_args / failed)
-///   在结果的 `ok:false` + `error` 里, 不是异常; 受理失败 (参数非法 / 宿主不支持) 抛异常
+///   在结果的 `ok:false` + `error` 里, 不是异常; 受理失败 (参数非法 / 主程序不支持) 抛异常
 /// - **本实例自己的实现不会被问到** (避免无用往返): 同一插件内部要取值请直接调本地函数;
 ///   没有其它实现时结果是 `no_impl`
 inline detail::FeatureCallAwaiter
@@ -1109,7 +1109,7 @@ inline void tool(
         auto* shim = static_cast<ToolShim*>(user_data);
         (void)error_out;
         // 先建立拥有型 Request，再把视图交给业务代码：协程挂起期间 args/
-        // session/tool_call_id 由 Job 持有，不再指向宿主借用缓冲区。
+        // session/tool_call_id 由 Job 持有，不再指向主程序借用缓冲区。
         auto request = detail::RootRequest::forTool(
             shim && shim->ctx ? shim->ctx->host : nullptr,
             args_json,
@@ -1151,7 +1151,7 @@ inline void tool(
         job->coroAddr = h.address();
 
         // 根的首步由 host driver 推进 (不在 execute_start 里同步跑插件协程,
-        // 因此不会有 completion 重入, 也不会占住宿主 IO 线程)。
+        // 因此不会有 completion 重入, 也不会占住主程序 IO 线程)。
         detail::startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
             delete job;
         });
@@ -1467,7 +1467,7 @@ inline void blocking_tool(
                         j->notify.done(j->notify.host_ud, st, &payload);
                     }
                     // OpCore::onEndpointDone 先在当前调用内线性化
-                    // completionSubmitted_，因此 notify.done 返回后，宿主
+                    // completionSubmitted_，因此 notify.done 返回后，主程序
                     // cancel 入口不会再把这个 provider handle 交回插件。
                     // 这使得 Job 可以在这里直接回收，不依赖第二个异步
                     // post，也不会留下自引用控制块泄漏。
@@ -1531,12 +1531,12 @@ inline void blocking_tool(
  * 适用: 业务体是 **asio 协程**、等待的是**插件本地 reactor 上的内核就绪事件**
  * (socket 收发 / 子进程管道 / 文件 IO / 本地 steady_timer) 的工具。
  *
- * 为什么需要它: 这类等待没有"宿主可见唤醒源" —— driver 里的 `poll_one` 只会执行
+ * 为什么需要它: 这类等待没有"主程序可见唤醒源" —— driver 里的 `poll_one` 只会执行
  * 已经就绪的 handler, 不会让私有 reactor 的等待对象到期。因此插件在注册时就
  * **声明**"该工具需要受控轮询驱动", 桥据此在有未完成的操作时继续申请请求:
  * - 有进展 (本轮 `poll_one` 执行到了 handler) → 立即续下一次请求;
- * - 无进展 → 退避 `PollOneBridge::kPollIntervalMs` (宿主计时器) 后再驱动;
- * - 连续有进展超过 `PollOneBridge::kPollBurstMax` 步 → 强制让出一次, 交给宿主;
+ * - 无进展 → 退避 `PollOneBridge::kPollIntervalMs` (主程序计时器) 后再驱动;
+ * - 连续有进展超过 `PollOneBridge::kPollBurstMax` 步 → 强制让出一次, 交给主程序;
  * - **没有未完成的 polled 操作时不申请请求、不建定时器** (空闲零开销)。
  *
  * 业务签名与 [blocking_tool] 完全一致 (只把返回值换成 `asio::awaitable<std::string>`),
@@ -1551,7 +1551,7 @@ inline void blocking_tool(
  * ```
  *
  * 约束 (与实现一起遵守):
- * - **不要**在 polled 协程里做重 CPU/阻塞工作: 它运行在宿主 IO 线程上
+ * - **不要**在 polled 协程里做重 CPU/阻塞工作: 它运行在主程序 IO 线程上
  *   (目录遍历 / 全文件扫描 / 向量相似度这类继续用 `blocking_tool`);
  * - **不要**在 polled 协程里 `co_await` kit 的 `Task` 型原语 (`sleep`/`call_tool`/
  *   `invoke_cap`): 它们的 awaiter 依赖 kit 自有 promise 接口, 而这里是
@@ -1561,7 +1561,7 @@ inline void blocking_tool(
 
 namespace detail {
 
-/// 受控轮询工具的 Job 侧取消查询 (kit 自造的会话级令牌, 不是宿主 token):
+/// 受控轮询工具的 Job 侧取消查询 (kit 自造的会话级令牌, 不是主程序 token):
 /// 只读 Job 的取消标志与实例 CancelRegistry, 生命周期与该 polled 根相同。
 /// 模板参数是 `polled_tool` 内的局部 Job 类型 (在其完整之后实例化)。
 template<typename Job>
@@ -1763,7 +1763,7 @@ inline void polled_tool(
             // 注册到桥的 reactor, 由受控轮询推进 (首步恒异步, 不在本调用内执行)。
             asio::co_spawn(bridge->local_executor(), detail::runPolledPumpJob(job), asio::detached);
         } catch (...) {
-            // 首步都无法排队: 按**拒绝**处理 (未产生任何宿主可见副作用),
+            // 首步都无法排队: 按**拒绝**处理 (未产生任何主程序可见副作用),
             // 回收 Job 并返回 NULL + error。
             bridge->removePolledRoot(job->root);
             auto keep = job->root;
@@ -1851,7 +1851,7 @@ struct HookJob {
     RootRequest                        request;
 };
 
-/// 提供给宿主的执行体 (与 AgentxxPluginHookSpec/Ex::hook_start 同签名)
+/// 提供给主程序的执行体 (与 AgentxxPluginHookSpec/Ex::hook_start 同签名)
 template<typename Ctx, typename HookFn>
 inline void* hookStart(
     void*                         user_data,
@@ -1888,7 +1888,7 @@ inline void* hookStart(
         return nullptr;
     } else {
         /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
-        /// 通知，返回 Job 作为宿主可取消的 provider 句柄（F19）。
+        /// 通知，返回 Job 作为主程序可取消的 provider 句柄（F19）。
         auto* job
             = new JobT{shim, std::make_shared<std::atomic<bool>>(false), nullptr, std::move(request)};
         auto task = invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
@@ -1907,7 +1907,7 @@ inline void* hookStart(
         job->coroAddr = h.address();
 
         // 根的首步由 host driver 推进 (不在 start 里同步跑插件协程,
-        // 因此没有 completion 重入, 也不占住宿主 IO 线程)。
+        // 因此没有 completion 重入, 也不占住主程序 IO 线程)。
         startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
             delete job;
         });
@@ -1915,7 +1915,7 @@ inline void* hookStart(
     }
 }
 
-/// 提供给宿主的取消回调 (与 AgentxxPluginHookSpec/Ex::hook_cancel 同签名)
+/// 提供给主程序的取消回调 (与 AgentxxPluginHookSpec/Ex::hook_cancel 同签名)
 template<typename Ctx, typename HookFn>
 inline void hookCancel(void* user_data, void* op) {
     (void)user_data;
@@ -1955,7 +1955,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
 /// 钩子登记选项 (有序登记; 见 `agentxx.agent.hooks` 接口表)
 struct HookOptions {
     /// 层内顺序, 小者先 (插件默认 0 = 按登记顺序 = 插件加载顺序)
-    /// - 越界由宿主裁剪到上下限并记一条警告 (不拒绝登记)
+    /// - 越界由主程序裁剪到上下限并记一条警告 (不拒绝登记)
     int32_t priority = 0;
     /// 展示归属标签 (处理器清单里显示; 可空)
     std::string ownerTag;
@@ -1968,7 +1968,7 @@ struct HookOptions {
 /// 与 [hook] 的区别:
 /// - 不覆盖: 同一实例同一个点可以登记多个处理器, 各自句柄;
 /// - 可排顺序: `priority` 小的先跑, 相同则按登记顺序;
-/// - 可写清单信息: `ownerTag` / `depict` 出现在宿主清单 (`listHooks`) 里。
+/// - 可写清单信息: `ownerTag` / `depict` 出现在主程序清单 (`listHooks`) 里。
 ///
 /// `return`: 句柄 (> 0); **0 = 主程序不支持或登记被拒**。
 ///
@@ -2051,11 +2051,11 @@ inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& r
 /// 与 tool/hook/capability 使用同一套生命周期与完成协议：
 /// - 输入（node/config/state/thread_id）由 [RootRequest] 拥有，跨挂起点有效（F13）；
 /// - 返回 `std::string`：快同步节点，调用返回即完成（异常 → FAILED）；
-/// - 返回 `Task<std::string>`：锚定协程节点，宿主获得可取消的 provider 句柄，
+/// - 返回 `Task<std::string>`：锚定协程节点，主程序获得可取消的 provider 句柄，
 ///   完成通知在协程真正结束后 exactly-once 发出；
 /// - `run_cancel` 置取消标志并取消嵌套 awaiter。
 ///
-/// `return`: 0 = 注册成功；非 0 = 类型名冲突或宿主不支持（调用方应使 start 事务失败）。
+/// `return`: 0 = 注册成功；非 0 = 类型名冲突或主程序不支持（调用方应使 start 事务失败）。
 template<typename Ctx, typename NodeFn>
 inline int32_t
     graph_node(Ctx& ctx, std::string_view type, std::string_view configSchema, NodeFn&& fn) {
@@ -2134,7 +2134,7 @@ inline int32_t
             return nullptr;
         } else {
             /// Task<T> 节点：由 promise 在协程结束后完成通知，
-            /// 返回 Job 作为宿主可取消的 provider 句柄。
+            /// 返回 Job 作为主程序可取消的 provider 句柄。
             auto* job = new NodeJob{shim, std::move(cancelFlag), nullptr, std::move(request)};
             auto task = detail::invokeGraphNode(shim->fn, *shim->ctx, job->request, std::move(ctl));
             if (!task.handle_) {
@@ -2152,7 +2152,7 @@ inline int32_t
             job->coroAddr = h.address();
 
             // 根的首步由 host driver 推进 (不在 start 里同步跑插件协程,
-            // 因此没有 completion 重入, 也不占住宿主 IO 线程)。
+            // 因此没有 completion 重入, 也不占住主程序 IO 线程)。
             detail::startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
                 delete job;
             });
@@ -2182,14 +2182,14 @@ inline int32_t
  *
  * 工具权限限制由工具来源方 (插件) 在注册工具后声明: 声明"哪些参数是受约束
  * 目标"以及读/写作用域; 具体判定 (白/黑名单、permission.mode 默认规则、
- * 用户记住的选择、工作区隔离、完全授权) 由宿主权限中间件统一执行, 插件
+ * 用户记住的选择、工作区隔离、完全授权) 由主程序权限中间件统一执行, 插件
  * 不参与判定。
  *
  * 典型用法 (文件系统类工具):
  *     blocking_tool(ctx, "my_read", depict, schema, fn);
  *     registerReadPathPermission(ctx, "my_read", "path");
  *
- * 权限声明属于附加能力: 宿主未装配权限中间件时返回非 0, 插件可忽略 (工具
+ * 权限声明属于附加能力: 主程序未装配权限中间件时返回非 0, 插件可忽略 (工具
  * 照常可用, 只是不参与权限判定)。
  */
 
@@ -2236,7 +2236,7 @@ inline int32_t registerToolPermission(
     return iface->register_tool_permission(host, &abiSpec);
 }
 
-/// 声明工具权限 (从插件实例上下文取宿主与接口表)
+/// 声明工具权限 (从插件实例上下文取主程序与接口表)
 template<typename Ctx>
 inline int32_t registerToolPermission(const Ctx& ctx, const ToolPermissionSpec& spec) {
     return registerToolPermission(ctx.host, ctx.iface.permission, spec);
@@ -2275,7 +2275,7 @@ inline int32_t registerWritePathPermission(
     return registerToolPermission(ctx, spec);
 }
 
-/// 撤销工具权限声明 (工具注销/插件禁用卸载时由宿主自动撤销, 一般无需手动调用)
+/// 撤销工具权限声明 (工具注销/插件禁用卸载时由主程序自动撤销, 一般无需手动调用)
 template<typename Ctx>
 inline int32_t unregisterToolPermission(const Ctx& ctx, std::string_view toolName) {
     if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->unregister_tool_permission
@@ -2306,7 +2306,7 @@ enum class PathDecision : int32_t {
 
 /// 批量查询路径权限 (三态; 不发起询问/不产生中断)
 /// - 入参 [paths] 建议为绝对路径 (相对路径按会话工作目录解析)
-/// - `return` 与 [paths] 等长的判定数组; 宿主不支持或调用失败时返回**空数组**
+/// - `return` 与 [paths] 等长的判定数组; 主程序不支持或调用失败时返回**空数组**
 ///   (调用方应跳过过滤按原行为处理, 而不是把路径当成拒绝)
 inline std::vector<PathDecision> checkPathDecisions(
     const PluginxxHost*                 host,
@@ -2315,7 +2315,7 @@ inline std::vector<PathDecision> checkPathDecisions(
     std::string_view                    sessionId,
     const std::vector<std::string>&     paths
 ) {
-    // 单次批量上限与宿主一致 (见 plugin_manager_vtable.cpp); 超出由调用方分批
+    // 单次批量上限与主程序一致 (见 plugin_manager_vtable.cpp); 超出由调用方分批
     constexpr size_t kMaxBatch = 16384;
     if (!host || !iface || !iface->check_paths || paths.empty() || paths.size() > kMaxBatch) {
         return {};
@@ -2344,7 +2344,7 @@ inline std::vector<PathDecision> checkPathDecisions(
     return out;
 }
 
-/// 同上 (从插件实例上下文取宿主与接口表)
+/// 同上 (从插件实例上下文取主程序与接口表)
 template<typename Ctx>
 inline std::vector<PathDecision> checkPathDecisions(
     const Ctx&                      ctx,
@@ -2374,8 +2374,8 @@ inline PathDecision checkPathDecision(
 
 /// 批量过滤路径 (工具内使用): 返回与 [paths] 等长的标记数组 (1 = 已明确允许)
 /// - Deny 与 Ask 都标记为不可访问 (fail-closed: 未获批准的范围不进入结果)
-/// - 宿主不支持查询时返回**空数组**, 调用方应跳过过滤 (保持原行为)
-/// - 内部按 [batchSize] 分批调用宿主 (默认 512 项, 避免长占宿主 io 线程),
+/// - 主程序不支持查询时返回**空数组**, 调用方应跳过过滤 (保持原行为)
+/// - 内部按 [batchSize] 分批调用主程序 (默认 512 项, 避免长占主程序 io 线程),
 ///   并对相同路径去重后查询
 inline std::vector<uint8_t> filterPathPermissions(
     const PluginxxHost*                 host,
@@ -2432,7 +2432,7 @@ inline std::vector<uint8_t> filterPathPermissions(
     return allowed;
 }
 
-/// 同上 (从插件实例上下文取宿主与接口表)
+/// 同上 (从插件实例上下文取主程序与接口表)
 template<typename Ctx>
 inline std::vector<uint8_t> filterPathPermissions(
     const Ctx&                      ctx,
@@ -2744,7 +2744,7 @@ public:
             }
             it->second(args);
         } catch (...) {
-            // handler 异常不外泄 C 边界 (宿主另有兜底, 此处静默吞掉)
+            // handler 异常不外泄 C 边界 (主程序另有兜底, 此处静默吞掉)
         }
     }
 
@@ -2889,12 +2889,12 @@ public:
     //
     // 这些方法是展示注册接口的薄封装: 用界面描述层 (cxx_pluginxx_ui, `pluginxx::ui`)
     // 的构建器 (`pluginxx::ui::build` / kit) 或直接构造组件项后提交给面板/Info 段落/
-    // overlay, 避免各处手写 JSON 拼装。宿主不支持对应子能力时返回非 0, 插件应
+    // overlay, 避免各处手写 JSON 拼装。主程序不支持对应子能力时返回非 0, 插件应
     // 按返回值降级 (通常是改用更简单的组件或纯文本)。
     //
     // 插件可用 `agentxx::ui` 指代描述层与扩展 kit (`agentxx::ui::kit`)。
 
-    /// 组件树 → 提交给宿主的 JSON 形态 (`{"items":[…]}`)
+    /// 组件树 → 提交给主程序的 JSON 形态 (`{"items":[…]}`)
     static std::string itemsJson(const std::vector<pluginxx::ui::Item>& items) {
         utilxx_base::Json j = utilxx_base::Json::object();
         j["items"]          = pluginxx::ui::dumpBlocks(items);
@@ -3037,7 +3037,7 @@ public:
             return *this;
         }
 
-        /// 提交 (幂等; 返回宿主状态码, 0 = 成功)
+        /// 提交 (幂等; 返回主程序状态码, 0 = 成功)
         int32_t commit() {
             if (committed_) {
                 return 0;
@@ -3070,7 +3070,7 @@ public:
     };
 
     /// 更新某次工具调用的消息装饰 (见 [DecorSpec])
-    /// - 空 `toolCallId` 或宿主不支持消息装饰时返回非 0 (插件应降级为不装饰)
+    /// - 空 `toolCallId` 或主程序不支持消息装饰时返回非 0 (插件应降级为不装饰)
     int32_t setToolDecor(std::string_view toolCallId, const DecorSpec& decor) const {
         if (!host || !iface.ui || !iface.ui->update_tool_decor || toolCallId.empty()) {
             return -1;
@@ -3101,10 +3101,10 @@ public:
 
     // ==================== 能力协商查询 ====================
 
-    /// 宿主是否声明了某个能力名 (查 `get_client_state().interfaces`)
+    /// 主程序是否声明了某个能力名 (查 `get_client_state().interfaces`)
     /// - 能力名常量见 `agentxx/plugin/plugin_interfaces.h` 的 plugin_interfaces 命名空间
     ///   (如 "agentxx.client.components" / "agentxx.client.form")
-    /// - 老宿主未提供该能力时返回 false, 插件据此降级 (不报错、不静默丢内容)
+    /// - 老主程序未提供该能力时返回 false, 插件据此降级 (不报错、不静默丢内容)
     bool hostSupports(std::string_view capability) const {
         if (capability.empty()) {
             return false;
@@ -3129,7 +3129,7 @@ public:
     /// ```c++
     /// if (kit.supportsBlock("Table")) { ... } else { ... }
     /// ```
-    /// 老宿主没有该段时按"描述层全支持"处理 —— 内容仍由客户端按自身能力降级
+    /// 老主程序没有该段时按"描述层全支持"处理 —— 内容仍由客户端按自身能力降级
     /// (见描述层的 `adapt`), 不会画错。
     ///
     /// 解析结果按实例缓存 (客户端能力在生命周期内不变), 因此在渲染/拼装路径里反复
@@ -3177,8 +3177,8 @@ public:
 
     /// 展示区域尺寸 (宽/高; 未上报时返回 0)
     /// - 区域 id 为面板/Info 段落的注册 id (`update_panel` / `update_info_section` 的 id)
-    /// - 宿主在每次布局后更新快照, 值变化时会另发 `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件;
-    ///   老宿主 (未声明 `agentxx.client.layout`) 该接口返回 0, 插件应降级为固定宽度
+    /// - 主程序在每次布局后更新快照, 值变化时会另发 `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件;
+    ///   老主程序 (未声明 `agentxx.client.layout`) 该接口返回 0, 插件应降级为固定宽度
     /// - 查询走 `get_client_state()`, 因此仅在 client io 线程可调 (与其它表接口一致)
     struct RegionSize {
         int width  = 0;
@@ -3226,7 +3226,7 @@ public:
         bool pauseWhenHidden = true;
     };
 
-    /// 定时器句柄: 持有宿主句柄与 std::function; 析构时自动取消
+    /// 定时器句柄: 持有主程序句柄与 std::function; 析构时自动取消
     /// - 插件只需把 shared_ptr 保存在自己的实例上下文里 (实例销毁即取消)
     class TimerHandle {
     public:
@@ -3279,7 +3279,7 @@ public:
     };
 
     /// 注册定时器 (client io 线程; 返回句柄, 失败返回 nullptr)
-    /// - 失败: spec 非法 / 宿主动画等级 Disabled / 单实例定时器超上限;
+    /// - 失败: spec 非法 / 主程序动画等级 Disabled / 单实例定时器超上限;
     ///   插件应据返回值降级 (不注册即静态展示)
     /// - 回调在 client io 线程执行; 回调内可更新面板/Info/overlay 描述
     std::shared_ptr<TimerHandle>
@@ -3309,7 +3309,7 @@ public:
         return std::make_shared<TimerHandle>(host, timer, std::move(holder));
     }
 
-    /// 关联展示区域当前是否可见 (client io 线程; 老宿主无该表返回 false)
+    /// 关联展示区域当前是否可见 (client io 线程; 老主程序无该表返回 false)
     bool isRegionVisible(std::string_view regionId) const {
         if (!host || !iface.timer || !iface.timer->is_visible || regionId.empty()) {
             return false;
@@ -3320,7 +3320,7 @@ public:
 
     // ==================== 全局快捷键 (`agentxx.client.keybind`) ====================
 
-    /// 快捷键句柄: 持有宿主句柄与 std::function; 析构时自动注销
+    /// 快捷键句柄: 持有主程序句柄与 std::function; 析构时自动注销
     class KeybindHandle {
     public:
 
@@ -3399,7 +3399,7 @@ public:
         return std::make_shared<KeybindHandle>(host, bind, std::move(holder));
     }
 
-    /// 当前已注册的快捷键列表 JSON (文本; 老宿主返回 "[]")
+    /// 当前已注册的快捷键列表 JSON (文本; 老主程序返回 "[]")
     std::string keybindListJson() const {
         if (!host || !iface.keybind || !iface.keybind->list_keybinds) {
             return "[]";
@@ -3453,8 +3453,8 @@ inline void logClientCreateFailure(
 
 /// Agent 侧插件入口导出 (生成 `agentxx_plugin_agent_{get_info,create,start,stop,destroy}`)。
 ///
-/// 内核只提供"带符号前缀"的通用导出宏 (见 `pluginxx/kit/kit.h` 的
-/// [PLUGINXX_EXPORT_PLUGIN]); 入口符号名属于本宿主命名空间, 因此在这里包一层。
+/// 插件框架只提供"带符号前缀"的通用导出宏 (见 `pluginxx/kit/kit.h` 的
+/// [PLUGINXX_EXPORT_PLUGIN]); 入口符号名属于本主程序命名空间, 因此在这里包一层。
 /// 运行时由 PluginManager::entrySymbols() 交出同一批符号名。
 #define AGENTXX_PLUGIN_AGENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn) \
     PLUGINXX_EXPORT_PLUGIN(agentxx_plugin_agent_, CtxType, Name, Ver, Desc, StartFn, StopFn)

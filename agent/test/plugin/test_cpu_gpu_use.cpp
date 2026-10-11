@@ -242,9 +242,9 @@ asio::awaitable<TestResult>
         }
     }
 
-    // ---- 5. spawn 宿主托管: 周期采集任务注册到宿主 + 卸载 ----
+    // ---- 5. spawn 主程序托管: 周期采集任务注册到主程序 + 卸载 ----
     // (agentxx_system_monitor 在 create 内 spawn 周期采集任务; spawn
-    // 经 agentxx.agent.tasks 接口表注册到宿主: 句柄在 outstandingOps +
+    // 经 agentxx.agent.tasks 接口表注册到主程序: 句柄在 outstandingOps +
     // inflight+1。卸载时 detachAll cancel → 协程退出 → notify → inflight 归零
     // → waitInflightZero 精确等待 → dlclose 安全, 无协程帧悬挂)
     {
@@ -252,7 +252,7 @@ asio::awaitable<TestResult>
         bool spawned = false;
         for (int i = 0; i < 100 && !spawned; ++i) {
             auto n = inst->outstandingOps.size();
-            // 采集 spawn 注册后宿主列表至少 1 项 (可能还有 client_attached 事件
+            // 采集 spawn 注册后主程序列表至少 1 项 (可能还有 client_attached 事件
             // 触发的 offload 等, 此处只要求非空)
             if (n > 0) {
                 spawned = true;
@@ -269,7 +269,7 @@ asio::awaitable<TestResult>
             XX_TEST_EXPECT_TRUE(inflightBefore > 0);
 
             // 卸载: detachAll cancel spawn → 协程退出 → notify → inflight 归零;
-            // 若 spawn 未被宿主托管 (游离), 卸载仍会返回但 inflight 无法等待到
+            // 若 spawn 未被主程序托管 (游离), 卸载仍会返回但 inflight 无法等待到
             // spawn 的退出, 这里用耗时粗略区分 (托管: 立即归零, 卸载快)
             auto t0       = std::chrono::steady_clock::now();
             bool unloaded = co_await ctx->pluginManager->unloadAsync("agentxx_system_monitor");

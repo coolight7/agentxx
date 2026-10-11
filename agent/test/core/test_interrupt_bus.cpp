@@ -734,7 +734,7 @@ asio::awaitable<void> test_permission_remember_rule() {
     co_return;
 }
 
-/// 记住权限选择 (生产总线拓扑) + 目录规则覆盖子目录与文件:
+/// 记住权限选择 (生产总线结构) + 目录规则覆盖子目录与文件:
 /// - 生产环境中权限中间件注册在 agent 全局总线 (agentContext->bus) 上, 而 IO 端点
 ///   的 interrupt/permission 服务注册在会话总线 (session->bus) 上 —— 两者是不同对象
 /// - 规则表归中间件所有, 因此"记住本次选择"经 RespPermission.remember 回传给中间件
@@ -742,7 +742,7 @@ asio::awaitable<void> test_permission_remember_rule() {
 ///   下次访问仍反复询问)
 /// - 目录规则按最长前缀匹配覆盖其下全部子目录与文件 (读/写各自一套规则)
 asio::awaitable<void> test_permission_remember_across_bus_and_dir_subtree() {
-    // 生产拓扑: 两个独立总线 (agent 全局总线 / 会话总线)
+    // 生产结构: 两个独立总线 (agent 全局总线 / 会话总线)
     auto agentBus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto sessionBus
         = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);

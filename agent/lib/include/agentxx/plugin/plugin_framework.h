@@ -1,19 +1,19 @@
-/// agentxx 插件宿主侧框架内核的命名空间入口
+/// agentxx 插件主程序侧插件框架的命名空间入口
 ///
-/// 背景: 插件框架内核 (宿主运行时 / 装载 / 清单解析 / Operation 驱动器 / SDK 基座)
-/// 已拆为独立库 `cxx_pluginxx` (命名空间 `pluginxx`), 供 agentxx / musicxx 等宿主
-/// 复用。宿主侧的插件管理器与 vtable 实现仍写在 `agentxx::plugin` 内, 若每处都
+/// 背景: 插件框架 (主程序运行时 / 加载 / 清单解析 / Operation 驱动器 / SDK 核心)
+/// 已拆为独立库 `cxx_pluginxx` (命名空间 `pluginxx`), 供 agentxx / musicxx 等主程序
+/// 复用。主程序侧的插件管理器与 vtable 实现仍写在 `agentxx::plugin` 内, 若每处都
 /// 书写 `pluginxx::` 双命名空间会显著增加噪声且容易漏改。
 ///
-/// 本头把宿主侧实际用到的内核类型/函数以**逐条 using 声明**的方式引入
+/// 本头把主程序侧实际用到的插件框架类型/函数以**逐条 using 声明**的方式引入
 /// `agentxx::plugin`, 因此:
 /// - 类型本体只有 `pluginxx` 一份 (不存在两份实现或 ODR 风险);
 /// - `agentxx::plugin::PluginInstanceBase` 与 `pluginxx::PluginInstanceBase`
 ///   是**同一个类型**, 两侧代码可自由混用;
-/// - 新增内核类型时按需在此追加一行, 导出面始终显式可读。
+/// - 新增插件框架类型时按需在此追加一行, 导出面始终显式可读。
 ///
 /// 注意: 这里不是"转发头"——没有 `agentxx/plugin/plugin_runtime.h` 之类的文件路径
-/// 兼容层; 内核头文件只能经 `pluginxx/...` 路径包含。
+/// 兼容层; 插件框架头文件只能经 `pluginxx/...` 路径包含。
 #ifndef AGENTXX_PLUGIN_FRAMEWORK_H
 #define AGENTXX_PLUGIN_FRAMEWORK_H
 
@@ -75,7 +75,7 @@ using pluginxx::OpGuardPtr;
 using pluginxx::PluginOpAwaitArgs;
 using pluginxx::PluginOperationState;
 
-// ==================== 动态库装载 (pluginxx/host/loader.h) ====================
+// ==================== 动态库加载 (pluginxx/host/loader.h) ====================
 using pluginxx::NativeLoader;
 
 // ==================== 清单解析与名称推导 (pluginxx/host/manifest.h) ====================
@@ -97,13 +97,13 @@ using pluginxx::topoSortPlugins;
 using pluginxx::CapabilityRegistry;
 using pluginxx::PluginCapabilityRegistration;
 
-// ==================== 宿主核心与领域钩子 (pluginxx/host/host_core.h) ====================
+// ==================== 插件框架的通用部分与业务数据入口 (pluginxx/host/host_core.h) ====================
 using pluginxx::DomainHooks;
 using pluginxx::EventSource;
 using pluginxx::PluginHostCore;
 using pluginxx::unsubscribePluginSubscription;
 
-// ==================== 宿主生命周期骨架 (pluginxx/host/lifecycle.h) ====================
+// ==================== 插件框架的生命周期公共实现 (pluginxx/host/lifecycle.h) ====================
 using pluginxx::PluginHostLifecycle;
 using pluginxx::PluginLoadOptions;
 

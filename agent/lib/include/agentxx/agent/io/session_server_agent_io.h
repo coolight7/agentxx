@@ -279,22 +279,22 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& sender
     );
 
-    /// 处理客户端注册宿主工具 (WireHostToolRegister)
+    /// 处理客户端注册的外部工具 (WireHostToolRegister)
     void handleHostToolRegister(
         const WireHostToolRegister&                  req,
         const std::shared_ptr<AgentIOTransportBase>& sender
     );
 
-    /// 处理客户端注销宿主工具 (WireHostToolUnregister)
+    /// 处理客户端注销的外部工具 (WireHostToolUnregister)
     void handleHostToolUnregister(
         const WireHostToolUnregister&                req,
         const std::shared_ptr<AgentIOTransportBase>& sender
     );
 
-    /// 处理客户端返回宿主工具执行结果 (WireHostToolResult)
+    /// 处理客户端返回的外部工具执行结果 (WireHostToolResult)
     void handleHostToolResult(const WireHostToolResult& resp);
 
-    /// 反向调用客户端执行宿主工具
+    /// 反向调用客户端执行主程序工具
     asio::awaitable<std::string> callHostToolAsync(
         std::shared_ptr<AgentIOTransportBase> client,
         std::string_view                      name,
@@ -444,9 +444,9 @@ private:
 
     /// 订阅事件总线 `plugin.` 前缀 (run 开始时调用一次):
     /// - 插件 publish 的事件 (topic 约定 `{插件名}.{事件名}`) 原样转发为
-    ///   WirePluginData (plugin/event/data), 宿主不解析载荷语义
+    ///   WirePluginData (plugin/event/data), 主程序不解析载荷语义
     /// - 频率由插件自身控制; 客户端据此判断插件可用性并展示
-    /// - 注册成功后向总线发布宿主约定事件 `agentxx_host.client_attached`
+    /// - 注册成功后向总线发布主程序约定事件 `agentxx_host.client_attached`
     ///   (见 kHostPluginName 注释), 双端插件可据此重发当前状态快照
     ///   (修复"一次性 status 事件先于订阅发布而丢失"的滞留显示问题)
     /// - 同时订阅权限状态变更事件 (service.permission.full_auth): 状态变化时

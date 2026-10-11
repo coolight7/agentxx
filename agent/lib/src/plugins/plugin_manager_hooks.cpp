@@ -1,19 +1,19 @@
 /// 钩子处理器注册表与派发 (接口表 `agentxx.agent.hooks` 的实现)
 ///
-/// 一个文件承载三件事:
+/// 一个文件包含三件事:
 /// 1. **注册表**: 一个钩子点 -> 处理器列表, 条目为
 ///    `{句柄, 层, 归属, 优先级, 登记序号, 归属标签, 说明, 执行体}`;
-///    顺序 = `plugin` 层 (插件 / FFI 宿主登记的) 按 `(priority 升序, 登记序号)`,
+///    顺序 = `plugin` 层 (插件 / FFI 主程序登记的) 按 `(priority 升序, 登记序号)`,
 ///    其后是 `core` 层 (库自己登记的)。不声明 `priority` (= 0) 时顺序就是登记
-///    顺序 = 插件装载顺序 (与旧行为一致);
+///    顺序 = 插件加载顺序 (与旧行为一致);
 /// 2. **单派发器**: 中间件链上只挂一个 [PluginHookDispatchHandle] —— 首次登记时
-///    插入、没有处理器时摘除; 派发时按注册表顺序串行执行处理器, 都在宿主 io 线程,
+///    插入、没有处理器时摘除; 派发时按注册表顺序串行执行处理器, 都在主程序 io 线程,
 ///    单个处理器失败只记一条警告日志并继续 (与旧实现一致);
 /// 3. **清单**: [PluginManager::hooksJson] / [PluginManager::handlersOf] —— 插件
 ///    `list_hooks`、装配快照 `hooks` 段与 `--dump-diagnostics` 共用同一份实现;
 ///    派发记录只在开发者模式下收集 (见 plan §11.4)。
 ///
-/// 线程约定: 注册表只在宿主 io 线程上读写 (注册入口由 vtable 层投递, 与工具 /
+/// 线程约定: 注册表只在主程序 io 线程上读写 (注册入口由 vtable 层投递, 与工具 /
 /// 功能点同一约定); 派发也在 io 线程执行。
 #include "agentxx/plugin/plugin_manager.h"
 
@@ -78,7 +78,7 @@ bool handlerEnabled(const std::weak_ptr<PluginInstance>& inst) {
     return ptr != nullptr && ptr->enabled;
 }
 
-/// 优先级越界裁剪到上下限并记一条警告 (不拒绝登记; 与功能点同一口径)
+/// 优先级越界裁剪到上下限并记一条警告 (不拒绝登记; 与功能点同一规则)
 int32_t clampHookPriority(int32_t point, std::string_view owner, int32_t priority) {
     if (priority < agentxx::feature::kPriorityMin || priority > agentxx::feature::kPriorityMax) {
         XX_LOGW(
@@ -411,7 +411,7 @@ bool PluginManager::removeCoreHookHandler(int64_t handle) {
 void PluginManager::ensureHookDispatch() {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
-        // 中间件链还没装配 (理论上不会: 插件在 initMiddleware 之后才装载)
+        // 中间件链还没装配 (理论上不会: 插件在 initMiddleware 之后才加载)
         XX_LOGW("钩子派发器无法挂载: 中间件上下文尚未装配");
         return;
     }
@@ -566,7 +566,7 @@ asio::awaitable<void>
             ++executed;
             continue;
         }
-        // core 层处理器: 宿主自己的实现已在 io 线程, 直接同步调用 (不走操作协议)
+        // core 层处理器: 主程序自己的实现已在 io 线程, 直接同步调用 (不走操作协议)
         // - 完成通知器是"什么都不做"的实现: 处理器里报的终态被丢弃 (钩子结果本就不用)
         // - core 层只支持同步处理器: 返回操作句柄的按"不支持"记一条警告并请求取消
         if (devMode) {

@@ -1,14 +1,14 @@
 /// agentxx_javascript_engine —— JS 解释器插件 (二期)
 ///
-/// 功能: 注册 "interpreter.js" 脚本引擎, 承载加载/卸载 type: js 的脚本插件
+/// 功能: 注册 "interpreter.js" 脚本引擎, 负责加载/卸载 type: js 的 JS 插件
 ///
 /// 线程模型 (关键设计, 统一异步操作模型):
 /// - 专用 JS 线程: 所有 QuickJS 操作集中于该线程 (QuickJS 非线程安全)
 /// - 任务队列 (互斥锁 + 条件变量): post 非阻塞投递
-/// - 工具 execute / 能力 load: 宿主 io 线程 start 入队 JS 线程后立即返回,
+/// - 工具 execute / 能力 load: 主程序 io 线程 start 入队 JS 线程后立即返回,
 ///   JS 线程执行完毕经 PluginxxOperatorNotify 上报完成 (线程安全) —— 全程无阻塞
-///   等待, 宿主 io 协程与 JS 任务交错执行; 旧版 postSync 阻塞桥已移除
-/// - JS 线程 → io 线程: host vtable 内部经 post_to_io + 同步等待 (宿主实现)
+///   等待, 主程序 io 协程与 JS 任务交错执行; 旧版 postSync 阻塞桥已移除
+/// - JS 线程 → io 线程: host vtable 内部经 post_to_io + 同步等待 (主程序实现)
 /// - 钩子/事件回调: io 线程 → post 到 JS 线程 (fire-and-forget, 不等待)
 /// - JS 内 callTool 命中本引擎工具: 同线程内联执行 (防自锁)
 /// - 卸载安全: JsPluginCtx 由 shared_ptr 管理; 跨线程经 mirror 表 (互斥锁) 查
@@ -199,7 +199,7 @@ enum BridgeMagic {
     B_CLEAR_TIMEOUT,
     B_LIST_PLUGINS,
     B_GET_PLUGIN,
-    // 会话资源扩展 (宿主 plugin_api v8)
+    // 会话资源扩展 (主程序 plugin_api v8)
     B_ADD_SKILL_DIR,
     B_REMOVE_SKILL_DIR,
     B_ADD_MEMORY_FILE,
@@ -220,14 +220,14 @@ struct ToolExecReq {
 };
 
 /// 工具绑定 (注册工具时创建, 由 JsPluginCtx 持有; execute 回调期间存活
-/// 由宿主 inflight 计数保证)
+/// 由主程序 inflight 计数保证)
 struct JsToolBinding {
     JsEngine*   engine = nullptr;
-    std::string plugin; ///< 所属脚本插件名
+    std::string plugin; ///< 所属JS 插件名
     std::string name;
 };
 
-/// 钩子/事件绑定 (注册时创建, 由 JsPluginCtx 持有; 回调期间存活由宿主
+/// 钩子/事件绑定 (注册时创建, 由 JsPluginCtx 持有; 回调期间存活由主程序
 /// inflight 计数保证)
 struct JsHookBinding {
     JsEngine*   engine = nullptr;
@@ -236,9 +236,9 @@ struct JsHookBinding {
 };
 
 /// JS 内 callTool 的跨线程完成桥:
-/// - 宿主工具完成回调运行在宿主 io 线程, 只复制结果并向 JS 线程投递 settle 任务
+/// - 主程序工具完成回调运行在主程序 io 线程, 只复制结果并向 JS 线程投递 settle 任务
 /// - resolve/reject 均为 JS 线程所属的 JSValue, 只在 JS 线程 Free
-/// - settled 原子标志保证 exactly-once (宿主协议已保证, 这里兜底)
+/// - settled 原子标志保证 exactly-once (主程序协议已保证, 这里兜底)
 struct JsCallBridge {
     JsEngine*         engine  = nullptr;
     JSContext*        ctx     = nullptr;
@@ -247,13 +247,13 @@ struct JsCallBridge {
     std::atomic<bool> settled{false};
 };
 
-/// 脚本插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
+/// JS 插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
 /// - 数据成员仅 JS 线程访问 (deleted/inflight 亦仅 JS 线程, 任务串行)
 /// - JSContext 释放: 析构函数 (全部进行中的任务结束后由最后一个持有者析构)
 struct JsPluginCtx {
     std::string         name;
     JSContext*          ctx      = nullptr;
-    const PluginxxHost* host     = nullptr; ///< 脚本插件宿主句柄
+    const PluginxxHost* host     = nullptr; ///< JS 插件主程序句柄
     JsEngine*           engine   = nullptr;
     bool                deleted  = false; ///< 已卸载 (入队任务检查后跳过)
     size_t              inflight = 0;     ///< 进行中的任务数 (execute/hook/event)
@@ -266,7 +266,7 @@ struct JsPluginCtx {
     std::vector<std::unique_ptr<JsToolBinding>> toolBindings;
     std::vector<std::unique_ptr<JsHookBinding>> hookBindings;
     /// 脚本初始化事务的撤销动作 (注册工具/钩子/订阅/资源成功时按序追加)。
-    /// 顶层执行失败或脚本卸载时逆序执行, 宿主侧不留任何残留注册。
+    /// 顶层执行失败或脚本卸载时逆序执行, 主程序侧不留任何残留注册。
     std::vector<std::function<void()>> rollbackActions;
 
     /// 逆序执行并清空撤销动作; 单个动作失败只忽略 (注销本身幂等)。
@@ -302,7 +302,7 @@ public:
     JsEngine() = default;
 
     /// 析构: 只处理已经安全停止 (或可以同步收尾) 的对象。
-    /// 宿主协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
+    /// 主程序协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
     ~JsEngine() {
         stopAndWait();
     }
@@ -322,7 +322,7 @@ public:
 
     /// 启动引擎: 创建 JSRuntime 与专用 JS 线程 (start 事务)
     /// - 幂等: 已运行时返回 true;
-    /// - 上一次停止的收尾线程必须先结束 (宿主协议: stop 完成才会再次 start),
+    /// - 上一次停止的收尾线程必须先结束 (主程序协议: stop 完成才会再次 start),
     ///   否则等待其退出后重建, 不共享已释放的 runtime/线程;
     /// - 失败 (runtime 创建失败) 返回 false 并保持停止状态, 可再次尝试。
     bool start() {
@@ -365,7 +365,7 @@ public:
     /// - 立即生效: 这是最后一次接受新任务之前的状态, 之后 post() 一律失败;
     /// - 队列中尚未开始的 JS 任务按取消/失败终结, 不再执行插件 JS 代码
     ///   (见各任务的 `stopping()` 前置检查);
-    /// - 不在调用线程 join JS 线程: JS 线程可能正阻塞在宿主 vtable 调用
+    /// - 不在调用线程 join JS 线程: JS 线程可能正阻塞在主程序 vtable 调用
     ///   (ioCallSync 等待 IO 线程) 上, 而 stop 由 IO 线程调用, 直接 join 会
     ///   自锁; 因此 join 与 JS_FreeRuntime 交给独立收尾线程;
     /// - 幂等: 停止中重复调用只追加完成回调。
@@ -387,7 +387,7 @@ public:
                     std::lock_guard<std::mutex> qlk(mtx_);
                     stop_.store(true, std::memory_order_release); ///< post() 从这里起拒绝新任务
                     // JS 线程空闲 (没有在手中的任务、队列为空) 时, 停止标志生效后
-                    // 它只会走线程退出清理路径 (不调用宿主 vtable), 因此可以在
+                    // 它只会走线程退出清理路径 (不调用主程序 vtable), 因此可以在
                     // 调用线程直接收尾: 省一次线程切换, 也让 stop→start 紧邻的
                     // 生命周期事务保持确定顺序。
                     finishInline = !busy_ && queue_.empty();
@@ -431,7 +431,7 @@ public:
     }
 
     /// 能力 "interpreter.js" 是否已由本实例注册 (start 事务幂等判定)。
-    /// 宿主在禁用/卸载时统一撤销注册, 引擎 stop 时同步清位。
+    /// 主程序在禁用/卸载时统一撤销注册, 引擎 stop 时同步清位。
     bool capabilityRegistered() const {
         return capabilityRegistered_;
     }
@@ -449,7 +449,7 @@ public:
         }
     }
 
-    /// 守卫异常日志 (noexcept; 经本实例宿主接口表输出 —— 多实例契约:
+    /// 守卫异常日志 (noexcept; 经本实例主程序接口表输出 —— 多实例契约:
     /// 不读任何全局, 日志归属精确到本引擎实例)
     void guardLog(const char* msg) const noexcept {
         agentxx::plugin::logTo(
@@ -468,7 +468,7 @@ public:
         };
     }
 
-    /// 引擎插件宿主句柄 (供静态桥回调读取; 可空)
+    /// JS 运行时插件主程序句柄 (供静态桥回调读取; 可空)
     const PluginxxHost* host() const {
         return engineHost_;
     }
@@ -480,7 +480,7 @@ public:
 
 private:
 
-    /// 宿主 log 接口表缓存 (setEngineHost 装配; 随实例生死)
+    /// 主程序 log 接口表缓存 (setEngineHost 装配; 随实例生死)
     const PluginxxLogIface* logIface_ = nullptr;
 
 public:
@@ -544,8 +544,8 @@ public:
         doUnloadScript(name);
     }
 
-    /// 宿主工具完成 (任意线程): 复制结果并投递回 JS 线程 settle Promise。
-    /// - 完成回调由宿主在调用方 IO 线程派发, 调用期间 caller/provider lease
+    /// 主程序工具完成 (任意线程): 复制结果并投递回 JS 线程 settle Promise。
+    /// - 完成回调由主程序在调用方 IO 线程派发, 调用期间 caller/provider lease
     ///   均被持有, 因此 engine 与其 JS 线程必然存活。
     /// - 引擎已停止时 post 失败: 不触碰 JSValue, 只释放桥 (JSContext 即将整体释放)。
     static void PLUGINXX_CALL
@@ -607,7 +607,7 @@ public:
         delete bridge;
     }
 
-    /// 【JS 线程】立即拒绝 (宿主同步拒绝 call_tool_async 的路径)
+    /// 【JS 线程】立即拒绝 (主程序同步拒绝 call_tool_async 的路径)
     static void
         rejectCallNow(JSContext* ctx, JSValue resolve, JSValue reject, const std::string& msg) {
         JSValue err = JS_NewError(ctx);
@@ -647,7 +647,7 @@ public:
     }
 
     /// 工具 execute 桥 —— 异步启动 (统一异步操作模型):
-    /// 【宿主 io 线程】调用; 任务入队 JS 线程后立即返回句柄,
+    /// 【主程序 io 线程】调用; 任务入队 JS 线程后立即返回句柄,
     /// 完成结果由 JS 线程经 notifier 上报 (线程安全), io 线程零阻塞
     static void* PLUGINXX_CALL toolExecuteStart(
         void*                         ud,
@@ -659,7 +659,7 @@ public:
     );
 
     /// 钩子回调桥 —— 异步启动 (统一异步操作模型):
-    /// 【宿主 io 线程】调用; post 到 JS 线程 (fire-and-forget, 与旧语义一致)
+    /// 【主程序 io 线程】调用; post 到 JS 线程 (fire-and-forget, 与旧语义一致)
     /// 后立即内联完成通知
     static void* PLUGINXX_CALL hookStart(
         void*                         ud,
@@ -717,7 +717,7 @@ public:
 
     // ==================== 跨线程镜像 ====================
 
-    /// 查找脚本插件上下文 (跨线程; 返回强引用保证存活)
+    /// 查找JS 插件上下文 (跨线程; 返回强引用保证存活)
     std::shared_ptr<JsPluginCtx> findPlugin(const std::string& name) {
         std::lock_guard<std::mutex> lk(mirrorMtx_);
         auto                        it = mirror_.find(name);
@@ -864,7 +864,7 @@ private:
                 }
                 if (queue_.empty()) {
                     // 仅定时器到期: 直接执行后继续等待。
-                    // 执行定时器回调期间视为"忙": 期间可能调用宿主 vtable,
+                    // 执行定时器回调期间视为"忙": 期间可能调用主程序 vtable,
                     // 停止请求必须交给收尾线程 (见 requestStop)。
                     busy_ = true;
                     lk.unlock();
@@ -876,7 +876,7 @@ private:
                 task = std::move(queue_.front());
                 queue_.pop_front();
                 // 任务在手中 (取任务与置忙在同一临界区内完成): 本线程此后可能
-                // 调用宿主 vtable, 停止请求不得在调用线程直接 join。
+                // 调用主程序 vtable, 停止请求不得在调用线程直接 join。
                 busy_ = true;
             }
             taskStart_ = std::chrono::steady_clock::now();
@@ -900,7 +900,7 @@ private:
             }
         }
         timers_.clear();
-        // 2. 残余插件上下文 (正常路径引擎卸载前脚本插件已级联卸载; 兜底释放,
+        // 2. 残余插件上下文 (正常路径引擎卸载前JS 插件已级联卸载; 兜底释放,
         //    保证 JS_FreeRuntime 前所有 JSContext 已 Free, 无 gc 断言)
         for (auto& [name, pctx] : plugins_) {
             (void)name;
@@ -982,7 +982,7 @@ private:
         return 0;
     }
 
-    /// 撤销脚本产生的宿主注册与脚本定时器 (失败回滚与脚本卸载共用)。
+    /// 撤销脚本产生的主程序注册与脚本定时器 (失败回滚与脚本卸载共用)。
     void rollbackScriptEffects(const std::shared_ptr<JsPluginCtx>& pctx) {
         if (!pctx) {
             return;
@@ -1008,9 +1008,9 @@ private:
         }
         auto pctx     = it->second;
         pctx->deleted = true;
-        pctx->host    = nullptr; // 后续任务不得再调用宿主
+        pctx->host    = nullptr; // 后续任务不得再调用主程序
         // 脚本卸载同样是注册事务的收尾: 注销该脚本注册的工具/钩子/订阅/资源,
-        // 不留悬垂 user_data (宿主 detachAll 只覆盖引擎实例整体卸载的场景)。
+        // 不留悬垂 user_data (主程序 detachAll 只覆盖引擎实例整体卸载的场景)。
         rollbackScriptEffects(pctx);
         plugins_.erase(it);
         {
@@ -1148,7 +1148,7 @@ private:
             JS_FreeValue(pctx->ctx, fn);
         }
         // done 只在 JS 回调真正结束 (或确认插件已卸载) 之后触发:
-        // 宿主 middleware 会等待该 op 的完成通知。
+        // 主程序 middleware 会等待该 op 的完成通知。
         if (notify.done) {
             auto errSv = agentxx::plugin::PluginStringView::from(errText.data(), errText.size());
             notify.done(
@@ -1317,7 +1317,7 @@ private:
         return out;
     }
 
-    /// 把 PromiseOutcome 的拒绝原因转成宿主错误文本 (调用方随后 Free outcome.value)
+    /// 把 PromiseOutcome 的拒绝原因转成主程序错误文本 (调用方随后 Free outcome.value)
     std::string rejectedText(JSContext* ctx, PromiseOutcome& out) {
         if (out.kind == PromiseOutcome::Kind::Timeout
             || out.kind == PromiseOutcome::Kind::Cancelled) {
@@ -1417,7 +1417,7 @@ private:
         def("clearTimeout", B_CLEAR_TIMEOUT, 1);
         def("listPlugins", B_LIST_PLUGINS, 0);
         def("getPlugin", B_GET_PLUGIN, 1);
-        // 会话资源扩展 (宿主 plugin_api v8): Skill/Memory/MCP 贡献
+        // 会话资源扩展 (主程序 plugin_api v8): Skill/Memory/MCP 贡献
         def("addSkillDir", B_ADD_SKILL_DIR, 1);
         def("removeSkillDir", B_REMOVE_SKILL_DIR, 1);
         def("addMemoryFile", B_ADD_MEMORY_FILE, 1);
@@ -1481,11 +1481,11 @@ private:
 
     std::chrono::steady_clock::time_point taskStart_;
 
-    /// 能力 "load" 的活动 op 占位 token (宿主只当不透明非空句柄; 每实例独立)
+    /// 能力 "load" 的活动 op 占位 token (主程序只当不透明非空句柄; 每实例独立)
     int capOpToken_ = 0;
 
     /// 定时器集合版本号: 注册/清除/执行都会递增, 作为等待条件的唤醒依据
-    /// (只做"是否变化"判断, 不承载业务语义)
+    /// (只做"是否变化"判断, 不代表业务语义)
     uint64_t timerEpoch_ = 0;
 
     /// 定时器 (setTimeout; JS 线程访问; fn 为 Dup 引用, 到期执行后 Free)
@@ -1523,7 +1523,7 @@ private:
         return out;
     }
 
-    /// 脚本插件表 (JS 线程访问)
+    /// JS 插件表 (JS 线程访问)
     std::map<std::string, std::shared_ptr<JsPluginCtx>, std::less<>> plugins_;
     /// 跨线程镜像 <name, weak_ptr> (互斥锁保护)
     std::mutex                                                     mirrorMtx_;
@@ -1532,7 +1532,7 @@ private:
 
 /// 工具 execute 异步桥 (统一异步操作模型):
 /// - start: io 线程调用 —— 打包请求入队 JS 线程, 立即返回 op 句柄
-///   (execute_poll 留 NULL, 宿主只等完成通知)
+///   (execute_poll 留 NULL, 主程序只等完成通知)
 /// - JS 线程执行完毕后经 notifier 上报结果 (线程安全; payload host->alloc)
 void* JsEngine::toolExecuteStart(
     void*                         ud,
@@ -1542,7 +1542,7 @@ void* JsEngine::toolExecuteStart(
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
-    // C ABI 回调异常守卫: start 由宿主 io 线程调用 (请求打包/入队含分配),
+    // C ABI 回调异常守卫: start 由主程序 io 线程调用 (请求打包/入队含分配),
     // 异常经通知器上报 OP_FAILED, 不外泄
     auto* binding = static_cast<JsToolBinding*>(ud);
     auto* engine = binding ? binding->engine : nullptr; ///< 提升至 try 外 (catch 日志闭包使用)
@@ -1564,8 +1564,8 @@ void* JsEngine::toolExecuteStart(
             tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
         };
 
-        // op 句柄仅作占位标识 (宿主不解释其内容): 所有权随任务闭包移交 JS 线程,
-        // 通知完成后由闭包自身释放 —— 支持同一引擎插件被多实例加载/反复加载
+        // op 句柄仅作占位标识 (主程序不解释其内容): 所有权随任务闭包移交 JS 线程,
+        // 通知完成后由闭包自身释放 —— 支持同一JS 运行时插件被多实例加载/反复加载
         // (此前成功路径 new 后无人 delete, 每次工具执行泄漏句柄)
         auto*                  op      = new int(0);
         PluginxxOperatorNotify ntfCopy = *notify;
@@ -1619,7 +1619,7 @@ void* JsEngine::toolExecuteStart(
         }
         return op;
     } catch (...) {
-        // 异常分类上报 + 经通知器上报失败 (宿主 io 线程等通知, 必须终结)
+        // 异常分类上报 + 经通知器上报失败 (主程序 io 线程等通知, 必须终结)
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             engine->guardLog(m);
         });
@@ -1643,7 +1643,7 @@ void* JsEngine::hookStart(
     PluginxxString*               error_out
 ) {
     (void)error_out;
-    // C ABI 回调异常守卫: start 由宿主 io 线程调用, 异常经通知器上报
+    // C ABI 回调异常守卫: start 由主程序 io 线程调用, 异常经通知器上报
     auto* binding = static_cast<JsHookBinding*>(ud);
     auto* engine = binding ? binding->engine : nullptr; ///< 提升至 try 外 (catch 日志闭包使用)
     try {
@@ -1673,7 +1673,7 @@ void* JsEngine::hookStart(
             return nullptr;
         }
         // 已接受: 返回非空 provider 句柄 (binding 由脚本上下文持有到卸载;
-        // 宿主 detachAll 时的 provider lease 保证其存活), 完成通知在 JS 线程
+        // 主程序 detachAll 时的 provider lease 保证其存活), 完成通知在 JS 线程
         // 于回调真正结束后触发 (见 doHookFire)。
         return binding;
     } catch (...) {
@@ -1693,7 +1693,7 @@ void* JsEngine::hookStart(
 void JsEngine::eventFire(const PluginxxStringView* event_json, void* ud) {
     auto* binding = static_cast<JsHookBinding*>(ud);
     auto* engine  = binding ? binding->engine : nullptr;
-    // C ABI 回调异常守卫: 事件分发由宿主 io 线程调用, 异常不外泄
+    // C ABI 回调异常守卫: 事件分发由主程序 io 线程调用, 异常不外泄
     agentxx::plugin::guardCallVoid(
         [engine](const char* m) noexcept {
             if (engine) {
@@ -1800,7 +1800,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "registerTool: name and execute function required");
             }
 
-            // 工具绑定 (宿主 execute 回调 → 本插件)
+            // 工具绑定 (主程序 execute 回调 → 本插件)
             auto binding    = std::make_unique<JsToolBinding>();
             binding->engine = engine;
             binding->plugin = pctx->name;
@@ -1877,7 +1877,7 @@ JSValue JsEngine::bridgeCall(
             // F17: callTool 始终返回 Promise, 完成事件回到 JS 线程 settle。
             // - 本引擎 JS 工具: 同线程执行并把结果/内部 Promise 链到外层 Promise
             //   (不阻塞等待, 内部 Promise 由外层驱动的 job/timer/队列泵推进)
-            // - 宿主插件工具: call_tool_async + 完成回调投递回 JS 线程 (不再
+            // - 主程序插件工具: call_tool_async + 完成回调投递回 JS 线程 (不再
             //   call_tool_blocking 阻塞 JS 线程, 消除 A/B 脚本互调自锁)
             JSValue resolving[2];
             JSValue promise = JS_NewPromiseCapability(ctx, resolving);
@@ -1925,7 +1925,7 @@ JSValue JsEngine::bridgeCall(
             }
             JS_FreeValue(ctx, entry);
 
-            // 2) 宿主插件工具: 异步互调, 完成回调经 JS 线程 settle
+            // 2) 主程序插件工具: 异步互调, 完成回调经 JS 线程 settle
             auto* bridge = new JsCallBridge{engine, ctx, resolving[0], resolving[1]};
             auto  nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
             auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
@@ -2083,7 +2083,7 @@ JSValue JsEngine::bridgeCall(
             JS_SetPropertyStr(ctx, entry, "topic", JS_NewString(ctx, topic.c_str()));
             JS_SetPropertyStr(ctx, entry, "handler", JS_DupValue(ctx, argv[1]));
             JS_SetPropertyStr(ctx, entry, "token", JS_NewInt32(ctx, static_cast<int32_t>(len)));
-            // 宿主订阅句柄: 拆高低 32 位存储 (JS number 为 double, 直接存指针
+            // 主程序订阅句柄: 拆高低 32 位存储 (JS number 为 double, 直接存指针
             // 会丢低位精度; BigInt 依赖 libbf 未裁剪)
             uint64_t subPtr = reinterpret_cast<uint64_t>(sub);
             JS_SetPropertyStr(
@@ -2114,8 +2114,8 @@ JSValue JsEngine::bridgeCall(
             JS_ToUint32(ctx, &token, argv[0]);
             JSValue entry = JS_GetPropertyUint32(ctx, pctx->agents, token);
             if (JS_IsObject(entry)) {
-                // 释放宿主订阅 (防事件持续投递到已退订的脚本插件:
-                // 退订后宿主不再回调, 插件卸载时也无残留)
+                // 释放主程序订阅 (防事件持续投递到已退订的JS 插件:
+                // 退订后主程序不再回调, 插件卸载时也无残留)
                 uint64_t subPtr = 0;
                 JSValue  loV    = JS_GetPropertyStr(ctx, entry, "subPtrLo");
                 JSValue  hiV    = JS_GetPropertyStr(ctx, entry, "subPtrHi");
@@ -2225,7 +2225,7 @@ JSValue JsEngine::bridgeCall(
         }
 
         // ---- 会话资源扩展 (v8): Skill/Memory/MCP 贡献 ----
-        // - 注册失败 (与主配置 yaml/其他插件冲突或宿主不支持) 抛 JS 异常;
+        // - 注册失败 (与主配置 yaml/其他插件冲突或主程序不支持) 抛 JS 异常;
         //   注销失败 (不存在/不属于本插件) 返回 false
         case B_ADD_SKILL_DIR:
         case B_ADD_MEMORY_FILE: {
@@ -2289,7 +2289,7 @@ JSValue JsEngine::bridgeCall(
                 }
                 JS_FreeValue(ctx, tv);
             }
-            // spec JSON 拼装经宿主 json_escape (防注入/转义错误; 失败时 SDK 内部回退为本地转义)
+            // spec JSON 拼装经主程序 json_escape (防注入/转义错误; 失败时 SDK 内部回退为本地转义)
             if (!iface.json) {
                 return JS_ThrowInternalError(ctx, "addMcpServer: json interface unavailable");
             }
@@ -2329,7 +2329,7 @@ JSValue JsEngine::bridgeCall(
 }
 
 // =====================================================================
-// 插件入口 (宿主 dlsym)
+// 插件入口 (主程序 dlsym)
 // =====================================================================
 
 extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
@@ -2349,11 +2349,11 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(voi
 /// - 统一异步操作模型: 快速校验在 io 线程内联完成; 脚本执行 (慢) 入队 JS
 ///   线程, 完成后经 notifier 上报 —— 全程无 postSync 阻塞等待, 根除
 ///   io↔引擎互等死锁面 (旧模型依赖"提供者回调在调用方线程"规则规避)
-/// - caller_host: 脚本插件 (C++ 壳) 的宿主句柄 —— 脚本内 agentxx.registerTool
-///   等注册动作经此挂到调用方插件实例 (宿主 detachAll 统一清理)
-/// - "load" args: {"name": 脚本插件名, "path": 脚本文件路径}; 完成 payload:
+/// - caller_host: JS 插件 (C++ 壳) 的主程序句柄 —— 脚本内 agentxx.registerTool
+///   等注册动作经此挂到调用方插件实例 (主程序 detachAll 统一清理)
+/// - "load" args: {"name": JS 插件名, "path": 脚本文件路径}; 完成 payload:
 ///   {"ok": true, "tools": [...]} (JSON, host->alloc)
-/// - "unload" args: {"name": 脚本插件名}; 投递式, 内联完成 {"ok": true}
+/// - "unload" args: {"name": JS 插件名}; 投递式, 内联完成 {"ok": true}
 static void* PLUGINXX_CALL jsCapStart(
     void*                         ctx,
     const PluginxxHost*           caller_host,
@@ -2362,7 +2362,7 @@ static void* PLUGINXX_CALL jsCapStart(
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
-    // C ABI 回调异常守卫: 能力方法 start 由宿主 op 驱动器在 io 线程调用,
+    // C ABI 回调异常守卫: 能力方法 start 由主程序 op 驱动器在 io 线程调用,
     // 内含接口查询/文件读取/字符串操作等可抛路径, 异常转 error_out 失败
     auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
@@ -2383,7 +2383,7 @@ static void* PLUGINXX_CALL jsCapStart(
             args_json && args_json->data ? args_json->data : "{}",
             args_json ? static_cast<size_t>(args_json->size) : 0
         };
-        // 参数解析经宿主 client 无关的 agentxx.agent.json 接口表 (对转义/嵌套结构可靠;
+        // 参数解析经主程序 client 无关的 agentxx.agent.json 接口表 (对转义/嵌套结构可靠;
         // caller_host 与本插件同进程, 接口表为同一批静态数据)
         const agentxx::plugin::AgentIfaces callerIf
             = agentxx::plugin::AgentIfaces::query(caller_host);
@@ -2453,7 +2453,7 @@ static void* PLUGINXX_CALL jsCapStart(
                 })) {
                 return setErr("interpreter.js engine stopped");
             }
-            // 活动 op 占位 (宿主只等完成通知; execute_poll 留 NULL)。
+            // 活动 op 占位 (主程序只等完成通知; execute_poll 留 NULL)。
             // 用实例成员地址而非函数级 static: 同一动态库多实例并存时
             // 每个实例各自持有稳定地址, 不共享可变静态存储。
             return engine->capOpToken();
@@ -2469,7 +2469,7 @@ static void* PLUGINXX_CALL jsCapStart(
             if (!engine->post([engine, name, ntfCopy]() {
                     if (engine->stopping()) {
                         // 停止中: 脚本上下文由 JS 线程退出路径统一释放,
-                        // 不再执行脚本 rollback (宿主侧注册此时已撤销)。
+                        // 不再执行脚本 rollback (主程序侧注册此时已撤销)。
                         auto errSv = agentxx::plugin::PluginStringView::fromCstr(
                             "interpreter.js engine stopped"
                         );
@@ -2491,7 +2491,7 @@ static void* PLUGINXX_CALL jsCapStart(
         }
         return nullptr;
     } catch (...) {
-        // 异常分类上报 + 尽力设置 error_out (宿主按 OP_FAILED 处理)
+        // 异常分类上报 + 尽力设置 error_out (主程序按 OP_FAILED 处理)
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             if (engine) {
                 engine->guardLog(m);
@@ -2509,9 +2509,9 @@ static void* PLUGINXX_CALL jsCapStart(
 
 extern "C" PLUGINXX_EXPORT int
     agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 装配宿主句柄),
+    // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 装配主程序句柄),
     // 不创建 runtime/线程, 也不提交任何运行时注册; 异常返回
-    // -1 走宿主加载失败清理路径
+    // -1 走主程序加载失败清理路径
     JsEngine* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* m) noexcept {
@@ -2529,14 +2529,14 @@ extern "C" PLUGINXX_EXPORT int
             engine->setEngineHost(host);
 
             // COM 风格接口表查询: entry 内一次性查询全部已知 IID (存入局部;
-            // 不可用函数级 static —— 多实例加载时各宿主接口表指针不同)
+            // 不可用函数级 static —— 多实例加载时各主程序接口表指针不同)
             const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
             if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
                 delete engine;
                 raw = nullptr;
                 return -1;
             }
-            *plugin_ctx = engine; ///< 所有权移交宿主 (destroy 时取回归还)
+            *plugin_ctx = engine; ///< 所有权移交主程序 (destroy 时取回归还)
             return 0;
         }
     );
@@ -2547,9 +2547,9 @@ extern "C" PLUGINXX_EXPORT int
 ///
 /// - create 阶段不启动线程/不注册: disable→enable 往返等价于一次 stop+start,
 ///   引擎线程与脚本上下文都按事务重建, 不存在"线程已存在但实例已停用"的中间态;
-/// - 线程启动失败或能力注册失败 → 返回 NULL + error, 宿主回滚本次加载 (注册
+/// - 线程启动失败或能力注册失败 → 返回 NULL + error, 主程序回滚本次加载 (注册
 ///   失败时先停止刚启动的引擎, 不留线程/运行时残留);
-/// - 重复 start: 引擎已运行时幂等成功, 能力注册在宿主侧按 owner+名称去重。
+/// - 重复 start: 引擎已运行时幂等成功, 能力注册在主程序侧按 owner+名称去重。
 static void* PLUGINXX_CALL jsEngineStart(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
@@ -2576,11 +2576,11 @@ static void* PLUGINXX_CALL jsEngineStart(
             return setErr("interpreter.js start: host lacks capabilities interface");
         }
         if (engine->capabilityRegistered()) {
-            // 重复 start (幂等): 能力仍由本实例持有, 宿主尚未撤销
+            // 重复 start (幂等): 能力仍由本实例持有, 主程序尚未撤销
         } else {
-            // 能力 "interpreter.js" (异步方法处理器三件套): 脚本插件 (C++ 壳) 经
+            // 能力 "interpreter.js" (异步方法处理器三件套): JS 插件 (C++ 壳) 经
             // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
-            // 宿主不参与; load/unload 均为异步完成 (JS 线程执行)
+            // 主程序不参与; load/unload 均为异步完成 (JS 线程执行)
             auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
             int  rc    = iface.capabilities
                          ->register_capability_ex(host, &capSv, &jsCapStart, nullptr, engine);
@@ -2621,7 +2621,7 @@ static void* PLUGINXX_CALL jsEngineStart(
 /// - 队列中尚未开始的任务按取消终结 (不执行插件 JS 代码); 已经开始的执行
 ///   由 drivePromise 观察 stop 标志后按取消完成;
 /// - JS 线程的 join 与 JS_FreeRuntime 交给收尾线程执行 (不能在 IO 线程直接
-///   join: JS 线程可能在宿主 vtable 调用中等待 IO 线程), done 在收尾完成后
+///   join: JS 线程可能在主程序 vtable 调用中等待 IO 线程), done 在收尾完成后
 ///   从收尾线程上报 (完成通知允许来自任意线程)。
 static void* PLUGINXX_CALL jsEngineStop(
     void*                         plugin_ctx,
@@ -2640,7 +2640,7 @@ static void* PLUGINXX_CALL jsEngineStop(
             return nullptr;
         }
         PluginxxOperatorNotify ntfCopy = *notify;
-        // 能力注册由宿主在停用/卸载时统一撤销 (detachInstanceRegistrations /
+        // 能力注册由主程序在停用/卸载时统一撤销 (detachInstanceRegistrations /
         // detachAll), 这里只清本实例的幂等标记。
         engine->setCapabilityRegistered(false);
         engine->requestStop([engine, ntfCopy]() mutable {
@@ -2683,8 +2683,8 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_stop(
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
     // C ABI 边界异常守卫: 销毁回调 (同步等待停止收尾 = 停线程 + 释放 runtime)
-    // 异常不得外泄, 否则 JS 线程/runtime 泄漏且宿主卸载流程被打断;
-    // 先借本实例宿主句柄装配日志闭包再 delete (delete 后不得访问成员)
+    // 异常不得外泄, 否则 JS 线程/runtime 泄漏且主程序卸载流程被打断;
+    // 先借本实例主程序句柄装配日志闭包再 delete (delete 后不得访问成员)
     const PluginxxHost*     ownHost = engine ? engine->host() : nullptr;
     const PluginxxLogIface* ownLog  = nullptr;
     if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {

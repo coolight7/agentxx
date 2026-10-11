@@ -1,8 +1,8 @@
 #pragma once
 
-/// 终端按键事件 → 快捷键描述 (与宿主的 `normalizeKeybindSpec` 同一套规则)
+/// 终端按键事件 → 快捷键描述 (与主程序的 `normalizeKeybindSpec` 同一套规则)
 ///
-/// 背景: 插件经 `agentxx.client.keybind` 表注册全局快捷键, 注册时宿主把键位描述
+/// 背景: 插件经 `agentxx.client.keybind` 表注册全局快捷键, 注册时主程序把键位描述
 /// 规范化 (小写 + 修饰键固定顺序, 如 `"ctrl+alt+k"`); 界面侧收到按键事件后必须
 /// 转成同一格式的字符串才能做匹配 —— 本文件就是那次转换的**唯一实现**。
 ///
@@ -12,7 +12,7 @@
 /// - 独立功能键: `f1`~`f12` / 方向键 (含 ctrl 变体) / home / end / pageup /
 ///   pagedown / insert / delete / backspace / tab / enter / esc
 /// - **无修饰键的可打印字符不作快捷键** (返回空串): 否则会与输入框抢字符
-///   (宿主侧注册同样的键位也会失败, 两侧规则一致)
+///   (主程序侧注册同样的键位也会失败, 两侧规则一致)
 ///
 /// 相关: 能力声明见 [tui_plugin_adapter.h]; 键位格式见
 /// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)

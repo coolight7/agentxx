@@ -30,8 +30,8 @@ namespace agent {
 /// - 语义与旧 BaseAgent::runTurnAsync / AgentHost::spawnOneTask
 ///   内联的中断循环完全一致, 消除两份复制与行为漂移
 /// - 中断分派 (按 interrupt handle name):
-///   - "subagent": 经 ctx->bus 请求 service.subagent (宿主在根与子代理总线上
-///     统一 registerServer; 嵌套委派与根委派完全同路径, 不需要宿主函数直调)
+///   - "subagent": 经 ctx->bus 请求 service.subagent (主程序在根与子代理总线上
+///     统一 registerServer; 嵌套委派与根委派完全同路径, 不需要主程序函数直调)
 ///   - 其他: 经 session->bus 请求 service.interrupt (HIL, 由 IO 端点应答)
 /// - 取消: cancelToken 传入, operation_aborted 按取消语义由调用方
 ///   (catchErrorAsync) 处理

@@ -1066,7 +1066,7 @@ static UICmdResult uiControlExecuteOne(const UiCmdFields& f) {
 std::string uiControlExecute(const utilxx_base::Json& arguments) {
     if (!arguments.is_object() || !arguments.contains("commands")
         || !arguments["commands"].is_array()) {
-        // 参数检查失败抛异常 (宿主统一按工具错误结果回给模型), 不返回编码后的 JSON
+        // 参数检查失败抛异常 (主程序统一按工具错误结果回给模型), 不返回编码后的 JSON
         throw std::invalid_argument{"Arg `commands` is required and must be an array"};
     }
     const auto& arr         = arguments["commands"];

@@ -5,7 +5,7 @@
 /// - start:  校验 "interpreter.js" 能力可用后, 把同目录 plugin.js 交给引擎执行,
 ///           脚本内注册的工具/订阅全部属于本实例的注册事务;
 /// - stop:   通知引擎卸载脚本 (撤销脚本注册), 引擎不可用时只记录;
-/// - destroy: 只释放本地状态, 不再调用宿主接口。
+/// - destroy: 只释放本地状态, 不再调用主程序接口。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -26,7 +26,7 @@ struct ShellCtx {
     std::string                  scriptPath;
     /// 脚本是否已由引擎加载 (load 成功后置位, stop 撤销; 仅在所属 IO 线程访问)
     bool scriptLoaded = false;
-    /// start/stop 的 op 占位句柄 (宿主只当不透明非空 token; 每实例独立)
+    /// start/stop 的 op 占位句柄 (主程序只当不透明非空 token; 每实例独立)
     int opToken = 0;
 };
 
@@ -47,7 +47,7 @@ bool fileExists(const std::string& p) {
     return std::filesystem::exists(p, ec);
 }
 
-/// 拼装 JSON 转义后的字符串字段 (经宿主 json 接口表, 避免路径/名称转义错误)
+/// 拼装 JSON 转义后的字符串字段 (经主程序 json 接口表, 避免路径/名称转义错误)
 /// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
 std::string jsonEscapedString(const ShellCtx& ctx, const std::string& value) {
     return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, value);
@@ -62,7 +62,7 @@ std::string scriptArgsJson(const ShellCtx& ctx) {
     );
 }
 
-/// 脚本加载完成 (异步 start 的收尾): 宿主 io 线程派发, 期间 caller lease
+/// 脚本加载完成 (异步 start 的收尾): 主程序 io 线程派发, 期间 caller lease
 /// 保证本实例上下文存活。
 void PLUGINXX_CALL onScriptLoadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
     auto* state = static_cast<std::pair<ShellCtx*, PluginxxOperatorNotify>*>(ud);
@@ -115,7 +115,7 @@ void PLUGINXX_CALL onScriptUnloadDone(void* ud, int32_t status, const PluginxxSt
     );
 }
 
-/// 通知引擎卸载本脚本 (best-effort: 引擎不可用时宿主已完成撤销)
+/// 通知引擎卸载本脚本 (best-effort: 引擎不可用时主程序已完成撤销)
 void dispatchScriptUnload(ShellCtx& ctx) {
     if (!ctx.scriptLoaded) {
         return;
@@ -241,9 +241,9 @@ extern "C" PLUGINXX_EXPORT int
 
 /// start 事务: 依赖能力校验 + 脚本加载。
 /// - 加载经 "interpreter.js" 能力异步执行, 脚本注册的工具/订阅属于本实例;
-///   因此 start 必须等加载结束才 done (返回宿主托管句柄, 完成回调上报结果);
+///   因此 start 必须等加载结束才 done (返回主程序托管句柄, 完成回调上报结果);
 /// - 能力不可用或脚本缺失 → 返回 NULL + error (拒绝); 加载失败 → done FAILED;
-///   两条路径都由宿主回滚本次加载, 不留注册残留。
+///   两条路径都由主程序回滚本次加载, 不留注册残留。
 static void*
     jsShellAgentStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     auto setErr = [&](const std::string& msg) -> void* {
@@ -304,7 +304,7 @@ static void*
 
 /// stop 事务: 通知引擎卸载脚本 (撤销脚本注册的工具/订阅/定时器)。
 /// - 引擎已停用/卸载时卸载调用失败: 只记录, 脚本上下文由引擎的停止路径释放;
-/// - 卸载 op 自身持有本实例 caller lease, 宿主会等它完成后才 destroy;
+/// - 卸载 op 自身持有本实例 caller lease, 主程序会等它完成后才 destroy;
 /// - 本函数同步完成 stop 本身 (卸载为 fire-and-forget, 无阻塞等待)。
 static void*
     jsShellAgentStop(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
@@ -328,7 +328,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
             if (!ctx) {
                 return;
             }
-            // destroy 只处理已经停止的对象: 不再调用宿主接口、不创建异步工作
+            // destroy 只处理已经停止的对象: 不再调用主程序接口、不创建异步工作
             // (脚本注销与上下文释放由 stop 与引擎的停止路径完成)
             delete ctx;
         }

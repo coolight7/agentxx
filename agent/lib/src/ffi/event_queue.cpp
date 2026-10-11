@@ -2,13 +2,13 @@
 ///
 /// 背景见 [ffi_api.h](/agent/lib/include/agentxx/ffi_api.h) "异步安全事件队列"
 /// 注释: on_event 在内部 client-io 线程
-/// 同步回调且 payload 仅回调期间有效, 无法同步拷贝 payload 的宿主语言运行时
+/// 同步回调且 payload 仅回调期间有效, 无法同步拷贝 payload 的嵌入方程序语言运行时
 /// (Dart NativeCallable.listener 等) 经本桥接安全接收事件。
 ///
 /// 线程模型:
 /// - 入队 (agentxx_ffi_event_queue_on_event): 任意线程 (实际为 client-io 线程),
 ///   仅做字符串拷贝 + mutex/deque 操作, 不阻塞 io 调度
-/// - 出队 (agentxx_ffi_event_queue_pop): 宿主线程, condition_variable 有界等待
+/// - 出队 (agentxx_ffi_event_queue_pop): 嵌入方程序线程, condition_variable 有界等待
 /// - free: 唤醒全部等待者并置 closed, 等待者以 AGENTXX_FFI_ERR_STATE 返回
 
 #include "agentxx/ffi_api.h"
@@ -24,8 +24,8 @@
 #include <utility>
 
 struct AgentxxFFIEventQueue {
-    /// 队列积压上限 (超限丢最旧): 流式 delta 高频场景下宿主停轮询的兜底,
-    /// 防止无界增长 OOM; 正常 CLI/GUI 宿主轮询间隔 << 1s, 远达不到该量级
+    /// 队列积压上限 (超限丢最旧): 流式 delta 高频场景下嵌入方程序停轮询的兜底,
+    /// 防止无界增长 OOM; 正常 CLI/GUI 嵌入方程序轮询间隔 << 1s, 远达不到该量级
     static constexpr size_t kMaxQueued = 16384;
 
     std::mutex                                  m;
@@ -84,10 +84,10 @@ void AGENTXX_FFI_CALL agentxx_ffi_event_queue_on_event(
     {
         std::lock_guard<std::mutex> lock(q->m);
         if (q->closed) {
-            return; // 队列已销毁/正在销毁: 丢弃 (宿主已停止处理)
+            return; // 队列已销毁/正在销毁: 丢弃 (嵌入方程序已停止处理)
         }
         if (q->items.size() >= AgentxxFFIEventQueue::kMaxQueued) {
-            // 超限丢最旧, 并补发一条错误提示让宿主可感知丢失
+            // 超限丢最旧, 并补发一条错误提示让嵌入方程序可感知丢失
             q->items.pop_front();
             q->items.emplace_back(
                 static_cast<int32_t>(AGENTXX_FFI_EVT_ERROR),
@@ -155,7 +155,7 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_event_queue_pop(
     *type_out = item.first;
 
     // payload 拷出为独立分配的 NUL 结尾 UTF-8 字符串 (统一经 agentxx_ffi_malloc
-    // 分配通道, 宿主用后 agentxx_ffi_string_free 释放)
+    // 分配通道, 嵌入方程序用后 agentxx_ffi_string_free 释放)
     char* out = nullptr;
     try {
         const size_t n = item.second.size();

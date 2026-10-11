@@ -98,7 +98,7 @@ asio::awaitable<void> test_host_registry() {
     co_return;
 }
 
-/// 验证: 宿主派生子代理端到端 (根 agent 总线 service.subagent → 宿主 → 独立 agent)
+/// 验证: agent 节点容器派生子代理端到端 (根 agent 总线 service.subagent → agent 节点容器 → 独立 agent)
 /// - 子代理使用独立 AgentContext (配置为轻量: 不建 MCP 连接)
 /// - 输出 = 模拟 LLM 响应; 子代理节点运行后回收 (registry 仅剩 root)
 /// - agent.progress / agent.done 事件发布
@@ -700,9 +700,9 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
 }
 
 /// 验证: 嵌套委派 (子代理再派生子代理, P3 扁平化总线路径)
-/// - 根 agent 执行 agentxx_subagent tool → 中断 → 根总线委派 → 宿主派生 A
+/// - 根 agent 执行 agentxx_subagent tool → 中断 → 根总线委派 → agent 节点容器派生 A
 /// - A 执行 agentxx_subagent tool → 中断 → A 自身总线 (service.subagent 由
-///   宿主 registerServer) 委派 → 宿主派生 B (与根委派完全同路径, 无宿主函数直调)
+///   agent 节点容器 registerServer) 委派 → agent 节点容器派生 B (与根委派完全同路径, 无 agent 节点容器函数直调)
 /// - B 纯文本回复 → 结果沿 B → A → 根逐级 resume 回填
 /// - 深度/并发预算、级联取消经 req.parentSessionId / req.cancelToken 生效
 /// - 全部节点回收 (registry 仅剩 root, runningSubagents == 0)
@@ -982,7 +982,7 @@ asio::awaitable<void> test_host_remote_a2a() {
             cc.baseUrl  = "http://127.0.0.1:" + std::to_string(a2aServer->port());
             auto client = std::make_shared<agentxx::protocol::A2aClient>(std::move(cc));
 
-            // 宿主 + 根 agent + 远程注册
+            // agent 节点容器 + 根 agent + 远程注册
             agentxx::agent::AgentHost::Config hostCfg;
             hostCfg.ioCtx  = io;
             auto host      = agentxx::agent::AgentHost::create(hostCfg);

@@ -806,7 +806,7 @@ private:
 /// - `footer`: 是否显示底栏提示 (缺省显示)
 /// - `scroll`: 内容是否需要滚动; `false` 时隐藏滚动提示 (与 `footer:false` 等效)
 /// - `stack`: 已有 overlay 打开时是否保留现有 overlay (缺省替换, 见 openOverlay)
-/// - 未知键忽略 (老宿主同样忽略), 非法值回退缺省
+/// - 未知键忽略 (老主程序同样忽略), 非法值回退缺省
 struct OverlayOptions {
     std::string size       = "normal";
     double      widthFrac  = 0.0; ///< 0 = 用 `size` 预设
@@ -950,13 +950,13 @@ private:
     std::shared_ptr<Scrollable> scrollable_;
     std::function<void()>       onClose_;
 
-    /// 折叠分组的展开状态 (键 = 组件 id; 宿主维护, 点击标题切换)
+    /// 折叠分组的展开状态 (键 = 组件 id; 主程序维护, 点击标题切换)
     std::map<std::string, bool, std::less<>> collapseStates_;
 
     /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
     OverlayOptions options_;
 
-    /// 表单状态与当前组件树 (控件值/勾选/选中/焦点; 由宿主维护, 见 ui_components.h)
+    /// 表单状态与当前组件树 (控件值/勾选/选中/焦点; 由主程序维护, 见 ui_components.h)
     agentxx::client::UiFormState   form_;
     std::vector<pluginxx::ui::Item> formItems_;
 

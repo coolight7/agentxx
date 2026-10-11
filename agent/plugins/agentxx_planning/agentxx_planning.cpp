@@ -6,7 +6,7 @@
 ///     {dataDir}/plans/{thread_id}.json (供 read 模式跨轮次读取);
 ///     mode=read 返回本会话此前保存的规划内容
 ///   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
-///     规划 JSON); 订阅宿主约定事件 agentxx_host.client_attached, 客户端接入/
+///     规划 JSON); 订阅主程序约定事件 agentxx_host.client_attached, 客户端接入/
 ///     重连时重发当前会话已保存规划 (状态快照自愈, 见
 ///     [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 ///   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
@@ -44,7 +44,7 @@ namespace {
 
 constexpr std::string_view kNamePlanning = "agentxx_planning";
 
-/// 连续相同调用重复检查: 达阈值时由宿主询问用户确认后再继续
+/// 连续相同调用重复检查: 达阈值时由主程序询问用户确认后再继续
 /// (见 [XXToolBase::repeatCallCheck] 与 AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK)
 constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 
@@ -191,7 +191,7 @@ std::string planningFileName(const std::string& tid) {
     return base;
 }
 
-/// 宿主数据目录 (AgentConfig dataDir; 经 agentxx.agent.config 接口表)
+/// 主程序数据目录 (AgentConfig dataDir; 经 agentxx.agent.config 接口表)
 std::string hostDataDir(const PluginCtx& ctx) {
     if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_config) {
         return {};
@@ -318,7 +318,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     ctx.iface.events->publish(ctx.host, &topicSv, &planSv);
 }
 
-/// 宿主约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
+/// 主程序约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
 /// (修复 "事件先于客户端订阅而丢失 → UI 永久空白", 见
 /// [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 void PLUGINXX_CALL on_client_attached(const PluginxxStringView* event_json, void* ud) {
@@ -358,7 +358,7 @@ void PLUGINXX_CALL on_client_attached(const PluginxxStringView* event_json, void
 /// =====================================================================
 
 extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL agentxx_plugin_agent_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL (宿主按"未导出"处理);
+    // C ABI 边界异常守卫: 异常返回 NULL (主程序按"未导出"处理);
     // 本边界为纯静态元数据, 无实例上下文可捕获 → 空操作日志闭包
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
@@ -381,7 +381,7 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL agentxx_plugin_agen
 /// 注册事务 (start 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
 static int planningSetup(PluginCtx* ctx) {
     const PluginxxHost* host = ctx->host;
-    // 注入 planning 附加提示词至宿主 (经通用 appendSystemPrompts 与 toolPrompt)
+    // 注入 planning 附加提示词至主程序 (经通用 appendSystemPrompts 与 toolPrompt)
     if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
         utilxx_base::Json j;
         j["appendSystemPrompts"]             = utilxx_base::Json::object();
@@ -440,7 +440,7 @@ static int planningSetup(PluginCtx* ctx) {
 
                 const auto mode = arguments.value("mode", std::string{});
                 if (mode != "write" && mode != "read") {
-                    // 参数检查失败抛异常 (宿主统一按工具错误结果回给模型),
+                    // 参数检查失败抛异常 (主程序统一按工具错误结果回给模型),
                     // 不再返回编码后的错误 JSON
                     throw std::invalid_argument{fmt::format(
                         "Arg `mode` must be \"write\" or \"read\", got \"{}\"",
@@ -506,7 +506,7 @@ static int planningSetup(PluginCtx* ctx) {
                     );
                 }
 
-                // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (宿主/客户端通用处理)
+                // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (主程序/客户端通用处理)
                 publishPlanningEvent(c, planJson);
 
                 return "success";
@@ -516,7 +516,7 @@ static int planningSetup(PluginCtx* ctx) {
         );
     }
 
-    // 宿主约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
+    // 主程序约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
     if (ctx->iface.events && ctx->iface.events->subscribe) {
         auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
         if (!ctx->iface.events->subscribe(host, &topicSv, on_client_attached, ctx)) {
@@ -550,7 +550,7 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
             ctx->iface = agentxx::plugin::AgentIfaces::query(host);
             raw        = ctx.get();
 
-            *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
+            *plugin_ctx = ctx.release(); ///< 所有权移交主程序 (destroy 时取回归还)
             return 0;
         }
     );
@@ -602,7 +602,7 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
         [](const char*) noexcept {},
         static_cast<void*>(nullptr),
         [&]() -> void* {
-            // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+            // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
             if (notify && notify->done) {
                 notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
@@ -651,7 +651,7 @@ struct ClientCtx {
     /// 通用交互动作控制器 (action_id → handler; dispatch 经 ud 恢复本实例)
     agentxx::plugin::kit::ActionController actions;
     /// 类型级渲染器回调 shim 存储 (registerToolRenderer 创建; 实例销毁时释放。
-    /// 宿主在插件停止/卸载时先摘除渲染器注册, 不会回调已释放的 shim)
+    /// 主程序在插件停止/卸载时先摘除渲染器注册, 不会回调已释放的 shim)
     std::vector<std::unique_ptr<void, void (*)(void*)>> renderShims;
 };
 
@@ -781,7 +781,7 @@ static void
 /// - `graphAsButton` false: 内联状态图 (Diagram 组件;
 ///   工具消息展开体, 状态图随消息一起渲染)
 /// - `graphAsButton` true: "|- " 前缀 + 可点 Graph 按钮 (Info 段落, 点击经
-///   dispatch 动作 planning.open_graph 弹窗; owner_id 由宿主组装)。
+///   dispatch 动作 planning.open_graph 弹窗; owner_id 由主程序组装)。
 ///   前缀与按钮是**相邻两项**: 客户端把相邻的 Text + Button 渲染成同一行
 ///   (按钮紧跟文本之后, 见 [renderItems] 的合并说明)
 /// - plan 显式带 items 数组时直接透传 (read 模式占位提示等自定义内容)
@@ -905,7 +905,7 @@ static void
     pushToolDecorParts(ctx, toolCallId, buildPlanDecorParts(plan));
 }
 
-/// 类型级工具渲染器 (按 tool_name 注册, 宿主在需要渲染 planning 工具消息时于
+/// 类型级工具渲染器 (按 tool_name 注册, 主程序在需要渲染 planning 工具消息时于
 /// client io 线程调用; 实现无实例状态):
 /// - 内容完全由消息自身 (参数/结果) 推导, 不依赖运行时事件 —— 重启恢复/重连/
 ///   切换会话后由 Sync 回放的历史工具消息没有 update_tool_decor 推送,
@@ -945,7 +945,7 @@ static void clearToolDecors(ClientCtx& ctx) {
     ctx.ui->update_tool_decor(ctx.host, &emptyTcid, &emptyDecor);
 }
 
-/// 懒注册 Info 栏段落 (宿主不支持 info_section 时保持 NULL 静默降级)
+/// 懒注册 Info 栏段落 (主程序不支持 info_section 时保持 NULL 静默降级)
 static void ensureSection(ClientCtx& ctx) {
     if (ctx.section || !ctx.ui || !ctx.ui->register_info_section || !ctx.host) {
         return;
@@ -1159,7 +1159,7 @@ static int planningClientSetup(ClientCtx* ctx) {
     // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠头与
     // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
     // 渲染** (这些消息没有 EVT_DELTA 装饰推送); 实时调用也走同一渲染器, 与
-    // 装饰推送 (展开头显示语义名) 内容同源。宿主无消息渲染面 (cli) 或未装配
+    // 装饰推送 (展开头显示语义名) 内容同源。主程序无消息渲染面 (cli) 或未装配
     // ui 表时注册失败 → 仅记日志, 不影响其他功能
     if (ctx->ui && ctx->ui->register_tool_renderer) {
         const int32_t rc = agentxx::plugin::registerToolRenderer(
@@ -1181,8 +1181,8 @@ static int planningClientSetup(ClientCtx* ctx) {
     }
     // 通用交互绑定 (方案 A fallback: target_id="" 本实例兜底, 一次永久生效):
     // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
-    //   owner_id 由宿主组装 (section_id / tool_call_id), 此处无需逐个 bind
-    // - ui 缺失或 bind 为 NULL (CLI/老宿主) 时静默降级: 内容仍推送, 按钮不可点
+    //   owner_id 由主程序组装 (section_id / tool_call_id), 此处无需逐个 bind
+    // - ui 缺失或 bind 为 NULL (CLI/老主程序) 时静默降级: 内容仍推送, 按钮不可点
     if (ctx->ui && ctx->ui->bind_action_handler) {
         ctx->actions.on(kActionOpenGraph, [ctxPtr = ctx](const utilxx_base::Json&) {
             auto* c = ctxPtr;
@@ -1225,8 +1225,8 @@ static int planningClientSetup(ClientCtx* ctx) {
         }
     }
 
-    // 事件订阅 (卸载时宿主自动退订); events/ui 缺失时仅失去渲染能力,
-    // 不阻塞加载 (CLI 等精简宿主场景)
+    // 事件订阅 (卸载时主程序自动退订); events/ui 缺失时仅失去渲染能力,
+    // 不阻塞加载 (CLI 等精简主程序场景)
     auto subWarn = [ctxPtr = ctx](const char* what) {
         if (ctxPtr && ctxPtr->host && ctxPtr->iface.log && ctxPtr->iface.log->log) {
             auto sv = agentxx::plugin::PluginStringView::from(what, std::strlen(what));
@@ -1278,7 +1278,7 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
             ctx->ui    = ctx->iface.ui;
             raw        = ctx.get();
 
-            *plugin_ctx = ctx.release(); ///< 所有权移交宿主 (destroy 时取回归还)
+            *plugin_ctx = ctx.release(); ///< 所有权移交主程序 (destroy 时取回归还)
             return 0;
         }
     );
@@ -1330,7 +1330,7 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
         [](const char*) noexcept {},
         static_cast<void*>(nullptr),
         [&]() -> void* {
-            // UI 注册与订阅由宿主在 stop 后统一撤销。
+            // UI 注册与订阅由主程序在 stop 后统一撤销。
             if (notify && notify->done) {
                 notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
@@ -1347,7 +1347,7 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_client_destroy(void
             delete ctx;
             return;
         }
-        // 主动反注册段落 (装饰由宿主卸载路径自动摘除; 成员判空遵循扩展表契约)
+        // 主动反注册段落 (装饰由主程序卸载路径自动摘除; 成员判空遵循扩展表契约)
         clearSection(*ctx);
         if (ctx->iface.log && ctx->iface.log->log) {
             auto unloadedSv = agentxx::plugin::PluginStringView::fromCstr(

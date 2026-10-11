@@ -40,16 +40,16 @@ inline std::string_view toSv(const AgentxxStringView* sv) {
 
 /// FFI 运行时 (agentxx_ffi_create 返回句柄的实体)
 ///
-/// 线程拓扑 (独立 Client-IO 线程 + 独立 Server-IO 线程):
+/// 线程结构 (独立 Client-IO 线程 + 独立 Server-IO 线程):
 /// - Server-IO 线程 (serverThread_ 运行 serverIoCtx_):
 ///   运行 CodeAgent / AgentHost / SessionServerAgentIO,
 ///   处理 ReAct 循环、工具调用、LLM 流式请求、SessionStore (单线程读写保证安全)。
 /// - Client-IO 线程 (clientThread_ 运行 clientIoCtx_):
-///   运行 FfiClientAgentIO (客户端端点), 处理 Wire 协议编解码、事件分发与宿主
-///   C 回调 (on_event)、挂起的中断等待与超时。与 Server-IO 线程完全解耦，宿主
+///   运行 FfiClientAgentIO (客户端端点), 处理 Wire 协议编解码、事件分发与嵌入方程序
+///   C 回调 (on_event)、挂起的中断等待与超时。与 Server-IO 线程完全解耦，嵌入方程序
 ///   在回调中的耗时不会阻塞 Agent 核心调度。
 /// - 两端点通过进程内 ChannelAgentIOTransport::makePair(clientEx, agentEx) 直连。
-/// - 对外 C API ([ffi_api.cpp](/agent/lib/src/ffi/ffi_api.cpp)) 可在宿主任意
+/// - 对外 C API ([ffi_api.cpp](/agent/lib/src/ffi/ffi_api.cpp)) 可在嵌入方程序任意
 ///   线程调用; 会话交互类经 asio::post
 ///   投递到 clientIoCtx_ 执行; 同步查询类经 promise/future 等待应答。
 /// - stop/destroy 不得在内部 io 线程 (即 client/agent 回调内) 调用 (返回 AGENTXX_FFI_ERR_STATE)。
@@ -141,7 +141,7 @@ public:
     int sendWire(std::string_view wireJson, std::string& err);
 
     // -------------------------------------------------------------------
-    // 宿主工具 (A3)
+    // 嵌入方程序工具 (A3)
     // -------------------------------------------------------------------
     int toolRegister(std::string_view toolJson, std::string& err);
     int toolUnregister(std::string_view name, std::string& err);
@@ -264,10 +264,10 @@ private:
     std::string        sessionId_;
     std::atomic<State> state_{State::Created};
 
-    /// 输入请求序号 (sendInput 自增; 服务端据 >0 回 input_ack, 宿主经 EVT_WIRE 看到受理结果)
+    /// 输入请求序号 (sendInput 自增; 服务端据 >0 回 input_ack, 嵌入方程序经 EVT_WIRE 看到受理结果)
     std::atomic<uint64_t> nextInputRequestId_{0};
 
-    /// HIL 中断等待宿主应答超时 (SessionServerAgentIO 配置)
+    /// HIL 中断等待嵌入方程序应答超时 (SessionServerAgentIO 配置)
     std::chrono::milliseconds interruptTimeout_{0};
 
     // ---- 事件回调 (值拷贝) ----

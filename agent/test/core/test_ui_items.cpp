@@ -80,7 +80,7 @@ TestResult testUiItems() {
         }
     }
     {
-        // i18n 键: 文本块带 textKey 时用 TextValue 的 key 承载 (客户端词表解析)
+        // i18n 键: 文本块带 textKey 时用 TextValue 的 key 保存 (客户端词表解析)
         InterruptUiBlock b;
         b.kind    = "text";
         b.textKey = "interrupt.header";
@@ -183,7 +183,7 @@ TestResult testUiItems() {
         }
     }
     {
-        // 候选项: 原值 (任意 JSON) 与标签 (i18n 键优先) 分别承载
+        // 候选项: 原值 (任意 JSON) 与标签 (i18n 键优先) 分别保存
         InterruptUiBlock b;
         b.kind    = "control";
         b.control = "buttons";

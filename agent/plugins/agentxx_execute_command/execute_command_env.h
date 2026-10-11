@@ -5,8 +5,8 @@
 /// 1. [detectExecEnv]: 探测 python / node 是否可用及版本 (Windows 侧另探测
 ///    PowerShell 可执行文件名与版本);
 /// 2. [bashToolPrompt] / [windowsToolPrompt]: 用探测结果生成工具提示词
-///    (depict + 参数描述), 由插件经 prompt 接口表作为本实例贡献注入宿主,
-///    卸载/禁用时由宿主自动撤销。
+///    (depict + 参数描述), 由插件经 prompt 接口表作为本实例贡献注入主程序,
+///    卸载/禁用时由主程序自动撤销。
 ///
 /// 为什么在 start 事务内探测:
 /// - 工具定义 (description / parameters) 在注册时固化 (见 PluginHost 的
@@ -17,7 +17,7 @@
 ///   同一动态库多实例并存的约束 (多实例三铁律)。
 ///
 /// 提示词文本与工具 schema 由同一份 [ExecPromptText] 提供 (插件入口传给
-/// `ctx.schema(...)`), 保证注入宿主的提示词与实际注册的 schema 一致。
+/// `ctx.schema(...)`), 保证注入主程序的提示词与实际注册的 schema 一致。
 #pragma once
 
 #include "fmt/format.h"
@@ -68,7 +68,7 @@ struct ExecEnvInfo {
     utilxx_base::PowerShellInfo powershell;
 };
 
-/// 工具提示词 (depict + 参数描述), 字段与宿主 AgentPrompt::ToolPrompt 对应
+/// 工具提示词 (depict + 参数描述), 字段与主程序 AgentPrompt::ToolPrompt 对应
 /// - depict 作为工具 definition 的整体描述, args 为各参数 description
 struct ExecPromptText {
     std::string                                     depict;

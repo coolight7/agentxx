@@ -1,10 +1,10 @@
 /// agentxx 插件侧 C ABI 边界异常处理 (C++ header-only) —— agentxx 侧补充
 ///
-/// 分层 (框架内核已拆分为 cxx_pluginxx 独立工程):
+/// 分层 (插件框架已拆分为 cxx_pluginxx 独立工程):
 /// - **通用部分**位于 `pluginxx/kit/guard.h`: logTo (agent 侧日志接口表) /
 ///   reportCurrentException / guardCall / guardCallVoid —— 本头包含它并把名字引入
 ///   `agentxx::plugin`, 插件源码书写 `agentxx::plugin::guardCall` 与拆分前一致;
-/// - **本头只补 client 领域部分**: client 插件使用的 `AgentxxClientLogIface`
+/// - **本头只补 client 业务部分**: client 插件使用的 `AgentxxClientLogIface`
 ///   (与 agent 侧日志表为独立类型) 之上的 logTo 重载。
 ///
 /// 定位: 纯头文件内联设施, 编译进插件本体;

@@ -145,7 +145,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             if (interruptArg.name == "subagent") {
                 // 统一批量委派: 参数解析收敛到共享实现 (parseSubagentBatchFromInterrupt +
                 // buildSubagentResumeValues, 与 SubAgentManagerTool 提取规则一致)
-                // - 经 ctx->bus 请求 service.subagent: 宿主在根与每个子代理的
+                // - 经 ctx->bus 请求 service.subagent: 主程序在根与每个子代理的
                 //   总线上统一 registerServer, 嵌套委派与根委派完全同路径 (扁平化)
                 auto batchReq = agentxx::tools::parseSubagentBatchFromInterrupt(
                     interruptArg,

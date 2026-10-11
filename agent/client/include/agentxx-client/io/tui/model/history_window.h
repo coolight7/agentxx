@@ -44,7 +44,7 @@ public:
     /// 窗口整体替换 (全量/尾窗同步)
     /// - `windowStart` = 本批消息的起始绝对下标 (0 = 全量, 上方无更早历史)
     /// - `totalCount` = 服务端会话总消息数 (0 = 未知, 保持上次值)
-    /// - `loadedCount` = 本批实际装载条数 (界面过滤空消息后可能少于服务端条数)
+    /// - `loadedCount` = 本批实际加载条数 (界面过滤空消息后可能少于服务端条数)
     void reset(uint64_t windowStart, uint64_t totalCount, uint64_t loadedCount);
 
     /// 切换会话: 窗口作废, 未完成的请求随之失效 (迟到响应返回 [PageOutcome::StaleSession])

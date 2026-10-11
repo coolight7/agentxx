@@ -640,7 +640,7 @@ static void runRepairDanglingScenario(
         });
     }
 
-    // ---- 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道) ----
+    // ---- 上下文写入会话 (会话是唯一权威; 图状态不再保存 messages 通道) ----
     neograph::graph::GraphState state;
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = "repair_dangling_test";
@@ -804,7 +804,7 @@ asio::awaitable<void> test_repair_multiple_complete_groups_kept() {
     neograph::graph::GraphState state;
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = "repair_dangling_test";
-    // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+    // 上下文写入会话 (会话是唯一权威; 图状态不再保存 messages 通道)
     ctx->getSession(runCtx.thread_id)
         ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
     neograph::graph::NodeInput in{state, runCtx, nullptr};
@@ -905,7 +905,7 @@ asio::awaitable<void> test_repair_middle_dangling_group_fixed() {
     neograph::graph::GraphState state;
     neograph::graph::RunContext runCtx;
     runCtx.thread_id = "repair_dangling_test";
-    // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+    // 上下文写入会话 (会话是唯一权威; 图状态不再保存 messages 通道)
     ctx->getSession(runCtx.thread_id)
         ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
     neograph::graph::NodeInput in{state, runCtx, nullptr};
@@ -969,7 +969,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         neograph::graph::GraphState state;
         neograph::graph::RunContext runCtx;
         runCtx.thread_id = "test_sys_hash_session";
-        // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+        // 上下文写入会话 (会话是唯一权威; 图状态不再保存 messages 通道)
         ctx->getSession(runCtx.thread_id)
             ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
         neograph::graph::NodeInput in{state, runCtx, nullptr};
@@ -1000,7 +1000,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         neograph::graph::GraphState state;
         neograph::graph::RunContext runCtx;
         runCtx.thread_id = "test_sys_hash_session";
-        // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+        // 上下文写入会话 (会话是唯一权威; 图状态不再保存 messages 通道)
         ctx->getSession(runCtx.thread_id)
             ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
         neograph::graph::NodeInput in{state, runCtx, nullptr};
@@ -1029,7 +1029,7 @@ static asio::awaitable<void> test_repair_system_prompt_hash() {
         neograph::graph::GraphState state;
         neograph::graph::RunContext runCtx;
         runCtx.thread_id = "test_sys_hash_session";
-        // 上下文写入会话 (会话是唯一权威; 图状态不再承载 messages 通道)
+        // 上下文写入会话 (会话是唯一权威; 图状态不再保存 messages 通道)
         ctx->getSession(runCtx.thread_id)
             ->replaceMessagesFromJson(agentxx::util::fromNeographJson(msgs));
         neograph::graph::NodeInput in{state, runCtx, nullptr};

@@ -158,7 +158,7 @@ static void* textSelectionAgentStart(
     return nullptr;
 }
 
-/// stop: 停止监听并摘除监听器 (可重复调用), 之后宿主才会调用 destroy
+/// stop: 停止监听并摘除监听器 (可重复调用), 之后主程序才会调用 destroy
 static void*
     textSelectionAgentStop(TextSelectionPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     try {

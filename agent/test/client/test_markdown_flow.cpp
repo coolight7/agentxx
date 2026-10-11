@@ -1,7 +1,7 @@
 // 自绘折行文本节点测试 (markdown::FlowText)
 //
 // 背景: markdown 正文原先按"每个词一个 ftxui::text 元素 + flexbox"组装, 一条
-// 消息几百个节点, 折行结果每帧重算。FlowText 用单个节点承载整段文本, 折行结果
+// 消息几百个节点, 折行结果每帧重算。FlowText 用单个节点放整段文本, 折行结果
 // 按宽度缓存 (宽度不变时重排几乎无成本)。
 //
 // 覆盖点:
@@ -252,7 +252,7 @@ TestResult testMarkdownFlow() {
     {
         // 节点内的字形列从 0 起算 (相对盒左缘), 选择区间是屏幕列: 两者坐标系不同,
         // 混用会漏掉每行开头若干字符 —— 元素左缘越靠右丢得越多。
-        // 宿主里正文常带左侧留白 (消息列表 3 列留白、面板边框内 1~2 列),
+        // 主程序里正文常带左侧留白 (消息列表 3 列留白、面板边框内 1~2 列),
         // 用户表现为"鼠标选中复制总是缺最左边的一两列"。
         auto flow = plainNode("hello world"); // 屏幕列 3..13
         XX_TEST_EXPECT_EQ(selectTextAt(flow, 3, 11, 1, 3, 0, 13, 0), std::string{"hello world"});
@@ -329,7 +329,7 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(selection.GetParts(), std::string{"world"}); // 高亮区间与复制文本一致
 
         // 选择清空: ComputeRequirement 复位高亮状态 (无选择时框架不再调用 Select),
-        // 复位后重绘无高亮 (跳过每帧 ComputeRequirement 的宿主经
+        // 复位后重绘无高亮 (跳过每帧 ComputeRequirement 的主程序经
         // LazyScrollable::resetSelectionHighlight 走同一条复位路径)
         auto clean
             = ftxui::Screen::Create(ftxui::Dimension::Fixed(11), ftxui::Dimension::Fixed(1));

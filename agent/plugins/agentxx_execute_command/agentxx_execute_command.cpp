@@ -4,13 +4,13 @@
 /// 子进程管道绑定到协程 executor, 等待的是插件本地 reactor 上的管道就绪事件,
 /// 因此注册为**声明式受控轮询**工具 (`polled_tool`, 见 plugin_kit.h)。
 /// 并发多条命令共享同一条 polled 驱动序列与同一个本地 reactor, 不再每条命令
-/// 占死一个宿主工作线程直到超时 (会话取消经 CancelRegistry 事件驱动 kill 进程组)。
+/// 占死一个主程序工作线程直到超时 (会话取消经 CancelRegistry 事件驱动 kill 进程组)。
 /// 只有关闭 `AGENTXX_ENABLE_BOOST_PROCESS` 的 popen 回退实现仍是阻塞函数,
 /// 继续走 `blocking_tool` (offload 工作线程)。
 ///
 /// 工具提示词由本插件负责 (原 libagentxx 的 AgentPrompt 环境探测已迁移至此):
 /// start 事务内先探测运行环境 (python/node 与 Windows 侧 PowerShell), 再把
-/// 生成的提示词作为本实例贡献注入宿主 (见 [publishToolPrompt])。
+/// 生成的提示词作为本实例贡献注入主程序 (见 [publishToolPrompt])。
 #include "agentxx_execmd_plugin.h"
 #include "asio/awaitable.hpp"
 #include "execute_command_env.h"
@@ -27,7 +27,7 @@ constexpr std::string_view kNameBash    = "agentxx_execute_bash_command";
 constexpr std::string_view kNameWindows = "agentxx_execute_windows_command";
 
 /// 取参数描述 (提示词里没有该参数时回退给定文本)
-/// - 提示词来自本插件自身生成, 正常都命中; 回退保证宿主提示词接口缺失时
+/// - 提示词来自本插件自身生成, 正常都命中; 回退保证主程序提示词接口缺失时
 ///   schema 描述仍完整
 std::string_view
     argDescOr(const ExecPromptText& prompt, std::string_view name, std::string_view fallback) {
@@ -45,10 +45,10 @@ struct ExecPluginCtx : public PluginBase {
     ExecEnvInfo env;
 };
 
-/// 把工具提示词 (depict + 参数描述) 作为本实例的贡献注入宿主提示词表
-/// - 宿主按所有者记录贡献 (见 PluginManager::setPromptJson), 插件卸载/禁用时
+/// 把工具提示词 (depict + 参数描述) 作为本实例的贡献注入主程序提示词表
+/// - 主程序按所有者记录贡献 (见 PluginManager::setPromptJson), 插件卸载/禁用时
 ///   自动撤销并恢复基础值; 同一工具由多个插件实例贡献时互不覆盖
-/// - 宿主未提供 prompt 接口表 (精简宿主) 时跳过: 描述文本仍随工具注册直接生效
+/// - 主程序未提供 prompt 接口表 (精简主程序) 时跳过: 描述文本仍随工具注册直接生效
 static void
     publishToolPrompt(ExecPluginCtx& ctx, std::string_view toolName, const ExecPromptText& prompt) {
     if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
@@ -90,7 +90,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     // 环境探测 (python/node 可用性与版本, Windows 侧含 PowerShell 版本):
     // - 阻塞式子进程探测, 每次 start 只执行一次, 结果存实例上下文
     // - 必须在工具注册前完成: 工具 definition 的 description/parameters 在注册时
-    //   由宿主固化, 之后无法再刷新 (提示词注入了也只能改宿主提示词表)
+    //   由主程序固化, 之后无法再刷新 (提示词注入了也只能改主程序提示词表)
     ctx.env = detectExecEnv();
 
     // 记录本次运行实际生效的子进程环境加固策略 (排查"为什么工具里跑命令的输出
@@ -113,7 +113,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #endif
     const auto winPrompt = windowsToolPrompt(ctx.env, viaProcessSpawn);
     // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
-    // 读取宿主提示词的 depict 作为工具描述, 注册后无法再改
+    // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
     publishToolPrompt(ctx, kNameWindows, winPrompt);
 
     auto winSchema
@@ -216,7 +216,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #else // Linux / POSIX
     const auto bashPrompt = bashToolPrompt(ctx.env);
     // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
-    // 读取宿主提示词的 depict 作为工具描述, 注册后无法再改
+    // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
     publishToolPrompt(ctx, kNameBash, bashPrompt);
 
     auto bashSchema
@@ -342,7 +342,7 @@ static void*
 }
 
 static void* execStop(ExecPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+    // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -395,7 +395,7 @@ static void* execClientStart(
 }
 
 static void* execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // UI 注册记录由宿主在 stop 后统一撤销。
+    // UI 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

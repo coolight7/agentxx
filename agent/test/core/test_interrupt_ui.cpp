@@ -588,7 +588,7 @@ void test_plain_text_extended_blocks() {
 
 /// A7: 图片块 / 进度块 / 路径控件的 JSON 往返与纯文本降级
 ///
-/// 三者都是"宿主 GUI 能做得更好、行式前端仍要有内容"的形态: 往返必须不丢字段,
+/// 三者都是"主程序 GUI 能做得更好、行式前端仍要有内容"的形态: 往返必须不丢字段,
 /// 纯文本降级必须给出可读的一行 (不能静默丢内容)。
 void test_ui_image_progress_path() {
     using namespace agentxx::middleware;
@@ -754,7 +754,7 @@ void test_ui_image_progress_bridge() {
         XX_TEST_EXPECT_TRUE(progressItem->text.fallback.find("5/8") != std::string::npos);
     }
 
-    // 路径控件: 非交互宿主按 "标签: [路径输入 (mode)]" 降级
+    // 路径控件: 非交互主程序按 "标签: [路径输入 (mode)]" 降级
     const auto pathControl = InterruptUiBlock::fromJson(Json{
         {"kind", "control"},
         {"control", "path"},

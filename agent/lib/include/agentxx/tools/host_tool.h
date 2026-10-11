@@ -14,12 +14,12 @@
 namespace agentxx {
 namespace tools {
 
-/// 宿主 / 客户端反向调用工具桥接
+/// 外部注册工具 / 客户端反向调用工具桥接
 ///
-/// 供 FFI 宿主与 WebSocket 客户端注册的动态工具使用:
+/// 供 FFI 外部注册工具与 WebSocket 客户端注册的动态工具使用:
 /// - 继承 XXToolBase, 接入 Agent 统一工具调用调度与类型纠正
-/// - get_definition 返回宿主注册的描述与 JSON Schema
-/// - execute_async 委托给 SessionServerAgentIO 或 FFI 运行时, 向宿主发送调用并协程等待应答
+/// - get_definition 返回外部注册工具注册的描述与 JSON Schema
+/// - execute_async 委托给 SessionServerAgentIO 或 FFI 运行时, 向外部注册工具发送调用并协程等待应答
 class HostTool : public XXToolBase {
 public:
 

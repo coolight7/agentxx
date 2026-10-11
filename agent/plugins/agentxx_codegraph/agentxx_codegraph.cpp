@@ -830,7 +830,7 @@ extern "C" PLUGINXX_EXPORT int
 /// 注册事务 (start 的实际内容): 工具/prompt/事件订阅/后台索引预热。
 /// - dataDir 缺失或 initialize 失败时 mgr 为空: 保持降级加载, start 直接完成
 ///   (与迁移前 create 的降级行为一致)。
-/// - 后台 warmup 由 std::thread 改为宿主托管任务 (ctx.spawn): 卸载时可取消,
+/// - 后台 warmup 由 std::thread 改为主程序托管任务 (ctx.spawn): 卸载时可取消,
 ///   且 offload 期间持有实例 lease, destroy/dlclose 前必然等待索引代码返回。
 static int codegraphAgentSetup(PluginCtx& ctx) {
     if (!ctx.mgr) {
@@ -910,7 +910,7 @@ static void* codegraphAgentStart(
 }
 
 static void* codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 注册记录与后台任务句柄由宿主在 stop 后统一撤销/取消; 索引数据保留在
+    // 注册记录与后台任务句柄由主程序在 stop 后统一撤销/取消; 索引数据保留在
     // 实例上下文中, 下次 start 直接复用。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;

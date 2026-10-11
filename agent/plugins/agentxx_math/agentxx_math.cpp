@@ -25,7 +25,7 @@ Supports:
 
 struct MathPluginCtx : public PluginBase {};
 
-/// 注册事务 (start 的实际内容); 失败由宿主按拒绝处理并回滚。
+/// 注册事务 (start 的实际内容); 失败由主程序按拒绝处理并回滚。
 static int32_t mathSetup(MathPluginCtx& ctx) {
     auto schema
         = ctx.schema(kNameCalculate)
@@ -87,7 +87,7 @@ static void*
 }
 
 static void* mathStop(MathPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 无自管线程/定时器; 注册记录由宿主在 stop 后统一撤销。
+    // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

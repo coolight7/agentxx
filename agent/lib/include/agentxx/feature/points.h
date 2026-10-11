@@ -40,7 +40,7 @@ inline constexpr std::string_view kContextCountTokens = "agentxx.context.countTo
 /// - 身份: `sessionId|messagesVersion|model`
 inline constexpr std::string_view kContextSummarize = "agentxx.context.summarize";
 
-/// 工具输出摘要 (provide; 第二批落地)
+/// 工具输出摘要 (provide; 第二批实现)
 inline constexpr std::string_view kToolSummarizeOutput = "agentxx.tool.summarizeOutput";
 
 /// 核心实现归属 (清单里的 `by` / `owner` 取值)
@@ -117,8 +117,8 @@ struct TokenEstimator {
 
 /// 上下文压缩的请求
 ///
-/// - 消息由编排方 (压缩中间件) 清理过: 噪音清理 / thinking 清理 / 工具折叠 /
-///   多模态降级都在编排侧做完, 实现只负责产出摘要文本;
+/// - 消息由调度方 (压缩中间件) 清理过: 噪音清理 / thinking 清理 / 工具折叠 /
+///   多模态降级都在调度侧做完, 实现只负责产出摘要文本;
 /// - `sessionId` 与 `messages` 二选一 (两个都给时以 `messages` 为准)。
 struct SummarizeRequest {
     std::string                        sessionId;
@@ -135,7 +135,7 @@ struct SummarizeRequest {
     bool manual = false;
 };
 
-/// 上下文压缩的结果 (只有摘要文本; 写回会话由编排方做)
+/// 上下文压缩的结果 (只有摘要文本; 写回会话由调度方做)
 struct SummarizeValue {
     std::string summary;
     bool        truncated = false;
@@ -164,7 +164,7 @@ struct ContextPointOptions {
     TokenEstimator estimator;
     /// 压缩核心实现 (由压缩中间件提供: 内部派生"用完即弃"的压缩子代理, 只返回
     /// 摘要文本; 返回 nullopt = 没有核心实现 / 这次算不出来)
-    /// - 实现里**不许**写回会话 / 不发提示消息 / 不写 share store: 这些是编排方的事
+    /// - 实现里**不许**写回会话 / 不发提示消息 / 不写 share store: 这些是调度方的事
     std::function<asio::awaitable<std::optional<SummarizeValue>>(
         const SummarizeRequest&,
         const ImplContext&

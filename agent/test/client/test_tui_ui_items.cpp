@@ -361,7 +361,7 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_TRUE(findRegion(res, "open:main") != nullptr);
     }
     {
-        // 树: 宿主管理折叠 (提供折叠状态查询时, 有子节点的行可点击展开/收起)
+        // 树: 主程序管理折叠 (提供折叠状态查询时, 有子节点的行可点击展开/收起)
         auto ctx             = ctxFor(40);
         ctx.collapseExpanded = [](const std::string& id, bool defaultValue) {
             // 路径键: 从根到该节点的路径 (如 "src/io/")
@@ -453,7 +453,7 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_TRUE(screenHas(collapsedText, "+ Stack"));
         XX_TEST_EXPECT_FALSE(screenHas(collapsedText, "detail"));
 
-        // 标题行登记折叠区域 (宿主据此切换展开状态)
+        // 标题行登记折叠区域 (主程序据此切换展开状态)
         const auto* region = findRegion(expanded, "c1");
         XX_TEST_EXPECT_TRUE(region != nullptr);
         if (region != nullptr) {
@@ -461,7 +461,7 @@ TestResult testTuiUiItems() {
         }
     }
     {
-        // 折叠状态由宿主的回调决定 (描述里 expanded=true, 宿主返回 false)
+        // 折叠状态由主程序的回调决定 (描述里 expanded=true, 主程序返回 false)
         auto ctx             = ctxFor(30);
         ctx.collapseExpanded = [](const std::string&, bool) {
             return false;

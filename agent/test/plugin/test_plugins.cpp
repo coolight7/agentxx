@@ -211,7 +211,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains(cmdToolName));
 
             // 插件 start 注入的工具提示词 (depict + 参数描述, 含启动时探测到的
-            // python/node 信息) 必须落到宿主提示词表与工具定义里
+            // python/node 信息) 必须落到主程序提示词表与工具定义里
             XX_TEST_EXPECT_TRUE(prompt.toolPrompt.contains(cmdToolName));
             if (prompt.toolPrompt.contains(cmdToolName)) {
                 auto it = prompt.toolPrompt.find(cmdToolName);
@@ -357,13 +357,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 保持引擎加载，供后续 JS 用例复用
     }
 
-    // ---- 5. 钩子登记: 宿主级派发器入链 + 处理器清单 ----
+    // ---- 5. 钩子登记: 主程序级派发器入链 + 处理器清单 ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
             return h->name == "plugin_hooks";
         });
-        XX_TEST_EXPECT_TRUE(found); ///< 中间件链上只有一个宿主级派发器
+        XX_TEST_EXPECT_TRUE(found); ///< 中间件链上只有一个主程序级派发器
         XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
         XX_TEST_EXPECT_GE(inst->hookRegistrations.front().handle, int64_t{1});
         const auto handlers = ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
@@ -490,7 +490,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // JS 引擎库与脚本插件目录 (第 12~26 段共用; 函数级声明)
+    // JS 引擎库与JS 插件目录 (第 12~26 段共用; 函数级声明)
     // findExamplePluginPath() 已含 plugins/ 前缀 (…/plugins/example_plugin),
     // parent_path() 即 plugins/ 目录, 直接拼接插件子目录名即可
     namespace fs       = std::filesystem;
@@ -498,7 +498,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     std::string jsLib  = (fs::path(jsPath).parent_path() / "agentxx_javascript_engine").string();
     std::string jsDir  = (fs::path(jsPath).parent_path() / "example_js").string();
 
-    // ---- 12. JS 引擎插件加载 (二期) ----
+    // ---- 12. JS JS 运行时插件加载 (二期) ----
     {
         auto engineInst = ctx->pluginManager->find("agentxx_javascript_engine");
         if (!engineInst) {
@@ -512,7 +512,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
 
         // ---- 13. JS 插件 (plugin.yaml 目录分派) ----
-        // 需宿主 example_echo 供 js_call_host 互调
+        // 需主程序 example_echo 供 js_call_host 互调
         auto hostInst = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(hostInst != nullptr);
         auto jsInst = co_await ctx->pluginManager->loadPluginAsync(jsDir);
@@ -527,7 +527,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
         XX_TEST_EXPECT_EQ(jsInst->name, "example_js");
         // 统一模型: 所有插件都是 C++ 插件, 无 type 概念; 脚本能力由壳经
-        // 能力调用委派给引擎 (宿主不参与)。内置合并编译模式下, 插件是否无
+        // 能力调用委派给引擎 (主程序不参与)。内置合并编译模式下, 插件是否无
         // 动态库句柄 (dlHandle 为空) 取决于其是否在 AGENTXX_PLUGIN_BUILTIN_LIST:
         // - 全量内置 ("all"): 无句柄; 名单外插件仍为动态库 (混合模式)
         // - 全动态 (BUILTIN=OFF): 有句柄
@@ -601,7 +601,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
-        // ---- 16. JS → 宿主插件互调 (C 桥) ----
+        // ---- 16. JS → 主程序插件互调 (C 桥) ----
         {
             auto tool = ctx->toolRegistry->find("js_call_host");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -626,7 +626,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
 
         // ---- JS 脚本顶层异常的事务化回滚 ----
-        // 脚本先注册工具/事件/定时器再抛异常: load 必须失败, 且宿主注册表里
+        // 脚本先注册工具/事件/定时器再抛异常: load 必须失败, 且主程序注册表里
         // 不留下任何该脚本的注册
         {
             namespace fs = std::filesystem;
@@ -686,7 +686,7 @@ throw new Error("top-level rollback probe");
             }
             XX_TEST_EXPECT_TRUE(st.done);
             XX_TEST_EXPECT_TRUE(st.status != PLUGINXX_OPERATOR_OK);
-            // 注册事务回滚: 失败脚本注册的工具必须已从宿主注册表撤销
+            // 注册事务回滚: 失败脚本注册的工具必须已从主程序注册表撤销
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("rollback_probe_tool"));
             // 引擎与既有脚本不受影响
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
@@ -706,26 +706,26 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
             XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
-            // 宿主 example_echo 不受影响
+            // 主程序 example_echo 不受影响
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         }
 
-        // ---- 18. 卸载宿主示例插件 ----
+        // ---- 18. 卸载主程序示例插件 ----
         {
             co_await ctx->pluginManager->unloadAsync("example_plugin");
             XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         }
 
-        // ---- 19. 卸载 JS 引擎插件: 能力消失 (脚本插件已在 17 卸载) ----
+        // ---- 19. 卸载 JS JS 运行时插件: 能力消失 (JS 插件已在 17 卸载) ----
         {
             auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
             XX_TEST_EXPECT_TRUE(ok);
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
         }
 
-        // ---- 20. 依赖图级联卸载: 引擎卸载连带 depends 它的脚本插件 ----
+        // ---- 20. 依赖图级联卸载: 引擎卸载连带 depends 它的JS 插件 ----
         {
-            // 重新加载引擎 + 脚本插件
+            // 重新加载引擎 + JS 插件
             auto engine2 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
             XX_TEST_EXPECT_TRUE(engine2 != nullptr);
             auto js2 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
@@ -755,7 +755,7 @@ throw new Error("top-level rollback probe");
 
         // ---- 22. 插件互查 API (vtable list_plugins/get_plugin) ----
         {
-            // 重新加载引擎 (供脚本插件验证互查)
+            // 重新加载引擎 (供JS 插件验证互查)
             auto engine3 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
             XX_TEST_EXPECT_TRUE(engine3 != nullptr);
             auto js4 = co_await ctx->pluginManager->loadPluginAsync(jsDir);
@@ -764,7 +764,7 @@ throw new Error("top-level rollback probe");
                 co_await sleepMs(50);
             }
             if (js4) {
-                // 脚本内互查已由 plugin.js 顶层执行 (日志); 此处验证宿主侧 JSON
+                // 脚本内互查已由 plugin.js 顶层执行 (日志); 此处验证主程序侧 JSON
                 auto engineJson = ctx->pluginManager->getPluginJson("agentxx_javascript_engine");
                 XX_TEST_EXPECT_FALSE(engineJson.empty());
                 if (!engineJson.empty()) {
@@ -817,7 +817,7 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 23. H1 回归: 工具超时后立即卸载不得执行已卸载代码段 ----
-    // - 统一异步操作模型: 超时 (asyncWithTimeout) 取消等待协程后, 宿主转入
+    // - 统一异步操作模型: 超时 (asyncWithTimeout) 取消等待协程后, 主程序转入
     //   后台收割协程继续驱动直至插件真正上报终态 —— inflight 保活随之转移,
     //   unloadAsync 必须等到收割完成才 dlclose (卸载耗时 ≈ 操作剩余时间)
     {
@@ -825,7 +825,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(inst23 != nullptr);
         if (inst23) {
             // 注册带超时的慢工具: 超时 100ms, 阻塞操作 600ms 后才完成
-            // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在宿主阻塞池线程执行)
+            // (阻塞委托型 offload线程池: execute 经 scheduler.offload 在主程序阻塞池线程执行)
             struct SlowCtx : public agentxx::plugin::PluginBase {};
 
             static SlowCtx slowCtx;
@@ -959,7 +959,7 @@ throw new Error("top-level rollback probe");
         if (engine25 && js25) {
             ctx->pluginManager->disable("example_js"); // 用户手动禁用
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
-            // 启用引擎 → 不应级联恢复被用户手动禁用的脚本插件
+            // 启用引擎 → 不应级联恢复被用户手动禁用的JS 插件
             ctx->pluginManager->enable("agentxx_javascript_engine");
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 用户显式启用 → 恢复
@@ -970,7 +970,7 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 25b. JS 引擎/脚本插件 disable→enable 往返: 引擎线程与脚本按事务重建 ----
+    // ---- 25b. JS 引擎/JS 插件 disable→enable 往返: 引擎线程与脚本按事务重建 ----
     // 引擎线程、JSRuntime 与脚本上下文都属于 start 事务 —— disable 停
     // 线程 (stop), enable 重建线程并重放脚本 (start)。断言能力/工具的可观察状态
     // 往返一致, 且 stop/destroy 顺序不会把实例提前销毁。
@@ -985,7 +985,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
 
-        // 禁用引擎 → 级联禁用脚本插件 → 两者 stop (引擎退出 JS 线程并释放 runtime)
+        // 禁用引擎 → 级联禁用JS 插件 → 两者 stop (引擎退出 JS 线程并释放 runtime)
         ctx->pluginManager->disable("agentxx_javascript_engine");
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
         for (int i = 0; i < 300 && !engine25b->lifecycleStopped; ++i) {
@@ -1002,7 +1002,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == engine25b);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == js25b);
 
-        // 重新启用引擎 → 级联恢复脚本插件: 引擎重建线程, 脚本重新 load
+        // 重新启用引擎 → 级联恢复JS 插件: 引擎重建线程, 脚本重新 load
         ctx->pluginManager->enable("agentxx_javascript_engine");
         for (int i = 0; i < 400 && !ctx->toolRegistry->contains("js_hello"); ++i) {
             co_await sleepMs(10);
@@ -1037,7 +1037,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(out.find("storm") != std::string::npos);
         }
 
-        // 清理: 卸载引擎级联卸载脚本插件
+        // 清理: 卸载引擎级联卸载JS 插件
         XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync(
             "agentxx_javascript_engine",
             std::chrono::seconds{30}
@@ -1049,7 +1049,7 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 26. H2 回归: shutdownAsync (含 JS 引擎) 先子后父, stop/destroy 后 dlclose ----
-    // - 引擎插件 stop 停 JS 线程; 脚本插件先卸载 (通知引擎释放 JSContext) →
+    // - JS 运行时插件 stop 停 JS 线程; JS 插件先卸载 (通知引擎释放 JSContext) →
     //   引擎停线程时 JS 线程空闲 → 无挂死/无执行已卸载代码段
     // - 同步 shutdownAll 不能等待 stop 事务: 导出 start/stop 的插件必须保留
     //   实例/上下文 (CloseFailed), 由 shutdownAsync 收尾 (plugin.md 第 7.3 节)
@@ -1081,12 +1081,12 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
     }
 
-    // ---- 27. loadConfiguredPlugins 拓扑排序: 配置顺序无关 (脚本插件在前也能加载) ----
+    // ---- 27. loadConfiguredPlugins 拓扑排序: 配置顺序无关 (JS 插件在前也能加载) ----
     // - 库路径项按文件名推导插件名 (libagentxx_javascript_engine.so → agentxx_javascript_engine),
     //   参与依赖排序: example_js (depends agentxx_javascript_engine) 排在引擎之后
     {
         std::vector<agentxx::agent::PluginConfig> cfgs;
-        // 故意把脚本插件目录写在引擎库之前 (配置顺序与依赖顺序相反)
+        // 故意把JS 插件目录写在引擎库之前 (配置顺序与依赖顺序相反)
         agentxx::agent::PluginConfig jsCfg;
         jsCfg.path    = jsDir;
         jsCfg.enabled = true;
@@ -1115,7 +1115,7 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 28. 提示词读写 (get_prompt/set_prompt): 插件写入默认条目 + 卸载回滚 ----
-    // - 插件加载时经 set_prompt 写入宿主 toolPrompt (仅当无该条目);
+    // - 插件加载时经 set_prompt 写入主程序 toolPrompt (仅当无该条目);
     //   卸载时自动回滚 (恢复加载前状态, 条目删除)
     // - 用户 yaml 覆盖 (加载前已存在条目) 优先, 插件不覆盖
     {
@@ -1246,7 +1246,7 @@ throw new Error("top-level rollback probe");
         auto inst31 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst31 != nullptr);
 
-        // 31.1 call_tool_async 回调语义 (宿主在 io 线程派发 cb; 恰好一次)
+        // 31.1 call_tool_async 回调语义 (主程序在 io 线程派发 cb; 恰好一次)
         {
             PluginxxString e        = {nullptr, 0};
             int            cbStatus = -1;
@@ -1405,7 +1405,7 @@ throw new Error("top-level rollback probe");
             ctx->sessions->remove("t_plugin_cancel");
         }
 
-        // 31.4 异常守卫: start() 违约抛 C++ 异常 → 宿主转失败终态 (不终止进程)
+        // 31.4 异常守卫: start() 违约抛 C++ 异常 → 主程序转失败终态 (不终止进程)
         {
             static AgentxxPluginToolSpec throwSpec;
             throwSpec.name = agentxx::plugin::PluginStringView::fromCstr("throwing_start_tool");
@@ -1441,7 +1441,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginManager->unregisterTool(inst31.get(), "throwing_start_tool");
         }
 
-        // 31.5 违约检测: start() 返回 NULL 且未 done 且无 error → 宿主按协议违约合成失败
+        // 31.5 违约检测: start() 返回 NULL 且未 done 且无 error → 主程序按协议违约合成失败
         {
             static AgentxxPluginToolSpec nullSpec;
             nullSpec.name        = agentxx::plugin::PluginStringView::fromCstr("null_start_tool");
@@ -1506,7 +1506,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginManager->unregisterTool(inst31.get(), "boom_tool");
         }
 
-        // 31.7 异常守卫: 事件 handler 违约抛异常 → 宿主派发兜底,
+        // 31.7 异常守卫: 事件 handler 违约抛异常 → 主程序派发兜底,
         //      同 topic 其他订阅者仍正常收到
         {
             static bool s_goodHandlerRan = false;
@@ -1864,7 +1864,7 @@ throw new Error("top-level rollback probe");
                     ) {
                         // 与 BaseAgent::initRegisterNodes 一致: 节点级配置合并进
                         // NodeContext.extra_config (插件图用 xx_autoRoute=false
-                        // 关闭宿主的自动路由)
+                        // 关闭主程序的自动路由)
                         auto merged = nc;
                         if (nodeConfig.is_object()) {
                             if (!merged.extra_config.is_object()) {
@@ -1986,10 +1986,10 @@ throw new Error("top-level rollback probe");
                     neograph::graph::RunConfig runCfg;
                     runCfg.thread_id = "graph-test-datetime";
                     /// 插件完成包必须经当前 IO executor 提交；同步 run 会创建嵌套
-                    /// io_context 并阻塞当前循环，不能在宿主协程内使用。
+                    /// io_context 并阻塞当前循环，不能在主程序协程内使用。
                     auto result = co_await engine->run_async(runCfg);
                     XX_TEST_EXPECT_TRUE(false == result.interrupted);
-                    // 会话上下文含时间 (datetime_node 写 messages 通道由宿主
+                    // 会话上下文含时间 (datetime_node 写 messages 通道由主程序
                     // 转成会话上下文写入)
                     bool hasTime = false;
                     try {
@@ -2210,7 +2210,7 @@ throw new Error("top-level rollback probe");
             DummyPlugin plug;
             XX_TEST_EXPECT_FALSE(plug.sessionCancelled("test_sess"));
 
-            // 宿主 execute_cancel 或本地登记取消
+            // 主程序 execute_cancel 或本地登记取消
             plug.cancelRegistry.cancel("test_sess");
             // 本地直接命中, 零跨线程 host 交互
             XX_TEST_EXPECT_TRUE(plug.sessionCancelled("test_sess"));
@@ -2291,12 +2291,12 @@ throw new Error("top-level rollback probe");
         co_await ctx->pluginManager->unloadAsync("example_plugin");
     }
 
-    // ---- 38b. 协程驱动桥端到端: 真实宿主下 driver/wake 交错执行 (plugin.md 6/10) ----
+    // ---- 38b. 协程驱动桥端到端: 真实主程序下 driver/wake 交错执行 (plugin.md 6/10) ----
     //
-    // `example_bridge` 每步都经"宿主 timer 回调 -> 投递 continuation + wake -> 下一次
+    // `example_bridge` 每步都经"主程序 timer 回调 -> 投递 continuation + wake -> 下一次
     // driver"推进, 因此:
-    // - 插件执行期间宿主 IO 线程必须仍能推进其它任务 (hostTicks 递增 = 没有被插件独占);
-    // - 结果里 driverAvailable/onHostIoThread 必须为真 (真宿主提供 coroutine_runtime);
+    // - 插件执行期间主程序 IO 线程必须仍能推进其它任务 (hostTicks 递增 = 没有被插件独占);
+    // - 结果里 driverAvailable/onHostIoThread 必须为真 (真主程序提供 coroutine_runtime);
     // - 只有真实唤醒源 (timer/callback) 才产生请求, 因此 ticks=3 时不应有自旋。
     {
         auto instBridge = co_await ctx->pluginManager->loadPluginAsync(path);
@@ -2331,7 +2331,7 @@ throw new Error("top-level rollback probe");
                 j["calls"]["echo"]["from"].get<std::string>(),
                 std::string{"example_bridge"}
             );
-            // 插件挂起期间宿主任务推进过 => 两者在同一 IO 序列中交错执行
+            // 插件挂起期间主程序任务推进过 => 两者在同一 IO 序列中交错执行
             XX_TEST_EXPECT_GE(hostTicks.load(), 2);
         }
         co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -2340,11 +2340,11 @@ throw new Error("top-level rollback probe");
     // ---- 38c. 受控轮询端到端: 插件本地 reactor 上的 asio 等待由 pump 推进 ----
     //
     // `example_polled_timer` 的等待是插件本地 reactor 上的 asio::steady_timer
-    // (没有宿主可见唤醒源), 只能由声明式受控轮询推进。因此:
+    // (没有主程序可见唤醒源), 只能由声明式受控轮询推进。因此:
     // - 计时器必须真正到期 (elapsedMs ≈ ticks*intervalMs), 说明本地 reactor 被
-    //   持续驱动, 而不是"挂死在那里等宿主回调";
-    // - 插件执行期间宿主 IO 线程必须仍能推进其它任务 (hostTicks 递增 = 未被独占);
-    // - pumpOnStart/driverAvailable/onHostIoThread 为真 (真实宿主提供 coroutine_runtime)。
+    //   持续驱动, 而不是"挂死在那里等主程序回调";
+    // - 插件执行期间主程序 IO 线程必须仍能推进其它任务 (hostTicks 递增 = 未被独占);
+    // - pumpOnStart/driverAvailable/onHostIoThread 为真 (真实主程序提供 coroutine_runtime)。
     {
         auto instPolled = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(instPolled != nullptr);
@@ -2385,7 +2385,7 @@ throw new Error("top-level rollback probe");
             // asio 原生 timer 在 pump 下真正到期 (退避间隔 10ms, 因此放宽下界)
             XX_TEST_EXPECT_GE(j["elapsedMs"].get<int64_t>(), int64_t{40});
             XX_TEST_EXPECT_TRUE(wallMs < 3000);
-            // 插件等待期间宿主任务持续推进 => 两者在同一 IO 序列中交错
+            // 插件等待期间主程序任务持续推进 => 两者在同一 IO 序列中交错
             XX_TEST_EXPECT_GE(hostTicks.load(), 2);
         }
         XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("example_plugin"));
@@ -2525,7 +2525,7 @@ throw new Error("top-level rollback probe");
 
     // ---- 38d-3. 工具权限声明: 插件在注册工具后声明自身工具的权限限制
     //             (agentxx.agent.permission 接口表), 声明交给权限中间件并由
-    //             宿主统一判定; 插件禁用/卸载时声明随工具一并撤销 ----
+    //             主程序统一判定; 插件禁用/卸载时声明随工具一并撤销 ----
     {
         // 装配权限中间件 (真实运行中由 BaseAgent::initMiddleware 装配)
         auto permission = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(ctx);
@@ -2827,7 +2827,7 @@ throw new Error("top-level rollback probe");
                 }
             }
 
-            // (6) 宿主未装配权限中间件: 查询返回失败 → 工具跳过过滤 (保持原行为)
+            // (6) 主程序未装配权限中间件: 查询返回失败 → 工具跳过过滤 (保持原行为)
             ctx->middlewareHandleContext->handles.pop_back();
             if (globTool) {
                 auto globOut = co_await globTool->execute_async(utilxx_base::Json{
@@ -2880,7 +2880,7 @@ throw new Error("top-level rollback probe");
     // ---- 38e. agentxx_websearch 端到端: 网络等待走受控轮询 (本地回环 HTTP 服务) ----
     //
     // 覆盖: 单请求完成、并发多请求 (共享同一 polled 驱动序列与 HTTP keep-alive 池,
-    // 互不阻塞)、插件等待期间宿主 IO 线程仍在推进。
+    // 互不阻塞)、插件等待期间主程序 IO 线程仍在推进。
     {
         using Server = utilxx::HttpServer;
         Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
@@ -2974,7 +2974,7 @@ throw new Error("top-level rollback probe");
                 }
                 netDone.store(true, std::memory_order_release);
                 XX_TEST_EXPECT_EQ(okCount.load(), kConcurrent);
-                // 插件等待网络期间宿主任务仍在推进
+                // 插件等待网络期间主程序任务仍在推进
                 XX_TEST_EXPECT_GE(hostTicks.load(), 2);
             }
             // 卸载: 无未完成操作 -> pump 已停止, 无残留
@@ -3029,7 +3029,7 @@ throw new Error("top-level rollback probe");
             co_await sleepMs(150);
             XX_TEST_EXPECT_FALSE(ures.done.load());
             auto t0 = std::chrono::steady_clock::now();
-            // 卸载: 宿主取消操作 -> 插件结束 (kill 进程组) -> pump 停止 -> inflight 归零
+            // 卸载: 主程序取消操作 -> 插件结束 (kill 进程组) -> pump 停止 -> inflight 归零
             XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_execute_command")
             );
             auto unloadMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3099,7 +3099,7 @@ throw new Error("top-level rollback probe");
 
     // ---- 40. 加载期 start 失败的真实 DSO 回滚 (R2 遗留) ----
     // 测试插件 start 依次注册 工具/图类型/订阅/prompt/hook/能力/资源 后主动失败:
-    // - 宿主必须回滚全部已生效注册 (工具/图类型/订阅/prompt/hook 中间件/能力/资源);
+    // - 主程序必须回滚全部已生效注册 (工具/图类型/订阅/prompt/hook 中间件/能力/资源);
     // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件
     //   `{"step":"all","ok":true}` 证明走到了最后一步)。
     {
@@ -3143,7 +3143,7 @@ throw new Error("top-level rollback probe");
             }
         };
 
-        // 第一次加载: 全注册后失败, 宿主回滚
+        // 第一次加载: 全注册后失败, 主程序回滚
         auto fail1
             = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
         XX_TEST_EXPECT_TRUE(fail1 == nullptr);
@@ -3205,7 +3205,7 @@ throw new Error("top-level rollback probe");
 
     // ---- 41. agentxx_planning 插件: 提示词迁移与 todos 无 summary 验证 ----
     {
-        // 41.1 验证宿主初始状态下无 planning 提示词 (已从 prompt.h 剥离)
+        // 41.1 验证主程序初始状态下无 planning 提示词 (已从 prompt.h 剥离)
         auto planCtx                     = std::make_shared<agent::AgentContext>();
         planCtx->agentConfig             = std::make_shared<agent::AgentConfig>();
         planCtx->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();

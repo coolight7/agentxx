@@ -392,11 +392,11 @@ private:
     /// 构建尾部 (仍增长) 块项 (每帧重建)
     LazyBuiltItem buildStreamingFrontier(const TUIRenderState& st);
 
-    /// 上报视角内"工具消息装饰区域"的可见性 (UI 线程; 每帧一次)
+    /// 上报角度内"工具消息装饰区域"的可见性 (UI 线程; 每帧一次)
     ///
     /// 插件用 `tool_call_id` 作区域 id 注册 `pause_when_hidden` 定时器
     /// (装饰的按钮/控件也同样归到 tool_call_id) 时, 该区域是否可见由本函数上报;
-    /// 只有**曾经登记过装饰**的 id 才参与上报 (否则宿主的可见性表会随会话长度
+    /// 只有**曾经登记过装饰**的 id 才参与上报 (否则主程序的可见性表会随会话长度
     /// 无界增长, 且绝大多数 tool_call_id 无人关心)。
     /// - `args`:
     ///     - [vboxes] 上一帧各子项可见区域 (LazyScrollable::visibleBoxes)

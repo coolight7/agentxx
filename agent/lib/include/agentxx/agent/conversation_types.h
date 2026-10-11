@@ -275,7 +275,7 @@ struct ViewMessage {
     // ---- Role::Think 专属 ----
     struct ThinkData {
         int  reasoningTokens = 0;     ///< 思考消耗 token 数 (若网关提供)
-        bool isEncrypted     = false; ///< 是否为加密 thinking 载体
+        bool isEncrypted     = false; ///< 是否为加密 thinking 内容
     };
 
     // ---- Role::Interrupt 专属 ----

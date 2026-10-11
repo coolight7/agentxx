@@ -2,15 +2,15 @@
 ///
 /// 背景: 核心在关键位置留出的扩展点 (token 估算 / 上下文压缩 / 工具输出摘要 ...)
 /// 过去写死在中间件与节点里, 插件既提供不了也调用不了, 也没有统一的清单、顺序、
-/// 置空与调用口径。本子系统把这些扩展点统一成"功能点":
+/// 置空与调用规则。本子系统把这些扩展点统一成"功能点":
 ///
 /// - **点 (Point)**: 一个带 id 的对象 ([ProvidePoint] / [JsonProvidePoint]), 自己
 ///   持有实现列表、值缓存、统计与说明; 用哪个类由代码决定, `type` 只用于展示与日志;
-/// - **实现 (Impl)**: 分两层 —— `plugin` (插件与 FFI 宿主登记的实现) → `core`
-///   (libagentxx 自身实现); 层内按 `(priority 升序, 登记顺序)`。埋点天生接受外部
+/// - **实现 (Impl)**: 分两层 —— `plugin` (插件与 FFI 主程序登记的实现) → `core`
+///   (libagentxx 自身实现); 层内按 `(priority 升序, 登记顺序)`。扩展点天生接受外部
 ///   实现 (没有"只允许核心实现"这类开关), `core` 实现只是"没人给值时的兜底";
 /// - **调用 (Call)**: 应用自己用 [ProvidePoint::ask] (读值缓存、记置空), 外部
-///   (插件 / FFI 宿主 / 命令行) 用 [ProvidePoint::call] (只读值缓存、不记置空、
+///   (插件 / FFI 主程序 / 命令行) 用 [ProvidePoint::call] (只读值缓存、不记置空、
 ///   不写调用方会话、不发界面提示、不落盘)。
 ///
 /// 关键约定 (实现时不要绕开):
@@ -23,7 +23,7 @@
 /// - **超时两处都实现、默认都不限 (0)**: 点的声明方可以给 `implTimeoutMs` (等单个
 ///   插件实现, 到点取消当次实现并按"没意见"继续链), 调用方可以给 `timeoutMs`
 ///   (等整次调用, 到点返回 `failed`);
-/// - **全异步**: 实现与调用都在宿主 io 线程上跑协程; 不提供同步等待入口。
+/// - **全异步**: 实现与调用都在主程序 io 线程上跑协程; 不提供同步等待入口。
 ///
 /// 统计与成功调用日志只在开发者模式 ([agentxx::agent::AgentConfigStatic::devMode],
 /// 启动期冻结) 下收集; 关闭时清单只给"当前状态", 不含 `stat` 段。
@@ -67,7 +67,7 @@ enum class PointType : int32_t {
 
 /// 实现所在的层 (排序时 `plugin` 恒在 `core` 之前)
 enum class ImplLayer : int32_t {
-    Plugin = 0, ///< 插件与 FFI 宿主登记的实现
+    Plugin = 0, ///< 插件与 FFI 主程序登记的实现
     Core   = 1, ///< libagentxx 自身实现 (没人给值时的兜底)
 };
 
@@ -88,11 +88,11 @@ const char* implLayerKey(ImplLayer layer) noexcept;
 const char* callErrorKey(CallError error) noexcept;
 
 /// `priority` 允许范围: 越界裁剪到上下限并记一条警告 (不拒绝登记)
-/// - 上限刻意远大于宿主默认带 1000: 声明方显式给更大值就能排在宿主实现之后
+/// - 上限刻意远大于主程序默认带 1000: 声明方显式给更大值就能排在主程序实现之后
 /// - 下限对称: 插件想抢在所有人之前可用负值
 inline constexpr int32_t kPriorityMin = -100000;
 inline constexpr int32_t kPriorityMax = 100000;
-/// 默认优先级带: 插件实现 `0`, FFI 宿主实现 `1000` (排在插件之后、core 之前)
+/// 默认优先级带: 插件实现 `0`, FFI 主程序实现 `1000` (排在插件之后、core 之前)
 inline constexpr int32_t kPluginDefaultPriority = 0;
 inline constexpr int32_t kHostDefaultPriority   = 1000;
 /// 单次请求 / 结果的大小上限 (超过直接拒绝并说明)
@@ -130,13 +130,13 @@ struct ImplContext {
     std::string sessionId;       ///< 规范请求里带的会话 (可为空)
 };
 
-/// 实现登记规格 (插件 / FFI 宿主用; 核心实现走 [ProvidePoint::addCoreImpl])
+/// 实现登记规格 (插件 / FFI 主程序用; 核心实现走 [ProvidePoint::addCoreImpl])
 struct ImplSpec {
     /// 调用实现: 入参为调用上下文 JSON 文本, 返回回答文本 (nullopt = 没意见)
     /// - 回答形状见 [parseImplAnswer]: `{"value": ...}` / `{"disable": true}` / `{}`
-    /// - 实现抛异常等价于"没意见" (宿主记一条警告并继续问下一个实现)
+    /// - 实现抛异常等价于"没意见" (主程序记一条警告并继续问下一个实现)
     using Fn = std::function<asio::awaitable<std::optional<std::string>>(std::string callJson)>;
-    /// 请求取消当次实现 (可为空); 到点超时或调用方放弃时由宿主调用
+    /// 请求取消当次实现 (可为空); 到点超时或调用方放弃时由主程序调用
     using CancelFn = std::function<void()>;
 
     ImplLayer   layer = ImplLayer::Plugin;
@@ -256,7 +256,7 @@ using AskResult = FeatureResult<TValue>;
 template<class TValue>
 using CallResult = FeatureResult<TValue>;
 
-/// 通用 JSON 值 (插件点与宿主点用)
+/// 通用 JSON 值 (插件点与主程序点用)
 using JsonResult = FeatureResult<utilxx_base::Json>;
 
 // ==================== 类型化的 JSON 编解码 ====================
@@ -277,7 +277,7 @@ concept JsonCodable = requires(const T& v, std::string_view s) {
     { Codec<T>::fromJson(s) } -> std::convertible_to<std::optional<T>>;
 };
 
-/// 实现回答的解析结果 (插件层与核心层共用同一份口径)
+/// 实现回答的解析结果 (插件层与核心层共用同一份规则)
 struct ImplAnswer {
     enum class Kind : int32_t {
         NoOpinion = 0, ///< 没意见 (空对象 / 不认识的形状)
@@ -314,7 +314,7 @@ public:
     const std::string&  id() const noexcept;
     PointType           type() const noexcept;
     const PointOptions& options() const noexcept;
-    /// 声明来源: `core` / `plugin:<插件名>` / `host:<宿主名>`
+    /// 声明来源: `core` / `plugin:<插件名>` / `host:<主程序名>`
     const std::string& origin() const noexcept;
     void               setOrigin(std::string origin);
 
@@ -323,7 +323,7 @@ public:
     /// 等单个插件实现的超时 (毫秒; 0 = 不限)
     int32_t implTimeoutMs() const noexcept;
 
-    // ---- 实现登记 (插件 / FFI 宿主) ----
+    // ---- 实现登记 (插件 / FFI 主程序) ----
     /// 登记实现
     /// - 同一 `(点, owner)` 重复登记为覆盖 (记一条日志)
     /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记)
@@ -334,7 +334,7 @@ public:
     /// `return`: 0 成功; 非 0 失败 (id 或调用函数为空)
     int32_t addImpl(ImplSpec spec);
 
-    /// 撤销某归属的实现 (插件注销 / 禁用 / 卸载时由宿主调用)
+    /// 撤销某归属的实现 (插件注销 / 禁用 / 卸载时由主程序调用)
     /// - 顺带清掉它产出的值缓存条目与它留下的置空标记
     ///
     /// `return`: 撤销的实现条数
@@ -592,7 +592,7 @@ protected:
     }
 
     asio::awaitable<ChainOutcome> runChain(const ChainEnv& env) override {
-        // 1) 插件层 (插件 / FFI 宿主登记的实现)
+        // 1) 插件层 (插件 / FFI 主程序登记的实现)
         auto outcome = co_await runPluginLayer(env);
         if (outcome.hasValue || outcome.disabled) {
             co_return outcome;
@@ -670,7 +670,7 @@ private:
         }
     }
 
-    /// `priority` 越界裁剪到上下限 (与插件层同一口径)
+    /// `priority` 越界裁剪到上下限 (与插件层同一规则)
     static int32_t clampPriority(int32_t priority) noexcept {
         if (priority < kPriorityMin) {
             return kPriorityMin;
@@ -716,7 +716,7 @@ private:
 
 /// 通用 JSON 取值点: 请求与值都是任意 JSON
 ///
-/// - 用于插件声明的点 (`plugin.<自己>.<名字>`) 与宿主声明的点; 参数原样交给实现;
+/// - 用于插件声明的点 (`plugin.<自己>.<名字>`) 与主程序声明的点; 参数原样交给实现;
 /// - 插件点本轮固定不缓存 (策略 `None`), 要缓存请由调用方按结果里的 `identity` 自理;
 /// - 没有核心实现: "core 层"为空, 没人给值就是 `no_impl`。
 class JsonProvidePoint : public PointBase {
@@ -724,10 +724,10 @@ public:
 
     JsonProvidePoint(std::string id, PointOptions opts, std::string origin);
 
-    /// 应用侧取值
+    /// 主程序取值
     asio::awaitable<JsonResult> ask(std::string argsJson, AskOptions opts = {});
 
-    /// 外部主动调用 (插件 / FFI 宿主 / 命令行入口都走这里)
+    /// 外部主动调用 (插件 / FFI 主程序 / 命令行入口都走这里)
     asio::awaitable<JsonResult> call(std::string argsJson, CallOptions opts = {});
 
 protected:

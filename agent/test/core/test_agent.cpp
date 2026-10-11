@@ -880,7 +880,7 @@ asio::awaitable<void> test_agent_tool_calls() {
 
     // 图条件 xx_has_tool_calls 在真实运行产生的图状态上生效:
     // 本轮最后一条 assistant 带 tool_calls, 影子通道应记录该条数 (条件返回 true),
-    // 说明宿主在上下文变更时确实刷新了 xx_messagesMeta
+    // 说明主程序在上下文变更时确实刷新了 xx_messagesMeta
     {
         auto* engine = agent.getEngine();
         XX_TEST_EXPECT_TRUE(engine != nullptr);

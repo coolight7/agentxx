@@ -33,7 +33,7 @@ public:
         return {
             // ui 表整体 (表 IID): 本适配器覆盖 "agentxx.client.ui" 表的全部子能力
             // (下方逐个声明), 因此同时声明表整体 —— 清单里按表名声明依赖的插件
-            // 视为已满足; 子能力不全的宿主 (cli) 不声明本项
+            // 视为已满足; 子能力不全的主程序 (cli) 不声明本项
             std::string{pi::ClientUi},
             std::string{pi::ClientStatusItem},
             std::string{pi::ClientPanel},
@@ -50,11 +50,11 @@ public:
             std::string{pi::ClientOverlay},
             // 组件描述能力: 能渲染 agentxx.ui.item 全量组件 (布局/结构化/图表/控件)
             std::string{pi::ClientComponents},
-            // 插件表单: 控件状态由宿主维护, 提交结果经动作通道回传
+            // 插件表单: 控件状态由主程序维护, 提交结果经动作通道回传
             std::string{pi::ClientForm},
             // 区域尺寸感知: 布局后把可用宽高告知插件 (事件 + 快照)
             std::string{pi::ClientLayout},
-            // 定时器: 宿主驱动 (asio steady_timer, 回调在 client io 线程);
+            // 定时器: 主程序驱动 (asio steady_timer, 回调在 client io 线程);
             // 面板/Info 不可见时可暂停, 动画等级 Disabled 时拒绝注册
             std::string{pi::ClientTimer},
             // 全局快捷键: 注册/注销/列表; 按键派发在 client io 线程执行插件回调

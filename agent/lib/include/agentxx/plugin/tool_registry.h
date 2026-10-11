@@ -17,7 +17,7 @@ namespace plugin {
 /// - 统一以 shared_ptr 持有插件工具: 摘除注册后, 执行中调用仍由局部
 ///   shared_ptr 引用计数保活, 代码段不会在执行中被卸载 (插件卸载须等
 ///   插件实例 inflight==0, 见 PluginManager)
-/// - 仅 io 线程读写 (与 Session 无锁模型一致); 工具执行在宿主线程池,
+/// - 仅 io 线程读写 (与 Session 无锁模型一致); 工具执行在主程序线程池,
 ///   经 find() 取 shared_ptr 后跨线程安全
 /// - 内置工具 (engine->own_tools 的 unique_ptr 所有权) 不进入本表,
 ///   查找顺序: 本表优先 (动态) → ToolcallWrapNode 静态列表回退

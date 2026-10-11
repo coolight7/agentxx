@@ -1,14 +1,14 @@
-/// agent 侧插件宿主 —— 领域部分 (工具/权限/钩子/图/提示词/资源) 与生命周期接缝
+/// agent 侧插件主程序 —— 业务部分 (工具/权限/钩子/图/提示词/资源) 与生命周期扩展点
 ///
-/// 装载/启停/禁用启用/卸载/级联依赖的骨架在 cxx_pluginxx
+/// 加载/启停/禁用启用/卸载/级联依赖的骨架在 cxx_pluginxx
 /// (见
 /// [pluginxx/host/lifecycle.h](/agent/third_party/cxx_pluginxx/include/pluginxx/host/lifecycle.h)),
 /// 本文件只保留:
 /// 1. 实例的析构 (stop 欠账时拒绝 destroy/dlclose 的守卫);
-/// 2. 管理器构造/析构与领域注册表初始化;
-/// 3. 骨架的宿主接缝覆写 —— "把宿主配置类型转成内核装载参数"以及
-///    "把领域注册(工具/权限/钩子/图/提示词/资源)摘除或清空";
-/// 4. agentxx 自己的查询与配置驱动装载 (list / JSON / loadConfiguredPlugins)。
+/// 2. 管理器构造/析构与业务注册表初始化;
+/// 3. 骨架的主程序扩展点覆写 —— "把主程序配置类型转成插件框架加载参数"以及
+///    "把业务注册(工具/权限/钩子/图/提示词/资源)摘除或清空";
+/// 4. agentxx 自己的查询与配置驱动加载 (list / JSON / loadConfiguredPlugins)。
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "pluginxx/runtime/op_driver.h"
@@ -76,7 +76,7 @@ PluginInstance::~PluginInstance() {
 
 PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext) :
     agentContext_(std::move(agentContext)) {
-    // 通用表 (events/scheduler/tasks/capabilities 等) 需要宿主数据的入口经本类取数
+    // 通用表 (events/scheduler/tasks/capabilities 等) 需要主程序数据的入口经本类取数
     // (见 pluginxx/host/domain_hooks.h): 在任何 vtable 入口被调用之前注入。
     setDomainHooks(this);
     if (auto ctx = agentContext_.lock()) {
@@ -108,11 +108,11 @@ void PluginManager::flushPendingCleanup() {
 }
 
 // =====================================================================
-// pluginxx::PluginHostLifecycle 宿主接缝
+// pluginxx::PluginHostLifecycle 的扩展点 (由本类覆写)
 // =====================================================================
 
 /// 生成 agent 侧实例对象
-/// - 只做领域自引用 (self) 与所属管理器 (manager) 的设置;
+/// - 只做业务自引用 (self) 与所属管理器 (manager) 的设置;
 /// - 基类自引用 (ownerSelf)、元信息/描述/路径、生命周期入口、生命周期控制块与
 ///   交给自己插件的 host 控制块由骨架的 makeInstance 统一装配。
 std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) {
@@ -122,8 +122,8 @@ std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) 
     return inst;
 }
 
-/// 摘除实例的领域注册 (工具 / 工具权限 / 图节点类型 / 提示词贡献 / 功能点 / 钩子处理器)
-/// - 只摘除宿主侧生效的注册, 保留实例内的注册记录 (启用时由 start 事务重新声明);
+/// 摘除实例的业务注册 (工具 / 工具权限 / 图节点类型 / 提示词贡献 / 功能点 / 钩子处理器)
+/// - 只摘除主程序侧生效的注册, 保留实例内的注册记录 (启用时由 start 事务重新声明);
 /// - 事件订阅与能力声明的撤销属通用部分, 由骨架的 detachAll 处理。
 void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     if (!inst) {
@@ -167,7 +167,7 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     detachHookHandlers(inst);
 }
 
-/// 摘除实例专属资源的所有权: 资源应用器上的启用标记 (钩子派发器是宿主级单例,
+/// 摘除实例专属资源的所有权: 资源应用器上的启用标记 (钩子派发器是主程序级单例,
 /// 不在实例名下, 处理器由 [detachHookHandlers] 从注册表摘除)
 void PluginManager::detachDomainOwnedResources(PluginInstance* inst) {
     if (!inst) {
@@ -180,7 +180,7 @@ void PluginManager::detachDomainOwnedResources(PluginInstance* inst) {
     }
 }
 
-/// 清空"由插件 start 事务重新声明"的领域记录 (工具/权限/hook/图/功能点)
+/// 清空"由插件 start 事务重新声明"的业务记录 (工具/权限/hook/图/功能点)
 /// - 通用记录 (事件订阅/能力声明) 由骨架的 clearPluginOwnedRegistrations 清空;
 /// - stop 成功后调用, 避免下次 start 在旧记录上重复累积。
 void PluginManager::clearDomainRegistrations(PluginInstance* inst) {
@@ -216,12 +216,12 @@ void PluginManager::onInstanceEnabledChanged(PluginInstance& inst, bool enabled)
 }
 
 // =====================================================================
-// 装载入口 (旧签名 → 内核装载参数)
+// 加加载口 (旧签名 → 插件框架加载参数)
 // =====================================================================
 
 namespace {
 
-/// 宿主插件配置 → 内核装载参数 (骨架只认 args 与 configPath 两个字段)
+/// 主程序插件配置 → 插件框架加载参数 (骨架只认 args 与 configPath 两个字段)
 void toLoadOptions(
     const agentxx::agent::PluginConfig* cfg,
     pluginxx::PluginLoadOptions&        options,
@@ -234,9 +234,9 @@ void toLoadOptions(
     }
 }
 
-/// 记录装载耗时与注册计数 (计划 PLG-10)
+/// 记录加载耗时与注册计数 (计划 PLG-10)
 ///
-/// 在装载入口收尾时调用: 写回 [PluginInstance::loadMs] 并把"装载完成后到底注册了
+/// 在加加载口收尾时调用: 写回 [PluginInstance::loadMs] 并把"加载完成后到底注册了
 /// 什么"打到日志, 便于回答"插件装了但模型看不到工具"一类问题;
 /// 完整清单另见装配快照 (ARC-6, `--dump-config`)。
 void notePluginLoaded(
@@ -267,10 +267,10 @@ void notePluginLoaded(
     );
 }
 
-/// 装载失败后记一句"怎么改"的建议 (计划 PLG-7)
-/// - 内核日志已经说明"哪一步失败了"; 这里补的是"照什么改" (路径/清单/导出符号),
-///   只在失败路径调用, 正常装载不产生额外开销
-/// - 装载失败本身不是错误用法 (例如插件只是没装), 因此按 WARN 记录
+/// 加载失败后记一句"怎么改"的建议 (计划 PLG-7)
+/// - 插件框架日志已经说明"哪一步失败了"; 这里补的是"照什么改" (路径/清单/导出符号),
+///   只在失败路径调用, 正常加载不产生额外开销
+/// - 加载失败本身不是错误用法 (例如插件只是没装), 因此按 WARN 记录
 void logLoadAdvice(const PluginManager& mgr, std::string_view path) {
     const auto advice = mgr.diagnosePluginPath(path);
     if (!advice.empty()) {
@@ -344,7 +344,7 @@ std::string PluginManager::diagnosePluginPath(std::string_view path) const {
             )) {
             return fmt::format(
                 "plugin.yaml 解析失败或不完整: `{}` (检查 YAML 语法缩进与 name/entry 字段; "
-                "解析失败时装载会被拒绝且不产生任何注册)",
+                "解析失败时加载会被拒绝且不产生任何注册)",
                 manifestPath.string()
             );
         }
@@ -405,7 +405,7 @@ std::string PluginManager::diagnosePluginPath(std::string_view path) const {
             list += (i == 0 ? "" : ", ") + missing[i];
         }
         return fmt::format(
-            "动态库 `{}` 缺少宿主入口符号: {} (插件必须导出 create/destroy/start/stop 五个入口; "
+            "动态库 `{}` 缺少主程序入口符号: {} (插件必须导出 create/destroy/start/stop 五个入口; "
             "C++ 插件用 AGENTXX_PLUGIN_AGENT_EXPORT 宏一次生成, 手写 create/destroy 的用 "
             "AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT 补 start/stop; 另外检查导出白名单是否把入口"
             "符号也隐藏了)",
@@ -592,7 +592,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
 }
 
 // =====================================================================
-// 配置驱动装载 (agentxx 自有: 输入是宿主配置条目, 与内核装载参数解耦)
+// 配置驱动加载 (agentxx 自有: 输入是主程序配置条目, 与插件框架加载参数解耦)
 // =====================================================================
 
 asio::awaitable<void>

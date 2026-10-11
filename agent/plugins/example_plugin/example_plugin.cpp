@@ -5,7 +5,7 @@
 ///    - example_echo (快同步 fast_tool, io 线程直跑)
 ///    - example_caller (锚定 Task 协程, 经 call_tool 异步互调)
 ///    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
-///    - example_bridge (协程驱动桥样例: 宿主 timer + 宿主回调两个真实唤醒源)
+///    - example_bridge (协程驱动桥样例: 主程序 timer + 主程序回调两个真实唤醒源)
 ///    - example_polled_timer (受控轮询样例: 插件本地 reactor 上的 asio steady_timer)
 /// 2. 钩子: agent_start 钩子
 /// 3. 事件: 订阅 plugin.demo.topic 与跨端事件
@@ -105,10 +105,10 @@ static void PLUGINXX_CALL on_client_hello(const PluginxxStringView*, void* ud) {
 /// 入口语义 (见 docs/zh-cn/design/plugins.md 生命周期小节):
 /// - `create`: 只分配上下文、查询接口、初始化纯本地字段; 不提交任何运行时注册,
 ///   不启动不受托管的线程。
-/// - `start`: 在宿主 IO 线程执行注册事务 (工具/hook/事件/能力/prompt); 失败时
-///   返回 NULL + error, 宿主按"拒绝"处理并回滚已生效的注册。
+/// - `start`: 在主程序 IO 线程执行注册事务 (工具/hook/事件/能力/prompt); 失败时
+///   返回 NULL + error, 主程序按"拒绝"处理并回滚已生效的注册。
 /// - `stop`: 在实例停用/关闭时给出完成信号 (本插件没有自管线程/定时器)。
-/// - `destroy`: 只释放本地内存; 不创建异步工作、不调用宿主注册接口。
+/// - `destroy`: 只释放本地内存; 不创建异步工作、不调用主程序注册接口。
 
 extern "C" PLUGINXX_EXPORT int
     agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
@@ -136,7 +136,7 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由宿主回滚已生效的注册。
+/// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由主程序回滚已生效的注册。
 static int exampleAgentSetup(AgentCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     // 1.1 echo: 快同步内联工具 (fast_tool)
@@ -193,10 +193,10 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     // 1.4 bridge: 协程驱动桥诊断 (plugin.md 样例)
     //
     // 这个工具演示驱动桥的两个"真实唤醒源":
-    //   1. 宿主已有 scheduler timer 回调 (`co_await sleep`) —— 到期时 adapter 只把
+    //   1. 主程序已有 scheduler timer 回调 (`co_await sleep`) —— 到期时 adapter 只把
     //      continuation 投递到本地执行器并唤醒, 下一步由下一次 host driver 推进;
-    //   2. 宿主回调式异步接口 (`co_await call_tool`) —— 完成回调同样不重入插件协程。
-    // 因此这里的循环既不是轮询、也不占用额外线程: 每一步都对应一次宿主驱动。
+    //   2. 主程序回调式异步接口 (`co_await call_tool`) —— 完成回调同样不重入插件协程。
+    // 因此这里的循环既不是轮询、也不占用额外线程: 每一步都对应一次主程序驱动。
     agentxx::plugin::tool(
         ctx,
         "example_bridge",
@@ -221,11 +221,11 @@ static int exampleAgentSetup(AgentCtx& ctx) {
             auto* bridge      = &c.bridge();
             bool  onIoAtStart = bridge->onHostIoThread();
             for (int i = 0; i < ticks; ++i) {
-                // 宿主计时器适配: 到期 -> 投递 continuation + wake -> 下一次 driver 恢复
+                // 主程序计时器适配: 到期 -> 投递 continuation + wake -> 下一次 driver 恢复
                 co_await agentxx::plugin::sleep(c, 1);
                 ctl.throw_if_cancelled();
             }
-            // 宿主回调式互调: 完成回调同样只投递 + 唤醒
+            // 主程序回调式互调: 完成回调同样只投递 + 唤醒
             std::string echo = co_await agentxx::plugin::call_tool(
                 c,
                 "example_echo",
@@ -245,10 +245,10 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     // 1.5 polled_timer: 受控轮询样例 (声明式 `polled_tool`)
     //
     // 业务体是 asio 协程, 等待的是**插件本地 reactor** 上的 `steady_timer`:
-    // 这类等待没有"宿主可见唤醒源", 因此由桥以受控轮询推进 ——
+    // 这类等待没有"主程序可见唤醒源", 因此由桥以受控轮询推进 ——
     // - 有未完成的 polled 操作时才申请驱动请求 (空闲零开销);
     // - 有进展立刻续下一次请求, 无进展退避 10ms, 突发 256 步后强制让出;
-    // - 宿主不提供 `coroutine_runtime`/`scheduler.sleep` 时自动降级为
+    // - 主程序不提供 `coroutine_runtime`/`scheduler.sleep` 时自动降级为
     //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。
     // 返回的 pumpOnStart 证明该协程确实以"受控轮询根"身份运行。
     agentxx::plugin::polled_tool(
@@ -385,7 +385,7 @@ static void*
 
 static void* exampleAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 本插件没有自管线程/定时器: stop 只给出完成信号。注册记录 (工具/hook/能力/
-    // 订阅/prompt 贡献) 由宿主在 stop 后统一撤销, 这里不重复反注册, 避免与宿主
+    // 订阅/prompt 贡献) 由主程序在 stop 后统一撤销, 这里不重复反注册, 避免与主程序
     // 的清理交叉。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -426,7 +426,7 @@ extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_
     );
 }
 
-/// 字符串 → JSON 字符串字面量 (经宿主 agentxx.client.json 接口表; 结果含引号)
+/// 字符串 → JSON 字符串字面量 (经主程序 agentxx.client.json 接口表; 结果含引号)
 /// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
 static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text) {
     return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, text);
@@ -714,7 +714,7 @@ static void* exampleClientStart(
 }
 
 static void* exampleClientStop(ClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // UI 注册与事件订阅由宿主在本事务后统一撤销 (宿主记录里已保存), 这里只给
+    // UI 注册与事件订阅由主程序在本事务后统一撤销 (主程序记录里已保存), 这里只给
     // 完成信号; 插件自身没有线程/定时器需要回收。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -756,8 +756,8 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) 
             delete ctx;
             return;
         }
-        // UI 注册与事件订阅在 stop 事务后由宿主统一撤销 (见 exampleClientStop):
-        // destroy 只释放本地内存, 不再调用宿主注册接口。
+        // UI 注册与事件订阅在 stop 事务后由主程序统一撤销 (见 exampleClientStop):
+        // destroy 只释放本地内存, 不再调用主程序注册接口。
         if (ctx->iface.log && ctx->iface.log->log) {
             auto msgSv
                 = agentxx::plugin::PluginStringView::fromCstr("example client plugin unloaded");

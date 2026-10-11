@@ -111,11 +111,11 @@ static WireSessionList
 }
 
 // ---------------------------------------------------------------------------
-// 宿主约定事件 (host convention events)
+// 主程序约定事件 (host convention events)
 //
-// 宿主以伪插件名 kHostPluginName 向总线发布约定事件, 经 subscribePluginEvents
+// 主程序以伪插件名 kHostPluginName 向总线发布约定事件, 经 subscribePluginEvents
 // 的前缀订阅原样转发为 WirePluginData 到客户端, 同时可被 agent 侧插件直接订阅
-// (subscribe 时宿主自动加 "plugin." 前缀)。用于解决跨进程/分端部署时
+// (subscribe 时主程序自动加 "plugin." 前缀)。用于解决跨进程/分端部署时
 // "一次性状态事件先于订阅发布而丢失" 与 "对端插件可用性不可知" 问题:
 //
 // - `agentxx_host.client_attached`: 载荷 {"sessionId":"..."}。端点就绪后发布
@@ -129,24 +129,24 @@ static WireSessionList
 //   ("agentPlugins") 查询对端可用性与声明的接口, 缺失时可降级提示, 避免
 //   静默丢弃造成"操作成功"假象。
 // - `agentxx_host.client_interfaces`: 载荷 {"sessionId","interfaces":[...]}
-//   (client 宿主支持的接口名集合)。由客户端在 READY 时经上行插件数据通道
+//   (client 主程序支持的接口名集合)。由客户端在 READY 时经上行插件数据通道
 //   上报 (ClientPluginManager::onReady); controller 与 client 是 1:N (同
 //   会话可多 client 接入/重连), 服务端不存储, 仅在 WirePluginDataUp 分支
 //   拦截并发布到 agent 总线 —— agent 侧插件订阅
 //   "agentxx_host.client_interfaces" 按事件到达感知各 client 快照, 据此
-//   自适应 (如 emit_message_tip 在无 toast 接口的宿主上降级)。
+//   自适应 (如 emit_message_tip 在无 toast 接口的主程序上降级)。
 //
 // 注意: server_plugins/client_interfaces 会转发到对端 (不以 "client." 开头,
 // 不触环回跳过), 对端插件同样可订阅处理。
 static constexpr std::string_view kHostPluginName    = "agentxx_host";
 static constexpr std::string_view kEvtClientAttached = "client_attached";
 static constexpr std::string_view kEvtServerPlugins  = "server_plugins";
-/// client 宿主接口集上报 (client → server; 见文件头注释)
+/// client 主程序接口集上报 (client → server; 见文件头注释)
 static constexpr std::string_view kEvtClientInterfaces = "client_interfaces";
 /// 上行 WirePluginDataUp 对端缺失警告冷却 (同一插件名两次警告最小间隔)
 static constexpr auto kUplinkWarnCooldown = std::chrono::seconds{30};
 
-/// 向总线发布宿主约定事件 (异步投递到总线 executor, 不阻塞调用方;
+/// 向总线发布主程序约定事件 (异步投递到总线 executor, 不阻塞调用方;
 /// 总线为空时跳过)。topic 组装为 "plugin.{kHostPluginName}.{event}"。
 static void publishHostEvent(
     const std::shared_ptr<agentxx::events::EventBus>& bus,
@@ -633,7 +633,7 @@ void SessionServerAgentIO::handleUserInput(
     }
     // agent 侧分阶段关闭 (计划 ARC-5): agent 已进入关闭阶段时同样不受理新输入
     // - 与上面的端点停止相互独立: 端点在进程退出时由调用方 stop, agent 可能
-    //   更早开始关闭 (例如宿主先关 agent 再停端点)
+    //   更早开始关闭 (例如主程序先关 agent 再停端点)
     if (auto agent = agent_.lock();
         agent && agent->agentContext && agent->agentContext->isShuttingDown()) {
         sendInputAck(
@@ -1159,7 +1159,7 @@ void SessionServerAgentIO::onPeerMessage(
 ) {
     // 连接阶段校验 (计划 PRO-5): 传输报告"尚未握手"时, 除 hello 之外的业务消息
     // 一律按 InvalidState 拒绝并给出原因, 而不是按正常流程处理或静默丢弃。
-    // - 进程内 Channel 传输恒为 ready, 因此同进程宿主的行为不变
+    // - 进程内 Channel 传输恒为 ready, 因此同进程主程序的行为不变
     // - WS 传输在对端 hello 被接受之前为 unhandshaken
     if (sender && !std::holds_alternative<WireHello>(msg)
         && sender->stage() == WireConnectionStage::Unhandshaken) {
@@ -1563,12 +1563,12 @@ void SessionServerAgentIO::onPeerMessage(
                     asio::detached
                 );
             } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
-                // 宿主约定上行事件拦截: client_interfaces (client 宿主接口集
+                // 主程序约定上行事件拦截: client_interfaces (client 主程序接口集
                 // 上报, 三期6) —— controller 与 client 是 1:N (同会话可多
                 // client 接入/重连), 不做单值存储; 仅向 agent 总线转发
                 // (topic plugin.agentxx_host.client_interfaces, 订阅方按事件
                 // 到达感知各 client 快照), agent 侧插件据此自适应 (如无
-                // toast 接口的宿主上降级提示)
+                // toast 接口的主程序上降级提示)
                 if (m.plugin == kHostPluginName && m.event == kEvtClientInterfaces) {
                     if (auto agt = agent_.lock(); agt && agt->agentContext) {
                         publishHostEvent(agt->agentContext->bus, kEvtClientInterfaces, m.data);
@@ -1862,7 +1862,7 @@ void SessionServerAgentIO::handleHello(
         doSend(std::move(req));
     }
 
-    // 宿主约定事件 (见文件头 kHostPluginName 注释):
+    // 主程序约定事件 (见文件头 kHostPluginName 注释):
     // - server_plugins: 同 ack.plugins 的约定事件形态 (结构化对象数组, 供
     //   已运行的 client 插件经 EVT_PLUGIN_DATA 订阅处理, 不依赖握手字段)
     // - client_attached: 每次连接握手后重发一次 (重连/同会话新客户端也能
@@ -2024,7 +2024,7 @@ void SessionServerAgentIO::subscribePluginEvents() {
     auto self = shared_from_this();
     // 订阅全部插件事件 (topic `plugin.{插件名}.{事件名}`):
     // - 载荷均为 std::string (JSON); 类型不匹配跳过
-    // - 原样转发为 WirePluginData, 宿主不解析语义; 频率由插件控制
+    // - 原样转发为 WirePluginData, 主程序不解析语义; 频率由插件控制
     pluginSubId_ = bus->listenPrefix(
         "plugin.",
         [weakSelf = std::weak_ptr<SessionServerAgentIO>{self
@@ -2063,7 +2063,7 @@ void SessionServerAgentIO::subscribePluginEvents() {
     pluginSubscribed_ = true;
     // 权限状态变更订阅 (完全授权切换广播)
     subscribePermissionEvents(bus);
-    // 发布宿主约定事件 client_attached: 双端插件据此重发当前状态快照,
+    // 发布主程序约定事件 client_attached: 双端插件据此重发当前状态快照,
     // 修复"status 等一次性事件先于本订阅发布而丢失 → 客户端滞留初始占位"
     // 的问题 (晚创建的控制器/晚接入的客户端由此获得快照)
     publishHostEvent(

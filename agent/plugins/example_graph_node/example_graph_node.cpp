@@ -8,18 +8,18 @@
 ///      由图的 conditional edge (route_channel) 决定路由; 非枚举值取
 ///      fallback (默认 "normal"); 已检查过的轮次退化为 xx_has_tool_calls 语义路由
 ///    - example_datetime (时间输出): 将当前系统日期时间作为 assistant
-///      消息写入 messages channel —— 宿主把该通道的写入转成会话上下文写入
+///      消息写入 messages channel —— 主程序把该通道的写入转成会话上下文写入
 ///      (并同步 viewMessages / llmMessages)
 /// 2. 修改执行图 JSON: 将默认图 (agentxx.default) 改为
 ///    用户输入 → llm (识别意图) → intent_router (路由) → datetime 直接结束
 ///    轮次 / normal 进入原 agent loop (llm→tool→llm→...→end)
 ///    llm 节点置 xx_autoRoute=false: 由本图的 intent_router 决定路由,
-///    不使用宿主默认的"按 tool_calls 直接跳转"行为
+///    不使用主程序默认的"按 tool_calls 直接跳转"行为
 ///
 /// 节点实现遵循"统一异步操作模型" (操作 run_start/run_cancel):
-/// - run_start 在宿主 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
+/// - run_start 在主程序 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
 /// - state_json 为 GraphState::serialize() 结果, 只读; 修改经返回 writes
-///   (其中 messages 通道的写入由宿主转成会话上下文写入)
+///   (其中 messages 通道的写入由主程序转成会话上下文写入)
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -91,10 +91,10 @@ std::string normalizeIntent(std::string_view s) {
     return out;
 }
 
-/// 从宿主查询会话 LLM 上下文 (json 数组; 图状态不再包含 messages 通道)
+/// 从主程序查询会话 LLM 上下文 (json 数组; 图状态不再包含 messages 通道)
 ///
 /// - 上下文由会话持有 (唯一权威), 经 agentxx.agent.context 接口表查询;
-///   接口不可用/查询失败时返回空数组 (老宿主降级: 路由退化为 fallback)
+///   接口不可用/查询失败时返回空数组 (老主程序降级: 路由退化为 fallback)
 utilxx_base::Json sessionMessages(const AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
     const auto text = ctx.getSessionMessages(req.session());
     if (text.empty()) {
@@ -201,7 +201,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
             }
         }
         // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
-        // - 对 messages 通道的 overwrite 写由宿主转成会话上下文替换
+        // - 对 messages 通道的 overwrite 写由主程序转成会话上下文替换
         //   (图状态不再持有上下文), 语义与旧版一致
         if (route != fallback && messages.is_array() && !messages.empty()) {
             const auto origin    = sessionMessages(ctx, req);
@@ -245,8 +245,8 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 }
 
 /// 时间输出节点执行 (快同步): 写当前系统日期时间到 messages channel
-/// - 宿主把 messages 通道写入转成会话上下文写入 (assistant 角色消息),
-///   并发出与宿主节点同形的通道写事件 → EventBridge 同步 viewMessages 与
+/// - 主程序把 messages 通道写入转成会话上下文写入 (assistant 角色消息),
+///   并发出与主程序节点同形的通道写事件 → EventBridge 同步 viewMessages 与
 ///   节流持久化, 满足"添加到 viewMessages、llmMessages"
 /// - 图配置为执行后直接路由 __end__ 结束轮次
 std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
@@ -352,7 +352,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
     if (def.contains("nodes") && def["nodes"].is_object()) {
         nodes = def["nodes"];
     }
-    // llm 节点关闭"自动路由" (宿主默认按 tool_calls 直接返回 Command):
+    // llm 节点关闭"自动路由" (主程序默认按 tool_calls 直接返回 Command):
     // 本图把 llm 接到 intent_router, 由路由节点按 __route__ 条件边决定后续
     if (nodes.contains("llm") && nodes["llm"].is_object()) {
         nodes["llm"]["xx_autoRoute"] = false;
@@ -423,8 +423,8 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
 /// 入口语义 (见 docs/zh-cn/design/plugins.md 第 15 节):
 /// - `create`: 只构造上下文与查询接口, 不注册节点类型、不修改执行图。
 /// - `start`: 注册事务 (两个节点类型 + 执行图修改); 注册失败返回 NULL + error,
-///   宿主回滚已生效的节点类型与图类型槽位。
-/// - `stop`: 只给出完成信号; 节点类型注册记录由宿主在 stop 后统一撤销
+///   主程序回滚已生效的节点类型与图类型槽位。
+/// - `stop`: 只给出完成信号; 节点类型注册记录由主程序在 stop 后统一撤销
 ///   (GraphTypeSlot 失效使旧编译节点安全失败), 执行图保持当前定义。
 /// - `destroy`: 只释放本地内存。
 
@@ -453,7 +453,7 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 注册事务 (start 的实际内容); 任一步失败由宿主回滚已生效的注册。
+/// 注册事务 (start 的实际内容); 任一步失败由主程序回滚已生效的注册。
 static int exampleGraphAgentSetup(AgentCtx& ctx) {
     // 1. 注册意图识别节点类型 (统一 root adapter: 输入拥有化 + provider 句柄)
     if (agentxx::plugin::graph_node(
@@ -480,7 +480,7 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
     std::string err;
     if (modifyGraphToIntentFlow(ctx, err) != 0) {
         ctx.log.warn("modify graph failed: " + err);
-        // 节点已注册, 图修改失败不阻止插件加载 (宿主回退默认图)
+        // 节点已注册, 图修改失败不阻止插件加载 (主程序回退默认图)
     }
     return 0;
 }
@@ -517,7 +517,7 @@ static void* exampleGraphAgentStart(
 
 static void*
     exampleGraphAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 没有自管线程/定时器; 注册记录由宿主在 stop 后撤销。
+    // 没有自管线程/定时器; 注册记录由主程序在 stop 后撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

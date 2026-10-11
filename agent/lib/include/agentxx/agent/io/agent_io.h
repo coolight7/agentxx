@@ -27,7 +27,7 @@ namespace agent {
 
 /// Agent 端点基类: 定义 client/server 之间的操作契约
 ///
-/// 拓扑 (强制 transport: 两端点之间必须经 transport 连接, 进程内用 Channel):
+/// 连接方式 (强制 transport: 两端点之间必须经 transport 连接, 进程内用 Channel):
 ///
 ///   BaseAgent ──进程内直调──▶ server 端点 (SessionServerAgentIO)
 ///            sendToPeer(事件)/        │ transport (Channel | WebSocket)

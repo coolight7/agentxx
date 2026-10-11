@@ -191,9 +191,9 @@ constexpr Entry kTable[] = {
     {"session.loadedMore",              "Loaded {}/{}  ↓ Scroll down for more",                                        "已加载 {}/{}  ↓ 下移加载更多"                                                                  },
     {"session.loadMore",                "↓ Scroll down for more",                                                      "↓ 下移加载更多"                                                                                   },
     {"session.hint",
-     " [Up/Down] Move [Enter] Switch [Ctrl+R] Rename [Esc] Cancel ",                                                     " [方向键] 移动 [Enter] 切换 [Ctrl+R] 改名 [Esc] 取消 "                                            },
+     " [Up/Down] Move [Enter] Switch [Ctrl+R] Rename [Esc] Cancel ",                                                     " [方向键] 移动 [Enter] 切换 [Ctrl+R] 改名 [Esc] 取消 "                                         },
     {"session.renamePrompt",            "[Rename]",                                                                      "[改名]"                                                                                                 },
-    {"session.renameFailed",            "rename failed",                                                                 "会话改名失败"                                                                                      },
+    {"session.renameFailed",            "rename failed",                                                                 "会话改名失败"                                                                                       },
 
  // ---- 设置弹窗 ----
     {"settings.title",                  "Settings",                                                                      "设置"                                                                                                   },
@@ -232,7 +232,7 @@ constexpr Entry kTable[] = {
  // ---- Logs 侧边栏 Menu 弹窗 ----
     {"menu.title",                      "Menu",                                                                          "菜单"                                                                                                   },
     {"menu.llmContext",                 "LLM Context",                                                                   "LLM 上下文"                                                                                            },
-    {"menu.summaryContext",             "Summary Context",                                                               "总结上下文"                                                                                          },
+    {"menu.summaryContext",             "Summary Context",                                                               "压缩上下文"                                                                                          },
     {"menu.clearLogs",                  "Clear Logs",                                                                    "清空日志"                                                                                             },
     {"menu.hint",
      " [Up/Down] Select [Enter] Confirm [Esc] Close ",                                                                   " [方向键] 选择 [Enter] 确认 [Esc] 关闭 "                                                         },
@@ -327,9 +327,9 @@ constexpr Entry kTable[] = {
     {"tool.result",                     "  result: ",                                                                    "  结果: "                                                                                               },
     {"tool.file",                       "  file: ",                                                                      "  文件: "                                                                                               },
     {"tool.running",                    "  running...",                                                                  "  运行中..."                                                                                           },
-    // 生成占位提示 (GenStatus: 模型节点已开始执行但尚无可见输出时展示)
-    {"msg.genWaiting",                  "waiting for response...",                                                       "等待响应..."                                                                                            },
-    {"msg.genToolCalling",              "receiving tool call...",                                                        "正在调用工具..."                                                                                        },
+ // 生成占位提示 (GenStatus: 模型节点已开始执行但尚无可见输出时展示)
+    {"msg.genWaiting",                  "waiting for response...",                                                       "等待响应..."                                                                                          },
+    {"msg.genToolCalling",              "receiving tool call...",                                                        "正在调用工具..."                                                                                    },
     {"tool.noChanges",                  "  ( no changes )",                                                              "  ( 未更改 )"                                                                                          },
 
  // ---- 状态栏 ----

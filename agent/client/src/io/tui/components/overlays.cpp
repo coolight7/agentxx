@@ -8,11 +8,11 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "pluginxx/ui.h"
 #include "agentxx/util/exception.h"
 #include "ftxui/component/component.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
+#include "pluginxx/ui.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include <algorithm>
@@ -243,8 +243,8 @@ pluginxx::ui::Item makeNumberControl(
         {},
         utilxx_base::Json(value).dump()
     );
-    item.integer = true;
-    item.hasMin  = true;
+    item.integer  = true;
+    item.hasMin   = true;
     item.minValue = static_cast<double>(minValue);
     item.hasMax   = true;
     item.maxValue = static_cast<double>(maxValue);
@@ -279,11 +279,8 @@ pluginxx::ui::Item makeCheckControl(
 }
 
 /// 下拉候选项 (值 + 显示文本)
-pluginxx::ui::ControlOption makeOption(
-    std::string_view value,
-    std::string_view labelKey,
-    std::string_view labelFallback
-) {
+pluginxx::ui::ControlOption
+    makeOption(std::string_view value, std::string_view labelKey, std::string_view labelFallback) {
     pluginxx::ui::ControlOption o;
     o.valueJson = utilxx_base::Json(std::string{value}).dump();
     o.label     = trText(labelKey, labelFallback);
@@ -336,7 +333,7 @@ ModelConfigOverlay::ModelConfigOverlay(TUICtx& ctx) :
     ctx_(ctx) {
     buildItems();
     scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
-        const auto& theme = *ctx_.theme;
+        const auto&                  theme = *ctx_.theme;
         agentxx::client::UiRenderCtx rc;
         rc.theme = &theme;
         // 内容宽度取滚动容器上一帧的测量值 (与 CustomOverlay 一致):
@@ -567,10 +564,23 @@ Element ModelConfigOverlay::OnRender() {
     double      wFrac = 0.7, hFrac = 0.85;
     int         popupW = 0, popupH = 0;
     const auto  termSize = ctx_.terminalSize();
-    popupW = std::clamp(static_cast<int>(static_cast<double>(termSize.dimx) * wFrac), 40, std::max(40, termSize.dimx - 4));
-    popupH = std::clamp(static_cast<int>(static_cast<double>(termSize.dimy) * hFrac), 10, std::max(10, termSize.dimy - 4));
+    popupW               = std::clamp(
+        static_cast<int>(static_cast<double>(termSize.dimx) * wFrac),
+        40,
+        std::max(40, termSize.dimx - 4)
+    );
+    popupH = std::clamp(
+        static_cast<int>(static_cast<double>(termSize.dimy) * hFrac),
+        10,
+        std::max(10, termSize.dimy - 4)
+    );
     const auto style = TuiSurfaceStyle::fromTheme(theme);
-    return tuiSurfacePopup(style, tr("model.form.title"), scrollable_->Render() | flex, tr("model.form.hint"))
+    return tuiSurfacePopup(
+               style,
+               tr("model.form.title"),
+               scrollable_->Render() | flex,
+               tr("model.form.hint")
+           )
            | size(WIDTH, GREATER_THAN, popupW) | size(WIDTH, LESS_THAN, popupW)
            | size(HEIGHT, GREATER_THAN, popupH) | size(HEIGHT, LESS_THAN, popupH);
 }
@@ -583,8 +593,8 @@ bool ModelConfigOverlay::OnEvent(Event event) {
         return true;
     }
     if (event.is_mouse()) {
-        const auto& mouse = event.mouse();
-        size_t      index = 0;
+        const auto& mouse  = event.mouse();
+        size_t      index  = 0;
         int         localX = 0;
         int         localY = 0;
         if (scrollable_->hitTestItem(mouse.x, mouse.y, index, localX, localY)) {
@@ -698,7 +708,7 @@ void ModelConfigOverlay::flushClose() {
 }
 
 void ModelConfigOverlay::setControlText(std::string_view id, std::string textValue) {
-    auto& state      = form_.ensure(id);
+    auto& state       = form_.ensure(id);
     state.initialized = true;
     state.edited      = true;
     state.editText    = std::move(textValue);
@@ -772,7 +782,9 @@ std::expected<agentxx::agent::ModelConfig, std::string>
             out = std::move(parsed);
             return {};
         } catch (const std::exception& e) {
-            return std::unexpected{fmt::format("{}: {} ({})", id, tr("model.form.errJson"), e.what())};
+            return std::unexpected{
+                fmt::format("{}: {} ({})", id, tr("model.form.errJson"), e.what())
+            };
         }
     };
 
@@ -781,10 +793,10 @@ std::expected<agentxx::agent::ModelConfig, std::string>
     if (mc.name.empty()) {
         return std::unexpected{std::string{tr("model.form.errName")}};
     }
-    mc.type      = textOf(kTypeId);
-    mc.baseUrl   = textOf(kBaseUrlId);
-    mc.apiPath   = textOf(kApiPathId);
-    mc.apiKey    = textOf(kApiKeyId);
+    mc.type    = textOf(kTypeId);
+    mc.baseUrl = textOf(kBaseUrlId);
+    mc.apiPath = textOf(kApiPathId);
+    mc.apiKey  = textOf(kApiKeyId);
     // 无鉴权服务的 Key 留空: 按 EMPTY 归一 (与写盘时一致)
     if (mc.apiKey.empty()) {
         mc.apiKey = "EMPTY";
@@ -792,18 +804,24 @@ std::expected<agentxx::agent::ModelConfig, std::string>
     mc.modelName = textOf(kModelNameId);
     mc.modelContextMaxToken
         = static_cast<size_t>(std::max<int64_t>(0, numberOf(kContextTokenId, 0)));
-    mc.connectTimeoutSeconds
-        = static_cast<int>(numberOf(kConnectTimeoutId, ModelConfig::defaultModelConfig.connectTimeoutSeconds));
-    mc.readChunkTimeoutSeconds
-        = static_cast<int>(numberOf(kReadTimeoutId, ModelConfig::defaultModelConfig.readChunkTimeoutSeconds));
-    mc.maxConcurrentConnections = static_cast<size_t>(
-        std::max<int64_t>(0, numberOf(kMaxConnectionsId, static_cast<int64_t>(ModelConfig::defaultModelConfig.maxConcurrentConnections)))
+    mc.connectTimeoutSeconds = static_cast<int>(
+        numberOf(kConnectTimeoutId, ModelConfig::defaultModelConfig.connectTimeoutSeconds)
     );
-    mc.sendThinking            = flagOf(kSendThinkingId, false);
-    mc.requestReasoningSummary = flagOf(kReasoningSummaryId, true);
-    mc.imageInput              = flagOf(kImageInputId, false);
-    mc.audioInput              = flagOf(kAudioInputId, false);
-    mc.videoInput              = flagOf(kVideoInputId, false);
+    mc.readChunkTimeoutSeconds = static_cast<int>(
+        numberOf(kReadTimeoutId, ModelConfig::defaultModelConfig.readChunkTimeoutSeconds)
+    );
+    mc.maxConcurrentConnections = static_cast<size_t>(std::max<int64_t>(
+        0,
+        numberOf(
+            kMaxConnectionsId,
+            static_cast<int64_t>(ModelConfig::defaultModelConfig.maxConcurrentConnections)
+        )
+    ));
+    mc.sendThinking             = flagOf(kSendThinkingId, false);
+    mc.requestReasoningSummary  = flagOf(kReasoningSummaryId, true);
+    mc.imageInput               = flagOf(kImageInputId, false);
+    mc.audioInput               = flagOf(kAudioInputId, false);
+    mc.videoInput               = flagOf(kVideoInputId, false);
 
     const std::string ssl = textOf(kSslVerifyId);
     if (ssl == "true") {
@@ -888,15 +906,15 @@ void SessionSelectorOverlay::beginRename() {
         return;
     }
     const auto& target = st.sessionList[static_cast<size_t>(index - 1)];
-    renameMode_      = true;
-    renameSessionId_ = target.sessionId;
-    renameText_      = target.title.empty() ? target.sessionId : target.title;
+    renameMode_        = true;
+    renameSessionId_   = target.sessionId;
+    renameText_        = target.title.empty() ? target.sessionId : target.title;
 }
 
 void SessionSelectorOverlay::submitRename() {
     const std::string title = renameText_;
     const std::string id    = renameSessionId_;
-    renameMode_ = false;
+    renameMode_             = false;
     renameSessionId_.clear();
     renameText_.clear();
     if (title.empty() || !onRename_) {
@@ -947,13 +965,11 @@ Element SessionSelectorOverlay::OnRender() {
     Elements rows;
     // 改名编辑态: 输入行显示正在编辑的标题 (非编辑态没有输入行)
     if (renameMode_) {
-        rows.push_back(
-            hbox({
-                text(std::string{tr("session.renamePrompt")}) | theme.dim(),
-                text(" "),
-                text(renameText_ + "_"),
-            })
-        );
+        rows.push_back(hbox({
+            text(std::string{tr("session.renamePrompt")}) | theme.dim(),
+            text(" "),
+            text(renameText_ + "_"),
+        }));
     }
     rows.push_back(list_.render(hits_, style_, rowBuilder));
     if (!tailHint.empty()) {
@@ -1304,7 +1320,7 @@ bool LogMenuOverlay::OnEvent(Event event) {
         }
         return true;
     }
-    // 上下键选择, Enter/鼠标点击命中激活 (LLM Context / 总结上下文 / 清空日志)
+    // 上下键选择, Enter/鼠标点击命中激活 (LLM Context / 压缩上下文 / 清空日志)
     const bool handled
         = event.is_mouse() ? list_.onMouseEvent(event.mouse(), hits_) : list_.onKeyEvent(event);
     if (handled) {
@@ -2945,14 +2961,14 @@ CustomOverlay::CustomOverlay(
         }
 
         agentxx::client::UiRenderCtx rc;
-        rc.theme            = &theme;
+        rc.theme = &theme;
         // 内容宽度取滚动容器的实际可用宽度 (上一帧测量值; 首帧为 -1):
         // 弹窗边框/内边距/滚动条都要占列, 只用终端宽度估算会让"按可用宽度分配列宽"
         // 的组件 (Row 的等分列、Table 的自动列宽) 算出比实际更大的宽度 —— 元素被收缩
         // 后画面与命中区域就会错位 (点击落到空处)
         {
             const int measured = scrollable_ ? scrollable_->contentWidth() : -1;
-            rc.width = measured > 0 ? measured : (ctx_.terminalSize().dimx - 8);
+            rc.width           = measured > 0 ? measured : (ctx_.terminalSize().dimx - 8);
         }
         rc.indent           = 0;
         rc.plugin           = ownerPlugin_;

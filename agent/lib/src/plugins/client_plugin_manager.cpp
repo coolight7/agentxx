@@ -45,7 +45,7 @@
 /// 可执行目录 helper
 using agentxx::plugin::getExecutableDirPath;
 
-/// 状态栏项宿主句柄实现 (全局作用域, 与
+/// 状态栏项主程序句柄实现 (全局作用域, 与
 /// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
 /// 的 C 不透明类型对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型,
 /// 不能在命名空间内另行定义)
@@ -55,21 +55,21 @@ struct AgentxxStatusItem {
     std::string                            plugin;
 };
 
-/// 面板宿主句柄实现
+/// 面板主程序句柄实现
 struct AgentxxPanel {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
     std::string                            id;
     std::string                            plugin;
 };
 
-/// Info 栏段落宿主句柄实现
+/// Info 栏段落主程序句柄实现
 struct AgentxxInfoSection {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
     std::string                            id;
     std::string                            plugin;
 };
 
-/// 全局快捷键宿主句柄实现
+/// 全局快捷键主程序句柄实现
 struct AgentxxKeybind {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
     std::string                            keys; ///< 规范化后的键位描述
@@ -329,12 +329,12 @@ ClientPluginManager::~ClientPluginManager() {
     }
 }
 
-// ==================== pluginxx::PluginHostLifecycle 宿主接缝 ====================
+// ==================== pluginxx::PluginHostLifecycle 的扩展点 (由本类覆写) ====================
 
 /// 生成 client 侧实例对象
-/// - 领域自引用 (self) 与所属管理器 (manager 弱引用);
-/// - 其余公共部分 (生命周期入口 / 基类自引用 / 生命周期控制块 / 宿主控制块)
-///   由 [attachInstance] 在装载路径中统一装配。
+/// - 业务自引用 (self) 与所属管理器 (manager 弱引用);
+/// - 其余公共部分 (生命周期入口 / 基类自引用 / 生命周期控制块 / 主程序控制块)
+///   由 [attachInstance] 在加载路径中统一装配。
 std::shared_ptr<ClientPluginInstance> ClientPluginManager::createInstance(std::string name) {
     auto inst     = std::make_shared<ClientPluginInstance>(std::move(name));
     inst->manager = weak_from_this();
@@ -386,7 +386,7 @@ InterfaceSet ClientPluginManager::hostSupportedInterfaces() const {
     // 接口集唯一来源: UI 适配器声明 (位图方案已移除, 见
     // [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
     // "接口协商" 节)。无适配器 (纯测试/直连) 时空集 —— 仅命令输入管线等
-    // 宿主固有能力也由适配器显式声明, 保持单一事实来源
+    // 主程序固有能力也由适配器显式声明, 保持单一事实来源
     return uiAdapter_ ? uiAdapter_->supportedInterfaces() : InterfaceSet{};
 }
 
@@ -516,7 +516,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     //      [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h) 接口协商节)
     //      ----
     // require 中本侧相关项未满足 → 跳过加载 (INFO + 记录原因, 非错误:
-    // 同一插件目录服务 cli/tui/gui 多宿主, 本宿主缺某接口是预期情况);
+    // 同一插件目录服务 cli/tui/gui 多主程序, 本主程序缺某接口是预期情况);
     // optional 缺失仅警告 (插件 entry 内应按 ui_caps()/interfaces 自降级)
     {
         auto check = checkInterfacesForSide(interfaces, hostSupportedInterfaces(), false);
@@ -620,7 +620,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->version     = version;
     inst->description = desc;
     inst->path        = path;
-    // 插件配置参数随加载直接传入 (与 agent 侧一致): 宿主不解析字段语义,
+    // 插件配置参数随加载直接传入 (与 agent 侧一致): 主程序不解析字段语义,
     // 插件经 vtable get_plugin_args 整体读取; 直连路径 cfg 为 nullptr → {}
     inst->args            = cfg ? cfg->args : utilxx_base::Json::object();
     inst->configPath      = cfg ? cfg->configPath : std::string{};
@@ -628,7 +628,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     inst->depends         = std::move(depends);
     inst->optionalDepends = std::move(optionalDepends);
     inst->interfaces      = std::move(interfaces);
-    // 生命周期入口 + 基类自引用 + 生命周期控制块 + 交给自己插件的宿主控制块
+    // 生命周期入口 + 基类自引用 + 生命周期控制块 + 交给自己插件的主程序控制块
     // (host 视图放在进程级稳定的控制块里: 插件可能保存该指针并在卸载后继续调用,
     // 控制块 tombstone 保证这类迟到调用安全失败)
     attachInstance(inst, lifecycleStart, lifecycleStop);
@@ -636,7 +636,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
     // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
     // client io 事件循环 (慢初始化/插件间调用时明显), 且违背契约声明的
-    // "entry 运行在宿主线程池";
+    // "entry 运行在主程序线程池";
     // 插件违约抛异常按 rc=-1 处理 (加载失败清理路径)
     int rc = co_await utilxx::offloadAsync<int>(*pool_, [inst, entryFn]() -> asio::awaitable<int> {
         try {
@@ -692,12 +692,12 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
 // ==================== 生命周期 (继承自 pluginxx::PluginHostLifecycle) ====================
 //
 // 卸载 / 关闭等待 / 禁用启用 / 级联依赖 / destroy 与 dlclose 的骨架在 cxx_pluginxx
-// (见 pluginxx/host/lifecycle.h): 这些逻辑与宿主领域无关, client 与 agent 两侧
+// (见 pluginxx/host/lifecycle.h): 这些逻辑与主程序业务无关, client 与 agent 两侧
 // 共用同一份实现 (含失败回滚、关闭超时、停止后重试、级联依赖)。
 // 本类只保留两处 client 特有差异:
 // - unloadAsync 的默认超时较短 (UI 交互路径, 见头文件);
 // - 卸载级联只统计"启用中"的依赖者 (cascadeUnloadEnabledOnly)。
-// 启停事务 (stop/start) 到达插件侧注册流程时, 领域动作经 detachDomainRegistrations 注入。
+// 启停事务 (stop/start) 到达插件侧注册流程时, 业务动作经 detachDomainRegistrations 注入。
 
 asio::awaitable<void>
     ClientPluginManager::loadConfiguredClientPlugins(const std::vector<PluginConfig>& plugins) {
@@ -712,7 +712,7 @@ asio::awaitable<void>
         const PluginConfig* cfg = nullptr;
     };
 
-    // 宿主支持接口集 (加载前计算一次; 三层协商第 2 层的 require 限制数据源)
+    // 主程序支持接口集 (加载前计算一次; 三层协商第 2 层的 require 限制数据源)
     const auto hostIfaces = hostSupportedInterfaces();
 
     std::vector<Item> items;
@@ -1030,7 +1030,7 @@ std::shared_ptr<const ClientToolRenderEntry>
     return toolRenderCache_->lookup(key, input);
 }
 
-/// 在 client io 线程执行自定义 renderer 并把结果拷成宿主语义快照。
+/// 在 client io 线程执行自定义 renderer 并把结果拷成主程序语义快照。
 /// - 渲染器已摘除/失效/实例禁用 → 写入未命中条目 (UI 回退通用渲染)
 /// - 插件回调返回失败 → 同样写未命中条目, 避免每帧重复请求
 void ClientPluginManager::performToolRender(
@@ -1059,7 +1059,7 @@ void ClientPluginManager::performToolRender(
         snapshot = uiRegistry_;
     }
     // 快照强引用保活: hit 指向快照内的注册记录, 后续插件回调期间不得失效
-    // 查找顺序与 [renderClientTool] 一致: 插件注册项优先, 未命中再查宿主内置项
+    // 查找顺序与 [renderClientTool] 一致: 插件注册项优先, 未命中再查主程序内置项
     const ClientToolRenderReg* hit = nullptr;
     for (const auto& r : snapshot->toolRenderers) {
         if (r.toolName == req.toolName && r.renderFn) {
@@ -1133,7 +1133,7 @@ void ClientPluginManager::performToolRender(
                 }
             }
         }
-        // 输出字段无论成功/失败/异常路径都由宿主释放
+        // 输出字段无论成功/失败/异常路径都由主程序释放
         hostMemoryFree(output.displayName.data);
         hostMemoryFree(output.summary.data);
         hostMemoryFree(output.items_json.data);
@@ -1144,7 +1144,7 @@ void ClientPluginManager::performToolRender(
         }
     };
 
-    // 宿主内置渲染器: 进程生命周期函数 (宿主自身实现), 无插件实例/租约,
+    // 主程序内置渲染器: 进程生命周期函数 (主程序自身实现), 无插件实例/租约,
     // 不经插件禁用/卸载路径, 直接执行
     if (hit->builtin) {
         runRenderer();
@@ -1280,7 +1280,7 @@ std::string ClientPluginManager::clientStateJson() const {
     j["sessionId"]       = sessionId_;
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
-    // 宿主支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
+    // 主程序支持的接口名清单 (三层协商第 3 层 —— 插件据此自行决定启用哪些
     // 功能; 见 [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
     // 接口协商节)。位图 uiCaps 字段已移除 (v4)
     j["interfaces"] = [&] {
@@ -1310,7 +1310,7 @@ std::string ClientPluginManager::clientStateJson() const {
         }
         return arr;
     }();
-    // 展示区域尺寸快照 [{id,w,h},...]: 面板/Info 段落的可用宽高 (宿主布局后写入;
+    // 展示区域尺寸快照 [{id,w,h},...]: 面板/Info 段落的可用宽高 (主程序布局后写入;
     // 插件据此按可用宽度自行重排; 事件 AGENTXX_CLIENT_EVT_UI_LAYOUT 会主动通知变化)
     j["regions"] = [&] {
         auto arr = utilxx_base::Json::array();
@@ -1330,7 +1330,7 @@ std::string ClientPluginManager::clientStateJson() const {
 
 void ClientPluginManager::onReady() {
     utilxx_base::Json j = utilxx_base::Json::object();
-    // 宿主支持的接口名清单 (启动后最早可得的协商结果, 插件在 READY 回调内
+    // 主程序支持的接口名清单 (启动后最早可得的协商结果, 插件在 READY 回调内
     // 即可完成功能启用决策; 位图 uiCaps 字段已移除, 见
     // [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) v4)
     j["interfaces"] = [&] {
@@ -1344,7 +1344,7 @@ void ClientPluginManager::onReady() {
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
     // 三期6: 向服务端上报本 client 支持的接口集 (约定事件, 镜像 server_plugins;
     // 服务端存储并经事件总线发布, agent 侧插件订阅 "agentxx_host.client_interfaces"
-    // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的宿主上降级)
+    // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的主程序上降级)
     if (uiAdapter_) {
         utilxx_base::Json up = utilxx_base::Json::object();
         up["sessionId"]      = sessionId_;
@@ -1396,7 +1396,7 @@ void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
 }
 
 void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& data) {
-    // 宿主约定事件 (server 端 SessionServerAgentIO 发布, 见该文件 kHostPluginName):
+    // 主程序约定事件 (server 端 SessionServerAgentIO 发布, 见该文件 kHostPluginName):
     // server_plugins → 记录服务端已加载插件结构化信息 [{name,version,interfaces},...],
     // 供 get_client_state ("agentPlugins") 查询对端可用性与能力; 其余约定
     // 事件照常向插件分发
@@ -1465,8 +1465,8 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
 
 // ==================== 内部 ====================
 
-/// 摘除插件在宿主侧的 UI 注册与订阅 (禁用与卸载共用; pluginxx 生命周期骨架的
-/// 领域接缝 [detachDomainRegistrations]):
+/// 摘除插件在主程序侧的 UI 注册与订阅 (禁用与卸载共用; pluginxx 生命周期骨架的
+/// 业务扩展点 [detachDomainRegistrations]):
 /// - 旧 COW 快照中的自定义 renderer 先失效, UI 线程只能回退通用渲染;
 /// - UI 注册表一次性重建 (COW), adapter 按注册记录逐项通知移除;
 /// - 注册记录与订阅句柄一并清空: 重新启用时由插件 start 事务重新声明。
@@ -1612,13 +1612,13 @@ namespace {
 
 using ClientHostCall = PluginHostCall<ClientPluginInstance, ClientPluginManager>;
 
-/// 框架内核通用表入口 (client 侧复用的部分: 协程驱动等与宿主领域无关的入口)
+/// 插件框架通用表入口 (client 侧复用的部分: 协程驱动等与主程序业务无关的入口)
 using ClientGenericEntries
     = pluginxx::GenericTableEntries<ClientPluginInstance, ClientPluginManager>;
 
-/// 解析宿主控制块，并持有实例/管理器强引用与 admission lease。
+/// 解析主程序控制块，并持有实例/管理器强引用与 admission lease。
 ///
-/// - 实例已卸载/已关闭，或传入的 host 指针不是本宿主发放的视图 -> 返回空上下文
+/// - 实例已卸载/已关闭，或传入的 host 指针不是本主程序发放的视图 -> 返回空上下文
 ///   （实例与管理器均为 nullptr），入口按失败返回，不访问已释放对象；
 /// - `allowClosing=true` 用于只读查询：关闭过程中仍允许执行（lease 保证卸载会
 ///   等它返回）。注册、投递新工作等入口必须用默认值，Closing/Disabled 后拒绝；
@@ -1793,9 +1793,9 @@ int32_t PLUGINXX_CALL
 
 // ---- 协程驱动 (agentxx.agent.coroutine_runtime; 与 agent 侧同 IID/同语义) ----
 //
-// 驱动请求/取消/线程判定的实现整体复用框架内核的通用表入口
-// ([pluginxx::GenericTableEntries]): 这三项只依赖"宿主控制块 + 实例生命周期 +
-// 宿主 runtime/io 线程判定", 与宿主领域无关, 因此 client / agent 两侧共用同一份
+// 驱动请求/取消/线程判定的实现整体复用插件框架的通用表入口
+// ([pluginxx::GenericTableEntries]): 这三项只依赖"主程序控制块 + 实例生命周期 +
+// 主程序 runtime/io 线程判定", 与主程序业务无关, 因此 client / agent 两侧共用同一份
 // 逻辑与语义 (见 pluginxx/host/tables_impl.h 的 requestDriverEntry 等)。
 // 语义要点: 申请恒异步、每张请求至多执行一次、排队期间持有实例 lease、
 // 关闭中仍允许驱动 (取消收尾需要驱动继续流动)、已关闭拒绝。
@@ -2357,9 +2357,9 @@ int32_t PLUGINXX_CALL xx_clist_keybinds(const PluginxxHost* host, PluginxxString
 
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 限制决定 (拒绝时返回
-/// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于宿主
-/// 整体缺失某子能力入口的场景 (当前宿主全量装配, 保留判空语义供第三方精简
-/// 宿主使用)。以函数内静态表实现 (前向引用无需 extern 声明)
+/// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于主程序
+/// 整体缺失某子能力入口的场景 (当前主程序全量装配, 保留判空语义供第三方精简
+/// 主程序使用)。以函数内静态表实现 (前向引用无需 extern 声明)
 static const AgentxxClientUiIface* clientUiIface() {
     static const AgentxxClientUiIface table = {
         /* version */ AGENTXX_IFACE_CLIENT_UI_VERSION,
@@ -2450,7 +2450,7 @@ const AgentxxClientKeybindIface g_clientIfaceKeybind = {
 };
 
 /// 协程驱动接口表 (与 agent 侧同 IID; client 插件用同一套 kit 桥接)
-/// - 三个入口整体复用框架内核的通用表实现 (见文件上方"协程驱动"说明)
+/// - 三个入口整体复用插件框架的通用表实现 (见文件上方"协程驱动"说明)
 const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime = {
     /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
     /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
@@ -3071,7 +3071,7 @@ int ClientPluginManager::registerCommand(
     }
     std::string nameStr = svToStr(name);
     std::string descStr = svToStr(description);
-    // 命令输入管线接口 (agentxx.client.command): 无命令输入面的宿主拒绝注册 ——
+    // 命令输入管线接口 (agentxx.client.command): 无命令输入面的主程序拒绝注册 ——
     // 与其他 register_* 的接口限制行为一致
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientCommand})) {
         XX_LOGW(
@@ -3257,7 +3257,7 @@ AgentxxTimer* ClientPluginManager::setTimer(ClientPluginInstance* inst, const Ag
         XX_LOGD("[client_plugin] `{}` set_timer rejected: animation disabled", inst->name);
         return nullptr;
     }
-    // 能力门控: 与其它 register_* 入口一致 (宿主未声明定时器能力时拒绝)
+    // 能力门控: 与其它 register_* 入口一致 (主程序未声明定时器能力时拒绝)
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientTimer})) {
         XX_LOGW("[client_plugin] `{}` set_timer rejected: interface agentxx.client.timer unsupported", inst->name);
         return nullptr;
@@ -3378,7 +3378,7 @@ AgentxxKeybind*
         XX_LOGW("[client_plugin] `{}` register_keybind rejected: invalid keys `{}`", inst->name, rawKeys);
         return nullptr;
     }
-    // 能力门控: 与其它 register_* 入口一致 (宿主未声明快捷键能力时拒绝)
+    // 能力门控: 与其它 register_* 入口一致 (主程序未声明快捷键能力时拒绝)
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientKeybind})) {
         XX_LOGW(
             "[client_plugin] `{}` register_keybind rejected: interface agentxx.client.keybind unsupported",
@@ -4130,7 +4130,7 @@ ClientToolRenderResult renderClientTool(
     }
 
     // 2. 匹配按 toolName 注册的工具特化渲染器 (render_fn 或 预设模版):
-    //    插件注册项优先, 未命中再查宿主内置项 (插件可覆盖内置渲染)
+    //    插件注册项优先, 未命中再查主程序内置项 (插件可覆盖内置渲染)
     if (!toolName.empty()) {
         for (const auto* rendererList : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
             for (const auto& r : *rendererList) {

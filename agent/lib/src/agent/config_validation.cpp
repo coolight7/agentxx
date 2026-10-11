@@ -357,7 +357,7 @@ ConfigValidationReport validateAgentConfig(const AgentConfig& config) {
             );
         }
     }
-    // 同一文件/目录被声明多次: 第二次装载会因重名工具被拒绝 (日志里容易被忽略)
+    // 同一文件/目录被声明多次: 第二次加载会因重名工具被拒绝 (日志里容易被忽略)
     for (size_t i = 0; i < config.plugins.size(); ++i) {
         if (config.plugins[i].path.empty()) {
             continue;

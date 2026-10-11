@@ -43,7 +43,7 @@ struct ValueCacheEntry {
     size_t      bytes = 0; ///< valueJson 字节数
 };
 
-/// 值缓存 (按点一份; 不做跨线程同步 —— 功能点只在宿主 io 线程上访问)
+/// 值缓存 (按点一份; 不做跨线程同步 —— 功能点只在主程序 io 线程上访问)
 class ValueCache {
 public:
 

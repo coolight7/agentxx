@@ -38,11 +38,11 @@ struct WebsearchPluginCtx : public PluginBase {
     bool              use_model_search = false;
 };
 
-/// 注册事务 (start 的实际内容): 读取宿主配置并注册三个工具。
+/// 注册事务 (start 的实际内容): 读取主程序配置并注册三个工具。
 ///
 /// 三个工具的实现体都是 asio 协程 (`co_await HttpClient::*Async`), 等待的是
 /// 插件本地 reactor 上的 socket 就绪事件, 因此注册为**声明式受控轮询**工具
-/// (`polled_tool`): 网络等待不再占用宿主工作线程池, 同一实例的并发请求共享
+/// (`polled_tool`): 网络等待不再占用主程序工作线程池, 同一实例的并发请求共享
 /// 一个本地 reactor 与 HTTP keep-alive 连接池。
 static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
@@ -249,7 +249,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 struct WebsearchClientCtx : public ClientPluginBase {};
 
-/// client 侧 start: 注册 3 个工具的折叠头模版 (stop 无需撤销, 宿主负责摘除)
+/// client 侧 start: 注册 3 个工具的折叠头模版 (stop 无需撤销, 主程序负责摘除)
 static void*
     websearchClientStart(WebsearchClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.registerTemplate(kNameSearch, "Search", "query");

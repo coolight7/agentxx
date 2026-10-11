@@ -102,7 +102,7 @@ bool FfiClientAgentIO::submitInterruptResponse(int64_t interruptId, utilxx_base:
     if (it == pending_.end()) {
         return false;
     }
-    // try_send: 容量 1, 宿主重复应答会被丢弃 (以首次为准) 并释放 channel
+    // try_send: 容量 1, 嵌入方程序重复应答会被丢弃 (以首次为准) 并释放 channel
     it->second->try_send(ErrorCode{}, std::move(values));
     return true;
 }
@@ -245,7 +245,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 j["argJson"]        = m.argJson;
                 emitEvent(AGENTXX_FFI_EVT_INTERRUPT_REQ, dump(j));
 
-                // 挂起等待宿主 agentxx_ffi_interrupt_respond
+                // 挂起等待嵌入方程序 agentxx_ffi_interrupt_respond
                 auto self = shared_from_this();
                 asio::co_spawn(
                     ex_,
@@ -271,7 +271,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 j["interruptId"]    = m.id;
                 emitEvent(AGENTXX_FFI_EVT_INTERRUPT_EXPIRED, dump(j));
             } else if constexpr (std::is_same_v<T, agent::WireModelInfo>) {
-                // 能力清单 (各模型多模态输入支持) 一并下发: 宿主据此判断
+                // 能力清单 (各模型多模态输入支持) 一并下发: 嵌入方程序据此判断
                 // 是否展示图片/音频/视频输入入口 (与 TUI 的附件按钮判定同源)
                 auto j = agent::io::makeModelInfo(m.currentModel, m.models, m.capabilities);
                 emitEvent(AGENTXX_FFI_EVT_MODEL_INFO, dump(j));
@@ -311,8 +311,8 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 };
                 emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CALL, dump(j));
             } else if constexpr (std::is_same_v<T, agent::WireAddModelResult>) {
-                // 模型增删回执: 走同步查询应答路由 (宿主 agentxx_ffi_add_model/
-                // remove_model 在等待), 同时作为 EVT_WIRE 透传给宿主
+                // 模型增删回执: 走同步查询应答路由 (嵌入方程序 agentxx_ffi_add_model/
+                // remove_model 在等待), 同时作为 EVT_WIRE 透传给嵌入方程序
                 auto j = agent::io::toJson(m);
                 if (onSyncReply) {
                     onSyncReply(SyncKind::AddModelResult, j);
@@ -332,7 +332,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 || std::is_same_v<T, agent::WireRenameSessionResult>
                 || std::is_same_v<T, agent::WireInputAck>
             ) {
-                // 输入受理回执也走这条: 宿主据此区分"已开始 / 已排队 / 被拒绝"
+                // 输入受理回执也走这条: 嵌入方程序据此区分"已开始 / 已排队 / 被拒绝"
                 // (被拒绝时 reason 给出结构化原因, 如 attachment_too_large)
                 emitEvent(AGENTXX_FFI_EVT_WIRE, dump(agent::io::toJson(m)));
             } else {

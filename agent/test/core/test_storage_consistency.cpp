@@ -420,7 +420,7 @@ KvBackend makeShareStoreBackend(const std::string& root, bool withPersistence) {
         };
         return bk;
     }
-    // 注入持久化: 重开只清内存缓存 (键 -> id 的映射是"应用侧"的知识, 重启后仍在)
+    // 注入持久化: 重开只清内存缓存 (键 -> id 的映射是主程序的知识, 重启后仍在)
     bk.reopen = [st] {
         st->ctx = std::make_shared<agentxx::middleware::MiddlewareContext>(st->store);
     };

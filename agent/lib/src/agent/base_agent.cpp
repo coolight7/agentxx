@@ -320,7 +320,7 @@ asio::awaitable<void> BaseAgent::init() {
         .after = "event_bus",
         .run      = [&]() -> asio::awaitable<void> {
             // 功能点注册表 (点 / 实现 / 调用): 早于中间件装配, 因此中间件可以声明
-            // 核心点 (如 agentxx.context.countTokens); 也早于插件装载, 因此插件
+            // 核心点 (如 agentxx.context.countTokens); 也早于插件加载, 因此插件
             // 登记实现时点已存在
             // - 开发者模式在启动时读取配置后冻结: 库内热路径只读进程级标记
             //   (与 benchmark 标记同一做法)
@@ -915,7 +915,7 @@ neograph::json BaseAgent::initGraphDefinition() {
     //
     // 注意: 循环分支由 llm 节点返回的 Command.goto_node 给出 (有 tool_calls →
     // tools, 否则 → agent_end), 不再依赖 "读末尾消息判断 xx_has_tool_calls" 的条件边 ——
-    // LLM 上下文由会话持有 (见 context.h Session::messages), 图状态通道不再承载
+    // LLM 上下文由会话持有 (见 context.h Session::messages), 图状态通道不再保存
     // 上下文, 因此也没有可供条件边读取的 messages 通道。
 
     // clang-format off
@@ -1502,7 +1502,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             // 统一的 "运行 + 中断处理 + 恢复" 循环 (与子代理共用 AgentRunner):
             // - 语义与旧内联循环完全一致 (checkpoint 持久化 / tempMessages 恢复 /
             //   MessageTip / IO 端点 HIL 超时)
-            // - 委派经 ctx->bus 请求 service.subagent (宿主 registerServer), 不限制超时
+            // - 委派经 ctx->bus 请求 service.subagent (主程序 registerServer), 不限制超时
             std::optional<neograph::graph::RunResult> recovered;
             if (resumeInterrupt) {
                 // 程序重启恢复中断: 跳过首跑, 从恢复的 graphData 重建中断结果,
@@ -1577,7 +1577,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     if (turnResult.hasError) {
         // 出现异常/取消时: 上下文以会话为唯一权威, 不随图状态回滚 —— 节点在抛出前
         // 已写入会话的消息 (部分完成的 tool 结果 / 兜底提示) 依然保留, 这里只需
-        // 把当前上下文落盘 (轮末权威保存), 不再需要从快照回灌的恢复逻辑
+        // 把当前上下文落盘 (轮末权威保存), 不再需要从快照写回的恢复逻辑
         XX_LOGD(
             "Turn ended with error; keep session LLM context ({}) as authoritative",
             session->messagesCount()
@@ -1716,7 +1716,7 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
     bool pluginsClosed = true;
     if (agentContext->pluginManager) {
         // stop 事务必须跑在插件管理器注册的 IO executor 上 (init 时绑定), 不能想当然
-        // 用 ioCtx: 宿主 spawn 的子代理在调用方 executor 上直跑 (engine 直跑),
+        // 用 ioCtx: 主程序 spawn 的子代理在调用方 executor 上直跑 (engine 直跑),
         // 其自身 ioCtx 从未 run(); 投递到那里会让 shutdownAsync 永久挂起。
         // 调用方可能来自任意 executor, 因此这里只借用管理器的 executor 执行事务。
         if (const auto& pluginEx = agentContext->pluginManager->ioExecutor()) {
@@ -1800,7 +1800,7 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
     bool                                 cleanupAfter
 ) {
     selectModel(sessionId, modelName);
-    // 上下文播种: 直接写入会话 (唯一权威), 图状态不再承载 messages 通道
+    // 上下文播种: 直接写入会话 (唯一权威), 图状态不再保存 messages 通道
     {
         auto session = agentContext->getSession(sessionId);
         session->replaceMessages(std::move(messages), false);

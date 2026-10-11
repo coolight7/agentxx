@@ -31,7 +31,7 @@ struct PromptSessionVars {
     std::string tempDir;
     /// 会话 ID (原文; 临时目录路径里的目录段已按文件系统规则清洗)
     std::string sessionId;
-    /// 宿主操作系统平台 (如 "Windows", "Linux", "macOS", "Android", "iOS")
+    /// 主程序操作系统平台 (如 "Windows", "Linux", "macOS", "Android", "iOS")
     std::string platform;
 };
 

@@ -749,7 +749,7 @@ void test_model_numeric_and_extra_config() {
 
 // ---------------------------------------------------------------------------
 // codegraph 参数迁移到插件配置 (yaml `plugins` 条目 args):
-// 宿主只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
+// 主程序只整体解析 args json, 不解析其字段语义 (字段由插件自行定义)
 // ---------------------------------------------------------------------------
 
 void test_plugins_empty_by_default() {
@@ -800,7 +800,7 @@ void test_plugin_name_form_removed() {
 }
 
 void test_plugin_args_paths_parse() {
-    // args 内路径列表原样解析 (宿主不解析语义)
+    // args 内路径列表原样解析 (主程序不解析语义)
     auto cfg = loadYaml(R"(plugin:
   list:
     - path: "/opt/plugins/agentxx_codegraph"
@@ -934,7 +934,7 @@ void test_plugin_args_env_expand() {
 }
 
 void test_plugins_config_path_parse() {
-    // config: 可指向文件或目录, 支持 ${VAR} 展开, 宿主原样保存 (归一化由装配侧完成)
+    // config: 可指向文件或目录, 支持 ${VAR} 展开, 主程序原样保存 (归一化由装配侧完成)
     auto cfg = loadYaml(R"(plugin:
   list:
     - path: "/opt/plugins/my_plugin.so"

@@ -4,14 +4,14 @@
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 与原实现的差异点:
 ///   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
-///     由插件入口从宿主接口表取值 (agentxx.agent.config.get_session_work_dir /
+///     由插件入口从主程序接口表取值 (agentxx.agent.config.get_session_work_dir /
 ///     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
 ///   - 统一异步操作模型 (受控轮询): 协程版执行体 *ExecuteAsync 由插件入口经
 ///     `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
-///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由宿主 IO
+///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由主程序 IO
 ///     线程经 driver 请求 `poll_one` 有界步进 (有进展立即续, 无进展退避,
 ///     无未完成操作时不驱动); 并发多条命令共享同一条驱动序列与同一个 reactor,
-///     不再每条命令占死一个宿主阻塞线程至超时
+///     不再每条命令占死一个主程序阻塞线程至超时
 ///     (见 plugin_kit.h 与 docs/zh-cn/design/plugins.md §16)
 ///   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
 ///     同步函数), 由入口经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册
@@ -101,7 +101,7 @@ namespace detail {
 //    show [1, Y], hide [Y+1, X]]\n<cropped>...
 //   与 ToolcallNode::execTool 的 offload 格式统一, 便于模型用
 //   agentxx_share_store 按行分页取回; 超限时经 [StoreFn] 把该路完整原文写入
-//   share_store 并把 ID 写进提示 (storeFn 为空, 或宿主未提供 add_share_store 时
+//   share_store 并把 ID 写进提示 (storeFn 为空, 或主程序未提供 add_share_store 时
 //   省略 ID, 仅提示可用 share_store)
 // - 保持 UTF-8 安全, 使用 findIndexAndLastLineIndexByUtf8Length (行边界优先)
 // - 限制值选取 30k 字符/每路 (≈ 30KB 文本, 远大于 ToolcallNode 的 2k 全局限制
@@ -214,7 +214,7 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 // - PAGER=cat         : less/more 不进入交互分页等待 (否则管道不关闭, 工具挂到超时)
 // - GIT_PAGER=cat     : git 的 log/diff 等子命令同样不分页
 // - LC_ALL (POSIX)    : 使用当前环境已是 UTF-8 的取值, 否则用 C.UTF-8;
-//                       保证子进程按 UTF-8 输出 (命令本身改不了宿主进程的 locale)
+//                       保证子进程按 UTF-8 输出 (命令本身改不了主程序进程的 locale)
 // - Windows           : 不改 locale (控制台代码页与命令自身编码策略共同决定输出,
 //                       强行覆盖会破坏中文等本地命令的输出)
 //
@@ -730,7 +730,7 @@ inline asio::awaitable<std::string> runProcPipeline(
 // =====================================================================
 // 执行体 —— 协程版 (受控轮询路径; BOOST_PROCESS 可用时唯一注册路径)
 // - 在插件实例本地 reactor 上 spawn (经 plugin_kit::polled_tool), 挂起点让出给
-//   宿主 IO 线程;
+//   主程序 IO 线程;
 //   返回结果文本, 失败抛出异常 (由 C ABI 边界/适配器捕获转 error_out)
 // =====================================================================
 
@@ -770,7 +770,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
     }
 
     // 受控轮询: 管道/进程绑定到当前协程的 executor (插件实例本地 reactor),
-    // 由宿主 IO 线程经 driver 请求 poll_one 有界步进 (不再自建 io_context + run())
+    // 由主程序 IO 线程经 driver 请求 poll_one 有界步进 (不再自建 io_context + run())
     auto                ex = co_await asio::this_coro::executor;
     asio::readable_pipe outpip{ex}, errpip{ex};
     // 创建管道，用于接收子进程的输出
@@ -942,7 +942,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 // =====================================================================
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
 // - 阻塞实现: 只允许经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册,
-// 禁止在宿主 IO 线程 / 受控轮询协程内直接调用
+// 禁止在主程序 IO 线程 / 受控轮询协程内直接调用
 // - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
 // =====================================================================
 

@@ -189,11 +189,11 @@ void checkClientIncludes(const fs::path& root, Violations& v, size_t& scanned) {
 
 /// 规则 3: 插件只引用 SDK 公开头与工具库公开头
 ///
-/// 允许的宿主公开头 (插件 SDK 边界):
-/// - `agentxx/plugin/api/*`: 插件 C ABI 头与宿主侧 kit (umbrella 为 plugin_kit.h)
+/// 允许的主程序公开头 (插件 SDK 边界):
+/// - `agentxx/plugin/api/*`: 插件 C ABI 头与主程序侧 kit (umbrella 为 plugin_kit.h)
 /// - `agentxx/util/exception.h`: 异常分类与统一捕获 (插件错误上报依赖)
 /// 其余 `agentxx/*` (agent / middlewares / nodes / tools / event / ui / protocol /
-/// plugin 下的宿主内部头) 都属于宿主内部实现, 插件不得引用。
+/// plugin 下的主程序内部头) 都属于主程序内部实现, 插件不得引用。
 void checkPluginIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     std::vector<fs::path> files;
     collectSources(root / "plugins", files);
@@ -216,7 +216,7 @@ void checkPluginIncludes(const fs::path& root, Violations& v, size_t& scanned) {
             }
             if (inc.path.rfind("agentxx/", 0) == 0 && !isAllowedHostHeader(inc.path)) {
                 v.push_back(
-                    where + ": 插件引用了 SDK 之外的宿主头 `" + inc.path
+                    where + ": 插件引用了 SDK 之外的主程序头 `" + inc.path
                     + "` (只允许 agentxx/plugin/api/* 与 agentxx/util/exception.h)"
                 );
             }
@@ -324,7 +324,7 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
         "agentxx/plugin/client_plugin_manager.h", // 插件管理器实现 (加载/生命周期)
         "agentxx/agent/io/",                      // 端点 / transport / wire
         "agentxx/agent/session",                  // 会话与持久化
-        "agentxx/agent/agent_host.h",             // 宿主与子代理派生
+        "agentxx/agent/agent_host.h",             // 主程序与子代理派生
         "utilxx/http_client.h",                   // 网络
         "utilxx/ws_client.h",                     // 网络
     };
@@ -443,13 +443,13 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
 /// 数量常量 (`kInterfaceTableCount`) 只能发现"少了一张表", 发现不了"名字写错"或
 /// "换了名字": 插件按 IID 查询, 名字错一个字就是查询失败。因此这里从 SDK 头文件
 /// 里读出三组接口表的**名字**并校验:
-///   - 通用表 (`pluginxx.*`, 由插件框架内核声明): 数量 + 唯一 + 前缀;
-///   - agent 领域表 (`agentxx.agent.*`): 数量 + 唯一 + 前缀;
+///   - 通用表 (`pluginxx.*`, 由插件框架声明): 数量 + 唯一 + 前缀;
+///   - agent 业务表 (`agentxx.agent.*`): 数量 + 唯一 + 前缀;
 ///   - client 侧表 (`agentxx.client.*`): 数量 + 唯一 + 前缀;
-/// 同时要求 20 张 agent/client 领域表名都写进 `docs/zh-cn/design/plugins.md`
+/// 同时要求 20 张 agent/client 业务表名都写进 `docs/zh-cn/design/plugins.md`
 /// (文档漏写新表等于插件作者查不到 IID)。
 ///
-/// 数量约定: 10 张通用表 + 10 张 agent 领域表 = 20 (与 `PluginManager::kInterfaceTableCount`
+/// 数量约定: 10 张通用表 + 10 张 agent 业务表 = 20 (与 `PluginManager::kInterfaceTableCount`
 /// 一致); 7 张 client 基础表 + 2 张交互表 (timer / keybind) = 9。
 void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     const auto genericHeader = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx"
@@ -553,7 +553,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 /// - 每张表在 `plugin_iface_meta.h` / `pluginxx/api/iface_meta.h` 里恰有一条
 ///   `IfaceMeta` 特化 (漏加特化不会编译失败, 只会让该表退化为"必须完整", 因此必须查)。
 ///
-/// 数量: 通用 10 + agent 领域 10 + client 领域 9 = 29 张。
+/// 数量: 通用 10 + agent 业务 10 + client 业务 9 = 29 张。
 void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     struct Group {
         const fs::path* file;
@@ -574,8 +574,8 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
 
     const Group groups[] = {
         {&genericHeader, "PLUGINXX_IFACE_", "通用", 10},
-        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 领域", 10},
-        {&clientHeader, "AGENTXX_IFACE_CLIENT_", "client 领域", 9},
+        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 业务", 10},
+        {&clientHeader, "AGENTXX_IFACE_CLIENT_", "client 业务", 9},
     };
 
     size_t                        tableTotal = 0;
@@ -944,7 +944,7 @@ void checkModelLayerIncludes(const fs::path& root, Violations& v) {
         "agentxx-client/io/tui/surface.h",
         "agentxx-client/plugin_ui_items.h",
         "agentxx/plugin/client_plugin_manager.h",  // 插件管理器实现
-        "agentxx/agent/agent_host.h",              // 宿主与子代理派生
+        "agentxx/agent/agent_host.h",              // 主程序与子代理派生
         "utilxx/http_client.h",                    // 网络
         "utilxx/ws_client.h",
     };
@@ -1017,9 +1017,9 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     const size_t agentCount  = agentxx::plugin::PluginManager::kInterfaceTableCount;
     const size_t clientCount = agentxx::plugin::ClientPluginManager::kInterfaceTableCount;
 
-    // 数量本身: 10 张通用表 + 10 张 agent 领域表 / 7 张基础表 + 2 张交互表
+    // 数量本身: 10 张通用表 + 10 张 agent 业务表 / 7 张基础表 + 2 张交互表
     if (agentCount != 20) {
-        v.push_back("PluginManager::kInterfaceTableCount 应为 20 (10 通用 + 10 领域), 实际 "
+        v.push_back("PluginManager::kInterfaceTableCount 应为 20 (10 通用 + 10 业务), 实际 "
                     + std::to_string(agentCount));
     }
     if (clientCount != 9) {

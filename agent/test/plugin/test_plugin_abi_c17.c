@@ -52,7 +52,7 @@ _Static_assert(offsetof(PluginxxStringView, size) == 8, "StringView.size 必须�
 _Static_assert(offsetof(PluginxxString, data) == 0, "String.data 必须是首字段");
 _Static_assert(offsetof(PluginxxString, size) == 8, "String.size 必须紧随 data");
 
-/* ==================== 宿主 vtable / 视图 ==================== */
+/* ==================== 主程序 vtable / 视图 ==================== */
 
 _Static_assert(offsetof(PluginxxHost, vtable) == 0, "PluginHost.vtable 必须是首字段");
 _Static_assert(offsetof(PluginxxHostVtable, alloc) == 0, "HostVtable.alloc 必须是首字段");
@@ -95,10 +95,10 @@ _Static_assert(
 
 /* ==================== 调用约定与入口函数类型可用 ==================== */
 
-/* 这些声明只在 C 视角下检查"函数指针类型可声明、调用约定宏可用"，
+/* 这些声明只在 C 角度下检查"函数指针类型可声明、调用约定宏可用"，
    不引入任何实现；GCC/Clang 的 -Wunused 对文件级 static 变量不告警。 */
 static PluginxxCreateFn abi_probe_create = NULL;
-/* 协程驱动: 不透明请求句柄与驱动回调类型必须在 C 视角下可声明 */
+/* 协程驱动: 不透明请求句柄与驱动回调类型必须在 C 角度下可声明 */
 static PluginxxDriver*     abi_probe_driver  = NULL;
 static PluginxxDriveOnceFn abi_probe_drive   = NULL;
 static PluginxxStartFn     abi_probe_start   = NULL;

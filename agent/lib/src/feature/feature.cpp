@@ -1,11 +1,11 @@
 /// agentxx 功能点子系统的类型擦除部分实现
 ///
-/// 本文件承载 [PointBase] 与 [JsonProvidePoint] 的实现: id / 选项 / 插件层实现链 /
+/// 本文件提供 [PointBase] 与 [JsonProvidePoint] 的实现: id / 选项 / 插件层实现链 /
 /// 值缓存 / 置空标记 / in-flight 去重 / 统计 / 清单。类型化的取值逻辑在
 /// `feature.h` 的 [ProvidePoint] 模板里 (核心实现不经 JSON, 热路径零拷贝)。
 ///
-/// 线程模型: 功能点的状态只在宿主 io 线程上访问 (与事件总线/会话一致),
-/// 因此这里没有任何锁; 插件侧入口经宿主投递 (见 plugin_manager_feature.cpp)。
+/// 线程模型: 功能点的状态只在主程序 io 线程上访问 (与事件总线/会话一致),
+/// 因此这里没有任何锁; 插件侧入口经主程序投递 (见 plugin_manager_feature.cpp)。
 #include "agentxx/feature/feature.h"
 
 #include "agentxx/agent/config_static.h"
@@ -589,7 +589,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
 
     // 1) 参数形状: 交给实现前必须是合法 JSON (空串 = 不带参数)
     //    - 强类型点的 `requestJson` / `argsJson` 由 Codec 生成, 恒为合法 JSON, 不会命中这里;
-    //      命中它的是"外部按名调用" (命令行 / FFI / 插件) 与应用侧 JSON 点取值时给的文本
+    //      命中它的是"外部按名调用" (命令行 / FFI / 插件) 与主程序 JSON 点取值时给的文本
     //    - 不做形状校验 (对象 / 数组 / 标量都放行): 参数形状由点的 argsDoc 说明, 实现自己判断
     if (!req.argsJson.empty()) {
         const bool jsonOk = utilxx_base::catchError<bool>(

@@ -2,12 +2,12 @@
 ///
 /// 覆盖：
 /// - F13 输入所有权：tool 根操作的 args/session/tool_call_id 由 Request 拥有，
-///   宿主借用缓冲区失效后协程继续读取仍然正确；
+///   主程序借用缓冲区失效后协程继续读取仍然正确；
 /// - 完成协议：同步钩子（正常/抛异常）与异步 Task 钩子都是 exactly-once 完成；
 /// - F19 钩子返回类型分发：同步 void 立即完成，返回 Task<void> 时由协程真正结束
-///   后才完成，并返回宿主可取消的 provider 句柄。
+///   后才完成，并返回主程序可取消的 provider 句柄。
 ///
-/// 用例不依赖真实管理器：用伪宿主接口表捕获 SDK 注册出来的 spec，再直接按 ABI
+/// 用例不依赖真实管理器：用伪主程序接口表捕获 SDK 注册出来的 spec，再直接按 ABI
 /// 调用 `execute_start`/`hook_start`，因此可以精确控制借用缓冲区的生命周期。
 #include "agentxx-test/plugin/test_plugin_sdk.h"
 
@@ -26,7 +26,7 @@ namespace agentxx::test {
 namespace {
 using namespace agentxx::plugin;
 
-/// SDK helper 注册出来的 spec 捕获（替代真实宿主的注册表）。
+/// SDK helper 注册出来的 spec 捕获（替代真实主程序的注册表）。
 struct CapturedRegistration {
     AgentxxPluginToolSpec           tool{};
     bool                            hasTool = false;
@@ -121,7 +121,7 @@ const AgentxxPluginGraphIface g_fakeGraph = {
     /* set_graph_json */ nullptr,
 };
 
-/// 伪宿主内存操作 (kit 会用 host->vtable->free 释放 request_driver 的 error_out)
+/// 伪主程序内存操作 (kit 会用 host->vtable->free 释放 request_driver 的 error_out)
 void* PLUGINXX_CALL fakeAlloc(uint64_t size) {
     return std::malloc(static_cast<size_t>(size));
 }
@@ -130,8 +130,8 @@ void PLUGINXX_CALL fakeFree(void* ptr) {
     std::free(ptr);
 }
 
-/// 伪宿主驱动票据: 记录待执行的驱动回调, 由用例经 [runDriver] 手动执行
-/// (等价于宿主 IO 线程执行一次 `poll_one`)。
+/// 伪主程序驱动票据: 记录待执行的驱动回调, 由用例经 [runDriver] 手动执行
+/// (等价于主程序 IO 线程执行一次 `poll_one`)。
 struct FakeDriverTicket {
     PluginxxDriveOnceFn drive = nullptr;
     void*               ud    = nullptr;
@@ -169,7 +169,7 @@ const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
     /* is_io_thread */ fakeIsIoThread,
 };
 
-/// 伪 client UI 接口表: 捕获 SDK 便捷方法提交的 JSON (替代真实宿主注册表)
+/// 伪 client UI 接口表: 捕获 SDK 便捷方法提交的 JSON (替代真实主程序注册表)
 struct ClientUiCapture {
     int         panelUpdates = 0;
     std::string panelItems;
@@ -308,9 +308,9 @@ const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const Pluginxx
     return nullptr;
 }
 
-/// 老宿主模拟: client 侧接口表一律不提供 (query_interface 返回 NULL)
+/// 老主程序模拟: client 侧接口表一律不提供 (query_interface 返回 NULL)
 ///
-/// 用途: 验证 SDK 便捷方法在"宿主不支持"时返回非 0 且不崩 (插件据此降级)
+/// 用途: 验证 SDK 便捷方法在"主程序不支持"时返回非 0 且不崩 (插件据此降级)
 const void* PLUGINXX_CALL
     fakeQueryInterfaceLegacy(const PluginxxHost* host, const PluginxxStringView* iid) {
     if (!iid || !iid->data) {
@@ -386,7 +386,7 @@ TestResult testPluginSdk() {
     TestResult         result;
     const PluginxxHost host{&g_fakeVtable, nullptr};
 
-    /// F13：tool 根操作的输入由 Request 拥有 —— 宿主借用缓冲区失效后，协程挂起
+    /// F13：tool 根操作的输入由 Request 拥有 —— 主程序借用缓冲区失效后，协程挂起
     /// 恢复继续读取 args 仍必须得到原值。
     {
         bool                    released = false;
@@ -412,7 +412,7 @@ TestResult testPluginSdk() {
             "depict",
             "{}",
             [&box](SdkCtx&, std::string_view args, OpCtl& ctl) -> Task<std::string> {
-                // 挂起前记录视图；恢复后（宿主借用缓冲区已失效）再读取。
+                // 挂起前记录视图；恢复后（主程序借用缓冲区已失效）再读取。
                 auto argsView = args;
                 co_await Gate{box.released, box.handle};
                 box.seen->assign(argsView.data(), argsView.size());
@@ -425,7 +425,7 @@ TestResult testPluginSdk() {
         auto spec = g_captured.tool;
         XX_TEST_EXPECT_TRUE(spec.execute_start != nullptr);
 
-        // 宿主借用缓冲区：start 返回后立即被覆写，插件不得再依赖它。
+        // 主程序借用缓冲区：start 返回后立即被覆写，插件不得再依赖它。
         std::string borrowedArgs = R"({"n":42})";
         std::string borrowedSid  = "sess-42";
         auto        argsSv       = PluginStringView::from(borrowedArgs.data(), borrowedArgs.size());
@@ -742,7 +742,7 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_TRUE(runDriver()); ///< 首步由 host driver 推进 (挂起到 Gate)
         XX_TEST_EXPECT_FALSE(finished);
 
-        // 宿主借用缓冲区失效后 (置空视图) 协程仍能完成 (Request 拥有输入)
+        // 主程序借用缓冲区失效后 (置空视图) 协程仍能完成 (Request 拥有输入)
         released = true;
         XX_TEST_EXPECT_TRUE(handle != nullptr);
         handle.resume();
@@ -756,7 +756,7 @@ TestResult testPluginSdk() {
     // ---- client 侧 SDK 便捷方法: 组件构建器 → 面板/装饰/overlay 提交 ----
     //
     // 用伪 client UI 表捕获提交的 JSON: 覆盖"构建器 → JSON → 接口调用"这条
-    // 端到端路径 (含老宿主缺失该表时的降级)。
+    // 端到端路径 (含老主程序缺失该表时的降级)。
     {
         ClientPluginBase client;
         client.host  = &host;
@@ -904,7 +904,7 @@ TestResult testPluginSdk() {
             XX_TEST_EXPECT_EQ(g_clientUiCapture.overlayExtra, std::string{"{\"size\":\"large\"}"});
         }
 
-        // 7) 未知 kind 原样透传 (老宿主忽略, 数据层向前兼容)
+        // 7) 未知 kind 原样透传 (老主程序忽略, 数据层向前兼容)
         {
             pluginxx::ui::Item future = pluginxx::ui::build::node("future_widget");
             future.fallback           = "n/a";
@@ -916,7 +916,7 @@ TestResult testPluginSdk() {
         }
     }
 
-    // ---- 老宿主降级: client UI 表缺失 → 便捷方法返回非 0, 不崩 ----
+    // ---- 老主程序降级: client UI 表缺失 → 便捷方法返回非 0, 不崩 ----
     {
         const PluginxxHost legacyHost{&g_legacyVtable, nullptr};
         ClientPluginBase   client;

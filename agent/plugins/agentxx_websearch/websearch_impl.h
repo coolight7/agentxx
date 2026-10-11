@@ -5,14 +5,14 @@
 /// - 依赖: cxx_utilxx (HttpClient) + cxx_utilxx_base (字符串编码转换 / 日志)
 /// - 统一异步操作模型 (受控轮询): 执行体为协程 (*ExecuteAsync), 由插件入口经
 ///   `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
-///   local_executor) 上, 由宿主 IO 线程经 driver 请求 `poll_one` 有界步进
+///   local_executor) 上, 由主程序 IO 线程经 driver 请求 `poll_one` 有界步进
 ///   (有进展立即续, 无进展退避, 无未完成操作时不驱动), 见 plugin_kit.h 与
 ///   docs/zh-cn/design/plugins.md §16; HttpClient 为协程接口直接 co_await,
 ///   不再经局部 io_context + io.run() 同步驱动
 /// - 取消语义: 协程内阶段边界轮询 cancel_flag (多请求路径的请求间生效);
 ///   单请求中断依赖 chunk 超时 (HttpClient 暂未暴露外部 cancellation slot)
 /// - html→markdown 转换 (cmark-gfm) 为同步 CPU 段, 典型页面 <10ms; 超大页面
-///   可能触发宿主看门狗告警 (>100ms WARN), 属可接受范围 (与原内置工具一致)
+///   可能触发主程序看门狗告警 (>100ms WARN), 属可接受范围 (与原内置工具一致)
 /// - 模型搜索经 OpenAI 兼容 chat/completions 非流式请求实现 (原 lib 版本走
 ///   OpenAIProvider, 行为一致: system+user 两条消息, temperature=0,
 ///   取回 choices[0].message.content 文本)
@@ -32,7 +32,7 @@
 namespace agentxx_websearch_plugin {
 
 /// 模型搜索配置 (原 ModelWebSearchTool 所需的最小字段集;
-/// 由插件入口从宿主 agentxx.agent.model 接口表 JSON 填充)
+/// 由插件入口从主程序 agentxx.agent.model 接口表 JSON 填充)
 struct ModelSearchConfig {
     std::string                        baseUrl;
     std::string                        apiKey                  = "EMPTY";

@@ -184,7 +184,7 @@ Session::~Session() {
     // - pendingViewOps_ 与 hooks_ 严格约定仅在 bound io 线程访问
     // - 若 Session 在非 io 线程析构 (如 SessionsManager::remove 或 AgentHost::destroyAgent
     //   在其他线程释放最后引用), 禁止跨线程触发 SQLite 落库或并发读写 pendingViewOps_;
-    //   此时宿主/进程正在拆卸, 直接丢弃待落盘操作并记录警告
+    //   此时主程序/进程正在拆卸, 直接丢弃待落盘操作并记录警告
     if (isIoThread()) {
         flushPendingViewOps();
     } else {
@@ -640,7 +640,7 @@ std::string AgentContext::getSessionBaseWorkDir(std::string_view sessionId) cons
 
 std::string AgentContext::getSessionWorkDir(std::string_view sessionId) const {
     // worktree 绑定优先 (worktree 模式; Session 可变状态仅 io 线程读写,
-    // 本方法约定在 io 线程调用 —— 插件宿主侧经 ioCallSync 投递)
+    // 本方法约定在 io 线程调用 —— 插件主程序侧经 ioCallSync 投递)
     auto session = sessions->get(sessionId);
     if (session) {
         const auto& wb = session->getWorktreeBinding();

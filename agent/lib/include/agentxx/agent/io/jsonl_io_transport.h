@@ -61,7 +61,7 @@ std::string jsonlEncodeMessage(const WireMessage& msg);
 ///
 /// 约定:
 /// - **stdout 只写协议行** (每行一条消息, 写后立即 flush); 日志/诊断一律走日志系统
-///   (宿主默认 sink 为 stderr), 保证 stdout 能被逐行解析
+///   (主程序默认 sink 为 stderr), 保证 stdout 能被逐行解析
 /// - **收到请求回执不等于轮次完成**: `user_input` 的受理回执 ([WireInputAck]) 只表示
 ///   "已受理", 轮次结束以 `turn_result` 为准; 调用方要等 `turn_result` 再收尾
 /// - 非法行不中断会话: 本端回一条 `WireError`(`InvalidArgs`) 后继续读下一行

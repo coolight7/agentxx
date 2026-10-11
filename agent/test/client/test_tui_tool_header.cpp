@@ -467,7 +467,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         .renderFn = planningFn,
     });
 
-    // 宿主内置工具 (lib 内置实现, 没有对应插件): 宿主自身注册的渲染器
+    // 主程序内置工具 (lib 内置实现, 没有对应插件): 主程序自身注册的渲染器
     // - 见 agentxx/plugin/builtin_tool_renderers.h
     reg->builtinToolRenderers.push_back({
         .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
@@ -1221,8 +1221,8 @@ void testTuiToolHeaderDuration() {
     XX_TEST_EXPECT_TRUE(f9.plainRender().find("0.0s") == std::string::npos);
 }
 
-// 宿主内置工具 (lib 内置实现: agentxx_share_store / agentxx_subagent) 头部特化渲染:
-// 显示名 + 一行摘要 (插件渲染器之外的"宿主内置渲染器"路径, 见
+// 主程序内置工具 (lib 内置实现: agentxx_share_store / agentxx_subagent) 头部特化渲染:
+// 显示名 + 一行摘要 (插件渲染器之外的"主程序内置渲染器"路径, 见
 // agentxx/plugin/builtin_tool_renderers.h)。展开体不受影响 (仍为参数/结果)。
 void testTuiToolHeaderBuiltin() {
     ToolHeaderFixture f;

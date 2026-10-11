@@ -434,7 +434,7 @@ struct WireSwitchSession {
 
 /// 插件事件转发 (Server -> Client)
 /// - 插件经事件总线发布 (topic 约定 `{插件名}.{事件名}`) 的事件原样转发,
-///   宿主不解析载荷语义; 频率由插件自身控制
+///   主程序不解析载荷语义; 频率由插件自身控制
 /// - 客户端据此判断插件可用性并展示 (如 agentxx_codegraph 索引进度、
 ///   agentxx_system_monitor 周期采集的 usage 事件)
 struct WirePluginData {
@@ -450,7 +450,7 @@ struct WirePluginData {
 /// - client 侧插件 (agentxx_plugin_client_create) 经 send_plugin_data 发出的跨端事件;
 ///   服务端收到后发布到事件总线 topic `client.{插件名}.{事件名}` (载荷 std::string),
 ///   由 agent 侧同名插件订阅处理
-/// - 宿主不解析载荷语义; 频率由插件自身控制 (与 WirePluginData 对称)
+/// - 主程序不解析载荷语义; 频率由插件自身控制 (与 WirePluginData 对称)
 struct WirePluginDataUp {
     /// 发送方插件名 (client 侧实例名, 与 agent 侧同名插件对应)
     std::string plugin;
@@ -633,7 +633,7 @@ struct WireRemoveModelResult {
     std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
 };
 
-/// 宿主/客户端注册的工具元数据
+/// 主程序/客户端注册的工具元数据
 struct WireHostToolInfo {
     std::string       name;          ///< 工具名
     std::string       description;   ///< 工具描述

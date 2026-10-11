@@ -223,7 +223,7 @@ bool FfiAgentRuntime::buildConfigs(
             }
         }
 
-        // HIL 中断等待宿主应答超时 (秒; 0=不限)
+        // HIL 中断等待嵌入方程序应答超时 (秒; 0=不限)
         interruptTimeout_
             = std::chrono::milliseconds(cfgJ.value("interruptTimeoutSec", int64_t{0}) * 1000);
     }
@@ -259,7 +259,7 @@ bool FfiAgentRuntime::buildConfigs(
     mc.modelContextMaxToken    = mj.value("modelContextMaxToken", size_t{0});
     mc.sendThinking             = mj.value("sendThinking", false);
     // 多模态输入能力 (与 yaml 的 image_input/audio_input/video_input 同义):
-    // 决定宿主能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发
+    // 决定嵌入方程序能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发
     // (见 agentxx_ffi_get_model_info 与 EVT_MODEL_INFO); 字段名兼容驼峰与下划线
     mc.imageInput = mj.value("imageInput", mj.value("image_input", false));
     mc.audioInput = mj.value("audioInput", mj.value("audio_input", false));
@@ -446,7 +446,7 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
         co_return;
     }
 
-    // 宿主 (进程级): 子代理委派 (service.subagent 总线服务) 与根 agent 注册
+    // 嵌入方程序 (进程级): 子代理委派 (service.subagent 总线服务) 与根 agent 注册
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx = agent_->ioCtx;
     host_         = agentxx::agent::AgentHost::create(hostCfg);
@@ -565,7 +565,7 @@ void FfiAgentRuntime::stopInternal() {
 
 int FfiAgentRuntime::stop(std::string& err) {
     if (isOnAnyIoThread()) {
-        err = "不能在 agent/client io 线程 (事件回调) 内调用 stop; 请从宿主线程调用";
+        err = "不能在 agent/client io 线程 (事件回调) 内调用 stop; 请从嵌入方程序线程调用";
         return AGENTXX_FFI_ERR_STATE;
     }
     stopInternal();
@@ -574,7 +574,7 @@ int FfiAgentRuntime::stop(std::string& err) {
 
 int FfiAgentRuntime::destroy(std::string& err) {
     if (isOnAnyIoThread()) {
-        err = "不能在 agent/client io 线程 (事件回调) 内调用 destroy; 请从宿主线程调用";
+        err = "不能在 agent/client io 线程 (事件回调) 内调用 destroy; 请从嵌入方程序线程调用";
         return AGENTXX_FFI_ERR_STATE;
     }
     stopInternal();
@@ -654,7 +654,7 @@ int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
         return AGENTXX_FFI_ERR_INVALID;
     }
     // 条数与大小在本地先拦一次 (与 wire 服务端同一套约定): 参数写错立刻同步报错,
-    // 不让宿主等到 input_ack(rejected) 才发现
+    // 不让嵌入方程序等到 input_ack(rejected) 才发现
     if (input.attachments.size() > agent::kMaxAttachmentsPerMessage) {
         err = fmt::format(
             "附件条数超出上限: {} > {} (单条消息)",
@@ -1062,7 +1062,7 @@ int FfiAgentRuntime::sendWire(std::string_view wireJson, std::string& err) {
 }
 
 // -------------------------------------------------------------------
-// 宿主工具 (A3)
+// 嵌入方程序工具 (A3)
 // -------------------------------------------------------------------
 
 int FfiAgentRuntime::toolRegister(std::string_view toolJson, std::string& err) {

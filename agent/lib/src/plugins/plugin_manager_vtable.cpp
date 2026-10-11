@@ -24,9 +24,9 @@ namespace plugin {
 
 using HostCall = PluginHostCall<PluginInstance, PluginManager>;
 
-/// 解析宿主控制块，并持有实例/管理器强引用与 admission lease。
+/// 解析主程序控制块，并持有实例/管理器强引用与 admission lease。
 ///
-/// - 实例已卸载/已关闭，或传入的 host 指针不是本宿主发放的视图 -> 返回空上下文
+/// - 实例已卸载/已关闭，或传入的 host 指针不是本主程序发放的视图 -> 返回空上下文
 ///   （实例与管理器均为 nullptr），入口按失败返回，不访问已释放对象，也不会把
 ///   调用转交给后来加载的同名实例；
 /// - `allowClosing=true` 用于只读查询：关闭过程中仍允许执行（lease 保证卸载会
@@ -183,7 +183,7 @@ static int32_t PLUGINXX_CALL
     });
 }
 
-/// check_paths 单次批量上限: 判定在宿主 io 线程执行, 限制单次规模避免长时间占用
+/// check_paths 单次批量上限: 判定在主程序 io 线程执行, 限制单次规模避免长时间占用
 /// (插件侧建议按 512 项分批; 上限仅作为异常调用的保护)
 static constexpr int32_t kPermissionCheckPathsMax = 16384;
 
@@ -872,7 +872,7 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
     // cancel/capabilities) 由 cxx_pluginxx 提供 (见 pluginxx/host/tables_impl.h),
-    // 宿主侧的领域表在下面逐个分发。
+    // 主程序侧的业务表在下面逐个分发。
     if (const void* generic = pluginxx::queryGenericPluginIface<PluginInstance, PluginManager>(n)) {
         return generic;
     }
@@ -909,7 +909,7 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     return nullptr;
 }
 
-// ==================== 宿主状态访问辅助实现 ====================
+// ==================== 主程序状态访问辅助实现 ====================
 
 static std::shared_ptr<agentxx::agent::AgentResourceApplier> getResourceApplier(
     const std::weak_ptr<agentxx::agent::AgentContext>& ctxWeak,
@@ -1255,7 +1255,7 @@ void writePromptKey(
     }
 }
 
-/// 两次取值是否相同（用于发现"宿主之外"的修改并 rebase 基础值）。
+/// 两次取值是否相同（用于发现"主程序之外"的修改并 rebase 基础值）。
 bool samePromptValue(
     const std::optional<PluginManager::PromptValue>& a,
     const std::optional<PluginManager::PromptValue>& b
@@ -1326,7 +1326,7 @@ void PluginManager::recomposePromptKey(const std::string& key) {
         // 首次接触该键：记录基础值
         state.base = current;
     } else if (!samePromptValue(current, state.applied)) {
-        // 宿主之外（用户或其他代码）改过：以当前值为新基础，贡献在其上重新应用
+        // 主程序之外（用户或其他代码）改过：以当前值为新基础，贡献在其上重新应用
         state.base = current;
     }
 
@@ -1534,7 +1534,7 @@ PluginxxString PluginManager::getSessionMessages(PluginxxStringView session_id) 
     if (!session) {
         return PluginxxString{nullptr, 0};
     }
-    // 会话是上下文的唯一权威: 取 Json 形态 (惰性生成) 后按宿主 alloc 约定复制出去
+    // 会话是上下文的唯一权威: 取 Json 形态 (惰性生成) 后按主程序 alloc 约定复制出去
     auto jsonText = session->llmMessagesJson().dump();
     return agentxx::plugin::hostMemoryCreateString(jsonText);
 }

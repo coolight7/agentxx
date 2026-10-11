@@ -1,4 +1,4 @@
-/// agentxx::util —— 宿主/图引擎耦合件 (仅保留必须与 neograph 打交道的部分)
+/// agentxx::util —— 主程序/图引擎耦合件 (仅保留必须与 neograph 打交道的部分)
 ///
 /// 本头只保留图引擎相关的异常分类与统一捕获工具:
 /// - 通用错误/取消处理 (utilxx_base::catchError 系列) 已下沉到 `cxx_utilxx_base`

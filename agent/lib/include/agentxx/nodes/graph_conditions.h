@@ -20,7 +20,7 @@ namespace nodes {
 ///
 /// 取值来源 (按优先级):
 /// 1. 上下文影子通道 `xx_messagesMeta` 的 `last_assistant_tool_calls`
-///    (agentxx 默认图; 由宿主在上下文变更时刷新, 载荷与上下文大小无关);
+///    (agentxx 默认图; 由主程序在上下文变更时刷新, 载荷与上下文大小无关);
 /// 2. 兼容路径: 图状态里存在 `messages` 通道时按内置 `has_tool_calls` 同语义扫描
 ///    (自定义图或插件自己保存上下文时仍可用);
 /// 3. 两者都没有: 返回 "false" (安全默认: 结束本轮而不是回到 tools 节点)
@@ -33,7 +33,7 @@ namespace nodes {
 inline constexpr std::string_view kConditionHasToolCalls = "xx_has_tool_calls";
 
 /// 把 agentxx 提供的图条件注册到指定执行图注册表 (幂等)
-/// - BaseAgent 装配执行图前调用 (注册到 per-agent GraphRegistry); 自定义宿主
+/// - BaseAgent 装配执行图前调用 (注册到 per-agent GraphRegistry); 自定义主程序
 ///   自建 GraphRegistry 时也应当调用, 否则图定义引用 `xx_has_tool_calls` 会编译失败
 /// - 已注册同名条件时覆盖为本实现 (条件语义以本文件为准)
 void registerAgentGraphConditions(neograph::graph::GraphRegistry& registry);

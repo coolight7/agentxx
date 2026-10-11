@@ -74,10 +74,10 @@ void AgentRegistry::clear() {
 
 std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     std::shared_ptr<AgentHost> host(new AgentHost(std::move(cfg)));
-    // 宿主总线: 派生与跨 agent 消息服务
+    // agent 节点容器总线: 派生与跨 agent 消息服务
     std::weak_ptr<AgentHost> self = host;
 
-    // agent.spawn (RR): 任意调用方经宿主总线派生独立子代理
+    // agent.spawn (RR): 任意调用方经 agent 节点容器总线派生独立子代理
     // (包装为单任务批量请求, 统一走 spawnBatch 路径)
     host->hostBus_
         ->getRR<events::ReqHostSpawn, events::RespHostSpawn>(events::HostTopic::AgentSpawn)
@@ -195,7 +195,7 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
         return;
     }
     // 注入共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
-    // host 引用 (供节点/工具经 AgentContext 感知宿主)
+    // host 引用 (供节点/工具经 AgentContext 感知 agent 节点容器)
     ctx->threadPool = threadPool_;
     ctx->host       = weak_from_this();
 
@@ -206,12 +206,12 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
 
     // 根 agent 全局总线上 registerServer 子代理委派 (中断路径, 统一批量语义):
     // - SubAgentManagerTool 抛 NodeInterrupt → BaseAgent 中断循环 →
-    //   agentContext->bus->request(service.subagent, ReqSubagentBatch) → 到达宿主
-    // - 宿主派生独立 agent 运行 (单任务 = 1 个 task), 结果经 interruptResult
+    //   agentContext->bus->request(service.subagent, ReqSubagentBatch) → 到达 agent 节点容器
+    // - agent 节点容器派生独立 agent 运行 (单任务 = 1 个 task), 结果经 interruptResult
     //   channel 回填
     std::weak_ptr<AgentHost> self = weak_from_this();
 
-    // 根 agent 也注册为节点 (平等成员; 由宿主持有, 不随 destroyAgent 回收)
+    // 根 agent 也注册为节点 (平等成员; 由 agent 节点容器持有, 不随 destroyAgent 回收)
     {
         auto rootNode     = std::make_shared<AgentNode>();
         rootNode->agentId = "root";
@@ -317,7 +317,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     }
 
     const auto& subagentName = task.subagentName;
-    // ---- 宿主预算检查 (深度 / 并发) ----
+    // ---- agent 节点容器预算检查 (深度 / 并发) ----
     size_t parentDepth = 0;
     if (auto it = sessionDepth_.find(parentSessionId); it != sessionDepth_.end()) {
         parentDepth = it->second;
@@ -446,7 +446,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             .errorMessage = "AgentHost: subagent context is null",
         };
     }
-    // 注入共享基础设施与宿主引用
+    // 注入共享基础设施与 agent 节点容器引用
     subCtx->threadPool = threadPool_;
     subCtx->host       = weak_from_this();
 
@@ -555,7 +555,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
             // ---- 子代理委派总线 registerServer (扁平化核心) ----
             // 子代理作用域内的 "subagent" 中断 (嵌套委派) 经本总线请求,
-            // 与根委派完全同路径; 宿主是唯一 spawn 服务者, 深度/并发预算
+            // 与根委派完全同路径; agent 节点容器是唯一 spawn 服务者, 深度/并发预算
             // 与取消级联在此统一执行
             // - handler 捕获弱引用 (parentCtx weak): 避免 ctx->bus -> registerServer
             //   handler -> ctx 的 shared_ptr 循环引用 (子代理回收时总线随 ctx
@@ -665,8 +665,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             // 统一的 "运行 + 中断处理 + 恢复" 循环 (与根 agent 共用 AgentRunner):
             // - 语义与旧内联循环完全一致 (无 checkpoint 持久化 / 无 MessageTip /
             //   HIL 超时统一取 IO 端点配置, 与根同策略)
-            // - 嵌套委派: 经本子代理总线 (service.subagent 由宿主 registerServer) 请求,
-            //   与根委派完全同路径 (扁平化: 无宿主函数直调)
+            // - 嵌套委派: 经本子代理总线 (service.subagent 由 agent 节点容器 registerServer) 请求,
+            //   与根委派完全同路径 (扁平化: 无 agent 节点容器函数直调)
             // - HIL (权限询问等): 子代理会话继承父会话总线, 请求冒泡到父 IO
             //   (弹窗/确认), 结果注入后 resume
             auto runnerOutcome = co_await AgentRunner{}.run(

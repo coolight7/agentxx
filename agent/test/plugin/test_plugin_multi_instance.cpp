@@ -1,8 +1,8 @@
 // test_plugin_multi_instance —— 多实例回归测试
 //
-// 验证同一动态库插件可被同进程内不同 agent 宿主各自创建为并存实例:
+// 验证同一动态库插件可被同进程内不同 agent 主程序各自创建为并存实例:
 // - 两个 AgentContext 各持独立 PluginManager, 加载同一 example_plugin
-// - 工具执行路由正确: A 实例的回调打到 A 的宿主 (echo 回显 sessionId 可区分)
+// - 工具执行路由正确: A 实例的回调打到 A 的主程序 (echo 回显 sessionId 可区分)
 // - 状态隔离: 卸载 A 后 B 的工具仍可用; B 重新加载亦正常
 // - 反复 load/unload 循环不泄漏 (LeakSanitizer 兜底)
 #include "agentxx-test/plugin/test_plugin_multi_instance.h"
@@ -98,7 +98,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
         co_return TestResult{g_mi_passed, g_mi_failed};
     }
 
-    // ---- 1. 双宿主并存加载同一插件 ----
+    // ---- 1. 双主程序并存加载同一插件 ----
     auto ex   = co_await asio::this_coro::executor;
     auto ctxA = makeAgentCtx(ex);
     auto ctxB = makeAgentCtx(ex);
@@ -107,13 +107,13 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     auto instB = co_await ctxB->pluginManager->loadPluginAsync(path);
     XX_TEST_EXPECT_TRUE(instA != nullptr);
     XX_TEST_EXPECT_TRUE(instB != nullptr);
-    XX_TEST_EXPECT_TRUE(instA->hostView()->opaque != instB->hostView()->opaque); ///< 宿主句柄互异
+    XX_TEST_EXPECT_TRUE(instA->hostView()->opaque != instB->hostView()->opaque); ///< 主程序句柄互异
     if (!instA || !instB) {
         XX_TEST_EXPECT_TRUE(false);
         co_return TestResult{g_mi_passed, g_mi_failed};
     }
 
-    // ---- 2. 工具路由正确性: 各自 registry 内 echo 回到各自宿主 ----
+    // ---- 2. 工具路由正确性: 各自 registry 内 echo 回到各自主程序 ----
     {
         auto toolA = ctxA->toolRegistry->find("example_echo");
         auto toolB = ctxB->toolRegistry->find("example_echo");
@@ -170,7 +170,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
         }
     }
 
-    // ---- 5. 宿主侧 registerTask 托管语义 (agentxx.agent.tasks) ----
+    // ---- 5. 主程序侧 registerTask 托管语义 (agentxx.agent.tasks) ----
     // 直接经 PluginManager::registerTask 验证: 句柄登记 (outstandingOps) /
     // cancel_fn 触发 / notify.done 恰好一次 (inflight 归零 + 句柄回收)
     {
@@ -197,7 +197,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 &err
             );
             XX_TEST_EXPECT_TRUE(h != nullptr);
-            XX_TEST_EXPECT_TRUE(ntf.done != nullptr); ///< notify 为出参 (宿主回填)
+            XX_TEST_EXPECT_TRUE(ntf.done != nullptr); ///< notify 为出参 (主程序回填)
             // 句柄已登记 (detachAll 可取消; 未完成前存在)
             bool tracked = std::any_of(
                 instC->outstandingOps.begin(),
@@ -269,7 +269,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 }
                 // cancel_fn 被调用 (协作式)
                 XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
-                // 取消后仍可上报完成 (宿主幂等; 不 UAF)
+                // 取消后仍可上报完成 (主程序幂等; 不 UAF)
                 auto nullSv2 = agentxx::plugin::PluginStringView::from(nullptr, 0);
                 ntf2.done(ntf2.host_ud, PLUGINXX_OPERATOR_CANCELLED, &nullSv2);
                 for (int i = 0; i < 100; ++i) {
@@ -344,7 +344,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     }
 #endif // XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D || XX_IS_MACOS_D
 
-    // ---- 7. JS 引擎 + 脚本插件双实例: 引擎线程/脚本上下文按实例隔离 ----
+    // ---- 7. JS 引擎 + JS 插件双实例: 引擎线程/脚本上下文按实例隔离 ----
     // - 同一 DSO 在每个 AgentContext 各建一个 JsEngine (各自 JS 线程与 runtime);
     // - A 停用引擎 (stop 停线程) 与卸载都不影响 B 的能力调用与脚本工具;
     // - 脚本注册的工具按 caller 实例归属, A/B 的注册表互不污染。
@@ -391,7 +391,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 XX_TEST_EXPECT_TRUE(outB.find("mi-A") == std::string::npos);
             }
 
-            // A 停用引擎 (级联停脚本插件, 线程退出) → B 完全不受影响
+            // A 停用引擎 (级联停JS 插件, 线程退出) → B 完全不受影响
             ctxA->pluginManager->disable("agentxx_javascript_engine");
             for (int i = 0; i < 300 && jsA && !jsA->lifecycleStopped; ++i) {
                 co_await sleepMsMI(10);
@@ -418,7 +418,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             XX_TEST_EXPECT_TRUE(ctxA->toolRegistry->contains("js_hello"));
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
 
-            // A 卸载引擎 (级联脚本插件) → B 仍可调用能力与工具
+            // A 卸载引擎 (级联JS 插件) → B 仍可调用能力与工具
             XX_TEST_EXPECT_TRUE(co_await ctxA->pluginManager->unloadAsync(
                 "agentxx_javascript_engine",
                 std::chrono::seconds{30}

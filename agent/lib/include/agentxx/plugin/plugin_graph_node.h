@@ -14,7 +14,7 @@ namespace plugin {
 
 class PluginInstance;
 
-/// GraphRegistry 没有删除类型的接口时，宿主用 slot 间接管理插件工厂。
+/// GraphRegistry 没有删除类型的接口时，主程序用 slot 间接管理插件工厂。
 /// 注册表中的 factory 只捕获 slot；卸载/重载通过代次切换使旧节点失效。
 struct GraphTypeSlot {
     struct Snapshot {
@@ -143,12 +143,12 @@ private:
     bool                           active     = false;
 };
 
-/// 插件自定义节点 (宿主侧 GraphNode 子类, 委托插件 C 回调执行)
+/// 插件自定义节点 (主程序侧 GraphNode 子类, 委托插件 C 回调执行)
 ///
 /// 设计: 遵循插件系统"统一异步操作模型" (操作 start/cancel + 锚定协程):
 /// - 引擎调用 run(NodeInput) → 序列化 GraphState → 调插件 run_start 回调
 /// - 插件完成时经 notify->done 上报节点输出 JSON (writes/command/sends)
-/// - 宿主解析 JSON 构造 NodeOutput; 取消经 run_cancel 传递
+/// - 主程序解析 JSON 构造 NodeOutput; 取消经 run_cancel 传递
 ///
 /// 节点规范 (neograph 约定): 节点实例被引擎共享于并发 run, 必须无状态或自
 /// 同步 —— 本类只保存构造期快照 (name/config/type/spec), 每次 run 只从 state
@@ -178,7 +178,7 @@ private:
     ///   按旧契约编写的插件仍会写该通道, 这里改写而非报"写入未知通道"
     /// - overwrite 模式: 整份替换会话上下文 (空列表视为误写, 忽略并记日志,
     ///   避免按旧契约读到空消息的插件把上下文清空)
-    /// - 写入后发出与宿主节点同形的事件 ({"channel":"messages","value":[...]}),
+    /// - 写入后发出与主程序节点同形的事件 ({"channel":"messages","value":[...]}),
     ///   由 EventBridge 转成 UI 消息增量并请求节流持久化
     void applyMessagesWrite(
         neograph::graph::NodeInput& in,

@@ -69,7 +69,7 @@ struct InterruptUiOption {
 /// - `text`      文本行 (`text`/`textKey` + color/bold/dim/wrap/indent)
 /// - `markdown`  markdown 富文本块 (客户端按 markdown 渲染; 行式前端打印原文)
 /// - `diff`      差异对比 (`path`/`oldStr`/`newStr`)
-/// - `image`     图片 (`dataUrl` 或 `path` + `alt`/`maxHeight`; 无图宿主降级为一行文本)
+/// - `image`     图片 (`dataUrl` 或 `path` + `alt`/`maxHeight`; 无图主程序降级为一行文本)
 /// - `progress`  进度 (`progressValue`/`progressTotal` + `label`/`labelKey` 或 `text`/`textKey`;
 ///               `progressTotal` 为 0 表示不确定态)
 /// - `separator` 分隔线 (`indent`)
@@ -86,7 +86,7 @@ struct InterruptUiOption {
 /// - `number`   数值控件 (`integer`/`min`/`max`/`step`)
 /// - `checkbox` 勾选项 (布尔值)
 /// - `path`     路径选择 (`pathMode` = file/dir/multi, `filter` = 扩展名白名单;
-///               由宿主用自己的文件选择器取值, 无选择器的宿主按文本输入降级)
+///               由主程序用自己的文件选择器取值, 无选择器的主程序按文本输入降级)
 ///
 /// 未知 kind / 未知 control: 客户端渲染 fallback 文本或诊断行, 不使整份描述失效
 /// (向前兼容, 且不静默丢内容)。
@@ -280,7 +280,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block);
 /// 内容; 需要控件/文案键等中断层字段时请直接构造 [InterruptUiBlock]。
 InterruptUiBlock blockOf(const pluginxx::ui::Item& item);
 
-/// 描述降级为纯文本 (行式前端/日志/FFI 文本宿主用)///
+/// 描述降级为纯文本 (行式前端/日志/FFI 文本主程序用)///
 /// - text/markdown: 原文 (markdown 不解析, 保留源码)
 /// - diff: 统一 diff 文本 (路径行 + 上下文/增删行)
 /// - separator: "---"; gap: 空行

@@ -233,9 +233,9 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
         *agent->ioCtx,
         [agent, serverIO, clientIO, sessionId]() -> asio::awaitable<void> {
             co_await agent->init();
-            // 宿主 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;
+            // 主程序 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;
             // attachRoot 在根 agent 总线上 registerServer 子代理委派 (service.subagent),
-            // 子代理由宿主派生独立 agent 运行 (独立 AgentContext/engine)
+            // 子代理由主程序派生独立 agent 运行 (独立 AgentContext/engine)
             // - 须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获, 避免悬空 this
             // - 注: MSVC 不支持带默认成员初始化器的聚合 + 指定初始化器,
             //   故用字段赋值构造 Config

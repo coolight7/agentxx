@@ -1,9 +1,9 @@
 /// test_plugin_hooks —— 钩子处理器清单与优先级
 /// (接口表 `agentxx.agent.hooks`)
 ///
-/// 背景: 钩子过去只有"一个实例一个点一个处理器、按装载顺序执行"这一种形态,
+/// 背景: 钩子过去只有"一个实例一个点一个处理器、按加载顺序执行"这一种形态,
 /// 也读不到"这个点上有谁"。本轮补上注册表与清单, 且**默认行为不变** —— 不声明
-/// 优先级时顺序仍是登记顺序 (插件装载顺序)。本模块验证这两面:
+/// 优先级时顺序仍是登记顺序 (插件加载顺序)。本模块验证这两面:
 ///
 /// 覆盖:
 /// 1. 顺序: `(层, priority 升序, 登记序号)`; 不声明优先级时 = 登记顺序;
@@ -13,13 +13,13 @@
 /// 3. 基础登记 (`register_hook`) 与扩展登记 (`register_hook_ex`) 互相独立:
 ///    基础登记覆盖式 (一个点一个), 撤销基础登记不影响扩展登记的处理器
 /// 4. 优先级越界裁剪到上下限 (不拒绝登记)
-/// 5. 宿主级单派发器: 首次登记挂到中间件链上, 没有处理器时摘除
+/// 5. 主程序级单派发器: 首次登记挂到中间件链上, 没有处理器时摘除
 ///    (轮次执行中先停用, 轮末 flush 摘除)
 /// 6. 实际派发: 按注册表顺序执行 (含 `core` 层), 单个处理器失败不影响后续;
 ///    core 层处理器必须是同步的 (返回操作句柄会被请求取消并记警告)
 /// 7. 清单: `hooksJson()` 的字段与顺序、装配快照同源, 开发者模式控制 `stat` 段
 /// 8. 生命周期: 禁用摘除处理器 (记录保留)、启用按 start 重新登记、卸载后回到基线
-/// 9. 插件面: kit 的 `hookEx` / `listHooks` / `unhookEx` 经真实宿主走一遍
+/// 9. 插件面: kit 的 `hookEx` / `listHooks` / `unhookEx` 经真实主程序走一遍
 #include "agentxx-test/plugin/test_plugin_hooks.h"
 
 #include "agentxx/agent/config_static.h"
@@ -96,12 +96,12 @@ std::string findPluginDir(const char* pluginName) {
     return std::string{"plugins/"} + pluginName;
 }
 
-/// 最小宿主夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
+/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
 /// + 插件管理器
 ///
 /// 功能点注册表按 `BaseAgent::init` 的顺序装配 (核心点先声明), 否则示例插件
 /// `example_feature` 的 start 事务会因"点未声明"失败 —— 本模块要用它做
-/// "后装载但优先级更高"的对照插件。
+/// "后加载但优先级更高"的对照插件。
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>    ctx;
     std::shared_ptr<agentxx::plugin::PluginManager>  mgr;
@@ -233,7 +233,7 @@ void* PLUGINXX_CALL coreHookAsync(
     const PluginxxOperatorNotify*,
     PluginxxString*
 ) {
-    // core 层不支持异步: 返回非空句柄会被宿主记警告并请求取消
+    // core 层不支持异步: 返回非空句柄会被主程序记警告并请求取消
     return reinterpret_cast<void*>(static_cast<intptr_t>(0x1));
 }
 
@@ -259,7 +259,7 @@ int64_t addCoreHook(
     );
 }
 
-/// 登记一个插件层处理器 (绕过 kit, 直接走宿主入口)
+/// 登记一个插件层处理器 (绕过 kit, 直接走主程序入口)
 int64_t addPluginHook(
     Fixture&                        f,
     agentxx::plugin::PluginInstance* inst,
@@ -308,7 +308,7 @@ asio::awaitable<void> test_order_by_layer_priority_seq() {
         co_return;
     }
 
-    // example_feature 用优先级 -10 登记 (装载在 example_plugin 之后), 应排在前面
+    // example_feature 用优先级 -10 登记 (加载在 example_plugin 之后), 应排在前面
     auto handlers = f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
     XX_TEST_EXPECT_EQ(handlers.size(), size_t{2});
     if (handlers.size() == 2) {
@@ -815,7 +815,7 @@ asio::awaitable<void> test_lifecycle_disable_enable_unload() {
 // ===========================================================================
 namespace {
 
-/// 插件侧上下文 (真实宿主视图; 只用来调 kit 的便捷函数)
+/// 插件侧上下文 (真实主程序视图; 只用来调 kit 的便捷函数)
 struct HookSdkCtx : public agentxx::plugin::PluginBase {};
 
 asio::awaitable<void> test_plugin_side_kit() {
@@ -858,7 +858,7 @@ asio::awaitable<void> test_plugin_side_kit() {
         }
     }
 
-    // 清单 (kit 读宿主 list_hooks)
+    // 清单 (kit 读主程序 list_hooks)
     const auto text = agentxx::plugin::listHooks(sdk);
     XX_TEST_EXPECT_TRUE(text.find("\"count\":7") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("\"ownerTag\":\"kit\"") != std::string::npos);

@@ -9,7 +9,7 @@
 ///     3. Info 栏段落 `test_client_start_fail.info` (+ update 自检)
 ///     4. 斜杠命令 `test_client_start_fail_cmd`
 ///     5. 事件订阅 `AGENTXX_CLIENT_EVT_READY`
-///   句柄自检保证"走到最后一步"意味着前面的注册真实生效, 宿主回滚必须
+///   句柄自检保证"走到最后一步"意味着前面的注册真实生效, 主程序回滚必须
 ///   全部撤销; 测试随后断言无任何残留。
 /// - 已设置该环境变量: start 直接成功返回 (供第二次加载验证回滚后同名
 ///   UI 项/命令/订阅可完整重新注册)。
@@ -200,7 +200,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(
         }
         return ctx;
     }
-    // 全部注册 + 句柄自检成功后主动失败 (触发宿主回滚)。
+    // 全部注册 + 句柄自检成功后主动失败 (触发主程序回滚)。
     setError(host, error_out, "client start failed on purpose after full registration");
     return nullptr;
 }

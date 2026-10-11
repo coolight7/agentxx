@@ -185,13 +185,13 @@ struct PluginConfig {
     /// 插件运行侧 (默认 auto = 按导出符号自动决定)
     PluginSide sides = PluginSide::Auto;
 
-    /// 插件参数 (yaml `args`; 宿主原样保存并整体传递给插件,
+    /// 插件参数 (yaml `args`; 主程序原样保存并整体传递给插件,
     /// 不解析具体字段 —— 参数语义由插件自行定义)
     utilxx_base::Json args;
 
     /// 插件配置文件所在目录或文件路径 (yaml `config`)
     /// - 可指向文件或目录; 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析
-    /// - 宿主归一化为绝对路径后保存并透传给插件 (经
+    /// - 主程序归一化为绝对路径后保存并透传给插件 (经
     ///   `agentxx.agent.config` / `agentxx.client.self` 的
     ///   `get_plugin_config_path` 查询)
     /// - 为空表示未指定 (插件使用默认配置加载逻辑)
@@ -265,7 +265,7 @@ public:
     ///   - permission Ask 模式默认放行规则 (code_agent initMiddleware)
     ///   - filesystem 工具与权限校验的相对路径解析基准 (toCurrentSystemAbsolutePath)
     ///   - 命令执行子进程的初始工作目录 (execute_command 工具)
-    ///   - 插件宿主信息 get_config 的 projectRoot (如 codegraph 默认索引根)
+    ///   - 插件主程序信息 get_config 的 projectRoot (如 codegraph 默认索引根)
     /// - 用途: 单进程多 agent 实例 (App 嵌入 libagentxx / FFI 多句柄) 各自绑定
     ///   独立项目目录; 也使 server 部署不再要求以项目目录作为启动目录
     std::string workDir;
@@ -304,7 +304,7 @@ public:
     std::vector<std::string> permissionDenyPaths;
 
     /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
-    /// - 插件参数整体存放于 PluginConfig::args (宿主不解析字段语义,
+    /// - 插件参数整体存放于 PluginConfig::args (主程序不解析字段语义,
     ///   由插件自行读取, 如 codegraph 插件的 loadPaths/ignorePaths/loadCwd/useGitignore)
     /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
     ///   codegraph 等依赖数据目录的插件自动跳过

@@ -1,6 +1,6 @@
 /// agentxx 插件接口协商 (三层协商的声明/校验基础设施)
 ///
-/// 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
+/// 背景: client 主程序形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
 /// 不同; server (server-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
 /// 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
 /// 机制通用, 实际起作用的限制集中在 client 侧。
@@ -10,26 +10,26 @@
 ///    名 (稳定字符串: 本项目内置为 "agentxx.agent.*" / "agentxx.client.*",
 ///    第三方私有接口用 "<vendor>.*"; agent 侧可用接口表 IID 精确声明,
 ///    如 "agentxx.agent.tools"/"agentxx.agent.prompt");
-/// 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
+/// 2. 校验层: 主程序加载前按前缀过滤出本侧声明, 与主程序支持集比对 ——
 ///    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
-///    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
+///    服务多种主程序是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
 /// 3. 决策层: 插件 entry 内经 query_interface 判空 / EVT_READY 与
 ///    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能;
 ///    展示类子能力经 "agentxx.client.ui" 接口表访问 (表内不支持项为 NULL
 ///    函数指针)
 ///
 /// 命名规范: "agentxx." 为本项目内置接口的保留命名空间, 第三方插件不得使用
-/// (第三方私有接口用 "<vendor>.<name>", 宿主不认识的名称一律视为不支持);
+/// (第三方私有接口用 "<vendor>.<name>", 主程序不认识的名称一律视为不支持);
 /// 前缀过滤规则见 [sideCaresAboutInterface]。
 ///
 /// api_version 限制 (要求 >= 当前基准版本) 保留且不被本机制替代: 核心结构体
-/// 是 C 结构, 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
+/// 是 C 结构, 老主程序+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"方面。
 /// COM 风格接口表机制使未来新增能力不再动全局版本号: 每个接口表自带 version
 /// 字段独立演进。
 ///
-/// 归属: 接口**清单解析** (plugin.yaml interfaces 段) 属框架内核, 见
+/// 归属: 接口**清单解析** (plugin.yaml interfaces 段) 属插件框架, 见
 /// `pluginxx/host/manifest.h` 的 [pluginxx::PluginManifestInterfaces];
-/// **清单目录与协商规则**属宿主领域 (需要知道本宿主实现了哪些表), 因此留在 agentxx。
+/// **清单目录与协商规则**属主程序业务 (需要知道本主程序实现了哪些表), 因此留在 agentxx。
 #ifndef AGENTXX_PLUGIN_INTERFACES_H
 #define AGENTXX_PLUGIN_INTERFACES_H
 
@@ -46,7 +46,7 @@ namespace agentxx {
 namespace plugin {
 /// ==================== 接口协商 (三层协商的声明/校验基础设施) ====================
 ///
-/// 背景: client 宿主形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
+/// 背景: client 主程序形态多样 (cli/tui/gui/第三方 app), 各自支持的插件接口
 /// 不同; server (server-io) 仅有 libagentxx 一个实现, agent 侧接口集 ≡ 核心
 /// 契约 + 全部标准接口表 (版本匹配即全集)。协商机制因此是不对称的:
 /// 机制通用, 实际起作用的限制集中在 client 侧。
@@ -56,29 +56,29 @@ namespace plugin {
 ///    名 (稳定字符串: 本项目内置为 "agentxx.agent.*" / "agentxx.client.*",
 ///    第三方私有接口用 "<vendor>.*"; agent 侧可用接口表 IID 精确声明,
 ///    如 "agentxx.agent.tools"/"agentxx.agent.prompt");
-/// 2. 校验层: 宿主加载前按前缀过滤出本侧声明, 与宿主支持集比对 ——
+/// 2. 校验层: 主程序加载前按前缀过滤出本侧声明, 与主程序支持集比对 ——
 ///    require 未满足 → 跳过加载 (INFO + 原因记录, 非错误: 同一插件目录
-///    服务多种宿主是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
+///    服务多种主程序是预期情况); 声明了本侧接口却缺对应入口符号 → 明确报错;
 /// 3. 决策层: 插件 entry 内经 query_interface 判空 / EVT_READY 与
 ///    get_client_state 的 "interfaces" 字符串数组自行决定启用哪些功能;
 ///    展示类子能力经 "agentxx.client.ui" 接口表访问 (表内不支持项为 NULL
 ///    函数指针)
 ///
 /// 命名规范: "agentxx." 为本项目内置接口的保留命名空间, 第三方插件不得使用
-/// (第三方私有接口用 "<vendor>.<name>", 宿主不认识的名称一律视为不支持);
+/// (第三方私有接口用 "<vendor>.<name>", 主程序不认识的名称一律视为不支持);
 /// 前缀过滤规则见 sideCaresAboutInterface。
 ///
 /// api_version 限制 (要求 >= 当前基准版本) 保留且不被本机制替代: 核心结构体是 C 结构,
-/// 老宿主+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"维度。
+/// 老主程序+新插件按新偏移读字段是 UB —— 接口协商只解决"功能子集"方面。
 /// COM 风格接口表机制使未来新增能力不再动全局版本号: 每个接口表自带
 /// version 字段独立演进。
 
 /// 已知接口名常量 (稳定契约; 第三方私有接口用 "<vendor>.<name>" 自定义,
-/// 宿主不认识的名称一律视为不支持 —— 安全失败)
+/// 主程序不认识的名称一律视为不支持 —— 安全失败)
 namespace plugin_interfaces {
-/// 元接口: 宿主实现完整核心契约
+/// 元接口: 主程序实现完整核心契约
 /// ([plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) v1
-/// 核心 vtable) + 标准接口表全集 (libagentxx 即此类宿主); 精简第三方宿主
+/// 核心 vtable) + 标准接口表全集 (libagentxx 即此类主程序); 精简第三方主程序
 /// 可仅声明实际实现的下述子集
 inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 /// COM 风格接口表 IID (与 plugin_api.h 的 AGENTXX_IFACE_AGENT_* 宏一一对应;
@@ -107,19 +107,19 @@ inline constexpr std::string_view AgentCoroutineRuntime = PLUGINXX_IFACE_COROUTI
 
 /// ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ----
 /// 展示扩展表整体: 声明它等价于"需要 ui 表内全部子能力", 只有覆盖全部子能力的
-/// 宿主才会声明本项 (tui; cli 只有 toast/command 故不声明)。插件应优先按下方的
-/// 细粒度能力名精确声明自己实际使用的子能力 —— 声明表整体会让"宿主缺某子能力"
+/// 主程序才会声明本项 (tui; cli 只有 toast/command 故不声明)。插件应优先按下方的
+/// 细粒度能力名精确声明自己实际使用的子能力 —— 声明表整体会让"主程序缺某子能力"
 /// 变成"整个插件不可加载/告警"
 inline constexpr std::string_view ClientUi          = AGENTXX_IFACE_CLIENT_UI;
 inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";
 inline constexpr std::string_view ClientToast       = "agentxx.client.toast";
-/// 全局快捷键: 宿主提供 `agentxx.client.keybind` 表 (注册/注销/列表),
+/// 全局快捷键: 主程序提供 `agentxx.client.keybind` 表 (注册/注销/列表),
 /// 快捷键在表单控件有焦点时同样生效 (见该表说明)
 inline constexpr std::string_view ClientKeybind     = AGENTXX_IFACE_CLIENT_KEYBIND;
 inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal"; // 预留
-/// 定时器: 宿主提供 `agentxx.client.timer` 表 (一次性/周期定时器 + 区域可见性查询);
-/// 宿主动画等级为 Disabled 时拒绝注册 (插件据此降级为静态展示)
+/// 定时器: 主程序提供 `agentxx.client.timer` 表 (一次性/周期定时器 + 区域可见性查询);
+/// 主程序动画等级为 Disabled 时拒绝注册 (插件据此降级为静态展示)
 inline constexpr std::string_view ClientTimer       = AGENTXX_IFACE_CLIENT_TIMER;
 /// 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor / register_tool_renderer;
 /// TUI 声明, CLI 无消息渲染面不声明)
@@ -130,19 +130,19 @@ inline constexpr std::string_view ClientCommand     = "agentxx.client.command";
 inline constexpr std::string_view ClientAction = "agentxx.client.action";
 /// 通用 overlay (ui 表 v3 open/close; TUI 声明, CLI 不声明)
 inline constexpr std::string_view ClientOverlay = "agentxx.client.overlay";
-/// 组件描述能力: 宿主能渲染 `agentxx.ui.item` 全量组件 (横排/分组/折叠/表格/树/键值/
+/// 组件描述能力: 主程序能渲染 `agentxx.ui.item` 全量组件 (横排/分组/折叠/表格/树/键值/
 /// 趋势图/计量条/控件/提交行); 未声明时插件应只推旧 kind (text/button/progress 等)
 /// 或改用 `fallback`。与 ui 表成员无关, 只作能力协商用。
 inline constexpr std::string_view ClientComponents = "agentxx.client.components";
-/// 插件表单: 宿主支持控件交互与结果回传 (`__submit`/`__cancel`/`commitOnPick`
+/// 插件表单: 主程序支持控件交互与结果回传 (`__submit`/`__cancel`/`commitOnPick`
 /// 经动作通道回传 `{"values":{控件 id: 值}}`); 未声明时控件只作展示
 inline constexpr std::string_view ClientForm = "agentxx.client.form";
-/// 区域尺寸感知: 宿主在布局后把可用宽高告知插件 (`AGENTXX_CLIENT_EVT_UI_LAYOUT`
+/// 区域尺寸感知: 主程序在布局后把可用宽高告知插件 (`AGENTXX_CLIENT_EVT_UI_LAYOUT`
 /// 事件 + `get_client_state().regions` 快照); 未声明时插件按固定宽度排版
 inline constexpr std::string_view ClientLayout = "agentxx.client.layout";
 } // namespace plugin_interfaces
 
-/// 宿主支持的接口集合 (稳定名字符串; io 线程构建后只读)
+/// 主程序支持的接口集合 (稳定名字符串; io 线程构建后只读)
 using InterfaceSet = std::set<std::string, std::less<>>;
 bool sideCaresAboutInterface(std::string_view name, bool agentSide);
 
@@ -153,8 +153,8 @@ struct InterfaceCheckResult {
     std::vector<std::string> missingOptional;  ///< 本侧缺失的可选接口 (仅警告)
 };
 
-/// 检查插件声明的接口是否被宿主支持集满足 (按前缀过滤出本侧相关项;
-/// agentSide=true 表示以 agent 宿主视角检查, false 为 client 宿主视角)
+/// 检查插件声明的接口是否被主程序支持集满足 (按前缀过滤出本侧相关项;
+/// agentSide=true 表示以 agent 主程序角度检查, false 为 client 主程序角度)
 InterfaceCheckResult checkInterfacesForSide(
     const pluginxx::PluginManifestInterfaces& decl,
     const InterfaceSet&                       hostSupported,
