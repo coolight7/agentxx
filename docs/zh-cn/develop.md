@@ -45,7 +45,7 @@
 ## 3. 插件开发
 
 - **声明式宏**: 推荐直接使用 `AGENTXX_PLUGIN_AGENT_EXPORT` (client 侧 `AGENTXX_PLUGIN_CLIENT_EXPORT`)，自动生成入口符号并包装 C ABI 异常守卫与实例生命周期
-- **声明式 Schema & 提取**: 通过 `ctx.schema(toolName)` 链式声明参数类型与说明，自动与宿主 `toolPrompt` 覆盖融合；在执行函数内使用 `ArgReader` 进行智能自愈与强类型参数提取
+- **声明式 Schema & 提取**: 通过 `ctx.schema(toolName)` 链式声明参数类型与说明，自动与主程序 `toolPrompt` 覆盖融合；在执行函数内使用 `ArgReader` 进行智能自愈与强类型参数提取
 - **事件驱动取消**: 长耗时外部进程或阻塞 IO 统一通过 `ctx.cancelRegistry.registerCallback(sessionKey, cb)` 注册取消动作（支持 `ScopedRegistration` RAII 自动反注册与防悬挂互斥保护），实现毫秒级即时终止
 - **遵守三铁律**：无可变全局 static / 状态经 `user_data` 闭包恢复 / 接口表缓存入实例上下文
 - **组件异常记录**：MCP、Skill、Memory 等外部资源初始化失败时统一记录于 `appendComponentInfo.failedComponents`，供客户端查看详细错误信息

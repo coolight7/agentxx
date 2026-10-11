@@ -95,7 +95,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | **代码分析** | `agentxx_codegraph_search` | 按名称搜索代码符号 |
 | | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
-| | `agentxx_codegraph_path` | 查找两符号间的调用链路径 |
+| | `agentxx_codegraph_path` | 查找两符号间的调用流程径 |
 | | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个是 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
 | **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
@@ -148,7 +148,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
   `.agentxx/agent/worktrees/` 内, 其读写按已注册规则照常处理 (否则会话对自身工作区
   的写操作也会被拒绝); filesystem 工具的相对路径经 `normalizePermissionPath(path,
   sessionId)` 按 worktree 解析, 权限规则与实际访问路径稳定匹配
-- **插件链路跟随**: 插件接口表 `agentxx.agent.config` 的
+- **插件流程跟随**: 插件接口表 `agentxx.agent.config` 的
   `get_session_work_dir(host, session_id)` (worktree 绑定优先, 为空回退默认会话工作目录); filesystem 插件
   改为每次 execute 按注入的 sessionId 动态解析 (原 entry 时静态缓存),
   execute_command 插件同语义 —— 会话绑定后两个插件的路径基准即时切换
@@ -172,7 +172,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，内容拼接到 system 消息末尾（稳定前缀，可被上游 KV/前缀缓存命中） |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
 | **SubagentManagerMiddleware** | 子代理委派管理: 持有 `SubAgentManagerTool` 单实例 (`agentxx_subagent`), 按 yaml `subagent.enable` 决定是否注入给模型; 事件总线服务 `service.subagent.execute` 始终注册 (供上下文压缩等内部路径调用) |
-| **AgentHost** | 进程级 agent 宿主: 主 agent 与子代理平等注册 (AgentNode), 派生独立 agent 运行子代理, 在根与每个子代理的全局总线上 serve service.subagent (委派扁平化: 嵌套委派与根委派同路径), 强制深度/并发预算, HostBus 跨 agent 消息路由, 生命周期回收 |
+| **AgentHost** | 进程级 agent 主程序: 主 agent 与子代理平等注册 (AgentNode), 派生独立 agent 运行子代理, 在根与每个子代理的全局总线上 serve service.subagent (委派扁平化: 嵌套委派与根委派同路径), 强制深度/并发预算, HostBus 跨 agent 消息路由, 生命周期回收 |
 | **EventBridge** | 将 GraphEngine 事件翻译为 EventBus 强类型事件 |
 | **LogPrint** | 调试日志输出中间件 (条件编译，按配置控制日志级别) |
 
@@ -289,7 +289,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   `capabilities`): 客户端据此判断输入框右侧 [ @︎ ] 按钮是否展示; 客户端侧
   模型能力表与会话无关 (来自 agent 配置), 跨 Sync 保留不清空
 
-#### Subagent 执行链路 (NodeInterrupt → 总线派发 → 宿主派生独立 agent)
+#### Subagent 执行流程 (NodeInterrupt → 总线派发 → 主程序派生独立 agent)
 
 ```
 父 agent LLM 发起 agentxx_subagent (单任务 = tasks 数组含 1 项, 批量 = 多任务)
@@ -313,11 +313,11 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
         中间件栈), 与主 agent 完全平等 (AgentNode); 配置为轻量子代理:
         不建 MCP 连接 / 不加载插件 / RAG / CodeGraph, 不注入父级 Skill/Memory,
         不持久化, 默认使用配置的 subagent 模型
-      → 宿主强制嵌套深度 (maxDepth) 与并发预算 (maxConcurrentSubagents)
-      → 子代理构造完成后, 宿主在其全局总线上 serve service.subagent
+      → 主程序强制嵌套深度 (maxDepth) 与并发预算 (maxConcurrentSubagents)
+      → 子代理构造完成后, 主程序在其全局总线上 serve service.subagent
         (与根 agent 总线 attachRoot 挂接对称): 子代理作用域内的 "subagent"
         中断 (嵌套委派) 经本总线请求, 与根委派完全同路径 (扁平化,
-        无逐级宿主函数直调)
+        无逐级主程序函数直调)
       → HIL 冒泡: 子代理会话继承父会话的 io 与总线 (权限/中断询问直达用户);
         父会话从父 agent (parentAgentCtx) 的 SessionStore 查找, 嵌套时
         是上一级子代理而非根
@@ -325,7 +325,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
         无 MessageTip; 中断未完成时才报错)
       → 取消令牌透传: 父取消级联中止子代理 (engine run 取消)
       → 进度经 hostBus agent.progress 发布, 结束经 agent.done 通知
-      → 运行结束 (成功/错误/取消) 宿主立即回收 AgentNode: 会话与中间件状态
+      → 运行结束 (成功/错误/取消) 主程序立即回收 AgentNode: 会话与中间件状态
         随 AgentContext 析构整体释放, 无按 thread 累积泄漏
   → 结果经 interruptResult channel 写回 graphData
   → AgentRunner resume_async 恢复父图, execute_async 按
@@ -418,7 +418,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     扩展 kit 在产品 [agentxx_ui_kit.g.h](/agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h) 里），
     经 `ClientPluginBase::setPanelItems/setInfoSectionItems/showItemsOverlay/setToolDecor` 直接提交;
     能力协商用客户端状态快照的 `ui` 段（`uiCapabilities()` / `supportsBlock()`）
-- **插件表单**: 面板/Info 段落/overlay 内的控件由**宿主维护状态** (值/勾选/选中/焦点/校验),
+- **插件表单**: 面板/Info 段落/overlay 内的控件由**主程序维护状态** (值/勾选/选中/焦点/校验),
   插件不进入 UI 线程; 结果经动作通道回传 (`__submit` + `{"values":{...}}` / `__cancel`),
   `commitOnPick` 的候选项点击即提交
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
@@ -493,7 +493,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
       "记住此选择" 即勾选控件 (id `remember`), **规则注册在 agent 侧完成**
       (权限处理器按 `values.remember` 经总线注册路径规则), 客户端不参与权限语义
     - 描述**必填**: 走客户端 HIL 的中断必须携带描述 (生产者用预设模板/组装器构造);
-      经总线由宿主处理、不进入客户端渲染路径的中断 (如 subagent 委派) 可为空。
+      经总线由主程序处理、不进入客户端渲染路径的中断 (如 subagent 委派) 可为空。
       描述缺失/非法按契约错误处理 (诊断行且不可交互); 未知块类型忽略/降级
       (向前兼容); **不保留历史版本兼容**
     - 命中区域按**描述块下标** + 控件 id + 子序号定位; 渲染与估算同源: 单一布局
@@ -594,7 +594,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 #### 按模块调日志级别 (`AGENTXX_LOG_MODULES`)
 
 日志条目带"模块名": `XX_LOG*` 宏自动取源文件基名 (`logModuleOf(__FILE__)`, 如
-`modelcall` / `session_store`), 插件经宿主日志表的日志记为 `plugin.<插件名>`。
+`modelcall` / `session_store`), 插件经主程序日志表的日志记为 `plugin.<插件名>`。
 环境变量 `AGENTXX_LOG_MODULES` 按模块名或前缀单独设置最低级别:
 
 ```bash
@@ -609,7 +609,7 @@ AGENTXX_LOG_MODULES="plugin.=warn,plugin.agentxx_codegraph=debug" agentxx_cli tu
 - 语义是"低于该级别的日志**直接丢弃**"(不入队, 不受 sink 侧全局级别影响);
   `Out` 级别 (XX_OUT) 恒不被拦
 - 多条命中时**最长前缀**生效 (长度相同时后设置者胜); 未命中任何条目的模块不受影响
-- `LogDispatcher::setModuleLevel/clearModuleLevels` 是同一能力的 API (宿主/嵌入方可直接调用)
+- `LogDispatcher::setModuleLevel/clearModuleLevels` 是同一能力的 API (主程序/嵌入方可直接调用)
 
 ### 训练系统
 
@@ -837,8 +837,8 @@ plugin:
       enabled: true                        # 默认 true
       sides: auto                          # auto|agent|client (双端插件用; 默认 auto 按导出符号自动决定)
       config: ""                           # 插件配置文件路径或目录 (可选; 支持 ~ 与 ${VAR}, 相对路径按工作目录解析;
-                                           # 宿主归一化为绝对路径后经 get_plugin_config_path 透传给插件)
-      args:                                # 插件参数 (宿主原样保存并整体传递, 字段语义由插件定义)
+                                           # 主程序归一化为绝对路径后经 get_plugin_config_path 透传给插件)
+      args:                                # 插件参数 (主程序原样保存并整体传递, 字段语义由插件定义)
         # ---- agentxx_codegraph 参数 ----
         paths:                             # 加载(索引)路径列表 (可选, 可多个目录)
           - "/path/to/proj_a"
@@ -1276,7 +1276,7 @@ User Input → TUIClientAgentIO/StdIOClientAgentIO
     → UI 渲染
 ```
 
-> 两种模式拓扑完全一致 (client 端点 + server 端点 + transport), 仅 transport
+> 两种模式的结构完全一致 (client 端点 + server 端点 + transport), 仅 transport
 > 实现不同。**强制 transport**: 端点间通信必须经 transport, 不存在无 transport
 > 的直连模式; `runTurnAsync(io=nullptr)` 的 headless 场景除外
 > (无 io 即无事件输出)。
@@ -1359,7 +1359,7 @@ end1  ←   end2  ←   end3
   (filesystem_list/glob/grep 已接入)
 - **插件事件驱动取消 (`CancelRegistry`)**: 针对跨进程命令执行 (如 `agentxx_execute_command` 的 bash/PowerShell 子进程) 与长耗时插件任务，单纯休眠轮询无法及时打断阻塞中的子进程。框架在 `plugin_kit.h` 提供了实例级 `CancelRegistry` 机制：
   - 任务启动时通过 `registerCallback(sessionKey, cb)` 注册取消动作（如向子进程组发送 `SIGKILL` / `TerminateProcess` 并关闭输出管道），获取 `ScopedRegistration` RAII 守卫；
-  - 宿主触发取消或重置时，即时调用已注册的取消动作，内部通过排他互斥锁与生命周期状态标记保证即使任务正在退出也不会发生回调访问已悬挂对象的竞争；
+  - 主程序触发取消或重置时，即时调用已注册的取消动作，内部通过排他互斥锁与生命周期状态标记保证即使任务正在退出也不会发生回调访问已悬挂对象的竞争；
   - 若注册时会话已处于取消态，立即在锁外同步执行取消回调，避免错过时机；新轮次开始时由 `PluginBase` 自动监听 `plugin.agentxx.round_start` 清空会话取消标记。
 
 不可中断段 (收尾/持久化) 不依赖"异常恰好没传到"，需显式防护：
@@ -1531,22 +1531,22 @@ auto resp = co_await rr.request(ReqPermission{.category = "filesystem_write"});
 | `service.subagent` | ReqSubagentBatch / RespSubagentBatch | RR | Subagent 委派 (统一批量, 单任务 = 1 个 task) |
 | `service.crossagent` | ReqCrossAgent / RespCrossAgent | RR | 跨 agent 查询 |
 
-宿主总线 (HostBus, AgentHost 持有, 跨 agent 路由):
+主程序总线 (HostBus, AgentHost 持有, 跨 agent 路由):
 
 | Topic | 类型 | 说明 |
 |---|---|---|
-| `agent.spawn` | ReqHostSpawn / RespHostSpawn | RR | 派生子代理 (宿主强制深度/并发预算) |
+| `agent.spawn` | ReqHostSpawn / RespHostSpawn | RR | 派生子代理 (主程序强制深度/并发预算) |
 | `agent.message` | ReqHostMessage / RespHostMessage | RR | 任意→任意 agent 消息 (mailbox / A2A 桥接) |
 | `agent.progress` | EventHostProgress | 单向 | 任意 agent 进度事件 |
-| `agent.done` | EventHostDone | 单向 | agent 运行结束 (宿主据此回收 AgentNode) |
+| `agent.done` | EventHostDone | 单向 | agent 运行结束 (主程序据此回收 AgentNode) |
 
 #### 5. 会话隔离与无锁设计
 
 ```
-AgentHost (进程级宿主)
+AgentHost (进程级主程序)
     ├── ioCtx                (共享 io_context, 多 agent 单线程/多协程交错)
     ├── blockingPool         (共享阻塞操作线程池, 避免每 agent 一份)
-    ├── hostBus              (宿主总线: agent.spawn/message/progress/done)
+    ├── hostBus              (主程序总线: agent.spawn/message/progress/done)
     └── AgentRegistry        (AgentNode 注册表: 主 agent 与子代理平等)
          ├── "root" → AgentNode (主 agent, 独立 BaseAgent)
          └── "agent_N" → AgentNode (子代理, 独立 BaseAgent)
@@ -1556,7 +1556,7 @@ AgentContext
     ├── middlewareHandleContext (中间件句柄)
     ├── bus                  (全局事件总线)
     ├── modelRegistry        (模型注册表)
-    ├── host                 (宿主引用, attachRoot/派生时注入)
+    ├── host                 (主程序引用, attachRoot/派生时注入)
     └── sessions (SessionsManager)
          ├── "session_1" → Session
          │     ├── io                    (AgentIOBase)
@@ -1698,7 +1698,7 @@ Client                              Server
     插件也一起走 mimalloc, 全程只有一个分配器, 不会出现跨模块 free 不匹配);
     动态链接则让 `libmimalloc.so` / `mimalloc.dll` 排在 libc 之前接管
   - 不受影响: `libagentxx.so` (FFI/嵌入) 与 `exec/plugins/*.so` 插件动态库自身不
-    链接分配器, 跟随宿主进程的分配器 (库若自行覆盖 `malloc`, 宿主的其他模块仍走
+    链接分配器, 跟随主程序进程的分配器 (库若自行覆盖 `malloc`, 主程序的其他模块仍走
     各自分配器, 反而容易跨模块 free 不匹配); 内置合并进 libagentxx 的插件随最终
     程序使用 mimalloc
   - 关键取舍: **关闭透明大页** (`-DMI_ALLOW_THP=OFF`, 上游 Linux 默认 FULL)。THP 下
@@ -1764,7 +1764,7 @@ Agent 与插件涉及 io_context / 线程池 / 动态库, 释放顺序有隐式�
 
 1. 停止输入与轮次: 断开客户端 (或收到退出信号后取消当前轮次), 使会话驱动循环退出;
 2. `co_await agent->shutdownAsync()`: 在 agent io 线程上执行插件 stop → lease 归零
-   → destroy/dlclose 全链路 (失败仅记日志: 未完成的实例保持 CloseFailed 并保留
+   → destroy/dlclose 全流程 (失败仅记日志: 未完成的实例保持 CloseFailed 并保留
    上下文/动态库, 越权 dlclose 更危险); 必须在 io_context 停止之前完成, 否则
    插件的 stop 事务没有可用的 io 线程;
 3. `agent->ioCtx->stop()` 并 join/等待 `run()` 返回: 停止会话协程、定时器与线程池任务;
@@ -1787,7 +1787,7 @@ agent/
 │   │   ├── agent/                # Agent 核心
 │   │   │   ├── base_agent.h      # BaseAgent 基类 (核心基础设施 + ReAct 循环 + 会话执行)
 │   │   │   ├── code_agent.h      # CodeAgent (继承 BaseAgent, 编程工具/中间件)
-│   │   │   ├── agent_host.h      # AgentHost 进程级宿主 (主 agent 与子代理平等注册/派生/回收)
+│   │   │   ├── agent_host.h      # AgentHost 进程级主程序 (主 agent 与子代理平等注册/派生/回收)
 │   │   │   │                     #   AgentNode / AgentRegistry / spawnBatch / HostBus / A2A 桥接
 │   │   │   ├── agent_runner.h    # AgentRunner 统一 "引擎运行+中断处理+恢复" 循环 (主 agent 与子代理共用)
 │   │   │   ├── resource_applier.h # 插件会话资源 (Skill/Memory/MCP) 声明应用与冻结
@@ -1830,13 +1830,13 @@ agent/
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
 │   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 20 张 agent 接口表 + 9 张 client 接口表)
-│   │   │   │                     #   框架内核 (C ABI 基座 / SDK 基座 / 宿主运行时 / 装载 / 清单解析) 已拆为
-│   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留宿主领域实现
-│   │   │   ├── api/              # 插件 API 头 (插件/宿主共用 C ABI 契约 + 插件 SDK; 宿主侧引用也走 api/ 前缀)
-│   │   │   │   ├── plugin_api.h      # umbrella: 包含 pluginxx/api/{abi,tables}.h + agent 领域表
+│   │   │   │                     #   插件框架 (C ABI 契约 / SDK 核心 / 主程序运行时 / 加载 / 清单解析) 已拆为
+│   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留主程序业务实现
+│   │   │   ├── api/              # 插件 API 头 (插件/主程序共用 C ABI 契约 + 插件 SDK; 主程序侧引用也走 api/ 前缀)
+│   │   │   │   ├── plugin_api.h      # umbrella: 包含 pluginxx/api/{abi,tables}.h + agent 业务表
 │   │   │   │   │                     #   (tools/permission/hooks/session/model/prompt/resources/graph)
-│   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 领域表 (UI 无关语义层)
-│   │   │   │   ├── plugin_kit.h      # agentxx 领域 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
+│   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 业务表 (UI 无关语义层)
+│   │   │   │   ├── plugin_kit.h      # agentxx 业务 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
 │   │   │   │   │                     #   tool/fast_tool/blocking_tool/polled_tool、ToolSchemaBuilder、hook、
 │   │   │   │   │                     #   图节点、工具权限声明、call_tool_blocking、client 渲染/ClientPluginBase;
 │   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
@@ -1844,20 +1844,20 @@ agent/
 │   │   │   │   ├── plugin_guard.h    # 边界异常守卫 (通用部分在 pluginxx/kit/guard.h + client 日志表重载)
 │   │   │   │   └── agentxx_ui_kit.g.h # agentxx 扩展 kit (生成物; 命名空间 agentxx::ui::kit,
 │   │   │   │   │                     #   自包含基础 kit; 定义见 agent/schema/agentxx-ui-kit.def.json)
-│   │   │   ├── plugin_framework.h # 把框架内核 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
+│   │   │   ├── plugin_framework.h # 把插件框架 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
 │   │   │   │                     #   内核实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
 │   │   │   │                     #   (kit/{kit,guard}.h; runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
 │   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,
 │   │   │   │                     #          host_core,tables_impl,lifecycle}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
-│   │   │   ├── plugin_manager.h  # PluginManager 领域部分 (工具/权限/钩子/图/提示词/资源/功能点) /
+│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/钩子/图/提示词/资源/功能点) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
-│   │   │   │                     #   PluginHookDispatchHandle (宿主级单派发器, 7 钩子点);
+│   │   │   │                     #   PluginHookDispatchHandle (主程序级单派发器, 7 钩子点);
 │   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore,
-│   │   │   │                     #   装载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
-│   │   │   │                     #   (领域数据经 pluginxx::DomainHooks + 生命周期接缝提供)
-│   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧装载/UI 注册表/命令管线;
-│   │   │   │                     #   卸载与启停继承 pluginxx::PluginHostLifecycle, 装载为 client 特有实现)
+│   │   │   │                     #   加载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
+│   │   │   │                     #   (业务数据经 pluginxx::DomainHooks + 生命周期扩展点提供)
+│   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线;
+│   │   │   │                     #   卸载与启停继承 pluginxx::PluginHostLifecycle, 加载为 client 特有实现)
 │   │   │   ├── plugin_graph_node.h # PluginGraphNode (插件自定义图节点, 统一 Operation 完成协议)
 │   │   │   ├── builtin_tool_renderers.h # 内置工具渲染器 (客户端专用展示)
 │   │   │   └── tool_registry.h   # 动态插件工具查表 (shared_ptr 保活, 静态工具名冲突检测)
@@ -1886,14 +1886,14 @@ agent/
 │   │   │   ├── provider_common.h # 各 LLM Provider 与模型调用节点共用 helper
 │   │   │   │                     #   (唯一 tool_call id 生成 / 空响应判定)
 │   │   │   └── protocol_base.h   # 协议基类
-│   │   ├── util/                 # 工具类 —— 图引擎/宿主耦合件 + 宿主专用数据库工具
+│   │   ├── util/                 # 工具类 —— 图引擎/主程序耦合件 + 主程序专用数据库工具
 │   │       ├── exception.h       # 异常分类与统一捕获 (neograph 取消/中断语义 + utilxx_base::catchError*)
 │   │       ├── neograph_json_bridge.h # utilxx_base::Json <-> neograph::json 桥接
 │   │       ├── cancel_adapter.h  # neograph::graph::CancelToken -> utilxx::CancelToken 适配器
 │   │       ├── sqlite.h          # 轻量 RAII sqlite3 封装 (SqliteDb/Stmt, WAL + busy_timeout)
 │   │       └── settings_db.h     # 全局设置 KV 库 ({dataDir}/sqlite/global.db)
 │   │       (说明: 其余通用工具已拆为独立工程, 见下方 third_party/ 与"基础库"小节;
-│   │        sqlite/settings_db 为宿主专用, 不进入通用工具库)
+│   │        sqlite/settings_db 为主程序专用, 不进入通用工具库)
 │   └── src/                      # 实现文件 (与 include 目录结构对应; util/ 下为
 │                                 #   sqlite.cpp / settings_db.cpp, ui/ 下为 item.cpp / text_width.cpp)
 │
@@ -1903,12 +1903,12 @@ agent/
 │   │                             #   async_mutex/asio_error + utilxx::CancelToken 与 offload
 │   ├── cxx_utilxx/               # 重依赖工具: http_client/http_server/ws_client/router/
 │   │                             #   regex/aho_corasick/diff_util/worktree/crypto (无数据库依赖)
-│   ├── cxx_pluginxx/             # 插件框架内核: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
+│   ├── cxx_pluginxx/             # 插件框架: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
 │   │                             #   runtime/(runtime,driver,instance_base,manager_base,op_driver) +
 │   │                             #   host/(loader,manifest,abi_util,capability_registry,
 │   │                             #         event_bus,domain_hooks,host_core,tables_impl,lifecycle)
 │   │                             #   —— 十张通用表的定义与实现 (PluginHostCore/入口) 以及
-│   │                             #      装载/启停/卸载/级联骨架 (PluginHostLifecycle) 都在此
+│   │                             #      加载/启停/卸载/级联骨架 (PluginHostLifecycle) 都在此
 │   └── (其余: boost/fmt/simdjson/sqlite3/OpenSSL/neograph/yaml-cpp/...)
 │
 ├── client/                       # agentxx_cli 可执行程序
@@ -1993,7 +1993,7 @@ agent/
 │       │   ├── test_agent.h                   # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
 │       │   │                                  #   test_agent.h 同时提供共享 LLM 模拟器 (DaSimServer),
 │       │   │                                  #   被 agent_host/session_persistence/remote_agent/cancel/memgrowth 等复用
-│       │   ├── test_agent_host.h              # AgentHost 宿主测试 (子代理派生/深度并发预算/回收)
+│       │   ├── test_agent_host.h              # AgentHost 主程序测试 (子代理派生/深度并发预算/回收)
 │       │   ├── test_training.h                # 进化训练测试 (变异/评估/优化/收敛/持久化)
 │       │   ├── test_events.h                  # 事件类型测试
 │       │   ├── test_event_stream.h            # EventBus / EventStream / RequestResponseStream 测试
@@ -2042,7 +2042,7 @@ agent/
 │       ├── plugin/                            # 插件测试头 (与 plugin/*.cpp 同名模块)
 │       │   ├── test_plugins.h                 # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
 │       │   ├── test_plugin_runtime.h          # 插件运行时测试 (生命周期/重试/取消/多实例句柄)
-│       │   ├── test_plugin_sdk.h              # 插件 SDK 测试 (kit 工具/表单/组件/键位定时器 + 老宿主降级)
+│       │   ├── test_plugin_sdk.h              # 插件 SDK 测试 (kit 工具/表单/组件/键位定时器 + 老主程序降级)
 │       │   ├── test_plugin_bridge.h           # 插件桥接测试 (协程驱动桥/受控轮询/跨插件互调)
 │       │   ├── test_plugin_resources.h        # 插件会话资源扩展测试 (Skill/Memory/MCP 声明式+运行时)
 │       │   ├── test_plugin_multi_instance.h   # 插件多实例隔离测试 (三铁律)
@@ -2119,7 +2119,7 @@ agent/
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_js_execute_command/ # JS 代码执行工具插件 (example_js_execute_command; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
-│   ├── agentxx_javascript_engine/ # QuickJS 引擎插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
+│   ├── agentxx_javascript_engine/ # QuickJS JS 运行时插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)
 │   ├── agentxx_filesystem/       # 文件系统 6 工具 (list/read/write/edit/glob/grep)
 │   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)
@@ -2245,12 +2245,12 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 20 张接口表: 10 张通用表 (`pluginxx.*`: events / capabilities / scheduler / coroutine_runtime / plugins / config / cancel / json / log / tasks) + 10 张领域表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / feature)
+- Agent 侧 20 张接口表: 10 张通用表 (`pluginxx.*`: events / capabilities / scheduler / coroutine_runtime / plugins / config / cancel / json / log / tasks) + 10 张业务表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / feature)
 - Client 侧 9 张接口表: ui / events / session / wire / self / json / log / timer / keybind (详见 client_plugin_api.h)
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 
   - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` 声明式导出宏, 自动包裹 C ABI 异常守卫与实例上下文生命周期
-  - `ToolSchemaBuilder` 链式参数构建器，自动与宿主 `toolPrompt` 提示词覆盖融合
+  - `ToolSchemaBuilder` 链式参数构建器，自动与主程序 `toolPrompt` 提示词覆盖融合
   - `ArgReader` 宽容类型解析与参数智能自愈
   - `CancelRegistry` 框架级事件驱动取消注册表，提供会话取消即时回调与 `ScopedRegistration` 防悬挂互斥保护
   - `PluginBase` 状态基类 + `Task<T>` 锚定协程 + `sleep/yield/offload/call_tool/invoke_cap` awaiter

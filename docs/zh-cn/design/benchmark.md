@@ -52,7 +52,7 @@
 
 | 模块名 | 形态 | 说明 |
 |---|---|---|
-| `resource_cli` | 同进程 CLI + Channel | 进程内 stdio 客户端 + agent, 真实轮次 + 100K/200K 上下文注入 + **真实逐轮往返** (每轮走完整链路, 无注入历史) |
+| `resource_cli` | 同进程 CLI + Channel | 进程内 stdio 客户端 + agent, 真实轮次 + 100K/200K 上下文注入 + **真实逐轮往返** (每轮走完整流程, 无注入历史) |
 | `resource_tui` | 同进程(无界面) TUI + Channel | TUI 端点仅作协议端点 (不启动 FTXUI), 测同步/分页/消息窗口 |
 | `resource_split_cli` | 真实两进程 | `agentxx_cli server` + `agentxx_cli cli --agent ws://...`, 分别采样 |
 | `resource_split_tui` | 真实 server + 连接客户端 | server 子进程 + bench 进程内 headless TUI 端点 (WS) |
@@ -71,7 +71,7 @@
 真实两进程场景的轮次负载可用 `AGENTXX_BENCH_SCALE` (0.01~1.0, 默认 1.0) 缩放,
 报告 note 会标注实际使用的系数与目标 token 数。
 
-`resource_cli` 末段是**真实逐轮往返** (采样点 `rounds<N>x<bytes>`): 每轮都走完整链路
+`resource_cli` 末段是**真实逐轮往返** (采样点 `rounds<N>x<bytes>`): 每轮都走完整流程
 (用户输入 → LLM 请求/SSE → 工具调用与结果回写 → 消息落库 → 事件回传), 与真实对话
 一致, 用于观察长上下文下的每轮固定开销与稳态漂移 (此前的 P1/P2 是直接注入历史,
 序列化/事件次数少于真实逐轮)。相关环境变量:
@@ -541,7 +541,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
   与复现步骤见 `resource/history/memory-1/plan.md` 第 4 节; 脚本与用法见
   `resource/benchmark/harness/README.md`
 - 若要把该场景纳入常驻基准: `resource_cli` 已加入**真实逐轮往返**段
-  (采样点 `rounds<N>x<bytes>`, 见第 1 节的环境变量; 每轮走完整链路而不是注入历史),
+  (采样点 `rounds<N>x<bytes>`, 见第 1 节的环境变量; 每轮走完整流程而不是注入历史),
   另外 mock LLM 支持 `AGENTXX_BENCH_STREAM_CHUNKS` 把回复切成 N 个 SSE 事件,
   用于测量逐事件解析开销 (memory-1 方案 §P3)
 
@@ -949,7 +949,7 @@ python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
 
 第 12、13 节之后主仓又合入 67 个提交, 主要是客户端模型层 (历史窗口/队列镜像,
 UI-1/UI-5)、输入投递队列、会话检索与改名、可观测性 (关键指标/诊断包, OBS-3/OBS-4/STO-13)、
-插件注册可逆与独占 slot (PLG-*) 与配置/协议门禁等; 与内存直接相关的是
+插件注册可逆与独占 slot (PLG-*) 与配置/协议校验等; 与内存直接相关的是
 `2d6c1961` (结构体成员顺序调整, 减小内存) 与第 13 节的巨帧处置 (本批构建已包含)。
 本节是**同一台机器、同一套负载与脚本**下的重新实测, 默认构建 (系统分配器),
 用于确认这些改动没有让常驻内存回退。

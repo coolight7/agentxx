@@ -55,7 +55,7 @@ int charToLower(int c) {
     - C++ 实现 Agent
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 BaseAgent/CodeAgent、toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
-    - [util](agent/lib/include/agentxx/util/) 与图引擎/宿主耦合的少量头: [exception.h](agent/lib/include/agentxx/util/exception.h) (异常分类 + 统一捕获, 基于 utilxx_base::catchError*)、neograph_json_bridge.h、cancel_adapter.h; 以及宿主专用的数据库工具 [sqlite.h](agent/lib/include/agentxx/util/sqlite.h) (轻量 RAII sqlite3 封装)、[settings_db.h](agent/lib/include/agentxx/util/settings_db.h) (全局设置 KV 库, 实现于 `agent/lib/src/util/`), 其余通用工具已拆为独立工程 (见 `agent/third_party/cxx_utilxx*`)
+    - [util](agent/lib/include/agentxx/util/) 与图引擎/主程序耦合的少量头: [exception.h](agent/lib/include/agentxx/util/exception.h) (异常分类 + 统一捕获, 基于 utilxx_base::catchError*)、neograph_json_bridge.h、cancel_adapter.h; 以及主程序专用的数据库工具 [sqlite.h](agent/lib/include/agentxx/util/sqlite.h) (轻量 RAII sqlite3 封装)、[settings_db.h](agent/lib/include/agentxx/util/settings_db.h) (全局设置 KV 库, 实现于 `agent/lib/src/util/`), 其余通用工具已拆为独立工程 (见 `agent/third_party/cxx_utilxx*`)
     - [BaseAgent](agent/lib/include/agentxx/agent/base_agent.h) agent 运行核心基类 (ReAct 循环 + 会话执行)
     - [CodeAgent](agent/lib/include/agentxx/agent/code_agent.h) 继承 BaseAgent, 添加编程工具/中间件
 - `agent/client`: 编译结果 {build}/exec/agentxx_cli
@@ -111,30 +111,30 @@ path/to/agentxx_test string_util regex
       产物 `libcxx_utilxx_base(.so|_static.a)` (Debug 加 `d`)
     - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/正则/路由/差异/
       worktree/散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
-      (不含数据库依赖: sqlite 封装与设置库属于宿主, 见 `agentxx/util/`)
+      (不含数据库依赖: sqlite 封装与设置库属于主程序, 见 `agentxx/util/`)
     - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架内核 (纯 C ABI 基座 pluginxx/api/、
-      插件 SDK kit/{kit.h,guard.h}、运行时 runtime/、宿主实现 host/), 依赖 cxx_utilxx_base +
+      插件 SDK kit/{kit.h,guard.h}、运行时 runtime/、主程序实现 host/), 依赖 cxx_utilxx_base +
       fmt + yaml-cpp (仅 Boost 头); 产物 `libcxx_pluginxx(.so|_static.a)`
         - SDK 分层: 通用 (跨边界字符串工具/通用表聚合 PluginIfaceCore/Task 锚定协程/锚定原语/
           CancelRegistry/OpCtl/ArgReader/PluginBaseT<IfacesT>/导出宏) 在内核,
-          宿主领域 helper 在宿主侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含内核头 +
+          主程序业务 helper 在主程序侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含内核头 +
           逐条 `using` 引入 agentxx::plugin, 插件源码零改动)
         - 通用表实现 (十张表的**定义与实现**) 也在内核: `host/host_core.h`
           (`PluginHostCore<InstanceT>`: 能力/事件/调度/任务/取消投递的通用实现) +
           `host/tables_impl.h` (C ABI 入口 + `queryGenericPluginIface<I,M>`) +
-          `host/domain_hooks.h` (`DomainHooks`: 通用表需要宿主数据的入口) +
+          `host/domain_hooks.h` (`DomainHooks`: 通用表需要主程序数据的入口) +
           `host/event_bus.h` (事件后端 `EventSource` 与订阅句柄);
-          agentxx 侧宿主实现见 `agent/lib/src/plugins/plugin_manager_domain_hooks.cpp`
+          agentxx 侧主程序实现见 `agent/lib/src/plugins/plugin_manager_domain_hooks.cpp`
           (事件后端包装 `agentxx::events::EventBus`) 与 `plugin_manager_vtable.cpp`
-          (领域表 + `query_interface` 先查通用表)
+          (业务表 + `query_interface` 先查通用表)
         - 生命周期骨架也在内核: `host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`
-          (继承 `PluginHostCore`) 提供装载/启停/禁用启用/卸载/级联依赖/关闭超时重试
-          的唯一实现, 宿主只提供接缝 (纯虚 `selfRef`/`createInstance`/`hostVtable`,
+          (继承 `PluginHostCore`) 提供加载/启停/禁用启用/卸载/级联依赖/关闭超时重试
+          的唯一实现, 主程序只提供扩展点 (纯虚 `selfRef`/`createInstance`/`hostVtable`,
           可选 `detachDomainRegistrations`/`clearDomainRegistrations`/
           `applyDeclaredResources`/`releaseInstanceResources`/`onInstanceEnabledChanged`/
           `onInstanceLoaded`/`onInstanceUnloaded`/`cascadeUnloadEnabledOnly`/`logTag`);
           agent 侧 `PluginManager` 与 client 侧 `ClientPluginManager` 都已接入
-          (client 侧仅"装载"保留自有实现: dlopen 卸载到内部线程池 + 接口协商 +
+          (client 侧仅"加载"保留自有实现: dlopen 卸载到内部线程池 + 接口协商 +
           双端入口探测); 实例侧 `destroyPlugin()` 在 `PluginInstanceBase` 共用,
           派生类只需给出 `pluginDestroySymbol()`
     - [boost](agent/third_party/boost/)
@@ -192,13 +192,13 @@ path/to/agentxx_test string_util regex
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。
   【生命周期契约 (必备)】所有插件必须导出 `agentxx_plugin_{agent,client}_{start,stop}`:
   `create` 只构造上下文 (`new Ctx + init(host)`, 不注册/不起线程), `start` 是注册事务
-  (在宿主 IO 线程执行, 失败返回 `NULL + error` 由宿主回滚), `stop` 撤销自管资源
+  (在主程序 IO 线程执行, 失败返回 `NULL + error` 由主程序回滚), `stop` 撤销自管资源
   (线程/定时器/订阅, 可重复), `destroy` 只释放本地对象。缺失 start/stop 的插件
-  宿主拒绝加载 (不再支持 create 期注册的旧形态)。
+  主程序拒绝加载 (不再支持 create 期注册的旧形态)。
   SDK 侧用 `AGENTXX_PLUGIN_AGENT_EXPORT(Ctx, Name, Ver, Desc, StartFn, StopFn)`
   (client 侧同名参数) 一次生成五个入口; 手写 create/destroy 的插件用
   `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 只生成 start/stop。
-  【多实例契约】同一动态库可被同进程内不同 agent 宿主各自创建多个并存实例:
+  【多实例契约】同一动态库可被同进程内不同 agent 主程序各自创建多个并存实例:
   ① 禁止可变全局/函数级 static 缓存; ② 实例状态只能放 `*plugin_ctx` 堆块,
   回调经 `spec.user_data` 恢复; ③ 接口表查询结果存实例上下文。
   offload线程池适配异步接口 (`plugin_tool_sync.h`) 适配器为调用方内嵌存储 (PluginCtx 成员),
@@ -209,7 +209,7 @@ path/to/agentxx_test string_util regex
 - 在主程序和插件的接口中不能传递标准库结构体，也不能传递复用代码里的结构体，这些都只能各自内部使用，且插件编译时应当只导出接口符号，其他符号全部隐藏
 
 已实现的插件设计约束 (2026-08)：
-- 导出符号控制: 插件动态库仅导出宿主按名查找的入口符号
+- 导出符号控制: 插件动态库仅导出主程序按名查找的入口符号
   (`agentxx_plugin_agent_get_info/create/destroy` + client 侧 `agentxx_plugin_client_*`),
   由 `PLUGINXX_EXPORT` 宏标记入口函数 (见 `plugin_api.h`);
   构建侧统一配置: ELF `-fvisibility=hidden` + version script 白名单
@@ -231,7 +231,7 @@ path/to/agentxx_test string_util regex
   container_util/hash/lru_cache/path_sanitize/stream/async_mutex/asio_error +
   契约 utilxx/cancel.h、utilxx/async_offload.h; 重依赖 http_client/http_server/
   ws_client/router/regex/aho_corasick/diff_util/worktree/crypto ——
-  数据库封装 sqlite 与设置库 settings_db 已随本次调整迁回宿主 `agentxx/util/`,
+  数据库封装 sqlite 与设置库 settings_db 已随本次调整迁回主程序 `agentxx/util/`,
   不进入工具库);
   libagentxx 与插件各自静态链接一份 (符号经导出控制隐藏, 互不冲突);
   插件 CMakeLists: `find_package(cxx_utilxx_base|cxx_utilxx)` +
@@ -258,7 +258,7 @@ path/to/agentxx_test string_util regex
   声明自身工具的权限限制 (作用域 读/写、目标来源 无/路径/文本、目标参数名 —— 目标值
   按参数实际 JSON 类型处理: 字符串为单目标、数组自动逐项、可选分类文本);
   权限中间件不再硬编码任何工具名 —— 未声明权限的工具不参与
-  权限判定 (直接放行), 声明解析目标后仍由宿主统一按规则判定 (白/黑名单、
+  权限判定 (直接放行), 声明解析目标后仍由主程序统一按规则判定 (白/黑名单、
   permission.mode、记住的选择、工作区隔离、完全授权)。声明随工具注销/插件禁用卸载
   自动撤销; 非本实例工具名或非法枚举取值会被拒绝并记日志。
   模式/前缀参数工具 (glob/grep/list) 另用同表的 `check_paths` 批量查询实际产生路径的
@@ -286,7 +286,7 @@ path/to/agentxx_test string_util regex
   **独占型** (`set_graph_json` 执行图定义) 同时只允许一个占用者, 后到者被拒绝,
   占用者禁用/卸载恢复占用前的定义 (回到内置)。诊断: `PluginManager::registrationInventory`
   给出各分类**生效**计数 (0 = 已回到基线), 装配快照输出 `registration_total` 与图定义
-  `definition_owner`; 装载失败由 `PluginManager::diagnosePluginPath` 给出"照什么改"的
+  `definition_owner`; 加载失败由 `PluginManager::diagnosePluginPath` 给出"照什么改"的
   建议 (路径/清单/入口符号)。PLG-1/PLG-2/PLG-4/PLG-7, 测试模块 `plugin_cleanup`
 
 客户端 UI 组件层 (2026-09): 仪表盘/Info/装饰/overlay/中断描述共用同一套组件描述
@@ -300,13 +300,13 @@ path/to/agentxx_test string_util regex
   与降级。测量走 `measureItem` (内部渲染一次), 与真实布局高度一致
 - 命中: 元素内子区域 `UiHitRegion` (局部坐标) + 滚动容器 `Scrollable::hitTestItem`
   (面板/Info/overlay/装饰不再用子项 `reflect`, 避免视口外子项残留命中区)
-- 表单: 控件状态由宿主维护 (`UiFormState`; 点击/键盘/校验/取值只有一份实现),
+- 表单: 控件状态由主程序维护 (`UiFormState`; 点击/键盘/校验/取值只有一份实现),
   提交经动作通道回传 `__submit` + `{"values":{...}}` / `__cancel`;
   中断描述 (`InterruptView`) 也走同一套渲染与交互, 仅结果去处不同
   (结果通道回传 `{"values":{...}}`); 插件侧便捷方法见 `plugin_kit.h` 的
   `setPanelItems`/`showItemsOverlay`/`registerTimer`/`registerKeybind` 等
 - 能力名 `agentxx.client.components` / `agentxx.client.form` / `agentxx.client.layout`
-  (能力协商, 老宿主缺失即降级); 详见 `docs/zh-cn/design/plugins.md` §9.1~§9.6
+  (能力协商, 老主程序缺失即降级); 详见 `docs/zh-cn/design/plugins.md` §9.1~§9.6
   与 `docs/zh-cn/design/tui.md` §2.2/§2.6
 - 定时器/快捷键新表 (2026-09): `agentxx.client.timer` (一次性/周期定时器,
   `pause_when_hidden` 区域不可见时顺延, 动画等级 Disabled 时拒绝注册, 禁用/卸载自动取消)
@@ -318,7 +318,7 @@ path/to/agentxx_test string_util regex
   `ClientKeybindConflict` 记录列在"键位冲突"段)
 - 补充约定 (2026-09-22): 单条 UI 描述 **1 MiB 上限** (`kUiJsonMaxBytes`; 入口拒绝整条更新
   并记日志, 注册表保持上次成功内容)、注册表条目带内容 `version`、通用字段 `when` 仅解析
-  与往返保留 (渲染不消费)、树节点在有 `collapseExpanded` 时按"节点路径"键支持宿主管理
+  与往返保留 (渲染不消费)、树节点在有 `collapseExpanded` 时按"节点路径"键支持主程序管理
   折叠; 行元素内的 `reflect` 框由元素自有节点 (`OwnedReflect`, 见
   `agent/client/include/agentxx-client/io/tui/framework/owned_reflect.h`) 持有 —— 接入点只搬
   元素也不会悬空 (行渲染 `renderItem`/`mergeTextButton` 与命中登记
@@ -327,7 +327,7 @@ path/to/agentxx_test string_util regex
   SDK 便捷方法另有 `panelItems`(就地构建自动提交)/`setToolDecor`/`Items::form`
 - 测试: 组件层解析/渲染/命中 `ui_items` + `tui_ui_items`; 表单 `tui_form`;
   接入点 (面板/Info/overlay) `tui_widget`·`tui_form`, 装饰 `tui_tool_header`; 插件端到端
-  (含老宿主降级) `plugin_sdk`·`client_plugins`
+  (含老主程序降级) `plugin_sdk`·`client_plugins`
 
 客户端 UI 与远程交互补充 (2026-09):
 - 跨设备附件选择: 远程模式下 client 与 server 不同设备时 (deviceId 比对; HelloAck 携带服务端设备 id
@@ -378,8 +378,8 @@ path/to/agentxx_test string_util regex
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` (计划 OBS-4) 导出
   环境/指标/装配(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
-- 接口表数量: agent 侧 20 张 (10 张通用表 `pluginxx.*` + 10 张领域表 `agentxx.agent.*`;
-  领域表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
+- 接口表数量: agent 侧 20 张 (10 张通用表 `pluginxx.*` + 10 张业务表 `agentxx.agent.*`;
+  业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
   `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
@@ -397,18 +397,18 @@ path/to/agentxx_test string_util regex
   - 自检: `boundaries` 逐表校验四件套与**成员顺序台账**; `plugin_runtime` 校验判定
     三态与布局偏移; 详见 docs/zh-cn/design/plugins.md §17
 - 钩子处理器清单与优先级 (2026-10, 接口表 `agentxx.agent.hooks` 的表尾三成员):
-  - 宿主维护**一张**钩子注册表 (`PluginManager::hookHandlers_`), 处理器按
-    `(层, priority 升序, 登记序号)` 执行: `plugin` 层 (插件 / FFI 宿主) 在前, `core` 层在后;
-    不声明 `priority` (= 0) 时顺序就是登记顺序 = 插件装载顺序 (与旧行为一致);
+  - 主程序维护**一张**钩子注册表 (`PluginManager::hookHandlers_`), 处理器按
+    `(层, priority 升序, 登记序号)` 执行: `plugin` 层 (插件 / FFI 主程序) 在前, `core` 层在后;
+    不声明 `priority` (= 0) 时顺序就是登记顺序 = 插件加载顺序 (与旧行为一致);
     `priority` 越界裁剪到 `agentxx::feature` 的上下限并记警告, 处理器数量不设上限
     (同一实例同一个点可登记多个, 各自句柄)
-  - 中间件链上只剩**一个**宿主级派发器 `PluginHookDispatchHandle` (`plugin_hooks`):
+  - 中间件链上只剩**一个**主程序级派发器 `PluginHookDispatchHandle` (`plugin_hooks`):
     首次登记时插入、没有处理器时移除 (轮次执行中先置 `disabled`, 轮末
     `flushPendingCleanup` 摘除); 旧的"每插件一个中间件句柄"与
     `PluginInstance::middleware` / `RegistrationInventory::middlewareAttached` 已删除
   - 单张钩子表 `agentxx.agent.hooks`: 基础两项 (一个实例一个点一个处理器, 覆盖式) +
     表尾三项 `register_hook_ex`/`unregister_hook_ex`/`list_hooks`
-    (SDK: `hookEx`/`unhookEx`/`listHooks`; 清单里的 `layer`/`owner` 与功能点同一口径);
+    (SDK: `hookEx`/`unhookEx`/`listHooks`; 清单里的 `layer`/`owner` 与功能点同一规则);
     三成员属本表 v1 布局 (基线), 主程序不支持时判空降级
   - 清单进装配快照 (`hooks` 段 + 插件行 `hook_priorities`) 与 `--dump-diagnostics`
     (`hookHandlers[N]`); 派发记录 (`stat` 段: 次数 / 上次顺序与耗时) 只在开发者模式收集
@@ -433,7 +433,7 @@ path/to/agentxx_test string_util regex
     通道, 新架构下恒为 false); 语义 = 最后一条 assistant 是否带 tool_calls,
     读 `xx_messagesMeta.last_assistant_tool_calls`, 无该通道时回退扫描 `messages` 通道;
     `BaseAgent::initRegisterNodes` 同时注册到 per-agent 与进程级全局条件表
-    (自建 GraphRegistry 的宿主需自行调用 `registerAgentGraphConditions`)
+    (自建 GraphRegistry 的主程序需自行调用 `registerAgentGraphConditions`)
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
@@ -455,7 +455,7 @@ path/to/agentxx_test string_util regex
   (superbuild 由顶层 AGENTXX_LINUX_IO_URING_SUPPORTED 下发; cxx_utilxx_base 的
   构建开关 CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED 与之同源, 一并下发)
 - 三个自研工具库 (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx) 按独立发布维护:
-  库内不使用宿主专名, 构建变量统一 `XX_*` 前缀 (`XX_INSTALL_DIR` /
+  库内不使用主程序专名, 构建变量统一 `XX_*` 前缀 (`XX_INSTALL_DIR` /
   `XX_EXEC_INSTALL_PREFIX` / `XX_LINUX_IO_URING_SUPPORTED` + `XX_IS_*_D` 平台宏),
   未传入时各自回退默认值; superbuild 在公共参数里下发 XX_* 取值
   (见 agent/CMakeLists.txt 的 _AGENTXX_COMMON_CMAKE_ARGS)
@@ -508,7 +508,7 @@ path/to/agentxx_test string_util regex
     libstdc++/dlopen 插件也走 mimalloc, 不会跨模块 free 不匹配); SHARED 用
     `-u mi_version` 保留 `libmimalloc.so` 依赖, 并把 SONAME 文件装到 exec
   - 插件 (agent/plugins) 不接入 (内置合并进 libagentxx 的随最终程序用 mimalloc,
-    独立编译的插件动态库跟随宿主进程); `libagentxx.so` 自身也不链接分配器
+    独立编译的插件动态库跟随主程序进程); `libagentxx.so` 自身也不链接分配器
   - THP 必须关: 上游 Linux 默认 `MI_ALLOW_THP=FULL` 时按 2 MB 大页保留内存,
     实测 RSS 翻倍 (19.6 → 37.4 MB); 需要 THP 时运行时用 `MIMALLOC_ALLOW_THP=1`
   - sanitizer 与 mimalloc 互斥 (ASan 需独占 malloc, 同开会启动崩溃): 非 Release 且

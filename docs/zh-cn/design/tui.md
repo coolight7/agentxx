@@ -153,7 +153,7 @@
 - 行元素内的 `reflect` 反射框由元素的**自有节点** `OwnedReflect` 持有: 元素被搬进
   滚动容器/消息块缓存 (可能跨帧存活) 时 Box 不会随局部渲染结果析构而悬空;
   命中判定仍读同一个 Box (两级判定 = 行元素框 + 行内区域)。
-- `tree` 的折叠态: 上下文提供 `collapseExpanded` (TUI 侧就是宿主维护的展开表) 时,
+- `tree` 的折叠态: 上下文提供 `collapseExpanded` (TUI 侧就是主程序维护的展开表) 时,
   有子节点的行可点击展开/收起, 状态键为"从根到该节点的路径"(如 `src/io/`);
   未提供时按全展开渲染 (行式前端行为不变)。
 
@@ -292,7 +292,7 @@ struct UiActionItem {
 - 命中与派发: 侧边栏内容经 `Scrollable::hitTestItem` 定位子项 + 局部坐标后判定区域
   (不用子项内的 `reflect`, 见 3.1); 命中后经 `ClientPluginManager::dispatchAction`
   投递回 io 线程, 二次校验插件存在/启用/实例代次后调用插件回调。
-- 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由宿主维护, 提交经
+- 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由主程序维护, 提交经
   动作通道回传 `__submit` (参数 `{"values":{控件 id: 值}}`), 取消回传 `__cancel`,
   `commitOnPick` 的候选项点击即提交。插件不接触 UI 线程, 只收结果。
 - 输入类控件 (`text` / `number`) 渲染为**整行输入框** (与主消息输入框同一套形态):
@@ -307,8 +307,8 @@ struct UiActionItem {
 - **定时器与快捷键**: 插件不能自己起线程/定时器, 需要"按时间刷新"或"响应按键"时经
   `agentxx.client.timer` / `agentxx.client.keybind` 两张表注册 (回调都在 client io
   线程执行, 插件代码永不进 UI 线程):
-  - 定时器: `pause_when_hidden` 关联的面板/Info 段落不可见时顺延不触发; 宿主动画等级
-    `Disabled` 时拒绝注册; 插件禁用/卸载时宿主全部取消
+  - 定时器: `pause_when_hidden` 关联的面板/Info 段落不可见时顺延不触发; 主程序动画等级
+    `Disabled` 时拒绝注册; 插件禁用/卸载时主程序全部取消
   - 快捷键: UI 线程按 `keybindOfEvent(event)` 得到的规范化键位查表
     (`ClientPluginManager::hasKeybind`) 命中后拦截事件, 经 `postKeybindInvocation`
     投递回 io 线程执行插件回调; 优先级为"全局快捷键 > 表单控件焦点 > 普通按键",
@@ -320,7 +320,7 @@ struct UiActionItem {
     冲突记录一起从快照消失
   - 可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`: 面板 = 当前激活 tab,
     Info 段落 = Info tab 激活), 经 `is_visible` 查询
-- 尺寸感知: 宿主布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
+- 尺寸感知: 主程序布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
   `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 (载荷 `{"regions":[{id,w,h}]}`), 并可经
   `get_client_state().regions` 查询; 插件据此按可用宽度重排内容。
 - 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
@@ -384,7 +384,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `新版本 {当前} -> {新版本}` / `· {发布页链接}` / `[ 前往下载 ]` (链接行用
   `paragraph` 按可用宽度换行, 长链接不截断, 可拖选复制); 内容行的文案键为
   `update.title` / `update.versionLine` / `update.download` / `update.hint`。
-  点击按钮或 Enter 触发宿主的 `onDownload`: 经
+  点击按钮或 Enter 触发主程序的 `onDownload`: 经
   [open_url.h](/agent/client/include/agentxx-client/util/open_url.h) 的
   `openUrlInBrowser` 交给系统默认程序打开浏览器 (Windows `ShellExecuteW` /
   macOS `open` / Android `termux-open-url` 回退 `xdg-open` / 其它 `xdg-open`,
@@ -612,7 +612,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 组件只在**真正处理**了事件时返回 `true`; 鼠标事件未命中任何登记项时应返回 `false`,
   让其它组件或全局处理继续 (否则会吞掉别人/全局的点击)。
 - 弹窗组件例外: 作为遮挡层, 未处理的事件也应 `return true` 吞掉 (见 2.5)。
-- **拖选复制与高亮**: 左键拖动由 FTXUI 的 `Selection` 承载 (`App` 只在没有任何组件
+- **拖选复制与高亮**: 左键拖动由 FTXUI 的 `Selection` 处理 (`App` 只在没有任何组件
   消费事件时把它转入选择); 每个文本节点在 `Select(selection)` 里既取走选中文本, 也
   记录"哪些单元格被选中"用于绘制高亮 —— 自绘节点 (`FlowText`/`FlowCodeBlock`) 必须
   两者都做, 否则表现为"能复制但拖动时没有反色高亮"。`Select` 只在选择非空时被调用,
@@ -652,7 +652,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   前一格, 控制字符不占列)。旧实现为每个字素保存一个 `std::string`, 渲染树是所
   显示文本的 30~60 倍; 现在纯文本节点约 ×1.4 (实测: 100 条 1KB 文本节点 137KB)。
 - **自绘折行节点** [markdown::FlowText](/agent/third_party/markdown_ftxui/markdown/include/markdown/flow.hpp):
-  markdown 段落/行内内容不再"每词一个元素", 而是**一个节点承载整段文本**:
+  markdown 段落/行内内容不再"每词一个元素", 而是**一个节点包含整段文本**:
   - 折行规则: 空格为词边界 (行首空格丢弃), 超宽单词按列硬拆 (不丢字符), `'\n'`
     为硬换行; 词间空格与该词合并写入同一片段, 通常一行只剩 1 个片段
   - **折行结果按宽度缓存**: 宽度不变时 `SetBox` 只更新盒位置 (流式输出/滚动时
