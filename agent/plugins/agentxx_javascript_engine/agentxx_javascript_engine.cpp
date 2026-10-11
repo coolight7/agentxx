@@ -915,9 +915,11 @@ private:
     }
 
     /// 中断处理: 任务超时打断 (返回 1 → 解释器抛 "interrupted")
-    static int interruptHandler(JSRuntime* rt, void* opaque) {
+    /// - 首参数是正在执行 JS 的上下文 (quickjs-ng 的 JSInterruptHandler 定义),
+    ///   本处只用到 opaque (引擎自身), 由 JS_SetInterruptHandler 注册时传入
+    static int interruptHandler(JSContext* ctx, void* opaque) {
         auto* engine = static_cast<JsEngine*>(opaque);
-        (void)rt;
+        (void)ctx;
         if (std::chrono::steady_clock::now() - engine->taskStart_
             > std::chrono::milliseconds(kTaskTimeoutMs)) {
             return 1;
