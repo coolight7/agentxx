@@ -107,6 +107,10 @@ static int32_t PLUGINXX_CALL
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->name)) {
             return -1;
         }
+        // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+        if (!specSizeOk<AgentxxPluginToolSpec>(spec->struct_size)) {
+            return -1;
+        }
         auto                  mgrPtr   = mgr;
         auto                  instPtr  = inst;
         AgentxxPluginToolSpec specCopy = *spec;
@@ -194,8 +198,8 @@ static int32_t PLUGINXX_CALL xx_check_paths(
     if (query->path_count > kPermissionCheckPathsMax) {
         return -1;
     }
-    // 旧布局保护: struct_size 非 0 时必须覆盖当前结构体
-    if (query->struct_size != 0 && query->struct_size < sizeof(AgentxxPluginPermissionPathQuery)) {
+    // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+    if (!agentxx::plugin::specSizeOk<AgentxxPluginPermissionPathQuery>(query->struct_size)) {
         return -1;
     }
     // 入参按值复制后交给 io 线程执行 (跨边界视图只在本次调用期间有效)
@@ -277,6 +281,10 @@ static int32_t PLUGINXX_CALL
         auto inst = call.instance();
         if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
             || !spec->hook_start) {
+            return -1;
+        }
+        // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+        if (!specSizeOk<AgentxxPluginHookSpec>(spec->struct_size)) {
             return -1;
         }
         auto                  mgrPtr   = mgr;
@@ -491,6 +499,10 @@ static int32_t PLUGINXX_CALL
         auto inst = call.instance();
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->type)
             || !spec->run_start) {
+            return -1;
+        }
+        // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+        if (!specSizeOk<AgentxxPluginGraphNodeTypeSpec>(spec->struct_size)) {
             return -1;
         }
         auto                           mgrPtr   = mgr;

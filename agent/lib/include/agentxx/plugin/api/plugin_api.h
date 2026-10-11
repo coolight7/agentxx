@@ -10,6 +10,8 @@
 /// - 版本策略: 全局 PLUGINXX_API_VERSION + 每张表四项齐全 (IID / `struct_size` /
 ///   `version` - `_VERSION` / `_MIN_VERSION` / `_BASELINE_SIZE`), 判定规则与追加策略
 ///   见 `pluginxx/api/tables.h` 的文件头说明与 docs/zh-cn/design/plugins.md §9
+/// - 跨边界结构体 (spec): 填充方填 `struct_size`, 读取方按它 gate (见
+///   `agentxx/plugin/api/plugin_spec.h`); 新增可选字段只能加在结构体尾部
 ///
 /// ════════════════════════════════════════════════════════════════════
 /// 归属分层 (框架内核已拆分为 cxx_pluginxx 独立工程)
@@ -65,6 +67,11 @@ extern "C" {
 #define AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK (1 << 2)
 
 typedef struct AgentxxPluginToolSpec {
+    /// 本结构体字节数 (`sizeof(AgentxxPluginToolSpec)`); `0` = 基线布局
+    /// - 以后往尾部追加可选字段时, 主程序读该字段前先用
+    ///   `agentxx::plugin::specHas<&AgentxxPluginToolSpec::字段>(spec->struct_size)` 判定
+    uint32_t           struct_size;
+    uint32_t           _reserved; ///< 8 字节补齐
     PluginxxStringView name; ///< 须全局唯一 (与内置工具/MCP 工具同名将注册失败)
     PluginxxStringView description;
     PluginxxStringView parameters_json; ///< JSON Schema 字符串 (json object)
@@ -85,11 +92,13 @@ typedef struct AgentxxPluginToolSpec {
     /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
     void(PLUGINXX_CALL* execute_cancel)(void* user_data, void* op);
 
-    void*    user_data;
-    int64_t  default_timeout_ms; ///< 0 = 不限制 (定长 64 位整型)
-    int32_t  flags;              ///< AGENTXX_PLUGIN_TOOL_FLAG_*
-    uint32_t _reserved;          ///< 8 字节补齐
+    void*   user_data;
+    int64_t default_timeout_ms; ///< 0 = 不限制 (定长 64 位整型)
+    int32_t flags;              ///< AGENTXX_PLUGIN_TOOL_FLAG_*
 } AgentxxPluginToolSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_TOOL_SPEC_BASELINE_SIZE sizeof(AgentxxPluginToolSpec)
 
 /* ==================== 中间件钩子 ==================== */
 
@@ -105,8 +114,9 @@ typedef enum AgentxxPluginHookPoint {
 } AgentxxPluginHookPoint;
 
 typedef struct AgentxxPluginHookSpec {
-    int32_t  point;     ///< AgentxxPluginHookPoint (明确 32 位整型)
-    uint32_t _reserved; ///< 8 字节补齐
+    /// 本结构体字节数 (`sizeof(AgentxxPluginHookSpec)`); `0` = 基线布局
+    uint32_t struct_size;
+    int32_t  point; ///< AgentxxPluginHookPoint (明确 32 位整型)
     void*(PLUGINXX_CALL* hook_start)(
         void*                         user_data,
         int32_t                       point,
@@ -118,13 +128,16 @@ typedef struct AgentxxPluginHookSpec {
     void* user_data;
 } AgentxxPluginHookSpec;
 
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_HOOK_SPEC_BASELINE_SIZE sizeof(AgentxxPluginHookSpec)
+
 /// 钩子处理器登记选项 (有序登记: 同一实例同一个点可以登记多个处理器)
 ///
 /// 与 [AgentxxPluginHookSpec] 的区别: 多了层内顺序 ([priority]) 与展示信息
 /// ([owner_tag] / [depict]), 且**不覆盖**同点已有处理器 —— 每次登记都得到一个
 /// 独立句柄, 经 [AgentxxPluginHooksExIface::unregister_hook_ex] 精确撤销。
 typedef struct AgentxxPluginHookSpecEx {
-    uint32_t struct_size; ///< sizeof(AgentxxPluginHookSpecEx); 0 = 按当前布局
+    uint32_t struct_size; ///< sizeof(AgentxxPluginHookSpecEx); 0 = 基线布局
     int32_t  point;       ///< AgentxxPluginHookPoint
     /// 层内顺序, 小者先 (默认 0 = 按登记顺序 = 插件装载顺序)
     /// - 越界裁剪到宿主允许范围并记一条警告, 不拒绝登记
@@ -149,6 +162,9 @@ typedef struct AgentxxPluginHookSpecEx {
     void(PLUGINXX_CALL* hook_cancel)(void* user_data, void* op); ///< 可为 NULL
     void* user_data;
 } AgentxxPluginHookSpecEx;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_HOOK_SPEC_EX_BASELINE_SIZE sizeof(AgentxxPluginHookSpecEx)
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
@@ -222,16 +238,19 @@ typedef struct AgentxxPluginToolPermissionSpec {
     /// - 目标值按**参数实际 JSON 类型**处理: 字符串视为单个目标, 数组则逐项判定
     ///   (无需声明形态)
     PluginxxStringView target_arg;
-    /// 本结构体字节数 (sizeof(AgentxxPluginToolPermissionSpec)); 传 0 时按当前布局解析
+    /// 本结构体字节数 (sizeof(AgentxxPluginToolPermissionSpec)); 0 = 基线布局
     uint32_t struct_size;
     uint32_t _reserved; ///< 8 字节补齐
     /// 权限分类文本 (权限询问卡片上显示; 留空则按作用域生成)
     PluginxxStringView category;
 } AgentxxPluginToolPermissionSpec;
 
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_TOOL_PERMISSION_SPEC_BASELINE_SIZE sizeof(AgentxxPluginToolPermissionSpec)
+
 /// 路径权限批量查询入参 (check_paths; 三态判定, 不发起询问)
 typedef struct AgentxxPluginPermissionPathQuery {
-    /// 本结构体字节数 (sizeof(AgentxxPluginPermissionPathQuery)); 传 0 时按当前布局解析
+    /// 本结构体字节数 (sizeof(AgentxxPluginPermissionPathQuery)); 0 = 基线布局
     uint32_t struct_size;
     /// 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_READ / _WRITE)
     int32_t scope;
@@ -243,6 +262,9 @@ typedef struct AgentxxPluginPermissionPathQuery {
     /// 待查路径数组 (只读借用, 仅本次调用有效): 绝对路径优先; 相对路径按会话工作目录解析
     const PluginxxStringView* paths;
 } AgentxxPluginPermissionPathQuery;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_PERMISSION_PATH_QUERY_BASELINE_SIZE sizeof(AgentxxPluginPermissionPathQuery)
 
 typedef struct AgentxxPluginPermissionIface {
     int32_t  version;     ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
@@ -521,6 +543,9 @@ typedef void(PLUGINXX_CALL* AgentxxPluginGraphNodeRunCancelFn)(void* user_data, 
 
 /// 插件节点类型注册规格
 typedef struct AgentxxPluginGraphNodeTypeSpec {
+    /// 本结构体字节数 (sizeof(AgentxxPluginGraphNodeTypeSpec)); 0 = 基线布局
+    uint32_t struct_size;
+    uint32_t _reserved; ///< 8 字节补齐
     PluginxxStringView                type;       ///< 节点类型名 (须全局唯一)
     AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (操作契约)
     AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
@@ -528,6 +553,9 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
     /// 可选节点 config JSON Schema (Draft 2020-12 片段; 仅供导出/文档, 引擎不校验)
     PluginxxStringView config_schema_json;
 } AgentxxPluginGraphNodeTypeSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_GRAPH_NODE_TYPE_SPEC_BASELINE_SIZE sizeof(AgentxxPluginGraphNodeTypeSpec)
 
 /// 执行图接口表: 插件注册自定义节点类型 + 读写宿主执行图 JSON 定义
 /// - 节点类型注册进 per-agent GraphRegistry (多实例隔离), 图编译时按类型名
@@ -603,7 +631,7 @@ typedef struct AgentxxPluginGraphIface {
 
 /// 插件声明自己的功能点
 typedef struct AgentxxPluginFeaturePointSpec {
-    /// 本结构体字节数 (sizeof(AgentxxPluginFeaturePointSpec)); 传 0 时按当前布局解析
+    /// 本结构体字节数 (sizeof(AgentxxPluginFeaturePointSpec)); 0 = 基线布局
     uint32_t struct_size;
     /// 类型 (AGENTXX_PLUGIN_FEATURE_TYPE_*)
     int32_t type;
@@ -622,9 +650,12 @@ typedef struct AgentxxPluginFeaturePointSpec {
     PluginxxStringView result_doc;
 } AgentxxPluginFeaturePointSpec;
 
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_FEATURE_POINT_SPEC_BASELINE_SIZE sizeof(AgentxxPluginFeaturePointSpec)
+
 /// 功能点实现登记 (与工具 `execute_start` 同一套操作协议)
 typedef struct AgentxxPluginFeatureImplSpec {
-    /// 本结构体字节数; 传 0 时按当前布局解析
+    /// 本结构体字节数 (sizeof(AgentxxPluginFeatureImplSpec)); 0 = 基线布局
     uint32_t struct_size;
     /// 层内顺序, 小者先 (插件默认 0; 越界裁剪到上下限并记警告, 不拒绝登记)
     int32_t priority;
@@ -654,6 +685,9 @@ typedef struct AgentxxPluginFeatureImplSpec {
     /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
     void(PLUGINXX_CALL* impl_cancel)(void* user_data, void* op);
 } AgentxxPluginFeatureImplSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_FEATURE_IMPL_SPEC_BASELINE_SIZE sizeof(AgentxxPluginFeatureImplSpec)
 
 typedef struct AgentxxPluginFeatureIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION
@@ -717,6 +751,7 @@ typedef struct AgentxxPluginFeatureIface {
  * 且纯 C 编译单元不参与 (本块被 `__cplusplus` 排除)。 */
 #ifdef __cplusplus
 #include "agentxx/plugin/api/plugin_iface_meta.h"
+#include "agentxx/plugin/api/plugin_spec.h"
 #endif
 
 #endif /* AGENTXX_PLUGIN_API_H */

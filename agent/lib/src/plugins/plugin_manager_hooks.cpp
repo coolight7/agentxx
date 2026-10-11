@@ -329,8 +329,8 @@ int PluginManager::registerHookEx(
     if (spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT || !spec->hook_start) {
         return -1;
     }
-    // struct_size 守卫: 非 0 时必须覆盖当前结构体 (新宿主的字段不会被老插件误读)
-    if (spec->struct_size != 0 && spec->struct_size < sizeof(AgentxxPluginHookSpecEx)) {
+    // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+    if (!agentxx::plugin::specSizeOk<AgentxxPluginHookSpecEx>(spec->struct_size)) {
         XX_LOGW("插件 `{}` registerHookEx 被拒绝: struct_size 过小", inst->name);
         return -1;
     }
@@ -348,7 +348,6 @@ int PluginManager::registerHookEx(
     entry.load     = (inst->builtinUnload != nullptr) ? "builtin" : "dynamic";
     entry.inst     = inst->self;
     entry.spec.point       = spec->point;
-    entry.spec._reserved   = 0;
     entry.spec.hook_start  = spec->hook_start;
     entry.spec.hook_cancel = spec->hook_cancel;
     entry.spec.user_data   = spec->user_data;

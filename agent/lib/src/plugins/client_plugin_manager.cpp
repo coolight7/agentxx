@@ -481,12 +481,14 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGW("[client_plugin] `{}` get_info threw unknown exception", path);
         }
         if (info) {
-            if (info->api_version != AGENTXX_CLIENT_PLUGIN_API_VERSION) {
+            // 插件级闸门: 声明版本低于本主程序支持的最低版本时拒绝加载
+            // (与 agent 侧同一判据; 见 pluginxx/api/abi.h 的 PLUGINXX_MIN_API_VERSION)
+            if (info->api_version < AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION) {
                 XX_LOGE(
-                    "[client_plugin] `{}` api_version {} mismatch (host expects {})",
+                    "[client_plugin] `{}` api_version {} below minimum {}",
                     path,
                     info->api_version,
-                    AGENTXX_CLIENT_PLUGIN_API_VERSION
+                    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION
                 );
                 NativeLoader::close(handle);
                 co_return nullptr;
@@ -1084,6 +1086,7 @@ void ClientPluginManager::performToolRender(
     /// 用内部作用域 + 闭包调用可避免其在回调前析构。
     auto runRenderer = [&]() {
         AgentxxToolRenderInput input{};
+        input.struct_size  = sizeof(AgentxxToolRenderInput);
         input.version      = 1;
         input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
         input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
@@ -3241,7 +3244,8 @@ void armTimer(
 } // namespace
 
 AgentxxTimer* ClientPluginManager::setTimer(ClientPluginInstance* inst, const AgentxxTimerSpec* spec) {
-    if (!inst || !spec || !spec->on_timer || spec->version != 1) {
+    if (!inst || !spec || !spec->on_timer || spec->version != 1
+        || !agentxx::plugin::specSizeOk<AgentxxTimerSpec>(spec->struct_size)) {
         return nullptr;
     }
     if (!acceptsRegistration(inst)) {
@@ -3360,7 +3364,8 @@ std::map<std::string, bool, std::less<>> ClientPluginManager::regionVisibility()
 
 AgentxxKeybind*
     ClientPluginManager::registerKeybind(ClientPluginInstance* inst, const AgentxxKeybindSpec* spec) {
-    if (!inst || !spec || !spec->on_keybind || spec->version != 1) {
+    if (!inst || !spec || !spec->on_keybind || spec->version != 1
+        || !agentxx::plugin::specSizeOk<AgentxxKeybindSpec>(spec->struct_size)) {
         return nullptr;
     }
     if (!acceptsRegistration(inst)) {
@@ -3690,6 +3695,7 @@ int ClientPluginManager::registerToolRenderer(
     const AgentxxToolRenderSpec* spec
 ) {
     if (!inst || !spec || spec->version != 1
+        || !agentxx::plugin::specSizeOk<AgentxxToolRenderSpec>(spec->struct_size)
         || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
         return -1;
     }
@@ -3983,6 +3989,7 @@ void ClientPluginManager::dispatchAction(
         }
         PluginInstanceBase::InflightGuard guard(inst->self.lock());
         AgentxxUiActionContext            ctx{};
+        ctx.struct_size = sizeof(AgentxxUiActionContext);
         ctx.version     = 1;
         ctx.owner_id    = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
         ctx.action_id   = agentxx::plugin::PluginStringView::from(actionId.data(), actionId.size());
@@ -4001,7 +4008,8 @@ void ClientPluginManager::dispatchAction(
 }
 
 int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOverlaySpec* spec) {
-    if (!inst || !spec || spec->version != 1) {
+    if (!inst || !spec || spec->version != 1
+        || !agentxx::plugin::specSizeOk<AgentxxOverlaySpec>(spec->struct_size)) {
         return -1;
     }
     if (!acceptsRegistration(inst)) {
@@ -4158,6 +4166,7 @@ ClientToolRenderResult renderClientTool(
 
                         // 无语义缓存 (如单元测试/未装配 pluginManager 环境): 同步执行 renderer
                         AgentxxToolRenderInput input{};
+                        input.struct_size  = sizeof(AgentxxToolRenderInput);
                         input.version      = 1;
                         input.tool_call_id = agentxx::plugin::PluginStringView::from(
                             toolCallId.data(),

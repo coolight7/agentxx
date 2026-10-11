@@ -1807,6 +1807,7 @@ JSValue JsEngine::bridgeCall(
             binding->name   = name;
 
             AgentxxPluginToolSpec spec{};
+            spec.struct_size = sizeof(AgentxxPluginToolSpec);
             spec.name        = agentxx::plugin::PluginStringView::from(name.data(), name.size());
             spec.description = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
             spec.parameters_json
@@ -2022,6 +2023,7 @@ JSValue JsEngine::bridgeCall(
             binding->plugin = pctx->name;
             binding->point  = point;
             AgentxxPluginHookSpec hspec{};
+            hspec.struct_size = sizeof(AgentxxPluginHookSpec);
             hspec.point       = static_cast<AgentxxPluginHookPoint>(point);
             hspec.hook_start  = &JsEngine::hookStart;
             hspec.hook_cancel = nullptr;

@@ -1200,8 +1200,9 @@ static int planningClientSetup(ClientCtx* ctx) {
                 return;
             }
             AgentxxOverlaySpec spec{};
-            spec.version = 1;
-            spec.type    = AGENTXX_OVERLAY_MERMAID;
+            spec.version     = 1;
+            spec.struct_size = sizeof(AgentxxOverlaySpec);
+            spec.type        = AGENTXX_OVERLAY_MERMAID;
             spec.title   = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
             spec.payload = agentxx::plugin::PluginStringView::from(roadmap.data(), roadmap.size());
             spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");

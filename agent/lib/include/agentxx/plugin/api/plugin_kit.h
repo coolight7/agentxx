@@ -1092,6 +1092,8 @@ inline void tool(
     };
 
     AgentxxPluginToolSpec spec{};
+    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
+    spec.struct_size = sizeof(AgentxxPluginToolSpec);
     spec.name        = PluginStringView::from(name.data(), name.size());
     spec.description = PluginStringView::from(
         storage[storage.size() - 2].data(),
@@ -1101,7 +1103,6 @@ inline void tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
-    spec._reserved          = 0;
 
     spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
@@ -1211,6 +1212,8 @@ inline void fast_tool(
     auto shim = ctx.storeShim(std::make_unique<FastShim>(FastShim{&ctx, std::forward<SyncFn>(fn)}));
 
     AgentxxPluginToolSpec spec{};
+    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
+    spec.struct_size = sizeof(AgentxxPluginToolSpec);
     spec.name        = PluginStringView::from(name.data(), name.size());
     spec.description = PluginStringView::from(
         storage[storage.size() - 2].data(),
@@ -1220,7 +1223,6 @@ inline void fast_tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
-    spec._reserved          = 0;
 
     spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
@@ -1319,6 +1321,8 @@ inline void blocking_tool(
     };
 
     AgentxxPluginToolSpec spec{};
+    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
+    spec.struct_size = sizeof(AgentxxPluginToolSpec);
     spec.name        = PluginStringView::from(name.data(), name.size());
     spec.description = PluginStringView::from(
         storage[storage.size() - 2].data(),
@@ -1328,7 +1332,6 @@ inline void blocking_tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
-    spec._reserved          = 0;
 
     spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
@@ -1703,6 +1706,8 @@ inline void polled_tool(
     constexpr auto kTokenIsRequested = &detail::polledJobTokenIsRequestedAbi<Job>;
 
     AgentxxPluginToolSpec spec{};
+    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
+    spec.struct_size = sizeof(AgentxxPluginToolSpec);
     spec.name        = PluginStringView::from(name.data(), name.size());
     spec.description = PluginStringView::from(
         storage[storage.size() - 2].data(),
@@ -1712,7 +1717,6 @@ inline void polled_tool(
     spec.user_data          = shim;
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
-    spec._reserved          = 0;
 
     spec.execute_start = [](void*                         user_data,
                             const PluginxxStringView*     args_json,
@@ -1941,9 +1945,9 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     auto shim = ctx.storeShim(std::make_unique<ShimT>(ShimT{&ctx, std::forward<HookFn>(fn)}));
 
     AgentxxPluginHookSpec spec{};
-    spec.point      = point;
-    spec._reserved  = 0;
-    spec.user_data  = shim;
+    spec.struct_size = sizeof(AgentxxPluginHookSpec);
+    spec.point       = point;
+    spec.user_data   = shim;
     spec.hook_start = &detail::hookStart<Ctx, HookFn>;
     spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
 
@@ -2080,6 +2084,7 @@ inline int32_t
     auto shim = ctx.storeShim(std::make_unique<NodeShim>(NodeShim{&ctx, std::forward<NodeFn>(fn)}));
 
     AgentxxPluginGraphNodeTypeSpec spec{};
+    spec.struct_size        = sizeof(AgentxxPluginGraphNodeTypeSpec);
     spec.type               = PluginStringView::from(type.data(), type.size());
     spec.config_schema_json = PluginStringView::from(configSchema.data(), configSchema.size());
     spec.user_data          = shim;
@@ -2609,6 +2614,7 @@ inline int32_t registerToolRenderer(
     };
 
     AgentxxToolRenderSpec spec{};
+    spec.struct_size   = sizeof(AgentxxToolRenderSpec);
     spec.version       = 1;
     spec.tool_name     = PluginStringView::from(toolName.data(), toolName.size());
     spec.render_fn     = renderCb;
@@ -2635,6 +2641,7 @@ inline int32_t registerToolTemplate(
     std::string jsonStr = j.dump();
 
     AgentxxToolRenderSpec spec{};
+    spec.struct_size   = sizeof(AgentxxToolRenderSpec);
     spec.version       = 1;
     spec.tool_name     = PluginStringView::from(toolName.data(), toolName.size());
     spec.render_fn     = nullptr;
@@ -2969,8 +2976,9 @@ public:
             return -1;
         }
         AgentxxOverlaySpec spec{};
-        spec.version    = 1;
-        spec.type       = type;
+        spec.version     = 1;
+        spec.struct_size = sizeof(AgentxxOverlaySpec);
+        spec.type        = type;
         spec.title      = PluginStringView::from(title.data(), title.size());
         spec.payload    = PluginStringView::from(payload.data(), payload.size());
         spec.extra_json = PluginStringView::from(extraJson.data(), extraJson.size());
@@ -3286,6 +3294,7 @@ public:
         }
         auto             holder = std::make_shared<std::function<void()>>(std::move(fn));
         AgentxxTimerSpec spec{};
+        spec.struct_size       = sizeof(AgentxxTimerSpec);
         spec.version           = 1;
         spec.interval_ms       = intervalMs;
         spec.repeat            = (opts.repeat > 0) ? opts.repeat : 0;
@@ -3377,6 +3386,7 @@ public:
         }
         auto               holder = std::make_shared<std::function<void()>>(std::move(fn));
         AgentxxKeybindSpec spec{};
+        spec.struct_size = sizeof(AgentxxKeybindSpec);
         spec.version     = 1;
         spec.keys        = PluginStringView::from(keys.data(), keys.size());
         spec.description = PluginStringView::from(description.data(), description.size());

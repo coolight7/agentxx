@@ -42,6 +42,13 @@ extern "C" {
 /// 全局 API 版本 (client 侧)
 #define AGENTXX_CLIENT_PLUGIN_API_VERSION 1
 
+/// 主程序支持的**最低**插件 API 版本 (插件 `AgentxxClientPluginInfo.api_version` 检查)
+///
+/// 判据只有这一条: `api_version >= AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION`。插件声明更高
+/// 版本不被拒绝 (它可能用了主程序没有的能力, 由插件自己读 `AGENTXX_CLIENT_PLUGIN_API_VERSION`
+/// 决定是否降级)。与 agent 侧 `PLUGINXX_MIN_API_VERSION` 同一口径。
+#define AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION 1
+
 #pragma pack(push, 8)
 
 /* ==================== 插件元信息 ==================== */
@@ -81,9 +88,13 @@ typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段
 
 /* ==================== 工具特化渲染器 (Tool Renderer / Template) ==================== */
 
+/// 工具渲染输入 (主程序填, 插件读; 全部只读借用)
+///
+/// 读取方 (插件) 只需认识自己的前缀字段; 以后主程序在尾部追加字段时, 插件读该字段前
+/// 用 `agentxx::plugin::specHas<&AgentxxToolRenderInput::字段>(input->struct_size)` 判定。
 typedef struct AgentxxToolRenderInput {
-    int32_t            version;      ///< 结构体版本 (必须 == 1)
-    uint32_t           _reserved;    ///< 8 字节对齐
+    uint32_t           struct_size;  ///< 主程序填 sizeof; 0 = 基线布局
+    int32_t            version;      ///< 结构体版本 (当前 == 1)
     PluginxxStringView tool_call_id; ///< 工具调用 ID
     PluginxxStringView tool_name;    ///< 工具名
     PluginxxStringView args_json;    ///< 参数 JSON 字符串
@@ -93,6 +104,9 @@ typedef struct AgentxxToolRenderInput {
     int32_t            max_width;    ///< 渲染内容区可用列宽预算 (<=0 表示不限)
     uint32_t           _pad;         ///< 8 字节对齐
 } AgentxxToolRenderInput;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_TOOL_RENDER_INPUT_BASELINE_SIZE sizeof(AgentxxToolRenderInput)
 
 typedef struct AgentxxToolRenderOutput {
     PluginxxString displayName; ///< 显示名 (如 "Read", "Edit", "Bash", 空则回退原始 toolName)
@@ -108,24 +122,30 @@ typedef int32_t(PLUGINXX_CALL* AgentxxToolRenderFn)(
 );
 
 typedef struct AgentxxToolRenderSpec {
-    int32_t             version;   ///< 结构体版本 (必须 == 1)
-    uint32_t            _reserved; ///< 8 字节对齐
+    uint32_t            struct_size; ///< sizeof(AgentxxToolRenderSpec); 0 = 基线布局
+    int32_t             version;     ///< 结构体版本 (当前 == 1)
     PluginxxStringView  tool_name; ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
     AgentxxToolRenderFn render_fn; ///< 渲染回调 (可为 NULL; 非空时优先调用)
     void*               user_data; ///< 回调上下文 (render_fn 非空时有效)
     PluginxxStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由宿主解析执行)
 } AgentxxToolRenderSpec;
 
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_TOOL_RENDER_SPEC_BASELINE_SIZE sizeof(AgentxxToolRenderSpec)
+
 /* ==================== 通用交互: 动作回调与 overlay ==================== */
 
-/// 动作派发上下文 (宿主在 client io 线程构造, 仅本次回调有效; 全部只读借用)
+/// 动作派发上下文 (主程序在 client io 线程构造, 仅本次回调有效; 全部只读借用)
 typedef struct AgentxxUiActionContext {
-    int32_t            version;     ///< == 1
-    uint32_t           _reserved;   ///< 8 字节补齐
+    uint32_t           struct_size; ///< 主程序填 sizeof; 0 = 基线布局
+    int32_t            version;     ///< 结构体版本 (当前 == 1)
     PluginxxStringView owner_id;    ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
     PluginxxStringView action_id;   ///< 按钮声明的 action_id
     PluginxxStringView action_args; ///< 参数 JSON object dump (空 = 无参)
 } AgentxxUiActionContext;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_UI_ACTION_CONTEXT_BASELINE_SIZE sizeof(AgentxxUiActionContext)
 
 /// 动作处理器 (client io 线程同步调用; 不得抛异常出边界, 宿主兜底)
 typedef void(PLUGINXX_CALL* AgentxxUiActionFn)(const AgentxxUiActionContext* ctx, void* user_data);
@@ -140,11 +160,12 @@ typedef enum AgentxxOverlayType {
 
 /// 通用 overlay 参数 (全部只读借用, 宿主拷贝后使用)
 typedef struct AgentxxOverlaySpec {
-    int32_t            version;    ///< == 1
-    int32_t            type;       ///< AgentxxOverlayType
-    PluginxxStringView title;      ///< 标题 (空则宿主回退默认)
-    PluginxxStringView payload;    ///< 内容 (语义见 AgentxxOverlayType)
-    PluginxxStringView extra_json; ///< 扩展 JSON object (可空)
+    int32_t            version;     ///< 结构体版本 (当前 == 1)
+    uint32_t           struct_size; ///< sizeof(AgentxxOverlaySpec); 0 = 基线布局
+    int32_t            type;        ///< AgentxxOverlayType
+    PluginxxStringView title;       ///< 标题 (空则宿主回退默认)
+    PluginxxStringView payload;     ///< 内容 (语义见 AgentxxOverlayType)
+    PluginxxStringView extra_json;  ///< 扩展 JSON object (可空)
     /// - TEXT: `{"markdown":bool}` (缺省按 markdown 渲染)
     /// - 通用尺寸与外观: `{"size":"auto|compact|normal|large|full",
     ///   "width_frac":0.8,"height_frac":0.9,"footer":bool,"scroll":bool,"stack":bool}`
@@ -152,6 +173,9 @@ typedef struct AgentxxOverlaySpec {
     ///   现有的, 缺省为替换当前 overlay)
     /// - 未知键被忽略 (老宿主同样忽略), 不影响其余字段生效
 } AgentxxOverlaySpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_OVERLAY_SPEC_BASELINE_SIZE sizeof(AgentxxOverlaySpec)
 
 /// CUSTOM overlay 内按钮归属 (owner_id 固定值, 走实例级 fallback 派发)
 #define AGENTXX_CLIENT_OVERLAY_OWNER "__overlay"
@@ -529,8 +553,8 @@ typedef struct AgentxxTimer AgentxxTimer;
 
 /// 定时器参数 (全部只读借用, 宿主拷贝后使用)
 typedef struct AgentxxTimerSpec {
-    int32_t  version;   ///< 必须 == 1
-    uint32_t _reserved; ///< 8 字节对齐
+    uint32_t struct_size; ///< sizeof(AgentxxTimerSpec); 0 = 基线布局
+    int32_t  version;     ///< 结构体版本 (当前 == 1)
     /// 触发间隔毫秒; 宿主持有下限 (当前 50, 更小按 50 处理)
     int32_t interval_ms;
     /// 0 = 仅触发一次; > 0 = 周期触发 (回调次数上限, 到达后自动取消)
@@ -549,6 +573,9 @@ typedef struct AgentxxTimerSpec {
     /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
     void* user_data;
 } AgentxxTimerSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_TIMER_SPEC_BASELINE_SIZE sizeof(AgentxxTimerSpec)
 
 typedef struct AgentxxClientTimerIface {
     int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_TIMER_VERSION
@@ -585,8 +612,8 @@ typedef struct AgentxxKeybind AgentxxKeybind;
 
 /// 快捷键参数 (全部只读借用, 宿主拷贝后使用)
 typedef struct AgentxxKeybindSpec {
-    int32_t  version;   ///< 必须 == 1
-    uint32_t _reserved; ///< 8 字节对齐
+    uint32_t struct_size; ///< sizeof(AgentxxKeybindSpec); 0 = 基线布局
+    int32_t  version;     ///< 结构体版本 (当前 == 1)
     /// 键位描述: 修饰键 + 主键, 用 `+` 连接, 不区分大小写与前后空格
     /// - 修饰键: `ctrl` (或 `control`) / `alt` / `shift` / `super` (或 `cmd`/`win`)
     /// - 主键: 单个可打印字符 (a-z / 0-9 / 符号) 或
@@ -603,6 +630,9 @@ typedef struct AgentxxKeybindSpec {
     /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
     void* user_data;
 } AgentxxKeybindSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_KEYBIND_SPEC_BASELINE_SIZE sizeof(AgentxxKeybindSpec)
 
 typedef struct AgentxxClientKeybindIface {
     int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_KEYBIND_VERSION
@@ -663,6 +693,7 @@ typedef void(PLUGINXX_CALL* AgentxxClientPluginDestroyFn)(void* plugin_ctx);
  * 且纯 C 编译单元不参与 (本块被 `__cplusplus` 排除)。 */
 #ifdef __cplusplus
 #include "agentxx/plugin/api/plugin_iface_meta.h"
+#include "agentxx/plugin/api/plugin_spec.h"
 #endif
 
 #endif /* AGENTXX_CLIENT_PLUGIN_API_H */

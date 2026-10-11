@@ -223,8 +223,8 @@ int PluginManager::registerToolPermission(
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->tool_name)) {
         return -1;
     }
-    // 旧布局保护: struct_size 非 0 时必须覆盖当前结构体 (传 0 视为当前布局)
-    if (spec->struct_size != 0 && spec->struct_size < sizeof(AgentxxPluginToolPermissionSpec)) {
+    // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+    if (!agentxx::plugin::specSizeOk<AgentxxPluginToolPermissionSpec>(spec->struct_size)) {
         XX_LOGW(
             "Plugin `{}` register tool permission: stale spec struct_size {}",
             inst->name,

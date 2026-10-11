@@ -146,6 +146,11 @@ int PluginManager::registerFeatureImpl(PluginInstance* inst, const AgentxxPlugin
     if (inst == nullptr || spec == nullptr || !spec->impl_start) {
         return -1;
     }
+    // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+    if (!specSizeOk<AgentxxPluginFeatureImplSpec>(spec->struct_size)) {
+        XX_LOGW("插件 `{}` 登记功能点实现被拒绝: struct_size 过小", inst->name);
+        return -1;
+    }
     auto ctx = agentContext_.lock();
     if (!ctx || ctx->features == nullptr) {
         XX_LOGW("插件 `{}` 登记功能点实现被拒绝: 功能点注册表未装配", inst->name);
@@ -260,6 +265,11 @@ int PluginManager::defineFeaturePoint(
     const AgentxxPluginFeaturePointSpec* spec
 ) {
     if (inst == nullptr || spec == nullptr) {
+        return -1;
+    }
+    // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+    if (!specSizeOk<AgentxxPluginFeaturePointSpec>(spec->struct_size)) {
+        XX_LOGW("插件 `{}` 声明功能点被拒绝: struct_size 过小", inst->name);
         return -1;
     }
     auto ctx = agentContext_.lock();

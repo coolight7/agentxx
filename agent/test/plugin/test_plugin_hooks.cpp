@@ -246,8 +246,8 @@ int64_t addCoreHook(
     CoreHookTrace*  trace
 ) {
     AgentxxPluginHookSpec spec{};
+    spec.struct_size = sizeof(AgentxxPluginHookSpec);
     spec.point      = AGENTXX_PLUGIN_HOOK_AGENT_START;
-    spec._reserved  = 0;
     spec.hook_start = throwsInstead ? &coreHookThrows : &coreHookStart;
     spec.hook_cancel = nullptr;
     spec.user_data   = trace;
@@ -486,8 +486,8 @@ asio::awaitable<void> test_base_and_ex_independent_and_clamp() {
     }();
     const int64_t extra = addPluginHook(f, inst.get(), 1, "test", "先登记一个扩展处理器");
     AgentxxPluginHookSpec baseSpec{};
+    baseSpec.struct_size = sizeof(AgentxxPluginHookSpec);
     baseSpec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
-    baseSpec._reserved   = 0;
     baseSpec.user_data   = nullptr;
     baseSpec.hook_start  = [](void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) -> void* {
         if (notify != nullptr && notify->done != nullptr) {
@@ -638,8 +638,8 @@ asio::awaitable<void> test_dispatch_order_and_failure_isolation() {
     {
         AsyncCoreHookState asyncState;
         AgentxxPluginHookSpec spec{};
+        spec.struct_size = sizeof(AgentxxPluginHookSpec);
         spec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
-        spec._reserved   = 0;
         spec.hook_start  = &coreHookAsync;
         spec.hook_cancel = &coreHookCancelAsync;
         spec.user_data   = &asyncState;
