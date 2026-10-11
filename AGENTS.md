@@ -383,6 +383,19 @@ path/to/agentxx_test string_util regex
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
   `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
+- 接口表版本与基线 (2026-10 一次性重置: 全部表 `version` = `MIN_VERSION` = 1, 基线 = 当时
+  完整布局; 重置前的二进制不再支持):
+  - 每张表**四件套齐全**: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` +
+    `_BASELINE_SIZE`; `plugin_iface_meta.h` 各一条 `IfaceMeta` 特化
+  - 整表判定 `IID 命中 && version >= MIN_VERSION && struct_size >= BASELINE_SIZE`
+    (`pluginxx::validateInterface`, 不再写死字面量 1);
+    追加段成员必须 `pluginxx::ifaceHas<&表::成员>(t)` 判定 (只判空不够)
+  - 改动规则: 成员只能追加在表尾 (基线不变 + `VERSION` +1 + `ifaceHas`);
+    重排/改签名/删成员 → 换 IID; `MIN_VERSION` 只在破坏性改动时 +1
+  - 跨边界结构体 (spec / input) 统一带 `struct_size`: 填充方填长度, 读取方用
+    `agentxx/plugin/api/plugin_spec.h` 的 `specSizeOk` / `specHas` 判定
+  - 自检: `boundaries` 逐表校验四件套与**成员顺序台账**; `plugin_runtime` 校验判定
+    三态与布局偏移; 详见 docs/zh-cn/design/plugins.md §17
 - 钩子处理器清单与优先级 (2026-10, 接口表 `agentxx.agent.hooks` 的表尾三成员):
   - 宿主维护**一张**钩子注册表 (`PluginManager::hookHandlers_`), 处理器按
     `(层, priority 升序, 登记序号)` 执行: `plugin` 层 (插件 / FFI 宿主) 在前, `core` 层在后;

@@ -432,6 +432,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tasks` | 1 | 后台任务宿主托管: `register_task/cancel_task` (kit `spawn` 自动注册; 宿主登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 | `agentxx.agent.feature` | 1 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async/op_cancel` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误) |
 
+> 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
+> `X_BASELINE_SIZE` (基线字节数); 当前全部为 v1 (基线 = 完整表长)。
+> 四件套要求、判定规则与追加策略见 **§17**。
+
 ### 工具注册 flags (`AgentxxPluginToolSpec::flags`)
 
 注册工具时传入的位标志决定宿主如何对待该工具的执行:
@@ -542,10 +546,9 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 | `agentxx.client.timer` | 1 | 一次性/周期定时器与区域可见性查询 (暂停策略见 §9.5) |
 | `agentxx.client.keybind` | 1 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
 
-**版本约定**: `agentxx.client.ui` 表自身 `version` 恒为 1 (表结构未变)。新增展示能力一律走
-**数据层** (新组件 kind / 新字段) 或**新增接口表**, 不在表尾追加成员 —— SDK 侧的接口校验是
-`version != 1 || struct_size < sizeof(Iface)` 即整表判为不可用, 表尾追加成员会让新插件在
-老宿主上丢掉整张表 (面板/状态栏/渲染器全部失效)。
+**版本约定**: 表自身 `version` 恒为 1 (表结构未变)。新增展示能力优先走**数据层**
+(新组件 kind / 新字段) 或**新增接口表**; 确实要往 `agentxx.client.ui` 表里加成员时,
+只能追加在表尾, 并按 §17 的追加策略做 (`BASELINE_SIZE` 不变 + `ifaceHas` 判定)。
 
 清单声明层约定 (`plugin.yaml` 的 `interfaces.require/optional`, 按前缀归属侧):
 
@@ -1376,3 +1379,107 @@ polled_tool(ctx, name, depict, schema,
 | 端到端 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实宿主执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间宿主任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
 | 端到端（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收束、pump 停止、inflight 归零且耗时远小于命令自身超时 |
 | 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（操作进行中时卸载/放弃的路径）后不变 |
+
+---
+
+## 17. 接口表版本与基线 (改动规则)
+
+> 本节是**改接口表时唯一的操作依据**。2026-10 做过一次一次性重置: 全部表的
+> `version` / `MIN_VERSION` 重置为 1, 基线 = 当时的完整布局, 从此"老布局长什么样"不再关心。
+> 重置之前的宿主/插件二进制不再受支持 (会明确失败, 不会静默错调)。
+
+### 17.1 四种机制的分工
+
+| 机制 | 回答的问题 | 谁维护 | 变化时的动作 |
+|---|---|---|---|
+| **IID** | 是不是这张表 | 字符串常量 (人) | 破坏性改动 / 语义级别无法共存 → 新 IID |
+| **版本对** (`version` + `MIN_VERSION`) | 契约是第几级、带哪些语义保证 | 人 (测试锁定) | 追加成员或语义变化 → `VERSION` +1; 不再兼容老版本 → `MIN_VERSION` +1 |
+| **`BASELINE_SIZE` + `struct_size`** | 我能安全读多少字节 | 编译器 (`offsetof` / `sizeof`) | 追加成员 → 只加在表尾 (基线不变, 成员偏移自动变大) |
+| **能力名字符串** | 支持不支持某个可选功能 | 人 (清单 / 能力表) | 与 ABI 无关的功能开关, 优先用它 |
+
+四件**缺一不可**: 只有版本号没有长度 → 忘了给新增成员加守卫就是越界读; 只有长度没有
+版本号 → "布局不变但语义变了"没有任何信号; 只有长度与版本号没有能力名 → 每个可选功能
+都得占一个表成员; 没有 IID → 无法表达"这是一份新契约"。
+
+### 17.2 每张表四件套 (硬要求)
+
+| 项 | 形态 | 谁写 | 作用 |
+|---|---|---|---|
+| **IID** | `#define X_IFACE_<名> "命名空间.名字"` | 人 | `query_interface` 的键 |
+| **`struct_size`** | 表头第 2 个字段 | 主程序装配时填 `sizeof(表)` | 能安全读多少字节 |
+| **`version`** | 表头第 1 个字段 + `X_VERSION` | 主程序填 `X_VERSION` | 语义档位 |
+| **`MIN_VERSION`** | `#define X_MIN_VERSION` | 人 (当前恒为 1) | 本头能协同工作的最低表版本 |
+| **`BASELINE_SIZE`** | `#define X_BASELINE_SIZE sizeof(表)` | 人 (追加时改成 `offsetof`) | 所有提供该表的主程序都应具备的字节数 |
+
+`pluginxx::IfaceMeta<表>` 特化 (在 `agentxx/plugin/api/plugin_iface_meta.h` 与
+`pluginxx/api/iface_meta.h`) 把 `MIN_VERSION` / `BASELINE_SIZE` 交给 SDK 的判定函数。
+测试模块 `boundaries` 逐表校验四件套齐全、`MIN_VERSION <= VERSION`、特化数量等于表数量。
+
+### 17.3 判定规则
+
+- **整表可用**: IID 命中 且 `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`
+  (实现在 `pluginxx::validateInterface`, 由 `queryInterface<Iface>` 调用);
+- **某成员可用**: 基线以内的成员由整表门槛保证; **追加段成员**必须用
+  `ifaceHas<&表::成员>(t) && t->成员` 判定 —— 只判空不够, 越过对方表尾读到的是相邻内存;
+- **语义档位**: `ifaceHasVersion(t, n)` (布局不变、含义变化时用)。
+
+### 17.4 追加策略
+
+1. **成员只能追加在表尾**; 插到中间视为破坏性改动 (换 IID);
+2. 追加成员: `BASELINE_SIZE` **不变** (值改为 `offsetof(表, 第一个追加成员)`),
+   `VERSION` +1, 受影响调用点改用 `ifaceHas`, 表头"追加历史"补一行;
+3. 语义变化 (不改布局): `VERSION` +1, 头文件写清从哪个版本起语义是什么,
+   调用点用 `ifaceHasVersion` 判定; `MIN_VERSION` 不动;
+4. **不再兼容老版本**: 优先换 IID; 确实要同 IID 硬切时提升 `MIN_VERSION`
+   (会拒掉所有低于它的主程序/插件), 并在 `CHANGELOG` 与本节点名;
+5. **禁止**: 重排成员、改成员签名、删除成员 —— 三者都可能不改变结构体大小, 版本号与
+   `struct_size` 都拦不住, 会静默调到隔壁函数。要改就换新 IID;
+6. `boundaries` 的"成员顺序台账"规则冻结了每张表的成员顺序: 重排/删除会让它失败。
+
+### 17.5 跨边界结构体 (spec / input)
+
+同一句话: **填充方填 `struct_size` (自己写入的字节数), 读取方按它 gate**。
+
+| 方向 | 结构体 | 填充方 | 读取方 | 何时需要 gate |
+|---|---|---|---|---|
+| 插件填 → 主程序读 | spec (`AgentxxPluginToolSpec` / `AgentxxOverlaySpec` …) | 插件 | 主程序 | 老插件 (短) + 新主程序 (长): 读尾部字段前必须判长度 |
+| 主程序填 → 插件读 | input (`AgentxxToolRenderInput` / `AgentxxUiActionContext`) | 主程序 | 插件 | 新插件 (认识长布局) + 老主程序 (填得短): 读尾部字段前必须判长度 |
+
+判定 (`agentxx/plugin/api/plugin_spec.h`):
+`specSizeOk<Spec>(len)`: `0` (基线布局, 零初始化的默认值) 与 `>= 基线` 接受, 其余拒绝;
+后续加字段时用 `specHas(&Spec::字段, 对方给的长度)` 判可读。
+
+新增可选字段的步骤: 字段加在**结构体尾部** → 对应 `AGENTXX_*_SPEC_BASELINE_SIZE` 保持
+不变 → 读取方读该字段前 `specHas` 判定 → 填充方把 `struct_size` 填成 `sizeof(Spec)`。
+
+### 17.6 以后怎么改 (操作手册)
+
+**加一个可选能力 (首选)**
+1. 优先新增**接口表** (新 IID) 或**能力名字符串** (`plugin.yaml` 的 `optional`);
+2. 两者都不合适 (必须往已有表里加) → 按 §17.4 第 2 条追加, 跑 §17.7 的用例。
+
+**改某个成员的语义 (布局不变)**
+1. `VERSION` +1, 头文件写清 v2 起含义/返回值有什么变化;
+2. 调用点需要新版语义时 `ifaceHasVersion(t, 2)`, 否则按 v1 语义兼容处理;
+3. `MIN_VERSION` 不动, 不换 IID (除非两套语义无法共存)。
+
+**真的要破坏兼容**
+1. 首选换 IID (新表名, 插件按"表缺失"降级);
+2. 必须同 IID 硬切 → `MIN_VERSION` +1, 并在 `CHANGELOG` 与本节点名。
+
+**永远不要做**
+- 重排成员、改成员签名、删除成员;
+- 追加成员却忘了把 `BASELINE_SIZE` 留在旧值 (老主程序会被误判整表不可用) 或忘了加
+  `ifaceHas` (越界读);
+- 用 `MIN_VERSION` 表达"我加了新成员" (那等于把所有老主程序判死)。
+
+### 17.7 验证
+
+| 层次 | 用例 |
+|------|------|
+| 判定规则 | `plugin_runtime`：整表判定 (`version` 低 / 表长不足 / 更高版本 + 完整长度)、`ifaceHas` 三态、`ifaceHasVersion` 两态、`specSizeOk` 三态、`specHas` 两态 |
+| 布局冻结 | `plugin_runtime`：9 个跨边界结构体的字段偏移与大小断言 (含 6 个零成本改动、3 个 +8) |
+| 四件套 | `boundaries`：逐表 IID / `VERSION` / `MIN_VERSION` / `BASELINE_SIZE` 齐全、`MIN_VERSION <= VERSION`、`IfaceMeta` 特化数 = 表数 = 29 |
+| 成员顺序 | `boundaries`：成员顺序台账逐表比对 (防重排 / 防删除) |
+| 长度门槛 | `plugin_feature`：声明点 / 登记实现两处 `specSizeOk` 的正反例 |
+| C ABI | `test_plugin_abi_c17.c` + `plugin_runtime`：C 与 C++ 两侧逐项对照 |

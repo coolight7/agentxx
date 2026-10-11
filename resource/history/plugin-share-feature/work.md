@@ -325,6 +325,9 @@ agentxx_test boundaries observability plugin_bridge feature_points plugin_cleanu
    （`not_callable`）—— 参数错是调用方最该先看到的问题。
 3. **阶段 5（钩子清单与优先级）已完成** —— 见下方"阶段 5"章节；接口表新增一张
    （`agentxx.agent.hooks_ex`，agent 侧 20 → 21 张）。
+   > 后续说明（2026-10, 见 `resource/history/plugin-version/`）：接口表版本机制改成
+   > "版本对 + 基线"后，`agentxx.agent.hooks_ex` 已**折回** `agentxx.agent.hooks`
+   > 表尾三成员，agent 侧接口表回到 20 张；本文档其余内容保持当时状态。
 4. **阶段 6（命令行 / FFI 接入）**：`feature` 子命令与 FFI 导出会走本阶段确立的
    `call()` 入口（按 JSON 请求解码），届时 `bad_args` / `not_callable` / 超时
    这些错误码会直接在命令行输出里出现。
