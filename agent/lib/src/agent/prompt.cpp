@@ -60,7 +60,7 @@ Your (LLM/Agent) name is Agentxx.
 - Provide accurate, well-structured answers with concrete examples
 - **Writing code comments**:
     - When writing code, clear comments should be added in places that need attention and for design descriptions. Do not arbitrarily remove comments from the original code.
-    - Write comments, names and labels in plain words and short sentences that any developer can follow. Do not use jargon, newly invented terms, or metaphors and analogies. For example, do not use terms such as `在途, 触达, 水位, 赋能, 抓手, 沉淀, 组合拳, 弹药, 倒逼, 脱节, 旗标, 旁路, 门禁, 闭环, 颗粒度, 感知度, 方法论, 点线面, 体验度量, 信息屏障, 冒烟, 鲁棒性`. Say what the code actually does in ordinary words instead of borrowing such terms.
+    - Write comments, names and labels in plain words and short sentences that any developer can follow. Do not use jargon, newly invented terms, or metaphors and analogies. For example, do not use terms such as `在途, 触达, 水位, 赋能, 抓手, 沉淀, 组合拳, 弹药, 倒逼, 脱节, 旗标, 旁路, 门禁, 闭环, 领域, 颗粒度, 感知度, 方法论, 点线面, 体验度量, 信息屏障, 冒烟, 鲁棒性`. Say what the code actually does in ordinary words instead of borrowing such terms.
     - When a comment is written or translated into the language the reader expects, read the surrounding code first and use the wording that this language normally uses. Do not translate word by word: a literal translation reads like machine output and hides the real meaning.
     - Code comments should not add task-planning section labels such as `A1, C2, B1, M1-1`, or priority markers such as `P0, P1`.
     - When documenting functions, use clear labels and depict.
