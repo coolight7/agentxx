@@ -19,107 +19,110 @@
 #include "markdown/dom_builder.hpp"
 #include "markdown/parser.hpp"
 #include "markdown/theme.hpp"
-#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
 #include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+#include <mach/mach.h>
+#include <malloc/malloc.h>
+#elif XX_IS_WIN_D
+#include <malloc.h>
+#if defined(_DEBUG)
+#include <crtdbg.h>
+#endif
+#else
+#include <malloc.h>
+#endif
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
 int g_ftxui_text_passed = 0;
 int g_ftxui_text_failed = 0;
 
-/// 打开的计数窗口内**当前存活**的堆字节数 (分配累加, 释放按记录的大小扣减)
-std::atomic<size_t> g_liveBytes{0};
-bool                g_countAllocations = false;
+// ---------------------------------------------------------------------------
+// 堆内"在用"字节数 (渲染树内存上界断言用)
+//
+// 这里**不替换全局 operator new/delete**: 测试进程里同时链着 libagentxx 与
+// cxx_* 等动态库 (各自带一份 operator new/delete 实例), 而 macOS/Windows 上
+// 动态库里的分配/释放绑定的是它自己那份实现 —— 全局替换只能记录"自己这份"
+// 分配的块, 一旦"别的实现分配、本份释放"就会多走一次头部偏移, 实测 libmalloc
+// 直接 abort ("pointer being freed was not allocated")。改为读取系统堆统计的
+// 差值, 不改变任何分配行为。
+//
+// - macOS/iOS: 汇总所有 malloc zone 的 size_in_use
+// - Linux/Android: mallinfo2 (旧版 glibc 与 bionic 退回 mallinfo) 的 uordblks
+// - Windows: 调试 CRT 的存活分配字节 (与 memgrowth 同法; Release 无该统计)
+// - 取不到统计时返回 nullopt, 调用方跳过内存断言并打印说明
+// ---------------------------------------------------------------------------
 
-/// 每个分配块前多留 16 字节存放申请大小 (释放时据此扣减存活字节)
-constexpr size_t kAllocHeader = 16;
+/// 当前进程堆内在用字节数; nullopt = 本平台/本次构建无可用统计
+std::optional<size_t> heapInUseBytes() {
+#if XX_IS_MACOS_D || XX_IS_IOS_D
+    vm_address_t* zones = nullptr;
+    unsigned      count = 0;
+    malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count);
+    size_t total = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        auto* zone = reinterpret_cast<malloc_zone_t*>(zones[i]);
+        if (zone == nullptr) {
+            continue;
+        }
+        malloc_statistics_t stats{};
+        malloc_zone_statistics(zone, &stats);
+        total += static_cast<size_t>(stats.size_in_use);
+    }
+    return total;
+#elif XX_IS_WIN_D
+#if defined(_DEBUG)
+    _CrtMemState state{};
+    _CrtMemCheckpoint(&state);
+    size_t total = 0;
+    for (int b = 0; b < _MAX_BLOCKS; ++b) {
+        total += static_cast<size_t>(state.lSizes[b]);
+    }
+    return total;
+#else
+    return std::nullopt; // Release CRT 无存活分配统计
+#endif
+#elif defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if __GLIBC_PREREQ(2, 33)
+    struct mallinfo2 mi = ::mallinfo2();
+    return static_cast<size_t>(mi.uordblks);
+#else
+    struct mallinfo mi = ::mallinfo();
+    return static_cast<size_t>(mi.uordblks);
+#endif
+#elif defined(__ANDROID__) || defined(__BIONIC__)
+    struct mallinfo mi = ::mallinfo();
+    return static_cast<size_t>(mi.uordblks);
+#else
+    return std::nullopt; // musl 等无 mallinfo
+#endif
+}
+
+/// 在 fn 执行前后各取一次堆在用字节数, 返回增量
+/// - 窗口内只观察"在用"字节变化, 已释放的块不计入; 负增量 (其他线程回收) 按 0 记
+template<typename Fn>
+std::optional<size_t> measureHeapDelta(Fn&& fn) {
+    const auto before = heapInUseBytes();
+    std::forward<Fn>(fn)();
+    const auto after = heapInUseBytes();
+    if (!before.has_value() || !after.has_value()) {
+        return std::nullopt;
+    }
+    return *after > *before ? (*after - *before) : size_t{0};
+}
 } // namespace
 
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_ftxui_text_passed
 #define XX_TEST_FAILED g_ftxui_text_failed
-
-// 计量分配: 转发到 malloc, 语义与默认实现一致; 只在本模块的内存断言期间
-// 打开计数 (g_countAllocations), 不影响其他测试
-namespace {
-/// 申请一块带头部的内存 (头部记录大小), 返回可用的数据区
-void* allocateWithHeader(std::size_t size) {
-    const std::size_t bytes = (size == 0 ? 1 : size) + kAllocHeader;
-    void*             base  = std::malloc(bytes);
-    if (base == nullptr) {
-        return nullptr;
-    }
-    *static_cast<std::size_t*>(base) = size;
-    if (g_countAllocations) {
-        g_liveBytes.fetch_add(size, std::memory_order_relaxed);
-    }
-    return static_cast<char*>(base) + kAllocHeader;
-}
-
-/// 释放带头部的内存 (按头部大小扣减存活字节)
-void freeWithHeader(void* p) noexcept {
-    if (p == nullptr) {
-        return;
-    }
-    char*             base = static_cast<char*>(p) - kAllocHeader;
-    const std::size_t size = *reinterpret_cast<std::size_t*>(base);
-    if (g_countAllocations) {
-        g_liveBytes.fetch_sub(std::min(size, g_liveBytes.load(std::memory_order_relaxed)),
-                              std::memory_order_relaxed);
-    }
-    std::free(base);
-}
-} // namespace
-
-void* operator new(std::size_t size) {
-    void* p = allocateWithHeader(size);
-    if (p == nullptr) {
-        throw std::bad_alloc();
-    }
-    return p;
-}
-
-void* operator new[](std::size_t size) {
-    return ::operator new(size);
-}
-
-void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-    return allocateWithHeader(size);
-}
-
-void* operator new[](std::size_t size, const std::nothrow_t& tag) noexcept {
-    return ::operator new(size, tag);
-}
-
-void operator delete(void* p) noexcept {
-    freeWithHeader(p);
-}
-
-void operator delete[](void* p) noexcept {
-    freeWithHeader(p);
-}
-
-void operator delete(void* p, std::size_t) noexcept {
-    freeWithHeader(p);
-}
-
-void operator delete[](void* p, std::size_t) noexcept {
-    freeWithHeader(p);
-}
-
-void operator delete(void* p, const std::nothrow_t&) noexcept {
-    freeWithHeader(p);
-}
-
-void operator delete[](void* p, const std::nothrow_t&) noexcept {
-    freeWithHeader(p);
-}
 
 namespace agentxx {
 namespace test {
@@ -289,18 +292,23 @@ TestResult testFtxuiText() {
         }
 
         std::vector<Element> elements;
-        g_liveBytes.store(0);
-        g_countAllocations = true;
-        for (const auto& t : texts) {
-            elements.push_back(text(t));
-        }
-        g_countAllocations = false;
-        const size_t allocated = g_liveBytes.load();
+        elements.reserve(kCount);
+        const auto allocated = measureHeapDelta([&] {
+            for (const auto& t : texts) {
+                elements.push_back(text(t));
+            }
+        });
 
-        TEST_INFO << "text nodes: " << kCount << " x " << kSize << "B -> " << allocated
-                  << " bytes allocated" << std::endl;
-        XX_TEST_EXPECT_GE(allocated, static_cast<size_t>(kCount * kSize)); // 至少等于源文本
-        XX_TEST_EXPECT_TRUE(allocated < static_cast<size_t>(kCount * kSize * 2));
+        if (!allocated.has_value()) {
+            TEST_INFO << "text nodes: 本平台无堆统计, 跳过内存上界断言" << std::endl;
+        } else {
+            TEST_INFO << "text nodes: " << kCount << " x " << kSize << "B -> " << *allocated
+                      << " bytes allocated" << std::endl;
+            // 下界: 节点保留原文, 至少等于源文本; 上界: 2 倍源文本 (实测约 1.5 倍,
+            // 含分配器取整; 旧实现的每字素一个 std::string 为 30 倍以上)
+            XX_TEST_EXPECT_GE(*allocated, static_cast<size_t>(kCount * kSize));
+            XX_TEST_EXPECT_TRUE(*allocated < static_cast<size_t>(kCount * kSize * 2));
+        }
     }
 
     // ---------------- markdown 渲染树内存放大 (sourceBytes 标定依据) ----------------
@@ -328,17 +336,21 @@ TestResult testFtxuiText() {
         auto builder = std::make_unique<markdown::DomBuilder>();
         builder->set_max_width(97);
 
-        g_liveBytes.store(0);
-        g_countAllocations = true;
-        auto element       = builder->build(ast, -1, markdown::theme_default());
-        g_countAllocations = false;
-        const size_t allocated = g_liveBytes.load();
-        const double ratio = static_cast<double>(allocated) / static_cast<double>(md.size());
-        TEST_INFO << "markdown render tree: " << md.size() << "B source -> " << allocated
-                  << " bytes (x" << ratio << ")" << std::endl;
-        // 自绘折行节点 + 紧凑文本节点后应明显低于基线 (×112); 这里按 ×40 把关,
-        // 同时保证绝对量级合理 (sourceBytes 标定依据, 见 buildMessageItem)
-        XX_TEST_EXPECT_TRUE(allocated < md.size() * 40);
+        Element     element;
+        const auto  allocated = measureHeapDelta([&] {
+            element = builder->build(ast, -1, markdown::theme_default());
+        });
+        if (!allocated.has_value()) {
+            TEST_INFO << "markdown render tree: 本平台无堆统计, 跳过内存放大断言" << std::endl;
+        } else {
+            const double ratio = static_cast<double>(*allocated) / static_cast<double>(md.size());
+            TEST_INFO << "markdown render tree: " << md.size() << "B source -> " << *allocated
+                      << " bytes (x" << ratio << ")" << std::endl;
+            // 自绘折行节点 + 紧凑文本节点后应明显低于基线 (×112); 这里按 ×60 把关
+            // (堆统计法实测约 ×37, 含分配器取整), 同时保证绝对量级合理
+            // (sourceBytes 标定依据, 见 buildMessageItem)
+            XX_TEST_EXPECT_TRUE(*allocated < md.size() * 60);
+        }
         XX_TEST_EXPECT_TRUE(static_cast<bool>(element));
     }
 

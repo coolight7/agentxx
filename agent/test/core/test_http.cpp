@@ -4,6 +4,7 @@
 #if AGENTXX_BUILD_CLIENT
 // 启动更新检查 (客户端实现; 仅在编译 client 时可用, 见 CMakeLists 的 GLOB)
 #include "agentxx-client/update_check.h"
+#include "agentxx/version.h"
 #endif
 #include <asio/awaitable.hpp>
 #include <asio/bind_cancellation_slot.hpp>
@@ -2087,18 +2088,27 @@ asio::awaitable<void> test_update_check_with_local_server() {
 
     Server server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 
+    // 夹具标签按当前版本推算, 不写死数值: 版本号已改为日期式 (如 2026.1011.0),
+    // 写死的 9.9.9 / 8.0.0 会低于当前版本, "有更新" 判定必然失败。
+    // major + 1 保证高于当前版本 (minor/patch 只用于区分两个夹具)
+    const std::string newerTag     = fmt::format("v{}.0.0", agentxx::kVersionMajor + 1);
+    const std::string newerJsonTag = fmt::format("v{}.1.0", agentxx::kVersionMajor + 1);
+    const auto        releasePageUrl = [](const std::string& tag) {
+        return fmt::format("https://github.com/coolight7/agentxx/releases/tag/{}", tag);
+    };
+
     // 1) /releases/latest: 302 -> 绝对 Location (与 GitHub 一致)
     server.router().add(
         "/releases/latest",
         0,
         std::make_shared<Server::Handler>(
-            [](Server::Request&, Server::Response& resp, std::string_view
+            [location = releasePageUrl(newerTag)](
+                Server::Request&,
+                Server::Response& resp,
+                std::string_view
             ) -> asio::awaitable<void> {
                 resp.result(status::found);
-                resp.set(
-                    field::location,
-                    "https://github.com/coolight7/agentxx/releases/tag/v9.9.9"
-                );
+                resp.set(field::location, location);
                 resp.prepare_payload();
                 co_return;
             }
@@ -2109,12 +2119,14 @@ asio::awaitable<void> test_update_check_with_local_server() {
         "/api/releases/latest",
         0,
         std::make_shared<Server::Handler>(
-            [](Server::Request&, Server::Response& resp, std::string_view
+            [tag = newerJsonTag, url = releasePageUrl(newerJsonTag)](
+                Server::Request&,
+                Server::Response& resp,
+                std::string_view
             ) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "application/json");
-                resp.body() = R"({"tag_name":"v8.0.0",)"
-                              R"("html_url":"https://github.com/coolight7/agentxx/releases/tag/v8.0.0"})";
+                resp.body() = fmt::format(R"({{"tag_name":"{}","html_url":"{}"}})", tag, url);
                 resp.prepare_payload();
                 co_return;
             }
@@ -2182,18 +2194,15 @@ asio::awaitable<void> test_update_check_with_local_server() {
     {
         auto res = co_await agentxx::client::checkLatestRelease(baseUrl + "/releases/latest");
         XX_TEST_EXPECT_TRUE(res.ok);
-        XX_TEST_EXPECT_EQ(res.latestTag, std::string("v9.9.9"));
-        XX_TEST_EXPECT_EQ(
-            res.url,
-            std::string("https://github.com/coolight7/agentxx/releases/tag/v9.9.9")
-        );
+        XX_TEST_EXPECT_EQ(res.latestTag, newerTag);
+        XX_TEST_EXPECT_EQ(res.url, releasePageUrl(newerTag));
         XX_TEST_EXPECT_TRUE(res.latestVersion.has_value());
         if (res.latestVersion.has_value()) {
-            XX_TEST_EXPECT_EQ((*res.latestVersion)[0], 9);
-            XX_TEST_EXPECT_EQ((*res.latestVersion)[1], 9);
-            XX_TEST_EXPECT_EQ((*res.latestVersion)[2], 9);
+            XX_TEST_EXPECT_EQ((*res.latestVersion)[0], agentxx::kVersionMajor + 1);
+            XX_TEST_EXPECT_EQ((*res.latestVersion)[1], 0);
+            XX_TEST_EXPECT_EQ((*res.latestVersion)[2], 0);
         }
-        // 9.9.9 远高于当前版本 (agentxx::kVersion): 判定为有更新
+        // 高于当前版本 (agentxx::kVersion): 判定为有更新
         XX_TEST_EXPECT_TRUE(res.hasUpdate);
     }
 
@@ -2201,11 +2210,8 @@ asio::awaitable<void> test_update_check_with_local_server() {
     {
         auto res = co_await agentxx::client::checkLatestRelease(baseUrl + "/api/releases/latest");
         XX_TEST_EXPECT_TRUE(res.ok);
-        XX_TEST_EXPECT_EQ(res.latestTag, std::string("v8.0.0"));
-        XX_TEST_EXPECT_EQ(
-            res.url,
-            std::string("https://github.com/coolight7/agentxx/releases/tag/v8.0.0")
-        );
+        XX_TEST_EXPECT_EQ(res.latestTag, newerJsonTag);
+        XX_TEST_EXPECT_EQ(res.url, releasePageUrl(newerJsonTag));
         XX_TEST_EXPECT_TRUE(res.hasUpdate);
     }
 

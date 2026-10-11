@@ -467,7 +467,16 @@ public:
         bool matchBody = true;
     };
 
-    static std::shared_ptr<HttpPlayer> start(HttpFixture fixture, Options options = {}) {
+    /// 用默认选项 (严格顺序 + 比对请求体) 启动回放服务; 端口分配失败返回 nullptr
+    /// - 默认值经重载给出, 不用默认参数: clang 不允许在类定义内的默认参数里取
+    ///   内嵌类的默认成员初始值 (报 "default member initializer ... outside of
+    ///   member functions"), 而函数体内构造是允许的
+    static std::shared_ptr<HttpPlayer> start(HttpFixture fixture) {
+        return start(std::move(fixture), Options{});
+    }
+
+    /// 启动回放服务; 端口分配失败返回 nullptr
+    static std::shared_ptr<HttpPlayer> start(HttpFixture fixture, Options options) {
         auto player = std::shared_ptr<HttpPlayer>(
             new HttpPlayer(std::move(fixture), std::move(options))
         );
