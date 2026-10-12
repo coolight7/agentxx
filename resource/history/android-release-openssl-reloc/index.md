@@ -32,6 +32,33 @@ ld.lld: error: relocation R_AARCH64_ADD_ABS_LO12_NC cannot be used against symbo
 - 只有 aarch64 会碰到: x86_64 的对应汇编没有这种跨目标文件直接取地址的写法,
   所以 Linux x86_64 一直链接正常。
 
+### 关于报错文案 "recompile with -fPIC" 的说明 (避免被误导)
+
+- 决定因素是符号**可抢占性** (preemptibility), 不是代码的地址无关性:
+  `adrp/add` 属于 PC 相对 + 链接期定址, 符号地址必须固定; 一个会被导出、运行期
+  可能被替换的符号地址不固定, 故链接器拒绝。
+- 这份 `libcrypto.a` 的确是 PIC 编译的 (重定位全是 PC 相对, 无绝对重定位),
+  但 "PIC" 对**可抢占符号**要求更严格: 取符号自身地址也要经 GOT。
+  C 编译器就是这么做的 (同一段取地址代码: `-fPIC` -> `adrp+LD64_GOT`,
+  `-fno-pic` -> `adrp+ADD`); OpenSSL 这段是手写汇编, 直接写了 `adrp/add`。
+- 实测该提示在此处无解: 手写 `.S` 加不加 `-fPIC` 编出的目标文件 md5 相同
+  (汇编指令不会被 `-fPIC` 改写); 反过来, 真·非 PIC 的 C 目标文件链 .so 时报的是
+  同样格式的文案 (如 `R_X86_64_PC32 ... recompile with -fPIC`), 该文案无法区分
+  这两种原因。同一份汇编把定义加上 `.hidden` 后立刻链接通过。
+- 同理, 这些符号链进**可执行文件**时不报错, 问题只在共享库链接上暴露: 主程序里定义的
+  符号在符号查找顺序上优先于共享库, 不会被抢占, 所以直接定址合法 (实测即使加
+  `--export-dynamic` 把符号写进 exe 的 `.dynsym` 也照样链接通过, 指令保持
+  `adrp/add`, 没有对应的运行期重定位)。
+- 两个条件是独立的, 不要混为一谈: ①"装载基址未知"(ASLR) 要求位置无关 —— PC 相对
+  或 GOT 间接都可以; ②"符号可能被替换"(可抢占) 只允许 GOT —— PC 相对不够, 因为
+  目标可能在别的模块或被 LD_PRELOAD 替换, 相对距离不固定。OpenSSL 这段是满足了 ①
+  而违反 ②。
+- 本地化后链接器不止"接受"原指令, 还会做松弛: 实测同一段代码
+  导出时可抢占 -> `adrp x0, page` + `ldr x0, [x0, #off]` (读 GOT) +
+  一条 `R_AARCH64_GLOB_DAT` (加载时由动态链接器填); 加了 `--exclude-libs=ALL` 后 ->
+  单条 `adr x0, <target>` (21 位 PC 相对直接算出), 该符号的运行期重定位 0 条。
+  本地化后符号仍留在静态符号表 (`.symtab`) 里, 只是不再占 `.dynsym`。
+
 ## 修改
 
 - `agent/CMakeLists.txt` (非 MSVC 分支内, 仅 Android): 给共享库链接参数追加
