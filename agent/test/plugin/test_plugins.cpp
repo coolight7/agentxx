@@ -845,14 +845,15 @@ throw new Error("top-level rollback probe");
             auto tool = ctx->toolRegistry->find("slow_timeout_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                std::atomic<bool> execDone{false};
+                // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
+                auto       execDone = std::make_shared<std::atomic<bool>>(false);
                 auto              ex = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
-                    [&execDone, tool]() -> asio::awaitable<void> {
+                    [execDone, tool]() -> asio::awaitable<void> {
                         auto out = co_await tool->execute_async(utilxx_base::Json{});
                         (void)out; // 超时返回 "[Plugin tool timeout]"
-                        execDone.store(true);
+                        execDone->store(true);
                         co_return;
                     },
                     asio::detached
@@ -882,11 +883,11 @@ throw new Error("top-level rollback probe");
                 // - execDone 由 detached 协程在 execute_async 返回后置位, 其
                 //   恢复依赖 io 线程调度 (Windows 上可能与卸载完成时刻竞态),
                 //   断言前限时等待其恢复, 消除调度时序抖动
-                for (int i = 0; i < 100 && !execDone.load(); ++i) {
+                for (int i = 0; i < 100 && !execDone->load(); ++i) {
                     co_await sleepMs(10);
                 }
                 XX_TEST_EXPECT_TRUE(elapsedMs >= 250);
-                XX_TEST_EXPECT_TRUE(execDone.load());
+                XX_TEST_EXPECT_TRUE(execDone->load());
             }
         }
     }
@@ -2263,30 +2264,36 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
             constexpr int    kTotalCalls = 1000;
-            std::atomic<int> completed{0};
+            // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
+            auto completed = std::make_shared<std::atomic<int>>(0);
             auto             ex = co_await asio::this_coro::executor;
             for (int i = 0; i < kTotalCalls; ++i) {
                 asio::co_spawn(
                     ex,
-                    [&tool, &completed, i]() -> asio::awaitable<void> {
+                    [tool, completed, i]() -> asio::awaitable<void> {
                         auto out = co_await tool->execute_async(utilxx_base::Json{
                             {"sessionId", fmt::format("conc_{}", i)},
                             {"x", i},
                         });
                         auto j   = utilxx_base::Json::parse(out);
                         if (j["via_call_tool"]["echo"]["x"].get<int>() == i) {
-                            completed.fetch_add(1, std::memory_order_relaxed);
+                            completed->fetch_add(1, std::memory_order_relaxed);
                         }
                     },
                     asio::detached
                 );
             }
             for (int waitCount = 0;
-                 waitCount < 500 && completed.load(std::memory_order_relaxed) < kTotalCalls;
+                 waitCount < 500 && completed->load(std::memory_order_relaxed) < kTotalCalls;
                  ++waitCount) {
                 co_await sleepMs(10);
             }
-            XX_TEST_EXPECT_EQ(completed.load(), kTotalCalls);
+            XX_TEST_EXPECT_EQ(completed->load(), kTotalCalls);
+            // 仍有未结束的并发调用时不得卸载 (卸载会与它们交错, 造成 use-after-free)
+            if (completed->load() != kTotalCalls) {
+                XX_TEST_EXPECT_TRUE(false);
+                co_return TestResult{g_plugin_passed, g_plugin_failed};
+            }
         }
         co_await ctx->pluginManager->unloadAsync("example_plugin");
     }
@@ -2304,14 +2311,15 @@ throw new Error("top-level rollback probe");
         auto bridgeTool = ctx->toolRegistry->find("example_bridge");
         XX_TEST_EXPECT_TRUE(bridgeTool != nullptr);
         if (bridgeTool) {
-            std::atomic<int>  hostTicks{0};
-            std::atomic<bool> pluginDone{false};
+            // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
+            auto hostTicks  = std::make_shared<std::atomic<int>>(0);
+            auto pluginDone = std::make_shared<std::atomic<bool>>(false);
             auto              ex = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
-                [&hostTicks, &pluginDone]() -> asio::awaitable<void> {
-                    for (int i = 0; i < 200 && !pluginDone.load(std::memory_order_acquire); ++i) {
-                        hostTicks.fetch_add(1, std::memory_order_relaxed);
+                [hostTicks, pluginDone]() -> asio::awaitable<void> {
+                    for (int i = 0; i < 200 && !pluginDone->load(std::memory_order_acquire); ++i) {
+                        hostTicks->fetch_add(1, std::memory_order_relaxed);
                         co_await sleepMs(1);
                     }
                 },
@@ -2322,7 +2330,7 @@ throw new Error("top-level rollback probe");
                 {"sessionId", "bridge_e2e"},
                 {"ticks",     3           }
             });
-            pluginDone.store(true, std::memory_order_release);
+            pluginDone->store(true, std::memory_order_release);
             auto j = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["driverAvailable"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["onHostIoThread"].get<bool>(), true);
@@ -2332,7 +2340,7 @@ throw new Error("top-level rollback probe");
                 std::string{"example_bridge"}
             );
             // 插件挂起期间主程序任务推进过 => 两者在同一 IO 序列中交错执行
-            XX_TEST_EXPECT_GE(hostTicks.load(), 2);
+            XX_TEST_EXPECT_GE(hostTicks->load(), 2);
         }
         co_await ctx->pluginManager->unloadAsync("example_plugin");
     }
@@ -2351,14 +2359,15 @@ throw new Error("top-level rollback probe");
         auto polledTool = ctx->toolRegistry->find("example_polled_timer");
         XX_TEST_EXPECT_TRUE(polledTool != nullptr);
         if (polledTool) {
-            std::atomic<int>  hostTicks{0};
-            std::atomic<bool> polledDone{false};
+            // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
+            auto hostTicks  = std::make_shared<std::atomic<int>>(0);
+            auto polledDone = std::make_shared<std::atomic<bool>>(false);
             auto              ex = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
-                [&hostTicks, &polledDone]() -> asio::awaitable<void> {
-                    for (int i = 0; i < 600 && !polledDone.load(std::memory_order_acquire); ++i) {
-                        hostTicks.fetch_add(1, std::memory_order_relaxed);
+                [hostTicks, polledDone]() -> asio::awaitable<void> {
+                    for (int i = 0; i < 600 && !polledDone->load(std::memory_order_acquire); ++i) {
+                        hostTicks->fetch_add(1, std::memory_order_relaxed);
                         co_await sleepMs(1);
                     }
                 },
@@ -2371,7 +2380,7 @@ throw new Error("top-level rollback probe");
                 {"ticks",      3           },
                 {"intervalMs", 15          },
             });
-            polledDone.store(true, std::memory_order_release);
+            polledDone->store(true, std::memory_order_release);
             auto wallMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - t0
             )
@@ -2386,7 +2395,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_GE(j["elapsedMs"].get<int64_t>(), int64_t{40});
             XX_TEST_EXPECT_TRUE(wallMs < 3000);
             // 插件等待期间主程序任务持续推进 => 两者在同一 IO 序列中交错
-            XX_TEST_EXPECT_GE(hostTicks.load(), 2);
+            XX_TEST_EXPECT_GE(hostTicks->load(), 2);
         }
         XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("example_plugin"));
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_polled_timer"));
@@ -2914,6 +2923,8 @@ throw new Error("top-level rollback probe");
         auto webPath = findPluginDir("agentxx_websearch");
         auto webInst = co_await ctx->pluginManager->loadPluginAsync(webPath);
         XX_TEST_EXPECT_TRUE(webInst != nullptr);
+        /// 并发 fetch 是否已全部收束 (仍有挂起协程时不得卸载插件, 否则与其交错)
+        bool webFetchesSettled = false;
         if (webInst && port != 0) {
             const std::string baseUrl     = "http://127.0.0.1:" + std::to_string(port);
             auto              fetchTool   = ctx->toolRegistry->find("agentxx_web_fetch");
@@ -2922,14 +2933,17 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(fetchMdTool != nullptr);
 
             if (fetchTool && fetchMdTool) {
-                std::atomic<int>  hostTicks{0};
-                std::atomic<bool> netDone{false};
-                auto              ex = co_await asio::this_coro::executor;
+                // 注: 下面所有 co_spawn(..., detached) 协程都可能比本作用域活得更久,
+                // 共享状态一律用 shared_ptr 持有 (捕获引用会在作用域结束后写坏内存;
+                // Release 实测为堆对象被写坏后释放野指针崩溃), 且卸载插件前必须等它们全部结束
+                auto              hostTicks  = std::make_shared<std::atomic<int>>(0);
+                auto              netDone    = std::make_shared<std::atomic<bool>>(false);
+                auto              ex         = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
-                    [&hostTicks, &netDone]() -> asio::awaitable<void> {
-                        for (int i = 0; i < 2000 && !netDone.load(std::memory_order_acquire); ++i) {
-                            hostTicks.fetch_add(1, std::memory_order_relaxed);
+                    [hostTicks, netDone]() -> asio::awaitable<void> {
+                        for (int i = 0; i < 2000 && !netDone->load(std::memory_order_acquire); ++i) {
+                            hostTicks->fetch_add(1, std::memory_order_relaxed);
                             co_await sleepMs(1);
                         }
                     },
@@ -2952,34 +2966,48 @@ throw new Error("top-level rollback probe");
 
                 // 3. 并发 6 路请求: 共享同一实例的 polled 驱动序列, 互不阻塞
                 constexpr int    kConcurrent = 6;
-                std::atomic<int> okCount{0};
+                auto             okCount     = std::make_shared<std::atomic<int>>(0);
+                auto             doneCount   = std::make_shared<std::atomic<int>>(0);
                 for (int i = 0; i < kConcurrent; ++i) {
                     asio::co_spawn(
                         ex,
-                        [fetchTool, &okCount, baseUrl]() -> asio::awaitable<void> {
+                        [fetchTool, okCount, doneCount, baseUrl]() -> asio::awaitable<void> {
                             auto out = co_await fetchTool->execute_async(utilxx_base::Json{
                                 {"url",     baseUrl + "/hello"},
                                 {"timeout", 10                },
                             });
                             if (out.find("polled_web_ok") != std::string::npos) {
-                                okCount.fetch_add(1, std::memory_order_relaxed);
+                                okCount->fetch_add(1, std::memory_order_relaxed);
                             }
+                            doneCount->fetch_add(1, std::memory_order_release);
                         },
                         asio::detached
                     );
                 }
-                for (int i = 0; i < 2000 && okCount.load(std::memory_order_relaxed) < kConcurrent;
+                // 必须等到 6 路**全部**结束, 而不是"计数达标或超时即继续": 否则后面
+                // (可能)执行的插件卸载会与仍在运行的 fetch 协程交错, 造成 use-after-free
+                for (int i = 0; i < 4000 && doneCount->load(std::memory_order_acquire) < kConcurrent;
                      ++i) {
                     co_await sleepMs(5);
                 }
-                netDone.store(true, std::memory_order_release);
-                XX_TEST_EXPECT_EQ(okCount.load(), kConcurrent);
+                netDone->store(true, std::memory_order_release);
+                const bool allFetchesDone
+                    = doneCount->load(std::memory_order_acquire) == kConcurrent;
+                webFetchesSettled = allFetchesDone;
+                XX_TEST_EXPECT_EQ(doneCount->load(), kConcurrent);
+                XX_TEST_EXPECT_EQ(okCount->load(), kConcurrent);
                 // 插件等待网络期间主程序任务仍在推进
-                XX_TEST_EXPECT_GE(hostTicks.load(), 2);
+                XX_TEST_EXPECT_GE(hostTicks->load(), 2);
+                if (!allFetchesDone) {
+                    XX_TEST_EXPECT_TRUE(false); // 已有断言失败; 此时卸载会踩到未结束的协程
+                }
             }
             // 卸载: 无未完成操作 -> pump 已停止, 无残留
-            XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_websearch"));
-            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_web_fetch"));
+            // (仅在上面的并发 fetch 已全部收束时执行; 仍有挂起协程时卸载会与其交错)
+            if (webFetchesSettled) {
+                XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_websearch"));
+                XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_web_fetch"));
+            }
         }
         server.stop();
         serverThread.join();
