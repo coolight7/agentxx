@@ -569,3 +569,4 @@ sudo echo 2 > /proc/sys/vm/drop_caches
 sudo echo 3 > /proc/sys/vm/drop_caches
 ```
 - 编译如果警告`不应忽略函数返回值`时，如果函数返回值是协程值(比如asio::awaitable<>)则必须处理，需要 co_await，否则该协程函数没有启动执行，相当于没调用
+- Android release (aarch64) 链接共享库时报 `relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'poly1305_blocks_sve2'`, 是 OpenSSL 4.0.1 aarch64 汇编的上游缺陷 (跨目标文件直接取全局符号地址、未写 `.hidden`, 静态 libcrypto.a 链进 .so 时该符号可抢占): 顶层 `agent/CMakeLists.txt` 已对 Android 共享库加 `-Wl,--exclude-libs=ALL` 处理, 详见 `resource/history/android-release-openssl-reloc/index.md`

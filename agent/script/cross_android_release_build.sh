@@ -24,6 +24,20 @@ agxxdeps_src_dir="$src_dir/third_party"
 AGENTXX_BUILD_PARALLEL="${AGENTXX_BUILD_PARALLEL:-4}"
 agxxdeps_parallel="$AGENTXX_BUILD_PARALLEL"
 
+# ===== 编译加速配置 =====
+# ccache: 缓存编译结果, 重复/增量编译大幅提速 (多个 ABI 之间也可复用部分结果)
+# - 未安装时自动跳过 (apt-get install ccache)
+# - 缓存目录默认 ~/.cache/ccache-agentxx, 可用 CCACHE_DIR 覆盖
+#   (与 linux/macos 构建脚本一致: 不与系统上其他构建共用 ccache 默认缓存)
+# - CCACHE_MAXSIZE 默认 20G (交叉编译产物较大, 容量太小会频繁触发清理)
+# - CCACHE_BASEDIR 归一化绝对路径, 项目目录移动后缓存仍可命中
+if command -v ccache >/dev/null 2>&1; then
+    export CCACHE_DIR="${CCACHE_DIR:-$HOME/.cache/ccache-agentxx}"
+    export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-20G}"
+    export CCACHE_COMPRESS="${CCACHE_COMPRESS:-1}"
+    export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$(cd "$src_dir" && pwd)}"
+fi
+
 # Android NDK 路径，可通过环境变量 ANDROID_NDK_ROOT 设置
 NDK_ROOT=""
 if [[ -n "${BOOST_ROOT:-}" && -n "${OPENSSL_ROOT_DIR:-}" ]]; then
@@ -195,6 +209,17 @@ for abi in "${abi_list[@]}"; do
 
     # 对 exec 目录下所有产物动态库进行 strip
     find "$abi_build_dir/exec" -type f -name "*.so" -exec "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded {} +
+
+    # 可执行文件: NDK 工具链默认给所有配置加 -g, 不 strip 时体积会大一个量级
+    # (与 script/linux_release_build.sh 对 agentxx_cli 的处理一致);
+    # 未编译的可执行文件 (如 AGENTXX_BUILD_TEST=OFF 时的 agentxx_test) 自动跳过
+    for _exe in agentxx_cli agentxx_test agentxx_benchmark; do
+        if [[ -f "$abi_build_dir/exec/$_exe" ]]; then
+            "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all "$abi_build_dir/exec/$_exe" || true
+            ls -lh "$abi_build_dir/exec/$_exe"
+        fi
+    done
+    unset _exe
 
     echo "[runtime] exec libs:"
     ls -lh "$abi_build_dir/exec/"*.so* 2>/dev/null || true

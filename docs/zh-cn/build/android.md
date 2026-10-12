@@ -33,6 +33,7 @@
 | `AGENTXX_DEPS_FORCE=1` | 忽略复用, 强制重建依赖 |
 | `BOOST_ROOT` / `OPENSSL_ROOT_DIR` | 手动指定已交叉编译产物路径, 优先于自动构建 |
 | `AGENTXX_BUILD_PARALLEL=N` | 并行任务数 (默认 4) |
+| `CCACHE_DIR` | ccache 缓存目录 (默认 `~/.cache/ccache-agentxx`, 与 linux/macos 脚本一致) |
 
 ## 手动编译
 
@@ -112,6 +113,18 @@ cd {项目根目录}/agent
 - 可执行文件: `agent/build/{platform}-{mode}/exec/agentxx_cli` / `agentxx_test` / `agentxx_benchmark`
 - 插件动态库 (独立动态库模式): `agent/build/{platform}-{mode}/exec/plugins/<插件名>/` (含 `plugin.yaml` 清单时按目录分派)
 - 共享库 (FFI): `agent/build/{platform}-{mode}/lib/libagentxx_shared.so` (导出 C 符号见 `agent/lib/ffi_symbols.map`)
+- 产物在脚本最后一步已 strip (动态库 `--strip-unneeded`, 可执行文件 `--strip-all`):
+  NDK 工具链默认给所有构建类型加 `-g`, 不 strip 时体积会大一个量级
 
 ## 常见错误
+
+- 链接共享库时 `ld.lld: error: relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used
+  against symbol 'poly1305_blocks_sve2'; recompile with -fPIC`
+  (引用位置 `libcrypto.a(libcrypto-lib-poly1305-armv8.o)`):
+  把静态 `libcrypto.a` 链进 aarch64 共享库时的 OpenSSL 4.0.1 上游缺陷 ——
+  `poly1305_init` 用 `adrp/add` 直接取另一个目标文件里的全局符号
+  `poly1305_blocks_sve2` (该处没写 `.hidden`), 在输出里它是可抢占符号, 重定位需要 GOT。
+  本项目顶层 `agent/CMakeLists.txt` 已对 Android 共享库加 `-Wl,--exclude-libs=ALL`
+  (把来自静态库的符号按隐藏可见性处理) 解决; 手动链接 libcrypto.a 组共享库时需自行加上。
+
 - [FAQ 更多问题](FAQ.md)

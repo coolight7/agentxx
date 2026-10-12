@@ -651,6 +651,25 @@ if (NOT XX_IS_MSVC_D)
   string(APPEND CMAKE_EXE_LINKER_FLAGS    " ${_AGENTXX_LINKER_FLAG}")
   string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_AGENTXX_LINKER_FLAG}")
 
+  # ===== Android: 共享库不导出静态库符号 =====
+  # 背景: OpenSSL (4.0.1) 的 aarch64 汇编里 poly1305_init 用 adrp/add 直接取
+  #   同库内符号 poly1305_blocks_sve2 (定义在另一个 .o, 且没写 .hidden), 把
+  #   libcrypto.a 链进共享库时该符号在输出里仍是可抢占的全局符号, lld 拒绝这类
+  #   重定位并报 "relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against
+  #   symbol 'poly1305_blocks_sve2'; recompile with -fPIC"。
+  #   OpenSSL 自己构建 libcrypto.so 时有版本脚本 (util/libcrypto.num) 把该符号
+  #   变成局部符号, 所以上游没有暴露这个问题。
+  # 处理: Android 链接共享库时加 --exclude-libs=ALL, 链接器把来自静态库的符号
+  #   按隐藏可见性处理 (不进入动态符号表), 重定位不再需要 GOT; 同时避免把
+  #   OpenSSL/fmt 等第三方符号导出到我们自己的 .so。
+  # - 只加给 SHARED: 可执行文件不导出动态符号
+  # - 本项目自己的 C/C++ API 由源文件直接编入共享库 (OBJECT 库), 不经过静态库,
+  #   导出面不受影响 (libagentxx 仍由 ffi_symbols.map 白名单控制)
+  if (XX_IS_ANDROID_D)
+    message("[agentxx] Android: hide static library symbols in shared libraries (--exclude-libs=ALL)")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,--exclude-libs=ALL")
+  endif()
+
   # ===== Release 链接期体积优化 =====
   # 相同代码合并 (--icf=all): 仅在 mold/gold/lld 下可用, bfd 无该选项
   # 仅 Linux/Android (ELF): 其他平台链接器对上述选项支持不一
