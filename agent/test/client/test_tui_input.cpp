@@ -691,6 +691,8 @@ void test_file_picker_navigation_without_filter() {
     }
 
     InputFixture                        f;
+    f.ctx.viewportWidth  = 100; // 与本用例渲染的 100x30 屏幕一致: 弹窗可用行数确定,
+    f.ctx.viewportHeight = 30;  // 不随物理终端大小/界面文案长度变化 (列表末端条目不被裁掉)
     agentxx::agent::ModelCapabilityInfo caps;
     caps.name       = "vision-model";
     caps.imageInput = true; // 仅图像: .mp3 属于媒体文件但当前模型不支持

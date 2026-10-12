@@ -117,6 +117,32 @@ static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::mi
     co_await t.async_wait(asio::redirect_error(asio::use_awaitable, ec));
 }
 
+/// 分离运行一个协程, 并把可调用对象按值复制进协程帧 (闭包活到协程结束)
+///
+/// 为什么需要它:
+/// - lambda 协程调用只把 **this 指针**存进协程帧, 闭包对象本身不入帧。分离协程
+///   可能在用例函数返回之后才被唤醒, 那时闭包对象 (以及它捕获的 shared_ptr、按引用
+///   捕获的局部量) 都已经析构, 唤醒后继续访问就是访问已释放内存 (偶发 SIGSEGV)
+/// - 作为**按值协程参数**传入的可调用对象会复制进帧, 因此它捕获的对象随协程存活
+///
+/// 用法 (用例里的分离协程都应当这样启动):
+/// ```cpp
+/// asio::co_spawn(
+///     ex,
+///     keepAliveRun([io]() -> asio::awaitable<void> {
+///         co_await io->runTransportLoop();
+///     }),
+///     asio::detached
+/// );
+/// ```
+/// - 捕获要保活的对象本身 (shared_ptr), 不要捕获用例栈上的局部量
+/// - 协程体在挂起点之后不要再用 `[&]` 捕获的局部量, 除非用例自身会等到它退出
+/// - 同类做法见 `agentxx::util::TaskScope::spawn` (同样按值保存可调用对象)
+template <class Fn>
+static asio::awaitable<void> keepAliveRun(Fn fn) {
+    co_await fn();
+}
+
 // ---------------------------------------------------------------------------
 // WS 收发辅助 (服务端 handler 内使用)
 // ---------------------------------------------------------------------------
@@ -762,7 +788,13 @@ static asio::awaitable<void> test_remote_client_handshake() {
         }
 
         if (ok) {
-            asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+            asio::co_spawn(
+                ex,
+                keepAliveRun([io]() -> asio::awaitable<void> {
+                    co_await io->runTransportLoop();
+                }),
+                asio::detached
+            );
 
             io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi"});
             co_await testSleep(ex, std::chrono::milliseconds{500});
@@ -1240,7 +1272,13 @@ static asio::awaitable<void> test_remote_client_reconnect() {
     bool                      ok = co_await transport->connect(hello);
     XX_TEST_EXPECT_TRUE(ok);
 
-    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     io->sendToPeer(agentxx::agent::WireUserInput{"session", "msg1"});
 
@@ -1320,9 +1358,15 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
 
     // 旧接收循环 (对应旧连接的 serveTransport 协程), 完成时置 oldLoopExited
     std::atomic<bool> oldLoopExited{false};
-    asio::co_spawn(ex, io->runTransportLoop(), [&oldLoopExited](std::exception_ptr) {
-        oldLoopExited.store(true, std::memory_order_release);
-    });
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        [&oldLoopExited](std::exception_ptr) {
+            oldLoopExited.store(true, std::memory_order_release);
+        }
+    );
 
     // 旧连接上收一条 WireDelta (确认循环工作)
     agentxx::agent::WireDelta da;
@@ -1350,9 +1394,15 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
 
     // 新接收循环 (模拟新连接的 serveTransport 发起): 绑定当前成员 transport_ (tB)
     std::atomic<bool> newLoopExited{false};
-    asio::co_spawn(ex, io->runTransportLoop(), [&newLoopExited](std::exception_ptr) {
-        newLoopExited.store(true, std::memory_order_release);
-    });
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        [&newLoopExited](std::exception_ptr) {
+            newLoopExited.store(true, std::memory_order_release);
+        }
+    );
 
     // 新连接上收发消息正常 (无两个循环瓜分)
     agentxx::agent::WireDelta db;
@@ -1431,7 +1481,13 @@ static asio::awaitable<void> test_remote_client_context_stats() {
     XX_TEST_EXPECT_TRUE(ok);
 
     if (ok) {
-        asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+        asio::co_spawn(
+            ex,
+            keepAliveRun([io]() -> asio::awaitable<void> {
+                co_await io->runTransportLoop();
+            }),
+            asio::detached
+        );
         co_await testSleep(ex, std::chrono::milliseconds{300});
         XX_TEST_EXPECT_EQ(io->lastCtxTokens.load(), uint64_t{1234});
         XX_TEST_EXPECT_EQ(io->lastMaxTokens.load(), uint64_t{5678});
@@ -1499,7 +1555,13 @@ static asio::awaitable<void> test_channel_client_integration() {
     io->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(clientT)));
 
     io->sendToPeer(agentxx::agent::WireHello{"session", "", 0, ""});
-    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     co_await testSleep(ex, std::chrono::milliseconds{100});
 
@@ -1583,7 +1645,13 @@ static asio::awaitable<void> test_remote_echo() {
     XX_TEST_EXPECT_TRUE(ok);
 
     if (ok) {
-        asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+        asio::co_spawn(
+            ex,
+            keepAliveRun([io]() -> asio::awaitable<void> {
+                co_await io->runTransportLoop();
+            }),
+            asio::detached
+        );
 
         for (int i = 0; i < 3; ++i) {
             io->sendToPeer(agentxx::agent::WireUserInput{"session", "m" + std::to_string(i)});
@@ -1712,7 +1780,13 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
     bool                      ok = co_await transport->connect(hello);
     XX_TEST_EXPECT_TRUE(ok);
 
-    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     bool multiReconnect = false;
     for (int i = 0; i < 100; ++i) {
@@ -1792,7 +1866,13 @@ static asio::awaitable<void> test_remote_cancel() {
     XX_TEST_EXPECT_TRUE(ok);
 
     if (ok) {
-        asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+        asio::co_spawn(
+            ex,
+            keepAliveRun([io]() -> asio::awaitable<void> {
+                co_await io->runTransportLoop();
+            }),
+            asio::detached
+        );
 
         io->sendToPeer(agentxx::agent::WireUserInput{"session", "hi"});
         io->sendToPeer(agentxx::agent::WireCancel{"session"});
@@ -1883,7 +1963,13 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
     bool                      ok = co_await transport->connect(hello);
     XX_TEST_EXPECT_TRUE(ok);
 
-    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     io->sendToPeer(agentxx::agent::WireUserInput{"session", "m1"});
 
@@ -2005,7 +2091,13 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
     bool                      ok = co_await transport->connect(hello);
     XX_TEST_EXPECT_TRUE(ok);
 
-    asio::co_spawn(ex, io->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([io]() -> asio::awaitable<void> {
+            co_await io->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     // 等待重连完成并收到 (或丢弃) 全部 delta
     std::vector<std::string> texts;
@@ -2599,7 +2691,13 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{1});
     XX_TEST_EXPECT_TRUE(sc->hasAliveClient());
 
-    asio::co_spawn(ex, sc->runTransportLoop(server1), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([sc, server1]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop(server1);
+        }),
+        asio::detached
+    );
 
     // 客户端 1 握手 Hello
     client1->send(agentxx::agent::WireHello{"multi-client-session", "", 0, ""});
@@ -2643,7 +2741,13 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
 
     sc->attachClient(server2);
     XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{2});
-    asio::co_spawn(ex, sc->runTransportLoop(server2), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([sc, server2]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop(server2);
+        }),
+        asio::detached
+    );
 
     // 客户端 2 握手，请求 lastSeq=1 之后的增量重放
     client2->send(agentxx::agent::WireHello{"multi-client-session", "", 1, ""});
@@ -2883,8 +2987,20 @@ static asio::awaitable<void> test_agent_server_multi_client() {
     auto server2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s2));
 
     // 服务端分别 serve 两个客户端 transport
-    asio::co_spawn(ex, server->serveTransport(server1), asio::detached);
-    asio::co_spawn(ex, server->serveTransport(server2), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([server, server1]() -> asio::awaitable<void> {
+            co_await server->serveTransport(server1);
+        }),
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        keepAliveRun([server, server2]() -> asio::awaitable<void> {
+            co_await server->serveTransport(server2);
+        }),
+        asio::detached
+    );
 
     // 客户端 1 握手
     client1->send(agentxx::agent::WireHello{"co-session", "secret-123", 0, ""});
@@ -2919,7 +3035,13 @@ static asio::awaitable<void> test_agent_server_multi_client() {
         auto [c3, s3] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
         auto client3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c3));
         auto server3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s3));
-        asio::co_spawn(ex, server->serveTransport(server3), asio::detached);
+        asio::co_spawn(
+            ex,
+            keepAliveRun([server, server3]() -> asio::awaitable<void> {
+                co_await server->serveTransport(server3);
+            }),
+            asio::detached
+        );
         client3->send(agentxx::agent::WireHello{
             .sessionId       = "co-session",
             .token           = "secret-123",
@@ -3273,6 +3395,9 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     std::vector<agentxx::agent::WireTurnResult>         turnResults;
     std::mutex                                          mu;
 
+    std::atomic<bool> clientLoopExited{false};
+    // 分离协程的闭包对象不入帧 (帧里只有 this 指针), 故经 keepAliveRun 按值入帧保活;
+    // 用例返回前还会等它退出, 因此这里按引用捕获用例局部量是安全的
     auto clientLoop = [&]() -> asio::awaitable<void> {
         while (clientT->alive()) {
             auto msg = co_await clientT->recv();
@@ -3293,9 +3418,10 @@ static asio::awaitable<void> test_session_controller_message_queue() {
                 *msg
             );
         }
+        clientLoopExited.store(true, std::memory_order_release);
     };
 
-    asio::co_spawn(ex, clientLoop(), asio::detached);
+    asio::co_spawn(ex, keepAliveRun(clientLoop), asio::detached);
     asio::co_spawn(
         ex,
         [sc]() -> asio::awaitable<void> {
@@ -3393,9 +3519,15 @@ static asio::awaitable<void> test_session_controller_message_queue() {
         }
     }
 
+    // 收尾: 关闭传输并等接收循环退出 (分离协程可能在用例返回之后才被唤醒,
+    // 那时用例栈上的 mu/queueUpdates/turnResults 已析构, 见 keepAliveRun 说明)
     clientT->close();
     sc->stop();
     sim.stop();
+    for (int i = 0; i < 50 && !clientLoopExited.load(std::memory_order_acquire); ++i) {
+        co_await testSleep(ex, std::chrono::milliseconds{10});
+    }
+    XX_TEST_EXPECT_TRUE(clientLoopExited.load(std::memory_order_acquire));
     co_return;
 }
 
@@ -3440,6 +3572,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     // 传输对象已析构 (ASan: heap-use-after-free, 与用例本身无关的时序问题)。
     std::shared_ptr<agentxx::agent::ChannelAgentIOTransport> clientT = std::move(clientOwn);
 
+    std::atomic<bool> loopExited{false};
     auto clientLoop = [&, clientT]() -> asio::awaitable<void> {
         while (clientT->alive()) {
             auto msg = co_await clientT->recv();
@@ -3457,9 +3590,10 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
                 *msg
             );
         }
+        loopExited.store(true, std::memory_order_release);
     };
 
-    asio::co_spawn(ex, clientLoop(), asio::detached);
+    asio::co_spawn(ex, keepAliveRun(clientLoop), asio::detached);
     asio::co_spawn(
         ex,
         [sc]() -> asio::awaitable<void> {
@@ -3573,9 +3707,15 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
         XX_TEST_EXPECT_TRUE(!turnResults[6].hasError && !turnResults[6].interrupted);
     }
 
+    // 收尾: 关闭传输并等接收循环退出 (分离协程可能在用例返回之后才被唤醒,
+    // 那时用例栈上的 mu/turnResults 已析构, 见 keepAliveRun 说明)
     clientT->close();
     sc->stop();
     sim.stop();
+    for (int i = 0; i < 50 && !loopExited.load(std::memory_order_acquire); ++i) {
+        co_await testSleep(ex, std::chrono::milliseconds{10});
+    }
+    XX_TEST_EXPECT_TRUE(loopExited.load(std::memory_order_acquire));
     co_return;
 }
 
@@ -3786,7 +3926,13 @@ static asio::awaitable<void> test_session_scope_validation() {
     auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
     // setTransport: 同时登记为端点主 transport (广播路径 sendToPeer 依赖它)
     sc->setTransport(server1);
-    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     client1->send(agentxx::agent::WireHello{"bound-session", "", 0, ""});
     auto helloMsg = co_await client1->recv();
@@ -3856,7 +4002,13 @@ static asio::awaitable<void> test_remote_user_input_attachments() {
         cfg
     );
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
-    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        }),
+        asio::detached
+    );
     clientT->send(agentxx::agent::WireHello{"att-session", "", 0, ""});
     auto helloAck = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(helloAck.has_value());
@@ -3907,7 +4059,13 @@ static asio::awaitable<void> test_remote_user_input_attachment_oversize() {
         cfg
     );
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
-    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     clientT->send(agentxx::agent::WireHello{"att-oversize-session", "", 0, ""});
     auto helloAck = co_await clientT->recv();
@@ -3976,7 +4134,13 @@ static asio::awaitable<void> test_remote_user_input_attachment_count_limit() {
         cfg
     );
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
-    asio::co_spawn(ex, sc->runTransportLoop(), asio::detached);
+    asio::co_spawn(
+        ex,
+        keepAliveRun([sc]() -> asio::awaitable<void> {
+            co_await sc->runTransportLoop();
+        }),
+        asio::detached
+    );
 
     clientT->send(agentxx::agent::WireHello{"att-count-session", "", 0, ""});
     auto helloAck = co_await clientT->recv();

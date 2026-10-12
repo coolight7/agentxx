@@ -333,6 +333,35 @@ asio::awaitable<void> test_fake_provider_overflow_compaction() {
 // ---------------------------------------------------------------------------
 // 5) 取消: 等待期间取消立即中断未完成的请求 (不必等延迟走完)
 // ---------------------------------------------------------------------------
+
+/// 后台观察者: 等会话取消令牌出现后请求取消
+///
+/// - agent 作为**按值协程参数**: 分离协程可能在用例返回之后才被唤醒, 而 lambda 协程
+///   帧只保存 this 指针 (闭包对象本身不入帧), 按引用捕获用例栈上的 shared_ptr 在
+///   唤醒时已经析构 (访问即 use-after-free)
+static asio::awaitable<void> cancelWatcherWhenTokenReady(
+    asio::any_io_executor              ex,
+    std::shared_ptr<FakeProviderAgent> agent
+) {
+    asio::steady_timer timer(ex);
+    for (int i = 0; i < 1000; ++i) {
+        auto session = agent->agentContext->sessions->get("fake_cancel");
+        if (session && session->getCancelToken()) {
+            break;
+        }
+        timer.expires_after(std::chrono::milliseconds(5));
+        co_await timer.async_wait(asio::use_awaitable);
+    }
+    timer.expires_after(std::chrono::milliseconds(200));
+    co_await timer.async_wait(asio::use_awaitable);
+    if (auto session = agent->agentContext->sessions->get("fake_cancel")) {
+        if (auto token = session->getCancelToken()) {
+            token->cancel();
+        }
+    }
+    co_return;
+}
+
 asio::awaitable<void> test_fake_provider_cancel() {
     auto provider = std::make_shared<FakeProvider>();
     provider->pushText("迟到的回答", 5000); // 5 秒后才产出
@@ -344,29 +373,8 @@ asio::awaitable<void> test_fake_provider_cancel() {
 
     auto ex = co_await asio::this_coro::executor;
 
-    // 后台观察者: 等会话取消令牌出现后请求取消
-    auto cancelWatcher = [&]() -> asio::awaitable<void> {
-        asio::steady_timer timer(ex);
-        for (int i = 0; i < 1000; ++i) {
-            auto session = agent->agentContext->sessions->get("fake_cancel");
-            if (session && session->getCancelToken()) {
-                break;
-            }
-            timer.expires_after(std::chrono::milliseconds(5));
-            co_await timer.async_wait(asio::use_awaitable);
-        }
-        timer.expires_after(std::chrono::milliseconds(200));
-        co_await timer.async_wait(asio::use_awaitable);
-        if (auto session = agent->agentContext->sessions->get("fake_cancel")) {
-            if (auto token = session->getCancelToken()) {
-                token->cancel();
-            }
-        }
-        co_return;
-    };
-
     const auto start = steadyNowMs();
-    asio::co_spawn(ex, cancelWatcher(), asio::detached);
+    asio::co_spawn(ex, cancelWatcherWhenTokenReady(ex, agent), asio::detached);
     auto       result = co_await agent->runTurnAsync("fake_cancel", "长请求", nullptr);
     const auto cost   = steadyNowMs() - start;
 

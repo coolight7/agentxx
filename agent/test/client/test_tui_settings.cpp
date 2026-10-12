@@ -252,27 +252,54 @@ void test_auto_language_detection() {
     auto& env      = utilxx_base::ApplicationEnv::instance();
     auto& i18n     = TuiI18n::instance();
 
+    // 模拟系统语言: 产品按 POSIX 优先级读取 LC_ALL -> LC_MESSAGES -> LANG -> LANGUAGE,
+    // 只改 LANG 时会被运行环境里已有的 LC_ALL 覆盖 (同一份测试在不同 shell 下结果不同)。
+    // 这里四个变量一起模拟, 用例结束恢复原值
+    const auto savedLcAll      = env.get("LC_ALL");
+    const auto savedLcMessages = env.get("LC_MESSAGES");
+    const auto savedLang       = env.get("LANG");
+    const auto savedLanguage   = env.get("LANGUAGE");
+    auto       simLocale       = [&](std::string_view loc) {
+        env.set("LC_ALL", loc);
+        env.set("LC_MESSAGES", loc);
+        env.set("LANG", loc);
+        env.remove("LANGUAGE"); // 避免 LANGUAGE 的列表语法参与优先级判定
+    };
+    auto restoreLocale = [&]() {
+        auto restoreOne = [&](const char* name, const std::optional<std::string>& value) {
+            if (value.has_value()) {
+                env.set(name, *value);
+            } else {
+                env.remove(name);
+            }
+        };
+        restoreOne("LC_ALL", savedLcAll);
+        restoreOne("LC_MESSAGES", savedLcMessages);
+        restoreOne("LANG", savedLang);
+        restoreOne("LANGUAGE", savedLanguage);
+    };
+
     // 设为自动模式
     settings.setLanguage(TuiLanguage::Auto);
     XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
     XX_TEST_EXPECT_EQ(settings.languageName(), std::string_view("自动 (Auto)"));
 
     // 模拟英文系统环境
-    env.set("LANG", std::string_view{"en_US.UTF-8"});
+    simLocale("en_US.UTF-8");
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
 
     // 模拟中文系统环境
-    env.set("LANG", std::string_view{"zh_CN.UTF-8"});
+    simLocale("zh_CN.UTF-8");
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::ZhCn);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("zh-cn"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("设置"));
 
     // 模拟其它语言系统环境 (回退 EnUs)
-    env.set("LANG", std::string_view{"ja_JP.UTF-8"});
+    simLocale("ja_JP.UTF-8");
     settings.refreshAutoLanguage();
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
@@ -285,7 +312,7 @@ void test_auto_language_detection() {
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("设置"));
 
     settings.setLanguage(TuiLanguage::EnUs);
-    env.set("LANG", std::string_view{"zh_CN.UTF-8"});
+    simLocale("zh_CN.UTF-8");
     XX_TEST_EXPECT_TRUE(settings.effectiveLanguage() == TuiLanguage::EnUs);
     XX_TEST_EXPECT_EQ(settings.languageCode(), std::string("en"));
     XX_TEST_EXPECT_EQ(i18n.t("settings.title"), std::string_view("Settings"));
@@ -295,8 +322,8 @@ void test_auto_language_detection() {
     XX_TEST_EXPECT_TRUE(settings.language() == TuiLanguage::Auto);
     XX_TEST_EXPECT_TRUE(settings.languageCode() == "zh-cn" || settings.languageCode() == "en");
 
-    // 清理模拟环境变量并恢复默认设置
-    env.remove("LANG");
+    // 清理: 恢复原语言环境与默认设置
+    restoreLocale();
     settings.setLanguage(TUISettings::kDefaultLanguage);
 }
 
