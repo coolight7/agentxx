@@ -8,6 +8,7 @@
 // - "前往下载"链接校验 (open_url.h): 只放行 http/https 且字符安全
 // - 本地 HTTP 服务端到端 (302 Location / JSON / 404) 见 `agentxx_test http`
 #include "agentxx-test/client/test_update_check.h"
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/update_check.h"
@@ -45,10 +46,10 @@ std::optional<UpdateCheckResult> runCheckSync(std::string_view url) {
     std::optional<UpdateCheckResult> out;
     asio::co_spawn(
         io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             out = co_await agentxx::client::checkLatestRelease(url);
             co_return;
-        },
+        }),
         asio::detached
     );
     io.run();

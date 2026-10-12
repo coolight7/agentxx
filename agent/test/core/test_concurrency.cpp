@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_concurrency.h"
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/model_registry.h"
@@ -233,7 +234,7 @@ void testAsyncMutex() {
     for (int c = 0; c < kCoros; ++c) {
         asio::co_spawn(
             ioc,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 for (int i = 0; i < kIter; ++i) {
                     auto guard = co_await mtx.lock();
                     // 临界区: 锁正确时 inCritical 恒为 1
@@ -250,7 +251,7 @@ void testAsyncMutex() {
                     // guard 于本次迭代结束时析构释放锁
                 }
                 done++;
-            },
+            }),
             asio::detached
         );
     }
@@ -279,7 +280,7 @@ void testAsyncMutexGuardMoveAssign() {
 
     asio::co_spawn(
         ioc,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto guardA = co_await mtx1.lock(); // 持有 mtx1 令牌
             {
                 auto guardB = co_await mtx2.lock(); // 持有 mtx2 令牌
@@ -287,14 +288,14 @@ void testAsyncMutexGuardMoveAssign() {
             }
             mainDone = true;
             // guardA (现持 mtx2) 于协程结束析构, 归还 mtx2
-        },
+        }),
         asio::detached
     );
 
     // 等主协程完成移动赋值后尝试再锁 mtx1: 修复后令牌已归还 → 立即成功; 泄漏则挂起
     asio::co_spawn(
         ioc,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             asio::steady_timer t(co_await asio::this_coro::executor);
             t.expires_after(std::chrono::milliseconds(10));
             co_await t.async_wait(asio::use_awaitable);
@@ -303,19 +304,19 @@ void testAsyncMutexGuardMoveAssign() {
             }
             auto g       = co_await mtx1.lock();
             relockedMtx1 = true;
-        },
+        }),
         asio::detached
     );
 
     // 看门狗: 超时停止 io_context, 防止令牌泄漏时 lock 永久挂起拖死测试
     asio::co_spawn(
         ioc,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             asio::steady_timer t(co_await asio::this_coro::executor);
             t.expires_after(std::chrono::milliseconds(300));
             co_await t.async_wait(asio::use_awaitable);
             ioc.stop();
-        },
+        }),
         asio::detached
     );
 
@@ -342,13 +343,13 @@ void testAsyncOffload() {
 
         asio::co_spawn(
             ioc,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 auto v = co_await utilxx::offloadAsync<int>(pool, [&]() -> asio::awaitable<int> {
                     ranOnWorker.store(true, std::memory_order_release);
                     co_return 42;
                 });
                 XX_TEST_EXPECT_EQ(v, 42);
-            },
+            }),
             asio::detached
         );
         ioc.run();
@@ -362,7 +363,7 @@ void testAsyncOffload() {
         asio::thread_pool pool(1);
         asio::co_spawn(
             ioc,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 auto v = co_await utilxx::offloadCancellableAsync<int>(
                     pool,
                     [](std::atomic<bool>&) -> asio::awaitable<int> {
@@ -370,7 +371,7 @@ void testAsyncOffload() {
                     }
                 );
                 XX_TEST_EXPECT_EQ(v, 7);
-            },
+            }),
             asio::detached
         );
         ioc.run();
@@ -386,7 +387,7 @@ void testAsyncOffload() {
 
         asio::co_spawn(
             ioc,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 bool threw = false;
                 try {
                     co_await utilxx::offloadCancellableAsync<int>(
@@ -405,7 +406,7 @@ void testAsyncOffload() {
                     threw = true;
                 }
                 XX_TEST_EXPECT_TRUE(threw);
-            },
+            }),
             asio::detached
         );
 

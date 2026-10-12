@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_openai_provider.h"
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/protocol/openai_provider.h"
 #include "agentxx/protocol/provider_common.h"
@@ -2613,10 +2614,10 @@ void test_true_streaming_incremental(uint16_t) {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto result = co_await provider->invoke(params, onChunk);
             XX_TEST_EXPECT_EQ(result.message.content, "ABC");
-        },
+        }),
         asio::detached
     );
     ctx.run();
@@ -2771,13 +2772,13 @@ void test_connect_timeout() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             try {
                 co_await provider->invoke(params, nullptr);
             } catch (const std::exception&) {
                 caught = true;
             }
-        },
+        }),
         asio::detached
     );
     ctx.run();
@@ -2817,13 +2818,13 @@ void test_read_timeout_streaming() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             try {
                 auto result = co_await provider->invoke(params, onChunk);
                 XX_TEST_EXPECT_EQ(result.message.content, "Hi");
             } catch (const std::exception&) {
             }
-        },
+        }),
         asio::detached
     );
     ctx.run();
@@ -2875,7 +2876,7 @@ void test_streaming_abort_after_done_ignored() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             try {
                 auto result = co_await provider->invoke(params, onChunk);
                 content     = result.message.content;
@@ -2885,7 +2886,7 @@ void test_streaming_abort_after_done_ignored() {
                 TEST_FAIL << "abort-after-done should be ignored, but threw: " << e.what()
                           << std::endl;
             }
-        },
+        }),
         asio::detached
     );
     ctx.run();

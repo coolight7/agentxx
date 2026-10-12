@@ -679,6 +679,8 @@ TestResult testPluginRuntime() {
         auto           op = f.operation();
         op->accept();
         asio::cancellation_signal cancel;
+        // 协程体是 op->wait() (成员协程): op 由夹具持有, 且下面在作用域内等待 future
+        // → 不需要 keepAliveRun
         auto                      waited = asio::co_spawn(
             f.io,
             op->wait(),

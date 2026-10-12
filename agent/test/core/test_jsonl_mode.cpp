@@ -1,6 +1,7 @@
 #include "agentxx-test/core/test_jsonl_mode.h"
 
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -361,18 +362,18 @@ asio::awaitable<std::shared_ptr<JsonlFixture>>
 
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint, tr = fx->transport]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint, tr = fx->transport]() -> asio::awaitable<void> {
             co_await ep->runTransportLoop(tr);
             co_return;
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
             co_await ep->run();
             co_return;
-        },
+        }),
         asio::detached
     );
     co_return fx;

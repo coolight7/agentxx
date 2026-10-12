@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_anthropic_provider.h"
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/protocol/anthropic_provider.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "utilxx/http_client.h"
@@ -1820,10 +1821,10 @@ void test_anthropic_true_streaming_incremental() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto result = co_await provider->invoke(params, onChunk);
             XX_TEST_EXPECT_EQ(result.message.content, "XYZ");
-        },
+        }),
         asio::detached
     );
     ctx.run();
@@ -1979,13 +1980,13 @@ void test_anthropic_connect_timeout() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             try {
                 co_await provider->invoke(params, nullptr);
             } catch (const std::exception&) {
                 caught = true;
             }
-        },
+        }),
         asio::detached
     );
     ctx.run();
@@ -2032,13 +2033,13 @@ void test_anthropic_read_timeout_streaming() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             try {
                 auto result = co_await provider->invoke(params, onChunk);
                 XX_TEST_EXPECT_EQ(result.message.content, "Par");
             } catch (const std::exception&) {
             }
-        },
+        }),
         asio::detached
     );
     ctx.run();
@@ -2101,7 +2102,7 @@ void test_anthropic_streaming_abort_after_message_stop_ignored() {
     asio::io_context ctx;
     asio::co_spawn(
         ctx,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             try {
                 auto result = co_await provider->invoke(params, onChunk);
                 content     = result.message.content;
@@ -2111,7 +2112,7 @@ void test_anthropic_streaming_abort_after_message_stop_ignored() {
                 TEST_FAIL << "abort-after-message_stop should be ignored, but threw: " << e.what()
                           << std::endl;
             }
-        },
+        }),
         asio::detached
     );
     ctx.run();

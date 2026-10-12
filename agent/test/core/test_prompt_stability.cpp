@@ -1,5 +1,6 @@
 #include "agentxx-test/core/test_prompt_stability.h"
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/code_agent.h"
@@ -162,37 +163,39 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
 
     asio::co_spawn(
         ex,
-        [clientT = fx->clientT, turnResults = &fx->turnResults]() -> asio::awaitable<void> {
-            while (clientT->alive()) {
-                auto msg = co_await clientT->recv();
-                if (!msg) {
-                    break;
+        keepAliveRun(
+            [clientT = fx->clientT, turnResults = &fx->turnResults]() -> asio::awaitable<void> {
+                while (clientT->alive()) {
+                    auto msg = co_await clientT->recv();
+                    if (!msg) {
+                        break;
+                    }
+                    std::visit(
+                        [turnResults](auto&& m) {
+                            using T = std::decay_t<decltype(m)>;
+                            if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
+                                turnResults->fetch_add(1);
+                            }
+                        },
+                        std::move(*msg)
+                    );
                 }
-                std::visit(
-                    [turnResults](auto&& m) {
-                        using T = std::decay_t<decltype(m)>;
-                        if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
-                            turnResults->fetch_add(1);
-                        }
-                    },
-                    std::move(*msg)
-                );
             }
-        },
+        ),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
             co_await ep->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
             co_await ep->run();
-        },
+        }),
         asio::detached
     );
     co_return fx;

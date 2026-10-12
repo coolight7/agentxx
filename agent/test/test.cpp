@@ -126,6 +126,7 @@
 #include "agentxx-test/core/test_util_misc.h"
 #include "agentxx-test/core/test_web_search_tools.h"
 #include "agentxx-test/core/test_websocket.h"
+#include "agentxx-test/test_coro_util.h"
 #include <cstring>
 #include <chrono>
 #include <iostream>
@@ -333,7 +334,7 @@ int main(int argn, char** argv) {
     if (!failFastTriggered) {
         asio::co_spawn(
             ioCtx,
-            [&]() -> asio::awaitable<void> {
+            agentxx::test::keepAliveRun([&]() -> asio::awaitable<void> {
                 auto agentConfig          = std::make_shared<agentxx::agent::AgentConfig>();
                 auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
                 agentContext->agentConfig = agentConfig;
@@ -509,7 +510,7 @@ int main(int argn, char** argv) {
                 co_await run("memgrowth", agentxx::test::run_memgrowth_tests);
 
                 ioCtx.stop();
-            },
+            }),
             asio::detached
         );
         ioCtx.run();

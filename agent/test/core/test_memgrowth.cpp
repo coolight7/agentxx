@@ -9,6 +9,7 @@
 
 #include "agentxx-test/core/test_memgrowth.h"
 #include "agentxx-test/core/test_agent.h"
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
@@ -151,14 +152,14 @@ asio::awaitable<ContainerSnapshot> snapshotContainersOnAgentThread(
     auto ctx = agent->agentContext;
     asio::co_spawn(
         *agent->ioCtx,
-        [ctx, sessionId, ch]() -> asio::awaitable<void> {
+        keepAliveRun([ctx, sessionId, ch]() -> asio::awaitable<void> {
             co_await ch->async_send(
                 utilxx_base::AsioErrorCode{},
                 snapshotContainers(ctx, sessionId),
                 asio::use_awaitable
             );
             co_return;
-        },
+        }),
         asio::detached
     );
     auto [ec, snap] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
@@ -277,24 +278,27 @@ asio::awaitable<int> runScenario(
             auto ch     = std::make_shared<ResCh>(agent->ioCtx->get_executor(), 1);
             asio::co_spawn(
                 *agent->ioCtx,
-                [agent, sessionId, input, turn, ch, nonStream]() -> asio::awaitable<void> {
-                    bool success = false;
-                    if (nonStream) {
-                        std::vector<neograph::ChatMessage> msgs;
-                        msgs.push_back(neograph::ChatMessage{
-                            .role    = "user",
-                            .content = input,
-                        });
-                        auto text = co_await agent->runOverMsgsTurnAsync(sessionId, msgs);
-                        success   = !text.empty();
-                    } else {
-                        auto result = co_await agent->runTurnAsync(sessionId, input, nullptr);
-                        success     = !result.hasError;
+                keepAliveRun(
+                    [agent, sessionId, input, turn, ch, nonStream]() -> asio::awaitable<void> {
+                        bool success = false;
+                        if (nonStream) {
+                            std::vector<neograph::ChatMessage> msgs;
+                            msgs.push_back(neograph::ChatMessage{
+                                .role    = "user",
+                                .content = input,
+                            });
+                            auto text = co_await agent->runOverMsgsTurnAsync(sessionId, msgs);
+                            success   = !text.empty();
+                        } else {
+                            auto result = co_await agent->runTurnAsync(sessionId, input, nullptr);
+                            success     = !result.hasError;
+                        }
+                        co_await ch->async_send(
+                            utilxx_base::AsioErrorCode{}, success, asio::use_awaitable
+                        );
+                        co_return;
                     }
-                    co_await ch
-                        ->async_send(utilxx_base::AsioErrorCode{}, success, asio::use_awaitable);
-                    co_return;
-                },
+                ),
                 asio::detached
             );
             auto [ec, ok2] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));

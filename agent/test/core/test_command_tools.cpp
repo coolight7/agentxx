@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_command_tools.h"
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/context.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_execute_command 插件 (同名同行为); 测试
@@ -873,18 +874,18 @@ asio::awaitable<void>
     auto             start = std::chrono::steady_clock::now();
     asio::co_spawn(
         ex,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             r1 = co_await tool.execute_async(args);
             done.fetch_add(1, std::memory_order_release);
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             r2 = co_await tool.execute_async(args);
             done.fetch_add(1, std::memory_order_release);
-        },
+        }),
         asio::detached
     );
     while (done.load(std::memory_order_acquire) < 2) {
@@ -1002,7 +1003,7 @@ asio::awaitable<void>
 
     asio::co_spawn(
         ex,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             result = co_await agentxx_execmd_plugin::bashExecuteAsync(
                 args,
                 agentxx::tools::testResolvedWorkDir(agentContext),
@@ -1012,7 +1013,7 @@ asio::awaitable<void>
                 "event_cancel_sess"
             );
             done.store(true, std::memory_order_release);
-        },
+        }),
         asio::detached
     );
 
@@ -1076,7 +1077,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
 
     asio::co_spawn(
         ex,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             resultA = co_await agentxx_execmd_plugin::bashExecuteAsync(
                 argsA,
                 agentxx::tools::testResolvedWorkDir(agentContext),
@@ -1086,7 +1087,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
                 "sess_A"
             );
             doneA.store(true, std::memory_order_release);
-        },
+        }),
         asio::detached
     );
 
@@ -1103,7 +1104,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
     // sess_B 正常执行
     asio::co_spawn(
         ex,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             resultB = co_await agentxx_execmd_plugin::bashExecuteAsync(
                 argsB,
                 agentxx::tools::testResolvedWorkDir(agentContext),
@@ -1113,7 +1114,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
                 "sess_B"
             );
             doneB.store(true, std::memory_order_release);
-        },
+        }),
         asio::detached
     );
 

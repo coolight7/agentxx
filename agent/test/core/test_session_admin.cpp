@@ -9,6 +9,7 @@
 #include "agentxx-test/core/test_session_admin.h"
 
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -176,7 +177,7 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(std::string sessionId, boo
 
     asio::co_spawn(
         ex,
-        [clientT = fx->clientT, recorder = fx->recorder]() -> asio::awaitable<void> {
+        keepAliveRun([clientT = fx->clientT, recorder = fx->recorder]() -> asio::awaitable<void> {
             while (clientT->alive()) {
                 auto msg = co_await clientT->recv();
                 if (!msg) {
@@ -184,15 +185,15 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(std::string sessionId, boo
                 }
                 recorder->handle(std::move(*msg));
             }
-        },
+        }),
         asio::detached
     );
     // 端点接收循环: 没有它, 客户端发来的会话管理消息不会被处理
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
             co_await ep->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     co_return fx;

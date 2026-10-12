@@ -18,6 +18,7 @@
 #include "utilxx_base/log.h"
 
 #include "agentxx-test/core/test_cancel.h"
+#include "agentxx-test/test_coro_util.h"
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -580,12 +581,12 @@ asio::awaitable<void> test_offload_cancel_token() {
     // 100ms 后取消
     asio::co_spawn(
         ex,
-        [token]() -> asio::awaitable<void> {
+        keepAliveRun([token]() -> asio::awaitable<void> {
             asio::steady_timer timer(co_await asio::this_coro::executor);
             timer.expires_after(std::chrono::milliseconds(100));
             co_await timer.async_wait(asio::use_awaitable);
             token->cancel();
-        },
+        }),
         asio::detached
     );
 

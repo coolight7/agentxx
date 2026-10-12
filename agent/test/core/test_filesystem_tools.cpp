@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_filesystem_tools.h"
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/context.h"
 #include "utilxx_base/env.h"
 #include <neograph/types.h>
@@ -3294,12 +3295,12 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         auto        done           = std::make_shared<bool>(false);
         asio::co_spawn(
             ex,
-            [&, done]() -> asio::awaitable<void> {
+            keepAliveRun([&, done]() -> asio::awaitable<void> {
                 auto second = co_await agentxx_fs_plugin::detail::lockPathAsync(filePath);
                 secondAcquired = true;
                 (void)second;
                 co_return;
-            },
+            }),
             [done](std::exception_ptr) { *done = true; }
         );
         // 让出控制权若干轮: 第二次获取必须仍被挡住
@@ -3352,20 +3353,20 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         bool        doneB = false;
         asio::co_spawn(
             ex,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 resA  = co_await editTool.execute_async(editArgsA);
                 doneA = true;
                 co_return;
-            },
+            }),
             asio::detached
         );
         asio::co_spawn(
             ex,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 resB  = co_await editTool.execute_async(editArgsB);
                 doneB = true;
                 co_return;
-            },
+            }),
             asio::detached
         );
         // 等待两个并发 edit 结束 (两者都在同一 io_context 上交错执行)

@@ -67,12 +67,26 @@ closure();          // 协程挂起后闭包离开作用域
 
 ## 修改
 
+- `agent/test/include/agentxx-test/test_coro_util.h` (新增共享头)
+  - `agentxx::test::keepAliveRun(Fn fn)`: 把可调用对象作为**按值协程参数**传入 →
+    参数会复制进协程帧, 闭包与它按值捕获的 shared_ptr 随协程存活; 注释写清规则、
+    用法与反例 (与 `agentxx::util::TaskScope::spawn` 的既有做法一致)
+- 全测试套件迁移 (**21 个文件、82 处**): `asio::co_spawn(..., <闭包>, asio::detached)`
+  一律改为 `asio::co_spawn(..., keepAliveRun(<闭包>), ...)`
+  - 各夹具的接收循环 / 端点驱动循环 (`[clientT = fx->clientT, recorder = fx->recorder]`,
+    `[ep = fx->endpoint]() { co_await ep->runTransportLoop(); }`, `ep->run()`):
+    `test_input_delivery` `test_jsonl_mode` `test_prompt_stability` `test_session_admin`
+    `test_session_sync` `test_shutdown_stages`
+  - 并发 / 工具 / provider 用例: `test_concurrency` `test_command_tools`
+    `test_anthropic_provider` `test_openai_provider` `test_agent_host` `test_cancel`
+    `test_filesystem_tools` `test_memgrowth` `test_session_persistence`
+  - 插件用例: `test_plugins` `test_client_plugins`
+  - 客户端用例与测试主程序: `test_update_check` `test.cpp` (主协程, 限定名调用)
+  - 另外两处第三参数不是 `asio::detached` 但同样会游离的站点也一并处理:
+    `test_filesystem_tools` (完成处理器形态) 与 `test_http` (`bind_cancellation_slot` 形态)
 - `agent/test/core/test_remote_agent.cpp`
-  - 新增 `keepAliveRun(Fn fn)`: 把可调用对象作为**按值协程参数**传入 → 参数会被复制进
-    协程帧, 闭包与它捕获的 shared_ptr 随协程存活; 注释写清规则、用法与反例
-  - 20 处 `co_spawn(ex, X->成员协程(), ...)` 改为
-    `co_spawn(ex, keepAliveRun([X]() -> awaitable<void> { co_await X->成员协程(); }), ...)`
-    (端点/服务端 shared_ptr 按值捕获)
+  - 20 处 `co_spawn(ex, X->成员协程(), ...)` 改为 `keepAliveRun([X]() { ... })`
+    (端点 / 服务端 shared_ptr 按值捕获; 文件内局部实现已删除, 改用共享头)
   - 2 处 `clientLoop`: 经 `keepAliveRun` 保活; 并新增退出标志, 用例收尾关闭传输后等它
     退出再返回 (`XX_TEST_EXPECT_TRUE(loopExited)`, 最长等 500ms)
 - `agent/test/core/test_fake_provider.cpp`
@@ -84,27 +98,31 @@ closure();          // 协程挂起后闭包离开作用域
 - `agent/test/client/test_tui_input.cpp`
   - 文件选择用例固定离屏视口 (`ctx.viewportWidth/viewportHeight = 100/30`, 与该用例
     渲染的尺寸一致), 不再随物理终端漂移
+- 4 处"形态特殊但已确认安全"的分离启动补了说明注释 (为何不需要 keepAliveRun):
+  `test_agent_host` (spawnOne("a"))、`test_http` (命名闭包 run)、
+  `test_plugin_runtime` (op->wait() + 取消槽)
 
 ## 验证
 
-- release 全量 (修复后, 共 6 轮):
-  - 敌意环境 `TERM=dumb NO_COLOR=1 LC_ALL=C LANG=C` 3 轮: 37581/0
-  - 插桩 `MallocScribble=1 MallocGuardEdges=1 MallocErrorAbort=1` (释放内存填 0x55,
-    大块分配加保护页, malloc 报错即中止) 2 轮: 37581/0
-  - 默认环境 1 轮: 37581/0
-  - (37581 = 原 37579 + 新增的 2 条退出断言)
-- 单模块: `remote_agent` 512/0; `fake_provider remote_agent cancel` 603/0
+- release 全量 (每轮约 4 分钟), 共 12 轮全 37581/0:
+  - 迁移前 6 轮: 敌意环境 `TERM=dumb NO_COLOR=1 LC_ALL=C LANG=C` 3 轮、
+    插桩 `MallocScribble=1 MallocGuardEdges=1 MallocErrorAbort=1` (释放内存填 0x55、
+    大块分配加保护页、malloc 报错即中止) 2 轮、默认环境 1 轮
+  - 全量迁移后 6 轮: 敌意 3 轮、插桩 2 轮、默认 1 轮
+  - (37581 = 原 37579 + `remote_agent` 新增的 2 条退出断言)
+- 单模块: `remote_agent` 512/0; `fake_provider remote_agent cancel` 603/0;
+  `agent_host http plugin_runtime` 1196/0
 - 环境矩阵: `tui_settings` + `tui_input` 在 5 种 locale 组合下 676/0
-- debug/ASan: `remote_agent fake_provider` 558/0; 加 `tui_settings tui_input` 连跑 2 轮
-  1234/0, 无 sanitizer 报告
-- 结论: 修复后 6 轮全量 (含插桩) 未再复现 SIGSEGV; 修复前同类环境约 1/8 次出现
+- debug/ASan: 20 个受影响模块 3438/0, `plugins client_plugins` 1203/0, 无 sanitizer 报告
+- 内存: 迁移后全量 RSS 未见上升 (示例: 迁移前 144 MB → 迁移后 130 MB; 夹具析构时已
+  关闭传输 / 停止端点, 循环随之退出并释放保活引用)
+- 结论: 修复与迁移后 12 轮全量 (含插桩放大) 未再出现 SIGSEGV; 修复前同类环境约 1/8 次出现
 
 ## 遗留
 
-- 同类形状 (闭包 / 按引用捕获 + detached 启动) 在其它模块仍有, 目前未复现崩溃:
-  `[ep = fx->endpoint]() -> awaitable<void> { co_await ep->runTransportLoop(); }` 形态
-  (见 `test_input_delivery` / `test_jsonl_mode` / `test_prompt_stability` /
-  `test_session_admin` / `test_session_sync` / `test_shutdown_stages`) —— 端点由 fixture
-  持有所以暂时安全, 后续可统一改用 `keepAliveRun` 形态
-- `test_fake_provider` 的 `cancelWatcherWhenTokenReady` 只保证不越界, 未等它退出
-  (它最多循环 5s; 用例返回后仍可能继续跑, 只是不再触碰用例栈对象)
+- 仍有一类写法未改: 分离协程按**引用**捕获用例栈局部量并跨挂起点使用 (例如
+  `test_client_plugins` 里 `[&]` 捕获 `probe` 的定时器用例)。经 `keepAliveRun` 后闭包
+  存储已安全, 但被引用的局部量仍需用例自身在作用域内把协程跑完 (这些用例会 drain io);
+  后续可继续收紧: 把共享状态放进 `shared_ptr` 并按值捕获
+- 未复现的那次 SIGSEGV 无 core 可查 (shell `ulimit -c` 为 0); 若再出现, 可用
+  `MallocScribble=1 MallocGuardEdges=1 MallocErrorAbort=1` 放大后定位

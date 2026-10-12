@@ -1,5 +1,6 @@
 #include "agentxx-test/core/test_agent_host.h"
 #include "agentxx-test/core/test_agent.h"
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
@@ -138,7 +139,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -170,7 +171,7 @@ asio::awaitable<void> test_host_spawn_e2e() {
                            std::chrono::seconds(30)
                        );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -241,7 +242,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -305,7 +306,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
                                  std::chrono::seconds(30)
                              );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -410,7 +411,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -462,7 +463,7 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             // ④ 缺省 (子代理默认全量)
             co_await spawnOne(std::nullopt, "default");
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -587,7 +588,7 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -605,7 +606,7 @@ asio::awaitable<void> test_host_spawn_depth_limit() {
                            std::chrono::seconds(5)
                        );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -647,7 +648,7 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -677,6 +678,8 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
 
             // 并发两个派生: 单 io 线程协作式调度, 首个在 LLM 请求处挂起,
             // 第二个进入时并发预算已满 → 拒绝
+            // ("a" 的协程帧只保存 spawnOne 的 this 指针, 而 spawnOne 在本协程帧上,
+            //  本协程又等到 finishedCount==2 才返回 → 不需要 keepAliveRun)
             asio::co_spawn(*io, spawnOne("a"), asio::detached);
             co_await spawnOne("b");
             // 等待 "a" 完成 (其 LLM 请求有 300ms 延迟)
@@ -686,7 +689,7 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
                 co_await t.async_wait(asio::use_awaitable);
             }
             allDone = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, allDone);
@@ -738,7 +741,7 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -771,7 +774,7 @@ asio::awaitable<void> test_host_spawn_nested_delegation() {
                            std::chrono::seconds(30)
                        );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -813,7 +816,7 @@ asio::awaitable<void> test_host_spawn_batch() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await agent->init();
             host->attachRoot(agent);
@@ -849,7 +852,7 @@ asio::awaitable<void> test_host_spawn_batch() {
                            std::chrono::seconds(30)
                        );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -894,7 +897,7 @@ asio::awaitable<void> test_host_mailbox_message() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             okResp
                 = co_await host->hostBus()
                       ->request<agentxx::events::ReqHostMessage, agentxx::events::RespHostMessage>(
@@ -920,7 +923,7 @@ asio::awaitable<void> test_host_mailbox_message() {
                           std::chrono::seconds(5)
                       );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -957,7 +960,7 @@ asio::awaitable<void> test_host_remote_a2a() {
 
     asio::co_spawn(
         *io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             // 远程 agent: 独立 CodeAgent + 进程内 A2A 服务
             auto remoteAgent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
             co_await remoteAgent->init();
@@ -1003,7 +1006,7 @@ asio::awaitable<void> test_host_remote_a2a() {
                            std::chrono::seconds(60)
                        );
             finished = true;
-        },
+        }),
         asio::detached
     );
     pumpIoUntil(io, finished);
@@ -1013,9 +1016,9 @@ asio::awaitable<void> test_host_remote_a2a() {
     if (a2aServer) {
         asio::co_spawn(
             *io,
-            [s = a2aServer]() -> asio::awaitable<void> {
+            keepAliveRun([s = a2aServer]() -> asio::awaitable<void> {
                 co_await s->stop();
-            },
+            }),
             asio::detached
         );
         io->run();

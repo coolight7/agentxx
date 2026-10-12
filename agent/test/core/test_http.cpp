@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_http.h"
+#include "agentxx-test/test_coro_util.h"
 #include "utilxx/http_client.h"
 #include "utilxx/http_server.h"
 #if AGENTXX_BUILD_CLIENT
@@ -1736,7 +1737,7 @@ asio::awaitable<void> test_http_client_dns_timeout() {
         auto                      ex = co_await asio::this_coro::executor;
         asio::co_spawn(
             ex,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 try {
                     co_await HttpClient::requestSseAsync(
                         "GET",
@@ -1753,7 +1754,7 @@ asio::awaitable<void> test_http_client_dns_timeout() {
                     // 取消产生的 operation_aborted 在此吞掉, 由 finished 标志验证结束
                 }
                 finished.store(true);
-            },
+            }),
             asio::bind_cancellation_slot(sig.slot(), asio::detached)
         );
 
@@ -1980,6 +1981,8 @@ asio::awaitable<void> test_http_client_connection_pool() {
             }
         };
         for (int i = 0; i < 5; ++i) {
+            // run 是本作用域内的命名闭包 (非临时闭包), 且下面的循环等到 5 个请求全部
+            // 完成才离开作用域 → 闭包与它捕获的局部量都还在, 不需要 keepAliveRun
             asio::co_spawn(executor, run, asio::detached);
         }
         asio::steady_timer poll(executor);

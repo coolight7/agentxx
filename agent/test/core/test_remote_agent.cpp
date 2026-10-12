@@ -1,5 +1,6 @@
 #include "agentxx-test/core/test_remote_agent.h"
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
+#include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/agent_io.h"
@@ -115,32 +116,6 @@ static asio::awaitable<void> testSleep(asio::any_io_executor ex, std::chrono::mi
     t.expires_after(d);
     utilxx_base::AsioErrorCode ec;
     co_await t.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-}
-
-/// 分离运行一个协程, 并把可调用对象按值复制进协程帧 (闭包活到协程结束)
-///
-/// 为什么需要它:
-/// - lambda 协程调用只把 **this 指针**存进协程帧, 闭包对象本身不入帧。分离协程
-///   可能在用例函数返回之后才被唤醒, 那时闭包对象 (以及它捕获的 shared_ptr、按引用
-///   捕获的局部量) 都已经析构, 唤醒后继续访问就是访问已释放内存 (偶发 SIGSEGV)
-/// - 作为**按值协程参数**传入的可调用对象会复制进帧, 因此它捕获的对象随协程存活
-///
-/// 用法 (用例里的分离协程都应当这样启动):
-/// ```cpp
-/// asio::co_spawn(
-///     ex,
-///     keepAliveRun([io]() -> asio::awaitable<void> {
-///         co_await io->runTransportLoop();
-///     }),
-///     asio::detached
-/// );
-/// ```
-/// - 捕获要保活的对象本身 (shared_ptr), 不要捕获用例栈上的局部量
-/// - 协程体在挂起点之后不要再用 `[&]` 捕获的局部量, 除非用例自身会等到它退出
-/// - 同类做法见 `agentxx::util::TaskScope::spawn` (同样按值保存可调用对象)
-template <class Fn>
-static asio::awaitable<void> keepAliveRun(Fn fn) {
-    co_await fn();
 }
 
 // ---------------------------------------------------------------------------
@@ -1169,11 +1144,11 @@ static asio::awaitable<void> test_session_controller_grace() {
     auto done = std::make_shared<bool>(false);
     asio::co_spawn(
         ex,
-        [sc, done]() -> asio::awaitable<void> {
+        keepAliveRun([sc, done]() -> asio::awaitable<void> {
             co_await sc->handleInterrupt("session", "node", "val", "{}");
             *done = true;
             co_return;
-        },
+        }),
         asio::detached
     );
 
@@ -1514,7 +1489,7 @@ static asio::awaitable<void> test_channel_client_integration() {
     // fake server (经 channel 说协议)
     asio::co_spawn(
         ex,
-        [st = std::move(serverT)]() mutable -> asio::awaitable<void> {
+        keepAliveRun([st = std::move(serverT)]() mutable -> asio::awaitable<void> {
             auto hello = co_await st->recv();
             if (!hello) {
                 co_return;
@@ -1547,7 +1522,7 @@ static asio::awaitable<void> test_channel_client_integration() {
                     });
                 }
             }
-        },
+        }),
         asio::detached
     );
 
@@ -2196,7 +2171,7 @@ static asio::awaitable<void> test_remote_auth_rejected() {
     // 模拟 AgentServer 鉴权逻辑
     asio::co_spawn(
         ex,
-        [st = std::move(serverT)]() mutable -> asio::awaitable<void> {
+        keepAliveRun([st = std::move(serverT)]() mutable -> asio::awaitable<void> {
             auto msg = co_await st->recv();
             if (!msg) {
                 co_return;
@@ -2209,7 +2184,7 @@ static asio::awaitable<void> test_remote_auth_rejected() {
             st->send(agentxx::agent::WireMessage{
                 agentxx::agent::WireHelloAck{authOk, hello->sessionId, "", {}}
             });
-        },
+        }),
         asio::detached
     );
 
@@ -2530,16 +2505,16 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     // transport 接收循环 (onPeerMessage 处理客户端消息) + 会话驱动循环 (run)
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->run();
-        },
+        }),
         asio::detached
     );
 
@@ -2850,11 +2825,11 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     auto interruptDone = std::make_shared<bool>(false);
     asio::co_spawn(
         ex,
-        [sc, interruptDone]() -> asio::awaitable<void> {
+        keepAliveRun([sc, interruptDone]() -> asio::awaitable<void> {
             auto res = co_await sc->handleInterrupt("multi-client-session", "perm", "ask", "{}");
             *interruptDone = true;
             co_return;
-        },
+        }),
         asio::detached
     );
 
@@ -2918,11 +2893,11 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     auto turnCancelled = std::make_shared<bool>(false);
     asio::co_spawn(
         ex,
-        [sc, turnCancelled]() -> asio::awaitable<void> {
+        keepAliveRun([sc, turnCancelled]() -> asio::awaitable<void> {
             co_await sc->handleInterrupt("multi-client-session", "wait", "val", "{}");
             *turnCancelled = true;
             co_return;
-        },
+        }),
         asio::detached
     );
 
@@ -3424,16 +3399,16 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     asio::co_spawn(ex, keepAliveRun(clientLoop), asio::detached);
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->run();
-        },
+        }),
         asio::detached
     );
 
@@ -3596,16 +3571,16 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     asio::co_spawn(ex, keepAliveRun(clientLoop), asio::detached);
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->run();
-        },
+        }),
         asio::detached
     );
 
@@ -3781,9 +3756,9 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
 
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->runTransportLoop();
-        },
+        }),
         asio::detached
     );
 
@@ -4219,16 +4194,16 @@ static asio::awaitable<void> test_remote_user_input_attachment_to_llm() {
     }});
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc]() -> asio::awaitable<void> {
             co_await sc->run();
-        },
+        }),
         asio::detached
     );
 

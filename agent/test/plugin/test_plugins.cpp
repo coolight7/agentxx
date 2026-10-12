@@ -1,4 +1,5 @@
 #include "agentxx-test/plugin/test_plugins.h"
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
@@ -850,12 +851,12 @@ throw new Error("top-level rollback probe");
                 auto              ex = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
-                    [execDone, tool]() -> asio::awaitable<void> {
+                    keepAliveRun([execDone, tool]() -> asio::awaitable<void> {
                         auto out = co_await tool->execute_async(utilxx_base::Json{});
                         (void)out; // 超时返回 "[Plugin tool timeout]"
                         execDone->store(true);
                         co_return;
-                    },
+                    }),
                     asio::detached
                 );
                 // 等待回调已开始 (inflight>0 说明线程池已进入 C 回调):
@@ -1378,14 +1379,14 @@ throw new Error("top-level rollback probe");
             auto ex = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
-                [sess]() -> asio::awaitable<void> {
+                keepAliveRun([sess]() -> asio::awaitable<void> {
                     asio::steady_timer t(co_await asio::this_coro::executor);
                     t.expires_after(std::chrono::milliseconds(30));
                     co_await t.async_wait(asio::use_awaitable);
                     if (sess->getCancelToken()) {
                         sess->getCancelToken()->cancel();
                     }
-                },
+                }),
                 asio::detached
             );
 
@@ -2270,7 +2271,7 @@ throw new Error("top-level rollback probe");
             for (int i = 0; i < kTotalCalls; ++i) {
                 asio::co_spawn(
                     ex,
-                    [tool, completed, i]() -> asio::awaitable<void> {
+                    keepAliveRun([tool, completed, i]() -> asio::awaitable<void> {
                         auto out = co_await tool->execute_async(utilxx_base::Json{
                             {"sessionId", fmt::format("conc_{}", i)},
                             {"x", i},
@@ -2279,7 +2280,7 @@ throw new Error("top-level rollback probe");
                         if (j["via_call_tool"]["echo"]["x"].get<int>() == i) {
                             completed->fetch_add(1, std::memory_order_relaxed);
                         }
-                    },
+                    }),
                     asio::detached
                 );
             }
@@ -2317,12 +2318,12 @@ throw new Error("top-level rollback probe");
             auto              ex = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
-                [hostTicks, pluginDone]() -> asio::awaitable<void> {
+                keepAliveRun([hostTicks, pluginDone]() -> asio::awaitable<void> {
                     for (int i = 0; i < 200 && !pluginDone->load(std::memory_order_acquire); ++i) {
                         hostTicks->fetch_add(1, std::memory_order_relaxed);
                         co_await sleepMs(1);
                     }
-                },
+                }),
                 asio::detached
             );
 
@@ -2365,12 +2366,12 @@ throw new Error("top-level rollback probe");
             auto              ex = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
-                [hostTicks, polledDone]() -> asio::awaitable<void> {
+                keepAliveRun([hostTicks, polledDone]() -> asio::awaitable<void> {
                     for (int i = 0; i < 600 && !polledDone->load(std::memory_order_acquire); ++i) {
                         hostTicks->fetch_add(1, std::memory_order_relaxed);
                         co_await sleepMs(1);
                     }
-                },
+                }),
                 asio::detached
             );
 
@@ -2941,12 +2942,12 @@ throw new Error("top-level rollback probe");
                 auto              ex         = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
-                    [hostTicks, netDone]() -> asio::awaitable<void> {
+                    keepAliveRun([hostTicks, netDone]() -> asio::awaitable<void> {
                         for (int i = 0; i < 2000 && !netDone->load(std::memory_order_acquire); ++i) {
                             hostTicks->fetch_add(1, std::memory_order_relaxed);
                             co_await sleepMs(1);
                         }
-                    },
+                    }),
                     asio::detached
                 );
 
@@ -2971,16 +2972,18 @@ throw new Error("top-level rollback probe");
                 for (int i = 0; i < kConcurrent; ++i) {
                     asio::co_spawn(
                         ex,
-                        [fetchTool, okCount, doneCount, baseUrl]() -> asio::awaitable<void> {
-                            auto out = co_await fetchTool->execute_async(utilxx_base::Json{
-                                {"url",     baseUrl + "/hello"},
-                                {"timeout", 10                },
-                            });
-                            if (out.find("polled_web_ok") != std::string::npos) {
-                                okCount->fetch_add(1, std::memory_order_relaxed);
+                        keepAliveRun(
+                            [fetchTool, okCount, doneCount, baseUrl]() -> asio::awaitable<void> {
+                                auto out = co_await fetchTool->execute_async(utilxx_base::Json{
+                                    {"url",     baseUrl + "/hello"},
+                                    {"timeout", 10                },
+                                });
+                                if (out.find("polled_web_ok") != std::string::npos) {
+                                    okCount->fetch_add(1, std::memory_order_relaxed);
+                                }
+                                doneCount->fetch_add(1, std::memory_order_release);
                             }
-                            doneCount->fetch_add(1, std::memory_order_release);
-                        },
+                        ),
                         asio::detached
                     );
                 }

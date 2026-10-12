@@ -1,5 +1,6 @@
 #include "agentxx-test/core/test_session_sync.h"
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
@@ -203,7 +204,7 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
 
     asio::co_spawn(
         ex,
-        [clientT = fx->clientT, recorder = fx->recorder]() -> asio::awaitable<void> {
+        keepAliveRun([clientT = fx->clientT, recorder = fx->recorder]() -> asio::awaitable<void> {
             while (clientT->alive()) {
                 auto msg = co_await clientT->recv();
                 if (!msg) {
@@ -211,21 +212,21 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
                 }
                 recorder->handle(std::move(*msg));
             }
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
             co_await ep->runTransportLoop();
-        },
+        }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        [ep = fx->endpoint]() -> asio::awaitable<void> {
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
             co_await ep->run();
-        },
+        }),
         asio::detached
     );
     co_return fx;

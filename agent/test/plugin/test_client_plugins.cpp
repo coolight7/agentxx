@@ -16,6 +16,7 @@
 /// 29. 接口协商: TUI 主程序声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
 ///     client 侧声明必须全部被满足 (避免启动误报"可选接口不支持")
 #include "agentxx-test/plugin/test_client_plugins.h"
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/tui_plugin_adapter.h"
@@ -2463,10 +2464,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         bool closed = false;
         asio::co_spawn(
             io,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 closed
                     = co_await mgr2->unloadAsync("fake_lifecycle", std::chrono::milliseconds{500});
-            },
+            }),
             asio::detached
         );
         drainIo(io);
@@ -3568,7 +3569,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         std::atomic<bool> loaded{false};
         asio::co_spawn(
             ioT,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 auto instC = co_await mgrC->loadNativeAsync(findExamplePluginPath());
                 if (!instC) {
                     co_return;
@@ -3622,7 +3623,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 periodic.user_data = &probe;
                 (void)ifaceTimerC->set_timer(instC->hostView(), &periodic);
                 loaded.store(true);
-            },
+            }),
             asio::detached
         );
 
@@ -3645,9 +3646,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         std::atomic<bool> unloaded{false};
         asio::co_spawn(
             ioT,
-            [&]() -> asio::awaitable<void> {
+            keepAliveRun([&]() -> asio::awaitable<void> {
                 unloaded.store(co_await mgrC->unloadAsync("example_plugin"));
-            },
+            }),
             asio::detached
         );
         {

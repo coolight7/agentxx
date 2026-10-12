@@ -1,5 +1,6 @@
 #include "agentxx-test/core/test_session_persistence.h"
 #include "agentxx-test/core/test_agent.h"
+#include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
@@ -1557,10 +1558,10 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     asio::io_context io;
     asio::co_spawn(
         io,
-        [&]() -> asio::awaitable<void> {
+        keepAliveRun([&]() -> asio::awaitable<void> {
             co_await testSessionPersistenceE2E();
             co_await testTurnEndTipPersistenceRoundtrip();
-        },
+        }),
         asio::detached
     );
     io.run();
