@@ -1197,12 +1197,22 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
     );
     // 本批次的取消信号: 会话取消时先向子协程发信号 (让它们的挂起等待尽快结束),
     // 再按取消路径返回, 不留下后台仍在推进的工具执行
-    auto batchCancelSignal = std::make_shared<asio::cancellation_signal>();
+    //
+    // 每个子协程**各自一个** signal: asio 的 cancellation_signal 同一时刻只容纳
+    // 一个已安装的取消处理器, 多个并发协程共用一个 signal 会互相覆盖对方的处理器,
+    // 协程收尾 (clear_cancellation_slot) 时会按残留的处理器指针去释放内存 ——
+    // 实测为野指针释放 (Release 下 malloc abort / ASan 报 bad-free)
+    std::vector<std::shared_ptr<asio::cancellation_signal>> batchSignals;
+    batchSignals.reserve(state->batch.size());
+    for (size_t i = 0; i < state->batch.size(); ++i) {
+        batchSignals.push_back(std::make_shared<asio::cancellation_signal>());
+    }
 
     for (size_t i = 0; i < state->batch.size(); ++i) {
+        auto signal = batchSignals[i];
         asio::co_spawn(
             ex,
-            [this, state, doneChannel, batchCancelSignal, i]() -> asio::awaitable<void> {
+            [this, state, doneChannel, signal, i]() -> asio::awaitable<void> {
                 // RAII 守卫: 无论单条调用如何退出都保证发送完成信号 (父协程不悬挂)
                 struct DoneGuard {
                     std::shared_ptr<
@@ -1230,7 +1240,7 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
                     state->interrupted
                 );
             },
-            asio::bind_cancellation_slot(batchCancelSignal->slot(), asio::detached)
+            asio::bind_cancellation_slot(signal->slot(), asio::detached)
         );
     }
     // 等待全部完成 (接收 n 次)
@@ -1249,7 +1259,9 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
     }
     if (waitCancelled) {
         // 让子协程的挂起等待尽快结束 (避免取消后仍在后台推进工具执行)
-        batchCancelSignal->emit(asio::cancellation_type::all);
+        for (const auto& signal : batchSignals) {
+            signal->emit(asio::cancellation_type::all);
+        }
         outMsgs = state->msgs;
         if (outError == nullptr) {
             outError = std::make_exception_ptr(

@@ -5,6 +5,7 @@
 #include "asio/cancellation_signal.hpp"
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -38,10 +39,16 @@ public:
     TaskScope& operator=(const TaskScope&) = delete;
 
     /// 登记并启动一个后台任务 (发起即返回, 不等待完成)
+    /// - `task` 是**可调用对象** (返回 `asio::awaitable<void>`), 例如:
+    ///   `spawn("event-publish", [ctx]() -> asio::awaitable<void> { ... });`
+    ///   不要写成 `spawn("x", [..]() -> asio::awaitable<void> { ... }())`:
+    ///   lambda 协程的帧只保存闭包指针, 内联调用产生的是**临时闭包** (语句结束即
+    ///   销毁), 协程后续访问它属于悬垂引用 (UB, 实测 ASan 报 stack-use-after-scope)。
+    ///   传入可调用对象时由 co_spawn 把闭包复制进自己的协程帧, 生命周期与任务一致
     /// - `name` 只用于诊断与关闭日志 (如 "event-publish" / "host-progress")
     /// - 取消信号在关闭时发送: 任务内挂起的 asio 异步操作会以 operation_aborted
     ///   结束; 任务自身如需特殊清理, 应捕获该错误码
-    void spawn(std::string name, asio::awaitable<void> task);
+    void spawn(std::string name, std::function<asio::awaitable<void>()> task);
 
     /// 仍在运行的任务数
     size_t pending() const noexcept {

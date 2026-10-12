@@ -725,10 +725,10 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
     };
     // 后台任务登记 (计划 ARC-5): 有登记表时由它统一在关闭阶段取消并等待收敛
     if (ctxPtr->taskScope) {
-        ctxPtr->taskScope->spawn("event-publish", task());
+        ctxPtr->taskScope->spawn("event-publish", std::move(task));
         return;
     }
-    asio::co_spawn(bus.executor(), task(), asio::detached);
+    asio::co_spawn(bus.executor(), std::move(task), asio::detached);
 }
 
 void EventBridge::publishError(std::string message, std::string where) {
@@ -758,10 +758,10 @@ void EventBridge::publishError(std::string message, std::string where) {
         );
     };
     if (ctxPtr->taskScope) {
-        ctxPtr->taskScope->spawn("event-publish", task());
+        ctxPtr->taskScope->spawn("event-publish", std::move(task));
         return;
     }
-    asio::co_spawn(bus.executor(), task(), asio::detached);
+    asio::co_spawn(bus.executor(), std::move(task), asio::detached);
 }
 
 } // namespace events

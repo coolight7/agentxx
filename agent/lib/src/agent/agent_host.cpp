@@ -295,10 +295,11 @@ void AgentHost::publishProgress(
     };
     // 后台任务登记 (计划 ARC-5): 根 agent 有登记表时由它统一取消/等待
     if (rootAgent_ && rootAgent_->agentContext && rootAgent_->agentContext->taskScope) {
-        rootAgent_->agentContext->taskScope->spawn("host-progress", task());
+        // 传可调用对象 (不内联调用): co_spawn 会把闭包复制进任务帧, 生命周期与任务一致
+        rootAgent_->agentContext->taskScope->spawn("host-progress", std::move(task));
         return;
     }
-    asio::co_spawn(hostBus_->executor(), task(), asio::detached);
+    asio::co_spawn(hostBus_->executor(), std::move(task), asio::detached);
 }
 
 asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(

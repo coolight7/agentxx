@@ -256,7 +256,7 @@ TestResult testTaskScopeSemantics() {
     scope->spawn("instant", [&ran]() -> asio::awaitable<void> {
         ran = true;
         co_return;
-    }());
+    });
     XX_TEST_EXPECT_EQ(scope->totalSpawned(), uint64_t{1});
     io.run_for(std::chrono::milliseconds{50});
     io.restart();
@@ -275,7 +275,7 @@ TestResult testTaskScopeSemantics() {
             cancelledObserved = true; // operation_aborted
         }
         co_return;
-    }());
+    });
     io.run_for(std::chrono::milliseconds{20});
     io.restart();
     XX_TEST_EXPECT_EQ(scope->pending(), size_t{1});
@@ -309,7 +309,7 @@ TestResult testTaskScopeSemantics() {
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         // 取消后仍继续走完 (演示"取消不改语义"的任务)
         co_return;
-    }());
+    });
     bool idleQuick = true;
     asio::co_spawn(
         io,

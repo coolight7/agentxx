@@ -12,7 +12,7 @@
 namespace agentxx {
 namespace util {
 
-void TaskScope::spawn(std::string name, asio::awaitable<void> task) {
+void TaskScope::spawn(std::string name, std::function<asio::awaitable<void>()> task) {
     const uint64_t id = ++nextId_;
     auto           signal = std::make_shared<asio::cancellation_signal>();
     entries_[id] = Entry{.name = std::move(name), .signal = signal};
@@ -20,6 +20,9 @@ void TaskScope::spawn(std::string name, asio::awaitable<void> task) {
 
     // 取消信号绑定到任务: 关闭时先发信号, 任务内部的 asio 等待尽快结束;
     // 完成处理器负责摘除登记项 (无论正常结束、异常还是被取消)
+    // 注意: 传**可调用对象**给 co_spawn (而不是先调用它拿 awaitable), co_spawn 会把
+    // 闭包复制进自己的协程帧, 闭包生命周期与任务一致 —— 内联调用 lambda 协程时帧只
+    // 保存临时闭包指针, 语句结束即悬垂 (见 task_scope.h 的 spawn 说明)
     asio::co_spawn(
         executor_,
         std::move(task),
