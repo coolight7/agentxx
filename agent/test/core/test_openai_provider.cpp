@@ -1058,6 +1058,202 @@ void test_request_body_tools_json_matches_legacy_path() {
     XX_TEST_EXPECT_EQ(direct.dump(), legacy.dump());
 }
 
+/// 请求体"文本路径"与"DOM 路径"必须产出逐字节相同的线上请求体
+///
+/// - 文本路径逐条追加 messages / tools, 不先构造整段 DOM (长上下文下每轮请求都会
+///   发全量消息, 整段 DOM + 整段文本会在请求期间同时占两份 O(上下文) 临时内存)
+/// - 这里校验真实发出去的请求体: 与"旧实现拼法"(`buildBody()` 的键序 + 参考
+///   `chatMessagesToOpenAIJson` / `chatToolsToOpenAIJson`) 逐字节比对, 一旦不一致
+///   就是请求体变了, 属于静默行为变化
+/// - 同时覆盖 `extra_fields` 与已有键重名时的回退: DOM 版本是原地覆盖 (键序不变),
+///   文本路径无法表达, 必须回退到 DOM 版本而不是写出重复键
+asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& mock, uint16_t port) {
+    const std::string baseUrl = fmt::format("http://127.0.0.1:{}", port);
+    // 参考消息集: 纯文本 / 空正文的 tool_calls / tool 应答 / 多模态 / reasoning_details
+    auto makeMessages = []() {
+        std::vector<neograph::ChatMessage> msgs;
+        {
+            neograph::ChatMessage m;
+            m.role    = "system";
+            m.content = "you are \"agent\" \\ helper\nline2\ttab";
+            msgs.push_back(m);
+        }
+        {
+            neograph::ChatMessage m;
+            m.role    = "user";
+            m.content = "中文 + emoji 🙂 + 控制字符 \x01 结束";
+            msgs.push_back(m);
+        }
+        {
+            neograph::ChatMessage m;
+            m.role    = "assistant";
+            m.content = "";
+            m.tool_calls.push_back(
+                neograph::ToolCall{"call_1", "read_file", R"({"path":"a b.json"})"}
+            );
+            m.tool_calls.push_back(neograph::ToolCall{"", "glob", "{}"});
+            msgs.push_back(m);
+        }
+        {
+            neograph::ChatMessage m;
+            m.role          = "tool";
+            m.content       = "[Error] 未找到\n路径";
+            m.tool_call_id  = "call_1";
+            m.tool_name     = "read_file";
+            msgs.push_back(m);
+        }
+        {
+            neograph::ChatMessage m;
+            m.role       = "user";
+            m.content    = "看图";
+            m.image_urls = {"https://example.com/a.png"};
+            m.audio_urls = {"data:audio/wav;base64,UklGRg=="};
+            msgs.push_back(m);
+        }
+        {
+            neograph::ChatMessage m;
+            m.role              = "assistant";
+            m.content           = "";
+            m.reasoning_content = "不应出现的思考";
+            m.reasoning_details = neograph::json::parse(R"([{"type":"reasoning","id":"r1"}])");
+            msgs.push_back(m);
+        }
+        {
+            neograph::ChatMessage m;
+            m.role              = "assistant";
+            m.content           = "带明文思考";
+            m.reasoning_content = "思考内容";
+            msgs.push_back(m);
+        }
+        return msgs;
+    };
+    auto makeTools = []() {
+        std::vector<neograph::ChatTool> tools;
+        {
+            neograph::ChatTool t;
+            t.name        = "read_file";
+            t.description = "读取文件\n支持 offset/limit";
+            t.parameters  = neograph::json::parse(
+                R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})"
+            );
+            tools.push_back(t);
+        }
+        {
+            neograph::ChatTool t;
+            t.name = "no_schema"; // parameters 为 null -> 回退空对象 schema
+            tools.push_back(t);
+        }
+        return tools;
+    };
+
+    const auto msgs  = makeMessages();
+    const auto tools = makeTools();
+
+    // 1. 流式 (末尾追加 stream / stream_options), 两种 sendThinking
+    for (bool sendThinking : {true, false}) {
+        mock.mode = MockMode::Streaming;
+        mock.sseChunks = {
+            MockOpenAIServer::sseData(R"({"choices":[{"delta":{"content":"ok"}}]})"),
+            MockOpenAIServer::sseDone(),
+        };
+        auto provider
+            = server::OpenAIProvider::create(makeOaiCfg("sk-x", baseUrl, 10, 10, sendThinking));
+
+        neograph::CompletionParams params;
+        params.model      = "gpt-4o-mini";
+        params.messages   = msgs;
+        params.tools      = tools;
+        params.max_tokens = 128;
+
+        try {
+            co_await provider->invoke(params, [](const std::string&) {});
+
+            // 旧实现的拼法: buildBody() 的键序 + 调用方追加的 stream / stream_options
+            std::string expected = "{\"model\":\"gpt-4o-mini\",\"messages\":";
+            expected += agentxx::protocol::chatMessagesToOpenAIJson(msgs, sendThinking).dump();
+            expected += ",\"tools\":";
+            expected += agentxx::protocol::chatToolsToOpenAIJson(tools).dump();
+            expected += ",\"tool_choice\":\"auto\",\"max_tokens\":128";
+            expected += ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}";
+
+            XX_TEST_EXPECT_EQ(mock.lastRequestBody, expected);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "request body text path (stream) failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 2. 非流式 + extraConfig (含与已有键冲突的 token 上限键) + extra_fields (非冲突键)
+    {
+        mock.mode = MockMode::Normal;
+        // sendThinking 默认关闭: 参考输出里不应出现 reasoning_content
+        const bool sendThinking = false;
+
+        neograph::CompletionParams params;
+        params.model      = "gpt-4o-mini";
+        params.messages   = msgs;
+        params.tools      = tools;
+        params.max_tokens = 128;
+        // session_id 是内部保留键, 不应进入请求体
+        params.extra_fields["user"]                     = neograph::json("u1");
+        params.extra_fields["session_id"]               = neograph::json("s1");
+
+        auto cfg          = makeOaiCfg("sk-x", baseUrl, 10, 10, sendThinking);
+        cfg.extraConfig["temperature"] = 0.5;
+        // 已存在 max_tokens 时, 互斥的输出上限键应被跳过
+        cfg.extraConfig["max_completion_tokens"] = 999;
+        auto provider2 = server::OpenAIProvider::create(cfg);
+
+        try {
+            co_await provider2->invoke(params, nullptr);
+
+            std::string expected = "{\"model\":\"gpt-4o-mini\",\"messages\":";
+            expected += agentxx::protocol::chatMessagesToOpenAIJson(msgs, sendThinking).dump();
+            expected += ",\"tools\":";
+            expected += agentxx::protocol::chatToolsToOpenAIJson(tools).dump();
+            expected += ",\"tool_choice\":\"auto\",\"max_tokens\":128";
+            expected += ",\"temperature\":0.5";
+            expected += ",\"user\":\"u1\"";
+            expected += "}";
+            XX_TEST_EXPECT_EQ(mock.lastRequestBody, expected);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "request body text path (extraConfig/extra_fields) failed: " << e.what()
+                      << std::endl;
+        }
+    }
+
+    // 3. extra_fields 与已有键重名: 必须回退 DOM 版本 (原地覆盖, 不产生重复键)
+    {
+        mock.mode = MockMode::Normal;
+        auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-x", baseUrl));
+
+        neograph::CompletionParams params;
+        params.model    = "gpt-4o-mini";
+        params.messages = msgs;
+        params.extra_fields["model"] = neograph::json("override-model");
+
+        try {
+            co_await provider->invoke(params, nullptr);
+
+            // 旧实现: body["model"] = "override-model" 原地覆盖 -> 仍是第 1 个键
+            XX_TEST_EXPECT_TRUE(
+                mock.lastRequestBody.starts_with("{\"model\":\"override-model\",\"messages\":")
+            );
+            // 只出现一次 model 键 (重复键是非法 JSON 语义)
+            size_t hits = 0;
+            for (size_t p = mock.lastRequestBody.find("\"model\":"); p != std::string::npos;
+                 p       = mock.lastRequestBody.find("\"model\":", p + 1)) {
+                ++hits;
+            }
+            XX_TEST_EXPECT_EQ(hits, size_t{1});
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "request body text path (fallback) failed: " << e.what() << std::endl;
+        }
+    }
+}
+
 void test_messages_to_json_multimodal_empty_content() {
     // content 为空但只有附件时, 不产生 text 块
     neograph::ChatMessage msg;
@@ -4718,6 +4914,9 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     // 多模态消息体 (图片/音频/视频附件)
     co_await test_multimodal_body_chat_completions(*mock, port);
     co_await test_multimodal_body_responses(*mock, port);
+
+    // 请求体文本路径与 DOM 路径逐字节一致 (含重名 extra_fields 的回退)
+    co_await test_request_body_text_matches_dom_path(*mock, port);
 
     // Responses API (Codex) 测试
     co_await test_responses_non_streaming(*mock, port);

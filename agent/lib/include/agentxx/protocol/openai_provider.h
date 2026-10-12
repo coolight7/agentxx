@@ -156,6 +156,31 @@ private:
 
     utilxx_base::Json buildBody(const neograph::CompletionParams& params) const;
 
+    /// 与 `buildBody(params)` (+ 可选的 stream / stream_options 键) `.dump()` 逐字节一致
+    /// 的文本版本
+    ///
+    /// - 目的: 请求体里 `messages` / `tools` 两个数组占绝大多数字节, 先用 DOM 装下来
+    ///   再 dump, 会在每轮请求时同时留下"整段 DOM + 整段文本"两份 O(上下文) 的临时内存;
+    ///   长上下文下这块临时内存抬高了堆的高水位, 表现为会话越长常驻内存越高。
+    ///   这里逐条消息追加文本, 临时内存降到单条消息量级, 且容量按实际内容一次性预留
+    ///   (旧路径 `dump()` 按元素个数 `size()*8+16` 预留, 长数组会反复扩容并搬移)
+    /// - 逐字节一致的依据: 消息/工具元素复用 [chatMessagesToOpenAIJson] /
+    ///   [chatToolsToOpenAIJson] 的同一份转换逻辑, JSON 数组/对象就是按下标与键序拼接
+    /// - 无法用追加表达的情形返回 false, 由调用方回退到 DOM 路径:
+    ///   `extra_fields` 与已写入的键重名时, DOM 版本是"原地覆盖", 追加会写出重复键
+    ///
+    /// - `args`:
+    ///     - [params] 补全参数
+    ///     - [stream] 是否在末尾追加 `"stream":true,"stream_options":{"include_usage":true}`
+    ///     - [out] 输出文本 (调用方负责保证生命周期覆盖本次请求)
+    ///
+    /// - `return` true 表示 out 可用; false 表示调用方应改走 [buildBody]
+    bool buildBodyText(
+        const neograph::CompletionParams& params,
+        bool                              stream,
+        std::string&                      out
+    ) const;
+
     utilxx_base::Json buildResponsesBody(const neograph::CompletionParams& params) const;
 
     asio::awaitable<neograph::ChatCompletion> completeAsync(const neograph::CompletionParams& params
@@ -166,7 +191,7 @@ private:
 
     asio::awaitable<neograph::ChatCompletion> doStream(
         const neograph::CompletionParams&  params,
-        const utilxx_base::Json&           body,
+        std::string                        bodyStr,
         neograph::FormatDataStreamCallback on_chunk
     );
 

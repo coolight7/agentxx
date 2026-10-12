@@ -128,8 +128,11 @@ public:
     void updateViewMessage(std::string_view sessionId, const ViewMessage& msg);
 
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
+    /// - [llmMessagesJson] 为上下文 JSON 数组的**文本** (会话侧已序列化, 见
+    ///   Session::llmMessagesJsonText): 落盘只需要文本, 直接写文本可省掉一份与
+    ///   上下文等大的 DOM 和一次整段 dump
     /// - 失败仅记录日志, 不影响内存状态
-    void saveLlmMessages(std::string_view sessionId, const utilxx_base::Json& llmMessages);
+    void saveLlmMessages(std::string_view sessionId, std::string_view llmMessagesJson);
 
     // ---- 输入收件箱 (session.db session_input 表; 计划 LOOP-1) ----
     //

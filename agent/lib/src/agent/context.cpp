@@ -81,8 +81,8 @@ SessionStoreHooks makeSessionStoreHooks(
                 reportPersistFailure(weakSession.lock(), store);
             },
         .onSaveLlmMessages =
-            [store, sessionId, weakSession](const utilxx_base::Json& msgs) {
-                store->saveLlmMessages(sessionId, msgs);
+            [store, sessionId, weakSession](std::string_view msgsText) {
+                store->saveLlmMessages(sessionId, msgsText);
                 reportPersistFailure(weakSession.lock(), store);
             },
     };
@@ -302,7 +302,7 @@ void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, 
 void Session::saveLlmMessages() {
     assertIoThread();
     if (hooks_.onSaveLlmMessages) {
-        hooks_.onSaveLlmMessages(llmMessagesJson());
+        hooks_.onSaveLlmMessages(llmMessagesJsonText());
         // 记录落盘时刻供节流判定 (轮末权威保存同样刷新窗口)
         llmLastSaveMs_ = steadyNowMs();
     }
@@ -310,7 +310,8 @@ void Session::saveLlmMessages() {
 
 void Session::markMessagesChanged() {
     ++messagesVersion_;
-    llmMessagesJsonDirty_ = true;
+    llmMessagesJsonDirty_     = true;
+    llmMessagesJsonTextDirty_ = true;
 }
 
 void Session::appendMessages(std::vector<neograph::ChatMessage> msgs, bool persistThrottled) {
@@ -375,6 +376,34 @@ const utilxx_base::Json& Session::llmMessagesJson() const {
         llmMessagesJsonDirty_ = false;
     }
     return llmMessagesJsonCache_;
+}
+
+const std::string& Session::llmMessagesJsonText() const {
+    assertIoThread();
+    if (llmMessagesJsonTextDirty_) {
+        // 逐条消息序列化后单独 dump 再拼成数组: 与"先构造整段数组 DOM 再 dump"
+        // 的输出逐字节一致 (JSON 数组就是 `[` + 元素以 `,` 连接 + `]`),
+        // 但不需要在内存里同时持有整段数组 DOM
+        std::string& out = llmMessagesJsonTextCache_;
+        out.clear();
+        if (messages_.empty()) {
+            out = "[]";
+        } else {
+            out.push_back('[');
+            for (size_t i = 0; i < messages_.size(); ++i) {
+                if (i > 0) {
+                    out.push_back(',');
+                }
+                // 每条消息一个临时 json: 只保留单条消息的转换结果, 不构造整段数组
+                neograph::json one;
+                neograph::to_json(one, messages_[i]);
+                out += agentxx::util::fromNeographJson(one).dump();
+            }
+            out.push_back(']');
+        }
+        llmMessagesJsonTextDirty_ = false;
+    }
+    return llmMessagesJsonTextCache_;
 }
 
 void Session::requestSaveLlmMessages() {

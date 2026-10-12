@@ -143,7 +143,7 @@ agentxx::agent::SessionStoreHooks countingHooks(HookCounters* c) {
                 ++c->update;
             },
         .onSaveLlmMessages =
-            [c](const utilxx_base::Json&) {
+            [c](std::string_view) {
                 ++c->llm;
             },
     };

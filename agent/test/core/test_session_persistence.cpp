@@ -264,7 +264,7 @@ static TestResult testLlmMessagesRoundtrip() {
         auto p = std::make_shared<SessionStore>(root);
 
         // 空上下文
-        p->saveLlmMessages("t2", utilxx_base::Json::array());
+        p->saveLlmMessages("t2", "[]");
         auto l1 = p->loadSession("t2");
         XX_TEST_EXPECT_TRUE(l1.llmMessages.is_array());
         XX_TEST_EXPECT_EQ(l1.llmMessages.size(), size_t{0});
@@ -288,7 +288,7 @@ static TestResult testLlmMessagesRoundtrip() {
             {"tool_call_id", "call_1"    },
             {"content",      R"({"r":1})"},
         });
-        p->saveLlmMessages("t2", ctx);
+        p->saveLlmMessages("t2", ctx.dump());
 
         // 重启后恢复
         auto p2 = std::make_shared<SessionStore>(root);
@@ -307,6 +307,82 @@ static TestResult testLlmMessagesRoundtrip() {
         }
     }
     removeTempRoot(root);
+    return TestResult{};
+}
+
+/// `Session::llmMessagesJsonText()` 与 `llmMessagesJson().dump()` 逐字节一致的卡口
+///
+/// - 落盘走文本路径 (不构造整段数组 DOM), 请求体组装 / WireGetContext / 插件查询
+///   仍走 DOM 路径; 两条路径必须给出**同一个 JSON**, 否则"省内存"会把落库内容改掉
+/// - 覆盖: 空上下文 / 各类消息形态 (system 含转义字符 / user 带图片 / assistant 带
+///   tool_calls + 思考 + history + flags + extra / tool) / 追加与截断后的缓存刷新
+static TestResult testLlmMessagesTextMirror() {
+    auto s = std::make_shared<agentxx::agent::Session>();
+
+    // 空上下文: 文本形态就是 "[]"
+    XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), std::string{"[]"});
+    XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), s->llmMessagesJson().dump());
+
+    neograph::ChatMessage sys;
+    sys.role    = "system";
+    sys.content = "sys \"quoted\" \\ 反斜杠\n换行\t制表";
+
+    neograph::ChatMessage user;
+    user.role    = "user";
+    user.content = "hello 中文 emoji 🙂";
+    user.image_urls.push_back("data:image/png;base64,iVBORw0KGgo=");
+
+    neograph::ChatMessage asst;
+    asst.role              = "assistant";
+    asst.content           = "";
+    asst.reasoning_content = "thinking...";
+    asst.tool_calls.push_back(
+        neograph::ToolCall{.id = "call_1", .name = "read", .arguments = R"({"path":"a\nb"})"}
+    );
+    asst.tool_calls.push_back(neograph::ToolCall{.id = "call_2", .name = "grep", .arguments = "{}"});
+    asst.history_contents.push_back("earlier content");
+    asst.flags = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized;
+    asst.extra["share_id"] = 7;
+
+    neograph::ChatMessage tool;
+    tool.role         = "tool";
+    tool.content      = R"({"r":1})";
+    tool.tool_call_id = "call_1";
+    tool.tool_name    = "read";
+    tool.tool_status  = "completed";
+
+    std::vector<neograph::ChatMessage> msgs;
+    msgs.push_back(sys);
+    msgs.push_back(user);
+    msgs.push_back(asst);
+    msgs.push_back(tool);
+    s->appendMessages(std::move(msgs), /*persistThrottled=*/false);
+
+    const std::string domDump = s->llmMessagesJson().dump();
+    XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), domDump);
+    XX_TEST_EXPECT_TRUE(domDump.find("call_2") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(domDump.find("share_id") != std::string::npos);
+
+    // 再追加一条: 文本镜像要跟着脏标记刷新
+    neograph::ChatMessage more;
+    more.role    = "user";
+    more.content = "again";
+    s->appendMessages({more}, /*persistThrottled=*/false);
+    XX_TEST_EXPECT_TRUE(s->llmMessagesJsonText().find("again") != std::string::npos);
+    XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), s->llmMessagesJson().dump());
+
+    // 截断: 同样刷新, 且两条路径一致
+    s->truncateMessages(2, /*persistThrottled=*/false);
+    XX_TEST_EXPECT_TRUE(s->llmMessagesJsonText().find("again") == std::string::npos);
+    XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), s->llmMessagesJson().dump());
+    XX_TEST_EXPECT_EQ(s->llmMessagesJson().size(), size_t{2});
+
+    // 整批替换 (边界形态入口) 后仍一致
+    utilxx_base::Json fromJson = utilxx_base::Json::array();
+    fromJson.push_back(utilxx_base::Json{{"role", "user"}, {"content", "replaced"}});
+    s->replaceMessagesFromJson(fromJson);
+    XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), s->llmMessagesJson().dump());
+
     return TestResult{};
 }
 
@@ -1191,7 +1267,7 @@ static void testPersistenceResilience() {
             "r_dirty",
             utilxx_base::Json::array({
                 utilxx_base::Json{{"role", "user"}, {"content", "ctx"}}
-        })
+            }).dump()
         );
         {
             auto dir = fs::path(root) / SessionStore::sanitizeSessionId("r_dirty");
@@ -1541,6 +1617,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
 
     testViewMessagesRoundtrip();
     testLlmMessagesRoundtrip();
+    testLlmMessagesTextMirror();
     testShareStoreRoundtrip();
     testUpdateHistoryPersistence();
     testSessionStoreIntegration();

@@ -1038,10 +1038,7 @@ void SessionStore::appendViewMessage(
     );
 }
 
-void SessionStore::saveLlmMessages(
-    std::string_view         sessionId,
-    const utilxx_base::Json& llmMessages
-) {
+void SessionStore::saveLlmMessages(std::string_view sessionId, std::string_view llmMessagesJson) {
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
@@ -1052,7 +1049,15 @@ void SessionStore::saveLlmMessages(
                 // 整表替换 (单行上下文)
                 db.exec("DELETE FROM llm_context");
                 auto insert = db.prepare("INSERT INTO llm_context(id, json) VALUES (1, ?)");
-                insert.bindText(1, dumpJsonUtf8(llmMessages));
+                // 直接绑定会话给出的文本 (与旧路径 dumpJsonUtf8(llmMessages) 等价:
+                // 文本非法 UTF-8 时同样按 U+FFFD 修复, 保证库内可被 simdjson 解析)
+                if (utilxx_base::utf8IsAvail(llmMessagesJson)) {
+                    insert.bindText(1, llmMessagesJson);
+                } else {
+                    std::string repaired{llmMessagesJson};
+                    (void)utilxx_base::utf8Repair(repaired);
+                    insert.bindText(1, repaired);
+                }
                 insert.step();
                 db.commit();
                 inTx = false;

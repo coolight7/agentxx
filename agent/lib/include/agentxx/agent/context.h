@@ -92,7 +92,9 @@ struct SessionStoreHooks {
     std::function<void(const ViewMessage&)> onUpdateViewMessage;
 
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
-    std::function<void(const utilxx_base::Json&)> onSaveLlmMessages;
+    /// - 传入的是已序列化的 JSON 数组**文本**, 不是 DOM: 落盘只需要文本,
+    ///   会话侧直接给出文本可以少构造一份与上下文等大的 DOM
+    std::function<void(std::string_view)> onSaveLlmMessages;
 };
 
 /// 上下文统计 (供 UI 显示上下文占用)
@@ -285,9 +287,19 @@ public:
     void truncateMessages(size_t count, bool persistThrottled = true);
 
     /// 取 Json 形态的上下文 (惰性生成并缓存)
-    /// - 供 sqlite 持久化 / WireGetContext / 子代理播种等边界形态使用;
+    /// - 供 WireGetContext / 子代理播种 / 插件查询等边界形态使用;
     ///   返回引用在下一次上下文变更前有效
     const utilxx_base::Json& llmMessagesJson() const;
+
+    /// 取上下文 JSON 数组的**文本**形态 (惰性生成并缓存)
+    ///
+    /// - 与 `llmMessagesJson().dump()` 逐字节一致 (逐条消息 `to_json` 后单独 dump,
+    ///   与整段 dump 的输出相同), 但**不构造整段数组 DOM**
+    /// - 落盘路径专用: 长会话下每轮都要把整段上下文写库, 走 DOM 形态会在每轮同时
+    ///   留下"整段 DOM + 整段文本"两份与上下文等大的临时内存, 并把整段 DOM 长期
+    ///   缓存; 文本形态只保留一份文本
+    /// - 返回引用在下一次上下文变更前有效
+    const std::string& llmMessagesJsonText() const;
     // -------------------------------------------------------------------
     // io 线程专用写入接口
     // -------------------------------------------------------------------
@@ -507,7 +519,9 @@ private:
 
     /// 上下文 Json 镜像 (惰性生成: 仅边界形态需要时构造, 避免每次写入都深拷贝)
     mutable utilxx_base::Json llmMessagesJsonCache_ = utilxx_base::Json::array();
-    std::string                                   modelName_;
+    /// 上下文 Json 数组文本镜像 (惰性生成; 落盘路径专用, 与上者内容一致但更省内存)
+    mutable std::string llmMessagesJsonTextCache_;
+    std::string         modelName_;
     std::string                                   language_;
     /// 最近一次已提示的持久化失败原因 (计划 STO-9; 去重)
     std::string lastPersistWarning_;
@@ -558,6 +572,8 @@ private:
     /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
     std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
     mutable bool              llmMessagesJsonDirty_ = true;
+    /// 文本镜像的脏标记 (与 Json 镜像独立维护: 两条路径各自惰性生成)
+    mutable bool              llmMessagesJsonTextDirty_ = true;
 
     /// 压入一条待落盘 view 操作并按节流规则决定是否立即刷出
     void enqueueViewPersist(PendingViewOp op);

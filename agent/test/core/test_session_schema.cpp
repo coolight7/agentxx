@@ -361,7 +361,7 @@ TestResult testSessionSchema() {
         XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{0});
         store.appendViewMessage("s-future", makeMsg("m9", "should not be written"), 2);
         XX_TEST_EXPECT_FALSE(store.lastWriteError().empty());
-        store.saveLlmMessages("s-future", utilxx_base::Json::array());
+        store.saveLlmMessages("s-future", "[]");
         XX_TEST_EXPECT_FALSE(store.lastWriteError().empty());
         XX_TEST_EXPECT_EQ(countRows(dbFuture, "llm_context"), int64_t{0});
     }
@@ -540,7 +540,7 @@ TestResult testSessionSchema() {
         SessionStore store{root};
         store.appendViewMessage("s-busy", makeMsg("b1", "blocked"), 1);
         XX_TEST_EXPECT_FALSE(store.lastWriteError().empty());
-        store.saveLlmMessages("s-busy", utilxx_base::Json::array());
+        store.saveLlmMessages("s-busy", "[]");
         XX_TEST_EXPECT_FALSE(store.lastWriteError().empty());
     }
     XX_TEST_EXPECT_FALSE(fs::exists(utilxx_base::utf8ToPath(dbBusy)));

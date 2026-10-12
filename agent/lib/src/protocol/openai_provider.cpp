@@ -5,6 +5,7 @@
 #include "fmt/format.h"
 #include "utilxx_base/json_view.h"
 #include <chrono>
+#include <set>
 
 namespace agentxx {
 namespace protocol {
@@ -61,12 +62,17 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::invoke_format_data(
     }
 
     if (on_chunk) {
-        auto body              = buildBody(params);
-        body["stream"]         = true;
-        body["stream_options"] = {
-            {"include_usage", true}
-        };
-        co_return co_await doStream(params, body, on_chunk);
+        // 请求体直接构造为文本 (逐条追加消息, 不先装整段 DOM); 无法表达时回退 DOM 路径
+        std::string bodyStr;
+        if (!buildBodyText(params, /*stream=*/true, bodyStr)) {
+            auto body              = buildBody(params);
+            body["stream"]         = true;
+            body["stream_options"] = {
+                {"include_usage", true}
+            };
+            bodyStr = body.dump();
+        }
+        co_return co_await doStream(params, std::move(bodyStr), on_chunk);
     }
     co_return co_await completeAsync(params);
 }
@@ -498,6 +504,124 @@ void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion
     }
 }
 
+namespace {
+
+/// 估算 Chat Completions 请求体文本长度, 用于一次性预留容量
+/// - 只服务预留: 估算偏大只是多占一点地址空间, 偏小就会触发扩容搬移
+///   (旧路径 `dump()` 按元素个数预留 `size()*8+16`, 长消息数组会反复扩容)
+/// - 图片/音频/视频 URL 是 data URL 时也会整段出现在请求体里, 按原长计入
+size_t estimateBodyTextBytes(const neograph::CompletionParams& params) {
+    size_t total = 512; // 固定键与标量
+    for (const auto& msg : params.messages) {
+        total += msg.content.size() + msg.reasoning_content.size() + 160;
+        for (const auto& tc : msg.tool_calls) {
+            total += tc.id.size() + tc.name.size() + tc.arguments.size() + 96;
+        }
+        for (const auto& url : msg.image_urls) {
+            total += url.size() + 96;
+        }
+        for (const auto& url : msg.audio_urls) {
+            // data URL 会被拆成 data + format 两个字段, 总量略小于原长
+            total += url.size() + 128;
+        }
+        for (const auto& url : msg.video_urls) {
+            total += url.size() + 96;
+        }
+    }
+    for (const auto& tool : params.tools) {
+        total += tool.name.size() + tool.description.size() + 4096; // 含 parameters schema
+    }
+    return total;
+}
+
+} // namespace
+
+bool OpenAIProvider::buildBodyText(
+    const neograph::CompletionParams& params,
+    bool                              stream,
+    std::string&                      out
+) const {
+    // 已写入的键 (与 buildBody 里 body.contains(key) 判定同义)
+    std::set<std::string, std::less<>> keys;
+
+    out.clear();
+    out.reserve(estimateBodyTextBytes(params));
+
+    const std::string& model = params.model.empty() ? config_.modelName : params.model;
+
+    out += "{\"model\":";
+    out += utilxx_base::Json(model).dump();
+    keys.emplace("model");
+
+    out += ",\"messages\":";
+    agentxx::protocol::appendOpenAIMessagesJson(out, params.messages, config_.sendThinking);
+    keys.emplace("messages");
+
+    if (!params.tools.empty()) {
+        out += ",\"tools\":";
+        agentxx::protocol::appendOpenAIToolsJson(out, params.tools);
+        out += ",\"tool_choice\":\"auto\"";
+        keys.emplace("tools");
+        keys.emplace("tool_choice");
+    }
+
+    // 发送输出 token 上限
+    // - 新模型 (o1/o3/o4/gpt-5 等) 只接受 max_completion_tokens 字段, 按模型名自动切换
+    if (params.max_tokens > 0) {
+        const bool useCompletionTokens = modelUsesMaxCompletionTokens(model);
+        out += useCompletionTokens ? ",\"max_completion_tokens\":" : ",\"max_tokens\":";
+        out += std::to_string(params.max_tokens);
+        keys.emplace(useCompletionTokens ? "max_completion_tokens" : "max_tokens");
+    }
+
+    if (config_.extraConfig.is_object()) {
+        for (const auto& [key, val] : config_.extraConfig.items()) {
+            if (keys.contains(key)) {
+                continue;
+            }
+            // 避免同时出现互斥的输出 token 上限字段
+            if ((key == "max_tokens" || key == "max_output_tokens" || key == "max_completion_tokens")
+                && (keys.contains("max_output_tokens") || keys.contains("max_completion_tokens")
+                    || keys.contains("max_tokens"))) {
+                continue;
+            }
+            out += ",";
+            out += utilxx_base::Json(key).dump();
+            out += ":";
+            out += val.dump();
+            keys.emplace(key);
+        }
+    }
+
+    if (!params.extra_fields.empty()) {
+        for (const auto& [key, val] : params.extra_fields.items()) {
+            if (isInternalExtraField(key)) {
+                continue;
+            }
+            // 与已有键重名时 DOM 版本是原地覆盖 (键序不变), 追加写法无法表达 → 回退
+            if (keys.contains(key)) {
+                return false;
+            }
+            out += ",";
+            out += utilxx_base::Json(key).dump();
+            out += ":";
+            out += agentxx::util::fromNeographJson(val).dump();
+            keys.emplace(key);
+        }
+    }
+
+    if (stream) {
+        // 与旧实现一致: stream / stream_options 在 buildBody 之后追加到末尾
+        if (keys.contains("stream") || keys.contains("stream_options")) {
+            return false;
+        }
+        out += ",\"stream\":true,\"stream_options\":{\"include_usage\":true}";
+    }
+
+    out += "}";
+    return true;
+}
+
 utilxx_base::Json OpenAIProvider::buildBody(const neograph::CompletionParams& params) const {
     utilxx_base::Json body;
     body["model"] = params.model.empty() ? config_.modelName : params.model;
@@ -749,8 +873,11 @@ asio::awaitable<neograph::ChatCompletion>
     using namespace utilxx_base;
     using namespace utilxx;
 
-    auto bodyJson = buildBody(params);
-    auto bodyStr  = bodyJson.dump();
+    std::string bodyStr;
+    if (!buildBodyText(params, /*stream=*/false, bodyStr)) {
+        auto bodyJson = buildBody(params);
+        bodyStr       = bodyJson.dump();
+    }
 
     HeaderMap headers;
     applyHeaders(headers, params);
@@ -1047,16 +1174,13 @@ asio::awaitable<neograph::ChatCompletion>
 
 asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     const neograph::CompletionParams&  params,
-    const utilxx_base::Json&           body,
+    std::string                        bodyStr,
     neograph::FormatDataStreamCallback on_chunk
 ) {
     XX_LOGT("OpenAIProvider::doStream START");
     // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
     using namespace utilxx_base;
     using namespace utilxx;
-
-    // 请求体组装完成后直接移动进 HTTP 层 (用完即弃, 省一份整段拷贝)
-    auto bodyStr = body.dump();
 
     HeaderMap headers;
     applyHeaders(headers, params);

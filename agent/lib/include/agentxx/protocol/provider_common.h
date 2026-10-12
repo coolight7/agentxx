@@ -255,6 +255,44 @@ inline utilxx_base::Json chatMessagesToOpenAIJson(
     return arr;
 }
 
+/// 与 `chatMessagesToOpenAIJson(messages, sendThinking).dump()` **逐字节一致**的流式版本
+///
+/// - 用途: 请求体组装时把消息数组直接写成 JSON 文本, 不先构造整段消息数组的 DOM。
+///   长上下文下每轮都要发一次全量消息, 构造整段 DOM 会同时留下"DOM 一份 + dump 一份"
+///   两块 O(上下文) 的临时内存, 逐条追加把临时内存压到单条消息量级
+///   (最终请求体字符串本身仍是 O(上下文), 无法避免)
+/// - 实现复用 [chatMessagesToOpenAIJson]: 逐条消息走同一份转换逻辑, 因此输出与
+///   整段 dump 完全一致 (JSON 数组就是 `[` + 元素按序以 `,` 连接 + `]`)
+/// - 注意: 越界/类型错误的处理与整段版本一致 (同样会抛异常)
+///
+/// - `args`:
+///     - [out] 追加目标 (调用方负责预留容量, 避免反复扩容)
+///     - [messages] 会话上下文 (typed)
+///     - [sendThinking] 是否回传明文思考
+inline void appendOpenAIMessagesJson(
+    std::string&                              out,
+    const std::vector<neograph::ChatMessage>& messages,
+    bool                                      sendThinking
+) {
+    if (messages.empty()) {
+        out += "[]";
+        return;
+    }
+    out.push_back('[');
+    // 单元素向量复用既有实现: 每条消息单独转换并立即 dump, 转换结果不跨条累积
+    std::vector<neograph::ChatMessage> one;
+    one.reserve(1);
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (i > 0) {
+            out.push_back(',');
+        }
+        one.clear();
+        one.push_back(messages[i]);
+        out += chatMessagesToOpenAIJson(one, sendThinking)[0].dump();
+    }
+    out.push_back(']');
+}
+
 /// 把 typed 工具定义直接组装为 OpenAI Chat Completions 请求体的 `tools` 数组
 ///
 /// - 与 [neograph::tools_to_json] 的输出逐字段一致, 同样省掉一次整段 DOM 拷贝
@@ -281,6 +319,33 @@ inline utilxx_base::Json chatToolsToOpenAIJson(const std::vector<neograph::ChatT
         });
     }
     return arr;
+}
+
+/// 与 `chatToolsToOpenAIJson(tools).dump()` **逐字节一致**的流式版本
+///
+/// - 用途同 [appendOpenAIMessagesJson]: 工具定义数组直接写成文本, 不构造整段 DOM
+///   (工具定义每轮都会随请求体发送, 只是体量小于消息数组)
+///
+/// - `args`:
+///     - [out] 追加目标
+///     - [tools] 工具定义列表
+inline void appendOpenAIToolsJson(std::string& out, const std::vector<neograph::ChatTool>& tools) {
+    if (tools.empty()) {
+        out += "[]";
+        return;
+    }
+    out.push_back('[');
+    std::vector<neograph::ChatTool> one;
+    one.reserve(1);
+    for (size_t i = 0; i < tools.size(); ++i) {
+        if (i > 0) {
+            out.push_back(',');
+        }
+        one.clear();
+        one.push_back(tools[i]);
+        out += chatToolsToOpenAIJson(one)[0].dump();
+    }
+    out.push_back(']');
 }
 
 /// 补充用量明细 (缓存 token) 的单独传递 (计划 LLM-8)
